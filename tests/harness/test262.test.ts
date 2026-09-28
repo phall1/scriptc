@@ -9,14 +9,16 @@ import { shardSelect, shardSuffix } from "./shard.js";
 const sanitize = process.env.SCRIPTC_SAN === "1";
 const upstreamHarness = ["assert.js", "sta.js"]
   .map((name) => readFileSync(join(vendorRoot, "harness", name), "utf8")).join("\n");
+const upstreamPropertyHelper = readFileSync(join(vendorRoot, "harness/propertyHelper.js"), "utf8");
 
-function runUpstream(source: string, variant: "strict" | "sloppy" = "strict"): void {
+function runUpstream(source: string, variant: "strict" | "sloppy" = "strict", includes: string[] = []): void {
   const context = createContext({});
   runInContext(upstreamHarness, context, { timeout: 5000 });
+  if (includes.includes("propertyHelper.js")) runInContext(upstreamPropertyHelper, context, { timeout: 5000 });
   runInContext(variant === "strict" ? `"use strict";\n${source}` : source, context, { timeout: 5000 });
 }
 
-async function runUpstreamAsync(source: string, variant: "strict" | "sloppy"): Promise<void> {
+async function runUpstreamAsync(source: string, variant: "strict" | "sloppy", includes: string[] = []): Promise<void> {
   const context = createContext({});
   let calls = 0;
   const done = new Promise<void>((resolve, reject) => {
@@ -28,6 +30,7 @@ async function runUpstreamAsync(source: string, variant: "strict" | "sloppy"): P
     };
   });
   runInContext(upstreamHarness, context, { timeout: 5000 });
+  if (includes.includes("propertyHelper.js")) runInContext(upstreamPropertyHelper, context, { timeout: 5000 });
   runInContext(variant === "strict" ? `"use strict";\n${source}` : source, context, { timeout: 5000 });
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -90,9 +93,9 @@ if (profileCases.length > 0) describe(`Test262 static script profile${shardSuffi
         let error: unknown;
         try { runUpstream(source, variant); } catch (caught) { error = caught; }
         expect(error).toMatchObject({ name: "SyntaxError" });
-      } else if (meta.flags.includes("async")) await runUpstreamAsync(source, variant);
-      else runUpstream(source, variant);
-      const result = await runSource(source, { sanitize, variant, asyncTest: meta.flags.includes("async") });
+      } else if (meta.flags.includes("async")) await runUpstreamAsync(source, variant, meta.includes);
+      else runUpstream(source, variant, meta.includes);
+      const result = await runSource(source, { sanitize, variant, asyncTest: meta.flags.includes("async"), includes: meta.includes });
       if (meta.negative?.phase === "parse") {
         expect(matchesParseNegative(result, source, variant), JSON.stringify(result, null, 2)).toBe(true);
       } else expect(matchesExpectation(`${path}#${variant}`, result), JSON.stringify(result, null, 2)).toBe(true);
@@ -175,6 +178,31 @@ describe(`Test262 host assertion contract${shardSuffix()}`, () => {
     const result = await runSource(source, { sanitize });
     expect(result, JSON.stringify(result)).toMatchObject({ status: "harness-refusal", reason: "non-error-assertion" });
   });
+});
+
+const propertyControls = shardSelect([
+  { name: "data descriptor", status: "pass", source: "const o = { a: 1 }; verifyProperty(o, 'a', { value: 1, writable: true, enumerable: true, configurable: true });" },
+  { name: "wrong value", status: "fail", source: "const o = { a: 1 }; verifyProperty(o, 'a', { value: 2 });" },
+  { name: "wrong writable", status: "fail", source: "const o = { a: 1 }; verifyProperty(o, 'a', { writable: false });" },
+  { name: "wrong enumerable", status: "fail", source: "const o = { a: 1 }; verifyProperty(o, 'a', { enumerable: false });" },
+  { name: "wrong configurable", status: "fail", source: "const o = { a: 1 }; verifyProperty(o, 'a', { configurable: false });" },
+  { name: "getter and setter fields follow the upstream helper", status: "pass", source: "const o = { a: 1 }; verifyProperty(o, 'a', { get: 2, set: 3 });" },
+  { name: "absent property", status: "pass", source: "const o = {}; verifyProperty(o, 'a', undefined);" },
+  { name: "unexpected presence", status: "fail", source: "const o = { a: 1 }; verifyProperty(o, 'a', undefined);" },
+  { name: "nonconfigurable property", status: "pass", source: "const o = JSON.parse('{}'); Object.defineProperty(o, 'a', { value: 1 }); verifyProperty(o, 'a', { value: 1, writable: false, enumerable: false, configurable: false });" },
+  { name: "restored property", status: "pass", source: "const o = { a: 1 }; verifyProperty(o, 'a', { configurable: true }, { restore: true }); assert.sameValue(o.a, 1);" },
+  { name: "reference value", status: "harness-refusal", source: "const f = function() {}; const o = { a: f }; verifyProperty(o, 'a', { value: f });" },
+], (item) => `property:${item.name}`);
+
+if (propertyControls.length > 0) describe(`Test262 property helper contract${shardSuffix()}`, () => {
+  for (const control of propertyControls) {
+    test(control.name, async () => {
+      if (control.status === "fail") expect(() => runUpstream(control.source, "strict", ["propertyHelper.js"])).toThrow();
+      else expect(() => runUpstream(control.source, "strict", ["propertyHelper.js"])).not.toThrow();
+      const result = await runSource(control.source, { sanitize, includes: ["propertyHelper.js"] });
+      expect(result, JSON.stringify(result, null, 2)).toMatchObject({ status: control.status });
+    });
+  }
 });
 
 const asyncControls = shardSelect([

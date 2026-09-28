@@ -12,7 +12,7 @@ import { lowerForAwaitBuiltin } from "./lower-async-iteration.js";
 import { BOOL, BYTES_U8, CAUGHT, DYN, F64, IrExpr, IrGlobal, IrLocal, IrStmt, IrType, JSVAL, STRING, SrcLoc, UNDEFINED_T, VOID, arrayOf, isUnitType, shapeHasAccessorSlots, typeEquals } from "../../ir/ir.js";
 import { PoisonError, boundIdentifiersOf, dynFallbackType, dynUndefinedExpr, importCallHandleType, neverTaintedJsType, staticImportNamespaceType, stmtUsesIsland, uncheckedOverloadHandleCall } from "./lowerer.js";
 import { enforceLibBoundary } from "./lib-boundary.js";
-import { cjsExportAssignmentOf, cjsExportDiscardReason, cjsExportTargetLiteral, isCjsJsFile, isEsModuleStamp, isJsSourceFile, locOf, requireSpecOf } from "../program.js";
+import { cjsExportAssignmentOf, cjsExportDiscardReason, cjsExportTargetLiteral, isCjsJsFile, isEsModuleStamp, isJsSourceFile, isNodeEsmFile, locOf, requireSpecOf } from "../program.js";
 import { COMPOUND_ASSIGN_OPS, CompoundOp, STR_METHODS, UNSUPPORTED_STMT, isStdlibMember, sideEffectFreeOptionValue, stdlibGlobalAliasDecl, stdlibGlobalAliasNameOf, stdlibGlobalNameOf } from "./surfaces.js";
 import { isProvenanceSourceFile } from "../provenance-registry.js";
 import { ambientUndefVarRootOf, lowerImportEquals, nsUndefRead, nsWritableTarget, trapDeclRootOf } from "./lower-namespaces.js";
@@ -4379,6 +4379,26 @@ function lowerBranchSwitch(
     };
   }
 
+function hasUseStrictDirective(statements: readonly ts.Statement[]): boolean {
+  for (const statement of statements) {
+    if (!ts.isExpressionStatement(statement) || !ts.isStringLiteral(statement.expression)) return false;
+    if (statement.expression.text === "use strict") return true;
+  }
+  return false;
+}
+
+function isStrictDelete(node: ts.DeleteExpression): boolean {
+  for (let parent: ts.Node | undefined = node.parent; parent; parent = parent.parent) {
+    if (ts.isClassDeclaration(parent) || ts.isClassExpression(parent)) return true;
+    if (ts.isFunctionLike(parent) && parent.body && ts.isBlock(parent.body) && hasUseStrictDirective(parent.body.statements)) return true;
+    if (ts.isSourceFile(parent)) {
+      return hasUseStrictDirective(parent.statements) ||
+        (!isCjsJsFile(parent) && (isNodeEsmFile(parent) || ts.isExternalModule(parent)));
+    }
+  }
+  return false;
+}
+
 /** Statement-position `delete`: process.env keys → process.envUnset
    * (unsetenv), pure `Record<string, T>` keys → recordKeyDelete (the
    * overflow Map delete), declared OPTIONAL fields → the undefined-arm
@@ -4431,7 +4451,8 @@ function lowerBranchSwitch(
     }
     const obj = lowerer.lowerExpr(target.expression);
     if (obj.type.kind === "dyn") {
-      return { kind: "exprStmt", expr: { kind: "libCall", fn: "dyn.keyDelete", args: [obj, lowerKey()], type: VOID, loc }, loc };
+      const strict = { kind: "boolLit", value: isStrictDelete(expr), type: BOOL, loc } as const;
+      return { kind: "exprStmt", expr: { kind: "libCall", fn: "dyn.keyDelete", args: [obj, lowerKey(), strict], type: VOID, loc }, loc };
     }
     if (obj.type.kind === "record") {
       const shape = lowerer.shapes.get(obj.type.shapeId);

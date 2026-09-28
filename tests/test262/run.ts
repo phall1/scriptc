@@ -4,7 +4,7 @@ import { parseArgs } from "node:util";
 import { shardSelect } from "../harness/shard.js";
 import { runSource, type Outcome } from "./execute.js";
 import {
-  assertThrowsSource, directory, exclusion, harnessSource, matchesExpectation, matchesParseNegative, metadata, pin, sha256, snapshotDigest, summarize,
+  assertThrowsSource, directory, exclusion, harnessSource, propertyHelperSource, matchesExpectation, matchesParseNegative, metadata, pin, sha256, snapshotDigest, summarize,
   testPaths, variants, vendorRoot, verifyVendor,
 } from "./support.mjs";
 
@@ -56,7 +56,7 @@ Other variants remain visible as exclusions.`);
     const source = readFileSync(join(root, path), "utf8");
     const meta = metadata(source, path);
     return variants(meta).map((variant: string) => ({
-      id: `${path}#${variant}`, path, variant, source, features: meta.features, negative: meta.negative,
+      id: `${path}#${variant}`, path, variant, source, features: meta.features, includes: meta.includes, negative: meta.negative,
       asyncTest: meta.flags.includes("async"),
       exclusion: exclusion(source, meta, variant),
     }));
@@ -86,7 +86,7 @@ Other variants remain visible as exclusions.`);
       const raw = item.exclusion
         ? { status: "excluded", reason: item.exclusion }
         : await runSource(item.source, {
-          backend, sanitize: process.env.SCRIPTC_SAN === "1", compileTimeoutMs, runtimeTimeoutMs, keep: values.keep, asyncTest: item.asyncTest,
+          backend, sanitize: process.env.SCRIPTC_SAN === "1", compileTimeoutMs, runtimeTimeoutMs, keep: values.keep, asyncTest: item.asyncTest, includes: item.includes,
           variant: item.variant === "sloppy" ? "sloppy" : "strict",
         });
       const outcome = item.negative?.phase === "parse" && matchesParseNegative(raw, item.source, item.variant)
@@ -104,8 +104,8 @@ Other variants remain visible as exclusions.`);
   const report = {
     schema: "scriptc.test262.v1",
     revision: pin.commit, snapshotSha256: pin.snapshotSha256,
-    profile: "static-adapted-v4",
-    harnessSha256: sha256(harnessSource + assertThrowsSource),
+    profile: "static-adapted-v5",
+    harnessSha256: sha256(harnessSource + assertThrowsSource + propertyHelperSource),
     dynamic: false, requestedBackend: backend, sanitize: process.env.SCRIPTC_SAN === "1",
     host: `${process.platform}-${process.arch}`, node: process.version,
     compilerVersion: JSON.parse(readFileSync(join(directory, "../../packages/compiler/package.json"), "utf8")).version,

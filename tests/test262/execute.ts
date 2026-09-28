@@ -64,6 +64,7 @@ export function boundedRun(command: string, args: string[], timeoutMs: number): 
 export async function runSource(source: string, options: {
   backend?: "default" | "llvm" | "c";
   asyncTest?: boolean;
+  includes?: string[];
   variant?: "strict" | "sloppy";
   sanitize?: boolean;
   compileTimeoutMs?: number;
@@ -80,7 +81,7 @@ export async function runSource(source: string, options: {
   let phase = "compile";
   try {
     const marker = `${completion}:${randomBytes(16).toString("hex")}`;
-    writeFileSync(entry, prepare(source, options.asyncTest ?? false, marker, options.variant));
+    writeFileSync(entry, prepare(source, options.asyncTest ?? false, marker, options.variant, options.includes));
     writeFileSync(join(workDir, "harness.ts"), harnessSource.replace(completion, marker));
     writeFileSync(join(workDir, "assert-throws.js"), assertThrowsSource);
     writeFileSync(requestFile, JSON.stringify({

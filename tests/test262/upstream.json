@@ -74,6 +74,7 @@
     "test/built-ins/Number/S9.3_A4.1_T1.js",
     "test/built-ins/Number/S9.3_A4.2_T1.js",
     "test/built-ins/Number/isNaN/nan.js",
+    "test/built-ins/Object/defineProperty/15.2.3.6-3-100.js",
     "test/built-ins/Object/hasOwn/hasown_nonexistent.js",
     "test/built-ins/Object/hasOwn/hasown_own_property_exists.js",
     "test/built-ins/Object/prototype/hasOwnProperty/8.12.1-1_1.js",
@@ -211,6 +212,7 @@
   "files": {
     "LICENSE": "4dd9244dfe8197c75348c4b24ab53d29d3b1cfad143ac76b5a3d8942aa354ce0",
     "harness/assert.js": "206e274ca325eb8a652e3911c3fbd090e2480d11ed7579dc17a5d17a2360ed48",
+    "harness/propertyHelper.js": "08bc29114d804c4f24f906bac950ee4dc9c93c659d93258e7b44a54283ba9bb8",
     "harness/sta.js": "1930c54af79455c484799f43e9a28e2b2f15c40d0917c9941ca54e26db243f35",
     "test/annexB/language/function-code/function-redeclaration-block.js": "8d4a3f259dabceeee101959aac117a19f5bfe9e374e1178b45f45a1142195d9e",
     "test/annexB/language/function-code/if-decl-else-decl-b-func-existing-fn-no-init.js": "ccd95922fd6c784012f7299445f0859db04812232a2266dd90070b026244bbf5",
@@ -280,6 +282,7 @@
     "test/built-ins/Number/S9.3_A4.1_T1.js": "4f08a7fd71e72dc06e01adf249e7880a13ab1eedea4d0be3c8280aa758a45b66",
     "test/built-ins/Number/S9.3_A4.2_T1.js": "fdf435ae47263f0372cce90bf25eb8ddae8d0abdc9dce30d4a3b098727a9ce6b",
     "test/built-ins/Number/isNaN/nan.js": "d513a909b333f40762bc08a9e2d1435d4ca097ed8b6da76497d0201a7264589e",
+    "test/built-ins/Object/defineProperty/15.2.3.6-3-100.js": "1465ec15ddfe6ce409faa92cfd1c538f44079caa6cc655a1bec57d6a787f7642",
     "test/built-ins/Object/hasOwn/hasown_nonexistent.js": "2cf837b4e55061f0a80f346f64bcb4c67027842f73aecb61a04f0b4c1769c254",
     "test/built-ins/Object/hasOwn/hasown_own_property_exists.js": "1db038aa023638a555b82474578f60c66f0d3e233f2efc0bcf3d770f93ea58c0",
     "test/built-ins/Object/prototype/hasOwnProperty/8.12.1-1_1.js": "9cd24500cbfc52271e8664e66789bc99d1e0f7d4e27cb31acec1a03c61d8639b",

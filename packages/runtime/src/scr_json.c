@@ -963,7 +963,7 @@ void scr_dyn_proxy_delete(ScrDyn *proxy, const ScrStr *key) {
   if (!trap) {
     ScrDynEntry *entry = scr_dyn_entry(proxy->v.proxy.target, key);
     if (entry && !entry->configurable) { scr_dyn_proxy_unsupported("deletion of non-configurable properties"); return; }
-    scr_dyn_key_delete(proxy->v.proxy.target, key);
+    scr_dyn_key_delete(proxy->v.proxy.target, key, true);
     return;
   }
   ScrDyn *property = scr_dyn_new_str((ScrStr *)key);
@@ -3504,13 +3504,15 @@ static void scr_json_delete_member(ScrDyn *object, const ScrStr *key) {
 /* Ordinary native objects carry removable own data properties. Dense
  * arrays, typed references and handles keep their explicit boundary;
  * deleting from a materialized snapshot would lose the mutation. */
-void scr_dyn_key_delete(ScrDyn *recv, const ScrStr *key) {
+void scr_dyn_key_delete(ScrDyn *recv, const ScrStr *key, bool strict) {
   if (recv->kind == SCR_DYN_PROXY) { scr_dyn_proxy_delete(recv, key); return; }
   if (recv->kind == SCR_DYN_OBJ) {
     ScrDynEntry *entry = scr_dyn_entry(recv, key);
     if (entry && !entry->configurable) {
-      static const char msg[] = "Cannot delete property";
-      scr_throw_error_msg(SCR_ERR_TYPE, msg, sizeof msg - 1);
+      if (strict) {
+        static const char message[] = "Cannot delete non-configurable property";
+        scr_throw_error_msg(SCR_ERR_TYPE, message, sizeof message - 1);
+      }
       return;
     }
     scr_json_delete_member(recv, key);
@@ -4615,7 +4617,7 @@ void scr_error_delete_cause(ScrError *e) {
   for (size_t i = 0; i < scr_errdyn_n; i++) {
     if (scr_errdyn_cache[i].err != e) continue;
     ScrStr *key = scr_str_new("cause", 5);
-    scr_dyn_key_delete(scr_errdyn_cache[i].dyn, key);
+    scr_dyn_key_delete(scr_errdyn_cache[i].dyn, key, true);
     scr_str_release(key);
     return;
   }

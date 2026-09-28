@@ -4447,7 +4447,7 @@ function emitDynamicLibCall(state: LibCallState): Temp {
             // non-object receivers (may-throw seed set).
             return finish(`scr_dyn_key_set(${arg(0)}, ${arg(1)}, ${arg(2)})`);
           case "dyn.keyDelete":
-            return finish(`scr_dyn_key_delete(${arg(0)}, ${arg(1)})`);
+            return finish(`scr_dyn_key_delete(${arg(0)}, ${arg(1)}, ${arg(2)})`);
           case "dyn.globalSymbolGet":
             return finish(`scr_dyn_global_symbol_get(${arg(0)})`);
           case "dyn.globalSymbolSet":

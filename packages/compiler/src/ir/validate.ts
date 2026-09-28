@@ -112,7 +112,7 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "json.parseReviver": { argTypes: [STRING, DYN], result: DYN },
   "json.stringifyReplacer": { argTypes: [DYN, DYN, STRING], result: DYN },
   "dyn.keySet": { argTypes: [DYN, STRING, DYN], result: VOID },
-  "dyn.keyDelete": { argTypes: [DYN, STRING], result: VOID },
+  "dyn.keyDelete": { argTypes: [DYN, STRING, BOOL], result: VOID },
   "dyn.globalSymbolGet": { argTypes: [SYMBOL_T], result: DYN },
   "dyn.globalSymbolSet": { argTypes: [SYMBOL_T, DYN], result: VOID },
   "dyn.globalSymbolHas": { argTypes: [SYMBOL_T], result: BOOL },

@@ -34,7 +34,7 @@ test("metadata generates the upstream variants without rewriting execution goals
 test("unsupported execution requirements and assertion reflection remain exclusions", () => {
   for (const [head, body] of [
     ["negative: {phase: runtime, type: TypeError}", "throw new TypeError();"],
-    ["includes: [propertyHelper.js]", "verifyProperty({}, 'x', {});"],
+    ["includes: [propertyHelper.js]", "verifyWritable({}, 'x');"],
     ["description: global script", "assert.sameValue(this, globalThis);"],
     ["description: reflection", "assert.sameValue(typeof assert, 'function');"],
     ["description: mutation", "assert.sameValue = () => {};"],
@@ -52,6 +52,27 @@ test("unsupported execution requirements and assertion reflection remain exclusi
   expect(exclusion(commonJsGlobal, metadata(commonJsGlobal), "sloppy")).toBe("host:module");
   const asyncText = source("flags: [async]", "Promise.resolve().then(() => $DONE());");
   expect(exclusion(asyncText, metadata(asyncText), "strict")).toBeUndefined();
+});
+
+test("the property helper only admits direct inline descriptor checks", () => {
+  for (const body of [
+    "verifyProperty({}, 'x', { value: 1, configurable: false });",
+    "verifyProperty({}, 'x', undefined);",
+  ]) {
+    const text = source("includes: [propertyHelper.js]", body);
+    expect(exclusion(text, metadata(text), "strict")).toBeUndefined();
+    expect(prepare(text, false, undefined, "strict", ["propertyHelper.js"])).toContain("function verifyProperty(");
+  }
+  for (const body of [
+    "verifyProperty({}, 'x', descriptor);",
+    "verifyProperty({}, 'x', { [key]: 1 });",
+    "verifyProperty({}, 'x', { extra: 1 });",
+    "const check = verifyProperty;",
+    "verifyNotWritable({}, 'x');",
+  ]) {
+    const text = source("includes: [propertyHelper.js]", body);
+    expect(exclusion(text, metadata(text), "strict")).toBe("harness:propertyHelper-surface");
+  }
 });
 
 test("receiver-bound this is admitted without adapting script-level this", () => {
