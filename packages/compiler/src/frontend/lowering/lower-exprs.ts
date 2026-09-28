@@ -9,6 +9,7 @@ import * as ts from "../ts7/adapter.js";
 import { dirname, posix } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Lowerer } from "./lowerer.js";
+import { OBJECT_CALLABLE_VALUES } from "./surfaces.js";
 import { wasiGuestPath } from "../../wasi-paths.js";
 import { BIGINT_T, BOOL, CAUGHT, DYN, DYN_HANDLE_KINDS, F64, IrExpr, IrFunction, IrJsOp, IrLocal, IrRecordShape, IrStmt, IrType, JSVAL, NULL_T, REF_TRUTHY_KINDS, REGEX, RUNTIME_ERROR_CLASSES, SEARCH_PARAMS_T, STRING, SrcLoc, UNDEFINED_T, VOID, arrayOf, canAdaptDynFuncTo, canDynCheckTo, canBoxFuncIntoDyn, funcOf, isDynTypedRefType, isJsonSafeType, isSupportedArrayElem, isUnitType, jsOpResultKind, shapeHasAccessorSlots, typeEquals, typeKey, unionContainerArmsOk } from "../../ir/ir.js";
 import { cjsClassExprWholeExportOf, cjsExportAssignmentOf, cjsExportDiscardReason, isCjsExportTableLiteral, isCjsJsFile, isJsSourceFile, isModuleExportsAccess, isNodeEsmFile, locOf } from "../program.js";
@@ -989,15 +990,15 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
             const roots = lowerTlsRootCertificates(lowerer, bi, loc);
             if (roots) return roots;
           }
-          // JavaScript sources: a builtin member taken as a bare VALUE is
+          {
+            const callable = lowerer.lowerBuiltinCallableValue(bi, loc);
+            if (callable) return callable;
+          }
+          // JavaScript sources: an otherwise unsupported builtin VALUE is
           // the same identity-token story as stdlib globals above (the
           // harness adds worker_threads.Worker to its identity Set).
           if (isJsSourceFile(expr.getSourceFile())) {
             return { kind: "strLit", value: `[builtin ${bi.module}.${bi.member}]`, type: STRING, loc };
-          }
-          {
-            const callable = lowerer.lowerBuiltinCallableValue(bi, loc);
-            if (callable) return callable;
           }
           if (builtinModuleFnOf(lowerer, bi.module, bi.member)) {
             lowerer.unsupported(
@@ -3366,6 +3367,10 @@ function lowerPromiseThenPresence(
    * verified — the name alone proves nothing. */
   export function lowerIntrinsicProperty(lowerer: Lowerer, expr: ts.PropertyAccessExpression): IrExpr | null {
     if (lowerer.chainBlocked(expr)) return null;
+    if (stdlibGlobalNameOf(lowerer, expr.expression) === "Object") {
+      const fn = own(OBJECT_CALLABLE_VALUES, expr.name.text);
+      if (fn) return lowerer.lowerNativeCallableValue(fn, `Object.${expr.name.text}`, locOf(expr));
+    }
     // A never-tainted JS receiver type lowered checked-dynamic
     // (neverTaintedJsType — `cmd.length` on `const cmd = ['pwd', []]`):
     // stand down so the dyn keyed read below the chain answers, instead
@@ -4918,6 +4923,7 @@ export function lowerOptionalNumber(
     ) {
       declared = shape.fields[0]!.type;
     }
+    if (!declared && isJsSourceFile(expr.getSourceFile()) && recordKeyResultOk(lowerer, shape, DYN)) declared = DYN;
     if (!declared) {
       lowerer.unsupported(
         "SC1090",
@@ -9466,7 +9472,7 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
             ? { kind: "call", callee: helper, args: [obj], type: present, loc: locOf(access.expression) }
             : lowerer.maybeNarrow(obj, access.expression);
         }
-        return obj;
+        return obj.type.kind === "dyn" ? lowerer.coerceInto(access.expression, obj, receiverIr) : obj;
       };
       if (access.name.text === "cause" && receiverIr.className !== "%DOMException") {
         let root = info;

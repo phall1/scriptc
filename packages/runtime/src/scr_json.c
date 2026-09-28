@@ -4267,6 +4267,37 @@ static ScrDyn *scr_dyn_objwalk(const ScrDyn *v, ScrObjWalk mode) {
 
 ScrDyn *scr_dyn_obj_keys(const ScrDyn *v) { return scr_dyn_objwalk(v, SCR_OBJWALK_KEYS); }
 
+/* Native dictionaries have only Object.prototype or a null prototype;
+ * neither contributes enumerable keys. Snapshot names without invoking
+ * getters; the loop rechecks live ownership before visiting each name. */
+ScrDyn *scr_dyn_for_in_keys(const ScrDyn *v) {
+  switch (v->kind) {
+  case SCR_DYN_OBJ:
+  case SCR_DYN_ARR:
+    return scr_dyn_obj_keys(v);
+  case SCR_DYN_STR: {
+    ScrDyn *keys = scr_dyn_new_arr();
+    size_t length = (size_t)scr_str_utf16_len(v->v.str);
+    for (size_t i = 0; i < length; i++) {
+      char key[24];
+      int len = snprintf(key, sizeof key, "%zu", i);
+      scr_dyn_arr_push(keys, scr_dyn_objwalk_key(key, (size_t)len));
+    }
+    return keys;
+  }
+  case SCR_DYN_NULL:
+  case SCR_DYN_UNDEF:
+  case SCR_DYN_BOOL:
+  case SCR_DYN_NUM:
+    return scr_dyn_new_arr();
+  default: {
+    static const char msg[] = "for-in over this checked-dynamic kind is not supported yet";
+    scr_throw_error_msg(SCR_ERR_ERROR, msg, sizeof msg - 1);
+    return NULL;
+  }
+  }
+}
+
 /* One source's own enumerable members onto an OBJ target. OBJ sources
  * snapshot their keys, then check attributes and read values in order so
  * getters can affect later entries. Arrays, strings, and bytes use their

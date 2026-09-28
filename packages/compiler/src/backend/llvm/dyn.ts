@@ -46,6 +46,7 @@ const DYN_HANDLE_TAG_NUM: Record<string, number> = {
   http2Stream: 5,
   httpClientReq: 6,
   child: 16,
+  fileHandle: 17,
 };
 
 export const DYN_KIND = {
@@ -2947,7 +2948,54 @@ export class LlDyn {
     const host = this.host;
     const B = new BlockBuilder();
     const argNames: string[] = [];
+    const typedRest = t.rest === true && t.restAbi === "typed";
+    const packTail = (start: number): string => {
+      host.declare(`declare ptr @scr_dyn_new_arr()`);
+      host.declare(`declare void @scr_dyn_arr_push(ptr, ptr)`);
+      const packed = B.tmp();
+      B.line(`${packed} = call ptr @scr_dyn_new_arr()`);
+      const riSlot = B.slot();
+      B.entryAllocas.push(`${riSlot} = alloca ${host.sizeType}`);
+      B.line(`store ${host.sizeType} ${start}, ptr ${riSlot}`);
+      const lc = B.newLabel("dfk.rc");
+      const lb = B.newLabel("dfk.rb");
+      const le = B.newLabel("dfk.re");
+      B.br(lc);
+      B.startBlock(lc);
+      const ri = B.tmp();
+      const cont = B.tmp();
+      B.line(`${ri} = load ${host.sizeType}, ptr ${riSlot}`);
+      B.line(`${cont} = icmp ult ${host.sizeType} ${ri}, %argc`);
+      B.condBr(cont, lb, le);
+      B.startBlock(lb);
+      const ap = B.tmp();
+      const av = B.tmp();
+      B.line(`${ap} = getelementptr inbounds ptr, ptr %args, ${host.sizeType} ${ri}`);
+      B.line(`${av} = load ptr, ptr ${ap}`);
+      const rv = this.retainDyn(B, av);
+      B.line(`call void @scr_dyn_arr_push(ptr ${packed}, ptr ${rv})`);
+      const ri2 = B.tmp();
+      B.line(`${ri2} = add ${host.sizeType} ${ri}, 1`);
+      B.line(`store ${host.sizeType} ${ri2}, ptr ${riSlot}`);
+      B.br(lc);
+      B.startBlock(le);
+      return packed;
+    };
     t.params.forEach((p, i) => {
+      if (typedRest && i === t.params.length - 1) {
+        const packed = packTail(i);
+        const a = B.tmp();
+        B.line(`${a} = call ${this.valTy(p)} @${this.dynCheckHelper(p)}(ptr ${packed}, ptr null)`);
+        host.declare(`declare void @scr_dyn_release(ptr)`);
+        B.line(`call void @scr_dyn_release(ptr ${packed})`);
+        this.pendingBail(B, "dfk.rest", () => {
+          t.params.slice(0, i).forEach((q, j) => {
+            if (isRefCounted(q)) B.line(`call void ${releaseSym(host, q)}(ptr ${argNames[j]})`);
+          });
+        }, "ptr null");
+        argNames.push(a);
+        return;
+      }
       // JS arity: a missing argument IS the undefined dyn value.
       const adSlot = B.slot();
       B.entryAllocas.push(`${adSlot} = alloca ptr`);
@@ -3017,38 +3065,7 @@ export class LlDyn {
     });
     // VARIADIC (rest-marked) signatures: one extra trailing dyn-array
     // param carries the call's arguments from index params.length on.
-    let rest: string | null = null;
-    if (t.rest) {
-      host.declare(`declare ptr @scr_dyn_new_arr()`);
-      host.declare(`declare void @scr_dyn_arr_push(ptr, ptr)`);
-      rest = B.tmp();
-      B.line(`${rest} = call ptr @scr_dyn_new_arr()`);
-      const riSlot = B.slot();
-      B.entryAllocas.push(`${riSlot} = alloca ${host.sizeType}`);
-      B.line(`store ${host.sizeType} ${t.argumentsAll ? 0 : t.params.length}, ptr ${riSlot}`);
-      const lc = B.newLabel("dfk.rc");
-      const lb = B.newLabel("dfk.rb");
-      const le = B.newLabel("dfk.re");
-      B.br(lc);
-      B.startBlock(lc);
-      const ri = B.tmp();
-      const cont = B.tmp();
-      B.line(`${ri} = load ${host.sizeType}, ptr ${riSlot}`);
-      B.line(`${cont} = icmp ult ${host.sizeType} ${ri}, %argc`);
-      B.condBr(cont, lb, le);
-      B.startBlock(lb);
-      const ap = B.tmp();
-      const av = B.tmp();
-      B.line(`${ap} = getelementptr inbounds ptr, ptr %args, ${host.sizeType} ${ri}`);
-      B.line(`${av} = load ptr, ptr ${ap}`);
-      const rv = this.retainDyn(B, av);
-      B.line(`call void @scr_dyn_arr_push(ptr ${rest}, ptr ${rv})`);
-      const ri2 = B.tmp();
-      B.line(`${ri2} = add ${host.sizeType} ${ri}, 1`);
-      B.line(`store ${host.sizeType} ${ri2}, ptr ${riSlot}`);
-      B.br(lc);
-      B.startBlock(le);
-    }
+    const rest = t.rest && !typedRest ? packTail(t.argumentsAll ? 0 : t.params.length) : null;
     // The closure CONSUMES its params (+1 each moved in).
     const fnp = B.tmp();
     const fn = B.tmp();
@@ -3104,7 +3121,7 @@ export class LlDyn {
       `define internal ptr @${name}(ptr %v, ptr %fname) ${FN_ATTRS} { ; box ${key} into dyn`,
       `entry:`,
       `  %c = call ptr @scr_closure_retain_v(ptr %v)`,
-      `  %r = call ptr @scr_dyn_new_func(ptr %c, ptr @${thunk}, i32 ${t.params.length}, ptr ${sigLit}, ptr %fname)`,
+      `  %r = call ptr @scr_dyn_new_func(ptr %c, ptr @${thunk}, i32 ${t.params.length - (t.restAbi === "typed" ? 1 : 0)}, ptr ${sigLit}, ptr %fname)`,
       `  ret ptr %r`,
       `}`,
       ``,

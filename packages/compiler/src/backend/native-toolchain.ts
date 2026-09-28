@@ -4485,7 +4485,7 @@ async function compileCInternal(
     ...(opts.inspect ? [rt(join(rtDir, "scr_inspect.c"))] : []),
     ...((opts.dynInvoke || nativeFetch) ? [rt(join(rtDir, "scr_dyn_invoke.c"))] : []),
     ...(opts.dc ? [rt(join(rtDir, "scr_dc.c"))] : []),
-    ...(opts.dynAsync || opts.dynInvoke || opts.dc || nativeFetch ? [rt(join(rtDir, "scr_async_dyn.c"))] : []),
+    ...(opts.dynAsync || opts.dynInvoke || opts.dc || opts.fileHandle || nativeFetch ? [rt(join(rtDir, "scr_async_dyn.c"))] : []),
     // The zlib UNIT (scr_zlib.c) gates on zlib.* IR use; the LINK (system
     // libz on the default host-clang build, vendored objects on Zig builds)
     // also serves the native fetch's gzip decoder — spread exactly once.

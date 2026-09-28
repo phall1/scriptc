@@ -237,7 +237,9 @@ function lowerBuiltinOptionalDefault(
    * declaration is not an import specifier. Returns the CANONICAL module
    * name and the EXPORTED member name (not the local alias). */
   export function builtinImportOf(lowerer: Lowerer, ident: ts.Identifier): { module: string; member: string } | null {
-    const symbol = lowerer.checker.getSymbolAtLocation(ident);
+    const symbol = ts.isShorthandPropertyAssignment(ident.parent) && ident.parent.name === ident
+      ? lowerer.checker.getShorthandAssignmentValueSymbol(ident.parent)
+      : lowerer.checker.getSymbolAtLocation(ident);
     const decl = symbol ? lowerer.checker.declarationsOf(symbol)[0] : undefined;
     if (!decl) return null;
     // The CommonJS twin of the named import: a destructured require

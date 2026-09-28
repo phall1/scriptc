@@ -1976,6 +1976,13 @@ export function lowerShorthandValue(lowerer: Lowerer, prop: ts.ShorthandProperty
   const propName = prop.name as ts.Identifier;
   const loc = locOf(propName);
   const symbol = lowerer.checker.getShorthandAssignmentValueSymbol(prop);
+  // Import identifiers in shorthand position carry the property's symbol,
+  // so the ordinary identifier expression path cannot resolve them.
+  const builtin = lowerer.builtinImportOf(propName);
+  if (builtin) {
+    const callable = lowerer.lowerBuiltinCallableValue(builtin, loc);
+    if (callable) return callable;
+  }
   if (symbol) {
     if (lowerer.ctx.selfSymbol === symbol) {
       return { kind: "selfRef", type: lowerer.ctx.selfType!, loc };

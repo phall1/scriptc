@@ -3364,6 +3364,7 @@ typedef enum {
   SCR_DYNH_EVENT,          /* native static-fetch abort Event */
   SCR_DYNH_ABORT_CONTROLLER, /* native static-fetch AbortController */
   SCR_DYNH_CHILD,          /* child_process.ChildProcess */
+  SCR_DYNH_FILE_HANDLE,    /* fs/promises.FileHandle */
   SCR_DYNH_COUNT,
 } ScrDynHandleTag;
 
@@ -3523,6 +3524,7 @@ bool scr_dyn_field_eq_bool(const ScrDyn *d, const ScrStr *key, bool value);
  * member nodes. null/undefined receivers throw Node's catchable
  * TypeError. */
 ScrDyn *scr_dyn_obj_keys(const ScrDyn *v);
+ScrDyn *scr_dyn_for_in_keys(const ScrDyn *v);
 /* Snapshot all own string keys of a SCR_DYN_OBJ in JS order. Returns +1. */
 ScrDyn *scr_dyn_obj_own_keys(const ScrDyn *v);
 /* Object.hasOwn over a dyn receiver: OBJ member presence, ARR index
@@ -3814,6 +3816,7 @@ typedef struct ScrDynHandleOps {
 } ScrDynHandleOps;
 
 void scr_dyn_handle_install(ScrDynHandleTag tag, const ScrDynHandleOps *ops);
+void scr_file_handle_dyn_install(void);
 /* The tag's class display name ("IncomingMessage") — error texts across
  * units; answers "object" for an uninstalled tag (error paths only). */
 const char *scr_dyn_handle_cls(const ScrDyn *d);

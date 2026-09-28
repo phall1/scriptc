@@ -255,6 +255,7 @@ static bool scr_file_handle_mode_valid(double mode) {
 }
 
 ScrFileHandle *scr_file_handle_open(ScrStr *path, ScrStr *flags, double mode) {
+  scr_file_handle_dyn_install();
   if (!scr_file_handle_path_valid(path)) return NULL;
   int of = scr_file_handle_open_flags(flags);
   if (of < 0) return NULL;
@@ -509,4 +510,53 @@ ScrPromise *scr_file_handle_stat_promise(ScrFileHandle *h) {
   ScrStats *st = scr_file_handle_stat(h);
   return scr_promise_settled_ref(st, &scr_stats_retain_v,
                                  &scr_stats_release_v, NULL);
+}
+
+/* The checked boundary retains the shared descriptor slot. Statically
+ * typed uses unwrap it before invoking the existing FileHandle surface. */
+static ScrDyn *scr_file_handle_dyn_invoke(
+    void *h, ScrDyn *self, const char *method,
+    ScrDyn *const *args, size_t argc, const char *what) {
+  (void)self;
+  (void)args;
+  (void)argc;
+  (void)what;
+  if (strcmp(method, "close") == 0) {
+    scr_file_handle_close(h);
+    ScrPromise *p = scr_promise_settled_ref(
+        scr_dyn_retain(scr_dyn_undefined()), &scr_dyn_retain_v,
+        &scr_dyn_release_v, NULL);
+    ScrDyn *out = scr_dyn_new_promise(p);
+    scr_promise_release(p);
+    return out;
+  }
+  static const char msg[] =
+      "FileHandle method calls through an 'unknown' value are not supported yet — narrow the value to FileHandle first";
+  scr_throw_error_msg(SCR_ERR_ERROR, msg, sizeof msg - 1);
+  return NULL;
+}
+
+static ScrDyn *scr_file_handle_dyn_get(void *h, const char *key, size_t len) {
+  if (len == 2 && memcmp(key, "fd", 2) == 0) {
+    return scr_dyn_new_num(scr_file_handle_fd(h));
+  }
+  return NULL;
+}
+
+static bool scr_file_handle_dyn_set(
+    void *h, const char *key, size_t len, const ScrDyn *value) {
+  (void)h;
+  (void)key;
+  (void)len;
+  (void)value;
+  return false;
+}
+
+void scr_file_handle_dyn_install(void) {
+  static const ScrDynHandleOps ops = {
+    "FileHandle", &scr_file_handle_retain_v, &scr_file_handle_release_v,
+    &scr_file_handle_dyn_invoke, &scr_file_handle_dyn_get,
+    &scr_file_handle_dyn_set, NULL,
+  };
+  scr_dyn_handle_install(SCR_DYNH_FILE_HANDLE, &ops);
 }

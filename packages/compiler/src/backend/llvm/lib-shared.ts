@@ -822,6 +822,7 @@ export const LIB_FN_SYMS: Record<string, string> = {
   // (option/DataClone/cycle errors), and new RegExp's eager compile
   // (catchable SyntaxError) — all may-throw generics over the checked-dynamic tree.
   "dyn.objKeys": "scr_dyn_obj_keys",
+  "dyn.forInKeys": "scr_dyn_for_in_keys",
   "dyn.hasOwn": "scr_dyn_has_own",
   "dyn.assign": "scr_dyn_assign",
   // variadic Object.assign: the source pack (push never throws; the

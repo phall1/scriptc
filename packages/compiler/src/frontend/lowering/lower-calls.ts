@@ -229,7 +229,7 @@ export interface GenericInstance {
    * the body builds (a re-demand is same-key recursion: the caller uses
    * the PINNED fallback returnType and returnPinned locks it); "done" once
    * returnType holds the inferred (or pinned) truth. */
-  implicitState?: "lowering" | "done";
+  implicitState?: "lowering" | "done" | "failed";
   /** Same-key recursion observed the fallback return type mid-lowering, so
    * the ABI is locked to it — the return post-pass coerces every return
    * value to the pinned type instead of adopting the inferred one. */
@@ -1025,6 +1025,7 @@ function completeFuncValueArgs(
       !hasExplicitJsDocReturn(decl) &&
       mappedReturn !== null &&
       promiseCarriesDyn(lowerer, mappedReturn) &&
+      !decl.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword) &&
       decl.parameters.some((param) => {
         const mapped = lowerer.mapTypeOf(lowerer.typeOf(param.name));
         return mapped === null || mapped.kind === "dyn";
@@ -1810,7 +1811,7 @@ export function genericFnOf(lowerer: Lowerer, ident: ts.Identifier): GenericFnIn
         final = DYN; // no valued return: JS completes with undefined — the dyn undefined, today's slot
       } else if (distinct.length === 1) {
         const t = distinct[0]!;
-        final = !sawBare ? t : t.kind === "dyn" ? DYN : (lowerer.withUndefinedArmOf(t) ?? DYN);
+        final = isUnitType(t) ? DYN : !sawBare ? t : t.kind === "dyn" ? DYN : (lowerer.withUndefinedArmOf(t) ?? DYN);
       } else {
         final = DYN; // disagreeing returns: the checked-dynamic join
       }
@@ -2179,6 +2180,7 @@ function runtimeOptionalHofGenericBinding(
       if (!declSig) return null;
       const retTs = lowerer.checker.getReturnTypeOfSignature(declSig);
       if (retTs.flags & ts.TypeFlags.Any) return null;
+      if (retTs.flags & (ts.TypeFlags.Null | ts.TypeFlags.Undefined)) return DYN;
       if (lowerer.checker.isArrayType(retTs)) {
         const elem = lowerer.checker.getTypeArguments(retTs as ts.TypeReference)[0];
         // An implicit-any parameter poisons an inferred array result to
@@ -2309,6 +2311,7 @@ function storedImplicitArgumentType(lowerer: Lowerer, arg: ts.Expression): IrTyp
     argTypes: Map<ts.Symbol, ts.Type>,): GenericInstance {
     const key = shapes.map((s) => typeKey(s.type)).join(",");
     let inst = info.instances.get(key);
+    if (inst?.implicitState === "failed") lowerer.unsupported("SC1090", blame, `the failed specialization of '${info.baseName}'`);
     if (inst) return inst;
     if (info.instances.size >= MAX_GENERIC_INSTANCES) {
       lowerer.unsupported(
@@ -2340,11 +2343,10 @@ function storedImplicitArgumentType(lowerer: Lowerer, arg: ts.Expression): IrTyp
       ...(declared === null ? { implicitInferReturn: true as const } : {}),
     };
     info.instances.set(key, inst);
-    // EAGER lowering (nested, the lambda discipline): the call site needs
-    // the settled return type NOW. A body-level poison (a fenced parameter
-    // form) skips the function like lowerFunction's rule — calls then meet
-    // the pinned signature over a missing body, which the linker never
-    // sees because the poison also fenced the call statement.
+    // Eager lowering settles the return ABI before callers use it. A failed
+    // JS body must still have a throwing implementation: later references
+    // (including recursive ones) can already hold its cached signature.
+    const diagsBefore = lowerer.diags.length;
     try {
       // Implicit-any instances lower EAGERLY at the call site so their
       // inferred return type is available immediately. They therefore do
@@ -2360,8 +2362,15 @@ function storedImplicitArgumentType(lowerer: Lowerer, arg: ts.Expression): IrTyp
       lowerer.implicitFns.push(fn);
     } catch (e) {
       if (!(e instanceof PoisonError)) throw e;
-      inst.implicitState = "done";
-      throw e;
+      inst.implicitState = "failed";
+      const types: IrType[] = shapes.map((shape) => shape.type);
+      if (info.member?.kind === "method") types.unshift({ kind: "object", className: info.member.cls.def.name });
+      const fn = lowerer.deferToRuntimeFence(diagsBefore, info.decl, {
+        kind: "function", name: inst.name, returnType: inst.returnType,
+        params: types.map((type, index) => ({ localId: `p.${index}`, name: `p${index}`, type })),
+      });
+      if (!fn) throw e;
+      lowerer.implicitFns.push(fn);
     }
     inst.implicitState = "done";
     return inst;
@@ -5964,7 +5973,7 @@ export function lowerDynDispatchMethodCall(
   arrayReceiver: boolean,
 ): IrExpr | null {
   const method = access.name.text;
-  if ((!DYN_DISPATCH_METHODS.has(method) && !isJsSourceFile(call.getSourceFile())) || call.questionDotToken || access.questionDotToken) return null;
+  if ((!DYN_DISPATCH_METHODS.has(method) && !isJsSourceFile(call.getSourceFile())) || lowerer.chainBlocked(call, access)) return null;
   if (call.arguments.some((arg) => ts.isSpreadElement(arg))) {
     lowerer.unsupported("SC1090", call, "spread arguments in calls through 'unknown' values");
   }
@@ -10558,7 +10567,7 @@ export function lowerFunction(lowerer: Lowerer, decl: ts.FunctionDeclaration): I
         const helper = lowerer.narrowedArmHelper(receiver.type.unionId, receiverIr, locOf(access.expression));
         if (helper !== null) return { kind: "call", callee: helper, args: [receiver], type: receiverIr, loc: locOf(access.expression) };
       }
-      return receiver;
+      return receiver.type.kind === "dyn" ? lowerer.coerceInto(access.expression, receiver, receiverIr) : receiver;
     };
     const info = lowerer.classes.get(receiverIr.className);
     if (!info) lowerer.flushDeferredClass(receiverIr.className);

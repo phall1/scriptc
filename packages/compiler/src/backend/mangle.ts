@@ -13,13 +13,13 @@ import { unsignedHex } from "./literals.js";
  * frontend, which separates name and counter with '.' exclusively.
  */
 
-function sanitize(name: string): string {
+function sanitize(name: string, property = false): string {
   let result = "";
   for (let i = 0; i < name.length; i++) {
     const code = name.charCodeAt(i);
     const ch = name.charAt(i);
-    result += code === 46 ? "_"
-      : (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || (code >= 48 && code <= 57) || code === 95
+    result += code === 46 && !property ? "_"
+      : (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || (code >= 48 && code <= 57) || (code === 95 && !property)
         ? ch : `_x${unsignedHex(code)}_`;
   }
   return result;
@@ -71,7 +71,9 @@ export function mangleClassRelease(className: string): string {
   return `sc_release_${sanitize(className)}`;
 }
 export function mangleField(fieldName: string): string {
-  return `sc_fld_${sanitize(fieldName)}`;
+  // Property keys are arbitrary strings. Encode both dots and underscores
+  // so a literal key cannot collide with either a separator or an escape.
+  return `sc_fld_${sanitize(fieldName, true)}`;
 }
 /** Hierarchy classes only (an `extends` anywhere): the per-class DIRECT
  * release — the whole-object teardown stored in the class's vtable, which

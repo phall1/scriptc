@@ -4507,6 +4507,8 @@ function emitDynamicLibCall(state: LibCallState): Temp {
             return finish(`scr_dyn_this_get()`);
           case "dyn.objKeys":
             return finish(`scr_dyn_obj_keys(${arg(0)})`);
+          case "dyn.forInKeys":
+            return finish(`scr_dyn_for_in_keys(${arg(0)})`);
           case "dyn.assign":
             // Object.assign over dyn values: own members copy, the target
             // returns (+1); non-object receivers throw like Node.

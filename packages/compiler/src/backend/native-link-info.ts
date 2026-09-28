@@ -150,7 +150,7 @@ function runtimeSourceRecipe(
     ...(features.inspect ? ["scr_inspect.c"] : []),
     ...(features.dynInvoke || nativeFetch ? ["scr_dyn_invoke.c"] : []),
     ...(features.dc ? ["scr_dc.c"] : []),
-    ...(features.dynAsync || features.dynInvoke || features.dc || nativeFetch
+    ...(features.dynAsync || features.dynInvoke || features.dc || features.fileHandle || nativeFetch
       ? ["scr_async_dyn.c"]
       : []),
     ...(features.zlib ? ["scr_zlib.c"] : []),

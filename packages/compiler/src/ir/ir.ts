@@ -3869,6 +3869,7 @@ export type IrLibFn =
    * empty array; null/undefined throw Node's catchable TypeError
    * ("Cannot convert undefined or null to object"). */
   | "dyn.objKeys"
+  | "dyn.forInKeys"
   | "dyn.hasOwn"
   | "dyn.assign"
   /** Variadic Object.assign over CHECKED-DYNAMIC targets (`Object.assign(
@@ -6100,6 +6101,7 @@ export function canMarshalTypedFuncIntoIsland(
  * (dynCheck's "expected IncomingMessage ..." texts). */
 export const DYN_HANDLE_KINDS: ReadonlyMap<string, { tag: string; cls: string }> = new Map([
   ["child", { tag: "SCR_DYNH_CHILD", cls: "ChildProcess" }],
+  ["fileHandle", { tag: "SCR_DYNH_FILE_HANDLE", cls: "FileHandle" }],
   ["httpReq", { tag: "SCR_DYNH_HTTP_REQ", cls: "IncomingMessage" }],
   ["httpRes", { tag: "SCR_DYNH_HTTP_RES", cls: "ServerResponse" }],
   ["netSocket", { tag: "SCR_DYNH_NET_SOCKET", cls: "Socket" }],
@@ -6281,10 +6283,11 @@ export function canBoxFuncIntoDyn(
 ): boolean {
   return (
     t.kind === "func" &&
-    // Only the legacy hidden-dyn rest ABI has a checked-dynamic call thunk.
-    // Typed rest stays static (its trailing array is compiler-packed), and
-    // island rest has its separate engine host-callback adapter.
-    (t.rest !== true || t.restAbi === undefined) &&
+    // Typed rest occupies the final native array parameter; its thunk
+    // checks a fresh array containing all remaining call arguments.
+    // Island rest keeps its separate engine host-callback adapter.
+    (t.rest !== true || t.restAbi === undefined ||
+      (t.restAbi === "typed" && t.params.at(-1)?.kind === "array")) &&
     // A jsval (island) param converts through scr_jsval_from_dyn in the
     // thunk (wrapped cells unwrap by reference, dyn data deep-copies) —
     // the checker-'any' callback params of the routed-dispatch lane
@@ -7802,6 +7805,7 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "dyn.cloneTransferFail",
   // the dyn Object walks throw on null/undefined receivers
   "dyn.objKeys",
+  "dyn.forInKeys",
   "dyn.hasOwn",
   "dyn.assign",
   // variadic Object.assign: spread flattening throws V8's spread-call

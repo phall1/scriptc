@@ -40,6 +40,17 @@ const BASE: NativeLinkFeatures = {
 };
 
 describe("native link info recipes", () => {
+  test("FileHandle-only links include checked promise adapters without an engine", async () => {
+    const info = await createNativeLinkInfo({
+      programObject: "/out/app.o", target: MACOS_ARM64_TARGET,
+      features: { ...BASE, fileHandle: true }, ffi: null,
+    });
+    const sources = info.runtime_pack.source_sets.find((set) => set.name === "runtime")!.sources;
+    expect(sources).toContain("src/scr_file_handle.c");
+    expect(sources).toContain("src/scr_async_dyn.c");
+    expect(sources).not.toContain("src/scr_island.c");
+  });
+
   test("feature source sets reproduce runtime and vendor gates", async () => {
     const info = await createNativeLinkInfo({
       programObject: "/out/app.o",

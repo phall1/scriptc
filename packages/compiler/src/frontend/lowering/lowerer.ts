@@ -6709,8 +6709,32 @@ export class Lowerer {
     //   value — the call runs (a `never` thrower never comes back, so the
     //   trap is unreachable there), then the stranded TypeError.
     let strandParams = false;
+    const narrowedParams = new Map<number, ReadonlySet<number>>();
+    const partialDynParams = new Map<number, IrType>();
     for (let i = 0; i < fromT.params.length; i++) {
-      if (!this.coercibleValue(toT.params[i]!, fromT.params[i]!)) strandParams = true;
+      const actual = toT.params[i]!;
+      const expected = fromT.params[i]!;
+      if (this.coercibleValue(actual, expected)) continue;
+      if (actual.kind === "union" && expected.kind === "dyn") {
+        const arms = this.unions.get(actual.unionId)?.arms.filter((arm) => this.dynConvertible(arm)) ?? [];
+        if (arms.length > 0) {
+          partialDynParams.set(i, arms.length === 1 ? arms[0]! : { kind: "union", unionId: this.unions.intern(arms) });
+          continue;
+        }
+      }
+      // A stored native builtin can have a narrower supported overload
+      // than its public declaration. Preserve every supported union arm
+      // and reject only an invocation carrying an unsupported arm. This
+      // is the union counterpart of the checked single-arm extraction.
+      if (actual.kind === "union" && expected.kind === "union") {
+        const source = this.unions.get(actual.unionId);
+        const target = this.unions.get(expected.unionId);
+        if (source && target && target.arms.every((arm) => this.armTag(actual.unionId, arm) >= 0)) {
+          narrowedParams.set(i, new Set(source.arms.flatMap((arm, tag) => this.armTag(expected.unionId, arm) < 0 ? [tag] : [])));
+          continue;
+        }
+      }
+      strandParams = true;
     }
     let voidRet: "dyn" | "jsval" | "strand" | null = null;
     let strandRet = false;
@@ -6757,7 +6781,24 @@ export class Lowerer {
     } else {
       const args = fromT.params.map((pt, i) => {
         const aRef: IrExpr = { kind: "varRef", localId: `a.${i}`, type: toT.params[i]!, loc };
-        const converted = this.coerceToExpected(aRef, pt);
+        const partial = partialDynParams.get(i);
+        if (partial && aRef.type.kind === "union") {
+          const source = this.unions.get(aRef.type.unionId)!;
+          const supported = partial.kind === "union" ? this.unions.get(partial.unionId)!.arms : [partial];
+          const rejected = new Set(source.arms.flatMap((arm, tag) => supported.some((accepted) => typeEquals(accepted, arm)) ? [] : [tag]));
+          const narrow = partial.kind === "union"
+            ? this.unionRetagHelper(aRef.type.unionId, partial.unionId, loc, rejected)
+            : this.narrowedArmHelper(aRef.type.unionId, partial, loc);
+          if (!narrow) throw new InternalCompilerError("lowerer bug: partial callable parameter stopped narrowing");
+          return this.coerceToExpected({ kind: "call", callee: narrow, args: [aRef], type: partial, loc }, pt);
+        }
+        const narrowed = narrowedParams.get(i);
+        const helper = narrowed && aRef.type.kind === "union" && pt.kind === "union"
+          ? this.unionRetagHelper(aRef.type.unionId, pt.unionId, loc, narrowed)
+          : null;
+        const converted: IrExpr = helper
+          ? { kind: "call", callee: helper, args: [aRef], type: pt, loc }
+          : this.coerceToExpected(aRef, pt);
         if (!typeEquals(converted.type, pt)) throw new InternalCompilerError("lowerer bug: probed fn-adapter param stopped coercing");
         return converted;
       });
@@ -10343,10 +10384,9 @@ export class Lowerer {
       const roots = lowerTlsRootCertificates(this, bi, loc);
       if (roots) return roots;
     }
-    // TypeScript builtin values admitted by an explicit surface-table
-    // contract materialize as interned closures. JavaScript sources retain
-    // their established builtin identity-token/fence policy.
-    if (!isJsSourceFile(expr.getSourceFile())) {
+    // Builtin values admitted by an explicit surface-table contract use
+    // the same interned native closures in TypeScript and JavaScript.
+    {
       const callable = this.lowerBuiltinCallableValue(bi, loc);
       if (callable) return callable;
     }
@@ -10379,8 +10419,12 @@ export class Lowerer {
     loc: SrcLoc,
   ): IrExpr | null {
     const fn = builtinModuleFnOf(this, bi.module, bi.member);
-    const valueParams = fn?.valueParams;
-    if (!fn || !valueParams) return null;
+    return fn ? this.lowerNativeCallableValue(fn, `${bi.module}.${bi.member}`, loc) : null;
+  }
+
+  lowerNativeCallableValue(fn: BuiltinModuleFn, display: string, loc: SrcLoc): IrExpr | null {
+    const valueParams = fn.valueParams;
+    if (!valueParams) return null;
     const shapes: ParamShape[] = valueParams.map((param): ParamShape => {
       if (param.mode === "rest") return { mode: "rest", type: arrayOf(param.type) };
       if (param.mode === "optional") {
@@ -10406,7 +10450,7 @@ export class Lowerer {
         const valueParam = valueParams[index];
         if (!valueParam) {
           throw new InternalCompilerError(
-            `builtin callable value '${bi.module}.${bi.member}' has a missing value parameter`,
+            `builtin callable value '${display}' has a missing value parameter`,
           );
         }
         const ref: IrExpr = {
@@ -10416,16 +10460,16 @@ export class Lowerer {
           loc,
         };
         if (valueParam.mode !== "optional") return ref;
-        if (valueParam.type.kind !== "string" || param.type.kind !== "union") {
+        if ((valueParam.type.kind !== "string" && valueParam.type.kind !== "f64") || param.type.kind !== "union") {
           throw new InternalCompilerError(
-            `builtin callable value '${bi.module}.${bi.member}' has an unsupported optional default`,
+            `builtin callable value '${display}' has an unsupported optional default`,
           );
         }
         const undefTag = this.armTag(param.type.unionId, UNDEFINED_T);
         const valueTag = this.armTag(param.type.unionId, valueParam.type);
         if (undefTag < 0 || valueTag < 0) {
           throw new InternalCompilerError(
-            `builtin callable value '${bi.module}.${bi.member}' has an invalid optional ABI`,
+            `builtin callable value '${display}' has an invalid optional ABI`,
           );
         }
         return {
@@ -10439,7 +10483,9 @@ export class Lowerer {
             type: BOOL,
             loc,
           },
-          then: { kind: "strLit", value: valueParam.defaultValue, type: STRING, loc },
+          then: typeof valueParam.defaultValue === "string"
+            ? { kind: "strLit", value: valueParam.defaultValue, type: STRING, loc }
+            : { kind: "numLit", value: valueParam.defaultValue, type: F64, loc },
           else_: {
             kind: "unionNarrow",
             unionId: param.type.unionId,

@@ -18,7 +18,7 @@ const OPTIONAL = [
   ["scr_copying.c", "copying"], ["scr_file_handle.c", "fileHandle"],
   ["scr_regex.c", "regex"], ["scr_assert.c", any("assert", "regex", "symbol")],
   ["scr_inspect.c", "inspect"], ["scr_dyn_invoke.c", any("dynInvoke", "nativeFetch")],
-  ["scr_dc.c", "dc"], ["scr_async_dyn.c", any("dynAsync", "dynInvoke", "dc", "nativeFetch")],
+  ["scr_dc.c", "dc"], ["scr_async_dyn.c", any("dynAsync", "dynInvoke", "dc", "fileHandle", "nativeFetch")],
   ["scr_zlib.c", "zlib"], ["scr_zlib_island.c", all("zlib", "dynamic")],
   ["scr_events.c", "events"], ["scr_readline.c", "events"],
   ["scr_events_emitter.c", "emitter"], ["scr_dyn_handle.c", any("emitter", "netEffective")],

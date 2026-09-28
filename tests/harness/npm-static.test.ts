@@ -128,6 +128,34 @@ describe(`npm-static pilots${sanitize ? " (sanitized)" : ""}`, () => {
     }
   });
 
+  test.each(["stored-native-builtins.js", "stored-object-helpers.js", "renderer-specializations.js", "renderer-export-dictionaries.js"].flatMap((name) =>
+    (["c", "llvm"] as const).map((backend) => ({ name, backend })),
+  ))("renderer startup $name compiles from shipped JavaScript ($backend)", async ({ name, backend }) => {
+    const dir = mkdtempSync(join(tmpdir(), "scriptc-renderer-startup-"));
+    try {
+      const pkg = join(dir, "node_modules", "renderer-startup");
+      mkdirSync(pkg, { recursive: true });
+      writeFileSync(join(dir, "package.json"), '{"type":"module"}');
+      writeFileSync(join(pkg, "package.json"), '{"name":"renderer-startup","type":"module","main":"index.js","types":"index.d.ts"}');
+      writeFileSync(join(pkg, "index.d.ts"), "export {};\n");
+      cpSync(join(repoRoot, "tests/corpus", name), join(pkg, "index.js"));
+      const entry = join(dir, "main.js");
+      writeFileSync(entry, 'import "renderer-startup";');
+      const { coverage } = analyze(entry, { npmStatic: "auto" });
+      expect(coverage.diagnostics).toEqual([]);
+      expect(coverage.runtimeFences ?? [], JSON.stringify(coverage.runtimeFences)).toEqual([]);
+      const result = await compile(entry, { backend, dynamic: false, npmStatic: "auto", sanitize, outDir: dir, outPath: join(dir, "program") });
+      expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
+      if (!result.ok) return;
+      const [nodeRes, nativeRes] = await Promise.all([runBinary(process.execPath, [entry]), runBinary(result.binaryPath, [])]);
+      expect(nativeRes.stdout).toEqual(nodeRes.stdout);
+      expect(comparableStderr(nativeRes.stderr)).toEqual(nodeRes.stderr);
+      expect(nativeRes.exitCode).toBe(nodeRes.exitCode);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test.each(["c", "llvm"] as const)("bundled class aliases preserve declared methods and callback fields (%s)", async (backend) => {
     const entry = join(pilotRoot, "bundled-methods-cli.ts");
     const { coverage } = analyze(entry, { npmStatic: "auto" });

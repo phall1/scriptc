@@ -15,11 +15,11 @@ import type { CycleEdge } from "../program.js";
 import { invalidJsonModuleDiag, npmEmbedFailedDiag, requiresDynamicImportDiag } from "../../diagnostics/diagnostic.js";
 import { BOOL, DYN, F64, IrClassDef, IrExpr, IrFunction, IrGlobal, IrRecordShape, IrStmt, IrType, IrUnionDef, JSVAL, RUNTIME_ERROR_CLASSES, STRING, SrcLoc, VOID, arrayOf, canBoxFuncIntoDyn, canConvertToDyn, isUnitType } from "../../ir/ir.js";
 import { ENTRY_NAME, PoisonError, boundIdentifiersOf, dynFallbackType, dynUndefinedExpr, importCallHandleType, newFnCtx, staticImportNamespaceType, uncheckedOverloadHandleCall } from "./lowerer.js";
-import { builtinMemberRequireDecl, builtinNamespaceDestructureModuleOf, createRequireBindingDecl, createRequireNamespaceDecl, createRequireProgramModuleDecl, createRequireSpecOf, isPromisifyCall, registerBuiltinCallableAlias } from "./lower-builtins.js";
+import { builtinMemberRequireDecl, builtinNamespaceDestructureModuleOf, createRequireBindingDecl, createRequireNamespaceDecl, createRequireProgramModuleDecl, createRequireSpecOf, isPromisifyCall, registerBuiltinCallableAlias, stripTypeCasts } from "./lower-builtins.js";
 import { bindingContextualGenericFnNodeOf, bindingGenericFnAliasInfoOf, bindingGenericFnInfoOf, bindingGenericFnNodeOf, bindingNeverReassigned, deadUnmappableBinding, implicitLocalFnInfoOf, implicitLocalFnNodeOf, nullishGenericBindingUnitOf, registerOverloadedCallableAlias } from "./lower-calls.js";
 import { hasJsTypeAnnotation, isVarDeclared, numericIteratorSourceOf, provenanceElidedConstDecl } from "./lower-stmts.js";
 import { streamClassAliasDecl } from "./lower-stream.js";
-import { stdlibGlobalAliasDecl, stdlibGlobalAliasNameOf } from "./surfaces.js";
+import { OBJECT_CALLABLE_VALUES, stdlibGlobalAliasDecl, stdlibGlobalAliasNameOf } from "./surfaces.js";
 import { collectNamespaceStmt, nsPathPrefix, trapDeclRootOf } from "./lower-namespaces.js";
 import { collectExpandoMembers } from "./lower-expando.js";
 import { recordTextCodecClass } from "../../ir/ir.js";
@@ -1410,6 +1410,29 @@ export function collectGlobals(lowerer: Lowerer, sf: ts.SourceFile, topStmts: ts
         for (const nameNode of boundIdentifiersOf(decl.name)) {
           const diagsBefore = lowerer.diags.length;
           try {
+            // Generic Object declarations do not describe the concrete
+            // native adapter ABI. Keep their stored values in shared module
+            // storage so separately lowered export helpers see the same closure.
+            const initializer = decl.initializer ? stripTypeCasts(decl.initializer) : undefined;
+            if (
+              isJsSourceFile(sf) && nameNode === decl.name && initializer &&
+              ts.isPropertyAccessExpression(initializer) &&
+              lowerer.isStdlibGlobal(initializer.expression, "Object") &&
+              Object.hasOwn(OBJECT_CALLABLE_VALUES, initializer.name.text)
+            ) {
+              const symbol = lowerer.checker.getSymbolAtLocation(nameNode);
+              if (symbol && !lowerer.globalsBySymbol.has(symbol)) {
+                const g: IrGlobal = {
+                  id: `%g.${tag}${nsPrefix}${nameNode.text}`, name: nameNode.text,
+                  type: DYN, mutable: isLet, source: bindingSource(nameNode),
+                  ...(!isVarDeclared(decl) ? { tdz: true as const } : {}),
+                };
+                lowerer.globalsBySymbol.set(symbol, g);
+                lowerer.globalsList.push(g);
+                if (isVarDeclared(decl)) noteVarGlobalEntryInit(lowerer, sf, g);
+              }
+              continue;
+            }
             // A JS file-scope evolving ARRAY (`const mustCallChecks = [];`
             // — test/common's exit-accounting ledger): the strict type
             // (any[]) has no mapping, but the VALUE is the dyn array the

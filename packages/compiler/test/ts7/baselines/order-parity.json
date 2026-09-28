@@ -10849,6 +10849,48 @@
     "<repo>/tests/corpus/module-fallback-functions/main.js"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/stored-native-builtins.js": {
+   "order": [
+    "<repo>/tests/corpus/stored-native-builtins.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/stored-object-helpers.js": {
+   "order": [
+    "<repo>/tests/corpus/stored-object-helpers.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/typed-rest-callables.ts": {
+   "order": [
+    "<repo>/tests/corpus/typed-rest-callables.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/file-handle-values.ts": {
+   "order": [
+    "<repo>/tests/corpus/file-handle-values.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/renderer-specializations.js": {
+   "order": [
+    "<repo>/tests/corpus/renderer-specializations.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-property-names.ts": {
+   "order": [
+    "<repo>/tests/corpus/native-property-names.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/renderer-export-dictionaries.js": {
+   "order": [
+    "<repo>/tests/corpus/renderer-export-dictionaries.js"
+   ],
+   "diags": []
   }
  }
 }

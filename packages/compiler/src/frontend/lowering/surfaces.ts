@@ -608,7 +608,7 @@ export interface BuiltinModuleFn {
   defaults?: string[];
   /** The source-level function-value signature. Each admitted entry
    * materializes as an interned zero-capture adapter over the fixed runtime
-   * libCall ABI. Optional parameters name the string default selected for
+   * libCall ABI. Optional parameters name the scalar default selected for
    * omission or explicit undefined; rest parameters pack into one typed
    * array slot. Entries with call-site-specific validation remain absent. */
   valueParams?: BuiltinValueParam[];
@@ -616,7 +616,7 @@ export interface BuiltinModuleFn {
 
 export type BuiltinValueParam =
   | { mode: "required"; type: IrType }
-  | { mode: "optional"; type: IrType; defaultValue: string }
+  | { mode: "optional"; type: IrType; defaultValue: string | number }
   | { mode: "rest"; type: IrType };
 
 /** The common first-class shape for builtin functions whose supported
@@ -626,6 +626,17 @@ export type BuiltinValueParam =
 function exactValueParams(...types: IrType[]): BuiltinValueParam[] {
   return types.map((type) => ({ mode: "required", type }));
 }
+
+/** Object helpers whose checked-native ABI is also their stored value ABI.
+ * These adapters operate on the live checked object/property table. */
+export const OBJECT_CALLABLE_VALUES: Record<string, BuiltinModuleFn | undefined> = {
+  defineProperty: { fn: "dyn.defineProperty", params: [DYN, DYN, DYN], result: DYN, valueParams: exactValueParams(DYN, DYN, DYN) },
+  getOwnPropertyDescriptor: { fn: "dyn.getOwnPropertyDescriptor", params: [DYN, DYN], result: DYN, valueParams: exactValueParams(DYN, DYN) },
+  defineProperties: { fn: "dyn.defineProps", params: [DYN, DYN], result: DYN, valueParams: exactValueParams(DYN, DYN) },
+  keys: { fn: "dyn.objKeys", params: [DYN], result: DYN, valueParams: exactValueParams(DYN) },
+  values: { fn: "dyn.objValues", params: [DYN], result: DYN, valueParams: exactValueParams(DYN) },
+  entries: { fn: "dyn.objEntries", params: [DYN], result: DYN, valueParams: exactValueParams(DYN) },
+};
 
 /** The lowerable surface of the supported node builtin modules, keyed by
  * CANONICAL module name (both "fs" and "node:fs" land on "fs" — see
@@ -746,7 +757,11 @@ export const BUILTIN_MODULE_FNS: Record<string, Record<string, BuiltinModuleFn |
     // open's optional flags/mode completion is special-cased in
     // lowerBuiltinModuleCall; this row routes all import spellings and
     // gives coverage the static member.
-    open: { fn: "fsp.open", params: [STRING, STRING, F64], result: { kind: "promise", inner: FILEHANDLE_T } },
+    open: { fn: "fsp.open", params: [STRING, STRING, F64], result: { kind: "promise", inner: FILEHANDLE_T }, valueParams: [
+      { mode: "required", type: STRING },
+      { mode: "optional", type: STRING, defaultValue: "r" },
+      { mode: "optional", type: F64, defaultValue: 0o666 },
+    ] },
   },
   // The bare module's POSIX-target binding; a win32 target rebinds it to
   // the win32 table (builtinModuleFnsOf — Node on Windows IS path.win32).

@@ -1848,6 +1848,8 @@ export function jsonWriteHelper(emitter: CEmitter, t: IrType): string {
     const sig = `static ScrDyn *${name}(ScrClosure *c, ScrDyn *const *args, size_t argc)`;
     emitter.walkerProtos.push(`${sig}; /* dyn call thunk for ${key} */`);
     const d: string[] = [`${sig} { /* dyn call thunk for ${key} */`];
+    const typedRest = t.rest === true && t.restAbi === "typed";
+    const hiddenRest = t.rest === true && !typedRest;
     if (t.params.length === 0) d.push(`  (void)args;`);
     d.push(`  (void)argc;`);
     t.params.forEach((p, i) => {
@@ -1856,7 +1858,13 @@ export function jsonWriteHelper(emitter: CEmitter, t: IrType): string {
       // anything; a number param throws the catchable TypeError).
       d.push(`  ${cDecl(p, `a${i}`)};`);
       d.push(`  {`);
-      d.push(`    const ScrDyn *ad = ${i} < argc ? args[${i}] : scr_dyn_undefined();`);
+      const packsRest = typedRest && i === t.params.length - 1;
+      if (packsRest) {
+        d.push(`    ScrDyn *ad = scr_dyn_new_arr();`);
+        d.push(`    for (size_t ri = ${i}; ri < argc; ri++) scr_dyn_arr_push(ad, scr_dyn_retain(args[ri]));`);
+      } else {
+        d.push(`    const ScrDyn *ad = ${i} < argc ? args[${i}] : scr_dyn_undefined();`);
+      }
       if (p.kind === "dyn") {
         d.push(`    a${i} = scr_dyn_retain((ScrDyn *)ad);`);
       } else if (p.kind === "jsval") {
@@ -1870,8 +1878,9 @@ export function jsonWriteHelper(emitter: CEmitter, t: IrType): string {
           .flatMap((q, j) => (isRefCounted(q) ? [`${releaseCallC(q, `a${j}`)};`] : []));
         d.push(`    if (!a${i}) { ${undo.join(" ")}${undo.length > 0 ? " " : ""}return NULL; }`);
       } else {
-        d.push(`    ScrDynPath pp = { NULL, NULL, ${i} };`);
-        d.push(`    a${i} = ${emitter.dynCheckHelper(p)}(ad, &pp);`);
+        if (!packsRest) d.push(`    ScrDynPath pp = { NULL, NULL, ${i} };`);
+        d.push(`    a${i} = ${emitter.dynCheckHelper(p)}(ad, ${packsRest ? "NULL" : "&pp"});`);
+        if (packsRest) d.push(`    scr_dyn_release(ad);`);
         const undo = t.params
           .slice(0, i)
           .flatMap((q, j) => (isRefCounted(q) ? [`${releaseCallC(q, `a${j}`)};`] : []));
@@ -1883,7 +1892,7 @@ export function jsonWriteHelper(emitter: CEmitter, t: IrType): string {
     // param carries the call's arguments from index params.length on —
     // the mustCall wrapper's `arguments`, a JS `...args`. Built fresh per
     // call (+1, moved into the callee like every param).
-    if (t.rest) {
+    if (hiddenRest) {
       d.push(`  ScrDyn *rest = scr_dyn_new_arr();`);
       d.push(`  for (size_t ri = ${t.argumentsAll ? 0 : t.params.length}; ri < argc; ri++) {`);
       d.push(`    scr_dyn_arr_push(rest, scr_dyn_retain((ScrDyn *)args[ri]));`);
@@ -1891,8 +1900,8 @@ export function jsonWriteHelper(emitter: CEmitter, t: IrType): string {
     }
     // The closure CONSUMES its params (+1 each moved in — exactly what the
     // builders above returned).
-    const castParams = ["ScrClosure *", ...t.params.map((p) => cType(p).trim()), ...(t.rest ? ["ScrDyn *"] : [])].join(", ");
-    const call = `((${cType(t.ret).trim()} (*)(${castParams}))c->fn)(${["c", ...t.params.map((_, i) => `a${i}`), ...(t.rest ? ["rest"] : [])].join(", ")})`;
+    const castParams = ["ScrClosure *", ...t.params.map((p) => cType(p).trim()), ...(hiddenRest ? ["ScrDyn *"] : [])].join(", ");
+    const call = `((${cType(t.ret).trim()} (*)(${castParams}))c->fn)(${["c", ...t.params.map((_, i) => `a${i}`), ...(hiddenRest ? ["rest"] : [])].join(", ")})`;
     if (t.ret.kind === "void") {
       d.push(`  ${call};`);
       d.push(`  if (scr_exc_pending()) return NULL;`);
@@ -1926,7 +1935,7 @@ export function jsonWriteHelper(emitter: CEmitter, t: IrType): string {
     const sigLit = cStringLiteral(Buffer.from(key, "utf8"));
     emitter.walkerDefs.push(
       `${sig} { /* box ${key} into dyn */`,
-      `  return scr_dyn_new_func(scr_closure_retain(v), &${thunk}, ${t.params.length}, ${sigLit}, fname);`,
+      `  return scr_dyn_new_func(scr_closure_retain(v), &${thunk}, ${t.params.length - (t.restAbi === "typed" ? 1 : 0)}, ${sigLit}, fname);`,
       `}`,
       ``,
     );

@@ -7964,12 +7964,24 @@ function lowerBranchSwitch(
     if (stdlibGlobalNameOf(lowerer, stmt.expression) === "globalThis") {
       return { kind: "block", body: [], loc };
     }
-    const recvT = lowerer.mapTypeOf(lowerer.typeOf(stmt.expression));
-    if (recvT?.kind === "array") return lowerForInArray(lowerer, stmt, labels);
+    const receiver = lowerer.lowerExpr(stmt.expression);
+    const recvT = receiver.type;
+    if (recvT.kind === "dyn") {
+      const recv = lowerer.declareHiddenLocal("%indyn", DYN);
+      const ref: IrExpr = { kind: "varRef", localId: recv.id, type: DYN, loc };
+      const keys: IrExpr = {
+        kind: "dynCheck", value: { kind: "libCall", fn: "dyn.forInKeys", args: [ref], type: DYN, loc },
+        type: arrayOf(STRING), loc,
+      };
+      const loop = lowerForInOverKeys(lowerer, stmt, keys, labels, (key) => ({
+        kind: "libCall", fn: "dyn.hasOwn", args: [ref, key], type: BOOL, loc,
+      }));
+      return { kind: "block", body: [{ kind: "varDecl", localId: recv.id, init: receiver, loc }, loop], loc };
+    }
+    if (recvT.kind === "array") return lowerForInArray(lowerer, stmt, labels, receiver);
     if (recvT?.kind === "record") {
       const shape = lowerer.shapes.get(recvT.shapeId);
       if (shape && !shape.tuple) {
-        const receiver = lowerer.lowerExpr(stmt.expression);
         if (receiver.type.kind !== "record") lowerer.badType(stmt.expression, lowerer.typeOf(stmt.expression));
         const rShape = lowerer.shapes.get(receiver.type.shapeId);
         if (!rShape) throw new InternalCompilerError(`lowerer bug: unknown shape ${receiver.type.shapeId}`);
@@ -8120,9 +8132,8 @@ function lowerBranchSwitch(
    * live-length guard is the per-visit presence check (keys removed by
    * pops are skipped, exactly Node's HasProperty re-check; indices are
    * dense, so `i < length` IS presence). */
-  function lowerForInArray(lowerer: Lowerer, stmt: ts.ForInStatement, labels: string[] | undefined): IrStmt {
+  function lowerForInArray(lowerer: Lowerer, stmt: ts.ForInStatement, labels: string[] | undefined, arrExpr: IrExpr): IrStmt {
     const loc = locOf(stmt);
-    const arrExpr = lowerer.lowerExpr(stmt.expression);
     if (arrExpr.type.kind !== "array") lowerer.badType(stmt.expression, lowerer.typeOf(stmt.expression));
     lowerer.scopes.push(new Map());
     try {
