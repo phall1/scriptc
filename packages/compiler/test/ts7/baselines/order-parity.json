@@ -7631,9 +7631,27 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/3122-dynamic-delete-descriptors.cjs": {
+   "order": [
+    "<repo>/tests/corpus/3122-dynamic-delete-descriptors.cjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/3122-dynamic-delete-descriptors.js": {
+   "order": [
+    "<repo>/tests/corpus/3122-dynamic-delete-descriptors.js"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/3122-js-async-class-methods.js": {
    "order": [
     "<repo>/tests/corpus/3122-js-async-class-methods.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/3123-destructured-global-tdz.js": {
+   "order": [
+    "<repo>/tests/corpus/3123-destructured-global-tdz.js"
    ],
    "diags": []
   },
