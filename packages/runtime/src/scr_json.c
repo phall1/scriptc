@@ -515,6 +515,13 @@ void scr_dyn_arr_push(ScrDyn *arr, ScrDyn *item) {
  * the generic "Spread syntax requires ...iterable[Symbol.iterator] to be
  * a function". Borrows src. */
 void scr_dyn_arr_push_spread(ScrDyn *arr, const ScrDyn *src, const char *what) {
+  if (src->kind == SCR_DYN_HANDLE && scr_dyn_handle_ops_of(src)->iter_pack) {
+    ScrDyn *pack = scr_dyn_handle_ops_of(src)->iter_pack(src->v.handle.ptr);
+    if (!pack) return;
+    scr_dyn_arr_push_spread(arr, pack, what);
+    scr_dyn_release(pack);
+    return;
+  }
   if (src->kind == SCR_DYN_TYPED_REF) {
     ScrDyn *materialized = scr_dyn_typed_ref_materialize(src);
     scr_dyn_arr_push_spread(arr, materialized, what);
@@ -583,6 +590,8 @@ void scr_dyn_arr_push_spread(ScrDyn *arr, const ScrDyn *src, const char *what) {
  * undefined no kind prefix, null V8's "object null"). Borrows both; +1 or
  * NULL with the TypeError pending. */
 ScrDyn *scr_dyn_iter_pack(const ScrDyn *src, const ScrStr *msg) {
+  if (src->kind == SCR_DYN_HANDLE && scr_dyn_handle_ops_of(src)->iter_pack)
+    return scr_dyn_handle_ops_of(src)->iter_pack(src->v.handle.ptr);
   if (src->kind == SCR_DYN_TYPED_REF) {
     ScrDyn *materialized = scr_dyn_typed_ref_materialize(src);
     ScrDyn *out = scr_dyn_iter_pack(materialized, msg);
@@ -978,15 +987,21 @@ void scr_dyn_proxy_delete(ScrDyn *proxy, const ScrStr *key) {
   scr_dyn_release(result);
 }
 
-ScrDyn *scr_dyn_new_bytes_copy(const ScrBytes *b) {
+ScrDyn *scr_dyn_new_bytes(const ScrBytes *b) {
   ScrDyn *d = scr_dyn_alloc(SCR_DYN_BYTES);
-  d->v.bytes = scr_bytes_copy(b); /* the static→dyn boundary copies */
+  d->v.bytes = scr_bytes_retain((ScrBytes *)b);
+  d->buffer = b->is_buffer;
   return d;
 }
 
-ScrDyn *scr_dyn_new_buffer_copy(const ScrBytes *b) {
-  ScrDyn *d = scr_dyn_new_bytes_copy(b);
-  d->buffer = true;
+ScrDyn *scr_dyn_new_buffer(const ScrBytes *b) {
+  if (b->is_buffer) return scr_dyn_new_bytes(b);
+  // Converting a Uint8Array chunk to Buffer creates a distinct view while
+  // retaining the same allocation; the source keeps its Uint8Array brand.
+  ScrBytes *view = scr_bytes_subarray((ScrBytes *)b, 0, (double)b->len);
+  view->is_buffer = true;
+  ScrDyn *d = scr_dyn_new_bytes(view);
+  scr_bytes_release(view);
   return d;
 }
 
@@ -1133,8 +1148,27 @@ void scr_dyn_typed_ref_cache_cast(
   d->v.typed_ref.casts = cast;
 }
 
-ScrBytes *scr_dyn_bytes_copy_out(const ScrDyn *d) {
-  return scr_bytes_copy(d->v.bytes); /* extraction copies too (+1) */
+ScrBytes *scr_dyn_bytes_unbox(const ScrDyn *d) {
+  return scr_bytes_retain(d->v.bytes);
+}
+
+/* Shared view metadata and indexed reads for both compiler backends. */
+ScrDyn *scr_dyn_bytes_key_get(const ScrDyn *value, const ScrStr *key) {
+  ScrBytes *bytes = value->v.bytes;
+  if (key->len == 6 && memcmp(key->data, "length", 6) == 0) return scr_dyn_new_num(scr_bytes_len(bytes));
+  if (key->len == 10 && memcmp(key->data, "byteLength", 10) == 0) return scr_dyn_new_num(scr_bytes_byte_len(bytes));
+  if (key->len == 10 && memcmp(key->data, "byteOffset", 10) == 0) return scr_dyn_new_num(scr_bytes_byte_offset(bytes));
+  if (key->len == 6 && memcmp(key->data, "buffer", 6) == 0) return scr_array_buffer_from_bytes(bytes);
+  if (key->len && !(key->len > 1 && key->data[0] == '0')) {
+    size_t index = 0;
+    bool digits = true;
+    for (size_t i = 0; i < key->len; i++) {
+      if (key->data[i] < '0' || key->data[i] > '9' || index > (SIZE_MAX - 9) / 10) { digits = false; break; }
+      index = index * 10 + (size_t)(key->data[i] - '0');
+    }
+    if (digits && index < bytes->len) return scr_dyn_new_num(scr_bytes_get(bytes, (double)index));
+  }
+  return scr_dyn_retain(scr_dyn_undefined());
 }
 
 /* ── the data-chunk encoding window (setEncoding) ─────────────────────
@@ -1158,7 +1192,7 @@ ScrDyn *scr_dyn_new_chunk(const ScrBytes *b) {
     scr_str_release(s);
     return d;
   }
-  return scr_dyn_new_buffer_copy(b);
+  return scr_dyn_new_buffer(b);
 }
 
 /* A boxed static function value (the compiler's static→dyn converters).
@@ -1951,8 +1985,8 @@ ScrStr *scr_dyn_object_tag(const ScrDyn *d) {
   case SCR_DYN_ARR: tag = "[object Array]"; break;
   case SCR_DYN_OBJ: tag = "[object Object]"; break;
   case SCR_DYN_HANDLE:
-    if (d->v.handle.tag >= SCR_DYNH_ABORT_SIGNAL &&
-        d->v.handle.tag <= SCR_DYNH_ABORT_CONTROLLER) {
+    if ((d->v.handle.tag >= SCR_DYNH_ABORT_SIGNAL &&
+         d->v.handle.tag <= SCR_DYNH_ABORT_CONTROLLER) || d->v.handle.tag == SCR_DYNH_ARRAY_BUFFER) {
       ScrJsonBuf b;
       scr_jb_init(&b);
       scr_jb_puts(&b, "[object ");
@@ -2310,8 +2344,8 @@ ScrStr *scr_dyn_to_string(const ScrDyn *d, const ScrStr *enc) {
   case SCR_DYN_OBJ:
     return scr_str_new("[object Object]", 15);
   case SCR_DYN_HANDLE:
-    if (d->v.handle.tag >= SCR_DYNH_ABORT_SIGNAL &&
-        d->v.handle.tag <= SCR_DYNH_ABORT_CONTROLLER) {
+    if ((d->v.handle.tag >= SCR_DYNH_ABORT_SIGNAL &&
+         d->v.handle.tag <= SCR_DYNH_ABORT_CONTROLLER) || d->v.handle.tag == SCR_DYNH_ARRAY_BUFFER) {
       ScrJsonBuf b;
       scr_jb_init(&b);
       scr_jb_puts(&b, "[object ");
@@ -2734,6 +2768,22 @@ void scr_dyn_key_set(ScrDyn *recv, ScrStr *key, ScrDyn *value) {
     scr_dyn_handle_key_set(recv, key, value);
     return;
   }
+  if (recv->kind == SCR_DYN_BYTES) {
+    /* Integer-indexed exotic writes coerce even for an invalid canonical
+     * numeric index, then silently ignore an out-of-range index. */
+    double index = scr_string_to_number(key);
+    char spelling[32];
+    size_t length = scr_f64_to_str(index, spelling);
+    bool negative_zero = key->len == 2 && memcmp(key->data, "-0", 2) == 0;
+    if (negative_zero || (length == key->len && memcmp(spelling, key->data, length) == 0)) {
+      double number;
+      if (!scr_dyn_number_coerce_js(value, &number)) return;
+      if (!negative_zero && index >= 0 && index < (double)recv->v.bytes->len && trunc(index) == index) {
+        scr_bytes_set(recv->v.bytes, index, number);
+      }
+      return;
+    }
+  }
   if (recv->kind == SCR_DYN_JSVAL) {
     /* The write lands on the REAL engine object (aliasing preserved —
      * island-side readers see it); the value crosses through the uniform
@@ -2772,6 +2822,22 @@ void scr_dyn_key_set(ScrDyn *recv, ScrStr *key, ScrDyn *value) {
     }
   }
   scr_throw_error(SCR_ERR_TYPE, scr_jb_finish(&b));
+}
+
+void scr_dyn_key_set_computed(ScrDyn *recv, ScrDyn *key, ScrDyn *value) {
+  /* A nullish receiver fails before object-key coercion. V8 includes a
+   * primitive key in the error, but never calls user code to describe it. */
+  if ((recv->kind == SCR_DYN_UNDEF || recv->kind == SCR_DYN_NULL) &&
+      scr_dyn_to_primitive_result_is_object(key)) {
+    const char *message = recv->kind == SCR_DYN_NULL
+      ? "Cannot set properties of null" : "Cannot set properties of undefined";
+    scr_throw_error_msg(SCR_ERR_TYPE, message, strlen(message));
+    return;
+  }
+  ScrStr *name = scr_dyn_string_coerce_js(key);
+  if (!name) return;
+  scr_dyn_key_set(recv, name, value);
+  scr_str_release(name);
 }
 
 /* Node's JSON.stringify over a dyn: object members holding undefined DROP,
@@ -3769,6 +3835,8 @@ bool scr_dyn_strict_eq(const ScrDyn *a, const ScrDyn *b) {
      * dyn boundary twice is still ONE JS function value, so identity
      * lives in the boxed closure, not the box. */
     return a == b || a->v.fn.clo == b->v.fn.clo;
+  case SCR_DYN_BYTES:
+    return a->v.bytes == b->v.bytes;
   case SCR_DYN_HANDLE:
     /* Same story: identity is the HANDLE — one req boxed into two
      * listeners is still one JS object. */
@@ -3871,10 +3939,14 @@ static ScrDyn *scr_sc_clone(const ScrDyn *v, const ScrScParent *up) {
     return scr_dyn_new_num(v->v.num);
   case SCR_DYN_STR:
     return scr_dyn_new_str(v->v.str);
-  case SCR_DYN_BYTES:
+  case SCR_DYN_BYTES: {
     /* A fresh byte copy; the Buffer flavor drops (Node: structuredClone
      * of a Buffer answers a plain Uint8Array). */
-    return scr_dyn_new_bytes_copy(v->v.bytes);
+    ScrBytes *copy = scr_bytes_copy(v->v.bytes);
+    ScrDyn *result = scr_dyn_new_bytes(copy);
+    scr_bytes_release(copy);
+    return result;
+  }
   case SCR_DYN_ARR:
   case SCR_DYN_OBJ: {
     for (const ScrScParent *p = up; p != NULL; p = p->up) {
@@ -4825,4 +4897,172 @@ ScrStr *scr_b64_missing_arg(void) {
   scr_throw_error_msg_code(SCR_ERR_TYPE, msg, sizeof msg - 1,
                            "ERR_MISSING_ARGS");
   return NULL;
+}
+
+static SCR_TL ScrDyn *scr_versions_object;
+
+static void scr_versions_object_cleanup(void) {
+  scr_dyn_release(scr_versions_object);
+  scr_versions_object = NULL;
+}
+
+ScrDyn *scr_process_versions(void) {
+  if (!scr_versions_object) {
+    scr_versions_object = scr_dyn_new_obj();
+    ScrStr *node = scr_process_versions_node();
+    ScrStr *openssl = scr_process_versions_openssl();
+    scr_dyn_obj_set(scr_versions_object, "node", 4, scr_dyn_new_str(node));
+    scr_dyn_obj_set(scr_versions_object, "openssl", 7, scr_dyn_new_str(openssl));
+    scr_str_release(node);
+    scr_str_release(openssl);
+    for (size_t i = 0; i < scr_versions_object->v.obj.len; i++) {
+      scr_versions_object->v.obj.entries[i].writable = false;
+    }
+    scr_atexit(&scr_versions_object_cleanup);
+  }
+  return scr_dyn_retain(scr_versions_object);
+}
+
+/* Fixed-length ArrayBuffers use the same retained root allocation as native
+ * typed-array views. The handle brand distinguishes storage from a view;
+ * repeated .buffer reads box the same root pointer and preserve identity. */
+bool scr_array_buffer_is(const ScrDyn *value) {
+  return value->kind == SCR_DYN_HANDLE && value->v.handle.tag == SCR_DYNH_ARRAY_BUFFER;
+}
+
+bool scr_array_buffer_is_view(const ScrDyn *value) {
+  return value->kind == SCR_DYN_BYTES;
+}
+
+static ScrDyn *scr_array_buffer_get(void *h, const char *key, size_t len) {
+  if ((len == 10 && memcmp(key, "byteLength", len) == 0) ||
+      (len == 13 && memcmp(key, "maxByteLength", len) == 0))
+    return scr_dyn_new_num(scr_bytes_byte_len(h));
+  if ((len == 9 && memcmp(key, "resizable", len) == 0) ||
+      (len == 8 && memcmp(key, "detached", len) == 0)) return scr_dyn_new_bool(false);
+  return NULL;
+}
+
+static bool scr_array_buffer_set(void *h, const char *key, size_t len, const ScrDyn *value) {
+  (void)h; (void)key; (void)len; (void)value;
+  return false;
+}
+
+static ScrDyn *scr_array_buffer_invoke(void *h, ScrDyn *self, const char *method,
+    ScrDyn *const *args, size_t argc, const char *what) {
+  (void)self; (void)what;
+  if (strcmp(method, "slice") == 0) {
+    double start = 0, end = scr_bytes_byte_len(h);
+    if (argc && !scr_dyn_number_coerce_js(args[0], &start)) return NULL;
+    if (argc > 1 && args[1]->kind != SCR_DYN_UNDEF && !scr_dyn_number_coerce_js(args[1], &end)) return NULL;
+    ScrBytes *view = scr_bytes_buffer_view(h, SCR_BYTES_U8, 0, false, 0);
+    if (!view) return NULL;
+    ScrBytes *copy = scr_bytes_slice(view, start, end);
+    scr_bytes_release(view);
+    ScrDyn *result = scr_array_buffer_from_bytes(copy);
+    scr_bytes_release(copy);
+    return result;
+  }
+  static const char msg[] = "ArrayBuffer method is not supported yet";
+  scr_throw_error_msg(SCR_ERR_ERROR, msg, sizeof msg - 1);
+  return NULL;
+}
+
+ScrDyn *scr_array_buffer_from_bytes(ScrBytes *view) {
+  static const ScrDynHandleOps ops = {
+    "ArrayBuffer", &scr_bytes_retain_v, &scr_bytes_release_v,
+    &scr_array_buffer_invoke, &scr_array_buffer_get, &scr_array_buffer_set, NULL,
+  };
+  scr_dyn_handle_install(SCR_DYNH_ARRAY_BUFFER, &ops);
+  return scr_dyn_new_handle(view->backing ? view->backing : view, SCR_DYNH_ARRAY_BUFFER);
+}
+
+ScrDyn *scr_array_buffer_new(ScrDyn *length) {
+  double number;
+  if (!scr_dyn_number_coerce_js(length, &number)) return NULL;
+  double size = isnan(number) ? 0 : trunc(number);
+  if (!(size >= 0) || size > 9007199254740991.0 || size > (double)(SIZE_MAX / 8)) {
+    static const char msg[] = "Invalid array buffer length";
+    scr_throw_error_msg(SCR_ERR_RANGE, msg, sizeof msg - 1);
+    return NULL;
+  }
+  ScrBytes *storage = scr_bytes_new(SCR_BYTES_U8, size);
+  if (!storage) return NULL;
+  ScrDyn *result = scr_array_buffer_from_bytes(storage);
+  scr_bytes_release(storage);
+  return result;
+}
+
+double scr_array_buffer_byte_length_getter(void) {
+  ScrDyn *receiver = scr_dyn_this_get();
+  if (!scr_array_buffer_is(receiver)) {
+    scr_dyn_release(receiver);
+    static const char msg[] = "Method get ArrayBuffer.prototype.byteLength called on incompatible receiver";
+    scr_throw_error_msg(SCR_ERR_TYPE, msg, sizeof msg - 1);
+    return 0;
+  }
+  double length = scr_bytes_byte_len(receiver->v.handle.ptr);
+  scr_dyn_release(receiver);
+  return length;
+}
+
+ScrDyn *scr_array_buffer_byte_length_descriptor(ScrDyn *getter) {
+  ScrDyn *descriptor = scr_dyn_new_obj();
+  ScrDyn *named = scr_dyn_new_func(scr_closure_retain(getter->v.fn.clo),
+      getter->v.fn.thunk, 0, getter->v.fn.sig, "get byteLength");
+  scr_dyn_obj_set(descriptor, "get", 3, named);
+  scr_dyn_obj_set(descriptor, "set", 3, scr_dyn_retain(scr_dyn_undefined()));
+  scr_dyn_obj_set(descriptor, "enumerable", 10, scr_dyn_new_bool(false));
+  scr_dyn_obj_set(descriptor, "configurable", 12, scr_dyn_new_bool(true));
+  return descriptor;
+}
+
+ScrBytes *scr_array_buffer_view(ScrBytesElem elem, const ScrDyn *buffer,
+    const ScrDyn *offset, const ScrDyn *length) {
+  if (!scr_array_buffer_is(buffer)) {
+    // Non-buffer inputs use the length/iterable/array-like constructor.
+    // Their extra arguments are evaluated by the caller, but not coerced.
+    return scr_bytes_from_dyn(elem, buffer, false);
+  }
+  double off, count = 0;
+  if (!scr_dyn_number_coerce_js(offset, &off)) return NULL;
+  off = isnan(off) ? 0 : trunc(off);
+  if (off < 0 || off > 9007199254740991.0 ||
+      fmod(off, (double)scr_bytes_elem_size(elem)) != 0) {
+    static const char msg[] = "Invalid typed array buffer range";
+    scr_throw_error_msg(SCR_ERR_RANGE, msg, sizeof msg - 1);
+    return NULL;
+  }
+  bool has_len = length->kind != SCR_DYN_UNDEF;
+  if (has_len && !scr_dyn_number_coerce_js(length, &count)) return NULL;
+  return scr_bytes_buffer_view(buffer->v.handle.ptr, elem, off, has_len, count);
+}
+
+#define SCR_ARRAY_BUFFER_VIEW(name, elem) \
+ScrBytes *scr_array_buffer_view_##name(ScrDyn *buffer, ScrDyn *offset, ScrDyn *length) { \
+  return scr_array_buffer_view(elem, buffer, offset, length); \
+}
+SCR_ARRAY_BUFFER_VIEW(u8, SCR_BYTES_U8)
+SCR_ARRAY_BUFFER_VIEW(u32, SCR_BYTES_U32)
+SCR_ARRAY_BUFFER_VIEW(i32, SCR_BYTES_I32)
+SCR_ARRAY_BUFFER_VIEW(f32, SCR_BYTES_F32)
+SCR_ARRAY_BUFFER_VIEW(f64, SCR_BYTES_F64)
+#undef SCR_ARRAY_BUFFER_VIEW
+
+ScrBytes *scr_array_buffer_view_dv(ScrDyn *buffer, ScrDyn *offset, ScrDyn *length) {
+  if (!scr_array_buffer_is(buffer)) {
+    static const char msg[] = "First argument to DataView constructor must be an ArrayBuffer";
+    scr_throw_error_msg(SCR_ERR_TYPE, msg, sizeof msg - 1);
+    return NULL;
+  }
+  double off, count = 0;
+  if (!scr_dyn_number_coerce_js(offset, &off)) return NULL;
+  off = isnan(off) ? 0 : trunc(off);
+  if (off < 0 || off > 9007199254740991.0 || off > scr_bytes_byte_len(buffer->v.handle.ptr)) {
+    // DataView rejects an out-of-bounds offset before coercing length.
+    return scr_dataview_new(buffer->v.handle.ptr, off, false, 0);
+  }
+  bool has_len = length->kind != SCR_DYN_UNDEF;
+  if (has_len && !scr_dyn_number_coerce_js(length, &count)) return NULL;
+  return scr_dataview_new(buffer->v.handle.ptr, off, has_len, count);
 }

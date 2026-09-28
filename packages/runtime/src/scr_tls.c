@@ -1105,7 +1105,7 @@ static ScrBytes *scr_tls_pem_dyn(const ScrDyn *v, const char *what, bool concat)
     memcpy(b->data, v->v.str->data, v->v.str->len);
     return b;
   }
-  if (v->kind == SCR_DYN_BYTES) return scr_dyn_bytes_copy_out(v);
+  if (v->kind == SCR_DYN_BYTES) return scr_dyn_bytes_unbox(v);
   if (v->kind == SCR_DYN_ARR) {
     if (v->v.arr.len == 0) {
       ScrJsonBuf b;

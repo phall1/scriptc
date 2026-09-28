@@ -40,6 +40,7 @@ static ScrBytes *scr_bytes_alloc(ScrBytesElem elem, size_t len) {
   b->data = calloc(len ? len : 1, scr_bytes_elem_size(elem));
   if (!b->data) scr_bytes_oom();
   b->backing = NULL;
+  b->is_buffer = false;
 #ifdef SCR_RC_AUDIT
   scr_live_bytes++;
 #endif
@@ -76,6 +77,11 @@ ScrBytes *scr_bytes_copy(const ScrBytes *src) {
   ScrBytes *b = scr_bytes_alloc(src->elem, src->len);
   memcpy(b->data, src->data, src->len * scr_bytes_elem_size(src->elem));
   return b;
+}
+
+ScrBytes *scr_bytes_as_buffer(ScrBytes *bytes) {
+  bytes->is_buffer = true;
+  return scr_bytes_retain(bytes);
 }
 
 ScrBytes *scr_bytes_convert(ScrBytesElem elem, const ScrBytes *src) {
@@ -262,6 +268,7 @@ ScrBytes *scr_bytes_subarray(ScrBytes *b, double start, double end) {
   v->elem = b->elem;
   v->data = b->data + s * scr_bytes_elem_size(b->elem);
   v->backing = scr_bytes_retain(owner);
+  v->is_buffer = b->is_buffer;
 #ifdef SCR_RC_AUDIT
   scr_live_bytes++;
 #endif
@@ -365,6 +372,7 @@ ScrBytes *scr_bytes_from_dyn(ScrBytesElem elem, const ScrDyn *value, bool from) 
     return out;
   }
   if (value->kind == SCR_DYN_BYTES) return scr_bytes_convert(elem, value->v.bytes);
+  if (!from && scr_array_buffer_is(value)) return scr_array_buffer_view(elem, value, scr_dyn_undefined(), scr_dyn_undefined());
   if (!from && (value->kind == SCR_DYN_NUM || value->kind == SCR_DYN_BOOL ||
                 value->kind == SCR_DYN_STR || value->kind == SCR_DYN_NULL || value->kind == SCR_DYN_UNDEF)) {
     double number;
@@ -472,10 +480,34 @@ ScrBytes *scr_dataview_new(ScrBytes *src, double byte_off, bool has_len, double 
   v->elem = SCR_BYTES_U8;
   v->data = owner->data + (size_t)off;
   v->backing = scr_bytes_retain(owner);
+  v->is_buffer = false;
 #ifdef SCR_RC_AUDIT
   scr_live_bytes++;
 #endif
   return v;
+}
+
+ScrBytes *scr_bytes_buffer_view(ScrBytes *src, ScrBytesElem elem,
+                               double offset, bool has_len, double length) {
+  ScrBytes *owner = src->backing ? src->backing : src;
+  size_t width = scr_bytes_elem_size(elem);
+  double available = scr_bytes_byte_len(owner);
+  double off = isnan(offset) ? 0 : trunc(offset);
+  double count = isnan(length) ? 0 : trunc(length);
+  if (off < 0 || off > 9007199254740991.0 || off > available ||
+      fmod(off, (double)width) != 0 ||
+      (has_len && (count < 0 || count > 9007199254740991.0 || count > (available - off) / (double)width)) ||
+      (!has_len && fmod(available - off, (double)width) != 0)) {
+    static const char msg[] = "Invalid typed array buffer range";
+    scr_throw_error_msg(SCR_ERR_RANGE, msg, sizeof msg - 1);
+    return NULL;
+  }
+  ScrBytes *view = scr_dataview_new(owner, off, true,
+      has_len ? count * (double)width : available - off);
+  if (!view) return NULL;
+  view->elem = elem;
+  view->len /= width;
+  return view;
 }
 
 static size_t scr_dataview_get_size(ScrDataViewGet kind) {

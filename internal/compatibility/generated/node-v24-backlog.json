@@ -8,8 +8,8 @@
     "tiers": {
       "static": {
         "replace-refusal": 47,
-        "verify-gap": 2570,
-        "audit-partial": 595,
+        "verify-gap": 2568,
+        "audit-partial": 597,
         "classify": 2,
         "implement": 81
       },
@@ -71250,12 +71250,15 @@
       "priority": "normal",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:process",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "compiler-feature:process.process.getBuiltinModule",
+          "tests": [
+            "tests/corpus/process-builtin-values.js",
+            "packages/compiler/test/process-builtin-values.test.ts"
+          ]
         },
         "dynamic": {
           "status": "not-implemented",
@@ -73852,12 +73855,14 @@
       "priority": "normal",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:process",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "compiler-feature:process.versions",
+          "tests": [
+            "tests/corpus/process-versions-storage.ts"
+          ]
         },
         "dynamic": {
           "status": "partial",

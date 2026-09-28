@@ -63,14 +63,14 @@ export function streamDataAdapter(host: LlvmEmitterContext, cbT: IrType & { kind
       d.push(`}`, ``);
     } else {
       // dyn: box by runtime tag — the JS lane's adapter parameter.
-      host.declare(`declare ptr @scr_dyn_new_buffer_copy(ptr)`);
+      host.declare(`declare ptr @scr_dyn_new_buffer(ptr)`);
       host.declare(`declare ptr @scr_dyn_new_str(ptr)`);
       d.push(
         `  %dslot = alloca ptr`,
         `  %isb = icmp ne ptr %a0, null`,
         `  br i1 %isb, label %buf, label %str`,
         `buf:`,
-        `  %db = call ptr @scr_dyn_new_buffer_copy(ptr %a0)`,
+        `  %db = call ptr @scr_dyn_new_buffer(ptr %a0)`,
         `  store ptr %db, ptr %dslot`,
         `  br label %go`,
         `str:`,
@@ -281,10 +281,10 @@ export function cryptoBytesThunkFor(host: LlvmEmitterContext, cbT: IrType & { ki
       host.declare(`declare void @scr_bytes_release(ptr)`);
       d.push(`  call void @scr_bytes_release(ptr %value)`);
     } else if (value.kind === "dyn") {
-      host.declare(`declare ptr @scr_dyn_new_bytes_copy(ptr)`);
+      host.declare(`declare ptr @scr_dyn_new_bytes(ptr)`);
       host.declare(`declare void @scr_bytes_release(ptr)`);
       d.push(
-        `  %result = call ptr @scr_dyn_new_bytes_copy(ptr %value)`,
+        `  %result = call ptr @scr_dyn_new_bytes(ptr %value)`,
         `  call void @scr_bytes_release(ptr %value)`,
       );
       passed.push("ptr %result");
@@ -360,7 +360,7 @@ export function zlibBytesThunkFor(host: LlvmEmitterContext, cbT: IrType & { kind
       host.declare(`declare void @scr_bytes_release(ptr)`);
       d.push(`  call void @scr_bytes_release(ptr %value)`);
     } else if (value.kind === "dyn") {
-      host.declare(`declare ptr @scr_dyn_new_bytes_copy(ptr)`);
+      host.declare(`declare ptr @scr_dyn_new_bytes(ptr)`);
       host.declare(`declare ptr @scr_dyn_undefined()`);
       host.declare(`declare void @scr_bytes_release(ptr)`);
       d.push(
@@ -368,7 +368,7 @@ export function zlibBytesThunkFor(host: LlvmEmitterContext, cbT: IrType & { kind
         `  %hasvalue = icmp ne ptr %value, null`,
         `  br i1 %hasvalue, label %value_yes, label %value_no`,
         `value_yes:`,
-        `  %db = call ptr @scr_dyn_new_bytes_copy(ptr %value)`,
+        `  %db = call ptr @scr_dyn_new_bytes(ptr %value)`,
         `  call void @scr_bytes_release(ptr %value)`,
         `  store ptr %db, ptr %rslot`,
         `  br label %value_go`,
@@ -469,8 +469,8 @@ export function streamCbThunkFor(host: LlvmEmitterContext, kind: "r" | "w" | "f"
         : (kind === "w" || kind === "t") ? pos === 2 : (kind === "f" || kind === "l") ? pos === 0 : pos === 1;
       if (p.kind === "dyn") {
         if (isChunkPos) {
-          host.declare(`declare ptr @scr_dyn_new_buffer_copy(ptr)`);
-          d.push(`  %dc${i} = call ptr @scr_dyn_new_buffer_copy(ptr %chunk)`);
+          host.declare(`declare ptr @scr_dyn_new_buffer(ptr)`);
+          d.push(`  %dc${i} = call ptr @scr_dyn_new_buffer(ptr %chunk)`);
           passed.push(`ptr %dc${i}`);
         } else if (isEncPos) {
           host.declare(`declare ptr @scr_str_new(ptr, ${host.sizeType})`);

@@ -947,11 +947,19 @@ void scr_assert_shape_re(int key, ScrRegex *re) {
  * "Invalid flags supplied to RegExp constructor 'x'". An empty pattern
  * stores the spec's "(?:)" source, like Node. Borrows both; +1. */
 ScrRegex *scr_regex_new(ScrStr *pattern, ScrStr *flags) {
+  unsigned seen_flags = 0;
   for (size_t i = 0; i < flags->len; i++) {
+    unsigned flag = 0;
     switch (flags->data[i]) {
-    case 'g': case 'i': case 'm': case 's': case 'u': case 'y':
-      break;
-    default: {
+    case 'g': flag = 1u << 0; break;
+    case 'i': flag = 1u << 1; break;
+    case 'm': flag = 1u << 2; break;
+    case 's': flag = 1u << 3; break;
+    case 'u': flag = 1u << 4; break;
+    case 'y': flag = 1u << 5; break;
+    default: break;
+    }
+    if (!flag || (seen_flags & flag)) {
       char msg[80];
       int n = snprintf(msg, sizeof msg,
                        "Invalid flags supplied to RegExp constructor '%.20s'",
@@ -959,7 +967,7 @@ ScrRegex *scr_regex_new(ScrStr *pattern, ScrStr *flags) {
       scr_throw_error_msg(SCR_ERR_SYNTAX, msg, (size_t)n);
       return NULL;
     }
-    }
+    seen_flags |= flag;
   }
   ScrRegex *re = calloc(1, sizeof *re);
   if (!re) {

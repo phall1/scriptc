@@ -1086,21 +1086,7 @@ export function jsonWriteHelper(emitter: CEmitter, t: IrType): string {
     d.push(`     * loud not-supported ladder (scr_json.c). */`);
     d.push(`    return scr_dyn_handle_key_get(d, k);`);
     d.push(`  }`);
-    d.push(`  if (d->kind == SCR_DYN_BYTES) {`);
-    d.push(`    /* Buffer-shaped dyn (a stream's 'data' chunk in the JS lane):`);
-    d.push(`     * .length and canonical-index byte reads answer like Node. */`);
-    d.push(`    if (k->len == 6 && memcmp(k->data, "length", 6) == 0) {`);
-    d.push(`      return scr_dyn_new_num((double)d->v.bytes->len);`);
-    d.push(`    }`);
-    d.push(`    if (k->len > 0 && !(k->len > 1 && k->data[0] == '0')) {`);
-    d.push(`      size_t idx = 0; bool digits = true;`);
-    d.push(`      for (size_t i = 0; i < k->len; i++) {`);
-    d.push(`        if (k->data[i] < '0' || k->data[i] > '9' || idx > (SIZE_MAX - 9) / 10) { digits = false; break; }`);
-    d.push(`        idx = idx * 10 + (size_t)(k->data[i] - '0');`);
-    d.push(`      }`);
-    d.push(`      if (digits && idx < d->v.bytes->len) return scr_dyn_new_num((double)d->v.bytes->data[idx]);`);
-    d.push(`    }`);
-    d.push(`  }`);
+    d.push(`  if (d->kind == SCR_DYN_BYTES) return scr_dyn_bytes_key_get(d, k);`);
     d.push(`  if (d->kind == SCR_DYN_FUNC) {`);
     d.push(`    /* own props (defineProperties writes), then name/length —`);
     d.push(`     * the function-instance members test/common copies. */`);
@@ -1254,11 +1240,10 @@ export function jsonWriteHelper(emitter: CEmitter, t: IrType): string {
         d.push(`  return scr_dyn_retain((ScrDyn *)d);`);
         break;
       case "bytes":
-        // `u as Uint8Array`: kind check, then a fresh COPY out (the
-        // boundary's aliasing stance in both directions).
+        // `u as Uint8Array`: kind check, then retain the shared view.
         if (t.elem !== "u8") throw new InternalCompilerError(`emitter bug: dynCheck of bytes<${t.elem}>`);
         d.push(`  if (d->kind != SCR_DYN_BYTES) { scr_dyn_check_fail(path, ${want}, d); return NULL; }`);
-        d.push(`  return scr_dyn_bytes_copy_out(d);`);
+        d.push(`  return scr_dyn_bytes_unbox(d);`);
         break;
       case "object":
         // The %Error extraction (an instanceof-Error narrow on unknown):
@@ -1570,10 +1555,10 @@ export function jsonWriteHelper(emitter: CEmitter, t: IrType): string {
         d.push(`  return ${dynFuncBoxHelper(emitter, t)}(v, NULL);`);
         break;
       case "bytes":
-        // bytes<u8> → the checked-dynamic tree's bytes kind, payload COPIED (the boundary
+        // bytes<u8> → a retained native view (the boundary
         // stance; stdin chunks into unknown-typed helpers).
         if (t.elem !== "u8") throw new InternalCompilerError(`emitter bug: to-dyn of bytes<${t.elem}>`);
-        d.push(`  return scr_dyn_new_bytes_copy(v);`);
+        d.push(`  return scr_dyn_new_bytes(v);`);
         break;
       case "record": {
         const shape = emitter.recordsById.get(t.shapeId);

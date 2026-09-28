@@ -783,12 +783,12 @@ export class LlDyn {
         break;
       }
       case "bytes": {
-        // `u as Uint8Array`: kind check, then a fresh COPY out.
+        // `u as Uint8Array`: kind check, then retain the shared view.
         if (t.elem !== "u8") throw new InternalCompilerError(`llvm emitter bug: dynCheck of bytes<${t.elem}>`);
         requireKind(DYN_KIND.BYTES, "dc");
-        host.declare(`declare ptr @scr_dyn_bytes_copy_out(ptr)`);
+        host.declare(`declare ptr @scr_dyn_bytes_unbox(ptr)`);
         const r = B.tmp();
-        B.line(`${r} = call ptr @scr_dyn_bytes_copy_out(ptr %d)`);
+        B.line(`${r} = call ptr @scr_dyn_bytes_unbox(ptr %d)`);
         B.terminate(`ret ptr ${r}`);
         break;
       }
@@ -1324,9 +1324,9 @@ export class LlDyn {
       }
       case "bytes": {
         if (t.elem !== "u8") throw new InternalCompilerError(`llvm emitter bug: to-dyn of bytes<${t.elem}>`);
-        host.declare(`declare ptr @scr_dyn_new_bytes_copy(ptr)`);
+        host.declare(`declare ptr @scr_dyn_new_bytes(ptr)`);
         const r = B.tmp();
-        B.line(`${r} = call ptr @scr_dyn_new_bytes_copy(ptr %v)`);
+        B.line(`${r} = call ptr @scr_dyn_new_bytes(ptr %v)`);
         B.terminate(`ret ptr ${r}`);
         break;
       }
@@ -2423,45 +2423,10 @@ export class LlDyn {
       const lNext = B.newLabel("kg.n");
       B.condBr(isB, lB, lNext);
       B.startBlock(lB);
-      host.declare(`declare ptr @scr_dyn_new_num(double)`);
-      const bts = this.payloadOf(B, "%d", "ptr");
-      const blenp = B.tmp();
-      const blen = B.tmp();
-      B.line(`${blenp} = getelementptr inbounds i8, ptr ${bts}, i64 ${this.abiOffset(8, 4)} ; ->len`);
-      B.line(`${blen} = load ${host.sizeType}, ptr ${blenp}`);
-      const lLen = B.newLabel("kg.bl");
-      const lIdx = B.newLabel("kg.bi");
-      B.condBr(lenHit, lLen, lIdx);
-      B.startBlock(lLen);
-      const lenD = B.tmp();
-      const r0 = B.tmp();
-      B.line(`${lenD} = uitofp ${host.sizeType} ${blen} to double`);
-      B.line(`${r0} = call ptr @scr_dyn_new_num(double ${lenD})`);
-      B.terminate(`ret ptr ${r0}`);
-      B.startBlock(lIdx);
-      const inRange = B.tmp();
-      const hit = B.tmp();
-      B.line(`${inRange} = icmp ult ${host.sizeType} ${idx}, ${blen}`);
-      B.line(`${hit} = and i1 ${digits}, ${inRange}`);
-      const lHit = B.newLabel("kg.bh");
-      const lMiss = B.newLabel("kg.bm");
-      B.condBr(hit, lHit, lMiss);
-      B.startBlock(lHit);
-      const bdatap = B.tmp();
-      const bdata = B.tmp();
-      B.line(`${bdatap} = getelementptr inbounds i8, ptr ${bts}, i64 ${this.abiOffset(24, 12)} ; ->data`);
-      B.line(`${bdata} = load ptr, ptr ${bdatap}`);
-      const bp = B.tmp();
-      const bv = B.tmp();
-      const bd = B.tmp();
-      const r1 = B.tmp();
-      B.line(`${bp} = getelementptr inbounds i8, ptr ${bdata}, ${host.sizeType} ${idx}`);
-      B.line(`${bv} = load i8, ptr ${bp}`);
-      B.line(`${bd} = uitofp i8 ${bv} to double`);
-      B.line(`${r1} = call ptr @scr_dyn_new_num(double ${bd})`);
-      B.terminate(`ret ptr ${r1}`);
-      B.startBlock(lMiss);
-      retainUndef();
+      host.declare(`declare ptr @scr_dyn_bytes_key_get(ptr, ptr)`);
+      const result = B.tmp();
+      B.line(`${result} = call ptr @scr_dyn_bytes_key_get(ptr %d, ptr %k)`);
+      B.terminate(`ret ptr ${result}`);
       B.startBlock(lNext);
     }
     // FUNC: own props (defineProperties writes), then name/length.

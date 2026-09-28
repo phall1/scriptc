@@ -24,6 +24,11 @@
  * friends; reads answer `string | undefined`), errno/syscall/path
  * typecheck and fence per member. */
 declare namespace NodeJS {
+  interface ProcessVersions {
+    readonly node: string;
+    readonly openssl?: string;
+    readonly [name: string]: string | undefined;
+  }
   /* The process introspection records — named interfaces so the type
    * mapper interns their record shapes (the RemoteInfo pattern; the
    * names match @types/node's, so the mappings hold when it adopts). */
@@ -163,19 +168,15 @@ declare module "console" {
  * (`kill ESRCH`/`kill EPERM` Errors, TypeErrors for unknown signals and
  * non-int32 pids). */
 declare var process: {
+  getBuiltinModule(id: string): unknown;
   argv: string[];
   platform: string;
   /* The binary's OWN architecture ("arm64", "x64") — Node's answer for
    * its own build on the same machine. */
   readonly arch: string;
-  /* versions.node is the runtime's Node COMPATIBILITY TARGET — no Node
-   * exists under a compiled binary (SEMANTICS.md divergence 60); the
-   * other components @types/node lists (v8, openssl, ...) do not exist
-   * here. openssl and sqlite are DECLARED (optional, so absence reads
-   * undefined) and LOWER to undefined — the honest capability probe
-   * (`Boolean(process.versions.openssl)`) answers false: no OpenSSL and
-   * no SQLite ship in a scriptc binary. Other members fence per site. */
-  readonly versions: { readonly node: string; readonly openssl?: string; readonly sqlite?: string };
+  /* Stable native dictionary. node and openssl name compatibility targets;
+   * components absent from the runtime have no entries. */
+  readonly versions: NodeJS.ProcessVersions;
   /* The build-configuration snapshot Node exposes from its gyp config.
    * A scriptc binary has no V8 and no gyp, so `variables` answers the
    * honest capability record (v8_enable_i18n_support: 0 — no ICU; asan

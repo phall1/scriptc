@@ -757,15 +757,15 @@ static ScrDyn *scr_dyn_invoke_impl(
       return scr_dyn_new_num((double)bytes->data[(size_t)idx]);
     }
     if (dyn_name_is(method, "slice") || dyn_name_is(method, "subarray")) {
-      /* Both COPY (no views in this runtime — the static lane's
-       * documented divergence for subarray/Buffer.slice); the result
-       * keeps the receiver's Buffer flavor. */
+      /* subarray and Buffer.slice alias their source. TypedArray.slice
+       * owns an independent copy; all keep the receiver's Buffer flavor. */
       double startD = dyn_index_arg(args, argc, 0, 0, what);
       if (scr_exc_pending()) return NULL;
       double endD = dyn_index_arg(args, argc, 1, (double)blen, what);
       if (scr_exc_pending()) return NULL;
-      ScrBytes *out = scr_bytes_slice(bytes, startD, endD);
-      ScrDyn *d = recv->buffer ? scr_dyn_new_buffer_copy(out) : scr_dyn_new_bytes_copy(out);
+      ScrBytes *out = recv->buffer || dyn_name_is(method, "subarray")
+        ? scr_bytes_subarray(bytes, startD, endD) : scr_bytes_slice(bytes, startD, endD);
+      ScrDyn *d = recv->buffer ? scr_dyn_new_buffer(out) : scr_dyn_new_bytes(out);
       scr_bytes_release(out);
       return d;
     }

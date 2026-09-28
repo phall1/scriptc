@@ -45,6 +45,7 @@ import { BOOL, BYTES_U8, CHILD_T, CHILDSTREAM_T, CHILDWRITER_T, CRYPTOHASH_T, CR
 import { boolLit, countedFor, numLit, strLit, varRef } from "../../ir/build.js";
 import { staticForkModulePath } from "../fork-target.js";
 import { tsgoPath } from "../dts-paths.js";
+import { lowerBuiltinLoaderValue } from "./lower-builtin-values.js";
 
 function optionalStringTags(lowerer: Lowerer, type: IrType): { stringTag: number; undefinedTag: number } | null {
   if (type.kind !== "union") return null;
@@ -7087,12 +7088,8 @@ function lowerProcessIpcSend(lowerer: Lowerer, call: ts.CallExpression): IrExpr 
    * rejected specifically. Null for non-process receivers (the chain keeps
    * trying other property lowerings). */
   export function lowerProcessProperty(lowerer: Lowerer, expr: ts.PropertyAccessExpression): IrExpr | null {
-    // process.versions.node — the ONE lowered member of process.versions:
-    // there is no Node under the binary, so the honest answer is the
-    // runtime's own Node compatibility target (the version whose semantics
-    // SEMANTICS.md verifies against — divergence 60, the execPath stance).
-    // Other versions members (v8, openssl, ...) name components that do
-    // not exist here and fall through to the member fence.
+    // node and openssl name the compatibility target, not linked engines.
+    // Read the stable object so descriptor edits through aliases stay visible.
     if (
       (expr.name.text === "node" || expr.name.text === "openssl") &&
       !expr.questionDotToken &&
@@ -7104,36 +7101,32 @@ function lowerProcessIpcSend(lowerer: Lowerer, call: ts.CallExpression): IrExpr 
       // "is crypto available" probe, and the crypto module exists here
       // (unsupported members fence per site). SEMANTICS.md documents that
       // the string names the compat target, not a linked library.
-      const fn = expr.name.text === "node" ? "process.versionsNode" : "process.versionsOpenssl";
-      return { kind: "libCall", fn, args: [], type: STRING, loc: locOf(expr) };
+      const loc = locOf(expr);
+      return lowerer.coerceToExpected({
+        kind: "dynKeyGet", key: { kind: "strLit", value: expr.name.text, type: STRING, loc },
+        value: { kind: "libCall", fn: "process.versions", args: [], type: DYN, loc }, type: DYN, loc,
+      }, STRING);
     }
-    // process.versions?.electron is the runtime-capability probe used by
-    // CLI packages to select Electron argument conventions. versions
-    // itself always exists, and a native scriptc binary is not Electron,
-    // so both the optional and ordinary property spellings read undefined.
+    // Other components begin absent. Consult the same object even for the
+    // capability probes: users can define or delete their own entries.
     if (
       ts.isPropertyAccessExpression(expr.expression) &&
-      lowerer.stdlibGlobalMember(expr.expression, "process") === "versions" &&
-      expr.name.text === "electron"
+      lowerer.stdlibGlobalMember(expr.expression, "process") === "versions"
     ) {
-      return { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc: locOf(expr) };
+      const loc = locOf(expr);
+      return {
+        kind: "dynKeyGet", key: { kind: "strLit", value: expr.name.text, type: STRING, loc },
+        value: { kind: "libCall", fn: "process.versions", args: [], type: DYN, loc }, type: DYN, loc,
+      };
     }
     // The capability-probe members that honestly DON'T EXIST in a
     // compiled binary — each reads undefined (their declared types carry
     // the undefined arm), so feature probes take their documented
-    // fallbacks: no OpenSSL/SQLite components (process.versions.openssl/
-    // .sqlite), no gyp build config (process.config.variables.* — no ICU,
+    // fallbacks: no gyp build config (process.config.variables.* — no ICU,
     // no QUIC — and process.config.target_defaults), no feature flags
     // (process.features.* — no inspector, not a debug build).
     if (!expr.questionDotToken && ts.isPropertyAccessExpression(expr.expression)) {
       const container = lowerer.stdlibGlobalMember(expr.expression, "process");
-      if (container === "versions" && (expr.name.text === "sqlite" || expr.name.text === "bun" || expr.name.text === "deno")) {
-        // versions.bun / versions.deno are the OTHER-runtime probes (a
-        // formatter's config loader picks its package.json reader by
-        // them): a compiled binary is neither, so both read undefined —
-        // exactly Node's own answer.
-        return { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc: locOf(expr) };
-      }
       if (container === "features") {
         return { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc: locOf(expr) };
       }
@@ -7157,6 +7150,15 @@ function lowerProcessIpcSend(lowerer: Lowerer, call: ts.CallExpression): IrExpr 
     const member = lowerer.stdlibGlobalMember(expr, "process");
     if (member === null) return null;
     const loc = locOf(expr);
+    if (member === "versions") {
+      return { kind: "libCall", fn: "process.versions", args: [], type: DYN, loc };
+    }
+    if (member === "getBuiltinModule") {
+      // Keep the native loader's argument validation when the function is
+      // stored. The declaration's string signature must not insert a checked
+      // adapter before the loader gets to report Node's invalid-id error.
+      return { kind: "dynFrom", value: lowerBuiltinLoaderValue(lowerer, loc), type: DYN, loc };
+    }
     if (member === "argv") {
       return { kind: "libCall", fn: "process.argv", args: [], type: arrayOf(STRING), loc };
     }
@@ -7722,6 +7724,17 @@ function lowerProcessIpcSend(lowerer: Lowerer, call: ts.CallExpression): IrExpr 
     access: ts.PropertyAccessExpression,): IrExpr | null {
     if (call.questionDotToken) return null;
     const directProcessMember = lowerer.stdlibGlobalMember(access, "process");
+    if (directProcessMember === "getBuiltinModule") {
+      if (call.arguments.some(ts.isSpreadElement)) lowerer.noLowering("process.getBuiltinModule with spread arguments", call);
+      const loc = locOf(call);
+      const id = call.arguments[0] ? lowerer.lowerExprExpecting(call.arguments[0], DYN)
+        : { kind: "dynFrom", value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc }, type: DYN, loc } satisfies IrExpr;
+      const binding = lowerer.declareHiddenLocal("%builtinId", DYN);
+      return { kind: "seqExpr", stmts: [
+        { kind: "varDecl", localId: binding.id, init: id, loc },
+        ...call.arguments.slice(1).map((arg): IrStmt => ({ kind: "exprStmt", expr: lowerer.lowerExpr(arg), loc: locOf(arg) })),
+      ], result: { kind: "callValue", callee: lowerBuiltinLoaderValue(lowerer, loc), args: [varRef(binding.id, DYN, loc)], type: DYN, loc }, type: DYN, loc };
+    }
     if (directProcessMember === "send") return lowerProcessIpcSend(lowerer, call);
     if (directProcessMember === "disconnect") {
       if (call.arguments.length !== 0) {

@@ -1640,7 +1640,7 @@ static void sf_collector_finish(SfStream *s) {
     value = scr_dyn_new_str(text);
     scr_str_release(text);
   } else {
-    value = scr_dyn_new_bytes_copy(bytes);
+    value = scr_dyn_new_bytes(bytes);
   }
   scr_bytes_release(bytes);
   if (scr_exc_pending()) {
@@ -1842,7 +1842,7 @@ static void sf_stream_enqueue_value(SfStream *s, ScrDyn *value) {
 }
 
 static void sf_stream_enqueue_bytes(SfStream *s, ScrBytes *bytes) {
-  ScrDyn *value = scr_dyn_new_bytes_copy(bytes);
+  ScrDyn *value = scr_dyn_new_bytes(bytes);
   sf_stream_enqueue_value(s, value);
   scr_dyn_release(value);
 }
@@ -3207,7 +3207,7 @@ static ScrPromise *sf_response_collect(SfResponse *r, int mode) {
     scr_str_release(empty);
   } else {
     ScrBytes *empty = scr_bytes_new(SCR_BYTES_U8, 0);
-    value = scr_dyn_new_bytes_copy(empty);
+    value = scr_dyn_new_bytes(empty);
     scr_bytes_release(empty);
   }
   if (scr_exc_pending()) {

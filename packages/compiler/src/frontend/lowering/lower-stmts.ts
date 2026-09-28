@@ -14,6 +14,7 @@ import { PoisonError, boundIdentifiersOf, dynFallbackType, dynUndefinedExpr, imp
 import { enforceLibBoundary } from "./lib-boundary.js";
 import { cjsExportAssignmentOf, cjsExportDiscardReason, cjsExportTargetLiteral, isCjsJsFile, isEsModuleStamp, isJsSourceFile, isNodeEsmFile, locOf, requireSpecOf } from "../program.js";
 import { COMPOUND_ASSIGN_OPS, CompoundOp, STR_METHODS, UNSUPPORTED_STMT, isStdlibMember, sideEffectFreeOptionValue, stdlibGlobalAliasDecl, stdlibGlobalAliasNameOf, stdlibGlobalNameOf } from "./surfaces.js";
+import { isNativeBuiltinValueInitializer } from "./lower-builtin-values.js";
 import { isProvenanceSourceFile } from "../provenance-registry.js";
 import { ambientUndefVarRootOf, lowerImportEquals, nsUndefRead, nsWritableTarget, trapDeclRootOf } from "./lower-namespaces.js";
 import { expandoWritableTarget, lowerExpandoAssignStmt } from "./lower-expando.js";
@@ -680,6 +681,8 @@ export function provenanceElidedConstDecl(lowerer: Lowerer, decl: ts.VariableDec
    * binding. */
   function varBindingType(lowerer: Lowerer, nameNode: ts.Identifier): IrType | null {
     if (ts.isVariableDeclaration(nameNode.parent) && isNativeProxyInitializer(lowerer, nameNode.parent.initializer)) return DYN;
+    if (isJsSourceFile(nameNode.getSourceFile()) && ts.isVariableDeclaration(nameNode.parent) &&
+        isNativeBuiltinValueInitializer(lowerer, nameNode.parent.initializer)) return DYN;
     let type = lowerer.mapTypeOf(lowerer.typeOf(nameNode));
     if (type?.kind === "record" && isJsSourceFile(nameNode.getSourceFile())) {
       const shape = lowerer.shapes.get(type.shapeId);
@@ -1574,6 +1577,10 @@ export function isParseArgsDynCheckerType(lowerer: Lowerer, type: ts.Type): bool
     out: IrStmt[],
     dynSpell?: string,
     allowDynObject = false,): void {
+    if (ts.isObjectBindingPattern(pattern)) {
+      const patternSymbol = lowerer.typeOf(pattern).getSymbol();
+      allowDynObject ||= patternSymbol?.name === "SegmentData" && lowerer.isStdlibSymbol(patternSymbol);
+    }
     const present = patternSourceValue(lowerer, srcRef(), ts.isArrayBindingPattern(pattern), out, locOf(pattern), dynSpell);
     if (!typeEquals(present.type, srcType)) {
       lowerer.lowerBindingPattern(pattern, () => present, present.type, isLet, out, dynSpell, allowDynObject);

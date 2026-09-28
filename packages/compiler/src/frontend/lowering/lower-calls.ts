@@ -5880,6 +5880,7 @@ const DYN_PROTO_METHOD_NAMES = new Set([
  * is-not-a-function where the kind's prototype lacks the name, and
  * fences LOUDLY on real-but-unimplemented pairs. */
 const DYN_DISPATCH_METHODS = new Set([
+  "segment", "containing", "resolvedOptions",
   "apply", "bind", "call",
   "push", "pop", "shift", "unshift", "slice", "at",
   "indexOf", "lastIndexOf", "includes", "join", "concat", "reverse", "sort",
@@ -8626,6 +8627,16 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
     if (call.questionDotToken || access.questionDotToken) return null;
     if (!lowerer.isStdlibGlobal(access.expression, "Object")) return null;
     const member = access.name.text;
+    if (member === "getOwnPropertyDescriptor" && call.arguments.length === 2) {
+      const [receiver, key] = call.arguments;
+      if (receiver && key && ts.isPropertyAccessExpression(receiver) && receiver.name.text === "prototype" &&
+          lowerer.isStdlibGlobal(receiver.expression, "ArrayBuffer") && ts.isStringLiteral(key) && key.text === "byteLength") {
+        const loc = locOf(call);
+        const getter = lowerer.lowerNativeCallableValue({ fn: "arrayBuffer.byteLengthGetter", params: [], result: F64, valueParams: [] }, "get ArrayBuffer.prototype.byteLength", loc)!;
+        return { kind: "libCall", fn: "arrayBuffer.byteLengthDescriptor", args: [lowerer.coerceToExpected(getter, DYN)], type: DYN, loc };
+      }
+    }
+
     const cacheKeys = lowerRequireCacheKeys(lowerer, call, member);
     if (cacheKeys) return cacheKeys;
     // Object.is — the spec's SameValue over the static kinds. Number

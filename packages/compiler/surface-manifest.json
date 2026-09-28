@@ -1604,6 +1604,13 @@
       "note": "numeric writes in statement position set the implicit exit status; process.exit() reads it"
     },
     {
+      "id": "node-builtin.process.getBuiltinModule",
+      "kind": "node-builtin",
+      "name": "process.getBuiltinModule",
+      "status": "static",
+      "note": "native path and os export subsets plus main-thread worker_threads metadata; other modules and exports throw SC2020"
+    },
+    {
       "id": "node-builtin.process.getgid",
       "kind": "node-builtin",
       "name": "process.getgid",
@@ -1667,6 +1674,13 @@
       "kind": "node-builtin",
       "name": "process.uptime",
       "status": "static"
+    },
+    {
+      "id": "node-builtin.process.versions",
+      "kind": "node-builtin",
+      "name": "process.versions",
+      "status": "static",
+      "note": "shared version dictionary containing node and openssl; other components are absent unless defined by the program"
     },
     {
       "id": "node-builtin.querystring",
@@ -1744,7 +1758,7 @@
       "name": "stream/consumers.arrayBuffer",
       "status": "unsupported",
       "code": "SC2020",
-      "note": "no free-standing ArrayBuffer value exists here (typed arrays own their storage) — buffer(stream) collects the same bytes as a Buffer"
+      "note": "collecting a stream directly into an ArrayBuffer has no native lowering yet; buffer(stream) collects the same bytes as a Buffer"
     },
     {
       "id": "node-builtin.stream.consumers.blob",

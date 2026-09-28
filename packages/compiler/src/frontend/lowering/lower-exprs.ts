@@ -46,6 +46,7 @@ import { coerceStringSearchValue, defaultAfterUndefined, lowerStaticallyUndefine
 import { recordTextCodecClass } from "../../ir/ir.js";
 import { classSymbolKeyOf } from "./symbol-fields.js";
 import { lowerClassMethodValue } from "./class-method-values.js";
+import { lowerGlobalValue } from "./lower-global-value.js";
 
 /** An assignable `obj.field` target — a class field, a record field, or a
  * class ACCESSOR property (reads become getter calls, writes setter calls;
@@ -665,11 +666,9 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
           }
         }
       }
-      // Island values ask the engine; static primitives constant-fold to
-      // the JS answer (the operand still evaluates — JS evaluates typeof
-      // operands too — but primitives here are side-effect-free varRefs/
-      // literals after lowering, so folding away the value is safe only
-      // when the operand is trivial; otherwise keep it simple and reject).
+      // A known static result type fixes typeof's answer, but its producer
+      // still evaluates: calls, getters, and checked reads can have effects
+      // or throw. Only trivial operands may disappear.
       let operand = lowerer.lowerExpr(expr.expression);
       if (operand.type.kind === "jsval") {
         return { kind: "jsOp", op: "typeof", args: [operand], type: STRING, loc };
@@ -692,8 +691,11 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
         undefinedT: "undefined", nullT: "object",
       };
       const folded = FOLD[operand.type.kind];
-      if (folded && isSafeToDiscard(operand)) {
-        return { kind: "strLit", value: folded, type: STRING, loc };
+      if (folded) {
+        const result: IrExpr = { kind: "strLit", value: folded, type: STRING, loc };
+        return isSafeToDiscard(operand) ? result : {
+          kind: "seqExpr", stmts: [{ kind: "exprStmt", expr: operand, loc }], result, type: STRING, loc,
+        };
       }
       // A union operand: every arm's typeof answer is static, so the value
       // form is a ternary chain over runtime TAG tests (arms grouped by
@@ -1109,6 +1111,9 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
       // global, one token; what a token cannot do (be called, answer
       // typeof "function") meets per-site fences/divergences, and
       // SEMANTICS.md documents the stance.
+      if (!lowerer.dynamic && stdlibGlobalNameOf(lowerer, expr) === "globalThis") {
+        return lowerGlobalValue(lowerer, expr);
+      }
       {
         const sym = lowerer.checker.getSymbolAtLocation(expr);
         if (lowerer.isStdlibSymbol(sym) || expr.text === "globalThis") {
@@ -1128,9 +1133,9 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
           const globalHints: Record<string, string | undefined> = {
             Proxy: "Proxy constructor values have no native lowering; use a direct new Proxy with checked-native plain objects",
             Reflect: "reflective property access has no static lowering — read and call members directly",
-            Intl: "locale- and ICU-backed behavior lives outside the static runtime (the localeCompare stance: code-unit order, no collation/locale data) — what lowers: the composed new Intl.NumberFormat(\"en-US\").format(x) and x.toLocaleString(\"en-US\") with default options",
+            Intl: "native Intl supports default Unicode grapheme segmentation and the composed new Intl.NumberFormat(\"en-US\").format(x); locale negotiation and other ICU-backed operations remain unsupported",
             SharedArrayBuffer: "no shared-memory threads exist in a compiled program — Uint8Array is the byte storage",
-            ArrayBuffer: "no free-standing ArrayBuffer value exists — typed arrays own their storage (new Uint8Array(n) allocates; new Uint8Array(new ArrayBuffer(n)) erases the buffer into the view)",
+            ArrayBuffer: "ArrayBuffer constructor values have no native lowering; use new ArrayBuffer(length) for fixed-length shared storage",
             WeakRef: "deref()-after-collect exposes GC timing — genuinely dynamic; hold a strong reference instead",
             FinalizationRegistry: "finalization callbacks expose GC timing — genuinely dynamic; release resources explicitly instead",
             eval: "runtime code evaluation cannot be compiled ahead of time",
@@ -1516,6 +1521,14 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
       if (requireMain) return requireMain;
       const moduleProperty = lowerNodeModuleProperty(lowerer, expr);
       if (moduleProperty) return moduleProperty;
+      // Missing host globals (Bun/Deno capability probes) have no binding
+      // in a native program. Declared globals retain their own lowering;
+      // arbitrary global-object mutation remains fenced. Preserve a dyn
+      // undefined value so stored probes compose with optional calls.
+      if (!lowerer.dynamic && stdlibGlobalNameOf(lowerer, expr.expression) === "globalThis" &&
+          !lowerer.checker.getPropertyOfType(lowerer.typeOf(expr.expression), expr.name.text)) {
+        return { kind: "dynFrom", value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc }, type: DYN, loc };
+      }
       if (expr.questionDotToken && expr.name.text === "electron") {
         const processProperty = lowerer.lowerProcessProperty(expr);
         if (processProperty) return processProperty;
@@ -1837,6 +1850,7 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
       ) {
         const canonical = stdlibGlobalNameOf(lowerer, expr);
         if (canonical !== null) {
+          if (!lowerer.dynamic && canonical === "globalThis") return lowerGlobalValue(lowerer, expr);
           return { kind: "strLit", value: `[builtin ${canonical}]`, type: STRING, loc };
         }
       }
@@ -1887,22 +1901,27 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
       // best-effort static name and the declared arity; anything else is
       // the own-property answer, undefined. Function.prototype METHOD
       // names stay fenced (a stored-member undefined would mis-answer
-      // `f.call` as a value). JS files only; TS keeps the fence.
+      // `f.call` as a value). Static callable values keep the existing TS fence; checked callable
+      // storage can expose its own name and length in both source languages.
       if (
         !["apply", "bind", "call", "toString", "constructor", "prototype", "caller", "arguments"].includes(expr.name.text) &&
-        isJsSourceFile(expr.getSourceFile())
+        (isJsSourceFile(expr.getSourceFile()) || expr.name.text === "name" || expr.name.text === "length")
       ) {
         const probed = tryLowerExpression(lowerer, expr.expression);
         // Inferred callable returns can use checked storage even when the
         // checker still describes a function. Read its actual dyn value;
         // the ambient Function member must not hide its own properties.
-        if (probed?.type.kind === "dyn" && lowerer.checker.getCallSignatures(lowerer.typeOf(expr.expression)).length > 0) {
+        const receiverType = lowerer.typeOf(expr.expression);
+        const receiverSymbol = receiverType.getSymbol();
+        const checkedFunction = lowerer.checker.getCallSignatures(receiverType).length > 0 ||
+          (receiverSymbol?.name === "Function" && lowerer.isStdlibSymbol(receiverSymbol));
+        if (probed?.type.kind === "dyn" && checkedFunction) {
           const key: IrExpr = { kind: "strLit", value: expr.name.text, type: STRING, loc: locOf(expr.name) };
           const opt = hasOptionalChainGuard(expr.expression);
           return lowerer.maybeNarrow({ kind: "dynKeyGet", key, value: probed, ...(opt ? { optional: true as const } : {}), type: DYN, loc }, expr);
         }
         if (
-          probed?.type.kind === "func" &&
+          isJsSourceFile(expr.getSourceFile()) && probed?.type.kind === "func" &&
           canBoxFuncIntoDyn(probed.type, (id) => lowerer.shapes.get(id), (id) => lowerer.unions.get(id))
         ) {
           const fnName = jsFuncNameOf(expr.expression);
@@ -1964,7 +1983,10 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
       // the generic dyn receiver path below. Provenance is limited to the
       // node:util parseArgs family; every other stdlib member keeps its
       // ordinary surface fence.
-      if (isParseArgsDynProperty(lowerer, expr)) {
+      const segmentDataSymbol = lowerer.typeOf(expr.expression).getSymbol();
+      const segmentDataProperty = segmentDataSymbol?.name === "SegmentData" && lowerer.isStdlibSymbol(segmentDataSymbol) &&
+        ["segment", "index", "input", "isWordLike"].includes(expr.name.text);
+      if (isParseArgsDynProperty(lowerer, expr) || segmentDataProperty) {
         const recv = lowerer.lowerExpr(expr.expression);
         if (recv.type.kind === "dyn") {
           const key: IrExpr = {
@@ -3562,15 +3584,9 @@ function lowerPromiseThenPresence(
         return { kind: "bytesIntrinsic", method: "byteOffset", receiver, args: [], type: F64, loc };
       }
       if (name === "buffer") {
-        // No ArrayBuffer VALUE exists — `.buffer` compiles only in the
-        // one composed position that consumes it, the DataView
-        // constructor's first argument (lowerDataViewNew peels it).
-        lowerer.unsupported(
-          "SC1090",
-          expr,
-          "'.buffer' outside new DataView(x.buffer, ...) / Buffer.from(x.buffer, ...) " +
-            "(no free-standing ArrayBuffer value exists; subarray() answers an aliasing view directly)",
-        );
+        const expected = lowerer.mapTypeOf(lowerer.typeOf(expr.expression));
+        const receiver = expected?.kind === "bytes" ? strictReceiver(expected) : lowerer.lowerExpr(expr.expression);
+        return { kind: "bytesIntrinsic", method: "buffer", receiver, args: [], type: DYN, loc };
       }
       if (name === "slice" || name === "subarray" || name === "set" || name === "toString") {
         lowerer.unsupported("SC1090", expr, `typed-array methods as values (call '${name}' directly)`);
@@ -5083,6 +5099,34 @@ export function lowerElementCompound(lowerer: Lowerer, expr: ts.BinaryExpression
 
 /** `a[i] = v` in statement position → arraySet (element writes, like local
    * assignment, produce no value in our subset). */
+  function lowerDynElementAssignment(lowerer: Lowerer, expr: ts.BinaryExpression, recv: IrExpr): IrExpr {
+    const loc = locOf(expr);
+    const target = expr.left as ts.ElementAccessExpression;
+    const receiver = lowerer.declareHiddenLocal("%setReceiver", DYN);
+    const keyValue = lowerer.lowerExprExpecting(target.argumentExpression, DYN);
+    const key = lowerer.declareHiddenLocal("%setKey", DYN);
+    const raw = lowerer.lowerExpr(expr.right);
+    const value: IrExpr = raw.type.kind === "void"
+      ? {
+          kind: "seqExpr", stmts: [{ kind: "exprStmt", expr: raw, loc }],
+          result: dynUndefinedExpr(loc), type: DYN, loc,
+        }
+      : isUnitType(raw.type) ? lowerer.coerceInto(expr.right, raw, DYN) : raw;
+    const assigned = lowerer.declareHiddenLocal("%setValue", value.type);
+    const result = varRef(assigned.id, value.type, loc);
+    const stored = lowerer.coerceInto(expr.right, result, DYN);
+    // Evaluate the reference before the RHS, but defer key coercion until
+    // PutValue. Yield the RHS without rereading a setter-backed property.
+    return {
+      kind: "seqExpr", stmts: [
+        { kind: "varDecl", localId: receiver.id, init: recv, loc },
+        { kind: "varDecl", localId: key.id, init: keyValue, loc },
+        { kind: "varDecl", localId: assigned.id, init: value, loc },
+        { kind: "exprStmt", expr: { kind: "libCall", fn: "dyn.keySetComputed", args: [varRef(receiver.id, DYN, loc), varRef(key.id, DYN, loc), stored], type: VOID, loc }, loc },
+      ], result, type: result.type, loc,
+    };
+  }
+
   export function lowerElementWrite(lowerer: Lowerer, expr: ts.BinaryExpression): IrStmt {
     const target = expr.left as ts.ElementAccessExpression;
     fenceNodeModuleMutation(lowerer, target, "assignment");
@@ -5129,6 +5173,10 @@ export function lowerElementCompound(lowerer: Lowerer, expr: ts.BinaryExpression
         target,
         "symbol-keyed property writes outside class fields keyed by a stable module-level literal Symbol()/Symbol.for() (other static shapes have no symbol-keyed storage)",
       );
+    }
+    const checkedReceiver = tryLowerExpression(lowerer, target.expression);
+    if (checkedReceiver?.type.kind === "dyn") {
+      return { kind: "exprStmt", expr: lowerDynElementAssignment(lowerer, expr, checkedReceiver), loc: locOf(expr) };
     }
     const receiverIr = lowerer.mapTypeOf(lowerer.typeOf(target.expression));
     if (receiverIr?.kind === "jsval") {
@@ -6226,6 +6274,15 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
         if (target) {
           const value = lowerer.lowerExprExpecting(expr.right, target.type);
           return { kind: "assignExpr", localId: target.id, value, type: target.type, loc };
+        }
+        // Bundled numeric enums use e[e["name"] = value] = "name".
+        // Capture the receiver and key before the RHS. PutValue coerces the
+        // key afterward, then yields the RHS without rereading the property.
+        if (ts.isElementAccessExpression(expr.left) && !expr.left.questionDotToken) {
+          const recv = tryLowerExpression(lowerer, expr.left.expression);
+          if (recv?.type.kind === "dyn") {
+            return lowerDynElementAssignment(lowerer, expr, recv);
+          }
         }
         // `h.k = v` on an ISLAND receiver in VALUE position: the engine
         // property write (setProp throws the engine's TypeErrors on
@@ -7834,6 +7891,10 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
       const left = lowerer.jsvalIn(lowerer.lowerExpr(expr.left), expr.left);
       const right = lowerer.lowerExpr(expr.right);
       return { kind: "jsOp", op: "instanceOf", args: [left, right], type: BOOL, loc };
+    }
+    if (lowerer.isStdlibGlobal(expr.right, "ArrayBuffer")) {
+      const value = lowerer.coerceInto(expr.left, lowerer.lowerExpr(expr.left), DYN);
+      return { kind: "libCall", fn: "arrayBuffer.is", args: [value], type: BOOL, loc };
     }
     const rhsSymbol = ts.isIdentifier(expr.right) ? lowerer.resolveValueSymbol(expr.right) : null;
     // `x instanceof events.EventEmitter` — the namespace-member spelling

@@ -596,7 +596,7 @@ function emitArgPackAndTrampolinePrologue(
     if (value === undefined) {
       lines.push(`  scr_bytes_release(sc_value);`);
     } else if (value.kind === "dyn") {
-      lines.push(`  ScrDyn *sc_result = scr_dyn_new_bytes_copy(sc_value);`, `  scr_bytes_release(sc_value);`);
+      lines.push(`  ScrDyn *sc_result = scr_dyn_new_bytes(sc_value);`, `  scr_bytes_release(sc_value);`);
       callTypes.push("ScrDyn *");
       callArgs.push("sc_result");
     } else if (value.kind === "bytes" && value.elem === "u8") {
@@ -655,7 +655,7 @@ function emitArgPackAndTrampolinePrologue(
       lines.push(`  scr_bytes_release(sc_value);`);
     } else if (value.kind === "dyn") {
       lines.push(
-        `  ScrDyn *sc_result = sc_value ? scr_dyn_new_bytes_copy(sc_value) : scr_dyn_undefined();`,
+        `  ScrDyn *sc_result = sc_value ? scr_dyn_new_bytes(sc_value) : scr_dyn_undefined();`,
         `  scr_bytes_release(sc_value);`,
       );
       callTypes.push("ScrDyn *");
@@ -1373,7 +1373,7 @@ export function streamDataThunkFor(emitter: CEmitter, cbT: IrType): string {
     passed.push("scr_str_retain(sc_s)");
   } else {
     // dyn: box by runtime tag — the JS lane's adapter parameter.
-    body.push(`  ScrDyn *sc_d = sc_b ? scr_dyn_new_buffer_copy(sc_b) : scr_dyn_new_str(sc_s);`);
+    body.push(`  ScrDyn *sc_d = sc_b ? scr_dyn_new_buffer(sc_b) : scr_dyn_new_str(sc_s);`);
     passed.push("sc_d");
   }
   const sigParams = ["ScrClosure *", ...cbT.params.map((q) => cType(q).trim())].join(", ");
@@ -1462,7 +1462,7 @@ export function streamCbThunkFor(emitter: CEmitter, kind: "r" | "w" | "f" | "d" 
     // boxes the retained stream).
     if (p.kind === "dyn") {
       if (isChunkPos) {
-        passed.push(`scr_dyn_new_buffer_copy(sc_chunk)`);
+        passed.push(`scr_dyn_new_buffer(sc_chunk)`);
       } else if (isEncPos) {
         body.push(
           `  ScrStr *sc_encs = scr_str_new("buffer", 6);`,

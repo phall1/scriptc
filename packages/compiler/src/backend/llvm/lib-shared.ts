@@ -24,6 +24,19 @@ export function emitAlwaysThrowLibCall(
 }
 
 export const LIB_FN_SYMS: Record<string, string> = {
+  "intl.segmenterNew": "scr_intl_segmenter_new",
+  "arrayBuffer.new": "scr_array_buffer_new",
+  "arrayBuffer.is": "scr_array_buffer_is",
+  "arrayBuffer.isView": "scr_array_buffer_is_view",
+  "arrayBuffer.byteLengthGetter": "scr_array_buffer_byte_length_getter",
+  "arrayBuffer.byteLengthDescriptor": "scr_array_buffer_byte_length_descriptor",
+  "arrayBuffer.viewU8": "scr_array_buffer_view_u8",
+  "arrayBuffer.viewU32": "scr_array_buffer_view_u32",
+  "arrayBuffer.viewI32": "scr_array_buffer_view_i32",
+  "arrayBuffer.viewF32": "scr_array_buffer_view_f32",
+  "arrayBuffer.viewF64": "scr_array_buffer_view_f64",
+  "arrayBuffer.viewDV": "scr_array_buffer_view_dv",
+
   "util.parseArgs": "scr_util_parse_args",
   "math.maxArr": "scr_math_max_arr",
   "math.minArr": "scr_math_min_arr",
@@ -119,6 +132,11 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "process.execPath": "scr_process_exec_path",
   "process.arch": "scr_process_arch",
   "process.versionsNode": "scr_process_versions_node",
+  "process.versions": "scr_process_versions",
+  "process.builtinId": "scr_process_builtin_id",
+  "global.native": "scr_global_native",
+  "process.builtinModule": "scr_process_builtin_module",
+  "process.builtinUnsupported": "scr_process_builtin_unsupported",
   "process.versionsOpenssl": "scr_process_versions_openssl",
   "process.umask": "scr_process_umask",
   "process.uptime": "scr_process_uptime",
@@ -247,6 +265,7 @@ export const LIB_FN_SYMS: Record<string, string> = {
   // leniently (never throws), concat copies its borrowed list; the sync
   // fs Buffer pair and zlib.inflateSync ride the may-throw check.
   "buffer.fromStr": "scr_bytes_from_str",
+  "buffer.brand": "scr_bytes_as_buffer",
   "buffer.fromDyn": "scr_buffer_from_dyn",
   "buffer.concat": "scr_bytes_concat",
   "buffer.concatLen": "scr_bytes_concat_len",
@@ -512,6 +531,7 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "json.parseReviver": "scr_json_parse_reviver",
   "json.stringifyReplacer": "scr_json_stringify_replacer",
   "dyn.keySet": "scr_dyn_key_set",
+  "dyn.keySetComputed": "scr_dyn_key_set_computed",
   "dyn.keyDelete": "scr_dyn_key_delete",
   "dyn.globalSymbolGet": "scr_dyn_global_symbol_get",
   "dyn.globalSymbolSet": "scr_dyn_global_symbol_set",

@@ -845,7 +845,7 @@ static void scr_stream_dyn_data(ScrDyn *const *args, size_t argc,
   *data_str = NULL;
   if (argc < 2) return;
   const ScrDyn *a = args[1];
-  if (a->kind == SCR_DYN_BYTES) *data = scr_dyn_bytes_copy_out(a);
+  if (a->kind == SCR_DYN_BYTES) *data = scr_dyn_bytes_unbox(a);
   else if (a->kind == SCR_DYN_STR) *data_str = scr_str_retain(a->v.str);
 }
 
@@ -877,7 +877,7 @@ ScrDyn *scr_stream_done_dyn_l(ScrClosure *clo, ScrDyn *const *args, size_t argc)
 bool scr_stream_push_dyn(ScrStream *s, const ScrDyn *d) {
   switch (d->kind) {
   case SCR_DYN_BYTES: {
-    ScrBytes *b = scr_dyn_bytes_copy_out(d);
+    ScrBytes *b = scr_dyn_bytes_unbox(d);
     bool r = scr_stream_push(s, b);
     scr_bytes_release(b);
     return r;
@@ -897,7 +897,7 @@ bool scr_stream_push_dyn(ScrStream *s, const ScrDyn *d) {
 bool scr_stream_write_dyn(ScrStream *s, const ScrDyn *d, ScrClosure *cb) {
   switch (d->kind) {
   case SCR_DYN_BYTES: {
-    ScrBytes *b = scr_dyn_bytes_copy_out(d);
+    ScrBytes *b = scr_dyn_bytes_unbox(d);
     bool r = scr_stream_write(s, b, cb);
     scr_bytes_release(b);
     return r;
@@ -923,7 +923,7 @@ static void scr_stream_next_fulfill(ScrStreamState *st, ScrPromise *w /*moves*/,
       d = scr_dyn_new_str((ScrStr *)chunk);
       scr_str_release((ScrStr *)chunk);
     } else {
-      d = scr_dyn_new_buffer_copy((ScrBytes *)chunk);
+      d = scr_dyn_new_buffer((ScrBytes *)chunk);
       scr_bytes_release((ScrBytes *)chunk);
     }
     scr_promise_fulfill_ref(w, d, scr_dyn_retain_v, scr_dyn_release_v, NULL);
@@ -1566,7 +1566,7 @@ static void scr_stream_dynopt_read_inv(ScrClosure *cb, ScrStream *s, double size
 static void scr_stream_dynopt_chunk3(ScrClosure *cb, ScrStream *s, ScrBytes *chunk,
                                      ScrDynThunk glue, const char *what) {
   ScrDyn *args[3];
-  args[0] = scr_dyn_new_buffer_copy(chunk);
+  args[0] = scr_dyn_new_buffer(chunk);
   ScrStr *enc = scr_str_new("buffer", 6);
   args[1] = scr_dyn_new_str(enc);
   scr_str_release(enc);
@@ -1584,7 +1584,7 @@ static void scr_stream_dynopt_write_inv(ScrClosure *cb, ScrStream *s, ScrBytes *
 
 static void scr_stream_dynopt_transform_inv(ScrClosure *cb, ScrStream *s, ScrBytes *chunk) {
   ScrDyn *args[3];
-  args[0] = scr_dyn_new_buffer_copy(chunk);
+  args[0] = scr_dyn_new_buffer(chunk);
   ScrStr *enc = scr_str_new("buffer", 6);
   args[1] = scr_dyn_new_str(enc);
   scr_str_release(enc);

@@ -2326,6 +2326,9 @@ ScrStr *scr_process_arch(void);
  * interned. */
 ScrStr *scr_process_versions_node(void);
 ScrStr *scr_process_versions_openssl(void);
+/* Stable native version dictionary (+1); node/openssl are compatibility
+ * targets, matching the scalar getters above. */
+ScrDyn *scr_process_versions(void);
 /* process.kill with Node's exact semantics: int32 pid validation (the
  * ERR_INVALID_ARG_TYPE TypeError text), Node's signal-name table for the
  * named form (unknown names throw the ERR_UNKNOWN_SIGNAL TypeError),
@@ -3367,6 +3370,11 @@ typedef enum {
   SCR_DYNH_ABORT_CONTROLLER, /* native static-fetch AbortController */
   SCR_DYNH_CHILD,          /* child_process.ChildProcess */
   SCR_DYNH_FILE_HANDLE,    /* fs/promises.FileHandle */
+  SCR_DYNH_ARRAY_BUFFER,   /* fixed-length ArrayBuffer storage */
+  SCR_DYNH_SEGMENTER,     /* default Unicode grapheme segmentation */
+  SCR_DYNH_SEGMENTS,      /* iterable immutable segmentation result */
+  SCR_DYNH_BUILTIN_MODULE, /* native builtin export object */
+  SCR_DYNH_GLOBAL,         /* native global object identity */
   SCR_DYNH_COUNT,
 } ScrDynHandleTag;
 
@@ -3587,12 +3595,13 @@ ScrDyn *scr_dyn_own_descriptor(const ScrDyn *value, const ScrStr *key);
 void scr_dyn_proxy_set(ScrDyn *proxy, ScrStr *key, ScrDyn *value);
 void scr_dyn_proxy_delete(ScrDyn *proxy, const ScrStr *key);
 void scr_dyn_proxy_unsupported(const char *operation);
-/* Wraps a fresh COPY of the u8 payload (the static→dyn boundary copies —
- * DataView-backed sources copy their aliased window). Borrows b. */
-ScrDyn *scr_dyn_new_bytes_copy(const ScrBytes *b);
+/* Retains the native view, preserving identity and its shared backing
+ * allocation across the checked-dynamic boundary. Borrows b. */
+ScrDyn *scr_dyn_new_bytes(const ScrBytes *b);
+ScrDyn *scr_dyn_bytes_key_get(const ScrDyn *value, const ScrStr *key);
 /* The Buffer-flavored twin (stream chunks): string coercion/toString
  * decode utf8 instead of joining elements. */
-ScrDyn *scr_dyn_new_buffer_copy(const ScrBytes *b);
+ScrDyn *scr_dyn_new_buffer(const ScrBytes *b);
 /* Identity-preserving transit capsule used by ReadableStream.from over
  * typed arrays. The constructor retains `ptr`; matching unbox returns +1.
  * materialize lazily creates and then retains one detached dyn snapshot.
@@ -3615,9 +3624,8 @@ void *scr_dyn_typed_ref_cached_cast(
 void scr_dyn_typed_ref_cache_cast(
     ScrDyn *d, const char *type_key, size_t type_key_len, void *ptr,
     void *(*retain)(void *), void (*release)(void *));
-/* A fresh u8 COPY of a SCR_DYN_BYTES payload (+1) — the dynCheck
- * extraction (`u as Uint8Array`). */
-ScrBytes *scr_dyn_bytes_copy_out(const ScrDyn *d);
+/* Retains a SCR_DYN_BYTES view (+1) for checked extraction. */
+ScrBytes *scr_dyn_bytes_unbox(const ScrDyn *d);
 void scr_dyn_arr_push(ScrDyn *arr, ScrDyn *item);
 /* Spread completion for a runtime-arity argument list (`f(...xs)` in the
  * checked-dynamic tier): flattens `src` into `arr` per JS's spread over the
@@ -3648,6 +3656,7 @@ ScrDyn *scr_dyn_get_own_property_descriptor(ScrDyn *target, ScrDyn *key);
  * non-object kinds throw Node's catchable TypeErrors (strict-mode
  * wording). All three operands BORROWED (the value is retained in). */
 void scr_dyn_key_set(ScrDyn *recv, ScrStr *key, ScrDyn *value);
+void scr_dyn_key_set_computed(ScrDyn *recv, ScrDyn *key, ScrDyn *value);
 void scr_dyn_key_delete(ScrDyn *recv, const ScrStr *key, bool strict);
 ScrDyn *scr_dyn_global_symbol_get(ScrSym *key); /* borrowed key; +1 value */
 void scr_dyn_global_symbol_set(ScrSym *key, ScrDyn *value); /* both borrowed */
@@ -3815,7 +3824,16 @@ typedef struct ScrDynHandleOps {
    * answers false for a pairing it does not model (the caller's loud
    * fence). NULL when the tag accepts no pipes. */
   bool (*pipe_from)(void *dst, const ScrDyn *src);
+  /* Immutable native iterables may drain into a fresh array. Mutable or
+   * effectful iterators need a separate step/close protocol. NULL = not iterable. */
+  ScrDyn *(*iter_pack)(void *h);
 } ScrDynHandleOps;
+
+ScrDyn *scr_intl_segmenter_new(void);
+ScrStr *scr_process_builtin_id(ScrDyn *id, ScrArr *known);
+ScrDyn *scr_process_builtin_module(ScrStr *id, ScrDyn *getter);
+ScrDyn *scr_process_builtin_unsupported(ScrStr *id, ScrStr *member);
+ScrDyn *scr_global_native(ScrArr *known);
 
 void scr_dyn_handle_install(ScrDynHandleTag tag, const ScrDynHandleOps *ops);
 void scr_file_handle_dyn_install(void);
@@ -5263,6 +5281,7 @@ typedef struct ScrBytes {
    * views over views resolve to the owner at construction) and its `data`
    * points into backing->data — released, never freed. */
   struct ScrBytes *backing;
+  bool is_buffer; /* Buffer brand belongs to the view, not its backing. */
 } ScrBytes;
 
 size_t scr_bytes_elem_size(ScrBytesElem elem); /* 1, 4, or 8 */
@@ -5294,6 +5313,25 @@ ScrJsval *scr_jsval_from_bytes(const ScrBytes *b);
  * THROWS Node's "Invalid typed array length" RangeError catchably and
  * returns NULL with the exception pending). */
 ScrBytes *scr_bytes_new(ScrBytesElem elem, double n); /* +1 */
+ScrBytes *scr_bytes_as_buffer(ScrBytes *bytes); /* borrows; +1, Buffer factory only */
+/* Views retain the root allocation; offsets are relative to its complete
+ * byte storage, including when src is itself a subarray. */
+ScrBytes *scr_bytes_buffer_view(ScrBytes *src, ScrBytesElem elem,
+                               double offset, bool has_len, double length);
+ScrDyn *scr_array_buffer_new(ScrDyn *length);
+ScrDyn *scr_array_buffer_from_bytes(ScrBytes *view);
+bool scr_array_buffer_is(const ScrDyn *value);
+bool scr_array_buffer_is_view(const ScrDyn *value);
+double scr_array_buffer_byte_length_getter(void);
+ScrDyn *scr_array_buffer_byte_length_descriptor(ScrDyn *getter);
+ScrBytes *scr_array_buffer_view(ScrBytesElem elem, const ScrDyn *buffer,
+                               const ScrDyn *offset, const ScrDyn *length);
+ScrBytes *scr_array_buffer_view_u8(ScrDyn *, ScrDyn *, ScrDyn *);
+ScrBytes *scr_array_buffer_view_u32(ScrDyn *, ScrDyn *, ScrDyn *);
+ScrBytes *scr_array_buffer_view_i32(ScrDyn *, ScrDyn *, ScrDyn *);
+ScrBytes *scr_array_buffer_view_f32(ScrDyn *, ScrDyn *, ScrDyn *);
+ScrBytes *scr_array_buffer_view_f64(ScrDyn *, ScrDyn *, ScrDyn *);
+ScrBytes *scr_array_buffer_view_dv(ScrDyn *, ScrDyn *, ScrDyn *);
 /* Native callback boundary: exact owned u8 copy. NULL with len == 0 is an
  * empty span. */
 ScrBytes *scr_bytes_from_data(const uint8_t *data, size_t len); /* +1 */

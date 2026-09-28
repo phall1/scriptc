@@ -842,9 +842,9 @@
       "apiEntries": 119,
       "static": {
         "supported": 0,
-        "partial": 25,
+        "partial": 27,
         "refused": 0,
-        "not-implemented": 94,
+        "not-implemented": 92,
         "by-design": 0,
         "unreviewed": 0,
         "not-applicable": 0
@@ -65658,9 +65658,9 @@
       "anchor": "processgetbuiltinmoduleid",
       "nodeStability": null,
       "static": {
-        "status": "not-implemented",
-        "detail": "No static compiler lowering is registered for this API yet.",
-        "verification": "registry-gap"
+        "status": "partial",
+        "detail": "Implemented for the documented scriptc module-loader subset.",
+        "verification": "test-backed"
       },
       "dynamic": {
         "status": "not-implemented",
@@ -67734,9 +67734,9 @@
       "anchor": "",
       "nodeStability": null,
       "static": {
-        "status": "not-implemented",
-        "detail": "No static compiler lowering is registered for this API yet.",
-        "verification": "registry-gap"
+        "status": "partial",
+        "detail": "Implemented for the documented scriptc module-loader subset.",
+        "verification": "test-backed"
       },
       "dynamic": {
         "status": "partial",

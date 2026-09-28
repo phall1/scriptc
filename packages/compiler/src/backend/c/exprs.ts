@@ -2158,6 +2158,8 @@ function emitContainerExpr(
             // 0 for owners, the view's offset into its owner for a
             // DataView. Never throws.
             return emitter.newTemp(e.type, `scr_bytes_byte_offset(${r.name})`);
+          case "buffer":
+            return emitter.newTemp(e.type, `scr_array_buffer_from_bytes(${r.name})`);
           case "dataViewNew": {
             // new DataView(x.buffer, byteOffset?, byteLength?) — receiver
             // is x itself (the frontend peeled `.buffer`). Omitted offset
@@ -4446,6 +4448,8 @@ function emitDynamicLibCall(state: LibCallState): Temp {
             // member retains the value in); throws Node's TypeErrors on
             // non-object receivers (may-throw seed set).
             return finish(`scr_dyn_key_set(${arg(0)}, ${arg(1)}, ${arg(2)})`);
+          case "dyn.keySetComputed":
+            return finish(`scr_dyn_key_set_computed(${arg(0)}, ${arg(1)}, ${arg(2)})`);
           case "dyn.keyDelete":
             return finish(`scr_dyn_key_delete(${arg(0)}, ${arg(1)}, ${arg(2)})`);
           case "dyn.globalSymbolGet":
@@ -4495,6 +4499,8 @@ function emitDynamicLibCall(state: LibCallState): Temp {
             return finish(`scr_dyn_add(${arg(0)}, ${arg(1)})`);
           case "dyn.proxyNew":
             return finish(`scr_dyn_proxy_new(${arg(0)}, ${arg(1)})`);
+          case "global.native":
+            return finish(`scr_global_native(${arg(0)})`);
           case "global.undefRead":
             // A declare-d const nothing defines: Node's catchable
             // ReferenceError at the access (always throws — the typed
@@ -4505,6 +4511,28 @@ function emitDynamicLibCall(state: LibCallState): Temp {
             );
           case "dyn.this":
             return finish(`scr_dyn_this_get()`);
+          case "arrayBuffer.new":
+            return finish(`scr_array_buffer_new(${arg(0)})`);
+          case "arrayBuffer.is":
+            return finish(`scr_array_buffer_is(${arg(0)})`);
+          case "arrayBuffer.isView":
+            return finish(`scr_array_buffer_is_view(${arg(0)})`);
+          case "arrayBuffer.byteLengthGetter":
+            return finish(`scr_array_buffer_byte_length_getter()`);
+          case "arrayBuffer.byteLengthDescriptor":
+            return finish(`scr_array_buffer_byte_length_descriptor(${arg(0)})`);
+          case "arrayBuffer.viewU8":
+            return finish(`scr_array_buffer_view_u8(${arg(0)}, ${arg(1)}, ${arg(2)})`);
+          case "arrayBuffer.viewU32":
+            return finish(`scr_array_buffer_view_u32(${arg(0)}, ${arg(1)}, ${arg(2)})`);
+          case "arrayBuffer.viewI32":
+            return finish(`scr_array_buffer_view_i32(${arg(0)}, ${arg(1)}, ${arg(2)})`);
+          case "arrayBuffer.viewF32":
+            return finish(`scr_array_buffer_view_f32(${arg(0)}, ${arg(1)}, ${arg(2)})`);
+          case "arrayBuffer.viewF64":
+            return finish(`scr_array_buffer_view_f64(${arg(0)}, ${arg(1)}, ${arg(2)})`);
+          case "arrayBuffer.viewDV":
+            return finish(`scr_array_buffer_view_dv(${arg(0)}, ${arg(1)}, ${arg(2)})`);
           case "dyn.objKeys":
             return finish(`scr_dyn_obj_keys(${arg(0)})`);
           case "dyn.forInKeys":
@@ -5382,6 +5410,8 @@ function emitPrimitiveLibCall(state: LibCallState): Temp {
             return finish(`scr_num_same_value(${arg(0)}, ${arg(1)})`);
           // Intl.NumberFormat("en-US").format / toLocaleString("en-US")
           // with default options (scr_lib.c). +1 string; no throw.
+          case "intl.segmenterNew":
+            return finish(`scr_intl_segmenter_new()`);
           case "intl.numFormatEnUs":
             return finish(`scr_intl_num_format_en_us(${arg(0)})`);
           // The URL surface (scr_url.c): construction and the two
@@ -5685,6 +5715,8 @@ function emitCryptoBytesLibCall(state: LibCallState): Temp {
           // leniently (never throws), concat copies its borrowed list.
           case "buffer.fromStr":
             return finish(`scr_bytes_from_str(${arg(0)}, ${arg(1)})`);
+          case "buffer.brand":
+            return finish(`scr_bytes_as_buffer(${arg(0)})`);
           case "buffer.fromDyn":
             return finish(`scr_buffer_from_dyn(${arg(0)}, ${arg(1)})`);
           case "buffer.concat":
@@ -8091,6 +8123,14 @@ function emitProcessLibCall(state: LibCallState): Temp {
           }
           case "process.arch":
             return finish(`scr_process_arch()`);
+          case "process.versions":
+            return finish(`scr_process_versions()`);
+          case "process.builtinId":
+            return finish(`scr_process_builtin_id(${arg(0)}, ${arg(1)})`);
+          case "process.builtinModule":
+            return finish(`scr_process_builtin_module(${arg(0)}, ${arg(1)})`);
+          case "process.builtinUnsupported":
+            return finish(`scr_process_builtin_unsupported(${arg(0)}, ${arg(1)})`);
           case "process.versionsNode":
             return finish(`scr_process_versions_node()`);
           case "process.versionsOpenssl":
@@ -9120,6 +9160,7 @@ function emitLibCallExpr(emitter: CEmitter, e: LibCallExpr): Temp {
     case "island":
     case "json":
       return emitWebLibCall(state);
+    case "arrayBuffer":
     case "dyn":
     case "global":
       return emitDynamicLibCall(state);

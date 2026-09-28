@@ -954,6 +954,10 @@ function classExprNeverRegisters(decl: ts.ClassLikeDeclaration): boolean {
 
 function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
   const { checker, unions, classNamer, resolveTypeParam } = ctx;
+  // TypeScript's intrinsic globalThis symbol has no declaration. A stored
+  // reference needs native object identity, including var's undefined state.
+  const intrinsic = type.getSymbol();
+  if (!ctx.dynamic && intrinsic?.name === "globalThis" && checker.declarationsOf(intrinsic).length === 0) return DYN;
   if (!ctx.dynamic) {
     const moduleId = ctx.moduleNamespaceId?.(type) ?? null;
     if (moduleId !== null) return { kind: "moduleNs", moduleId };
@@ -1811,6 +1815,7 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
   if (isStdlibInterface("RegExp")) {
     return { kind: "regex" };
   }
+  if (isStdlibInterface("Segmenter") || isStdlibInterface("Segments") || isStdlibInterface("SegmentData")) return DYN;
   // Typed arrays: references to the lib's Uint8Array/Uint32Array/
   // Float32Array/Float64Array interfaces (provenance, not names). The es2022+ lib
   // declares them generic over the backing buffer (`Uint8Array<ArrayBuffer>`
@@ -1844,6 +1849,7 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
   // the same numeric-handle story over the check-phase queue — its own id
   // space, so clearTimeout of an Immediate no-ops like Node.
   if (isStdlibInterface("Immediate")) return F64;
+  if (isStdlibInterface("ArrayBuffer") || isStdlibInterface("PropertyDescriptor") || isStdlibInterface("ProcessVersions")) return DYN;
   if (isStdlibInterface("Uint8Array")) return bytesOf("u8");
   if (isStdlibInterface("Uint32Array")) return bytesOf("u32");
   // Int32Array: the signed 32-bit kind (element reads sign-extend, writes

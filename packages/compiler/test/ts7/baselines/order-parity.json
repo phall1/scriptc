@@ -10975,6 +10975,92 @@
     "<repo>/tests/fixtures/node-types/url-getters.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/array-buffer-conversions.js": {
+   "order": [
+    "<repo>/tests/corpus/array-buffer-conversions.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/array-buffer-storage.ts": {
+   "order": [
+    "<repo>/tests/corpus/array-buffer-storage.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/checked-byte-storage/main.ts": {
+   "order": [
+    "<repo>/tests/corpus/checked-byte-storage/values.js",
+    "<repo>/tests/corpus/checked-byte-storage/main.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/expression-runtime-values.ts": {
+   "order": [
+    "<repo>/tests/corpus/expression-runtime-values.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/global-runtime-probes.js": {
+   "order": [
+    "<repo>/tests/corpus/global-runtime-probes.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/global-stored-probes.js": {
+   "order": [
+    "<repo>/tests/corpus/global-stored-probes.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/indexed-assignment-values.js": {
+   "order": [
+    "<repo>/tests/corpus/indexed-assignment-values.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/intl-grapheme-conformance/main.ts": {
+   "order": [
+    "<repo>/tests/corpus/intl-grapheme-conformance/cases.ts",
+    "<repo>/tests/corpus/intl-grapheme-conformance/main.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/intl-grapheme.ts": {
+   "order": [
+    "<repo>/tests/corpus/intl-grapheme.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/object-spread-computed.ts": {
+   "order": [
+    "<repo>/tests/corpus/object-spread-computed.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/optional-native-callables.js": {
+   "order": [
+    "<repo>/tests/corpus/optional-native-callables.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/process-builtin-values.js": {
+   "order": [
+    "<repo>/tests/corpus/process-builtin-values.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/process-versions-storage.ts": {
+   "order": [
+    "<repo>/tests/corpus/process-versions-storage.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/regexp-optional-constructor.ts": {
+   "order": [
+    "<repo>/tests/corpus/regexp-optional-constructor.ts"
+   ],
+   "diags": []
   }
  }
 }

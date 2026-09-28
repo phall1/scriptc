@@ -112,6 +112,7 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "json.parseReviver": { argTypes: [STRING, DYN], result: DYN },
   "json.stringifyReplacer": { argTypes: [DYN, DYN, STRING], result: DYN },
   "dyn.keySet": { argTypes: [DYN, STRING, DYN], result: VOID },
+  "dyn.keySetComputed": { argTypes: [DYN, DYN, DYN], result: VOID },
   "dyn.keyDelete": { argTypes: [DYN, STRING, BOOL], result: VOID },
   "dyn.globalSymbolGet": { argTypes: [SYMBOL_T], result: DYN },
   "dyn.globalSymbolSet": { argTypes: [SYMBOL_T, DYN], result: VOID },
@@ -952,6 +953,7 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   // The Buffer statics and the fs/zlib Buffer forms: fixed always-u8
   // signatures (Buffer IS a Uint8Array — one bytes kind).
   "buffer.fromStr": { argTypes: [STRING, STRING], result: BYTES_U8 },
+  "buffer.brand": { argTypes: [BYTES_U8], result: BYTES_U8 },
   "buffer.fromDyn": { argTypes: [DYN, STRING], result: BYTES_U8 },
   "buffer.concat": { argTypes: [arrayOf(BYTES_U8)], result: BYTES_U8 },
   "buffer.byteLenStr": { argTypes: [STRING, STRING], result: F64 },
@@ -1056,6 +1058,10 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "process.getgid": { argTypes: [], result: F64 },
   "process.execPath": { argTypes: [], result: STRING },
   "process.arch": { argTypes: [], result: STRING },
+  "process.versions": { argTypes: [], result: DYN },
+  "process.builtinId": { argTypes: [DYN, arrayOf(STRING)], result: STRING },
+  "process.builtinModule": { argTypes: [STRING, DYN], result: DYN },
+  "process.builtinUnsupported": { argTypes: [STRING, STRING], result: DYN },
   "process.versionsNode": { argTypes: [], result: STRING },
   "process.versionsOpenssl": { argTypes: [], result: STRING },
   "process.kill": { argTypes: [F64, STRING], result: BOOL },
@@ -1079,6 +1085,7 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   // Always throws; the result is the READ's declared type (a typed dummy
   // the unwind abandons) — the libCall case skips the result check.
   "global.undefRead": { argTypes: [STRING], result: VOID },
+  "global.native": { argTypes: [arrayOf(STRING)], result: DYN },
   // `X.name` through a class value: the arg is a program-dependent
   // classval (a null slot; the libCall case checks the kind).
   "class.name": { argTypes: [null], result: STRING },
@@ -1098,6 +1105,18 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "error.domCause": { argTypes: [null], result: DYN },
   "error.domClone": { argTypes: [null, DYN], result: VOID },
   "dyn.errInstanceof": { argTypes: [DYN, F64], result: BOOL },
+  "arrayBuffer.new": { argTypes: [DYN], result: DYN },
+  "intl.segmenterNew": { argTypes: [], result: DYN },
+  "arrayBuffer.is": { argTypes: [DYN], result: BOOL },
+  "arrayBuffer.isView": { argTypes: [DYN], result: BOOL },
+  "arrayBuffer.byteLengthGetter": { argTypes: [], result: F64 },
+  "arrayBuffer.byteLengthDescriptor": { argTypes: [DYN], result: DYN },
+  "arrayBuffer.viewU8": { argTypes: [DYN, DYN, DYN], result: BYTES_U8 },
+  "arrayBuffer.viewU32": { argTypes: [DYN, DYN, DYN], result: bytesOf("u32") },
+  "arrayBuffer.viewI32": { argTypes: [DYN, DYN, DYN], result: bytesOf("i32") },
+  "arrayBuffer.viewF32": { argTypes: [DYN, DYN, DYN], result: bytesOf("f32") },
+  "arrayBuffer.viewF64": { argTypes: [DYN, DYN, DYN], result: bytesOf("f64") },
+  "arrayBuffer.viewDV": { argTypes: [DYN, DYN, DYN], result: BYTES_U8 },
   "dyn.objKeys": { argTypes: [DYN], result: DYN },
   "dyn.forInKeys": { argTypes: [DYN], result: DYN },
   "dyn.hasOwn": { argTypes: [DYN, STRING], result: BOOL },
@@ -2754,6 +2773,7 @@ function validateFunction(
           err(`bytesIntrinsic ${e.method} args[1] must be a strLit encoding`, e.loc);
         }
         const EXTRA_SIGS: Record<string, { argTypes: IrType[]; minArgs: number; result: IrType } | undefined> = {
+          buffer: { argTypes: [], minArgs: 0, result: DYN },
           setFromDyn: { argTypes: [DYN, F64], minArgs: 1, result: VOID },
           copyWithin: { argTypes: [F64, F64, F64], minArgs: 3, result: bytesOf(recv.elem) },
           equals: { argTypes: [BYTES_U8], minArgs: 1, result: BOOL },

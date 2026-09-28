@@ -70,7 +70,7 @@ ScrDyn *scr_fs_read_file_sync_dyn(ScrStr *path, const ScrDyn *enc) {
   if (enc->kind == SCR_DYN_UNDEF || enc->kind == SCR_DYN_NULL) {
     ScrBytes *b = scr_fs_read_file_bytes(path);
     if (!b) return NULL;
-    ScrDyn *d = scr_dyn_new_buffer_copy(b);
+    ScrDyn *d = scr_dyn_new_buffer(b);
     scr_bytes_release(b);
     return d;
   }

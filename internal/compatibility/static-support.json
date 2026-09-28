@@ -60,6 +60,8 @@
     "node-builtin.path": ["tests/corpus/957-builtins-namespace.ts", "tests/corpus/2915-path-function-values.ts", "tests/corpus/2916-path-function-values-cjs.ts", "tests/corpus/2917-builtin-callable-widths.ts", "tests/corpus/2918-builtin-callable-widths-cjs.ts"],
     "node-builtin.perf_hooks": ["tests/corpus/957-builtins-namespace.ts"],
     "node-builtin.process": ["tests/corpus/990-process-basics.ts", "tests/corpus/2314-process-introspection.ts"],
+    "node-builtin.process.getBuiltinModule": ["tests/corpus/process-builtin-values.js", "packages/compiler/test/process-builtin-values.test.ts"],
+    "node-builtin.process.versions": ["tests/corpus/process-versions-storage.ts"],
     "node-builtin.process.rows": ["tests/corpus/2992-stream-rows.ts", "tests/harness/terminal-geometry.test.ts"],
     "node-builtin.process.columns": ["tests/corpus/1448-stream-columns.ts", "tests/harness/terminal-geometry.test.ts"],
     "node-builtin.process.exitCode": ["tests/corpus/2941-process-exit-code.ts", "tests/corpus/2942-process-exit-code-override.ts", "tests/corpus/2943-process-exit-code-invalid.ts", "tests/corpus/2944-process-exit-code-wrap.ts"],
@@ -83,6 +85,8 @@
     "stdlib.abort": ["tests/harness/fetch-conformance.test.ts"]
   },
   "features": [
+    { "chapter": "process", "signatures": ["`process.getBuiltinModule(id)`"], "status": "partial", "evidence": ["tests/corpus/process-builtin-values.js", "packages/compiler/test/process-builtin-values.test.ts"] },
+    { "chapter": "process", "signatures": ["`versions` Type: {Object}"], "status": "partial", "evidence": ["tests/corpus/process-versions-storage.ts"] },
     { "chapter": "http", "signatures": ["Class: `http.ClientRequest`", "Class: `http.Server`", "Class: `http.ServerResponse`", "Class: `http.IncomingMessage`"], "status": "partial", "evidence": ["tests/corpus/2981-http-static-events.ts", "tests/corpus/2976-http-static-incoming-state.ts"] },
     { "chapter": "http", "parent": "Class: `http.ClientRequest`", "signatures": ["`request.setSocketKeepAlive([enable][, initialDelay])`", "`request.setTimeout(timeout[, callback])`", "`destroyed` Type: {boolean}", "Event: `'timeout'`"], "status": "partial", "evidence": ["tests/corpus/2978-http-static-client-timeout.ts", "tests/corpus/2987-http-static-timeout-errors.ts"] },
     { "chapter": "http", "parent": "Class: `http.ClientRequest`", "signatures": ["`request.abort()`", "`aborted` Type: {boolean}", "Event: `'abort'`"], "status": "partial", "evidence": ["tests/corpus/2988-http-static-client-abort.ts"] },

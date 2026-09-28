@@ -553,6 +553,8 @@ export function emitBytesIntrinsic(host: LlvmEmitterContext, e: IrExpr & { kind:
           false,
           true,
         );
+      case "buffer":
+        return call("scr_array_buffer_from_bytes", "ptr (ptr)", `ptr ${r.name}`, true, false);
       case "byteOffset":
         return call("scr_bytes_byte_offset", "double (ptr)", `ptr ${r.name}`, false, false);
       case "dataViewNew":

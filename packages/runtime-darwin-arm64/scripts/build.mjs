@@ -165,6 +165,7 @@ async function build() {
       [join(runtimeRoot, "LICENSE"), "artifacts/licenses/scriptc-runtime.txt", "Apache-2.0"],
       [join(quickjs, "LICENSE"), "artifacts/licenses/quickjs-ng.txt", "MIT"],
       [join(vendorRoot, "ryu", "LICENSE-Boost"), "artifacts/licenses/ryu.txt", "BSL-1.0"],
+      [join(vendorRoot, "unicode", "LICENSE"), "artifacts/licenses/unicode.txt", "Unicode-3.0"],
       [join(zlib, "LICENSE"), "artifacts/licenses/zlib.txt", "Zlib"],
       [join(mbedtls, "LICENSE"), "artifacts/licenses/mbedtls.txt", "Apache-2.0"],
     ];

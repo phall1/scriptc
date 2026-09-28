@@ -1788,6 +1788,7 @@ export type IrStrIntrinsicMethod =
  * (integer kinds by modular truncation, Float32 by double→float
  * rounding). No BIG setters exist — bigint arguments never lower. */
 export type IrBytesIntrinsicMethod =
+  | "buffer"
   | "length"
   | "byteLength"
   | "get"
@@ -1974,6 +1975,18 @@ export type IrRegexIntrinsicMethod =
  * assume the island runtime is linked when they see it; island exceptions
  * bridge into the exception cell as catchable strings (may-throw). */
 export type IrLibFn =
+  | "intl.segmenterNew"
+  | "arrayBuffer.new"
+  | "arrayBuffer.is"
+  | "arrayBuffer.isView"
+  | "arrayBuffer.byteLengthGetter"
+  | "arrayBuffer.byteLengthDescriptor"
+  | "arrayBuffer.viewU8"
+  | "arrayBuffer.viewU32"
+  | "arrayBuffer.viewI32"
+  | "arrayBuffer.viewF32"
+  | "arrayBuffer.viewF64"
+  | "arrayBuffer.viewDV"
   /** Native static fetch and its Web-platform companions. fetch.start
    * answers once the response head arrives; the response body readers
    * consume the native body stream. AbortSignal and ReadableStream values
@@ -2032,6 +2045,7 @@ export type IrLibFn =
    * SEMANTICS.md notes the sloppy divergence: loud, never silent). Void
    * result; in the may-throw seed set. */
   | "dyn.keySet"
+  | "dyn.keySetComputed"
   /** Delete an ordinary checked-native object's own key. Borrows both
    * arguments; other receiver representations retain a runtime refusal. */
   | "dyn.keyDelete"
@@ -3372,6 +3386,7 @@ export type IrLibFn =
    * bytes<u8>[] arg (the list) and returns a fresh copy. `Buffer.from(u8)`
    * and `Buffer.alloc(n)` need no libFn — they lower to bytesNew. */
   | "buffer.fromStr"
+  | "buffer.brand"
   /** Buffer.from on checked-native strings, bytes, arrays and data-only
    * array-like/Buffer-JSON objects. The encoding is a normalized literal;
    * non-string inputs ignore it. Copies the input and may throw during
@@ -3575,6 +3590,12 @@ export type IrLibFn =
    * "x64") — Node's answer for its own build on the same machine.
    * Interned; +1 per read. Never throws. */
   | "process.arch"
+  /** Stable native version dictionary. node/openssl identify compatibility
+   * targets; components absent from the native runtime are omitted. */
+  | "process.versions"
+  | "process.builtinId"
+  | "process.builtinModule"
+  | "process.builtinUnsupported"
   /** process.versions.node: the runtime's Node COMPATIBILITY TARGET —
    * there is no Node under the binary, so this reports the version whose
    * semantics the runtime implements (SEMANTICS.md divergence 60, the
@@ -3817,6 +3838,8 @@ export type IrLibFn =
    * name; the result type is the read's declared type (a typed dummy the
    * unwind abandons — the value never exists). */
   | "global.undefRead"
+  /** A native reference to the global object; known names retain value fences. */
+  | "global.native"
   /** `X.name` through a class VALUE (scr_object.c): args[0] is a borrowed
    * classval; the result is the class object's stored .name string,
    * retained (+1 — the string is an interned immortal, so the retain is a
@@ -6161,7 +6184,7 @@ export function classDynViewSupported(
 }
 
 /** A static type that CONVERTS into a dyn value — the dynFrom domain:
- * JSON-safe data, bytes<u8> (payload copied), identity-preserving class
+ * JSON-safe data, bytes<u8> (retained views), identity-preserving class
  * references, undefined-armed unions of those arms, boxable function types,
  * and the runtime HANDLE kinds (boxed by reference — DYN_HANDLE_KINDS). */
 export function canConvertToDyn(
@@ -6171,7 +6194,7 @@ export function canConvertToDyn(
 ): boolean {
   if (isJsonSafeType(t, getRecord, getUnion)) return true;
   // bytes<u8> and boxable functions are dyn kinds the walker boxes
-  // ANYWHERE (bytes copied, functions held by identity), including nested
+  // ANYWHERE (bytes and functions held by identity), including nested
   // in records/arrays/unions. isJsonSafeType rejects them, but dynFrom
   // needs only that the walker can build the dyn value, so this composite
   // fold extends the JSON-safe core.
@@ -6262,7 +6285,7 @@ function canBoxDynComposite(
 }
 
 /** A type a dyn value can be VALIDATED into — the dynCheck domain:
- * JSON-safe data, bytes<u8> (a fresh copy out), the %Error extraction,
+ * JSON-safe data, bytes<u8> (retained views), the %Error extraction,
  * undefined-armed unions of JSON-safe arms, adaptable function types,
  * and the runtime HANDLE kinds (a tag-checked reference unwrap —
  * DYN_HANDLE_KINDS). */
@@ -6283,7 +6306,10 @@ export function canDynCheckTo(
   if (DYN_HANDLE_KINDS.has(t.kind)) return true;
   if (t.kind === "union") {
     const def = getUnion(t.unionId);
-    return !!def && def.arms.every((a) => a.kind === "undefinedT" || isJsonSafeAt(a, getRecord, getUnion, false, false, new Set(), true));
+    // Optional native callbacks and handles retain the same checked
+    // conversion as their bare value. The union matcher selects the arm
+    // before its adapter/extractor runs.
+    return !!def && def.arms.every((a) => isUnitType(a) || (a.kind !== "union" && canDynCheckTo(a, getRecord, getUnion)));
   }
   return false;
 }
@@ -7535,6 +7561,15 @@ export function moduleLibNondeterministicSurface(mod: IrModule): string | null {
  * seed on `dynCheck` and `awaitExpr` nodes, which throw on validation
  * failure / promise rejection). */
 export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
+  "arrayBuffer.new",
+  "arrayBuffer.byteLengthGetter",
+  "arrayBuffer.viewU8",
+  "arrayBuffer.viewU32",
+  "arrayBuffer.viewI32",
+  "arrayBuffer.viewF32",
+  "arrayBuffer.viewF64",
+  "arrayBuffer.viewDV",
+
   "bigint.parse",
   "bigint.fromF64",
   "bigint.div",
@@ -7836,6 +7871,10 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   // throws Node's catchable SyntaxError at construction.
   "regex.new",
   "dyn.keySet",
+  "dyn.keySetComputed",
+  "process.builtinId",
+  "process.builtinModule",
+  "process.builtinUnsupported",
   "dyn.keyDelete",
   // the destructuring pack throws V8's TypeError on non-iterable dyn kinds
   "dyn.iterPack",

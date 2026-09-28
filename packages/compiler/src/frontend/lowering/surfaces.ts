@@ -1157,6 +1157,16 @@ export const AMBIENT_SURFACE_FNS: readonly AmbientSurfaceRow[] = [
     note: "reads, writes, deletes, and enumeration of the process environment (the process global)",
   },
   { id: "node-builtin.process.argv", kind: "node-builtin", name: "process.argv", fns: ["process.argv"] },
+  {
+    id: "node-builtin.process.getBuiltinModule", kind: "node-builtin", name: "process.getBuiltinModule",
+    fns: ["process.builtinId", "process.builtinModule", "process.builtinUnsupported"],
+    note: "native path and os export subsets plus main-thread worker_threads metadata; other modules and exports throw SC2020",
+  },
+  {
+    id: "node-builtin.process.versions", kind: "node-builtin", name: "process.versions",
+    fns: ["process.versions"],
+    note: "shared version dictionary containing node and openssl; other components are absent unless defined by the program",
+  },
   { id: "node-builtin.process.cwd", kind: "node-builtin", name: "process.cwd", fns: ["process.cwd"] },
   { id: "node-builtin.process.chdir", kind: "node-builtin", name: "process.chdir", fns: ["process.chdir"] },
   { id: "node-builtin.process.pid", kind: "node-builtin", name: "process.pid", fns: ["process.pid"] },
@@ -1431,7 +1441,7 @@ export const BUILTIN_MODULE_FENCE_HINTS: Record<string, Record<string, string | 
   },
   "stream/consumers": {
     arrayBuffer:
-      "no free-standing ArrayBuffer value exists here (typed arrays own their storage) — " +
+      "collecting a stream directly into an ArrayBuffer has no native lowering yet; " +
       "buffer(stream) collects the same bytes as a Buffer",
     blob:
       "Blob values have no representation in a compiled binary — " +
@@ -1641,9 +1651,8 @@ export const BUILTIN_MODULE_FENCE_HINTS: Record<string, Record<string, string | 
         "a RegExp at runtime, which has no lowering";
     } else if (container === "ArrayBuffer" || container.startsWith("ArrayBuffer<")) {
       hint =
-        "resize/transfer/maxByteLength need the buffer to exist as a runtime value, and no " +
-        "free-standing ArrayBuffer value does — typed arrays own fixed-length storage " +
-        "(new Uint8Array(n)); allocate a new view and copy instead";
+        "native ArrayBuffer storage is fixed-length; resize and transfer are unsupported — " +
+        "allocate a new buffer and copy through typed-array views instead";
     } else if (container === "SharedArrayBuffer" || container.startsWith("SharedArrayBuffer<")) {
       hint =
         "no shared-memory threads exist in a compiled program — Uint8Array is the byte storage " +
@@ -1660,7 +1669,8 @@ export const BUILTIN_MODULE_FENCE_HINTS: Record<string, Record<string, string | 
         "locale- and ICU-backed behavior lives outside the static runtime (the localeCompare " +
         "stance: code-unit order, no collation/locale data) — what lowers: the composed " +
         'new Intl.NumberFormat("en-US").format(x) and x.toLocaleString("en-US") with default ' +
-        "options; format with template literals, toFixed, and toString otherwise";
+        "options, plus default Unicode grapheme segmentation with Intl.Segmenter; locale " +
+        "negotiation, word/sentence segmentation, and resolvedOptions remain unsupported";
     } else if (container === "Object" && member === "assign") {
       hint =
         "spread instead: { ...a, ...b } builds the merged record; what lowers: the empty-target " +
@@ -1731,11 +1741,11 @@ export const BUILTIN_MODULE_FENCE_HINTS: Record<string, Record<string, string | 
   export function stdlibGlobalNameOf(lowerer: Lowerer, expr: ts.Expression): string | null {
     if (ts.isParenthesizedExpression(expr)) return stdlibGlobalNameOf(lowerer, expr.expression);
     if (ts.isIdentifier(expr)) {
-      // `globalThis` itself: a reserved intrinsic — tsc rejects user
-      // bindings of the name, and its special symbol carries no ordinary
-      // declarations for the provenance check to see.
-      if (expr.text === "globalThis") return "globalThis";
       const symbol = lowerer.checker.getSymbolAtLocation(expr);
+      // `globalThis` itself: a reserved intrinsic — tsc rejects user
+      // global bindings, but local parameters can shadow it. Its special
+      // symbol has no ordinary declarations for the provenance check.
+      if (expr.text === "globalThis" && (!symbol || lowerer.checker.declarationsOf(symbol).length === 0 || lowerer.isStdlibSymbol(symbol))) return "globalThis";
       if (!symbol) return null;
       const alias = lowerer.stdlibGlobalAliases.get(symbol);
       if (alias !== undefined) return alias;
@@ -1850,6 +1860,10 @@ export const BUILTIN_MODULE_FENCE_HINTS: Record<string, Record<string, string | 
     if (!ts.isIdentifier(nameNode)) return false;
     const name = stdlibGlobalAliasNameOf(lowerer, init);
     if (name === null) return false;
+    // Mutable global-object bindings keep real storage, even when never
+    // reassigned: var can be observed before initialization and let has TDZ.
+    if (name === "globalThis" && ts.isVariableDeclaration(nameNode.parent) &&
+        (ts.getCombinedNodeFlags(nameNode.parent) & ts.NodeFlags.Const) === 0) return false;
     const symbol = lowerer.checker.getSymbolAtLocation(nameNode);
     if (!symbol) return false;
     lowerer.stdlibGlobalAliases.set(symbol, name);

@@ -1124,6 +1124,16 @@ export function lowerObjectLiteral(lowerer: Lowerer, expr: ts.ObjectLiteralExpre
   };
 
   const fields: { name: string; value: IrExpr; overflow?: true; drop?: true }[] = [];
+  const spreadStmts: IrStmt[] = [];
+  const hasSpread = expr.properties.some(ts.isSpreadAssignment);
+  const captured = new Set<IrExpr>();
+  const capture = (value: IrExpr): IrExpr => {
+    const local = lowerer.declareHiddenLocal("%spreadValue", value.type);
+    spreadStmts.push({ kind: "varDecl", localId: local.id, init: value, loc: value.loc });
+    const ref = varRef(local.id, value.type, value.loc);
+    captured.add(ref);
+    return ref;
+  };
   // Field names introduced by conditional spreads: their ternary carries
   // the spread's whole evaluation (cond once, value lazily), so a LATER
   // contributor overriding one would silently drop that evaluation —
@@ -1133,6 +1143,20 @@ export function lowerObjectLiteral(lowerer: Lowerer, expr: ts.ObjectLiteralExpre
   // member reads narrow away; see the catch in the property loop).
   const droppedNames = new Set<string>();
   for (const prop of expr.properties) {
+    // A later contributor can mutate an earlier source or overwrite a
+    // value with effects. Snapshot pending fields at their source position,
+    // before evaluating the next contributor, even if they are overwritten.
+    if (hasSpread) {
+      for (let i = 0; i < fields.length; i++) {
+        const field = fields[i]!;
+        if (field.drop) {
+          spreadStmts.push({ kind: "exprStmt", expr: field.value, loc: field.value.loc });
+          fields.splice(i--, 1);
+          continue;
+        }
+        if (!captured.has(field.value)) field.value = capture(field.value);
+      }
+    }
     if (ts.isSpreadAssignment(prop)) {
       const cs = conditionalSpreadOf(prop.expression);
       if (cs && cs !== "unsupported") {
@@ -1195,30 +1219,15 @@ export function lowerObjectLiteral(lowerer: Lowerer, expr: ts.ObjectLiteralExpre
       // shape. Every source field must land on the target shape with an
       // equal type (a wider source would silently DROP fields JS keeps —
       // the width fence, same as literals). Later contributors override
-      // earlier ones (JS last-write-wins; the reads are side-effect-free,
-      // so dropping the earlier read is exact). Sources must be a
-      // re-emittable pure read, sharing one lowered node per field.
-      // The desugar's one-entry-per-name list reads spread fields
-      // EAGERLY at the spread's position, so an explicit property
-      // BEFORE a spread would need JS's overwrite — order-fenced (the
-      // index-signature merge path above takes any order).
-      if (
-        expr.properties
-          .slice(0, expr.properties.indexOf(prop))
-          .some((p) => !ts.isSpreadAssignment(p))
-      ) {
-        lowerer.unsupported(
-          "SC1090",
-          prop,
-          "object spread after explicit properties (spreads must come first — a later spread would overwrite them with JS semantics the desugar does not model)",
-        );
-      }
+      // earlier ones (JS last-write-wins). Evaluate the source exactly
+      // once, including empty sources and those whose fields are all
+      // overridden. Field snapshots above preserve the copy order.
       let srcNode: ts.Expression = prop.expression;
       while (ts.isParenthesizedExpression(srcNode)) srcNode = srcNode.expression;
-      const srcLowered =
+      const srcLowered = capture(
         prop === expr.properties[0] && leadingSpreadLowered !== null
           ? leadingSpreadLowered
-          : lowerer.lowerExpr(srcNode);
+          : lowerer.lowerExpr(srcNode));
       // Array callbacks can receive a record-or-undefined ABI even when
       // TypeScript describes a required record. Select the copy strategy
       // from that stored representation so absent sources copy nothing.
@@ -1246,13 +1255,6 @@ export function lowerObjectLiteral(lowerer: Lowerer, expr: ts.ObjectLiteralExpre
             "SC1090",
             prop,
             `object spread of '${lowerer.fmt(srcType)}' sources (only known record shapes spread — ${NARROW_FIRST})`,
-          );
-        }
-        if (srcLowered && !isSafeToRepeat(srcLowered)) {
-          lowerer.unsupported(
-            "SC1090",
-            prop,
-            "object spread of computed sources (the field copies re-read the source — bind it to a const first)",
           );
         }
         const recArm = recArms[0]! as IrType & { kind: "record" };
@@ -1389,13 +1391,6 @@ export function lowerObjectLiteral(lowerer: Lowerer, expr: ts.ObjectLiteralExpre
           "SC1090",
           prop,
           `object spread of '${srcType ? lowerer.fmt(srcType) : lowerer.checker.typeToString(lowerer.typeOf(srcNode))}' sources (only known record shapes spread — ${NARROW_FIRST})`,
-        );
-      }
-      if (srcLowered && !isSafeToRepeat(srcLowered)) {
-        lowerer.unsupported(
-          "SC1090",
-          prop,
-          "object spread of computed sources (the field copies re-read the source — bind it to a const first)",
         );
       }
       const srcShape = lowerer.shapes.get(srcType.shapeId);
@@ -1730,7 +1725,8 @@ export function lowerObjectLiteral(lowerer: Lowerer, expr: ts.ObjectLiteralExpre
       fields.push({ name: f.name, value: absent });
     }
   }
-  return { kind: "recordLit", fields, type, loc };
+  const result: IrExpr = { kind: "recordLit", fields, type, loc };
+  return spreadStmts.length === 0 ? result : { kind: "seqExpr", stmts: spreadStmts, result, type, loc };
 }
 
 /** A conditional spread's carrier property: `name: value` or shorthand,

@@ -4984,6 +4984,32 @@ function assignedThisFieldType(lowerer: Lowerer, expr: ts.NewExpression): IrType
 
 export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
     const loc = locOf(expr);
+    if (ts.isPropertyAccessExpression(expr.expression) && expr.expression.name.text === "Segmenter" &&
+        lowerer.isStdlibGlobal(expr.expression.expression, "Intl")) {
+      const args = expr.arguments ?? [];
+      const undefinedArg = (arg: ts.Expression): boolean =>
+        (lowerer.typeOf(arg).flags & ts.TypeFlags.Undefined) !== 0;
+      if (args.length > 2 || (args[0] && !undefinedArg(args[0]))) {
+        lowerer.noLowering("Intl.Segmenter locale negotiation", expr,
+          "omit the locale or pass undefined for default Unicode grapheme segmentation");
+      }
+      const options = args[1];
+      if (options && !undefinedArg(options) &&
+          !(ts.isObjectLiteralExpression(options) && options.properties.every((property) =>
+            ts.isPropertyAssignment(property) &&
+            (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) && property.name.text === "granularity" &&
+            ts.isStringLiteral(property.initializer) && property.initializer.text === "grapheme"))) {
+        lowerer.noLowering("Intl.Segmenter options", options,
+          'the native segmenter supports default options and { granularity: "grapheme" }; word and sentence segmentation remain unsupported');
+      }
+      // Explicit undefined expressions can carry effects; retain argument order.
+      const stmts: IrStmt[] = args.map((arg) => {
+        const value = lowerer.lowerExpr(arg);
+        return { kind: "exprStmt", expr: value.type.kind === "void" ? value : lowerer.coerceInto(arg, value, DYN), loc: locOf(arg) };
+      });
+      const result: IrExpr = { kind: "libCall", fn: "intl.segmenterNew", args: [], type: DYN, loc };
+      return stmts.length ? { kind: "seqExpr", stmts, result, type: DYN, loc } : result;
+    }
     const consoleCtor = ts.isIdentifier(expr.expression)
       ? lowerer.builtinImportOf(expr.expression)
       : ts.isPropertyAccessExpression(expr.expression) &&
@@ -5244,11 +5270,21 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
         const strArg = (a: ts.Expression | undefined, what: string): IrExpr => {
           if (!a) return { kind: "strLit", value: "", type: STRING, loc };
           const v = lowerer.lowerExpr(a);
+          const empty: IrExpr = { kind: "strLit", value: "", type: STRING, loc };
+          if (v.type.kind === "undefinedT") {
+            if (v.kind === "unitLit") return empty;
+            return { kind: "seqExpr", stmts: [{ kind: "exprStmt", expr: lowerer.coerceToExpected(v, DYN), loc: locOf(a) }], result: empty, type: STRING, loc };
+          }
+          if (v.type.kind === "union" && lowerer.unions.get(v.type.unionId)?.arms.every(
+            (arm) => arm.kind === "string" || arm.kind === "undefinedT",
+          )) {
+            return { kind: "nullish", left: v, right: empty, type: STRING, loc: locOf(a) };
+          }
           if (v.type.kind !== "string") {
             lowerer.noLowering(
               `new RegExp with a '${lowerer.fmt(v.type)}' ${what}`,
               a,
-              "string arguments are the lowered form (a RegExp copy or ToString coercion has no lowering)",
+              "string or undefined arguments are the lowered form (a RegExp copy or ToString coercion has no lowering)",
             );
           }
           return v;
@@ -5739,7 +5775,7 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
           WeakRef: "deref()-after-collect exposes GC timing — genuinely dynamic; hold a strong reference instead",
           FinalizationRegistry: "finalization callbacks expose GC timing — genuinely dynamic; release resources explicitly instead",
           SharedArrayBuffer: "no shared-memory threads exist in a compiled program — Uint8Array is the byte storage",
-          ArrayBuffer: "no free-standing ArrayBuffer value exists — typed arrays own their storage: allocate the view directly (new Uint8Array(n)), or erase a fresh buffer into one (new Uint8Array(new ArrayBuffer(n)), new DataView(new ArrayBuffer(n), ...))",
+          ArrayBuffer: "native ArrayBuffer construction supports fixed-length storage; resizable buffers remain unsupported",
           Proxy: "native Proxy construction requires checked-native plain targets and handlers",
           Function: "runtime code generation cannot be compiled ahead of time (the eval stance) — write the function",
         };

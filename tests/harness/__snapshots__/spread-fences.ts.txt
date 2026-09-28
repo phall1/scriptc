@@ -4,10 +4,3 @@ spread-fences.ts:14:21 - error SC1090: conditional spreads beyond `...(c ? { fie
   14 | const s1: Shape = { ...(cond ? { x: 1, y: 2 } : { x: 3, y: 4 }) };
      |                     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   15 | interface YOnly {
-
-spread-fences.ts:19:27 - error SC1090: object spread after explicit properties (spreads must come first — a later spread would overwrite them with JS semantics the desugar does not model) are not supported yet
-
-  18 | const yPart: YOnly = { y: 0 };
-  19 | const s2: Shape = { x: 5, ...yPart };
-     |                           ^~~~~~~~
-  20 | // A spread field the target keeps (no later override) must match exactly —

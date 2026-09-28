@@ -19,7 +19,8 @@ import { builtinMemberRequireDecl, builtinNamespaceDestructureModuleOf, createRe
 import { bindingContextualGenericFnNodeOf, bindingGenericFnAliasInfoOf, bindingGenericFnInfoOf, bindingGenericFnNodeOf, bindingNeverReassigned, deadUnmappableBinding, implicitLocalFnInfoOf, implicitLocalFnNodeOf, nullishGenericBindingUnitOf, registerOverloadedCallableAlias } from "./lower-calls.js";
 import { hasJsTypeAnnotation, isVarDeclared, numericIteratorSourceOf, provenanceElidedConstDecl } from "./lower-stmts.js";
 import { streamClassAliasDecl } from "./lower-stream.js";
-import { OBJECT_CALLABLE_VALUES, stdlibGlobalAliasDecl, stdlibGlobalAliasNameOf } from "./surfaces.js";
+import { stdlibGlobalAliasDecl, stdlibGlobalAliasNameOf, stdlibGlobalNameOf } from "./surfaces.js";
+import { isNativeBuiltinValueInitializer } from "./lower-builtin-values.js";
 import { collectNamespaceStmt, nsPathPrefix, trapDeclRootOf } from "./lower-namespaces.js";
 import { collectExpandoMembers } from "./lower-expando.js";
 import { recordTextCodecClass } from "../../ir/ir.js";
@@ -1410,15 +1411,14 @@ export function collectGlobals(lowerer: Lowerer, sf: ts.SourceFile, topStmts: ts
         for (const nameNode of boundIdentifiersOf(decl.name)) {
           const diagsBefore = lowerer.diags.length;
           try {
-            // Generic Object declarations do not describe the concrete
-            // native adapter ABI. Keep their stored values in shared module
-            // storage so separately lowered export helpers see the same closure.
+            // Builtin declarations do not always describe the concrete native
+            // callable ABI. Preserve checked-native values in shared storage;
+            // adapting the loader to (string) would replace its validation.
             const initializer = decl.initializer ? stripTypeCasts(decl.initializer) : undefined;
             if (
               isJsSourceFile(sf) && nameNode === decl.name && initializer &&
-              ts.isPropertyAccessExpression(initializer) &&
-              lowerer.isStdlibGlobal(initializer.expression, "Object") &&
-              Object.hasOwn(OBJECT_CALLABLE_VALUES, initializer.name.text)
+              (isNativeBuiltinValueInitializer(lowerer, initializer) ||
+                (!lowerer.dynamic && stdlibGlobalNameOf(lowerer, initializer) === "globalThis"))
             ) {
               const symbol = lowerer.checker.getSymbolAtLocation(nameNode);
               if (symbol && !lowerer.globalsBySymbol.has(symbol)) {
