@@ -8620,6 +8620,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/collection-copy-identities.ts": {
+   "order": [
+    "<repo>/tests/corpus/collection-copy-identities.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/compound-field-receivers.ts": {
    "order": [
     "<repo>/tests/corpus/compound-field-receivers.ts"
@@ -8644,10 +8650,22 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/generic-binding-ownership.ts": {
+   "order": [
+    "<repo>/tests/corpus/generic-binding-ownership.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/generic-class-js-functions/main.ts": {
    "order": [
     "<repo>/tests/corpus/generic-class-js-functions/functions.js",
     "<repo>/tests/corpus/generic-class-js-functions/main.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/generic-pattern-bindings.ts": {
+   "order": [
+    "<repo>/tests/corpus/generic-pattern-bindings.ts"
    ],
    "diags": []
   },
@@ -8726,6 +8744,24 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/logical-assignment-dynamic.js": {
+   "order": [
+    "<repo>/tests/corpus/logical-assignment-dynamic.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/logical-assignment-values.ts": {
+   "order": [
+    "<repo>/tests/corpus/logical-assignment-values.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/map-seeds-and-spreads.ts": {
+   "order": [
+    "<repo>/tests/corpus/map-seeds-and-spreads.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/native-buffer-coercion.js": {
    "order": [
     "<repo>/tests/corpus/native-buffer-coercion.js"
@@ -8799,6 +8835,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/string-pattern-replacement.ts": {
+   "order": [
+    "<repo>/tests/corpus/string-pattern-replacement.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/symbol-class-fields.ts": {
    "order": [
     "<repo>/tests/corpus/symbol-class-fields.ts"
@@ -8823,6 +8865,18 @@
   "<repo>/tests/corpus/text-codec-var.ts": {
    "order": [
     "<repo>/tests/corpus/text-codec-var.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/tuple-and-string-search.ts": {
+   "order": [
+    "<repo>/tests/corpus/tuple-and-string-search.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/tuple-callback-visitation.ts": {
+   "order": [
+    "<repo>/tests/corpus/tuple-callback-visitation.ts"
    ],
    "diags": []
   },

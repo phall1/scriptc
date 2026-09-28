@@ -29,7 +29,7 @@ import { lowerEnumDeclaration } from "./lower-enums.js";
 import { abstractPropertyDeclOf, aliasTypeofNarrows, isMatchSliceType, lowerAbsenceProbe, lowerCompoundValueToTarget, lowerElementCompound, lowerGroupsProjection, matchResultNamedGroupsOf, runtimeOptionalTrueIds, symbolFieldInfo, withRuntimeOptionalNarrowed } from "./lower-exprs.js";
 import { isSafeToRepeat } from "./expressions/evaluation-safety.js";
 import { globalSymbolKey } from "./expressions/global-symbols.js";
-import { lowerNullishAssignment } from "./expressions/nullish-assignment.js";
+import { lowerShortCircuitAssignment } from "./expressions/nullish-assignment.js";
 import { lowerEnvironmentKey } from "./lower-exprs.js";
 import { isNativeProxyInitializer } from "./expressions/native-proxy.js";
 import { tryLowerExpression } from "./expressions/try-lower-expression.js";
@@ -550,7 +550,6 @@ export function provenanceElidedConstDecl(lowerer: Lowerer, decl: ts.VariableDec
     if (!decl.initializer) return false;
     const flags = ts.getCombinedNodeFlags(decl);
     if ((flags & ts.NodeFlags.BlockScoped) === 0 || (flags & ts.NodeFlags.Using) !== 0) return false;
-    if (lowerer.tdzPredeclared.has(symbol)) return false; // defensive: never twice
     // MODULE-scope bindings are pre-registered globals (collectGlobals):
     // references resolve through globalOf after the local search fails, so
     // a TDZ box here would SHADOW the global and never fill (the top-level
@@ -570,7 +569,7 @@ export function provenanceElidedConstDecl(lowerer: Lowerer, decl: ts.VariableDec
       // const's own initializer capturing the const (`const server =
       // createServer(h).listen(0, go)` with `go` reading `server`) is a
       // TDZ read until the initializing assign completes — JS exactly.
-      if (idx < entry.index || entry.ctx === lowerer.ctx) return false;
+      if (idx < entry.index || entry.ctx === lowerer.ctx || entry.ctx.tdzPredeclared.has(symbol)) return false;
       const type = lowerer.irTypeOf(decl.name);
       if (!TDZ_KINDS.has(type.kind) || isUnitType(type)) return false;
       const name = decl.name.text;
@@ -583,7 +582,7 @@ export function provenanceElidedConstDecl(lowerer: Lowerer, decl: ts.VariableDec
       entry.ctx.locals.push(local);
       entry.frame.set(symbol, local);
       entry.out.push({ kind: "varDecl", localId: local.id, init: null, loc: locOf(decl) });
-      lowerer.tdzPredeclared.set(symbol, local);
+      entry.ctx.tdzPredeclared.set(symbol, local);
       return true;
     }
     return false;
@@ -596,20 +595,18 @@ export function provenanceElidedConstDecl(lowerer: Lowerer, decl: ts.VariableDec
    * declaration and initializing assignment are pushed before the current
    * statement's IR, registered in the list's scope frame) and the statement
    * loop skips the source statement when it arrives
-   * (lowerer.hoistedFnDecls). Same-function only: the declaration's own
-   * lowering runs under the ctx that owns its statement list, and a
-   * cross-function early capture would need lowering under a DIFFERENT
-   * ctx than the one currently open — that shape keeps the honest fence. */
+   * (the owner's hoistedFnDecls). Forward references from nested functions
+   * lower the declaration under the owning statement list's context, then
+   * resume the caller and thread its captures normally. */
   export function predeclareForwardFnDecl(lowerer: Lowerer, symbol: ts.Symbol): boolean {
     const decl = lowerer.checker.valueDeclarationOf(symbol);
     if (!decl || !ts.isFunctionDeclaration(decl) || !decl.body || decl.typeParameters) return false;
-    if (lowerer.hoistedFnDecls.has(decl)) return false; // defensive: never twice
     for (let i = lowerer.activeStmtLists.length - 1; i >= 0; i--) {
       const entry = lowerer.activeStmtLists[i]!;
       const idx = entry.stmts.indexOf(decl);
       if (idx < 0) continue;
       // Not forward — already lowered; resolution would have found it.
-      if (idx <= entry.index) return false;
+      if (idx <= entry.index || entry.ctx.hoistedFnDecls.has(decl)) return false;
       // The declaration may live in an ENCLOSING function's open list (a
       // sibling hoisted function calling a later one — mutual recursion):
       // lower it under the OWNER's lexical environment by truncating the
@@ -621,13 +618,13 @@ export function provenanceElidedConstDecl(lowerer: Lowerer, decl: ts.VariableDec
       const depth = lowerer.fnStack.indexOf(entry.ctx);
       const frameIdx = entry.ctx.scopes.indexOf(entry.frame);
       if (depth < 0 || frameIdx < 0) return false;
-      lowerer.hoistedFnDecls.add(decl);
+      entry.ctx.hoistedFnDecls.add(decl);
       const fnTail = lowerer.fnStack.splice(depth + 1);
       const scopeTail = entry.ctx.scopes.splice(frameIdx + 1);
       try {
         entry.out.push(lowerer.lowerNestedFunctionDecl(decl));
       } catch (e) {
-        lowerer.hoistedFnDecls.delete(decl);
+        entry.ctx.hoistedFnDecls.delete(decl);
         throw e;
       } finally {
         entry.ctx.scopes.push(...scopeTail);
@@ -642,7 +639,8 @@ export function provenanceElidedConstDecl(lowerer: Lowerer, decl: ts.VariableDec
    * was declared with `var` — no const/let/using flag anywhere on its
    * binding chain. */
   export function isVarDeclared(decl: ts.Node): boolean {
-    return (ts.getCombinedNodeFlags(decl) & ts.NodeFlags.BlockScoped) === 0;
+    const host = ts.isIdentifier(decl) ? hostVariableDeclarationOf(decl) : decl;
+    return host !== null && (ts.getCombinedNodeFlags(host) & ts.NodeFlags.BlockScoped) === 0;
   }
 
 /** The VariableDeclaration hosting a binding name (walking out of any
@@ -726,12 +724,12 @@ export function provenanceElidedConstDecl(lowerer: Lowerer, decl: ts.VariableDec
    * classic capture semantics fall out: closures made in a loop share the
    * single boxed binding, where `let` gets a fresh box per iteration. */
   function hoistVarBinding(lowerer: Lowerer, symbol: ts.Symbol, nameNode: ts.Identifier): IrLocal {
-    const existing = lowerer.hoistedVars.get(symbol);
+    const existing = lowerer.ctx.hoistedVars.get(symbol);
     if (existing) return existing;
     // The parameter merge: the symbol already binds a function-root local.
     const bound = lowerer.bindingIn(lowerer.ctx, symbol);
     if (bound) {
-      lowerer.hoistedVars.set(symbol, bound);
+      lowerer.ctx.hoistedVars.set(symbol, bound);
       return bound;
     }
     const type = varBindingType(lowerer, nameNode);
@@ -749,7 +747,7 @@ export function provenanceElidedConstDecl(lowerer: Lowerer, decl: ts.VariableDec
     // engine undefined for jsval).
     const wrapped = type.kind === "dyn" ? dynUndefinedExpr(locOf(nameNode)) : lowerer.unassignedSlotInit(type, locOf(nameNode));
     root.out.push({ kind: "varDecl", localId: local.id, init: wrapped, loc: locOf(nameNode) });
-    lowerer.hoistedVars.set(symbol, local);
+    lowerer.ctx.hoistedVars.set(symbol, local);
     return local;
   }
 
@@ -767,7 +765,6 @@ export function provenanceElidedConstDecl(lowerer: Lowerer, decl: ts.VariableDec
    * would yield if the capture ran early, and guessing "it won't" is the
    * silent-wrong-output sin. */
   export function predeclareForwardVar(lowerer: Lowerer, symbol: ts.Symbol): boolean {
-    if (lowerer.hoistedVars.has(symbol)) return false; // would have resolved
     const decl = lowerer.checker.valueDeclarationOf(symbol);
     if (!decl || !ts.isVariableDeclaration(decl) || !isVarDeclared(decl)) return false;
     const nameNode = ts.isIdentifier(decl.name) ? decl.name : null;
@@ -788,6 +785,7 @@ export function provenanceElidedConstDecl(lowerer: Lowerer, decl: ts.VariableDec
     }
     if (!owner) return false;
     const ctx = owner.ctx;
+    if (ctx.hoistedVars.has(symbol)) return false; // would have resolved
     // Only a slot that can hold `undefined` can carry the pre-
     // initialization reads: an undefined-armed union (the interned arm),
     // a checked-dynamic binding (the dyn undefined), or a jsval 'any'
@@ -804,7 +802,7 @@ export function provenanceElidedConstDecl(lowerer: Lowerer, decl: ts.VariableDec
     ctx.locals.push(local);
     ctx.scopes[0]!.set(symbol, local);
     root.out.push({ kind: "varDecl", localId: local.id, init: wrapped, loc: locOf(decl) });
-    lowerer.hoistedVars.set(symbol, local);
+    ctx.hoistedVars.set(symbol, local);
     return true;
   }
 
@@ -1091,7 +1089,7 @@ export function lowerStmt(lowerer: Lowerer, stmt: ts.Statement): IrStmt | IrStmt
       // Already lowered eagerly by the forward-hoisting machinery
       // (predeclareForwardFnDecl) — its declaration and assignment are in
       // the list's output.
-      if (lowerer.hoistedFnDecls.has(stmt)) return null;
+      if (lowerer.ctx.hoistedFnDecls.has(stmt)) return null;
       return lowerer.lowerNestedFunctionDecl(stmt);
     }
     // Enum declarations: constant-member enums emit nothing (member reads
@@ -1262,7 +1260,7 @@ export function lowerStmt(lowerer: Lowerer, stmt: ts.Statement): IrStmt | IrStmt
     const sourceNode = numericIteratorSourceOf(lowerer, decl.initializer);
     if (sourceNode === null) return null;
     const sym = lowerer.checker.getSymbolAtLocation(decl.name);
-    if (!sym || lowerer.tdzPredeclared.has(sym)) return null;
+    if (!sym || lowerer.ctx.tdzPredeclared.has(sym)) return null;
     const source = lowerer.lowerExpr(sourceNode);
     if (
       !(
@@ -1302,7 +1300,7 @@ export function lowerStmt(lowerer: Lowerer, stmt: ts.Statement): IrStmt | IrStmt
     const call = directMatchAllCallOf(lowerer, decl.initializer);
     if (!call) return null;
     const sym = lowerer.checker.getSymbolAtLocation(decl.name);
-    if (!sym || lowerer.globalsBySymbol.has(sym) || lowerer.tdzPredeclared.has(sym)) return null;
+    if (!sym || lowerer.globalsBySymbol.has(sym) || lowerer.ctx.tdzPredeclared.has(sym)) return null;
     const rowsT = arrayOf(arrayOf(STRING));
     const declared = lowerer.mapTypeOf(lowerer.typeOf(decl.name));
     if (!declared || !typeEquals(declared, rowsT)) return null;
@@ -2444,7 +2442,7 @@ export function isParseArgsDynCheckerType(lowerer: Lowerer, type: ts.Type): bool
         );
       }
       const symbol = lowerer.checker.getSymbolAtLocation(el.name);
-      if (!symbol || lowerer.tdzPredeclared.has(symbol)) {
+      if (!symbol || lowerer.ctx.tdzPredeclared.has(symbol)) {
         lowerer.unsupported("SC1031", el, `bindings with predeclared slots over the builtin global '${globalName}'`);
       }
       const g = lowerer.globalsBySymbol.get(symbol);
@@ -3677,9 +3675,9 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
     // function in this scope captured it — predeclareForwardCapture): the
     // binding and its scope-entry varDecl already exist; the source
     // declaration is the one initializing `assign` into the shared box.
-    const pre = declSymbol ? lowerer.tdzPredeclared.get(declSymbol) : undefined;
+    const pre = declSymbol ? lowerer.ctx.tdzPredeclared.get(declSymbol) : undefined;
     if (pre && decl.initializer) {
-      lowerer.tdzPredeclared.delete(declSymbol!);
+      lowerer.ctx.tdzPredeclared.delete(declSymbol!);
       const init = lowerer.lowerExprExpecting(decl.initializer, pre.type);
       return { kind: "assign", localId: pre.id, value: init, initializes: true, loc: locOf(decl) };
     }
@@ -4035,9 +4033,9 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
     // case): the binding and its scope-entry varDecl already exist, so
     // this declaration is the initializing `assign` into the shared box,
     // not a fresh local.
-    const preSelf = declSymbol ? lowerer.tdzPredeclared.get(declSymbol) : undefined;
+    const preSelf = declSymbol ? lowerer.ctx.tdzPredeclared.get(declSymbol) : undefined;
     if (preSelf) {
-      lowerer.tdzPredeclared.delete(declSymbol!);
+      lowerer.ctx.tdzPredeclared.delete(declSymbol!);
       init = lowerer.coerceInto(decl.initializer, init, preSelf.type);
       return { kind: "assign", localId: preSelf.id, value: init, initializes: true, loc: locOf(decl) };
     }
@@ -5278,8 +5276,9 @@ function lowerBranchSwitch(
         if (lowerer.runtimeOptionalStorageLocals.has(runtimeOptionalRoot)) lowerer.runtimeOptionalLocals.add(runtimeOptionalRoot);
         return { kind: "assign", localId: target.id, value, loc: locOf(expr) };
       }
-      if (opKind === ts.SyntaxKind.QuestionQuestionEqualsToken) {
-        return { kind: "exprStmt", expr: lowerNullishAssignment(lowerer, expr), loc: locOf(expr) };
+      if (opKind === ts.SyntaxKind.QuestionQuestionEqualsToken ||
+          opKind === ts.SyntaxKind.AmpersandAmpersandEqualsToken || opKind === ts.SyntaxKind.BarBarEqualsToken) {
+        return { kind: "exprStmt", expr: lowerShortCircuitAssignment(lowerer, expr), loc: locOf(expr) };
       }
       const compound = COMPOUND_ASSIGN_OPS[opKind];
       if (compound !== undefined) {
@@ -5317,8 +5316,7 @@ function lowerBranchSwitch(
         opKind >= ts.SyntaxKind.FirstCompoundAssignment &&
         opKind <= ts.SyntaxKind.LastCompoundAssignment
       ) {
-        // Everything else is covered above; what remains is &&= and ||=.
-        lowerer.unsupported("SC1090", expr, "logical assignment (&&=, ||=) — write the if out");
+        lowerer.unsupported("SC1090", expr, "this compound assignment operator");
       }
     }
     if (

@@ -3731,15 +3731,15 @@
       "id": "stdlib.string.replace",
       "kind": "stdlib",
       "name": "string.prototype.replace",
-      "status": "dynamic-only",
-      "code": "SC2012"
+      "status": "static",
+      "note": "string patterns with primitive replacements or typed callbacks; regex forms have separate lowering"
     },
     {
       "id": "stdlib.string.replaceAll",
       "kind": "stdlib",
       "name": "string.prototype.replaceAll",
-      "status": "dynamic-only",
-      "code": "SC2012"
+      "status": "static",
+      "note": "string patterns with primitive replacements or typed callbacks; regex forms have separate lowering"
     },
     {
       "id": "stdlib.string.slice",

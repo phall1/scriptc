@@ -15,7 +15,7 @@ import { cjsClassExprWholeExportOf, cjsExportAssignmentOf, cjsExportDiscardReaso
 import { ARRAY_METHODS, builtinConstLit, builtinFenceHintOf, builtinModuleConstOf, builtinModulesArrayLit, builtinModuleFnOf, COMPOUND_ASSIGN_OPS, CompoundOp, ISLAND_SURFACE, isChildSurfaceMember, MAP_METHODS, NARROW_FIRST, SET_METHODS, STRING_INDEX_METHODS, STR_METHODS, UNSUPPORTED_EXPR, sideEffectFreeOptionValue, stdlibGlobalNameOf } from "./surfaces.js";
 import { UNSUPPORTED, blockedBindingUseDiag, requiresDynamicPackageDiag, unsupportedDiag } from "../../diagnostics/diagnostic.js";
 import { PoisonError, dynUndefinedExpr, jsFuncNameOf, neverTaintedJsType, nodeThrowExpr, own } from "./lowerer.js";
-import { lowerNpmStaticSafeIndexRead, lowerSafeIndexRead, strCharsCall, tryLowerNumericIndexRead } from "./lower-containers.js";
+import { lowerMapSpread, lowerNpmStaticSafeIndexRead, lowerSafeIndexRead, strCharsCall, tryLowerNumericIndexRead } from "./lower-containers.js";
 import { arrayValueRead, arrayValueStore } from "./array-values.js";
 import { lowerOptionalStringIndex } from "./string-index.js";
 import { tryLowerIndexedComparison } from "./indexed-comparison.js";
@@ -35,7 +35,7 @@ import { countedFor, numLit, varRef } from "../../ir/build.js";
 import { unionWideningTags } from "../../ir/analysis.js";
 import { isSafeToDiscard, isSafeToMoveConditionEarlier, isSafeToRepeat } from "./expressions/evaluation-safety.js";
 import { globalSymbolKey } from "./expressions/global-symbols.js";
-import { lowerNullishAssignment } from "./expressions/nullish-assignment.js";
+import { lowerShortCircuitAssignment } from "./expressions/nullish-assignment.js";
 import { hasOptionalChainGuard, isOptionalChainTail, isRequireMainFilename } from "./expressions/optional-chains.js";
 import { conditionalSpreadOf, foldedStringKeyOf } from "./expressions/object-literals.js";
 import { tryLowerExpression } from "./expressions/try-lower-expression.js";
@@ -2986,8 +2986,13 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
     const def = lowerer.unions.get(left.type.unionId);
     if (!def) lowerer.badType(expr.left, lowerer.typeOf(expr.left));
     if (!def.arms.some(isUnitType)) return left;
-    const type = lowerer.irTypeOf(expr);
     const rest = def.arms.filter((a) => !isUnitType(a));
+    // `optionalMap ?? new Map()` carries its element contract on the left;
+    // the empty fallback may use it without constructing a Map<any, any>
+    // arm that has no first-class union representation.
+    const fresh = rest.length === 1 ? lowerer.emptyCollectionFor(expr.right, rest[0]!) : null;
+    if (fresh) return { kind: "nullish", left, right: fresh, type: fresh.type, loc };
+    const type = lowerer.irTypeOf(expr);
     if (typeEquals(type, left.type) || (rest.length === 1 && typeEquals(type, rest[0]!))) {
       const right = lowerer.lowerExprExpecting(expr.right, type);
       return { kind: "nullish", left, right, type, loc };
@@ -3999,6 +4004,7 @@ function lowerPromiseThenPresence(
           (ts.isConditionalExpression(srcNode)
             ? lowerTernary(lowerer, srcNode, type)
             : lowerer.lowerExpr(el.expression));
+        src = lowerMapSpread(lowerer, src, el.expression) ?? src;
         // `[...someSet]`: a same-element Set drains into a fresh array in
         // insertion order (setIntrinsic toArray); the spread machinery
         // then copies like any array source.
@@ -6168,7 +6174,10 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
     if (cacheHas) return cacheHas;
 
     if (op === ts.SyntaxKind.EqualsToken || (op >= ts.SyntaxKind.FirstCompoundAssignment && op <= ts.SyntaxKind.LastCompoundAssignment)) {
-      if (op === ts.SyntaxKind.QuestionQuestionEqualsToken) return lowerNullishAssignment(lowerer, expr);
+      if (op === ts.SyntaxKind.QuestionQuestionEqualsToken ||
+          op === ts.SyntaxKind.AmpersandAmpersandEqualsToken || op === ts.SyntaxKind.BarBarEqualsToken) {
+        return lowerShortCircuitAssignment(lowerer, expr);
+      }
       if (ts.isPropertyAccessExpression(expr.left) || ts.isElementAccessExpression(expr.left)) {
         fenceNodeModuleMutation(lowerer, expr.left, "assignment");
       }

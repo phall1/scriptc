@@ -8,14 +8,13 @@ import type { Lowerer } from "./lowerer.js";
 import { BOOL, CAUGHT, DYN, F64, IrExpr, IrFunction, IrLocal, IrMapIntrinsicMethod, IrParam, IrRecordShape, IrSetIntrinsicMethod, IrStmt, IrType, JSVAL, STRING, SrcLoc, UNDEFINED_T, VOID, arrayOf, funcOf, isRefCounted, isSupportedArrayElem, isSupportedIndexValue, isUnitType, typeEquals } from "../../ir/ir.js";
 import { ARRAY_METHODS, MAP_METHODS, SET_COMBINE_METHODS, SET_METHODS } from "./surfaces.js";
 import { tryLowerExpression } from "./expressions/try-lower-expression.js";
-import { isSafeToRepeat } from "./expressions/evaluation-safety.js";
 import { forOfVarTarget, lowerDestructuringAssign } from "./lower-stmts.js";
 import { isJsSourceFile, locOf } from "../program.js";
 import { islandPrimitiveExit, lowerDynDispatchMethodCall } from "./lower-calls.js";
 import { buildArraySortFn } from "./lower-array-sort.js";
 import { arrayIndexPresent, arrayValueRead, arrayValueStore, arrayValueType, currentArrayIndexPresent } from "./array-values.js";
 import { typeKey } from "../type-mapper.js";
-import { WidthLift } from "./lowerer.js";
+import { WidthLift, nodeThrowExpr } from "./lowerer.js";
 import { boolLit, countedFor, numLit, strLit, varRef } from "../../ir/build.js";
 import { defaultAfterUndefined, lowerPositionArgument, lowerStaticallyUndefinedArgument, positionNumber } from "./optional-arguments.js";
 import { lowerArrayCopyWithin, lowerArrayFill } from "./array-indexed-mutation.js";
@@ -236,6 +235,9 @@ function fenceProducedArrayElem(lowerer: Lowerer, node: ts.Node, producer: strin
     // static arrIntrinsic over a jsval (the validator ICE).
     {
       const receiver = lowerer.lowerExpr(access.expression);
+      if (receiver.type.kind === "record" && lowerer.shapes.get(receiver.type.shapeId)?.tuple) {
+        return lowerTupleReadMethodCall(lowerer, call, access, receiver);
+      }
       if (receiver.type.kind === "jsval") {
         const loweredArgs = call.arguments.map((a) => lowerer.lowerExpr(a));
         if (name === "filter" && loweredArgs[0]?.type.kind === "func" && loweredArgs[0].type.ret.kind === "void") {
@@ -857,9 +859,8 @@ function lowerArraySearchCall(
 ): IrExpr {
   const loc = locOf(call);
   const receiver = lowerer.lowerExpr(access.expression);
-  const argNode = call.arguments[0] ?? call;
   if (call.arguments.some(ts.isSpreadElement)) lowerer.noLowering(`.${method} with spread arguments`, call);
-  let needle: IrExpr = call.arguments[0]
+  const needle: IrExpr = call.arguments[0]
     ? lowerer.lowerExpr(call.arguments[0])
     : { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc };
   const fromIndex: IrExpr = call.arguments[1]
@@ -867,6 +868,15 @@ function lowerArraySearchCall(
     : method === "lastIndexOf"
       ? { kind: "bin", op: "/", left: numLit(1, loc), right: numLit(0, loc), type: F64, loc }
       : numLit(0, loc);
+  return lowerArraySearchValues(lowerer, call, method, elem, receiver, needle, fromIndex);
+}
+
+function lowerArraySearchValues(
+  lowerer: Lowerer, call: ts.CallExpression, method: "indexOf" | "lastIndexOf" | "includes",
+  elem: IrType, receiver: IrExpr, needle: IrExpr, fromIndex: IrExpr,
+): IrExpr {
+  const loc = locOf(call);
+  const argNode = call.arguments[0] ?? call;
   // A derived CLASS VALUE against a base-classval element widens (the same
   // pointer — identity search is exact); the coercion path owns the ABI gate.
   if (needle.type.kind === "classval" && elem.kind === "classval" && !typeEquals(needle.type, elem)) {
@@ -942,6 +952,12 @@ function arraySearchEquality(
   loc: SrcLoc,
 ): IrExpr {
   if (left.type.kind !== "union" || right.type.kind !== "union" || left.type.unionId !== right.type.unionId) {
+    if (left.type.kind === "string" && right.type.kind === "string") {
+      return { kind: "strEq", negated: false, left, right, type: BOOL, loc };
+    }
+    if (left.type.kind === "bigint" && right.type.kind === "bigint") {
+      return { kind: "bin", op: "===", left: { kind: "libCall", fn: "bigint.cmp", args: [left, right], type: F64, loc }, right: numLit(0, loc), type: BOOL, loc };
+    }
     return { kind: "bin", op: "===", left, right, type: BOOL, loc };
   }
   const unionId = left.type.unionId;
@@ -1675,96 +1691,184 @@ function arrayUnionHofHelper(
   return name;
 }
 
-/** READ-ONLY array methods on TUPLE receivers — `t.slice(...)` and
-   * `t.map(f)`: a tuple is a fixed-shape record, but these methods never
-   * write, so the positions snapshot into a fresh array (the for-of-over-
-   * tuples stance — pure receivers only, since the reads re-emit per
-   * position) and the ordinary array machinery runs over it. The element
-   * type is the one position type, or the positions' interned union with
-   * each read wrapped into its arm (exactly the checker's callback
-   * parameter type). Null when this isn't a tuple slice/map — writers and
-   * the rest of the surface keep their fences. */
-  export function lowerTupleReadMethodCall(lowerer: Lowerer, call: ts.CallExpression,
-    access: ts.PropertyAccessExpression,): IrExpr | null {
-    if (lowerer.chainBlocked(access, call)) return null;
-    const name = access.name.text;
-    if (name !== "slice" && name !== "map") return null;
-    if (!lowerer.isStdlibMember(access)) return null;
-    let receiverIr = lowerer.mapTypeOf(lowerer.typeOf(access.expression));
-    let receiver: IrExpr | null = null;
-    // A readonly tuple union under Array.isArray is checker-typed as an
-    // unmappable intersection with any[], while maybeNarrow still extracts
-    // its one tuple arm. Dispatch the supported tuple read methods from
-    // that lowered representation, like tuple indexing and `.length`.
-    const checkerArray = lowerer.checkerArrayValue(access.expression);
-    if (checkerArray?.type.kind === "record") {
-      receiverIr = checkerArray.type;
-      receiver = checkerArray;
-    }
-    if (receiverIr?.kind !== "record") return null;
-    const shape = lowerer.shapes.get(receiverIr.shapeId);
-    if (!shape?.tuple) return null;
-    receiver ??= lowerer.lowerExpr(access.expression);
-    if (receiver.type.kind !== "record") return null;
-    if (!isSafeToRepeat(receiver)) {
-      lowerer.noLowering(
-        `${lowerer.checker.typeToString(lowerer.typeOf(access.expression))}.${name}`,
-        call,
-        "tuple receivers snapshot per position, so only effect-free receivers lower — bind the tuple to a const first",
-      );
-    }
-    const loc = locOf(call);
-    const byIndex = [...shape.fields].sort((a, b) => Number(a.name) - Number(b.name));
-    let elemT: IrType | null = null;
-    {
-      const arms: IrType[] = [];
-      for (const f of byIndex) {
-        if (f.type.kind === "union") { elemT = null; break; }
-        if (!arms.some((a) => typeEquals(a, f.type))) arms.push(f.type);
-        elemT = arms.length === 1 ? arms[0]! : { kind: "union", unionId: lowerer.unions.intern(arms) };
-      }
-    }
-    if (elemT === null || byIndex.length === 0) return null; // empty/union-position tuples keep the fence
-    const snapshotElem = elemT;
-    const snapshot: IrExpr = {
-      kind: "arrayLit",
-      elems: byIndex.map((f) => {
-        const read: IrExpr = {
-          kind: "recordGet",
-          obj: receiver,
-          shapeId: receiverIr.shapeId,
-          field: f.name,
-          type: f.type,
-          loc,
-        };
-        return typeEquals(f.type, snapshotElem) ? read : lowerer.coerceInto(access.expression, read, snapshotElem);
-      }),
-      type: arrayOf(snapshotElem),
-      loc,
-    };
-    if (name === "slice") {
-      if (call.arguments.length > 2) {
-        lowerer.noLowering(`.slice with ${call.arguments.length} arguments`, call);
-      }
-      const args = call.arguments.map((a) => lowerer.lowerExpr(a));
-      for (let i = 0; i < args.length; i++) {
-        if (args[i]!.type.kind !== "f64") lowerer.badType(call.arguments[i]!, lowerer.typeOf(call.arguments[i]!));
-      }
-      return { kind: "arrIntrinsic", method: "slice", receiver: snapshot, args, type: arrayOf(snapshotElem), loc };
-    }
-    // map
-    if (call.arguments.length !== 1) {
-      lowerer.noLowering(`.map with ${call.arguments.length} arguments`, call, "the thisArg parameter has no lowering — use an arrow function");
-    }
-    const argNode = call.arguments[0]!;
-    const { fnArg, arity } = hofCallbackArg(lowerer, argNode, [arrayValueType(lowerer, snapshotElem)], arrayOf(snapshotElem));
-    const fnRet = fnArg.type.ret;
-    if (fnRet.kind === "void" || fnRet.kind === "func") lowerer.badType(call, lowerer.typeOf(call));
-    fenceProducedArrayElem(lowerer, call, "'.map()'", fnRet);
-    const outElem = callbackArrayElem(lowerer, call, fnRet);
-    const helper = arrayHofHelper(lowerer, "map", snapshotElem, fnRet, arity, loc, outElem);
-    return { kind: "call", callee: helper, args: [snapshot, fnArg], type: arrayOf(outElem), loc };
+/** Tuple methods keep the original receiver alive through argument evaluation.
+ * Callback methods read each position only when it is visited, so writes to
+ * later positions through a captured alias are visible. A tuple cannot be
+ * passed as the callback's array parameter without changing its identity;
+ * that parameter retains an explicit representation boundary. */
+export function lowerTupleReadMethodCall(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
+  access: ts.PropertyAccessExpression,
+  tupleReceiver?: IrExpr,
+): IrExpr | null {
+  if (lowerer.chainBlocked(access, call)) return null;
+  const method = access.name.text;
+  const search = method === "includes" || method === "indexOf" || method === "lastIndexOf";
+  if (method !== "slice" && method !== "map" && method !== "flatMap" && !search) return null;
+  if (!lowerer.isStdlibMember(access)) return null;
+  let receiverIr = tupleReceiver?.type ?? lowerer.mapTypeOf(lowerer.typeOf(access.expression));
+  let receiver: IrExpr | null = tupleReceiver ?? null;
+  const checkerArray = lowerer.checkerArrayValue(access.expression);
+  if (checkerArray?.type.kind === "record") {
+    receiverIr = checkerArray.type;
+    receiver = checkerArray;
   }
+  if (receiverIr?.kind !== "record") return null;
+  const shape = lowerer.shapes.get(receiverIr.shapeId);
+  if (!shape?.tuple) return null;
+  receiver ??= lowerer.lowerExpr(access.expression);
+  if (receiver.type.kind !== "record") return null;
+  const fields = [...shape.fields].sort((a, b) => Number(a.name) - Number(b.name));
+  const arms: IrType[] = [];
+  for (const field of fields) {
+    const types = field.type.kind === "union" ? lowerer.unions.get(field.type.unionId)!.arms : [field.type];
+    for (const type of types) if (!arms.some(arm => typeEquals(arm, type))) arms.push(type);
+  }
+  if (arms.length === 0) return null;
+  const elem: IrType = arms.length === 1 ? arms[0]! : { kind: "union", unionId: lowerer.unions.intern(arms) };
+  const loc = locOf(call);
+  const tuple = varRef("a.0", receiver.type, loc);
+  const read = (field: typeof fields[number]): IrExpr => lowerer.coerceInto(access.expression, {
+    kind: "recordGet", obj: tuple, shapeId: receiverIr.shapeId, field: field.name, type: field.type, loc,
+  }, elem);
+  if (search) {
+    if (call.arguments.length > 2 || call.arguments.some(ts.isSpreadElement)) {
+      return lowerer.noLowering(`tuple .${method} with spread or extra arguments`, call);
+    }
+    const arg = call.arguments[0];
+    const undefinedArg = arg ? lowerStaticallyUndefinedArgument(lowerer, arg) : null;
+    let needle = arg ? undefinedArg ?? lowerer.lowerExpr(arg) : null;
+    if (!needle || isUnitType(needle.type) || needle.type.kind === "void") {
+      const optional = arrayValueType(lowerer, elem);
+      const wrapped = needle?.type.kind === "nullT"
+        ? lowerer.coerceInto(arg ?? call, needle, optional) : lowerer.wrappedUndefined(optional, loc);
+      if (!wrapped) return lowerer.noLowering(`tuple .${method} missing search value`, call);
+      needle = needle ? defaultAfterUndefined(needle, wrapped) : wrapped;
+    }
+    const from = call.arguments[1]
+      ? lowerPositionArgument(lowerer, call.arguments[1], numLit(0, loc))
+      : numLit(method === "lastIndexOf" ? Infinity : 0, loc);
+    const key = `tuple.${method}:${typeKey(receiver.type)}:${typeKey(needle.type)}:${typeKey(from.type)}:${call.arguments.length}`;
+    let helper = lowerer.arrHofHelpers.get(key);
+    const resultType = method === "includes" ? BOOL : F64;
+    if (!helper) {
+      helper = `%tuple.${method}.${lowerer.arrHofHelpers.size}`;
+      lowerer.arrHofHelpers.set(key, helper);
+      const params = [
+        { localId: "a.0", name: "a", type: receiver.type },
+        { localId: "needle.0", name: "needle", type: needle.type },
+        { localId: "from.0", name: "from", type: from.type },
+      ];
+      const result = lowerArraySearchValues(lowerer, call, method, elem,
+        { kind: "arrayLit", elems: fields.map(read), type: arrayOf(elem), loc },
+        varRef("needle.0", needle.type, loc), varRef("position.0", F64, loc));
+      lowerer.liftedFns.push({
+        name: helper, params, returnType: resultType,
+        locals: [
+          ...params.map(param => ({ id: param.localId, name: param.name, type: param.type, mutable: false })),
+          { id: "position.0", name: "position", type: F64, mutable: false },
+        ],
+        body: [
+          { kind: "varDecl", localId: "position.0", init: positionNumber(lowerer, varRef("from.0", from.type, loc), numLit(0, loc), call.arguments[1] ?? call, "tuple search position"), loc },
+          { kind: "return", value: result, loc },
+        ], loc,
+      });
+    }
+    return { kind: "call", callee: helper, args: [receiver, needle, from], type: resultType, loc };
+  }
+  if (method === "slice") {
+    if (call.arguments.length > 2 || call.arguments.some(ts.isSpreadElement)) {
+      lowerer.noLowering(`.slice with ${call.arguments.length} arguments`, call);
+    }
+    const args = call.arguments.map(arg => lowerer.lowerExpr(arg));
+    args.forEach((arg, i) => { if (arg.type.kind !== "f64") lowerer.badType(call.arguments[i]!, lowerer.typeOf(call.arguments[i]!)); });
+    const resultType = arrayOf(elem);
+    const key = `tuple.slice:${typeKey(receiver.type)}:${args.length}`;
+    let helper = lowerer.arrHofHelpers.get(key);
+    if (!helper) {
+      helper = `%tuple.slice.${lowerer.arrHofHelpers.size}`;
+      lowerer.arrHofHelpers.set(key, helper);
+      const params = [receiver, ...args].map((arg, i) => ({ localId: i === 0 ? "a.0" : `arg.${i}`, name: `arg${i}`, type: arg.type }));
+      lowerer.liftedFns.push({
+        name: helper, params, returnType: resultType,
+        locals: params.map(param => ({ id: param.localId, name: param.name, type: param.type, mutable: false })),
+        body: [{ kind: "return", value: {
+          kind: "arrIntrinsic", method: "slice",
+          receiver: { kind: "arrayLit", elems: fields.map(read), type: resultType, loc },
+          args: args.map((arg, i) => varRef(`arg.${i + 1}`, arg.type, loc)), type: resultType, loc,
+        }, loc }], loc,
+      });
+    }
+    return { kind: "call", callee: helper, args: [receiver, ...args], type: resultType, loc };
+  }
+  if (call.arguments.length !== 1 || call.arguments.some(ts.isSpreadElement)) {
+    lowerer.noLowering(`.${method} with ${call.arguments.length} arguments`, call, "the thisArg parameter has no lowering — use an arrow function");
+  }
+  const callback = call.arguments[0]!;
+  // Check before the array HOF adapter can create a tuple-to-array copy.
+  const signatures = lowerer.checker.getCallSignatures(lowerer.typeOf(callback));
+  if (signatures.some(signature => signature.getParameters().length > 2)) {
+    lowerer.noLowering(`tuple .${method} callback array parameter`, callback, "capture the original tuple explicitly to preserve its identity");
+  }
+  const { fnArg, arity } = hofCallbackArg(lowerer, callback, [elem], receiver.type);
+  const ret = fnArg.type.ret;
+  if (ret.kind === "void" || ret.kind === "func") lowerer.badType(call, lowerer.typeOf(call));
+  if (method === "flatMap" && ret.kind === "union" && lowerer.unions.get(ret.unionId)!.arms.some(arm => arm.kind === "array")) {
+    lowerer.noLowering("tuple .flatMap callback mixing array and scalar results", callback, "return an array from every path");
+  }
+  const flatten = method === "flatMap" && ret.kind === "array";
+  const outElem = flatten ? ret.elem : callbackArrayElem(lowerer, call, ret);
+  fenceProducedArrayElem(lowerer, call, `'.${method}()'`, outElem);
+  const outType = arrayOf(outElem);
+  const key = `tuple.${method}:${typeKey(receiver.type)}:${typeKey(fnArg.type)}:${typeKey(outElem)}`;
+  let helper = lowerer.arrHofHelpers.get(key);
+  if (!helper) {
+    helper = `%tuple.${method}.${lowerer.arrHofHelpers.size}`;
+    lowerer.arrHofHelpers.set(key, helper);
+    const out = varRef("out.0", outType, loc);
+    const result = varRef("r.0", ret, loc);
+    const outputLength: IrExpr = { kind: "arrIntrinsic", method: "length", receiver: out, args: [], type: F64, loc };
+    const body: IrStmt[] = [{ kind: "varDecl", localId: "out.0", init: { kind: "arrayLit", elems: [], type: outType, loc }, loc }];
+    for (const field of fields) {
+      const invocation: IrExpr = {
+        kind: "callValue", callee: varRef("f.0", fnArg.type, loc),
+        args: [read(field), numLit(Number(field.name), loc)].slice(0, arity), type: ret, loc,
+      };
+      body.push(field === fields[0]
+        ? { kind: "varDecl", localId: "r.0", init: invocation, loc }
+        : { kind: "assign", localId: "r.0", value: invocation, loc });
+      if (flatten) {
+        const index = varRef("i.0", F64, loc);
+        body.push(countedFor(loc, { kind: "arrIntrinsic", method: "length", receiver: result, args: [], type: F64, loc }, () => [{
+          kind: "if", cond: arrayIndexPresent(result, index, loc), then: [
+            { kind: "varDecl", localId: "inner.0", init: arrayValueRead(lowerer, result, index, outElem, loc), loc },
+            arrayValueStore(lowerer, out, outputLength, varRef("inner.0", arrayValueType(lowerer, outElem), loc), outElem, loc),
+          ], else_: null, loc,
+        }]));
+      } else {
+        body.push(arrayValueStore(lowerer, out, outputLength, result, outElem, loc));
+      }
+    }
+    body.push({ kind: "return", value: out, loc });
+    lowerer.liftedFns.push({
+      name: helper,
+      params: [{ localId: "a.0", name: "a", type: receiver.type }, { localId: "f.0", name: "f", type: fnArg.type }],
+      returnType: outType,
+      locals: [
+        { id: "a.0", name: "a", type: receiver.type, mutable: false },
+        { id: "f.0", name: "f", type: fnArg.type, mutable: false },
+        { id: "out.0", name: "out", type: outType, mutable: false },
+        { id: "r.0", name: "r", type: ret, mutable: true },
+        ...(flatten ? [
+          { id: "i.0", name: "i", type: F64, mutable: true },
+          { id: "inner.0", name: "inner", type: arrayValueType(lowerer, outElem), mutable: false },
+        ] : []),
+      ], body, loc,
+    });
+  }
+  return { kind: "call", callee: helper, args: [receiver, fnArg], type: outType, loc };
+}
 
 /** An ordinary indexed read: values retain their element type, while
  * holes, missing properties, and present undefined yield undefined. */
@@ -3462,6 +3566,53 @@ const MAP_ITER_METHODS = new Set(["keys", "values", "entries"]);
       loc,
     };
   }
+
+/** An immediate Map spread observes the same entry order as entries().
+ * Each pair is new; its key and value retain their original identities. */
+export function mapEntriesArray(lowerer: Lowerer, receiver: IrExpr & { type: IrType & { kind: "map" } }): IrExpr {
+  const mapT = receiver.type;
+  const tupleT: IrType & { kind: "record" } = {
+    kind: "record", shapeId: lowerer.shapes.intern([
+      { name: "0", type: mapT.key }, { name: "1", type: mapT.value },
+    ], true),
+  };
+  const key = `entries:${typeKey(mapT.key)}:${typeKey(mapT.value)}`;
+  let helper = lowerer.mapHofHelpers.get(key);
+  if (!helper) {
+    helper = `%map.entries.${lowerer.mapHofHelpers.size}`;
+    lowerer.mapHofHelpers.set(key, helper);
+    lowerer.liftedFns.push(buildMapIterDrainFn(helper, mapT, "entries", tupleT, tupleT, receiver.loc));
+  }
+  return { kind: "call", callee: helper, args: [receiver], type: arrayOf(tupleT), loc: receiver.loc };
+}
+
+/** Optional Map storage can survive a checker narrowing when the producer
+ * is a runtime-optional read. Keep the missing arm observable at iteration. */
+export function lowerMapSpread(lowerer: Lowerer, source: IrExpr, node: ts.Expression): IrExpr | null {
+  if (source.type.kind === "map") return mapEntriesArray(lowerer, { ...source, type: source.type });
+  if (source.type.kind !== "union") return null;
+  const arms = lowerer.unions.get(source.type.unionId)?.arms;
+  const tag = arms?.findIndex((arm) => arm.kind === "map") ?? -1;
+  const mapT = arms?.[tag];
+  if (mapT?.kind !== "map" || !arms?.every((arm, index) => index === tag || isUnitType(arm))) return null;
+  const loc = locOf(node);
+  const slot = lowerer.declareHiddenLocal("%mapSpread", source.type);
+  const value = varRef(slot.id, source.type, loc);
+  const entries = mapEntriesArray(lowerer, {
+    kind: "unionNarrow", unionId: source.type.unionId, tag, value, type: mapT, loc,
+  });
+  return {
+    kind: "seqExpr", stmts: [{ kind: "varDecl", localId: slot.id, init: source, loc }],
+    result: {
+      kind: "ternary",
+      cond: { kind: "unionIsTag", unionId: source.type.unionId, tag, value, negated: false, type: BOOL, loc },
+      then: entries,
+      else_: nodeThrowExpr(1, "", `${node.getText()} is not iterable`, entries.type, loc),
+      type: entries.type, loc,
+    },
+    type: entries.type, loc,
+  };
+}
 
 /** `m.forEach(fn)` desugars to a direct call of a synthetic module
    * function — one per key/value type + callback arity, interned — whose
@@ -5378,18 +5529,119 @@ const ITER_TERMINALS = new Set(["toArray", "forEach", "reduce", "some", "every",
     return walk(stmts);
   }
 
-/** `new Map(entries)` from a tuple-array VALUE — any `[K, V][]`-typed
-   * expression (a variable, a .map() result, a sorted entries spread), not
-   * just the pair-literal form lower-classes handles inline. Desugars to a
-   * direct call of a synthetic function that constructs the empty map and
-   * set()s each pair in array order — JS-exact: pairs are visited in
-   * insertion order and a later duplicate key overwrites while keeping the
-   * first occurrence's position (set()'s own contract). Null when the
-   * argument isn't a matching tuple array (the caller keeps its fence). */
-  export function lowerMapSeedArrayNew(lowerer: Lowerer, argNode: ts.Expression,
+/** Consume supported Map seeds: matching Maps and tuple arrays, plus
+ * nullish values that construct an empty Map. Conditional/nullish seeds
+ * select one lazy branch without representing a first-class iterable.
+ * Copy loops preserve entry order and stored reference identities. */
+  export function lowerMapSeedNew(lowerer: Lowerer, argNode: ts.Expression,
     mapT: IrType & { kind: "map" },): IrExpr | null {
     if (ts.isSpreadElement(argNode)) return null;
+    const empty = lowerer.emptyCollectionFor(argNode, mapT);
+    if (empty) return empty;
+    while (ts.isParenthesizedExpression(argNode)) argNode = argNode.expression;
+    // A constructor consumes either iterable branch immediately. It does
+    // not need a first-class Map|array representation for `cached ?? []`.
+    // Snapshot the left before the lazy fallback can mutate its binding.
+    if (ts.isBinaryExpression(argNode) && argNode.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken) {
+      const source = lowerer.lowerExpr(argNode.left);
+      if (isUnitType(source.type)) {
+        const fallback = lowerMapSeedNew(lowerer, argNode.right, mapT);
+        return fallback ? defaultAfterUndefined(source, fallback) : null;
+      }
+      if (source.type.kind !== "union") return mapFromSeedValue(lowerer, source, mapT);
+      const arms = lowerer.unions.get(source.type.unionId)?.arms;
+      if (!arms) return null;
+      const loc = locOf(argNode);
+      const saved = lowerer.declareHiddenLocal("%mapSeed", source.type);
+      const ref = varRef(saved.id, source.type, loc);
+      let result: IrExpr | null = null;
+      for (let tag = arms.length - 1; tag >= 0; tag--) {
+        const arm = arms[tag]!;
+        const branch = isUnitType(arm)
+          ? lowerMapSeedNew(lowerer, argNode.right, mapT)
+          : mapFromSeedValue(lowerer, { kind: "unionNarrow", unionId: source.type.unionId, tag, value: ref, type: arm, loc }, mapT);
+        if (!branch) return null;
+        result = result === null ? branch : {
+          kind: "ternary",
+          cond: { kind: "unionIsTag", unionId: source.type.unionId, tag, value: ref, negated: false, type: BOOL, loc },
+          then: branch, else_: result, type: mapT, loc,
+        };
+      }
+      return result ? { kind: "seqExpr", stmts: [{ kind: "varDecl", localId: saved.id, init: source, loc }], result, type: mapT, loc } : null;
+    }
+    if (ts.isConditionalExpression(argNode)) {
+      const yes = lowerMapSeedNew(lowerer, argNode.whenTrue, mapT);
+      const no = lowerMapSeedNew(lowerer, argNode.whenFalse, mapT);
+      return yes && no ? { kind: "ternary", cond: lowerer.lowerCondition(argNode.condition), then: yes, else_: no, type: mapT, loc: locOf(argNode) } : null;
+    }
+    if (ts.isArrayLiteralExpression(argNode)) {
+      const tuple: IrType & { kind: "record" } = { kind: "record", shapeId: lowerer.shapes.intern([
+        { name: "0", type: mapT.key }, { name: "1", type: mapT.value },
+      ], true) };
+      return mapFromSeedValue(lowerer, lowerer.lowerArrayLiteral(argNode, { kind: "array", elem: tuple }), mapT);
+    }
     const seed = lowerer.lowerExpr(argNode);
+    return mapFromSeedValue(lowerer, seed, mapT);
+  }
+
+function mapFromSeedValue(lowerer: Lowerer, seed: IrExpr, mapT: IrType & { kind: "map" }): IrExpr | null {
+    const loc = seed.loc;
+    if (isUnitType(seed.type)) {
+      return defaultAfterUndefined(seed, { kind: "mapNew", type: mapT, loc });
+    }
+    if (seed.type.kind === "union") {
+      const arms = lowerer.unions.get(seed.type.unionId)?.arms;
+      if (!arms) return null;
+      const saved = lowerer.declareHiddenLocal("%mapSeed", seed.type);
+      const ref = varRef(saved.id, seed.type, loc);
+      let result: IrExpr | null = null;
+      for (let tag = arms.length - 1; tag >= 0; tag--) {
+        const arm = arms[tag]!;
+        const branch: IrExpr | null = isUnitType(arm) ? { kind: "mapNew", type: mapT, loc }
+          : mapFromSeedValue(lowerer, { kind: "unionNarrow", unionId: seed.type.unionId, tag, value: ref, type: arm, loc }, mapT);
+        if (!branch) return null;
+        result = result === null ? branch : {
+          kind: "ternary",
+          cond: { kind: "unionIsTag", unionId: seed.type.unionId, tag, value: ref, negated: false, type: BOOL, loc },
+          then: branch, else_: result, type: mapT, loc,
+        };
+      }
+      return result ? { kind: "seqExpr", stmts: [{ kind: "varDecl", localId: saved.id, init: seed, loc }], result, type: mapT, loc } : null;
+    }
+    if (seed.type.kind === "map") {
+      if (!typeEquals(seed.type, mapT)) return null;
+      const key = `copy:${typeKey(mapT)}`;
+      let name = lowerer.mapHofHelpers.get(key);
+      if (!name) {
+        name = `%map.copy.${lowerer.mapHofHelpers.size}`;
+        lowerer.mapHofHelpers.set(key, name);
+        const source = varRef("source.0", mapT, loc);
+        const target = varRef("target.0", mapT, loc);
+        const index = varRef("i.0", F64, loc);
+        const read = (method: "iterCount" | "iterLive" | "iterKey" | "iterValue", type: IrType): IrExpr => ({
+          kind: "mapIntrinsic", method, receiver: source, args: method === "iterCount" ? [] : [index], type, loc,
+        });
+        lowerer.liftedFns.push({
+          name, params: [{ localId: "source.0", name: "source", type: mapT }], returnType: mapT,
+          locals: [
+            { id: "source.0", name: "source", type: mapT, mutable: false },
+            { id: "target.0", name: "target", type: mapT, mutable: false },
+            { id: "i.0", name: "i", type: F64, mutable: true },
+          ],
+          body: [
+            { kind: "varDecl", localId: "target.0", init: { kind: "mapNew", type: mapT, loc }, loc },
+            countedFor(loc, read("iterCount", F64), () => [{
+              kind: "if", cond: read("iterLive", BOOL), then: [{ kind: "exprStmt", expr: {
+                kind: "mapIntrinsic", method: "set", receiver: target,
+                args: [read("iterKey", mapT.key), read("iterValue", mapT.value)], type: VOID, loc,
+              }, loc }], else_: null, loc,
+            }]),
+            { kind: "return", value: target, loc },
+          ], loc,
+        });
+      }
+      return { kind: "call", callee: name, args: [seed], type: mapT, loc };
+    }
     if (seed.type.kind !== "array" || seed.type.elem.kind !== "record") return null;
     const elem = seed.type.elem;
     const shape = lowerer.shapes.get(elem.shapeId);
@@ -5397,7 +5649,6 @@ const ITER_TERMINALS = new Set(["toArray", "forEach", "reduce", "some", "every",
     const kT = shape.fields.find((f) => f.name === "0")!.type;
     const vT = shape.fields.find((f) => f.name === "1")!.type;
     if (!typeEquals(kT, mapT.key) || !typeEquals(vT, mapT.value)) return null;
-    const loc = locOf(argNode);
     const key = `seed:${typeKey(mapT.key)}:${typeKey(mapT.value)}:${elem.shapeId}`;
     let helper = lowerer.mapHofHelpers.get(key);
     if (!helper) {

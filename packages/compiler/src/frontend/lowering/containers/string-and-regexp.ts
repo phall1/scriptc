@@ -5,7 +5,8 @@ import { locOf } from "../../program.js";
 import type { Lowerer } from "../lowerer.js";
 import { nodeThrowExpr, own } from "../lowerer.js";
 import { isRequireMainFilename } from "../expressions/optional-chains.js";
-import { STRING_INDEX_METHODS, STR_METHODS } from "../surfaces.js";
+import { STRING_INDEX_METHODS, STRING_REPLACE_METHODS, STR_METHODS } from "../surfaces.js";
+import { lowerStringReplacement } from "./string-replacement.js";
 import { coerceStringSearchValue, defaultAfterUndefined, lowerOptionalArgument, lowerPositionArgument, lowerStaticallyUndefinedArgument, lowerStringSearchArgument, positionNumber } from "../optional-arguments.js";
 
 function lowerSplitLimitArg(lowerer: Lowerer, node: ts.Expression | undefined, loc: SrcLoc): IrExpr {
@@ -547,7 +548,8 @@ export function lowerStringMethodCall(lowerer: Lowerer, call: ts.CallExpression,
   if (dynReceiver === undefined && access.name.text === "localeCompare") return lowerLocaleCompareCall(lowerer, call, access);
   const entry = own(STR_METHODS, access.name.text);
   const indexMethod = STRING_INDEX_METHODS.has(access.name.text) ? access.name.text as "at" | "codePointAt" : null;
-  if (!entry && !indexMethod) return null;
+  const replaceMethod = STRING_REPLACE_METHODS.has(access.name.text) ? access.name.text as "replace" | "replaceAll" : null;
+  if (!entry && !indexMethod && !replaceMethod) return null;
   // A validated dyn receiver (`pkg.name.replace(...)` on a JSON.parse
   // value) arrives pre-extracted through `dynReceiver`; its checker type
   // is `any`, so the type/symbol gates don't apply — the dyn value's
@@ -567,7 +569,7 @@ export function lowerStringMethodCall(lowerer: Lowerer, call: ts.CallExpression,
   }
   // The lib declares optional parameters beyond some lowered forms; fence
   // those arities instead of passing arguments the runtime doesn't take.
-  if (argumentNodes.length < (entry?.minArgs ?? 0) || argumentNodes.length > (entry?.maxArgs ?? 1)) {
+  if (argumentNodes.length < (entry?.minArgs ?? 0) || argumentNodes.length > (entry?.maxArgs ?? (replaceMethod ? 2 : 1))) {
     lowerer.noLowering(
       `.${access.name.text} with ${argumentNodes.length} argument${argumentNodes.length === 1 ? "" : "s"} on strings`,
       call,
@@ -577,6 +579,7 @@ export function lowerStringMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     ? dynReceiver()
     : lowerMethodReceiver(lowerer, access.expression, STRING, access.name.text);
   const loc = locOf(call);
+  if (replaceMethod) return lowerStringReplacement(lowerer, call, replaceMethod, receiver, argumentNodes);
   if (indexMethod) return lowerStringIndexCall(lowerer, call, indexMethod, receiver, access.expression, argumentNodes);
   if (!entry) return null;
   if (entry.method === "split") return lowerStringSplitCall(lowerer, call, receiver, access.expression, argumentNodes);

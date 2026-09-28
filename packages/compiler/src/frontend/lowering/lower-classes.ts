@@ -11,7 +11,7 @@ import { MAX_GENERIC_INSTANCES, appendImplicitUndefinedReturn, bodyReadsArgument
 import { isGenericCallableMemberType, jsOpenObjectType, typeKey } from "../type-mapper.js";
 import { cjsClassExprWholeExportOf, isCjsJsFile, isJsSourceFile, isModuleExportsAccess, isNodeTypesPath, locOf } from "../program.js";
 import { PoisonError, dynFallbackType, dynUndefinedExpr, newFnCtx, own } from "./lowerer.js";
-import { lowerArrayConstructor, lowerMapSeedArrayNew, strCharsCall } from "./lower-containers.js";
+import { lowerArrayConstructor, lowerMapSeedNew, strCharsCall } from "./lower-containers.js";
 import { bufEncoding } from "./containers/bytes.js";
 import { isSafeToRepeat } from "./expressions/evaluation-safety.js";
 import { lowerSearchParamsNew, lowerTextCodecNew } from "./lower-builtins.js";
@@ -5381,10 +5381,10 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
       // (`new Map([[k, v], ...])`) — each pair's key/value lower as
       // ordinary K/V-typed expressions and the backend set()s them in
       // order, so the tuple array never exists as a value — and a
-      // `[K, V][]`-typed tuple-array VALUE (lowerMapSeedArrayNew: a
+      // `[K, V][]`-typed tuple-array VALUE (lowerMapSeedNew: a
       // construct-and-set loop, pairs in array order, duplicates
-      // overwrite). Other seeds — another Map, general iterables — keep
-      // the fence: never silently an empty map. Unsupported key/value
+      // overwrite). Matching Maps copy their entries; nullish seeds make
+      // empty Maps. General iterable seeds retain a fence. Unsupported key/value
       // types get their half named specifically instead of the component
       // fence (SC2009, which names Map slots at value positions elsewhere).
       // Both Array() and new Array() share the elements/count lowering.
@@ -5446,7 +5446,7 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
           }
         }
         if (seedArg && !entriesLit && mapped?.kind === "map") {
-          const seeded = lowerMapSeedArrayNew(lowerer, seedArg, mapped);
+          const seeded = lowerMapSeedNew(lowerer, seedArg, mapped);
           if (seeded) return seeded;
         }
         if ((expr.arguments?.length ?? 0) > 0 && !entriesLit) {
@@ -5454,8 +5454,7 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
             "new Map(entries)",
             expr,
             "supported seeds: an array literal of [key, value] pair literals, or a " +
-              "[K, V][]-typed tuple-array value — construct the Map empty and set() " +
-              "each entry otherwise",
+              "[K, V][]-typed tuple-array value, a matching Map, or null/undefined",
           );
         }
         if (mapped?.kind === "map") {
@@ -5542,6 +5541,13 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
           }
           if (!ts.isSpreadElement(argNode)) {
             const argIr = lowerer.mapTypeOf(lowerer.typeOf(argNode));
+            if (argIr?.kind === "set" && typeEquals(argIr.elem, mapped.elem)) {
+              const source = lowerer.lowerExpr(argNode);
+              if (source.type.kind === "set" && typeEquals(source.type, mapped)) {
+                const seed: IrExpr = { kind: "setIntrinsic", method: "toArray", receiver: source, args: [], type: arrayOf(mapped.elem), loc };
+                return { kind: "setNew", seed, type: mapped, loc };
+              }
+            }
             // String iteration is by Unicode code point, not UTF-16 code
             // unit. Share Array.from's iterator snapshot; evaluation of
             // the source occurs once and insertion preserves first order.

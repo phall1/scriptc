@@ -79,7 +79,7 @@ const offenders = new Map<string, string>();
  * the host probes the same file many times, and the rewrite parses. */
 const rewriteCache = new Map<string, string | null>();
 
-export function setNpmStaticPackages(packages: Iterable<string>): void {
+export function setNpmStaticPackages<T extends Iterable<string>>(packages: T): void {
   activePackages = new Set(packages);
   declarationOverloads = new Map();
   declarationProperties = new Map();

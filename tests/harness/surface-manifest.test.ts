@@ -126,6 +126,8 @@ const PROBES: Probe[] = [
   { id: "syntax.compound-assignment.plus", source: 'let x = 1;\nx += 2;\nconsole.log(x);\n' },
   { id: "syntax.spread-arguments", source: 'function add(a: number, b: number): number { return a + b; }\nconst args: [number, number] = [1, 2];\nconsole.log(add(...args));\n' },
   { id: "stdlib.string.charCodeAt", source: 'console.log("abc".charCodeAt(0));\n' },
+  { id: "stdlib.string.replace", source: 'console.log("aa".replace("a", "b"));\n' },
+  { id: "stdlib.string.replaceAll", source: 'console.log("aa".replaceAll("a", "b"));\n' },
   { id: "stdlib.array.push", source: "const xs: number[] = [1];\nxs.push(2);\nconsole.log(xs.length);\n" },
   { id: "stdlib.array.unshift", source: "const xs: number[] = [2];\nconsole.log(xs.unshift(1), xs[0]);\n" },
   { id: "stdlib.array.reverse", source: "const xs: number[] = [1, 2];\nconsole.log(xs.reverse()[0]);\n" },
@@ -167,7 +169,6 @@ const PROBES: Probe[] = [
   { id: "stdlib.math.SQRT2", source: "console.log(Math.SQRT2);\n" },
   // status dynamic-only — refused with the entry's code statically,
   // analyzed clean under --dynamic
-  { id: "stdlib.string.replace", source: 'console.log("aa".replace("a", "b"));\n' },
   {
     id: "stdlib.headers.entries",
     source: '/// <reference types="node" />\nasync function f(): Promise<void> {\n  const r = await fetch("http://127.0.0.1");\n  void r.headers.entries();\n}\nvoid f();\n',

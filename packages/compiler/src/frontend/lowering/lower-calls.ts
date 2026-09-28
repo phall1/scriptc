@@ -4744,8 +4744,8 @@ export function lowerCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr {
         lowerArrayFromCall(lowerer, expr, expr.expression) ??
         lowerArrayOfCall(lowerer, expr, expr.expression) ??
         lowerer.lowerArrayMethodCall(expr, expr.expression) ??
-        // Read-only array methods (slice/map) on TUPLE receivers — the
-        // positions snapshot into a fresh array (the for-of stance).
+        // Tuple reads preserve the receiver through argument evaluation;
+        // callbacks read each position when visited.
         lowerTupleReadMethodCall(lowerer, expr, expr.expression) ??
         lowerGenMethodCall(lowerer, expr, expr.expression) ??
         lowerer.lowerMapMethodCall(expr, expr.expression) ??

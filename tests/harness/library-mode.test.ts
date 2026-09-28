@@ -973,16 +973,16 @@ describe.each(EMISSIONS)("K14: determinism fences, %s emission", (emission) => {
 
   test("fencing a surface the static tier refuses anyway changes only the message", async () => {
     const diags = await refusal(
-      `export function f(): number { return "abc".replace("a", "b").length; }\n`,
+      `export function f(): number { return (1.234).toPrecision(2).length; }\n`,
       {
         exports: [{ export: "f", symbol: "kx_f", params: [], returns: "f64" }],
-        determinism: { fences: [{ id: "stdlib.string.replace", teaching: "replacement is host work" }] },
+        determinism: { fences: [{ id: "stdlib.number.toPrecision", teaching: "formatting is host work" }] },
       },
       emission,
     );
     // The existing refusal's code survives — the fence never re-codes a
     // surface that already refuses; its teaching rides as the note.
     expect(diags[0]!.code).toBe("SC2012");
-    expect(diags[0]!.note).toBe("from the 'refusal-fixture' profile: replacement is host work");
+    expect(diags[0]!.note).toBe("from the 'refusal-fixture' profile: formatting is host work");
   });
 });

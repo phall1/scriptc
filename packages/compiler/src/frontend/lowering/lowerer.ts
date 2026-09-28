@@ -195,6 +195,14 @@ export interface FnCtx {
   locals: IrLocal[];
   scopes: Map<ts.Symbol, IrLocal>[];
   localCounters: Map<string, number>;
+  /** Bindings belong to this lowering of the body. Generic specializations
+   * share checker symbols and AST declarations, but never local storage. */
+  hoistedVars: Map<ts.Symbol, IrLocal>;
+  hoistedFnDecls: Set<ts.FunctionDeclaration>;
+  /** Forward captures waiting for their source declaration to initialize
+   * the TDZ box. The declaration's owner retains this entry while nested
+   * functions lower and capture its slot. */
+  tdzPredeclared: Map<ts.Symbol, IrLocal>;
   /** Lifted functions only: capture entries (also present in `locals`,
    * boxed), in closure caps[] order. undefined ⇔ plain declared function. */
   captures: IrParam[] | null;
@@ -241,6 +249,9 @@ export function newFnCtx(
     locals: [],
     scopes: [new Map()],
     localCounters: new Map(),
+    hoistedVars: new Map(),
+    hoistedFnDecls: new Set(),
+    tdzPredeclared: new Map(),
     captures: lifted ? [] : null,
     captureSources: [],
     captureBySymbol: new Map(),
@@ -1862,20 +1873,6 @@ export class Lowerer {
     frame: Map<ts.Symbol, IrLocal>;
     out: IrStmt[];
   }[] = [];
-  /** Forward-captured bindings pre-declared as TDZ boxes, keyed by symbol:
-   * lowerVarDecl consumes the entry when the source declaration arrives and
-   * emits the initializing `assign` instead of a fresh declaration. */
-  readonly tdzPredeclared = new Map<ts.Symbol, IrLocal>();
-  /** Nested function DECLARATIONS lowered eagerly by the forward-hoisting
-   * machinery (predeclareForwardFnDecl — a reference above the declaration
-   * in the same function, JS's function hoisting): the statement loop skips
-   * the source statement when it arrives. */
-  readonly hoistedFnDecls = new Set<ts.FunctionDeclaration>();
-  /** `var` bindings hoisted to their function root (hoistVarBinding), keyed
-   * by the checker's merged symbol — every same-name `var` in one function
-   * is one symbol, so one slot. Module-scope vars live in globalsBySymbol
-   * instead. */
-  readonly hoistedVars = new Map<ts.Symbol, IrLocal>();
   /** Per-file `var` module globals whose type carries an undefined arm:
    * lowerFileInit assigns them the interned undefined right after the
    * run-once guard — JS hoists module vars to `undefined` at entry, so a
@@ -7980,6 +7977,10 @@ export class Lowerer {
   /** Lower for a known destination, then apply ordinary value coercion.
    * Fresh arrays and records use the destination layout directly. */
   lowerExprExpecting(node: ts.Expression, expected: IrType | undefined): IrExpr {
+    if (expected) {
+      const fresh = this.emptyCollectionFor(node, expected);
+      if (fresh) return this.coerceInto(node, fresh, expected);
+    }
     if (expected?.kind === "array") {
       let x: ts.Expression = node;
       while (ts.isParenthesizedExpression(x)) x = x.expression;
@@ -8055,6 +8056,25 @@ export class Lowerer {
     }
     const e = this.lowerExpr(node);
     return expected ? this.coerceInto(node, e, expected) : e;
+  }
+
+  /** An unannotated empty collection has no existing elements or aliases
+   * that constrain its layout. An explicit type argument still wins. */
+  emptyCollectionFor(node: ts.Expression, expected: IrType): IrExpr | null {
+    let value = node;
+    while (ts.isParenthesizedExpression(value)) value = value.expression;
+    if (!ts.isNewExpression(value) || !ts.isIdentifier(value.expression) || (value.arguments?.length ?? 0) !== 0 ||
+        (value.typeArguments?.length ?? 0) !== 0) return null;
+    const symbol = this.resolveValueSymbol(value.expression);
+    if (!symbol || !this.isStdlibSymbol(symbol)) return null;
+    const kind = symbol.name === "Map" ? "map" : symbol.name === "Set" ? "set" : null;
+    if (!kind) return null;
+    const arms = expected.kind === "union" ? this.unions.get(expected.unionId)?.arms ?? [] : [expected];
+    const candidates = arms.filter((arm) => arm.kind === kind);
+    if (candidates.length !== 1) return null;
+    const type = candidates[0]!;
+    return type.kind === "map" ? { kind: "mapNew", type, loc: locOf(value) }
+      : type.kind === "set" ? { kind: "setNew", type, loc: locOf(value) } : null;
   }
 
   /** A value flowing into an index-signature VALUE slot (an overflow
