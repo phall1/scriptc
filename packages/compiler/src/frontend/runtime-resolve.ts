@@ -15,7 +15,8 @@ import { createRequire, isBuiltin } from "node:module";
 import { isAbsolute } from "node:path";
 import { pathToFileURL } from "node:url";
 import { markFrontendInputsUnstable } from "./input-tracker.js";
-import { NpmGraphBuilder, probeNodeImportRefusal } from "./npm-node.js";
+import { NpmGraphBuilder, probeNodeImportRefusal } from "./npm.js";
+import type { FrontendServices } from "./services.js";
 import { wasiGuestPath } from "../wasi-paths.js";
 
 export interface RuntimeResolveError {
@@ -60,6 +61,7 @@ export function resolveImportMetaRuntime(
   fromFile: string,
   specifier: string,
   targetPlatform: string,
+  services?: FrontendServices,
 ): RuntimeResolveResult | null {
   const base = targetFileUrl(fromFile, targetPlatform);
   if (
@@ -77,7 +79,8 @@ export function resolveImportMetaRuntime(
   }
   if (specifier.startsWith("#")) return null;
 
-  const builder = new NpmGraphBuilder();
+  if (services === undefined) throw new Error("package runtime resolution requires frontend services");
+  const builder = new NpmGraphBuilder(services);
   const key = builder.resolveForIntrospection(fromFile, specifier, "import");
   if (key !== null) return { ok: true, value: targetFileUrl(key, targetPlatform) };
   const refusal = probeNodeImportRefusal(fromFile, specifier);

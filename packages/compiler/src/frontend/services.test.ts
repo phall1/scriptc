@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, expect, test, vi } from "vitest";
-import { FrontendServices } from "./services.js";
+import { FrontendServices, type ComptimeEvaluator } from "./services.js";
 import { Ts7Api } from "./ts7/rpc-api.js";
 import { checkPreflight, isNodeEsmFile, loadProgram } from "./program.js";
 import { clearResolveCaches } from "./resolve.js";
@@ -13,7 +13,7 @@ afterEach(() => {
   clearResolveCaches();
   for (const dir of directories.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
-function setup() {
+function setup(evaluator?: ComptimeEvaluator) {
   const dir = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-services-"));
   directories.push(dir);
   const connections: { api: Ts7Api; close: ReturnType<typeof vi.spyOn>; options: Ts7ApiOptions }[] = [];
@@ -22,8 +22,27 @@ function setup() {
     connections.push({ api, close: vi.spyOn(api, "close"), options });
     return api;
   });
-  return { dir, connections, factory, services: new FrontendServices(factory, dir) };
+  return { dir, connections, factory, services: new FrontendServices(factory, dir, evaluator) };
 }
+
+test("compile-time execution belongs to the supplied host and closes with its services", () => {
+  const value = { table: [1, 2, 3] };
+  const evaluate = vi.fn(() => value);
+  const { services, factory } = setup(evaluate);
+  expect(services.evaluateComptime("() => [1, 2, 3]", 2000)).toBe(value);
+  expect(evaluate).toHaveBeenCalledExactlyOnceWith("() => [1, 2, 3]", 2000);
+  expect(factory).not.toHaveBeenCalled();
+  services.close();
+  expect(() => services.evaluateComptime("() => 1", 2000)).toThrow("closed");
+  expect(evaluate).toHaveBeenCalledTimes(1);
+});
+
+test("a host without a compile-time evaluator refuses explicitly", () => {
+  const { services, factory } = setup();
+  try { expect(() => services.evaluateComptime("() => 1", 2000)).toThrow("does not provide compile-time evaluation"); }
+  finally { services.close(); }
+  expect(factory).not.toHaveBeenCalled();
+});
 
 test("service construction and irrelevant rewrites open no connections", () => {
   const { services, factory } = setup();

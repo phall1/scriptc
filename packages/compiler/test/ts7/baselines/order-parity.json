@@ -8662,6 +8662,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/default-undefined-parameters.ts": {
+   "order": [
+    "<repo>/tests/corpus/default-undefined-parameters.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/error-cause-writes.js": {
    "order": [
     "<repo>/tests/corpus/error-cause-writes.js"
@@ -8901,6 +8907,18 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/regex-optional-templates.ts": {
+   "order": [
+    "<repo>/tests/corpus/regex-optional-templates.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/regex-split-captures.ts": {
+   "order": [
+    "<repo>/tests/corpus/regex-split-captures.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/renderer-export-dictionaries.js": {
    "order": [
     "<repo>/tests/corpus/renderer-export-dictionaries.js"
@@ -9034,6 +9052,12 @@
   "<repo>/tests/corpus/unknown-record-views.ts": {
    "order": [
     "<repo>/tests/corpus/unknown-record-views.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/url-runtime-base.ts": {
+   "order": [
+    "<repo>/tests/corpus/url-runtime-base.ts"
    ],
    "diags": []
   },

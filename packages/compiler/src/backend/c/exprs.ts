@@ -5101,6 +5101,8 @@ function emitPathUrlLibCall(state: LibCallState): Temp {
           }
           case "url.new":
             return finish(`scr_url_new(${arg(0)})`);
+          case "url.newBase":
+            return finish(`scr_url_new_base(${arg(0)}, ${arg(1)})`);
           case "url.protocol":
             return finish(`scr_url_protocol(${arg(0)})`);
           case "url.origin":

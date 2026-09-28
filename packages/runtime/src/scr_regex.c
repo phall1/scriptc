@@ -628,17 +628,7 @@ ScrArr *scr_regex_split_limit(ScrStr *s, ScrRegex *re, double limit_num) {
   uint8_t *bc = scr_regex_bc(re);
   uint32_t limit = scr_to_uint32(limit_num);
   if (limit == 0) return scr_arr_new(SCR_ELEM_STR, 0);
-  if (lre_get_capture_count(bc) > 1) {
-    /* JS splices every capture group's value into the result between the
-     * pieces, changing the array's SHAPE per match — not modeled this
-     * slice. Catchable, scriptc-specific. */
-    static const char msg[] =
-        "split() with capture groups in the pattern is not "
-        "supported (JS splices the captured values into the result); use a "
-        "non-capturing group (?:...)";
-    scr_throw_error_msg(SCR_ERR_TYPE, msg, sizeof msg - 1);
-    return NULL; /* callers are compiler-emitted pending checks */
-  }
+  int capture_count = lre_get_capture_count(bc);
   int re_flags = lre_get_flags(bc);
   bool unicode = (re_flags & (LRE_FLAG_UNICODE | LRE_FLAG_UNICODE_SETS)) != 0;
   bool sticky = (re_flags & LRE_FLAG_STICKY) != 0;
@@ -648,7 +638,7 @@ ScrArr *scr_regex_split_limit(ScrStr *s, ScrRegex *re, double limit_num) {
   const uint8_t *ubase = (const uint8_t *)u;
   ScrArr *out = scr_arr_new(SCR_ELEM_STR, 0);
 
-  /* ECMA-262 22.2.6.14 (Symbol.split, no limit). The spec probes every
+  /* ECMA-262 22.2.6.14 (Symbol.split). The spec probes every
    * position with a sticky matcher; for non-sticky patterns a forward
    * SEARCH from q is equivalent (the earliest match position >= q is the
    * first probe that would succeed) and one exec replaces the per-position
@@ -671,22 +661,35 @@ ScrArr *scr_regex_split_limit(ScrStr *s, ScrRegex *re, double limit_num) {
     }
     int start = (int)((capture[0] - ubase) >> 1);
     int end = (int)((capture[1] - ubase) >> 1);
+    /* The sticky algorithm never probes the position after the subject.
+     * A forward search can find a zero-width match there; exclude it. */
+    if (start == len) break;
     if (end == p) {
       /* Zero-length match adjacent to the previous split point: advance
        * (start == q == p here — the search cannot skip a match). */
       q = scr_advance(u, len, start, unicode);
     } else {
       scr_arr_push_ref(out, scr_str_from_utf16(u, p, start));
-      if (out->len == limit) {
-        free(capture);
-        free(u);
-        return out;
+      if (out->len == limit) goto done;
+      for (int group = 1; group < capture_count; group++) {
+        const uint8_t *from = capture[2 * group];
+        const uint8_t *to = capture[2 * group + 1];
+        if (from == NULL || to == NULL) {
+          // Nonparticipating captures are present undefined elements,
+          // distinct from both empty strings and holes.
+          scr_arr_set_undefined(out, (double)out->len);
+        } else {
+          scr_arr_push_ref(out, scr_str_from_utf16(u,
+              (int)((from - ubase) >> 1), (int)((to - ubase) >> 1)));
+        }
+        if (out->len == limit) goto done;
       }
       p = end;
       q = p;
     }
   }
   scr_arr_push_ref(out, scr_str_from_utf16(u, p, len));
+done:
   free(capture);
   free(u);
   return out;

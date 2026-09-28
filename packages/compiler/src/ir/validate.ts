@@ -330,6 +330,7 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "bigint.dataViewGet": { argTypes: [BYTES_U8, F64, BOOL, BOOL], result: BIGINT_T },
   "bigint.dataViewSet": { argTypes: [BYTES_U8, F64, BIGINT_T, BOOL], result: VOID },
   "url.new": { argTypes: [STRING], result: URL_T },
+  "url.newBase": { argTypes: [STRING, STRING], result: URL_T },
   "url.protocol": { argTypes: [URL_T], result: STRING },
   "url.origin": { argTypes: [URL_T], result: STRING },
   "url.username": { argTypes: [URL_T], result: STRING },

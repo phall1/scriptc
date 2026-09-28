@@ -1446,7 +1446,7 @@ interface URL {
   toString(): string;
 }
 declare var URL: {
-  new (input: string, base?: string | URL): URL;
+  new (input: string | { toString: () => string }, base?: string | URL): URL;
 };
 
 /* URLSearchParams — the WHATWG application/x-www-form-urlencoded list.

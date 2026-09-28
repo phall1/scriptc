@@ -517,12 +517,23 @@ export function lowerRegexMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     const args = name === "split"
       ? [lowerer.lowerExpr(arg0), lowerSplitLimitArg(lowerer, call.arguments[1], loc)]
       : call.arguments.map((a) => lowerer.lowerExpr(a));
-    if (name !== "split" && args[1]?.type.kind !== "string") {
-      lowerer.unsupported(
-        "SC1120",
-        call.arguments[1] ?? call,
-        "function replacement values (replacements must be string templates)",
-      );
+    if (name !== "split") {
+      const replacement = args[1];
+      const templateType = (type: IrType): boolean => type.kind === "union"
+        ? lowerer.unions.get(type.unionId)!.arms.every(templateType)
+        : type.kind === "string" || type.kind === "f64" || type.kind === "bool" ||
+          type.kind === "bigint" || isUnitType(type);
+      if (!replacement || !templateType(replacement.type)) {
+        lowerer.unsupported(
+          "SC1120",
+          call.arguments[1] ?? call,
+          "function replacement values (replacements must be string templates)",
+        );
+      }
+      // Array iteration can carry an explicit undefined even when the
+      // checker spells string. RegExp replacement applies ToString once,
+      // including when the pattern has no match; it does not call that value.
+      args[1] = coerceStringSearchValue(lowerer, replacement, call.arguments[1]!, loc);
     }
     return {
       kind: "regexIntrinsic",

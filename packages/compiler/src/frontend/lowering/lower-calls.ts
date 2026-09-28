@@ -302,21 +302,7 @@ export interface GenericInstance {
         // default when the argument was omitted or undefined, then the
         // pattern destructures the picked value (declareParams).
         const raw = lowerer.irTypeOf(param.name);
-        // A DYNAMIC-TIER pattern source (`function f({} = a)` with
-        // `a: any` — jsval for island values, dyn for the checked-dynamic
-        // dyn): the slot holds its tier's undefined DIRECTLY, so the ABI
-        // is the slot itself — no synthesized union; the prologue tests
-        // undefined at runtime (declareParams).
-        if (raw.kind === "dyn" || raw.kind === "jsval") {
-          return { type: raw, mode: "omittable", bodyType: raw };
-        }
-        const bodyType = lowerer.stripUndefinedArm(raw);
-        lowerer.checkDefaultParamBodyType(param, bodyType);
-        const abi = bodyType.kind === "union" ? lowerer.withUndefinedArmOf(bodyType) : lowerer.withUndefinedArm(bodyType);
-        if (!abi) {
-          lowerer.badType(param.name, lowerer.typeOf(param.name)); // defensive: unknown union id
-        }
-        return { type: abi, mode: "omittable", bodyType };
+        return defaultParameterShape(lowerer, param, raw);
       }
       return { type: lowerer.runtimeOptionalBindingType(param.name, lowerer.irTypeOf(param.name)), mode: "required" };
     }
@@ -349,39 +335,7 @@ export interface GenericInstance {
     }
     if (param.initializer) {
       const raw = lowerer.irTypeOf(param.name);
-      // A DYNAMIC-TIER defaulted param (`function f(x = a)` with `a: any`
-      // — tsc types x any; jsval for island values, dyn for the checked-
-      // dynamic dyn): the slot holds its tier's undefined directly, so
-      // the ABI is the slot itself and the prologue's default test is the
-      // runtime undefined test (declareParams).
-      if (raw.kind === "dyn" || raw.kind === "jsval") {
-        return { type: raw, mode: "omittable", bodyType: raw };
-      }
-      // A default that may ITSELF be undefined (`x = process.env.FOO`):
-      // tsc keeps undefined in the body's type, so there is nothing to
-      // narrow — the ABI union IS the body type and the prologue passes a
-      // present argument through unchanged (declareParams's pass-through
-      // branch). The generic strip-and-narrow below would demand a
-      // `string`-typed default and fence on the union re-tag.
-      if (lowerer.bareUndefinedArmedUnion(raw)) {
-        const initT = lowerer.mapTypeOf(lowerer.typeOf(param.initializer));
-        if (initT && (initT.kind === "undefinedT" || lowerer.bareUndefinedArmedUnion(initT))) {
-          return { type: raw, mode: "omittable", bodyType: raw };
-        }
-      }
-      const bodyType = lowerer.stripUndefinedArm(raw);
-      lowerer.checkDefaultParamBodyType(param, bodyType);
-      // A UNION body type (`tlds: string | string[] = "localhost"`) arms
-      // the ABI with undefined ON TOP of the body's arms; the prologue
-      // re-tags a present argument back into the body union (undefined
-      // sorts last among arm typeKeys in practice, so the mapping is
-      // usually the identity prefix — the interned retag helper handles
-      // any order).
-      const abi = bodyType.kind === "union" ? lowerer.withUndefinedArmOf(bodyType) : lowerer.withUndefinedArm(bodyType);
-      if (!abi) {
-        lowerer.badType(param.name, lowerer.typeOf(param.name)); // defensive: unknown union id
-      }
-      return { type: abi, mode: "omittable", bodyType };
+      return defaultParameterShape(lowerer, param, raw);
     }
     const type = lowerer.runtimeOptionalBindingType(param.name, lowerer.irTypeOf(param.name));
     if (type.kind === "void") {
@@ -429,20 +383,36 @@ export interface GenericInstance {
         if (mapped.kind !== "array") lowerer.badType(blameOf?.(declParam, i) ?? declParam.name, tsType);
         return { type: mapped, mode: "rest" };
       }
-      if (declParam.initializer) {
-        if (mapped.kind === "dyn" || mapped.kind === "jsval") {
-          return { type: mapped, mode: "omittable", bodyType: mapped };
-        }
-        const bodyType = lowerer.stripUndefinedArm(mapped);
-        lowerer.checkDefaultParamBodyType(declParam, bodyType);
-        return { type: lowerer.withUndefinedArm(bodyType), mode: "omittable", bodyType };
-      }
+      if (declParam.initializer) return defaultParameterShape(lowerer, declParam, mapped);
       if (declParam.questionToken && !lowerer.bareUndefinedArmedUnion(mapped)) {
         lowerer.unsupported("SC1090", declParam, `optional parameters of type '${lowerer.fmt(mapped)}'`);
       }
       return { type: mapped, mode: declParam.questionToken ? "omittable" : "required" };
     });
   }
+
+/** A default expression may itself yield undefined. Keep that arm in the
+ * body and parameter-property storage, including for literal `undefined`
+ * and void expressions: the general type mapper represents those as VOID,
+ * so checking only a mapped undefinedT silently erased a valid value.
+ * Shared by declared and instantiated signatures, including destructuring. */
+function defaultParameterShape(lowerer: Lowerer, param: ts.ParameterDeclaration, raw: IrType): ParamShape {
+  if (raw.kind === "dyn" || raw.kind === "jsval") {
+    return { type: raw, mode: "omittable", bodyType: raw };
+  }
+  if (lowerer.bareUndefinedArmedUnion(raw) && param.initializer) {
+    const initializer = lowerer.typeOf(param.initializer);
+    const parts = initializer.isUnionType() ? ts.constituentTypes(initializer) : [initializer];
+    if (parts.some((part) => (part.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Void)) !== 0)) {
+      return { type: raw, mode: "omittable", bodyType: raw };
+    }
+  }
+  const bodyType = lowerer.stripUndefinedArm(raw);
+  lowerer.checkDefaultParamBodyType(param, bodyType);
+  const abi = bodyType.kind === "union" ? lowerer.withUndefinedArmOf(bodyType) : lowerer.withUndefinedArm(bodyType);
+  if (!abi) lowerer.badType(param.name, lowerer.typeOf(param.name));
+  return { type: abi, mode: "omittable", bodyType };
+}
 
 /** The fences on a defaulted parameter's body type: it becomes the value
    * arm of the synthesized `T | undefined` ABI union, so it must be a valid

@@ -720,7 +720,11 @@ export function loadProgram(
       if (methods !== undefined) {
         const byClass = new Map(declarationOverloads.get(targetNorm) ?? []);
         byClass.set(localName, new Map([...methods].map(([name, signatures]) => [name, signatures.map((signature) => ({
-          parameters: signature.parameters.map((parameter) => ({ ...parameter, type: renameSelf(parameter.type) })),
+          parameters: signature.parameters.map((parameter) => ({
+            name: parameter.name,
+            type: renameSelf(parameter.type),
+            optional: parameter.optional,
+          })),
           returnType: renameSelf(signature.returnType),
         }))])));
         declarationOverloads.set(targetNorm, byClass);
@@ -782,8 +786,9 @@ export function loadProgram(
 /** tsc diagnostics (syntax + types), the supported-import fence, and the
  * module evaluation order: fills load.moduleOrder (the SourceFiles
  * themselves — the lowering consumes them directly) and returns the
- * preflight diagnostics. The lowerer runs only on programs that pass. */
-export function checkPreflight(load: LoadResult): ScrDiagnostic[] {
+ * preflight diagnostics. Preserve the caller's complete load shape when
+ * mutating it, including its owned services and disposal callback. */
+export function checkPreflight<T extends LoadResult>(load: T): ScrDiagnostic[] {
   const { diags, moduleOrder, startupCrash } = preflight7(load);
   load.moduleOrder = moduleOrder;
   load.startupCrash = startupCrash;
@@ -2018,7 +2023,8 @@ export function makeCycleAdmission(
       }
       sccVerdict.set(comp, reason);
     }
-    const clusterReason = sccVerdict.get(comp)!;
+    const clusterReason = sccVerdict.get(comp);
+    if (clusterReason === undefined) throw new Error("missing module-cycle verdict");
     if (clusterReason !== null) return clusterReason;
     const use = backEdgeUseOffence7(program, importer, e.stmt);
     if (use !== null) {

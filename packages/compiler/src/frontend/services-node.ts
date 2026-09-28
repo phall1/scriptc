@@ -1,8 +1,9 @@
 import { FrontendServices } from "./services.js";
 import { Ts7Api } from "./ts7/rpc-api.js";
+import { evaluateNodeComptime } from "./comptime-node.js";
 
 export function createNodeFrontendServices(): FrontendServices {
-  return new FrontendServices((options) => new Ts7Api(options));
+  return new FrontendServices((options) => new Ts7Api(options), process.cwd(), evaluateNodeComptime);
 }
 
 let shared: FrontendServices | undefined;

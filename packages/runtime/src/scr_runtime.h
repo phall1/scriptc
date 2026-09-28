@@ -1158,8 +1158,8 @@ ScrStr *scr_str_raw(ScrArr *raw, ScrArr *subs);
  * test() on a g/y-flagged regex aborts with a clear message.
  *
  * Ownership: subjects/replacements are BORROWED; string/array results
- * return +1. replace_all without /g and split on a pattern with capture
- * groups THROW catchable TypeErrors (callers are compiler-emitted pending
+ * return +1. replace_all without /g THROWS a catchable TypeError
+ * (callers are compiler-emitted pending
  * checks); every other failure mode aborts.
  */
 typedef struct ScrRegex {
@@ -1200,7 +1200,8 @@ ScrStr *scr_regex_flags(ScrRegex *re);        /* +1 */
 ScrStr *scr_regex_replace(ScrStr *s, ScrRegex *re, ScrStr *rep);
 /* replaceAll: throws Node's TypeError when /g is missing (may-throw). */
 ScrStr *scr_regex_replace_all(ScrStr *s, ScrRegex *re, ScrStr *rep);
-/* split: capture-free patterns only — capture groups throw (may-throw).
+/* split: captured substrings are interleaved with the split pieces;
+ * unmatched groups become present undefined elements, not holes.
  * limit uses ToUint32; the no-limit wrapper supplies 2^32-1. */
 ScrArr *scr_regex_split(ScrStr *s, ScrRegex *re);
 ScrArr *scr_regex_split_limit(ScrStr *s, ScrRegex *re, double limit);
@@ -3034,6 +3035,7 @@ void scr_fs_close(double fd);
 typedef struct ScrUrl ScrUrl;
 
 ScrUrl *scr_url_new(ScrStr *input); /* +1, or throws */
+ScrUrl *scr_url_new_base(ScrStr *input, ScrStr *base); /* +1, or throws */
 ScrUrl *scr_url_retain(ScrUrl *u);
 void scr_url_release(ScrUrl *u);
 void *scr_url_retain_v(void *p);

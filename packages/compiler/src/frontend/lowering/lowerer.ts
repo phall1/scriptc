@@ -1,5 +1,6 @@
 import type { FrontendServices } from "../services.js";
 import { InternalCompilerError } from "../../errors.js";
+import { defaultAfterUndefined, lowerStaticallyUndefinedArgument } from "./optional-arguments.js";
 import { ClassDynamicDispatch } from "./class-dynamic-dispatch.js";
 import { finalizeClassMethodValues } from "./class-method-values.js";
 /* AST + checker → IR.
@@ -8869,6 +8870,12 @@ export class Lowerer {
     const decls = rawDecls.filter((p) => !isThisParameter(p));
     const params: IrParam[] = [];
     const prologue: IrStmt[] = [];
+    const defaultValue = (node: ts.Expression, expected: IrType): IrExpr => {
+      const undefinedValue = lowerStaticallyUndefinedArgument(this, node);
+      if (undefinedValue === null) return this.lowerExprExpecting(node, expected);
+      const absent: IrExpr = { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc: locOf(node) };
+      return defaultAfterUndefined(undefinedValue, this.coerceInto(node, absent, expected));
+    };
     decls.forEach((decl, i) => {
       const shape = shapes[i]!;
       if (ts.isArrayBindingPattern(decl.name) || ts.isObjectBindingPattern(decl.name)) {
@@ -8895,7 +8902,7 @@ export class Lowerer {
             // dynamic dyn): the slot holds its tier's undefined directly,
             // so the default test is the runtime undefined test — then
             // the pattern destructures the picked value.
-            const dflt = this.lowerExprExpecting(decl.initializer, abi);
+            const dflt = defaultValue(decl.initializer, abi);
             const src = this.declareHiddenLocal("%psrc", abi);
             const inRef = (): IrExpr => ({ kind: "varRef", localId: slot.id, type: abi, loc });
             const isUndef: IrExpr =
@@ -8944,7 +8951,7 @@ export class Lowerer {
             }
           }
           if (!present) this.unsupported("SC1090", decl, "this parameter form"); // defensive: abi = bodyType + undefined by construction
-          const dflt = this.lowerExprExpecting(decl.initializer, shape.bodyType);
+          const dflt = defaultValue(decl.initializer, shape.bodyType);
           const src = this.declareHiddenLocal("%psrc", shape.bodyType);
           prologue.push({
             kind: "varDecl",
@@ -8975,7 +8982,7 @@ export class Lowerer {
             abi.kind === "jsval"
               ? { kind: "jsOp", op: "eq", args: [inRef(), { kind: "jsOp", op: "undefLit", args: [], type: JSVAL, loc }], type: BOOL, loc }
               : { kind: "dynTest", test: "undefined", value: inRef(), type: BOOL, loc };
-          const dflt = this.lowerExprExpecting(decl.initializer, abi);
+          const dflt = defaultValue(decl.initializer, abi);
           const body = this.declareLocal(decl.name, name, abi, true);
           prologue.push({
             kind: "varDecl",
@@ -8997,7 +9004,7 @@ export class Lowerer {
           // the body keeps the full `T | undefined` union (tsc's type),
           // so a present argument passes through unchanged and an omitted
           // one takes the default AS IS — no narrow on either branch.
-          const dflt = this.lowerExprExpecting(decl.initializer, abi);
+          const dflt = defaultValue(decl.initializer, abi);
           const body = this.declareLocal(decl.name, name, abi, true);
           prologue.push({
             kind: "varDecl",
@@ -9022,7 +9029,7 @@ export class Lowerer {
           // it), and every other arm maps by identity.
           const retag = this.unionRetagHelper(abi.unionId, shape.bodyType.unionId, loc);
           if (!retag) this.unsupported("SC1090", decl, "this parameter form"); // defensive
-          const dflt = this.lowerExprExpecting(decl.initializer, shape.bodyType);
+          const dflt = defaultValue(decl.initializer, shape.bodyType);
           const body = this.declareLocal(decl.name, name, shape.bodyType, true);
           prologue.push({
             kind: "varDecl",
@@ -9044,7 +9051,7 @@ export class Lowerer {
         // The default lowers BEFORE the body local binds, so a same-named
         // outer binding referenced in it can never resolve to the fresh
         // local (tsc separately rejects `x = x`).
-        const dflt = this.lowerExprExpecting(decl.initializer, shape.bodyType);
+        const dflt = defaultValue(decl.initializer, shape.bodyType);
         const body = this.declareLocal(decl.name, name, shape.bodyType, true);
         prologue.push({
           kind: "varDecl",

@@ -8,7 +8,7 @@ import tseslint from "typescript-eslint";
 const TS5_ISLANDS = [
   "packages/compiler/src/frontend/npm.ts",
   "packages/compiler/src/frontend/cjs-lexer.ts",
-  "packages/compiler/src/frontend/lowering/lower-comptime.ts",
+  "packages/compiler/src/frontend/comptime-node.ts",
   "packages/compiler/src/frontend/ts7/world-check.ts",
   // The standalone native parser compares source spans against TS5 as
   // a test oracle; no oracle node crosses into the native syntax passes.

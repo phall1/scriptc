@@ -52,6 +52,7 @@ interface PkgJson {
   types?: string;
   typings?: string;
   main?: string;
+  imports?: unknown;
   exports?: unknown;
   /** The workspace ROOT's member declaration: an array of directory globs
    * (or `{ packages: [...] }` — the tool-config twin of the same field). */
@@ -588,14 +589,14 @@ export function resolveProjectImport(fromFile: string, specifier: string): strin
   if (viaPaths !== null) return normalizeResolvedPath(viaPaths);
   const pkgDir = nearestPkgDir(dirname(resolve(fromFile)));
   if (pkgDir === null) return null;
-  const pkg = pkgJsonOf(pkgDir) as (PkgJson & { imports?: unknown; exports?: unknown; type?: string }) | null;
+  const pkg = pkgJsonOf(pkgDir);
   if (!pkg) return null;
   let target: string | null = null;
   if (specifier.startsWith("#")) {
     // Node's validity rule: only the bare "#" is never resolvable ("#/..."
     // matches "#/*"-pattern keys on current Node).
     if (specifier === "#") return null;
-    target = resolvePackageImports((pkg as { imports?: unknown }).imports, specifier, EXPORT_CONDITIONS);
+    target = resolvePackageImports(pkg.imports, specifier, EXPORT_CONDITIONS);
     // An imports target that is not "./"-relative is PACKAGE_RESOLVE'd as
     // a bare specifier (Node's PACKAGE_IMPORTS_EXPORTS_RESOLVE): the
     // project-internal half of that re-entry is the self-name rule below —

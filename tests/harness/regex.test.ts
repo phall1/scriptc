@@ -4,9 +4,6 @@
  * - The statefulness fence at runtime: test() on a g/y regex that flowed
  *   through a variable (the frontend only sees literal receivers) must
  *   abort with the fence message, never silently model lastIndex.
- * - split() on a pattern with capture groups: Node splices the captured
- *   values into the result — scriptc throws a catchable TypeError naming
- *   the limitation instead, so the caught branch is asserted here.
  * - The two size/stability pins: a regex-free program must not reference
  *   the regex runtime at all (byte-identical link line — its C names no
  *   ScrRegex symbol), and a regex-USING static binary pays libregexp
@@ -86,21 +83,6 @@ console.log(check(/a/g, "abc"));
     expect(err.stderr).toContain(
       "test() on a regex with the 'g' or 'y' flag is not supported",
     );
-  });
-
-  test("split() with capture groups throws a catchable TypeError (Node would splice them in)", async () => {
-    const r = await build(
-      "split-captures",
-      `try {
-  const parts = "a,b".split(/(,)/);
-  console.log("unreachable", parts.length);
-} catch {
-  console.log("caught");
-}
-`,
-    );
-    const { stdout } = await execFileAsync(r.binaryPath, []);
-    expect(stdout).toBe("caught\n");
   });
 
   test("a pattern the engine rejects aborts at first use with a SyntaxError message", async () => {

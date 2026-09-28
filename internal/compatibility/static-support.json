@@ -150,6 +150,7 @@
     { "chapter": "stream", "signatures": ["`writable` Type: {boolean}"], "status": "partial", "evidence": ["tests/corpus/2893-child-stdin-duplex.ts", "tests/corpus/2895-child-stdin-write-after-end.ts"] },
     { "chapter": "stream", "signatures": ["Event: `'drain'`"], "status": "partial", "evidence": ["tests/corpus/2894-child-stdin-backpressure.ts"] },
     { "chapter": "webstreams", "signatures": ["`readableStream.values([options])`"], "status": "partial", "evidence": ["tests/corpus/2862-web-readable-async-iteration.ts"] },
+    { "chapter": "url", "signatures": ["Class: `URL`"], "status": "partial", "evidence": ["tests/corpus/url-runtime-base.ts"] },
     { "chapter": "url", "signatures": ["`hash` Type: {string}", "`port` Type: {string}"], "status": "partial", "evidence": ["tests/corpus/2946-url-port-hash.ts"] },
     { "chapter": "util", "signatures": ["`util.promisify(original)`"], "status": "partial", "evidence": ["tests/corpus/1473-promisify-execfile.ts", "tests/corpus/1573-promisify-execfile-env-spread.ts", "tests/corpus/2912-promisify-fs-readfile.ts"] },
     { "chapter": "typescript", "symbols": ["type"], "status": "supported", "evidence": ["tests/corpus/2702-type-import-link-static/main.ts", "tests/corpus/2703-type-import-link-static-reexport/main.ts", "tests/corpus/2704-type-import-link-static-success/main.ts", "tests/corpus/2707-type-import-link-static-default-reexport/main.ts", "tests/harness/errors.test.ts"] }

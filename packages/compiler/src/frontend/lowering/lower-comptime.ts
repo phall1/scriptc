@@ -1,9 +1,7 @@
 import { InternalCompilerError } from "../../errors.js";
-/* comptime(fn) lowering: run the closed callback under node:vm at compile
+/* comptime(fn) lowering: run the closed callback through the host at compile
  * time (with a timeout), then bake the produced VALUE into the IR as
  * literals — records/arrays/unions included, subject to comptimeBakeable. */
-import vm from "node:vm";
-import ts5 from "typescript5";
 import * as ts from "../ts7/adapter.js";
 import type { Lowerer } from "./lowerer.js";
 import { IrExpr, IrType } from "../../ir/ir.js";
@@ -81,24 +79,13 @@ function describeComptimeValue(v: unknown): string {
           `(only number, string, boolean, arrays, and records lower to literals)`,
       );
     }
-    // 5. Evaluate. Types are stripped first (the extracted text is
-    // TypeScript; vm runs JavaScript), then the IIFE runs in a FRESH vm
-    // context: JS intrinsics (JSON, Object, ...) exist, the compiler's own
-    // globals and the shipped declarations' Node-isms (console, process,
-    // fs, setTimeout) do not — so a comptime island cannot leak side effects
-    // into the build, and the vm timeout bounds runaway loops.
-    // The TRANSPILE ISLAND: typescript@7.0.2 ships no client-side
-    // transpiler, so this one call keeps 5.9.3 (adapter.ts's two-world
-    // rules — only TEXT crosses this boundary, never AST/checker objects).
-    const js = ts5.transpileModule(`(${cb.getText()})()`, {
-      compilerOptions: { target: ts5.ScriptTarget.ESNext },
-    }).outputText;
+    // 5. The host executes the extracted callback under a finite budget.
+    // Shared lowering stays independent of the host's execution engine;
+    // capture checks and result validation apply to every evaluator.
     let result: unknown;
     try {
-      // `console: undefined` shadows V8's built-in per-context console (a
-      // silent inspector hook) so no code path can log into the void — the
-      // capture walk already rejects direct uses with a better message.
-      result = vm.runInNewContext(js, { console: undefined }, { timeout: COMPTIME_TIMEOUT_MS });
+      if (lowerer.frontendServices === undefined) throw new Error("compile-time evaluation requires frontend services");
+      result = lowerer.frontendServices.evaluateComptime(cb.getText(), COMPTIME_TIMEOUT_MS);
     } catch (e) {
       // Errors born inside the vm context (and the timeout error itself) are
       // CROSS-REALM objects — `instanceof Error` is false — so the code and

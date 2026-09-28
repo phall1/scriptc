@@ -2350,6 +2350,7 @@ export type IrLibFn =
    * encoded slashes, and non-empty hosts. url.pathToFileURL resolves the
    * path (getcwd) and never throws. */
   | "url.new"
+  | "url.newBase"
   | "url.protocol"
   | "url.origin"
   | "url.username"
@@ -7855,6 +7856,7 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "fs.readdirSync",
   "fs.readdirTypesSync",
   "url.new",
+  "url.newBase",
   "url.fileURLToPathUrl",
   "url.fileURLToPathStr",
   // The win32-target flavor of pathToFileURL (same runtime entry point —

@@ -6,7 +6,7 @@ import { InternalCompilerError } from "../../errors.js";
  * hierarchy registration. */
 import * as ts from "../ts7/adapter.js";
 import type { Lowerer } from "./lowerer.js";
-import { BOOL, DATE_T, DYN, F64, bytesOf, IrClassDef, IrExpr, IrFunction, IrLocal, IrParam, IrStmt, IrType, JSVAL, RUNTIME_EMITTER_CLASS, RUNTIME_ERROR_CLASSES, RUNTIME_STREAM_CLASSES, STRING, SrcLoc, UNDEFINED_T, URL_T, VOID, arrayOf, isSupportedMapKey, isSupportedMapValue, isSupportedSetElem, isUnitType, typeEquals } from "../../ir/ir.js";
+import { BOOL, DATE_T, DYN, F64, bytesOf, IrClassDef, IrExpr, IrFunction, IrLocal, IrParam, IrStmt, IrType, JSVAL, RUNTIME_EMITTER_CLASS, RUNTIME_ERROR_CLASSES, RUNTIME_STREAM_CLASSES, STRING, SrcLoc, UNDEFINED_T, VOID, arrayOf, isSupportedMapKey, isSupportedMapValue, isSupportedSetElem, isUnitType, typeEquals } from "../../ir/ir.js";
 import { MAX_GENERIC_INSTANCES, appendImplicitUndefinedReturn, bodyReadsArguments, generatorMeta, genericCallInstance, implicitAnyParamSymbolsOf, implicitCallInstance, implicitMonoFile, omittedArgFor, type GenericFnInfo, type ParamShape } from "./lower-calls.js";
 import { isGenericCallableMemberType, jsOpenObjectType, typeKey } from "../type-mapper.js";
 import { cjsClassExprWholeExportOf, isCjsJsFile, isJsSourceFile, isModuleExportsAccess, isNodeTypesPath, locOf } from "../program.js";
@@ -25,7 +25,7 @@ import { lowerHttpAgentNew, lowerHttpServerNew } from "./lower-server.js";
 import { ambientNsRootOf, ambientUndefReadType, ambientUndefVarRootOf, ambientUndefinedFnSymbolOf, fenceEarlyAliasUse, fenceEarlyNsMemberRef, nsMemberIdentOf, nsUndefRead } from "./lower-namespaces.js";
 import { mixinResultBindingClassOf, type MixinInstanceInfo } from "./lower-mixins.js";
 import { rejectStaticThis } from "./static-this.js";
-import { staticForkString } from "../fork-target.js";
+import { lowerUrlNew } from "./lower-url.js";
 import { isNativeProxyInitializer, lowerNativeProxy } from "./expressions/native-proxy.js";
 
 export interface ClassInfo {
@@ -5230,9 +5230,7 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
       if (streamInfo) return lowerStreamNew(lowerer, expr, streamInfo);
       // `new URL(input)`: the WHATWG URL class (stdlib/@types provenance —
       // a user's own `class URL` resolves through classBySymbol below).
-      // One string argument; invalid input throws a catchable TypeError
-      // ("Invalid URL"), like Node. The lib's base-argument form
-      // typechecks and is fenced here.
+      // Invalid input or base throws a catchable TypeError ("Invalid URL").
       // `new RegExp(pattern, flags?)`: runtime construction over the same
       // libregexp engine the literals ride. The pattern compiles EAGERLY,
       // so bad input throws Node's catchable SyntaxError at construction.
@@ -5260,35 +5258,7 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
         return { kind: "libCall", fn: "regex.new", args: [pattern, flags], type: { kind: "regex" }, loc };
       }
       if (symbol && symbol.name === "URL" && lowerer.isStdlibSymbol(symbol)) {
-        const args = expr.arguments ?? [];
-        if (args.length === 2) {
-          const folded = staticForkString(lowerer.program, expr);
-          if (folded === null) {
-            lowerer.noLowering(
-              "new URL with a runtime-valued base",
-              expr,
-              "a relative literal or statically resolvable template against import.meta.url compiles",
-              symbol,
-            );
-          }
-          return {
-            kind: "libCall",
-            fn: "url.new",
-            args: [{ kind: "strLit", value: folded, type: STRING, loc }],
-            type: URL_T,
-            loc,
-          };
-        }
-        if (args.length !== 1) {
-          lowerer.noLowering(
-            `new URL with ${args.length} argument${args.length === 1 ? "" : "s"}`,
-            expr,
-            "one absolute-URL string, or a static relative input against import.meta.url, is supported",
-            symbol,
-          );
-        }
-        const input = lowerer.lowerExprExpecting(args[0]!, STRING);
-        return { kind: "libCall", fn: "url.new", args: [input], type: URL_T, loc };
+        return lowerUrlNew(lowerer, expr);
       }
       // `new URLSearchParams(init?)`: the WHATWG list (stdlib provenance —
       // see lowerSearchParamsNew for the lowered init shapes).

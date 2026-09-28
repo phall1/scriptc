@@ -361,6 +361,7 @@ export const LIB_FN_SYMS: Record<string, string> = {
   // constructions +1; url.new, the fileURLToPath pair, the win32
   // pathToFileURL flavor, and sp.fromPairs throw catchably (may-throw).
   "url.new": "scr_url_new",
+  "url.newBase": "scr_url_new_base",
   "url.protocol": "scr_url_protocol",
   "url.origin": "scr_url_origin",
   "url.username": "scr_url_username",

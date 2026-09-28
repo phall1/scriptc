@@ -6,16 +6,25 @@ import { isBundlerCjsCandidate } from "./npm-static-rewrite-syntax.js";
 import * as syntax from "./npm-static-declaration-syntax.js";
 import type { SourceFile } from "./ts7/ast-types.js";
 
+/** Evaluate an isolated, self-contained TypeScript callback under a finite
+ * budget. Hosts supply execution; shared lowering owns capture checks and
+ * verifies the returned value before baking it into the program. */
+export type ComptimeEvaluator = (source: string, timeoutMs: number) => unknown;
+
 /** Own the syntax and semantic services for a compiler client. The supplied
- * connection factory is the only process boundary; parsing, projection and
- * filesystem resolution use the same implementation in native and Node
- * clients. Program hosts belong to the caller that creates them. */
+ * connection factory and optional evaluator provide host operations;
+ * parsing, projection and filesystem resolution share their implementation
+ * across native and Node clients. Program hosts belong to their callers. */
 export class FrontendServices {
   private parser: Ts7SourceParser | undefined;
   private readonly fetchAnalyzer: NpmFetchAnalyzer;
   private closed = false;
 
-  constructor(private readonly createApi: Ts7ApiFactory, private readonly cwd = process.cwd()) {
+  constructor(
+    private readonly createApi: Ts7ApiFactory,
+    private readonly cwd = process.cwd(),
+    private readonly comptimeEvaluator: ComptimeEvaluator | undefined = undefined,
+  ) {
     this.fetchAnalyzer = new NpmFetchAnalyzer((options) => createApi({ ...options, collectTiming: false }), cwd);
   }
 
@@ -25,6 +34,11 @@ export class FrontendServices {
     return this.parser ??= new Ts7SourceParser((options) => this.createApi({ ...options, collectTiming: false }), this.cwd);
   }
   parse(path: string, source: string, kind: Ts7SourceKind): SourceFile { return this.sourceParser().parse(path, source, kind); }
+  evaluateComptime(source: string, timeoutMs: number): unknown {
+    this.ensureOpen();
+    if (this.comptimeEvaluator === undefined) throw new Error("this compiler host does not provide compile-time evaluation");
+    return this.comptimeEvaluator(source, timeoutMs);
+  }
   createProgramHost(options?: Ts7HostOptions): Ts7Host {
     this.ensureOpen();
     return new Ts7Host(this.createApi, { ...options, cwd: options?.cwd ?? this.cwd });
