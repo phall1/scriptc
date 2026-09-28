@@ -1705,7 +1705,7 @@ export function lowerTupleReadMethodCall(
   if (lowerer.chainBlocked(access, call)) return null;
   const method = access.name.text;
   const search = method === "includes" || method === "indexOf" || method === "lastIndexOf";
-  if (method !== "slice" && method !== "map" && method !== "flatMap" && !search) return null;
+  if (method !== "slice" && method !== "map" && method !== "flatMap" && method !== "join" && !search) return null;
   if (!lowerer.isStdlibMember(access)) return null;
   let receiverIr = tupleReceiver?.type ?? lowerer.mapTypeOf(lowerer.typeOf(access.expression));
   let receiver: IrExpr | null = tupleReceiver ?? null;
@@ -1718,6 +1718,21 @@ export function lowerTupleReadMethodCall(
   const shape = lowerer.shapes.get(receiverIr.shapeId);
   if (!shape?.tuple) return null;
   receiver ??= lowerer.lowerExpr(access.expression);
+  if (method === "join") {
+    // Object.entries can retain its dynamic array representation behind a
+    // checker tuple. Native tuples box as live references, so separator
+    // evaluation can still mutate their elements before join reads them.
+    // An unchecked outer array read must validate its optional payload
+    // before passing the tuple to the runtime.
+    if (receiver.type.kind === "union") {
+      receiver = lowerer.coerceInto(access.expression, receiver, receiverIr);
+    }
+    const converted = lowerer.coerceInto(access.expression, receiver, DYN);
+    const boxed: IrExpr = converted.kind === "dynFrom" && converted.value.type.kind === "record"
+      ? { ...converted, liveRef: true } : converted;
+    const joined = lowerDynDispatchMethodCall(lowerer, call, access, boxed, true);
+    return joined ? lowerer.coerceInto(call, joined, STRING) : null;
+  }
   if (receiver.type.kind !== "record") return null;
   const fields = [...shape.fields].sort((a, b) => Number(a.name) - Number(b.name));
   const arms: IrType[] = [];
@@ -6015,7 +6030,10 @@ function mapFromSeedValue(lowerer: Lowerer, seed: IrExpr, mapT: IrType & { kind:
         `Object.fromEntries over '${lowerer.fmt(argIr)}' (the tuple's '${lowerer.fmt(valT)}' value cannot flow into the '${lowerer.fmt(iv)}' signature slot)`,
       );
     }
-    const receiver = lowerer.lowerExpr(argNode);
+    // Enumeration/filtering may keep the array in checked-dynamic storage.
+    // Validate its tuple layout before calling a helper with a native-array
+    // ABI; opaque tuple values themselves retain their original references.
+    const receiver = lowerer.lowerExprExpecting(argNode, argIr);
     const key = `obj.fromEntries:${argIr.elem.shapeId}:${resultT.shapeId}`;
     let helper = lowerer.arrHofHelpers.get(key);
     if (!helper) {

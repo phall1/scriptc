@@ -27,9 +27,26 @@ export function checkAstViews(file: AstFile): void {
   let methods = 0;
   let calls = 0;
   let binaries = 0;
+  let bodies = 0;
+  let names = 0;
+  let modifiers = 0;
   for (let index = 1; index < file.wire.nodeCount; index++) {
     if (file.wire.kind(index) === KIND_NODE_LIST) continue;
     const node: Node = file.node(index);
+    // These are the structural views used by the production frontend.
+    // The cast changes the checker surface while the actual value remains
+    // one AstNode; reads must use its original lazy getters and caches.
+    const body = (node as { body?: Node }).body;
+    const name = (node as { name?: Node })["name"];
+    const flags = (node as { modifiers?: readonly Node[] }).modifiers;
+    check(body === node.body && name === node.name, "structural child getter identity");
+    check(flags === node.modifiers, "structural list getter identity");
+    if (body !== undefined) { bodies++; check(body.parent === node, "structural body parent"); }
+    if (name !== undefined) { names++; check(name.parent === node, "structural name parent"); }
+    if (flags !== undefined) {
+      modifiers += flags.length;
+      for (const modifier of flags) check(modifier.parent === node, "structural modifier parent");
+    }
     if (ts.isIdentifier(node)) {
       identifiers += node.text.length;
       check(node.getSourceFile() === source, "identifier source identity");
@@ -56,5 +73,6 @@ export function checkAstViews(file: AstFile): void {
     }
   }
   check(identifiers > 10 && strings > 0 && declarations > 3 && methods > 0 && calls > 0 && binaries > 0, "typed AST paths executed");
+  check(bodies > 0 && names > 0 && modifiers > 0, "structural AST paths executed");
   check(tokenToString(SyntaxKind.EqualsGreaterThanToken) === "=>", "native token lookup");
 }

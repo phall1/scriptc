@@ -9212,6 +9212,15 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
         `Object.${member} over a shape carrying get/set accessor properties (Node lists the accessor names${member === "keys" ? "" : " and invokes the getters"} — the static key walk cannot; read the properties explicitly)`,
       );
     }
+    // unknown[] uses the checked-dynamic array representation. Enumerate
+    // a live view of the record so values retain their identities and the
+    // result never pretends to be a native vector or an island array.
+    if (member === "values" && lowerer.mapTypeOf(lowerer.typeOf(call))?.kind === "dyn") {
+      let receiver = lowerer.coerceToExpected(lowerer.lowerExpr(argNode), DYN);
+      if (receiver.type.kind !== "dyn") lowerer.badType(argNode, lowerer.typeOf(argNode));
+      if (receiver.kind === "dynFrom" && receiver.value.type.kind === "record") receiver = { ...receiver, liveRef: true };
+      return { kind: "libCall", fn: "dyn.objValues", args: [receiver], type: DYN, loc: locOf(call) };
+    }
     if (shape.indexValue) {
       // Index-signature (overflow-carrying) shapes: the runtime walk —
       // declared fields first, then the overflow in JS own-key order

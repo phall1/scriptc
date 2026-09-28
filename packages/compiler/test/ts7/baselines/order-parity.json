@@ -8638,9 +8638,27 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/declared-index-spread.ts": {
+   "order": [
+    "<repo>/tests/corpus/declared-index-spread.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/error-cause-writes.js": {
+   "order": [
+    "<repo>/tests/corpus/error-cause-writes.js"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/field-assignment-values.ts": {
    "order": [
     "<repo>/tests/corpus/field-assignment-values.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/file-handle-values.ts": {
+   "order": [
+    "<repo>/tests/corpus/file-handle-values.ts"
    ],
    "diags": []
   },
@@ -8762,6 +8780,19 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/module-fallback-functions/main.js": {
+   "order": [
+    "<repo>/tests/corpus/module-fallback-functions/platform.js",
+    "<repo>/tests/corpus/module-fallback-functions/main.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/narrowed-nullish-values.ts": {
+   "order": [
+    "<repo>/tests/corpus/narrowed-nullish-values.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/native-buffer-coercion.js": {
    "order": [
     "<repo>/tests/corpus/native-buffer-coercion.js"
@@ -8771,6 +8802,30 @@
   "<repo>/tests/corpus/native-class-cache.js": {
    "order": [
     "<repo>/tests/corpus/native-class-cache.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-factory-records.js": {
+   "order": [
+    "<repo>/tests/corpus/native-factory-records.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-method-values.js": {
+   "order": [
+    "<repo>/tests/corpus/native-method-values.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-method-values.ts": {
+   "order": [
+    "<repo>/tests/corpus/native-method-values.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-property-names.ts": {
+   "order": [
+    "<repo>/tests/corpus/native-property-names.ts"
    ],
    "diags": []
   },
@@ -8822,10 +8877,46 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/record-unknown-values.ts": {
+   "order": [
+    "<repo>/tests/corpus/record-unknown-values.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/renderer-export-dictionaries.js": {
+   "order": [
+    "<repo>/tests/corpus/renderer-export-dictionaries.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/renderer-null-state.js": {
+   "order": [
+    "<repo>/tests/corpus/renderer-null-state.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/renderer-specializations.js": {
+   "order": [
+    "<repo>/tests/corpus/renderer-specializations.js"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/static-field-updates/main.ts": {
    "order": [
     "<repo>/tests/corpus/static-field-updates/counter.ts",
     "<repo>/tests/corpus/static-field-updates/main.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/stored-native-builtins.js": {
+   "order": [
+    "<repo>/tests/corpus/stored-native-builtins.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/stored-object-helpers.js": {
+   "order": [
+    "<repo>/tests/corpus/stored-object-helpers.js"
    ],
    "diags": []
   },
@@ -8838,6 +8929,12 @@
   "<repo>/tests/corpus/string-pattern-replacement.ts": {
    "order": [
     "<repo>/tests/corpus/string-pattern-replacement.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/structural-class-properties.ts": {
+   "order": [
+    "<repo>/tests/corpus/structural-class-properties.ts"
    ],
    "diags": []
   },
@@ -8880,6 +8977,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/typed-rest-callables.ts": {
+   "order": [
+    "<repo>/tests/corpus/typed-rest-callables.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/typedarray-native-inputs.js": {
    "order": [
     "<repo>/tests/corpus/typedarray-native-inputs.js"
@@ -8892,9 +8995,27 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/union-record-structural-copy.ts": {
+   "order": [
+    "<repo>/tests/corpus/union-record-structural-copy.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/unknown-collections.ts": {
    "order": [
     "<repo>/tests/corpus/unknown-collections.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/unknown-object-enumeration.ts": {
+   "order": [
+    "<repo>/tests/corpus/unknown-object-enumeration.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/unknown-record-views.ts": {
+   "order": [
+    "<repo>/tests/corpus/unknown-record-views.ts"
    ],
    "diags": []
   },
@@ -10810,85 +10931,6 @@
   "<repo>/tests/fixtures/node-types/url-getters.ts": {
    "order": [
     "<repo>/tests/fixtures/node-types/url-getters.ts"
-   ],
-   "diags": []
-  },
-  "<repo>/tests/corpus/native-factory-records.js": {
-   "order": [
-    "<repo>/tests/corpus/native-factory-records.js"
-   ],
-   "diags": []
-  },
-  "<repo>/tests/corpus/native-method-values.js": {
-   "order": [
-    "<repo>/tests/corpus/native-method-values.js"
-   ],
-   "diags": []
-  },
-  "<repo>/tests/corpus/native-method-values.ts": {
-   "order": [
-    "<repo>/tests/corpus/native-method-values.ts"
-   ],
-   "diags": []
-  },
-  "<repo>/tests/corpus/error-cause-writes.js": {
-   "order": [
-    "<repo>/tests/corpus/error-cause-writes.js"
-   ],
-   "diags": []
-  },
-  "<repo>/tests/corpus/renderer-null-state.js": {
-   "order": [
-    "<repo>/tests/corpus/renderer-null-state.js"
-   ],
-   "diags": []
-  },
-  "<repo>/tests/corpus/module-fallback-functions/main.js": {
-   "order": [
-    "<repo>/tests/corpus/module-fallback-functions/platform.js",
-    "<repo>/tests/corpus/module-fallback-functions/main.js"
-   ],
-   "diags": []
-  },
-  "<repo>/tests/corpus/stored-native-builtins.js": {
-   "order": [
-    "<repo>/tests/corpus/stored-native-builtins.js"
-   ],
-   "diags": []
-  },
-  "<repo>/tests/corpus/stored-object-helpers.js": {
-   "order": [
-    "<repo>/tests/corpus/stored-object-helpers.js"
-   ],
-   "diags": []
-  },
-  "<repo>/tests/corpus/typed-rest-callables.ts": {
-   "order": [
-    "<repo>/tests/corpus/typed-rest-callables.ts"
-   ],
-   "diags": []
-  },
-  "<repo>/tests/corpus/file-handle-values.ts": {
-   "order": [
-    "<repo>/tests/corpus/file-handle-values.ts"
-   ],
-   "diags": []
-  },
-  "<repo>/tests/corpus/renderer-specializations.js": {
-   "order": [
-    "<repo>/tests/corpus/renderer-specializations.js"
-   ],
-   "diags": []
-  },
-  "<repo>/tests/corpus/native-property-names.ts": {
-   "order": [
-    "<repo>/tests/corpus/native-property-names.ts"
-   ],
-   "diags": []
-  },
-  "<repo>/tests/corpus/renderer-export-dictionaries.js": {
-   "order": [
-    "<repo>/tests/corpus/renderer-export-dictionaries.js"
    ],
    "diags": []
   }

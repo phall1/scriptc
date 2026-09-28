@@ -144,6 +144,7 @@ export type WidthLift =
   | { how: "retag" }
   | { how: "liftWrap"; tag: number; arm: IrType }
   | { how: "width" }
+  | { how: "unionWidth" }
   | { how: "arr" }
   | { how: "tupleArr" }
   | { how: "emptyArr" }
@@ -5740,6 +5741,22 @@ export class Lowerer {
     if (dst.kind === "record" && src.kind === "record") {
       return this.recordWidthPlan(src.shapeId, dst.shapeId) !== null ? { how: "width" } : null;
     }
+    if (dst.kind === "record" && src.kind === "union") {
+      // A union of records can share a structural destination without
+      // choosing one payload layout in advance. Plan every arm: omitted
+      // destination fields need the ordinary optional-field completion,
+      // and a required field missing from any arm still rejects the pair.
+      const from = this.unions.get(src.unionId);
+      if (!from || from.arms.length === 0 || !from.arms.every((arm) => arm.kind === "record")) return null;
+      const key = `unionWidth:${src.unionId}:${dst.shapeId}`;
+      if (this.widthPlanning.has(key)) return { how: "unionWidth" };
+      this.widthPlanning.add(key);
+      try {
+        return from.arms.every((arm) => this.widthLiftPlan(arm, dst) !== null) ? { how: "unionWidth" } : null;
+      } finally {
+        this.widthPlanning.delete(key);
+      }
+    }
     if (dst.kind === "record" && src.kind === "object") {
       return this.objToRecordPlan(src.className, dst.shapeId) !== null ? { how: "objWidth" } : null;
     }
@@ -5811,6 +5828,11 @@ export class Lowerer {
         if (!helper) throw new InternalCompilerError("lowerer bug: planned width lift failed to intern");
         return { kind: "call", callee: helper, args: [value], type: dst, loc };
       }
+      case "unionWidth": {
+        if (dst.kind !== "record" || value.type.kind !== "union") throw new InternalCompilerError("lowerer bug: union width lift shape");
+        const helper = this.unionRecordWidthHelper(value.type.unionId, dst, loc);
+        return { kind: "call", callee: helper, args: [value], type: dst, loc };
+      }
       case "arr": {
         if (dst.kind !== "array" || value.type.kind !== "array") throw new InternalCompilerError("lowerer bug: arr lift shape");
         const helper = this.arrayWidthHelper(value.type, dst, loc);
@@ -5866,6 +5888,48 @@ export class Lowerer {
         throw new InternalCompilerError("unreachable");
       }
     }
+  }
+
+  /** Dispatch a structural copy from its runtime union tag. Each record
+   * payload has its own field offsets and optional-field completions;
+   * interpreting all arms as the destination layout would corrupt memory.
+   * Intern before descending so recursive record unions can reuse it. */
+  unionRecordWidthHelper(fromId: string, target: IrType & { kind: "record" }, loc: SrcLoc): string {
+    const key = `unionWidth:${fromId}:${target.shapeId}`;
+    const existing = this.widthHelpers.get(key);
+    if (existing) return existing;
+    const name = `%union.record.${this.widthHelpers.size}`;
+    this.widthHelpers.set(key, name);
+    const type: IrType = { kind: "union", unionId: fromId };
+    const value = varRef("value.0", type, loc);
+    const from = this.unions.get(fromId);
+    if (!from) throw new InternalCompilerError("lowerer bug: missing record union");
+    const body: IrStmt[] = [];
+    from.arms.forEach((arm, tag) => {
+      const lift = this.widthLiftPlan(arm, target);
+      if (!lift || arm.kind !== "record") throw new InternalCompilerError("lowerer bug: invalid union record plan");
+      const narrowed: IrExpr = { kind: "unionNarrow", unionId: fromId, tag, value, type: arm, loc };
+      body.push({
+        kind: "if",
+        cond: { kind: "unionIsTag", unionId: fromId, tag, negated: false, value, type: BOOL, loc },
+        then: [{ kind: "return", value: this.applyWidthLift(lift, narrowed, target, loc), loc }],
+        else_: null, loc,
+      });
+    });
+    body.push({
+      kind: "throw",
+      value: {
+        kind: "libCall", fn: "error.new",
+        args: [{ kind: "strLit", value: "invalid record union tag", type: STRING, loc }],
+        type: { kind: "object", className: "%TypeError" }, loc,
+      },
+      loc,
+    });
+    this.liftedFns.push({
+      name, params: [{ localId: "value.0", name: "value", type }], returnType: target,
+      locals: [{ id: "value.0", name: "value", type, mutable: false }], body, loc,
+    });
+    return name;
   }
 
   /** Interned `%rec.width.<n>(r)` — builds the target shape from a source

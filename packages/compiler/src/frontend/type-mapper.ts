@@ -3804,6 +3804,16 @@ function mapRecordType(widened: ts.Type, ctx: TypeMapperCtx): IrType | null {
         shapeId: shapes.finalizeRecursive(widened, inner.fields, inner.indexValue, inner.declaredOrder),
       };
     }
+    // A record with no typed payload contract is a view of an existing
+    // object, including across parameters and returns. Building a native
+    // struct for it would copy a checked-dynamic object at each boundary
+    // and sever mutation/identity. Keep the same representation as unknown;
+    // constrained records and tuples retain their native layouts.
+    if (
+      (inner.fields.length > 0 || inner.indexValue !== undefined) &&
+      inner.fields.every((field) => field.type.kind === "dyn") &&
+      (inner.indexValue === undefined || inner.indexValue.kind === "dyn")
+    ) return DYN;
     return { kind: "record", shapeId: shapes.intern(inner.fields, false, inner.indexValue, inner.declaredOrder) };
   } finally {
     shapes.inProgress.delete(widened);

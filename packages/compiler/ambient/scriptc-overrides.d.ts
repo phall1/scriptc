@@ -26,10 +26,12 @@ interface String {
  * ArrayLike sources). A PRECISION override, not a divergence: the lowering
  * emits the field list statically and the values are exactly T[keyof T] —
  * without this the result would be `any`-typed and drag every downstream
- * use into the island. */
+ * use into the island. An opaque object has no statically known keys;
+ * its actual values remain unknown instead of becoming an impossible
+ * never payload. */
 interface ObjectConstructor {
-  values<T extends object>(o: T): Array<T[keyof T]>;
-  entries<T extends object>(o: T): Array<[string, T[keyof T]]>;
+  values<T extends object>(o: T): Array<keyof T extends never ? unknown : T[keyof T]>;
+  entries<T extends object>(o: T): Array<[string, keyof T extends never ? unknown : T[keyof T]]>;
 }
 
 /* `parse` returns `unknown`, not the lib's `any` — the dynamic boundary. A

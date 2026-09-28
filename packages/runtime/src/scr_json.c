@@ -3451,6 +3451,9 @@ ScrDyn *scr_json_parse(ScrStr *text) {
  * scoped to the call and unwound even when an exception is pending. */
 static ScrDyn *scr_json_callback(const ScrDyn *callback, const ScrDyn *holder,
                                  const ScrStr *key, ScrDyn *value) {
+  /* The same traversal serves records containing unknown values without a
+   * user callback. Keep toJSON, omission, and cycle handling in that walk. */
+  if (callback->kind == SCR_DYN_UNDEF) return scr_dyn_retain(value);
   ScrDyn *name = scr_dyn_new_str((ScrStr *)key);
   ScrDyn *args[] = { name, value };
   scr_dyn_this_push_dyn(holder);
@@ -3475,6 +3478,12 @@ static ScrStr *scr_json_index_key(size_t index) {
 
 /* Keys passed here come from our own index formatter or own-key walk. */
 static ScrDyn *scr_json_member(const ScrDyn *holder, const ScrStr *key) {
+  if (holder->kind == SCR_DYN_TYPED_REF) {
+    ScrDyn *view = scr_dyn_typed_ref_materialize(holder);
+    ScrDyn *member = scr_exc_pending() ? NULL : scr_json_member(view, key);
+    scr_dyn_release(view);
+    return member;
+  }
   if (holder->kind == SCR_DYN_ARR || holder->kind == SCR_DYN_BYTES) {
     size_t index = 0;
     for (size_t i = 0; i < key->len; i++) index = index * 10 + (size_t)(key->data[i] - '0');
@@ -3607,21 +3616,18 @@ static ScrDyn *scr_json_buffer_view(const ScrDyn *value) {
 static ScrDyn *scr_json_replace(const ScrDyn *holder, const ScrStr *key, const ScrDyn *replacer) {
   ScrDyn *value = scr_json_member(holder, key);
   if (!value) return NULL;
-  if (value->kind == SCR_DYN_TYPED_REF) {
-    ScrDyn *view = scr_dyn_typed_ref_materialize(value);
+  /* Inspect a typed reference without replacing its live identity. Later
+   * members must read the source again after a callback mutates it. */
+  ScrDyn *view = value->kind == SCR_DYN_TYPED_REF ? scr_dyn_typed_ref_materialize(value) : NULL;
+  const ScrDyn *inspected = view ? view : value;
+  if (scr_exc_pending()) { scr_dyn_release(view); scr_dyn_release(value); return NULL; }
+  if (inspected->kind == SCR_DYN_BYTES && inspected->buffer) {
+    ScrDyn *converted = scr_json_buffer_view(inspected);
     scr_dyn_release(value);
-    value = view;
-  }
-  if (value->kind == SCR_DYN_BYTES && value->buffer) {
-    ScrDyn *view = scr_json_buffer_view(value);
-    scr_dyn_release(value);
-    value = view;
-  } else if (value->kind == SCR_DYN_OBJ) {
-    ScrDyn *method = scr_dyn_obj_read(value, "toJSON", 6);
-    if (!method) {
-      scr_dyn_release(value);
-      return NULL;
-    }
+    value = converted;
+  } else if (inspected->kind == SCR_DYN_OBJ) {
+    ScrDyn *method = scr_dyn_obj_read(inspected, "toJSON", 6);
+    if (!method) { scr_dyn_release(view); scr_dyn_release(value); return NULL; }
     if (method->kind == SCR_DYN_FUNC) {
       ScrDyn *name = scr_dyn_new_str((ScrStr *)key);
       ScrDyn *args[] = { name };
@@ -3631,10 +3637,11 @@ static ScrDyn *scr_json_replace(const ScrDyn *holder, const ScrStr *key, const S
       scr_dyn_release(method);
       scr_dyn_release(name);
       scr_dyn_release(value);
-      if (!converted) return NULL;
       value = converted;
     } else scr_dyn_release(method);
   }
+  scr_dyn_release(view);
+  if (!value) return NULL;
   ScrDyn *result = scr_json_callback(replacer, holder, key, value);
   scr_dyn_release(value);
   return result;
@@ -3653,28 +3660,32 @@ static void scr_json_gap(ScrJsonBuf *buffer, const ScrStr *gap, size_t depth) {
 static bool scr_json_replaced_write(ScrJsonBuf *buffer, const ScrDyn *value,
                                    const ScrDyn *replacer, const ScrStr *gap, size_t depth) {
   if (!scr_json_callback_depth(depth)) return false;
-  if (value->kind == SCR_DYN_TYPED_REF) {
-    ScrDyn *view = scr_dyn_typed_ref_materialize(value);
-    bool ok = scr_json_replaced_write(buffer, view, replacer, gap, depth);
-    scr_dyn_release(view);
-    return ok;
-  }
-  if (value->kind != SCR_DYN_OBJ && value->kind != SCR_DYN_ARR && value->kind != SCR_DYN_BYTES) {
+  ScrDyn *view = value->kind == SCR_DYN_TYPED_REF ? scr_dyn_typed_ref_materialize(value) : NULL;
+  const ScrDyn *observed = view ? view : value;
+  if (scr_exc_pending()) { scr_dyn_release(view); return false; }
+  if (observed->kind != SCR_DYN_OBJ && observed->kind != SCR_DYN_ARR && observed->kind != SCR_DYN_BYTES) {
     /* Engine objects need an engine callback bridge, not an opaque JSON
      * splice: that would silently skip all their children. */
-    if (value->kind == SCR_DYN_JSVAL) {
+    if (observed->kind == SCR_DYN_JSVAL && replacer->kind != SCR_DYN_UNDEF) {
       const char *message = "JSON replacers over engine-held values are not supported yet";
       scr_throw_error_msg(SCR_ERR_ERROR, message, strlen(message));
+      scr_dyn_release(view);
       return false;
     }
-    scr_dyn_json_write(buffer, value);
+    scr_dyn_json_write(buffer, observed);
+    scr_dyn_release(view);
     return !scr_exc_pending();
   }
-  bool array = value->kind == SCR_DYN_ARR;
-  if (!scr_jb_enter(buffer, value, array)) return false;
+  bool array = observed->kind == SCR_DYN_ARR;
+  /* Different capsules may refer to the same native container. Detect
+   * cycles by the original payload, while sibling references remain legal
+   * after the current frame leaves the traversal stack. */
+  const void *identity = view ? value->v.typed_ref.ptr : (const void *)value;
+  if (!scr_jb_enter(buffer, identity, array)) { scr_dyn_release(view); return false; }
   scr_jb_putc(buffer, array ? '[' : '{');
-  ScrDyn *keys = array ? NULL : scr_dyn_obj_keys(value);
-  size_t length = array ? value->v.arr.len : keys->v.arr.len;
+  ScrDyn *keys = array ? NULL : scr_dyn_obj_keys(observed);
+  if (scr_exc_pending()) { scr_dyn_release(keys); scr_dyn_release(view); scr_jb_leave(buffer); return false; }
+  size_t length = array ? observed->v.arr.len : keys->v.arr.len;
   bool first = true;
   bool ok = true;
   for (size_t i = 0; i < length; i++) {
@@ -3703,6 +3714,7 @@ static bool scr_json_replaced_write(ScrJsonBuf *buffer, const ScrDyn *value,
     if (!ok) break;
   }
   scr_dyn_release(keys);
+  scr_dyn_release(view);
   scr_jb_leave(buffer);
   if (!ok) return false;
   if (!first) scr_json_gap(buffer, gap, depth);

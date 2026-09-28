@@ -5829,6 +5829,21 @@ export function isJsonStringifySafeType(
   return isJsonSafeAt(t, getRecord, getUnion, true, false, new Set());
 }
 
+/** A JSON-shaped container with unknown payloads needs the runtime JSON
+ * traversal. Its declared structure can be boxed, but payloads may carry
+ * omitted values, toJSON methods, or cycles. This predicate does not widen
+ * the type-directed serializer, checked-island boundary, or root-undefined
+ * contract; callers must select the checked runtime traversal explicitly. */
+export function isJsonStringifyDynamicType(
+  t: IrType,
+  getRecord: (shapeId: string) => IrRecordShape | undefined,
+  getUnion: (unionId: string) => IrUnionDef | undefined,
+): boolean {
+  return (t.kind === "record" || t.kind === "array" || t.kind === "union") &&
+    isJsonSafeAt(t, getRecord, getUnion, true, false, new Set(), true) &&
+    !isJsonStringifySafeType(t, getRecord, getUnion);
+}
+
 /** The recursion shared by checked JSON conversion and stringification.
  * Ordinary record fields always admit undefined by dropping the key. Array
  * and tuple slots admit it only for stringification, which writes null. */

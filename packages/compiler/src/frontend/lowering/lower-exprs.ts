@@ -11,7 +11,7 @@ import { pathToFileURL } from "node:url";
 import type { Lowerer } from "./lowerer.js";
 import { OBJECT_CALLABLE_VALUES } from "./surfaces.js";
 import { wasiGuestPath } from "../../wasi-paths.js";
-import { BIGINT_T, BOOL, CAUGHT, DYN, DYN_HANDLE_KINDS, F64, IrExpr, IrFunction, IrJsOp, IrLocal, IrRecordShape, IrStmt, IrType, JSVAL, NULL_T, REF_TRUTHY_KINDS, REGEX, RUNTIME_ERROR_CLASSES, SEARCH_PARAMS_T, STRING, SrcLoc, UNDEFINED_T, VOID, arrayOf, canAdaptDynFuncTo, canDynCheckTo, canBoxFuncIntoDyn, funcOf, isDynTypedRefType, isJsonSafeType, isSupportedArrayElem, isUnitType, jsOpResultKind, shapeHasAccessorSlots, typeEquals, typeKey, unionContainerArmsOk } from "../../ir/ir.js";
+import { BIGINT_T, BOOL, CAUGHT, DYN, DYN_HANDLE_KINDS, F64, IrExpr, IrFunction, IrJsOp, IrLocal, IrRecordShape, IrStmt, IrType, JSVAL, NULL_T, REF_TRUTHY_KINDS, REGEX, RUNTIME_ERROR_CLASSES, SEARCH_PARAMS_T, STRING, SrcLoc, UNDEFINED_T, VOID, arrayOf, canAdaptDynFuncTo, canDynCheckTo, canBoxFuncIntoDyn, funcOf, isDynTypedRefType, isSupportedArrayElem, isUnitType, jsOpResultKind, shapeHasAccessorSlots, typeEquals, typeKey, unionContainerArmsOk } from "../../ir/ir.js";
 import { cjsClassExprWholeExportOf, cjsExportAssignmentOf, cjsExportDiscardReason, isCjsExportTableLiteral, isCjsJsFile, isJsSourceFile, isModuleExportsAccess, isNodeEsmFile, locOf } from "../program.js";
 import { ARRAY_METHODS, builtinConstLit, builtinFenceHintOf, builtinModuleConstOf, builtinModulesArrayLit, builtinModuleFnOf, COMPOUND_ASSIGN_OPS, CompoundOp, ISLAND_SURFACE, isChildSurfaceMember, MAP_METHODS, NARROW_FIRST, SET_METHODS, STRING_INDEX_METHODS, STR_METHODS, UNSUPPORTED_EXPR, sideEffectFreeOptionValue, stdlibGlobalNameOf } from "./surfaces.js";
 import { UNSUPPORTED, blockedBindingUseDiag, requiresDynamicPackageDiag, unsupportedDiag } from "../../diagnostics/diagnostic.js";
@@ -2337,10 +2337,14 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
       );
       if (!ctxArray && emptyUntypedArrayArm(expr.whenTrue) && !emptyUntypedArrayArm(expr.whenFalse)) {
         elseRaw = lowerer.lowerExpr(expr.whenFalse);
-        thenRaw = withRuntimeOptionalNarrowed(lowerer, runtimeTrueIds, () => lowerArm(expr.whenTrue, elseRaw.type));
+        thenRaw = withRuntimeOptionalNarrowed(lowerer, runtimeTrueIds,
+          () => lowerArm(expr.whenTrue, elseRaw.type.kind === "dyn" && ownArrayJoin ? ownArrayJoin : elseRaw.type));
       } else {
         thenRaw = lowerTrueArm();
-        elseRaw = lowerArm(expr.whenFalse, thenRaw.type);
+        // A checked-dynamic producer (Object.entries(...).filter(...))
+        // can still have a precise checker array type. Empty literal arms
+        // must adopt that element layout before the checked array boundary.
+        elseRaw = lowerArm(expr.whenFalse, thenRaw.type.kind === "dyn" && ownArrayJoin ? ownArrayJoin : thenRaw.type);
       }
       // The ternary's IR type is normally the checker's own: it collapses
       // same-kind literal unions ("a" | "b" → string) and forms tagged
@@ -3001,109 +3005,25 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
     if (type.kind !== "union" && rest.length > 1 && rest.some((arm) => typeEquals(arm, type))) {
       const helper = lowerer.narrowedArmHelper(left.type.unionId, type, loc);
       if (helper !== null) {
-        const stmts: IrStmt[] = [];
-        let stable = left;
-        if (!isSafeToRepeat(left)) {
-          const local = lowerer.declareHiddenLocal("%nullish", left.type);
-          stmts.push({ kind: "varDecl", localId: local.id, init: left, loc });
-          stable = varRef(local.id, left.type, loc);
-        }
-        const unitTags = def.arms
-          .map((arm, tag) => ({ arm, tag }))
-          .filter(({ arm }) => isUnitType(arm))
-          .map(({ tag }) => tag);
-        let isNullish: IrExpr = { kind: "unionIsTag", unionId: left.type.unionId, tag: unitTags[0]!, negated: false, value: stable, type: BOOL, loc };
-        for (const tag of unitTags.slice(1)) {
-          isNullish = {
-            kind: "logical",
-            op: "||",
-            left: isNullish,
-            right: { kind: "unionIsTag", unionId: left.type.unionId, tag, negated: false, value: stable, type: BOOL, loc },
-            type: BOOL,
-            loc,
-          };
-        }
-        const result: IrExpr = {
-          kind: "ternary",
-          cond: isNullish,
-          then: lowerer.lowerExprExpecting(expr.right, type),
-          else_: { kind: "call", callee: helper, args: [stable], type, loc },
-          type,
-          loc,
-        };
-        return stmts.length === 0 ? result : { kind: "seqExpr", stmts, result, type, loc };
+        return nullishBranches(lowerer, left, left.type, def.arms, type, loc,
+          () => lowerer.lowerExprExpecting(expr.right, type),
+          (stable) => ({ kind: "call", callee: helper, args: [stable], type, loc }));
       }
     }
     // A default may change the union or widen its records. Test the
     // original tag before coercing: converting the whole left first can
     // lose nullish arms, and evaluating the default eagerly loses laziness.
     if (type.kind === "union") {
-      const leftT = left.type;
-      const armPairs = rest.map((a) => ({ arm: a, src: lowerer.armTag(leftT.unionId, a), dst: lowerer.armTag(type.unionId, a) }));
-      if (rest.length > 0 && armPairs.every((pair) => pair.src >= 0 &&
-        (pair.dst >= 0 || lowerer.widthLiftPlan(pair.arm, type) !== null))) {
-        const stmts: IrStmt[] = [];
-        let stable = left;
-        if (!isSafeToRepeat(left)) {
-          const local = lowerer.declareHiddenLocal("%nullish", leftT);
-          stmts.push({ kind: "varDecl", localId: local.id, init: left, loc });
-          stable = varRef(local.id, leftT, loc);
-        }
-        const unitTags = def.arms
-          .map((arm, tag) => ({ arm, tag }))
-          .filter(({ arm }) => isUnitType(arm))
-          .map(({ tag }) => tag);
-        let isNullish: IrExpr = {
-          kind: "unionIsTag",
-          unionId: leftT.unionId,
-          tag: unitTags[0]!,
-          negated: false,
-          value: stable,
-          type: BOOL,
-          loc,
-        };
-        for (const tag of unitTags.slice(1)) {
-          isNullish = {
-            kind: "logical",
-            op: "||",
-            left: isNullish,
-            right: { kind: "unionIsTag", unionId: leftT.unionId, tag, negated: false, value: stable, type: BOOL, loc },
-            type: BOOL,
-            loc,
-          };
-        }
-        let present: IrExpr | null = null;
-        for (let i = armPairs.length - 1; i >= 0; i--) {
-          const pair = armPairs[i]!;
-          const arm: IrExpr = { kind: "unionNarrow", unionId: leftT.unionId, tag: pair.src, value: stable, type: pair.arm, loc };
-          const wrapped = lowerer.coerceInto(expr.left, arm, type);
-          present = present === null
-            ? wrapped
-            : {
-                kind: "ternary",
-                cond: { kind: "unionIsTag", unionId: leftT.unionId, tag: pair.src, negated: false, value: stable, type: BOOL, loc },
-                then: wrapped,
-                else_: present,
-                type,
-                loc,
-              };
-        }
-        const result: IrExpr = {
-          kind: "ternary",
-          cond: isNullish,
-          then: lowerer.lowerExprExpecting(expr.right, type),
-          else_: present!,
-          type,
-          loc,
-        };
-        return stmts.length === 0 ? result : { kind: "seqExpr", stmts, result, type, loc };
-      }
-      if (armPairs.every((p) => p.src >= 0 && p.dst >= 0)) {
-        const right = lowerer.lowerExprExpecting(expr.right, type);
-        if (isSafeToDiscard(right)) {
-          const helper = nullishRetagHelper(lowerer, leftT, type, loc);
-          return { kind: "call", callee: helper, args: [left, right], type, loc };
-        }
+      const retag = lowerer.unionRetagHelper(left.type.unionId, type.unionId, loc) ??
+        lowerer.narrowedRetagHelper(expr.left, left.type.unionId, type.unionId, loc);
+      if (retag !== null) {
+        // Narrowing may exclude a record/class arm while storage retains
+        // it. The checked retag traps that impossible arm, but only AFTER
+        // the original nullish test: null/undefined must reach the lazy
+        // default even when neither is representable in the result.
+        return nullishBranches(lowerer, left, left.type, def.arms, type, loc,
+          () => lowerer.lowerExprExpecting(expr.right, type),
+          (stable) => ({ kind: "call", callee: retag, args: [stable], type, loc }));
       }
     }
     lowerer.unsupported(
@@ -3115,62 +3035,37 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
     );
   }
 
-/** Interned `%nullish.retag.<n>(l, r)` — the retagged `??` (see
-   * lowerNullishCoalesce): unit-armed left answers the pre-evaluated
-   * default; every other arm narrows out of the left union and wraps into
-   * the result union's matching arm. */
-  function nullishRetagHelper(lowerer: Lowerer, leftT: IrType & { kind: "union" }, resT: IrType & { kind: "union" }, loc: SrcLoc): string {
-    const key = `nullish:${leftT.unionId}:${typeKey(resT)}`;
-    const existing = lowerer.widthHelpers.get(key);
-    if (existing) return existing;
-    const name = `%nullish.retag.${lowerer.widthHelpers.size}`;
-    lowerer.widthHelpers.set(key, name);
-    const def = lowerer.unions.get(leftT.unionId)!;
-
-    const l = varRef("l.0", leftT, loc);
-    const r = varRef("r.0", resT, loc);
-    const body: IrStmt[] = [];
-    def.arms.forEach((arm, tag) => {
-      if (isUnitType(arm)) return;
-      const dst = lowerer.armTag(resT.unionId, arm);
-      body.push({
-        kind: "if",
-        cond: { kind: "unionIsTag", unionId: leftT.unionId, tag, negated: false, value: l, type: BOOL, loc },
-        then: [
-          {
-            kind: "return",
-            value: {
-              kind: "unionWrap",
-              unionId: resT.unionId,
-              tag: dst,
-              value: { kind: "unionNarrow", unionId: leftT.unionId, tag, value: l, type: arm, loc },
-              type: resT,
-              loc,
-            },
-            loc,
-          },
-        ],
-        else_: null,
-        loc,
-      });
-    });
-    body.push({ kind: "return", value: r, loc });
-    lowerer.liftedFns.push({
-      name,
-      params: [
-        { localId: "l.0", name: "l", type: leftT },
-        { localId: "r.0", name: "r", type: resT },
-      ],
-      returnType: resT,
-      locals: [
-        { id: "l.0", name: "l", type: leftT, mutable: true },
-        { id: "r.0", name: "r", type: resT, mutable: true },
-      ],
-      body,
-      loc,
-    });
-    return name;
+/** Test the original storage before projecting its present value. Both
+ * branches are lazy, and an effectful receiver is evaluated exactly once.
+ * Keeping the original tags matters when the checker has removed an arm
+ * or the default changes the union's layout. */
+function nullishBranches(
+  lowerer: Lowerer,
+  left: IrExpr,
+  leftType: IrType & { kind: "union" },
+  arms: readonly IrType[],
+  type: IrType,
+  loc: SrcLoc,
+  absent: () => IrExpr,
+  present: (stable: IrExpr) => IrExpr,
+): IrExpr {
+  const stmts: IrStmt[] = [];
+  let stable = left;
+  if (!isSafeToRepeat(left)) {
+    const local = lowerer.declareHiddenLocal("%nullish", leftType);
+    stmts.push({ kind: "varDecl", localId: local.id, init: left, loc });
+    stable = varRef(local.id, leftType, loc);
   }
+  const unitTags = arms.flatMap((arm, tag) => isUnitType(arm) ? [tag] : []);
+  let test: IrExpr | null = null;
+  for (const tag of unitTags) {
+    const part: IrExpr = { kind: "unionIsTag", unionId: leftType.unionId, tag, negated: false, value: stable, type: BOOL, loc };
+    test = test === null ? part : { kind: "logical", op: "||", left: test, right: part, type: BOOL, loc };
+  }
+  if (test === null) throw new InternalCompilerError("nullish branch requires an absent arm");
+  const result: IrExpr = { kind: "ternary", cond: test, then: absent(), else_: present(stable), type, loc };
+  return stmts.length === 0 ? result : { kind: "seqExpr", stmts, result, type, loc };
+}
 
 
 /** A CONDITION-position expression: the result is consumed as a bool
@@ -4405,6 +4300,13 @@ export function lowerOptionalNumber(
     // lowered representation, like the existing any[] array-method path.
     const checkerArray = lowerer.checkerArrayValue(expr.expression);
     if (checkerArray) receiverIr = checkerArray.type;
+    if (receiverIr?.kind === "object") {
+      const key = recordKeyLiteralText(expr.argumentExpression) ?? recordKeyTypeLiteralText(lowerer, expr.argumentExpression);
+      if (key !== null) {
+        const target = classFieldTarget(lowerer, expr.expression, receiverIr, key);
+        if (target) return lowerer.maybeNarrow(lowerer.fieldGetExpr(target, locOf(expr), expr), expr);
+      }
+    }
     if (receiverIr?.kind === "jsval") {
       // Dispatch follows the RUNTIME world (383(d)): a checker-'any'
       // receiver whose value LOWERED checked-dynamic (`bag.list[0]` where
@@ -4532,13 +4434,8 @@ export function lowerOptionalNumber(
         // Number, bool, and DYN keys stringify (ToPropertyKey) — the
         // dyn-keyed read `catchWarning[warning.name]` where the property
         // chain itself lowered dyn.
-        const key: IrExpr | null =
-          rawKey.type.kind === "string"
-            ? rawKey
-            : rawKey.type.kind === "f64" || rawKey.type.kind === "bool" || rawKey.type.kind === "dyn"
-              ? { kind: "toString", operand: rawKey, type: STRING, loc: rawKey.loc }
-              : null;
-        if (key) {
+        const key = lowerRecordPropertyKey(lowerer, rawKey, expr.argumentExpression);
+        if (key.type.kind === "string") {
           const opt = hasOptionalChainGuard(expr.expression);
           return lowerer.maybeNarrow(
             { kind: "dynKeyGet", key, ...(opt ? { optional: true as const } : {}), value: obj, type: DYN, loc: locOf(expr) },
@@ -4706,7 +4603,7 @@ export function lowerOptionalNumber(
     // can validate, and fences by name when it is not — an arrayGet over a
     // dyn receiver is never emitted (the validator ICE).
     if (arr.type.kind === "dyn") {
-      if (isJsonSafeType(receiverIr, (id) => lowerer.shapes.get(id), (id) => lowerer.unions.get(id))) {
+      if (canDynCheckTo(receiverIr, (id) => lowerer.shapes.get(id), (id) => lowerer.unions.get(id))) {
         arr = { kind: "dynCheck", value: arr, type: receiverIr, loc: locOf(expr) };
       } else {
         lowerer.unsupported(
@@ -4857,6 +4754,16 @@ export function lowerOptionalNumber(
       // index value (and therefore validates it); ===/!==, ||, and ?? need
       // to observe the missing value instead of throwing during that check.
       return includeUndefined ? read : lowerer.maybeNarrow(read, expr);
+    }
+    if (litKey !== null) {
+      const nominal = representedClassFieldTarget(lowerer, expr.expression, litKey, obj);
+      if (nominal) {
+        const read = lowerer.fieldGetExpr(nominal, loc, expr);
+        return includeUndefined ? read : lowerer.maybeNarrow(read, expr);
+      }
+    }
+    if (hasClassPayload(lowerer, obj.type)) {
+      lowerer.unsupported("SC1090", expr, "computed property reads through structural views of class instances (use a declared literal key)");
     }
     // Predicates can strengthen optional fields without changing the
     // receiver's stored layout. Use that layout for bracket reads just as
@@ -5266,8 +5173,7 @@ export function lowerElementCompound(lowerer: Lowerer, expr: ts.BinaryExpression
       const obj = lowerer.lowerExpr(target.expression);
       if (obj.type.kind === "dyn") {
         const loc = locOf(expr);
-        let key = lowerer.lowerExpr(target.argumentExpression);
-        if (key.type.kind === "f64") key = lowerer.ensureString(key, target.argumentExpression);
+        const key = lowerRecordPropertyKey(lowerer, lowerer.lowerExpr(target.argumentExpression), target.argumentExpression);
         if (key.type.kind !== "string") {
           lowerer.unsupported("SC1090", target.argumentExpression, "indexing with non-string or non-number keys");
         }
@@ -5280,6 +5186,20 @@ export function lowerElementCompound(lowerer: Lowerer, expr: ts.BinaryExpression
           );
         }
         return { kind: "exprStmt", expr: { kind: "libCall", fn: "dyn.keySet", args: [obj, key, value], type: VOID, loc }, loc };
+      }
+    }
+    if (receiverIr?.kind === "object" || receiverIr?.kind === "record") {
+      const key = recordKeyLiteralText(target.argumentExpression) ?? recordKeyTypeLiteralText(lowerer, target.argumentExpression);
+      if (key !== null) {
+        const receiver = lowerer.lowerExpr(target.expression);
+        const field = representedClassFieldTarget(lowerer, target.expression, key, receiver);
+        if (field) {
+          const value = lowerer.lowerExprExpecting(expr.right, field.fieldType);
+          return lowerer.fieldSetStmt(field, value, locOf(expr), target);
+        }
+        if (hasClassPayload(lowerer, receiver.type)) {
+          lowerer.unsupported("SC1090", target, "writing undeclared properties through structural views of class instances");
+        }
       }
     }
     // Typed-array element write `b[i] = v` — bytesSet: the value is an f64
@@ -5311,6 +5231,9 @@ export function lowerElementCompound(lowerer: Lowerer, expr: ts.BinaryExpression
       // a recordSet/recordKeySet over a jsval.
       if (shape) {
         const obj = lowerer.lowerExpr(target.expression);
+        if (hasClassPayload(lowerer, obj.type)) {
+          lowerer.unsupported("SC1090", target, "computed property writes through structural views of class instances (use a declared literal key)");
+        }
         if (obj.type.kind === "jsval") {
           const key = lowerer.jsvalIn(lowerer.lowerExpr(target.argumentExpression), target.argumentExpression);
           const value = lowerer.jsvalIn(lowerer.lowerExpr(expr.right), expr.right);
@@ -5794,6 +5717,19 @@ export function lowerTemplate(lowerer: Lowerer, expr: ts.TemplateExpression): Ir
         return lowerer.jsvalIn(inner, expr.expression);
       }
       const target = lowerer.mapTypeOf(targetTs0);
+      // Unknown-only record views use the checked-dynamic representation.
+      // A native record asserted to such a view still denotes the original
+      // object. Box a live reference instead of erasing the assertion and
+      // handing native storage to a checked-dynamic property operation.
+      if (target?.kind === "dyn" && (targetTs0.flags & ts.TypeFlags.Object) !== 0) {
+        const sourceShape = inner.type.kind === "record" ? lowerer.shapes.get(inner.type.shapeId) : undefined;
+        if (hasClassPayload(lowerer, inner.type) || sourceShape && shapeHasAccessorSlots(sourceShape)) {
+          lowerer.unsupported("SC1090", expr,
+            "opaque structural views of classes or accessor records (name the property's concrete type to retain native accessor dispatch)");
+        }
+        const boxed = lowerer.coerceInto(expr, inner, DYN);
+        return boxed.kind === "dynFrom" ? { ...boxed, liveRef: true } : boxed;
+      }
       // Collection assertions are interface views only: their backing
       // value must already have the same native key/element/value layout.
       // Erasing a mock or a different instantiation here would let member
@@ -5868,6 +5804,22 @@ export function lowerTemplate(lowerer: Lowerer, expr: ts.TemplateExpression): Ir
     const target = lowerer.mapTypeOf(targetTs);
     if (!target) lowerer.badType(expr.type, targetTs);
     if (target.kind === "dyn") return inner; // `as unknown`: erasure
+    // An all-`unknown`-fields record target (`err as { code?: unknown }`
+    // — the errno-probing idiom): there is nothing to validate (every
+    // field is unknown, exactly what the dyn value already answers) and
+    // nothing to build — the cast is pure typing, so it ERASES and the
+    // reads ride the dyn keyed read.
+    if (target.kind === "record") {
+      const shape = lowerer.shapes.get(target.shapeId);
+      if (
+        shape &&
+        !shape.tuple &&
+        shape.fields.every((f) => f.type.kind === "dyn") &&
+        (!shape.indexValue || shape.indexValue.kind === "dyn")
+      ) {
+        return inner;
+      }
+    }
     if (target.kind === "void" || !canDynCheckTo(target, (id) => lowerer.shapes.get(id), (id) => lowerer.unions.get(id))) {
       // Bare undefined-armed targets pass when every OTHER arm is
       // JSON-safe: the checked-dynamic tree holds a first-class undefined value now
@@ -5905,22 +5857,6 @@ export function lowerTemplate(lowerer: Lowerer, expr: ts.TemplateExpression): Ir
       // unwrap, identity preserved (DYN_HANDLE_KINDS).
       if (DYN_HANDLE_KINDS.has(target.kind)) {
         return { kind: "dynCheck", value: inner, type: target, loc: locOf(expr) };
-      }
-      // An all-`unknown`-fields record target (`err as { code?: unknown }`
-      // — the errno-probing idiom): there is nothing to validate (every
-      // field is unknown, exactly what the dyn value already answers) and
-      // nothing to build — the cast is pure typing, so it ERASES and the
-      // reads ride the dyn keyed read.
-      if (target.kind === "record") {
-        const shape = lowerer.shapes.get(target.shapeId);
-        if (
-          shape &&
-          !shape.tuple &&
-          shape.fields.every((f) => f.type.kind === "dyn") &&
-          (!shape.indexValue || shape.indexValue.kind === "dyn")
-        ) {
-          return inner;
-        }
       }
       lowerer.unsupported(
         "SC1090",
@@ -9445,6 +9381,88 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
     return { kind: "unionKeyGet", unionId, key, value, type, loc: locOf(expr) };
   }
 
+/** A structural TypeScript view does not change a nominal object's layout
+ * or accessor dispatch. Resolve the property from the represented class;
+ * the optional checker view must not turn its getter into a record read. */
+function classFieldTarget(
+  lowerer: Lowerer,
+  receiverNode: ts.Expression,
+  receiverType: IrType & { kind: "object" },
+  fieldName: string,
+  saved?: IrExpr,
+): FieldTarget | null {
+  const info = lowerer.classes.get(receiverType.className);
+  if (!info) {
+    // A receiver typed as a class whose collection deferred: the
+    // deferred diagnostics are what explains the miss.
+    lowerer.flushDeferredClass(receiverType.className);
+    return null;
+  }
+  const fieldType = info.fields.get(fieldName);
+  const lowerObjectReceiver = (): IrExpr => {
+    let obj = saved ?? lowerer.lowerExpr(receiverNode);
+    if (obj.type.kind === "union") {
+      const helper = lowerer.narrowedArmHelper(obj.type.unionId, receiverType, locOf(receiverNode));
+      obj = helper
+        ? { kind: "call", callee: helper, args: [obj], type: receiverType, loc: locOf(receiverNode) }
+        : lowerer.maybeNarrow(obj, receiverNode);
+    }
+    return obj.type.kind === "dyn" ? lowerer.coerceInto(receiverNode, obj, receiverType) : obj;
+  };
+  if (fieldName === "cause" && receiverType.className !== "%DOMException") {
+    let root = info;
+    while (root.base) root = root.base;
+    if (root.def.name === "%Error") {
+      return { container: "errorCause", obj: lowerObjectReceiver(), field: "cause", fieldType: DYN };
+    }
+  }
+  if (fieldType) {
+    const obj = lowerObjectReceiver();
+    return { container: "class", obj, className: receiverType.className, field: fieldName, fieldType };
+  }
+  // Accessor property: either half declared anywhere on the chain
+  // makes the name an accessor target (fields and accessors share a
+  // namespace — tsc rejects mixing them, so the halves agree on kind).
+  const getF = lowerer.findMethodOn(info, `get:${fieldName}`);
+  const setF = lowerer.findMethodOn(info, `set:${fieldName}`);
+  if (getF || setF) {
+    const obj = lowerObjectReceiver();
+    return {
+      container: "accessor",
+      obj,
+      className: receiverType.className,
+      field: fieldName,
+      fieldType: getF ? getF.sig.ret : setF!.sig.params[0]!.type,
+    };
+  }
+  return null;
+}
+
+/** A structural assertion can leave the value in its original class
+ * representation, including an unchecked array read's undefined arm. Only
+ * a single nominal payload has an unambiguous property layout. Validate
+ * that payload before dispatching a field or accessor; an absent receiver
+ * must never reach the backend as an object pointer. */
+function hasClassPayload(lowerer: Lowerer, type: IrType): boolean {
+  return type.kind === "object" || type.kind === "union" &&
+    (lowerer.unions.get(type.unionId)?.arms.some((arm) => arm.kind === "object") ?? false);
+}
+
+function representedClassFieldTarget(
+  lowerer: Lowerer,
+  receiverNode: ts.Expression,
+  fieldName: string,
+  value: IrExpr,
+): FieldTarget | null {
+  const arms = value.type.kind === "union"
+    ? lowerer.unions.get(value.type.unionId)?.arms.filter((arm) => !isUnitType(arm))
+    : [value.type];
+  const objectType = arms?.length === 1 ? arms[0] : null;
+  return objectType?.kind === "object"
+    ? classFieldTarget(lowerer, receiverNode, objectType, fieldName, value)
+    : null;
+}
+
 /** Recognizes `obj.field` as an assignable field target: receiver is a
    * known class instance OR a record, and the member is a field or (class
    * receivers) a declared accessor property. Returns the pieces of a
@@ -9453,60 +9471,15 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
     if (lowerer.chainBlocked(access)) return null;
     const receiverIr = lowerer.mapTypeOf(lowerer.typeOf(access.expression));
     if (receiverIr?.kind === "object") {
-      const info = lowerer.classes.get(receiverIr.className);
-      if (!info) {
-        // A receiver typed as a class whose collection deferred: the
-        // deferred diagnostics are what explains the miss.
-        lowerer.flushDeferredClass(receiverIr.className);
-        return null;
-      }
-      const fieldType = info.fields.get(access.name.text);
-      const lowerObjectReceiver = (): IrExpr => {
-        let obj = lowerer.lowerExpr(access.expression);
-        if (obj.type.kind === "union" && lowerer.armTag(obj.type.unionId, UNDEFINED_T) >= 0) {
-          const present = lowerer.stripUndefinedArm(obj.type);
-          const helper = present.kind === "object"
-            ? lowerer.narrowedArmHelper(obj.type.unionId, present, locOf(access.expression))
-            : null;
-          obj = helper
-            ? { kind: "call", callee: helper, args: [obj], type: present, loc: locOf(access.expression) }
-            : lowerer.maybeNarrow(obj, access.expression);
-        }
-        return obj.type.kind === "dyn" ? lowerer.coerceInto(access.expression, obj, receiverIr) : obj;
-      };
-      if (access.name.text === "cause" && receiverIr.className !== "%DOMException") {
-        let root = info;
-        while (root.base) root = root.base;
-        if (root.def.name === "%Error") {
-          return { container: "errorCause", obj: lowerObjectReceiver(), field: "cause", fieldType: DYN };
-        }
-      }
-      if (fieldType) {
-        const obj = lowerObjectReceiver();
-        return { container: "class", obj, className: receiverIr.className, field: access.name.text, fieldType };
-      }
-      // Accessor property: either half declared anywhere on the chain
-      // makes the name an accessor target (fields and accessors share a
-      // namespace — tsc rejects mixing them, so the halves agree on kind).
-      const getF = lowerer.findMethodOn(info, `get:${access.name.text}`);
-      const setF = lowerer.findMethodOn(info, `set:${access.name.text}`);
-      if (getF || setF) {
-        const obj = lowerObjectReceiver();
-        return {
-          container: "accessor",
-          obj,
-          className: receiverIr.className,
-          field: access.name.text,
-          fieldType: getF ? getF.sig.ret : setF!.sig.params[0]!.type,
-        };
-      }
-      return null;
+      return classFieldTarget(lowerer, access.expression, receiverIr, access.name.text);
     }
     if (receiverIr?.kind === "record") {
       const shape = lowerer.shapes.get(receiverIr.shapeId);
       const fieldType = shape?.fields.find((f) => f.name === access.name.text)?.type;
       if (fieldType) {
         let obj = lowerer.lowerExpr(access.expression);
+        const nominal = representedClassFieldTarget(lowerer, access.expression, access.name.text, obj);
+        if (nominal) return nominal;
         // A checker-record receiver whose VALUE stayed dyn (the erased
         // all-unknown-fields cast — `(err as { code?: unknown }).code`):
         // decline, and the dyn keyed-read fallback answers.

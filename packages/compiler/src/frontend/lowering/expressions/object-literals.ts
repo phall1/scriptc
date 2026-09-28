@@ -809,7 +809,7 @@ export function lowerObjectLiteral(lowerer: Lowerer, expr: ts.ObjectLiteralExpre
   // descriptor records with `any` values) — builds as a dyn OBJECT:
   // each field converts through the usual dyn boundary, and dynamic
   // consumers ride the keyed-dyn paths. TypeScript keeps the fence.
-  if ((!mapped || mapped.kind === "dyn") && isJsSourceFile(expr.getSourceFile())) {
+  if (mapped?.kind === "dyn" || (!mapped && isJsSourceFile(expr.getSourceFile()))) {
     return lowerDynObjectLiteral(lowerer, expr);
   }
   if (!mapped || mapped.kind !== "record") lowerer.badType(expr, tsType);
@@ -1090,15 +1090,10 @@ export function lowerObjectLiteral(lowerer: Lowerer, expr: ts.ObjectLiteralExpre
     }
   }
 
-  // A DECLARED-fields target built ENTIRELY from index-signature spreads —
-  // `{ ...Object.fromEntries(...), ...Object.fromEntries(...) }` typed
-  // AppConfig (the defaults-merge idiom over runtime-keyed sources): the
-  // field-by-field desugar cannot enumerate runtime keys, so the literal
-  // lowers as ONE interned merge-helper call — sources evaluate once each
-  // in source order (the call's argument order — computed sources
-  // included, no re-read), contributors apply in order with per-key
-  // dispatch onto the declared fields (JS last-write-wins). Divergence 68
-  // has the runtime rules (validated collisions, extra keys dropped).
+  // A declared destination combining fixed records and runtime-keyed
+  // sources needs both layouts. Apply each source before evaluating the
+  // next expression, with checked overflow collisions and optional-field
+  // completion. Extra runtime keys follow the declared-shape width policy.
   if (
     !shape.indexValue &&
     !shape.tuple &&
@@ -1107,7 +1102,7 @@ export function lowerObjectLiteral(lowerer: Lowerer, expr: ts.ObjectLiteralExpre
     expr.properties.every((p) => ts.isSpreadAssignment(p) && !conditionalSpreadOf(p.expression)) &&
     expr.properties.some((p) => {
       const t = lowerer.mapTypeOf(lowerer.typeOf((p as ts.SpreadAssignment).expression));
-      return t?.kind === "record" && !!lowerer.shapes.get(t.shapeId)?.indexValue;
+      return t?.kind === "dyn" || t?.kind === "record" && !!lowerer.shapes.get(t.shapeId)?.indexValue;
     })
   ) {
     return lowerDeclaredSpreadMerge(lowerer, expr, type, shape, loc);
@@ -1800,25 +1795,27 @@ export function conditionalSpreadOf(expr: ts.Expression):
  * untyped copy would store the lie) — and a key naming NO declared field
  * is DROPPED (the shape cannot represent it; Node keeps it invisibly —
  * divergence 68). Later contributors overwrite earlier ones
- * (last-write-wins). Sources must be PURE index-signature records. */
+ * (last-write-wins). Fixed, hybrid, and pure index records may contribute. */
 function lowerDeclaredSpreadMerge(lowerer: Lowerer, expr: ts.ObjectLiteralExpression,
   type: IrType & { kind: "record" },
   shape: IrRecordShape,
   loc: SrcLoc,): IrExpr {
-  interface Src { value: IrExpr; shapeId: string; iv: IrType }
+  interface Src { value: IrExpr; shapeId: string; shape?: IrRecordShape }
   const srcs: Src[] = [];
   for (const prop of expr.properties) {
     const spread = prop as ts.SpreadAssignment; // caller-checked: all spreads
     const value = lowerer.lowerExpr(spread.expression);
-    const srcShape = value.type.kind === "record" ? lowerer.shapes.get(value.type.shapeId) : undefined;
-    if (value.type.kind !== "record" || !srcShape?.indexValue || srcShape.tuple || srcShape.fields.length > 0) {
-      lowerer.unsupported(
-        "SC1090",
-        prop,
-        `object spread of '${lowerer.fmt(value.type)}' into '${lowerer.fmt(type)}' (only PURE index-signature records — Object.fromEntries results, Record<string, T> values — spread into a declared shape)`,
-      );
+    if (value.type.kind === "dyn") {
+      srcs.push({ value, shapeId: "dyn" });
+      continue;
     }
-    srcs.push({ value, shapeId: value.type.shapeId, iv: srcShape.indexValue });
+    const srcShape = value.type.kind === "record" ? lowerer.shapes.get(value.type.shapeId) : undefined;
+    if (value.type.kind !== "record" || !srcShape || srcShape.tuple) {
+      lowerer.unsupported("SC1090", prop,
+        `object spread of '${lowerer.fmt(value.type)}' into '${lowerer.fmt(type)}' (only records spread into a declared shape)`);
+    }
+    fenceAccessorSpreadSource(lowerer, prop, srcShape);
+    srcs.push({ value, shapeId: value.type.shapeId, shape: srcShape });
   }
   // Every target field must be optional: absent keys leave the undefined
   // arm, exactly the unset-optional representation.
@@ -1887,84 +1884,115 @@ function lowerDeclaredSpreadMerge(lowerer: Lowerer, expr: ts.ObjectLiteralExpres
       `object spread into '${lowerer.fmt(type)}' where the source's '${lowerer.fmt(iv)}' values cannot reach the '${lowerer.fmt(f.type)}' field '${f.name}' (the value slot must be the field type, 'unknown', or a union covering the field's arms)`,
     );
   };
-  const key = `declmerge:${type.shapeId}:${srcs.map((s) => s.shapeId).join(",")}`;
-  let helper = lowerer.widthHelpers.get(key);
-  if (!helper) {
-    helper = `%rec.declmerge.${lowerer.widthHelpers.size}`;
-
-    const outRef = varRef("out.0", type, loc);
-    const ksT = arrayOf(STRING);
-    const locals: IrLocal[] = [{ id: "out.0", name: "out", type, mutable: false }];
-    const params = srcs.map((s, j) => {
-      locals.push({ id: `s${j}.0`, name: `s${j}`, type: s.value.type, mutable: true });
-      return { localId: `s${j}.0`, name: `s${j}`, type: s.value.type };
-    });
-    const body: IrStmt[] = [
-      {
-        kind: "varDecl",
-        localId: "out.0",
-        init: {
-          kind: "recordLit",
-          fields: shape.fields.map((f) => ({ name: f.name, value: lowerer.wrappedUndefined(f.type, loc)! })),
-          type,
-          loc,
-        },
-        loc,
-      },
-    ];
-    srcs.forEach((s, j) => {
-      const sRef = varRef(`s${j}.0`, s.value.type, loc);
-      const kRef = varRef(`k${j}.0`, STRING, loc);
-      const vRef = varRef(`v${j}.0`, s.iv, loc);
-      locals.push(
-        { id: `ks${j}.0`, name: `ks${j}`, type: ksT, mutable: false },
-        { id: `i${j}.0`, name: `i${j}`, type: F64, mutable: true },
-        { id: `k${j}.0`, name: `k${j}`, type: STRING, mutable: false },
-        { id: `v${j}.0`, name: `v${j}`, type: s.iv, mutable: false },
-      );
-      // Per-key dispatch: if (k === "a") { write a } else if ... else drop.
-      const dispatch = shape.fields.reduceRight<IrStmt[]>((rest, f) => {
-        const write = (value: IrExpr): IrStmt => ({ kind: "recordSet", obj: outRef, shapeId: type.shapeId, field: f.name, value, loc });
-        const c = conv(s.iv, f, vRef);
-        const thenBody = "value" in c ? [write(c.value)] : c.stmts(write);
-        return [{
-          kind: "if",
-          cond: { kind: "strEq", negated: false, left: kRef, right: { kind: "strLit", value: f.name, type: STRING, loc }, type: BOOL, loc },
-          then: thenBody,
-          else_: rest.length > 0 ? rest : null,
-          loc,
-        }];
-      }, []);
-      body.push(
-        { kind: "varDecl", localId: `ks${j}.0`, init: { kind: "recordOvfKeys", obj: sRef, shapeId: s.shapeId, type: ksT, loc }, loc },
-        {
-          kind: "for",
-          init: { kind: "varDecl", localId: `i${j}.0`, init: numLit(0, loc), loc },
-          cond: { kind: "bin", op: "<", left: varRef(`i${j}.0`, F64, loc), right: { kind: "arrIntrinsic", method: "length", receiver: varRef(`ks${j}.0`, ksT, loc), args: [], type: F64, loc }, type: BOOL, loc },
-          update: { kind: "assign", localId: `i${j}.0`, value: { kind: "bin", op: "+", left: varRef(`i${j}.0`, F64, loc), right: numLit(1, loc), type: F64, loc }, loc },
-          body: [
-            { kind: "varDecl", localId: `k${j}.0`, init: { kind: "arrayGet", arr: varRef(`ks${j}.0`, ksT, loc), index: varRef(`i${j}.0`, F64, loc), type: STRING, loc }, loc },
-            { kind: "varDecl", localId: `v${j}.0`, init: { kind: "recordKeyGet", obj: sRef, shapeId: s.shapeId, key: kRef, overflowOnly: true, type: s.iv, loc }, loc },
-            ...dispatch,
-          ],
-          loc,
-        },
-      );
-    });
-    body.push({ kind: "return", value: outRef, loc });
-    lowerer.liftedFns.push({
-      name: helper,
-      params,
-      returnType: type,
-      locals,
-      body,
-      loc,
-    });
-    // Registered only after a fence-free build: a conv() fence mid-build
-    // must not leave a phantom helper behind for the next literal.
-    lowerer.widthHelpers.set(key, helper);
+  // Apply each source before evaluating the next expression. Passing all
+  // sources as one helper's arguments would read an earlier record after a
+  // later source factory mutated it, contrary to object spread evaluation.
+  const out = lowerer.declareHiddenLocal("%declMerge", type);
+  const outRef = varRef(out.id, type, loc);
+  const stmts: IrStmt[] = [{
+    kind: "varDecl", localId: out.id,
+    init: { kind: "recordLit", fields: shape.fields.map((f) => ({ name: f.name, value: lowerer.wrappedUndefined(f.type, loc)! })), type, loc },
+    loc,
+  }];
+  for (const source of srcs) {
+    const key = `declmerge-source:${type.shapeId}:${source.shapeId}`;
+    let helper = lowerer.widthHelpers.get(key);
+    if (!helper) {
+      helper = `%rec.declmerge.${lowerer.widthHelpers.size}`;
+      const sourceType = source.value.type;
+      const destination = varRef("out.0", type, loc);
+      const receiver = varRef("source.0", sourceType, loc);
+      const locals: IrLocal[] = [
+        { id: "out.0", name: "out", type, mutable: false },
+        { id: "source.0", name: "source", type: sourceType, mutable: false },
+      ];
+      const body: IrStmt[] = [];
+      if (!source.shape) {
+        // CopyDataProperties skips nullish sources, even when an erased
+        // record view supplies the checker's apparent object type.
+        body.push({
+          kind: "if", cond: { kind: "dynTest", test: "nullish", value: receiver, type: BOOL, loc },
+          then: [{ kind: "return", value: destination, loc }], else_: null, loc,
+        });
+      }
+      for (const field of source.shape?.fields ?? []) {
+        const target = shape.fields.find((candidate) => candidate.name === field.name);
+        if (!target) continue; // The declared destination drops extra keys.
+        const raw: IrExpr = { kind: "recordGet", obj: receiver, shapeId: source.shapeId, field: field.name, type: field.type, loc };
+        const lift = lowerer.widthLiftPlan(field.type, target.type);
+        if (!lift) {
+          lowerer.unsupported("SC1090", expr,
+            `object spread of field '${field.name}' from '${lowerer.fmt(field.type)}' into '${lowerer.fmt(target.type)}'`);
+        }
+        const write: IrStmt = {
+          kind: "recordSet", obj: destination, shapeId: type.shapeId, field: field.name,
+          value: lowerer.applyWidthLift(lift, raw, target.type, loc), loc,
+        };
+        // Optional declared fields use the established unset convention.
+        // A dyn field, including a present undefined, is a real property;
+        // its checked conversion runs and can overwrite an earlier value.
+        const absent = field.type.kind === "union" ? lowerer.armTag(field.type.unionId, UNDEFINED_T) : -1;
+        if (absent >= 0 && field.type.kind === "union") {
+          body.push({ kind: "if", cond: {
+            kind: "unionIsTag", unionId: field.type.unionId, tag: absent, negated: true, value: raw, type: BOOL, loc,
+          }, then: [write], else_: null, loc });
+        } else body.push(write);
+      }
+      const iv = source.shape ? source.shape.indexValue : DYN;
+      if (iv) {
+        const keysType = arrayOf(STRING);
+        const keys = varRef("keys.0", keysType, loc);
+        const index = varRef("index.0", F64, loc);
+        const name = varRef("key.0", STRING, loc);
+        const value = varRef("value.0", iv, loc);
+        locals.push(
+          { id: "keys.0", name: "keys", type: keysType, mutable: false },
+          { id: "index.0", name: "index", type: F64, mutable: true },
+          { id: "key.0", name: "key", type: STRING, mutable: false },
+          { id: "value.0", name: "value", type: iv, mutable: false },
+        );
+        const dispatch = shape.fields.reduceRight<IrStmt[]>((rest, field) => {
+          const write = (value: IrExpr): IrStmt => ({ kind: "recordSet", obj: destination, shapeId: type.shapeId, field: field.name, value, loc });
+          const converted = conv(iv, field, value);
+          return [{
+            kind: "if",
+            cond: { kind: "strEq", negated: false, left: name, right: { kind: "strLit", value: field.name, type: STRING, loc }, type: BOOL, loc },
+            then: "value" in converted ? [write(converted.value)] : converted.stmts(write),
+            else_: rest.length > 0 ? rest : null, loc,
+          }];
+        }, []);
+        body.push(
+          { kind: "varDecl", localId: "keys.0", init: source.shape
+            ? { kind: "recordOvfKeys", obj: receiver, shapeId: source.shapeId, type: keysType, loc }
+            : { kind: "dynCheck", value: { kind: "libCall", fn: "dyn.objKeys", args: [receiver], type: DYN, loc }, type: keysType, loc }, loc },
+          {
+            kind: "for",
+            init: { kind: "varDecl", localId: "index.0", init: numLit(0, loc), loc },
+            cond: { kind: "bin", op: "<", left: index, right: { kind: "arrIntrinsic", method: "length", receiver: keys, args: [], type: F64, loc }, type: BOOL, loc },
+            update: { kind: "assign", localId: "index.0", value: { kind: "bin", op: "+", left: index, right: numLit(1, loc), type: F64, loc }, loc },
+            body: [
+              { kind: "varDecl", localId: "key.0", init: { kind: "arrayGet", arr: keys, index, type: STRING, loc }, loc },
+              { kind: "varDecl", localId: "value.0", init: source.shape
+                ? { kind: "recordKeyGet", obj: receiver, shapeId: source.shapeId, key: name, overflowOnly: true, type: iv, loc }
+                : { kind: "dynKeyGet", value: receiver, key: name, type: DYN, loc }, loc },
+              ...dispatch,
+            ], loc,
+          },
+        );
+      }
+      body.push({ kind: "return", value: destination, loc });
+      lowerer.liftedFns.push({
+        name: helper,
+        params: [{ localId: "out.0", name: "out", type }, { localId: "source.0", name: "source", type: sourceType }],
+        returnType: type, locals, body, loc,
+      });
+      // Publish only a fully checked helper: rejected conversions must not
+      // leave an entry that a later literal could reuse without a body.
+      lowerer.widthHelpers.set(key, helper);
+    }
+    stmts.push({ kind: "exprStmt", expr: { kind: "call", callee: helper, args: [outRef, source.value], type, loc }, loc });
   }
-  return { kind: "call", callee: helper, args: srcs.map((s) => s.value), type, loc };
+  return { kind: "seqExpr", stmts, result: outRef, type, loc };
 }
 
 /** The value of a shorthand property (`{ x }`): the binding `x` refers to.

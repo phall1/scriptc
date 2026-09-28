@@ -38,6 +38,7 @@ import { CRYPTO_CIPHERS, CRYPTO_CONSTANTS, CRYPTO_CURVES, CRYPTO_HASHES } from "
 import { generatorMeta, timerStyleCallback, type ParamShape } from "./lower-calls.js";
 import { registerHttpClientFnBinding, voidizedCallback } from "./lower-server.js";
 import { pairsSnapshotHelper } from "./pairs-snapshot.js";
+import { isJsonStringifyDynamicType } from "../../ir/ir.js";
 import { bufEncoding } from "./containers/bytes.js";
 import { BOOL, BYTES_U8, CHILD_T, CHILDSTREAM_T, CHILDWRITER_T, CRYPTOHASH_T, CRYPTOHMAC_T, DYN, F64, FILEHANDLE_T, FSWATCHER_T, PROCSTREAM_T, IrExpr, IrFunction, IrLibFn, IrLocal, IrStmt, IrType, JSVAL, NULL_T, SEARCH_PARAMS_T, SPAWNRES_T, STRING, SrcLoc, UNDEFINED_T, VOID, arrayOf, canBoxFuncIntoDyn, canConvertToDyn, funcOf, isUnitType, typeEquals, typeKey } from "../../ir/ir.js";
 import { boolLit, countedFor, numLit, strLit, varRef } from "../../ir/build.js";
@@ -4881,6 +4882,21 @@ export function lowerForkCall(lowerer: Lowerer, expr: ts.CallExpression, loc: Sr
       }
       const optionalString = lowerOptionalStringifyRoot(lowerer, value, indent, loc);
       if (optionalString) return optionalString;
+      if (value.type.kind === "dyn" || isJsonStringifyDynamicType(value.type, (id) => lowerer.shapes.get(id), (id) => lowerer.unions.get(id))) {
+        // Keep the original containers live while the runtime visits them:
+        // a toJSON callback can mutate a later field, and shared/cyclic
+        // references must retain their identities throughout traversal.
+        const boxed: IrExpr = value.type.kind === "dyn" ? value : { kind: "dynFrom", value, liveRef: true, type: DYN, loc };
+        const raw: IrExpr = {
+          kind: "libCall", fn: "json.stringifyReplacer",
+          args: [boxed, dynUndefinedExpr(loc), { kind: "strLit", value: indent, type: STRING, loc }],
+          type: DYN, loc,
+        };
+        // Preserve the existing dyn-root string ABI, including its textual
+        // "undefined" result, while letting the runtime honor toJSON hooks.
+        return value.type.kind === "dyn" ? { kind: "toString", operand: raw, type: STRING, loc }
+          : { kind: "dynCheck", value: raw, type: lowerer.withUndefinedArm(STRING), loc };
+      }
       // An ISLAND value (`JSON.stringify(err)` on a package handle — the
       // island error-inspection idiom): the ENGINE's own JSON.stringify
       // runs, so key order, nesting, toJSON, and getters match Node by
@@ -4903,17 +4919,7 @@ export function lowerForkCall(lowerer: Lowerer, expr: ts.CallExpression, loc: Sr
         const raw: IrExpr = { kind: "jsOp", op: "callMethod", name: "stringify", args, type: JSVAL, loc };
         return { kind: "jsOp", op: "toStr", args: [raw], type: STRING, loc };
       }
-      // A dyn ROOT (`JSON.stringify(u)` over unknown / `{}` / `Object` /
-      // `object` slots, the JSON.parse round-trip) serializes with the
-      // runtime's dyn walker instead of a type-directed serializer — the
-      // dyn is JSON-representable by construction (non-JSON values fenced
-      // at their conversion INTO the slot). Two edges, both documented:
-      // a root the stringify drops (runtime undefined) produces the TEXT
-      // "undefined" where Node produces the undefined VALUE (tsc's own lib
-      // types the return `string`, so no static consumer can tell), and a
-      // runtime handle inside the tree throws (Node would walk its own
-      // enumerable props, which the handle does not model).
-      if (!lowerer.jsonStringifySafe(value.type) && value.type.kind !== "dyn") {
+      if (!lowerer.jsonStringifySafe(value.type)) {
         // Bare undefined-armed unions get their own wording: Node's
         // stringify of bare undefined is not a string at all — per-type
         // serialization cannot match that exactly, so the fence is

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { DYN, F64, HANDLE_KINDS, canDynCheckTo, isIslandCallbackParamType, isJsonSafeType, isJsonStringifySafeType, type IrRecordShape, type IrType, type IrUnionDef, POINTER_KINDS, STRING, arrayOf, typeEquals, typeKey } from "./ir.js";
+import { DYN, F64, HANDLE_KINDS, canDynCheckTo, isIslandCallbackParamType, isJsonSafeType, isJsonStringifySafeType, isJsonStringifyDynamicType, type IrRecordShape, type IrType, type IrUnionDef, POINTER_KINDS, STRING, arrayOf, typeEquals, typeKey } from "./ir.js";
 
 describe("IR kind sets", () => {
   test("keeps procStream as the scalar handle exception", () => {
@@ -62,6 +62,7 @@ describe("checked records with opaque payloads", () => {
     expect(canDynCheckTo(type, record, union)).toBe(true);
     expect(isJsonSafeType(type, record, union)).toBe(false);
     expect(isJsonStringifySafeType(type, record, union)).toBe(false);
+    expect(isJsonStringifyDynamicType(type, record, union)).toBe(true);
     expect(isIslandCallbackParamType(type, record, union)).toBe(false);
   });
 
@@ -74,5 +75,16 @@ describe("checked records with opaque payloads", () => {
     expect(canDynCheckTo({ kind: "record", shapeId: "unsafe" }, record, union)).toBe(false);
     expect(canDynCheckTo({ kind: "record", shapeId: "missing" }, record, union)).toBe(false);
     expect(canDynCheckTo({ kind: "union", unionId: "missing" }, record, union)).toBe(false);
+    expect(isJsonStringifyDynamicType({ kind: "record", shapeId: "unsafe" }, record, union)).toBe(false);
+    expect(isJsonStringifyDynamicType({ kind: "record", shapeId: "missing" }, record, union)).toBe(false);
+    expect(isJsonStringifyDynamicType({ kind: "union", unionId: "missing" }, record, union)).toBe(false);
+  });
+
+  test("runtime JSON traversal does not broaden root-undefined or island contracts", () => {
+    expect(isJsonStringifyDynamicType({ kind: "union", unionId: "optional" }, record, union)).toBe(false);
+    expect(isJsonStringifyDynamicType(DYN, record, union)).toBe(false);
+    expect(isJsonStringifyDynamicType(arrayOf(DYN), record, union)).toBe(true);
+    expect(isJsonStringifyDynamicType(arrayOf(STRING), record, union)).toBe(false);
+    expect(isJsonStringifyDynamicType(arrayOf({ kind: "union", unionId: "optional" }), record, union)).toBe(true);
   });
 });

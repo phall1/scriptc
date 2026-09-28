@@ -509,11 +509,13 @@ export function provenanceElidedConstDecl(lowerer: Lowerer, decl: ts.VariableDec
    * empty-slot sentinel still works (a scalar slot has no spare state:
    * every bit pattern is a legal value — the setTimeout-handle shape,
    * `clearTimeout(timer)` captured above `const timer = setTimeout(...)`).
-   * dyn/caught/jsval keep their existing capture fences. Unit-only types
+   * Checked-dynamic values use ref boxes with their own retain/release;
+   * a NULL payload remains distinct from the allocated undefined value.
+   * caught/jsval keep their existing capture fences. Unit-only types
    * never carry a useful forward capture. */
   const TDZ_KINDS = new Set<IrType["kind"]>([
     "func", "string", "array", "record", "object", "union", "map", "set", "regex", "bytes",
-    "f64", "bool",
+    "f64", "bool", "dyn",
     // The runtime HANDLE kinds — heap, refcounted, pointer-backed like
     // `object`, so the box's NULL sentinel works unchanged. The canonical
     // shape is the const's own initializer capturing the const:
