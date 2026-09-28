@@ -1,6 +1,7 @@
 import type { FrontendServices } from "../services.js";
 import { InternalCompilerError } from "../../errors.js";
 import { ClassDynamicDispatch } from "./class-dynamic-dispatch.js";
+import { finalizeClassMethodValues } from "./class-method-values.js";
 /* AST + checker → IR.
  *
  * Invariants:
@@ -3690,6 +3691,7 @@ export class Lowerer {
   /** Final retention, pruning, and module assembly shared by ordinary emit
    * and the retained reachability worklist. */
   finishModule(functions: IrFunction[]): LowerResult {
+    finalizeClassMethodValues(this, functions);
 
     // Globals typed by a class that never REGISTERED (a JS class whose
     // collection fenced — Symbol-keyed fields, an unsupported base): the
@@ -6582,6 +6584,7 @@ export class Lowerer {
               {
                 kind: "callValue",
                 callee: { kind: "varRef", localId: "f.0", type: fromT, loc },
+                receiver: { kind: "libCall", fn: "dyn.this", args: [], type: DYN, loc },
                 args: [],
                 type: fromT.ret,
                 loc,
@@ -6764,6 +6767,7 @@ export class Lowerer {
       const call: IrExpr = {
         kind: "callValue",
         callee: { kind: "varRef", localId: "f.0", type: fromT, loc },
+        receiver: { kind: "libCall", fn: "dyn.this", args: [], type: DYN, loc },
         args,
         type: fromT.ret,
         loc,
@@ -6918,6 +6922,7 @@ export class Lowerer {
           init: {
             kind: "callValue",
             callee: { kind: "varRef", localId: "f.0", type: fromT, loc },
+            receiver: { kind: "libCall", fn: "dyn.this", args: [], type: DYN, loc },
             args: params.map((p): IrExpr => ({ kind: "varRef", localId: p.localId, type: p.type, loc })),
             type: fromT.ret,
             loc,
