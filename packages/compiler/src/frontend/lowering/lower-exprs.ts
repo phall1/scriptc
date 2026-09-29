@@ -6742,7 +6742,7 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
             // dyn vs dyn (`context.actual !== context.exact` —
             // test/common's exit accounting): the runtime's whole-dyn
             // strict equality — scalars by value, units by kind,
-            // reference kinds by node identity (scr_dyn_strict_eq).
+            // reference kinds by identity (scr_dyn_strict_eq).
             scalarSide.type.kind === "dyn")
         ) {
           return {

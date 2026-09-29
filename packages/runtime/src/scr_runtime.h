@@ -3447,9 +3447,8 @@ struct ScrDyn {
       size_t cap;
       ScrDynEntry *entries;
       /* Optional identity of the typed record that produced this ordinary
-       * deep-copy snapshot. EventTarget uses it to recognize the same
-       * EventListenerObject across repeated static→dyn crossings without
-       * changing generic dyn-object `===` semantics. */
+       * snapshot. Empty records and callback interfaces can retain their
+       * source across repeated static-to-dynamic crossings. */
       /* Owned through source_access(source_identity, false). Callback
        * interfaces may request a fresh snapshot with the true arm. */
       void *source_identity;
@@ -3578,14 +3577,15 @@ ScrDyn *scr_dyn_new_num(double n);
 ScrDyn *scr_dyn_new_str(ScrStr *s);
 ScrDyn *scr_dyn_new_arr(void);
 ScrDyn *scr_dyn_new_obj(void);
-/* The ordinary deep-copy object plus a retained typed source. source_access
- * releases that source when materialize=false and returns a fresh dyn snapshot
- * when true. Generic dyn member reads and strict equality remain snapshot/node
- * based; callback-interface consumers opt into the live arm explicitly. */
+/* The ordinary object snapshot plus a retained typed source. source_access
+ * releases that source when materialize=false and returns a fresh snapshot
+ * when true. */
 ScrDyn *scr_dyn_new_obj_with_identity(
     void *source, void *(*source_retain)(void *),
     ScrDyn *(*source_access)(void *, bool materialize));
 bool scr_dyn_obj_same_source(const ScrDyn *a, const ScrDyn *b);
+void *scr_dyn_obj_source_cast(const ScrDyn *d,
+    ScrDyn *(*source_access)(void *, bool), void *(*source_retain)(void *));
 /* Object.create(null): the fresh null-prototype dictionary (see the
  * null_proto flavor flag above). */
 ScrDyn *scr_dyn_new_obj_null_proto(void);
@@ -3652,6 +3652,7 @@ ScrDyn *scr_dyn_arr_at(const ScrDyn *d, double i);
 void scr_dyn_obj_set(ScrDyn *obj, const char *key, size_t key_len, ScrDyn *value);
 ScrDyn *scr_dyn_define_property(ScrDyn *target, ScrDyn *key, ScrDyn *descriptor);
 ScrDyn *scr_dyn_get_own_property_descriptor(ScrDyn *target, ScrDyn *key);
+ScrDyn *scr_dyn_array_proto_call(ScrDyn *target, ScrStr *method, ScrDyn *args);
 /* The checked-dynamic keyed WRITE (`h.k = v` on a dyn receiver): OBJ sets
  * the member (JS: later writes win, insertion order); undefined/null and
  * non-object kinds throw Node's catchable TypeErrors (strict-mode

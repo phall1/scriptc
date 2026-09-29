@@ -1289,6 +1289,14 @@ export function jsonWriteHelper(emitter: CEmitter, t: IrType): string {
           break;
         }
         d.push(`  if (d->kind != SCR_DYN_OBJ) { scr_dyn_check_fail(path, ${want}, d); return NULL; }`);
+        if (shape.fields.length === 0 && !shape.indexValue) {
+          const sourceAccessor = `${emitter.toDynHelper(t)}_source_access`;
+          const rc = vAdapters(t);
+          d.push(`  {`);
+          d.push(`    ${cDecl(t, "sc_source")} = (${cType(t).trim()})scr_dyn_obj_source_cast(d, &${sourceAccessor}, &${rc.retain});`);
+          d.push(`    if (sc_source) return sc_source;`);
+          d.push(`  }`);
+        }
         d.push(`  ${cDecl(t, "r")} = ${mangleRecordNew(t.shapeId)}();`);
         for (const f of shape.fields) {
           const keyLit = cStringLiteral(Buffer.from(f.name, "utf8"));
@@ -1582,14 +1590,14 @@ export function jsonWriteHelper(emitter: CEmitter, t: IrType): string {
         const carriesListenerIdentity = shape.fields.some(
           (f) => f.name === "handleEvent" && f.type.kind === "func",
         );
-        if (carriesListenerIdentity) {
+        if ((shape.fields.length === 0 && !shape.indexValue) || carriesListenerIdentity) {
           const rc = vAdapters(t);
           sourceAccessor = {
             name: `${name}_source_access`,
             release: rc.release,
           };
           emitter.walkerProtos.push(
-            `static ScrDyn *${sourceAccessor.name}(void *v, bool materialize); /* live listener source ${key} */`,
+            `static ScrDyn *${sourceAccessor.name}(void *v, bool materialize); /* record source ${key} */`,
           );
           d.push(
             `  ScrDyn *d = scr_dyn_new_obj_with_identity(v, &${rc.retain}, &${sourceAccessor.name});`,

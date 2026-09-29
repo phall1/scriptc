@@ -2090,6 +2090,7 @@ export type IrLibFn =
   | "dyn.defineProps"
   | "dyn.defineProperty"
   | "dyn.getOwnPropertyDescriptor"
+  | "dyn.arrayProtoCall"
   /** Bare `typeof v` on a dyn value AS A STRING (arg: the dyn value,
    * borrowed; result: an owned string) — the dyn kind's JS answer:
    * undefined→"undefined", null/object/array/bytes→"object" (JS's oldest
@@ -6810,7 +6811,8 @@ export function moduleUsesDynInvoke(mod: IrModule): boolean {
       return;
     }
     const node = v as { kind?: unknown; fn?: unknown };
-    if (node.kind === "dynInvoke" || (node.kind === "libCall" && node.fn === "dyn.defineProps")) {
+    if (node.kind === "dynInvoke" || (node.kind === "libCall" &&
+        (node.fn === "dyn.defineProps" || node.fn === "dyn.arrayProtoCall"))) {
       found = true;
       return;
     }
@@ -7886,6 +7888,7 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "dyn.defineProps",
   "dyn.defineProperty",
   "dyn.getOwnPropertyDescriptor",
+  "dyn.arrayProtoCall",
   "process.chdir",
   "fs.realpathSync",
   "fs.realpathNativeSync",

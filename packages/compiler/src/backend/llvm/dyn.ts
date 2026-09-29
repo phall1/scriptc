@@ -905,6 +905,21 @@ export class LlDyn {
           break;
         }
         requireKind(DYN_KIND.OBJ, "dcr");
+        if (shape.fields.length === 0 && !shape.indexValue) {
+          const sourceAccessor = `${this.toDynHelper(t)}_source_access`;
+          const rc = vAdapters(host, t);
+          host.declare(`declare ptr @scr_dyn_obj_source_cast(ptr, ptr, ptr)`);
+          const source = B.tmp();
+          const found = B.tmp();
+          const lSource = B.newLabel("dcr.source");
+          const lCopy = B.newLabel("dcr.copy");
+          B.line(`${source} = call ptr @scr_dyn_obj_source_cast(ptr %d, ptr @${sourceAccessor}, ptr ${rc.retain})`);
+          B.line(`${found} = icmp ne ptr ${source}, null`);
+          B.condBr(found, lSource, lCopy);
+          B.startBlock(lSource);
+          B.terminate(`ret ptr ${source}`);
+          B.startBlock(lCopy);
+        }
         B.line(`%r0 = call ptr @${mangleRecordNew(t.shapeId)}()`);
         for (const f of shape.fields) {
           const fieldWant = host.cstr(dynDesc(f.type, this.host.recordsById, this.host.unionsById));
@@ -1376,7 +1391,7 @@ export class LlDyn {
         const carriesListenerIdentity = shape.fields.some(
           (f) => f.name === "handleEvent" && f.type.kind === "func",
         );
-        if (carriesListenerIdentity) {
+        if ((shape.fields.length === 0 && !shape.indexValue) || carriesListenerIdentity) {
           const rc = vAdapters(host, t);
           sourceAccessor = {
             name: `${name}_source_access`,
@@ -1626,7 +1641,7 @@ export class LlDyn {
     );
     if (sourceAccessor) {
       this.defs.push(
-        `define internal ptr @${sourceAccessor.name}(ptr %v, i1 %materialize) ${FN_ATTRS} { ; live listener source ${key}`,
+        `define internal ptr @${sourceAccessor.name}(ptr %v, i1 %materialize) ${FN_ATTRS} { ; record source ${key}`,
         `entry:`,
         `  br i1 %materialize, label %snapshot, label %release`,
         `snapshot:`,

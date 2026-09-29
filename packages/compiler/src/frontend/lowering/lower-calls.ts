@@ -4647,6 +4647,7 @@ export function lowerCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr {
         // TestContext surface (t.test/t.skip/t.diagnostic), t.assert.*.
         lowerer.lowerTestMethodCall(expr, expr.expression) ??
         lowerer.lowerTimeoutMethodCall(expr, expr.expression) ??
+        lowerArrayPrototypeBorrowCall(lowerer, expr, expr.expression) ??
         lowerObjectOwnPrototypeCall(lowerer, expr, expr.expression) ??
         lowerObjectPrototypeCall(lowerer, expr, expr.expression) ??
         lowerStringPrototypeCall(lowerer, expr, expr.expression) ??
@@ -5269,6 +5270,40 @@ function immediateObjectTagReceiver(lowerer: Lowerer, node: ts.Expression): { ta
     };
   }
   return null;
+}
+
+const ARRAY_BORROW_METHODS = new Set([
+  "at", "every", "filter", "find", "findIndex", "forEach", "includes",
+  "indexOf", "lastIndexOf", "map", "reduce", "reduceRight", "some",
+]);
+
+function lowerArrayPrototypeBorrowCall(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
+  access: ts.PropertyAccessExpression,
+): IrExpr | null {
+  if (lowerer.dynamic || !isJsSourceFile(call.getSourceFile()) || call.questionDotToken ||
+      access.questionDotToken || access.name.text !== "call" ||
+      !ts.isPropertyAccessExpression(access.expression) ||
+      call.arguments.some(ts.isSpreadElement)) return null;
+  const method = access.expression;
+  if (method.questionDotToken || !ARRAY_BORROW_METHODS.has(method.name.text) ||
+      !ts.isPropertyAccessExpression(method.expression) ||
+      method.expression.questionDotToken || method.expression.name.text !== "prototype" ||
+      !lowerer.isStdlibGlobal(method.expression.expression, "Array") ||
+      !lowerer.isStdlibMember(method)) return null;
+  const loc = locOf(call);
+  const receiver = call.arguments[0]
+    ? lowerer.lowerExprExpecting(call.arguments[0]!, DYN)
+    : { kind: "dynFrom", value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc }, type: DYN, loc } as IrExpr;
+  const args = call.arguments.slice(1).map((arg) => lowerer.lowerExprExpecting(arg, DYN));
+  return {
+    kind: "libCall", fn: "dyn.arrayProtoCall", args: [
+      receiver,
+      { kind: "strLit", value: method.name.text, type: STRING, loc },
+      { kind: "dynArrLit", elems: args, type: DYN, loc },
+    ], type: DYN, loc,
+  };
 }
 
 function lowerObjectOwnPrototypeCall(

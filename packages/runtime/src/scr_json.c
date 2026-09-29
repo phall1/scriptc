@@ -728,6 +728,13 @@ bool scr_dyn_obj_same_source(const ScrDyn *a, const ScrDyn *b) {
          a->v.obj.source_identity == b->v.obj.source_identity;
 }
 
+void *scr_dyn_obj_source_cast(const ScrDyn *d,
+    ScrDyn *(*source_access)(void *, bool), void *(*source_retain)(void *)) {
+  if (!d || d->kind != SCR_DYN_OBJ || !d->v.obj.source_identity ||
+      d->v.obj.source_access != source_access) return NULL;
+  return source_retain(d->v.obj.source_identity);
+}
+
 ScrDyn *scr_dyn_new_obj_null_proto(void) {
   ScrDyn *d = scr_dyn_alloc(SCR_DYN_OBJ);
   d->null_proto = true;
@@ -3818,10 +3825,16 @@ void *scr_dyn_retain_v(void *d) { return scr_dyn_retain((ScrDyn *)d); }
 void scr_dyn_release_v(void *d) { scr_dyn_release((ScrDyn *)d); }
 
 /* JS === over two dyn values: scalars by value (NaN false, ±0 equal via
- * C ==; strings bytewise), units by kind, everything reference-shaped by
- * node IDENTITY (the checked-dynamic tree's object identity). Never throws. */
+ * C ==; strings bytewise), units by kind, references by node identity or
+ * by their retained static record source when one exists. Never throws. */
 bool scr_dyn_strict_eq(const ScrDyn *a, const ScrDyn *b) {
-  if (a->kind != b->kind) return false;
+  if (a->kind != b->kind) {
+    if (a->kind == SCR_DYN_TYPED_REF && b->kind == SCR_DYN_OBJ)
+      return b->v.obj.source_identity && a->v.typed_ref.ptr == b->v.obj.source_identity;
+    if (a->kind == SCR_DYN_OBJ && b->kind == SCR_DYN_TYPED_REF)
+      return a->v.obj.source_identity && a->v.obj.source_identity == b->v.typed_ref.ptr;
+    return false;
+  }
   switch (a->kind) {
   case SCR_DYN_UNDEF:
   case SCR_DYN_NULL: return true;
@@ -3830,6 +3843,8 @@ bool scr_dyn_strict_eq(const ScrDyn *a, const ScrDyn *b) {
   case SCR_DYN_STR:
     return a->v.str->len == b->v.str->len &&
            memcmp(a->v.str->data, b->v.str->data, a->v.str->len) == 0;
+  case SCR_DYN_OBJ:
+    return a == b || scr_dyn_obj_same_source(a, b);
   case SCR_DYN_FUNC:
     /* The ScrDyn box is a boundary artifact — one closure crossing the
      * dyn boundary twice is still ONE JS function value, so identity
