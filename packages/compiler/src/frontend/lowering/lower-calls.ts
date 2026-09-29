@@ -4894,9 +4894,11 @@ export function lowerCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr {
       ts.isElementAccessExpression(expr.expression) &&
       !expr.expression.questionDotToken &&
       !expr.questionDotToken &&
-      ts.isStringLiteralLike(expr.expression.argumentExpression)
+      (ts.isStringLiteralLike(expr.expression.argumentExpression) || ts.isNumericLiteral(expr.expression.argumentExpression))
     ) {
-      const memberName = expr.expression.argumentExpression.text;
+      const memberName = ts.isNumericLiteral(expr.expression.argumentExpression)
+        ? String(Number(expr.expression.argumentExpression.text))
+        : expr.expression.argumentExpression.text;
       const receiverType = lowerer.mapTypeOf(lowerer.typeOf(expr.expression.expression));
       if (receiverType?.kind === "object") {
         const info = lowerer.classes.get(receiverType.className);
