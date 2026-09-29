@@ -109,9 +109,9 @@ test("bootstrap exact builds use the routed cache and source edits fall through"
 }, 120_000);
 
 test.skipIf(!runtimePackHost)(
-  "bootstrap cache hits retain the legacy C executable warning",
+  "bootstrap cache hits reuse LLVM executables",
   async () => {
-    const dir = await mkdtemp(join(tmpdir(), "scriptc-bootstrap-legacy-warning-"));
+    const dir = await mkdtemp(join(tmpdir(), "scriptc-bootstrap-llvm-cache-"));
     const cacheRoot = join(dir, "cache");
     const entry = join(dir, "main.ts");
     const outPath = join(dir, "program");
@@ -128,13 +128,13 @@ test.skipIf(!runtimePackHost)(
       { env, maxBuffer: 4 * 1024 * 1024 },
     );
     try {
-      await writeFile(entry, 'console.log("legacy warning");\n');
+      await writeFile(entry, 'console.log("LLVM cache");\n');
       const first = await build();
-      expect(first.stderr).toContain("deprecated legacy C executable path");
+      expect((await execFileAsync(outPath)).stdout).toBe("LLVM cache\n");
       expect(first.stderr).toContain("scriptc lowering");
 
       const cached = await build();
-      expect(cached.stderr).toContain("deprecated legacy C executable path");
+      expect((await execFileAsync(outPath)).stdout).toBe("LLVM cache\n");
       expect(cached.stderr).not.toContain("scriptc lowering");
     } finally {
       await rm(dir, { recursive: true, force: true });

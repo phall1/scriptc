@@ -50,7 +50,7 @@ test("the native frontend and LLVM emitter rebuild a working frontend from its T
     const buildSeed = async (entry: string, name: string, ffi?: string) => {
       const api = pathToFileURL(join(root, "packages/compiler/src/index.ts")).href;
       const built = await execFileAsync(process.execPath, [
-        "--import", "tsx", "--input-type=module", "--eval",
+        "--max-old-space-size=8192", "--import", "tsx", "--input-type=module", "--eval",
         `import { compile } from ${JSON.stringify(api)};
          const result = await compile(process.argv[1], {
            outDir: process.argv[2], outPath: process.argv[3], backend: 'llvm',

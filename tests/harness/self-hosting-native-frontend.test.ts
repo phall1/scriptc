@@ -46,7 +46,7 @@ for (const backend of ["llvm"] as const) {
       const nativeSources = join(root, "packages/compiler/native");
       const object = join(directory, "ts7-process.o");
       execFileSync("clang", ["-std=c11", "-Wall", "-Wextra", "-Werror", ...(sanitize ? ["-fsanitize=address"] : []),
-        "-c", join(nativeSources, "ts7-process.ll"), "-o", object]);
+        "-c", join(nativeSources, "ts7-process.c"), "-o", object]);
       const profile = join(directory, "ffi.json");
       writeFileSync(profile, JSON.stringify({
         ...JSON.parse(readFileSync(join(nativeSources, "ts7-process.ffi.json"), "utf8")), libraries: [object],
@@ -55,7 +55,7 @@ for (const backend of ["llvm"] as const) {
       // Build the actual entry in a child while keeping Vitest responsive.
       const api = pathToFileURL(join(root, "packages/compiler/src/index.ts")).href;
       const { stdout, stderr } = await execFileAsync(process.execPath, [
-        "--import", "tsx", "--input-type=module", "--eval",
+        "--max-old-space-size=8192", "--import", "tsx", "--input-type=module", "--eval",
         `import { compile } from ${JSON.stringify(api)};
          const result = await compile(process.argv[1], {
            outDir: process.argv[2], outPath: process.argv[3], backend: process.argv[4],
@@ -205,7 +205,7 @@ for (const backend of ["llvm"] as const) {
       const ffiResult = lowerRequest("native bindings", { entry: source, ffiProfile: inputFfi });
       expect(ffiResult.report[1]).toMatchObject({ diagnostics: [], validation: [] });
       if (!ffiResult.module) throw new Error("missing FFI IR");
-      const helper = join(directory, "add.ll");
+      const helper = join(directory, "add.c");
       const helperObject = join(directory, "add.o");
       writeFileSync(helper, "double native_add(double a, double b) { return a + b; }\n");
       execFileSync("clang", ["-c", helper, "-o", helperObject]);

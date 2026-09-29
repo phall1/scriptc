@@ -3253,6 +3253,16 @@ function lowerPromiseThenPresence(
       : null;
   if (promiseType === null) return null;
   let receiver = lowerer.lowerExpr(access.expression);
+  if (receiver.type.kind === "union" && access.questionDotToken) {
+    const arms = lowerer.unions.get(receiver.type.unionId)?.arms ?? [];
+    if (arms.every((arm) => arm.kind === "promise" || isUnitType(arm))) {
+      return nullishBranches(lowerer, receiver, receiver.type, arms, result.type, locOf(access),
+        () => result.type.kind === "bool"
+          ? { kind: "boolLit", value: false, type: BOOL, loc: result.loc }
+          : { kind: "strLit", value: "undefined", type: STRING, loc: result.loc },
+        () => result);
+    }
+  }
   if (receiver.type.kind === "union") {
     const optional = lowerer.runtimeOptionalPropertyReceiver(access.expression, receiver, promiseType, access.name.text);
     if (optional !== null) receiver = optional;
@@ -3261,6 +3271,29 @@ function lowerPromiseThenPresence(
       if (helper === null) return null;
       receiver = { kind: "call", callee: helper, args: [receiver], type: promiseType, loc: receiver.loc };
     }
+  }
+  if (receiver.type.kind === "dyn") {
+    // A specialized JS parameter can retain checked storage while JSDoc
+    // describes a promise. Probe its actual value, preserving nullish
+    // guards and own-property reads on ordinary thenable objects.
+    const loc = locOf(access);
+    const local = lowerer.declareHiddenLocal("%thenReceiver", DYN);
+    const stable = varRef(local.id, DYN, loc);
+    const member: IrExpr = {
+      kind: "dynKeyGet", value: stable,
+      key: { kind: "strLit", value: "then", type: STRING, loc },
+      ...(access.questionDotToken ? { optional: true as const } : {}), type: DYN, loc,
+    };
+    const other: IrExpr = result.type.kind === "bool"
+      ? { kind: "dynTest", test: "truthy", value: member, type: BOOL, loc }
+      : { kind: "libCall", fn: "dyn.typeof", args: [member], type: STRING, loc };
+    return {
+      kind: "seqExpr", stmts: [{ kind: "varDecl", localId: local.id, init: receiver, loc }],
+      result: {
+        kind: "ternary", cond: { kind: "dynTest", test: "promise", value: stable, type: BOOL, loc },
+        then: result, else_: other, type: result.type, loc,
+      }, type: result.type, loc,
+    };
   }
   if (receiver.type.kind !== "promise") return null;
   if (isSafeToDiscard(receiver)) return result;

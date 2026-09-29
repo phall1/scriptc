@@ -71,6 +71,14 @@ test.each([
   }
 });
 
+test("coverage preserves function-local class capture environments", () => {
+  const { coverage } = analyze(join(repoRoot, "tests/corpus/local-class-unknown.ts"));
+  expect(coverage.preflightFailed).toBe(false);
+  expect(coverage.diagnostics).toEqual([]);
+  expect(coverage.stats.statementsFailed).toBe(0);
+  expect(coverage.unreached?.diagnostics ?? []).toEqual([]);
+});
+
 test("runtime-optional refined unions report blockers without crashing", () => {
   for (const dynamic of [false, true]) {
     const { coverage } = analyze(join(repoRoot, "tests/diagnostics/runtime-optional-refined-union.ts"), { dynamic });

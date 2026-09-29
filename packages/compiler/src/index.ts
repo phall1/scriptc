@@ -1952,7 +1952,6 @@ async function compileLibraryTracked(
   }
   const profile = loadedProfile.profile;
   const entryPath = profile.entry;
-  const buildPlatform = buildTargetPlatform();
   const profileDir = dirname(resolve(opts.profilePath));
   for (let directory = dirname(entryPath); ; directory = dirname(directory)) {
     for (const name of ["tsconfig.json", "package.json"]) {
@@ -1990,6 +1989,8 @@ async function compileLibraryTracked(
       };
     }
   }
+
+  const buildPlatform = buildTargetPlatform();
 
   // Multi-instance library mode (abi.localize_runtime) localizes per
   // OBJECT FORMAT: ELF and COFF archives localize from any host (cross
@@ -2031,7 +2032,7 @@ async function compileLibraryTracked(
         ok: false,
         diagnostics: decorateLibraryRefusals([
           targetRefusalDiag(
-            driver.target ?? platform,
+            process.env["SCRIPTC_TARGET"] || driver.target || platform,
             subject,
             { file: entryPath, start: 0, end: 0 },
           ),

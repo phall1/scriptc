@@ -11673,6 +11673,18 @@
     "<repo>/tests/corpus/process-uncaught-sync.cjs"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/4030-runtime-object-truthiness.ts": {
+   "order": [
+    "<repo>/tests/corpus/4030-runtime-object-truthiness.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4031-event-emitter-long-tuples.ts": {
+   "order": [
+    "<repo>/tests/corpus/4031-event-emitter-long-tuples.ts"
+   ],
+   "diags": []
   }
  }
 }

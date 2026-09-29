@@ -3971,6 +3971,13 @@ export function collectVirtualJsMethods(lowerer: Lowerer, files: readonly ts.Sou
   }
 
 export function lowerClassMembers(lowerer: Lowerer, info: ClassInfo): IrFunction[] {
+    // Local class bodies are lowered when their expression captures its
+    // lexical environment. Type collection alone can discover a class in
+    // an owner skipped by the coverage remainder; it must not relower the
+    // constructor without that environment.
+    if (info.localClass && info.localClass.context === null) {
+      return [...info.localClass.bodies.values()];
+    }
     const out: IrFunction[] = [];
     const className = info.def.name;
     // Generic-class INSTANTIATIONS (and mixin instantiations) are

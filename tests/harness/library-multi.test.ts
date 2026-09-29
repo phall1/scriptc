@@ -1084,7 +1084,7 @@ test.each(MOBILE_TARGETS)(
       if (!result.ok) {
         expect(result.diagnostics[0]!.code).toBe("SC3002");
         expect(result.diagnostics[0]!.message).toContain(target);
-        expect(result.diagnostics[0]!.message).toContain("SCRIPTC_CC=zigcc scriptc build --lib --profile <profile.json>");
+        expect(result.diagnostics[0]!.message).toContain("scriptc build --lib --profile <profile.json>");
       }
     });
   },

@@ -558,7 +558,9 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
             B.line(`${o} = or i1 ${acc}, ${c}`);
             return o;
           };
-          if (e.test === "nullish") {
+          if (e.test === "promise") {
+            test = oneOf([DYN_KIND.PROMISE]);
+          } else if (e.test === "nullish") {
             test = oneOf([DYN_KIND.UNDEF, DYN_KIND.NULL]);
           } else if (e.test === "buffer") {
             const bytes = oneOf([DYN_KIND.BYTES]);
