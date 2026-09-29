@@ -1588,7 +1588,7 @@ export function jsonWriteHelper(emitter: CEmitter, t: IrType): string {
             d.push(`  scr_dyn_arr_push(d, ${emitter.toDynHelper(f.type)}(v->${mangleField(f.name)}));`);
           }
           if (cyclicRec) d.push(`  scr_dyn_from_leave();`);
-          d.push(`  return d;`);
+          d.push(`  return scr_dyn_mark_snapshot(d);`);
           break;
         }
         const carriesListenerIdentity = shape.fields.some(
@@ -1656,7 +1656,7 @@ export function jsonWriteHelper(emitter: CEmitter, t: IrType): string {
           d.push(`  }`);
         }
         if (cyclicRec) d.push(`  scr_dyn_from_leave();`);
-        d.push(`  return d;`);
+        d.push(`  return scr_dyn_mark_snapshot(d);`);
         break;
       }
       case "array": {
@@ -1678,7 +1678,7 @@ export function jsonWriteHelper(emitter: CEmitter, t: IrType): string {
         }
         d.push(`  }`);
         if (cyclicArr) d.push(`  scr_dyn_from_leave();`);
-        d.push(`  return d;`);
+        d.push(`  return scr_dyn_mark_snapshot(d);`);
         break;
       }
       case "union": {

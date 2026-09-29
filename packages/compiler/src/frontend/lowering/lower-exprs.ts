@@ -7910,6 +7910,15 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
       const right = lowerer.lowerExpr(expr.right);
       return { kind: "jsOp", op: "instanceOf", args: [left, right], type: BOOL, loc };
     }
+    if (lowerer.isStdlibGlobal(expr.right, "WeakMap") || lowerer.isStdlibGlobal(expr.right, "WeakSet")) {
+      if (lowerer.dynamic) {
+        const value = lowerer.jsvalIn(lowerer.lowerExpr(expr.left), expr.left);
+        const ctor: IrExpr = { kind: "jsOp", op: "globalGet", name: lowerer.isStdlibGlobal(expr.right, "WeakMap") ? "WeakMap" : "WeakSet", args: [], type: JSVAL, loc };
+        return { kind: "jsOp", op: "instanceOf", args: [value, ctor], type: BOOL, loc };
+      }
+      const value = lowerer.coerceInto(expr.left, lowerer.lowerExpr(expr.left), DYN);
+      return { kind: "libCall", fn: lowerer.isStdlibGlobal(expr.right, "WeakMap") ? "weakMap.is" : "weakSet.is", args: [value], type: BOOL, loc };
+    }
     if (lowerer.isStdlibGlobal(expr.right, "ArrayBuffer")) {
       const value = lowerer.coerceInto(expr.left, lowerer.lowerExpr(expr.left), DYN);
       return { kind: "libCall", fn: "arrayBuffer.is", args: [value], type: BOOL, loc };

@@ -1415,6 +1415,8 @@ export class LlDyn {
             B.line(`call void @scr_dyn_arr_push(ptr ${d}, ptr ${conv})`);
           }
           if (cyclicRec) B.line(`call void @scr_dyn_from_leave()`);
+          host.declare(`declare ptr @scr_dyn_mark_snapshot(ptr)`);
+          B.line(`call ptr @scr_dyn_mark_snapshot(ptr ${d})`);
           B.terminate(`ret ptr ${d}`);
           break;
         }
@@ -1515,6 +1517,8 @@ export class LlDyn {
           B.line(`call void @scr_arr_release(ptr ${ks})`);
         }
         if (cyclicRec) B.line(`call void @scr_dyn_from_leave()`);
+        host.declare(`declare ptr @scr_dyn_mark_snapshot(ptr)`);
+        B.line(`call ptr @scr_dyn_mark_snapshot(ptr ${d})`);
         B.terminate(`ret ptr ${d}`);
         break;
       }
@@ -1577,6 +1581,8 @@ export class LlDyn {
           B.startBlock(doneLabel);
         });
         if (cyclicArr) B.line(`call void @scr_dyn_from_leave()`);
+        host.declare(`declare ptr @scr_dyn_mark_snapshot(ptr)`);
+        B.line(`call ptr @scr_dyn_mark_snapshot(ptr ${d})`);
         B.terminate(`ret ptr ${d}`);
         break;
       }

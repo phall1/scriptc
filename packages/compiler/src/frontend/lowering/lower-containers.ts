@@ -5780,6 +5780,50 @@ function mapFromSeedValue(lowerer: Lowerer, seed: IrExpr, mapT: IrType & { kind:
       }
       return { kind: "call", callee: name, args: [seed], type: mapT, loc };
     }
+    if (seed.type.kind === "dyn" || seed.type.kind === "array" && seed.type.elem.kind === "dyn") {
+      const key = `checked-seed:${typeKey(mapT)}`;
+      let name = lowerer.mapHofHelpers.get(key);
+      if (!name) {
+        name = `%map.checkedSeed.${lowerer.mapHofHelpers.size}`;
+        lowerer.mapHofHelpers.set(key, name);
+        const source = varRef("source.0", DYN, loc);
+        const entries = varRef("entries.0", DYN, loc);
+        const entry = varRef("entry.0", DYN, loc);
+        const target = varRef("target.0", mapT, loc);
+        const keyValue = varRef("key.0", DYN, loc);
+        const itemValue = varRef("value.0", DYN, loc);
+        const checked = (value: IrExpr, type: IrType): IrExpr => type.kind === "dyn" ? value
+          : { kind: "dynCheck", value, type, loc };
+        lowerer.liftedFns.push({
+          name, params: [{ localId: "source.0", name: "source", type: DYN }], returnType: mapT,
+          locals: [
+            { id: "source.0", name: "source", type: DYN, mutable: false },
+            { id: "entries.0", name: "entries", type: DYN, mutable: false },
+            { id: "entry.0", name: "entry", type: DYN, mutable: false },
+            { id: "key.0", name: "key", type: DYN, mutable: false },
+            { id: "value.0", name: "value", type: DYN, mutable: false },
+            { id: "target.0", name: "target", type: mapT, mutable: false },
+            { id: "i.0", name: "i", type: F64, mutable: true },
+          ],
+          body: [
+            { kind: "varDecl", localId: "target.0", init: { kind: "mapNew", type: mapT, loc }, loc },
+            { kind: "varDecl", localId: "entries.0", init: { kind: "libCall", fn: "dyn.mapSeedEntries", args: [source], type: DYN, loc }, loc },
+            countedFor(loc, { kind: "libCall", fn: "dyn.arrLen", args: [entries], type: F64, loc }, () => [
+              { kind: "varDecl", localId: "entry.0", init: { kind: "libCall", fn: "dyn.mapSeedEntry", args: [
+                { kind: "libCall", fn: "dyn.arrAt", args: [entries, varRef("i.0", F64, loc)], type: DYN, loc },
+              ], type: DYN, loc }, loc },
+              { kind: "varDecl", localId: "key.0", init: { kind: "dynKeyGet", value: entry, key: strLit("0", loc), type: DYN, loc }, loc },
+              { kind: "varDecl", localId: "value.0", init: { kind: "dynKeyGet", value: entry, key: strLit("1", loc), type: DYN, loc }, loc },
+              { kind: "exprStmt", expr: { kind: "mapIntrinsic", method: "set", receiver: target,
+                args: [checked(keyValue, mapT.key), checked(itemValue, mapT.value)], type: VOID, loc }, loc },
+            ]),
+            { kind: "return", value: target, loc },
+          ], loc,
+        });
+      }
+      const source: IrExpr = seed.type.kind === "dyn" ? seed : { kind: "dynFrom", value: seed, type: DYN, loc };
+      return { kind: "call", callee: name, args: [source], type: mapT, loc };
+    }
     if (seed.type.kind !== "array" || seed.type.elem.kind !== "record") return null;
     const elem = seed.type.elem;
     const shape = lowerer.shapes.get(elem.shapeId);
@@ -6100,6 +6144,20 @@ function mapFromSeedValue(lowerer: Lowerer, seed: IrExpr, mapT: IrType & { kind:
    * (lowerRecordOvfCaptureHelper). Null when the argument or result shape
    * is outside this (Maps, richer iterables → the SC2020 fence). */
   export function lowerObjectFromEntriesCall(lowerer: Lowerer, call: ts.CallExpression,
+    callee: ts.Expression,): IrExpr | null {
+    const typed = lowerTypedObjectFromEntriesCall(lowerer, call, callee);
+    if (typed) return typed;
+    if (!ts.isPropertyAccessExpression(callee) || call.questionDotToken || callee.questionDotToken ||
+        !lowerer.isStdlibGlobal(callee.expression, "Object") || callee.name.text !== "fromEntries" ||
+        call.arguments.length !== 1 || ts.isSpreadElement(call.arguments[0]!)) return null;
+    if (lowerer.dynamic) return null;
+    return {
+      kind: "libCall", fn: "dyn.fromEntries", type: DYN, loc: locOf(call),
+      args: [lowerer.lowerExprExpecting(call.arguments[0]!, DYN)],
+    };
+  }
+
+  function lowerTypedObjectFromEntriesCall(lowerer: Lowerer, call: ts.CallExpression,
     callee: ts.Expression,): IrExpr | null {
     if (!ts.isPropertyAccessExpression(callee)) return null;
     if (call.questionDotToken || callee.questionDotToken) return null;

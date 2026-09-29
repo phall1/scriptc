@@ -67,7 +67,7 @@ import type {
   IrUnionDef,
   SrcLoc,
 } from "../../ir/ir.js";
-import { arrayOf, BOOL, canAdaptDynFuncTo, canDynCheckTo, canConvertToDyn, canCrossIslandBoundary, canExitIslandToType, canMarshalTypedFuncIntoIsland, DYN, DYN_HANDLE_KINDS, F64, isDynTypedRefType, isJsonSafeType, isJsonStringifySafeType, isUndefinedArmedUnion, isUnitType, JSVAL, NULL_T, RUNTIME_ERROR_CLASSES, STRING, typeEquals, UNDEFINED_T, VOID } from "../../ir/ir.js";
+import { arrayOf, BOOL, canAdaptDynFuncTo, canDynCheckTo, canConvertToDyn, canCrossIslandBoundary, canExitIslandToType, canMarshalTypedFuncIntoIsland, DYN, DYN_HANDLE_KINDS, F64, isDynTypedRefType, isJsonSafeType, isJsonStringifySafeType, isSupportedMapKey, isSupportedMapValue, isUndefinedArmedUnion, isUnitType, JSVAL, NULL_T, RUNTIME_ERROR_CLASSES, STRING, typeEquals, UNDEFINED_T, VOID } from "../../ir/ir.js";
 import { type DynamicImportResolution, type NpmBuiltinUse, type NpmLazyTrap } from "../npm.js";
 import { provenanceActive } from "../provenance-registry.js";
 import {
@@ -113,6 +113,7 @@ import { prepareCjsModuleGraph } from "./lower-node-module.js";
 import { ClassInfo, ClassIteratorInfo, GenericClassInfo, registerBuiltinErrorClasses, registerBuiltinEmitterClass, registerBuiltinStreamClasses, builtinErrorInfoOf, builtinEmitterInfoOf, builtinStreamInfoOf, analyzeClassDecoration, classIteratorDrainCall, classIteratorNextCall, classIteratorOf, classIteratorOpenCall, classIteratorRestDrainCall, classMemberNameOf, classValueRef, collectClassShape, exactClassOfReceiver, collectClassShapeInner, ctorAbiEquals, findMethodOn, findStaticOn, findGenericMethodOn, findGenericStaticOn, genericClassInstanceType, isSubclassOf, inHierarchy, overrideBelow, staticShadowBelow, upcastTo, lowerClassMembers, lowerClassCtor, lowerClassExpression, lowerClassExpressionInfo, lowerClassMethodMember, lowerClassValueProperty, lowerStaticMethod, throwingSetterFn, fieldInitStmts, lowerStaticFieldInits, lowerStaticFieldRead, lowerDerivedCtorBody, superCallStmt, lowerSuperMethodCall, superThisRef, lowerSuperAccessorRead, lowerSuperAccessorWrite, inheritsBuiltinErrorCtor, inheritsBuiltinEmitterCtor, errorConstructorArgs, lowerNew, accessorCall } from "./lower-classes.js";
 import { MixinFnShape, mixinCallClassInfoOf, mixinIntersectionInstanceType } from "./lower-mixins.js";
 import { implicitAnyParamSymbolsOf } from "./lower-calls.js";
+import { tryLowerExpression } from "./expressions/try-lower-expression.js";
 import { ParamShape, FnSig, GenericFnInfo, GenericInstance, bindingNeverReassigned, bodyReadsArguments, funcTypeFromParamShapes, implicitMonoFile, isThisParameter, paramShape, paramShapes, checkDefaultParamBodyType, completeArgs, wrappedUndefined, undefinedArgFor, requireExactArityValue, bodyReturnType, declaredReturnType, collectSignature, collectSignatureInner, collectGenericSignature, genericFnOf, lowerGenericCall, lowerGenericFnValue, inferTypeParamBindings, lowerGenericInstance, lowerCall, lowerFfiCall, lowerTimersMemberCall, lowerPromiseMethodCall, lowerFilterNarrowCall, isTopLevelFnSymbol, lowerNestedFunctionDecl, lambdaSignature, lowerLambda, lowerFunction, validateFfiImports } from "./lower-calls.js";
 import { lowerArrayMethodCall, lowerMapMethodCall, lowerMapForEachCall, buildMapForEachFn, lowerRecordOvfCaptureHelper, lowerEnvToPairsHelper, lowerSetMethodCall, lowerSetForEachCall, buildSetForEachFn } from "./lower-containers.js";
 import { lowerBufferStaticCall, lowerBytesMethodCall, lowerBytesNew } from "./containers/bytes.js";
@@ -778,6 +779,21 @@ export function dynFallbackType(lowerer: Lowerer, node: ts.Node, t: ts.Type): Ir
     // the whole type's own fence.
     return anyPiecedFuncType(lowerer, node, t);
   }
+  const promise = jsFallbackPromiseType(lowerer, t);
+  if (promise) return promise;
+  const symbol = t.getSymbol();
+  if ((symbol?.name === "Map" || symbol?.name === "ReadonlyMap") && lowerer.isStdlibSymbol(symbol)) {
+    const args = lowerer.checker.getTypeArguments(t as ts.TypeReference);
+    if (args.length === 2) {
+      const key = lowerer.mapTypeOf(args[0]!);
+      const value = lowerer.mapTypeOf(args[1]!);
+      return {
+        kind: "map",
+        key: key && isSupportedMapKey(key, key.kind === "union" ? lowerer.unions.get(key.unionId)?.arms : undefined) ? key : DYN,
+        value: value && isSupportedMapValue(value) ? value : DYN,
+      };
+    }
+  }
   // JS inference commonly spells a callback field initialized to null as
   // `((value: any) => any) | null`. Preserve the callable arm and its
   // checked-dynamic pieces instead of collapsing the whole slot to dyn.
@@ -839,6 +855,15 @@ export function dynFallbackType(lowerer: Lowerer, node: ts.Node, t: ts.Type): Ir
   return DYN;
 }
 
+/** An inferred JS promise keeps its asynchronous ABI even when its payload
+ * has no fixed shape. The settled value crosses the checked native boundary. */
+function jsFallbackPromiseType(lowerer: Lowerer, t: ts.Type): IrType | null {
+  const symbol = t.getSymbol();
+  if (symbol?.name !== "Promise" || !lowerer.isStdlibSymbol(symbol)) return null;
+  const inner = lowerer.checker.getTypeArguments(t as ts.TypeReference)[0];
+  return inner ? { kind: "promise", inner: lowerer.mapTypeOf(inner) ?? DYN } : null;
+}
+
 function jsFallbackFunctionType(lowerer: Lowerer, node: ts.Node, t: ts.Type): IrType | null {
   const sig = pureSingleCallSignatureOf(lowerer, t);
   if (!sig) return null;
@@ -871,7 +896,8 @@ function jsFallbackFunctionType(lowerer: Lowerer, node: ts.Node, t: ts.Type): Ir
   const sigDecl = lowerer.checker.signatureDeclaration(sig);
   const jsUnitReturn = sigDecl !== undefined && isJsSourceFile(sigDecl.getSourceFile()) &&
     (retT.flags & (ts.TypeFlags.Null | ts.TypeFlags.Undefined)) !== 0;
-  const ret: IrType = jsUnitReturn ? DYN : retT.flags & ts.TypeFlags.Void ? VOID : lowerer.mapTypeOf(retT) ?? DYN;
+  const ret: IrType = jsUnitReturn ? DYN : retT.flags & ts.TypeFlags.Void ? VOID
+    : lowerer.mapTypeOf(retT) ?? jsFallbackPromiseType(lowerer, retT) ?? DYN;
   return { kind: "func", params, ret };
 }
 
@@ -7927,7 +7953,8 @@ export class Lowerer {
     // whole union as context: an identity lift of that context does not
     // mean the literal's independently inferred element layout fits.
     // Construct the elements for the selected arm before wrapping it.
-    // Multiple eligible arms retain the ordinary ambiguity rules.
+    // When several array arms fit a fresh literal, any complete element
+    // layout is valid: the new array has no existing aliases to preserve.
     if (expected?.kind === "union") {
       let x: ts.Expression = node;
       while (ts.isParenthesizedExpression(x)) x = x.expression;
@@ -7951,8 +7978,18 @@ export class Lowerer {
               this.shapes.get(a.shapeId)!.fields.length === x.elements.length &&
               !x.elements.some(ts.isSpreadElement)),
         );
-        if (arms.length === 1) {
-          const arm = arms[0]!;
+        let arm = arms.length === 1 ? arms[0] : undefined;
+        if (!arm && arms.length > 1 && x.elements.length > 0 &&
+            x.elements.every((el) => !ts.isSpreadElement(el) && !ts.isOmittedExpression(el))) {
+          const ownType = this.mapTypeOf(this.typeOf(x));
+          arm = arms.find((candidate) => ownType !== null && typeEquals(candidate, ownType));
+          if (!arm) {
+            const elements = x.elements.map((el) => tryLowerExpression(this, el));
+            arm = arms.find((candidate) => candidate.kind === "array" &&
+              elements.every((element) => element !== null && this.widthLiftPlan(element.type, candidate.elem) !== null));
+          }
+        }
+        if (arm) {
           const built = this.lowerArrayLiteral(x, arm as IrType & { kind: "array" } | (IrType & { kind: "record" }));
           return this.coerceInto(node, built, expected);
         }

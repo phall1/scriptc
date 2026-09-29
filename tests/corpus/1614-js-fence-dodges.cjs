@@ -23,7 +23,7 @@ console.log('F1', platformScale(4000) === 4000);
 const known = new Set([setTimeout, clearTimeout, setInterval]);
 console.log('F2', known.has(setTimeout), known.has(clearInterval));
 
-// WeakMap constructs as an opaque value; its methods live behind fences
+// WeakMap constructs natively; this case only observes identity
 // that never fire here.
 const wm = new WeakMap();
 console.log('F3', wm !== null);

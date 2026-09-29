@@ -1,4 +1,4 @@
-import { BOOL, F64, IrExpr, IrStmt, IrType, JSVAL, SrcLoc, UNDEFINED_T, typeEquals } from "../../ir/ir.js";
+import { BOOL, F64, IrExpr, IrStmt, IrType, JSVAL, SrcLoc, UNDEFINED_T, typeEquals, typeKey, unionContainerArmsOk } from "../../ir/ir.js";
 import { varRef } from "../../ir/build.js";
 import type { Lowerer } from "./lowerer.js";
 import { dynUndefinedExpr } from "./lowerer.js";
@@ -50,6 +50,36 @@ export function arrayValueRead(lowerer: Lowerer, arr: IrExpr, index: IrExpr, ele
     else_: missing,
     type, loc,
   };
+}
+
+/** Read a stabilized union of native arrays without copying either the
+ * receiver or its elements. Every arm contributes its missing-value case. */
+export function unionArrayValueRead(lowerer: Lowerer, value: IrExpr, index: IrExpr, loc: SrcLoc): IrExpr | null {
+  if (value.type.kind !== "union") return null;
+  const unionId = value.type.unionId;
+  const arms = lowerer.unions.get(unionId)?.arms;
+  if (!arms?.length || !arms.every((arm) => arm.kind === "array")) return null;
+  const answers = new Map<string, IrType>();
+  for (const arm of arms) {
+    const answer = arrayValueType(lowerer, arm.elem);
+    const parts = answer.kind === "union" ? lowerer.unions.get(answer.unionId)!.arms : [answer];
+    for (const part of parts) answers.set(typeKey(part), part);
+  }
+  const joined = [...answers.values()].sort((a, b) => typeKey(a) < typeKey(b) ? -1 : 1);
+  if (joined.length > 1 && (!unionContainerArmsOk(joined) ||
+      joined.some((arm) => arm.kind === "dyn" || arm.kind === "jsval" || arm.kind === "generator" || arm.kind === "caught"))) return null;
+  const type: IrType = joined.length === 1 ? joined[0]! : { kind: "union", unionId: lowerer.unions.intern(joined) };
+  let result: IrExpr | null = null;
+  for (let tag = arms.length - 1; tag >= 0; tag--) {
+    const arm = arms[tag]!;
+    const receiver: IrExpr = { kind: "unionNarrow", unionId, tag, value, type: arm, loc };
+    const read = lowerer.coerceToExpected(arrayValueRead(lowerer, receiver, index, arm.elem, loc), type);
+    result = result === null ? read : {
+      kind: "ternary", cond: { kind: "unionIsTag", unionId, tag, value, negated: false, type: BOOL, loc },
+      then: read, else_: result, type, loc,
+    };
+  }
+  return result;
 }
 
 /** Store a stabilized value without changing the array's element ABI. */

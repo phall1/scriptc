@@ -342,6 +342,7 @@ static ScrDyn *scr_dyn_alloc(ScrDynKind kind) {
     d->kind = kind;
     d->buffer = false;
     d->null_proto = false;
+    d->copied_from_native = false;
     if (kind == SCR_DYN_ARR) {
       d->v.arr.len = 0; /* cap/items preserved from the node's last life */
     } else if (kind == SCR_DYN_OBJ) {
@@ -370,6 +371,7 @@ static bool scr_dyn_to_primitive_result_is_object(const ScrDyn *d);
 void scr_dyn_release(ScrDyn *d) {
   if (!d || d->rc == SIZE_MAX) return; /* NULL: an uninitialized `let` local */
   if (--d->rc != 0) return;
+  scr_weak_dispose(d);
   switch (d->kind) {
   case SCR_DYN_STR:
     scr_str_release(d->v.str);
@@ -649,6 +651,35 @@ ScrDyn *scr_dyn_iter_pack(const ScrDyn *src, const ScrStr *msg) {
 /* The for-of-over-dyn pack accessors: the emitted index loop drives them
  * over a scr_dyn_iter_pack result (ARR by construction — the defensive
  * arms cover nothing reachable from that lowering). Never throw. */
+ScrDyn *scr_dyn_map_seed_entries(const ScrDyn *src) {
+  if (src->kind == SCR_DYN_ARR) return scr_dyn_retain((ScrDyn *)src);
+  if (src->kind == SCR_DYN_NULL || src->kind == SCR_DYN_UNDEF) return scr_dyn_new_arr();
+  if (src->kind == SCR_DYN_HANDLE || src->kind == SCR_DYN_TYPED_REF || src->kind == SCR_DYN_JSVAL) {
+    static const char message[] = "new Map(entries) over native non-array iterables has no lowering";
+    scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
+    return NULL;
+  }
+  return scr_dyn_iter_pack(src, NULL);
+}
+
+ScrDyn *scr_dyn_map_seed_entry(const ScrDyn *entry) {
+  if (entry->kind == SCR_DYN_NULL || entry->kind == SCR_DYN_UNDEF ||
+      entry->kind == SCR_DYN_NUM || entry->kind == SCR_DYN_BOOL ||
+      entry->kind == SCR_DYN_STR) {
+    ScrStr *value = scr_dyn_string_coerce_js(entry);
+    if (scr_exc_pending()) { scr_str_release(value); return NULL; }
+    ScrJsonBuf b;
+    scr_jb_init(&b);
+    scr_jb_puts(&b, "Iterator value ");
+    scr_jb_write(&b, value->data, value->len);
+    scr_jb_puts(&b, " is not an entry object");
+    scr_str_release(value);
+    scr_throw_error(SCR_ERR_TYPE, scr_jb_finish(&b));
+    return NULL;
+  }
+  return scr_dyn_retain((ScrDyn *)entry);
+}
+
 double scr_dyn_arr_len(const ScrDyn *d) {
   return d->kind == SCR_DYN_ARR ? (double)d->v.arr.len : 0;
 }
@@ -2076,7 +2107,8 @@ ScrStr *scr_dyn_object_tag(const ScrDyn *d) {
   case SCR_DYN_OBJ: tag = "[object Object]"; break;
   case SCR_DYN_HANDLE:
     if ((d->v.handle.tag >= SCR_DYNH_ABORT_SIGNAL &&
-         d->v.handle.tag <= SCR_DYNH_ABORT_CONTROLLER) || d->v.handle.tag == SCR_DYNH_ARRAY_BUFFER) {
+         d->v.handle.tag <= SCR_DYNH_ABORT_CONTROLLER) || d->v.handle.tag == SCR_DYNH_ARRAY_BUFFER ||
+        d->v.handle.tag == SCR_DYNH_WEAK_MAP || d->v.handle.tag == SCR_DYNH_WEAK_SET) {
       ScrJsonBuf b;
       scr_jb_init(&b);
       scr_jb_puts(&b, "[object ");
@@ -5066,6 +5098,282 @@ ScrDyn *scr_array_buffer_from_bytes(ScrBytes *view) {
   };
   scr_dyn_handle_install(SCR_DYNH_ARRAY_BUFFER, &ops);
   return scr_dyn_new_handle(view->backing ? view->backing : view, SCR_DYNH_ARRAY_BUFFER);
+}
+
+ScrDyn *scr_dyn_mark_snapshot(ScrDyn *value) {
+  value->copied_from_native = true;
+  return value;
+}
+
+typedef struct ScrWeakMap ScrWeakMap;
+typedef struct ScrWeakEntry {
+  void *key; /* borrowed native identity, never retained */
+  unsigned kind;
+  ScrDyn *value;
+  ScrWeakMap *owner;
+  struct ScrWeakEntry *next, *all_next;
+} ScrWeakEntry;
+
+struct ScrWeakMap { size_t rc; ScrWeakEntry *entries; bool is_set; };
+/* Weak observers borrow key identities. Values remain ordinary RC edges;
+ * value-to-key cycles require explicit deletion or container disposal. */
+#define SCR_WEAK_BUCKETS 1024
+static SCR_TL ScrWeakEntry *scr_weak_entries[SCR_WEAK_BUCKETS];
+static size_t scr_weak_bucket(void *key) {
+  uintptr_t bits = (uintptr_t)key;
+  return ((bits >> 4) ^ (bits >> 14)) & (SCR_WEAK_BUCKETS - 1);
+}
+
+static void scr_weak_remove(ScrWeakEntry *entry) {
+  ScrWeakEntry **slot = &entry->owner->entries;
+  while (*slot != entry) slot = &(*slot)->next;
+  *slot = entry->next;
+  slot = &scr_weak_entries[scr_weak_bucket(entry->key)];
+  while (*slot != entry) slot = &(*slot)->all_next;
+  *slot = entry->all_next;
+  ScrDyn *value = entry->value;
+  free(entry);
+  /* Unlink before release: releasing a value can dispose another key. */
+  scr_dyn_release(value);
+}
+
+static void scr_weak_disposed(void *key) {
+  for (;;) {
+    ScrWeakEntry *entry = scr_weak_entries[scr_weak_bucket(key)];
+    while (entry && entry->key != key) entry = entry->all_next;
+    if (!entry) return;
+    scr_weak_remove(entry);
+  }
+}
+
+static void *scr_weak_map_retain(void *ptr) {
+  ((ScrWeakMap *)ptr)->rc++;
+  return ptr;
+}
+
+static void scr_weak_map_release(void *ptr) {
+  ScrWeakMap *map = ptr;
+  if (--map->rc) return;
+  scr_weak_dispose(map);
+  while (map->entries) scr_weak_remove(map->entries);
+  free(map);
+}
+
+/* Return 1 for an observed identity, 0 for a primitive, and -1 for a
+ * reference whose native lifetime has no observer contract yet. */
+static int scr_weak_key(const ScrDyn *key, void **ptr, unsigned *kind) {
+  if (key->copied_from_native) return -1;
+  *kind = 0;
+  switch (key->kind) {
+  case SCR_DYN_OBJ:
+    if (key->v.obj.source_identity) return -1;
+    *ptr = (void *)key; return 1;
+  case SCR_DYN_ARR: case SCR_DYN_PROXY:
+    *ptr = (void *)key; return 1;
+  case SCR_DYN_BYTES:
+    *ptr = key->v.bytes; *kind = 1; return 1;
+  case SCR_DYN_FUNC:
+    *ptr = key->v.fn.class_obj ? (void *)key->v.fn.class_obj : (void *)key->v.fn.clo;
+    *kind = key->v.fn.class_obj ? 3 : 2; return 1;
+  case SCR_DYN_HANDLE:
+    if (key->v.handle.tag != SCR_DYNH_ARRAY_BUFFER && key->v.handle.tag != SCR_DYNH_WEAK_MAP && key->v.handle.tag != SCR_DYNH_WEAK_SET) return -1;
+    *ptr = key->v.handle.ptr; *kind = 4 + key->v.handle.tag; return 1;
+  case SCR_DYN_TYPED_REF: case SCR_DYN_PROMISE: case SCR_DYN_JSVAL:
+    return -1;
+  default: return 0;
+  }
+}
+
+static ScrWeakEntry *scr_weak_find(ScrWeakMap *map, void *ptr, unsigned kind) {
+  for (ScrWeakEntry *entry = map->entries; entry; entry = entry->next)
+    if (entry->key == ptr && entry->kind == kind) return entry;
+  return NULL;
+}
+
+static bool scr_weak_set(ScrWeakMap *map, ScrDyn *key, ScrDyn *value) {
+  void *ptr = NULL;
+  unsigned kind = 0;
+  int supported = scr_weak_key(key, &ptr, &kind);
+  if (supported < 0) {
+    static const char message[] = "Weak collection keys of this native reference type have no weak lifetime lowering";
+    scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
+    return false;
+  }
+  if (!supported) {
+    const char *message = map->is_set ? "Invalid value used in weak set" : "Invalid value used as weak map key";
+    scr_throw_error_msg(SCR_ERR_TYPE, message, strlen(message));
+    return false;
+  }
+  ScrWeakEntry *entry = scr_weak_find(map, ptr, kind);
+  if (entry) {
+    ScrDyn *old = entry->value;
+    entry->value = scr_dyn_retain(value);
+    scr_dyn_release(old);
+    return true;
+  }
+  entry = calloc(1, sizeof *entry);
+  if (!entry) scr_json_oom();
+  entry->key = ptr;
+  entry->kind = kind;
+  entry->value = scr_dyn_retain(value);
+  entry->owner = map;
+  entry->next = map->entries;
+  map->entries = entry;
+  size_t bucket = scr_weak_bucket(ptr);
+  entry->all_next = scr_weak_entries[bucket];
+  scr_weak_entries[bucket] = entry;
+  return true;
+}
+
+static ScrDyn *scr_weak_map_invoke(void *ptr, ScrDyn *self, const char *method,
+    ScrDyn *const *args, size_t argc, const char *what) {
+  (void)what;
+  ScrWeakMap *map = ptr;
+  ScrDyn *key = argc ? args[0] : scr_dyn_undefined();
+  if (strcmp(method, map->is_set ? "add" : "set") == 0) {
+    if (!scr_weak_set(map, key, !map->is_set && argc > 1 ? args[1] : scr_dyn_undefined())) return NULL;
+    return scr_dyn_retain(self);
+  }
+  if ((!map->is_set && strcmp(method, "get") == 0) || strcmp(method, "has") == 0 || strcmp(method, "delete") == 0) {
+    void *identity = NULL;
+    unsigned kind = 0;
+    int supported = scr_weak_key(key, &identity, &kind);
+    if (supported < 0) {
+      static const char message[] = "Weak collection keys of this native reference type have no weak lifetime lowering";
+      scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
+      return NULL;
+    }
+    ScrWeakEntry *entry = supported ? scr_weak_find(map, identity, kind) : NULL;
+    if (strcmp(method, "get") == 0) return scr_dyn_retain(entry ? entry->value : scr_dyn_undefined());
+    bool found = entry != NULL;
+    if (found && strcmp(method, "delete") == 0) scr_weak_remove(entry);
+    return scr_dyn_new_bool(found);
+  }
+  static const char message[] = "WeakMap method has no native lowering";
+  scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
+  return NULL;
+}
+
+static ScrDyn *scr_weak_map_get(void *ptr, const char *key, size_t len) {
+  ScrWeakMap *map = ptr;
+  if ((len == 3 && (memcmp(key, "has", 3) == 0 ||
+      (map->is_set ? memcmp(key, "add", 3) == 0 : (memcmp(key, "get", 3) == 0 || memcmp(key, "set", 3) == 0)))) ||
+      (len == 6 && memcmp(key, "delete", 6) == 0)) {
+    static const char message[] = "Weak collection method values have no native lowering";
+    scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
+  }
+  return NULL;
+}
+
+static bool scr_weak_map_write(void *ptr, const char *key, size_t len, const ScrDyn *value) {
+  (void)ptr; (void)key; (void)len; (void)value;
+  return false;
+}
+
+/* Constructor entries read property 0 before property 1, including getters.
+ * Entry validation has already rejected primitive values. */
+static ScrDyn *scr_dyn_entry_read(const ScrDyn *entry, unsigned index) {
+  if (entry->kind == SCR_DYN_ARR)
+    return scr_dyn_retain(index < entry->v.arr.len ? entry->v.arr.items[index] : scr_dyn_undefined());
+  char name = index ? '1' : '0';
+  if (entry->kind == SCR_DYN_OBJ) return scr_dyn_obj_read(entry, &name, 1);
+  if (entry->kind == SCR_DYN_TYPED_REF) {
+    ScrDyn *view = scr_dyn_typed_ref_materialize(entry);
+    if (scr_exc_pending()) { scr_dyn_release(view); return NULL; }
+    ScrDyn *result = scr_dyn_entry_read(view, index);
+    scr_dyn_release(view);
+    return result;
+  }
+  ScrStr *key = scr_str_new(&name, 1);
+  ScrDyn *result = NULL;
+  switch (entry->kind) {
+  case SCR_DYN_PROXY: result = scr_dyn_proxy_get(entry, key); break;
+  case SCR_DYN_BYTES: result = scr_dyn_bytes_key_get(entry, key); break;
+  case SCR_DYN_HANDLE: result = scr_dyn_handle_key_get(entry, key); break;
+  case SCR_DYN_FUNC: result = scr_dyn_fn_get(entry, &name, 1); break;
+  case SCR_DYN_JSVAL: result = scr_dyn_isl_key_get(entry, key); break;
+  default: break;
+  }
+  scr_str_release(key);
+  return result || scr_exc_pending() ? result : scr_dyn_retain(scr_dyn_undefined());
+}
+
+static ScrDyn *scr_weak_collection_new(ScrDyn *seed, bool is_set) {
+  static const ScrDynHandleOps map_ops = {
+    "WeakMap", &scr_weak_map_retain, &scr_weak_map_release, &scr_weak_map_invoke,
+    &scr_weak_map_get, &scr_weak_map_write, NULL, NULL,
+  };
+  static const ScrDynHandleOps set_ops = {
+    "WeakSet", &scr_weak_map_retain, &scr_weak_map_release, &scr_weak_map_invoke,
+    &scr_weak_map_get, &scr_weak_map_write, NULL, NULL,
+  };
+  ScrDynHandleTag tag = is_set ? SCR_DYNH_WEAK_SET : SCR_DYNH_WEAK_MAP;
+  scr_weak_dispose_hook = &scr_weak_disposed;
+  scr_dyn_handle_install(tag, is_set ? &set_ops : &map_ops);
+  ScrWeakMap *map = calloc(1, sizeof *map);
+  if (!map) scr_json_oom();
+  map->rc = 1;
+  map->is_set = is_set;
+  ScrDyn *entries = scr_dyn_map_seed_entries(seed);
+  if (!entries) { scr_weak_map_release(map); return NULL; }
+  for (size_t i = 0; i < entries->v.arr.len; i++) {
+    if (is_set) {
+      if (!scr_weak_set(map, entries->v.arr.items[i], scr_dyn_undefined())) break;
+      continue;
+    }
+    ScrDyn *entry = scr_dyn_map_seed_entry(entries->v.arr.items[i]);
+    if (!entry) break;
+    ScrDyn *key = scr_dyn_entry_read(entry, 0);
+    ScrDyn *value = scr_exc_pending() ? NULL : scr_dyn_entry_read(entry, 1);
+    scr_dyn_release(entry);
+    bool ok = value && scr_weak_set(map, key, value);
+    scr_dyn_release(key); scr_dyn_release(value);
+    if (!ok) break;
+  }
+  scr_dyn_release(entries);
+  if (scr_exc_pending()) { scr_weak_map_release(map); return NULL; }
+  ScrDyn *result = scr_dyn_new_handle(map, tag);
+  scr_weak_map_release(map);
+  return result;
+}
+
+bool scr_weak_map_is(const ScrDyn *value) {
+  return value->kind == SCR_DYN_HANDLE && value->v.handle.tag == SCR_DYNH_WEAK_MAP;
+}
+bool scr_weak_set_is(const ScrDyn *value) {
+  return value->kind == SCR_DYN_HANDLE && value->v.handle.tag == SCR_DYNH_WEAK_SET;
+}
+ScrDyn *scr_weak_map_new(ScrDyn *seed) { return scr_weak_collection_new(seed, false); }
+ScrDyn *scr_weak_set_new(ScrDyn *seed) { return scr_weak_collection_new(seed, true); }
+
+ScrDyn *scr_dyn_from_entries(ScrDyn *seed) {
+  if (seed->kind == SCR_DYN_UNDEF || seed->kind == SCR_DYN_NULL) {
+    static const char message[] = "undefined is not iterable";
+    scr_throw_error_msg(SCR_ERR_TYPE, message, sizeof message - 1);
+    return NULL;
+  }
+  ScrDyn *entries = scr_dyn_map_seed_entries(seed);
+  if (!entries) return NULL;
+  ScrDyn *result = scr_dyn_new_obj();
+  for (size_t i = 0; i < entries->v.arr.len; i++) {
+    ScrDyn *entry = scr_dyn_map_seed_entry(entries->v.arr.items[i]);
+    if (!entry) break;
+    ScrDyn *key = scr_dyn_entry_read(entry, 0);
+    ScrDyn *value = scr_exc_pending() ? NULL : scr_dyn_entry_read(entry, 1);
+    scr_dyn_release(entry);
+    ScrStr *name = value ? scr_dyn_property_key(key) : NULL;
+    scr_dyn_release(key);
+    if (name && !scr_exc_pending()) {
+      scr_dyn_obj_set(result, name->data, name->len, value); /* takes value */
+    } else {
+      scr_dyn_release(value);
+    }
+    scr_str_release(name);
+    if (scr_exc_pending()) break;
+  }
+  scr_dyn_release(entries);
+  if (scr_exc_pending()) { scr_dyn_release(result); return NULL; }
+  return result;
 }
 
 ScrDyn *scr_array_buffer_new(ScrDyn *length) {

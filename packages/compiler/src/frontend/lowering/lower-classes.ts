@@ -5494,6 +5494,7 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
             : null;
         let tsType = lowerer.typeOf(expr);
         let mapped = lowerer.mapTypeOf(tsType);
+        if (mapped === null && isJsSourceFile(expr.getSourceFile())) mapped = lowerer.irTypeOf(expr);
         const fieldType = assignedThisFieldType(lowerer, expr);
         if (mapped?.kind !== "map" && fieldType?.kind === "map") mapped = fieldType;
         // A fresh map built from pair literals can use its destination's
@@ -5545,7 +5546,7 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
         const targs = lowerer.checker.getTypeArguments(tsType as ts.TypeReference);
         // JAVASCRIPT `new Map()` whose arguments never resolved past
         // Map<any, any> (no annotation, no contextual type, no seed): the
-        // WeakMap stance below — the VALUE lowers as an opaque dyn object
+        // The VALUE lowers as an opaque dyn object
         // (identity and truthiness are real), and every reached METHOD use
         // meets its own per-site fence at runtime. The formatter's
         // config-cache shape: module init constructs the caches
@@ -5579,25 +5580,24 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
         }
         lowerer.badType(expr, tsType);
       }
-      // `new Set<T>()`: Map's sibling. The SEEDED form lowers for arrays
-      // and fixed tuples of legal elements, or strings by code point, as
-      // construct + bulk add (duplicates collapse, insertion order
-      // preserved, exactly JS). Other iterables keep the fence.
-      // Unsupported element types are named specifically.
-      // `new WeakMap()` / `new WeakSet()` in JAVASCRIPT sources: no weak
-      // container exists in the value model, but harness code constructs
-      // one unconditionally and touches it only on paths tests don't
-      // reach — the value lowers as an opaque dyn object (identity only;
-      // every reached METHOD use meets its own per-site fence → runtime
-      // fence). TypeScript keeps the compile fence.
-      if (
-        (symbol?.name === "WeakMap" || symbol?.name === "WeakSet") &&
-        lowerer.isStdlibSymbol(symbol) &&
-        isJsSourceFile(expr.getSourceFile()) &&
-        (expr.arguments?.length ?? 0) === 0
-      ) {
-        return { kind: "dynObjLit", type: DYN, loc };
+      // Weak containers share checked native key identities and lifetime hooks.
+      if ((symbol?.name === "WeakMap" || symbol?.name === "WeakSet") && lowerer.isStdlibSymbol(symbol)) {
+        const args = expr.arguments ?? [];
+        if (args.length > 1 || args.some(ts.isSpreadElement)) {
+          lowerer.unsupported("SC1090", expr, `${symbol.name} construction with surplus or spread arguments`);
+        }
+        if (lowerer.dynamic) {
+          const ctor: IrExpr = { kind: "jsOp", op: "globalGet", name: symbol.name, args: [], type: JSVAL, loc };
+          return { kind: "jsOp", op: "construct", args: [ctor, ...args.map((arg) => lowerer.jsvalIn(lowerer.lowerExpr(arg), arg))], type: JSVAL, loc };
+        }
+        return {
+          kind: "libCall", fn: symbol.name === "WeakMap" ? "weakMap.new" : "weakSet.new",
+          args: [args[0] ? lowerer.lowerExprExpecting(args[0], DYN) : dynUndefinedExpr(loc)],
+          type: DYN, loc,
+        };
       }
+      // `new Set<T>()`: construct + bulk add from native arrays, tuples,
+      // or strings. Duplicates collapse in insertion order.
       if (symbol?.name === "Set" && lowerer.isStdlibSymbol(symbol)) {
         const tsType = lowerer.typeOf(expr);
         let mapped = lowerer.mapTypeOf(tsType);
@@ -5765,8 +5765,6 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
           String: "boxed wrapper objects have no lowering — use the string primitive (the box is only distinguishable via typeof/identity, which nothing here can honor)",
           Number: "boxed wrapper objects have no lowering — use the number primitive",
           Boolean: "boxed wrapper objects have no lowering — use the boolean primitive",
-          WeakMap: "weak collections observe garbage collection, which reference counting never exposes — a strong Map behaves identically in-language: use Map",
-          WeakSet: "weak collections observe garbage collection, which reference counting never exposes — a strong Set behaves identically in-language: use Set",
           WeakRef: "deref()-after-collect exposes GC timing — genuinely dynamic; hold a strong reference instead",
           FinalizationRegistry: "finalization callbacks expose GC timing — genuinely dynamic; release resources explicitly instead",
           SharedArrayBuffer: "no shared-memory threads exist in a compiled program — Uint8Array is the byte storage",

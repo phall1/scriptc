@@ -1804,6 +1804,9 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
     if (!value || !isSupportedMapValue(value)) return null;
     return mapOf(key, value);
   }
+  // Native WeakMap keeps reference identities in checked-dynamic storage.
+  // The runtime rejects reference kinds without a weak lifetime contract.
+  if (isStdlibInterface("WeakMap") || isStdlibInterface("WeakSet")) return ctx.dynamic ? JSVAL : DYN;
   // Set<T>: Map's sibling — same provenance rule and key domain.
   // Anything else stays unmapped;
   // the `new Set` lowering names the offending element type specifically.

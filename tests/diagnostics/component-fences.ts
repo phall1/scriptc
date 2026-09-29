@@ -32,14 +32,14 @@ console.log(storedSum(1, 2));
 // A function's return type carries the failure. The value arrives through
 // a cast, not an ambient declare (a declare-rooted chain would compile to
 // Node's ReferenceError at the root instead).
-const makeWeak = (0 as unknown) as () => WeakMap<object, number>;
+const makeWeak = (0 as unknown) as () => WeakRef<object>;
 const storedMake = makeWeak;
 console.log(storedMake());
 
 // A record member's type carries the failure.
 interface Holder {
   label: string;
-  cache: WeakMap<object, number>;
+  cache: WeakRef<object>;
 }
 const held = (0 as unknown) as Holder;
 const kept = held;

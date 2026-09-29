@@ -84,6 +84,12 @@
  */
 #include "scr_runtime.h"
 
+SCR_TL void (*scr_weak_dispose_hook)(void *) = NULL;
+
+void scr_weak_dispose(void *object) {
+  if (scr_weak_dispose_hook) scr_weak_dispose_hook(object);
+}
+
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -109,6 +115,7 @@ void *scr_cyc_alloc(size_t size, ScrTraceFn trace, ScrCycFreeFn free_fn) {
 }
 
 void scr_cyc_free(void *obj) {
+  scr_weak_dispose(obj);
   scr_cyc_live--;
   free(scr_cyc_hdr(obj));
 }

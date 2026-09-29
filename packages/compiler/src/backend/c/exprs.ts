@@ -4488,6 +4488,10 @@ function emitDynamicLibCall(state: LibCallState): Temp {
             // non-iterable dyn kinds and drains wrapped engine values
             // through the engine's protocol (may-throw seed set).
             return finish(`scr_dyn_iter_pack(${arg(0)}, ${arg(1)})`);
+          case "dyn.mapSeedEntries":
+            return finish(`scr_dyn_map_seed_entries(${arg(0)})`);
+          case "dyn.mapSeedEntry":
+            return finish(`scr_dyn_map_seed_entry(${arg(0)})`);
           case "dyn.arrLen":
             // The for-of pack's length (borrowed; never throws).
             return finish(`scr_dyn_arr_len(${arg(0)})`);
@@ -4531,6 +4535,16 @@ function emitDynamicLibCall(state: LibCallState): Temp {
             );
           case "dyn.this":
             return finish(`scr_dyn_this_get()`);
+          case "dyn.fromEntries":
+            return finish(`scr_dyn_from_entries(${arg(0)})`);
+          case "weakSet.new":
+            return finish(`scr_weak_set_new(${arg(0)})`);
+          case "weakMap.is":
+            return finish(`scr_weak_map_is(${arg(0)})`);
+          case "weakSet.is":
+            return finish(`scr_weak_set_is(${arg(0)})`);
+          case "weakMap.new":
+            return finish(`scr_weak_map_new(${arg(0)})`);
           case "arrayBuffer.new":
             return finish(`scr_array_buffer_new(${arg(0)})`);
           case "arrayBuffer.is":
@@ -9190,6 +9204,8 @@ function emitLibCallExpr(emitter: CEmitter, e: LibCallExpr): Temp {
     case "island":
     case "json":
       return emitWebLibCall(state);
+    case "weakSet":
+    case "weakMap":
     case "arrayBuffer":
     case "dyn":
     case "global":

@@ -2290,7 +2290,8 @@ function storedImplicitArgumentType(lowerer: Lowerer, arg: ts.Expression): IrTyp
       if ((lowerer.typeOf(param.name).flags & ts.TypeFlags.Any) === 0) bound = declared.type;
       const arg = call.arguments[i];
       if (arg && !ts.isSpreadElement(arg)) {
-        if (storedImplicitArgumentType(lowerer, arg)?.kind === "dyn") {
+        const stored = storedImplicitArgumentType(lowerer, arg);
+        if (stored?.kind === "dyn") {
           bound = DYN;
           argTypes.set(sym, lowerer.checker.getUnknownType());
           shapes.push({ type: bound, mode: "required" });
@@ -2302,6 +2303,22 @@ function storedImplicitArgumentType(lowerer: Lowerer, arg: ts.Expression): IrTyp
         // instantiates it (this._initCommandGroup(command)).
         const t = lowerer.checker.getBaseTypeOfLiteralType(lowerer.typeOf(arg));
         const mapped = lowerer.mapTypeOf(t) ?? dynFallbackType(lowerer, arg, t);
+        // JS inference can absorb heterogeneous loop values into `{}`.
+        // That checker supertype is not an empty-record runtime layout:
+        // preserve represented arms through the checked boundary instead
+        // of specializing a call to a union that would discard them.
+        const mappedArms = mapped?.kind === "union" ? lowerer.unions.get(mapped.unionId)?.arms ?? [] : mapped ? [mapped] : [];
+        const hasTopObject = mappedArms.some((arm) => {
+          const shape = arm.kind === "record" ? lowerer.shapes.get(arm.shapeId) : undefined;
+          return shape && !shape.tuple && !shape.indexValue && shape.fields.length === 0;
+        });
+        if (stored?.kind === "union" && hasTopObject && lowerer.dynConvertible(stored) &&
+            lowerer.unions.get(stored.unionId)?.arms.some((arm) => !isUnitType(arm) &&
+              !mappedArms.some((target) => lowerer.widthLiftPlan(arm, target) !== null))) {
+          argTypes.set(sym, lowerer.checker.getUnknownType());
+          shapes.push({ type: DYN, mode: "required" });
+          return;
+        }
         if (
           ts.isArrowFunction(arg) &&
           arg.type === undefined &&
@@ -6004,7 +6021,7 @@ const DYN_DISPATCH_METHODS = new Set([
   "setEncoding", "setDefaultEncoding", "setTimeout", "read", "isPaused",
   "writeHead", "setHeader", "getHeader", "hasHeader", "removeHeader",
   "getHeaders", "getHeaderNames", "appendHeader", "flushHeaders",
-  "append", "delete", "get", "getSetCookie", "has", "set",
+  "add", "append", "delete", "get", "getSetCookie", "has", "set",
   "writeContinue", "writeEarlyHints", "cork", "uncork", "addTrailers",
   "ref", "unref", "address", "setNoDelay", "setKeepAlive", "connect",
   "resetAndDestroy", "destroySoon",
@@ -9301,11 +9318,13 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
     // unknown[] uses the checked-dynamic array representation. Enumerate
     // a live view of the record so values retain their identities and the
     // result never pretends to be a native vector or an island array.
-    if (member === "values" && lowerer.mapTypeOf(lowerer.typeOf(call))?.kind === "dyn") {
+    const enumerationType = lowerer.mapTypeOf(lowerer.typeOf(call));
+    if ((member === "values" || member === "entries") &&
+        (enumerationType?.kind === "dyn" || enumerationType === null && isJsSourceFile(call.getSourceFile()))) {
       let receiver = lowerer.coerceToExpected(lowerer.lowerExpr(argNode), DYN);
       if (receiver.type.kind !== "dyn") lowerer.badType(argNode, lowerer.typeOf(argNode));
       if (receiver.kind === "dynFrom" && receiver.value.type.kind === "record") receiver = { ...receiver, liveRef: true };
-      return { kind: "libCall", fn: "dyn.objValues", args: [receiver], type: DYN, loc: locOf(call) };
+      return { kind: "libCall", fn: member === "values" ? "dyn.objValues" : "dyn.objEntries", args: [receiver], type: DYN, loc: locOf(call) };
     }
     if (shape.indexValue) {
       // Index-signature (overflow-carrying) shapes: the runtime walk —

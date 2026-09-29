@@ -25,6 +25,11 @@ export function emitAlwaysThrowLibCall(
 
 export const LIB_FN_SYMS: Record<string, string> = {
   "intl.segmenterNew": "scr_intl_segmenter_new",
+  "weakMap.is": "scr_weak_map_is",
+  "weakSet.is": "scr_weak_set_is",
+  "weakMap.new": "scr_weak_map_new",
+  "weakSet.new": "scr_weak_set_new",
+  "dyn.fromEntries": "scr_dyn_from_entries",
   "arrayBuffer.new": "scr_array_buffer_new",
   "arrayBuffer.is": "scr_array_buffer_is",
   "arrayBuffer.isView": "scr_array_buffer_is_view",
@@ -544,6 +549,8 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "dyn.globalSymbolDelete": "scr_dyn_global_symbol_delete",
   "dyn.typedRefIs": "scr_dyn_typed_ref_is_key",
   "dyn.iterPack": "scr_dyn_iter_pack",
+  "dyn.mapSeedEntries": "scr_dyn_map_seed_entries",
+  "dyn.mapSeedEntry": "scr_dyn_map_seed_entry",
   "dyn.arrLen": "scr_dyn_arr_len",
   "dyn.arrAt": "scr_dyn_arr_at",
   "dyn.hasKey": "scr_dyn_has_key",

@@ -24,7 +24,7 @@ const d = new Date(2024, 0); // the local-time year/month field constructor stay
 const mutableDate = new Date(0);
 mutableDate.setUTCFullYear(2024); // mutation is outside the read-only Date slice
 const sameDate = mutableDate === mutableDate; // scalar storage must not fake object identity
-const wm = new WeakMap();
+const wr = new WeakRef({});
 const px = new Proxy({ a: 1 }, {});
 const buf = new ArrayBuffer(8);
 const st = new Set(new Set([1, 2])); // string and array seeds lower; Set-valued seeds stay fenced

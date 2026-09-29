@@ -6,7 +6,7 @@ import { InternalCompilerError } from "../../errors.js";
 import * as ts from "../ts7/adapter.js";
 import { bindingSource } from "../binding-source.js";
 import type { Lowerer } from "./lowerer.js";
-import { arrayValueRead, arrayValueStore, arrayValueType } from "./array-values.js";
+import { arrayValueRead, arrayValueStore, arrayValueType, unionArrayValueRead } from "./array-values.js";
 import { lowerForAwaitGenerator, lowerForOfGenerator, lowerYieldStarStatement, type GenType } from "./lower-generators.js";
 import { lowerForAwaitBuiltin } from "./lower-async-iteration.js";
 import { BOOL, BYTES_U8, CAUGHT, DYN, F64, IrExpr, IrGlobal, IrLocal, IrStmt, IrType, JSVAL, STRING, SrcLoc, UNDEFINED_T, VOID, arrayOf, isUnitType, shapeHasAccessorSlots, typeEquals } from "../../ir/ir.js";
@@ -1588,6 +1588,19 @@ export function isParseArgsDynCheckerType(lowerer: Lowerer, type: ts.Type): bool
     }
     if (ts.isArrayBindingPattern(pattern)) {
       lowerer.fenceStaticHeadersIteration(pattern);
+      if (srcType.kind === "union" && lowerer.unions.get(srcType.unionId)?.arms.every((arm) => arm.kind === "array")) {
+        for (let i = 0; i < pattern.elements.length; i++) {
+          const el = pattern.elements[i]!;
+          if (ts.isOmittedExpression(el) || el.name === undefined) continue;
+          if (el.dotDotDotToken) lowerer.unsupported("SC1031", el, "rest elements over a union of array layouts");
+          const loc = locOf(el);
+          let value = unionArrayValueRead(lowerer, srcRef(), numLit(i, loc), loc);
+          if (!value) lowerer.unsupported("SC1031", el, "array union elements without a common native representation");
+          if (el.initializer) value = applyBindingDefault(lowerer, el, value);
+          lowerer.bindPatternTarget(el.name, value, isLet, out);
+        }
+        return;
+      }
       // Tuple sources: each position is a field read of the tuple's record
       // shape — the positional twin of object destructuring below.
       const tupleShape =
@@ -2224,7 +2237,8 @@ export function isParseArgsDynCheckerType(lowerer: Lowerer, type: ts.Type): bool
     const unionId = value.type.unionId;
     const arms = lowerer.unions.get(unionId)?.arms;
     const present = arms?.filter((arm) => !isUnitType(arm));
-    if (!arms || present?.length !== 1 || arms.length === 1) return value;
+    if (!arms || !present?.length || present.length === arms.length ||
+        (present.length > 1 && !(arrayPattern && present.every((arm) => arm.kind === "array")))) return value;
     for (const [tag, arm] of arms.entries()) {
       if (!isUnitType(arm)) continue;
       const unit = arm.kind === "undefinedT" ? "undefined" : "null";
@@ -2238,14 +2252,19 @@ export function isParseArgsDynCheckerType(lowerer: Lowerer, type: ts.Type): bool
         else_: null, loc,
       });
     }
-    return { kind: "unionNarrow", unionId, tag: lowerer.armTag(unionId, present[0]!), value, type: present[0]!, loc };
+    if (present.length === 1) {
+      return { kind: "unionNarrow", unionId, tag: lowerer.armTag(unionId, present[0]!), value, type: present[0]!, loc };
+    }
+    const type: IrType = { kind: "union", unionId: lowerer.unions.intern(present) };
+    return lowerer.coerceToExpected(value, type);
   }
 
 /** The type a pattern element binds at — the checker's type of the bound
    * identifier, or of the nested pattern itself (its implied type). Null
-   * when the type has no static mapping (the caller fences). */
+   * when the type has no static mapping or checked JS fallback. */
   function patternBindingType(lowerer: Lowerer, name: ts.BindingName): IrType | null {
-    return lowerer.mapTypeOf(lowerer.typeOf(name));
+    const type = lowerer.typeOf(name);
+    return lowerer.mapTypeOf(type) ?? (isJsSourceFile(name.getSourceFile()) ? dynFallbackType(lowerer, name, type) : null);
   }
 
 /** The STATIC property name of a destructuring key: identifiers spell
@@ -5682,13 +5701,21 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
 
 /** V8's spelling of a destructuring RHS in its TypeError message
    * ("Cannot destructure 'a' as it is undefined.") — plain identifiers
-   * spell their name (parens unwrap); everything else is V8's
-   * CallPrinter reconstruction, which is not reproduced — null keeps a
-   * fence at the caller. */
+   * spell their name (parens unwrap), and calls append an ellipsis to a
+   * supported callee spelling. Other CallPrinter forms keep a fence. */
   function destrSpellingOf(rhs: ts.Expression): string | null {
     let e = rhs;
     while (ts.isParenthesizedExpression(e)) e = e.expression;
-    return ts.isIdentifier(e) ? e.text : null;
+    if (ts.isIdentifier(e)) return e.text;
+    if (ts.isPropertyAccessExpression(e) && !e.questionDotToken) {
+      const base = destrSpellingOf(e.expression);
+      return base === null ? null : `${base}.${e.name.text}`;
+    }
+    if (ts.isCallExpression(e) && !e.questionDotToken) {
+      const callee = destrSpellingOf(e.expression);
+      return callee === null ? null : `${callee}(...)`;
+    }
+    return null;
   }
 
 /** Destructuring ASSIGNMENT (existing bindings — the declaration twin is
@@ -5808,7 +5835,7 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
           lowerer.unsupported(
             "SC1031",
             blame,
-            "destructuring assignment from a checked-dynamic source that is not a plain variable (V8's TypeError spells the source expression — assign it to a variable first)",
+            "destructuring assignment from a checked-dynamic source whose expression spelling is unsupported (use a variable, ordinary property chain, or ordinary call)",
           );
         }
         let firstProp: string | undefined;

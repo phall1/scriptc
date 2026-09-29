@@ -11211,6 +11211,66 @@
     "<repo>/tests/corpus/union-optional-semantic-identity.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/async-backend-factory.mjs": {
+   "order": [
+    "<repo>/tests/corpus/async-backend-factory.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/destructure-call-assignment.js": {
+   "order": [
+    "<repo>/tests/corpus/destructure-call-assignment.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/destructure-inferred-row-defaults.js": {
+   "order": [
+    "<repo>/tests/corpus/destructure-inferred-row-defaults.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/map-checked-seed.js": {
+   "order": [
+    "<repo>/tests/corpus/map-checked-seed.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/object-from-checked-entries.js": {
+   "order": [
+    "<repo>/tests/corpus/object-from-checked-entries.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/weak-map-array-buffer.ts": {
+   "order": [
+    "<repo>/tests/corpus/weak-map-array-buffer.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/weak-map-native.js": {
+   "order": [
+    "<repo>/tests/corpus/weak-map-native.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/weak-set-native.js": {
+   "order": [
+    "<repo>/tests/corpus/weak-set-native.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/destructure-union-arrays.ts": {
+   "order": [
+    "<repo>/tests/corpus/destructure-union-arrays.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/fresh-array-union-layout.js": {
+   "order": [
+    "<repo>/tests/corpus/fresh-array-union-layout.js"
+   ],
+   "diags": []
   }
  }
 }

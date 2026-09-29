@@ -128,7 +128,8 @@ describe(`npm-static pilots${sanitize ? " (sanitized)" : ""}`, () => {
     }
   });
 
-  test.each(["stored-native-builtins.js", "stored-object-helpers.js", "renderer-specializations.js", "renderer-export-dictionaries.js"].flatMap((name) =>
+  test.each(["stored-native-builtins.js", "stored-object-helpers.js", "renderer-specializations.js", "renderer-export-dictionaries.js",
+    "fresh-array-union-layout.js", "async-backend-factory.mjs", "destructure-inferred-row-defaults.js", "object-from-checked-entries.js"].flatMap((name) =>
     (["c", "llvm"] as const).map((backend) => ({ name, backend })),
   ))("renderer startup $name compiles from shipped JavaScript ($backend)", async ({ name, backend }) => {
     const dir = mkdtempSync(join(tmpdir(), "scriptc-renderer-startup-"));
@@ -148,7 +149,7 @@ describe(`npm-static pilots${sanitize ? " (sanitized)" : ""}`, () => {
       expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
       if (!result.ok) return;
       const [nodeRes, nativeRes] = await Promise.all([runBinary(process.execPath, [entry]), runBinary(result.binaryPath, [])]);
-      expect(nativeRes.stdout).toEqual(nodeRes.stdout);
+      expect(nativeRes.stdout.toString()).toEqual(nodeRes.stdout.toString());
       expect(comparableStderr(nativeRes.stderr)).toEqual(nodeRes.stderr);
       expect(nativeRes.exitCode).toBe(nodeRes.exitCode);
     } finally {

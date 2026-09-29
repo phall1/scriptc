@@ -3371,6 +3371,8 @@ typedef enum {
   SCR_DYNH_SEGMENTS,      /* iterable immutable segmentation result */
   SCR_DYNH_BUILTIN_MODULE, /* native builtin export object */
   SCR_DYNH_GLOBAL,         /* native global object identity */
+  SCR_DYNH_WEAK_MAP,       /* native weak-key metadata */
+  SCR_DYNH_WEAK_SET,       /* native weak membership */
   SCR_DYNH_COUNT,
 } ScrDynHandleTag;
 
@@ -3431,6 +3433,9 @@ struct ScrDyn {
    * fresh copies (structuredClone) DROP the flag — Node's serialization
    * answers a plain object too. */
   bool null_proto;
+  /* A deep typed-to-dyn copy has no stable native reference identity.
+   * Weak collections must refuse it instead of weakly tracking its box. */
+  bool copied_from_native;
   union {
     bool b;
     double num;
@@ -3639,6 +3644,19 @@ void scr_dyn_arr_push_spread(ScrDyn *arr, const ScrDyn *src, const char *what);
  * compile-time source spelling), else the runtime kind wording. Borrows
  * both; NULL with the exception pending on the throw. */
 ScrDyn *scr_dyn_iter_pack(const ScrDyn *src, const ScrStr *msg);
+/* Map constructor seeds: retain array inputs for live iteration, accept
+ * nullish inputs as empty, and validate each entry before reading 0/1. */
+ScrDyn *scr_dyn_map_seed_entries(const ScrDyn *src);
+ScrDyn *scr_dyn_map_seed_entry(const ScrDyn *entry);
+bool scr_weak_map_is(const ScrDyn *value);
+bool scr_weak_set_is(const ScrDyn *value);
+ScrDyn *scr_weak_map_new(ScrDyn *entries);
+ScrDyn *scr_weak_set_new(ScrDyn *values);
+ScrDyn *scr_dyn_from_entries(ScrDyn *entries);
+ScrDyn *scr_dyn_mark_snapshot(ScrDyn *value); /* consumes and returns +1 */
+/* Optional non-owning observers, installed by weak collections. */
+extern SCR_TL void (*scr_weak_dispose_hook)(void *);
+void scr_weak_dispose(void *object);
 /* The for-of-over-dyn pack accessors (the emitted index loop drives them
  * over a scr_dyn_iter_pack result, which is ARR by construction).
  * scr_dyn_arr_len answers 0 for non-ARR kinds; scr_dyn_arr_at answers the

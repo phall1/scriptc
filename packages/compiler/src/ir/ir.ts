@@ -1996,6 +1996,11 @@ export type IrRegexIntrinsicMethod =
  * bridge into the exception cell as catchable strings (may-throw). */
 export type IrLibFn =
   | "intl.segmenterNew"
+  | "weakMap.is"
+  | "weakSet.is"
+  | "weakMap.new"
+  | "weakSet.new"
+  | "dyn.fromEntries"
   | "arrayBuffer.new"
   | "arrayBuffer.is"
   | "arrayBuffer.isView"
@@ -2091,6 +2096,8 @@ export type IrLibFn =
    * not iterable (cannot read property Symbol(Symbol.iterator))"). In the
    * may-throw seed set. */
   | "dyn.iterPack"
+  | "dyn.mapSeedEntries"
+  | "dyn.mapSeedEntry"
   /** The for-of-over-dyn pack accessors — the emitted index loop drives
    * them over a dyn.iterPack result (ARR by construction). arrLen: the
    * ARR length as f64 (0 for non-ARR kinds; arg borrowed). arrAt: the
@@ -5355,10 +5362,8 @@ export type IrExpr =
    * `['pwd', []]` — and evolving `[]` declarations): each element is
    * already a dyn value; the result owns them. Never throws. */
   | { kind: "dynArrLit"; elems: IrExpr[]; type: IrType; loc: SrcLoc }
-  /** A dyn OBJECT built member-by-member. With no `fields` it is the empty
-   * object (the JS stand-in for opaque container values — `new WeakMap()`
-   * in harness code: the value exists for identity; every reached METHOD
-   * use meets its own fence). With `fields` it is a JS object literal whose
+  /** A dyn OBJECT built member-by-member. With no `fields` it is an empty
+   * object. With `fields` it is a JS object literal whose
    * keys are RUNTIME values (the computed-key idiom `{ [field]: criteria,
    * actual: 0 }` in test/common's _mustCallInner): each entry's key is a
    * string-typed expression (identifier/string keys lower to strLits;
@@ -7588,6 +7593,9 @@ export function moduleLibNondeterministicSurface(mod: IrModule): string | null {
  * seed on `dynCheck` and `awaitExpr` nodes, which throw on validation
  * failure / promise rejection). */
 export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
+  "weakMap.new",
+  "weakSet.new",
+  "dyn.fromEntries",
   "arrayBuffer.new",
   "arrayBuffer.byteLengthGetter",
   "arrayBuffer.viewU8C",
@@ -7909,6 +7917,8 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "dyn.keyDelete",
   // the destructuring pack throws V8's TypeError on non-iterable dyn kinds
   "dyn.iterPack",
+  "dyn.mapSeedEntries",
+  "dyn.mapSeedEntry",
   "dyn.toString",
   "string.fromCodePoint",
   "dyn.defineProps",
