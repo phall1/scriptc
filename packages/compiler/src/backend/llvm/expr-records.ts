@@ -114,6 +114,12 @@ export function emitRegexIntrinsic(host: LlvmEmitterContext, e: IrExpr & { kind:
         B.line(`${t} = call ptr @scr_regex_flags(ptr ${r.name})`);
         return host.own({ name: t, type: e.type });
       }
+      case "toString": {
+        host.declare(`declare ptr @scr_regex_to_string(ptr)`);
+        const t = B.tmp();
+        B.line(`${t} = call ptr @scr_regex_to_string(ptr ${r.name})`);
+        return host.own({ name: t, type: e.type });
+      }
       case "replace": {
         host.declare(`declare ptr @scr_regex_replace(ptr, ptr, ptr)`);
         const t = B.tmp();

@@ -5533,6 +5533,9 @@ export function lowerEnvironmentKey(lowerer: Lowerer, node: ts.Expression): IrEx
 
 export function ensureString(lowerer: Lowerer, e: IrExpr, node: ts.Node): IrExpr {
     if (e.type.kind === "string") return e;
+    if (e.type.kind === "regex") {
+      return { kind: "regexIntrinsic", method: "toString", receiver: e, args: [], type: STRING, loc: e.loc };
+    }
     if (e.type.kind === "bigint") {
       return {
         kind: "libCall",

@@ -73,6 +73,7 @@ export const REGEX_INTRINSIC_SIGS: Record<
   search: { receiver: STRING, argTypes: [REGEX], result: F64 },
   source: { receiver: REGEX, argTypes: [], result: STRING },
   flags: { receiver: REGEX, argTypes: [], result: STRING },
+  toString: { receiver: REGEX, argTypes: [], result: STRING },
   replace: { receiver: STRING, argTypes: [REGEX, STRING], result: STRING },
   replaceAll: { receiver: STRING, argTypes: [REGEX, STRING], result: STRING },
   split: { receiver: STRING, argTypes: [REGEX, F64], result: arrayOf(STRING) },

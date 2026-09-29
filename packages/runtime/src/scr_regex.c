@@ -222,6 +222,69 @@ void scr_regex_release_v(void *re) { scr_regex_release(re); }
 
 ScrStr *scr_regex_source(ScrRegex *re) { return scr_str_retain(re->source); }
 ScrStr *scr_regex_flags(ScrRegex *re) { return scr_str_retain(re->flags); }
+ScrStr *scr_regex_to_string(ScrRegex *re) {
+  const char *source = re->source->data;
+  size_t len = re->source->len;
+  size_t escaped = 0;
+  bool in_class = false;
+  bool quoted = false;
+  for (size_t i = 0; i < len; i++) {
+    char c = source[i];
+    bool line_separator = i + 2 < len && (unsigned char)c == 0xE2 &&
+                          (unsigned char)source[i + 1] == 0x80 &&
+                          ((unsigned char)source[i + 2] == 0xA8 ||
+                           (unsigned char)source[i + 2] == 0xA9);
+    if (!quoted && c == '/' && !in_class) escaped++;
+    if (!quoted && (c == '\n' || c == '\r')) escaped++;
+    if (!quoted && line_separator) escaped += 3;
+    if (!quoted && c == '[') in_class = true;
+    else if (!quoted && c == ']') in_class = false;
+    if (c == '\\') quoted = !quoted;
+    else quoted = false;
+  }
+  size_t total = 2 + len + escaped + re->flags->len;
+  char *buf = malloc(total + 1);
+  if (!buf) scr_regex_oom();
+  size_t pos = 0;
+  buf[pos++] = '/';
+  in_class = false;
+  quoted = false;
+  for (size_t i = 0; i < len; i++) {
+    char c = source[i];
+    bool line_separator = i + 2 < len && (unsigned char)c == 0xE2 &&
+                          (unsigned char)source[i + 1] == 0x80 &&
+                          ((unsigned char)source[i + 2] == 0xA8 ||
+                           (unsigned char)source[i + 2] == 0xA9);
+    if (!quoted && c == '/' && !in_class) buf[pos++] = '\\';
+    if (!quoted && line_separator) {
+      buf[pos++] = '\\';
+      buf[pos++] = 'u';
+      buf[pos++] = '2';
+      buf[pos++] = '0';
+      buf[pos++] = '2';
+      buf[pos++] = source[i + 2] == (char)0xA8 ? '8' : '9';
+      i += 2;
+      quoted = false;
+      continue;
+    }
+    if (!quoted && (c == '\n' || c == '\r')) {
+      buf[pos++] = '\\';
+      c = c == '\n' ? 'n' : 'r';
+    }
+    buf[pos++] = c;
+    if (!quoted && c == '[') in_class = true;
+    else if (!quoted && c == ']') in_class = false;
+    if (source[i] == '\\') quoted = !quoted;
+    else quoted = false;
+  }
+  buf[pos++] = '/';
+  memcpy(buf + pos, re->flags->data, re->flags->len);
+  pos += re->flags->len;
+  buf[pos] = '\0';
+  ScrStr *out = scr_str_new(buf, pos);
+  free(buf);
+  return out;
+}
 
 /* ── UTF-8 ⇄ UTF-16 (the exec buffer strategy) ──────────────────────── */
 

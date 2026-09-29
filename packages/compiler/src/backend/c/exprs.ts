@@ -1615,6 +1615,8 @@ function emitStringExpr(
             return emitter.newTemp(e.type, `scr_regex_source(${r.name})`);
           case "flags":
             return emitter.newTemp(e.type, `scr_regex_flags(${r.name})`);
+          case "toString":
+            return emitter.newTemp(e.type, `scr_regex_to_string(${r.name})`);
           case "replace":
             return emitter.newTemp(
               e.type,

@@ -869,6 +869,34 @@ bool scr_dyn_proxy_has(const ScrDyn *proxy, const ScrStr *key) {
 
 ScrDyn *scr_dyn_own_descriptor(const ScrDyn *value, const ScrStr *key) {
   if (scr_dyn_class_reflection_fence(value)) return NULL;
+  if (value->kind == SCR_DYN_FUNC) {
+    if (value->v.fn.clo->props) {
+      ScrDyn *table = (ScrDyn *)scr_box_get_ref(value->v.fn.clo->props);
+      ScrDyn *desc = table ? scr_dyn_own_descriptor(table, key) : NULL;
+      bool found = desc && desc->kind != SCR_DYN_UNDEF;
+      scr_dyn_release(table);
+      if (found || scr_exc_pending()) return desc;
+      scr_dyn_release(desc);
+    }
+    bool name = key->len == 4 && memcmp(key->data, "name", 4) == 0;
+    bool length = key->len == 6 && memcmp(key->data, "length", 6) == 0;
+    if (!name && !length) return scr_dyn_retain(scr_dyn_undefined());
+    ScrDyn *out = scr_dyn_new_obj();
+    ScrDyn *member = scr_dyn_fn_get(value, key->data, key->len);
+    scr_dyn_obj_set(out, "value", 5, member);
+    scr_dyn_obj_set(out, "writable", 8, scr_dyn_new_bool(false));
+    scr_dyn_obj_set(out, "enumerable", 10, scr_dyn_new_bool(false));
+    scr_dyn_obj_set(out, "configurable", 12, scr_dyn_new_bool(true));
+    return out;
+  }
+  if (value->kind == SCR_DYN_ARR && key->len == 6 && memcmp(key->data, "length", 6) == 0) {
+    ScrDyn *out = scr_dyn_new_obj();
+    scr_dyn_obj_set(out, "value", 5, scr_dyn_new_num((double)value->v.arr.len));
+    scr_dyn_obj_set(out, "writable", 8, scr_dyn_new_bool(true));
+    scr_dyn_obj_set(out, "enumerable", 10, scr_dyn_new_bool(false));
+    scr_dyn_obj_set(out, "configurable", 12, scr_dyn_new_bool(false));
+    return out;
+  }
   if (value->kind == SCR_DYN_OBJ) {
     ScrDynEntry *entry = scr_dyn_entry((ScrDyn *)value, key);
     if (!entry) return scr_dyn_retain(scr_dyn_undefined());
@@ -1938,7 +1966,7 @@ ScrDyn *scr_dyn_get_own_property_descriptor(ScrDyn *target, ScrDyn *key) {
     scr_throw_error_msg(SCR_ERR_TYPE, msg, sizeof msg - 1);
     return NULL;
   }
-  if (target->kind != SCR_DYN_OBJ && target->kind != SCR_DYN_PROXY) {
+  if (target->kind != SCR_DYN_OBJ && target->kind != SCR_DYN_PROXY && target->kind != SCR_DYN_FUNC && target->kind != SCR_DYN_ARR) {
     static const char msg[] = "Object.getOwnPropertyDescriptor on this value is not supported yet";
     scr_throw_error_msg(SCR_ERR_ERROR, msg, sizeof msg - 1);
     return NULL;
@@ -4686,7 +4714,13 @@ bool scr_dyn_has_own(const ScrDyn *v, const ScrStr *key) {
   if (v->kind == SCR_DYN_BYTES) {
     return scr_dyn_canonical_own_index(key, v->v.bytes->len);
   }
-  if (v->kind == SCR_DYN_FUNC || v->kind == SCR_DYN_HANDLE ||
+  if (v->kind == SCR_DYN_FUNC) {
+    ScrDyn *desc = scr_dyn_own_descriptor(v, key);
+    bool has = desc && desc->kind != SCR_DYN_UNDEF;
+    scr_dyn_release(desc);
+    return has;
+  }
+  if (v->kind == SCR_DYN_HANDLE ||
       v->kind == SCR_DYN_TYPED_REF) {
     const char *m = "Own-property checks on this checked-dynamic kind are not supported yet";
     scr_throw_error_msg(SCR_ERR_ERROR, m, strlen(m));

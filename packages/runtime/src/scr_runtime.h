@@ -1194,6 +1194,7 @@ ScrArr *scr_regex_match(ScrStr *s, ScrRegex *re);
 double scr_regex_search(ScrStr *s, ScrRegex *re);
 ScrStr *scr_regex_source(ScrRegex *re);       /* +1 */
 ScrStr *scr_regex_flags(ScrRegex *re);        /* +1 */
+ScrStr *scr_regex_to_string(ScrRegex *re);    /* +1 */
 /* replace: first match without /g, every match with it. */
 ScrStr *scr_regex_replace(ScrStr *s, ScrRegex *re, ScrStr *rep);
 /* replaceAll: throws Node's TypeError when /g is missing (may-throw). */

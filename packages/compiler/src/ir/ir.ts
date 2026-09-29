@@ -1969,6 +1969,7 @@ export type IrRegexIntrinsicMethod =
   | "search"
   | "source"
   | "flags"
+  | "toString"
   | "replace"
   | "replaceAll"
   | "split";
