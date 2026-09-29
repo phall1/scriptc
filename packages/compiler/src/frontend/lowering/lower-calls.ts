@@ -4924,13 +4924,17 @@ export function lowerCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr {
           else lowerer.noteEdge(`%${found.declarer.def.name}.${memberName}`);
           const receiver = lowerer.lowerExpr(expr.expression.expression);
           const args = lowerer.completeArgs(expr.arguments, found.sig.params, locOf(expr), expr);
+          const callArgs = [lowerer.upcastTo(receiver, virtual ? info.def.name : found.declarer.def.name), ...args];
+          const loc = locOf(expr);
+          if (virtual) {
+            return reconcileOverloadReturn(lowerer, expr, {
+              kind: "virtualCall", className: info.def.name, method: memberName,
+              args: callArgs, type: found.sig.ret, loc,
+            });
+          }
           return reconcileOverloadReturn(lowerer, expr, {
-            ...(virtual
-              ? { kind: "virtualCall" as const, className: info.def.name, method: memberName }
-              : { kind: "call" as const, callee: `%${found.declarer.def.name}.${memberName}` }),
-            args: [lowerer.upcastTo(receiver, virtual ? info.def.name : found.declarer.def.name), ...args],
-            type: found.sig.ret,
-            loc: locOf(expr),
+            kind: "call", callee: `%${found.declarer.def.name}.${memberName}`,
+            args: callArgs, type: found.sig.ret, loc,
           });
         }
       }

@@ -9492,12 +9492,6 @@
    ],
    "diags": []
   },
-  "<repo>/tests/diagnostics/expressions.ts": {
-   "order": [
-    "<repo>/tests/diagnostics/expressions.ts"
-   ],
-   "diags": []
-  },
   "<repo>/tests/diagnostics/fetch-static.ts": {
    "order": [
     "<repo>/tests/diagnostics/fetch-static.ts"
@@ -11461,6 +11455,126 @@
   "<repo>/tests/corpus/typed-rest-filtered-return.ts": {
    "order": [
     "<repo>/tests/corpus/typed-rest-filtered-return.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/class-accessor-returned-function.js": {
+   "order": [
+    "<repo>/tests/corpus/class-accessor-returned-function.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/class-bracket-method-calls.js": {
+   "order": [
+    "<repo>/tests/corpus/class-bracket-method-calls.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-array-borrowed-find-last.js": {
+   "order": [
+    "<repo>/tests/corpus/native-array-borrowed-find-last.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-array-borrowed-slice.js": {
+   "order": [
+    "<repo>/tests/corpus/native-array-borrowed-slice.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-array-copying-methods.js": {
+   "order": [
+    "<repo>/tests/corpus/native-array-copying-methods.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-array-fill-copywithin.js": {
+   "order": [
+    "<repo>/tests/corpus/native-array-fill-copywithin.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-array-frozen-noops.js": {
+   "order": [
+    "<repo>/tests/corpus/native-array-frozen-noops.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-array-index-boundaries.js": {
+   "order": [
+    "<repo>/tests/corpus/native-array-index-boundaries.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-array-integrity.js": {
+   "order": [
+    "<repo>/tests/corpus/native-array-integrity.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-array-length.js": {
+   "order": [
+    "<repo>/tests/corpus/native-array-length.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-array-named-properties.js": {
+   "order": [
+    "<repo>/tests/corpus/native-array-named-properties.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-array-reduce-find-last.js": {
+   "order": [
+    "<repo>/tests/corpus/native-array-reduce-find-last.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-array-search-from-index.js": {
+   "order": [
+    "<repo>/tests/corpus/native-array-search-from-index.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-array-splice-coercion.js": {
+   "order": [
+    "<repo>/tests/corpus/native-array-splice-coercion.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-array-splice-flat.js": {
+   "order": [
+    "<repo>/tests/corpus/native-array-splice-flat.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-object-descriptors.js": {
+   "order": [
+    "<repo>/tests/corpus/native-object-descriptors.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-object-for-in-minimal.js": {
+   "order": [
+    "<repo>/tests/corpus/native-object-for-in-minimal.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-object-property-attributes.js": {
+   "order": [
+    "<repo>/tests/corpus/native-object-property-attributes.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-object-prototype.js": {
+   "order": [
+    "<repo>/tests/corpus/native-object-prototype.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/primitive-and-function-descriptors.js": {
+   "order": [
+    "<repo>/tests/corpus/primitive-and-function-descriptors.js"
    ],
    "diags": []
   }
