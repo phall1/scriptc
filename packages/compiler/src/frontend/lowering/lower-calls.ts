@@ -9306,7 +9306,7 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
       }
       return null;
     }
-    if (["preventExtensions", "isExtensible", "seal", "isSealed", "isFrozen"].includes(member) &&
+    if (["preventExtensions", "isExtensible", "seal", "isSealed"].includes(member) &&
         call.arguments.length === 1 && !ts.isSpreadElement(call.arguments[0]!)) {
       const value = lowerer.lowerExpr(call.arguments[0]!);
       if (value.type.kind === "string" || value.type.kind === "f64" ||
@@ -9322,7 +9322,7 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
       if (value.type.kind === "dyn") {
         const operation = {
           preventExtensions: "dyn.preventExtensions", isExtensible: "dyn.isExtensible",
-          seal: "dyn.seal", isSealed: "dyn.isSealed", isFrozen: "dyn.isFrozen",
+          seal: "dyn.seal", isSealed: "dyn.isSealed",
         } as const;
         const fn = operation[member as keyof typeof operation];
         return { kind: "libCall", fn, args: [value], type: member.startsWith("is") ? BOOL : DYN, loc: locOf(call) };
