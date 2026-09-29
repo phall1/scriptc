@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
-import { analyze, compile, compileC, deserializeModule, emitCModule, validateModule } from "@scriptc/compiler";
+import { analyze, compile, compileC, deserializeModule, emitLlvmModule, validateModule } from "@scriptc/compiler";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -22,7 +22,7 @@ test("the complete IR validator lowers statically without skipped functions", ()
 // beyond the fixture directory, which the corpus oracle cache does not hash.
 // Node executes the actual TS modules through tsx's .js → .ts resolution.
 for (const component of ["source-locations", "ir-collections", "ir-types", "ir-control-flow", "emitter-literals"]) {
-  for (const backend of ["c", "llvm"] as const) {
+  for (const backend of ["llvm"] as const) {
     test(`self-hosting ${component}: ${backend} matches Node`, async () => {
       const entry = join(root, "tests/fixtures/self-hosting", `${component}.ts`);
       const outDir = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-self-hosting-"));
@@ -61,7 +61,7 @@ for (const component of ["source-locations", "ir-collections", "ir-types", "ir-c
 // IR must produce a working executable. Comparing its serialized IR
 // to Node also pins construction order and every recursive payload.
 for (const [fixture, backend] of ["ir-build", "contextual-ir"].flatMap((fixture) =>
-  (["c", "llvm"] as const).map((backend) => [fixture, backend] as const))) {
+  (["llvm"] as const).map((backend) => [fixture, backend] as const))) {
   test(`self-hosting IR generation ${fixture}: ${backend} builds and validates an executable program`, async () => {
     const entry = join(root, "tests/fixtures/self-hosting", `${fixture}.ts`);
     const outDir = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-ir-build-"));
@@ -85,10 +85,10 @@ for (const [fixture, backend] of ["ir-build", "contextual-ir"].flatMap((fixture)
         expect(native.stderr).toEqual(oracle.stderr);
         const mod = deserializeModule(native.stdout.toString());
         expect(validateModule(mod)).toEqual([]);
-        const cPath = join(outDir, `generated-${bound}.c`);
+        const llvmPath = join(outDir, `generated-${bound}.ll`);
         const outPath = exe(`generated-${bound}`);
-        writeFileSync(cPath, emitCModule(mod));
-        await compileC({ cPath, outPath, sanitize });
+        writeFileSync(llvmPath, emitLlvmModule(mod));
+        await compileC({ cPath: llvmPath, outPath, sanitize });
         const program = spawnSync(outPath, [], options);
         expect(program.error).toBeUndefined();
         expect(program.signal).toBeNull();

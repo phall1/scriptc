@@ -1,67 +1,23 @@
+import { moduleUsesDgram, moduleUsesHttp2 } from "../../ir/ir.js";
 import { emitLlvmLayouts } from "./layouts.js";
 import { llvmBytes as llBytes } from "../literals.js";
 import { InternalCompilerError } from "../../errors.js";
-/* IR → LLVM IR text (.ll). The LLVM backend consumes the SAME in-memory
- * IrModule the C backend does (never the JSON dump — see the -0 lesson in
- * the survey). Its textual module is either lowered by scriptc's native
- * helper and linked with a runtime pack or occupies the legacy compiler
- * driver's program-TU seat. Both paths use the same scr_* C ABI.
+/** Lower typed IR to LLVM, using the runtime's C ABI.
  *
- * Phase 1 was the TRIVIAL TIER: f64/bool/string locals and params, the
- * scalar operator set, structured control flow, direct calls, interned
- * string literals, and the console protocol. Phase 2 adds the VOLUME
- * TIER: module globals and locals of every in-tier ref kind (arrays,
- * record shapes, unions, function values/closures), the full array and
- * string intrinsic surfaces, per-record-shape RC helpers (cycle headers
- * included — the C emitter's fixpoint, ported in shapes.ts), tagged-union
- * construction/narrowing/equality with interned immortal unit instances,
- * capture boxes and the closure calling convention, switch/for-of
- * lowering, and the non-throwing slice of the libCall table. EVERYTHING
- * ELSE REFUSES loudly at the first unhandled node (LlvmUnsupportedError
- * naming the kind) — this backend never guesses and never emits wrong
- * code for a construct it does not model. compile() surfaces the refusal
- * as diagnostic SC3001.
+ * Reference-counted temporaries own one reference. Declarations, assignments,
+ * returns and arguments move that ownership; frame and scope exits release
+ * everything remaining. Slot-backed entries release the slot's current value.
  *
- * RC ownership discipline: the frame/scope release-point machinery is
- * ported from CEmitter (docs/ir.md) — every refcounted temp holds an owned
- * +1 reference; varDecl/assign/return/call-argument MOVE that ownership;
- * each statement releases its remaining refcounted temps when it ends;
- * each scope releases the refcounted locals declared in it when it exits;
- * callees own their params; return/break/continue release everything the
- * jump bypasses (releaseForJump). Releases are type-directed through
- * shapes.ts (the releaseCallC table's LLVM twin); frame entries can be
- * SLOT-based (the entry names a pointer whose CURRENT value releases —
- * conditional results like optional chains need that indirection).
+ * Exceptions use a pending flag and explicit cleanup edges. Throwing calls
+ * test scr_exc_pending before consuming results, release the scopes crossed,
+ * and branch to the innermost handler or return to the caller. Catch bindings
+ * hold ScrCaught snapshots; finally runs on normal, throwing and returning
+ * paths. This keeps ownership cleanup intact without nonlocal jumps.
  *
- * Exceptions (phase 4): the pending-flag unwind protocol, ported from the
- * C emitter. `throw` moves its payload into the runtime's exception cell
- * (scr_throw_*) and unwinds; after every call that can raise (per the
- * SAME computeMayThrow analysis the C backend runs) a pending check tests
- * scr_exc_pending() and unwinds — releasing frames/scopes down to the
- * innermost try handler's depths and branching to its label, or releasing
- * everything and returning a dummy value (never read: callers of a
- * may-throw function test the flag before using the result). No
- * setjmp/longjmp: longjmp would skip the emitted RC releases. try/catch
- * follows stmts.ts's shape exactly — a compile-time tryStack entry
- * per region, the catch block taking the exception (scr_exc_take into the
- * binding's snapshot box, or scr_exc_clear for the bindingless form), the
- * finally body emitted once per path (normal, exception-with-stash,
- * pending-return) with fresh temps each time. Catch bindings ride
- * ScrCaught snapshot boxes (caughtTest/caughtNarrow/caughtCheck read
- * them); TDZ reads test the box's payload slot and throw Node's
- * ReferenceError. main() gains the uncaught epilogue when the entry
- * function may throw.
- *
- * The dyn surface (phase 5): ScrDyn dyn values are in the tier — dyn.ts
- * ports walkers.ts's dyn slice (match/check/toDyn walkers, the
- * String(unknown)/caught→dyn/keyed-read singletons, the checked-dynamic
- * function boundary's thunk/box/adapter triple) and the emitter lowers
- * the dyn expression kinds (dynFrom/dynCall/dynInvoke/dynTest/dynKeyGet/
- * dynCheck/destructuring), the JSON.parse family, dyn record fields and
- * overflow maps, dyn capture boxes, and generator unknown channels.
- * The island surface (jsval/jsExit and embedded npm tables) is in the
- * tier too; the module text and resolution tables use the same compressed,
- * lazy-inflate representation as the C debugging backend.
+ * Program objects are emitted by the packaged LLVM helper and linked with
+ * runtime packs. Sanitizer development builds use an external LLVM driver.
+ * Dynamic values and islands share the runtime ABI; embedded npm modules use
+ * compressed source tables that the runtime inflates on demand.
  */
 import { deflateRawSync } from "node:zlib";
 import { endsWithJump, matchStringSelfConcat, streamTypedRefEligible } from "../../ir/analysis.js";
@@ -88,7 +44,7 @@ import { analyzeIntegerRanges, type IntegerRanges } from "../../ir/integer-range
 import { findConstantNumericTables, type ConstantNumericTable } from "../../ir/constant-tables.js";
 import { allocateFfiCallbackAdapters, hasForeignFfiCallback, hasRetainedFfiCallback, type FfiCallbackAdapter } from "../ffi-callbacks.js";
 import { RUNTIME_ABI_MARKER } from "../runtime-abi.js";
-import { computeMayThrow } from "../c/may-throw.js";
+import { computeMayThrow } from "../may-throw.js";
 import { mangleArgPack, mangleAsyncSpawn, mangleClassObj, mangleClassStruct, mangleFnClosure, mangleFunction, mangleGenDrop, mangleGenSpawn, mangleGlobal, mangleLocal, mangleRecordStruct, mangleTrampoline, mangleWrapper } from "../mangle.js";
 import { BlockBuilder } from "./blocks.js";
 import { LlvmDebugInfo } from "./debug-info.js";
@@ -217,11 +173,11 @@ export class LlEmitter {
   private readonly emitLibraryIdentity: boolean;
   private readonly runtimeAbiMarker: boolean;
   /** Interned string literals: UTF-8 text → { symbol, byte length } —
-   * first-use order, the C emitter's determinism discipline. */
+   * first-use order, the runtime ABI’s determinism discipline. */
   private readonly literals = new Map<string, { sym: string; len: number }>();
   /** Interned unit-armed union instances: "unionId:tag" → symbol — one
-   * immortal (rc == SIZE_MAX) static per (union, unit tag), exactly the
-   * C emitter's table. RC entry points and the collector skip immortals. */
+   * immortal (rc == SIZE_MAX) static per (union, unit tag).
+   * RC entry points and the collector skip immortals. */
   private readonly unitInstances = new Map<string, string>();
   /** Interned regex literals: "<flags>/<pattern>" → { symbol, interned
    * source/flags literal refs } — one immortal ScrRegex per distinct
@@ -271,18 +227,18 @@ export class LlEmitter {
   private readonly globalTypes = new Map<string, IrType>();
   private readonly tdzGlobals = new Map<string, string>();
   readonly constantNumericTables: ReadonlyMap<string, ConstantNumericTable>;
-  /** May-throw analysis (the C emitter's computeMayThrow, shared): pending
+  /** May-throw analysis (computeMayThrow): pending
    * checks are emitted only after calls that can actually raise. */
   readonly mayThrow: Set<string>;
   readonly indirectMayThrow: boolean;
   /** Method names with at least one may-throw implementation — the
-   * virtualCall pending check's key (CEmitter.mayThrowMethods). */
+   * virtualCall pending check's key. */
   readonly mayThrowMethods = new Set<string>();
   /** setTimeout and friends appeared somewhere: main must run the event
-   * loop even in programs with no async functions (CEmitter.usesTimers). */
+   * loop even in programs with no async functions. */
   usesTimers = false;
   /** Emitted ref-kind resolve thunks for new Promise, interned per inner
-   * typeKey → thunk symbol (CEmitter.resolveThunks). */
+   * typeKey → thunk symbol. */
   readonly resolveThunks = new Map<string, string>();
   readonly resolveThunkDefs: string[] = [];
   /** ReadableStream.from adapters keep typed arrays by reference and box
@@ -303,7 +259,7 @@ export class LlEmitter {
   readonly tracedShapes: Set<string>;
   readonly tracedUnions: Set<string>;
   /** The class graph (buildClassGraph): preorder numbering, hierarchy
-   * membership, virtual slot lists — the CEmitter classMeta, ported. */
+   * membership, virtual slot lists. */
   readonly classMeta: Map<string, LlClassMeta>;
   /** Class objects (classes as first-class values): className → the
    * interned .name literal ref — registered during body emission, the
@@ -311,7 +267,7 @@ export class LlEmitter {
   private readonly classObjs = new Map<string, { nameSym: string }>();
   /** Preorder intervals of the runtime error classes under THIS module's
    * class-forest numbering (main() stamps scr_error_vts with them, exactly
-   * like the C emitter's errorVtStampLines). */
+   * like the runtime ABI’s errorVtStampLines). */
   private readonly errorIntervals: { kind: number; pre: number; post: number; lib: string }[] = [];
   /** The runtime emitter vtable's preorder interval, when the program
    * touches node:events (the class def rides the module exactly then) —
@@ -350,7 +306,7 @@ export class LlEmitter {
   integerRanges: IntegerRanges = new Map();
   /** Enclosing try-with-FINALLY regions, innermost last: a `return`
    * inside one runs every crossed finally (innermost first) before the
-   * actual ret — the C emitter's pending-return path, with the finally
+   * actual ret — the runtime ABI’s pending-return path, with the finally
    * bodies emitted inline at the return site instead of behind a goto.
    * `tryDepth` snapshots tryStack.length at region entry: a throw inside
    * a pending-return finally copy propagates OUT of the completing try
@@ -359,7 +315,7 @@ export class LlEmitter {
    * emitFinallysForJump. */
   private finallyStack: { frameDepth: number; scopeDepth: number; tryDepth: number; body: IrStmt[] }[] = [];
   /** Enclosing try contexts, innermost last — the compile-time unwind
-   * targets (CEmitter.tryStack): a pending check or `throw` inside a try
+   * targets: a pending check or `throw` inside a try
    * releases frames/scopes down to the recorded depths and branches to
    * `label` (the catch, or the exception-path finally) instead of
    * returning out of the function. Entering a try emits no code. */
@@ -440,7 +396,7 @@ export class LlEmitter {
       // Module globals: scalar (f64/bool) storage is a zero-initialized
       // LLVM global, ref-kind storage a null-initialized ptr — load/store
       // like a local, assigned by the %init functions. Refcounted globals
-      // are released at the end of main (the C emitter's
+      // are released at the end of main (the runtime ABI’s
       // sc_release_globals), before the RC audit would run.
       try {
         this.llType(g.type); // refuses out-of-tier kinds
@@ -451,11 +407,8 @@ export class LlEmitter {
       this.globalTypes.set(g.id, g.type);
       if (g.tdz) this.tdzGlobals.set(g.id, g.name);
     }
-    // User classes are IN the tier (phase 3), and so are the runtime
-    // error classes and the runtime EventEmitter/stream classes (phase 6
-    // — subclasses embed the ScrEmitter/ScrStream prefixes, classes.ts).
-    // Anything else runtime-flagged refuses by name, exactly the
-    // classDef:* histogram key.
+    // Runtime error, EventEmitter, and stream classes have known layouts.
+    // Subclasses embed the ScrEmitter/ScrStream prefixes from classes.ts.
     const classes = mod.classes ?? [];
     for (const cls of classes) {
       if (
@@ -468,9 +421,8 @@ export class LlEmitter {
       }
     }
     // The class graph: base/children links, hierarchy membership, the
-    // whole-program preorder numbering (identical to CEmitter's, so
-    // runtime-made and compiled error objects agree on instanceof through
-    // either backend), and the per-hierarchy virtual slot lists.
+    // whole-program preorder numbering for instanceof over runtime and
+    // compiled error objects, and the per-hierarchy virtual slot lists.
     this.classMeta = buildClassGraph(mod, this.fnByName);
     for (const [name, rec] of RUNTIME_ERROR_CLASSES) {
       const meta = this.classMeta.get(name);
@@ -498,7 +450,7 @@ export class LlEmitter {
   // ── types ───────────────────────────────────────────────────────────────
 
   llType(t: IrType): string {
-    if (POINTER_KINDS.has(t.kind) && t.kind !== "http2Session" && t.kind !== "http2Stream") return "ptr";
+    if (POINTER_KINDS.has(t.kind)) return "ptr";
     switch (t.kind) {
       case "f64":
       case "date":
@@ -844,7 +796,7 @@ export class LlEmitter {
 
   emit(): string {
     // Function bodies first (the literal/unit/fn-value tables fill as they
-    // emit), then the file assembles around them — the C emitter's order.
+    // emit), then the file assembles around them — the runtime ABI’s order.
     const fnDefs: string[] = [];
     for (const fn of this.mod.functions) fnDefs.push(this.emitFunction(fn));
     const layouts = emitLlvmLayouts(this.shapeHost, this.mod, this.classMeta, this.classObjs, this.fnByName, (t) => this.llType(t));
@@ -885,14 +837,14 @@ export class LlEmitter {
       seenGlobalIds.add(g.id);
       return true;
     });
-    // Refcounted globals release before main returns — the C emitter's
+    // Refcounted globals release before main returns — the runtime ABI’s
     // sc_release_globals, keeping the RC audit's live count exact. Built
     // before the declaration table flushes (it adds the release symbols).
     // Two spellings with distinct temp names: the normal exit and the
     // uncaught-exception exit are separate blocks of the same function.
     // Interned function-value closures are IMMORTAL (rc == SIZE_MAX), so
     // an own-property table Object.defineProperties hung on one would
-    // outlive the RC audit — release it with the globals (the C emitter's
+    // outlive the RC audit — release it with the globals (the runtime ABI’s
     // sc_release_globals tail). Only when the dispatch unit is even
     // linked (defineProps is the only writer).
     const fnValueProps = moduleUsesDynInvoke(this.mod) ? [...this.fnValues] : [];
@@ -918,7 +870,7 @@ export class LlEmitter {
       return lines;
     };
     // Exit listeners can read MODULE GLOBALS directly, so they must run
-    // BEFORE the global releases (the C emitter's runExitListeners
+    // BEFORE the global releases (the runtime ABI’s runExitListeners
     // ordering — the atexit half becomes an idempotent no-op).
     const usesEvents = moduleUsesProcessEvents(this.mod);
     const usesChildProcess = moduleUsesChildProcess(this.mod);
@@ -933,6 +885,8 @@ export class LlEmitter {
     // programs additionally stamp the httpReq/httpRes ops — the C main's
     // install lines, gated on the same predicates native-toolchain.ts links by.
     const usesNet = moduleUsesNet(this.mod);
+    const usesDgram = moduleUsesDgram(this.mod);
+    const usesHttp2 = moduleUsesHttp2(this.mod);
     const usesHttp = moduleUsesHttpServer(this.mod);
     // Fetch-referencing programs register the native fetch bridge before
     // any island entry (the engine's lazy boot consults it) — native-toolchain.ts
@@ -963,6 +917,8 @@ export class LlEmitter {
       this.declare(`declare void @scr_net_install()`);
       this.declare(`declare void @scr_net_dyn_install()`);
     }
+    if (usesDgram) this.declare(`declare void @scr_dgram_install()`);
+    if (usesHttp2) this.declare(`declare void @scr_http2_dyn_install()`);
     if (usesHttp) this.declare(`declare void @scr_http_dyn_install()`);
     if (usesFetch) this.declare(`declare void @scr_fetch_install()`);
     if (embedsZlib) this.declare(`declare void @scr_zlib_island_install()`);
@@ -983,7 +939,7 @@ export class LlEmitter {
     // the refcounted-global releases, or the retained-FFI atexit ledger
     // sweep (a listener may legitimately release or pump a registration,
     // and only the inline call orders ahead of every atexit handler —
-    // the C emitter's runExitListeners stance). Plain event programs
+    // the runtime ABI’s runExitListeners stance). Plain event programs
     // with neither keep the atexit path, so their listener timing is
     // unchanged.
     const hasRefGlobals = globals.some((g) => isRefCounted(g.type)) || fnValueProps.length > 0;
@@ -1229,7 +1185,7 @@ export class LlEmitter {
     }
     for (const [text, lit] of this.literals) {
       // Immortal interned ScrStr: { rc = SIZE_MAX, len, cap = len, bytes\0 } —
-      // the C emitter's static table, retain/release skip rc == SIZE_MAX.
+      // the runtime ABI’s static table, retain/release skip rc == SIZE_MAX.
       out.push(
         `@${lit.sym} = internal global { ${this.sizeType}, ${this.sizeType}, ${this.sizeType}, [${lit.len + 1} x i8] } ` +
           `{ ${this.sizeType} -1, ${this.sizeType} ${lit.len}, ${this.sizeType} ${lit.len}, [${lit.len + 1} x i8] c"${llStrBytes(text)}" }`,
@@ -1273,8 +1229,7 @@ export class LlEmitter {
     }
     if (this.templateStringsInstances.size > 0) out.push(``);
     for (const [text, c] of this.cstrs) {
-      // NUL-terminated byte-array constants: the scr_jb_puts / indent-text
-      // currency (the C emitter passes string literals; these are theirs).
+      // NUL-terminated byte-array constants for scr_jb_puts and indentation.
       out.push(
         `@${c.sym} = internal constant [${c.len + 1} x i8] c"${llStrBytes(text)}"`,
       );
@@ -1347,9 +1302,8 @@ export class LlEmitter {
 
     // main(): scr_init, the program-dependent error-vt interval stamps,
     // scr_lib_init(argc, argv), then the entry function. An uncaught
-    // exception escaping top-level code prints and exits 1 (Node) — the
-    // C emitter's epilogue, emitted exactly when the entry may throw.
-    // No event loop yet: timers/async still refuse (phase 5).
+    // exception escaping top-level code prints and exits 1 (Node).
+    // The exception epilogue is emitted when the entry may throw.
     const stamps: string[] = [];
     for (const iv of this.errorIntervals) {
       const fields: [number, number][] = [[0, iv.pre], [1, iv.post]];
@@ -1398,7 +1352,7 @@ export class LlEmitter {
     }
     if (this.mod.lib !== undefined) {
       // LIBRARY mode: no @main — the profile-declared external
-      // symbols instead, from the same IR facts the C emission consumes.
+      // symbols specified by the library IR instead.
       out.push(...this.emitLibDefs(globals, globalReleaseLines, stamps));
       out.push(`attributes #0 = { sanitize_address }`);
       if (this.wasi) out.push(`attributes #1 = { sanitize_address presplitcoroutine }`);
@@ -1428,6 +1382,8 @@ export class LlEmitter {
       ...(embedsNet ? [`  call void @scr_net_island_install()`] : []),
       ...(usesNet ? [`  call void @scr_net_install()`, `  call void @scr_net_dyn_install()`] : []),
       ...(usesHttp ? [`  call void @scr_http_dyn_install()`] : []),
+      ...(usesDgram ? [`  call void @scr_dgram_install()`] : []),
+      ...(usesHttp2 ? [`  call void @scr_http2_dyn_install()`] : []),
       ...(usesStream ? [`  call void @scr_stream_install()`] : []),
       `  call void @scr_lib_init(i32 %argc, ptr %argv)`,
       ...(usesIsland
@@ -1577,8 +1533,7 @@ export class LlEmitter {
     // The runtime detected-trap overlay table (scr_runtime.h declares it,
     // the library trap funnel consults it): flat code/teaching/remediation
     // triples, one per runtime trap code (SC4013–SC4019) the profile
-    // declares text for — the same data the C emission defines, so the
-    // funnel-assembled sink message is emission-invariant by construction.
+    // declares text for. The funnel assembles the structured sink message.
     // The empty table still defines the symbols the funnel links against.
     const ovlCells: string[] = [];
     lib.trapOverlays.forEach((o, i) => {
@@ -1636,8 +1591,8 @@ export class LlEmitter {
       // Host-callback channels: the per-channel name constants (the
       // registration dispatch's strcmp operands), the per-channel
       // unregistered-call trap constants (the ffiCall sites'
-      // scr_library_cb_require operands — same bytes as the C emission by
-      // construction), and the registration define: a pure store dispatch
+      // scr_library_cb_require operands), and the registration function:
+      // a pure store dispatch
       // (the sink registration's rule — no entry prologue, no poison
       // guard) whose first operation rejects callback-time re-entry
       // (SC4026). An unknown or NULL name is a defined -1, never a store.
@@ -1675,7 +1630,7 @@ export class LlEmitter {
       // from the poisoned guard and every runtime touch (ratified), so a
       // host can read them before init and after a trap. The u64 rides
       // i64 two's-complement (LLVM integer constants are signed).
-      out.push(...emitLibraryIdentityLines("llvm", lib.identity, FN_ATTRS));
+      out.push(...emitLibraryIdentityLines(lib.identity, FN_ATTRS));
     }
     if (lib.resultResetSymbol !== null) {
       out.push(
@@ -1706,8 +1661,7 @@ export class LlEmitter {
       if (e.inboundBytesTrap !== undefined) {
         // The bytes-in helper's trap message: the compiler-assembled
         // structured trap-teaching form (0x01 text 0x1F SC4012 0x1F symbol
-        // [0x1F remediation]) — the same bytes the C emission passes, so
-        // the sink message is emission-invariant by construction.
+        // [0x1F remediation]) consumed by the runtime sink.
         const trapBytes = Buffer.byteLength(e.inboundBytesTrap, "utf8");
         out.push(`@sc_lib_bytes_trap_${e.symbol} = internal constant [${trapBytes + 1} x i8] c"${llStrBytes(e.inboundBytesTrap)}"`, ``);
       }
@@ -1842,7 +1796,7 @@ export class LlEmitter {
 
   /** The shared abort helpers (emitted only when referenced): the OOM
    * abort of untraced shape allocation and the invalid-union-tag abort —
-   * both print the C emitter's exact message on fd 2 and abort. */
+   * both print the runtime ABI’s exact message on fd 2 and abort. */
   private helperDefs(): string[] {
     const defs: string[] = [];
     const msgHelper = (fnName: string, msgSym: string, msg: string): void => {
@@ -1905,7 +1859,7 @@ export class LlEmitter {
   }
 
   /** Env-signature wrappers + interned immortal closures for declared
-   * functions used as values (the C emitter's sc_w_/sc_fc_ pair): every
+   * functions used as values (the runtime ABI’s sc_w_/sc_fc_ pair): every
    * mention of `f` yields the same pointer, so `f === f` holds. */
   private emitFnValueDefs(): string[] {
     const out: string[] = [];
@@ -2304,7 +2258,7 @@ export class LlEmitter {
     return out;
   }
 
-  // ── plumbing (the CEmitter frame/scope machinery, alloca-flavored) ──────
+  // ── plumbing (frame and scope ownership) ──────
 
   internLiteral(text: string): string {
     let lit = this.literals.get(text);
@@ -2434,7 +2388,7 @@ export class LlEmitter {
   /** THE release-on-jump path (break/continue/return): pending statement
    * frames and entered scopes down to the given depths, innermost first —
    * everything whose normal fall-through releases the jump bypasses.
-   * Ported verbatim from CEmitter.releaseForJump. */
+   * Release every scope crossed by the control-flow edge. */
   private releaseForJump(frameDepth: number, scopeDepth: number): void {
     for (let i = this.frames.length - 1; i >= frameDepth; i--) this.releaseFrame(this.frames[i]!);
     for (let i = this.scopes.length - 1; i >= scopeDepth; i--) this.releaseScope(this.scopes[i]!);
@@ -2473,7 +2427,7 @@ export class LlEmitter {
    * function — and branch to the handler / return a dummy value (never
    * read: callers of a may-throw function test the pending flag before
    * using the result). Callers own the surrounding pending branch; a
-   * `throw` unwinds unconditionally. CEmitter.emitUnwind, block-flavored. */
+   * `throw` unwinds unconditionally. */
   private emitUnwind(): void {
     const target = this.tryStack[this.tryStack.length - 1];
     if (target) {
@@ -2566,7 +2520,7 @@ export class LlEmitter {
   truthy(v: LlValue): string {
     const B = this.B;
     if (v.type.kind === "union") {
-      // The ARM value's ToBoolean: an inline tag switch (the C emitter's
+      // The ARM value's ToBoolean: an inline tag switch (the runtime ABI’s
       // per-union interned helper, emitted at the use site instead).
       const def = this.unionsById.get(v.type.unionId);
       if (!def) throw new InternalCompilerError(`llvm emitter bug: truthiness of unknown union ${v.type.unionId}`);
@@ -2575,7 +2529,7 @@ export class LlEmitter {
       const join = B.newLabel("ut.j");
       this.unionTagSwitch(v.name, def, (arm) => {
         let valueName = "false";
-        if (arm.kind === "f64") {
+        if (arm.kind === "f64" || arm.kind === "procStream") {
           valueName = B.tmp();
           this.declare(`declare double @scr_union_get_f64(ptr)`);
           B.line(`${valueName} = call double @scr_union_get_f64(ptr ${v.name})`);
@@ -2585,7 +2539,7 @@ export class LlEmitter {
           B.line(`${valueName} = call zeroext i1 @scr_union_get_bool(ptr ${v.name})`);
         } else if (arm.kind === "string") {
           valueName = this.unionPeek(v.name);
-        } else if (arm.kind === "bigint") {
+        } else if (arm.kind === "bigint" || arm.kind === "dyn" || arm.kind === "jsval") {
           valueName = this.unionPeek(v.name);
         }
         const truthy = this.truthyOf(arm.kind, valueName, true);
@@ -2607,13 +2561,10 @@ export class LlEmitter {
     switch (kind) {
       case "undefinedT":
       case "nullT":
-        if (!unionArm) throw new LlvmUnsupportedError(`truthy:${kind}`);
         return "false";
       case "bool":
         return valueName;
-      case "f64":
-      case "procStream": {
-        if (unionArm && kind === "procStream") throw new LlvmUnsupportedError(`truthy:union:${kind}`);
+      case "f64": {
         const truthy = B.tmp();
         B.line(`${truthy} = fcmp one double ${valueName}, ${f64Lit(0)}`);
         return truthy;
@@ -2634,26 +2585,30 @@ export class LlEmitter {
         return truthy;
       }
       case "date":
+      // Process streams use a numeric descriptor internally, including zero
+      // for stdin. They remain JavaScript objects in boolean contexts.
+      case "procStream":
         return "true";
       case "array": case "record": case "object": case "classval": case "func":
       case "map": case "set": case "symbol": case "regex": case "promise": case "bytes":
       case "url": case "searchParams": case "stats": case "fileHandle": case "spawnRes":
       case "child": case "childStream": case "childWriter": case "generator": case "fsWatcher":
-      case "cryptoHash": case "cryptoHmac": {
+      case "cryptoHash": case "cryptoHmac":
+      case "netSocket": case "netServer": case "httpReq": case "httpRes":
+      case "httpClientReq": case "http2Session": case "http2Stream":
+      case "dgramSocket": case "secureCtx": case "testCtx": {
         if (unionArm) return "true";
         const truthy = B.tmp();
         B.line(`${truthy} = icmp ne ptr ${valueName}, null`);
         return truthy;
       }
       case "dyn": {
-        if (unionArm) throw new LlvmUnsupportedError(`truthy:union:${kind}`);
         this.declare(`declare zeroext i1 @scr_dyn_truthy(ptr)`);
         const truthy = B.tmp();
         B.line(`${truthy} = call zeroext i1 @scr_dyn_truthy(ptr ${valueName})`);
         return truthy;
       }
       case "jsval": {
-        if (unionArm) throw new LlvmUnsupportedError(`truthy:union:${kind}`);
         this.declare(`declare i32 @scr_jsval_truthy(ptr)`);
         const raw = B.tmp();
         const truthy = B.tmp();
@@ -2689,7 +2644,7 @@ export class LlEmitter {
 
   /** Emits `switch` over a union's tag with one block per arm; each arm
    * body must TERMINATE its block (the callers branch to a join). The
-   * default block is the C emitter's invalid-tag abort. */
+   * default block is the runtime ABI’s invalid-tag abort. */
   unionTagSwitch(uName: string, def: IrUnionDef, arm: (armType: IrType, tag: number) => void): void {
     const B = this.B;
     const tag = this.unionTag(uName);
@@ -3031,7 +2986,7 @@ export class LlEmitter {
    * async bodies are entered via their emitted spawn wrapper (which runs
    * the fiber eagerly to its first suspension and returns the promise);
    * generator bodies via theirs (which only ALLOCATES the suspended
-   * fiber and returns the generator object) — CEmitter.callTargetC. */
+   * fiber and returns the generator object). */
   callTarget(fnName: string): string {
     const fn = this.fnByName.get(fnName);
     if (fn?.generator !== undefined) return mangleGenSpawn(fnName);
@@ -3156,7 +3111,7 @@ export class LlEmitter {
       this.declare(`declare token @llvm.coro.save(ptr)`);
       this.declare(`declare i8 @llvm.coro.suspend(token, i1)`);
       this.declare(`declare ptr @llvm.coro.free(token, ptr)`);
-      this.declare(`declare i1 @llvm.coro.end(ptr, i1, token)`);
+      this.declare(`declare void @llvm.coro.end(ptr, i1, token)`);
       this.declare(`declare ptr @malloc(${this.sizeType})`);
       this.declare(`declare void @free(ptr)`);
       this.declare(`declare void @scr_wasi_coro_started(ptr)`);
@@ -3287,8 +3242,7 @@ export class LlEmitter {
       B.line(`call void @free(ptr ${frame})`);
       B.br(coro.suspendLabel);
       B.startBlock(coro.suspendLabel);
-      const ended = B.tmp();
-      B.line(`${ended} = call i1 @llvm.coro.end(ptr ${coro.handle}, i1 false, token none)`);
+      B.line(`call void @llvm.coro.end(ptr ${coro.handle}, i1 false, token none)`);
       const ret = this.llType(fn.returnType);
       if (ret === "void") B.terminate(`ret void`);
       else if (ret === "double") B.terminate(`ret double ${f64Lit(0)}`);
@@ -3313,15 +3267,15 @@ export class LlEmitter {
   private emitStmts(stmts: IrStmt[]): void {
     for (const s of stmts) {
       // Statements after a terminator are unreachable (dead code after
-      // return/break/continue) — the C emitter emits them as dead C; here
-      // they are skipped so no dropped SSA definition can leak forward.
+      // return/break/continue). Skip them so no dropped SSA definition
+      // can leak forward.
       if (this.B.isTerminated()) return;
       this.emitStmt(s);
     }
   }
 
   /** Emits a block in its own lexical scope (refcounted locals released at
-   * end) — CEmitter.emitBlock without the braces. `setup` runs after the
+   * end). `setup` runs after the
    * scope opens, before the statements — the catch-binding hook: it may
    * emit prelude lines and register entries the scope owns (released on
    * every exit, jumps and unwinds included). */
@@ -3921,10 +3875,7 @@ export class LlEmitter {
         // tryStack it sees truncated to its region (its releases already
         // ran; a throw inside a copy propagates OUT of the completing
         // try, past its own catch), then the function-level releases and
-        // the actual ret. The C emitter routes this through per-region
-        // finally copies behind gotos with the value parked in sc_pret;
-        // the inline copies here are the same code at the same depths,
-        // with the parked value's ownership riding a synthetic slot-based
+        // the actual ret. The parked value owns a synthetic slot-backed
         // scope entry during each copy so a throwing finally releases it.
         let v: LlValue | null = null;
         if (s.value !== null) {
@@ -4172,7 +4123,7 @@ export class LlEmitter {
 
   /** JS-exact switch: lazily evaluated, arbitrary-expression case tests in
    * source order, bodies falling through in source order until a break —
-   * CEmitter.emitSwitch's goto chain, block-flavored. All case bodies
+   * A chain of conditional branches. All case bodies
    * share ONE scope; because dispatch can jump PAST a varDecl into a later
    * case, refcounted/boxed case-body locals are NULL-reset up front and
    * the scope-exit releases rely on NULL tolerance. */
@@ -4253,7 +4204,7 @@ export class LlEmitter {
   /** Evaluates a condition (IR conds are bool-typed) and releases its
    * temps BEFORE the branch — safe because the result is a scalar i1, and
    * required in loop-condition blocks (their temps must not survive into
-   * later blocks across the back edge). CEmitter.emitCondition. */
+   * later blocks across the back edge). */
   private emitCondition(cond: IrExpr): string {
     const v = this.emitExpr(cond);
     const frame = this.currentFrame();
@@ -4265,7 +4216,7 @@ export class LlEmitter {
   /** Evaluates `expr` in its own statement frame inside an already-open
    * branch and moves the result into `slot`: the chosen value's ownership
    * transfers, every other temp the arm allocated releases inside the
-   * branch. The shared core of ternary/logical. CEmitter.emitBranchInto. */
+   * branch. The shared core of ternary/logical. */
   emitBranchInto(slot: string, expr: IrExpr): void {
     this.frames.push([]);
     const v = this.emitExpr(expr);

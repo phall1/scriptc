@@ -593,7 +593,7 @@ export function emitCallExpr(host: LlvmEmitterContext, e: ExprOf<"call" | "ffiCa
       }
       case "promiseVoidWiden": {
         // One ScrPromise* either way — ownership transfers, type-only
-        // (the C emitter's rule).
+        //.
         const v = host.emitExpr(e.value);
         host.moveTemp(v);
         return host.own({ name: v.name, type: e.type });

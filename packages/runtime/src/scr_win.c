@@ -16,6 +16,11 @@
 #include <time.h>
 #include <windows.h>
 
+/* LLVM's MSVC-target objects reference this marker when they use floating
+ * point. MinGW supplies the arithmetic runtime but not the MSVC marker.
+ * Select-any allows an embedding application's CRT to provide it as well. */
+__declspec(selectany) int _fltused = 0x9875;
+
 #ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
 #define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
 #endif

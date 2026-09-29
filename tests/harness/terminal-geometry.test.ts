@@ -21,7 +21,7 @@ test.skipIf(process.platform === "win32")("stdio geometry matches Node on indepe
     const nativeEnv = process.platform === "darwin" && process.env["SCRIPTC_SAN"] === "1"
       ? { ...process.env, MallocNanoZone: "0" }
       : process.env;
-    for (const backend of ["c", "llvm"] as const) {
+    for (const backend of ["llvm"] as const) {
       const result = await compile(entry, { outDir: dir, outPath: join(dir, backend), backend, sanitize: process.env["SCRIPTC_SAN"] === "1" });
       if (!result.ok) throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
       const native = await run("python3", [script, result.binaryPath], { env: nativeEnv });

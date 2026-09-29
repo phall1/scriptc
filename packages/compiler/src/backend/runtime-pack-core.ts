@@ -35,6 +35,14 @@ interface RuntimePackArchive extends RuntimePackArtifact {
   predicate: RuntimePredicate;
 }
 
+export type RuntimePackMode = "executable" | "library" | "library-thread";
+export type RuntimePackFlavor = "release" | "dev" | "library-release" | "library-dev" | "library-thread-release" | "library-thread-dev";
+
+interface RuntimePackFlavorManifest {
+  optimization: "-O2" | "-O0";
+  runtime_units: RuntimePackUnit[];
+}
+
 export interface RuntimePackManifest {
   schema: typeof RUNTIME_PACK_SCHEMA;
   format: typeof RUNTIME_PACK_FORMAT;
@@ -54,10 +62,7 @@ export interface RuntimePackManifest {
     excluded: string[];
     sanitizer: "external-toolchain-required";
   };
-  flavors: Record<"release" | "dev", {
-    optimization: "-O2" | "-O0";
-    runtime_units: RuntimePackUnit[];
-  }>;
+  flavors: Partial<Record<RuntimePackFlavor, RuntimePackFlavorManifest>>;
   archives: RuntimePackArchive[];
   system_libraries: { name: string; predicate: RuntimePredicate }[];
   licenses: { path: string; license: string }[];
@@ -140,7 +145,10 @@ export function parseRuntimePackManifest(value: unknown): RuntimePackManifest {
     !Array.isArray(macros?.executable) || !macros.executable.every((entry) => typeof entry === "string") ||
     !Array.isArray(macros.excluded) || !macros.excluded.every((entry) => typeof entry === "string") ||
     macros.sanitizer !== "external-toolchain-required" ||
-    flavors === null || !validFlavor(flavors.release, "-O2") || !validFlavor(flavors.dev, "-O0") ||
+    flavors === null || Object.keys(flavors).length === 0 ||
+    Object.keys(flavors).some((name) => !["release", "dev", "library-release", "library-dev", "library-thread-release", "library-thread-dev"].includes(name)) ||
+    ((flavors.release !== undefined || flavors.dev !== undefined) && (!validFlavor(flavors.release, "-O2") || !validFlavor(flavors.dev, "-O0"))) ||
+    Object.entries(flavors).some(([name, flavor]) => !validFlavor(flavor, name.endsWith("dev") ? "-O0" : "-O2")) ||
     !Array.isArray(manifest.archives) || !manifest.archives.every((raw) => {
       const archive = object(raw);
       return validArtifact(raw) && typeof archive?.id === "string" && validPredicate(archive.predicate);
@@ -257,11 +265,20 @@ export function selectRuntimePackArtifacts(
   requested: NativeLinkFeatures,
   flavor: "release" | "dev",
   env: NodeJS.ProcessEnv = process.env,
+  mode: RuntimePackMode = "executable",
 ): RuntimePackArtifacts {
   const features = effectiveRuntimeFeatures(requested, env);
+  const key: RuntimePackFlavor = mode === "executable" ? flavor : `${mode}-${flavor}`;
+  const selectedFlavor = mode === "library"
+    ? flavor === "release" ? manifest.flavors["library-release"] : manifest.flavors["library-dev"]
+    : mode === "library-thread"
+      ? flavor === "release" ? manifest.flavors["library-thread-release"] : manifest.flavors["library-thread-dev"]
+      : flavor === "release" ? manifest.flavors.release : manifest.flavors.dev;
+  if (selectedFlavor === undefined) throw new RuntimePackError(`runtime pack has no ${key} flavor; reinstall the matching runtime package`, "invalid");
+  if (mode !== "executable" && requested.dynamic) throw new RuntimePackError("library runtime packs do not support dynamic execution", "unsupported");
   return {
     features,
-    runtime: manifest.flavors[flavor].runtime_units
+    runtime: selectedFlavor.runtime_units
       .filter((unit) => evaluateRuntimePredicate(unit.predicate, features))
       .map((unit) => selectVariant(unit, features)),
     archives: manifest.archives.filter((archive) => evaluateRuntimePredicate(archive.predicate, features)),

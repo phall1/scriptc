@@ -49,7 +49,7 @@ export function mangleFnClosure(fnName: string): string {
   return `sc_fc_${sanitize(fnName)}`;
 }
 
-/** Per-class emitted C struct and RC helpers. */
+/** Per-class emitted LLVM struct and RC helpers. */
 export function mangleClassStruct(className: string): string {
   return `sc_o_${sanitize(className)}`;
 }
@@ -117,7 +117,7 @@ export function mangleClassGcFree(className: string): string {
   return `sc_gcfree_${sanitize(className)}`;
 }
 
-/** Per-record-shape emitted C struct and RC helpers. Shape ids are
+/** Per-record-shape emitted LLVM struct and RC helpers. Shape ids are
  * compiler-generated (`r0`, `r1`, ...), but the prefixes are still disjoint
  * from every class prefix above (sc_rs_X vs sc_o_Y, sc_rnew_X vs
  * sc_new_Y, ...) so no user class name can collide with a record symbol. */

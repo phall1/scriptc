@@ -41,7 +41,7 @@ describe.runIf(supported)("external native object example", () => {
         package: "@scriptc/runtime",
         version: "1.0.0",
         root: runtimeRoot,
-        source_sets: [],
+        objects: [], archives: [],
       },
       program: { object: join(scratch, "missing.o") },
       ffi: { libraries: [] },

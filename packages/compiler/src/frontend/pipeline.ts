@@ -36,7 +36,7 @@ export type ProgramLoader = (entryPath: string, options: ProgramLoadOptions) => 
  * Frontend shape. */
 export interface Frontend {
   preflight: ScrDiagnostic[];
-  /** The entry source file's text (emitCModule's header comment input). */
+  /** The entry source file's text for diagnostics and source annotations. */
   entryText: () => string;
   /** Library mode's resolution input: the entry file's exported function
    * declarations (call before dispose — it reads the ts7 AST). */

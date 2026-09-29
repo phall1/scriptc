@@ -7,9 +7,9 @@ set(SCRIPTC_DEFAULT_TARGET "arm64-apple-macosx14.0.0" CACHE STRING
 set(SCRIPTC_DEFAULT_DATA_LAYOUT
     "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128-Fn32"
     CACHE STRING "Data layout for SCRIPTC_DEFAULT_TARGET")
-set(SCRIPTC_TARGET_BACKENDS "AArch64" CACHE STRING
+set(SCRIPTC_TARGET_BACKENDS "AArch64;X86;WebAssembly" CACHE STRING
     "Semicolon-separated LLVM target backends compiled into the helper")
-set(SCRIPTC_ALLOWED_TARGETS "arm64-apple-macosx14.0.0" CACHE STRING
+set(SCRIPTC_ALLOWED_TARGETS "arm64-apple-macosx14.0.0,x86_64-apple-macosx14.0.0,x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu,x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,x86_64-pc-windows-msvc,wasm32-unknown-wasi,arm64-apple-ios15.0.0,arm64-apple-ios15.0.0-simulator,aarch64-unknown-linux-android26" CACHE STRING
     "Comma-separated target triples accepted by this helper")
 set(SCRIPTC_HELPER_ARCH "arm64" CACHE STRING
     "macOS architecture of the helper executable")

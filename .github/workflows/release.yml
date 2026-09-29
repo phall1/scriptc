@@ -179,9 +179,47 @@ jobs:
             packages/${{ matrix.runtime }}
           retention-days: 1
 
+  build-mobile-runtime-packs:
+    name: Build ${{ matrix.runtime }}
+    needs: check-release
+    if: needs.check-release.outputs.should_release == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runtime: runtime-ios-arm64
+            runner: macos-15
+          - runtime: runtime-ios-simulator-arm64
+            runner: macos-15
+          - runtime: runtime-android-arm64
+            runner: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.15.0
+      - name: Install Android NDK
+        if: matrix.runtime == 'runtime-android-arm64'
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.2.12479018"
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+      - name: Build and verify mobile runtime pack
+        run: |
+          node packages/${{ matrix.runtime }}/scripts/build.mjs
+          node packages/${{ matrix.runtime }}/scripts/verify.mjs
+          mkdir -p "$RUNNER_TEMP/mobile-pack/${{ matrix.runtime }}"
+          cp -R packages/${{ matrix.runtime }}/. "$RUNNER_TEMP/mobile-pack/${{ matrix.runtime }}/"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.runtime }}
+          path: ${{ runner.temp }}/mobile-pack
+          retention-days: 1
+
   publish:
     name: Publish to npm
-    needs: [check-release, build-native-packages]
+    needs: [check-release, build-native-packages, build-mobile-runtime-packs]
     if: needs.check-release.outputs.should_release == 'true'
     runs-on: macos-15
     timeout-minutes: 15
@@ -233,7 +271,7 @@ jobs:
       - name: Check version sync
         run: |
           VERSION="${{ needs.check-release.outputs.version }}"
-          for pkg in packages/runtime packages/runtime-darwin-arm64 packages/llvm-darwin-arm64 packages/runtime-linux-x64-gnu packages/llvm-linux-x64-gnu packages/runtime-linux-arm64-gnu packages/llvm-linux-arm64-gnu packages/runtime-linux-x64-musl packages/llvm-linux-x64-musl packages/runtime-linux-arm64-musl packages/llvm-linux-arm64-musl packages/runtime-wasm32-wasi packages/runtime-win32-x64-msvc packages/llvm-win32-x64-msvc packages/compiler packages/cli; do
+          for pkg in packages/runtime packages/runtime-darwin-arm64 packages/llvm-darwin-arm64 packages/runtime-linux-x64-gnu packages/llvm-linux-x64-gnu packages/runtime-linux-arm64-gnu packages/llvm-linux-arm64-gnu packages/runtime-linux-x64-musl packages/llvm-linux-x64-musl packages/runtime-linux-arm64-musl packages/llvm-linux-arm64-musl packages/runtime-wasm32-wasi packages/runtime-ios-arm64 packages/runtime-ios-simulator-arm64 packages/runtime-android-arm64 packages/runtime-win32-x64-msvc packages/llvm-win32-x64-msvc packages/compiler packages/cli; do
             V=$(node -p "require('./$pkg/package.json').version")
             if [ "$V" != "$VERSION" ]; then
               echo "Version mismatch: $pkg is $V, expected $VERSION"
@@ -326,6 +364,9 @@ jobs:
           publish_dir packages/llvm-linux-x64-musl
           publish_dir packages/runtime-linux-arm64-musl
           publish_dir packages/llvm-linux-arm64-musl
+          publish_dir packages/runtime-ios-arm64
+          publish_dir packages/runtime-ios-simulator-arm64
+          publish_dir packages/runtime-android-arm64
           publish_dir packages/runtime-wasm32-wasi
           publish_dir packages/runtime-win32-x64-msvc
           publish_dir packages/llvm-win32-x64-msvc

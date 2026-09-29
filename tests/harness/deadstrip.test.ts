@@ -19,23 +19,21 @@ const repoRoot = join(import.meta.dirname, "../..");
 const cacheDir = join(repoRoot, "node_modules/.cache/scriptc-tests");
 const sanitize = process.env["SCRIPTC_SAN"] === "1";
 
-test("unreached bodies leave no trace in the emitted C", async () => {
+test("unreached bodies leave no trace in the emitted LLVM", async () => {
   const outDir = join(cacheDir, `deadstrip-c${sanitize ? "-san" : ""}`);
   const result = await compile(join(repoRoot, "tests/corpus/420-dead-strip-modules/main.ts"), {
     outPath: join(outDir, "program"),
     outDir,
     sanitize,
-    // Pinned: this test greps the emitted C for reached/unreached names —
-    // it measures the C backend's artifact by design.
-    backend: "c",
+    backend: "llvm",
   });
   if (!result.ok) {
     throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
   }
-  const c = readFileSync(result.cPath, "utf8");
+  const c = readFileSync(result.llvmPath, "utf8");
   // Reached bodies are there (mangled names embed the source name)...
   for (const reached of ["used", "double", "evenSteps", "oddSteps", "usedMethod", "tag"]) {
-    expect(c, `expected reached '${reached}' in the emitted C`).toContain(reached);
+    expect(c, `expected reached '${reached}' in the emitted LLVM`).toContain(reached);
   }
   // ...unreached ones are not: no function body, no async spawn wrapper or
   // trampoline (unusedAsync), no monomorphized instance (unusedGeneric),
@@ -47,7 +45,7 @@ test("unreached bodies leave no trace in the emitted C", async () => {
     "unusedGeneric",
     "unusedMethod",
   ]) {
-    expect(c, `unreached '${gone}' must leave no trace in the emitted C`).not.toContain(gone);
+    expect(c, `unreached '${gone}' must leave no trace in the emitted LLVM`).not.toContain(gone);
   }
 });
 

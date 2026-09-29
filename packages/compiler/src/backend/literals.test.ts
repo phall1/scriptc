@@ -1,6 +1,5 @@
 import { expect, test } from "vitest";
 import { commentText, llvmBytes, llvmQuoted, octalByte, unsignedHex } from "./literals.js";
-import { cCommentText, cNumberLiteral, cStringLiteral } from "./c/types.js";
 import { f64Lit, llvmCommentText } from "./llvm/common.js";
 import { mangleFunction, mangleLocal } from "./mangle.js";
 
@@ -22,7 +21,6 @@ test("octal and LLVM escapes cover every byte without ambiguous suffixes", () =>
   expect(llvmBytes(bytes)).toBe(expected + "\\00");
   expect(llvmBytes(bytes, false)).toBe(expected);
   expect(llvmBytes(new Uint8Array())).toBe("\\00");
-  expect(cStringLiteral(Buffer.from([0, 49, 255, 55, 63, 34, 92]))).toBe('"\\0001\\3777\\?\\"\\\\"');
 });
 
 test("metadata strings preserve UTF-8 replacement, embedded NUL and quotes", () => {
@@ -40,10 +38,9 @@ test("comments preserve ordinary text and encode all source-control units", () =
     "\\u" + ch.charCodeAt(0).toString(16).padStart(4, "0"));
   expect(commentText(text)).toBe(expected);
   expect(llvmCommentText(text)).toBe(expected);
-  expect(cCommentText(text)).toBe(expected.replace(/\*\//g, "* /").replace(/\/\*/g, "/ *"));
 });
 
-test("name spelling remains byte-for-byte compatible, including surrogate units", () => {
+test("name spelling remains stable, including surrogate units", () => {
   for (const name of ["abc_X9", "x.12", "$x%y", "é日本", "😀", "\ud800\0", "dash-here"]) {
     const expected = name.replace(/[^A-Za-z0-9_]/g, (ch) => ch === "." ? "_" : `_x${ch.codePointAt(0)!.toString(16)}_`);
     expect(mangleFunction(name)).toBe("sc_f_" + expected);
@@ -57,6 +54,4 @@ test("double spelling preserves every bit, including signed zero and subnormals"
     bytes.writeDoubleBE(number);
     expect(f64Lit(number)).toBe("0x" + bytes.toString("hex").toUpperCase());
   }
-  expect(cNumberLiteral(-0)).toBe("-0.0");
-  expect(cNumberLiteral(2 ** 64)).toBe("18446744073709552000.0");
 });

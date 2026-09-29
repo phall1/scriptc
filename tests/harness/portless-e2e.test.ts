@@ -111,7 +111,7 @@ suite("Portless acceptance", () => {
     const built = await compile(entry, {
       outDir: work,
       outPath: binary,
-      backend: "c",
+      backend: "llvm",
       sanitize: process.env["SCRIPTC_SAN"] === "1",
     });
     expect(built.ok).toBe(true);

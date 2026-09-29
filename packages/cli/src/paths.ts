@@ -2,11 +2,10 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { buildTargetPlatform, sourceTargetPlatform, wasiGuestPath } from "@scriptc/compiler";
 
-export type CliOutputKind = "ir" | "c" | "llvm" | "asm" | "obj" | "exe";
+export type CliOutputKind = "ir" | "llvm" | "asm" | "obj" | "exe";
 
 const POSIX_SUFFIXES: Record<CliOutputKind, string> = {
   ir: ".ir.json",
-  c: ".c",
   llvm: ".ll",
   asm: ".s",
   obj: ".o",

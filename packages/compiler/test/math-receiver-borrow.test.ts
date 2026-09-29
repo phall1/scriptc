@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 import { compile, deserializeModule } from "../src/index.js";
-import { emitCModule } from "../src/backend/c/c-emitter.js";
 import { emitLlvmModule } from "../src/backend/llvm/emitter.js";
 
 test("numeric Math operands borrow stable receivers but preserve snapshots across replacement and calls", async () => {
@@ -30,30 +29,20 @@ replaced(buffer, new Uint8Array(1));
     const result = await compile(entry, { outDir: dir, outPath, outputKind: "ir" });
     if (!result.ok) throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
     const mod = deserializeModule(await readFile(outPath, "utf8"));
-    const c = emitCModule(mod);
+
     const ll = emitLlvmModule(mod);
-    const cBody = (name: string): string => {
-      const match = c.match(new RegExp(`static [^\\n]+ sc_f_${name}\\([^\\n]*\\) \\{([\\s\\S]*?)\\n\\}`));
-      expect(match, `${name} C function`).not.toBeNull();
-      return match![1]!;
-    };
     const llBody = (name: string): string => {
       const match = ll.match(new RegExp(`define internal [^\\n]+ @sc_f_${name}\\([^\\n]*\\) #0 \\{([\\s\\S]*?)\\n\\}`));
       expect(match, `${name} LLVM function`).not.toBeNull();
       return match![1]!;
     };
-    expect(cBody("safe")).not.toContain("scr_bytes_retain(");
     expect(llBody("safe")).not.toContain("@scr_bytes_retain_v(");
     // The incoming parameter still owns the buffer until function cleanup.
-    expect(cBody("safe").match(/scr_bytes_release\(/g)).toHaveLength(1);
     expect(llBody("safe").match(/call void @scr_bytes_release\(/g)).toHaveLength(1);
-    expect(cBody("safe")).toContain("floor(");
     expect(llBody("safe")).toContain("@llvm.floor.f64(");
     for (const name of ["owned", "replaced"]) {
-      expect(cBody(name)).toContain("scr_bytes_retain(");
       expect(llBody(name)).toContain("@scr_bytes_retain_v(");
     }
-    expect(cBody("readArray")).not.toContain("scr_arr_retain(");
     expect(llBody("readArray")).not.toContain("@scr_arr_retain_v(");
   } finally { await rm(dir, { recursive: true, force: true }); }
 });

@@ -611,6 +611,28 @@ describe("mergeAndLocalizeCoffObjects", () => {
     expect(stubs[0]!.storageClass).toBe(IMAGE_SYM_CLASS_STATIC);
   });
 
+  test("private COMDAT code and leaderless unwind sections retain each object's relocations", () => {
+    const member = (name: string, marker: number): Uint8Array => buildCoff([
+      { name: ".text", data: new Uint8Array([marker]), characteristics: 0x60000020 | IMAGE_SCN_LNK_COMDAT, comdatSelection: 1 },
+      { name: ".xdata", data: new Uint8Array([marker + 10]), characteristics: 0x40000040 | IMAGE_SCN_LNK_COMDAT, comdatSelection: 2 },
+      { name: ".pdata", data: new Uint8Array(8), relocs: [{ va: 0, sym: 2, type: 3 }, { va: 4, sym: 3, type: 3 }] },
+    ], [
+      { name: ".text", section: 1, storageClass: IMAGE_SYM_CLASS_STATIC, sectionDef: true },
+      { name: "private_fn", section: 1, storageClass: IMAGE_SYM_CLASS_STATIC },
+      { name: ".xdata", section: 2, storageClass: IMAGE_SYM_CLASS_STATIC, sectionDef: true },
+      { name: ".pdata", section: 3, storageClass: IMAGE_SYM_CLASS_STATIC, sectionDef: true },
+      { name, section: 1 },
+    ]);
+    const merged = readCoff(mergeAndLocalizeCoffObjects([member("first", 1), member("second", 2)], [], new Set(["first", "second"])));
+    expect(merged.sections).toHaveLength(6);
+    expect(merged.sections.filter((s) => s.name === ".text").map((s) => [...s.data])).toEqual([[1], [2]]);
+    expect(merged.sections.filter((s) => s.name === ".xdata").map((s) => [...s.data])).toEqual([[11], [12]]);
+    for (const section of merged.sections) expect(section.characteristics & IMAGE_SCN_LNK_COMDAT).toBe(0);
+    const byIndex = new Map(merged.symbols.map((s) => [s.index, s]));
+    const pdata = merged.sections.filter((s) => s.name === ".pdata");
+    expect(pdata.map((s) => s.relocs.map((r) => byIndex.get(r.sym)?.section))).toEqual([[1, 2], [4, 5]]);
+  });
+
   const comdatPair = (
     selection: number,
     firstData: Uint8Array,

@@ -1,16 +1,13 @@
 import { typedRefConstructor } from "./shapes.js";
 import { BYTES_ELEM_NUM, f64Lit } from "./common.js";
 import { InternalCompilerError } from "../../errors.js";
-/* The dyn (ScrDyn dyn) helper EMITTERS for the LLVM backend — the .ll
- * mirror of walkers.ts's dyn slice: per-type match predicates
+/* ScrDyn helpers for the LLVM backend: per-type match predicates
  * (dynMatchHelper), checked builders (dynCheckHelper), static→dyn
  * converters (toDynHelper), the type-independent singletons (String
  * (unknown), caught→dyn, the keyed read, the destructuring
  * RequireObjectCoercible, GetIterator+N), and the checked-dynamic
- * function boundary's thunk/box/adapter triple. Every helper follows the
- * C emitter's semantics EXACTLY — same runtime entry points, same
- * ownership, same path-annotated failure texts — so the differential
- * suite's byte-parity contract holds through either backend.
+ * function boundary's thunk/box/adapter triple. Helpers use the runtime ABI,
+ * explicit reference ownership, and path-annotated failure messages.
  *
  * dyn layout facts this file compiles against (scr_runtime.h):
  *   ScrDyn   { size_t rc; ScrDynKind kind; bool buffer; union v; }
@@ -1477,7 +1474,7 @@ export class LlDyn {
         host.declare(`declare void @scr_dyn_obj_set(ptr, ptr, ${host.sizeType}, ptr)`);
         // CYCLE-CAPABLE shapes guard the deep copy: enter TRAPS on a value
         // already being converted (a cyclic value has no finite dyn copy —
-        // SEMANTICS.md; the C emitter's contract exactly).
+        // SEMANTICS.md).
         const cyclicRec = traceAdapter(host, t) !== null;
         if (cyclicRec) {
           host.declare(`declare void @scr_dyn_from_enter(ptr)`);

@@ -41,7 +41,7 @@ async function buildAndRun(name: string, dynamic: boolean, program = entry): Pro
   // Pinned: the provenance thesis compares a source-static binary against
   // a dist-island binary — holding both on the C lane keeps that byte
   // comparison about PROVENANCE, never about which backend each build drew.
-  const result = await compile(program, { outPath, outDir, dynamic, backend: "c" });
+  const result = await compile(program, { outPath, outDir, dynamic, backend: "llvm" });
   if (!result.ok) {
     throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
   }

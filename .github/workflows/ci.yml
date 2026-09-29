@@ -292,16 +292,8 @@ jobs:
           packages/cli/test/native-link-info.test.ts
           packages/cli/test/runtime-pack.test.ts
           tests/harness/native-object-example.test.ts
-      - name: Default helper/runtime-pack executable does not compile C
-        if: matrix.shard == 1
+      - name: LLVM release/dev differential (${{ matrix.shard }}/5)
         env:
-          SCRIPTC_LEGACY_C_PIPELINE: "0"
-        run: >-
-          pnpm test packages/cli/test/runtime-pack.test.ts
-          --testNamePattern "legacy C pipeline disabled"
-      - name: LLVM-tier helper object differential (${{ matrix.shard }}/5)
-        env:
-          SCRIPTC_LLVM_HELPER_ONLY: "1"
           SCRIPTC_TEST_WORKERS: "4"
         run: pnpm test tests/harness/llvm-differential.test.ts
       - name: Packaged helper contract
@@ -370,6 +362,7 @@ jobs:
   # slash styles, and the default executable must use the .exe suffix.
   windows_cli:
     name: test (windows CLI smoke)
+    needs: llvm_artifacts_windows_x64
     runs-on: windows-latest
     timeout-minutes: 15
     env:
@@ -396,6 +389,10 @@ jobs:
             Write-Host "pnpm exited without a diagnostic; retrying once"
             pnpm install --frozen-lockfile
           }
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-native-packages
+          path: packages
       - run: pnpm build
       - name: Windows path regressions
         run: pnpm exec vitest run packages/compiler/test/ts7/program-adapter.test.ts packages/compiler/test/ts7/resolver-parity.test.ts packages/cli/test/paths.test.ts
@@ -407,7 +404,7 @@ jobs:
         shell: pwsh
         run: |
           zig version
-          $output = & node packages/cli/dist/main.js run tests/corpus/001-hello.ts --backend c
+          $output = & node packages/cli/dist/main.js run tests/corpus/001-hello.ts --backend llvm
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
@@ -426,7 +423,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
-          $nativeOutput = & node packages/cli/dist/main.js run tests/corpus/2557-tls-ca-store.ts --backend c
+          $nativeOutput = & node packages/cli/dist/main.js run tests/corpus/2557-tls-ca-store.ts --backend llvm
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
@@ -495,6 +492,14 @@ jobs:
           node packages/cli/dist/main.js build tests/corpus/001-hello.ts --emit=obj -o "$env:RUNNER_TEMP\hello.obj"
           $bytes = [System.IO.File]::ReadAllBytes("$env:RUNNER_TEMP\hello.obj")
           if ($bytes[0] -ne 0x64 -or $bytes[1] -ne 0x86) { throw "expected AMD64 COFF object" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-native-packages
+          path: |
+            packages/llvm-win32-x64-msvc/bin
+            packages/runtime-win32-x64-msvc/artifacts
+            packages/runtime-win32-x64-msvc/runtime-pack.json
+          retention-days: 1
 
   # Retain the pre-matrix "test" check for branch protection and badges. It
   # passes only when every matrix shard and independent integration job does.

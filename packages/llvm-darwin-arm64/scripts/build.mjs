@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { nativeTargetCmakeArgs } from "../../../native/llvm-codegen/targets.mjs";
 import { execFileSync } from "node:child_process";
 import { chmodSync, copyFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -20,8 +21,7 @@ execFileSync("cmake", [
   "-G", "Ninja",
   `-DLLVM_DIR=${llvmDir}`,
   `-DSCRIPTC_PACKAGE_VERSION=${manifest.version}`,
-  "-DSCRIPTC_TARGET_BACKENDS=AArch64;WebAssembly",
-  "-DSCRIPTC_ALLOWED_TARGETS=arm64-apple-macosx14.0.0,wasm32-unknown-wasi",
+  ...nativeTargetCmakeArgs,
   "-DCMAKE_BUILD_TYPE=Release",
 ], { stdio: "inherit" });
 execFileSync("cmake", ["--build", buildDir, "--target", "scriptc-llvm-codegen"], {

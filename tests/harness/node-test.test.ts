@@ -90,7 +90,7 @@ async function build(entry: string): Promise<string> {
     // Pinned: the spec-reporter normalizations here were written against
     // the C lane; lane identity stays fixed so a diff means the reporter
     // (or Node) changed, never that the default backend moved.
-    backend: "c",
+    backend: "llvm",
   });
   if (!result.ok) {
     throw new Error(

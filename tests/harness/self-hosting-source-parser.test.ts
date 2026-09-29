@@ -80,7 +80,7 @@ require("cjs");`, kind: "ts" },
   };
 }
 
-for (const backend of ["c", "llvm"] as const) {
+for (const backend of ["llvm"] as const) {
   test(`source parsing, import scanning and declaration projection run without Node (${backend})`, async () => {
     const directory = mkdtempSync(join(tempRoot, "scriptc-source-parser-native-"));
     try {

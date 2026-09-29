@@ -11,7 +11,7 @@ const root = fileURLToPath(new URL("../..", import.meta.url));
 const entry = join(root, "tests/fixtures/self-hosting/validate.ts");
 const runOptions = { cwd: root, timeout: 30_000, maxBuffer: 16 * 1024 * 1024 };
 
-for (const backend of ["c", "llvm"] as const) {
+for (const backend of ["llvm"] as const) {
   test(`self-hosting full validator: ${backend} matches Node on valid and invalid IR`, async () => {
     const dir = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-native-validator-"));
     try {

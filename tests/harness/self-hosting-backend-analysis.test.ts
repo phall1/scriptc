@@ -5,8 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { expect, test } from "vitest";
-import { compile, compileC, deserializeModule, emitCModule, serializeModule, validateModule, type AnalyzeResult } from "@scriptc/compiler";
-import { emitLlvmModule } from "../../packages/compiler/src/backend/llvm/emitter.js";
+import { compile, compileC, deserializeModule, emitLlvmModule, serializeModule, validateModule, type AnalyzeResult } from "@scriptc/compiler";
 import { everyStmtList } from "../../packages/compiler/src/ir/traverse.js";
 import { moduleUsesInspect, moduleUsesDynInvoke, moduleUsesRegex, moduleUsesCopying, type IrModule } from "../../packages/compiler/src/ir/ir.js";
 import { backendAnalysisCases } from "./self-hosting-backend-cases.js";
@@ -58,7 +57,7 @@ test("the production optimization and backend analysis pipeline lowers entirely 
   expect(coverage.stats.functionsSkipped).toBe(0);
 });
 
-for (const backend of ["c", "llvm"] as const) {
+for (const backend of ["llvm"] as const) {
   test(`self-hosting backend analysis and optimization (${backend})`, async () => {
     const dir = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-native-analysis-"));
     const sanitize = process.env["SCRIPTC_SAN"] === "1";
@@ -124,8 +123,8 @@ for (const backend of ["c", "llvm"] as const) {
         // Feed the native result to each production backend. This pins
         // optimizer semantics beyond matching Node's JSON: the resulting
         // native executable must agree with the original TypeScript.
-        const path = join(dir, backend === "c" ? "optimized.c" : "optimized.ll");
-        writeFileSync(path, backend === "c" ? emitCModule(optimized) : emitLlvmModule(optimized));
+        const path = join(dir, "optimized.ll");
+        writeFileSync(path, emitLlvmModule(optimized));
         const outPath = executable("program");
         await compileC({
           cPath: path, outPath, sanitize,

@@ -64,7 +64,7 @@ function signatureAt(checker: SemanticChecker, node: AstNode): SemanticSignature
   return signature;
 }
 
-/** This runs both in Node and in the C/LLVM native executables. Each fact
+/** This runs both in Node and in native LLVM executables. Each fact
  * checks relationships within the live native parser/checker's response;
  * server-assigned numeric handles never become hard-coded test answers. */
 export function checkSemanticModel(snapshot: SemanticSnapshot, checker: SemanticChecker, file: AstFile): void {

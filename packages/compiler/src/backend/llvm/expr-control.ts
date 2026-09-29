@@ -57,7 +57,7 @@ export function emitControlExpr(host: LlvmEmitterContext, e: ExprOf<"dynDestrChe
         // JS value semantics: the result is the deciding operand itself.
         // Left evaluates once, ownership moves into the result slot; when
         // the branch takes the right operand the stale left releases first
-        // and the right runs in its own frame — CEmitter's dance.
+        // and the right runs in its own frame.
         const ty = host.llType(e.type);
         const l = host.emitExpr(e.left);
         host.moveTemp(l);

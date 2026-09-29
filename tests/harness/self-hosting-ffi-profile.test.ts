@@ -26,7 +26,7 @@ test("the production FFI profile parser lowers entirely statically", () => {
   expect(coverage.stats.functionsSkipped).toBe(0);
 });
 
-for (const backend of ["c", "llvm"] as const) {
+for (const backend of ["llvm"] as const) {
   test(`native FFI profile validation and release resolution (${backend})`, async () => {
     const dir = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-native-ffi-profile-"));
     try {

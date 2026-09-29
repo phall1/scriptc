@@ -65,10 +65,7 @@ async function compileAndRun(
   // for runtime-fence shapes only mixed dynamic graphs can spell (the
   // diagnostics suite's directive, applied to the run-and-observe lane).
   const dynamic = /^\/\/ @dynamic\s*$/.test(source.split("\n", 1)[0] ?? "");
-  // Pinned: the uncaught-STDERR line shape (SEMANTICS.md divergence 11) is
-  // pinned against the C reference; the LLVM lane's uncaught epilogue is
-  // llvm-differential's parity job, not this suite's.
-  const result = await compile(file, { outPath: join(outDir, name), outDir, sanitize, backend: "c", dynamic });
+  const result = await compile(file, { outPath: join(outDir, name), outDir, sanitize, backend: "llvm", dynamic });
   if (!result.ok) {
     throw new Error(
       "errors program failed to compile:\n" +

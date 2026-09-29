@@ -56,8 +56,8 @@ new tests should follow this convention.
 
 ## Where things live
 
-- `packages/compiler` — the frontend (tsc API to IR), typed IR, validator, serializer, and LLVM and C backends.
-- `packages/runtime` — the C runtime compiled into every scriptc binary.
+- `packages/compiler` — the frontend (tsc API to IR), typed IR, validator, serializer, and LLVM backend.
+- `packages/runtime` — the C runtime distributed as precompiled runtime packs.
 - `packages/cli` — `scriptc build | run | coverage`.
 - `internal/compatibility` — generated Node.js parity inventory, implementation-owned compatibility manifests, and engineering backlog.
 - `tests/` — the differential corpus, diagnostics snapshots, and harness.

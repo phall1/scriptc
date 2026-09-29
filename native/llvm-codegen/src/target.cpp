@@ -118,6 +118,9 @@ std::unique_ptr<TargetMachine> createTargetMachine(StringRef TripleName,
   if (Definition == nullptr)
     return nullptr;
   TargetOptions Options;
+  // The Android API 26 runtime pack uses the NDK's emulated TLS ABI.
+  // Program globals and runtime thread instances must use the same ABI.
+  Options.EmulatedTLS = TargetTriple.isAndroid();
   return std::unique_ptr<TargetMachine>(Definition->createTargetMachine(
       TargetTriple, "generic", "", Options, Reloc::PIC_, CodeModel::Small,
       codeGenLevel(OptLevel)));

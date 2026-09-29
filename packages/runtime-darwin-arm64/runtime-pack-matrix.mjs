@@ -1,3 +1,5 @@
+import { withLibraryRuntimeFlavors } from "../runtime-pack-common/library-matrix.mjs";
+
 /**
  * The executable runtime-pack matrix. This is the single source of truth for
  * both release compilation and the generated feature predicates consumed by
@@ -91,7 +93,7 @@ function variantsFor(source) {
   return variants;
 }
 
-export const RUNTIME_PACK_MATRIX = {
+export const RUNTIME_PACK_MATRIX = withLibraryRuntimeFlavors({
   schema: "scriptc.runtime-pack-matrix.v1",
   target: {
     name: "macos-arm64",
@@ -113,4 +115,4 @@ export const RUNTIME_PACK_MATRIX = {
     { id: "mbedtls", predicate: "tlsEffective" },
   ],
   system_libraries: [{ name: "System", predicate: true }, { name: "m", predicate: "dynamic" }],
-};
+});

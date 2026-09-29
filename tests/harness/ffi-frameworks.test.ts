@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { compile } from "@scriptc/compiler";
 
-describe.skipIf(process.platform !== "darwin").each(["c", "llvm"] as const)("FFI framework links, %s", backend => {
+describe.skipIf(process.platform !== "darwin").each(["llvm"] as const)("FFI framework links, %s", backend => {
   test("links a framework symbol without an extra object or library input", async () => {
     const outDir = mkdtempSync(join(tmpdir(), "scriptc-ffi-framework-"));
     const entry = join(outDir, "app.ts");

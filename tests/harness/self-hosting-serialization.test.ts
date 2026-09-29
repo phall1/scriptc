@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
-import { analyze, compile, compileC, deserializeModule, emitCModule, serializeModule, validateModule } from "@scriptc/compiler";
+import { analyze, compile, compileC, deserializeModule, emitLlvmModule, serializeModule, validateModule } from "@scriptc/compiler";
 import { IR_VERSION } from "../../packages/compiler/src/ir/serialize.js";
 import { F64, VOID, type IrModule } from "../../packages/compiler/src/ir/ir.js";
 import { numLit } from "../../packages/compiler/src/ir/build.js";
@@ -43,7 +43,7 @@ test("the production IR serialization and validation pipeline lowers entirely st
   expect(coverage.stats.functionsSkipped).toBe(0);
 });
 
-for (const backend of ["c", "llvm"] as const) {
+for (const backend of ["llvm"] as const) {
   test(`self-hosting serialization: ${backend} round-trips IR and produces a working program`, async () => {
     const dir = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-native-serialize-"));
     const sanitize = process.env["SCRIPTC_SAN"] === "1";
@@ -90,8 +90,8 @@ for (const backend of ["c", "llvm"] as const) {
       expect(third.kind).toBe("numLit");
       if (third.kind !== "numLit") throw new Error("literal changed");
       expect(Object.is(third.value, -0)).toBe(true);
-      const cPath = join(dir, "numbers.c");
-      writeFileSync(cPath, emitCModule(numeric));
+      const cPath = join(dir, "numbers.ll");
+      writeFileSync(cPath, emitLlvmModule(numeric));
       await compileC({ cPath, outPath: executable("numbers"), sanitize });
       const program = spawnSync(executable("numbers"), [], runOptions);
       expect(program.error).toBeUndefined();

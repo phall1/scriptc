@@ -8,7 +8,7 @@ import { compile } from "@scriptc/compiler";
 
 const execFileAsync = promisify(execFile);
 
-for (const backend of ["c", "llvm"] as const) {
+for (const backend of ["llvm"] as const) {
   test(`native Proxy boundaries unwind catchably (${backend})`, async () => {
     const outDir = mkdtempSync(join(tmpdir(), "scriptc-proxy-boundaries-"));
     const entry = join(outDir, "main.mjs");

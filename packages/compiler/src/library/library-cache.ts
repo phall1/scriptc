@@ -6,7 +6,7 @@ import { gzip, gunzip } from "node:zlib";
 import type { IrModule } from "../ir/ir.js";
 import { IR_VERSION } from "../ir/serialize.js";
 import { frontendInputsSemanticallyMatch, frontendInputsStillMatch, validFrontendInputSnapshot, type FrontendInputSnapshot } from "../frontend/input-tracker.js";
-import { rebaseSourceLocations, semanticallyEqualSource, sourceLineRebaseIsIdentity } from "./semantic-source.js";
+import { rebaseSourceLocations, semanticallyEqualSource } from "./semantic-source.js";
 import { compilerImplementationIdentity } from "./compiler-self-identity.js";
 import {
   cacheKey as sharedCacheKey,
@@ -40,7 +40,7 @@ interface EarlyLibraryCacheStamp {
     sources: CachedLibraryFile | null;
   };
   native: {
-    backend: "c" | "llvm";
+    backend: "llvm";
     regex: boolean;
     assert: boolean;
     inspect: boolean;
@@ -56,7 +56,7 @@ interface EarlyLibraryCacheStamp {
 }
 
 export interface EarlyLibraryNativeFeatures {
-  backend: "c" | "llvm";
+  backend: "llvm";
   regex: boolean;
   assert: boolean;
   inspect: boolean;
@@ -88,7 +88,7 @@ export interface EarlyLibraryCacheOptions {
 }
 
 export interface EarlyLibraryCacheHit {
-  cPath: string;
+  llvmPath: string;
   irPath?: string;
   sidecarPath?: string;
   native: EarlyLibraryNativeFeatures;
@@ -169,7 +169,7 @@ function stampIntegrity(stamp: Omit<EarlyLibraryCacheStamp, "integrity">): strin
   return sharedStampIntegrity("early-library-stamp-v2", stamp);
 }
 
-function outputPaths(options: EarlyLibraryCacheOptions, backend: "c" | "llvm") {
+function outputPaths(options: EarlyLibraryCacheOptions, backend: "llvm") {
   return sharedOutputPaths(options, backend, ".lib");
 }
 
@@ -187,7 +187,7 @@ function archiveOutputPath(options: EarlyLibraryCacheOptions): string {
 
 function frontendOutputExclusions(
   options: EarlyLibraryCacheOptions,
-  backend: "c" | "llvm",
+  backend: "llvm",
   sidecarPath: string | undefined,
 ): ReturnType<typeof sharedFrontendOutputExclusions> {
   return sharedFrontendOutputExclusions(options, backend, ".lib", [
@@ -258,7 +258,7 @@ export async function readEarlyLibraryCache(
     ) return null;
 
     const paths = outputPaths(options, stamp.native.backend);
-    await installBytes(translationUnit, paths.cPath);
+    await installBytes(translationUnit, paths.llvmPath);
     if (ir !== null) await installBytes(ir, paths.irPath);
     let sidecarPath: string | undefined;
     if (sidecar !== null) {
@@ -273,7 +273,7 @@ export async function readEarlyLibraryCache(
       ...(stamp.files.sidecar === null ? [] : [join(directory, stamp.files.sidecar.name)]),
     ].map((cachePath) => utimes(cachePath, now, now).catch(() => undefined)));
     return {
-      cPath: paths.cPath,
+      llvmPath: paths.llvmPath,
       native: stamp.native,
       ...(ir !== null ? { irPath: paths.irPath } : {}),
       ...(sidecarPath !== undefined ? { sidecarPath } : {}),
@@ -352,20 +352,6 @@ export async function readSemanticLibraryCache(
       ),
     );
     if (semantic === null || semantic.changed.length === 0) return null;
-    // C source annotations are rendered through the entry source's line table,
-    // including imported offsets stamped with the entry path and synthetic
-    // byte-zero locations. Their line-only text cannot be rebased exactly for
-    // multi-source graphs or line-shifting edits. Keep TU reuse to the safe
-    // single-source, line-preserving subset; take the normal frontend path for
-    // the other uncommon trivia edits.
-    if (stamp.native.backend === "c") {
-      const entry = resolve(options.entryPath);
-      const change = semantic.changed.find((candidate) => candidate.path === entry);
-      if (
-        previousSources.size > 1 || semantic.changed.length !== 1 || change === undefined ||
-        !sourceLineRebaseIsIdentity(entry, change.previous, change.current)
-      ) return null;
-    }
     const mod = deserializeV8(irJson) as IrModule;
     if (mod.irVersion !== IR_VERSION) return null;
     rebaseSourceLocations(mod, previousSources, semantic.currentSources);
@@ -410,7 +396,7 @@ export async function publishEarlyLibraryCache(
       return { name, digest: digest(await readFile(target)) };
     };
     const [translationUnit, ir, sidecar, semanticIr, sources] = await Promise.all([
-      publishFile(result.cPath, "program.tu"),
+      publishFile(result.llvmPath, "program.tu"),
       result.irPath === undefined ? Promise.resolve(null) : publishFile(result.irPath, "program.ir.json"),
       result.sidecarPath === undefined ? Promise.resolve(null) : publishFile(result.sidecarPath, "contract.json"),
       result.semantic === undefined

@@ -1,6 +1,6 @@
 // Large mixed-Unicode indexed-string regression. The output is compact and
 // deterministic; the runtime white-box test owns the complexity bound while
-// this corpus pins C/LLVM semantics against Node.
+// this corpus pins native semantics against Node.
 const piece = "aé😀é"; // UTF-16 units: a, é, high/low 😀, e, combining mark
 const text = piece.repeat(12000);
 const positions = [0, 1, 2, 3, 4, 5, 6, 31111, 52799, text.length - 6];

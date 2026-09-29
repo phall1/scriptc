@@ -26,10 +26,9 @@ interface CachedExecutableFile {
 }
 
 export interface EarlyExecutableNativeFeatures {
-  backend: "c" | "llvm";
+  backend: "llvm";
   /** Omitted is the historical release posture. */
   optimization?: "dev";
-  llvmRefusal?: string;
   dynamic: boolean;
   regex: boolean;
   copying: boolean;
@@ -84,7 +83,7 @@ export interface EarlyExecutableCacheOptions {
   emitIr: boolean;
   sanitize: boolean;
   dynamic: boolean;
-  backend: "auto" | "c" | "llvm";
+  backend: "llvm";
   /** Omitted is the historical release posture and preserves v1 keys. */
   optimization?: "dev";
   /** Omitted retains the unstripped executable's historical cache key. */
@@ -123,7 +122,7 @@ interface EarlyExecutableImplementationProof {
 }
 
 export interface EarlyExecutableCacheHit {
-  cPath: string;
+  llvmPath: string;
   irPath?: string;
   /** True when the final executable was restored after native dependencies
    * validated. False restores only frontend artifacts and must call compileC. */
@@ -174,8 +173,7 @@ function validNativeFeatures(value: unknown): value is EarlyExecutableNativeFeat
     value,
     BOOLEAN_NATIVE_KEYS,
     (native) =>
-      (native.optimization === undefined || native.optimization === "dev") &&
-      (native.llvmRefusal === undefined || typeof native.llvmRefusal === "string"),
+      (native.optimization === undefined || native.optimization === "dev"),
   );
 }
 
@@ -291,7 +289,7 @@ function stampIntegrity(stamp: Omit<EarlyExecutableCacheStamp, "integrity">): st
 
 function executableFrontendOutputExclusions(
   options: EarlyExecutableCacheOptions,
-  backend: "c" | "llvm",
+  backend: "llvm",
 ): ReturnType<typeof frontendOutputExclusions> {
   return frontendOutputExclusions(options, backend, "", [options.outPath, `${options.outPath}.dSYM`]);
 }
@@ -402,8 +400,8 @@ export async function readEarlyExecutableCache(
       // update must not win the window immediately before installation.
       await nativeArtifactDependenciesStillMatch(stamp.nativeDependencies);
     const paths = outputPaths(options, stamp.native.backend);
-    if (!(await fileMatches(paths.cPath, stamp.files.translationUnit.digest))) {
-      await installBytes(translationUnit, paths.cPath);
+    if (!(await fileMatches(paths.llvmPath, stamp.files.translationUnit.digest))) {
+      await installBytes(translationUnit, paths.llvmPath);
     }
     if (
       ir !== null && stamp.files.ir !== null &&
@@ -432,7 +430,7 @@ export async function readEarlyExecutableCache(
       ...(stamp.files.debugSymbols === undefined ? [] : [join(directory, stamp.files.debugSymbols.name)]),
     ].map((cachePath) => utimes(cachePath, now, now).catch(() => undefined)));
     return {
-      cPath: paths.cPath,
+      llvmPath: paths.llvmPath,
       native: stamp.native,
       executableRestored,
       frontend: stamp.frontend,
@@ -565,7 +563,7 @@ export async function publishEarlyExecutableCache(
         ? Promise.resolve(null)
         : publishFile(options.outPath, "program.bin");
     const [translationUnit, ir, executable] = await Promise.all([
-      publishFile(result.cPath, "program.tu"),
+      publishFile(result.llvmPath, "program.tu"),
       result.irPath === undefined
         ? Promise.resolve(null)
         : publishFile(result.irPath, "program.ir.json"),

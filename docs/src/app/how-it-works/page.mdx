@@ -5,16 +5,15 @@
 ```
 TypeScript ──tsc: parse + typecheck──▶ lowering ──▶ typed IR ──▶ LLVM IR ──scriptc LLVM helper──▶ assembly/object
                                              │          │             └──precompiled runtime + linker──▶ executable
-                                             │          └─────▶ C ────────────────C compiler/linker─────┘
                                              └── serialized IR
 ```
 
 1. **Frontend** — the real TypeScript compiler parses and type-checks your program against `es2025` (plus `@types/node` when your project has it), honoring your `tsconfig.json` for checker strictness. The frontend then lowers the checked AST into a typed intermediate representation, using tsc's own type and narrowing answers to drive every decision. A construct with no lowering is a precise diagnostic at this stage — never a miscompile later.
 2. **Typed IR** — the only interface between the ends: a validated, serializable representation (`--emit=ir` writes it as JSON and stops). Types are concrete here; generics have been monomorphized, unions are tagged values, closures have explicit captures.
-3. **Backends** — `--emit=c` writes readable C and stops; `--emit=llvm` writes textual LLVM IR and stops. Neither source-output command discovers or invokes a native toolchain. On supported macOS, Linux, and Windows hosts (and for WASI), `--emit=asm|obj` sends LLVM IR to a version-matched out-of-process LLVM 22 helper; it needs no clang or linker. Executable builds default to LLVM and can fall back to C on a native program outside the LLVM tier (one stderr note; `--backend llvm` pins it and fails with a diagnostic instead). The production <code>wasm32-wasi</code> target never falls back.
-4. **Link** — release packages contain one precompiled object per runtime feature unit plus QuickJS, libregexp, zlib, and mbedTLS archives for every supported target. A hashed manifest maps IR feature gates to an ordered typed link plan, so binaries still pay only for what they use. The user needs the target platform linker and SDK/sysroot, but ordinary LLVM-tier builds compile no C. AddressSanitizer, explicit C builds, and LLVM refusals keep the external C-toolchain path.
+3. **LLVM backend** — `--emit=llvm` writes textual LLVM IR and stops. On supported macOS, Linux, and Windows hosts and for WASI, `--emit=asm|obj` sends LLVM IR to the matching LLVM 22 helper. Executable and library builds use the same LLVM backend.
+4. **Link** — runtime packs contain precompiled C runtime objects plus the required vendor archives. A hashed manifest selects objects from the program's runtime features, optimization mode, and library state model. The target platform linker and SDK/sysroot produce the executable. Runtime development with AddressSanitizer uses an instrumented C runtime.
 
-Program objects define <code>main</code> and leave their selected <code>scr_*</code> runtime functions undefined. The <code>scr_runtime_abi_v4</code> reference is a strong link-time compatibility check. <code>--print=native-link-info</code> exposes the exact source runtime pack and link ordering for external builds; that object ABI is currently experimental and exact-runtime-version compatible, not semver-stable.
+Program objects define <code>main</code> and leave their selected <code>scr_*</code> runtime functions undefined. The <code>scr_runtime_abi_v4</code> reference is a strong link-time compatibility check. <code>--print=native-link-info</code> exposes the exact precompiled runtime pack and link ordering for external builds; that object ABI is currently experimental and exact-runtime-version compatible, not semver-stable.
 
 Inspect any stage yourself:
 
@@ -22,24 +21,17 @@ Inspect any stage yourself:
 $ scriptc build fib.ts --emit=ir
 $ ls .scriptc/
 fib.ir.json
-$ scriptc build fib.ts --emit=c
-$ ls .scriptc/
-fib.c
-fib.ir.json
 $ scriptc build fib.ts --emit=llvm
 $ ls .scriptc/
-fib.c
 fib.ir.json
 fib.ll
 $ scriptc build fib.ts --emit=asm
 $ ls .scriptc/
-fib.c
 fib.ir.json
 fib.ll
 fib.s
 $ scriptc build fib.ts --emit=obj
 $ ls .scriptc/
-fib.c
 fib.ir.json
 fib.ll
 fib.o
@@ -58,10 +50,10 @@ fib.s
 
 scriptc's correctness claim is not "we implemented the spec" — it is "we ran your semantics against Node's and they matched." Two lanes enforce it on every change:
 
-- **The differential corpus** — every corpus program runs under Node *and* as a compiled binary; stdout, stderr, and exit codes must match **byte-for-byte**. Servers are exercised by live client drivers against both implementations. Number formatting was additionally fuzz-verified against Node's `String(x)` on a million random doubles.
+- **The differential corpus** — every corpus program runs under Node *and* as a compiled binary; stdout, stderr, and exit codes must match exactly. Servers are exercised by live client drivers against both implementations. Number formatting was additionally fuzz-verified against Node's `String(x)` on a million random doubles.
 - **The memory-safety lane** — the entire corpus re-runs under AddressSanitizer with a reference-count audit at exit; a leak or use-after-free anywhere is a build failure. The same lane is available for your programs as `scriptc build --sanitize`.
 
-Where matching Node byte-for-byte is impossible or deliberately not the goal (timing internals, error-object internals, aliasing at the dynamic boundary), the divergence is **documented and numbered** — see [Limitations](/limitations). Empty divergence space is load-bearing: the verified-identical list records what has been verified, not merely assumed.
+Where matching Node exactly is impossible or deliberately not the goal (timing internals, error-object internals, aliasing at the dynamic boundary), the divergence is **documented and numbered** — see [Limitations](/limitations). Empty divergence space is load-bearing: the verified-identical list records what has been verified, not merely assumed.
 
 ## The dynamic island
 
@@ -79,7 +71,7 @@ Where matching Node byte-for-byte is impossible or deliberately not the goal (ti
   <tbody>
     <tr>
       <td><code>packages/compiler</code></td>
-      <td>The frontend (tsc API → IR), the typed IR with validator and serializer, the C and LLVM backends, native-helper integration, and the coverage analyzer.</td>
+      <td>The frontend (tsc API → IR), the typed IR with validator and serializer, the LLVM backend, native-helper integration, and the coverage analyzer.</td>
     </tr>
     <tr>
       <td><code>native/llvm-codegen</code></td>

@@ -222,7 +222,7 @@ function verify(reports: Report[]): void {
   expect(get("npm-restored").order).toEqual(get("npm-static").order);
 }
 
-for (const backend of ["c", "llvm"] as const) {
+for (const backend of ["llvm"] as const) {
   test(`production program loading and preflight run without Node (${backend})`, async () => {
     const directory = mkdtempSync(join(tempRoot, "scriptc-frontend-program-"));
     try {

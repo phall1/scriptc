@@ -27,7 +27,7 @@ const platformTest = process.env["SCRIPTC_PORTABLE_ONLY"] === "1" ? test.skip : 
 
 interface BuildResult {
   binaryPath: string;
-  cPath: string;
+  llvmPath: string;
 }
 
 /** Compiles an inline program (static by default — regex needs no flag). */
@@ -46,17 +46,14 @@ async function build(
   mkdirSync(outDir, { recursive: true });
   const file = join(outDir, `${name}.ts`);
   writeFileSync(file, source);
-  // Pinned: the size/stability pins below grep the emitted C (no ScrRegex
-  // symbol) and weigh the C-lane binary — this suite measures the C
-  // backend's artifact by design.
-  const result = await compile(file, { outPath: join(outDir, name), outDir, sanitize: san, backend: "c" });
+  const result = await compile(file, { outPath: join(outDir, name), outDir, sanitize: san, backend: "llvm" });
   if (!result.ok) {
     throw new Error(
       "regex program failed to compile:\n" +
         result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"),
     );
   }
-  return { binaryPath: result.binaryPath, cPath: result.cPath };
+  return { binaryPath: result.binaryPath, llvmPath: result.llvmPath };
 }
 
 describe("regex (scriptc-only behavior)", () => {
@@ -122,9 +119,8 @@ console.log(/${"(a)".repeat(300)}/.test("a"));
         { sanitize: false },
       ),
     ]);
-    const plainC = readFileSync(plainBuild.cPath, "utf8");
-    expect(plainC).not.toContain("ScrRegex");
-    expect(plainC).not.toContain("scr_regex");
+    const plainC = readFileSync(plainBuild.llvmPath, "utf8");
+    expect(plainC).not.toContain("@scr_regex");
     // The class bounds are page-granular (macOS rounds segments to 16KB,
     // so a few hundred bytes of new runtime can tip a whole page): the net
     // loop hooks, the console/process/child surface (the piped-stream

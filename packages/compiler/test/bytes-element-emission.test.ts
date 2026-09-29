@@ -1,5 +1,4 @@
 import { expect, test } from "vitest";
-import { emitCModule } from "../src/backend/c/c-emitter.js";
 import { emitLlvmModule } from "../src/backend/llvm/emitter.js";
 import { BOOL, F64, VOID, bytesOf, type IrBytesElem, type IrExpr, type IrLocal, type IrModule, type IrStmt } from "../src/ir/ir.js";
 import { validateModule } from "../src/ir/validate.js";
@@ -242,20 +241,6 @@ function integerLoopFixture(mutatesIndex = false): IrModule {
   };
 }
 
-test("C emission specializes typed-array element access by static element kind", () => {
-  const mod = fixture();
-  expect(validateModule(mod)).toEqual([]);
-  const c = emitCModule(mod);
-  for (const elem of elems) {
-    expect(c).toContain(`sc_bytes_get_${elem}(`);
-    expect(c).toContain(`sc_bytes_set_${elem}(`);
-  }
-  // The only generic calls are the shared cold invalid-index trap funnel.
-  expect(c.match(/\bscr_bytes_get\(/g)).toHaveLength(2);
-  expect(c).not.toMatch(/\bscr_bytes_set\(/);
-  expect(c).not.toContain("scr_bytes_retain(");
-});
-
 test("LLVM emission performs typed-array element access directly on the valid path", () => {
   const mod = fixture();
   expect(validateModule(mod)).toEqual([]);
@@ -274,21 +259,20 @@ test("LLVM emission performs typed-array element access directly on the valid pa
 test("side-effecting indices retain the receiver snapshot", () => {
   const mod = sideEffectFixture();
   expect(validateModule(mod)).toEqual([]);
-  const c = emitCModule(mod);
+
   const ll = emitLlvmModule(mod);
-  expect(c).toContain("scr_bytes_retain(sc_l_b_0)");
+
   expect(ll).toContain("call ptr @scr_bytes_retain_v");
-  expect(c.match(/\bscr_bytes_get\(/g)).toHaveLength(2);
+
   expect(ll).toContain("call double @scr_bytes_get");
 });
 
 test("receiver assignments nested in numeric operands retain the receiver snapshot", () => {
   const mod = receiverReassignmentFixture();
   expect(validateModule(mod)).toEqual([]);
-  const c = emitCModule(mod);
+
   const ll = emitLlvmModule(mod);
-  expect(c).toContain("scr_bytes_retain(sc_l_read)");
-  expect(c).toContain("scr_bytes_retain(sc_l_write)");
+
   // Two receiver snapshots plus two retains per yielded bytes assignment
   // (one for the RHS temp and one for the binding's stored reference).
   expect(ll.match(/call ptr @scr_bytes_retain_v/g)).toHaveLength(6);
@@ -297,13 +281,8 @@ test("receiver assignments nested in numeric operands retain the receiver snapsh
 test("canonical byte loops keep their induction variable and indices integral", () => {
   const mod = integerLoopFixture();
   expect(validateModule(mod)).toEqual([]);
-  const c = emitCModule(mod);
-  const ll = emitLlvmModule(mod);
 
-  expect(c).toContain("uint64_t sc_i");
-  expect(c).toContain("sc_bytes_get_u8_u64(");
-  expect(c).toContain("sc_bytes_set_u8_u64(");
-  expect(c).not.toContain("sc_bytes_index_checked(");
+  const ll = emitLlvmModule(mod);
 
   expect(ll).toContain("alloca i64 ; integer induction index");
   expect(ll).toContain("icmp ult i64");
@@ -313,11 +292,9 @@ test("canonical byte loops keep their induction variable and indices integral", 
 test("a body mutation keeps the byte loop on the general f64 path", () => {
   const mod = integerLoopFixture(true);
   expect(validateModule(mod)).toEqual([]);
-  const c = emitCModule(mod);
+
   const ll = emitLlvmModule(mod);
 
-  expect(c).not.toContain("integer induction index");
-  expect(c).not.toContain("_u64(");
   expect(ll).not.toContain("integer induction index");
   expect(ll).toContain("bytes.index.range");
   expect(ll).toContain("fptoui double");

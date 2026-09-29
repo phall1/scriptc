@@ -2244,37 +2244,30 @@ function validateFunction(
     }
   }
 
-  function checkNullishChain(e: IrExpr & { kind: "nullish" }): void {
-    // Preserve the recursive validator's left/right/parent diagnostic order
-    // without keeping its large native expression frame for every operand.
-    const parents: (IrExpr & { kind: "nullish" })[] = [];
-    let left: IrExpr = e;
-    while (left.kind === "nullish") {
-      parents.push(left);
-      left = left.left;
-    }
-    checkExpr(left);
-    for (let i = parents.length - 1; i >= 0; i--) {
-      const parent = parents[i]!;
-      checkExpr(parent.right);
-      checkNullishOperands(parent);
-    }
-  }
-
-  function checkLogicalTree(root: IrExpr & { kind: "logical" }): void {
-    // Long predicates can associate in either direction. Keep their
-    // left/right/parent diagnostic order with bounded native stack use.
+  function checkBranchingTree(root: IrExpr): void {
+    // Predicates and conditional dispatch can nest in either direction.
+    // Preserve child-before-parent diagnostics with bounded native stack
+    // use, including trees that mix the three branching operators.
     const pending: { expr: IrExpr; visited: boolean }[] = [{ expr: root, visited: false }];
     while (pending.length !== 0) {
       const task = pending.pop()!;
       const e = task.expr;
-      if (e.kind !== "logical") {
-        checkExpr(e);
-      } else if (!task.visited) {
-        pending.push({ expr: e, visited: true });
-        pending.push({ expr: e.right, visited: false });
-        pending.push({ expr: e.left, visited: false });
-      } else {
+      if (!task.visited) {
+        if (e.kind === "logical" || e.kind === "nullish") {
+          pending.push({ expr: e, visited: true });
+          pending.push({ expr: e.right, visited: false });
+          pending.push({ expr: e.left, visited: false });
+        } else if (e.kind === "ternary") {
+          pending.push({ expr: e, visited: true });
+          pending.push({ expr: e.else_, visited: false });
+          pending.push({ expr: e.then, visited: false });
+          pending.push({ expr: e.cond, visited: false });
+        } else {
+          checkExpr(e);
+        }
+        continue;
+      }
+      if (e.kind === "logical") {
         if (
           e.type.kind !== "f64" && e.type.kind !== "string" && e.type.kind !== "bool" &&
           e.type.kind !== "jsval" && e.type.kind !== "union" && e.type.kind !== "dyn"
@@ -2284,6 +2277,13 @@ function validateFunction(
         if (e.type.kind === "union") checkTruthyUnion(e.type.unionId, e.loc);
         expectType(e.left, e.type, `logical ${e.op} left`);
         expectType(e.right, e.type, `logical ${e.op} right`);
+      } else if (e.kind === "nullish") {
+        checkNullishOperands(e);
+      } else if (e.kind === "ternary") {
+        expectType(e.cond, BOOL, "ternary condition");
+        expectType(e.then, e.type, "ternary then-branch");
+        expectType(e.else_, e.type, "ternary else-branch");
+        if (e.type.kind === "void") err("ternary must not be void", e.loc);
       }
     }
   }
@@ -2292,8 +2292,8 @@ function validateFunction(
     switch (e.kind) {
       case "numLit":
         // ±Infinity and NaN are real literals (the globals
-        // `Infinity`/`NaN`, Number constants) — both backends spell them
-        // (INFINITY/NAN macros in C, bit-encoded f64 in LLVM).
+        // `Infinity`/`NaN`, Number constants) — the backend spells them
+        // (bit-encoded f64 in LLVM).
         // procStream is the ONE non-f64 numLit: process.stdout/stderr as
         // first-class values mint the stream's fd (1/2) as the scalar —
         // the prefixStream idiom.
@@ -2501,7 +2501,9 @@ function validateFunction(
         if (e.type.kind !== "bool") err("toBool must be bool", e.loc);
         break;
       case "logical":
-        checkLogicalTree(e);
+      case "nullish":
+      case "ternary":
+        checkBranchingTree(e);
         break;
       case "unionEq": {
         checkExpr(e.left);
@@ -2544,15 +2546,6 @@ function validateFunction(
         expectType(e.left, STRING, `${e.kind} left`);
         expectType(e.right, STRING, `${e.kind} right`);
         if (e.type.kind !== "bool") err(`${e.kind} must be bool`, e.loc);
-        break;
-      case "ternary":
-        checkExpr(e.cond);
-        checkExpr(e.then);
-        checkExpr(e.else_);
-        expectType(e.cond, BOOL, "ternary condition");
-        expectType(e.then, e.type, "ternary then-branch");
-        expectType(e.else_, e.type, "ternary else-branch");
-        if (e.type.kind === "void") err("ternary must not be void", e.loc);
         break;
       case "optChain": {
         checkExpr(e.receiver);
@@ -2638,9 +2631,6 @@ function validateFunction(
         expectType(e, bound, "chainRecv");
         break;
       }
-      case "nullish":
-        checkNullishChain(e);
-        break;
       case "orDefault": {
         checkExpr(e.left);
         checkExpr(e.right);

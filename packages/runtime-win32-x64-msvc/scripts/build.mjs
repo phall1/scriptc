@@ -1,5 +1,5 @@
 import { dirname } from "node:path"; import { fileURLToPath } from "node:url";
-if (process.platform !== "win32" || process.arch !== "x64") { process.stdout.write("@scriptc/runtime-win32-x64-msvc: skipped on this host\n"); process.exit(0); }
+if (process.env.SCRIPTC_BUILD_CROSS !== "1" && (process.platform !== "win32" || process.arch !== "x64")) { process.stdout.write("@scriptc/runtime-win32-x64-msvc: skipped on this host\n"); process.exit(0); }
 process.env.SCRIPTC_RUNTIME_PACK_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 // The helper emits x64 COFF objects, whose calling convention is compatible
 // with Zig's MinGW runtime. The runtime itself intentionally uses the

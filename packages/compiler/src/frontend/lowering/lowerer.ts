@@ -3558,7 +3558,7 @@ export class Lowerer {
         if (this.mixinFnShapes.get(decl)) continue;
         const sig = declSymbol ? this.fnSigsBySymbol.get(declSymbol) : undefined;
         // A body nothing reaches never lowers: its constructs can't fail
-        // the build and it leaves no trace in the emitted C.
+        // the build and it leaves no trace in the emitted LLVM.
         if (sig && !this.wantBody(sig.name)) continue;
         const fn = this.lowerFunction(decl);
         if (fn) functions.push(fn);

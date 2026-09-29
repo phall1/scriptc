@@ -280,7 +280,7 @@ export interface CcOptions {
    * when omitted: arbitrary C can depend on same-path edited headers and on
    * compiler-visible source spelling (`__FILE__`), neither of which the
    * top-level bytes alone can safely represent. scriptc's frontend supplies
-   * this for its generated C/LLVM IR; `--from-c` deliberately does not. */
+   * this for its generated LLVM IR; caller-supplied C deliberately does not. */
   cacheIdentity?: string;
   /** Native optimization posture. Release preserves the historical -O2
    * executable lane; dev selects -O0 and may compile a caller-provided LLVM
@@ -1001,11 +1001,11 @@ export interface LibArchiveOptions {
   /** Canonical externally visible definitions retained while the shard merge
    * demotes generated cross-shard linkage back to local symbols. */
   programPublicSymbols?: readonly string[];
-  /** Tiny generated C source carrying volatile library identity getters.
+  /** Tiny LLVM module carrying volatile library identity getters.
    * Its bytes join the complete archive key, but the source itself exists
    * only in the invocation-private build directory and the large program-
    * object cache is keyed independently. */
-  identityCSource?: string;
+  identityLlvmSource?: string;
   /** The archive to produce (<name>.lib.a). */
   outPath: string;
   /** Caller-owned identity for the generated TU's complete non-system
@@ -1284,9 +1284,9 @@ export async function compileLibArchive(opts: LibArchiveOptions): Promise<void> 
   let cachedProgramBytes = opts.programSource === undefined
     ? null
     : Buffer.from(opts.programSource, "utf8");
-  const identityBytes = opts.identityCSource === undefined
+  const identityBytes = opts.identityLlvmSource === undefined
     ? null
-    : Buffer.from(opts.identityCSource, "utf8");
+    : Buffer.from(opts.identityLlvmSource, "utf8");
   if (persistentCache !== null) {
     try {
       const [cv, fingerprint, programBytes] = await Promise.all([
@@ -1639,7 +1639,7 @@ export async function compileLibArchive(opts: LibArchiveOptions): Promise<void> 
       const identityObject = identityBytes === null
         ? null
         : await (async () => {
-            const source = join(buildDir, "identity.c");
+            const source = join(buildDir, "identity.ll");
             await writeFile(source, identityBytes);
             return compileOne(source, `${stem}.identity.o`);
           })();
@@ -1848,7 +1848,7 @@ export async function compileLibArchive(opts: LibArchiveOptions): Promise<void> 
  *            mirrors MSVC link.exe; zig's COFF driver refuses multi-object
  *            merges) and llvm-objcopy rejects symbol-scope flags for
  *            COFF, so no tool pairing exists to shell out to. */
-async function localizeLibraryObjects(
+export async function localizeLibraryObjects(
   driver: CcDriver,
   arArgv: readonly string[],
   buildDir: string,
@@ -1856,8 +1856,8 @@ async function localizeLibraryObjects(
   supportObjects: readonly string[],
   keepSymbols: readonly string[],
   stem: string,
+  platform = targetPlatform(driver),
 ): Promise<string> {
-  const platform = targetPlatform(driver);
   const combined = join(buildDir, `${stem}.localized.o`);
   const staging = join(buildDir, `${stem}.localize-staging.a`);
   const keepFile = join(buildDir, "localize-keep.syms");
@@ -1949,9 +1949,9 @@ async function localizeLibraryObjects(
  *                     (every .c/.h in the runtime src dir plus the vendor pin
  *                     QJS_COMMIT), the caller's dependency identity, the
  *                     compiler-visible TU path, Darwin output basename, the
- *                     FULL normalized command line, and the emitted C bytes).
- *                     Emitted C is
- *                     byte-stable by project invariant, so unchanged programs
+ *                     FULL normalized command line, and the emitted LLVM bytes).
+ *                     Emitted LLVM is
+ *                     deterministic, so unchanged programs
  *                     hit; any flag difference — e.g. the sanitized lane's
  *                     -O1/-fsanitize=address/-DSCR_RC_AUDIT — lands in a
  *                     naturally distinct key. On a hit the cached binary is
@@ -1980,7 +1980,7 @@ async function localizeLibraryObjects(
  *   obj/<set>/<f>.o — per-flavor runtime objects for cache-miss builds. The
  *                     historical single invocation recompiles every runtime
  *                     TU per program (~1.3s at -O2); with cached objects a
- *                     miss compiles ONLY the program's C and links (~0.15s).
+ *                     miss compiles only the program's LLVM and links (~0.15s).
  *                     Library-mode -DSCR_LIB objects use a distinct flavor.
  *                     The clang driver hands every input the same option set,
  *                     so per-TU `-c` compiles with those options plus a final
@@ -4133,7 +4133,7 @@ async function compileCInternal(
     cachePolicy.runtimeObjects &&
     configuredCacheRoot !== null &&
     await compilerDriverSupportsPersistentCache(driver, toolchainEnv);
-  // Only compiler-generated TUs opt in. Arbitrary `compileC` / `--from-c`
+  // Only compiler-generated TUs opt in. Arbitrary `compileC` inputs
   // inputs may include caller-owned headers whose contents are not otherwise
   // represented in this key, so they retain the fully uncached historical
   // path unless the caller supplies its own complete dependency identity.
@@ -4452,15 +4452,15 @@ async function compileCInternal(
     ...executableSectionFlags.compile,
     ...(opts.textDecoderLegacy ? ["-DSCR_TEXT_DECODER_LEGACY"] : []),
     "-fno-math-errno",
-    // The emitted object model is deliberately type-punned C: a hierarchy
+    // The runtime object model uses type-punned C: a hierarchy
     // upcast is a raw pointer cast, so one object's header (rc, vt) and
     // fields are read and written through BOTH the base and derived struct
     // types (sc_retain_Derived vs sc_release_Base on the same object).
     // C's effective-type rule calls that UB, and clang's TBAA at -O2
     // reorders/elides the rc updates once everything inlines — an upcast
     // identity compare frees the object while a global still owns it.
-    // The LLVM backend emits no TBAA metadata, so this flag is also what
-    // keeps the two backends' memory semantics identical. Mirrored in the
+    // The LLVM backend emits no TBAA metadata; this flag preserves
+    // matching memory semantics in the runtime. Mirrored in the
     // cache-miss cflags below and compileLibArchive — the three option
     // sets must stay in lockstep.
     "-fno-strict-aliasing",
@@ -4671,8 +4671,7 @@ async function compileCInternal(
         (opts.systemLibraries?.length ?? 0) > 0
           ? "This build includes native FFI link inputs. Check that every symbol and system library exists, " +
             "that archive/object ordering is correct, and that each input matches the selected target."
-          : `This is a scriptc bug (generated C should always compile) unless ` +
-            `${ccName} itself is missing/broken.`;
+          : `Check the supplied native source and the selected ${ccName} toolchain.`;
       throw new CcCompileError(
         ccName,
         stderr,

@@ -53,7 +53,7 @@ export { bodyReadsArguments };
 export type ParamMode = "required" | "omittable" | "rest" | "dynRest" | "islandRest" | "arguments";
 
 /** One parameter of a signature, as call sites and callee prologues see it.
- * `type` is the ABI type — what the emitted C parameter carries: the
+ * `type` is the ABI type — what the emitted LLVM parameter carries: the
  * checker's `T | undefined` union for `x?: T`, a synthesized `T | undefined`
  * union for `x: T = e`, `T[]` for `...xs: T[]`, the plain declared type
  * otherwise. `bodyType` is present exactly for DEFAULTED program params:
@@ -3382,7 +3382,7 @@ export function lowerFfiCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr 
         }
         // An inline function value at a RELEASE site can never match:
         // lifted lambdas always carry a captures list (even an empty one),
-        // so both backends mint a fresh closure per evaluation of the
+        // so the backend creates a fresh closure per evaluation of the
         // expression — the release argument is a pointer no registration
         // holds, a guaranteed runtime trap. Declared functions stay valid
         // here — their value is the interned immortal closure (captures
@@ -6963,7 +6963,7 @@ function loweredTemplateStrings(
   loc: SrcLoc,
 ): IrExpr {
   // Normal runtime construction keeps this array aligned with the current
-  // ScrArr layout in both backends. The old static-header IR node encoded the
+  // ScrArr layout in the backend. The old static-header IR node encoded the
   // pre-sparse layout in LLVM and crashed as soon as a tag read its strings.
   const type = arrayOf(STRING);
   const key = `templateStringsGlobal:${loc.file}:${expr.template.getStart()}`;

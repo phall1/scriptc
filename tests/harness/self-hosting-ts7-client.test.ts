@@ -19,7 +19,7 @@ test("the production TypeScript RPC and filesystem client lowers entirely static
   expect(coverage.stats.functionsSkipped).toBe(0);
 });
 
-for (const backend of ["c", "llvm"] as const) {
+for (const backend of ["llvm"] as const) {
   test(`native TypeScript client talks directly to the pinned parser/checker (${backend})`, async () => {
     const dir = mkdtempSync(join(tempRoot, "scriptc-native-ts7-"));
     try {

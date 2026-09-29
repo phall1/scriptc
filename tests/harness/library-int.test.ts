@@ -46,8 +46,8 @@ const fixtureRoot = join(repoRoot, "tests/library-mode");
 const flavor = process.env["SCRIPTC_SAN"] === "1" ? "san" : "plain";
 const cacheDir = join(repoRoot, "node_modules/.cache/scriptc-tests/library-int", flavor);
 
-type Emission = "llvm" | "c";
-const EMISSIONS: Emission[] = ["llvm", "c"];
+type Emission = "llvm";
+const EMISSIONS: Emission[] = ["llvm"];
 
 /* ── the corpus (reference package §3, sources verbatim) ─────────────────
  * `body` is the case's program text: top-level statements, or the body of
@@ -453,7 +453,7 @@ export function grow(a: number): void {
 }
 `;
   const c: CorpusCase = { name: "render", body: "", param: false, expected: "refuse" };
-  const profile = corpusProfile(c, "c", "lib.ts") as { exports: object[] };
+  const profile = corpusProfile(c, "llvm", "lib.ts") as { exports: object[] };
   profile.exports.push(
     { export: "half", symbol: "kc_half", params: ["f64"], returns: "void" },
     { export: "grow", symbol: "kc_grow", params: ["f64"], returns: "void" },
@@ -497,7 +497,7 @@ function sidecarProfile(integerSlots: object[], patch: Record<string, unknown> =
     profile_format: 1,
     name: "int-sidecar",
     entry: "lib.ts",
-    emission: "c",
+    emission: "llvm",
     abi: {
       prefix: "ks_",
       init_symbol: "ks_init",

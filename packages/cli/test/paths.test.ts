@@ -11,12 +11,12 @@ test("default executable names use the Windows PE suffix", () => {
 });
 
 test("source artifact names use stable POSIX and Windows suffixes", () => {
-  expect(["ir", "c", "llvm", "asm", "obj", "exe"].map((kind) =>
+  expect(["ir", "llvm", "asm", "obj", "exe"].map((kind) =>
     defaultOutputName("main", kind as Parameters<typeof defaultOutputName>[1], "linux")
-  )).toEqual(["main.ir.json", "main.c", "main.ll", "main.s", "main.o", "main"]);
-  expect(["ir", "c", "llvm", "asm", "obj", "exe"].map((kind) =>
+  )).toEqual(["main.ir.json", "main.ll", "main.s", "main.o", "main"]);
+  expect(["ir", "llvm", "asm", "obj", "exe"].map((kind) =>
     defaultOutputName("main", kind as Parameters<typeof defaultOutputName>[1], "win32")
-  )).toEqual(["main.ir.json", "main.c", "main.ll", "main.asm", "main.obj", "main.exe"]);
+  )).toEqual(["main.ir.json", "main.ll", "main.asm", "main.obj", "main.exe"]);
 });
 
 test("primary output selection keeps explicit paths exact", () => {

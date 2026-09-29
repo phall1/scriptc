@@ -103,7 +103,7 @@ async function build(entry: string): Promise<string> {
     // Pinned: the listening-process differential was written against the
     // C lane; keeping lane identity fixed keeps a three-leg diff meaning
     // "server behavior changed", never "the default backend moved".
-    backend: "c",
+    backend: "llvm",
   });
   if (!result.ok) {
     throw new Error(
@@ -169,7 +169,7 @@ describe(`server differential (${cases.length} programs${sanitize ? ", sanitized
           result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"),
       );
     }
-    const llvm = readFileSync(result.cPath, "utf8");
+    const llvm = readFileSync(result.llvmPath, "utf8");
     expect(llvm).toContain(
       "declare void @scr_net_listen_opts_reuse_port(ptr, double, ptr, i1 zeroext, i1 zeroext, ptr)",
     );

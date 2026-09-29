@@ -7,7 +7,7 @@ import { analyze, compile } from "../src/index.js";
 
 const sanitize = process.env["SCRIPTC_SAN"] === "1";
 
-test.each(["c", "llvm"] as const)("native callable checks preserve supported arguments and reject before invoking (%s)", async (backend) => {
+test.each(["llvm"] as const)("native callable checks preserve supported arguments and reject before invoking (%s)", async (backend) => {
   const dir = mkdtempSync(join(tmpdir(), "scriptc-callable-checks-"));
   try {
     const entry = join(dir, "main.ts");
@@ -64,7 +64,7 @@ console.log(handle.fd);
   }
 });
 
-test.each(["c", "llvm"] as const)("failed implicit specializations retain a callable throwing body (%s)", async (backend) => {
+test.each(["llvm"] as const)("failed implicit specializations retain a callable throwing body (%s)", async (backend) => {
   const dir = mkdtempSync(join(tmpdir(), "scriptc-failed-specialization-"));
   try {
     const pkg = join(dir, "node_modules", "callbacks");

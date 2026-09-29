@@ -6,7 +6,6 @@ import { enableCompileCache } from "node:module";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { LEGACY_C_EXECUTABLE_WARNING, shouldWarnLegacyCExecutable } from "./legacy-c-warning.js";
 import { CLI_OPTIONS, USAGE } from "./usage.js";
 
 // Node 24 can persist V8's compiled module bytecode. scriptc's CLI imports
@@ -58,11 +57,11 @@ async function tryFastPath(): Promise<number | null> {
     (values.emit !== undefined && values.emit !== "exe") ||
     values.print !== undefined ||
     values["emit-ir"] ||
-    values.lib || values["from-c"] || values["provenance-sources"] ||
+    values.lib || values["provenance-sources"] ||
     (values["external-types"] ?? []).length > 0
   ) return null;
   const backend = values.backend;
-  if (backend !== undefined && backend !== "c" && backend !== "llvm") return null;
+  if (backend !== undefined && backend !== "llvm") return null;
   const optimization = values.optimization;
   if (optimization !== undefined && optimization !== "release" && optimization !== "dev") return null;
   const npmRaw = (values["npm-static"] ?? [])
@@ -103,7 +102,7 @@ async function tryFastPath(): Promise<number | null> {
   // full compiler. Otherwise a valid helper/runtime-pack cache entry has a
   // different target/compiler identity and bootstrap must unnecessarily load
   // the whole compiler graph to rediscover it.
-  const helperRuntimePackTarget = backend !== "c" && !values.sanitize
+  const helperRuntimePackTarget = !values.sanitize
     ? startup.precompiledRuntimePackTarget()
     : null;
   const helperObjectRoute = helperRuntimePackTarget !== null;
@@ -126,7 +125,7 @@ async function tryFastPath(): Promise<number | null> {
     emitIr: values["emit-ir"],
     sanitize: values.sanitize,
     dynamic: values.dynamic,
-    backend: backend ?? "auto",
+    backend: "llvm",
     ...(optimization === "dev" ? { optimization: "dev" as const } : {}),
     ...(values.strip ? { strip: true as const } : {}),
     npmStatic,
@@ -141,18 +140,7 @@ async function tryFastPath(): Promise<number | null> {
     nodeVersion: process.version,
   });
   if (hit === null) return null;
-  if (shouldWarnLegacyCExecutable({
-    executable: true,
-    fromC: false,
-    backend,
-    sanitize: values.sanitize,
-  })) {
-    process.stderr.write(LEGACY_C_EXECUTABLE_WARNING);
-  }
-  if (hit.native.llvmRefusal !== undefined) {
-    process.stderr.write(`scriptc: backend c (llvm refused: ${hit.native.llvmRefusal})\n`);
-  }
-  if (!values["keep-c"]) await rm(hit.cPath, { force: true });
+  if (!values["keep-llvm"]) await rm(hit.llvmPath, { force: true });
   if (command === "build") {
     process.stdout.write(`${outPath}\n`);
     return 0;

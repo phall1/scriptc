@@ -1,8 +1,7 @@
 /* The LLVM backend's runtime ABI guard: every `declare` of a scr_* symbol
  * the emitter produces must agree with the C prototype in scr_runtime.h —
  * parameter count, integer width, pointer-ness, return type, and
- * variadic-ness. The C backend gets this checked for free (clang
- * type-checks its calls against the header), but a .ll `declare` is taken
+ * variadic-ness. A .ll `declare` is taken
  * on faith by the linker, so a disagreement is silent UB that can run
  * clean under one toolchain and misbehave under another. This test kills
  * the class mechanically, from four directions:
@@ -361,7 +360,7 @@ _Static_assert(offsetof(ScrBytes, is_buffer) == 40, "LLVM ScrBytes.is_buffer off
           `${fixture} left the LLVM tier (${res.diagnostics[0]?.message ?? "?"}) — swap in an in-tier fs fixture`,
         );
       }
-      const ll = await readFile(res.cPath, "utf8");
+      const ll = await readFile(res.llvmPath, "utf8");
       for (const line of ll.split("\n")) {
         if (!line.startsWith("declare ")) continue;
         const d = parseDeclare(line);

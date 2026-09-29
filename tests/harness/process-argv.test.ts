@@ -9,7 +9,7 @@ const root = join(import.meta.dirname, "../..");
 const entry = join(root, "tests/fixtures/npm/cases/process-argv.mts");
 const args = ["", "héllo", "中文", "🌍", "a b", 'double"quote', "end\\", 'slashes\\\\"quote', "&;$(hello)`test'", "line\nbreak", "tab\targ"];
 
-for (const backend of ["c", "llvm"] as const) {
+for (const backend of ["llvm"] as const) {
   test(`island process.argv preserves Unicode, quoting, empty values and identity (${backend})`, async () => {
     const dir = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-argv-island-"));
     try {

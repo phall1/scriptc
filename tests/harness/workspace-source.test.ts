@@ -11,7 +11,7 @@ const entry = join(repoRoot, "tests/fixtures/workspace-source/main.ts");
 const cacheDir = join(repoRoot, "node_modules/.cache/scriptc-tests/workspace-source");
 const sanitize = process.env["SCRIPTC_SAN"] === "1";
 
-test.for(["c", "llvm"] as const)(
+test.for(["llvm"] as const)(
   "a TypeScript-source workspace package compiles as program modules with the %s backend",
   async (backend) => {
     const outDir = join(cacheDir, `${backend}-${sanitize ? "san" : "plain"}`);

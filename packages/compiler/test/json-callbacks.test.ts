@@ -29,7 +29,7 @@ test.each([
   }
 });
 
-for (const backend of ["c", "llvm"] as const) {
+for (const backend of ["llvm"] as const) {
   test(`JSON callback checked boundaries and recovery (${backend})`, async () => {
     const dir = temp();
     try {

@@ -379,7 +379,7 @@ export type HandleKind = typeof HANDLE_KIND_LIST[number];
 type HandleType = Extract<IrType, { kind: HandleKind }>;
 export const HANDLE_KINDS = irKindSet(HANDLE_KIND_LIST);
 
-/** The IR kinds represented as pointers in both native backends. */
+/** The IR kinds represented as pointers in native code. */
 const POINTER_KIND_LIST = [
   "string",
   "bigint",
@@ -538,8 +538,8 @@ export function isUnitType(t: IrType): boolean {
   return t.kind === "undefinedT" || t.kind === "nullT";
 }
 
-/** Element kinds with a real ScrArr storage/RC representation in BOTH
- * backends. Array-producing lowerings can learn their result element from
+/** Element kinds with a real ScrArr storage/RC representation.
+ * Array-producing lowerings can learn their result element from
  * a callback rather than through mapType's ordinary T[] gate, so they must
  * share this predicate instead of reconstructing an array around an
  * otherwise-valid standalone type (Date, opaque handles, ...). */
@@ -874,7 +874,7 @@ export interface IrModule {
    * and system-library inputs. Absent when the build has no FFI manifest. */
   ffiImports?: IrFfiImport[];
   /** LIBRARY mode: the profile's resolved export map plus the
-   * mode-provided symbol names, landed ON the IR so both backends emit the
+   * mode-provided symbol names, landed ON the IR so the backend emits the
    * external-linkage wrappers and entries from the same facts — the two
    * emissions stay conformance-identical by construction. Absent on every
    * executable build (the backends emit main() exactly as always). */
@@ -1057,7 +1057,7 @@ export interface IrLibTrapOverlay {
 
 /** One resolved host-callback channel (the profile's `callbacks` entry
  * landed on the IR): compiled call sites of the channel's ambient binding
- * lower as ffiCall nodes carrying the channel name, and both backends emit
+ * lower as ffiCall nodes carrying the channel name, and the backend emits
  * the same dispatch — fetch the slot's registered pointer through
  * scr_library_cb_require (which delivers `unregisteredTrap` through the
  * library funnel when the host never registered), then the typed indirect
@@ -1073,7 +1073,7 @@ export interface IrLibCallback {
   /** The unregistered-call trap text (a DETECTED trap: plain bytes the
    * library funnel classifies SC4025 and assembles with the current
    * entry's symbol — unlike the SC4012 wrapper traps, the entry is only
-   * known at runtime). Built once at export resolution so both backends
+   * known at runtime). Built once at export resolution so generated wrappers
    * emit identical constants by construction. */
   unregisteredTrap: string;
 }
@@ -6775,7 +6775,7 @@ export function moduleEmbedsBuiltin(mod: IrModule, builtin: string): boolean {
 }
 
 /** Embedded module texts at least this long are DEFLATE-compressed into
- * the emitted C (island.ts; each stays plain when deflate does not
+ * the emitted LLVM (island.ts; each stays plain when deflate does not
  * shrink it) and inflated lazily by the island's module loader at first
  * load. Below it the zlib round trip cannot pay for itself. */
 export const NPM_COMPRESS_MIN = 1024;

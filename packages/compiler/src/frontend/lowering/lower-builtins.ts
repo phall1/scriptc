@@ -8567,7 +8567,7 @@ const NUMBER_STATIC_PREDICATES: Record<string, IrLibFn | undefined> = {
 };
 
 /** The Number constants, baked as literals — non-finite ones included
- * (numLits carry NaN and the infinities; both backends spell them). */
+ * (numLits carry NaN and the infinities; the backend preserves them). */
 const NUMBER_CONSTANTS: Record<string, number | undefined> = {
   MAX_SAFE_INTEGER: 9007199254740991,
   MIN_SAFE_INTEGER: -9007199254740991,

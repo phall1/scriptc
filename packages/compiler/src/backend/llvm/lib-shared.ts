@@ -24,6 +24,9 @@ export function emitAlwaysThrowLibCall(
 }
 
 export const LIB_FN_SYMS: Record<string, string> = {
+  "assert.expectsErrDyn": "scr_assert_expects_err_dyn",
+  "insp.jsonDyn": "scr_dyn_format_j",
+  "http.reqH2StreamOrThrow": "scr_http_req_h2_stream_or_throw",
   "intl.segmenterNew": "scr_intl_segmenter_new",
   "weakMap.is": "scr_weak_map_is",
   "weakSet.is": "scr_weak_set_is",

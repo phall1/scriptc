@@ -652,8 +652,13 @@ export function mergeAndLocalizeCoffObjects(
         fail(`${object.label}: COMDAT section ${section.name} has unsupported selection ${section.comdatSelection}`);
       }
       const leader = section.comdatLeader >= 0 ? object.symbols[section.comdatLeader] : undefined;
-      if (leader === undefined || leader.storageClass !== IMAGE_SYM_CLASS_EXTERNAL) {
-        fail(`${object.label}: COMDAT section ${section.name} has no external leader symbol`);
+      // Function-section builds also mark private code and unwind tables
+      // as COMDAT. They have a static leader or just a section symbol.
+      // Their names are local to the input object, so preserve each copy
+      // and its relocations instead of deduplicating across objects.
+      if (leader === undefined || leader.storageClass === IMAGE_SYM_CLASS_STATIC) return;
+      if (leader.storageClass !== IMAGE_SYM_CLASS_EXTERNAL) {
+        fail(`${object.label}: COMDAT section ${section.name} has an invalid leader symbol`);
       }
       const existing = comdatKept.get(leader.name);
       if (existing === undefined) {

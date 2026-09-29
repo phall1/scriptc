@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { compile } from "@scriptc/compiler";
 import { expect, test } from "vitest";
 
-for (const backend of ["c", "llvm"] as const) {
+for (const backend of ["llvm"] as const) {
   test(`opaque class fields refuse dynamic views while preserving exact recovery (${backend})`, async () => {
     const dir = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-opaque-class-"));
     try {

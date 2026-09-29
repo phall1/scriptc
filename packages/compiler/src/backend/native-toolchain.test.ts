@@ -3649,7 +3649,7 @@ test("library identity edits reuse the cached large program object", async () =>
     await compileLibArchive({
       cPath,
       programSource,
-      identityCSource: "unsigned long long scriptc_build_id(void) { return 1; }\n",
+      identityLlvmSource: "define i64 @scriptc_build_id() { ret i64 1 }\n",
       outPath,
       cacheIdentity: TEST_CACHE_IDENTITY,
     });
@@ -3668,7 +3668,7 @@ test("library identity edits reuse the cached large program object", async () =>
     await compileLibArchive({
       cPath,
       programSource,
-      identityCSource: "unsigned long long scriptc_build_id(void) { return 2; }\n",
+      identityLlvmSource: "define i64 @scriptc_build_id() { ret i64 2 }\n",
       outPath,
       cacheIdentity: TEST_CACHE_IDENTITY,
     });
@@ -4278,9 +4278,9 @@ test.skipIf(process.platform === "win32" || zigExecutable === undefined)(
       await writeFile(cPath, "int scriptc_large_program_value(void) { return 7; }\n");
       await compileLibArchive({
         cPath,
-        identityCSource: [
-          "unsigned long long scriptc_build_id(void) { return 2; }",
-          "unsigned scriptc_abi_version(void) { return 1; }",
+        identityLlvmSource: [
+          "define i64 @scriptc_build_id() { ret i64 2 }",
+          "define i32 @scriptc_abi_version() { ret i32 1 }",
           "",
         ].join("\n"),
         outPath: archivePath,

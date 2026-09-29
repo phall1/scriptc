@@ -77,7 +77,7 @@ function request(root: string, packageJson: string, output = join(root, "program
   };
 }
 
-test("resolves the target's matching platform helper rather than a fixed macOS package", async () => {
+test("resolves the build host's platform helper", async () => {
   const pkg = await fakePackage();
   const output = join(pkg.root, "linux.o");
   await writeFile(pkg.packageJson, JSON.stringify({ name: LINUX_X64_GNU_TARGET.helperPackage }));
@@ -88,7 +88,7 @@ test("resolves the target's matching platform helper rather than a fixed macOS p
     .replaceAll(`"supported_targets":["${MACOS_ARM64_TARGET.llvmTriple}"]`, `"supported_targets":["${LINUX_X64_GNU_TARGET.llvmTriple}"]`));
   await emitNativeArtifact({
     ...request(pkg.root, pkg.packageJson, output, LINUX_X64_GNU_TARGET),
-    helperHost: { platform: "linux", arch: "x64" },
+    helperHost: { platform: "linux", arch: "x64", linuxLibc: "gnu" },
   });
   expect(await readFile(output, "utf8")).toContain("define i32 @answer");
 });

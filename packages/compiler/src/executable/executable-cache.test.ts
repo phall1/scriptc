@@ -58,24 +58,24 @@ async function fixture(): Promise<{
   options: EarlyExecutableCacheOptions;
   source: string;
   missing: string;
-  cPath: string;
+  llvmPath: string;
   irPath: string;
 }> {
   const dir = await mkdtemp(join(tmpdir(), "scriptc-early-executable-"));
   scratch.push(dir);
   const source = join(dir, "entry.ts");
-  const cPath = join(dir, "entry.ll");
+  const llvmPath = join(dir, "entry.ll");
   const irPath = join(dir, "entry.ir.json");
   await Promise.all([
     writeFile(source, 'console.log("hello");\n'),
-    writeFile(cPath, "; generated llvm\n"),
+    writeFile(llvmPath, "; generated llvm\n"),
     writeFile(irPath, '{"irVersion":6}\n'),
   ]);
   return {
     root: join(dir, "cache"),
     source,
     missing: join(dir, "missing.ts"),
-    cPath,
+    llvmPath,
     irPath,
     options: {
       entryPath: source,
@@ -84,7 +84,7 @@ async function fixture(): Promise<{
       emitIr: true,
       sanitize: false,
       dynamic: false,
-      backend: "auto",
+      backend: "llvm",
       npmStatic: null,
       ffiProfile: null,
       target: "test",
@@ -105,22 +105,22 @@ test("early executable cache restores the emitted TU, IR, and native feature gat
     trackedFileExists(f.missing);
   });
   await publishEarlyExecutableCache(f.root, f.options, {
-    cPath: f.cPath,
+    llvmPath: f.llvmPath,
     irPath: f.irPath,
     native,
     executableRestored: false,
     frontend: tracker.snapshot(),
   });
-  await Promise.all([rm(f.cPath), rm(f.irPath)]);
+  await Promise.all([rm(f.llvmPath), rm(f.irPath)]);
   const alternateC = join(f.options.outDir, "entry.c");
-  await writeFile(alternateC, "/* saved C backend */\n");
+  await writeFile(alternateC, "/* user-owned native source */\n");
 
   const hit = await readEarlyExecutableCache(f.root, f.options);
   expect(hit?.native).toEqual(native);
   expect(hit?.executableRestored).toBe(false);
-  expect(await readFile(f.cPath, "utf8")).toBe("; generated llvm\n");
+  expect(await readFile(f.llvmPath, "utf8")).toBe("; generated llvm\n");
   expect(await readFile(f.irPath, "utf8")).toContain("irVersion");
-  expect(await readFile(alternateC, "utf8")).toBe("/* saved C backend */\n");
+  expect(await readFile(alternateC, "utf8")).toBe("/* user-owned native source */\n");
 });
 
 test("early dev cache restores the matching dSYM and rejects a missing payload", async () => {
@@ -133,7 +133,7 @@ test("early dev cache restores the matching dSYM and rejects a missing payload",
   const symbols = Buffer.concat([Buffer.from("SCDSYM01"), Buffer.from([5, 0, 0, 0]), Buffer.from("plistDWARF")]);
   await installDarwinDebugSymbols(symbols, f.options.outPath);
   await publishEarlyExecutableCache(f.root, f.options, {
-    cPath: f.cPath, irPath: f.irPath, native: { ...native, optimization: "dev" },
+    llvmPath: f.llvmPath, irPath: f.irPath, native: { ...native, optimization: "dev" },
     executableRestored: true, nativeDependencies: [], frontend: tracker.snapshot(),
   });
   await rm(`${f.options.outPath}.dSYM`, { recursive: true });
@@ -154,7 +154,7 @@ test("early executable cache misses on source and resolution changes", async () 
     trackedFileExists(f.missing);
   });
   await publishEarlyExecutableCache(f.root, f.options, {
-    cPath: f.cPath,
+    llvmPath: f.llvmPath,
     irPath: f.irPath,
     native,
     executableRestored: false,
@@ -174,7 +174,7 @@ test("early executable keys isolate compile modes, paths, implementation, and FF
   const tracker = new FrontendInputTracker();
   tracker.run(() => trackedReadFile(f.source));
   await publishEarlyExecutableCache(f.root, f.options, {
-    cPath: f.cPath,
+    llvmPath: f.llvmPath,
     irPath: f.irPath,
     native,
     executableRestored: false,
@@ -184,7 +184,6 @@ test("early executable keys isolate compile modes, paths, implementation, and FF
     { ...f.options, emitIr: false },
     { ...f.options, sanitize: true },
     { ...f.options, dynamic: true },
-    { ...f.options, backend: "c" },
     { ...f.options, optimization: "dev" },
     { ...f.options, npmStatic: "auto" },
     { ...f.options, npmStatic: ["commander"] },
@@ -206,7 +205,7 @@ test("early executable cache rejects corruption and refreshes payload LRU times"
   const tracker = new FrontendInputTracker();
   tracker.run(() => trackedReadFile(f.source));
   await publishEarlyExecutableCache(f.root, f.options, {
-    cPath: f.cPath,
+    llvmPath: f.llvmPath,
     irPath: f.irPath,
     native,
     executableRestored: false,
@@ -239,7 +238,7 @@ test("early executable cache restores a validated final binary", async () => {
   const tracker = new FrontendInputTracker();
   tracker.run(() => trackedReadFile(f.source));
   await publishEarlyExecutableCache(f.root, f.options, {
-    cPath: f.cPath,
+    llvmPath: f.llvmPath,
     irPath: f.irPath,
     native,
     executableRestored: true,
@@ -292,7 +291,7 @@ test("routed executable hits require an unchanged compiler implementation proof"
   const tracker = new FrontendInputTracker();
   tracker.run(() => trackedReadFile(f.source));
   await publishEarlyExecutableCache(f.root, f.options, {
-    cPath: f.cPath,
+    llvmPath: f.llvmPath,
     irPath: f.irPath,
     native,
     executableRestored: true,
@@ -326,7 +325,7 @@ test("routed executable hits require an unchanged compiler implementation proof"
   // Publishing the same route again must replace its metadata on every
   // platform (notably Windows, whose rename does not overwrite files).
   await publishEarlyExecutableCache(f.root, f.options, {
-    cPath: f.cPath,
+    llvmPath: f.llvmPath,
     irPath: f.irPath,
     native,
     executableRestored: true,

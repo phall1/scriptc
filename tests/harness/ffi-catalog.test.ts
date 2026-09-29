@@ -9,7 +9,7 @@ const fixture = join(import.meta.dirname, "../ffi");
 const sanitize = process.env["SCRIPTC_SAN"] === "1";
 const oracle = process.env["SCRIPTC_NODE_FFI_ORACLE"];
 
-describe.each(["c", "llvm"] as const)("static node:ffi catalog, %s", backend => {
+describe.each(["llvm"] as const)("static node:ffi catalog, %s", backend => {
   test("binds native symbols and preserves independent library lifetimes", async () => {
     const outDir = mkdtempSync(join(tmpdir(), "scriptc-ffi-catalog-"));
     const object = join(outDir, "wide.o");

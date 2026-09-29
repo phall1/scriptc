@@ -9,12 +9,6 @@
     "url": "git+https://github.com/vercel-labs/scriptc.git",
     "directory": "packages/runtime-win32-x64-msvc"
   },
-  "os": [
-    "win32"
-  ],
-  "cpu": [
-    "x64"
-  ],
   "files": [
     "artifacts",
     "runtime-pack.json"

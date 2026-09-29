@@ -3,12 +3,12 @@ import { parseNativeArguments } from "./arguments.js";
 
 test("native build arguments preserve paths and select explicit output modes", () => {
   expect(parseNativeArguments([
-    "build", "source with spaces.ts", "-o", "result with spaces", "--backend=c", "--emit=obj",
+    "build", "source with spaces.ts", "-o", "result with spaces", "--backend=llvm", "--emit=obj",
     "--toolchain", "/installed/compiler.json", "--dev", "--strip", "--ffi=bindings.json", "--npm-static=one,@scope/two",
   ], "default.json")).toEqual({
     help: false, toolchainPath: "/installed/compiler.json",
     build: {
-      entryPath: "source with spaces.ts", outputPath: "result with spaces", backend: "c", outputKind: "obj",
+      entryPath: "source with spaces.ts", outputPath: "result with spaces", backend: "llvm", outputKind: "obj",
       optimization: "dev", strip: true, ffiProfilePath: "bindings.json", npmStatic: ["one", "@scope/two"],
     },
   });
@@ -26,7 +26,9 @@ test("native build rejects unknown, missing and ambiguous arguments", () => {
     [["main.ts", "-o", "--dev"], "requires a value"],
     [["main.ts", "-o=x", "extra.ts"], "unexpected argument"],
     [["main.ts", "-o=x", "--dynamic"], "unknown native compiler option"],
-    [["main.ts", "-o=x", "--backend=other"], "--backend must"],
+    [["main.ts", "-o=x", "--backend=other"], "LLVM is the only backend"],
+    [["main.ts", "-o=x", "--backend=c"], "LLVM is the only backend"],
+    [["main.ts", "-o=x", "--emit=c"], "--emit must"],
     [["main.ts", "-o=x", "--emit=other"], "--emit must"],
   ] as const) expect(() => parseNativeArguments(args, "toolchain.json")).toThrow(message);
 });

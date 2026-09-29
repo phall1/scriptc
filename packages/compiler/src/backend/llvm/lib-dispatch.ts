@@ -1,3 +1,7 @@
+import { emitTlsLibCall } from "./lib-tls.js";
+import { emitHttp2LibCall } from "./lib-http2.js";
+import { emitDatagramLibCall } from "./lib-datagram.js";
+import { emitTestLibCall } from "./lib-test.js";
 /* Focused LLVM library-call emission extracted from emitter.ts. */
 import { InternalCompilerError } from "../../errors.js";
 import { MAY_THROW_LIB_FNS } from "../../ir/ir.js";
@@ -252,9 +256,10 @@ export function emitLibCall(host: LlvmEmitterContext, e: LibCallExpr): LlValue {
       case "passthrough":
       case "sc":
         return host.emitStreamLibCall(e);
-      case "net":
       case "dgram":
       case "dns":
+        return emitDatagramLibCall(host, e);
+      case "net":
       case "http":
       case "https":
         return host.emitNetworkHttpLibCall(e);
@@ -273,11 +278,11 @@ export function emitLibCall(host: LlvmEmitterContext, e: LibCallExpr): LlValue {
       case "crypto":
       case "buffer":
       case "bytes":
-      case "test":
-      case "tls":
       case "tlsca":
-      case "http2":
         return host.emitGenericLibCall(e);
+      case "test": return emitTestLibCall(host, e);
+      case "tls": return emitTlsLibCall(host, e);
+      case "http2": return emitHttp2LibCall(host, e);
       default: {
         const _exhaustive: never = prefix;
         void _exhaustive;

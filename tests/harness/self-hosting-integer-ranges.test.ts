@@ -23,7 +23,7 @@ test("production integer-range analysis lowers statically with identity-keyed ma
   expect(coverage.stats.functionsSkipped).toBe(0);
 });
 
-for (const backend of ["c", "llvm"] as const) {
+for (const backend of ["llvm"] as const) {
   test(`native integer-range analysis preserves proofs and expression identity (${backend})`, async () => {
     const dir = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-native-ranges-"));
     try {

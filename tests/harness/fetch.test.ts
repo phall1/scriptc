@@ -126,7 +126,7 @@ async function build(entry: string): Promise<string> {
     // Pinned: real-socket fixtures — the compiled lane stays the C
     // reference so a diff is fetch behavior, never a backend-lane change
     // (npm.test.ts rides the default and covers the fallback at scale).
-    backend: "c",
+    backend: "llvm",
   });
   if (!result.ok) {
     throw new Error(
@@ -139,7 +139,7 @@ async function build(entry: string): Promise<string> {
 
 async function buildStatic(
   entry: string,
-  backend: "c" | "llvm",
+  backend: "llvm",
   flavor = "",
 ): Promise<string> {
   const hash = createHash("sha256");
@@ -172,7 +172,7 @@ const cases = globSync(join(fixturesRoot, "cases/*/main.ts"))
   .map((entry) => ({ name: entry.split("/").at(-2)!, entry }));
 
 describe(`static fetch differential${sanitize ? " (sanitized)" : ""}`, () => {
-  test.for(["dynamic", "c", "llvm"] as const)(
+  test.for(["dynamic", "llvm"] as const)(
     "RequestInit wrapper spread / %s backend",
     async (lane) => {
       const entry = join(fixturesRoot, "spread-wrapper/main.mts");
@@ -199,7 +199,7 @@ describe(`static fetch differential${sanitize ? " (sanitized)" : ""}`, () => {
   ] as const;
   test.for(
     staticCases.flatMap((name) =>
-      (["c", "llvm"] as const).map((backend) => [name, backend] as const),
+      (["llvm"] as const).map((backend) => [name, backend] as const),
     ),
   )("%s / %s backend", async ([name, backend]) => {
     const entry = join(
@@ -224,7 +224,7 @@ describe(`static fetch differential${sanitize ? " (sanitized)" : ""}`, () => {
     expect(nativeRes.exitCode).toBe(nodeRes.exitCode);
   }, 120_000);
 
-  test.for(["c", "llvm"] as const)(
+  test.for(["llvm"] as const)(
     "static fetch / %s backend settles an abandoned compressed response",
     async (backend) => {
       const entry = join(fixturesRoot, "static-abandon/main.mts");
@@ -239,7 +239,7 @@ describe(`static fetch differential${sanitize ? " (sanitized)" : ""}`, () => {
     120_000,
   );
 
-  test.for(["c", "llvm"] as const)(
+  test.for(["llvm"] as const)(
     "static fetch / %s backend trusts NODE_EXTRA_CA_CERTS",
     async (backend) => {
       const certs = join(fixturesRoot, "../server/certs");
@@ -311,9 +311,8 @@ describe(`static fetch differential${sanitize ? " (sanitized)" : ""}`, () => {
           fixturesRoot,
           "static-env-snapshot/main.mts",
         );
-        const [dynamic, c, llvm] = await Promise.all([
+        const [dynamic, llvm] = await Promise.all([
           build(entry),
-          buildStatic(entry, "c", "env-snapshot"),
           buildStatic(entry, "llvm", "env-snapshot"),
         ]);
         const argv = [
@@ -339,7 +338,6 @@ describe(`static fetch differential${sanitize ? " (sanitized)" : ""}`, () => {
         const [nodeRes, ...nativeResults] = await Promise.all([
           runBinary("node", [entry, ...argv], env),
           runBinary(dynamic, argv, env),
-          runBinary(c, argv, env),
           runBinary(llvm, argv, env),
         ]);
         for (const nativeRes of nativeResults) {
@@ -358,7 +356,7 @@ describe(`static fetch differential${sanitize ? " (sanitized)" : ""}`, () => {
     120_000,
   );
 
-  test.for(["c", "llvm"] as const)(
+  test.for(["llvm"] as const)(
     "static fetch / %s backend supports IPv6 URL literals and NO_PROXY",
     async (backend) => {
       const server = createHttpServer(
@@ -466,23 +464,21 @@ describe(`static fetch differential${sanitize ? " (sanitized)" : ""}`, () => {
           `http://127.0.0.1:${redirectAddress.port}/to-blocked-port`;
 
         const entry = join(fixturesRoot, "static-bad-port/main.mts");
-        const [dynamic, c, llvm] = await Promise.all([
+        const [dynamic, llvm] = await Promise.all([
           build(entry),
-          buildStatic(entry, "c", "bad-port"),
           buildStatic(entry, "llvm", "bad-port"),
         ]);
         const argv = [blockedUrl, redirectUrl];
         const [nodeRes, ...nativeResults] = await Promise.all([
           runBinary("node", [entry, ...argv]),
           runBinary(dynamic, argv),
-          runBinary(c, argv),
           runBinary(llvm, argv),
         ]);
         for (const nativeRes of nativeResults) {
           expect(nativeRes.stdout.equals(nodeRes.stdout)).toBe(true);
           expect(nativeRes.exitCode).toBe(nodeRes.exitCode);
         }
-        expect(redirectRequests).toBe(4);
+        expect(redirectRequests).toBe(3);
         expect(blockedRequests).toBe(0);
       } finally {
         await Promise.all(
@@ -505,7 +501,7 @@ describe(`static fetch differential${sanitize ? " (sanitized)" : ""}`, () => {
     process.env["SCRIPTC_FETCH_CURL"] = "1";
     try {
       const entry = join(fixturesRoot, "static/main.mts");
-      await buildStatic(entry, "c", "curl-env");
+      await buildStatic(entry, "llvm", "curl-env");
     } finally {
       if (previous === undefined) {
         delete process.env["SCRIPTC_FETCH_CURL"];
@@ -572,7 +568,7 @@ describe(`proxy env opt-in (NODE_USE_ENV_PROXY${sanitize ? ", sanitized" : ""})`
     ]);
   }, 120_000);
 
-  test.for(["c", "llvm"] as const)(
+  test.for(["llvm"] as const)(
     "static fetch / %s backend authenticates to http_proxy",
     async (backend) => {
       const entry = join(fixturesRoot, "static-proxy/main.mts");
@@ -602,7 +598,7 @@ describe(`proxy env opt-in (NODE_USE_ENV_PROXY${sanitize ? ", sanitized" : ""})`
     120_000,
   );
 
-  test.for(["dynamic", "c", "llvm"] as const)(
+  test.for(["dynamic", "llvm"] as const)(
     "%s fetch authenticates over an HTTPS proxy transport",
     async (lane) => {
       const entry = join(fixturesRoot, "static-proxy/main.mts");
@@ -667,9 +663,8 @@ describe(`proxy env opt-in (NODE_USE_ENV_PROXY${sanitize ? ", sanitized" : ""})`
           throw new Error("missing HTTPS address");
         }
         const entry = join(fixturesRoot, "static-network-error/main.mts");
-        const [dynamic, c, llvm] = await Promise.all([
+        const [dynamic, llvm] = await Promise.all([
           build(entry),
-          buildStatic(entry, "c", "https-proxy-reject"),
           buildStatic(entry, "llvm", "https-proxy-reject"),
         ]);
         const argv = [`https://localhost:${address.port}`];
@@ -685,7 +680,6 @@ describe(`proxy env opt-in (NODE_USE_ENV_PROXY${sanitize ? ", sanitized" : ""})`
         const [nodeRes, ...nativeResults] = await Promise.all([
           runBinary("node", [entry, ...argv], env),
           runBinary(dynamic, argv, env),
-          runBinary(c, argv, env),
           runBinary(llvm, argv, env),
         ]);
         for (const nativeRes of nativeResults) {
@@ -702,7 +696,7 @@ describe(`proxy env opt-in (NODE_USE_ENV_PROXY${sanitize ? ", sanitized" : ""})`
     120_000,
   );
 
-  test.for(["dynamic", "c", "llvm"] as const)(
+  test.for(["dynamic", "llvm"] as const)(
     "%s fetch rejects an invalid opted-in proxy instead of dialing directly",
     async (lane) => {
       const entry = join(fixturesRoot, "static-proxy/main.mts");
@@ -753,7 +747,7 @@ describe(`proxy env opt-in (NODE_USE_ENV_PROXY${sanitize ? ", sanitized" : ""})`
     expect(servers.proxiedRequests() - before).toBe(0);
   }, 120_000);
 
-  test.for(["c", "llvm"] as const)(
+  test.for(["llvm"] as const)(
     "static fetch / %s backend honors wildcard no_proxy exclusions",
     async (backend) => {
       const entry = join(fixturesRoot, "static-network/main.mts");

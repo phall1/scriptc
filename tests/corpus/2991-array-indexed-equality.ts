@@ -37,7 +37,7 @@ function fail(): number { trace += "!"; throw new Error("index"); }
 try { console.log(receiver("A")[index("a")] === receiver("B")[fail()]); }
 catch (error) { console.log(error instanceof Error, trace); }
 // Repeated conditions exercise hidden-local cleanup on continue/break and
-// exceptions; both backends run under the RC audit as well as plain mode.
+// exceptions; LLVM runs under the RC audit as well as plain mode.
 let count = 0;
 for (let i = 0; i < 500; i++) {
   const x = ["x".repeat(i % 17 + 1)];

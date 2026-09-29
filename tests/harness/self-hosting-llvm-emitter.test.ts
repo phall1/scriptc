@@ -8,8 +8,8 @@ import { expect, test } from "vitest";
 import { compile, compileC, deserializeModule, serializeModule, validateModule } from "@scriptc/compiler";
 import { emitLlvmModule } from "../../packages/compiler/src/backend/llvm/emitter.js";
 import {
-  moduleUsesAssert, moduleUsesBigInt, moduleUsesCopying, moduleUsesDynInvoke, moduleUsesInspect,
-  moduleUsesLegacyTextDecoder, moduleUsesRegex, moduleUsesSymbol, moduleUsesZlib, type IrModule,
+  moduleUsesAssert, moduleUsesBigInt, moduleUsesCopying, moduleUsesDynInvoke, moduleUsesEmitter, moduleUsesInspect,
+  moduleUsesLegacyTextDecoder, moduleUsesRegex, moduleUsesStream, moduleUsesSymbol, moduleUsesZlib, type IrModule,
 } from "../../packages/compiler/src/ir/ir.js";
 import { llvmEmitterCases, llvmEmitterOptions, llvmEmitterRequest, type LlvmEmitterRequest } from "./self-hosting-llvm-emitter-cases.js";
 import { normalizedEmbeddingLlvm } from "./self-hosting-llvm-embedding.js";
@@ -33,6 +33,7 @@ function nativeFeatures(mod: IrModule) {
     inspect: moduleUsesInspect(mod), dynInvoke: moduleUsesDynInvoke(mod),
     symbol: moduleUsesSymbol(mod), bigint: moduleUsesBigInt(mod), zlib: moduleUsesZlib(mod),
     assert: moduleUsesAssert(mod),
+    emitter: moduleUsesEmitter(mod), stream: moduleUsesStream(mod),
     textDecoderLegacy: moduleUsesLegacyTextDecoder(mod),
   };
 }
@@ -69,10 +70,11 @@ const programs = [
   "3118-recursive-union-spread.ts",
   "3119-runtime-optional-spread.ts",
   "3120-ir-nonfinite-numbers.ts",
+  "4031-event-emitter-long-tuples.ts",
   "text-codec-values/main.ts",
 ];
 
-for (const backend of ["c", "llvm"] as const) {
+for (const backend of ["llvm"] as const) {
   test(`the complete LLVM emitter bootstraps natively (${backend})`, async () => {
     const dir = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-llvm-emitter-"));
     const executable = (name: string) => join(dir, name + (process.platform === "win32" ? ".exe" : ""));
@@ -98,7 +100,7 @@ for (const backend of ["c", "llvm"] as const) {
       if (!built.ok) throw new Error(built.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
       if (!("binaryPath" in built)) throw new Error("bootstrap did not produce an executable");
       expect(built.backend).toBe(backend);
-      expect(built.llvmRefusal).toBeUndefined();
+
       expect(built.irPath).toBeDefined();
       const ownIr = deserializeModule(readFileSync(built.irPath!, "utf8"));
       expect(ownIr.functions.length).toBeGreaterThan(800);

@@ -339,7 +339,7 @@ export function liveDynUnionRefAdapter(host: LlvmEmitterContext,
       );
       B.line(`${payload} = load ptr, ptr ${payloadPtr}`);
       B.line(
-        `${boxed} = call ptr ${typedRefConstructor(host, arm)}(ptr ${payload}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${host.cstr(armKey)}, ${host.sizeType} ${Buffer.byteLength(armKey, "utf8")}, ptr @${adapter.snapshot}, ptr ${adapter.commit})`,
+        `${boxed} = call ptr ${typedRefConstructor(host.shapeHost, arm)}(ptr ${payload}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${host.cstr(armKey)}, ${host.sizeType} ${Buffer.byteLength(armKey, "utf8")}, ptr @${adapter.snapshot}, ptr ${adapter.commit})`,
       );
       B.terminate(`ret ptr ${boxed}`);
     });
@@ -438,7 +438,7 @@ function nestedTypedRefUnionAdapter(
         B.line(`${payloadPtr} = getelementptr inbounds %ScrUnion, ptr %u, i64 0, i32 5`);
         B.line(`${payload} = load ptr, ptr ${payloadPtr}`);
         B.line(
-          `${boxed} = call ptr ${typedRefConstructor(host, arm)}(ptr ${payload}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${host.cstr(armKey)}, ${host.sizeType} ${Buffer.byteLength(armKey, "utf8")}, ptr @${adapter.snapshot}, ptr ${adapter.commit})`,
+          `${boxed} = call ptr ${typedRefConstructor(host.shapeHost, arm)}(ptr ${payload}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${host.cstr(armKey)}, ${host.sizeType} ${Buffer.byteLength(armKey, "utf8")}, ptr @${adapter.snapshot}, ptr ${adapter.commit})`,
         );
         B.terminate(`ret ptr ${boxed}`);
       } else if (arm.kind === "undefinedT") {
@@ -525,7 +525,7 @@ export function streamTypedRefBoxValue(host: LlvmEmitterContext,
     const key = typeKey(t);
 
     B.line(
-      `${boxed} = call ptr ${typedRefConstructor(host, t)}(ptr ${value}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${host.cstr(key)}, ${host.sizeType} ${Buffer.byteLength(key, "utf8")}, ptr @${nested.snapshot}, ptr ${nested.commit})`,
+      `${boxed} = call ptr ${typedRefConstructor(host.shapeHost, t)}(ptr ${value}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${host.cstr(key)}, ${host.sizeType} ${Buffer.byteLength(key, "utf8")}, ptr @${nested.snapshot}, ptr ${nested.commit})`,
     );
     return boxed;
   }
@@ -800,7 +800,7 @@ export function streamFromArrayAdapter(host: LlvmEmitterContext,
           );
           B.line(`${payload} = load ptr, ptr ${payloadPtr}`);
           B.line(
-            `${armBoxed} = call ptr ${typedRefConstructor(host, arm)}(ptr ${payload}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${host.cstr(armKey)}, ${host.sizeType} ${Buffer.byteLength(armKey, "utf8")}, ptr @${armSnapshot}, ptr ${armCommit})`,
+            `${armBoxed} = call ptr ${typedRefConstructor(host.shapeHost, arm)}(ptr ${payload}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${host.cstr(armKey)}, ${host.sizeType} ${Buffer.byteLength(armKey, "utf8")}, ptr @${armSnapshot}, ptr ${armCommit})`,
           );
           B.line(`store ptr ${armBoxed}, ptr ${boxedSlot}`);
           B.br(join);
@@ -848,7 +848,7 @@ export function streamFromArrayAdapter(host: LlvmEmitterContext,
       }
 
       B.line(
-        `${boxed} = call ptr ${typedRefConstructor(host, elem)}(ptr ${value}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${keyPtr}, ${host.sizeType} ${Buffer.byteLength(key, "utf8")}, ptr @${snapshot}, ptr ${commit})`,
+        `${boxed} = call ptr ${typedRefConstructor(host.shapeHost, elem)}(ptr ${value}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${keyPtr}, ${host.sizeType} ${Buffer.byteLength(key, "utf8")}, ptr @${snapshot}, ptr ${commit})`,
       );
     } else {
       boxed = B.tmp();

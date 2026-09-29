@@ -1,4 +1,4 @@
-/* The one structure the C emitter never needed: a basic-block builder
+/* LLVM basic-block builder
  * lowering the structured statement tree to labeled blocks with explicit
  * terminators. clang -O0 style — every local is an alloca, every read a
  * load — so no SSA construction is ever needed; LLVM's mem2reg promotes

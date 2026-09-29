@@ -8,7 +8,7 @@ import { compile } from "@scriptc/compiler";
 const fixture = join(import.meta.dirname, "../ffi");
 const sanitize = process.env["SCRIPTC_SAN"] === "1";
 
-describe.each(["c", "llvm"] as const)("native FFI wide integers and pointers, %s", backend => {
+describe.each(["llvm"] as const)("native FFI wide integers and pointers, %s", backend => {
   test("preserves exact values through calls, retained callbacks, and mixed ABI arguments without an engine", async () => {
     const outDir = mkdtempSync(join(tmpdir(), "scriptc-ffi-wide-"));
     const object = join(outDir, "wide.o");

@@ -85,8 +85,8 @@ const platformTest = process.env["SCRIPTC_PORTABLE_ONLY"] === "1" ? test.skip : 
 const flavor = process.env["SCRIPTC_SAN"] === "1" ? "san" : "plain";
 const cacheDir = join(repoRoot, "node_modules/.cache/scriptc-tests/library-mode", flavor);
 
-type Emission = "llvm" | "c";
-const EMISSIONS: Emission[] = ["llvm", "c"];
+type Emission = "llvm";
+const EMISSIONS: Emission[] = ["llvm"];
 
 interface BuildOpts {
   sanitize?: boolean;
@@ -535,7 +535,7 @@ let refusalCounter = 0;
 async function refusal(
   source: string,
   profilePatch: Record<string, unknown>,
-  emission: Emission = "c",
+  emission: Emission = "llvm",
 ): Promise<{ code: string; message: string; hint?: string; note?: string; file: string }[]> {
   const outDir = join(cacheDir, `refusal-${refusalCounter++}`);
   mkdirSync(outDir, { recursive: true });
@@ -573,7 +573,7 @@ async function refusal(
 async function acceptance(
   source: string,
   profilePatch: Record<string, unknown>,
-  emission: Emission = "c",
+  emission: Emission = "llvm",
 ): Promise<void> {
   const outDir = join(cacheDir, `acceptance-${refusalCounter++}`);
   mkdirSync(outDir, { recursive: true });
@@ -679,7 +679,7 @@ async function npmRefusal(
     profile_format: 1,
     name: "npm-refusal-fixture",
     entry: join(fixtureRoot, "npm-refuse", entryFile),
-    emission: "c",
+    emission: "llvm",
     abi: {
       prefix: "kx_",
       init_symbol: "kx_init",
@@ -903,7 +903,7 @@ describe.each(EMISSIONS)("K14: determinism fences, %s emission", (emission) => {
   });
 
   test("unreached fences compile at zero cost: the emitted code is byte-identical", async () => {
-    // ONE entry file feeds both builds (emitted C/LLVM embeds the entry's
+    // ONE entry file feeds both builds (emitted LLVM embeds the entry's
     // path in provenance comments; the fence's cost is what's measured,
     // not the build directory's spelling).
     const entryDir = join(cacheDir, `fence-zerocost-${emission}`);
@@ -935,7 +935,7 @@ describe.each(EMISSIONS)("K14: determinism fences, %s emission", (emission) => {
       );
       const result = await compileLibrary({ profilePath, outDir });
       if (!result.ok) throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
-      emitted.push(readFileSync(result.cPath, "utf8"));
+      emitted.push(readFileSync(result.llvmPath, "utf8"));
     }
     expect(emitted[1]).toBe(emitted[0]);
   });

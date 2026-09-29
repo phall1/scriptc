@@ -345,7 +345,7 @@ export function keyedRecordReadInto(host: LlvmEmitterContext,
       return;
     }
     // A direct result cannot represent a miss. This is unreachable for
-    // programs whose behavior matches Node, but keep the C backend's trap.
+    // programs whose behavior matches Node, but preserve the missing-key trap.
     host.needsBadKey = true;
     B.line(`call void @sc_bad_key()`);
     B.terminate(`unreachable`);

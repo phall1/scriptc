@@ -80,12 +80,21 @@ importers:
       '@scriptc/llvm-win32-x64-msvc':
         specifier: workspace:*
         version: link:../llvm-win32-x64-msvc
+      '@scriptc/runtime-android-arm64':
+        specifier: workspace:*
+        version: link:../runtime-android-arm64
       '@scriptc/runtime-darwin-arm64':
         specifier: workspace:*
         version: link:../runtime-darwin-arm64
       '@scriptc/runtime-darwin-x64':
         specifier: workspace:*
         version: link:../runtime-darwin-x64
+      '@scriptc/runtime-ios-arm64':
+        specifier: workspace:*
+        version: link:../runtime-ios-arm64
+      '@scriptc/runtime-ios-simulator-arm64':
+        specifier: workspace:*
+        version: link:../runtime-ios-simulator-arm64
       '@scriptc/runtime-linux-arm64-gnu':
         specifier: workspace:*
         version: link:../runtime-linux-arm64-gnu
@@ -121,9 +130,15 @@ importers:
 
   packages/runtime: {}
 
+  packages/runtime-android-arm64: {}
+
   packages/runtime-darwin-arm64: {}
 
   packages/runtime-darwin-x64: {}
+
+  packages/runtime-ios-arm64: {}
+
+  packages/runtime-ios-simulator-arm64: {}
 
   packages/runtime-linux-arm64-gnu: {}
 

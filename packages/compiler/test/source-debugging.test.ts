@@ -12,7 +12,7 @@ const sanitize = process.env["SCRIPTC_SAN"] === "1";
 
 // Xcode ships this debugger. Resolve real breakpoints after temporary native
 // objects have been deleted, including after the executable cache restores.
-test.runIf(process.platform === "darwin").each(["llvm", "c"] as const)(
+test.runIf(process.platform === "darwin").each(["llvm"] as const)(
   "dev %s builds preserve source breakpoints across cache hits",
   async (backend) => {
     const dir = await mkdtemp(join(tmpdir(), "scriptc-debug-"));
@@ -98,7 +98,7 @@ test.each([
   try {
     const entry = join(corpus, "..", fixture);
     const node = await exec(process.execPath, [entry]);
-    for (const backend of ["c", "llvm"] as const) {
+    for (const backend of ["llvm"] as const) {
       const outPath = join(dir, process.platform === "win32" ? `${backend}.exe` : backend);
       const built = await compile(entry, { outDir: dir, outPath, backend, optimization: "dev", sanitize });
       expect(built.ok, !built.ok ? JSON.stringify(built.diagnostics) : "").toBe(true);

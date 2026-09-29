@@ -40,6 +40,29 @@ export function validatorCases(): ValidatorCase[] {
       }, invalid ? "boolLit must be bool" : undefined);
     }
   }
+  for (const arm of ["cond", "then", "else", "mixed"]) {
+    for (const invalid of [false, true]) {
+      add(`deep conditional ${arm} ${invalid ? "invalid" : "valid"}`, (m) => {
+        const nullable: IrType = { kind: "union", unionId: "optional-bool" };
+        m.unions = [{ id: "optional-bool", arms: [BOOL, { kind: "undefinedT" }] }];
+        let tree: IrExpr = invalid ? { kind: "boolLit", value: true, type: F64, loc } : boolLit(true, loc);
+        for (let depth = 0; depth < 128; depth++) {
+          const leaf = boolLit(depth % 2 === 0, loc);
+          if (arm === "mixed" && depth % 3 === 0) {
+            tree = { kind: "logical", op: "&&", left: leaf, right: tree, type: BOOL, loc };
+          } else if (arm === "mixed" && depth % 3 === 1) {
+            tree = { kind: "nullish", left: { kind: "unionWrap", unionId: "optional-bool", tag: 1,
+              value: { kind: "unitLit", unit: "undefined", type: { kind: "undefinedT" }, loc }, type: nullable, loc },
+              right: tree, type: BOOL, loc };
+          } else {
+            tree = { kind: "ternary", cond: arm === "cond" ? tree : leaf,
+              then: arm === "then" ? tree : leaf, else_: arm === "else" || arm === "mixed" ? tree : leaf, type: BOOL, loc };
+          }
+        }
+        m.functions[0]!.body = [expression(tree)];
+      }, invalid ? "boolLit must be bool" : undefined);
+    }
+  }
   add("duplicate function", (m) => { m.functions.push(structuredClone(m.functions[0]!)); }, "duplicate function");
   add("unknown local", (m) => { m.functions[0]!.body = [expression(varRef("missing", F64, loc))]; }, "missing");
   add("parameter without local", (m) => {

@@ -8,7 +8,7 @@ import { expect, test } from "vitest";
 const root = join(import.meta.dirname, "../..");
 const entry = join(root, "tests/fixtures/self-hosting/frontend-metadata.ts");
 
-for (const backend of ["c", "llvm"] as const) {
+for (const backend of ["llvm"] as const) {
   test(`production package transforms and TS7 options execute natively (${backend})`, async () => {
     const directory = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-frontend-metadata-"));
     try {

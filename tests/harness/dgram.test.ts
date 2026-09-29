@@ -91,7 +91,7 @@ async function build(entry: string): Promise<string> {
     // Pinned: a networking suite whose flake surface is already the
     // sockets — the compiled lane stays the C reference so any diff is
     // network behavior, never a backend-lane change.
-    backend: "c",
+    backend: "llvm",
   });
   if (!result.ok) {
     throw new Error(

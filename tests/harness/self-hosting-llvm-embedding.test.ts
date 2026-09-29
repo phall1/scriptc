@@ -2,10 +2,10 @@ import { deflateRawSync } from "node:zlib";
 import { expect, test } from "vitest";
 import { llvmBytes } from "../../packages/compiler/src/backend/literals.js";
 import { emitLlvmModule } from "../../packages/compiler/src/backend/llvm/emitter.js";
-import { cEmitterCases } from "./self-hosting-c-emitter-cases.js";
+import { emitterInputCases } from "./self-hosting-emitter-inputs.js";
 import { normalizedEmbeddingLlvm } from "./self-hosting-llvm-embedding.js";
 
-const item = cEmitterCases().find((item) => item.name === "level-nine module and facade compression")!;
+const item = emitterInputCases().find((item) => item.name === "level-nine module and facade compression")!;
 const original = emitLlvmModule(item.module);
 
 function withSource(bytes: Buffer): string {

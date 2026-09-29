@@ -9,7 +9,7 @@ const fixture = join(import.meta.dirname, "../ffi");
 const sanitize = process.env["SCRIPTC_SAN"] === "1";
 const oracle = process.env["SCRIPTC_NODE_FFI_ORACLE"];
 
-describe.each(["c", "llvm"] as const)("static native callback pool, %s", backend => {
+describe.each(["llvm"] as const)("static native callback pool, %s", backend => {
   test.skipIf(process.platform === "win32")("refuses foreign-thread invocation before touching a script closure", async () => {
     const outDir = mkdtempSync(join(tmpdir(), "scriptc-ffi-callback-thread-"));
     const object = join(outDir, "wide.o");

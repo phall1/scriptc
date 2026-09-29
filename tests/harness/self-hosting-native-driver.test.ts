@@ -30,7 +30,6 @@ test("the standalone compiler builds programs and rebuilds itself with Node unav
     const seed = executable("scriptc-native");
     const manifestPath = seed + ".json";
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as NativeToolchainManifest;
-    manifest.c_compiler = absoluteCommand(manifest.c_compiler);
     manifest.linker = absoluteCommand(manifest.linker);
     if (process.platform === "darwin") manifest.dsymutil = absoluteCommand(manifest.dsymutil);
     writeFileSync(manifestPath, JSON.stringify(manifest));
@@ -66,7 +65,6 @@ test("the standalone compiler builds programs and rebuilds itself with Node unav
       expect(actual.stderr).toEqual(oracle.stderr);
     };
     const sample = join(root, "tests/corpus/class-array-optional-return.ts");
-    await checkProgram(seed, sample, "c");
     await checkProgram(seed, sample, "llvm");
 
     const badSource = join(directory, "bad.ts");
@@ -81,18 +79,18 @@ test("the standalone compiler builds programs and rebuilds itself with Node unav
     const entry = join(root, "packages/compiler/src/native/main.ts");
     const profile = join(directory, "ts7-process.ffi.json");
     const rebuilt = executable("scriptc-rebuilt");
-    const self = await invoke(seed, [entry, "-o", rebuilt, "--backend=c", "--dev", "--strip", "--ffi", profile]);
+    const self = await invoke(seed, [entry, "-o", rebuilt, "--backend=llvm", "--dev", "--strip", "--ffi", profile]);
     expect(self.stats.statementsTotal).toBeGreaterThan(10_000);
     console.log("native self-build", self.stats);
-    await checkProgram(rebuilt, join(root, "tests/corpus/nullish-long-chain.ts"), "c");
+    await checkProgram(rebuilt, join(root, "tests/corpus/nullish-long-chain.ts"), "llvm");
     await checkProgram(rebuilt, sample, "llvm");
 
-    // Both generations lower and emit the complete driver. Comparing C
-    // avoids the >512MB JSON string required by its expanded IR graph.
-    const seedC = join(directory, "seed.c");
-    const rebuiltC = join(directory, "rebuilt.c");
-    await invoke(seed, [entry, "--emit=c", "-o", seedC, "--ffi", profile]);
-    await invoke(rebuilt, [entry, "--emit=c", "-o", rebuiltC, "--ffi", profile]);
-    expect(readFileSync(seedC).equals(readFileSync(rebuiltC)), "native compiler generations must emit identical C").toBe(true);
+    // Both generations lower and emit the complete driver. Compare LLVM
+    // without materializing its larger expanded IR graph as JSON.
+    const seedLlvm = join(directory, "seed.ll");
+    const rebuiltLlvm = join(directory, "rebuilt.ll");
+    await invoke(seed, [entry, "--emit=llvm", "-o", seedLlvm, "--ffi", profile]);
+    await invoke(rebuilt, [entry, "--emit=llvm", "-o", rebuiltLlvm, "--ffi", profile]);
+    expect(readFileSync(seedLlvm).equals(readFileSync(rebuiltLlvm)), "native compiler generations must emit identical LLVM").toBe(true);
   } finally { rmSync(directory, { recursive: true, force: true }); }
 }, 5_400_000);

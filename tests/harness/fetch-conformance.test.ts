@@ -6,7 +6,7 @@
  * surface manifest. The reflected inventory supplies the denominator. This
  * suite checks that the pinned Node executable is the intended oracle, every
  * profile row names differential evidence, and the generated
- * WebIDL/state-machine program agrees through both native backends.
+ * WebIDL/state-machine program agrees through LLVM.
  */
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -121,7 +121,7 @@ async function run(command: string, args: string[]): Promise<RunResult> {
   }
 }
 
-async function build(backend: "c" | "llvm"): Promise<string> {
+async function build(backend: "llvm"): Promise<string> {
   const outDir = join(
     workRoot,
     `${sourceHash}-${backend}-${sanitize ? "san" : "plain"}`,
@@ -394,7 +394,7 @@ describe(
   `generated fetch conformance (seed=${conformanceSeed}, traces=${conformanceTraceCount}` +
     `${sanitize ? ", sanitized" : ""})`,
   () => {
-    test.for(["c", "llvm"] as const)(
+    test.for(["llvm"] as const)(
       "%s backend matches the pinned Node oracle",
       async (backend) => {
         const binary = await build(backend);

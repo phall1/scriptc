@@ -68,7 +68,7 @@ export interface NativeCodegenOptions {
   sanitize?: boolean;
   target?: NativeTargetSpec;
   /** Test seam for package selection on a simulated host. */
-  helperHost?: { platform: NodeJS.Platform; arch: string };
+  helperHost?: { platform: NodeJS.Platform; arch: string; linuxLibc?: "gnu" | "musl" };
   /** Test seam: still resolves a package path, never searches PATH. */
   resolvePackageJson?: (specifier: string) => string;
   /** Internal/test override; omitted production calls use the shared cache. */
@@ -122,12 +122,13 @@ export function validateNativeCodegenVersion(
 async function resolveHelper(
   target: NativeTargetSpec,
   resolver?: (specifier: string) => string,
-  host?: { platform: NodeJS.Platform; arch: string },
+  host?: { platform: NodeJS.Platform; arch: string; linuxLibc?: "gnu" | "musl" },
 ): Promise<ResolvedHelper> {
   const helper = nativeHelperForTarget(
     target,
     host?.platform,
     host?.arch,
+    host?.linuxLibc,
   );
   if (helper === null) {
     throw new NativeCodegenError(
@@ -191,7 +192,7 @@ async function resolveHelper(
   // host-native ISA plus WebAssembly). Cache only after the target backend
   // has also been checked; otherwise a prior X86 lookup could accidentally
   // bless a later WASI request against an older X86-only package.
-  const cacheKey = JSON.stringify({ dependencies, targetBackend: target.llvmBackend });
+  const cacheKey = JSON.stringify({ dependencies, targetTriple: target.llvmTriple });
   const load = async (): Promise<ResolvedHelper> => {
     let stdout: string;
     let binary: Buffer;

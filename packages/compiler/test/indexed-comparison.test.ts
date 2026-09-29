@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 import { compile, deserializeModule, validateModule } from "../src/index.js";
-import { emitCModule } from "../src/backend/c/c-emitter.js";
 import { emitLlvmModule } from "../src/backend/llvm/emitter.js";
 
 test("primitive indexed comparisons do not allocate optional-union boxes", async () => {
@@ -40,10 +39,10 @@ test("primitive indexed comparisons do not allocate optional-union boxes", async
     }
     visitFunction(mod.entry);
     const reachable = { ...mod, functions: mod.functions.filter((f) => visited.has(f.name)) };
-    const c = emitCModule(reachable), llvm = emitLlvmModule(reachable);
-    expect(c).not.toContain("scr_union_new_");
+    const llvm = emitLlvmModule(reachable);
+
     expect(llvm).not.toContain("@scr_union_new_");
-    expect(c.match(/scr_arr_index_eq\(/g)).toHaveLength(3);
+
     expect(llvm.match(/call zeroext i1 @scr_arr_index_eq\(/g)).toHaveLength(3);
   } finally {
     await rm(dir, { recursive: true, force: true });

@@ -7,7 +7,7 @@ import { analyze, compile } from "../src/index.js";
 
 const sanitize = process.env["SCRIPTC_SAN"] === "1";
 
-test.each(["c", "llvm"] as const)("incompatible JS return overrides refuse only when called (%s)", async (backend) => {
+test.each(["llvm"] as const)("incompatible JS return overrides refuse only when called (%s)", async (backend) => {
   const dir = mkdtempSync(join(tmpdir(), "scriptc-override-returns-"));
   try {
     const entry = join(dir, "main.cjs");

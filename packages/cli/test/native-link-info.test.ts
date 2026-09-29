@@ -45,7 +45,7 @@ test("print option validation is explicit", async () => {
 });
 
 describe.runIf(supported)("macOS arm64 native link info", () => {
-  test("prints a stable cache-independent source-pack recipe", async () => {
+  test("prints a stable cache-independent precompiled runtime recipe", async () => {
     const { entry, object } = await fixture();
     const { stdout, stderr } = await cli([
       "build", entry, "--print=native-link-info", "-o", object,
@@ -65,19 +65,18 @@ describe.runIf(supported)("macOS arm64 native link info", () => {
       program: { object, entry_symbol: "main" },
       runtime_abi: { version: 4, marker: "scr_runtime_abi_v4" },
       runtime_pack: {
-        kind: "source",
-        package: "@scriptc/runtime",
+        kind: "precompiled",
+        package: "@scriptc/runtime-darwin-arm64",
         path_base: "runtime_pack.root",
       },
       link: { system_libraries: ["System"], frameworks: [] },
     });
     expect(info.runtime_pack.root).not.toContain("node_modules/.cache");
     expect(info.link.input_order.join("\n")).not.toContain("node_modules/.cache");
-    const runtime = info.runtime_pack.source_sets.find((set) => set.name === "runtime");
-    expect(runtime?.sources).toEqual(expect.arrayContaining([
-      "src/scr_console.c",
-      "src/scr_async.c",
-      "src/scr_cycle.c",
+    expect(info.runtime_pack.objects.map((object) => object.path)).toEqual(expect.arrayContaining([
+      "artifacts/release/runtime/default/scr_console.o",
+      "artifacts/release/runtime/default/scr_async.o",
+      "artifacts/release/runtime/default/scr_cycle.o",
     ]));
     await expect(readFile(object)).resolves.toBeInstanceOf(Buffer);
   });
@@ -115,14 +114,10 @@ describe.runIf(supported)("macOS arm64 native link info", () => {
       "build", entry, "--print=native-link-info", "-o", object,
     ]);
     const info = JSON.parse(stdout) as NativeLinkInfo;
-    const runtime = info.runtime_pack.source_sets.find((set) => set.name === "runtime")!;
     const executable = join(dir, "app");
     await execFileAsync("clang", [
-      ...runtime.c_flags,
-      ...runtime.defines.map((define) => `-D${define}`),
-      ...runtime.include_directories.flatMap((path) => ["-I", join(info.runtime_pack.root, path)]),
-      ...runtime.sources.map((path) => join(info.runtime_pack.root, path)),
-      object,
+      ...info.link.driver_flags,
+      ...info.link.input_order,
       ...info.link.system_libraries.map((name) => `-l${name}`),
       "-o", executable,
     ]);

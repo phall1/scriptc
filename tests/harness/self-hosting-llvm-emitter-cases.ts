@@ -1,7 +1,7 @@
 import { F64, type IrModule } from "../../packages/compiler/src/ir/ir.js";
 import { numLit } from "../../packages/compiler/src/ir/build.js";
 import type { LlvmTargetOptions } from "../../packages/compiler/src/backend/llvm/emitter.js";
-import { cEmitterCases } from "./self-hosting-c-emitter-cases.js";
+import { emitterInputCases } from "./self-hosting-emitter-inputs.js";
 
 export interface LlvmEmitterRequest {
   targetTriple?: string;
@@ -37,9 +37,9 @@ export interface LlvmEmitterCase {
 }
 
 export function llvmEmitterCases(): LlvmEmitterCase[] {
-  // Both complete backends consume the same IR, including library entry
+  // The LLVM emitter consumes complete IR, including library entry
   // points, recursive layouts, closure boxes and embedded package tables.
-  const cases: LlvmEmitterCase[] = cEmitterCases().map((item) => ({
+  const cases: LlvmEmitterCase[] = emitterInputCases().map((item) => ({
     name: item.name, module: item.module,
     request: llvmEmitterRequest({ debug: item.sources.length > 0, sources: item.sources }),
     contains: item.module.lib ? ["@native_init", "@native_collect"] : ["define i32 @main("],

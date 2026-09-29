@@ -28,7 +28,7 @@ writeFileSync(profile, JSON.stringify({
     { name: "nativeRender", symbol: "probe_render", params: ["string", "mutable-bytes"], returns: "u32" },
   ],
 }, null, 2));
-for (const backend of ["c", "llvm"] as const) {
+for (const backend of ["llvm"] as const) {
   const result = await compile(join(fixtures, "native.ts"), {
     backend, dynamic: false, outDir: join(out, backend), outPath: join(out, `opentui-${backend}`), ffiProfilePath: profile,
   });

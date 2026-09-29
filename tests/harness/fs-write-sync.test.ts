@@ -20,7 +20,7 @@ describe.skipIf(process.platform === "win32")(
         outPath: join(outDir, "sigpipe"),
         outDir,
         sanitize,
-        backend: "c",
+        backend: "llvm",
       });
       if (!result.ok) {
         throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));

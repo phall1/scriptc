@@ -201,8 +201,7 @@ export function emitSerializationExpr(host: LlvmEmitterContext, e: ExprOf<"jsonS
         const v = host.emitExpr(e.value);
         let compact: { name: string; type: IrType };
         if (e.value.type.kind === "dyn") {
-          // A dyn root: the runtime's dyn walker (scr_dyn_format_j — the
-          // C backend's dispatch exactly): number/string/bool/null/array/
+          // A dyn root: the runtime's dyn walker (scr_dyn_format_j): number/string/bool/null/array/
           // object exact, dropped members omitted, and a dropped ROOT
           // becomes the TEXT "undefined" (JSON.stringify(undefined) is
           // the undefined value; printing it spells the word — Node's
@@ -228,7 +227,7 @@ export function emitSerializationExpr(host: LlvmEmitterContext, e: ExprOf<"jsonS
           // A cycle-capable root can throw the circular-structure
           // TypeError mid-walk: finish still runs (frees the buffer, the
           // partial string joins the frame and releases on unwind), then
-          // the pending check unwinds — the C emitter's contract exactly.
+          // the pending check unwinds — the runtime ABI’s contract exactly.
           if (traceAdapter(host.shapeHost, e.value.type) !== null) host.emitPendingCheck();
         }
         // A pretty-print form (`stringify(v, null, 2)`): the frontend

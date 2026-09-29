@@ -2,7 +2,7 @@ import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { glibcRuntimeToolchain } from "../../runtime-pack-common/scripts/glibc-toolchain.mjs";
 
-if (process.platform !== "linux" || process.arch !== "x64") {
+if (process.env.SCRIPTC_BUILD_CROSS !== "1" && (process.platform !== "linux" || process.arch !== "x64")) {
   process.stdout.write("@scriptc/runtime-linux-x64-gnu: skipped on this host\n");
   process.exit(0);
 }

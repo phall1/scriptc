@@ -37,7 +37,7 @@ function input(directory: string) {
   };
 }
 
-for (const backend of ["c", "llvm"] as const) {
+for (const backend of ["llvm"] as const) {
   test(`owned frontend services run without Node (${backend})`, async () => {
     const directory = mkdtempSync(join(tempRoot, "scriptc-frontend-services-native-"));
     try {

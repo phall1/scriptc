@@ -18,9 +18,7 @@ import { analyze, compile, renderDiagnostics } from "@scriptc/compiler";
 
 /* Every compile below deliberately carries NO backend pin: this suite is
  * the user-adoption path, so it must see exactly what a flagless
- * `scriptc build` produces — the LLVM backend where the tier claims the
- * program, the transparent C fallback where it refuses. A failure here
- * that a `backend: "c"` pin would hide is a release-default bug. */
+ * `scriptc build` produces through the production LLVM backend. */
 const execFileAsync = promisify(execFile);
 const repoRoot = join(import.meta.dirname, "../..");
 const fixture = (name: string) => join(repoRoot, "tests/fixtures/strictness", name);

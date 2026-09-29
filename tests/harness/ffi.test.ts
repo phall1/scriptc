@@ -1,6 +1,6 @@
 /* Outbound native FFI is an integration lane rather than a corpus case:
  * Node has no equivalent static-link surface to differential-run. The same
- * TypeScript and native archive run through BOTH scriptc backends, and the
+ * TypeScript and native archive run through the LLVM backend, and the
  * result bytes must match. The fixture covers every value ABI class,
  * integer coercion, embedded-NUL/UTF-8 string spans, byte spans, format-2
  * raw/context callbacks, format-3 callback cstring/span copies (lossy UTF-8,
@@ -86,7 +86,7 @@ const expected = [
   "",
 ].join("\n");
 
-describe.each(["c", "llvm"] as const)("outbound native FFI, %s backend", (backend) => {
+describe.each(["llvm"] as const)("outbound native FFI, %s backend", (backend) => {
   test("calls the manifest-bound archive across every v1 ABI class plus v2/v3/v4/v5 callback ABI classes", async () => {
     const outDir = join(cacheRoot, backend);
     mkdirSync(outDir, { recursive: true });
@@ -795,7 +795,7 @@ test.each([
   },
 );
 
-describe.each(["c", "llvm"] as const)("FFI binding identity, %s backend", (backend) => {
+describe.each(["llvm"] as const)("FFI binding identity, %s backend", (backend) => {
   test("a local same-named function remains ordinary TypeScript with Node-byte parity", async () => {
     const outDir = join(cacheRoot, `shadow-${backend}`);
     mkdirSync(outDir, { recursive: true });
@@ -866,7 +866,7 @@ describe.each(["c", "llvm"] as const)("FFI binding identity, %s backend", (backe
   });
 });
 
-describe.each(["c", "llvm"] as const)("retained FFI at process exit, %s backend", (backend) => {
+describe.each(["llvm"] as const)("retained FFI at process exit, %s backend", (backend) => {
   test("process 'exit' listeners can release retained registrations after a normal loop drain", async () => {
     const outDir = join(cacheRoot, `retained-exit-listener-${backend}`);
     mkdirSync(outDir, { recursive: true });
@@ -949,7 +949,7 @@ describe.each(["c", "llvm"] as const)("retained FFI at process exit, %s backend"
   });
 });
 
-describe.each(["c", "llvm"] as const)("retained FFI release traps, %s backend", (backend) => {
+describe.each(["llvm"] as const)("retained FFI release traps, %s backend", (backend) => {
   test("releasing a closure that was never registered traps precisely", async () => {
     const outDir = join(cacheRoot, `retained-missing-${backend}`);
     mkdirSync(outDir, { recursive: true });

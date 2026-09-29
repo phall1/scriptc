@@ -31,7 +31,7 @@ writeFileSync(ffi, JSON.stringify({
   ...JSON.parse(readFileSync(join(nativeSources, "ts7-process.ffi.json"), "utf8")), libraries: [object],
 }, null, 2) + "\n");
 const result = await compile(join(root, "packages/compiler/src/native/main.ts"), {
-  outDir: output, outPath: executable, backend: "c", optimization: "dev", dynamic: false, ffiProfilePath: ffi, sanitize,
+  outDir: output, outPath: executable, backend: "llvm", optimization: "dev", dynamic: false, ffiProfilePath: ffi, sanitize,
 });
 if (!result.ok) throw new Error(result.diagnostics.map((item) =>
   `${item.loc ? `${item.loc.file}:${item.loc.start}: ` : ""}${item.code}: ${item.message}`,
@@ -46,8 +46,6 @@ const manifest: NativeToolchainManifest = {
   compiler_version: (JSON.parse(readFileSync(join(root, "packages/compiler/package.json"), "utf8")) as { version: string }).version,
   target: target.name, ts7: relative(relativeRoot, ts7Executable()),
   llvm_package: packagePath(target.helper.packageName), runtime_pack: packagePath(target.runtimePackPackage),
-  runtime_headers: relative(relativeRoot, join(root, "packages/runtime/src")),
-  c_compiler: compiler, c_compiler_args: compilerArgs,
   linker: process.env["SCRIPTC_LINKER"] ?? target.defaultLinker,
   linker_args: process.env["SCRIPTC_LINKER"] === undefined ? [...target.defaultLinkerArgs] : [],
   dsymutil: process.env["SCRIPTC_DSYMUTIL"] ?? "dsymutil",

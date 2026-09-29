@@ -142,6 +142,23 @@ test("logical trees retain left/right/parent diagnostic order", () => {
   ]);
 });
 
+test("conditional trees retain condition/then/else/parent diagnostic order", () => {
+  const at = (start: number) => ({ ...loc, start });
+  const expr: IrExpr = {
+    kind: "ternary", type: STRING, loc: at(3),
+    cond: { kind: "numLit", value: 0, type: BOOL, loc: at(0) },
+    then: { kind: "boolLit", value: true, type: F64, loc: at(1) },
+    else_: { kind: "strLit", value: "wrong", type: BOOL, loc: at(2) },
+  };
+  expect(validateModule(expressionModule(expr, [])).map((error) => [error.loc.start, error.message])).toEqual([
+    [0, "in main: numLit must be f64"],
+    [1, "in main: boolLit must be bool"],
+    [2, "in main: strLit must be string"],
+    [1, "in main: ternary then-branch: expected string, got f64"],
+    [2, "in main: ternary else-branch: expected string, got bool"],
+  ]);
+});
+
 test.each(["callValue", "dynCall"] as const)("%s requires a checked-value receiver and preserves it in serialization", (kind) => {
   const funcType: IrType = { kind: "func", params: [], ret: DYN };
   const closure: IrExpr = { kind: "closure", fnName: "callback", captures: [], type: funcType, loc };

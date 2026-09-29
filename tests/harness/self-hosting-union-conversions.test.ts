@@ -5,8 +5,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { expect, test } from "vitest";
-import { compileC, deserializeModule, emitCModule, validateModule } from "@scriptc/compiler";
-import { emitLlvmModule } from "../../packages/compiler/src/backend/llvm/emitter.js";
+import { compileC, deserializeModule, emitLlvmModule, validateModule } from "@scriptc/compiler";
 import type { AnalyzeResult, compile } from "@scriptc/compiler";
 
 const root = join(import.meta.dirname, "../..");
@@ -15,7 +14,7 @@ const execFileAsync = promisify(execFile);
 const runOptions = { encoding: "utf8" as const, timeout: 60_000, maxBuffer: 32 * 1024 * 1024 };
 
 for (const fixture of ["ir-refinements", "union-conversions"]) {
-  for (const backend of ["c", "llvm"] as const) {
+  for (const backend of ["llvm"] as const) {
     test(`self-hosting ${fixture} executes natively (${backend})`, async () => {
       const dir = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-union-conversions-"));
       const exe = (name: string) => join(dir, name + (process.platform === "win32" ? ".exe" : ""));
@@ -47,7 +46,7 @@ for (const fixture of ["ir-refinements", "union-conversions"]) {
         if (!built.ok) throw new Error(built.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
         if (!("binaryPath" in built)) throw new Error("native stage did not produce an executable");
         expect(built.backend).toBe(backend);
-        expect(built.llvmRefusal).toBeUndefined();
+
         const nodePath = join(dir, "node.json"), nativePath = join(dir, "native.json");
         const oracle = spawnSync(process.execPath, ["--import", "tsx", entry, nodePath], { ...runOptions, cwd: root });
         const native = spawnSync(built.binaryPath, [nativePath], runOptions);
@@ -72,8 +71,8 @@ for (const fixture of ["ir-refinements", "union-conversions"]) {
           expect(module).toEqual(deserializeModule(readFileSync(nodePath, "utf8")));
           expect(validateModule(module)).toEqual([]);
           expect(module.functions.filter((fn) => fn.name.endsWith("retag"))).toHaveLength(4);
-          const cPath = join(dir, backend === "c" ? "generated.c" : "generated.ll");
-          writeFileSync(cPath, backend === "c" ? emitCModule(module) : emitLlvmModule(module));
+          const cPath = join(dir, "generated.ll");
+          writeFileSync(cPath, emitLlvmModule(module));
           await compileC({ cPath, outPath: exe("generated"), sanitize, optimization: "dev" });
           const generated = spawnSync(exe("generated"), [], runOptions);
           expect(generated.error).toBeUndefined();

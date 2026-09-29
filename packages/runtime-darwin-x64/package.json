@@ -9,12 +9,6 @@
     "url": "git+https://github.com/vercel-labs/scriptc.git",
     "directory": "packages/runtime-darwin-x64"
   },
-  "os": [
-    "darwin"
-  ],
-  "cpu": [
-    "x64"
-  ],
   "files": [
     "artifacts",
     "runtime-pack.json"

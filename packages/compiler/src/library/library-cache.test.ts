@@ -22,7 +22,7 @@ async function fixture(): Promise<{
   options: EarlyLibraryCacheOptions;
   source: string;
   missing: string;
-  cPath: string;
+  llvmPath: string;
   irPath: string;
   sidecarPath: string;
 }> {
@@ -30,13 +30,13 @@ async function fixture(): Promise<{
   scratch.push(dir);
   const source = join(dir, "entry.ts");
   const profilePath = join(dir, "profile.json");
-  const cPath = join(dir, "entry.lib.ll");
+  const llvmPath = join(dir, "entry.lib.ll");
   const irPath = join(dir, "entry.lib.ir.json");
   const sidecarPath = join(dir, "entry.lib.a.contract.json");
   await Promise.all([
     writeFile(source, "export function value(): number { return 1; }\n"),
     writeFile(profilePath, "{}\n"),
-    writeFile(cPath, "; generated llvm\n"),
+    writeFile(llvmPath, "; generated llvm\n"),
     writeFile(irPath, "{\"irVersion\":6}\n"),
     writeFile(sidecarPath, "{\"contract\":true}\n"),
   ]);
@@ -44,7 +44,7 @@ async function fixture(): Promise<{
     root: join(dir, "cache"),
     source,
     missing: join(dir, "missing.ts"),
-    cPath,
+    llvmPath,
     irPath,
     sidecarPath,
     options: {
@@ -83,20 +83,20 @@ test("early library cache restores generated artifacts and metadata", async () =
     textDecoderLegacy: false,
   };
   await publishEarlyLibraryCache(f.root, f.options, {
-    cPath: f.cPath,
+    llvmPath: f.llvmPath,
     irPath: f.irPath,
     sidecarPath: f.sidecarPath,
     native,
     frontend: tracker.snapshot(),
   });
-  await Promise.all([rm(f.cPath), rm(f.irPath), rm(f.sidecarPath)]);
+  await Promise.all([rm(f.llvmPath), rm(f.irPath), rm(f.sidecarPath)]);
   const alternateCPath = join(f.options.outDir, "entry.lib.c");
   await writeFile(alternateCPath, "/* saved c backend */\n");
 
   const hit = await readEarlyLibraryCache(f.root, f.options, null);
   expect(hit).not.toBeNull();
   expect(hit?.native).toEqual(native);
-  expect(await readFile(f.cPath, "utf8")).toBe("; generated llvm\n");
+  expect(await readFile(f.llvmPath, "utf8")).toBe("; generated llvm\n");
   expect(await readFile(f.irPath, "utf8")).toContain("irVersion");
   expect(await readFile(f.sidecarPath, "utf8")).toContain("contract");
   expect(await readFile(alternateCPath, "utf8")).toBe("/* saved c backend */\n");
@@ -107,7 +107,7 @@ test("early library cache publishes after creating a fresh output directory", as
   const cacheRoot = await mkdtemp(join(tmpdir(), "scriptc-early-cache-root-"));
   scratch.push(cacheRoot);
   const outDir = join(f.options.outDir, "fresh-out");
-  const cPath = join(outDir, "entry.lib.ll");
+  const llvmPath = join(outDir, "entry.lib.ll");
   const options = { ...f.options, outDir, emitIr: false };
   const tracker = new FrontendInputTracker();
   tracker.run(() => {
@@ -118,9 +118,9 @@ test("early library cache publishes after creating a fresh output directory", as
   });
 
   await mkdir(outDir);
-  await writeFile(cPath, "; generated llvm in fresh output\n");
+  await writeFile(llvmPath, "; generated llvm in fresh output\n");
   await publishEarlyLibraryCache(cacheRoot, options, {
-    cPath,
+    llvmPath,
     native: {
       backend: "llvm",
       regex: false,
@@ -137,9 +137,9 @@ test("early library cache publishes after creating a fresh output directory", as
     frontend: tracker.snapshot(),
   });
 
-  await rm(cPath);
-  expect((await readEarlyLibraryCache(cacheRoot, options, undefined))?.cPath).toBe(cPath);
-  expect(await readFile(cPath, "utf8")).toContain("fresh output");
+  await rm(llvmPath);
+  expect((await readEarlyLibraryCache(cacheRoot, options, undefined))?.llvmPath).toBe(llvmPath);
+  expect(await readFile(llvmPath, "utf8")).toContain("fresh output");
 });
 
 test("early library cache hits refresh every payload's LRU time", async () => {
@@ -147,7 +147,7 @@ test("early library cache hits refresh every payload's LRU time", async () => {
   const tracker = new FrontendInputTracker();
   tracker.run(() => trackedReadFile(f.source));
   await publishEarlyLibraryCache(f.root, f.options, {
-    cPath: f.cPath,
+    llvmPath: f.llvmPath,
     irPath: f.irPath,
     sidecarPath: f.sidecarPath,
     native: {
@@ -191,7 +191,7 @@ test("early library cache misses on source edits and newly-resolved candidates",
     trackedFileExists(f.missing);
   });
   await publishEarlyLibraryCache(f.root, f.options, {
-    cPath: f.cPath,
+    llvmPath: f.llvmPath,
     irPath: f.irPath,
     sidecarPath: f.sidecarPath,
     native: {
@@ -212,14 +212,14 @@ test("early library cache misses on source edits and newly-resolved candidates",
 
   await writeFile(f.source, "export function value(): number { return 2; }\n");
   expect(await readEarlyLibraryCache(f.root, f.options, null)).toBeNull();
-  await writeFile(f.cPath, "; generated llvm v2\n");
+  await writeFile(f.llvmPath, "; generated llvm v2\n");
   const editedTracker = new FrontendInputTracker();
   editedTracker.run(() => {
     trackedReadFile(f.source);
     trackedFileExists(f.missing);
   });
   await publishEarlyLibraryCache(f.root, f.options, {
-    cPath: f.cPath,
+    llvmPath: f.llvmPath,
     irPath: f.irPath,
     sidecarPath: f.sidecarPath,
     native: {
@@ -237,8 +237,8 @@ test("early library cache misses on source edits and newly-resolved candidates",
     },
     frontend: editedTracker.snapshot(),
   });
-  expect((await readEarlyLibraryCache(f.root, f.options, null))?.cPath).toBe(f.cPath);
-  expect(await readFile(f.cPath, "utf8")).toBe("; generated llvm v2\n");
+  expect((await readEarlyLibraryCache(f.root, f.options, null))?.llvmPath).toBe(f.llvmPath);
+  expect(await readFile(f.llvmPath, "utf8")).toBe("; generated llvm v2\n");
 
   await writeFile(f.source, "export function value(): number { return 1; }\n");
   await writeFile(f.missing, "export const appeared = true;\n");
@@ -265,7 +265,7 @@ test("semantic library cache restores and rebases IR after a comment-only edit",
   const tracker = new FrontendInputTracker();
   tracker.run(() => trackedReadFile(f.source));
   await publishEarlyLibraryCache(f.root, f.options, {
-    cPath: f.cPath,
+    llvmPath: f.llvmPath,
     irPath: f.irPath,
     sidecarPath: f.sidecarPath,
     native: {
@@ -323,7 +323,7 @@ test("semantic library cache refuses token and directive edits", async () => {
   const tracker = new FrontendInputTracker();
   tracker.run(() => trackedReadFile(f.source));
   await publishEarlyLibraryCache(f.root, f.options, {
-    cPath: f.cPath,
+    llvmPath: f.llvmPath,
     irPath: f.irPath,
     sidecarPath: f.sidecarPath,
     native: {
@@ -349,7 +349,7 @@ test("semantic library cache refuses token and directive edits", async () => {
   expect(await readSemanticLibraryCache(f.root, f.options, null)).toBeNull();
 });
 
-test("semantic C cache accepts only line-preserving single-source edits", async () => {
+test("semantic LLVM cache accepts comment edits that shift source lines", async () => {
   const f = await fixture();
   const sourceBefore = await readFile(f.source, "utf8");
   const semanticMod = {
@@ -368,11 +368,11 @@ test("semantic C cache accepts only line-preserving single-source edits", async 
   const tracker = new FrontendInputTracker();
   tracker.run(() => trackedReadFile(f.source));
   await publishEarlyLibraryCache(f.root, f.options, {
-    cPath: f.cPath,
+    llvmPath: f.llvmPath,
     irPath: f.irPath,
     sidecarPath: f.sidecarPath,
     native: {
-      backend: "c",
+      backend: "llvm",
       regex: false,
       assert: false,
       inspect: false,
@@ -391,10 +391,10 @@ test("semantic C cache accepts only line-preserving single-source edits", async 
   await writeFile(f.source, `/* harmless */ ${sourceBefore}`);
   expect(await readSemanticLibraryCache(f.root, f.options, null)).not.toBeNull();
   await writeFile(f.source, `// inserted line\n${sourceBefore}`);
-  expect(await readSemanticLibraryCache(f.root, f.options, null)).toBeNull();
+  expect(await readSemanticLibraryCache(f.root, f.options, null)).not.toBeNull();
 });
 
-test("semantic C cache refuses non-LF separator normalization", async () => {
+test("semantic LLVM cache accepts line separator normalization", async () => {
   const f = await fixture();
   for (const separator of ["\r", "\u2028", "\u2029"]) {
     const sourceBefore = [
@@ -405,11 +405,11 @@ test("semantic C cache refuses non-LF separator normalization", async () => {
     const tracker = new FrontendInputTracker();
     tracker.run(() => trackedReadFile(f.source));
     await publishEarlyLibraryCache(f.root, f.options, {
-      cPath: f.cPath,
+      llvmPath: f.llvmPath,
       irPath: f.irPath,
       sidecarPath: f.sidecarPath,
       native: {
-        backend: "c",
+        backend: "llvm",
         regex: false,
         assert: false,
         inspect: false,
@@ -434,11 +434,11 @@ test("semantic C cache refuses non-LF separator normalization", async () => {
     });
 
     await writeFile(f.source, sourceBefore.replace(separator, "\n"));
-    expect(await readSemanticLibraryCache(f.root, f.options, null)).toBeNull();
+    expect(await readSemanticLibraryCache(f.root, f.options, null)).not.toBeNull();
   }
 });
 
-test("semantic C cache refuses comment-only edits in multi-source graphs", async () => {
+test("semantic LLVM cache rebases comment edits in multi-source graphs", async () => {
   const f = await fixture();
   const imported = join(dirname(f.source), "helper.ts");
   const entrySource = await readFile(f.source, "utf8");
@@ -463,11 +463,11 @@ test("semantic C cache refuses comment-only edits in multi-source graphs", async
     trackedReadFile(imported);
   });
   await publishEarlyLibraryCache(f.root, f.options, {
-    cPath: f.cPath,
+    llvmPath: f.llvmPath,
     irPath: f.irPath,
     sidecarPath: f.sidecarPath,
     native: {
-      backend: "c",
+      backend: "llvm",
       regex: false,
       assert: false,
       inspect: false,
@@ -487,10 +487,10 @@ test("semantic C cache refuses comment-only edits in multi-source graphs", async
   });
 
   await writeFile(f.source, `// inserted entry comment\n${entrySource}`);
-  expect(await readSemanticLibraryCache(f.root, f.options, null)).toBeNull();
+  expect(await readSemanticLibraryCache(f.root, f.options, null)).not.toBeNull();
   await writeFile(f.source, entrySource);
   await writeFile(imported, `// inserted imported comment\n${importedSource}`);
-  expect(await readSemanticLibraryCache(f.root, f.options, null)).toBeNull();
+  expect(await readSemanticLibraryCache(f.root, f.options, null)).not.toBeNull();
 });
 
 test("early library cache is separated by the host Node version", async () => {
@@ -498,7 +498,7 @@ test("early library cache is separated by the host Node version", async () => {
   const tracker = new FrontendInputTracker();
   tracker.run(() => trackedReadFile(f.source));
   await publishEarlyLibraryCache(f.root, f.options, {
-    cPath: f.cPath,
+    llvmPath: f.llvmPath,
     irPath: f.irPath,
     sidecarPath: f.sidecarPath,
     native: {
@@ -530,7 +530,7 @@ test("early library cache rejects corrupted artifacts and metadata", async () =>
   const tracker = new FrontendInputTracker();
   tracker.run(() => trackedReadFile(f.source));
   await publishEarlyLibraryCache(f.root, f.options, {
-    cPath: f.cPath,
+    llvmPath: f.llvmPath,
     irPath: f.irPath,
     sidecarPath: f.sidecarPath,
     native: {
@@ -563,7 +563,7 @@ test("disabled early library cache performs no reads or writes", async () => {
   const tracker = new FrontendInputTracker();
   tracker.run(() => trackedReadFile(f.source));
   const publish = {
-    cPath: f.cPath,
+    llvmPath: f.llvmPath,
     irPath: f.irPath,
     sidecarPath: f.sidecarPath,
     native: {

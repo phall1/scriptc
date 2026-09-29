@@ -16,7 +16,7 @@ const expected = "bigint true\n10,99,30,40 99,30\n10,99,30,40 55,99,30,40\ntrue\
   "RangeError ERR_OUT_OF_RANGE The length is too large\nError ERR_BUFFER_TOO_LARGE Buffer is too large\n" +
   "true\ntrue\ntrue\ntrue\nfalse\nfalse\n";
 
-describe.each(["c", "llvm"] as const)("native FFI memory, %s", backend => {
+describe.each(["llvm"] as const)("native FFI memory, %s", backend => {
   test("aliases native memory and copies on request without an engine", async () => {
     const outDir = mkdtempSync(join(tmpdir(), "scriptc-ffi-memory-"));
     // Both loader spellings must keep real storage; bare `require` also

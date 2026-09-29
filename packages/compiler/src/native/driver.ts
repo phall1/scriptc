@@ -1,9 +1,8 @@
 /** Static executable compiler. The TS7 parser/checker and native toolchain
- * are external native processes; lowering, validation and both emitters run
+ * are external native processes; lowering, validation and LLVM emission run
  * inside this binary. Installed paths are supplied by the distribution. */
-import { appendFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { emitCModuleChunks } from "../backend/c/c-emitter.js";
 import { emitLlvmModule } from "../backend/llvm/emitter.js";
 import { executableLinkFeatures } from "../backend/executable-features.js";
 import { executableLinkInputs } from "../backend/link-plan-core.js";
@@ -23,9 +22,6 @@ export interface NativeToolchain {
   helperExecutable: string;
   helperPackageRoot: string;
   runtimePackRoot: string;
-  runtimeIncludeDirectory: string;
-  cCompiler: string;
-  cCompilerArgs: string[];
   linker: string;
   linkerArgs: string[];
   dsymutil: string;
@@ -34,8 +30,8 @@ export interface NativeToolchain {
 export interface NativeBuildOptions {
   entryPath: string;
   outputPath: string;
-  backend: "c" | "llvm";
-  outputKind: "exe" | "obj" | "c" | "llvm";
+  backend: "llvm";
+  outputKind: "exe" | "obj" | "llvm";
   optimization: "release" | "dev";
   strip: boolean;
   ffiProfilePath?: string;
@@ -68,23 +64,17 @@ export function buildNative(options: NativeBuildOptions, toolchain: NativeToolch
     const errors = validateModule(module);
     if (errors.length !== 0) throw new Error(JSON.stringify(errors));
     const features = executableLinkFeatures(module, false);
-    const sourceOutput = options.outputKind === "c" || options.outputKind === "llvm";
-    const backend = sourceOutput ? options.outputKind : options.backend;
+    const sourceOutput = options.outputKind === "llvm";
     const debug = options.optimization === "dev" && !options.strip;
     const debugSources = debug ? frontend.sourceTexts() : new Map<string, string>();
-    const chunks = backend === "c"
-      ? emitCModuleChunks(module, undefined, { debugSources })
-      : [emitLlvmModule(module, {
-          targetTriple: toolchain.target.llvmTriple,
-          pointerBits: toolchain.target.pointerBits,
-          wasi: toolchain.target.platform === "wasi",
-          runtimeAbiMarker: true,
-          ...(debug ? { debugSources } : {}),
-        })];
-    const writeSource = (path: string): void => {
-      writeFileSync(path, "");
-      for (const chunk of chunks) appendFileSync(path, chunk);
-    };
+    const llvm = emitLlvmModule(module, {
+      targetTriple: toolchain.target.llvmTriple,
+      pointerBits: toolchain.target.pointerBits,
+      wasi: toolchain.target.platform === "wasi",
+      runtimeAbiMarker: true,
+      ...(debug ? { debugSources } : {}),
+    });
+    const writeSource = (path: string): void => { writeFileSync(path, llvm); };
     mkdirSync(dirname(output), { recursive: true });
     // A sibling temporary directory keeps installation on the same volume
     // and preserves the basename used by Mach-O's ad-hoc signature.
@@ -98,24 +88,14 @@ export function buildNative(options: NativeBuildOptions, toolchain: NativeToolch
       if (sourceOutput) {
         writeSource(stagedOutput);
       } else {
-        const input = join(inputDirectory, backend === "c" ? "program.c" : "program.ll");
+        const input = join(inputDirectory, "program.ll");
         const object = options.outputKind === "obj" ? stagedOutput : join(inputDirectory, "program" + toolchain.target.outputSuffixes.obj);
         writeSource(input);
-        if (backend === "llvm") {
-          emitNativeObject({
-            executable: toolchain.helperExecutable, packageRoot: toolchain.helperPackageRoot,
-            compilerVersion: toolchain.compilerVersion, target: toolchain.target, helper: toolchain.helper,
-            inputPath: input, outputPath: object, sourcePath: entry, optimization: options.optimization,
-          });
-        } else {
-          runNativeTool(toolchain.cCompiler, [
-            ...toolchain.cCompilerArgs, "-std=c11", "-target", toolchain.target.linkerTargetTriple,
-            "-fno-strict-aliasing", options.optimization === "dev" ? "-O0" : "-O2",
-            ...(debug ? ["-gline-tables-only", "-gno-column-info"] : []),
-            "-I", toolchain.runtimeIncludeDirectory, "-c", input, "-o", object,
-          ]);
-          requireNativeArtifact(object);
-        }
+        emitNativeObject({
+          executable: toolchain.helperExecutable, packageRoot: toolchain.helperPackageRoot,
+          compilerVersion: toolchain.compilerVersion, target: toolchain.target, helper: toolchain.helper,
+          inputPath: input, outputPath: object, sourcePath: entry, optimization: options.optimization,
+        });
         if (options.outputKind === "exe") {
           const runtime = stageNativeRuntimePack(toolchain.runtimePackRoot, join(stage, "runtime"),
             toolchain.target, toolchain.compilerVersion, features, options.optimization);

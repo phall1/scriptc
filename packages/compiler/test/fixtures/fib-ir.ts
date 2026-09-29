@@ -6,8 +6,7 @@
  *   }
  *   console.log(fib(10));           // 55
  *
- * Exercises the IR (and later the C emitter) from the consumer side before
- * any frontend exists.
+ * Exercises the IR and LLVM emitter directly, without the frontend.
  */
 import type { IrExpr, IrModule, SrcLoc } from "../../src/ir/ir.js";
 import { BOOL, F64, VOID } from "../../src/ir/ir.js";

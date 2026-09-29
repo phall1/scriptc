@@ -40,7 +40,7 @@ async function build(name: string): Promise<{ binary: string; sourceFile: string
     outPath: join(outDir, name),
     outDir,
     sanitize,
-    backend: "c",
+    backend: "llvm",
   });
   if (!result.ok) {
     throw new Error(

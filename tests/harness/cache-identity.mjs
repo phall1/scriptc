@@ -5,9 +5,9 @@
  * Identical output is the gate for trusting the cache; any drift exits 1
  * with the differing lines.
  *
- * Usage: node tests/harness/cache-identity.mjs [--san] [--keep-cache]
+ * Usage: node tests/harness/cache-identity.mjs [--san] [--keep-llvmache]
  *   --san         run the sanitized lane (SCRIPTC_SAN=1)
- *   --keep-cache  don't wipe the cache before the populate pass
+ *   --keep-llvmache  don't wipe the cache before the populate pass
  * Prints a timing table (uncached / populate / cached) as a side effect. */
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = join(fileURLToPath(import.meta.url), "../../..");
 const san = process.argv.includes("--san");
-const keepCache = process.argv.includes("--keep-cache");
+const keepLlvmache = process.argv.includes("--keep-llvmache");
 // Must match vitest.config.ts's default.
 const cacheDir = process.env.SCRIPTC_CACHE_DIR ?? join(repoRoot, "node_modules/.cache/scriptc-tests/cas");
 const outDir = mkdtempSync(join(tmpdir(), "scr-cache-identity-"));
@@ -57,7 +57,7 @@ function counts(json) {
   return `${json.numTotalTests} tests, ${json.numPassedTests} passed, ${json.numFailedTests} failed, ${json.numPendingTests} skipped`;
 }
 
-if (!keepCache) {
+if (!keepLlvmache) {
   console.log(`wiping cache at ${cacheDir}`);
   rmSync(cacheDir, { recursive: true, force: true });
 }

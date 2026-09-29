@@ -6,7 +6,7 @@ import { compile } from "@scriptc/compiler";
 import { expect, test } from "vitest";
 
 const sanitize = process.env["SCRIPTC_SAN"] === "1";
-for (const backend of ["c", "llvm"] as const) {
+for (const backend of ["llvm"] as const) {
   test(`embedded package destructuring defaults retain global fetch (${backend})`, async () => {
     const directory = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-fetch-defaults-"));
     try {

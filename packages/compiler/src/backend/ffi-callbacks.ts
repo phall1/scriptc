@@ -14,7 +14,7 @@ export interface FfiCallbackAdapter {
 }
 
 /** Allocate internal callback symbols outside the manifest's external
- * symbol set. C and LLVM share this table so a valid native symbol can
+ * symbol set. The frontend and backend share this table so a valid native symbol can
  * never collide with a generated trampoline or raw-callback TLS slot. */
 export function allocateFfiCallbackAdapters(
   imports: readonly IrFfiImport[],
@@ -109,8 +109,7 @@ export interface FfiRetainedOp<V> {
 }
 
 /** Collect a call's retained registrations and releases in manifest order —
- * the lifecycle-policy walk shared by the C and LLVM emitters, so ordering
- * fixes apply to both backends at once. */
+ * the runtime and LLVM adapters follow the same lifecycle ordering. */
 export function collectFfiRetainedOps<V>(
   entry: IrFfiImport,
   callbackArgs: ReadonlyMap<string, V>,

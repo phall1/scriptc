@@ -81,7 +81,7 @@ export async function executableLinkerEnvironmentFingerprint(
   defaultLinker: string = "clang",
 ): Promise<string> {
   const linker = resolvePlatformLinker(env, defaultLinker);
-  const linkerIdentity = platformLinkerIdentity(env);
+  const linkerIdentity = platformLinkerIdentity(env, linker);
   let effectiveDriverIdentity: string;
   try {
     const selected = await execFileAsync(linker, ["-print-prog-name=clang"], {

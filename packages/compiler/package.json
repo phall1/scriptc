@@ -1,7 +1,7 @@
 {
   "name": "@scriptc/compiler",
   "version": "0.1.7",
-  "description": "The scriptc compiler — TypeScript/JavaScript frontend, typed IR, LLVM and C backends",
+  "description": "The scriptc compiler \u2014 TypeScript/JavaScript frontend, typed IR, LLVM backend",
   "license": "Apache-2.0",
   "homepage": "https://scriptc.dev",
   "repository": {
@@ -51,6 +51,9 @@
     "@scriptc/runtime-linux-x64-musl": "workspace:*",
     "@scriptc/runtime-linux-arm64-musl": "workspace:*",
     "@scriptc/runtime-win32-x64-msvc": "workspace:*",
-    "@scriptc/runtime-wasm32-wasi": "workspace:*"
+    "@scriptc/runtime-wasm32-wasi": "workspace:*",
+    "@scriptc/runtime-ios-arm64": "workspace:*",
+    "@scriptc/runtime-ios-simulator-arm64": "workspace:*",
+    "@scriptc/runtime-android-arm64": "workspace:*"
   }
 }

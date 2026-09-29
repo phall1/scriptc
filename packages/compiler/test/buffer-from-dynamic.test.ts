@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 import { compile } from "../src/index.js";
 
-test.each(["c", "llvm"] as const)("untyped Buffer inputs keep explicit object-boundary refusals (%s)", async (backend) => {
+test.each(["llvm"] as const)("untyped Buffer inputs keep explicit object-boundary refusals (%s)", async (backend) => {
   const dir = mkdtempSync(join(tmpdir(), "scriptc-buffer-from-"));
   try {
     const entry = join(dir, "main.cjs");

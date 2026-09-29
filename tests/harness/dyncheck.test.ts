@@ -52,7 +52,7 @@ async function compileAndRun(name: string, source: string, ext: "ts" | "cjs" = "
   // Pinned: the exact TypeError text and path rendering of failed checked
   // casts are C-reference pins; lane identity stays fixed so a diff means
   // the dyn boundary changed, never that the default backend moved.
-  const result = await compile(file, { outPath: join(outDir, name), outDir, sanitize, backend: "c", dynamic });
+  const result = await compile(file, { outPath: join(outDir, name), outDir, sanitize, backend: "llvm", dynamic });
   if (!result.ok) {
     throw new Error(
       "dyncheck program failed to compile:\n" +

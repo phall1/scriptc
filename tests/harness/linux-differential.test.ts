@@ -254,10 +254,7 @@ async function crossCompileAndRun(file: string): Promise<RunResult> {
   const key = hash.update("linux\0").update(target).digest("hex").slice(0, 16);
   const outDir = join(cacheDir, key);
   mkdirSync(outDir, { recursive: true });
-  // Pinned "c" here and at every compile below: the Linux lane is a
-  // C-reference suite (the cross-compile story is the C backend's; the
-  // LLVM lane's Linux coverage runs in llvm-differential on the sandbox).
-  const result = await compile(file, { outPath: join(outDir, "program"), outDir, dynamic: wantsDynamic(file), backend: "c" });
+  const result = await compile(file, { outPath: join(outDir, "program"), outDir, dynamic: wantsDynamic(file), backend: "llvm" });
   if (!result.ok) {
     throw new Error(
       "corpus program failed to cross-compile:\n" +
@@ -344,7 +341,7 @@ async function crossCompileFixture(entry: string): Promise<string> {
   const key = hash.update("linux\0").update(target).digest("hex").slice(0, 16);
   const outDir = join(cacheDir, key);
   mkdirSync(outDir, { recursive: true });
-  const result = await compile(entry, { outPath: join(outDir, "program"), outDir, backend: "c" });
+  const result = await compile(entry, { outPath: join(outDir, "program"), outDir, backend: "llvm" });
   if (!result.ok) {
     throw new Error(
       "fixture failed to cross-compile:\n" +
@@ -472,7 +469,7 @@ async function crossCompileNpmCase(entry: string): Promise<string> {
   const key = hash.update("linux\0").update(target).digest("hex").slice(0, 16);
   const outDir = join(cacheDir, key);
   mkdirSync(outDir, { recursive: true });
-  const result = await compile(entry, { outPath: join(outDir, "program"), outDir, dynamic: true, backend: "c" });
+  const result = await compile(entry, { outPath: join(outDir, "program"), outDir, dynamic: true, backend: "llvm" });
   if (!result.ok) {
     throw new Error(
       "npm case failed to cross-compile:\n" +
@@ -495,7 +492,7 @@ async function crossCompileFetchFixture(entry: string): Promise<string> {
   const key = hash.update("linux\0").update(target).digest("hex").slice(0, 16);
   const outDir = join(cacheDir, key);
   mkdirSync(outDir, { recursive: true });
-  const result = await compile(entry, { outPath: join(outDir, "program"), outDir, dynamic: true, backend: "c" });
+  const result = await compile(entry, { outPath: join(outDir, "program"), outDir, dynamic: true, backend: "llvm" });
   if (!result.ok) {
     throw new Error(
       "fetch fixture failed to cross-compile:\n" +

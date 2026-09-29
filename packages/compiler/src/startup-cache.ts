@@ -6,7 +6,6 @@ export type { EarlyExecutableRouteOptions } from "./executable/executable-cache.
 export {
   executableNativeEnvironmentFingerprint,
   configuredTargetPlatform,
-  legacyCExecutablePathRequested,
   resolveCc,
   targetPlatform,
 } from "./backend/external-c.js";
@@ -15,7 +14,6 @@ export {
   executableLinkerEnvironmentFingerprint,
   resolvePlatformLinker,
 } from "./backend/linker.js";
-import { legacyCExecutablePathRequested } from "./backend/external-c.js";
 import { nativeCodegenTarget, type NativeTargetSpec } from "./backend/targets.js";
 
 /** Whether an ordinary LLVM executable can take the helper/object plus
@@ -25,8 +23,6 @@ import { nativeCodegenTarget, type NativeTargetSpec } from "./backend/targets.js
 export function precompiledRuntimePackTarget(
   env: NodeJS.ProcessEnv = process.env,
 ): NativeTargetSpec | null {
-  if (env["SCRIPTC_RUNTIME_PACK"] === "0" ||
-    env["SCRIPTC_FETCH_CURL"] === "1" ||
-    legacyCExecutablePathRequested(env)) return null;
+  if (env["SCRIPTC_FETCH_CURL"] === "1") return null;
   return nativeCodegenTarget(env);
 }

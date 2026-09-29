@@ -35,7 +35,6 @@ test.runIf(supported)("WASI helper object plus runtime pack builds and runs with
       ...process.env,
       SCRIPTC_TARGET: "wasm32-wasi",
       SCRIPTC_NO_CACHE: "1",
-      SCRIPTC_LEGACY_C_PIPELINE: "0",
       ZIG_GLOBAL_CACHE_DIR: join(zigCache, "global"),
       ZIG_LOCAL_CACHE_DIR: join(zigCache, "local"),
     },
@@ -59,7 +58,7 @@ test.runIf(supported)("switching WASI LLVM and native C builds preserves both tr
   await build([], wasiEnv);
   const llvm = await readFile(join(outDir, "hello.ll"));
   const wasm = await readFile(join(outDir, "hello.wasm"));
-  await build(["--backend=c", "--keep-c"], nativeEnv);
+  await build(["--backend=llvm", "--keep-llvm"], nativeEnv);
   const c = await readFile(join(outDir, "hello.c"));
   expect(await readFile(join(outDir, "hello.ll"))).toEqual(llvm);
   expect(await readFile(join(outDir, "hello.wasm"))).toEqual(wasm);

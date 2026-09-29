@@ -13,7 +13,7 @@ import type { NativeTargetSpec } from "./targets.js";
 
 import {
   RuntimePackError, parseRuntimePackManifest, selectRuntimePackArtifacts, validateRuntimePackIdentity,
-  type RuntimePackArtifact, type RuntimePackManifest, type RuntimeFeatureSet,
+  type RuntimePackArtifact, type RuntimePackManifest, type RuntimeFeatureSet, type RuntimePackMode,
 } from "./runtime-pack-core.js";
 export {
   RUNTIME_PACK_SCHEMA, RUNTIME_PACK_FORMAT, RuntimePackError, parseRuntimePackManifest,
@@ -123,6 +123,7 @@ export async function loadRuntimePack(options: {
   target: NativeTargetSpec;
   features: NativeLinkFeatures;
   optimization: "release" | "dev";
+  mode?: RuntimePackMode;
   env?: NodeJS.ProcessEnv;
   resolver?: (specifier: string) => string;
 }): Promise<RuntimePackSelection> {
@@ -158,7 +159,7 @@ export async function loadRuntimePack(options: {
   }
   validateRuntimePackIdentity(manifest, packageManifest.name, packageManifest.version, options.target, compilerReleaseVersion());
   const flavor = options.optimization;
-  const selected = selectRuntimePackArtifacts(manifest, options.features, flavor, options.env);
+  const selected = selectRuntimePackArtifacts(manifest, options.features, flavor, options.env, options.mode);
   const features = selected.features;
   const selectedVariants = selected.runtime;
   const selectedArchives = selected.archives;

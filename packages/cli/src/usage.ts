@@ -18,19 +18,11 @@ Usage:
 
 Options:
   -o, --out <path>   primary output path (default: .scriptc/<name><suffix>)
-      --emit <kind>  primary output: ir, c, llvm, asm, obj, or exe
+      --emit <kind>  primary output: ir, llvm, asm, obj, or exe
                      (default: exe). asm/obj use the matching platform helper
       --print <kind> print machine-readable metadata instead of the output path
                      (native-link-info implies --emit=obj and never links)
-      --backend <b>  code generator. llvm is the default and the output that
-                     ships; c emits readable C for inspecting what the
-                     compiler produced, and program behavior is identical
-                     either way. On native targets, a program outside the LLVM tier still
-                     builds — the default lane emits C for it and a one-line
-                     stderr note names the construct — while an explicit
-                     --backend llvm fails with that construct named
-                     wasm32-wasi is LLVM-only unless --backend c is explicit;
-                     its C inspection lane accepts async-free programs only
+      --backend <b>  code generator (llvm)
       --optimization <release|dev>
                      native optimization posture (default: release/-O2). dev
                      uses -O0, source breakpoints, and cached LLVM object shards;
@@ -40,11 +32,8 @@ Options:
       --windows-subsystem <console|gui>
                      Windows executable subsystem (default: console). gui
                      prevents Windows from opening a console window
-      --from-c       treat input as a C (or .ll) file (toolchain plumbing/debugging)
-      --keep-c       keep the generated program TU next to the executable
-                     (default; the .ll — or the .c under --backend=c or
-                     when the build fell back)
-      --no-keep-c    delete the generated program TU after compiling
+      --keep-llvm    keep generated LLVM IR beside the executable (default)
+      --no-keep-llvm delete generated LLVM IR after compiling
       --emit-ir      also write IR beside an executable or library archive;
                      deprecated for executables: use --emit=ir for primary IR
       --sanitize     build with ASan + runtime RC audit
@@ -81,8 +70,7 @@ export const CLI_OPTIONS = {
   optimization: { type: "string" },
   strip: { type: "boolean", default: false },
   "windows-subsystem": { type: "string" },
-  "from-c": { type: "boolean", default: false },
-  "keep-c": { type: "boolean", default: true },
+  "keep-llvm": { type: "boolean", default: true },
   "emit-ir": { type: "boolean", default: false },
   sanitize: { type: "boolean", default: false },
   dynamic: { type: "boolean", default: false },

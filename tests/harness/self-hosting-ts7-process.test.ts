@@ -14,7 +14,7 @@ const oracleEntry = join(root, "tests/fixtures/self-hosting/ts7-client.ts");
 const tempRoot = process.platform === "win32" ? tmpdir() : "/tmp";
 const sanitize = process.env["SCRIPTC_SAN"] === "1";
 
-for (const backend of ["c", "llvm"] as const) {
+for (const backend of ["llvm"] as const) {
   test(`the native client owns its TypeScript server from startup through exit (${backend})`, async () => {
     const dir = mkdtempSync(join(tempRoot, "scriptc-ts7-owned-"));
     try {

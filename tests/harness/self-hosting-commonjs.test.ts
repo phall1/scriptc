@@ -43,7 +43,7 @@ function input() {
   };
 }
 
-for (const backend of ["c", "llvm"] as const) {
+for (const backend of ["llvm"] as const) {
   test(`CommonJS detection and package rewrites run without Node (${backend})`, async () => {
     const directory = mkdtempSync(join(tempRoot, "scriptc-commonjs-native-"));
     try {

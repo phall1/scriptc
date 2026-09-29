@@ -1,7 +1,7 @@
 import type { IrModule, IrType } from "../ir/ir.js";
 import { funcOf, mapOf, RUNTIME_EMITTER_CLASS, STRING, VOID } from "../ir/ir.js";
 
-/** Cycle capability shared by both native backends.
+/** Cycle capability for native code generation.
  * Greatest fixpoint over shapes and unions: start optimistic (everything
  * cycle-capable), repeatedly drop shapes with no cycle-capable field and
  * unions with no cycle-capable arm until stable. Closures, checked values and promises

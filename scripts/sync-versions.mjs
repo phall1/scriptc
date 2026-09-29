@@ -22,6 +22,7 @@ for (const pkg of [
   "runtime-linux-x64-gnu", "runtime-linux-arm64-gnu",
   "runtime-linux-x64-musl", "runtime-linux-arm64-musl",
   "runtime-win32-x64-msvc", "runtime-wasm32-wasi",
+  "runtime-ios-arm64", "runtime-ios-simulator-arm64", "runtime-android-arm64",
   "compiler",
   "llvm-darwin-arm64", "llvm-darwin-x64",
   "llvm-linux-x64-gnu", "llvm-linux-arm64-gnu",

@@ -21,8 +21,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "build": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json",
-    "postinstall": "node scripts/warm-cache.mjs"
+    "build": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json"
   },
   "dependencies": {
     "@scriptc/compiler": "workspace:*"

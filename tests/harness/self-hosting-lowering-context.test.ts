@@ -15,7 +15,7 @@ const nativeSources = join(root, "packages/compiler/native");
 const sanitize = process.env["SCRIPTC_SAN"] === "1";
 const execFileAsync = promisify(execFile);
 
-for (const backend of ["c", "llvm"] as const) {
+for (const backend of ["llvm"] as const) {
   test(`production lexical contexts run with native TS7 symbols (${backend})`, async () => {
     const directory = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-lowering-context-"));
     try {
@@ -73,7 +73,7 @@ for (const backend of ["c", "llvm"] as const) {
       expect(coverage.stats.functionsSkipped).toBe(0);
       if (!built.ok) throw new Error(built.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
       expect(built.backend).toBe(backend);
-      expect(built.llvmRefusal).toBeUndefined();
+
       const output = join(directory, "native.json");
       const run = spawnSync(built.binaryPath, [ts7Executable(), source, output], { encoding: "utf8", timeout: 90_000 });
       expect(run.error, run.stderr).toBeUndefined();

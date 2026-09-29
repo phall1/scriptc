@@ -65,7 +65,7 @@ describe.runIf(supported)("LLVM native helper integration", () => {
     expect(await readFile(output, "utf8")).toBe("existing\n");
 
     await writeFile(input, "define i32 @answer() { ret i32 42 }\n");
-    const unsupported = await run(helper, helperArgs(input, output, "x86_64-apple-macosx14.0.0"));
+    const unsupported = await run(helper, helperArgs(input, output, "riscv64-unknown-linux-gnu"));
     expect(JSON.parse(unsupported.stderr.toString("utf8"))).toMatchObject({
       ok: false,
       code: "unsupported_target",

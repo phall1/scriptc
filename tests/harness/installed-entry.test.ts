@@ -26,7 +26,7 @@ test.each([
     // Node refuses native TS stripping inside node_modules. Its oracle
     // runs the identical source tree at the original corpus location.
     const oracle = await execFileAsync(process.execPath, [join(original, entryName)]);
-    for (const backend of ["c", "llvm"] as const) {
+    for (const backend of ["llvm"] as const) {
       const outDir = join(dir, backend);
       const built = await compile(entry, { outDir, outPath: join(outDir, "program"), backend, sanitize });
       expect(built.ok, !built.ok ? JSON.stringify(built.diagnostics) : "").toBe(true);

@@ -13,7 +13,7 @@ const RUNTIME_SOURCES = ["scr_number.c", "scr_bigint.c", "scr_string.c", "scr_ar
 );
 
 // Full runtime smoke under ASan + the RC audit: proves the API works and the
-// hand-modeled ownership discipline (the same one emit-c.ts generates) is
+// hand-modeled ownership discipline (the same one the LLVM emitter uses) is
 // leak- and double-free-clean.
 test("runtime smoke.c: output exact, ASan and RC audit clean", async () => {
   const buildDir = join(testDir, "build");

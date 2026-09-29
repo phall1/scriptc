@@ -1,15 +1,7 @@
-/* Type-directed RC/trace/box dispatch tables of the LLVM backend, the
- * cycle-capability fixpoint, and per-record-shape emission — the .ll
- * mirror of the C emitter's types.ts + shapes.ts slice that the
- * phase-2 tier needs. Everything here follows the SAME contracts the C
- * backend compiled into the runtime: `_v` adapters where a container
- * stores RC entry points as data, per-shape retain/release/new (and
- * trace/teardown for cycle-capable shapes) with `size_t rc` at offset 0,
- * scr_obj_alloc_note/scr_obj_free_note bracketing every shape allocation
- * so the sanitized lane's RC audit stays exact.
- *
- * Anything outside the tier refuses loudly (LlvmUnsupportedError naming
- * the type kind) — the tables never guess. */
+/** Type-directed reference counting, tracing, boxes and record layouts.
+ * Containers store erased adapters; shape helpers retain, release and trace
+ * their fields. Every allocation has a size_t reference count at offset zero
+ * and participates in the runtime allocation audit. */
 import type { IrModule, IrRecordShape, IrType } from "../../ir/ir.js";
 import { isIdentityCollectionKey, isRefCounted, mapOf, POINTER_KINDS, runtimeRcStem, RUNTIME_EMITTER_CLASS, RUNTIME_ERROR_CLASSES, RUNTIME_STREAM_CLASSES, STRING } from "../../ir/ir.js";
 import {
@@ -111,9 +103,7 @@ export function releaseSym(host: ShapeHost, t: IrType): string {
 }
 
 /** The trace entry point for a payload/field type, or null when the type
- * cannot participate in a cycle — traceAdapterC's table over the LLVM
- * tier's kinds (promise/object rows are out of tier and unreachable:
- * their RC rows refuse first). */
+ * cannot participate in a cycle. */
 export function traceAdapter(host: ShapeHost, t: IrType): string | null {
   switch (t.kind) {
     case "dyn":
@@ -209,7 +199,7 @@ function elemKindNum(elem: IrType): number {
   }
 }
 
-/** Array construction call text (arrNewC's dispatch): ref elements
+/** Array construction call text: ref elements
  * (records, unions, closures — and cycle-capable inner arrays, whose
  * SCR_ELEM_ARR spelling would hide them from the outer array's trace)
  * construct through scr_arr_new_ref with the element type's `_v` RC entry
@@ -244,7 +234,7 @@ export function arrNewCall(host: ShapeHost, elem: IrType, capText: string): stri
  * data) for per-shape payloads and cycle-capable arrays. SCR_BOX_* tags
  * from scr_runtime.h. */
 export function boxNewCall(host: ShapeHost, t: IrType): string {
-  const plain: Partial<Record<IrType["kind"], number>> = { f64: 0, date: 0, bool: 1, string: 2, func: 4 };
+  const plain: Partial<Record<IrType["kind"], number>> = { f64: 0, date: 0, procStream: 0, bool: 1, string: 2, func: 4 };
   const kind = plain[t.kind];
   if (kind !== undefined) {
     host.declare(`declare ptr @scr_box_new(i32)`);
@@ -254,22 +244,7 @@ export function boxNewCall(host: ShapeHost, t: IrType): string {
     host.declare(`declare ptr @scr_box_new(i32)`);
     return `call ptr @scr_box_new(i32 3)`; // SCR_BOX_ARR
   }
-  if (
-    t.kind === "record" || t.kind === "object" || t.kind === "classval" || t.kind === "union" ||
-    t.kind === "array" || t.kind === "map" || t.kind === "set" || t.kind === "symbol" || t.kind === "bigint" || t.kind === "regex" ||
-    t.kind === "promise" || t.kind === "bytes" || t.kind === "url" || t.kind === "searchParams" ||
-    t.kind === "stats" || t.kind === "fileHandle" || t.kind === "spawnRes" || t.kind === "child" || t.kind === "childStream" || t.kind === "childWriter" ||
-    t.kind === "generator" ||
-    t.kind === "netServer" || t.kind === "netSocket" || t.kind === "dgramSocket" ||
-    t.kind === "httpReq" || t.kind === "httpRes" || t.kind === "httpClientReq" ||
-    t.kind === "secureCtx" || t.kind === "cryptoHash" || t.kind === "cryptoHmac" || t.kind === "testCtx" ||
-    // Island handles: the box carries scr_jsval_retain_v/release_v and
-    // no trace — the same stance as jsval array elements.
-    t.kind === "jsval" ||
-    // Checked values trace native objects, arrays and captured closures.
-    t.kind === "dyn" ||
-    t.kind === "fsWatcher"
-  ) {
+  if (isRefCounted(t)) {
     const v = vAdapters(host, t);
     host.declare(`declare ptr @scr_box_new_obj(ptr, ptr, ptr)`);
     return `call ptr @scr_box_new_obj(ptr ${v.retain}, ptr ${v.release}, ptr ${traceArg(host, t)})`;
@@ -279,7 +254,7 @@ export function boxNewCall(host: ShapeHost, t: IrType): string {
 
 /** Box accessor suffix (boxAccess): scalars unboxed, ref kinds pointers. */
 export function boxAccess(t: IrType): "f64" | "bool" | "ref" {
-  return t.kind === "f64" || t.kind === "date" ? "f64" : t.kind === "bool" ? "bool" : "ref";
+  return t.kind === "f64" || t.kind === "date" || t.kind === "procStream" ? "f64" : t.kind === "bool" ? "bool" : "ref";
 }
 
 /* ── record shapes ────────────────────────────────────────────────────── */
@@ -287,7 +262,7 @@ export function boxAccess(t: IrType): "f64" | "bool" | "ref" {
 /** A record field's in-struct LLVM type. bool fields store as i8 (the C
  * _Bool layout); loads/stores convert at the access site. */
 export function llFieldType(t: IrType): "double" | "i8" | "ptr" {
-  if (POINTER_KINDS.has(t.kind) && t.kind !== "http2Session" && t.kind !== "http2Stream") return "ptr";
+  if (POINTER_KINDS.has(t.kind)) return "ptr";
   switch (t.kind) {
     case "f64":
     case "date":
@@ -405,7 +380,7 @@ export function releaseBody(
 
 /** Per-record-shape LLVM emission: the named struct types (returned as
  * `typeDefs`) and the new/retain/release (+trace/gcFree for cycle-capable
- * shapes) function definitions (`defs`). Layout mirrors the C emitter:
+ * shapes) function definitions (`defs`). Layout follows the runtime ABI:
  * `{ i64 rc, fields..., [ptr overflow] }`; the retain/release signatures
  * are already `_v`-shaped, so the same symbols serve as container RC
  * entry points. */

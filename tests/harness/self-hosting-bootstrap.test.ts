@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual, promisify } from "node:util";
 import { expect, test } from "vitest";
-import { compileC, deserializeModule, emitCModule, validateModule } from "@scriptc/compiler";
+import { compileC, deserializeModule, emitLlvmModule, validateModule } from "@scriptc/compiler";
 import type { compile } from "@scriptc/compiler";
 import * as ir from "../../packages/compiler/src/ir/ir.js";
 import { ts7Executable } from "../../packages/compiler/src/frontend/ts7/rpc-api.js";
@@ -31,11 +31,11 @@ function nativeFeatures(module: ir.IrModule) {
   };
 }
 
-test("the native frontend and C emitter rebuild a working frontend from its TypeScript source", async () => {
+test("the native frontend and LLVM emitter rebuild a working frontend from its TypeScript source", async () => {
   const directory = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-bootstrap-"));
   const executable = (name: string) => join(directory, name + (process.platform === "win32" ? ".exe" : ""));
   const frontend = join(root, "tests/fixtures/self-hosting/frontend-lowering.ts");
-  const emitter = join(root, "tests/fixtures/self-hosting/c-emitter.ts");
+  const emitter = join(root, "tests/fixtures/self-hosting/llvm-emitter.ts");
   const nativeOptions = { ...options, env: { ...process.env, PATH: "" } };
   try {
     const nativeSources = join(root, "packages/compiler/native");
@@ -53,7 +53,7 @@ test("the native frontend and C emitter rebuild a working frontend from its Type
         "--import", "tsx", "--input-type=module", "--eval",
         `import { compile } from ${JSON.stringify(api)};
          const result = await compile(process.argv[1], {
-           outDir: process.argv[2], outPath: process.argv[3], backend: 'c',
+           outDir: process.argv[2], outPath: process.argv[3], backend: 'llvm',
            dynamic: false, optimization: 'dev', sanitize: process.argv[4] === '1',
            ffiProfilePath: process.argv[5] || undefined, emitIr: true,
          });
@@ -64,12 +64,14 @@ test("the native frontend and C emitter rebuild a working frontend from its Type
       const result = JSON.parse(built.stdout) as Awaited<ReturnType<typeof compile>>;
       if (!result.ok) throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
       if (!("binaryPath" in result)) throw new Error("expected a native frontend executable");
-      expect(result.backend).toBe("c");
+      expect(result.backend).toBe("llvm");
       expect(result.irPath).toBeDefined();
       return result;
     };
     const seed = await buildSeed(frontend, "frontend-seed", profile);
     const nativeEmitter = await buildSeed(emitter, "emitter");
+    const emitterRequest = join(directory, "emitter-request.json");
+    writeFileSync(emitterRequest, JSON.stringify({ debug: true, sources: [], pointerBits: 64, wasi: false, emitLibraryIdentity: true, runtimeAbiMarker: false }));
     const ownIr = join(directory, "frontend-native.json");
     const self = await execFileAsync(seed.binaryPath, [ts7Executable(), frontend, ownIr, profile], nativeOptions);
     expect(self.stdout).toBe("0\n0 0\n");
@@ -83,12 +85,12 @@ test("the native frontend and C emitter rebuild a working frontend from its Type
     expect(validateModule(module)).toEqual([]);
     expect(isDeepStrictEqual(module, deserializeModule(readFileSync(seed.irPath!, "utf8"))), "native self-lowering must match the Node seed").toBe(true);
 
-    const cPath = join(directory, "frontend-native.c");
-    const emitted = await execFileAsync(nativeEmitter.binaryPath, [ownIr, cPath], nativeOptions);
+    const cPath = join(directory, "frontend-native.ll");
+    const emitted = await execFileAsync(nativeEmitter.binaryPath, [ownIr, cPath, emitterRequest], nativeOptions);
     expect(emitted.stdout).toBe("");
     expect(emitted.stderr).toBe("");
     // Avoid rendering hundreds of megabytes in an assertion failure.
-    expect(readFileSync(cPath, "utf8") === emitCModule(module, undefined, { debugSources: new Map() }), "native C emission must match Node byte-for-byte").toBe(true);
+    expect(readFileSync(cPath, "utf8") === emitLlvmModule(module, { debugSources: new Map() }), "native LLVM emission must match Node exactly").toBe(true);
     const rebuilt = executable("frontend-rebuilt");
     await compileC({ cPath, outPath: rebuilt, optimization: "dev", sanitize, linkInputs: [object], ...nativeFeatures(module) });
 
@@ -109,8 +111,8 @@ test("the native frontend and C emitter rebuild a working frontend from its Type
       const program = deserializeModule(readFileSync(actualIr, "utf8"));
       expect(program).toEqual(deserializeModule(readFileSync(expectedIr, "utf8")));
       expect(validateModule(program)).toEqual([]);
-      const programC = join(directory, "program.c");
-      const emission = await execFileAsync(nativeEmitter.binaryPath, [actualIr, programC], nativeOptions);
+      const programC = join(directory, "program.ll");
+      const emission = await execFileAsync(nativeEmitter.binaryPath, [actualIr, programC, emitterRequest], nativeOptions);
       expect(emission.stdout).toBe("");
       expect(emission.stderr).toBe("");
       await compileC({ cPath: programC, outPath: executable("program"), sanitize, ...nativeFeatures(program) });

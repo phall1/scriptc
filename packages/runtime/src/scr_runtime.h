@@ -1738,14 +1738,18 @@ ScrEmitter *scr_emitter_on_via(ScrEmitter *em, ScrStr *name, ScrClosure *orig /*
  * typed stack slots and reference values ride directly. The runtime's own
  * emits (data/error/pipe/meta) carry pointers only, so the shims read every
  * tuple either lane produces on 32- and 64-bit targets.
- * SCR_EE_FIXED_MAX is the registry's audited arity ceiling — backends
- * refuse listeners past it rather than guess. */
+ * The fixed shims cover the common short tuples. Longer adapters use the
+ * opaque cursor interface below without depending on the va_list ABI. */
 #define SCR_EE_FIXED_MAX 4
 void scr_ee_inv_fixed0(ScrClosure *cb, va_list ap);
 void scr_ee_inv_fixed1(ScrClosure *cb, va_list ap);
 void scr_ee_inv_fixed2(ScrClosure *cb, va_list ap);
 void scr_ee_inv_fixed3(ScrClosure *cb, va_list ap);
 void scr_ee_inv_fixed4(ScrClosure *cb, va_list ap);
+/* Invoke cb->fn(cb, cursor). The cursor borrows a private va_list copy for
+ * this call; each next operation reads one borrowed pointer argument. */
+void scr_ee_inv_args(ScrClosure *cb, va_list ap);
+void *scr_ee_arg_next(void *cursor);
 /* removeListener/off (LAST matching occurrence, Node's search order) and
  * removeAllListeners; both return em +1. 'removeListener' fires after
  * each removal when listened for. */

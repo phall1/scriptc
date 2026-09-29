@@ -17,9 +17,8 @@
  *   x86_64-macos             (build-only; the host arm64-macos build is
  *                             the ordinary suites' tested baseline)
  *
- * Both emissions build per target (the K suite's reference/differential
- * posture — emitted .c and .ll deliberately carry no target triple, so
- * `zig cc -target` compiles either). Per archive, ON THE HOST (no
+ * LLVM program objects combine with the target's precompiled runtime
+ * pack. Per archive, ON THE HOST (no
  * execution — Apple's nm is llvm-nm and reads ELF/COFF/Mach-O alike):
  *
  *   - K1 cross: prefix-carrying external definitions equal the profile's
@@ -49,7 +48,7 @@
  * present the probe runs as a bonus (detected, never required).
  *
  * Cost (warm zig cache, M-series host): ~1s per archive build, ~2.5min
- * for the full 112-build matrix — plus zig on PATH as a hard requirement,
+ * for the complete matrix — plus zig on PATH as a hard requirement,
  * which is why the lane is env-gated rather than part of the default
  * suite. SCRIPTC_CROSS_FILTER=<regex> narrows the fixture list for
  * triage. Never part of the commit gate. */
@@ -91,8 +90,8 @@ type Target = (typeof TARGETS)[number];
  * link line; the probe links pin the set. */
 const WIN32_EMBEDDER_LIBS = ["-ladvapi32", "-liphlpapi", "-lws2_32"];
 
-type Emission = "llvm" | "c";
-const EMISSIONS: Emission[] = ["llvm", "c"];
+type Emission = "llvm";
+const EMISSIONS: Emission[] = ["llvm"];
 
 const filter = process.env["SCRIPTC_CROSS_FILTER"];
 /* Every K fixture that IS a library profile (int-corpus and npm-refuse
@@ -338,14 +337,14 @@ describe.skipIf(!enabled)("cross-target library conformance", () => {
         // Box etiquette (the windows lane's): everything in ONE directory,
         // created per run and deleted at the end — a lane-distinct name so
         // a concurrent windows-differential run is never disturbed.
-        const dirWin = "C:\\Users\\rdp\\work\\scriptc-xlib-lane";
+        const dirWin = `C:\\Users\\rdp\\work\\scriptc-xlib-${process.pid}-${Date.now()}`;
         const { archive, outDir } = await buildLibrary("scalars", emission, "x86_64-windows-gnu");
         const probe = linkProbe("scalars", archive, outDir, "x86_64-windows-gnu");
         const ssh = (cmd: string): string =>
           execFileSync("ssh", ["-o", "ConnectTimeout=15", host, cmd], { encoding: "utf8", timeout: 120_000 });
         try {
           ssh(`cmd /c if not exist ${dirWin} mkdir ${dirWin}`);
-          execFileSync("scp", ["-q", probe, `${host}:C:/Users/rdp/work/scriptc-xlib-lane/probe-${emission}.exe`], {
+          execFileSync("scp", ["-q", probe, `${host}:${dirWin.replaceAll("\\", "/")}/probe-${emission}.exe`], {
             timeout: 120_000,
           });
           const out = ssh(`cd /d ${dirWin} && probe-${emission}.exe`);

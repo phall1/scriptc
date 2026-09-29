@@ -27,7 +27,7 @@ test("runtime manifest validation and selection are entirely static", () => {
   expect(coverage.stats.functionsSkipped).toBe(0);
 });
 
-for (const backend of ["c", "llvm"] as const) {
+for (const backend of ["llvm"] as const) {
   test(`native runtime manifest selection matches Node (${backend})`, async () => {
     const directory = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-pack-selection-"));
     try {

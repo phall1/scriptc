@@ -197,7 +197,7 @@ export function emitOperatorExpr(host: LlvmEmitterContext, e: ExprOf<"bin" | "un
       case "assignExpr": {
         // `x = e` in expression position: the binding takes its OWN
         // reference (retain for ref kinds), the temp stays the yielded
-        // value — CEmitter's order exactly (release old, store retained).
+        // value — release the old value before storing the retained value.
         const concat = e.value;
         const suffix = matchStringSelfConcat(e.localId, concat);
         if (suffix && concat.kind === "strConcat") {
@@ -390,7 +390,7 @@ export function emitStringExpr(host: LlvmEmitterContext, e: ExprOf<"strConcat" |
         // One immortal static per (pattern, flags) pair; the +1 retain is
         // a no-op on immortals but keeps the owned-temps discipline
         // uniform. Pattern/flags strings intern NOW (the literal table is
-        // still open — the C emitter's regex-literal discipline).
+        // still open — the runtime ABI’s regex-literal discipline).
         const key = `${e.flags}/${e.pattern}`;
         let re = host.regexInstances.get(key);
         if (!re) {

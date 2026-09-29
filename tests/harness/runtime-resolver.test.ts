@@ -169,7 +169,7 @@ test("runtime lookup tracks failed candidates as well as selected files", () => 
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
-for (const backend of ["c", "llvm"] as const) {
+for (const backend of ["llvm"] as const) {
   test(`native runtime resolver: ${backend} matches pinned Node without evaluating modules`, async () => {
     const directory = workspace();
     try {

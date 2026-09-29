@@ -8,7 +8,7 @@ import { compile } from "@scriptc/compiler";
 
 const exec = promisify(execFile);
 
-for (const backend of ["c", "llvm"] as const) {
+for (const backend of ["llvm"] as const) {
   test(`weak collections keep engine identity in dynamic builds (${backend})`, async () => {
     const outDir = await mkdtemp(join(tmpdir(), "scriptc-weak-island-"));
     try {

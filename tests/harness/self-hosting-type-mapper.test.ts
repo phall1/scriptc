@@ -68,7 +68,7 @@ function checkReport(report: MappingReport): void {
   ]);
 }
 
-for (const backend of ["c", "llvm"] as const) {
+for (const backend of ["llvm"] as const) {
   test(`production type mapper runs against native TS7 (${backend})`, async () => {
     const directory = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-type-mapper-"));
     try {
@@ -129,7 +129,7 @@ for (const backend of ["c", "llvm"] as const) {
       if (!built.ok) throw new Error(built.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
       if (!("binaryPath" in built)) throw new Error("type mapper did not produce a native executable");
       expect(built.backend).toBe(backend);
-      expect(built.llvmRefusal).toBeUndefined();
+
       const output = join(directory, "native.json");
       const native = spawnSync(built.binaryPath, [ts7Executable(), source, output], { encoding: "utf8", timeout: 90_000 });
       expect(native.error, native.stderr).toBeUndefined();

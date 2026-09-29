@@ -9,8 +9,8 @@ test("native toolchain installation paths relocate with the manifest", () => {
   const path = join(root, "toolchain.json");
   const manifest: NativeToolchainManifest = {
     schema: "scriptc.native-toolchain.v1", compiler_version: "1.2.3", target: "macos-arm64",
-    ts7: "typescript/tsc", llvm_package: "llvm", runtime_pack: "runtime", runtime_headers: "headers",
-    c_compiler: "clang", c_compiler_args: [], linker: "tools/linker", linker_args: ["cc"], dsymutil: "dsymutil",
+    ts7: "typescript/tsc", llvm_package: "llvm", runtime_pack: "runtime",
+    linker: "tools/linker", linker_args: ["cc"], dsymutil: "dsymutil",
   };
   try {
     writeFileSync(path, JSON.stringify(manifest));
@@ -19,7 +19,6 @@ test("native toolchain installation paths relocate with the manifest", () => {
     expect(toolchain.helperExecutable).toBe(join(root, "llvm/bin/scriptc-llvm-codegen"));
     expect(toolchain.runtimePackRoot).toBe(join(root, "runtime"));
     expect(toolchain.linker).toBe(join(root, "tools/linker"));
-    expect(toolchain.cCompiler).toBe("clang");
     expect(toolchain.linkerArgs).toEqual(["cc"]);
     expect(toolchain.target.name).toBe("macos-arm64");
     for (const invalid of [null, [], {}, { ...manifest, schema: "other" }, { ...manifest, target: "other" },

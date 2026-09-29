@@ -80,8 +80,8 @@ const localizationTest =
 const flavor = process.env["SCRIPTC_SAN"] === "1" ? "san" : "plain";
 const cacheDir = join(repoRoot, "node_modules/.cache/scriptc-tests/library-callbacks", flavor);
 
-type Emission = "llvm" | "c";
-const EMISSIONS: Emission[] = ["llvm", "c"];
+type Emission = "llvm";
+const EMISSIONS: Emission[] = ["llvm"];
 
 interface BuildOpts {
   sanitize?: boolean;

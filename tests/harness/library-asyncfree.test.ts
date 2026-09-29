@@ -25,7 +25,7 @@ async function surfaceOf(name: string, source: string): Promise<string | null> {
     outPath: join(outDir, "program"),
     outDir,
     emitIr: true,
-    backend: "c",
+    backend: "llvm",
   });
   if (!result.ok) {
     throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));

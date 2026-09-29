@@ -1,28 +1,13 @@
-/* The dual-backend differential: tier membership is AUTO-DISCOVERED by
- * attempting the LLVM build on every corpus program. A program the tier
- * claims must be byte-identical through BOTH backends — stdout (always),
- * stderr (exit-0 programs), exit code — and both must match the Node
- * oracle. A program outside the tier must REFUSE loudly under the
- * explicit `backend: "llvm"` pin this suite builds with: diagnostic
- * SC3001 naming the first unsupported IR construct, never wrong code.
- * (The RELEASE default is LLVM with a transparent C fallback; the pin is
- * exactly how this suite keeps refusals loud. Each refused program is
- * additionally rebuilt through the default lane below, asserting the
- * fallback lands on the C backend with the same refusal kind recorded.)
- *
- * SCRIPTC_SAN=1 rebuilds both lanes with ASan + the runtime RC audit; the
- * emitted .ll opts its functions into instrumentation via sanitize_address,
- * so the LLVM-emitted frames are covered too. The refusal histogram and
- * the claimed count print at the end — phase 2's queue.
- */
+/* Both LLVM optimization modes must compile every corpus program and match
+ * Node's stdout, successful stderr, and expected exit status. Any backend
+ * refusal is a failure. SCRIPTC_SAN=1 instruments emitted code and runtime. */
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { globSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { release as osRelease } from "node:os";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { afterAll, describe, expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
 import ts5 from "typescript";
 import { compile } from "@scriptc/compiler";
 import { shardSelect, shardSuffix } from "./shard.js";
@@ -43,41 +28,9 @@ const files = shardSelect(
   (f) => f.slice(corpusDir.length + 1),
 );
 const sanitize = process.env["SCRIPTC_SAN"] === "1";
-const helperOnly = process.env["SCRIPTC_LLVM_HELPER_ONLY"] === "1";
 
 // Same known-env contract as the main differential suite.
 process.env["SCRIPTC_TEST_ENV"] = "from-harness";
-
-/** The survey's six in-tier programs: the tier floor. Auto-discovery may
- * claim MORE (it does — strings/globals joined in phase 1), but these six
- * regressing out of the tier is always a bug, so they are pinned. */
-const TIER_FLOOR = [
-  "001-hello.ts",
-  "002-log-args.ts",
-  "100-number-format.ts",
-  "101-arithmetic.ts",
-  "400-fib.ts",
-  "401-mutual-recursion.ts",
-];
-
-/** Fixed backend gaps whose corpus programs must remain in the LLVM tier. */
-const TIER_REGRESSIONS = [
-  "2672-http-request-response-callback.ts",
-];
-
-/** Phase 2 object-emission floor: these claimed corpus cases pin every
- * required helper-validation family. TLS server creation remains one of the
- * six explicit SC3001 refusals outside this floor. */
-const HELPER_TIER_FLOOR = [
-  "1020-async-basics.ts",
-  "2010-generators-basics.ts",
-  "984-exceptions-finally.ts",
-  "1100-island-eval-basics.ts",
-  "1200-regex-test-basics.ts",
-  "2672-http-request-response-callback.ts",
-  "1404-zlib-crypto-bytes.ts",
-  "2557-tls-ca-store.ts",
-];
 
 interface RunResult {
   stdout: Buffer;
@@ -206,177 +159,33 @@ function programInputs(file: string): string[] {
   ].sort();
 }
 
-async function build(file: string, backend: "c" | "llvm" | "helper" | "default") {
+async function build(file: string, optimization: "release" | "dev") {
   const hash = createHash("sha256");
   for (const f of programInputs(file)) hash.update(f).update(readFileSync(f));
-  // "llvm-c" (not the bare key differential.test.ts computes) keeps this
-  // suite's C-lane binaries in their OWN cache slots: compile() always
-  // rewrites its output, so sharing paths with the main differential
-  // means one suite can relink a binary the other is exec'ing — Linux
-  // answers ETXTBSY (observed on the sandbox lane as claims grew).
-  const key = hash
-    .update(sanitize ? "san" : "plain")
-    .update(wantsDynamic(file) ? "dyn" : "")
-    .update(backend === "llvm" ? "llvm" : backend === "helper" ? "llvm-helper" : backend === "c" ? "llvm-c" : "llvm-def")
-    .digest("hex")
-    .slice(0, 16);
+  const key = hash.update(sanitize ? "san" : "plain")
+    .update(wantsDynamic(file) ? "dyn" : "").update("llvm-" + optimization).digest("hex").slice(0, 16);
   const outDir = join(cacheDir, key);
   mkdirSync(outDir, { recursive: true });
-  // The binary BASENAME must be unique per lane (and per flavor): fs-corpus
-  // programs derive their scratch paths from tail(process.argv[1]) — the
-  // basename — so two concurrently running native binaries that share a
-  // name share a scratch directory and corrupt each other's fs state. This
-  // suite runs its LLVM and C binaries concurrently (the Promise.all
-  // below), and the main differential's C binary ("program") for the same
-  // fixture can run in a sibling worker at the same time; the node oracle
-  // is safe on its own (argv[1] is the .ts path). Observed on the public
-  // CI runner as the seven fs/path llvm-differential failures of run
-  // 29965245855 — empty or interleaved stdout on whichever lane lost the
-  // race, reproducible locally by racing the two same-named binaries.
-  const lane = backend === "llvm" ? "program-llvm" : backend === "helper" ? "program-llvmhelper" : backend === "c" ? "program-llvmc" : "program-llvmdef";
   return compile(file, {
-    outPath: join(outDir, `${lane}${sanitize ? "-san" : ""}`),
-    outDir,
-    sanitize,
-    dynamic: wantsDynamic(file),
-    // "default" leaves the option unset — the release default's
-    // LLVM-with-transparent-C-fallback lane, exercised on refusals below.
-    ...(backend === "default" ? {} : { backend: backend === "helper" ? "llvm" as const : backend }),
-    ...(backend === "helper" ? { nativeProgramObject: true } : {}),
+    outPath: join(outDir, `program-llvm-${optimization}${sanitize ? "-san" : ""}`),
+    outDir, sanitize, dynamic: wantsDynamic(file), optimization,
   });
 }
 
-// Auto-discovery ledger, summarized after the run: which programs the tier
-// claims, and which IR kinds gate the rest (phase 2's queue).
-// SCRIPTC_LLVM_REFUSALS=1 additionally lists every refused program under
-// its kind — the burn-down view the phase reports work from.
-const claimed: string[] = [];
-const refusalKinds = new Map<string, number>();
-const refusalPrograms = new Map<string, string[]>();
-
 describe(`llvm differential corpus (${files.length} programs${sanitize ? ", sanitized" : ""}${shardSuffix()})`, () => {
-  test.for(files.map((f) => [f.slice(corpusDir.length + 1), f] as const))(
-    "%s",
-    async ([rel, file]) => {
-      const llvmRes = await build(file, "llvm");
-      if (!llvmRes.ok) {
-        // Out of tier: the refusal must be LOUD and must be THE refusal —
-        // exactly one SC3001 naming the first unhandled construct. Any
-        // other diagnostic here means a corpus program stopped compiling
-        // at all, which the main differential suite forbids.
-        expect(llvmRes.diagnostics.map((d) => d.code)).toEqual(["SC3001"]);
-        const kind = /\(([^)]+)\)/.exec(llvmRes.diagnostics[0]!.message)?.[1] ?? "?";
-        refusalKinds.set(kind, (refusalKinds.get(kind) ?? 0) + 1);
-        refusalPrograms.set(kind, [...(refusalPrograms.get(kind) ?? []), rel]);
-        // The release default must land this same program on the C lane
-        // TRANSPARENTLY: one frontend pass, the emit retried through the
-        // C backend, the refusal recorded — never a failed build.
-        const defRes = await build(file, "default");
-        if (!defRes.ok) throw new Error(`the default lane failed to fall back on a refused program: ${rel}`);
-        expect(defRes.backend).toBe("c");
-        expect(defRes.llvmRefusal).toBe(kind);
-        expect(defRes.cPath.endsWith(".c")).toBe(true);
-        return;
-      }
-      claimed.push(rel);
-      expect(llvmRes.backend).toBe("llvm");
-      expect(llvmRes.llvmRefusal).toBeUndefined();
-      expect(llvmRes.cPath.endsWith(".ll")).toBe(true);
-
-      if (helperOnly) {
-        if (sanitize) throw new Error("the helper object lane does not support sanitizer mode");
-        if (process.platform !== "darwin" || process.arch !== "arm64" ||
-            Number.parseInt(osRelease().split(".", 1)[0] ?? "", 10) < 24) {
-          throw new Error("the helper object lane requires macOS 15+ arm64");
-        }
-        const helperRes = await build(file, "helper");
-        if (!helperRes.ok) {
-          throw new Error(
-            `LLVM helper object emission failed on a program the LLVM tier claims: ${rel}: ` +
-            helperRes.diagnostics.map((d) => `${d.code} ${d.message}`).join("; "),
-          );
-        }
-        const [llvm, helper] = await Promise.all([
-          runBinary(llvmRes.binaryPath, []),
-          runBinary(helperRes.binaryPath, []),
-        ]);
-        expect(helper.stdout, `helper object stdout differed for ${rel}`).toEqual(llvm.stdout);
-        if (helper.exitCode === 0) {
-          expect(comparableStderr(helper.stderr), `helper object stderr differed for ${rel}`)
-            .toEqual(comparableStderr(llvm.stderr));
-        }
-        expect(helper.exitCode, `helper object exit code differed for ${rel}`).toBe(llvm.exitCode);
-        return;
-      }
-
-      const cRes = await build(file, "c");
-      if (!cRes.ok) throw new Error(`C backend failed on a program the LLVM tier claims: ${rel}`);
-      expect(cRes.backend).toBe("c");
-      const [llvm, c, node] = await Promise.all([
-        runBinary(llvmRes.binaryPath, []),
-        runBinary(cRes.binaryPath, []),
-        runBinary("node", nodeOracleArgs(file)),
-      ]);
-
-      // stdout: byte parity across all three lanes.
-      if (!llvm.stdout.equals(c.stdout)) {
-        expect(llvm.stdout.toString("utf8")).toBe(c.stdout.toString("utf8"));
-        expect.unreachable("llvm-vs-c stdout differed at byte level but not after utf8 decode");
-      }
-      if (!llvm.stdout.equals(node.stdout)) {
-        expect(llvm.stdout.toString("utf8")).toBe(node.stdout.toString("utf8"));
-        expect.unreachable("llvm-vs-node stdout differed at byte level but not after utf8 decode");
-      }
-      // stderr: the exit-0 contract of the main differential suite.
-      const expectedExit = expectedExitCode(file);
-      if (expectedExit === 0) {
-        const llvmErr = comparableStderr(llvm.stderr);
-        const cErr = comparableStderr(c.stderr);
-        if (!llvmErr.equals(cErr)) {
-          expect(llvmErr.toString("utf8")).toBe(cErr.toString("utf8"));
-        }
-        if (!llvmErr.equals(node.stderr)) {
-          expect(llvmErr.toString("utf8")).toBe(node.stderr.toString("utf8"));
-        }
-      }
-      expect(llvm.exitCode).toBe(expectedExit);
-      expect(c.exitCode).toBe(expectedExit);
-      expect(node.exitCode).toBe(expectedExit);
-    },
-  );
-
-  test("tier floor: the survey's six programs stay claimed", () => {
-    // Under a shard, only the floor programs THIS slice ran can be asserted
-    // (same key as the corpus split above); the shard union covers all six.
-    for (const name of shardSelect(TIER_FLOOR, (n) => n)) {
-      expect(claimed, `${name} regressed out of the LLVM tier`).toContain(name);
-    }
-  });
-
-  test("fixed tier regressions stay claimed", () => {
-    for (const name of shardSelect(TIER_REGRESSIONS, (n) => n)) {
-      expect(claimed, `${name} regressed out of the LLVM tier`).toContain(name);
-    }
-  });
-
-  test.skipIf(!helperOnly)("helper object feature floor stays claimed", () => {
-    for (const name of shardSelect(HELPER_TIER_FLOOR, (n) => n)) {
-      expect(claimed, `${name} regressed out of helper object emission`).toContain(name);
-    }
-  });
-
-  afterAll(() => {
-    const hist = [...refusalKinds].sort((a, b) => b[1] - a[1]);
-    // eslint-disable-next-line no-console
-    console.info(
-      `llvm tier: ${claimed.length}/${files.length} corpus programs claimed; ` +
-        `top refusals: ${hist.slice(0, 8).map(([k, n]) => `${k}×${n}`).join(", ")}`,
-    );
-    if (process.env["SCRIPTC_LLVM_REFUSALS"] === "1") {
-      for (const [kind] of hist) {
-        // eslint-disable-next-line no-console
-        console.info(`  ${kind}: ${refusalPrograms.get(kind)!.join(" ")}`);
-      }
+  test.for(files.map((f) => [f.slice(corpusDir.length + 1), f] as const))("%s", async ([rel, file]) => {
+    const oracle = await runBinary(process.execPath, nodeOracleArgs(file));
+    const expectedExit = expectedExitCode(file);
+    expect(oracle.exitCode).toBe(expectedExit);
+    for (const optimization of ["release", "dev"] as const) {
+      const result = await build(file, optimization);
+      if (!result.ok) throw new Error(`${rel} (${optimization}): ` + result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("; "));
+      expect(result.backend).toBe("llvm");
+      expect(result.llvmPath.endsWith(".ll")).toBe(true);
+      const actual = await runBinary(result.binaryPath, []);
+      expect(actual.stdout, `${optimization} stdout`).toEqual(oracle.stdout);
+      if (expectedExit === 0) expect(comparableStderr(actual.stderr), `${optimization} stderr`).toEqual(oracle.stderr);
+      expect(actual.exitCode, `${optimization} exit status`).toBe(expectedExit);
     }
   });
 });

@@ -1,7 +1,6 @@
 import { release } from "node:os";
 
-/** A helper package is host-specific, even when it emits a portable target
- * (the WASI helpers are the first intentionally cross-host case). */
+/** Helpers run on the build host and emit every supported target ABI. */
 export interface NativeHelperSpec {
   packageName: string;
   /** The helper protocol reports this primary target and its layout. */
@@ -18,7 +17,10 @@ export type NativeTargetName =
   | "windows-x64-msvc"
   | "linux-x64-musl"
   | "linux-arm64-musl"
-  | "wasm32-wasi";
+  | "wasm32-wasi"
+  | "ios-arm64"
+  | "ios-simulator-arm64"
+  | "android-arm64";
 
 export type NativeObjectFormat = "macho" | "elf" | "coff" | "wasm";
 export type NativeTargetPlatform = "darwin" | "linux" | "win32" | "wasi";
@@ -191,7 +193,7 @@ export const MACOS_ARM64_TARGET: NativeTargetSpec = {
   defaultLinker: "clang", defaultLinkerArgs: [], runtimeSystemLibraries: ["System"],
   linkerTargetTriple: "arm64-apple-macosx14.0.0",
   runtimeCompileDefines: [],
-  supports: { asm: true, obj: true, exe: true, library: false },
+  supports: { asm: true, obj: true, exe: true, library: true },
   helperPackage: DARWIN_ARM64_HELPER.packageName, helper: DARWIN_ARM64_HELPER,
   llvmBackend: "AArch64",
   runtimePackPackage: "@scriptc/runtime-darwin-arm64",
@@ -206,7 +208,7 @@ export const MACOS_X64_TARGET: NativeTargetSpec = {
   defaultLinker: "clang", defaultLinkerArgs: [], runtimeSystemLibraries: ["System"],
   linkerTargetTriple: "x86_64-apple-macosx14.0.0",
   runtimeCompileDefines: [],
-  supports: { asm: true, obj: true, exe: true, library: false },
+  supports: { asm: true, obj: true, exe: true, library: true },
   helperPackage: DARWIN_X64_HELPER.packageName, helper: DARWIN_X64_HELPER,
   llvmBackend: "X86",
   runtimePackPackage: "@scriptc/runtime-darwin-x64",
@@ -307,10 +309,35 @@ export const WASM32_WASI_TARGET: NativeTargetSpec = {
   runtimePackPackage: "@scriptc/runtime-wasm32-wasi",
 };
 
+export const IOS_ARM64_TARGET: NativeTargetSpec = {
+  ...MACOS_ARM64_TARGET,
+  name: "ios-arm64", llvmTriple: "arm64-apple-ios15.0.0",
+  minimumOs: "15.0", linkerTargetTriple: "aarch64-ios.15.0",
+  supports: { asm: true, obj: true, exe: false, library: true },
+  runtimePackPackage: "@scriptc/runtime-ios-arm64",
+};
+
+export const IOS_SIMULATOR_ARM64_TARGET: NativeTargetSpec = {
+  ...IOS_ARM64_TARGET,
+  name: "ios-simulator-arm64", llvmTriple: "arm64-apple-ios15.0.0-simulator",
+  linkerTargetTriple: "aarch64-ios.15.0-simulator",
+  runtimePackPackage: "@scriptc/runtime-ios-simulator-arm64",
+};
+
+export const ANDROID_ARM64_TARGET: NativeTargetSpec = {
+  ...LINUX_ARM64_GNU_TARGET,
+  name: "android-arm64", llvmTriple: "aarch64-unknown-linux-android26",
+  minimumOs: "Android 26", defaultLinker: "zig", defaultLinkerArgs: ["cc"],
+  linkerTargetTriple: "aarch64-linux-android.26",
+  supports: { asm: true, obj: true, exe: false, library: true },
+  runtimePackPackage: "@scriptc/runtime-android-arm64",
+};
+
 export const NATIVE_TARGETS = [
   MACOS_ARM64_TARGET, MACOS_X64_TARGET, LINUX_X64_GNU_TARGET,
   LINUX_ARM64_GNU_TARGET, WINDOWS_X64_MSVC_TARGET, LINUX_X64_MUSL_TARGET,
   LINUX_ARM64_MUSL_TARGET, WASM32_WASI_TARGET,
+  IOS_ARM64_TARGET, IOS_SIMULATOR_ARM64_TARGET, ANDROID_ARM64_TARGET,
 ] as const;
 
 function detectedLinuxLibc(): LinuxLibc {
@@ -343,9 +370,15 @@ export function nativeHelperForTarget(
 ): NativeHelperSpec | null {
   const host = helperHost(hostPlatform, hostArch, linuxLibc);
   if (host === null) return null;
-  return target.hostHelpers?.[host] ?? (
-    target.platform === hostPlatform && target.architecture === hostArch ? target.helper : null
-  );
+  switch (host) {
+    case "darwin-arm64": return DARWIN_ARM64_HELPER;
+    case "darwin-x64": return DARWIN_X64_HELPER;
+    case "linux-x64-gnu": return LINUX_X64_HELPER;
+    case "linux-arm64-gnu": return LINUX_ARM64_HELPER;
+    case "linux-x64-musl": return LINUX_X64_MUSL_HELPER;
+    case "linux-arm64-musl": return LINUX_ARM64_MUSL_HELPER;
+    case "win32-x64": return WINDOWS_X64_HELPER;
+  }
 }
 
 function nativeHostTarget(
@@ -373,30 +406,31 @@ function requestedTarget(
   raw: string,
   host: NativeTargetSpec | null,
   hostPlatform: NodeJS.Platform,
-  hostArch: string,
-  linuxLibc: LinuxLibc,
 ): NativeTargetSpec | null {
   if (raw === "") return host;
   switch (raw) {
-    case "arm64-apple-macosx14.0.0": return host?.name === "macos-arm64" ? MACOS_ARM64_TARGET : null;
+    case "arm64-apple-macosx14.0.0":
+    case "aarch64-macos": return MACOS_ARM64_TARGET;
     case "x86_64-apple-macosx14.0.0":
-    case "x86_64-apple-macos": return host?.name === "macos-x64" ? MACOS_X64_TARGET : null;
+    case "x86_64-apple-macos":
+    case "x86_64-macos": return MACOS_X64_TARGET;
     case "x86_64-unknown-linux-gnu":
     case "x86_64-linux-gnu":
-    case "x86_64-linux-gnu.2.36": return host?.name === "linux-x64-gnu" ? LINUX_X64_GNU_TARGET : null;
+    case "x86_64-linux-gnu.2.36": return LINUX_X64_GNU_TARGET;
     case "aarch64-unknown-linux-gnu":
     case "aarch64-linux-gnu":
-    case "aarch64-linux-gnu.2.36": return host?.name === "linux-arm64-gnu" ? LINUX_ARM64_GNU_TARGET : null;
+    case "aarch64-linux-gnu.2.36": return LINUX_ARM64_GNU_TARGET;
     case "x86_64-unknown-linux-musl":
-    case "x86_64-linux-musl":
-      return host?.platform === "linux" && host.architecture === "x64" ? LINUX_X64_MUSL_TARGET : null;
+    case "x86_64-linux-musl": return LINUX_X64_MUSL_TARGET;
     case "aarch64-unknown-linux-musl":
-    case "aarch64-linux-musl":
-      return host?.platform === "linux" && host.architecture === "arm64" ? LINUX_ARM64_MUSL_TARGET : null;
+    case "aarch64-linux-musl": return LINUX_ARM64_MUSL_TARGET;
     case "wasm32-wasi":
-    case "wasm32-unknown-wasi":
-      return helperHost(hostPlatform, hostArch, linuxLibc) === null ? null : WASM32_WASI_TARGET;
-    case "x86_64-pc-windows-msvc": return host?.name === "windows-x64-msvc" ? WINDOWS_X64_MSVC_TARGET : null;
+    case "wasm32-unknown-wasi": return WASM32_WASI_TARGET;
+    case "x86_64-windows-gnu":
+    case "x86_64-pc-windows-msvc": return WINDOWS_X64_MSVC_TARGET;
+    case "aarch64-apple-ios": return hostPlatform === "darwin" ? IOS_ARM64_TARGET : null;
+    case "aarch64-apple-ios-simulator": return hostPlatform === "darwin" ? IOS_SIMULATOR_ARM64_TARGET : null;
+    case "aarch64-linux-android": return ANDROID_ARM64_TARGET;
     default: return null;
   }
 }
@@ -411,8 +445,20 @@ export function nativeCodegenTarget(
   linuxLibc: LinuxLibc = detectedLinuxLibc(),
 ): NativeTargetSpec | null {
   const host = nativeHostTarget(hostPlatform, hostArch, hostRelease, linuxLibc);
-  const target = requestedTarget(env["SCRIPTC_TARGET"] ?? "", host, hostPlatform, hostArch, linuxLibc);
-  return target !== null && nativeHelperForTarget(target, hostPlatform, hostArch, linuxLibc) !== null ? target : null;
+  const target = requestedTarget(env["SCRIPTC_TARGET"] ?? "", host, hostPlatform);
+  if (host === null || target === null || nativeHelperForTarget(target, hostPlatform, hostArch, linuxLibc) === null) return null;
+  // Cross ELF links use Zig's target libc. A native clang driver cannot
+  // infer or provide another architecture's CRT and sysroot.
+  if (target.platform === "linux" && target.name !== host.name && target.name !== "android-arm64") {
+    return {
+      ...target, defaultLinker: "zig", defaultLinkerArgs: ["cc"],
+      linkerTargetTriple: `${target.architecture === "x64" ? "x86_64" : "aarch64"}-linux-${target.name.endsWith("musl") ? "musl" : "gnu.2.36"}`,
+    };
+  }
+  if (target.platform === "darwin" && hostPlatform !== "darwin") {
+    return { ...target, defaultLinker: "zig", defaultLinkerArgs: ["cc"], linkerTargetTriple: `${target.architecture === "x64" ? "x86_64" : "aarch64"}-macos.14.0` };
+  }
+  return target;
 }
 
 export function nativeCodegenTargetRefusal(

@@ -3,11 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 import { compile, deserializeModule, validateModule } from "../src/index.js";
-import { emitCModule } from "../src/backend/c/c-emitter.js";
 import { emitLlvmModule } from "../src/backend/llvm/emitter.js";
 import { scalarizeNumericRecords } from "../src/ir/scalar-records.js";
 
-test("both backends scalarize ordinary typed calls while preserving producers with finally", async () => {
+test("LLVM scalarize ordinary typed calls while preserving producers with finally", async () => {
   const dir = await mkdtemp(join(tmpdir(), "scriptc-scalar-record-emission-"));
   try {
     const entry = join(dir, "main.ts");
@@ -38,11 +37,11 @@ render();
     expect(validateModule(out)).toEqual([]);
     const render = out.functions.find((fn) => fn.name === "render")!;
     expect(render.locals.filter((l) => l.type.kind === "record").map((l) => l.name)).toEqual(["g"]);
-    const c = emitCModule(mod);
+
     const llvm = emitLlvmModule(mod);
-    expect(c).not.toMatch(/= sc_f_pair\(/);
+
     expect(llvm).not.toMatch(/call ptr @sc_f_pair\(/);
-    expect(c).toMatch(/= sc_f_guarded\(/);
+
     expect(llvm).toMatch(/call ptr @sc_f_guarded\(/);
   } finally {
     await rm(dir, { recursive: true, force: true });

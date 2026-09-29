@@ -9,7 +9,7 @@ const root = join(import.meta.dirname, "../..");
 const entry = join(root, "tests/fixtures/self-hosting/frontend-collections.ts");
 const sanitize = process.env["SCRIPTC_SAN"] === "1";
 
-for (const backend of ["c", "llvm"] as const) {
+for (const backend of ["llvm"] as const) {
   test(`frontend builtin and package registries execute natively (${backend})`, async () => {
     const directory = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-frontend-collections-"));
     try {

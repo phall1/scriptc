@@ -6902,7 +6902,7 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
       // runs for EFFECT exactly as its statement lowering (JS discards its
       // value), the right operand is the expression's value — a seqExpr.
       // The validator restricts seqExpr statements to straight-line writes
-      // (the C emission point is mid-expression), so a left operand whose
+      // (the lowering point is mid-expression), so a left operand whose
       // statement lowering needs real control flow keeps a pointed fence
       // instead of tripping the validator downstream.
       const effect = lowerer.lowerExprStatement(expr.left);

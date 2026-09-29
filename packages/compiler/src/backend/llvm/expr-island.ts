@@ -29,7 +29,7 @@ export function emitJsMarshal(host: LlvmEmitterContext, e: IrExpr & { kind: "jsM
         // data kinds only — boxed functions/handles/promises throw the
         // catchable TypeError in the runtime, and a wrapped island value
         // unwraps to the SAME engine value (the identity round trip).
-        // The C emitter's rule, mirrored.
+        // Transfer ownership to the island runtime.
         return simple("scr_jsval_from_dyn", "ptr", true);
       case "bytes":
         // A typed array crossing IN: a COPY (the boundary's copy stance).
@@ -41,7 +41,7 @@ export function emitJsMarshal(host: LlvmEmitterContext, e: IrExpr & { kind: "jsM
         // A STATIC promise crossing IN: a real engine thenable settled
         // when the scriptc promise settles (the async-callback return
         // bridge). from_promise takes ownership of a +1 — retain past
-        // the borrowed frame temp. The C emitter's rule, mirrored.
+        // the borrowed frame temp. Transfer ownership to the island runtime.
         const tag = islandPromisePayloadTag(e.value.type.inner);
         if (!tag) throw new InternalCompilerError("llvm emitter bug: jsMarshal of a promise outside the bridge payload domain");
         const tagN = { void: 0, f64: 1, bool: 2, string: 3, jsval: 4, jsvalArr: 5 }[tag];
@@ -64,7 +64,7 @@ export function emitJsMarshal(host: LlvmEmitterContext, e: IrExpr & { kind: "jsM
           ? host.islandAdapter(fn.params.length, fn.ret.kind as "void" | "jsval" | "f64" | "bool" | "string")
           : host.islandTypedAdapter(fn);
         host.declare(`declare ptr @scr_jsval_from_closure(ptr, i32, ptr)`);
-        // ISLAND-REST closures encode a NEGATIVE arity (the C emitter's
+        // ISLAND-REST closures encode a NEGATIVE arity (the runtime ABI’s
         // rule): the wrapper hands the trailing slot the engine array of
         // the surplus arguments.
         const arity = fn.rest === true && fn.restAbi === "jsval" ? -fn.params.length : fn.params.length;
@@ -291,7 +291,7 @@ export function emitJsOp(host: LlvmEmitterContext, e: IrExpr & { kind: "jsOp" })
         });
       }
       case "defineGetter": {
-        // Getter completion for an island literal (the C emitter's
+        // Getter completion for an island literal (the runtime ABI’s
         // scr_jsval_define_getter shape): defines key a(1) on obj a(0)
         // as an engine getter invoking a(2); answers the object (+1).
         host.declare(`declare ptr @scr_jsval_define_getter(ptr, ptr, ptr)`);
@@ -309,7 +309,7 @@ export function emitJsOp(host: LlvmEmitterContext, e: IrExpr & { kind: "jsOp" })
       case "instanceOf": {
         // JS_IsInstanceOf through the engine: 1 true, 0 false, -1 threw
         // (Symbol.hasInstance can raise) — the fallible pattern, result
-        // narrowed to bool by comparing against 1 (the C emitter's shape).
+        // narrowed to bool by comparing against 1.
         host.declare(`declare i32 @scr_jsval_instance_of(ptr, ptr)`);
         return fallible(() => {
           const r = B.tmp();

@@ -43,7 +43,7 @@ test("library identity source stays private and cannot overwrite a sidecar", asy
         profile_format: 1,
         name: "cli-library-output",
         entry: "lib.ts",
-        emission: "c",
+        emission: "llvm",
         abi: {
           prefix: "clo_",
           init_symbol: "clo_init",
@@ -64,12 +64,12 @@ test("library identity source stays private and cannot overwrite a sidecar", asy
         },
       }, null, 2)}\n`,
     );
-    const runBuild = async (keepC = false, emitIr = false): Promise<{ stderr: string }> => {
+    const runBuild = async (keepLlvm = false, emitIr = false): Promise<{ stderr: string }> => {
       return execFileAsync(
         process.execPath,
         [
           "--import", tsxLoader, cliEntry, "build", "--lib", "--profile", profilePath,
-          ...(keepC ? [] : ["--no-keep-c"]),
+          ...(keepLlvm ? [] : ["--no-keep-llvm"]),
           ...(emitIr ? ["--emit-ir"] : []),
         ],
         {
@@ -83,43 +83,41 @@ test("library identity source stays private and cannot overwrite a sidecar", asy
       );
     };
 
-    // --no-keep-c removes the public program TU, and the identity source is
-    // invocation-private rather than a second caller-visible C artifact.
+    // --no-keep-llvm removes the public program TU, and the identity source is
+    // invocation-private rather than a second caller-visible LLVM artifact.
     await writeProfile("contract.json");
     await runBuild();
     expect((await readdir(outDir)).sort()).toEqual(["contract.json", "lib.lib.a"]);
 
     // A single-source comment-only edit takes the semantic cache path. Its
-    // restored public TU must match a forced miss before --no-keep-c removes
+    // restored public TU must match a forced miss before --no-keep-llvm removes
     // it again.
     await writeFile(
       join(dir, "lib.ts"),
       `/* harmless rebuild comment */ ${await readFile(join(dir, "lib.ts"), "utf8")}`,
     );
     await runBuild(true);
-    const semanticHitC = await readFile(join(outDir, "lib.lib.c"), "utf8");
+    const semanticHitLlvm = await readFile(join(outDir, "lib.lib.ll"), "utf8");
     await rm(join(cacheRoot, "early-lib"), { recursive: true, force: true });
     await runBuild(true);
-    expect(await readFile(join(outDir, "lib.lib.c"), "utf8")).toBe(semanticHitC);
+    expect(await readFile(join(outDir, "lib.lib.ll"), "utf8")).toBe(semanticHitLlvm);
     await runBuild();
     expect((await readdir(outDir)).sort()).toEqual(["contract.json", "lib.lib.a"]);
 
-    // A line-shifting edit cannot safely reuse line-only annotations (not even
-    // synthetic byte-zero locations). It must match a forced frontend miss.
+    // A line-shifting edit must preserve the same LLVM artifact as a
+    // forced frontend miss.
     await writeFile(join(dir, "lib.ts"), [
       "// line-shifting rebuild comment",
       await readFile(join(dir, "lib.ts"), "utf8"),
     ].join("\n"));
     await runBuild(true);
-    const shiftedC = await readFile(join(outDir, "lib.lib.c"), "utf8");
+    const shiftedLlvm = await readFile(join(outDir, "lib.lib.ll"), "utf8");
     await rm(join(cacheRoot, "early-lib"), { recursive: true, force: true });
     await runBuild(true);
-    expect(await readFile(join(outDir, "lib.lib.c"), "utf8")).toBe(shiftedC);
+    expect(await readFile(join(outDir, "lib.lib.ll"), "utf8")).toBe(shiftedLlvm);
 
-    // Move to a multi-source graph and seed its cache. Imported trivia is
-    // semantically unchanged too, but cached C annotations cannot be rebased
-    // through the entry-only line table. That shape must take the normal
-    // frontend path and match a forced cache miss.
+    // Imported trivia edits in a multi-source graph must also produce
+    // the same LLVM artifact as a forced frontend miss.
     await writeFile(join(dir, "lib.ts"), (await readFile(join(dir, "lib.ts"), "utf8"))
       .replace(
         "export interface Model",
@@ -132,14 +130,14 @@ test("library identity source stays private and cannot overwrite a sidecar", asy
       await readFile(join(dir, "helper.ts"), "utf8"),
     ].join("\n"));
     await runBuild(true);
-    const fallbackC = await readFile(join(outDir, "lib.lib.c"), "utf8");
+    const savedLlvm = await readFile(join(outDir, "lib.lib.ll"), "utf8");
     await rm(join(cacheRoot, "early-lib"), { recursive: true, force: true });
     await runBuild(true);
-    expect(await readFile(join(outDir, "lib.lib.c"), "utf8")).toBe(fallbackC);
+    expect(await readFile(join(outDir, "lib.lib.ll"), "utf8")).toBe(savedLlvm);
 
     // This name collided with the former fixed `<stem>.lib.identity.c`
     // output. Repeat to exercise the exact early-cache-hit ordering that used
-    // to restore JSON and then overwrite it with generated C.
+    // to restore JSON and then overwrite it with generated LLVM.
     await rm(outDir, { recursive: true, force: true });
     await writeProfile("lib.lib.identity.c");
     await runBuild();

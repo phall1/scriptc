@@ -1,3 +1,7 @@
+import { emitLookupConnect } from "./lib-lookup.js";
+import { emitConnectListener } from "./lib-connect.js";
+import { abiValue, callRuntime, callbackAdapter, callbackType, finishRuntimeCall, nullableReference, ptr } from "./lib-abi.js";
+import { emitTlsLibCall } from "./lib-tls.js";
 /* Focused LLVM library-call emission extracted from emitter.ts. */
 import { InternalCompilerError } from "../../errors.js";
 import { undefinedArmTag } from "../../ir/analysis.js";
@@ -8,6 +12,23 @@ import { f64Lit } from "./common.js";
 import { emitAlwaysThrowLibCall } from "./lib-shared.js";
 
 export function emitNetworkHttpLibCall(host: LlvmEmitterContext, e: LibCallExpr): LlValue {
+    if (["https.createServer", "https.createServerDyn", "https.createServerDynCb", "https.requestAgent", "https.requestAgentCb", "https.requestFn", "https.requestFnCb"].includes(e.fn)) return emitTlsLibCall(host, e);
+    if (e.fn === "net.connectLookup") return emitLookupConnect(host, e);
+    if (e.fn === "http.serverOnConnect") return emitConnectListener(host, e);
+    if (e.fn === "http.reqH2Stream") {
+      const args = e.args.map((arg) => abiValue(host, host.emitExpr(arg)));
+      const value = callRuntime(host, "scr_http_req_h2_stream", "ptr", args);
+      return nullableReference(host, e.type, value, "http2Stream", "undefinedT");
+    }
+    if (e.fn === "http.requestConn" || e.fn === "http.requestConnCb") {
+      const args = e.args.map((arg) => host.emitExpr(arg));
+      host.usesTimers = true;
+      host.moveTemp(args[0]!);
+      const cb = args[6];
+      const handler = cb === undefined ? [ptr(), ptr()] : callbackAdapter(host, cb,
+        callbackType(cb).params.length === 0 ? "scr_http_resp_thunk0" : "scr_http_resp_thunk_res", ["ptr", "ptr"]);
+      return finishRuntimeCall(host, e, "scr_http_request_conn", [...args.slice(0, 6).map((arg) => abiValue(host, arg)), ...handler]);
+    }
     const B = host.B;
     if (e.fn === "net.connectOptsChk") {
       return emitAlwaysThrowLibCall(host, e, "scr_net_connect_opts_chk");
@@ -194,7 +215,7 @@ export function emitNetworkHttpLibCall(host: LlvmEmitterContext, e: LibCallExpr)
       B.line(`call void @${entry}(ptr ${args[0]!.name}, ptr ${args[1]!.name}, i1 ${args[2]!.name})`);
       return { name: "", type: e.type };
     }
-    if (e.fn === "net.serverOnConnection" || e.fn === "http.serverOnTimeout" || e.fn === "http.serverSetTimeoutCb" || e.fn === "http.clientOnSocket") {
+    if (e.fn === "net.serverOnConnection" || e.fn === "net.serverOnSecureConnection" || e.fn === "http.serverOnTimeout" || e.fn === "http.serverSetTimeoutCb" || e.fn === "http.clientOnSocket") {
       const cbIndex = e.fn === "http.serverSetTimeoutCb" ? 2 : 1;
       const cbT = e.args[cbIndex]!.type;
       if (cbT.kind !== "func") throw new InternalCompilerError(`llvm emitter bug: ${e.fn} callback not a func`);
@@ -206,7 +227,7 @@ export function emitNetworkHttpLibCall(host: LlvmEmitterContext, e: LibCallExpr)
         host.declare("declare void @scr_net_server_set_timeout_cb(ptr, double, ptr, ptr)");
         B.line(`call void @scr_net_server_set_timeout_cb(ptr ${args[0]!.name}, double ${args[1]!.name}, ptr ${args[2]!.name}, ptr @${adapter})`);
       } else {
-        const entry = e.fn === "net.serverOnConnection" ? "scr_net_server_on_connection"
+        const entry = e.fn === "net.serverOnSecureConnection" ? "scr_net_server_on_secure_connection" : e.fn === "net.serverOnConnection" ? "scr_net_server_on_connection"
           : e.fn === "http.clientOnSocket" ? "scr_http_client_on_socket" : "scr_net_server_on_timeout";
         host.declare(`declare void @${entry}(ptr, ptr, ptr, i1 zeroext)`);
         B.line(`call void @${entry}(ptr ${args[0]!.name}, ptr ${args[1]!.name}, ptr @${adapter}, i1 ${args[2]!.name})`);

@@ -107,6 +107,7 @@ describe.skipIf(!zigOnPath())("wasm32-wasi differential", () => {
   });
 
   test.each([
+    "4031-event-emitter-long-tuples.ts",
     "2700-wasi-core.ts",
     "1612-cjs-module-globals.cjs",
     "992-fs-roundtrip.ts",
@@ -161,7 +162,7 @@ describe.skipIf(!zigOnPath())("wasm32-wasi differential", () => {
     const result = await compile(entry, { outDir, outPath });
     if (!result.ok) throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
     expect(result.backend).toBe("llvm");
-    expect(result.cPath.endsWith(".ll")).toBe(true);
+    expect(result.llvmPath.endsWith(".ll")).toBe(true);
     expect([...(await readFile(outPath)).subarray(0, 4)]).toEqual([0x00, 0x61, 0x73, 0x6d]);
 
     const node = await run(process.execPath, ["--no-warnings", entry]);
@@ -203,40 +204,6 @@ describe.skipIf(!zigOnPath())("wasm32-wasi differential", () => {
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.code).toBe("SC3002");
       expect(result.diagnostics[0]?.message).toMatch(/does not support library-mode archive builds/);
-    }
-  });
-
-  test("the explicit C backend still emits compact async-free wasm", async () => {
-    const outDir = await mkdtemp("/tmp/scriptc-wasi-c-");
-    const outPath = join(outDir, "program.wasm");
-    const result = await compile(join(repoRoot, "tests/corpus/001-hello.ts"), {
-      outDir,
-      outPath,
-      backend: "c",
-    });
-    if (!result.ok) {
-      throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
-    }
-    expect(result.backend).toBe("c");
-    const wasm = await readFile(outPath);
-    expect(wasmCustomSectionNames(wasm).filter((name) => name.startsWith(".debug"))).toEqual([]);
-    expect(wasm.byteLength).toBeLessThan(256 * 1024);
-  });
-
-  test("the explicit C backend diagnoses coroutine-dependent programs", async () => {
-    const outDir = await mkdtemp("/tmp/scriptc-wasi-c-refusal-");
-    const result = await compile(join(repoRoot, "tests/corpus/1020-async-basics.ts"), {
-      outDir,
-      outPath: join(outDir, "program.wasm"),
-      backend: "c",
-    });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.code).toBe("SC3001");
-      expect(result.diagnostics[0]?.message).toMatch(
-        /c backend does not support an async function .* for wasm32-wasi; use --backend llvm/,
-      );
     }
   });
 
@@ -380,7 +347,7 @@ describe.skipIf(!zigOnPath())("wasm32-wasi differential", () => {
       "--import", loader,
       join(repoRoot, "packages/cli/src/main.ts"),
       "run", entry,
-      "--no-keep-c",
+      "--no-keep-llvm",
       "-o", join(outDir, "program.wasm"),
     ]);
     const node = await execFileAsync(process.execPath, [entry]);

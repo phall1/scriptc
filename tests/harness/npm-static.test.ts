@@ -87,7 +87,7 @@ async function buildStatic(entry: string, npmStatic: string[] | "auto"): Promise
     // Pinned: the suite pins --npm-static's FRONTEND frontier (coverage
     // numbers, fence sites); the backend lane is held fixed so those pins
     // move only when the frontend moves.
-    backend: "c",
+    backend: "llvm",
   });
   if (!result.ok) {
     throw new Error(
@@ -99,7 +99,7 @@ async function buildStatic(entry: string, npmStatic: string[] | "auto"): Promise
 }
 
 describe(`npm-static pilots${sanitize ? " (sanitized)" : ""}`, () => {
-  test.each(["c", "llvm"] as const)("renderer values and callbacks compile from shipped JavaScript (%s)", async (backend) => {
+  test.each(["llvm"] as const)("renderer values and callbacks compile from shipped JavaScript (%s)", async (backend) => {
     const dir = mkdtempSync(join(tmpdir(), "scriptc-renderer-values-"));
     try {
       const pkg = join(dir, "node_modules", "renderer-values");
@@ -130,7 +130,7 @@ describe(`npm-static pilots${sanitize ? " (sanitized)" : ""}`, () => {
 
   test.each(["stored-native-builtins.js", "stored-object-helpers.js", "renderer-specializations.js", "renderer-export-dictionaries.js",
     "fresh-array-union-layout.js", "async-backend-factory.mjs", "destructure-inferred-row-defaults.js", "object-from-checked-entries.js", "regex-checked-storage.js", "set-checked-methods.js", "frozen-checked-dictionaries.mjs", "checked-renderer-defaults.js"].flatMap((name) =>
-    (["c", "llvm"] as const).map((backend) => ({ name, backend })),
+    (["llvm"] as const).map((backend) => ({ name, backend })),
   ))("renderer startup $name compiles from shipped JavaScript ($backend)", async ({ name, backend }) => {
     const dir = mkdtempSync(join(tmpdir(), "scriptc-renderer-startup-"));
     try {
@@ -157,7 +157,7 @@ describe(`npm-static pilots${sanitize ? " (sanitized)" : ""}`, () => {
     }
   });
 
-  test.each(["c", "llvm"] as const)("bundled class aliases preserve declared methods and callback fields (%s)", async (backend) => {
+  test.each(["llvm"] as const)("bundled class aliases preserve declared methods and callback fields (%s)", async (backend) => {
     const entry = join(pilotRoot, "bundled-methods-cli.ts");
     const { coverage } = analyze(entry, { npmStatic: "auto" });
     expect(coverage.npmStatic).toEqual([{ package: "bundled-methods", status: "static" }]);
@@ -193,7 +193,7 @@ describe(`npm-static pilots${sanitize ? " (sanitized)" : ""}`, () => {
     }
   });
 
-  test.each(["c", "llvm"] as const)("untyped package methods preserve virtual overrides (%s)", async (backend) => {
+  test.each(["llvm"] as const)("untyped package methods preserve virtual overrides (%s)", async (backend) => {
     const entry = join(pilotRoot, "virtual-classes-cli.ts");
     const { coverage } = analyze(entry, { npmStatic: "auto" });
     expect(coverage.npmStatic).toEqual([{ package: "virtual-classes", status: "static" }]);
@@ -208,7 +208,7 @@ describe(`npm-static pilots${sanitize ? " (sanitized)" : ""}`, () => {
     expect(nativeRes.exitCode).toBe(nodeRes.exitCode);
   });
 
-  test.each(["c", "llvm"] as const)("a package's literal createRequire calls compile without an engine (%s)", async (backend) => {
+  test.each(["llvm"] as const)("a package's literal createRequire calls compile without an engine (%s)", async (backend) => {
     const entry = join(pilotRoot, "module-loader-cli.ts");
     const { coverage } = analyze(entry, { npmStatic: "auto" });
     expect(coverage.npmStatic).toEqual([{ package: "module-loader", status: "static" }]);
@@ -273,7 +273,7 @@ describe(`npm-static pilots${sanitize ? " (sanitized)" : ""}`, () => {
     }
   });
 
-  test.each(["c", "llvm"] as const)("bundled CommonJS function imports compile without an engine (%s)", async (backend) => {
+  test.each(["llvm"] as const)("bundled CommonJS function imports compile without an engine (%s)", async (backend) => {
     const entry = join(pilotRoot, "bundled-function-cli.ts");
     const { coverage } = analyze(entry, { npmStatic: "auto" });
     expect(coverage.npmStatic).toEqual([{ package: "bundled-function", status: "static" }]);

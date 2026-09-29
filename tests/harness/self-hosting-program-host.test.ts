@@ -13,7 +13,7 @@ const oracle = join(root, "tests/fixtures/self-hosting/ts7-program-host-node.ts"
 const tempRoot = process.platform === "win32" ? tmpdir() : "/tmp";
 const sanitize = process.env["SCRIPTC_SAN"] === "1";
 
-for (const backend of ["c", "llvm"] as const) {
+for (const backend of ["llvm"] as const) {
   test(`the shared program host runs statically with its own TypeScript server (${backend})`, async () => {
     const dir = mkdtempSync(join(tempRoot, "scriptc-program-host-"));
     try {

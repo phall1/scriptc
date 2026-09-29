@@ -4,7 +4,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import type { FrontendInputExclusions } from "../frontend/input-tracker.js";
 import { compilerReleaseVersion } from "./sidecar.js";
 
-export type CacheBackend = "c" | "llvm";
+export type CacheBackend = "llvm";
 
 interface CacheOutputOptions {
   entryPath: string;
@@ -13,8 +13,7 @@ interface CacheOutputOptions {
 }
 
 export interface CacheOutputPaths {
-  cPath: string;
-  alternateCPath: string;
+  llvmPath: string;
   irPath: string;
 }
 
@@ -54,8 +53,7 @@ export function outputPaths(
 ): CacheOutputPaths {
   const stem = basename(options.entryPath).replace(/\.(ts|mts|cts|js|mjs|cjs)$/, "") + stemSuffix;
   return {
-    cPath: join(options.outDir, `${stem}.${backend === "llvm" ? "ll" : "c"}`),
-    alternateCPath: join(options.outDir, `${stem}.${backend === "llvm" ? "c" : "ll"}`),
+    llvmPath: join(options.outDir, `${stem}.ll`),
     irPath: join(options.outDir, `${stem}.ir.json`),
   };
 }
@@ -68,8 +66,7 @@ export function frontendOutputExclusions(
 ): FrontendInputExclusions {
   const paths = outputPaths(options, backend, stemSuffix);
   const outputArtifacts = [
-    paths.cPath,
-    paths.alternateCPath,
+    paths.llvmPath,
     paths.irPath,
     ...additionalPaths,
   ].map((path) => resolve(path));
@@ -114,7 +111,7 @@ export function validNativeFeatures<T extends { backend: CacheBackend }>(
 ): value is T {
   if (value === null || typeof value !== "object") return false;
   const native = value as Partial<T>;
-  return (native.backend === "c" || native.backend === "llvm") &&
+  return native.backend === "llvm" &&
     booleanKeys.every((key) => typeof native[key] === "boolean") &&
     validAdditional(native);
 }

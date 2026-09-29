@@ -10,8 +10,8 @@ export function parseNativeArguments(args: readonly string[], defaultToolchain: 
   let toolchainPath = defaultToolchain;
   let entryPath = "";
   let outputPath = "";
-  let backend: "c" | "llvm" = "llvm";
-  let outputKind: "exe" | "obj" | "c" | "llvm" = "exe";
+  let backend = "llvm" as const;
+  let outputKind: "exe" | "obj" | "llvm" = "exe";
   let optimization: "release" | "dev" = "release";
   let strip = false;
   let help = false;
@@ -37,10 +37,10 @@ export function parseNativeArguments(args: readonly string[], defaultToolchain: 
       else if (name === "--ffi") ffiProfilePath = value;
       else if (name === "--npm-static") npmStatic = value === "auto" ? "auto" : value.split(",");
       else if (name === "--backend") {
-        if (value !== "c" && value !== "llvm") throw new Error("--backend must be c or llvm");
+        if (value !== "llvm") throw new Error("LLVM is the only backend");
         backend = value;
       } else if (name === "--emit") {
-        if (value !== "exe" && value !== "obj" && value !== "c" && value !== "llvm") throw new Error("--emit must be exe, obj, c, or llvm");
+        if (value !== "exe" && value !== "obj" && value !== "llvm") throw new Error("--emit must be exe, obj, or llvm");
         outputKind = value;
       }
       continue;
@@ -63,8 +63,8 @@ export function parseNativeArguments(args: readonly string[], defaultToolchain: 
 
 export const NATIVE_HELP = `Usage: scriptc-native build <entry.ts> -o <output> [options]
 
-  --backend <llvm|c>       Code generation backend (default: llvm)
-  --emit <exe|obj|c|llvm>  Output artifact (default: exe)
+  --backend <llvm>       Code generation backend (default: llvm)
+  --emit <exe|obj|llvm>  Output artifact (default: exe)
   --dev                   Disable optimization and include debug information
   --strip                 Strip executable symbols
   --ffi <profile.json>    Native FFI bindings and link inputs

@@ -9,7 +9,7 @@ const fixture = join(root, "tests/ffi");
 const sanitize = process.env["SCRIPTC_SAN"] === "1";
 const scalarClasses = ["f32", "i8", "u16", "i16"] as const;
 
-describe.each(["c", "llvm"] as const)("native FFI scalar widths, %s", (backend) => {
+describe.each(["llvm"] as const)("native FFI scalar widths, %s", (backend) => {
   test("matches Node conversions through native calls, callbacks, and mixed register/stack arguments without an engine", async () => {
     const outDir = join(root, "node_modules/.cache/scriptc-tests/ffi-scalars", sanitize ? "san" : "plain", backend);
     mkdirSync(outDir, { recursive: true });

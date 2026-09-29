@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 import { compile } from "../src/index.js";
 
-test.each(["c", "llvm"] as const)("native builtin values refuse unimplemented modules and exports (%s)", async (backend) => {
+test.each(["llvm"] as const)("native builtin values refuse unimplemented modules and exports (%s)", async (backend) => {
   const dir = mkdtempSync("/tmp/scriptc-builtin-values-");
   try {
     const entry = join(dir, "main.js");

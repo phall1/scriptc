@@ -11,7 +11,7 @@
  *   the engine's stack check on every entry. Unbounded recursion in an
  *   island eval must surface as a catchable RangeError — a crash here
  *   means the re-anchor regressed.
- * - The static/dynamic fence: --dynamic must not change emitted C, and a
+ * - The static/dynamic fence: --dynamic must not change emitted LLVM, and a
  *   static binary must stay in its size class (the ~620KB engine must never
  *   leak into default builds).
  *
@@ -40,7 +40,7 @@ interface RunResult {
 
 interface BuildResult {
   binaryPath: string;
-  cPath: string;
+  llvmPath: string;
 }
 
 /** Compiles an inline program (island tests default to --dynamic). */
@@ -66,10 +66,7 @@ async function build(
     outDir,
     sanitize: san,
     dynamic,
-    // Pinned: the static/dynamic fence and the size classes below are
-    // assertions ON the emitted C and the C-lane binary — this suite
-    // measures the C backend's artifact by design.
-    backend: "c",
+    backend: "llvm",
   });
   if (!result.ok) {
     throw new Error(
@@ -77,7 +74,7 @@ async function build(
         result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"),
     );
   }
-  return { binaryPath: result.binaryPath, cPath: result.cPath };
+  return { binaryPath: result.binaryPath, llvmPath: result.llvmPath };
 }
 
 /** Linux ASan prints a once-per-process warning to stderr the first time a
@@ -338,7 +335,7 @@ console.log(__island_eval("Promise.reject(new TypeError('island second')); 'arme
     expect(r.stderr).toBe("Unhandled promise rejection: RangeError: static first\n");
   });
 
-  test("--dynamic does not change emitted C for island-free programs", async () => {
+  test("--dynamic does not change emitted LLVM for island-free programs", async () => {
     const source = `function greet(who: string): string {
   return "hello " + who;
 }
@@ -351,7 +348,7 @@ console.log(greet("world"), 6 * 7);
       build("same-c", source, { dynamic: true }),
     ]);
     const body = (r: BuildResult) =>
-      readFileSync(r.cPath, "utf8").replaceAll(dirname(r.cPath), "OUTDIR");
+      readFileSync(r.llvmPath, "utf8").replaceAll(dirname(r.llvmPath), "OUTDIR");
     expect(body(dyn)).toBe(body(stat));
   });
 

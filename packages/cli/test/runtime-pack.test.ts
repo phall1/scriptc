@@ -65,24 +65,16 @@ describe.runIf(supported)("precompiled runtime executable builds", () => {
     expect(await readFile(output)).toEqual(firstExecutable);
   });
 
-  test("the object-plus-runtime-pack route remains live with the legacy C pipeline disabled", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "scriptc-runtime-pack-no-legacy-"));
+  test("library builds use LLVM and precompiled runtime objects even with an unusable C compiler", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "scriptc-library-pack-cli-"));
     dirs.push(dir);
-    const entry = join(dir, "main.ts");
-    const output = join(dir, "program");
-    await writeFile(entry, 'console.log("no legacy C");\n');
-    await execFileAsync(
-      process.execPath,
-      ["--import", tsxLoader, cliEntry, "build", entry, "-o", output],
-      {
-        env: {
-          ...process.env,
-          SCRIPTC_NO_CACHE: "1",
-          SCRIPTC_LEGACY_C_PIPELINE: "0",
-        },
-      },
-    );
-    await expect(execFileAsync(output, [], { encoding: "utf8" }))
-      .resolves.toMatchObject({ stdout: "no legacy C\n" });
+    const entry = join(dir, "library.ts"), profile = join(dir, "profile.json"), output = join(dir, "library.a");
+    await writeFile(entry, 'export function answer(): number { return 42; }\n');
+    const template = JSON.parse(await readFile(join(repoRoot, "tests/library-mode/scalars/profile.json"), "utf8"));
+    await writeFile(profile, JSON.stringify({ ...template, entry, emission: "llvm", exports: [{ export: "answer", symbol: "kt_answer", params: [], returns: "f64" }] }));
+    await execFileAsync(process.execPath, ["--import", tsxLoader, cliEntry, "build", "--lib", "--profile", profile, "-o", output], {
+      env: { ...process.env, SCRIPTC_NO_CACHE: "1", SCRIPTC_CC: join(dir, "missing-c-compiler") },
+    });
+    expect((await execFileAsync("ar", ["t", output])).stdout).toContain("scr_library.o");
   });
 });

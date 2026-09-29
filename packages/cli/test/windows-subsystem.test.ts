@@ -81,8 +81,7 @@ test.skipIf(process.platform !== "win32" && process.env["SCRIPTC_WIN_SUBSYSTEM"]
           ZIG_GLOBAL_CACHE_DIR: join(dir, "zig-cache"),
         };
     const llvmOut = join(dir, "llvm.exe");
-    const cOut = join(dir, "c.exe");
-    const build = async (backend: "llvm" | "c", out: string, subsystem?: "console" | "gui") => {
+    const build = async (backend: "llvm", out: string, subsystem?: "console" | "gui") => {
       await cli([
         "build", entry, `--backend=${backend}`, "-o", out,
         ...(subsystem === undefined ? [] : [`--windows-subsystem=${subsystem}`]),
@@ -93,14 +92,8 @@ test.skipIf(process.platform !== "win32" && process.env["SCRIPTC_WIN_SUBSYSTEM"]
     expect(await build("llvm", llvmOut, "gui")).toBe(2);
     expect(await build("llvm", llvmOut)).toBe(3);
     expect(await build("llvm", llvmOut, "console")).toBe(3);
-    expect(await build("c", cOut, "gui")).toBe(2);
-    const cSource = join(dir, "from-c.c");
-    const fromCOut = join(dir, "from-c.exe");
-    await writeFile(cSource, "int main(void) { return 0; }\n");
-    await cli(["build", cSource, "--from-c", "--windows-subsystem=gui", "-o", fromCOut], env);
-    expect(await peSubsystem(fromCOut)).toBe(2);
     if (process.platform === "win32") {
-      expect((await execFileAsync(cOut)).stdout.trim()).toBe("subsystem");
+      expect((await execFileAsync(llvmOut)).stdout.trim()).toBe("subsystem");
     }
   },
   180_000,

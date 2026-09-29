@@ -54,8 +54,9 @@ const corpusDir = join(repoRoot, "tests/corpus");
 const cacheDir = join(repoRoot, "node_modules/.cache/scriptc-tests");
 const target = process.env["SCRIPTC_WIN_TARGET"] ?? "x86_64-windows-gnu";
 const host = process.env["SCRIPTC_WIN_HOST"] ?? "windows-dev";
-const laneDirWin = "C:\\Users\\rdp\\work\\scriptc-lane"; // remote commands (cmd.exe)
-const laneDirScp = "C:/Users/rdp/work/scriptc-lane"; // scp destinations
+const laneNameId = `scriptc-llvm-${process.pid}-${Date.now()}`;
+const laneDirWin = `C:\\Users\\rdp\\work\\${laneNameId}`; // remote commands (cmd.exe)
+const laneDirScp = `C:/Users/rdp/work/${laneNameId}`; // scp destinations
 
 /* ssh connection multiplexing: one master connection per run, every scp/ssh
  * rides it (~0.1s per op instead of ~0.4s). The control socket lives in the
@@ -331,9 +332,7 @@ async function crossCompile(file: string): Promise<string> {
   const outDir = join(cacheDir, key);
   mkdirSync(outDir, { recursive: true });
   const outPath = join(outDir, `${laneName(file)}.exe`);
-  // Pinned "c" here and at every compile below: the Windows lane is a
-  // C-reference suite — the cross-compile story is the C backend's.
-  const result = await compile(file, { outPath, outDir, dynamic: wantsDynamic(file), backend: "c" });
+  const result = await compile(file, { outPath, outDir, dynamic: wantsDynamic(file), backend: "llvm" });
   if (!result.ok) {
     throw new Error(
       "corpus program failed to cross-compile:\n" +
@@ -470,7 +469,7 @@ async function shipFixture(c: { name: string; entry: string }): Promise<void> {
   const key = hash.update("windows\0").update(target).digest("hex").slice(0, 16);
   const outDir = join(cacheDir, key);
   mkdirSync(outDir, { recursive: true });
-  const result = await compile(c.entry, { outPath: join(outDir, `${c.name}.exe`), outDir, backend: "c" });
+  const result = await compile(c.entry, { outPath: join(outDir, `${c.name}.exe`), outDir, backend: "llvm" });
   if (!result.ok) {
     throw new Error(
       "fixture failed to cross-compile:\n" +
@@ -744,7 +743,7 @@ describe.skipIf(!enabled)(`windows differential (${target})`, () => {
       const key = hash.update("windows-fetch\0").update(target).digest("hex").slice(0, 16);
       const outDir = join(cacheDir, key);
       mkdirSync(outDir, { recursive: true });
-      const result = await compile(c.entry, { outPath: join(outDir, `${c.name}.exe`), outDir, dynamic: true, backend: "c" });
+      const result = await compile(c.entry, { outPath: join(outDir, `${c.name}.exe`), outDir, dynamic: true, backend: "llvm" });
       if (!result.ok) {
         throw new Error(
           "fetch fixture failed to cross-compile:\n" +

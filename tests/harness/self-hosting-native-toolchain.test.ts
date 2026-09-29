@@ -28,7 +28,7 @@ test("native toolchain configuration, staging and helper validation are static",
   expect(coverage.stats.functionsSkipped).toBe(0);
 });
 
-for (const backend of ["c", "llvm"] as const) {
+for (const backend of ["llvm"] as const) {
   test(`native toolchain integrity and failure behavior match Node (${backend})`, async () => {
     const directory = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-native-integrity-"));
     const target = nativeCodegenTarget()!;

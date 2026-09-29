@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 import { compile, deserializeModule } from "../src/index.js";
-import { emitCModule } from "../src/backend/c/c-emitter.js";
 import { emitLlvmModule } from "../src/backend/llvm/emitter.js";
 
 test("numeric remainder emits strict LLVM frem and keeps exponentiation on pow", async () => {
@@ -28,7 +27,5 @@ console.log(remainder(-9.5, 8), constants(17.25), power(2, 3));
     expect(ll.match(/ = frem double /g)).toHaveLength(3);
     expect(ll).not.toContain("@fmod");
     expect(ll).toContain("call double @pow(");
-    // The C backend remains on libm with the same operand expressions.
-    expect(emitCModule(mod).match(/fmod\(/g)).toHaveLength(3);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });

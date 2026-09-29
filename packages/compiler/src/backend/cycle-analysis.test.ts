@@ -1,7 +1,6 @@
 import { expect, test } from "vitest";
 import { DYN, F64, STRING, VOID, RUNTIME_EMITTER_CLASS, arrayOf, funcOf, mapOf, setOf, type IrModule, type IrRecordShape, type IrType } from "../ir/ir.js";
 import { computeTraced } from "./cycle-analysis.js";
-import { CEmitter } from "./c/c-emitter.js";
 import { computeTraced as llvmTraced } from "./llvm/shapes.js";
 
 const loc = { file: "cycles.ts", start: 0, end: 1 };
@@ -17,9 +16,6 @@ function check(mod: IrModule, shapes: string[], unions: string[] = []): void {
   expect([...actual.shapes].sort()).toEqual(shapes.sort());
   expect([...actual.unions].sort()).toEqual(unions.sort());
   expect(llvmTraced(mod)).toEqual(actual);
-  const c = new CEmitter(mod);
-  expect(c.tracedShapes).toEqual(actual.shapes);
-  expect(c.tracedUnions).toEqual(actual.unions);
   expect(mod).toEqual(before);
 }
 

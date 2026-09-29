@@ -21,7 +21,7 @@ const vendorRoot = join(runtimeRoot, "vendor");
 const outputRoot = join(packageRoot, "artifacts");
 const manifestPath = join(packageRoot, "runtime-pack.json");
 
-if (process.platform !== "darwin" || process.arch !== "arm64") {
+if (process.env.SCRIPTC_BUILD_CROSS !== "1" && (process.platform !== "darwin" || process.arch !== "arm64")) {
   process.stdout.write("@scriptc/runtime-darwin-arm64: skipped on this host\n");
   process.exit(0);
 }
@@ -101,9 +101,10 @@ async function build() {
     const flavors = {};
     for (const [flavor, flavorSpec] of Object.entries(RUNTIME_PACK_MATRIX.flavors)) {
       const units = [];
-      for (const unit of RUNTIME_PACK_MATRIX.runtime_units) {
+      for (const unit of flavorSpec.runtime_units ?? RUNTIME_PACK_MATRIX.runtime_units) {
         const variants = [];
-        for (const variant of unit.variants) {
+        for (const baseVariant of unit.variants) {
+          const variant = { ...baseVariant, defines: [...(flavorSpec.defines ?? []), ...baseVariant.defines] };
           const variantName = variant.id === "default" ? "default" : variant.id;
           const output = join(
             stagedOutputRoot,
@@ -188,7 +189,7 @@ async function build() {
       },
       macros: {
         executable: ["SCR_DYNAMIC", "SCR_TEXT_DECODER_LEGACY"],
-        excluded: ["SCR_LIB", "SCR_THREAD_INSTANCES", "SCR_RC_AUDIT", "SCR_ASAN_FIBERS"],
+        excluded: ["SCR_RC_AUDIT", "SCR_ASAN_FIBERS"],
         sanitizer: "external-toolchain-required",
       },
       flavors,

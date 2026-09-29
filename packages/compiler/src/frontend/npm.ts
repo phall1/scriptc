@@ -16,7 +16,7 @@
  * ts.preProcessFile silently drops), dynamic import() of string literals,
  * and CommonJS require() calls — never a regex.
  *
- * Every reached module's SOURCE is embedded into the emitted C as a static
+ * Every reached module's SOURCE is embedded into the emitted LLVM as a static
  * string keyed by its REALPATH — one physical module embeds once, however
  * many symlink aliases reach it; scr_island.c serves the engine's module
  * loader (and a CommonJS require shim) from that map, so binaries never

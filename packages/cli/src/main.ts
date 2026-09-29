@@ -3,8 +3,7 @@ import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { analyze, compile, compileExternalC, compileLibrary, isExactExternalTypeSpecifier, renderDiagnostics, renderCoverage, resolveProvenanceSources, setProvenanceSources, sourceTargetPlatform, warmNativeCaches, type NativeCacheWarmProfile } from "@scriptc/compiler";
-import { LEGACY_C_EXECUTABLE_WARNING, shouldWarnLegacyCExecutable } from "./legacy-c-warning.js";
+import { analyze, compile, compileLibrary, isExactExternalTypeSpecifier, renderDiagnostics, renderCoverage, resolveProvenanceSources, setProvenanceSources, sourceTargetPlatform, warmNativeCaches, type NativeCacheWarmProfile } from "@scriptc/compiler";
 import { resolveOutputOptions } from "./output-options.js";
 import { selectOutputPaths } from "./paths.js";
 import { CLI_OPTIONS, USAGE } from "./usage.js";
@@ -71,7 +70,7 @@ async function main(): Promise<number> {
   const [command, inputArg] = positionals;
   if (command === "cache") {
     if (inputArg !== "warm") fail(`unknown cache command "${inputArg ?? ""}" (supported: warm)\n\n${USAGE}`);
-    if (values.lib || values.dynamic || values.backend !== undefined || values.emit !== undefined || values.print !== undefined || values["from-c"] || values.ffi !== undefined || values.profile !== undefined || values.strip || values["windows-subsystem"] !== undefined || (values["npm-static"] ?? []).length > 0 || values["provenance-sources"] || externalTypeArgs.length > 0 || values.out !== undefined || values["emit-ir"] || !values["keep-c"]) {
+    if (values.lib || values.dynamic || values.backend !== undefined || values.emit !== undefined || values.print !== undefined || values.ffi !== undefined || values.profile !== undefined || values.strip || values["windows-subsystem"] !== undefined || (values["npm-static"] ?? []).length > 0 || values["provenance-sources"] || externalTypeArgs.length > 0 || values.out !== undefined || values["emit-ir"] || !values["keep-llvm"]) {
       fail(`scriptc cache warm takes only native optimization/sanitizer options and profile names\n\n${USAGE}`);
     }
     const optimization = values.optimization;
@@ -140,7 +139,7 @@ async function main(): Promise<number> {
       process.stderr.write(`\n${n} error${n === 1 ? "" : "s"}.\n`);
       return 1;
     }
-    if (!values["keep-c"]) rmSync(result.cPath, { force: true });
+    if (!values["keep-llvm"]) rmSync(result.llvmPath, { force: true });
     process.stdout.write(`${result.archivePath}\n`);
     // The contract sidecar rides the same invocation when the profile
     // declares one — name it so the embedder's tooling knows where to look.
@@ -197,8 +196,8 @@ async function main(): Promise<number> {
     externalTypes[specifier] = declarationPath;
   }
   const ffiProfilePath = values.ffi !== undefined ? resolve(values.ffi) : undefined;
-  if (values.backend !== undefined && values.backend !== "c" && values.backend !== "llvm") {
-    fail(`unknown backend "${values.backend}" (supported: c, llvm)\n\n${USAGE}`);
+  if (values.backend !== undefined && values.backend !== "llvm") {
+    fail(`unknown backend "${values.backend}" (supported: llvm)\n\n${USAGE}`);
   }
   const optimization = values.optimization;
   if (optimization !== undefined && optimization !== "release" && optimization !== "dev") {
@@ -219,8 +218,7 @@ async function main(): Promise<number> {
           : { emit: values.emit ?? "obj" }),
         emitIr: values["emit-ir"],
         ...(values.backend === undefined ? {} : { backend: values.backend }),
-        fromC: values["from-c"],
-        keepC: values["keep-c"],
+        keepLlvm: values["keep-llvm"],
         sanitize: values.sanitize,
         ...(values.optimization === undefined ? {} : { optimization: values.optimization }),
         strip: values.strip,
@@ -275,35 +273,8 @@ async function main(): Promise<number> {
   }
   const { outDir, outPath } = selectOutputPaths(input, output.cliOutputKind, values.out);
 
-  // SCRIPTC_CC remains a migration escape hatch for explicit C, sanitizer,
-  // and comparison builds. The normal LLVM executable route is controlled by
-  // SCRIPTC_LINKER, which receives objects and archives only.
-  if (shouldWarnLegacyCExecutable({
-    executable: output.outputKind === "exe",
-    fromC: values["from-c"],
-    backend: values.backend,
-    sanitize: values.sanitize,
-  })) {
-    process.stderr.write(LEGACY_C_EXECUTABLE_WARNING);
-  }
-
   let nativeLinkInfo: object | undefined;
   const build = async (): Promise<string> => {
-    if (values["from-c"]) {
-      if (ffiProfilePath !== undefined) {
-        fail("--ffi is a TypeScript/JavaScript compiler feature and cannot be combined with --from-c");
-      }
-      await compileExternalC({
-        cPath: input,
-        outPath,
-        sanitize: values.sanitize,
-        dynamic: values.dynamic,
-        ...(optimization !== undefined ? { optimization } : {}),
-        ...(values.strip ? { strip: true } : {}),
-        ...(windowsSubsystem !== undefined ? { windowsSubsystem } : {}),
-      });
-      return outPath;
-    }
     const result = await compile(input, {
       outPath,
       outDir,
@@ -326,16 +297,8 @@ async function main(): Promise<number> {
       process.stderr.write(`\n${n} error${n === 1 ? "" : "s"}.\n`);
       throw new CliExit(1);
     }
-    // The lane-change note: the ONLY case where silence would be dishonest
-    // is the default lane quietly building through C — one stderr line
-    // names the refusal. A successful LLVM build is the documented default
-    // (and the kept .ll next to the binary is the durable record), and an
-    // explicit --backend was the user's own choice — neither gets a line.
     if (result.artifact.kind === "exe") {
-      if (result.artifact.llvmRefusal !== undefined) {
-        process.stderr.write(`scriptc: backend c (llvm refused: ${result.artifact.llvmRefusal})\n`);
-      }
-      if (!values["keep-c"]) rmSync(result.artifact.translationUnitPath, { force: true });
+      if (!values["keep-llvm"]) rmSync(result.artifact.translationUnitPath, { force: true });
     } else if (result.artifact.kind === "obj") {
       nativeLinkInfo = result.artifact.nativeLinkInfo;
     }

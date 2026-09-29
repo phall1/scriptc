@@ -151,10 +151,7 @@ async function buildDriver(name: string, entrySource: (rel: string) => string): 
   writeFileSync(join(dir, "tsconfig.json"), DRIVER_TSCONFIG);
   const binary = join(outDir, "program");
   mkdirSync(outDir, { recursive: true });
-  // Deliberately NO backend pin: the acceptance build is flagless-user-
-  // shaped, so it rides the release default — today the npm embedding
-  // refuses the LLVM tier and the build falls back to the C backend
-  // transparently; this suite staying green IS the fallback acceptance.
+  // Exercise the default LLVM path used by ordinary dynamic builds.
   const result = await compile(entry, { outPath: binary, outDir, sanitize, dynamic: true });
   if (!result.ok) {
     throw new Error(

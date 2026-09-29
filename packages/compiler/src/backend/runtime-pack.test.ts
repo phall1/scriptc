@@ -536,3 +536,27 @@ describe("runtime pack manifests", () => {
     },
   );
 });
+
+test("library runtime selection requires dedicated packs and never substitutes executable objects", async () => {
+  const f = await fixture();
+  const options = { target: MACOS_ARM64_TARGET, features: BASE, optimization: "release" as const, resolver: () => f.packagePath };
+  await expect(loadRuntimePack({ ...options, mode: "library" })).rejects.toThrow("no library-release flavor");
+  await expect(loadRuntimePack({ ...options, mode: "library-thread" })).rejects.toThrow("no library-thread-release flavor");
+  const unit = f.manifest.flavors.release!.runtime_units[0]!;
+  const variant = unit.variants[0]!;
+  for (const [name, defines] of [
+    ["library-release", ["SCR_LIB"]],
+    ["library-thread-release", ["SCR_LIB", "SCR_THREAD_INSTANCES"]],
+  ] as const) {
+    f.manifest.flavors[name] = { optimization: "-O2", runtime_units: [{ ...unit, variants: [{ ...variant, defines: [...defines] }] }] };
+  }
+  await writeFile(join(f.root, "runtime-pack.json"), JSON.stringify(f.manifest));
+  const threaded = await loadRuntimePack({ ...options, mode: "library-thread" });
+  expect(threaded.runtimeObjects.map((path) => basename(path))).toEqual(["base.o"]);
+  await expect(loadRuntimePack({ ...options, features: { ...BASE, dynamic: true }, mode: "library" })).rejects.toThrow("do not support dynamic");
+  delete f.manifest.flavors.release;
+  delete f.manifest.flavors.dev;
+  await writeFile(join(f.root, "runtime-pack.json"), JSON.stringify(f.manifest));
+  await expect(loadRuntimePack({ ...options, mode: "library-thread" })).resolves.toMatchObject({ runtimeObjects: threaded.runtimeObjects });
+  await expect(loadRuntimePack(options)).rejects.toThrow("no release flavor");
+});

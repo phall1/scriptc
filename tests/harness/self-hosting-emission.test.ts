@@ -42,7 +42,7 @@ test("the production layout and metadata stage lowers statically", () => {
   expect(coverage.stats.functionsSkipped).toBe(0);
 });
 
-for (const backend of ["c", "llvm"] as const) {
+for (const backend of ["llvm"] as const) {
   test(`native LLVM layout and metadata emission (${backend})`, async () => {
     const dir = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-native-emission-"));
     const sanitize = process.env["SCRIPTC_SAN"] === "1";

@@ -13,7 +13,7 @@ async function main(): Promise<void> {
     ...(request.backend === "default" ? {} : { backend: request.backend }),
   });
   writeFileSync(request.result, JSON.stringify(result.ok
-    ? { ok: true, backend: result.backend, llvmRefusal: result.llvmRefusal }
+    ? { ok: true, backend: result.backend }
     : { ok: false, diagnostics: result.diagnostics }));
 }
 

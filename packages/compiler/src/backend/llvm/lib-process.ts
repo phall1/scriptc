@@ -564,8 +564,7 @@ export function emitErrorsEventsLibCall(host: LlvmEmitterContext, e: LibCallExpr
       // (recv, name, cb /moves — the identity/, once, prepend): the
       // listener registers through scr_emitter_on_via with an emitted
       // fixed-arity adapter closure (what emit invokes) and the runtime's
-      // matching va_list shim — the C backend's emitterInvokeThunkFor
-      // split across the C/LLVM boundary. May-throw ('newListener' meta
+      // matching va_list shim across the runtime ABI. May-throw ('newListener' meta
       // listeners run inside).
       const cbT = e.args[2]!.type;
       if (cbT.kind !== "func") throw new InternalCompilerError("llvm emitter bug: emitter.on listener not a func");

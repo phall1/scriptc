@@ -14,7 +14,7 @@ test("cache warm accepts focused profiles and rejects unknown ones", async () =>
   const dir = await mkdtemp(join(tmpdir(), "scriptc-cli-cache-warm-"));
   const cacheRoot = join(dir, "cache");
   try {
-    const env = { ...process.env, SCRIPTC_CACHE_DIR: cacheRoot };
+    const env = { ...process.env, SCRIPTC_CACHE_DIR: cacheRoot, SCRIPTC_CC: "/unavailable/compiler" };
     const warmed = await execFileAsync(
       process.execPath,
       [bootstrap, "cache", "warm", "runtime"],
@@ -23,7 +23,7 @@ test("cache warm accepts focused profiles and rejects unknown ones", async () =>
     expect(warmed.stdout).toContain(`${cacheRoot}\n`);
     expect(warmed.stdout).toMatch(/runtime\t\d+ms/);
     expect(warmed.stdout).not.toContain("tls\t");
-    expect((await readdir(join(cacheRoot, "obj"))).length).toBeGreaterThan(0);
+    expect(await readdir(join(cacheRoot, "obj")).catch(() => [])).toEqual([]);
 
     await expect(
       execFileAsync(process.execPath, [bootstrap, "cache", "warm", "unknown"], { env }),
@@ -33,9 +33,7 @@ test("cache warm accepts focused profiles and rejects unknown ones", async () =>
       execFileAsync(process.execPath, [bootstrap, "cache", "warm", "runtime"], {
         env: { ...env, CPATH: dir },
       }),
-    ).rejects.toMatchObject({
-      stderr: expect.stringContaining("requires a persistently cacheable compiler environment"),
-    });
+    ).resolves.toMatchObject({ stdout: expect.stringContaining("runtime\t") });
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

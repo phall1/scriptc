@@ -1,5 +1,9 @@
 import { describe, expect, test } from "vitest";
 import {
+  IOS_ARM64_TARGET,
+  IOS_SIMULATOR_ARM64_TARGET,
+  ANDROID_ARM64_TARGET,
+  nativeHelperForTarget,
   LINUX_ARM64_GNU_TARGET,
   LINUX_ARM64_MUSL_TARGET,
   LINUX_X64_GNU_TARGET,
@@ -51,7 +55,7 @@ describe("native code-generation targets", () => {
     expect(nativeCodegenTarget(
       { SCRIPTC_TARGET: "aarch64-apple-ios" }, "darwin", "arm64", "24.0.0",
     ))
-      .toBeNull();
+      .toEqual(IOS_ARM64_TARGET);
   });
 
   test("refusals name the unsupported host or cross target", () => {
@@ -59,11 +63,23 @@ describe("native code-generation targets", () => {
     expect(nativeCodegenTargetRefusal({}, "darwin", "arm64", "23.6.0"))
       .toContain("requires macOS 15.0 or newer");
     expect(nativeCodegenTargetRefusal(
-      { SCRIPTC_TARGET: "x86_64-linux-gnu.2.36" },
+      { SCRIPTC_TARGET: "riscv64-linux-gnu" },
       "darwin",
       "arm64",
       "24.0.0",
-    )).toContain("SCRIPTC_TARGET=x86_64-linux-gnu.2.36");
+    )).toContain("SCRIPTC_TARGET=riscv64-linux-gnu");
+  });
+
+  test("cross targets select the host helper and a target linker", () => {
+    const cross = nativeCodegenTarget({ SCRIPTC_TARGET: "x86_64-linux-gnu.2.36" }, "darwin", "arm64", "24.0.0")!;
+    expect(cross).toMatchObject({ name: "linux-x64-gnu", defaultLinker: "zig", linkerTargetTriple: "x86_64-linux-gnu.2.36" });
+    expect(nativeHelperForTarget(cross, "darwin", "arm64")?.packageName).toBe("@scriptc/llvm-darwin-arm64");
+    expect(nativeHelperForTarget(MACOS_ARM64_TARGET, "win32", "x64")?.packageName).toBe("@scriptc/llvm-win32-x64-msvc");
+    expect(nativeCodegenTarget({ SCRIPTC_TARGET: "aarch64-linux-android" }, "win32", "x64", "10.0.0")).toEqual(ANDROID_ARM64_TARGET);
+    expect(nativeCodegenTarget({ SCRIPTC_TARGET: "aarch64-apple-ios-simulator" }, "darwin", "arm64", "24.0.0")).toEqual(IOS_SIMULATOR_ARM64_TARGET);
+    for (const target of [IOS_ARM64_TARGET, IOS_SIMULATOR_ARM64_TARGET, ANDROID_ARM64_TARGET]) {
+      expect(target.supports).toEqual({ asm: true, obj: true, exe: false, library: true });
+    }
   });
 
   test("owns helper executable linker arguments in the target specification", () => {

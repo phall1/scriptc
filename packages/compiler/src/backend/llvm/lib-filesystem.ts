@@ -391,8 +391,8 @@ export function emitPathUrlLibCall(host: LlvmEmitterContext, e: LibCallExpr): Ll
     if (e.fn === "qs.parse") {
       // The ParsedUrlQuery dictionary: a fresh pure-index-signature
       // record whose overflow map the runtime scan fills
-      // (scr_qs_parse_into groups repeats into string[] buckets) — the
-      // C emitter's shape exactly. The frontend verified the structure;
+      // (scr_qs_parse_into groups repeats into string[] buckets).
+      // The frontend verified the structure;
       // lookups here only guard emitter bugs. Args: qs, sep, eq, maxKeys.
       if (e.type.kind !== "record") throw new InternalCompilerError("llvm emitter bug: qs.parse result is not a record");
       const dictShape = host.recordsById.get(e.type.shapeId);

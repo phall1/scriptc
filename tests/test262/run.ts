@@ -22,7 +22,7 @@ async function main(): Promise<void> {
   --filter TEXT                            select test paths containing TEXT
   --limit N                                first N selected test files
   --workers N                              concurrent compiles (default 2)
-  --backend default|llvm|c                  default uses scriptc's normal selection
+  --backend default|llvm                    LLVM is the production backend
   --report PATH                            JSON report (default under node_modules/.cache)
   --journal PATH                           append each result as JSONL during the run
   --compile-timeout MS --runtime-timeout MS bound each compiler/program process
@@ -39,8 +39,8 @@ Other variants remain visible as exclusions.`);
     if (!Number.isSafeInteger(n) || n <= 0) throw new Error(`${name} must be a positive integer`);
     return n;
   }
-  if (!["default", "c", "llvm"].includes(values.backend!)) throw new Error("invalid backend");
-  const backend = values.backend as "default" | "c" | "llvm";
+  if (!["default", "llvm"].includes(values.backend!)) throw new Error("invalid backend");
+  const backend = values.backend as "default" | "llvm";
   const workers = positive(values.workers ?? process.env.SCRIPTC_TEST_WORKERS, 2, "workers");
   const limit = positive(values.limit, Number.MAX_SAFE_INTEGER, "limit");
   const compileTimeoutMs = positive(values["compile-timeout"], 120_000, "compile-timeout");

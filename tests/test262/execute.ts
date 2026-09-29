@@ -12,7 +12,6 @@ export interface Outcome {
   reason?: string;
   phase?: string;
   backend?: string;
-  llvmRefusal?: string;
   stdout?: string;
   stderr?: string;
   diagnostics?: unknown[];
@@ -62,7 +61,7 @@ export function boundedRun(command: string, args: string[], timeoutMs: number): 
 }
 
 export async function runSource(source: string, options: {
-  backend?: "default" | "llvm" | "c";
+  backend?: "default" | "llvm";
   asyncTest?: boolean;
   includes?: string[];
   variant?: "strict" | "sloppy";
@@ -103,7 +102,7 @@ export async function runSource(source: string, options: {
     }
     phase = "runtime";
     const result = await boundedRun(binary, [], options.runtimeTimeoutMs ?? 10_000);
-    const common = { backend: build.backend, ...(build.llvmRefusal ? { llvmRefusal: build.llvmRefusal } : {}) };
+    const common = { backend: build.backend };
     if (result.timeout) return finish({ ...common, status: "timeout", phase });
     if (result.signal) return finish({ ...common, status: "crash", phase, reason: result.signal, stderr: result.stderr });
     const stderr = options.sanitize

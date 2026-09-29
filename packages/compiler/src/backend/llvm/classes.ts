@@ -1,25 +1,8 @@
 import { InternalCompilerError } from "../../errors.js";
-/* The LLVM backend's class machinery — the .ll mirror of the C emitter's
- * class slice (shapes.ts): the class graph (base/children links, the
- * whole-program preorder numbering behind O(1) instanceof, hierarchy
- * membership, per-hierarchy virtual slot lists), per-class struct types and
- * RC/trace helper families, the hierarchy vtable instances, and the class
- * objects (classes as first-class values) with their construct thunks.
- *
- * Two deliberate simplifications over the C emission, both possible because
- * every pointer is `ptr` in LLVM:
- * - NO vtable slot adapters: the C backend needs sc_vm_* thunks because a
- *   slot's function-pointer TYPE spells the declaring class's `this`; here
- *   every implementation already has the slot's exact LLVM signature
- *   (override exactness fixes the ABI), so the vtable stores the method
- *   function directly.
- * - ONE struct spelling per class (%sc_o_*); the runtime error classes GEP
- *   through the emitter-declared %ScrError instead (their structs live in
- *   the runtime).
- *
- * Emitter- and stream-rooted classes stay out of the tier (their prefixes
- * embed runtime registry/state slots and their surfaces are async-shaped);
- * the emitter refuses them by name before anything here runs. */
+/** Class layouts, reference counting, hierarchy intervals, virtual tables and
+ * constructor values. Opaque LLVM pointers allow virtual slots to store method
+ * implementations directly. Runtime EventEmitter and stream subclasses embed
+ * their runtime prefixes ahead of user fields. */
 import type { IrClassDef, IrFunction, IrModule, IrType, IrUnionDef } from "../../ir/ir.js";
 import { isRefCounted, RUNTIME_EMITTER_CLASS, RUNTIME_ERROR_CLASSES, RUNTIME_STREAM_CLASSES } from "../../ir/ir.js";
 import { streamRooted, undefinedArmTag } from "../../ir/analysis.js";
@@ -49,7 +32,7 @@ export interface LlVtSlot {
   fn: IrFunction;
 }
 
-/** Per-class node of the class graph — the CEmitter ClassMeta shape. */
+/** Per-class node of the class graph. */
 export class LlClassMeta {
   base: LlClassMeta | null = null;
   children: LlClassMeta[] = [];
@@ -66,12 +49,11 @@ export class LlClassMeta {
 }
 
 /** The class graph: link base/children, number the forest in preorder
- * (roots and children in module class order — the SAME numbering the C
- * backend computes, so instanceof agrees between backends and with the
+ * (roots and children in module class order, matching the
  * runtime's stamped error vtables), and compute each hierarchy's virtual
  * slots — a class's method gets a slot iff no ancestor declares it AND some
  * strict descendant redeclares it (whole-program devirtualization).
- * Ported from the CEmitter constructor. */
+ * The preorder intervals also identify runtime class membership. */
 export function buildClassGraph(mod: IrModule, fnByName: Map<string, IrFunction>): Map<string, LlClassMeta> {
   const metaMap = new Map<string, LlClassMeta>();
   for (const cls of mod.classes ?? []) {
@@ -522,8 +504,8 @@ export function emitClassShapes(
 
 /** Class objects (classes as first-class values): the immortal ScrClassObj
  * statics plus their construct thunks — allocate, run the constructor over
- * a +1 `this`, hand the remaining +1 out (the C emitCtorThunkDefs, minus
- * the pending check: in-tier constructors are throw-free by construction).
+ * a +1 `this`, and hand the remaining +1 out. No pending check is needed:
+ * in-tier constructors are throw-free by construction.
  * `classObjs` maps className → { nameSym } registered during body emission
  * (the literal interned while the table was open). */
 export function emitClassObjDefs(

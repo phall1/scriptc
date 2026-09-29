@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 import { compile, deserializeModule, validateModule } from "../src/index.js";
-import { emitCModule } from "../src/backend/c/c-emitter.js";
 import { emitLlvmModule } from "../src/backend/llvm/emitter.js";
 
 test("ordinary numeric-array arithmetic uses one lookup per read without boxing", async () => {
@@ -45,13 +44,13 @@ test("ordinary numeric-array arithmetic uses one lookup per read without boxing"
     visitFunction(mod.entry);
     expect(arrayReads).toBe(3);
     const reachable = { ...mod, functions: mod.functions.filter((fn) => visited.has(fn.name)) };
-    const c = emitCModule(reachable);
+
     const llvm = emitLlvmModule(reachable);
-    expect(c.match(/scr_arr_get_number\(/g)).toHaveLength(3);
+
     expect(llvm.match(/call double @scr_arr_get_number\(/g)).toHaveLength(3);
-    expect(c).not.toContain("scr_arr_state(");
+
     expect(llvm).not.toContain("@scr_arr_state(");
-    expect(c).not.toContain("scr_arr_retain(");
+
     expect(llvm).not.toContain("@scr_arr_retain_v");
   } finally {
     await rm(dir, { recursive: true, force: true });

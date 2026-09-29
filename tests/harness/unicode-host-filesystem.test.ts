@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { compile } from "@scriptc/compiler";
 import { expect, test } from "vitest";
 
-for (const backend of ["c", "llvm"] as const) {
+for (const backend of ["llvm"] as const) {
   test(`host filesystem preserves Unicode paths and directory entries (${backend})`, async () => {
     const scratch = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-unicode-host-"));
     try {

@@ -356,10 +356,7 @@ async function compileAndRun(file: string): Promise<RunResult> {
     outDir,
     sanitize,
     dynamic,
-    // Pinned: this suite IS the C-reference lane — its meaning is "the C
-    // backend matches Node", regardless of what the product default does.
-    // llvm-differential.test.ts owns the LLVM lane over the same corpus.
-    backend: "c",
+    backend: "llvm",
   });
   if (!result.ok) {
     throw new Error(

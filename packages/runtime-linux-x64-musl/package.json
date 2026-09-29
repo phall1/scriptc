@@ -9,12 +9,6 @@
     "url": "git+https://github.com/vercel-labs/scriptc.git",
     "directory": "packages/runtime-linux-x64-musl"
   },
-  "os": [
-    "linux"
-  ],
-  "cpu": [
-    "x64"
-  ],
   "files": [
     "artifacts",
     "runtime-pack.json"

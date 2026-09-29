@@ -61,7 +61,7 @@ const invariantRemoteFiles = [
   "packages/cli/test/paths.test.ts",
   "packages/compiler/src/library/int-infer.test.ts",
   "packages/compiler/test/cjs-lexer.test.ts",
-  "packages/compiler/test/emit-c.test.ts",
+  "packages/compiler/test/emit-llvm.test.ts",
   "packages/compiler/test/ir.test.ts",
   "packages/compiler/test/llvm-runtime-abi.test.ts",
   "packages/compiler/test/ts7/bench.test.ts",

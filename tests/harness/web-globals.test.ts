@@ -41,10 +41,8 @@ async function compileAndRun(name: string, source: string): Promise<RunResult> {
   const file = join(outDir, `${name}.ts`);
   writeFileSync(file, source);
   // Deliberately NO backend pin: these are flagless-user-shaped --dynamic
-  // builds, so the suite rides the release default (LLVM where the tier
-  // claims the program, the transparent C fallback where it refuses). The
-  // fence MESSAGES asserted below come from the island runtime the two
-  // backends share, so they are lane-invariant by construction.
+  // builds through the production LLVM backend. The fence messages
+  // asserted below come from the island runtime.
   const result = await compile(file, {
     outPath: join(outDir, name),
     outDir,

@@ -6,8 +6,7 @@ import { analyze } from "../src/index.js";
 import { BOOL, DYN, F64, STRING, UNDEFINED_T, VOID, arrayOf, isIdentityCollectionKey, isSupportedMapKey, isSupportedSetElem, mapOf, setOf, type IrExpr, type IrModule, type IrType } from "../src/ir/ir.js";
 import { validateModule } from "../src/ir/validate.js";
 import { IR_VERSION } from "../src/ir/serialize.js";
-import { mapKeyAccess, mapKeyKindC } from "../src/backend/c/types.js";
-import { mapKeyAccess as llvmAccess, mapKeyKindNum } from "../src/backend/llvm/shapes.js";
+import { mapKeyAccess, mapKeyKindNum } from "../src/backend/llvm/shapes.js";
 
 const reference: IrType = { kind: "record", shapeId: "key" };
 const references: IrType[] = [reference, { kind: "object", className: "Key" }, arrayOf(F64), { kind: "symbol" }, { kind: "netServer" }];
@@ -41,13 +40,11 @@ test("checked collection slots refuse snapshot and adapting reference conversion
   }
 });
 
-test.each(references)("identity key %j uses the reference ABI in both emitters", (type) => {
+test.each(references)("identity key %j uses the reference ABI in LLVM", (type) => {
   expect(isIdentityCollectionKey(type)).toBe(true);
   expect(isSupportedMapKey(type)).toBe(true);
   expect(isSupportedSetElem(type)).toBe(true);
   expect(mapKeyAccess(type)).toBe("ref");
-  expect(llvmAccess(type)).toBe("ref");
-  expect(mapKeyKindC(type)).toBe("SCR_MAP_KEY_REF");
   expect(mapKeyKindNum(type)).toBe(2);
 });
 
@@ -55,8 +52,6 @@ test("boxed reference keys select payload identity, not wrapper identity", () =>
   expect(isSupportedMapKey(union, references)).toBe(true);
   expect(isSupportedSetElem(union, references)).toBe(true);
   expect(mapKeyAccess(union)).toBe("ref");
-  expect(llvmAccess(union)).toBe("ref");
-  expect(mapKeyKindC(union)).toBe("SCR_MAP_KEY_UNION_REF");
   expect(mapKeyKindNum(union)).toBe(3);
 });
 
@@ -73,16 +68,16 @@ test("unresolved, empty and mixed-value unions cannot enter the identity ABI", (
 });
 
 test("primitive key ABI constants remain stable", () => {
-  expect([mapKeyKindC(F64), mapKeyKindNum(F64), mapKeyAccess(F64)]).toEqual(["SCR_MAP_KEY_F64", 0, "f64"]);
-  expect([mapKeyKindC(STRING), mapKeyKindNum(STRING), mapKeyAccess(STRING)]).toEqual(["SCR_MAP_KEY_STR", 1, "str"]);
+  expect([mapKeyKindNum(F64), mapKeyAccess(F64)]).toEqual([0, "f64"]);
+  expect([mapKeyKindNum(STRING), mapKeyAccess(STRING)]).toEqual([1, "str"]);
 });
 
 test("unknown keys select value equality separately from reference identity", () => {
   expect(isIdentityCollectionKey(DYN)).toBe(false);
   expect(isSupportedMapKey(DYN)).toBe(true);
   expect(isSupportedSetElem(DYN)).toBe(true);
-  expect([mapKeyKindC(DYN), mapKeyKindNum(DYN), mapKeyAccess(DYN), llvmAccess(DYN)])
-    .toEqual(["SCR_MAP_KEY_DYN", 4, "ref", "ref"]);
+  expect([mapKeyKindNum(DYN), mapKeyAccess(DYN)])
+    .toEqual([4, "ref"]);
 });
 
 test.each(["map", "set"] as const)("validator checks the arms behind a %s key union", (kind) => {

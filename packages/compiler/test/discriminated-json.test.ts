@@ -7,8 +7,8 @@ import { compile } from "../src/index.js";
 
 // A checked assertion intentionally validates more than Node's erased
 // assertion. Test rejection here; valid inputs have differential corpus
-// coverage on both backends.
-for (const backend of ["c", "llvm"] as const) {
+// coverage through LLVM.
+for (const backend of ["llvm"] as const) {
   test(`checked discriminator rejection (${backend})`, async () => {
     const dir = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-discriminator-"));
     try {

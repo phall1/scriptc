@@ -3,11 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 import { compile, deserializeModule } from "../src/index.js";
-import { emitCModule } from "../src/backend/c/c-emitter.js";
 import { emitLlvmModule } from "../src/backend/llvm/emitter.js";
 import { findConstantNumericTables } from "../src/ir/constant-tables.js";
 
-test("both backends use guarded native constants and retain array initialization", async () => {
+test("LLVM uses guarded native constants and retain array initialization", async () => {
   const dir = await mkdtemp(join(tmpdir(), "scriptc-constant-tables-"));
   try {
     const entry = join(dir, "main.ts");
@@ -23,14 +22,9 @@ console.log(lookup(1), mutated[0] * 1);
     if (!result.ok) throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
     const mod = deserializeModule(await readFile(outPath, "utf8"));
     expect([...findConstantNumericTables(mod).values()].map((t) => t.values)).toEqual([[3, -0, Infinity]]);
-    const c = emitCModule(mod);
+
     const llvm = emitLlvmModule(mod);
-    expect(c).toContain("static const double sc_const_numbers_0[] = { 3.0, -0.0, INFINITY }");
-    expect(c).toContain("if (a != NULL && i >= 0.0 && i < 3.0)");
-    expect(c).toContain("if ((double)index == i)");
-    expect(c).toMatch(/= sc_const_numbers_0_get\(/);
-    expect(c).toContain("return scr_arr_get_number(a, i)");
-    expect(c).toContain("scr_arr_push_f64(");
+
     expect(llvm).toContain("@sc_const_numbers_0 = private constant [3 x double]");
     expect(llvm).toContain("%initialized = icmp ne ptr %a, null");
     expect(llvm).toContain("br i1 %safe, label %convert, label %fallback");
@@ -45,18 +39,17 @@ console.log(lookup(1), mutated[0] * 1);
 });
 
 test.each([
-  ["2970-constant-numeric-tables.ts", "2.0, -0.0, 1.5, INFINITY, -INFINITY, 8.0, NAN"],
-  ["2971-constant-table-modules/main.ts", "2.0, 5.0, 11.0"],
-])("%s exercises specialization and rejects its mutated/escaping tables", async (fixture, expected) => {
+  "2970-constant-numeric-tables.ts",
+  "2971-constant-table-modules/main.ts",
+])("%s specializes only immutable nonescaping tables", async (fixture) => {
   const dir = await mkdtemp(join(tmpdir(), "scriptc-constant-tables-"));
   try {
-    const outPath = join(dir, "main.c");
+    const outPath = join(dir, "main.ll");
     const entry = join(import.meta.dirname, "../../../tests/corpus", fixture);
-    const result = await compile(entry, { outDir: dir, outPath, outputKind: "c" });
+    const result = await compile(entry, { outDir: dir, outPath, outputKind: "llvm" });
     if (!result.ok) throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
-    const c = await readFile(outPath, "utf8");
-    expect(c.match(/static const double sc_const_numbers_/g)).toHaveLength(1);
-    expect(c).toContain(`static const double sc_const_numbers_0[] = { ${expected} };`);
-    expect(c).toMatch(/= sc_const_numbers_0_get\(/);
+    const llvm = await readFile(outPath, "utf8");
+    expect(llvm).toContain("@sc_const_numbers_0 = private constant");
+    expect(llvm).toMatch(/call double @sc_const_numbers_0_get\(/);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });

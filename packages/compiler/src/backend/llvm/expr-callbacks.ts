@@ -630,10 +630,11 @@ export function childDataThunkFor(host: LlvmEmitterContext, param: IrType): stri
   }
 
 export function emitterFixedAdapter(host: LlvmEmitterContext, cbT: IrType & { kind: "func" }): { fn: string; shim: string } {
-    // SCR_EE_FIXED_MAX (scr_runtime.h): the registry's audited arity
-    // ceiling — refuse past it rather than guess.
-    if (cbT.params.length > 4) throw new LlvmUnsupportedError(`emitterListenerArity:${cbT.params.length}`);
-    const shim = `scr_ee_inv_fixed${cbT.params.length}`;
+    // Short tuples use direct fixed signatures. Longer listeners read an
+    // opaque runtime cursor so no platform va_list layout leaks into LLVM.
+    const cursor = cbT.params.length > 4;
+    const shim = cursor ? "scr_ee_inv_args" : `scr_ee_inv_fixed${cbT.params.length}`;
+    if (cursor) host.declare("declare ptr @scr_ee_arg_next(ptr)");
     // Only the shim's ADDRESS rides the .ll (the runtime calls it through
     // its real ScrEeInvoke type); the (ptr, ptr) spelling is layout-free.
     host.declare(`declare void @${shim}(ptr, ptr)`);
@@ -644,7 +645,7 @@ export function emitterFixedAdapter(host: LlvmEmitterContext, cbT: IrType & { ki
     host.resolveThunks.set(key, sym);
     host.declare(`declare ptr @scr_box_get_ref(ptr)`);
     host.declare(`declare void @scr_closure_release(ptr)`);
-    const params = cbT.params.map((_, i) => `ptr %a${i}`).join(", ");
+    const params = cursor ? "ptr %args" : cbT.params.map((_, i) => `ptr %a${i}`).join(", ");
     const d: string[] = [
       `define internal void @${sym}(ptr %cb${params ? ", " + params : ""}) ${FN_ATTRS} { ; emitter listener adapter ${typeKey(cbT)}`,
       `entry:`,
@@ -654,6 +655,7 @@ export function emitterFixedAdapter(host: LlvmEmitterContext, cbT: IrType & { ki
     ];
     const passed: string[] = ["ptr %orig"];
     cbT.params.forEach((p, i) => {
+      if (cursor) d.push(`  %a${i} = call ptr @scr_ee_arg_next(ptr %args)`);
       const ty = host.llType(p);
       if (ty === "double") {
         d.push(`  %d${i} = load double, ptr %a${i}`);

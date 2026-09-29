@@ -1,5 +1,4 @@
 import { commentText, llvmBytes, llvmQuoted, octalByte, unsignedHex } from "../../../packages/compiler/src/backend/literals.js";
-import { cCommentText, cDecl, cNumberLiteral, cStringLiteral, cType } from "../../../packages/compiler/src/backend/c/types.js";
 import { f64Lit, ffiNativeTypeLl, llvmCommentText } from "../../../packages/compiler/src/backend/llvm/common.js";
 import { mangleClassNew, mangleClassObj, mangleClassRelease, mangleClassRetain, mangleClassStruct, mangleField, mangleFunction, mangleGlobal, mangleLocal, mangleRecordStruct, mangleVtInstance } from "../../../packages/compiler/src/backend/mangle.js";
 import { BOOL, F64, STRING, VOID, arrayOf, funcOf, mapOf, type IrType } from "../../../packages/compiler/src/ir/ir.js";
@@ -8,7 +7,6 @@ const bytes = new Uint8Array(256);
 for (let i = 0; i < bytes.length; i++) bytes[i] = i;
 console.log(llvmBytes(bytes));
 console.log(llvmBytes(bytes, false));
-console.log(cStringLiteral(Buffer.from(bytes)));
 console.log(llvmBytes(new Uint8Array()));
 
 for (let i = 0; i < 256; i++) console.log(unsignedHex(i), octalByte(i));
@@ -21,14 +19,12 @@ for (const value of [-1, 0.5, NaN, Infinity]) {
 }
 
 for (const value of [0, -0, 1, -1, 0.1, Number.MIN_VALUE, Number.MAX_VALUE, Infinity, -Infinity, NaN]) {
-  console.log(f64Lit(value), cNumberLiteral(value));
+  console.log(f64Lit(value));
 }
 
 for (const text of ["", "ordinary", "é日本😀", 'quote"slash\\\0', "line\nnext\u2028last", "/* comment */"]) {
   console.log(llvmQuoted(text));
-  console.log(cStringLiteral(Buffer.from(text, "utf8")));
   console.log(JSON.stringify(commentText(text)));
-  console.log(JSON.stringify(cCommentText(text)));
   console.log(JSON.stringify(llvmCommentText(text)));
 }
 
@@ -38,21 +34,6 @@ for (const name of ["ordinary", "x.12", "$x%y", "é日本", "😀", "nul\0", "da
   console.log(mangleClassRetain(name), mangleClassRelease(name), mangleVtInstance(name), mangleRecordStruct(name));
 }
 
-const types: IrType[] = [
-  F64, BOOL, STRING, VOID, arrayOf(F64), mapOf(STRING, F64),
-  { kind: "set", elem: STRING }, { kind: "record", shapeId: "row" },
-  { kind: "object", className: "User" }, { kind: "union", unionId: "choice" },
-  { kind: "classval", className: "User" }, { kind: "bytes", elem: "u8" },
-  { kind: "dyn" }, { kind: "jsval" }, { kind: "caught" },
-  { kind: "promise", inner: STRING }, funcOf([STRING], F64),
-  { kind: "generator", yieldT: F64, retT: STRING, nextT: VOID },
-  { kind: "date" }, { kind: "bigint" }, { kind: "regex" },
-  { kind: "url" }, { kind: "searchParams" }, { kind: "symbol" },
-  { kind: "stats" }, { kind: "fileHandle" }, { kind: "spawnRes" },
-  { kind: "child" }, { kind: "netServer" }, { kind: "netSocket" },
-  { kind: "http2Session" }, { kind: "http2Stream" },
-];
-for (const type of types) console.log(cType(type), cDecl(type, "slot"));
 console.log(ffiNativeTypeLl("f64"), ffiNativeTypeLl("bool"), ffiNativeTypeLl("u8"));
 console.log(ffiNativeTypeLl("u32"), ffiNativeTypeLl("i32"), ffiNativeTypeLl("cstring"), ffiNativeTypeLl("void"));
 try { console.log(ffiNativeTypeLl("bytes")); }

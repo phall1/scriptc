@@ -38,8 +38,8 @@ const fixtureRoot = join(repoRoot, "tests/library-mode");
 const flavor = process.env["SCRIPTC_SAN"] === "1" ? "san" : "plain";
 const cacheDir = join(repoRoot, "node_modules/.cache/scriptc-tests/library-contract", flavor);
 
-type Emission = "llvm" | "c";
-const EMISSIONS: Emission[] = ["llvm", "c"];
+type Emission = "llvm";
+const EMISSIONS: Emission[] = ["llvm"];
 
 const TOP_LEVEL_ORDER = [
   "format", "wire_version", "abi_version", "compiler_version", "entry",
@@ -66,7 +66,7 @@ async function buildContract(
    * directories is exactly what the canonical root-relative paths
    * guarantee, and the V13-style assertions prove it). */
   root = cacheDir,
-): Promise<{ outDir: string; archive: string; cPath: string; sidecarPath: string; doc: SidecarDoc; bytes: Buffer }> {
+): Promise<{ outDir: string; archive: string; llvmPath: string; sidecarPath: string; doc: SidecarDoc; bytes: Buffer }> {
   const dir = join(fixtureRoot, fixture);
   const outDir = join(root, `${fixture}-${emission}${tag}`);
   mkdirSync(outDir, { recursive: true });
@@ -92,7 +92,7 @@ async function buildContract(
   return {
     outDir,
     archive: result.archivePath,
-    cPath: result.cPath,
+    llvmPath: result.llvmPath,
     sidecarPath: result.sidecarPath!,
     doc: JSON.parse(bytes.toString("utf8")) as SidecarDoc,
     bytes: bytes as Buffer,
@@ -113,7 +113,7 @@ function nmDefined(archive: string, prefix: string): string[] {
 
 describe.each(EMISSIONS)("contract sidecar, %s emission", (emission) => {
   test("anti-alphabetical declaration order, schema shape, V11/V12 identity", async () => {
-    const { outDir, archive, cPath, doc, bytes } = await buildContract("contract", emission);
+    const { outDir, archive, llvmPath, doc, bytes } = await buildContract("contract", emission);
 
     // The emitter's own self-check ran before writing; the test-side
     // validator agrees the document conforms.
@@ -247,7 +247,7 @@ describe.each(EMISSIONS)("contract sidecar, %s emission", (emission) => {
       ...(emission === "llvm"
         ? ["-Wno-override-module"]
         : ["-Wno-comment", "-I", join(repoRoot, "packages/runtime/src")]),
-      "-c", cPath,
+      "-c", llvmPath,
       "-o", keptObject,
     ]);
     expect(nmDefined(keptObject, "kc_")).toEqual(doc.abi.exports.map((s) => `kc_${s}`).sort());
@@ -741,7 +741,7 @@ async function sidecarProjection(source: string): Promise<SidecarDoc> {
     profile_format: 1,
     name: "sidecar-projection-fixture",
     entry: "lib.ts",
-    emission: "c",
+    emission: "llvm",
     abi: {
       prefix: "kp_",
       init_symbol: "kp_init",
@@ -869,7 +869,7 @@ async function sidecarRefusal(
     profile_format: 1,
     name: "sidecar-refusal-fixture",
     entry: "lib.ts",
-    emission: "c",
+    emission: "llvm",
     abi: {
       prefix: "ks_",
       init_symbol: "ks_init",

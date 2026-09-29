@@ -15,12 +15,7 @@ import { compile } from "@scriptc/compiler";
 const execFileAsync = promisify(execFile);
 const repoRoot = join(import.meta.dirname, "../..");
 const cacheDir = join(repoRoot, "node_modules/.cache/scriptc-tests/runtime-tree-shaking");
-// These source-toolchain contracts are safe in the Linux Sandboxes used by
-// `test:sandbox`: they deliberately use the C backend and `nm`, both of
-// which are part of that image. Keep the Windows host out of this POSIX
-// fixture (its child program uses /bin/echo), but do not use
-// SCRIPTC_PORTABLE_ONLY here: that marker means "run in a Linux Sandbox",
-// not "skip native executable assertions".
+// The executable and symbol contracts use POSIX tools and /bin/echo.
 const sourceToolchainTest = process.platform === "win32" ? test.skip : test;
 
 interface Fixture {
@@ -96,7 +91,7 @@ async function build(name: string, source: string) {
     outDir,
     // The C lane proves source-toolchain linking. macOS additionally runs
     // the default lane below, which selects the helper/runtime-pack path.
-    backend: "c",
+    backend: "llvm",
   });
   if (!result.ok) {
     throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));

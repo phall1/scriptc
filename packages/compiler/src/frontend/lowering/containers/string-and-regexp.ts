@@ -520,7 +520,7 @@ export function lowerRegexMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     if (!arg0 || lowerer.mapTypeOf(lowerer.typeOf(arg0))?.kind !== "regex") return null;
     const receiver = lowerReceiver();
     // Split's omitted or undefined limit is 2^32-1. Complete it here so
-    // both IR backends and the runtime have one required (regex, limit)
+    // the LLVM backend and runtime have one required (regex, limit)
     // shape; an optional-number value selects the default at runtime.
     const args = name === "split"
       ? [lowerer.lowerExprExpecting(arg0, { kind: "regex" }), lowerSplitLimitArg(lowerer, call.arguments[1], loc)]
@@ -557,7 +557,7 @@ export function lowerRegexMethodCall(lowerer: Lowerer, call: ts.CallExpression,
 
 /** `s.slice(1, 4)` and friends → strIntrinsic. Null when this isn't an
  * ambient string method call (caller keeps its generic rejection).
- * Complete position defaults and conversions here for both backends. */
+ * Complete position defaults and conversions here before code generation. */
 export function lowerStringMethodCall(lowerer: Lowerer, call: ts.CallExpression,
   access: ts.PropertyAccessExpression,
   dynReceiver?: () => IrExpr,

@@ -5,7 +5,7 @@ import { scalarizeNumericRecords } from "../../../packages/compiler/src/ir/scala
 import { findConstantNumericTables } from "../../../packages/compiler/src/ir/constant-tables.js";
 import { matchIntegerBytesForLoop } from "../../../packages/compiler/src/ir/integer-loops.js";
 import { everyStmtList } from "../../../packages/compiler/src/ir/traverse.js";
-import { computeMayThrow } from "../../../packages/compiler/src/backend/c/may-throw.js";
+import { computeMayThrow } from "../../../packages/compiler/src/backend/may-throw.js";
 import { computeTraced } from "../../../packages/compiler/src/backend/cycle-analysis.js";
 
 try {

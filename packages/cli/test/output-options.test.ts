@@ -3,18 +3,15 @@ import { resolveOutputOptions, type OutputOptionValues } from "../src/output-opt
 
 const BASE: OutputOptionValues = {
   emitIr: false,
-  fromC: false,
-  keepC: true,
+  keepLlvm: true,
   sanitize: false,
 };
 
 describe("output option compatibility", () => {
   test.each([
-    [undefined, undefined, "exe", undefined],
-    ["exe", "c", "exe", "c"],
+    [undefined, undefined, "exe", "llvm"],
+    ["exe", "llvm", "exe", "llvm"],
     ["ir", undefined, "ir", undefined],
-    ["c", undefined, "c", "c"],
-    ["c", "c", "c", "c"],
     ["llvm", undefined, "llvm", "llvm"],
     ["llvm", "llvm", "llvm", "llvm"],
     ["asm", undefined, "asm", "llvm"],
@@ -34,15 +31,14 @@ describe("output option compatibility", () => {
 
   test.each([
     [{ emit: "wat" }, /unknown emit kind/],
-    [{ emit: "asm", backend: "c" }, /cannot be combined/],
-    [{ emit: "obj", backend: "c" }, /cannot be combined/],
-    [{ emit: "c", backend: "llvm" }, /cannot be combined/],
-    [{ emit: "llvm", backend: "c" }, /cannot be combined/],
-    [{ emit: "ir", keepC: false }, /no-keep-c/],
-    [{ emit: "c", sanitize: true }, /sanitize/],
+    [{ emit: "asm", backend: "c" }, /unknown backend/],
+    [{ emit: "obj", backend: "c" }, /unknown backend/],
+    [{ emit: "c" }, /unknown emit kind/],
+    [{ emit: "llvm", backend: "c" }, /unknown backend/],
+    [{ emit: "ir", keepLlvm: false }, /no-keep-llvm/],
+    [{ emit: "llvm", sanitize: true }, /sanitize/],
     [{ emit: "llvm", optimization: "dev" }, /optimization/],
-    [{ emit: "ir", backend: "c" }, /before backend selection/],
-    [{ emit: "ir", fromC: true }, /from-c/],
+    [{ emit: "ir", backend: "llvm" }, /before backend selection/],
     [{ emit: "llvm", emitIr: true }, /emit-ir/],
     [{ emit: "ir", emitIr: true }, /same output/],
     [{ backend: "wat" }, /unknown backend/],
@@ -55,7 +51,7 @@ describe("output option compatibility", () => {
     expect(result).toEqual({ ok: false, message: expect.stringMatching(message) });
   });
 
-  test.each(["ir", "c", "llvm"])("run rejects --emit=%s", (emit) => {
+  test.each(["ir", "llvm"])("run rejects --emit=%s", (emit) => {
     expect(resolveOutputOptions("run", { ...BASE, emit })).toEqual({
       ok: false,
       message: "scriptc run requires --emit=exe",
