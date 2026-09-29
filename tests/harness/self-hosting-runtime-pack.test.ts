@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
-import { analyze, compile } from "@scriptc/compiler";
+import { analyzeInChild, compileInChild } from "./self-hosting-compiler-process.js";
 import { NATIVE_TARGETS, nativeCodegenTarget } from "../../packages/compiler/src/backend/targets.js";
 import type { NativeLinkFeatures } from "../../packages/compiler/src/backend/native-link-info.js";
 import type { RuntimePackManifest } from "../../packages/compiler/src/backend/runtime-pack-core.js";
@@ -18,8 +18,8 @@ const base: NativeLinkFeatures = {
   http2: false, dgram: false, watch: false, foreignFfi: false, nodeTest: false, tls: false, tlsCa: false,
 };
 
-test("runtime manifest validation and selection are entirely static", () => {
-  const { coverage } = analyze(entry, { dynamic: false });
+test("runtime manifest validation and selection are entirely static", async () => {
+  const coverage = await analyzeInChild(entry, { dynamic: false });
   expect(coverage.preflightFailed).toBe(false);
   expect(coverage.stats.statementsTotal).toBeGreaterThan(50);
   expect(coverage.stats.statementsFailed).toBe(0);
@@ -31,7 +31,7 @@ for (const backend of ["llvm"] as const) {
   test(`native runtime manifest selection matches Node (${backend})`, async () => {
     const directory = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-pack-selection-"));
     try {
-      const built = await compile(entry, {
+      const built = await compileInChild(entry, {
         outDir: directory, outPath: join(directory, "selection" + (process.platform === "win32" ? ".exe" : "")),
         backend, dynamic: false, optimization: "dev", sanitize: process.env["SCRIPTC_SAN"] === "1",
       });

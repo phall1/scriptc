@@ -22,8 +22,6 @@ jobs:
       # calling onTaskUpdate") with every test green — the same contention
       # artifact the harness README documents for local parallel suites.
       SCRIPTC_TEST_WORKERS: "4"
-      # Native self-hosting analysis can block worker RPC during lowering.
-      VITEST_RPC_TIMEOUT: "180000"
       # san = ASan + RC audit over the same suite; anything but "1" is plain.
       SCRIPTC_SAN: ${{ matrix.flavor == 'san' && '1' || '' }}
       # Within-file partition for the large case-driven harnesses

@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
-import { analyze, compile } from "@scriptc/compiler";
+import { analyzeInChild, compileInChild } from "./self-hosting-compiler-process.js";
 import { nativeCodegenTarget } from "../../packages/compiler/src/backend/targets.js";
 import type { NativeLinkFeatures } from "../../packages/compiler/src/backend/native-link-info.js";
 import type { RuntimePackManifest } from "../../packages/compiler/src/backend/runtime-pack-core.js";
@@ -20,8 +20,8 @@ const features: NativeLinkFeatures = {
   http2: false, dgram: false, watch: false, foreignFfi: false, nodeTest: false, tls: false, tlsCa: false,
 };
 
-test("native toolchain configuration, staging and helper validation are static", () => {
-  const { coverage } = analyze(entry, { dynamic: false });
+test("native toolchain configuration, staging and helper validation are static", async () => {
+  const coverage = await analyzeInChild(entry, { dynamic: false });
   expect(coverage.preflightFailed).toBe(false);
   expect(coverage.stats.statementsFailed).toBe(0);
   expect(coverage.stats.statementsIsland).toBe(0);
@@ -33,7 +33,7 @@ for (const backend of ["llvm"] as const) {
     const directory = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-native-integrity-"));
     const target = nativeCodegenTarget()!;
     try {
-      const built = await compile(entry, {
+      const built = await compileInChild(entry, {
         outDir: directory, outPath: join(directory, "toolchain" + target.outputSuffixes.exe),
         backend, optimization: "dev", dynamic: false, sanitize: process.env["SCRIPTC_SAN"] === "1",
       });
