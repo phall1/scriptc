@@ -1131,6 +1131,8 @@ export function jsonWriteHelper(emitter: CEmitter, t: IrType): string {
     d.push(`        return r;`);
     d.push(`      }`);
     d.push(`    }`);
+    d.push(`    if (d->kind == SCR_DYN_ARR && d->v.arr.properties)`);
+    d.push(`      return scr_dyn_obj_read(d->v.arr.properties, k->data, k->len);`);
     d.push(`  }`);
     d.push(`  return scr_dyn_retain(scr_dyn_undefined());`);
     d.push(`}`, ``);

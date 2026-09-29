@@ -632,6 +632,7 @@ function exactValueParams(...types: IrType[]): BuiltinValueParam[] {
 export const OBJECT_CALLABLE_VALUES: Record<string, BuiltinModuleFn | undefined> = {
   defineProperty: { fn: "dyn.defineProperty", params: [DYN, DYN, DYN], result: DYN, valueParams: exactValueParams(DYN, DYN, DYN) },
   getOwnPropertyDescriptor: { fn: "dyn.getOwnPropertyDescriptor", params: [DYN, DYN], result: DYN, valueParams: exactValueParams(DYN, DYN) },
+  getOwnPropertyDescriptors: { fn: "dyn.getOwnPropertyDescriptors", params: [DYN], result: DYN, valueParams: exactValueParams(DYN) },
   defineProperties: { fn: "dyn.defineProps", params: [DYN, DYN], result: DYN, valueParams: exactValueParams(DYN, DYN) },
   keys: { fn: "dyn.objKeys", params: [DYN], result: DYN, valueParams: exactValueParams(DYN) },
   values: { fn: "dyn.objValues", params: [DYN], result: DYN, valueParams: exactValueParams(DYN) },

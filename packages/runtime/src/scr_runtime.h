@@ -3443,14 +3443,14 @@ struct ScrDyn {
   /* A deep typed-to-dyn copy has no stable native reference identity.
    * Weak collections must refuse it instead of weakly tracking its box. */
   bool copied_from_native;
-  bool non_extensible; /* ordinary checked objects; fits the header padding */
+  bool non_extensible; /* native objects and arrays; fits the header padding */
   union {
     bool b;
     double num;
     ScrStr *str; /* owned */
     ScrBytes *bytes; /* owned (SCR_DYN_BYTES) */
     ScrBigInt *bigint; /* owned (SCR_DYN_BIGINT) */
-    struct { size_t len; size_t cap; ScrDyn **items; } arr;      /* owned */
+    struct { size_t len; size_t cap; ScrDyn **items; struct ScrDyn *properties; bool sealed; bool frozen; } arr; /* owned */
     struct {
       size_t len;
       size_t cap;
@@ -3506,6 +3506,9 @@ struct ScrDyn {
     struct { ScrJsval *cell; } jsval;
     struct { ScrDyn *target; ScrDyn *handler; } proxy; /* both owned */
   } v;
+  /* Keep the checked value payload at its established offset: generated
+   * native converters read array and object fields directly. */
+  struct ScrDyn *prototype;
 };
 
 static inline ScrDyn *scr_dyn_retain(ScrDyn *d) {
@@ -3548,10 +3551,12 @@ ScrDyn *scr_dyn_obj_keys(const ScrDyn *v);
 ScrDyn *scr_dyn_for_in_keys(const ScrDyn *v);
 /* Snapshot all own string keys of a SCR_DYN_OBJ in JS order. Returns +1. */
 ScrDyn *scr_dyn_obj_own_keys(const ScrDyn *v);
+ScrDyn *scr_dyn_get_own_property_names(const ScrDyn *value);
 /* Object.hasOwn over a dyn receiver: OBJ member presence, ARR index
  * bounds ("length" included); nullish receivers throw Node's ToObject
  * TypeError; every other kind answers false. */
 bool scr_dyn_has_own(const ScrDyn *v, const ScrStr *key);
+bool scr_dyn_property_is_enumerable(const ScrDyn *value, const ScrStr *key);
 /* Object.assign over dyn values (+1 target back; ToObject TypeError on a
  * nullish target). Sources visit own keys in order and copy entries that
  * are enumerable when reached; ARR/STR/BYTES expose index keys. Nullish
@@ -3608,6 +3613,15 @@ void *scr_dyn_obj_source_cast(const ScrDyn *d,
 /* Object.create(null): the fresh null-prototype dictionary (see the
  * null_proto flavor flag above). */
 ScrDyn *scr_dyn_new_obj_null_proto(void);
+ScrDyn *scr_dyn_obj_create(ScrDyn *prototype);
+ScrDyn *scr_dyn_obj_create_with_properties(ScrDyn *prototype, ScrDyn *descriptors);
+ScrDyn *scr_dyn_get_prototype(ScrDyn *object);
+ScrDyn *scr_dyn_get_own_property_descriptors(ScrDyn *object);
+ScrDyn *scr_dyn_set_prototype(ScrDyn *object, ScrDyn *prototype);
+ScrDyn *scr_dyn_prevent_extensions(ScrDyn *object);
+bool scr_dyn_is_extensible(ScrDyn *object);
+ScrDyn *scr_dyn_seal(ScrDyn *object);
+bool scr_dyn_is_sealed(const ScrDyn *object);
 ScrDyn *scr_dyn_proxy_new(const ScrDyn *target, const ScrDyn *handler);
 ScrDyn *scr_dyn_proxy_get(const ScrDyn *proxy, const ScrStr *key);
 bool scr_dyn_proxy_has(const ScrDyn *proxy, const ScrStr *key);
@@ -3683,6 +3697,7 @@ void scr_weak_dispose(void *object);
  * +1. */
 double scr_dyn_arr_len(const ScrDyn *d);
 ScrDyn *scr_dyn_arr_at(const ScrDyn *d, double i);
+ScrDyn *scr_dyn_arr_named_get(const ScrDyn *d, const ScrStr *key);
 void scr_dyn_obj_set(ScrDyn *obj, const char *key, size_t key_len, ScrDyn *value);
 ScrDyn *scr_dyn_define_property(ScrDyn *target, ScrDyn *key, ScrDyn *descriptor);
 ScrDyn *scr_dyn_get_own_property_descriptor(ScrDyn *target, ScrDyn *key);

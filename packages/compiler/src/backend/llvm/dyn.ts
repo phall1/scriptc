@@ -2653,6 +2653,15 @@ export class LlDyn {
         B.line(`call void @scr_str_release(ptr ${ch})`);
         B.terminate(`ret ptr ${r2}`);
         B.startBlock(lMiss);
+        const lArrNamed = B.newLabel("kg.an");
+        const lOther = B.newLabel("kg.ao");
+        B.condBr(isA, lArrNamed, lOther);
+        B.startBlock(lArrNamed);
+        host.declare(`declare ptr @scr_dyn_arr_named_get(ptr, ptr)`);
+        const named = B.tmp();
+        B.line(`${named} = call ptr @scr_dyn_arr_named_get(ptr %d, ptr %k)`);
+        B.terminate(`ret ptr ${named}`);
+        B.startBlock(lOther);
         retainUndef();
       }
       B.startBlock(lNext);

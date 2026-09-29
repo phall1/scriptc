@@ -165,23 +165,14 @@ static void dyn_throw_unsupported(const char *proto, const char *method) {
   scr_throw_error(SCR_ERR_ERROR, scr_jb_finish(&b));
 }
 
-/* ToIntegerOrInfinity over an OPTIONAL index argument: missing/undefined
- * answers dflt; a NUM truncates toward zero (NaN -> 0, like JS); any
- * other kind throws the loud fence (Node would ToNumber-coerce — a
- * documented gap, never a silent misread). */
+/* ToIntegerOrInfinity over an optional index argument. Missing and
+ * undefined use the operation's default; present values run ToNumber once. */
 static double dyn_index_arg(ScrDyn *const *args, size_t argc, size_t i, double dflt, const char *what) {
+  (void)what;
   if (i >= argc || args[i]->kind == SCR_DYN_UNDEF) return dflt;
-  if (args[i]->kind == SCR_DYN_NUM) {
-    double n = args[i]->v.num;
-    if (n != n) return 0;
-    return trunc(n);
-  }
-  ScrJsonBuf b;
-  scr_jb_init(&b);
-  scr_jb_puts(&b, what);
-  scr_jb_puts(&b, ": non-number index arguments on a dynamic receiver are not supported yet");
-  scr_throw_error(SCR_ERR_TYPE, scr_jb_finish(&b));
-  return 0;
+  double number;
+  if (!scr_dyn_number_coerce_js(args[i], &number)) return 0;
+  return isnan(number) ? 0 : trunc(number);
 }
 
 static double dyn_bytes_index_arg(ScrDyn *const *args, size_t argc, size_t index, double fallback) {
@@ -198,6 +189,13 @@ static size_t dyn_rel_index(double rel, size_t len) {
     return r < 0 ? 0 : (size_t)r;
   }
   return rel > (double)len ? len : (size_t)rel;
+}
+
+static bool dyn_arr_length_unchanged(const ScrDyn *recv, size_t length) {
+  if (recv->v.arr.len == length) return true;
+  static const char message[] = "Array method after an argument changes the receiver length is not supported yet";
+  scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
+  return false;
 }
 
 /* The array callback runner (forEach/map/filter/some/every/find/
@@ -269,7 +267,13 @@ static ScrDyn *dyn_borrow_get(ScrDyn *recv, const ScrStr *key) {
       return scr_dyn_new_num(length);
     }
     size_t index;
-    if (!dyn_borrow_index(key, &index)) return scr_dyn_retain(scr_dyn_undefined());
+    if (!dyn_borrow_index(key, &index)) {
+      if (recv->kind == SCR_DYN_ARR && recv->v.arr.properties)
+        return scr_dyn_arr_named_get(recv, key);
+      return scr_dyn_retain(scr_dyn_undefined());
+    }
+    if (recv->kind == SCR_DYN_ARR && index >= recv->v.arr.len && recv->v.arr.properties)
+      return scr_dyn_arr_named_get(recv, key);
     if (recv->kind == SCR_DYN_ARR) return scr_dyn_arr_at(recv, (double)index);
     if (recv->kind == SCR_DYN_BYTES) {
       return index < recv->v.bytes->len
@@ -359,7 +363,7 @@ static ScrDyn *dyn_borrow_item(ScrDyn *recv, size_t index) {
 
 ScrDyn *scr_dyn_array_proto_call(ScrDyn *recv, ScrStr *method, ScrDyn *args) {
   if (recv->kind == SCR_DYN_NULL || recv->kind == SCR_DYN_UNDEF) {
-    static const char msg[] = "Array.prototype method called on null or undefined";
+    static const char msg[] = "Cannot convert undefined or null to object";
     scr_throw_error_msg(SCR_ERR_TYPE, msg, sizeof msg - 1);
     return NULL;
   }
@@ -377,6 +381,8 @@ ScrDyn *scr_dyn_array_proto_call(ScrDyn *recv, ScrStr *method, ScrDyn *args) {
     ScrDyn *needle = argc ? argv[0] : scr_dyn_undefined();
     double from = last_index_of ? (double)len - 1 : 0;
     if (argc > 1 && !dyn_borrow_number(argv[1], &from)) return NULL;
+    if (isnan(from)) from = 0;
+    else from = trunc(from);
     double first = from < 0 ? (double)len + from : from;
     if (last_index_of) {
       if (from >= 0) first = fmin(from, (double)len - 1);
@@ -416,6 +422,41 @@ ScrDyn *scr_dyn_array_proto_call(ScrDyn *recv, ScrStr *method, ScrDyn *args) {
       ? dyn_borrow_item(recv, (size_t)index)
       : scr_dyn_retain(scr_dyn_undefined());
   }
+  if (dyn_borrow_is(method, "slice")) {
+    if (recv->kind == SCR_DYN_PROXY) {
+      scr_dyn_proxy_unsupported("Array.prototype.slice");
+      return NULL;
+    }
+    double startD = 0;
+    double endD = (double)len;
+    if (argc && !dyn_borrow_number(argv[0], &startD)) return NULL;
+    if (argc > 1 && argv[1]->kind != SCR_DYN_UNDEF && !dyn_borrow_number(argv[1], &endD)) return NULL;
+    if (isnan(startD)) startD = 0;
+    if (isnan(endD)) endD = 0;
+    size_t start = dyn_rel_index(trunc(startD), len);
+    size_t end = dyn_rel_index(trunc(endD), len);
+    if (end > start && end - start > 1000000) {
+      static const char message[] = "Array.prototype.slice exceeds the native iteration limit";
+      scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
+      return NULL;
+    }
+    ScrDyn *out = scr_dyn_new_arr();
+    for (size_t i = start; i < end; i++) {
+      if (!dyn_borrow_iteration(i - start)) { scr_dyn_release(out); return NULL; }
+      bool present = dyn_borrow_present(recv, i);
+      if (scr_exc_pending()) { scr_dyn_release(out); return NULL; }
+      if (!present) {
+        static const char message[] = "Array.prototype.slice over sparse array-like values is not supported yet";
+        scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
+        scr_dyn_release(out);
+        return NULL;
+      }
+      ScrDyn *item = dyn_borrow_item(recv, i);
+      if (!item) { scr_dyn_release(out); return NULL; }
+      scr_dyn_arr_push(out, item);
+    }
+    return out;
+  }
 
   bool each = dyn_borrow_is(method, "forEach");
   bool map = dyn_borrow_is(method, "map");
@@ -424,9 +465,11 @@ ScrDyn *scr_dyn_array_proto_call(ScrDyn *recv, ScrStr *method, ScrDyn *args) {
   bool every = dyn_borrow_is(method, "every");
   bool find = dyn_borrow_is(method, "find");
   bool find_index = dyn_borrow_is(method, "findIndex");
+  bool find_last = dyn_borrow_is(method, "findLast");
+  bool find_last_index = dyn_borrow_is(method, "findLastIndex");
   bool reduce = dyn_borrow_is(method, "reduce");
   bool reduce_right = dyn_borrow_is(method, "reduceRight");
-  if (!(each || map || filter || some || every || find || find_index || reduce || reduce_right)) {
+  if (!(each || map || filter || some || every || find || find_index || find_last || find_last_index || reduce || reduce_right)) {
     static const char msg[] = "Array.prototype method is not supported yet";
     scr_throw_error_msg(SCR_ERR_ERROR, msg, sizeof msg - 1);
     return NULL;
@@ -461,7 +504,8 @@ ScrDyn *scr_dyn_array_proto_call(ScrDyn *recv, ScrStr *method, ScrDyn *args) {
   ScrDyn *this_arg = argc > 1 ? argv[1] : scr_dyn_undefined();
   for (size_t i = 0; i < len; i++) {
     if (len > 1000000 && !dyn_borrow_iteration(i)) { scr_dyn_release(out); return NULL; }
-    bool present = find || find_index || dyn_borrow_present(recv, i);
+    size_t index = find_last || find_last_index ? len - 1 - i : i;
+    bool present = find || find_index || find_last || find_last_index || dyn_borrow_present(recv, index);
     if (scr_exc_pending()) { scr_dyn_release(out); return NULL; }
     if (!present) {
       if (map) {
@@ -472,10 +516,10 @@ ScrDyn *scr_dyn_array_proto_call(ScrDyn *recv, ScrStr *method, ScrDyn *args) {
       }
       continue;
     }
-    ScrDyn *item = dyn_borrow_item(recv, i);
+    ScrDyn *item = dyn_borrow_item(recv, index);
     if (!item) { scr_dyn_release(out); return NULL; }
     scr_dyn_this_push_dyn(this_arg);
-    ScrDyn *result = dyn_call_cb(cb, item, i, recv);
+    ScrDyn *result = dyn_call_cb(cb, item, index, recv);
     scr_dyn_this_pop();
     if (!result) { scr_dyn_release(item); scr_dyn_release(out); return NULL; }
     if (map) {
@@ -486,16 +530,16 @@ ScrDyn *scr_dyn_array_proto_call(ScrDyn *recv, ScrStr *method, ScrDyn *args) {
       if (filter && truthy) scr_dyn_arr_push(out, scr_dyn_retain(item));
       if (some && truthy) { scr_dyn_release(item); return scr_dyn_new_bool(true); }
       if (every && !truthy) { scr_dyn_release(item); return scr_dyn_new_bool(false); }
-      if (find && truthy) return item;
-      if (find_index && truthy) { scr_dyn_release(item); return scr_dyn_new_num((double)i); }
+      if ((find || find_last) && truthy) return item;
+      if ((find_index || find_last_index) && truthy) { scr_dyn_release(item); return scr_dyn_new_num((double)index); }
     }
     scr_dyn_release(item);
   }
   if (out) return out;
   if (some) return scr_dyn_new_bool(false);
   if (every) return scr_dyn_new_bool(true);
-  if (find) return scr_dyn_retain(scr_dyn_undefined());
-  if (find_index) return scr_dyn_new_num(-1);
+  if (find || find_last) return scr_dyn_retain(scr_dyn_undefined());
+  if (find_index || find_last_index) return scr_dyn_new_num(-1);
   return scr_dyn_retain(scr_dyn_undefined());
 }
 
@@ -591,18 +635,39 @@ static bool dyn_arr_sort(ScrDyn *recv, ScrDyn *cmp) {
   return ok;
 }
 
+static bool dyn_arr_flatten(ScrDyn *out, const ScrDyn *source, double depth, size_t *visits) {
+  for (size_t i = 0; i < source->v.arr.len; i++) {
+    if (++*visits > 1000000) {
+      static const char message[] = "Array.prototype.flat exceeds the native iteration limit";
+      scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
+      return false;
+    }
+    const ScrDyn *item = source->v.arr.items[i];
+    if (depth > 0 && item->kind == SCR_DYN_ARR) {
+      if (!dyn_arr_flatten(out, item, depth - 1, visits)) return false;
+    } else {
+      scr_dyn_arr_push(out, scr_dyn_retain((ScrDyn *)item));
+    }
+  }
+  return true;
+}
+
+static void dyn_arr_reversed_copy(ScrDyn *out, const ScrDyn *source) {
+  for (size_t i = source->v.arr.len; i > 0; i--)
+    scr_dyn_arr_push(out, scr_dyn_retain(source->v.arr.items[i - 1]));
+}
+
 /* Names each prototype declares BEYOND what's implemented here — these
  * fence loudly instead of mis-answering "is not a function". */
 static bool dyn_arr_proto_unimpl(const char *m) {
-  static const char *names[] = { "splice", "reduce", "reduceRight", "flat",
-    "fill", "copyWithin", "keys", "values", "entries", "toReversed", "toSorted", "toSpliced",
-    "with", "toString", "toLocaleString", NULL };
+  static const char *names[] = { "keys", "values", "entries",
+    "toString", "toLocaleString", NULL };
   for (size_t i = 0; names[i]; i++) if (dyn_name_is(m, names[i])) return true;
   return false;
 }
 static bool dyn_arr_proto_mutates(const char *m) {
   static const char *names[] = {
-    "push", "pop", "shift", "unshift", "reverse", "sort", NULL
+    "push", "pop", "shift", "unshift", "reverse", "sort", "fill", "copyWithin", "splice", NULL
   };
   for (size_t i = 0; names[i]; i++) if (dyn_name_is(m, names[i])) return true;
   return false;
@@ -695,10 +760,10 @@ static ScrDyn *scr_dyn_invoke_impl(
     return result;
   }
 
-  /* OBJ: the own member calls (own properties shadow prototypes in JS
-   * too); anything else is Node's is-not-a-function. */
+  /* OBJ method calls follow the native prototype chain while binding the
+   * original receiver as `this`. */
   if (recv->kind == SCR_DYN_OBJ) {
-    ScrDyn *m = scr_dyn_obj_get(recv, method, strlen(method));
+    ScrDyn *m = scr_dyn_obj_read(recv, method, strlen(method));
     if (m && (m->kind == SCR_DYN_FUNC ||
               /* a WRAPPED engine function stored as a dyn member: the
                * routed call (scr_dyn_call's JSVAL arm) runs it. */
@@ -708,8 +773,10 @@ static ScrDyn *scr_dyn_invoke_impl(
       scr_dyn_this_push_dyn(recv);
       ScrDyn *r = scr_dyn_call(m, args, argc, what);
       scr_dyn_this_pop();
+      scr_dyn_release(m);
       return r;
     }
+    scr_dyn_release(m);
     dyn_throw_not_fn(what);
     return NULL;
   }
@@ -803,6 +870,63 @@ static ScrDyn *scr_dyn_invoke_impl(
 
   if (recv->kind == SCR_DYN_ARR) {
     size_t len = recv->v.arr.len;
+    size_t splice_start = 0;
+    size_t splice_removed = 0;
+    if (dyn_arr_proto_mutates(method)) {
+      bool grows = dyn_name_is(method, "push") && argc > 0;
+      grows = grows || (dyn_name_is(method, "unshift") && argc > 0);
+      bool shrinks = (dyn_name_is(method, "pop") || dyn_name_is(method, "shift")) && len > 0;
+      if (dyn_name_is(method, "splice")) {
+        double startD = dyn_index_arg(args, argc, 0, 0, what);
+        if (scr_exc_pending()) return NULL;
+        splice_start = dyn_rel_index(startD, len);
+        splice_removed = len - splice_start;
+        if (argc > 1) {
+          double countD = dyn_index_arg(args, argc, 1, 0, what);
+          if (scr_exc_pending()) return NULL;
+          splice_removed = countD <= 0 ? 0 : countD >= (double)splice_removed ? splice_removed : (size_t)countD;
+        }
+        if (recv->v.arr.len != len) {
+          static const char message[] = "Array.prototype.splice after an argument changes the receiver length is not supported yet";
+          scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
+          return NULL;
+        }
+        size_t inserted = argc > 2 ? argc - 2 : 0;
+        if (inserted > splice_removed && inserted - splice_removed > 1000000) {
+          static const char message[] = "Array.prototype.splice exceeds the native array growth limit";
+          scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
+          return NULL;
+        }
+        grows = grows || inserted > splice_removed;
+        shrinks = shrinks || splice_removed > inserted;
+        if (splice_removed > inserted && recv->v.arr.sealed && !recv->v.arr.frozen) {
+          for (size_t i = splice_start; i < len - splice_removed + inserted; i++) {
+            size_t source = i < splice_start + inserted ? i : i + splice_removed - inserted;
+            ScrDyn *replacement = i < splice_start + inserted ? args[i - splice_start + 2] : recv->v.arr.items[source];
+            ScrDyn *old = recv->v.arr.items[i];
+            recv->v.arr.items[i] = scr_dyn_retain(replacement);
+            scr_dyn_release(old);
+          }
+          static const char message[] = "Cannot delete non-configurable property";
+          scr_throw_error_msg(SCR_ERR_TYPE, message, sizeof message - 1);
+          return NULL;
+        }
+      }
+      if (recv->v.arr.frozen && (dyn_name_is(method, "push") ||
+          dyn_name_is(method, "pop") || dyn_name_is(method, "shift") ||
+          dyn_name_is(method, "unshift") || dyn_name_is(method, "splice"))) {
+        static const char message[] = "Cannot assign to read only property 'length'";
+        scr_throw_error_msg(SCR_ERR_TYPE, message, sizeof message - 1);
+        return NULL;
+      }
+      if ((grows && recv->non_extensible) || (shrinks && recv->v.arr.sealed && !dyn_name_is(method, "shift")) ||
+          (recv->v.arr.frozen && ((dyn_name_is(method, "sort") && len > 1) ||
+            (dyn_name_is(method, "reverse") && len > 1)))) {
+        static const char message[] = "Cannot modify a sealed or frozen array";
+        scr_throw_error_msg(SCR_ERR_TYPE, message, sizeof message - 1);
+        return NULL;
+      }
+    }
     if (dyn_name_is(method, "push")) {
       for (size_t i = 0; i < argc; i++) scr_dyn_arr_push(recv, scr_dyn_retain(args[i]));
       return scr_dyn_new_num((double)recv->v.arr.len);
@@ -813,26 +937,68 @@ static ScrDyn *scr_dyn_invoke_impl(
     }
     if (dyn_name_is(method, "shift")) {
       if (len == 0) return scr_dyn_retain(scr_dyn_undefined());
+      if (recv->v.arr.sealed) {
+        if (recv->v.arr.frozen) {
+          static const char message[] = "Cannot assign to read only property";
+          scr_throw_error_msg(SCR_ERR_TYPE, message, sizeof message - 1);
+          return NULL;
+        }
+        for (size_t i = 1; i < len; i++) {
+          scr_dyn_release(recv->v.arr.items[i - 1]);
+          recv->v.arr.items[i - 1] = scr_dyn_retain(recv->v.arr.items[i]);
+        }
+        static const char message[] = "Cannot delete non-configurable property";
+        scr_throw_error_msg(SCR_ERR_TYPE, message, sizeof message - 1);
+        return NULL;
+      }
       ScrDyn *first = recv->v.arr.items[0];
       memmove(recv->v.arr.items, recv->v.arr.items + 1, (len - 1) * sizeof(ScrDyn *));
       recv->v.arr.len = len - 1;
       return first; /* ownership moves out */
     }
     if (dyn_name_is(method, "unshift")) {
-      /* Append first (the push path grows capacity and takes the +1s),
-       * then rotate: the old block moves up and the SAME retained
-       * pointers land at the front (args[] still names them, so the
-       * memmove clobbering the appended slots loses nothing). */
-      for (size_t i = 0; i < argc; i++) scr_dyn_arr_push(recv, scr_dyn_retain(args[i]));
+      /* Grow the backing store before shifting the old elements. The
+       * appended placeholders are immortal, so overwriting them does not
+       * abandon retained argument references. */
+      for (size_t i = 0; i < argc; i++) scr_dyn_arr_push(recv, scr_dyn_retain(scr_dyn_undefined()));
       memmove(recv->v.arr.items + argc, recv->v.arr.items, len * sizeof(ScrDyn *));
-      for (size_t i = 0; i < argc; i++) recv->v.arr.items[i] = args[i];
+      for (size_t i = 0; i < argc; i++) recv->v.arr.items[i] = scr_dyn_retain(args[i]);
       return scr_dyn_new_num((double)recv->v.arr.len);
+    }
+    if (dyn_name_is(method, "splice")) {
+      size_t start = splice_start;
+      size_t removed = splice_removed;
+      size_t inserted = argc > 2 ? argc - 2 : 0;
+      ScrDyn *out = scr_dyn_new_arr();
+      for (size_t i = start; i < start + removed; i++)
+        scr_dyn_arr_push(out, scr_dyn_retain(recv->v.arr.items[i]));
+      size_t next_len = len - removed + inserted;
+      if (next_len > recv->v.arr.cap) {
+        size_t capacity = recv->v.arr.cap ? recv->v.arr.cap : 4;
+        while (capacity < next_len) {
+          if (capacity > SIZE_MAX / 2) scr_trap("scriptc: array capacity overflow\n");
+          capacity *= 2;
+        }
+        ScrDyn **items = realloc(recv->v.arr.items, capacity * sizeof *items);
+        if (!items) scr_trap("scriptc: out of memory\n");
+        recv->v.arr.items = items;
+        recv->v.arr.cap = capacity;
+      }
+      for (size_t i = start; i < start + removed; i++) scr_dyn_release(recv->v.arr.items[i]);
+      memmove(recv->v.arr.items + start + inserted,
+              recv->v.arr.items + start + removed,
+              (len - start - removed) * sizeof(ScrDyn *));
+      for (size_t i = 0; i < inserted; i++)
+        recv->v.arr.items[start + i] = scr_dyn_retain(args[i + 2]);
+      recv->v.arr.len = next_len;
+      return out;
     }
     if (dyn_name_is(method, "slice")) {
       double startD = dyn_index_arg(args, argc, 0, 0, what);
       if (scr_exc_pending()) return NULL;
       double endD = dyn_index_arg(args, argc, 1, (double)len, what);
       if (scr_exc_pending()) return NULL;
+      if (!dyn_arr_length_unchanged(recv, len)) return NULL;
       size_t start = dyn_rel_index(startD, len);
       size_t end = dyn_rel_index(endD, len);
       ScrDyn *out = scr_dyn_new_arr();
@@ -842,20 +1008,32 @@ static ScrDyn *scr_dyn_invoke_impl(
     if (dyn_name_is(method, "at")) {
       double iD = dyn_index_arg(args, argc, 0, 0, what);
       if (scr_exc_pending()) return NULL;
+      if (!dyn_arr_length_unchanged(recv, len)) return NULL;
       double idx = iD < 0 ? (double)len + iD : iD;
       if (idx < 0 || idx >= (double)len) return scr_dyn_retain(scr_dyn_undefined());
       return scr_dyn_retain(recv->v.arr.items[(size_t)idx]);
     }
     if (dyn_name_is(method, "indexOf") || dyn_name_is(method, "lastIndexOf") ||
         dyn_name_is(method, "includes")) {
+      if (len == 0) return dyn_name_is(method, "includes") ? scr_dyn_new_bool(false) : scr_dyn_new_num(-1);
       ScrDyn *needle = argc > 0 ? args[0] : scr_dyn_undefined();
+      double from = dyn_name_is(method, "lastIndexOf") ? (double)len - 1 : 0;
+      if (argc > 1) {
+        from = dyn_index_arg(args, argc, 1, from, what);
+        if (scr_exc_pending()) return NULL;
+      }
+      if (!dyn_arr_length_unchanged(recv, len)) return NULL;
       if (dyn_name_is(method, "lastIndexOf")) {
-        for (size_t i = len; i > 0; i--) {
+        double first = from < 0 ? (double)len + from : from;
+        if (first >= (double)len) first = (double)len - 1;
+        for (size_t i = first < 0 ? 0 : (size_t)first + 1; i > 0; i--) {
           if (scr_dyn_strict_eq(recv->v.arr.items[i - 1], needle)) return scr_dyn_new_num((double)(i - 1));
         }
         return scr_dyn_new_num(-1);
       }
-      for (size_t i = 0; i < len; i++) {
+      double first = from < 0 ? (double)len + from : from;
+      if (first < 0) first = 0;
+      for (size_t i = first >= (double)len ? len : (size_t)first; i < len; i++) {
         const ScrDyn *item = recv->v.arr.items[i];
         bool nan_match = dyn_name_is(method, "includes") &&
           item->kind == SCR_DYN_NUM && needle->kind == SCR_DYN_NUM &&
@@ -865,6 +1043,28 @@ static ScrDyn *scr_dyn_invoke_impl(
         }
       }
       return dyn_name_is(method, "includes") ? scr_dyn_new_bool(false) : scr_dyn_new_num(-1);
+    }
+    if (dyn_name_is(method, "findLast") || dyn_name_is(method, "findLastIndex")) {
+      if (!dyn_cb_check(args, argc)) return NULL;
+      ScrDyn *visible_recv = callback_recv ? callback_recv : recv;
+      for (size_t i = len; i > 0; i--) {
+        size_t index = i - 1;
+        ScrDyn *item = index < recv->v.arr.len
+          ? scr_dyn_retain(recv->v.arr.items[index])
+          : scr_dyn_retain(scr_dyn_undefined());
+        ScrDyn *result = dyn_call_cb(args[0], item, index, visible_recv);
+        if (!result) { scr_dyn_release(item); return NULL; }
+        bool matched = scr_dyn_truthy(result);
+        scr_dyn_release(result);
+        if (matched) {
+          if (dyn_name_is(method, "findLast")) return item;
+          scr_dyn_release(item);
+          return scr_dyn_new_num((double)index);
+        }
+        scr_dyn_release(item);
+      }
+      return dyn_name_is(method, "findLast")
+        ? scr_dyn_retain(scr_dyn_undefined()) : scr_dyn_new_num(-1);
     }
     if (dyn_name_is(method, "join")) {
       ScrJsonBuf b;
@@ -897,11 +1097,115 @@ static ScrDyn *scr_dyn_invoke_impl(
       }
       return out;
     }
+    if (dyn_name_is(method, "flat")) {
+      double depth = dyn_index_arg(args, argc, 0, 1, what);
+      if (scr_exc_pending()) return NULL;
+      if (!dyn_arr_length_unchanged(recv, len)) return NULL;
+      ScrDyn *out = scr_dyn_new_arr();
+      size_t visits = 0;
+      if (!dyn_arr_flatten(out, recv, depth < 0 ? 0 : depth, &visits)) {
+        scr_dyn_release(out);
+        return NULL;
+      }
+      return out;
+    }
     if (dyn_name_is(method, "reverse")) {
       for (size_t i = 0; i < len / 2; i++) {
         ScrDyn *tmp = recv->v.arr.items[i];
         recv->v.arr.items[i] = recv->v.arr.items[len - 1 - i];
         recv->v.arr.items[len - 1 - i] = tmp;
+      }
+      return scr_dyn_retain(recv);
+    }
+    if (dyn_name_is(method, "toReversed")) {
+      ScrDyn *out = scr_dyn_new_arr();
+      dyn_arr_reversed_copy(out, recv);
+      return out;
+    }
+    if (dyn_name_is(method, "with")) {
+      double indexD = dyn_index_arg(args, argc, 0, 0, what);
+      if (scr_exc_pending()) return NULL;
+      if (!dyn_arr_length_unchanged(recv, len)) return NULL;
+      double index = indexD < 0 ? (double)len + indexD : indexD;
+      if (index < 0 || index >= (double)len) {
+        static const char message[] = "Invalid index";
+        scr_throw_error_msg(SCR_ERR_RANGE, message, sizeof message - 1);
+        return NULL;
+      }
+      ScrDyn *replacement = argc > 1 ? args[1] : scr_dyn_undefined();
+      ScrDyn *out = scr_dyn_new_arr();
+      for (size_t i = 0; i < len; i++)
+        scr_dyn_arr_push(out, scr_dyn_retain((size_t)index == i ? replacement : recv->v.arr.items[i]));
+      return out;
+    }
+    if (dyn_name_is(method, "toSpliced")) {
+      double startD = dyn_index_arg(args, argc, 0, 0, what);
+      if (scr_exc_pending()) return NULL;
+      size_t start = dyn_rel_index(startD, len);
+      size_t delete_count = len - start;
+      if (argc > 1) {
+        double countD = dyn_index_arg(args, argc, 1, 0, what);
+        if (scr_exc_pending()) return NULL;
+        delete_count = countD <= 0 ? 0 : countD >= (double)delete_count ? delete_count : (size_t)countD;
+      }
+      if (!dyn_arr_length_unchanged(recv, len)) return NULL;
+      ScrDyn *out = scr_dyn_new_arr();
+      for (size_t i = 0; i < start; i++) scr_dyn_arr_push(out, scr_dyn_retain(recv->v.arr.items[i]));
+      for (size_t i = 2; i < argc; i++) scr_dyn_arr_push(out, scr_dyn_retain(args[i]));
+      for (size_t i = start + delete_count; i < len; i++) scr_dyn_arr_push(out, scr_dyn_retain(recv->v.arr.items[i]));
+      return out;
+    }
+    if (dyn_name_is(method, "fill")) {
+      double startD = dyn_index_arg(args, argc, 1, 0, what);
+      if (scr_exc_pending()) return NULL;
+      double endD = dyn_index_arg(args, argc, 2, (double)len, what);
+      if (scr_exc_pending()) return NULL;
+      if (!dyn_arr_length_unchanged(recv, len)) return NULL;
+      size_t start = dyn_rel_index(startD, len);
+      size_t end = dyn_rel_index(endD, len);
+      if (recv->v.arr.frozen && start < end) {
+        static const char message[] = "Cannot assign to read only array index";
+        scr_throw_error_msg(SCR_ERR_TYPE, message, sizeof message - 1);
+        return NULL;
+      }
+      ScrDyn *fill = argc ? args[0] : scr_dyn_undefined();
+      for (size_t i = start; i < end; i++) {
+        ScrDyn *old = recv->v.arr.items[i];
+        recv->v.arr.items[i] = scr_dyn_retain(fill);
+        scr_dyn_release(old);
+      }
+      return scr_dyn_retain(recv);
+    }
+    if (dyn_name_is(method, "copyWithin")) {
+      double targetD = dyn_index_arg(args, argc, 0, 0, what);
+      if (scr_exc_pending()) return NULL;
+      double startD = dyn_index_arg(args, argc, 1, 0, what);
+      if (scr_exc_pending()) return NULL;
+      double endD = dyn_index_arg(args, argc, 2, (double)len, what);
+      if (scr_exc_pending()) return NULL;
+      if (!dyn_arr_length_unchanged(recv, len)) return NULL;
+      size_t target = dyn_rel_index(targetD, len);
+      size_t start = dyn_rel_index(startD, len);
+      size_t end = dyn_rel_index(endD, len);
+      size_t count = end > start ? end - start : 0;
+      if (count > len - target) count = len - target;
+      if (recv->v.arr.frozen && count > 0) {
+        static const char message[] = "Cannot assign to read only array index";
+        scr_throw_error_msg(SCR_ERR_TYPE, message, sizeof message - 1);
+        return NULL;
+      }
+      if (start < target && target < start + count) {
+        for (size_t i = count; i > 0; i--) {
+          ScrDyn *old = recv->v.arr.items[target + i - 1];
+          recv->v.arr.items[target + i - 1] = scr_dyn_retain(recv->v.arr.items[start + i - 1]);
+          scr_dyn_release(old);
+        }
+      } else {
+        for (size_t i = 0; i < count; i++) {
+          ScrDyn *old = recv->v.arr.items[target + i];
+          recv->v.arr.items[target + i] = scr_dyn_retain(recv->v.arr.items[start + i]);
+          scr_dyn_release(old);
+        }
       }
       return scr_dyn_retain(recv);
     }
@@ -920,7 +1224,9 @@ static ScrDyn *scr_dyn_invoke_impl(
        * array argument then commit directly to the original static array. */
       size_t n = len;
       ScrDyn *visible_recv = callback_recv ? callback_recv : recv;
-      for (size_t i = 0; i < n && i < recv->v.arr.len; i++) {
+      for (size_t step = 0; step < n; step++) {
+        size_t i = step;
+        if (i >= recv->v.arr.len) continue;
         ScrDyn *item = scr_dyn_retain(recv->v.arr.items[i]);
         ScrDyn *r = dyn_call_cb(cb, item, i, visible_recv);
         if (!r) { scr_dyn_release(item); scr_dyn_release(out); return NULL; }
@@ -944,6 +1250,30 @@ static ScrDyn *scr_dyn_invoke_impl(
       if (dyn_name_is(method, "find")) return scr_dyn_retain(scr_dyn_undefined());
       if (dyn_name_is(method, "findIndex")) return scr_dyn_new_num(-1);
       return scr_dyn_retain(scr_dyn_undefined()); /* forEach */
+    }
+    if (dyn_name_is(method, "reduce") || dyn_name_is(method, "reduceRight")) {
+      if (!dyn_cb_check(args, argc)) return NULL;
+      bool backward = dyn_name_is(method, "reduceRight");
+      ScrDyn *acc = argc > 1 ? scr_dyn_retain(args[1]) : NULL;
+      ScrDyn *visible_recv = callback_recv ? callback_recv : recv;
+      for (size_t step = 0; step < len; step++) {
+        size_t i = backward ? len - 1 - step : step;
+        if (i >= recv->v.arr.len) continue;
+        ScrDyn *item = scr_dyn_retain(recv->v.arr.items[i]);
+        if (!acc) { acc = item; continue; }
+        ScrDyn *index = scr_dyn_new_num((double)i);
+        ScrDyn *call_args[] = { acc, item, index, visible_recv };
+        ScrDyn *next = scr_dyn_call(args[0], call_args, 4, "callback");
+        scr_dyn_release(index);
+        scr_dyn_release(item);
+        scr_dyn_release(acc);
+        if (!next) return NULL;
+        acc = next;
+      }
+      if (acc) return acc;
+      static const char message[] = "Reduce of empty array with no initial value";
+      scr_throw_error_msg(SCR_ERR_TYPE, message, sizeof message - 1);
+      return NULL;
     }
     if (dyn_name_is(method, "flatMap")) {
       /* JS Array.prototype.flatMap over a dyn array: map + a depth-1
@@ -1006,6 +1336,21 @@ static ScrDyn *scr_dyn_invoke_impl(
       }
       if (len > 1 && !dyn_arr_sort(recv, cmp->kind == SCR_DYN_FUNC ? cmp : NULL)) return NULL;
       return scr_dyn_retain(recv);
+    }
+    if (dyn_name_is(method, "toSorted")) {
+      ScrDyn *cmp = argc > 0 ? args[0] : scr_dyn_undefined();
+      if (cmp->kind != SCR_DYN_UNDEF && cmp->kind != SCR_DYN_FUNC) {
+        static const char message[] = "The comparison function must be either a function or undefined";
+        scr_throw_error_msg(SCR_ERR_TYPE, message, sizeof message - 1);
+        return NULL;
+      }
+      ScrDyn *out = scr_dyn_new_arr();
+      for (size_t i = 0; i < len; i++) scr_dyn_arr_push(out, scr_dyn_retain(recv->v.arr.items[i]));
+      if (len > 1 && !dyn_arr_sort(out, cmp->kind == SCR_DYN_FUNC ? cmp : NULL)) {
+        scr_dyn_release(out);
+        return NULL;
+      }
+      return out;
     }
     if (dyn_arr_proto_unimpl(method)) {
       dyn_throw_unsupported("Array", method);
@@ -1112,7 +1457,7 @@ ScrDyn *scr_dyn_define_props(ScrDyn *target, ScrDyn *descs) {
   scr_dyn_isl_fence(target, "Object.defineProperties");
   if (!scr_exc_pending()) scr_dyn_isl_fence(descs, "Object.defineProperties");
   if (scr_exc_pending()) return NULL;
-  if (target->kind != SCR_DYN_OBJ && target->kind != SCR_DYN_FUNC) {
+  if (target->kind != SCR_DYN_OBJ && target->kind != SCR_DYN_FUNC && target->kind != SCR_DYN_ARR) {
     scr_throw_error_msg(SCR_ERR_TYPE, "Object.defineProperties called on non-object",
                         strlen("Object.defineProperties called on non-object"));
     return NULL;
@@ -1192,4 +1537,14 @@ fail:
   scr_dyn_release(keys);
   scr_dyn_release(pending);
   return NULL;
+}
+
+ScrDyn *scr_dyn_obj_create_with_properties(ScrDyn *prototype, ScrDyn *descriptors) {
+  ScrDyn *object = scr_dyn_obj_create(prototype);
+  if (!object) return NULL;
+  if (descriptors->kind == SCR_DYN_UNDEF) return object;
+  ScrDyn *defined = scr_dyn_define_props(object, descriptors);
+  if (!defined) { scr_dyn_release(object); return NULL; }
+  scr_dyn_release(defined);
+  return object;
 }

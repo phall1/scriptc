@@ -8062,7 +8062,7 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
         type: arrayOf(STRING), loc,
       };
       const loop = lowerForInOverKeys(lowerer, stmt, keys, labels, (key) => ({
-        kind: "libCall", fn: "dyn.hasOwn", args: [ref, key], type: BOOL, loc,
+        kind: "libCall", fn: "dyn.hasKey", args: [ref, key], type: BOOL, loc,
       }));
       return { kind: "block", body: [{ kind: "varDecl", localId: recv.id, init: receiver, loc }, loop], loc };
     }

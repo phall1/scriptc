@@ -8,7 +8,7 @@ import { AstNode } from "../ts7/ast-node.js";
 import { bodyReadsArguments } from "../arguments-usage.js";
 import type { Lowerer } from "./lowerer.js";
 import { lowerGenMethodCall } from "./lower-generators.js";
-import { BYTES_ELEMENT_NAME, BIGINT_T, BOOL, CAUGHT, DYN, F64, type IrExpr, type IrFunction, type IrLocal, type IrParam, type IrStmt, type IrType, JSVAL, STRING, SYMBOL_T, type SrcLoc, UNDEFINED_T, VOID, arrayOf, canBoxFuncIntoDyn, canConvertToDyn, canDynCheckTo, canMarshalTypedFuncIntoIsland, ffiClassType, ffiSourceParamTypes, funcOf, isFfiCallbackParam, isFfiContextParam, isFfiReleaseParam, isUnitType, shapeHasAccessorSlots, typeEquals } from "../../ir/ir.js";
+import { BYTES_ELEMENT_NAME, BIGINT_T, BOOL, CAUGHT, DYN, F64, type IrExpr, type IrFunction, type IrLocal, type IrParam, type IrStmt, type IrType, JSVAL, NULL_T, STRING, SYMBOL_T, type SrcLoc, UNDEFINED_T, VOID, arrayOf, canBoxFuncIntoDyn, canConvertToDyn, canDynCheckTo, canMarshalTypedFuncIntoIsland, ffiClassType, ffiSourceParamTypes, funcOf, isFfiCallbackParam, isFfiContextParam, isFfiReleaseParam, isUnitType, shapeHasAccessorSlots, typeEquals } from "../../ir/ir.js";
 import type { IrFfiCallbackParam, IrFfiCallbackParamClass, IrFfiImport, IrFfiReleaseParam } from "../../ir/ir.js";
 import { isJsSourceFile, isNodeEsmFile, locOf, requireSpecOf } from "../program.js";
 import { genResultRecord, isGenericCallableMemberType, jsOpenObjectType, typeKey } from "../type-mapper.js";
@@ -5377,8 +5377,8 @@ function immediateObjectTagReceiver(lowerer: Lowerer, node: ts.Expression): { ta
 }
 
 const ARRAY_BORROW_METHODS = new Set([
-  "at", "every", "filter", "find", "findIndex", "forEach", "includes",
-  "indexOf", "lastIndexOf", "map", "reduce", "reduceRight", "some",
+  "at", "every", "filter", "find", "findIndex", "findLast", "findLastIndex", "forEach", "includes",
+  "indexOf", "lastIndexOf", "map", "reduce", "reduceRight", "slice", "some",
 ]);
 
 function lowerArrayPrototypeBorrowCall(
@@ -5434,7 +5434,11 @@ function lowerObjectOwnMethodCall(
   const method = access.name.text;
   if (lowerer.dynamic || call.questionDotToken || access.questionDotToken ||
       (method !== "hasOwnProperty" && method !== "propertyIsEnumerable") ||
-      !lowerer.isStdlibMember(access) || call.arguments.some(ts.isSpreadElement)) return null;
+      call.arguments.some(ts.isSpreadElement)) return null;
+  if (!lowerer.isStdlibMember(access)) {
+    const receiver = tryLowerExpression(lowerer, access.expression);
+    if (receiver?.type.kind !== "dyn") return null;
+  }
   return lowerObjectOwnCall(lowerer, call, access.expression, call.arguments[0], call.arguments.slice(1), method);
 }
 
@@ -5509,8 +5513,8 @@ function lowerObjectOwnCall(
       lowerer.noLowering("Object.prototype." + method + " over this record shape", receiverNode ?? call);
     }
     result = { kind: "call", callee: recordHasOwnHelper(lowerer, type.shapeId, loc), args: [receiverRef, key], type: BOOL, loc };
-  } else if (type.kind === "dyn" && !enumerable) {
-    result = { kind: "libCall", fn: "dyn.hasOwn", args: [receiverRef, key], type: BOOL, loc };
+  } else if (type.kind === "dyn") {
+    result = { kind: "libCall", fn: enumerable ? "dyn.propertyIsEnumerable" : "dyn.hasOwn", args: [receiverRef, key], type: BOOL, loc };
   } else if (type.kind === "string" || type.kind === "array") {
     const needleLocal = lowerer.declareHiddenLocal("%ownIndex", F64);
     stmts.push({ kind: "varDecl", localId: needleLocal.id, init: { kind: "libCall", fn: "num.fromString", args: [key], type: F64, loc }, loc });
@@ -8862,6 +8866,28 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
     if (call.questionDotToken || access.questionDotToken) return null;
     if (!lowerer.isStdlibGlobal(access.expression, "Object")) return null;
     const member = access.name.text;
+    if ((member === "getOwnPropertyNames" || member === "getOwnPropertyDescriptors") && call.arguments.length === 1 &&
+        !call.arguments.some(ts.isSpreadElement) && !lowerer.dynamic) {
+      let object = lowerer.lowerExpr(call.arguments[0]!);
+      if (object.type.kind === "string" || object.type.kind === "f64" ||
+          object.type.kind === "bool" || isUnitType(object.type))
+        object = { kind: "dynFrom", value: object, type: DYN, loc: locOf(call) };
+      if (object.type.kind === "dyn")
+        return { kind: "libCall", fn: member === "getOwnPropertyNames" ? "dyn.getOwnPropertyNames" : "dyn.getOwnPropertyDescriptors", args: [object], type: DYN, loc: locOf(call) };
+    }
+    if ((member === "getPrototypeOf" || member === "setPrototypeOf") &&
+        call.arguments.length === (member === "getPrototypeOf" ? 1 : 2) &&
+        !call.arguments.some(ts.isSpreadElement) && !lowerer.dynamic) {
+      const object = lowerer.lowerExpr(call.arguments[0]!);
+      if (object.type.kind === "dyn") {
+        const loc = locOf(call);
+        if (member === "getPrototypeOf")
+          return { kind: "libCall", fn: "dyn.getPrototype", args: [object], type: DYN, loc };
+        const prototype = lowerer.lowerExpr(call.arguments[1]!);
+        if (prototype.type.kind === "dyn")
+          return { kind: "libCall", fn: "dyn.setPrototype", args: [object, prototype], type: DYN, loc };
+      }
+    }
     if (member === "getOwnPropertyDescriptor" && call.arguments.length === 2) {
       const [receiver, key] = call.arguments;
       if (receiver && key && ts.isPropertyAccessExpression(receiver) && receiver.name.text === "prototype" &&
@@ -8992,27 +9018,14 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
         "the operands must share one comparable kind (numbers, strings, booleans, units, one union shape, or one reference type)",
       );
     }
-    // Object.create — the null-prototype DICTIONARY (`Object.create(null)`
-    // then keyed assignment, the memo-table idiom prettier's index/
-    // group-mode maps spell) and, under --dynamic, the engine's own
-    // Object.create for engine-held prototypes. Everything else is a
-    // NAMED fence: the compiled representations have no prototype chain,
-    // and the own-copy stand-in would answer WRONG observably — Node's
-    // Object.keys/inspect/JSON of the created object list NO own keys,
-    // and mutating the prototype afterwards is visible through the
-    // created object (live delegation), which no copy can honor.
+    // Native checked objects retain a live prototype and can install an
+    // own-property descriptor table during creation. Engine-held values
+    // use the engine's Object.create path below.
     if (member === "create") {
       if (call.arguments.some((a) => ts.isSpreadElement(a))) {
         lowerer.noLowering("Object.create with spread arguments", call);
       }
-      if (call.arguments.length >= 2) {
-        lowerer.noLowering(
-          "Object.create with a properties-descriptor argument",
-          call,
-          "create first, then assign: const o = Object.create(null); o.k = v",
-        );
-      }
-      if (call.arguments.length !== 1) {
+      if (call.arguments.length < 1 || call.arguments.length > 2) {
         lowerer.noLowering(`Object.create with ${call.arguments.length} arguments`, call);
       }
       const loc = locOf(call);
@@ -9020,6 +9033,7 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
       while (ts.isParenthesizedExpression(protoNode)) protoNode = protoNode.expression;
       const nullProto = protoNode.kind === ts.SyntaxKind.NullKeyword;
       if (lowerer.dynamic) {
+        if (call.arguments.length === 2) lowerer.noLowering("Object.create with properties under --dynamic", call);
         // The checker types the result `any` — an ENGINE value under
         // --dynamic — and the engine's own Object.create answers with
         // REAL prototype semantics: reads delegate LIVE, writes shadow,
@@ -9044,15 +9058,24 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
           "prototype reads delegate LIVE in Node (mutating the prototype shows through the created object), which the boundary's deep copy cannot honor — only null and engine-held ('any') prototypes lower",
         );
       }
-      if (nullProto) {
+      if (nullProto && call.arguments.length === 1) {
         return { kind: "libCall", fn: "dyn.objCreateNullProto", args: [], type: DYN, loc };
       }
-      const proto = lowerer.lowerExpr(protoNode);
-      lowerer.noLowering(
-        `Object.create over '${lowerer.fmt(proto.type)}' prototypes`,
-        call,
-        "the compiled representations have no prototype chain, and an own-copy would answer wrong observably (Node lists NO own keys on the created object, and prototype mutations show through it live) — only Object.create(null) lowers",
-      );
+      let proto = nullProto
+        ? { kind: "dynFrom", value: { kind: "unitLit", unit: "null", type: NULL_T, loc }, type: DYN, loc } as IrExpr
+        : ts.isObjectLiteralExpression(protoNode)
+          ? lowerer.lowerExprExpecting(protoNode, DYN)
+          : lowerer.lowerExpr(protoNode);
+      if (isUnitType(proto.type) || proto.type.kind === "f64" || proto.type.kind === "bool" || proto.type.kind === "string")
+        proto = { kind: "dynFrom", value: proto, type: DYN, loc };
+      if (proto.type.kind === "dyn") {
+        if (call.arguments.length === 1)
+          return { kind: "libCall", fn: "dyn.objCreate", args: [proto], type: DYN, loc };
+        const descriptors = lowerer.lowerExprExpecting(call.arguments[1]!, DYN);
+        if (descriptors.type.kind === "dyn")
+          return { kind: "libCall", fn: "dyn.objCreateWithProperties", args: [proto, descriptors], type: DYN, loc };
+      }
+      lowerer.noLowering(`Object.create over '${lowerer.fmt(proto.type)}' prototypes`, call);
     }
     // `Object.assign(fn, { props })` whose RESULT type maps to the hybrid
     // (function-with-properties) record: the chalk-shape CONSTRUCTOR.
@@ -9279,6 +9302,28 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
       }
       return null;
     }
+    if (["preventExtensions", "isExtensible", "seal", "isSealed", "isFrozen"].includes(member) &&
+        call.arguments.length === 1 && !ts.isSpreadElement(call.arguments[0]!)) {
+      const value = lowerer.lowerExpr(call.arguments[0]!);
+      if (value.type.kind === "string" || value.type.kind === "f64" ||
+          value.type.kind === "bool" || value.type.kind === "symbol" || isUnitType(value.type)) {
+        if (member === "preventExtensions" || member === "seal") return value;
+        const loc = locOf(call);
+        const answer: IrExpr = { kind: "boolLit", value: member !== "isExtensible", type: BOOL, loc };
+        return isSafeToDiscard(value) ? answer : {
+          kind: "seqExpr", stmts: [{ kind: "exprStmt", expr: value, loc: value.loc }],
+          result: answer, type: BOOL, loc,
+        };
+      }
+      if (value.type.kind === "dyn") {
+        const operation = {
+          preventExtensions: "dyn.preventExtensions", isExtensible: "dyn.isExtensible",
+          seal: "dyn.seal", isSealed: "dyn.isSealed", isFrozen: "dyn.isFrozen",
+        } as const;
+        const fn = operation[member as keyof typeof operation];
+        return { kind: "libCall", fn, args: [value], type: member.startsWith("is") ? BOOL : DYN, loc: locOf(call) };
+      }
+    }
     // Object.freeze: on a FRESH literal (object or array) the result IS
     // the argument — no alias exists, so the frozen bit is unobservable
     // (writes through the Readonly<T> result are compile errors, and no
@@ -9412,9 +9457,11 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
       const isDyn = probed?.type.kind === "dyn";
       // Unit-typed arguments (Object.keys(null)) ride the same runtime
       // walk: it throws Node's catchable TypeError.
-      const isUnit = probed !== null && probed !== undefined && isUnitType(probed.type);
       const isFunction = probed?.type.kind === "func" && lowerer.dynConvertible(probed.type);
-      if (isDyn || isUnit || isFunction) {
+      const isPrimitive = probed !== null && probed !== undefined &&
+        (isUnitType(probed.type) || probed.type.kind === "string" ||
+         probed.type.kind === "f64" || probed.type.kind === "bool");
+      if (isDyn || isPrimitive || isFunction) {
         const fn = member === "keys" ? "dyn.objKeys" : member === "values" ? "dyn.objValues" : "dyn.objEntries";
         let v = lowerer.lowerExpr(argNode);
         if (v.type.kind !== "dyn") v = { kind: "dynFrom", value: v, type: DYN, loc: locOf(call) };

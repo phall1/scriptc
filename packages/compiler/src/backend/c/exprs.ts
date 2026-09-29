@@ -4613,10 +4613,32 @@ function emitDynamicLibCall(state: LibCallState): Temp {
             // Object.create(null): the fresh null-prototype dictionary
             // (+1). Never throws.
             return finish(`scr_dyn_new_obj_null_proto()`);
+          case "dyn.objCreate":
+            return finish(`scr_dyn_obj_create(${arg(0)})`);
+          case "dyn.objCreateWithProperties":
+            return finish(`scr_dyn_obj_create_with_properties(${arg(0)}, ${arg(1)})`);
+          case "dyn.getPrototype":
+            return finish(`scr_dyn_get_prototype(${arg(0)})`);
+          case "dyn.setPrototype":
+            return finish(`scr_dyn_set_prototype(${arg(0)}, ${arg(1)})`);
+          case "dyn.getOwnPropertyNames":
+            return finish(`scr_dyn_get_own_property_names(${arg(0)})`);
+          case "dyn.getOwnPropertyDescriptors":
+            return finish(`scr_dyn_get_own_property_descriptors(${arg(0)})`);
+          case "dyn.preventExtensions":
+            return finish(`scr_dyn_prevent_extensions(${arg(0)})`);
+          case "dyn.isExtensible":
+            return finish(`scr_dyn_is_extensible(${arg(0)})`);
+          case "dyn.seal":
+            return finish(`scr_dyn_seal(${arg(0)})`);
+          case "dyn.isSealed":
+            return finish(`scr_dyn_is_sealed(${arg(0)})`);
           case "dyn.hasOwn":
             // Object.hasOwn over a dyn receiver (throws on nullish, like
             // Node's ToObject).
             return finish(`scr_dyn_has_own(${arg(0)}, ${arg(1)})`);
+          case "dyn.propertyIsEnumerable":
+            return finish(`scr_dyn_property_is_enumerable(${arg(0)}, ${arg(1)})`);
           case "dyn.objValues":
             return finish(`scr_dyn_obj_values(${arg(0)})`);
           case "dyn.objEntries":

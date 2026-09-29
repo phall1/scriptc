@@ -168,14 +168,14 @@ export function emitGenericLibCall(host: LlvmEmitterContext, e: LibCallExpr): Ll
     const retTy = host.llType(e.type);
     const retDecl = retTy === "i1" ? "zeroext i1" : retTy;
     host.declare(`declare ${retDecl} @${sym}(${argDecls.join(", ")})`);
-    const argList = args.map((a) => `${host.llType(a.type)} ${a.name}`).join(", ");
+    const argList = args.map((a, index) => `${argDecls[index]} ${a.name}`).join(", ");
     if (retTy === "void") {
       B.line(`call void @${sym}(${argList})`);
       if (MAY_THROW_LIB_FNS.has(e.fn)) host.emitPendingCheck();
       return { name: "", type: e.type };
     }
     const t = B.tmp();
-    B.line(`${t} = call ${retTy} @${sym}(${argList})`);
+    B.line(`${t} = call ${retDecl} @${sym}(${argList})`);
     // The result joins its frame BEFORE the pending check so an unwind
     // releases the dummy (NULL for refcounted returns) harmlessly.
     const out = host.own({ name: t, type: e.type });
