@@ -1,3 +1,4 @@
+import { everyExprChild, everyStmtChild } from "../../ir/traverse.js";
 import { buildUnionNarrow } from "./union-narrow.js";
 import { planUnionRetag, buildUnionRetag } from "./union-retag.js";
 import type { WidthLift } from "./width-lift.js";
@@ -202,10 +203,6 @@ const IR_STMT_KINDS = new Set([
   "continue", "block", "tryCatch", "throw", "rethrow", "runtimeFence",
 ]);
 
-/** True when a lowered statement's OWN expressions contain island
- * constructs — a generic JSON walk (like moduleUsesRegex): `kind`
- * discriminants live only on IR objects, so user string values can never
- * false-positive. Nested statements are skipped (counted separately). */
 /** Every identifier a binding name binds: the identifier itself, or all
  * identifiers of a (possibly nested) destructuring pattern in source
  * order. */
@@ -221,29 +218,21 @@ export function boundIdentifiersOf(name: ts.BindingName): ts.Identifier[] {
   return out;
 }
 
+/** Inspect executable children directly, without boxing the statement tree
+ * into checked-dynamic storage just to calculate coverage. */
 export function stmtUsesIsland(stmts: IrStmt | IrStmt[]): boolean {
-  let found = false;
-  const visit = (v: unknown, root: boolean): void => {
-    if (found || v === null || typeof v !== "object") return;
-    if (Array.isArray(v)) {
-      for (const item of v) visit(item, root);
-      return;
-    }
-    const kind = (v as { kind?: unknown }).kind;
-    if (!root && typeof kind === "string" && IR_STMT_KINDS.has(kind)) return;
-    const fn = (v as { fn?: unknown }).fn;
-    if (
-      kind === "jsOp" || kind === "jsExit" || kind === "jsBridgePromise" ||
-      fn === "island.eval" || fn === "island.import" || fn === "island.importDyn" ||
-      fn === "island.castFail"
-    ) {
-      found = true;
-      return;
-    }
-    for (const value of Object.values(v)) visit(value, false);
+  // Keep the accounting boundary at the source statement: nested statement
+  // lists are counted by their own lowerStmts invocation.
+  const nested = (stmt: IrStmt): boolean =>
+    IR_STMT_KINDS.has(stmt.kind) || everyStmtChild(stmt, expr, nested);
+  const expr = (node: IrExpr): boolean => {
+    if (node.kind === "jsOp" || node.kind === "jsExit" || node.kind === "jsBridgePromise" ||
+        (node.kind === "libCall" && (node.fn === "island.eval" || node.fn === "island.import" ||
+          node.fn === "island.importDyn" || node.fn === "island.castFail"))) return false;
+    return everyExprChild(node, expr, nested);
   };
-  visit(stmts, true);
-  return found;
+  if (Array.isArray(stmts)) return !stmts.every((stmt) => everyStmtChild(stmt, expr, nested));
+  return !everyStmtChild(stmts, expr, nested);
 }
 
 export interface LowerResult {

@@ -36,9 +36,10 @@
  * The pass never rewrites a well-typed argument: typeEquals matches are
  * untouched, so byte-stability holds for every program that lowered
  * cleanly before. The validator stays the backstop for anything else. */
+import { everyExprChild, everyStmtChild } from "../../ir/traverse.js";
 import type { Lowerer } from "./lowerer.js";
 import { PoisonError } from "./lowerer.js";
-import { canAdaptDynFuncTo, canMarshalTypedFuncIntoIsland, DYN, DYN_HANDLE_KINDS, type IrExpr, type IrType, JSVAL, type SrcLoc, STRING, isDynTypedRefType, isUnitType, typeEquals } from "../../ir/ir.js";
+import { canAdaptDynFuncTo, canMarshalTypedFuncIntoIsland, DYN, DYN_HANDLE_KINDS, type IrExpr, type IrStmt, type IrType, JSVAL, type SrcLoc, STRING, isDynTypedRefType, isUnitType, typeEquals } from "../../ir/ir.js";
 import { LIB_FN_SIGS, REGEX_INTRINSIC_SIGS, STR_INTRINSIC_SIGS } from "../../ir/validate.js";
 import { unionMismatchDiag, unsupportedDiag } from "../../diagnostics/diagnostic.js";
 
@@ -123,19 +124,21 @@ function fence(lowerer: Lowerer, code: "SC1090" | "SC1100", loc: SrcLoc, feature
  * signature-table argument slot. Idempotent: a wrapped argument matches its
  * slot on a revisit (nested statement lists are walked by their own
  * lowerStmts call first, then again inside the enclosing statement). */
-export function enforceLibBoundary(lowerer: Lowerer, node: unknown): void {
-  if (node === null || typeof node !== "object") return;
-  if (Array.isArray(node)) {
-    for (const item of node) enforceLibBoundary(lowerer, item);
-    return;
-  }
-  const rec = node as Record<string, unknown>;
-  for (const key of Object.keys(rec)) {
-    if (key !== "loc") enforceLibBoundary(lowerer, rec[key]);
-  }
-  const kind = rec["kind"];
+export function enforceLibBoundary(lowerer: Lowerer, node: IrStmt | IrStmt[]): void {
+  const stmt = (value: IrStmt): boolean => everyStmtChild(value, expr, stmt);
+  const expr = (value: IrExpr): boolean => {
+    everyExprChild(value, expr, stmt);
+    enforceExprBoundary(lowerer, value);
+    return true;
+  };
+  if (Array.isArray(node)) node.forEach((value) => { stmt(value); });
+  else stmt(node);
+}
+
+function enforceExprBoundary(lowerer: Lowerer, node: IrExpr): void {
+  const kind = node.kind;
   if (kind === "libCall") {
-    const e = rec as unknown as Extract<IrExpr, { kind: "libCall" }>;
+    const e = node;
     const sig = LIB_FN_SIGS[e.fn];
     if (!sig) return;
     e.args.forEach((a, i) => {
@@ -145,7 +148,7 @@ export function enforceLibBoundary(lowerer: Lowerer, node: unknown): void {
     return;
   }
   if (kind === "strIntrinsic") {
-    const e = rec as unknown as Extract<IrExpr, { kind: "strIntrinsic" }>;
+    const e = node;
     e.receiver = coerceSlot(lowerer, e.receiver, STRING, `the receiver of .${e.method}`);
     const sig = STR_INTRINSIC_SIGS[e.method];
     if (!sig) return;
@@ -156,7 +159,7 @@ export function enforceLibBoundary(lowerer: Lowerer, node: unknown): void {
     return;
   }
   if (kind === "regexIntrinsic") {
-    const e = rec as unknown as Extract<IrExpr, { kind: "regexIntrinsic" }>;
+    const e = node;
     const sig = REGEX_INTRINSIC_SIGS[e.method];
     if (!sig) return;
     e.receiver = coerceSlot(lowerer, e.receiver, sig.receiver, `the receiver of .${e.method}`);
@@ -167,7 +170,7 @@ export function enforceLibBoundary(lowerer: Lowerer, node: unknown): void {
     return;
   }
   if (kind === "arrIntrinsic") {
-    const e = rec as unknown as Extract<IrExpr, { kind: "arrIntrinsic" }>;
+    const e = node;
     if (e.receiver.type.kind === "dyn" || e.receiver.type.kind === "jsval" || isUnitType(e.receiver.type)) {
       // No element type exists to validate a dyn receiver against — the
       // honest answer is the operations-on-unknown fence. An island
@@ -182,7 +185,7 @@ export function enforceLibBoundary(lowerer: Lowerer, node: unknown): void {
     return;
   }
   if (kind === "callValue") {
-    const e = rec as unknown as Extract<IrExpr, { kind: "callValue" }>;
+    const e = node;
     if (e.callee.type.kind === "dyn" || e.callee.type.kind === "jsval" || isUnitType(e.callee.type)) {
       fence(lowerer, "SC1100", e.loc, `calling '${lowerer.fmt(e.callee.type)}' values`);
     }
@@ -210,7 +213,7 @@ export function enforceLibBoundary(lowerer: Lowerer, node: unknown): void {
     // values with an island representation marshal in, and dyn values (no
     // dyn→engine bridge that preserves handles/functions) fence with
     // jsvalIn's own message.
-    const e = rec as unknown as Extract<IrExpr, { kind: "jsOp" }>;
+    const e = node;
     e.args.forEach((a, i) => {
       if (a.type.kind === "jsval") return;
       if (isUnitType(a.type)) {
@@ -236,7 +239,7 @@ export function enforceLibBoundary(lowerer: Lowerer, node: unknown): void {
     // take the ordinary dynFrom crossing; island values have NO bridge
     // into the checked-dynamic tree (a jsval handle cannot ride the deep-copy), so they
     // fence — named, catchable at runtime in JS sources, never an ICE.
-    const e = rec as unknown as Extract<IrExpr, { kind: "dynCall" | "dynInvoke" }>;
+    const e = node;
     if (kind === "dynInvoke") {
       const inv = e as Extract<IrExpr, { kind: "dynInvoke" }>;
       if (inv.recv.type.kind !== "dyn") {
