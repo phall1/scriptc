@@ -37,9 +37,12 @@
  * SCRIPTC_TS7_ALL=1 widens to the ENTIRE recorded set — the acceptance
  * sweep and the upgrade playbook's step 2. */
 
+import { execFile } from "node:child_process";
 import { globSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { afterAll, describe, expect, test } from "vitest";
 import { checkPreflightTs7 } from "../../src/frontend/program-node.js";
 import { Ts7Host } from "../../src/frontend/ts7/program-adapter.js";
@@ -65,16 +68,32 @@ const rel = (s: string): string =>
 
 const relativeName = (s: string): string => rel(s).replace(/^<repo>\//, "");
 
-function nativeAnswer(host: Ts7Host, entry: string): BaselineEntry {
-  const t7 = checkPreflightTs7(entry, host);
-  return {
+const execFileAsync = promisify(execFile);
+
+async function nativeAnswers(entries: string[]): Promise<BaselineEntry[]> {
+  const frontend = pathToFileURL(join(repoRoot, "packages/compiler/src/frontend/program-node.ts")).href;
+  const adapter = pathToFileURL(join(repoRoot, "packages/compiler/src/frontend/ts7/program-adapter.ts")).href;
+  const { stdout } = await execFileAsync(process.execPath, [
+    "--import", "tsx", "--input-type=module", "--eval",
+    `import { checkPreflightTs7 } from ${JSON.stringify(frontend)};
+     import { Ts7Host } from ${JSON.stringify(adapter)};
+     const host = new Ts7Host();
+     try {
+       const answers = process.argv.slice(1).map(entry => checkPreflightTs7(entry, host));
+       console.log(JSON.stringify(answers));
+     } finally { host.close(); }`,
+    ...entries,
+  ], { cwd: repoRoot, timeout: 240_000, maxBuffer: 32 * 1024 * 1024 });
+  const answers = JSON.parse(stdout) as ReturnType<typeof checkPreflightTs7>[];
+  expect(answers).toHaveLength(entries.length);
+  return answers.map((t7) => ({
     order: t7.moduleOrder.map(rel),
     diags: t7.diags.map((d) => ({
       ...d,
       message: rel(d.message),
       loc: { ...d.loc, file: rel(d.loc.file) },
     })),
-  };
+  }));
 }
 
 function entriesUnder(dir: string): string[] {
@@ -115,13 +134,10 @@ const entries = pickEntries();
 const host = new Ts7Host();
 afterAll(() => host.close());
 
-/* Entries run in CHUNKS of an async test each, with an event-loop yield
- * between entries: each entry is a fully synchronous blocking tsgo
- * round-trip, and hundreds of back-to-back synchronous tests starve the
- * vitest worker's RPC loop (the full sweep reproducibly died with
- * "[vitest-worker]: Timeout calling onTaskUpdate" — all tests green, exit
- * code 1). The chunking is cosmetic only: every assertion still names its
- * entry. */
+/* Each batch runs in an awaited child: even one deep source can block
+ * synchronous preflight past Vitest's RPC deadline. Yielding between
+ * entries cannot help during that call. The child owns and closes its
+ * TypeScript host; every baseline assertion still names its entry. */
 const CHUNK = 20;
 const chunks: string[][] = [];
 for (let i = 0; i < entries.length; i += CHUNK) chunks.push(entries.slice(i, i + CHUNK));
@@ -129,26 +145,29 @@ for (let i = 0; i < entries.length; i += CHUNK) chunks.push(entries.slice(i, i +
 if (UPDATE) {
   test("re-record baselines from the current native frontend", async () => {
     const record: Record<string, BaselineEntry> = {};
-    for (const entry of allEntries()) {
-      await new Promise((r) => setImmediate(r));
-      record[rel(entry)] = nativeAnswer(host, entry);
+    const all = allEntries();
+    for (let i = 0; i < all.length; i += CHUNK) {
+      const batch = all.slice(i, i + CHUNK);
+      const answers = await nativeAnswers(batch);
+      for (let j = 0; j < batch.length; j++) record[rel(batch[j]!)] = answers[j]!;
     }
     writeFileSync(baselinePath, JSON.stringify({ entries: record }, null, 1) + "\n");
-  });
+  }, 600_000);
 } else {
   describe(`preflight/order canary vs recorded 5.9.3 baselines (${entries.length} entries${FULL ? ", full sweep" : ""})`, () => {
     test.for(chunks.map((c) => [`${relativeName(c[0]!)} … +${c.length - 1}`, c] as const))(
       "%s",
       async ([, chunk]) => {
-        for (const entry of chunk) {
-          await new Promise((r) => setImmediate(r)); // keep the worker RPC alive
+        const answers = await nativeAnswers(chunk);
+        for (let i = 0; i < chunk.length; i++) {
+          const entry = chunk[i]!;
           const name = relativeName(entry);
           const recorded = baseline.entries[rel(entry)];
           expect(
             recorded,
             `${name}: no recorded baseline — new fixture? re-record with SCRIPTC_UPDATE_BASELINES=1 (see the playbook comment)`,
           ).toBeDefined();
-          const native = nativeAnswer(host, entry);
+          const native = answers[i]!;
           expect(native.order, `${name}: module evaluation order`).toEqual(recorded!.order);
           expect(native.diags, `${name}: preflight diagnostics`).toEqual(recorded!.diags);
         }
