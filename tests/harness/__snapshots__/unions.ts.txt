@@ -1,4 +1,4 @@
-unions.ts:18:10 - error SC2003: union types must match exactly: expected 'number | { n: number } | { m: string }', got 'number | { m: string; n: number }' (a union re-tags into another union only when every arm of the source has an identical arm in the destination, or is a record/array that width-coerces into exactly one destination arm)
+unions.ts:18:10 - error SC2003: union conversion has no unambiguous layout mapping: expected 'number | { n: number } | { m: string }', got 'number | { m: string; n: number }' (each source arm needs an identical destination arm, a unique compatible record/array layout, or a shared literal discriminant selecting compatible layouts)
 
   17 | function ambiguousArm(x: WideArm | number): { n: number } | { m: string } | number {
   18 |   return x;

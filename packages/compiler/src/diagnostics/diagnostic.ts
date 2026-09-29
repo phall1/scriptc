@@ -671,8 +671,8 @@ export function unionMismatchDiag(
   return {
     code: "SC2003",
     message:
-      `union types must match exactly: expected '${expectedText}', got '${actualText}' ` +
-      `(a union re-tags into another union only when every arm of the source has an identical arm in the destination, or is a record/array that width-coerces into exactly one destination arm)`,
+      `union conversion has no unambiguous layout mapping: expected '${expectedText}', got '${actualText}' ` +
+      `(each source arm needs an identical destination arm, a unique compatible record/array layout, or a shared literal discriminant selecting compatible layouts)`,
     loc,
     milestone: "later",
     hint: "narrow the value to a SINGLE arm first (a discriminant check, or '!== undefined'/'!== null' for unit arms); a plain arm value widens into any union that contains it, and a whole union widens into any union whose arms include the source's",

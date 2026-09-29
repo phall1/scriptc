@@ -1,3 +1,7 @@
+import { buildUnionNarrow } from "./union-narrow.js";
+import { planUnionRetag, buildUnionRetag } from "./union-retag.js";
+import type { WidthLift } from "./width-lift.js";
+export type { WidthLift } from "./width-lift.js";
 import { bindingInContext, captureContextBinding, declareContextLocal, declareContextThis, type FnCtx } from "./function-context.js";
 export { newFnCtx, type FnCtx } from "./function-context.js";
 import type { FrontendServices } from "../services.js";
@@ -140,26 +144,6 @@ interface GenericDemandOwner {
   functionDemands: GenericInstance[];
   classDemands: ClassInfo[];
 }
-
-/** One step of the copy-reshape width relation (widthLiftPlan): how a
- * source-typed value enters a destination slot. Pure data — the plan half;
- * applyWidthLift is the build half. */
-export type WidthLift =
-  | { how: "copy" }
-  | { how: "wrap"; tag: number }
-  | { how: "retag" }
-  | { how: "liftWrap"; tag: number; arm: IrType }
-  | { how: "width" }
-  | { how: "unionWidth" }
-  | { how: "arr" }
-  | { how: "tupleArr" }
-  | { how: "emptyArr" }
-  | { how: "objWidth" }
-  | { how: "clsWidth" }
-  | { how: "narrow" }
-  | { how: "dynIn" }
-  | { how: "upcast" }
-  | { how: "funcAdapt" };
 
 export class PoisonError extends Error {}
 
@@ -5626,8 +5610,8 @@ export class Lowerer {
    * before any helper exists. The cases, in order:
    *   copy      — exact same type (typeEquals), the field/element moves as is
    *   retag     — union into union, every arm mapped (unionRetagMappable —
-   *               identity arms, trap-less; record/array arms may width-lift
-   *               into exactly one destination arm)
+   *               identity arms and compatible payload conversions; a shared
+   *               discriminant may select different record destinations)
    *   wrap      — a non-unit arm value into a union that contains it
    *   liftWrap  — a record/array value into a union with NO identical arm
    *               but exactly ONE arm it width-lifts into (the findRoute
@@ -7028,42 +7012,19 @@ export class Lowerer {
     return name;
   }
 
-  /** Interned `%union.retag.<n>(u)` — the runtime re-tag for a value of
-   * union `fromId` flowing into a slot of union `toId`: a switch on the
-   * source tag re-wraps the payload under its tag in the destination
-   * (unionNarrow + unionWrap — the payload pointer moves, no copy, so
-   * ref-arm identity is preserved across the re-tag). Arms map by
-   * canonical type (typeEquals): every non-unit source arm must exist in
-   * the destination, or the pair isn't mappable (null — the caller keeps
-   * the SC2003 fence). A stranded UNIT arm (undefined/null with no
-   * destination arm) is different: it means tsc's picture at the site was
-   * NARROWER than the IR type — control-flow narrowing to a sub-union, or
-   * a non-null assertion, both of which erase at lowering — so the arm is
-   * exactly the possibility the checker proved (or the source asserted)
-   * away. It compiles to a runtime trap case throwing a catchable
-   * TypeError-shaped string, the lying-cast stance (SEMANTICS.md): sound
-   * narrowing never reaches it, a lying `!` throws instead of smuggling
-   * an unrepresentable unit into the destination. */
-  /** True when unionRetagHelper can bridge the pair — every non-unit
-   * source arm exists (typeEquals) in the destination, or width-lifts
-   * into exactly one destination arm (widthLiftPlan — record and array
-   * arms compose the re-tag with the per-arm reshape). Pure: callers that
-   * must validate a WHOLE plan before interning anything (recordWidthHelper)
-   * probe with this so a failed later field never orphans a helper. */
+  /** Validate the complete union conversion before interning helpers.
+   * Recursive width plans close through the same in-progress pair guard;
+   * no optimistic result is memoized after that planning stack unwinds. */
   unionRetagMappable(fromId: string, toId: string): boolean {
     const from = this.unions.get(fromId);
-    if (!from || !this.unions.get(toId)) return false;
-    // The union-pair face of the widthPlanning cycle guard: recursive
-    // aliases can close their cycle through a union without repeating a
-    // record pair (`type Json = Json[] | undefined`) — an in-progress
-    // pair re-entered answers "assume mappable", same greatest-fixed-point
-    // reading as recordWidthPlan's.
+    const to = this.unions.get(toId);
+    if (!from || !to) return false;
     const key = `u:${fromId}:${toId}`;
     if (this.widthPlanning.has(key)) return true;
     this.widthPlanning.add(key);
     try {
-      const toT: IrType = { kind: "union", unionId: toId };
-      return from.arms.every((arm) => isUnitType(arm) || this.widthLiftPlan(arm, toT) !== null);
+      return planUnionRetag(from, to, (id) => this.shapes.get(id),
+        (src, dst) => this.widthLiftPlan(src, dst)) !== null;
     } finally {
       this.widthPlanning.delete(key);
     }
@@ -7234,103 +7195,21 @@ export class Lowerer {
     const from = this.unions.get(fromId);
     const to = this.unions.get(toId);
     if (!from || !to) return null;
-    // Per-arm WIDTH LIFTS: a RECORD or ARRAY arm with no identical
-    // destination arm may width-lift into exactly ONE destination arm
-    // (widthLiftPlan's liftWrap — the findRoute pattern: `{hostname, port,
-    // tailscaleUrl?} | undefined` returning as `{hostname, port} |
-    // undefined`; nested width and per-element array reshapes compose).
-    // Planned PURELY first so a failing arm never orphans an interned
-    // width helper; ambiguity (several liftable destination arms) declines
-    // — no honest single mapping exists. A lifted arm is a COPY
-    // (divergence 35's stance), unlike the identity-preserving plain
-    // re-wrap.
-    const toT: IrType = { kind: "union", unionId: toId };
-    const lifts = new Map<number, WidthLift & { how: "liftWrap" }>();
-    from.arms.forEach((arm, i) => {
-      if (this.armTag(toId, arm) >= 0 || isUnitType(arm) || (trappable?.has(i) ?? false)) return;
-      const lp = this.widthLiftPlan(arm, toT);
-      if (lp && lp.how === "liftWrap") lifts.set(i, lp);
-    });
-    // `trappable` extends the unit-arm rule to arms the CHECKER proved
-    // away at the coercion site (narrowedRetagHelper): those may trap too.
-    const ok = from.arms.every(
-      (arm, i) => this.armTag(toId, arm) >= 0 || isUnitType(arm) || (trappable?.has(i) ?? false) || lifts.has(i),
-    );
-    if (!ok) return null;
-    const mapping = from.arms.map((arm, i) => {
-      const identity = this.armTag(toId, arm);
-      return identity >= 0 ? identity : (lifts.get(i)?.tag ?? -1);
-    });
-    const stranded = mapping.flatMap((t, i) => (t < 0 ? [i] : []));
-    // Lifts are a pure function of the (from, to) pair, so the historic
-    // key stays sound for them; stranded arms depend on the SITE.
+    const plan = planUnionRetag(from, to, (id) => this.shapes.get(id),
+      (src, dst) => this.widthLiftPlan(src, dst), trappable);
+    if (plan === null) return null;
+    // The registry pair determines every route; only checker-proven
+    // stranded arms vary by site. Publish the name before building widths
+    // so recursive records and arrays can call this same helper.
+    const stranded: number[] = [];
+    plan.forEach((arm, tag) => { if (arm.kind === "trap") stranded.push(tag); });
     const key = `${fromId}:${toId}:${stranded.join(".")}`;
     const existing = this.retagHelpers.get(key);
     if (existing) return existing;
     const name = `%union.retag.${this.retagHelpers.size}`;
     this.retagHelpers.set(key, name);
-    const fromT: IrType = { kind: "union", unionId: fromId };
-    const u: IrExpr = { kind: "varRef", localId: "u.0", type: fromT, loc };
-    const body: IrStmt[] = [];
-    from.arms.forEach((arm, i) => {
-      const tag = mapping[i]!;
-      const cond: IrExpr = { kind: "unionIsTag", unionId: fromId, tag: i, negated: false, value: u, type: BOOL, loc };
-      let then: IrStmt[];
-      if (tag < 0) {
-        const what = isUnitType(arm)
-          ? (arm.kind === "undefinedT" ? "undefined" : "null")
-          : `a '${this.fmt(arm)}' value`;
-        then = [
-          {
-            kind: "throw",
-            value: {
-              kind: "libCall",
-              fn: "error.new",
-              args: [
-                {
-                  kind: "strLit",
-                  value: `${what} is not representable in the target union (a value narrowed or asserted past it still held it)`,
-                  type: STRING,
-                  loc,
-                },
-              ],
-              type: { kind: "object", className: "%TypeError" },
-              loc,
-            },
-            loc,
-          },
-        ];
-      } else {
-        const value: IrExpr = isUnitType(arm)
-          ? { kind: "unitLit", unit: arm.kind === "undefinedT" ? "undefined" : "null", type: arm, loc }
-          : { kind: "unionNarrow", unionId: fromId, tag: i, value: u, type: arm, loc };
-        const lift = lifts.get(i);
-        // Width-lifted arm: the narrowed payload reshapes into the
-        // destination arm and wraps (applyWidthLift — planned above, so
-        // the interns cannot fail here); identity arms re-wrap the same
-        // payload pointer.
-        const wrapped: IrExpr = lift
-          ? this.applyWidthLift(lift, value, toT, loc)
-          : { kind: "unionWrap", unionId: toId, tag, value, type: toT, loc };
-        then = [{ kind: "return", value: wrapped, loc }];
-      }
-      body.push({ kind: "if", cond, then, else_: null, loc });
-    });
-    // Unreachable when tags are exhaustive (they are, by construction);
-    // satisfies the all-paths-return rule and keeps a corrupted tag loud.
-    body.push({
-      kind: "throw",
-      value: { kind: "strLit", value: "scriptc: internal error: invalid union tag", type: STRING, loc },
-      loc,
-    });
-    this.liftedFns.push({
-      name,
-      params: [{ localId: "u.0", name: "u", type: fromT }],
-      returnType: toT,
-      locals: [{ id: "u.0", name: "u", type: fromT, mutable: true }],
-      body,
-      loc,
-    });
+    this.liftedFns.push(buildUnionRetag(name, from, to, plan, loc,
+      (lift, value, dst) => this.applyWidthLift(lift, value, dst, loc), (type) => this.fmt(type)));
     return name;
   }
 
@@ -7355,54 +7234,9 @@ export class Lowerer {
     const name = `%union.narrow.${this.narrowHelpers.size}`;
     this.narrowHelpers.set(key, name);
     this.checkedNarrowHelpers.add(name);
-    const fromT: IrType = { kind: "union", unionId: fromId };
-    const u: IrExpr = { kind: "varRef", localId: "u.0", type: fromT, loc };
-    const body: IrStmt[] = [];
-    from.arms.forEach((arm, i) => {
-      if (i === tag) return; // the fall-through extraction below
-      const what = isUnitType(arm)
-        ? (arm.kind === "undefinedT" ? "undefined" : "null")
-        : `a '${this.fmt(arm)}' value`;
-      body.push({
-        kind: "if",
-        cond: { kind: "unionIsTag", unionId: fromId, tag: i, negated: false, value: u, type: BOOL, loc },
-        then: [
-          {
-            kind: "throw",
-            value: {
-              kind: "libCall",
-              fn: "error.new",
-              args: [
-                {
-                  kind: "strLit",
-                  value: `${what} is not representable in the target union (a value narrowed or asserted past it still held it)`,
-                  type: STRING,
-                  loc,
-                },
-              ],
-              type: { kind: "object", className: "%TypeError" },
-              loc,
-            },
-            loc,
-          },
-        ],
-        else_: null,
-        loc,
-      });
-    });
-    body.push({
-      kind: "return",
-      value: { kind: "unionNarrow", unionId: fromId, tag, value: u, type: target, loc },
-      loc,
-    });
-    this.liftedFns.push({
-      name,
-      params: [{ localId: "u.0", name: "u", type: fromT }],
-      returnType: target,
-      locals: [{ id: "u.0", name: "u", type: fromT, mutable: true }],
-      body,
-      loc,
-    });
+    const fn = buildUnionNarrow(name, from, target, loc, (type) => this.fmt(type));
+    if (!fn) throw new InternalCompilerError("lowerer bug: invalid checked union extraction");
+    this.liftedFns.push(fn);
     return name;
   }
 
@@ -7429,33 +7263,12 @@ export class Lowerer {
     if (existing) return existing;
     const name = `%deferred.read.${this.narrowHelpers.size}`;
     this.narrowHelpers.set(key, name);
-    const fromT: IrType = { kind: "union", unionId: fromId };
-    const u: IrExpr = { kind: "varRef", localId: "u.0", type: fromT, loc };
-    const dflt: IrExpr =
-      target.kind === "bool"
-        ? { kind: "boolLit", value: false, type: BOOL, loc }
-        : { kind: "numLit", value: NaN, type: F64, loc };
-    this.liftedFns.push({
-      name,
-      params: [{ localId: "u.0", name: "u", type: fromT }],
-      returnType: target,
-      locals: [{ id: "u.0", name: "u", type: fromT, mutable: true }],
-      body: [
-        {
-          kind: "if",
-          cond: { kind: "unionIsTag", unionId: fromId, tag: utag, negated: false, value: u, type: BOOL, loc },
-          then: [{ kind: "return", value: dflt, loc }],
-          else_: null,
-          loc,
-        },
-        {
-          kind: "return",
-          value: { kind: "unionNarrow", unionId: fromId, tag, value: u, type: target, loc },
-          loc,
-        },
-      ],
-      loc,
-    });
+    const dflt: IrExpr = target.kind === "bool"
+      ? { kind: "boolLit", value: false, type: BOOL, loc }
+      : { kind: "numLit", value: NaN, type: F64, loc };
+    const fn = buildUnionNarrow(name, from, target, loc, (type) => this.fmt(type), dflt);
+    if (!fn) throw new InternalCompilerError("lowerer bug: invalid deferred union extraction");
+    this.liftedFns.push(fn);
     return name;
   }
 

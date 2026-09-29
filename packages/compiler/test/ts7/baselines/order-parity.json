@@ -11145,6 +11145,18 @@
     "<repo>/tests/diagnostics/local-class-boundaries.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/3124-array-prototype-borrow.js": {
+   "order": [
+    "<repo>/tests/corpus/3124-array-prototype-borrow.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/union-discriminant-width.ts": {
+   "order": [
+    "<repo>/tests/corpus/union-discriminant-width.ts"
+   ],
+   "diags": []
   }
  }
 }
