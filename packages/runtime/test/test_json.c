@@ -291,7 +291,7 @@ static void json_callback_tests(void) {
    * Their pre-replacer toJSON differs from a buffer returned BY a replacer. */
   const uint8_t bytes[] = { 5, 6 };
   ScrBytes *storage = scr_bytes_from_data(bytes, sizeof bytes);
-  callback_shared = scr_dyn_new_buffer_copy(storage);
+  callback_shared = scr_dyn_new_buffer(storage);
   scr_bytes_release(storage);
   callback_mode = 0;
   value = scr_dyn_new_obj();

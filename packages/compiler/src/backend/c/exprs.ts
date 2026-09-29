@@ -8464,6 +8464,8 @@ function emitErrorsEventsLibCall(state: LibCallState): Temp {
             return finish(`scr_emitter_listener_count((ScrEmitter *)${arg(0)}, ${arg(1)})`);
           case "emitter.countFn":
             return finish(`scr_emitter_listener_count_fn((ScrEmitter *)${arg(0)}, ${arg(1)}, ${arg(2)})`);
+          case "emitter.countDyn":
+            return finish(`scr_emitter_listener_count_dyn((ScrEmitter *)${arg(0)}, ${arg(1)}, ${arg(2)})`);
           case "emitter.names":
             // +1 string[] in first-registration order.
             return finish(`scr_emitter_event_names((ScrEmitter *)${arg(0)})`);

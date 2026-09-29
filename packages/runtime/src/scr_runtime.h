@@ -1759,6 +1759,7 @@ bool scr_emitter_emit_flex(ScrEmitter *em, ScrStr *name, ScrDyn *const *args, si
 bool scr_emitter_emit_error(ScrEmitter *em, ScrStr *name, ScrError *err);
 double scr_emitter_listener_count(ScrEmitter *em, ScrStr *name);
 double scr_emitter_listener_count_fn(ScrEmitter *em, ScrStr *name, ScrClosure *fn);
+double scr_emitter_listener_count_dyn(ScrEmitter *em, ScrStr *name, const ScrDyn *fn);
 ScrArr *scr_emitter_event_names(ScrEmitter *em);          /* +1 string[] */
 /* Pre-create a name's eventNames() rank with no listener (Node's stream
  * classes pre-create their known _events keys; empty = absent for every

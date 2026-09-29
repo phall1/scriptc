@@ -130,7 +130,10 @@ class Ts7ProcessIo implements Ts7WireIo {
     this.child.stdin?.destroy();
     // A failed spawn can leave libuv's process handle without a PID.
     // Never signal it: PID zero has process-group semantics on POSIX.
-    if (this.child.pid !== undefined) this.child.kill();
+    // The channel is closed and all its work is discarded. SIGTERM invokes
+    // tsgo's cancellation handler, which can race EOF and print "context
+    // canceled" into an otherwise successful compile's stderr.
+    if (this.child.pid !== undefined) this.child.kill("SIGKILL");
   };
 }
 

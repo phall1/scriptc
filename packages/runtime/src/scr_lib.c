@@ -618,6 +618,30 @@ ScrStr *scr_process_versions_openssl(void) {
   return scr_str_retain(scr_versions_openssl_str);
 }
 
+static SCR_TL ScrDyn *scr_versions_object;
+
+static void scr_versions_object_cleanup(void) {
+  scr_dyn_release(scr_versions_object);
+  scr_versions_object = NULL;
+}
+
+ScrDyn *scr_process_versions(void) {
+  if (!scr_versions_object) {
+    scr_versions_object = scr_dyn_new_obj();
+    ScrStr *node = scr_process_versions_node();
+    ScrStr *openssl = scr_process_versions_openssl();
+    scr_dyn_obj_set(scr_versions_object, "node", 4, scr_dyn_new_str(node));
+    scr_dyn_obj_set(scr_versions_object, "openssl", 7, scr_dyn_new_str(openssl));
+    scr_str_release(node);
+    scr_str_release(openssl);
+    for (size_t i = 0; i < scr_versions_object->v.obj.len; i++) {
+      scr_versions_object->v.obj.entries[i].writable = false;
+    }
+    scr_atexit(&scr_versions_object_cleanup);
+  }
+  return scr_dyn_retain(scr_versions_object);
+}
+
 /* process.execPath — the running binary's own resolved absolute path,
  * exactly what Node computes for ITS executable (uv_exepath + realpath):
  * _NSGetExecutablePath on macOS, /proc/self/exe on Linux, argv[0] as the

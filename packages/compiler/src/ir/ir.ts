@@ -3988,6 +3988,7 @@ export type IrLibFn =
   | "emitter.emitError"
   | "emitter.count"
   | "emitter.countFn"
+  | "emitter.countDyn"
   | "emitter.names"
   | "emitter.listeners"
   | "emitter.setMax"

@@ -5,7 +5,7 @@
  * Focus areas beside the differential corpus (which re-checks the
  * observable results against Node): the C-level contracts — RC accounting
  * of results, catchable throws through the exception cell (replaceAll
- * without /g, split with capture groups), the CESU-8 pattern re-encoding
+ * without /g), capture-group splitting, the CESU-8 pattern re-encoding
  * for non-/u astral patterns, and the UTF-16 buffer round-trip.
  *
  * Special mode: --crash-global-test calls test() on a /g regex and must
@@ -265,11 +265,9 @@ static void test_split(void) {
   scr_str_release(s);
 
   s = S("a,b");
-  check(!scr_exc_pending(), "no pending exception before the capture fence");
-  ScrArr *r = scr_regex_split(s, &re_split_group);
-  check(r == NULL && scr_exc_pending(),
-        "split with capture groups throws catchably and returns NULL");
-  scr_exc_clear();
+  expect_split(s, &re_split_group, (const char *[]){"a", ",", "b"}, 3,
+               "split includes participating capture groups");
+  check(!scr_exc_pending(), "capture splitting leaves no pending exception");
   scr_str_release(s);
 }
 

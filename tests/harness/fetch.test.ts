@@ -172,6 +172,20 @@ const cases = globSync(join(fixturesRoot, "cases/*/main.ts"))
   .map((entry) => ({ name: entry.split("/").at(-2)!, entry }));
 
 describe(`static fetch differential${sanitize ? " (sanitized)" : ""}`, () => {
+  test.for(["dynamic", "c", "llvm"] as const)(
+    "RequestInit wrapper spread / %s backend",
+    async (lane) => {
+      const entry = join(fixturesRoot, "spread-wrapper/main.mts");
+      const binary = lane === "dynamic" ? await build(entry) : await buildStatic(entry, lane);
+      const [nodeRes, nativeRes] = await Promise.all([
+        runBinary("node", [entry, baseUrl]),
+        runBinary(binary, [baseUrl]),
+      ]);
+      expect(nativeRes.stdout).toEqual(nodeRes.stdout);
+      expect(nativeRes.exitCode).toBe(nodeRes.exitCode);
+    },
+  );
+
   const staticCases = [
     "static",
     "static-coercion",

@@ -19,13 +19,6 @@ private-members.ts:22:13 - error SC1090: method calls like 'rs.read' is not supp
      |             ^~~~~~~~~
   23 | 
 
-private-members.ts:32:15 - error SC1090: bound method references (call '#m' directly) are not supported yet
-
-  31 |   grab(): () => number {
-  32 |     const f = this.#m;
-     |               ^~~~~~~
-  33 |     return f;
-
 private-members.ts:44:51 - error SC1090: '#v in …' on 'unknown' receivers (only class-instance receivers — and unions of classes below or beside the declarer — have a static brand answer; narrow first) are not supported yet
 
   43 |   static probe(o: unknown): boolean {

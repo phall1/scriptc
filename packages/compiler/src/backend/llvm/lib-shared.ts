@@ -587,6 +587,7 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "emitter.emitError": "scr_emitter_emit_error",
   "emitter.count": "scr_emitter_listener_count",
   "emitter.countFn": "scr_emitter_listener_count_fn",
+  "emitter.countDyn": "scr_emitter_listener_count_dyn",
   "emitter.names": "scr_emitter_event_names",
   "emitter.listeners": "scr_emitter_listeners",
   "emitter.setMax": "scr_emitter_set_max",

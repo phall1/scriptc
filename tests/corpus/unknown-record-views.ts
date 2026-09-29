@@ -49,6 +49,22 @@ console.log(checked.name.toUpperCase(), JSON.stringify(checked));
 const present: unknown = JSON.parse('{"first":null,"last":false}');
 console.log(Object.values(present as Record<string, unknown>).length);
 
+// Later typed fields do not turn a dynamic spread source into a fixed
+// record. Copy before evaluating overrides, retaining unmentioned keys.
+const spreadSource: { child: unknown; keep: unknown } = { child: "before", keep: 2 };
+let spreadOrder = "";
+function readSpread(): { child: unknown; keep: unknown } {
+  spreadOrder += "source";
+  return spreadSource;
+}
+function overrideSpread(): string {
+  spreadOrder += ",override";
+  spreadSource.keep = 3;
+  return "after";
+}
+const spreadCopy: { child: unknown; keep: unknown } = { ...readSpread(), child: overrideSpread() };
+console.log(spreadOrder, JSON.stringify(spreadCopy), JSON.stringify(spreadSource));
+
 // Function, return, annotated binding, and field boundaries keep the view.
 function mutate(fields: Record<string, unknown>): Record<string, unknown> {
   fields["throughCall"] = true;

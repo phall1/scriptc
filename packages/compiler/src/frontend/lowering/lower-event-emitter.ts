@@ -1090,6 +1090,9 @@ export function lowerEmitterMethodCall(lowerer: Lowerer, call: ts.CallExpression
       // The fn filter matches by identity — the listener's own type is
       // its word; no tuple check is needed to count.
       const cb = lowerer.lowerExpr(args[1]!);
+      if (cb.type.kind === "dyn") {
+        return { kind: "libCall", fn: "emitter.countDyn", args: [receiver, name, cb], type: F64, loc };
+      }
       if (cb.type.kind !== "func") {
         lowerer.noLowering(`listenerCount with a non-function filter`, args[1]!);
       }

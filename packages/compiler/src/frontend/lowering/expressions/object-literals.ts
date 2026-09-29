@@ -652,6 +652,14 @@ export function lowerObjectLiteral(lowerer: Lowerer, expr: ts.ObjectLiteralExpre
     tsType = lowerer.checker.getAwaitedType(tsType) ?? tsType;
   }
   let mapped = lowerer.mapTypeOf(tsType);
+  // A checked-dynamic source has runtime keys even when later explicit
+  // fields make the literal's inferred type look like a fixed record.
+  // Keep a checked-dynamic destination in that representation so copying
+  // preserves keys, evaluation order, and fields overwritten afterwards.
+  if (mapped?.kind === "dyn" && expr.properties.some((p) =>
+    ts.isSpreadAssignment(p) && lowerer.mapTypeOf(lowerer.typeOf(p.expression))?.kind === "dyn")) {
+    return lowerDynObjectLiteral(lowerer, expr);
+  }
   // A JavaScript call can contextually type an object literal as string even
   // though the literal itself is a record. Keep its own shape so a caller
   // performing ToString can convert it after the value is built.

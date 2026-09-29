@@ -365,6 +365,13 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
               return !sf.isDeclarationFile && !sf.fileName.includes("/node_modules/");
             });
           if (projectDeclared) {
+            // A spread already stored in the island must copy there too.
+            // Later overrides can make the literal's own inferred shape
+            // appear static without making that source a native record.
+            if (ts.isObjectLiteralExpression(expr) && expr.properties.some((p) =>
+              ts.isSpreadAssignment(p) && lowerer.mapTypeOf(lowerer.typeOf(p.expression))?.kind === "jsval")) {
+              return true;
+            }
             const own = lowerer.mapTypeOf(lowerer.typeOf(expr));
             if (own?.kind === "record" || own?.kind === "array") return false;
           }
@@ -4375,6 +4382,17 @@ export function lowerOptionalNumber(
         // read rides engine ops, exiting at the declared per-index type
         // like the array path.
         if (obj.type.kind === "jsval") return islandElementRead(lowerer, expr, obj);
+        if (obj.type.kind === "dyn") {
+          // Object.entries over a checked value stores each pair in the
+          // dynamic tree even when the checker names a tuple type.
+          const key = lowerRecordPropertyKey(lowerer, lowerer.lowerExpr(expr.argumentExpression), expr.argumentExpression);
+          const optional = hasOptionalChainGuard(expr.expression);
+          return lowerer.maybeNarrow({
+            kind: "dynKeyGet", value: obj, key,
+            ...(optional ? { optional: true as const } : {}),
+            type: DYN, loc: locOf(expr),
+          }, expr);
+        }
         if (obj.type.kind === "union" && lowerer.armTag(obj.type.unionId, UNDEFINED_T) >= 0) {
           // The checker sees the outer `arrays[i]` as a tuple when
           // noUncheckedIndexedAccess is disabled, but the lowered read is

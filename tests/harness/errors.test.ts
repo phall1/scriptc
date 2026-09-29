@@ -222,12 +222,12 @@ console.log(two(1, 2, loud()));
 
   test("Array.from fences an unsupported callback result before emission (JS lane)", async () => {
     // Callback-driven producers learn their result element from the
-    // lowered callback, bypassing mapType's ordinary T[] gate. An empty
-    // Set in JS has checked elements; the frontend must replace the
-    // statement with the normal JS runtime fence, never emit Set arrays.
+    // lowered callback, bypassing mapType's ordinary T[] gate. A
+    // Date still has no array storage; the frontend must replace the
+    // statement with the normal JS runtime fence, never emit Date arrays.
     const r = await compileAndRun(
       "array-from-length-elements",
-      `const arr = Array.from({ length: 2 }, () => new Set());
+      `const arr = Array.from({ length: 2 }, () => new Date(0));
 console.log(arr.length);
 `,
       "js",
@@ -235,7 +235,7 @@ console.log(arr.length);
     expect(r.exitCode).toBe(1);
     expect(r.stdout).toBe("");
     expect(r.stderr).toMatch(
-      /^Uncaught Error: 'Array\.from\(\{ length \}, mapper\)' with a callback returning 'Set<unknown>' values .* \[SC1090 at .*array-from-length-elements\.js:1\]\n$/,
+      /^Uncaught Error: 'Array\.from\(\{ length \}, mapper\)' with a callback returning 'Date' values .* \[SC1090 at .*array-from-length-elements\.js:1\]\n$/,
     );
   });
 
@@ -244,9 +244,9 @@ console.log(arr.length);
       label: "flatMap",
       name: "flatmap-elements",
       producer: "'.flatMap()'",
-      result: "'Set<number>' values \\(arrays of this element kind have no representation — store the values individually\\)",
+      result: "'Date' values \\(arrays of this element kind have no representation — store the values individually\\)",
       line: 1,
-      source: `const arr = [1].flatMap(() => new Set([1]));
+      source: `const arr = [1].flatMap(() => new Date(0));
 console.log(arr.length);
 `,
     },
@@ -254,11 +254,11 @@ console.log(arr.length);
       label: "tuple map",
       name: "tuple-map-elements",
       producer: "'.map()'",
-      result: "'Set<unknown>' values \\(arrays of this element kind have no representation — store the values individually\\)",
+      result: "'Date' values \\(arrays of this element kind have no representation — store the values individually\\)",
       line: 3,
       source: `/** @type {[number]} */
 const tuple = [1];
-const arr = tuple.map(() => new Set());
+const arr = tuple.map(() => new Date(0));
 console.log(arr.length);
 `,
     },

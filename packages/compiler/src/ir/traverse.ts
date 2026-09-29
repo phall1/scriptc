@@ -362,8 +362,11 @@ export function mapExprChildren(node: IrExpr, expr: (expr: IrExpr) => IrExpr, st
       return { ...node, args: node.args.map((child) => expr(child)) };
     case "closure":
       return node;
-    case "callValue":
-      return { ...node, callee: expr(node.callee), ...(node.receiver === undefined ? {} : { receiver: expr(node.receiver) }), args: node.args.map((child) => expr(child)) };
+    case "callValue": {
+      const callee = expr(node.callee);
+      if (node.receiver === undefined) return { ...node, callee, args: node.args.map((child) => expr(child)) };
+      return { ...node, callee, receiver: expr(node.receiver), args: node.args.map((child) => expr(child)) };
+    }
     case "selfRef":
       return node;
     case "yieldExpr":
@@ -410,8 +413,11 @@ export function mapExprChildren(node: IrExpr, expr: (expr: IrExpr) => IrExpr, st
       return { ...node, value: expr(node.value) };
     case "dynFromJsval":
       return { ...node, value: expr(node.value) };
-    case "dynCall":
-      return { ...node, callee: expr(node.callee), ...(node.receiver === undefined ? {} : { receiver: expr(node.receiver) }), args: node.args.map((child) => expr(child)) };
+    case "dynCall": {
+      const callee = expr(node.callee);
+      if (node.receiver === undefined) return { ...node, callee, args: node.args.map((child) => expr(child)) };
+      return { ...node, callee, receiver: expr(node.receiver), args: node.args.map((child) => expr(child)) };
+    }
     case "dynInvoke":
       return { ...node, recv: expr(node.recv), args: node.args.map((child) => expr(child)) };
     case "dynArrLit":

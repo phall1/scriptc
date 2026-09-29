@@ -719,6 +719,17 @@ double scr_emitter_listener_count_fn(ScrEmitter *em, ScrStr *name, ScrClosure *f
   return (double)count;
 }
 
+/* A checked-dynamic filter must compare the original closure, never a
+ * newly built call adapter. Node treats a nullish filter as omitted;
+ * other non-functions cannot match a registered listener. All borrowed. */
+double scr_emitter_listener_count_dyn(ScrEmitter *em, ScrStr *name, const ScrDyn *fn) {
+  if (fn->kind == SCR_DYN_NULL || fn->kind == SCR_DYN_UNDEF)
+    return scr_emitter_listener_count(em, name);
+  return fn->kind == SCR_DYN_FUNC
+    ? scr_emitter_listener_count_fn(em, name, fn->v.fn.clo)
+    : 0;
+}
+
 /* eventNames(): +1 string[] of the bucket names in first-registration
  * order (exactly Node's _events key order). Reserved-but-empty buckets
  * (the stream pre-created keys) are invisible until a listener lands. */

@@ -261,18 +261,19 @@ describe("LLVM backend declares match scr_runtime.h prototypes", () => {
 #include <stdint.h>
 #include "scr_runtime.h"
 
-/* LLVM emits: %ScrBytes = type { i64, i64, i32, ptr, ptr }.
+/* LLVM emits: %ScrBytes = type { i64, i64, i32, ptr, ptr, i8 }.
  * Keep every ABI fact used by its field-index GEPs explicit here. */
 _Static_assert(sizeof(size_t) == 8, "LLVM ScrBytes expects 64-bit size_t");
 _Static_assert(sizeof(void *) == 8, "LLVM ScrBytes expects 64-bit pointers");
 _Static_assert(sizeof(ScrBytesElem) == 4, "LLVM ScrBytes elem field is i32");
 _Static_assert(_Alignof(ScrBytes) == 8, "LLVM ScrBytes alignment changed");
-_Static_assert(sizeof(ScrBytes) == 40, "LLVM ScrBytes size changed");
+_Static_assert(sizeof(ScrBytes) == 48, "LLVM ScrBytes size changed");
 _Static_assert(offsetof(ScrBytes, rc) == 0, "LLVM ScrBytes.rc offset changed");
 _Static_assert(offsetof(ScrBytes, len) == 8, "LLVM ScrBytes.len offset changed");
 _Static_assert(offsetof(ScrBytes, elem) == 16, "LLVM ScrBytes.elem offset changed");
 _Static_assert(offsetof(ScrBytes, data) == 24, "LLVM ScrBytes.data offset changed");
 _Static_assert(offsetof(ScrBytes, backing) == 32, "LLVM ScrBytes.backing offset changed");
+_Static_assert(offsetof(ScrBytes, is_buffer) == 40, "LLVM ScrBytes.is_buffer offset changed");
 `,
     );
     const driver = resolveCc();

@@ -45,7 +45,7 @@ ScrDyn *scr_global_native(ScrArr *known) {
   scr_dyn_handle_install(SCR_DYNH_GLOBAL, &ops);
   if (!scr_global_known) scr_global_known = scr_dyn_new_obj();
   if (!scr_global_cleanup_registered) {
-    atexit(scr_global_cleanup);
+    scr_atexit(scr_global_cleanup);
     scr_global_cleanup_registered = true;
   }
   for (size_t i = 0; i < known->len; i++) {
@@ -154,7 +154,7 @@ ScrDyn *scr_process_builtin_module(ScrStr *id, ScrDyn *getter) {
       return scr_dyn_new_handle(module, SCR_DYNH_BUILTIN_MODULE);
   }
   if (!scr_builtin_cleanup_registered) {
-    atexit(scr_builtin_cleanup);
+    scr_atexit(scr_builtin_cleanup);
     scr_builtin_cleanup_registered = true;
   }
   ScrBuiltinModule *module = malloc(sizeof(*module));

@@ -56,7 +56,7 @@ generic-methods.ts:78:7 - error SC2005: values of type '<T>(x: T) => T' cannot b
 
   hint: annotate the destination with a concrete signature (e.g. '(x: number) => number'), instantiate explicitly ('f<number>'), or call the generic function directly
 
-generic-methods.ts:78:15 - error SC1090: bound method references (call 'g' directly) are not supported yet
+generic-methods.ts:78:15 - error SC1090: values of builtin or unspecialized generic methods are not supported yet
 
   77 | }
   78 | const bound = new Inst().g;

@@ -4955,8 +4955,12 @@ function lowerBufferStaticCallWithNarrowedArg(
   call: ts.CallExpression,
   access: ts.PropertyAccessExpression,
 ): IrExpr | null {
-  const lowered = lowerer.lowerBufferStaticCall(call, access);
-  if (lowered?.kind !== "bytesNew" || !lowered.source || lowered.source.type.kind !== "union") return lowered;
+  const result = lowerer.lowerBufferStaticCall(call, access);
+  // The Buffer brand wraps the constructor result. Normalize its source
+  // before restoring that wrapper so narrowed unions never reach bytesNew.
+  const branded = result?.kind === "libCall" && result.fn === "buffer.brand" ? result : null;
+  const lowered = branded ? branded.args[0]! : result;
+  if (lowered?.kind !== "bytesNew" || !lowered.source || lowered.source.type.kind !== "union") return result;
   // A callback can store a wider union than the checker sees at this use
   // (including an added undefined arm). Extract the exact arm proven by
   // control-flow narrowing, not merely the union with undefined removed.
@@ -4974,10 +4978,11 @@ function lowerBufferStaticCallWithNarrowedArg(
   if (!helper) {
     lowerer.unsupported("SC1090", call.arguments[0]!, "a Buffer constructor argument whose narrowed type is not a stored source arm");
   }
-  return {
+  const narrowedValue: IrExpr = {
     ...lowered,
     source: { kind: "call", callee: helper, args: [lowered.source], type: narrowed, loc: lowered.source.loc },
   };
+  return branded ? { ...branded, args: [narrowedValue] } : narrowedValue;
 }
 
 function lowerOptionalNumberDefault(
