@@ -22,6 +22,10 @@ export function lowerStaticallyUndefinedArgument(lowerer: Lowerer, node: ts.Expr
   let expr = node;
   while (ts.isParenthesizedExpression(expr)) expr = expr.expression;
   if ((lowerer.typeOf(expr).flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Void)) === 0) return null;
+  // A caller may already have evaluated the entire argument (including a
+  // void operand) before receiver coercion. Do not evaluate it again.
+  const stabilized = lowerer.chainRecvByNode.get(node);
+  if (stabilized) return stabilized;
   expr = peelErasableWrappers(expr);
   let sawVoid = false;
   while (ts.isVoidExpression(expr)) {

@@ -3777,7 +3777,8 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
       init = expandsObject ? lowerer.lowerExprExpecting(decl.initializer, DYN) : immediatelyGuardedAbsenceProbe(lowerer, decl)
         ? (lowerAbsenceProbe(lowerer, decl.initializer) ?? lowerer.lowerExpr(decl.initializer))
         : lowerVariableInitializer(lowerer, decl.initializer,
-            decl.type ? lowerer.mapTypeOf(lowerer.typeOf(decl.name)) ?? undefined : undefined);
+            decl.type && (lowerer.typeOf(decl.name).flags & ts.TypeFlags.Never) === 0
+              ? lowerer.mapTypeOf(lowerer.typeOf(decl.name)) ?? undefined : undefined);
     } catch (e) {
       if (e instanceof PoisonError) {
         const salvaged = lowerer.mapTypeOf(lowerer.typeOf(decl.name));
@@ -4111,7 +4112,11 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
     // including either arm of a conditional. Existing values still pass
     // through the normal conversion and alias-preservation rules.
     if (!ts.isObjectLiteralExpression(value)) {
-      return ts.isArrayLiteralExpression(value) || ts.isConditionalExpression(value) || ts.isNewExpression(value)
+      // Empty Map/Set construction can use its destination, but class
+      // instances must retain their nominal layout for generic dispatch.
+      const empty = expected ? lowerer.emptyCollectionFor(node, expected) : null;
+      if (empty) return lowerer.coerceInto(node, empty, expected!);
+      return ts.isArrayLiteralExpression(value) || ts.isConditionalExpression(value)
         ? lowerer.lowerExprExpecting(node, expected) : lowerer.lowerExpr(node);
     }
 

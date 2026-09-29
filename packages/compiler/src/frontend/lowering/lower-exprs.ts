@@ -844,7 +844,22 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
             }
             return { kind: "varRef", localId: local.id, type: local.type, loc };
           }
-          return lowerer.maybeNarrow({ kind: "varRef", localId: local.id, type: local.type, loc }, expr);
+          const narrowed = lowerer.maybeNarrow({ kind: "varRef", localId: local.id, type: local.type, loc }, expr);
+          if (narrowed.type.kind === "union" && lowerer.runtimeOptionalStorageLocals.has(runtimeOptionalRoot) &&
+              lowerer.mapTypeOf(lowerer.typeOf(expr))?.kind === "record") {
+            // A presence guard can be followed by a predicate strengthening
+            // the record's fields. Its refined shape is not a stored union
+            // arm: extract the original layout before reading a member.
+            const use = runtimeOptionalUseOf(expr);
+            if (use && !use.complex && !use.optional) {
+              if (use.kind === "property") return runtimeOptionalReceiverRead(lowerer, expr, local, use.access.name.text, loc);
+              if (use.kind === "element") {
+                const key = runtimeOptionalElementKey(use.access.argumentExpression);
+                if (key !== null) return runtimeOptionalReceiverRead(lowerer, expr, local, key, loc);
+              }
+            }
+          }
+          return narrowed;
       }
       // `import x = N.y` aliases resolve transparently through globalOf/
       // fnSigOf below; their source-order guards live here (a no-op for

@@ -7,7 +7,7 @@
 // absent, surplus arguments dropped (JS call semantics). Async callbacks
 // return a real thenable the package can await; a rejection crosses as a
 // real engine Error. Results are compared with Node.
-import { catching, chainCatchLog, chainLog, classifyCaught, collectTwice, extraArgs, fire, maybe, withBool, withNumbers, withOptions, withString } from "typedcb";
+import { catching, chainCatchLog, chainLog, classifyCaught, collectTwice, extraArgs, fire, maybe, opaqueRoundTrip, withBool, withNumbers, withOptions, withString } from "typedcb";
 
 interface Opts {
   name: string;
@@ -72,6 +72,10 @@ function collect(value: string, previous: string[] = []): string[] {
 }
 const collected: string = collectTwice(collect);
 console.log(collected);
+
+// Unknown callback arguments retain engine identity, including cyclic data
+// and callable values; scalar values normalize without losing -0 or NaN.
+console.log(opaqueRoundTrip((value: unknown): unknown => value));
 
 // Async callbacks: the package awaits a real thenable (and logs
 // island-side). The fulfillment marshals back; a rejection arrives as a

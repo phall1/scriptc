@@ -675,7 +675,7 @@ function lowerBuiltinOptionalDefault(
         // This probe marks frontend inputs unstable, but every branch
         // here refuses compilation, so successful-build caches keep their
         // existing dependency proofs.
-        const resolved = resolveRequireRuntime(cr.baseFile.fileName, spec, lowerer.targetPlatform);
+        const resolved = resolveRequireRuntime(cr.baseFile.fileName, spec, lowerer.targetPlatform, undefined, lowerer.frontendServices);
         if (resolved.ok && resolved.value.endsWith(".node")) {
           lowerer.pushDiag(nativeAddonDiag(spec, loc));
           throw new PoisonError();
@@ -4870,7 +4870,9 @@ export function lowerForkCall(lowerer: Lowerer, expr: ts.CallExpression, loc: Sr
       // storage representation when lowered as ordinary arguments. Select
       // the JSON walker from the proven use-site type, using a checked
       // conversion so a stale capture cannot read an impossible payload.
-      if (value.type.kind === "union") {
+      // Optional strings have a serializer that preserves a missing root;
+      // an unchecked array read can still be absent despite its checker type.
+      if (value.type.kind === "union" && optionalStringTags(lowerer, value.type) === null) {
         const narrowed = lowerer.mapTypeOf(lowerer.typeOf(argNode));
         if (narrowed && !isUnitType(narrowed) && narrowed.kind !== "void") {
           const helper = narrowed.kind === "union"

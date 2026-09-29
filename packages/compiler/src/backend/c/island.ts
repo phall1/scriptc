@@ -171,6 +171,11 @@ export function emitNpmEmbedding(emitter: CEmitter, out: string[]): void {
     fn.params.forEach((p, i) => {
       const a = `sc_a${i}`;
       switch (p.kind) {
+        case "dyn":
+          decls.push(`  ScrDyn *${a} = NULL;`);
+          conv.push(`  ${a} = scr_dyn_from_jsval(argv[${i}]);`);
+          cleanup.push(`  scr_dyn_release(${a});`);
+          break;
         case "jsval":
           decls.push(`  ScrJsval *${a} = NULL;`);
           conv.push(`  ${a} = scr_jsval_retain(argv[${i}]);`);

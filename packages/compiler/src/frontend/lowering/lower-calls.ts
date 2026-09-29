@@ -5250,22 +5250,6 @@ function immediatePrimitiveWrapperToString(lowerer: Lowerer, node: ts.Expression
   return lowerer.ensureString(primitive, wrapped);
 }
 
-function plainObjectCoercionReceiver(lowerer: Lowerer, node: ts.Expression): boolean {
-  const plainLiteral = (literal: ts.ObjectLiteralExpression): boolean => literal.properties.every((prop) =>
-    ts.isPropertyAssignment(prop) &&
-    (ts.isIdentifier(prop.name) || ts.isStringLiteral(prop.name) || ts.isNumericLiteral(prop.name)) &&
-    prop.name.text !== "__proto__");
-  let value = node;
-  while (ts.isParenthesizedExpression(value)) value = value.expression;
-  if (ts.isObjectLiteralExpression(value)) return plainLiteral(value);
-  if (!ts.isIdentifier(value)) return false;
-  const symbol = lowerer.resolveValueSymbol(value);
-  const decl = symbol ? lowerer.checker.valueDeclarationOf(symbol) : undefined;
-  if (!symbol || !decl || !ts.isVariableDeclaration(decl) || !decl.initializer ||
-      !ts.isObjectLiteralExpression(decl.initializer) || !plainLiteral(decl.initializer)) return false;
-  return bindingNeverReassigned(lowerer, symbol, decl);
-}
-
 function objectToStringTag(lowerer: Lowerer, type: IrType): string | null {
   switch (type.kind) {
   case "undefinedT":
@@ -5550,6 +5534,55 @@ function lowerObjectPrototypeCall(
   return { kind: "seqExpr", stmts, result, type: STRING, loc };
 }
 
+/** Function.call evaluates all arguments before RequireObjectCoercible and
+ * ToString. Stabilize them before reusing the ordinary string method lowering,
+ * so a boxed nullish receiver or a coercion hook cannot reorder effects. */
+function lowerDynamicStringPrototypeCall(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
+  methodAccess: ts.PropertyAccessExpression,
+  receiver: IrExpr,
+  method: string,
+): IrExpr | null {
+  const loc = locOf(call);
+  const receiverLocal = lowerer.declareHiddenLocal("%stringCallReceiver", receiver.type);
+  const stmts: IrStmt[] = [{ kind: "varDecl", localId: receiverLocal.id, init: receiver, loc }];
+  const receiverRef = varRef(receiverLocal.id, receiver.type, loc);
+  const converted: IrExpr = {
+    kind: "ternary",
+    cond: { kind: "dynTest", test: "nullish", value: receiverRef, type: BOOL, loc },
+    then: nodeThrowExpr(1, "", `String.prototype.${method} called on null or undefined`, STRING, loc),
+    else_: { kind: "libCall", fn: "dyn.toStringCoerce", args: [receiverRef], type: STRING, loc },
+    type: STRING, loc,
+  };
+  const overrides: { node: ts.Expression; previous: IrExpr | undefined }[] = [];
+  try {
+    for (const node of call.arguments.slice(1)) {
+      const undefinedValue = lowerStaticallyUndefinedArgument(lowerer, node);
+      const value = undefinedValue ?? lowerer.lowerExpr(node);
+      let ref: IrExpr;
+      if (undefinedValue || isUnitType(value.type) || value.type.kind === "void") {
+        stmts.push({ kind: "exprStmt", expr: value, loc: value.loc });
+        const nullUnit = !undefinedValue && value.type.kind === "nullT";
+        ref = { kind: "unitLit", unit: nullUnit ? "null" : "undefined", type: nullUnit ? value.type : UNDEFINED_T, loc: value.loc };
+      } else {
+        const local = lowerer.declareHiddenLocal("%stringCallArg", value.type);
+        stmts.push({ kind: "varDecl", localId: local.id, init: value, loc: value.loc });
+        ref = varRef(local.id, value.type, value.loc);
+      }
+      overrides.push({ node, previous: lowerer.chainRecvByNode.get(node) });
+      lowerer.chainRecvByNode.set(node, ref);
+    }
+    const result = lowerStringMethodCallWithOptionalArgs(lowerer, call, methodAccess, () => converted, call.arguments.slice(1));
+    return result ? { kind: "seqExpr", stmts, result, type: result.type, loc } : null;
+  } finally {
+    for (const override of overrides) {
+      if (override.previous) lowerer.chainRecvByNode.set(override.node, override.previous);
+      else lowerer.chainRecvByNode.delete(override.node);
+    }
+  }
+}
+
 function lowerStringPrototypeCall(
   lowerer: Lowerer,
   call: ts.CallExpression,
@@ -5592,6 +5625,9 @@ function lowerStringPrototypeCall(
       loc,
     };
   }
+  if (receiverType.kind === "dyn") {
+    return lowerDynamicStringPrototypeCall(lowerer, call, methodAccess, receiverValue, method);
+  }
   const padding = entry?.method === "padStart" || entry?.method === "padEnd";
   const scalar = receiverType.kind === "string" || receiverType.kind === "f64" ||
     receiverType.kind === "bool" || receiverType.kind === "bigint" ||
@@ -5601,9 +5637,7 @@ function lowerStringPrototypeCall(
   // padding uses a helper that delays conversion until every argument is ready.
   const objectWithoutMethodArgs = entry?.maxArgs === 0 && call.arguments.length === 1 &&
     (receiverType.kind === "record" || receiverType.kind === "array" || receiverType.kind === "object");
-  const dynObjectWithoutMethodArgs = entry?.maxArgs === 0 && call.arguments.length === 1 &&
-    receiverType.kind === "dyn" && plainObjectCoercionReceiver(lowerer, receiverNode);
-  if (!scalar && !objectWithoutMethodArgs && !dynObjectWithoutMethodArgs && !(padding && receiverType.kind === "dyn")) {
+  if (!scalar && !objectWithoutMethodArgs) {
     lowerer.noLowering(`String.prototype.${methodAccess.name.text}.call with ${lowerer.fmt(receiverType)} receivers`, call);
   }
   if (indexMethod) return lowerStringIndexCall(lowerer, call, indexMethod, receiverValue, receiverNode, call.arguments.slice(1));
@@ -5614,9 +5648,7 @@ function lowerStringPrototypeCall(
   if (entry.method === "split") {
     return lowerStringSplitCall(lowerer, call, receiverValue, receiverNode, call.arguments.slice(1));
   }
-  const receiver: IrExpr = dynObjectWithoutMethodArgs
-    ? { kind: "libCall", fn: "dyn.toStringCoerce", args: [receiverValue], type: STRING, loc }
-    : lowerer.ensureString(receiverValue, receiverNode);
+  const receiver = lowerer.ensureString(receiverValue, receiverNode);
   return lowerStringMethodCallWithOptionalArgs(lowerer, call, methodAccess, () => receiver, call.arguments.slice(1));
 }
 

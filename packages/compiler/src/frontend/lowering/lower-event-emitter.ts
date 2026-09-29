@@ -565,14 +565,19 @@ function lowerDynListenerCall(
     }
   } else {
     const cb = lowerer.lowerExpr(cbNode);
-    if (cb.type.kind !== "func" || !canBoxFuncIntoDyn(cb.type, getRecord, getUnion)) {
+    // A wrapper can return a boxed closure even when the checker retains
+    // its callable signature. The registration helper validates that value.
+    if (cb.type.kind === "dyn") {
+      cbDyn = cb;
+    } else if (cb.type.kind === "func" && canBoxFuncIntoDyn(cb.type, getRecord, getUnion)) {
+      cbDyn = { kind: "dynFrom", value: cb, type: DYN, loc };
+    } else {
       lowerer.noLowering(
         `'${member}' with a listener of this signature`,
         cbNode,
         "a checked-dynamic listener's own parameters and return must box across the dynamic boundary",
       );
     }
-    cbDyn = { kind: "dynFrom", value: cb, type: DYN, loc };
   }
   const recvT = receiver.type;
   const adapterT: IrType = { kind: "func", params: tuple, ret: VOID };

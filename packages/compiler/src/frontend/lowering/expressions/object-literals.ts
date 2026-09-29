@@ -1756,6 +1756,11 @@ function lowerUnionRecordClone(lowerer: Lowerer, expr: ts.ObjectLiteralExpressio
   if (isJsSourceFile(expr.getSourceFile())) return null;
   const spread = expr.properties[0];
   if (!spread || !ts.isSpreadAssignment(spread)) return null;
+  let sourceNode = spread.expression;
+  while (ts.isParenthesizedExpression(sourceNode) || ts.isSatisfiesExpression(sourceNode)) sourceNode = sourceNode.expression;
+  // Conditional spreads construct optional keys, including the empty arm.
+  // Their dedicated lowering owns that layout rather than a union clone.
+  if (ts.isConditionalExpression(sourceNode)) return null;
   const sourceType = lowerer.mapTypeOf(lowerer.typeOf(spread.expression));
   if (sourceType?.kind !== "union") return null;
   const def = lowerer.unions.get(sourceType.unionId);
