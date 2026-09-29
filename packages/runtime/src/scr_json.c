@@ -2627,7 +2627,7 @@ ScrStr *scr_dyn_to_string(const ScrDyn *d, const ScrStr *enc) {
   case SCR_DYN_OBJ:
     return scr_str_new("[object Object]", 15);
   case SCR_DYN_HANDLE:
-    if (d->v.handle.tag == SCR_DYNH_REGEXP) {
+    if (d->v.handle.tag == SCR_DYNH_REGEXP || d->v.handle.tag == SCR_DYNH_URL) {
       ScrDyn *text = scr_dyn_handle_ops_of(d)->invoke(d->v.handle.ptr, (ScrDyn *)d, "toString", NULL, 0, "RegExp.toString");
       if (!text) return NULL;
       ScrStr *out = scr_str_retain(text->v.str);
@@ -4825,7 +4825,21 @@ ScrDyn *scr_dyn_for_in_keys(const ScrDyn *v) {
  * getters can affect later entries. Arrays, strings, and bytes use their
  * index-keyed entries walk. Nullish and scalar sources copy nothing;
  * non-OBJ targets have no property table. */
-static void scr_dyn_assign_from(ScrDyn *target, const ScrDyn *src) {
+static void scr_dyn_copy_property(ScrDyn *target, ScrStr *key, ScrDyn *value, bool define) {
+  if (!define) { scr_dyn_key_set(target, key, value); return; }
+  ScrDyn *descriptor = scr_dyn_new_obj();
+  scr_dyn_obj_set(descriptor, "value", 5, scr_dyn_retain(value));
+  scr_dyn_obj_set(descriptor, "writable", 8, scr_dyn_new_bool(true));
+  scr_dyn_obj_set(descriptor, "enumerable", 10, scr_dyn_new_bool(true));
+  scr_dyn_obj_set(descriptor, "configurable", 12, scr_dyn_new_bool(true));
+  ScrDyn *name = scr_dyn_new_str(key);
+  ScrDyn *result = scr_dyn_define_property(target, name, descriptor);
+  scr_dyn_release(result);
+  scr_dyn_release(name);
+  scr_dyn_release(descriptor);
+}
+
+static void scr_dyn_assign_from(ScrDyn *target, const ScrDyn *src, bool define) {
   if (target->kind == SCR_DYN_PROXY || src->kind == SCR_DYN_PROXY) {
     scr_dyn_proxy_unsupported("Object.assign");
     return;
@@ -4833,7 +4847,7 @@ static void scr_dyn_assign_from(ScrDyn *target, const ScrDyn *src) {
   if (target->kind != SCR_DYN_OBJ) return;
   if (src->kind == SCR_DYN_TYPED_REF) {
     ScrDyn *materialized = scr_dyn_typed_ref_materialize(src);
-    scr_dyn_assign_from(target, materialized);
+    if (materialized) scr_dyn_assign_from(target, materialized, define);
     scr_dyn_release(materialized);
     return;
   }
@@ -4846,7 +4860,7 @@ static void scr_dyn_assign_from(ScrDyn *target, const ScrDyn *src) {
       if (!scr_dyn_obj_enumerable(src, key->data, key->len)) continue;
       ScrDyn *value = scr_dyn_obj_read(src, key->data, key->len);
       if (!value) break;
-      scr_dyn_key_set(target, key, value);
+      scr_dyn_copy_property(target, key, value, define);
       scr_dyn_release(value);
       if (scr_exc_pending()) break;
     }
@@ -4865,7 +4879,7 @@ static void scr_dyn_assign_from(ScrDyn *target, const ScrDyn *src) {
       if (pair->kind != SCR_DYN_ARR || pair->v.arr.len != 2) continue;
       const ScrDyn *k = pair->v.arr.items[0];
       if (k->kind != SCR_DYN_STR) continue;
-      scr_dyn_key_set(target, k->v.str, pair->v.arr.items[1]);
+      scr_dyn_copy_property(target, k->v.str, pair->v.arr.items[1], define);
       if (scr_exc_pending()) break;
     }
   }
@@ -4917,7 +4931,21 @@ ScrDyn *scr_dyn_assign(ScrDyn *target, const ScrDyn *src) {
     }
     return scr_exc_pending() ? NULL : scr_dyn_retain(target);
   }
-  scr_dyn_assign_from(target, src);
+  scr_dyn_assign_from(target, src, false);
+  return scr_exc_pending() ? NULL : scr_dyn_retain(target);
+}
+
+/* Object literal spread creates data properties, bypassing existing
+ * setters and replacing configurable accessors on the fresh literal. */
+ScrDyn *scr_dyn_copy_data_properties(ScrDyn *target, const ScrDyn *src) {
+  if (target->kind != SCR_DYN_OBJ) return NULL; /* compiler-owned literal */
+  if (src->kind == SCR_DYN_JSVAL) {
+    ScrDyn *copy = scr_dyn_new_obj();
+    ScrDyn *assigned = scr_dyn_assign(copy, src);
+    if (assigned) scr_dyn_assign_from(target, assigned, true);
+    scr_dyn_release(assigned);
+    scr_dyn_release(copy);
+  } else scr_dyn_assign_from(target, src, true);
   return scr_exc_pending() ? NULL : scr_dyn_retain(target);
 }
 
@@ -5396,6 +5424,372 @@ ScrDyn *scr_array_buffer_from_bytes(ScrBytes *view) {
   return scr_dyn_new_handle(view->backing ? view->backing : view, SCR_DYNH_ARRAY_BUFFER);
 }
 
+static ScrDyn *scr_ffi_fail(const char *message) {
+  scr_throw_error_msg_code(SCR_ERR_ERROR, message, strlen(message), "SC2020");
+  return NULL;
+}
+
+ScrDyn *scr_ffi_argument(ScrDyn *value, ScrStr *type) {
+  const char *error = NULL;
+  if (type->len == 3 && (!memcmp(type->data, "i64", 3) || !memcmp(type->data, "u64", 3))) {
+    bool signed_value = type->data[0] == 'i';
+    if (value->kind != SCR_DYN_BIGINT || !(signed_value ? scr_bigint_i64_fits(value->v.bigint) : scr_bigint_u64_fits(value->v.bigint)))
+      error = signed_value ? "Native argument must be an int64" : "Native argument must be a uint64";
+  } else if (type->len >= 2 && (type->data[0] == 'i' || type->data[0] == 'u')) {
+    bool signed_value = type->data[0] == 'i';
+    unsigned bits = type->data[1] == '8' ? 8 : type->data[1] == '1' ? 16 : 32;
+    double bound = (double)(UINT64_C(1) << (signed_value ? bits - 1 : bits));
+    if (value->kind != SCR_DYN_NUM || !isfinite(value->v.num) || floor(value->v.num) != value->v.num ||
+        value->v.num < (signed_value ? -bound : 0) || value->v.num >= bound) error = "Native integer argument is outside its ABI range";
+  } else if (type->len == 3 && type->data[0] == 'f' && value->kind != SCR_DYN_NUM) {
+    error = "Native floating-point argument must be a number";
+  }
+  if (error) {
+    scr_throw_error_msg_code(SCR_ERR_TYPE, error, strlen(error), "ERR_INVALID_ARG_VALUE");
+    return NULL;
+  }
+  if (type->len == 7 && !memcmp(type->data, "pointer", 7)) {
+    void *address = NULL;
+    bool converted = value->kind == SCR_DYN_NULL || value->kind == SCR_DYN_UNDEF;
+    ScrBytes *bytes = value->kind == SCR_DYN_BYTES ? value->v.bytes :
+      scr_array_buffer_is(value) ? value->v.handle.ptr : NULL;
+    if (bytes) { address = bytes->data; converted = true; }
+    if (value->kind == SCR_DYN_STR) {
+      if (memchr(value->v.str->data, 0, value->v.str->len)) {
+        static const char message[] = "Native string argument must not contain null bytes";
+        scr_throw_error_msg_code(SCR_ERR_TYPE, message, sizeof message - 1, "ERR_INVALID_ARG_VALUE");
+        return NULL;
+      }
+      address = value->v.str->data;
+      converted = true;
+    }
+    if (converted) {
+      ScrBigInt *pointer = scr_bigint_from_pointer(address);
+      ScrDyn *result = scr_dyn_new_bigint(pointer);
+      scr_bigint_release(pointer);
+      return result;
+    }
+    if (value->kind != SCR_DYN_BIGINT || !scr_bigint_pointer_fits(value->v.bigint)) {
+      static const char message[] = "Native pointer argument must be a non-negative address or byte storage";
+      scr_throw_error_msg_code(SCR_ERR_TYPE, message, sizeof message - 1, "ERR_INVALID_ARG_VALUE");
+      return NULL;
+    }
+  }
+  return scr_dyn_retain(value);
+}
+
+static bool scr_ffi_text_equal(const ScrDyn *a, const ScrDyn *b);
+
+static const char *scr_ffi_abi_name(const ScrDyn *value) {
+  if (!value || value->kind != SCR_DYN_STR) return NULL;
+  static const char *const names[][2] = {
+    {"int8", "i8"}, {"uint8", "u8"}, {"bool", "u8"}, {"int16", "i16"}, {"uint16", "u16"},
+    {"int32", "i32"}, {"uint32", "u32"}, {"int64", "i64"}, {"uint64", "u64"},
+    {"float32", "f32"}, {"float", "f32"}, {"float64", "f64"}, {"double", "f64"},
+  };
+  for (size_t i = 0; i < sizeof names / sizeof names[0]; i++)
+    if (value->v.str->len == strlen(names[i][0]) && !memcmp(value->v.str->data, names[i][0], value->v.str->len)) return names[i][1];
+  // Never allow an embedded NUL to turn a different signature into an alias.
+  if (memchr(value->v.str->data, 0, value->v.str->len)) return NULL;
+  return value->v.str->data;
+}
+
+static bool scr_ffi_abi_equal(const ScrDyn *a, const ScrDyn *b) {
+  const char *left = scr_ffi_abi_name(a), *right = scr_ffi_abi_name(b);
+  return left && right && !strcmp(left, right);
+}
+
+static bool scr_ffi_signature_equal(const ScrDyn *entry, const ScrDyn *definition) {
+  if (!definition || definition->kind != SCR_DYN_OBJ) return false;
+  ScrDyn *expected = scr_dyn_obj_get(entry, "arguments", 9);
+  ScrDyn *actual = scr_dyn_obj_get(definition, "arguments", 9);
+  if (!actual || actual->kind != SCR_DYN_ARR || actual->v.arr.len != expected->v.arr.len ||
+      !scr_ffi_abi_equal(scr_dyn_obj_get(entry, "return", 6), scr_dyn_obj_get(definition, "return", 6))) return false;
+  for (size_t i = 0; i < actual->v.arr.len; i++)
+    if (!scr_ffi_abi_equal(actual->v.arr.items[i], expected->v.arr.items[i])) return false;
+  return true;
+}
+
+static void scr_ffi_callback_remove(ScrDyn *entry, ScrDyn *catalog) {
+  ScrDyn *name = scr_dyn_obj_get(entry, "name", 4);
+  for (size_t i = 0; i < catalog->v.arr.len; i++) {
+    ScrDyn *release = catalog->v.arr.items[i];
+    if (!scr_ffi_text_equal(scr_dyn_obj_get(release, "target", 6), name)) continue;
+    ScrDyn *result = scr_dyn_call(scr_dyn_obj_get(release, "call", 4), NULL, 0, "unregisterCallback");
+    scr_dyn_release(result);
+    scr_dyn_obj_set(entry, "owner", 5, scr_dyn_new_num(0));
+    return;
+  }
+}
+
+static ScrDyn *scr_ffi_checked_callback_call(ScrClosure *closure, ScrDyn *const *args, size_t argc) {
+  ScrDyn *callback = scr_box_get_ref(closure->caps[0]);
+  ScrDyn *result = scr_dyn_call(callback, args, argc, "native callback");
+  scr_dyn_release(callback);
+  if (!result) return NULL;
+  ScrDyn *type = scr_box_get_ref(closure->caps[1]);
+  // Callback pointer returns cannot borrow temporary string/byte storage.
+  bool invalid_pointer = type->v.str->len == 7 && !memcmp(type->v.str->data, "pointer", 7) &&
+    result->kind != SCR_DYN_BIGINT && result->kind != SCR_DYN_NULL && result->kind != SCR_DYN_UNDEF;
+  ScrDyn *converted = invalid_pointer ? scr_ffi_fail("native callback pointer return must be a bigint or nullish") : scr_ffi_argument(result, type->v.str);
+  scr_dyn_release(type);
+  scr_dyn_release(result);
+  return converted;
+}
+
+static ScrDyn *scr_ffi_checked_callback(ScrDyn *callback, ScrDyn *type, uint32_t arity) {
+  ScrClosure *closure = scr_closure_new(NULL, 2);
+  for (size_t i = 0; i < 2; i++) {
+    closure->caps[i] = scr_box_new_obj(scr_dyn_retain_v, scr_dyn_release_v, scr_dyn_trace_v);
+    scr_box_set_ref(closure->caps[i], scr_dyn_retain(i ? type : callback));
+  }
+  return scr_dyn_new_func(closure, scr_ffi_checked_callback_call, arity, "", "native callback");
+}
+
+static ScrDyn *scr_ffi_callback_operation(ScrDyn *state, int operation, ScrDyn *const *args, size_t argc) {
+  ScrDyn *catalog = scr_dyn_obj_get(state, "catalog", 7);
+  double owner = scr_dyn_obj_get(state, "id", 2)->v.num;
+  if (operation == 0 || operation == 3) {
+    if (operation == 3 && (argc != 1 || args[0]->kind != SCR_DYN_BIGINT)) return scr_ffi_fail("unregisterCallback requires a pointer");
+    bool removed = operation == 0;
+    for (size_t i = 0; i < catalog->v.arr.len; i++) {
+      ScrDyn *entry = catalog->v.arr.items[i];
+      ScrDyn *registered = scr_dyn_obj_get(entry, "owner", 5);
+      if (!registered || registered->v.num != owner) continue;
+      ScrDyn *pointer = scr_dyn_obj_get(entry, "pointer", 7);
+      if (operation == 3 && !scr_dyn_strict_eq(pointer, args[0])) continue;
+      scr_ffi_callback_remove(entry, catalog);
+      removed = true;
+    }
+    return removed ? scr_dyn_retain(scr_dyn_undefined()) : scr_ffi_fail("callback pointer is not registered with this library");
+  }
+  if (argc != 2 || args[1]->kind != SCR_DYN_FUNC) return scr_ffi_fail("registerCallback requires a signature and callable");
+  ScrDyn *path = scr_dyn_obj_get(state, "path", 4);
+  for (size_t i = 0; i < catalog->v.arr.len; i++) {
+    ScrDyn *entry = catalog->v.arr.items[i];
+    ScrDyn *kind = scr_dyn_obj_get(entry, "operation", 9);
+    if (kind->v.str->len != 8 || memcmp(kind->v.str->data, "register", 8) ||
+        !scr_ffi_text_equal(scr_dyn_obj_get(entry, "library", 7), path) || !scr_ffi_signature_equal(entry, args[0])) continue;
+    ScrDyn *registered = scr_dyn_obj_get(entry, "owner", 5);
+    if (registered && registered->v.num != 0) continue;
+    ScrDyn *checked = scr_ffi_checked_callback(args[1], scr_dyn_obj_get(entry, "return", 6),
+      (uint32_t)scr_dyn_obj_get(entry, "arguments", 9)->v.arr.len);
+    ScrDyn *arguments[] = {checked};
+    ScrDyn *pointer = scr_dyn_call(scr_dyn_obj_get(entry, "call", 4), arguments, 1, "registerCallback");
+    scr_dyn_release(checked);
+    if (!pointer) return NULL;
+    scr_dyn_obj_set(entry, "owner", 5, scr_dyn_new_num(owner));
+    scr_dyn_obj_set(entry, "pointer", 7, scr_dyn_retain(pointer));
+    return pointer;
+  }
+  return scr_ffi_fail("callback signature is not compiled or its registration capacity is exhausted");
+}
+
+static ScrDyn *scr_ffi_library_call(ScrClosure *closure, ScrDyn *const *args, size_t argc) {
+  ScrDyn *state = scr_box_get_ref(closure->caps[0]);
+  int operation = (int)scr_box_get_f64(closure->caps[1]);
+  ScrDyn *closed = scr_dyn_obj_get(state, "closed", 6);
+  if (operation == 0) {
+    scr_dyn_obj_set(state, "closed", 6, scr_dyn_new_bool(true));
+    ScrDyn *result = scr_ffi_callback_operation(state, 0, args, argc);
+    scr_dyn_release(state);
+    return result;
+  }
+  if (closed->v.b) { scr_dyn_release(state); return scr_ffi_fail("native library is closed"); }
+  if (operation != 1) {
+    ScrDyn *result = scr_ffi_callback_operation(state, operation, args, argc);
+    scr_dyn_release(state);
+    return result;
+  }
+  ScrDyn *call = scr_box_get_ref(closure->caps[2]);
+  if (argc != call->v.fn.arity) {
+    scr_dyn_release(call);
+    scr_dyn_release(state);
+    return scr_ffi_fail("native function argument count does not match the compiled signature");
+  }
+  ScrDyn *result = scr_dyn_call(call, args, argc, "native function");
+  scr_dyn_release(call);
+  scr_dyn_release(state);
+  return result;
+}
+
+static ScrDyn *scr_ffi_library_function(ScrDyn *state, int operation, ScrDyn *call) {
+  ScrClosure *closure = scr_closure_new(NULL, call ? 3 : 2);
+  closure->caps[0] = scr_box_new_obj(scr_dyn_retain_v, scr_dyn_release_v, scr_dyn_trace_v);
+  scr_box_set_ref(closure->caps[0], scr_dyn_retain(state));
+  closure->caps[1] = scr_box_new(SCR_BOX_F64);
+  scr_box_set_f64(closure->caps[1], operation);
+  if (call) {
+    closure->caps[2] = scr_box_new_obj(scr_dyn_retain_v, scr_dyn_release_v, scr_dyn_trace_v);
+    scr_box_set_ref(closure->caps[2], scr_dyn_retain(call));
+  }
+  return scr_dyn_new_func(closure, scr_ffi_library_call, call ? call->v.fn.arity : 0, "", "native");
+}
+
+static bool scr_ffi_text_equal(const ScrDyn *a, const ScrDyn *b) {
+  return a && b && a->kind == SCR_DYN_STR && b->kind == SCR_DYN_STR &&
+    a->v.str->len == b->v.str->len && !memcmp(a->v.str->data, b->v.str->data, a->v.str->len);
+}
+
+static ScrDyn *scr_ffi_open(ScrDyn *catalog, const ScrDyn *path, const ScrDyn *definitions) {
+  if (path->kind != SCR_DYN_STR || !definitions || definitions->kind != SCR_DYN_OBJ)
+    return scr_ffi_fail("static node:ffi.dlopen requires a library name and symbol definitions");
+  ScrDyn *functions = scr_dyn_new_obj();
+  ScrDyn *state = scr_dyn_new_obj();
+  static SCR_TL uint64_t next_library_id;
+  if (next_library_id >= UINT64_C(9007199254740991)) {
+    scr_dyn_release(functions); scr_dyn_release(state);
+    return scr_ffi_fail("native library identity capacity exhausted");
+  }
+  scr_dyn_obj_set(state, "id", 2, scr_dyn_new_num((double)++next_library_id));
+  scr_dyn_obj_set(state, "catalog", 7, scr_dyn_retain(catalog));
+  scr_dyn_obj_set(state, "path", 4, scr_dyn_retain((ScrDyn *)path));
+  scr_dyn_obj_set(state, "closed", 6, scr_dyn_new_bool(false));
+  bool found = false;
+  for (size_t i = 0; i < catalog->v.arr.len; i++)
+    if (scr_ffi_text_equal(scr_dyn_obj_get(catalog->v.arr.items[i], "library", 7), path)) found = true;
+  if (!found) goto invalid;
+  for (size_t i = 0; i < definitions->v.obj.len; i++) {
+    const ScrDynEntry *requested = &definitions->v.obj.entries[i];
+    if (!requested->enumerable) continue;
+    if (requested->accessor || requested->value->kind != SCR_DYN_OBJ) goto invalid;
+    ScrDyn *entry = NULL;
+    for (size_t j = 0; j < catalog->v.arr.len; j++) {
+      ScrDyn *candidate = catalog->v.arr.items[j];
+      ScrDyn *name = scr_dyn_obj_get(candidate, "name", 4);
+      ScrDyn *operation = scr_dyn_obj_get(candidate, "operation", 9);
+      if (operation->v.str->len == 4 && !memcmp(operation->v.str->data, "call", 4) &&
+          scr_ffi_text_equal(scr_dyn_obj_get(candidate, "library", 7), path) &&
+          name->v.str->len == requested->key_len && !memcmp(name->v.str->data, requested->key, requested->key_len)) {
+        entry = candidate;
+        break;
+      }
+    }
+    if (!entry) goto invalid;
+    if (!scr_ffi_signature_equal(entry, requested->value)) goto invalid;
+    scr_dyn_obj_set(functions, requested->key, requested->key_len,
+      scr_ffi_library_function(state, 1, scr_dyn_obj_get(entry, "call", 4)));
+  }
+  ScrDyn *lib = scr_dyn_new_obj();
+  scr_dyn_obj_set(lib, "close", 5, scr_ffi_library_function(state, 0, NULL));
+  scr_dyn_obj_set(lib, "registerCallback", 16, scr_ffi_library_function(state, 2, NULL));
+  scr_dyn_obj_set(lib, "unregisterCallback", 18, scr_ffi_library_function(state, 3, NULL));
+  ScrDyn *result = scr_dyn_new_obj();
+  scr_dyn_obj_set(result, "lib", 3, lib);
+  scr_dyn_obj_set(result, "functions", 9, functions);
+  scr_dyn_release(state);
+  return result;
+invalid:
+  scr_dyn_release(functions);
+  scr_dyn_release(state);
+  return scr_ffi_fail("node:ffi.dlopen library or signature does not match a static native binding");
+}
+
+static ScrDyn *scr_ffi_memory_call(ScrClosure *closure, ScrDyn *const *args, size_t argc) {
+  int method = (int)scr_box_get_f64(closure->caps[0]);
+  const ScrDyn *value = argc ? args[0] : scr_dyn_undefined();
+  if (method == 0) {
+    ScrBytes *bytes = value->kind == SCR_DYN_BYTES ? value->v.bytes :
+      scr_array_buffer_is(value) ? value->v.handle.ptr : NULL;
+    if (!bytes) {
+      scr_dyn_arg_type_fail("source", "an ArrayBuffer or ArrayBufferView", value);
+      return NULL;
+    }
+    ScrBigInt *pointer = scr_bigint_from_pointer(bytes->data);
+    ScrDyn *result = scr_dyn_new_bigint(pointer);
+    scr_bigint_release(pointer);
+    return result;
+  }
+  if (method == 1) {
+    if (value->kind != SCR_DYN_BIGINT) {
+      scr_dyn_arg_type_fail("pointer", "of type bigint", value);
+      return NULL;
+    }
+    if (!scr_bigint_pointer_fits(value->v.bigint)) {
+      static const char message[] = "The first argument must be a non-negative bigint";
+      scr_throw_error_msg_code(SCR_ERR_TYPE, message, sizeof message - 1, "ERR_INVALID_ARG_VALUE");
+      return NULL;
+    }
+    const ScrDyn *size = argc > 1 ? args[1] : scr_dyn_undefined();
+    if (size->kind != SCR_DYN_NUM) {
+      scr_dyn_arg_type_fail("length", "of type number", size);
+      return NULL;
+    }
+    double length = size->v.num;
+    if (!isfinite(length) || length < 0 || floor(length) != length) {
+      static const char message[] = "The length must be a non-negative integer";
+      scr_throw_error_msg_code(SCR_ERR_TYPE, message, sizeof message - 1, "ERR_INVALID_ARG_VALUE");
+      return NULL;
+    }
+    if (length >= (double)SIZE_MAX) {
+      static const char message[] = "The length is too large";
+      scr_throw_error_msg_code(SCR_ERR_RANGE, message, sizeof message - 1, "ERR_OUT_OF_RANGE");
+      return NULL;
+    }
+    bool copy = argc < 3 || args[2]->kind == SCR_DYN_UNDEF || scr_dyn_truthy(args[2]);
+    void *pointer = scr_bigint_to_pointer(value->v.bigint);
+    if (!pointer && length != 0) {
+      static const char message[] = "Cannot create an ArrayBuffer from a null pointer";
+      scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "ERR_FFI_INVALID_POINTER");
+      return NULL;
+    }
+    if (length > 0 && (size_t)length - 1 > UINTPTR_MAX - (uintptr_t)pointer) {
+      static const char message[] = "The pointer and length exceed the platform address range";
+      scr_throw_error_msg_code(SCR_ERR_TYPE, message, sizeof message - 1, "ERR_INVALID_ARG_VALUE");
+      return NULL;
+    }
+    if (length > 9007199254740991.0) {
+      static const char message[] = "Buffer is too large";
+      scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "ERR_BUFFER_TOO_LARGE");
+      return NULL;
+    }
+    ScrBytes *bytes = copy ? scr_bytes_from_data(pointer, (size_t)length) :
+      scr_bytes_from_external(pointer, (size_t)length);
+    ScrDyn *result = scr_array_buffer_from_bytes(bytes);
+    scr_bytes_release(bytes);
+    return result;
+  }
+  ScrDyn *catalog = scr_box_get_ref(closure->caps[1]);
+  ScrDyn *result = scr_ffi_open(catalog, value, argc > 1 ? args[1] : NULL);
+  scr_dyn_release(catalog);
+  return result;
+}
+
+static SCR_TL ScrDyn *scr_ffi_module_value;
+
+static void scr_ffi_module_cleanup(void) {
+  scr_dyn_release(scr_ffi_module_value);
+  scr_ffi_module_value = NULL;
+}
+
+ScrDyn *scr_ffi_memory_module(ScrDyn *catalog) {
+  if (scr_ffi_module_value) return scr_dyn_retain(scr_ffi_module_value);
+  ScrDyn *module = scr_dyn_new_obj();
+  const char *names[] = {"getRawPointer", "toArrayBuffer", "dlopen"};
+  for (size_t i = 0; i < 3; i++) {
+    ScrClosure *closure = scr_closure_new(NULL, 2);
+    closure->caps[0] = scr_box_new(SCR_BOX_F64);
+    scr_box_set_f64(closure->caps[0], (double)i);
+    closure->caps[1] = scr_box_new_obj(scr_dyn_retain_v, scr_dyn_release_v, scr_dyn_trace_v);
+    scr_box_set_ref(closure->caps[1], scr_dyn_retain(catalog));
+    scr_dyn_obj_set(module, names[i], strlen(names[i]),
+      scr_dyn_new_func(closure, scr_ffi_memory_call, i == 0 ? 1 : i == 1 ? 3 : 2, "", names[i]));
+  }
+#ifdef _WIN32
+  const char *suffix = "dll";
+#elif defined(__APPLE__)
+  const char *suffix = "dylib";
+#else
+  const char *suffix = "so";
+#endif
+  ScrStr *text = scr_str_new(suffix, strlen(suffix));
+  scr_dyn_obj_set(module, "suffix", 6, scr_dyn_new_str(text));
+  scr_str_release(text);
+  scr_ffi_module_value = scr_dyn_retain(module);
+  scr_atexit(scr_ffi_module_cleanup);
+  return module;
+}
+
 ScrDyn *scr_dyn_mark_snapshot(ScrDyn *value) {
   value->copied_from_native = true;
   return value;
@@ -5472,7 +5866,8 @@ static int scr_weak_key(const ScrDyn *key, void **ptr, unsigned *kind) {
     *ptr = key->v.fn.class_obj ? (void *)key->v.fn.class_obj : (void *)key->v.fn.clo;
     *kind = key->v.fn.class_obj ? 3 : 2; return 1;
   case SCR_DYN_HANDLE:
-    if (key->v.handle.tag != SCR_DYNH_ARRAY_BUFFER && key->v.handle.tag != SCR_DYNH_WEAK_MAP && key->v.handle.tag != SCR_DYNH_WEAK_SET) return -1;
+    if (key->v.handle.tag != SCR_DYNH_ARRAY_BUFFER && key->v.handle.tag != SCR_DYNH_WEAK_MAP &&
+        key->v.handle.tag != SCR_DYNH_WEAK_SET && key->v.handle.tag != SCR_DYNH_STDIO) return -1;
     *ptr = key->v.handle.ptr; *kind = 4 + key->v.handle.tag; return 1;
   case SCR_DYN_TYPED_REF: case SCR_DYN_PROMISE: case SCR_DYN_JSVAL:
     return -1;
@@ -5839,6 +6234,21 @@ ScrDyn *scr_dyn_native_set(ScrMap *value) {
   };
   scr_dyn_handle_install(SCR_DYNH_SET, &ops);
   return scr_dyn_new_handle(value, SCR_DYNH_SET);
+}
+
+ScrDyn *scr_dyn_native_set_new(const ScrDyn *seed) {
+  ScrDyn *items = NULL;
+  if (seed->kind != SCR_DYN_NULL && seed->kind != SCR_DYN_UNDEF) {
+    items = scr_dyn_iter_pack(seed, NULL);
+    if (!items) return NULL;
+  }
+  ScrMap *set = scr_map_new_typed(SCR_MAP_KEY_DYN, SCR_MAP_VAL_F64,
+    scr_dyn_retain_v, scr_dyn_release_v, scr_dyn_trace_v, NULL, NULL, NULL);
+  if (items) for (size_t i = 0; i < items->v.arr.len; i++) scr_map_set_ref_f64(set, items->v.arr.items[i], 0);
+  ScrDyn *result = scr_dyn_native_set(set);
+  scr_map_release(set);
+  scr_dyn_release(items);
+  return result;
 }
 
 bool scr_dyn_native_set_is(const ScrDyn *value) {

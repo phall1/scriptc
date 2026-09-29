@@ -5,6 +5,26 @@ import { validateModule } from "./validate.js";
 
 const loc = { file: "numeric-read.ts", start: 0, end: 0 };
 
+test("static callback operations validate their complete ABI after serialization", () => {
+  const mod = expressionModule({ kind: "numLit", value: 0, type: F64, loc }, []);
+  mod.ffiImports = [
+    { name: "register", symbol: "register", library: "native", callbackOperation: "register", params: [{ callback: { id: "callback", params: ["pointer"], returns: "void", lifetime: "retained", invoke: "script-thread" } }], returns: "pointer" },
+    { name: "release", symbol: "release", library: "native", callbackOperation: "release", callbackTarget: "register", params: [], returns: "void" },
+  ];
+  expect(validateModule(deserializeModule(serializeModule(mod)))).toEqual([]);
+  for (const variant of ["target", "library", "return", "params", "callback-id"]) {
+    const bad = structuredClone(mod);
+    const registration = bad.ffiImports![0]!;
+    const release = bad.ffiImports![1]!;
+    if (variant === "target") release.callbackTarget = "missing";
+    if (variant === "library") release.library = "different";
+    if (variant === "return") registration.returns = "void";
+    if (variant === "params") release.params = ["pointer"];
+    if (variant === "callback-id") (registration.params[0] as { callback: { id: string } }).callback.id = "wrong";
+    expect(validateModule(bad).some(error => error.message.includes("FFI callback operation"))).toBe(true);
+  }
+});
+
 function localClassModule(): IrModule {
   const self: IrType = { kind: "object", className: "Local" };
   const mod = expressionModule({ kind: "classRef", className: "Local", captures: ["outer"], type: { kind: "classval", className: "Local" }, loc }, []);

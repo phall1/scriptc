@@ -25,7 +25,7 @@ import type { ClassInfo, ClassIteratorInfo } from "./lower-classes.js";
 import { genericIfaceBindingKeepsClass, staticFieldWriteTarget } from "./lower-classes.js";
 import { lowerStreamUnderscoreAssign, streamClassAliasDecl } from "./lower-stream.js";
 import { lowerHttpResPropertyAssignment, lowerHttpServerTimeoutAssignment, lowerServerCloseOverrideAssignment } from "./lower-server.js";
-import { builtinMemberRequireDecl, builtinNamespaceDestructureModuleOf, createRequireBindingDecl, createRequireCalleeFileOf, createRequireNamespaceDecl, createRequireProgramModuleDecl, createRequireProgramModuleOf, lowerNodeModuleCall, registerBuiltinCallableAlias } from "./lower-builtins.js";
+import { isNativeFfiRequire, builtinMemberRequireDecl, builtinNamespaceDestructureModuleOf, createRequireBindingDecl, createRequireCalleeFileOf, createRequireNamespaceDecl, createRequireProgramModuleDecl, createRequireProgramModuleOf, lowerNodeModuleCall, registerBuiltinCallableAlias } from "./lower-builtins.js";
 import { lowerEnumDeclaration } from "./lower-enums.js";
 import { abstractPropertyDeclOf, aliasTypeofNarrows, isMatchSliceType, lowerAbsenceProbe, lowerCompoundValueToTarget, lowerElementCompound, lowerGroupsProjection, matchResultNamedGroupsOf, runtimeOptionalGuardIds, runtimeOptionalTrueIds, symbolFieldInfo, withRuntimeOptionalNarrowed } from "./lower-exprs.js";
 import { isSafeToRepeat } from "./expressions/evaluation-safety.js";
@@ -1169,6 +1169,7 @@ export function lowerStmt(lowerer: Lowerer, stmt: ts.Statement): IrStmt | IrStmt
       if (
         decl.initializer !== undefined &&
         requireSpecOf(decl.initializer) !== null &&
+        !isNativeFfiRequire(lowerer, decl.initializer) &&
         isJsSourceFile(decl.getSourceFile())
       ) {
         const spec = requireSpecOf(decl.initializer)!;

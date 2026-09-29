@@ -309,6 +309,8 @@ export interface CcOptions {
    * their builds bypass the complete-executable cache while still reusing
    * cached runtime objects. */
   systemLibraries?: readonly string[];
+  /** Darwin framework names, emitted as distinct driver arguments. */
+  frameworks?: readonly string[];
   /** Embed the dynamic-island engine (--dynamic): compiles scr_island.c,
    * defines SCR_DYNAMIC, and links the cached libqjs.a. Off retains the
    * static runtime selection; executable section GC may still remove
@@ -4034,6 +4036,8 @@ async function compileCInternal(
   const tlsCa = (opts.tlsCa ?? false) || tls;
   const driver = resolveCc();
   const darwinDebugSymbols = needsDarwinDebugSymbols(targetPlatform(driver), optimization, opts.strip);
+  if (opts.frameworks?.length && targetPlatform(driver) !== "darwin") throw new Error("FFI frameworks require a Darwin target");
+  if (opts.frameworks?.some(name => !/^[A-Za-z][A-Za-z0-9_]*$/.test(name))) throw new Error("Invalid FFI framework name");
   const debugFlags = optimization === "dev" && !opts.strip
     ? ["-gline-tables-only", ...(opts.cPath.endsWith(".ll") ? [] : ["-gno-column-info"])]
     : [];
@@ -4176,6 +4180,7 @@ async function compileCInternal(
     cachePolicy.completeArtifacts &&
     persistentCache.identity === "scriptc-generated-v1" &&
     (opts.linkInputs?.length ?? 0) === 0 &&
+    (opts.frameworks?.length ?? 0) === 0 &&
     (opts.systemLibraries?.length ?? 0) === 0 &&
     process.env["SCRIPTC_TEST_TRUST_COMPILER_WRAPPER"] !== "1"
   ) {
@@ -4612,6 +4617,7 @@ async function compileCInternal(
     build.programPath ?? opts.cPath,
     ...(opts.linkInputs ?? []),
     ...(opts.systemLibraries ?? []).map((name) => `-l${name}`),
+    ...(opts.frameworks ?? []).flatMap(name => ["-framework", name]),
     // GNU ld resolves libraries from left to right and commonly enables
     // --as-needed: host-clang libz must follow scr_zlib.c/scr_fetch.c and every
     // generated/native input that references inflate symbols. Cross
@@ -4661,6 +4667,7 @@ async function compileCInternal(
       const stderr = subprocessFailureDetail(err);
       const guidance =
         (opts.linkInputs?.length ?? 0) > 0 ||
+        (opts.frameworks?.length ?? 0) > 0 ||
         (opts.systemLibraries?.length ?? 0) > 0
           ? "This build includes native FFI link inputs. Check that every symbol and system library exists, " +
             "that archive/object ordering is correct, and that each input matches the selected target."
@@ -4808,6 +4815,7 @@ async function compileCInternal(
     !cacheWarmOnly &&
     cachePolicy.completeArtifacts &&
     (opts.linkInputs?.length ?? 0) === 0 &&
+    (opts.frameworks?.length ?? 0) === 0 &&
     (opts.systemLibraries?.length ?? 0) === 0;
   let programDependencies: string | null = null;
   const linkProbeArgs = [

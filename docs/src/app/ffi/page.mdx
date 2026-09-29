@@ -133,21 +133,21 @@ The manifest is the native ABI authority. TypeScript has only `number`, so its d
       <td><code>cstring</code></td>
       <td><code>string</code></td>
       <td><code>const char *</code>; callback input only, copied through lossy UTF-8 decoding</td>
-      <td>callback only (formats 3–6)</td>
+      <td>callback only (formats 3–7)</td>
       <td>no</td>
     </tr>
     <tr>
       <td><code>string</code></td>
       <td><code>string</code></td>
       <td><code>const uint8_t *, size_t</code>; UTF-8 bytes, length-delimited</td>
-      <td>yes; callback input in formats 3–6</td>
+      <td>yes; callback input in formats 3–7</td>
       <td>no</td>
     </tr>
     <tr>
       <td><code>bytes</code></td>
       <td><code>Uint8Array</code> or <code>Buffer</code></td>
       <td><code>const uint8_t *, size_t</code>; raw bytes, length-delimited</td>
-      <td>yes; callback input in formats 3–6</td>
+      <td>yes; callback input in formats 3–7</td>
       <td>no</td>
     </tr>
     <tr>
@@ -167,13 +167,68 @@ The manifest is the native ABI authority. TypeScript has only `number`, so its d
   </tbody>
 </table>
 
-For ordinary outbound parameters, string and byte pointers are borrowed only for the duration of the call. Native code must not mutate <code>string</code> or <code>bytes</code> spans. Format 6's <code>mutable-bytes</code> permits in-place writes within the supplied length; mutations are visible through the original array and its aliases. Native code must not free or retain any borrowed pointer. Strings may contain embedded NUL bytes, so always use the supplied length; an empty span may have a null pointer. The current formats deliberately have no pointer, string, or byte return because those need an explicit ownership and allocator contract.
+For ordinary outbound parameters, string and byte pointers are borrowed only for the duration of the call. Native code must not mutate <code>string</code> or <code>bytes</code> spans. Format 6's <code>mutable-bytes</code> permits in-place writes within the supplied length; mutations are visible through the original array and its aliases. Native code must not free or retain any borrowed pointer. Strings may contain embedded NUL bytes, so always use the supplied length; an empty span may have a null pointer. String and byte returns remain unsupported because they need an explicit ownership and allocator contract. Format 7 can return an opaque pointer as a bigint; scriptc does not infer its lifetime, allocation size, or deallocator.
 
 Set <code>ffi_format</code> to <code>6</code> to use the additional scalar widths or writable spans. The new scalar classes also work in call-scoped, retained, and foreign-thread callback parameters, and in same-thread callback returns. Foreign-thread delivery widens their values before queueing them without losing precision. Formats 1–5 retain their original class sets.
+
+Set <code>ffi_format</code> to <code>7</code> for <code>i64</code>, <code>u64</code>, and <code>pointer</code>. These classes use TypeScript <code>bigint</code> and the C types <code>int64_t</code>, <code>uint64_t</code>, and <code>void *</code>. Integer inputs use the low 64 bits; pointer inputs use the low pointer-width bits. Results preserve every bit without conversion through a JavaScript number. They work in direct calls and same-thread callbacks, including retained callbacks. Foreign-thread callback parameters using these classes remain refused.
 
 For C++, export the symbol with `extern "C"` so it keeps the manifest's unmangled C name.
 
 For operating-system helpers, wrap the system call in a fixed-signature C function too. For example, Linux's variadic `prctl` needs a wrapper that supplies its operation and trailing arguments. A wrapper returning C `int32_t` uses the manifest's `i32` return class and a TypeScript `number`; check its error result in TypeScript before using the value. Build the object or archive for the same target as the scriptc binary.
+
+## Static bindings for node:ffi
+
+JavaScript packages that load `node:ffi` through `createRequire` can use a format 7 catalog. Add a `library` string to each function to expose it through `ffi.dlopen`. The string must match the library argument used by the package; the native implementation comes from the manifest's linked objects or archives. No JavaScript engine, runtime library loader, or executable-memory allocation is involved.
+
+```json:ffi.json
+{
+  "ffi_format": 7,
+  "libraries": ["./native.o"],
+  "functions": [
+    {
+      "name": "nativeU64",
+      "symbol": "native_u64",
+      "library": "native",
+      "params": ["u64"],
+      "returns": "u64"
+    }
+  ]
+}
+```
+
+```c:native.c
+#include <stdint.h>
+uint64_t native_u64(uint64_t value) { return value; }
+```
+
+```js:app.mjs
+import { createRequire } from "node:module";
+const ffi = createRequire(import.meta.url)("node:ffi");
+const { lib, functions } = ffi.dlopen("native", {
+  nativeU64: { arguments: ["u64"], return: "u64" }
+});
+console.log(functions.nativeU64(9007199254740993n));
+lib.close();
+```
+
+Catalog entries support scalar and pointer signatures. Each requested symbol must have the compiled argument and return types. Calls check arity and integer ranges, and 64-bit arguments must be bigints. In this Node API, `bool` is an alias for `u8`, so its arguments and results are numbers. The direct manifest API retains its boolean convention.
+
+Pointer arguments accept a non-negative bigint address, an ArrayBuffer or view, a NUL-free UTF-8 string, or nullish values for a null pointer. Storage stays alive during the call. `getRawPointer` returns an ArrayBuffer or view's address, including a view's byte offset. `toArrayBuffer(pointer, length)` copies memory; passing `false` as its third argument creates a borrowed view. The caller must keep foreign memory valid for the entire lifetime of a borrowed view and must supply a readable range.
+
+For packages that call `lib.registerCallback`, declare each callback signature in the root `callbacks` array:
+
+```json
+"callbacks": [
+  { "library": "native", "params": ["u64"], "returns": "u64", "capacity": 16 }
+]
+```
+
+The compiler emits a fixed pool of native function pointers for each signature. Capacity defaults to 16 and may be 1–256. Registrations occupy independent slots; unregistering a callback or closing its library releases its slots. Exhausting the compiled capacity throws. These callbacks run on the registering script thread; calling one from a foreign thread is unsupported. Native code must stop using a callback pointer before unregistering it or closing its library. Closing a library also makes its saved function wrappers reject further calls.
+
+Callback returns undergo the same scalar range checks; pointer returns must be nullish or a non-negative bigint. Callback exceptions follow scriptc's deferred exception contract: the native call receives a zero result, and the exception reaches the calling script frame when that native call returns.
+
+On Darwin targets, a format 7 manifest may name system frameworks in `frameworks`, such as `["Foundation"]`. Objects and archives still belong in `libraries`, and ordinary system libraries belong in `system_libraries`.
 
 ## Callbacks and context pointers
 
@@ -283,7 +338,7 @@ timerRemove(tick);
 
 The release argument must be the same function value used for registration. Registrations to a context-bearing descriptor are counted: registering the same closure twice requires two releases. A raw descriptor's slot has replace semantics instead — every set call supersedes the previous registration, including one that passes the already-registered closure, so exactly one release is ever pending for that descriptor. Releasing an unregistered value traps because native code may still hold the original pointer — the trap fires before the native release call runs, so native code never observes the invalid release. The callback's function type must be exact at retained call sites; an implicit wrapper would create a different pointer and make release identity unsound. An inline function literal as a release argument is rejected for the same reason: it creates a fresh closure at every evaluation, a pointer no registration holds — pass the same named value used to register. Registering an inline literal remains legal; such a registration is simply permanent and is dropped by the exit teardown. A single binding cannot both register and release the same descriptor — the manifest loader rejects a `release` targeting a retained callback declared in the same function's parameter list, because the register-then-release ordering within one call would defeat the pre-call release validation.
 
-Context-bearing descriptors support multiple concurrent closures. A raw retained descriptor has no context pointer, so it has one process-global slot with replace semantics: the previous registration stays live and dispatching until the replacing set call returns (a native setter that flushes the outgoing callback mid-replace still reaches the old closure), then it is released and the slot commits to the new closure. Script-thread retained registrations do not keep the event loop alive; format 5 foreign registrations do. At process exit, `process` `'exit'` listeners run first — they may still release registrations or pump script-thread callbacks on every exit path. Foreign posting is disarmed when the loop stops, so a straggling native post is silently dropped. On exits that run atexit handlers, the runtime then drops the remaining registrations and disarms raw slots; `process.exit()` terminates immediately after its listeners and skips that sweep, leaving remaining registrations to the operating system. A raw-slot invocation after teardown traps instead of reaching a freed closure. A context-bearing registration has no slot to disarm — its trampoline and context pointer dangle once teardown frees the closure — so native code must not invoke one after exit; a library that can fire on its own exit path should have its registrations released from a `process` `'exit'` listener.
+Context-bearing descriptors support multiple concurrent closures. A raw retained descriptor has no context pointer, so it has one slot on the script thread with replace semantics: the previous registration stays live and dispatching until the replacing set call returns (a native setter that flushes the outgoing callback mid-replace still reaches the old closure), then it is released and the slot commits to the new closure. Script-thread retained registrations do not keep the event loop alive; format 5 foreign registrations do. At process exit, `process` `'exit'` listeners run first — they may still release registrations or pump script-thread callbacks on every exit path. Foreign posting is disarmed when the loop stops, so a straggling native post is silently dropped. On exits that run atexit handlers, the runtime then drops the remaining registrations and disarms raw slots; `process.exit()` terminates immediately after its listeners and skips that sweep, leaving remaining registrations to the operating system. A raw-slot invocation after teardown traps instead of reaching a freed closure. A context-bearing registration has no slot to disarm — its trampoline and context pointer dangle once teardown frees the closure — so native code must not invoke one after exit; a library that can fire on its own exit path should have its registrations released from a `process` `'exit'` listener.
 
 Retained identity is scoped to the declaring binding. Every retained callback parameter is its own descriptor: the `<binding>:<callback-id>` pair names one registration ledger, one generated trampoline, and (for a raw descriptor) one slot, and a release binding validates and unpins only registrations made through the binding its `release` reference targets. Two bindings that store into the same native state — a plain setter and a flush-on-replace setter for one native slot, say — are therefore independent descriptors that pass native code two different function pointers. Registering the same function value through both and then releasing it through one is unsound: the release unpins in its own descriptor's ledger, but native code compares stored pointers against the other descriptor's trampoline, so the surviving registration stays armed and keeps dispatching — nothing traps, and the callback keeps firing after the program believes it released it. Keep a function value registered with one such native registration point through exactly one binding at a time, and release it through that binding's paired release.
 
@@ -344,6 +399,6 @@ Unknown fields, invalid ABI classes, duplicate names, and signature mismatches f
 - Native calls are synchronous and must return normally. Do not unwind C++ exceptions or `longjmp` across the boundary.
 - Native code is outside scriptc's exception, reference-counting, and sanitizer contracts. A bad pointer or mismatched C signature can still corrupt the process.
 - `invoke` defaults to `"script-thread"`. Format 5 foreign callbacks are asynchronous, `void`-returning, context-bearing, explicitly released, and not real-time capable; direct foreign-thread script execution is unsupported.
-- There are no variadic calls, struct-by-value arguments, owned pointer returns, or runtime `dlopen`/`dlsym` handles yet.
+- There are no variadic calls, struct-by-value arguments, or owned pointer returns. The `node:ffi` catalog resolves only bindings compiled into the binary; runtime `dlopen`/`dlsym` loading remains unsupported.
 - The archive or object must match the build target. Cross-compilation does not translate native inputs.
 - Outbound FFI is currently available for executable builds, not `scriptc build --lib`.

@@ -47,6 +47,7 @@ export async function createNativeLinkPlan(options: {
   env?: NodeJS.ProcessEnv;
   resolver?: (specifier: string) => string;
 }): Promise<NativeLinkPlan> {
+  if (options.ffi?.frameworks?.length && options.target.platform !== "darwin") throw new Error("FFI frameworks require a Darwin target");
   const runtimePack = await loadRuntimePack(options);
   return {
     target: options.target,
@@ -63,6 +64,7 @@ export async function createNativeLinkPlan(options: {
       ...runtimePack.systemLibraries,
     ])],
     driverFlags: [
+      ...(options.ffi?.frameworks ?? []).flatMap(name => ["-framework", name]),
       ...options.target.executableLinkerArgs.map((arg, index, args) =>
         index > 0 && args[index - 1] === "-target" ? options.target.linkerTargetTriple : arg
       ),

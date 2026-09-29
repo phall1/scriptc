@@ -4785,6 +4785,10 @@ export class Lowerer {
         const boundIr = this.mapTypeOf(bound);
         if (narrowedIr === null || boundIr === null) return bound;
         if (typeEquals(narrowedIr, boundIr)) return t;
+        // A checked value can contain any runtime kind. A checker-proven
+        // branch narrow therefore cannot contradict this specialization;
+        // reads still validate the payload through maybeNarrow.
+        if (boundIr.kind === "dyn") return t;
         // A union binding narrowed to one of its arms (typeof/equality
         // guards over string|number bindings) — the narrow is truth.
         if (boundIr.kind === "union") {

@@ -781,6 +781,9 @@ export function jsonWriteHelper(emitter: CEmitter, t: IrType): string {
       );
     }
     switch (t.kind) {
+      case "url":
+        d.push(`  return scr_dyn_native_url_is(d);`);
+        break;
       case "regex":
         d.push(`  return scr_dyn_native_regex_is(d);`);
         break;
@@ -1237,6 +1240,9 @@ export function jsonWriteHelper(emitter: CEmitter, t: IrType): string {
       }
     }
     switch (t.kind) {
+      case "url":
+        d.push(`  return scr_dyn_native_url_check(d, path);`);
+        break;
       case "regex":
         d.push(`  return scr_dyn_native_regex_check(d, path);`);
         break;
@@ -1543,6 +1549,9 @@ export function jsonWriteHelper(emitter: CEmitter, t: IrType): string {
     const d: string[] = [`${sig} { /* to-dyn ${key} */`];
     let sourceAccessor: { name: string; release: string } | null = null;
     switch (t.kind) {
+      case "url":
+        d.push(`  return scr_dyn_native_url(v);`);
+        break;
       case "regex":
         d.push(`  return scr_dyn_native_regex(v);`);
         break;

@@ -27,6 +27,10 @@ export function ffiNativeTypeLl(
     case "u32":
     case "i32":
       return "i32";
+    case "i64":
+    case "u64":
+      return "i64";
+    case "pointer":
     case "cstring":
       return "ptr";
     case "string":

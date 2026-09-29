@@ -193,8 +193,8 @@ function propNameText(lowerer: Lowerer, name: ts.PropertyName): string {
  * dyn's String() for dyn operands — `{ [field]: v }` where field is a
  * checked-dynamic param). Values convert through the usual dyn boundary
  * (dynFrom's domain, functions box); a value with no dyn representation
- * fences per property. Spreads copy through dyn.assign in source order;
- * accessors stay fenced. */
+ * fences per property. Spreads create own data properties in source order;
+ * accessors retain their captured getter and setter closures. */
 export function lowerDynObjectLiteral(
   lowerer: Lowerer,
   expr: ts.ObjectLiteralExpression,
@@ -203,8 +203,23 @@ export function lowerDynObjectLiteral(
   const loc = locOf(expr);
   let fields: { key: IrExpr; value: IrExpr }[] = [];
   let acc: IrExpr | null = null;
+  let hasAccessors = false;
   const flushFields = (): void => {
     if (fields.length === 0) return;
+    if (hasAccessors) {
+      for (const field of fields) {
+        const descriptor: IrExpr = { kind: "dynObjLit", type: DYN, loc, fields: [
+          { key: { kind: "strLit", value: "value", type: STRING, loc }, value: field.value },
+          ...["writable", "enumerable", "configurable"].map(name => ({
+            key: { kind: "strLit", value: name, type: STRING, loc } as IrExpr,
+            value: { kind: "dynFrom", value: { kind: "boolLit", value: true, type: BOOL, loc }, type: DYN, loc } as IrExpr,
+          })),
+        ] };
+        acc = { kind: "libCall", fn: "dyn.defineProperty", args: [acc!, lowerer.coerceToExpected(field.key, DYN), descriptor], type: DYN, loc };
+      }
+      fields = [];
+      return;
+    }
     const chunk: IrExpr = { kind: "dynObjLit", fields, type: DYN, loc };
     acc = acc === null
       ? chunk
@@ -223,19 +238,8 @@ export function lowerDynObjectLiteral(
         lowerer.unsupported("SC1101", prop.expression, `spreading '${lowerer.fmt(source.type)}' into a checked-dynamic object literal`);
       }
       acc ??= { kind: "dynObjLit", fields: [], type: DYN, loc };
-      acc = { kind: "libCall", fn: "dyn.assign", args: [acc, source], type: DYN, loc: locOf(prop) };
+      acc = { kind: "libCall", fn: "dyn.copyDataProperties", args: [acc, source], type: DYN, loc: locOf(prop) };
       continue;
-    }
-    if (
-      !ts.isPropertyAssignment(prop) &&
-      !ts.isShorthandPropertyAssignment(prop) &&
-      !ts.isMethodDeclaration(prop)
-    ) {
-      lowerer.unsupported(
-        "SC1090",
-        prop,
-        "accessors in a runtime-keyed (computed-key) object literal",
-      );
     }
     const name = prop.name;
     let key: IrExpr;
@@ -263,6 +267,24 @@ export function lowerDynObjectLiteral(
       key = { kind: "strLit", value: String(Number(name.text)), type: STRING, loc: locOf(name) };
     } else {
       lowerer.unsupported("SC1090", prop, "non-identifier property names");
+    }
+    if (ts.isGetAccessorDeclaration(prop) || ts.isSetAccessorDeclaration(prop)) {
+      flushFields();
+      hasAccessors = true;
+      acc ??= { kind: "dynObjLit", fields: [], type: DYN, loc };
+      lowerer.rejectThisInObjectMethod(prop.body ?? prop);
+      const fn = lowerer.lowerLambda(prop);
+      const descriptor: IrExpr = {
+        kind: "dynObjLit", type: DYN, loc: locOf(prop), fields: [
+          { key: { kind: "strLit", value: ts.isGetAccessorDeclaration(prop) ? "get" : "set", type: STRING, loc }, value: lowerer.coerceToExpected(fn, DYN) },
+          ...["enumerable", "configurable"].map(name => ({
+            key: { kind: "strLit", value: name, type: STRING, loc } as IrExpr,
+            value: { kind: "dynFrom", value: { kind: "boolLit", value: true, type: BOOL, loc }, type: DYN, loc } as IrExpr,
+          })),
+        ],
+      };
+      acc = { kind: "libCall", fn: "dyn.defineProperty", args: [acc, lowerer.coerceToExpected(key, DYN), descriptor], type: DYN, loc };
+      continue;
     }
     const valueExpr: ts.Node = ts.isMethodDeclaration(prop)
       ? prop

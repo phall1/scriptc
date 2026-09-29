@@ -60,7 +60,7 @@ for (const backend of ["c", "llvm"] as const) {
         return result;
       };
       check("native TypeScript transport", readFileSync(nativeProfile, "utf8"));
-      for (const format of [1, 2, 3, 4, 5, 6]) {
+      for (const format of [1, 2, 3, 4, 5, 6, 7]) {
         check(`empty format ${format}`, JSON.stringify(profile(format, [])));
         check(`scalar format ${format}`, JSON.stringify(profile(format, [fn("scalar", ["f64", "bool", "u8", "u32", "i32", "string", "bytes"], "i32")])));
       }
@@ -71,6 +71,15 @@ for (const backend of ["c", "llvm"] as const) {
         fn("scalars", ["f32", "i8", "u16", "i16", "mutable-bytes"], "f32"),
         fn("call", [callback("call", ["f32", "i8", "u16", "i16"], "script-thread", "i16")]),
       ])));
+      check("wide scalar classes", JSON.stringify(profile(7, [fn("wide", ["i64", "u64", "pointer"], "u64")])));
+      const catalog = check("static catalog and callback pool", JSON.stringify({
+        ...profile(7, [{ ...fn("native", ["bool", "pointer"], "bool"), library: "native" }]),
+        frameworks: ["Foundation"],
+        callbacks: [{ library: "native", params: ["u64", "pointer"], returns: "void", capacity: 2 }],
+      }));
+      if (!catalog.ok) throw new Error("expected catalog");
+      expect(catalog.profile.functions[0]).toMatchObject({ library: "native", params: ["u8", "pointer"], returns: "u8" });
+      expect(catalog.profile.functions).toHaveLength(5);
 
       for (const withContext of [false, true]) {
         const params = withContext ? ["f64", context, "bytes"] : ["f64", "bytes"];
@@ -88,7 +97,7 @@ for (const backend of ["c", "llvm"] as const) {
       const rejects: [string, unknown, string][] = [
         ["root array", [], "must be a JSON object"],
         ["root null", null, "must be a JSON object"],
-        ["unknown format", profile(7, []), "unsupported ffi_format"],
+        ["unknown format", profile(8, []), "unsupported ffi_format"],
         ["unknown key", { ...profile(1, []), typo: true }, "unknown field 'typo'"],
         ["invalid binding", profile(1, [fn("bad-name", [])]), "not a plain TypeScript identifier"],
         ["duplicate binding", profile(1, [fn("same", []), fn("same", [])]), "declared twice"],

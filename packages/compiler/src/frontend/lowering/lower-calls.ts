@@ -2960,12 +2960,13 @@ function ffiCallbackInputDiagnostic(
     }
 
     if (nativeClass === "bytes") continue;
-    const domain = nativeClass === "bool"
+    const wide = nativeClass === "i64" || nativeClass === "u64" || nativeClass === "pointer";
+    const domain = wide ? "bigint" : nativeClass === "bool"
       ? "boolean"
       : nativeClass === "cstring" || nativeClass === "string"
       ? "string"
       : "number";
-    const coversDomain = nativeClass === "bool"
+    const coversDomain = wide ? (paramType.flags & ts.TypeFlags.BigInt) !== 0 : nativeClass === "bool"
       ? (paramType.flags & ts.TypeFlags.Boolean) !== 0
       : nativeClass === "cstring" || nativeClass === "string"
       ? (paramType.flags & ts.TypeFlags.String) !== 0
@@ -2995,8 +2996,9 @@ function ffiReturnDomainDiagnostic(
   returnType: ts.Type,
 ): string | null {
   if (nativeClass === "void") return null;
-  const domain = nativeClass === "bool" ? "boolean" : "number";
-  const coversDomain = nativeClass === "bool"
+  const wide = nativeClass === "i64" || nativeClass === "u64" || nativeClass === "pointer";
+  const domain = wide ? "bigint" : nativeClass === "bool" ? "boolean" : "number";
+  const coversDomain = wide ? (returnType.flags & ts.TypeFlags.BigInt) !== 0 : nativeClass === "bool"
     ? (returnType.flags & ts.TypeFlags.Boolean) !== 0
     : (returnType.flags & ts.TypeFlags.Number) !== 0;
   return coversDomain
@@ -3155,7 +3157,7 @@ function libraryCallbackOwnsFile(lowerer: Lowerer, file: ts.SourceFile): boolean
 export function validateFfiImports(lowerer: Lowerer): FfiValidationResult {
   const diagnostics: ScrDiagnostic[] = [];
   const symbolsByName = new Map<string, ReadonlySet<ts.Symbol>>();
-  const configuredNames = new Set(lowerer.ffiImports.map((binding) => binding.name));
+  const configuredNames = new Set(lowerer.ffiImports.filter(binding => binding.library === undefined).map((binding) => binding.name));
   const candidates = new Map<string, Map<ts.Symbol, ts.FunctionDeclaration>>();
 
   if (configuredNames.size === 0) return { diagnostics, symbolsByName };
@@ -3186,6 +3188,7 @@ export function validateFfiImports(lowerer: Lowerer): FfiValidationResult {
   }
 
   for (const binding of lowerer.ffiImports) {
+    if (binding.library !== undefined) continue;
     const bySymbol = candidates.get(binding.name);
     if (bySymbol === undefined || bySymbol.size === 0) {
       // A native-manifest binding with no declaration is a broken build
@@ -3242,6 +3245,7 @@ export function validateFfiImports(lowerer: Lowerer): FfiValidationResult {
 export function lowerFfiCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr | null {
     if (!ts.isIdentifier(expr.expression)) return null;
     const binding = lowerer.ffiImportsByName.get(expr.expression.text);
+    if (binding?.library !== undefined) return null;
     if (binding === undefined) {
       // LIBRARY mode with a declared callback surface: a CALL of a
       // program-authored signature-only ambient function that names no

@@ -800,7 +800,7 @@ async function compileExecutableNative(
               ...(programIsObject ? [cPath] : []),
               ...(ffi?.libraries ?? []),
             ],
-            ...(ffi === null ? {} : { systemLibraries: ffi.systemLibraries }),
+            ...(ffi === null ? {} : { systemLibraries: ffi.systemLibraries, frameworks: ffi.frameworks }),
           }),
     });
   } finally {

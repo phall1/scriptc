@@ -5629,6 +5629,9 @@ export function lowerSetSeedNew(lowerer: Lowerer, node: ts.Expression, setT: IrT
       (source.type.kind === "dyn" || source.type.kind === "jsval")) {
     source = lowerer.coerceInto(node, source, STRING);
   }
+  if (source.type.kind === "dyn" && setT.elem.kind === "dyn") {
+    return { kind: "dynCheck", value: { kind: "libCall", fn: "dyn.nativeSetNew", args: [source], type: DYN, loc }, type: setT, loc };
+  }
   if (declared?.kind === "array" && typeEquals(declared.elem, setT.elem)) {
     // Preserve the existing checked scalar-iterable bridge. Reference
     // elements must retain identity and cannot enter via a copying exit.

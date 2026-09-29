@@ -1528,6 +1528,7 @@ void scr_ffi_commit_slot(ScrFfiTable *table, ScrClosure *callback);
  * call so a bogus release cannot reach native code. */
 void scr_ffi_require(ScrFfiTable *table, ScrClosure *callback);
 void scr_ffi_release(ScrFfiTable *table, ScrClosure *callback);
+void scr_ffi_release_optional(ScrFfiTable *table, ScrClosure *callback);
 void scr_ffi_require_foreign(ScrFfiTable *table, ScrClosure *callback);
 void scr_ffi_release_foreign(ScrFfiTable *table, ScrClosure *callback);
 void scr_ffi_teardown(ScrFfiTable *table);
@@ -3144,6 +3145,15 @@ void *scr_bigint_retain_v(void *v);
 void scr_bigint_release_v(void *v);
 ScrBigInt *scr_bigint_parse(ScrStr *text); /* borrowed text; +1 or throws */
 ScrBigInt *scr_bigint_from_f64(double value); /* +1 or throws */
+ScrBigInt *scr_bigint_from_u64(uint64_t value);
+ScrBigInt *scr_bigint_from_i64(int64_t value);
+ScrBigInt *scr_bigint_from_pointer(void *value);
+uint64_t scr_bigint_to_u64(const ScrBigInt *value); /* low 64 bits, modulo 2^64 */
+int64_t scr_bigint_to_i64(const ScrBigInt *value);
+bool scr_bigint_pointer_fits(const ScrBigInt *value);
+bool scr_bigint_u64_fits(const ScrBigInt *value);
+bool scr_bigint_i64_fits(const ScrBigInt *value);
+void *scr_bigint_to_pointer(const ScrBigInt *value); /* low pointer-width bits; raw address, borrowed */
 ScrBigInt *scr_bigint_neg(ScrBigInt *value);
 ScrBigInt *scr_bigint_not(ScrBigInt *value);
 ScrBigInt *scr_bigint_add(ScrBigInt *a, ScrBigInt *b);
@@ -3380,6 +3390,7 @@ typedef enum {
   SCR_DYNH_SET,            /* native Set<unknown>, shared backing map */
   SCR_DYNH_REGEXP,         /* native RegExp, shared compiled pattern */
   SCR_DYNH_STDIO,          /* stable process stdin/stdout/stderr values */
+  SCR_DYNH_URL,            /* native WHATWG URL */
   SCR_DYNH_COUNT,
 } ScrDynHandleTag;
 
@@ -3557,6 +3568,7 @@ bool scr_dyn_has_own(const ScrDyn *v, const ScrStr *key);
  * are enumerable when reached; ARR/STR/BYTES expose index keys. Nullish
  * and scalar/function/handle sources copy nothing. */
 ScrDyn *scr_dyn_assign(ScrDyn *target, const ScrDyn *src);
+ScrDyn *scr_dyn_copy_data_properties(ScrDyn *target, const ScrDyn *src);
 /* Variadic Object.assign (the spread-source form): the compiler packs
  * every source into one fresh dyn array — pack_push retains a plain
  * source in (BORROWED), pack_push_spread flattens a spread source through
@@ -3585,9 +3597,12 @@ ScrDyn *scr_dyn_undefined(void);
 ScrDyn *scr_dyn_new_null(void);
 ScrDyn *scr_dyn_new_bool(bool b);
 ScrDyn *scr_dyn_new_num(double n);
+ScrDyn *scr_dyn_native_set_new(const ScrDyn *seed);
 ScrDyn *scr_dyn_native_set(ScrMap *value); /* borrowed backing, +1 box */
 bool scr_dyn_native_set_is(const ScrDyn *value);
 ScrRegex *scr_regex_new_checked(const ScrDyn *pattern, const ScrDyn *flags);
+ScrDyn *scr_dyn_native_url(ScrUrl *value);
+bool scr_dyn_native_url_is(const ScrDyn *value);
 ScrDyn *scr_dyn_native_regex(ScrRegex *value);
 bool scr_dyn_native_regex_is(const ScrDyn *value);
 ScrDyn *scr_dyn_freeze(ScrDyn *value);
@@ -3824,6 +3839,8 @@ typedef struct ScrDynPath {
   size_t index;
 } ScrDynPath;
 ScrMap *scr_dyn_native_set_check(const ScrDyn *value, const ScrDynPath *path);
+ScrStr *scr_url_checked_to_path(const ScrDyn *value);
+ScrUrl *scr_dyn_native_url_check(const ScrDyn *value, const ScrDynPath *path);
 ScrRegex *scr_dyn_native_regex_check(const ScrDyn *value, const ScrDynPath *path);
 ScrClassObj *scr_dyn_class_check(const ScrDyn *value, const char *type_key, const ScrDynPath *path);
 
@@ -5333,7 +5350,12 @@ typedef struct ScrBytes {
    * points into backing->data — released, never freed. */
   struct ScrBytes *backing;
   bool is_buffer; /* Buffer brand belongs to the view, not its backing. */
+  bool external; /* Root aliases foreign memory; releasing it never frees data. */
 } ScrBytes;
+
+ScrBytes *scr_bytes_from_external(void *data, size_t length);
+ScrDyn *scr_ffi_memory_module(ScrDyn *catalog);
+ScrDyn *scr_ffi_argument(ScrDyn *value, ScrStr *type);
 
 size_t scr_bytes_elem_size(ScrBytesElem elem); /* 1, 2, 4, or 8 */
 const char *scr_bytes_elem_name(ScrBytesElem elem);

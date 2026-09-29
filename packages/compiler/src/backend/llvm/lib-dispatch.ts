@@ -266,6 +266,7 @@ export function emitLibCall(host: LlvmEmitterContext, e: LibCallExpr): LlValue {
         return host.emitIoLibCall(e);
       case "weakMap":
       case "weakSet":
+      case "ffi":
       case "arrayBuffer":
       case "util":
       case "bigint":

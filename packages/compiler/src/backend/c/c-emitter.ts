@@ -129,6 +129,9 @@ function ffiNativeTypeC(
       return "uint32_t";
     case "i32":
       return "int32_t";
+    case "i64": return "int64_t";
+    case "u64": return "uint64_t";
+    case "pointer": return "void *";
     case "cstring":
       return "const char *";
     case "string":
@@ -702,7 +705,7 @@ export class CEmitter {
     // symbols, a valid TS channel name such as `int` is a C keyword).
     const libraryCallbackNames = new Set(this.mod.lib?.callbacks?.map((cb) => cb.name) ?? []);
     const directFfiImports = (this.mod.ffiImports ?? []).filter(
-      (entry) => !libraryCallbackNames.has(entry.name),
+      (entry) => !libraryCallbackNames.has(entry.name) && entry.callbackOperation === undefined,
     );
     for (const entry of directFfiImports) {
       const params = entry.params.flatMap((param): string[] => {
@@ -1750,7 +1753,7 @@ export class CEmitter {
         out.push(`static _Thread_local ScrClosure *${adapter.tls};`);
       }
       if (adapter.global !== null) {
-        out.push(`static ScrClosure *${adapter.global};`);
+        out.push(`static _Thread_local ScrClosure *${adapter.global};`);
       }
       if (adapter.table !== null) {
         out.push(`static ScrFfiTable ${adapter.table};`);
@@ -1767,6 +1770,10 @@ export class CEmitter {
         const scriptArgs = cb.params.flatMap((param, i): string[] => {
           if (isFfiContextParam(param)) return [];
           switch (param) {
+            case "i64":
+            case "u64":
+            case "pointer":
+              throw new InternalCompilerError("64-bit and pointer foreign callbacks require native queue support");
             case "f64":
             case "f32":
             case "i8":
@@ -1856,7 +1863,11 @@ export class CEmitter {
       for (let i = 0; i < cb.params.length; i++) {
         const param = cb.params[i]!;
         if (isFfiContextParam(param)) continue;
-        if (param === "cstring") {
+        if (param === "i64" || param === "u64" || param === "pointer") {
+          const local = `sc_s${i}`;
+          out.push(`  ScrBigInt *${local} = scr_bigint_from_${param}(sc_a${i});`);
+          materialized.set(i, local);
+        } else if (param === "cstring") {
           const local = `sc_s${i}`;
           out.push(
             `  ScrStr *${local} = scr_str_from_utf8_lossy((const uint8_t *)sc_a${i}, strlen(sc_a${i}));`,
@@ -1887,6 +1898,9 @@ export class CEmitter {
           case "u32":
           case "i32":
             return [`(double)sc_a${i}`];
+          case "i64":
+          case "u64":
+          case "pointer":
           case "cstring":
           case "string":
           case "bytes":
@@ -1913,6 +1927,12 @@ export class CEmitter {
       out.push(`  ${cDecl(ft.ret, "sc_result")} = ${call};`);
       if (cb.lifetime === "retained") out.push(`  scr_closure_release(sc_cb);`);
       switch (cb.returns) {
+        case "i64":
+        case "u64":
+        case "pointer":
+          out.push(`  ${ffiNativeTypeC(cb.returns)} sc_out = scr_bigint_to_${cb.returns}(sc_result);`);
+          out.push(`  scr_bigint_release(sc_result);`, `  return sc_out;`);
+          break;
         case "f64":
           out.push(`  return sc_result;`);
           break;

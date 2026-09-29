@@ -31,6 +31,8 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "weakSet.new": "scr_weak_set_new",
   "dyn.fromEntries": "scr_dyn_from_entries",
   "arrayBuffer.new": "scr_array_buffer_new",
+  "ffi.argument": "scr_ffi_argument",
+  "ffi.memoryModule": "scr_ffi_memory_module",
   "arrayBuffer.is": "scr_array_buffer_is",
   "arrayBuffer.isView": "scr_array_buffer_is_view",
   "arrayBuffer.byteLengthGetter": "scr_array_buffer_byte_length_getter",
@@ -405,6 +407,7 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "url.hash": "scr_url_hash",
   "url.searchParams": "scr_url_search_params",
   "url.fileURLToPathUrl": "scr_url_to_path",
+  "url.fileURLToPathChecked": "scr_url_checked_to_path",
   "url.fileURLToPathStr": "scr_url_str_to_path",
   "url.pathToFileURL": "scr_url_from_path",
   "url.pathToFileURLPlatform": "scr_url_from_path_platform",
@@ -565,7 +568,9 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "dyn.objectTag": "scr_dyn_object_tag",
   "dyn.freeze": "scr_dyn_freeze",
   "dyn.isFrozen": "scr_dyn_is_frozen",
+  "dyn.nativeSetNew": "scr_dyn_native_set_new",
   "dyn.nativeSetIs": "scr_dyn_native_set_is",
+  "dyn.nativeUrlIs": "scr_dyn_native_url_is",
   "dyn.nativeRegexIs": "scr_dyn_native_regex_is",
   "dyn.toString": "scr_dyn_to_string_argument",
   "dyn.this": "scr_dyn_this_get",
@@ -867,6 +872,7 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "dyn.forInKeys": "scr_dyn_for_in_keys",
   "dyn.hasOwn": "scr_dyn_has_own",
   "dyn.assign": "scr_dyn_assign",
+  "dyn.copyDataProperties": "scr_dyn_copy_data_properties",
   // variadic Object.assign: the source pack (push never throws; the
   // spread flatten throws V8's spread-call TypeErrors) and the final
   // left-to-right copy (ToObject TypeError on a nullish target).

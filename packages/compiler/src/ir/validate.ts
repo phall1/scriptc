@@ -129,7 +129,9 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "dyn.hasKey": { argTypes: [DYN, STRING], result: BOOL },
   "dyn.freeze": { argTypes: [DYN], result: DYN },
   "dyn.isFrozen": { argTypes: [DYN], result: BOOL },
+  "dyn.nativeSetNew": { argTypes: [DYN], result: DYN },
   "dyn.nativeSetIs": { argTypes: [DYN], result: BOOL },
+  "dyn.nativeUrlIs": { argTypes: [DYN], result: BOOL },
   "dyn.nativeRegexIs": { argTypes: [DYN], result: BOOL },
   "dyn.toString": { argTypes: [DYN, DYN, STRING], result: STRING },
   "dyn.defineProps": { argTypes: [DYN, DYN], result: DYN },
@@ -351,6 +353,7 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "url.pathname": { argTypes: [URL_T], result: STRING },
   "url.href": { argTypes: [URL_T], result: STRING },
   "url.fileURLToPathUrl": { argTypes: [URL_T], result: STRING },
+  "url.fileURLToPathChecked": { argTypes: [DYN], result: STRING },
   "url.fileURLToPathStr": { argTypes: [STRING], result: STRING },
   "url.pathToFileURL": { argTypes: [STRING], result: URL_T },
   "url.pathToFileURLPlatform": { argTypes: [STRING, BOOL], result: URL_T },
@@ -1123,6 +1126,8 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "weakSet.new": { argTypes: [DYN], result: DYN },
   "dyn.fromEntries": { argTypes: [DYN], result: DYN },
   "arrayBuffer.new": { argTypes: [DYN], result: DYN },
+  "ffi.argument": { argTypes: [DYN, STRING], result: DYN },
+  "ffi.memoryModule": { argTypes: [DYN], result: DYN },
   "intl.segmenterNew": { argTypes: [], result: DYN },
   "arrayBuffer.is": { argTypes: [DYN], result: BOOL },
   "arrayBuffer.isView": { argTypes: [DYN], result: BOOL },
@@ -1142,6 +1147,7 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "dyn.forInKeys": { argTypes: [DYN], result: DYN },
   "dyn.hasOwn": { argTypes: [DYN, STRING], result: BOOL },
   "dyn.assign": { argTypes: [DYN, DYN], result: DYN },
+  "dyn.copyDataProperties": { argTypes: [DYN, DYN], result: DYN },
   "dyn.packPush": { argTypes: [DYN, DYN], result: VOID },
   "dyn.packPushSpread": { argTypes: [DYN, DYN, STRING], result: VOID },
   "dyn.packPushSpreadIter": { argTypes: [DYN, DYN], result: VOID },
@@ -1491,6 +1497,23 @@ export function validateModule(mod: IrModule): IrValidationError[] {
   }
   const retainedFfiCallbacks = new Map<string, Extract<NonNullable<IrModule["ffiImports"]>[number]["params"][number], { callback: { id: string } }>["callback"]>();
   for (const entry of mod.ffiImports ?? []) {
+    if (entry.callbackOperation !== undefined) {
+      const fail = (detail: string): void => { errors.push({ message: `FFI callback operation "${entry.name}" ${detail}`, loc: moduleLoc }); };
+      if (!entry.library || entry.library.includes("\0")) fail("requires a library name");
+      if (entry.callbackOperation === "register") {
+        const param = entry.params[0];
+        if (entry.params.length !== 1 || !param || !isFfiCallbackParam(param) ||
+            param.callback.id !== "callback" || param.callback.lifetime !== "retained" || param.callback.invoke !== "script-thread" ||
+            param.callback.params.some(p => typeof p !== "string" || ["cstring", "string", "bytes"].includes(p)) ||
+            entry.returns !== "pointer" || entry.callbackTarget !== undefined) fail("has an invalid registration ABI");
+      } else if (entry.callbackOperation === "release") {
+        const target = entry.callbackTarget ? ffiByName.get(entry.callbackTarget) : undefined;
+        if (entry.params.length !== 0 || entry.returns !== "void" || target?.callbackOperation !== "register" ||
+            target.library !== entry.library) fail("has an invalid release target or ABI");
+      } else fail("has an invalid operation");
+    } else if (entry.callbackTarget !== undefined) {
+      errors.push({ message: `FFI binding "${entry.name}" has a callback target without a release operation`, loc: moduleLoc });
+    }
     const ids = new Set<string>();
     for (const param of entry.params) {
       if (!isFfiCallbackParam(param)) continue;
@@ -1502,6 +1525,9 @@ export function validateModule(mod: IrModule): IrValidationError[] {
         errors.push({ message: `FFI callback "${entry.name}:${param.callback.id}" has invalid invoke mode`, loc: moduleLoc });
       }
       if (param.callback.invoke === "foreign") {
+        if (param.callback.params.some((p) => p === "i64" || p === "u64" || p === "pointer")) {
+          errors.push({ message: `FFI foreign callback "${entry.name}:${param.callback.id}" has unsupported 64-bit or pointer arguments`, loc: moduleLoc });
+        }
         if (param.callback.lifetime !== "retained") {
           errors.push({ message: `FFI foreign callback "${entry.name}:${param.callback.id}" is not retained`, loc: moduleLoc });
         }
@@ -2287,6 +2313,7 @@ function validateFunction(
             e.left.type.kind === "map" ||
             e.left.type.kind === "set" ||
             e.left.type.kind === "regex" ||
+            e.left.type.kind === "url" ||
             e.left.type.kind === "object" ||
             e.left.type.kind === "record" ||
             // Symbol identity IS pointer identity (the frontend's rule).

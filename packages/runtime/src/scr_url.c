@@ -1163,3 +1163,69 @@ ScrStr *scr_url_hash(ScrUrl *u) {
   if (u->fragment->len <= 1) return scr_str_new("", 0);
   return scr_str_retain(u->fragment);
 }
+
+/* Checked native URL values preserve their handle across unknown storage. */
+static ScrDyn *scr_native_url_get(void *ptr, const char *key, size_t len) {
+  if (len == 12 && !memcmp(key, "searchParams", len)) {
+    static const char message[] = "Checked URL.searchParams has no native lowering";
+    scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
+    return NULL;
+  }
+  ScrStr *text = NULL;
+#define URL_GET(name) if (len == sizeof(#name) - 1 && memcmp(key, #name, len) == 0) text = scr_url_##name(ptr)
+  URL_GET(href);
+  else URL_GET(protocol);
+  else URL_GET(origin);
+  else URL_GET(username);
+  else URL_GET(password);
+  else URL_GET(host);
+  else URL_GET(hostname);
+  else URL_GET(port);
+  else URL_GET(pathname);
+  else URL_GET(search);
+  else URL_GET(hash);
+#undef URL_GET
+  if (!text) return scr_dyn_retain(scr_dyn_undefined());
+  ScrDyn *result = scr_dyn_new_str(text);
+  scr_str_release(text);
+  return result;
+}
+
+static ScrDyn *scr_native_url_invoke(void *ptr, ScrDyn *self, const char *method,
+    ScrDyn *const *args, size_t argc, const char *what) {
+  (void)self; (void)args; (void)argc; (void)what;
+  if (!strcmp(method, "toString") || !strcmp(method, "toJSON")) {
+    ScrStr *text = scr_url_href(ptr);
+    ScrDyn *result = scr_dyn_new_str(text);
+    scr_str_release(text);
+    return result;
+  }
+  static const char message[] = "Native URL method has no lowering";
+  scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
+  return NULL;
+}
+
+ScrDyn *scr_dyn_native_url(ScrUrl *value) {
+  static const ScrDynHandleOps ops = {
+    "URL", &scr_url_retain_v, &scr_url_release_v, &scr_native_url_invoke,
+    &scr_native_url_get, NULL, NULL, NULL,
+  };
+  scr_dyn_handle_install(SCR_DYNH_URL, &ops);
+  return scr_dyn_new_handle(value, SCR_DYNH_URL);
+}
+
+bool scr_dyn_native_url_is(const ScrDyn *value) {
+  return value && value->kind == SCR_DYN_HANDLE && value->v.handle.tag == SCR_DYNH_URL;
+}
+
+ScrUrl *scr_dyn_native_url_check(const ScrDyn *value, const ScrDynPath *path) {
+  if (!scr_dyn_native_url_is(value)) { scr_dyn_check_fail(path, "URL", value); return NULL; }
+  return scr_url_retain(value->v.handle.ptr);
+}
+
+ScrStr *scr_url_checked_to_path(const ScrDyn *value) {
+  if (scr_dyn_native_url_is(value)) return scr_url_to_path(value->v.handle.ptr);
+  if (value->kind == SCR_DYN_STR) return scr_url_str_to_path(value->v.str);
+  scr_dyn_arg_type_fail("path", "of type string or an instance of URL", value);
+  return NULL;
+}

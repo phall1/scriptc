@@ -371,6 +371,13 @@ export class LlDyn {
       B.terminate(`ret i1 ${r}`);
     };
     switch (t.kind) {
+      case "url": {
+        this.host.declare(`declare zeroext i1 @scr_dyn_native_url_is(ptr)`);
+        const r = B.tmp();
+        B.line(`${r} = call zeroext i1 @scr_dyn_native_url_is(ptr %d)`);
+        B.terminate(`ret i1 ${r}`);
+        break;
+      }
       case "regex": {
         this.host.declare(`declare zeroext i1 @scr_dyn_native_regex_is(ptr)`);
         const r = B.tmp();
@@ -789,6 +796,13 @@ export class LlDyn {
       B.startBlock(lo);
     };
     switch (t.kind) {
+      case "url": {
+        host.declare(`declare ptr @scr_dyn_native_url_check(ptr, ptr)`);
+        const r = B.tmp();
+        B.line(`${r} = call ptr @scr_dyn_native_url_check(ptr %d, ptr %path)`);
+        B.terminate(`ret ptr ${r}`);
+        break;
+      }
       case "regex": {
         host.declare(`declare ptr @scr_dyn_native_regex_check(ptr, ptr)`);
         const r = B.tmp();
@@ -1345,6 +1359,13 @@ export class LlDyn {
     const B = new BlockBuilder();
     let sourceAccessor: { name: string; release: string } | null = null;
     switch (t.kind) {
+      case "url": {
+        host.declare(`declare ptr @scr_dyn_native_url(ptr)`);
+        const r = B.tmp();
+        B.line(`${r} = call ptr @scr_dyn_native_url(ptr %v)`);
+        B.terminate(`ret ptr ${r}`);
+        break;
+      }
       case "regex": {
         host.declare(`declare ptr @scr_dyn_native_regex(ptr)`);
         const r = B.tmp();

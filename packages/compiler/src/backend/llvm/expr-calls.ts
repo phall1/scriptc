@@ -153,6 +153,25 @@ export function emitCallExpr(host: LlvmEmitterContext, e: ExprOf<"call" | "ffiCa
         }
         const entry = host.ffiByName.get(e.import);
         if (!entry) throw new InternalCompilerError(`llvm emitter bug: unknown FFI import ${e.import}`);
+        if (entry.callbackOperation) {
+          const adapter = host.ffiCallbackAdapter(entry.callbackTarget ?? entry.name, "callback");
+          if (entry.callbackOperation === "release") {
+            host.declare(`declare void @scr_ffi_release_optional(ptr, ptr)`);
+            const callback = B.tmp();
+            B.line(`${callback} = load ptr, ptr @${adapter.global}`);
+            B.line(`call void @scr_ffi_release_optional(ptr @${adapter.table}, ptr ${callback})`);
+            return { name: "", type: e.type };
+          }
+          const callback = host.emitExpr(e.args[0]!);
+          host.declare(`declare void @scr_ffi_retain_slot(ptr, ptr, ptr)`);
+          host.declare(`declare void @scr_ffi_commit_slot(ptr, ptr)`);
+          host.declare(`declare ptr @scr_bigint_from_pointer(ptr)`);
+          B.line(`call void @scr_ffi_retain_slot(ptr @${adapter.table}, ptr @${adapter.global}, ptr ${callback.name})`);
+          B.line(`call void @scr_ffi_commit_slot(ptr @${adapter.table}, ptr ${callback.name})`);
+          const result = B.tmp();
+          B.line(`${result} = call ptr @scr_bigint_from_pointer(ptr @${adapter.symbol})`);
+          return host.own({ name: result, type: e.type });
+        }
         const args = e.args.map((arg) => host.emitExpr(arg));
         const sourceArgs = new Map<number, LlValue>();
         const callbackArgs = new Map<string, LlValue>();
@@ -240,6 +259,17 @@ export function emitCallExpr(host: LlvmEmitterContext, e: ExprOf<"call" | "ffiCa
           }
           const arg = sourceArgs.get(i)!;
           switch (param) {
+            case "i64":
+            case "u64":
+            case "pointer": {
+              const ty = ffiNativeTypeLl(param);
+              host.declare(`declare ${ty} @scr_bigint_to_${param}(ptr)`);
+              const raw = B.tmp();
+              B.line(`${raw} = call ${ty} @scr_bigint_to_${param}(ptr ${arg.name})`);
+              nativeParamTypes.push(ty);
+              nativeArgs.push(`${ty} ${raw}`);
+              break;
+            }
             case "f64":
               nativeParamTypes.push("double");
               nativeArgs.push(`double ${arg.name}`);
@@ -362,6 +392,14 @@ export function emitCallExpr(host: LlvmEmitterContext, e: ExprOf<"call" | "ffiCa
         B.line(`${raw} = ${call}`);
         restoreRawContexts();
         finishRetainedReleases();
+        if (entry.returns === "i64" || entry.returns === "u64" || entry.returns === "pointer") {
+          host.declare(`declare ptr @scr_bigint_from_${entry.returns}(${retTy})`);
+          const value = B.tmp();
+          B.line(`${value} = call ptr @scr_bigint_from_${entry.returns}(${retTy} ${raw})`);
+          const result = host.own({ name: value, type: e.type });
+          if (callbacksMayThrow) host.emitPendingCheck();
+          return result;
+        }
         if (entry.returns === "f64") {
           const result = { name: raw, type: e.type };
           if (callbacksMayThrow) host.emitPendingCheck();

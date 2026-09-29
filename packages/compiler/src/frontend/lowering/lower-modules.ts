@@ -16,7 +16,7 @@ import type { CycleEdge } from "../program.js";
 import { invalidJsonModuleDiag, npmEmbedFailedDiag, requiresDynamicImportDiag } from "../../diagnostics/diagnostic.js";
 import { BOOL, DYN, F64, type IrClassDef, type IrExpr, type IrFunction, type IrGlobal, type IrRecordShape, type IrStmt, type IrType, type IrUnionDef, JSVAL, RUNTIME_ERROR_CLASSES, STRING, type SrcLoc, VOID, arrayOf, canBoxFuncIntoDyn, canConvertToDyn, isUnitType } from "../../ir/ir.js";
 import { ENTRY_NAME, PoisonError, boundIdentifiersOf, dynFallbackType, dynUndefinedExpr, importCallHandleType, newFnCtx, staticImportNamespaceType, uncheckedOverloadHandleCall } from "./lowerer.js";
-import { builtinMemberRequireDecl, builtinNamespaceDestructureModuleOf, createRequireBindingDecl, createRequireNamespaceDecl, createRequireProgramModuleDecl, createRequireSpecOf, isPromisifyCall, registerBuiltinCallableAlias, stripTypeCasts } from "./lower-builtins.js";
+import { isNativeFfiRequire, builtinMemberRequireDecl, builtinNamespaceDestructureModuleOf, createRequireBindingDecl, createRequireNamespaceDecl, createRequireProgramModuleDecl, createRequireSpecOf, isPromisifyCall, registerBuiltinCallableAlias, stripTypeCasts } from "./lower-builtins.js";
 import { bindingContextualGenericFnNodeOf, bindingGenericFnAliasInfoOf, bindingGenericFnInfoOf, bindingGenericFnNodeOf, bindingNeverReassigned, deadUnmappableBinding, funcTypeFromParamShapes, implicitLocalFnInfoOf, implicitLocalFnNodeOf, nullishGenericBindingUnitOf, registerOverloadedCallableAlias } from "./lower-calls.js";
 import { hasJsTypeAnnotation, isVarDeclared, numericIteratorSourceOf, provenanceElidedConstDecl } from "./lower-stmts.js";
 import { streamClassAliasDecl } from "./lower-stream.js";
@@ -835,6 +835,16 @@ function jsDynHoldableInitializer(lowerer: Lowerer, init: ts.Expression | undefi
   // callable whose inferred overloads cannot describe one native ABI.
   if ((ts.isPropertyAccessExpression(e) || ts.isElementAccessExpression(e)) &&
       ts.isIdentifier(e.expression) && lowerer.globalOf(e.expression)?.type.kind === "dyn") return true;
+  // Optional callable reads (for example descriptor?.get) can be held in
+  // the same checked slot as a callable. Their nullish arm must remain
+  // observable by functions declared outside the module initializer.
+  if (ts.isPropertyAccessExpression(e) || ts.isElementAccessExpression(e) || ts.isCallExpression(e)) {
+    const fallback = lowerer.mapTypeOf(lowerer.typeOf(e)) ?? dynFallbackType(lowerer, e, lowerer.typeOf(e));
+    const arms = fallback?.kind === "union" ? lowerer.unions.get(fallback.unionId)?.arms : undefined;
+    if (arms?.some(arm => arm.kind === "func") && arms.every(arm =>
+      isUnitType(arm) || (arm.kind === "func" && canBoxFuncIntoDyn(arm,
+        (id) => lowerer.shapes.get(id), (id) => lowerer.unions.get(id))))) return true;
+  }
   if (ts.isIdentifier(e) || ts.isArrowFunction(e) || ts.isFunctionExpression(e)) {
     if (ts.isIdentifier(e)) {
       if (lowerer.globalOf(e)?.type.kind === "dyn") return true;
@@ -1167,7 +1177,8 @@ export function collectGlobals(lowerer: Lowerer, sf: ts.SourceFile, topStmts: ts
       // require('node:process')` aliases the global process
       // (stdlibGlobalAliasDecl's require form) so reads through the
       // binding lower via the process surface.
-      if (isRequireStatement(stmt)) {
+      if (isRequireStatement(stmt) && !(ts.isVariableStatement(stmt) &&
+          stmt.declarationList.declarations.some(decl => isNativeFfiRequire(lowerer, decl.initializer)))) {
         if (
           ts.isVariableStatement(stmt) &&
           (stmt.declarationList.flags & ts.NodeFlags.Const) !== 0
@@ -1570,8 +1581,7 @@ export function collectGlobals(lowerer: Lowerer, sf: ts.SourceFile, topStmts: ts
             ) {
               const fallback = dynFallbackType(lowerer, nameNode, lowerer.typeOf(nameNode));
               const symbol = lowerer.checker.getSymbolAtLocation(nameNode);
-              if (symbol && fallback?.kind === "func" && canBoxFuncIntoDyn(fallback,
-                (id) => lowerer.shapes.get(id), (id) => lowerer.unions.get(id))) {
+              if (symbol && fallback && (fallback.kind === "func" || fallback.kind === "union") && lowerer.dynConvertible(fallback)) {
                 if (!lowerer.globalsBySymbol.has(symbol)) {
                   const g: IrGlobal = {
                     id: `%g.${tag}${nsPrefix}${nameNode.text}`, name: nameNode.text,

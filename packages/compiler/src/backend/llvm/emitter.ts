@@ -151,6 +151,11 @@ interface LlArgPackAndTrampolinePrologue {
 
 function ffiCallbackDummyLl(callback: IrFfiCallbackParam["callback"]): string {
   switch (callback.returns) {
+    case "i64":
+    case "u64":
+      return "i64 0";
+    case "pointer":
+      return "ptr null";
     case "void":
       return "void";
     case "f64":
@@ -534,7 +539,7 @@ export class LlEmitter {
     for (const adapter of this.ffiCallbackAdapters.values()) {
       const cb = adapter.callback;
       if (adapter.tls !== null) globals.push(`@${adapter.tls} = internal thread_local global ptr null`);
-      if (adapter.global !== null) globals.push(`@${adapter.global} = internal global ptr null`);
+      if (adapter.global !== null) globals.push(`@${adapter.global} = internal thread_local global ptr null`);
       if (adapter.table !== null) {
         globals.push(`@${adapter.table} = internal global %ScrFfiTable zeroinitializer`);
       }
@@ -546,7 +551,8 @@ export class LlEmitter {
         return [`${ffiNativeParamLl(param, this.ffiExtendNarrowIntegers)} %a${i}`];
       });
       if (cb.invoke === "foreign") {
-        if (adapter.table === null || !cb.params.some(isFfiContextParam) || cb.returns !== "void") {
+        if (adapter.table === null || !cb.params.some(isFfiContextParam) || cb.returns !== "void" ||
+            cb.params.some(param => param === "i64" || param === "u64" || param === "pointer")) {
           throw new InternalCompilerError("llvm emitter bug: invalid foreign FFI callback descriptor");
         }
         const dispatch = `${adapter.symbol}_dispatch`;
@@ -700,6 +706,15 @@ export class LlEmitter {
         const param = cb.params[i]!;
         if (isFfiContextParam(param)) continue;
         switch (param) {
+          case "i64":
+          case "u64":
+          case "pointer": {
+            const ty = ffiNativeTypeLl(param);
+            this.declare(`declare ptr @scr_bigint_from_${param}(${ty})`);
+            defs.push(`  %s${i} = call ptr @scr_bigint_from_${param}(${ty} %a${i})`);
+            scriptArgs.push(`ptr %s${i}`);
+            break;
+          }
           case "f64":
             scriptArgs.push(`double %a${i}`);
             break;
@@ -777,6 +792,16 @@ export class LlEmitter {
         defs.push(`  call void @scr_closure_release_v(ptr %invoke_pin)`);
       }
       switch (cb.returns) {
+        case "i64":
+        case "u64":
+        case "pointer": {
+          const ty = ffiNativeTypeLl(cb.returns);
+          this.declare(`declare ${ty} @scr_bigint_to_${cb.returns}(ptr)`);
+          this.declare(`declare void @scr_bigint_release(ptr)`);
+          defs.push(`  %out = call ${ty} @scr_bigint_to_${cb.returns}(ptr %result)`,
+            `  call void @scr_bigint_release(ptr %result)`, `  ret ${ty} %out`);
+          break;
+        }
         case "f64":
           defs.push(`  ret double %result`);
           break;

@@ -137,3 +137,7 @@ void scr_ffi_release(ScrFfiTable *table, ScrClosure *callback) {
   }
   scr_trap("scriptc: releasing a native callback registration that does not exist\n");
 }
+
+void scr_ffi_release_optional(ScrFfiTable *table, ScrClosure *callback) {
+  if (callback) scr_ffi_release(table, callback);
+}

@@ -85,6 +85,7 @@ export function dynDesc(
     case "map": return "Map";
     case "set": return "Set";
     case "regex": return "RegExp";
+    case "url": return "URL";
     default: {
       const handle = DYN_HANDLE_KINDS.get(t.kind);
       if (handle) return handle.cls;

@@ -2427,6 +2427,17 @@ function emitCallExpr(
         }
         const entry = emitter.ffiByName.get(e.import);
         if (!entry) throw new InternalCompilerError(`emitter bug: unknown FFI import ${e.import}`);
+        if (entry.callbackOperation) {
+          const adapter = emitter.ffiCallbackAdapter(entry.callbackTarget ?? entry.name, "callback");
+          if (entry.callbackOperation === "release") {
+            emitter.line(`if (${adapter.global}) scr_ffi_release(&${adapter.table}, ${adapter.global});`);
+            return { name: "", type: e.type };
+          }
+          const callback = emitter.emitExpr(e.args[0]!);
+          emitter.line(`scr_ffi_retain_slot(&${adapter.table}, &${adapter.global}, ${callback.name});`);
+          emitter.line(`scr_ffi_commit_slot(&${adapter.table}, ${callback.name});`);
+          return emitter.newTemp(e.type, `scr_bigint_from_pointer((void *)&${adapter.symbol})`);
+        }
         const args = e.args.map((arg) => emitter.emitExpr(arg));
         const sourceArgs = new Map<number, Temp>();
         const callbackArgs = new Map<string, Temp>();
@@ -2500,6 +2511,11 @@ function emitCallExpr(
           }
           const arg = sourceArgs.get(i)!;
           switch (param) {
+            case "i64":
+            case "u64":
+            case "pointer":
+              nativeArgs.push(`scr_bigint_to_${param}(${arg.name})`);
+              break;
             case "mutable-bytes":
               nativeArgs.push(`(uint8_t *)${arg.name}->data`, `${arg.name}->len`);
               break;
@@ -2562,6 +2578,15 @@ function emitCallExpr(
         };
         const callbacksMayThrow = callbackArgs.size > 0 || emitter.ffiHasRetainedCallback;
         switch (entry.returns) {
+          case "i64":
+          case "u64":
+          case "pointer": {
+            const result = emitter.newTemp(e.type, `scr_bigint_from_${entry.returns}(${call})`);
+            restoreRawContexts();
+            finishRetainedReleases();
+            if (callbacksMayThrow) emitter.emitPendingCheck();
+            return result;
+          }
           case "void":
             emitter.line(`${call};${emitter.srcComment(e.loc)}`);
             restoreRawContexts();
@@ -4509,7 +4534,9 @@ function emitDynamicLibCall(state: LibCallState): Temp {
             return finish(`scr_dyn_object_tag(${arg(0)})`);
           case "dyn.freeze": return finish(`scr_dyn_freeze(${arg(0)})`);
           case "dyn.isFrozen": return finish(`scr_dyn_is_frozen(${arg(0)})`);
+          case "dyn.nativeSetNew": return finish(`scr_dyn_native_set_new(${arg(0)})`);
           case "dyn.nativeSetIs": return finish(`scr_dyn_native_set_is(${arg(0)})`);
+          case "dyn.nativeUrlIs": return finish(`scr_dyn_native_url_is(${arg(0)})`);
           case "dyn.nativeRegexIs": return finish(`scr_dyn_native_regex_is(${arg(0)})`);
           case "dyn.toString":
             // Receiver-kind-dispatched toString (+1); throws Node's
@@ -4556,6 +4583,9 @@ function emitDynamicLibCall(state: LibCallState): Temp {
             return finish(`scr_weak_map_new(${arg(0)})`);
           case "arrayBuffer.new":
             return finish(`scr_array_buffer_new(${arg(0)})`);
+          case "ffi.argument": return finish(`scr_ffi_argument(${arg(0)}, ${arg(1)})`);
+          case "ffi.memoryModule":
+            return finish(`scr_ffi_memory_module(${arg(0)})`);
           case "arrayBuffer.is":
             return finish(`scr_array_buffer_is(${arg(0)})`);
           case "arrayBuffer.isView":
@@ -4592,6 +4622,8 @@ function emitDynamicLibCall(state: LibCallState): Temp {
             // Object.assign over dyn values: own members copy, the target
             // returns (+1); non-object receivers throw like Node.
             return finish(`scr_dyn_assign(${arg(0)}, ${arg(1)})`);
+          case "dyn.copyDataProperties":
+            return finish(`scr_dyn_copy_data_properties(${arg(0)}, ${arg(1)})`);
           case "dyn.packPush":
             // Variadic Object.assign's source pack: a plain source
             // retains in (both args borrowed). Never throws.
@@ -5202,6 +5234,7 @@ function emitPathUrlLibCall(state: LibCallState): Temp {
             return finish(`scr_url_href(${arg(0)})`);
           case "url.fileURLToPathUrl":
             return finish(`scr_url_to_path(${arg(0)})`);
+          case "url.fileURLToPathChecked": return finish(`scr_url_checked_to_path(${arg(0)})`);
           case "url.fileURLToPathStr":
             return finish(`scr_url_str_to_path(${arg(0)})`);
           case "url.pathToFileURL":
@@ -9221,6 +9254,7 @@ function emitLibCallExpr(emitter: CEmitter, e: LibCallExpr): Temp {
       return emitWebLibCall(state);
     case "weakSet":
     case "weakMap":
+    case "ffi":
     case "arrayBuffer":
     case "dyn":
     case "global":

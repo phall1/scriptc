@@ -45,6 +45,7 @@ import { BOOL, BYTES_U8, CHILD_T, CHILDSTREAM_T, CHILDWRITER_T, CRYPTOHASH_T, CR
 import { boolLit, countedFor, numLit, strLit, varRef } from "../../ir/build.js";
 import { staticForkModulePath } from "../fork-target.js";
 import { tsgoPath } from "../dts-paths.js";
+import { lowerFfiMemoryModule } from "./native-ffi.js";
 import { lowerBuiltinLoaderValue } from "./lower-builtin-values.js";
 
 function optionalStringTags(lowerer: Lowerer, type: IrType): { stringTag: number; undefinedTag: number } | null {
@@ -476,6 +477,14 @@ function lowerBuiltinOptionalDefault(
     return { spec: ts.isStringLiteralLike(a) ? a.text : null, baseFile };
   }
 
+/** node:ffi is a checked native module value, so its require binding needs
+ * storage even when the createRequire loader is named `require`. */
+export function isNativeFfiRequire(lowerer: Lowerer, expr: ts.Expression | undefined): boolean {
+  if (expr === undefined) return false;
+  const call = stripTypeCasts(expr);
+  return ts.isCallExpression(call) && createRequireSpecOf(lowerer, call)?.spec === "node:ffi";
+}
+
 /** True for `const fs = require("node:fs")` through a createRequire
    * binding — a builtin namespace import in const clothing: alias
    * plumbing with no storage (uses resolve through
@@ -645,6 +654,9 @@ function lowerBuiltinOptionalDefault(
       );
     }
     const spec = cr.spec;
+    if (spec === "node:ffi") {
+      return lowerFfiMemoryModule(lowerer, loc);
+    }
     if (canonicalBuiltinModule(spec) !== null) {
       lowerer.unsupported(
         "SC1090",
@@ -2510,6 +2522,7 @@ function lowerFsSyncBufferWindow(
       // undefined, ...) must narrow first, like everywhere else.
       const argNode = expr.arguments[0]!;
       const arg = lowerer.lowerExpr(argNode);
+      if (arg.type.kind === "dyn") return { kind: "libCall", fn: "url.fileURLToPathChecked", args: [arg], type: STRING, loc };
       if (arg.type.kind === "url") {
         return { kind: "libCall", fn: "url.fileURLToPathUrl", args: [arg], type: STRING, loc };
       }
@@ -5106,6 +5119,7 @@ function lowerJsonCallback(lowerer: Lowerer, node: ts.Expression, role: "replace
       if (ts.isVariableDeclaration(varDecl) && varDecl.initializer !== undefined) {
         const spec = requireSpecOf(varDecl.initializer);
         if (spec !== null) {
+          if (isNativeFfiRequire(lowerer, varDecl.initializer)) return null;
           const isBuiltin = spec.startsWith("node:") || builtinModules.includes(spec);
           return isBuiltin && canonicalBuiltinModule(spec) === null ? spec : null;
         }

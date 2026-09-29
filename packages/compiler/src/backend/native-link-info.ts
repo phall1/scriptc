@@ -292,6 +292,7 @@ export async function createNativeLinkInfo(options: {
   optimization?: "release" | "dev";
   env?: NodeJS.ProcessEnv;
 }): Promise<NativeLinkInfo> {
+  if (options.ffi?.frameworks?.length && options.target.platform !== "darwin") throw new Error("FFI frameworks require a Darwin target");
   const root = dirname(runtimeSrcDir());
   const runtimeVersion = (JSON.parse(
     await readFile(join(root, "package.json"), "utf8"),
@@ -348,7 +349,7 @@ export async function createNativeLinkInfo(options: {
     },
     ffi: {
       format: options.ffi?.ffiFormat ?? null,
-      symbols: options.ffi?.functions.map((fn) => fn.symbol) ?? [],
+      symbols: options.ffi?.functions.filter((fn) => !fn.callbackOperation).map((fn) => fn.symbol) ?? [],
       libraries: [...ffiLibraries],
     },
     link: {
@@ -364,7 +365,7 @@ export async function createNativeLinkInfo(options: {
         ...(options.ffi?.systemLibraries ?? []),
         ...recipe.systemLibraries,
       ]),
-      frameworks: [],
+      frameworks: [...(options.ffi?.frameworks ?? [])],
     },
   };
 }

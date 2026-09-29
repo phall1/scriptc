@@ -881,7 +881,7 @@ export interface IrModule {
   lib?: IrLibSection;
 }
 
-export type IrFfiValueParamClass = "f64" | "f32" | "bool" | "u8" | "i8" | "u16" | "i16" | "u32" | "i32" | "string" | "bytes" | "mutable-bytes";
+export type IrFfiValueParamClass = "f64" | "f32" | "bool" | "u8" | "i8" | "u16" | "i16" | "u32" | "i32" | "i64" | "u64" | "pointer" | "string" | "bytes" | "mutable-bytes";
 export type IrFfiCallbackParamClass =
   | "f64"
   | "f32"
@@ -892,10 +892,13 @@ export type IrFfiCallbackParamClass =
   | "i16"
   | "u32"
   | "i32"
+  | "i64"
+  | "u64"
+  | "pointer"
   | "cstring"
   | "string"
   | "bytes";
-export type IrFfiReturnClass = "f64" | "f32" | "bool" | "u8" | "i8" | "u16" | "i16" | "u32" | "i32" | "void";
+export type IrFfiReturnClass = "f64" | "f32" | "bool" | "u8" | "i8" | "u16" | "i16" | "u32" | "i32" | "i64" | "u64" | "pointer" | "void";
 
 export interface IrFfiContextParam {
   /** Manifest-local id of the callback whose ScrClosure* occupies this ABI slot. */
@@ -949,6 +952,10 @@ export function ffiClassType(
   cls: IrFfiCallbackParamClass | IrFfiValueParamClass | IrFfiReturnClass,
 ): IrType {
   switch (cls) {
+    case "i64":
+    case "u64":
+    case "pointer":
+      return BIGINT_T;
     case "bool":
       return BOOL;
     case "cstring":
@@ -1000,6 +1007,10 @@ export interface IrFfiImport {
   name: string;
   /** The external C symbol. */
   symbol: string;
+  /** Exact node:ffi.dlopen library name when exposed as a checked callable. */
+  library?: string;
+  callbackOperation?: "register" | "release";
+  callbackTarget?: string;
   params: IrFfiParam[];
   returns: IrFfiReturnClass;
 }
@@ -1058,7 +1069,7 @@ export interface IrLibCallback {
   /** The runtime channel slot (profile declaration order). */
   slot: number;
   params: ("f64" | "bool" | "string" | "bytes" | "u8" | "u32" | "i32")[];
-  returns: "f64" | "bool" | "u8" | "u32" | "i32" | "void";
+  returns: "f64" | "bool" | "u8" | "u32" | "i32" | "i64" | "u64" | "pointer" | "void";
   /** The unregistered-call trap text (a DETECTED trap: plain bytes the
    * library funnel classifies SC4025 and assembles with the current
    * entry's symbol — unlike the SC4012 wrapper traps, the entry is only
@@ -1995,6 +2006,8 @@ export type IrRegexIntrinsicMethod =
  * assume the island runtime is linked when they see it; island exceptions
  * bridge into the exception cell as catchable strings (may-throw). */
 export type IrLibFn =
+  | "ffi.argument"
+  | "ffi.memoryModule"
   | "intl.segmenterNew"
   | "weakMap.is"
   | "weakSet.is"
@@ -2131,7 +2144,9 @@ export type IrLibFn =
   | "dyn.objectTag"
   | "dyn.freeze"
   | "dyn.isFrozen"
+  | "dyn.nativeSetNew"
   | "dyn.nativeSetIs"
+  | "dyn.nativeUrlIs"
   | "dyn.nativeRegexIs"
   /** toString() on a checked-dynamic receiver: runtime kind dispatch
    * (bytes decode per the literal encoding — utf8 default; strings,
@@ -2412,6 +2427,7 @@ export type IrLibFn =
   | "url.pathname"
   | "url.href"
   | "url.fileURLToPathUrl"
+  | "url.fileURLToPathChecked"
   | "url.fileURLToPathStr"
   | "url.pathToFileURL"
   /** Explicit path syntax from the options.windows argument, independent
@@ -3938,6 +3954,7 @@ export type IrLibFn =
   | "dyn.forInKeys"
   | "dyn.hasOwn"
   | "dyn.assign"
+  | "dyn.copyDataProperties"
   /** Variadic Object.assign over CHECKED-DYNAMIC targets (`Object.assign(
    * {}, ...arr.map(f), tail)` — the option-table merge): the lowering
    * builds one fresh dyn pack of sources (packPush retains a plain source
@@ -5963,6 +5980,7 @@ function isJsonSafeAt(
       return nativeFields && !stringify && t.elem.kind === "dyn";
     case "bigint":
     case "regex":
+    case "url":
       return nativeFields && !stringify;
     case "bytes":
       return nativeFields;
@@ -5975,9 +5993,6 @@ function isJsonSafeAt(
     // empty-object husk nobody wants; stringify/dynCheck reject instead).
     case "map":
     case "date":
-    // URLs stringify as "{}" husks in Node too (data properties live on
-    // internal slots) — rejected the same way; use url.href instead.
-    case "url":
     // URLSearchParams stringifies as the same "{}" husk — rejected; use
     // sp.toString() instead.
     case "searchParams":
@@ -6299,6 +6314,7 @@ function canBoxDynComposite(
       return true;
     case "bytes":
     case "regex":
+    case "url":
       return true;
     case "func":
       return canBoxFuncIntoDyn(t, getRecord, getUnion);
@@ -7609,6 +7625,9 @@ export function moduleLibNondeterministicSurface(mod: IrModule): string | null {
  * seed on `dynCheck` and `awaitExpr` nodes, which throw on validation
  * failure / promise rejection). */
 export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
+  "dyn.nativeSetNew",
+  "ffi.argument",
+  "ffi.memoryModule",
   "process.stdoutWrite",
   "process.stderrWrite",
   "process.stdoutWriteBytes",
@@ -7920,6 +7939,7 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "dyn.forInKeys",
   "dyn.hasOwn",
   "dyn.assign",
+  "dyn.copyDataProperties",
   // variadic Object.assign: spread flattening throws V8's spread-call
   // TypeErrors; the final copy throws ToObject on a nullish target
   "dyn.packPushSpread",
@@ -7964,6 +7984,7 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "url.new",
   "url.newBase",
   "url.fileURLToPathUrl",
+  "url.fileURLToPathChecked",
   "url.fileURLToPathStr",
   // The win32-target flavor of pathToFileURL (same runtime entry point —
   // the bridge dispatches by the binary's platform): Node's win32 arm

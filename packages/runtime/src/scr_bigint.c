@@ -64,6 +64,46 @@ static ScrBigInt *bi_copy(const ScrBigInt *a) {
   return v;
 }
 
+ScrBigInt *scr_bigint_from_u64(uint64_t value) { return bi_u64(value); }
+
+ScrBigInt *scr_bigint_from_i64(int64_t value) {
+  /* Unsigned negation also handles INT64_MIN without signed overflow. */
+  ScrBigInt *result = bi_u64(value < 0 ? UINT64_C(0) - (uint64_t)value : (uint64_t)value);
+  if (value < 0) result->sign = -1;
+  return result;
+}
+
+ScrBigInt *scr_bigint_from_pointer(void *value) { return bi_u64((uintptr_t)value); }
+
+uint64_t scr_bigint_to_u64(const ScrBigInt *value) {
+  if (!value) return 0; /* callback throw paths return the ABI's zero value */
+  uint64_t bits = value->len ? value->limb[0] : 0;
+  if (value->len > 1) bits |= (uint64_t)value->limb[1] << 32;
+  return value->sign < 0 ? UINT64_C(0) - bits : bits;
+}
+
+int64_t scr_bigint_to_i64(const ScrBigInt *value) {
+  uint64_t bits = scr_bigint_to_u64(value);
+  return bits <= INT64_MAX ? (int64_t)bits : -1 - (int64_t)(UINT64_MAX - bits);
+}
+
+bool scr_bigint_pointer_fits(const ScrBigInt *value) {
+  return !value || (value->sign >= 0 && value->len <= 2 && scr_bigint_to_u64(value) <= UINTPTR_MAX);
+}
+
+bool scr_bigint_u64_fits(const ScrBigInt *value) {
+  return !value || (value->sign >= 0 && value->len <= 2);
+}
+
+bool scr_bigint_i64_fits(const ScrBigInt *value) {
+  if (!value) return true;
+  if (value->len > 2) return false;
+  uint64_t bits = scr_bigint_to_u64(value);
+  return value->sign < 0 ? bits >= (UINT64_C(1) << 63) : bits <= INT64_MAX;
+}
+
+void *scr_bigint_to_pointer(const ScrBigInt *value) { return (void *)(uintptr_t)scr_bigint_to_u64(value); }
+
 ScrBigInt *scr_bigint_retain(ScrBigInt *v) {
   if (v && v->rc != SIZE_MAX) v->rc++;
   return v;

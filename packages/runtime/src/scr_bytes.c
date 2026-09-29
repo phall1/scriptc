@@ -70,9 +70,23 @@ static ScrBytes *scr_bytes_alloc(ScrBytesElem elem, size_t len) {
   if (!b->data) scr_bytes_oom();
   b->backing = NULL;
   b->is_buffer = false;
+  b->external = false;
 #ifdef SCR_RC_AUDIT
   scr_live_bytes++;
 #endif
+  return b;
+}
+
+ScrBytes *scr_bytes_from_external(void *data, size_t length) {
+  ScrBytes *b = scr_bytes_alloc(SCR_BYTES_U8, 0);
+  /* Keep the owned empty allocation for NULL/zero-length views: existing
+   * view operations may add zero to the data pointer. */
+  if (data) {
+    free(b->data);
+    b->data = data;
+    b->external = true;
+  }
+  b->len = length;
   return b;
 }
 
@@ -131,7 +145,7 @@ void scr_bytes_release(ScrBytes *b) {
     scr_weak_dispose(b);
     if (b->backing) {
       scr_bytes_release(b->backing); /* a view: data points into the owner */
-    } else {
+    } else if (!b->external) {
       free(b->data);
     }
 #ifdef SCR_RC_AUDIT
@@ -327,6 +341,7 @@ ScrBytes *scr_bytes_subarray(ScrBytes *b, double start, double end) {
   v->data = b->data + s * scr_bytes_elem_size(b->elem);
   v->backing = scr_bytes_retain(owner);
   v->is_buffer = b->is_buffer;
+  v->external = false;
 #ifdef SCR_RC_AUDIT
   scr_live_bytes++;
 #endif
@@ -539,6 +554,7 @@ ScrBytes *scr_dataview_new(ScrBytes *src, double byte_off, bool has_len, double 
   v->data = owner->data + (size_t)off;
   v->backing = scr_bytes_retain(owner);
   v->is_buffer = false;
+  v->external = false;
 #ifdef SCR_RC_AUDIT
   scr_live_bytes++;
 #endif

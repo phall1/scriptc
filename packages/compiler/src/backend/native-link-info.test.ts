@@ -40,6 +40,16 @@ const BASE: NativeLinkFeatures = {
 };
 
 describe("native link info recipes", () => {
+  test("FFI frameworks remain Darwin-only and callback adapters are not external symbols", async () => {
+    const ffi = { ffiFormat: 7 as const, libraries: [], systemLibraries: [], frameworks: ["Foundation"], functions: [
+      { name: "native", symbol: "native", params: [], returns: "void" as const },
+      { name: "release", symbol: "release", params: [], returns: "void" as const, callbackOperation: "release" as const },
+    ] };
+    const info = await createNativeLinkInfo({ programObject: "/out/app.o", target: MACOS_ARM64_TARGET, features: BASE, ffi });
+    expect(info.ffi.symbols).toEqual(["native"]);
+    expect(info.link.frameworks).toEqual(["Foundation"]);
+    await expect(createNativeLinkInfo({ programObject: "/out/app.o", target: WASM32_WASI_TARGET, features: BASE, ffi })).rejects.toThrow("Darwin");
+  });
   test("FileHandle-only links include checked promise adapters without an engine", async () => {
     const info = await createNativeLinkInfo({
       programObject: "/out/app.o", target: MACOS_ARM64_TARGET,

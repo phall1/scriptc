@@ -2556,7 +2556,7 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
       }
       // An instanceof narrow retains the native view after validating its
       // exact element kind. Buffer also matches Uint8Array.
-      if (narrowed?.kind === "bytes") {
+      if (narrowed?.kind === "bytes" || narrowed?.kind === "url") {
         return { kind: "dynCheck", value: expr, type: narrowed, loc: expr.loc };
       }
       // An `instanceof Error` narrow: the checked-dynamic tree's error encoding rebuilds a
@@ -5740,6 +5740,7 @@ export function lowerEnvironmentKey(lowerer: Lowerer, node: ts.Expression): IrEx
 
 export function ensureString(lowerer: Lowerer, e: IrExpr, node: ts.Node): IrExpr {
     if (e.type.kind === "string") return e;
+    if (e.type.kind === "url") return { kind: "libCall", fn: "url.href", args: [e], type: STRING, loc: e.loc };
     if (e.type.kind === "regex") {
       return { kind: "regexIntrinsic", method: "toString", receiver: e, args: [], type: STRING, loc: e.loc };
     }
@@ -6958,7 +6959,7 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
         const scalarSide = dynSide === left ? right : left;
         const reference = scalarSide.type;
         if ((isDynTypedRefType(reference) || reference.kind === "record" || reference.kind === "array" ||
-             reference.kind === "bytes" || reference.kind === "func" || reference.kind === "regex" ||
+             reference.kind === "bytes" || reference.kind === "func" || reference.kind === "regex" || reference.kind === "url" ||
              reference.kind === "bigint" || reference.kind === "set" || DYN_HANDLE_KINDS.has(reference.kind)) &&
             lowerer.dynConvertible(reference)) {
           const boxed: IrExpr = {
@@ -7430,6 +7431,7 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
             idLeft.type.kind === "map" ||
             idLeft.type.kind === "set" ||
             idLeft.type.kind === "regex" ||
+            idLeft.type.kind === "url" ||
             idLeft.type.kind === "object" ||
             idLeft.type.kind === "record" ||
             // Symbols ARE identity: `Symbol('a') === Symbol('a')` is false,
@@ -8139,6 +8141,12 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
       }
       const value = lowerer.coerceInto(expr.left, lowerer.lowerExpr(expr.left), DYN);
       return { kind: "libCall", fn: lowerer.isStdlibGlobal(expr.right, "WeakMap") ? "weakMap.is" : "weakSet.is", args: [value], type: BOOL, loc };
+    }
+    const rhsBuiltin = ts.isIdentifier(expr.right) ? lowerer.builtinImportOf(expr.right) :
+      ts.isPropertyAccessExpression(expr.right) ? lowerer.builtinMemberOf(expr.right) : null;
+    if (lowerer.isStdlibGlobal(expr.right, "URL") || rhsBuiltin?.module === "url" && rhsBuiltin.member === "URL") {
+      const value = lowerer.coerceInto(expr.left, lowerer.lowerExpr(expr.left), DYN);
+      return { kind: "libCall", fn: "dyn.nativeUrlIs", args: [value], type: BOOL, loc };
     }
     if (lowerer.isStdlibGlobal(expr.right, "ArrayBuffer")) {
       const value = lowerer.coerceInto(expr.left, lowerer.lowerExpr(expr.left), DYN);
