@@ -1,4 +1,3 @@
-import { moduleUsesDgram, moduleUsesHttp2 } from "../../ir/ir.js";
 import { emitLlvmLayouts } from "./layouts.js";
 import { llvmBytes as llBytes } from "../literals.js";
 import { InternalCompilerError } from "../../errors.js";
@@ -37,7 +36,7 @@ import type {
   IrUnionDef,
   SrcLoc,
 } from "../../ir/ir.js";
-import { CAUGHT, ffiCallbackType, isDynTypedRefType, isFfiContextParam, isRefCounted, isUnitType, moduleEmbedsBuiltin, moduleEmbedsCompressedNpm, moduleUsesChildProcess, moduleUsesDynInvoke, moduleUsesFetch, moduleUsesFsWatch, moduleUsesHttpServer, moduleUsesNet, moduleUsesNodeTest, moduleUsesProcessEvents, moduleUsesStream, moduleUsesTls, moduleUsesTlsCa, NPM_COMPRESS_MIN, POINTER_KINDS, RUNTIME_EMITTER_CLASS, RUNTIME_ERROR_CLASSES, RUNTIME_STREAM_CLASSES, typeKey, VOID } from "../../ir/ir.js";
+import { CAUGHT, ffiCallbackType, isDynTypedRefType, isFfiContextParam, isRefCounted, isUnitType, moduleRuntimeFeatures, moduleEmbedsBuiltin, moduleEmbedsCompressedNpm, NPM_COMPRESS_MIN, POINTER_KINDS, RUNTIME_EMITTER_CLASS, RUNTIME_ERROR_CLASSES, RUNTIME_STREAM_CLASSES, typeKey, VOID } from "../../ir/ir.js";
 import { matchIntegerBytesForLoop } from "../../ir/integer-loops.js";
 import { scalarizeNumericRecords } from "../../ir/scalar-records.js";
 import { analyzeIntegerRanges, type IntegerRanges } from "../../ir/integer-ranges.js";
@@ -847,7 +846,8 @@ export class LlEmitter {
     // outlive the RC audit — release it with the globals (the runtime ABI’s
     // sc_release_globals tail). Only when the dispatch unit is even
     // linked (defineProps is the only writer).
-    const fnValueProps = moduleUsesDynInvoke(this.mod) ? [...this.fnValues] : [];
+    const runtimeFeatures = moduleRuntimeFeatures(this.mod);
+    const fnValueProps = runtimeFeatures.dynInvoke ? [...this.fnValues] : [];
     if (fnValueProps.length > 0) this.declare(`declare void @scr_box_release(ptr)`);
     const globalReleaseLines = (prefix: string): string[] => {
       const lines: string[] = [];
@@ -872,26 +872,26 @@ export class LlEmitter {
     // Exit listeners can read MODULE GLOBALS directly, so they must run
     // BEFORE the global releases (the runtime ABI’s runExitListeners
     // ordering — the atexit half becomes an idempotent no-op).
-    const usesEvents = moduleUsesProcessEvents(this.mod);
-    const usesChildProcess = moduleUsesChildProcess(this.mod);
-    const usesFsWatch = moduleUsesFsWatch(this.mod);
+    const usesEvents = runtimeFeatures.processEvents;
+    const usesChildProcess = runtimeFeatures.childProcess;
+    const usesFsWatch = runtimeFeatures.fsWatch;
     // Stream-surface programs fill the loop's stream hook (the deferred
     // next-tick emissions) and the emitter's post-registration flow kick
     // before %main — scr_stream.c links only when the line is emitted
     // (native-toolchain.ts gates on the same predicate).
-    const usesStream = moduleUsesStream(this.mod);
+    const usesStream = runtimeFeatures.stream;
     // Net-surface programs fill the loop's net hooks (and the netSocket
     // handle-dispatch ops for the checked-dynamic boundary); http-surface
     // programs additionally stamp the httpReq/httpRes ops — the C main's
     // install lines, gated on the same predicates native-toolchain.ts links by.
-    const usesNet = moduleUsesNet(this.mod);
-    const usesDgram = moduleUsesDgram(this.mod);
-    const usesHttp2 = moduleUsesHttp2(this.mod);
-    const usesHttp = moduleUsesHttpServer(this.mod);
+    const usesNet = runtimeFeatures.net;
+    const usesDgram = runtimeFeatures.dgram;
+    const usesHttp2 = runtimeFeatures.http2;
+    const usesHttp = runtimeFeatures.http;
     // Fetch-referencing programs register the native fetch bridge before
     // any island entry (the engine's lazy boot consults it) — native-toolchain.ts
     // compiles scr_fetch.c on the same predicate.
-    const usesFetch = moduleUsesFetch(this.mod);
+    const usesFetch = runtimeFeatures.fetch;
     const embedsZlib = moduleEmbedsBuiltin(this.mod, "node:zlib");
     const embedsNet =
       moduleEmbedsBuiltin(this.mod, "node:http") ||
@@ -899,13 +899,13 @@ export class LlEmitter {
       moduleEmbedsBuiltin(this.mod, "node:net") ||
       moduleEmbedsBuiltin(this.mod, "node:tls");
     const snapshotsTlsCa =
-      moduleUsesTls(this.mod) || moduleUsesTlsCa(this.mod) ||
+      runtimeFeatures.tls || runtimeFeatures.tlsCa ||
       moduleEmbedsBuiltin(this.mod, "node:https") ||
       moduleEmbedsBuiltin(this.mod, "node:tls");
     // The process verdict has the same precedence as the C reference
     // emitter: node:test owns the final status when present; otherwise an
     // embedded process.exitCode owns it; ordinary programs return zero.
-    const usesNodeTest = moduleUsesNodeTest(this.mod);
+    const usesNodeTest = runtimeFeatures.nodeTest;
     const programExitUsesIsland = !usesNodeTest && usesIsland;
     // Declared NOW — the extern block flushes before main assembles.
     if (usesEvents) this.declare(`declare void @scr_events_install()`);

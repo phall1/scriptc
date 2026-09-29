@@ -49,8 +49,7 @@ import {
 import { validateSidecar } from "./library/sidecar-validate.js";
 import type { EntryExportInfo } from "./frontend/lib-exports.js";
 import type { ContractFacts } from "./frontend/lib-contract.js";
-import { moduleLibAsyncSurface, moduleLibNondeterministicSurface, moduleEmbedsBuiltin, moduleUsesAssert, moduleUsesCopying, moduleUsesEmitter, moduleUsesFetch, moduleUsesInspect, moduleUsesLegacyTextDecoder, moduleUsesRegex, moduleUsesSearchParams, moduleUsesSymbol, moduleUsesZlib, type IrFfiImport, type IrLibSection, type IrModule, type IrRecordShape, type IrType, type SrcLoc } from "./ir/ir.js";
-import { moduleUsesBigInt } from "./ir/ir.js";
+import { moduleRuntimeFeatures, moduleLibAsyncSurface, moduleLibNondeterministicSurface, moduleEmbedsBuiltin, moduleUsesFetch, type IrFfiImport, type IrLibSection, type IrModule, type IrRecordShape, type IrType, type SrcLoc } from "./ir/ir.js";
 import { serializeModule } from "./ir/serialize.js";
 import { validateModule } from "./ir/validate.js";
 import { loadProgram } from "./frontend/program-node.js";
@@ -1728,18 +1727,19 @@ function libraryNativeFeatures(
   mod: IrModule,
   backend: "llvm",
 ): EarlyLibraryNativeFeatures {
+  const features = moduleRuntimeFeatures(mod);
   return {
     backend,
-    regex: moduleUsesRegex(mod),
-    assert: moduleUsesAssert(mod),
-    inspect: moduleUsesInspect(mod),
-    symbol: moduleUsesSymbol(mod),
-    bigint: moduleUsesBigInt(mod),
-    searchParams: moduleUsesSearchParams(mod),
-    emitter: moduleUsesEmitter(mod),
-    zlib: moduleUsesZlib(mod),
-    copying: moduleUsesCopying(mod),
-    textDecoderLegacy: moduleUsesLegacyTextDecoder(mod),
+    regex: features.regex,
+    assert: features.assert,
+    inspect: features.inspect,
+    symbol: features.symbol,
+    bigint: features.bigint,
+    searchParams: features.searchParams,
+    emitter: features.emitter,
+    zlib: features.zlib,
+    copying: features.copying,
+    textDecoderLegacy: features.legacyTextDecoder,
     ...(mod.lib?.identity !== undefined ? { buildId: mod.lib.identity.buildId } : {}),
   };
 }

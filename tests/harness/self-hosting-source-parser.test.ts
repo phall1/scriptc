@@ -1,8 +1,9 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
+import { promisify } from "node:util";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { analyze, compile } from "@scriptc/compiler";
+import { analyzeInChild, compileInChild } from "./self-hosting-compiler-process.js";
 import { expect, test } from "vitest";
 import { ts7Executable } from "../../packages/compiler/src/frontend/ts7/rpc-api.js";
 
@@ -12,6 +13,7 @@ const oracle = join(root, "tests/fixtures/self-hosting/ts7-source-parser-node.ts
 const nativeSources = join(root, "packages/compiler/native");
 const tempRoot = process.platform === "win32" ? tmpdir() : "/tmp";
 const sanitize = process.env["SCRIPTC_SAN"] === "1";
+const execFileAsync = promisify(execFile);
 
 function input() {
   const fixtures = join(root, "tests/fixtures/npm-static/node_modules");
@@ -91,13 +93,13 @@ for (const backend of ["llvm"] as const) {
       writeFileSync(profile, JSON.stringify({
         ...JSON.parse(readFileSync(join(nativeSources, "ts7-process.ffi.json"), "utf8")), libraries: [object],
       }));
-      const { coverage } = analyze(entry, { dynamic: false, ffiProfilePath: profile });
+      const coverage = await analyzeInChild(entry, { dynamic: false, ffiProfilePath: profile });
       expect(coverage.preflightFailed, JSON.stringify(coverage.diagnostics)).toBe(false);
       expect(coverage.diagnostics).toEqual([]);
       expect(coverage.stats.statementsFailed).toBe(0);
       expect(coverage.stats.statementsIsland).toBe(0);
       expect(coverage.stats.functionsSkipped).toBe(0);
-      const built = await compile(entry, {
+      const built = await compileInChild(entry, {
         backend, dynamic: false, optimization: "dev", sanitize, ffiProfilePath: profile,
         outDir: directory, outPath: join(directory, process.platform === "win32" ? "parser.exe" : "parser"),
       });
@@ -105,16 +107,11 @@ for (const backend of ["llvm"] as const) {
       const request = join(directory, "request.json");
       writeFileSync(request, JSON.stringify(input()));
       const expected = join(directory, "node.json");
-      const node = spawnSync(process.execPath, ["--import", "tsx", oracle, ts7Executable(), request, expected], { encoding: "utf8", timeout: 45_000 });
-      expect(node.error, node.stderr).toBeUndefined();
-      expect(node.status, node.stderr).toBe(0);
+      const node = await execFileAsync(process.execPath, ["--import", "tsx", oracle, ts7Executable(), request, expected], { encoding: "utf8", timeout: 45_000 });
       expect(node.stdout).toBe("");
       expect(node.stderr).toBe("");
       const report = join(directory, "native.json");
-      const run = spawnSync(built.binaryPath, [ts7Executable(), request, report], { encoding: "utf8", timeout: 45_000 });
-      expect(run.error, run.stderr).toBeUndefined();
-      expect(run.signal, run.stderr).toBeNull();
-      expect(run.status, run.stderr).toBe(0);
+      const run = await execFileAsync(built.binaryPath, [ts7Executable(), request, report], { encoding: "utf8", timeout: 45_000 });
       expect(run.stdout).toBe(node.stdout);
       expect(run.stderr).toBe(node.stderr);
       const result = JSON.parse(readFileSync(report, "utf8"));

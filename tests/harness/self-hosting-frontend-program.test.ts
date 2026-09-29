@@ -1,8 +1,9 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
+import { promisify } from "node:util";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { analyze, compile } from "@scriptc/compiler";
+import { analyzeInChild, compileInChild } from "./self-hosting-compiler-process.js";
 import { expect, test } from "vitest";
 import { ts7Executable } from "../../packages/compiler/src/frontend/ts7/rpc-api.js";
 import type { FrontendProgramRequest } from "../fixtures/self-hosting/frontend-program-cases.js";
@@ -13,6 +14,7 @@ const oracle = join(root, "tests/fixtures/self-hosting/frontend-program-node.ts"
 const nativeSources = join(root, "packages/compiler/native");
 const tempRoot = process.platform === "win32" ? tmpdir() : "/tmp";
 const sanitize = process.env["SCRIPTC_SAN"] === "1";
+const execFileAsync = promisify(execFile);
 
 function inputs(directory: string): FrontendProgramRequest {
   const cases: FrontendProgramRequest["cases"] = [];
@@ -236,30 +238,25 @@ for (const backend of ["llvm"] as const) {
       const request = join(directory, "request.json");
       const expected = join(directory, "node.json");
       writeFileSync(request, JSON.stringify(inputs(directory)));
-      const node = spawnSync(process.execPath, ["--import", "tsx", oracle, ts7Executable(), request, expected], { encoding: "utf8", timeout: 90_000 });
-      expect(node.error, node.stderr).toBeUndefined();
-      expect(node.status, node.stderr).toBe(0);
+      const node = await execFileAsync(process.execPath, ["--import", "tsx", oracle, ts7Executable(), request, expected], { encoding: "utf8", timeout: 90_000 });
       expect(node.stdout).toBe("");
       expect(node.stderr).toBe("");
       const nodeReports = JSON.parse(readFileSync(expected, "utf8")) as Report[];
       verify(nodeReports);
       // Restore edits made by the Node run before starting the native client.
       writeFileSync(request, JSON.stringify(inputs(directory)));
-      const { coverage } = analyze(entry, { dynamic: false, ffiProfilePath: profile });
+      const coverage = await analyzeInChild(entry, { dynamic: false, ffiProfilePath: profile });
       expect(coverage.preflightFailed, JSON.stringify(coverage.diagnostics)).toBe(false);
       expect(coverage.stats.statementsFailed, JSON.stringify(coverage.diagnostics)).toBe(0);
       expect(coverage.stats.statementsIsland).toBe(0);
       expect(coverage.stats.functionsSkipped).toBe(0);
-      const built = await compile(entry, {
+      const built = await compileInChild(entry, {
         backend, dynamic: false, optimization: "dev", sanitize, ffiProfilePath: profile,
         outDir: directory, outPath: join(directory, process.platform === "win32" ? "frontend.exe" : "frontend"),
       });
       if (!built.ok) throw new Error(built.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
       const report = join(directory, "native.json");
-      const run = spawnSync(built.binaryPath, [ts7Executable(), request, report], { encoding: "utf8", timeout: 90_000 });
-      expect(run.error, run.stderr).toBeUndefined();
-      expect(run.signal, run.stderr).toBeNull();
-      expect(run.status, run.stderr).toBe(0);
+      const run = await execFileAsync(built.binaryPath, [ts7Executable(), request, report], { encoding: "utf8", timeout: 90_000 });
       expect(run.stdout).toBe(node.stdout);
       expect(run.stderr).toBe(node.stderr);
       const nativeReports = JSON.parse(readFileSync(report, "utf8")) as Report[];

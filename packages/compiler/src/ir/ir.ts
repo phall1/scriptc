@@ -7,8 +7,8 @@ import { InternalCompilerError } from "../errors.js";
  * - Every node carries `loc` (source span) and every expression carries its
  *   computed `type` — backends never re-derive types.
  * - Structured control flow (statement tree), not basic blocks: the only
- * current backend is C and there are no optimization passes yet. When a mid-end
- *   arrives, a structured→CFG lowering pass slots in after validation.
+ * LLVM backend lowers these into control flow. A future IR optimization
+ *   pass can run after validation.
  * - The type union is deliberately written for extension (`dyn` shipped
  *   with JSON, `promise` with async). All switches over IrType/IrExpr/
  *   IrStmt must have exhaustive `never` default arms so adding a member
@@ -6502,6 +6502,156 @@ export function canExitIslandToType(
   return false;
 }
 
+export interface RuntimeFeatures {
+  regex: boolean;
+  copying: boolean;
+  legacyTextDecoder: boolean;
+  fileHandle: boolean;
+  fetch: boolean;
+  processEvents: boolean;
+  emitter: boolean;
+  stream: boolean;
+  zlib: boolean;
+  dc: boolean;
+  assert: boolean;
+  dynInvoke: boolean;
+  dynAsync: boolean;
+  inspect: boolean;
+  childProcess: boolean;
+  net: boolean;
+  symbol: boolean;
+  bigint: boolean;
+  searchParams: boolean;
+  qs: boolean;
+  parseArgs: boolean;
+  fsWatch: boolean;
+  nodeTest: boolean;
+  dgram: boolean;
+  http: boolean;
+  http2: boolean;
+  tls: boolean;
+  tlsCa: boolean;
+}
+
+const DYN_ASYNC_LIB_FNS: ReadonlySet<string> = new Set([
+  "async.awaitDyn", "timers.immediatePromise",
+  "process.onUncaughtException", "process.offUncaughtException",
+  "process.onUnhandledRejection", "process.offUnhandledRejection",
+  "process.onRejectionHandled", "process.offRejectionHandled",
+  "process.onWarning", "process.offWarning", "process.emitWarning",
+  "als.new", "als.get", "als.run", "als.exitRun", "als.enterWith", "als.disable",
+  "dc.chanBindStore", "dc.chanUnbindStore", "dc.chanRunStores",
+]);
+
+/** Inspect types and expressions together in one traversal. This is a fresh
+ * snapshot: callers may mutate an IR module between compilation passes. */
+export function moduleRuntimeFeatures(mod: IrModule): RuntimeFeatures {
+  return scanRuntimeFeatures(mod);
+}
+
+function scanRuntimeFeatures(mod: IrModule, stopAt?: keyof RuntimeFeatures): RuntimeFeatures {
+  const features: RuntimeFeatures = {
+    regex: false, copying: false, legacyTextDecoder: false, fileHandle: false,
+    fetch: mod.embedded?.modules.some((m) => m.usesFetch === true) ?? false,
+    processEvents: false, emitter: (mod.classes ?? []).some((c) => c.name === RUNTIME_EMITTER_CLASS),
+    stream: (mod.classes ?? []).some((c) => RUNTIME_STREAM_CLASSES.has(c.name)),
+    zlib: mod.embedded?.edges.some((e) => e.to === "node:zlib") ?? false,
+    dc: false, assert: false, dynInvoke: false, dynAsync: false, inspect: false,
+    childProcess: false, net: false, symbol: false, bigint: false, searchParams: false,
+    qs: false, parseArgs: false, fsWatch: false, nodeTest: false, dgram: false,
+    http: false, http2: false, tls: false, tlsCa: false,
+  };
+  const visit = (value: unknown): void => {
+    if (value === null || typeof value !== "object" || (stopAt !== undefined && features[stopAt])) return;
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+    const node = value as {
+      kind?: unknown; fn?: unknown; method?: unknown; op?: unknown; name?: unknown;
+      type?: { kind?: unknown };
+      value?: { type?: { kind?: unknown; ret?: { kind?: unknown } } };
+    };
+    const kind = node.kind;
+    if (kind === "libCall" && typeof node.fn === "string") {
+      const fn = node.fn;
+      if (fn === "regexp.escape" || fn === "dyn.nativeRegexIs") features.regex = true;
+      if (fn === "text.decodeLegacy") features.legacyTextDecoder = true;
+      if (fn.startsWith("fetch.")) features.fetch = true;
+      if (PROCESS_EVENT_LIB_FNS.has(fn)) features.processEvents = true;
+      if (fn.startsWith("emitter.")) features.emitter = true;
+      if (fn.startsWith("readable.") || fn.startsWith("writable.") || fn.startsWith("duplex.") ||
+          fn.startsWith("transform.") || fn.startsWith("passthrough.") || fn.startsWith("sc.") ||
+          fn.startsWith("stream.set") || fn === "stream.destroy" || fn === "stream.destroyErr" ||
+          fn === "stream.prop" || fn === "stream.errored" || fn === "sp.finished" || fn === "sp.pipeline") features.stream = true;
+      if (fn.startsWith("zlib.")) features.zlib = true;
+      if (fn.startsWith("dc.")) features.dc = true;
+      if (fn.startsWith("assert.")) features.assert = true;
+      if (fn === "dyn.defineProps" || fn === "dyn.defineProperty" || fn === "dyn.objCreateWithProperties" || fn === "dyn.arrayProtoCall") features.dynInvoke = true;
+      if (DYN_ASYNC_LIB_FNS.has(fn)) features.dynAsync = true;
+      if (fn.startsWith("insp.")) features.inspect = true;
+      if (fn.startsWith("cp.") || fn.startsWith("child.") || fn.startsWith("writer.") || fn.startsWith("spawnRes.") ||
+          fn === "process.forkTarget" || fn === "process.connected" || fn === "process.send" || fn === "process.sendCb" ||
+          fn === "process.disconnect" || fn === "process.onMessage" || fn === "process.onDisconnect") features.childProcess = true;
+      if (fn.startsWith("net.")) features.net = true;
+      if (fn.startsWith("http.")) { features.net = true; features.http = true; }
+      if (fn.startsWith("tls.") || fn.startsWith("https.") || fn.startsWith("http2.")) {
+        features.net = true; features.http = true; features.tls = true;
+      }
+      if (fn.startsWith("http2.") && !HTTP2_LEGACY_FNS.has(fn)) features.http2 = true;
+      if (fn.startsWith("sym.")) features.symbol = true;
+      if (fn.startsWith("bigint.")) features.bigint = true;
+      if (fn.startsWith("sp.") || fn === "url.searchParams") features.searchParams = true;
+      if (fn === "qs.parse" || fn === "qs.stringify" || fn === "qs.unescape") features.qs = true;
+      if (fn === "util.parseArgs") features.parseArgs = true;
+      if (fn.startsWith("fs.watch") || fn.startsWith("watcher.")) features.fsWatch = true;
+      if (fn.startsWith("test.")) features.nodeTest = true;
+      if (fn.startsWith("dgram.") || fn.startsWith("dns.")) features.dgram = true;
+      if (fn.startsWith("tlsca.")) features.tlsCa = true;
+    } else {
+      switch (kind) {
+        case "regex": case "regexLit": case "regexIntrinsic": features.regex = true; break;
+        case "strIntrinsic":
+          if (node.method === "toLowerCase" || node.method === "toUpperCase") features.regex = true;
+          break;
+        case "arrIntrinsic":
+          if (node.method === "toReversed" || node.method === "toSpliced" || node.method === "with" || node.method === "withUndefined") features.copying = true;
+          break;
+        case "bytesIntrinsic":
+          if (node.method === "toReversed" || node.method === "with" || node.method === "join" || node.method === "toArray") features.copying = true;
+          break;
+        case "fileHandle": features.fileHandle = true; break;
+        case "jsOp":
+          if (node.op === "globalGet" && node.name === "fetch") features.fetch = true;
+          break;
+        case "dynInvoke": features.dynInvoke = true; break;
+        case "awaitExpr":
+          if (node.type?.kind === "dyn") features.dynAsync = true;
+          break;
+        case "dynFrom": {
+          const boxed = node.value?.type;
+          if (boxed?.kind === "promise" || (boxed?.kind === "func" && boxed.ret?.kind === "promise")) features.dynAsync = true;
+          break;
+        }
+        case "child": case "childStream": case "childWriter": case "spawnRes": features.childProcess = true; break;
+        case "netServer": case "netSocket": features.net = true; break;
+        case "http2Session": case "http2Stream": features.net = true; features.http2 = true; break;
+        case "httpReq": case "httpRes": case "httpClientReq": features.net = true; features.http = true; break;
+        case "secureCtx": features.net = true; features.http = true; features.tls = true; break;
+        case "symbol": features.symbol = true; break;
+        case "bigint": features.bigint = true; break;
+        case "searchParams": features.searchParams = true; break;
+        case "fsWatcher": features.fsWatch = true; break;
+        case "testCtx": features.nodeTest = true; break;
+        case "dgramSocket": features.dgram = true; break;
+      }
+    }
+    for (const key of Object.keys(value)) visit((value as Record<string, unknown>)[key]);
+  };
+  visit(mod);
+  return features;
+}
+
 /** True when the module contains any regex construct — a regexLit /
  * regexIntrinsic node or a regex-typed slot anywhere. This is the link
  * switch that pulls scr_regex.c + the vendored libregexp into the binary
@@ -6509,118 +6659,28 @@ export function canExitIslandToType(
  * JSON walk: `kind` discriminants live only on IR objects, so user string
  * VALUES can never false-positive. */
 export function moduleUsesRegex(mod: IrModule): boolean {
-  let found = false;
-  const visit = (v: unknown): void => {
-    if (found || v === null || typeof v !== "object") return;
-    if (Array.isArray(v)) {
-      for (const item of v) visit(item);
-      return;
-    }
-    const kind = (v as { kind?: unknown }).kind;
-    if (kind === "regex" || kind === "regexLit" || kind === "regexIntrinsic") {
-      found = true;
-      return;
-    }
-    // The lre-backed case conversions live in scr_regex.c (libunicode's
-    // case tables): they ride the same link switch as regex nodes.
-    if (kind === "strIntrinsic") {
-      const method = (v as { method?: unknown }).method;
-      if (method === "toLowerCase" || method === "toUpperCase") {
-        found = true;
-        return;
-      }
-    }
-    // RegExp.escape lives in scr_regex.c too (needing no engine — it
-    // keeps the always-linked string TU out of hello-world's size class).
-    if (kind === "libCall" && ["regexp.escape", "dyn.nativeRegexIs"].includes(String((v as { fn?: unknown }).fn))) {
-      found = true;
-      return;
-    }
-    for (const key of Object.keys(v)) visit((v as Record<string, unknown>)[key]);
-  };
-  visit(mod);
-  return found;
+  return scanRuntimeFeatures(mod, "regex").regex;
 }
 
 /** True when the module contains an intrinsic whose implementation lives
  * in scr_copying.c. This is the link switch that keeps the optional
  * Array-copying and typed-array bridge TU out of unrelated binaries. */
 export function moduleUsesCopying(mod: IrModule): boolean {
-  let found = false;
-  const visit = (v: unknown): void => {
-    if (found || v === null || typeof v !== "object") return;
-    if (Array.isArray(v)) {
-      for (const item of v) visit(item);
-      return;
-    }
-    const node = v as { kind?: unknown; method?: unknown };
-    if (
-      node.kind === "arrIntrinsic" &&
-      (node.method === "toReversed" ||
-        node.method === "toSpliced" ||
-        node.method === "with" ||
-        node.method === "withUndefined")
-    ) {
-      found = true;
-      return;
-    }
-    if (
-      node.kind === "bytesIntrinsic" &&
-      (node.method === "toReversed" ||
-        node.method === "with" ||
-        node.method === "join" ||
-        node.method === "toArray")
-    ) {
-      found = true;
-      return;
-    }
-    for (const key of Object.keys(v)) visit((v as Record<string, unknown>)[key]);
-  };
-  visit(mod);
-  return found;
+  return scanRuntimeFeatures(mod, "copying").copying;
 }
 
 /** True when a non-UTF-8 TextDecoder call survives lowering. This gates the
  * generated legacy mapping tables inside scr_bytes.c; the default UTF-8
  * decoder and unrelated Buffer users keep their prior runtime object. */
 export function moduleUsesLegacyTextDecoder(mod: IrModule): boolean {
-  let found = false;
-  const visit = (value: unknown): void => {
-    if (found || value === null || typeof value !== "object") return;
-    if (Array.isArray(value)) {
-      for (const item of value) visit(item);
-      return;
-    }
-    const node = value as { kind?: unknown; fn?: unknown };
-    if (node.kind === "libCall" && node.fn === "text.decodeLegacy") {
-      found = true;
-      return;
-    }
-    for (const key of Object.keys(value)) visit((value as Record<string, unknown>)[key]);
-  };
-  visit(mod);
-  return found;
+  return scanRuntimeFeatures(mod, "legacyTextDecoder").legacyTextDecoder;
 }
 
 /** True when a FileHandle type survives in the module. This is the link
  * switch for scr_file_handle.c; fs/promises.open carries the type inside its
  * promise result even when no handle method is called. */
 export function moduleUsesFileHandle(mod: IrModule): boolean {
-  let found = false;
-  const visit = (v: unknown): void => {
-    if (found || v === null || typeof v !== "object") return;
-    if (Array.isArray(v)) {
-      for (const item of v) visit(item);
-      return;
-    }
-    if ((v as { kind?: unknown }).kind === "fileHandle") {
-      found = true;
-      return;
-    }
-    for (const key of Object.keys(v)) visit((v as Record<string, unknown>)[key]);
-  };
-  visit(mod);
-  return found;
+  return scanRuntimeFeatures(mod, "fileHandle").fileHandle;
 }
 
 /** True when user code lowers static fetch or the embedded npm graph
@@ -6631,29 +6691,7 @@ export function moduleUsesFileHandle(mod: IrModule): boolean {
  * and local `fetch` bindings do not change the link or target capability.
  * Fetch-free graphs keep their exact historical link lines. */
 export function moduleUsesFetch(mod: IrModule): boolean {
-  const embedded = mod.embedded;
-  if (embedded && embedded.modules.some((m) => m.usesFetch === true)) return true;
-  // User-code fetch is either the engine global or the static libCall pair.
-  let found = false;
-  const visit = (v: unknown): void => {
-    if (found || v === null || typeof v !== "object") return;
-    if (Array.isArray(v)) {
-      for (const item of v) visit(item);
-      return;
-    }
-    const node = v as { kind?: unknown; op?: unknown; name?: unknown; fn?: unknown };
-    if (
-      (node.kind === "jsOp" && node.op === "globalGet" && node.name === "fetch") ||
-      (node.kind === "libCall" &&
-        typeof node.fn === "string" && node.fn.startsWith("fetch."))
-    ) {
-      found = true;
-      return;
-    }
-    for (const key of Object.keys(v)) visit((v as Record<string, unknown>)[key]);
-  };
-  visit(mod);
-  return found;
+  return scanRuntimeFeatures(mod, "fetch").fetch;
 }
 
 /** The libCall fns served by the OPTIONAL events unit (scr_events.c):
@@ -6682,22 +6720,7 @@ const PROCESS_EVENT_LIB_FNS: ReadonlySet<string> = new Set([
  * gating precedent). Event-free programs pay zero bytes and keep their
  * exact link line. Same generic-walk shape as moduleUsesRegex. */
 export function moduleUsesProcessEvents(mod: IrModule): boolean {
-  let found = false;
-  const visit = (v: unknown): void => {
-    if (found || v === null || typeof v !== "object") return;
-    if (Array.isArray(v)) {
-      for (const item of v) visit(item);
-      return;
-    }
-    const node = v as { kind?: unknown; fn?: unknown };
-    if (node.kind === "libCall" && typeof node.fn === "string" && PROCESS_EVENT_LIB_FNS.has(node.fn)) {
-      found = true;
-      return;
-    }
-    for (const key of Object.keys(v)) visit((v as Record<string, unknown>)[key]);
-  };
-  visit(mod);
-  return found;
+  return scanRuntimeFeatures(mod, "processEvents").processEvents;
 }
 
 /** True when the module uses the node:events EventEmitter surface — the
@@ -6710,23 +6733,7 @@ export function moduleUsesProcessEvents(mod: IrModule): boolean {
  * no emitter-typed value). Emitter-free programs pay zero bytes and keep
  * their exact link line. */
 export function moduleUsesEmitter(mod: IrModule): boolean {
-  if ((mod.classes ?? []).some((c) => c.name === RUNTIME_EMITTER_CLASS)) return true;
-  let found = false;
-  const visit = (v: unknown): void => {
-    if (found || v === null || typeof v !== "object") return;
-    if (Array.isArray(v)) {
-      for (const item of v) visit(item);
-      return;
-    }
-    const node = v as { kind?: unknown; fn?: unknown };
-    if (node.kind === "libCall" && typeof node.fn === "string" && node.fn.startsWith("emitter.")) {
-      found = true;
-      return;
-    }
-    for (const key of Object.keys(v)) visit((v as Record<string, unknown>)[key]);
-  };
-  visit(mod);
-  return found;
+  return scanRuntimeFeatures(mod, "emitter").emitter;
 }
 
 /** True when the program touches the node:stream surface (scr_stream.c —
@@ -6737,34 +6744,7 @@ export function moduleUsesEmitter(mod: IrModule): boolean {
  * moduleUsesEmitter answers true whenever this does. Stream-free
  * programs pay zero bytes and keep their exact link line. */
 export function moduleUsesStream(mod: IrModule): boolean {
-  if ((mod.classes ?? []).some((c) => RUNTIME_STREAM_CLASSES.has(c.name))) return true;
-  let found = false;
-  const visit = (v: unknown): void => {
-    if (found || v === null || typeof v !== "object") return;
-    if (Array.isArray(v)) {
-      for (const item of v) visit(item);
-      return;
-    }
-    const node = v as { kind?: unknown; fn?: unknown };
-    if (
-      node.kind === "libCall" &&
-      typeof node.fn === "string" &&
-      (node.fn.startsWith("readable.") || node.fn.startsWith("writable.") ||
-        node.fn.startsWith("duplex.") || node.fn.startsWith("transform.") ||
-        node.fn.startsWith("passthrough.") ||
-        node.fn === "stream.destroy" || node.fn === "stream.destroyErr" ||
-        node.fn === "stream.prop" || node.fn === "stream.errored" ||
-        node.fn === "sp.finished" || node.fn === "sp.pipeline" ||
-        node.fn.startsWith("sc.") ||
-        node.fn.startsWith("stream.set"))
-    ) {
-      found = true;
-      return;
-    }
-    for (const key of Object.keys(v)) visit((v as Record<string, unknown>)[key]);
-  };
-  visit(mod);
-  return found;
+  return scanRuntimeFeatures(mod, "stream").stream;
 }
 
 /** True when the embedded npm graph has an edge into `builtin` — the
@@ -6801,23 +6781,7 @@ export function moduleEmbedsCompressedNpm(mod: IrModule): boolean {
  * generic-walk shape as moduleUsesRegex: `kind`/`fn` discriminants live
  * only on IR objects. */
 export function moduleUsesZlib(mod: IrModule): boolean {
-  if (moduleEmbedsBuiltin(mod, "node:zlib")) return true;
-  let found = false;
-  const visit = (v: unknown): void => {
-    if (found || v === null || typeof v !== "object") return;
-    if (Array.isArray(v)) {
-      for (const item of v) visit(item);
-      return;
-    }
-    const node = v as { kind?: unknown; fn?: unknown };
-    if (node.kind === "libCall" && typeof node.fn === "string" && node.fn.startsWith("zlib.")) {
-      found = true;
-      return;
-    }
-    for (const key of Object.keys(v)) visit((v as Record<string, unknown>)[key]);
-  };
-  visit(mod);
-  return found;
+  return scanRuntimeFeatures(mod, "zlib").zlib;
 }
 
 /** True when the module contains any dc.* libCall — the link switch that
@@ -6825,22 +6789,7 @@ export function moduleUsesZlib(mod: IrModule): boolean {
  * binary (native-toolchain.ts). Channel-free binaries keep their exact size class.
  * Same walk shape as moduleUsesZlib. */
 export function moduleUsesDc(mod: IrModule): boolean {
-  let found = false;
-  const visit = (v: unknown): void => {
-    if (found || v === null || typeof v !== "object") return;
-    if (Array.isArray(v)) {
-      for (const item of v) visit(item);
-      return;
-    }
-    const node = v as { kind?: unknown; fn?: unknown };
-    if (node.kind === "libCall" && typeof node.fn === "string" && node.fn.startsWith("dc.")) {
-      found = true;
-      return;
-    }
-    for (const key of Object.keys(v)) visit((v as Record<string, unknown>)[key]);
-  };
-  visit(mod);
-  return found;
+  return scanRuntimeFeatures(mod, "dc").dc;
 }
 
 /** True when the module contains any assert libCall — the link switch
@@ -6850,22 +6799,7 @@ export function moduleUsesDc(mod: IrModule): boolean {
  * the historical command line and size. Same walk shape as
  * moduleUsesZlib. */
 export function moduleUsesAssert(mod: IrModule): boolean {
-  let found = false;
-  const visit = (v: unknown): void => {
-    if (found || v === null || typeof v !== "object") return;
-    if (Array.isArray(v)) {
-      for (const item of v) visit(item);
-      return;
-    }
-    const node = v as { kind?: unknown; fn?: unknown };
-    if (node.kind === "libCall" && typeof node.fn === "string" && node.fn.startsWith("assert.")) {
-      found = true;
-      return;
-    }
-    for (const key of Object.keys(v)) visit((v as Record<string, unknown>)[key]);
-  };
-  visit(mod);
-  return found;
+  return scanRuntimeFeatures(mod, "assert").assert;
 }
 
 /** True when the module contains any dynInvoke node or dyn.defineProps
@@ -6875,25 +6809,7 @@ export function moduleUsesAssert(mod: IrModule): boolean {
  * precedent — dispatch-free binaries keep their exact size class). Same
  * walk shape as moduleUsesZlib. */
 export function moduleUsesDynInvoke(mod: IrModule): boolean {
-  let found = false;
-  const visit = (v: unknown): void => {
-    if (found || v === null || typeof v !== "object") return;
-    if (Array.isArray(v)) {
-      for (const item of v) visit(item);
-      return;
-    }
-    const node = v as { kind?: unknown; fn?: unknown };
-    if (node.kind === "dynInvoke" || (node.kind === "libCall" &&
-        (node.fn === "dyn.defineProps" || node.fn === "dyn.defineProperty" ||
-         node.fn === "dyn.objCreateWithProperties" ||
-         node.fn === "dyn.arrayProtoCall"))) {
-      found = true;
-      return;
-    }
-    for (const key of Object.keys(v)) visit((v as Record<string, unknown>)[key]);
-  };
-  visit(mod);
-  return found;
+  return scanRuntimeFeatures(mod, "dynInvoke").dynInvoke;
 }
 
 /** True when the module contains any insp libCall — the link switch that
@@ -6907,92 +6823,18 @@ export function moduleUsesDynInvoke(mod: IrModule): boolean {
  * dynInvoke and dc gates (their TUs call into this one) — native-toolchain.ts. Same
  * walk shape as moduleUsesZlib. */
 export function moduleUsesDynAsync(mod: IrModule): boolean {
-  const fns = new Set([
-    "async.awaitDyn", "timers.immediatePromise",
-    "process.onUncaughtException", "process.offUncaughtException",
-    "process.onUnhandledRejection", "process.offUnhandledRejection",
-    "process.onRejectionHandled", "process.offRejectionHandled",
-    "process.onWarning", "process.offWarning", "process.emitWarning",
-    "als.new", "als.get", "als.run", "als.exitRun", "als.enterWith", "als.disable",
-    "dc.chanBindStore", "dc.chanUnbindStore", "dc.chanRunStores",
-  ]);
-  let found = false;
-  const visit = (v: unknown): void => {
-    if (found || v === null || typeof v !== "object") return;
-    if (Array.isArray(v)) {
-      for (const item of v) visit(item);
-      return;
-    }
-    const node = v as { kind?: unknown; fn?: unknown; type?: { kind?: unknown } };
-    if (node.kind === "libCall" && typeof node.fn === "string" && fns.has(node.fn)) {
-      found = true;
-      return;
-    }
-    // A DYN-typed await reads through scr_await_dyn (the checked-dynamic tree-crossing
-    // await lives in the gated TU) — promise<dyn> receivers' awaits and
-    // the lifted then/catch helpers alike.
-    const boxed = (node as { value?: { type?: { kind?: unknown; ret?: { kind?: unknown } } } }).value?.type;
-    if ((node.kind === "awaitExpr" && node.type?.kind === "dyn") ||
-        (node.kind === "dynFrom" && (boxed?.kind === "promise" || (boxed?.kind === "func" && boxed.ret?.kind === "promise")))) {
-      found = true;
-      return;
-    }
-    for (const key of Object.keys(v)) visit((v as Record<string, unknown>)[key]);
-  };
-  visit(mod);
-  return found;
+  return scanRuntimeFeatures(mod, "dynAsync").dynAsync;
 }
 
 export function moduleUsesInspect(mod: IrModule): boolean {
-  let found = false;
-  const visit = (v: unknown): void => {
-    if (found || v === null || typeof v !== "object") return;
-    if (Array.isArray(v)) {
-      for (const item of v) visit(item);
-      return;
-    }
-    const node = v as { kind?: unknown; fn?: unknown };
-    if (node.kind === "libCall" && typeof node.fn === "string" && node.fn.startsWith("insp.")) {
-      found = true;
-      return;
-    }
-    for (const key of Object.keys(v)) visit((v as Record<string, unknown>)[key]);
-  };
-  visit(mod);
-  return found;
+  return scanRuntimeFeatures(mod, "inspect").inspect;
 }
 
 /** True when the module reaches child_process or carries one of its runtime
  * handle/result types. Besides the existing link consequence, this gates the
  * checked-dynamic ChildProcess handle table installed from scr_child.c. */
 export function moduleUsesChildProcess(mod: IrModule): boolean {
-  let found = false;
-  const visit = (v: unknown): void => {
-    if (found || v === null || typeof v !== "object") return;
-    if (Array.isArray(v)) {
-      for (const item of v) visit(item);
-      return;
-    }
-    const node = v as { kind?: unknown; fn?: unknown };
-    if (
-      node.kind === "libCall" &&
-      typeof node.fn === "string" &&
-      (node.fn.startsWith("cp.") || node.fn.startsWith("child.") || node.fn.startsWith("writer.") || node.fn.startsWith("spawnRes.") ||
-        node.fn === "process.forkTarget" || node.fn === "process.connected" || node.fn === "process.send" ||
-        node.fn === "process.sendCb" || node.fn === "process.disconnect" || node.fn === "process.onMessage" ||
-        node.fn === "process.onDisconnect")
-    ) {
-      found = true;
-      return;
-    }
-    if (node.kind === "child" || node.kind === "childStream" || node.kind === "childWriter" || node.kind === "spawnRes") {
-      found = true;
-      return;
-    }
-    for (const key of Object.keys(v)) visit((v as Record<string, unknown>)[key]);
-  };
-  visit(mod);
-  return found;
+  return scanRuntimeFeatures(mod, "childProcess").childProcess;
 }
 
 /** True when the module contains any net libCall — the link switch that
@@ -7001,39 +6843,7 @@ export function moduleUsesChildProcess(mod: IrModule): boolean {
  * Net-free programs pay zero bytes and keep their exact link line. Same
  * generic-walk shape as moduleUsesZlib. */
 export function moduleUsesNet(mod: IrModule): boolean {
-  let found = false;
-  const visit = (v: unknown): void => {
-    if (found || v === null || typeof v !== "object") return;
-    if (Array.isArray(v)) {
-      for (const item of v) visit(item);
-      return;
-    }
-    const node = v as { kind?: unknown; fn?: unknown };
-    if (node.kind === "libCall" && typeof node.fn === "string" &&
-        (node.fn.startsWith("net.") || node.fn.startsWith("http.") ||
-         node.fn.startsWith("tls.") || node.fn.startsWith("https.") ||
-         node.fn.startsWith("http2."))) {
-      // http/tls/https/http2 all ride ON net: their libCalls need scr_net.c
-      // linked and installed too, so the net switch answers for every
-      // server-family prefix.
-      found = true;
-      return;
-    }
-    // A net-family HANDLE TYPE anywhere in the IR (a global or local whose
-    // initializing statement compiled to a runtime fence still carries the
-    // type): its emitted release call needs the unit linked even when no
-    // libCall survived the fencing.
-    if (node.kind === "netServer" || node.kind === "netSocket" ||
-        node.kind === "http2Session" || node.kind === "http2Stream" ||
-        node.kind === "httpReq" || node.kind === "httpRes" ||
-        node.kind === "httpClientReq" || node.kind === "secureCtx") {
-      found = true;
-      return;
-    }
-    for (const key of Object.keys(v)) visit((v as Record<string, unknown>)[key]);
-  };
-  visit(mod);
-  return found;
+  return scanRuntimeFeatures(mod, "net").net;
 }
 
 /** True when the module contains any sym.* libCall or a symbol-kind type
@@ -7044,51 +6854,14 @@ export function moduleUsesNet(mod: IrModule): boolean {
  * fence still emits release calls that need the unit linked. Symbol-free
  * programs pay zero bytes and keep their exact link line. */
 export function moduleUsesSymbol(mod: IrModule): boolean {
-  let found = false;
-  const visit = (v: unknown): void => {
-    if (found || v === null || typeof v !== "object") return;
-    if (Array.isArray(v)) {
-      for (const item of v) visit(item);
-      return;
-    }
-    const node = v as { kind?: unknown; fn?: unknown };
-    if (node.kind === "libCall" && typeof node.fn === "string" && node.fn.startsWith("sym.")) {
-      found = true;
-      return;
-    }
-    if (node.kind === "symbol") {
-      found = true;
-      return;
-    }
-    for (const key of Object.keys(v)) visit((v as Record<string, unknown>)[key]);
-  };
-  visit(mod);
-  return found;
+  return scanRuntimeFeatures(mod, "symbol").symbol;
 }
 
 /** True when bigint runtime operations or bigint-typed storage appears in
  * the IR. The type check keeps retain/release references link-safe even
  * when a producing statement was replaced by a runtime fence. */
 export function moduleUsesBigInt(mod: IrModule): boolean {
-  let found = false;
-  const visit = (v: unknown): void => {
-    if (found || v === null || typeof v !== "object") return;
-    if (Array.isArray(v)) {
-      for (const item of v) visit(item);
-      return;
-    }
-    const node = v as { kind?: unknown; fn?: unknown };
-    if (
-      node.kind === "bigint" ||
-      (node.kind === "libCall" && typeof node.fn === "string" && node.fn.startsWith("bigint."))
-    ) {
-      found = true;
-      return;
-    }
-    for (const key of Object.keys(v)) visit((v as Record<string, unknown>)[key]);
-  };
-  visit(mod);
-  return found;
+  return scanRuntimeFeatures(mod, "bigint").bigint;
 }
 
 /** True when the module uses the URLSearchParams surface — sp.* libCalls,
@@ -7100,27 +6873,7 @@ export function moduleUsesBigInt(mod: IrModule): boolean {
  * programs keep their exact link line; scr_url.c itself stays
  * always-linked and never references the unit. */
 export function moduleUsesSearchParams(mod: IrModule): boolean {
-  let found = false;
-  const visit = (v: unknown): void => {
-    if (found || v === null || typeof v !== "object") return;
-    if (Array.isArray(v)) {
-      for (const item of v) visit(item);
-      return;
-    }
-    const node = v as { kind?: unknown; fn?: unknown };
-    if (node.kind === "libCall" && typeof node.fn === "string" &&
-        (node.fn.startsWith("sp.") || node.fn === "url.searchParams")) {
-      found = true;
-      return;
-    }
-    if (node.kind === "searchParams") {
-      found = true;
-      return;
-    }
-    for (const key of Object.keys(v)) visit((v as Record<string, unknown>)[key]);
-  };
-  visit(mod);
-  return found;
+  return scanRuntimeFeatures(mod, "searchParams").searchParams;
 }
 
 /** True when the module uses the node:querystring surface — the qs.*
@@ -7131,45 +6884,14 @@ export function moduleUsesSearchParams(mod: IrModule): boolean {
  * loop hooks, cross-compiles everywhere). qs-free programs keep their
  * exact link line. Same generic-walk shape as moduleUsesZlib. */
 export function moduleUsesQs(mod: IrModule): boolean {
-  let found = false;
-  const visit = (v: unknown): void => {
-    if (found || v === null || typeof v !== "object") return;
-    if (Array.isArray(v)) {
-      for (const item of v) visit(item);
-      return;
-    }
-    const node = v as { kind?: unknown; fn?: unknown };
-    if (node.kind === "libCall" && typeof node.fn === "string" &&
-        (node.fn === "qs.parse" || node.fn === "qs.stringify" || node.fn === "qs.unescape")) {
-      found = true;
-      return;
-    }
-    for (const key of Object.keys(v)) visit((v as Record<string, unknown>)[key]);
-  };
-  visit(mod);
-  return found;
+  return scanRuntimeFeatures(mod, "qs").qs;
 }
 
 /** True when the module uses native util.parseArgs — the link switch for
  * scr_util.c. The implementation is a pure checked-dynamic data transform,
  * cross-platform and independent of the island's node:util shim. */
 export function moduleUsesParseArgs(mod: IrModule): boolean {
-  let found = false;
-  const visit = (v: unknown): void => {
-    if (found || v === null || typeof v !== "object") return;
-    if (Array.isArray(v)) {
-      for (const item of v) visit(item);
-      return;
-    }
-    const node = v as { kind?: unknown; fn?: unknown };
-    if (node.kind === "libCall" && node.fn === "util.parseArgs") {
-      found = true;
-      return;
-    }
-    for (const key of Object.keys(v)) visit((v as Record<string, unknown>)[key]);
-  };
-  visit(mod);
-  return found;
+  return scanRuntimeFeatures(mod, "parseArgs").parseArgs;
 }
 
 /** True when the module contains any fs.watch/watcher.* libCall — the
@@ -7178,29 +6900,7 @@ export function moduleUsesParseArgs(mod: IrModule): boolean {
  * precedent). Watch-free programs pay zero bytes and keep their exact
  * link line. Same generic-walk shape as moduleUsesZlib. */
 export function moduleUsesFsWatch(mod: IrModule): boolean {
-  let found = false;
-  const visit = (v: unknown): void => {
-    if (found || v === null || typeof v !== "object") return;
-    if (Array.isArray(v)) {
-      for (const item of v) visit(item);
-      return;
-    }
-    const node = v as { kind?: unknown; fn?: unknown };
-    if (node.kind === "libCall" && typeof node.fn === "string" &&
-        (node.fn.startsWith("fs.watch") || node.fn.startsWith("watcher."))) {
-      found = true;
-      return;
-    }
-    // A watcher HANDLE TYPE left behind by a fenced statement still emits
-    // scr_watcher_release — the unit must link.
-    if (node.kind === "fsWatcher") {
-      found = true;
-      return;
-    }
-    for (const key of Object.keys(v)) visit((v as Record<string, unknown>)[key]);
-  };
-  visit(mod);
-  return found;
+  return scanRuntimeFeatures(mod, "fsWatch").fsWatch;
 }
 
 /** True when the module contains any test.* libCall or a testCtx handle
@@ -7209,28 +6909,7 @@ export function moduleUsesFsWatch(mod: IrModule): boolean {
  * (native-toolchain.ts + emitter; the moduleUsesDgram shape). Test-free programs pay
  * zero bytes and keep their exact link line. */
 export function moduleUsesNodeTest(mod: IrModule): boolean {
-  let found = false;
-  const visit = (v: unknown): void => {
-    if (found || v === null || typeof v !== "object") return;
-    if (Array.isArray(v)) {
-      for (const item of v) visit(item);
-      return;
-    }
-    const node = v as { kind?: unknown; fn?: unknown };
-    if (node.kind === "libCall" && typeof node.fn === "string" && node.fn.startsWith("test.")) {
-      found = true;
-      return;
-    }
-    // A TestContext HANDLE TYPE left behind by a fenced statement still
-    // emits a release call — the unit must link (the dgram type story).
-    if (node.kind === "testCtx") {
-      found = true;
-      return;
-    }
-    for (const key of Object.keys(v)) visit((v as Record<string, unknown>)[key]);
-  };
-  visit(mod);
-  return found;
+  return scanRuntimeFeatures(mod, "nodeTest").nodeTest;
 }
 
 /** True when the module contains any dgram.* or dns.* libCall — the
@@ -7240,64 +6919,14 @@ export function moduleUsesNodeTest(mod: IrModule): boolean {
  * answers). Dgram-free programs pay zero bytes and keep their exact link
  * line. Same generic-walk shape as moduleUsesZlib. */
 export function moduleUsesDgram(mod: IrModule): boolean {
-  let found = false;
-  const visit = (v: unknown): void => {
-    if (found || v === null || typeof v !== "object") return;
-    if (Array.isArray(v)) {
-      for (const item of v) visit(item);
-      return;
-    }
-    const node = v as { kind?: unknown; fn?: unknown };
-    if (node.kind === "libCall" && typeof node.fn === "string" &&
-        (node.fn.startsWith("dgram.") || node.fn.startsWith("dns."))) {
-      found = true;
-      return;
-    }
-    // A dgram HANDLE TYPE left behind by a fenced statement still emits a
-    // release call — the unit must link (the moduleUsesNet type story).
-    if (node.kind === "dgramSocket") {
-      found = true;
-      return;
-    }
-    for (const key of Object.keys(v)) visit((v as Record<string, unknown>)[key]);
-  };
-  visit(mod);
-  return found;
+  return scanRuntimeFeatures(mod, "dgram").dgram;
 }
 
 /** True when the module contains any http.* libCall — the link switch
  * that pulls scr_http.c into the binary (native-toolchain.ts; moduleUsesNet already
  * answers true for these, so scr_net.c comes along). */
 export function moduleUsesHttpServer(mod: IrModule): boolean {
-  let found = false;
-  const visit = (v: unknown): void => {
-    if (found || v === null || typeof v !== "object") return;
-    if (Array.isArray(v)) {
-      for (const item of v) visit(item);
-      return;
-    }
-    const node = v as { kind?: unknown; fn?: unknown };
-    if (node.kind === "libCall" && typeof node.fn === "string" &&
-        (node.fn.startsWith("http.") || node.fn.startsWith("tls.") || node.fn.startsWith("https.") ||
-         node.fn.startsWith("http2."))) {
-      // scr_tls.c calls into scr_http.c unconditionally (the https server
-      // and client are the http ones over a transport), so any tls/https
-      // use pulls the http unit too.
-      found = true;
-      return;
-    }
-    // An http-family HANDLE TYPE left behind by a fenced statement still
-    // emits its release call — the unit must link (the moduleUsesNet type
-    // story; secureCtx rides here because scr_tls.c calls into scr_http.c).
-    if (node.kind === "httpReq" || node.kind === "httpRes" ||
-        node.kind === "httpClientReq" || node.kind === "secureCtx") {
-      found = true;
-      return;
-    }
-    for (const key of Object.keys(v)) visit((v as Record<string, unknown>)[key]);
-  };
-  visit(mod);
-  return found;
+  return scanRuntimeFeatures(mod, "http").http;
 }
 
 /** The legacy http2.* libCalls implemented by scr_http.c/scr_tls.c (the
@@ -7311,27 +6940,7 @@ const HTTP2_LEGACY_FNS = new Set([
  * http2.* libCall, or an h2 handle type left behind by a fenced statement
  * (its emitted release call needs the unit — the moduleUsesNet story). */
 export function moduleUsesHttp2(mod: IrModule): boolean {
-  let found = false;
-  const visit = (v: unknown): void => {
-    if (found || v === null || typeof v !== "object") return;
-    if (Array.isArray(v)) {
-      for (const item of v) visit(item);
-      return;
-    }
-    const node = v as { kind?: unknown; fn?: unknown };
-    if (node.kind === "libCall" && typeof node.fn === "string" &&
-        node.fn.startsWith("http2.") && !HTTP2_LEGACY_FNS.has(node.fn)) {
-      found = true;
-      return;
-    }
-    if (node.kind === "http2Session" || node.kind === "http2Stream") {
-      found = true;
-      return;
-    }
-    for (const key of Object.keys(v)) visit((v as Record<string, unknown>)[key]);
-  };
-  visit(mod);
-  return found;
+  return scanRuntimeFeatures(mod, "http2").http2;
 }
 
 /** True when the module contains any tls.* or https.* libCall — the link
@@ -7340,30 +6949,7 @@ export function moduleUsesHttp2(mod: IrModule): boolean {
  * true for these, so scr_net.c and scr_http.c come along). TLS-free
  * programs keep their exact link line and never build mbedTLS. */
 export function moduleUsesTls(mod: IrModule): boolean {
-  let found = false;
-  const visit = (v: unknown): void => {
-    if (found || v === null || typeof v !== "object") return;
-    if (Array.isArray(v)) {
-      for (const item of v) visit(item);
-      return;
-    }
-    const node = v as { kind?: unknown; fn?: unknown };
-    if (node.kind === "libCall" && typeof node.fn === "string" &&
-        (node.fn.startsWith("tls.") || node.fn.startsWith("https.") ||
-         node.fn.startsWith("http2."))) {
-      found = true;
-      return;
-    }
-    // A secureCtx HANDLE TYPE left behind by a fenced statement still
-    // emits scr_secure_ctx_release — the unit must link.
-    if (node.kind === "secureCtx") {
-      found = true;
-      return;
-    }
-    for (const key of Object.keys(v)) visit((v as Record<string, unknown>)[key]);
-  };
-  visit(mod);
-  return found;
+  return scanRuntimeFeatures(mod, "tls").tls;
 }
 
 /** True when the module contains any tlsca.* libCall — the link switch
@@ -7374,22 +6960,7 @@ export function moduleUsesTls(mod: IrModule): boolean {
  * also compiles the unit whenever TLS itself links — scr_tls.c consults
  * the unit's default-set override for its trust anchors. */
 export function moduleUsesTlsCa(mod: IrModule): boolean {
-  let found = false;
-  const visit = (v: unknown): void => {
-    if (found || v === null || typeof v !== "object") return;
-    if (Array.isArray(v)) {
-      for (const item of v) visit(item);
-      return;
-    }
-    const node = v as { kind?: unknown; fn?: unknown };
-    if (node.kind === "libCall" && typeof node.fn === "string" && node.fn.startsWith("tlsca.")) {
-      found = true;
-      return;
-    }
-    for (const key of Object.keys(v)) visit((v as Record<string, unknown>)[key]);
-  };
-  visit(mod);
-  return found;
+  return scanRuntimeFeatures(mod, "tlsCa").tlsCa;
 }
 
 /* ── library mode's async_free gate ──────────────────────────────────────
