@@ -3468,12 +3468,11 @@ struct ScrDyn {
      * so nothing dangles — a cycle THROUGH a dyn-boxed function is merely
      * never collected (documented divergence). */
     struct { ScrClosure *clo; ScrDynThunk thunk; const char *sig; const char *name; uint32_t arity; ScrClassObj *class_obj; } fn;
-    /* SCR_DYN_HANDLE: the retained native handle + its type tag. The
-     * dyn→handle edge is NOT visible to the cycle collector (the dyn→
-     * closure stance): handles drop their listener lists at settlement,
-     * so a listener capturing its own boxed handle never cycles past the
-     * settle — the settle-releases-listeners story. */
-    struct { void *ptr; ScrDynHandleTag tag; } handle;
+    /* Native handles normally keep conservative ownership edges. Sets
+     * backed by cycle-capable maps expose their edge to the collector.
+     * Cache that allocation property: during collection the map may be
+     * freed before its box, so disposal must not inspect the map again. */
+    struct { void *ptr; ScrDynHandleTag tag; bool traced; } handle;
     /* SCR_DYN_TYPED_REF: original static value + its compiler-emitted
      * identity tag, RC adapters, and ordinary dyn snapshot adapter. */
     struct {

@@ -353,7 +353,7 @@ void scr_dyn_trace_v(void *ptr, ScrTraceVisit visit, void *ctx) {
     break;
   case SCR_DYN_TYPED_REF: visit(d->v.typed_ref.materialized, ctx); break;
   case SCR_DYN_HANDLE:
-    if (d->v.handle.tag == SCR_DYNH_SET) visit(d->v.handle.ptr, ctx);
+    if (d->v.handle.traced) visit(d->v.handle.ptr, ctx);
     break;
   default: break;
   }
@@ -436,7 +436,7 @@ static void scr_dyn_dispose(ScrDyn *d, bool collected) {
     if (!collected) scr_closure_release(d->v.fn.clo); /* sig/name are static literals */
     break;
   case SCR_DYN_HANDLE:
-    if (!collected || d->v.handle.tag != SCR_DYNH_SET)
+    if (!collected || !d->v.handle.traced)
       scr_dyn_handle_release(d->v.handle.ptr, d->v.handle.tag);
     break;
   case SCR_DYN_PROMISE:
@@ -498,7 +498,7 @@ void scr_dyn_release(ScrDyn *d) {
   if (--d->rc != 0) {
     if (d->kind == SCR_DYN_ARR || d->kind == SCR_DYN_OBJ || d->kind == SCR_DYN_FUNC ||
         d->kind == SCR_DYN_PROXY || d->kind == SCR_DYN_TYPED_REF ||
-        (d->kind == SCR_DYN_HANDLE && d->v.handle.tag == SCR_DYNH_SET))
+        (d->kind == SCR_DYN_HANDLE && d->v.handle.traced))
       scr_cyc_on_release(d);
     return;
   }
@@ -1691,6 +1691,8 @@ ScrDyn *scr_dyn_new_handle(void *h, ScrDynHandleTag tag) {
   ScrDyn *d = scr_dyn_alloc(SCR_DYN_HANDLE);
   d->v.handle.ptr = scr_dyn_handle_ops(tag)->retain(h);
   d->v.handle.tag = tag;
+  d->v.handle.traced = tag == SCR_DYNH_SET &&
+    (((ScrMap *)h)->key_trace != NULL || ((ScrMap *)h)->val_trace != NULL);
   return d;
 }
 

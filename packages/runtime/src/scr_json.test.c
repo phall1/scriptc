@@ -22,6 +22,33 @@ static ScrDyn *nothing(ScrClosure *closure, ScrDyn *const *args, size_t argc) {
 
 int main(void) {
   scr_init();
+  /* Native Set boxes may own headerless scalar/string maps. Collecting an
+   * enclosing cycle must neither trace those leaves nor skip their release. */
+  for (int i = 0; i < 2000; i++) {
+#ifdef SCR_RC_AUDIT
+    long before_maps = scr_map_live_count();
+    long before_dyns = scr_dyn_live_count();
+#endif
+    ScrMap *numbers = scr_map_new(SCR_MAP_KEY_F64, SCR_MAP_VAL_F64, NULL, NULL, NULL);
+    ScrMap *strings = scr_map_new(SCR_MAP_KEY_STR, SCR_MAP_VAL_F64, NULL, NULL, NULL);
+    scr_map_set_f64_f64(numbers, 42, 1);
+    ScrStr *text = scr_str_new("kept", 4);
+    scr_map_set_str_f64(strings, text, 1);
+    scr_str_release(text);
+    ScrDyn *object = scr_dyn_new_obj();
+    scr_dyn_obj_set(object, "numbers", 7, scr_dyn_native_set(numbers));
+    scr_dyn_obj_set(object, "strings", 7, scr_dyn_native_set(strings));
+    scr_dyn_obj_set(object, "self", 4, scr_dyn_retain(object));
+    scr_map_release(strings); /* only the box owns this leaf */
+    scr_dyn_release(object);
+    scr_collect_cycles();
+    assert(numbers->rc == 1 && scr_map_has_f64(numbers, 42));
+    scr_map_release(numbers);
+#ifdef SCR_RC_AUDIT
+    assert(scr_map_live_count() == before_maps);
+    assert(scr_dyn_live_count() == before_dyns);
+#endif
+  }
   /* A live alias survives collection; dropping it releases the entire
    * object/closure/capture cycle, including its acyclic string leaf. */
   for (int i = 0; i < 2000; i++) {
