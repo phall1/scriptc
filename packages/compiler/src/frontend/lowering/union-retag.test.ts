@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { BOOL, F64, NULL_T, STRING, UNDEFINED_T, typeEquals, typeKey } from "../../ir/ir.js";
 import type { IrRecordShape, IrType, IrUnionDef, SrcLoc } from "../../ir/ir.js";
-import { planUnionRetag, buildUnionRetag } from "./union-retag.js";
+import { planUnionRetag, buildUnionRetag, planRecordUnionWrap } from "./union-retag.js";
 import type { UnionRetagArm } from "./union-retag.js";
 import type { WidthLift } from "./width-lift.js";
 
@@ -47,6 +47,35 @@ function split(plan: UnionRetagArm[] | null) {
   if (first.kind !== "discriminant") throw new Error("expected discriminant plan");
   return first;
 }
+
+describe("record conversion with shared layouts", () => {
+  test.each([
+    [STRING, ["binary", "logical"]], [F64, [0, 1]], [BOOL, [false, true]],
+  ] as [IrType, (string | number | boolean)[]][])("selects %j variants by their value", (type, values) => {
+    const f = fixture(type, values);
+    f.shapes[2]!.fields = f.shapes[1]!.fields.slice();
+    expect(planRecordUnionWrap(f.shapes[1]!, f.to, f.shapeOf)).toEqual({
+      field: "kind", fieldType: type, routes: [
+        { tag: 0, lift: { how: "copy" }, values: [values[0]] },
+        { tag: 1, lift: { how: "width" }, values: [values[1]] },
+      ],
+    });
+    // Re-read registry definitions: a later field incompatibility must
+    // invalidate a previously possible shared-layout conversion.
+    f.shapes[2]!.fields = [{ name: "kind", type }, { name: "left", type: STRING }];
+    expect(planRecordUnionWrap(f.shapes[1]!, f.to, f.shapeOf)).toBeNull();
+  });
+
+  test("requires unambiguous literal ownership and matching field order", () => {
+    const f = fixture();
+    f.shapes[2]!.fields = f.shapes[1]!.fields.slice();
+    f.to.discriminant!.cases[1]!.values = ["left"];
+    expect(planRecordUnionWrap(f.shapes[1]!, f.to, f.shapeOf)).toBeNull();
+    f.to.discriminant!.cases[1]!.values = ["right"];
+    f.shapes[2]!.fields.reverse();
+    expect(planRecordUnionWrap(f.shapes[1]!, f.to, f.shapeOf)).toBeNull();
+  });
+});
 
 describe("union conversion planning", () => {
   test("matches large unions in source order, including duplicate destination arms", () => {

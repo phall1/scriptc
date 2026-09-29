@@ -7362,21 +7362,26 @@ function lowerLogicalPair(lowerer: Lowerer, expr: ts.BinaryExpression, left: IrE
     };
   }
   if (left.type.kind === "union" || right.type.kind === "union") {
-    // JS value semantics over a union: the deciding test is the ARM
-    // value's ToBoolean (a per-union helper), and the result is the
-    // deciding operand. Supported when the checker's type of the whole
-    // expression maps to ONE union both operands coerce into (same
-    // union passes through; a plain arm wraps — `u || undefined`).
-    // Everything else (`u && flag`, whose value would need a wider
-    // re-tagged union) stays fenced — in CONDITION position those
-    // shapes lower through lowerCondition's bool descent instead.
+    // Test the deciding operand in its own representation. The result
+    // contains only the values that can survive short-circuit evaluation.
     let target = lowerer.mapTypeOf(lowerer.typeOf(expr));
+    // Unchecked array reads carry undefined even when the checker sees
+    // a required value. The RHS can return it for either operator; the
+    // LHS can return it only for &&. Preserve it through later chain pairs.
+    if (target !== null && !isUnitType(target) && (
+      (right.type.kind === "union" && lowerer.armTag(right.type.unionId, UNDEFINED_T) >= 0) ||
+      (op === ts.SyntaxKind.AmpersandAmpersandToken && left.type.kind === "union" &&
+        lowerer.armTag(left.type.unionId, UNDEFINED_T) >= 0)
+    )) {
+      target = lowerer.runtimeOptionalType(target);
+    }
     // A broad-JSDoc npm-static body can leave the CHECKER result `any`
     // even after declaration-backed specialization has recovered both
     // operands (`helpOption && args.find(...)` in commander). When the
     // left consists only of always-truthy references and falsy units,
     // the static result is exactly the right operand plus those units.
     if (
+      op === ts.SyntaxKind.AmpersandAmpersandToken &&
       target === null &&
       lowerer.implicitParamTypes !== null &&
       npmStaticPackageOfPath(expr.getSourceFile().fileName) !== null &&

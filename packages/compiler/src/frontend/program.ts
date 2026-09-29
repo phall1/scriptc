@@ -1884,8 +1884,8 @@ function identifierOccurrences7(root: ts.Node, text: string): ts.Identifier[] {
  * of an imported binding are the same alias story, not reads. */
 function backEdgeUseOffence7(
   program: ts.Program,
-  sf: ts.SourceFile,
   stmt: ts.ImportDeclaration | ts.ExportDeclaration,
+  occurrences: ReadonlyMap<string, readonly ts.Identifier[]>,
 ): { name: string; node: ts.Node } | null {
   if (!ts.isImportDeclaration(stmt) || stmt.importClause === undefined) return null;
   const checker = program.getTypeChecker();
@@ -1899,25 +1899,18 @@ function backEdgeUseOffence7(
   for (const bindingName of bindingNames) {
     const sym = checker.getSymbolAtLocation(bindingName);
     if (sym === undefined) continue;
-    checker.prefetchSymbolNodesExact(identifierOccurrences7(sf, bindingName.text));
-    let offence: { name: string; node: ts.Node } | null = null;
-    const visit = (node: ts.Node): void => {
-      if (offence !== null || ts.isImportDeclaration(node)) return;
+    const references = occurrences.get(bindingName.text) ?? [];
+    checker.prefetchSymbolNodesExact(references);
+    for (const node of references) {
       if (
-        ts.isIdentifier(node) &&
-        node.text === bindingName.text &&
         !(node.parent !== undefined && ts.isExportSpecifier(node.parent)) &&
         checker.getSymbolAtLocation(node) === sym &&
         !inTypePosition7(node) &&
         !inDeferredPosition7(node)
       ) {
-        offence = { name: bindingName.text, node };
-        return;
+        return { name: bindingName.text, node };
       }
-      ts.forEachChild(node, visit);
-    };
-    visit(sf);
-    if (offence !== null) return offence;
+    }
   }
   return null;
 }
@@ -1988,6 +1981,26 @@ export function makeCycleAdmission(
   // reason the cluster's cycles stay fenced, or null when its every
   // member passes the inert-top-level bar.
   const sccVerdict = new Map<ts.SourceFile[], string | null>();
+  // A module can close many cycle edges, each importing many bindings.
+  // Index its identifiers once for this admission pass. ASTs are immutable;
+  // the pass owns the index so it cannot retain a disposed program.
+  const bindingUses = new Map<ts.SourceFile, Map<string, ts.Identifier[]>>();
+  const usesOf = (sf: ts.SourceFile): Map<string, ts.Identifier[]> => {
+    const cached = bindingUses.get(sf);
+    if (cached !== undefined) return cached;
+    const uses = new Map<string, ts.Identifier[]>();
+    ts.walkPreorder(sf, (node) => {
+      if (ts.isImportDeclaration(node)) return "skip";
+      if (ts.isIdentifier(node)) {
+        const references = uses.get(node.text);
+        if (references !== undefined) references.push(node);
+        else uses.set(node.text, [node]);
+      }
+      return undefined;
+    });
+    bindingUses.set(sf, uses);
+    return uses;
+  };
   return (importer: ts.SourceFile, e: CycleEdge): string | null => {
     if (e.stmt === undefined) return "the cycle closes through a require() edge";
     // Cheap per-edge admission: nothing readable binds through the edge.
@@ -2026,7 +2039,7 @@ export function makeCycleAdmission(
     const clusterReason = sccVerdict.get(comp);
     if (clusterReason === undefined) throw new Error("missing module-cycle verdict");
     if (clusterReason !== null) return clusterReason;
-    const use = backEdgeUseOffence7(program, importer, e.stmt);
+    const use = backEdgeUseOffence7(program, e.stmt, usesOf(importer));
     if (use !== null) {
       return `the cycle-crossing binding '${use.name}' is read at ${lineOf(use.node)}, outside any function body — a read during the init window observes the partially-initialized module (Node's TDZ ReferenceError / stale var), which is not modeled`;
     }

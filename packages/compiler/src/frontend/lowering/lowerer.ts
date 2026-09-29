@@ -1,6 +1,6 @@
 import { everyExprChild, everyStmtChild } from "../../ir/traverse.js";
 import { buildUnionNarrow } from "./union-narrow.js";
-import { planUnionRetag, buildUnionRetag } from "./union-retag.js";
+import { planUnionRetag, buildUnionRetag, planRecordUnionWrap, buildRecordUnionWrap } from "./union-retag.js";
 import type { WidthLift } from "./width-lift.js";
 export type { WidthLift } from "./width-lift.js";
 import { bindingInContext, captureContextBinding, declareContextLocal, declareContextThis, type FnCtx } from "./function-context.js";
@@ -3058,15 +3058,29 @@ export class Lowerer {
       ) return [0];
       return null;
     };
-    const bodyReturnsOptional = (fn: ts.FunctionLikeDeclaration): boolean => {
-      if (!fn.body) return false;
-      if (!ts.isBlock(fn.body)) return mayBeOptional(fn.body as ts.Expression);
-      let found = false;
+    // Syntax does not change during the fixed point. Reuse its return sites
+    // while recomputing their optionality from each pass's current bindings.
+    const returnSites = new Map<ts.FunctionLikeDeclaration, ts.Expression[]>();
+    const returnsOf = (fn: ts.FunctionLikeDeclaration): ts.Expression[] => {
+      const cached = returnSites.get(fn);
+      if (cached !== undefined) return cached;
+      const expressions: ts.Expression[] = [];
+      returnSites.set(fn, expressions);
+      if (!fn.body) return expressions;
+      if (!ts.isBlock(fn.body)) {
+        expressions.push(fn.body as ts.Expression);
+      }
       ts.walkPreorder(fn.body, (node) => {
         if (node !== fn.body && (ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isArrowFunction(node) || ts.isMethodDeclaration(node))) return "skip";
-        if (ts.isReturnStatement(node) && node.expression && mayBeOptional(node.expression)) found = true;
+        if (ts.isReturnStatement(node) && node.expression) expressions.push(node.expression);
         return undefined;
       });
+      return expressions;
+    };
+    const bodyReturnsOptional = (fn: ts.FunctionLikeDeclaration): boolean => {
+      if (fn.body && !ts.isBlock(fn.body)) return mayBeOptional(fn.body as ts.Expression);
+      let found = false;
+      for (const expression of returnsOf(fn)) if (mayBeOptional(expression)) found = true;
       return found;
     };
     const promoteHofCallback = (callback: ts.Expression, parameterIndices: readonly number[], seen = new Set<ts.Symbol>()): boolean => {
@@ -3199,9 +3213,20 @@ export class Lowerer {
       const decl = this.checker.valueDeclarationOf(symbol);
       return !!decl && ts.isVariableDeclaration(decl) && !!decl.initializer && callbackReturnsOptional(decl.initializer, seen);
     };
+    const scanSites = new Map<ts.SourceFile, ts.Node[]>();
+    const sitesOf = (sf: ts.SourceFile): ts.Node[] => {
+      const cached = scanSites.get(sf);
+      if (cached !== undefined) return cached;
+      const nodes: ts.Node[] = [];
+      ts.walkPreorder(sf, (node) => {
+        if (ts.isVariableDeclaration(node) || ts.isBinaryExpression(node) || ts.isCallExpression(node)) nodes.push(node);
+      });
+      scanSites.set(sf, nodes);
+      return nodes;
+    };
     const scanFile = (sf: ts.SourceFile): boolean => {
       let changed = false;
-      ts.walkPreorder(sf, (node) => {
+      const scan = (node: ts.Node): void => {
         if (ts.isVariableDeclaration(node)) {
           if (node.initializer) {
             if (ts.isIdentifier(node.name) && isDynamicObjectEntryRead(node.initializer)) {
@@ -3400,38 +3425,23 @@ export class Lowerer {
               }
           });
         }
-      });
+      };
+      for (const node of sitesOf(sf)) scan(node);
       return changed;
     };
     const scanReturns = (symbol: ts.Symbol, decl: ts.FunctionLikeDeclaration): boolean => {
-      if (!decl.body) return false;
       let changed = false;
-      if (!ts.isBlock(decl.body) && mayBeOptional(decl.body as ts.Expression) && !optionalReturns.has(symbol)) {
-        optionalReturns.add(symbol);
-        changed = true;
-      }
-      if (!ts.isBlock(decl.body)) {
-        const arithmetic = optionalStringArithmeticType(decl.body as ts.Expression);
+      for (const expression of returnsOf(decl)) {
+        if (mayBeOptional(expression) && !optionalReturns.has(symbol)) {
+          optionalReturns.add(symbol);
+          changed = true;
+        }
+        const arithmetic = optionalStringArithmeticType(expression);
         if (arithmetic && !arithmeticReturns.has(symbol)) {
           arithmeticReturns.set(symbol, arithmetic);
           changed = true;
         }
       }
-      ts.walkPreorder(decl.body, (node) => {
-        if (node !== decl.body && (ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isArrowFunction(node) || ts.isMethodDeclaration(node))) return "skip";
-        if (ts.isReturnStatement(node) && node.expression && mayBeOptional(node.expression) && !optionalReturns.has(symbol)) {
-          optionalReturns.add(symbol);
-          changed = true;
-        }
-        if (ts.isReturnStatement(node) && node.expression) {
-          const arithmetic = optionalStringArithmeticType(node.expression);
-          if (arithmetic && !arithmeticReturns.has(symbol)) {
-            arithmeticReturns.set(symbol, arithmetic);
-            changed = true;
-          }
-        }
-        return undefined;
-      });
       return changed;
     };
     let changed = true;
@@ -5482,6 +5492,10 @@ export class Lowerer {
       return expr;
     }
     const tag = this.armTag(expected.unionId, expr.type);
+    if (tag >= 0 && expr.type.kind === "record" && expr.kind !== "recordLit") {
+      const helper = this.recordUnionWrapHelper(expr.type, expected.unionId, expr.loc);
+      if (helper) return { kind: "call", callee: helper, args: [expr], type: expected, loc: expr.loc };
+    }
     if (tag < 0) {
       // A derived class flowing into a union with a base-class arm widens
       // first (nearest ancestor arm wins), then wraps like any arm value.
@@ -5649,6 +5663,8 @@ export class Lowerer {
    *               identity arms and compatible payload conversions; a shared
    *               discriminant may select different record destinations)
    *   wrap      — a non-unit arm value into a union that contains it
+   *   discriminantWrap — identical recursive layouts distinguished by
+   *               their literal field value rather than their storage id
    *   liftWrap  — a record/array value into a union with NO identical arm
    *               but exactly ONE arm it width-lifts into (the findRoute
    *               rule applied at every level; several candidates are
@@ -5681,9 +5697,13 @@ export class Lowerer {
       // LITERAL unit — and no lowered shape carries a bare unit field).
       if (isUnitType(src)) return null;
       const tag = this.armTag(dst.unionId, src);
-      if (tag >= 0) return { how: "wrap", tag };
       const def = this.unions.get(dst.unionId);
       if (!def) return null;
+      if (tag >= 0) {
+        const shape = src.kind === "record" ? this.shapes.get(src.shapeId) : undefined;
+        if (shape && planRecordUnionWrap(shape, def, (id) => this.shapes.get(id))) return { how: "discriminantWrap" };
+        return { how: "wrap", tag };
+      }
       const candidates: { tag: number; arm: IrType }[] = [];
       def.arms.forEach((arm, i) => {
         if (isUnitType(arm)) return;
@@ -5798,6 +5818,12 @@ export class Lowerer {
       case "wrap": {
         if (dst.kind !== "union") throw new InternalCompilerError("lowerer bug: wrap lift against a non-union");
         return { kind: "unionWrap", unionId: dst.unionId, tag: lift.tag, value, type: dst, loc };
+      }
+      case "discriminantWrap": {
+        if (dst.kind !== "union" || value.type.kind !== "record") throw new InternalCompilerError("lowerer bug: record discriminator lift shape");
+        const helper = this.recordUnionWrapHelper(value.type, dst.unionId, loc);
+        if (!helper) throw new InternalCompilerError("lowerer bug: planned record discriminator lift failed to intern");
+        return { kind: "call", callee: helper, args: [value], type: dst, loc };
       }
       case "retag": {
         if (dst.kind !== "union" || value.type.kind !== "union") throw new InternalCompilerError("lowerer bug: retag lift shape");
@@ -7228,6 +7254,22 @@ export class Lowerer {
       });
     }
     return { kind: "call", callee: name, args: isUnitType(src) ? [] : [expr], type: expected, loc };
+  }
+
+  recordUnionWrapHelper(source: IrType & { kind: "record" }, toId: string, loc: SrcLoc): string | null {
+    const shape = this.shapes.get(source.shapeId);
+    const to = this.unions.get(toId);
+    if (!shape || !to) return null;
+    const plan = planRecordUnionWrap(shape, to, (id) => this.shapes.get(id));
+    if (!plan) return null;
+    const key = `recordWrap:${source.shapeId}:${toId}`;
+    const existing = this.retagHelpers.get(key);
+    if (existing) return existing;
+    const name = `%record.wrap.${this.retagHelpers.size}`;
+    this.retagHelpers.set(key, name);
+    this.liftedFns.push(buildRecordUnionWrap(name, source, to, plan, loc,
+      (lift, value, dst) => this.applyWidthLift(lift, value, dst, loc)));
+    return name;
   }
 
   unionRetagHelper(fromId: string, toId: string, loc: SrcLoc, trappable?: ReadonlySet<number>): string | null {

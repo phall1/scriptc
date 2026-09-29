@@ -467,8 +467,10 @@ function defaultParameterShape(lowerer: Lowerer, param: ts.ParameterDeclaration,
      * coercion an ordinary argument gets (coerceInto against its shape,
      * DYN conversion in a dyn rest, element coercion in a typed rest). */
     leading?: readonly IrExpr[],): IrExpr[] {
-    if (canCompleteRuntimeSpread(lowerer, shapes) &&
-        argNodes.some((arg) => ts.isSpreadElement(arg) && !fixedTupleSpreadInfo(lowerer, arg.expression))) {
+    // Conversion eligibility can traverse the whole recursive parameter
+    // graph. Ordinary calls and fixed tuples never need that analysis.
+    if (argNodes.some((arg) => ts.isSpreadElement(arg) && !fixedTupleSpreadInfo(lowerer, arg.expression)) &&
+        canCompleteRuntimeSpread(lowerer, shapes)) {
       // Runtime-length spreads determine the complete argument list before
       // any parameter default runs. Build it once in source order, then
       // extract the fixed native ABI slots; missing elements are undefined.
@@ -5888,7 +5890,6 @@ function lowerOptionalStringNumber(
     shapes: readonly ParamShape[],
     argNodes: readonly ts.Expression[],
   ): boolean {
-    if (canCompleteRuntimeSpread(lowerer, shapes)) return false;
     const restAt = shapes.findIndex((s) => s.mode === "rest" || s.mode === "dynRest" || s.mode === "islandRest");
     let position = 0;
     for (const arg of argNodes) {
@@ -5898,7 +5899,9 @@ function lowerOptionalStringNumber(
           position += tuple.fields.length;
           continue;
         }
-        if (restAt < 0 || position < restAt || shapes[restAt]!.mode !== "rest") return true;
+        if (restAt < 0 || position < restAt || shapes[restAt]!.mode !== "rest") {
+          return !canCompleteRuntimeSpread(lowerer, shapes);
+        }
       }
       position++;
     }

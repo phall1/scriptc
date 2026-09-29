@@ -5,7 +5,8 @@ import { dirname, join } from "node:path";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import type { SourceFile, Node } from "typescript/unstable/ast";
 import { AstFile, AstNode } from "./ast-node.js";
-import { AstKind, KIND_NODE_LIST, astChildNames, HEADER_OFFSET_NODES, NODE_LEN } from "./ast-schema.generated.js";
+import { AstKind, KIND_NODE_LIST, astChildNames, HEADER_OFFSET_NODES, NODE_LEN, NODE_OFFSET_PARENT } from "./ast-schema.generated.js";
+import { walkPreorder } from "./ast.js";
 import { ts7Executable } from "./rpc-api.js";
 import { Ts7RpcClient } from "./rpc-client.js";
 import { spawnTs7Wire } from "./rpc-process.js";
@@ -177,4 +178,45 @@ test("a source view requires a source-file root", () => {
   words.setUint32(nodes + NODE_LEN, AstKind.Identifier, true);
   expect(() => new AstFile(bytes).sourceFile).toThrow("expected a source file root");
   expect(decoded.get("empty.ts")!.file.root.statements).toEqual([]);
+});
+
+test("preorder traversal preserves depth, skipped subtrees and early termination", () => {
+  const { file, oracle } = decoded.get("main.ts")!;
+  const expected: [number, number][] = [];
+  const visit = (node: OracleNode, depth: number): void => {
+    expected.push([node.index, depth]);
+    if (node.kind === AstKind.ClassDeclaration) return;
+    node.forEachChild((child) => { visit(child as OracleNode, depth + 1); });
+  };
+  visit(oracle.getOrCreateNodeAtIndex(1), 0);
+  const actual: [number, number][] = [];
+  walkPreorder(file.root, (node, depth) => {
+    actual.push([node.index, depth]);
+    return node.kind === AstKind.ClassDeclaration ? "skip" : undefined;
+  });
+  expect(actual).toEqual(expected);
+  const prefix: [number, number][] = [];
+  walkPreorder(file.root, (node, depth) => {
+    prefix.push([node.index, depth]);
+    if (prefix.length === 7) return "stop";
+    return node.kind === AstKind.ClassDeclaration ? "skip" : undefined;
+  });
+  expect(prefix).toEqual(expected.slice(0, 7));
+});
+
+test("child traversal still rejects a sibling belonging to another parent", () => {
+  const { file, bytes } = decoded.get("main.ts")!;
+  let parent = 0;
+  let sibling = 0;
+  for (let index = 1; index < file.wire.nodeCount; index++) {
+    if (file.wire.kind(index) === KIND_NODE_LIST) continue;
+    const children = file.wire.children(index);
+    if (children.length > 1) { parent = index; sibling = children[1]!; break; }
+  }
+  expect(sibling).toBeGreaterThan(0);
+  const broken = bytes.slice();
+  const words = new DataView(broken.buffer, broken.byteOffset, broken.byteLength);
+  const nodes = words.getUint32(HEADER_OFFSET_NODES, true);
+  words.setUint32(nodes + sibling * NODE_LEN + NODE_OFFSET_PARENT, parent === 1 ? 0 : 1, true);
+  expect(() => new AstFile(broken).node(parent).forEachChild(() => undefined)).toThrow("sibling belongs to another parent");
 });

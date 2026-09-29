@@ -1,8 +1,9 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, test } from "vitest";
-import { checkPreflight, loadProgram } from "./program-node.js";
+import { expect, test, vi } from "vitest";
+import { checkPreflight, loadProgram, makeCycleAdmission, type CycleEdge } from "./program-node.js";
+import * as ts from "./ts7/ast.js";
 
 function requireOrderDiagnostics(source: string, dependency = "exports.value = 'ready';\n") {
   const dir = mkdtempSync(join(tmpdir(), "scriptc-require-order-"));
@@ -121,4 +122,61 @@ const dep = require('./dep.cjs');
 function read() { return dep.value; }
 `, "const main = require('./main.cjs'); exports.value = main.read();\n");
   expect(diagnostics.some((diag) => diag.code === "SC1016")).toBe(true);
+});
+
+test.for([
+  ['export function read() { return first + alias; }', null],
+  ['export { first, alias }; export function read() { return 1; }', null],
+  ['type Value = typeof alias; export function read(first: number = 1) { return first; }', null],
+  ['class Box { value = alias; } export function read(value = first) { return value; }', null],
+  ['const value = alias; export function read() { return value; }', "alias"],
+  ['class Box { static value = first; } export function read() { return 1; }', "first"],
+  ['class Box { [alias] = 1; } export function read() { return 1; }', "alias"],
+])("cycle binding indexes preserve initialization safety: %s", ([body, refused]) => {
+  const directory = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-cycle-bindings-"));
+  const entry = join(directory, "main.ts");
+  writeFileSync(entry, 'import { read } from "./peer.ts"; export const first = 1; export const second = 2; export function run() { return read(); }');
+  writeFileSync(join(directory, "peer.ts"), 'import { first, second as alias } from "./main.ts";\n' + body);
+  const load = loadProgram(entry);
+  try {
+    const cycles = checkPreflight(load).filter((diagnostic) => diagnostic.code === "SC1016");
+    if (refused === null) expect(cycles).toEqual([]);
+    else {
+      expect(cycles).toHaveLength(1);
+      expect(cycles[0]!.message).toContain(`binding '${refused}' is read`);
+    }
+  } finally {
+    load.dispose();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("repeated cycle edges reuse a file's binding index", () => {
+  const directory = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-cycle-index-"));
+  const entry = join(directory, "main.ts");
+  writeFileSync(entry, 'import { read } from "./peer.ts"; export const first = 1; export const second = 2; export function run() { return read(); }');
+  writeFileSync(join(directory, "peer.ts"), 'import { first } from "./main.ts"; import { second } from "./main.ts"; export function read() { return first + second; }');
+  const load = loadProgram(entry);
+  try {
+    const main = load.entry;
+    const peer = load.program.getSourceFile(join(directory, "peer.ts"))!;
+    const mainImports = main.statements.filter(ts.isImportDeclaration);
+    const peerImports = peer.statements.filter(ts.isImportDeclaration);
+    const edges = new Map<ts.SourceFile, CycleEdge[]>([
+      [main, mainImports.map((stmt) => ({ dep: peer, stmt }))],
+      [peer, peerImports.map((stmt) => ({ dep: main, stmt }))],
+    ]);
+    const admit = makeCycleAdmission(load.program, (file) => edges.get(file) ?? []);
+    expect(admit(peer, edges.get(peer)![0]!)).toBeNull();
+    // The first edge may materialize/check the file. A later binding must
+    // inspect its indexed references without another full-file walk.
+    const walk = vi.spyOn(peer, "forEachChild");
+    try {
+      expect(admit(peer, edges.get(peer)![1]!)).toBeNull();
+      expect(walk).not.toHaveBeenCalled();
+    } finally { walk.mockRestore(); }
+  } finally {
+    load.dispose();
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

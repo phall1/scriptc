@@ -5935,7 +5935,8 @@ export function isJsonStringifyDynamicType(
 
 /** The recursion shared by checked JSON conversion and stringification.
  * Ordinary record fields always admit undefined by dropping the key. Array
- * and tuple slots admit it only for stringification, which writes null. */
+ * and tuple slots admit it only for stringification, which writes null.
+ * Direct loops avoid allocating captured callbacks at each recursive edge. */
 function isJsonSafeAt(
   t: IrType,
   getRecord: (shapeId: string) => IrRecordShape | undefined,
@@ -5960,12 +5961,11 @@ function isJsonSafeAt(
       if (!shape) return false;
       if (recordTextCodecClass(shape) !== null) return false;
       // The recursive knot: answer true and let the rest of the graph
-      // decide (any unsafe constituent is found on its own path; a false
-      // short-circuits every `every` up the walk).
+      // decide (any unsafe constituent ends the traversal immediately).
       if (visiting.has(t.shapeId)) return true;
       visiting.add(t.shapeId);
-      if (!shape.fields.every((f) => isJsonSafeAt(f.type, getRecord, getUnion, stringify, !shape.tuple || stringify, visiting, nativeFields))) {
-        return false;
+      for (const field of shape.fields) {
+        if (!isJsonSafeAt(field.type, getRecord, getUnion, stringify, !shape.tuple || stringify, visiting, nativeFields)) return false;
       }
       // Overflow values sit in record-key position too: dyn is JSON-safe
       // HERE (the checked-dynamic tree serializes itself; undefined-valued entries drop
@@ -5982,7 +5982,10 @@ function isJsonSafeAt(
       const key = `${t.unionId}:${stringify}:${undefinedAllowed}`;
       if (visiting.has(key)) return true; // the recursive knot, union-flavored
       visiting.add(key);
-      return def.arms.every((a) => a.kind === "undefinedT" ? undefinedAllowed : isJsonSafeAt(a, getRecord, getUnion, stringify, undefinedAllowed, visiting, nativeFields));
+      for (const arm of def.arms) {
+        if (!(arm.kind === "undefinedT" ? undefinedAllowed : isJsonSafeAt(arm, getRecord, getUnion, stringify, undefinedAllowed, visiting, nativeFields))) return false;
+      }
+      return true;
     }
     case "set":
       return nativeFields && !stringify && t.elem.kind === "dyn";
@@ -6340,7 +6343,9 @@ function canBoxDynComposite(
       // Recursive shapes answer coinductively, like isJsonSafeType.
       if (visiting.has(t.shapeId)) return true;
       visiting.add(t.shapeId);
-      if (!shape.fields.every((f) => canBoxDynComposite(f.type, getRecord, getUnion, visiting))) return false;
+      for (const field of shape.fields) {
+        if (!canBoxDynComposite(field.type, getRecord, getUnion, visiting)) return false;
+      }
       return !shape.indexValue || canBoxDynComposite(shape.indexValue, getRecord, getUnion, visiting);
     }
     case "union": {
@@ -6348,7 +6353,10 @@ function canBoxDynComposite(
       if (!def) return false;
       if (visiting.has(t.unionId)) return true;
       visiting.add(t.unionId);
-      return def.arms.every((a) => canBoxDynComposite(a, getRecord, getUnion, visiting));
+      for (const arm of def.arms) {
+        if (!canBoxDynComposite(arm, getRecord, getUnion, visiting)) return false;
+      }
+      return true;
     }
     default:
       return false;

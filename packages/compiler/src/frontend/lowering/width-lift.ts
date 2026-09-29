@@ -6,6 +6,7 @@ import type { IrType } from "../../ir/ir.js";
 export type WidthLift =
   | { how: "copy" }
   | { how: "wrap"; tag: number }
+  | { how: "discriminantWrap" }
   | { how: "retag" }
   | { how: "liftWrap"; tag: number; arm: IrType }
   | { how: "width" }

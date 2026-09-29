@@ -133,8 +133,12 @@ export class AstNode {
   }
 
   forEachChild<T>(visitNode: (node: AstNode) => T, visitList?: (nodes: readonly AstNode[]) => T): T | undefined {
-    for (const index of this.file.wire.children(this.index)) {
-      const kind = this.file.wire.kind(index);
+    const wire = this.file.wire;
+    // Walk the immutable sibling links directly. Repeated semantic scans
+    // should not allocate and free a temporary child-index array per node.
+    for (let index = wire.firstChild(this.index); index !== 0; index = wire.next(index)) {
+      if (wire.parent(index) !== this.index) throw new AstDecodeError("sibling belongs to another parent");
+      const kind = wire.kind(index);
       if (kind === KIND_NODE_LIST) {
         const list = this.file.list(index);
         if (visitList !== undefined) {

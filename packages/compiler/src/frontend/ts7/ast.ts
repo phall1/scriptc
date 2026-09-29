@@ -109,10 +109,12 @@ export function walkPreorder(
   root: Node,
   cb: (node: Node, depth: number) => void | "skip" | "stop",
 ): void {
-  const stack: [Node, number][] = [[root, 0]];
+  const stack: Node[] = [root];
+  const depths: number[] = [0];
   const children: Node[] = [];
   while (stack.length > 0) {
-    const [n, depth] = stack.pop()!;
+    const n = stack.pop()!;
+    const depth = depths.pop()!;
     const verdict = cb(n, depth);
     if (verdict === "stop") return;
     if (verdict === "skip") continue;
@@ -120,7 +122,10 @@ export function walkPreorder(
     n.forEachChild((c) => {
       children.push(c);
     });
-    for (let i = children.length - 1; i >= 0; i--) stack.push([children[i]!, depth + 1]);
+    for (let i = children.length - 1; i >= 0; i--) {
+      stack.push(children[i]!);
+      depths.push(depth + 1);
+    }
   }
 }
 

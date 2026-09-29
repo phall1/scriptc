@@ -16,6 +16,12 @@ const execFileAsync = promisify(execFile);
 const sanitize = process.env["SCRIPTC_SAN"] === "1";
 const options = { cwd: root, timeout: 1_200_000, maxBuffer: 16 * 1024 * 1024 };
 
+function comparableStderr(text: string): string {
+  return sanitize
+    ? text.replace(/^==\d+==WARNING: ASan doesn't fully support makecontext\/swapcontext functions and may produce false positives in some cases!\n/gm, "")
+    : text;
+}
+
 test("the native frontend and LLVM emitter rebuild a working frontend from its TypeScript source", async () => {
   const directory = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-bootstrap-"));
   const executable = (name: string) => join(directory, name + (process.platform === "win32" ? ".exe" : ""));
@@ -61,7 +67,7 @@ test("the native frontend and LLVM emitter rebuild a working frontend from its T
     const self = await bootstrapStep("frontend lowers itself", () =>
       execFileAsync(seed.binaryPath, [ts7Executable(), frontend, ownIr, profile], nativeOptions));
     expect(self.stdout).toBe("0\n0 0\n");
-    expect(self.stderr).toBe("");
+    expect(comparableStderr(self.stderr)).toBe("");
 
     // Compare complete IR, including layouts and helper signatures. A valid
     // module alone can hide different optional-return inference or dropped
@@ -70,7 +76,7 @@ test("the native frontend and LLVM emitter rebuild a working frontend from its T
     const emitted = await bootstrapStep("emit frontend LLVM", () =>
       execFileAsync(nativeEmitter.binaryPath, [ownIr, cPath, emitterRequest], nativeOptions));
     expect(emitted.stdout).toBe("");
-    expect(emitted.stderr).toBe("");
+    expect(comparableStderr(emitted.stderr)).toBe("");
     // Full compiler graphs exceed the worker's default heap. Keep both the
     // structural IR comparison and reference emission in a roomy child.
     const verification = await bootstrapStep("compare frontend IR and LLVM", () => execFileAsync(process.execPath, [
@@ -107,14 +113,14 @@ test("the native frontend and LLVM emitter rebuild a working frontend from its T
       expect(expected.stdout).toBe("0\n0 0\n");
       expect(actual.stdout).toBe(expected.stdout);
       expect(expected.stderr).toBe("");
-      expect(actual.stderr).toBe("");
+      expect(comparableStderr(actual.stderr)).toBe("");
       const program = deserializeModule(readFileSync(actualIr, "utf8"));
       expect(program).toEqual(deserializeModule(readFileSync(expectedIr, "utf8")));
       expect(validateModule(program)).toEqual([]);
       const programC = join(directory, "program.ll");
       const emission = await execFileAsync(nativeEmitter.binaryPath, [actualIr, programC, emitterRequest], nativeOptions);
       expect(emission.stdout).toBe("");
-      expect(emission.stderr).toBe("");
+      expect(comparableStderr(emission.stderr)).toBe("");
       await compileC({ cPath: programC, outPath: executable("program"), sanitize, ...nativeFeatures(program) });
       const oracle = spawnSync(process.execPath, [source], options);
       const native = spawnSync(executable("program"), [], options);
