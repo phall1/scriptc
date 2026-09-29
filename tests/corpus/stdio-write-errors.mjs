@@ -1,6 +1,11 @@
 import { closeSync } from 'node:fs';
 const output = process.stdout;
 const error = process.stderr;
+function announce() {
+  output.write('ready\n');
+  error.write('starting\n');
+}
+announce();
 function removed() { error.write('removed\n'); }
 output.on('error', removed);
 output.off('error', removed);

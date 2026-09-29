@@ -31,7 +31,7 @@ writeFileSync(ffi, JSON.stringify({
   ...JSON.parse(readFileSync(join(nativeSources, "ts7-process.ffi.json"), "utf8")), libraries: [object],
 }, null, 2) + "\n");
 const result = await compile(join(root, "packages/compiler/src/native/main.ts"), {
-  outDir: output, outPath: executable, backend: "llvm", optimization: "dev", dynamic: false, ffiProfilePath: ffi, sanitize,
+  outDir: output, outPath: executable, backend: "llvm", optimization: "release", strip: true, dynamic: false, ffiProfilePath: ffi, sanitize,
 });
 if (!result.ok) throw new Error(result.diagnostics.map((item) =>
   `${item.loc ? `${item.loc.file}:${item.loc.start}: ` : ""}${item.code}: ${item.message}`,

@@ -822,6 +822,13 @@ function jsDynHoldableInitializer(lowerer: Lowerer, init: ts.Expression | undefi
   if (isNativeProxyInitializer(lowerer, init)) return true;
   let e: ts.Expression = init;
   while (ts.isParenthesizedExpression(e)) e = e.expression;
+  // JavaScript process streams lower to native checked handles even when
+  // their declared method overloads prevent a structural type mapping.
+  // Register the shared slot before separately declared functions lower.
+  if (ts.isPropertyAccessExpression(e)) {
+    const member = lowerer.stdlibGlobalMember(e, "process");
+    if (member === "stdin" || member === "stdout" || member === "stderr") return true;
+  }
   if (e.kind === ts.SyntaxKind.NullKeyword) return true;
   if (ts.isIdentifier(e) && e.text === "undefined") return true;
   if (ts.isConditionalExpression(e)) {

@@ -8,6 +8,7 @@ import { expect, test } from "vitest";
 import { compileC, deserializeModule, validateModule } from "@scriptc/compiler";
 import type { compile } from "@scriptc/compiler";
 import { nativeFeatures } from "./self-hosting-native-features.js";
+import { bootstrapStep } from "./self-hosting-timing.js";
 import { ts7Executable } from "../../packages/compiler/src/frontend/ts7/rpc-api.js";
 
 const root = join(import.meta.dirname, "../..");
@@ -38,7 +39,7 @@ test("the native frontend and LLVM emitter rebuild a working frontend from its T
         `import { compile } from ${JSON.stringify(api)};
          const result = await compile(process.argv[1], {
            outDir: process.argv[2], outPath: process.argv[3], backend: 'llvm',
-           dynamic: false, optimization: 'dev', sanitize: process.argv[4] === '1',
+           dynamic: false, optimization: 'release', strip: true, sanitize: process.argv[4] === '1',
            ffiProfilePath: process.argv[5] || undefined, emitIr: true,
          });
          console.log(JSON.stringify({ ...result, sourceTexts: undefined }));`,
@@ -52,12 +53,13 @@ test("the native frontend and LLVM emitter rebuild a working frontend from its T
       expect(result.irPath).toBeDefined();
       return result;
     };
-    const seed = await buildSeed(frontend, "frontend-seed", profile);
-    const nativeEmitter = await buildSeed(emitter, "emitter");
+    const seed = await bootstrapStep("build frontend seed", () => buildSeed(frontend, "frontend-seed", profile));
+    const nativeEmitter = await bootstrapStep("build LLVM emitter seed", () => buildSeed(emitter, "emitter"));
     const emitterRequest = join(directory, "emitter-request.json");
     writeFileSync(emitterRequest, JSON.stringify({ debug: true, sources: [], pointerBits: 64, wasi: false, emitLibraryIdentity: true, runtimeAbiMarker: false }));
     const ownIr = join(directory, "frontend-native.json");
-    const self = await execFileAsync(seed.binaryPath, [ts7Executable(), frontend, ownIr, profile], nativeOptions);
+    const self = await bootstrapStep("frontend lowers itself", () =>
+      execFileAsync(seed.binaryPath, [ts7Executable(), frontend, ownIr, profile], nativeOptions));
     expect(self.stdout).toBe("0\n0 0\n");
     expect(self.stderr).toBe("");
 
@@ -65,12 +67,13 @@ test("the native frontend and LLVM emitter rebuild a working frontend from its T
     // module alone can hide different optional-return inference or dropped
     // method-registry mutations in the native compiler.
     const cPath = join(directory, "frontend-native.ll");
-    const emitted = await execFileAsync(nativeEmitter.binaryPath, [ownIr, cPath, emitterRequest], nativeOptions);
+    const emitted = await bootstrapStep("emit frontend LLVM", () =>
+      execFileAsync(nativeEmitter.binaryPath, [ownIr, cPath, emitterRequest], nativeOptions));
     expect(emitted.stdout).toBe("");
     expect(emitted.stderr).toBe("");
     // Full compiler graphs exceed the worker's default heap. Keep both the
     // structural IR comparison and reference emission in a roomy child.
-    const verification = await execFileAsync(process.execPath, [
+    const verification = await bootstrapStep("compare frontend IR and LLVM", () => execFileAsync(process.execPath, [
       "--max-old-space-size=8192", "--import", "tsx", "--input-type=module", "--eval",
       `import assert from 'node:assert/strict';
        import { readFileSync } from 'node:fs';
@@ -84,11 +87,12 @@ test("the native frontend and LLVM emitter rebuild a working frontend from its T
        assert.ok(readFileSync(process.argv[3], 'utf8') === emitLlvmModule(module, { debugSources: new Map() }), 'native LLVM emission must match Node exactly');
        console.log(JSON.stringify(nativeFeatures(module)));`,
       ownIr, seed.irPath!, cPath,
-    ], options);
+    ], options));
     expect(verification.stderr).toBe("");
     const features = JSON.parse(verification.stdout) as ReturnType<typeof nativeFeatures>;
     const rebuilt = executable("frontend-rebuilt");
-    await compileC({ cPath, outPath: rebuilt, optimization: "dev", sanitize, linkInputs: [object], ...features });
+    await bootstrapStep("build second frontend generation", () =>
+      compileC({ cPath, outPath: rebuilt, optimization: "release", strip: true, sanitize, linkInputs: [object], ...features }));
 
     // The rebuilt compiler consumes new source, and its emitted program
     // executes. These inputs exercise the two bugs found by self-compiling:

@@ -79,6 +79,14 @@ test("coverage preserves function-local class capture environments", () => {
   expect(coverage.unreached?.diagnostics ?? []).toEqual([]);
 });
 
+test("module stream aliases remain static in separately declared functions", () => {
+  const { coverage } = analyze(join(repoRoot, "tests/corpus/stdio-write-errors.mjs"));
+  expect(coverage.preflightFailed).toBe(false);
+  expect(coverage.diagnostics).toEqual([]);
+  expect(coverage.runtimeFences ?? []).toEqual([]);
+  expect(coverage.stats.statementsFailed).toBe(0);
+});
+
 test("runtime-optional refined unions report blockers without crashing", () => {
   for (const dynamic of [false, true]) {
     const { coverage } = analyze(join(repoRoot, "tests/diagnostics/runtime-optional-refined-union.ts"), { dynamic });

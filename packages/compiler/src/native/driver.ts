@@ -34,12 +34,14 @@ export interface NativeBuildOptions {
   outputKind: "exe" | "obj" | "llvm";
   optimization: "release" | "dev";
   strip: boolean;
+  keepLlvm?: boolean;
   ffiProfilePath?: string;
   npmStatic?: readonly string[] | "auto";
 }
 
 export interface NativeBuildResult {
   outputPath: string;
+  llvmPath?: string;
   stats: LowerStats;
 }
 
@@ -118,11 +120,15 @@ export function buildNative(options: NativeBuildOptions, toolchain: NativeToolch
           }
         }
       }
+      if (options.keepLlvm && !sourceOutput) renameSync(join(inputDirectory, "program.ll"), output + ".ll");
       renameSync(stagedOutput, output);
       if (options.outputKind === "exe" && toolchain.target.platform === "darwin" && (options.optimization !== "dev" || options.strip)) {
         rmSync(output + ".dSYM", { recursive: true, force: true });
       }
     } finally { rmSync(stage, { recursive: true, force: true }); }
-    return { outputPath: output, stats: lowered.stats };
+    return {
+      outputPath: output, stats: lowered.stats,
+      ...(options.keepLlvm && !sourceOutput ? { llvmPath: output + ".ll" } : {}),
+    };
   } finally { frontend.dispose(); }
 }

@@ -4,12 +4,12 @@ import { parseNativeArguments } from "./arguments.js";
 test("native build arguments preserve paths and select explicit output modes", () => {
   expect(parseNativeArguments([
     "build", "source with spaces.ts", "-o", "result with spaces", "--backend=llvm", "--emit=obj",
-    "--toolchain", "/installed/compiler.json", "--dev", "--strip", "--ffi=bindings.json", "--npm-static=one,@scope/two",
+    "--toolchain", "/installed/compiler.json", "--dev", "--strip", "--keep-llvm", "--ffi=bindings.json", "--npm-static=one,@scope/two",
   ], "default.json")).toEqual({
     help: false, toolchainPath: "/installed/compiler.json",
     build: {
       entryPath: "source with spaces.ts", outputPath: "result with spaces", backend: "llvm", outputKind: "obj",
-      optimization: "dev", strip: true, ffiProfilePath: "bindings.json", npmStatic: ["one", "@scope/two"],
+      optimization: "dev", strip: true, keepLlvm: true, ffiProfilePath: "bindings.json", npmStatic: ["one", "@scope/two"],
     },
   });
   expect(parseNativeArguments(["--out=result", "--npm-static", "auto", "--", "-entry.ts"], "default.json")).toMatchObject({

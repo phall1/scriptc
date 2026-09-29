@@ -14,6 +14,7 @@ export function parseNativeArguments(args: readonly string[], defaultToolchain: 
   let outputKind: "exe" | "obj" | "llvm" = "exe";
   let optimization: "release" | "dev" = "release";
   let strip = false;
+  let keepLlvm = false;
   let help = false;
   let ffiProfilePath: string | undefined;
   let npmStatic: string[] | "auto" | undefined;
@@ -24,6 +25,7 @@ export function parseNativeArguments(args: readonly string[], defaultToolchain: 
     if (!positional && arg === "--") { positional = true; continue; }
     if (!positional && arg === "--dev") { optimization = "dev"; continue; }
     if (!positional && arg === "--strip") { strip = true; continue; }
+    if (!positional && arg === "--keep-llvm") { keepLlvm = true; continue; }
     if (!positional && arg.startsWith("-")) {
       const equals = arg.indexOf("=");
       const name = equals < 0 ? arg : arg.slice(0, equals);
@@ -55,6 +57,7 @@ export function parseNativeArguments(args: readonly string[], defaultToolchain: 
     help, toolchainPath,
     build: {
       entryPath, outputPath, backend, outputKind, optimization, strip,
+      ...(keepLlvm ? { keepLlvm: true } : {}),
       ...(ffiProfilePath === undefined ? {} : { ffiProfilePath }),
       ...(npmStatic === undefined ? {} : { npmStatic }),
     },
@@ -67,6 +70,7 @@ export const NATIVE_HELP = `Usage: scriptc-native build <entry.ts> -o <output> [
   --emit <exe|obj|llvm>  Output artifact (default: exe)
   --dev                   Disable optimization and include debug information
   --strip                 Strip executable symbols
+  --keep-llvm             Keep the generated LLVM at <output>.ll
   --ffi <profile.json>    Native FFI bindings and link inputs
   --npm-static <packages> Compile comma-separated packages, or auto
   --toolchain <file>      Native toolchain manifest (default: beside executable)
