@@ -1,9 +1,43 @@
-/* Class instances are per-class C structs emitted by the compiler; the
- * runtime only provides the RC-audit hooks their emitted new/release
- * helpers call — plus the class-OBJECT entry points (classes as values:
- * every class object is an emitted immortal static, so the adapters are
- * no-ops behind the uniform container RC machinery). */
+/* Class instance layouts are emitted by the compiler. Class objects share
+ * one runtime layout, including captured bindings for local classes. */
 #include "scr_runtime.h"
+
+void scr_classobj_trace_v(void *object, ScrTraceVisit visit, void *ctx) {
+  ScrClassObj *c = object;
+  for (size_t i = 0; i < c->ncaps; i++) visit(c->caps[i], ctx);
+}
+
+static void scr_classobj_gcfree(void *object) {
+  scr_obj_free_note();
+  scr_cyc_free(object);
+}
+
+ScrClassObj *scr_classobj_new(const ScrClassObj *template, size_t ncaps) {
+  if (ncaps > (SIZE_MAX - sizeof(ScrClassObj)) / sizeof(ScrBox *))
+    scr_trap("scriptc: class capture allocation overflow\n");
+  ScrClassObj *c = scr_cyc_alloc(sizeof(ScrClassObj) + ncaps * sizeof(ScrBox *),
+      &scr_classobj_trace_v, &scr_classobj_gcfree);
+  c->rc = 1;
+  c->pre = template->pre;
+  c->post = template->post;
+  c->ctor = template->ctor;
+  c->name = template->name;
+  c->ncaps = ncaps;
+  c->length = template->length;
+  scr_obj_alloc_note();
+  return c;
+}
+
+void scr_classobj_release(ScrClassObj *c) {
+  if (!c || c->rc == SIZE_MAX) return;
+  if (--c->rc == 0) {
+    scr_cyc_on_dead(c);
+    for (size_t i = 0; i < c->ncaps; i++) scr_box_release(c->caps[i]);
+    scr_classobj_gcfree(c);
+  } else {
+    scr_cyc_on_release(c);
+  }
+}
 
 void *scr_classobj_retain_v(void *c) {
   return scr_classobj_retain((ScrClassObj *)c);

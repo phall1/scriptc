@@ -470,6 +470,54 @@ function defaultParameterShape(lowerer: Lowerer, param: ts.ParameterDeclaration,
      * coercion an ordinary argument gets (coerceInto against its shape,
      * DYN conversion in a dyn rest, element coercion in a typed rest). */
     leading?: readonly IrExpr[],): IrExpr[] {
+    if (canCompleteRuntimeSpread(lowerer, shapes) &&
+        argNodes.some((arg) => ts.isSpreadElement(arg) && !fixedTupleSpreadInfo(lowerer, arg.expression))) {
+      // Runtime-length spreads determine the complete argument list before
+      // any parameter default runs. Build it once in source order, then
+      // extract the fixed native ABI slots; missing elements are undefined.
+      const pack = lowerer.declareHiddenLocal("%spreadArgs", DYN);
+      const ref = (): IrExpr => ({ kind: "varRef", localId: pack.id, type: DYN, loc });
+      const stmts: IrStmt[] = [{ kind: "varDecl", localId: pack.id, init: { kind: "dynArrLit", elems: [], type: DYN, loc }, loc }];
+      const push = (value: IrExpr, fn: "dyn.packPush" | "dyn.packPushSpreadIter") => {
+        stmts.push({ kind: "exprStmt", expr: { kind: "libCall", fn, args: [ref(), value], type: VOID, loc: value.loc }, loc: value.loc });
+      };
+      for (const value of leading ?? []) push(lowerer.coerceInto(blame, value, DYN), "dyn.packPush");
+      const spreads = argNodes.filter(ts.isSpreadElement).length;
+      argNodes.forEach((arg, index) => {
+        if (!ts.isSpreadElement(arg)) {
+          push(lowerer.lowerExprExpecting(arg, DYN), "dyn.packPush");
+          return;
+        }
+        let value = lowerer.lowerExpr(arg.expression);
+        if (value.type.kind === "set") {
+          value = { kind: "setIntrinsic", method: "toArray", receiver: value, args: [], type: arrayOf(value.type.elem), loc: value.loc };
+        } else if (value.type.kind === "object") {
+          value = lowerer.classIteratorDrainCall(value, locOf(arg)) ?? value;
+        }
+        if (value.type.kind === "array") {
+          // Argument iteration materializes holes as present undefined
+          // before conversion to the dense checked-dynamic argument pack.
+          value = { kind: "arrayLit", elems: [value], spreads: [0], type: value.type, loc: value.loc };
+        }
+        value = lowerer.coerceInto(arg.expression, value, DYN);
+        if (spreads === 1 && index === argNodes.length - 1) {
+          stmts.push({ kind: "exprStmt", expr: {
+            kind: "libCall", fn: "dyn.packPushSpread", args: [ref(), value, { kind: "strLit", value: arg.expression.getText(), type: STRING, loc }], type: VOID, loc,
+          }, loc });
+        } else push(value, "dyn.packPushSpreadIter");
+      });
+      const args = shapes.map((shape, index): IrExpr => {
+        if (shape.mode === "arguments") return ref();
+        const value: IrExpr = shape.mode === "rest" || shape.mode === "dynRest"
+          ? { kind: "dynInvoke", recv: ref(), method: "slice", calleeName: "arguments.slice", args: [{ kind: "dynFrom", value: { kind: "numLit", value: index, type: F64, loc }, type: DYN, loc }], type: DYN, loc }
+          : { kind: "dynKeyGet", value: ref(), key: { kind: "strLit", value: String(index), type: STRING, loc }, type: DYN, loc };
+        return lowerer.coerceInto(blame, value, shape.type);
+      });
+      // Every supported form has at least one native slot to carry the
+      // evaluation prefix, including calls whose only slot is their rest.
+      args[0] = { kind: "seqExpr", stmts, result: args[0]!, type: args[0]!.type, loc };
+      return args;
+    }
     type ArgSource = ts.Expression | { ir: IrExpr };
     const isIr = (s: ArgSource | undefined): s is { ir: IrExpr } =>
       s !== undefined && !("kind" in s);
@@ -539,9 +587,18 @@ function defaultParameterShape(lowerer: Lowerer, param: ts.ParameterDeclaration,
           lowerer.unsupported("SC1090", source, "spread arguments into fixed parameter positions (a spread can only fill a rest parameter)");
         }
         const slotType = i < restAt ? positional[i]!.type : DYN;
-        const value = isIr(source)
-          ? lowerer.coerceInto(blame, source.ir, slotType)
-          : lowerer.lowerExprExpecting(source, slotType);
+        let value: IrExpr;
+        if (isIr(source)) {
+          let ir = source.ir;
+          // Tuple-spread storage also feeds later arguments. Declare it in
+          // this shared sequence, not inside one argument's initializer,
+          // whose statement frame ends before the next field is read.
+          if (ir.kind === "seqExpr") {
+            stmts.push(...ir.stmts);
+            ir = ir.result;
+          }
+          value = lowerer.coerceInto(blame, ir, slotType);
+        } else value = lowerer.lowerExprExpecting(source, slotType);
         const saved = lowerer.declareHiddenLocal("%callArg", slotType);
         stmts.push({ kind: "varDecl", localId: saved.id, init: value, loc: value.loc });
         return { kind: "varRef", localId: saved.id, type: slotType, loc: value.loc };
@@ -1657,6 +1714,7 @@ export function genericFnOf(lowerer: Lowerer, ident: ts.Identifier): GenericFnIn
       fnCtx.generator = generatorMeta(lowerer, inst.returnType);
     }
     lowerer.fnStack.push(fnCtx);
+    lowerer.localClassInstantiations.push({ owner: decl, name: inst.name });
     try {
       // STATIC generic methods: `this`/`super` name the RECEIVER class (a
       // dynamic value) — the lowerStaticMethod fence, applied here because
@@ -1736,6 +1794,7 @@ export function genericFnOf(lowerer: Lowerer, ident: ts.Identifier): GenericFnIn
       lowerer.typeParamTsBindings = prevTsBindings;
       lowerer.implicitParamTypes = prevImplicit;
       lowerer.instantiationContext = prevContext;
+      lowerer.localClassInstantiations.pop();
       lowerer.suppressStats = prevSuppress;
     }
   }
@@ -5689,6 +5748,7 @@ function lowerOptionalStringNumber(
     shapes: readonly ParamShape[],
     argNodes: readonly ts.Expression[],
   ): boolean {
+    if (canCompleteRuntimeSpread(lowerer, shapes)) return false;
     const restAt = shapes.findIndex((s) => s.mode === "rest" || s.mode === "dynRest" || s.mode === "islandRest");
     let position = 0;
     for (const arg of argNodes) {
@@ -5703,6 +5763,11 @@ function lowerOptionalStringNumber(
       position++;
     }
     return false;
+  }
+
+  function canCompleteRuntimeSpread(lowerer: Lowerer, shapes: readonly ParamShape[]): boolean {
+    return shapes.length > 0 && shapes.every((shape) => shape.mode !== "islandRest" && shape.callDefault === undefined &&
+      canDynCheckTo(shape.type, (id) => lowerer.shapes.get(id), (id) => lowerer.unions.get(id)));
   }
 
 /** METHOD calls on dyn receivers (`pkg.name.replace(...)`, `rawName.split`,

@@ -794,6 +794,7 @@ export interface TypeMapperCtx {
    * inside members, self-referential member types), null outside any
    * mixin context (the type alone cannot name a call site). */
   mixinClassInstance?: (decl: ts.ClassLikeDeclaration) => IrType | null;
+  localClassInstance?: (decl: ts.ClassExpression) => IrType | null;
   /** MIXIN instance INTERSECTIONS (`Tagged.C & Derived` — values built
    * through a mixin result): resolved by chain structure to the unique
    * pinned instantiation they describe; null when ambiguous or when no
@@ -938,13 +939,9 @@ export function mapType(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
   }
 }
 
-/** True when a class expression can NEVER register a lowering: one
- * enclosed by a function-like body or a class static block mints a
- * DISTINCT class per evaluation, which lowerClassExpressionInfo always
- * fences. Its instance/static types must stay UNMAPPED — an object type
- * naming a struct that will never be emitted is the invalid-C escape
- * family (every SITE using the value already carries its own fence). */
-function classExprNeverRegisters(decl: ts.ClassLikeDeclaration): boolean {
+/** Local class types need the enclosing specialization's registered layout.
+ * Static-block classes are sent through the same hook for an explicit fence. */
+function classExprNeedsContext(decl: ts.ClassLikeDeclaration): boolean {
   if (!ts.isClassExpression(decl)) return false;
   for (let p: ts.Node | undefined = decl.parent; p !== undefined && !ts.isSourceFile(p); p = p.parent) {
     if (ts.isFunctionLike(p) || ts.isClassStaticBlockDeclaration(p)) return true;
@@ -1420,9 +1417,11 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
         return viaMixin;
       }
     }
-    // A class expression inside a function/static block never registers
-    // (a distinct class per evaluation): unmappable for the same reason.
-    if (classExprNeverRegisters(classDecl)) return null;
+    if (classExprNeedsContext(classDecl)) {
+      const local = ts.isClassExpression(classDecl) ? ctx.localClassInstance?.(classDecl) : null;
+      if (local) contextResolutions++;
+      return local ?? null;
+    }
     // A GENERIC class's instance type (`Box<number>`) maps to the concrete
     // INSTANTIATION's class (`Box%0`), registered on demand — the Lowerer
     // hook owns the instance table (monomorphization by flow).
@@ -1457,7 +1456,14 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
         return { kind: "classval", className: viaMixin.className };
       }
     }
-    if (classExprNeverRegisters(classDecl)) return null;
+    if (classExprNeedsContext(classDecl)) {
+      const local = ts.isClassExpression(classDecl) ? ctx.localClassInstance?.(classDecl) : null;
+      if (local?.kind === "object") {
+        contextResolutions++;
+        return { kind: "classval", className: local.className };
+      }
+      return null;
+    }
     // A GENERIC class's static side: only an INSTANTIATED one maps — an
     // instantiation expression's type (`Box<number>` as a value) carries a
     // construct signature returning the concrete instance, which maps to

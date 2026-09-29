@@ -14,7 +14,7 @@ function scalarTemporaries(value: IrExpr): boolean {
 }
 
 function producer(fn: IrFunction, shapes: ReadonlyMap<string, IrRecordShape>): Producer | null {
-  if (fn.async || fn.generator || fn.captures?.length || fn.returnType.kind !== "record") return null;
+  if (fn.async || fn.generator || fn.captures?.length || fn.classCaptures?.length || fn.returnType.kind !== "record") return null;
   const shape = shapes.get(fn.returnType.shapeId);
   if (!shape || shape.tuple || shape.indexValue || shape.fields.length === 0 || shape.fields.length > MAX_FIELDS ||
       shape.fields.some((f) => f.type.kind !== "f64")) return null;
@@ -58,8 +58,8 @@ function fieldOnlyUses(fn: IrFunction, localId: string, shape: IrRecordShape): b
       case "varRef": case "incDec": case "assignExpr":
         if (node.localId === localId) return false;
         break;
-      case "closure":
-        if (node.captures.includes(localId)) return false;
+      case "closure": case "classRef":
+        if (node.captures?.includes(localId)) return false;
         break;
     }
     return everyExprChild(node, expr, stmt);

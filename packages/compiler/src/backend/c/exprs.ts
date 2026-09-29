@@ -2659,6 +2659,13 @@ function emitCallExpr(
         // address. The +1 retain is a no-op on immortals but keeps the
         // owned-temps discipline uniform (the regexLit pattern).
         const sym = emitter.classObjSym(e.className);
+        if (e.captures !== undefined) {
+          const value = emitter.newTemp(e.type, `scr_classobj_new(&${sym}, ${e.captures.length})`);
+          e.captures.forEach((id, slot) => {
+            emitter.line(`${value.name}->caps[${slot}] = scr_box_retain(${mangleLocal(id)});`);
+          });
+          return value;
+        }
         return emitter.newTemp(e.type, `scr_classobj_retain(&${sym})`);
       }
       case "newValue": {
@@ -2678,8 +2685,8 @@ function emitCallExpr(
         const args = e.args.map((a) => emitter.emitExpr(a));
         for (const a of args) emitter.moveTemp(a); // the constructor owns its params
         const paramTypes = ctor.params.slice(1).map((p) => cType(p.type).trim());
-        const cast = `(void *(*)(${paramTypes.join(", ") || "void"}))`;
-        const call = `(${cast}${callee.name}->ctor)(${args.map((a) => a.name).join(", ")})`;
+        const cast = `(void *(*)(ScrClassObj *${paramTypes.length ? ", " + paramTypes.join(", ") : ""}))`;
+        const call = `(${cast}${callee.name}->ctor)(${[callee.name, ...args.map((a) => a.name)].join(", ")})`;
         const t = emitter.newTemp(e.type, `(${cType(e.type).trim()})${call}`);
         if (newValueMayThrow(cls, emitter.classMeta.get(cls), emitter.mayThrow)) emitter.emitPendingCheck();
         return t;
@@ -2690,6 +2697,9 @@ function emitCallExpr(
         // sides are hierarchy members, so the operand has a vt word.
         const v = emitter.emitExpr(e.value);
         const target = emitter.emitExpr(e.classValue);
+        if (e.value.type.kind === "object" && emitter.classMeta.get(e.value.type.className)?.def.localCaptures !== undefined) {
+          return emitter.newTemp(e.type, `${v.name}->sc_class == ${target.name}`);
+        }
         return emitter.newTemp(
           e.type,
           `${v.name}->vt->pre >= ${target.name}->pre && ${v.name}->vt->pre <= ${target.name}->post`,

@@ -26,7 +26,7 @@ import { fenceEnumObjectValue, lowerEnumAccess } from "./lower-enums.js";
 import { ambientNsRootOf, ambientUndefReadType, ambientUndefVarRootOf, ambientUndefinedFnSymbolOf, contextualUndefReadType, fenceEarlyAliasUse, fenceEarlyNsMemberRef, lowerNsIdentifierValue, nsMemberIdentOf, nsUndefRead, nsWritableTarget } from "./lower-namespaces.js";
 import { expandoMemberRead, expandoWritableTarget } from "./lower-expando.js";
 import { lowerSocketInstanceOf, lowerTlsRootCertificates } from "./lower-server.js";
-import { findGenericMethodOn, lowerStaticFieldRead, staticFieldWriteTarget } from "./lower-classes.js";
+import { findGenericMethodOn, lowerStaticFieldRead, staticFieldWriteTarget, storedClassValueType } from "./lower-classes.js";
 import { bindingNeverReassigned, funcTypeFromParamShapes, implicitMonoFile, lowerTaggedTemplate, nullishGenericBindingUnitOf, objLitGenericFnInfoOf, objLitGenericFnNodeOf, requireObjLitGenericReceiver } from "./lower-calls.js";
 import { mixinFnOfCallee } from "./lower-mixins.js";
 import { isConstAssertionTypeNode, isGenericCallableMemberType, isParseArgsDynTypeName, underConstAssertion, unitOnlyUnion } from "../type-mapper.js";
@@ -7989,7 +7989,7 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
       // STANDALONE target class has exactly one possible runtime value
       // (itself — no descendants can flow into the slot), so the answer
       // folds statically exactly like the named-target folds below.
-      const rhsClassval = lowerer.mapTypeOf(lowerer.typeOf(expr.right));
+      const rhsClassval = storedClassValueType(lowerer, expr.right);
       if (rhsClassval?.kind === "classval" && !lowerer.caughtLocalOf(expr.left)) {
         const targetInfo = lowerer.classes.get(rhsClassval.className);
         if (!targetInfo) {
@@ -8013,7 +8013,8 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
         }
         const lhsInfo = lowerer.classes.get(left.type.className);
         if (!lhsInfo) throw new InternalCompilerError(`lowerer bug: unknown class ${left.type.className}`);
-        if (lowerer.inHierarchy(targetInfo) && lowerer.inHierarchy(lhsInfo)) {
+        if ((lowerer.inHierarchy(targetInfo) && lowerer.inHierarchy(lhsInfo)) ||
+            (targetInfo.localClass !== undefined && lhsInfo.localClass !== undefined)) {
           const classValue = lowerer.lowerExpr(expr.right);
           if (classValue.type.kind !== "classval") lowerer.badType(expr.right, lowerer.typeOf(expr.right));
           return { kind: "instanceOfValue", value: left, classValue, type: BOOL, loc };

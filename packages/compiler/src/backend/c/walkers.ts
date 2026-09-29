@@ -807,6 +807,9 @@ export function jsonWriteHelper(emitter: CEmitter, t: IrType): string {
       case "func":
         d.push(`  return d->kind == SCR_DYN_FUNC;`);
         break;
+      case "classval":
+        d.push(`  return scr_dyn_class_is(d, ${cStringLiteral(Buffer.from(key, "utf8"))});`);
+        break;
       case "object":
         if (t.className === "%Error") {
           d.push(`  return d->kind == SCR_DYN_OBJ && scr_dyn_obj_get(d, "%error", 6) != NULL;`);
@@ -1224,6 +1227,9 @@ export function jsonWriteHelper(emitter: CEmitter, t: IrType): string {
         d.push(`  if (d->kind != SCR_DYN_NUM) { scr_dyn_check_fail(path, ${want}, d); return 0; }`);
         d.push(`  return d->v.num;`);
         break;
+      case "classval":
+        d.push(`  return scr_dyn_class_check(d, ${cStringLiteral(Buffer.from(key, "utf8"))}, path);`);
+        break;
       case "bool":
         d.push(`  if (d->kind != SCR_DYN_BOOL) { scr_dyn_check_fail(path, ${want}, d); return false; }`);
         d.push(`  return d->v.b;`);
@@ -1548,6 +1554,9 @@ export function jsonWriteHelper(emitter: CEmitter, t: IrType): string {
         // immutable-through-copies.
         d.push(`  return scr_dyn_retain(v);`);
         break;
+      case "classval":
+        d.push(`  return scr_dyn_new_class(v, ${cStringLiteral(Buffer.from(key, "utf8"))});`);
+        break;
       case "func":
         // Function-valued record/array fields (EventListenerObject's
         // handleEvent method) box through the same identity-preserving
@@ -1654,6 +1663,7 @@ export function jsonWriteHelper(emitter: CEmitter, t: IrType): string {
         if (cyclicArr) d.push(`  scr_dyn_from_enter(v);`);
         d.push(`  ScrDyn *d = scr_dyn_new_arr();`);
         d.push(`  for (size_t i = 0; i < v->len; i++) {`);
+        d.push(`    if (scr_arr_state(v, (double)i) == SCR_ARR_UNDEFINED) { scr_dyn_arr_push(d, scr_dyn_retain(scr_dyn_undefined())); continue; }`);
         if (elem.kind === "f64") {
           d.push(`    scr_dyn_arr_push(d, scr_dyn_new_num(scr_arr_get_f64(v, (double)i)));`);
         } else if (elem.kind === "bool") {

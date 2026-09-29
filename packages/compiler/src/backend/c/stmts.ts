@@ -33,7 +33,7 @@ export function emitFunction(emitter: CEmitter, fn: IrFunction): void {
     emitter.currentGenerator = fn.generator ?? null;
     emitter.labelCounter = 0;
     emitter.currentLocals = new Map(fn.locals.map((l) => [l.id, l]));
-    emitter.captureIds = new Set((fn.captures ?? []).map((c) => c.localId));
+    emitter.captureIds = new Set([...(fn.captures ?? []), ...(fn.classCaptures ?? [])].map((c) => c.localId));
     emitter.integerLoopBindings.clear();
     emitter.integerRanges = analyzeIntegerRanges(fn);
 
@@ -54,6 +54,12 @@ export function emitFunction(emitter: CEmitter, fn: IrFunction): void {
     // whole call (the closure owns them): bound here, never released here.
     (fn.captures ?? []).forEach((c, i) => {
       emitter.line(`ScrBox *${mangleLocal(c.localId)} = sc_env->caps[${i}]; /* captured ${c.name} */`);
+    });
+    (fn.classCaptures ?? []).forEach((c) => {
+      const self = fn.params[0]!;
+      const local = emitter.currentLocals.get(self.localId)!;
+      const receiver = local.boxed ? mangleRawParam(self.localId) : mangleLocal(self.localId);
+      emitter.line(`ScrBox *${mangleLocal(c.localId)} = ${receiver}->sc_class->caps[${c.slot}]; /* captured ${c.name} */`);
     });
 
     const paramIds = new Set(fn.params.map((p) => p.localId));

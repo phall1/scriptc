@@ -11103,6 +11103,48 @@
     "<repo>/tests/diagnostics/intl-segmenter.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/local-class-call-spreads.js": {
+   "order": [
+    "<repo>/tests/corpus/local-class-call-spreads.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/local-class-evaluation.ts": {
+   "order": [
+    "<repo>/tests/corpus/local-class-evaluation.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/local-class-lifetimes.ts": {
+   "order": [
+    "<repo>/tests/corpus/local-class-lifetimes.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/local-class-specialization.js": {
+   "order": [
+    "<repo>/tests/corpus/local-class-specialization.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/local-class-unknown.ts": {
+   "order": [
+    "<repo>/tests/corpus/local-class-unknown.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/local-class-values.ts": {
+   "order": [
+    "<repo>/tests/corpus/local-class-values.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/diagnostics/local-class-boundaries.ts": {
+   "order": [
+    "<repo>/tests/diagnostics/local-class-boundaries.ts"
+   ],
+   "diags": []
   }
  }
 }

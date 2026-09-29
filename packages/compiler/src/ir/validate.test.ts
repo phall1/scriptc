@@ -5,6 +5,40 @@ import { validateModule } from "./validate.js";
 
 const loc = { file: "numeric-read.ts", start: 0, end: 0 };
 
+function localClassModule(): IrModule {
+  const self: IrType = { kind: "object", className: "Local" };
+  const mod = expressionModule({ kind: "classRef", className: "Local", captures: ["outer"], type: { kind: "classval", className: "Local" }, loc }, []);
+  mod.classes = [{ name: "Local", jsName: "Local", fields: [], localCaptures: [{ localId: "shared", name: "value", type: F64 }], loc }];
+  mod.functions[0]!.locals = [{ id: "outer", name: "value", type: F64, mutable: true, boxed: true }];
+  mod.functions.push({
+    name: "%Local.constructor", params: [{ localId: "self", name: "this", type: self }],
+    locals: [{ id: "self", name: "this", type: self, mutable: false }, { id: "capture", name: "value", type: F64, mutable: true, boxed: true }],
+    classCaptures: [{ localId: "capture", name: "value", type: F64, slot: 0 }],
+    returnType: VOID, body: [], loc,
+  });
+  return mod;
+}
+
+test("local classes retain serialized capture slots and fresh identity", () => {
+  const mod = localClassModule();
+  expect(validateModule(mod)).toEqual([]);
+  expect(deserializeModule(serializeModule(mod))).toEqual(mod);
+});
+
+test.each(["missing", "unboxed", "type", "slot", "receiver", "closure", "layout", "direct-new"])("local classes reject an invalid %s environment", (variant) => {
+  const mod = localClassModule();
+  const ctor = mod.functions[1]!;
+  if (variant === "missing") mod.functions[0]!.locals = [];
+  if (variant === "unboxed") delete mod.functions[0]!.locals[0]!.boxed;
+  if (variant === "type") ctor.locals[1]!.type = STRING;
+  if (variant === "slot") ctor.classCaptures![0]!.slot = 1;
+  if (variant === "receiver") ctor.params[0]!.type = F64;
+  if (variant === "closure") ctor.captures = [];
+  if (variant === "layout") mod.classes![0]!.runtime = true;
+  if (variant === "direct-new") mod.functions[0]!.body = [{ kind: "exprStmt", expr: { kind: "new", className: "Local", args: [], type: { kind: "object", className: "Local" }, loc }, loc }];
+  expect(validateModule(mod).length).toBeGreaterThan(0);
+});
+
 test.each([mapOf(STRING, F64), setOf(STRING), { kind: "promise", inner: F64 } as IrType])("nullable %j payloads preserve an explicit absence tag", (type) => {
   const mod = expressionModule({ kind: "numLit", value: 0, type: F64, loc }, [
     { id: "nullable", arms: [type, NULL_T, UNDEFINED_T] },

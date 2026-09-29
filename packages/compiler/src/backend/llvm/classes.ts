@@ -174,6 +174,7 @@ function emitterRooted(meta: LlClassMeta): boolean {
  * display name) on emitter-rooted classes, then the stream-state slot on
  * stream-rooted ones. */
 function fieldBase(meta: LlClassMeta): number {
+  if (meta.def.localCaptures !== undefined) return 2;
   if (!meta.hierarchy) return 1;
   if (streamRooted(meta)) return 5;
   return emitterRooted(meta) ? 4 : 2;
@@ -259,7 +260,7 @@ export function emitClassShapes(
       : emitterRooted(meta) ? ["ptr", "ptr", "ptr"]
       : ["ptr"]
       : [];
-    const members = [...prefix, ...fieldTys];
+    const members = [...prefix, ...(cls.localCaptures !== undefined ? ["ptr"] : []), ...fieldTys];
     typeDefs.push(
       `%${mangleClassStruct(cls.name)} = type { ${host.sizeType}${members.length ? ", " + members.join(", ") : ""} } ` +
         `; class ${cls.name}${meta.hierarchy ? " (vt at 1)" : ""}${streamRooted(meta) ? " (ScrStream prefix at 2)" : emitterRooted(meta) ? " (ScrEmitter prefix at 2)" : ""} { ${cls.fields.map((f) => llvmCommentText(f.name)).join("; ")} }`,
@@ -310,8 +311,13 @@ export function emitClassShapes(
     const isEmitterRooted = emitterRooted(meta);
     const isStreamRooted = streamRooted(meta);
     const fieldIndex = (i: number): number => fieldBase(meta) + i;
-    const refFields = cls.fields
-      .map((f, i) => ({ name: f.name, type: f.type, index: fieldIndex(i) }))
+    const indexedFields = [
+      ...cls.fields.map((f, i) => ({ name: f.name, type: f.type, index: fieldIndex(i) })),
+      ...(cls.localCaptures !== undefined
+        ? [{ name: "class environment", type: { kind: "classval" as const, className: cls.name }, index: 1 }]
+        : []),
+    ];
+    const refFields = indexedFields
       .filter((f) => isRefCounted(f.type));
     const sizeOf = `ptrtoint (ptr getelementptr (%${struct}, ptr null, i32 1) to ${host.sizeType})`;
     // An embedded prefix slot (the emitter registry at 2, the stream
@@ -472,7 +478,7 @@ export function emitClassShapes(
       // trace: visit exactly the cycle-capable fields; gcFree: release
       // exactly the complement, then free (the trace/teardown complement
       // contract in scr_runtime.h).
-      const indexed = cls.fields.map((f, i) => ({ name: f.name, type: f.type, index: fieldIndex(i) }));
+      const indexed = indexedFields;
       const tracedFields = indexed.filter((f) => traceAdapter(host, f.type) !== null);
       const untracedRefFields = indexed.filter(
         (f) => isRefCounted(f.type) && traceAdapter(host, f.type) === null,
@@ -543,16 +549,22 @@ export function emitClassObjDefs(
     const params = ctor.params.slice(1);
     const paramDecls = params.map((p, i) => `${llType(p.type)} %a${i}`).join(", ");
     const ctorArgs = params.map((p, i) => `${llType(p.type)} %a${i}`);
+    if (meta.def.localCaptures !== undefined) host.declare(`declare ptr @scr_classobj_retain_v(ptr)`);
     out.push(
-      `define internal ptr @${mangleCtorThunk(className)}(${paramDecls}) ${FN_ATTRS} { ; construct thunk ${className}`,
+      `define internal ptr @${mangleCtorThunk(className)}(ptr %class${paramDecls ? ", " + paramDecls : ""}) ${FN_ATTRS} { ; construct thunk ${className}`,
       `entry:`,
       `  %o = call ptr @${mangleClassNew(className)}()`,
+      ...(meta.def.localCaptures !== undefined ? [
+        `  %class.owned = call ptr @scr_classobj_retain_v(ptr %class)`,
+        `  %class.slot = getelementptr inbounds %${mangleClassStruct(className)}, ptr %o, i64 0, i32 1`,
+        `  store ptr %class.owned, ptr %class.slot`,
+      ] : []),
       `  %r = call ptr @${mangleClassRetain(className)}(ptr %o)`,
       `  call void @${mangleFunction(`%${className}.constructor`)}(${[`ptr %r`, ...ctorArgs].join(", ")})`,
       `  ret ptr %o`,
       `}`,
       `@${mangleClassObj(className)} = internal global %ScrClassObj ` +
-        `{ ${host.sizeType} -1, ${host.sizeType} ${intervalMeta.pre}, ${host.sizeType} ${intervalMeta.post}, ptr @${mangleCtorThunk(className)}, ptr ${nameSym} } ; class ${className}`,
+        `{ ${host.sizeType} -1, ${host.sizeType} ${intervalMeta.pre}, ${host.sizeType} ${intervalMeta.post}, ptr @${mangleCtorThunk(className)}, ptr ${nameSym}, ${host.sizeType} 0, ${host.sizeType} ${meta.def.jsLength ?? 0} } ; class ${className}`,
       ``,
     );
   }

@@ -106,6 +106,7 @@ import { FileParts, splitFiles, collectProgram, collectNpmImports, collectJsonIm
 import { prepareCjsModuleGraph } from "./lower-node-module.js";
 import { ClassInfo, ClassIteratorInfo, GenericClassInfo, registerBuiltinErrorClasses, registerBuiltinEmitterClass, registerBuiltinStreamClasses, builtinErrorInfoOf, builtinEmitterInfoOf, builtinStreamInfoOf, analyzeClassDecoration, classIteratorDrainCall, classIteratorNextCall, classIteratorOf, classIteratorOpenCall, classIteratorRestDrainCall, classMemberNameOf, classValueRef, collectClassShape, exactClassOfReceiver, collectClassShapeInner, ctorAbiEquals, findMethodOn, findStaticOn, findGenericMethodOn, findGenericStaticOn, genericClassInstanceType, isSubclassOf, inHierarchy, overrideBelow, staticShadowBelow, upcastTo, lowerClassMembers, lowerClassCtor, lowerClassExpression, lowerClassExpressionInfo, lowerClassMethodMember, lowerClassValueProperty, lowerStaticMethod, throwingSetterFn, fieldInitStmts, lowerStaticFieldInits, lowerStaticFieldRead, lowerDerivedCtorBody, superCallStmt, lowerSuperMethodCall, superThisRef, lowerSuperAccessorRead, lowerSuperAccessorWrite, inheritsBuiltinErrorCtor, inheritsBuiltinEmitterCtor, errorConstructorArgs, lowerNew, accessorCall } from "./lower-classes.js";
 import { MixinFnShape, mixinCallClassInfoOf, mixinIntersectionInstanceType } from "./lower-mixins.js";
+import { implicitAnyParamSymbolsOf } from "./lower-calls.js";
 import { ParamShape, FnSig, GenericFnInfo, GenericInstance, bindingNeverReassigned, bodyReadsArguments, funcTypeFromParamShapes, implicitMonoFile, isThisParameter, paramShape, paramShapes, checkDefaultParamBodyType, completeArgs, wrappedUndefined, undefinedArgFor, requireExactArityValue, bodyReturnType, declaredReturnType, collectSignature, collectSignatureInner, collectGenericSignature, genericFnOf, lowerGenericCall, lowerGenericFnValue, inferTypeParamBindings, lowerGenericInstance, lowerCall, lowerFfiCall, lowerTimersMemberCall, lowerPromiseMethodCall, lowerFilterNarrowCall, isTopLevelFnSymbol, lowerNestedFunctionDecl, lambdaSignature, lowerLambda, lowerFunction, validateFfiImports } from "./lower-calls.js";
 import { lowerArrayMethodCall, lowerMapMethodCall, lowerMapForEachCall, buildMapForEachFn, lowerRecordOvfCaptureHelper, lowerEnvToPairsHelper, lowerSetMethodCall, lowerSetForEachCall, buildSetForEachFn } from "./lower-containers.js";
 import { lowerBufferStaticCall, lowerBytesMethodCall, lowerBytesNew } from "./containers/bytes.js";
@@ -1201,6 +1202,7 @@ export class Lowerer {
   /** Non-null while an instance body lowers: type-parameter symbol →
    * concrete IR type, consulted inside mapType's recursion. */
   typeParamBindings: Map<ts.Symbol, IrType> | null = null;
+  localClassInstantiations: { owner: ts.FunctionLikeDeclaration; name: string }[] = [];
   /** The ts-level twin of typeParamBindings, non-null while a CALL-keyed
    * instance body lowers: type-parameter symbol → the bound CHECKER type,
    * consulted where the mapped IrType has already widened away information
@@ -1936,6 +1938,17 @@ export class Lowerer {
         this.mixinTypeContext && this.mixinTypeContext.classNode === decl
           ? { kind: "object", className: this.mixinTypeContext.className }
           : null,
+      localClassInstance: (decl) => {
+        for (let parent: ts.Node | undefined = decl.parent; parent && !ts.isSourceFile(parent); parent = parent.parent) {
+          if (!ts.isFunctionDeclaration(parent) && !ts.isFunctionExpression(parent) &&
+              !ts.isArrowFunction(parent) && !ts.isMethodDeclaration(parent)) continue;
+          if (this.localClassInstantiations.some((entry) => entry.owner === parent)) break;
+          if (parent.typeParameters?.length || (implicitMonoFile(parent.getSourceFile()) && implicitAnyParamSymbolsOf(this, parent))) return null;
+        }
+        const className = this.classNamer(decl);
+        if (!this.collectingExprClasses.has(decl)) this.lowerClassExpressionInfo(decl);
+        return { kind: "object", className };
+      },
       mixinIntersectionInstance: (widened) => mixinIntersectionInstanceType(this, widened),
       isStdlibFile: this.isStdlibFile,
       isNpmFile: this.isNpmFile,
@@ -2023,10 +2036,18 @@ export class Lowerer {
    * builds (no counter can drift between invocations),
    * program-unique through the file qualifier, and collision-free with
    * user identifiers ('%'). */
-  readonly classNamer = (decl: ts.ClassLikeDeclaration): string =>
-    ts.isClassExpression(decl)
+  readonly classNamer = (decl: ts.ClassLikeDeclaration): string => {
+    const name = ts.isClassExpression(decl)
       ? this.qualify(decl.getSourceFile(), `%cx${decl.getStart()}.${decl.name?.text ?? ""}`)
       : this.qualify(decl.getSourceFile(), nsPathPrefix(decl) + (decl.name ? decl.name.text : "%anon"));
+    for (let index = this.localClassInstantiations.length - 1; index >= 0; index--) {
+      const entry = this.localClassInstantiations[index]!;
+      for (let parent: ts.Node | undefined = decl.parent; parent && !ts.isSourceFile(parent); parent = parent.parent) {
+        if (parent === entry.owner) return `${name}%${entry.name}`;
+      }
+    }
+    return name;
+  };
 
   /** Follows import aliases to the original declaration's symbol. Every
    * value reference resolves through here, so it doubles as the flush
@@ -3660,7 +3681,7 @@ export class Lowerer {
           if (typeof catchId === "string") referenced.add(catchId);
           // Closure captures name their source locals as PLAIN STRINGS
           // (captures: string[]) — a captured broken-class local is live.
-          if (rec["kind"] === "closure" && Array.isArray(rec["captures"])) {
+          if ((rec["kind"] === "closure" || rec["kind"] === "classRef") && Array.isArray(rec["captures"])) {
             for (const c of rec["captures"]) if (typeof c === "string") referenced.add(c);
           }
           for (const key of Object.keys(rec)) scan(rec[key]);
@@ -3683,7 +3704,7 @@ export class Lowerer {
       for (const fn of brokenLocalFns) {
         // Params and captures list their locals by id too — never prune
         // those out from under them.
-        const referenced = referencedIn([fn.body, fn.params, fn.captures ?? []]);
+        const referenced = referencedIn([fn.body, fn.params, fn.captures ?? [], fn.classCaptures ?? []]);
         fn.locals = fn.locals.filter(
           (l) => referenced.has(l.id) || !this.typeNamesUnregisteredClass(l.type),
         );
@@ -8588,7 +8609,7 @@ export class Lowerer {
    * members ride fp.classDecls; expressions register only when their
    * containing statement lowers). */
   readonly exprClasses: ClassInfo[] = [];
-  readonly exprClassInfoByNode = new Map<ts.ClassExpression, ClassInfo>();
+  readonly exprClassInfoByName = new Map<string, ClassInfo>();
   /** Class expressions whose collection is IN FLIGHT — the reentrancy
    * guard for heritage-demanded collection (lowerClassExpressionInfo). */
   readonly collectingExprClasses = new Set<ts.ClassExpression>();

@@ -127,6 +127,9 @@ export interface StructShape {
     // the record's trace must visit it).
     const rcMembers = (s: StructShape): { member: string; type: IrType; name: string }[] => [
       ...s.fields.map((f) => ({ member: mangleField(f.name), type: f.type, name: f.name })),
+      ...(s.meta?.def.localCaptures !== undefined
+        ? [{ member: "sc_class", type: { kind: "classval" as const, className: s.meta.def.name }, name: "class environment" }]
+        : []),
       ...(s.indexValue
         ? [{ member: OVERFLOW_MEMBER, type: mapOf(STRING, s.indexValue), name: "[key: string] overflow" }]
         : []),
@@ -163,6 +166,7 @@ export interface StructShape {
     out.push("");
     for (const s of shapes) {
       out.push(`struct ${s.struct} { /* ${cCommentText(s.comment)} */`, `  size_t rc;`);
+      if (s.meta?.def.localCaptures !== undefined) out.push(`  ScrClassObj *sc_class;`);
       if (inHierarchy(s)) {
         // The hierarchy prefix: base fields follow at identical offsets in
         // every subclass, so vt must sit between rc and the field list.
@@ -607,9 +611,9 @@ function emitRecordCloneC(
       if (!intervalMeta) throw new InternalCompilerError(`emitter bug: class object for ${className} names unknown family ${meta.def.genericOf ?? ""}`);
       const nameSym = emitter.internLiteral(meta.def.jsName ?? "");
       out.push(
-        `static void *${mangleCtorThunk(className)}(${ctorThunkParams(emitter, className).decls || "void"});`,
+        `static void *${mangleCtorThunk(className)}(ScrClassObj *sc_class${ctorThunkParams(emitter, className).decls ? ", " + ctorThunkParams(emitter, className).decls : ""});`,
         `static ScrClassObj ${sym} = { SIZE_MAX, ${intervalMeta.pre}, ${intervalMeta.post}, ` +
-          `(void *)&${mangleCtorThunk(className)}, (const ScrStr *)&${nameSym} }; /* class ${className} */`,
+          `(void *)&${mangleCtorThunk(className)}, (const ScrStr *)&${nameSym}, 0, ${meta.def.jsLength ?? 0} }; /* class ${className} */`,
       );
     }
   }
@@ -640,8 +644,11 @@ function emitRecordCloneC(
       const struct = mangleClassStruct(className);
       const lines = [
         ``,
-        `static void *${mangleCtorThunk(className)}(${decls || "void"}) {`,
+        `static void *${mangleCtorThunk(className)}(ScrClassObj *sc_class${decls ? ", " + decls : ""}) {`,
         `  ${struct} *o = ${mangleClassNew(className)}();`,
+        ...(emitter.classMeta.get(className)?.def.localCaptures !== undefined
+          ? [`  o->sc_class = scr_classobj_retain(sc_class);`]
+          : [`  (void)sc_class;`]),
         `  ${mangleFunction(`%${className}.constructor`)}(${[`${mangleClassRetain(className)}(o)`, ...names].join(", ")});`,
       ];
       if (emitter.mayThrow.has(`%${className}.constructor`)) {
@@ -710,6 +717,8 @@ function emitRecordCloneC(
    * the type cannot participate in a cycle (see the constructor fixpoint). */
   export function traceAdapterC(emitter: CEmitter, t: IrType): string | null {
     switch (t.kind) {
+      case "classval":
+        return "scr_classobj_trace_v";
       case "func":
         return "scr_closure_trace_v";
       case "union":
@@ -772,7 +781,7 @@ function emitRecordCloneC(
       elem.kind === "netServer" || // server handles: scr_net_server_* adapters, no trace
       elem.kind === "symbol" || // symbol identities: scr_sym_* adapters, no trace
       elem.kind === "bigint" || // immutable numeric values: scr_bigint_* adapters
-      elem.kind === "classval" || // class objects: no-op adapters, no trace (immortal statics)
+      elem.kind === "classval" || // local class objects own traced capture boxes
       // Closures: scr_closure_* adapters + scr_closure_trace_v (always
       // cycle-headered — captures can reach back through boxes).
       elem.kind === "func" ||

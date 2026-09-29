@@ -62,7 +62,7 @@ void scr_init(void);
 /* Program objects emitted by the bundled LLVM helper reference this symbol.
  * Its versioned spelling makes a mismatched manual runtime link fail before
  * the program can start. */
-void scr_runtime_abi_v3(void);
+void scr_runtime_abi_v4(void);
 
 /* ── the trap funnel (scr_console.c; scr_library.c under -DSCR_LIB) ──────
  * Every unrecoverable runtime trap — OOM, semantic range traps, internal-
@@ -451,34 +451,32 @@ int scr_str_cmp(ScrStr *a, ScrStr *b);
 int scr_str_cmp_u16(ScrStr *a, ScrStr *b);
 
 /* ── class objects (classes as first-class values) ────────────────────
- * The class STATIC side as a runtime value: one emitted IMMORTAL static
- * per class the program takes as a value (`const X = C`, class
- * expressions, constructor-typed slots). One struct type covers every
- * class — the fields are class-independent — so containers and casts
- * never need per-class knowledge. `pre`/`post` are the SAME preorder
- * numbering the vtables carry (compile-time constants in the emitted
- * initializer), so `x instanceof X` through a value is the usual O(1)
- * interval check with the interval loaded from the class object. `ctor`
- * is the emitted construct thunk — the class's own completed-constructor
- * ABI returning `void *` (the compiler's flow rules guarantee every value
- * in a slot shares one ABI); `name` is the JS-observable `.name` string
- * (an interned immortal literal). rc is always SIZE_MAX: retain/release
- * are no-ops (the regex-literal discipline), the object holds no
- * references, and it can never be part of a cycle (trace = NULL). */
+ * Top-level classes use immortal templates. Evaluating a function-local
+ * class creates a fresh, traced object that owns its captured binding boxes.
+ * Every construct thunk takes the borrowed class object before source
+ * arguments. Instances of a local class retain that object for identity and
+ * method captures. `pre`/`post` still describe the compiled class hierarchy;
+ * local-class instanceof additionally compares the fresh object identity. */
 typedef struct ScrClassObj {
-  size_t rc; /* SIZE_MAX — every class object is an immortal static */
+  size_t rc;
   size_t pre, post;
   void *ctor;
   const ScrStr *name;
+  size_t ncaps;
+  size_t length;
+  struct ScrBox *caps[];
 } ScrClassObj;
 
 static inline ScrClassObj *scr_classobj_retain(ScrClassObj *c) {
-  if (c->rc != SIZE_MAX) c->rc++;
+  if (c && c->rc != SIZE_MAX) {
+    c->rc++;
+    scr_cyc_mark_live(c);
+  }
   return c;
 }
-static inline void scr_classobj_release(ScrClassObj *c) {
-  (void)c; /* immortal (NULL-tolerant like every release) */
-}
+void scr_classobj_release(ScrClassObj *c);
+ScrClassObj *scr_classobj_new(const ScrClassObj *template, size_t ncaps);
+void scr_classobj_trace_v(void *c, ScrTraceVisit visit, void *ctx);
 /* void*-signature RC adapters (container slots) — scr_object.c. */
 void *scr_classobj_retain_v(void *c);
 void scr_classobj_release_v(void *c);
@@ -3462,7 +3460,7 @@ struct ScrDyn {
      * has no trace header): trial deletion treats it as an external root,
      * so nothing dangles — a cycle THROUGH a dyn-boxed function is merely
      * never collected (documented divergence). */
-    struct { ScrClosure *clo; ScrDynThunk thunk; const char *sig; const char *name; uint32_t arity; } fn;
+    struct { ScrClosure *clo; ScrDynThunk thunk; const char *sig; const char *name; uint32_t arity; ScrClassObj *class_obj; } fn;
     /* SCR_DYN_HANDLE: the retained native handle + its type tag. The
      * dyn→handle edge is NOT visible to the cycle collector (the dyn→
      * closure stance): handles drop their listener lists at settlement,
@@ -3761,6 +3759,8 @@ ScrDyn *scr_dyn_define_props(ScrDyn *target, ScrDyn *descs);
  * (callers retain first when they keep their own reference); `sig`/`name`
  * must be static literals (the box never frees them; name may be NULL). */
 ScrDyn *scr_dyn_new_func(ScrClosure *clo, ScrDynThunk thunk, uint32_t arity, const char *sig, const char *name);
+ScrDyn *scr_dyn_new_class(ScrClassObj *cls, const char *type_key);
+bool scr_dyn_class_is(const ScrDyn *value, const char *type_key);
 /* Calls a dyn value: a non-function kind throws the catchable TypeError
  * "<what> is not a function" (Node's wording — `what` is the call site's
  * callee spelling) and returns NULL; a function kind delegates to the
@@ -3783,6 +3783,7 @@ typedef struct ScrDynPath {
   const char *key;
   size_t index;
 } ScrDynPath;
+ScrClassObj *scr_dyn_class_check(const ScrDyn *value, const char *type_key, const ScrDynPath *path);
 
 /* The dynCheck failure path: builds "TypeError: expected <want> at <path>,
  * got <kind>" (got == NULL renders as "undefined" — a missing object

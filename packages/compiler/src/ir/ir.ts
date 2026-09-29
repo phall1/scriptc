@@ -239,11 +239,9 @@ export type IrType =
   | { kind: "object"; className: string } // heap, refcounted class instance
   /** The class STATIC side as a value — `typeof C`, the type of the class
    * name itself and of `new (…) => T` constructor-typed slots. Runtime
-   * representation is the per-class IMMORTAL class object (ScrClassObj:
-   * preorder interval, construct thunk, .name string) emitted once per
-   * classRef-referenced class — so identity `===` is one pointer compare
-   * and retains/releases are no-ops on the immortal (the regex-literal
-   * discipline; isRefCounted says true for container/RC uniformity).
+   * representation is ScrClassObj: an immortal top-level template or a fresh
+   * function-local object owning captured binding boxes. Identity is one
+   * pointer comparison; local instances retain their constructor object.
    * Values of `classval:C` are C's class object or a STRICT DESCENDANT's —
    * the object kind's nominal, upcast-only story — and every legal flow
    * preserves the constructor ABI (upcast requires the descendant's
@@ -251,7 +249,8 @@ export type IrType =
    * completion against C's one signature sound. Allowed in locals,
    * globals, params, returns, class/record fields, capture boxes, array
    * elements, Map VALUES, and union arms; fenced out of Map keys, Set
-   * elements, JSON, dyn/jsval conversion, and ToString. */
+   * elements, JSON, jsval conversion, and ToString. Unknown slots retain
+   * class identity and allow an exact typed constructor round trip. */
   | { kind: "classval"; className: string }
   /** An ECMAScript module namespace object for one statically-known module.
    * `moduleId` is a canonical compiled source-file or builtin identity.
@@ -1117,6 +1116,10 @@ export interface IrLibIdentity {
 
 export interface IrClassDef {
   name: string;
+  /** Present for a class evaluated inside a function. Each evaluation owns
+   * fresh identity and these shared binding boxes; instance layouts carry a
+   * private class-object pointer before their source fields. */
+  localCaptures?: IrParam[];
   /** The JS-observable `.name` of the class (the runtime class object's
    * name string, and what `C.name` folds to). Differs from `name` because
    * IR names are program-qualified (`%m1.C`, `%cx…` for class
@@ -1124,6 +1127,8 @@ export interface IrClassDef {
    * binding name for `const x = class {}`, or "" for truly anonymous
    * expressions. Absent on the runtime-provided defs (never valuable). */
   jsName?: string;
+  /** JavaScript constructor arity, ending before the first default or rest parameter. */
+  jsLength?: number;
   /** RUNTIME-PROVIDED class (the builtin Error hierarchy): the struct, RC
    * helpers, and vtable live in the runtime (ScrError / scr_error_*), so
    * backends emit no definitions for it — only the preorder-interval
@@ -1340,6 +1345,10 @@ export interface IrFunction {
    * variables received through the closure environment, in caps[] order.
    * Each is also listed in `locals` (with boxed: true); it is NOT a param. */
   captures?: IrParam[];
+  /** Instance methods/constructors of local classes borrow captures through
+   * their first (`this`) parameter. The slot indexes the class object's
+   * capture array; no closure parameter is added to the method ABI. */
+  classCaptures?: (IrParam & { slot: number })[];
   /** Async: the body runs on a fiber; `returnType` is the INNER type T (a
    * `return v` fulfills with v) while ordinary call sites receive
    * Promise<T>. With `generator` present, call sites receive the lazy
@@ -4744,8 +4753,7 @@ export type IrExpr =
   /** Numeric operands; comparisons yield bool. `===`/`!==` additionally
    * accept two same-typed arrays: reference identity (pointer compare),
    * matching JS object equality — and two same-typed CLASS VALUES, where
-   * the pointer compare IS class identity (one immortal object per
-   * class). */
+   * the pointer compare IS class identity. */
   | { kind: "bin"; op: IrNumBinOp; left: IrExpr; right: IrExpr; type: IrType; loc: SrcLoc }
   /** `~` is JS bitwise NOT: ToInt32 the operand, complement, back to f64. */
   | { kind: "unary"; op: "-" | "!" | "~"; operand: IrExpr; type: IrType; loc: SrcLoc }
@@ -5140,14 +5148,13 @@ export type IrExpr =
    * with the new object as arg 0 (retained — the ctor owns and releases its
    * `this` param like any callee). Result is owned (+1). */
   | { kind: "new"; className: string; args: IrExpr[]; type: IrType; loc: SrcLoc }
-  /** The class itself as a value: a pointer to `className`'s immortal
-   * class object (type `classval:className`, +1 — a no-op retain on the
-   * immortal, kept for the uniform owned-temp discipline, the regexLit
-   * pattern). The frontend notes an edge to `%className.constructor` at
+  /** The class itself as an owned value. `captures` creates fresh identity
+   * and retains the named boxes; absent captures use an immortal template.
+   * The frontend notes an edge to `%className.constructor` at
    * every classRef, so a value's construct thunk always has a constructor
    * to call; backends emit class objects (and thunks) for exactly the
    * classes some classRef in the module names. */
-  | { kind: "classRef"; className: string; type: IrType; loc: SrcLoc }
+  | { kind: "classRef"; className: string; captures?: string[]; type: IrType; loc: SrcLoc }
   /** `new X(args)` through a class VALUE: call the class object's
    * construct thunk. `callee` is classval-typed; args are completed
    * against `%<callee.className>.constructor`'s ABI — sound because every
@@ -6208,6 +6215,7 @@ export function canConvertToDyn(
   // listener boundary (a mustCall-wrapped handler receiving the payload).
   if (t.kind === "object" && t.className === "%Error") return true;
   if (isDynTypedRefType(t)) return true;
+  if (t.kind === "classval") return true;
   if (t.kind === "func") return canBoxFuncIntoDyn(t, getRecord, getUnion);
   if (DYN_HANDLE_KINDS.has(t.kind)) return true;
   // Promises box by REFERENCE (SCR_DYN_PROMISE): promise<dyn> carries its
@@ -6231,7 +6239,7 @@ export function canConvertToDyn(
     // boundary exactly like a bare func dynFrom).
     return !!def && def.arms.every((a) =>
       a.kind === "undefinedT" || isJsonSafeType(a, getRecord, getUnion) ||
-      isDynTypedRefType(a) || DYN_HANDLE_KINDS.has(a.kind) ||
+      isDynTypedRefType(a) || a.kind === "classval" || DYN_HANDLE_KINDS.has(a.kind) ||
       (a.kind === "func" && canBoxFuncIntoDyn(a, getRecord, getUnion)) ||
       (a.kind === "promise" && canConvertToDyn(a, getRecord, getUnion)),
     );
@@ -6258,6 +6266,7 @@ function canBoxDynComposite(
     case "dyn":
     case "undefinedT":
     case "nullT":
+    case "classval":
       return true;
     case "bytes":
       return t.elem === "u8";
@@ -6304,6 +6313,7 @@ export function canDynCheckTo(
   // unknown record fields with the undefined value.
   if (isJsonSafeAt(t, getRecord, getUnion, false, false, new Set(), true)) return true;
   if (t.kind === "bytes" && t.elem === "u8") return true;
+  if (t.kind === "classval") return true;
   if (t.kind === "object" && t.className === "%Error") return true;
   if (t.kind === "func") return canAdaptDynFuncTo(t, getRecord, getUnion);
   if (DYN_HANDLE_KINDS.has(t.kind)) return true;

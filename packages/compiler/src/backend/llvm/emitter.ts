@@ -89,7 +89,7 @@ import { findConstantNumericTables, type ConstantNumericTable } from "../../ir/c
 import { allocateFfiCallbackAdapters, hasForeignFfiCallback, hasRetainedFfiCallback, type FfiCallbackAdapter } from "../ffi-callbacks.js";
 import { RUNTIME_ABI_MARKER } from "../runtime-abi.js";
 import { computeMayThrow } from "../c/may-throw.js";
-import { mangleArgPack, mangleAsyncSpawn, mangleClassObj, mangleFnClosure, mangleFunction, mangleGenDrop, mangleGenSpawn, mangleGlobal, mangleLocal, mangleRecordStruct, mangleTrampoline, mangleWrapper } from "../mangle.js";
+import { mangleArgPack, mangleAsyncSpawn, mangleClassObj, mangleClassStruct, mangleFnClosure, mangleFunction, mangleGenDrop, mangleGenSpawn, mangleGlobal, mangleLocal, mangleRecordStruct, mangleTrampoline, mangleWrapper } from "../mangle.js";
 import { BlockBuilder } from "./blocks.js";
 import { LlvmDebugInfo } from "./debug-info.js";
 import { f64Lit, ffiNativeTypeLl, ffiNativeParamLl, ffiNativeReturnLl, llvmCommentText } from "./common.js";
@@ -1123,7 +1123,7 @@ export class LlEmitter {
       // class-object shape { rc, pre, post, ctor, name } — field reads on
       // builtin errors and classval loads GEP through these.
       `%ScrError = type { ${this.sizeType}, ptr, ptr, ptr, ptr, ptr }`,
-      `%ScrClassObj = type { ${this.sizeType}, ${this.sizeType}, ${this.sizeType}, ptr, ptr }`,
+      `%ScrClassObj = type { ${this.sizeType}, ${this.sizeType}, ${this.sizeType}, ptr, ptr, ${this.sizeType}, ${this.sizeType} }`,
       // The runtime emitter prefix { rc, vt, reg, cls } — user subclasses
       // embed it (classes.ts), and bare-emitter GEPs address through it.
       `%ScrEmitter = type { ${this.sizeType}, ptr, ptr, ptr }`,
@@ -3102,7 +3102,7 @@ export class LlEmitter {
     this.scopes = [];
     this.jumpTargets = [];
     this.currentLocals = new Map(fn.locals.map((l) => [l.id, l]));
-    this.captureIds = new Set((fn.captures ?? []).map((c) => c.localId));
+    this.captureIds = new Set([...(fn.captures ?? []), ...(fn.classCaptures ?? [])].map((c) => c.localId));
     this.integerLoopBindings.clear();
     this.integerRanges = analyzeIntegerRanges(fn);
     this.chainSlots.clear();
@@ -3176,6 +3176,21 @@ export class LlEmitter {
       B.line(`${p} = getelementptr inbounds ptr, ptr ${caps}, ${this.sizeType} ${i} ; caps[${i}]`);
       B.line(`${box} = load ptr, ptr ${p}`);
       B.line(`store ptr ${box}, ptr %${mangleLocal(c.localId)} ; captured ${c.name}`);
+    });
+    (fn.classCaptures ?? []).forEach((c) => {
+      const self = fn.params[0]!;
+      if (self.type.kind !== "object") throw new InternalCompilerError("class captures require an instance receiver");
+      const classSlot = B.tmp();
+      const classValue = B.tmp();
+      const caps = B.tmp();
+      const slot = B.tmp();
+      const box = B.tmp();
+      B.line(`${classSlot} = getelementptr inbounds %${mangleClassStruct(self.type.className)}, ptr %p_${mangleLocal(self.localId)}, i64 0, i32 1`);
+      B.line(`${classValue} = load ptr, ptr ${classSlot}`);
+      B.line(`${caps} = getelementptr inbounds %ScrClassObj, ptr ${classValue}, i64 1`);
+      B.line(`${slot} = getelementptr inbounds ptr, ptr ${caps}, ${this.sizeType} ${c.slot}`);
+      B.line(`${box} = load ptr, ptr ${slot}`);
+      B.line(`store ptr ${box}, ptr %${mangleLocal(c.localId)} ; class capture ${c.name}`);
     });
     // Params spill into their slots; the function scope owns refcounted
     // params (callees own their params — callers passed +1). Boxed params

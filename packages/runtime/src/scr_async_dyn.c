@@ -198,7 +198,7 @@ static void scr_rej_remove(ScrRejListener *list, size_t *n, ScrDyn *fn) {
   for (size_t i = 0; i < *n; i++) {
     ScrDyn *l = list[i].fn;
     bool same = l == fn || (l->kind == SCR_DYN_FUNC && fn->kind == SCR_DYN_FUNC &&
-                            l->v.fn.clo == fn->v.fn.clo);
+                            scr_dyn_strict_eq(l, fn));
     if (same) {
       scr_dyn_release(l);
       memmove(list + i, list + i + 1, (*n - i - 1) * sizeof *list);
@@ -471,7 +471,7 @@ void scr_process_off_warning(ScrDyn *fn) {
   for (size_t i = 0; i < scr_nwarn; i++) {
     ScrDyn *l = scr_warn_listeners[i];
     bool same = l == fn || (l->kind == SCR_DYN_FUNC && fn->kind == SCR_DYN_FUNC &&
-                            l->v.fn.clo == fn->v.fn.clo);
+                            scr_dyn_strict_eq(l, fn));
     if (same) {
       scr_dyn_release(l);
       memmove(scr_warn_listeners + i, scr_warn_listeners + i + 1,

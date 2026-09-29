@@ -18,9 +18,11 @@ export function computeTraced(mod: IrModule): { shapes: Set<string>; unions: Set
   const shapeDefs = [
     ...classes.map((c) => ({
       key: `object:${c.name}`,
-      fields: c.name === RUNTIME_EMITTER_CLASS
-        ? [...c.fields, { name: "<listeners>", type: funcOf([], VOID) }]
-        : c.fields,
+      fields: [
+        ...c.fields,
+        ...(c.name === RUNTIME_EMITTER_CLASS ? [{ name: "<listeners>", type: funcOf([], VOID) }] : []),
+        ...(c.localCaptures !== undefined ? [{ name: "<class>", type: { kind: "classval" as const, className: c.name } }] : []),
+      ],
     })),
     ...(mod.records ?? []).map((r) => ({
       key: `record:${r.id}`,
@@ -59,6 +61,7 @@ export function computeTraced(mod: IrModule): { shapes: Set<string>; unions: Set
   const cycleCapable = (t: IrType): boolean => {
     switch (t.kind) {
       case "func":
+      case "classval":
       case "promise":
         return true;
       case "object":

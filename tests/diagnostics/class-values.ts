@@ -47,9 +47,9 @@ someClass.tag = "write";
 // runtime class decides which declaration answers.
 console.log(someClass.tag);
 
-// Class expressions inside functions mint a DISTINCT class per evaluation.
+// Local classes with statics still need per-evaluation static storage.
 function make(): unknown {
-  return class {};
+  return class { static value = 1; };
 }
 make();
 

@@ -15,7 +15,7 @@ const UNSIGNED: IntegerRange = { min: 0, max: 4294967295 };
 export function analyzeIntegerRanges(fn: IrFunction): IntegerRanges {
   const ranges = new Map<IrExpr, IntegerRange | null>();
   if (fn.async || fn.generator) return ranges;
-  const captures = new Set((fn.captures ?? []).map((c) => c.localId));
+  const captures = new Set([...(fn.captures ?? []), ...(fn.classCaptures ?? [])].map((c) => c.localId));
   const eligible = new Set(fn.locals.filter((l) => l.type.kind === "f64" && !l.boxed && !l.tdz && !captures.has(l.id)).map((l) => l.id));
   type Facts = Map<string, IntegerRange>;
 

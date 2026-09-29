@@ -23,6 +23,15 @@
  */
 #include "scr_runtime.h"
 
+/* Constructor capsules expose identity and name/length, but do not model
+ * per-class static property tables yet. Never report a fabricated empty view. */
+static bool scr_dyn_class_reflection_fence(const ScrDyn *value) {
+  if (!value || value->kind != SCR_DYN_FUNC || !value->v.fn.class_obj) return false;
+  static const char message[] = "scriptc: class reflection through unknown is not supported";
+  scr_throw_error_msg(SCR_ERR_TYPE, message, sizeof message - 1);
+  return true;
+}
+
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -852,6 +861,7 @@ bool scr_dyn_proxy_has(const ScrDyn *proxy, const ScrStr *key) {
 }
 
 ScrDyn *scr_dyn_own_descriptor(const ScrDyn *value, const ScrStr *key) {
+  if (scr_dyn_class_reflection_fence(value)) return NULL;
   if (value->kind == SCR_DYN_OBJ) {
     ScrDynEntry *entry = scr_dyn_entry((ScrDyn *)value, key);
     if (!entry) return scr_dyn_retain(scr_dyn_undefined());
@@ -1204,7 +1214,46 @@ ScrDyn *scr_dyn_new_func(ScrClosure *clo, ScrDynThunk thunk, uint32_t arity, con
   d->v.fn.sig = sig;
   d->v.fn.name = name;
   d->v.fn.arity = arity;
+  d->v.fn.class_obj = NULL;
   return d;
+}
+
+/* A class is function-shaped for typeof and identity, but calling it without
+ * new always throws. The closure owns the class object and its lexical boxes. */
+static ScrDyn *scr_dyn_class_call(ScrClosure *closure, ScrDyn *const *args, size_t argc) {
+  (void)args;
+  (void)argc;
+  ScrClassObj *cls = scr_box_get_ref(closure->caps[0]);
+  ScrJsonBuf message;
+  scr_jb_init(&message);
+  scr_jb_puts(&message, "Class constructor ");
+  scr_jb_write(&message, cls->name->data, cls->name->len);
+  scr_jb_puts(&message, " cannot be invoked without 'new'");
+  scr_classobj_release(cls);
+  scr_throw_error(SCR_ERR_TYPE, scr_jb_finish(&message));
+  return NULL;
+}
+
+ScrDyn *scr_dyn_new_class(ScrClassObj *cls, const char *type_key) {
+  ScrClosure *closure = scr_closure_new(NULL, 1);
+  closure->caps[0] = scr_box_new_obj(scr_classobj_retain_v, scr_classobj_release_v, scr_classobj_trace_v);
+  scr_box_set_ref(closure->caps[0], scr_classobj_retain(cls));
+  ScrDyn *value = scr_dyn_new_func(closure, scr_dyn_class_call, (uint32_t)cls->length, type_key, cls->name->data);
+  value->v.fn.class_obj = cls; /* borrowed from the closure */
+  return value;
+}
+
+bool scr_dyn_class_is(const ScrDyn *value, const char *type_key) {
+  return value && value->kind == SCR_DYN_FUNC && value->v.fn.class_obj &&
+      strcmp(value->v.fn.sig, type_key) == 0;
+}
+
+ScrClassObj *scr_dyn_class_check(const ScrDyn *value, const char *type_key, const ScrDynPath *path) {
+  if (!scr_dyn_class_is(value, type_key)) {
+    scr_dyn_check_fail(path, "class constructor", value);
+    return NULL;
+  }
+  return scr_classobj_retain(value->v.fn.class_obj);
 }
 
 /* Calling a dyn value: kind check (Node's "<what> is not a function"
@@ -2687,6 +2736,7 @@ static const char *scr_dyn_kind_name(const ScrDyn *d);
  * valid dense index, every other kind false (tsc admits `in` only on
  * object-typed operands). Proxy traps may throw. Borrows both. */
 bool scr_dyn_has_key(const ScrDyn *v, const ScrStr *key) {
+  if (scr_dyn_class_reflection_fence(v)) return false;
   if (v->kind == SCR_DYN_PROXY) return scr_dyn_proxy_has(v, key);
   if (v->kind == SCR_DYN_JSVAL) return scr_dyn_isl_fence(v, "'in'");
   if (v->kind == SCR_DYN_TYPED_REF) {
@@ -2712,6 +2762,7 @@ bool scr_dyn_has_key(const ScrDyn *v, const ScrStr *key) {
 }
 
 void scr_dyn_key_set(ScrDyn *recv, ScrStr *key, ScrDyn *value) {
+  if (scr_dyn_class_reflection_fence(recv)) return;
   if (recv->kind == SCR_DYN_PROXY) { scr_dyn_proxy_set(recv, key, value); return; }
   if (recv->kind == SCR_DYN_TYPED_REF) {
     ScrDyn *materialized = scr_dyn_typed_ref_materialize(recv);
@@ -3580,6 +3631,7 @@ static void scr_json_delete_member(ScrDyn *object, const ScrStr *key) {
  * arrays, typed references and handles keep their explicit boundary;
  * deleting from a materialized snapshot would lose the mutation. */
 void scr_dyn_key_delete(ScrDyn *recv, const ScrStr *key, bool strict) {
+  if (scr_dyn_class_reflection_fence(recv)) return;
   if (recv->kind == SCR_DYN_PROXY) { scr_dyn_proxy_delete(recv, key); return; }
   if (recv->kind == SCR_DYN_OBJ) {
     ScrDynEntry *entry = scr_dyn_entry(recv, key);
@@ -3834,6 +3886,7 @@ bool scr_dyn_strict_eq(const ScrDyn *a, const ScrDyn *b) {
     /* The ScrDyn box is a boundary artifact — one closure crossing the
      * dyn boundary twice is still ONE JS function value, so identity
      * lives in the boxed closure, not the box. */
+    if (a->v.fn.class_obj || b->v.fn.class_obj) return a->v.fn.class_obj == b->v.fn.class_obj;
     return a == b || a->v.fn.clo == b->v.fn.clo;
   case SCR_DYN_BYTES:
     return a->v.bytes == b->v.bytes;
@@ -3877,6 +3930,10 @@ ScrDyn *scr_dyn_fn_get(const ScrDyn *d, const char *key, size_t key_len) {
   }
   if (key_len == 6 && memcmp(key, "length", 6) == 0) {
     return scr_dyn_new_num((double)d->v.fn.arity);
+  }
+  if (d->v.fn.class_obj) {
+    static const char message[] = "scriptc: class properties through unknown other than name and length are not supported";
+    scr_throw_error_msg(SCR_ERR_TYPE, message, sizeof message - 1);
   }
   return NULL;
 }
@@ -4190,6 +4247,7 @@ static bool scr_dyn_objwalk_entry(ScrDyn *out, const ScrDyn *object,
 }
 
 static ScrDyn *scr_dyn_objwalk(const ScrDyn *v, ScrObjWalk mode) {
+  if (scr_dyn_class_reflection_fence(v)) return NULL;
   if (v->kind == SCR_DYN_PROXY) {
     ScrDyn *trap = scr_dyn_proxy_trap(v, "ownKeys");
     if (scr_exc_pending()) return NULL;
@@ -4357,6 +4415,7 @@ ScrDyn *scr_dyn_obj_keys(const ScrDyn *v) { return scr_dyn_objwalk(v, SCR_OBJWAL
  * neither contributes enumerable keys. Snapshot names without invoking
  * getters; the loop rechecks live ownership before visiting each name. */
 ScrDyn *scr_dyn_for_in_keys(const ScrDyn *v) {
+  if (scr_dyn_class_reflection_fence(v)) return NULL;
   switch (v->kind) {
   case SCR_DYN_OBJ:
   case SCR_DYN_ARR:
@@ -4442,6 +4501,7 @@ static void scr_dyn_assign_from(ScrDyn *target, const ScrDyn *src) {
  * nothing; index-keyed sources (arrays/strings/bytes) copy their index
  * keys like Node; the remaining kinds have no own enumerable keys. */
 ScrDyn *scr_dyn_assign(ScrDyn *target, const ScrDyn *src) {
+  if (scr_dyn_class_reflection_fence(target) || scr_dyn_class_reflection_fence(src)) return NULL;
   if (target->kind == SCR_DYN_UNDEF || target->kind == SCR_DYN_NULL) {
     const char *m = "Cannot convert undefined or null to object";
     scr_throw_error_msg(SCR_ERR_TYPE, m, strlen(m));

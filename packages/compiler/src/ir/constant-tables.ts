@@ -50,8 +50,8 @@ export function findConstantNumericTables(mod: IrModule): ReadonlyMap<string, Co
 
   function expr(node: IrExpr): boolean {
     switch (node.kind) {
-      case "closure":
-        for (const id of node.captures) reject(id);
+      case "closure": case "classRef":
+        for (const id of node.captures ?? []) reject(id);
         break;
       case "arrIntrinsic": {
         const candidate = candidateFor(node.receiver);

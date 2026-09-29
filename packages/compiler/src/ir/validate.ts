@@ -1624,6 +1624,12 @@ export function validateModule(mod: IrModule): IrValidationError[] {
       errors.push({ message: `duplicate class "${cls.name}"`, loc: cls.loc });
     }
     classesByName.set(cls.name, cls);
+    if (cls.localCaptures !== undefined && (cls.runtime || cls.base !== undefined || cls.genericOf !== undefined)) {
+      errors.push({ message: `class ${cls.name}: local class cannot use a runtime or inherited layout`, loc: cls.loc });
+    }
+    if (cls.jsLength !== undefined && (!Number.isSafeInteger(cls.jsLength) || cls.jsLength < 0)) {
+      errors.push({ message: `class ${cls.name}: invalid constructor length`, loc: cls.loc });
+    }
     const seen = new Set<string>();
     for (const f of cls.fields) {
       if (seen.has(f.name)) {
@@ -1663,6 +1669,9 @@ export function validateModule(mod: IrModule): IrValidationError[] {
     if (!base) {
       errors.push({ message: `class ${cls.name}: undeclared base "${cls.base}"`, loc: cls.loc });
       continue;
+    }
+    if (base.localCaptures !== undefined) {
+      errors.push({ message: `class ${cls.name}: cannot extend a local class`, loc: cls.loc });
     }
     const seen = new Set<string>([cls.name]);
     for (let c: IrClassDef | undefined = base; c; c = c.base !== undefined ? classesByName.get(c.base) : undefined) {
@@ -2065,11 +2074,25 @@ function validateFunction(
     }
     if (p.type.kind === "caught") err(`param "${p.name}" is caught-typed`, fn.loc);
   }
-  for (const c of fn.captures ?? []) {
+  for (const c of [...(fn.captures ?? []), ...(fn.classCaptures ?? [])]) {
     const local = locals.get(c.localId);
     if (!local) err(`capture "${c.name}" has no local entry "${c.localId}"`, fn.loc);
     else if (!local.boxed) err(`capture local "${c.localId}" is not boxed`, fn.loc);
+    else if (!typeEquals(local.type, c.type)) err(`capture local "${c.localId}" has the wrong type`, fn.loc);
     if (c.type.kind === "caught") err(`capture "${c.name}" is caught-typed`, fn.loc);
+  }
+  if (fn.classCaptures !== undefined) {
+    const self = fn.params[0];
+    const cls = self?.type.kind === "object" ? classes.get(self.type.className) : undefined;
+    if (fn.captures !== undefined || cls?.localCaptures === undefined) {
+      err("class captures require a local-class instance receiver and no closure environment", fn.loc);
+    }
+    for (const capture of fn.classCaptures) {
+      const slot = cls?.localCaptures?.[capture.slot];
+      if (!Number.isInteger(capture.slot) || !slot || !typeEquals(slot.type, capture.type)) {
+        err(`class capture "${capture.name}" has an invalid slot or type`, fn.loc);
+      }
+    }
   }
 
   const expectType = (expr: IrExpr, want: IrType, what: string) => {
@@ -3241,6 +3264,7 @@ function validateFunction(
           break;
         }
         const ctor = functions.get(`%${e.className}.constructor`);
+        if (cls.localCaptures !== undefined) err(`new ${e.className}: local class requires a class value`, e.loc);
         if (!ctor) {
           err(`new ${e.className}: missing constructor function`, e.loc);
           break;
@@ -3349,6 +3373,17 @@ function validateFunction(
         if (!typeEquals(e.type, { kind: "classval", className: e.className })) {
           err(`classRef to "${e.className}" must have that classval type`, e.loc);
         }
+        if ((e.captures === undefined) !== (cls.localCaptures === undefined) ||
+            (e.captures?.length ?? 0) !== (cls.localCaptures?.length ?? 0)) {
+          err(`classRef to "${e.className}" must supply its class captures`, e.loc);
+        }
+        (e.captures ?? []).forEach((id, index) => {
+          const local = locals.get(id);
+          const wanted = cls.localCaptures?.[index];
+          if (!local?.boxed || (wanted && !typeEquals(local.type, wanted.type))) {
+            err(`classRef capture "${id}" must name a box with the declared type`, e.loc);
+          }
+        });
         break;
       }
       case "newValue": {
@@ -3389,6 +3424,8 @@ function validateFunction(
         // Both sides must be hierarchy members: the operand needs a vt
         // word to read; a standalone target class has one possible value
         // and the frontend folds it statically.
+        if (classes.get(e.classValue.type.className)?.localCaptures !== undefined &&
+            e.value.type.kind === "object" && classes.get(e.value.type.className)?.localCaptures !== undefined) break;
         if (!hierarchy.has(e.classValue.type.className)) {
           err(`instanceOfValue against standalone class "${e.classValue.type.className}"`, e.loc);
         }

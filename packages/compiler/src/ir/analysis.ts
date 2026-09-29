@@ -80,6 +80,7 @@ export function dynDesc(
       return def.arms.map((arm) => dynDesc(arm, recordsById, unionsById)).join(" | ");
     }
     case "func": return "function";
+    case "classval": return "class constructor";
     case "map": return "Map";
     case "set": return "Set";
     default: {

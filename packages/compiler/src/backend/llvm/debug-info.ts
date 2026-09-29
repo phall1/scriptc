@@ -61,7 +61,7 @@ export class LlvmDebugInfo {
     const id = this.add(`distinct !DISubprogram(name: ${quoted(fn.name)}, linkageName: ${quoted(mangleFunction(fn.name))}, scope: ${file}, file: ${file}, line: ${pos.line}, type: ${signature}, scopeLine: ${pos.line}, spFlags: DISPFlagLocalToUnit | DISPFlagDefinition, unit: ${this.unit(pos.file).id})`);
     const scopes: { loc: SrcLoc; id: string }[] = [];
     this.lexicalScopes.set(id, scopes);
-    const captures = new Set((fn.captures ?? []).map((c) => c.localId));
+    const captures = new Set([...(fn.captures ?? []), ...(fn.classCaptures ?? [])].map((c) => c.localId));
     const spans = fn.locals.filter((local) => !captures.has(local.id)).flatMap((local) => local.source ? [local.source.scope] : []);
     // Outer scopes first; declarations in flattened IR still retain their
     // source block, loop, catch, or function scope (including hoisted var).

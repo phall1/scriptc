@@ -334,7 +334,39 @@ static void json_callback_tests(void) {
   scr_dyn_release(callback);
 }
 
+static void test_class_values(void) {
+  ScrStr *name = S("Stored");
+  ScrClassObj template = { .rc = SIZE_MAX, .name = name, .length = 2 };
+  ScrClassObj *first = scr_classobj_new(&template, 1);
+  first->caps[0] = scr_box_new(SCR_BOX_F64);
+  scr_box_set_f64(first->caps[0], 42);
+  ScrClassObj *second = scr_classobj_new(&template, 0);
+  ScrDyn *a = scr_dyn_new_class(first, "classval:Stored");
+  ScrDyn *again = scr_dyn_new_class(first, "classval:Stored");
+  ScrDyn *b = scr_dyn_new_class(second, "classval:Stored");
+  scr_classobj_release(first);
+  scr_classobj_release(second);
+  check(scr_dyn_strict_eq(a, again) && !scr_dyn_strict_eq(a, b), "boxed class identity belongs to evaluation");
+  ScrClassObj *restored = scr_dyn_class_check(a, "classval:Stored", NULL);
+  check(restored && scr_box_get_f64(restored->caps[0]) == 42, "boxed class retains captured environment");
+  scr_classobj_release(restored);
+  check(!scr_dyn_class_check(a, "classval:Other", NULL) && scr_exc_pending(), "class casts check native constructor type");
+  scr_exc_clear();
+  ScrDyn *arity = scr_dyn_fn_get(a, "length", 6);
+  check(arity && arity->kind == SCR_DYN_NUM && arity->v.num == 2, "boxed constructor length");
+  scr_dyn_release(arity);
+  check(!scr_dyn_call(a, NULL, 0, "Stored") && scr_exc_pending(), "class call requires new");
+  scr_exc_clear();
+  check(!scr_dyn_obj_keys(a) && scr_exc_pending(), "class reflection refuses an incomplete property view");
+  scr_exc_clear();
+  scr_dyn_release(a);
+  scr_dyn_release(again);
+  scr_dyn_release(b);
+  scr_str_release(name);
+}
+
 int main(void) {
+  test_class_values();
   scr_init();
 
   /* ── primitives ─────────────────────────────────────────────────── */

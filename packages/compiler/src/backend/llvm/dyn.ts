@@ -396,6 +396,13 @@ export class LlDyn {
       case "func":
         kindIs(DYN_KIND.FUNC);
         break;
+      case "classval": {
+        this.host.declare(`declare zeroext i1 @scr_dyn_class_is(ptr, ptr)`);
+        const matched = B.tmp();
+        B.line(`${matched} = call zeroext i1 @scr_dyn_class_is(ptr %d, ptr ${this.host.cstr(key)})`);
+        B.terminate(`ret i1 ${matched}`);
+        break;
+      }
       case "object": {
         if (t.className !== "%Error") {
           // Exact class capsules returned true before materialization.
@@ -606,6 +613,14 @@ export class LlDyn {
     host.declare(`declare void @scr_dyn_check_fail(ptr, ptr, ptr)`);
     const want = host.cstr(dynDesc(t, this.host.recordsById, this.host.unionsById));
     const B = new BlockBuilder();
+    if (t.kind === "classval") {
+      host.declare(`declare ptr @scr_dyn_class_check(ptr, ptr, ptr)`);
+      const checked = B.tmp();
+      B.line(`${checked} = call ptr @scr_dyn_class_check(ptr %d, ptr ${host.cstr(key)}, ptr %path)`);
+      B.terminate(`ret ptr ${checked}`);
+      this.defs.push(`define internal ptr @${name}(ptr %d, ptr %path) ${FN_ATTRS} {`, B.render(), `}`, ``);
+      return name;
+    }
     if (isRefCounted(t) && t.kind !== "dyn") {
       host.declare(`declare zeroext i1 @scr_dyn_typed_ref_is(ptr, ptr, ${host.sizeType})`);
       host.declare(`declare ptr @scr_dyn_typed_ref_unbox(ptr)`);
@@ -1314,6 +1329,13 @@ export class LlDyn {
         B.terminate(`ret ptr ${r}`);
         break;
       }
+      case "classval": {
+        host.declare(`declare ptr @scr_dyn_new_class(ptr, ptr)`);
+        const r = B.tmp();
+        B.line(`${r} = call ptr @scr_dyn_new_class(ptr %v, ptr ${host.cstr(key)})`);
+        B.terminate(`ret ptr ${r}`);
+        break;
+      }
       case "func": {
         const r = B.tmp();
         B.line(
@@ -1489,6 +1511,20 @@ export class LlDyn {
         const len = B.tmp();
         B.line(`${len} = call double @scr_arr_len(ptr %v)`);
         B.countedLoop(len, (i) => {
+          host.declare(`declare double @scr_arr_state(ptr, double)`);
+          const state = B.tmp();
+          const undefinedState = B.tmp();
+          const undefinedLabel = B.newLabel("tda.undefined");
+          const valueLabel = B.newLabel("tda.value");
+          const doneLabel = B.newLabel("tda.done");
+          B.line(`${state} = call double @scr_arr_state(ptr %v, double ${i})`);
+          B.line(`${undefinedState} = fcmp oeq double ${state}, 2.0`); // SCR_ARR_UNDEFINED
+          B.terminate(`br i1 ${undefinedState}, label %${undefinedLabel}, label %${valueLabel}`);
+          B.startBlock(undefinedLabel);
+          const retained = this.retainDyn(B, this.undef(B));
+          B.line(`call void @scr_dyn_arr_push(ptr ${d}, ptr ${retained})`);
+          B.terminate(`br label %${doneLabel}`);
+          B.startBlock(valueLabel);
           if (elem.kind === "f64" || elem.kind === "bool") {
             const acc = elem.kind;
             const accTy = elem.kind === "f64" ? "double" : "i1";
@@ -1513,6 +1549,8 @@ export class LlDyn {
             B.line(`call void @scr_dyn_arr_push(ptr ${d}, ptr ${conv})`);
             B.line(`call void ${releaseSym(host, elem)}(ptr ${e})`);
           }
+          B.terminate(`br label %${doneLabel}`);
+          B.startBlock(doneLabel);
         });
         if (cyclicArr) B.line(`call void @scr_dyn_from_leave()`);
         B.terminate(`ret ptr ${d}`);
