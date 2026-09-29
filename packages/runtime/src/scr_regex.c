@@ -1187,3 +1187,88 @@ ScrStr *scr_regexp_escape(ScrStr *s) {
   out->data[out_len] = '\0';
   return out;
 }
+
+/* Checked storage retains the native pattern; no JavaScript engine is needed. */
+bool scr_dyn_native_regex_is(const ScrDyn *value) {
+  return value && value->kind == SCR_DYN_HANDLE && value->v.handle.tag == SCR_DYNH_REGEXP;
+}
+
+ScrRegex *scr_dyn_native_regex_check(const ScrDyn *value, const ScrDynPath *path) {
+  if (!scr_dyn_native_regex_is(value)) { scr_dyn_check_fail(path, "RegExp", value); return NULL; }
+  return scr_regex_retain(value->v.handle.ptr);
+}
+
+static ScrDyn *scr_native_regex_string(ScrStr *text) {
+  if (!text) return NULL;
+  ScrDyn *out = scr_dyn_new_str(text);
+  scr_str_release(text);
+  return out;
+}
+
+static ScrDyn *scr_native_regex_get(void *ptr, const char *key, size_t len) {
+  ScrRegex *re = ptr;
+  if (len == 6 && memcmp(key, "source", 6) == 0) return scr_native_regex_string(scr_regex_source(re));
+  if (len == 5 && memcmp(key, "flags", 5) == 0) return scr_native_regex_string(scr_regex_flags(re));
+  static const struct { const char *name; char flag; } flags[] = {
+    {"global", 'g'}, {"ignoreCase", 'i'}, {"multiline", 'm'}, {"dotAll", 's'},
+    {"unicode", 'u'}, {"sticky", 'y'}, {"hasIndices", 'd'}, {"unicodeSets", 'v'},
+  };
+  for (size_t i = 0; i < sizeof flags / sizeof flags[0]; i++) {
+    if (strlen(flags[i].name) == len && memcmp(key, flags[i].name, len) == 0)
+      return scr_dyn_new_bool(memchr(re->flags->data, flags[i].flag, re->flags->len) != NULL);
+  }
+  static const char *const methods[] = {"test", "exec", "toString", "compile", "lastIndex"};
+  for (size_t i = 0; i < sizeof methods / sizeof methods[0]; i++) {
+    if (strlen(methods[i]) == len && memcmp(key, methods[i], len) == 0) {
+      static const char message[] = "Native RegExp method values and lastIndex have no lowering";
+      scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
+      break;
+    }
+  }
+  return NULL;
+}
+
+static bool scr_native_regex_set(void *ptr, const char *key, size_t len, const ScrDyn *value) {
+  (void)ptr; (void)key; (void)len; (void)value;
+  return false;
+}
+
+static ScrDyn *scr_native_regex_invoke(void *ptr, ScrDyn *self, const char *method,
+                                     ScrDyn *const *args, size_t argc, const char *what) {
+  (void)self; (void)what;
+  ScrRegex *re = ptr;
+  if (strcmp(method, "toString") == 0) return scr_native_regex_string(scr_regex_to_string(re));
+  if (strcmp(method, "test") == 0) {
+    ScrStr *subject = scr_dyn_string_coerce_js(argc ? args[0] : scr_dyn_undefined());
+    if (!subject) return NULL;
+    bool matches = scr_regex_test(re, subject);
+    scr_str_release(subject);
+    return scr_exc_pending() ? NULL : scr_dyn_new_bool(matches);
+  }
+  static const char message[] = "Native RegExp method has no lowering";
+  scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
+  return NULL;
+}
+
+ScrDyn *scr_dyn_native_regex(ScrRegex *value) {
+  static const ScrDynHandleOps ops = {
+    "RegExp", &scr_regex_retain_v, &scr_regex_release_v, &scr_native_regex_invoke,
+    &scr_native_regex_get, &scr_native_regex_set, NULL, NULL,
+  };
+  scr_dyn_handle_install(SCR_DYNH_REGEXP, &ops);
+  return scr_dyn_new_handle(value, SCR_DYNH_REGEXP);
+}
+
+ScrRegex *scr_regex_new_checked(const ScrDyn *pattern, const ScrDyn *flags) {
+  ScrRegex *original = scr_dyn_native_regex_is(pattern) ? pattern->v.handle.ptr : NULL;
+  ScrStr *source = original ? scr_regex_source(original)
+    : pattern->kind == SCR_DYN_UNDEF ? scr_str_new("", 0) : scr_dyn_string_coerce_js(pattern);
+  if (!source) return NULL;
+  ScrStr *options = flags->kind == SCR_DYN_UNDEF
+    ? original ? scr_regex_flags(original) : scr_str_new("", 0)
+    : scr_dyn_string_coerce_js(flags);
+  ScrRegex *result = options ? scr_regex_new(source, options) : NULL;
+  scr_str_release(source);
+  scr_str_release(options);
+  return result;
+}

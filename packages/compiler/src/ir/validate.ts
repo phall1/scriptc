@@ -127,7 +127,11 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "dyn.arrLen": { argTypes: [DYN], result: F64 },
   "dyn.arrAt": { argTypes: [DYN, F64], result: DYN },
   "dyn.hasKey": { argTypes: [DYN, STRING], result: BOOL },
-  "dyn.toString": { argTypes: [DYN, STRING, STRING], result: STRING },
+  "dyn.freeze": { argTypes: [DYN], result: DYN },
+  "dyn.isFrozen": { argTypes: [DYN], result: BOOL },
+  "dyn.nativeSetIs": { argTypes: [DYN], result: BOOL },
+  "dyn.nativeRegexIs": { argTypes: [DYN], result: BOOL },
+  "dyn.toString": { argTypes: [DYN, DYN, STRING], result: STRING },
   "dyn.defineProps": { argTypes: [DYN, DYN], result: DYN },
   "dyn.defineProperty": { argTypes: [DYN, DYN, DYN], result: DYN },
   "dyn.getOwnPropertyDescriptor": { argTypes: [DYN, DYN], result: DYN },
@@ -1084,6 +1088,7 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "error.deleteCause": { argTypes: [null], result: VOID },
   "error.nodeThrow": { argTypes: [F64, STRING, STRING], result: VOID },
   "dyn.toStringCoerce": { argTypes: [DYN], result: STRING },
+  "dyn.numberConstructor": { argTypes: [DYN], result: F64 },
   "dyn.toNumberCoerce": { argTypes: [DYN], result: F64 },
   "dyn.add": { argTypes: [DYN, DYN], result: DYN },
   "dyn.proxyNew": { argTypes: [DYN, DYN], result: DYN },
@@ -1146,6 +1151,7 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "dyn.cloneMissing": { argTypes: [], result: DYN },
   "dyn.cloneTransferFail": { argTypes: [], result: DYN },
   "regex.new": { argTypes: [STRING, STRING], result: REGEX },
+  "regex.newChecked": { argTypes: [DYN, DYN], result: REGEX },
   // node:events EventEmitter: receivers are emitter-hierarchy objects and
   // the chaining forms (on/off/removeAll/setMax) return the receiver's
   // own class — program-dependent object types, checked in the libCall
@@ -2224,6 +2230,7 @@ function validateFunction(
           (e.left.type.kind === "array" ||
             e.left.type.kind === "map" ||
             e.left.type.kind === "set" ||
+            e.left.type.kind === "regex" ||
             e.left.type.kind === "object" ||
             e.left.type.kind === "record" ||
             // Symbol identity IS pointer identity (the frontend's rule).

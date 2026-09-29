@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { F64, STRING, VOID, RUNTIME_EMITTER_CLASS, arrayOf, funcOf, mapOf, setOf, type IrModule, type IrRecordShape, type IrType } from "../ir/ir.js";
+import { DYN, F64, STRING, VOID, RUNTIME_EMITTER_CLASS, arrayOf, funcOf, mapOf, setOf, type IrModule, type IrRecordShape, type IrType } from "../ir/ir.js";
 import { computeTraced } from "./cycle-analysis.js";
 import { CEmitter } from "./c/c-emitter.js";
 import { computeTraced as llvmTraced } from "./llvm/shapes.js";
@@ -133,4 +133,10 @@ test("a map-key cycle in one subclass headers the whole hierarchy", () => {
     { name: "Sibling", base: "Base", fields: [], loc },
   ];
   check(mod, ["object:Base", "object:Child", "object:Sibling"]);
+});
+
+test("checked values seed tracing through records and collections", () => {
+  const mod = module();
+  mod.records = [shape("value", [DYN]), shape("list", [arrayOf(DYN)]), shape("set", [setOf(DYN)]), shape("map", [mapOf(DYN, F64)])];
+  check(mod, ["record:value", "record:list", "record:set", "record:map"]);
 });

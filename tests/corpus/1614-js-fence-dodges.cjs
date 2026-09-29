@@ -1,12 +1,7 @@
 // @deferred-fences: 1
-// JS statements with no static lowering compile as RUNTIME fences — the
-// program builds, and the fences sit untaken behind the same conditions
-// Node never takes. The dual-mode number/bigint helper is the shape that
-// matters: `typeof ms === 'bigint'` folds constant-false over a checked-
-// dynamic parameter (no dyn box holds a bigint), so the bigint arm — whose
-// literals have no lowering — folds away and the number path runs (the
-// record read `multipliers.two` compiles; the untaken Proxy wrap is the
-// statement that carries the deferred fence).
+// Unsupported JS statements remain deferred behind untaken branches.
+// Both bigint and number table arms now have native checked storage;
+// the absent-global Proxy expression remains the deferred fence.
 'use strict';
 
 function platformScale(ms) {

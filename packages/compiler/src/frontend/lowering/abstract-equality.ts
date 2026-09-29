@@ -263,6 +263,9 @@ export function lowerAbstractEquality(
   loc: SrcLoc,
 ): IrExpr | null {
   if (!supportsPair(lowerer, left.type, right.type)) return null;
+  if (left.kind === "strLit" && right.kind === "strLit") {
+    return { kind: "boolLit", value: (left.value === right.value) !== negated, type: BOOL, loc };
+  }
   const stmts: IrStmt[] = [];
   const stable = (value: IrExpr, name: string): IrExpr => {
     if (isUnitType(value.type)) {

@@ -74,6 +74,12 @@ test.each(["c", "llvm"] as const)("failed implicit specializations retain a call
     writeFileSync(join(pkg, "index.d.ts"), "export {};\n");
     writeFileSync(join(pkg, "index.js"), `
 const inspect = (value) => eval(value);
+function stopped(value) {
+  eval(value);
+  return { done() { return "wrong"; } };
+}
+try { console.log(stopped("0").done()); }
+catch (error) { console.log(String(error).includes("SC2011")); }
 const first = { inspect };
 const second = { inspect };
 console.log(typeof first.inspect, first.inspect === second.inspect);
@@ -93,7 +99,7 @@ for (const callback of [first.inspect, second.inspect]) {
     const child = spawnSync(result.binaryPath, [], { encoding: "utf8" });
     expect(child.status, child.stderr).toBe(0);
     expect(child.stderr).toBe("");
-    expect(child.stdout).toBe("function true\ntrue\ntrue\n");
+    expect(child.stdout).toBe("true\nfunction true\ntrue\ntrue\n");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

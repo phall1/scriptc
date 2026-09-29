@@ -3478,7 +3478,18 @@ export function staticFieldWriteTarget(lowerer: Lowerer, access: ts.PropertyAcce
     // export assignment pins it) — the direct-name rules apply.
     if (!ts.isIdentifier(access.expression)) {
       if (!isModuleExportsAccess(access.expression) || !isCjsJsFile(access.getSourceFile(), lowerer.program)) {
-        return null;
+        const receiverType = lowerer.mapTypeOf(lowerer.typeOf(access.expression));
+        if (receiverType?.kind !== "classval") return null;
+        const info = lowerer.classes.get(receiverType.className);
+        if (!info) return null;
+        const result = staticCallOn(lowerer, call, access, info, true);
+        if (!result) return null;
+        // Evaluate and validate the receiver before evaluating arguments.
+        // A typed checker projection cannot turn a replaced field into a call
+        // to the class that originally occupied it.
+        const receiver = lowerer.lowerExprExpecting(access.expression, receiverType);
+        return { kind: "seqExpr", stmts: [{ kind: "exprStmt", expr: receiver, loc: locOf(access.expression) }],
+          result, type: result.type, loc: locOf(call) };
       }
       const whole = cjsClassExprWholeExportOf(access.getSourceFile());
       if (!whole) return null;
@@ -5329,16 +5340,23 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
       // `new RegExp(pattern, flags?)`: runtime construction over the same
       // libregexp engine the literals ride. The pattern compiles EAGERLY,
       // so bad input throws Node's catchable SyntaxError at construction.
-      // String arguments only (Node also accepts a RegExp to copy — that
-      // form keeps the fence).
+      // Checked arguments retain native regexes and perform runtime coercion.
       if (symbol && symbol.name === "RegExp" && lowerer.isStdlibSymbol(symbol)) {
         const args = expr.arguments ?? [];
         if (args.length > 2) {
           lowerer.noLowering(`new RegExp with ${args.length} arguments`, expr);
         }
+        if (args.some(ts.isSpreadElement)) lowerer.noLowering("new RegExp with spread arguments", expr);
+        const values = args.map((arg) => lowerer.lowerExpr(arg));
+        if (values.some((value) => value.type.kind === "dyn" || value.type.kind === "regex")) {
+          const checked = [0, 1].map((index): IrExpr => values[index]
+            ? lowerer.coerceInto(args[index]!, values[index]!, DYN)
+            : { kind: "dynFrom", value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc }, type: DYN, loc });
+          return { kind: "libCall", fn: "regex.newChecked", args: checked, type: { kind: "regex" }, loc };
+        }
         const strArg = (a: ts.Expression | undefined, what: string): IrExpr => {
           if (!a) return { kind: "strLit", value: "", type: STRING, loc };
-          const v = lowerer.lowerExpr(a);
+          const v = values[args.indexOf(a)]!;
           const empty: IrExpr = { kind: "strLit", value: "", type: STRING, loc };
           if (v.type.kind === "undefinedT") {
             if (v.kind === "unitLit") return empty;

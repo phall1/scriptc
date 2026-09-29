@@ -23,6 +23,8 @@ beforeAll(async () => {
     // the JSON module and its dependencies join the link (scr_closure.c:
     // releasing a dyn tree releases SCR_DYN_FUNC boxes' closures).
     join(testDir, "../src/scr_json.c"),
+    join(testDir, "../src/scr_bigint.c"),
+    join(testDir, "../src/scr_map.c"),
     join(testDir, "../src/scr_closure.c"),
     join(testDir, "../src/scr_string.c"),
     join(testDir, "../src/scr_number.c"),

@@ -457,7 +457,7 @@ export function lowerRegexMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     const receiver = nullableStringRecv
       ? lowerMethodReceiver(lowerer, access.expression, STRING, access.name.text)
       : lowerReceiver();
-    const re = lowerer.lowerExpr(arg0);
+    const re = lowerer.lowerExprExpecting(arg0, { kind: "regex" });
     // RegExpMatchArray | null maps to the string[] | null union by
     // itself; intern it directly when the checker's spelling doesn't —
     // or when it maps to something WIDER (an optional-chain call node
@@ -482,7 +482,7 @@ export function lowerRegexMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     if (!arg0 || lowerer.mapTypeOf(lowerer.typeOf(arg0))?.kind !== "regex") return null; // string-pattern form: the SC2020 fence
     if (call.arguments.length !== 1) return null;
     const receiver = lowerReceiver();
-    const re = lowerer.lowerExpr(arg0);
+    const re = lowerer.lowerExprExpecting(arg0, { kind: "regex" });
     return {
       kind: "regexIntrinsic",
       method: "matchAll",
@@ -501,7 +501,7 @@ export function lowerRegexMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     if (!arg0 || lowerer.mapTypeOf(lowerer.typeOf(arg0))?.kind !== "regex") return null; // string-pattern form: the SC2020 fence
     if (call.arguments.length !== 1) return null;
     const receiver = lowerReceiver();
-    const re = lowerer.lowerExpr(arg0);
+    const re = lowerer.lowerExprExpecting(arg0, { kind: "regex" });
     return { kind: "regexIntrinsic", method: "search", receiver, args: [re], type: F64, loc };
   }
   if (
@@ -515,8 +515,8 @@ export function lowerRegexMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     // both IR backends and the runtime have one required (regex, limit)
     // shape; an optional-number value selects the default at runtime.
     const args = name === "split"
-      ? [lowerer.lowerExpr(arg0), lowerSplitLimitArg(lowerer, call.arguments[1], loc)]
-      : call.arguments.map((a) => lowerer.lowerExpr(a));
+      ? [lowerer.lowerExprExpecting(arg0, { kind: "regex" }), lowerSplitLimitArg(lowerer, call.arguments[1], loc)]
+      : call.arguments.map((a, index) => index === 0 ? lowerer.lowerExprExpecting(a, { kind: "regex" }) : lowerer.lowerExpr(a));
     if (name !== "split") {
       const replacement = args[1];
       const templateType = (type: IrType): boolean => type.kind === "union"

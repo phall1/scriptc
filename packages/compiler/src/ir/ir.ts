@@ -2129,6 +2129,10 @@ export type IrLibFn =
   | "dyn.typeof"
   /** Object.prototype.toString.call on a checked-dynamic value. */
   | "dyn.objectTag"
+  | "dyn.freeze"
+  | "dyn.isFrozen"
+  | "dyn.nativeSetIs"
+  | "dyn.nativeRegexIs"
   /** toString() on a checked-dynamic receiver: runtime kind dispatch
    * (bytes decode per the literal encoding — utf8 default; strings,
    * numbers, booleans, arrays, objects answer JS-exactly; undefined and
@@ -3862,6 +3866,7 @@ export type IrLibFn =
    * valueOf/toString ordering; user throws propagate). Borrowed dyn;
    * f64 result, or a throw. Used by statically lowered numeric coercions
    * whose checker type remained any. */
+  | "dyn.numberConstructor"
   | "dyn.toNumberCoerce"
   | "dyn.add"
   | "dyn.proxyNew"
@@ -3980,6 +3985,7 @@ export type IrLibFn =
    * The result TYPE is the regex kind, so the link switch pulls the
    * engine exactly like a literal. */
   | "regex.new"
+  | "regex.newChecked"
   /** structuredClone with a NON-EMPTY transfer array of static values:
    * nothing static is transferable, so the call always throws Node's
    * catchable DataCloneError ("Found invalid value in transferList.") —
@@ -5402,7 +5408,7 @@ export type IrExpr =
    * "function"` — true exactly for the checked-dynamic tree's function kind (boxed
    * closures); function values are truthy and answer FALSE to the
    * `"object"` test, JS-exact. */
-  | { kind: "dynTest"; test: "string" | "number" | "boolean" | "undefined" | "null" | "nullish" | "bytes" | "buffer" | "object" | "array" | "truthy" | "error" | "function"; bytesElem?: IrBytesElem; negated?: true; value: IrExpr; type: IrType; loc: SrcLoc }
+  | { kind: "dynTest"; test: "bigint" | "string" | "number" | "boolean" | "undefined" | "null" | "nullish" | "bytes" | "buffer" | "object" | "array" | "truthy" | "error" | "function"; bytesElem?: IrBytesElem; negated?: true; value: IrExpr; type: IrType; loc: SrcLoc }
   /** Keyed read on a dyn value — `pkg.name` / `pkg["k"]` / the
    * `pkg?.scripts` chain step on a JSON.parse result. `key` is
    * string-typed (a strLit for the dot form); `type` is always dyn. An
@@ -5949,6 +5955,11 @@ function isJsonSafeAt(
       visiting.add(key);
       return def.arms.every((a) => a.kind === "undefinedT" ? undefinedAllowed : isJsonSafeAt(a, getRecord, getUnion, stringify, undefinedAllowed, visiting, nativeFields));
     }
+    case "set":
+      return nativeFields && !stringify && t.elem.kind === "dyn";
+    case "bigint":
+    case "regex":
+      return nativeFields && !stringify;
     case "bytes":
       return nativeFields;
     case "func":
@@ -5959,11 +5970,6 @@ function isJsonSafeAt(
     // Maps are not JSON (JSON.stringify(new Map()) is "{}" in Node — an
     // empty-object husk nobody wants; stringify/dynCheck reject instead).
     case "map":
-    // Sets stringify as the same "{}" husk — rejected like Maps.
-    case "set":
-    // Regexes are not JSON (JSON.stringify(/a/) is "{}" in Node — the same
-    // empty-object husk as Maps; stringify/dynCheck reject instead).
-    case "regex":
     case "date":
     // URLs stringify as "{}" husks in Node too (data properties live on
     // internal slots) — rejected the same way; use url.href instead.
@@ -5974,7 +5980,6 @@ function isJsonSafeAt(
     // Symbols are DROPPED by Node's stringify (undefined at the top level,
     // omitted as object values) — silent divergence banned; rejected.
     case "symbol":
-    case "bigint":
     case "jsval":
     case "caught":
     case "promise":
@@ -6279,6 +6284,7 @@ function canBoxDynComposite(
 ): boolean {
   switch (t.kind) {
     case "f64":
+    case "bigint":
     case "string":
     case "bool":
     case "dyn":
@@ -6287,9 +6293,12 @@ function canBoxDynComposite(
     case "classval":
       return true;
     case "bytes":
+    case "regex":
       return true;
     case "func":
       return canBoxFuncIntoDyn(t, getRecord, getUnion);
+    case "set":
+      return t.elem.kind === "dyn";
     case "array":
       return canBoxDynComposite(t.elem, getRecord, getUnion, visiting);
     case "record": {
@@ -6330,6 +6339,7 @@ export function canDynCheckTo(
   // serializable. Backends already retain dyn fields and fill missing
   // unknown record fields with the undefined value.
   if (isJsonSafeAt(t, getRecord, getUnion, false, false, new Set(), true)) return true;
+  if (t.kind === "bigint" || t.kind === "set" && t.elem.kind === "dyn") return true;
   if (t.kind === "bytes") return true;
   if (t.kind === "classval") return true;
   if (t.kind === "object" && t.className === "%Error") return true;
@@ -6488,7 +6498,7 @@ export function moduleUsesRegex(mod: IrModule): boolean {
     }
     // RegExp.escape lives in scr_regex.c too (needing no engine — it
     // keeps the always-linked string TU out of hello-world's size class).
-    if (kind === "libCall" && (v as { fn?: unknown }).fn === "regexp.escape") {
+    if (kind === "libCall" && ["regexp.escape", "dyn.nativeRegexIs"].includes(String((v as { fn?: unknown }).fn))) {
       found = true;
       return;
     }
@@ -7832,6 +7842,7 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "error.deleteCause",
   "dyn.objectTag",
   // Numeric coercion runs user valueOf/toString — throws propagate.
+  "dyn.numberConstructor",
   "dyn.toNumberCoerce",
   "dyn.add",
   "dyn.proxyNew",
@@ -7909,6 +7920,7 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   // new RegExp compiles the pattern eagerly: an invalid pattern or flag
   // throws Node's catchable SyntaxError at construction.
   "regex.new",
+  "regex.newChecked",
   "dyn.keySet",
   "dyn.keySetComputed",
   "process.builtinId",
@@ -7919,6 +7931,8 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "dyn.iterPack",
   "dyn.mapSeedEntries",
   "dyn.mapSeedEntry",
+  "dyn.freeze",
+  "dyn.isFrozen",
   "dyn.toString",
   "string.fromCodePoint",
   "dyn.defineProps",

@@ -3288,7 +3288,7 @@ function emitDynamicExpr(
                     : e.test === "function"
                       ? `(${d.name}->kind == SCR_DYN_FUNC || scr_dyn_isl_typeof_is(${d.name}, "function"))`
                       : `${d.name}->kind == ${
-                          { string: "SCR_DYN_STR", number: "SCR_DYN_NUM", boolean: "SCR_DYN_BOOL", undefined: "SCR_DYN_UNDEF", null: "SCR_DYN_NULL", bytes: "SCR_DYN_BYTES" }[e.test]
+                          { bigint: "SCR_DYN_BIGINT", string: "SCR_DYN_STR", number: "SCR_DYN_NUM", boolean: "SCR_DYN_BOOL", undefined: "SCR_DYN_UNDEF", null: "SCR_DYN_NULL", bytes: "SCR_DYN_BYTES" }[e.test]
                         }`;
         return emitter.newTemp(e.type, e.negated ? `!(${test})` : test);
       }
@@ -4504,16 +4504,22 @@ function emitDynamicLibCall(state: LibCallState): Temp {
             return finish(`scr_dyn_typeof(${arg(0)})`);
           case "dyn.objectTag":
             return finish(`scr_dyn_object_tag(${arg(0)})`);
+          case "dyn.freeze": return finish(`scr_dyn_freeze(${arg(0)})`);
+          case "dyn.isFrozen": return finish(`scr_dyn_is_frozen(${arg(0)})`);
+          case "dyn.nativeSetIs": return finish(`scr_dyn_native_set_is(${arg(0)})`);
+          case "dyn.nativeRegexIs": return finish(`scr_dyn_native_regex_is(${arg(0)})`);
           case "dyn.toString":
             // Receiver-kind-dispatched toString (+1); throws Node's
             // TypeError on undefined/null and the "is not a function"
             // TypeError on null-prototype dictionaries (may-throw seed
             // set) — args[2] carries the call's source spelling.
-            return finish(`scr_dyn_to_string_method(${arg(0)}, ${arg(1)}, ${arg(2)})`);
+            return finish(`scr_dyn_to_string_argument(${arg(0)}, ${arg(1)}, ${arg(2)})`);
           case "dyn.toStringCoerce":
             // +1 string or NULL with the exception pending (user
             // toString/valueOf throws propagate). Borrows the dyn.
             return finish(`scr_dyn_string_coerce_js(${arg(0)})`);
+          case "dyn.numberConstructor":
+            return finish(`scr_dyn_number_constructor(${arg(0)})`);
           case "dyn.toNumberCoerce":
             // JS ToNumber (number-hint valueOf/toString protocol). A
             // thrown hook leaves the exception pending; the may-throw
@@ -8379,6 +8385,7 @@ function emitErrorsEventsLibCall(state: LibCallState): Temp {
             // Borrowed receiver + borrowed options; +1 %DOMException.
             // Option errors throw (may-throw seed set).
             return finish(`scr_domex_clone(${arg(0)}, ${arg(1)})`);
+          case "regex.newChecked": return finish(`scr_regex_new_checked(${arg(0)}, ${arg(1)})`);
           case "regex.new":
             // Eager compile: bad patterns/flags throw catchable
             // SyntaxError (may-throw seed set). Borrowed strings; +1.

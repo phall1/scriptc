@@ -64,6 +64,7 @@ export const DYN_KIND = {
   JSVAL: 11, /* SCR_DYN_JSVAL — island values held by reference */
   TYPED_REF: 12, /* SCR_DYN_TYPED_REF — static Web-stream transit capsule */
   PROXY: 13,
+  BIGINT: 14,
 } as const;
 
 /** What the dyn helpers need beyond the walker host: interned immortal
@@ -370,6 +371,23 @@ export class LlDyn {
       B.terminate(`ret i1 ${r}`);
     };
     switch (t.kind) {
+      case "regex": {
+        this.host.declare(`declare zeroext i1 @scr_dyn_native_regex_is(ptr)`);
+        const r = B.tmp();
+        B.line(`${r} = call zeroext i1 @scr_dyn_native_regex_is(ptr %d)`);
+        B.terminate(`ret i1 ${r}`);
+        break;
+      }
+      case "set": {
+        this.host.declare(`declare zeroext i1 @scr_dyn_native_set_is(ptr)`);
+        const r = B.tmp();
+        B.line(`${r} = call zeroext i1 @scr_dyn_native_set_is(ptr %d)`);
+        B.terminate(`ret i1 ${r}`);
+        break;
+      }
+      case "bigint":
+        kindIs(DYN_KIND.BIGINT);
+        break;
       case "f64":
         kindIs(DYN_KIND.NUM);
         break;
@@ -771,6 +789,29 @@ export class LlDyn {
       B.startBlock(lo);
     };
     switch (t.kind) {
+      case "regex": {
+        host.declare(`declare ptr @scr_dyn_native_regex_check(ptr, ptr)`);
+        const r = B.tmp();
+        B.line(`${r} = call ptr @scr_dyn_native_regex_check(ptr %d, ptr %path)`);
+        B.terminate(`ret ptr ${r}`);
+        break;
+      }
+      case "set": {
+        host.declare(`declare ptr @scr_dyn_native_set_check(ptr, ptr)`);
+        const r = B.tmp();
+        B.line(`${r} = call ptr @scr_dyn_native_set_check(ptr %d, ptr %path)`);
+        B.terminate(`ret ptr ${r}`);
+        break;
+      }
+      case "bigint": {
+        requireKind(DYN_KIND.BIGINT, "dc");
+        host.declare(`declare ptr @scr_bigint_retain(ptr)`);
+        const v = this.payloadOf(B, "%d", "ptr");
+        const r = B.tmp();
+        B.line(`${r} = call ptr @scr_bigint_retain(ptr ${v})`);
+        B.terminate(`ret ptr ${r}`);
+        break;
+      }
       case "f64": {
         requireKind(DYN_KIND.NUM, "dc");
         const v = this.payloadOf(B, "%d", "double");
@@ -1251,11 +1292,12 @@ export class LlDyn {
         host.declare(`declare ptr @scr_box_new_obj(ptr, ptr, ptr)`);
         host.declare(`declare void @scr_box_set_ref(ptr, ptr)`);
         host.declare(`declare ptr @scr_dyn_retain_v(ptr)`);
+        host.declare(`declare void @scr_dyn_trace_v(ptr, ptr, ptr)`);
         host.declare(`declare void @scr_dyn_release_v(ptr)`);
         const a = B.tmp();
         B.line(`${a} = call ptr @scr_closure_new(ptr @${adapter}, ${host.sizeType} 1)`);
         const box = B.tmp();
-        B.line(`${box} = call ptr @scr_box_new_obj(ptr @scr_dyn_retain_v, ptr @scr_dyn_release_v, ptr null)`);
+        B.line(`${box} = call ptr @scr_box_new_obj(ptr @scr_dyn_retain_v, ptr @scr_dyn_release_v, ptr @scr_dyn_trace_v)`);
         const capp = B.tmp();
         B.line(`${capp} = getelementptr inbounds %ScrClosure, ptr ${a}, i64 1 ; caps[0]`);
         B.line(`store ptr ${box}, ptr ${capp}`);
@@ -1303,6 +1345,27 @@ export class LlDyn {
     const B = new BlockBuilder();
     let sourceAccessor: { name: string; release: string } | null = null;
     switch (t.kind) {
+      case "regex": {
+        host.declare(`declare ptr @scr_dyn_native_regex(ptr)`);
+        const r = B.tmp();
+        B.line(`${r} = call ptr @scr_dyn_native_regex(ptr %v)`);
+        B.terminate(`ret ptr ${r}`);
+        break;
+      }
+      case "set": {
+        host.declare(`declare ptr @scr_dyn_native_set(ptr)`);
+        const r = B.tmp();
+        B.line(`${r} = call ptr @scr_dyn_native_set(ptr %v)`);
+        B.terminate(`ret ptr ${r}`);
+        break;
+      }
+      case "bigint": {
+        host.declare(`declare ptr @scr_dyn_new_bigint(ptr)`);
+        const r = B.tmp();
+        B.line(`${r} = call ptr @scr_dyn_new_bigint(ptr %v)`);
+        B.terminate(`ret ptr ${r}`);
+        break;
+      }
       case "f64": {
         host.declare(`declare ptr @scr_dyn_new_num(double)`);
         const r = B.tmp();
@@ -1727,10 +1790,11 @@ export class LlDyn {
     const B = new BlockBuilder();
     host.declare(`declare void @scr_promise_fulfill_ref(ptr, ptr, ptr, ptr, ptr)`);
     host.declare(`declare ptr @scr_dyn_retain_v(ptr)`);
+    host.declare(`declare void @scr_dyn_trace_v(ptr, ptr, ptr)`);
     host.declare(`declare void @scr_dyn_release_v(ptr)`);
     const fulfill = (dv: string): void => {
       B.line(
-        `call void @scr_promise_fulfill_ref(ptr %dst, ptr ${dv}, ptr @scr_dyn_retain_v, ptr @scr_dyn_release_v, ptr null)`,
+        `call void @scr_promise_fulfill_ref(ptr %dst, ptr ${dv}, ptr @scr_dyn_retain_v, ptr @scr_dyn_release_v, ptr @scr_dyn_trace_v)`,
       );
     };
     switch (inner.kind) {
@@ -1824,7 +1888,7 @@ export class LlDyn {
       const kd = this.kindOf(B, "%d");
       const done = B.newLabel("ds.d");
       const labels = new Map<number, string>();
-      for (const k of [DYN_KIND.NULL, DYN_KIND.BOOL, DYN_KIND.NUM, DYN_KIND.STR, DYN_KIND.ARR, DYN_KIND.OBJ, DYN_KIND.UNDEF, DYN_KIND.BYTES, DYN_KIND.FUNC, DYN_KIND.HANDLE, DYN_KIND.PROMISE, DYN_KIND.JSVAL, DYN_KIND.TYPED_REF, DYN_KIND.PROXY]) {
+      for (const k of [DYN_KIND.NULL, DYN_KIND.BOOL, DYN_KIND.NUM, DYN_KIND.STR, DYN_KIND.ARR, DYN_KIND.OBJ, DYN_KIND.UNDEF, DYN_KIND.BYTES, DYN_KIND.FUNC, DYN_KIND.HANDLE, DYN_KIND.PROMISE, DYN_KIND.JSVAL, DYN_KIND.TYPED_REF, DYN_KIND.PROXY, DYN_KIND.BIGINT]) {
         labels.set(k, B.newLabel(`ds.k${k}`));
       }
       const branches: string[] = [];
@@ -1864,6 +1928,16 @@ export class LlDyn {
         const s = B.tmp();
         B.line(`${s} = select i1 ${bv}, ptr ${host.cstr("true")}, ptr ${host.cstr("false")}`);
         B.line(`call void @scr_jb_puts(ptr %b, ptr ${s})`);
+        B.br(done);
+      }
+      B.startBlock(labels.get(DYN_KIND.BIGINT)!);
+      {
+        host.declare(`declare ptr @scr_bigint_to_string(ptr, double)`);
+        const v = this.payloadOf(B, "%d", "ptr");
+        const s = B.tmp();
+        B.line(`${s} = call ptr @scr_bigint_to_string(ptr ${v}, double ${f64Lit(10)})`);
+        this.putScrStr(B, "%b", s);
+        B.line(`call void @scr_str_release(ptr ${s})`);
         B.br(done);
       }
       B.startBlock(labels.get(DYN_KIND.NUM)!);
@@ -2060,8 +2134,14 @@ export class LlDyn {
         B.br(done);
       }
       B.startBlock(labels.get(DYN_KIND.HANDLE)!);
-      this.puts(B, "%b", "[object Object]");
-      B.br(done);
+      {
+        host.declare(`declare ptr @scr_dyn_to_string(ptr, ptr)`);
+        const s = B.tmp();
+        B.line(`${s} = call ptr @scr_dyn_to_string(ptr %d, ptr null)`);
+        this.putScrStr(B, "%b", s);
+        B.line(`call void @scr_str_release(ptr ${s})`);
+        B.br(done);
+      }
       B.startBlock(labels.get(DYN_KIND.PROMISE)!);
       // Object.prototype.toString with the Promise @@toStringTag.
       this.puts(B, "%b", "[object Promise]");

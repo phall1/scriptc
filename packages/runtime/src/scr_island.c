@@ -1050,6 +1050,8 @@ static JSValue isl_from_dyn(const ScrDyn *d) {
     return JS_NULL;
   case SCR_DYN_BOOL:
     return JS_NewBool(isl_ctx, d->v.b);
+  case SCR_DYN_BIGINT:
+    return JS_ThrowTypeError(isl_ctx, "native bigint values cannot enter a dynamic island yet");
   case SCR_DYN_NUM:
     return JS_NewFloat64(isl_ctx, d->v.num);
   case SCR_DYN_STR:

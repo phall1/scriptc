@@ -49,6 +49,12 @@ static void scr_dyn_display_buf(ScrJsonBuf *b, const ScrDyn *d) {
   case SCR_DYN_UNDEF: scr_jb_puts(b, "undefined"); return;
   case SCR_DYN_NULL: scr_jb_puts(b, "null"); return;
   case SCR_DYN_BOOL: scr_jb_puts(b, d->v.b ? "true" : "false"); return;
+  case SCR_DYN_BIGINT: {
+    ScrStr *s = scr_bigint_to_string(d->v.bigint, 10);
+    for (size_t i = 0; i < s->len; i++) scr_jb_putc(b, s->data[i]);
+    scr_str_release(s);
+    return;
+  }
   case SCR_DYN_NUM: {
     ScrStr *s = scr_f64_to_scrstr(d->v.num);
     for (size_t i = 0; i < s->len; i++) scr_jb_putc(b, s->data[i]);
@@ -104,10 +110,12 @@ static void scr_dyn_display_buf(ScrJsonBuf *b, const ScrDyn *d) {
     if (d->v.fn.name) scr_jb_puts(b, d->v.fn.name);
     scr_jb_puts(b, "() { [native code] }");
     return;
-  case SCR_DYN_HANDLE:
-    /* Object.prototype.toString — Node's String() over these classes. */
-    scr_jb_puts(b, "[object Object]");
+  case SCR_DYN_HANDLE: {
+    ScrStr *s = scr_dyn_to_string(d, NULL);
+    for (size_t i = 0; i < s->len; i++) scr_jb_putc(b, s->data[i]);
+    scr_str_release(s);
     return;
+  }
   case SCR_DYN_PROMISE:
     /* Object.prototype.toString — promises carry no own toString, and
      * their @@toStringTag is not modeled here; Node's String() answer
@@ -761,7 +769,7 @@ static ScrDyn *scr_dyn_invoke_impl(
     return NULL;
   }
 
-  if ((recv->kind == SCR_DYN_NUM || recv->kind == SCR_DYN_BOOL || recv->kind == SCR_DYN_STR) &&
+  if ((recv->kind == SCR_DYN_BIGINT || recv->kind == SCR_DYN_NUM || recv->kind == SCR_DYN_BOOL || recv->kind == SCR_DYN_STR) &&
       dyn_name_is(method, "valueOf")) return scr_dyn_retain(recv);
 
   if (recv->kind == SCR_DYN_STR) {
@@ -1188,7 +1196,7 @@ ScrDyn *scr_dyn_define_props(ScrDyn *target, ScrDyn *descs) {
       scr_dyn_release(defined);
     } else {
       if (!target->v.fn.clo->props) {
-        ScrBox *box = scr_box_new_obj(&scr_dyn_retain_v, &scr_dyn_release_v, NULL);
+        ScrBox *box = scr_box_new_obj(&scr_dyn_retain_v, &scr_dyn_release_v, &scr_dyn_trace_v);
         ScrDyn *table = scr_dyn_new_obj();
         scr_box_set_ref(box, table); /* the box owns the fresh table */
         target->v.fn.clo->props = box;

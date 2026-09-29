@@ -84,6 +84,7 @@ export function dynDesc(
     case "classval": return "class constructor";
     case "map": return "Map";
     case "set": return "Set";
+    case "regex": return "RegExp";
     default: {
       const handle = DYN_HANDLE_KINDS.get(t.kind);
       if (handle) return handle.cls;

@@ -11271,6 +11271,78 @@
     "<repo>/tests/corpus/fresh-array-union-layout.js"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/bigint-checked-casts.ts": {
+   "order": [
+    "<repo>/tests/corpus/bigint-checked-casts.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/bigint-checked-storage.js": {
+   "order": [
+    "<repo>/tests/corpus/bigint-checked-storage.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/checked-object-module-alias.js": {
+   "order": [
+    "<repo>/tests/corpus/checked-object-module-alias.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/dynamic-function-descriptors.js": {
+   "order": [
+    "<repo>/tests/corpus/dynamic-function-descriptors.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/regexp-string-coercion.js": {
+   "order": [
+    "<repo>/tests/corpus/regexp-string-coercion.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/frozen-checked-dictionaries.mjs": {
+   "order": [
+    "<repo>/tests/corpus/frozen-checked-dictionaries.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/regex-checked-casts.ts": {
+   "order": [
+    "<repo>/tests/corpus/regex-checked-casts.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/regex-checked-storage.js": {
+   "order": [
+    "<repo>/tests/corpus/regex-checked-storage.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/set-checked-methods.js": {
+   "order": [
+    "<repo>/tests/corpus/set-checked-methods.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/set-checked-storage.ts": {
+   "order": [
+    "<repo>/tests/corpus/set-checked-storage.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/checked-builder-cycles.js": {
+   "order": [
+    "<repo>/tests/corpus/checked-builder-cycles.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/checked-renderer-defaults.js": {
+   "order": [
+    "<repo>/tests/corpus/checked-renderer-defaults.js"
+   ],
+   "diags": []
   }
  }
 }

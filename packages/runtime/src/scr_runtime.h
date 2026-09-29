@@ -3341,6 +3341,7 @@ typedef enum {
   SCR_DYN_TYPED_REF,
   /* Native Proxy over a checked plain object; keep new tags at the end. */
   SCR_DYN_PROXY,
+  SCR_DYN_BIGINT, /* exact native integer, retained by the box */
 } ScrDynKind;
 
 /* The handle-type tags the checked-dynamic tree can carry. The set is deliberately the
@@ -3373,6 +3374,8 @@ typedef enum {
   SCR_DYNH_GLOBAL,         /* native global object identity */
   SCR_DYNH_WEAK_MAP,       /* native weak-key metadata */
   SCR_DYNH_WEAK_SET,       /* native weak membership */
+  SCR_DYNH_SET,            /* native Set<unknown>, shared backing map */
+  SCR_DYNH_REGEXP,         /* native RegExp, shared compiled pattern */
   SCR_DYNH_COUNT,
 } ScrDynHandleTag;
 
@@ -3436,11 +3439,13 @@ struct ScrDyn {
   /* A deep typed-to-dyn copy has no stable native reference identity.
    * Weak collections must refuse it instead of weakly tracking its box. */
   bool copied_from_native;
+  bool non_extensible; /* ordinary checked objects; fits the header padding */
   union {
     bool b;
     double num;
     ScrStr *str; /* owned */
     ScrBytes *bytes; /* owned (SCR_DYN_BYTES) */
+    ScrBigInt *bigint; /* owned (SCR_DYN_BIGINT) */
     struct { size_t len; size_t cap; ScrDyn **items; } arr;      /* owned */
     struct {
       size_t len;
@@ -3501,7 +3506,10 @@ struct ScrDyn {
 };
 
 static inline ScrDyn *scr_dyn_retain(ScrDyn *d) {
-  if (d->rc != SIZE_MAX) d->rc++;
+  if (d->rc != SIZE_MAX) {
+    d->rc++;
+    scr_cyc_mark_live(d);
+  }
   return d;
 }
 
@@ -3574,6 +3582,14 @@ ScrDyn *scr_dyn_undefined(void);
 ScrDyn *scr_dyn_new_null(void);
 ScrDyn *scr_dyn_new_bool(bool b);
 ScrDyn *scr_dyn_new_num(double n);
+ScrDyn *scr_dyn_native_set(ScrMap *value); /* borrowed backing, +1 box */
+bool scr_dyn_native_set_is(const ScrDyn *value);
+ScrRegex *scr_regex_new_checked(const ScrDyn *pattern, const ScrDyn *flags);
+ScrDyn *scr_dyn_native_regex(ScrRegex *value);
+bool scr_dyn_native_regex_is(const ScrDyn *value);
+ScrDyn *scr_dyn_freeze(ScrDyn *value);
+bool scr_dyn_is_frozen(const ScrDyn *value);
+ScrDyn *scr_dyn_new_bigint(ScrBigInt *value); /* borrows and retains value */
 ScrDyn *scr_dyn_new_str(ScrStr *s);
 ScrDyn *scr_dyn_new_arr(void);
 ScrDyn *scr_dyn_new_obj(void);
@@ -3695,6 +3711,7 @@ ScrStr *scr_dyn_to_string(const ScrDyn *d, const ScrStr *enc);
  * null-prototype dictionary throws "<what> is not a function" — its
  * prototype chain has no toString (Node's answer). */
 ScrStr *scr_dyn_to_string_method(const ScrDyn *d, const ScrStr *enc, const ScrStr *what);
+ScrStr *scr_dyn_to_string_argument(const ScrDyn *d, const ScrDyn *argument, const ScrStr *what);
 /* JS String() over the dyn kind (units render "null"/"undefined" where
  * scr_dyn_to_string throws) — the web globals' WebIDL ToString. +1. */
 ScrStr *scr_dyn_string_coerce(const ScrDyn *d);
@@ -3706,6 +3723,7 @@ bool scr_dyn_number_coerce_js(const ScrDyn *d, double *out);
 /* Direct-return ABI wrapper for compiler libCalls: JS ToNumber, or NaN
  * with the exception pending when an object hook throws/refuses. */
 double scr_dyn_number_coerce(const ScrDyn *d);
+double scr_dyn_number_constructor(const ScrDyn *d);
 ScrDyn *scr_dyn_add(const ScrDyn *left, const ScrDyn *right); /* borrowed; +1 or NULL/pending */
 
 /* `d instanceof TypeError` (and the other builtin error classes) on a
@@ -3801,6 +3819,8 @@ typedef struct ScrDynPath {
   const char *key;
   size_t index;
 } ScrDynPath;
+ScrMap *scr_dyn_native_set_check(const ScrDyn *value, const ScrDynPath *path);
+ScrRegex *scr_dyn_native_regex_check(const ScrDyn *value, const ScrDynPath *path);
 ScrClassObj *scr_dyn_class_check(const ScrDyn *value, const char *type_key, const ScrDynPath *path);
 
 /* The dynCheck failure path: builds "TypeError: expected <want> at <path>,
@@ -4145,6 +4165,7 @@ ScrStr *scr_jb_finish(ScrJsonBuf *b); /* returns +1; frees the buffer */
 
 void *scr_dyn_retain_v(void *d);
 void scr_dyn_release_v(void *d);
+void scr_dyn_trace_v(void *d, ScrTraceVisit visit, void *ctx);
 
 #ifdef SCR_RC_AUDIT
 long scr_dyn_live_count(void);

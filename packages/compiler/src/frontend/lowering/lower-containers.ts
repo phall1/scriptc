@@ -5713,6 +5713,9 @@ function setFromSeedValue(
       return yes && no ? { kind: "ternary", cond: lowerer.lowerCondition(argNode.condition), then: yes, else_: no, type: mapT, loc: locOf(argNode) } : null;
     }
     if (ts.isArrayLiteralExpression(argNode)) {
+      if (isJsSourceFile(argNode.getSourceFile()) && argNode.elements.some((entry) => !ts.isArrayLiteralExpression(entry))) {
+        return mapFromSeedValue(lowerer, lowerer.lowerExprExpecting(argNode, DYN), mapT);
+      }
       const tuple: IrType & { kind: "record" } = { kind: "record", shapeId: lowerer.shapes.intern([
         { name: "0", type: mapT.key }, { name: "1", type: mapT.value },
       ], true) };

@@ -22,6 +22,46 @@ static ScrDyn *nothing(ScrClosure *closure, ScrDyn *const *args, size_t argc) {
 
 int main(void) {
   scr_init();
+  /* A live alias survives collection; dropping it releases the entire
+   * object/closure/capture cycle, including its acyclic string leaf. */
+  for (int i = 0; i < 2000; i++) {
+#ifdef SCR_RC_AUDIT
+    long before = scr_dyn_live_count();
+#endif
+    ScrDyn *object = scr_dyn_new_obj();
+    ScrClosure *closure = scr_closure_new(NULL, 1);
+    closure->caps[0] = scr_box_new_obj(scr_dyn_retain_v, scr_dyn_release_v, scr_dyn_trace_v);
+    scr_box_set_ref(closure->caps[0], scr_dyn_retain(object));
+    ScrDyn *callback = scr_dyn_new_func(closure, nothing, 0, "func()=>dyn", "read");
+    scr_dyn_obj_set(object, "read", 4, callback);
+    ScrStr *text = scr_str_new("alive", 5);
+    scr_dyn_obj_set(object, "text", 4, scr_dyn_new_str(text));
+    scr_str_release(text);
+    ScrDyn *alias = scr_dyn_retain(object);
+    scr_dyn_release(object);
+    scr_collect_cycles();
+    assert(scr_dyn_obj_get(alias, "text", 4)->v.str->len == 5);
+    scr_dyn_release(alias);
+    scr_collect_cycles();
+#ifdef SCR_RC_AUDIT
+    assert(scr_dyn_live_count() == before);
+#endif
+  }
+  /* A checked bigint owns its payload independently of the producing slot. */
+  for (int i = 0; i < 2000; i++) {
+    ScrStr *decimal = scr_str_new("18446744073709551615", 20);
+    ScrBigInt *integer = scr_bigint_parse(decimal);
+    ScrDyn *boxed = scr_dyn_new_bigint(integer);
+    scr_bigint_release(integer);
+    ScrDyn *copy = scr_dyn_new_bigint(boxed->v.bigint);
+    assert(scr_dyn_strict_eq(boxed, copy) && scr_dyn_truthy(copy));
+    scr_dyn_release(boxed);
+    ScrStr *rendered = scr_dyn_to_string(copy, NULL);
+    assert(scr_str_eq(decimal, rendered));
+    scr_str_release(decimal);
+    scr_str_release(rendered);
+    scr_dyn_release(copy);
+  }
   ScrDyn *snapshot = scr_dyn_mark_snapshot(scr_dyn_new_obj());
   scr_dyn_release(snapshot);
   ScrDyn *fresh = scr_dyn_new_obj();

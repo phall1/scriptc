@@ -103,3 +103,19 @@ describe("native typed-array boundaries", () => {
     expect(isIslandCallbackParamType(shape, record, union)).toBe(false);
   });
 });
+
+describe("native bigint checked storage", () => {
+  test("checks nested bigints without declaring them JSON or island safe", () => {
+    const bigint: IrType = { kind: "bigint" };
+    const record = (id: string): IrRecordShape | undefined => id === "integers"
+      ? { id, fields: [{ name: "values", type: arrayOf(bigint) }] } : undefined;
+    const union = (): IrUnionDef | undefined => undefined;
+    for (const type of [bigint, arrayOf(bigint), { kind: "record", shapeId: "integers" } as IrType]) {
+      expect(canConvertToDyn(type, record, union)).toBe(true);
+      expect(canDynCheckTo(type, record, union)).toBe(true);
+      expect(isJsonSafeType(type, record, union)).toBe(false);
+      expect(isJsonStringifySafeType(type, record, union)).toBe(false);
+      expect(isIslandCallbackParamType(type, record, union)).toBe(false);
+    }
+  });
+});

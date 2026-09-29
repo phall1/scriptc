@@ -302,6 +302,12 @@ export function unionWidenHelper(emitter: CEmitter, fromId: string, toId: string
       `  case SCR_DYN_UNDEF: scr_jb_puts(b, "undefined"); break;`,
       `  case SCR_DYN_NULL: scr_jb_puts(b, "null"); break;`,
       `  case SCR_DYN_BOOL: scr_jb_puts(b, d->v.b ? "true" : "false"); break;`,
+      `  case SCR_DYN_BIGINT: {`,
+      `    ScrStr *s = scr_bigint_to_string(d->v.bigint, 10);`,
+      `    for (size_t i = 0; i < s->len; i++) scr_jb_putc(b, s->data[i]);`,
+      `    scr_str_release(s);`,
+      `    break;`,
+      `  }`,
       `  case SCR_DYN_NUM: {`,
       `    ScrStr *s = scr_f64_to_scrstr(d->v.num); /* String(n): NaN/Infinity spelled out, not JSON null */`,
       `    for (size_t i = 0; i < s->len; i++) scr_jb_putc(b, s->data[i]);`,
@@ -364,11 +370,12 @@ export function unionWidenHelper(emitter: CEmitter, fromId: string, toId: string
       `    if (d->v.fn.name) scr_jb_puts(b, d->v.fn.name);`,
       `    scr_jb_puts(b, "() { [native code] }");`,
       `    break;`,
-      `  case SCR_DYN_HANDLE:`,
-      `    /* Object.prototype.toString — Node's String() over these`,
-      `     * classes (IncomingMessage/ServerResponse/Socket). */`,
-      `    scr_jb_puts(b, "[object Object]");`,
+      `  case SCR_DYN_HANDLE: {`,
+      `    ScrStr *s = scr_dyn_to_string(d, NULL);`,
+      `    for (size_t i = 0; i < s->len; i++) scr_jb_putc(b, s->data[i]);`,
+      `    scr_str_release(s);`,
       `    break;`,
+      `  }`,
       `  case SCR_DYN_PROMISE:`,
       `    /* Object.prototype.toString with the Promise @@toStringTag. */`,
       `    scr_jb_puts(b, "[object Promise]");`,
@@ -774,6 +781,15 @@ export function jsonWriteHelper(emitter: CEmitter, t: IrType): string {
       );
     }
     switch (t.kind) {
+      case "regex":
+        d.push(`  return scr_dyn_native_regex_is(d);`);
+        break;
+      case "set":
+        d.push(`  return scr_dyn_native_set_is(d);`);
+        break;
+      case "bigint":
+        d.push(`  return d->kind == SCR_DYN_BIGINT;`);
+        break;
       case "f64":
         d.push(`  return d->kind == SCR_DYN_NUM;`);
         break;
@@ -1221,6 +1237,17 @@ export function jsonWriteHelper(emitter: CEmitter, t: IrType): string {
       }
     }
     switch (t.kind) {
+      case "regex":
+        d.push(`  return scr_dyn_native_regex_check(d, path);`);
+        break;
+      case "set":
+        d.push(`  if (!scr_dyn_native_set_is(d)) { scr_dyn_check_fail(path, ${want}, d); return NULL; }`);
+        d.push(`  return scr_map_retain((ScrMap *)d->v.handle.ptr);`);
+        break;
+      case "bigint":
+        d.push(`  if (d->kind != SCR_DYN_BIGINT) { scr_dyn_check_fail(path, ${want}, d); return NULL; }`);
+        d.push(`  return scr_bigint_retain(d->v.bigint);`);
+        break;
       case "f64":
         d.push(`  if (d->kind != SCR_DYN_NUM) { scr_dyn_check_fail(path, ${want}, d); return 0; }`);
         d.push(`  return d->v.num;`);
@@ -1475,7 +1502,7 @@ export function jsonWriteHelper(emitter: CEmitter, t: IrType): string {
         d.push(`  if (strcmp(d->v.fn.sig, ${sigLit}) == 0) return scr_closure_retain(d->v.fn.clo);`);
         d.push(`  {`);
         d.push(`    ScrClosure *a = scr_closure_new((void *)&${adapter}, 1);`);
-        d.push(`    a->caps[0] = scr_box_new_obj(&scr_dyn_retain_v, &scr_dyn_release_v, NULL);`);
+        d.push(`    a->caps[0] = scr_box_new_obj(&scr_dyn_retain_v, &scr_dyn_release_v, &scr_dyn_trace_v);`);
         d.push(`    scr_box_set_ref(a->caps[0], scr_dyn_retain((ScrDyn *)d));`);
         d.push(`    return a;`);
         d.push(`  }`);
@@ -1516,6 +1543,15 @@ export function jsonWriteHelper(emitter: CEmitter, t: IrType): string {
     const d: string[] = [`${sig} { /* to-dyn ${key} */`];
     let sourceAccessor: { name: string; release: string } | null = null;
     switch (t.kind) {
+      case "regex":
+        d.push(`  return scr_dyn_native_regex(v);`);
+        break;
+      case "set":
+        d.push(`  return scr_dyn_native_set(v);`);
+        break;
+      case "bigint":
+        d.push(`  return scr_dyn_new_bigint(v); /* retains v */`);
+        break;
       case "f64":
         d.push(`  return scr_dyn_new_num(v);`);
         break;
@@ -1762,7 +1798,7 @@ export function jsonWriteHelper(emitter: CEmitter, t: IrType): string {
     emitter.walkerProtos.push(`${sig}; /* dyn-box settle adapter for promise<${key}> */`);
     const d: string[] = [`${sig} { /* dyn-box settle adapter for promise<${key}> */`];
     const fulfill = (expr: string) =>
-      `  scr_promise_fulfill_ref(dst, ${expr}, scr_dyn_retain_v, scr_dyn_release_v, NULL);`;
+      `  scr_promise_fulfill_ref(dst, ${expr}, scr_dyn_retain_v, scr_dyn_release_v, scr_dyn_trace_v);`;
     switch (inner.kind) {
       case "void":
       case "undefinedT":

@@ -584,6 +584,7 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
             test = orIsl(oneOf([DYN_KIND.FUNC]), "scr_dyn_isl_typeof_is", host.cstr("function"));
           } else {
             const kindOf: Record<string, number> = {
+              bigint: DYN_KIND.BIGINT,
               string: DYN_KIND.STR,
               number: DYN_KIND.NUM,
               boolean: DYN_KIND.BOOL,

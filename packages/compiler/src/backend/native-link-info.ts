@@ -159,7 +159,6 @@ function runtimeSourceRecipe(
     ...(features.emitter ? ["scr_events_emitter.c"] : []),
     ...(features.emitter || net ? ["scr_dyn_handle.c"] : []),
     ...(features.symbol ? ["scr_symbol.c"] : []),
-    ...(features.bigint ? ["scr_bigint.c"] : []),
     ...(features.assert && features.bigint ? ["scr_bigint_assert.c"] : []),
     ...(features.searchParams ? ["scr_url_params.c"] : []),
     ...(features.qs ? ["scr_qs.c"] : []),

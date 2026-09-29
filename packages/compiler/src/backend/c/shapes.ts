@@ -717,6 +717,8 @@ function emitRecordCloneC(
    * the type cannot participate in a cycle (see the constructor fixpoint). */
   export function traceAdapterC(emitter: CEmitter, t: IrType): string | null {
     switch (t.kind) {
+      case "dyn":
+        return "scr_dyn_trace_v";
       case "classval":
         return "scr_classobj_trace_v";
       case "func":
@@ -822,12 +824,7 @@ function emitRecordCloneC(
       // Island handles: the box carries scr_jsval_retain_v/release_v and
       // no trace — the same stance as jsval array elements.
       t.kind === "jsval" ||
-      // Checked-dynamic captures (the mustCall wrapper closing over its
-      // implicit-any `fn` param): the box carries scr_dyn_retain_v/
-      // release_v and NO trace — a dyn tree is pure data except the
-      // function kind, whose closure edge stays invisible to the
-      // collector (trial deletion treats it as an external root: cycles
-      // through dyn never collect, nothing dangles — SEMANTICS.md).
+      // Checked values trace native objects, arrays and captured closures.
       t.kind === "dyn" ||
       // A CYCLE-CAPABLE array must ride the obj-box so the box's trace
       // reaches it (SCR_BOX_ARR payloads are never traced); acyclic arrays

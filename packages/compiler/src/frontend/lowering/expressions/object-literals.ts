@@ -531,6 +531,14 @@ return prefix.length === 0 ? selected : { kind: "seqExpr", stmts: prefix, result
 export function lowerObjectLiteral(lowerer: Lowerer, expr: ts.ObjectLiteralExpression,
   expected?: IrType & { kind: "record" },): IrExpr {
   const loc = locOf(expr);
+  // Module collection already chose checked storage for this JavaScript
+  // binding. Construct in that representation: an intermediate record would
+  // check nested aliases back into inferred shapes and lose their identity.
+  if (isJsSourceFile(expr.getSourceFile()) && ts.isVariableDeclaration(expr.parent) &&
+      expr.parent.initializer === expr && ts.isIdentifier(expr.parent.name) &&
+      lowerer.globalOf(expr.parent.name)?.type.kind === "dyn") {
+    return lowerDynObjectLiteral(lowerer, expr);
+  }
   // The RUNTIME-KEYED literal (JS): a computed key that doesn't fold to a
   // compile-time string means the literal's shape is not a compile-time
   // fact — no record shape can hold it. The whole literal builds as a dyn

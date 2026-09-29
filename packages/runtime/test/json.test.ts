@@ -20,6 +20,7 @@ beforeAll(async () => {
     "-o", bin,
     join(testDir, "test_json.c"),
     join(testDir, "../src/scr_json.c"),
+    join(testDir, "../src/scr_bigint.c"),
     join(testDir, "../src/scr_string.c"),
     join(testDir, "../src/scr_array.c"),
     join(testDir, "../src/scr_map.c"),

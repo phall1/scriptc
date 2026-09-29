@@ -283,6 +283,7 @@ export const LIB_FN_SYMS: Record<string, string> = {
   // The checked-dynamic compare/equals validators (scr_bytes_io.c):
   // Node's argument ladders throw catchably (MAY_THROW_LIB_FNS).
   "dyn.toStringCoerce": "scr_dyn_string_coerce_js",
+  "dyn.numberConstructor": "scr_dyn_number_constructor",
   "dyn.toNumberCoerce": "scr_dyn_number_coerce",
   "dyn.add": "scr_dyn_add",
   "dyn.proxyNew": "scr_dyn_proxy_new",
@@ -560,7 +561,11 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "dyn.arrayProtoCall": "scr_dyn_array_proto_call",
   "dyn.typeof": "scr_dyn_typeof",
   "dyn.objectTag": "scr_dyn_object_tag",
-  "dyn.toString": "scr_dyn_to_string_method",
+  "dyn.freeze": "scr_dyn_freeze",
+  "dyn.isFrozen": "scr_dyn_is_frozen",
+  "dyn.nativeSetIs": "scr_dyn_native_set_is",
+  "dyn.nativeRegexIs": "scr_dyn_native_regex_is",
+  "dyn.toString": "scr_dyn_to_string_argument",
   "dyn.this": "scr_dyn_this_get",
   "insp.dyn": "scr_insp_dyn",
   "insp.dynS": "scr_insp_dyn_s",
@@ -874,6 +879,7 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "dyn.cloneMissing": "scr_structured_clone_missing",
   "dyn.cloneTransferFail": "scr_structured_clone_transfer_fail",
   "regex.new": "scr_regex_new",
+  "regex.newChecked": "scr_regex_new_checked",
   // queueMicrotask's checked-dynamic form (borrowed dyn; a non-function
   // throws synchronously), the minted setImmediate value, and the
   // timers/promises immediate — all mark the loop live.

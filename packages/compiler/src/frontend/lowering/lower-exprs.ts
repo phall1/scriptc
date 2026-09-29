@@ -693,7 +693,7 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
         array: "object", object: "object", record: "object",
         symbol: "symbol",
         map: "object", set: "object", promise: "object", bytes: "object",
-        regexp: "object", generator: "object", classval: "function",
+        regex: "object", generator: "object", classval: "function",
         moduleNs: "object",
         undefinedT: "undefined", nullT: "object",
       };
@@ -2501,7 +2501,7 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
       const narrowed = lowerer.mapTypeOf(lowerer.typeOf(node));
       if (
         narrowed &&
-        (narrowed.kind === "f64" || narrowed.kind === "bool" || narrowed.kind === "string")
+        (narrowed.kind === "f64" || narrowed.kind === "bool" || narrowed.kind === "string" || narrowed.kind === "bigint")
       ) {
         return { kind: "dynCheck", value: expr, type: narrowed, loc: expr.loc };
       }
@@ -5950,6 +5950,9 @@ export function lowerPrefixUnary(lowerer: Lowerer, expr: ts.PrefixUnaryExpressio
       }
       case ts.SyntaxKind.PlusToken: {
         const raw = lowerer.lowerExpr(expr.operand);
+        if (raw.type.kind === "dyn") {
+          return { kind: "libCall", fn: "dyn.toNumberCoerce", args: [raw], type: F64, loc };
+        }
         // Unary + is ToNumber; on an already-number operand it's identity,
         // and a STRING operand runs the runtime's ECMA-exact StringToNumber
         // (num.fromString — Number(aString)'s lowering, scr_string.c).
@@ -6620,6 +6623,17 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
             return { kind: "orDefault", left, right: dflt, type: rest[0]!, loc };
           }
         }
+        // JavaScript defaults can join differently inferred object layouts.
+        // When both operands have native checked representations, preserve
+        // the deciding value and short-circuit evaluation in that domain.
+        if (isJsSourceFile(expr.getSourceFile()) &&
+            lowerer.dynConvertible(left.type) && lowerer.dynConvertible(right.type)) {
+          return {
+            kind: "logical", op: op === ts.SyntaxKind.AmpersandAmpersandToken ? "&&" : "||",
+            left: lowerer.coerceInto(expr.left, left, DYN),
+            right: lowerer.coerceInto(expr.right, right, DYN), type: DYN, loc,
+          };
+        }
         lowerer.unsupported(
           "SC1090",
           expr,
@@ -6732,7 +6746,8 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
         const scalarSide = dynSide === left ? right : left;
         const reference = scalarSide.type;
         if ((isDynTypedRefType(reference) || reference.kind === "record" || reference.kind === "array" ||
-             reference.kind === "bytes" || reference.kind === "func" || DYN_HANDLE_KINDS.has(reference.kind)) &&
+             reference.kind === "bytes" || reference.kind === "func" || reference.kind === "regex" ||
+             reference.kind === "bigint" || reference.kind === "set" || DYN_HANDLE_KINDS.has(reference.kind)) &&
             lowerer.dynConvertible(reference)) {
           const boxed: IrExpr = {
             kind: "dynFrom", value: scalarSide, type: DYN, loc: scalarSide.loc,
@@ -7071,7 +7086,10 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
         const indexed = tryLowerIndexedComparison(lowerer, left, right, negated, loc);
         if (indexed) return indexed;
         if (plainBothNum) return { kind: "bin", op: negated ? "!==" : "===", left, right, type: BOOL, loc };
-        if (bothStr) return { kind: "strEq", negated, left, right, type: BOOL, loc };
+        if (bothStr) {
+          if (left.kind === "strLit" && right.kind === "strLit") return { kind: "boolLit", value: (left.value === right.value) !== negated, type: BOOL, loc };
+          return { kind: "strEq", negated, left, right, type: BOOL, loc };
+        }
         // bool === bool: a plain value compare (the config-drift checks'
         // `desired.lanMode !== actual.lanMode` shape).
         if (left.type.kind === "bool" && right.type.kind === "bool") {
@@ -7199,6 +7217,7 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
           (idLeft.type.kind === "array" ||
             idLeft.type.kind === "map" ||
             idLeft.type.kind === "set" ||
+            idLeft.type.kind === "regex" ||
             idLeft.type.kind === "object" ||
             idLeft.type.kind === "record" ||
             // Symbols ARE identity: `Symbol('a') === Symbol('a')` is false,
@@ -7666,7 +7685,7 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
           "'typeof' tests on 'unknown' values against non-literal strings",
         );
       }
-      if (b.text === "string" || b.text === "number" || b.text === "boolean" || b.text === "undefined") {
+      if (b.text === "string" || b.text === "number" || b.text === "boolean" || b.text === "undefined" || b.text === "bigint") {
         return {
           kind: "dynTest",
           test: b.text,
@@ -7703,14 +7722,8 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
           loc,
         };
       }
-      // Kinds a dyn box can NEVER hold — no conversion into 'unknown'
-      // exists for bigints or symbols (dynFrom's domain is JSON-safe data
-      // + bytes + Error + functions), so the test's answer is a
-      // compile-time constant: false for ===, true for !==. The capability
-      // probes this settles (`typeof ms === 'bigint'` in dual-mode number
-      // helpers) then FOLD their impossible arm (lowerTernary), which is
-      // what lets the reachable arm compile statically.
-      if (b.text === "bigint" || b.text === "symbol") {
+      // Native checked values do not yet carry symbols.
+      if (b.text === "symbol") {
         return { kind: "boolLit", value: negated, type: BOOL, loc };
       }
       lowerer.unsupported(
@@ -7910,6 +7923,12 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
       const right = lowerer.lowerExpr(expr.right);
       return { kind: "jsOp", op: "instanceOf", args: [left, right], type: BOOL, loc };
     }
+    if (!lowerer.dynamic && lowerer.isStdlibGlobal(expr.right, "Set")) {
+      const value = lowerer.lowerExpr(expr.left);
+      if (value.type.kind === "dyn") return { kind: "libCall", fn: "dyn.nativeSetIs", args: [value], type: BOOL, loc };
+      if (value.type.kind === "set") return { kind: "seqExpr", stmts: [{ kind: "exprStmt", expr: value, loc }],
+        result: { kind: "boolLit", value: true, type: BOOL, loc }, type: BOOL, loc };
+    }
     if (lowerer.isStdlibGlobal(expr.right, "WeakMap") || lowerer.isStdlibGlobal(expr.right, "WeakSet")) {
       if (lowerer.dynamic) {
         const value = lowerer.jsvalIn(lowerer.lowerExpr(expr.left), expr.left);
@@ -7992,6 +8011,7 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
         !lowerer.caughtLocalOf(expr.left)
       ) {
         const left = lowerer.lowerExpr(expr.left);
+        if (left.type.kind === "dyn") return { kind: "libCall", fn: "dyn.nativeRegexIs", args: [left], type: BOOL, loc };
         if (left.type.kind === "union") {
           const def = lowerer.unions.get(left.type.unionId);
           const tag = def ? def.arms.findIndex((a) => a.kind === "regex") : -1;

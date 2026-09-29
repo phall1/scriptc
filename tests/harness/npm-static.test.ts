@@ -129,7 +129,7 @@ describe(`npm-static pilots${sanitize ? " (sanitized)" : ""}`, () => {
   });
 
   test.each(["stored-native-builtins.js", "stored-object-helpers.js", "renderer-specializations.js", "renderer-export-dictionaries.js",
-    "fresh-array-union-layout.js", "async-backend-factory.mjs", "destructure-inferred-row-defaults.js", "object-from-checked-entries.js"].flatMap((name) =>
+    "fresh-array-union-layout.js", "async-backend-factory.mjs", "destructure-inferred-row-defaults.js", "object-from-checked-entries.js", "regex-checked-storage.js", "set-checked-methods.js", "frozen-checked-dictionaries.mjs", "checked-renderer-defaults.js"].flatMap((name) =>
     (["c", "llvm"] as const).map((backend) => ({ name, backend })),
   ))("renderer startup $name compiles from shipped JavaScript ($backend)", async ({ name, backend }) => {
     const dir = mkdtempSync(join(tmpdir(), "scriptc-renderer-startup-"));

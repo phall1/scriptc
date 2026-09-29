@@ -445,6 +445,8 @@ static bool scr_assert_dyn_same_value(const ScrDyn *a, const ScrDyn *b) {
       return true;
     case SCR_DYN_BOOL:
       return a->v.b == b->v.b;
+    case SCR_DYN_BIGINT:
+      return scr_bigint_eq(a->v.bigint, b->v.bigint);
     case SCR_DYN_NUM:
       return scr_assert_same_value_f64(a->v.num, b->v.num);
     case SCR_DYN_STR:
@@ -512,6 +514,8 @@ static bool scr_assert_dyn_deep_eq(const ScrDyn *a, const ScrDyn *b) {
       return true;
     case SCR_DYN_BOOL:
       return a->v.b == b->v.b;
+    case SCR_DYN_BIGINT:
+      return scr_bigint_eq(a->v.bigint, b->v.bigint);
     case SCR_DYN_NUM:
       return scr_assert_same_value_f64(a->v.num, b->v.num);
     case SCR_DYN_STR:
@@ -631,6 +635,12 @@ static void scr_assert_cf_value(ScrAssertBuf *b, const ScrDyn *d, size_t indent,
     case SCR_DYN_BOOL:
       ab_cstr(b, d->v.b ? "true" : "false");
       return;
+    case SCR_DYN_BIGINT: {
+      ScrStr *text = scr_bigint_inspect(d->v.bigint);
+      ab_str(b, text);
+      scr_str_release(text);
+      return;
+    }
     case SCR_DYN_NUM: {
       char tmp[40];
       size_t n = scr_assert_inspect_f64(d->v.num, tmp);

@@ -1467,13 +1467,18 @@ export function collectGlobals(lowerer: Lowerer, sf: ts.SourceFile, topStmts: ts
             // dyn-representable (unmappable member types are the checked-dynamic tree
             // fallback's own case) — so shorthand aggregates (test/common's
             // export object: alias plumbing importers resolve THROUGH),
-            // spreads, accessors, and literals holding unconvertible typed
+            // accessors, and literals holding unconvertible typed
             // values (a Map member) keep their static/alias stories.
+            // Spreads from an existing checked dictionary stay checked too;
+            // copying its entries must not extract nested callable records.
             if (
               isJsSourceFile(sf) &&
               ts.isIdentifier(decl.name) && nameNode === decl.name &&
               decl.initializer !== undefined && ts.isObjectLiteralExpression(decl.initializer) &&
               decl.initializer.properties.every((p) => {
+                if (ts.isSpreadAssignment(p)) {
+                  return ts.isIdentifier(p.expression) && lowerer.globalOf(p.expression)?.type.kind === "dyn";
+                }
                 if (!ts.isPropertyAssignment(p) || ts.isComputedPropertyName(p.name)) return false;
                 const mt = lowerer.mapTypeOf(lowerer.typeOf(p.initializer));
                 return mt === null || mt.kind === "dyn" ||
@@ -1591,6 +1596,14 @@ export function collectGlobals(lowerer: Lowerer, sf: ts.SourceFile, topStmts: ts
                   (uncheckedOverloadHandleCall(lowerer, decl.initializer) ? JSVAL : null) : null)
                 : null;
             let type = handleT ?? lowerer.irTypeOf(nameNode);
+            // Unannotated JavaScript aliases retain an existing native
+            // checked object instead of copying it into an inferred record.
+            if (isJsSourceFile(sf) && !decl.type && !hasJsTypeAnnotation(decl) &&
+                decl.initializer && ts.isIdentifier(decl.initializer) &&
+                (type.kind === "record" || type.kind === "func")) {
+              const source = lowerer.globalOf(decl.initializer);
+              if (source?.type.kind === "dyn") type = DYN;
+            }
             // JavaScript bind inference can leave an artificial tuple-rest
             // signature. Keep the returned callable's runtime arity intact.
             if (isJsSourceFile(sf) && type.kind === "func" && decl.initializer &&
