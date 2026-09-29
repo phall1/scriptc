@@ -362,8 +362,19 @@ static SCR_TL int scr_exit_code_hint = 0;
 void scr_exit_code_note(int code) { scr_exit_code_hint = code; }
 int scr_exit_code_hint_get(void) { return scr_exit_code_hint; }
 
+int (*scr_uncaught_exception_hook)(bool from_promise) = NULL;
+static bool scr_uncaught_handler_failed = false;
+
+bool scr_exc_handle_uncaught(bool from_promise) {
+  if (!scr_exc_pending()) return true;
+  if (!scr_uncaught_exception_hook || scr_uncaught_handler_failed) return false;
+  int result = scr_uncaught_exception_hook(from_promise);
+  if (result < 0) scr_uncaught_handler_failed = true;
+  return result > 0;
+}
+
 void scr_exc_print_uncaught(void) {
-  scr_exit_code_note(1);
+  scr_exit_code_note(scr_uncaught_handler_failed ? 7 : 1);
   /* Settle any runtime-internal stdout fragment before the stderr line when
    * both share an fd. JavaScript-visible writes already flush themselves. */
   fflush(stdout);

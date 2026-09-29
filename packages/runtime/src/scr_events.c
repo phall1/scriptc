@@ -1,5 +1,5 @@
 /* Process events and stdin streaming — the OPTIONAL half of the event
- * loop: signal handlers (process.on/once/off of SIGINT/SIGTERM), the
+ * loop: signal handlers (named process.on/once/off signal handlers), the
  * process 'exit' event, and the piped-stdin surface ('data'/'end'/'error'
  * listeners plus the for-await chunk source). This translation unit links
  * ONLY into binaries whose IR uses those surfaces (moduleUsesProcessEvents
@@ -59,7 +59,7 @@ void scr_child_err_thunk_error(ScrClosure *cb, ScrStr *msg) {
 }
 #endif
 
-/* ── process signal events (process.on("SIGINT" | "SIGTERM")) ─────────
+/* ── process signal events (process.on(name, listener)) ─────────
  * Classic self-pipe integration: a watched signal's sigaction handler
  * (installed WITHOUT SA_RESTART) sets a per-signal flag and writes one
  * byte into the wake pipe. The loop drains flags at every turn and the
@@ -75,8 +75,10 @@ void scr_child_err_thunk_error(ScrClosure *cb, ScrStr *msg) {
  * kernel coalesces pending non-RT signals the same way). */
 
 typedef struct {
-  ScrClosure *cb; /* owned */
+  ScrDyn *cb; /* owned; checked callable */
+  ScrStr *name; /* aliases of one signum remain distinct event names */
   bool once;
+  uint64_t id;
 } ScrSigListener;
 
 typedef struct ScrSigReg {
@@ -91,18 +93,20 @@ typedef struct ScrSigReg {
   struct ScrSigReg *next;
 } ScrSigReg;
 
-/* Classic signal numbers only (SIGINT 2 / SIGTERM 15 today; every POSIX
- * classic fits) — NSIG is not visible under strict _XOPEN_SOURCE. */
+/* Every named classic POSIX signal fits; NSIG is hidden by strict
+ * _XOPEN_SOURCE. Unknown SIG-prefixed names use the unwatched slot zero. */
 #define SCR_SIG_MAX 32
 
 static ScrSigReg *scr_sig_regs = NULL;
+static uint64_t scr_sig_id = 0;
 static size_t scr_sig_watched = 0; /* watched signal COUNT (regs) */
 static volatile sig_atomic_t scr_sig_flag[SCR_SIG_MAX];
 static volatile sig_atomic_t scr_sig_any = 0;
 static int scr_wake_pipe[2] = {-1, -1};
 
 static void scr_sig_handler(int sig) {
-  if (sig < 0 || sig >= SCR_SIG_MAX) return;
+  if (sig <= 0 || sig >= SCR_SIG_MAX) return;
+  int saved_errno = errno;
 #ifdef _WIN32
   /* msvcrt reset the disposition to SIG_DFL before this call (SysV
    * semantics); re-arm so the next delivery reaches us too. Only ever
@@ -116,6 +120,7 @@ static void scr_sig_handler(int sig) {
     ssize_t ignored = write(scr_wake_pipe[1], "s", 1);
     (void)ignored; /* a full pipe still wakes the poller */
   }
+  errno = saved_errno;
 }
 
 static void scr_sig_reg_drop(ScrSigReg *reg);
@@ -128,7 +133,10 @@ static void scr_sig_reg_drop(ScrSigReg *reg);
 static void scr_sig_cleanup(void) {
   while (scr_sig_regs) {
     ScrSigReg *reg = scr_sig_regs;
-    for (size_t i = 0; i < reg->n; i++) scr_closure_release(reg->ls[i].cb);
+    for (size_t i = 0; i < reg->n; i++) {
+      scr_dyn_release(reg->ls[i].cb);
+      scr_str_release(reg->ls[i].name);
+    }
     reg->n = 0;
     scr_sig_reg_drop(reg);
   }
@@ -159,143 +167,161 @@ static void scr_wake_pipe_drain(void) {
   while (read(scr_wake_pipe[0], buf, sizeof buf) > 0) {}
 }
 
-void scr_signal_on(double signum, ScrClosure *cb /*moves*/, bool once) {
-#ifdef __wasi__
-  (void)signum;
-  (void)once;
-  scr_closure_release(cb);
-  /* The compiler rejects this capability before linking. This guard keeps
-   * the optional events unit honest if hand-authored IR reaches it. */
-  scr_trap("scriptc: internal error: OS signal surface reached on WASI\n");
-  return;
-#else
-  int sig = (int)signum;
-  if (sig <= 0 || sig >= SCR_SIG_MAX) {
-    scr_closure_release(cb); /* frontend only emits classic signals */
-    return;
+/* A computed process-event name is accepted here only for the signal
+ * family. Other process-event families retain their explicit lowerings. */
+static bool scr_signal_check(ScrStr *name, ScrDyn *cb) {
+  if (cb->kind != SCR_DYN_FUNC) {
+    const char *msg = "The \"listener\" argument must be of type function";
+    scr_throw_error_msg_code(SCR_ERR_TYPE, msg, strlen(msg), "ERR_INVALID_ARG_TYPE");
+    return false;
   }
+  if (name->len < 3 || memcmp(name->data, "SIG", 3) != 0) {
+    const char *msg = "scriptc: computed process event names currently support the SIG signal family";
+    scr_throw_error_msg(SCR_ERR_ERROR, msg, strlen(msg));
+    return false;
+  }
+  return true;
+}
+
+void scr_signal_on(ScrStr *name, ScrDyn *cb, bool once) {
+  if (!scr_signal_check(name, cb)) return;
+#ifdef __wasi__
+  (void)once;
+  scr_trap("scriptc: internal error: OS signal surface reached on WASI\n");
+#else
+  int sig = scr_signal_from_name(name);
+  if (sig < 0) sig = 0; /* e.g. SIGBREAK on POSIX: ordinary inert event */
   ScrSigReg *reg = scr_sig_regs;
   while (reg && reg->sig != sig) reg = reg->next;
   if (!reg) {
     reg = calloc(1, sizeof *reg);
     if (!reg) scr_events_oom();
     reg->sig = sig;
+    if (sig > 0) {
+      bool failed = sig >= SCR_SIG_MAX;
+#ifdef _WIN32
+      /* The Windows CRT rejects non-CRT signal numbers via its fatal
+       * invalid-parameter handler. Keep these forms explicitly fenced. */
+      if (sig != SIGINT && sig != SIGILL && sig != SIGABRT && sig != SIGFPE &&
+          sig != SIGSEGV && sig != SIGTERM && sig != SIGBREAK) failed = true;
+      if (!failed) {
+        reg->prev = signal(sig, scr_sig_handler);
+        failed = reg->prev == SIG_ERR;
+      }
+#else
+      struct sigaction sa;
+      memset(&sa, 0, sizeof sa);
+      sa.sa_handler = scr_sig_handler;
+      sigemptyset(&sa.sa_mask);
+      if (!failed) failed = sigaction(sig, &sa, &reg->prev) != 0;
+#endif
+      if (failed) {
+        free(reg);
+        const char *msg = "uv_signal_start EINVAL";
+        scr_throw_error_msg_code(SCR_ERR_ERROR, msg, strlen(msg), "EINVAL");
+        return;
+      }
+      scr_sig_watched++;
+      scr_wake_pipe_init();
+    }
     reg->next = scr_sig_regs;
     scr_sig_regs = reg;
-    scr_sig_watched++;
-    scr_wake_pipe_init();
-#ifdef _WIN32
-    reg->prev = signal(sig, scr_sig_handler);
-    if (reg->prev == SIG_ERR) reg->prev = SIG_DFL;
-#else
-    struct sigaction sa;
-    memset(&sa, 0, sizeof sa);
-    sa.sa_handler = scr_sig_handler;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0; /* NO SA_RESTART: idle sleeps must EINTR */
-    sigaction(sig, &sa, &reg->prev);
-#endif
   }
   if (reg->n == reg->cap) {
     reg->cap = reg->cap ? reg->cap * 2 : 2;
     reg->ls = realloc(reg->ls, reg->cap * sizeof *reg->ls);
     if (!reg->ls) scr_events_oom();
   }
-  reg->ls[reg->n].cb = cb;
-  reg->ls[reg->n].once = once;
-  reg->n++;
+  reg->ls[reg->n++] = (ScrSigListener){scr_dyn_retain(cb), scr_str_retain(name), once, ++scr_sig_id};
 #endif
 }
 
 static void scr_sig_reg_drop(ScrSigReg *reg) {
+  if (reg->sig > 0) {
 #ifdef _WIN32
-  signal(reg->sig, reg->prev); /* default disposition back */
-#elif defined(__wasi__)
-  /* No signal disposition exists in WASI Preview 1. The compiler refuses
-   * signal registrations, so this arm is only the cleanup safety net. */
-#else
-  sigaction(reg->sig, &reg->prev, NULL); /* default disposition back */
+    signal(reg->sig, reg->prev);
+#elif !defined(__wasi__)
+    sigaction(reg->sig, &reg->prev, NULL);
 #endif
+    scr_sig_watched--;
+    scr_sig_flag[reg->sig] = 0;
+  }
   ScrSigReg **link = &scr_sig_regs;
   while (*link != reg) link = &(*link)->next;
   *link = reg->next;
-  scr_sig_watched--;
   free(reg->ls);
   free(reg);
 }
 
-void scr_signal_off(double signum, ScrClosure *cb /*borrowed*/) {
-#ifdef __wasi__
-  (void)signum;
-  (void)cb;
-  scr_trap("scriptc: internal error: OS signal surface reached on WASI\n");
-  return;
-#else
-  int sig = (int)signum;
+static void scr_sig_remove(ScrSigReg *reg, size_t i) {
+  scr_dyn_release(reg->ls[i].cb);
+  scr_str_release(reg->ls[i].name);
+  memmove(reg->ls + i, reg->ls + i + 1, (reg->n - i - 1) * sizeof *reg->ls);
+  if (--reg->n == 0) scr_sig_reg_drop(reg);
+}
+
+void scr_signal_off(ScrStr *name, ScrDyn *cb) {
+  if (!scr_signal_check(name, cb)) return;
+  int sig = scr_signal_from_name(name);
+  if (sig < 0) sig = 0;
   ScrSigReg *reg = scr_sig_regs;
   while (reg && reg->sig != sig) reg = reg->next;
   if (!reg) return;
-  for (size_t i = 0; i < reg->n; i++) {
-    if (reg->ls[i].cb == cb) { /* first match, like Node's removeListener */
-      scr_closure_release(reg->ls[i].cb);
-      memmove(reg->ls + i, reg->ls + i + 1, (reg->n - i - 1) * sizeof *reg->ls);
-      reg->n--;
-      if (reg->n == 0) scr_sig_reg_drop(reg);
+  /* EventEmitter removes the most recently registered matching listener. */
+  for (size_t i = reg->n; i > 0; i--) {
+    ScrSigListener *l = &reg->ls[i - 1];
+    if (scr_str_eq(l->name, name) && scr_dyn_strict_eq(l->cb, cb)) {
+      scr_sig_remove(reg, i - 1);
       return;
     }
   }
-#endif
 }
 
-/* One dispatch pass: every flagged signal fires its listener SNAPSHOT
- * (Node emits over a copy — a listener removed mid-emit still runs for
- * this delivery; one added mid-emit waits for the next). `once` entries
- * leave the live list BEFORE their callback runs; an emptied list
- * restores the default disposition, so the next delivery of that signal
- * kills the process — Node-exact. A throw stops the pass and leaves the
- * exception for the loop. */
+/* Snapshot all pending deliveries before invoking user code. No live
+ * registry pointer survives a callback: off() can remove this signal or
+ * another pending signal and free either registry. */
 static void scr_signals_drain(void) {
   if (!scr_sig_any) return;
   scr_sig_any = 0;
-  ScrSigReg *reg = scr_sig_regs;
-  while (reg) {
-    ScrSigReg *next = reg->next; /* reg may drop below */
-    if (scr_sig_flag[reg->sig]) {
-      scr_sig_flag[reg->sig] = 0;
-      size_t n = reg->n;
-      ScrSigListener *snap = malloc(n * sizeof *snap);
-      if (!snap) scr_events_oom();
-      for (size_t i = 0; i < n; i++) {
-        snap[i] = reg->ls[i];
-        scr_closure_retain(snap[i].cb);
-      }
-      bool dropped = false;
-      for (size_t i = 0; i < n; i++) {
-        if (snap[i].once && !dropped) {
-          /* remove from the live list before invoking */
+  ScrSigListener *snap = NULL;
+  size_t n = 0;
+  for (ScrSigReg *reg = scr_sig_regs; reg; reg = reg->next) {
+    if (reg->sig <= 0 || !scr_sig_flag[reg->sig]) continue;
+    scr_sig_flag[reg->sig] = 0;
+    snap = realloc(snap, (n + reg->n) * sizeof *snap);
+    if (!snap) scr_events_oom();
+    for (size_t i = 0; i < reg->n; i++) {
+      snap[n] = reg->ls[i];
+      scr_dyn_retain(snap[n].cb);
+      scr_str_retain(snap[n].name);
+      n++;
+    }
+  }
+  for (size_t i = 0; i < n; i++) {
+    if (!scr_exc_pending()) {
+      if (snap[i].once) {
+        for (ScrSigReg *reg = scr_sig_regs; reg; reg = reg->next) {
+          bool found = false;
           for (size_t j = 0; j < reg->n; j++) {
-            if (reg->ls[j].cb == snap[i].cb) {
-              scr_closure_release(reg->ls[j].cb);
-              memmove(reg->ls + j, reg->ls + j + 1, (reg->n - j - 1) * sizeof *reg->ls);
-              reg->n--;
+            if (reg->ls[j].id == snap[i].id) {
+              scr_sig_remove(reg, j);
+              found = true;
               break;
             }
           }
-          if (reg->n == 0) {
-            scr_sig_reg_drop(reg);
-            dropped = true;
-          }
+          if (found) break;
         }
-        if (!scr_exc_pending()) {
-          ((void (*)(ScrClosure *))snap[i].cb->fn)(snap[i].cb);
-        }
-        scr_closure_release(snap[i].cb);
       }
-      free(snap);
-      if (scr_exc_pending()) return;
+      ScrDyn *args[2] = {scr_dyn_new_str(snap[i].name), scr_dyn_new_num(scr_signal_from_name(snap[i].name))};
+      ScrDyn *result = scr_dyn_call(snap[i].cb, args, 2, "listener");
+      scr_dyn_release(result);
+      scr_dyn_release(args[0]);
+      scr_dyn_release(args[1]);
     }
-    reg = next;
+    scr_dyn_release(snap[i].cb);
+    scr_str_release(snap[i].name);
   }
+  free(snap);
 }
 
 /* ── process.stdin events and async iteration ─────────────────────────

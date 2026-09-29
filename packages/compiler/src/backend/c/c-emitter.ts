@@ -847,11 +847,11 @@ export class CEmitter {
       : runExitListeners !== ""
         ? `  ${runExitListeners.trim()}`
         : `  /* no refcounted globals */`;
-    const uncaught = (indent: string, releaseTop = false) => [
-      `${indent}if (scr_exc_pending()) {`,
+    const uncaught = (indent: string, releaseTop = false, handle = false) => [
+      `${indent}if (scr_exc_pending()${handle ? " && !scr_exc_handle_uncaught(false)" : ""}) {`,
       `${indent}  scr_exc_print_uncaught();`,
       `${indent}  ${releaseTop ? "scr_promise_release(sc_top); " : ""}` +
-        `${exitCleanup}return 1;`,
+        `${exitCleanup}return scr_exit_code_hint_get();`,
       `${indent}}`,
     ];
     out.push(
@@ -947,7 +947,7 @@ export class CEmitter {
         ? [`  ScrPromise *sc_top = ${mangleAsyncSpawn(this.mod.entry)}();`]
         : [`  ${mangleFunction(this.mod.entry)}();`]),
       // Uncaught exception from top-level code: Node exits 1.
-      ...(this.mayThrow.has(this.mod.entry) && !asyncEntry ? uncaught("  ") : []),
+      ...(this.mayThrow.has(this.mod.entry) && !asyncEntry ? uncaught("  ", false, true) : []),
       // The event loop runs to exhaustion (microtasks before timers). A
       // throw escaping a timer callback and unhandled promise rejections
       // both exit 1, like Node.
@@ -958,7 +958,7 @@ export class CEmitter {
             `  if (sc_loop_rejection) {`,
             `    scr_discard_unhandled_rejections();`,
             ...(asyncEntry ? [`    scr_promise_release(sc_top);`] : []),
-            `    ${exitCleanup}return 1;`,
+            `    ${exitCleanup}return scr_exit_code_hint_get();`,
             `  }`,
             ...(asyncEntry
               ? [
@@ -971,13 +971,13 @@ export class CEmitter {
                   `    scr_promise_rethrow_top_level(sc_top);`,
                   `    scr_promise_release(sc_top);`,
                   `    scr_exc_print_uncaught();`,
-                  `    ${exitCleanup}return 1;`,
+                  `    ${exitCleanup}return scr_exit_code_hint_get();`,
                   `  }`,
                   `  scr_promise_release(sc_top);`,
                 ]
               : []),
             `  if (scr_report_unhandled_rejections()) {`,
-            `    ${exitCleanup}return 1;`,
+            `    ${exitCleanup}return scr_exit_code_hint_get();`,
             `  }`,
             ...(asyncEntry
               ? [

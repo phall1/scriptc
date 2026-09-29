@@ -8117,7 +8117,7 @@ function lowerProcessIpcSend(lowerer: Lowerer, call: ts.CallExpression): IrExpr 
     const member = lowerer.stdlibGlobalMember(access, "process");
     if (member === null) return null;
     const loc = locOf(call);
-    // process.on/once/off: the CLI event slice — the SIGINT/SIGTERM
+    // process.on/once/off: the CLI event slice — named OS
     // signal handlers and the 'exit' hook. Signal listeners run as
     // macrotasks at loop turns, replace the default disposition while
     // registered (removing the last restores Ctrl-C death), and never
@@ -8152,12 +8152,17 @@ function lowerProcessIpcSend(lowerer: Lowerer, call: ts.CallExpression): IrExpr 
           loc,
         };
       }
-      // own(), not a bare index: the key is a USER-written event name,
-      // and `{ SIGINT: 2 }["__proto__"]` answers Object.prototype — an
-      // object flowed into a numLit and emitted itself into the C
-      // (test-event-emitter-special-event-names.js's process.on).
-      const SIGNALS: Record<string, number | undefined> = { SIGINT: 2, SIGTERM: 15 };
-      const signo = event !== null ? own(SIGNALS, event) : undefined;
+      if (event === "uncaughtException" || event === "uncaughtExceptionMonitor") {
+        if (!ts.isExpressionStatement(call.parent)) {
+          lowerer.unsupported("SC1090", call, "chaining process exception listener registration");
+        }
+        const cb = dcSubscriberArg(lowerer, call.arguments[1]!);
+        const monitor = boolLit(event === "uncaughtExceptionMonitor", loc);
+        return {
+          kind: "libCall", fn: isOff ? "process.offUncaughtException" : "process.onUncaughtException",
+          args: isOff ? [cb, monitor] : [cb, boolLit(member === "once", loc), monitor], type: VOID, loc,
+        };
+      }
       // 'unhandledRejection': the listener crosses as a dyn function and
       // the completed-checkpoint report dispatches it (reason, promise) per
       // never-observed rejection instead of printing and exiting 1
@@ -8201,12 +8206,23 @@ function lowerProcessIpcSend(lowerer: Lowerer, call: ts.CallExpression): IrExpr 
           loc,
         };
       }
-      if (signo === undefined && event !== "exit") {
-        lowerer.noLowering(
-          `process.${member}(${event === null ? "non-literal event" : `"${event}"`}, ...)`,
-          call.arguments[0]!,
-          '"message", "disconnect", "SIGINT", "SIGTERM", "exit", "warning", "unhandledRejection", and "rejectionHandled" are the supported process events (as literals)',
-        );
+      if (event === null || event.startsWith("SIG")) {
+        if (!ts.isExpressionStatement(call.parent)) {
+          lowerer.unsupported("SC1090", call, "chaining process signal listener registration");
+        }
+        const name = lowerer.coerceToExpected(lowerer.lowerExpr(call.arguments[0]!), STRING);
+        if (name.type.kind !== "string" && name.type.kind !== "dyn") {
+          lowerer.noLowering("process signal event name that is not a string", call.arguments[0]!);
+        }
+        const signal = name.type.kind === "string" ? name : { kind: "dynCheck" as const, value: name, type: STRING, loc };
+        const cb = dcSubscriberArg(lowerer, call.arguments[1]!);
+        return {
+          kind: "libCall", fn: isOff ? "process.offSignal" : "process.onSignal",
+          args: isOff ? [signal, cb] : [signal, cb, boolLit(member === "once", loc)], type: VOID, loc,
+        };
+      }
+      if (event !== "exit") {
+        lowerer.noLowering(`process.${member}("${event}", ...)`, call.arguments[0]!);
       }
       if (!ts.isExpressionStatement(call.parent)) {
         lowerer.unsupported(
@@ -8225,7 +8241,7 @@ function lowerProcessIpcSend(lowerer: Lowerer, call: ts.CallExpression): IrExpr 
       // result; a non-function dyn value throws the catchable TypeError
       // at REGISTRATION (Node's ERR_INVALID_ARG_TYPE moment).
       {
-        const target = funcOf(signo !== undefined || event !== "exit" ? [] : [F64], VOID);
+        const target = funcOf([F64], VOID);
         const exact =
           cb.type.kind === "func" &&
           cb.type.ret.kind === "void" &&
@@ -8256,20 +8272,6 @@ function lowerProcessIpcSend(lowerer: Lowerer, call: ts.CallExpression): IrExpr 
       }
       const param = cb.type.params[0];
       const onceArg: IrExpr = { kind: "boolLit", value: member === "once", type: BOOL, loc };
-      if (signo !== undefined) {
-        if (param !== undefined) {
-          lowerer.unsupported(
-            "SC1090",
-            call.arguments[1]!,
-            "signal listeners with parameters (the signal name argument has no lowering — use ())",
-          );
-        }
-        const sig: IrExpr = { kind: "numLit", value: signo, type: F64, loc };
-        if (isOff) {
-          return { kind: "libCall", fn: "process.offSignal", args: [sig, cb], type: VOID, loc };
-        }
-        return { kind: "libCall", fn: "process.onSignal", args: [sig, cb, onceArg], type: VOID, loc };
-      }
       if (param !== undefined && param.kind !== "f64") {
         lowerer.unsupported(
           "SC1090",

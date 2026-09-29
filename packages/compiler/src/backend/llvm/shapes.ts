@@ -176,6 +176,13 @@ export function traceArg(host: ShapeHost, t: IrType): string {
   return traceAdapter(host, t) ?? "null";
 }
 
+/** Keep native capsule edges visible when the referent is cycle-capable. */
+export function typedRefConstructor(host: ShapeHost, t: IrType): string {
+  const name = traceAdapter(host, t) === null ? "scr_dyn_new_typed_ref" : "scr_dyn_new_typed_ref_traced";
+  host.declare(`declare ptr @${name}(ptr, ptr, ptr, ptr, ${host.sizeType}, ptr, ptr)`);
+  return `@${name}`;
+}
+
 /* ── arrays ───────────────────────────────────────────────────────────── */
 
 /** Runtime accessor suffix for an element type (matches types.ts:

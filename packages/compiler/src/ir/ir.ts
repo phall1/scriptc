@@ -3811,14 +3811,10 @@ export type IrLibFn =
   | "process.cpuPrevValidate"
   | "process.rusage"
   | "process.activeResources"
-  /** Process signal events — process.on/once/off("SIGINT" | "SIGTERM").
-   * args: [signo f64 (the frontend bakes the POSIX number), cb, once
-   * bool] for on; [signo, cb] for off (cb borrowed, removed by pointer
-   * identity — Node's removeListener contract). Handlers run as
-   * macrotasks at loop turns; watching replaces the default disposition
-   * and removing the last listener restores it; signal listeners never
-   * keep the loop alive (Node). Zero-param callbacks only (the ambient
-   * shape). Never throw. */
+  /** Named process signal events: [name string, callback dyn, once bool]
+   * or [name, callback] for removal. The runtime resolves platform signal
+   * numbers and delivers (name, number). Listeners do not keep the loop
+   * alive. Invalid callbacks and uncatchable signals throw. */
   | "process.onSignal"
   | "process.offSignal"
   /** The process 'exit' event — process.on/once/off("exit"). args: [cb,
@@ -4502,6 +4498,9 @@ export type IrLibFn =
    * Node's once); off/removeListener remove by closure identity, the
    * offWarning stance. Throws Node's ERR_INVALID_ARG_TYPE on a
    * non-function. */
+  /** Uncaught exception handlers and monitors: [callback dyn, once, monitor]. */
+  | "process.onUncaughtException"
+  | "process.offUncaughtException"
   | "process.onUnhandledRejection"
   | "process.offUnhandledRejection"
   /** process.on/once/off('rejectionHandled', fn): the sibling registry.
@@ -6230,6 +6229,9 @@ export function isClassOwnEnumerableFieldName(name: string): boolean {
   return !name.startsWith("#") && !name.startsWith("%");
 }
 
+/** Compiler-owned storage for properties added through untyped references. */
+export const DYN_CLASS_PROPERTIES = "%dynProperties";
+
 /** A class capsule can always preserve its exact native identity. Its
  * optional property view additionally needs converters in both directions;
  * fields such as Maps may remain opaque without preventing the round trip. */
@@ -6907,6 +6909,7 @@ export function moduleUsesDynInvoke(mod: IrModule): boolean {
 export function moduleUsesDynAsync(mod: IrModule): boolean {
   const fns = new Set([
     "async.awaitDyn", "timers.immediatePromise",
+    "process.onUncaughtException", "process.offUncaughtException",
     "process.onUnhandledRejection", "process.offUnhandledRejection",
     "process.onRejectionHandled", "process.offRejectionHandled",
     "process.onWarning", "process.offWarning", "process.emitWarning",
@@ -7697,6 +7700,10 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "dc.tcTraceSync",
   "dc.tcTraceCallback",
   "dc.tcTracePromise",
+  "process.onUncaughtException",
+  "process.offUncaughtException",
+  "process.onSignal",
+  "process.offSignal",
   "process.onUnhandledRejection",
   "process.onRejectionHandled",
   "async.awaitDyn",

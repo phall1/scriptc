@@ -1,3 +1,4 @@
+import { typedRefConstructor } from "./shapes.js";
 import { BYTES_ELEM_NUM, f64Lit } from "./common.js";
 import { InternalCompilerError } from "../../errors.js";
 /* The dyn (ScrDyn dyn) helper EMITTERS for the LLVM backend — the .ll
@@ -1423,12 +1424,10 @@ export class LlDyn {
         const adapter = host.liveDynRefAdapter(t);
         const rc = vAdapters(host, t);
         const keyLit = host.cstr(typeKey(t));
-        host.declare(
-          `declare ptr @scr_dyn_new_typed_ref(ptr, ptr, ptr, ptr, ${host.sizeType}, ptr, ptr)`,
-        );
+
         const r = B.tmp();
         B.line(
-          `${r} = call ptr @scr_dyn_new_typed_ref(ptr %v, ptr ${rc.retain}, ptr ${rc.release}, ptr ${keyLit}, ${host.sizeType} ${Buffer.byteLength(typeKey(t), "utf8")}, ptr @${adapter.snapshot}, ptr ${adapter.commit})`,
+          `${r} = call ptr ${typedRefConstructor(host, t)}(ptr %v, ptr ${rc.retain}, ptr ${rc.release}, ptr ${keyLit}, ${host.sizeType} ${Buffer.byteLength(typeKey(t), "utf8")}, ptr @${adapter.snapshot}, ptr ${adapter.commit})`,
         );
         B.terminate(`ret ptr ${r}`);
         break;

@@ -1595,7 +1595,7 @@ export function jsonWriteHelper(emitter: CEmitter, t: IrType): string {
           const key = typeKey(t);
           const keyLit = cStringLiteral(Buffer.from(key, "utf8"));
           d.push(
-            `  return scr_dyn_new_typed_ref(v, &${rc.retain}, &${rc.release}, ${keyLit}, ${Buffer.byteLength(key, "utf8")}, &${adapter.snapshot}, ${adapter.commit});`,
+            `  return scr_dyn_new_typed_ref${emitter.traceAdapterC(t) !== null ? "_traced" : ""}(v, &${rc.retain}, &${rc.release}, ${keyLit}, ${Buffer.byteLength(key, "utf8")}, &${adapter.snapshot}, ${adapter.commit});`,
           );
         }
         break;

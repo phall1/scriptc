@@ -988,7 +988,7 @@ export class LlEmitter {
     // unchanged.
     const hasRefGlobals = globals.some((g) => isRefCounted(g.type)) || fnValueProps.length > 0;
     const inlineExitListeners = usesEvents && (hasRefGlobals || this.ffiHasRetainedCallback);
-    if (!usesNodeTest && !usesIsland) this.declare(`declare i32 @scr_exit_code_hint_get()`);
+    this.declare(`declare i32 @scr_exit_code_hint_get()`);
     if (inlineExitListeners) {
       this.declare(`declare void @scr_run_exit_listeners(double)`);
       this.declare(`declare i32 @scr_exit_code_hint_get()`);
@@ -1394,7 +1394,7 @@ export class LlEmitter {
       // order-free — the scr_error_set_traced precedent). Only the
       // printer emits here (nothing else declares it); scr_exc_pending
       // and the loop entry points rode the Set before the flush.
-      out.push(`declare void @scr_exc_print_uncaught()`, ``);
+      out.push(`declare void @scr_exc_print_uncaught()`, `declare zeroext i1 @scr_exc_handle_uncaught(i1 zeroext)`, ``);
     }
     if (this.mod.lib !== undefined) {
       // LIBRARY mode: no @main — the profile-declared external
@@ -1448,10 +1448,14 @@ export class LlEmitter {
             `  %exc = call zeroext i1 @scr_exc_pending()`,
             `  br i1 %exc, label %uncaught, label %ok`,
             `uncaught:`,
+            `  %handled = call zeroext i1 @scr_exc_handle_uncaught(i1 false)`,
+            `  br i1 %handled, label %ok, label %fatal`,
+            `fatal:`,
             `  call void @scr_exc_print_uncaught()`,
             ...exitListenerLines("xu"),
             ...uncaughtReleases,
-            `  ret i32 1`,
+            `  %failure_code_0 = call i32 @scr_exit_code_hint_get()`,
+            `  ret i32 %failure_code_0`,
             `ok:`,
           ]
         : []),
@@ -1468,7 +1472,8 @@ export class LlEmitter {
             ...(asyncEntry ? [`  call void @scr_promise_release(ptr %top)`] : []),
             ...exitListenerLines("xl"),
             ...loopReleasesU,
-            `  ret i32 1`,
+            `  %failure_code_1 = call i32 @scr_exit_code_hint_get()`,
+            `  ret i32 %failure_code_1`,
             `lok:`,
             `  br i1 %loop_rejection, label %lreported, label %lclean`,
             `lreported:`,
@@ -1476,7 +1481,8 @@ export class LlEmitter {
             ...(asyncEntry ? [`  call void @scr_promise_release(ptr %top)`] : []),
             ...exitListenerLines("xq"),
             ...loopReportedReleases,
-            `  ret i32 1`,
+            `  %failure_code_2 = call i32 @scr_exit_code_hint_get()`,
+            `  ret i32 %failure_code_2`,
             `lclean:`,
             ...(asyncEntry
               ? [
@@ -1493,7 +1499,8 @@ export class LlEmitter {
                   `  call void @scr_exc_print_uncaught()`,
                   ...exitListenerLines("xt"),
                   ...topRejectReleases,
-                  `  ret i32 1`,
+                  `  %failure_code_3 = call i32 @scr_exit_code_hint_get()`,
+                  `  ret i32 %failure_code_3`,
                   `tla_not_rejected:`,
                   `  call void @scr_promise_release(ptr %top)`,
                 ]
@@ -1503,7 +1510,8 @@ export class LlEmitter {
             `lrej:`,
             ...exitListenerLines("xr"),
             ...loopReleasesR,
-            `  ret i32 1`,
+            `  %failure_code_4 = call i32 @scr_exit_code_hint_get()`,
+            `  ret i32 %failure_code_4`,
             `lrok:`,
             ...(asyncEntry
               ? [

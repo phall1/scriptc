@@ -11577,6 +11577,102 @@
     "<repo>/tests/corpus/primitive-and-function-descriptors.js"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/3068-url-checked-identity.ts": {
+   "order": [
+    "<repo>/tests/corpus/3068-url-checked-identity.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/3069-set-checked-seed.js": {
+   "order": [
+    "<repo>/tests/corpus/3069-set-checked-seed.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/3070-checked-object-accessors.js": {
+   "order": [
+    "<repo>/tests/corpus/3070-checked-object-accessors.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/3071-checked-specialization-narrowing.js": {
+   "order": [
+    "<repo>/tests/corpus/3071-checked-specialization-narrowing.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/3072-weak-process-streams.js": {
+   "order": [
+    "<repo>/tests/corpus/3072-weak-process-streams.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/3073-optional-callable-module.js": {
+   "order": [
+    "<repo>/tests/corpus/3073-optional-callable-module.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-class-properties.cjs": {
+   "order": [
+    "<repo>/tests/corpus/native-class-properties.cjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-class-property-cycles.cjs": {
+   "order": [
+    "<repo>/tests/corpus/native-class-property-cycles.cjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-class-property-order.cjs": {
+   "order": [
+    "<repo>/tests/corpus/native-class-property-order.cjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/process-named-signals.cjs": {
+   "order": [
+    "<repo>/tests/corpus/process-named-signals.cjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/process-uncaught-handler-throws.cjs": {
+   "order": [
+    "<repo>/tests/corpus/process-uncaught-handler-throws.cjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/process-uncaught-loop.cjs": {
+   "order": [
+    "<repo>/tests/corpus/process-uncaught-loop.cjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/process-uncaught-module.mjs": {
+   "order": [
+    "<repo>/tests/corpus/process-uncaught-module.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/process-uncaught-monitor.cjs": {
+   "order": [
+    "<repo>/tests/corpus/process-uncaught-monitor.cjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/process-uncaught-rejection.cjs": {
+   "order": [
+    "<repo>/tests/corpus/process-uncaught-rejection.cjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/process-uncaught-sync.cjs": {
+   "order": [
+    "<repo>/tests/corpus/process-uncaught-sync.cjs"
+   ],
+   "diags": []
   }
  }
 }

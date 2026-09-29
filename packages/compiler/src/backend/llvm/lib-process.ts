@@ -436,15 +436,13 @@ export function emitProcessLibCall(host: LlvmEmitterContext, e: LibCallExpr): Ll
       return { name: "", type: e.type };
     }
     if (e.fn === "process.onSignal") {
-      // The registry owns the callback (zero-param — frontend-pinned)
-      // until off/once removes it. The loop dispatches deliveries.
       host.usesTimers = true;
       const sig = host.emitExpr(e.args[0]!);
       const cb = host.emitExpr(e.args[1]!);
       const once = host.emitExpr(e.args[2]!);
-      host.moveTemp(cb);
-      host.declare(`declare void @scr_signal_on(double, ptr, i1 zeroext)`);
-      B.line(`call void @scr_signal_on(double ${sig.name}, ptr ${cb.name}, i1 ${once.name})`);
+      host.declare(`declare void @scr_signal_on(ptr, ptr, i1 zeroext)`);
+      B.line(`call void @scr_signal_on(ptr ${sig.name}, ptr ${cb.name}, i1 ${once.name})`);
+      host.emitPendingCheck();
       return { name: "", type: e.type };
     }
     if (e.fn === "process.onExit") {

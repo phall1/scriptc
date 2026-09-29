@@ -849,6 +849,8 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "process.onWarning": "scr_process_on_warning",
   "process.offWarning": "scr_process_off_warning",
   "process.emitWarning": "scr_process_emit_warning",
+  "process.onUncaughtException": "scr_process_on_uncaught_exception",
+  "process.offUncaughtException": "scr_process_off_uncaught_exception",
   "process.onUnhandledRejection": "scr_process_on_unhandled_rejection",
   "process.offUnhandledRejection": "scr_process_off_unhandled_rejection",
   "process.onRejectionHandled": "scr_process_on_rejection_handled",
@@ -944,6 +946,7 @@ export const USES_TIMERS_LIB_FNS = new Set<string>([
   // the checkpoint unhandled-rejection report.
   "async.hop", "async.awaitDyn",
   "dc.tcTracePromise",
+  "process.onUncaughtException",
   "process.onUnhandledRejection", "process.onRejectionHandled",
   "timers.queueMicrotaskDyn", "timers.setImmediateFnValue", "timers.immediatePromise",
 ]);

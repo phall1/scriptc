@@ -1,7 +1,8 @@
+import { typedRefConstructor } from "./shapes.js";
 /* Focused LLVM expression emission extracted from emitter.ts. */
 import { InternalCompilerError } from "../../errors.js";
 import { streamTypedRefEligible } from "../../ir/analysis.js";
-import { type IrType, classDynViewSupported, isClassOwnEnumerableFieldName, isDynTypedRefType, isRefCounted, typeKey } from "../../ir/ir.js";
+import { type IrType, DYN_CLASS_PROPERTIES, classDynViewSupported, isClassOwnEnumerableFieldName, isDynTypedRefType, isRefCounted, typeKey } from "../../ir/ir.js";
 import { mangleRecordStruct } from "../mangle.js";
 import { BlockBuilder } from "./blocks.js";
 import { classFieldIndex, classStructSym } from "./classes.js";
@@ -185,6 +186,34 @@ export function streamTypedRefCommitAdapter(host: LlvmEmitterContext,
         }
         lines.push(`  br label %${after}`, `${after}:`);
       }
+      if (meta.def.fields.some((field) => field.name === DYN_CLASS_PROPERTIES)) {
+        host.declare(`declare ptr @scr_dyn_new_obj()`);
+        host.declare(`declare ptr @scr_dyn_copy_data_properties(ptr, ptr)`);
+        host.declare(`declare void @scr_dyn_release_v(ptr)`);
+        host.declare(`declare ptr @scr_str_new(ptr, ${host.sizeType})`);
+        host.declare(`declare void @scr_str_release(ptr)`);
+        host.declare(`declare void @scr_dyn_key_delete(ptr, ptr, i1 zeroext)`);
+        lines.push(
+          `  %bag = call ptr @scr_dyn_new_obj()`,
+          `  %bag_copy = call ptr @scr_dyn_copy_data_properties(ptr %bag, ptr %d)`,
+          `  call void @scr_dyn_release_v(ptr %bag_copy)`,
+          `  %bag_pending = call zeroext i1 @scr_exc_pending()`,
+          `  br i1 %bag_pending, label %bag_fail, label %bag_keys`,
+          `bag_fail:`, `  call void @scr_dyn_release_v(ptr %bag)`, `  br label %done`, `bag_keys:`,
+        );
+        fields.forEach((field, index) => lines.push(
+          `  %bag_key${index} = call ptr @scr_str_new(ptr ${host.cstr(field.name)}, ${host.sizeType} ${Buffer.byteLength(field.name, "utf8")})`,
+          `  call void @scr_dyn_key_delete(ptr %bag, ptr %bag_key${index}, i1 zeroext false)`,
+          `  call void @scr_str_release(ptr %bag_key${index})`,
+        ));
+        const { index } = classFieldIndex(meta, DYN_CLASS_PROPERTIES);
+        lines.push(
+          `  %bag_ptr = getelementptr inbounds %${classStructSym(t.className)}, ptr %target, i64 0, i32 ${index}`,
+          `  %bag_old = load ptr, ptr %bag_ptr`,
+          `  store ptr %bag, ptr %bag_ptr`,
+          `  call void @scr_dyn_release_v(ptr %bag_old)`,
+        );
+      }
       lines.push(`  br label %done`, `done:`, `  ret void`, `}`, ``);
       host.resolveThunkDefs.push(...lines);
       return `@${commit}`;
@@ -263,9 +292,7 @@ export function liveDynUnionRefAdapter(host: LlvmEmitterContext,
 
     const sym = `sc_ldu_${host.liveDynUnionRefAdapters.size}`;
     host.liveDynUnionRefAdapters.set(key, sym);
-    host.declare(
-      `declare ptr @scr_dyn_new_typed_ref(ptr, ptr, ptr, ptr, ${host.sizeType}, ptr, ptr)`,
-    );
+
     const adapters = new Map<number, LlStreamTypedRefAdapter>();
     for (const { arm, tag } of mutableArms) {
       const prefix = `${sym}_${tag}`;
@@ -312,7 +339,7 @@ export function liveDynUnionRefAdapter(host: LlvmEmitterContext,
       );
       B.line(`${payload} = load ptr, ptr ${payloadPtr}`);
       B.line(
-        `${boxed} = call ptr @scr_dyn_new_typed_ref(ptr ${payload}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${host.cstr(armKey)}, ${host.sizeType} ${Buffer.byteLength(armKey, "utf8")}, ptr @${adapter.snapshot}, ptr ${adapter.commit})`,
+        `${boxed} = call ptr ${typedRefConstructor(host, arm)}(ptr ${payload}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${host.cstr(armKey)}, ${host.sizeType} ${Buffer.byteLength(armKey, "utf8")}, ptr @${adapter.snapshot}, ptr ${adapter.commit})`,
       );
       B.terminate(`ret ptr ${boxed}`);
     });
@@ -388,9 +415,7 @@ function nestedTypedRefUnionAdapter(
     }
     const sym = `${ctx.prefix}_union_${unions.size}`;
     unions.set(key, sym);
-    host.declare(
-      `declare ptr @scr_dyn_new_typed_ref(ptr, ptr, ptr, ptr, ${host.sizeType}, ptr, ptr)`,
-    );
+
     const B = new BlockBuilder();
     const tagPtr = B.tmp();
     const tagValue = B.tmp();
@@ -413,7 +438,7 @@ function nestedTypedRefUnionAdapter(
         B.line(`${payloadPtr} = getelementptr inbounds %ScrUnion, ptr %u, i64 0, i32 5`);
         B.line(`${payload} = load ptr, ptr ${payloadPtr}`);
         B.line(
-          `${boxed} = call ptr @scr_dyn_new_typed_ref(ptr ${payload}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${host.cstr(armKey)}, ${host.sizeType} ${Buffer.byteLength(armKey, "utf8")}, ptr @${adapter.snapshot}, ptr ${adapter.commit})`,
+          `${boxed} = call ptr ${typedRefConstructor(host, arm)}(ptr ${payload}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${host.cstr(armKey)}, ${host.sizeType} ${Buffer.byteLength(armKey, "utf8")}, ptr @${adapter.snapshot}, ptr ${adapter.commit})`,
         );
         B.terminate(`ret ptr ${boxed}`);
       } else if (arm.kind === "undefinedT") {
@@ -498,11 +523,9 @@ export function streamTypedRefBoxValue(host: LlvmEmitterContext,
     const nested = host.streamTypedRefMaterializeAdapter(t, ctx);
     const rc = vAdapters(host.shapeHost, t);
     const key = typeKey(t);
-    host.declare(
-      `declare ptr @scr_dyn_new_typed_ref(ptr, ptr, ptr, ptr, ${host.sizeType}, ptr, ptr)`,
-    );
+
     B.line(
-      `${boxed} = call ptr @scr_dyn_new_typed_ref(ptr ${value}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${host.cstr(key)}, ${host.sizeType} ${Buffer.byteLength(key, "utf8")}, ptr @${nested.snapshot}, ptr ${nested.commit})`,
+      `${boxed} = call ptr ${typedRefConstructor(host, t)}(ptr ${value}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${host.cstr(key)}, ${host.sizeType} ${Buffer.byteLength(key, "utf8")}, ptr @${nested.snapshot}, ptr ${nested.commit})`,
     );
     return boxed;
   }
@@ -554,6 +577,16 @@ export function streamTypedRefMaterializeAdapter(host: LlvmEmitterContext,
         }
         const boxed = host.streamTypedRefBoxValue(B, field.type, fieldValue, ctx);
         B.line(`call void @scr_dyn_obj_set(ptr ${out}, ptr ${host.cstr(field.name)}, ${host.sizeType} ${Buffer.byteLength(field.name, "utf8")}, ptr ${boxed})`);
+      }
+      if (meta.def.fields.some((field) => field.name === DYN_CLASS_PROPERTIES)) {
+        host.declare(`declare ptr @scr_dyn_copy_data_properties(ptr, ptr)`);
+        host.declare(`declare void @scr_dyn_release_v(ptr)`);
+        const { index } = classFieldIndex(meta, DYN_CLASS_PROPERTIES);
+        const slot = B.tmp(), bag = B.tmp(), copied = B.tmp();
+        B.line(`${slot} = getelementptr inbounds %${classStructSym(t.className)}, ptr %p, i64 0, i32 ${index}`);
+        B.line(`${bag} = load ptr, ptr ${slot}`);
+        B.line(`${copied} = call ptr @scr_dyn_copy_data_properties(ptr ${out}, ptr ${bag})`);
+        B.line(`call void @scr_dyn_release_v(ptr ${copied})`);
       }
       B.terminate(`ret ptr ${out}`);
     } else if (t.kind === "record") {
@@ -735,9 +768,7 @@ export function streamFromArrayAdapter(host: LlvmEmitterContext,
           `${boxed} = call ptr @${host.dyn.toDynHelper(elem)}(ptr ${value})`,
         );
       } else {
-        host.declare(
-          `declare ptr @scr_dyn_new_typed_ref(ptr, ptr, ptr, ptr, ${host.sizeType}, ptr, ptr)`,
-        );
+
         const boxedSlot = B.slot();
         B.entryAllocas.push(`${boxedSlot} = alloca ptr`);
         const tagPtr = B.tmp();
@@ -769,7 +800,7 @@ export function streamFromArrayAdapter(host: LlvmEmitterContext,
           );
           B.line(`${payload} = load ptr, ptr ${payloadPtr}`);
           B.line(
-            `${armBoxed} = call ptr @scr_dyn_new_typed_ref(ptr ${payload}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${host.cstr(armKey)}, ${host.sizeType} ${Buffer.byteLength(armKey, "utf8")}, ptr @${armSnapshot}, ptr ${armCommit})`,
+            `${armBoxed} = call ptr ${typedRefConstructor(host, arm)}(ptr ${payload}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${host.cstr(armKey)}, ${host.sizeType} ${Buffer.byteLength(armKey, "utf8")}, ptr @${armSnapshot}, ptr ${armCommit})`,
           );
           B.line(`store ptr ${armBoxed}, ptr ${boxedSlot}`);
           B.br(join);
@@ -815,11 +846,9 @@ export function streamFromArrayAdapter(host: LlvmEmitterContext,
           ``,
         );
       }
-      host.declare(
-        `declare ptr @scr_dyn_new_typed_ref(ptr, ptr, ptr, ptr, ${host.sizeType}, ptr, ptr)`,
-      );
+
       B.line(
-        `${boxed} = call ptr @scr_dyn_new_typed_ref(ptr ${value}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${keyPtr}, ${host.sizeType} ${Buffer.byteLength(key, "utf8")}, ptr @${snapshot}, ptr ${commit})`,
+        `${boxed} = call ptr ${typedRefConstructor(host, elem)}(ptr ${value}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${keyPtr}, ${host.sizeType} ${Buffer.byteLength(key, "utf8")}, ptr @${snapshot}, ptr ${commit})`,
       );
     } else {
       boxed = B.tmp();

@@ -192,8 +192,8 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   // Signal listeners are zero-param (the ambient shape); exit/stdin
   // callbacks carry program-dependent one-param shapes — null slots, the
   // libCall case checks them (child.onExit precedent).
-  "process.onSignal": { argTypes: [F64, { kind: "func", params: [], ret: VOID }, BOOL], result: VOID },
-  "process.offSignal": { argTypes: [F64, { kind: "func", params: [], ret: VOID }], result: VOID },
+  "process.onSignal": { argTypes: [STRING, DYN, BOOL], result: VOID },
+  "process.offSignal": { argTypes: [STRING, DYN], result: VOID },
   "process.onExit": { argTypes: [null, BOOL], result: VOID },
   "process.offExit": { argTypes: [null], result: VOID },
   "stdin.onData": { argTypes: [null, BOOL], result: VOID },
@@ -1383,6 +1383,8 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "dc.tcTraceSync": { argTypes: [F64, DYN, DYN, DYN, DYN], result: DYN },
   "dc.tcTraceCallback": { argTypes: [F64, DYN, F64, DYN, DYN, DYN], result: DYN },
   "dc.tcTracePromise": { argTypes: [F64, DYN, DYN, DYN, DYN], result: { kind: "promise", inner: DYN } },
+  "process.onUncaughtException": { argTypes: [DYN, BOOL, BOOL], result: VOID },
+  "process.offUncaughtException": { argTypes: [DYN, BOOL], result: VOID },
   "process.onUnhandledRejection": { argTypes: [DYN, BOOL], result: VOID },
   "process.offUnhandledRejection": { argTypes: [DYN], result: VOID },
   "process.onRejectionHandled": { argTypes: [DYN, BOOL], result: VOID },

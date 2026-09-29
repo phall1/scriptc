@@ -85,6 +85,7 @@ const WINDOWS_SKIPS: Record<string, string> = {
   // stdout/stderr read "" here where Node types them null (the
   // documented spawnSync stance) — invisible on POSIX lanes where these
   // spawns succeed, exposed here where every one fails.
+  "process-named-signals.cjs": "POSIX signal delivery: Windows Node cannot send SIGWINCH or register SIGSTOP",
   "1360-spawn-sync.ts": "posix-shaped: every spawn is ENOENT on Windows Node too, exposing the documented spawn-failure \"\"-vs-null stdout stance (1644 covers spawnSync here)",
   "1361-spawn-events.ts": "posix-shaped: the unlistened /bin/sh spawn failure crashes both sides, rendered differently (1646 covers spawn events here)",
   "1362-spawn-timers.ts": "posix-shaped: the unlistened /bin/sh spawn failure crashes both sides, rendered differently",
@@ -307,8 +308,10 @@ async function runWindowsNode(file: string): Promise<RunResult> {
   const nodep = directiveHead(file).some((l) => /^\/\/ @no-deprecation\s*$/.test(l))
     ? "--no-deprecation "
     : "";
+  const shims = directiveHead(file).includes("// @no-node-shims")
+    ? "" : "--import ./comptime-shim.mjs --import ./island-shim.mjs ";
   return runOnBox(
-    `node ${transform}${nodep}--import ./comptime-shim.mjs --import ./island-shim.mjs ${entry}`,
+    `node ${transform}${nodep}${shims}${entry}`,
   );
 }
 

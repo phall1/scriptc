@@ -2231,6 +2231,12 @@ ScrDyn *scr_caught_to_dyn(const ScrCaught *c);
  * "Uncaught <value>" to stderr (strings raw, numbers JS-exact, booleans
  * true/false, ref payloads as "[object]"), and releases the payload. */
 void scr_exc_print_uncaught(void);
+/* Optional native process exception registry. Hook returns 1 when handled,
+ * 0 when unhandled, and -1 when a handler itself threw (Node exit 7). */
+extern int (*scr_uncaught_exception_hook)(bool from_promise);
+bool scr_exc_handle_uncaught(bool from_promise);
+void scr_process_on_uncaught_exception(ScrDyn *fn, bool once, bool monitor);
+void scr_process_off_uncaught_exception(ScrDyn *fn, bool monitor);
 
 /* ── standard library: process + node:fs (scr_lib.c) ─────────────────
  * Called once at the top of main, right after scr_init: stashes argc/argv
@@ -3503,6 +3509,7 @@ struct ScrDyn {
        * identity while the source reference remains observable. */
       ScrDyn *materialized;
       ScrDynTypedCast *casts;
+      bool traced; /* native referent has a cycle header */
     } typed_ref;
     /* SCR_DYN_PROMISE: the retained promise. The boundary contract: it
      * settles with a dyn payload (SCR_EXC_REF ScrDyn fulfillment or a
@@ -3657,6 +3664,11 @@ ScrDyn *scr_dyn_new_buffer(const ScrBytes *b);
  * The cast cache lets a non-exact dynCheck reuse one safe, compiler-built
  * target view instead of raw-casting structurally different layouts. */
 ScrDyn *scr_dyn_new_typed_ref(
+    void *ptr, void *(*retain)(void *), void (*release)(void *),
+    const char *type_key, size_t type_key_len,
+    ScrDyn *(*materialize)(void *),
+    void (*commit)(void *, const ScrDyn *));
+ScrDyn *scr_dyn_new_typed_ref_traced(
     void *ptr, void *(*retain)(void *), void (*release)(void *),
     const char *type_key, size_t type_key_len,
     ScrDyn *(*materialize)(void *),
@@ -4531,8 +4543,8 @@ void scr_nticks_teardown(void);
  * loop alive, like Node's flowing stdin. */
 typedef struct ScrBytes ScrBytes; /* full definition below (C11 repeat) */
 void scr_events_install(void);
-void scr_signal_on(double signum, ScrClosure *cb, bool once);
-void scr_signal_off(double signum, ScrClosure *cb);
+void scr_signal_on(ScrStr *name, ScrDyn *cb, bool once);
+void scr_signal_off(ScrStr *name, ScrDyn *cb);
 void scr_process_on_exit(ScrClosure *cb, void (*fn)(ScrClosure *, double), bool once);
 void scr_process_off_exit(ScrClosure *cb);
 void scr_run_exit_listeners(double code);

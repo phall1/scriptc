@@ -915,9 +915,9 @@
       "apiEntries": 119,
       "static": {
         "supported": 0,
-        "partial": 30,
+        "partial": 33,
         "refused": 0,
-        "not-implemented": 89,
+        "not-implemented": 86,
         "by-design": 0,
         "unreviewed": 0,
         "not-applicable": 0
@@ -86848,6 +86848,7 @@
         "evidence": "derived:descendants",
         "tests": [
           "packages/compiler/test/process-builtin-values.test.ts",
+          "tests/corpus/1443-signal-handlers.ts",
           "tests/corpus/2314-process-introspection.ts",
           "tests/corpus/2941-process-exit-code.ts",
           "tests/corpus/2942-process-exit-code-override.ts",
@@ -86856,6 +86857,13 @@
           "tests/corpus/2946-child-fork-ipc/main.ts",
           "tests/corpus/990-process-basics.ts",
           "tests/corpus/process-builtin-values.js",
+          "tests/corpus/process-named-signals.cjs",
+          "tests/corpus/process-uncaught-handler-throws.cjs",
+          "tests/corpus/process-uncaught-loop.cjs",
+          "tests/corpus/process-uncaught-module.mjs",
+          "tests/corpus/process-uncaught-monitor.cjs",
+          "tests/corpus/process-uncaught-rejection.cjs",
+          "tests/corpus/process-uncaught-sync.cjs",
           "tests/corpus/process-versions-storage.ts",
           "tests/corpus/stdio-values.mjs",
           "tests/corpus/stdio-write-errors.mjs",
@@ -87072,8 +87080,16 @@
       "anchor": "event-uncaughtexception",
       "nodeStability": null,
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:process"
+        "status": "partial",
+        "evidence": "compiler-feature:process.'uncaughtException'",
+        "tests": [
+          "tests/corpus/process-uncaught-sync.cjs",
+          "tests/corpus/process-uncaught-loop.cjs",
+          "tests/corpus/process-uncaught-module.mjs",
+          "tests/corpus/process-uncaught-rejection.cjs",
+          "tests/corpus/process-uncaught-monitor.cjs",
+          "tests/corpus/process-uncaught-handler-throws.cjs"
+        ]
       },
       "dynamic": {
         "status": "not-implemented",
@@ -87116,8 +87132,16 @@
       "anchor": "event-uncaughtexceptionmonitor",
       "nodeStability": null,
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:process"
+        "status": "partial",
+        "evidence": "compiler-feature:process.'uncaughtExceptionMonitor'",
+        "tests": [
+          "tests/corpus/process-uncaught-sync.cjs",
+          "tests/corpus/process-uncaught-loop.cjs",
+          "tests/corpus/process-uncaught-module.mjs",
+          "tests/corpus/process-uncaught-rejection.cjs",
+          "tests/corpus/process-uncaught-monitor.cjs",
+          "tests/corpus/process-uncaught-handler-throws.cjs"
+        ]
       },
       "dynamic": {
         "status": "not-implemented",
@@ -87248,8 +87272,12 @@
       "anchor": "signal-events",
       "nodeStability": null,
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:process"
+        "status": "partial",
+        "evidence": "compiler-feature:process.SIGINT, SIGHUP, etc.",
+        "tests": [
+          "tests/corpus/1443-signal-handlers.ts",
+          "tests/corpus/process-named-signals.cjs"
+        ]
       },
       "dynamic": {
         "status": "not-implemented",

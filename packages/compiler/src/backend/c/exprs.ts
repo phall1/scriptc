@@ -3,7 +3,7 @@ import { InternalCompilerError } from "../../errors.js";
  * expression lands in a fresh C temp, with RC ownership tracked on the
  * emitter's frames (see the discipline comment in emitter core). */
 import type { CEmitter, Temp } from "./c-emitter.js";
-import { BYTES_ELEMENT_SIZE, arrayOf, BOOL, BYTES_U8, bytesOf, canMarshalFuncIntoIsland, CHILDSTREAM_T, CHILDWRITER_T, DYN, F64, type IrExpr, type IrLibFn, type IrRecordShape, type IrType, islandPromisePayloadTag, classDynViewSupported, isClassOwnEnumerableFieldName, isDynTypedRefType, isFfiCallbackParam, isFfiContextParam, isFfiReleaseParam, isRefCounted, isUnitType, MAY_THROW_LIB_FNS, NETSOCKET_T, RUNTIME_ERROR_CLASSES, STRING, typeEquals, typeKey } from "../../ir/ir.js";
+import { BYTES_ELEMENT_SIZE, arrayOf, BOOL, BYTES_U8, bytesOf, canMarshalFuncIntoIsland, CHILDSTREAM_T, CHILDWRITER_T, DYN, DYN_CLASS_PROPERTIES, F64, type IrExpr, type IrLibFn, type IrRecordShape, type IrType, islandPromisePayloadTag, classDynViewSupported, isClassOwnEnumerableFieldName, isDynTypedRefType, isFfiCallbackParam, isFfiContextParam, isFfiReleaseParam, isRefCounted, isUnitType, MAY_THROW_LIB_FNS, NETSOCKET_T, RUNTIME_ERROR_CLASSES, STRING, typeEquals, typeKey } from "../../ir/ir.js";
 import { BYTES_NUM_KIND_C, BYTES_NUM_VAR_C, bytesElemKindC, cDecl, cFnPtrCast, cNumberLiteral, cStringLiteral, cType, DV_GET_KIND_C, DV_SET_KIND_C, elemAccess, mapKeyAccess, mapKeyKindC, mapValKindC, releaseCallC, retainCallC, vAdapters } from "./types.js";
 import { mangleClassNew, mangleClassRetain, mangleClassStruct, mangleField, mangleFnClosure, mangleFunction, mangleGlobal, mangleLocal, mangleRecordClone, mangleRecordNew, mangleRecordStruct, mangleVtStruct } from "../mangle.js";
 import { OVERFLOW_MEMBER } from "./shapes.js";
@@ -110,6 +110,22 @@ function streamTypedRefCommitAdapter(
         `  }`,
       );
     }
+    if (meta.def.fields.some((field) => field.name === DYN_CLASS_PROPERTIES)) {
+      const bag = `sc_target->${mangleField(DYN_CLASS_PROPERTIES)}`;
+      defs.push(
+        `  ScrDyn *sc_bag = scr_dyn_new_obj();`,
+        `  scr_dyn_release(scr_dyn_copy_data_properties(sc_bag, sc_d));`,
+        `  if (scr_exc_pending()) { scr_dyn_release(sc_bag); return; }`,
+      );
+      for (const field of meta.def.fields.filter((f) => isClassOwnEnumerableFieldName(f.name))) {
+        const literal = cStringLiteral(Buffer.from(field.name, "utf8"));
+        defs.push(
+          `  { ScrStr *sc_key = scr_str_new(${literal}, ${Buffer.byteLength(field.name, "utf8")});`,
+          `    scr_dyn_key_delete(sc_bag, sc_key, false); scr_str_release(sc_key); }`,
+        );
+      }
+      defs.push(`  ScrDyn *sc_old_bag = ${bag};`, `  ${bag} = sc_bag;`, `  scr_dyn_release(sc_old_bag);`);
+    }
     defs.push(`}`, ``);
     return `&${commit}`;
   }
@@ -194,7 +210,7 @@ function nestedTypedRefUnionAdapter(
       const armKey = typeKey(arm);
       const keyLit = cStringLiteral(Buffer.from(armKey, "utf8"));
       lines.push(
-        `  case ${tag}: return scr_dyn_new_typed_ref(scr_union_peek(sc_u), &${rc.retain}, &${rc.release}, ${keyLit}, ${Buffer.byteLength(armKey, "utf8")}, &${adapter.snapshot}, ${adapter.commit});`,
+        `  case ${tag}: return scr_dyn_new_typed_ref${emitter.traceAdapterC(arm) !== null ? "_traced" : ""}(scr_union_peek(sc_u), &${rc.retain}, &${rc.release}, ${keyLit}, ${Buffer.byteLength(armKey, "utf8")}, &${adapter.snapshot}, ${adapter.commit});`,
       );
     } else if (arm.kind === "undefinedT") {
       lines.push(`  case ${tag}: return scr_dyn_retain(scr_dyn_undefined());`);
@@ -265,7 +281,7 @@ function streamTypedRefAdapter(
     const rc = vAdapters(child);
     const childKey = typeKey(child);
     const keyLit = cStringLiteral(Buffer.from(childKey, "utf8"));
-    return `scr_dyn_new_typed_ref(${expr}, &${rc.retain}, &${rc.release}, ${keyLit}, ${Buffer.byteLength(childKey, "utf8")}, &${nested.snapshot}, ${nested.commit})`;
+    return `scr_dyn_new_typed_ref${emitter.traceAdapterC(child) !== null ? "_traced" : ""}(${expr}, &${rc.retain}, &${rc.release}, ${keyLit}, ${Buffer.byteLength(childKey, "utf8")}, &${nested.snapshot}, ${nested.commit})`;
   };
 
   const lines = [
@@ -283,6 +299,9 @@ function streamTypedRefAdapter(
       lines.push(
         `  scr_dyn_obj_set(d, ${keyLit}, ${Buffer.byteLength(field.name, "utf8")}, ${box(field.type, `v->${mangleField(field.name)}`)});`,
       );
+    }
+    if (meta.def.fields.some((field) => field.name === DYN_CLASS_PROPERTIES)) {
+      lines.push(`  scr_dyn_release(scr_dyn_copy_data_properties(d, v->${mangleField(DYN_CLASS_PROPERTIES)}));`);
     }
     lines.push(`  return d;`);
   } else if (t.kind === "record") {
@@ -431,7 +450,7 @@ function liveDynUnionRefAdapter(
     const keyLit = cStringLiteral(Buffer.from(armKey, "utf8"));
     defs.push(
       `  case ${tag}:`,
-      `    return scr_dyn_new_typed_ref(scr_union_peek(sc_u), &${rc.retain}, &${rc.release}, ${keyLit}, ${Buffer.byteLength(armKey, "utf8")}, &${adapter.snapshot}, ${adapter.commit});`,
+      `    return scr_dyn_new_typed_ref${emitter.traceAdapterC(arm) !== null ? "_traced" : ""}(scr_union_peek(sc_u), &${rc.retain}, &${rc.release}, ${keyLit}, ${Buffer.byteLength(armKey, "utf8")}, &${adapter.snapshot}, ${adapter.commit});`,
     );
   }
   const mutableTags = new Set(mutableArms.map(({ tag }) => tag));
@@ -546,7 +565,7 @@ function streamFromArrayAdapter(
         const keyLit = cStringLiteral(Buffer.from(armKey, "utf8"));
         d.push(
           `  case ${tag}:`,
-          `    sc_d = scr_dyn_new_typed_ref(scr_union_peek(sc_v), &${rc.retain}, &${rc.release}, ${keyLit}, ${Buffer.byteLength(armKey, "utf8")}, &${snapshot}_${tag}, ${unionCommits.get(tag) ?? "NULL"});`,
+          `    sc_d = scr_dyn_new_typed_ref${emitter.traceAdapterC(arm) !== null ? "_traced" : ""}(scr_union_peek(sc_v), &${rc.retain}, &${rc.release}, ${keyLit}, ${Buffer.byteLength(armKey, "utf8")}, &${snapshot}_${tag}, ${unionCommits.get(tag) ?? "NULL"});`,
           `    break;`,
         );
       }
@@ -561,7 +580,7 @@ function streamFromArrayAdapter(
       const keyLit = cStringLiteral(Buffer.from(key, "utf8"));
       const keyLen = Buffer.byteLength(key, "utf8");
       d.push(
-        `  ScrDyn *sc_d = scr_dyn_new_typed_ref(sc_v, &${rc.retain}, &${rc.release}, ${keyLit}, ${keyLen}, &${snapshot}, ${commit});`,
+        `  ScrDyn *sc_d = scr_dyn_new_typed_ref${emitter.traceAdapterC(elem) !== null ? "_traced" : ""}(sc_v, &${rc.retain}, &${rc.release}, ${keyLit}, ${keyLen}, &${snapshot}, ${commit});`,
       );
     } else {
       d.push(`  ScrDyn *sc_d = ${emitter.toDynHelper(elem)}(sc_v);`);
@@ -2933,7 +2952,7 @@ function emitDynamicExpr(
           const keyLit = cStringLiteral(Buffer.from(key, "utf8"));
           return emitter.newTemp(
             e.type,
-            `scr_dyn_new_typed_ref(${v.name}, &${rc.retain}, &${rc.release}, ${keyLit}, ${Buffer.byteLength(key, "utf8")}, &${adapter.snapshot}, ${adapter.commit})`,
+            `scr_dyn_new_typed_ref${emitter.traceAdapterC(v.type) !== null ? "_traced" : ""}(${v.name}, &${rc.retain}, &${rc.release}, ${keyLit}, ${Buffer.byteLength(key, "utf8")}, &${adapter.snapshot}, ${adapter.commit})`,
           );
         }
         if (v.type.kind === "func") {
@@ -8071,6 +8090,11 @@ function emitProcessLibCall(state: LibCallState): Temp {
             return finish(`scr_process_off_warning(${arg(0)})`);
           case "process.emitWarning":
             return finish(`scr_process_emit_warning(${arg(0)})`);
+          case "process.onUncaughtException":
+            emitter.usesTimers = true;
+            return finish(`scr_process_on_uncaught_exception(${arg(0)}, ${arg(1)}, ${arg(2)})`);
+          case "process.offUncaughtException":
+            return finish(`scr_process_off_uncaught_exception(${arg(0)}, ${arg(1)})`);
           case "process.onUnhandledRejection":
             // The completed-checkpoint report dispatches the listeners.
             emitter.usesTimers = true;
@@ -8276,16 +8300,10 @@ function emitProcessLibCall(state: LibCallState): Temp {
             emitter.moveTemp(cb);
             return finish(`scr_next_tick(${cb.name})`);
           }
-          case "process.onSignal": {
-            // The registry owns the callback (zero-param — frontend-pinned)
-            // until off/once removes it. The loop dispatches deliveries.
+          case "process.onSignal":
             emitter.usesTimers = true;
-            const cb = args[1]!;
-            emitter.moveTemp(cb);
-            return finish(`scr_signal_on(${arg(0)}, ${cb.name}, ${arg(2)})`);
-          }
+            return finish(`scr_signal_on(${arg(0)}, ${arg(1)}, ${arg(2)})`);
           case "process.offSignal":
-            // Borrowed callback: removal is by pointer identity.
             return finish(`scr_signal_off(${arg(0)}, ${arg(1)})`);
           case "process.onExit": {
             // Runtime adapters cover both shapes (the code is a plain

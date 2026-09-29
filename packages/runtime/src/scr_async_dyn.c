@@ -150,9 +150,23 @@ ScrDyn *scr_als_exit_run(double id, ScrDyn *fn, ScrDyn *args) {
  * `once` flag (auto-removed after one delivery, Node's once) and
  * identity-based removal (the offWarning stance). */
 typedef struct {
+  size_t refs;
+  bool fired;
+} ScrRejState;
+
+typedef struct {
   ScrDyn *fn;
   bool once;
+  uint64_t id;
+  ScrRejState *state; /* snapshots share the once-fired state */
 } ScrRejListener;
+
+static void scr_rej_release(ScrRejListener *l) {
+  scr_dyn_release(l->fn);
+  if (--l->state->refs == 0) free(l->state);
+}
+
+static uint64_t scr_rej_id = 0;
 
 static ScrRejListener *scr_urj_listeners = NULL;
 static size_t scr_nurj = 0, scr_urj_cap = 0;
@@ -160,14 +174,14 @@ static ScrRejListener *scr_rjh_listeners = NULL;
 static size_t scr_nrjh = 0, scr_rjh_cap = 0;
 
 static void scr_urj_teardown(void) {
-  for (size_t i = 0; i < scr_nurj; i++) scr_dyn_release(scr_urj_listeners[i].fn);
+  for (size_t i = 0; i < scr_nurj; i++) scr_rej_release(&scr_urj_listeners[i]);
   free(scr_urj_listeners);
   scr_urj_listeners = NULL;
   scr_nurj = scr_urj_cap = 0;
 }
 
 static void scr_rjh_teardown(void) {
-  for (size_t i = 0; i < scr_nrjh; i++) scr_dyn_release(scr_rjh_listeners[i].fn);
+  for (size_t i = 0; i < scr_nrjh; i++) scr_rej_release(&scr_rjh_listeners[i]);
   free(scr_rjh_listeners);
   scr_rjh_listeners = NULL;
   scr_nrjh = scr_rjh_cap = 0;
@@ -191,16 +205,20 @@ static void scr_rej_push(ScrRejListener **list, size_t *n, size_t *cap, ScrDyn *
     *list = realloc(*list, *cap * sizeof **list);
     if (!*list) scr_ad_oom();
   }
-  (*list)[(*n)++] = (ScrRejListener){scr_dyn_retain(fn), once};
+  ScrRejState *state = calloc(1, sizeof *state);
+  if (!state) scr_ad_oom();
+  state->refs = 1;
+  (*list)[(*n)++] = (ScrRejListener){scr_dyn_retain(fn), once, ++scr_rej_id, state};
 }
 
 static void scr_rej_remove(ScrRejListener *list, size_t *n, ScrDyn *fn) {
-  for (size_t i = 0; i < *n; i++) {
+  for (size_t left = *n; left > 0; left--) {
+    size_t i = left - 1;
     ScrDyn *l = list[i].fn;
     bool same = l == fn || (l->kind == SCR_DYN_FUNC && fn->kind == SCR_DYN_FUNC &&
                             scr_dyn_strict_eq(l, fn));
     if (same) {
-      scr_dyn_release(l);
+      scr_rej_release(&list[i]);
       memmove(list + i, list + i + 1, (*n - i - 1) * sizeof *list);
       (*n)--;
       return;
@@ -251,33 +269,94 @@ void scr_process_off_rejection_handled(ScrDyn *fn) {
   scr_rjh_sync_hook();
 }
 
-/* One registry pass: call every listener with `args`, removing once-
- * listeners BEFORE their call (Node's once removes at dispatch, so a
- * re-registration inside the listener sticks). The registry is accessed
- * THROUGH its pointers per step — a listener that registers can realloc
- * the array mid-pass. Returns false when a listener threw (the caller's
- * crash path). */
+/* Snapshot dispatch preserves EventEmitter mutation rules: removals do
+ * not skip a pending listener, additions wait for the next delivery, and
+ * once entries leave the live list before invoking user code. */
 static bool scr_rej_fire(ScrRejListener **list, size_t *n, ScrDyn **args, size_t argc) {
-  size_t i = 0;
-  bool ok = true;
-  while (i < *n && ok) {
-    /* Own +1 across the call: a once-removal (here) or the listener
-     * removing itself (off inside the body) must not free a running
-     * function. */
-    ScrDyn *fn = scr_dyn_retain((*list)[i].fn);
-    if ((*list)[i].once) {
-      scr_dyn_release((*list)[i].fn);
-      memmove(*list + i, *list + i + 1, (*n - i - 1) * sizeof **list);
-      (*n)--;
-    } else {
-      i++;
-    }
-    ScrDyn *r = scr_dyn_call(fn, args, argc, "listener");
-    if (r == NULL) ok = false;
-    else scr_dyn_release(r);
-    scr_dyn_release(fn);
+  size_t count = *n;
+  ScrRejListener *snap = count ? malloc(count * sizeof *snap) : NULL;
+  if (count && !snap) scr_ad_oom();
+  for (size_t i = 0; i < count; i++) {
+    snap[i] = (*list)[i];
+    scr_dyn_retain(snap[i].fn);
+    snap[i].state->refs++;
   }
+  bool ok = true;
+  for (size_t i = 0; i < count; i++) {
+    if (ok && !(snap[i].once && snap[i].state->fired)) {
+      if (snap[i].once) {
+        snap[i].state->fired = true;
+        for (size_t j = 0; j < *n; j++) {
+          if ((*list)[j].id == snap[i].id) {
+            scr_rej_release(&(*list)[j]);
+            memmove(*list + j, *list + j + 1, (*n - j - 1) * sizeof **list);
+            (*n)--;
+            break;
+          }
+        }
+      }
+      ScrDyn *r = scr_dyn_call(snap[i].fn, args, argc, "listener");
+      ok = !scr_exc_pending();
+      scr_dyn_release(r);
+    }
+    scr_rej_release(&snap[i]);
+  }
+  free(snap);
   return ok;
+}
+
+/* Uncaught exception listeners share the checked-dynamic callback ABI.
+ * Monitors run first but do not handle the exception by themselves. */
+static ScrRejListener *scr_uncaught_ls[2];
+static size_t scr_uncaught_n[2], scr_uncaught_cap[2];
+static int scr_uncaught_dispatch(bool from_promise);
+
+static void scr_uncaught_sync_hook(void) {
+  scr_uncaught_exception_hook = (scr_uncaught_n[0] || scr_uncaught_n[1]) ? scr_uncaught_dispatch : NULL;
+}
+
+static void scr_uncaught_teardown(void) {
+  for (size_t k = 0; k < 2; k++) {
+    for (size_t i = 0; i < scr_uncaught_n[k]; i++) scr_rej_release(&scr_uncaught_ls[k][i]);
+    free(scr_uncaught_ls[k]);
+    scr_uncaught_ls[k] = NULL;
+    scr_uncaught_n[k] = scr_uncaught_cap[k] = 0;
+  }
+  scr_uncaught_sync_hook();
+}
+
+void scr_process_on_uncaught_exception(ScrDyn *fn, bool once, bool monitor) {
+  if (!scr_rej_check_listener(fn)) return;
+  static bool armed = false;
+  if (!armed) { armed = true; atexit(scr_uncaught_teardown); }
+  size_t k = monitor ? 1 : 0;
+  scr_rej_push(&scr_uncaught_ls[k], &scr_uncaught_n[k], &scr_uncaught_cap[k], fn, once);
+  scr_uncaught_sync_hook();
+}
+
+void scr_process_off_uncaught_exception(ScrDyn *fn, bool monitor) {
+  if (!scr_rej_check_listener(fn)) return;
+  size_t k = monitor ? 1 : 0;
+  scr_rej_remove(scr_uncaught_ls[k], &scr_uncaught_n[k], fn);
+  scr_uncaught_sync_hook();
+}
+
+static int scr_uncaught_dispatch(bool from_promise) {
+  ScrCaught *caught = scr_exc_take();
+  ScrDyn *error = scr_caught_to_dyn(caught);
+  const char *origin = from_promise ? "unhandledRejection" : "uncaughtException";
+  ScrStr *text = scr_str_new(origin, strlen(origin));
+  ScrDyn *args[2] = {error, scr_dyn_new_str(text)};
+  scr_str_release(text);
+  bool ok = scr_rej_fire(&scr_uncaught_ls[1], &scr_uncaught_n[1], args, 2);
+  bool handled = ok && scr_uncaught_n[0] > 0;
+  if (handled) ok = scr_rej_fire(&scr_uncaught_ls[0], &scr_uncaught_n[0], args, 2);
+  scr_dyn_release(args[0]);
+  scr_dyn_release(args[1]);
+  scr_uncaught_sync_hook();
+  if (ok && !handled) scr_rethrow(caught);
+  scr_caught_release(caught);
+  return !ok ? -1 : handled ? 1 : 0;
 }
 
 /* Dispatch one unhandled rejection to the registered listeners —

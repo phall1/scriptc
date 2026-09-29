@@ -353,7 +353,10 @@ void scr_dyn_trace_v(void *ptr, ScrTraceVisit visit, void *ctx) {
     visit(d->v.proxy.target, ctx);
     visit(d->v.proxy.handler, ctx);
     break;
-  case SCR_DYN_TYPED_REF: visit(d->v.typed_ref.materialized, ctx); break;
+  case SCR_DYN_TYPED_REF:
+    visit(d->v.typed_ref.materialized, ctx);
+    if (d->v.typed_ref.traced) visit(d->v.typed_ref.ptr, ctx);
+    break;
   case SCR_DYN_HANDLE:
     if (d->v.handle.traced) visit(d->v.handle.ptr, ctx);
     break;
@@ -469,7 +472,7 @@ static void scr_dyn_dispose(ScrDyn *d, bool collected) {
       cast->release(cast->ptr);
       free(cast);
     }
-    d->v.typed_ref.release(d->v.typed_ref.ptr);
+    if (!collected || !d->v.typed_ref.traced) d->v.typed_ref.release(d->v.typed_ref.ptr);
     break;
   case SCR_DYN_PROXY:
     if (!collected) {
@@ -1119,6 +1122,12 @@ static bool scr_dyn_canonical_own_index(const ScrStr *key, size_t length);
 
 ScrDyn *scr_dyn_own_descriptor(const ScrDyn *value, const ScrStr *key) {
   if (scr_dyn_class_reflection_fence(value)) return NULL;
+  if (value->kind == SCR_DYN_TYPED_REF) {
+    ScrDyn *view = scr_dyn_typed_ref_materialize(value);
+    ScrDyn *result = scr_exc_pending() ? NULL : scr_dyn_own_descriptor(view, key);
+    scr_dyn_release(view);
+    return result;
+  }
   if (value->kind == SCR_DYN_FUNC) {
     if (value->v.fn.clo->props) {
       ScrDyn *table = (ScrDyn *)scr_box_get_ref(value->v.fn.clo->props);
@@ -1354,7 +1363,19 @@ ScrDyn *scr_dyn_new_typed_ref(
   d->v.typed_ref.commit = commit;
   d->v.typed_ref.materialized = NULL;
   d->v.typed_ref.casts = NULL;
+  d->v.typed_ref.traced = false;
   return d;
+}
+
+ScrDyn *scr_dyn_new_typed_ref_traced(
+    void *ptr, void *(*retain)(void *), void (*release)(void *),
+    const char *type_key, size_t type_key_len,
+    ScrDyn *(*materialize)(void *),
+    void (*commit)(void *, const ScrDyn *)) {
+  ScrDyn *value = scr_dyn_new_typed_ref(ptr, retain, release, type_key,
+      type_key_len, materialize, commit);
+  value->v.typed_ref.traced = true;
+  return value;
 }
 
 bool scr_dyn_typed_ref_is(
@@ -2352,7 +2373,7 @@ ScrDyn *scr_dyn_get_own_property_descriptor(ScrDyn *target, ScrDyn *key) {
     scr_throw_error_msg(SCR_ERR_TYPE, msg, sizeof msg - 1);
     return NULL;
   }
-  if (target->kind != SCR_DYN_OBJ && target->kind != SCR_DYN_PROXY && target->kind != SCR_DYN_FUNC && target->kind != SCR_DYN_ARR && target->kind != SCR_DYN_STR && target->kind != SCR_DYN_BOOL && target->kind != SCR_DYN_NUM) {
+  if (target->kind != SCR_DYN_OBJ && target->kind != SCR_DYN_PROXY && target->kind != SCR_DYN_FUNC && target->kind != SCR_DYN_ARR && target->kind != SCR_DYN_STR && target->kind != SCR_DYN_BOOL && target->kind != SCR_DYN_NUM && target->kind != SCR_DYN_TYPED_REF) {
     static const char msg[] = "Object.getOwnPropertyDescriptor on this value is not supported yet";
     scr_throw_error_msg(SCR_ERR_ERROR, msg, sizeof msg - 1);
     return NULL;

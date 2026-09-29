@@ -8,8 +8,8 @@
     "tiers": {
       "static": {
         "replace-refusal": 47,
-        "verify-gap": 2565,
-        "audit-partial": 600,
+        "verify-gap": 2562,
+        "audit-partial": 603,
         "classify": 2,
         "implement": 81
       },
@@ -70558,12 +70558,19 @@
       "priority": "normal",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:process",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "compiler-feature:process.'uncaughtException'",
+          "tests": [
+            "tests/corpus/process-uncaught-sync.cjs",
+            "tests/corpus/process-uncaught-loop.cjs",
+            "tests/corpus/process-uncaught-module.mjs",
+            "tests/corpus/process-uncaught-rejection.cjs",
+            "tests/corpus/process-uncaught-monitor.cjs",
+            "tests/corpus/process-uncaught-handler-throws.cjs"
+          ]
         },
         "dynamic": {
           "status": "not-implemented",
@@ -70614,12 +70621,19 @@
       "priority": "normal",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:process",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "compiler-feature:process.'uncaughtExceptionMonitor'",
+          "tests": [
+            "tests/corpus/process-uncaught-sync.cjs",
+            "tests/corpus/process-uncaught-loop.cjs",
+            "tests/corpus/process-uncaught-module.mjs",
+            "tests/corpus/process-uncaught-rejection.cjs",
+            "tests/corpus/process-uncaught-monitor.cjs",
+            "tests/corpus/process-uncaught-handler-throws.cjs"
+          ]
         },
         "dynamic": {
           "status": "not-implemented",
@@ -70726,12 +70740,15 @@
       "priority": "normal",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:process",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "compiler-feature:process.SIGINT, SIGHUP, etc.",
+          "tests": [
+            "tests/corpus/1443-signal-handlers.ts",
+            "tests/corpus/process-named-signals.cjs"
+          ]
         },
         "dynamic": {
           "status": "not-implemented",

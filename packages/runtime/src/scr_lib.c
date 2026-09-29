@@ -850,7 +850,7 @@ static int scr_signal_by_name(const char *name) {
 /* The table above for other units (scr_child.c's child.kill shares Node's
  * one signal-name story): the resolved number, or -1 for unknown names. */
 int scr_signal_from_name(const ScrStr *signal) {
-  return scr_signal_by_name(signal->data);
+  return strlen(signal->data) == signal->len ? scr_signal_by_name(signal->data) : -1;
 }
 
 /* The reverse walk, for spawnSync's result.signal: the FIRST name with
