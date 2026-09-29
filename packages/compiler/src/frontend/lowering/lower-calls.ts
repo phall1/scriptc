@@ -4897,6 +4897,29 @@ export function lowerCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr {
       ts.isStringLiteralLike(expr.expression.argumentExpression)
     ) {
       const memberName = expr.expression.argumentExpression.text;
+      const receiverType = lowerer.mapTypeOf(lowerer.typeOf(expr.expression.expression));
+      if (receiverType?.kind === "object") {
+        const info = lowerer.classes.get(receiverType.className);
+        const found = info ? lowerer.findMethodOn(info, memberName) : null;
+        if (info && found) {
+          const virtual = lowerer.overrideBelow(info, memberName);
+          if (found.sig.abstract === true && !virtual) {
+            lowerer.unsupported("SC1090", expr, `calls of the abstract method '${memberName}' with no concrete implementation below the receiver's static class`);
+          }
+          if (virtual) lowerer.noteVirtualEdge(info, memberName);
+          else lowerer.noteEdge(`%${found.declarer.def.name}.${memberName}`);
+          const receiver = lowerer.lowerExpr(expr.expression.expression);
+          const args = lowerer.completeArgs(expr.arguments, found.sig.params, locOf(expr), expr);
+          return reconcileOverloadReturn(lowerer, expr, {
+            ...(virtual
+              ? { kind: "virtualCall" as const, className: info.def.name, method: memberName }
+              : { kind: "call" as const, callee: `%${found.declarer.def.name}.${memberName}` }),
+            args: [lowerer.upcastTo(receiver, virtual ? info.def.name : found.declarer.def.name), ...args],
+            type: found.sig.ret,
+            loc: locOf(expr),
+          });
+        }
+      }
       // ts7's getSymbolAtLocation does not resolve element accesses; the
       // member symbol comes from the receiver's (apparent) type instead —
       // same provenance answer as the dot spelling's name symbol.
