@@ -4821,6 +4821,18 @@ export function lowerCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr {
         // monomorphized against the defining literal's declaration.
         lowerObjLitGenericMethodCall(lowerer, expr, expr.expression);
       if (intrinsic) return intrinsic;
+      const accessorTarget = lowerer.fieldTarget(expr.expression);
+      if (accessorTarget?.container === "accessor") {
+        const callee = lowerer.fieldGetExpr(accessorTarget, locOf(expr.expression), expr.expression);
+        if (callee.type.kind === "func") {
+          const args = completeFuncValueArgs(lowerer, expr, callee.type, locOf(expr));
+          return { kind: "callValue", callee, args, type: callee.type.ret, loc: locOf(expr) };
+        }
+        if (callee.type.kind === "dyn" && !expr.arguments.some((arg) => ts.isSpreadElement(arg))) {
+          const args = expr.arguments.map((arg) => lowerer.lowerExprExpecting(arg, DYN));
+          return { kind: "dynCall", callee, calleeName: expr.expression.getText(), args, type: DYN, loc: locOf(expr) };
+        }
+      }
       // A method call rooted at an initializer-less ambient `declare
       // const/var` whose declared type has no mapping: Node throws the
       // catchable ReferenceError at the ROOT read before the member, the
