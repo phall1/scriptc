@@ -49,3 +49,57 @@ console.log(sequence);
 sequence = "";
 console.log((text("a", undefined) ?? text("b", null)) ?? text("c", "end") ?? text("d", "unused"));
 console.log(sequence);
+
+// Logical chains also occur in compiler predicates and retain operand values.
+function logicalDispatch(winner: number): void {
+  const calls: number[] = [];
+  function probe(index: number): number {
+    calls.push(index);
+    return index === winner ? index + 1 : 0;
+  }
+  const found =
+    probe(0) || probe(1) || probe(2) || probe(3) ||
+    probe(4) || probe(5) || probe(6) || probe(7) ||
+    probe(8) || probe(9) || probe(10) || probe(11) ||
+    probe(12) || probe(13) || probe(14) || probe(15) ||
+    probe(16) || probe(17) || probe(18) || probe(19) ||
+    probe(20) || probe(21) || probe(22) || probe(23) ||
+    probe(24) || probe(25) || probe(26) || probe(27) ||
+    probe(28) || probe(29) || probe(30) || probe(31) ||
+    probe(32) || probe(33) || probe(34) || probe(35) ||
+    probe(36) || probe(37) || probe(38) || probe(39) ||
+    probe(40) || probe(41) || probe(42) || probe(43) ||
+    probe(44) || probe(45) || probe(46) || probe(47) ||
+    probe(48) || probe(49) || probe(50) || probe(51) ||
+    probe(52) || probe(53) || probe(54) || probe(55) ||
+    probe(56) || probe(57) || probe(58) || probe(59) ||
+    probe(60) || probe(61) || probe(62) || probe(63);
+  console.log("or", winner, found, calls.join(","));
+  calls.length = 0;
+  function accept(index: number): number {
+    calls.push(index);
+    return index === winner ? 0 : index + 1;
+  }
+  const accepted =
+    accept(0) && accept(1) && accept(2) && accept(3) &&
+    accept(4) && accept(5) && accept(6) && accept(7) &&
+    accept(8) && accept(9) && accept(10) && accept(11) &&
+    accept(12) && accept(13) && accept(14) && accept(15) &&
+    accept(16) && accept(17) && accept(18) && accept(19) &&
+    accept(20) && accept(21) && accept(22) && accept(23) &&
+    accept(24) && accept(25) && accept(26) && accept(27) &&
+    accept(28) && accept(29) && accept(30) && accept(31) &&
+    accept(32) && accept(33) && accept(34) && accept(35) &&
+    accept(36) && accept(37) && accept(38) && accept(39) &&
+    accept(40) && accept(41) && accept(42) && accept(43) &&
+    accept(44) && accept(45) && accept(46) && accept(47) &&
+    accept(48) && accept(49) && accept(50) && accept(51) &&
+    accept(52) && accept(53) && accept(54) && accept(55) &&
+    accept(56) && accept(57) && accept(58) && accept(59) &&
+    accept(60) && accept(61) && accept(62) && accept(63);
+  console.log("and", winner, accepted, calls.join(","));
+}
+logicalDispatch(0);
+logicalDispatch(31);
+logicalDispatch(63);
+logicalDispatch(64);

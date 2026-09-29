@@ -6682,249 +6682,7 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
       );
     }
     if (op === ts.SyntaxKind.AmpersandAmpersandToken || op === ts.SyntaxKind.BarBarToken) {
-      if (op === ts.SyntaxKind.BarBarToken) {
-        const fallback = lowerAbsenceAwareOrChain(lowerer, expr);
-        if (fallback) return fallback;
-      }
-      // JS value semantics: `a && b` is `toBool(a) ? b : a` — the result is
-      // an operand value, so both operands must share one IR kind (which is
-      // also what tsc's type says, modulo literal-union collapsing that
-      // mapType already handles). Mixed kinds (`n && s`) stay rejected.
-      const left = lowerAbsenceProbe(lowerer, expr.left) ?? lowerer.lowerExpr(expr.left);
-      const right = lowerer.lowerExpr(expr.right);
-      // A LITERAL-unit left operand (a compile-time undefined/null — the
-      // capability-probe members: `process.features.inspector ||
-      // !flag.startsWith('--inspect')` reads undefined in a compiled
-      // binary): statically falsy, so the operator folds JS-exactly —
-      // `unit || X` IS X, `unit && X` IS the unit (X's side effects never
-      // run in JS either; the lowered right is simply dropped). Literal
-      // units only — computed unit-typed values keep the fences below.
-      if (left.kind === "unitLit") {
-        return op === ts.SyntaxKind.BarBarToken ? right : left;
-      }
-      // JS objects and symbols are always truthy. In `ref || fallback`
-      // the fallback is therefore unreachable and the result is the
-      // already-evaluated left value — the browser-fallback idiom used by
-      // packages for `process.argv || []` and `process.env || {}`. The
-      // operand itself remains in the IR, preserving reads/calls that
-      // produce the reference; only the unreachable right lowering drops.
-      if (op === ts.SyntaxKind.BarBarToken && REF_TRUTHY_KINDS.has(left.type.kind)) {
-        return left;
-      }
-      if (left.type.kind === "dyn" || right.type.kind === "dyn") {
-        // A checked-dynamic operand (`fn.name || '<anonymous>'` —
-        // test/common's _mustCallInner): both sides live in the checked-dynamic tree and
-        // the deciding test is ToBoolean over the dyn kind
-        // (scr_dyn_truthy) — JS value semantics exactly, result dyn. The
-        // non-dyn side converts through the usual boundary; a value with
-        // no dyn representation keeps the fence.
-        const l = lowerer.coerceToExpected(left, DYN);
-        const r = lowerer.coerceToExpected(right, DYN);
-        if (l.type.kind !== "dyn" || r.type.kind !== "dyn") {
-          lowerer.unsupported("SC1100", expr, "logical operators on 'unknown' values");
-        }
-        return {
-          kind: "logical",
-          op: op === ts.SyntaxKind.AmpersandAmpersandToken ? "&&" : "||",
-          left: l,
-          right: r,
-          type: DYN, loc,
-        };
-      }
-      if (left.type.kind === "jsval" || right.type.kind === "jsval") {
-        return {
-          kind: "logical",
-          op: op === ts.SyntaxKind.AmpersandAmpersandToken ? "&&" : "||",
-          left: lowerer.jsvalIn(left, expr.left),
-          right: lowerer.jsvalIn(right, expr.right),
-          type: JSVAL, loc,
-        };
-      }
-      if (left.type.kind === "union" || right.type.kind === "union") {
-        // JS value semantics over a union: the deciding test is the ARM
-        // value's ToBoolean (a per-union helper), and the result is the
-        // deciding operand. Supported when the checker's type of the whole
-        // expression maps to ONE union both operands coerce into (same
-        // union passes through; a plain arm wraps — `u || undefined`).
-        // Everything else (`u && flag`, whose value would need a wider
-        // re-tagged union) stays fenced — in CONDITION position those
-        // shapes lower through lowerCondition's bool descent instead.
-        let target = lowerer.mapTypeOf(lowerer.typeOf(expr));
-        // A broad-JSDoc npm-static body can leave the CHECKER result `any`
-        // even after declaration-backed specialization has recovered both
-        // operands (`helpOption && args.find(...)` in commander). When the
-        // left consists only of always-truthy references and falsy units,
-        // the static result is exactly the right operand plus those units.
-        if (
-          target === null &&
-          lowerer.implicitParamTypes !== null &&
-          npmStaticPackageOfPath(expr.getSourceFile().fileName) !== null &&
-          (lowerer.typeOf(expr).flags & ts.TypeFlags.Any) !== 0 &&
-          left.type.kind === "union"
-        ) {
-          const leftArms = lowerer.unions.get(left.type.unionId)?.arms;
-          const rightArms = right.type.kind === "union"
-            ? lowerer.unions.get(right.type.unionId)?.arms
-            : [right.type];
-          const rightIsStatic = rightArms?.every(
-            (arm) => arm.kind !== "dyn" && arm.kind !== "caught" && arm.kind !== "jsval" && arm.kind !== "void",
-          ) ?? false;
-          if (
-            leftArms && rightArms && rightIsStatic &&
-            leftArms.some(isUnitType) &&
-            leftArms.every((arm) => isUnitType(arm) || REF_TRUTHY_KINDS.has(arm.kind))
-          ) {
-            const byKey = new Map<string, IrType>();
-            for (const arm of [...rightArms, ...leftArms.filter(isUnitType)]) {
-              byKey.set(typeKey(arm), arm);
-            }
-            const arms = [...byKey.values()].sort((a, b) => (typeKey(a) < typeKey(b) ? -1 : 1));
-            if (arms.length > 1) {
-              const source = right.type.kind === "union" ? lowerer.unions.get(right.type.unionId) : undefined;
-              target = { kind: "union", unionId: source
-                ? lowerer.unions.transform(source, arms)
-                : lowerer.unions.intern(arms) };
-            }
-          }
-        }
-        if (target?.kind === "union") {
-          // `&&` whose left does NOT fit the result union: the checker
-          // built that result by DROPPING left arms which are always
-          // truthy (`Option | undefined && string | undefined` answers
-          // `string | undefined`, not `Option | string | undefined`).
-          // Evaluate the left once, test it in its own union, and retag it
-          // only on the falsy path. Any stranded reference arms are
-          // unreachable there because every JS object is truthy.
-          if (op === ts.SyntaxKind.AmpersandAmpersandToken && left.type.kind === "union" && !typeEquals(left.type, target)) {
-            const def = lowerer.unions.get(left.type.unionId);
-            const trappable = new Set<number>();
-            def?.arms.forEach((arm, tag) => {
-              if (lowerer.armTag(target.unionId, arm) < 0 && REF_TRUTHY_KINDS.has(arm.kind)) {
-                trappable.add(tag);
-              }
-            });
-            const retag = trappable.size === 0
-              ? null
-              : lowerer.unionRetagHelper(left.type.unionId, target.unionId, loc, trappable);
-            if (retag) {
-              lowerer.requireTruthyUnion(left.type.unionId, expr);
-              const stmts: IrStmt[] = [];
-              let stable: IrExpr = left;
-              if (!isSafeToRepeat(left)) {
-                const local = lowerer.declareHiddenLocal("%and", left.type);
-                stmts.push({ kind: "varDecl", localId: local.id, init: left, loc });
-                stable = varRef(local.id, left.type, loc);
-              }
-              const result: IrExpr = {
-                kind: "ternary",
-                cond: lowerer.ensureBool(stable, expr.left),
-                then: lowerer.coerceInto(expr.right, right, target),
-                else_: { kind: "call", callee: retag, args: [stable], type: target, loc },
-                type: target,
-                loc,
-              };
-              return stmts.length === 0 ? result : { kind: "seqExpr", stmts, result, type: target, loc };
-            }
-          }
-          // `||` whose left does NOT fit the result union: the checker built
-          // that result by DROPPING the left's falsy arms (`process.env.X ||
-          // null` is `string | null`, `|| 3000` is `string | number` — the
-          // `undefined` is gone from both), so coercing the left eagerly, as
-          // the shared shape below does, retags an arm the test is about to
-          // rule out and throws where Node yields the default. Single-eval
-          // instead: test the left in its OWN union and retag only on the
-          // truthy side, where the dropped arms are unreachable.
-          if (op === ts.SyntaxKind.BarBarToken && left.type.kind === "union" && !typeEquals(left.type, target)) {
-            const retag = lowerer.unionRetagHelper(left.type.unionId, target.unionId, loc);
-            if (retag) {
-              lowerer.requireTruthyUnion(left.type.unionId, expr);
-              return {
-                kind: "orDefault",
-                left,
-                right: lowerer.coerceInto(expr.right, right, target),
-                retag,
-                type: target,
-                loc,
-              };
-            }
-          }
-          lowerer.requireTruthyUnion(target.unionId, expr);
-          return {
-            kind: "logical",
-            op: op === ts.SyntaxKind.AmpersandAmpersandToken ? "&&" : "||",
-            left: lowerer.coerceInto(expr.left, left, target),
-            right: lowerer.coerceInto(expr.right, right, target),
-            type: target, loc,
-          };
-        }
-        // `u || d` NARROWED by the default: the checker types the result
-        // as u's single non-unit arm (`marker() || "default"`) — evaluate
-        // u once, truthy extracts the arm, falsy takes d lazily (the
-        // orDefault node, nullish's truthiness sibling). An UNMAPPABLE
-        // checker result takes the same rule (`options.runner ||
-        // defaultRunner` — tsc's union of two structurally-compatible
-        // function types has no representation, while the left's one
-        // non-unit arm is the only representable answer): the default
-        // must coerce into the arm or fence on its own.
-        if (
-          op === ts.SyntaxKind.BarBarToken &&
-          left.type.kind === "union"
-        ) {
-          const def = lowerer.unions.get(left.type.unionId);
-          const rest = def ? def.arms.filter((a) => !isUnitType(a)) : [];
-          const funcArmDefault =
-            rest[0]?.kind === "func" && (target === null || target.kind === "func");
-          if (rest.length === 1 && ((target !== null && typeEquals(target, rest[0]!)) || funcArmDefault)) {
-            lowerer.requireTruthyUnion(left.type.unionId, expr);
-            const dflt = lowerer.lowerExprExpecting(expr.right, rest[0]!);
-            return { kind: "orDefault", left, right: dflt, type: rest[0]!, loc };
-          }
-        }
-        // JavaScript defaults can join differently inferred object layouts.
-        // When both operands have native checked representations, preserve
-        // the deciding value and short-circuit evaluation in that domain.
-        if (isJsSourceFile(expr.getSourceFile()) &&
-            lowerer.dynConvertible(left.type) && lowerer.dynConvertible(right.type)) {
-          return {
-            kind: "logical", op: op === ts.SyntaxKind.AmpersandAmpersandToken ? "&&" : "||",
-            left: lowerer.coerceInto(expr.left, left, DYN),
-            right: lowerer.coerceInto(expr.right, right, DYN), type: DYN, loc,
-          };
-        }
-        lowerer.unsupported(
-          "SC1090",
-          expr,
-          `logical operators on union-typed values outside conditions (${NARROW_FIRST})`,
-        );
-      }
-      const kind = left.type.kind;
-      if (
-        kind !== right.type.kind ||
-        (kind !== "f64" && kind !== "string" && kind !== "bool")
-      ) {
-        // Mixed PLAIN operands (`value || null`, `flag || undefined`,
-        // `s || 0`): JS value semantics still compile when the checker
-        // types the RESULT as one union both operands coerce into — the
-        // same lift the union-operand path above takes, arriving here
-        // with two plain arm values instead.
-        const target = lowerer.mapTypeOf(lowerer.typeOf(expr));
-        if (target?.kind === "union") {
-          lowerer.requireTruthyUnion(target.unionId, expr);
-          return {
-            kind: "logical",
-            op: op === ts.SyntaxKind.AmpersandAmpersandToken ? "&&" : "||",
-            left: lowerer.coerceInto(expr.left, left, target),
-            right: lowerer.coerceInto(expr.right, right, target),
-            type: target, loc,
-          };
-        }
-        lowerer.unsupported("SC1042", expr);
-      }
-      return {
-        kind: "logical",
-        op: op === ts.SyntaxKind.AmpersandAmpersandToken ? "&&" : "||",
-        left, right, type: left.type, loc,
-      };
+      return lowerLogicalChain(lowerer, expr);
     }
     if (op === ts.SyntaxKind.QuestionQuestionToken) {
       return lowerer.lowerNullishCoalesce(expr, loc);
@@ -7518,20 +7276,289 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
     lowerer.unsupported("SC1090", expr, `operator '${ts.tokenToString(op) ?? ts.syntaxKindName(op)}'`);
   }
 
+function lowerLogicalChain(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr {
+  // Logical chains have a left-nested AST. Keep the native stack bounded
+  // while retaining each pair's checker type and lazy operand evaluation.
+  const parents: ts.BinaryExpression[] = [];
+  let current = expr;
+  let result: IrExpr;
+  while (true) {
+    if (current.operatorToken.kind === ts.SyntaxKind.BarBarToken) {
+      const fallback = lowerAbsenceAwareOrChain(lowerer, current);
+      if (fallback !== null) {
+        result = fallback;
+        break;
+      }
+    }
+    const left = current.left;
+    if (ts.isBinaryExpression(left) &&
+        (left.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken ||
+         left.operatorToken.kind === ts.SyntaxKind.BarBarToken) &&
+        !lowerer.chainRecvByNode.has(left)) {
+      parents.push(current);
+      current = left;
+      continue;
+    }
+    result = lowerLogicalPair(lowerer, current,
+      lowerAbsenceProbe(lowerer, left) ?? lowerer.lowerExpr(left));
+    break;
+  }
+  for (let i = parents.length - 1; i >= 0; i--) {
+    result = lowerLogicalPair(lowerer, parents[i]!, result);
+  }
+  return result;
+}
+
+function lowerLogicalPair(lowerer: Lowerer, expr: ts.BinaryExpression, left: IrExpr): IrExpr {
+  const op = expr.operatorToken.kind;
+  const loc = locOf(expr);
+  const right = lowerer.lowerExpr(expr.right);
+  // A LITERAL-unit left operand (a compile-time undefined/null — the
+  // capability-probe members: `process.features.inspector ||
+  // !flag.startsWith('--inspect')` reads undefined in a compiled
+  // binary): statically falsy, so the operator folds JS-exactly —
+  // `unit || X` IS X, `unit && X` IS the unit (X's side effects never
+  // run in JS either; the lowered right is simply dropped). Literal
+  // units only — computed unit-typed values keep the fences below.
+  if (left.kind === "unitLit") {
+    return op === ts.SyntaxKind.BarBarToken ? right : left;
+  }
+  // JS objects and symbols are always truthy. In `ref || fallback`
+  // the fallback is therefore unreachable and the result is the
+  // already-evaluated left value — the browser-fallback idiom used by
+  // packages for `process.argv || []` and `process.env || {}`. The
+  // operand itself remains in the IR, preserving reads/calls that
+  // produce the reference; only the unreachable right lowering drops.
+  if (op === ts.SyntaxKind.BarBarToken && REF_TRUTHY_KINDS.has(left.type.kind)) {
+    return left;
+  }
+  if (left.type.kind === "dyn" || right.type.kind === "dyn") {
+    // A checked-dynamic operand (`fn.name || '<anonymous>'` —
+    // test/common's _mustCallInner): both sides live in the checked-dynamic tree and
+    // the deciding test is ToBoolean over the dyn kind
+    // (scr_dyn_truthy) — JS value semantics exactly, result dyn. The
+    // non-dyn side converts through the usual boundary; a value with
+    // no dyn representation keeps the fence.
+    const l = lowerer.coerceToExpected(left, DYN);
+    const r = lowerer.coerceToExpected(right, DYN);
+    if (l.type.kind !== "dyn" || r.type.kind !== "dyn") {
+      lowerer.unsupported("SC1100", expr, "logical operators on 'unknown' values");
+    }
+    return {
+      kind: "logical",
+      op: op === ts.SyntaxKind.AmpersandAmpersandToken ? "&&" : "||",
+      left: l,
+      right: r,
+      type: DYN, loc,
+    };
+  }
+  if (left.type.kind === "jsval" || right.type.kind === "jsval") {
+    return {
+      kind: "logical",
+      op: op === ts.SyntaxKind.AmpersandAmpersandToken ? "&&" : "||",
+      left: lowerer.jsvalIn(left, expr.left),
+      right: lowerer.jsvalIn(right, expr.right),
+      type: JSVAL, loc,
+    };
+  }
+  if (left.type.kind === "union" || right.type.kind === "union") {
+    // JS value semantics over a union: the deciding test is the ARM
+    // value's ToBoolean (a per-union helper), and the result is the
+    // deciding operand. Supported when the checker's type of the whole
+    // expression maps to ONE union both operands coerce into (same
+    // union passes through; a plain arm wraps — `u || undefined`).
+    // Everything else (`u && flag`, whose value would need a wider
+    // re-tagged union) stays fenced — in CONDITION position those
+    // shapes lower through lowerCondition's bool descent instead.
+    let target = lowerer.mapTypeOf(lowerer.typeOf(expr));
+    // A broad-JSDoc npm-static body can leave the CHECKER result `any`
+    // even after declaration-backed specialization has recovered both
+    // operands (`helpOption && args.find(...)` in commander). When the
+    // left consists only of always-truthy references and falsy units,
+    // the static result is exactly the right operand plus those units.
+    if (
+      target === null &&
+      lowerer.implicitParamTypes !== null &&
+      npmStaticPackageOfPath(expr.getSourceFile().fileName) !== null &&
+      (lowerer.typeOf(expr).flags & ts.TypeFlags.Any) !== 0 &&
+      left.type.kind === "union"
+    ) {
+      const leftArms = lowerer.unions.get(left.type.unionId)?.arms;
+      const rightArms = right.type.kind === "union"
+        ? lowerer.unions.get(right.type.unionId)?.arms
+        : [right.type];
+      const rightIsStatic = rightArms?.every(
+        (arm) => arm.kind !== "dyn" && arm.kind !== "caught" && arm.kind !== "jsval" && arm.kind !== "void",
+      ) ?? false;
+      if (
+        leftArms && rightArms && rightIsStatic &&
+        leftArms.some(isUnitType) &&
+        leftArms.every((arm) => isUnitType(arm) || REF_TRUTHY_KINDS.has(arm.kind))
+      ) {
+        const byKey = new Map<string, IrType>();
+        for (const arm of [...rightArms, ...leftArms.filter(isUnitType)]) {
+          byKey.set(typeKey(arm), arm);
+        }
+        const arms = [...byKey.values()].sort((a, b) => (typeKey(a) < typeKey(b) ? -1 : 1));
+        if (arms.length > 1) {
+          const source = right.type.kind === "union" ? lowerer.unions.get(right.type.unionId) : undefined;
+          target = { kind: "union", unionId: source
+            ? lowerer.unions.transform(source, arms)
+            : lowerer.unions.intern(arms) };
+        }
+      }
+    }
+    if (target?.kind === "union") {
+      // `&&` whose left does NOT fit the result union: the checker
+      // built that result by DROPPING left arms which are always
+      // truthy (`Option | undefined && string | undefined` answers
+      // `string | undefined`, not `Option | string | undefined`).
+      // Evaluate the left once, test it in its own union, and retag it
+      // only on the falsy path. Any stranded reference arms are
+      // unreachable there because every JS object is truthy.
+      if (op === ts.SyntaxKind.AmpersandAmpersandToken && left.type.kind === "union" && !typeEquals(left.type, target)) {
+        const def = lowerer.unions.get(left.type.unionId);
+        const trappable = new Set<number>();
+        def?.arms.forEach((arm, tag) => {
+          if (lowerer.armTag(target.unionId, arm) < 0 && REF_TRUTHY_KINDS.has(arm.kind)) {
+            trappable.add(tag);
+          }
+        });
+        const retag = trappable.size === 0
+          ? null
+          : lowerer.unionRetagHelper(left.type.unionId, target.unionId, loc, trappable);
+        if (retag) {
+          lowerer.requireTruthyUnion(left.type.unionId, expr);
+          const stmts: IrStmt[] = [];
+          let stable: IrExpr = left;
+          if (!isSafeToRepeat(left)) {
+            const local = lowerer.declareHiddenLocal("%and", left.type);
+            stmts.push({ kind: "varDecl", localId: local.id, init: left, loc });
+            stable = varRef(local.id, left.type, loc);
+          }
+          const result: IrExpr = {
+            kind: "ternary",
+            cond: lowerer.ensureBool(stable, expr.left),
+            then: lowerer.coerceInto(expr.right, right, target),
+            else_: { kind: "call", callee: retag, args: [stable], type: target, loc },
+            type: target,
+            loc,
+          };
+          return stmts.length === 0 ? result : { kind: "seqExpr", stmts, result, type: target, loc };
+        }
+      }
+      // `||` whose left does NOT fit the result union: the checker built
+      // that result by DROPPING the left's falsy arms (`process.env.X ||
+      // null` is `string | null`, `|| 3000` is `string | number` — the
+      // `undefined` is gone from both), so coercing the left eagerly, as
+      // the shared shape below does, retags an arm the test is about to
+      // rule out and throws where Node yields the default. Single-eval
+      // instead: test the left in its OWN union and retag only on the
+      // truthy side, where the dropped arms are unreachable.
+      if (op === ts.SyntaxKind.BarBarToken && left.type.kind === "union" && !typeEquals(left.type, target)) {
+        const retag = lowerer.unionRetagHelper(left.type.unionId, target.unionId, loc);
+        if (retag) {
+          lowerer.requireTruthyUnion(left.type.unionId, expr);
+          return {
+            kind: "orDefault",
+            left,
+            right: lowerer.coerceInto(expr.right, right, target),
+            retag,
+            type: target,
+            loc,
+          };
+        }
+      }
+      lowerer.requireTruthyUnion(target.unionId, expr);
+      return {
+        kind: "logical",
+        op: op === ts.SyntaxKind.AmpersandAmpersandToken ? "&&" : "||",
+        left: lowerer.coerceInto(expr.left, left, target),
+        right: lowerer.coerceInto(expr.right, right, target),
+        type: target, loc,
+      };
+    }
+    // `u || d` NARROWED by the default: the checker types the result
+    // as u's single non-unit arm (`marker() || "default"`) — evaluate
+    // u once, truthy extracts the arm, falsy takes d lazily (the
+    // orDefault node, nullish's truthiness sibling). An UNMAPPABLE
+    // checker result takes the same rule (`options.runner ||
+    // defaultRunner` — tsc's union of two structurally-compatible
+    // function types has no representation, while the left's one
+    // non-unit arm is the only representable answer): the default
+    // must coerce into the arm or fence on its own.
+    if (
+      op === ts.SyntaxKind.BarBarToken &&
+      left.type.kind === "union"
+    ) {
+      const def = lowerer.unions.get(left.type.unionId);
+      const rest = def ? def.arms.filter((a) => !isUnitType(a)) : [];
+      const funcArmDefault =
+        rest[0]?.kind === "func" && (target === null || target.kind === "func");
+      if (rest.length === 1 && ((target !== null && typeEquals(target, rest[0]!)) || funcArmDefault)) {
+        lowerer.requireTruthyUnion(left.type.unionId, expr);
+        const dflt = lowerer.lowerExprExpecting(expr.right, rest[0]!);
+        return { kind: "orDefault", left, right: dflt, type: rest[0]!, loc };
+      }
+    }
+    // JavaScript defaults can join differently inferred object layouts.
+    // When both operands have native checked representations, preserve
+    // the deciding value and short-circuit evaluation in that domain.
+    if (isJsSourceFile(expr.getSourceFile()) &&
+        lowerer.dynConvertible(left.type) && lowerer.dynConvertible(right.type)) {
+      return {
+        kind: "logical", op: op === ts.SyntaxKind.AmpersandAmpersandToken ? "&&" : "||",
+        left: lowerer.coerceInto(expr.left, left, DYN),
+        right: lowerer.coerceInto(expr.right, right, DYN), type: DYN, loc,
+      };
+    }
+    lowerer.unsupported(
+      "SC1090",
+      expr,
+      `logical operators on union-typed values outside conditions (${NARROW_FIRST})`,
+    );
+  }
+  const kind = left.type.kind;
+  if (
+    kind !== right.type.kind ||
+    (kind !== "f64" && kind !== "string" && kind !== "bool")
+  ) {
+    // Mixed PLAIN operands (`value || null`, `flag || undefined`,
+    // `s || 0`): JS value semantics still compile when the checker
+    // types the RESULT as one union both operands coerce into — the
+    // same lift the union-operand path above takes, arriving here
+    // with two plain arm values instead.
+    const target = lowerer.mapTypeOf(lowerer.typeOf(expr));
+    if (target?.kind === "union") {
+      lowerer.requireTruthyUnion(target.unionId, expr);
+      return {
+        kind: "logical",
+        op: op === ts.SyntaxKind.AmpersandAmpersandToken ? "&&" : "||",
+        left: lowerer.coerceInto(expr.left, left, target),
+        right: lowerer.coerceInto(expr.right, right, target),
+        type: target, loc,
+      };
+    }
+    lowerer.unsupported("SC1042", expr);
+  }
+  return {
+    kind: "logical",
+    op: op === ts.SyntaxKind.AmpersandAmpersandToken ? "&&" : "||",
+    left, right, type: left.type, loc,
+  };
+}
+
   function lowerAbsenceAwareOrChain(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr | null {
     const nodes: ts.Expression[] = [];
-    const collect = (node: ts.Expression): void => {
-      if (
-        ts.isBinaryExpression(node) &&
-        node.operatorToken.kind === ts.SyntaxKind.BarBarToken
-      ) {
-        collect(node.left);
-        collect(node.right);
+    const pending: ts.Expression[] = [expr];
+    while (pending.length !== 0) {
+      const node = pending.pop()!;
+      if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.BarBarToken) {
+        pending.push(node.right, node.left);
       } else {
         nodes.push(node);
       }
-    };
-    collect(expr);
+    }
     if (nodes.length < 3) return null;
     const lowered = nodes.map((node) => lowerAbsenceProbe(lowerer, node) ?? lowerer.lowerExpr(node));
     if (!lowered.some((value) => value.type.kind === "union" && lowerer.armTag(value.type.unionId, UNDEFINED_T) >= 0)) {

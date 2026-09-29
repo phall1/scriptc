@@ -3,33 +3,17 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { isDeepStrictEqual, promisify } from "node:util";
+import { promisify } from "node:util";
 import { expect, test } from "vitest";
-import { compileC, deserializeModule, emitLlvmModule, validateModule } from "@scriptc/compiler";
+import { compileC, deserializeModule, validateModule } from "@scriptc/compiler";
 import type { compile } from "@scriptc/compiler";
-import * as ir from "../../packages/compiler/src/ir/ir.js";
+import { nativeFeatures } from "./self-hosting-native-features.js";
 import { ts7Executable } from "../../packages/compiler/src/frontend/ts7/rpc-api.js";
 
 const root = join(import.meta.dirname, "../..");
 const execFileAsync = promisify(execFile);
 const sanitize = process.env["SCRIPTC_SAN"] === "1";
 const options = { cwd: root, timeout: 1_200_000, maxBuffer: 16 * 1024 * 1024 };
-
-function nativeFeatures(module: ir.IrModule) {
-  return {
-    regex: ir.moduleUsesRegex(module), copying: ir.moduleUsesCopying(module),
-    inspect: ir.moduleUsesInspect(module), dynInvoke: ir.moduleUsesDynInvoke(module),
-    symbol: ir.moduleUsesSymbol(module), bigint: ir.moduleUsesBigInt(module),
-    zlib: ir.moduleUsesZlib(module), assert: ir.moduleUsesAssert(module),
-    textDecoderLegacy: ir.moduleUsesLegacyTextDecoder(module), fileHandle: ir.moduleUsesFileHandle(module),
-    fetch: ir.moduleUsesFetch(module), dc: ir.moduleUsesDc(module), dynAsync: ir.moduleUsesDynAsync(module),
-    events: ir.moduleUsesProcessEvents(module), emitter: ir.moduleUsesEmitter(module),
-    searchParams: ir.moduleUsesSearchParams(module), qs: ir.moduleUsesQs(module), parseArgs: ir.moduleUsesParseArgs(module),
-    stream: ir.moduleUsesStream(module), net: ir.moduleUsesNet(module), http: ir.moduleUsesHttpServer(module),
-    http2: ir.moduleUsesHttp2(module), dgram: ir.moduleUsesDgram(module), watch: ir.moduleUsesFsWatch(module),
-    nodeTest: ir.moduleUsesNodeTest(module), tls: ir.moduleUsesTls(module), tlsCa: ir.moduleUsesTlsCa(module),
-  };
-}
 
 test("the native frontend and LLVM emitter rebuild a working frontend from its TypeScript source", async () => {
   const directory = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-bootstrap-"));
@@ -80,19 +64,31 @@ test("the native frontend and LLVM emitter rebuild a working frontend from its T
     // Compare complete IR, including layouts and helper signatures. A valid
     // module alone can hide different optional-return inference or dropped
     // method-registry mutations in the native compiler.
-    const module = deserializeModule(readFileSync(ownIr, "utf8"));
-    expect(module.functions.length).toBeGreaterThan(1_000);
-    expect(validateModule(module)).toEqual([]);
-    expect(isDeepStrictEqual(module, deserializeModule(readFileSync(seed.irPath!, "utf8"))), "native self-lowering must match the Node seed").toBe(true);
-
     const cPath = join(directory, "frontend-native.ll");
     const emitted = await execFileAsync(nativeEmitter.binaryPath, [ownIr, cPath, emitterRequest], nativeOptions);
     expect(emitted.stdout).toBe("");
     expect(emitted.stderr).toBe("");
-    // Avoid rendering hundreds of megabytes in an assertion failure.
-    expect(readFileSync(cPath, "utf8") === emitLlvmModule(module, { debugSources: new Map() }), "native LLVM emission must match Node exactly").toBe(true);
+    // Full compiler graphs exceed the worker's default heap. Keep both the
+    // structural IR comparison and reference emission in a roomy child.
+    const verification = await execFileAsync(process.execPath, [
+      "--max-old-space-size=8192", "--import", "tsx", "--input-type=module", "--eval",
+      `import assert from 'node:assert/strict';
+       import { readFileSync } from 'node:fs';
+       import { isDeepStrictEqual } from 'node:util';
+       import { deserializeModule, validateModule, emitLlvmModule } from ${JSON.stringify(pathToFileURL(join(root, "packages/compiler/src/index.ts")).href)};
+       import { nativeFeatures } from ${JSON.stringify(new URL("./self-hosting-native-features.ts", import.meta.url).href)};
+       const module = deserializeModule(readFileSync(process.argv[1], 'utf8'));
+       assert.ok(module.functions.length > 1000);
+       assert.deepEqual(validateModule(module), []);
+       assert.ok(isDeepStrictEqual(module, deserializeModule(readFileSync(process.argv[2], 'utf8'))), 'native self-lowering must match the Node seed');
+       assert.ok(readFileSync(process.argv[3], 'utf8') === emitLlvmModule(module, { debugSources: new Map() }), 'native LLVM emission must match Node exactly');
+       console.log(JSON.stringify(nativeFeatures(module)));`,
+      ownIr, seed.irPath!, cPath,
+    ], options);
+    expect(verification.stderr).toBe("");
+    const features = JSON.parse(verification.stdout) as ReturnType<typeof nativeFeatures>;
     const rebuilt = executable("frontend-rebuilt");
-    await compileC({ cPath, outPath: rebuilt, optimization: "dev", sanitize, linkInputs: [object], ...nativeFeatures(module) });
+    await compileC({ cPath, outPath: rebuilt, optimization: "dev", sanitize, linkInputs: [object], ...features });
 
     // The rebuilt compiler consumes new source, and its emitted program
     // executes. These inputs exercise the two bugs found by self-compiling:
