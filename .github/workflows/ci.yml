@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   tests:
     name: test (${{ matrix.flavor }}, ${{ matrix.shard }}/10)
@@ -117,6 +121,10 @@ jobs:
           SCRIPTC_TEST_STABLE_TOOLCHAIN: "0"
         run: pnpm test packages/compiler/src/backend/native-toolchain.test.ts
       - name: Tests (case-sharded, slice ${{ matrix.shard }}/10)
+        env:
+          # differential.test.ts owns release; this companion adds dev.
+          # Packaged-artifact jobs still exercise both optimization modes.
+          SCRIPTC_LLVM_TEST_MODE: dev
         run: >-
           pnpm test
           tests/harness/differential.test.ts

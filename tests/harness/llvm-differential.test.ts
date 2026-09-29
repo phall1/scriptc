@@ -28,6 +28,14 @@ const files = shardSelect(
   (f) => f.slice(corpusDir.length + 1),
 );
 const sanitize = process.env["SCRIPTC_SAN"] === "1";
+const requestedMode = process.env["SCRIPTC_LLVM_TEST_MODE"];
+if (requestedMode !== undefined && requestedMode !== "release" && requestedMode !== "dev") {
+  throw new Error("SCRIPTC_LLVM_TEST_MODE must be release or dev when set");
+}
+// Combined CI lanes cover release in differential.test.ts. Standalone and
+// packaged-artifact runs retain both modes unless one is explicitly selected.
+const optimizationModes: readonly ("release" | "dev")[] = requestedMode === undefined
+  ? ["release", "dev"] : [requestedMode];
 
 // Same known-env contract as the main differential suite.
 process.env["SCRIPTC_TEST_ENV"] = "from-harness";
@@ -172,12 +180,12 @@ async function build(file: string, optimization: "release" | "dev") {
   });
 }
 
-describe(`llvm differential corpus (${files.length} programs${sanitize ? ", sanitized" : ""}${shardSuffix()})`, () => {
+describe(`llvm differential corpus (${files.length} programs, ${optimizationModes.join("+")}${sanitize ? ", sanitized" : ""}${shardSuffix()})`, () => {
   test.for(files.map((f) => [f.slice(corpusDir.length + 1), f] as const))("%s", async ([rel, file]) => {
     const oracle = await runBinary(process.execPath, nodeOracleArgs(file));
     const expectedExit = expectedExitCode(file);
     expect(oracle.exitCode).toBe(expectedExit);
-    for (const optimization of ["release", "dev"] as const) {
+    for (const optimization of optimizationModes) {
       const result = await build(file, optimization);
       if (!result.ok) throw new Error(`${rel} (${optimization}): ` + result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("; "));
       expect(result.backend).toBe("llvm");
