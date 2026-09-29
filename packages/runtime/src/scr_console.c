@@ -152,7 +152,9 @@ void scr_init(void) {
 /* ONE formatter for both console streams — console.error/warn print
  * byte-identically to console.log in Node (same inspect rendering), only
  * the stream differs. */
-bool (*scr_stdio_write_hook)(int fd, const void *data, size_t len);
+/* A real definition lets relocatable library links localize this hook;
+ * a tentative common symbol stays externally visible on Mach-O. */
+bool (*scr_stdio_write_hook)(int fd, const void *data, size_t len) = NULL;
 
 static void scr_console_write(FILE *out, size_t n, const ScrLogArg *args) {
   if (scr_stdio_write_hook) {

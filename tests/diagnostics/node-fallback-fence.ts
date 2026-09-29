@@ -13,7 +13,7 @@ process.stdin.destroy();
 process.on("SIGINT", () => {});
 process.once("exit", () => {});
 process.off("exit", () => {});
-process.stdin.setEncoding("utf8"); // stays fenced: chunks are bytes
+process.stdin.setEncoding("utf8"); // terminal streams accept a text encoding
 const buf = Buffer.from("x", "utf8").reverse(); // from and fill lower; reverse fences
 const enc = new TextEncoder().encode("x");
 const dec = new TextDecoder().decode(enc);

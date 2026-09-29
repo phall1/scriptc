@@ -11427,6 +11427,42 @@
     "<repo>/tests/corpus/callable-module-members.mjs"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/array-refined-storage.ts": {
+   "order": [
+    "<repo>/tests/corpus/array-refined-storage.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/class-array-optional-return.ts": {
+   "order": [
+    "<repo>/tests/corpus/class-array-optional-return.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/contextual-array-union-write.ts": {
+   "order": [
+    "<repo>/tests/corpus/contextual-array-union-write.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/nullish-long-chain.ts": {
+   "order": [
+    "<repo>/tests/corpus/nullish-long-chain.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/tuple-array-union.ts": {
+   "order": [
+    "<repo>/tests/corpus/tuple-array-union.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/typed-rest-filtered-return.ts": {
+   "order": [
+    "<repo>/tests/corpus/typed-rest-filtered-return.ts"
+   ],
+   "diags": []
   }
  }
 }
