@@ -35,6 +35,7 @@ export class ClassDynamicDispatch {
 
   process(lowerer: Lowerer, functions: readonly IrFunction[]): boolean {
     const seenTypes = new Set<string>();
+    const rewrite = new Set<IrFunction>();
     const discover = (type: IrType): void => {
       const key = typeKey(type);
       if (seenTypes.has(key)) return;
@@ -52,7 +53,18 @@ export class ClassDynamicDispatch {
     for (const fn of functions) everyStmtList(fn.body, {
       stmt: () => true,
       expr: (expr) => {
-        if (expr.kind === "dynFrom") discover(expr.value.type);
+        switch (expr.kind) {
+          case "dynFrom":
+            discover(expr.value.type);
+            break;
+          case "dynKeyGet":
+          case "dynInvoke":
+            rewrite.add(fn);
+            break;
+          case "libCall":
+            if (expr.fn === "dyn.keySet" || expr.fn === "dyn.keySetComputed") rewrite.add(fn);
+            break;
+        }
         return true;
       },
     });
@@ -104,7 +116,10 @@ export class ClassDynamicDispatch {
       return matching;
     };
     for (const fn of functions) {
-      if (this.generated.has(fn)) continue;
+      // Discovery already visits every expression. Preserve bodies without
+      // dispatch sites instead of rebuilding their entire typed IR tree on
+      // every reachability pass. Recompute this set as new bodies appear.
+      if (this.generated.has(fn) || !rewrite.has(fn)) continue;
       fn.body = transformStmtList(fn.body, {
         stmt: (stmt) => stmt,
         expr: (expr) => {

@@ -9,6 +9,13 @@ import { bootstrapStep } from "./self-hosting-timing.js";
 
 const root = join(import.meta.dirname, "../..");
 const exec = promisify(execFile);
+const sanitize = process.env["SCRIPTC_SAN"] === "1";
+
+function comparableStderr(text: string): string {
+  return sanitize
+    ? text.replace(/^==\d+==WARNING: ASan doesn't fully support makecontext\/swapcontext functions and may produce false positives in some cases!\n/gm, "")
+    : text;
+}
 
 function absoluteCommand(command: string): string {
   if (command.includes("/") || command.includes("\\")) return resolve(command);
@@ -33,6 +40,12 @@ test("the standalone compiler builds programs and rebuilds itself with Node unav
     const manifestPath = seed + ".json";
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as NativeToolchainManifest;
     manifest.linker = absoluteCommand(manifest.linker);
+    if (process.platform === "linux") {
+      // Clang delegates linking to a separate executable. Resolve it before
+      // removing PATH so the complete native toolchain remains available.
+      const linker = await exec(manifest.linker, [...manifest.linker_args, "--print-prog-name=ld"], options);
+      manifest.linker_args.push("--ld-path=" + absoluteCommand(linker.stdout.trim()));
+    }
     if (process.platform === "darwin") manifest.dsymutil = absoluteCommand(manifest.dsymutil);
     writeFileSync(manifestPath, JSON.stringify(manifest));
     const nativeOptions = { ...options, env: { ...process.env, PATH: "" } };
@@ -41,7 +54,7 @@ test("the standalone compiler builds programs and rebuilds itself with Node unav
         const failure = error as Error & { code?: string | number; signal?: string; stdout?: string; stderr?: string };
         throw new Error(`${failure.message}\ncode=${failure.code} signal=${failure.signal}\n${failure.stderr ?? ""}\n${failure.stdout ?? ""}`, { cause: error });
       });
-      expect(result.stderr).toBe("");
+      expect(comparableStderr(result.stderr)).toBe("");
       const built = JSON.parse(result.stdout) as { outputPath: string; llvmPath?: string; stats: {
         statementsTotal: number; statementsFailed: number; statementsIsland: number; functionsSkipped: number;
       } };

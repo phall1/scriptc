@@ -282,6 +282,10 @@ export class LlEmitter {
   B = new BlockBuilder();
   frames: LlValue[][] = [];
   private scopes: LlScopeEntry[][] = [];
+  /** Scope slots dominate every throw site. Share their exceptional cleanup
+   * for identical live bindings and handlers; statement temporaries stay at
+   * their own throw sites because their SSA values are path-dependent. */
+  private readonly unwindCleanups = new Map<string, { label: string; entries: LlScopeEntry[]; terminator: string }>();
   /** Enclosing break/continue targets. `kind` separates loops from
    * switches and labeled blocks: an unlabeled break binds to the innermost
    * NON-BLOCK entry (loop or switch — blocks only enter the stack when
@@ -2430,22 +2434,41 @@ export class LlEmitter {
    * `throw` unwinds unconditionally. */
   private emitUnwind(): void {
     const target = this.tryStack[this.tryStack.length - 1];
+    const frameDepth = target?.frameDepth ?? 0;
+    const scopeDepth = target?.scopeDepth ?? 0;
+    for (let i = this.frames.length - 1; i >= frameDepth; i--) this.releaseFrame(this.frames[i]!);
+    let terminator: string;
     if (target) {
-      this.releaseForJump(target.frameDepth, target.scopeDepth);
       target.used = true;
-      this.B.terminate(`br label %${target.label}`);
+      terminator = `br label %${target.label}`;
+    } else if (this.currentWasiCoro !== null) {
+      terminator = `br label %${this.currentWasiCoro.finalLabel}`;
+    } else {
+      const t = this.currentReturnType;
+      terminator = t.kind === "void" ? "ret void"
+        : t.kind === "f64" || t.kind === "date" ? `ret double ${f64Lit(0)}`
+        : t.kind === "bool" ? "ret i1 false" : "ret ptr null";
+    }
+    // Copy the entries now: later declarations extend these lexical scopes.
+    // Release order and the handler are part of the shared block's identity.
+    const entries: LlScopeEntry[] = [];
+    let key = terminator;
+    for (let i = this.scopes.length - 1; i >= scopeDepth; i--) {
+      for (const entry of this.scopes[i]!) {
+        entries.push(entry);
+        key += `\0${entry.slot}\0${entry.boxed ? "@scr_box_release" : releaseSym(this.shapeHost, entry.type)}`;
+      }
+    }
+    if (entries.length === 0) {
+      this.B.terminate(terminator);
       return;
     }
-    this.releaseForJump(0, 0);
-    if (this.currentWasiCoro !== null) {
-      this.B.terminate(`br label %${this.currentWasiCoro.finalLabel}`);
-      return;
+    let cleanup = this.unwindCleanups.get(key);
+    if (!cleanup) {
+      cleanup = { label: this.B.newLabel("exc.cleanup"), entries, terminator };
+      this.unwindCleanups.set(key, cleanup);
     }
-    const t = this.currentReturnType;
-    if (t.kind === "void") this.B.terminate("ret void");
-    else if (t.kind === "f64" || t.kind === "date") this.B.terminate(`ret double ${f64Lit(0)}`);
-    else if (t.kind === "bool") this.B.terminate("ret i1 false");
-    else this.B.terminate("ret ptr null");
+    this.B.br(cleanup.label);
   }
 
   /** The emitter contract for exceptions: after EVERY call that can throw
@@ -3091,6 +3114,7 @@ export class LlEmitter {
     B.debugLocation = this.debug?.location(fn.loc, this.debugScope) ?? null;
     this.frames = [];
     this.scopes = [];
+    this.unwindCleanups.clear();
     this.jumpTargets = [];
     this.currentLocals = new Map(fn.locals.map((l) => [l.id, l]));
     this.captureIds = new Set([...(fn.captures ?? []), ...(fn.classCaptures ?? [])].map((c) => c.localId));
@@ -3248,6 +3272,15 @@ export class LlEmitter {
       else if (ret === "double") B.terminate(`ret double ${f64Lit(0)}`);
       else if (ret === "i1") B.terminate(`ret i1 false`);
       else B.terminate(`ret ptr null`);
+    }
+
+    // Shared blocks have multiple source locations. Keep the location on
+    // each incoming exception check instead of assigning one to the cleanup.
+    B.debugLocation = null;
+    for (const cleanup of this.unwindCleanups.values()) {
+      B.startBlock(cleanup.label);
+      this.releaseScope(cleanup.entries);
+      B.terminate(cleanup.terminator);
     }
 
     if (this.logArgSlots > 0) {
