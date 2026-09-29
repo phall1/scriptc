@@ -965,6 +965,8 @@ bool scr_dyn_proxy_has(const ScrDyn *proxy, const ScrStr *key) {
   return has;
 }
 
+static bool scr_dyn_canonical_own_index(const ScrStr *key, size_t length);
+
 ScrDyn *scr_dyn_own_descriptor(const ScrDyn *value, const ScrStr *key) {
   if (scr_dyn_class_reflection_fence(value)) return NULL;
   if (value->kind == SCR_DYN_FUNC) {
@@ -992,6 +994,31 @@ ScrDyn *scr_dyn_own_descriptor(const ScrDyn *value, const ScrStr *key) {
     scr_dyn_obj_set(out, "enumerable", 10, scr_dyn_new_bool(false));
     scr_dyn_obj_set(out, "configurable", 12, scr_dyn_new_bool(false));
     return out;
+  }
+  if (value->kind == SCR_DYN_STR) {
+    size_t length = (size_t)scr_str_utf16_len(value->v.str);
+    bool length_key = key->len == 6 && memcmp(key->data, "length", 6) == 0;
+    size_t index = 0;
+    bool index_key = !length_key && scr_dyn_canonical_own_index(key, length);
+    if (!length_key && !index_key) return scr_dyn_retain(scr_dyn_undefined());
+    if (index_key) {
+      for (size_t i = 0; i < key->len; i++) index = index * 10 + (size_t)(key->data[i] - '0');
+    }
+    ScrDyn *out = scr_dyn_new_obj();
+    if (length_key) {
+      scr_dyn_obj_set(out, "value", 5, scr_dyn_new_num((double)length));
+    } else {
+      ScrStr *character = scr_str_char_at(value->v.str, (double)index);
+      scr_dyn_obj_set(out, "value", 5, scr_dyn_new_str(character));
+      scr_str_release(character);
+    }
+    scr_dyn_obj_set(out, "writable", 8, scr_dyn_new_bool(false));
+    scr_dyn_obj_set(out, "enumerable", 10, scr_dyn_new_bool(index_key));
+    scr_dyn_obj_set(out, "configurable", 12, scr_dyn_new_bool(false));
+    return out;
+  }
+  if (value->kind == SCR_DYN_BOOL || value->kind == SCR_DYN_NUM) {
+    return scr_dyn_retain(scr_dyn_undefined());
   }
   if (value->kind == SCR_DYN_OBJ) {
     ScrDynEntry *entry = scr_dyn_entry((ScrDyn *)value, key);
@@ -2140,7 +2167,7 @@ ScrDyn *scr_dyn_get_own_property_descriptor(ScrDyn *target, ScrDyn *key) {
     scr_throw_error_msg(SCR_ERR_TYPE, msg, sizeof msg - 1);
     return NULL;
   }
-  if (target->kind != SCR_DYN_OBJ && target->kind != SCR_DYN_PROXY && target->kind != SCR_DYN_FUNC && target->kind != SCR_DYN_ARR) {
+  if (target->kind != SCR_DYN_OBJ && target->kind != SCR_DYN_PROXY && target->kind != SCR_DYN_FUNC && target->kind != SCR_DYN_ARR && target->kind != SCR_DYN_STR && target->kind != SCR_DYN_BOOL && target->kind != SCR_DYN_NUM) {
     static const char msg[] = "Object.getOwnPropertyDescriptor on this value is not supported yet";
     scr_throw_error_msg(SCR_ERR_ERROR, msg, sizeof msg - 1);
     return NULL;
@@ -3123,6 +3150,17 @@ void scr_dyn_key_set(ScrDyn *recv, ScrStr *key, ScrDyn *value) {
     if (scr_dyn_fn_property_fence(key)) return;
     ScrDyn *table = scr_dyn_fn_properties(recv);
     scr_dyn_object_key_set(table, key, value, recv);
+    scr_dyn_release(table);
+    return;
+  }
+  if (recv->kind == SCR_DYN_FUNC && !recv->v.fn.class_obj) {
+    if (!recv->v.fn.clo->props) {
+      ScrBox *box = scr_box_new_obj(&scr_dyn_retain_v, &scr_dyn_release_v, NULL);
+      scr_box_set_ref(box, scr_dyn_new_obj());
+      recv->v.fn.clo->props = box;
+    }
+    ScrDyn *table = (ScrDyn *)scr_box_get_ref(recv->v.fn.clo->props);
+    scr_dyn_key_set(table, key, value);
     scr_dyn_release(table);
     return;
   }

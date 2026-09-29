@@ -9197,7 +9197,9 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
         const fnName = jsFuncNameOf(call.arguments[0]!);
         target = { kind: "dynFrom", value: target, type: DYN, loc: locOf(call.arguments[0]!), ...(fnName !== null ? { fnName } : {}) };
       }
-      if (!target || (target.type.kind !== "dyn" && !isUnitType(target.type))) return null;
+      const descriptorPrimitive = member === "getOwnPropertyDescriptor" && target &&
+        (target.type.kind === "bool" || target.type.kind === "f64" || target.type.kind === "string");
+      if (!target || (target.type.kind !== "dyn" && !isUnitType(target.type) && !descriptorPrimitive)) return null;
       if (target.type.kind !== "dyn") target = { kind: "dynFrom", value: target, type: DYN, loc: locOf(call.arguments[0]!) };
       const key = lowerer.lowerExprExpecting(call.arguments[1]!, DYN);
       if (key.type.kind !== "dyn") return null;
