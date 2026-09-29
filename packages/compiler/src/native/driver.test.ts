@@ -29,14 +29,14 @@ test.each([false, true])("object generation releases frontend resources and pres
   writeFileSync(llvmPath, "previous LLVM");
   const module: IrModule = {
     irVersion: 13, sourceFile: entry, entry: "%main",
-    functions: [{ name: "%main", params: [], locals: [], body: [], returnType: VOID }],
+    functions: [{ name: "%main", params: [], locals: [], body: [], returnType: VOID, loc: { file: entry, start: 0, end: 0 } }],
   };
   const dispose = vi.fn();
   vi.mocked(runNativeFrontend).mockReturnValue({
     preflight: [], entryText: () => "", entryExports: () => new Map(),
     entryContract: () => { throw new Error("unexpected contract request"); },
     sourceTexts: () => new Map(), npmStatic: [], npmImportSites: new Map(), dispose,
-    lower: () => ({ module, diagnostics: [], stats: {
+    lower: () => ({ module, diagnostics: [], runtimeFences: [], stats: {
       statementsTotal: 0, statementsFailed: 0, statementsIsland: 0, functionsSkipped: 0,
     } }),
   });
