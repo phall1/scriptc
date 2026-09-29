@@ -518,7 +518,8 @@ jobs:
   # passes only when every matrix shard and independent integration job does.
   test:
     needs: [tests, linux_host_clang, ts7_parity, llvm_artifacts_linux_x64, llvm_artifacts_macos_arm64, llvm_artifacts_macos_x64, windows_cli, llvm_artifacts_windows_x64]
-    if: always()
+    # A superseded run must release its concurrency slot immediately.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - name: All lanes green
