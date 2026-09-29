@@ -5899,6 +5899,27 @@ function lowerOptionalStringNumber(
       // tsc types the return by the evolved shape, the binding lowered
       // dyn): probe the lowering and claim exactly the dyn results.
       const probed = tryLowerExpression(lowerer, access.expression);
+      if (isJsSourceFile(call.getSourceFile()) && probed?.type.kind === "func" &&
+          !["call", "apply", "bind", "toString", "valueOf", "constructor"].includes(access.name.text) &&
+          canBoxFuncIntoDyn(probed.type, (id) => lowerer.shapes.get(id), (id) => lowerer.unions.get(id))) {
+        const loc = locOf(call);
+        const fnName = jsFuncNameOf(access.expression);
+        const boxed: IrExpr = { kind: "dynFrom", value: probed, type: DYN, loc, ...(fnName !== null ? { fnName } : {}) };
+        const local = lowerer.declareHiddenLocal("%callableReceiver", DYN);
+        const receiver: IrExpr = { kind: "varRef", localId: local.id, type: DYN, loc };
+        const member: IrExpr = {
+          kind: "dynKeyGet", value: receiver,
+          key: { kind: "strLit", value: access.name.text, type: STRING, loc }, type: DYN, loc,
+        };
+        if (call.arguments.some(ts.isSpreadElement)) {
+          lowerer.unsupported("SC1090", call, "spread arguments in callable property calls");
+        }
+        return {
+          kind: "seqExpr", stmts: [{ kind: "varDecl", localId: local.id, init: boxed, loc }],
+          result: { kind: "dynCall", callee: member, receiver, calleeName: access.getText(),
+            args: call.arguments.map((arg) => lowerer.lowerExprExpecting(arg, DYN)), type: DYN, loc }, type: DYN, loc,
+        };
+      }
       if (probed?.type.kind !== "dyn") return null;
       recv = probed;
     }
@@ -6996,6 +7017,22 @@ function loweredTemplateStrings(
    * requireExactArityValue decides whether that completed ABI may escape. */
   export function lambdaSignature(lowerer: Lowerer, node: ts.ArrowFunction | ts.FunctionExpression | ts.FunctionDeclaration | ts.MethodDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration,): { shapes: ParamShape[]; funcType: IrType & { kind: "func" } } {
     if (!node.body) lowerer.unsupported("SC1090", node, "function overload signatures");
+    // A JS replacement of a native stream's write method receives the
+    // actual call tuple, including overloads and omitted arguments. Node's
+    // contextual overload signature cannot define this closure's ABI.
+    if (isJsSourceFile(node.getSourceFile()) && !node.type &&
+        (ts.isFunctionExpression(node) || ts.isArrowFunction(node)) &&
+        node.parameters.every((param) => !param.type && !param.dotDotDotToken && !param.initializer) &&
+        ts.isBinaryExpression(node.parent) && node.parent.right === node &&
+        node.parent.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+        ts.isPropertyAccessExpression(node.parent.left) && node.parent.left.name.text === "write" &&
+        lowerer.isStdlibMember(node.parent.left)) {
+      const receiver = lowerer.lowerExpr(node.parent.left.expression);
+      if (receiver.type.kind === "dyn") {
+        const shapes: ParamShape[] = node.parameters.map(() => ({ type: DYN, mode: "required" }));
+        return { shapes, funcType: funcTypeFromParamShapes(shapes, DYN) };
+      }
+    }
     if (node.typeParameters) {
       // Generic function-like forms monomorphize only where a static home
       // exists: top-level generic function declarations, generic methods
@@ -9155,6 +9192,10 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
           ts.isStringLiteral(keyNode) && keyNode.text === "cause") {
         target = lowerer.coerceToExpected(target, DYN);
       }
+      if (target?.type.kind === "func" && lowerer.dynConvertible(target.type)) {
+        const fnName = jsFuncNameOf(call.arguments[0]!);
+        target = { kind: "dynFrom", value: target, type: DYN, loc: locOf(call.arguments[0]!), ...(fnName !== null ? { fnName } : {}) };
+      }
       if (!target || (target.type.kind !== "dyn" && !isUnitType(target.type))) return null;
       if (target.type.kind !== "dyn") target = { kind: "dynFrom", value: target, type: DYN, loc: locOf(call.arguments[0]!) };
       const key = lowerer.lowerExprExpecting(call.arguments[1]!, DYN);
@@ -9170,7 +9211,7 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
     // _mustCallInner copying name/length onto the mustCall wrapper): the
     // runtime turns each descriptor's `value` into an own property on
     // the dyn node (OBJ members preserve attributes; FUNC nodes carry an
-    // own-property table). Accessors throw loudly.
+    // own-property table). Accessors use the target as their receiver.
     // The result is the target, like JS. Typed targets keep the fence:
     // static shapes have no property table to extend.
     if (member === "defineProperties" && call.arguments.length === 2 &&
@@ -9184,7 +9225,8 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
         target && target.type.kind === "func" &&
         canBoxFuncIntoDyn(target.type, (id) => lowerer.shapes.get(id), (id) => lowerer.unions.get(id))
       ) {
-        target = { kind: "dynFrom", value: target, type: DYN, loc: locOf(call.arguments[0]!) };
+        const fnName = jsFuncNameOf(call.arguments[0]!);
+        target = { kind: "dynFrom", value: target, type: DYN, loc: locOf(call.arguments[0]!), ...(fnName !== null ? { fnName } : {}) };
       }
       if (target && isUnitType(target.type)) {
         target = { kind: "dynFrom", value: target, type: DYN, loc: locOf(call.arguments[0]!) };
@@ -9251,9 +9293,9 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
       // A CHECKED-DYNAMIC receiver (the JS file-scope object-literal
       // identity story): the runtime dyn probe — OBJ member presence, ARR
       // index bounds, Node's ToObject TypeError on nullish.
-      if (probed?.type.kind === "dyn") {
+      if (probed?.type.kind === "dyn" || (probed?.type.kind === "func" && lowerer.dynConvertible(probed.type))) {
         const loc = locOf(call);
-        const receiver = lowerer.lowerExpr(recvNode);
+        const receiver = lowerer.coerceToExpected(probed, DYN);
         const key = ownPropertyKey(lowerer, lowerer.lowerExpr(keyNode));
         if (!key) return null;
         return { kind: "libCall", fn: "dyn.hasOwn", args: [receiver, key], type: BOOL, loc };
@@ -9331,7 +9373,8 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
       // Unit-typed arguments (Object.keys(null)) ride the same runtime
       // walk: it throws Node's catchable TypeError.
       const isUnit = probed !== null && probed !== undefined && isUnitType(probed.type);
-      if (isDyn || isUnit) {
+      const isFunction = probed?.type.kind === "func" && lowerer.dynConvertible(probed.type);
+      if (isDyn || isUnit || isFunction) {
         const fn = member === "keys" ? "dyn.objKeys" : member === "values" ? "dyn.objValues" : "dyn.objEntries";
         let v = lowerer.lowerExpr(argNode);
         if (v.type.kind !== "dyn") v = { kind: "dynFrom", value: v, type: DYN, loc: locOf(call) };

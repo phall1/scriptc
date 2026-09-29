@@ -20,6 +20,21 @@ export interface EventLoopCase {
 
 export const eventLoopCases: EventLoopCase[] = [
   {
+    title: "stdio values: paused reads consume buffered input",
+    fixture: "stdio-read.mjs",
+    script: { writes: [{ delayMs: 30, data: "hello" }], end: true },
+  },
+  {
+    title: "stdio values: pause preserves data until resume",
+    fixture: "stdio-pause-resume.mjs",
+    script: { writes: [{ delayMs: 0, data: "hello" }], end: true },
+  },
+  {
+    title: "stdio values: paused input releases the event loop",
+    fixture: "stdio-paused-exit.mjs",
+    script: { writes: [], end: false },
+  },
+  {
     title: "read-all: one instant write, then EOF",
     fixture: "stdin-read-all.ts",
     script: { writes: [{ delayMs: 0, data: "hello stdin\nsecond line\n" }], end: true },

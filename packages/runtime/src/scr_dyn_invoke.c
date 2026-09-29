@@ -1179,37 +1179,12 @@ ScrDyn *scr_dyn_define_props(ScrDyn *target, ScrDyn *descs) {
     ScrDyn *pair = pending->v.arr.items[i];
     ScrDyn *key = pair->v.arr.items[0];
     ScrDyn *descriptor = pair->v.arr.items[1];
-    if (target->kind == SCR_DYN_FUNC &&
-        (scr_dyn_obj_get(descriptor, "get", 3) || scr_dyn_obj_get(descriptor, "set", 3))) {
-      scr_throw_error_msg(SCR_ERR_ERROR,
-        "accessor (get/set) property descriptors on a dynamic value are not supported yet",
-        strlen("accessor (get/set) property descriptors on a dynamic value are not supported yet"));
+    ScrDyn *defined = scr_dyn_define_property(target, key, descriptor);
+    if (!defined) {
       scr_dyn_release(pending);
       return NULL;
     }
-    if (target->kind == SCR_DYN_OBJ) {
-      ScrDyn *defined = scr_dyn_define_property(target, key, descriptor);
-      if (!defined) {
-        scr_dyn_release(pending);
-        return NULL;
-      }
-      scr_dyn_release(defined);
-    } else {
-      if (!target->v.fn.clo->props) {
-        ScrBox *box = scr_box_new_obj(&scr_dyn_retain_v, &scr_dyn_release_v, &scr_dyn_trace_v);
-        ScrDyn *table = scr_dyn_new_obj();
-        scr_box_set_ref(box, table); /* the box owns the fresh table */
-        target->v.fn.clo->props = box;
-      }
-      ScrDyn *table = (ScrDyn *)scr_box_get_ref(target->v.fn.clo->props); /* +1 */
-      ScrDyn *defined = scr_dyn_define_property(table, key, descriptor);
-      scr_dyn_release(table);
-      if (!defined) {
-        scr_dyn_release(pending);
-        return NULL;
-      }
-      scr_dyn_release(defined);
-    }
+    scr_dyn_release(defined);
   }
   scr_dyn_release(pending);
   return scr_dyn_retain(target);

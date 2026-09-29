@@ -17,7 +17,7 @@ import { invalidJsonModuleDiag, npmEmbedFailedDiag, requiresDynamicImportDiag } 
 import { BOOL, DYN, F64, IrClassDef, IrExpr, IrFunction, IrGlobal, IrRecordShape, IrStmt, IrType, IrUnionDef, JSVAL, RUNTIME_ERROR_CLASSES, STRING, SrcLoc, VOID, arrayOf, canBoxFuncIntoDyn, canConvertToDyn, isUnitType } from "../../ir/ir.js";
 import { ENTRY_NAME, PoisonError, boundIdentifiersOf, dynFallbackType, dynUndefinedExpr, importCallHandleType, newFnCtx, staticImportNamespaceType, uncheckedOverloadHandleCall } from "./lowerer.js";
 import { builtinMemberRequireDecl, builtinNamespaceDestructureModuleOf, createRequireBindingDecl, createRequireNamespaceDecl, createRequireProgramModuleDecl, createRequireSpecOf, isPromisifyCall, registerBuiltinCallableAlias, stripTypeCasts } from "./lower-builtins.js";
-import { bindingContextualGenericFnNodeOf, bindingGenericFnAliasInfoOf, bindingGenericFnInfoOf, bindingGenericFnNodeOf, bindingNeverReassigned, deadUnmappableBinding, implicitLocalFnInfoOf, implicitLocalFnNodeOf, nullishGenericBindingUnitOf, registerOverloadedCallableAlias } from "./lower-calls.js";
+import { bindingContextualGenericFnNodeOf, bindingGenericFnAliasInfoOf, bindingGenericFnInfoOf, bindingGenericFnNodeOf, bindingNeverReassigned, deadUnmappableBinding, funcTypeFromParamShapes, implicitLocalFnInfoOf, implicitLocalFnNodeOf, nullishGenericBindingUnitOf, registerOverloadedCallableAlias } from "./lower-calls.js";
 import { hasJsTypeAnnotation, isVarDeclared, numericIteratorSourceOf, provenanceElidedConstDecl } from "./lower-stmts.js";
 import { streamClassAliasDecl } from "./lower-stream.js";
 import { stdlibGlobalAliasDecl, stdlibGlobalAliasNameOf, stdlibGlobalNameOf } from "./surfaces.js";
@@ -831,7 +831,17 @@ function jsDynHoldableInitializer(lowerer: Lowerer, init: ts.Expression | undefi
       e.operatorToken.kind === ts.SyntaxKind.BarBarToken || e.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken)) {
     return jsDynHoldableInitializer(lowerer, e.left) && jsDynHoldableInitializer(lowerer, e.right);
   }
+  // A member of a checked module value is itself checked, including a
+  // callable whose inferred overloads cannot describe one native ABI.
+  if ((ts.isPropertyAccessExpression(e) || ts.isElementAccessExpression(e)) &&
+      ts.isIdentifier(e.expression) && lowerer.globalOf(e.expression)?.type.kind === "dyn") return true;
   if (ts.isIdentifier(e) || ts.isArrowFunction(e) || ts.isFunctionExpression(e)) {
+    if (ts.isIdentifier(e)) {
+      if (lowerer.globalOf(e)?.type.kind === "dyn") return true;
+      const signature = lowerer.isTopLevelFnSymbol(e) ? lowerer.fnSigOf(e) : null;
+      if (signature && canBoxFuncIntoDyn(funcTypeFromParamShapes(signature.params, signature.returnType),
+        (id) => lowerer.shapes.get(id), (id) => lowerer.unions.get(id))) return true;
+    }
     const type = lowerer.mapTypeOf(lowerer.typeOf(e)) ?? dynFallbackType(lowerer, e, lowerer.typeOf(e));
     if (type?.kind === "func" && canBoxFuncIntoDyn(type, (id) => lowerer.shapes.get(id), (id) => lowerer.unions.get(id))) return true;
   }

@@ -915,9 +915,9 @@
       "apiEntries": 119,
       "static": {
         "supported": 0,
-        "partial": 27,
+        "partial": 30,
         "refused": 0,
-        "not-implemented": 92,
+        "not-implemented": 89,
         "by-design": 0,
         "unreviewed": 0,
         "not-applicable": 0
@@ -86856,7 +86856,11 @@
           "tests/corpus/2946-child-fork-ipc/main.ts",
           "tests/corpus/990-process-basics.ts",
           "tests/corpus/process-builtin-values.js",
-          "tests/corpus/process-versions-storage.ts"
+          "tests/corpus/process-versions-storage.ts",
+          "tests/corpus/stdio-values.mjs",
+          "tests/corpus/stdio-write-errors.mjs",
+          "tests/corpus/stdio-write-overrides.mjs",
+          "tests/harness/event-loop.test.ts"
         ]
       },
       "dynamic": {
@@ -89608,8 +89612,14 @@
       "anchor": "",
       "nodeStability": null,
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:process"
+        "status": "partial",
+        "evidence": "compiler-feature:process.stderr",
+        "tests": [
+          "tests/corpus/stdio-values.mjs",
+          "tests/corpus/stdio-write-overrides.mjs",
+          "tests/corpus/stdio-write-errors.mjs",
+          "tests/harness/event-loop.test.ts"
+        ]
       },
       "dynamic": {
         "status": "partial",
@@ -89655,8 +89665,14 @@
       "anchor": "",
       "nodeStability": null,
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:process"
+        "status": "partial",
+        "evidence": "compiler-feature:process.stdin",
+        "tests": [
+          "tests/corpus/stdio-values.mjs",
+          "tests/corpus/stdio-write-overrides.mjs",
+          "tests/corpus/stdio-write-errors.mjs",
+          "tests/harness/event-loop.test.ts"
+        ]
       },
       "dynamic": {
         "status": "partial",
@@ -89702,8 +89718,14 @@
       "anchor": "",
       "nodeStability": null,
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:process"
+        "status": "partial",
+        "evidence": "compiler-feature:process.stdout",
+        "tests": [
+          "tests/corpus/stdio-values.mjs",
+          "tests/corpus/stdio-write-overrides.mjs",
+          "tests/corpus/stdio-write-errors.mjs",
+          "tests/harness/event-loop.test.ts"
+        ]
       },
       "dynamic": {
         "status": "partial",

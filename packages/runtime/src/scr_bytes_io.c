@@ -163,14 +163,12 @@ ScrBytes *scr_crypto_random_bytes(double n) {
 
 bool scr_process_stdout_write_bytes(const ScrBytes *b, const ScrStr *encoding) {
   (void)encoding;
-  scr_stdio_write(1, b->data, b->len * scr_bytes_elem_size(b->elem));
-  return true;
+  return scr_stdio_write(1, b->data, b->len * scr_bytes_elem_size(b->elem));
 }
 
 bool scr_process_stderr_write_bytes(const ScrBytes *b, const ScrStr *encoding) {
   (void)encoding;
-  scr_stdio_write(2, b->data, b->len * scr_bytes_elem_size(b->elem));
-  return true;
+  return scr_stdio_write(2, b->data, b->len * scr_bytes_elem_size(b->elem));
 }
 
 /* Buffer.from over checked-native input. Strings use the existing codec;

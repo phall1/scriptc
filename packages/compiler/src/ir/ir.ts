@@ -3701,6 +3701,7 @@ export type IrLibFn =
    * never throws. */
   | "process.stdoutWrite"
   | "process.stderrWrite"
+  | "process.stdio"
   | "timers.setTimeout"
   /** The repeating timer pair. setInterval takes (callback, ms) like
    * setTimeout and RETURNS the f64 handle the fallback declarations
@@ -6629,6 +6630,7 @@ export function moduleUsesFetch(mod: IrModule): boolean {
 /** The libCall fns served by the OPTIONAL events unit (scr_events.c):
  * process signal/exit listeners and the piped-stdin surface. */
 const PROCESS_EVENT_LIB_FNS: ReadonlySet<string> = new Set([
+  "process.stdio",
   "process.onSignal",
   "process.offSignal",
   "process.onExit",
@@ -7607,6 +7609,11 @@ export function moduleLibNondeterministicSurface(mod: IrModule): string | null {
  * seed on `dynCheck` and `awaitExpr` nodes, which throw on validation
  * failure / promise rejection). */
 export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
+  "process.stdoutWrite",
+  "process.stderrWrite",
+  "process.stdoutWriteBytes",
+  "process.stderrWriteBytes",
+  "procStream.write",
   "weakMap.new",
   "weakSet.new",
   "dyn.fromEntries",

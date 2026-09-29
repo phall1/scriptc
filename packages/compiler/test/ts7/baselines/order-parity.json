@@ -11385,6 +11385,48 @@
     "<repo>/tests/diagnostics/union-clone-override-width.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/callable-properties.mjs": {
+   "order": [
+    "<repo>/tests/corpus/callable-properties.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/callable-property-cycles.js": {
+   "order": [
+    "<repo>/tests/corpus/callable-property-cycles.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/stdio-values.mjs": {
+   "order": [
+    "<repo>/tests/corpus/stdio-values.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/stdio-write-errors.mjs": {
+   "order": [
+    "<repo>/tests/corpus/stdio-write-errors.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/stdio-write-overrides.mjs": {
+   "order": [
+    "<repo>/tests/corpus/stdio-write-overrides.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/boxed-error-rethrows.mjs": {
+   "order": [
+    "<repo>/tests/corpus/boxed-error-rethrows.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/callable-module-members.mjs": {
+   "order": [
+    "<repo>/tests/corpus/callable-module-members.mjs"
+   ],
+   "diags": []
   }
  }
 }

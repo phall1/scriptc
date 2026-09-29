@@ -6800,6 +6800,13 @@ function lowerProcessIpcSend(lowerer: Lowerer, call: ts.CallExpression): IrExpr 
     if (!lowerer.isStdlibMember(access)) return null;
     const name = access.name.text;
     const loc = locOf(call);
+    if (isJsSourceFile(call.getSourceFile())) {
+      const receiver = lowerer.lowerExpr(access.expression);
+      if (receiver.type.kind === "dyn") {
+        return { kind: "dynInvoke", recv: receiver, method: name, calleeName: call.expression.getText(),
+          args: call.arguments.map((arg) => lowerer.lowerExprExpecting(arg, DYN)), type: DYN, loc };
+      }
+    }
     if (name === "write" && call.arguments.length === 1) {
       const receiver = lowerer.lowerExpr(access.expression);
       const data = lowerer.lowerExpr(call.arguments[0]!);
@@ -7056,6 +7063,15 @@ function lowerProcessIpcSend(lowerer: Lowerer, call: ts.CallExpression): IrExpr 
   export function lowerProcessStreamProperty(lowerer: Lowerer, expr: ts.PropertyAccessExpression): IrExpr | null {
     if (expr.questionDotToken) return null;
     const member = expr.name.text;
+    const direct = ts.isPropertyAccessExpression(expr.expression) ? lowerer.stdlibGlobalMember(expr.expression, "process") : null;
+    if (isJsSourceFile(expr.getSourceFile()) &&
+        (direct === "stdin" || direct === "stdout" || direct === "stderr" ||
+         lowerer.mapTypeOf(lowerer.typeOf(expr.expression))?.kind === "procStream")) {
+      const value = lowerer.lowerExpr(expr.expression);
+      if (value.type.kind === "dyn") return {
+        kind: "dynKeyGet", value, key: strLit(member, locOf(expr.name)), type: DYN, loc: locOf(expr),
+      };
+    }
     if (member !== "isTTY" && member !== "columns" && member !== "rows") return null;
     let recv: ts.Expression = expr.expression;
     while (ts.isParenthesizedExpression(recv) || ts.isAsExpression(recv) || ts.isTypeAssertion(recv)) recv = recv.expression;
@@ -7242,6 +7258,9 @@ function lowerProcessIpcSend(lowerer: Lowerer, call: ts.CallExpression): IrExpr 
     // procStream scalar, minted as the stream's fd. Member reads
     // (`process.stdout.isTTY`, `.write(...)`) never reach here — their
     // OUTER expressions dispatch first.
+    if (member === "stdin" || ((member === "stdout" || member === "stderr") && isJsSourceFile(expr.getSourceFile()))) {
+      return { kind: "libCall", fn: "process.stdio", args: [numLit(member === "stdin" ? 0 : member === "stdout" ? 1 : 2, loc)], type: DYN, loc };
+    }
     if (member === "stdout" || member === "stderr") {
       return { kind: "numLit", value: member === "stdout" ? 1 : 2, type: PROCSTREAM_T, loc };
     }
@@ -7752,6 +7771,14 @@ function lowerProcessIpcSend(lowerer: Lowerer, call: ts.CallExpression): IrExpr 
   export function lowerProcessMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     access: ts.PropertyAccessExpression,): IrExpr | null {
     if (call.questionDotToken) return null;
+    if (isJsSourceFile(call.getSourceFile()) && ts.isPropertyAccessExpression(access.expression)) {
+      const stream = lowerer.stdlibGlobalMember(access.expression, "process");
+      if (stream === "stdin" || stream === "stdout" || stream === "stderr") {
+        if (call.arguments.some(ts.isSpreadElement)) lowerer.noLowering("process stream spread arguments", call);
+        return { kind: "dynInvoke", recv: lowerer.lowerExpr(access.expression), method: access.name.text,
+          calleeName: access.getText(), args: call.arguments.map((arg) => lowerer.lowerExprExpecting(arg, DYN)), type: DYN, loc: locOf(call) };
+      }
+    }
     const directProcessMember = lowerer.stdlibGlobalMember(access, "process");
     if (directProcessMember === "getBuiltinModule") {
       if (call.arguments.some(ts.isSpreadElement)) lowerer.noLowering("process.getBuiltinModule with spread arguments", call);

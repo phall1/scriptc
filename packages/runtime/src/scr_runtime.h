@@ -2286,7 +2286,9 @@ ScrStr *scr_process_cwd(void);      /* +1 fresh (getcwd) */
 /* Submit one raw chunk to fd 1/2 and flush it before returning. Used by all
  * JavaScript-visible console/process/readline/island output paths so the
  * internal stdio formatting buffer never delays live output. */
-void scr_stdio_write(int fd, const void *data, size_t len);
+bool scr_stdio_write(int fd, const void *data, size_t len);
+int scr_stdio_write_raw(int fd, const void *data, size_t len);
+extern bool (*scr_stdio_write_hook)(int fd, const void *data, size_t len);
 /* process.stdout/.stderr .write — raw bytes (no newline or formatting; data
  * borrowed), promptly visible and ordered with console output. Constantly
  * true (the synchronous runtime never queues backpressure). */
@@ -3377,6 +3379,7 @@ typedef enum {
   SCR_DYNH_WEAK_SET,       /* native weak membership */
   SCR_DYNH_SET,            /* native Set<unknown>, shared backing map */
   SCR_DYNH_REGEXP,         /* native RegExp, shared compiled pattern */
+  SCR_DYNH_STDIO,          /* stable process stdin/stdout/stderr values */
   SCR_DYNH_COUNT,
 } ScrDynHandleTag;
 
@@ -3737,6 +3740,7 @@ bool scr_dyn_err_instanceof(const ScrDyn *d, double kind);
 ScrDyn *scr_dyn_obj_read(const ScrDyn *d, const char *key, size_t key_len);
 /* JS typeof comparison, including null's "object" result. */
 bool scr_dyn_is_object(const ScrDyn *d);
+void scr_dyn_throw(ScrDyn *d); /* moves; preserves boxed native Error classification */
 
 /* structuredClone over the checked-dynamic tree: JSON-safe data + bytes deep-copy;
  * functions/handles throw the spec's catchable DataCloneError; cycles
@@ -3874,6 +3878,7 @@ ScrStr *scr_process_builtin_id(ScrDyn *id, ScrArr *known);
 ScrDyn *scr_process_builtin_module(ScrStr *id, ScrDyn *getter);
 ScrDyn *scr_process_builtin_unsupported(ScrStr *id, ScrStr *member);
 ScrDyn *scr_global_native(ScrArr *known);
+ScrDyn *scr_process_stdio(double fd);
 
 void scr_dyn_handle_install(ScrDynHandleTag tag, const ScrDynHandleOps *ops);
 void scr_file_handle_dyn_install(void);

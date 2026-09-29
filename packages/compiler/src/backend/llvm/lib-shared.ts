@@ -186,6 +186,7 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "process.envUnset": "scr_env_unset",
   "process.envPairs": "scr_env_pairs",
   "process.stdoutWrite": "scr_process_stdout_write",
+  "process.stdio": "scr_process_stdio",
   "process.stderrWrite": "scr_process_stderr_write",
   "process.isTTY": "scr_process_is_tty",
   "date.now": "scr_date_now",
@@ -890,6 +891,7 @@ export const LIB_FN_SYMS: Record<string, string> = {
 };
 
 export const USES_TIMERS_LIB_FNS = new Set<string>([
+  "process.stdio",
   "fetch.start",
   "fetch.abortTimeout", "fetch.streamNew", "fetch.streamFrom",
   "readable.new", "writable.new", "duplex.new", "transform.new", "passthrough.new",

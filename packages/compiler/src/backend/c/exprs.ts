@@ -3436,11 +3436,10 @@ function emitIntrinsicExpr(
           emitter.moveTemp(reason); // the cell takes ownership
           const rc = vAdapters(t);
           if (t.kind === "dyn") {
-            // The thrown-dyn representation (REF + dyn adapters): catch
-            // bindings and the unhandled dispatch see the dyn value
-            // itself — identity preserved.
+            // Preserve Error classification and checked-value identity
+            // through promise rejection and catch observers.
             emitter.line(
-              `scr_throw_ref_classified(${reason.name}, &${rc.retain}, &${rc.release}, NULL, scr_dyn_is_object(${reason.name}));${emitter.srcComment(e.loc)}`,
+              `scr_dyn_throw(${reason.name});${emitter.srcComment(e.loc)}`,
             );
           } else {
             emitter.line(
@@ -3703,9 +3702,11 @@ function emitAsyncExpr(
             } else if (t.kind === "symbol" || t.kind === "bigint" || t.kind === "func" || t.kind === "classval") {
               const rc = vAdapters(t);
               emitter.line(`scr_throw_primitive_ref(${a.name}, &${rc.retain}, &${rc.release}, NULL);${emitter.srcComment(e.loc)}`);
-            } else if (t.kind === "dyn" || t.kind === "jsval") {
+            } else if (t.kind === "dyn") {
+              emitter.line(`scr_dyn_throw(${a.name});${emitter.srcComment(e.loc)}`);
+            } else if (t.kind === "jsval") {
               const rc = vAdapters(t);
-              const test = t.kind === "dyn" ? "scr_dyn_is_object" : "scr_jsval_is_object";
+              const test = "scr_jsval_is_object";
               emitter.line(`scr_throw_ref_classified(${a.name}, &${rc.retain}, &${rc.release}, ${emitter.traceArgC(t)}, ${test}(${a.name}));${emitter.srcComment(e.loc)}`);
             } else {
               const rc = vAdapters(t);
@@ -3766,9 +3767,11 @@ function emitAsyncExpr(
           } else if (t.kind === "symbol" || t.kind === "bigint" || t.kind === "func" || t.kind === "classval") {
             const rc = vAdapters(t);
             emitter.line(`scr_throw_primitive_ref(${a.name}, &${rc.retain}, &${rc.release}, NULL);${emitter.srcComment(e.loc)}`);
-          } else if (t.kind === "dyn" || t.kind === "jsval") {
+          } else if (t.kind === "dyn") {
+            emitter.line(`scr_dyn_throw(${a.name});${emitter.srcComment(e.loc)}`);
+          } else if (t.kind === "jsval") {
             const rc = vAdapters(t);
-            const test = t.kind === "dyn" ? "scr_dyn_is_object" : "scr_jsval_is_object";
+            const test = "scr_jsval_is_object";
             emitter.line(`scr_throw_ref_classified(${a.name}, &${rc.retain}, &${rc.release}, ${emitter.traceArgC(t)}, ${test}(${a.name}));${emitter.srcComment(e.loc)}`);
           } else {
             const rc = vAdapters(t);
@@ -8034,6 +8037,9 @@ function emitProcessLibCall(state: LibCallState): Temp {
             return finish(`scr_process_cwd()`);
           case "process.stdoutWrite":
             return finish(`scr_process_stdout_write(${arg(0)})`);
+          case "process.stdio":
+            emitter.usesTimers = true;
+            return finish(`scr_process_stdio(${arg(0)})`);
           case "process.stderrWrite":
             return finish(`scr_process_stderr_write(${arg(0)})`);
           case "process.envGet": {

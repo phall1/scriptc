@@ -2526,6 +2526,23 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
     // instead of misreading the payload (the dyn boundary's usual stance).
     // Object/array narrowings stay dyn-typed and keep their fences.
     if (expr.type.kind === "dyn") {
+      if (isJsSourceFile(node.getSourceFile()) && ts.isIdentifier(node)) {
+        const symbol = lowerer.resolveValueSymbol(node);
+        if (symbol && lowerer.checker.declarationsOf(symbol).some((decl) => {
+          if (!ts.isParameter(decl) || decl.type) return false;
+          const fn = decl.parent;
+          if (!ts.isFunctionExpression(fn) && !ts.isArrowFunction(fn)) return false;
+          const assignment = fn.parent;
+          return ts.isBinaryExpression(assignment) && assignment.right === fn &&
+            ts.isPropertyAccessExpression(assignment.left) && assignment.left.name.text === "write" &&
+            lowerer.isStdlibMember(assignment.left);
+        })) return expr;
+      }
+      // Node's TTY declarations promise booleans/numbers even when a pipe
+      // has no such property. Preserve the checked read for JS capability
+      // probes instead of treating a declaration as a runtime type guard.
+      if (isJsSourceFile(node.getSourceFile()) && ts.isPropertyAccessExpression(node) &&
+          ["isTTY", "columns", "rows"].includes(node.name.text) && lowerer.isStdlibMember(node)) return expr;
       // A null-initialized JS field can later receive an object even when
       // checker flow calls its non-null branch never. The live checked
       // value remains authoritative; never is not a numeric guard.
@@ -4429,6 +4446,16 @@ export function lowerOptionalNumber(
     let receiverIr = neverTaintedJsType(lowerer, expr.expression, lowerer.typeOf(expr.expression))
       ? null
       : lowerer.mapTypeOf(lowerer.typeOf(expr.expression));
+    if (isJsSourceFile(expr.getSourceFile())) {
+      const receiver = tryLowerExpression(lowerer, expr.expression);
+      if (receiver?.type.kind === "func" && lowerer.dynConvertible(receiver.type)) {
+        const loc = locOf(expr);
+        const fnName = jsFuncNameOf(expr.expression);
+        const boxed: IrExpr = { kind: "dynFrom", value: receiver, type: DYN, loc, ...(fnName !== null ? { fnName } : {}) };
+        const key = lowerRecordPropertyKey(lowerer, lowerer.lowerExpr(expr.argumentExpression), expr.argumentExpression);
+        return lowerer.maybeNarrow({ kind: "dynKeyGet", key, value: boxed, type: DYN, loc }, expr);
+      }
+    }
     // A readonly tuple union under Array.isArray is checker-typed as an
     // intersection with any[], whose structural mapping is not the tuple
     // shape. maybeNarrow on the receiver uses the runtime tag proof to
@@ -5237,13 +5264,15 @@ export function lowerElementCompound(lowerer: Lowerer, expr: ts.BinaryExpression
   };
 }
 
-/** `a[i] = v` in statement position → arraySet (element writes, like local
-   * assignment, produce no value in our subset). */
-  function lowerDynElementAssignment(lowerer: Lowerer, expr: ts.BinaryExpression, recv: IrExpr): IrExpr {
+/** Checked member assignment evaluates the reference before its RHS and
+   * yields the original assigned value, including in a chained assignment. */
+  function lowerDynMemberAssignment(lowerer: Lowerer, expr: ts.BinaryExpression, recv: IrExpr): IrExpr {
     const loc = locOf(expr);
-    const target = expr.left as ts.ElementAccessExpression;
+    const target = expr.left as ts.ElementAccessExpression | ts.PropertyAccessExpression;
     const receiver = lowerer.declareHiddenLocal("%setReceiver", DYN);
-    const keyValue = lowerer.lowerExprExpecting(target.argumentExpression, DYN);
+    const keyValue = ts.isElementAccessExpression(target)
+      ? lowerer.lowerExprExpecting(target.argumentExpression, DYN)
+      : lowerer.coerceToExpected({ kind: "strLit", value: target.name.text, type: STRING, loc }, DYN);
     const key = lowerer.declareHiddenLocal("%setKey", DYN);
     const raw = lowerer.lowerExpr(expr.right);
     const value: IrExpr = raw.type.kind === "void"
@@ -5265,6 +5294,25 @@ export function lowerElementCompound(lowerer: Lowerer, expr: ts.BinaryExpression
         { kind: "exprStmt", expr: { kind: "libCall", fn: "dyn.keySetComputed", args: [varRef(receiver.id, DYN, loc), varRef(key.id, DYN, loc), stored], type: VOID, loc }, loc },
       ], result, type: result.type, loc,
     };
+  }
+
+  /** JavaScript callable members live on the closure, so aliases and chained
+   * writes share the same storage as Object.defineProperties. */
+  export function lowerNativeFunctionAssignment(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr | null {
+    const target = expr.left;
+    if (!isJsSourceFile(expr.getSourceFile()) ||
+        (!ts.isPropertyAccessExpression(target) && !ts.isElementAccessExpression(target)) ||
+        target.questionDotToken) return null;
+    const receiver = tryLowerExpression(lowerer, target.expression);
+    if (receiver?.type.kind !== "func" ||
+        !canBoxFuncIntoDyn(receiver.type, (id) => lowerer.shapes.get(id), (id) => lowerer.unions.get(id))) return null;
+    fenceNodeModuleMutation(lowerer, target, "assignment");
+    const fnName = jsFuncNameOf(target.expression);
+    const boxed: IrExpr = {
+      kind: "dynFrom", value: receiver, type: DYN, loc: locOf(target.expression),
+      ...(fnName !== null ? { fnName } : {}),
+    };
+    return lowerDynMemberAssignment(lowerer, expr, boxed);
   }
 
   export function lowerElementWrite(lowerer: Lowerer, expr: ts.BinaryExpression): IrStmt {
@@ -5316,7 +5364,7 @@ export function lowerElementCompound(lowerer: Lowerer, expr: ts.BinaryExpression
     }
     const checkedReceiver = tryLowerExpression(lowerer, target.expression);
     if (checkedReceiver?.type.kind === "dyn") {
-      return { kind: "exprStmt", expr: lowerDynElementAssignment(lowerer, expr, checkedReceiver), loc: locOf(expr) };
+      return { kind: "exprStmt", expr: lowerDynMemberAssignment(lowerer, expr, checkedReceiver), loc: locOf(expr) };
     }
     const receiverIr = lowerer.mapTypeOf(lowerer.typeOf(target.expression));
     if (receiverIr?.kind === "jsval") {
@@ -6316,6 +6364,10 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
     if (cacheHas) return cacheHas;
 
     if (op === ts.SyntaxKind.EqualsToken || (op >= ts.SyntaxKind.FirstCompoundAssignment && op <= ts.SyntaxKind.LastCompoundAssignment)) {
+      if (op === ts.SyntaxKind.EqualsToken) {
+        const callableWrite = lowerNativeFunctionAssignment(lowerer, expr);
+        if (callableWrite) return callableWrite;
+      }
       if (op === ts.SyntaxKind.QuestionQuestionEqualsToken ||
           op === ts.SyntaxKind.AmpersandAmpersandEqualsToken || op === ts.SyntaxKind.BarBarEqualsToken) {
         return lowerShortCircuitAssignment(lowerer, expr);
@@ -6433,7 +6485,7 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
         if (ts.isElementAccessExpression(expr.left) && !expr.left.questionDotToken) {
           const recv = tryLowerExpression(lowerer, expr.left.expression);
           if (recv?.type.kind === "dyn") {
-            return lowerDynElementAssignment(lowerer, expr, recv);
+            return lowerDynMemberAssignment(lowerer, expr, recv);
           }
         }
         // `h.k = v` on an ISLAND receiver in VALUE position: the engine
@@ -8588,6 +8640,9 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
       return { kind: "unionIsTag", unionId: envType.unionId, tag: undefTag, negated: true, value: read, type: BOOL, loc };
     }
     let recv = lowerer.lowerExpr(expr.right);
+    if (isJsSourceFile(expr.getSourceFile()) && recv.type.kind === "func" && lowerer.dynConvertible(recv.type)) {
+      recv = lowerer.coerceToExpected(recv, DYN);
+    }
     const siteType = lowerer.mapTypeOf(lowerer.typeOf(expr.right));
     if (recv.type.kind === "union" && siteType?.kind === "union" && !typeEquals(recv.type, siteType)) {
       const helper = lowerer.narrowedRetagHelper(expr.right, recv.type.unionId, siteType.unionId, loc);

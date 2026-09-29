@@ -1077,6 +1077,7 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "process.kill": { argTypes: [F64, STRING], result: BOOL },
   "process.killNum": { argTypes: [F64, F64], result: BOOL },
   "process.stdoutWrite": { argTypes: [STRING], result: BOOL },
+  "process.stdio": { argTypes: [F64], result: DYN },
   "process.stderrWrite": { argTypes: [STRING], result: BOOL },
   // error.new's result and the receiver slots are builtin-error classes —
   // program-dependent object types, checked in the libCall case.

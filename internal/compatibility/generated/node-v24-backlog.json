@@ -8,8 +8,8 @@
     "tiers": {
       "static": {
         "replace-refusal": 47,
-        "verify-gap": 2568,
-        "audit-partial": 597,
+        "verify-gap": 2565,
+        "audit-partial": 600,
         "classify": 2,
         "implement": 81
       },
@@ -73537,12 +73537,17 @@
       "priority": "normal",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:process",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "compiler-feature:process.stderr",
+          "tests": [
+            "tests/corpus/stdio-values.mjs",
+            "tests/corpus/stdio-write-overrides.mjs",
+            "tests/corpus/stdio-write-errors.mjs",
+            "tests/harness/event-loop.test.ts"
+          ]
         },
         "dynamic": {
           "status": "partial",
@@ -73595,12 +73600,17 @@
       "priority": "normal",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:process",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "compiler-feature:process.stdin",
+          "tests": [
+            "tests/corpus/stdio-values.mjs",
+            "tests/corpus/stdio-write-overrides.mjs",
+            "tests/corpus/stdio-write-errors.mjs",
+            "tests/harness/event-loop.test.ts"
+          ]
         },
         "dynamic": {
           "status": "partial",
@@ -73653,12 +73663,17 @@
       "priority": "normal",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:process",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "compiler-feature:process.stdout",
+          "tests": [
+            "tests/corpus/stdio-values.mjs",
+            "tests/corpus/stdio-write-overrides.mjs",
+            "tests/corpus/stdio-write-errors.mjs",
+            "tests/harness/event-loop.test.ts"
+          ]
         },
         "dynamic": {
           "status": "partial",

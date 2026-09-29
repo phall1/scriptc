@@ -31,7 +31,7 @@ import { abstractPropertyDeclOf, aliasTypeofNarrows, isMatchSliceType, lowerAbse
 import { isSafeToRepeat } from "./expressions/evaluation-safety.js";
 import { globalSymbolKey } from "./expressions/global-symbols.js";
 import { lowerShortCircuitAssignment } from "./expressions/nullish-assignment.js";
-import { lowerEnvironmentKey } from "./lower-exprs.js";
+import { lowerEnvironmentKey, lowerNativeFunctionAssignment } from "./lower-exprs.js";
 import { isNativeProxyInitializer } from "./expressions/native-proxy.js";
 import { tryLowerExpression } from "./expressions/try-lower-expression.js";
 import { lowerUnionFieldWrite } from "./expressions/union-field-write.js";
@@ -4503,7 +4503,10 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
         loc,
       };
     }
-    const obj = lowerer.lowerExpr(target.expression);
+    let obj = lowerer.lowerExpr(target.expression);
+    if (isJsSourceFile(expr.getSourceFile()) && obj.type.kind === "func" && lowerer.dynConvertible(obj.type)) {
+      obj = lowerer.coerceToExpected(obj, DYN);
+    }
     if (obj.type.kind === "dyn") {
       const strict = { kind: "boolLit", value: isStrictDelete(expr), type: BOOL, loc } as const;
       return { kind: "exprStmt", expr: { kind: "libCall", fn: "dyn.keyDelete", args: [obj, lowerKey(), strict], type: VOID, loc }, loc };
@@ -5047,6 +5050,8 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
         };
       }
       if (opKind === ts.SyntaxKind.EqualsToken) {
+        const callableWrite = lowerNativeFunctionAssignment(lowerer, expr);
+        if (callableWrite) return { kind: "exprStmt", expr: callableWrite, loc: locOf(expr) };
         // Expando function members (`foo.bar = 12`, `foo[SYM] = v` on a
         // module-level function/callable const): the member's module
         // global (lower-expando.ts) — claimed by symbol identity before

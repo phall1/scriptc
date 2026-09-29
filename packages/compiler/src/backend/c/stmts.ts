@@ -727,9 +727,11 @@ function emitStmtBody(emitter: CEmitter, s: IrStmt): void {
         } else if (t.kind === "symbol" || t.kind === "bigint" || t.kind === "func" || t.kind === "classval") {
           const rc = vAdapters(t);
           emitter.line(`scr_throw_primitive_ref(${v.name}, &${rc.retain}, &${rc.release}, NULL);${emitter.srcComment(s.loc)}`);
-        } else if (t.kind === "dyn" || t.kind === "jsval") {
+        } else if (t.kind === "dyn") {
+          emitter.line(`scr_dyn_throw(${v.name});${emitter.srcComment(s.loc)}`);
+        } else if (t.kind === "jsval") {
           const rc = vAdapters(t);
-          const test = t.kind === "dyn" ? "scr_dyn_is_object" : "scr_jsval_is_object";
+          const test = "scr_jsval_is_object";
           emitter.line(`scr_throw_ref_classified(${v.name}, &${rc.retain}, &${rc.release}, ${emitter.traceArgC(t)}, ${test}(${v.name}));${emitter.srcComment(s.loc)}`);
         } else {
           const rc = vAdapters(t);

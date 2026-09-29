@@ -1029,13 +1029,11 @@ ScrStr *scr_process_cwd(void) {
  * — this synchronous runtime has no queued backpressure, so it is constantly
  * true. */
 bool scr_process_stdout_write(const ScrStr *data) {
-  scr_stdio_write(1, data->data, data->len);
-  return true;
+  return scr_stdio_write(1, data->data, data->len);
 }
 
 bool scr_process_stderr_write(const ScrStr *data) {
-  scr_stdio_write(2, data->data, data->len);
-  return true;
+  return scr_stdio_write(2, data->data, data->len);
 }
 
 /* The FIRST-CLASS stream write (`output.write(line)` where output is a

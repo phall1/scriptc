@@ -3,6 +3,8 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <errno.h>
 #ifdef _WIN32
 #include <fcntl.h> /* _O_BINARY */
 #include <io.h>    /* _setmode, _fileno */
@@ -150,7 +152,44 @@ void scr_init(void) {
 /* ONE formatter for both console streams — console.error/warn print
  * byte-identically to console.log in Node (same inspect rendering), only
  * the stream differs. */
+bool (*scr_stdio_write_hook)(int fd, const void *data, size_t len);
+
 static void scr_console_write(FILE *out, size_t n, const ScrLogArg *args) {
+  if (scr_stdio_write_hook) {
+    size_t capacity = 1;
+    for (size_t i = 0; i < n; i++) {
+      size_t length = args[i].tag == SCR_ARG_STR ? args[i].v.s->len : 32;
+      if (length >= SIZE_MAX - capacity) scr_trap("scriptc: console output too large\n");
+      capacity += length + 1;
+    }
+    char *line = malloc(capacity);
+    if (!line) scr_trap("scriptc: out of memory\n");
+    size_t used = 0;
+    for (size_t i = 0; i < n; i++) {
+      if (i) line[used++] = ' ';
+      const ScrLogArg *arg = &args[i];
+      if (arg->tag == SCR_ARG_STR) {
+        memcpy(line + used, arg->v.s->data, arg->v.s->len);
+        used += arg->v.s->len;
+      } else if (arg->tag == SCR_ARG_BOOL) {
+        const char *text = arg->v.b ? "true" : "false";
+        size_t length = arg->v.b ? 4 : 5;
+        memcpy(line + used, text, length);
+        used += length;
+      } else if (arg->v.f == 0 && signbit(arg->v.f)) {
+        memcpy(line + used, "-0", 2);
+        used += 2;
+      } else {
+        used += scr_f64_to_str(arg->v.f, line + used);
+      }
+    }
+    line[used++] = '\n';
+    scr_stdio_write_hook(out == stderr ? 2 : 1, line, used);
+    free(line);
+    /* The global Node console uses ignoreErrors=true for stream writes. */
+    if (scr_exc_pending()) scr_exc_clear();
+    return;
+  }
   char numbuf[32];
   for (size_t i = 0; i < n; i++) {
     if (i > 0) fputc(' ', out);
@@ -203,9 +242,16 @@ void scr_console_error(size_t n, const ScrLogArg *args) {
  *
  * stderr flushes any runtime-internal stdout fragment first to preserve the
  * existing merged-fd ordering convention. */
-void scr_stdio_write(int fd, const void *data, size_t len) {
+int scr_stdio_write_raw(int fd, const void *data, size_t len) {
   FILE *out = fd == 2 ? stderr : stdout;
   if (fd == 2) fflush(stdout);
-  if (len > 0) fwrite(data, 1, len, out);
-  fflush(out);
+  if (len > 0 && fwrite(data, 1, len, out) != len) return errno ? errno : EIO;
+  if (fflush(out) != 0) return errno ? errno : EIO;
+  return 0;
+}
+
+bool scr_stdio_write(int fd, const void *data, size_t len) {
+  if (scr_stdio_write_hook) return scr_stdio_write_hook(fd, data, len);
+  (void)scr_stdio_write_raw(fd, data, len);
+  return true;
 }

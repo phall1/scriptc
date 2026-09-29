@@ -87,6 +87,7 @@
     "stdlib.abort": ["tests/harness/fetch-conformance.test.ts"]
   },
   "features": [
+    { "chapter": "process", "signatures": ["`stdin` Type: {Stream}", "`stdout` Type: {Stream}", "`stderr` Type: {Stream}"], "status": "partial", "evidence": ["tests/corpus/stdio-values.mjs", "tests/corpus/stdio-write-overrides.mjs", "tests/corpus/stdio-write-errors.mjs", "tests/harness/event-loop.test.ts"] },
     { "chapter": "process", "signatures": ["`process.getBuiltinModule(id)`"], "status": "partial", "evidence": ["tests/corpus/process-builtin-values.js", "packages/compiler/test/process-builtin-values.test.ts"] },
     { "chapter": "process", "signatures": ["`versions` Type: {Object}"], "status": "partial", "evidence": ["tests/corpus/process-versions-storage.ts"] },
     { "chapter": "http", "signatures": ["Class: `http.ClientRequest`", "Class: `http.Server`", "Class: `http.ServerResponse`", "Class: `http.IncomingMessage`"], "status": "partial", "evidence": ["tests/corpus/2981-http-static-events.ts", "tests/corpus/2976-http-static-incoming-state.ts"] },

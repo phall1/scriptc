@@ -842,9 +842,9 @@
       "apiEntries": 119,
       "static": {
         "supported": 0,
-        "partial": 27,
+        "partial": 30,
         "refused": 0,
-        "not-implemented": 92,
+        "not-implemented": 89,
         "by-design": 0,
         "unreviewed": 0,
         "not-applicable": 0
@@ -67481,9 +67481,9 @@
       "anchor": "",
       "nodeStability": null,
       "static": {
-        "status": "not-implemented",
-        "detail": "No static compiler lowering is registered for this API yet.",
-        "verification": "registry-gap"
+        "status": "partial",
+        "detail": "Stored JavaScript process streams support native input listeners, pause/resume and buffered reads, synchronous output writes, and output write replacement; other stream operations remain unsupported.",
+        "verification": "test-backed"
       },
       "dynamic": {
         "status": "partial",
@@ -67527,9 +67527,9 @@
       "anchor": "",
       "nodeStability": null,
       "static": {
-        "status": "not-implemented",
-        "detail": "No static compiler lowering is registered for this API yet.",
-        "verification": "registry-gap"
+        "status": "partial",
+        "detail": "Stored JavaScript process streams support native input listeners, pause/resume and buffered reads, synchronous output writes, and output write replacement; other stream operations remain unsupported.",
+        "verification": "test-backed"
       },
       "dynamic": {
         "status": "partial",
@@ -67573,9 +67573,9 @@
       "anchor": "",
       "nodeStability": null,
       "static": {
-        "status": "not-implemented",
-        "detail": "No static compiler lowering is registered for this API yet.",
-        "verification": "registry-gap"
+        "status": "partial",
+        "detail": "Stored JavaScript process streams support native input listeners, pause/resume and buffered reads, synchronous output writes, and output write replacement; other stream operations remain unsupported.",
+        "verification": "test-backed"
       },
       "dynamic": {
         "status": "partial",

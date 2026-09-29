@@ -2508,9 +2508,12 @@ export class LlEmitter {
       const rc = vAdapters(this.shapeHost, t);
       this.declare(`declare void @scr_throw_primitive_ref(ptr, ptr, ptr, ptr)`);
       B.line(`call void @scr_throw_primitive_ref(ptr ${v.name}, ptr ${rc.retain}, ptr ${rc.release}, ptr null)`);
-    } else if (t.kind === "dyn" || t.kind === "jsval") {
+    } else if (t.kind === "dyn") {
+      this.declare(`declare void @scr_dyn_throw(ptr)`);
+      B.line(`call void @scr_dyn_throw(ptr ${v.name})`);
+    } else if (t.kind === "jsval") {
       const rc = vAdapters(this.shapeHost, t);
-      const test = t.kind === "dyn" ? "scr_dyn_is_object" : "scr_jsval_is_object";
+      const test = "scr_jsval_is_object";
       this.declare(`declare zeroext i1 @${test}(ptr)`);
       this.declare(`declare void @scr_throw_ref_classified(ptr, ptr, ptr, ptr, i1 zeroext)`);
       const object = B.tmp();
