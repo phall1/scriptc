@@ -30,7 +30,7 @@ import { jsFuncNameOf, own } from "./lowerer.js";
 import { NARROW_FIRST } from "./surfaces.js";
 import { inspectExpr, typeReachesItself } from "./lower-inspect.js";
 import { abstractEqualityExpr, abstractEqualitySupported } from "./abstract-equality.js";
-import { BOOL, CAUGHT, DYN, DYN_HANDLE_KINDS, F64, IrExpr, IrLibFn, IrStmt, IrType, REGEX, RUNTIME_ERROR_CLASSES, STRING, SrcLoc, VOID, isUnitType, typeEquals, typeKey } from "../../ir/ir.js";
+import { BOOL, CAUGHT, DYN, DYN_HANDLE_KINDS, F64, type IrExpr, type IrLibFn, type IrStmt, type IrType, REGEX, RUNTIME_ERROR_CLASSES, STRING, type SrcLoc, VOID, isUnitType, typeEquals, typeKey } from "../../ir/ir.js";
 import { boolLit, countedFor, numLit, strLit, varRef } from "../../ir/build.js";
 
 /** node:assert/strict binds the loose NAMES to the strict comparisons —

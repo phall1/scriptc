@@ -37,8 +37,8 @@
 import * as ts from "../ts7/adapter.js";
 import type { Lowerer } from "./lowerer.js";
 import { PoisonError } from "./lowerer.js";
-import { IrType } from "../../ir/ir.js";
-import { ClassInfo, builtinStreamInfoOf, exactClassOfReceiver, propertyAssignedClassInfoOf } from "./lower-classes.js";
+import { type IrType } from "../../ir/ir.js";
+import { type ClassInfo, builtinStreamInfoOf, exactClassOfReceiver, propertyAssignedClassInfoOf } from "./lower-classes.js";
 
 /** A recognized mixin function: one base-class parameter, a body that
  * defines and returns exactly one class extending that parameter, and no

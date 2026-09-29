@@ -13,22 +13,33 @@ test("the complete production frontend lowers with zero rejected statements", as
   // work cannot starve Vitest's worker RPC. Native execution of the complete
   // frontend is a separate bootstrap milestone.
   const frontend = pathToFileURL(join(root, "packages/compiler/src/frontend/")).href;
+  const validator = pathToFileURL(join(root, "packages/compiler/src/ir/validate.ts")).href;
+  const ffi = pathToFileURL(join(root, "packages/compiler/src/ffi/ffi-manifest.ts")).href;
   const { stdout, stderr } = await promisify(execFile)(process.execPath, [
     "--import", "tsx", "--input-type=module", "--eval",
     `import { loadProgram, checkPreflight } from ${JSON.stringify(frontend + "program-node.ts")};
      import { lowerToIr } from ${JSON.stringify(frontend + "lowering/lowerer.ts")};
+     import { validateModule } from ${JSON.stringify(validator)};
+     import { loadFfiProfile } from ${JSON.stringify(ffi)};
+     const ffi = loadFfiProfile(process.argv[2]);
+     if (!ffi.ok) throw new Error(JSON.stringify(ffi.diagnostics));
      const load = loadProgram(process.argv[1]);
      try {
        const preflight = checkPreflight(load);
        if (preflight.length) throw new Error(JSON.stringify(preflight));
-       const result = lowerToIr(load.program, load.entry, load.moduleOrder, { dynamic: false, frontendServices: load.services });
+       if (load.startupCrash) throw new Error(JSON.stringify(load.startupCrash));
+       const result = lowerToIr(load.program, load.entry, load.moduleOrder, {
+         dynamic: false, frontendServices: load.services, ffiImports: ffi.profile.functions,
+       });
        console.log(JSON.stringify({ stats: result.stats, diagnostics: result.diagnostics, runtimeFences: result.runtimeFences,
-         functions: result.module?.functions.length ?? 0 }));
+         functions: result.module?.functions.length ?? 0,
+         validation: result.module ? validateModule(result.module) : null }));
      } finally { load.dispose(); }`,
     join(root, "tests/fixtures/self-hosting/frontend-lowering.ts"),
+    join(root, "packages/compiler/native/ts7-process.ffi.json"),
   ], { cwd: root, timeout: 900_000, maxBuffer: 8 * 1024 * 1024 });
   expect(stderr).toBe("");
-  const result = JSON.parse(stdout) as Pick<LowerResult, "stats" | "diagnostics" | "runtimeFences"> & { functions: number };
+  const result = JSON.parse(stdout) as Pick<LowerResult, "stats" | "diagnostics" | "runtimeFences"> & { functions: number; validation: unknown[] | null };
   expect(result.diagnostics).toEqual([]);
   expect(result.runtimeFences).toEqual([]);
   expect(result.stats.statementsTotal).toBeGreaterThan(50_000);
@@ -36,4 +47,5 @@ test("the complete production frontend lowers with zero rejected statements", as
   expect(result.stats.statementsIsland).toBe(0);
   expect(result.stats.functionsSkipped).toBe(0);
   expect(result.functions).toBeGreaterThan(1_000);
+  expect(result.validation).toEqual([]);
 }, 930_000);

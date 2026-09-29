@@ -5,8 +5,8 @@ import { InternalCompilerError } from "../../errors.js";
  * package boundary fences for node_modules-declared symbols. */
 import * as ts from "../ts7/adapter.js";
 import type { Lowerer } from "./lowerer.js";
-import { arrayOf, BOOL, BYTES_U8, DYN, F64, IrExpr, IrStmt, IrType, JSVAL, MAX_ISLAND_CALLBACK_ARITY, STRING, VOID, canConvertToDyn, canMarshalTypedFuncIntoIsland, islandPromisePayloadTag, isUnitType } from "../../ir/ir.js";
-import { ISLAND_SURFACE, IslandFnEntry, STATIC_MATH_FNS, STATIC_MATH_PROPS, boundaryIntoIslandMsg } from "./surfaces.js";
+import { arrayOf, BOOL, BYTES_U8, DYN, F64, type IrExpr, type IrStmt, type IrType, JSVAL, MAX_ISLAND_CALLBACK_ARITY, STRING, VOID, canConvertToDyn, canMarshalTypedFuncIntoIsland, islandPromisePayloadTag, isUnitType } from "../../ir/ir.js";
+import { ISLAND_SURFACE, type IslandFnEntry, STATIC_MATH_FNS, STATIC_MATH_PROPS, boundaryIntoIslandMsg } from "./surfaces.js";
 import { requiresDynamicApiDiag, requiresDynamicPackageDiag } from "../../diagnostics/diagnostic.js";
 import { esmNamedImportLinkCrash, isCjsJsFile, isJsSourceFile, locOf, npmPackageNameOf } from "../program.js";
 import { foldedStringKeyOf, lowerDynObjectLiteral } from "./expressions/object-literals.js";

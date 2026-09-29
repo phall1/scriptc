@@ -9,7 +9,7 @@ import { InternalCompilerError } from "../../errors.js";
  * g.next()` binds and reads flow. */
 import * as ts from "../ts7/adapter.js";
 import type { Lowerer } from "./lowerer.js";
-import { BOOL, DYN, IrExpr, IrStmt, IrType, SrcLoc, UNDEFINED_T, VOID, isUnitType, typeEquals } from "../../ir/ir.js";
+import { BOOL, DYN, type IrExpr, type IrStmt, type IrType, type SrcLoc, UNDEFINED_T, VOID, isUnitType, typeEquals } from "../../ir/ir.js";
 import { locOf } from "../program.js";
 import { genResultRecord } from "../type-mapper.js";
 import { forOfVarTarget, lowerDestructuringAssign } from "./lower-stmts.js";

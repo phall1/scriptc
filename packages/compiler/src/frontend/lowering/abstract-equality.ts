@@ -1,5 +1,5 @@
 import { InternalCompilerError } from "../../errors.js";
-import { BOOL, DYN_HANDLE_KINDS, F64, IrExpr, IrStmt, IrType, SrcLoc, isUnitType, typeEquals } from "../../ir/ir.js";
+import { BOOL, DYN_HANDLE_KINDS, F64, type IrExpr, type IrStmt, type IrType, type SrcLoc, isUnitType, typeEquals } from "../../ir/ir.js";
 import { boolLit, numLit, varRef } from "../../ir/build.js";
 import type { Lowerer } from "./lowerer.js";
 

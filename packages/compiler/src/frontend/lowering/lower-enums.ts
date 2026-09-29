@@ -29,7 +29,7 @@
 import * as ts from "../ts7/adapter.js";
 import type { Lowerer } from "./lowerer.js";
 import { locOf } from "../program.js";
-import { F64, IrExpr, STRING } from "../../ir/ir.js";
+import { F64, type IrExpr, STRING } from "../../ir/ir.js";
 
 /** The member's source-name text (identifiers and string-literal names —
  * the only name forms tsc allows on enum members). */

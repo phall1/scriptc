@@ -1,4 +1,4 @@
-import { BOOL, F64, IrExpr, IrStmt, IrType, JSVAL, SrcLoc, UNDEFINED_T, typeEquals, typeKey, unionContainerArmsOk } from "../../ir/ir.js";
+import { BOOL, F64, type IrExpr, type IrStmt, type IrType, JSVAL, type SrcLoc, UNDEFINED_T, typeEquals, typeKey, unionContainerArmsOk } from "../../ir/ir.js";
 import { varRef } from "../../ir/build.js";
 import type { Lowerer } from "./lowerer.js";
 import { dynUndefinedExpr } from "./lowerer.js";

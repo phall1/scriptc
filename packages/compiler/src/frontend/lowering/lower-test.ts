@@ -16,7 +16,7 @@ import * as ts from "../ts7/adapter.js";
 import { resultIsDiscarded } from "./call-position.js";
 import type { Lowerer } from "./lowerer.js";
 import { locOf } from "../program.js";
-import { IrExpr, IrType, SrcLoc, STRING, VOID, isUnitType } from "../../ir/ir.js";
+import { type IrExpr, type IrType, type SrcLoc, STRING, VOID, isUnitType } from "../../ir/ir.js";
 import { numLit, strLit } from "../../ir/build.js";
 
 const TEST_FN_HINT =

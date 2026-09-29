@@ -11,7 +11,7 @@ import * as ts from "../ts7/adapter.js";
 import type { Lowerer } from "./lowerer.js";
 import { ladderFenceExpr } from "./lowerer.js";
 import { isJsSourceFile, locOf } from "../program.js";
-import { BOOL, canBoxFuncIntoDyn, DGRAMSOCK_T, DYN, F64, IrExpr, IrLibFn, IrType, SrcLoc, STRING, UNDEFINED_T, VOID } from "../../ir/ir.js";
+import { BOOL, canBoxFuncIntoDyn, DGRAMSOCK_T, DYN, F64, type IrExpr, type IrLibFn, type IrType, type SrcLoc, STRING, UNDEFINED_T, VOID } from "../../ir/ir.js";
 import { DNS_LOOKUP_DOCUMENTED_OPTIONS, fenceOrDropOptionKey } from "./surfaces.js";
 import { boolLit } from "../../ir/build.js";
 import { resultIsDiscarded } from "./call-position.js";

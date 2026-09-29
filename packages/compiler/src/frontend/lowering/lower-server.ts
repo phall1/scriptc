@@ -12,7 +12,7 @@ import * as ts from "../ts7/adapter.js";
 import type { Lowerer } from "./lowerer.js";
 import { ladderFenceExpr, nodeThrowExpr } from "./lowerer.js";
 import { isJsSourceFile, locOf } from "../program.js";
-import { arrayOf, BOOL, BYTES_U8, canBoxFuncIntoDyn, canConvertToDyn, DYN, DYN_HANDLE_KINDS, F64, funcOf, HTTP2SESSION_T, HTTP2STREAM_T, HTTPCLIENTREQ_T, HTTPREQ_T, HTTPRES_T, IrExpr, IrLibFn, IrStmt, IrType, NETSERVER_T, NETSOCKET_T, NULL_T, SECURECTX_T, STRING, UNDEFINED_T, SrcLoc, typeKey, VOID } from "../../ir/ir.js";
+import { arrayOf, BOOL, BYTES_U8, canBoxFuncIntoDyn, canConvertToDyn, DYN, DYN_HANDLE_KINDS, F64, funcOf, HTTP2SESSION_T, HTTP2STREAM_T, HTTPCLIENTREQ_T, HTTPREQ_T, HTTPRES_T, type IrExpr, type IrLibFn, type IrStmt, type IrType, NETSERVER_T, NETSOCKET_T, NULL_T, SECURECTX_T, STRING, UNDEFINED_T, type SrcLoc, typeKey, VOID } from "../../ir/ir.js";
 import {
   AGENT_DOCUMENTED_OPTIONS,
   builtinFenceHintOf,

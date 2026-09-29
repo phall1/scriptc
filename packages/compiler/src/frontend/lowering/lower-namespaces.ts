@@ -41,7 +41,7 @@ import type { Lowerer } from "./lowerer.js";
 import { boundIdentifiersOf } from "./lowerer.js";
 import type { FileParts } from "./lower-modules.js";
 import { locOf, resolveImport } from "../program.js";
-import { F64, IrExpr, IrStmt, IrType, STRING } from "../../ir/ir.js";
+import { F64, type IrExpr, type IrStmt, type IrType, STRING } from "../../ir/ir.js";
 
 /** True when this module declaration produces NO runtime construct at all:
  * ambient (`declare namespace/module`, `declare global`, string-named

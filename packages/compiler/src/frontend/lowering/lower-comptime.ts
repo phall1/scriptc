@@ -4,7 +4,7 @@ import { InternalCompilerError } from "../../errors.js";
  * literals — records/arrays/unions included, subject to comptimeBakeable. */
 import * as ts from "../ts7/adapter.js";
 import type { Lowerer } from "./lowerer.js";
-import { IrExpr, IrType } from "../../ir/ir.js";
+import { type IrExpr, type IrType } from "../../ir/ir.js";
 import { comptimeFailedDiag } from "../../diagnostics/diagnostic.js";
 import { locOf } from "../program.js";
 import { PoisonError } from "./lowerer.js";

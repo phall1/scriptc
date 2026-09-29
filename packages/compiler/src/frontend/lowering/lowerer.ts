@@ -107,14 +107,14 @@ import {
   UnionRegistry,
   withUndefinedArm as withUndefinedArmCanonical,
 } from "../type-mapper.js";
-import { CompoundOp, IslandFnEntry, boundaryIntoIslandMsg, boundaryOutOfIslandMsg, BuiltinModuleFn, builtinConstLit, builtinModuleConstOf, builtinModulesArrayLit, builtinFenceHintOf, builtinModuleFnOf, stdlibMemberFence, isStdlibMember, isStdlibSymbol, isStdlibGlobal, stdlibGlobalMember, nodeTypesOnlySymbol } from "./surfaces.js";
-import { FileParts, splitFiles, collectProgram, collectNpmImports, collectJsonImports, moduleArtifacts, collectGlobals, declSymbolOf, defaultExportSymbolOf, lowerFileInit, lowerDefaultExport, buildMain, appendDynamicImportModules, appendForkModules } from "./lower-modules.js";
+import { type CompoundOp, type IslandFnEntry, boundaryIntoIslandMsg, boundaryOutOfIslandMsg, type BuiltinModuleFn, builtinConstLit, builtinModuleConstOf, builtinModulesArrayLit, builtinFenceHintOf, builtinModuleFnOf, stdlibMemberFence, isStdlibMember, isStdlibSymbol, isStdlibGlobal, stdlibGlobalMember, nodeTypesOnlySymbol } from "./surfaces.js";
+import { type FileParts, splitFiles, collectProgram, collectNpmImports, collectJsonImports, moduleArtifacts, collectGlobals, declSymbolOf, defaultExportSymbolOf, lowerFileInit, lowerDefaultExport, buildMain, appendDynamicImportModules, appendForkModules } from "./lower-modules.js";
 import { prepareCjsModuleGraph } from "./lower-node-module.js";
-import { ClassInfo, ClassIteratorInfo, GenericClassInfo, registerBuiltinErrorClasses, registerBuiltinEmitterClass, registerBuiltinStreamClasses, builtinErrorInfoOf, builtinEmitterInfoOf, builtinStreamInfoOf, analyzeClassDecoration, classIteratorDrainCall, classIteratorNextCall, classIteratorOf, classIteratorOpenCall, classIteratorRestDrainCall, classMemberNameOf, classValueRef, collectClassShape, exactClassOfReceiver, collectClassShapeInner, ctorAbiEquals, findMethodOn, findStaticOn, findGenericMethodOn, findGenericStaticOn, genericClassInstanceType, isSubclassOf, inHierarchy, overrideBelow, staticShadowBelow, upcastTo, lowerClassMembers, lowerClassCtor, lowerClassExpression, lowerClassExpressionInfo, lowerClassMethodMember, lowerClassValueProperty, lowerStaticMethod, throwingSetterFn, fieldInitStmts, lowerStaticFieldInits, lowerStaticFieldRead, lowerDerivedCtorBody, superCallStmt, lowerSuperMethodCall, superThisRef, lowerSuperAccessorRead, lowerSuperAccessorWrite, inheritsBuiltinErrorCtor, inheritsBuiltinEmitterCtor, errorConstructorArgs, lowerNew, accessorCall } from "./lower-classes.js";
-import { MixinFnShape, mixinCallClassInfoOf, mixinIntersectionInstanceType } from "./lower-mixins.js";
+import { type ClassInfo, type ClassMethodSignature, type ClassIteratorInfo, type GenericClassInfo, registerBuiltinErrorClasses, registerBuiltinEmitterClass, registerBuiltinStreamClasses, builtinErrorInfoOf, builtinEmitterInfoOf, builtinStreamInfoOf, analyzeClassDecoration, classIteratorDrainCall, classIteratorNextCall, classIteratorOf, classIteratorOpenCall, classIteratorRestDrainCall, classMemberNameOf, classValueRef, collectClassShape, exactClassOfReceiver, collectClassShapeInner, ctorAbiEquals, findMethodOn, findStaticOn, findGenericMethodOn, findGenericStaticOn, genericClassInstanceType, isSubclassOf, inHierarchy, overrideBelow, staticShadowBelow, upcastTo, lowerClassMembers, lowerClassCtor, lowerClassExpression, lowerClassExpressionInfo, lowerClassMethodMember, lowerClassValueProperty, lowerStaticMethod, throwingSetterFn, fieldInitStmts, lowerStaticFieldInits, lowerStaticFieldRead, lowerDerivedCtorBody, superCallStmt, lowerSuperMethodCall, superThisRef, lowerSuperAccessorRead, lowerSuperAccessorWrite, inheritsBuiltinErrorCtor, inheritsBuiltinEmitterCtor, errorConstructorArgs, lowerNew, accessorCall } from "./lower-classes.js";
+import { type MixinFnShape, mixinCallClassInfoOf, mixinIntersectionInstanceType } from "./lower-mixins.js";
 import { implicitAnyParamSymbolsOf } from "./lower-calls.js";
 import { tryLowerExpression } from "./expressions/try-lower-expression.js";
-import { ParamShape, FnSig, GenericFnInfo, GenericInstance, bindingNeverReassigned, bodyReadsArguments, funcTypeFromParamShapes, implicitMonoFile, isThisParameter, paramShape, paramShapes, checkDefaultParamBodyType, completeArgs, wrappedUndefined, undefinedArgFor, requireExactArityValue, bodyReturnType, declaredReturnType, collectSignature, collectSignatureInner, collectGenericSignature, genericFnOf, lowerGenericCall, lowerGenericFnValue, inferTypeParamBindings, lowerGenericInstance, lowerCall, lowerFfiCall, lowerTimersMemberCall, lowerPromiseMethodCall, lowerFilterNarrowCall, isTopLevelFnSymbol, lowerNestedFunctionDecl, lambdaSignature, lowerLambda, lowerFunction, validateFfiImports } from "./lower-calls.js";
+import { type ParamShape, type FnSig, type GenericFnInfo, type GenericInstance, bindingNeverReassigned, bodyReadsArguments, funcTypeFromParamShapes, implicitMonoFile, isThisParameter, paramShape, paramShapes, checkDefaultParamBodyType, completeArgs, wrappedUndefined, undefinedArgFor, requireExactArityValue, bodyReturnType, declaredReturnType, collectSignature, collectSignatureInner, collectGenericSignature, genericFnOf, lowerGenericCall, lowerGenericFnValue, inferTypeParamBindings, lowerGenericInstance, lowerCall, lowerFfiCall, lowerTimersMemberCall, lowerPromiseMethodCall, lowerFilterNarrowCall, isTopLevelFnSymbol, lowerNestedFunctionDecl, lambdaSignature, lowerLambda, lowerFunction, validateFfiImports } from "./lower-calls.js";
 import { lowerArrayMethodCall, lowerMapMethodCall, lowerMapForEachCall, buildMapForEachFn, lowerRecordOvfCaptureHelper, lowerEnvToPairsHelper, lowerSetMethodCall, lowerSetForEachCall, buildSetForEachFn } from "./lower-containers.js";
 import { lowerBufferStaticCall, lowerBytesMethodCall, lowerBytesNew } from "./containers/bytes.js";
 import { lowerRegexMethodCall, lowerStringMethodCall } from "./containers/string-and-regexp.js";
@@ -129,7 +129,7 @@ import { lowerAssertModuleCall, lowerAssertDirectCall } from "./lower-assert.js"
 import { lowerUtilModuleCall } from "./lower-inspect.js";
 import { lowerComptime, comptimeBakeable, rejectComptimeCaptures, comptimeValueToIr } from "./lower-comptime.js";
 import { lowerStmts, noteBlockedBindings, isBlockedBinding, lowerScopedBlock, predeclareForwardCapture, predeclareForwardFnDecl, predeclareForwardVar, lowerStmt, lowerVarStatement, lowerDestructuringDecl, lowerDestructuringAssignParts, lowerBindingPattern, lowerJsvalBindingPattern, checkBindingElement, bindPatternTarget, isParseArgsDynCheckerType, lowerVarDeclList, lowerVarDecl, lowerSwitch, lowerTry, lowerExprStatement, lowerForOf, lowerForStatement } from "./lower-stmts.js";
-import { FieldTarget, lowerExpr, maybeNarrow, lowerUnitComparison, lowerNullishCoalesce, lowerCondition, ensureBool, requireTruthyUnion, eqComparableUnion, lowerIntrinsicProperty, lowerArrayLiteral, lowerElementAccess, lowerElementWrite, lowerRecordKeyRead, ensureString, lowerTemplate, lowerAsExpression, lowerPrefixUnary, lowerBinary, lowerCaughtTypeofTest, caughtRead, caughtLocalOf, caughtToString, lowerInstanceOf, lowerRegexLiteral, lowerFieldRead, lowerUnionProperty, fieldTarget, fieldGetExpr, fieldSetStmt, lowerFieldCompound, uniqueSymbolKeyOf } from "./lower-exprs.js";
+import { type FieldTarget, lowerExpr, maybeNarrow, lowerUnitComparison, lowerNullishCoalesce, lowerCondition, ensureBool, requireTruthyUnion, eqComparableUnion, lowerIntrinsicProperty, lowerArrayLiteral, lowerElementAccess, lowerElementWrite, lowerRecordKeyRead, ensureString, lowerTemplate, lowerAsExpression, lowerPrefixUnary, lowerBinary, lowerCaughtTypeofTest, caughtRead, caughtLocalOf, caughtToString, lowerInstanceOf, lowerRegexLiteral, lowerFieldRead, lowerUnionProperty, fieldTarget, fieldGetExpr, fieldSetStmt, lowerFieldCompound, uniqueSymbolKeyOf } from "./lower-exprs.js";
 import { finishOptionalChain, isOptionalChainTail, lowerOptionalChain } from "./expressions/optional-chains.js";
 import { foldedStringKeyOf, lowerDynObjectLiteral, lowerObjectLiteral, lowerShorthandValue, rejectThisInObjectMethod } from "./expressions/object-literals.js";
 import type { ExpandoMembers } from "./lower-expando.js";
@@ -1276,6 +1276,9 @@ export class Lowerer {
   /** Concise callback/lambda returns promoted by the HOF callback prepass;
    * arrows have no declaration symbol to key in fnSigsBySymbol. */
   readonly runtimeOptionalFunctionReturns = new Map<ts.Node, IrType>();
+  /** Intrinsic callback slots can supply a destination for fresh return
+   * literals, such as a reduce accumulator with recursive union fields. */
+  readonly contextualFunctionReturns = new Map<ts.Node, IrType>();
   /** Arithmetic over an unchecked string read can answer either NaN or a
    * string. Bindings and returns use this marker to retain that result union
    * through checker-bare string annotations. */
@@ -2875,7 +2878,9 @@ export class Lowerer {
       params: ParamShape[];
       returnType: IrType;
       top?: FnSig;
-      method?: { params: ParamShape[]; ret: IrType };
+      // Keep the complete method record: return promotion mutates the
+      // class registry, so a narrower structural copy would lose the write.
+      method?: ClassMethodSignature;
     };
     const signatureBySymbol = new Map<ts.Symbol, RuntimeSig>();
     for (const [symbol, sig] of this.fnSigsBySymbol) signatureBySymbol.set(symbol, { params: sig.params, returnType: sig.returnType, top: sig });
@@ -5692,6 +5697,9 @@ export class Lowerer {
         const sameFamily =
           (src.kind === "record" && arm.kind === "record") ||
           (src.kind === "array" && arm.kind === "array") ||
+          // Tuples already lift into ordinary array slots. Consider that
+          // same conversion when the array is an arm of a union too.
+          (src.kind === "record" && this.shapes.get(src.shapeId)?.tuple === true && arm.kind === "array") ||
           (src.kind === "object" && arm.kind === "record") ||
           (src.kind === "record" && arm.kind === "object");
         if (sameFamily && this.widthLiftPlan(src, arm) !== null) candidates.push({ tag: i, arm });
@@ -9696,7 +9704,7 @@ export class Lowerer {
     );
   }
 
-  private withExpressionOverride<T>(node: ts.Expression, value: IrExpr, lower: () => T): T {
+  withExpressionOverride<T>(node: ts.Expression, value: IrExpr, lower: () => T): T {
     const previous = this.chainRecvByNode.get(node);
     this.chainRecvByNode.set(node, value);
     try {

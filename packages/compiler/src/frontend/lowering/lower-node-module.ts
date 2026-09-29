@@ -10,7 +10,7 @@ import type { Lowerer } from "./lowerer.js";
 import type { FileParts } from "./lower-modules.js";
 import { isNodeEsmFile, locOf } from "../program.js";
 import { runtimePathForTarget } from "../runtime-resolve.js";
-import { BOOL, F64, IrExpr, IrStmt, IrType, NULL_T, STRING, UNDEFINED_T, VOID, arrayOf } from "../../ir/ir.js";
+import { BOOL, F64, type IrExpr, type IrStmt, type IrType, NULL_T, STRING, UNDEFINED_T, VOID, arrayOf } from "../../ir/ir.js";
 import { boolLit, numLit, strLit, varRef } from "../../ir/build.js";
 
 const MODULE_FIELDS = new Set([

@@ -17,7 +17,7 @@ import { trackedReadFile } from "../input-tracker.js";
 import { requireResolvePathsRuntime, resolveImportMetaRuntime, resolveRequireRuntime, type RuntimeResolveError, type RuntimeResolveResult } from "../runtime-resolve.js";
 import { invalidJsonModuleDiag, nativeAddonDiag, requiresDynamicImportDiag } from "../../diagnostics/diagnostic.js";
 import {
-  BuiltinModuleFn,
+  type BuiltinModuleFn,
   builtinModuleFnOf,
   FS_READDIR_DOCUMENTED_OPTIONS,
   FS_WATCH_DOCUMENTED_OPTIONS,
@@ -41,7 +41,7 @@ import { registerHttpClientFnBinding, voidizedCallback } from "./lower-server.js
 import { pairsSnapshotHelper } from "./pairs-snapshot.js";
 import { isJsonStringifyDynamicType } from "../../ir/ir.js";
 import { bufEncoding } from "./containers/bytes.js";
-import { BOOL, BYTES_U8, CHILD_T, CHILDSTREAM_T, CHILDWRITER_T, CRYPTOHASH_T, CRYPTOHMAC_T, DYN, F64, FILEHANDLE_T, FSWATCHER_T, PROCSTREAM_T, IrExpr, IrFunction, IrLibFn, IrLocal, IrStmt, IrType, JSVAL, NULL_T, SEARCH_PARAMS_T, SPAWNRES_T, STRING, SrcLoc, UNDEFINED_T, VOID, arrayOf, canBoxFuncIntoDyn, canConvertToDyn, funcOf, isUnitType, typeEquals, typeKey } from "../../ir/ir.js";
+import { BOOL, BYTES_U8, CHILD_T, CHILDSTREAM_T, CHILDWRITER_T, CRYPTOHASH_T, CRYPTOHMAC_T, DYN, F64, FILEHANDLE_T, FSWATCHER_T, PROCSTREAM_T, type IrExpr, type IrFunction, type IrLibFn, type IrLocal, type IrStmt, type IrType, JSVAL, NULL_T, SEARCH_PARAMS_T, SPAWNRES_T, STRING, type SrcLoc, UNDEFINED_T, VOID, arrayOf, canBoxFuncIntoDyn, canConvertToDyn, funcOf, isUnitType, typeEquals, typeKey } from "../../ir/ir.js";
 import { boolLit, countedFor, numLit, strLit, varRef } from "../../ir/build.js";
 import { staticForkModulePath } from "../fork-target.js";
 import { tsgoPath } from "../dts-paths.js";

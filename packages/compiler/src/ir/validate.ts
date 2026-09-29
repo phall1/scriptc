@@ -2168,6 +2168,60 @@ function validateFunction(
     ) ?? false;
   };
 
+  function checkNullishOperands(e: IrExpr & { kind: "nullish" }): void {
+    expectType(e.right, e.type, "nullish right operand");
+    // The ISLAND form: `a ?? b` over an engine value — left, right,
+    // and result are all handles (the emitters' jsval nullish arm).
+    if (e.left.type.kind === "jsval") {
+      if (e.type.kind !== "jsval") err("jsval nullish must answer jsval", e.loc);
+      return;
+    }
+    // The CHECKED-DYNAMIC form: the runtime kind decides (the
+    // emitters' scr_dyn_is_nullish arm) — left, right, and result
+    // all live in the checked-dynamic tree.
+    if (e.left.type.kind === "dyn") {
+      if (e.type.kind !== "dyn") err("dyn nullish must answer dyn", e.loc);
+      return;
+    }
+    if (e.left.type.kind !== "union") {
+      err(`nullish left must be a union, got ${e.left.type.kind}`, e.loc);
+      return;
+    }
+    const def = unions.get(e.left.type.unionId);
+    if (!def) {
+      err(`nullish left references unknown union ${e.left.type.unionId}`, e.loc);
+      return;
+    }
+    if (!def.arms.some(isUnitType)) {
+      err("nullish left union has no unit arm (frontend must fence)", e.loc);
+    }
+    // Two shapes: pass-through (type === left's union) or narrowed
+    // (type === the union's SINGLE non-unit arm).
+    if (!typeEquals(e.type, e.left.type)) {
+      const rest = def.arms.filter((a) => !isUnitType(a));
+      if (rest.length !== 1 || !typeEquals(e.type, rest[0]!)) {
+        err("nullish type must be the left union or its single non-unit arm", e.loc);
+      }
+    }
+  }
+
+  function checkNullishChain(e: IrExpr & { kind: "nullish" }): void {
+    // Preserve the recursive validator's left/right/parent diagnostic order
+    // without keeping its large native expression frame for every operand.
+    const parents: (IrExpr & { kind: "nullish" })[] = [];
+    let left: IrExpr = e;
+    while (left.kind === "nullish") {
+      parents.push(left);
+      left = left.left;
+    }
+    checkExpr(left);
+    for (let i = parents.length - 1; i >= 0; i--) {
+      const parent = parents[i]!;
+      checkExpr(parent.right);
+      checkNullishOperands(parent);
+    }
+  }
+
   function checkExpr(e: IrExpr): void {
     switch (e.kind) {
       case "numLit":
@@ -2527,45 +2581,9 @@ function validateFunction(
         expectType(e, bound, "chainRecv");
         break;
       }
-      case "nullish": {
-        checkExpr(e.left);
-        checkExpr(e.right);
-        expectType(e.right, e.type, "nullish right operand");
-        // The ISLAND form: `a ?? b` over an engine value — left, right,
-        // and result are all handles (the emitters' jsval nullish arm).
-        if (e.left.type.kind === "jsval") {
-          if (e.type.kind !== "jsval") err("jsval nullish must answer jsval", e.loc);
-          break;
-        }
-        // The CHECKED-DYNAMIC form: the runtime kind decides (the
-        // emitters' scr_dyn_is_nullish arm) — left, right, and result
-        // all live in the checked-dynamic tree.
-        if (e.left.type.kind === "dyn") {
-          if (e.type.kind !== "dyn") err("dyn nullish must answer dyn", e.loc);
-          break;
-        }
-        if (e.left.type.kind !== "union") {
-          err(`nullish left must be a union, got ${e.left.type.kind}`, e.loc);
-          break;
-        }
-        const def = unions.get(e.left.type.unionId);
-        if (!def) {
-          err(`nullish left references unknown union ${e.left.type.unionId}`, e.loc);
-          break;
-        }
-        if (!def.arms.some(isUnitType)) {
-          err("nullish left union has no unit arm (frontend must fence)", e.loc);
-        }
-        // Two shapes: pass-through (type === left's union) or narrowed
-        // (type === the union's SINGLE non-unit arm).
-        if (!typeEquals(e.type, e.left.type)) {
-          const rest = def.arms.filter((a) => !isUnitType(a));
-          if (rest.length !== 1 || !typeEquals(e.type, rest[0]!)) {
-            err("nullish type must be the left union or its single non-unit arm", e.loc);
-          }
-        }
+      case "nullish":
+        checkNullishChain(e);
         break;
-      }
       case "orDefault": {
         checkExpr(e.left);
         checkExpr(e.right);

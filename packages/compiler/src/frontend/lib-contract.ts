@@ -106,7 +106,7 @@ export interface ContractFacts {
 
 const CONVENTION_CONSTS = new Set(["modelUnbound", "msgUnbound", "appearanceMsg", "chromeMsg", "envMsgs"]);
 const CONTRACT_GLOBAL_TYPES = new Set(["Array", "ReadonlyArray", "Uint8Array"]);
-const moduleTypeBindings = new WeakMap<ts.SourceFile, Set<string>>();
+type TypeBindings = Map<ts.SourceFile, Set<string>>;
 
 function locOf(file: ts.SourceFile, node: ts.Node): SrcLoc {
   return { file: file.fileName, start: node.getStart(), end: node.end };
@@ -128,8 +128,8 @@ function propName(name: ts.Node): string | null {
  * `ReadonlyArray`, or `Uint8Array` by text can publish a slice/bytes contract
  * for a user-declared record. Imports and declarations are module-scoped
  * regardless of statement order, so one syntax-tree pass is sufficient. */
-function localTypeBindings(file: ts.SourceFile): Set<string> {
-  const cached = moduleTypeBindings.get(file);
+function localTypeBindings(file: ts.SourceFile, bindings: TypeBindings): Set<string> {
+  const cached = bindings.get(file);
   if (cached !== undefined) return cached;
   const names = new Set<string>();
   const add = (name: ts.Identifier | undefined): void => {
@@ -156,14 +156,14 @@ function localTypeBindings(file: ts.SourceFile): Set<string> {
     if (ts.isNamespaceImport(clause.namedBindings)) add(clause.namedBindings.name);
     else for (const el of clause.namedBindings.elements) add(el.name);
   }
-  moduleTypeBindings.set(file, names);
+  bindings.set(file, names);
   return names;
 }
 
 /** Whether a bare type name reaches the ambient global rather than a local
  * declaration/import or a type parameter in an enclosing declaration. */
-function isUnshadowedGlobalType(file: ts.SourceFile, node: ts.TypeNode, name: string): boolean {
-  if (localTypeBindings(file).has(name)) return false;
+function isUnshadowedGlobalType(file: ts.SourceFile, node: ts.TypeNode, name: string, bindings: TypeBindings): boolean {
+  if (localTypeBindings(file, bindings).has(name)) return false;
   for (let scope = node.parent; scope !== undefined && scope !== file; scope = scope.parent) {
     const params = scope.typeParameters;
     if (params?.some((p) => ts.isTypeParameterDeclaration(p) && p.name.text === name) === true) return false;
@@ -171,7 +171,7 @@ function isUnshadowedGlobalType(file: ts.SourceFile, node: ts.TypeNode, name: st
   return true;
 }
 
-function shapeOfMembers(file: ts.SourceFile, members: readonly ts.Node[], onBad: (text: string) => void): ContractField[] {
+function shapeOfMembers(file: ts.SourceFile, members: readonly ts.Node[], onBad: (text: string) => void, bindings: TypeBindings): ContractField[] {
   const fields: ContractField[] = [];
   for (const m of members) {
     if (!ts.isPropertySignature(m)) {
@@ -183,7 +183,7 @@ function shapeOfMembers(file: ts.SourceFile, members: readonly ts.Node[], onBad:
       onBad("a computed property name");
       continue;
     }
-    const shape = m.type !== undefined ? typeShape(file, m.type) : ({ k: "unsupported", text: "missing type annotation" } as const);
+    const shape = m.type !== undefined ? typeShape(file, m.type, bindings) : ({ k: "unsupported", text: "missing type annotation" } as const);
     fields.push({ name, optional: m.postfixToken?.kind === ts.SyntaxKind.QuestionToken, shape, loc: locOf(file, m) });
   }
   return fields;
@@ -192,7 +192,7 @@ function shapeOfMembers(file: ts.SourceFile, members: readonly ts.Node[], onBad:
 /** The syntactic shape of a type node, over the closed vocabulary the
  * sidecar schema can express. Anything else lands as `unsupported` with
  * the source text preserved for the refusal message. */
-function typeShape(file: ts.SourceFile, node: ts.TypeNode): ContractTypeShape {
+function typeShape(file: ts.SourceFile, node: ts.TypeNode, bindings: TypeBindings): ContractTypeShape {
   switch (node.kind) {
     case ts.SyntaxKind.BooleanKeyword:
       return { k: "bool" };
@@ -207,13 +207,13 @@ function typeShape(file: ts.SourceFile, node: ts.TypeNode): ContractTypeShape {
     default:
       break;
   }
-  if (ts.isParenthesizedTypeNode(node)) return typeShape(file, node.type);
+  if (ts.isParenthesizedTypeNode(node)) return typeShape(file, node.type, bindings);
   // `readonly T[]` is the same contract shape as `T[]`: readonly is a
   // checker-only view, and format 1 has one mutability-neutral slice
   // spelling. Preserve the wrapped shape so readonly tuples still reach
   // the projector's explicit tuple refusal.
   if (ts.isTypeOperatorNode(node) && node.operator === ts.SyntaxKind.ReadonlyKeyword) {
-    return typeShape(file, node.type);
+    return typeShape(file, node.type, bindings);
   }
   if (ts.isLiteralTypeNode(node)) {
     const lit = node.literal;
@@ -221,24 +221,24 @@ function typeShape(file: ts.SourceFile, node: ts.TypeNode): ContractTypeShape {
     if (lit.kind === ts.SyntaxKind.NullKeyword) return { k: "absent", unit: "null" };
     return { k: "unsupported", text: node.getText(file) };
   }
-  if (ts.isArrayTypeNode(node)) return { k: "array", elem: typeShape(file, node.elementType) };
+  if (ts.isArrayTypeNode(node)) return { k: "array", elem: typeShape(file, node.elementType, bindings) };
   if (ts.isTupleTypeNode(node)) {
     const elems: ContractTypeShape[] = [];
     for (const e of node.elements) {
       // Named tuple members carry the type under `.type`.
       const t = ts.isNamedTupleMember(e) ? e.type : (e as ts.TypeNode);
-      elems.push(typeShape(file, t));
+      elems.push(typeShape(file, t, bindings));
     }
     return { k: "tuple", elems };
   }
   if (ts.isUnionTypeNode(node)) {
-    return { k: "union", parts: node.types.map((t) => typeShape(file, t)) };
+    return { k: "union", parts: node.types.map((t) => typeShape(file, t, bindings)) };
   }
   if (ts.isTypeLiteralNode(node)) {
     let bad: string | null = null;
     const fields = shapeOfMembers(file, node.members, (text) => {
       bad = text;
-    });
+    }, bindings);
     if (bad !== null) return { k: "unsupported", text: bad };
     return { k: "object", fields };
   }
@@ -251,10 +251,10 @@ function typeShape(file: ts.SourceFile, node: ts.TypeNode): ContractTypeShape {
   if (ts.isTypeReferenceNode(node)) {
     if (!ts.isIdentifier(node.typeName)) return { k: "unsupported", text: node.getText(file) };
     const name = node.typeName.text;
-    const global = CONTRACT_GLOBAL_TYPES.has(name) && isUnshadowedGlobalType(file, node, name);
+    const global = CONTRACT_GLOBAL_TYPES.has(name) && isUnshadowedGlobalType(file, node, name, bindings);
     if (global && name === "Uint8Array" && (node.typeArguments?.length ?? 0) === 0) return { k: "bytes" };
     if (global && (name === "Array" || name === "ReadonlyArray") && node.typeArguments?.length === 1) {
-      return { k: "array", elem: typeShape(file, node.typeArguments[0]!) };
+      return { k: "array", elem: typeShape(file, node.typeArguments[0]!, bindings) };
     }
     if ((node.typeArguments?.length ?? 0) > 0) return { k: "unsupported", text: node.getText(file) };
     return { k: "ref", name };
@@ -325,6 +325,9 @@ function siteOf(file: ts.SourceFile, node: ts.Node): string {
  * canonical path order), each in statement (declaration) order. Call
  * before the frontend is disposed. */
 export function entryContractFacts(entry: ts.SourceFile, modules: readonly ts.SourceFile[] = []): ContractFacts {
+  // One contract read owns its syntax cache; no AST or native handle is
+  // retained after the projection finishes.
+  const bindings: TypeBindings = new Map();
   const facts: ContractFacts = {
     types: [],
     multiSiteTypes: [],
@@ -378,7 +381,7 @@ export function entryContractFacts(entry: ts.SourceFile, modules: readonly ts.So
           let bad: string | null = null;
           const fields = shapeOfMembers(file, stmt.members, (text) => {
             bad = text;
-          });
+          }, bindings);
           const generic = (stmt.typeParameters?.length ?? 0) > 0;
           const heritage = (stmt.heritageClauses?.length ?? 0) > 0;
           facts.types.push({
@@ -399,7 +402,7 @@ export function entryContractFacts(entry: ts.SourceFile, modules: readonly ts.So
           facts.types.push({
             name,
             form: "alias",
-            shape: generic ? { k: "unsupported", text: "a generic type alias" } : typeShape(file, stmt.type),
+            shape: generic ? { k: "unsupported", text: "a generic type alias" } : typeShape(file, stmt.type, bindings),
             loc: locOf(file, stmt),
           });
         }
@@ -435,9 +438,9 @@ export function entryContractFacts(entry: ts.SourceFile, modules: readonly ts.So
         name: stmt.name.text,
         params: stmt.parameters.map((p) => ({
           name: ts.isIdentifier(p.name) ? p.name.text : "<pattern>",
-          shape: p.type !== undefined ? typeShape(entry, p.type) : null,
+          shape: p.type !== undefined ? typeShape(entry, p.type, bindings) : null,
         })),
-        returns: stmt.type !== undefined ? typeShape(entry, stmt.type) : null,
+        returns: stmt.type !== undefined ? typeShape(entry, stmt.type, bindings) : null,
         generic: (stmt.typeParameters?.length ?? 0) > 0,
         loc: locOf(entry, stmt),
       });
@@ -459,7 +462,8 @@ export function entryContractFacts(entry: ts.SourceFile, modules: readonly ts.So
             facts.malformedConsts.push({ name, detail: "must be a string literal naming a msg arm", loc });
             continue;
           }
-          facts[name] = { value: v.text, loc };
+          if (name === "appearanceMsg") facts.appearanceMsg = { value: v.text, loc };
+          else facts.chromeMsg = { value: v.text, loc };
           continue;
         }
         if (name === "envMsgs") {
@@ -480,7 +484,8 @@ export function entryContractFacts(entry: ts.SourceFile, modules: readonly ts.So
           facts.malformedConsts.push({ name, detail: "must be an array of string literals", loc });
           continue;
         }
-        facts[name === "modelUnbound" ? "modelUnbound" : "msgUnbound"] = { value: v, loc };
+        if (name === "modelUnbound") facts.modelUnbound = { value: v, loc };
+        else facts.msgUnbound = { value: v, loc };
       }
     }
   }

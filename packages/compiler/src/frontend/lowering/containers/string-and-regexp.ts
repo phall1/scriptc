@@ -1,5 +1,5 @@
 import * as ts from "../../ts7/adapter.js";
-import { BOOL, DYN, F64, IrExpr, IrFunction, IrStmt, IrType, STRING, SrcLoc, UNDEFINED_T, arrayOf, isUnitType, typeEquals, typeKey } from "../../../ir/ir.js";
+import { BOOL, DYN, F64, type IrExpr, type IrFunction, type IrStmt, type IrType, STRING, type SrcLoc, UNDEFINED_T, arrayOf, isUnitType, typeEquals, typeKey } from "../../../ir/ir.js";
 import { numLit, strLit, varRef } from "../../../ir/build.js";
 import { locOf } from "../../program.js";
 import type { Lowerer } from "../lowerer.js";

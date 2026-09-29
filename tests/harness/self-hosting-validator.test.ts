@@ -48,6 +48,7 @@ for (const backend of ["c", "llvm"] as const) {
         "tests/corpus/3089-array-find-narrowing.ts",
         "tests/corpus/3091-json-recursive-discriminants.ts",
         "tests/corpus/3109-identity-union-collections.ts",
+        "tests/corpus/nullish-long-chain.ts",
       ]) {
         const irPath = join(dir, "emitted.json");
         const emitted = await compile(join(root, source), { outDir: dir, outPath: irPath, outputKind: "ir", dynamic: false });

@@ -8,7 +8,7 @@ import { AstNode } from "../ts7/ast-node.js";
 import { bodyReadsArguments } from "../arguments-usage.js";
 import type { Lowerer } from "./lowerer.js";
 import { lowerGenMethodCall } from "./lower-generators.js";
-import { BYTES_ELEMENT_NAME, BIGINT_T, BOOL, CAUGHT, DYN, F64, IrExpr, IrFunction, IrLocal, IrParam, IrStmt, IrType, JSVAL, STRING, SYMBOL_T, SrcLoc, UNDEFINED_T, VOID, arrayOf, canBoxFuncIntoDyn, canConvertToDyn, canDynCheckTo, canMarshalTypedFuncIntoIsland, ffiClassType, ffiSourceParamTypes, funcOf, isFfiCallbackParam, isFfiContextParam, isFfiReleaseParam, isUnitType, shapeHasAccessorSlots, typeEquals } from "../../ir/ir.js";
+import { BYTES_ELEMENT_NAME, BIGINT_T, BOOL, CAUGHT, DYN, F64, type IrExpr, type IrFunction, type IrLocal, type IrParam, type IrStmt, type IrType, JSVAL, STRING, SYMBOL_T, type SrcLoc, UNDEFINED_T, VOID, arrayOf, canBoxFuncIntoDyn, canConvertToDyn, canDynCheckTo, canMarshalTypedFuncIntoIsland, ffiClassType, ffiSourceParamTypes, funcOf, isFfiCallbackParam, isFfiContextParam, isFfiReleaseParam, isUnitType, shapeHasAccessorSlots, typeEquals } from "../../ir/ir.js";
 import type { IrFfiCallbackParam, IrFfiCallbackParamClass, IrFfiImport, IrFfiReleaseParam } from "../../ir/ir.js";
 import { isJsSourceFile, isNodeEsmFile, locOf, requireSpecOf } from "../program.js";
 import { genResultRecord, isGenericCallableMemberType, jsOpenObjectType, typeKey } from "../type-mapper.js";
@@ -7135,6 +7135,7 @@ function loweredTemplateStrings(
         ret = VOID;
       }
     }
+    ret = lowerer.contextualFunctionReturns.get(node) ?? ret;
     // A plain JS function reading `arguments` receives one hidden dyn
     // array. With named parameters, the array contains every actual
     // argument and only ES modules are admitted: sloppy-mode arguments
@@ -7218,7 +7219,7 @@ function loweredTemplateStrings(
       // The synthetic trailing dyn-array param carries `arguments`.
       // Parameterized functions receive all actual arguments; zero-param
       // functions receive the same array through their rest ABI.
-      if (funcType.rest && !shapes.some((s) => s.mode === "dynRest" || s.mode === "islandRest")) {
+      if (funcType.rest && funcType.restAbi === undefined && !shapes.some((s) => s.mode === "dynRest" || s.mode === "islandRest")) {
         const argsLocal = lowerer.declareHiddenLocal("%arguments", DYN);
         params.push({ localId: argsLocal.id, name: "%arguments", type: DYN });
         fnCtx.argumentsLocal = argsLocal;

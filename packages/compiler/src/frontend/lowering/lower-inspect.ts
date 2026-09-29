@@ -38,7 +38,7 @@ import * as ts from "../ts7/adapter.js";
 import { unsignedHex } from "../../format-integer.js";
 import type { Lowerer } from "./lowerer.js";
 import { isJsSourceFile } from "../program.js";
-import { BOOL, DYN, F64, IrExpr, IrStmt, IrType, RUNTIME_ERROR_CLASSES, STRING, SrcLoc, canConvertToDyn, canDynCheckTo, recordTextCodecClass, shapeHasAccessorSlots, typeKey } from "../../ir/ir.js";
+import { BOOL, DYN, F64, type IrExpr, type IrStmt, type IrType, RUNTIME_ERROR_CLASSES, STRING, type SrcLoc, canConvertToDyn, canDynCheckTo, recordTextCodecClass, shapeHasAccessorSlots, typeKey } from "../../ir/ir.js";
 import type { ClassInfo } from "./lower-classes.js";
 import { isSafeToRepeat } from "./expressions/evaluation-safety.js";
 import { boolLit, numLit, strLit, varRef } from "../../ir/build.js";

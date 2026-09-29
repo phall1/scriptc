@@ -38,7 +38,7 @@
  * cleanly before. The validator stays the backstop for anything else. */
 import type { Lowerer } from "./lowerer.js";
 import { PoisonError } from "./lowerer.js";
-import { canAdaptDynFuncTo, canMarshalTypedFuncIntoIsland, DYN, DYN_HANDLE_KINDS, IrExpr, IrType, JSVAL, SrcLoc, STRING, isDynTypedRefType, isUnitType, typeEquals } from "../../ir/ir.js";
+import { canAdaptDynFuncTo, canMarshalTypedFuncIntoIsland, DYN, DYN_HANDLE_KINDS, type IrExpr, type IrType, JSVAL, type SrcLoc, STRING, isDynTypedRefType, isUnitType, typeEquals } from "../../ir/ir.js";
 import { LIB_FN_SIGS, REGEX_INTRINSIC_SIGS, STR_INTRINSIC_SIGS } from "../../ir/validate.js";
 import { unionMismatchDiag, unsupportedDiag } from "../../diagnostics/diagnostic.js";
 

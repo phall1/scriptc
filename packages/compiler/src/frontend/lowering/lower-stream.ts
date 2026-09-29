@@ -36,7 +36,7 @@ import { newFnCtx, own } from "./lowerer.js";
 import { appendImplicitUndefinedReturn } from "./lower-calls.js";
 import { bufEncoding, knownBufEncoding } from "./containers/bytes.js";
 import { tryLowerExpression } from "./expressions/try-lower-expression.js";
-import { BOOL, DYN, F64, IrExpr, IrFunction, IrLibFn, IrStmt, IrType, RUNTIME_STREAM_CLASSES, STRING, SrcLoc, VOID, arrayOf, BYTES_U8, canBoxFuncIntoDyn, funcOf, typeEquals, typeKey } from "../../ir/ir.js";
+import { BOOL, DYN, F64, type IrExpr, type IrFunction, type IrLibFn, type IrStmt, type IrType, RUNTIME_STREAM_CLASSES, STRING, type SrcLoc, VOID, arrayOf, BYTES_U8, canBoxFuncIntoDyn, funcOf, typeEquals, typeKey } from "../../ir/ir.js";
 import { boolLit, numLit, strLit } from "../../ir/build.js";
 
 const BYTES = BYTES_U8;

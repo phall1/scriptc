@@ -14,9 +14,9 @@ import { pathToFileURL } from "node:url";
 import type { Lowerer } from "./lowerer.js";
 import { OBJECT_CALLABLE_VALUES } from "./surfaces.js";
 import { wasiGuestPath } from "../../wasi-paths.js";
-import { BIGINT_T, BYTES_ELEMENT_NAME, BOOL, CAUGHT, DYN, DYN_HANDLE_KINDS, F64, IrBytesElem, IrExpr, IrFunction, IrJsOp, IrLocal, IrRecordShape, IrStmt, IrType, JSVAL, NULL_T, REF_TRUTHY_KINDS, REGEX, RUNTIME_ERROR_CLASSES, SEARCH_PARAMS_T, STRING, SrcLoc, UNDEFINED_T, VOID, arrayOf, canAdaptDynFuncTo, canDynCheckTo, canBoxFuncIntoDyn, funcOf, isDynTypedRefType, isSupportedArrayElem, isUnitType, jsOpResultKind, shapeHasAccessorSlots, typeEquals, typeKey, unionContainerArmsOk } from "../../ir/ir.js";
+import { BIGINT_T, BYTES_ELEMENT_NAME, BOOL, CAUGHT, DYN, DYN_HANDLE_KINDS, F64, type IrBytesElem, type IrExpr, type IrFunction, type IrJsOp, type IrLocal, type IrRecordShape, type IrStmt, type IrType, JSVAL, NULL_T, REF_TRUTHY_KINDS, REGEX, RUNTIME_ERROR_CLASSES, SEARCH_PARAMS_T, STRING, type SrcLoc, UNDEFINED_T, VOID, arrayOf, canAdaptDynFuncTo, canDynCheckTo, canBoxFuncIntoDyn, funcOf, isDynTypedRefType, isSupportedArrayElem, isUnitType, jsOpResultKind, shapeHasAccessorSlots, typeEquals, typeKey, unionContainerArmsOk } from "../../ir/ir.js";
 import { cjsClassExprWholeExportOf, cjsExportAssignmentOf, cjsExportDiscardReason, isCjsExportTableLiteral, isCjsJsFile, isJsSourceFile, isModuleExportsAccess, isNodeEsmFile, locOf } from "../program.js";
-import { ARRAY_METHODS, builtinConstLit, builtinFenceHintOf, builtinModuleConstOf, builtinModulesArrayLit, builtinModuleFnOf, COMPOUND_ASSIGN_OPS, CompoundOp, ISLAND_SURFACE, isChildSurfaceMember, MAP_METHODS, NARROW_FIRST, SET_METHODS, STRING_INDEX_METHODS, STR_METHODS, UNSUPPORTED_EXPR, sideEffectFreeOptionValue, stdlibGlobalNameOf } from "./surfaces.js";
+import { ARRAY_METHODS, builtinConstLit, builtinFenceHintOf, builtinModuleConstOf, builtinModulesArrayLit, builtinModuleFnOf, COMPOUND_ASSIGN_OPS, type CompoundOp, ISLAND_SURFACE, isChildSurfaceMember, MAP_METHODS, NARROW_FIRST, SET_METHODS, STRING_INDEX_METHODS, STR_METHODS, UNSUPPORTED_EXPR, sideEffectFreeOptionValue, stdlibGlobalNameOf } from "./surfaces.js";
 import { UNSUPPORTED, blockedBindingUseDiag, requiresDynamicPackageDiag, unsupportedDiag } from "../../diagnostics/diagnostic.js";
 import { PoisonError, dynUndefinedExpr, jsFuncNameOf, neverTaintedJsType, nodeThrowExpr, own } from "./lowerer.js";
 import { lowerCollectionSpread, lowerNpmStaticSafeIndexRead, lowerSafeIndexRead, strCharsCall, tryLowerNumericIndexRead } from "./lower-containers.js";
@@ -3058,7 +3058,30 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
    * results (several non-unit arms) and defaults that change the result
    * type are fenced with narrow-first hints. */
   export function lowerNullishCoalesce(lowerer: Lowerer, expr: ts.BinaryExpression, loc: SrcLoc): IrExpr {
-    const left = lowerAbsenceProbe(lowerer, expr.left) ?? lowerer.lowerExpr(expr.left);
+    // `a ?? b ?? c` is a left-nested AST. Lower its spine bottom-up so
+    // long dispatch chains do not retain a full expression/binary lowering
+    // frame per operand in a native compiler. The pair lowering still
+    // decides each result layout and preserves the lazy right operand.
+    const parents: ts.BinaryExpression[] = [];
+    let first = expr;
+    while (
+      ts.isBinaryExpression(first.left) &&
+      first.left.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken &&
+      !lowerer.chainRecvByNode.has(first.left)
+    ) {
+      parents.push(first);
+      first = first.left;
+    }
+    let result = lowerNullishPair(lowerer, first, first === expr ? loc : locOf(first),
+      lowerAbsenceProbe(lowerer, first.left) ?? lowerer.lowerExpr(first.left));
+    for (let i = parents.length - 1; i >= 0; i--) {
+      const parent = parents[i]!;
+      result = lowerNullishPair(lowerer, parent, parent === expr ? loc : locOf(parent), result);
+    }
+    return result;
+  }
+
+function lowerNullishPair(lowerer: Lowerer, expr: ts.BinaryExpression, loc: SrcLoc, left: IrExpr): IrExpr {
     if (left.type.kind === "dyn") {
       // `a ?? b` on a CHECKED-DYNAMIC left: the deciding test is the
       // runtime kind (scr_dyn_is_nullish — UNDEF/NULL take the default;
@@ -5700,8 +5723,11 @@ export function lowerElementCompound(lowerer: Lowerer, expr: ts.BinaryExpression
     // Optional array reads carry the source array's payload type plus an
     // undefined arm. arrayValueStore turns that arm into the runtime's
     // UNDEFINED state while keeping number[]/string[] payload storage scalar.
-    const value = lowerer.lowerExpr(expr.right);
-    return arrayValueStore(lowerer, arr, index, value, receiverIr.elem, locOf(expr));
+    let literal = expr.right;
+    while (ts.isParenthesizedExpression(literal) || ts.isSatisfiesExpression(literal)) literal = literal.expression;
+    const value = ts.isObjectLiteralExpression(literal) || ts.isArrayLiteralExpression(literal)
+      ? lowerer.lowerExprExpecting(literal, arr.type.elem) : lowerer.lowerExpr(expr.right);
+    return arrayValueStore(lowerer, arr, index, value, arr.type.elem, locOf(expr));
   }
 
 /** Environment property names use ToPrimitive with the string hint, so

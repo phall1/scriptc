@@ -6,7 +6,7 @@ import { InternalCompilerError } from "../../errors.js";
  * hierarchy registration. */
 import * as ts from "../ts7/adapter.js";
 import type { FnCtx, Lowerer } from "./lowerer.js";
-import { BOOL, DATE_T, DYN, F64, bytesOf, IrClassDef, IrExpr, IrFunction, IrLocal, IrParam, IrStmt, IrType, JSVAL, RUNTIME_EMITTER_CLASS, RUNTIME_ERROR_CLASSES, RUNTIME_STREAM_CLASSES, STRING, SrcLoc, UNDEFINED_T, VOID, arrayOf, isSupportedMapKey, isSupportedMapValue, isSupportedSetElem, isUnitType, typeEquals } from "../../ir/ir.js";
+import { BOOL, DATE_T, DYN, F64, bytesOf, type IrClassDef, type IrExpr, type IrFunction, type IrLocal, type IrParam, type IrStmt, type IrType, JSVAL, RUNTIME_EMITTER_CLASS, RUNTIME_ERROR_CLASSES, RUNTIME_STREAM_CLASSES, STRING, type SrcLoc, UNDEFINED_T, VOID, arrayOf, isSupportedMapKey, isSupportedMapValue, isSupportedSetElem, isUnitType, typeEquals } from "../../ir/ir.js";
 import { MAX_GENERIC_INSTANCES, appendImplicitUndefinedReturn, bodyReadsArguments, generatorMeta, genericCallInstance, implicitAnyParamSymbolsOf, implicitCallInstance, implicitMonoFile, omittedArgFor, type GenericFnInfo, type ParamShape } from "./lower-calls.js";
 import { isGenericCallableMemberType, jsOpenObjectType, typeKey } from "../type-mapper.js";
 import { cjsClassExprWholeExportOf, isCjsJsFile, isJsSourceFile, isModuleExportsAccess, isNodeTypesPath, locOf } from "../program.js";
@@ -42,6 +42,14 @@ export function storedClassValueType(lowerer: Lowerer, expression: ts.Expression
     if (stored?.type.kind === "classval") return stored.type;
   }
   return lowerer.mapTypeOf(lowerer.typeOf(expression));
+}
+
+export interface ClassMethodSignature {
+  params: ParamShape[];
+  ret: IrType;
+  abstract?: true;
+  async?: true;
+  gen?: NonNullable<IrFunction["generator"]>;
 }
 
 export interface ClassInfo {
@@ -80,7 +88,7 @@ export interface ClassInfo {
    * walk IS lexical resolution and privates never join vtables (JS's
    * no-dynamic-dispatch semantics by construction). A `gen` entry has a
    * generator body whose direct calls enter through its spawn wrapper. */
-  methods: Map<string, { params: ParamShape[]; ret: IrType; abstract?: true; async?: true; gen?: NonNullable<IrFunction["generator"]> }>;
+  methods: Map<string, ClassMethodSignature>;
   /** Own JS overrides whose return cannot use the inherited ABI. The slot
    * retains that ABI, but its implementation throws before executing. */
   methodEntryFences?: Map<string, ScrDiagnostic>;

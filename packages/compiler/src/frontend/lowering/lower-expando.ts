@@ -32,7 +32,7 @@
  *   precedent); runtime-valued keys keep their fences. */
 import * as ts from "../ts7/adapter.js";
 import type { Lowerer } from "./lowerer.js";
-import { IrExpr, IrGlobal, IrStmt, IrType } from "../../ir/ir.js";
+import { type IrExpr, type IrGlobal, type IrStmt, type IrType } from "../../ir/ir.js";
 import { isJsSourceFile, locOf } from "../program.js";
 import { isUnitOnlyTsType, unitOnlyUnion } from "../type-mapper.js";
 

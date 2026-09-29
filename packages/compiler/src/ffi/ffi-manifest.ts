@@ -224,7 +224,7 @@ interface UnresolvedFfiReleaseParam {
   callback: { release: string };
 }
 
-type UnresolvedFfiParamClass = FfiParamClass | UnresolvedFfiReleaseParam;
+type UnresolvedFfiParamClass = FfiValueParamClass | FfiCallbackParam | FfiContextParam | UnresolvedFfiReleaseParam;
 
 function callbackParam(
   value: unknown,
@@ -260,12 +260,12 @@ function callbackParam(
   const params = callback["params"].map((entry, i): FfiCallbackParamClass | FfiContextParam => {
     const entryPath = `${path}.callback.params[${i}]`;
     checkClassVersion(entry, entryPath, format);
-    const allowed = format >= 3
+    const allowed: readonly string[] = format >= 3
       ? FFI_CALLBACK_PARAM_CLASSES
       : FFI_FORMAT_2_CALLBACK_PARAM_CLASSES;
     if (
       typeof entry === "string" &&
-      (allowed as readonly string[]).includes(entry)
+      allowed.includes(entry)
     ) {
       return entry as FfiCallbackParamClass;
     }
@@ -451,7 +451,7 @@ export function loadFfiProfile(
         }
         for (const [id, cb] of callbacks) {
           const callbackContexts = cb.params.filter(
-            (param): param is FfiContextParam => typeof param === "object",
+            (param) => typeof param === "object",
           );
           for (const context of callbackContexts) {
             if (context.context !== id) {
@@ -483,8 +483,11 @@ export function loadFfiProfile(
       return { name, symbol, params, returns: returns as FfiReturnClass };
     });
 
+    // Collect registrations before resolving releases so declarations may
+    // reference a callback later in the manifest. Build resolved descriptors
+    // explicitly: mutating an unresolved array cannot prove its new ABI type.
+    const retained = new Map<string, FfiCallbackParam["callback"]>();
     if (format >= 4) {
-      const retained = new Map<string, FfiCallbackParam["callback"]>();
       for (const fn of functions) {
         for (const param of fn.params) {
           if (
@@ -497,82 +500,80 @@ export function loadFfiProfile(
           }
         }
       }
-      for (const [i, fn] of functions.entries()) {
-        for (const [j, param] of fn.params.entries()) {
-          if (
-            typeof param !== "object" ||
-            !("callback" in param) ||
-            !("release" in param.callback)
-          ) continue;
-          const target = param.callback.release;
-          const descriptor = retained.get(target);
-          if (descriptor === undefined) {
-            const [binding, id, ...extra] = target.split(":");
-            const candidate = extra.length === 0 && binding !== undefined && id !== undefined
-              ? functions.find((entry) => entry.name === binding)?.params.find(
-                (entry) =>
-                  typeof entry === "object" &&
-                  "callback" in entry &&
-                  !("release" in entry.callback) &&
-                  entry.callback.id === id,
-              )
-              : undefined;
-            if (
-              candidate !== undefined &&
-              typeof candidate === "object" &&
-              "callback" in candidate &&
-              !("release" in candidate.callback)
-            ) {
-              throw new FfiProfileError(
-                `release '${target}' in 'functions[${i}].params[${j}]' targets a non-retained callback`,
-              );
-            }
-            throw new FfiProfileError(
-              `release '${target}' in 'functions[${i}].params[${j}]' has no matching retained callback`,
-            );
-          }
-          /* The emitted lifecycle is pin -> require -> native call -> commit ->
-           * release. A call that registers its own release target either
-           * retires the released pin during the commit sweep or satisfies the
-           * pre-call require with the pin it just created, so the
-           * release-validation trap cannot hold. */
-          const registeredBySameCall = fn.params.some(
-            (entry) =>
-              typeof entry === "object" &&
-              "callback" in entry &&
-              !("release" in entry.callback) &&
-              `${fn.name}:${entry.callback.id}` === target,
-          );
-          if (registeredBySameCall) {
-            throw new FfiProfileError(
-              `release '${target}' in 'functions[${i}].params[${j}]' targets a retained callback registered by the same call; registration and release must be separate bindings`,
-            );
-          }
-          const inheritedContext = descriptor.params.some(
-            (entry) => typeof entry === "object",
-          );
-          const contextCount = fn.params.filter(
-            (entry) => typeof entry === "object" && "context" in entry && entry.context === target,
-          ).length;
-          if (inheritedContext !== (contextCount === 1)) {
-            throw new FfiProfileError(
-              inheritedContext
-                ? `release '${target}' must declare its context exactly once in the native function parameter list because the retained callback has a context`
-                : `release '${target}' must not declare a context in the native function parameter list because the retained callback has none`,
-            );
-          }
-          fn.params[j] = {
-            callback: {
-              release: target,
-              params: descriptor.params,
-              returns: descriptor.returns,
-            },
-          };
-        }
-      }
     }
-
-    const resolvedFunctions = functions as FfiFunction[];
+    const resolvedFunctions: FfiFunction[] = functions.map((fn, i): FfiFunction => ({
+      name: fn.name,
+      symbol: fn.symbol,
+      returns: fn.returns,
+      params: fn.params.map((param, j): FfiParamClass => {
+        if (typeof param !== "object" || !("callback" in param)) return param;
+        if (!("release" in param.callback)) return { callback: param.callback };
+        const target = param.callback.release;
+        const descriptor = retained.get(target);
+        if (descriptor === undefined) {
+          const [binding, id, ...extra] = target.split(":");
+          const candidate = extra.length === 0 && binding !== undefined && id !== undefined
+            ? functions.find((entry) => entry.name === binding)?.params.find(
+              (entry) =>
+                typeof entry === "object" &&
+                "callback" in entry &&
+                !("release" in entry.callback) &&
+                entry.callback.id === id,
+            )
+            : undefined;
+          if (
+            candidate !== undefined &&
+            typeof candidate === "object" &&
+            "callback" in candidate &&
+            !("release" in candidate.callback)
+          ) {
+            throw new FfiProfileError(
+              `release '${target}' in 'functions[${i}].params[${j}]' targets a non-retained callback`,
+            );
+          }
+          throw new FfiProfileError(
+            `release '${target}' in 'functions[${i}].params[${j}]' has no matching retained callback`,
+          );
+        }
+        /* The emitted lifecycle is pin -> require -> native call -> commit ->
+         * release. A call that registers its own release target either
+         * retires the released pin during the commit sweep or satisfies the
+         * pre-call require with the pin it just created, so the
+         * release-validation trap cannot hold. */
+        const registeredBySameCall = fn.params.some(
+          (entry) =>
+            typeof entry === "object" &&
+            "callback" in entry &&
+            !("release" in entry.callback) &&
+            `${fn.name}:${entry.callback.id}` === target,
+        );
+        if (registeredBySameCall) {
+          throw new FfiProfileError(
+            `release '${target}' in 'functions[${i}].params[${j}]' targets a retained callback registered by the same call; registration and release must be separate bindings`,
+          );
+        }
+        const inheritedContext = descriptor.params.some(
+          (entry) => typeof entry === "object",
+        );
+        const contextCount = fn.params.filter(
+          (entry) => typeof entry === "object" && "context" in entry && entry.context === target,
+        ).length;
+        if (inheritedContext !== (contextCount === 1)) {
+          throw new FfiProfileError(
+            inheritedContext
+              ? `release '${target}' must declare its context exactly once in the native function parameter list because the retained callback has a context`
+              : `release '${target}' must not declare a context in the native function parameter list because the retained callback has none`,
+          );
+        }
+        return {
+          callback: {
+            release: target,
+            params: descriptor.params,
+            returns: descriptor.returns,
+          },
+        };
+      }),
+    }));
 
     const libraries = stringArray(root["libraries"], "libraries").map((path) =>
       resolve(dirname(profilePath), path)

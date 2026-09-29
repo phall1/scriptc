@@ -47,7 +47,7 @@ import type { Lowerer } from "./lowerer.js";
 import { dynFallbackType, newFnCtx } from "./lowerer.js";
 import type { ClassInfo } from "./lower-classes.js";
 import { isJsSourceFile, locOf } from "../program.js";
-import { arrayOf, BOOL, canBoxFuncIntoDyn, canConvertToDyn, DYN, F64, IrExpr, IrFunction, IrLocal, IrParam, IrStmt, IrType, isUnitType, STRING, SrcLoc, typeEquals, typeKey, VOID } from "../../ir/ir.js";
+import { arrayOf, BOOL, canBoxFuncIntoDyn, canConvertToDyn, DYN, F64, type IrExpr, type IrFunction, type IrLocal, type IrParam, type IrStmt, type IrType, isUnitType, STRING, type SrcLoc, typeEquals, typeKey, VOID } from "../../ir/ir.js";
 import { STREAM_FORCED_EVENT_NAMES, streamForcedTuple, streamSidesOf } from "./lower-stream.js";
 import { boolLit, strLit, varRef } from "../../ir/build.js";
 

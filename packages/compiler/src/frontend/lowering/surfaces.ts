@@ -7,7 +7,7 @@
 import * as ts from "../ts7/adapter.js";
 import type { Lowerer } from "./lowerer.js";
 import { UNSUPPORTED } from "../../diagnostics/diagnostic.js";
-import { BOOL, BYTES_U8, CHILD_T, CRYPTOHASH_T, CRYPTOHMAC_T, DYN, F64, FILEHANDLE_T, IrExpr, IrLibFn, IrStrIntrinsicMethod, IrType, RUNTIME_ERROR_CLASSES, SPAWNRES_T, STATS_T, STRING, URL_T, VOID, arrayOf } from "../../ir/ir.js";
+import { BOOL, BYTES_U8, CHILD_T, CRYPTOHASH_T, CRYPTOHMAC_T, DYN, F64, FILEHANDLE_T, type IrExpr, type IrLibFn, type IrStrIntrinsicMethod, type IrType, RUNTIME_ERROR_CLASSES, SPAWNRES_T, STATS_T, STRING, URL_T, VOID, arrayOf } from "../../ir/ir.js";
 import { isJsSourceFile, isNodeTypesPath, requireSpecOf } from "../program.js";
 
 /** Statement-level constructs rejected wholesale, keyed by syntax kind. */

@@ -6,7 +6,7 @@
 import * as ts from "../ts7/adapter.js";
 import { InternalCompilerError } from "../../errors.js";
 import type { Lowerer } from "./lowerer.js";
-import { BOOL, DYN, IrExpr, IrStmt, IrType, VOID } from "../../ir/ir.js";
+import { BOOL, DYN, type IrExpr, type IrStmt, type IrType, VOID } from "../../ir/ir.js";
 import { locOf } from "../program.js";
 import { dynUndefinedExpr } from "./lowerer.js";
 import { extractIteratorValue } from "./lower-generators.js";

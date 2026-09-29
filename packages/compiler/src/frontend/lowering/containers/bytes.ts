@@ -1,6 +1,6 @@
 import { BUF_NUM_METHODS } from "./buffer-numeric-methods.js";
 import * as ts from "../../ts7/adapter.js";
-import { BYTES_ELEMENT_SIZE, BIGINT_T, BOOL, BYTES_U8, DYN, F64, IrBytesElem, IrBytesIntrinsicMethod, IrExpr, IrType, STRING, SrcLoc, UNDEFINED_T, VOID, arrayOf, bytesOf, typeEquals } from "../../../ir/ir.js";
+import { BYTES_ELEMENT_SIZE, BIGINT_T, BOOL, BYTES_U8, DYN, F64, type IrBytesElem, type IrBytesIntrinsicMethod, type IrExpr, type IrType, STRING, type SrcLoc, UNDEFINED_T, VOID, arrayOf, bytesOf, typeEquals } from "../../../ir/ir.js";
 import { locOf } from "../../program.js";
 import type { Lowerer } from "../lowerer.js";
 import { dynUndefinedExpr, own } from "../lowerer.js";

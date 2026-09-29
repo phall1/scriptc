@@ -5,7 +5,7 @@ import { InternalCompilerError } from "../../errors.js";
  * record operations. */
 import * as ts from "../ts7/adapter.js";
 import type { Lowerer } from "./lowerer.js";
-import { BOOL, CAUGHT, DYN, F64, IrExpr, IrFunction, IrLocal, IrMapIntrinsicMethod, IrParam, IrRecordShape, IrSetIntrinsicMethod, IrStmt, IrType, JSVAL, STRING, SrcLoc, UNDEFINED_T, VOID, arrayOf, funcOf, isRefCounted, isSupportedArrayElem, isSupportedIndexValue, isUnitType, typeEquals } from "../../ir/ir.js";
+import { BOOL, CAUGHT, DYN, F64, type IrExpr, type IrFunction, type IrLocal, type IrMapIntrinsicMethod, type IrParam, type IrRecordShape, type IrSetIntrinsicMethod, type IrStmt, type IrType, JSVAL, STRING, type SrcLoc, UNDEFINED_T, VOID, arrayOf, funcOf, isRefCounted, isSupportedArrayElem, isSupportedIndexValue, isUnitType, typeEquals } from "../../ir/ir.js";
 import { ARRAY_METHODS, MAP_METHODS, SET_COMBINE_METHODS, SET_METHODS } from "./surfaces.js";
 import { tryLowerExpression } from "./expressions/try-lower-expression.js";
 import { forOfVarTarget, lowerDestructuringAssign } from "./lower-stmts.js";
@@ -14,7 +14,7 @@ import { islandPrimitiveExit, lowerDynDispatchMethodCall } from "./lower-calls.j
 import { buildArraySortFn } from "./lower-array-sort.js";
 import { arrayIndexPresent, arrayValueRead, arrayValueStore, arrayValueType, currentArrayIndexPresent } from "./array-values.js";
 import { typeKey } from "../type-mapper.js";
-import { WidthLift, nodeThrowExpr } from "./lowerer.js";
+import { type WidthLift, nodeThrowExpr } from "./lowerer.js";
 import { boolLit, countedFor, numLit, strLit, varRef } from "../../ir/build.js";
 import { defaultAfterUndefined, lowerPositionArgument, lowerStaticallyUndefinedArgument, positionNumber } from "./optional-arguments.js";
 import { lowerArrayCopyWithin, lowerArrayFill } from "./array-indexed-mutation.js";
@@ -235,6 +235,18 @@ function fenceProducedArrayElem(lowerer: Lowerer, node: ts.Node, producer: strin
     // static arrIntrinsic over a jsval (the validator ICE).
     {
       const receiver = lowerer.lowerExpr(access.expression);
+      if (receiver.type.kind === "union") {
+        const arms = lowerer.unions.get(receiver.type.unionId)?.arms;
+        const present = arms?.find((arm): boolean => arm.kind === "array");
+        if (present?.kind === "array" && arms?.every((arm) => typeEquals(arm, present) || isUnitType(arm))) {
+          // A predicate can narrow the element type without changing the
+          // original array layout. Extract that stored array before choosing
+          // a helper, then adapt callback arguments at their actual ABI.
+          const array = lowerer.runtimeOptionalPropertyReceiver(access.expression, receiver, present, name) ??
+            lowerer.coerceInto(access.expression, receiver, present);
+          return lowerer.withExpressionOverride(access.expression, array, () => lowerArrayMethodCall(lowerer, call, access));
+        }
+      }
       if (receiver.type.kind === "record" && lowerer.shapes.get(receiver.type.shapeId)?.tuple) {
         return lowerTupleReadMethodCall(lowerer, call, access, receiver);
       }
@@ -268,16 +280,11 @@ function fenceProducedArrayElem(lowerer: Lowerer, node: ts.Node, producer: strin
           "assign it to an array-typed binding first (the validated extraction), then call the method",
         );
       }
-      // An evolving-`any` array binding under --dynamic whose flow type
-      // EVOLVED past `any[]` (`const fns = []; fns.push(() => 1);
-      // fns.map(...)` — the binding lowered array<jsval> at its `any[]`
-      // declaration, while tsc's evolving-array analysis answers the
-      // pushed element type at this site): the VALUE's element type is
-      // the truth — ride the explicit-`any[]` handle-element lowering
-      // (pushes marshal in, HOF callbacks bind the handle, results exit
-      // per the checker type), never a typed intrinsic over a jsval-
-      // element array (the validator ICE).
-      if (receiver.type.kind === "array" && receiver.type.elem.kind === "jsval" && !typeEquals(receiverIr, receiver.type)) {
+      // Flow predicates and evolving-any analysis can refine the checker
+      // element type without changing the array's storage. Helpers and
+      // callback array arguments must retain the original layout and
+      // identity; element conversions happen at the callback boundary.
+      if (receiver.type.kind === "array" && !typeEquals(receiverIr, receiver.type)) {
         receiverIr = receiver.type;
         elem = receiver.type.elem;
       }
@@ -1179,7 +1186,7 @@ function arraySearchHelper(
    * loop passes exactly what it declares (JS passes everything; a callback
    * only sees the parameters it names). Returns the lowered callback and
    * its declared arity. */
-  function hofCallbackArg(lowerer: Lowerer, argNode: ts.Expression, lead: IrType[], arrT: IrType, bindUntyped = false):
+  function hofCallbackArg(lowerer: Lowerer, argNode: ts.Expression, lead: IrType[], arrT: IrType, bindUntyped = false, expectedReturn?: IrType):
     { fnArg: IrExpr & { type: IrType & { kind: "func" } }; arity: number } {
     const full = [...lead, F64, arrT];
     // A DYN-receiver HOF's callback (`parsed.flatMap((value) => ...)`):
@@ -1212,15 +1219,16 @@ function arraySearchHelper(
         lowerer.jsvalParamOverrides.add(p);
       });
     }
-    // A checker-untyped array expression whose lowered value supplies a
-    // concrete static element type still contextually types an inline HOF
-    // callback with any/unknown. Bind only unannotated parameters to the
-    // exact ABI the synthesized loop passes. The override is temporary:
-    // one callback AST may be lowered under several generic instances.
+    // An untyped or flow-refined array can contextually type an inline
+    // callback differently from the stored element and array layout. Bind
+    // unannotated parameters to the helper's ABI when a boundary adapter
+    // cannot carry it. Include the optional-read prepass's parameter type
+    // in this comparison. The override is temporary because one callback
+    // AST can lower under several generic instances.
     const contextual: { symbol: ts.Symbol; previous: IrType | undefined }[] = [];
     const previousImplicit = lowerer.implicitParamTypes;
     let contextualTs: Map<ts.Symbol, ts.Type> | null = null;
-    if (bindUntyped && (ts.isArrowFunction(argNode) || ts.isFunctionExpression(argNode))) {
+    if (ts.isArrowFunction(argNode) || ts.isFunctionExpression(argNode)) {
       argNode.parameters.forEach((param, i) => {
         const expected = full[i];
         if (
@@ -1230,7 +1238,10 @@ function arraySearchHelper(
           return;
         }
         const checkerType = lowerer.checker.getTypeAtLocation(param.name);
-        if ((checkerType.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) === 0) return;
+        const untyped = (checkerType.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) !== 0;
+        const raw = untyped ? null : lowerer.mapTypeOf(checkerType);
+        const mapped = raw ? lowerer.runtimeOptionalBindingType(param.name, raw) : null;
+        if (untyped ? !bindUntyped : mapped === null || lowerer.coercibleValue(expected, mapped)) return;
         const symbol = lowerer.checker.getSymbolAtLocation(param.name);
         if (!symbol) return;
         contextual.push({ symbol, previous: lowerer.runtimeOptionalBindingTypes.get(symbol) });
@@ -1250,6 +1261,10 @@ function arraySearchHelper(
       });
     }
     if (contextualTs !== null) lowerer.implicitParamTypes = contextualTs;
+    const previousReturn = lowerer.contextualFunctionReturns.get(argNode);
+    if (expectedReturn && (ts.isArrowFunction(argNode) || ts.isFunctionExpression(argNode))) {
+      lowerer.contextualFunctionReturns.set(argNode, expectedReturn);
+    }
     let fnArg: IrExpr;
     try {
       fnArg = lowerer.lowerExpr(argNode);
@@ -1260,6 +1275,8 @@ function arraySearchHelper(
         else lowerer.runtimeOptionalBindingTypes.set(symbol, previous);
       }
       lowerer.implicitParamTypes = previousImplicit;
+      if (previousReturn === undefined) lowerer.contextualFunctionReturns.delete(argNode);
+      else lowerer.contextualFunctionReturns.set(argNode, previousReturn);
     }
     // A callback can accept a wider parameter type than the array supplies
     // (a reusable predicate over a union is common). Its closure still has
@@ -1393,12 +1410,10 @@ function filterResultElem(
   const checkerReceiver = access
     ? lowerer.mapTypeOf(lowerer.typeOf(access.expression))
     : null;
-  // Evolving-any arrays of island handles retain their jsval element ABI,
-  // while the checker later describes both the receiver and unchanged
-  // filter result by the evolved callable type. Equal checker elements mean
-  // no predicate narrowing occurred; preserve the runtime element home.
+  // Equal checker elements mean the filter introduces no new refinement.
+  // Preserve the stored element layout even if an earlier predicate or
+  // evolving-any analysis changed the receiver's flow type.
   if (
-    elem.kind === "jsval" && valueT.kind === "jsval" &&
     result?.kind === "array" && checkerReceiver?.kind === "array" &&
     typeEquals(result.elem, checkerReceiver.elem)
   ) {
@@ -2174,24 +2189,29 @@ export function tryLowerNumericIndexRead(lowerer: Lowerer, operand: IrExpr, loc:
       };
     }
     // find visits holes as undefined and can infer a predicate that selects
-    // a subset of the element union. Only an inline, inferred predicate is
-    // evidence for that narrower representation; explicit assertions keep
+    // a subset of the element union. A result matching the receiver's flow
+    // element inherits that earlier refinement. Otherwise only an inline,
+    // inferred predicate proves a new narrowing; explicit assertions keep
     // the same refusal boundary as filter.
-    const resultT = bindUntyped ? arrayValueType(lowerer, elem) : lowerer.irTypeOf(call);
+    const valueT = arrayValueType(lowerer, elem);
+    const checkerReceiver = lowerer.mapTypeOf(lowerer.typeOf(access.expression));
+    const checkerResult = lowerer.irTypeOf(call);
+    const unchangedElement = checkerReceiver?.kind === "array" &&
+      typeEquals(checkerResult, arrayValueType(lowerer, checkerReceiver.elem));
+    const resultT = bindUntyped ? valueT : checkerResult;
     if (resultT.kind !== "union") lowerer.badType(call, lowerer.typeOf(call)); // defensive: T | undefined always maps to a union
     const undefTag = lowerer.armTag(resultT.unionId, UNDEFINED_T);
     if (undefTag < 0) lowerer.badType(call, lowerer.typeOf(call));
-    const valueT = arrayValueType(lowerer, elem);
     let retag: string | null = null;
     if (!lowerer.coercibleValue(valueT, resultT)) {
       const inline = ts.isArrowFunction(argNode) || ts.isFunctionExpression(argNode);
-      if (!inline || argNode.type !== undefined) {
+      if (!unchangedElement && (!inline || argNode.type !== undefined)) {
         lowerer.unsupported("SC1090", argNode,
           `narrowing '.${method}' requires an inline callback with an inferred predicate (annotate the return ': boolean' to keep the receiver's element type)`);
       }
-      const signature = lowerer.checker.getSignatureFromDeclaration(argNode);
+      const signature = inline ? lowerer.checker.getSignatureFromDeclaration(argNode) : undefined;
       const predicate = signature ? lowerer.checker.getTypePredicateOfSignature(signature) : undefined;
-      if (!predicate || predicate.parameterIndex !== 0 || valueT.kind !== "union") {
+      if ((!unchangedElement && (!predicate || predicate.parameterIndex !== 0)) || valueT.kind !== "union") {
         lowerer.unsupported("SC1090", call, `'.${method}' result narrowing without a predicate over its element`);
       }
       retag = lowerer.narrowedRetagHelper(call, valueT.unionId, resultT.unionId, loc);
@@ -2571,7 +2591,7 @@ export function tryLowerNumericIndexRead(lowerer: Lowerer, operand: IrExpr, loc:
     const accT = lowerer.runtimeOptionalReduceTypes.get(call) ??
       (hasInit ? lowerer.irTypeOf(call) : arrayValueType(lowerer, elem));
     if (accT.kind === "void" || accT.kind === "func") lowerer.badType(call, lowerer.typeOf(call));
-    const { fnArg, arity } = hofCallbackArg(lowerer, argNode, [accT, arrayValueType(lowerer, elem)], arrT);
+    const { fnArg, arity } = hofCallbackArg(lowerer, argNode, [accT, arrayValueType(lowerer, elem)], arrT, false, accT);
     const helper = reduceHelper(lowerer, method, elem, accT, fnArg.type.ret, arity, hasInit, loc);
     const args: IrExpr[] = [receiver, fnArg];
     if (hasInit) args.push(lowerer.lowerExprExpecting(call.arguments[1]!, accT));
