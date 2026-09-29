@@ -1,5 +1,5 @@
 import { InternalCompilerError } from "../../errors.js";
-import { BOOL, F64, STRING, isUnitType, typeEquals } from "../../ir/ir.js";
+import { BOOL, F64, STRING, isUnitType, typeEquals, typeKey } from "../../ir/ir.js";
 import type { IrExpr, IrFunction, IrRecordShape, IrStmt, IrType, IrUnionDef, SrcLoc } from "../../ir/ir.js";
 import type { WidthLift } from "./width-lift.js";
 import { discriminantField, discriminantOwners } from "../union-discriminants.js";
@@ -35,9 +35,22 @@ export function planUnionRetag(
   const useDiscriminant = discriminant !== undefined && discriminant.field === to.discriminant?.field;
   const owners = useDiscriminant ? discriminantOwners(to, shapeOf) : null;
   if (useDiscriminant && (owners === null || discriminantOwners(from, shapeOf) === null)) return null;
+  // Large unions otherwise compare every source arm with every destination.
+  // Keys narrow the search; exact ABI equality still resolves collisions.
+  // Keep small conversions allocation-light and rebuild for each registry view.
+  const indexed = from.arms.length >= 4 && to.arms.length >= 8;
+  const identities = new Map<string, number[]>();
+  if (indexed) to.arms.forEach((arm, tag) => {
+    const key = typeKey(arm);
+    const tags = identities.get(key);
+    if (tags) tags.push(tag);
+    else identities.set(key, [tag]);
+  });
   for (let tag = 0; tag < from.arms.length; tag++) {
     const source = from.arms[tag]!;
-    const identity = to.arms.findIndex((arm) => typeEquals(arm, source));
+    const identity = indexed
+      ? identities.get(typeKey(source))?.find((candidate) => typeEquals(to.arms[candidate]!, source)) ?? -1
+      : to.arms.findIndex((arm) => typeEquals(arm, source));
     if (isUnitType(source)) {
       result.push(identity < 0 ? { kind: "trap" } : {
         kind: "direct", route: { tag: identity, lift: { how: "copy" }, values: [] },

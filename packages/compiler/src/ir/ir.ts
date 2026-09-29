@@ -761,42 +761,40 @@ export function typeKey(t: IrType): string {
 }
 
 export function typeEquals(a: IrType, b: IrType): boolean {
-  if (a.kind === "array") return b.kind === "array" && typeEquals(a.elem, b.elem);
-  if (a.kind === "bytes") return b.kind === "bytes" && a.elem === b.elem;
-  if (a.kind === "map") {
-    return b.kind === "map" && typeEquals(a.key, b.key) && typeEquals(a.value, b.value);
+  // Dispatch once: a chain of negative narrowing checks repeatedly retags
+  // the remaining variants when this comparator runs in the native compiler.
+  switch (a.kind) {
+    case "array": return b.kind === "array" && typeEquals(a.elem, b.elem);
+    case "bytes": return b.kind === "bytes" && a.elem === b.elem;
+    case "map": return b.kind === "map" && typeEquals(a.key, b.key) && typeEquals(a.value, b.value);
+    case "set": return b.kind === "set" && typeEquals(a.elem, b.elem);
+    case "func":
+      return (
+        b.kind === "func" &&
+        a.params.length === b.params.length &&
+        (a.rest === true) === (b.rest === true) &&
+        a.restAbi === b.restAbi &&
+        a.argumentsAll === b.argumentsAll &&
+        a.params.every((p, i) => typeEquals(p, b.params[i]!)) &&
+        typeEquals(a.ret, b.ret)
+      );
+    case "object": return b.kind === "object" && a.className === b.className;
+    case "classval": return b.kind === "classval" && a.className === b.className;
+    case "moduleNs": return b.kind === "moduleNs" && a.moduleId === b.moduleId;
+    // Shapes and unions are interned, so their ids determine equality.
+    case "record": return b.kind === "record" && a.shapeId === b.shapeId;
+    case "union": return b.kind === "union" && a.unionId === b.unionId;
+    case "promise": return b.kind === "promise" && typeEquals(a.inner, b.inner);
+    case "generator":
+      return (
+        b.kind === "generator" &&
+        (a.async === true) === (b.async === true) &&
+        typeEquals(a.yieldT, b.yieldT) &&
+        typeEquals(a.retT, b.retT) &&
+        typeEquals(a.nextT, b.nextT)
+      );
+    default: return a.kind === b.kind;
   }
-  if (a.kind === "set") return b.kind === "set" && typeEquals(a.elem, b.elem);
-  if (a.kind === "func") {
-    return (
-      b.kind === "func" &&
-      a.params.length === b.params.length &&
-      (a.rest === true) === (b.rest === true) &&
-      a.restAbi === b.restAbi &&
-      a.argumentsAll === b.argumentsAll &&
-      a.params.every((p, i) => typeEquals(p, b.params[i]!)) &&
-      typeEquals(a.ret, b.ret)
-    );
-  }
-  if (a.kind === "object") return b.kind === "object" && a.className === b.className;
-  if (a.kind === "classval") return b.kind === "classval" && a.className === b.className;
-  if (a.kind === "moduleNs") return b.kind === "moduleNs" && a.moduleId === b.moduleId;
-  // The frontend deduplicates shapes structurally (one shapeId per canonical
-  // field list), so id equality IS structural equality.
-  if (a.kind === "record") return b.kind === "record" && a.shapeId === b.shapeId;
-  // Unions are interned like shapes: one unionId per canonical arm list.
-  if (a.kind === "union") return b.kind === "union" && a.unionId === b.unionId;
-  if (a.kind === "promise") return b.kind === "promise" && typeEquals(a.inner, b.inner);
-  if (a.kind === "generator") {
-    return (
-      b.kind === "generator" &&
-      (a.async === true) === (b.async === true) &&
-      typeEquals(a.yieldT, b.yieldT) &&
-      typeEquals(a.retT, b.retT) &&
-      typeEquals(a.nextT, b.nextT)
-    );
-  }
-  return a.kind === b.kind;
 }
 
 /** True for types whose values are heap-allocated and reference-counted.

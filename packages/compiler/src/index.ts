@@ -740,6 +740,190 @@ function runtimePackDiagnostic(error: RuntimePackError, entryPath: string): ScrD
   return nativeCodegenDiag(error.code === "unsupported" ? "SC3002" : "SC3003", error.message, entryPath);
 }
 
+interface PreparedExecutable {
+  llvmSource: string;
+  llvmPath: string;
+  irPath: string | undefined;
+  nativeFeatures: EarlyExecutableNativeFeatures;
+  programSplit: ReturnType<typeof splitLlvmProgram>;
+  sourceTexts: Map<string, string>;
+}
+
+/** Finish frontend work in a separate scope so the AST, checker caches and
+ * typed IR can be reclaimed before the native optimizer needs its heap. */
+async function prepareExecutableInput(
+  entryPath: string, opts: CompileRequestOptions, ffi: FfiProfile | null, buildPlatform: string,
+): Promise<PreparedExecutable | CompileRequestResult> {
+  const outputKind = opts.outputKind ?? "exe";
+  const fe = runFrontend(entryPath, loadProgram, opts.npmStatic);
+  let lowered: LowerResult;
+  let sourceTexts: Map<string, string>;
+  // The frontend (and its tsgo server) is released as soon as lowering
+  // ends — clang and the link never hold it open.
+  try {
+    const fail = (diagnostics: ScrDiagnostic[]): CompileFailure => ({
+      ok: false,
+      diagnostics,
+      sourceTexts: fe.sourceTexts(),
+    });
+
+    if (fe.preflight.length > 0) return fail(fe.preflight);
+
+    try {
+      lowered = fe.lower({
+        dynamic: opts.dynamic ?? false,
+        targetPlatform: buildPlatform,
+        ...(ffi !== null ? { ffiImports: ffi.functions } : {}),
+      });
+    } catch (e) {
+      // The last-resort panic fence: an upstream tsgo panic that crossed a
+      // checker call no statement/collection fence wrapped still becomes a
+      // clean failed compile (anchored at the entry), never a crashed CLI.
+      if (!isCheckerPanic(e)) throw e;
+      return fail([
+        checkerPanicDiag(e.message.split("\n", 1)[0]!, { file: entryPath, start: 0, end: 0 }),
+      ]);
+    }
+    if (lowered.module === null) return fail(lowered.diagnostics);
+
+    const validation = validateModule(lowered.module);
+    if (validation.length > 0) {
+      return fail(validation.map((v) => iceDiag(v.message, v.loc)));
+    }
+    if (buildPlatform === "wasi") {
+      const entryLoc: SrcLoc = { file: entryPath, start: 0, end: 0 };
+      if (opts.sanitize) {
+        return fail([targetRefusalDiag("wasm32-wasi", "--sanitize", entryLoc)]);
+      }
+      if (ffi !== null) {
+        return fail([targetRefusalDiag("wasm32-wasi", "native FFI manifests", entryLoc)]);
+      }
+      const unavailable = moduleWasiUnavailableSurface(lowered.module);
+      if (unavailable !== null) {
+        return fail([targetRefusalDiag("wasm32-wasi", unavailable.surface, unavailable.loc)]);
+      }
+    }
+    sourceTexts = fe.sourceTexts();
+  } finally {
+    fe.dispose();
+  }
+
+  const stem = basename(entryPath).replace(/\.(ts|mts|cts|js|mjs|cjs)$/, "");
+  const defaultSourcePaths = {
+    ir: join(opts.outDir, `${stem}.ir.json`),
+    llvm: join(opts.outDir, `${stem}.ll`),
+  } as const;
+  const debugOptions = opts.optimization === "dev" && !opts.strip
+    ? { debugSources: sourceTexts }
+    : {};
+
+  if (outputKind === "ir") {
+    await mkdir(dirname(opts.outPath), { recursive: true });
+    await writeFile(opts.outPath, serializeModule(lowered.module));
+    return { ok: true, artifact: { kind: "ir", path: opts.outPath } };
+  }
+
+  if (outputKind === "llvm" || outputKind === "asm" || outputKind === "obj") {
+    let llvm: string;
+    try {
+      llvm = emitLlvmModule(lowered.module, {
+        targetTriple: process.env["SCRIPTC_TARGET"] ?? "",
+        ...debugOptions,
+        pointerBits: buildPlatform === "wasi" ? 32 : 64,
+        wasi: buildPlatform === "wasi",
+        runtimeAbiMarker: outputKind === "obj",
+      });
+    } catch (err) {
+      if (!(err instanceof LlvmUnsupportedError)) throw err;
+      return { ok: false, diagnostics: [llvmRefusalDiag(err, entryPath)], sourceTexts };
+    }
+    if (outputKind === "llvm") {
+      await mkdir(dirname(opts.outPath), { recursive: true });
+      await writeFile(opts.outPath, llvm);
+    } else {
+      try {
+        await emitNativeArtifact({
+          outputPath: opts.outPath,
+          llvm,
+          outputKind,
+          sourcePath: entryPath,
+          optimization: opts.optimization === "dev" ? "0" : "2",
+          ...(opts.sanitize === undefined ? {} : { sanitize: opts.sanitize }),
+        });
+      } catch (err) {
+        if (!(err instanceof NativeCodegenError)) throw err;
+        return {
+          ok: false,
+          diagnostics: [nativeCodegenDiag(err.diagnosticCode, err.message, entryPath)],
+          sourceTexts,
+        };
+      }
+    }
+    if (outputKind === "obj" && opts.nativeLinkInfo === true) {
+      const target = nativeCodegenTarget();
+      if (target === null) {
+        throw new InternalCompilerError("native object emitted without a native target");
+      }
+      return {
+        ok: true,
+        artifact: {
+          kind: "obj",
+          path: opts.outPath,
+          nativeLinkInfo: await createNativeLinkInfo({
+            programObject: opts.outPath,
+            target,
+            features: executableNativeFeatures(
+              lowered.module,
+              "llvm",
+              opts.dynamic ?? false,
+              opts.optimization ?? "release",
+            ),
+            ffi,
+            optimization: opts.optimization ?? "release",
+          }),
+        },
+      };
+    }
+    return { ok: true, artifact: { kind: outputKind, path: opts.outPath } };
+  }
+
+  await mkdir(opts.outDir, { recursive: true });
+  const llvmPath = defaultSourcePaths.llvm;
+  const backend = "llvm" as const;
+  let llvmSource: string;
+  try {
+    llvmSource = emitLlvmModule(lowered.module, {
+      targetTriple: process.env["SCRIPTC_TARGET"] ?? "",
+      ...debugOptions,
+      pointerBits: buildPlatform === "wasi" ? 32 : 64,
+      wasi: buildPlatform === "wasi",
+      runtimeAbiMarker: opts.nativeProgramObject === true || usesPrecompiledRuntimePack(opts, "llvm"),
+    });
+  } catch (err) {
+    if (!(err instanceof LlvmUnsupportedError)) throw err;
+    return { ok: false, diagnostics: [llvmRefusalDiag(err, entryPath)], sourceTexts };
+  }
+  await writeFile(llvmPath, llvmSource);
+  let irPath: string | undefined;
+  if (opts.emitIr) {
+    irPath = defaultSourcePaths.ir;
+    await writeFile(irPath, serializeModule(lowered.module));
+  }
+
+  const nativeFeatures = executableNativeFeatures(
+    lowered.module,
+    backend,
+    opts.dynamic ?? false,
+    opts.optimization ?? "release",
+  );
+  const programSplit =
+    backend === "llvm" && (opts.optimization ?? "release") === "dev" &&
+      !(opts.sanitize ?? false) && llvmSource !== null
+      ? splitLlvmProgram(llvmSource)
+      : null;
+  return { llvmSource, llvmPath, irPath, nativeFeatures, programSplit, sourceTexts };
+}
+
 async function compileTracked(
   entryPath: string,
   opts: CompileRequestOptions,
@@ -1057,172 +1241,10 @@ async function compileTracked(
       ...(earlyHit.irPath === undefined ? {} : { irPath: earlyHit.irPath }),
     };
   }
-  const fe = runFrontend(entryPath, loadProgram, opts.npmStatic);
-  let lowered: LowerResult;
-  let sourceTexts: Map<string, string>;
-  // The frontend (and its tsgo server) is released as soon as lowering
-  // ends — clang and the link never hold it open.
-  try {
-    const fail = (diagnostics: ScrDiagnostic[]): CompileFailure => ({
-      ok: false,
-      diagnostics,
-      sourceTexts: fe.sourceTexts(),
-    });
-
-    if (fe.preflight.length > 0) return fail(fe.preflight);
-
-    try {
-      lowered = fe.lower({
-        dynamic: opts.dynamic ?? false,
-        targetPlatform: buildPlatform,
-        ...(ffi !== null ? { ffiImports: ffi.functions } : {}),
-      });
-    } catch (e) {
-      // The last-resort panic fence: an upstream tsgo panic that crossed a
-      // checker call no statement/collection fence wrapped still becomes a
-      // clean failed compile (anchored at the entry), never a crashed CLI.
-      if (!isCheckerPanic(e)) throw e;
-      return fail([
-        checkerPanicDiag(e.message.split("\n", 1)[0]!, { file: entryPath, start: 0, end: 0 }),
-      ]);
-    }
-    if (lowered.module === null) return fail(lowered.diagnostics);
-
-    const validation = validateModule(lowered.module);
-    if (validation.length > 0) {
-      return fail(validation.map((v) => iceDiag(v.message, v.loc)));
-    }
-    if (buildPlatform === "wasi") {
-      const entryLoc: SrcLoc = { file: entryPath, start: 0, end: 0 };
-      if (opts.sanitize) {
-        return fail([targetRefusalDiag("wasm32-wasi", "--sanitize", entryLoc)]);
-      }
-      if (ffi !== null) {
-        return fail([targetRefusalDiag("wasm32-wasi", "native FFI manifests", entryLoc)]);
-      }
-      const unavailable = moduleWasiUnavailableSurface(lowered.module);
-      if (unavailable !== null) {
-        return fail([targetRefusalDiag("wasm32-wasi", unavailable.surface, unavailable.loc)]);
-      }
-    }
-    sourceTexts = fe.sourceTexts();
-  } finally {
-    fe.dispose();
-  }
-
-  const stem = basename(entryPath).replace(/\.(ts|mts|cts|js|mjs|cjs)$/, "");
-  const defaultSourcePaths = {
-    ir: join(opts.outDir, `${stem}.ir.json`),
-    llvm: join(opts.outDir, `${stem}.ll`),
-  } as const;
-  const debugOptions = opts.optimization === "dev" && !opts.strip
-    ? { debugSources: sourceTexts }
-    : {};
-
-  if (outputKind === "ir") {
-    await mkdir(dirname(opts.outPath), { recursive: true });
-    await writeFile(opts.outPath, serializeModule(lowered.module));
-    return { ok: true, artifact: { kind: "ir", path: opts.outPath } };
-  }
-
-  if (outputKind === "llvm" || outputKind === "asm" || outputKind === "obj") {
-    let llvm: string;
-    try {
-      llvm = emitLlvmModule(lowered.module, {
-        targetTriple: process.env["SCRIPTC_TARGET"] ?? "",
-        ...debugOptions,
-        pointerBits: buildPlatform === "wasi" ? 32 : 64,
-        wasi: buildPlatform === "wasi",
-        runtimeAbiMarker: outputKind === "obj",
-      });
-    } catch (err) {
-      if (!(err instanceof LlvmUnsupportedError)) throw err;
-      return { ok: false, diagnostics: [llvmRefusalDiag(err, entryPath)], sourceTexts };
-    }
-    if (outputKind === "llvm") {
-      await mkdir(dirname(opts.outPath), { recursive: true });
-      await writeFile(opts.outPath, llvm);
-    } else {
-      try {
-        await emitNativeArtifact({
-          outputPath: opts.outPath,
-          llvm,
-          outputKind,
-          sourcePath: entryPath,
-          optimization: opts.optimization === "dev" ? "0" : "2",
-          ...(opts.sanitize === undefined ? {} : { sanitize: opts.sanitize }),
-        });
-      } catch (err) {
-        if (!(err instanceof NativeCodegenError)) throw err;
-        return {
-          ok: false,
-          diagnostics: [nativeCodegenDiag(err.diagnosticCode, err.message, entryPath)],
-          sourceTexts,
-        };
-      }
-    }
-    if (outputKind === "obj" && opts.nativeLinkInfo === true) {
-      const target = nativeCodegenTarget();
-      if (target === null) {
-        throw new InternalCompilerError("native object emitted without a native target");
-      }
-      return {
-        ok: true,
-        artifact: {
-          kind: "obj",
-          path: opts.outPath,
-          nativeLinkInfo: await createNativeLinkInfo({
-            programObject: opts.outPath,
-            target,
-            features: executableNativeFeatures(
-              lowered.module,
-              "llvm",
-              opts.dynamic ?? false,
-              opts.optimization ?? "release",
-            ),
-            ffi,
-            optimization: opts.optimization ?? "release",
-          }),
-        },
-      };
-    }
-    return { ok: true, artifact: { kind: outputKind, path: opts.outPath } };
-  }
-
-  await mkdir(opts.outDir, { recursive: true });
-  const llvmPath = defaultSourcePaths.llvm;
+  const prepared = await prepareExecutableInput(entryPath, opts, ffi, buildPlatform);
+  if ("ok" in prepared) return prepared;
+  const { llvmSource, llvmPath, irPath, nativeFeatures, programSplit, sourceTexts } = prepared;
   const backend = "llvm" as const;
-  let llvmSource: string;
-  try {
-    llvmSource = emitLlvmModule(lowered.module, {
-      targetTriple: process.env["SCRIPTC_TARGET"] ?? "",
-      ...debugOptions,
-      pointerBits: buildPlatform === "wasi" ? 32 : 64,
-      wasi: buildPlatform === "wasi",
-      runtimeAbiMarker: opts.nativeProgramObject === true || usesPrecompiledRuntimePack(opts, "llvm"),
-    });
-  } catch (err) {
-    if (!(err instanceof LlvmUnsupportedError)) throw err;
-    return { ok: false, diagnostics: [llvmRefusalDiag(err, entryPath)], sourceTexts };
-  }
-  await writeFile(llvmPath, llvmSource);
-  let irPath: string | undefined;
-  if (opts.emitIr) {
-    irPath = defaultSourcePaths.ir;
-    await writeFile(irPath, serializeModule(lowered.module));
-  }
-
-  const nativeFeatures = executableNativeFeatures(
-    lowered.module,
-    backend,
-    opts.dynamic ?? false,
-    opts.optimization ?? "release",
-  );
-  const programSplit =
-    backend === "llvm" && (opts.optimization ?? "release") === "dev" &&
-      !(opts.sanitize ?? false) && llvmSource !== null
-      ? splitLlvmProgram(llvmSource)
-      : null;
   await mkdir(dirname(opts.outPath), { recursive: true });
   if (earlyCacheOptions === null) {
     throw new InternalCompilerError("executable emission without executable cache options");

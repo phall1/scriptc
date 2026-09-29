@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { BOOL, F64, NULL_T, STRING, UNDEFINED_T, typeEquals } from "../../ir/ir.js";
+import { BOOL, F64, NULL_T, STRING, UNDEFINED_T, typeEquals, typeKey } from "../../ir/ir.js";
 import type { IrRecordShape, IrType, IrUnionDef, SrcLoc } from "../../ir/ir.js";
 import { planUnionRetag, buildUnionRetag } from "./union-retag.js";
 import type { UnionRetagArm } from "./union-retag.js";
@@ -49,6 +49,35 @@ function split(plan: UnionRetagArm[] | null) {
 }
 
 describe("union conversion planning", () => {
+  test("matches large unions in source order, including duplicate destination arms", () => {
+    const arms: IrType[] = Array.from({ length: 48 }, (_, index) => record(`r${index}`));
+    const from: IrUnionDef = { id: "large-from", arms };
+    const to: IrUnionDef = { id: "large-to", arms: [record("r7"), ...arms.slice().reverse(), record("r7")] };
+    const plan = planUnionRetag(from, to, () => undefined, () => null);
+    expect(plan).toEqual(arms.map((source) => ({
+      kind: "direct", route: { tag: to.arms.findIndex((arm) => typeEquals(arm, source)), lift: { how: "copy" }, values: [] },
+    })));
+    to.arms = to.arms.filter((arm) => !typeEquals(arm, arms[11]!));
+    expect(planUnionRetag(from, to, () => undefined, () => null)).toBeNull();
+    expect(planUnionRetag(from, to, () => undefined, () => null, new Set([11]))?.[11]).toEqual({ kind: "trap" });
+  });
+
+  test("checks exact ABI equality within type-key collisions", () => {
+    const fixed: IrType = { kind: "func", params: [STRING], ret: F64 };
+    const withArguments: IrType = { kind: "func", params: [STRING], ret: F64, argumentsAll: true };
+    expect(typeKey(fixed)).toBe(typeKey(withArguments));
+    expect(typeEquals(fixed, withArguments)).toBe(false);
+    const padding: IrType[] = Array.from({ length: 12 }, (_, index) => record(`r${index}`));
+    const from: IrUnionDef = { id: "collision-from", arms: [fixed, withArguments, ...padding] };
+    const to: IrUnionDef = { id: "collision-to", arms: [withArguments, fixed, ...padding] };
+    expect(planUnionRetag(from, to, () => undefined, () => null)?.slice(0, 2)).toEqual([
+      { kind: "direct", route: { tag: 1, lift: { how: "copy" }, values: [] } },
+      { kind: "direct", route: { tag: 0, lift: { how: "copy" }, values: [] } },
+    ]);
+    to.arms.splice(1, 1);
+    expect(planUnionRetag(from, to, () => undefined, () => null)).toBeNull();
+  });
+
   test("splits one source layout by semantic kind", () => {
     const f = fixture();
     const arm = split(f.plan());

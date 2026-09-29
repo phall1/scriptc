@@ -153,6 +153,36 @@ scenario("s", STRING, "constructor", "__proto__");
 scenario("n", F64, 0, -2.5);
 scenario("b", BOOL, false, true);
 scenario("i", STRING, "kept", "width", true);
+
+// Large conversions exercise indexed identity lookup with the same semantic
+// discriminants as small conversions. Reverse tags and execute every arm.
+const largeFrom: IrUnionDef = { id: "large-from", arms: [], discriminant: { field: "kind", cases: [] } };
+const largeTo: IrUnionDef = { id: "large-to", arms: [], discriminant: { field: "kind", cases: [] } };
+for (let index = 0; index < 32; index++) {
+  const shape = `large-${index}`;
+  records.push({ id: shape, fields: [{ name: "kind", type: STRING }, { name: "value", type: F64 }] });
+  largeFrom.arms.push(recordType(shape));
+  largeFrom.discriminant!.cases.push({ tag: index, values: [shape] });
+  largeTo.arms.unshift(recordType(shape));
+  largeTo.discriminant!.cases.push({ tag: 31 - index, values: [shape] });
+}
+unions.push(largeFrom, largeTo);
+const largePlan = planUnionRetag(largeFrom, largeTo, shapeOf, widthLift);
+if (!largePlan) throw new Error("missing large conversion");
+functions.push(buildUnionRetag("large-retag", largeFrom, largeTo, largePlan, loc, applyLift, () => "payload"));
+for (let index = 0; index < largeFrom.arms.length; index++) {
+  const type = largeFrom.arms[index]!;
+  if (type.kind !== "record") throw new Error("bad large conversion source");
+  const source: IrExpr = { kind: "recordLit", type, loc, fields: [
+    { name: "kind", value: string(type.shapeId) }, { name: "value", value: number(index) },
+  ] };
+  const converted: IrExpr = { kind: "call", callee: "large-retag", args: [wrap(largeFrom, index, source)], type: unionType(largeTo.id), loc };
+  body.push(print(`large:${index}`, {
+    kind: "recordGet", obj: { kind: "unionNarrow", unionId: largeTo.id, tag: 31 - index, value: converted, type, loc },
+    shapeId: type.shapeId, field: "value", type: F64, loc,
+  }));
+}
+
 // The same native stage emits checked single-arm extraction and deferred
 // scalar field reads. Wrong non-unit tags must never share a payload read.
 const scalarUnion: IrUnionDef = { id: "scalar", arms: [BOOL, F64, STRING, UNDEFINED_T] };

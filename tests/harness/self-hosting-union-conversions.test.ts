@@ -70,7 +70,7 @@ for (const fixture of ["ir-refinements", "union-conversions"]) {
           const module = deserializeModule(text);
           expect(module).toEqual(deserializeModule(readFileSync(nodePath, "utf8")));
           expect(validateModule(module)).toEqual([]);
-          expect(module.functions.filter((fn) => fn.name.endsWith("retag"))).toHaveLength(4);
+          expect(module.functions.filter((fn) => fn.name.endsWith("retag"))).toHaveLength(5);
           const cPath = join(dir, "generated.ll");
           writeFileSync(cPath, emitLlvmModule(module));
           await compileC({ cPath, outPath: exe("generated"), sanitize, optimization: "dev" });
@@ -84,6 +84,7 @@ for (const fixture of ["ir-refinements", "union-conversions"]) {
             "n:0 17", "n:1 43", "n:undefined true", "n:invalid TypeError", "n:narrow TypeError",
             "b:0 17", "b:1 43", "b:undefined true", "b:narrow TypeError",
             "i:0 17", "i:1 43", "i:0 17", "i:undefined true", "i:invalid TypeError", "i:narrow TypeError",
+            ...Array.from({ length: 32 }, (_, index) => `large:${index} ${index}`),
             "extract_bool true", "extract_bool:undefined TypeError", "extract_bool:wrong TypeError",
             "deferred_bool false", "deferred_bool:present true", "deferred_bool:wrong TypeError",
             "extract_f64 37", "extract_f64:undefined TypeError", "extract_f64:wrong TypeError",
