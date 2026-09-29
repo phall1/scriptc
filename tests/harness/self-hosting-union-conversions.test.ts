@@ -45,6 +45,7 @@ for (const fixture of ["ir-refinements", "union-conversions"]) {
         expect(stats.statementsIsland).toBe(0);
         expect(stats.functionsSkipped).toBe(0);
         if (!built.ok) throw new Error(built.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
+        if (!("binaryPath" in built)) throw new Error("native stage did not produce an executable");
         expect(built.backend).toBe(backend);
         expect(built.llvmRefusal).toBeUndefined();
         const nodePath = join(dir, "node.json"), nativePath = join(dir, "native.json");
@@ -72,7 +73,7 @@ for (const fixture of ["ir-refinements", "union-conversions"]) {
           expect(validateModule(module)).toEqual([]);
           expect(module.functions.filter((fn) => fn.name.endsWith("retag"))).toHaveLength(3);
           const cPath = join(dir, backend === "c" ? "generated.c" : "generated.ll");
-          writeFileSync(cPath, backend === "c" ? emitCModule(module) : emitLlvmModule(module, { sanitize }));
+          writeFileSync(cPath, backend === "c" ? emitCModule(module) : emitLlvmModule(module));
           await compileC({ cPath, outPath: exe("generated"), sanitize, optimization: "dev" });
           const generated = spawnSync(exe("generated"), [], runOptions);
           expect(generated.error).toBeUndefined();
