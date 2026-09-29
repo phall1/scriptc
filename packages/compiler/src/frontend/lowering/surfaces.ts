@@ -1000,6 +1000,9 @@ export const BUILTIN_MODULE_CONSTS: Record<string, Record<string, string | numbe
  * BUILTIN_MODULE_FNS; consumed by the fence taxonomy
  * (library/fence-eval.ts) and the attestation-parity test. */
 export const BUILTIN_MODULE_FN_ALIASES: Record<string, Record<string, readonly IrLibFn[] | undefined> | undefined> = {
+  url: {
+    pathToFileURL: ["url.pathToFileURLPlatform"],
+  },
   fs: {
     // Inline numeric O_* flags use a target-neutral runtime entry point.
     openSync: ["fs.openNumericSync"],

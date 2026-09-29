@@ -4,6 +4,7 @@ import { InternalCompilerError } from "../../errors.js";
  * function/lambda lowering and signature collection, and monomorphizing
  * generic instantiation (bounded by MAX_GENERIC_INSTANCES). */
 import * as ts from "../ts7/adapter.js";
+import { AstNode } from "../ts7/ast-node.js";
 import { bodyReadsArguments } from "../arguments-usage.js";
 import type { Lowerer } from "./lowerer.js";
 import { lowerGenMethodCall } from "./lower-generators.js";
@@ -99,11 +100,7 @@ export function funcTypeFromParamShapes(
     ret,
     ...(typedRest || dynRest || islandRest || argumentsAll ? { rest: true as const } : {}),
     ...(argumentsAll ? { argumentsAll: true as const } : {}),
-    ...(typedRest
-      ? { restAbi: "typed" as const }
-      : islandRest
-        ? { restAbi: "jsval" as const }
-        : {}),
+    ...(typedRest || islandRest ? { restAbi: typedRest ? "typed" as const : "jsval" as const } : {}),
   };
 }
 
@@ -520,7 +517,7 @@ function defaultParameterShape(lowerer: Lowerer, param: ts.ParameterDeclaration,
     }
     type ArgSource = ts.Expression | { ir: IrExpr };
     const isIr = (s: ArgSource | undefined): s is { ir: IrExpr } =>
-      s !== undefined && !("kind" in s);
+      s !== undefined && !(s instanceof AstNode);
     const sources: ArgSource[] = leading?.map((ir) => ({ ir })) ?? [];
     for (const arg of argNodes) {
       if (!ts.isSpreadElement(arg)) {
@@ -1822,10 +1819,6 @@ export function genericFnOf(lowerer: Lowerer, ident: ts.Identifier): GenericFnIn
     const last = body[body.length - 1];
     const mayFallThrough =
       !last || !(last.kind === "return" || last.kind === "throw" || last.kind === "rethrow" || last.kind === "runtimeFence");
-    const valued = infer.entries.filter(
-      (e): e is { stmt: IrStmt & { kind: "return"; value: IrExpr }; node: ts.Expression | null } =>
-        e.stmt.kind === "return" && e.stmt.value !== null && e.stmt.value !== undefined,
-    );
     const sawBare =
       mayFallThrough || infer.entries.some((e) => e.stmt.kind === "return" && (e.stmt.value === null || e.stmt.value === undefined));
     let final: IrType;
@@ -1833,8 +1826,10 @@ export function genericFnOf(lowerer: Lowerer, ident: ts.Identifier): GenericFnIn
       final = inst.returnType;
     } else {
       const distinct: IrType[] = [];
-      for (const e of valued) {
-        if (!distinct.some((t) => typeEquals(t, e.stmt.value.type))) distinct.push(e.stmt.value.type);
+      for (const e of infer.entries) {
+        if (e.stmt.kind !== "return" || e.stmt.value === null || e.stmt.value === undefined) continue;
+        const type = e.stmt.value.type;
+        if (!distinct.some((t) => typeEquals(t, type))) distinct.push(type);
       }
       if (distinct.length === 0) {
         final = DYN; // no valued return: JS completes with undefined — the dyn undefined, today's slot
@@ -2196,7 +2191,10 @@ function runtimeOptionalHofGenericBinding(
           if (
             ts.isCallExpression(expression) &&
             ts.isIdentifier(expression.expression) &&
-            broadCallbackSymbols.has(lowerer.checker.getSymbolAtLocation(expression.expression) ?? ({} as ts.Symbol))
+            (() => {
+              const symbol = lowerer.checker.getSymbolAtLocation(expression.expression);
+              return symbol !== undefined && broadCallbackSymbols.has(symbol);
+            })()
           ) {
             returnsBroadCallback = true;
             return "stop";
@@ -2905,10 +2903,11 @@ export function islandPrimitiveExit(lowerer: Lowerer, call: ts.CallExpression, r
   }
 
 function ffiSourceParams(binding: IrFfiImport): Exclude<IrFfiImport["params"][number], { context: string }>[] {
-  return binding.params.filter((param) => !isFfiContextParam(param)) as Exclude<
-    IrFfiImport["params"][number],
-    { context: string }
-  >[];
+  const params: Exclude<IrFfiImport["params"][number], { context: string }>[] = [];
+  for (const param of binding.params) {
+    if (!isFfiContextParam(param)) params.push(param);
+  }
+  return params;
 }
 
 function ffiParamDisplay(param: ReturnType<typeof ffiSourceParams>[number]): string {
@@ -2931,9 +2930,10 @@ function ffiCallbackInputDiagnostic(
   const signatures = lowerer.checker.getCallSignatures(callbackType);
   if (signatures.length !== 1) return null;
 
-  const nativeParams = descriptor.callback.params.filter(
-    (param): param is IrFfiCallbackParamClass => !isFfiContextParam(param),
-  );
+  const nativeParams: IrFfiCallbackParamClass[] = [];
+  for (const param of descriptor.callback.params) {
+    if (!isFfiContextParam(param)) nativeParams.push(param);
+  }
   let nativeIndex = 0;
   const params = signatures[0]!.getParameters();
   for (let i = 0; i < params.length; i++) {
@@ -3270,7 +3270,7 @@ export function lowerFfiCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr 
     }
     const loc = locOf(expr);
     const { binding: bindingFlavor, signature: signatureFlavor } = ffiFlavor(lowerer);
-    const bindingError = (detail: string): never => {
+    const bindingError: (detail: string) => never = (detail) => {
       lowerer.pushDiag(bindingFlavor(binding.name, detail, loc));
       throw new PoisonError();
     };
@@ -3278,9 +3278,8 @@ export function lowerFfiCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr 
       lowerer.pushDiag(signatureFlavor(binding.name, detail, loc));
       throw new PoisonError();
     };
-    const symbol =
-      lowerer.resolveValueSymbol(expr.expression) ??
-      bindingError("the call has no resolved TypeScript symbol");
+    const symbol = lowerer.resolveValueSymbol(expr.expression);
+    if (!symbol) bindingError("the call has no resolved TypeScript symbol");
     if (lowerer.ffiBindingSymbols !== null) {
       const validSymbols = lowerer.ffiBindingSymbols.get(binding.name);
       // No entry means the program-level pass already diagnosed this
@@ -5125,6 +5124,7 @@ function lowerStringMethodCallWithOptionalArgs(
           ? [1]
           : [];
   for (const index of zeroDefaultArgs) {
+    if (index === undefined) continue;
     const value = args[index];
     if (!value) continue;
     const coerced = lowerOptionalNumberDefault(lowerer, value, 0, value.loc);
@@ -5604,7 +5604,7 @@ function lowerStringPrototypeCall(
   const dynObjectWithoutMethodArgs = entry?.maxArgs === 0 && call.arguments.length === 1 &&
     receiverType.kind === "dyn" && plainObjectCoercionReceiver(lowerer, receiverNode);
   if (!scalar && !objectWithoutMethodArgs && !dynObjectWithoutMethodArgs && !(padding && receiverType.kind === "dyn")) {
-    return lowerer.noLowering(`String.prototype.${methodAccess.name.text}.call with ${lowerer.fmt(receiverType)} receivers`, call);
+    lowerer.noLowering(`String.prototype.${methodAccess.name.text}.call with ${lowerer.fmt(receiverType)} receivers`, call);
   }
   if (indexMethod) return lowerStringIndexCall(lowerer, call, indexMethod, receiverValue, receiverNode, call.arguments.slice(1));
   if (!entry) return null;
@@ -6202,7 +6202,8 @@ const DYN_STRING_ONLY_METHODS = new Set([
       // over side-effect-free reads (the operand re-evaluates/drops, the
       // `in`-operator fold discipline). dyn/caught/jsval arms have no
       // static tag answer and keep the narrow-first fence.
-      const def = lowerer.unions.get(arg.type.unionId);
+      const unionId = arg.type.unionId;
+      const def = lowerer.unions.get(unionId);
       const opaque = !def || def.arms.some((a) => a.kind === "dyn" || a.kind === "caught" || a.kind === "jsval");
       const arrayTags = lowerer.arrayValueTags(arg.type.unionId);
       const freeRead = arg.kind === "varRef" || arg.kind === "recordGet" || arg.kind === "fieldGet";
@@ -6214,7 +6215,7 @@ const DYN_STRING_ONLY_METHODS = new Set([
       }
       if (!opaque && freeRead && arrayTags.length > 1) {
         return arrayTags
-          .map((tag): IrExpr => ({ kind: "unionIsTag", unionId: (arg.type as { unionId: string }).unionId, tag, negated: false, value: arg, type: BOOL, loc }))
+          .map((tag): IrExpr => ({ kind: "unionIsTag", unionId: unionId, tag, negated: false, value: arg, type: BOOL, loc }))
           .reduce((left, right) => ({ kind: "logical", op: "||", left, right, type: BOOL, loc }));
       }
       lowerer.unsupported(
@@ -6996,8 +6997,8 @@ function loweredTemplateStrings(
         : lowerer.declaredReturnType(node, node);
     ret = lowerer.runtimeOptionalFunctionReturnType(node, ret);
     // A contextually-typed arrow/function EXPRESSION whose slot signature
-    // returns a UNION the inferred return doesn't spell adopts the slot's
-    // return as its ABI: `(n) => work()` (inferring Promise<void>) against
+    // returns a composite type the inferred return doesn't spell adopts
+    // the slot's return as its ABI: `(n) => work()` (inferring Promise<void>) against
     // an `(n) => Promise<void> | void` field must RETURN that union — the
     // body's returns coerce into it per return site (arm values wrap;
     // width-coercible records rebuild into their arm — the runJobs
@@ -7011,6 +7012,9 @@ function loweredTemplateStrings(
     // returns coerce; the spawn-wrapper ABI still returns a promise).
     // jsval-returning bodies stay out (adoption would force validated
     // exits the writer never asked for).
+    // Array and record returns also need the destination during literal
+    // construction: a callback building IrStmt[] must wrap each element at
+    // that recursive layout instead of first inferring narrower arrays.
     const isAsyncLike =
       !ts.isMethodDeclaration(node) &&
       node.modifiers?.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword) === true;
@@ -7041,8 +7045,8 @@ function loweredTemplateStrings(
       const ctxRet =
         isAsyncLike && ctxRetRaw?.kind === "promise" ? ctxRetRaw.inner : ctxRetRaw;
       if (
-        ctxRet?.kind === "union" &&
-        (innerRet.kind === "void" ? lowerer.armTag(ctxRet.unionId, UNDEFINED_T) >= 0 : true)
+        (ctxRet?.kind === "union" || ctxRet?.kind === "array" || ctxRet?.kind === "record") &&
+        (innerRet.kind !== "void" || (ctxRet.kind === "union" && lowerer.armTag(ctxRet.unionId, UNDEFINED_T) >= 0))
       ) {
         ret = isAsyncLike ? { kind: "promise", inner: ctxRet } : ctxRet;
       }
@@ -7182,7 +7186,9 @@ function loweredTemplateStrings(
             body = value.kind === "unitLit" ? [] : [{ kind: "exprStmt", expr: value, loc: locOf(node.body!) }];
           }
         } else {
-          let value = lowerer.lowerExpr(bodyExpr);
+          // Concise and block bodies use the same destination layout for
+          // fresh literals. Async bodies must inspect promises first.
+          let value = isAsync ? lowerer.lowerExpr(bodyExpr) : lowerer.lowerExprExpecting(bodyExpr, bodyReturn);
           // An async concise body whose value is itself a promise
           // (`async () => p`): the async machinery RESOLVES the returned
           // thenable into the function's own promise — lowerReturnValue's
@@ -7543,10 +7549,12 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
                 loc,
               }));
             } else {
+              if (settled.type.kind !== "dyn" &&
+                  !canConvertToDyn(settled.type, (id) => lowerer.shapes.get(id), (id) => lowerer.unions.get(id))) {
+                lowerer.unsupported("SC1090", fulfilledNode, "then fulfillment values that cannot cross the checked-dynamic boundary");
+              }
               const arg: IrExpr = settled.type.kind === "dyn" ? settled
-                : canConvertToDyn(settled.type, (id) => lowerer.shapes.get(id), (id) => lowerer.unions.get(id))
-                  ? { kind: "dynFrom", value: settled, type: DYN, loc }
-                  : lowerer.unsupported("SC1090", fulfilledNode, "then fulfillment values that cannot cross the checked-dynamic boundary");
+                : { kind: "dynFrom", value: settled, type: DYN, loc };
               body.push(...resultOf({
                 kind: "dynCall",
                 callee: { kind: "varRef", localId: fLocal.id, type: DYN, loc },
@@ -8435,7 +8443,7 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
     lowerer: Lowerer,
     receiver: IrExpr,
     argIr: IrType & { kind: "record" },
-    shape: { declaredOrder?: string[]; fields: { name: string; type: IrType }[] },
+    shape: import("../../ir/ir.js").IrRecordShape,
     loc: SrcLoc,
   ): IrExpr {
     const resultT = arrayOf(STRING);
@@ -8458,7 +8466,8 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
         loc,
       };
       const finalize = (): void => {
-        const current = lowerer.shapes.get(argIr.shapeId) ?? shape;
+        const latest = lowerer.shapes.get(argIr.shapeId);
+        const current: import("../../ir/ir.js").IrRecordShape = latest !== undefined ? latest : shape;
         const body: IrStmt[] = [
           { kind: "varDecl", localId: "out.0", init: { kind: "arrayLit", elems: [], type: resultT, loc }, loc },
         ];
@@ -9376,7 +9385,8 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
         loc,
       };
       const finalize = (): void => {
-        const current = lowerer.shapes.get(argIr.shapeId) ?? shape;
+        const latest = lowerer.shapes.get(argIr.shapeId);
+        const current: import("../../ir/ir.js").IrRecordShape = latest !== undefined ? latest : shape;
         const body: IrStmt[] = [
           { kind: "varDecl", localId: "out.0", init: { kind: "arrayLit", elems: [], type: resultT, loc }, loc },
         ];
@@ -9407,7 +9417,7 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
             if (undefTag >= 0) {
               guardUndefTag = undefTag;
               const arms = lowerer.unions.get(f.type.unionId)?.arms ?? [];
-              const others = arms.filter((a) => a.kind !== "undefinedT");
+              const others = arms.filter((a): boolean => a.kind !== "undefinedT");
               if (typeEquals(f.type, valueT ?? f.type)) {
               // The field union IS the result union (single-field shapes):
               // push the raw box — but then the undefined skip must NOT
@@ -10661,9 +10671,10 @@ export function lowerFunction(lowerer: Lowerer, decl: ts.FunctionDeclaration): I
       : mappedReceiver?.kind === "union"
         ? (() => {
             const arms = lowerer.unions.get(mappedReceiver.unionId)?.arms ?? [];
-            const objects = arms.filter((arm): arm is IrType & { kind: "object" } => arm.kind === "object");
-            return objects.length === 1 && arms.every((arm) => arm.kind === "object" || isUnitType(arm))
-              ? objects[0]!
+            const objects = arms.filter((arm): boolean => arm.kind === "object");
+            const object = objects[0];
+            return objects.length === 1 && object?.kind === "object" && arms.every((arm) => arm.kind === "object" || isUnitType(arm))
+              ? object
               : null;
           })()
         : null;
@@ -10720,9 +10731,10 @@ export function lowerFunction(lowerer: Lowerer, decl: ts.FunctionDeclaration): I
         : fieldType?.kind === "union"
           ? (() => {
               const arms = lowerer.unions.get(fieldType.unionId)?.arms ?? [];
-              const funcs = arms.filter((arm): arm is Extract<IrType, { kind: "func" }> => arm.kind === "func");
-              return funcs.length === 1 && arms.every((arm) => arm.kind === "func" || isUnitType(arm))
-                ? funcs[0]!
+              const funcs = arms.filter((arm): boolean => arm.kind === "func");
+              const func = funcs[0];
+              return funcs.length === 1 && func?.kind === "func" && arms.every((arm) => arm.kind === "func" || isUnitType(arm))
+                ? func
                 : null;
             })()
           : null;

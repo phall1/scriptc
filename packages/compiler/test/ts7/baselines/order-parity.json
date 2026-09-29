@@ -11271,6 +11271,60 @@
     "<repo>/tests/corpus/fresh-array-union-layout.js"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/contextual-return-layouts.ts": {
+   "order": [
+    "<repo>/tests/corpus/contextual-return-layouts.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/dynamic-function-descriptors.js": {
+   "order": [
+    "<repo>/tests/corpus/dynamic-function-descriptors.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/regexp-string-coercion.js": {
+   "order": [
+    "<repo>/tests/corpus/regexp-string-coercion.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/compound-presence-guards.ts": {
+   "order": [
+    "<repo>/tests/corpus/compound-presence-guards.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/union-record-clone.ts": {
+   "order": [
+    "<repo>/tests/corpus/union-record-clone.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/generic-record-index.ts": {
+   "order": [
+    "<repo>/tests/corpus/generic-record-index.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/path-to-file-url-options.ts": {
+   "order": [
+    "<repo>/tests/corpus/path-to-file-url-options.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/file-url-percent-decoding.ts": {
+   "order": [
+    "<repo>/tests/corpus/file-url-percent-decoding.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/diagnostics/union-clone-override-width.ts": {
+   "order": [
+    "<repo>/tests/diagnostics/union-clone-override-width.ts"
+   ],
+   "diags": []
   }
  }
 }

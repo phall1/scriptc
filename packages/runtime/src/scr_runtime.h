@@ -3055,6 +3055,7 @@ ScrStr *scr_url_href(ScrUrl *u);     /* +1; also toString() */
 ScrStr *scr_url_to_path(ScrUrl *u);      /* +1, or throws */
 ScrStr *scr_url_str_to_path(ScrStr *s);  /* +1, or throws */
 ScrUrl *scr_url_from_path(ScrStr *path); /* +1; throws on win32 UNC malformations only */
+ScrUrl *scr_url_from_path_platform(ScrStr *path, bool windows); /* +1; explicit options.windows */
 /* The bridge pair's win32 arms as direct entry points (the public pair
  * selects by TARGET at compile time — Node's isWindows): the host-side
  * differential tests exercise the Windows behavior from any platform,

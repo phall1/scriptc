@@ -16,7 +16,7 @@ export function lowerStringReplacement(
   args: readonly ts.Expression[],
 ): IrExpr {
   if (args.length > 2 || args.some(ts.isSpreadElement)) {
-    return lowerer.noLowering(`string .${method} with spread or extra arguments`, call);
+    lowerer.noLowering(`string .${method} with spread or extra arguments`, call);
   }
   const loc = locOf(call);
   const primitive = (type: IrType): boolean => type.kind === "union"
@@ -85,7 +85,7 @@ export function lowerStringReplacement(
           }))]),
         ], loc,
       },
-      builder.append(builder.slice(subject, end)),
+      builder.append(builder.slice(subject, end, undefined)),
       { kind: "return", value: builder.join(), loc },
     ];
     const params = [
@@ -128,7 +128,7 @@ function replacementTemplateHelper(lowerer: Lowerer, loc: SrcLoc): string {
     ["$", strLit("$", loc)],
     ["&", needle],
     ["`", builder.slice(subject, numLit(0, loc), position)],
-    ["'", builder.slice(subject, builder.add(position, builder.length(needle)))],
+    ["'", builder.slice(subject, builder.add(position, builder.length(needle)), undefined)],
   ];
   let selection: IrStmt[] = [builder.append(strLit("$", loc))];
   for (let index = expansions.length - 1; index >= 0; index--) {
@@ -168,7 +168,7 @@ function replacementTemplateHelper(lowerer: Lowerer, loc: SrcLoc): string {
           ...selection,
         ], loc,
       },
-      builder.append(builder.slice(template, cursor)),
+      builder.append(builder.slice(template, cursor, undefined)),
       { kind: "return", value: builder.join(), loc },
     ], loc,
   });
@@ -182,7 +182,7 @@ function stringBuilder(loc: SrcLoc, chunks: IrExpr) {
     add(left: IrExpr, right: IrExpr): IrExpr { return { kind: "bin", op: "+", left, right, type: F64, loc }; },
     compare(op: "<" | "<=" | "===", left: IrExpr, right: IrExpr): IrExpr { return { kind: "bin", op, left, right, type: BOOL, loc }; },
     length(receiver: IrExpr): IrExpr { return { kind: "strIntrinsic", method: "length", receiver, args: [], type: F64, loc }; },
-    slice(receiver: IrExpr, start: IrExpr, end?: IrExpr): IrExpr {
+    slice(receiver: IrExpr, start: IrExpr, end: IrExpr | undefined): IrExpr {
       return { kind: "strIntrinsic", method: "slice", receiver, args: end ? [start, end] : [start], type: STRING, loc };
     },
     append(value: IrExpr): IrStmt {

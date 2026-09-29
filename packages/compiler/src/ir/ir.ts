@@ -2410,6 +2410,9 @@ export type IrLibFn =
   | "url.fileURLToPathUrl"
   | "url.fileURLToPathStr"
   | "url.pathToFileURL"
+  /** Explicit path syntax from the options.windows argument, independent
+   * of the executable's host platform. Windows UNC input can throw. */
+  | "url.pathToFileURLPlatform"
   /** pathToFileURL under a win32 TARGET: the same scr_url_from_path call
    * (the runtime selects the win32 arm by _WIN32), but a distinct IR name
    * because that arm THROWS for malformed UNC inputs — may-throw seeds on
@@ -7945,6 +7948,7 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   // raises ERR_INVALID_ARG_VALUE TypeErrors for malformed UNC inputs, so
   // only THIS flavor seeds may-throw — posix emission stays untouched.
   "url.pathToFileURLWin32",
+  "url.pathToFileURLPlatform",
   // URLSearchParams from a string[][]: Node's ERR_INVALID_TUPLE TypeError
   // on a row that is not a [name, value] pair. The rest of the sp family
   // never throws.

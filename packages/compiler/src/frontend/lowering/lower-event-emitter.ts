@@ -110,9 +110,10 @@ function scannedEmitterInfo(lowerer: Lowerer, receiver: IrType | null): ClassInf
     className = receiver.className;
   } else if (receiver.kind === "union") {
     const arms = lowerer.unions.get(receiver.unionId)?.arms ?? [];
-    const objects = arms.filter((arm): arm is Extract<IrType, { kind: "object" }> => arm.kind === "object");
-    if (objects.length !== 1 || !arms.every((arm) => arm.kind === "object" || isUnitType(arm))) return null;
-    className = objects[0]!.className;
+    const objects = arms.filter((arm): boolean => arm.kind === "object");
+    const object = objects[0];
+    if (objects.length !== 1 || object?.kind !== "object" || !arms.every((arm) => arm.kind === "object" || isUnitType(arm))) return null;
+    className = object.className;
   } else {
     return null;
   }

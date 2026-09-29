@@ -27,7 +27,7 @@ export function lowerStringSplitCall(
 ): IrExpr {
   const loc = locOf(call);
   if (argumentNodes.length > 2 || argumentNodes.some(ts.isSpreadElement)) {
-    return lowerer.noLowering(`.split with ${argumentNodes.length} arguments`, call);
+    lowerer.noLowering(`.split with ${argumentNodes.length} arguments`, call);
   }
   const separatorNode = argumentNodes[0];
   const undefinedSeparator = separatorNode ? lowerStaticallyUndefinedArgument(lowerer, separatorNode) : null;
@@ -155,7 +155,7 @@ export function lowerStringIndexCall(
 ): IrExpr {
   const loc = locOf(call);
   if (argumentNodes.length > 1 || argumentNodes.some(ts.isSpreadElement)) {
-    return lowerer.noLowering(`String.prototype.${method} with ${argumentNodes.length} arguments`, call);
+    lowerer.noLowering(`String.prototype.${method} with ${argumentNodes.length} arguments`, call);
   }
   const indexNode = argumentNodes[0];
   let index = lowerPositionArgument(lowerer, indexNode, numLit(0, loc));
@@ -164,7 +164,7 @@ export function lowerStringIndexCall(
   }
   const valueType = method === "at" ? STRING : F64;
   const resultType = lowerer.withUndefinedArmOf(valueType);
-  if (!resultType || resultType.kind !== "union") return lowerer.noLowering(`String.prototype.${method} result`, call);
+  if (!resultType || resultType.kind !== "union") lowerer.noLowering(`String.prototype.${method} result`, call);
   const undefinedTag = lowerer.armTag(resultType.unionId, UNDEFINED_T);
   const valueTag = lowerer.armTag(resultType.unionId, valueType);
   const key = `str.index:${method}:${typeKey(receiver.type)}:${typeKey(index.type)}`;
@@ -280,7 +280,7 @@ export function lowerStringPaddingCall(
   argumentNodes: readonly ts.Expression[],
 ): IrExpr {
   if (argumentNodes.length > 2) {
-    return lowerer.noLowering(`.${method} with ${argumentNodes.length} arguments`, call);
+    lowerer.noLowering(`.${method} with ${argumentNodes.length} arguments`, call);
   }
   const loc = locOf(call);
   const maxLength = lowerPositionArgument(lowerer, argumentNodes[0], numLit(0, loc));

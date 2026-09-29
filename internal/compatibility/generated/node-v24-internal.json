@@ -108320,8 +108320,9 @@
         "status": "partial",
         "evidence": "derived:descendants",
         "tests": [
-          "tests/corpus/1794-searchparams-url-live.ts",
           "tests/corpus/2946-url-port-hash.ts",
+          "tests/corpus/file-url-percent-decoding.ts",
+          "tests/corpus/path-to-file-url-options.ts",
           "tests/corpus/url-runtime-base.ts"
         ]
       },
@@ -109610,7 +109611,7 @@
         "status": "partial",
         "evidence": "surface-manifest:node-builtin.url.fileURLToPath",
         "tests": [
-          "tests/corpus/1794-searchparams-url-live.ts"
+          "tests/corpus/file-url-percent-decoding.ts"
         ]
       },
       "dynamic": {
@@ -109702,7 +109703,7 @@
         "status": "partial",
         "evidence": "surface-manifest:node-builtin.url.pathToFileURL",
         "tests": [
-          "tests/corpus/1794-searchparams-url-live.ts"
+          "tests/corpus/path-to-file-url-options.ts"
         ]
       },
       "dynamic": {

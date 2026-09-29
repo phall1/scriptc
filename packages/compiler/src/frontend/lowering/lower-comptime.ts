@@ -87,20 +87,22 @@ function describeComptimeValue(v: unknown): string {
       if (lowerer.frontendServices === undefined) throw new Error("compile-time evaluation requires frontend services");
       result = lowerer.frontendServices.evaluateComptime(cb.getText(), COMPTIME_TIMEOUT_MS);
     } catch (e) {
-      // Errors born inside the vm context (and the timeout error itself) are
-      // CROSS-REALM objects — `instanceof Error` is false — so the code and
-      // message are read structurally.
-      const err = typeof e === "object" && e !== null ? (e as { code?: unknown; message?: unknown }) : null;
-      const detail =
-        err?.code === "ERR_SCRIPT_EXECUTION_TIMEOUT"
-          ? `evaluation exceeded the ${COMPTIME_TIMEOUT_MS}ms compile-time budget`
-          : `the callback threw: ${err && typeof err.message === "string" ? err.message : String(e)}`;
+      const detail = comptimeFailureDetail(e);
       lowerer.pushDiag(comptimeFailedDiag(detail, locOf(cb)));
       throw new PoisonError();
     }
     // 6. Result → literal IR, checked against T.
     return lowerer.comptimeValueToIr(result, target, "$", cb);
   }
+
+/** VM errors may come from another realm; read their public error fields
+ * structurally rather than relying on the host Error constructor. */
+function comptimeFailureDetail(error: unknown): string {
+  const err = typeof error === "object" && error !== null ? (error as { code?: unknown; message?: unknown }) : null;
+  return err?.code === "ERR_SCRIPT_EXECUTION_TIMEOUT"
+    ? `evaluation exceeded the ${COMPTIME_TIMEOUT_MS}ms compile-time budget`
+    : `the callback threw: ${err && typeof err.message === "string" ? err.message : String(error)}`;
+}
 
 /** True when a comptime result of this type can be written as a literal
    * expression: number/string/boolean, arrays and record shapes of those,
@@ -207,7 +209,7 @@ function describeComptimeValue(v: unknown): string {
     path: string,
     blame: ts.Node,): IrExpr {
     const loc = locOf(blame);
-    const fail = (got: string): never => {
+    const fail: (got: string) => never = (got) => {
       lowerer.pushDiag(
         comptimeFailedDiag(`expected '${lowerer.fmt(expected)}' at ${path}, got ${got}`, loc),
       );
@@ -215,22 +217,22 @@ function describeComptimeValue(v: unknown): string {
     };
     switch (expected.kind) {
       case "f64": {
-        if (typeof value !== "number") return fail(describeComptimeValue(value));
+        if (typeof value !== "number") fail(describeComptimeValue(value));
         if (!Number.isFinite(value)) {
-          return fail(`${String(value)} (only finite numbers can be written as literals)`);
+          fail(`${String(value)} (only finite numbers can be written as literals)`);
         }
         return { kind: "numLit", value, type: expected, loc };
       }
       case "string": {
-        if (typeof value !== "string") return fail(describeComptimeValue(value));
+        if (typeof value !== "string") fail(describeComptimeValue(value));
         return { kind: "strLit", value, type: expected, loc };
       }
       case "bool": {
-        if (typeof value !== "boolean") return fail(describeComptimeValue(value));
+        if (typeof value !== "boolean") fail(describeComptimeValue(value));
         return { kind: "boolLit", value, type: expected, loc };
       }
       case "array": {
-        if (!Array.isArray(value)) return fail(describeComptimeValue(value));
+        if (!Array.isArray(value)) fail(describeComptimeValue(value));
         const elems = (value as unknown[]).map((el, i) =>
           lowerer.comptimeValueToIr(el, expected.elem, `${path}[${i}]`, blame),
         );
@@ -238,7 +240,7 @@ function describeComptimeValue(v: unknown): string {
       }
       case "record": {
         if (typeof value !== "object" || value === null || Array.isArray(value)) {
-          return fail(describeComptimeValue(value));
+          fail(describeComptimeValue(value));
         }
         const shape = lowerer.shapes.get(expected.shapeId)!; // bakeable-checked
         const obj = value as Record<string, unknown>;

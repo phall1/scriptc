@@ -972,7 +972,8 @@ export function lowerStreamUnderscoreAssign(lowerer: Lowerer, expr: ts.BinaryExp
   if (!ts.isPropertyAccessExpression(expr.left) || expr.left.questionDotToken) return null;
   const methodName = expr.left.name.text;
   if (!methodName.startsWith("_")) return null;
-  const optionByMethod = new Map(Array.from(UNDERSCORE_METHODS, ([o, m]) => [m, o] as const));
+  const optionByMethod = new Map<string, string>();
+  for (const [option, method] of UNDERSCORE_METHODS) optionByMethod.set(method, option);
   if (!optionByMethod.has(methodName) && methodName !== "_writev" && methodName !== "_construct") return null;
   const recv = tryLowerExpression(lowerer, expr.left.expression);
   if (!recv || recv.type.kind !== "object") return null;
@@ -1205,8 +1206,8 @@ function lowerStreamArg(lowerer: Lowerer, node: ts.Expression, what: "finished" 
  * and answers the throw as the whole call's value (Node throws before
  * registering anything, so the other arguments never evaluate their
  * effects; listener arguments are effect-free in practice). */
-class StreamArgTypeThrow {
-  constructor(readonly expr: IrExpr) {}
+class StreamArgTypeThrow extends Error {
+  constructor(readonly expr: IrExpr) { super("stream argument is not a stream"); }
 }
 
 /** The finished/pipeline completion callback: an inline function lowers

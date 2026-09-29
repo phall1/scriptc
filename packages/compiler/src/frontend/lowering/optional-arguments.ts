@@ -133,6 +133,6 @@ export function positionNumber(
       else_: { kind: "libCall", fn: "dyn.toNumberCoerce", args: [value], type: F64, loc },
       type: F64, loc,
     };
-    default: return lowerer.noLowering(`${subject} of '${lowerer.fmt(value.type)}' values`, node);
+    default: lowerer.noLowering(`${subject} of '${lowerer.fmt(value.type)}' values`, node);
   }
 }

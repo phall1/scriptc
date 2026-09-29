@@ -888,7 +888,7 @@ function lowerBuiltinOptionalDefault(
     }
     const loc = locOf(call);
     if (pathsCall) {
-      const result = requireResolvePathsRuntime(baseFile.fileName, specifier, lowerer.targetPlatform);
+      const result = requireResolvePathsRuntime(baseFile.fileName, specifier, lowerer.targetPlatform, lowerer.frontendServices);
       if (result !== null && !Array.isArray(result)) {
         return runtimeResolveThrow(result as RuntimeResolveError, lowerer.irTypeOf(call), loc);
       }
@@ -896,7 +896,7 @@ function lowerBuiltinOptionalDefault(
         ? { kind: "unitLit", unit: "null", type: NULL_T, loc }
         : {
             kind: "arrayLit",
-            elems: result.map((value) => ({ kind: "strLit", value, type: STRING, loc })),
+            elems: (result as readonly string[]).map((value): IrExpr => ({ kind: "strLit", value, type: STRING, loc })),
             type: arrayOf(STRING),
             loc,
           };
@@ -915,6 +915,7 @@ function lowerBuiltinOptionalDefault(
       specifier,
       lowerer.targetPlatform,
       paths,
+      lowerer.frontendServices,
     );
     return result.ok
       ? { kind: "strLit", value: result.value, type: STRING, loc }
@@ -1626,8 +1627,8 @@ function lowerFsSyncBufferWindow(
         );
       }
       const path = lowerer.lowerExprExpecting(expr.arguments[0]!, STRING);
-      const defaultFlags = { kind: "strLit", value: "r", type: STRING, loc } satisfies IrExpr;
-      const defaultMode = { kind: "numLit", value: 0o666, type: F64, loc } satisfies IrExpr;
+      const defaultFlags: IrExpr = { kind: "strLit", value: "r", type: STRING, loc };
+      const defaultMode: IrExpr = { kind: "numLit", value: 0o666, type: F64, loc };
       const flags = expr.arguments[1]
         ? lowerBuiltinOptionalDefault(lowerer, expr.arguments[1]!, STRING, defaultFlags)
         : defaultFlags;
@@ -2456,6 +2457,26 @@ function lowerFsSyncBufferWindow(
     }
     const required = fn.params.length - (fn.defaults?.length ?? 0);
     const hasSpread = expr.arguments.some(ts.isSpreadElement);
+    if (!hasSpread && bi.module === "url" && bi.member === "pathToFileURL" && expr.arguments.length === 2) {
+      let options = expr.arguments[1]!;
+      while (ts.isParenthesizedExpression(options) || ts.isSatisfiesExpression(options)) options = options.expression;
+      if (!ts.isObjectLiteralExpression(options) || options.properties.length > 1) {
+        lowerer.noLowering("pathToFileURL with these options", options, "use a literal { windows: boolean } options object");
+      }
+      let windowsNode: ts.Expression | null = null;
+      const property = options.properties[0];
+      if (property) {
+        if ((!ts.isPropertyAssignment(property) && !ts.isShorthandPropertyAssignment(property)) ||
+            (!ts.isIdentifier(property.name) && !ts.isStringLiteral(property.name)) || property.name.text !== "windows") {
+          lowerer.noLowering("pathToFileURL with these options", property, "use a literal { windows: boolean } options object");
+        }
+        windowsNode = ts.isPropertyAssignment(property) ? property.initializer : property.name;
+      }
+      const path = lowerer.lowerExprExpecting(expr.arguments[0]!, STRING);
+      const defaultWindows: IrExpr = { kind: "boolLit", value: lowerer.targetPlatform === "win32", type: BOOL, loc };
+      const windows = windowsNode ? lowerOptionalArgument(lowerer, windowsNode, BOOL, defaultWindows) : defaultWindows;
+      return { kind: "libCall", fn: "url.pathToFileURLPlatform", args: [path, windows], type: fn.result, loc };
+    }
     if (hasSpread && bi.module === "url" && bi.member === "fileURLToPath") {
       lowerer.noLowering(
         "fileURLToPath with spread arguments",
@@ -5824,7 +5845,7 @@ function lowerOptionalStringSearchParams(lowerer: Lowerer, init: IrExpr, loc: Sr
     const receiver = (): IrExpr => lowerer.lowerExprExpecting(access.expression, FILEHANDLE_T);
     const promise = (inner: IrType): IrType => ({ kind: "promise", inner });
     const num = (node: ts.Expression | undefined, dflt: number): { value: IrExpr; defaulted: IrExpr } => {
-      const defaultValue = { kind: "numLit", value: dflt, type: F64, loc } satisfies IrExpr;
+      const defaultValue: IrExpr = { kind: "numLit", value: dflt, type: F64, loc };
       if (!node) return { value: defaultValue, defaulted: boolLit(true, loc) };
       const undefinedArg = lowerStaticallyUndefinedArgument(lowerer, node);
       if (undefinedArg) {
@@ -7330,9 +7351,11 @@ function lowerProcessIpcSend(lowerer: Lowerer, call: ts.CallExpression): IrExpr 
       );
     const callType = lowerer.mapTypeOf(lowerer.typeOf(call));
     if (!callType) fence();
-    const result = promiseForm
-      ? callType.kind === "promise" ? callType.inner : fence()
-      : callType;
+    let result = callType;
+    if (promiseForm) {
+      if (callType.kind !== "promise") fence();
+      result = callType.inner;
+    }
     if (result?.kind !== "array" || result.elem.kind !== "record") fence();
     const shape = lowerer.shapes.get(result.elem.shapeId);
     if (
@@ -7523,9 +7546,9 @@ function lowerProcessIpcSend(lowerer: Lowerer, call: ts.CallExpression): IrExpr 
       else if (arm.kind !== "undefinedT" && arm.kind !== "f64") fence();
     }
     if (!sawStr || !sawArr) fence();
-    const str = call.arguments[0]
-      ? lowerer.lowerExprExpecting(call.arguments[0], STRING)
-      : lowerer.noLowering("querystring.parse without a query string", call);
+    const argument = call.arguments[0];
+    if (!argument) lowerer.noLowering("querystring.parse without a query string", call);
+    const str = lowerer.lowerExprExpecting(argument, STRING);
     const sep = qsSepEqArg(lowerer, call.arguments[1], "&", "querystring.parse", loc);
     const eq = qsSepEqArg(lowerer, call.arguments[2], "=", "querystring.parse", loc);
     // The options walk: maxKeys lowers (Node's rule — > 0 caps the pair

@@ -1,16 +1,5 @@
-/** Integer spelling for compiler-generated names and escapes. These
- * callers need exact nonnegative integers, not Number.toString's general
- * fractional-radix conversion. Division preserves all safe integer bits. */
-export function unsignedHex(value: number): string {
-  if (!Number.isSafeInteger(value) || value < 0) throw new RangeError("hexadecimal value must be a nonnegative safe integer");
-  const digits = "0123456789abcdef";
-  let result = "";
-  do {
-    result = digits.charAt(value % 16) + result;
-    value = Math.floor(value / 16);
-  } while (value !== 0);
-  return result;
-}
+import { unsignedHex } from "../format-integer.js";
+export { unsignedHex } from "../format-integer.js";
 
 /** Three octal digits prevent a following source digit extending an escape. */
 export function octalByte(value: number): string {

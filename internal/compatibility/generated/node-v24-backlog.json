@@ -92473,7 +92473,7 @@
           "confidence": "high",
           "source": "surface-manifest:node-builtin.url.fileURLToPath",
           "tests": [
-            "tests/corpus/1794-searchparams-url-live.ts"
+            "tests/corpus/file-url-percent-decoding.ts"
           ]
         },
         "dynamic": {
@@ -92580,7 +92580,7 @@
           "confidence": "high",
           "source": "surface-manifest:node-builtin.url.pathToFileURL",
           "tests": [
-            "tests/corpus/1794-searchparams-url-live.ts"
+            "tests/corpus/path-to-file-url-options.ts"
           ]
         },
         "dynamic": {

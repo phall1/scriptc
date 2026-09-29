@@ -3,21 +3,21 @@
  * This is deliberately separate from resolve.ts: that resolver answers the
  * TypeScript program's TYPE surface and may correctly select a .d.ts file,
  * while import.meta.resolve / require.resolve must answer Node's executable
- * file or URL. CJS resolution delegates to the pinned Node 24 host for exact
- * exports/main/extension/error behavior. The host API does not expose its
- * failed lookup candidates, so those builds decline persistent frontend-cache
- * publication rather than retaining an incomplete dependency snapshot. ESM
+ * file or URL. Native CJS resolution uses the shared filesystem resolver,
+ * including exact exports/imports targets and legacy extension/index probes;
+ * a Node host supplies its resolver to preserve process settings and hooks. ESM
  * package success uses the tracked embedded-graph resolver under Node's import
  * conditions; relative and URL-like specifiers are pure URL resolution and do
  * not require the target to exist, matching Node. */
 
-import { createRequire, isBuiltin } from "node:module";
+import { isBuiltin } from "node:module";
 import { isAbsolute } from "node:path";
 import { pathToFileURL } from "node:url";
 import { markFrontendInputsUnstable } from "./input-tracker.js";
 import { NpmGraphBuilder, probeNodeImportRefusal } from "./npm.js";
 import type { FrontendServices } from "./services.js";
 import { wasiGuestPath } from "../wasi-paths.js";
+import { cjsResolvePaths, resolveCjsRuntime } from "./cjs-resolve.js";
 
 export interface RuntimeResolveError {
   name: string;
@@ -99,17 +99,18 @@ export function resolveRequireRuntime(
   specifier: string,
   targetPlatform: string,
   paths?: readonly string[],
+  services?: FrontendServices,
 ): RuntimeResolveResult {
+  // Legacy global lookup locations depend on the process environment and
+  // executable prefix, which are not part of the filesystem snapshot.
   markFrontendInputsUnstable();
   try {
-    const require = createRequire(pathToFileURL(fromFile));
-    const value = paths === undefined
-      ? require.resolve(specifier)
-      : require.resolve(specifier, { paths: [...paths] });
-    return {
-      ok: true,
-      value: isAbsolute(value) ? runtimePathForTarget(value, targetPlatform) : value,
-    };
+    const resolver = services?.runtimeModuleResolver;
+    const result: RuntimeResolveResult = resolver === undefined
+      ? resolveCjsRuntime(fromFile, specifier, paths)
+      : { ok: true, value: resolver.resolve(fromFile, specifier, paths) };
+    if (!result.ok) return result;
+    return { ok: true, value: isAbsolute(result.value) ? runtimePathForTarget(result.value, targetPlatform) : result.value };
   } catch (error) {
     return { ok: false, error: errorShape(error) };
   }
@@ -120,10 +121,12 @@ export function requireResolvePathsRuntime(
   fromFile: string,
   specifier: string,
   targetPlatform: string,
+  services?: FrontendServices,
 ): readonly string[] | null | RuntimeResolveError {
   markFrontendInputsUnstable();
   try {
-    const paths = createRequire(pathToFileURL(fromFile)).resolve.paths(specifier);
+    const resolver = services?.runtimeModuleResolver;
+    const paths = resolver === undefined ? cjsResolvePaths(fromFile, specifier) : resolver.lookupPaths(fromFile, specifier);
     return paths?.map((path) => runtimePathForTarget(path, targetPlatform)) ?? null;
   } catch (error) {
     return errorShape(error);

@@ -3,7 +3,8 @@
  * generated program defines immutable metadata once, while the runtime
  * registry tracks cache membership, parent/children, and loaded state as
  * require sites execute. */
-import { posix, win32 } from "node:path";
+import * as posix from "node:path/posix";
+import * as win32 from "node:path/win32";
 import * as ts from "../ts7/adapter.js";
 import type { Lowerer } from "./lowerer.js";
 import type { FileParts } from "./lower-modules.js";
@@ -76,12 +77,15 @@ function moduleFileName(lowerer: Lowerer, sf: ts.SourceFile): string {
 }
 
 function nodeModulePaths(fileName: string, targetPlatform: string): string[] {
-  const api = targetPlatform === "win32" ? win32 : posix;
+  const windows = targetPlatform === "win32";
   const paths: string[] = [];
-  let dir = api.dirname(fileName);
+  let dir = windows ? win32.dirname(fileName) : posix.dirname(fileName);
   for (;;) {
-    if (api.basename(dir).toLowerCase() !== "node_modules") paths.push(api.join(dir, "node_modules"));
-    const parent = api.dirname(dir);
+    const basename = windows ? win32.basename(dir) : posix.basename(dir);
+    if (basename.toLowerCase() !== "node_modules") {
+      paths.push(windows ? win32.join(dir, "node_modules") : posix.join(dir, "node_modules"));
+    }
+    const parent = windows ? win32.dirname(dir) : posix.dirname(dir);
     if (parent === dir) break;
     dir = parent;
   }
@@ -99,7 +103,7 @@ export function cjsModuleRegistryPrelude(lowerer: Lowerer, loc: IrExpr["loc"]): 
     const moduleId = index + 1;
     const filename = moduleFileName(lowerer, sf);
     const isMain = sf === lowerer.entry && !isNodeEsmFile(lowerer.entry, lowerer.program);
-    const path = (lowerer.targetPlatform === "win32" ? win32 : posix).dirname(filename);
+    const path = lowerer.targetPlatform === "win32" ? win32.dirname(filename) : posix.dirname(filename);
     const paths: IrExpr = {
       kind: "arrayLit",
       elems: nodeModulePaths(filename, lowerer.targetPlatform).map((value) => strLit(value, loc)),

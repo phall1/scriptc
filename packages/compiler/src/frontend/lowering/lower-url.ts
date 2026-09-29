@@ -12,7 +12,7 @@ export function lowerUrlNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
   const args = expr.arguments ?? [];
   const loc = locOf(expr);
   if (args.length < 1 || args.length > 2 || args.some(ts.isSpreadElement)) {
-    return lowerer.noLowering("URL construction with spread, missing, or extra arguments", expr);
+    lowerer.noLowering("URL construction with spread, missing, or extra arguments", expr);
   }
   if (args.length === 2) {
     const folded = staticForkString(lowerer.program, expr);

@@ -349,6 +349,7 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "url.fileURLToPathUrl": { argTypes: [URL_T], result: STRING },
   "url.fileURLToPathStr": { argTypes: [STRING], result: STRING },
   "url.pathToFileURL": { argTypes: [STRING], result: URL_T },
+  "url.pathToFileURLPlatform": { argTypes: [STRING, BOOL], result: URL_T },
   "url.pathToFileURLWin32": { argTypes: [STRING], result: URL_T },
   "sp.new": { argTypes: [], result: SEARCH_PARAMS_T },
   "sp.parse": { argTypes: [STRING], result: SEARCH_PARAMS_T },
