@@ -422,3 +422,13 @@ test("mixed literal discriminators resolve field unions declared later", () => {
   mod.unions![0]!.discriminant!.cases[1]!.values.push(false);
   expect(validateModule(mod).some((error) => error.message.includes("invalid or repeated"))).toBe(true);
 });
+
+
+test("typed-array brand tests serialize their element kind and reject misplaced brands", () => {
+  const expr: IrExpr = { kind: "dynTest", test: "bytes", bytesElem: "u16", value: { kind: "dynObjLit", type: DYN, loc }, type: BOOL, loc };
+  const mod = expressionModule(expr, []);
+  expect(validateModule(mod)).toEqual([]);
+  expect(deserializeModule(serializeModule(mod))).toEqual(mod);
+  expr.test = "array";
+  expect(validateModule(mod).map((d) => d.message)).toContain("in main: dynTest bytesElem requires a valid bytes test");
+});

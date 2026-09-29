@@ -3252,15 +3252,11 @@ typedef enum {
    * drops object members holding it and prints null for array slots,
    * exactly Node. dynCheck matches it against exactly the undefined arm. */
   SCR_DYN_UNDEF,
-  /* A Uint8Array/Buffer VALUE. Never produced by the parser — it enters
-   * the checked-dynamic tree through the compiler's static→dyn converters (a bytes<u8>
-   * value flowing into an `unknown` slot: stdin chunks passed to
-   * unknown-typed helpers). Owns a ScrBytes payload (a COPY of the static
-   * source — the boundary's aliasing stance). typeof answers "object"
-   * (kind tests all miss), String() joins the elements ("1,2,3" —
-   * Uint8Array.prototype.toString), JSON serializes the index-keyed
-   * object form ({"0":1}), and dynCheck extracts a fresh copy against a
-   * Uint8Array target. */
+  /* A numeric typed-array/Buffer value retained by reference. Boxing and
+   * checked extraction preserve the view, exact element kind, and backing
+   * allocation. typeof answers "object"; String() joins numeric elements
+   * (Buffer keeps its encoding behavior); JSON writes an index-keyed object.
+   * Exact-brand tests accept Buffer as Uint8Array. */
   SCR_DYN_BYTES,
   /* A FUNCTION value. Never produced by the parser — it enters the checked-dynamic tree
    * through the compiler's static→dyn converters (a typed closure flowing
@@ -3625,6 +3621,8 @@ void scr_dyn_typed_ref_cache_cast(
     void *(*retain)(void *), void (*release)(void *));
 /* Retains a SCR_DYN_BYTES view (+1) for checked extraction. */
 ScrBytes *scr_dyn_bytes_unbox(const ScrDyn *d);
+/* Exact numeric typed-array brand; elem is a ScrBytesElem tag. */
+bool scr_dyn_bytes_is(const ScrDyn *d, int elem);
 void scr_dyn_arr_push(ScrDyn *arr, ScrDyn *item);
 /* Spread completion for a runtime-arity argument list (`f(...xs)` in the
  * checked-dynamic tier): flattens `src` into `arr` per JS's spread over the
@@ -4687,6 +4685,7 @@ ScrPromise *scr_fetch_static(ScrStr *url, ScrDyn *init); /* +1 promise<Response 
 ScrDyn *scr_fetch_response_new(ScrDyn *body, ScrDyn *init); /* borrowed args; +1 Response handle or NULL pending */
 ScrPromise *scr_fetch_response_json(ScrDyn *response); /* +1 promise<dyn> */
 ScrPromise *scr_fetch_response_text(ScrDyn *response); /* +1 promise<dyn> */
+ScrPromise *scr_fetch_response_array_buffer(ScrDyn *response); /* +1 promise<dyn> */
 ScrPromise *scr_fetch_response_bytes(ScrDyn *response); /* +1 promise<dyn> */
 ScrDyn *scr_fetch_abort_controller_new(void); /* +1 AbortController handle */
 /* Borrowed number; +1 AbortSignal handle or NULL pending. */
@@ -5245,7 +5244,7 @@ double scr_bit_ushr(double a, double b);
 double scr_bit_not(double a);
 
 /* ── typed arrays / Buffer (scr_bytes.c) ──────────────────────────────
- * ONE runtime representation for Uint8Array/Uint32Array/Float32Array/Float64Array,
+ * ONE runtime representation for the supported numeric typed arrays,
  * Node's Buffer (a Uint8Array subclass), and DataView: a refcounted,
  * MUTABLE, fixed-length element buffer. An ScrBytes either OWNS its
  * storage (backing == NULL, byteOffset 0) or is a VIEW: its `data` points
@@ -5272,6 +5271,10 @@ typedef enum ScrBytesElem {
   SCR_BYTES_F32, /* Float32Array */
   SCR_BYTES_I32, /* Int32Array (reads sign-extend; writes ToInt32-wrap) */
   SCR_BYTES_F64, /* Float64Array */
+  SCR_BYTES_I8,  /* Int8Array */
+  SCR_BYTES_U16, /* Uint16Array */
+  SCR_BYTES_I16, /* Int16Array */
+  SCR_BYTES_U8C, /* Uint8ClampedArray */
 } ScrBytesElem;
 
 typedef struct ScrBytes {
@@ -5287,7 +5290,9 @@ typedef struct ScrBytes {
   bool is_buffer; /* Buffer brand belongs to the view, not its backing. */
 } ScrBytes;
 
-size_t scr_bytes_elem_size(ScrBytesElem elem); /* 1, 4, or 8 */
+size_t scr_bytes_elem_size(ScrBytesElem elem); /* 1, 2, 4, or 8 */
+const char *scr_bytes_elem_name(ScrBytesElem elem);
+double scr_bytes_to_u8_clamp(double value);
 
 /* node:string_decoder's StringDecoder (scr_bytes.c, beside the decoders
  * it shares): the decoder value is a record holding the CANONICAL
@@ -5316,6 +5321,8 @@ ScrJsval *scr_jsval_from_bytes(const ScrBytes *b);
  * THROWS Node's "Invalid typed array length" RangeError catchably and
  * returns NULL with the exception pending). */
 ScrBytes *scr_bytes_new(ScrBytesElem elem, double n); /* +1 */
+/* Shared u8 view over exactly the source view's raw bytes. Borrows; +1. */
+ScrBytes *scr_bytes_raw_view(ScrBytes *bytes);
 ScrBytes *scr_bytes_as_buffer(ScrBytes *bytes); /* borrows; +1, Buffer factory only */
 /* Views retain the root allocation; offsets are relative to its complete
  * byte storage, including when src is itself a subarray. */
@@ -5329,6 +5336,10 @@ double scr_array_buffer_byte_length_getter(void);
 ScrDyn *scr_array_buffer_byte_length_descriptor(ScrDyn *getter);
 ScrBytes *scr_array_buffer_view(ScrBytesElem elem, const ScrDyn *buffer,
                                const ScrDyn *offset, const ScrDyn *length);
+ScrBytes *scr_array_buffer_view_u8c(ScrDyn *, ScrDyn *, ScrDyn *);
+ScrBytes *scr_array_buffer_view_i8(ScrDyn *, ScrDyn *, ScrDyn *);
+ScrBytes *scr_array_buffer_view_u16(ScrDyn *, ScrDyn *, ScrDyn *);
+ScrBytes *scr_array_buffer_view_i16(ScrDyn *, ScrDyn *, ScrDyn *);
 ScrBytes *scr_array_buffer_view_u8(ScrDyn *, ScrDyn *, ScrDyn *);
 ScrBytes *scr_array_buffer_view_u32(ScrDyn *, ScrDyn *, ScrDyn *);
 ScrBytes *scr_array_buffer_view_i32(ScrDyn *, ScrDyn *, ScrDyn *);

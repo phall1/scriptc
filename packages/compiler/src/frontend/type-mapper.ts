@@ -2,7 +2,7 @@ import { InternalCompilerError } from "../errors.js";
 import * as ts from "./ts7/adapter.js";
 import { bodyReadsArguments } from "./arguments-usage.js";
 import type { IrRecordShape, IrType, IrUnionDef, IrUnionDiscriminant } from "../ir/ir.js";
-import { arrayOf, BOOL, bytesOf, canConvertToDyn, CHILD_T, CRYPTOHASH_T, CRYPTOHMAC_T, DATE_T, DYN, F64, funcOf, isSupportedArrayElem, isSupportedIndexValue, isSupportedMapKey, isSupportedMapValue, isSupportedSetElem, isUnitType, JSVAL, mapOf, NULL_T, PROCSTREAM_T, RUNTIME_EMITTER_CLASS, RUNTIME_ERROR_CLASSES, RUNTIME_STREAM_CLASSES, setOf, STRING, SYMBOL_T, typeEquals, typeKey, unionContainerArmsOk, UNDEFINED_T, VOID } from "../ir/ir.js";
+import { BYTES_ELEMENT_NAME, arrayOf, BOOL, bytesOf, canConvertToDyn, CHILD_T, CRYPTOHASH_T, CRYPTOHMAC_T, DATE_T, DYN, F64, funcOf, isSupportedArrayElem, isSupportedIndexValue, isSupportedMapKey, isSupportedMapValue, isSupportedSetElem, isUnitType, JSVAL, mapOf, NULL_T, PROCSTREAM_T, RUNTIME_EMITTER_CLASS, RUNTIME_ERROR_CLASSES, RUNTIME_STREAM_CLASSES, setOf, STRING, SYMBOL_T, typeEquals, typeKey, unionContainerArmsOk, UNDEFINED_T, VOID } from "../ir/ir.js";
 import { BIGINT_T } from "../ir/ir.js";
 
 import { isJsSourceFile, isNodeTypesPath } from "./program.js";
@@ -485,7 +485,7 @@ export function formatIrType(t: IrType, shapes: ShapeRegistry, unions: UnionRegi
       case "bytes":
         // The u8 kind reads as Uint8Array (Buffer maps here too — one
         // runtime representation; the message stays honest either way).
-        return append(t.elem === "u8" ? "Uint8Array" : t.elem === "u32" ? "Uint32Array" : t.elem === "i32" ? "Int32Array" : t.elem === "f32" ? "Float32Array" : "Float64Array");
+        return append(BYTES_ELEMENT_NAME[t.elem]);
       case "map":
         append("Map<");
         child(t.key);
@@ -1859,6 +1859,10 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
   if (isStdlibInterface("ArrayBuffer") || isStdlibInterface("PropertyDescriptor") || isStdlibInterface("ProcessVersions")) return DYN;
   if (isStdlibInterface("Uint8Array")) return bytesOf("u8");
   if (isStdlibInterface("Uint32Array")) return bytesOf("u32");
+  if (isStdlibInterface("Uint8ClampedArray")) return bytesOf("u8c");
+  if (isStdlibInterface("Int8Array")) return bytesOf("i8");
+  if (isStdlibInterface("Uint16Array")) return bytesOf("u16");
+  if (isStdlibInterface("Int16Array")) return bytesOf("i16");
   // Int32Array: the signed 32-bit kind (element reads sign-extend, writes
   // ToInt32-wrap) — the Atomics.wait sleep idiom constructs one over a
   // SharedArrayBuffer, and the i32 semantics hold for every other use.

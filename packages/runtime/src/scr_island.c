@@ -1019,6 +1019,23 @@ static const char *isl_dyn_unmarshalable(const ScrDyn *d) {
 
 static JSValue isl_dynfn_new(const ScrDyn *d); /* the checked-dynamic tree-function shim, below */
 
+static JSValue isl_from_bytes(const ScrBytes *b) {
+  if (b->elem == SCR_BYTES_U8) return JS_NewUint8ArrayCopy(isl_ctx, b->data, b->len);
+  JSValue buf = JS_NewArrayBufferCopy(isl_ctx, b->data, b->len * scr_bytes_elem_size(b->elem));
+  if (JS_IsException(buf)) return buf;
+  JSValueConst argv[3] = {buf, JS_UNDEFINED, JS_UNDEFINED};
+  JSValue v = JS_NewTypedArray(isl_ctx, 3, argv,
+      b->elem == SCR_BYTES_U8C ? JS_TYPED_ARRAY_UINT8C
+      : b->elem == SCR_BYTES_I8 ? JS_TYPED_ARRAY_INT8
+      : b->elem == SCR_BYTES_U16 ? JS_TYPED_ARRAY_UINT16
+      : b->elem == SCR_BYTES_I16 ? JS_TYPED_ARRAY_INT16
+      : b->elem == SCR_BYTES_U32 ? JS_TYPED_ARRAY_UINT32
+      : b->elem == SCR_BYTES_I32 ? JS_TYPED_ARRAY_INT32
+      : b->elem == SCR_BYTES_F64 ? JS_TYPED_ARRAY_FLOAT64 : JS_TYPED_ARRAY_FLOAT32);
+  JS_FreeValue(isl_ctx, buf);
+  return v;
+}
+
 static JSValue isl_from_dyn(const ScrDyn *d) {
   switch (d->kind) {
   case SCR_DYN_FUNC:
@@ -1038,8 +1055,7 @@ static JSValue isl_from_dyn(const ScrDyn *d) {
   case SCR_DYN_STR:
     return JS_NewStringLen(isl_ctx, d->v.str->data, d->v.str->len);
   case SCR_DYN_BYTES:
-    /* Only u8 payloads reach the checked-dynamic tree today (scr_json.c's stringify note). */
-    return JS_NewUint8ArrayCopy(isl_ctx, d->v.bytes->data, d->v.bytes->len);
+    return isl_from_bytes(d->v.bytes);
   case SCR_DYN_ARR: {
     JSValue arr = JS_NewArray(isl_ctx);
     if (JS_IsException(arr)) return arr;
@@ -9732,29 +9748,7 @@ ScrJsval *scr_jsval_null(void) {
 
 ScrJsval *scr_jsval_from_bytes(const ScrBytes *b) {
   isl_entry();
-  if (b->elem == SCR_BYTES_U8) {
-    JSValue v = JS_NewUint8ArrayCopy(isl_ctx, b->data, b->len);
-    if (JS_IsException(v)) {
-      isl_bridge_exception();
-      return NULL;
-    }
-    return isl_cell_new(v);
-  }
-  JSValue buf = JS_NewArrayBufferCopy(isl_ctx, b->data,
-                                      b->len * scr_bytes_elem_size(b->elem));
-  if (JS_IsException(buf)) {
-    isl_bridge_exception();
-    return NULL;
-  }
-  /* The engine's constructor reads the offset/length slots unconditionally
-   * — pad them with undefined like a real JS call would. */
-  JSValueConst argv[3] = {buf, JS_UNDEFINED, JS_UNDEFINED};
-  JSValue v = JS_NewTypedArray(isl_ctx, 3, argv,
-                               b->elem == SCR_BYTES_U32   ? JS_TYPED_ARRAY_UINT32
-                               : b->elem == SCR_BYTES_I32 ? JS_TYPED_ARRAY_INT32
-                               : b->elem == SCR_BYTES_F64 ? JS_TYPED_ARRAY_FLOAT64
-                                                          : JS_TYPED_ARRAY_FLOAT32);
-  JS_FreeValue(isl_ctx, buf);
+  JSValue v = isl_from_bytes(b);
   if (JS_IsException(v)) {
     isl_bridge_exception();
     return NULL;

@@ -2222,7 +2222,7 @@ void scr_net_sock_write_str(ScrNetSocket *s, ScrStr *data /*borrowed*/) {
 }
 
 void scr_net_sock_write_bytes(ScrNetSocket *s, ScrBytes *data /*borrowed*/) {
-  scr_net_sock_write_raw(s, (const char *)data->data, data->len);
+  scr_net_sock_write_raw(s, (const char *)data->data, (data->len * scr_bytes_elem_size(data->elem)));
 }
 
 void scr_net_sock_end(ScrNetSocket *s) {

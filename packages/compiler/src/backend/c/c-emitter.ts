@@ -41,7 +41,7 @@ import type {
   IrUnionDef,
   SrcLoc,
 } from "../../ir/ir.js";
-import { ffiCallbackType, isFfiCallbackParam, isFfiContextParam, isFfiReleaseParam, isRefCounted, isUnitType, moduleEmbedsCompressedNpm, moduleUsesChildProcess, moduleUsesDgram, moduleUsesDynInvoke, moduleEmbedsBuiltin, moduleUsesFetch, moduleUsesFsWatch, moduleUsesHttp2, moduleUsesHttpServer, moduleUsesNet, moduleUsesNodeTest, moduleUsesProcessEvents, moduleUsesStream, moduleUsesTls, moduleUsesTlsCa, POINTER_KINDS, type PointerKind, RUNTIME_EMITTER_CLASS, VOID } from "../../ir/ir.js";
+import { BYTES_ELEMENT_SIZE, ffiCallbackType, isFfiCallbackParam, isFfiContextParam, isFfiReleaseParam, isRefCounted, isUnitType, moduleEmbedsCompressedNpm, moduleUsesChildProcess, moduleUsesDgram, moduleUsesDynInvoke, moduleEmbedsBuiltin, moduleUsesFetch, moduleUsesFsWatch, moduleUsesHttp2, moduleUsesHttpServer, moduleUsesNet, moduleUsesNodeTest, moduleUsesProcessEvents, moduleUsesStream, moduleUsesTls, moduleUsesTlsCa, POINTER_KINDS, type PointerKind, RUNTIME_EMITTER_CLASS, VOID } from "../../ir/ir.js";
 import { undefinedArmTag } from "../../ir/analysis.js";
 import { scalarizeNumericRecords } from "../../ir/scalar-records.js";
 import type { IntegerRanges } from "../../ir/integer-ranges.js";
@@ -1424,7 +1424,7 @@ export class CEmitter {
         `}`,
       );
     }
-    const elements: ("u8" | "u32" | "i32" | "f32" | "f64")[] = ["u8", "u32", "i32", "f32", "f64"];
+    const elements: IrBytesElem[] = ["u8", "u8c", "i8", "u16", "i16", "u32", "i32", "f32", "f64"];
     const modes: ("f64" | "u64")[] = ["f64", "u64"];
     for (const elem of elements) {
       for (const mode of modes) {
@@ -1439,8 +1439,8 @@ export class CEmitter {
               `}`,
             );
           } else {
-            const valueType = elem === "f32" ? "float" : elem === "f64" ? "double" : elem === "i32" ? "int32_t" : "uint32_t";
-            const size = elem === "f64" ? 8 : 4;
+            const size = BYTES_ELEMENT_SIZE[elem];
+            const valueType = elem === "f32" ? "float" : elem === "f64" ? "double" : `${elem.startsWith("i") ? "int" : "uint"}${size * 8}_t`;
             out.push(
               `static inline double sc_bytes_get_${elem}${suffix}(const ScrBytes *b, ${indexType} i) {`,
               `  ${valueType} v;`,
@@ -1458,9 +1458,9 @@ export class CEmitter {
               `}`,
             );
           } else {
-            const valueType = elem === "f32" ? "float" : elem === "f64" ? "double" : "uint32_t";
-            const init = elem === "f32" ? `(float)v` : elem === "f64" ? "v" : `sc_bytes_coerce_u32(v)`;
-            const size = elem === "f64" ? 8 : 4;
+            const size = BYTES_ELEMENT_SIZE[elem];
+            const valueType = elem === "f32" ? "float" : elem === "f64" ? "double" : `uint${size * 8}_t`;
+            const init = elem === "f32" ? `(float)v` : elem === "f64" ? "v" : elem === "u8c" ? `(uint8_t)scr_bytes_to_u8_clamp(v)` : `(${valueType})sc_bytes_coerce_u32(v)`;
             out.push(
               `static inline void sc_bytes_set_${elem}${suffix}(ScrBytes *b, ${indexType} i, double v) {`,
               `  size_t idx = ${checked}(b, i);`,

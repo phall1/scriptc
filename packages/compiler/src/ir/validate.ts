@@ -18,7 +18,7 @@ import type {
   IrUnionDef,
   SrcLoc,
 } from "./ir.js";
-import { arrayOf, BOOL, BYTES_U8, bytesOf, canAdaptDynFuncTo, canDynCheckTo, canConvertToDyn, canExitIslandToType, canMarshalIntoIsland, canMarshalTypedFuncIntoIsland, CHILD_T, CHILDSTREAM_T, CHILDWRITER_T, CRYPTOHASH_T, CRYPTOHMAC_T, DATE_T, DGRAMSOCK_T, DYN, DYN_HANDLE_KINDS, F64, ffiClassType, ffiSourceParamTypes, FILEHANDLE_T, FSWATCHER_T, HTTP2SESSION_T, HTTP2STREAM_T, HTTPCLIENTREQ_T, HTTPREQ_T, HTTPRES_T, islandPromisePayloadTag, isDynTypedRefType, isFfiCallbackParam, isFfiContextParam, isFfiReleaseParam, isJsonSafeType, isJsonStringifySafeType, isRefCounted, isSupportedArrayElem, isSupportedIndexValue, isSupportedMapKey, isSupportedMapValue, isSupportedSetElem, isUnitType, jsOpResultKind, JSVAL, NETSERVER_T, NETSOCKET_T, PROCSTREAM_T, REF_TRUTHY_KINDS, REGEX, RUNTIME_EMITTER_CLASS, RUNTIME_ERROR_CLASSES, RUNTIME_STREAM_CLASSES, SEARCH_PARAMS_T, SECURECTX_T, shapeHasAccessorSlots, SPAWNRES_T, STATS_T, STRING, SYMBOL_T, TESTCTX_T, typeEquals, typeKey, unionContainerArmsOk, URL_T, VOID } from "./ir.js";
+import { arrayOf, BYTES_ELEMENT_NAME, BOOL, BYTES_U8, bytesOf, canAdaptDynFuncTo, canDynCheckTo, canConvertToDyn, canExitIslandToType, canMarshalIntoIsland, canMarshalTypedFuncIntoIsland, CHILD_T, CHILDSTREAM_T, CHILDWRITER_T, CRYPTOHASH_T, CRYPTOHMAC_T, DATE_T, DGRAMSOCK_T, DYN, DYN_HANDLE_KINDS, F64, ffiClassType, ffiSourceParamTypes, FILEHANDLE_T, FSWATCHER_T, HTTP2SESSION_T, HTTP2STREAM_T, HTTPCLIENTREQ_T, HTTPREQ_T, HTTPRES_T, islandPromisePayloadTag, isDynTypedRefType, isFfiCallbackParam, isFfiContextParam, isFfiReleaseParam, isJsonSafeType, isJsonStringifySafeType, isRefCounted, isSupportedArrayElem, isSupportedIndexValue, isSupportedMapKey, isSupportedMapValue, isSupportedSetElem, isUnitType, jsOpResultKind, JSVAL, NETSERVER_T, NETSOCKET_T, PROCSTREAM_T, REF_TRUTHY_KINDS, REGEX, RUNTIME_EMITTER_CLASS, RUNTIME_ERROR_CLASSES, RUNTIME_STREAM_CLASSES, SEARCH_PARAMS_T, SECURECTX_T, shapeHasAccessorSlots, SPAWNRES_T, STATS_T, STRING, SYMBOL_T, TESTCTX_T, typeEquals, typeKey, unionContainerArmsOk, URL_T, VOID } from "./ir.js";
 import { BIGINT_T } from "./ir.js";
 import { unionWideningTags } from "./analysis.js";
 import { alwaysReturns } from "./control-flow.js";
@@ -88,6 +88,7 @@ export const REGEX_INTRINSIC_SIGS: Record<
 export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result: IrType }> = {
   "fetch.start": { argTypes: [STRING, DYN], result: { kind: "promise", inner: DYN } },
   "fetch.responseNew": { argTypes: [DYN, DYN], result: DYN },
+  "fetch.responseArrayBuffer": { argTypes: [DYN], result: { kind: "promise", inner: DYN } },
   "fetch.responseJson": { argTypes: [DYN], result: { kind: "promise", inner: DYN } },
   "fetch.responseText": { argTypes: [DYN], result: { kind: "promise", inner: STRING } },
   "fetch.responseBytes": { argTypes: [DYN], result: { kind: "promise", inner: BYTES_U8 } },
@@ -1112,6 +1113,10 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "arrayBuffer.isView": { argTypes: [DYN], result: BOOL },
   "arrayBuffer.byteLengthGetter": { argTypes: [], result: F64 },
   "arrayBuffer.byteLengthDescriptor": { argTypes: [DYN], result: DYN },
+  "arrayBuffer.viewU8C": { argTypes: [DYN, DYN, DYN], result: bytesOf("u8c") },
+  "arrayBuffer.viewI8": { argTypes: [DYN, DYN, DYN], result: bytesOf("i8") },
+  "arrayBuffer.viewU16": { argTypes: [DYN, DYN, DYN], result: bytesOf("u16") },
+  "arrayBuffer.viewI16": { argTypes: [DYN, DYN, DYN], result: bytesOf("i16") },
   "arrayBuffer.viewU8": { argTypes: [DYN, DYN, DYN], result: BYTES_U8 },
   "arrayBuffer.viewU32": { argTypes: [DYN, DYN, DYN], result: bytesOf("u32") },
   "arrayBuffer.viewI32": { argTypes: [DYN, DYN, DYN], result: bytesOf("i32") },
@@ -3791,6 +3796,9 @@ function validateFunction(
         checkExpr(e.value);
         expectType(e.value, { kind: "dyn" }, "dynTest operand");
         if (e.type.kind !== "bool") err("dynTest must be bool", e.loc);
+        if (e.bytesElem !== undefined && (e.test !== "bytes" || !Object.hasOwn(BYTES_ELEMENT_NAME, e.bytesElem))) {
+          err("dynTest bytesElem requires a valid bytes test", e.loc);
+        }
         break;
       }
       case "dynKeyGet": {

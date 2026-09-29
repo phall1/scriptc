@@ -845,7 +845,7 @@ static void scr_stream_dyn_data(ScrDyn *const *args, size_t argc,
   *data_str = NULL;
   if (argc < 2) return;
   const ScrDyn *a = args[1];
-  if (a->kind == SCR_DYN_BYTES) *data = scr_dyn_bytes_unbox(a);
+  if (a->kind == SCR_DYN_BYTES) *data = scr_bytes_raw_view(a->v.bytes);
   else if (a->kind == SCR_DYN_STR) *data_str = scr_str_retain(a->v.str);
 }
 
@@ -877,7 +877,7 @@ ScrDyn *scr_stream_done_dyn_l(ScrClosure *clo, ScrDyn *const *args, size_t argc)
 bool scr_stream_push_dyn(ScrStream *s, const ScrDyn *d) {
   switch (d->kind) {
   case SCR_DYN_BYTES: {
-    ScrBytes *b = scr_dyn_bytes_unbox(d);
+    ScrBytes *b = scr_bytes_raw_view(d->v.bytes);
     bool r = scr_stream_push(s, b);
     scr_bytes_release(b);
     return r;
@@ -897,7 +897,7 @@ bool scr_stream_push_dyn(ScrStream *s, const ScrDyn *d) {
 bool scr_stream_write_dyn(ScrStream *s, const ScrDyn *d, ScrClosure *cb) {
   switch (d->kind) {
   case SCR_DYN_BYTES: {
-    ScrBytes *b = scr_dyn_bytes_unbox(d);
+    ScrBytes *b = scr_bytes_raw_view(d->v.bytes);
     bool r = scr_stream_write(s, b, cb);
     scr_bytes_release(b);
     return r;

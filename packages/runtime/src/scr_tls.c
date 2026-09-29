@@ -1105,7 +1105,7 @@ static ScrBytes *scr_tls_pem_dyn(const ScrDyn *v, const char *what, bool concat)
     memcpy(b->data, v->v.str->data, v->v.str->len);
     return b;
   }
-  if (v->kind == SCR_DYN_BYTES) return scr_dyn_bytes_unbox(v);
+  if (scr_dyn_bytes_is(v, SCR_BYTES_U8)) return scr_dyn_bytes_unbox(v);
   if (v->kind == SCR_DYN_ARR) {
     if (v->v.arr.len == 0) {
       ScrJsonBuf b;
@@ -1128,7 +1128,7 @@ static ScrBytes *scr_tls_pem_dyn(const ScrDyn *v, const char *what, bool concat)
     for (size_t i = 0; i < v->v.arr.len; i++) {
       const ScrDyn *e = v->v.arr.items[i];
       if (e->kind == SCR_DYN_STR) total += e->v.str->len + 1;
-      else if (e->kind == SCR_DYN_BYTES) total += e->v.bytes->len + 1;
+      else if (scr_dyn_bytes_is(e, SCR_BYTES_U8)) total += e->v.bytes->len + 1;
       else {
         scr_dyn_arg_type_fail(what, "of type string or an instance of Buffer or Uint8Array", e);
         return NULL;

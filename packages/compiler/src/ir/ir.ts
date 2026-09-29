@@ -24,10 +24,18 @@ export interface SrcLoc {
 
 /* ── types ─────────────────────────────────────────────────────────────── */
 
-/** Typed-array element kinds with a runtime representation: Uint8Array/Buffer,
- * Uint32Array, Int32Array, Float32Array, and Float64Array. Other flavors stay
- * frontend-fenced. */
-export type IrBytesElem = "u8" | "u32" | "i32" | "f32" | "f64";
+/** Numeric typed-array element kinds with a native representation. Float16
+ * and BigInt typed arrays remain frontend-fenced. */
+export type IrBytesElem = "u8" | "u8c" | "i8" | "u16" | "i16" | "u32" | "i32" | "f32" | "f64";
+
+export const BYTES_ELEMENT_SIZE: Record<IrBytesElem, number> = {
+  u8: 1, u8c: 1, i8: 1, u16: 2, i16: 2, u32: 4, i32: 4, f32: 4, f64: 8,
+};
+
+export const BYTES_ELEMENT_NAME: Record<IrBytesElem, string> = {
+  u8: "Uint8Array", u8c: "Uint8ClampedArray", i8: "Int8Array", u16: "Uint16Array", i16: "Int16Array",
+  u32: "Uint32Array", i32: "Int32Array", f32: "Float32Array", f64: "Float64Array",
+};
 
 export type IrType =
   | { kind: "f64" }
@@ -1992,6 +2000,10 @@ export type IrLibFn =
   | "arrayBuffer.isView"
   | "arrayBuffer.byteLengthGetter"
   | "arrayBuffer.byteLengthDescriptor"
+  | "arrayBuffer.viewU8C"
+  | "arrayBuffer.viewI8"
+  | "arrayBuffer.viewU16"
+  | "arrayBuffer.viewI16"
   | "arrayBuffer.viewU8"
   | "arrayBuffer.viewU32"
   | "arrayBuffer.viewI32"
@@ -2004,6 +2016,7 @@ export type IrLibFn =
    * are opaque checked-dynamic handles. */
   | "fetch.start"
   | "fetch.responseNew"
+  | "fetch.responseArrayBuffer"
   | "fetch.responseJson"
   | "fetch.responseText"
   | "fetch.responseBytes"
@@ -5359,9 +5372,9 @@ export type IrExpr =
    * control flow understands on `unknown`: `typeof v === "string" |
    * "number" | "boolean" | "undefined"` and the unit comparisons `v ===
    * undefined` / `v === null` (`"nullish"` is the LOOSE `v == null` pair —
-   * undefined or null in one test), and `v instanceof Uint8Array`
-   * (`"bytes"` — the checked-dynamic tree's bytes kind; Node's Buffer IS a Uint8Array
-   * subclass and both worlds answer true for it, SEMANTICS.md 45), plus
+   * undefined or null in one test), and `v instanceof TypedArray`
+   * (`"bytes"` plus bytesElem, default u8; Node's Buffer is a Uint8Array
+   * subclass), plus
    * the two object-family tests: `"object"` is `typeof v === "object"`
    * exactly (true for the checked-dynamic tree's object, array, bytes, AND null kinds —
    * JS's oldest wart preserved), `"array"` is `Array.isArray(v)` (the
@@ -5383,7 +5396,7 @@ export type IrExpr =
    * "function"` — true exactly for the checked-dynamic tree's function kind (boxed
    * closures); function values are truthy and answer FALSE to the
    * `"object"` test, JS-exact. */
-  | { kind: "dynTest"; test: "string" | "number" | "boolean" | "undefined" | "null" | "nullish" | "bytes" | "buffer" | "object" | "array" | "truthy" | "error" | "function"; negated?: true; value: IrExpr; type: IrType; loc: SrcLoc }
+  | { kind: "dynTest"; test: "string" | "number" | "boolean" | "undefined" | "null" | "nullish" | "bytes" | "buffer" | "object" | "array" | "truthy" | "error" | "function"; bytesElem?: IrBytesElem; negated?: true; value: IrExpr; type: IrType; loc: SrcLoc }
   /** Keyed read on a dyn value — `pkg.name` / `pkg["k"]` / the
    * `pkg?.scripts` chain step on a JSON.parse result. `key` is
    * string-typed (a strLit for the dot form); `type` is always dyn. An
@@ -5889,18 +5902,18 @@ function isJsonSafeAt(
   stringify: boolean,
   undefinedAllowed: boolean,
   visiting: Set<string>,
-  dynFields = false,
+  nativeFields = false,
 ): boolean {
   if (HANDLE_KINDS.has(t.kind)) return false;
   switch (t.kind) {
     case "dyn":
-      return dynFields;
+      return nativeFields;
     case "f64":
     case "string":
     case "bool":
       return true;
     case "array":
-      return isJsonSafeAt(t.elem, getRecord, getUnion, stringify, stringify, visiting, dynFields);
+      return isJsonSafeAt(t.elem, getRecord, getUnion, stringify, stringify, visiting, nativeFields);
     case "record": {
       const shape = getRecord(t.shapeId);
       if (!shape) return false;
@@ -5910,7 +5923,7 @@ function isJsonSafeAt(
       // short-circuits every `every` up the walk).
       if (visiting.has(t.shapeId)) return true;
       visiting.add(t.shapeId);
-      if (!shape.fields.every((f) => isJsonSafeAt(f.type, getRecord, getUnion, stringify, !shape.tuple || stringify, visiting, dynFields))) {
+      if (!shape.fields.every((f) => isJsonSafeAt(f.type, getRecord, getUnion, stringify, !shape.tuple || stringify, visiting, nativeFields))) {
         return false;
       }
       // Overflow values sit in record-key position too: dyn is JSON-safe
@@ -5918,7 +5931,7 @@ function isJsonSafeAt(
       // like any undefined-valued key), everything else follows the
       // record-field rule.
       if (shape.indexValue && shape.indexValue.kind !== "dyn") {
-        return isJsonSafeAt(shape.indexValue, getRecord, getUnion, stringify, true, visiting, dynFields);
+        return isJsonSafeAt(shape.indexValue, getRecord, getUnion, stringify, true, visiting, nativeFields);
       }
       return true;
     }
@@ -5928,8 +5941,10 @@ function isJsonSafeAt(
       const key = `${t.unionId}:${stringify}:${undefinedAllowed}`;
       if (visiting.has(key)) return true; // the recursive knot, union-flavored
       visiting.add(key);
-      return def.arms.every((a) => a.kind === "undefinedT" ? undefinedAllowed : isJsonSafeAt(a, getRecord, getUnion, stringify, undefinedAllowed, visiting, dynFields));
+      return def.arms.every((a) => a.kind === "undefinedT" ? undefinedAllowed : isJsonSafeAt(a, getRecord, getUnion, stringify, undefinedAllowed, visiting, nativeFields));
     }
+    case "bytes":
+      return nativeFields;
     case "func":
     case "object":
     // Class values stringify as "{}" husks in Node (own enumerable statics
@@ -5954,10 +5969,6 @@ function isJsonSafeAt(
     // omitted as object values) — silent divergence banned; rejected.
     case "symbol":
     case "bigint":
-    // Typed arrays stringify as index-keyed objects ({"0":1,...}) and
-    // Buffers as {type:"Buffer",data:[...]} in Node — neither shape is
-    // representable type-directedly; rejected like Maps.
-    case "bytes":
     case "jsval":
     case "caught":
     case "promise":
@@ -6195,7 +6206,7 @@ export function classDynViewSupported(
 }
 
 /** A static type that CONVERTS into a dyn value — the dynFrom domain:
- * JSON-safe data, bytes<u8> (retained views), identity-preserving class
+ * JSON-safe data, numeric typed arrays (retained views), identity-preserving class
  * references, undefined-armed unions of those arms, boxable function types,
  * and the runtime HANDLE kinds (boxed by reference — DYN_HANDLE_KINDS). */
 export function canConvertToDyn(
@@ -6204,13 +6215,13 @@ export function canConvertToDyn(
   getUnion: (unionId: string) => IrUnionDef | undefined,
 ): boolean {
   if (isJsonSafeType(t, getRecord, getUnion)) return true;
-  // bytes<u8> and boxable functions are dyn kinds the walker boxes
+  // numeric typed arrays and boxable functions are dyn kinds the walker boxes
   // ANYWHERE (bytes and functions held by identity), including nested
   // in records/arrays/unions. isJsonSafeType rejects them, but dynFrom
   // needs only that the walker can build the dyn value, so this composite
   // fold extends the JSON-safe core.
   if (canBoxDynComposite(t, getRecord, getUnion)) return true;
-  if (t.kind === "bytes" && t.elem === "u8") return true;
+  if (t.kind === "bytes") return true;
   // %Error converts as the checked-dynamic tree's error encoding ({%error, name, message,
   // code?} — the caughtToDyn shape, scr_dyn_from_error): the dyn 'error'
   // listener boundary (a mustCall-wrapped handler receiving the payload).
@@ -6249,7 +6260,7 @@ export function canConvertToDyn(
 }
 
 /** The composite extension of the dynFrom domain: JSON-safe scalars plus
- * bytes<u8> and boxable functions anywhere, recursing through records
+ * numeric typed arrays and boxable functions anywhere, recursing through records
  * (fields + index value), arrays, and unit-armed unions — exactly the
  * sc_td_* walker's capability. Returns false for a composite carrying a
  * kind the walker cannot box (Maps or handles nested in a record); those
@@ -6270,7 +6281,7 @@ function canBoxDynComposite(
     case "classval":
       return true;
     case "bytes":
-      return t.elem === "u8";
+      return true;
     case "func":
       return canBoxFuncIntoDyn(t, getRecord, getUnion);
     case "array":
@@ -6298,7 +6309,7 @@ function canBoxDynComposite(
 }
 
 /** A type a dyn value can be VALIDATED into — the dynCheck domain:
- * JSON-safe data, bytes<u8> (retained views), the %Error extraction,
+ * JSON-safe data, numeric typed arrays (retained views), the %Error extraction,
  * undefined-armed unions of JSON-safe arms, adaptable function types,
  * and the runtime HANDLE kinds (a tag-checked reference unwrap —
  * DYN_HANDLE_KINDS). */
@@ -6313,7 +6324,7 @@ export function canDynCheckTo(
   // serializable. Backends already retain dyn fields and fill missing
   // unknown record fields with the undefined value.
   if (isJsonSafeAt(t, getRecord, getUnion, false, false, new Set(), true)) return true;
-  if (t.kind === "bytes" && t.elem === "u8") return true;
+  if (t.kind === "bytes") return true;
   if (t.kind === "classval") return true;
   if (t.kind === "object" && t.className === "%Error") return true;
   if (t.kind === "func") return canAdaptDynFuncTo(t, getRecord, getUnion);
@@ -7578,6 +7589,10 @@ export function moduleLibNondeterministicSurface(mod: IrModule): string | null {
 export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "arrayBuffer.new",
   "arrayBuffer.byteLengthGetter",
+  "arrayBuffer.viewU8C",
+  "arrayBuffer.viewI8",
+  "arrayBuffer.viewU16",
+  "arrayBuffer.viewI16",
   "arrayBuffer.viewU8",
   "arrayBuffer.viewU32",
   "arrayBuffer.viewI32",

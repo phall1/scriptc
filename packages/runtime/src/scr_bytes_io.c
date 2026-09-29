@@ -218,7 +218,7 @@ static ScrBytes *scr_buffer_from_array_like(const ScrDyn *value, double length) 
 
 ScrBytes *scr_buffer_from_dyn(const ScrDyn *value, const ScrStr *encoding) {
   if (value->kind == SCR_DYN_STR) return scr_bytes_from_str(value->v.str, encoding);
-  if (value->kind == SCR_DYN_BYTES) return scr_bytes_copy(value->v.bytes);
+  if (value->kind == SCR_DYN_BYTES) return scr_bytes_convert(SCR_BYTES_U8, value->v.bytes);
   if (value->kind == SCR_DYN_ARR) {
     return scr_buffer_from_array_like(value, (double)value->v.arr.len);
   }
@@ -263,7 +263,7 @@ ScrBytes *scr_buffer_from_dyn(const ScrDyn *value, const ScrStr *encoding) {
 
 /* A bytes payload or the API's own ERR_INVALID_ARG_TYPE (borrowed). */
 static ScrBytes *scr_bytes_chk_u8(const ScrDyn *d, const char *argname) {
-  if (d->kind != SCR_DYN_BYTES) {
+  if (!scr_dyn_bytes_is(d, SCR_BYTES_U8)) {
     scr_dyn_arg_type_fail(argname, "an instance of Buffer or Uint8Array", d);
     return NULL;
   }
@@ -376,7 +376,7 @@ static bool scr_fs_cb_chk(const ScrDyn *cb, const char *name) {
  * these ladders — the checked-dynamic tree has no URL kind here, and Node would accept
  * only file: URLs anyway). */
 static bool scr_fs_path_chk(const ScrDyn *p, const char *name) {
-  if (p->kind == SCR_DYN_STR || p->kind == SCR_DYN_BYTES) return true;
+  if (p->kind == SCR_DYN_STR || scr_dyn_bytes_is(p, SCR_BYTES_U8)) return true;
   scr_dyn_arg_type_fail(name, "of type string or an instance of Buffer or URL", p);
   return false;
 }
@@ -456,7 +456,7 @@ static void scr_fs_exists_fire(ScrClosure *self) {
     ScrStr *p = scr_str_retain(path->v.str);
     ans = scr_fs_exists(p);
     scr_str_release(p);
-  } else if (path->kind == SCR_DYN_BYTES) {
+  } else if (scr_dyn_bytes_is(path, SCR_BYTES_U8)) {
     ScrStr *p = scr_str_new((const char *)path->v.bytes->data, path->v.bytes->len);
     ans = scr_fs_exists(p);
     scr_str_release(p);
@@ -472,7 +472,7 @@ static void scr_fs_exists_fire(ScrClosure *self) {
 
 ScrDyn *scr_fs_exists_async(const ScrDyn *path, const ScrDyn *cb) {
   if (!scr_fs_cb_chk(cb, "cb")) return NULL;
-  if (path->kind != SCR_DYN_STR && path->kind != SCR_DYN_BYTES) {
+  if (path->kind != SCR_DYN_STR && !scr_dyn_bytes_is(path, SCR_BYTES_U8)) {
     /* Node's wart, kept exactly: a path getValidatedPath rejects answers
      * false through the callback SYNCHRONOUSLY (`return callback(false)`
      * in lib/fs.js exists). */
@@ -682,7 +682,7 @@ void scr_fs_read_chk(const ScrDyn *fd, const ScrDyn *buffer, const ScrDyn *offse
     scr_dyn_arg_type_fail("fd", "of type number", fd);
     return;
   }
-  double buflen = (double)buffer->v.bytes->len;
+  double buflen = scr_bytes_byte_len(buffer->v.bytes);
   if (!scr_fs_dyn_absent(offset)) {
     /* validateInteger's MAX_SAFE range first, the buffer bound second —
      * Node renders each with its own max. */

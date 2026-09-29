@@ -872,18 +872,22 @@ ScrStr *scr_insp_dyn(ScrDyn *d, double recurse, double depth) {
         return scr_insp_buffer(b);
       }
       char prefix[48];
-      int pn = snprintf(prefix, sizeof prefix, "Uint8Array(%zu) [", b->len);
+      int pn = snprintf(prefix, sizeof prefix, "%s(%zu) [", scr_bytes_elem_name(b->elem), b->len);
       if (b->len == 0) {
         InspBuf out = {0};
         ib_bytes(&out, prefix, (size_t)pn);
         ib_char(&out, ']');
         return ib_take(&out);
       }
-      if (recurse > depth) return scr_str_new("[Uint8Array]", 12);
+      if (recurse > depth) {
+        char tag[32];
+        int n = snprintf(tag, sizeof tag, "[%s]", scr_bytes_elem_name(b->elem));
+        return scr_str_new(tag, (size_t)n);
+      }
       scr_insp_begin(recurse + 1);
       size_t shown = b->len < 100 ? b->len : 100;
       for (size_t i = 0; i < shown; i++) {
-        ScrStr *s = scr_insp_f64((double)((const unsigned char *)b->data)[i]);
+        ScrStr *s = scr_insp_f64(scr_bytes_get(b, (double)i));
         scr_insp_entry(s, true);
         scr_str_release(s);
       }

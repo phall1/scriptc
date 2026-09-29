@@ -1,5 +1,6 @@
 import { InternalCompilerError } from "../errors.js";
 import {
+  BYTES_ELEMENT_NAME,
   DYN_HANDLE_KINDS,
   RUNTIME_STREAM_CLASSES,
   typeEquals,
@@ -72,7 +73,7 @@ export function dynDesc(
     case "nullT": return "null";
     case "undefinedT": return "undefined";
     case "dyn": return "unknown";
-    case "bytes": return "Uint8Array";
+    case "bytes": return BYTES_ELEMENT_NAME[t.elem];
     case "object": return t.className.replace(/^%/, "");
     case "union": {
       const def = unionsById.get(t.unionId);

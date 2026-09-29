@@ -2,6 +2,7 @@
 import { InternalCompilerError } from "../../errors.js";
 import { streamTypedRefEligible } from "../../ir/analysis.js";
 import { DYN, isDynTypedRefType, isRefCounted, isUnitType, typeEquals, typeKey } from "../../ir/ir.js";
+import { BYTES_ELEM_NUM } from "./common.js";
 import { DYN_KIND } from "./dyn.js";
 import { elemAccess, vAdapters } from "./shapes.js";
 import { LlvmUnsupportedError } from "./unsupported.js";
@@ -494,7 +495,11 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
         // form also reads a scalar payload (the runtime's ToBoolean).
         const d = host.emitExpr(e.value);
         let test: string;
-        if (e.test === "truthy") {
+        if (e.test === "bytes") {
+          host.declare(`declare zeroext i1 @scr_dyn_bytes_is(ptr, i32)`);
+          test = B.tmp();
+          B.line(`${test} = call zeroext i1 @scr_dyn_bytes_is(ptr ${d.name}, i32 ${BYTES_ELEM_NUM[e.bytesElem ?? "u8"]})`);
+        } else if (e.test === "truthy") {
           host.declare(`declare zeroext i1 @scr_dyn_truthy(ptr)`);
           test = B.tmp();
           B.line(`${test} = call zeroext i1 @scr_dyn_truthy(ptr ${d.name})`);

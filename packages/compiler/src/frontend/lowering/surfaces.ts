@@ -1008,6 +1008,7 @@ export const BUILTIN_MODULE_FN_ALIASES: Record<string, Record<string, readonly I
     readFileSync: ["fs.readFileSyncBuf", "fs.readFileSyncBytes", "fs.readFileSyncDyn", "fs.readFdSync", "fs.readFdSyncBytes"],
     // The bytes-data form and the { mode } options form.
     writeFileSync: ["fs.writeFileSyncBytes", "fs.writeFileModeSync"],
+    appendFileSync: ["fs.appendFileSyncBytes"],
     // The utf8 string overload; the table row is the Buffer-window form.
     writeSync: ["fs.writeStrSync"],
     // The { recursive, mode } option lowerings.

@@ -1,6 +1,6 @@
 import { BUF_NUM_METHODS } from "./buffer-numeric-methods.js";
 import * as ts from "../../ts7/adapter.js";
-import { BIGINT_T, BOOL, BYTES_U8, DYN, F64, IrBytesElem, IrBytesIntrinsicMethod, IrExpr, IrType, STRING, SrcLoc, UNDEFINED_T, VOID, arrayOf, bytesOf, typeEquals } from "../../../ir/ir.js";
+import { BYTES_ELEMENT_SIZE, BIGINT_T, BOOL, BYTES_U8, DYN, F64, IrBytesElem, IrBytesIntrinsicMethod, IrExpr, IrType, STRING, SrcLoc, UNDEFINED_T, VOID, arrayOf, bytesOf, typeEquals } from "../../../ir/ir.js";
 import { locOf } from "../../program.js";
 import type { Lowerer } from "../lowerer.js";
 import { dynUndefinedExpr, own } from "../lowerer.js";
@@ -97,17 +97,21 @@ function lowerBytesToSortedCall(
 /* ── typed arrays / Buffer ─────────────────────────────────────────────── */
 
 /** The typed-array constructors with a runtime representation, by lib
- * interface name. Other flavors (Int8Array, Float16Array, ...) fall through
+ * interface name. Other flavors (Float16Array, BigInt64Array, ...) fall through
  * to the generic stdlib-constructor fence. DataView is handled separately. */
 const BYTES_CTORS: Record<string, IrBytesElem | undefined> = {
   Uint8Array: "u8",
+  Uint8ClampedArray: "u8c",
+  Int8Array: "i8",
+  Uint16Array: "u16",
+  Int16Array: "i16",
   Uint32Array: "u32",
   Int32Array: "i32",
   Float32Array: "f32",
   Float64Array: "f64",
 };
 
-/** `new Uint8Array(...)` / `new Uint32Array(...)` / `new Float32Array(...)` / `new Float64Array(...)`
+/** Numeric typed-array constructors
    * (stdlib provenance — a user's own class with the name resolves through
    * classBySymbol). Lowered argument shapes: none (empty), a length
    * (zero-filled; ToIndex at runtime — invalid lengths throw Node's
@@ -116,7 +120,7 @@ const BYTES_CTORS: Record<string, IrBytesElem | undefined> = {
    * literal (element-coerced; its contextual type is the lib's
    * ArrayLike/Iterable union, which cannot map — the Set-seed pattern), or
    * a number[]-typed value, or checked native input with runtime length /
-   * array-like dispatch. Free-standing ArrayBuffer forms remain fenced.
+   * array-like dispatch. ArrayBuffer inputs create shared views.
    * Null when this isn't a stdlib
    * typed-array construction. */
 export function lowerBytesNew(lowerer: Lowerer, expr: ts.NewExpression, symbol: ts.Symbol | null | undefined): IrExpr | null {
@@ -174,7 +178,7 @@ export function lowerBytesNew(lowerer: Lowerer, expr: ts.NewExpression, symbol: 
             "SharedArrayBuffer here erases into the view: drop the options bag",
         );
       }
-      const elemSize = elem === "u8" ? 1 : elem === "f64" ? 8 : 4;
+      const elemSize = BYTES_ELEMENT_SIZE[elem];
       const lenArg = argNode.arguments?.length === 1 ? argNode.arguments[0] : undefined;
       const lenT = lenArg ? lowerer.typeOf(lenArg) : null;
       const byteLen = lenT?.isNumberLiteralType() ? lenT.value : null;
@@ -219,7 +223,7 @@ export function lowerBytesNew(lowerer: Lowerer, expr: ts.NewExpression, symbol: 
       `new ${name} over '${lowerer.fmt(src.type)}' values`,
       argNode,
       `supported: new ${name}(), (length), (typedArray) — always a copy — or (number[]); ` +
-        "ArrayBuffers and views do not exist here (narrow unions first)",
+        "or (ArrayBuffer, byteOffset?, length?) for shared storage (narrow unions first)",
     );
   }
   lowerer.noLowering(
@@ -260,7 +264,7 @@ function lowerArrayBufferView(lowerer: Lowerer, args: readonly ts.Expression[], 
     const node = args[index];
     return node ? lowerer.coerceInto(node, lowerer.lowerExpr(node), DYN) : dynUndefinedExpr(loc);
   });
-  const fn = { u8: "arrayBuffer.viewU8", u32: "arrayBuffer.viewU32", i32: "arrayBuffer.viewI32", f32: "arrayBuffer.viewF32", f64: "arrayBuffer.viewF64", dv: "arrayBuffer.viewDV" } as const;
+  const fn = { u8c: "arrayBuffer.viewU8C", i8: "arrayBuffer.viewI8", u16: "arrayBuffer.viewU16", i16: "arrayBuffer.viewI16", u8: "arrayBuffer.viewU8", u32: "arrayBuffer.viewU32", i32: "arrayBuffer.viewI32", f32: "arrayBuffer.viewF32", f64: "arrayBuffer.viewF64", dv: "arrayBuffer.viewDV" } as const;
   return { kind: "libCall", fn: fn[elem], args: values, type: elem === "dv" ? BYTES_U8 : bytesOf(elem), loc };
 }
 
@@ -318,9 +322,9 @@ export function lowerBytesMethodCall(lowerer: Lowerer, call: ts.CallExpression,
       loc,
     };
   }
-  if (receiverIr.elem === "u8" && name === "join") {
+  if (name === "join") {
     if (nArgs > 1 || call.arguments.some(ts.isSpreadElement)) {
-      lowerer.noLowering(`.join with ${nArgs} arguments on Uint8Array`, call);
+      lowerer.noLowering(`.join with ${nArgs} arguments on typed arrays`, call);
     }
     const separatorDefault: IrExpr = {
       kind: "strLit",

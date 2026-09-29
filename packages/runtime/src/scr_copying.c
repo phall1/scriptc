@@ -144,18 +144,3 @@ ScrBytes *scr_bytes_with(const ScrBytes *b, double index, double value) {
   scr_bytes_set(out, actual, value);
   return out;
 }
-
-ScrArr *scr_bytes_to_arr(const ScrBytes *b) {
-  ScrArr *out = scr_arr_new(SCR_ELEM_F64, b->len ? b->len : 1);
-  for (size_t i = 0; i < b->len; i++) {
-    scr_arr_push_f64(out, scr_bytes_get(b, (double)i));
-  }
-  return out;
-}
-
-ScrStr *scr_bytes_join(const ScrBytes *b, const ScrStr *separator) {
-  ScrArr *values = scr_bytes_to_arr(b);
-  ScrStr *out = scr_arr_join(values, (ScrStr *)separator);
-  scr_arr_release(values);
-  return out;
-}

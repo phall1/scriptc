@@ -11,7 +11,7 @@ import { pathToFileURL } from "node:url";
 import type { Lowerer } from "./lowerer.js";
 import { OBJECT_CALLABLE_VALUES } from "./surfaces.js";
 import { wasiGuestPath } from "../../wasi-paths.js";
-import { BIGINT_T, BOOL, CAUGHT, DYN, DYN_HANDLE_KINDS, F64, IrExpr, IrFunction, IrJsOp, IrLocal, IrRecordShape, IrStmt, IrType, JSVAL, NULL_T, REF_TRUTHY_KINDS, REGEX, RUNTIME_ERROR_CLASSES, SEARCH_PARAMS_T, STRING, SrcLoc, UNDEFINED_T, VOID, arrayOf, canAdaptDynFuncTo, canDynCheckTo, canBoxFuncIntoDyn, funcOf, isDynTypedRefType, isSupportedArrayElem, isUnitType, jsOpResultKind, shapeHasAccessorSlots, typeEquals, typeKey, unionContainerArmsOk } from "../../ir/ir.js";
+import { BIGINT_T, BYTES_ELEMENT_NAME, BOOL, CAUGHT, DYN, DYN_HANDLE_KINDS, F64, IrBytesElem, IrExpr, IrFunction, IrJsOp, IrLocal, IrRecordShape, IrStmt, IrType, JSVAL, NULL_T, REF_TRUTHY_KINDS, REGEX, RUNTIME_ERROR_CLASSES, SEARCH_PARAMS_T, STRING, SrcLoc, UNDEFINED_T, VOID, arrayOf, canAdaptDynFuncTo, canDynCheckTo, canBoxFuncIntoDyn, funcOf, isDynTypedRefType, isSupportedArrayElem, isUnitType, jsOpResultKind, shapeHasAccessorSlots, typeEquals, typeKey, unionContainerArmsOk } from "../../ir/ir.js";
 import { cjsClassExprWholeExportOf, cjsExportAssignmentOf, cjsExportDiscardReason, isCjsExportTableLiteral, isCjsJsFile, isJsSourceFile, isModuleExportsAccess, isNodeEsmFile, locOf } from "../program.js";
 import { ARRAY_METHODS, builtinConstLit, builtinFenceHintOf, builtinModuleConstOf, builtinModulesArrayLit, builtinModuleFnOf, COMPOUND_ASSIGN_OPS, CompoundOp, ISLAND_SURFACE, isChildSurfaceMember, MAP_METHODS, NARROW_FIRST, SET_METHODS, STRING_INDEX_METHODS, STR_METHODS, UNSUPPORTED_EXPR, sideEffectFreeOptionValue, stdlibGlobalNameOf } from "./surfaces.js";
 import { UNSUPPORTED, blockedBindingUseDiag, requiresDynamicPackageDiag, unsupportedDiag } from "../../diagnostics/diagnostic.js";
@@ -2505,10 +2505,9 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
       ) {
         return { kind: "dynCheck", value: expr, type: narrowed, loc: expr.loc };
       }
-      // An `instanceof Uint8Array` narrow: the checked-dynamic tree's bytes kind, extracted
-      // with the same validated copy the checked cast uses (a Buffer that
-      // crossed in rides the kind too — it IS a Uint8Array in Node).
-      if (narrowed?.kind === "bytes" && narrowed.elem === "u8") {
+      // An instanceof narrow retains the native view after validating its
+      // exact element kind. Buffer also matches Uint8Array.
+      if (narrowed?.kind === "bytes") {
         return { kind: "dynCheck", value: expr, type: narrowed, loc: expr.loc };
       }
       // An `instanceof Error` narrow: the checked-dynamic tree's error encoding rebuilds a
@@ -3963,7 +3962,7 @@ function lowerPromiseThenPresence(
         // A native checked iterable can supply scalar elements even when
         // the checker inferred a typed array from its producer. Drain once
         // and validate the elements before the ordinary spread copy.
-        if (src.type.kind === "dyn" && (type.elem.kind === "f64" || type.elem.kind === "string" || type.elem.kind === "bool")) {
+        if (src.type.kind === "dyn" && (type.elem.kind === "dyn" || type.elem.kind === "f64" || type.elem.kind === "string" || type.elem.kind === "bool")) {
           src = lowerer.coerceInto(el.expression, {
             kind: "libCall", fn: "dyn.iterPack", args: [src,
               { kind: "strLit", value: el.expression.getText(), type: STRING, loc: locOf(el) }],
@@ -5547,6 +5546,12 @@ export function ensureString(lowerer: Lowerer, e: IrExpr, node: ts.Node): IrExpr
       // String() exactly (undefined/null texts, JS number formatting,
       // strings verbatim, arrays via join, objects as "[object Object]").
       return { kind: "toString", operand: e, type: STRING, loc: e.loc };
+    }
+    if (e.type.kind === "bytes") {
+      // Preserve the runtime brand: typed arrays join numeric elements,
+      // while a Buffer stored in a Uint8Array slot decodes its bytes.
+      const boxed: IrExpr = { kind: "dynFrom", value: e, type: DYN, loc: e.loc };
+      return { kind: "toString", operand: boxed, type: STRING, loc: e.loc };
     }
     if (e.type.kind === "jsval") {
       // String(v) in the engine — JS-exact (and Node-exact in templates).
@@ -7942,22 +7947,22 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
       lowerer.builtinStreamInfoOf(rhsMemberSymbol) ??
       undefined;
     if (!target) {
-      // `u instanceof Uint8Array` on an `unknown` value: the checked-dynamic tree carries a
-      // bytes kind — one runtime tag test, and tsc's narrowing types the
-      // true branch (reads bridge through maybeNarrow's validated
-      // extraction, like the typeof tests). Node's Buffer IS a Uint8Array
-      // subclass and rides the same bytes kind, so both worlds answer true
-      // for Buffer payloads — Node-exact (the bytes kind's other
-      // divergences are SEMANTICS.md 45). Catch bindings stay out (their
-      // payload is a typed snapshot, not a dyn).
-      if (
-        ts.isIdentifier(expr.right) &&
-        lowerer.isStdlibGlobal(expr.right, "Uint8Array") &&
-        !lowerer.caughtLocalOf(expr.left)
-      ) {
-        const left = lowerer.lowerExpr(expr.left);
-        if (left.type.kind === "dyn") {
-          return { kind: "dynTest", test: "bytes", value: left, type: BOOL, loc };
+      // Unknown storage retains each numeric typed array's exact native brand.
+      if (ts.isIdentifier(expr.right) && !lowerer.caughtLocalOf(expr.left)) {
+        const elem = (Object.keys(BYTES_ELEMENT_NAME) as IrBytesElem[]).find(
+          (kind) => lowerer.isStdlibGlobal(expr.right, BYTES_ELEMENT_NAME[kind]),
+        );
+        if (elem !== undefined) {
+          const left = lowerer.lowerExpr(expr.left);
+          if (left.type.kind === "dyn") {
+            return { kind: "dynTest", test: "bytes", bytesElem: elem, value: left, type: BOOL, loc };
+          }
+          if (left.type.kind === "bytes") {
+            return {
+              kind: "seqExpr", stmts: [{ kind: "exprStmt", expr: left, loc }],
+              result: { kind: "boolLit", value: left.type.elem === elem, type: BOOL, loc }, type: BOOL, loc,
+            };
+          }
         }
       }
       // `x instanceof RegExp` over a union with a regex arm (the

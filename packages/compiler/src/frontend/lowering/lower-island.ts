@@ -875,14 +875,6 @@ export function lowerStaticResponseCall(lowerer: Lowerer, call: ts.CallExpressio
   const recvType = lowerer.checker.getBaseTypeOfLiteralType(lowerer.typeOf(access.expression));
   const sym = recvType.getAliasSymbol() ?? recvType.getSymbol();
   if (!sym || sym.name !== "Response" || !lowerer.isStdlibSymbol(sym)) return null;
-  if (member === "arrayBuffer") {
-    lowerer.noLowering(
-      "Response.arrayBuffer() in a static build",
-      call,
-      "use Response.bytes() for the native Uint8Array body; free-standing ArrayBuffer values have no static representation",
-      sym,
-    );
-  }
   const recv = lowerer.lowerExpr(access.expression);
   if (recv.type.kind !== "dyn") return null;
   return lowerStaticFixedFetchMethodCall(
@@ -906,7 +898,7 @@ export function lowerStaticResponseCall(lowerer: Lowerer, call: ts.CallExpressio
           }
         : {
             kind: "libCall",
-            fn: "fetch.responseJson",
+            fn: member === "arrayBuffer" ? "fetch.responseArrayBuffer" : "fetch.responseJson",
             args: [receiver],
             type: { kind: "promise", inner: DYN },
             loc: locOf(call),
@@ -1212,7 +1204,7 @@ export function fenceStaticResponseMember(
   lowerer.noLowering(
     `Response.${member} in a static build`,
     access,
-    "the native static Response surface is status/ok/statusText/url/redirected/headers/body/bodyUsed plus json(), text(), and bytes(); use --dynamic for the wider Web API",
+    "the native static Response surface is status/ok/statusText/url/redirected/headers/body/bodyUsed plus json(), text(), bytes(), and arrayBuffer(); use --dynamic for the wider Web API",
     sym,
   );
 }

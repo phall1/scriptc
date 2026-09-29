@@ -94,9 +94,9 @@ static void scr_dyn_display_buf(ScrJsonBuf *b, const ScrDyn *d) {
     }
     for (size_t i = 0; i < d->v.bytes->len; i++) {
       if (i > 0) scr_jb_putc(b, ',');
-      char n[16];
-      snprintf(n, sizeof n, "%u", (unsigned)d->v.bytes->data[i]);
-      scr_jb_puts(b, n);
+      ScrStr *n = scr_f64_to_scrstr(scr_bytes_get(d->v.bytes, (double)i));
+      for (size_t j = 0; j < n->len; j++) scr_jb_putc(b, n->data[j]);
+      scr_str_release(n);
     }
     return;
   case SCR_DYN_FUNC:
@@ -174,6 +174,13 @@ static double dyn_index_arg(ScrDyn *const *args, size_t argc, size_t i, double d
   scr_jb_puts(&b, ": non-number index arguments on a dynamic receiver are not supported yet");
   scr_throw_error(SCR_ERR_TYPE, scr_jb_finish(&b));
   return 0;
+}
+
+static double dyn_bytes_index_arg(ScrDyn *const *args, size_t argc, size_t index, double fallback) {
+  if (index >= argc || args[index]->kind == SCR_DYN_UNDEF) return fallback;
+  double value;
+  if (!scr_dyn_number_coerce_js(args[index], &value)) return 0;
+  return isnan(value) ? 0 : trunc(value);
 }
 
 /* JS relative-index normalization (slice's rule). */
@@ -1023,18 +1030,18 @@ static ScrDyn *scr_dyn_invoke_impl(
     ScrBytes *bytes = recv->v.bytes;
     size_t blen = bytes->len;
     if (dyn_name_is(method, "at")) {
-      double iD = dyn_index_arg(args, argc, 0, 0, what);
+      double iD = dyn_bytes_index_arg(args, argc, 0, 0);
       if (scr_exc_pending()) return NULL;
       double idx = iD < 0 ? (double)blen + iD : iD;
       if (idx < 0 || idx >= (double)blen) return scr_dyn_retain(scr_dyn_undefined());
-      return scr_dyn_new_num((double)bytes->data[(size_t)idx]);
+      return scr_dyn_new_num(scr_bytes_get(bytes, idx));
     }
     if (dyn_name_is(method, "slice") || dyn_name_is(method, "subarray")) {
       /* subarray and Buffer.slice alias their source. TypedArray.slice
        * owns an independent copy; all keep the receiver's Buffer flavor. */
-      double startD = dyn_index_arg(args, argc, 0, 0, what);
+      double startD = dyn_bytes_index_arg(args, argc, 0, 0);
       if (scr_exc_pending()) return NULL;
-      double endD = dyn_index_arg(args, argc, 1, (double)blen, what);
+      double endD = dyn_bytes_index_arg(args, argc, 1, (double)blen);
       if (scr_exc_pending()) return NULL;
       ScrBytes *out = recv->buffer || dyn_name_is(method, "subarray")
         ? scr_bytes_subarray(bytes, startD, endD) : scr_bytes_slice(bytes, startD, endD);
@@ -1042,8 +1049,44 @@ static ScrDyn *scr_dyn_invoke_impl(
       scr_bytes_release(out);
       return d;
     }
+    if (dyn_name_is(method, "set")) {
+      double offset = dyn_bytes_index_arg(args, argc, 1, 0);
+      if (scr_exc_pending()) return NULL;
+      scr_bytes_set_from_dyn(bytes, argc ? args[0] : scr_dyn_undefined(), offset);
+      return scr_exc_pending() ? NULL : scr_dyn_retain(scr_dyn_undefined());
+    }
+    if (dyn_name_is(method, "copyWithin")) {
+      double target = dyn_bytes_index_arg(args, argc, 0, 0);
+      if (scr_exc_pending()) return NULL;
+      double start = dyn_bytes_index_arg(args, argc, 1, 0);
+      if (scr_exc_pending()) return NULL;
+      double end = dyn_bytes_index_arg(args, argc, 2, (double)blen);
+      if (scr_exc_pending()) return NULL;
+      scr_bytes_release(scr_bytes_copy_within(bytes, target, start, end));
+      return scr_dyn_retain(recv);
+    }
+    if (dyn_name_is(method, "fill") && !recv->buffer) {
+      double value;
+      if (!scr_dyn_number_coerce_js(argc ? args[0] : scr_dyn_undefined(), &value)) return NULL;
+      double start = dyn_bytes_index_arg(args, argc, 1, 0);
+      if (scr_exc_pending()) return NULL;
+      double end = dyn_bytes_index_arg(args, argc, 2, (double)blen);
+      if (scr_exc_pending()) return NULL;
+      scr_bytes_release(scr_bytes_fill_elem(bytes, value, start, end));
+      return scr_dyn_retain(recv);
+    }
+    if (dyn_name_is(method, "join") || (dyn_name_is(method, "toString") && !recv->buffer)) {
+      ScrStr *separator = dyn_name_is(method, "join") && argc && args[0]->kind != SCR_DYN_UNDEF
+        ? scr_dyn_string_coerce_js(args[0]) : scr_str_new(",", 1);
+      if (scr_exc_pending()) { scr_str_release(separator); return NULL; }
+      ScrStr *joined = scr_bytes_join(bytes, separator);
+      scr_str_release(separator);
+      ScrDyn *out = scr_dyn_new_str(joined);
+      scr_str_release(joined);
+      return out;
+    }
     if (dyn_bytes_proto_real(method)) {
-      dyn_throw_unsupported("Uint8Array", method);
+      dyn_throw_unsupported(scr_bytes_elem_name(bytes->elem), method);
       return NULL;
     }
   }

@@ -26,7 +26,36 @@ static void scr_bytes_oom(void) {
 }
 
 size_t scr_bytes_elem_size(ScrBytesElem elem) {
-  return elem == SCR_BYTES_U8 ? 1 : elem == SCR_BYTES_F64 ? 8 : 4;
+  switch (elem) {
+    case SCR_BYTES_U8: case SCR_BYTES_U8C: case SCR_BYTES_I8: return 1;
+    case SCR_BYTES_U16: case SCR_BYTES_I16: return 2;
+    case SCR_BYTES_U32: case SCR_BYTES_I32: case SCR_BYTES_F32: return 4;
+    case SCR_BYTES_F64: return 8;
+  }
+  scr_trap("scriptc: invalid typed array element kind\n");
+}
+
+const char *scr_bytes_elem_name(ScrBytesElem elem) {
+  switch (elem) {
+    case SCR_BYTES_U8: return "Uint8Array";
+    case SCR_BYTES_U8C: return "Uint8ClampedArray";
+    case SCR_BYTES_I8: return "Int8Array";
+    case SCR_BYTES_U16: return "Uint16Array";
+    case SCR_BYTES_I16: return "Int16Array";
+    case SCR_BYTES_U32: return "Uint32Array";
+    case SCR_BYTES_I32: return "Int32Array";
+    case SCR_BYTES_F32: return "Float32Array";
+    case SCR_BYTES_F64: return "Float64Array";
+  }
+  scr_trap("scriptc: invalid typed array element kind\n");
+}
+
+double scr_bytes_to_u8_clamp(double value) {
+  if (!(value > 0)) return 0;
+  if (value >= 255) return 255;
+  double lower = floor(value);
+  double fraction = value - lower;
+  return fraction > 0.5 || (fraction == 0.5 && ((unsigned)lower & 1)) ? lower + 1 : lower;
 }
 
 /* ── lifecycle ─────────────────────────────────────────────────────────── */
@@ -77,6 +106,11 @@ ScrBytes *scr_bytes_copy(const ScrBytes *src) {
   ScrBytes *b = scr_bytes_alloc(src->elem, src->len);
   memcpy(b->data, src->data, src->len * scr_bytes_elem_size(src->elem));
   return b;
+}
+
+ScrBytes *scr_bytes_raw_view(ScrBytes *bytes) {
+  if (bytes->elem == SCR_BYTES_U8) return scr_bytes_retain(bytes);
+  return scr_dataview_new(bytes, scr_bytes_byte_offset(bytes), true, scr_bytes_byte_len(bytes));
 }
 
 ScrBytes *scr_bytes_as_buffer(ScrBytes *bytes) {
@@ -150,8 +184,23 @@ static uint32_t scr_bytes_to_u32(double v) {
 double scr_bytes_get(const ScrBytes *b, double i) {
   size_t idx = scr_bytes_check_index(b, i);
   switch (b->elem) {
-    case SCR_BYTES_U8:
+    case SCR_BYTES_U8: case SCR_BYTES_U8C:
       return (double)b->data[idx];
+    case SCR_BYTES_I8: {
+      int8_t v;
+      memcpy(&v, b->data + idx, 1);
+      return (double)v;
+    }
+    case SCR_BYTES_U16: {
+      uint16_t v;
+      memcpy(&v, b->data + idx * 2, 2);
+      return (double)v;
+    }
+    case SCR_BYTES_I16: {
+      int16_t v;
+      memcpy(&v, b->data + idx * 2, 2);
+      return (double)v;
+    }
     case SCR_BYTES_U32: {
       uint32_t v;
       memcpy(&v, b->data + idx * 4, 4);
@@ -179,9 +228,17 @@ double scr_bytes_get(const ScrBytes *b, double i) {
 void scr_bytes_set(ScrBytes *b, double i, double v) {
   size_t idx = scr_bytes_check_index(b, i);
   switch (b->elem) {
-    case SCR_BYTES_U8:
+    case SCR_BYTES_U8: case SCR_BYTES_I8:
       b->data[idx] = (uint8_t)scr_bytes_to_u32(v);
       break;
+    case SCR_BYTES_U8C:
+      b->data[idx] = (uint8_t)scr_bytes_to_u8_clamp(v);
+      break;
+    case SCR_BYTES_U16: case SCR_BYTES_I16: {
+      uint16_t u = (uint16_t)scr_bytes_to_u32(v);
+      memcpy(b->data + idx * 2, &u, 2);
+      break;
+    }
     case SCR_BYTES_U32: {
       uint32_t u = scr_bytes_to_u32(v);
       memcpy(b->data + idx * 4, &u, 4);
@@ -1796,33 +1853,9 @@ ScrBytes *scr_bytes_from_str(const ScrStr *s, const ScrStr *enc) {
 ScrBytes *scr_bytes_from_arr(ScrBytesElem elem, const ScrArr *arr) {
   ScrBytes *b = scr_bytes_alloc(elem, arr->len);
   for (size_t i = 0; i < arr->len; i++) {
-    /* Buffer.from(Array) applies Number/ToUint* to each value. A hole is
-     * read as undefined and therefore contributes zero; it must never read
-     * an uninitialized dense slot or assume sparse storage is allocated. */
-    double v = scr_arr_has(arr, (double)i) ? scr_arr_get_f64((ScrArr *)arr, (double)i) : 0;
-    switch (elem) {
-      case SCR_BYTES_U8:
-        b->data[i] = (uint8_t)scr_bytes_to_u32(v);
-        break;
-      case SCR_BYTES_U32: {
-        uint32_t u = scr_bytes_to_u32(v);
-        memcpy(b->data + i * 4, &u, 4);
-        break;
-      }
-      case SCR_BYTES_F32: {
-        float f = (float)v;
-        memcpy(b->data + i * 4, &f, 4);
-        break;
-      }
-      case SCR_BYTES_F64:
-        memcpy(b->data + i * 8, &v, 8);
-        break;
-      case SCR_BYTES_I32: {
-        uint32_t u = scr_bytes_to_u32(v);
-        memcpy(b->data + i * 4, &u, 4); /* same residue reinterpreted */
-        break;
-      }
-    }
+    // Iteration reads holes as undefined: floating arrays store NaN and
+    // integer arrays store zero through their normal element conversion.
+    scr_bytes_set(b, (double)i, scr_arr_get_number(arr, (double)i));
   }
   return b;
 }
@@ -2450,4 +2483,19 @@ bool scr_dataview_write_u64_raw(ScrBytes *b, double offset, bool le, uint64_t va
   uint8_t *p = b->data + (size_t)off;
   for (size_t i = 0; i < 8; i++) p[le ? i : 7 - i] = (uint8_t)(value >> (8 * i));
   return true;
+}
+
+ScrArr *scr_bytes_to_arr(const ScrBytes *b) {
+  ScrArr *out = scr_arr_new(SCR_ELEM_F64, b->len ? b->len : 1);
+  for (size_t i = 0; i < b->len; i++) {
+    scr_arr_push_f64(out, scr_bytes_get(b, (double)i));
+  }
+  return out;
+}
+
+ScrStr *scr_bytes_join(const ScrBytes *b, const ScrStr *separator) {
+  ScrArr *values = scr_bytes_to_arr(b);
+  ScrStr *out = scr_arr_join(values, (ScrStr *)separator);
+  scr_arr_release(values);
+  return out;
 }

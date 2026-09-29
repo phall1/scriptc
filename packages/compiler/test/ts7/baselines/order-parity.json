@@ -11157,6 +11157,36 @@
     "<repo>/tests/corpus/union-discriminant-width.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/number-predicates-unknown.ts": {
+   "order": [
+    "<repo>/tests/corpus/number-predicates-unknown.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/typed-array-byte-io.js": {
+   "order": [
+    "<repo>/tests/corpus/typed-array-byte-io.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/typed-array-dynamic-methods.js": {
+   "order": [
+    "<repo>/tests/corpus/typed-array-dynamic-methods.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/typed-array-integer-widths.ts": {
+   "order": [
+    "<repo>/tests/corpus/typed-array-integer-widths.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/typed-array-unknown.ts": {
+   "order": [
+    "<repo>/tests/corpus/typed-array-unknown.ts"
+   ],
+   "diags": []
   }
  }
 }

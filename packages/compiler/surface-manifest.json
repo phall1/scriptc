@@ -3441,9 +3441,8 @@
       "id": "stdlib.response.arrayBuffer",
       "kind": "stdlib",
       "name": "Response.arrayBuffer",
-      "status": "dynamic-only",
-      "code": "SC2020",
-      "note": "Node 24.15.0 / Undici 7.24.4; free-standing ArrayBuffer values have no static representation; use Response.bytes()"
+      "status": "static",
+      "note": "Node 24.15.0 / Undici 7.24.4; facets: body-consumption, promise-settlement, state-machine, error-shape; differential evidence: fixture:static"
     },
     {
       "id": "stdlib.response.blob",

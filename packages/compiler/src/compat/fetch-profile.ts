@@ -500,12 +500,12 @@ export const NODE24_FETCH_COMPAT_PROFILE = {
       facets: ["property-read"],
       evidence: [fixture("static")],
     })),
-    ...["json", "text", "bytes"].map((member): FetchCompatOperation => ({
+    ...["json", "text", "bytes", "arrayBuffer"].map((member): FetchCompatOperation => ({
       id: `stdlib.response.${member}`,
       name: `Response.${member}`,
       kind: "method",
       facets: ["body-consumption", "promise-settlement", "state-machine", "error-shape"],
-      evidence: [fixture("static"), fixture("static-stream")],
+      evidence: member === "arrayBuffer" ? [fixture("static")] : [fixture("static"), fixture("static-stream")],
     })),
   ],
   inventory: {
@@ -711,13 +711,7 @@ export const NODE24_FETCH_COMPAT_PROFILE = {
       ...["url", "redirected", "status", "ok", "statusText", "headers", "body", "bodyUsed"].map(
         (member) => staticEntry(`stdlib.response.${member}`, "Response", member, "prototype"),
       ),
-      dynamicEntry(
-        "stdlib.response.arrayBuffer",
-        "Response",
-        "arrayBuffer",
-        "prototype",
-        "free-standing ArrayBuffer values have no static representation; use Response.bytes()",
-      ),
+      staticEntry("stdlib.response.arrayBuffer", "Response", "arrayBuffer", "prototype"),
       ...["clone", "blob", "formData"].map((member) =>
         unsupportedEntry(
           `stdlib.response.${member}`,

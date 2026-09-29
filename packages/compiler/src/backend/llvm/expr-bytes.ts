@@ -1,6 +1,6 @@
 /* Focused LLVM expression emission extracted from emitter.ts. */
 import { InternalCompilerError } from "../../errors.js";
-import { F64, type IrBytesElem, type IrExpr } from "../../ir/ir.js";
+import { BYTES_ELEMENT_SIZE, F64, type IrBytesElem, type IrExpr } from "../../ir/ir.js";
 import type { LlvmEmitterContext, LlValue } from "./expr-context.js";
 import { F64_INF, f64Lit } from "./common.js";
 
@@ -128,8 +128,9 @@ export function emitBytesLength(host: LlvmEmitterContext, elem: IrBytesElem, rec
     const len = B.tmp();
     B.line(`${p} = getelementptr inbounds %ScrBytes, ptr ${receiver}, i64 0, i32 1`);
     B.line(`${len} = load ${host.sizeType}, ptr ${p}`);
-    const count = bytes && elem !== "u8" ? B.tmp() : len;
-    if (count !== len) B.line(`${count} = shl ${host.sizeType} ${len}, ${elem === "f64" ? 3 : 2}`);
+    const size = BYTES_ELEMENT_SIZE[elem];
+    const count = bytes && size !== 1 ? B.tmp() : len;
+    if (count !== len) B.line(`${count} = shl ${host.sizeType} ${len}, ${Math.log2(size)}`);
     const out = B.tmp();
     B.line(`${out} = uitofp ${host.sizeType} ${count} to double`);
     return { name: out, type: F64 };
@@ -140,14 +141,16 @@ export function emitBytesGet(host: LlvmEmitterContext, elem: IrBytesElem, receiv
     const idx = host.emitBytesIndex(receiver, index, integerIndex);
     const data = host.emitBytesData(receiver);
     const p = B.tmp();
-    if (elem === "u8") {
+    if (BYTES_ELEMENT_SIZE[elem] < 4) {
+      const bits = BYTES_ELEMENT_SIZE[elem] * 8;
+      const signed = elem === "i8" || elem === "i16";
       const raw = B.tmp();
       const wide = B.tmp();
       const out = B.tmp();
-      B.line(`${p} = getelementptr inbounds i8, ptr ${data}, ${host.sizeType} ${idx}`);
-      B.line(`${raw} = load i8, ptr ${p}, align 1`);
-      B.line(`${wide} = zext i8 ${raw} to i32`);
-      B.line(`${out} = uitofp i32 ${wide} to double`);
+      B.line(`${p} = getelementptr inbounds i${bits}, ptr ${data}, ${host.sizeType} ${idx}`);
+      B.line(`${raw} = load i${bits}, ptr ${p}, align 1`);
+      B.line(`${wide} = ${signed ? "sext" : "zext"} i${bits} ${raw} to i32`);
+      B.line(`${out} = ${signed ? "sitofp" : "uitofp"} i32 ${wide} to double`);
       return { name: out, type: F64 };
     }
     if (elem === "f32") {
@@ -249,14 +252,22 @@ export function emitToUint32(host: LlvmEmitterContext, value: string, expr?: IrE
 export function emitBytesSet(host: LlvmEmitterContext, elem: IrBytesElem, receiver: string, index: string, value: string, integerIndex = false): void {
     const B = host.B;
     const idx = host.emitBytesIndex(receiver, index, integerIndex);
-    const stored = elem === "f32" || elem === "f64" ? null : host.emitToUint32(value);
+    let stored: string | null;
+    if (elem === "u8c") {
+      host.declare(`declare double @scr_bytes_to_u8_clamp(double)`);
+      const clamped = B.tmp();
+      stored = B.tmp();
+      B.line(`${clamped} = call double @scr_bytes_to_u8_clamp(double ${value})`);
+      B.line(`${stored} = fptoui double ${clamped} to i32`);
+    } else stored = elem === "f32" || elem === "f64" ? null : host.emitToUint32(value);
     const data = host.emitBytesData(receiver);
     const p = B.tmp();
-    if (elem === "u8") {
+    if (BYTES_ELEMENT_SIZE[elem] < 4) {
+      const bits = BYTES_ELEMENT_SIZE[elem] * 8;
       const byte = B.tmp();
-      B.line(`${byte} = trunc i32 ${stored!} to i8`);
-      B.line(`${p} = getelementptr inbounds i8, ptr ${data}, ${host.sizeType} ${idx}`);
-      B.line(`store i8 ${byte}, ptr ${p}, align 1`);
+      B.line(`${byte} = trunc i32 ${stored!} to i${bits}`);
+      B.line(`${p} = getelementptr inbounds i${bits}, ptr ${data}, ${host.sizeType} ${idx}`);
+      B.line(`store i${bits} ${byte}, ptr ${p}, align 1`);
       return;
     }
     if (elem === "f32") {

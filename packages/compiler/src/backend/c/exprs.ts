@@ -3,7 +3,7 @@ import { InternalCompilerError } from "../../errors.js";
  * expression lands in a fresh C temp, with RC ownership tracked on the
  * emitter's frames (see the discipline comment in emitter core). */
 import type { CEmitter, Temp } from "./c-emitter.js";
-import { arrayOf, BOOL, BYTES_U8, bytesOf, canMarshalFuncIntoIsland, CHILDSTREAM_T, CHILDWRITER_T, DYN, F64, type IrExpr, type IrLibFn, type IrRecordShape, type IrType, islandPromisePayloadTag, classDynViewSupported, isClassOwnEnumerableFieldName, isDynTypedRefType, isFfiCallbackParam, isFfiContextParam, isFfiReleaseParam, isRefCounted, isUnitType, MAY_THROW_LIB_FNS, NETSOCKET_T, RUNTIME_ERROR_CLASSES, STRING, typeEquals, typeKey } from "../../ir/ir.js";
+import { BYTES_ELEMENT_SIZE, arrayOf, BOOL, BYTES_U8, bytesOf, canMarshalFuncIntoIsland, CHILDSTREAM_T, CHILDWRITER_T, DYN, F64, type IrExpr, type IrLibFn, type IrRecordShape, type IrType, islandPromisePayloadTag, classDynViewSupported, isClassOwnEnumerableFieldName, isDynTypedRefType, isFfiCallbackParam, isFfiContextParam, isFfiReleaseParam, isRefCounted, isUnitType, MAY_THROW_LIB_FNS, NETSOCKET_T, RUNTIME_ERROR_CLASSES, STRING, typeEquals, typeKey } from "../../ir/ir.js";
 import { BYTES_NUM_KIND_C, BYTES_NUM_VAR_C, bytesElemKindC, cDecl, cFnPtrCast, cNumberLiteral, cStringLiteral, cType, DV_GET_KIND_C, DV_SET_KIND_C, elemAccess, mapKeyAccess, mapKeyKindC, mapValKindC, releaseCallC, retainCallC, vAdapters } from "./types.js";
 import { mangleClassNew, mangleClassRetain, mangleClassStruct, mangleField, mangleFnClosure, mangleFunction, mangleGlobal, mangleLocal, mangleRecordClone, mangleRecordNew, mangleRecordStruct, mangleVtStruct } from "../mangle.js";
 import { OVERFLOW_MEMBER } from "./shapes.js";
@@ -1993,7 +1993,7 @@ function emitContainerExpr(
             }
             return emitter.newTemp(
               e.type,
-              `(double)(${r.name}->len * ${e.receiver.type.elem === "u8" ? "1" : e.receiver.type.elem === "f64" ? "8" : "4"})`,
+              `(double)(${r.name}->len * ${BYTES_ELEMENT_SIZE[e.receiver.type.elem]})`,
             );
           case "get":
             // Any invalid index traps (the array runtime's discipline).
@@ -3253,6 +3253,10 @@ function emitDynamicExpr(
         // kind, so the calls stay unconditional); narrowing never changes
         // representation (SEMANTICS.md).
         const d = emitter.emitExpr(e.value);
+        if (e.test === "bytes") {
+          const test = `scr_dyn_bytes_is(${d.name}, ${bytesElemKindC(e.bytesElem ?? "u8")})`;
+          return emitter.newTemp(e.type, e.negated ? `!${test}` : test);
+        }
         if (e.test === "buffer") {
           const test = `(${d.name}->kind == SCR_DYN_BYTES && ${d.name}->buffer)`;
           return emitter.newTemp(e.type, e.negated ? `!${test}` : test);
@@ -4331,6 +4335,8 @@ function emitWebLibCall(state: LibCallState): Temp {
             return finish(`scr_fetch_static(${arg(0)}, ${arg(1)})`);
           case "fetch.responseNew":
             return finish(`scr_fetch_response_new(${arg(0)}, ${arg(1)})`);
+          case "fetch.responseArrayBuffer":
+            return finish(`scr_fetch_response_array_buffer(${arg(0)})`);
           case "fetch.responseJson":
             return finish(`scr_fetch_response_json(${arg(0)})`);
           case "fetch.responseText":
@@ -4533,6 +4539,14 @@ function emitDynamicLibCall(state: LibCallState): Temp {
             return finish(`scr_array_buffer_byte_length_getter()`);
           case "arrayBuffer.byteLengthDescriptor":
             return finish(`scr_array_buffer_byte_length_descriptor(${arg(0)})`);
+          case "arrayBuffer.viewU8C":
+            return finish(`scr_array_buffer_view_u8c(${arg(0)}, ${arg(1)}, ${arg(2)})`);
+          case "arrayBuffer.viewI8":
+            return finish(`scr_array_buffer_view_i8(${arg(0)}, ${arg(1)}, ${arg(2)})`);
+          case "arrayBuffer.viewU16":
+            return finish(`scr_array_buffer_view_u16(${arg(0)}, ${arg(1)}, ${arg(2)})`);
+          case "arrayBuffer.viewI16":
+            return finish(`scr_array_buffer_view_i16(${arg(0)}, ${arg(1)}, ${arg(2)})`);
           case "arrayBuffer.viewU8":
             return finish(`scr_array_buffer_view_u8(${arg(0)}, ${arg(1)}, ${arg(2)})`);
           case "arrayBuffer.viewU32":

@@ -7,7 +7,7 @@ import * as ts from "../ts7/adapter.js";
 import { bodyReadsArguments } from "../arguments-usage.js";
 import type { Lowerer } from "./lowerer.js";
 import { lowerGenMethodCall } from "./lower-generators.js";
-import { BIGINT_T, BOOL, CAUGHT, DYN, F64, IrExpr, IrFunction, IrLocal, IrParam, IrStmt, IrType, JSVAL, STRING, SYMBOL_T, SrcLoc, UNDEFINED_T, VOID, arrayOf, canBoxFuncIntoDyn, canConvertToDyn, canDynCheckTo, canMarshalTypedFuncIntoIsland, ffiClassType, ffiSourceParamTypes, funcOf, isFfiCallbackParam, isFfiContextParam, isFfiReleaseParam, isUnitType, shapeHasAccessorSlots, typeEquals } from "../../ir/ir.js";
+import { BYTES_ELEMENT_NAME, BIGINT_T, BOOL, CAUGHT, DYN, F64, IrExpr, IrFunction, IrLocal, IrParam, IrStmt, IrType, JSVAL, STRING, SYMBOL_T, SrcLoc, UNDEFINED_T, VOID, arrayOf, canBoxFuncIntoDyn, canConvertToDyn, canDynCheckTo, canMarshalTypedFuncIntoIsland, ffiClassType, ffiSourceParamTypes, funcOf, isFfiCallbackParam, isFfiContextParam, isFfiReleaseParam, isUnitType, shapeHasAccessorSlots, typeEquals } from "../../ir/ir.js";
 import type { IrFfiCallbackParam, IrFfiCallbackParamClass, IrFfiImport, IrFfiReleaseParam } from "../../ir/ir.js";
 import { isJsSourceFile, isNodeEsmFile, locOf, requireSpecOf } from "../program.js";
 import { genResultRecord, isGenericCallableMemberType, jsOpenObjectType, typeKey } from "../type-mapper.js";
@@ -5269,7 +5269,7 @@ function objectToStringTag(lowerer: Lowerer, type: IrType): string | null {
   case "set": return "Set";
   case "promise": return "Promise";
   case "bytes":
-    return ({ u8: "Uint8Array", u32: "Uint32Array", i32: "Int32Array", f32: "Float32Array", f64: "Float64Array" })[type.elem];
+    return BYTES_ELEMENT_NAME[type.elem];
   case "object":
     return type.className === "%Error" || lowerer.isSubclassOf(type.className, "%Error") ? "Error" : null;
   default: return null;

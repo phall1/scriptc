@@ -334,6 +334,10 @@ export function elemKindC(elem: IrType): string {
 /** The runtime's element-kind tag for a bytes (typed array) type. */
 const BYTES_ELEM_KIND_C: Record<IrBytesElem, string> = {
   u8: "SCR_BYTES_U8",
+  u8c: "SCR_BYTES_U8C",
+  i8: "SCR_BYTES_I8",
+  u16: "SCR_BYTES_U16",
+  i16: "SCR_BYTES_I16",
   u32: "SCR_BYTES_U32",
   i32: "SCR_BYTES_I32",
   f32: "SCR_BYTES_F32",

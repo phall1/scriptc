@@ -195,6 +195,7 @@ enum {
   SF_COLLECT_JSON,
   SF_COLLECT_TEXT,
   SF_COLLECT_BYTES,
+  SF_COLLECT_ARRAY_BUFFER,
 };
 
 enum {
@@ -1545,7 +1546,7 @@ static ScrBytes *sf_chunk_bytes(const ScrDyn *chunk) {
     scr_dyn_release(materialized);
     return bytes;
   }
-  if (chunk && chunk->kind == SCR_DYN_BYTES) {
+  if (chunk && scr_dyn_bytes_is(chunk, SCR_BYTES_U8)) {
     return scr_bytes_copy(chunk->v.bytes);
   }
   if (chunk && chunk->kind == SCR_DYN_STR) {
@@ -1639,6 +1640,8 @@ static void sf_collector_finish(SfStream *s) {
     ScrStr *text = scr_text_decode(bytes);
     value = scr_dyn_new_str(text);
     scr_str_release(text);
+  } else if (c->mode == SF_COLLECT_ARRAY_BUFFER) {
+    value = scr_array_buffer_from_bytes(bytes);
   } else {
     value = scr_dyn_new_bytes(bytes);
   }
@@ -3207,7 +3210,7 @@ static ScrPromise *sf_response_collect(SfResponse *r, int mode) {
     scr_str_release(empty);
   } else {
     ScrBytes *empty = scr_bytes_new(SCR_BYTES_U8, 0);
-    value = scr_dyn_new_bytes(empty);
+    value = mode == SF_COLLECT_ARRAY_BUFFER ? scr_array_buffer_from_bytes(empty) : scr_dyn_new_bytes(empty);
     scr_bytes_release(empty);
   }
   if (scr_exc_pending()) {
@@ -3229,6 +3232,7 @@ static ScrDyn *sf_response_invoke(void *ptr, ScrDyn *self,
   if (strcmp(method, "json") == 0) mode = SF_COLLECT_JSON;
   else if (strcmp(method, "text") == 0) mode = SF_COLLECT_TEXT;
   else if (strcmp(method, "bytes") == 0) mode = SF_COLLECT_BYTES;
+  else if (strcmp(method, "arrayBuffer") == 0) mode = SF_COLLECT_ARRAY_BUFFER;
   if (mode >= 0) {
     ScrPromise *p = sf_response_collect(r, mode);
     ScrDyn *out = scr_dyn_new_promise(p);
@@ -3285,6 +3289,10 @@ ScrPromise *scr_fetch_response_json(ScrDyn *response) {
 
 ScrPromise *scr_fetch_response_text(ScrDyn *response) {
   return sf_response_collect_dyn(response, SF_COLLECT_TEXT);
+}
+
+ScrPromise *scr_fetch_response_array_buffer(ScrDyn *response) {
+  return sf_response_collect_dyn(response, SF_COLLECT_ARRAY_BUFFER);
 }
 
 ScrPromise *scr_fetch_response_bytes(ScrDyn *response) {
@@ -5017,7 +5025,7 @@ ScrDyn *scr_fetch_response_new(ScrDyn *body, ScrDyn *init) {
       !(body->kind == SCR_DYN_HANDLE &&
         body->v.handle.tag == SCR_DYNH_WEB_STREAM)) {
     if (body->kind == SCR_DYN_BYTES) {
-      body_bytes = scr_bytes_copy(body->v.bytes);
+      body_bytes = scr_bytes_from_data(body->v.bytes->data, body->v.bytes->len * scr_bytes_elem_size(body->v.bytes->elem));
     } else {
       ScrStr *text =
           body->kind == SCR_DYN_STR

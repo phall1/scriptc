@@ -3148,6 +3148,9 @@ export function lowerArrayOfCall(lowerer: Lowerer, call: ts.CallExpression,
         }
         return { kind: "call", callee: helper, args: [src, fnArg], type: arrayOf(outElem), loc };
       }
+      if (src.type.kind === "bytes" && args.length === 1) {
+        return { kind: "bytesIntrinsic", method: "toArray", receiver: src, args: [], type: arrayOf(F64), loc };
+      }
       if (src.type.kind === "set" && args.length === 1) {
         return { kind: "setIntrinsic", method: "toArray", receiver: src, args: [], type: arrayOf(src.type.elem), loc };
       }

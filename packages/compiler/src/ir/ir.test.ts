@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { DYN, F64, HANDLE_KINDS, canDynCheckTo, isIslandCallbackParamType, isJsonSafeType, isJsonStringifySafeType, isJsonStringifyDynamicType, type IrRecordShape, type IrType, type IrUnionDef, POINTER_KINDS, STRING, arrayOf, typeEquals, typeKey } from "./ir.js";
+import { DYN, F64, HANDLE_KINDS, BYTES_ELEMENT_NAME, bytesOf, canConvertToDyn, canDynCheckTo, type IrBytesElem, isIslandCallbackParamType, isJsonSafeType, isJsonStringifySafeType, isJsonStringifyDynamicType, type IrRecordShape, type IrType, type IrUnionDef, POINTER_KINDS, STRING, arrayOf, typeEquals, typeKey } from "./ir.js";
 
 describe("IR kind sets", () => {
   test("keeps procStream as the scalar handle exception", () => {
@@ -86,5 +86,20 @@ describe("checked records with opaque payloads", () => {
     expect(isJsonStringifyDynamicType(arrayOf(DYN), record, union)).toBe(true);
     expect(isJsonStringifyDynamicType(arrayOf(STRING), record, union)).toBe(false);
     expect(isJsonStringifyDynamicType(arrayOf({ kind: "union", unionId: "optional" }), record, union)).toBe(true);
+  });
+});
+
+
+describe("native typed-array boundaries", () => {
+  test.each(Object.keys(BYTES_ELEMENT_NAME) as IrBytesElem[])("preserves %s in checked records without a JSON/island claim", (elem) => {
+    const view = bytesOf(elem);
+    const record = (id: string): IrRecordShape | undefined => id === "views"
+      ? { id, fields: [{ name: "values", type: arrayOf(view) }] } : undefined;
+    const union = () => undefined;
+    const shape: IrType = { kind: "record", shapeId: "views" };
+    expect(canConvertToDyn(shape, record, union)).toBe(true);
+    expect(canDynCheckTo(shape, record, union)).toBe(true);
+    expect(isJsonSafeType(shape, record, union)).toBe(false);
+    expect(isIslandCallbackParamType(shape, record, union)).toBe(false);
   });
 });

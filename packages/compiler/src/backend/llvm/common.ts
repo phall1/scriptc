@@ -1,6 +1,6 @@
 import { commentText, unsignedHex } from "../literals.js";
 import { InternalCompilerError } from "../../errors.js";
-import type { IrFfiCallbackParamClass, IrFfiReturnClass, IrFfiValueParamClass } from "../../ir/ir.js";
+import type { IrBytesElem, IrFfiCallbackParamClass, IrFfiReturnClass, IrFfiValueParamClass } from "../../ir/ir.js";
 
 /** User-controlled text embedded after an LLVM `;` comment marker. Preserve
  * ordinary output byte-for-byte, but encode control and line-separator code
@@ -62,3 +62,16 @@ export function f64Lit(n: number): string {
 }
 
 export const F64_INF = f64Lit(Infinity);
+
+/** Stable ScrBytesElem tags from scr_runtime.h. */
+export const BYTES_ELEM_NUM: Record<IrBytesElem, number> = {
+  u8: 0,
+  u32: 1,
+  f32: 2,
+  i32: 3,
+  f64: 4,
+  i8: 5,
+  u16: 6,
+  i16: 7,
+  u8c: 8,
+};

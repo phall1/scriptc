@@ -9,7 +9,7 @@ import { InternalCompilerError } from "../../errors.js";
 import type { CEmitter } from "./c-emitter.js";
 import { DYN_HANDLE_KINDS, type IrType, type IrUnionDef, isDynTypedRefType, isRefCounted, typeEquals, typeKey } from "../../ir/ir.js";
 import { dynDesc, undefinedArmTag, unionWideningTags } from "../../ir/analysis.js";
-import { cCommentText, cDecl, cStringLiteral, cType, elemAccess, releaseCallC, retainCallC, vAdapters } from "./types.js";
+import { bytesElemKindC, cCommentText, cDecl, cStringLiteral, cType, elemAccess, releaseCallC, retainCallC, vAdapters } from "./types.js";
 import { mangleField, mangleRecordNew, mangleRecordStruct } from "../mangle.js";
 import { jsonObjectKeyLabel } from "../json-literal.js";
 import { OVERFLOW_MEMBER } from "./shapes.js";
@@ -350,9 +350,9 @@ export function unionWidenHelper(emitter: CEmitter, fromId: string, toId: string
       `    }`,
       `    for (size_t i = 0; i < d->v.bytes->len; i++) {`,
       `      if (i > 0) scr_jb_putc(b, ',');`,
-      `      char n[16];`,
-      `      snprintf(n, sizeof n, "%u", (unsigned)d->v.bytes->data[i]);`,
-      `      scr_jb_puts(b, n);`,
+      `      ScrStr *n = scr_f64_to_scrstr(scr_bytes_get(d->v.bytes, (double)i));`,
+      `      for (size_t j = 0; j < n->len; j++) scr_jb_putc(b, n->data[j]);`,
+      `      scr_str_release(n);`,
       `    }`,
       `    break;`,
       `  }`,
@@ -800,9 +800,7 @@ export function jsonWriteHelper(emitter: CEmitter, t: IrType): string {
         d.push(`  return true;`);
         break;
       case "bytes":
-        // A Uint8Array target (the checked-dynamic tree carries u8 payloads only).
-        if (t.elem !== "u8") throw new InternalCompilerError(`emitter bug: dynMatch of bytes<${t.elem}>`);
-        d.push(`  return d->kind == SCR_DYN_BYTES;`);
+        d.push(`  return scr_dyn_bytes_is(d, ${bytesElemKindC(t.elem)});`);
         break;
       case "func":
         d.push(`  return d->kind == SCR_DYN_FUNC;`);
@@ -1013,7 +1011,7 @@ export function jsonWriteHelper(emitter: CEmitter, t: IrType): string {
       `    if (d->kind == SCR_DYN_ARR) {`,
       `      item = i < d->v.arr.len ? scr_dyn_retain(d->v.arr.items[i]) : scr_dyn_retain(scr_dyn_undefined());`,
       `    } else if (d->kind == SCR_DYN_BYTES) {`,
-      `      item = i < d->v.bytes->len ? scr_dyn_new_num((double)d->v.bytes->data[i]) : scr_dyn_retain(scr_dyn_undefined());`,
+      `      item = i < d->v.bytes->len ? scr_dyn_new_num(scr_bytes_get(d->v.bytes, (double)i)) : scr_dyn_retain(scr_dyn_undefined());`,
       `    } else {`,
       `      /* String iteration: whole code POINTS (astral chars arrive`,
       `       * unsplit — the string iterator, not charAt). */`,
@@ -1246,9 +1244,8 @@ export function jsonWriteHelper(emitter: CEmitter, t: IrType): string {
         d.push(`  return scr_dyn_retain((ScrDyn *)d);`);
         break;
       case "bytes":
-        // `u as Uint8Array`: kind check, then retain the shared view.
-        if (t.elem !== "u8") throw new InternalCompilerError(`emitter bug: dynCheck of bytes<${t.elem}>`);
-        d.push(`  if (d->kind != SCR_DYN_BYTES) { scr_dyn_check_fail(path, ${want}, d); return NULL; }`);
+        // Check the exact element brand before retaining the shared view.
+        d.push(`  if (!scr_dyn_bytes_is(d, ${bytesElemKindC(t.elem)})) { scr_dyn_check_fail(path, ${want}, d); return NULL; }`);
         d.push(`  return scr_dyn_bytes_unbox(d);`);
         break;
       case "object":
@@ -1572,9 +1569,7 @@ export function jsonWriteHelper(emitter: CEmitter, t: IrType): string {
         d.push(`  return ${dynFuncBoxHelper(emitter, t)}(v, NULL);`);
         break;
       case "bytes":
-        // bytes<u8> → a retained native view (the boundary
-        // stance; stdin chunks into unknown-typed helpers).
-        if (t.elem !== "u8") throw new InternalCompilerError(`emitter bug: to-dyn of bytes<${t.elem}>`);
+        // Preserve the view, its element brand, and its backing allocation.
         d.push(`  return scr_dyn_new_bytes(v);`);
         break;
       case "record": {

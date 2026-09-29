@@ -115,7 +115,10 @@ static void dc_throw_bad_fn_arg(const ScrDyn *cb, const char *arg_name) {
   case SCR_DYN_NULL: received = "null"; break;
   case SCR_DYN_UNDEF: received = "undefined"; break;
   case SCR_DYN_ARR: received = "an instance of Array"; break;
-  case SCR_DYN_BYTES: received = "an instance of Uint8Array"; break;
+  case SCR_DYN_BYTES:
+    snprintf(detail, sizeof detail, "an instance of %s", scr_bytes_elem_name(cb->v.bytes->elem));
+    received = detail;
+    break;
   case SCR_DYN_BOOL:
     snprintf(detail, sizeof detail, "type boolean (%s)", cb->v.b ? "true" : "false");
     received = detail;

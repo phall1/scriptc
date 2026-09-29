@@ -545,7 +545,7 @@ void scr_dyn_arr_push_spread(ScrDyn *arr, const ScrDyn *src, const char *what) {
   }
   if (src->kind == SCR_DYN_BYTES) {
     for (size_t i = 0; i < src->v.bytes->len; i++) {
-      scr_dyn_arr_push(arr, scr_dyn_new_num((double)src->v.bytes->data[i]));
+      scr_dyn_arr_push(arr, scr_dyn_new_num(scr_bytes_get(src->v.bytes, (double)i)));
     }
     return;
   }
@@ -1165,6 +1165,10 @@ void scr_dyn_typed_ref_cache_cast(
   d->v.typed_ref.casts = cast;
 }
 
+bool scr_dyn_bytes_is(const ScrDyn *d, int elem) {
+  return d && d->kind == SCR_DYN_BYTES && d->v.bytes->elem == (ScrBytesElem)elem;
+}
+
 ScrBytes *scr_dyn_bytes_unbox(const ScrDyn *d) {
   return scr_bytes_retain(d->v.bytes);
 }
@@ -1377,7 +1381,9 @@ const char *scr_dyn_specific_type(const ScrDyn *cb, char *detail, size_t cap) {
   case SCR_DYN_UNDEF: d = "undefined"; break;
   case SCR_DYN_OBJ: d = "an instance of Object"; break;
   case SCR_DYN_ARR: d = "an instance of Array"; break;
-  case SCR_DYN_BYTES: d = "an instance of Uint8Array"; break;
+  case SCR_DYN_BYTES:
+    snprintf(detail, cap, "an instance of %s", cb->buffer ? "Buffer" : scr_bytes_elem_name(cb->v.bytes->elem));
+    break;
   case SCR_DYN_FUNC:
     /* determineSpecificType: `function ${value.name}` — anonymous
      * functions keep Node's trailing space. */
@@ -2052,7 +2058,14 @@ ScrStr *scr_dyn_object_tag(const ScrDyn *d) {
     }
     tag = "[object Object]";
     break;
-  case SCR_DYN_BYTES: tag = "[object Uint8Array]"; break;
+  case SCR_DYN_BYTES: {
+    ScrJsonBuf b;
+    scr_jb_init(&b);
+    scr_jb_puts(&b, "[object ");
+    scr_jb_puts(&b, scr_bytes_elem_name(d->v.bytes->elem));
+    scr_jb_putc(&b, ']');
+    return scr_jb_finish(&b);
+  }
   case SCR_DYN_FUNC: tag = "[object Function]"; break;
   case SCR_DYN_PROMISE: tag = "[object Promise]"; break;
   default: {
@@ -2377,18 +2390,10 @@ ScrStr *scr_dyn_to_string(const ScrDyn *d, const ScrStr *enc) {
   switch (d->kind) {
   case SCR_DYN_BYTES:
     if (d->buffer) return scr_bytes_to_str(d->v.bytes, enc);
-    /* Uint8Array.prototype.toString is Array's: elements joined */
     {
-      ScrStr *out = scr_str_new("", 0);
-      for (size_t i = 0; i < d->v.bytes->len; i++) {
-        char n[16];
-        int w = snprintf(n, sizeof n, i > 0 ? ",%u" : "%u", (unsigned)d->v.bytes->data[i]);
-        ScrStr *piece = scr_str_new(n, (size_t)w);
-        ScrStr *joined = scr_str_concat(out, piece);
-        scr_str_release(out);
-        scr_str_release(piece);
-        out = joined;
-      }
+      ScrStr *separator = scr_str_new(",", 1);
+      ScrStr *out = scr_bytes_join(d->v.bytes, separator);
+      scr_str_release(separator);
       return out;
     }
   case SCR_DYN_STR:
@@ -2920,13 +2925,14 @@ void scr_jb_put_dyn(ScrJsonBuf *b, const ScrDyn *d) {
     return;
   case SCR_DYN_BYTES: {
     /* Node's JSON.stringify over a typed array: the index-keyed object
-     * form — {"0":1,"1":2}. u8 payloads only reach the checked-dynamic tree today. */
+     * form — {"0":1,"1":2}, using each view's numeric element kind. */
     scr_jb_putc(b, '{');
     for (size_t i = 0; i < d->v.bytes->len; i++) {
       if (i > 0) scr_jb_putc(b, ',');
       char idx[32];
-      snprintf(idx, sizeof idx, "\"%zu\":%u", i, (unsigned)d->v.bytes->data[i]);
+      snprintf(idx, sizeof idx, "\"%zu\":", i);
       scr_jb_puts(b, idx);
+      scr_jb_put_f64(b, scr_bytes_get(d->v.bytes, (double)i));
     }
     scr_jb_putc(b, '}');
     return;
@@ -3029,7 +3035,7 @@ static const char *scr_dyn_kind_name(const ScrDyn *d) {
   case SCR_DYN_ARR: return "array";
   case SCR_DYN_OBJ: return "object";
   case SCR_DYN_UNDEF: return "undefined";
-  case SCR_DYN_BYTES: return "Uint8Array";
+  case SCR_DYN_BYTES: return scr_bytes_elem_name(d->v.bytes->elem);
   case SCR_DYN_FUNC: return "function";
   case SCR_DYN_HANDLE: return scr_dyn_handle_cls(d); /* "got IncomingMessage" */
   case SCR_DYN_PROMISE: return "Promise"; /* "got Promise" */
@@ -4374,7 +4380,7 @@ static ScrDyn *scr_dyn_objwalk(const ScrDyn *v, ScrObjWalk mode) {
       ScrDyn *val = NULL;
       if (mode != SCR_OBJWALK_KEYS) {
         val = v->kind == SCR_DYN_ARR ? scr_dyn_retain(v->v.arr.items[i])
-                                     : scr_dyn_new_num((double)v->v.bytes->data[i]);
+                                     : scr_dyn_new_num(scr_bytes_get(v->v.bytes, (double)i));
       }
       if (mode == SCR_OBJWALK_KEYS) {
         scr_dyn_arr_push(out, scr_dyn_objwalk_key(key, (size_t)klen));
@@ -5093,6 +5099,10 @@ ScrBytes *scr_array_buffer_view(ScrBytesElem elem, const ScrDyn *buffer,
 ScrBytes *scr_array_buffer_view_##name(ScrDyn *buffer, ScrDyn *offset, ScrDyn *length) { \
   return scr_array_buffer_view(elem, buffer, offset, length); \
 }
+SCR_ARRAY_BUFFER_VIEW(u8c, SCR_BYTES_U8C)
+SCR_ARRAY_BUFFER_VIEW(i8, SCR_BYTES_I8)
+SCR_ARRAY_BUFFER_VIEW(u16, SCR_BYTES_U16)
+SCR_ARRAY_BUFFER_VIEW(i16, SCR_BYTES_I16)
 SCR_ARRAY_BUFFER_VIEW(u8, SCR_BYTES_U8)
 SCR_ARRAY_BUFFER_VIEW(u32, SCR_BYTES_U32)
 SCR_ARRAY_BUFFER_VIEW(i32, SCR_BYTES_I32)

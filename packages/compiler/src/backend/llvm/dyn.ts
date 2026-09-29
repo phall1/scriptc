@@ -1,4 +1,4 @@
-import { f64Lit } from "./common.js";
+import { BYTES_ELEM_NUM, f64Lit } from "./common.js";
 import { InternalCompilerError } from "../../errors.js";
 /* The dyn (ScrDyn dyn) helper EMITTERS for the LLVM backend — the .ll
  * mirror of walkers.ts's dyn slice: per-type match predicates
@@ -389,10 +389,13 @@ export class LlDyn {
         // An `unknown` target: every dyn value fits, undefined included.
         B.terminate(`ret i1 true`);
         break;
-      case "bytes":
-        if (t.elem !== "u8") throw new InternalCompilerError(`llvm emitter bug: dynMatch of bytes<${t.elem}>`);
-        kindIs(DYN_KIND.BYTES);
+      case "bytes": {
+        this.host.declare(`declare zeroext i1 @scr_dyn_bytes_is(ptr, i32)`);
+        const matched = B.tmp();
+        B.line(`${matched} = call zeroext i1 @scr_dyn_bytes_is(ptr %d, i32 ${BYTES_ELEM_NUM[t.elem]})`);
+        B.terminate(`ret i1 ${matched}`);
         break;
+      }
       case "func":
         kindIs(DYN_KIND.FUNC);
         break;
@@ -798,9 +801,16 @@ export class LlDyn {
         break;
       }
       case "bytes": {
-        // `u as Uint8Array`: kind check, then retain the shared view.
-        if (t.elem !== "u8") throw new InternalCompilerError(`llvm emitter bug: dynCheck of bytes<${t.elem}>`);
-        requireKind(DYN_KIND.BYTES, "dc");
+        host.declare(`declare zeroext i1 @scr_dyn_bytes_is(ptr, i32)`);
+        const matched = B.tmp();
+        B.line(`${matched} = call zeroext i1 @scr_dyn_bytes_is(ptr %d, i32 ${BYTES_ELEM_NUM[t.elem]})`);
+        const yes = B.newLabel("dc.bytes");
+        const no = B.newLabel("dc.bytes.fail");
+        B.condBr(matched, yes, no);
+        B.startBlock(no);
+        B.line(`call void @scr_dyn_check_fail(ptr %path, ptr ${want}, ptr %d)`);
+        B.terminate(`ret ptr null`);
+        B.startBlock(yes);
         host.declare(`declare ptr @scr_dyn_bytes_unbox(ptr)`);
         const r = B.tmp();
         B.line(`${r} = call ptr @scr_dyn_bytes_unbox(ptr %d)`);
@@ -1360,7 +1370,6 @@ export class LlDyn {
         break;
       }
       case "bytes": {
-        if (t.elem !== "u8") throw new InternalCompilerError(`llvm emitter bug: to-dyn of bytes<${t.elem}>`);
         host.declare(`declare ptr @scr_dyn_new_bytes(ptr)`);
         const r = B.tmp();
         B.line(`${r} = call ptr @scr_dyn_new_bytes(ptr %v)`);
@@ -2017,35 +2026,11 @@ export class LlDyn {
         B.br(done);
         B.startBlock(lJoin);
         const bts = this.payloadOf(B, "%d", "ptr");
-        const blenp = B.tmp();
-        const blen = B.tmp();
-        const bdatap = B.tmp();
-        const bdata = B.tmp();
-        B.line(`${blenp} = getelementptr inbounds i8, ptr ${bts}, i64 ${this.abiOffset(8, 4)} ; ->len`);
-        B.line(`${blen} = load ${this.S}, ptr ${blenp}`);
-        B.line(`${bdatap} = getelementptr inbounds i8, ptr ${bts}, i64 ${this.abiOffset(24, 12)} ; ->data`);
-        B.line(`${bdata} = load ptr, ptr ${bdatap}`);
-        this.i64Loop(B, "ds.by", blen, (i) => {
-          const nz = B.tmp();
-          B.line(`${nz} = icmp ugt ${this.S} ${i}, 0`);
-          const lcm = B.newLabel("ds.bc");
-          const lv = B.newLabel("ds.bv");
-          B.condBr(nz, lcm, lv);
-          B.startBlock(lcm);
-          B.line(`call void @scr_jb_putc(ptr %b, i8 44)`);
-          B.br(lv);
-          B.startBlock(lv);
-          const cp = B.tmp();
-          const c = B.tmp();
-          const cd = B.tmp();
-          B.line(`${cp} = getelementptr inbounds i8, ptr ${bdata}, ${this.S} ${i}`);
-          B.line(`${c} = load i8, ptr ${cp}`);
-          B.line(`${cd} = uitofp i8 ${c} to double`);
-          const s = B.tmp();
-          B.line(`${s} = call ptr @scr_f64_to_scrstr(double ${cd})`);
-          this.putScrStr(B, "%b", s);
-          B.line(`call void @scr_str_release(ptr ${s})`);
-        });
+        host.declare(`declare ptr @scr_bytes_join(ptr, ptr)`);
+        const joined = B.tmp();
+        B.line(`${joined} = call ptr @scr_bytes_join(ptr ${bts}, ptr ${host.internLiteral(",")})`);
+        this.putScrStr(B, "%b", joined);
+        B.line(`call void @scr_str_release(ptr ${joined})`);
         B.br(done);
       }
       B.startBlock(labels.get(DYN_KIND.FUNC)!);
@@ -2814,7 +2799,7 @@ export class LlDyn {
         B.line(`store ptr ${r2}, ptr ${itemSlot}`);
         B.br(lPush);
       }
-      // BYTES: by byte.
+      // BYTES: by numeric element.
       B.startBlock(lBy);
       {
         const bts = this.payloadOf(B, "%d", "ptr");
@@ -2828,17 +2813,12 @@ export class LlDyn {
         const lMiss = B.newLabel("din.bm");
         B.condBr(inR, lHit, lMiss);
         B.startBlock(lHit);
-        const bdatap = B.tmp();
-        const bdata = B.tmp();
-        B.line(`${bdatap} = getelementptr inbounds i8, ptr ${bts}, i64 ${this.abiOffset(24, 12)} ; ->data`);
-        B.line(`${bdata} = load ptr, ptr ${bdatap}`);
-        const bp = B.tmp();
-        const bv = B.tmp();
+        host.declare(`declare double @scr_bytes_get(ptr, double)`);
+        const index = B.tmp();
         const bd = B.tmp();
         const r = B.tmp();
-        B.line(`${bp} = getelementptr inbounds i8, ptr ${bdata}, ${host.sizeType} ${i}`);
-        B.line(`${bv} = load i8, ptr ${bp}`);
-        B.line(`${bd} = uitofp i8 ${bv} to double`);
+        B.line(`${index} = uitofp ${host.sizeType} ${i} to double`);
+        B.line(`${bd} = call double @scr_bytes_get(ptr ${bts}, double ${index})`);
         B.line(`${r} = call ptr @scr_dyn_new_num(double ${bd})`);
         B.line(`store ptr ${r}, ptr ${itemSlot}`);
         B.br(lPush);

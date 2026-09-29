@@ -158,10 +158,10 @@ function lowerOptionalNumberPredicate(
   // arm runs the predicate; every other arm answers false after evaluating
   // the argument once. This includes the undefined added by array reads.
   const widened = value.type;
-  if (widened.kind !== "union") return null;
-  const numberTag = lowerer.armTag(widened.unionId, F64);
-  if (numberTag < 0) return null;
-  const key = `number.optionalPredicate:${fn}:${widened.unionId}`;
+  if (widened.kind !== "union" && widened.kind !== "dyn") return null;
+  const numberTag = widened.kind === "union" ? lowerer.armTag(widened.unionId, F64) : -1;
+  if (widened.kind === "union" && numberTag < 0) return null;
+  const key = `number.optionalPredicate:${fn}:${typeKey(widened)}`;
   let helper = lowerer.widthHelpers.get(key);
   if (!helper) {
     helper = `%number.optionalPredicate.${lowerer.widthHelpers.size}`;
@@ -175,7 +175,9 @@ function lowerOptionalNumberPredicate(
       body: [
         {
           kind: "if",
-          cond: { kind: "unionIsTag", unionId: widened.unionId, tag: numberTag, negated: true, value: input, type: BOOL, loc },
+          cond: widened.kind === "dyn"
+            ? { kind: "dynTest", test: "number", negated: true, value: input, type: BOOL, loc }
+            : { kind: "unionIsTag", unionId: widened.unionId, tag: numberTag, negated: true, value: input, type: BOOL, loc },
           then: [{ kind: "return", value: boolLit(false, loc), loc }],
           else_: null,
           loc,
@@ -185,7 +187,9 @@ function lowerOptionalNumberPredicate(
           value: {
             kind: "libCall",
             fn,
-            args: [{ kind: "unionNarrow", unionId: widened.unionId, tag: numberTag, value: input, type: F64, loc }],
+            args: [widened.kind === "dyn"
+              ? { kind: "dynCheck", value: input, type: F64, loc }
+              : { kind: "unionNarrow", unionId: widened.unionId, tag: numberTag, value: input, type: F64, loc }],
             type: BOOL,
             loc,
           },

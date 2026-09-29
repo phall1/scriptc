@@ -30,6 +30,10 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "arrayBuffer.isView": "scr_array_buffer_is_view",
   "arrayBuffer.byteLengthGetter": "scr_array_buffer_byte_length_getter",
   "arrayBuffer.byteLengthDescriptor": "scr_array_buffer_byte_length_descriptor",
+  "arrayBuffer.viewU8C": "scr_array_buffer_view_u8c",
+  "arrayBuffer.viewI8": "scr_array_buffer_view_i8",
+  "arrayBuffer.viewU16": "scr_array_buffer_view_u16",
+  "arrayBuffer.viewI16": "scr_array_buffer_view_i16",
   "arrayBuffer.viewU8": "scr_array_buffer_view_u8",
   "arrayBuffer.viewU32": "scr_array_buffer_view_u32",
   "arrayBuffer.viewI32": "scr_array_buffer_view_i32",
@@ -517,6 +521,7 @@ export const LIB_FN_SYMS: Record<string, string> = {
   // ambient-this read never throw. The fs dyn read is the sync-fs story.
   "fetch.start": "scr_fetch_static",
   "fetch.responseNew": "scr_fetch_response_new",
+  "fetch.responseArrayBuffer": "scr_fetch_response_array_buffer",
   "fetch.responseJson": "scr_fetch_response_json",
   "fetch.responseText": "scr_fetch_response_text",
   "fetch.responseBytes": "scr_fetch_response_bytes",

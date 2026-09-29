@@ -1512,14 +1512,14 @@ void scr_http_res_write_str(ScrHttpRes *r, ScrStr *data /*borrowed*/) {
 void scr_http_res_write_bytes(ScrHttpRes *r, ScrBytes *data /*borrowed*/) {
   double expected;
   if (r->head_sent && scr_http_res_expected_length(r, &expected) &&
-      (double)(r->strict_bytes_written + data->len) > expected) {
-    r->strict_bytes_written += data->len;
+      (double)(r->strict_bytes_written + (data->len * scr_bytes_elem_size(data->elem))) > expected) {
+    r->strict_bytes_written += (data->len * scr_bytes_elem_size(data->elem));
     scr_http_res_length_mismatch(r, expected);
-    r->strict_bytes_written -= data->len;
+    r->strict_bytes_written -= (data->len * scr_bytes_elem_size(data->elem));
     return;
   }
-  if (r->strict_content_length) r->strict_bytes_written += data->len;
-  scr_http_res_write_raw(r, (const char *)data->data, data->len);
+  if (r->strict_content_length) r->strict_bytes_written += (data->len * scr_bytes_elem_size(data->elem));
+  scr_http_res_write_raw(r, (const char *)data->data, (data->len * scr_bytes_elem_size(data->elem)));
 }
 
 /* res.flushHeaders(): the head goes out NOW (streaming framing — chunked
@@ -1642,7 +1642,7 @@ void scr_http_res_end_str(ScrHttpRes *r, ScrStr *data /*borrowed*/) {
 }
 
 void scr_http_res_end_bytes(ScrHttpRes *r, ScrBytes *data /*borrowed*/) {
-  scr_http_res_end_raw(r, (const char *)data->data, data->len);
+  scr_http_res_end_raw(r, (const char *)data->data, (data->len * scr_bytes_elem_size(data->elem)));
 }
 
 void scr_http_res_write_head(ScrHttpRes *r, double status) {
@@ -3552,7 +3552,7 @@ void scr_http_client_write_str(ScrHttpClientReq *c, ScrStr *data /*borrowed*/) {
 }
 
 void scr_http_client_write_bytes(ScrHttpClientReq *c, ScrBytes *data /*borrowed*/) {
-  scr_http_client_write_raw(c, (const char *)data->data, data->len);
+  scr_http_client_write_raw(c, (const char *)data->data, (data->len * scr_bytes_elem_size(data->elem)));
 }
 
 static void scr_http_client_cork_flush(ScrHttpClientReq *c) {
@@ -3608,7 +3608,7 @@ void scr_http_client_end_str(ScrHttpClientReq *c, ScrStr *data /*borrowed*/) {
 }
 
 void scr_http_client_end_bytes(ScrHttpClientReq *c, ScrBytes *data /*borrowed*/) {
-  scr_http_client_end_raw(c, (const char *)data->data, data->len);
+  scr_http_client_end_raw(c, (const char *)data->data, (data->len * scr_bytes_elem_size(data->elem)));
 }
 
 void scr_http_client_flush_headers(ScrHttpClientReq *c) {
