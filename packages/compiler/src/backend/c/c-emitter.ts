@@ -87,6 +87,28 @@ export function emitCModule(
   return new CEmitter(scalarizeNumericRecords(mod), sourceText, options).emit();
 }
 
+/** Output chunks avoid the host's single-string size limit when a compiler
+ * contains both emitters. Keep individual emitted lines intact, including
+ * UTF-16 surrogate pairs. Joining these preserves emitCModule's exact bytes. */
+export function emitCModuleChunks(
+  mod: IrModule,
+  sourceText?: string,
+  options: CEmitOptions = {},
+): string[] {
+  const lines = new CEmitter(scalarizeNumericRecords(mod), sourceText, options).emitLines();
+  const chunks: string[] = [];
+  let chunk = "";
+  let first = true;
+  for (const line of lines) {
+    if (!first) chunk += "\n";
+    first = false;
+    chunk += line;
+    if (chunk.length >= 64 * 1024) { chunks.push(chunk); chunk = ""; }
+  }
+  if (chunk !== "") chunks.push(chunk);
+  return chunks;
+}
+
 // Box construction moved onto CEmitter (boxNewC method): obj-kind boxes now
 // also carry the payload type's trace entry point, which is type-directed
 // through the emitter's cycle analysis.
@@ -568,7 +590,9 @@ export class CEmitter {
     }
   }
 
-  emit(): string {
+  emit(): string { return this.emitLines().join("\n"); }
+
+  emitLines(): string[] {
     const body: string[] = [];
     // Async-generator spawn wrappers need their type-directed result
     // builders even when user code only creates and drops the iterator.
@@ -773,7 +797,7 @@ export class CEmitter {
       // loop — the profile-declared external symbols instead. Everything
       // above is unchanged (still all internal linkage).
       this.emitLibEntries(out, globals);
-      return out.join("\n");
+      return out;
     }
     const refGlobals = globals.filter((g) => isRefCounted(g.type));
     // Interned function-value closures are IMMORTAL (rc == SIZE_MAX), so
@@ -1019,7 +1043,7 @@ export class CEmitter {
       `}`,
       ``,
     );
-    return out.join("\n");
+    return out;
   }
 
   /* ── library mode ─────────────────────────────────────────────────────

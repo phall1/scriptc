@@ -2248,6 +2248,33 @@ function validateFunction(
     }
   }
 
+  function checkLogicalTree(root: IrExpr & { kind: "logical" }): void {
+    // Long predicates can associate in either direction. Keep their
+    // left/right/parent diagnostic order with bounded native stack use.
+    const pending: { expr: IrExpr; visited: boolean }[] = [{ expr: root, visited: false }];
+    while (pending.length !== 0) {
+      const task = pending.pop()!;
+      const e = task.expr;
+      if (e.kind !== "logical") {
+        checkExpr(e);
+      } else if (!task.visited) {
+        pending.push({ expr: e, visited: true });
+        pending.push({ expr: e.right, visited: false });
+        pending.push({ expr: e.left, visited: false });
+      } else {
+        if (
+          e.type.kind !== "f64" && e.type.kind !== "string" && e.type.kind !== "bool" &&
+          e.type.kind !== "jsval" && e.type.kind !== "union" && e.type.kind !== "dyn"
+        ) {
+          err(`logical ${e.op} must be f64|string|bool|jsval|union|dyn, got ${e.type.kind}`, e.loc);
+        }
+        if (e.type.kind === "union") checkTruthyUnion(e.type.unionId, e.loc);
+        expectType(e.left, e.type, `logical ${e.op} left`);
+        expectType(e.right, e.type, `logical ${e.op} right`);
+      }
+    }
+  }
+
   function checkExpr(e: IrExpr): void {
     switch (e.kind) {
       case "numLit":
@@ -2461,17 +2488,7 @@ function validateFunction(
         if (e.type.kind !== "bool") err("toBool must be bool", e.loc);
         break;
       case "logical":
-        checkExpr(e.left);
-        checkExpr(e.right);
-        if (
-          e.type.kind !== "f64" && e.type.kind !== "string" && e.type.kind !== "bool" &&
-          e.type.kind !== "jsval" && e.type.kind !== "union" && e.type.kind !== "dyn"
-        ) {
-          err(`logical ${e.op} must be f64|string|bool|jsval|union|dyn, got ${e.type.kind}`, e.loc);
-        }
-        if (e.type.kind === "union") checkTruthyUnion(e.type.unionId, e.loc);
-        expectType(e.left, e.type, `logical ${e.op} left`);
-        expectType(e.right, e.type, `logical ${e.op} right`);
+        checkLogicalTree(e);
         break;
       case "unionEq": {
         checkExpr(e.left);

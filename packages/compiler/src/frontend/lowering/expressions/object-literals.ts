@@ -23,7 +23,7 @@ import type { Lowerer } from "../lowerer.js";
 import { lowerIndexMergeHelper } from "../lower-containers.js";
 import type { IndexMergeContributor } from "../lower-containers.js";
 import { isGenericCallableMemberType } from "../../type-mapper.js";
-import { numLit, varRef } from "../../../ir/build.js";
+import { numLit, strLit, varRef } from "../../../ir/build.js";
 import { isSafeToRepeat } from "./evaluation-safety.js";
 import { tryLowerExpression } from "./try-lower-expression.js";
 import { fenceSymbolFieldCopy } from "../symbol-fields.js";
@@ -211,7 +211,7 @@ export function lowerDynObjectLiteral(
         const descriptor: IrExpr = { kind: "dynObjLit", type: DYN, loc, fields: [
           { key: { kind: "strLit", value: "value", type: STRING, loc }, value: field.value },
           ...["writable", "enumerable", "configurable"].map(name => ({
-            key: { kind: "strLit", value: name, type: STRING, loc } as IrExpr,
+            key: strLit(name, loc),
             value: { kind: "dynFrom", value: { kind: "boolLit", value: true, type: BOOL, loc }, type: DYN, loc } as IrExpr,
           })),
         ] };
@@ -278,7 +278,7 @@ export function lowerDynObjectLiteral(
         kind: "dynObjLit", type: DYN, loc: locOf(prop), fields: [
           { key: { kind: "strLit", value: ts.isGetAccessorDeclaration(prop) ? "get" : "set", type: STRING, loc }, value: lowerer.coerceToExpected(fn, DYN) },
           ...["enumerable", "configurable"].map(name => ({
-            key: { kind: "strLit", value: name, type: STRING, loc } as IrExpr,
+            key: strLit(name, loc),
             value: { kind: "dynFrom", value: { kind: "boolLit", value: true, type: BOOL, loc }, type: DYN, loc } as IrExpr,
           })),
         ],

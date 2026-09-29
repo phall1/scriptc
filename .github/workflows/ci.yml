@@ -63,6 +63,7 @@ jobs:
           --exclude=tests/harness/self-hosting-serialization.test.ts
           --exclude=tests/harness/self-hosting.test.ts
           --exclude=tests/harness/self-hosting-llvm-emitter.test.ts
+          --exclude=tests/harness/self-hosting-native-driver.test.ts
           --exclude=tests/harness/fetch.test.ts
           --exclude=tests/harness/npm-static.test.ts
           --exclude=tests/harness/surface-manifest.test.ts
@@ -82,6 +83,12 @@ jobs:
         env:
           SCRIPTC_TEST_WORKERS: "1"
         run: pnpm test tests/harness/self-hosting-llvm-emitter.test.ts
+      - name: Tests (native compiler bootstrap)
+        if: matrix.shard == 6
+        env:
+          SCRIPTC_TEST_WORKERS: "1"
+          VITEST_RPC_TIMEOUT: "180000"
+        run: pnpm test tests/harness/self-hosting-native-driver.test.ts
       # These long files otherwise collide in one Vitest file shard and contend
       # for the worker RPC. Spread them across jobs with one worker each.
       - name: Tests (fetch)

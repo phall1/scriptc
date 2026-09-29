@@ -29,7 +29,7 @@ export function lowerFfiMemoryModule(lowerer: Lowerer, loc: SrcLoc): IrExpr {
         : [{ kind: "return", value: { kind: "dynFrom", value: call, type: DYN, loc }, loc }], loc,
     });
     const closure: IrExpr = { kind: "closure", fnName: name, captures: [], type: funcOf(locals.map(() => DYN), resultType.kind === "void" ? VOID : DYN), loc };
-    const callback = entry.params.find(isFfiCallbackParam)?.callback;
+    const callback = entry.params.find(param => isFfiCallbackParam(param))?.callback;
     return object({
       library: text(entry.library!), name: text(entry.name),
       operation: text(entry.callbackOperation ?? "call"), target: text(entry.callbackTarget ?? ""),

@@ -16,7 +16,7 @@ import {
   resolveCc,
   targetPlatform,
 } from "./backend/external-c.js";
-import { emitCModule } from "./backend/c/c-emitter.js";
+import { emitCModule, emitCModuleChunks } from "./backend/c/c-emitter.js";
 import { emitLlvmModule, LlvmUnsupportedError } from "./backend/llvm/emitter.js";
 import { emitNativeArtifact, NativeCodegenError } from "./backend/native-codegen.js";
 import { privateSiblingPath } from "./backend/build-cache.js";
@@ -53,7 +53,7 @@ import {
 import { validateSidecar } from "./library/sidecar-validate.js";
 import type { EntryExportInfo } from "./frontend/lib-exports.js";
 import type { ContractFacts } from "./frontend/lib-contract.js";
-import { moduleLibAsyncSurface, moduleLibNondeterministicSurface, moduleEmbedsBuiltin, moduleEmbedsCompressedNpm, moduleUsesAssert, moduleUsesCopying, moduleUsesDc, moduleUsesDgram, moduleUsesDynAsync, moduleUsesDynInvoke, moduleUsesEmitter, moduleUsesFetch, moduleUsesFileHandle, moduleUsesFsWatch, moduleUsesHttp2, moduleUsesHttpServer, moduleUsesInspect, moduleUsesLegacyTextDecoder, moduleUsesNet, moduleUsesNodeTest, moduleUsesParseArgs, moduleUsesProcessEvents, moduleUsesQs, moduleUsesRegex, moduleUsesSearchParams, moduleUsesStream, moduleUsesSymbol, moduleUsesTls, moduleUsesTlsCa, moduleUsesZlib, type IrFfiImport, type IrLibSection, type IrModule, type IrRecordShape, type IrType, type SrcLoc } from "./ir/ir.js";
+import { moduleLibAsyncSurface, moduleLibNondeterministicSurface, moduleEmbedsBuiltin, moduleUsesAssert, moduleUsesCopying, moduleUsesEmitter, moduleUsesFetch, moduleUsesInspect, moduleUsesLegacyTextDecoder, moduleUsesRegex, moduleUsesSearchParams, moduleUsesSymbol, moduleUsesZlib, type IrFfiImport, type IrLibSection, type IrModule, type IrRecordShape, type IrType, type SrcLoc } from "./ir/ir.js";
 import { moduleUsesBigInt } from "./ir/ir.js";
 import { serializeModule } from "./ir/serialize.js";
 import { validateModule } from "./ir/validate.js";
@@ -64,7 +64,7 @@ import { clearResolveCaches } from "./frontend/resolve.js";
 import type { LowerResult } from "./frontend/lowering/lowerer.js";
 import type { CoverageInput } from "./coverage/report.js";
 import { loadFfiProfile, type FfiProfile } from "./ffi/ffi-manifest.js";
-import { hasForeignFfiCallback } from "./backend/ffi-callbacks.js";
+import { executableLinkFeatures } from "./backend/executable-features.js";
 import { FrontendInputTracker, trackedReadFile } from "./frontend/input-tracker.js";
 import { libraryFrontendImplementationFingerprint, publishEarlyLibraryCache, readEarlyLibraryCache, readSemanticLibraryCache, type EarlyLibraryCacheOptions, type EarlyLibraryCachePublish, type EarlyLibraryNativeFeatures, type SemanticLibraryCacheHit } from "./library/library-cache.js";
 import { createSourceLineRebaser } from "./library/semantic-source.js";
@@ -95,6 +95,7 @@ export {
 export { ANDROID_MIN_API, IPHONEOS_MIN_VERSION, isAndroidTarget, isIosTarget, isMobileTarget, mobileLibraryTarget, mobileTargetRefusal } from "./backend/external-c.js";
 export {
   emitCModule,
+  emitCModuleChunks,
   emitCModule as emitModule,
   type CEmitOptions,
 } from "./backend/c/c-emitter.js";
@@ -654,40 +655,7 @@ function executableNativeFeatures(
     backend,
     ...(optimization === "dev" ? { optimization: "dev" as const } : {}),
     ...(llvmRefusal === undefined ? {} : { llvmRefusal }),
-    dynamic,
-    regex: moduleUsesRegex(mod),
-    copying: moduleUsesCopying(mod),
-    textDecoderLegacy: moduleUsesLegacyTextDecoder(mod),
-    fileHandle: moduleUsesFileHandle(mod),
-    fetch: moduleUsesFetch(mod),
-    netIsland:
-      moduleEmbedsBuiltin(mod, "node:http") ||
-      moduleEmbedsBuiltin(mod, "node:https") ||
-      moduleEmbedsBuiltin(mod, "node:net") ||
-      moduleEmbedsBuiltin(mod, "node:tls"),
-    zlib: moduleUsesZlib(mod) || moduleEmbedsCompressedNpm(mod),
-    assert: moduleUsesAssert(mod),
-    inspect: moduleUsesInspect(mod),
-    dynInvoke: moduleUsesDynInvoke(mod),
-    dc: moduleUsesDc(mod),
-    dynAsync: moduleUsesDynAsync(mod),
-    events: moduleUsesProcessEvents(mod),
-    emitter: moduleUsesEmitter(mod),
-    symbol: moduleUsesSymbol(mod),
-    bigint: moduleUsesBigInt(mod),
-    searchParams: moduleUsesSearchParams(mod),
-    qs: moduleUsesQs(mod),
-    parseArgs: moduleUsesParseArgs(mod),
-    stream: moduleUsesStream(mod),
-    net: moduleUsesNet(mod),
-    http: moduleUsesHttpServer(mod),
-    http2: moduleUsesHttp2(mod),
-    dgram: moduleUsesDgram(mod),
-    watch: moduleUsesFsWatch(mod),
-    foreignFfi: hasForeignFfiCallback(mod.ffiImports ?? []),
-    nodeTest: moduleUsesNodeTest(mod),
-    tls: moduleUsesTls(mod),
-    tlsCa: moduleUsesTlsCa(mod),
+    ...executableLinkFeatures(mod, dynamic),
   };
 }
 
@@ -1255,7 +1223,7 @@ async function compileTracked(
 
   if (outputKind === "c") {
     await mkdir(dirname(opts.outPath), { recursive: true });
-    await writeFile(opts.outPath, emitCModule(lowered.module, entryText, debugOptions));
+    await writeFile(opts.outPath, emitCModuleChunks(lowered.module, entryText, debugOptions));
     return { ok: true, artifact: { kind: "c", path: opts.outPath } };
   }
 
@@ -1359,7 +1327,7 @@ async function compileTracked(
     }
   }
   if (backend === "c") {
-    await writeFile(cPath, emitCModule(lowered.module!, entryText, debugOptions));
+    await writeFile(cPath, emitCModuleChunks(lowered.module!, entryText, debugOptions));
   }
   let irPath: string | undefined;
   if (opts.emitIr) {

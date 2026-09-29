@@ -26,6 +26,20 @@ export function validatorCases(): ValidatorCase[] {
     cases.push({ name, module, ...(diagnostic ? { diagnostic } : {}) });
   };
   add("empty module", () => {});
+  for (const direction of ["left", "right", "alternating"]) {
+    for (const invalid of [false, true]) {
+      add(`deep logical ${direction} ${invalid ? "invalid" : "valid"}`, (m) => {
+        let tree: IrExpr = invalid ? { kind: "boolLit", value: true, type: F64, loc } : boolLit(true, loc);
+        for (let depth = 0; depth < 128; depth++) {
+          const leaf = boolLit(depth % 2 === 0, loc);
+          const left = direction === "left" || (direction === "alternating" && depth % 2 === 0);
+          tree = { kind: "logical", op: depth % 2 === 0 ? "&&" : "||",
+            left: left ? tree : leaf, right: left ? leaf : tree, type: BOOL, loc };
+        }
+        m.functions[0]!.body = [expression(tree)];
+      }, invalid ? "boolLit must be bool" : undefined);
+    }
+  }
   add("duplicate function", (m) => { m.functions.push(structuredClone(m.functions[0]!)); }, "duplicate function");
   add("unknown local", (m) => { m.functions[0]!.body = [expression(varRef("missing", F64, loc))]; }, "missing");
   add("parameter without local", (m) => {

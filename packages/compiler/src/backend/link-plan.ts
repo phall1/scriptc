@@ -11,13 +11,8 @@ import type { NativeLinkFeatures } from "./native-link-info.js";
 import type { NativeArtifactDependency } from "./native-toolchain.js";
 import { needsDarwinDebugSymbols } from "./debug-symbols.js";
 import { loadRuntimePack, type RuntimePackSelection } from "./runtime-pack.js";
-import {
-  executableOptimizationLinkerArgs,
-  executableStripLinkerArgs,
-  windowsSubsystemLinkerArgs,
-  type NativeTargetSpec,
-  type WindowsSubsystem,
-} from "./targets.js";
+import { executableLinkInputs } from "./link-plan-core.js";
+import type { NativeTargetSpec, WindowsSubsystem } from "./targets.js";
 
 export interface NativeLinkPlan {
   target: NativeTargetSpec;
@@ -53,25 +48,19 @@ export async function createNativeLinkPlan(options: {
     target: options.target,
     darwinDebugSymbols: needsDarwinDebugSymbols(options.target.platform, options.optimization, options.strip),
     outputPath: options.outPath,
-    inputs: [
-      options.programObject,
-      ...(options.ffi?.libraries ?? []),
-      ...runtimePack.runtimeObjects,
-      ...runtimePack.archives,
-    ],
-    systemLibraries: [...new Set([
-      ...(options.ffi?.systemLibraries ?? []),
-      ...runtimePack.systemLibraries,
-    ])],
-    driverFlags: [
-      ...(options.ffi?.frameworks ?? []).flatMap(name => ["-framework", name]),
-      ...options.target.executableLinkerArgs.map((arg, index, args) =>
-        index > 0 && args[index - 1] === "-target" ? options.target.linkerTargetTriple : arg
-      ),
-      ...executableOptimizationLinkerArgs(options.target.platform, options.optimization),
-      ...executableStripLinkerArgs(options.target.platform, options.strip ?? false),
-      ...windowsSubsystemLinkerArgs(options.target.platform, options.windowsSubsystem),
-    ],
+    ...executableLinkInputs({
+      target: options.target,
+      programObject: options.programObject,
+      ffiLibraries: options.ffi?.libraries ?? [],
+      ffiSystemLibraries: options.ffi?.systemLibraries ?? [],
+      ffiFrameworks: options.ffi?.frameworks ?? [],
+      runtimeObjects: runtimePack.runtimeObjects,
+      runtimeArchives: runtimePack.archives,
+      runtimeSystemLibraries: runtimePack.systemLibraries,
+      optimization: options.optimization,
+      ...(options.strip === undefined ? {} : { strip: options.strip }),
+      ...(options.windowsSubsystem === undefined ? {} : { windowsSubsystem: options.windowsSubsystem }),
+    }),
     dependencyPaths: [
       ...runtimePack.dependencyPaths,
       ...(options.ffi?.libraries ?? []),

@@ -122,6 +122,26 @@ test("nullish chains retain child-before-parent diagnostic order", () => {
   ]);
 });
 
+test("logical trees retain left/right/parent diagnostic order", () => {
+  const at = (start: number) => ({ ...loc, start });
+  const expr: IrExpr = {
+    kind: "logical", op: "&&", type: BOOL, loc: at(4),
+    left: {
+      kind: "logical", op: "||", type: STRING, loc: at(2),
+      left: { kind: "numLit", value: 0, type: STRING, loc: at(0) },
+      right: { kind: "boolLit", value: true, type: F64, loc: at(1) },
+    },
+    right: { kind: "strLit", value: "wrong", type: BOOL, loc: at(3) },
+  };
+  expect(validateModule(expressionModule(expr, [])).map((error) => [error.loc.start, error.message])).toEqual([
+    [0, "in main: numLit must be f64"],
+    [1, "in main: boolLit must be bool"],
+    [1, "in main: logical || right: expected string, got f64"],
+    [3, "in main: strLit must be string"],
+    [2, "in main: logical && left: expected bool, got string"],
+  ]);
+});
+
 test.each(["callValue", "dynCall"] as const)("%s requires a checked-value receiver and preserves it in serialization", (kind) => {
   const funcType: IrType = { kind: "func", params: [], ret: DYN };
   const closure: IrExpr = { kind: "closure", fnName: "callback", captures: [], type: funcType, loc };

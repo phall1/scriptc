@@ -7,6 +7,7 @@
   "scripts": {
     "build": "pnpm -r --filter \"./packages/*\" run build",
     "build:fresh": "rm -rf packages/compiler/dist packages/cli/dist node_modules/.cache/scriptc-tsc && pnpm build",
+    "build:native-compiler": "node --max-old-space-size=8192 --import tsx scripts/build-native-compiler.mts",
     "bench:builds": "node scripts/bench-builds.mjs",
     "test": "vitest run",
     "test:ts7": "node scripts/test-ts7.mjs",
