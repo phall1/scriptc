@@ -137,8 +137,10 @@ jobs:
   # Full compiler rebuilds dominate the critical path. Start them immediately
   # after setup, independently of corpus and integration test shards.
   bootstrap:
-    name: test (${{ matrix.flavor }}, ${{ matrix.compiler }} bootstrap)
-    runs-on: macos-15
+    name: test (Linux, ${{ matrix.flavor }}, ${{ matrix.compiler }} bootstrap)
+    # These contracts are portable. Standard Linux runners have enough memory
+    # for LLVM optimization alongside the compiler that produces its input.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -161,10 +163,21 @@ jobs:
         with:
           node-version-file: .node-version
           cache: pnpm
-      - run: brew install llvm@22
+      - name: Install pinned LLVM development distribution
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes g++ zlib1g-dev libzstd-dev
+          curl -fL --retry 3 -o "$RUNNER_TEMP/llvm.tar.xz" https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/LLVM-22.1.8-Linux-X64.tar.xz
+          tar -xJf "$RUNNER_TEMP/llvm.tar.xz" -C "$RUNNER_TEMP"
+          mv "$RUNNER_TEMP/LLVM-22.1.8-Linux-X64" "$RUNNER_TEMP/llvm-22.1.8"
+          echo "LLVM_DIR=$RUNNER_TEMP/llvm-22.1.8/lib/cmake/llvm" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/llvm-22.1.8/bin" >> "$GITHUB_PATH"
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @scriptc/llvm-darwin-arm64 build:native
-      - run: pnpm --filter @scriptc/runtime-darwin-arm64 build:native
+      - run: pnpm --filter @scriptc/llvm-linux-x64-gnu build:native
+      - uses: vercel-labs/setup-zig@v1
+        with:
+          version: 0.16.0
+      - run: CC=zig AR=zig pnpm --filter @scriptc/runtime-linux-x64-gnu build:native
       - run: pnpm build
       - run: pnpm test ${{ matrix.test }}
 
