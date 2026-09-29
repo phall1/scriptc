@@ -11187,6 +11187,30 @@
     "<repo>/tests/corpus/typed-array-unknown.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/return-void-through-finally.ts": {
+   "order": [
+    "<repo>/tests/corpus/return-void-through-finally.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/union-literal-scalar-discriminants.ts": {
+   "order": [
+    "<repo>/tests/corpus/union-literal-scalar-discriminants.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/union-literal-slot-conversion.ts": {
+   "order": [
+    "<repo>/tests/corpus/union-literal-slot-conversion.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/union-optional-semantic-identity.ts": {
+   "order": [
+    "<repo>/tests/corpus/union-optional-semantic-identity.ts"
+   ],
+   "diags": []
   }
  }
 }

@@ -7,7 +7,9 @@ export type {
   SemanticType as UnionOrIntersectionType,
   SemanticType as UnionType,
   SemanticTupleType as TupleType,
-  SemanticTupleType as TupleTypeReference,
+  // A reference carries its element flags on the target, not necessarily on
+  // itself. Claiming a tuple shape here makes a native presence test constant.
+  SemanticObjectType as TupleTypeReference,
   SemanticStringLiteralType as StringLiteralType,
   SemanticNumberLiteralType as NumberLiteralType,
   SemanticBooleanLiteralType as BooleanLiteralType,

@@ -316,7 +316,7 @@ export function lowerOptionalChain(lowerer: Lowerer, expr: ts.CallExpression | t
   }
   const narrowed = rest.length === 1
     ? rest[0]!
-    : { kind: "union" as const, unionId: lowerer.unions.intern(rest) };
+    : { kind: "union" as const, unionId: lowerer.unions.transform(def, rest) };
   const id = `chain.${lowerer.chainCounter++}`;
   // A single present arm binds its payload. Multiple present arms bind
   // the original tagged value, then retag inside the guarded body. The

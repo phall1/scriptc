@@ -29,6 +29,8 @@ import { resolve } from "node:path";
 import { bindingSource } from "../binding-source.js";
 import { tsgoPath } from "../dts-paths.js";
 import * as ts from "../ts7/adapter.js";
+import { literalValues } from "../literal-values.js";
+import { literalUnionArm } from "../union-discriminants.js";
 import type { ScrDiagnostic } from "../../diagnostics/diagnostic.js";
 import {
   anyOpRequiresDynamicDiag,
@@ -7658,6 +7660,23 @@ export class Lowerer {
    * lowering goes through here (via lowerExprExpecting) or calls this
    * directly when the expression was already lowered. */
   coerceInto(node: ts.Node, expr: IrExpr, expected: IrType): IrExpr {
+    // A fresh literal can retain a wider runtime-optional field after its
+    // initial contextual layout was chosen. Its known discriminator still
+    // selects the destination arm; validate that payload before wrapping.
+    // Work with the already lowered value so property effects run once.
+    if (expr.type.kind === "record" && expected.kind === "union") {
+      let literal = node;
+      while (ts.isParenthesizedExpression(literal)) literal = literal.expression;
+      const def = this.unions.get(expected.unionId);
+      if (def?.discriminant && ts.isObjectLiteralExpression(literal)) {
+        const property = this.checker.getPropertyOfType(this.typeOf(literal), def.discriminant.field);
+        if (property && !(property.flags & (ts.SymbolFlags.Optional | ts.SymbolFlags.GetAccessor | ts.SymbolFlags.SetAccessor))) {
+          const values = literalValues(this.checker.getTypeOfSymbol(property));
+          const arm = values && literalUnionArm(def, values, (id) => this.shapes.get(id));
+          if (arm) expr = this.coerceInto(node, expr, arm);
+        }
+      }
+    }
     if (expected.kind === "dyn") {
       const contextual = this.checker.getContextualType(node);
       const parts = contextual?.isUnionType() ? ts.constituentTypes(contextual) : contextual ? [contextual] : [];
@@ -8109,7 +8128,7 @@ export class Lowerer {
     const rest = def.arms.filter((a) => a.kind !== "undefinedT");
     if (rest.length === 1) return rest[0]!;
     // Removing an arm keeps canonical (typeKey-sorted) order.
-    return { kind: "union", unionId: this.unions.intern(rest) };
+    return { kind: "union", unionId: this.unions.transform(def, rest) };
   }
 
   /** The interned `T | undefined` union over a non-union arm type — the ABI

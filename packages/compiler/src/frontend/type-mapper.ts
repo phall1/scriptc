@@ -4,6 +4,8 @@ import { bodyReadsArguments } from "./arguments-usage.js";
 import type { IrRecordShape, IrType, IrUnionDef, IrUnionDiscriminant } from "../ir/ir.js";
 import { BYTES_ELEMENT_NAME, arrayOf, BOOL, bytesOf, canConvertToDyn, CHILD_T, CRYPTOHASH_T, CRYPTOHMAC_T, DATE_T, DYN, F64, funcOf, isSupportedArrayElem, isSupportedIndexValue, isSupportedMapKey, isSupportedMapValue, isSupportedSetElem, isUnitType, JSVAL, mapOf, NULL_T, PROCSTREAM_T, RUNTIME_EMITTER_CLASS, RUNTIME_ERROR_CLASSES, RUNTIME_STREAM_CLASSES, setOf, STRING, SYMBOL_T, typeEquals, typeKey, unionContainerArmsOk, UNDEFINED_T, VOID } from "../ir/ir.js";
 import { BIGINT_T } from "../ir/ir.js";
+import { literalValues } from "./literal-values.js";
+import { remapUnionDiscriminant } from "./union-discriminants.js";
 
 import { isJsSourceFile, isNodeTypesPath } from "./program.js";
 import { accessorSlotProp, recordTextCodecClass } from "../ir/ir.js";
@@ -417,6 +419,11 @@ export class UnionRegistry {
       this.unions.push(def);
     }
     return id;
+  }
+
+  /** An exact arm transformation keeps the source's semantic variants. */
+  transform(source: IrUnionDef, arms: IrType[]): string {
+    return this.intern(arms, remapUnionDiscriminant(source, arms));
   }
 
   get(unionId: string): IrUnionDef | undefined {
@@ -1426,9 +1433,7 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
     // INSTANTIATION's class (`Box%0`), registered on demand — the Lowerer
     // hook owns the instance table (monomorphization by flow).
     if (classDecl.typeParameters) {
-      const instance = ctx.genericClassInstance
-        ? ctx.genericClassInstance(classDecl, widened, (argument) => mapType(argument, ctx))
-        : null;
+      const instance = ctx.genericClassInstance?.(classDecl, widened, (argument) => mapType(argument, ctx)) ?? null;
       // Before the generic declaration's collection turn, the hook can only
       // return its family shell; after collection the same checker type names
       // a concrete registered instance. Never memoize either phase's answer.
@@ -1671,10 +1676,11 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
   // record-holding binding forms compile. User-declared literals with
   // these member names keep the ordinary record path (their declarations
   // are not in declaration files).
+  const promiseDeclarations = psym ? checker.declarationsOf(psym) : [];
   if (
     flags & ts.TypeFlags.Object &&
-    (psym ? checker.declarationsOf(psym).length : 0) > 0 &&
-    (psym ? checker.declarationsOf(psym) : []).every((d) => d.getSourceFile().isDeclarationFile)
+    promiseDeclarations.length > 0 &&
+    promiseDeclarations.every((d) => d.getSourceFile().isDeclarationFile)
   ) {
     const props = checker.getPropertiesOfType(widened);
     if (
@@ -2998,20 +3004,6 @@ function unionDiscriminant(
 ): IrUnionDiscriminant | undefined {
   if (arms.filter((arm) => arm.kind === "record").length < 2 || parts.length < 2) return undefined;
   const { checker } = ctx;
-  const literals = (type: ts.Type): (string | number | boolean)[] | null => {
-    const values: (string | number | boolean)[] = [];
-    for (const part of type.isUnionType() ? ts.constituentTypes(type) : [type]) {
-      if (part.flags & ts.TypeFlags.StringLiteral) values.push((part as ts.StringLiteralType).value);
-      else if (part.flags & ts.TypeFlags.NumberLiteral) {
-        const value = (part as ts.NumberLiteralType).value;
-        if (!Number.isFinite(value)) return null;
-        values.push(value);
-      }
-      else if (part.flags & ts.TypeFlags.BooleanLiteral) values.push((part as ts.BooleanLiteralType).value);
-      else return null;
-    }
-    return values.length ? values : null;
-  };
   for (const candidate of checker.getPropertiesOfType(parts[0]!.source)) {
     if (candidate.name.startsWith("__@")) continue;
     const byTag = new Map<number, (string | number | boolean)[]>();
@@ -3023,7 +3015,7 @@ function unionDiscriminant(
         complete = false;
         break;
       }
-      const values = literals(checker.getTypeOfSymbol(prop));
+      const values = literalValues(checker.getTypeOfSymbol(prop));
       if (!values) { complete = false; break; }
       const tag = arms.findIndex((arm) => typeEquals(arm, part.mapped));
       const grouped = byTag.get(tag) ?? [];
@@ -3395,7 +3387,7 @@ function mapGenericIndexedAccess(type: ts.Type, ctx: TypeMapperCtx): IrType | nu
     covered = f ? [f.type] : shape.indexValue ? [shape.indexValue] : null;
   } else {
     const allKeys =
-      (idx.flags & ts.TypeFlags.TypeParameter && resolveTypeParam(idx)?.kind === "string") ||
+      ((idx.flags & ts.TypeFlags.TypeParameter) !== 0 && resolveTypeParam(idx)?.kind === "string") ||
       (idx.isIndexType() && idx.getTarget() === obj);
     if (allKeys) {
       covered = shape.fields.map((f) => f.type);
@@ -3555,7 +3547,7 @@ export function withUndefinedArm(t: IrType, unions: UnionRegistry): IrType | nul
     if (def.arms.some((a) => a.kind === "undefinedT")) return t;
     const arms = [...def.arms, UNDEFINED_T];
     arms.sort((a, b) => (typeKey(a) < typeKey(b) ? -1 : 1));
-    return { kind: "union", unionId: unions.intern(arms) };
+    return { kind: "union", unionId: unions.transform(def, arms) };
   }
   if (
     t.kind === "void" || t.kind === "date" || t.kind === "dyn" ||

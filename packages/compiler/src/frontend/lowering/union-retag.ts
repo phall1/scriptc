@@ -2,6 +2,7 @@ import { InternalCompilerError } from "../../errors.js";
 import { BOOL, F64, STRING, isUnitType, typeEquals } from "../../ir/ir.js";
 import type { IrExpr, IrFunction, IrRecordShape, IrStmt, IrType, IrUnionDef, SrcLoc } from "../../ir/ir.js";
 import type { WidthLift } from "./width-lift.js";
+import { discriminantField, discriminantOwners } from "../union-discriminants.js";
 
 type Literal = string | number | boolean;
 
@@ -15,53 +16,6 @@ export type UnionRetagArm =
   | { kind: "trap" }
   | { kind: "direct"; route: UnionRetagRoute }
   | { kind: "discriminant"; field: string; fieldType: IrType; routes: UnionRetagRoute[] };
-
-/** Read only data fields whose literal comparisons have a native ABI.
- * Accessors and optional/dynamic slots must not acquire an implicit read
- * or an unchecked interpretation while selecting a destination layout. */
-function discriminantField(shape: IrRecordShape | undefined, field: string): IrType | null {
-  if (field.startsWith("%") || !shape || shape.tuple) return null;
-  if (shape.fields.some((entry) => entry.name === `%get:${field}` || entry.name === `%set:${field}`)) return null;
-  const type = shape.fields.find((entry) => entry.name === field)?.type;
-  return type && (type.kind === "string" || type.kind === "f64" || type.kind === "bool") ? type : null;
-}
-
-function matchesLiteral(type: IrType, value: Literal): boolean {
-  if (type.kind === "string") return typeof value === "string";
-  if (type.kind === "bool") return typeof value === "boolean";
-  return type.kind === "f64" && typeof value === "number" && Number.isFinite(value);
-}
-
-/** Check the metadata independently of the width relation. A missing or
- * ambiguous literal cannot justify choosing the first compatible arm.
- * JSON keys distinguish 1, "1", true and "true", including unusual strings. */
-function discriminantOwners(
-  union: IrUnionDef,
-  shapeOf: (id: string) => IrRecordShape | undefined,
-): Map<string, number> | null {
-  const discriminant = union.discriminant;
-  if (!discriminant) return null;
-  const owners = new Map<string, number>();
-  const tags = new Set<number>();
-  for (const entry of discriminant.cases) {
-    const arm = union.arms[entry.tag];
-    if (!Number.isInteger(entry.tag) || !arm || arm.kind !== "record" || tags.has(entry.tag)) return null;
-    tags.add(entry.tag);
-    const type = discriminantField(shapeOf(arm.shapeId), discriminant.field);
-    if (!type || entry.values.length === 0) return null;
-    for (const value of entry.values) {
-      if (!matchesLiteral(type, value)) return null;
-      const key = JSON.stringify(value);
-      const previous = owners.get(key);
-      if (previous !== undefined && previous !== entry.tag) return null;
-      owners.set(key, entry.tag);
-    }
-  }
-  for (let tag = 0; tag < union.arms.length; tag++) {
-    if (union.arms[tag]!.kind === "record" && !tags.has(tag)) return null;
-  }
-  return owners;
-}
 
 /** Pure conversion planning. A source storage tag need not denote just
  * one semantic variant: refinements can coalesce recursive record layouts.

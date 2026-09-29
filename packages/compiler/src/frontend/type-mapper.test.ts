@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { F64, STRING, UNDEFINED_T, VOID, mapOf, setOf, type IrType } from "../ir/ir.js";
+import { F64, NULL_T, STRING, UNDEFINED_T, VOID, mapOf, setOf, type IrType, type IrUnionDef } from "../ir/ir.js";
 import { formatIrType, genResultRecord, ShapeRegistry, UnionRegistry, withUndefinedArm } from "./type-mapper.js";
 
 describe("nullable collection union builders", () => {
@@ -133,5 +133,87 @@ describe("union discriminator identity", () => {
     const string = registry.intern(arms, { field: "tag", cases: [{ tag: 0, values: ["1"] }, { tag: 1, values: ["2"] }] });
     const bool = registry.intern(arms, { field: "tag", cases: [{ tag: 0, values: [false] }, { tag: 1, values: [true] }] });
     expect(new Set([numeric, string, bool]).size).toBe(3);
+  });
+});
+
+describe("canonical optional unions", () => {
+  function fixture() {
+    const registry = new UnionRegistry();
+    const arms: IrType[] = [{ kind: "record", shapeId: "a" }, { kind: "record", shapeId: "b" }];
+    const id = registry.intern(arms, {
+      field: "kind", cases: [{ tag: 0, values: ["empty", "none"] }, { tag: 1, values: ["value"] }],
+    });
+    return { registry, arms, id, source: registry.get(id)! };
+  }
+
+  test("adding and removing undefined recovers the semantic union identity", () => {
+    const { registry, arms, id, source } = fixture();
+    const required: IrType = { kind: "union", unionId: id };
+    const optional = withUndefinedArm(required, registry);
+    if (optional?.kind !== "union") throw new Error("missing optional union");
+    const definition = registry.get(optional.unionId)!;
+    expect(definition.arms).toEqual([...arms, UNDEFINED_T]);
+    expect(definition.discriminant).toEqual(source.discriminant);
+    expect(withUndefinedArm(optional, registry)).toBe(optional);
+    expect(registry.transform(definition, definition.arms.filter((arm) => arm.kind !== "undefinedT"))).toBe(id);
+    expect(registry.unions).toHaveLength(2);
+  });
+
+  test("structural and semantic optional unions stay distinct", () => {
+    const { registry, arms, source } = fixture();
+    const structural = registry.intern([...arms, UNDEFINED_T]);
+    const semantic = registry.transform(source, [...arms, UNDEFINED_T]);
+    expect(semantic).not.toBe(structural);
+    expect(registry.get(structural)!.discriminant).toBeUndefined();
+    expect(registry.get(semantic)!.discriminant).toEqual(source.discriminant);
+  });
+
+  test("independent literal contracts retain distinct optional identities", () => {
+    const { registry, arms, source } = fixture();
+    const otherId = registry.intern(arms, {
+      field: "kind", cases: [{ tag: 0, values: ["missing"] }, { tag: 1, values: ["present"] }],
+    });
+    const first = registry.transform(source, [...arms, UNDEFINED_T]);
+    const second = registry.transform(registry.get(otherId)!, [...arms, UNDEFINED_T]);
+    expect(first).not.toBe(second);
+    expect(registry.transform(registry.get(second)!, arms)).toBe(otherId);
+    expect(registry.transform(registry.get(first)!, arms)).toBe(source.id);
+  });
+
+  test("scalar insertion shifts every semantic tag without reassigning aliases", () => {
+    const { registry, arms, source } = fixture();
+    const wide = registry.transform(source, [F64, NULL_T, ...arms, STRING, UNDEFINED_T]);
+    expect(registry.get(wide)!.discriminant).toEqual({ field: "kind", cases: [
+      { tag: 2, values: ["empty", "none"] }, { tag: 3, values: ["value"] },
+    ] });
+    const narrow = registry.transform(registry.get(wide)!, [arms[1]!, UNDEFINED_T]);
+    expect(registry.get(narrow)!.discriminant).toEqual({ field: "kind", cases: [{ tag: 0, values: ["value"] }] });
+    expect(registry.transform(registry.get(wide)!, arms)).toBe(source.id);
+  });
+
+  test("adding a record discards an incomplete semantic contract", () => {
+    const { registry, arms, source } = fixture();
+    const combined = [...arms, { kind: "record" as const, shapeId: "new" }];
+    expect(registry.transform(source, combined)).toBe(registry.intern(combined));
+    expect(registry.get(registry.transform(source, combined))!.discriminant).toBeUndefined();
+  });
+
+  test("transformed case arrays do not alias source metadata", () => {
+    const { registry, arms, source } = fixture();
+    const transformed = registry.get(registry.transform(source, [...arms, UNDEFINED_T]))!;
+    expect(transformed.discriminant).not.toBe(source.discriminant);
+    expect(transformed.discriminant!.cases).not.toBe(source.discriminant!.cases);
+    expect(transformed.discriminant!.cases[0]!.values).not.toBe(source.discriminant!.cases[0]!.values);
+  });
+
+  test("plain scalar and undiscriminated record transformations remain plain", () => {
+    const registry = new UnionRegistry();
+    for (const arms of [[F64, STRING], [{ kind: "record", shapeId: "a" } as IrType, NULL_T]]) {
+      const plain: IrUnionDef = registry.get(registry.intern(arms))!;
+      const optional = withUndefinedArm({ kind: "union", unionId: plain.id }, registry);
+      if (optional?.kind !== "union") throw new Error("missing optional union");
+      expect(registry.get(optional.unionId)!.discriminant).toBeUndefined();
+      expect(registry.transform(registry.get(optional.unionId)!, arms)).toBe(plain.id);
+    }
   });
 });

@@ -6517,7 +6517,10 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
             }
             const arms = [...byKey.values()].sort((a, b) => (typeKey(a) < typeKey(b) ? -1 : 1));
             if (arms.length > 1) {
-              target = { kind: "union", unionId: lowerer.unions.intern(arms) };
+              const source = right.type.kind === "union" ? lowerer.unions.get(right.type.unionId) : undefined;
+              target = { kind: "union", unionId: source
+                ? lowerer.unions.transform(source, arms)
+                : lowerer.unions.intern(arms) };
             }
           }
         }

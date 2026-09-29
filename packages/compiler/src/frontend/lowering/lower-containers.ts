@@ -923,11 +923,12 @@ function lowerArraySearchValues(
   const scalarNeedle = needleArms.every((arm) =>
     arm.kind === "f64" || arm.kind === "string" || arm.kind === "bool" ||
     arm.kind === "bigint" || arm.kind === "symbol" || isUnitType(arm));
-  const valueArms = lowerer.unions.get(valueT.unionId)!.arms;
+  const valueDef = lowerer.unions.get(valueT.unionId)!;
+  const valueArms = valueDef.arms;
   if (scalarNeedle && !valueArms.some((arm) => arm.kind === "func" || arm.kind === "set")) {
     const arms = [...valueArms];
     for (const arm of needleArms) if (!arms.some((existing) => typeEquals(existing, arm))) arms.push(arm);
-    if (arms.length !== valueArms.length) valueT = { kind: "union", unionId: lowerer.unions.intern(arms) };
+    if (arms.length !== valueArms.length) valueT = { kind: "union", unionId: lowerer.unions.transform(valueDef, arms) };
   }
   const directNeedle = method === "lastIndexOf" && elem.kind !== "union" && typeEquals(needle.type, elem);
   const searchNeedle = directNeedle ? needle : lowerer.coerceInto(argNode, needle, valueT);

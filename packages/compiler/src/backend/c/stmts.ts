@@ -660,7 +660,12 @@ function emitStmtBody(emitter: CEmitter, s: IrStmt): void {
         // value and remove the slot from this return's own unwind path.
         let pendingEntry: { index: number; entry: (typeof emitter.scopes)[number][number] } | null = null;
         let value: ReturnType<typeof emitter.emitExpr> | null = null;
-        if (s.value) value = emitter.emitExpr(s.value);
+        if (s.value) {
+          const emitted = emitter.emitExpr(s.value);
+          // A void expression still runs before finally, but has no C value
+          // to park in the pending-return slot (or return from the function).
+          if (s.value.type.kind !== "void") value = emitted;
+        }
         const pendingIndex = emitter.pendingReturnScopeIndex;
         if (pendingIndex !== null && isRefCounted(emitter.currentReturnType)) {
           const scope = emitter.scopes[pendingIndex]!;
