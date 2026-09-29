@@ -21,7 +21,8 @@ export function pairsSnapshotHelper(
   const shape = lowerer.shapes.get(shapeId);
   if (!shape || shape.tuple || shape.fields.length > 0 || !shape.indexValue) return null;
   const indexValue = shape.indexValue;
-  if (options.indexValueOk && !options.indexValueOk(indexValue)) return null;
+  const indexValueOk = options.indexValueOk;
+  if (indexValueOk && !indexValueOk(indexValue)) return null;
   if (indexValue.kind !== "union") return null;
   const stringTag = options.lookupValue ? -1 : lowerer.armTag(indexValue.unionId, STRING);
   if (options.lookupValue) {

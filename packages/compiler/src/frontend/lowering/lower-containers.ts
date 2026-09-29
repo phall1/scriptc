@@ -1890,10 +1890,11 @@ export function lowerTupleReadMethodCall(
  * holes, missing properties, and present undefined yield undefined. */
   export function lowerSafeIndexRead(
     lowerer: Lowerer,
-    arr: IrExpr & { type: { kind: "array" } },
+    arr: IrExpr,
     index: IrExpr,
     loc: SrcLoc,
   ): IrExpr | null {
+    if (arr.type.kind !== "array") throw new InternalCompilerError("indexed read requires an array");
     const elem = arr.type.elem;
     if (elem.kind === "void" || elem.kind === "dyn") return null;
     const resultT = arrayValueType(lowerer, elem);
@@ -3589,8 +3590,9 @@ const MAP_ITER_METHODS = new Set(["keys", "values", "entries"]);
 
 /** An immediate Map spread observes the same entry order as entries().
  * Each pair is new; its key and value retain their original identities. */
-export function mapEntriesArray(lowerer: Lowerer, receiver: IrExpr & { type: IrType & { kind: "map" } }): IrExpr {
+export function mapEntriesArray(lowerer: Lowerer, receiver: IrExpr): IrExpr {
   const mapT = receiver.type;
+  if (mapT.kind !== "map") throw new InternalCompilerError("Map entries require a map");
   const tupleT: IrType & { kind: "record" } = {
     kind: "record", shapeId: lowerer.shapes.intern([
       { name: "0", type: mapT.key }, { name: "1", type: mapT.value },
@@ -3610,7 +3612,7 @@ export function mapEntriesArray(lowerer: Lowerer, receiver: IrExpr & { type: IrT
  * parameters may retain an undefined arm even when the checker spells a
  * bare collection. Observe that arm before touching native storage. */
 export function lowerCollectionSpread(lowerer: Lowerer, source: IrExpr, node: ts.Expression): IrExpr | null {
-  if (source.type.kind === "map") return mapEntriesArray(lowerer, { ...source, type: source.type });
+  if (source.type.kind === "map") return mapEntriesArray(lowerer, source);
   if (source.type.kind === "set") return {
     kind: "setIntrinsic", method: "toArray", receiver: source, args: [], type: arrayOf(source.type.elem), loc: source.loc,
   };
@@ -3627,7 +3629,7 @@ export function lowerCollectionSpread(lowerer: Lowerer, source: IrExpr, node: ts
     kind: "unionNarrow", unionId: source.type.unionId, tag, value, type: collection, loc,
   };
   const entries: IrExpr = collection.kind === "map"
-    ? mapEntriesArray(lowerer, { ...narrowed, type: collection })
+    ? mapEntriesArray(lowerer, narrowed)
     : { kind: "setIntrinsic", method: "toArray", receiver: narrowed, args: [], type: arrayOf(collection.elem), loc };
   return {
     kind: "seqExpr", stmts: [{ kind: "varDecl", localId: slot.id, init: source, loc }],
@@ -4374,7 +4376,10 @@ export function lowerCollectionSpread(lowerer: Lowerer, source: IrExpr, node: ts
         "the chain's element and result types must be representable — annotate the callbacks' types",
       );
     }
-    const stageKeys = stageIrs.map((s) => (s.kind === "take" || s.kind === "drop" ? s.kind : `${s.kind}:${typeKey((s as { fn: IrExpr }).fn.type)}`));
+    const stageKeys = stageIrs.map((s) => {
+      if (!s) throw new InternalCompilerError("missing iterator stage");
+      return "budget" in s ? s.kind : `${s.kind}:${typeKey(s.fn.type)}`;
+    });
     const key = `iter:${srcProj}:${typeKey(items.type)}:${stageKeys.join(",")}:${terminal}:${termArgs.map((a) => typeKey(a.type)).join(",")}`;
     let helper = lowerer.arrHofHelpers.get(key);
     if (!helper) {
@@ -4382,7 +4387,10 @@ export function lowerCollectionSpread(lowerer: Lowerer, source: IrExpr, node: ts
       lowerer.arrHofHelpers.set(key, helper);
       lowerer.liftedFns.push(buildIterChainFn(lowerer, helper, items.type, srcProj, stageIrs, terminal, termArgs.map((a) => a.type), resultT, loc));
     }
-    const budgetOrFn = stageIrs.map((s) => (s.kind === "take" || s.kind === "drop" ? s.budget : (s as { fn: IrExpr }).fn));
+    const budgetOrFn = stageIrs.map((s): IrExpr => {
+      if (!s) throw new InternalCompilerError("missing iterator stage");
+      return "budget" in s ? s.budget : s.fn;
+    });
     return { kind: "call", callee: helper, args: [items, ...budgetOrFn, ...termArgs], type: resultT, loc };
   }
 
@@ -5120,14 +5128,11 @@ const ITER_TERMINALS = new Set(["toArray", "forEach", "reduce", "some", "every",
    * [number, T] tuple record. Stored iterator OBJECTS keep their fence
    * (only the direct for-of position unwraps). */
   export function lowerForOfArrayIter(lowerer: Lowerer, stmt: ts.ForOfStatement,
-    iterable: IrExpr & {
-      type:
-        | (IrType & { kind: "array" })
-        | (IrType & { kind: "bytes" });
-    },
+    iterable: IrExpr,
     proj: "keys" | "entries",): IrStmt {
     const loc = locOf(stmt);
     const arrT = iterable.type;
+    if (arrT.kind !== "array" && arrT.kind !== "bytes") throw new InternalCompilerError("array iterator requires indexed storage");
     const elemT = arrT.kind === "array" ? arrayValueType(lowerer, arrT.elem) : F64;
     const yieldsPair = proj === "entries";
     if (!ts.isVariableDeclarationList(stmt.initializer)) {
@@ -5541,7 +5546,10 @@ const ITER_TERMINALS = new Set(["toArray", "forEach", "reduce", "some", "every",
           case "block":
             return [{ ...s, body: walk(s.body) }];
           case "switch":
-            return [{ ...s, cases: s.cases.map((c) => ({ ...c, body: walk(c.body) })) }];
+            return [{ ...s, cases: s.cases.map((c) => {
+              if (!c) throw new InternalCompilerError("missing switch clause");
+              return { ...c, body: walk(c.body) };
+            }) }];
           case "tryCatch":
             return [
               {
@@ -6016,7 +6024,7 @@ function mapFromSeedValue(lowerer: Lowerer, seed: IrExpr, mapT: IrType & { kind:
             // element arm: narrow (the undefined case is guard-skipped),
             // then wrap.
             if (utag >= 0 && f.type.kind === "union") {
-              const others = (lowerer.unions.get(f.type.unionId)?.arms ?? []).filter((a) => a.kind !== "undefinedT");
+              const others = (lowerer.unions.get(f.type.unionId)?.arms ?? []).filter((a): boolean => a.kind !== "undefinedT");
               if (others.length === 1) {
                 const otherTag = lowerer.armTag(valueT.unionId, others[0]!);
                 const narrowTag = lowerer.armTag(f.type.unionId, others[0]!);

@@ -1,4 +1,6 @@
 import { InternalCompilerError } from "../../errors.js";
+import { literalValues } from "../literal-values.js";
+import { literalUnionArm } from "../union-discriminants.js";
 /* Expression lowering: the expression dispatch (lowerExpr), literals
  * (array/object/regex/template), operators (binary incl. compound targets,
  * unary, instanceof, caught-typeof tests), union narrowing and unit
@@ -6,7 +8,8 @@ import { InternalCompilerError } from "../../errors.js";
  * ToBoolean/ToString coercion helpers, and field/element reads and writes
  * (FieldTarget). */
 import * as ts from "../ts7/adapter.js";
-import { dirname, posix } from "node:path";
+import { dirname } from "node:path";
+import * as posix from "node:path/posix";
 import { pathToFileURL } from "node:url";
 import type { Lowerer } from "./lowerer.js";
 import { OBJECT_CALLABLE_VALUES } from "./surfaces.js";
@@ -408,8 +411,8 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
         // using the value is exactly what cannot be answered. `getterName`
         // null keeps the closure shape (function-shaped members, and the
         // conditional-spread arms where getters cannot combine).
-        const islandMemberFence = (diagsBefore: number, err: unknown, valueNode: ts.Node, getterName: string | null = null): IrExpr | null => {
-          if (!(err instanceof PoisonError) || !isJsSourceFile(expr.getSourceFile())) throw err;
+        const islandMemberFence = (diagsBefore: number, err: PoisonError, valueNode: ts.Node, getterName: string | null = null): IrExpr | null => {
+          if (!isJsSourceFile(expr.getSourceFile())) throw err;
           const fence = lowerer.deferToRuntimeFence(diagsBefore, valueNode, {
             kind: "closure",
             name: () => `%fn${lowerer.lambdaCounter++}_islfence`,
@@ -455,6 +458,7 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
             // instance): func-typed values keep the call-time closure;
             // data-shaped values fence at the read (the getter), unless a
             // conditional spread owns the literal (getters cannot combine).
+            if (!(err instanceof PoisonError)) throw err;
             const asGetter = value.type.kind !== "func" && spread === null;
             const fence = islandMemberFence(diagsBefore, err, valueNode, asGetter ? name.text : null);
             if (fence === null) return; // registered as a fence getter — no data property
@@ -557,6 +561,7 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
                   ? (lowerer.rejectThisInObjectMethod(prop.body), lowerer.lowerLambda(prop))
                   : null;
           } catch (err) {
+            if (!(err instanceof PoisonError)) throw err;
             const nameText =
               name && (ts.isIdentifier(name) || ts.isStringLiteral(name)) ? name.text : null;
             const asGetter = nameText !== null && spread === null && !funcShapedMember(prop);
@@ -763,7 +768,7 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
         }
         if (projection?.kind === "builtin-function") {
           if (!isJsSourceFile(expr.getSourceFile())) {
-            const callable = lowerer.lowerBuiltinCallableValue(projection, loc);
+            const callable = lowerer.lowerBuiltinCallableValue({ module: projection.module, member: projection.member }, loc);
             if (callable) return callable;
           }
           lowerer.unsupported(
@@ -800,7 +805,7 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
           const arithmetic = lowerer.runtimeOptionalArithmeticLocals.has(runtimeOptionalRoot);
           const captured = !!symbol &&
             lowerer.runtimeOptionalStorageLocals.has(runtimeOptionalRoot) &&
-            (lowerer.ctx.captureBySymbol.get(symbol) === local || runtimeOptionalRoot !== local);
+            (local.boxed === true || lowerer.ctx.captureBySymbol.get(symbol) === local || runtimeOptionalRoot !== local);
           if (arithmetic && !runtimeOptionalUseOf(expr)) {
             return { kind: "varRef", localId: local.id, type: local.type, loc };
           }
@@ -839,7 +844,22 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
             }
             return { kind: "varRef", localId: local.id, type: local.type, loc };
           }
-          return lowerer.maybeNarrow({ kind: "varRef", localId: local.id, type: local.type, loc }, expr);
+          const narrowed = lowerer.maybeNarrow({ kind: "varRef", localId: local.id, type: local.type, loc }, expr);
+          if (narrowed.type.kind === "union" && lowerer.runtimeOptionalStorageLocals.has(runtimeOptionalRoot) &&
+              lowerer.mapTypeOf(lowerer.typeOf(expr))?.kind === "record") {
+            // A presence guard can be followed by a predicate strengthening
+            // the record's fields. Its refined shape is not a stored union
+            // arm: extract the original layout before reading a member.
+            const use = runtimeOptionalUseOf(expr);
+            if (use && !use.complex && !use.optional) {
+              if (use.kind === "property") return runtimeOptionalReceiverRead(lowerer, expr, local, use.access.name.text, loc);
+              if (use.kind === "element") {
+                const key = runtimeOptionalElementKey(use.access.argumentExpression);
+                if (key !== null) return runtimeOptionalReceiverRead(lowerer, expr, local, key, loc);
+              }
+            }
+          }
+          return narrowed;
       }
       // `import x = N.y` aliases resolve transparently through globalOf/
       // fnSigOf below; their source-order guards live here (a no-op for
@@ -2201,12 +2221,11 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
     }
   }
 
-/** `c ? a : b` — see the inline comments. `expected` plays the contextual
-   * array type's role when the caller knows the slot's array type and tsc's
-   * API doesn't surface it (a ternary as a SPREAD source — lowerArrayLiteral
-   * threads the literal's own type in). */
-  function lowerTernary(lowerer: Lowerer, expr: ts.ConditionalExpression,
-    expected?: IrType & { kind: "array" | "record" },): IrExpr {
+/** `c ? a : b`. An explicit destination constructs each branch at that
+ * layout before joining it. Without one, retain the expression's inferred
+ * type and the contextual/sibling rules below. */
+  export function lowerTernary(lowerer: Lowerer, expr: ts.ConditionalExpression,
+    expected?: IrType,): IrExpr {
     const loc = locOf(expr);
       // `Array.isArray(x) ? x : [x]` over a `T | readonly T[]` union: tsc
       // narrows the TRUE branch to `any[]` (maybeNarrow's isArray bridge
@@ -2259,7 +2278,20 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
       // literals) sit untaken in compiled JS. A boolLit carries no
       // effects, so dropping the condition read loses nothing.
       if (cond.kind === "boolLit") {
-        return lowerer.lowerExpr(cond.value ? expr.whenTrue : expr.whenFalse);
+        return lowerer.lowerExprExpecting(cond.value ? expr.whenTrue : expr.whenFalse, expected);
+      }
+      if (expected) {
+        // Construct fresh literals in their actual destination. Joining
+        // inferred layouts first can erase the literal discriminator or
+        // choose an empty array's uninhabited element representation.
+        // Runtime-optional proofs apply only within the selected true arm.
+        const then = withRuntimeOptionalNarrowed(
+          lowerer,
+          runtimeOptionalTrueIds(lowerer, expr.condition),
+          () => lowerer.lowerExprExpecting(expr.whenTrue, expected),
+        );
+        const else_ = lowerer.lowerExprExpecting(expr.whenFalse, expected);
+        return { kind: "ternary", cond, then, else_, type: expected, loc };
       }
       const ctxTs = lowerer.checker.getContextualType(expr);
       const ctxMapped = ctxTs ? lowerer.mapTypeOf(ctxTs) : null;
@@ -2276,7 +2308,7 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
       // lowerArrayLiteral, and just as unambiguous — tsc already typed the
       // whole ternary by the filled arm alone. Both arms empty stays
       // fenced (no element type exists anywhere).
-      const ctxArray = expected?.kind === "array" ? expected : (ctxMapped?.kind === "array" ? ctxMapped : null);
+      const ctxArray = ctxMapped?.kind === "array" ? ctxMapped : null;
       const armLiteral = (e: ts.Expression): ts.ArrayLiteralExpression | null => {
         let x = e;
         while (ts.isParenthesizedExpression(x)) x = x.expression;
@@ -2300,7 +2332,7 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
       // with nested empty-array branches. Carry the whole record layout
       // through those branches before constructing their fresh fields.
       const ownJoin = lowerer.mapTypeOf(lowerer.typeOf(expr));
-      const recordJoin = expected?.kind === "record" ? expected : ctxMapped?.kind === "record" ? ctxMapped :
+      const recordJoin = ctxMapped?.kind === "record" ? ctxMapped :
         ownJoin?.kind === "record" ? ownJoin : undefined;
       const lowerArm = (e: ts.Expression, siblingType?: IrType): IrExpr => {
         let fresh = e;
@@ -2450,7 +2482,7 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
           }
         }
       }
-      const type = expected?.kind === "record" ? expected :
+      const type =
         thenRaw.type.kind === "array" && typeEquals(thenRaw.type, elseRaw.type)
           ? thenRaw.type
           : dynJoin
@@ -2565,6 +2597,22 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
     }
     const tag = lowerer.armTag(expr.type.unionId, narrowed);
     if (tag < 0) {
+      // The checker may refine fields inside a discriminated record too.
+      // That creates a different mapped shape, but does not change the
+      // stored payload layout. A required literal discriminator proves
+      // which original arm to read; retain all of that arm's field types.
+      const def = lowerer.unions.get(expr.type.unionId);
+      if (narrowed.kind === "record" && def?.discriminant) {
+        const property = lowerer.checker.getPropertyOfType(narrowedTs, def.discriminant.field);
+        if (property && !(property.flags & (ts.SymbolFlags.Optional | ts.SymbolFlags.GetAccessor | ts.SymbolFlags.SetAccessor))) {
+          const values = literalValues(lowerer.checker.getTypeOfSymbol(property));
+          const arm = values && literalUnionArm(def, values, (id) => lowerer.shapes.get(id));
+          if (arm) {
+            return { kind: "unionNarrow", unionId: expr.type.unionId,
+              tag: lowerer.armTag(expr.type.unionId, arm), value: expr, type: arm, loc: expr.loc };
+          }
+        }
+      }
       // A base-class arm can narrow to a subclass after instanceof. The
       // payload retains its base-class tag even when the union also has
       // records or other classes. Require one unambiguous containing arm.
@@ -2604,13 +2652,13 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
   function runtimeOptionalReceiverRead(
     lowerer: Lowerer,
     expr: ts.Identifier,
-    local: Pick<IrLocal, "id" | "type">,
+    local: IrLocal,
     property: string | null,
     loc: SrcLoc,
   ): IrExpr {
     if (local.type.kind !== "union") {
-      lowerer.runtimeOptionalLocals.delete(local as IrLocal);
-      lowerer.runtimeOptionalStorageLocals.delete(local as IrLocal);
+      lowerer.runtimeOptionalLocals.delete(local);
+      lowerer.runtimeOptionalStorageLocals.delete(local);
       return varRef(local.id, local.type, loc);
     }
     // A non-null/type assertion around the receiver carries the useful
@@ -3156,9 +3204,10 @@ function lowerPromiseThenPresence(
     : mapped?.kind === "union"
       ? (() => {
           const arms = lowerer.unions.get(mapped.unionId)?.arms ?? [];
-          const promises = arms.filter((arm): arm is IrType & { kind: "promise" } => arm.kind === "promise");
-          return promises.length === 1 && arms.every((arm) => arm.kind === "promise" || isUnitType(arm))
-            ? promises[0]!
+          const promises = arms.filter((arm): boolean => arm.kind === "promise");
+          const promise = promises[0];
+          return promises.length === 1 && promise?.kind === "promise" && arms.every((arm) => arm.kind === "promise" || isUnitType(arm))
+            ? promise
             : null;
         })()
       : null;
@@ -3193,16 +3242,92 @@ function lowerPromiseThenPresence(
   }
 
   export function runtimeOptionalTrueIds(lowerer: Lowerer, node: ts.Expression): IrLocal[] {
-    let expr = node;
-    while (ts.isParenthesizedExpression(expr)) expr = expr.expression;
-    if (
-      ts.isBinaryExpression(expr) &&
-      expr.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken
-    ) {
-      return [...runtimeOptionalTrueIds(lowerer, expr.left), ...runtimeOptionalTrueIds(lowerer, expr.right)];
-    }
-    const local = runtimeOptionalLocalOf(lowerer, expr);
-    return local === null ? [] : [local];
+    return runtimeOptionalGuardIds(lowerer, node, true);
+  }
+
+  /** Presence proved by one outcome of a boolean guard. Negation flips
+   * the outcome; all operands of a true AND or false OR have that outcome.
+   * Assignments invalidate a syntactic proof even when checker types hide
+   * the undefined produced by an out-of-bounds read. */
+  export function runtimeOptionalGuardIds(lowerer: Lowerer, node: ts.Expression, truthy: boolean | null): IrLocal[] {
+    const candidates: IrLocal[] = [];
+    const collect = (expr: ts.Expression, outcome: boolean | null): void => {
+      if (ts.isParenthesizedExpression(expr)) return collect(expr.expression, outcome);
+      if (ts.isPrefixUnaryExpression(expr) && expr.operator === ts.SyntaxKind.ExclamationToken) {
+        return collect(expr.operand, outcome === null ? null : !outcome);
+      }
+      if (ts.isBinaryExpression(expr) &&
+          (outcome === true && expr.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken ||
+           outcome === false && expr.operatorToken.kind === ts.SyntaxKind.BarBarToken)) {
+        collect(expr.left, outcome);
+        collect(expr.right, outcome);
+      } else if (ts.isPropertyAccessExpression(expr) && !expr.questionDotToken) {
+        // A completed ordinary member read checked its receiver even if
+        // the property's value was falsy. Optional chains make no such
+        // promise, and calls/captures retain their separate checked ABI.
+        const local = runtimeOptionalLocalOf(lowerer, expr.expression);
+        if (local !== null) candidates.push(local);
+        else if (ts.isPropertyAccessExpression(expr.expression)) collect(expr.expression, outcome);
+      } else if (ts.isBinaryExpression(expr) &&
+          expr.operatorToken.kind !== ts.SyntaxKind.AmpersandAmpersandToken &&
+          expr.operatorToken.kind !== ts.SyntaxKind.BarBarToken &&
+          expr.operatorToken.kind !== ts.SyntaxKind.QuestionQuestionToken) {
+        // Both operands of a comparison/arithmetic operator are evaluated.
+        // Only member reads prove presence; bare identifiers need truth.
+        const member = (operand: ts.Expression): void => {
+          while (ts.isParenthesizedExpression(operand)) operand = operand.expression;
+          if (ts.isPropertyAccessExpression(operand)) collect(operand, outcome);
+        };
+        member(expr.left);
+        member(expr.right);
+        const op = expr.operatorToken.kind;
+        const equal = op === ts.SyntaxKind.EqualsEqualsEqualsToken || op === ts.SyntaxKind.EqualsEqualsToken;
+        const unequal = op === ts.SyntaxKind.ExclamationEqualsEqualsToken || op === ts.SyntaxKind.ExclamationEqualsToken;
+        if ((equal && outcome === false) || (unequal && outcome === true)) {
+          const present = (value: ts.Expression, unit: ts.Expression): void => {
+            while (ts.isParenthesizedExpression(unit)) unit = unit.expression;
+            const excludesUndefined = ts.isIdentifier(unit) && unit.text === "undefined" &&
+              (lowerer.typeOf(unit).flags & ts.TypeFlags.Undefined) !== 0 ||
+              unit.kind === ts.SyntaxKind.NullKeyword &&
+              (op === ts.SyntaxKind.EqualsEqualsToken || op === ts.SyntaxKind.ExclamationEqualsToken);
+            if (excludesUndefined) {
+              const local = runtimeOptionalLocalOf(lowerer, value);
+              if (local !== null) candidates.push(local);
+            }
+          };
+          present(expr.left, expr.right);
+          present(expr.right, expr.left);
+        }
+      } else if (outcome) {
+        const local = runtimeOptionalLocalOf(lowerer, expr);
+        if (local !== null) candidates.push(local);
+      }
+    };
+    collect(node, truthy);
+    if (candidates.length === 0) return candidates;
+    const assigned = new Set<IrLocal>();
+    const visit = (part: ts.Node): void => {
+      if (ts.isFunctionLike(part)) return;
+      let target: ts.Node | null = null;
+      if (ts.isBinaryExpression(part) && part.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+          part.operatorToken.kind <= ts.SyntaxKind.LastAssignment) target = part.left;
+      if ((ts.isPrefixUnaryExpression(part) || ts.isPostfixUnaryExpression(part)) &&
+          (part.operator === ts.SyntaxKind.PlusPlusToken || part.operator === ts.SyntaxKind.MinusMinusToken)) target = part.operand;
+      if (target !== null) {
+        // Destructuring assignments can contain several identifiers.
+        const mark = (name: ts.Node): void => {
+          if (ts.isIdentifier(name)) {
+            const local = lowerer.resolveLocal(name);
+            if (local) assigned.add(lowerer.runtimeOptionalRootOf(local));
+          }
+          ts.forEachChild(name, mark);
+        };
+        mark(target);
+      }
+      ts.forEachChild(part, visit);
+    };
+    visit(node);
+    return candidates.filter((local) => !assigned.has(lowerer.runtimeOptionalRootOf(local)));
   }
 
   export function withRuntimeOptionalNarrowed<T>(lowerer: Lowerer, locals: readonly IrLocal[], fn: () => T): T {
@@ -4451,6 +4576,15 @@ export function lowerOptionalNumber(
     // the fences below (re-lowering is pure IR construction).
     if (receiverIr?.kind === "dyn" || receiverIr === null) {
       const obj = lowerer.lowerExpr(expr.expression);
+      // A generic mapped type can stay unresolved at this body use even
+      // though its instantiated parameter has a concrete record ABI.
+      // Dispatch from that stored shape, as the array fallback below does.
+      if (receiverIr === null && obj.type.kind === "record") {
+        const shape = lowerer.shapes.get(obj.type.shapeId);
+        if (shape && !shape.tuple) {
+          return lowerer.lowerRecordKeyRead(expr, obj.type.shapeId, shape);
+        }
+      }
       if (obj.type.kind === "dyn") {
         const rawKey = lowerer.lowerExpr(expr.argumentExpression);
         // Number, bool, and DYN keys stringify (ToPropertyKey) — the
@@ -4667,7 +4801,7 @@ export function lowerOptionalNumber(
           expr,
         );
       }
-      const safe = lowerSafeIndexRead(lowerer, arr as IrExpr & { type: { kind: "array" } }, index, locOf(expr));
+      const safe = lowerSafeIndexRead(lowerer, arr, index, locOf(expr));
       if (safe) return safe;
     }
     // --npm-static package files retain the original slice-specific route
@@ -4678,7 +4812,7 @@ export function lowerOptionalNumber(
       arr.method === "slice" &&
       npmStaticPackageOfPath(expr.getSourceFile().fileName) !== null
     ) {
-      const safe = lowerNpmStaticSafeIndexRead(lowerer, arr as IrExpr & { type: { kind: "array" } }, index, locOf(expr));
+      const safe = lowerNpmStaticSafeIndexRead(lowerer, arr, index, locOf(expr));
       if (safe) return safe;
     }
     // A union-element read narrows like an identifier when the checker has
@@ -4956,7 +5090,7 @@ export function lowerOptionalNumber(
     if (arr.type.kind !== "array") return null;
     const index = lowerer.lowerExpr(expr.argumentExpression);
     if (index.type.kind !== "f64") return null;
-    return lowerSafeIndexRead(lowerer, arr as IrExpr & { type: { kind: "array" } }, index, locOf(expr));
+    return lowerSafeIndexRead(lowerer, arr, index, locOf(expr));
   }
 
   /** The compile-time string spelling of a record key literal: a string
@@ -6727,7 +6861,7 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
       ) {
         const negated = op === ts.SyntaxKind.ExclamationEqualsEqualsToken;
         const unit = left.kind === "unitLit" ? left : right.kind === "unitLit" ? right : null;
-        const other = unit === left ? right : left;
+        const other = left.kind === "unitLit" ? right : left;
         if (unit && other.type.kind === "dyn") {
           return {
             kind: "dynTest",
@@ -7339,10 +7473,7 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
    * shape, so the sibling typeof lowerings keep trying. */
   function lowerErrorCodeTypeofTest(lowerer: Lowerer, expr: ts.BinaryExpression, loc: SrcLoc): IrExpr | null {
     const negated = expr.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken;
-    for (const [a, b] of [
-      [expr.left, expr.right],
-      [expr.right, expr.left],
-    ] as const) {
+    for (const [a, b] of operandPairs(expr)) {
       if (!ts.isTypeOfExpression(a)) continue;
       let prop: ts.Expression = a.expression;
       while (ts.isParenthesizedExpression(prop)) prop = prop.expression;
@@ -7392,10 +7523,7 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
 
   export function lowerCaughtTypeofTest(lowerer: Lowerer, expr: ts.BinaryExpression, loc: SrcLoc): IrExpr | null {
     const negated = expr.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken;
-    for (const [a, b] of [
-      [expr.left, expr.right],
-      [expr.right, expr.left],
-    ] as const) {
+    for (const [a, b] of operandPairs(expr)) {
       if (!ts.isTypeOfExpression(a)) continue;
       const local = lowerer.caughtLocalOf(a.expression);
       if (!local) continue;
@@ -7504,13 +7632,15 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
     return out;
   }
 
+/** Visit both operand orders while keeping the sequence an array of pairs. */
+  function operandPairs(expr: ts.BinaryExpression): [ts.Expression, ts.Expression][] {
+    return [[expr.left, expr.right], [expr.right, expr.left]];
+  }
+
 /** One ===/!== leaf of aliasTypeofNarrows — the qualification battery. */
   function aliasTypeofArmOf(lowerer: Lowerer, e: ts.BinaryExpression,
     strip: (x: ts.Expression) => ts.Expression,): { sym: ts.Symbol; tsArm: ts.Type } | null {
-    for (const [a0, b] of [
-      [e.left, e.right],
-      [e.right, e.left],
-    ] as const) {
+    for (const [a0, b] of operandPairs(e)) {
       if (!ts.isStringLiteral(b)) continue;
       const a = strip(a0);
       if (!ts.isIdentifier(a)) continue;
@@ -7568,10 +7698,7 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
    * bare-typeof value form then composes with strEq for pure operands). */
   function lowerUnionTypeofTest(lowerer: Lowerer, expr: ts.BinaryExpression, loc: SrcLoc): IrExpr | null {
     const negated = expr.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken;
-    for (const [a, b] of [
-      [expr.left, expr.right],
-      [expr.right, expr.left],
-    ] as const) {
+    for (const [a, b] of operandPairs(expr)) {
       if (!ts.isTypeOfExpression(a)) continue;
       if (lowerer.mapTypeOf(lowerer.typeOf(a.expression))?.kind !== "union") continue;
       if (!ts.isStringLiteral(b)) continue; // bare-typeof + strEq handles pure operands
@@ -7622,10 +7749,7 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
    * side is a typeof over a dyn-typed operand (not this pattern). */
   function lowerDynTypeofTest(lowerer: Lowerer, expr: ts.BinaryExpression, loc: SrcLoc): IrExpr | null {
     const negated = expr.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken;
-    for (const [a, b] of [
-      [expr.left, expr.right],
-      [expr.right, expr.left],
-    ] as const) {
+    for (const [a, b] of operandPairs(expr)) {
       if (!ts.isTypeOfExpression(a)) continue;
       const declared = lowerer.mapTypeOf(lowerer.typeOf(a.expression));
       let value: IrExpr;
@@ -9484,7 +9608,7 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
         if (!surfaces(declared)) return null;
         continue;
       }
-      const ovfShape = literalField !== null && shape.indexValue ? { ...shape, fields: [] } : shape;
+      const ovfShape: IrRecordShape = literalField !== null && shape.indexValue ? { ...shape, fields: [] } : shape;
       if (!recordKeyResultOk(lowerer, ovfShape, type)) return null;
     }
     return { kind: "unionKeyGet", unionId, key, value, type, loc: locOf(expr) };

@@ -110,9 +110,10 @@ function scannedEmitterInfo(lowerer: Lowerer, receiver: IrType | null): ClassInf
     className = receiver.className;
   } else if (receiver.kind === "union") {
     const arms = lowerer.unions.get(receiver.unionId)?.arms ?? [];
-    const objects = arms.filter((arm): arm is Extract<IrType, { kind: "object" }> => arm.kind === "object");
-    if (objects.length !== 1 || !arms.every((arm) => arm.kind === "object" || isUnitType(arm))) return null;
-    className = objects[0]!.className;
+    const objects = arms.filter((arm): boolean => arm.kind === "object");
+    const object = objects[0];
+    if (objects.length !== 1 || object?.kind !== "object" || !arms.every((arm) => arm.kind === "object" || isUnitType(arm))) return null;
+    className = object.className;
   } else {
     return null;
   }
@@ -564,14 +565,19 @@ function lowerDynListenerCall(
     }
   } else {
     const cb = lowerer.lowerExpr(cbNode);
-    if (cb.type.kind !== "func" || !canBoxFuncIntoDyn(cb.type, getRecord, getUnion)) {
+    // A wrapper can return a boxed closure even when the checker retains
+    // its callable signature. The registration helper validates that value.
+    if (cb.type.kind === "dyn") {
+      cbDyn = cb;
+    } else if (cb.type.kind === "func" && canBoxFuncIntoDyn(cb.type, getRecord, getUnion)) {
+      cbDyn = { kind: "dynFrom", value: cb, type: DYN, loc };
+    } else {
       lowerer.noLowering(
         `'${member}' with a listener of this signature`,
         cbNode,
         "a checked-dynamic listener's own parameters and return must box across the dynamic boundary",
       );
     }
-    cbDyn = { kind: "dynFrom", value: cb, type: DYN, loc };
   }
   const recvT = receiver.type;
   const adapterT: IrType = { kind: "func", params: tuple, ret: VOID };

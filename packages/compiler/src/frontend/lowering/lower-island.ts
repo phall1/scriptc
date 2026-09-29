@@ -56,8 +56,8 @@ import {
    * invoked — building the value compiles; only a call through the
    * island stops the run. Null (caller rethrows) outside the JS deferral
    * gate: TypeScript sources, probe mode, ICEs. */
-  export function islandFuncValueFence(lowerer: Lowerer, err: unknown, diagsBefore: number, node: ts.Node): IrExpr | null {
-    if (!(err instanceof PoisonError) || !isJsSourceFile(node.getSourceFile())) return null;
+  export function islandFuncValueFence(lowerer: Lowerer, diagsBefore: number, node: ts.Node): IrExpr | null {
+    if (!isJsSourceFile(node.getSourceFile())) return null;
     const fence = lowerer.deferToRuntimeFence(diagsBefore, node, {
       kind: "closure",
       name: () => `%fn${lowerer.lambdaCounter++}_islfence`,
@@ -123,7 +123,8 @@ import {
         // diagnostic when INVOKED (the withPlugins aggregation shape —
         // wrappers built at module init around functions the smoke path
         // never calls). TypeScript and probe mode keep the poison.
-        const fence = islandFuncValueFence(lowerer, err, diagsBefore, node);
+        if (!(err instanceof PoisonError)) throw err;
+        const fence = islandFuncValueFence(lowerer, diagsBefore, node);
         if (fence) return fence;
         throw err;
       }
@@ -1005,7 +1006,7 @@ function lowerStaticFixedFetchMethodCall(
         },
         loc,
       },
-      ...argumentValues.map<IrStmt>((argument, index) => ({
+      ...argumentValues.map((argument, index): IrStmt => ({
         kind: "varDecl",
         localId: argumentLocals[index]!.id,
         init: argument,
@@ -1779,7 +1780,7 @@ export function lowerFetchElementMethodCall(
       { kind: "varDecl", localId: receiverLocal.id, init: receiver, loc },
       { kind: "varDecl", localId: keyLocal.id, init: key, loc },
       memberReadStmt,
-      ...argumentValues.map<IrStmt>((argument, index) => ({
+      ...argumentValues.map((argument, index): IrStmt => ({
         kind: "varDecl",
         localId: argumentLocals[index]!.id,
         init: argument,
@@ -2486,7 +2487,7 @@ export function lowerResponseNew(
     if (what === "an init value" && value.type.kind === "object") {
       const sourceType = lowerer.typeOf(node);
       const fields: { name: string; type: IrType }[] = [];
-      for (const name of ["headers", "status", "statusText"] as const) {
+      for (const name of ["headers", "status", "statusText"]) {
         const property = lowerer.checker.getPropertyOfType(sourceType, name);
         if (!property) continue;
         const propertyType = lowerer.checker.getTypeOfSymbolAtLocation(property, node);

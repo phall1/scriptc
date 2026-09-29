@@ -1,3 +1,4 @@
+import { InternalCompilerError } from "../../errors.js";
 /* Module-graph lowering: splitting each source file into its parts, the
  * program-collection pass (signatures, classes, globals — reachability
  * seeds), npm/JSON import collection, per-file %init functions, %main, and
@@ -751,7 +752,8 @@ export function appendForkModules(
       classes: [...lowerer.classes.values()]
         .map((c) => c.def)
         .filter((def) => classNames.has(def.name))
-        .map((def) => {
+        .map((def): IrClassDef => {
+          if (!def) throw new InternalCompilerError("missing reachable class definition");
           // Generic-class instantiations bypass the reachability gate
           // (demand-driven — every member of a demanded instantiation
           // lowers; see lowerClassMembers), so their defs keep every
@@ -759,19 +761,18 @@ export function appendForkModules(
           // the same rule (noteVirtualEdge marks the abstract declarer, so
           // a dispatched slot keeps its declaration; an unreferenced one
           // drops and the root-most CONCRETE declaration owns the slot).
+          const className = def.name;
           const methods =
             reachable === null || def.genericOf !== undefined
               ? (def.methods ?? [])
-              : (def.methods?.filter((m) => reachable.has(`%${def.name}.${m}`)) ?? []);
+              : (def.methods?.filter((m) => reachable.has(`%${className}.${m}`)) ?? []);
           const abstractMethods = def.abstractMethods?.filter((m) => methods.includes(m)) ?? [];
           const rest = { ...def };
-          delete rest.methods;
-          delete rest.abstractMethods;
-          return {
-            ...rest,
-            ...(methods.length > 0 ? { methods } : {}),
-            ...(abstractMethods.length > 0 ? { abstractMethods } : {}),
-          };
+          if (methods.length > 0) rest.methods = methods;
+          else delete rest.methods;
+          if (abstractMethods.length > 0) rest.abstractMethods = abstractMethods;
+          else delete rest.abstractMethods;
+          return rest;
         }),
       records: lowerer.shapes.shapes.filter((r) => shapeIds.has(r.id)),
       unions: lowerer.unions.unions.filter((u) => unionIds.has(u.id)),
@@ -934,7 +935,8 @@ export function collectGlobals(lowerer: Lowerer, sf: ts.SourceFile, topStmts: ts
             const symType = lowerer.checker.getTypeOfSymbol(symbol);
             if (!(symType.flags & ts.TypeFlags.Any)) tsType = symType;
           }
-          let type = lowerer.mapTypeOf(tsType) ?? dynFallbackType(lowerer, stmt.expression, tsType) ?? lowerer.badType(stmt.expression, tsType);
+          let type = lowerer.mapTypeOf(tsType) ?? dynFallbackType(lowerer, stmt.expression, tsType);
+          if (type === null) lowerer.badType(stmt.expression, tsType);
           // `export default undefined` — the unit-only union, like any
           // unit-only binding (`export default null` maps via mapType).
           if (type.kind === "void" && isUnitOnlyTsType(tsType)) {
@@ -2049,7 +2051,7 @@ export function collectGlobals(lowerer: Lowerer, sf: ts.SourceFile, topStmts: ts
         const loc = asyncDeps[0]!.loc;
         const entries: IrExpr = {
           kind: "arrayLit",
-          elems: asyncDeps.map((dep) => ({
+          elems: asyncDeps.map((dep): IrExpr => ({
             kind: "varRef",
             localId: dep.completionId,
             type: promiseT,

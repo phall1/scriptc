@@ -35,6 +35,7 @@ import { InternalCompilerError } from "../../errors.js";
  * record/class property order follows declaration order (SEMANTICS.md
  * 36's existing stance). */
 import * as ts from "../ts7/adapter.js";
+import { unsignedHex } from "../../format-integer.js";
 import type { Lowerer } from "./lowerer.js";
 import { isJsSourceFile } from "../program.js";
 import { BOOL, DYN, F64, IrExpr, IrStmt, IrType, RUNTIME_ERROR_CLASSES, STRING, SrcLoc, canConvertToDyn, canDynCheckTo, recordTextCodecClass, shapeHasAccessorSlots, typeKey } from "../../ir/ir.js";
@@ -66,20 +67,20 @@ function inspectQuote(s: string): string {
     const c = s.charCodeAt(i);
     if (c < 0x20) {
       const meta = ["\\b", "\\t", "\\n", undefined, "\\f", "\\r"][c - 8];
-      body += c >= 8 && c <= 13 && meta !== undefined ? meta : `\\x${c.toString(16).toUpperCase().padStart(2, "0")}`;
+      body += c >= 8 && c <= 13 && meta !== undefined ? meta : `\\x${unsignedHex(c).toUpperCase().padStart(2, "0")}`;
     } else if (c === 0x27 && quote === "'") {
       body += "\\'";
     } else if (c === 0x5c) {
       body += "\\\\";
     } else if (c >= 0x7f && c <= 0x9f) {
-      body += `\\x${c.toString(16).toUpperCase().padStart(2, "0")}`;
+      body += `\\x${unsignedHex(c).toUpperCase().padStart(2, "0")}`;
     } else if (c >= 0xd800 && c <= 0xdfff) {
       const next = i + 1 < s.length ? s.charCodeAt(i + 1) : 0;
       if (c <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
         body += s[i]! + s[i + 1]!;
         i++;
       } else {
-        body += `\\u${c.toString(16)}`;
+        body += `\\u${unsignedHex(c)}`;
       }
     } else {
       body += s[i]!;
@@ -714,7 +715,10 @@ function inspectHelper(lowerer: Lowerer, t: IrType, loc: SrcLoc): string {
       // keys before all symbol keys — Node's inspect order) and their
       // reserved layout names carry Node's key spelling (`Symbol(limit)`),
       // printed verbatim after removing the internal slot prefix.
-      const symNames = new Set(info.symbolFields?.values() ?? []);
+      const symNames = new Set<string>();
+      if (info.symbolFields) {
+        for (const [, name] of info.symbolFields) symNames.add(name);
+      }
       const ordered = [
         ...visible.filter((f) => !symNames.has(f.name)),
         ...visible.filter((f) => symNames.has(f.name)),

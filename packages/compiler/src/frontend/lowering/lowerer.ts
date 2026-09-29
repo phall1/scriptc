@@ -137,6 +137,7 @@ import { lowerRecordFieldCall, lowerObjectMethodCall } from "./lower-calls.js";
 import { fenceCrossBlockNsRef, nsPathPrefix } from "./lower-namespaces.js";
 import { numLit, varRef } from "../../ir/build.js";
 import { isSafeToRepeat } from "./expressions/evaluation-safety.js";
+import { lowerTernary } from "./lower-exprs.js";
 
 /** Entry function name. '%' cannot appear in a TS identifier, so a user
  * function can never collide with it (mangling is injective per prefix). */
@@ -1910,7 +1911,9 @@ export class Lowerer {
     if (this.remainder || !provenanceActive()) return;
     let s = this.statsByFile.get(file);
     if (!s) this.statsByFile.set(file, (s = { total: 0, failed: 0, island: 0 }));
-    s[kind]++;
+    if (kind === "total") s.total += 1;
+    else if (kind === "failed") s.failed += 1;
+    else s.island += 1;
   }
 
   constructor(
@@ -2706,10 +2709,13 @@ export class Lowerer {
 
     const orderIndex = new Map(parts.map((fp, i) => [fp.sf, i] as const));
     const partSet = new Set(parts.map((fp) => fp.sf));
-    const staticDeps = (sf: ts.SourceFile): ts.SourceFile[] =>
-      orderedImportsOf(this.program, sf)
-        .map(({ dep }) => dep)
-        .filter((dep): dep is ts.SourceFile => dep !== null && dep !== sf && partSet.has(dep));
+    const staticDeps = (sf: ts.SourceFile): ts.SourceFile[] => {
+      const dependencies: ts.SourceFile[] = [];
+      for (const { dep } of orderedImportsOf(this.program, sf)) {
+        if (dep !== null && dep !== sf && partSet.has(dep)) dependencies.push(dep);
+      }
+      return dependencies;
+    };
 
     // Tarjan SCCs over the same static graph. The last postorder member is
     // a deterministic COMPONENT representative for internal-edge tests
@@ -3077,6 +3083,7 @@ export class Lowerer {
       };
       const promoteNode = (fn: ts.FunctionLikeDeclaration): void => {
         for (const parameterIndex of parameterIndices) {
+          if (parameterIndex === undefined) continue;
           const parameter = fn.parameters[parameterIndex];
           if (!parameter) continue;
           const symbol = ts.isIdentifier(parameter.name) ? symbolOf(parameter.name) : null;
@@ -3140,6 +3147,7 @@ export class Lowerer {
       const sig = signatureBySymbol.get(symbol);
       if (sig) {
         for (const parameterIndex of parameterIndices) {
+          if (parameterIndex === undefined) continue;
           if (!sig.params[parameterIndex]) continue;
           const before = sig.params[parameterIndex]!.type;
           sig.params[parameterIndex]!.type = this.runtimeOptionalType(before);
@@ -3152,6 +3160,7 @@ export class Lowerer {
       if (valueType?.kind === "func") {
         const params = valueType.params.slice();
         for (const parameterIndex of parameterIndices) {
+          if (parameterIndex === undefined) continue;
           if (params[parameterIndex]) params[parameterIndex] = this.runtimeOptionalType(params[parameterIndex]!);
         }
         const promoted: IrType = { ...valueType, params };
@@ -4066,7 +4075,7 @@ export class Lowerer {
           () => this.lowerClassMethodMember(info, member),
         );
       }
-      for (const [name, entry] of info.staticMethods ?? []) {
+      if (info.staticMethods) for (const [name, entry] of info.staticMethods) {
         register(
           `%${cName}.static:${name}`,
           functionRoots(entry.member),
@@ -4338,7 +4347,8 @@ export class Lowerer {
     if (target.kind === "statement") return fence;
 
     const params = target.params ?? [];
-    const name = typeof target.name === "function" ? target.name() : target.name;
+    const targetName = target.name;
+    const name = typeof targetName === "function" ? targetName() : targetName;
     const fn: IrFunction = {
       name,
       params,
@@ -7692,7 +7702,7 @@ export class Lowerer {
     // Work with the already lowered value so property effects run once.
     if (expr.type.kind === "record" && expected.kind === "union") {
       let literal = node;
-      while (ts.isParenthesizedExpression(literal)) literal = literal.expression;
+      while (ts.isParenthesizedExpression(literal) || ts.isSatisfiesExpression(literal)) literal = literal.expression;
       const def = this.unions.get(expected.unionId);
       if (def?.discriminant && ts.isObjectLiteralExpression(literal)) {
         const property = this.checker.getPropertyOfType(this.typeOf(literal), def.discriminant.field);
@@ -7773,7 +7783,8 @@ export class Lowerer {
       try {
         this.requireExactShape(node, e.type, expected);
       } catch (err) {
-        const fence = islandFuncValueFence(this, err, diagsBefore, node);
+        if (!(err instanceof PoisonError)) throw err;
+        const fence = islandFuncValueFence(this, diagsBefore, node);
         if (fence) return fence;
         throw err;
       }
@@ -7907,7 +7918,12 @@ export class Lowerer {
   /** Lower for a known destination, then apply ordinary value coercion.
    * Fresh arrays and records use the destination layout directly. */
   lowerExprExpecting(node: ts.Expression, expected: IrType | undefined): IrExpr {
+    // These wrappers do not change the value or its inferred type. Keep a
+    // fresh literal visible to destination-directed construction. Assertions
+    // retain their own checked conversion and must not be erased here.
+    while (ts.isParenthesizedExpression(node) || ts.isSatisfiesExpression(node)) node = node.expression;
     if (expected) {
+      if (ts.isConditionalExpression(node)) return lowerTernary(this, node, expected);
       const fresh = this.emptyCollectionFor(node, expected);
       if (fresh) return this.coerceInto(node, fresh, expected);
     }
@@ -7926,6 +7942,17 @@ export class Lowerer {
       while (ts.isParenthesizedExpression(x)) x = x.expression;
       if (ts.isObjectLiteralExpression(x)) {
         return this.coerceInto(node, this.lowerObjectLiteral(x, expected), expected);
+      }
+    }
+    if (expected?.kind === "union" && ts.isObjectLiteralExpression(node)) {
+      const def = this.unions.get(expected.unionId);
+      if (def?.discriminant) {
+        const property = this.checker.getPropertyOfType(this.typeOf(node), def.discriminant.field);
+        if (property && !(property.flags & (ts.SymbolFlags.Optional | ts.SymbolFlags.GetAccessor | ts.SymbolFlags.SetAccessor))) {
+          const values = literalValues(this.checker.getTypeOfSymbol(property));
+          const arm = values && literalUnionArm(def, values, (id) => this.shapes.get(id));
+          if (arm) return this.coerceInto(node, this.lowerObjectLiteral(node, arm), expected);
+        }
       }
     }
     // An OBJECT LITERAL against a checked-dynamic slot in a JS file (the
@@ -8080,6 +8107,11 @@ export class Lowerer {
    * nothing evaluates; unit-typed non-literals keep the fences. */
   lowerReturnValue(node: ts.Expression): IrExpr | null {
     const expected = this.ctx.returnType;
+    // A return slot supplies the same construction layout as an argument
+    // or initializer. In particular, contextual callbacks can return fresh
+    // arrays of recursive unions and nullable, unannotated collections.
+    // Async returns still resolve a promise before converting its payload.
+    if (!this.ctx.isAsync && expected.kind !== "void") return this.lowerExprExpecting(node, expected);
     // Fresh JS objects returned through a checked-native ABI use that
     // storage directly, just like arguments and variable initializers.
     // Contextual types (such as Proxy descriptors' symbol-valued fields)
@@ -8162,7 +8194,7 @@ export class Lowerer {
     if (t.kind !== "union") return t;
     const def = this.unions.get(t.unionId);
     if (!def || !def.arms.some((a) => a.kind === "undefinedT")) return t;
-    const rest = def.arms.filter((a) => a.kind !== "undefinedT");
+    const rest = def.arms.filter((a): boolean => a.kind !== "undefinedT");
     if (rest.length === 1) return rest[0]!;
     // Removing an arm keeps canonical (typeKey-sorted) order.
     return { kind: "union", unionId: this.unions.transform(def, rest) };
@@ -9486,8 +9518,8 @@ export class Lowerer {
       return lowerElementAccess(this, expr);
     }
     const receiver = this.runtimeOptionalIdentifierValue(expr.expression);
-    const receiverValue = receiver && (receiver.present.kind === "array" || receiver.present.kind === "record")
-      ? (() => {
+    const receiverValue: IrExpr | null = receiver && (receiver.present.kind === "array" || receiver.present.kind === "record")
+      ? ((): IrExpr | null => {
           const helper = this.narrowedArmHelper(receiver.unionId, receiver.present, locOf(expr.expression));
           return helper ? { kind: "call" as const, callee: helper, args: [receiver.value], type: receiver.present, loc: locOf(expr.expression) } : null;
         })()
@@ -10270,9 +10302,9 @@ export class Lowerer {
         name: `arg${index}`,
         type,
       }));
-      const args: IrExpr[] = params.map((param, index) => {
-        const valueParam = valueParams[index];
-        if (!valueParam) {
+      const args: IrExpr[] = valueParams.map((valueParam, index): IrExpr => {
+        const param = params[index];
+        if (!param || !valueParam) {
           throw new InternalCompilerError(
             `builtin callable value '${display}' has a missing value parameter`,
           );

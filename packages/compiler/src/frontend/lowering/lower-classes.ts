@@ -398,7 +398,7 @@ export interface GenericClassInfo {
         // reach it through the base-chain walk, so its declarer is always
         // %Error and calls lower to the one runtime implementation.
         methods: rec.base === null
-          ? new Map([["toString", { params: [], ret: STRING }]])
+          ? new Map<string, { params: ParamShape[]; ret: IrType; abstract?: true; async?: true; gen?: NonNullable<IrFunction["generator"]> }>([["toString", { params: [], ret: STRING }]])
           : new Map(),
         decl: null,
         builtinError: true,
@@ -1619,9 +1619,7 @@ export function collectClassShapeInner(lowerer: Lowerer, decl: ts.ClassLikeDecla
           if (type.kind === "dyn" && !isJsSourceFile(member.getSourceFile())) {
             lowerer.unsupported("SC1090", member.name, "'unknown'-typed class fields");
           }
-          const undefinedInitializer = type.kind === "dyn" && !member.initializer
-            ? { undefinedInitializer: locOf(member) }
-            : {};
+          const undefinedInitializer = type.kind === "dyn" && !member.initializer ? locOf(member) : undefined;
           if (fields.has(member.name.text)) {
             // REDECLARING an inherited field: Node [[Define]]s the OWN
             // property again when THIS class's field initializers run
@@ -1636,7 +1634,7 @@ export function collectClassShapeInner(lowerer: Lowerer, decl: ts.ClassLikeDecla
             // Other bare or type-changing redeclarations keep the fence.
             const baseType = fields.get(member.name.text)!;
             if ((member.initializer || type.kind === "dyn") && typeEquals(type, baseType)) {
-              fieldOrder.push({ name: member.name.text, type, initializer: member.initializer, ...undefinedInitializer, redeclared: true });
+              fieldOrder.push({ name: member.name.text, type, initializer: member.initializer, ...(undefinedInitializer ? { undefinedInitializer } : {}), redeclared: true });
               continue;
             }
             lowerer.unsupported(
@@ -1685,7 +1683,7 @@ export function collectClassShapeInner(lowerer: Lowerer, decl: ts.ClassLikeDecla
             }
           }
           fields.set(member.name.text, type);
-          fieldOrder.push({ name: member.name.text, type, initializer: member.initializer, ...undefinedInitializer });
+          fieldOrder.push({ name: member.name.text, type, initializer: member.initializer, ...(undefinedInitializer ? { undefinedInitializer } : {}) });
         } else if (ts.isConstructorDeclaration(member)) {
           // A body-less constructor is an OVERLOAD SIGNATURE: type-world,
           // lowers to nothing — tsc resolved each `new` against the
@@ -2069,7 +2067,7 @@ export function collectClassShapeInner(lowerer: Lowerer, decl: ts.ClassLikeDecla
       // them unconditionally (paramPropInitStmts).
       if (paramProps.length > 0) {
         for (const pp of paramProps) fields.set(pp.name, pp.type);
-        fieldOrder.unshift(...paramProps.map((pp) => ({ name: pp.name, type: pp.type, initializer: undefined })));
+        fieldOrder.unshift(...paramProps.map((pp): ClassInfo["fieldOrder"][number] => ({ name: pp.name, type: pp.type, initializer: undefined })));
       }
 
       // The deferred definite-assignment check: a field on the unguarded
@@ -3996,7 +3994,7 @@ export function lowerClassMembers(lowerer: Lowerer, info: ClassInfo): IrFunction
         if (!(e instanceof PoisonError)) throw e;
       }
     }
-    for (const name of info.staticMethods?.keys() ?? []) {
+    if (info.staticMethods) for (const [name] of info.staticMethods) {
       if (!lowerer.wantBody(`%${className}.static:${name}`)) continue;
       const fn = lowerStaticMethod(lowerer, info, name);
       if (fn) out.push(fn);
@@ -4021,9 +4019,10 @@ export function lowerClassMembers(lowerer: Lowerer, info: ClassInfo): IrFunction
     if (!info.localClass) return {};
     const environment = info.localClass.context;
     if (!environment) throw new InternalCompilerError("local class lowered outside its lexical environment");
-    return { classCaptures: (context.captures ?? []).map((capture, index) => ({
-      ...capture, slot: environment.captures!.findIndex((entry) => entry.localId === context.captureSources[index]),
-    })) };
+    return { classCaptures: (context.captures ?? []).map((capture, index) => {
+      if (!capture) throw new InternalCompilerError("missing local class capture");
+      return { ...capture, slot: environment.captures!.findIndex((entry) => entry.localId === context.captureSources[index]) };
+    }) };
   }
 
   function lowerClassCtorInner(lowerer: Lowerer, info: ClassInfo): IrFunction {
@@ -5822,7 +5821,7 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
             return bi?.module === "crypto" && bi.member === "X509Certificate";
           })());
       if (isX509) {
-        const args = expr.arguments ?? ([] as unknown as ts.NodeArray<ts.Expression>);
+        const args: readonly ts.Expression[] = expr.arguments ?? [];
         if (args.length !== 1) {
           lowerer.noLowering(
             "X509Certificate with this argument shape",

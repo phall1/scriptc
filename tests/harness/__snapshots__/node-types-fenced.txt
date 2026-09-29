@@ -32,7 +32,7 @@ fenced.ts:28:15 - error SC2020: 'Response.type in a static build' is typed by @t
      |               ^~~~~~~~~~~~~
   29 |   response.clone();
 
-  hint: the native static Response surface is status/ok/statusText/url/redirected/headers/body/bodyUsed plus json(), text(), and bytes(); use --dynamic for the wider Web API
+  hint: the native static Response surface is status/ok/statusText/url/redirected/headers/body/bodyUsed plus json(), text(), bytes(), and arrayBuffer(); use --dynamic for the wider Web API
 
 fenced.ts:29:3 - error SC2020: 'Response.clone' is typed by @types/node but has no scriptc lowering yet
 

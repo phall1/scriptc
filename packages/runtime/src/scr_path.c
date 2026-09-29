@@ -229,6 +229,25 @@ static void scr_path_cwd(PathBuf *out) {
   pb_append(out, buf, strlen(buf));
 }
 
+static void scr_path_posix_cwd(PathBuf *out) {
+  scr_path_cwd(out);
+#ifdef _WIN32
+  /* path.posix resolves relative inputs against a slash-normalized cwd
+   * without the Windows drive prefix. The win32 resolver keeps the raw
+   * cwd, so normalize only the POSIX caller's virtual argument. */
+  size_t first_slash = out->len;
+  for (size_t i = 0; i < out->len; i++) {
+    if (out->data[i] == '\\') out->data[i] = '/';
+    if (out->data[i] == '/' && first_slash == out->len) first_slash = i;
+  }
+  if (first_slash < out->len) {
+    memmove(out->data, out->data + first_slash, out->len - first_slash);
+    out->len -= first_slash;
+    out->data[out->len] = '\0';
+  }
+#endif
+}
+
 ScrStr *scr_path_resolve(ScrArr *parts) {
   /* Node walks the args LAST-first, prepending, until one is absolute;
    * the cwd is a final virtual argument. Build the concatenation by
@@ -245,7 +264,7 @@ ScrStr *scr_path_resolve(ScrArr *parts) {
       pb_append(&seg, arg->data, arg->len);
       scr_str_release(arg);
     } else {
-      scr_path_cwd(&seg);
+      scr_path_posix_cwd(&seg);
     }
     if (seg.len == 0) {
       free(seg.data);

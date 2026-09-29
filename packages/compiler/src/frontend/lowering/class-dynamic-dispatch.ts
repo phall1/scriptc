@@ -1,4 +1,4 @@
-import { BOOL, DYN, STRING, VOID, isDynTypedRefType, typeEquals, typeKey, type IrExpr, type IrFunction, type IrStmt, type IrType } from "../../ir/ir.js";
+import { BOOL, DYN, STRING, isDynTypedRefType, typeEquals, typeKey, type IrExpr, type IrFunction, type IrStmt, type IrType } from "../../ir/ir.js";
 import { varRef } from "../../ir/build.js";
 import { everyStmtList, transformStmtList } from "../../ir/traverse.js";
 import { dynUndefinedExpr, PoisonError, type Lowerer } from "./lowerer.js";
@@ -167,7 +167,7 @@ export class ClassDynamicDispatch {
       : { kind: "call", callee, args: [upcastTo(lowerer, receiver, owner.def.name), ...args], type: result, loc };
     let body: IrStmt[];
     if (result.kind === "void") body = [
-      { kind: "exprStmt", expr: { ...call, type: VOID }, loc },
+      { kind: "exprStmt", expr: call, loc },
       { kind: "return", value: dynUndefinedExpr(loc), loc },
     ];
     else {

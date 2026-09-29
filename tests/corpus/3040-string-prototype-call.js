@@ -25,6 +25,7 @@ try {
   String.prototype.indexOf.call(nullReceiver(), searched());
 } catch (error) {
   console.log(nullishTrace, error.name);
+  console.log(error.message);
 }
 try {
   String.prototype.trim.call(undefined);
@@ -43,4 +44,27 @@ try {
   String.prototype.trim.call(null, extra());
 } catch (error) {
   console.log(extraTrace, error.message);
+}
+
+// A boxed receiver must remain a runtime decision. Every argument runs
+// once before nullish validation or a user-defined conversion hook.
+let dynamicTrace = "";
+function boxed(value) { dynamicTrace += "r"; return value; }
+function needle() { dynamicTrace += "s"; return "b"; }
+function offset() { dynamicTrace += "p"; return 0; }
+const convertible = { toString() { dynamicTrace += "c"; return "abc"; } };
+console.log(String.prototype.indexOf.call(boxed(convertible), needle(), offset()), dynamicTrace);
+dynamicTrace = "";
+console.log(String.prototype.indexOf.call(boxed("undefined"), void needle()), dynamicTrace);
+dynamicTrace = "";
+try {
+  String.prototype.indexOf.call(boxed(undefined), needle(), offset());
+} catch (error) {
+  console.log(dynamicTrace, error.name, error.message);
+}
+dynamicTrace = "";
+try {
+  String.prototype.indexOf.call(boxed(null), extra());
+} catch (error) {
+  console.log(dynamicTrace, extraTrace, error.message);
 }

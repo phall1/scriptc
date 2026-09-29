@@ -27,7 +27,7 @@ import { lowerStreamUnderscoreAssign, streamClassAliasDecl } from "./lower-strea
 import { lowerHttpResPropertyAssignment, lowerHttpServerTimeoutAssignment, lowerServerCloseOverrideAssignment } from "./lower-server.js";
 import { builtinMemberRequireDecl, builtinNamespaceDestructureModuleOf, createRequireBindingDecl, createRequireCalleeFileOf, createRequireNamespaceDecl, createRequireProgramModuleDecl, createRequireProgramModuleOf, lowerNodeModuleCall, registerBuiltinCallableAlias } from "./lower-builtins.js";
 import { lowerEnumDeclaration } from "./lower-enums.js";
-import { abstractPropertyDeclOf, aliasTypeofNarrows, isMatchSliceType, lowerAbsenceProbe, lowerCompoundValueToTarget, lowerElementCompound, lowerGroupsProjection, matchResultNamedGroupsOf, runtimeOptionalTrueIds, symbolFieldInfo, withRuntimeOptionalNarrowed } from "./lower-exprs.js";
+import { abstractPropertyDeclOf, aliasTypeofNarrows, isMatchSliceType, lowerAbsenceProbe, lowerCompoundValueToTarget, lowerElementCompound, lowerGroupsProjection, matchResultNamedGroupsOf, runtimeOptionalGuardIds, runtimeOptionalTrueIds, symbolFieldInfo, withRuntimeOptionalNarrowed } from "./lower-exprs.js";
 import { isSafeToRepeat } from "./expressions/evaluation-safety.js";
 import { globalSymbolKey } from "./expressions/global-symbols.js";
 import { lowerShortCircuitAssignment } from "./expressions/nullish-assignment.js";
@@ -80,7 +80,7 @@ function npmStaticReturnedEmptyArrayType(
   if (symbol === undefined) return null;
   let owner: ts.Node | undefined = decl.parent;
   while (owner !== undefined && !ts.isFunctionLike(owner)) owner = owner.parent;
-  const ownerBody = owner !== undefined && "body" in owner ? owner.body : undefined;
+  const ownerBody = owner !== undefined && ts.isFunctionLike(owner) ? owner.body : undefined;
   if (ownerBody === undefined || !ts.isBlock(ownerBody)) return null;
   let returned = false;
   ts.walkPreorder(ownerBody, (node) => {
@@ -118,7 +118,7 @@ function npmStaticOptionalSelfWriteType(
   if (symbol === undefined) return null;
   let owner: ts.Node | undefined = decl.parent;
   while (owner !== undefined && !ts.isFunctionLike(owner)) owner = owner.parent;
-  const ownerBody = owner !== undefined && "body" in owner ? owner.body : undefined;
+  const ownerBody = owner !== undefined && ts.isFunctionLike(owner) ? owner.body : undefined;
   if (ownerBody === undefined || !ts.isBlock(ownerBody)) return null;
   let candidate: (IrType & { kind: "union" }) | null = null;
   let invalid = false;
@@ -855,10 +855,22 @@ export function provenanceElidedConstDecl(lowerer: Lowerer, decl: ts.VariableDec
   export function lowerScopedBlock(lowerer: Lowerer, stmt: ts.Statement): IrStmt[] {
     lowerer.scopes.push(new Map());
     try {
-      const stmts = ts.isBlock(stmt) ? lowerer.lowerStmts(stmt.statements) : lowerer.lowerStmts([stmt]);
-      return stmts;
+      return withRuntimeOptionalScope(lowerer, () =>
+        ts.isBlock(stmt) ? lowerer.lowerStmts(stmt.statements) : lowerer.lowerStmts([stmt]));
     } finally {
       lowerer.scopes.pop();
+    }
+  }
+
+  function withRuntimeOptionalScope<T>(lowerer: Lowerer, lower: () => T): T {
+    const optionalOnEntry = [...lowerer.runtimeOptionalLocals];
+    try {
+      return lower();
+    } finally {
+      // A guard inside one branch or loop body proves presence only for
+      // its remaining statements. Keep assignments that reactivated a
+      // slot, and restore every absence possibility from the outer scope.
+      for (const local of optionalOnEntry) lowerer.runtimeOptionalLocals.add(local);
     }
   }
 
@@ -930,11 +942,13 @@ export function lowerStmt(lowerer: Lowerer, stmt: ts.Statement): IrStmt | IrStmt
       );
       const else_ = stmt.elseStatement
         ? lowerer.narrowingAliases(aliasTypeofNarrows(lowerer, stmt.expression, false), () =>
-            lowerer.lowerScopedBlock(stmt.elseStatement!),
+            withRuntimeOptionalNarrowed(lowerer, runtimeOptionalGuardIds(lowerer, stmt.expression, false), () =>
+              lowerer.lowerScopedBlock(stmt.elseStatement!)),
           )
         : null;
-      const narrowedAfter = falsyExitRuntimeOptionalLocal(lowerer, stmt);
-      if (narrowedAfter !== null) lowerer.runtimeOptionalLocals.delete(lowerer.runtimeOptionalRootOf(narrowedAfter));
+      for (const local of falsyExitRuntimeOptionalLocals(lowerer, stmt)) {
+        lowerer.runtimeOptionalLocals.delete(lowerer.runtimeOptionalRootOf(local));
+      }
       return { kind: "if", cond, then, else_, loc: locOf(stmt) };
     }
     if (ts.isWhileStatement(stmt)) {
@@ -2663,7 +2677,7 @@ export function isParseArgsDynCheckerType(lowerer: Lowerer, type: ts.Type): bool
   function tupleRestValue(lowerer: Lowerer, el: ts.BindingElement,
     srcRef: () => IrExpr,
     srcType: IrType & { kind: "record" },
-    shape: { fields: readonly { name: string; type: IrType }[] },
+    shape: import("../../ir/ir.js").IrRecordShape,
     from: number,): IrExpr {
     if (el.initializer) {
       lowerer.unsupported("SC1031", el, "defaults on rest elements"); // tsc rejects; defensive
@@ -2677,7 +2691,7 @@ export function isParseArgsDynCheckerType(lowerer: Lowerer, type: ts.Type): bool
   function tupleTailValue(lowerer: Lowerer, blame: ts.Node,
     srcRef: () => IrExpr,
     srcType: IrType & { kind: "record" },
-    shape: { fields: readonly { name: string; type: IrType }[] },
+    shape: import("../../ir/ir.js").IrRecordShape,
     from: number,
     restT: IrType | null,): IrExpr {
     const loc = locOf(blame);
@@ -3084,7 +3098,7 @@ export function isParseArgsDynCheckerType(lowerer: Lowerer, type: ts.Type): bool
           if (el.initializer) {
             const d = exprText(el.initializer, boundBefore);
             if (d === null) return null;
-            sub += `=${d}`;
+            sub = sub + `=${d}`;
           }
           parts.push(el.dotDotDotToken ? `...${sub}` : sub);
         }
@@ -3123,7 +3137,7 @@ export function isParseArgsDynCheckerType(lowerer: Lowerer, type: ts.Type): bool
         if (el.initializer) {
           const d = exprText(el.initializer, boundBefore);
           if (d === null) return null;
-          sub += `=${d}`;
+          sub = sub + `=${d}`;
         }
         parts.push(`[${key}]:${sub}`);
       }
@@ -3762,7 +3776,9 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
     try {
       init = expandsObject ? lowerer.lowerExprExpecting(decl.initializer, DYN) : immediatelyGuardedAbsenceProbe(lowerer, decl)
         ? (lowerAbsenceProbe(lowerer, decl.initializer) ?? lowerer.lowerExpr(decl.initializer))
-        : lowerVariableInitializer(lowerer, decl.initializer);
+        : lowerVariableInitializer(lowerer, decl.initializer,
+            decl.type && (lowerer.typeOf(decl.name).flags & ts.TypeFlags.Never) === 0
+              ? lowerer.mapTypeOf(lowerer.typeOf(decl.name)) ?? undefined : undefined);
     } catch (e) {
       if (e instanceof PoisonError) {
         const salvaged = lowerer.mapTypeOf(lowerer.typeOf(decl.name));
@@ -4082,7 +4098,7 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
     return { kind: "varDecl", localId: local.id, init, loc: locOf(decl) };
   }
 
-  function lowerVariableInitializer(lowerer: Lowerer, node: ts.Expression): IrExpr {
+  function lowerVariableInitializer(lowerer: Lowerer, node: ts.Expression, expected?: IrType): IrExpr {
     let value = node;
     while (
       ts.isParenthesizedExpression(value) ||
@@ -4092,7 +4108,17 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
     ) {
       value = value.expression;
     }
-    if (!ts.isObjectLiteralExpression(value)) return lowerer.lowerExpr(node);
+    // An explicit destination supplies the layout for fresh construction,
+    // including either arm of a conditional. Existing values still pass
+    // through the normal conversion and alias-preservation rules.
+    if (!ts.isObjectLiteralExpression(value)) {
+      // Empty Map/Set construction can use its destination, but class
+      // instances must retain their nominal layout for generic dispatch.
+      const empty = expected ? lowerer.emptyCollectionFor(node, expected) : null;
+      if (empty) return lowerer.coerceInto(node, empty, expected!);
+      return ts.isArrayLiteralExpression(value) || ts.isConditionalExpression(value)
+        ? lowerer.lowerExprExpecting(node, expected) : lowerer.lowerExpr(node);
+    }
 
     const previous = new Map<ts.Expression, IrExpr | undefined>();
     for (const property of value.properties) {
@@ -4105,7 +4131,7 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
       lowerer.chainRecvByNode.set(keyNode, lowerer.ensureString(optional, keyNode));
     }
     try {
-      return lowerer.lowerExpr(node);
+      return lowerer.lowerExprExpecting(node, expected);
     } finally {
       for (const [keyNode, prior] of previous) {
         if (prior) lowerer.chainRecvByNode.set(keyNode, prior);
@@ -4201,21 +4227,17 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
     return ts.isIdentifier(operand) && lowerer.resolveValueSymbol(operand) === lowerer.resolveValueSymbol(decl.name);
   }
 
-  function falsyExitRuntimeOptionalLocal(lowerer: Lowerer, stmt: ts.IfStatement): IrLocal | null {
-    if (stmt.elseStatement) return null;
-    let condition = stmt.expression;
-    while (ts.isParenthesizedExpression(condition)) condition = condition.expression;
-    if (!ts.isPrefixUnaryExpression(condition) || condition.operator !== ts.SyntaxKind.ExclamationToken) return null;
-    let operand = condition.operand;
-    while (ts.isParenthesizedExpression(operand)) operand = operand.expression;
-    if (!ts.isIdentifier(operand)) return null;
-    const local = lowerer.resolveLocal(operand);
-    if (!local || !lowerer.runtimeOptionalLocals.has(lowerer.runtimeOptionalRootOf(local))) return null;
-    const exits = ts.isReturnStatement(stmt.thenStatement) || ts.isThrowStatement(stmt.thenStatement) ||
-      (ts.isBlock(stmt.thenStatement) && stmt.thenStatement.statements.length > 0 &&
-        (ts.isReturnStatement(stmt.thenStatement.statements[stmt.thenStatement.statements.length - 1]!) ||
-          ts.isThrowStatement(stmt.thenStatement.statements[stmt.thenStatement.statements.length - 1]!)));
-    return exits ? local : null;
+  function falsyExitRuntimeOptionalLocals(lowerer: Lowerer, stmt: ts.IfStatement): IrLocal[] {
+    if (stmt.elseStatement) return [];
+    let tail = stmt.thenStatement;
+    while (ts.isBlock(tail)) {
+      const last = tail.statements[tail.statements.length - 1];
+      if (!last) return [];
+      tail = last;
+    }
+    const exits = ts.isReturnStatement(tail) || ts.isThrowStatement(tail) ||
+      ts.isContinueStatement(tail) || ts.isBreakStatement(tail);
+    return exits ? runtimeOptionalGuardIds(lowerer, stmt.expression, false) : [];
   }
 
 /** JS-exact switch (see docs/ir.md): one shared lexical scope for all case
@@ -4227,6 +4249,7 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
     // forms keep their own break target, including union comparisons.
     const labels = lowerer.takeLabels();
     const disc = lowerer.lowerExpr(stmt.expression);
+    return withRuntimeOptionalNarrowed(lowerer, runtimeOptionalGuardIds(lowerer, stmt.expression, null), () => {
     const dk = disc.type.kind;
     if (dk === "dyn") return lowerDynSwitch(lowerer, stmt, disc, labels);
     if (dk === "union") return lowerUnionSwitch(lowerer, stmt, disc, labels);
@@ -4250,12 +4273,14 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
             );
           }
         }
-        cases.push({ test, body: lowerer.inCtl("switch", () => lowerer.lowerStmts(clause.statements), labels) });
+        cases.push({ test, body: lowerer.inCtl("switch", () =>
+          withRuntimeOptionalScope(lowerer, () => lowerer.lowerStmts(clause.statements)), labels) });
       }
       return { kind: "switch", disc, cases, ...(labels && { labels }), loc: locOf(stmt) };
     } finally {
       lowerer.scopes.pop();
     }
+    });
   }
 
 /** Compare a union discriminant through a boolean switch. The native switch
@@ -4341,7 +4366,8 @@ function lowerBranchSwitch(
       test: ts.isCaseClause(clause)
         ? compare(stableDisc, lowerer.lowerExpr(clause.expression), clause.expression)
         : null,
-      body: lowerer.inCtl("switch", () => lowerer.lowerStmts(clause.statements), labels),
+      body: lowerer.inCtl("switch", () =>
+        withRuntimeOptionalScope(lowerer, () => lowerer.lowerStmts(clause.statements)), labels),
     }));
     return {
       kind: "block",
@@ -6104,7 +6130,7 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
         }
         const packed: IrExpr = {
           kind: "recordLit",
-          fields: remaining.map((f) => ({
+          fields: remaining.map((f): Extract<IrExpr, { kind: "recordLit" }>["fields"][number] => ({
             name: f.name,
             value: { kind: "recordGet", obj: { kind: "varRef", localId: tmp.id, type: srcType, loc: locOf(prop) }, shapeId: srcType.shapeId, field: f.name, type: f.type, loc: locOf(prop) },
           })),
@@ -6640,7 +6666,7 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
       if (ts.isIdentifier(src)) {
         const sym = lowerer.resolveValueSymbol(src);
         const state = sym ? lowerer.numericIterators.get(sym) : undefined;
-        if (state?.ctx === lowerer.ctx) {
+        if (state && state.ctx === lowerer.ctx) {
           return lowerForOfStoredNumericIterator(lowerer, stmt, state, labels);
         }
       }
@@ -6688,7 +6714,7 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
         if (recv?.kind === "array" && (proj === "keys" || proj === "entries")) {
           const container = lowerer.lowerExpr(src.expression.expression);
           if (container.type.kind === "array") {
-            return lowerForOfArrayIter(lowerer, stmt, container as IrExpr & { type: IrType & { kind: "array" } }, proj);
+            return lowerForOfArrayIter(lowerer, stmt, container, proj);
           }
         }
         // Typed arrays expose the same live indexed iterator projections.
@@ -6700,7 +6726,7 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
             return lowerForOfArrayIter(
               lowerer,
               stmt,
-              container as IrExpr & { type: IrType & { kind: "bytes" } },
+              container,
               proj,
             );
           }

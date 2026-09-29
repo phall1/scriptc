@@ -584,6 +584,10 @@ export function islandTypedAdapter(host: LlvmEmitterContext, fn: IrType & { kind
     fn.params.forEach((p, i) => {
       d.push(`  %ap${i} = getelementptr inbounds ptr, ptr %argv, i64 ${i}`, `  %av${i} = load ptr, ptr %ap${i}`);
       switch (p.kind) {
+        case "dyn":
+          host.declare(`declare ptr @scr_dyn_from_jsval(ptr)`);
+          d.push(`  %dr${i} = call ptr @scr_dyn_from_jsval(ptr %av${i})`, `  store ptr %dr${i}, ptr %sl${i}`);
+          break;
         case "jsval":
           host.declare(`declare ptr @scr_jsval_retain_v(ptr)`);
           d.push(`  %jr${i} = call ptr @scr_jsval_retain_v(ptr %av${i})`, `  store ptr %jr${i}, ptr %sl${i}`);

@@ -5207,6 +5207,8 @@ function emitPathUrlLibCall(state: LibCallState): Temp {
           // may-throw seed (the win32 arm's UNC TypeErrors).
           case "url.pathToFileURLWin32":
             return finish(`scr_url_from_path(${arg(0)})`);
+          case "url.pathToFileURLPlatform":
+            return finish(`scr_url_from_path_platform(${arg(0)}, ${arg(1)})`);
           // URLSearchParams (scr_url.c — always linked with the url unit).
           // Constructions come back +1; sp.fromPairs throws Node's
           // ERR_INVALID_TUPLE catchably (may-throw seed set). Mutators are

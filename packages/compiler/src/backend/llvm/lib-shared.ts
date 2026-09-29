@@ -406,6 +406,7 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "url.fileURLToPathUrl": "scr_url_to_path",
   "url.fileURLToPathStr": "scr_url_str_to_path",
   "url.pathToFileURL": "scr_url_from_path",
+  "url.pathToFileURLPlatform": "scr_url_from_path_platform",
   "url.pathToFileURLWin32": "scr_url_from_path",
   "sp.new": "scr_sp_new",
   "sp.parse": "scr_sp_parse",

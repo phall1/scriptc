@@ -2414,6 +2414,9 @@ export type IrLibFn =
   | "url.fileURLToPathUrl"
   | "url.fileURLToPathStr"
   | "url.pathToFileURL"
+  /** Explicit path syntax from the options.windows argument, independent
+   * of the executable's host platform. Windows UNC input can throw. */
+  | "url.pathToFileURLPlatform"
   /** pathToFileURL under a win32 TARGET: the same scr_url_from_path call
    * (the runtime selects the win32 arm by _WIN32), but a distinct IR name
    * because that arm THROWS for malformed UNC inputs — may-throw seeds on
@@ -6041,7 +6044,8 @@ export function canMarshalFuncIntoIsland(t: IrType): boolean {
 
 /** Parameter types a TYPED closure may declare when it crosses INTO the
  * island as a host function: jsval params take the engine argument as a
- * handle (the all-'any' shape above); every other admitted type converts
+ * handle (the all-'any' shape above); dyn params normalize scalars or retain
+ * engine objects by reference. Every other admitted type converts
  * AT CALL TIME through the validated-exit machinery — strict primitives,
  * JSON round-trip composites (the dynCheck walker: width-tolerant records,
  * path-annotated failures). On top of the jsExit set, a bare `T | undefined`
@@ -6054,7 +6058,7 @@ export function isIslandCallbackParamType(
   getRecord: (shapeId: string) => IrRecordShape | undefined,
   getUnion: (unionId: string) => IrUnionDef | undefined,
 ): boolean {
-  if (t.kind === "jsval") return true;
+  if (t.kind === "jsval" || t.kind === "dyn") return true;
   if (isJsonSafeType(t, getRecord, getUnion)) return true;
   if (t.kind === "union") {
     // A bare undefined-armed union: every non-undefined arm must be
@@ -6102,8 +6106,8 @@ export function islandCallbackRet(
  * closures whose params are per-argument-convertible at call time
  * (isIslandCallbackParamType) and whose return classifies
  * (islandCallbackRet). Same arity cap — the runtime's host-call argument
- * buffer. Closures taking closures and 'unknown'-typed params stay fenced
- * (no per-type extraction exists for them inside a host call). */
+ * buffer. Statically typed closure parameters stay fenced; unknown values
+ * enter as checked-dynamic values and are validated at each typed use. */
 export function canMarshalTypedFuncIntoIsland(
   t: IrType,
   getRecord: (shapeId: string) => IrRecordShape | undefined,
@@ -7959,6 +7963,7 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   // raises ERR_INVALID_ARG_VALUE TypeErrors for malformed UNC inputs, so
   // only THIS flavor seeds may-throw — posix emission stays untouched.
   "url.pathToFileURLWin32",
+  "url.pathToFileURLPlatform",
   // URLSearchParams from a string[][]: Node's ERR_INVALID_TUPLE TypeError
   // on a row that is not a [name, value] pair. The rest of the sp family
   // never throws.

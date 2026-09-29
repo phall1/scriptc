@@ -58,9 +58,13 @@ export function unionArrayValueRead(lowerer: Lowerer, value: IrExpr, index: IrEx
   if (value.type.kind !== "union") return null;
   const unionId = value.type.unionId;
   const arms = lowerer.unions.get(unionId)?.arms;
-  if (!arms?.length || !arms.every((arm) => arm.kind === "array")) return null;
+  if (!arms?.length) return null;
+  // Keep the collection's IrType union layout and narrow each element at
+  // its use; an inferred array predicate changes the collection's ABI.
+  for (const arm of arms) if (arm.kind !== "array") return null;
   const answers = new Map<string, IrType>();
   for (const arm of arms) {
+    if (arm.kind !== "array") return null;
     const answer = arrayValueType(lowerer, arm.elem);
     const parts = answer.kind === "union" ? lowerer.unions.get(answer.unionId)!.arms : [answer];
     for (const part of parts) answers.set(typeKey(part), part);
@@ -72,6 +76,7 @@ export function unionArrayValueRead(lowerer: Lowerer, value: IrExpr, index: IrEx
   let result: IrExpr | null = null;
   for (let tag = arms.length - 1; tag >= 0; tag--) {
     const arm = arms[tag]!;
+    if (arm.kind !== "array") return null;
     const receiver: IrExpr = { kind: "unionNarrow", unionId, tag, value, type: arm, loc };
     const read = lowerer.coerceToExpected(arrayValueRead(lowerer, receiver, index, arm.elem, loc), type);
     result = result === null ? read : {

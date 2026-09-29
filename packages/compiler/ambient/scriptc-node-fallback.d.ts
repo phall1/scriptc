@@ -1481,7 +1481,7 @@ declare var URLSearchParams: {
  * encodes it into a file: URL. */
 declare module "url" {
   export function fileURLToPath(url: string | URL): string;
-  export function pathToFileURL(path: string): URL;
+  export function pathToFileURL(path: string, options?: { windows?: boolean }): URL;
 }
 declare module "node:url" {
   export * from "url";

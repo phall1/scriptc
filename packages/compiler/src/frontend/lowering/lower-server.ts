@@ -2570,7 +2570,7 @@ function lowerHttpServerOptions(lowerer: Lowerer, node: ts.Expression, what: str
  * interned option-setting helper. */
 function lowerHttpCreateServerForms(lowerer: Lowerer, expr: ts.CallExpression | ts.NewExpression,
   what: string, loc: SrcLoc,): IrExpr {
-  const args = expr.arguments ?? ([] as unknown as ts.NodeArray<ts.Expression>);
+  const args: readonly ts.Expression[] = expr.arguments ?? [];
   if (args.length > 2) {
     lowerer.noLowering(
       `${what} with ${args.length} arguments`,

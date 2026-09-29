@@ -1084,10 +1084,10 @@ function lowerBufferStaticValue(lowerer: Lowerer, call: ts.CallExpression,
     // A side that is not statically bytes (the invalid-input probes,
     // untyped JS helpers): Node's "buf1"/"buf2" argument ladder runs
     // at runtime — a well-typed dyn still compares.
-    const dyns = sides.map((v, i) => {
+    const dyns = sides.map((v, i): IrExpr => {
       if (v.type.kind === "dyn") return v;
       if (v.kind === "unitLit" || lowerer.dynConvertible(v.type)) {
-        return { kind: "dynFrom", value: v, type: DYN, loc: v.loc } as IrExpr;
+        return { kind: "dynFrom", value: v, type: DYN, loc: v.loc };
       }
       lowerer.noLowering(
         `Buffer.compare of '${lowerer.fmt(v.type)}' values`,

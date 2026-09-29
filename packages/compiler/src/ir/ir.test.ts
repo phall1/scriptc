@@ -67,6 +67,7 @@ describe("checked records with opaque payloads", () => {
   });
 
   test("opaque arrays and optional records retain their actual payload representation", () => {
+    expect(isIslandCallbackParamType(DYN, record, union)).toBe(true);
     expect(canDynCheckTo(arrayOf(DYN), record, union)).toBe(true);
     expect(canDynCheckTo({ kind: "union", unionId: "optional" }, record, union)).toBe(true);
   });

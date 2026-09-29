@@ -11,6 +11,13 @@ import type { SourceFile } from "./ts7/ast-types.js";
  * verifies the returned value before baking it into the program. */
 export type ComptimeEvaluator = (source: string, timeoutMs: number) => unknown;
 
+/** A Node host keeps its process-specific resolver settings and hooks. Native
+ * clients use the filesystem resolver when no host adapter is supplied. */
+export interface RuntimeModuleResolver {
+  resolve: (fromFile: string, specifier: string, paths: readonly string[] | undefined) => string;
+  lookupPaths: (fromFile: string, specifier: string) => readonly string[] | null;
+}
+
 /** Own the syntax and semantic services for a compiler client. The supplied
  * connection factory and optional evaluator provide host operations;
  * parsing, projection and filesystem resolution share their implementation
@@ -24,6 +31,7 @@ export class FrontendServices {
     private readonly createApi: Ts7ApiFactory,
     private readonly cwd = process.cwd(),
     private readonly comptimeEvaluator: ComptimeEvaluator | undefined = undefined,
+    readonly runtimeModuleResolver: RuntimeModuleResolver | undefined = undefined,
   ) {
     this.fetchAnalyzer = new NpmFetchAnalyzer((options) => createApi({ ...options, collectTiming: false }), cwd);
   }

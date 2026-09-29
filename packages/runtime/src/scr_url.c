@@ -889,10 +889,11 @@ static ScrStr *scr_url_to_path_impl(ScrUrl *u, bool win32) {
         return NULL;
       }
     }
-    /* Forward slashes become backslashes FIRST, then percent-decoding
-     * (Node's decodeURIComponent order). Invalid sequences pass through
-     * verbatim where Node throws URIError — no URIError class exists
-     * here (documented divergence, shared with the posix arm). */
+    /* Encoded separators have already been refused, so decoding first and
+     * replacing the remaining literal slashes has Node's ordering. Use the
+     * strict decoder: malformed escapes and invalid UTF-8 throw URIError. */
+    ScrStr *decoded = scr_str_decode_uri_component(u->path);
+    if (!decoded) return NULL;
     UrlBuf out;
     ub_init(&out);
     if (u->host->len > 0) {
@@ -903,22 +904,9 @@ static ScrStr *scr_url_to_path_impl(ScrUrl *u, bool win32) {
       ub_append(&out, u->host->data, u->host->len);
     }
     size_t path_start = out.len;
-    for (size_t i = 0; i < len; i++) {
-      if (p[i] == '/') {
-        ub_push(&out, '\\');
-        continue;
-      }
-      if (p[i] == '%' && i + 2 < len) {
-        int hi = hex_val(p[i + 1]);
-        int lo = hex_val(p[i + 2]);
-        if (hi >= 0 && lo >= 0) {
-          ub_push(&out, (char)((hi << 4) | lo));
-          i += 2;
-          continue;
-        }
-      }
-      ub_push(&out, p[i]);
-    }
+    for (size_t i = 0; i < decoded->len; i++)
+      ub_push(&out, decoded->data[i] == '/' ? '\\' : decoded->data[i]);
+    scr_str_release(decoded);
     if (u->host->len > 0) return ub_take(&out);
     /* A local path requires a drive letter: pathname[1] in [a-zA-Z] and
      * pathname[2] === ':' (both on the DECODED, backslashed pathname). */
@@ -953,8 +941,6 @@ static ScrStr *scr_url_to_path_impl(ScrUrl *u, bool win32) {
     scr_throw_error_msg(SCR_ERR_TYPE, msg, (size_t)mlen);
     return NULL;
   }
-  UrlBuf out;
-  ub_init(&out);
   for (size_t i = 0; i < len; i++) {
     if (p[i] == '%' && i + 2 < len) {
       int hi = hex_val(p[i + 1]);
@@ -962,19 +948,15 @@ static ScrStr *scr_url_to_path_impl(ScrUrl *u, bool win32) {
       if (hi >= 0 && lo >= 0) {
         unsigned char decoded = (unsigned char)((hi << 4) | lo);
         if (decoded == '/') {
-          free(out.data);
           scr_throw_error_msg(SCR_ERR_TYPE,
                                "File URL path must not include encoded / characters", 51);
           return NULL;
         }
-        ub_push(&out, (char)decoded);
         i += 2;
-        continue;
       }
     }
-    ub_push(&out, p[i]);
   }
-  return ub_take(&out);
+  return scr_str_decode_uri_component(u->path);
 }
 
 /* The target's arm: Node on Windows takes the win32 branch of the same
@@ -1157,6 +1139,10 @@ ScrUrl *scr_url_from_path(ScrStr *path) {
 #else
   return scr_url_from_path_impl(path, false);
 #endif
+}
+
+ScrUrl *scr_url_from_path_platform(ScrStr *path, bool windows) {
+  return scr_url_from_path_impl(path, windows);
 }
 
 /* The win32 arms as real entry points: the host-side differential tests

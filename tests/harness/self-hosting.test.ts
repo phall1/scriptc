@@ -60,9 +60,10 @@ for (const component of ["source-locations", "ir-collections", "ir-types", "ir-c
 // actual IR builder, analysis functions and validator, writes IR, and that
 // IR must produce a working executable. Comparing its serialized IR
 // to Node also pins construction order and every recursive payload.
-for (const backend of ["c", "llvm"] as const) {
-  test(`self-hosting IR generation: ${backend} builds and validates an executable program`, async () => {
-    const entry = join(root, "tests/fixtures/self-hosting/ir-build.ts");
+for (const [fixture, backend] of ["ir-build", "contextual-ir"].flatMap((fixture) =>
+  (["c", "llvm"] as const).map((backend) => [fixture, backend] as const))) {
+  test(`self-hosting IR generation ${fixture}: ${backend} builds and validates an executable program`, async () => {
+    const entry = join(root, "tests/fixtures/self-hosting", `${fixture}.ts`);
     const outDir = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-ir-build-"));
     const sanitize = process.env["SCRIPTC_SAN"] === "1";
     const exe = (name: string): string => join(outDir, name + (process.platform === "win32" ? ".exe" : ""));
@@ -92,7 +93,9 @@ for (const backend of ["c", "llvm"] as const) {
         expect(program.error).toBeUndefined();
         expect(program.signal).toBeNull();
         expect(program.status, program.stderr.toString()).toBe(0);
-        expect(program.stdout.toString()).toBe(`built${"!".repeat(bound)} ${bound * (bound - 1) / 2} true\n`);
+        const label = fixture === "ir-build" ? "built" : "context";
+        const suffix = fixture === "ir-build" ? " true" : "";
+        expect(program.stdout.toString()).toBe(`${label}${"!".repeat(bound)} ${bound * (bound - 1) / 2}${suffix}\n`);
         expect(program.stderr.toString()).toBe("");
       }
     } finally {
