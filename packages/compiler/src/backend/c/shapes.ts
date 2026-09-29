@@ -759,6 +759,8 @@ function emitRecordCloneC(
   export function arrNewC(emitter: CEmitter, elem: IrType, capExpr: string | number): string {
     const useRef =
       elem.kind === "record" || elem.kind === "object" || elem.kind === "union" ||
+      // Collection values retain identity and trace their typed keys/values.
+      elem.kind === "map" || elem.kind === "set" ||
       // Promise elements (Promise.all's food): refcounted, cycle-headered
       // — the `_v` adapters and scr_promise_trace_v ride the same REF
       // machinery as record/object/union elements.

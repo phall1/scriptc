@@ -13,7 +13,7 @@ console.log(listeners);
 const flags = new Set<boolean>();
 console.log(flags);
 
-// Arrays cannot hold Map elements yet.
+// Arrays hold Map elements; retain the accepted adjacent form.
 const rows: Map<string, number>[] = [];
 console.log(rows);
 

@@ -20,7 +20,7 @@ type BoxNewPointerType = Extract<IrType, {
   kind: Exclude<PointerKind, "string" | "array" | "func" | "dyn" | "jsval" | "caught" | "promise" | "generator">
 }>;
 type RejectedArrayPointerType = Extract<IrType, {
-  kind: Exclude<PointerKind, "string" | "bigint" | "array" | "bytes" | "record" | "object" | "union" | "jsval" | "child" | "netServer" | "symbol" | "classval" | "func">
+  kind: Exclude<PointerKind, "string" | "bigint" | "array" | "map" | "set" | "bytes" | "record" | "object" | "union" | "jsval" | "child" | "netServer" | "symbol" | "classval" | "func">
 }>;
 
 export function cType(t: IrType): string {
@@ -265,7 +265,7 @@ export function cFnPtrCast(ft: IrType & { kind: "func" }): string {
  * CEmitter.arrNewC, which overrides this for traced-array elements. */
 export function elemKindC(elem: IrType): string {
   if (POINTER_KINDS.has(elem.kind) &&
-      elem.kind !== "string" && elem.kind !== "array" && elem.kind !== "bytes" &&
+      elem.kind !== "string" && elem.kind !== "array" && elem.kind !== "map" && elem.kind !== "set" && elem.kind !== "bytes" &&
       elem.kind !== "record" && elem.kind !== "object" && elem.kind !== "union" &&
       elem.kind !== "jsval" && elem.kind !== "child" && elem.kind !== "netServer" &&
       elem.kind !== "symbol" && elem.kind !== "bigint" && elem.kind !== "classval" && elem.kind !== "func" && elem.kind !== "dyn") {
@@ -285,6 +285,8 @@ export function elemKindC(elem: IrType): string {
     case "record":
     case "object":
     case "union":
+    case "map":
+    case "set":
     // Island handles are ordinary refcounted pointers (scr_jsval_retain/
     // release adapters) — `any[]` under --dynamic is a native array of
     // handles, one element per island value.

@@ -7,11 +7,10 @@ export interface ClassSymbolKey {
   sym: ts.Symbol;
   /** Registry keys share identity across bindings and modules; ordinary
    * Symbol() calls retain the declaring binding's distinct identity. */
-  identity: ts.Symbol | string;
+  identity: ts.Symbol;
   fieldName: string;
 }
 
-const keys = new WeakMap<Lowerer, Map<ts.Symbol, ClassSymbolKey | null>>();
 const FIELD_PREFIX = "%symbol:";
 
 export function symbolFieldDisplayName(field: string): string {
@@ -49,9 +48,9 @@ export function classSymbolKeyOf(lowerer: Lowerer, key: ts.Expression): ClassSym
  * cannot be used before initialization: a computed class field evaluates
  * its key when the class is defined, even if no instance is constructed. */
 export function classSymbolKeyOfSymbol(lowerer: Lowerer, sym: ts.Symbol): ClassSymbolKey | null {
-  let cache = keys.get(lowerer);
-  if (!cache) keys.set(lowerer, cache = new Map());
-  if (cache.has(sym)) return cache.get(sym)!;
+  const cache = lowerer.classSymbolKeys;
+  const cached = cache.get(sym);
+  if (cached !== undefined) return cached;
   cache.set(sym, null);
   const decls = lowerer.checker.declarationsOf(sym);
   const decl = lowerer.checker.valueDeclarationOf(sym);
@@ -73,9 +72,18 @@ export function classSymbolKeyOfSymbol(lowerer: Lowerer, sym: ts.Symbol): ClassS
   if (bindingWritten(lowerer, sym, sf)) return null;
   const preceding = list.declarations.slice(0, list.declarations.indexOf(decl));
   if (bindingEarlyUse7(lowerer.program, sf, sf.statements.indexOf(list.parent), decl, preceding) !== null) return null;
+  // A registry name denotes one symbol even when several source bindings
+  // initialize it. Intern those names into a representative checker symbol;
+  // the layout table then has one identity-keyed domain for both forms.
+  let identity = sym;
+  if (registered) {
+    const existing = lowerer.registeredClassSymbols.get(arg!.text);
+    if (existing) identity = existing;
+    else lowerer.registeredClassSymbols.set(arg!.text, sym);
+  }
   const key: ClassSymbolKey = {
     sym,
-    identity: registered ? arg!.text : sym,
+    identity,
     // Symbol slots are not string properties. The reserved prefix keeps
     // them out of the native class's string-keyed dynamic view, including
     // Object.keys/JSON serialization and string-property writeback.

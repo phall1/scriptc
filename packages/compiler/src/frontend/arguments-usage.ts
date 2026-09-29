@@ -15,7 +15,7 @@ function isArgumentsRead(id: ts.Identifier): boolean {
 
 /** Does this function's own body read `arguments`? Nested plain functions and
  * methods own theirs; arrows inherit the enclosing one. */
-export function bodyReadsArguments(fn: { body?: ts.Node | undefined }): boolean {
+export function bodyReadsArguments(fn: ts.Node): boolean {
   if (fn.body === undefined) return false;
   let found = false;
   // Iterative walking preserves the frontend's nesting fence on deep trees.

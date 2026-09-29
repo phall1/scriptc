@@ -65,7 +65,7 @@ const REGISTER_MEMBERS: ReadonlySet<string> = new Set([
 
 const META_EVENTS: ReadonlySet<string> = new Set(["newListener", "removeListener"]);
 
-interface EventSig {
+export interface EventSig {
   /** The unified argument tuple, positions in emit order. */
   tuple: IrType[];
   /** True once ANY emit site pinned the arity/types (listeners may then
@@ -97,7 +97,7 @@ function flexibleJsEvent(name: string, sig: EventSig | undefined): boolean {
     (sig.unmappedEmit === true || sig.conflict !== null);
 }
 
-interface ComputedEventPattern {
+export interface ComputedEventPattern {
   prefix: string;
   suffix: string;
   listener: boolean;
@@ -131,11 +131,7 @@ function computedPatternOverlapsReserved(pattern: ComputedEventPattern): boolean
  * types and non-literal names are simply not candidates — the touching
  * sites speak for themselves when they lower. */
 function emitterEvents(lowerer: Lowerer): Map<string, EventSig> {
-  const holder = lowerer as unknown as {
-    emitterEventTable?: Map<string, EventSig>;
-    emitterComputedPatterns?: ComputedEventPattern[];
-  };
-  if (holder.emitterEventTable) return holder.emitterEventTable;
+  if (lowerer.emitterEventTable) return lowerer.emitterEventTable;
   const table = new Map<string, EventSig>();
   const computedPatterns: ComputedEventPattern[] = [];
   const sigOf = (name: string): EventSig => {
@@ -278,14 +274,14 @@ function emitterEvents(lowerer: Lowerer): Map<string, EventSig> {
     };
     walk(sf);
   }
-  holder.emitterEventTable = table;
-  holder.emitterComputedPatterns = computedPatterns;
+  lowerer.emitterEventTable = table;
+  lowerer.emitterComputedPatterns = computedPatterns;
   return table;
 }
 
 function computedPatterns(lowerer: Lowerer): ComputedEventPattern[] {
   emitterEvents(lowerer);
-  return (lowerer as unknown as { emitterComputedPatterns: ComputedEventPattern[] }).emitterComputedPatterns;
+  return lowerer.emitterComputedPatterns;
 }
 
 function computedPatternsOverlap(left: ComputedEventPattern, right: ComputedEventPattern): boolean {

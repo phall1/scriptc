@@ -3219,10 +3219,8 @@ export interface HttpClientFnBinding {
   member: "request" | "get";
 }
 
-const httpClientFnBindings = new WeakMap<Lowerer, Map<ts.Symbol, HttpClientFnBinding>>();
-
 export function httpClientFnBindingOf(lowerer: Lowerer, sym: ts.Symbol): HttpClientFnBinding | undefined {
-  return httpClientFnBindings.get(lowerer)?.get(sym);
+  return lowerer.httpClientFnBindings.get(sym);
 }
 
 /** The { module, member } of an http/https client-function REFERENCE
@@ -3328,12 +3326,7 @@ export function registerHttpClientFnBinding(lowerer: Lowerer, nameNode: ts.Node,
   }
   const symbol = lowerer.checker.getSymbolAtLocation(nameNode);
   if (symbol) {
-    let map = httpClientFnBindings.get(lowerer);
-    if (!map) {
-      map = new Map();
-      httpClientFnBindings.set(lowerer, map);
-    }
-    map.set(symbol, { cond, trueSecure: t.module === "https", member: t.member });
+    lowerer.httpClientFnBindings.set(symbol, { cond, trueSecure: t.module === "https", member: t.member });
   }
   return true;
 }

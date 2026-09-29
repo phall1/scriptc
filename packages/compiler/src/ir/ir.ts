@@ -535,7 +535,7 @@ export function isUnitType(t: IrType): boolean {
  * backends. Array-producing lowerings can learn their result element from
  * a callback rather than through mapType's ordinary T[] gate, so they must
  * share this predicate instead of reconstructing an array around an
- * otherwise-valid standalone type (Map, Set, opaque handles, ...). */
+ * otherwise-valid standalone type (Date, opaque handles, ...). */
 export function isSupportedArrayElem(t: IrType): boolean {
   switch (t.kind) {
     // Native collection seeds and drains retain checked values in a
@@ -546,6 +546,8 @@ export function isSupportedArrayElem(t: IrType): boolean {
     case "bool":
     case "string":
     case "array":
+    case "map":
+    case "set":
     case "bytes":
     case "record":
     case "object":

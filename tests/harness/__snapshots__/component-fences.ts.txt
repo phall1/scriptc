@@ -73,24 +73,6 @@ component-fences.ts:14:13 - error SC2004: uses of 'flags' inherit the blocker on
 
   hint: the declaration of 'flags' did not compile — fix the diagnostic reported there and these sites clear with it
 
-component-fences.ts:17:7 - error SC2009: values of type 'Map<string, number>[]' cannot be compiled: the array shape is supported, but 'Map<string, number>' elements have no array representation yet
-
-  16 | // Arrays cannot hold Map elements yet.
-  17 | const rows: Map<string, number>[] = [];
-     |       ^~~~
-  18 | console.log(rows);
-
-  hint: the outer shape is supported — the named component is the blocker; restate it inside the compilable set (number, string, boolean, arrays, Maps, Sets, RegExp, functions, classes, records, unions of those, and 'unknown')
-
-component-fences.ts:18:13 - error SC2004: uses of 'rows' inherit the blocker on its declaration
-
-  17 | const rows: Map<string, number>[] = [];
-  18 | console.log(rows);
-     |             ^~~~
-  19 | 
-
-  hint: the declaration of 'rows' did not compile — fix the diagnostic reported there and these sites clear with it
-
 component-fences.ts:35:7 - error SC2009: values of type '() => WeakMap<object, number>' cannot be compiled: the function shape is supported, but its return type 'WeakMap<object, number>' does not compile
 
   34 | // Node's ReferenceError at the root instead).

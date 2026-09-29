@@ -1,9 +1,9 @@
 // Set support boundaries: what stays rejected at LOWERING, with specific
 // messages. Elements share Map's key domain; unsupported forms remain fenced.
 
-// Array seeds lower (`new Set(["a", "b"])` is a corpus program now); a
-// other iterable seed — another Set — typechecks against the lib
-// but keeps the fence: never silently an empty set.
+// Array and same-element Set seeds lower, preserving insertion order
+// and copying membership into independent storage. Keep this accepted
+// form beside the unsupported element domains below.
 const seeded = new Set(new Set(["a", "b"]));
 
 // Boolean elements remain unsupported — the new-site diagnostic names the
@@ -23,7 +23,7 @@ function maybeSet(cond: boolean): Set<string> | undefined {
   return undefined;
 }
 
-// Sets as array elements: ScrArr has no set element kind.
+// Sets as array elements now preserve references without a diagnostic.
 const rows: Set<string>[] = [];
 
 // Sets are not JSON (Node stringifies them as the useless "{}" husk;

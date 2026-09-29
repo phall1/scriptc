@@ -3400,7 +3400,8 @@ function buildArrayFromArrayFn(lowerer: Lowerer, name: string, elem: IrType,
     // Collection views can refine has() while retaining its native ABI.
     if (!lowerer.isStdlibMember(access) && name !== "has") return null;
     const loc = locOf(call);
-    const receiver = lowerer.lowerExpr(access.expression);
+    const value = lowerer.lowerExpr(access.expression);
+    const receiver = lowerer.runtimeOptionalPropertyReceiver(access.expression, value, receiverIr, name) ?? value;
     // The lib's `set` returns the Map (chaining typechecks); the lowered
     // set is a void statement, so a chained receiver has no value — fence
     // it instead of emitting a void receiver.
@@ -3601,21 +3602,29 @@ export function mapEntriesArray(lowerer: Lowerer, receiver: IrExpr & { type: IrT
   return { kind: "call", callee: helper, args: [receiver], type: arrayOf(tupleT), loc: receiver.loc };
 }
 
-/** Optional Map storage can survive a checker narrowing when the producer
- * is a runtime-optional read. Keep the missing arm observable at iteration. */
-export function lowerMapSpread(lowerer: Lowerer, source: IrExpr, node: ts.Expression): IrExpr | null {
+/** Snapshot a collection for immediate iteration. Array reads and callback
+ * parameters may retain an undefined arm even when the checker spells a
+ * bare collection. Observe that arm before touching native storage. */
+export function lowerCollectionSpread(lowerer: Lowerer, source: IrExpr, node: ts.Expression): IrExpr | null {
   if (source.type.kind === "map") return mapEntriesArray(lowerer, { ...source, type: source.type });
+  if (source.type.kind === "set") return {
+    kind: "setIntrinsic", method: "toArray", receiver: source, args: [], type: arrayOf(source.type.elem), loc: source.loc,
+  };
   if (source.type.kind !== "union") return null;
   const arms = lowerer.unions.get(source.type.unionId)?.arms;
-  const tag = arms?.findIndex((arm) => arm.kind === "map") ?? -1;
-  const mapT = arms?.[tag];
-  if (mapT?.kind !== "map" || !arms?.every((arm, index) => index === tag || isUnitType(arm))) return null;
+  const tag = arms?.findIndex((arm) => arm.kind === "map" || arm.kind === "set") ?? -1;
+  const collection = arms?.[tag];
+  if ((collection?.kind !== "map" && collection?.kind !== "set") ||
+      !arms?.every((arm, index) => index === tag || isUnitType(arm))) return null;
   const loc = locOf(node);
-  const slot = lowerer.declareHiddenLocal("%mapSpread", source.type);
+  const slot = lowerer.declareHiddenLocal("%collectionSpread", source.type);
   const value = varRef(slot.id, source.type, loc);
-  const entries = mapEntriesArray(lowerer, {
-    kind: "unionNarrow", unionId: source.type.unionId, tag, value, type: mapT, loc,
-  });
+  const narrowed: IrExpr = {
+    kind: "unionNarrow", unionId: source.type.unionId, tag, value, type: collection, loc,
+  };
+  const entries: IrExpr = collection.kind === "map"
+    ? mapEntriesArray(lowerer, { ...narrowed, type: collection })
+    : { kind: "setIntrinsic", method: "toArray", receiver: narrowed, args: [], type: arrayOf(collection.elem), loc };
   return {
     kind: "seqExpr", stmts: [{ kind: "varDecl", localId: slot.id, init: source, loc }],
     result: {
@@ -3829,7 +3838,8 @@ export function lowerMapSpread(lowerer: Lowerer, source: IrExpr, node: ts.Expres
     // still rejects structural mocks and assertions over other objects.
     if (!lowerer.isStdlibMember(access) && name !== "has") return null;
     const loc = locOf(call);
-    const receiver = lowerer.lowerExpr(access.expression);
+    const value = lowerer.lowerExpr(access.expression);
+    const receiver = lowerer.runtimeOptionalPropertyReceiver(access.expression, value, receiverIr, name) ?? value;
     // The lib's `add` returns the Set (chaining typechecks); the lowered
     // add is a void statement — fence chained receivers like Map's set.
     if (receiver.type.kind !== "set") {
@@ -5543,6 +5553,115 @@ const ITER_TERMINALS = new Set(["toArray", "forEach", "reduce", "some", "every",
       });
     return walk(stmts);
   }
+
+/** Consume a Set seed immediately, including optional inherited sets used
+ * by compiler tables. Nullish seeds construct empty sets; a lazy fallback
+ * consumes its evaluated branch even when it reassigns the source binding. */
+export function lowerSetSeedNew(lowerer: Lowerer, node: ts.Expression, setT: IrType & { kind: "set" }): IrExpr | null {
+  if (ts.isSpreadElement(node)) return null;
+  while (ts.isParenthesizedExpression(node)) node = node.expression;
+  const loc = locOf(node);
+  const undefinedSeed = lowerStaticallyUndefinedArgument(lowerer, node);
+  if (undefinedSeed) return defaultAfterUndefined(undefinedSeed, { kind: "setNew", type: setT, loc });
+  if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken) {
+    const undefinedLeft = lowerStaticallyUndefinedArgument(lowerer, node.left);
+    const fallback = node.right;
+    if (undefinedLeft) {
+      const selected = lowerSetSeedNew(lowerer, fallback, setT);
+      return selected ? defaultAfterUndefined(undefinedLeft, selected) : null;
+    }
+    const source = lowerer.lowerExpr(node.left);
+    if (isUnitType(source.type)) {
+      const selected = lowerSetSeedNew(lowerer, fallback, setT);
+      return selected ? defaultAfterUndefined(source, selected) : null;
+    }
+    return setFromSeedValue(lowerer, source, setT, () => lowerSetSeedNew(lowerer, fallback, setT));
+  }
+  if (ts.isConditionalExpression(node)) {
+    const yes = lowerSetSeedNew(lowerer, node.whenTrue, setT);
+    const no = lowerSetSeedNew(lowerer, node.whenFalse, setT);
+    return yes && no ? { kind: "ternary", cond: lowerer.lowerCondition(node.condition), then: yes, else_: no, type: setT, loc } : null;
+  }
+  // Constructor contextual types include Iterable<T>, which has no value
+  // representation. Build a literal at the actual Set element ABI instead.
+  if (ts.isArrayLiteralExpression(node) && !node.elements.some(ts.isSpreadElement)) {
+    const elems = node.elements.map((element) => lowerer.lowerCollectionKey(element, setT.elem));
+    return { kind: "setNew", seed: { kind: "arrayLit", elems, type: arrayOf(setT.elem), loc }, type: setT, loc };
+  }
+  const declared = lowerer.mapTypeOf(lowerer.typeOf(node));
+  const scalar = setT.elem.kind === "f64" || setT.elem.kind === "string";
+  let source = !scalar && (declared?.kind === "array" || declared?.kind === "record")
+    ? lowerer.lowerCollectionKey(node, declared)
+    : lowerer.lowerExpr(node);
+  if (declared?.kind === "string" && setT.elem.kind === "string" &&
+      (source.type.kind === "dyn" || source.type.kind === "jsval")) {
+    source = lowerer.coerceInto(node, source, STRING);
+  }
+  if (declared?.kind === "array" && typeEquals(declared.elem, setT.elem)) {
+    // Preserve the existing checked scalar-iterable bridge. Reference
+    // elements must retain identity and cannot enter via a copying exit.
+    if (source.type.kind === "jsval" && lowerer.boundaryExitSafe(arrayOf(setT.elem))) {
+      source = { kind: "jsExit", value: source, type: arrayOf(setT.elem), loc };
+    }
+    if (source.type.kind === "dyn" && scalar) {
+      source = lowerer.coerceInto(node, {
+        kind: "libCall", fn: "dyn.iterPack", args: [source, strLit(node.getText(), loc)], type: DYN, loc,
+      }, arrayOf(setT.elem));
+    }
+  }
+  return setFromSeedValue(lowerer, source, setT, () => ({ kind: "setNew", type: setT, loc }));
+}
+
+function setFromSeedValue(
+  lowerer: Lowerer,
+  source: IrExpr,
+  setT: IrType & { kind: "set" },
+  missing: () => IrExpr | null,
+): IrExpr | null {
+  const loc = source.loc;
+  if (isUnitType(source.type)) {
+    const empty = missing();
+    return empty ? defaultAfterUndefined(source, empty) : null;
+  }
+  if (source.type.kind === "union") {
+    const unionId = source.type.unionId;
+    const arms = lowerer.unions.get(unionId)?.arms;
+    if (!arms) return null;
+    const slot = lowerer.declareHiddenLocal("%setSeed", source.type);
+    const ref = varRef(slot.id, source.type, loc);
+    let result: IrExpr | null = null;
+    for (let tag = arms.length - 1; tag >= 0; tag--) {
+      const arm = arms[tag]!;
+      const branch = isUnitType(arm) ? missing() : setFromSeedValue(lowerer, {
+        kind: "unionNarrow", unionId, tag, value: ref, type: arm, loc,
+      }, setT, missing);
+      if (!branch) return null;
+      result = result === null ? branch : {
+        kind: "ternary", cond: { kind: "unionIsTag", unionId, tag, value: ref, negated: false, type: BOOL, loc },
+        then: branch, else_: result, type: setT, loc,
+      };
+    }
+    return result ? {
+      kind: "seqExpr", stmts: [{ kind: "varDecl", localId: slot.id, init: source, loc }], result, type: setT, loc,
+    } : null;
+  }
+  let seed: IrExpr;
+  if (source.type.kind === "set" && typeEquals(source.type, setT)) {
+    seed = { kind: "setIntrinsic", method: "toArray", receiver: source, args: [], type: arrayOf(setT.elem), loc };
+  } else if (source.type.kind === "string" && setT.elem.kind === "string") {
+    seed = strCharsCall(lowerer, source, loc);
+  } else if (source.type.kind === "array" && typeEquals(source.type.elem, setT.elem)) {
+    seed = source;
+  } else if (source.type.kind === "record") {
+    const shape = lowerer.shapes.get(source.type.shapeId);
+    if (!shape?.tuple || !shape.fields.every((field) => typeEquals(field.type, setT.elem))) return null;
+    const arrayT: IrType & { kind: "array" } = { kind: "array", elem: setT.elem };
+    const helper = lowerer.tupleArrayWidthHelper(source.type.shapeId, arrayT, loc);
+    if (!helper) return null;
+    seed = { kind: "call", callee: helper, args: [source], type: arrayT, loc };
+  } else return null;
+  return { kind: "setNew", seed, type: setT, loc };
+}
 
 /** Consume supported Map seeds: matching Maps and tuple arrays, plus
  * nullish values that construct an empty Map. Conditional/nullish seeds

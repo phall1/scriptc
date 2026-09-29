@@ -713,7 +713,11 @@ export function lowerObjectLiteral(lowerer: Lowerer, expr: ts.ObjectLiteralExpre
   // gate DECLINED it (a project-declared typedef that absorbed to the
   // island through checker-`any` field residue): the literal builds at
   // its own type like every unmappable context.
-  if (mapped === null || mapped.kind === "union" || mapped.kind === "dyn" || mapped.kind === "object" || mapped.kind === "jsval") {
+  // An index-signature literal can inherit a callable contextual type for
+  // a prototype-named DATA property (notably `toString`). Object literals
+  // have no call signature; construct their own data shape and let the
+  // surrounding assignment/assertion enforce the destination contract.
+  if (mapped === null || mapped.kind === "union" || mapped.kind === "dyn" || mapped.kind === "object" || mapped.kind === "jsval" || mapped.kind === "func") {
     const ctxUnion = mapped?.kind === "union" ? mapped : null;
     mapped = lowerer.mapTypeOf(lowerer.typeOf(expr)) ?? mapped;
     // A literal whose own shape re-tags into NO arm of the contextual

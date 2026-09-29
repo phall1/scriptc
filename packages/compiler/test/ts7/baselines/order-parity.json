@@ -11061,6 +11061,48 @@
     "<repo>/tests/corpus/regexp-optional-constructor.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/collection-array-cycles.ts": {
+   "order": [
+    "<repo>/tests/corpus/collection-array-cycles.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/collection-array-maps.ts": {
+   "order": [
+    "<repo>/tests/corpus/collection-array-maps.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/collection-array-missing.ts": {
+   "order": [
+    "<repo>/tests/corpus/collection-array-missing.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/collection-array-sets.ts": {
+   "order": [
+    "<repo>/tests/corpus/collection-array-sets.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/prototype-named-data-records.ts": {
+   "order": [
+    "<repo>/tests/corpus/prototype-named-data-records.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/set-optional-seeds.ts": {
+   "order": [
+    "<repo>/tests/corpus/set-optional-seeds.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/diagnostics/intl-segmenter.ts": {
+   "order": [
+    "<repo>/tests/diagnostics/intl-segmenter.ts"
+   ],
+   "diags": []
   }
  }
 }

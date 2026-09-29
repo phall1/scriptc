@@ -302,8 +302,7 @@ function errorOrNull(lowerer: Lowerer): IrType {
  * record and the compile-time walk would split-brain. Built once, lazily
  * (the emitterEvents pre-pass precedent); the scan is diagnostic-free. */
 function propMutatedSymbols(lowerer: Lowerer): Set<ts.Symbol> {
-  const holder = lowerer as unknown as { streamPropMutatedSyms?: Set<ts.Symbol> };
-  if (holder.streamPropMutatedSyms) return holder.streamPropMutatedSyms;
+  if (lowerer.streamPropMutatedSyms) return lowerer.streamPropMutatedSyms;
   const set = new Set<ts.Symbol>();
   const noteBase = (target: ts.Expression): void => {
     let base = target;
@@ -333,7 +332,7 @@ function propMutatedSymbols(lowerer: Lowerer): Set<ts.Symbol> {
     };
     walk(sf);
   }
-  holder.streamPropMutatedSyms = set;
+  lowerer.streamPropMutatedSyms = set;
   return set;
 }
 

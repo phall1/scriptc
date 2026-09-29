@@ -11,7 +11,7 @@ import { MAX_GENERIC_INSTANCES, appendImplicitUndefinedReturn, bodyReadsArgument
 import { isGenericCallableMemberType, jsOpenObjectType, typeKey } from "../type-mapper.js";
 import { cjsClassExprWholeExportOf, isCjsJsFile, isJsSourceFile, isModuleExportsAccess, isNodeTypesPath, locOf } from "../program.js";
 import { PoisonError, dynFallbackType, dynUndefinedExpr, newFnCtx, own } from "./lowerer.js";
-import { lowerArrayConstructor, lowerMapSeedNew, strCharsCall } from "./lower-containers.js";
+import { lowerArrayConstructor, lowerMapSeedNew, lowerSetSeedNew } from "./lower-containers.js";
 import { bufEncoding } from "./containers/bytes.js";
 import { isSafeToRepeat } from "./expressions/evaluation-safety.js";
 import { lowerSearchParamsNew, lowerTextCodecNew } from "./lower-builtins.js";
@@ -167,7 +167,7 @@ export interface ClassInfo {
    * goes key identity → reserved layout field name; inspect recovers the
    * Symbol(limit) spelling. Inherited entries are seeded from the base.
    * Absent on builtin classes and classes with no symbol-keyed fields. */
-  symbolFields?: Map<ts.Symbol | string, string>;
+  symbolFields?: Map<ts.Symbol, string>;
   /** GENERIC class FAMILY (`class Box<T>` itself): the synthetic,
    * never-constructed ancestor every instantiation extends. It owns what
    * JS's one runtime `Box` owns — the statics (one storage location for
@@ -299,7 +299,7 @@ export interface GenericClassInfo {
   function symbolSlotReturnType(
     lowerer: Lowerer,
     fnLike: ts.MethodDeclaration,
-    symbolFields: ReadonlyMap<ts.Symbol | string, string>,
+    symbolFields: ReadonlyMap<ts.Symbol, string>,
     fields: ReadonlyMap<string, IrType>,
   ): IrType | null {
     if (symbolFields.size === 0) return null;
@@ -1186,7 +1186,7 @@ export function collectClassShapeInner(lowerer: Lowerer, decl: ts.ClassLikeDecla
         for (let c = base; c; c = c.base) if (c.builtinError) return true;
         return false;
       })();
-      const symbolFields = new Map<ts.Symbol | string, string>(base?.symbolFields ?? []);
+      const symbolFields = new Map<ts.Symbol, string>(base?.symbolFields ?? []);
       const fieldOrder: ClassInfo["fieldOrder"] = [];
       const methods = new Map<string, { params: ParamShape[]; ret: IrType; abstract?: true; async?: true; gen?: NonNullable<IrFunction["generator"]> }>();
       const methodEntryFences = new Map<string, ScrDiagnostic>();
@@ -5535,82 +5535,8 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
         const fieldType = assignedThisFieldType(lowerer, expr);
         if (mapped?.kind !== "set" && fieldType?.kind === "set") mapped = fieldType;
         if (mapped?.kind === "set" && (expr.arguments?.length ?? 0) === 1) {
-          const argNode = expr.arguments![0]!;
-          // An array LITERAL seed builds element-wise (its contextual type
-          // is the lib constructor's `readonly T[] | Iterable<T> | null`
-          // union — unmappable, so the generic literal path can't type it);
-          // an array-typed VALUE seed lowers as itself.
-          if (ts.isArrayLiteralExpression(argNode) && !argNode.elements.some(ts.isSpreadElement)) {
-            const elems = argNode.elements.map((el) => lowerer.lowerCollectionKey(el, mapped.elem));
-            const seed: IrExpr = { kind: "arrayLit", elems, type: arrayOf(mapped.elem), loc };
-            return { kind: "setNew", seed, type: mapped, loc };
-          }
-          if (!ts.isSpreadElement(argNode)) {
-            const argIr = lowerer.mapTypeOf(lowerer.typeOf(argNode));
-            if (argIr?.kind === "set" && typeEquals(argIr.elem, mapped.elem)) {
-              const source = lowerer.lowerExpr(argNode);
-              if (source.type.kind === "set" && typeEquals(source.type, mapped)) {
-                const seed: IrExpr = { kind: "setIntrinsic", method: "toArray", receiver: source, args: [], type: arrayOf(mapped.elem), loc };
-                return { kind: "setNew", seed, type: mapped, loc };
-              }
-            }
-            // String iteration is by Unicode code point, not UTF-16 code
-            // unit. Share Array.from's iterator snapshot; evaluation of
-            // the source occurs once and insertion preserves first order.
-            if (argIr?.kind === "string" && mapped.elem.kind === "string") {
-              const source = lowerer.lowerExprExpecting(argNode, STRING);
-              return { kind: "setNew", seed: strCharsCall(lowerer, source, loc), type: mapped, loc };
-            }
-            if (argIr?.kind === "array" && typeEquals(argIr.elem, mapped.elem)) {
-              // Copying scalar elements is unobservable, but a checked
-              // dynamic exit would mint different record/array identities.
-              let seed = mapped.elem.kind === "f64" || mapped.elem.kind === "string"
-                ? lowerer.lowerExpr(argNode)
-                : lowerer.lowerCollectionKey(argNode, argIr);
-              // A T[]-DECLARED seed whose value is an island handle (a
-              // package's exported array — the binding never held a
-              // static array): the VALIDATED exit copies the engine
-              // array out (strict elements, the catchable TypeError on a
-              // lying handle), and the bulk add proceeds on the copy —
-              // construction reads the seed once, so the aliasing
-              // divergence has nothing to observe.
-              if (seed.type.kind === "jsval" && lowerer.boundaryExitSafe(arrayOf(mapped.elem))) {
-                seed = { kind: "jsExit", value: seed, type: arrayOf(mapped.elem), loc: seed.loc };
-              }
-              if (seed.type.kind === "dyn" && (mapped.elem.kind === "f64" || mapped.elem.kind === "string")) {
-                seed = lowerer.coerceInto(argNode, {
-                  kind: "libCall", fn: "dyn.iterPack", args: [seed,
-                    { kind: "strLit", value: argNode.getText(), type: STRING, loc: seed.loc }],
-                  type: DYN, loc: seed.loc,
-                }, arrayOf(mapped.elem));
-              }
-              if (typeEquals(seed.type, arrayOf(mapped.elem))) {
-                return { kind: "setNew", seed, type: mapped, loc };
-              }
-              // Any other lowered kind falls through to the named fence
-              // below — never a mistyped seed into the validator.
-            }
-            // Fixed tuples use record storage, not T[] storage. Snapshot
-            // their legal elements into an array before bulk insertion;
-            // the helper takes the tuple as one argument, so an effectful
-            // seed expression is evaluated exactly once.
-            if (argIr?.kind === "record") {
-              const shape = lowerer.shapes.get(argIr.shapeId);
-              if (shape?.tuple && shape.fields.every((field) => typeEquals(field.type, mapped.elem))) {
-                const seedType = { kind: "array" as const, elem: mapped.elem };
-                const helper = lowerer.tupleArrayWidthHelper(argIr.shapeId, seedType, loc);
-                if (helper) {
-                  const tuple = mapped.elem.kind === "f64" || mapped.elem.kind === "string"
-                    ? lowerer.lowerExpr(argNode)
-                    : lowerer.lowerCollectionKey(argNode, argIr);
-                  if (typeEquals(tuple.type, argIr)) {
-                    const seed: IrExpr = { kind: "call", callee: helper, args: [tuple], type: seedType, loc };
-                    return { kind: "setNew", seed, type: mapped, loc };
-                  }
-                }
-              }
-            }
-          }
+          const seeded = lowerSetSeedNew(lowerer, expr.arguments![0]!, mapped);
+          if (seeded) return seeded;
         }
         // JavaScript's identity-Set idiom: `new Set([setTimeout, atob,
         // ...])` — the element TYPE (a union of stdlib signatures) has no
@@ -5641,7 +5567,7 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
           lowerer.noLowering(
             "new Set(values)",
             expr,
-            "construct the Set empty and add() each value — only a string, array, or fixed tuple of " +
+            "construct the Set empty and add() each value — only nullish values or a matching Set, string, array, or fixed tuple of " +
               "already-legal elements (numbers, strings, or identity references) seeds a Set",
           );
         }

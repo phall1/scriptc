@@ -262,11 +262,8 @@ function requestInitStaticBoolean(lowerer: Lowerer, value: ts.Expression): boole
  * after `init.cache = undefined` would diagnose the stale literal instead of
  * the value fetch actually observes. Built lazily and diagnostic-free. */
 function requestInitPropMutatedSymbols(lowerer: Lowerer): Set<ts.Symbol> {
-  const holder = lowerer as unknown as {
-    requestInitPropMutatedSyms?: Set<ts.Symbol>;
-  };
-  if (holder.requestInitPropMutatedSyms) {
-    return holder.requestInitPropMutatedSyms;
+  if (lowerer.requestInitPropMutatedSyms) {
+    return lowerer.requestInitPropMutatedSyms;
   }
   const symbols = new Set<ts.Symbol>();
   const noteBase = (target: ts.Expression): void => {
@@ -312,7 +309,7 @@ function requestInitPropMutatedSymbols(lowerer: Lowerer): Set<ts.Symbol> {
     };
     walk(source);
   }
-  holder.requestInitPropMutatedSyms = symbols;
+  lowerer.requestInitPropMutatedSyms = symbols;
   return symbols;
 }
 

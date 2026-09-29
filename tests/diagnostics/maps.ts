@@ -20,7 +20,7 @@ function maybeMap(cond: boolean): Map<string, number> | undefined {
   return undefined;
 }
 
-// Maps as array elements: ScrArr has no map element kind.
+// Maps as array elements now preserve references without a diagnostic.
 const rows: Map<string, number>[] = [];
 
 // Maps are not JSON (Node stringifies them as the useless "{}" husk;

@@ -1,12 +1,3 @@
-sets.ts:7:16 - error SC2020: 'new Set(values)' is part of the standard library types but has no scriptc lowering yet
-
-  6 | // but keeps the fence: never silently an empty set.
-  7 | const seeded = new Set(new Set(["a", "b"]));
-    |                ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  8 | 
-
-  hint: construct the Set empty and add() each value — only a string, array, or fixed tuple of already-legal elements (numbers, strings, or identity references) seeds a Set
-
 sets.ts:11:7 - error SC2009: values of type 'Set<boolean>' cannot be compiled: the Set shape is supported, but 'boolean' is outside its supported element domain (numbers, strings, identity references, or unions of identity references)
 
   10 | // element type.
@@ -29,15 +20,6 @@ sets.ts:17:17 - error SC2009: values of type 'Set<boolean>' cannot be compiled: 
   17 | function useBad(s: Set<boolean>): number {
      |                 ^
   18 |   return s.size;
-
-  hint: the outer shape is supported — the named component is the blocker; restate it inside the compilable set (number, string, boolean, arrays, Maps, Sets, RegExp, functions, classes, records, unions of those, and 'unknown')
-
-sets.ts:27:7 - error SC2009: values of type 'Set<string>[]' cannot be compiled: the array shape is supported, but 'Set<string>' elements have no array representation yet
-
-  26 | // Sets as array elements: ScrArr has no set element kind.
-  27 | const rows: Set<string>[] = [];
-     |       ^~~~
-  28 | 
 
   hint: the outer shape is supported — the named component is the blocker; restate it inside the compilable set (number, string, boolean, arrays, Maps, Sets, RegExp, functions, classes, records, unions of those, and 'unknown')
 

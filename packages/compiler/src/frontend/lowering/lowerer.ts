@@ -1,8 +1,12 @@
+import { bindingInContext, captureContextBinding, declareContextLocal, declareContextThis, type FnCtx } from "./function-context.js";
+export { newFnCtx, type FnCtx } from "./function-context.js";
 import type { FrontendServices } from "../services.js";
 import { InternalCompilerError } from "../../errors.js";
 import { defaultAfterUndefined, lowerStaticallyUndefinedArgument } from "./optional-arguments.js";
 import { ClassDynamicDispatch } from "./class-dynamic-dispatch.js";
 import { finalizeClassMethodValues } from "./class-method-values.js";
+import type { ClassSymbolKey } from "./symbol-fields.js";
+import type { HttpClientFnBinding } from "./lower-server.js";
 /* AST + checker → IR.
  *
  * Invariants:
@@ -107,7 +111,7 @@ import { lowerArrayMethodCall, lowerMapMethodCall, lowerMapForEachCall, buildMap
 import { lowerBufferStaticCall, lowerBytesMethodCall, lowerBytesNew } from "./containers/bytes.js";
 import { lowerRegexMethodCall, lowerStringMethodCall } from "./containers/string-and-regexp.js";
 import { lowerStreamModuleCall } from "./lower-stream.js";
-import { lowerEmitOverrideSpec, type EmitSpecCtx, type EmitSpecRequest } from "./lower-event-emitter.js";
+import { lowerEmitOverrideSpec, type ComputedEventPattern, type EmitSpecCtx, type EmitSpecRequest, type EventSig } from "./lower-event-emitter.js";
 import { builtinImportOf, createRequireBindingDecl, createRequireNamespaceDecl, createRequireProgramModuleOf, createRequireSpecOf, stripTypeCasts, lowerBuiltinModuleCall, lowerNodeModuleCall, lowerTimersPromisesSetInterval, lowerFsToUnixTimestampCall, lowerFsLadderCall, lowerChildArgsArg, lowerSpawnSyncCall, lowerSpawnCall, lowerExecFileCall, lowerExecSyncCall, recordToEnvPairs, lowerJsonMethodCall, fencedBuiltinImportOf, lowerCryptoComposedCall, lowerUrlMethodCall, lowerSearchParamsMethodCall, lowerStatsMethodCall, lowerChildMethodCall, lowerAtomicsCall, lowerBuiltinExtraProperty, registerPromisifiedBuiltinDecl, lowerExecFileAsyncCall, execFileAsyncHelper, lowerStringDecoderMethodCall, strdecHelper, lowerReadlineMethodCall, lowerDcChannelMethodCall, lowerDcChannelProperty, lowerAlsMethodCall, lowerDcTracingChannelMethodCall, lowerDcTracingChannelProperty, lowerJsonProperty, lowerErrorCodeProperty, lowerProcessProperty, isProcessEnv, envValueType, lowerProcessEnvGet, lowerProcessMethodCall, lowerProcessOptionalMethodCall, lowerTimeoutMethodCall, envSnapshotHelper, isConsoleLog, consoleCallMember, lowerNumberStaticCall, lowerNumberStaticProperty, lowerDateCall, lowerTextCodecCall, lowerCryptoModuleCall, lowerFsConstantsProperty, lowerBuiltinConstantsProperty, builtinConstantBindingOf, builtinConstantsDestructureDecl, lowerProcessStreamProperty, lowerStringStaticCall, lowerStringLastIndexOfCall, lowerPromiseStaticCall } from "./lower-builtins.js";
 import { fenceFetchObjectAssignment, fenceFetchObjectBinding, fenceStaticAbortControllerMemberRead, fenceStaticHeadersIteration, fenceStaticHeadersMember, fenceStaticReadableStreamMember, fenceStaticResponseMember, fenceUnsupportedFetchConstructorMember, isIslandExpr, islandFuncValueFence, islandRegexpOf, jsvalIn, requireDynamicApi, islandGlobalFnOf, lowerAbortControllerNew, lowerDynamicHeadersIteratorCall, lowerDynamicHeadersSpread, lowerDynamicImportCall, lowerFetchCall, lowerFetchElementMethodCall, lowerResponseNew, lowerStaticFetchCompanionCall, lowerStaticAbortControllerCall, lowerStaticAbortSignalListenerCall, lowerStaticReadableStreamCancelCall, lowerStaticReadableStreamControllerCall, lowerStaticReadableStreamNew, lowerStaticReadableStreamReaderCall, lowerStaticResponseCall, lowerIslandMethodCall, lowerMathProperty, npmPackageOf, npmMemberFence, npmPackageOfSymbol } from "./lower-island.js";
 import { lowerHttpHeadersElement, lowerNetModuleCall, lowerServerMethodCall, lowerServerProperty, lowerTlsRootCertificates } from "./lower-server.js";
@@ -120,7 +124,7 @@ import { lowerStmts, noteBlockedBindings, isBlockedBinding, lowerScopedBlock, pr
 import { FieldTarget, lowerExpr, maybeNarrow, lowerUnitComparison, lowerNullishCoalesce, lowerCondition, ensureBool, requireTruthyUnion, eqComparableUnion, lowerIntrinsicProperty, lowerArrayLiteral, lowerElementAccess, lowerElementWrite, lowerRecordKeyRead, ensureString, lowerTemplate, lowerAsExpression, lowerPrefixUnary, lowerBinary, lowerCaughtTypeofTest, caughtRead, caughtLocalOf, caughtToString, lowerInstanceOf, lowerRegexLiteral, lowerFieldRead, lowerUnionProperty, fieldTarget, fieldGetExpr, fieldSetStmt, lowerFieldCompound, uniqueSymbolKeyOf } from "./lower-exprs.js";
 import { finishOptionalChain, isOptionalChainTail, lowerOptionalChain } from "./expressions/optional-chains.js";
 import { foldedStringKeyOf, lowerDynObjectLiteral, lowerObjectLiteral, lowerShorthandValue, rejectThisInObjectMethod } from "./expressions/object-literals.js";
-import type { ExpandoMember } from "./lower-expando.js";
+import type { ExpandoMembers } from "./lower-expando.js";
 import { lowerRecordFieldCall, lowerObjectMethodCall } from "./lower-calls.js";
 import { fenceCrossBlockNsRef, nsPathPrefix } from "./lower-namespaces.js";
 import { numLit, varRef } from "../../ir/build.js";
@@ -177,92 +181,12 @@ export function own<T>(table: Record<string, T | undefined>, key: string): T | u
   return Object.hasOwn(table, key) ? table[key] : undefined;
 }
 
-/** Sentinel binding key for `this` (which has no ts.Symbol): a stable
- * object identity used in the same scope/capture maps as real symbols, so
- * arrows capturing `this` ride the ordinary capture machinery. */
-const THIS_BINDING = { escapedName: "%this" } as unknown as ts.Symbol;
-
 /* ── the island boundary, in one voice ────────────────────────────────
  * Whether a value can cross between the static world and the island is
  * ONE question — canCrossIslandBoundary (ir.ts), asked here through
  * boundarySafe() — and each rejected direction has ONE message builder,
  * so the rule and its wording cannot drift apart across the implicit
  * coercion path, the explicit marshal path, and the exact-type fence. */
-
-/** Per-function lowering context. A stack of these models nested functions:
- * identifier resolution walks outward, and a hit in an enclosing context
- * turns into a capture (boxing the binding at its origin and threading it
- * through every function in between). */
-export interface FnCtx {
-  locals: IrLocal[];
-  scopes: Map<ts.Symbol, IrLocal>[];
-  localCounters: Map<string, number>;
-  /** Bindings belong to this lowering of the body. Generic specializations
-   * share checker symbols and AST declarations, but never local storage. */
-  hoistedVars: Map<ts.Symbol, IrLocal>;
-  hoistedFnDecls: Set<ts.FunctionDeclaration>;
-  /** Forward captures waiting for their source declaration to initialize
-   * the TDZ box. The declaration's owner retains this entry while nested
-   * functions lower and capture its slot. */
-  tdzPredeclared: Map<ts.Symbol, IrLocal>;
-  /** Lifted functions only: capture entries (also present in `locals`,
-   * boxed), in closure caps[] order. undefined ⇔ plain declared function. */
-  captures: IrParam[] | null;
-  /** Parent-function localIds feeding each capture, parallel to captures. */
-  captureSources: string[];
-  captureBySymbol: Map<ts.Symbol, IrLocal>;
-  /** Named function expressions/declarations: the function's own name
-   * symbol. Self-references become `selfRef` (NOT a capture — a box holding
-   * its own closure would be an RC cycle and leak). */
-  selfSymbol: ts.Symbol | null;
-  selfType: IrType | null;
-  /** Await is legal here (async function body). */
-  isAsync?: boolean;
-  /** Yield is legal here (generator function body): the yield/next value
-   * channels the yield lowering types itself against. */
-  generator?: { yieldT: IrType; nextT: IrType; resultType: IrType & { kind: "record" } } | null;
-  /** VARIADIC `arguments` form (rest-marked func type with no declared
-   * rest param): the synthetic trailing dyn-array param `arguments`
-   * reads resolve to. */
-  argumentsLocal?: IrLocal | null;
-  /** Declared return type — lets `return` detect record-shape mismatches
-   * (SC2002) before the validator would ICE on them. */
-  returnType: IrType;
-  /** Implicit-any instance RETURN INFERENCE (resolveInferredReturn):
-   * present ⇔ `return` statements lower their values BARE (no coercion)
-   * and record themselves here; the post-pass unifies the types and wraps
-   * each return onto the settled one. `returnType` holds the DYN pin. */
-  inferReturn?: { entries: { stmt: IrStmt; node: ts.Expression | null }[] } | null;
-  /** Enclosing jump targets, innermost last. `labels` carries the source
-   * statement's JS label names so labeled break/continue resolve. Finally
-   * regions do not appear here: the backends route every abrupt completion
-   * through the cleanup regions it crosses. Per function, so a nested
-   * function's jumps never bind to enclosing constructs. */
-  ctl: { kind: "loop" | "switch" | "block"; labels?: string[] }[];
-}
-
-export function newFnCtx(
-  lifted: boolean,
-  selfSymbol: ts.Symbol | null,
-  selfType: IrType | null,
-  returnType: IrType,
-): FnCtx {
-  return {
-    locals: [],
-    scopes: [new Map()],
-    localCounters: new Map(),
-    hoistedVars: new Map(),
-    hoistedFnDecls: new Set(),
-    tdzPredeclared: new Map(),
-    captures: lifted ? [] : null,
-    captureSources: [],
-    captureBySymbol: new Map(),
-    selfSymbol,
-    selfType,
-    returnType,
-    ctl: [],
-  };
-}
 
 export interface LowerStats {
   /** Statements the lowerer attempted (nested statements count individually;
@@ -525,14 +449,13 @@ export function lowerToIr(
   const timing = (phase: string, detail: Record<string, unknown> = {}): void => {
     if (!phaseTiming) return;
     const now = performance.now();
-    process.stderr.write(
-      `scriptc lowering ${JSON.stringify({
-        phase,
-        phase_ms: Math.round((now - phaseLast) * 10) / 10,
-        total_ms: Math.round((now - phaseStarted) * 10) / 10,
-        ...detail,
-      })}\n`,
-    );
+    const event: Record<string, unknown> = {
+      phase,
+      phase_ms: Math.round((now - phaseLast) * 10) / 10,
+      total_ms: Math.round((now - phaseStarted) * 10) / 10,
+    };
+    for (const key of Object.keys(detail)) event[key] = detail[key];
+    process.stderr.write(`scriptc lowering ${JSON.stringify(event)}\n`);
     phaseLast = now;
   };
   const dynamic = options.dynamic ?? false;
@@ -978,7 +901,7 @@ function jsArgumentsFunctionType(lowerer: Lowerer, t: ts.Type): IrType | null {
     !isJsSourceFile(decl.getSourceFile()) || !isNodeEsmFile(decl.getSourceFile(), lowerer.program) ||
     decl.parameters.length === 0 ||
     decl.parameters.some((p) => p.dotDotDotToken !== undefined) ||
-    !bodyReadsArguments(decl as { body?: ts.Node })
+    !bodyReadsArguments(decl)
   ) return null;
   const shapes = paramShapes(lowerer, decl.parameters);
   const retType = lowerer.checker.getReturnTypeOfSignature(sigs[0]!);
@@ -1016,7 +939,7 @@ function pureSingleCallSignatureOf(lowerer: Lowerer, t: ts.Type): ts.Signature |
       // tsgo never synthesizes the `arguments` pseudo-rest into the
       // inferred signature (5.9.3 did — the count mismatch above was the
       // whole detector there), so ask the declaration's body directly.
-      return !(sigDecl !== undefined && ts.isFunctionLike(sigDecl) && bodyReadsArguments(sigDecl as { body?: ts.Node }));
+      return !(sigDecl !== undefined && ts.isFunctionLike(sigDecl) && bodyReadsArguments(sigDecl));
     })()
   ) {
     return sigs[0]!;
@@ -1302,6 +1225,15 @@ export class Lowerer {
    * aliases, so this carries the var/let form the checker cannot.
    * Scoped strictly by narrowingAliases (lowerIf / lowerCondition). */
   readonly aliasNarrowTypes = new Map<ts.Symbol, ts.Type>();
+  /** These caches belong to this lowering pass. The program already owns
+   * their symbol/node keys; no module-level cache should retain a pass. */
+  readonly classSymbolKeys = new Map<ts.Symbol, ClassSymbolKey | null>();
+  readonly registeredClassSymbols = new Map<string, ts.Symbol>();
+  readonly httpClientFnBindings = new Map<ts.Symbol, HttpClientFnBinding>();
+  streamPropMutatedSyms: Set<ts.Symbol> | null = null;
+  requestInitPropMutatedSyms: Set<ts.Symbol> | null = null;
+  emitterEventTable: Map<string, EventSig> | null = null;
+  emitterComputedPatterns: ComputedEventPattern[] = [];
   /** Locals widened beyond the checker's type because an inferred indexed
    * read can be absent at runtime. Bare reads preserve that union until a
    * surrounding JavaScript guard/default consumes it. */
@@ -1328,18 +1260,18 @@ export class Lowerer {
   readonly runtimeOptionalBindingTypes = new Map<ts.Symbol, IrType>();
   /** Concise callback/lambda returns promoted by the HOF callback prepass;
    * arrows have no declaration symbol to key in fnSigsBySymbol. */
-  readonly runtimeOptionalFunctionReturns = new WeakMap<ts.Node, IrType>();
+  readonly runtimeOptionalFunctionReturns = new Map<ts.Node, IrType>();
   /** Arithmetic over an unchecked string read can answer either NaN or a
    * string. Bindings and returns use this marker to retain that result union
    * through checker-bare string annotations. */
-  readonly runtimeOptionalArithmeticTypes = new WeakMap<ts.Node, IrType>();
+  readonly runtimeOptionalArithmeticTypes = new Map<ts.Node, IrType>();
   /** Record fields promoted to an undefined-armed union by an indexed-read
    * value. The key is the concrete emitted shape and field name. */
   readonly runtimeOptionalFields = new Set<string>();
   /** Callback pattern parameters carry an optional source without making
    * every name destructured from a present source optional. */
-  readonly runtimeOptionalPatternTypes = new WeakMap<ts.Node, IrType>();
-  readonly runtimeOptionalReduceTypes = new WeakMap<ts.CallExpression, IrType>();
+  readonly runtimeOptionalPatternTypes = new Map<ts.Node, IrType>();
+  readonly runtimeOptionalReduceTypes = new Map<ts.CallExpression, IrType>();
   /** Capture entries and their origin share one mutable box. Normalize each
    * entry to the origin so writes and flow proofs stay synchronized. */
   readonly runtimeOptionalRoots = new Map<IrLocal, IrLocal>();
@@ -1715,7 +1647,7 @@ export class Lowerer {
   readonly classBySymbol = new Map<ts.Symbol, ClassInfo>();
   /** Inferred JS methods participating in an override chain keep a vtable
    * ABI instead of call-site specialization. Filled before class collection. */
-  readonly virtualJsMethods = new WeakSet<ts.MethodDeclaration>();
+  readonly virtualJsMethods = new Set<ts.MethodDeclaration>();
   /** The class whose members are lowering — `super` binds lexically to it
    * (arrows inside methods lower within this window, so they see it too). */
   currentClass: ClassInfo | null = null;
@@ -1724,7 +1656,7 @@ export class Lowerer {
    * or callable const): per function symbol, each written member's module
    * global — string keys for spelled/folded names, ts.Symbols for
    * unique-symbol keys (lower-expando.ts). */
-  readonly expandoMembers = new Map<ts.Symbol, Map<string | ts.Symbol, ExpandoMember>>();
+  readonly expandoMembers = new Map<ts.Symbol, ExpandoMembers>();
   /** CJS export globals ALSO key by their declaration NODE: the checker
    * hands importers a distinct (late-bound) symbol for `module.exports`
    * property exports — different object, same declaration — so globalOf
@@ -2990,12 +2922,17 @@ export class Lowerer {
         this.mapTypeOf(this.typeOf(e))?.kind === "union" &&
         this.armTag((this.mapTypeOf(this.typeOf(e)) as IrType & { kind: "union" }).unionId, UNDEFINED_T) >= 0
       ) return true;
-      if (ts.isIdentifier(e)) return optionalSymbols.has(symbolOf(e) ?? ({} as ts.Symbol));
+      if (ts.isIdentifier(e)) {
+        const symbol = symbolOf(e);
+        return symbol !== null && optionalSymbols.has(symbol);
+      }
       if (ts.isCallExpression(e) && ts.isIdentifier(e.expression)) {
-        return optionalReturns.has(symbolOf(e.expression) ?? ({} as ts.Symbol));
+        const symbol = symbolOf(e.expression);
+        return symbol !== null && optionalReturns.has(symbol);
       }
       if (ts.isCallExpression(e) && ts.isPropertyAccessExpression(e.expression)) {
-        return optionalReturns.has(symbolOf(e.expression.name) ?? ({} as ts.Symbol));
+        const symbol = symbolOf(e.expression.name);
+        return symbol !== null && optionalReturns.has(symbol);
       }
       if (ts.isConditionalExpression(e)) {
         return mayBeOptional(e.whenTrue) || mayBeOptional(e.whenFalse);
@@ -3009,7 +2946,8 @@ export class Lowerer {
         ) return mayBeOptional(e.left) || mayBeOptional(e.right);
       }
       if (ts.isPropertyAccessExpression(e) && ts.isIdentifier(e.expression)) {
-        const fields = optionalFields.get(symbolOf(e.expression) ?? ({} as ts.Symbol));
+        const symbol = symbolOf(e.expression);
+        const fields = symbol === null ? undefined : optionalFields.get(symbol);
         return fields?.has(fieldName(e)) ?? false;
       }
       return false;
@@ -3939,7 +3877,7 @@ export class Lowerer {
       lower: () => IrFunction | null;
     }>();
     const bodyRoots = (...roots: (ts.Node | undefined | null)[]): ts.Node[] =>
-      roots.filter((root): root is ts.Node => root !== undefined && root !== null);
+      roots.filter((root) => root !== undefined && root !== null);
     const functionRoots = (decl: ts.FunctionLikeDeclaration): ts.Node[] => bodyRoots(
       ...decl.parameters.map((param) => param.initializer),
       decl.body,
@@ -3949,11 +3887,14 @@ export class Lowerer {
       info.ctor?.body,
       ...info.fieldOrder.map((field) => field.initializer),
     );
-    const classMemberRoots = (info: ClassInfo): ts.Node[] => [
-      ...classCtorRoots(info),
-      ...[...this.classMethodMembers(info)].flatMap(({ member }) => functionRoots(member)),
-      ...[...(info.staticMethods?.values() ?? [])].flatMap(({ member }) => functionRoots(member)),
-    ];
+    const classMemberRoots = (info: ClassInfo): ts.Node[] => {
+      const roots = classCtorRoots(info);
+      for (const { member } of this.classMethodMembers(info)) roots.push(...functionRoots(member));
+      if (info.staticMethods) {
+        for (const { member } of info.staticMethods.values()) roots.push(...functionRoots(member));
+      }
+      return roots;
+    };
     let unitOrder = 0;
     for (const fp of parts) {
       for (const decl of fp.fnDecls) {
@@ -4003,12 +3944,14 @@ export class Lowerer {
           });
         }
       }
-      for (const [name, entry] of info.staticMethods ?? []) {
-        units.set(`%${cName}.static:${name}`, {
-          order: unitOrder++,
-          roots: functionRoots(entry.member),
-          lower: () => lowerStaticMethod(this, info, name),
-        });
+      if (info.staticMethods) {
+        for (const [name, entry] of info.staticMethods) {
+          units.set(`%${cName}.static:${name}`, {
+            order: unitOrder++,
+            roots: functionRoots(entry.member),
+            lower: () => lowerStaticMethod(this, info, name),
+          });
+        }
       }
     }
     // The old emit pass visited each file's functions and then its classes,
@@ -4039,7 +3982,9 @@ export class Lowerer {
         const cName = info.def.name;
         rank(`%${cName}.constructor`);
         for (const { mName } of this.classMethodMembers(info)) rank(`%${cName}.${mName}`);
-        for (const name of info.staticMethods?.keys() ?? []) rank(`%${cName}.static:${name}`);
+        if (info.staticMethods) {
+          for (const name of info.staticMethods.keys()) rank(`%${cName}.static:${name}`);
+        }
         for (const prop of info.throwingSetters) rank(`%${cName}.set:${prop}`);
       }
     }
@@ -8791,14 +8736,10 @@ export class Lowerer {
     return superCallStmt(this, info, thisLocal, args, loc);
   }
 
-  /** Declares the `this` param local, registered under the THIS_BINDING
-   * sentinel so lexical-this capture in arrows uses the normal machinery. */
+  /** Declares the this parameter in the function's dedicated binding slot.
+   * Arrow captures use the same boxing and threading as named bindings. */
   declareThis(type: IrType): IrLocal {
-    const ctx = this.ctx;
-    const local: IrLocal = { id: "this.0", name: "this", type, mutable: false };
-    ctx.locals.push(local);
-    ctx.scopes[ctx.scopes.length - 1]!.set(THIS_BINDING, local);
-    return local;
+    return declareContextThis(this.ctx, type);
   }
 
   lowerFunction(decl: ts.FunctionDeclaration): IrFunction | null {
@@ -8824,26 +8765,14 @@ export class Lowerer {
   /* ── scoping and captures ─────────────────────────────────────────── */
 
   declareLocal(nameNode: ts.Node, name: string, type: IrType, mutable: boolean): IrLocal {
-    const ctx = this.ctx;
-    const count = ctx.localCounters.get(name) ?? 0;
-    ctx.localCounters.set(name, count + 1);
-    const local: IrLocal = { id: `${name}.${count}`, name, type, mutable, source: bindingSource(nameNode) };
-    ctx.locals.push(local);
-    const symbol = this.checker.getSymbolAtLocation(nameNode);
-    if (symbol) ctx.scopes[ctx.scopes.length - 1]!.set(symbol, local);
-    return local;
+    return declareContextLocal(this.ctx, name, type, mutable, this.checker.getSymbolAtLocation(nameNode), bindingSource(nameNode));
   }
 
   /** A function-scope local bound to NO ts.Symbol — the hidden ABI slot of a
    * defaulted parameter (the parameter's symbol binds to the separately-
    * declared body local; nothing in the source can name this one). */
   declareHiddenLocal(name: string, type: IrType): IrLocal {
-    const ctx = this.ctx;
-    const count = ctx.localCounters.get(name) ?? 0;
-    ctx.localCounters.set(name, count + 1);
-    const local: IrLocal = { id: `${name}.${count}`, name, type, mutable: false };
-    ctx.locals.push(local);
-    return local;
+    return declareContextLocal(this.ctx, name, type, false, undefined, undefined);
   }
 
   /** Declares a callee's parameter locals from its ParamShapes and builds
@@ -9086,12 +9015,8 @@ export class Lowerer {
 
   /** The binding for `symbol` inside context `ctx` — a scoped local or an
    * already-threaded capture entry. */
-  bindingIn(ctx: FnCtx, symbol: ts.Symbol): IrLocal | null {
-    for (let i = ctx.scopes.length - 1; i >= 0; i--) {
-      const local = ctx.scopes[i]!.get(symbol);
-      if (local) return local;
-    }
-    return ctx.captureBySymbol.get(symbol) ?? null;
+  bindingIn(ctx: FnCtx, symbol: ts.Symbol | undefined): IrLocal | null {
+    return bindingInContext(ctx, symbol);
   }
 
   /** Resolves an identifier to a local of the CURRENT function, creating
@@ -9134,7 +9059,7 @@ export class Lowerer {
    * through arrows (function expressions/declarations reset `this` in JS;
    * their bodies never see an enclosing method's binding). */
   resolveThis(): IrLocal | null {
-    return this.resolveKey(THIS_BINDING);
+    return this.resolveKey(undefined);
   }
 
   /** READ-ONLY twin of resolveLocal for PROBES (isIslandExpr): answers
@@ -9157,83 +9082,21 @@ export class Lowerer {
     return null;
   }
 
-  resolveKey(symbol: ts.Symbol, blame?: ts.Node): IrLocal | null {
-    const direct = this.bindingIn(this.ctx, symbol);
-    if (direct) return direct;
-
-    // Search enclosing functions, innermost first.
-    for (let depth = this.fnStack.length - 2; depth >= 0; depth--) {
-      const origin = this.bindingIn(this.fnStack[depth]!, symbol);
-      if (!origin) continue;
-      // dyn captures ride an UNTRACED obj-box (scr_dyn_retain_v/release_v
-      // — boxNewC): the mustCall wrapper closing over its implicit-any
-      // `fn` param. A dyn tree is pure data except the function kind,
-      // whose closure edge the collector never sees — cycles through a
-      // captured dyn are uncollectable (leak, never dangle: trial
-      // deletion treats untraced edges as external roots). SEMANTICS.md.
-      // jsval captures are fine: the box is an obj-box carrying the
-      // island handle's own retain/release (scr_jsval_*_v), untraced like
-      // every jsval container position — engine-side back-references are
-      // the island's documented collection stance, not the box's.
-      if (origin.type.kind === "caught") {
-        // A catch binding never escapes its catch (KEEP NARROW): narrow it
-        // into a typed local and capture THAT.
-        this.unsupported(
-          "SC1090",
-          blame ?? this.checker.declarationsOf(symbol)[0] ?? this.entry,
-          "closures capturing catch bindings (narrow into a typed local first)",
-        );
-      }
-      // The binding escapes into a nested function: it must live in a box,
-      // shared by everyone (that's what makes mutation visible everywhere).
-      origin.boxed = true;
-      // Thread a capture through every function between origin and here.
-      let parentEntry = origin;
-      for (let j = depth + 1; j < this.fnStack.length; j++) {
-        const ctx = this.fnStack[j]!;
-        let entry = ctx.captureBySymbol.get(symbol);
-        if (!entry) {
-          // A context that takes NO captures (a plain declared function —
-          // monomorphized/implicit instances lower this way) cannot carry
-          // the binding through: the shape is a module binding whose only
-          // storage is the init function's LOCAL (a typed-but-unmappable
-          // const — the file-scope `new Map()` ledger idiom) read from
-          // inside a nested instance. Fence it — in JS the statement
-          // defers to its runtime trap like every collection failure;
-          // asserting here was an ICE on ordinary npm-static JS.
-          if (ctx.captures === null) {
-            this.unsupported(
-              "SC1090",
-              blame ?? this.checker.declarationsOf(symbol)[0] ?? this.entry,
-              `the binding '${origin.name}' captured through a plain nested function (the declaration has no static storage a capture can thread — bind the value through a typed const, or read it in the declaring scope)`,
-            );
-          }
-          const count = ctx.localCounters.get(origin.name) ?? 0;
-          ctx.localCounters.set(origin.name, count + 1);
-          entry = {
-            id: `${origin.name}.${count}`,
-            name: origin.name,
-            type: origin.type,
-            mutable: origin.mutable,
-            boxed: true,
-            ...(origin.source ? { source: origin.source } : {}),
-            // TDZ travels with the binding: reads through ANY capture of a
-            // forward-captured const must trap while the box is empty.
-            ...(origin.tdz ? { tdz: true as const } : {}),
-          };
-          ctx.locals.push(entry);
-          ctx.captureBySymbol.set(symbol, entry);
-          ctx.captures.push({ localId: entry.id, name: entry.name, type: entry.type });
-          ctx.captureSources.push(parentEntry.id);
-          const runtimeOptionalRoot = this.runtimeOptionalRootOf(parentEntry);
-          if (this.runtimeOptionalStorageLocals.has(runtimeOptionalRoot)) {
-            this.runtimeOptionalRoots.set(entry, runtimeOptionalRoot);
-          }
-        }
-        parentEntry = entry;
-      }
-      return parentEntry;
+  resolveKey(symbol: ts.Symbol | undefined, blame?: ts.Node): IrLocal | null {
+    const resolved = captureContextBinding(this.fnStack, symbol, (parentEntry, entry) => {
+      const root = this.runtimeOptionalRootOf(parentEntry);
+      if (this.runtimeOptionalStorageLocals.has(root)) this.runtimeOptionalRoots.set(entry, root);
+    });
+    if (resolved.error !== null) {
+      const location = blame ?? (symbol === undefined ? undefined : this.checker.declarationsOf(symbol)[0]) ?? this.entry;
+      const message = resolved.error === "caught"
+        ? "closures capturing catch bindings (narrow into a typed local first)"
+        : `the binding '${resolved.origin!.name}' captured through a plain nested function (the declaration has no static storage a capture can thread — bind the value through a typed const, or read it in the declaring scope)`;
+      this.unsupported("SC1090", location, message);
     }
+    if (resolved.local !== null) return resolved.local;
+    // This cannot be forward-declared: its parameter must already exist.
+    if (symbol === undefined) return null;
     // Nothing declared yet anywhere on the stack: the hoisted-handler shape
     // — a function declared BEFORE a const it captures (`const cleanup =
     // () => onSigInt; ...; const onSigInt = ...`). Pre-declare the const as

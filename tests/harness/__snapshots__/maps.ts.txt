@@ -39,15 +39,6 @@ maps.ts:14:17 - error SC2009: values of type 'Map<boolean, number>' cannot be co
 
   hint: the outer shape is supported — the named component is the blocker; restate it inside the compilable set (number, string, boolean, arrays, Maps, Sets, RegExp, functions, classes, records, unions of those, and 'unknown')
 
-maps.ts:24:7 - error SC2009: values of type 'Map<string, number>[]' cannot be compiled: the array shape is supported, but 'Map<string, number>' elements have no array representation yet
-
-  23 | // Maps as array elements: ScrArr has no map element kind.
-  24 | const rows: Map<string, number>[] = [];
-     |       ^~~~
-  25 | 
-
-  hint: the outer shape is supported — the named component is the blocker; restate it inside the compilable set (number, string, boolean, arrays, Maps, Sets, RegExp, functions, classes, records, unions of those, and 'unknown')
-
 maps.ts:29:28 - error SC1090: JSON.stringify of 'Map<string, number>' values (only number, string, boolean, records, arrays, unions of those, and 'unknown' stringify) are not supported yet
 
   28 | const m = new Map<string, number>();

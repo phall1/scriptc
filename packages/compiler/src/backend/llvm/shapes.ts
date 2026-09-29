@@ -205,6 +205,7 @@ function elemKindNum(elem: IrType): number {
 export function arrNewCall(host: ShapeHost, elem: IrType, capText: string): string {
   const useRef =
     elem.kind === "record" || elem.kind === "object" || elem.kind === "union" || elem.kind === "func" ||
+    elem.kind === "map" || elem.kind === "set" || // scr_map_* adapters and typed key/value tracing
     elem.kind === "symbol" || // symbol identities: scr_sym_* adapters, no trace
     elem.kind === "bigint" || // immutable numeric values: scr_bigint_* adapters
     elem.kind === "classval" || // class objects: no-op adapters, no trace (immortal statics)

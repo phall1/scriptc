@@ -48,6 +48,17 @@ export interface ExpandoMember {
   file: ts.SourceFile;
 }
 
+/** String property names and checker-symbol identities are disjoint key
+ * domains. Keep both explicit; a symbol's display name is never its key. */
+export interface ExpandoMembers {
+  names: Map<string, ExpandoMember>;
+  symbols: Map<ts.Symbol, ExpandoMember>;
+}
+
+function memberOf(members: ExpandoMembers | undefined, key: string | ts.Symbol): ExpandoMember | undefined {
+  return typeof key === "string" ? members?.names.get(key) : members?.symbols.get(key);
+}
+
 /** Function members JS refuses to assign in strict mode (every module is
  * strict): non-writable own properties of functions plus the poisoned
  * caller/arguments pair. A global slot would silently succeed where Node
@@ -139,10 +150,10 @@ export function collectExpandoMembers(lowerer: Lowerer, sf: ts.SourceFile): void
     if (w) {
       let members = lowerer.expandoMembers.get(w.fnSym);
       if (!members) {
-        members = new Map();
+        members = { names: new Map(), symbols: new Map() };
         lowerer.expandoMembers.set(w.fnSym, members);
       }
-      const existing = members.get(w.key);
+      const existing = memberOf(members, w.key);
       if (existing) {
         existing.firstWriteStart = Math.min(existing.firstWriteStart, node.getStart());
       } else if (!(typeof w.key === "string" && READONLY_FN_MEMBERS.has(w.key)) && !nsOwnedMember(lowerer, w.access)) {
@@ -170,7 +181,9 @@ export function collectExpandoMembers(lowerer: Lowerer, sf: ts.SourceFile): void
             type,
             mutable: true,
           };
-          members.set(w.key, { global: g, firstWriteStart: node.getStart(), file: sf });
+          const entry: ExpandoMember = { global: g, firstWriteStart: node.getStart(), file: sf };
+          if (typeof w.key === "string") members.names.set(w.key, entry);
+          else members.symbols.set(w.key, entry);
           lowerer.globalsList.push(g);
         }
       }
@@ -235,7 +248,7 @@ export function expandoWritableTarget(
       `assigning the read-only function member '${key}' (strict-mode JS — every module — throws TypeError here)`,
     );
   }
-  const member = lowerer.expandoMembers.get(fnSym)?.get(key);
+  const member = memberOf(lowerer.expandoMembers.get(fnSym), key);
   if (!member) return null;
   return { id: member.global.id, type: member.global.type };
 }
@@ -254,7 +267,7 @@ export function expandoMemberRead(
   if (!fnSym) return null;
   const key = memberKeyOf(lowerer, access);
   if (key === null) return null;
-  const member = lowerer.expandoMembers.get(fnSym)?.get(key);
+  const member = memberOf(lowerer.expandoMembers.get(fnSym), key);
   if (!member) return null;
   if (
     access.getSourceFile() === member.file &&

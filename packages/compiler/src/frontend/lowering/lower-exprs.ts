@@ -16,7 +16,7 @@ import { cjsClassExprWholeExportOf, cjsExportAssignmentOf, cjsExportDiscardReaso
 import { ARRAY_METHODS, builtinConstLit, builtinFenceHintOf, builtinModuleConstOf, builtinModulesArrayLit, builtinModuleFnOf, COMPOUND_ASSIGN_OPS, CompoundOp, ISLAND_SURFACE, isChildSurfaceMember, MAP_METHODS, NARROW_FIRST, SET_METHODS, STRING_INDEX_METHODS, STR_METHODS, UNSUPPORTED_EXPR, sideEffectFreeOptionValue, stdlibGlobalNameOf } from "./surfaces.js";
 import { UNSUPPORTED, blockedBindingUseDiag, requiresDynamicPackageDiag, unsupportedDiag } from "../../diagnostics/diagnostic.js";
 import { PoisonError, dynUndefinedExpr, jsFuncNameOf, neverTaintedJsType, nodeThrowExpr, own } from "./lowerer.js";
-import { lowerMapSpread, lowerNpmStaticSafeIndexRead, lowerSafeIndexRead, strCharsCall, tryLowerNumericIndexRead } from "./lower-containers.js";
+import { lowerCollectionSpread, lowerNpmStaticSafeIndexRead, lowerSafeIndexRead, strCharsCall, tryLowerNumericIndexRead } from "./lower-containers.js";
 import { arrayValueRead, arrayValueStore } from "./array-values.js";
 import { lowerOptionalStringIndex } from "./string-index.js";
 import { tryLowerIndexedComparison } from "./indexed-comparison.js";
@@ -3595,7 +3595,8 @@ function lowerPromiseThenPresence(
     }
     if (kind === "map") {
       if (name === "size") {
-        const receiver = lowerer.lowerExpr(expr.expression);
+        const expected = lowerer.mapTypeOf(lowerer.typeOf(expr.expression));
+        const receiver = expected?.kind === "map" ? strictReceiver(expected) : lowerer.lowerExpr(expr.expression);
         return { kind: "mapIntrinsic", method: "size", receiver, args: [], type: F64, loc: locOf(expr) };
       }
       if (MAP_METHODS.has(name) || name === "forEach") {
@@ -3605,7 +3606,8 @@ function lowerPromiseThenPresence(
     }
     if (kind === "set") {
       if (name === "size") {
-        const receiver = lowerer.lowerExpr(expr.expression);
+        const expected = lowerer.mapTypeOf(lowerer.typeOf(expr.expression));
+        const receiver = expected?.kind === "set" ? strictReceiver(expected) : lowerer.lowerExpr(expr.expression);
         return { kind: "setIntrinsic", method: "size", receiver, args: [], type: F64, loc: locOf(expr) };
       }
       if (SET_METHODS.has(name)) {
@@ -3920,20 +3922,7 @@ function lowerPromiseThenPresence(
           (ts.isConditionalExpression(srcNode)
             ? lowerTernary(lowerer, srcNode, type)
             : lowerer.lowerExpr(el.expression));
-        src = lowerMapSpread(lowerer, src, el.expression) ?? src;
-        // `[...someSet]`: a same-element Set drains into a fresh array in
-        // insertion order (setIntrinsic toArray); the spread machinery
-        // then copies like any array source.
-        if (src.type.kind === "set" && typeEquals(src.type.elem, type.elem)) {
-          src = {
-            kind: "setIntrinsic",
-            method: "toArray",
-            receiver: src,
-            args: [],
-            type: arrayOf(src.type.elem),
-            loc: locOf(el),
-          };
-        }
+        src = lowerCollectionSpread(lowerer, src, el.expression) ?? src;
         // `[...new SymbolIterator]`: a CLASS ITERABLE drains through its
         // own protocol into a fresh element array (classIteratorDrainCall
         // — an infinite iterator loops forever, exactly Node), and the

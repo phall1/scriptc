@@ -97,7 +97,7 @@ export interface DeclaredOrderPriorityRef {
 export type DeclaredOrderPriority = readonly number[] | DeclaredOrderPriorityRef;
 
 function priorityRank(priority: DeclaredOrderPriority): readonly number[] {
-  return "rank" in priority ? priority.rank : priority;
+  return Array.isArray(priority) ? priority : (priority as DeclaredOrderPriorityRef).rank;
 }
 
 function comparePriority(left: DeclaredOrderPriority, right: DeclaredOrderPriority): number {
@@ -1225,7 +1225,8 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
   // function VALUE is one ScrClosure for its whole life — top-level
   // declarations intern one immortal closure, and inner closures are
   // allocated once at their definition's evaluation and flow by
-  // reference, exactly JS's function identity. map/set/regex/url/dyn and
+  // reference, exactly JS's function identity. Maps and Sets use their
+  // typed RC/trace adapters; RegExp values use immutable REF storage. URL and
   // Date (scalar-backed but identity-bearing in JS) and the other opaque
   // handles stay unsupported as array elements; ordinary Date locals,
   // params, fixed record/tuple fields, and promise payloads are supported.
@@ -1258,7 +1259,7 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
     // array literal) and typed sources convert per element at the slot.
     if (elem.kind === "dyn") return DYN;
     // The shared predicate is the runtime/backend storage contract. In
-    // particular, valid standalone values such as Map/Set/Date and opaque
+    // particular, valid standalone values such as Date and opaque
     // handles do not automatically have an array element representation.
     if (!isSupportedArrayElem(elem)) return null;
     // ChildProcess[] (the running-apps list) and Server[] (the [...set]
@@ -2698,7 +2699,7 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
       // tsgo never SYNTHESIZES that rest param into the inferred signature
       // (5.9.3 did — the count mismatch above was the whole detector
       // there), so the declaration's own body answers directly.
-      if (sigDecl !== undefined && ts.isFunctionLike(sigDecl) && bodyReadsArguments(sigDecl as { body?: ts.Node })) {
+      if (sigDecl !== undefined && ts.isFunctionLike(sigDecl) && bodyReadsArguments(sigDecl)) {
         return null;
       }
     }
@@ -4310,7 +4311,7 @@ export function describeComponentBlocker(widened: ts.Type, ctx: TypeMapperCtx): 
       sigDecl !== undefined &&
       ts.isFunctionLike(sigDecl) &&
       (sigDecl.parameters.length !== sig.getParameters().length ||
-        bodyReadsArguments(sigDecl as { body?: ts.Node }))
+        bodyReadsArguments(sigDecl))
     ) {
       return `the function shape is supported, but its signature is variadic ('arguments'-reading), and a compiled signature is fixed-arity`;
     }
