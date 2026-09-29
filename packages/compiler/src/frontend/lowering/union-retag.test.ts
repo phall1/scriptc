@@ -77,6 +77,26 @@ describe("union conversion planning", () => {
     expect(arm.routes.map((route) => route.tag)).toEqual([0, 1]);
   });
 
+  test("retains exact storage when narrowing omits literal cases", () => {
+    const f = fixture();
+    f.to.arms[1] = record("r0");
+    f.to.discriminant!.cases[0]!.values = ["other"];
+    f.to.discriminant!.cases[1]!.values = ["left"];
+    expect(f.plan()![0]).toEqual({
+      kind: "direct", route: { tag: 1, lift: { how: "copy" }, values: ["left", "right"] },
+    });
+  });
+
+  test("combines omitted literal identity with explicit width routes", () => {
+    const f = fixture();
+    f.to.arms[0] = record("r0");
+    f.from.discriminant!.cases[0]!.values.push("omitted");
+    expect(split(f.plan()).routes).toEqual([
+      { tag: 0, lift: { how: "copy" }, values: ["left", "omitted"] },
+      { tag: 1, lift: { how: "width" }, values: ["right"] },
+    ]);
+  });
+
   test("coalesces several literals targeting the same layout", () => {
     const f = fixture();
     f.from.discriminant!.cases[0]!.values.push("middle", "middle");

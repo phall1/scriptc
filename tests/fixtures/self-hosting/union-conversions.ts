@@ -72,7 +72,7 @@ function caught(label: string, call: IrExpr): IrStmt {
   };
 }
 
-function scenario(prefix: string, fieldType: IrType, left: string | number | boolean, right: string | number | boolean): void {
+function scenario(prefix: string, fieldType: IrType, left: string | number | boolean, right: string | number | boolean, identity = false): void {
   const src = `${prefix}0`, a = `${prefix}1`, b = `${prefix}2`;
   records.push(
     { id: src, fields: [{ name: "kind", type: fieldType }, { name: "left", type: F64 }, { name: "right", type: F64 }] },
@@ -84,7 +84,7 @@ function scenario(prefix: string, fieldType: IrType, left: string | number | boo
     discriminant: { field: "kind", cases: [{ tag: 0, values: [left, right] }] },
   };
   const to: IrUnionDef = {
-    id: `${prefix}to`, arms: [recordType(a), recordType(b), UNDEFINED_T],
+    id: `${prefix}to`, arms: [recordType(identity ? src : a), recordType(b), UNDEFINED_T],
     discriminant: { field: "kind", cases: [{ tag: 0, values: [left] }, { tag: 1, values: [right] }] },
   };
   // Multiple literals can select one destination. The emitted OR must
@@ -92,7 +92,9 @@ function scenario(prefix: string, fieldType: IrType, left: string | number | boo
   const literals: (string | number | boolean)[] = [left, right];
   if (fieldType.kind === "string") {
     from.discriminant!.cases[0]!.values.push("alias\u0000left");
-    to.discriminant!.cases[0]!.values.push("alias\u0000left");
+    // Narrowed metadata can omit a literal while retaining the exact source
+    // layout. The native planner must copy it without stealing width routes.
+    if (!identity) to.discriminant!.cases[0]!.values.push("alias\u0000left");
     literals.push("alias\u0000left");
   }
   unions.push(from, to);
@@ -137,7 +139,7 @@ function scenario(prefix: string, fieldType: IrType, left: string | number | boo
 
   // Missing unit arms keep the established catchable narrowing behavior.
   const required: IrUnionDef = {
-    id: `${prefix}required`, arms: [recordType(a), recordType(b)], discriminant: to.discriminant!,
+    id: `${prefix}required`, arms: to.arms.slice(0, 2), discriminant: to.discriminant!,
   };
   unions.push(required);
   const narrow = planUnionRetag(from, required, shapeOf, widthLift);
@@ -150,6 +152,7 @@ function scenario(prefix: string, fieldType: IrType, left: string | number | boo
 scenario("s", STRING, "constructor", "__proto__");
 scenario("n", F64, 0, -2.5);
 scenario("b", BOOL, false, true);
+scenario("i", STRING, "kept", "width", true);
 // The same native stage emits checked single-arm extraction and deferred
 // scalar field reads. Wrong non-unit tags must never share a payload read.
 const scalarUnion: IrUnionDef = { id: "scalar", arms: [BOOL, F64, STRING, UNDEFINED_T] };

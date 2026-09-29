@@ -102,7 +102,10 @@ export function planUnionRetag(
       if (!entry || !fieldType) return null;
       const routes: UnionRetagRoute[] = [];
       for (const value of entry.values) {
-        const destination = owners.get(JSON.stringify(value));
+        // Narrowing can remove semantic cases without changing a storage
+        // arm. Retain that exact representation for omitted literals, while
+        // explicit owners still select their own payload layouts.
+        const destination = owners.get(JSON.stringify(value)) ?? (identity >= 0 ? identity : undefined);
         if (destination === undefined) return null;
         const existing = routes.find((route) => route.tag === destination);
         if (existing) {
