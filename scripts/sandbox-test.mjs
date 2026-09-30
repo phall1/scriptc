@@ -721,7 +721,9 @@ try {
         );
       }
       await execIn(worker, "pnpm", ["install", "--frozen-lockfile"], {}, "", 2 * 60_000);
-      await execIn(worker, "pnpm", ["build"], {}, "", 2 * 60_000);
+      // Resetting the source tree removes dist but preserves node_modules,
+      // including TypeScript's incremental metadata. Rebuild both together.
+      await execIn(worker, "pnpm", ["build:fresh"], {}, "", 2 * 60_000);
       // Workspace builds deliberately do not rebuild packaged native artifacts.
       // Every remote lane needs the Linux helper and runtime from this worktree.
       await execIn(worker, "pnpm", ["--filter", "@scriptc/llvm-linux-x64-gnu", "build:native"], {}, "LLVM helper", 5 * 60_000);
