@@ -3395,7 +3395,15 @@ export function lowerStaticReadableStreamReaderCall(
       ts.isSpreadElement(call.arguments[0]!)
     ) {
       const spread = call.arguments[0]! as ts.SpreadElement;
-      const src = lowerer.lowerExpr(spread.expression);
+      let src = lowerer.lowerExpr(spread.expression);
+      // JavaScript array call results retain checked storage so aliases stay
+      // shared. This read-only fold can extract the inferred numeric array.
+      if (src.type.kind === "dyn") {
+        const inferred = lowerer.mapTypeOf(lowerer.typeOf(spread.expression));
+        if (inferred?.kind === "array" && inferred.elem.kind === "f64") {
+          src = lowerer.coerceInto(spread.expression, src, inferred);
+        }
+      }
       if (src.type.kind !== "array" || src.type.elem.kind !== "f64") {
         lowerer.unsupported(
           "SC1090",

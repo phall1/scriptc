@@ -32,7 +32,7 @@ import { lowerSocketInstanceOf, lowerTlsRootCertificates } from "./lower-server.
 import { findGenericMethodOn, lowerStaticFieldRead, staticFieldWriteTarget, storedClassValueType } from "./lower-classes.js";
 import { bindingNeverReassigned, funcTypeFromParamShapes, implicitMonoFile, lowerTaggedTemplate, nullishGenericBindingUnitOf, objLitGenericFnInfoOf, objLitGenericFnNodeOf, requireObjLitGenericReceiver } from "./lower-calls.js";
 import { mixinFnOfCallee } from "./lower-mixins.js";
-import { isConstAssertionTypeNode, isGenericCallableMemberType, isParseArgsDynTypeName, underConstAssertion, unitOnlyUnion } from "../type-mapper.js";
+import { isConstAssertionTypeNode, isGenericCallableMemberType, isParseArgsDynTypeName, underConstAssertion, unitOnlyUnion, withUnitArm } from "../type-mapper.js";
 import { lowerYield } from "./lower-generators.js";
 import { lowerStreamProperty, lowerStreamStateProperty, streamSidesOf } from "./lower-stream.js";
 import { countedFor, numLit, varRef } from "../../ir/build.js";
@@ -5168,6 +5168,10 @@ export function lowerOptionalNumber(
     }
     if (ts.isPropertyAccessExpression(expr)) {
       const target = lowerer.fieldTarget(expr);
+      if (target?.container === "class" && target.fieldType.kind === "union" &&
+          lowerer.unions.get(target.fieldType.unionId)?.arms.some(isUnitType)) {
+        return lowerer.fieldGetExpr(target, locOf(expr), expr);
+      }
       if (target?.container !== "recordOvf") return null;
       // A JS file-scope object-literal global is record-shaped to the
       // checker but stored in the checked-dynamic tree to preserve object
@@ -6227,7 +6231,10 @@ export function lowerPrefixUnary(lowerer: Lowerer, expr: ts.PrefixUnaryExpressio
         if (raw.type.kind === "bigint") {
           return { kind: "libCall", fn: "bigint.neg", args: [raw], type: BIGINT_T, loc };
         }
-        const operand = lowerOptionalNumber(lowerer, raw, loc, expr.operand);
+        // Match the checked numeric boundary used by JS binary arithmetic.
+        const operand = raw.type.kind === "dyn" && isJsSourceFile(expr.getSourceFile())
+          ? { kind: "dynCheck" as const, value: raw, type: F64, loc }
+          : lowerOptionalNumber(lowerer, raw, loc, expr.operand);
         if (operand.type.kind !== "f64") lowerer.unsupported("SC1043", expr);
         if (operand.kind === "numLit") return { ...operand, value: -operand.value, loc };
         return { kind: "unary", op: "-", operand, type: F64, loc };
@@ -7405,15 +7412,17 @@ function lowerLogicalPair(lowerer: Lowerer, expr: ts.BinaryExpression, left: IrE
     // Test the deciding operand in its own representation. The result
     // contains only the values that can survive short-circuit evaluation.
     let target = lowerer.mapTypeOf(lowerer.typeOf(expr));
-    // Unchecked array reads carry undefined even when the checker sees
-    // a required value. The RHS can return it for either operator; the
-    // LHS can return it only for &&. Preserve it through later chain pairs.
-    if (target !== null && !isUnitType(target) && (
-      (right.type.kind === "union" && lowerer.armTag(right.type.unionId, UNDEFINED_T) >= 0) ||
-      (op === ts.SyntaxKind.AmpersandAmpersandToken && left.type.kind === "union" &&
-        lowerer.armTag(left.type.unionId, UNDEFINED_T) >= 0)
-    )) {
-      target = lowerer.runtimeOptionalType(target);
+    // Index reads can be absent without noUncheckedIndexedAccess. Their
+    // explicit nullish fallback still runs, even if the checker discarded it.
+    if (target !== null) {
+      const returned = [right.type, ...(op === ts.SyntaxKind.AmpersandAmpersandToken ? [left.type] : [])];
+      for (const type of returned) {
+        const arms = type.kind === "union" ? lowerer.unions.get(type.unionId)?.arms ?? [] : [type];
+        for (const arm of arms) {
+          if (arm.kind === "undefinedT" && !isUnitType(target)) target = lowerer.runtimeOptionalType(target);
+          if (arm.kind === "nullT") target = withUnitArm(target, arm.kind, lowerer.unions) ?? target;
+        }
+      }
     }
     // A broad-JSDoc npm-static body can leave the CHECKER result `any`
     // even after declaration-backed specialization has recovered both
@@ -9918,7 +9927,9 @@ function representedClassFieldTarget(
    * fieldSet/recordSet/accessor-call (minus value/kind) or null. */
   export function fieldTarget(lowerer: Lowerer, access: ts.PropertyAccessExpression): FieldTarget | null {
     if (lowerer.chainBlocked(access)) return null;
-    const receiverIr = lowerer.mapTypeOf(lowerer.typeOf(access.expression));
+    const stored = ts.isIdentifier(access.expression)
+      ? lowerer.peekLocal(access.expression)?.type ?? lowerer.globalOf(access.expression)?.type : undefined;
+    const receiverIr = stored?.kind === "record" ? stored : lowerer.mapTypeOf(lowerer.typeOf(access.expression));
     if (receiverIr?.kind === "object") {
       return classFieldTarget(lowerer, access.expression, receiverIr, access.name.text);
     }

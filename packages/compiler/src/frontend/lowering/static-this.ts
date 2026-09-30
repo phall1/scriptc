@@ -9,6 +9,7 @@ export function rejectStaticThis(
   root: ts.Node,
   message: (keyword: "this" | "super") => string,
   includeRoot = false,
+  allowThis = false,
 ): void {
   const visit = (node: ts.Node): void => {
     if (
@@ -19,7 +20,7 @@ export function rejectStaticThis(
     ) {
       return;
     }
-    if (node.kind === ts.SyntaxKind.ThisKeyword || node.kind === ts.SyntaxKind.SuperKeyword) {
+    if ((node.kind === ts.SyntaxKind.ThisKeyword && !allowThis) || node.kind === ts.SyntaxKind.SuperKeyword) {
       const keyword = node.kind === ts.SyntaxKind.ThisKeyword ? "this" : "super";
       lowerer.unsupported("SC1090", node, message(keyword));
     }
@@ -27,4 +28,28 @@ export function rejectStaticThis(
   };
   if (includeRoot) visit(root);
   else root.forEachChild(visit);
+}
+
+export function hasStaticThis(root: ts.Node): boolean {
+  let found = false;
+  const visit = (node: ts.Node): void => {
+    if (node.kind === ts.SyntaxKind.ThisKeyword) found = true;
+    if ((ts.isFunctionLike(node) && !ts.isArrowFunction(node)) || ts.isClassDeclaration(node) || ts.isClassExpression(node)) return;
+    node.forEachChild(visit);
+  };
+  root.forEachChild(visit);
+  return found;
+}
+
+/** Private names belong to the lexical class, independently of any
+ * same-spelled member in a receiver's subclass. */
+export function hasLexicalPrivateReference(root: ts.Node): boolean {
+  let found = false;
+  const visit = (node: ts.Node): void => {
+    if (ts.isClassDeclaration(node) || ts.isClassExpression(node)) return;
+    if (ts.isPrivateIdentifier(node)) found = true;
+    node.forEachChild(visit);
+  };
+  root.forEachChild(visit);
+  return found;
 }
