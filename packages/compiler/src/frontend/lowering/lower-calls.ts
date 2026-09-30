@@ -23,7 +23,7 @@ import { dynStringReceiver, lowerArrayConstructor, lowerArrayFromCall, lowerArra
 import { lowerBytesStaticCall } from "./containers/bytes.js";
 import { lowerRegexMethodCall, lowerStringIndexCall, lowerStringMethodCall, lowerStringPaddingCall, lowerStringSplitCall } from "./containers/string-and-regexp.js";
 import { createRequireSpecOf, lowerChildStreamMethodCall, lowerChildWriterMethodCall, lowerCreateRequireCall, lowerCryptoHashMethodCall, lowerDirentMethodCall, lowerFileHandleMethodCall, lowerImportMetaResolveCall, lowerNodeModuleCall, lowerPerfHooksCall, lowerProcStreamMethodCall, lowerReflectApplyCall, lowerRequireResolveCall, lowerWatcherMethodCall } from "./lower-builtins.js";
-import { lowerAbsenceProbe, lowerPromiseAllTupleCall, lowerPromiseRejectCall, stringWrapperToString, templateRawTextOf } from "./lower-exprs.js";
+import { lowerAbsenceProbe, lowerPromiseAllTupleCall, lowerPromiseRejectCall, stringWrapperToString, symbolFieldInfo, templateRawTextOf } from "./lower-exprs.js";
 import { isSafeToDiscard } from "./expressions/evaluation-safety.js";
 import { tryLowerExpression } from "./expressions/try-lower-expression.js";
 import { httpClientFnBindingOf, isStreamUndefCallExpr, lowerCompatReqStreamOptionalCall, lowerHttpClientFnCall } from "./lower-server.js";
@@ -4950,7 +4950,8 @@ export function lowerCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr {
 
     // Computed native members retain their original receiver and resolve
     // the function before argument effects, just like dotted calls.
-    if (ts.isElementAccessExpression(expr.expression) && !expr.expression.questionDotToken && !expr.questionDotToken) {
+    if (ts.isElementAccessExpression(expr.expression) && !expr.expression.questionDotToken && !expr.questionDotToken &&
+        !symbolFieldInfo(lowerer, expr.expression)) {
       const access = expr.expression;
       const value = tryLowerExpression(lowerer, access.expression);
       if (value?.type.kind === "dyn" || value?.type.kind === "object" && !lowerer.classes.get(value.type.className)?.def.runtime) {
@@ -4963,7 +4964,7 @@ export function lowerCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr {
         const callee: IrExpr = { kind: "dynKeyGet", value: receiver, key, type: DYN, loc };
         const spread = expr.arguments.some(ts.isSpreadElement) ? lowerSpreadArgsCall(lowerer, expr, callee, loc) : null;
         if (spread && spread.kind !== "dynCall") lowerer.unsupported("SC1090", expr, "computed native method spread arguments");
-        const result: IrExpr = spread?.kind === "dynCall" ? { ...spread, receiver } : { kind: "dynCall", callee, receiver,
+        const result: IrExpr = spread !== null ? { ...spread, receiver } : { kind: "dynCall", callee, receiver,
           calleeName: access.getText(), args: expr.arguments.map((arg) => lowerer.lowerExprExpecting(arg, DYN)), type: DYN, loc };
         return { kind: "seqExpr", stmts: [{ kind: "varDecl", localId: local.id, init: value, loc }], result, type: DYN, loc };
       }
@@ -6317,9 +6318,11 @@ export function lowerDynDispatchMethodCall(
       }
     }
   }
-  const args = call.arguments.map((arg, i) =>
-    i === 0 && predicate ? lowerer.coerceInto(arg, predicate, DYN) : lowerer.lowerExprExpecting(arg, DYN),
-  );
+  const args = call.arguments.map((arg, i) => {
+    if (i === 0 && predicate) return lowerer.coerceInto(arg, predicate, DYN);
+    const undefinedArg = lowerStaticallyUndefinedArgument(lowerer, arg);
+    return undefinedArg ? defaultAfterUndefined(undefinedArg, dynUndefinedExpr(locOf(arg))) : lowerer.lowerExprExpecting(arg, DYN);
+  });
   return {
     kind: "dynInvoke",
     recv,
@@ -11067,7 +11070,7 @@ export function lowerFunction(lowerer: Lowerer, decl: ts.FunctionDeclaration): I
           key: { kind: "strLit", value: access.name.text, type: STRING, loc }, type: DYN, loc };
         const spread = call.arguments.some(ts.isSpreadElement) ? lowerSpreadArgsCall(lowerer, call, callee, loc) : null;
         if (spread && spread.kind !== "dynCall") lowerer.unsupported("SC1090", call, "native property call spread arguments");
-        const result: IrExpr = spread?.kind === "dynCall" ? { ...spread, receiver } : { kind: "dynCall", callee, receiver,
+        const result: IrExpr = spread !== null ? { ...spread, receiver } : { kind: "dynCall", callee, receiver,
           calleeName: access.getText(), args: call.arguments.map((arg) => lowerer.lowerExprExpecting(arg, DYN)), type: DYN, loc };
         return { kind: "seqExpr", stmts: [{ kind: "varDecl", localId: local.id, init: value, loc }], result, type: DYN, loc };
       }
@@ -11177,7 +11180,7 @@ function lowerUnionObjectMethodCall(
       key: { kind: "strLit", value: method, type: STRING, loc }, type: DYN, loc };
     const spread = call.arguments.some(ts.isSpreadElement) ? lowerSpreadArgsCall(lowerer, call, callee, loc) : null;
     if (spread && spread.kind !== "dynCall") lowerer.unsupported("SC1090", call, "union method spread arguments");
-    const value: IrExpr = spread?.kind === "dynCall" ? { ...spread, receiver } : { kind: "dynCall", callee, receiver,
+    const value: IrExpr = spread !== null ? { ...spread, receiver } : { kind: "dynCall", callee, receiver,
       calleeName: access.getText(), args: call.arguments.map((arg) => lowerer.lowerExprExpecting(arg, DYN)), type: DYN, loc };
     const resultT = lowerer.mapTypeOf(lowerer.typeOf(call));
     const result = resultT && !isUnitType(resultT) ? lowerer.coerceToExpected(value, resultT) : value;

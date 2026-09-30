@@ -62,13 +62,11 @@ test("bytes runtime: coercions, encodings, zlib, fs, RC", async () => {
   expect(stderr.trim().split("\n").pop()).toMatch(/^(\d+)\/\1 cases passed$/);
 });
 
-// JS reads undefined / ignores writes out of bounds on typed arrays; both
-// are unrepresentable, so the runtime traps (documented divergence, the
-// array runtime's exact discipline).
+// Statically typed numeric reads cannot represent undefined and still trap.
+// Invalid writes are ignored and covered by the runtime assertions above.
 test.each([
   ["--crash-get-oob", "typed array index 1 out of bounds (length 1)"],
   ["--crash-get-frac", "typed array index 0.5 out of bounds (length 1)"],
-  ["--crash-set-oob", "typed array index 1 out of bounds (length 1)"],
 ])("trap aborts (%s)", async (mode, message) => {
   const err = await execFileAsync(bin, [mode]).then(
     () => {

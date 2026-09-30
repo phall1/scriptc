@@ -1630,8 +1630,8 @@ export function collectGlobals(lowerer: Lowerer, sf: ts.SourceFile, topStmts: ts
                 : null;
             let type = handleT ?? factoryType ?? lowerer.irTypeOf(nameNode);
             if (isJsSourceFile(sf) && !decl.type && !hasJsTypeAnnotation(decl) && decl.initializer &&
-                ts.isNewExpression(decl.initializer) && !(ts.isIdentifier(decl.initializer.expression) && lowerer.isStdlibSymbol(lowerer.resolveValueSymbol(decl.initializer.expression) ?? undefined)) &&
-                lowerer.mapTypeOf(lowerer.typeOf(decl.initializer.expression))?.kind === "dyn") type = DYN;
+                ts.isNewExpression(decl.initializer) && lowerer.mapTypeOf(lowerer.typeOf(decl.initializer.expression))?.kind === "dyn" &&
+                !(ts.isIdentifier(decl.initializer.expression) && lowerer.isStdlibSymbol(lowerer.checker.getSymbolAtLocation(decl.initializer.expression)))) type = DYN;
             // JavaScript call results may retain a checked array supplied by
             // the caller. A typed global here would copy it on extraction.
             if (isJsSourceFile(sf) && !decl.type && !hasJsTypeAnnotation(decl) && type.kind === "array" &&

@@ -403,8 +403,11 @@ export class ClassDynamicDispatch {
 
         for (let owner: ClassInfo | null = info; owner; owner = owner.base) {
           for (const method of owner.methods.keys()) {
-            if ((method.startsWith("get:") || method.startsWith("set:")) && isClassOwnEnumerableFieldName(method.slice(4))) names.add(method.slice(4));
-            else if (isClassOwnEnumerableFieldName(method)) names.add(method);
+            // Symbol method slots are internal identities, not string keys.
+            // Exposing them here also retains otherwise unreachable bodies.
+            if (method.startsWith("get:") || method.startsWith("set:")) {
+              if (isClassOwnEnumerableFieldName(method.slice(4))) names.add(method.slice(4));
+            } else if (!method.startsWith("sym:") && isClassOwnEnumerableFieldName(method)) names.add(method);
           }
         }
         const branch: IrStmt[] = [];

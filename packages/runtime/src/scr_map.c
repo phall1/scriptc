@@ -104,6 +104,7 @@ static uint64_t scr_map_hash_dyn(const ScrDyn *d) {
     return hash;
   }
   case SCR_DYN_STR: return scr_map_hash_str(d->v.str);
+  case SCR_DYN_BYTES: value = scr_map_slot_from_ptr(d->v.bytes); break;
   case SCR_DYN_FUNC: value = scr_map_slot_from_ptr(d->v.fn.clo); break;
   case SCR_DYN_HANDLE: value = scr_map_slot_from_ptr(d->v.handle.ptr); break;
   case SCR_DYN_PROMISE: value = scr_map_slot_from_ptr(d->v.promise); break;

@@ -1025,7 +1025,7 @@ static ScrDyn *scr_dyn_invoke_impl(
       ScrDyn *needle = argc > 0 ? args[0] : scr_dyn_undefined();
       double from = dyn_name_is(method, "lastIndexOf") ? (double)len - 1 : 0;
       if (argc > 1) {
-        from = dyn_index_arg(args, argc, 1, from, what);
+        from = dyn_index_arg(args, argc, 1, 0, what);
         if (scr_exc_pending()) return NULL;
       }
       if (!dyn_arr_length_unchanged(recv, len)) return NULL;

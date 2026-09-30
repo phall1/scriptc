@@ -5,7 +5,6 @@
  *   <scratch-dir>       run all assertions; prints "N/N cases passed"
  *   --crash-get-oob     element read past the end   → RangeError + abort()
  *   --crash-get-frac    fractional element index    → RangeError + abort()
- *   --crash-set-oob     element write past the end  → RangeError + abort()
  *
  * The coercion matrix mirrors Node exactly (verified by hand and by the
  * differential corpus): ToUint8/ToUint32 modular truncation on writes,
@@ -59,6 +58,17 @@ static void test_construction(void) {
   check_f64(scr_bytes_len(b), 3, "new(3) length");
   check_f64(scr_bytes_byte_len(b), 3, "u8 byteLength == length");
   check_f64(scr_bytes_get(b, 0), 0, "zero-filled");
+  scr_bytes_release(b);
+
+  b = scr_bytes_new(SCR_BYTES_U8, 1);
+  scr_bytes_set(b, 0, 3);
+  const double invalid_indices[] = { -1, 0.5, 1, NAN, INFINITY, -INFINITY };
+  for (size_t i = 0; i < sizeof invalid_indices / sizeof invalid_indices[0]; i++) {
+    scr_bytes_set(b, invalid_indices[i], 7);
+    check_f64(scr_bytes_get(b, 0), 3, "invalid writes preserve existing elements");
+    check_f64(scr_bytes_len(b), 1, "invalid writes do not grow typed arrays");
+    check(!scr_exc_pending(), "invalid writes do not throw");
+  }
   scr_bytes_release(b);
 
   /* ToIndex: 3.5 truncates to 3, NaN is 0 — no throw (Node-exact). */
@@ -376,8 +386,6 @@ int main(int argc, char **argv) {
       scr_bytes_get(b, 1);
     } else if (strcmp(argv[1], "--crash-get-frac") == 0) {
       scr_bytes_get(b, 0.5);
-    } else if (strcmp(argv[1], "--crash-set-oob") == 0) {
-      scr_bytes_set(b, 1, 7); /* JS ignores; we trap (no appends either) */
     } else {
       fprintf(stderr, "unknown mode %s\n", argv[1]);
       return 2;
