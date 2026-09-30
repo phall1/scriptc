@@ -143,6 +143,7 @@ for (const backend of ["llvm"] as const) {
         ["escape-barrel.ts", "auto", ["escape-string-regexp"]],
         ["nested/main.ts", "auto", ["shouty"]],
         ["slash-cli.ts", ["slash"], ["slash"]],
+        ["inferred-returns.mjs", ["inferred-returns"], ["inferred-returns"]],
       ] as const) {
         const result = lowerRequest(file, {
           entry: join(root, "tests/fixtures/npm-static", file),

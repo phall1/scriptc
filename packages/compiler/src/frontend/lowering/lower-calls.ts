@@ -1866,23 +1866,24 @@ export function genericFnOf(lowerer: Lowerer, ident: ts.Identifier): GenericFnIn
       inst.returnType = final;
     }
     // The wrap pass: settle every recorded return onto `final`, in place.
+    // Write through the stored union arm: optional-field widening on a
+    // local alias can otherwise introduce a record copy in native builds.
     for (const e of infer.entries) {
       if (e.stmt.kind !== "return") continue;
-      const st = e.stmt as IrStmt & { kind: "return"; value: IrExpr | null };
       const diagsBefore = lowerer.diags.length;
       try {
-        if (st.value === null || st.value === undefined) {
-          if (final.kind === "dyn") st.value = dynUndefinedExpr(st.loc);
+        if (e.stmt.value === null || e.stmt.value === undefined) {
+          if (final.kind === "dyn") e.stmt.value = dynUndefinedExpr(e.stmt.loc);
           else if (final.kind === "union") {
-            const wrapped = lowerer.wrappedUndefined(final, st.loc);
+            const wrapped = lowerer.wrappedUndefined(final, e.stmt.loc);
             if (!wrapped) {
               lowerer.unsupported("SC1090", e.node ?? decl, `bare 'return' in a function whose inferred return type is '${lowerer.fmt(final)}'`);
             }
-            st.value = wrapped;
+            e.stmt.value = wrapped;
           }
           // void final: bare return stands as-is
-        } else if (!typeEquals(st.value.type, final)) {
-          st.value = lowerer.coerceInto(e.node ?? decl, st.value, final);
+        } else if (!typeEquals(e.stmt.value.type, final)) {
+          e.stmt.value = lowerer.coerceInto(e.node ?? decl, e.stmt.value, final);
         }
       } catch (err) {
         if (!(err instanceof PoisonError)) throw err;
@@ -1894,7 +1895,7 @@ export function genericFnOf(lowerer: Lowerer, ident: ts.Identifier): GenericFnIn
         if (ice.length > 0) lowerer.diags.push(...ice);
         lowerer.runtimeFences.push(...captured.filter((d) => d.code !== "SC9001"));
         const first = captured.find((d) => d.code !== "SC9001");
-        const mutable = st as unknown as Record<string, unknown>;
+        const mutable = e.stmt as unknown as Record<string, unknown>;
         delete mutable["value"];
         mutable["kind"] = "runtimeFence";
         mutable["code"] = first?.code ?? "SC1090";
