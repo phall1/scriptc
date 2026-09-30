@@ -59,6 +59,27 @@ test("hash words remain unsigned and ordered", () => {
   expect(file.parseOptionsKey).toBe("4294967295");
 });
 
+test("node words respect a byte view's offset, signed spans and unsigned flags", () => {
+  const original = response();
+  const padded = new Uint8Array(original.length + 11).fill(0xff);
+  padded.set(original, 3);
+  const bytes = padded.subarray(3, 3 + original.length);
+  const at = 120 + 3 * NODE_LEN;
+  word(bytes, at + 4, 0xffffffff);
+  word(bytes, at + 8, 0x80000000);
+  word(bytes, at + 24, 0xfedcba98);
+  const file = new AstWireFile(bytes);
+  expect(file.kind(3)).toBe(AstKind.Identifier);
+  expect(file.pos(3)).toBe(-1);
+  expect(file.end(3)).toBe(-2147483648);
+  expect(file.flags(3)).toBe(0xfedcba98);
+  expect(file.data(3)).toBe(0x40000002);
+  expect(file.next(3)).toBe(4);
+  expect(file.parent(3)).toBe(2);
+  expect(file.kind(4)).toBe(AstKind.Identifier);
+  expect(() => file.kind(5)).toThrow(AstDecodeError);
+});
+
 test("truncated headers, sections and node tables are rejected", () => {
   for (let size = 0; size < HEADER_SIZE; size++) expect(() => new AstWireFile(new Uint8Array(size))).toThrow(AstDecodeError);
   for (const [offset, value] of [[0, 0], [24, 40], [28, 59], [28, 67], [32, 59], [36, 69], [40, 119], [40, 0xffffffff], [48, 9], [52, 8], [56, 2]]) {

@@ -22,6 +22,7 @@ export class CheckerCache {
   readonly assignableTypes = new Map<Type, Map<Type, boolean>>();
   readonly nonNullableType = new Map<Type, Type | undefined>();
   readonly propertiesOfType = new Map<Type, readonly Ts7Symbol[]>();
+  readonly propertyOfType = new Map<Type, Map<string, Ts7Symbol | undefined>>();
   readonly indexInfosOfType = new Map<Type, readonly IndexInfo[]>();
   readonly typeArgumentsOf = new Map<Type, readonly Type[]>();
   readonly arrayTypeAnswer = new Map<Type, boolean>();
@@ -67,6 +68,7 @@ export class CheckerCache {
     this.assignableTypes.clear();
     this.nonNullableType.clear();
     this.propertiesOfType.clear();
+    this.propertyOfType.clear();
     this.indexInfosOfType.clear();
     this.typeArgumentsOf.clear();
     this.arrayTypeAnswer.clear();

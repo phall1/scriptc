@@ -1,4 +1,5 @@
 import { everyExprChild, everyStmtChild } from "../../ir/traverse.js";
+import { RuntimeOptionalLocals } from "./runtime-optional-locals.js";
 import { sanitizeUnregisteredClassTypes } from "./sanitize-class-types.js";
 import { buildUnionNarrow } from "./union-narrow.js";
 import { planUnionRetag, buildUnionRetag, planRecordUnionWrap, buildRecordUnionWrap } from "./union-retag.js";
@@ -1261,7 +1262,7 @@ export class Lowerer {
   /** Locals widened beyond the checker's type because an inferred indexed
    * read can be absent at runtime. Bare reads preserve that union until a
    * surrounding JavaScript guard/default consumes it. */
-  readonly runtimeOptionalLocals = new Set<IrLocal>();
+  readonly runtimeOptionalLocals = new RuntimeOptionalLocals();
   /** An effectful switch test can change the original binding after the
    * discriminant was captured. A case match narrows the captured value,
    * not that mutable binding; preserve its tagged representation on reads. */
@@ -2946,8 +2947,15 @@ export class Lowerer {
       }
       return e;
     };
+    const callableSymbols = new Map<ts.Expression, ts.Symbol | null>();
     const callableSymbolOf = (node: ts.Expression): ts.Symbol | null => {
+      const cached = callableSymbols.get(node);
+      if (cached !== undefined) return cached;
       let symbol = symbolOf(ts.isPropertyAccessExpression(node) ? node.name : node);
+      if (symbol === null || signatureBySymbol.has(symbol)) {
+        callableSymbols.set(node, symbol);
+        return symbol;
+      }
       const seen = new Set<ts.Symbol>();
       while (symbol && !signatureBySymbol.has(symbol) && !seen.has(symbol)) {
         seen.add(symbol);
@@ -2958,6 +2966,7 @@ export class Lowerer {
           symbol = symbolOf(peel(declaration.initializer));
         } else break;
       }
+      callableSymbols.set(node, symbol);
       return symbol;
     };
     const explicitlyNonNull = (node: ts.Expression): boolean => {
@@ -3046,9 +3055,10 @@ export class Lowerer {
       const e = peel(node);
       if (!ts.isBinaryExpression(e) || e.operatorToken.kind !== ts.SyntaxKind.PlusToken) return null;
       const stringArrayRead = (part: ts.Expression): boolean => {
-        const t = this.mapTypeOf(this.typeOf(part));
         const p = peel(part);
-        if (t?.kind !== "string" || !ts.isElementAccessExpression(p)) return false;
+        if (!ts.isElementAccessExpression(p)) return false;
+        const t = this.mapTypeOf(this.typeOf(part));
+        if (t?.kind !== "string") return false;
         const recv = this.mapTypeOf(this.typeOf(p.expression));
         return recv?.kind === "array" && recv.elem.kind === "string";
       };
@@ -3367,50 +3377,52 @@ export class Lowerer {
         }
         if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
           const callbackIndices = hofCallbackIndices(node.expression.name.text, node.arguments.length >= 2);
-          const receiverNode = node.expression.expression;
-          const receiverTs = this.typeOf(receiverNode);
-          let receiver = this.mapTypeOf(receiverTs);
-          // An array method after an optional-chain guard only runs on the
-          // present receiver. The checker includes the chain's short-circuit
-          // undefined in intermediate call types, so use the same narrowed
-          // receiver the method lowerer sees when promoting HOF callbacks.
-          if (
-            callbackIndices !== null && receiver?.kind === "union" &&
-            (node.expression.questionDotToken !== undefined || isOptionalChainTail(this, node))
-          ) {
-            receiver = this.mapTypeOf(this.checker.getNonNullableType(receiverTs));
-          }
-          const callback = callbackIndices === null ? undefined : node.arguments[0];
-          const tuple = receiver?.kind === "record" && this.shapes.get(receiver.shapeId)?.tuple === true;
-          // A JS/evolving-any array may have acquired a precise FLOW type
-          // at this call while its actual binding remains a checked-dynamic
-          // array. Its callback consumes DYN values through runtime method
-          // dispatch, so widening that callback to the native array value
-          // ABI makes it impossible to box back into DYN. Judge a simple
-          // binding by its declaration type, the same storage fact local
-          // declaration lowering uses.
-          let nativeArrayReceiver = receiver?.kind === "array" || tuple;
-          if (nativeArrayReceiver && ts.isIdentifier(receiverNode)) {
-            const receiverSymbol = symbolOf(receiverNode);
-            const declaration = receiverSymbol ? this.checker.valueDeclarationOf(receiverSymbol) : undefined;
-            if (declaration && ts.isVariableDeclaration(declaration)) {
-              const declared = this.mapTypeOf(this.typeOf(declaration.name));
-              if (declared?.kind !== "array" && !(declared?.kind === "record" && this.shapes.get(declared.shapeId)?.tuple === true)) {
-                nativeArrayReceiver = false;
+          const callback = node.arguments[0];
+          if (callbackIndices !== null && callback !== undefined && !ts.isSpreadElement(callback)) {
+            const receiverNode = node.expression.expression;
+            const receiverTs = this.typeOf(receiverNode);
+            let receiver = this.mapTypeOf(receiverTs);
+            // An array method after an optional-chain guard only runs on the
+            // present receiver. The checker includes the chain's short-circuit
+            // undefined in intermediate call types, so use the same narrowed
+            // receiver the method lowerer sees when promoting HOF callbacks.
+            if (
+              receiver?.kind === "union" &&
+              (node.expression.questionDotToken !== undefined || isOptionalChainTail(this, node))
+            ) {
+              receiver = this.mapTypeOf(this.checker.getNonNullableType(receiverTs));
+            }
+            const tuple = receiver?.kind === "record" && this.shapes.get(receiver.shapeId)?.tuple === true;
+            // A JS/evolving-any array may have acquired a precise FLOW type
+            // at this call while its actual binding remains a checked-dynamic
+            // array. Its callback consumes DYN values through runtime method
+            // dispatch, so widening that callback to the native array value
+            // ABI makes it impossible to box back into DYN. Judge a simple
+            // binding by its declaration type, the same storage fact local
+            // declaration lowering uses.
+            let nativeArrayReceiver = receiver?.kind === "array" || tuple;
+            if (nativeArrayReceiver && ts.isIdentifier(receiverNode)) {
+              const receiverSymbol = symbolOf(receiverNode);
+              const declaration = receiverSymbol ? this.checker.valueDeclarationOf(receiverSymbol) : undefined;
+              if (declaration && ts.isVariableDeclaration(declaration)) {
+                const declared = this.mapTypeOf(this.typeOf(declaration.name));
+                if (declared?.kind !== "array" && !(declared?.kind === "record" && this.shapes.get(declared.shapeId)?.tuple === true)) {
+                  nativeArrayReceiver = false;
+                }
               }
             }
-          }
-          if (nativeArrayReceiver && callback && !ts.isSpreadElement(callback)) {
-            if (promoteHofCallback(callback, callbackIndices!)) changed = true;
-            const method = node.expression.name.text;
-            if ((method === "reduce" || method === "reduceRight") &&
-                (node.arguments.length < 2 || callbackReturnsOptional(callback))) {
-              if (promoteHofCallback(callback, [0, 1])) changed = true;
-              const result = this.runtimeOptionalType(this.irTypeOf(node));
-              const previous = this.runtimeOptionalReduceTypes.get(node);
-              if (!previous || !typeEquals(previous, result)) {
-                this.runtimeOptionalReduceTypes.set(node, result);
-                changed = true;
+            if (nativeArrayReceiver) {
+              if (promoteHofCallback(callback, callbackIndices)) changed = true;
+              const method = node.expression.name.text;
+              if ((method === "reduce" || method === "reduceRight") &&
+                  (node.arguments.length < 2 || callbackReturnsOptional(callback))) {
+                if (promoteHofCallback(callback, [0, 1])) changed = true;
+                const result = this.runtimeOptionalType(this.irTypeOf(node));
+                const previous = this.runtimeOptionalReduceTypes.get(node);
+                if (!previous || !typeEquals(previous, result)) {
+                  this.runtimeOptionalReduceTypes.set(node, result);
+                  changed = true;
+                }
               }
             }
           }

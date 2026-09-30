@@ -1,4 +1,4 @@
-import { AstDecodeError, AstMsgpackReader, astBounds, astI32, astU32, decodeAstString } from "./ast-bytes.js";
+import { AstDecodeError, AstMsgpackReader, astBounds, astU32, decodeAstString } from "./ast-bytes.js";
 import {
   AstKind, HEADER_OFFSET_EXTENDED_DATA, HEADER_OFFSET_HASH_HI0, HEADER_OFFSET_HASH_HI1,
   HEADER_OFFSET_HASH_LO0, HEADER_OFFSET_HASH_LO1, HEADER_OFFSET_METADATA, HEADER_OFFSET_NODES,
@@ -64,10 +64,12 @@ export class AstWireFile {
   private readonly extended: number;
   private readonly structured: number;
   private readonly nodes: number;
+  private readonly view: DataView;
   private readonly stringCache = new Map<number, string>();
 
   constructor(private readonly bytes: Uint8Array) {
     astBounds(bytes, 0, HEADER_SIZE);
+    this.view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const metadata = astU32(bytes, HEADER_OFFSET_METADATA);
     if ((metadata >>> 24) !== PROTOCOL_VERSION) throw new AstDecodeError(`unsupported protocol version ${metadata >>> 24}`);
     this.stringOffsets = astU32(bytes, HEADER_OFFSET_STRING_TABLE_OFFSETS);
@@ -104,20 +106,23 @@ export class AstWireFile {
     return this.nodes + index * NODE_LEN;
   }
 
-  kind(index: number): number { return astU32(this.bytes, this.nodeOffset(index) + NODE_OFFSET_KIND); }
-  pos(index: number): number { return astI32(this.bytes, this.nodeOffset(index) + NODE_OFFSET_POS); }
-  end(index: number): number { return astI32(this.bytes, this.nodeOffset(index) + NODE_OFFSET_END); }
-  flags(index: number): number { return astU32(this.bytes, this.nodeOffset(index) + NODE_OFFSET_FLAGS); }
-  data(index: number): number { return astU32(this.bytes, this.nodeOffset(index) + NODE_OFFSET_DATA); }
+  // The constructor validates the complete fixed-width node table, and
+  // nodeOffset validates its index. Read each word in one operation while
+  // preserving little-endian decoding even in an unaligned byte view.
+  kind(index: number): number { return this.view.getUint32(this.nodeOffset(index) + NODE_OFFSET_KIND, true); }
+  pos(index: number): number { return this.view.getInt32(this.nodeOffset(index) + NODE_OFFSET_POS, true); }
+  end(index: number): number { return this.view.getInt32(this.nodeOffset(index) + NODE_OFFSET_END, true); }
+  flags(index: number): number { return this.view.getUint32(this.nodeOffset(index) + NODE_OFFSET_FLAGS, true); }
+  data(index: number): number { return this.view.getUint32(this.nodeOffset(index) + NODE_OFFSET_DATA, true); }
 
   next(index: number): number {
-    const next = astU32(this.bytes, this.nodeOffset(index) + NODE_OFFSET_NEXT);
+    const next = this.view.getUint32(this.nodeOffset(index) + NODE_OFFSET_NEXT, true);
     if (next !== 0 && (next <= index || next >= this.nodeCount)) throw new AstDecodeError("invalid sibling link");
     return next;
   }
 
   parent(index: number): number {
-    const parent = astU32(this.bytes, this.nodeOffset(index) + NODE_OFFSET_PARENT);
+    const parent = this.view.getUint32(this.nodeOffset(index) + NODE_OFFSET_PARENT, true);
     if (parent >= this.nodeCount || (index <= 1 ? parent > index : parent >= index)) throw new AstDecodeError("invalid parent link");
     return parent;
   }
