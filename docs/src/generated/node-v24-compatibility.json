@@ -410,9 +410,9 @@
       "apiEntries": 461,
       "static": {
         "supported": 0,
-        "partial": 0,
+        "partial": 3,
         "refused": 0,
-        "not-implemented": 461,
+        "not-implemented": 458,
         "by-design": 0,
         "unreviewed": 0,
         "not-applicable": 0
@@ -842,9 +842,9 @@
       "apiEntries": 119,
       "static": {
         "supported": 0,
-        "partial": 33,
+        "partial": 35,
         "refused": 0,
-        "not-implemented": 86,
+        "not-implemented": 84,
         "by-design": 0,
         "unreviewed": 0,
         "not-applicable": 0
@@ -21934,7 +21934,7 @@
       "anchor": "",
       "nodeStability": null,
       "static": {
-        "status": "not-implemented",
+        "status": "partial",
         "detail": "Derived from the exact API rows in this chapter.",
         "verification": "derived"
       },
@@ -22003,9 +22003,9 @@
       "anchor": "class-error",
       "nodeStability": null,
       "static": {
-        "status": "not-implemented",
-        "detail": "No static compiler lowering is registered for this API yet.",
-        "verification": "registry-gap"
+        "status": "partial",
+        "detail": "Numeric limits control the frames captured by newly created native errors.",
+        "verification": "test-backed"
       },
       "dynamic": {
         "status": "not-implemented",
@@ -22095,9 +22095,9 @@
       "anchor": "class-error",
       "nodeStability": null,
       "static": {
-        "status": "not-implemented",
-        "detail": "No static compiler lowering is registered for this API yet.",
-        "verification": "registry-gap"
+        "status": "partial",
+        "detail": "Native errors capture synchronous source frames; V8 stack customization and async stack stitching remain unsupported.",
+        "verification": "test-backed"
       },
       "dynamic": {
         "status": "not-implemented",
@@ -65824,9 +65824,9 @@
         "inherited": false
       },
       "static": {
-        "status": "not-implemented",
-        "detail": "No static compiler lowering is registered for this API yet.",
-        "verification": "registry-gap"
+        "status": "partial",
+        "detail": "Native monotonic clock supports tuple and bigint results, including stored JavaScript callable values.",
+        "verification": "test-backed"
       },
       "dynamic": {
         "status": "partial",
@@ -65847,9 +65847,9 @@
       "anchor": "processhrtimebigint",
       "nodeStability": null,
       "static": {
-        "status": "not-implemented",
-        "detail": "No static compiler lowering is registered for this API yet.",
-        "verification": "registry-gap"
+        "status": "partial",
+        "detail": "Native monotonic clock supports tuple and bigint results, including stored JavaScript callable values.",
+        "verification": "test-backed"
       },
       "dynamic": {
         "status": "not-implemented",

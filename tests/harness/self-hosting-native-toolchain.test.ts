@@ -51,7 +51,7 @@ for (const backend of ["llvm"] as const) {
         schema: "scriptc.runtime-pack.v1", format: 1, package: target.runtimePackPackage, version: "1.2.3",
         target: { name: target.name, llvm_triple: target.llvmTriple, architecture: target.architecture,
           object_format: target.objectFormat, minimum_os: target.minimumOs },
-        runtime_abi: { version: 4, marker: "scr_runtime_abi_v4" },
+        runtime_abi: { version: 5, marker: "scr_runtime_abi_v5" },
         compiler: { command: "fixture", identity: "fixture", target: target.llvmTriple },
         macros: { executable: [], excluded: [], sanitizer: "external-toolchain-required" },
         flavors: { release: { optimization: "-O2", runtime_units: units }, dev: { optimization: "-O0", runtime_units: units } },

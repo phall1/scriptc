@@ -309,12 +309,13 @@ export function emitArrIntrinsic(host: LlvmEmitterContext, e: IrExpr & { kind: "
       }
       case "pop":
       case "shift": {
-        if (e.type.kind !== "union") throw new InternalCompilerError("llvm emitter bug: array removal result is not a union");
-        const def = host.unionsById.get(e.type.unionId);
+        const dynamic = elem.kind === "dyn" && e.type.kind === "dyn";
+        if (!dynamic && e.type.kind !== "union") throw new InternalCompilerError("llvm emitter bug: array removal result is not a union");
+        const def = e.type.kind === "union" ? host.unionsById.get(e.type.unionId) : undefined;
         const tag = def ? def.arms.findIndex((arm) => typeEquals(arm, elem)) : -1;
         const undefTag = undefinedArmTag(e.type, host.unionsById);
         const sameUnion = elem.kind === "union" && typeEquals(elem, e.type);
-        if ((!sameUnion && tag < 0) || undefTag < 0) throw new InternalCompilerError("llvm emitter bug: array removal union lacks its arms");
+        if (!dynamic && ((!sameUnion && tag < 0) || undefTag < 0)) throw new InternalCompilerError("llvm emitter bug: array removal union lacks its arms");
         host.declare(`declare zeroext i8 @scr_arr_${method}_state(ptr, ptr)`);
         const rawSlot = B.slot();
         const resultSlot = B.slot();
@@ -335,10 +336,17 @@ export function emitArrIntrinsic(host: LlvmEmitterContext, e: IrExpr & { kind: "
         if (elem.kind === "f64") B.line(`${value} = bitcast i64 ${raw} to double`);
         else if (elem.kind === "bool") B.line(`${value} = icmp ne i64 ${raw}, 0`);
         else B.line(`${value} = inttoptr i64 ${raw} to ptr`);
-        B.line(`store ptr ${sameUnion ? value : host.unionNewOwned(tag, { name: value, type: elem })}, ptr ${resultSlot}`);
+        B.line(`store ptr ${dynamic || sameUnion ? value : host.unionNewOwned(tag, { name: value, type: elem })}, ptr ${resultSlot}`);
         B.br(lj);
         B.startBlock(la);
-        B.line(`store ptr ${host.unitInstanceRef(e.type.unionId, undefTag)}, ptr ${resultSlot}`);
+        if (dynamic) {
+          host.declare(`declare ptr @scr_dyn_undefined()`);
+          const absent = B.tmp();
+          B.line(`${absent} = call ptr @scr_dyn_undefined()`);
+          B.line(`store ptr ${absent}, ptr ${resultSlot}`);
+        } else if (e.type.kind === "union") {
+          B.line(`store ptr ${host.unitInstanceRef(e.type.unionId, undefTag)}, ptr ${resultSlot}`);
+        }
         B.br(lj);
         B.startBlock(lj);
         const out = B.tmp();

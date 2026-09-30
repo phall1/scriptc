@@ -20,6 +20,8 @@ export class BlockBuilder {
   private tempCounter = 0;
   private labelCounter = 0;
   debugLocation: string | null = null;
+  /** Function epilogue shared by normal and exceptional returns. */
+  returnEpilogue: string | null = null;
 
   constructor() {
     this.cur = { label: "entry", lines: [], term: null };
@@ -66,7 +68,10 @@ export class BlockBuilder {
   }
 
   terminate(s: string): void {
-    if (this.cur.term === null) this.cur.term = `  ${this.withDebugLocation(s)}`;
+    if (this.cur.term === null) {
+      if (this.returnEpilogue && s.startsWith("ret ")) this.line(this.returnEpilogue);
+      this.cur.term = `  ${this.withDebugLocation(s)}`;
+    }
   }
 
   br(label: string): void {

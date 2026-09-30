@@ -8,8 +8,8 @@
     "tiers": {
       "static": {
         "replace-refusal": 47,
-        "verify-gap": 2562,
-        "audit-partial": 603,
+        "verify-gap": 2558,
+        "audit-partial": 607,
         "classify": 2,
         "implement": 81
       },
@@ -8290,6 +8290,7 @@
             "tests/corpus/1460-console-error-warn.ts",
             "tests/corpus/2440-console-inspect-args.ts",
             "tests/corpus/2631-create-require/main.ts",
+            "tests/corpus/console-native-value.js",
             "tests/harness/npm-static.test.ts"
           ]
         },
@@ -8398,6 +8399,7 @@
             "tests/corpus/1460-console-error-warn.ts",
             "tests/corpus/2440-console-inspect-args.ts",
             "tests/corpus/2631-create-require/main.ts",
+            "tests/corpus/console-native-value.js",
             "tests/harness/npm-static.test.ts"
           ]
         },
@@ -8541,6 +8543,7 @@
             "tests/corpus/1460-console-error-warn.ts",
             "tests/corpus/2440-console-inspect-args.ts",
             "tests/corpus/2631-create-require/main.ts",
+            "tests/corpus/console-native-value.js",
             "tests/harness/npm-static.test.ts"
           ]
         },
@@ -8581,6 +8584,7 @@
             "tests/corpus/1460-console-error-warn.ts",
             "tests/corpus/2440-console-inspect-args.ts",
             "tests/corpus/2631-create-require/main.ts",
+            "tests/corpus/console-native-value.js",
             "tests/harness/npm-static.test.ts"
           ]
         },
@@ -8794,6 +8798,7 @@
             "tests/corpus/1460-console-error-warn.ts",
             "tests/corpus/2440-console-inspect-args.ts",
             "tests/corpus/2631-create-require/main.ts",
+            "tests/corpus/console-native-value.js",
             "tests/harness/npm-static.test.ts"
           ]
         },
@@ -18109,12 +18114,14 @@
       "priority": "normal",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:errors",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "compiler-feature:errors.stackTraceLimit",
+          "tests": [
+            "tests/corpus/error-stack-limit.ts"
+          ]
         },
         "dynamic": {
           "status": "not-implemented",
@@ -18221,12 +18228,15 @@
       "priority": "normal",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:errors",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "compiler-feature:errors.stack",
+          "tests": [
+            "tests/corpus/error-stack-frames.ts",
+            "tests/corpus/error-stack-limit.ts"
+          ]
         },
         "dynamic": {
           "status": "not-implemented",
@@ -71477,12 +71487,14 @@
       "priority": "low",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:process",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "compiler-feature:process.process.hrtime",
+          "tests": [
+            "tests/corpus/process-hrtime.js"
+          ]
         },
         "dynamic": {
           "status": "partial",
@@ -71507,12 +71519,14 @@
       "priority": "normal",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:process",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "compiler-feature:process.process.hrtime.bigint",
+          "tests": [
+            "tests/corpus/process-hrtime.js"
+          ]
         },
         "dynamic": {
           "status": "not-implemented",

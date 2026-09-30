@@ -35,7 +35,7 @@ function absoluteCommand(command: string): string {
 test("the production CLI relocates, builds programs, and rebuilds itself with Node unavailable", async () => {
   const directory = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-native-bootstrap-"));
   const executable = (name: string) => join(directory, name + (process.platform === "win32" ? ".exe" : ""));
-  const options = { cwd: root, timeout: 1_800_000, maxBuffer: 16 * 1024 * 1024 };
+  const options = { cwd: root, timeout: sanitize ? 5_400_000 : 1_800_000, maxBuffer: 16 * 1024 * 1024 };
   try {
     const distribution = join(directory, "distribution");
     await bootstrapStep("build production CLI seed", () =>
@@ -258,4 +258,4 @@ test("the production CLI relocates, builds programs, and rebuilds itself with No
       expect(withoutAbiCheck(seedLlvm) === withoutAbiCheck(rebuiltLlvm), "native compiler generations must emit identical LLVM").toBe(true);
     }
   } finally { rmSync(directory, { recursive: true, force: true }); }
-}, 5_400_000);
+}, sanitize ? 10_800_000 : 5_400_000);

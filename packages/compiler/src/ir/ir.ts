@@ -1136,8 +1136,10 @@ export interface IrClassDef {
   name: string;
   /** Present for a class evaluated inside a function. Each evaluation owns
    * fresh identity and these shared binding boxes; instance layouts carry a
-   * private class-object pointer before their source fields. */
+   * private class-object pointer after their source fields. */
   localCaptures?: IrParam[];
+  /** Capture holding the evaluated local base constructor, if any. */
+  localBaseCapture?: number;
   /** The JS-observable `.name` of the class (the runtime class object's
    * name string, and what `C.name` folds to). Differs from `name` because
    * IR names are program-qualified (`%m1.C`, `%cx…` for class
@@ -1396,6 +1398,10 @@ export interface IrFunction {
    * type). `async` alongside this field marks an async generator: its
    * resume methods queue requests and return promises. */
   generator?: { yieldT: IrType; nextT: IrType; resultType: IrType & { kind: "record" } };
+  /** Source function name for native error stack frames. */
+  sourceName?: string;
+  /** Ordinary authored function declarations/expressions own a prototype. */
+  ownsPrototype?: true;
   body: IrStmt[];
   loc: SrcLoc;
 }
@@ -2078,6 +2084,7 @@ export type IrLibFn =
   | "json.parse"
   | "json.parseReviver"
   | "json.stringifyReplacer"
+  | "json.stringifyValue"
   /** Keyed WRITE on a dyn value — `h.onDone = cb` / `h["k"] = v` on a
    * checked-dynamic object (args: receiver, key string, value — all
    * borrowed; the runtime copies the key and retains the value in). An
@@ -2094,6 +2101,10 @@ export type IrLibFn =
   /** Delete an ordinary checked-native object's own key. Borrows both
    * arguments; other receiver representations retain a runtime refusal. */
   | "dyn.keyDelete"
+  | "dyn.keyDeleteComputed"
+  | "dyn.hasKeyComputed"
+  | "dyn.hasOwnComputed"
+  | "dyn.propertyIsEnumerableComputed"
   /** Native own properties on globalThis keyed by symbol identity. */
   | "dyn.globalSymbolGet"
   | "dyn.globalSymbolSet"
@@ -2111,6 +2122,9 @@ export type IrLibFn =
    * not iterable (cannot read property Symbol(Symbol.iterator))"). In the
    * may-throw seed set. */
   | "dyn.iterPack"
+  | "dyn.arrayFromIterator"
+  | "dyn.iterator"
+  | "dyn.iteratorResult"
   | "dyn.mapSeedEntries"
   | "dyn.mapSeedEntry"
   /** The for-of-over-dyn pack accessors — the emitted index loop drives
@@ -2148,7 +2162,11 @@ export type IrLibFn =
   | "dyn.isFrozen"
   | "dyn.nativeSetNew"
   | "dyn.nativeSetIs"
+  | "dyn.nativeMapIs"
   | "dyn.nativeUrlIs"
+  | "dyn.nativeDateIs"
+  | "date.nativeNew"
+  | "date.checkedValue"
   | "dyn.nativeRegexIs"
   /** toString() on a checked-dynamic receiver: runtime kind dispatch
    * (bytes decode per the literal encoding — utf8 default; strings,
@@ -2520,6 +2538,7 @@ export type IrLibFn =
   | "sym.new"
   | "sym.newAnon"
   | "sym.for"
+  | "sym.wellKnown"
   | "sym.keyFor"
   | "sym.desc"
   | "sym.toString"
@@ -3654,6 +3673,7 @@ export type IrLibFn =
   | "process.builtinId"
   | "process.builtinModule"
   | "process.builtinUnsupported"
+  | "process.hrtimeValue"
   /** process.versions.node: the runtime's Node COMPATIBILITY TARGET —
    * there is no Node under the binary, so this reports the version whose
    * semantics the runtime implements (SEMANTICS.md divergence 60, the
@@ -3880,6 +3900,10 @@ export type IrLibFn =
    * render "null"/"undefined") — the WHATWG USVString conversions
    * (URLSearchParams names/values). Borrowed dyn; +1 string. May-throw. */
   | "dyn.toStringCoerce"
+  | "dyn.stringConstructor"
+  | "dyn.propertyKey"
+  | "dyn.toNumeric"
+  | "dyn.increment"
   /** JS ToNumber over a dyn value WITH the object protocol (number-hint
    * valueOf/toString ordering; user throws propagate). Borrowed dyn;
    * f64 result, or a throw. Used by statically lowered numeric coercions
@@ -3887,6 +3911,8 @@ export type IrLibFn =
   | "dyn.numberConstructor"
   | "dyn.toNumberCoerce"
   | "dyn.add"
+  | "dyn.arithmetic"
+  | "dyn.bitwise"
   | "dyn.proxyNew"
   /** A read of a `declare`d const NOTHING defines (the bundler-define
    * pattern — __VERSION__): always throws the catchable ReferenceError
@@ -3896,6 +3922,7 @@ export type IrLibFn =
   | "global.undefRead"
   /** A native reference to the global object; known names retain value fences. */
   | "global.native"
+  | "console.native"
   /** `X.name` through a class VALUE (scr_object.c): args[0] is a borrowed
    * classval; the result is the class object's stored .name string,
    * retained (+1 — the string is an interned immortal, so the retain is a
@@ -3904,6 +3931,9 @@ export type IrLibFn =
   | "class.name"
   | "error.ctor"
   | "error.toString"
+  | "error.stack"
+  | "error.stackLimitGet"
+  | "error.stackLimitSet"
   /** `new DOMException(message?, nameOrOptions?)` (scr_error.c): both args
    * are borrowed dyn values (the lowering passes the dyn undefined for an
    * absent argument, so WebIDL's optionality lives in one place). The
@@ -3981,11 +4011,17 @@ export type IrLibFn =
    * and deepStrictEqual's prototype gate. Never throws. Static builds
    * only; --dynamic routes Object.create through the engine instead. */
   | "dyn.objCreateNullProto"
+  | "dyn.arrayPrototype"
+  | "dyn.classPrototype"
+  | "dyn.classBasePrototype"
+  | "dyn.classSuper"
+  | "dyn.assignPrototype"
   | "dyn.objCreate"
   | "dyn.objCreateWithProperties"
   | "dyn.getPrototype"
   | "dyn.setPrototype"
   | "dyn.getOwnPropertyNames"
+  | "dyn.getOwnPropertySymbols"
   | "dyn.getOwnPropertyDescriptors"
   | "dyn.preventExtensions"
   | "dyn.isExtensible"
@@ -5161,7 +5197,7 @@ export type IrExpr =
    * through finally blocks but must NOT be taken by catch handlers
    * (backends emit a sentinel re-unwind prologue at catch entry inside
    * generator bodies; scr_exc_genret_pending answers it). */
-  | { kind: "yieldExpr"; value: IrExpr | null; awaited?: true; type: IrType; loc: SrcLoc }
+  | { kind: "yieldExpr"; value: IrExpr | null; awaited?: true; captureCompletion?: { returnType: IrType }; type: IrType; loc: SrcLoc }
   /** One consumer resume of a generator: `g.next(arg)`, `g.return(arg)`,
    * `g.throw(arg)`, and the for-of/yield* desugars. `gen` is a borrowed
    * generator-typed temp. `arg` is the sent value (moves in): next's
@@ -5441,7 +5477,7 @@ export type IrExpr =
    * "function"` — true exactly for the checked-dynamic tree's function kind (boxed
    * closures); function values are truthy and answer FALSE to the
    * `"object"` test, JS-exact. */
-  | { kind: "dynTest"; test: "promise" | "bigint" | "string" | "number" | "boolean" | "undefined" | "null" | "nullish" | "bytes" | "buffer" | "object" | "array" | "truthy" | "error" | "function"; bytesElem?: IrBytesElem; negated?: true; value: IrExpr; type: IrType; loc: SrcLoc }
+  | { kind: "dynTest"; test: "promise" | "bigint" | "symbol" | "string" | "number" | "boolean" | "undefined" | "null" | "nullish" | "bytes" | "buffer" | "object" | "array" | "truthy" | "error" | "function"; bytesElem?: IrBytesElem; negated?: true; value: IrExpr; type: IrType; loc: SrcLoc }
   /** Keyed read on a dyn value — `pkg.name` / `pkg["k"]` / the
    * `pkg?.scripts` chain step on a JSON.parse result. `key` is
    * string-typed (a strLit for the dot form); `type` is always dyn. An
@@ -5483,12 +5519,12 @@ export type IrExpr =
    * forms whose statement lowering needs temps and writes (destructuring
    * assignments in value position, keyed dyn writes yielding the RHS).
    * `type` IS result's type. Restricted on purpose: stmts must be
-   * local statements (including state-selection blocks/ifs, but no jumps;
+   * local statements (including blocks, branches, and loops, but no jumps;
    * the validator enforces the subset). Hidden locals retain function-wide
    * ids, but their owned values live through the enclosing expression's
    * frame: later call arguments may reuse a saved operand. Release them
    * on the same path that initialized them, not an outer lexical scope. */
-  | { kind: "seqExpr"; stmts: IrStmt[]; result: IrExpr; type: IrType; loc: SrcLoc }
+  | { kind: "seqExpr"; stmts: IrStmt[]; result: IrExpr; generatorDelegate?: true; type: IrType; loc: SrcLoc }
   /** RequireObjectCoercible with V8's destructuring TypeError: throws
    * "Cannot destructure 'SPELLING' as it is undefined." (or "…null.") on
    * a nullish value — the property form "Cannot destructure property
@@ -6276,6 +6312,7 @@ export function canConvertToDyn(
   // listener boundary (a mustCall-wrapped handler receiving the payload).
   if (t.kind === "object" && t.className === "%Error") return true;
   if (isDynTypedRefType(t)) return true;
+  if (t.kind === "generator") return true;
   if (t.kind === "classval") return true;
   if (t.kind === "func") return canBoxFuncIntoDyn(t, getRecord, getUnion);
   if (DYN_HANDLE_KINDS.has(t.kind)) return true;
@@ -6323,6 +6360,7 @@ function canBoxDynComposite(
   switch (t.kind) {
     case "f64":
     case "bigint":
+    case "symbol":
     case "string":
     case "bool":
     case "dyn":
@@ -6334,12 +6372,14 @@ function canBoxDynComposite(
     case "regex":
     case "url":
       return true;
-    case "object":
-      return isDynTypedRefType(t);
     case "func":
       return canBoxFuncIntoDyn(t, getRecord, getUnion);
     case "set":
       return t.elem.kind === "dyn";
+    case "map":
+      return t.key.kind === "dyn" && t.value.kind === "dyn";
+    case "object":
+      return t.className === "%Error" || isDynTypedRefType(t);
     case "array":
       return canBoxDynComposite(t.elem, getRecord, getUnion, visiting);
     case "record": {
@@ -6385,12 +6425,14 @@ export function canDynCheckTo(
   // serializable. Backends already retain dyn fields and fill missing
   // unknown record fields with the undefined value.
   if (isJsonSafeAt(t, getRecord, getUnion, false, false, new Set(), true)) return true;
-  if (t.kind === "bigint" || t.kind === "set" && t.elem.kind === "dyn") return true;
+  if (t.kind === "bigint" || t.kind === "symbol" || t.kind === "set" && t.elem.kind === "dyn") return true;
+  if (t.kind === "map" && t.key.kind === "dyn" && t.value.kind === "dyn") return true;
   if (t.kind === "bytes") return true;
   if (t.kind === "classval") return true;
+  if (t.kind === "generator") return true;
   if (t.kind === "object" && t.className === "%Error") return true;
-  // Native class arrays validate each branded reference, never fabricate
-  // class instances from plain object data.
+  // Native class capsules already support checked extraction at ordinary
+  // boundaries. Callable adapters use the same identity/brand check.
   if (isDynTypedRefType(t)) return true;
   if (t.kind === "array" && isDynTypedRefType(t.elem)) return true;
   if (t.kind === "func") return canAdaptDynFuncTo(t, getRecord, getUnion);
@@ -6444,10 +6486,9 @@ export function canAdaptDynFuncTo(
 ): boolean {
   return (
     t.kind === "func" &&
-    // A variadic (rest-marked) target would need the trailing rest-array
-    // param synthesized by the adapter — no adapter models that; variadic
-    // values live boxed and are called through their own thunks.
-    t.rest !== true &&
+    // Checked rest and arguments packs retain all actual arguments. Typed
+    // and island rest ABIs still require their own conversion plan.
+    (t.rest !== true || t.restAbi === undefined) &&
     t.params.every((p) => p.kind === "dyn" || canConvertToDyn(p, getRecord, getUnion)) &&
     (t.ret.kind === "void" || t.ret.kind === "dyn" || canDynCheckTo(t.ret, getRecord, getUnion))
   );
@@ -6593,9 +6634,9 @@ function scanRuntimeFeatures(mod: IrModule, stopAt?: keyof RuntimeFeatures): Run
       if (fn.startsWith("zlib.")) features.zlib = true;
       if (fn.startsWith("dc.")) features.dc = true;
       if (fn.startsWith("assert.")) features.assert = true;
-      if (fn === "dyn.defineProps" || fn === "dyn.defineProperty" || fn === "dyn.objCreateWithProperties" || fn === "dyn.arrayProtoCall") features.dynInvoke = true;
+      if (fn === "dyn.defineProps" || fn === "dyn.defineProperty" || fn === "dyn.objCreateWithProperties" || fn === "dyn.arrayProtoCall" || fn === "dyn.arrayPrototype") features.dynInvoke = true;
       if (DYN_ASYNC_LIB_FNS.has(fn)) features.dynAsync = true;
-      if (fn.startsWith("insp.")) features.inspect = true;
+      if (fn.startsWith("insp.") || fn === "console.native" || fn === "global.native") features.inspect = true;
       if (fn.startsWith("cp.") || fn.startsWith("child.") || fn.startsWith("writer.") || fn.startsWith("spawnRes.") ||
           fn === "process.forkTarget" || fn === "process.connected" || fn === "process.send" || fn === "process.sendCb" ||
           fn === "process.disconnect" || fn === "process.onMessage" || fn === "process.onDisconnect") features.childProcess = true;
@@ -6606,6 +6647,7 @@ function scanRuntimeFeatures(mod: IrModule, stopAt?: keyof RuntimeFeatures): Run
       }
       if (fn.startsWith("http2.") && !HTTP2_LEGACY_FNS.has(fn)) features.http2 = true;
       if (fn.startsWith("sym.")) features.symbol = true;
+      if (fn === "process.hrtimeValue") features.bigint = true;
       if (fn.startsWith("bigint.")) features.bigint = true;
       if (fn.startsWith("sp.") || fn === "url.searchParams") features.searchParams = true;
       if (fn === "qs.parse" || fn === "qs.stringify" || fn === "qs.unescape") features.qs = true;
@@ -7454,6 +7496,10 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "error.nodeThrow",
   // USVString coercion runs user toString/valueOf — throws propagate.
   "dyn.toStringCoerce",
+  "dyn.stringConstructor",
+  "dyn.propertyKey",
+  "dyn.toNumeric",
+  "dyn.increment",
   // Error messages use the same coercion protocol before installing cause.
   "error.newOptions",
   "error.ctorOptions",
@@ -7465,7 +7511,11 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "dyn.numberConstructor",
   "dyn.toNumberCoerce",
   "dyn.add",
+  "dyn.arithmetic",
+  "dyn.bitwise",
   "dyn.proxyNew",
+  "dyn.classBasePrototype",
+  "dyn.classSuper",
   "dyn.hasKey",
   "child.kill",
   // The caller's lookup runs synchronously inside the connect call — a
@@ -7503,6 +7553,9 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "json.parse",
   "json.parseReviver",
   "json.stringifyReplacer",
+  "json.stringifyValue",
+  "date.nativeNew",
+  "date.checkedValue",
   "util.parseArgs",
   // decodeURIComponent throws the spec's URIError on bad hex/invalid
   // UTF-8 octets (encodeURIComponent never throws — see the IrLibFn doc).
@@ -7541,6 +7594,7 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "dyn.getPrototype",
   "dyn.setPrototype",
   "dyn.getOwnPropertyNames",
+  "dyn.getOwnPropertySymbols",
   "dyn.getOwnPropertyDescriptors",
   "dyn.preventExtensions",
   "dyn.isExtensible",
@@ -7559,8 +7613,15 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "process.builtinModule",
   "process.builtinUnsupported",
   "dyn.keyDelete",
+  "dyn.keyDeleteComputed",
+  "dyn.hasKeyComputed",
+  "dyn.hasOwnComputed",
+  "dyn.propertyIsEnumerableComputed",
   // the destructuring pack throws V8's TypeError on non-iterable dyn kinds
   "dyn.iterPack",
+  "dyn.arrayFromIterator",
+  "dyn.iterator",
+  "dyn.iteratorResult",
   "dyn.mapSeedEntries",
   "dyn.mapSeedEntry",
   "dyn.freeze",

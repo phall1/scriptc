@@ -1008,6 +1008,14 @@ export function isNativeFfiRequire(lowerer: Lowerer, expr: ts.Expression | undef
     return false;
   }
 
+/** Presence probes do not extract an unbound Performance method value. */
+export function lowerPerfHooksTypeof(lowerer: Lowerer, expression: ts.Expression): IrExpr | null {
+  const value = isPerfHooksPerformanceExpr(lowerer, expression) ? "object" :
+    ts.isPropertyAccessExpression(expression) && !expression.questionDotToken && expression.name.text === "now" &&
+    isPerfHooksPerformanceExpr(lowerer, expression.expression) ? "function" : null;
+  return value === null ? null : { kind: "strLit", value, type: STRING, loc: locOf(expression) };
+}
+
 /** The node:perf_hooks spoke: `performance.now()` reads the runtime's
    * monotonic clock anchored at process start — Node's timeOrigin for a
    * compiled program, fractional milliseconds — and
@@ -7055,7 +7063,7 @@ function lowerProcessIpcSend(lowerer: Lowerer, call: ts.CallExpression): IrExpr 
         return { kind: "libCall", fn: "error.domCause", args: [receiver], type: DYN, loc: locOf(expr) };
       }
     }
-    if (expr.name.text !== "code" && expr.name.text !== "cause") return null;
+    if (expr.name.text !== "code" && expr.name.text !== "cause" && expr.name.text !== "stack") return null;
     // Error-rooted classes only — builtin or user subclass (both embed the
     // code and cause slots in their layout prefix).
     let info = lowerer.classes.get(recvT.className) ?? null;
@@ -7065,19 +7073,31 @@ function lowerProcessIpcSend(lowerer: Lowerer, call: ts.CallExpression): IrExpr 
     const receiver = lowerer.lowerExpr(expr.expression);
     return {
       kind: "libCall",
-      fn: expr.name.text === "cause" ? "error.cause" : "error.code",
+      fn: expr.name.text === "stack" ? "error.stack" : expr.name.text === "cause" ? "error.cause" : "error.code",
       args: [receiver],
-      type: expr.name.text === "cause" ? DYN : lowerer.envValueType(),
+      type: expr.name.text === "stack" ? STRING : expr.name.text === "cause" ? DYN : lowerer.envValueType(),
       loc: locOf(expr),
     };
   }
 
-/** `JSON.parse` / `JSON.stringify` referenced without a call: rejected
-   * specifically, like process methods as values. Null for non-JSON
-   * receivers (the property chain keeps trying other lowerings). */
+/** Stored stringify uses the same native serializer and keeps omitted roots
+   * as undefined. Other JSON method values retain a named refusal. */
   export function lowerJsonProperty(lowerer: Lowerer, expr: ts.PropertyAccessExpression): IrExpr | null {
     const member = lowerer.stdlibGlobalMember(expr, "JSON");
     if (member === null) return null;
+    if (member === "stringify") {
+      const loc = locOf(expr);
+      const name = "%builtin.JSON.stringify";
+      if (!lowerer.builtinCallableValueFns.has(name)) {
+        lowerer.builtinCallableValueFns.set(name, name);
+        const params = ["value", "replacer", "space"].map((name) => ({ localId: name, name, type: DYN }));
+        lowerer.liftedFns.push({ name, params, returnType: DYN,
+          locals: params.map((p) => ({ id: p.localId, name: p.name, type: DYN, mutable: false })), loc,
+          body: [{ kind: "return", value: { kind: "libCall", fn: "json.stringifyValue", args: params.map((p) => varRef(p.localId, DYN, loc)), type: DYN, loc }, loc }],
+        });
+      }
+      return { kind: "dynFrom", value: { kind: "closure", fnName: name, captures: [], type: { kind: "func", params: [DYN, DYN, DYN], ret: DYN }, loc }, fnName: "stringify", type: DYN, loc };
+    }
     lowerer.unsupported("SC1090", expr, `JSON methods as values (call '${member}' directly)`);
   }
 
@@ -7187,6 +7207,12 @@ function lowerProcessIpcSend(lowerer: Lowerer, call: ts.CallExpression): IrExpr 
    * rejected specifically. Null for non-process receivers (the chain keeps
    * trying other property lowerings). */
   export function lowerProcessProperty(lowerer: Lowerer, expr: ts.PropertyAccessExpression): IrExpr | null {
+    if (!expr.questionDotToken && expr.name.text === "bigint" && ts.isPropertyAccessExpression(expr.expression) &&
+        lowerer.stdlibGlobalMember(expr.expression, "process") === "hrtime") {
+      const loc = locOf(expr);
+      return { kind: "dynKeyGet", value: { kind: "libCall", fn: "process.hrtimeValue", args: [], type: DYN, loc },
+        key: { kind: "strLit", value: "bigint", type: STRING, loc }, type: DYN, loc };
+    }
     // node and openssl name the compatibility target, not linked engines.
     // Read the stable object so descriptor edits through aliases stay visible.
     if (
@@ -7251,6 +7277,9 @@ function lowerProcessIpcSend(lowerer: Lowerer, call: ts.CallExpression): IrExpr 
     const loc = locOf(expr);
     if (member === "versions") {
       return { kind: "libCall", fn: "process.versions", args: [], type: DYN, loc };
+    }
+    if (member === "hrtime") {
+      return { kind: "libCall", fn: "process.hrtimeValue", args: [], type: DYN, loc };
     }
     if (member === "getBuiltinModule") {
       // Keep the native loader's argument validation when the function is
@@ -7836,6 +7865,12 @@ function lowerProcessIpcSend(lowerer: Lowerer, call: ts.CallExpression): IrExpr 
       }
     }
     const directProcessMember = lowerer.stdlibGlobalMember(access, "process");
+    if (directProcessMember === "hrtime") {
+      if (call.arguments.some(ts.isSpreadElement)) lowerer.noLowering("process.hrtime with spread arguments", call);
+      const loc = locOf(call);
+      return { kind: "dynCall", callee: { kind: "libCall", fn: "process.hrtimeValue", args: [], type: DYN, loc },
+        args: call.arguments.map((arg) => lowerer.lowerExprExpecting(arg, DYN)), calleeName: "process.hrtime", type: DYN, loc };
+    }
     if (directProcessMember === "getBuiltinModule") {
       if (call.arguments.some(ts.isSpreadElement)) lowerer.noLowering("process.getBuiltinModule with spread arguments", call);
       const loc = locOf(call);
@@ -8752,7 +8787,9 @@ const DATE_METHOD_HINT =
     if (call.arguments.length !== 0) {
       lowerer.noLowering(`Date.prototype.${name} with arguments`, call, DATE_METHOD_HINT);
     }
-    const receiver = lowerer.lowerExpr(access.expression);
+    const raw = lowerer.lowerExpr(access.expression);
+    const receiver: IrExpr = raw.type.kind === "dyn"
+      ? { kind: "libCall", fn: "date.checkedValue", args: [raw], type: { kind: "date" }, loc } : raw;
     if (receiver.type.kind !== "date") lowerer.badType(access.expression, lowerer.typeOf(access.expression));
     if (name === "getTime" || name === "valueOf") {
       return {

@@ -747,6 +747,8 @@ ScrStr *scr_insp_dyn(ScrDyn *d, double recurse, double depth) {
       return d->v.b ? scr_str_new("true", 4) : scr_str_new("false", 5);
     case SCR_DYN_BIGINT:
       return scr_bigint_inspect(d->v.bigint);
+    case SCR_DYN_SYMBOL:
+      return d->v.symbol.render(d->v.symbol.value);
     case SCR_DYN_NUM:
       return scr_insp_f64(d->v.num);
     case SCR_DYN_STR:

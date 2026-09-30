@@ -303,6 +303,7 @@ export function emitLibCall(host: LlvmEmitterContext, e: LibCallExpr): LlValue {
       case "rl":
       case "strdec":
         return host.emitIoLibCall(e);
+      case "console":
       case "weakMap":
       case "weakSet":
       case "ffi":

@@ -28,7 +28,7 @@ test("static callback operations validate their complete ABI after serialization
 function localClassModule(): IrModule {
   const self: IrType = { kind: "object", className: "Local" };
   const mod = expressionModule({ kind: "classRef", className: "Local", captures: ["outer"], type: { kind: "classval", className: "Local" }, loc }, []);
-  mod.classes = [{ name: "Local", jsName: "Local", fields: [], localCaptures: [{ localId: "shared", name: "value", type: F64 }], loc }];
+  mod.classes = [{ name: "Local", jsName: "Local", fields: [{ name: "%classEnvironment:Local", type: { kind: "classval", className: "Local" } }], localCaptures: [{ localId: "shared", name: "value", type: F64 }], loc }];
   mod.functions[0]!.locals = [{ id: "outer", name: "value", type: F64, mutable: true, boxed: true }];
   mod.functions.push({
     name: "%Local.constructor", params: [{ localId: "self", name: "this", type: self }],

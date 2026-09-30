@@ -774,6 +774,8 @@ export function dynFallbackType(lowerer: Lowerer, node: ts.Node, t: ts.Type): Ir
   }
   const promise = jsFallbackPromiseType(lowerer, t);
   if (promise) return promise;
+  const generator = jsFallbackGeneratorType(lowerer, t);
+  if (generator) return generator;
   const symbol = t.getSymbol();
   if ((symbol?.name === "Map" || symbol?.name === "ReadonlyMap") && lowerer.isStdlibSymbol(symbol)) {
     const args = lowerer.checker.getTypeArguments(t as ts.TypeReference);
@@ -857,6 +859,23 @@ function jsFallbackPromiseType(lowerer: Lowerer, t: ts.Type): IrType | null {
   return inner ? { kind: "promise", inner: lowerer.mapTypeOf(inner) ?? DYN } : null;
 }
 
+/** An inferred generator with channels outside the typed result union
+ * keeps its fiber ABI and carries yielded/resumed values as checked values. */
+function jsFallbackGeneratorType(lowerer: Lowerer, t: ts.Type): IrType | null {
+  const symbol = t.getSymbol();
+  if (!symbol || !["Generator", "AsyncGenerator", "IterableIterator"].includes(symbol.name) ||
+      !lowerer.isStdlibSymbol(symbol)) return null;
+  const [yielded, returned, resumed] = lowerer.checker.getTypeArguments(t as ts.TypeReference);
+  const unit = ts.TypeFlags.Void | ts.TypeFlags.Undefined | ts.TypeFlags.Never;
+  return {
+    kind: "generator",
+    ...(symbol.name === "AsyncGenerator" ? { async: true as const } : {}),
+    yieldT: yielded && yielded.flags & ts.TypeFlags.Never ? VOID : DYN,
+    retT: !returned || returned.flags & unit ? VOID : DYN,
+    nextT: !resumed || resumed.flags & unit ? UNDEFINED_T : DYN,
+  };
+}
+
 function jsFallbackFunctionType(lowerer: Lowerer, node: ts.Node, t: ts.Type): IrType | null {
   const sig = pureSingleCallSignatureOf(lowerer, t);
   if (!sig) return null;
@@ -890,31 +909,31 @@ function jsFallbackFunctionType(lowerer: Lowerer, node: ts.Node, t: ts.Type): Ir
   const jsUnitReturn = sigDecl !== undefined && isJsSourceFile(sigDecl.getSourceFile()) &&
     (retT.flags & (ts.TypeFlags.Null | ts.TypeFlags.Undefined)) !== 0;
   const ret: IrType = jsUnitReturn ? DYN : retT.flags & ts.TypeFlags.Void ? VOID
-    : lowerer.mapTypeOf(retT) ?? jsFallbackPromiseType(lowerer, retT) ?? DYN;
+    : lowerer.mapTypeOf(retT) ?? jsFallbackPromiseType(lowerer, retT) ?? jsFallbackGeneratorType(lowerer, retT) ?? DYN;
   return { kind: "func", params, ret };
 }
 
-/** A JavaScript `arguments` reader has the spelled parameters plus a hidden
- * array of all supplied arguments in the native ABI. Recover that ABI from
- * the implementation when the function flows through a value binding. */
+/** Recover a JavaScript variadic callable's native ABI from its declaration.
+ * Rest parameters and an implicit `arguments` array must keep their packing
+ * convention when the function flows through a value or an export. */
 function jsArgumentsFunctionType(lowerer: Lowerer, t: ts.Type): IrType | null {
   if (!(t.flags & ts.TypeFlags.Object)) return null;
   const sigs = lowerer.checker.getCallSignatures(t);
   if (sigs.length !== 1 || sigs[0]!.getTypeParameters().length !== 0 || lowerer.checker.getConstructSignatures(t).length !== 0 || lowerer.checker.getPropertiesOfType(t).length !== 0) return null;
   const decl = lowerer.checker.signatureDeclaration(sigs[0]!);
   if (
-    decl === undefined || !(ts.isFunctionDeclaration(decl) || ts.isFunctionExpression(decl)) ||
-    !isJsSourceFile(decl.getSourceFile()) || !isNodeEsmFile(decl.getSourceFile(), lowerer.program) ||
-    decl.parameters.length === 0 ||
-    decl.parameters.some((p) => p.dotDotDotToken !== undefined) ||
-    !bodyReadsArguments(decl)
+    decl === undefined || !(ts.isFunctionDeclaration(decl) || ts.isFunctionExpression(decl) || ts.isArrowFunction(decl)) ||
+    !isJsSourceFile(decl.getSourceFile())
   ) return null;
+  const hasRest = decl.parameters.some((p) => p.dotDotDotToken !== undefined);
+  if (!hasRest && (ts.isArrowFunction(decl) || !bodyReadsArguments(decl) ||
+      decl.parameters.length > 0 && !isNodeEsmFile(decl.getSourceFile(), lowerer.program))) return null;
   const shapes = paramShapes(lowerer, decl.parameters);
   const retType = lowerer.checker.getReturnTypeOfSignature(sigs[0]!);
   const ret = retType.flags & (ts.TypeFlags.Null | ts.TypeFlags.Undefined)
     ? DYN
     : retType.flags & ts.TypeFlags.Void ? VOID : lowerer.mapTypeOf(retType) ?? DYN;
-  return funcTypeFromParamShapes([...shapes, { type: DYN, mode: "arguments" }], ret);
+  return funcTypeFromParamShapes(hasRest ? shapes : [...shapes, { type: DYN, mode: "arguments" }], ret);
 }
 
 /** The one call signature of a PURE function type — single signature, no
@@ -1806,6 +1825,9 @@ export class Lowerer {
   // top level, top = the innermost nested function currently lowering).
   fnStack: FnCtx[] = [];
   readonly liftedFns: IrFunction[] = [];
+  /** One Error-method helper belongs to this lowering session. Its cached
+   * dispatch revision needs no weak-key identity or process-global state. */
+  errorMethodDispatchRevision: string | null = null;
   lambdaCounter = 0;
 
   /** Statement lists currently mid-lowering, innermost last: the forward-
@@ -2050,7 +2072,12 @@ export class Lowerer {
    * program-unique through the file qualifier, and collision-free with
    * user identifiers ('%'). */
   readonly classNamer = (decl: ts.ClassLikeDeclaration): string => {
-    const name = ts.isClassExpression(decl)
+    const name = ts.isClassExpression(decl) || (() => {
+      for (let parent: ts.Node | undefined = decl.parent; parent && !ts.isSourceFile(parent); parent = parent.parent) {
+        if (ts.isFunctionLike(parent)) return true;
+      }
+      return false;
+    })()
       ? this.qualify(decl.getSourceFile(), `%cx${decl.getStart()}.${decl.name?.text ?? ""}`)
       : this.qualify(decl.getSourceFile(), nsPathPrefix(decl) + (decl.name ? decl.name.text : "%anon"));
     for (let index = this.localClassInstantiations.length - 1; index >= 0; index--) {
@@ -4275,7 +4302,7 @@ export class Lowerer {
     // turn queue more instances. Continue to the joint fixpoint; the initial
     // queue above is the only portion whose discovery order differed from
     // historical emit order.
-    const classDispatch = new ClassDynamicDispatch();
+    const classDispatch = new ClassDynamicDispatch(extraRoots !== undefined);
     for (;;) {
       drainInstances();
       const dispatchChanged = classDispatch.process(this, [
@@ -4862,7 +4889,7 @@ export class Lowerer {
    * retains interface-view substitutions while sharing ABI normalization. */
   mapTypeOf(t: ts.Type, mapper?: (type: ts.Type) => IrType | null): IrType | null {
     const mapped = mapper ? mapper(t) : mapType(t, this.typeCtx);
-    return mapped?.kind === "func" ? jsArgumentsFunctionType(this, t) ?? mapped : mapped;
+    return mapped === null || mapped.kind === "func" ? jsArgumentsFunctionType(this, t) ?? mapped : mapped;
   }
 
   /** The one position where a contextual UNION must not be adopted over the
@@ -8093,6 +8120,12 @@ export class Lowerer {
     if (expected?.kind === "dyn") {
       let x: ts.Expression = node;
       while (ts.isParenthesizedExpression(x)) x = x.expression;
+      // A fresh dense array entering a checked slot has no typed aliases.
+      // Construct its actual storage here so identity and WeakMap lifetime
+      // belong to the array the program keeps, rather than a typed snapshot.
+      if (ts.isArrayLiteralExpression(x) && x.elements.every((element) => !ts.isSpreadElement(element) && !ts.isOmittedExpression(element))) {
+        return { kind: "dynArrLit", elems: x.elements.map((element) => this.lowerExprExpecting(element, DYN)), type: DYN, loc: locOf(x) };
+      }
       const contextual = this.checker.getContextualType(x);
       const widened = contextual ? this.checker.getBaseTypeOfLiteralType(contextual) : undefined;
       const parts = widened?.isUnionType() ? ts.constituentTypes(widened) : widened ? [widened] : [];
@@ -8596,11 +8629,11 @@ export class Lowerer {
     return collectClassShapeInner(this, decl, jsNameOverride, inst, mixin);
   }
 
-  lowerClassExpressionInfo(expr: ts.ClassExpression): ClassInfo {
+  lowerClassExpressionInfo(expr: ts.ClassLikeDeclaration): ClassInfo {
     return lowerClassExpressionInfo(this, expr);
   }
 
-  lowerClassExpression(expr: ts.ClassExpression): IrExpr {
+  lowerClassExpression(expr: ts.ClassLikeDeclaration): IrExpr {
     return lowerClassExpression(this, expr);
   }
 
@@ -8649,7 +8682,7 @@ export class Lowerer {
   readonly exprClassInfoByName = new Map<string, ClassInfo>();
   /** Class expressions whose collection is IN FLIGHT — the reentrancy
    * guard for heritage-demanded collection (lowerClassExpressionInfo). */
-  readonly collectingExprClasses = new Set<ts.ClassExpression>();
+  readonly collectingExprClasses = new Set<ts.ClassLikeDeclaration>();
   /** Static-init statements of class expressions inside the statement
    * currently lowering — lowerFileInit drains the buffer immediately
    * BEFORE that statement (JS's order for the supported whole-initializer

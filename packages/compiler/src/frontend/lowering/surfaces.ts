@@ -7,14 +7,11 @@
 import * as ts from "../ts7/adapter.js";
 import type { Lowerer } from "./lowerer.js";
 import { UNSUPPORTED } from "../../diagnostics/diagnostic.js";
-import { BOOL, BYTES_U8, CHILD_T, CRYPTOHASH_T, CRYPTOHMAC_T, DYN, F64, FILEHANDLE_T, type IrExpr, type IrLibFn, type IrStrIntrinsicMethod, type IrType, RUNTIME_ERROR_CLASSES, SPAWNRES_T, STATS_T, STRING, URL_T, VOID, arrayOf } from "../../ir/ir.js";
+import { BOOL, BYTES_U8, CHILD_T, CRYPTOHASH_T, CRYPTOHMAC_T, DYN, F64, FILEHANDLE_T, type IrExpr, type IrLibFn, type IrStrIntrinsicMethod, type IrType, SPAWNRES_T, STATS_T, STRING, URL_T, VOID, arrayOf } from "../../ir/ir.js";
 import { isJsSourceFile, isNodeTypesPath, requireSpecOf } from "../program.js";
 
 /** Statement-level constructs rejected wholesale, keyed by syntax kind. */
 export const UNSUPPORTED_STMT: Partial<Record<ts.SyntaxKind, { code: keyof typeof UNSUPPORTED; feature?: string }>> = {
-  // Top-level ClassDeclarations are supported (collected in run()); one
-  // reaching lowerStmt is nested inside a function.
-  [ts.SyntaxKind.ClassDeclaration]: { code: "SC1090", feature: "class declarations inside functions" },
   // DoStatement / SwitchStatement are supported; handled in lowerStmt.
   // ForOfStatement is supported (arrays); handled in lowerStmt.
   // ThrowStatement / TryStatement are supported (exceptions); handled in
@@ -637,6 +634,8 @@ export const OBJECT_CALLABLE_VALUES: Record<string, BuiltinModuleFn | undefined>
   keys: { fn: "dyn.objKeys", params: [DYN], result: DYN, valueParams: exactValueParams(DYN) },
   values: { fn: "dyn.objValues", params: [DYN], result: DYN, valueParams: exactValueParams(DYN) },
   entries: { fn: "dyn.objEntries", params: [DYN], result: DYN, valueParams: exactValueParams(DYN) },
+  fromEntries: { fn: "dyn.fromEntries", params: [DYN], result: DYN, valueParams: exactValueParams(DYN) },
+  getOwnPropertySymbols: { fn: "dyn.getOwnPropertySymbols", params: [DYN], result: DYN, valueParams: exactValueParams(DYN) },
 };
 
 /** The lowerable surface of the supported node builtin modules, keyed by
@@ -1095,7 +1094,7 @@ export const AMBIENT_SURFACE_FNS: readonly AmbientSurfaceRow[] = [
     id: "stdlib.date.constructor",
     kind: "stdlib",
     name: "Date constructor",
-    fns: ["date.newNow", "date.newMs", "date.newString"],
+    fns: ["date.newNow", "date.newMs", "date.newString", "date.nativeNew"],
     note: "zero arguments, or one milliseconds/date-string argument; values are the read-only TimeClip scalar slice",
   },
   {
@@ -1162,6 +1161,7 @@ export const AMBIENT_SURFACE_FNS: readonly AmbientSurfaceRow[] = [
     note: "reads, writes, deletes, and enumeration of the process environment (the process global)",
   },
   { id: "node-builtin.process.argv", kind: "node-builtin", name: "process.argv", fns: ["process.argv"] },
+  { id: "node-builtin.process.hrtime", kind: "node-builtin", name: "process.hrtime", fns: ["process.hrtimeValue"], note: "native monotonic tuple clock and bigint member; direct calls and stored JavaScript callable values" },
   {
     id: "node-builtin.process.getBuiltinModule", kind: "node-builtin", name: "process.getBuiltinModule",
     fns: ["process.builtinId", "process.builtinModule", "process.builtinUnsupported"],
@@ -1600,14 +1600,6 @@ export const BUILTIN_MODULE_FENCE_HINTS: Record<string, Record<string, string | 
       hint =
         "flat has no lowering (flatMap does) — flatten into an accumulator instead: " +
         "for (const x of xs) for (const y of x) out.push(y)";
-    } else if (
-      recvIr?.kind === "object" &&
-      RUNTIME_ERROR_CLASSES.has(recvIr.className) &&
-      member === "stack"
-    ) {
-      hint =
-        "stack traces are not captured (frames would need runtime bookkeeping); " +
-        "name, message, and toString() are available";
     } else if (container === "process.stdin" || (container === "process" && member === "stdin")) {
       hint =
         "isTTY, destroy(), on/once of the data/end/error events, and " +

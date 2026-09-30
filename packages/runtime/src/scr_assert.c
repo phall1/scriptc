@@ -440,6 +440,8 @@ void scr_assert_ref_eq_fn(const ScrClosure *a, const ScrClosure *b, bool negated
 static bool scr_assert_dyn_same_value(const ScrDyn *a, const ScrDyn *b) {
   if (a->kind != b->kind) return false;
   switch (a->kind) {
+    case SCR_DYN_SYMBOL:
+      return a->v.symbol.value == b->v.symbol.value;
     case SCR_DYN_UNDEF:
     case SCR_DYN_NULL:
       return true;
@@ -509,6 +511,8 @@ static bool scr_assert_dyn_deep_eq(const ScrDyn *a, const ScrDyn *b) {
     return false;
   }
   switch (a->kind) {
+    case SCR_DYN_SYMBOL:
+      return a->v.symbol.value == b->v.symbol.value;
     case SCR_DYN_UNDEF:
     case SCR_DYN_NULL:
       return true;
@@ -643,6 +647,12 @@ static void scr_assert_cf_value(ScrAssertBuf *b, const ScrDyn *d, size_t indent,
       return;
     case SCR_DYN_BIGINT: {
       ScrStr *text = scr_bigint_inspect(d->v.bigint);
+      ab_str(b, text);
+      scr_str_release(text);
+      return;
+    }
+    case SCR_DYN_SYMBOL: {
+      ScrStr *text = d->v.symbol.render(d->v.symbol.value);
       ab_str(b, text);
       scr_str_release(text);
       return;

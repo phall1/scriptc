@@ -754,6 +754,11 @@ describe("determinism attestation ↔ fence parity", () => {
       // only the JS lane reaches it. A residual, documented gap: no
       // manifest member exists to hang a detector on yet.
       "fs.toUnixTimestamp",
+      // Validates/unboxes a native Date handle without reading ambient
+      // state. lowerDateCall emits it only as the receiver of a separately
+      // witnessed Date method; assigning it to getTime would also deny
+      // valueOf/toISOString/etc. under a getTime-only fence.
+      "date.checkedValue",
     ]);
     const missing = Object.keys(LIB_FN_SIGS).filter(
       (fn) =>

@@ -1618,6 +1618,21 @@ double scr_perf_now(void) {
   return scr_uptime_now_ms() - scr_uptime_t0_ms;
 }
 
+uint64_t scr_hrtime_ns(void) {
+#ifdef _WIN32
+  LARGE_INTEGER counter, frequency;
+  QueryPerformanceCounter(&counter);
+  QueryPerformanceFrequency(&frequency);
+  uint64_t whole = (uint64_t)(counter.QuadPart / frequency.QuadPart);
+  uint64_t remainder = (uint64_t)(counter.QuadPart % frequency.QuadPart);
+  return whole * UINT64_C(1000000000) + remainder * UINT64_C(1000000000) / (uint64_t)frequency.QuadPart;
+#else
+  struct timespec time;
+  clock_gettime(CLOCK_MONOTONIC, &time);
+  return (uint64_t)time.tv_sec * UINT64_C(1000000000) + (uint64_t)time.tv_nsec;
+#endif
+}
+
 #ifdef _WIN32
 /* GetProcessTimes/GetThreadTimes answer 100ns units; Node reports µs. */
 static double scr_filetime_us(FILETIME ft) {
@@ -6159,55 +6174,6 @@ bool scr_num_is_safe_integer(double x) {
   return isfinite(x) && trunc(x) == x && fabs(x) <= 9007199254740991.0;
 }
 
-/* ── bitwise operators ─────────────────────────────────────────────────
- * JS-exact (scr_runtime.h has the contract). ToUint32 is the primitive —
- * ToInt32 and the Int32-typed results are the same 32 bits reinterpreted
- * as two's complement, spelled portably (no implementation-defined
- * narrowing casts, no UB shifts of signed values).
- */
-
-/* The 32 bits as a SIGNED (Int32) JS number. */
-static double scr_bits_as_int32(uint32_t u) {
-  return u >= UINT32_C(0x80000000)
-             ? (double)(int32_t)(u - UINT32_C(0x80000000)) + (double)INT32_MIN
-             : (double)u;
-}
-
-double scr_bit_and(double a, double b) {
-  return scr_bits_as_int32(scr_to_uint32(a) & scr_to_uint32(b));
-}
-
-double scr_bit_or(double a, double b) {
-  return scr_bits_as_int32(scr_to_uint32(a) | scr_to_uint32(b));
-}
-
-double scr_bit_xor(double a, double b) {
-  return scr_bits_as_int32(scr_to_uint32(a) ^ scr_to_uint32(b));
-}
-
-double scr_bit_shl(double a, double b) {
-  return scr_bits_as_int32(scr_to_uint32(a) << (scr_to_uint32(b) & 31u));
-}
-
-double scr_bit_shr(double a, double b) {
-  uint32_t u = scr_to_uint32(a);
-  uint32_t s = scr_to_uint32(b) & 31u;
-  uint32_t r = u >> s;
-  if ((u & UINT32_C(0x80000000)) != 0 && s != 0) {
-    r |= ~(UINT32_C(0xffffffff) >> s); /* arithmetic shift: sign-fill */
-  }
-  return scr_bits_as_int32(r);
-}
-
-double scr_bit_ushr(double a, double b) {
-  /* The one Uint32-typed result: (-1 >>> 0) === 4294967295. */
-  return (double)(scr_to_uint32(a) >> (scr_to_uint32(b) & 31u));
-}
-
-double scr_bit_not(double a) {
-  return scr_bits_as_int32(~scr_to_uint32(a));
-}
-
 /* ── checked catch-binding cast (`e as C`) ────────────────────────────
  * The caught analog of the dyn boundary's checked casts: an OBJ payload
  * inside the class's preorder interval extracts (retained, +1); every
@@ -6259,4 +6225,80 @@ ScrArr *scr_set_to_arr_ref(const ScrMap *s) {
     scr_arr_push_ref(out, scr_map_iter_key_ref(s, (double)i));
   }
   return out;
+}
+
+/* JS Date storage owns an identity; the typed read-only Date ABI continues
+ * to use milliseconds and explicitly extracts them for native getters. */
+typedef struct { size_t rc; double milliseconds; } ScrNativeDate;
+static void *scr_native_date_retain(void *ptr) { ((ScrNativeDate *)ptr)->rc++; return ptr; }
+static void scr_native_date_release(void *ptr) { if (--((ScrNativeDate *)ptr)->rc == 0) free(ptr); }
+
+bool scr_dyn_native_date_is(const ScrDyn *value) {
+  return value && value->kind == SCR_DYN_HANDLE && value->v.handle.tag == SCR_DYNH_DATE;
+}
+
+double scr_dyn_native_date_value(const ScrDyn *value) {
+  if (!scr_dyn_native_date_is(value)) { scr_dyn_check_fail(NULL, "Date", value); return NAN; }
+  return ((ScrNativeDate *)value->v.handle.ptr)->milliseconds;
+}
+
+static ScrDyn *scr_native_date_invoke(void *ptr, ScrDyn *self, const char *method,
+    ScrDyn *const *args, size_t argc, const char *what) {
+  (void)self; (void)args; (void)argc; (void)what;
+  double ms = ((ScrNativeDate *)ptr)->milliseconds;
+  if (!strcmp(method, "getTime") || !strcmp(method, "valueOf")) return scr_dyn_new_num(ms);
+  if (!strcmp(method, "toISOString") || !strcmp(method, "toJSON")) {
+    if (!strcmp(method, "toJSON") && !isfinite(ms)) return scr_dyn_new_null();
+    ScrStr *text = scr_date_to_iso(ms);
+    if (!text) return NULL;
+    ScrDyn *result = scr_dyn_new_str(text);
+    scr_str_release(text);
+    return result;
+  }
+#define DATE_GET(name, fn) if (!strcmp(method, name)) return scr_dyn_new_num(fn(ms))
+  DATE_GET("getFullYear", scr_date_get_full_year_local);
+  DATE_GET("getUTCFullYear", scr_date_get_full_year_utc);
+  DATE_GET("getMonth", scr_date_get_month_local);
+  DATE_GET("getUTCMonth", scr_date_get_month_utc);
+  DATE_GET("getDate", scr_date_get_date_local);
+  DATE_GET("getUTCDate", scr_date_get_date_utc);
+  DATE_GET("getDay", scr_date_get_day_local);
+  DATE_GET("getUTCDay", scr_date_get_day_utc);
+  DATE_GET("getHours", scr_date_get_hours_local);
+  DATE_GET("getUTCHours", scr_date_get_hours_utc);
+  DATE_GET("getMinutes", scr_date_get_minutes_local);
+  DATE_GET("getUTCMinutes", scr_date_get_minutes_utc);
+  DATE_GET("getSeconds", scr_date_get_seconds_local);
+  DATE_GET("getUTCSeconds", scr_date_get_seconds_utc);
+  DATE_GET("getMilliseconds", scr_date_get_milliseconds);
+  DATE_GET("getUTCMilliseconds", scr_date_get_milliseconds);
+  DATE_GET("getTimezoneOffset", scr_date_get_timezone_offset);
+#undef DATE_GET
+  static const char message[] = "Native Date method has no lowering";
+  scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
+  return NULL;
+}
+
+ScrDyn *scr_dyn_native_date_new(const ScrDyn *arguments) {
+  double ms;
+  if (arguments->v.arr.len == 0) ms = scr_date_now();
+  else {
+    ScrDyn *value = arguments->v.arr.items[0];
+    if (scr_dyn_native_date_is(value)) ms = scr_dyn_native_date_value(value);
+    else if (value->kind == SCR_DYN_STR) ms = scr_date_parse_get_time(value->v.str);
+    else if (!scr_dyn_number_coerce_js(value, &ms)) return NULL;
+    ms = scr_date_new_ms(ms);
+  }
+  static const ScrDynHandleOps ops = {
+    "Date", &scr_native_date_retain, &scr_native_date_release, &scr_native_date_invoke,
+    NULL, NULL, NULL, NULL,
+  };
+  scr_dyn_handle_install(SCR_DYNH_DATE, &ops);
+  ScrNativeDate *date = malloc(sizeof *date);
+  if (!date) scr_trap("scriptc: out of memory\n");
+  date->rc = 1;
+  date->milliseconds = ms;
+  ScrDyn *result = scr_dyn_new_handle(date, SCR_DYNH_DATE);
+  scr_native_date_release(date);
+  return result;
 }

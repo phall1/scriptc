@@ -1,17 +1,21 @@
 import * as ts from "../ts7/adapter.js";
-import { BOOL, DYN, STRING, typeEquals, typeKey, type IrExpr, type IrFunction, type IrStmt, type IrType } from "../../ir/ir.js";
+import { BOOL, DYN, STRING, RUNTIME_ERROR_CLASSES, typeEquals, typeKey, type IrExpr, type IrFunction, type IrStmt, type IrType, type SrcLoc } from "../../ir/ir.js";
 import { varRef } from "../../ir/build.js";
 import { everyStmtList, transformStmtList } from "../../ir/traverse.js";
 import { locOf } from "../program.js";
 import type { Lowerer } from "./lowerer.js";
-import { findGenericMethodOn, findMethodOn, type ClassInfo } from "./lower-classes.js";
+import { findGenericMethodOn, findMethodOn, genericOverrideBelow, type ClassInfo } from "./lower-classes.js";
 import { funcTypeFromParamShapes, implicitDefaultInstance, type ParamShape } from "./lower-calls.js";
+import { errorToStringMethod } from "./error-methods.js";
 import { classCallbackValue, isClassCallback } from "./class-callbacks.js";
 
 /** A method value retains its declaration's identity, not the receiver from
  * extraction. Its native thunk validates the receiver supplied at call time. */
 export function lowerClassMethodValue(lowerer: Lowerer, expr: ts.PropertyAccessExpression, info: ClassInfo): IrExpr | null {
   const method = expr.name.text;
+  if (method === "toString" && findMethodOn(lowerer, info, method)?.declarer.builtinError) {
+    return errorToStringMethod(lowerer, lowerer.lowerExpr(expr.expression));
+  }
   const value = methodValue(lowerer, expr, info);
   if (!value) return null;
   const loc = locOf(expr);
@@ -52,30 +56,33 @@ export function lowerClassMethodValue(lowerer: Lowerer, expr: ts.PropertyAccessE
 }
 
 function methodValue(lowerer: Lowerer, expr: ts.PropertyAccessExpression, info: ClassInfo): IrExpr | null {
-  const method = expr.name.text;
+  return classMethodValue(lowerer, expr, info, expr.name.text, locOf(expr));
+}
+
+export function classMethodValue(lowerer: Lowerer, blame: ts.Node, info: ClassInfo, method: string, loc: SrcLoc): IrExpr | null {
   const found = findMethodOn(lowerer, info, method);
   const generic = found ? null : findGenericMethodOn(lowerer, info, method);
   if (!found && !generic) return null;
-  const loc = locOf(expr);
   let owner: ClassInfo;
   let params: ParamShape[];
   let ret: IrType;
   let callee: string;
-  if (found && !found.declarer.builtinError) {
+  if (found) {
     owner = found.declarer;
-    if (found.sig.abstract) lowerer.unsupported("SC1090", expr, "values of abstract method declarations");
+    if (found.sig.abstract) lowerer.unsupported("SC1090", blame, "values of abstract method declarations");
     params = found.sig.params;
     ret = found.sig.ret;
     callee = `%${owner.def.name}.${method}`;
-    lowerer.noteEdge(callee);
-  } else if (generic?.info.implicitParams && generic.declarer.decl && !lowerer.inHierarchy(info)) {
+    if (!owner.builtinError) lowerer.noteEdge(callee);
+  } else if (generic?.info.implicitParams && generic.declarer.decl &&
+      !lowerer.overrideBelow(info, method) && !genericOverrideBelow(lowerer, info, method)) {
     owner = generic.declarer;
     const instance = implicitDefaultInstance(lowerer, owner.decl!, generic.info);
     params = instance.params;
     ret = instance.returnType;
     callee = instance.name;
   } else {
-    lowerer.unsupported("SC1090", expr, "values of builtin or unspecialized generic methods");
+    lowerer.unsupported("SC1090", blame, "values of builtin or unspecialized generic methods");
   }
   const type = funcTypeFromParamShapes(params, ret);
   const name = `%method.value:${callee}`;
@@ -90,7 +97,9 @@ function methodValue(lowerer: Lowerer, expr: ts.PropertyAccessExpression, info: 
     }
     const receiver: IrExpr = { kind: "call", callee: receiverName,
       args: [{ kind: "libCall", fn: "dyn.this", args: [], type: DYN, loc }], type: receiverType, loc };
-    const call: IrExpr = {
+    const call: IrExpr = owner.builtinError ? {
+      kind: "libCall", fn: "error.toString", args: [receiver], type: ret, loc,
+    } : {
       kind: "call", callee, args: [receiver, ...thunkParams.map((p) => varRef(p.localId, p.type, loc))], type: ret, loc,
     };
     const fn: IrFunction = {
@@ -114,8 +123,17 @@ export function finalizeClassMethodValues(lowerer: Lowerer, functions: IrFunctio
       const loc = fn.loc;
       const receiver = varRef("this.0", DYN, loc);
       const branches: IrStmt[] = [];
+      if (lowerer.isSubclassOf(owner, "%Error")) {
+        const base: IrExpr = { kind: "dynCheck", value: receiver, type: { kind: "object", className: "%Error" }, loc };
+        branches.push({ kind: "if", cond: { kind: "dynTest", test: "error", value: receiver, type: BOOL, loc }, then: [
+          { kind: "if", cond: { kind: "instanceOf", value: base, className: owner, type: BOOL, loc }, then: [
+            { kind: "return", value: owner === "%Error" ? base : { kind: "downcast", value: base, type: fn.returnType, loc }, loc },
+          ], else_: null, loc },
+        ], else_: null, loc });
+      }
       for (const info of lowerer.classes.values()) {
         const name = info.def.name;
+        if (RUNTIME_ERROR_CLASSES.has(name)) continue;
         if (!lowerer.isSubclassOf(name, owner) && !lowerer.isSubclassOf(owner, name) && name !== owner) continue;
         const type: IrType = { kind: "object", className: name };
         const checked: IrExpr = { kind: "dynCheck", value: receiver, type, loc };
@@ -134,7 +152,7 @@ export function finalizeClassMethodValues(lowerer: Lowerer, functions: IrFunctio
     const target = byName.get(fn.name.slice("%method.value:".length));
     const thisParam = target?.params[0];
     if (!target || !thisParam || target.async || target.generator) continue;
-    const usesThis = !everyStmtList(target.body, { stmt: () => true, expr: (expr) =>
+    const usesThis = !!target.classCaptures?.length || !everyStmtList(target.body, { stmt: () => true, expr: (expr) =>
       !(expr.kind === "varRef" && expr.localId === thisParam.localId) &&
       !(expr.kind === "closure" && expr.captures.includes(thisParam.localId)) });
     if (usesThis) continue;

@@ -595,6 +595,40 @@ async function compileTracked(
       sourceTexts: new Map(),
     };
   }
+  // Mobile triples are library-mode targets: the archive an embedding app
+  // links is the artifact, and only the library-admissible runtime surface
+  // is verified on those device classes. The executable lane refuses before
+  // any frontend work — a pure env check, so the refusal needs no toolchain.
+  if (outputKind === "exe") {
+    const entryLoc: SrcLoc = { file: entryPath, start: 0, end: 0 };
+    const mobileTarget = mobileLibraryTarget();
+    if (mobileTarget !== null) {
+      return {
+        ok: false,
+        diagnostics: [
+          targetRefusalDiag(
+            mobileTarget,
+            "standalone executable builds — mobile targets produce library-mode static archives (scriptc build --lib --profile <profile.json>) for an embedding app to link",
+            entryLoc,
+          ),
+        ],
+        sourceTexts: new Map(),
+      };
+    }
+    const rawTarget = process.env["SCRIPTC_TARGET"] ?? "";
+    const mobileRefusal = mobileTargetRefusal(rawTarget);
+    if (mobileRefusal !== null) {
+      return {
+        ok: false,
+        diagnostics: [{ code: "SC3002", message: mobileRefusal, loc: entryLoc }],
+        sourceTexts: new Map(),
+      };
+    }
+  }
+  if (outputKind === "exe" && opts.sanitize !== true && process.env["SCRIPTC_FETCH_CURL"] !== "1") {
+    const refusal = nativeCodegenTargetRefusal();
+    if (refusal !== null) return { ok: false, diagnostics: [nativeCodegenDiag("SC3002", refusal, entryPath)], sourceTexts: new Map() };
+  }
   let ffi: FfiProfile | null = null;
   let ffiProfileBytes: Uint8Array | null = null;
   if (opts.ffiProfilePath !== undefined) {
@@ -668,40 +702,6 @@ async function compileTracked(
       diagnostics: [nativeCodegenDiag("SC3002", err instanceof Error ? err.message : String(err), entryPath)],
       sourceTexts: new Map(),
     };
-  }
-  // Mobile triples are library-mode targets: the archive an embedding app
-  // links is the artifact, and only the library-admissible runtime surface
-  // is verified on those device classes. The executable lane refuses before
-  // any frontend work — a pure env check, so the refusal needs no toolchain.
-  if (outputKind === "exe") {
-    const entryLoc: SrcLoc = { file: entryPath, start: 0, end: 0 };
-    const mobileTarget = mobileLibraryTarget();
-    if (mobileTarget !== null) {
-      return {
-        ok: false,
-        diagnostics: [
-          targetRefusalDiag(
-            mobileTarget,
-            "standalone executable builds — mobile targets produce library-mode static archives (scriptc build --lib --profile <profile.json>) for an embedding app to link",
-            entryLoc,
-          ),
-        ],
-        sourceTexts: new Map(),
-      };
-    }
-    const rawTarget = process.env["SCRIPTC_TARGET"] ?? "";
-    const mobileRefusal = mobileTargetRefusal(rawTarget);
-    if (mobileRefusal !== null) {
-      return {
-        ok: false,
-        diagnostics: [{ code: "SC3002", message: mobileRefusal, loc: entryLoc }],
-        sourceTexts: new Map(),
-      };
-    }
-  }
-  if (outputKind === "exe" && opts.sanitize !== true && process.env["SCRIPTC_FETCH_CURL"] !== "1") {
-    const refusal = nativeCodegenTargetRefusal();
-    if (refusal !== null) return { ok: false, diagnostics: [nativeCodegenDiag("SC3002", refusal, entryPath)], sourceTexts: new Map() };
   }
   const cacheRoot = outputKind === "exe" && provenanceSources() === null
     ? await prepareBuildCacheRoot(buildCacheRoot())
