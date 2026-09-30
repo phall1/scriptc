@@ -1,3 +1,5 @@
+// @deferred-fences: 1
+// The incompatible string write is intentionally fenced; toArray stays uncalled.
 class Coordinates {
   constructor() { this.value = 3; }
   /** @param {number[]} values */
