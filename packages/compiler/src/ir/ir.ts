@@ -7034,10 +7034,6 @@ const LIB_MODE_REFUSED_PREFIXES: readonly [string, string][] = [
   ["als.", "AsyncLocalStorage"],
   ["urj.", "unhandled-rejection tracking"],
   ["dc.", "the diagnostics_channel surface"],
-  // NOT the whole "dyn." family: the checked-dynamic tree (ScrDyn) is
-  // static-tier surface hosted by always-linked units; only defineProps
-  // drags the prototype-dispatch unit (scr_dyn_invoke.c → scr_async_dyn.c).
-  ["dyn.defineProps", "checked-dynamic prototype dispatch"],
 ];
 
 /** Value/type kinds whose mere presence means an excluded unit's code (or
@@ -7063,7 +7059,6 @@ const LIB_MODE_REFUSED_KINDS: ReadonlyMap<string, string> = new Map([
   ["httpRes", "the node:http surface"],
   ["httpClientReq", "the node:http surface"],
   ["secureCtx", "the node:tls surface"],
-  ["dynInvoke", "checked-dynamic prototype dispatch"],
 ]);
 
 /** First async/event-loop/ambient-process surface the module graph
@@ -7125,7 +7120,6 @@ export function moduleLibAsyncSurface(mod: IrModule): { surface: string; loc: Sr
     [moduleUsesNodeTest(mod), "the node:test surface"],
     [moduleUsesDynAsync(mod), "the checked-dynamic async surface"],
     [moduleUsesDc(mod), "the diagnostics_channel surface"],
-    [moduleUsesDynInvoke(mod), "checked-dynamic prototype dispatch"],
   ];
   for (const [on, surface] of coarse) {
     if (on) return { surface, loc: entryLoc };

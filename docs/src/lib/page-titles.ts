@@ -7,6 +7,7 @@ export const PAGE_TITLES: Record<string, string> = {
   dependencies: "npm Dependencies",
   ffi: "Native FFI",
   "native-objects": "Native Program Objects",
+  wasm: "WebAssembly Modules",
   platforms: "Platform Support",
   compatibility: "Node.js 24 Compatibility",
   "how-it-works": "How It Works",

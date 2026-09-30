@@ -57,6 +57,7 @@ interface EarlyLibraryCacheStamp {
 
 export interface EarlyLibraryNativeFeatures {
   backend: "llvm";
+  dynInvoke: boolean;
   regex: boolean;
   assert: boolean;
   inspect: boolean;
@@ -114,6 +115,7 @@ export interface SemanticLibraryCacheHit {
 }
 
 const BOOLEAN_NATIVE_KEYS = [
+  "dynInvoke",
   "regex",
   "assert",
   "inspect",

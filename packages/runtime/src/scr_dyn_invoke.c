@@ -1376,6 +1376,9 @@ static ScrDyn *scr_dyn_invoke_impl(
    * other Promise.prototype name is `then`-adjacent sugar JS doesn't
    * have, so the not-a-function answer IS the JS answer. */
   if (recv->kind == SCR_DYN_PROMISE) {
+#ifdef SCR_LIB
+    scr_trap("scriptc: promise dispatch is unavailable in library mode\n");
+#else
     if (dyn_name_is(method, "then")) {
       return scr_dyn_promise_then(recv->v.promise, argc >= 1 ? args[0] : NULL,
                                   argc >= 2 ? args[1] : NULL, NULL);
@@ -1388,6 +1391,7 @@ static ScrDyn *scr_dyn_invoke_impl(
     }
     dyn_throw_not_fn(what);
     return NULL;
+#endif
   }
 
   if (recv->kind == SCR_DYN_BYTES) {

@@ -9,8 +9,9 @@ Usage:
                                             type-resolve an embedder-provided module for analysis
   scriptc build --lib --profile <p.json>    library mode: compile the profile's entry
                                             module to a linkable static archive
-                                            (<name>.lib.a) exporting the
-                                            profile-declared C symbols; a profile
+                                            (<name>.lib.a), or a Wasm reactor
+                                            (<name>.wasm) on wasm32-wasi,
+                                            exporting the profile symbols; a profile
                                             with a sidecar section also gets the
                                             contract sidecar JSON beside the archive
   scriptc cache warm [runtime|tls|dynamic…] prebuild expensive native cache families

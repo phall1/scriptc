@@ -1358,7 +1358,7 @@ export interface CompileLibraryOptions {
   profilePath: string;
   /** Where the archive and the kept program TU land. */
   outDir: string;
-  /** Archive path. Default: <outDir>/<stem>.lib.a. */
+  /** Artifact path. Default: <stem>.lib.a, or <stem>.wasm for wasm32-wasi. */
   outPath?: string;
   emitIr?: boolean;
   sanitize?: boolean;
@@ -1762,6 +1762,7 @@ function libraryNativeFeatures(
     zlib: features.zlib,
     copying: features.copying,
     textDecoderLegacy: features.legacyTextDecoder,
+    dynInvoke: features.dynInvoke,
     ...(mod.lib?.identity !== undefined ? { buildId: mod.lib.identity.buildId } : {}),
   };
 }
@@ -1789,6 +1790,19 @@ async function compileLibraryNative(
   sanitize: boolean,
   features: EarlyLibraryNativeFeatures,
 ): Promise<void> {
+  const wasmTarget = nativeCodegenTarget();
+  if (wasmTarget?.platform === "wasi") {
+    await compilePackedLibrary({
+      cPath: llvmPath, outPath: archivePath, optimization: profile.optimization, ...features,
+    }, wasmTarget, [
+      profile.initSymbol, "scriptc_alloc", "scriptc_free",
+      ...(profile.collectSymbol === null ? [] : [profile.collectSymbol]),
+      ...(profile.resultResetSymbol === null ? [] : [profile.resultResetSymbol]),
+      ...(profile.sidecar === null ? [] : [profile.sidecar.buildIdSymbol, profile.sidecar.abiVersionSymbol]),
+      ...profile.exports.map((entry) => entry.symbol),
+    ]);
+    return;
+  }
   const localizeSymbols = libraryLocalizeSymbols(profile);
   let identityLlvmSource: string | undefined;
   let programSource: string | undefined;
@@ -1845,6 +1859,7 @@ async function compileLibraryNative(
     zlib: features.zlib,
     copying: features.copying,
     textDecoderLegacy: features.textDecoderLegacy,
+    dynInvoke: features.dynInvoke,
   };
   if (packTarget !== null) await compilePackedLibrary(archiveOptions, packTarget);
   else await compileExternalCLibrary(archiveOptions);
@@ -1989,7 +2004,7 @@ async function compileLibraryTracked(
   }
   const archivePath = opts.outPath ?? join(
     opts.outDir,
-    `${basename(entryPath).replace(/\.(ts|mts|cts|js|mjs|cjs)$/, "")}.lib.a`,
+    `${basename(entryPath).replace(/\.(ts|mts|cts|js|mjs|cjs)$/, "")}${buildTargetPlatform() === "wasi" ? ".wasm" : ".lib.a"}`,
   );
 
   // Mobile-target admission first — a pure env/host check, so a refused
@@ -2013,6 +2028,17 @@ async function compileLibraryTracked(
   }
 
   const buildPlatform = buildTargetPlatform();
+  if (buildPlatform === "wasi") {
+    const reserved = new Set(["scriptc_alloc", "scriptc_free", "memory", "_initialize", "_start"]);
+    const symbols = [profile.initSymbol, profile.sinkRegisterSymbol, profile.collectSymbol, profile.resultResetSymbol, profile.callbackRegisterSymbol, ...profile.exports.map((entry) => entry.symbol), profile.sidecar?.buildIdSymbol, profile.sidecar?.abiVersionSymbol];
+    const surface = opts.sanitize ? "sanitized library builds"
+      : profile.instancePerThread ? "thread-instanced libraries (instantiate separate Wasm instances instead)"
+      : profile.localizeRuntime ? "runtime localization (Wasm instances already isolate their runtime)"
+      : symbols.some((symbol) => symbol != null && reserved.has(symbol)) ? "library symbols reserved by the Wasm embedding ABI"
+      : profile.callbacks.some((cb) => cb.name === "panic") ? "a callback named 'panic' (reserved by the Wasm embedding ABI)"
+      : null;
+    if (surface !== null) return { ok: false, diagnostics: [targetRefusalDiag("wasm32-wasi", surface, { file: entryPath, start: 0, end: 0 })], sourceTexts: new Map() };
+  }
 
   // Multi-instance library mode (abi.localize_runtime) localizes per
   // OBJECT FORMAT: ELF and COFF archives localize from any host (cross
@@ -2021,8 +2047,8 @@ async function compileLibraryTracked(
   // localization runs the macOS host linker, so macos and ios targets
   // admit darwin hosts only (the mobile admission above already refused
   // an ios triple off darwin). Everything else refuses before frontend/
-  // backend work, naming the pairing. WASI retains the general
-  // library-mode refusal below.
+  // backend work, naming the pairing. WASI refuses localization above:
+  // each WebAssembly.Instance already owns its runtime state.
   if (profile.localizeRuntime && buildPlatform !== "wasi") {
     const packTarget = nativeCodegenTarget();
     const driver = opts.sanitize ? resolveCc() : {
@@ -2129,9 +2155,9 @@ async function compileLibraryTracked(
   // posture: "lib" runs the same auto-detection and eligibility bar as
   // the executable lane's --npm-static (own .d.ts, unminified shipped JS,
   // no build-transform markers), automatically — the library path has no
-  // island/dynamic tier to offer (SC4006's ground), so eligibility needs
-  // no flag and a miss is a refusal, never a fallback.
-  const fe = runFrontend(entryPath, loadProgram, "lib");
+  // island/dynamic tier to offer. Explicit profile npm_static entries may
+  // also attempt source inference; any failed attempt remains a refusal.
+  const fe = runFrontend(entryPath, loadProgram, "lib", undefined, profile.npmStatic);
   timing("frontend-load", {
     entry_bytes: fe.entryText().length,
     source_files: fe.sourceTexts().size,
@@ -2149,19 +2175,6 @@ async function compileLibraryTracked(
       diagnostics: decorateLibraryRefusals(diagnostics, profile),
       sourceTexts: fe.sourceTexts(),
     });
-    // Library mode emits a host-embedded static archive with native trap and
-    // C-ABI contracts. wasm32-wasi executable modules are supported, but the
-    // archive/reactor contract is not; refuse before emitting a host-width
-    // LLVM TU or asking Zig to compile the native library runtime for WASI.
-    if (buildPlatform === "wasi") {
-      return fail([
-        targetRefusalDiag(
-          "wasm32-wasi",
-          "library-mode archive builds",
-          { file: entryPath, start: 0, end: 0 },
-        ),
-      ]);
-    }
     // The npm verdicts FIRST: whatever the shared frontend would have
     // served from the island — an eligibility miss, an untyped install, a
     // preflight offender inside a package's files, a dropped inferred
@@ -2281,6 +2294,10 @@ async function compileLibraryTracked(
   const fenced = evaluateLibraryFences(mod, profile);
   if (fenced.length > 0) return fail(fenced);
   mod.lib = resolved.lib;
+  if (buildPlatform === "wasi") {
+    const unavailable = moduleWasiUnavailableSurface(mod);
+    if (unavailable !== null) return fail([targetRefusalDiag("wasm32-wasi", unavailable.surface, unavailable.loc)]);
+  }
 
   // Ask 4's declared integer slots: the export map's i64/u64 classes
   // seed the config here; sidecar-declared slots (record fields, msg
@@ -2354,7 +2371,11 @@ async function compileLibraryTracked(
   const stem = basename(entryPath).replace(/\.(ts|mts|cts|js|mjs|cjs)$/, "");
   const llvmPath = join(opts.outDir, `${stem}.lib.ll`);
   try {
-    const ll = emitLlvmModule(mod, { targetTriple: process.env["SCRIPTC_TARGET"] ?? "" });
+    const ll = emitLlvmModule(mod, {
+      targetTriple: process.env["SCRIPTC_TARGET"] ?? "",
+      pointerBits: buildPlatform === "wasi" ? 32 : 64,
+      wasi: buildPlatform === "wasi",
+    });
     timing("llvm-emit", { output_bytes: Buffer.byteLength(ll) });
     await writeFile(llvmPath, ll);
     timing("llvm-write");

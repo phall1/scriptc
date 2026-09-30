@@ -61,12 +61,12 @@ Set <code>SCRIPTC_TARGET=wasm32-wasi</code> to produce a standalone <code>.wasm<
 
 WASI is a production LLVM target with the same language tiers as the native targets. Its 32-bit LLVM ABI supports collections, closures, exceptions, classes, checked dynamic values, async/await, promises, synchronous and asynchronous generators, timers, stdin/readline events, process-exit listeners, filesystem callbacks and promises, and the <code>--dynamic</code> QuickJS island.
 
-The remaining executable boundary is host capability, not language coverage. WASI Preview 1 has no portable socket, process-spawn, OS-signal, network-interface, or filesystem-notification APIs. Networking/fetch, child processes, signal APIs, <code>os.networkInterfaces()</code>, and <code>fs.watch</code> therefore fail before linking with diagnostic <code>SC3002</code>. <code>--sanitize</code>, native FFI, and library-mode archive builds are unavailable too. Filesystem behavior is bounded by the host's preopens, and process/OS introspection follows WASI's reduced model.
+The remaining executable boundary is host capability, not language coverage. WASI Preview 1 has no portable socket, process-spawn, OS-signal, network-interface, or filesystem-notification APIs. Networking/fetch, child processes, signal APIs, <code>os.networkInterfaces()</code>, and <code>fs.watch</code> therefore fail before linking with diagnostic <code>SC3002</code>. <code>--sanitize</code> and native FFI are unavailable too. Filesystem behavior is bounded by the host's preopens, and process/OS introspection follows WASI's reduced model.
 
 ## Cross-target limits
 
 - `--sanitize` is a host-build lane.
-- Library-mode static archives are native embedder artifacts; <code>wasm32-wasi</code> rejects <code>scriptc build --lib</code> with <code>SC3002</code>.
+- On <code>wasm32-wasi</code>, <code>scriptc build --lib --profile</code> emits a callable Wasm reactor instead of a static archive. See [WebAssembly Modules](/wasm) for exports, host imports, initialization, and memory ownership.
 - Mobile triples are library-mode-only: standalone executable builds reject with <code>SC3002</code>, and only the library-admissible surface (the async-free static tier a library archive links) is supported there.
 - iOS targets build on macOS hosts only (Mach-O localization uses the host linker); Android archives build from any supported host with Zig.
 - WASI cannot host APIs for capabilities missing from Preview 1, as described above.

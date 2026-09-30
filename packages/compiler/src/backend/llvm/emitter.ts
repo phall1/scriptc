@@ -354,9 +354,9 @@ export class LlEmitter {
     this.wasi = options.wasi === true;
     this.emitLibraryIdentity = options.emitLibraryIdentity !== false;
     this.runtimeAbiMarker = options.runtimeAbiMarker === true;
-    // ScrCycHdr is { ptr trace; ptr free; i32 color; i16 buffered;
-    // i16 gen; size_t buf_index }. The object follows it, so color is 12
-    // bytes behind a wasm32 object and 16 bytes behind a 64-bit object.
+    // ScrCycHdr.color stays 12 bytes behind a wasm32 object and 16 bytes
+    // behind a 64-bit object. The wasm32 header pads before color so its
+    // payload remains double-aligned without changing this ABI offset.
     this.cycleColorOffset = options.pointerBits === 32 ? 12 : 16;
     this.ffiCallbackAdapters = allocateFfiCallbackAdapters(mod.ffiImports ?? []);
     this.ffiHasRetainedCallback = hasRetainedFfiCallback(mod.ffiImports ?? []);
@@ -1050,6 +1050,10 @@ export class LlEmitter {
     // LIBRARY mode: the runtime entry points the generated library
     // symbols delegate to — declared before the extern block flushes.
     if (this.mod.lib !== undefined) {
+      if (this.wasi) {
+        this.declare(`declare ptr @malloc(${this.sizeType})`);
+        this.declare(`declare void @free(ptr)`);
+      }
       this.declare(`declare void @scr_library_entry(i1 zeroext, ptr)`);
       this.declare(`declare void @scr_library_reset()`);
       this.declare(`declare void @scr_library_check_exc()`);
@@ -1540,6 +1544,23 @@ export class LlEmitter {
     if (lib.collectSymbol !== null) emitSymConst(lib.collectSymbol);
     for (const e of lib.exports) emitSymConst(e.symbol);
     out.push(``);
+    if (this.wasi) {
+      for (const symbol of ["scriptc_alloc", "scriptc_free"]) emitSymConst(symbol);
+      out.push(
+        `define ptr @scriptc_alloc(i32 %size) ${FN_ATTRS} {`,
+        `entry:`,
+        `  call void @scr_library_entry(i1 zeroext false, ptr ${symConst("scriptc_alloc")})`,
+        `  %p = call ptr @malloc(i32 %size)`,
+        `  ret ptr %p`,
+        `}`, ``,
+        `define void @scriptc_free(ptr %p) ${FN_ATTRS} {`,
+        `entry:`,
+        `  call void @scr_library_entry(i1 zeroext false, ptr ${symConst("scriptc_free")})`,
+        `  call void @free(ptr %p)`,
+        `  ret void`,
+        `}`, ``,
+      );
+    }
     // The runtime detected-trap overlay table (scr_runtime.h declares it,
     // the library trap funnel consults it): flat code/teaching/remediation
     // triples, one per runtime trap code (SC4013–SC4019) the profile

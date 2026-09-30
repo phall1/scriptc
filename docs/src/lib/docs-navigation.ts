@@ -23,6 +23,7 @@ export const navSections: NavSection[] = [
       { name: "npm Dependencies", href: "/dependencies" },
       { name: "Native FFI", href: "/ffi" },
       { name: "Native Program Objects", href: "/native-objects" },
+      { name: "WebAssembly Modules", href: "/wasm" },
       { name: "Platform Support", href: "/platforms" },
     ],
   },

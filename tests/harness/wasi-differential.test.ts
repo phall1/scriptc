@@ -193,17 +193,17 @@ describe.skipIf(!zigOnPath())("wasm32-wasi differential", () => {
     }
   });
 
-  test("library mode reports a target diagnostic instead of invoking the WASI toolchain", async () => {
+  test("sanitized library mode reports a target diagnostic before invoking the WASI toolchain", async () => {
     const outDir = await mkdtemp("/tmp/scriptc-wasi-library-");
     const result = await compileLibrary({
       profilePath: join(repoRoot, "tests/library-mode/scalars/profile.json"),
-      outDir,
+      outDir, sanitize: true,
     });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.code).toBe("SC3002");
-      expect(result.diagnostics[0]?.message).toMatch(/does not support library-mode archive builds/);
+      expect(result.diagnostics[0]?.message).toMatch(/does not support sanitized library builds/);
     }
   });
 

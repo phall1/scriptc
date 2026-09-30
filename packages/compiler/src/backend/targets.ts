@@ -294,7 +294,7 @@ export const WASM32_WASI_TARGET: NativeTargetSpec = {
   linkerTargetTriple: "wasm32-wasi",
   runtimeSystemLibraries: ["wasi-emulated-signal", "wasi-emulated-process-clocks"],
   runtimeCompileDefines: ["_GNU_SOURCE", "_WASI_EMULATED_SIGNAL", "_WASI_EMULATED_PROCESS_CLOCKS"],
-  supports: { asm: true, obj: true, exe: true, library: false },
+  supports: { asm: true, obj: true, exe: true, library: true },
   helperPackage: DARWIN_ARM64_HELPER.packageName, helper: DARWIN_ARM64_HELPER,
   llvmBackend: "WebAssembly",
   hostHelpers: {

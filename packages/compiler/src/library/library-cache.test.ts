@@ -81,6 +81,7 @@ test("early library cache restores generated artifacts and metadata", async () =
     zlib: false,
     copying: false,
     textDecoderLegacy: false,
+    dynInvoke: false,
   };
   await publishEarlyLibraryCache(f.root, f.options, {
     llvmPath: f.llvmPath,
@@ -133,6 +134,7 @@ test("early library cache publishes after creating a fresh output directory", as
       zlib: false,
       copying: false,
       textDecoderLegacy: false,
+      dynInvoke: false,
     },
     frontend: tracker.snapshot(),
   });
@@ -162,6 +164,7 @@ test("early library cache hits refresh every payload's LRU time", async () => {
       zlib: false,
       copying: false,
       textDecoderLegacy: false,
+      dynInvoke: false,
     },
     frontend: tracker.snapshot(),
   });
@@ -206,6 +209,7 @@ test("early library cache misses on source edits and newly-resolved candidates",
       zlib: false,
       copying: false,
       textDecoderLegacy: false,
+      dynInvoke: false,
     },
     frontend: tracker.snapshot(),
   });
@@ -234,6 +238,7 @@ test("early library cache misses on source edits and newly-resolved candidates",
       zlib: false,
       copying: false,
       textDecoderLegacy: false,
+      dynInvoke: false,
     },
     frontend: editedTracker.snapshot(),
   });
@@ -280,6 +285,7 @@ test("semantic library cache restores and rebases IR after a comment-only edit",
       zlib: false,
       copying: false,
       textDecoderLegacy: false,
+      dynInvoke: false,
     },
     frontend: tracker.snapshot(),
     semantic: { mod: semanticMod, sources: new Map([[f.source, sourceBefore]]) },
@@ -338,6 +344,7 @@ test("semantic library cache refuses token and directive edits", async () => {
       zlib: false,
       copying: false,
       textDecoderLegacy: false,
+      dynInvoke: false,
     },
     frontend: tracker.snapshot(),
     semantic: { mod: semanticMod, sources: new Map([[f.source, sourceBefore]]) },
@@ -383,6 +390,7 @@ test("semantic LLVM cache accepts comment edits that shift source lines", async 
       zlib: false,
       copying: false,
       textDecoderLegacy: false,
+      dynInvoke: false,
     },
     frontend: tracker.snapshot(),
     semantic: { mod: semanticMod, sources: new Map([[f.source, sourceBefore]]) },
@@ -420,6 +428,7 @@ test("semantic LLVM cache accepts line separator normalization", async () => {
         zlib: false,
         copying: false,
         textDecoderLegacy: false,
+        dynInvoke: false,
       },
       frontend: tracker.snapshot(),
       semantic: {
@@ -478,6 +487,7 @@ test("semantic LLVM cache rebases comment edits in multi-source graphs", async (
       zlib: false,
       copying: false,
       textDecoderLegacy: false,
+      dynInvoke: false,
     },
     frontend: tracker.snapshot(),
     semantic: {
@@ -513,6 +523,7 @@ test("early library cache is separated by the host Node version", async () => {
       zlib: false,
       copying: false,
       textDecoderLegacy: false,
+      dynInvoke: false,
     },
     frontend: tracker.snapshot(),
   });
@@ -545,6 +556,7 @@ test("early library cache rejects corrupted artifacts and metadata", async () =>
       zlib: false,
       copying: false,
       textDecoderLegacy: false,
+      dynInvoke: false,
     },
     frontend: tracker.snapshot(),
   });
@@ -578,6 +590,7 @@ test("disabled early library cache performs no reads or writes", async () => {
       zlib: false,
       copying: false,
       textDecoderLegacy: false,
+      dynInvoke: false,
     },
     frontend: tracker.snapshot(),
   };
