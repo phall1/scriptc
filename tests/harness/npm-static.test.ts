@@ -326,6 +326,19 @@ describe(`npm-static pilots${sanitize ? " (sanitized)" : ""}`, () => {
   // monomorphization and aliased-typeof narrowing landed; its one
   // remaining fence sits on the garbage-input path (pinned below), which
   // ms-cli.ts deliberately never drives.
+  test.each(["release", "dev"] as const)("inferred class methods dispatch through inherited checked receivers (%s)", async (optimization) => {
+    const entry = join(pilotRoot, "class-helper-cli.ts");
+    const outDir = join(cacheDir, `class-helper-${optimization}-${sanitize ? "san" : "plain"}`);
+    const result = await compile(entry, { backend: "llvm", npmStatic: ["class-helper"], sanitize, optimization,
+      outDir, outPath: join(outDir, "program") });
+    if (!result.ok) throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
+    const [reference, native] = await Promise.all([runBinary(process.execPath, [entry]), runBinary(result.binaryPath, [])]);
+    expect(reference.stdout.toString()).toBe("base:inherited\nbase:own\ntrue\nsecond:detached\n");
+    expect(native.stdout).toEqual(reference.stdout);
+    expect(comparableStderr(native.stderr)).toEqual(reference.stderr);
+    expect(native.exitCode).toBe(reference.exitCode);
+  });
+
   test.for([
     ["escape-string-regexp", "escape-cli.ts"],
     ["slash", "slash-cli.ts"],
@@ -656,6 +669,15 @@ describe(`npm-static pilots${sanitize ? " (sanitized)" : ""}`, () => {
     expect(nativeRes.exitCode).toBe(nodeRes.exitCode);
   }, 180_000);
 
+  test("recursive inferred JavaScript results retain their promised ABI", async () => {
+    const entry = join(pilotRoot, "recursive-result-cli.ts");
+    const binary = await buildStatic(entry, ["recursive-result"]);
+    const [nodeRes, nativeRes] = await Promise.all([runBinary("node", [entry]), runBinary(binary, [])]);
+    expect(nativeRes.stdout).toEqual(nodeRes.stdout);
+    expect(comparableStderr(nativeRes.stderr)).toEqual(nodeRes.stderr);
+    expect(nativeRes.exitCode).toBe(nodeRes.exitCode);
+  }, 180_000);
+
   test("the published Effect Function subpath initializes and runs statically", async () => {
     const entry = join(pilotRoot, "effect-function-cli.ts");
     const { coverage } = analyze(entry, { npmStatic: ["effect"] });
@@ -668,6 +690,50 @@ describe(`npm-static pilots${sanitize ? " (sanitized)" : ""}`, () => {
     expect(comparableStderr(nativeRes.stderr)).toEqual(nodeRes.stderr);
     expect(nativeRes.exitCode).toBe(nodeRes.exitCode);
   }, 180_000);
+
+  test("the published Effect generator logs and completes statically", async () => {
+    const entry = join(pilotRoot, "effect-gen-cli.ts");
+    const binary = await buildStatic(entry, ["effect"]);
+    const [reference, native] = await Promise.all([runBinary(process.execPath, [entry]), runBinary(binary, [])]);
+    const log = /^timestamp=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z level=INFO fiber=#0 message="Hello, world!"\n$/;
+    expect(reference.stdout.toString()).toMatch(log);
+    expect(native.stdout.toString()).toMatch(log);
+    expect(comparableStderr(native.stderr)).toEqual(reference.stderr);
+    expect(native.exitCode).toBe(reference.exitCode);
+    expect(native.exitCode).toBe(0);
+  });
+
+  test("the published Effect generator has deterministic native results", async () => {
+    const entry = join(pilotRoot, "effect-gen-result-cli.ts");
+    const binary = await buildStatic(entry, ["effect"]);
+    const [reference, native] = await Promise.all([runBinary(process.execPath, [entry]), runBinary(binary, [])]);
+    expect(reference.stdout.toString()).toBe("Hello, world!\n42\n");
+    expect(native.stdout).toEqual(reference.stdout);
+    expect(comparableStderr(native.stderr)).toEqual(reference.stderr);
+    expect(native.exitCode).toBe(reference.exitCode);
+  });
+
+  test("inferred variadic factories preserve checked callable results", async () => {
+    const entry = join(pilotRoot, "variadic-factory-cli.ts");
+    const binary = await buildStatic(entry, ["variadic-factory"]);
+    const [nodeRes, nativeRes] = await Promise.all([runBinary("node", [entry]), runBinary(binary, [])]);
+    expect(nativeRes.stdout).toEqual(nodeRes.stdout);
+    expect(comparableStderr(nativeRes.stderr)).toEqual(nodeRes.stderr);
+    expect(nativeRes.exitCode).toBe(nodeRes.exitCode);
+  }, 180_000);
+
+  test.each(["release", "dev"] as const)("inferred helpers preserve native array storage (%s)", async (optimization) => {
+    const entry = join(pilotRoot, "array-helper-cli.ts");
+    const outDir = join(cacheDir, `array-helper-${optimization}-${sanitize ? "san" : "plain"}`);
+    const result = await compile(entry, { backend: "llvm", npmStatic: ["array-helper"], sanitize, optimization,
+      outDir, outPath: join(outDir, "program") });
+    if (!result.ok) throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
+    const [reference, native] = await Promise.all([runBinary(process.execPath, [entry]), runBinary(result.binaryPath, [])]);
+    expect(reference.stdout.toString()).toBe("[0,2,4,6]\n[]\n");
+    expect(native.stdout).toEqual(reference.stdout);
+    expect(comparableStderr(native.stderr)).toEqual(reference.stderr);
+    expect(native.exitCode).toBe(reference.exitCode);
+  });
 
   test.for([
     ["purebarrel", "purebarrel-cli.ts"],

@@ -48,16 +48,7 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
             throw new InternalCompilerError(`llvm emitter bug: live dyn ref of ${typeKey(v.type)}`);
           }
           const key = typeKey(v.type);
-          let adapter = host.liveDynRefAdapters.get(key);
-          if (!adapter) {
-            const prefix = `sc_ldr_${host.liveDynRefAdapters.size}`;
-            adapter = host.streamTypedRefMaterializeAdapter(
-              v.type,
-              { prefix, adapters: new Map() },
-              `${prefix}_materialize`,
-            );
-            host.liveDynRefAdapters.set(key, adapter);
-          }
+          const adapter = host.liveDynRefAdapter(v.type);
           const rc = vAdapters(host.shapeHost, v.type);
 
           const boxed = B.tmp();
@@ -206,13 +197,15 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
         // paths are unreachable here.
         host.declare(`declare ptr @scr_dyn_new_obj()`);
         host.declare(`declare void @scr_dyn_key_set(ptr, ptr, ptr)`);
+        host.declare(`declare void @scr_dyn_key_set_computed(ptr, ptr, ptr)`);
         const obj = B.tmp();
         B.line(`${obj} = call ptr @scr_dyn_new_obj()`);
         const out = host.own({ name: obj, type: e.type });
         for (const f of e.fields ?? []) {
           const k = host.emitExpr(f.key);
           const v = host.emitExpr(f.value);
-          B.line(`call void @scr_dyn_key_set(ptr ${obj}, ptr ${k.name}, ptr ${v.name})`);
+          B.line(`call void @${f.key.type.kind === "dyn" ? "scr_dyn_key_set_computed" : "scr_dyn_key_set"}(ptr ${obj}, ptr ${k.name}, ptr ${v.name})`);
+          host.emitPendingCheck();
         }
         return out;
       }
@@ -412,7 +405,7 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
         // property ladder on EITHER form; the result is owned (+1).
         const d = host.emitExpr(e.value);
         const k = host.emitExpr(e.key);
-        const helper = host.dyn.dynKeyGetHelper();
+        const helper = e.key.type.kind === "dyn" ? host.dyn.dynComputedKeyGetHelper() : host.dyn.dynKeyGetHelper();
         const t = B.tmp();
         B.line(`${t} = call ptr @${helper}(ptr ${d.name}, ptr ${k.name}, i1 ${e.optional ? "true" : "false"})`);
         const out = host.own({ name: t, type: e.type });
@@ -585,6 +578,7 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
           } else {
             const kindOf: Record<string, number> = {
               bigint: DYN_KIND.BIGINT,
+              symbol: DYN_KIND.SYMBOL,
               string: DYN_KIND.STR,
               number: DYN_KIND.NUM,
               boolean: DYN_KIND.BOOL,

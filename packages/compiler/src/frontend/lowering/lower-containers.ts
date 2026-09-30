@@ -1283,6 +1283,11 @@ function arraySearchHelper(
     // that wider ABI: adapt each actual argument before invoking it, just
     // as assignment to a narrower function slot does. Require a conversion
     // plan so this path never manufactures a stranded callback.
+    if (fnArg.type.kind === "dyn") {
+      const signatures = lowerer.checker.getCallSignatures(lowerer.typeOf(argNode));
+      const ret = expectedReturn ?? (signatures[0] ? lowerer.mapTypeOf(lowerer.checker.getReturnTypeOfSignature(signatures[0])) : null);
+      if (ret && ret.kind !== "void") fnArg = lowerer.coerceToExpected(fnArg, funcOf(full, ret));
+    }
     if (fnArg.type.kind === "func" && fnArg.type.params.length <= full.length &&
       fnArg.type.params.every((param, i) => lowerer.coercibleValue(full[i]!, param))) {
       const callbackType = funcOf(full.slice(0, fnArg.type.params.length), fnArg.type.ret);
@@ -1911,7 +1916,7 @@ export function lowerTupleReadMethodCall(
   ): IrExpr | null {
     if (arr.type.kind !== "array") throw new InternalCompilerError("indexed read requires an array");
     const elem = arr.type.elem;
-    if (elem.kind === "void" || elem.kind === "dyn") return null;
+    if (elem.kind === "void") return null;
     const resultT = arrayValueType(lowerer, elem);
     const key = `idxOr:${typeKey(elem)}`;
     let name = lowerer.arrHofHelpers.get(key);
@@ -3011,10 +3016,24 @@ export function lowerArrayConstructor(lowerer: Lowerer,
     const contextual = lowerer.checker.getContextualType(expr);
     if (contextual) result = lowerer.mapTypeOf(contextual);
   }
+  if (isJsSourceFile(expr.getSourceFile()) && (result === null || result.kind === "dyn")) result = arrayOf(DYN);
   if (result?.kind !== "array" || !isSupportedArrayElem(result.elem)) {
     lowerer.badType(expr, lowerer.typeOf(expr));
   }
   const argType = args.length === 1 ? lowerer.mapTypeOf(lowerer.typeOf(args[0]!)) : null;
+  if (args.length === 1 && result.elem.kind === "dyn" && (argType === null || argType.kind === "dyn")) {
+    const input = lowerer.declareHiddenLocal("%arrayCtorValue", DYN);
+    const value = varRef(input.id, DYN, loc);
+    const local = lowerer.declareHiddenLocal("%arrayCtor", result);
+    const array = varRef(local.id, result, loc);
+    return { kind: "seqExpr", stmts: [
+      { kind: "varDecl", localId: input.id, init: lowerer.lowerExprExpecting(args[0]!, DYN), loc },
+      { kind: "varDecl", localId: local.id, init: { kind: "arrayLit", elems: [], type: result, loc }, loc },
+      { kind: "if", cond: { kind: "dynTest", test: "number", value, type: BOOL, loc },
+        then: [{ kind: "arraySetLength", arr: array, length: { kind: "dynCheck", value, type: F64, loc }, loc }],
+        else_: [arrayValueStore(lowerer, array, numLit(0, loc), value, DYN, loc)], loc },
+    ], result: array, type: result, loc };
+  }
   if (argType?.kind === "dyn" || argType?.kind === "jsval") {
     lowerer.noLowering("Array constructor with a dynamically typed sole argument", args[0]!);
   }
@@ -3076,6 +3095,34 @@ export function lowerArrayOfCall(lowerer: Lowerer, call: ts.CallExpression,
     type: result,
     loc: locOf(call),
   };
+}
+
+/** Mapper-less checked Array.from: acquire once, then step through emitted
+ * property and call dispatch so native class iterators retain their methods. */
+function lowerCheckedArrayFrom(lowerer: Lowerer, source: IrExpr, loc: SrcLoc): IrExpr {
+  const iterator = lowerer.declareHiddenLocal("%fromIterator", DYN);
+  const next = lowerer.declareHiddenLocal("%fromNext", DYN);
+  const step = lowerer.declareHiddenLocal("%fromStep", DYN);
+  const out = lowerer.declareHiddenLocal("%fromArray", DYN);
+  const done = lowerer.declareHiddenLocal("%fromDone", BOOL);
+  done.mutable = true;
+  const get = (value: IrExpr, key: string): IrExpr => ({ kind: "dynKeyGet", value, key: strLit(key, loc), type: DYN, loc });
+  const stmts: IrStmt[] = [
+    { kind: "varDecl", localId: iterator.id, init: { kind: "libCall", fn: "dyn.iteratorResult", args: [{ kind: "libCall", fn: "dyn.arrayFromIterator", args: [source], type: DYN, loc }], type: DYN, loc }, loc },
+    { kind: "varDecl", localId: next.id, init: get(varRef(iterator.id, DYN, loc), "next"), loc },
+    { kind: "varDecl", localId: out.id, init: { kind: "dynArrLit", elems: [], type: DYN, loc }, loc },
+    { kind: "varDecl", localId: done.id, init: boolLit(false, loc), loc },
+    { kind: "while", cond: { kind: "unary", op: "!", operand: varRef(done.id, BOOL, loc), type: BOOL, loc }, body: [
+      { kind: "varDecl", localId: step.id, init: { kind: "libCall", fn: "dyn.iteratorResult", args: [{
+        kind: "dynCall", callee: varRef(next.id, DYN, loc), receiver: varRef(iterator.id, DYN, loc), calleeName: "iterator.next", args: [], type: DYN, loc,
+      }], type: DYN, loc }, loc },
+      { kind: "assign", localId: done.id, value: { kind: "dynTest", test: "truthy", value: get(varRef(step.id, DYN, loc), "done"), type: BOOL, loc }, loc },
+      { kind: "if", cond: { kind: "unary", op: "!", operand: varRef(done.id, BOOL, loc), type: BOOL, loc }, then: [
+        { kind: "exprStmt", expr: { kind: "dynInvoke", recv: varRef(out.id, DYN, loc), method: "push", calleeName: "Array.from", args: [get(varRef(step.id, DYN, loc), "value")], type: DYN, loc }, loc },
+      ], else_: null, loc },
+    ], loc },
+  ];
+  return { kind: "seqExpr", stmts, result: varRef(out.id, DYN, loc), type: DYN, loc };
 }
 
 /** `Array.from({ length: n }, mapfn)` — the counted-generation idiom — on
@@ -3179,6 +3226,9 @@ export function lowerArrayOfCall(lowerer: Lowerer, call: ts.CallExpression,
       // String iteration advances by code point; the same helper serves
       // `[...s]` and both Array.from(s) forms.
       if (src.type.kind === "string" && args.length === 1) return strCharsCall(lowerer, src, loc);
+      if (src.type.kind === "dyn" && args.length === 1) {
+        return lowerCheckedArrayFrom(lowerer, src, loc);
+      }
       lowerer.noLowering(
         "Array.from with this argument shape",
         call,

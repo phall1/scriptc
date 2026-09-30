@@ -14,7 +14,9 @@ import { ts7Executable } from "../../packages/compiler/src/frontend/ts7/rpc-api.
 const root = join(import.meta.dirname, "../..");
 const execFileAsync = promisify(execFile);
 const sanitize = process.env["SCRIPTC_SAN"] === "1";
-const options = { cwd: root, timeout: 1_200_000, maxBuffer: 16 * 1024 * 1024 };
+// ASan instruments the entire compiler graph, including its native AST and
+// IR traversal. Keep a separate budget for those full self-compilation passes.
+const options = { cwd: root, timeout: sanitize ? 3_600_000 : 1_200_000, maxBuffer: 16 * 1024 * 1024 };
 
 function comparableStderr(text: string): string {
   return sanitize
@@ -133,4 +135,4 @@ test("the native frontend and LLVM emitter rebuild a working frontend from its T
       expect(native.stderr).toEqual(oracle.stderr);
     }
   } finally { rmSync(directory, { recursive: true, force: true }); }
-}, 2_400_000);
+}, sanitize ? 7_200_000 : 2_400_000);

@@ -186,6 +186,7 @@ ScrClosure *scr_closure_new(void *fn, size_t ncaps) {
   c->fn = fn;
   c->ncaps = ncaps;
   c->props = NULL; /* lazily allocated by Object.defineProperties */
+  c->function_kind = 0;
 #ifdef SCR_RC_AUDIT
   scr_live_closures++;
 #endif

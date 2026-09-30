@@ -11,6 +11,7 @@
 #include "scr_runtime.h"
 
 #include <stdio.h>
+#include <math.h>
 #include <stdlib.h>
 
 #ifndef SCR_LIB
@@ -59,6 +60,54 @@ ScrExcCell *scr_exc_swap_cell(ScrExcCell *cell) {
 /* The ACTIVE cell, for runtime code that moves a pending payload out of it
  * (a new-Promise executor throw rejecting the promise). */
 ScrExcCell *scr_exc_current_cell(void) { return SCR_EXC_CUR(); }
+
+void scr_stack_enter(ScrStackFrame *frame, const char *text) {
+  frame->previous = SCR_EXC_CUR()->stack;
+  frame->text = text;
+  SCR_EXC_CUR()->stack = frame;
+}
+
+void scr_stack_leave(ScrStackFrame *frame) {
+  SCR_EXC_CUR()->stack = frame->previous;
+}
+
+static SCR_TL double scr_stack_limit = 10;
+static SCR_TL bool scr_stack_limit_reset_registered;
+static void scr_stack_limit_reset(void) {
+  scr_stack_limit = 10;
+  scr_stack_limit_reset_registered = false;
+}
+double scr_stack_limit_get(void) { return scr_stack_limit; }
+void scr_stack_limit_set(double limit) {
+  if (!scr_stack_limit_reset_registered) {
+    scr_atexit(scr_stack_limit_reset);
+    scr_stack_limit_reset_registered = true;
+  }
+  scr_stack_limit = limit;
+}
+
+ScrStr *scr_stack_capture(void) {
+  if (!SCR_EXC_CUR()->stack) return NULL;
+  const double limit = floor(scr_stack_limit);
+  if (!(limit > 0)) return NULL;
+  size_t length = 0;
+  size_t count = 0;
+  for (ScrStackFrame *frame = SCR_EXC_CUR()->stack; frame && (double)count++ < limit; frame = frame->previous)
+    length += 1 + strlen(frame->text);
+  char *text = malloc(length);
+  if (!text) scr_trap("scriptc: out of memory\n");
+  size_t offset = 0;
+  count = 0;
+  for (ScrStackFrame *frame = SCR_EXC_CUR()->stack; frame && (double)count++ < limit; frame = frame->previous) {
+    text[offset++] = '\n';
+    size_t size = strlen(frame->text);
+    memcpy(text + offset, frame->text, size);
+    offset += size;
+  }
+  ScrStr *out = scr_str_new(text, length);
+  free(text);
+  return out;
+}
 
 #define scr_exc_kind (SCR_EXC_CUR()->kind)
 #define scr_exc_f64 (SCR_EXC_CUR()->f64)

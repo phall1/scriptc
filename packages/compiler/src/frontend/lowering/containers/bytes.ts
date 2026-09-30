@@ -25,7 +25,7 @@ function lowerBytesToSortedCall(
   if (call.arguments.length > 1 || call.arguments.some(ts.isSpreadElement)) {
     lowerer.noLowering(`.toSorted with ${call.arguments.length} arguments on Uint8Array`, call);
   }
-  const receiver = lowerer.lowerExpr(access.expression);
+  const receiver = lowerer.lowerExprExpecting(access.expression, bytesT);
   const undefinedArg = call.arguments[0]
     ? lowerStaticallyUndefinedArgument(lowerer, call.arguments[0])
     : null;
@@ -300,7 +300,7 @@ export function lowerBytesMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     return {
       kind: "bytesIntrinsic",
       method: "toReversed",
-      receiver: lowerer.lowerExpr(access.expression),
+      receiver: lowerer.lowerExprExpecting(access.expression, receiverIr),
       args: [],
       type: receiverIr,
       loc,
@@ -313,7 +313,7 @@ export function lowerBytesMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     return {
       kind: "bytesIntrinsic",
       method: "with",
-      receiver: lowerer.lowerExpr(access.expression),
+      receiver: lowerer.lowerExprExpecting(access.expression, receiverIr),
       args: [
         lowerer.lowerExprExpecting(call.arguments[0]!, F64),
         lowerer.lowerExprExpecting(call.arguments[1]!, F64),
@@ -343,7 +343,7 @@ export function lowerBytesMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     return {
       kind: "bytesIntrinsic",
       method: "join",
-      receiver: lowerer.lowerExpr(access.expression),
+      receiver: lowerer.lowerExprExpecting(access.expression, receiverIr),
       args: [separator],
       type: STRING,
       loc,
@@ -353,7 +353,7 @@ export function lowerBytesMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     if (nArgs > 2) {
       lowerer.noLowering(`.${name} with ${nArgs} arguments on typed arrays`, call);
     }
-    const receiver = lowerer.lowerExpr(access.expression);
+    const receiver = lowerer.lowerExprExpecting(access.expression, receiverIr);
     const args = call.arguments.map((a) => lowerer.lowerExprExpecting(a, F64));
     // subarray is a VIEW (TypedArray.prototype.subarray aliases), and
     // Buffer's slice() is subarray's deprecated Node alias — resolved by
@@ -374,7 +374,7 @@ export function lowerBytesMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     if (nArgs > 3 || call.arguments.some(ts.isSpreadElement)) {
       lowerer.noLowering(`.copyWithin with ${nArgs} arguments on typed arrays`, call);
     }
-    const receiver = lowerer.lowerExpr(access.expression);
+    const receiver = lowerer.lowerExprExpecting(access.expression, receiverIr);
     const args = [0, 0, Infinity].map((value, i) => {
       const fallback: IrExpr = { kind: "numLit", value, type: F64, loc };
       const node = call.arguments[i];
@@ -390,7 +390,7 @@ export function lowerBytesMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     if (nArgs < 1 || nArgs > 3) {
       lowerer.noLowering(`.fill with ${nArgs} arguments on typed arrays`, call);
     }
-    const receiver = lowerer.lowerExpr(access.expression);
+    const receiver = lowerer.lowerExprExpecting(access.expression, receiverIr);
     const v = lowerer.lowerExprExpecting(call.arguments[0]!, F64);
     const idx = call.arguments.slice(1).map((a) => lowerer.lowerExprExpecting(a, F64));
     return { kind: "bytesIntrinsic", method: "fillElem", receiver, args: [v, ...idx], type: receiverIr, loc };
@@ -399,7 +399,7 @@ export function lowerBytesMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     if (nArgs < 1 || nArgs > 2) {
       lowerer.noLowering(`.set with ${nArgs} arguments on typed arrays`, call);
     }
-    const receiver = lowerer.lowerExpr(access.expression);
+    const receiver = lowerer.lowerExprExpecting(access.expression, receiverIr);
     const src = lowerer.lowerExpr(call.arguments[0]!);
     const method = src.type.kind === "bytes" ? "setFrom" : "setFromDyn";
     const args = [src.type.kind === "bytes" ? src : lowerer.coerceInto(call.arguments[0]!, src, DYN)];
@@ -424,7 +424,7 @@ export function lowerBytesMethodCall(lowerer: Lowerer, call: ts.CallExpression,
       );
     }
     if (nArgs > 3) lowerer.noLowering(`.toString with ${nArgs} arguments on Buffers`, call);
-    const receiver = lowerer.lowerExpr(access.expression);
+    const receiver = lowerer.lowerExprExpecting(access.expression, receiverIr);
     const encNode = call.arguments[0];
     let method: IrBytesIntrinsicMethod = "toString";
     let enc: IrExpr = { kind: "strLit", value: "utf8", type: STRING, loc };
@@ -492,7 +492,7 @@ export function lowerBytesMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     if (nArgs < required || nArgs > required + 1) {
       lowerer.noLowering(`.${name} with ${nArgs} arguments`, call);
     }
-    const receiver = lowerer.lowerExpr(access.expression);
+    const receiver = lowerer.lowerExprExpecting(access.expression, receiverIr);
     const offsetNode = call.arguments[required];
     const offset: IrExpr = offsetNode
       ? lowerer.lowerExprExpecting(offsetNode, F64)
@@ -519,7 +519,7 @@ export function lowerBytesMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     if (nArgs < required || nArgs > required + 1) {
       lowerer.noLowering(`.${name} with ${nArgs} arguments`, call);
     }
-    const receiver = lowerer.lowerExpr(access.expression);
+    const receiver = lowerer.lowerExprExpecting(access.expression, receiverIr);
     const kind: IrExpr = { kind: "strLit", value: numKind, type: STRING, loc };
     const args = [kind, ...call.arguments.map((a) => lowerer.lowerExprExpecting(a, F64))];
     if (nArgs === required) {
@@ -537,7 +537,7 @@ export function lowerBytesMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     if (nArgs !== required) {
       lowerer.noLowering(`.${name} with ${nArgs} arguments`, call);
     }
-    const receiver = lowerer.lowerExpr(access.expression);
+    const receiver = lowerer.lowerExprExpecting(access.expression, receiverIr);
     const kind: IrExpr = { kind: "strLit", value: varKind, type: STRING, loc };
     const args = [kind, ...call.arguments.map((a) => lowerer.lowerExprExpecting(a, F64))];
     return { kind: "bytesIntrinsic", method: write ? "writeNumVar" : "readNumVar", receiver, args, type: F64, loc };
@@ -550,7 +550,7 @@ export function lowerBytesMethodCall(lowerer: Lowerer, call: ts.CallExpression,
   const dvBigGetter = own(DV_BIG_GETTERS, name);
   if (dvBigGetter !== undefined && receiverIr.elem === "u8") {
     if (nArgs < 1 || nArgs > 2) lowerer.noLowering(`.${name} with ${nArgs} arguments`, call);
-    const receiver = lowerer.lowerExpr(access.expression);
+    const receiver = lowerer.lowerExprExpecting(access.expression, receiverIr);
     const offset = lowerer.lowerExprExpecting(call.arguments[0]!, F64);
     const sign: IrExpr = { kind: "boolLit", value: dvBigGetter.sign, type: BOOL, loc };
     const le: IrExpr = call.arguments[1]
@@ -564,7 +564,7 @@ export function lowerBytesMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     if (nArgs < 1 || nArgs > maxArgs) {
       lowerer.noLowering(`.${name} with ${nArgs} arguments`, call);
     }
-    const receiver = lowerer.lowerExpr(access.expression);
+    const receiver = lowerer.lowerExprExpecting(access.expression, receiverIr);
     const args = [lowerer.lowerExprExpecting(call.arguments[0]!, F64)];
     if (nArgs === 2) args.push(lowerer.lowerExprExpecting(call.arguments[1]!, BOOL));
     return { kind: "bytesIntrinsic", method: dvGetter.method, receiver, args, type: F64, loc };
@@ -578,7 +578,7 @@ export function lowerBytesMethodCall(lowerer: Lowerer, call: ts.CallExpression,
   const dvSetter = own(DV_SETTERS, name);
   if ((name === "setBigUint64" || name === "setBigInt64") && receiverIr.elem === "u8") {
     if (nArgs < 2 || nArgs > 3) lowerer.noLowering(`.${name} with ${nArgs} arguments`, call);
-    const receiver = lowerer.lowerExpr(access.expression);
+    const receiver = lowerer.lowerExprExpecting(access.expression, receiverIr);
     const offset = lowerer.lowerExprExpecting(call.arguments[0]!, F64);
     const value = lowerer.lowerExprExpecting(call.arguments[1]!, BIGINT_T);
     const le: IrExpr = call.arguments[2]
@@ -591,7 +591,7 @@ export function lowerBytesMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     if (nArgs < 2 || nArgs > maxArgs) {
       lowerer.noLowering(`.${name} with ${nArgs} arguments`, call);
     }
-    const receiver = lowerer.lowerExpr(access.expression);
+    const receiver = lowerer.lowerExprExpecting(access.expression, receiverIr);
     const args = [
       lowerer.lowerExprExpecting(call.arguments[0]!, F64),
       lowerer.lowerExprExpecting(call.arguments[1]!, F64),
@@ -725,12 +725,12 @@ function lowerBufferInstanceMethod(lowerer: Lowerer, call: ts.CallExpression,
     if (nArgs !== 1) lowerer.noLowering(`.equals with ${nArgs} arguments`, call);
     if (argIrKind(0)?.kind === "bytes") {
       const other = u8Arg(0);
-      const receiver = lowerer.lowerExpr(access.expression);
+      const receiver = lowerer.lowerExprExpecting(access.expression, BYTES_U8);
       return { kind: "bytesIntrinsic", method: "equals", receiver, args: [other], type: BOOL, loc };
     }
     // Not statically bytes (the invalid-input probes, untyped JS
     // helpers): Node's "otherBuffer" argument ladder runs at runtime.
-    const receiver = lowerer.lowerExpr(access.expression);
+    const receiver = lowerer.lowerExprExpecting(access.expression, BYTES_U8);
     return { kind: "libCall", fn: "bytes.equalsChk", args: [receiver, chkArg(0)], type: BOOL, loc };
   }
   if (name === "compare") {
@@ -742,14 +742,14 @@ function lowerBufferInstanceMethod(lowerer: Lowerer, call: ts.CallExpression,
     if (fast) {
       const target = u8Arg(0);
       const idx = call.arguments.slice(1).map((a) => lowerer.lowerExprExpecting(a, F64));
-      const receiver = lowerer.lowerExpr(access.expression);
+      const receiver = lowerer.lowerExprExpecting(access.expression, BYTES_U8);
       return { kind: "bytesIntrinsic", method: "compareBuf", receiver, args: [target, ...idx], type: F64, loc };
     }
     // An absent/ill-typed target or offset (`a.compare()`, string
     // offsets, explicit undefined): Node's target/targetStart/targetEnd/
     // sourceStart/sourceEnd ladder runs at runtime; absent slots pass
     // the undefined dyn (Node defaults apply there).
-    const receiver = lowerer.lowerExpr(access.expression);
+    const receiver = lowerer.lowerExprExpecting(access.expression, BYTES_U8);
     const slots: IrExpr[] = [];
     for (let i = 0; i < 5; i++) slots.push(i < nArgs ? chkArg(i) : dynUndefinedExpr(loc));
     return { kind: "libCall", fn: "bytes.compareChk", args: [receiver, ...slots], type: F64, loc };
@@ -769,7 +769,7 @@ function lowerBufferInstanceMethod(lowerer: Lowerer, call: ts.CallExpression,
     }
     const resultT = name === "includes" ? BOOL : F64;
     const vT = lowerer.mapTypeOf(lowerer.typeOf(args[0]!));
-    const receiver = lowerer.lowerExpr(access.expression);
+    const receiver = lowerer.lowerExprExpecting(access.expression, BYTES_U8);
     if (vT?.kind === "f64") {
       // A number needle wraps & 0xFF at runtime (Buffer semantics; the
       // encoding is irrelevant, like Node).
@@ -812,7 +812,7 @@ function lowerBufferInstanceMethod(lowerer: Lowerer, call: ts.CallExpression,
     const receiverT = lowerer.mapTypeOf(lowerer.typeOf(access.expression));
     if (receiverT?.kind !== "bytes") lowerer.badType(access.expression, lowerer.typeOf(access.expression));
     const vT = lowerer.mapTypeOf(lowerer.typeOf(args[0]!));
-    const receiver = lowerer.lowerExpr(access.expression);
+    const receiver = lowerer.lowerExprExpecting(access.expression, BYTES_U8);
     if (vT?.kind === "string") {
       const encName = encNode ? bufEncoding(lowerer, ".fill", encNode) : "utf8";
       const s = lowerer.lowerExprExpecting(args[0]!, STRING);
@@ -831,12 +831,12 @@ function lowerBufferInstanceMethod(lowerer: Lowerer, call: ts.CallExpression,
     if (nArgs < 1 || nArgs > 4) lowerer.noLowering(`.copy with ${nArgs} arguments`, call);
     const target = u8Arg(0);
     const idx = call.arguments.slice(1).map((a) => lowerer.lowerExprExpecting(a, F64));
-    const receiver = lowerer.lowerExpr(access.expression);
+    const receiver = lowerer.lowerExprExpecting(access.expression, BYTES_U8);
     return { kind: "bytesIntrinsic", method: "copy", receiver, args: [target, ...idx], type: F64, loc };
   }
   if (name === "swap16" || name === "swap32" || name === "swap64") {
     if (nArgs !== 0) lowerer.noLowering(`.${name} with ${nArgs} arguments`, call);
-    const receiver = lowerer.lowerExpr(access.expression);
+    const receiver = lowerer.lowerExprExpecting(access.expression, BYTES_U8);
     return { kind: "bytesIntrinsic", method: name, receiver, args: [], type: BYTES_U8, loc };
   }
   if (name === "write") {
@@ -857,7 +857,7 @@ function lowerBufferInstanceMethod(lowerer: Lowerer, call: ts.CallExpression,
       ? lowerer.lowerExprExpecting(idxNodes[0], F64)
       : { kind: "numLit", value: 0, type: F64, loc };
     const writeArgs = [s, enc, offset, ...(idxNodes[1] ? [lowerer.lowerExprExpecting(idxNodes[1], F64)] : [])];
-    const receiver = lowerer.lowerExpr(access.expression);
+    const receiver = lowerer.lowerExprExpecting(access.expression, BYTES_U8);
     return { kind: "bytesIntrinsic", method: "writeStr", receiver, args: writeArgs, type: F64, loc };
   }
   return null;

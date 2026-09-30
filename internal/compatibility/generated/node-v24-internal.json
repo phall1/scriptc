@@ -459,9 +459,9 @@
       "apiEntries": 461,
       "static": {
         "supported": 0,
-        "partial": 0,
+        "partial": 3,
         "refused": 0,
-        "not-implemented": 461,
+        "not-implemented": 458,
         "by-design": 0,
         "unreviewed": 0,
         "not-applicable": 0
@@ -915,9 +915,9 @@
       "apiEntries": 119,
       "static": {
         "supported": 0,
-        "partial": 33,
+        "partial": 35,
         "refused": 0,
-        "not-implemented": 86,
+        "not-implemented": 84,
         "by-design": 0,
         "unreviewed": 0,
         "not-applicable": 0
@@ -22573,6 +22573,7 @@
           "tests/corpus/1460-console-error-warn.ts",
           "tests/corpus/2440-console-inspect-args.ts",
           "tests/corpus/2631-create-require/main.ts",
+          "tests/corpus/console-native-value.js",
           "tests/harness/npm-static.test.ts"
         ]
       },
@@ -22867,6 +22868,7 @@
           "tests/corpus/1460-console-error-warn.ts",
           "tests/corpus/2440-console-inspect-args.ts",
           "tests/corpus/2631-create-require/main.ts",
+          "tests/corpus/console-native-value.js",
           "tests/harness/npm-static.test.ts"
         ]
       },
@@ -22960,6 +22962,7 @@
           "tests/corpus/1460-console-error-warn.ts",
           "tests/corpus/2440-console-inspect-args.ts",
           "tests/corpus/2631-create-require/main.ts",
+          "tests/corpus/console-native-value.js",
           "tests/harness/npm-static.test.ts"
         ]
       },
@@ -23083,6 +23086,7 @@
           "tests/corpus/1460-console-error-warn.ts",
           "tests/corpus/2440-console-inspect-args.ts",
           "tests/corpus/2631-create-require/main.ts",
+          "tests/corpus/console-native-value.js",
           "tests/harness/npm-static.test.ts"
         ]
       },
@@ -23119,6 +23123,7 @@
           "tests/corpus/1460-console-error-warn.ts",
           "tests/corpus/2440-console-inspect-args.ts",
           "tests/corpus/2631-create-require/main.ts",
+          "tests/corpus/console-native-value.js",
           "tests/harness/npm-static.test.ts"
         ]
       },
@@ -23302,6 +23307,7 @@
           "tests/corpus/1460-console-error-warn.ts",
           "tests/corpus/2440-console-inspect-args.ts",
           "tests/corpus/2631-create-require/main.ts",
+          "tests/corpus/console-native-value.js",
           "tests/harness/npm-static.test.ts"
         ]
       },
@@ -37415,8 +37421,12 @@
       "anchor": "",
       "nodeStability": null,
       "static": {
-        "status": "not-implemented",
-        "evidence": "derived:descendants"
+        "status": "partial",
+        "evidence": "derived:descendants",
+        "tests": [
+          "tests/corpus/error-stack-frames.ts",
+          "tests/corpus/error-stack-limit.ts"
+        ]
       },
       "dynamic": {
         "status": "not-implemented",
@@ -37481,8 +37491,11 @@
       "anchor": "class-error",
       "nodeStability": null,
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:errors"
+        "status": "partial",
+        "evidence": "compiler-feature:errors.stackTraceLimit",
+        "tests": [
+          "tests/corpus/error-stack-limit.ts"
+        ]
       },
       "dynamic": {
         "status": "not-implemented",
@@ -37569,8 +37582,12 @@
       "anchor": "class-error",
       "nodeStability": null,
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:errors"
+        "status": "partial",
+        "evidence": "compiler-feature:errors.stack",
+        "tests": [
+          "tests/corpus/error-stack-frames.ts",
+          "tests/corpus/error-stack-limit.ts"
+        ]
       },
       "dynamic": {
         "status": "not-implemented",
@@ -86857,6 +86874,7 @@
           "tests/corpus/2946-child-fork-ipc/main.ts",
           "tests/corpus/990-process-basics.ts",
           "tests/corpus/process-builtin-values.js",
+          "tests/corpus/process-hrtime.js",
           "tests/corpus/process-named-signals.cjs",
           "tests/corpus/process-uncaught-handler-throws.cjs",
           "tests/corpus/process-uncaught-loop.cjs",
@@ -87924,8 +87942,11 @@
         "inherited": false
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:process"
+        "status": "partial",
+        "evidence": "compiler-feature:process.process.hrtime",
+        "tests": [
+          "tests/corpus/process-hrtime.js"
+        ]
       },
       "dynamic": {
         "status": "partial",
@@ -87949,8 +87970,11 @@
       "anchor": "processhrtimebigint",
       "nodeStability": null,
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:process"
+        "status": "partial",
+        "evidence": "compiler-feature:process.process.hrtime.bigint",
+        "tests": [
+          "tests/corpus/process-hrtime.js"
+        ]
       },
       "dynamic": {
         "status": "not-implemented",

@@ -231,8 +231,7 @@ export function emitOperatorExpr(host: LlvmEmitterContext, e: ExprOf<"bin" | "un
       case "seqExpr": {
         // Statements mid-expression: each emits in place (its own frame,
         // exactly statement position); the result is an ordinary temp of
-        // the current frame. The validator restricted stmts to straight-
-        // line writes — no jump can leave the region.
+        // the current frame. No jump can leave the expression's region.
         for (const s of e.stmts) host.emitStmt(s);
         return host.emitExpr(e.result);
       }

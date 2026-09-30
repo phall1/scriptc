@@ -32,7 +32,7 @@ function absoluteCommand(command: string): string {
 test("the standalone compiler builds programs and rebuilds itself with Node unavailable", async () => {
   const directory = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-native-bootstrap-"));
   const executable = (name: string) => join(directory, name + (process.platform === "win32" ? ".exe" : ""));
-  const options = { cwd: root, timeout: 1_800_000, maxBuffer: 16 * 1024 * 1024 };
+  const options = { cwd: root, timeout: sanitize ? 5_400_000 : 1_800_000, maxBuffer: 16 * 1024 * 1024 };
   try {
     await bootstrapStep("build native compiler seed", () =>
       exec(process.execPath, ["--max-old-space-size=8192", "--import", "tsx", join(root, "scripts/build-native-compiler.mts"), directory], options));
@@ -119,4 +119,4 @@ test("the standalone compiler builds programs and rebuilds itself with Node unav
       invoke(rebuilt, [entry, "--emit=llvm", "-o", rebuiltLlvm, "--ffi", profile]));
     expect(readFileSync(seedLlvm).equals(readFileSync(rebuiltLlvm)), "native compiler generations must emit identical LLVM").toBe(true);
   } finally { rmSync(directory, { recursive: true, force: true }); }
-}, 5_400_000);
+}, sanitize ? 10_800_000 : 5_400_000);

@@ -801,7 +801,7 @@ export interface TypeMapperCtx {
    * inside members, self-referential member types), null outside any
    * mixin context (the type alone cannot name a call site). */
   mixinClassInstance?: (decl: ts.ClassLikeDeclaration) => IrType | null;
-  localClassInstance?: (decl: ts.ClassExpression) => IrType | null;
+  localClassInstance?: (decl: ts.ClassLikeDeclaration) => IrType | null;
   /** MIXIN instance INTERSECTIONS (`Tagged.C & Derived` — values built
    * through a mixin result): resolved by chain structure to the unique
    * pinned instantiation they describe; null when ambiguous or when no
@@ -862,8 +862,8 @@ export interface TypeMapperCtx {
  * - next: void/undefined/never mean valueless resumes (the undefined
  *   unit); any/unknown ride dyn; else the mapped type (`.next(v)` then
  *   requires its argument — fenced at the call site).
- * Mixed dyn/concrete value channels stay unmapped (the shared result
- * record's value slot is one representation). */
+ * Mixed dyn/concrete value channels both use checked values because the
+ * shared result record's value slot has one representation. */
 function genChannels(
   yieldTs: ts.Type | undefined,
   retTs: ts.Type | undefined,
@@ -892,7 +892,7 @@ function genChannels(
   const dynMix =
     (yieldT.kind === "dyn" && retT.kind !== "dyn" && retT.kind !== "void") ||
     (retT.kind === "dyn" && yieldT.kind !== "dyn" && yieldT.kind !== "void");
-  if (dynMix) return null;
+  if (dynMix) return { yieldT: DYN, retT: DYN, nextT };
   return { yieldT, retT, nextT };
 }
 
@@ -949,7 +949,6 @@ export function mapType(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
 /** Local class types need the enclosing specialization's registered layout.
  * Static-block classes are sent through the same hook for an explicit fence. */
 function classExprNeedsContext(decl: ts.ClassLikeDeclaration): boolean {
-  if (!ts.isClassExpression(decl)) return false;
   for (let p: ts.Node | undefined = decl.parent; p !== undefined && !ts.isSourceFile(p); p = p.parent) {
     if (ts.isFunctionLike(p) || ts.isClassStaticBlockDeclaration(p)) return true;
   }
@@ -1425,7 +1424,7 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
       }
     }
     if (classExprNeedsContext(classDecl)) {
-      const local = ts.isClassExpression(classDecl) ? ctx.localClassInstance?.(classDecl) : null;
+      const local = ctx.localClassInstance?.(classDecl);
       if (local) contextResolutions++;
       return local ?? null;
     }
@@ -1462,7 +1461,7 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
       }
     }
     if (classExprNeedsContext(classDecl)) {
-      const local = ts.isClassExpression(classDecl) ? ctx.localClassInstance?.(classDecl) : null;
+      const local = ctx.localClassInstance?.(classDecl);
       if (local?.kind === "object") {
         contextResolutions++;
         return { kind: "classval", className: local.className };
@@ -2342,8 +2341,8 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
   //                    boxes; the yield expression reads checked-dynamic);
   //                    else the mapped type (`.next(v)` requires its
   //                    argument — fenced at the call).
-  // Mixed dyn/concrete channels stay unmapped: the shared result record's
-  // value slot would need a dyn union arm, which does not exist.
+  // Mixed dyn/concrete value channels share checked storage, so either
+  // branch of the result record has the same representation.
   if (isStdlibInterface("Generator") || isStdlibInterface("AsyncGenerator") || isStdlibInterface("IterableIterator")) {
     const args = checker.getTypeArguments(widened as ts.TypeReference);
     const channels = genChannels(args[0], args[1], args[2], ctx);
@@ -3543,6 +3542,7 @@ export function isUnitOnlyTsType(t: ts.Type, resolveTypeParam?: TypeParamResolve
  * admits, `(() => void) | undefined`) so the interned union is IDENTICAL
  * to what mapping the checker's own `T | undefined` produces. */
 export function withUndefinedArm(t: IrType, unions: UnionRegistry): IrType | null {
+  if (t.kind === "jsval") return t;
   if (t.kind === "union") {
     const def = unions.get(t.unionId);
     if (!def) return null;

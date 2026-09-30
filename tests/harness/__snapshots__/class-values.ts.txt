@@ -16,13 +16,6 @@ class-values.ts:22:11 - error SC2020: 'Error' is part of the standard library ty
 
   hint: the type checker sees the full standard library, but only the supported surface compiles (https://scriptc.dev/limitations)
 
-class-values.ts:27:11 - error SC1090: classes extending builtin bases as values ('MyErr' inherits a runtime-provided constructor) are not supported yet
-
-  26 | class MyErr extends Error {}
-  27 | const M = MyErr;
-     |           ^~~~~
-  28 | 
-
 class-values.ts:31:33 - error SC1090: structurally-typed class-value flows ('typeof Unrelated' into a 'typeof Base' slot: only a class and its subclasses share a slot — extend the base class) are not supported yet
 
   30 | // is the IR's only class subtyping.
@@ -58,7 +51,7 @@ class-values.ts:48:13 - error SC1090: reading the static member 'tag' through a 
      |             ^~~~~~~~~~~~~
   49 | 
 
-class-values.ts:52:10 - error SC1090: function-local classes with inheritance, statics, decorators, or generic members are not supported yet
+class-values.ts:52:10 - error SC1090: function-local classes with statics, decorators, or generic members are not supported yet
 
   51 | function make(): unknown {
   52 |   return class { static value = 1; };

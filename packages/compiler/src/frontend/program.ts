@@ -88,6 +88,7 @@ import {
 } from "./tsc-codes.js";
 import { trackedFileExists, trackedReadFile, trackedRealpath } from "./input-tracker.js";
 import { forkTargetPaths } from "./fork-target.js";
+import { inferredJsDiagnosticSuppressed } from "./inferred-js-diagnostics.js";
 
 const BASE_OPTIONS: ts.Ts7CompilerOptions = {
   strict: true,
@@ -2382,6 +2383,7 @@ function preflight7(load: LoadResult): {
         !npmStaticFileSuppressed(d) &&
         !nodeModulesJsSuppressed(d) &&
         !namespaceCalleeSuppressed(p, d) &&
+        !inferredJsDiagnosticSuppressed(p, d) &&
         !workspaceImplicitAnySuppressed(p, d) &&
         !jsdocTypeSuppressed(p, d, commentDup),
     );

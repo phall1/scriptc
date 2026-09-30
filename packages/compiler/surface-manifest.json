@@ -1623,6 +1623,13 @@
       "status": "static"
     },
     {
+      "id": "node-builtin.process.hrtime",
+      "kind": "node-builtin",
+      "name": "process.hrtime",
+      "status": "static",
+      "note": "native monotonic tuple clock and bigint member; direct calls and stored JavaScript callable values"
+    },
+    {
       "id": "node-builtin.process.isTTY",
       "kind": "node-builtin",
       "name": "process.isTTY",
@@ -3858,13 +3865,6 @@
       "name": "bigint literals",
       "status": "static",
       "note": "arbitrary-precision values in decimal, binary, octal, and hexadecimal spelling"
-    },
-    {
-      "id": "syntax.class-declarations-inside-functions",
-      "kind": "syntax",
-      "name": "class declarations inside functions",
-      "status": "unsupported",
-      "code": "SC1090"
     },
     {
       "id": "syntax.class-expressions",

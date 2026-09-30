@@ -33,6 +33,9 @@ const programs = [
   "tuple-array-union.ts",
   "array-refined-storage.ts",
   "typed-rest-filtered-return.ts",
+  "rest-optional-elements.ts",
+  "1300-errors-basics.ts",
+  "error-tostring-overrides.ts",
   "nullish-long-chain.ts",
   "class-array-optional-return.ts",
   "contextual-array-union-write.ts",
@@ -90,7 +93,10 @@ for (const backend of ["llvm"] as const) {
           expect(result.error, file + "\n" + result.stderr).toBeUndefined();
           expect(result.signal, file + "\n" + result.stderr).toBeNull();
           expect(result.status, file + "\n" + result.stderr).toBe(0);
-          expect(result.stderr, file).toBe("");
+          const stderr = sanitize && process.platform === "linux"
+            ? result.stderr.replace(/^==\d+==WARNING: ASan doesn't fully support makecontext\/swapcontext functions and may produce false positives in some cases!\n/gm, "")
+            : result.stderr;
+          expect(stderr, file).toBe("");
         }
         const expectedReport = expected.stdout.trim().split("\n").map((line) => JSON.parse(line));
         const actualReport = actual.stdout.trim().split("\n").map((line) => JSON.parse(line));

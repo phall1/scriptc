@@ -49,7 +49,10 @@ async function build() {
   const sha256 = async (path) => createHash("sha256").update(await readFile(path)).digest("hex");
   const compile = async (source, output, flags) => {
     await mkdir(dirname(output), { recursive: true });
-    await run(compiler, [...compilerArgs, ...sourcePathFlags, ...flags, "-c", source, "-o", output]);
+    // Zig emits DWARF by default even for optimized C. Packaged runtime
+    // objects omit source debug payload, matching clang's default; the
+    // compiler owns the program's development debug information.
+    await run(compiler, [...compilerArgs, ...sourcePathFlags, ...flags, "-g0", "-c", source, "-o", output]);
   };
   const parallel = async (items, task) => {
     const width = Math.max(1, Math.min(8, availableParallelism()));
@@ -122,7 +125,7 @@ async function build() {
     const licensed = [[join(runtimeRoot, "LICENSE"), "artifacts/licenses/scriptc-runtime.txt", "Apache-2.0"], [join(quickjs, "LICENSE"), "artifacts/licenses/quickjs-ng.txt", "MIT"], [join(vendorRoot, "ryu", "LICENSE-Boost"), "artifacts/licenses/ryu.txt", "BSL-1.0"], [join(zlib, "LICENSE"), "artifacts/licenses/zlib.txt", "Zlib"], [join(mbedtls, "LICENSE"), "artifacts/licenses/mbedtls.txt", "Apache-2.0"]];
     licensed.push([join(vendorRoot, "unicode", "LICENSE"), "artifacts/licenses/unicode.txt", "Unicode-3.0"]);
     await Promise.all(licensed.map(async ([source, destination]) => { const output = join(buildRoot, destination); await mkdir(dirname(output), { recursive: true }); await copyFile(source, output); }));
-    const manifest = { schema: "scriptc.runtime-pack.v1", format: 1, package: packageManifest.name, version: packageManifest.version, target: matrix.target, runtime_abi: { version: 4, marker: "scr_runtime_abi_v4" }, compiler: { command: compiler, identity: compilerVersion, target: matrix.target.llvm_triple }, macros: { executable: ["SCR_DYNAMIC", "SCR_TEXT_DECODER_LEGACY"], excluded: ["SCR_RC_AUDIT", "SCR_ASAN_FIBERS"], sanitizer: "external-toolchain-required" }, flavors, archives: archives.map((entry) => ({ ...entry, predicate: archiveSpecs.get(entry.id).predicate })), system_libraries: matrix.system_libraries, licenses: licensed.map(([, path, license]) => ({ path, license })) };
+    const manifest = { schema: "scriptc.runtime-pack.v1", format: 1, package: packageManifest.name, version: packageManifest.version, target: matrix.target, runtime_abi: { version: 5, marker: "scr_runtime_abi_v5" }, compiler: { command: compiler, identity: compilerVersion, target: matrix.target.llvm_triple }, macros: { executable: ["SCR_DYNAMIC", "SCR_TEXT_DECODER_LEGACY"], excluded: ["SCR_RC_AUDIT", "SCR_ASAN_FIBERS"], sanitizer: "external-toolchain-required" }, flavors, archives: archives.map((entry) => ({ ...entry, predicate: archiveSpecs.get(entry.id).predicate })), system_libraries: matrix.system_libraries, licenses: licensed.map(([, path, license]) => ({ path, license })) };
     await writeFile(stagedManifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
     const suffix = `${process.pid}-${Math.random().toString(36).slice(2)}`;
     await installRuntimePack({ outputRoot, manifestPath, stagedOutputRoot, stagedManifestPath, backupRoot: join(packageRoot, `.runtime-pack-artifacts-backup-${suffix}`), backupManifestPath: join(packageRoot, `.runtime-pack-manifest-backup-${suffix}`) });

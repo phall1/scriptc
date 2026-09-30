@@ -13,6 +13,21 @@ export interface ClassSymbolKey {
 
 const FIELD_PREFIX = "%symbol:";
 
+function constantSymbolDescription(lowerer: Lowerer, expression: ts.Expression, seen = new Set<ts.Symbol>()): string | null {
+  while (ts.isParenthesizedExpression(expression)) expression = expression.expression;
+  if (ts.isStringLiteralLike(expression)) return expression.text;
+  if (!ts.isIdentifier(expression) && !ts.isPropertyAccessExpression(expression)) return null;
+  const name = ts.isPropertyAccessExpression(expression) ? expression.name : expression;
+  if (!ts.isIdentifier(name)) return null;
+  const symbol = lowerer.resolveValueSymbol(name);
+  if (!symbol || seen.has(symbol)) return null;
+  seen.add(symbol);
+  const declaration = lowerer.checker.valueDeclarationOf(symbol);
+  if (!declaration || !ts.isVariableDeclaration(declaration) || !declaration.initializer ||
+      !ts.isVariableDeclarationList(declaration.parent) || !(declaration.parent.flags & ts.NodeFlags.Const)) return null;
+  return constantSymbolDescription(lowerer, declaration.initializer, seen);
+}
+
 export function symbolFieldDisplayName(field: string): string {
   return field.slice(FIELD_PREFIX.length);
 }
@@ -36,10 +51,12 @@ export function fenceSymbolFieldCopy(lowerer: Lowerer, node: ts.Node, type: IrTy
 }
 
 export function classSymbolKeyOf(lowerer: Lowerer, key: ts.Expression): ClassSymbolKey | null {
-  if (!ts.isIdentifier(key)) return null;
+  if (!ts.isIdentifier(key) && (!ts.isPropertyAccessExpression(key) || key.questionDotToken || !ts.isIdentifier(key.name))) return null;
   const type = lowerer.typeOf(key);
   if (!(type.flags & (ts.TypeFlags.UniqueESSymbol | ts.TypeFlags.ESSymbol))) return null;
-  const sym = lowerer.resolveValueSymbol(key);
+  const id = ts.isPropertyAccessExpression(key) ? key.name : key;
+  if (!ts.isIdentifier(id)) return null;
+  const sym = lowerer.resolveValueSymbol(id);
   return sym ? classSymbolKeyOfSymbol(lowerer, sym) : null;
 }
 
@@ -58,6 +75,15 @@ export function classSymbolKeyOfSymbol(lowerer: Lowerer, sym: ts.Symbol): ClassS
   const list = decl.parent;
   if (!ts.isVariableDeclarationList(list) || !ts.isVariableStatement(list.parent) || !ts.isSourceFile(list.parent.parent)) return null;
   const init = decl.initializer;
+  if (init && (ts.isIdentifier(init) || ts.isPropertyAccessExpression(init))) {
+    const target = classSymbolKeyOf(lowerer, init);
+    if (!target || bindingWritten(lowerer, sym, decl.getSourceFile())) return null;
+    const preceding = list.declarations.slice(0, list.declarations.indexOf(decl));
+    if (bindingEarlyUse7(lowerer.program, decl.getSourceFile(), decl.getSourceFile().statements.indexOf(list.parent), decl, preceding) !== null) return null;
+    const alias = { ...target, sym };
+    cache.set(sym, alias);
+    return alias;
+  }
   if (!init || !ts.isCallExpression(init) || init.questionDotToken) return null;
   const callee = init.expression;
   const registered = ts.isPropertyAccessExpression(callee) && !callee.questionDotToken && callee.name.text === "for";
@@ -65,21 +91,38 @@ export function classSymbolKeyOfSymbol(lowerer: Lowerer, sym: ts.Symbol): ClassS
   if (!ts.isIdentifier(root) || !lowerer.isStdlibGlobal(root, "Symbol")) return null;
   const arg = init.arguments.length === 0 ? null : init.arguments.length === 1 ? init.arguments[0]! : undefined;
   if (arg === undefined || (registered && arg === null)) return null;
-  if (arg !== null && !ts.isStringLiteralLike(arg)) return null;
+  const description = arg === null ? "" : constantSymbolDescription(lowerer, arg);
+  if (description === null) return null;
   // Ordinary Symbol() is a fresh identity per evaluation, so only the
   // module-scope declaration above can name one fixed layout slot.
   const sf = decl.getSourceFile();
   if (bindingWritten(lowerer, sym, sf)) return null;
   const preceding = list.declarations.slice(0, list.declarations.indexOf(decl));
-  if (bindingEarlyUse7(lowerer.program, sf, sf.statements.indexOf(list.parent), decl, preceding) !== null) return null;
+  // Creating a function value does not execute its body. The general
+  // require-publication analysis conservatively enters those bodies, but a
+  // prefix containing only imports and function definitions cannot call
+  // them before this key initializes. Cyclic module reads are checked by
+  // preflight independently.
+  const inertInitializer = (declaration: ts.VariableDeclaration): boolean => {
+    const init = declaration.initializer;
+    return ts.isIdentifier(declaration.name) && init !== undefined &&
+      (ts.isArrowFunction(init) || ts.isFunctionExpression(init) || ts.isStringLiteralLike(init) ||
+        ts.isNumericLiteral(init) || init.kind === ts.SyntaxKind.TrueKeyword ||
+        init.kind === ts.SyntaxKind.FalseKeyword || init.kind === ts.SyntaxKind.NullKeyword);
+  };
+  const prefixIsInert = sf.statements.slice(0, sf.statements.indexOf(list.parent)).every((statement) =>
+    ts.isImportDeclaration(statement) || ts.isFunctionDeclaration(statement) ||
+    ts.isVariableStatement(statement) && statement.declarationList.declarations.every(inertInitializer),
+  ) && preceding.every(inertInitializer);
+  if (!prefixIsInert && bindingEarlyUse7(lowerer.program, sf, sf.statements.indexOf(list.parent), decl, preceding) !== null) return null;
   // A registry name denotes one symbol even when several source bindings
   // initialize it. Intern those names into a representative checker symbol;
   // the layout table then has one identity-keyed domain for both forms.
   let identity = sym;
   if (registered) {
-    const existing = lowerer.registeredClassSymbols.get(arg!.text);
+    const existing = lowerer.registeredClassSymbols.get(description);
     if (existing) identity = existing;
-    else lowerer.registeredClassSymbols.set(arg!.text, sym);
+    else lowerer.registeredClassSymbols.set(description, sym);
   }
   const key: ClassSymbolKey = {
     sym,
@@ -87,7 +130,7 @@ export function classSymbolKeyOfSymbol(lowerer: Lowerer, sym: ts.Symbol): ClassS
     // Symbol slots are not string properties. The reserved prefix keeps
     // them out of the native class's string-keyed dynamic view, including
     // Object.keys/JSON serialization and string-property writeback.
-    fieldName: `${FIELD_PREFIX}Symbol(${arg?.text ?? ""})`,
+    fieldName: `${FIELD_PREFIX}Symbol(${description})`,
   };
   cache.set(sym, key);
   return key;

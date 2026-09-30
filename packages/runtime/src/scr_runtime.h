@@ -62,7 +62,7 @@ void scr_init(void);
 /* Program objects emitted by the bundled LLVM helper reference this symbol.
  * Its versioned spelling makes a mismatched manual runtime link fail before
  * the program can start. */
-void scr_runtime_abi_v4(void);
+void scr_runtime_abi_v5(void);
 
 /* ── the trap funnel (scr_console.c; scr_library.c under -DSCR_LIB) ──────
  * Every unrecoverable runtime trap — OOM, semantic range traps, internal-
@@ -464,6 +464,7 @@ typedef struct ScrClassObj {
   const ScrStr *name;
   size_t ncaps;
   size_t length;
+  struct ScrBox *prototype_data;
   struct ScrBox *caps[];
 } ScrClassObj;
 
@@ -482,6 +483,10 @@ void *scr_classobj_retain_v(void *c);
 void scr_classobj_release_v(void *c);
 /* `X.name` (+1 — a no-op retain on the interned immortal). */
 ScrStr *scr_classobj_name(ScrClassObj *c);
+struct ScrDyn *scr_dyn_class_prototype(struct ScrDyn *value, struct ScrDyn *base);
+struct ScrDyn *scr_dyn_class_base_prototype(struct ScrDyn *constructor);
+void scr_dyn_class_super(struct ScrDyn *constructor, struct ScrDyn *receiver, struct ScrDyn *arguments);
+struct ScrDyn *scr_dyn_assign_prototype(struct ScrDyn *target, struct ScrDyn *sources, struct ScrDyn *protected_keys);
 /* The keyed-write miss on a fixed-shape record: throws the catchable
  * TypeError naming the key (JS would add the property — the documented
  * monomorphic-struct divergence). scr_object.c. */
@@ -519,6 +524,8 @@ typedef struct ScrError {
                     * embed the slot and release it NULL-guarded. */
   struct ScrDyn *error_cause; /* NULL = absent; dyn undefined = present */
   bool cause_enumerable; /* assignment creates an enumerable own property */
+  ScrStr *stack_frames; /* captured native source frames */
+  ScrStr *stack; /* lazily formatted, cached stack */
 } ScrError;
 
 enum {
@@ -550,6 +557,8 @@ typedef struct ScrDomException {
   ScrStr *code;    /* the Node string-code slot (stays NULL here) */
   struct ScrDyn *error_cause; /* shared ScrError prefix; unused by DOMException */
   bool cause_enumerable;
+  ScrStr *stack_frames;
+  ScrStr *stack;
   double dom_code; /* the WebIDL legacy code (0 when the name is off-table) */
   bool has_cause;  /* the options form carried a `cause` member */
   struct ScrDyn *cause; /* owned; NULL when has_cause is false */
@@ -606,6 +615,7 @@ void scr_error_delete_cause(ScrError *e);
 /* ECMA Error.prototype.toString: "", name, message, or "name: message".
  * Borrows e, returns +1. */
 ScrStr *scr_error_to_string(ScrError *e);
+ScrStr *scr_error_stack(ScrError *e);
 
 ScrError *scr_error_retain(ScrError *e);
 void scr_error_release(ScrError *e); /* dispatches through e->vt */
@@ -1460,6 +1470,7 @@ typedef struct ScrClosure {
    * (like the dyn→closure edge): a cycle through it is merely never
    * collected. */
   ScrBox *props;
+  uint32_t function_kind; /* low bits: 0 ordinary, 1 generator, 2 async, 3 async generator; bit 2: ordinary own prototype */
   ScrBox *caps[];
 } ScrClosure;
 
@@ -2135,6 +2146,17 @@ typedef enum {
 
 /* One cell per fiber (JS has one exception in flight per execution
  * context); scr_async.c swaps the active cell on fiber switches. */
+typedef struct ScrStackFrame {
+  struct ScrStackFrame *previous;
+  const char *text;
+} ScrStackFrame;
+
+void scr_stack_enter(ScrStackFrame *frame, const char *text);
+void scr_stack_leave(ScrStackFrame *frame);
+ScrStr *scr_stack_capture(void); /* +1, NULL when no source frames exist */
+double scr_stack_limit_get(void);
+void scr_stack_limit_set(double limit);
+
 typedef struct ScrExcCell {
   ScrExcKind kind;
   double f64;
@@ -2146,6 +2168,7 @@ typedef struct ScrExcCell {
    * along so a rejection moving the payload into a promise keeps the
    * promise's payload edge traceable. */
   ScrTraceFn trace_fn;
+  ScrStackFrame *stack; /* execution state; never moves with an exception */
 } ScrExcCell;
 
 /* Runtime-internal (fiber machinery in scr_async.c) — never emitted. */
@@ -2375,6 +2398,8 @@ double scr_process_uptime(void);
 /* perf_hooks performance.now(): fractional ms since process start (the
  * uptime anchor — Node's timeOrigin for a compiled program). */
 double scr_perf_now(void);
+uint64_t scr_hrtime_ns(void);
+ScrDyn *scr_process_hrtime_value(void);
 double scr_cpu_user(void);
 double scr_cpu_system(void);
 double scr_cpu_user_diff(double prev);
@@ -3365,6 +3390,7 @@ typedef enum {
   /* Native Proxy over a checked plain object; keep new tags at the end. */
   SCR_DYN_PROXY,
   SCR_DYN_BIGINT, /* exact native integer, retained by the box */
+  SCR_DYN_SYMBOL, /* native symbol identity, retained by the box */
 } ScrDynKind;
 
 /* The handle-type tags the checked-dynamic tree can carry. The set is deliberately the
@@ -3401,6 +3427,10 @@ typedef enum {
   SCR_DYNH_REGEXP,         /* native RegExp, shared compiled pattern */
   SCR_DYNH_STDIO,          /* stable process stdin/stdout/stderr values */
   SCR_DYNH_URL,            /* native WHATWG URL */
+  SCR_DYNH_MAP,            /* native Map<unknown, unknown>, shared backing */
+  SCR_DYNH_DATE,           /* JavaScript Date with stable native identity */
+  SCR_DYNH_ITERATOR,       /* live native array/string/byte iterator */
+  SCR_DYNH_CONSOLE,        /* stored global console value */
   SCR_DYNH_COUNT,
 } ScrDynHandleTag;
 
@@ -3471,6 +3501,8 @@ struct ScrDyn {
     ScrStr *str; /* owned */
     ScrBytes *bytes; /* owned (SCR_DYN_BYTES) */
     ScrBigInt *bigint; /* owned (SCR_DYN_BIGINT) */
+    /* Callbacks keep the optional symbol unit out of symbol-free binaries. */
+    struct { ScrSym *value; void (*release)(ScrSym *); ScrStr *(*render)(ScrSym *); ScrStr *(*description)(ScrSym *); } symbol;
     struct { size_t len; size_t cap; ScrDyn **items; struct ScrDyn *properties; bool sealed; bool frozen; } arr; /* owned */
     struct {
       size_t len;
@@ -3531,6 +3563,11 @@ struct ScrDyn {
   /* Keep the checked value payload at its established offset: generated
    * native converters read array and object fields directly. */
   struct ScrDyn *prototype;
+  /* Symbol properties have their own descriptor table. Its private string
+   * keys encode native identities; symbol_keys retains the actual keys in
+   * insertion order, never exposing those encodings to JavaScript. */
+  struct ScrDyn *symbol_properties;
+  struct ScrDyn *symbol_keys;
 };
 
 static inline ScrDyn *scr_dyn_retain(ScrDyn *d) {
@@ -3553,6 +3590,7 @@ ScrDyn *scr_json_parse(ScrStr *text);
  * when the replacer omits the root. gap has already applied space rules. */
 ScrDyn *scr_json_parse_reviver(ScrStr *text, const ScrDyn *reviver);
 ScrDyn *scr_json_stringify_replacer(const ScrDyn *value, const ScrDyn *replacer, const ScrStr *gap);
+ScrDyn *scr_json_stringify_value(const ScrDyn *value, const ScrDyn *replacer, const ScrDyn *space);
 
 
 /* BORROWED member lookup on a SCR_DYN_OBJ; NULL when the key is absent. */
@@ -3574,6 +3612,7 @@ ScrDyn *scr_dyn_for_in_keys(const ScrDyn *v);
 /* Snapshot all own string keys of a SCR_DYN_OBJ in JS order. Returns +1. */
 ScrDyn *scr_dyn_obj_own_keys(const ScrDyn *v);
 ScrDyn *scr_dyn_get_own_property_names(const ScrDyn *value);
+ScrDyn *scr_dyn_get_own_property_symbols(const ScrDyn *value);
 /* Object.hasOwn over a dyn receiver: OBJ member presence, ARR index
  * bounds ("length" included); nullish receivers throw Node's ToObject
  * TypeError; every other kind answers false. */
@@ -3616,17 +3655,42 @@ ScrDyn *scr_dyn_new_num(double n);
 ScrDyn *scr_dyn_native_set_new(const ScrDyn *seed);
 ScrDyn *scr_dyn_native_set(ScrMap *value); /* borrowed backing, +1 box */
 bool scr_dyn_native_set_is(const ScrDyn *value);
+ScrDyn *scr_dyn_native_map(ScrMap *value); /* borrowed backing, +1 box */
+bool scr_dyn_native_map_is(const ScrDyn *value);
 ScrRegex *scr_regex_new_checked(const ScrDyn *pattern, const ScrDyn *flags);
 ScrDyn *scr_dyn_native_url(ScrUrl *value);
 bool scr_dyn_native_url_is(const ScrDyn *value);
+bool scr_dyn_native_date_is(const ScrDyn *value);
+ScrDyn *scr_dyn_native_date_new(const ScrDyn *arguments);
+double scr_dyn_native_date_value(const ScrDyn *value);
 ScrDyn *scr_dyn_native_regex(ScrRegex *value);
 bool scr_dyn_native_regex_is(const ScrDyn *value);
 ScrDyn *scr_dyn_freeze(ScrDyn *value);
 bool scr_dyn_is_frozen(const ScrDyn *value);
 ScrDyn *scr_dyn_new_bigint(ScrBigInt *value); /* borrows and retains value */
+ScrDyn *scr_dyn_new_symbol(ScrSym *value); /* borrows and retains value */
+ScrSym *scr_sym_well_known(ScrStr *name);
+ScrDyn *scr_dyn_symbol_get(const ScrDyn *value, const ScrStr *key);
+ScrDyn *scr_dyn_symbol_key_get(const ScrDyn *value, const ScrDyn *key, bool optional);
+void scr_dyn_symbol_key_set(ScrDyn *value, ScrDyn *key, ScrDyn *stored);
+bool scr_dyn_has_key_computed(const ScrDyn *value, const ScrDyn *key);
+bool scr_dyn_has_own_computed(const ScrDyn *value, const ScrDyn *key);
+bool scr_dyn_property_is_enumerable_computed(const ScrDyn *value, const ScrDyn *key);
+void scr_dyn_key_delete_computed(ScrDyn *value, const ScrDyn *key, bool strict);
+ScrStr *scr_dyn_string_constructor(const ScrDyn *value);
+ScrDyn *scr_dyn_property_key_value(const ScrDyn *value);
+ScrDyn *scr_dyn_to_numeric(const ScrDyn *value);
+ScrDyn *scr_dyn_increment(const ScrDyn *value, bool increment);
+/* Internal constructor consumes a retained symbol with its native operations. */
+ScrDyn *scr_dyn_symbol_ref(ScrSym *value, void (*release)(ScrSym *), ScrStr *(*render)(ScrSym *), ScrStr *(*description)(ScrSym *));
 ScrDyn *scr_dyn_new_str(ScrStr *s);
 ScrDyn *scr_dyn_new_arr(void);
 ScrDyn *scr_dyn_new_obj(void);
+ScrDyn *scr_dyn_iterator(const ScrDyn *value, const ScrStr *spell);
+void scr_dyn_install_iterator_symbol(ScrDyn *key);
+ScrDyn *scr_dyn_array_values_function(void);
+ScrDyn *scr_dyn_array_from_iterator(const ScrDyn *value);
+ScrDyn *scr_dyn_iterator_result(ScrDyn *value);
 /* The ordinary object snapshot plus a retained typed source. source_access
  * releases that source when materialize=false and returns a fresh snapshot
  * when true. */
@@ -3733,6 +3797,8 @@ void scr_dyn_obj_set(ScrDyn *obj, const char *key, size_t key_len, ScrDyn *value
 ScrDyn *scr_dyn_define_property(ScrDyn *target, ScrDyn *key, ScrDyn *descriptor);
 ScrDyn *scr_dyn_get_own_property_descriptor(ScrDyn *target, ScrDyn *key);
 ScrDyn *scr_dyn_array_proto_call(ScrDyn *target, ScrStr *method, ScrDyn *args);
+ScrDyn *scr_dyn_array_prototype(void); /* +1, installs native method adapters */
+ScrDyn *scr_dyn_array_prototype_base(void); /* +1, shared native array identity */
 /* The checked-dynamic keyed WRITE (`h.k = v` on a dyn receiver): OBJ sets
  * the member (JS: later writes win, insertion order); undefined/null and
  * non-object kinds throw Node's catchable TypeErrors (strict-mode
@@ -3774,6 +3840,8 @@ bool scr_dyn_number_coerce_js(const ScrDyn *d, double *out);
 double scr_dyn_number_coerce(const ScrDyn *d);
 double scr_dyn_number_constructor(const ScrDyn *d);
 ScrDyn *scr_dyn_add(const ScrDyn *left, const ScrDyn *right); /* borrowed; +1 or NULL/pending */
+ScrDyn *scr_dyn_arithmetic(const ScrDyn *left, const ScrDyn *right, const ScrStr *operation);
+ScrDyn *scr_dyn_bitwise(const ScrDyn *left, const ScrDyn *right, const ScrStr *operation);
 
 /* `d instanceof TypeError` (and the other builtin error classes) on a
  * checked-dynamic value: the from_error cache resolves the dyn encoding
@@ -3870,6 +3938,7 @@ typedef struct ScrDynPath {
   size_t index;
 } ScrDynPath;
 ScrMap *scr_dyn_native_set_check(const ScrDyn *value, const ScrDynPath *path);
+ScrMap *scr_dyn_native_map_check(const ScrDyn *value, const ScrDynPath *path);
 ScrStr *scr_url_checked_to_path(const ScrDyn *value);
 ScrUrl *scr_dyn_native_url_check(const ScrDyn *value, const ScrDynPath *path);
 ScrRegex *scr_dyn_native_regex_check(const ScrDyn *value, const ScrDynPath *path);
@@ -3926,6 +3995,8 @@ ScrStr *scr_process_builtin_id(ScrDyn *id, ScrArr *known);
 ScrDyn *scr_process_builtin_module(ScrStr *id, ScrDyn *getter);
 ScrDyn *scr_process_builtin_unsupported(ScrStr *id, ScrStr *member);
 ScrDyn *scr_global_native(ScrArr *known);
+ScrDyn *scr_global_native_init(ScrArr *known, ScrDyn *(*console_get)(void));
+ScrDyn *scr_console_native(void);
 ScrDyn *scr_process_stdio(double fd);
 
 void scr_dyn_handle_install(ScrDynHandleTag tag, const ScrDynHandleOps *ops);
@@ -4028,6 +4099,7 @@ typedef struct ScrDynJsvalOps {
    * bridges with the ENGINE's message. +1, or NULL with the exception
    * pending. */
   ScrDyn *(*iter_drain)(ScrJsval *cell, bool spread, const ScrStr *spell);
+  ScrDyn *(*iterator)(ScrJsval *cell, const ScrStr *spell, bool array_from);
 } ScrDynJsvalOps;
 
 /* The allocator view the gated constructor uses (installs the ops);
@@ -4730,6 +4802,11 @@ void scr_gen_in_none(ScrGen *g);
 double scr_gen_take_in_f64(void); /* body side: the running fiber's gen */
 bool scr_gen_take_in_bool(void);
 void *scr_gen_take_in_ref(void); /* +1 moved out; NONE → NULL */
+/* yield* captures next/return/throw before ordinary yield unwinding. Ref
+ * converters borrow their typed payload and return an owned dyn value. */
+ScrDyn *scr_gen_delegate_resume(ScrDyn *(*next_ref)(void *),
+                                ScrDyn *(*return_ref)(void *),
+                                ScrDyn *(*caught_ref)(const ScrCaught *));
 
 /* RET slot (consumer parks the `.return(v)` value before resume_return). */
 void scr_gen_ret_f64(ScrGen *g, double v);
@@ -5326,7 +5403,7 @@ double scr_date_get_seconds_utc(double ms);
  * space (shift counts mask to 5 bits, `>>` is an arithmetic shift spelled
  * portably — no C UB/implementation-defined shifts) and the result
  * returns to f64: `>>>` as Uint32, everything else as Int32.
- * scr_to_uint32 lives in scr_number.c; the bitwise operations in scr_lib.c. */
+ * ToUint32 and the bitwise operations live in scr_number.c. */
 uint32_t scr_to_uint32(double d);
 double scr_bit_and(double a, double b);
 double scr_bit_or(double a, double b);

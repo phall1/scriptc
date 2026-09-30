@@ -559,6 +559,11 @@ export function streamTypedRefMaterializeAdapter(host: LlvmEmitterContext,
         return adapter;
       }
     }
+    // Reserve both names before generating field conversions: recursive
+    // class/record conversions can request this adapter while it is in flight.
+    if (isDynTypedRefType(t) || t.kind === "bytes" || t.kind === "array" || t.kind === "record") {
+      adapter.commit = `@${snapshot}_commit`;
+    }
     adapter.commit = host.streamTypedRefCommitAdapter(t, snapshot);
     const B = new BlockBuilder();
 

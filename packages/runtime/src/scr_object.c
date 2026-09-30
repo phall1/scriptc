@@ -5,6 +5,7 @@
 void scr_classobj_trace_v(void *object, ScrTraceVisit visit, void *ctx) {
   ScrClassObj *c = object;
   for (size_t i = 0; i < c->ncaps; i++) visit(c->caps[i], ctx);
+  visit(c->prototype_data, ctx);
 }
 
 static void scr_classobj_gcfree(void *object) {
@@ -24,6 +25,7 @@ ScrClassObj *scr_classobj_new(const ScrClassObj *template, size_t ncaps) {
   c->name = template->name;
   c->ncaps = ncaps;
   c->length = template->length;
+  c->prototype_data = NULL;
   scr_obj_alloc_note();
   return c;
 }
@@ -33,6 +35,7 @@ void scr_classobj_release(ScrClassObj *c) {
   if (--c->rc == 0) {
     scr_cyc_on_dead(c);
     for (size_t i = 0; i < c->ncaps; i++) scr_box_release(c->caps[i]);
+    scr_box_release(c->prototype_data);
     scr_classobj_gcfree(c);
   } else {
     scr_cyc_on_release(c);

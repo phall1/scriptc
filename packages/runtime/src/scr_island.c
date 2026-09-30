@@ -417,12 +417,14 @@ static const char isl_prelude[] =
     /* ISL_H_ITER: GetIterator alone (the for-of head over an island
      * value) — the same not-iterable TypeError text as iterN; the static
      * side drives next() through callMethod. */
-    "v=>{if(v===undefined||v===null||typeof v[Symbol.iterator]!==\"function\"){"
+    "(v,s,a)=>{const m=v==null?undefined:v[Symbol.iterator];"
+    "if(a&&m==null)return Array.from(v)[Symbol.iterator]();"
+    "if(typeof m!==\"function\"){if(s)throw new TypeError(s);"
     "let d;if(v===undefined)d=\"undefined\";else if(v===null)d=\"object null\";"
     "else if(typeof v===\"number\")d=\"number \"+v;else if(typeof v===\"boolean\")d=\"boolean \"+v;"
     "else if(typeof v===\"function\")d=\"function\";else d=\"object\";"
     "throw new TypeError(d+\" is not iterable (cannot read property Symbol(Symbol.iterator))\")}"
-    "return v[Symbol.iterator]()},"
+    "return m.call(v)},"
     /* ISL_H_CALLSPREAD: spread application (`f(...pre, ...s)` — the
      * rest-forwarding idiom's call): REAL spread syntax, so iterator
      * protocols are the engine's own; the guards front-run V8's exact
@@ -1052,6 +1054,8 @@ static JSValue isl_from_dyn(const ScrDyn *d) {
     return JS_NewBool(isl_ctx, d->v.b);
   case SCR_DYN_BIGINT:
     return JS_ThrowTypeError(isl_ctx, "native bigint values cannot enter a dynamic island yet");
+  case SCR_DYN_SYMBOL:
+    return JS_ThrowTypeError(isl_ctx, "native symbol values cannot enter a dynamic island yet");
   case SCR_DYN_NUM:
     return JS_NewFloat64(isl_ctx, d->v.num);
   case SCR_DYN_STR:
@@ -1224,7 +1228,11 @@ static ScrDyn *isl_dynjs_call(ScrJsval *cell, ScrDyn *const *args, size_t argc) 
     if (cells != stack_cells) free(cells);
     return NULL;
   }
-  ScrJsval *r = scr_jsval_call(cell, (int)argc, cells);
+  ScrDyn *receiver = scr_dyn_this_get();
+  ScrJsval *receiver_cell = scr_jsval_from_dyn(receiver);
+  scr_dyn_release(receiver);
+  ScrJsval *r = receiver_cell ? scr_jsval_call_this(cell, receiver_cell, (int)argc, cells) : NULL;
+  scr_jsval_release(receiver_cell);
   for (size_t i = 0; i < argc; i++) scr_jsval_release(cells[i]);
   if (cells != stack_cells) free(cells);
   if (!r) return NULL;
@@ -1378,6 +1386,18 @@ static ScrDyn *isl_dynjs_iter_drain(ScrJsval *cell, bool spread, const ScrStr *s
   return out;
 }
 
+static ScrDyn *isl_dynjs_iterator(ScrJsval *cell, const ScrStr *spell, bool array_from) {
+  isl_entry();
+  JSValue s = spell && spell->len ? JS_NewStringLen(isl_ctx, spell->data, spell->len) : JS_UNDEFINED;
+  JSValue argv[3] = {cell->v, s, JS_NewBool(isl_ctx, array_from)};
+  JSValue r = JS_Call(isl_ctx, isl_helpers[ISL_H_ITER], JS_UNDEFINED, 3, argv);
+  JS_FreeValue(isl_ctx, s);
+  if (JS_IsException(r)) { isl_bridge_exception(); return NULL; }
+  ScrDyn *out = isl_dyn_from_value(r);
+  JS_FreeValue(isl_ctx, r);
+  return out;
+}
+
 static const ScrDynJsvalOps isl_dynjs_ops = {
   isl_dynjs_release,
   isl_dynjs_typeof,
@@ -1396,6 +1416,7 @@ static const ScrDynJsvalOps isl_dynjs_ops = {
   isl_dynjs_assign,
   isl_dynjs_to_json,
   isl_dynjs_iter_drain,
+  isl_dynjs_iterator,
 };
 
 ScrDyn *scr_dyn_from_jsval(ScrJsval *cell) {

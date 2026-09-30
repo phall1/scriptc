@@ -169,6 +169,10 @@ declare module "console" {
  * non-int32 pids). */
 declare var process: {
   getBuiltinModule(id: string): unknown;
+  hrtime: {
+    (time?: [number, number]): [number, number];
+    bigint(): bigint;
+  };
   argv: string[];
   platform: string;
   /* The binary's OWN architecture ("arm64", "x64") — Node's answer for
@@ -691,6 +695,13 @@ declare var AbortSignal: {
   readonly prototype: AbortSignal;
 };
 
+interface QueuingStrategySize<T = unknown> {
+  (chunk: T): number;
+}
+interface QueuingStrategy<T = unknown> {
+  highWaterMark?: number;
+  size?: QueuingStrategySize<T>;
+}
 interface ReadableStreamReadValueResult<T> {
   done: false;
   value: T;
@@ -3831,4 +3842,7 @@ declare module "stream/consumers" {
 declare module "node:stream/consumers" {
   import streamConsumers = require("stream/consumers");
   export = streamConsumers;
+}
+interface ErrorConstructor {
+  stackTraceLimit: number;
 }

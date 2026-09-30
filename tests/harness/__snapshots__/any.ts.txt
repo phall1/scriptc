@@ -1,12 +1,3 @@
-any.ts:7:13 - error SC2011: the '+' operator on 'any'-typed values runs in the embedded dynamic engine, which this build does not include
-
-  6 | const n: any = 41;
-  7 | const sum = n + 1; // ToNumber/ToPrimitive coercion — engine only
-    |             ^~~~~
-  8 | var { x } = <any>0; // destructuring a non-object 'any' — engine only
-
-  hint: build with --dynamic to run 'any'-typed code in the embedded engine (adds ~620KB to the binary), or stay static with 'unknown' and a checked cast ('x as T')
-
 any.ts:8:5 - error SC2011: destructuring on 'any'-typed values runs in the embedded dynamic engine, which this build does not include
 
   7 | const sum = n + 1; // ToNumber/ToPrimitive coercion — engine only

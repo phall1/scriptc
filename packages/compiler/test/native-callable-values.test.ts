@@ -38,8 +38,7 @@ const operations = { open: widened };
 function describe(value: unknown): string { console.log("described"); return typeof value; }
 const describeKey = describe as (value: string | symbol) => string;
 console.log(describeKey("supported"));
-try { describeKey(Symbol.for("unsupported")); }
-catch (error) { if (error instanceof Error) console.log(error.name); }
+console.log(describeKey(Symbol.for("supported")));
 const file = process.argv[2]!;
 try { await operations.open(file, 0); }
 catch (error) { if (error instanceof Error) console.log(error.name); }
@@ -56,8 +55,11 @@ console.log(handle.fd);
     const path = join(dir, "created.txt");
     const child = spawnSync(result.binaryPath, [path], { encoding: "utf8" });
     expect(child.status, child.stderr).toBe(0);
-    expect(child.stderr).toBe("");
-    expect(child.stdout).toBe("argument\nargument\nargument\nTypeError\ninvoked\nafter:one:two\ntrue\ndescribed\nstring\nTypeError\nTypeError\nTypeError\n-1\n");
+    const stderr = sanitize && process.platform === "linux"
+      ? child.stderr.replace(/^==\d+==WARNING: ASan doesn't fully support makecontext\/swapcontext functions and may produce false positives in some cases!\n/gm, "")
+      : child.stderr;
+    expect(stderr).toBe("");
+    expect(child.stdout).toBe("argument\nargument\nargument\nTypeError\ninvoked\nafter:one:two\ntrue\ndescribed\nstring\ndescribed\nsymbol\nTypeError\nTypeError\n-1\n");
     expect(statSync(path).mode & 0o777).toBe(0o600);
   } finally {
     rmSync(dir, { recursive: true, force: true });

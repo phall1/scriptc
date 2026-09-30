@@ -39,6 +39,7 @@ import type {
 import { CAUGHT, ffiCallbackType, isDynTypedRefType, isFfiContextParam, isRefCounted, isUnitType, moduleRuntimeFeatures, moduleEmbedsBuiltin, moduleEmbedsCompressedNpm, NPM_COMPRESS_MIN, POINTER_KINDS, RUNTIME_EMITTER_CLASS, RUNTIME_ERROR_CLASSES, RUNTIME_STREAM_CLASSES, typeKey, VOID } from "../../ir/ir.js";
 import { matchIntegerBytesForLoop } from "../../ir/integer-loops.js";
 import { scalarizeNumericRecords } from "../../ir/scalar-records.js";
+import { everyStmtList } from "../../ir/traverse.js";
 import { analyzeIntegerRanges, type IntegerRanges } from "../../ir/integer-ranges.js";
 import { findConstantNumericTables, type ConstantNumericTable } from "../../ir/constant-tables.js";
 import { allocateFfiCallbackAdapters, hasForeignFfiCallback, hasRetainedFfiCallback, type FfiCallbackAdapter } from "../ffi-callbacks.js";
@@ -69,6 +70,7 @@ import { emitNetworkHttpLibCall } from "./lib-network.js";
 import { emitAssertInspectLibCall, emitIoLibCall, emitGenericLibCall, emitLibCall } from "./lib-dispatch.js";
 import {
   buildClassGraph,
+  classEnvironmentIndex,
   classFieldIndex,
   classStructSym,
   type LlClassMeta,
@@ -345,8 +347,12 @@ export class LlEmitter {
   /** Active optional-chain bind slots, by chain id (chainRecv reads). */
   readonly chainSlots = new Map<string, LlValue>();
   logArgSlots = 0;
+  private readonly stackTraces: boolean;
 
   constructor(readonly mod: IrModule, options: LlvmTargetOptions) {
+    this.stackTraces = mod.functions.some((fn) => !everyStmtList(fn.body, {
+      stmt: () => true, expr: (expr) => !(expr.kind === "libCall" && expr.fn === "error.stack"),
+    }));
     this.debug = options.debugSources === undefined ? null : new LlvmDebugInfo(mod.sourceFile, options.debugSources, options.pointerBits, mod.unions);
     this.constantNumericTables = findConstantNumericTables(mod);
     this.sizeType = options.pointerBits === 32 ? "i32" : "i64";
@@ -393,6 +399,7 @@ export class LlEmitter {
       cstr: (text) => this.cstr(text),
       unitInstanceRef: (unionId, tag) => this.unitInstanceRef(unionId, tag),
       liveDynRefAdapter: (type) => this.liveDynRefAdapter(type),
+      isErrorClass: (name) => this.classMeta.get(name)?.root.def.name === "%Error",
     };
     this.walkers = new LlWalkers(this.shapeHost);
     this.dyn = new LlDyn(this.shapeHost);
@@ -1098,7 +1105,7 @@ export class LlEmitter {
       `%ScrLogArg = type { i32, i64 }`,
       `%ScrVt = type { ${this.sizeType}, ${this.sizeType}, ptr }`,
       `%ScrUnion = type { ${this.sizeType}, i32, ptr, ptr, ptr, i64 }`,
-      `%ScrClosure = type { ${this.sizeType}, ptr, ${this.sizeType}, ptr }`,
+      `%ScrClosure = type { ${this.sizeType}, ptr, ${this.sizeType}, ptr, i32 }`,
       `%ScrFfiTable = type { ptr, ${this.sizeType}, ${this.sizeType}, ptr, i8, ptr, ptr, ${this.sizeType}, ${this.sizeType}, ${this.sizeType}, ptr, ptr }`,
       `%ScrRegex = type { ${this.sizeType}, ptr, ptr, ptr }`,
       // ScrArr mirrors scr_runtime.h field-for-field. Live dynamic stream
@@ -1109,7 +1116,7 @@ export class LlEmitter {
       // class-object shape { rc, pre, post, ctor, name } — field reads on
       // builtin errors and classval loads GEP through these.
       `%ScrError = type { ${this.sizeType}, ptr, ptr, ptr, ptr, ptr }`,
-      `%ScrClassObj = type { ${this.sizeType}, ${this.sizeType}, ${this.sizeType}, ptr, ptr, ${this.sizeType}, ${this.sizeType} }`,
+      `%ScrClassObj = type { ${this.sizeType}, ${this.sizeType}, ${this.sizeType}, ptr, ptr, ${this.sizeType}, ${this.sizeType}, ptr }`,
       // The runtime emitter prefix { rc, vt, reg, cls } — user subclasses
       // embed it (classes.ts), and bare-emitter GEPs address through it.
       `%ScrEmitter = type { ${this.sizeType}, ptr, ptr, ptr }`,
@@ -1883,7 +1890,7 @@ export class LlEmitter {
         ret === "void" ? `  ${call}` : `  %r = ${call}`,
         ret === "void" ? `  ret void` : `  ret ${ret} %r`,
         `}`,
-        `@${mangleFnClosure(name)} = internal global %ScrClosure { ${this.sizeType} -1, ptr @${mangleWrapper(name)}, ${this.sizeType} 0, ptr null }`,
+        `@${mangleFnClosure(name)} = internal global %ScrClosure { ${this.sizeType} -1, ptr @${mangleWrapper(name)}, ${this.sizeType} 0, ptr null, i32 ${(fn.generator ? 1 : 0) + (fn.async ? 2 : 0) + (fn.ownsPrototype ? 4 : 0)} }`,
         ``,
       );
     }
@@ -3254,7 +3261,7 @@ export class LlEmitter {
       const caps = B.tmp();
       const slot = B.tmp();
       const box = B.tmp();
-      B.line(`${classSlot} = getelementptr inbounds %${mangleClassStruct(self.type.className)}, ptr %p_${mangleLocal(self.localId)}, i64 0, i32 1`);
+      B.line(`${classSlot} = getelementptr inbounds %${mangleClassStruct(self.type.className)}, ptr %p_${mangleLocal(self.localId)}, i64 0, i32 ${classEnvironmentIndex(this.classMeta.get(self.type.className)!)}`);
       B.line(`${classValue} = load ptr, ptr ${classSlot}`);
       B.line(`${caps} = getelementptr inbounds %ScrClassObj, ptr ${classValue}, i64 1`);
       B.line(`${slot} = getelementptr inbounds ptr, ptr ${caps}, ${this.sizeType} ${c.slot}`);
@@ -3280,6 +3287,16 @@ export class LlEmitter {
       if (isRefCounted(p.type)) fnScope.push({ slot, type: p.type });
     }
     this.scopes.push(fnScope);
+    // Stackful native fibers retain these frames while suspended. The
+    // active exception context owns the chain, so concurrent fibers isolate it.
+    if (this.stackTraces && !this.wasi && fn.sourceName !== undefined) {
+      this.declare(`declare void @scr_stack_enter(ptr, ptr)`);
+      this.declare(`declare void @scr_stack_leave(ptr)`);
+      B.entryAllocas.push(`%source_frame = alloca { ptr, ptr }`);
+      const frame = `    at ${fn.sourceName} (${fn.loc.file})`;
+      B.line(`call void @scr_stack_enter(ptr %source_frame, ptr ${this.cstr(frame)})`);
+      B.returnEpilogue = `call void @scr_stack_leave(ptr %source_frame)`;
+    }
     this.emitStmts(fn.body);
     // Implicit exit of a void function: release the function scope unless
     // the body already terminated its final block (return, or a throw
@@ -3772,7 +3789,10 @@ export class LlEmitter {
           B.line(`store ${this.sizeType} 0, ptr ${integerSlot}`);
           this.integerLoopBindings.set(integerLoop.localId, integerSlot);
         } else if (s.init) {
-          this.emitStmt(s.init);
+          // A multi-declarator head's locals belong to the loop scope,
+          // not a temporary block that would release them before condition.
+          if (s.init.kind === "block") for (const init of s.init.body) this.emitStmt(init);
+          else this.emitStmt(s.init);
         }
         const lc = B.newLabel("loop.c");
         const lb = B.newLabel("loop.b");
@@ -3782,9 +3802,28 @@ export class LlEmitter {
         // seeing iteration k's value) — only observable, and only emitted,
         // when the init variable is captured (boxed). The freshening (and
         // the update) live in the continue-target block.
-        const initLocal = s.init?.kind === "varDecl" ? this.currentLocals.get(s.init.localId) : undefined;
-        const freshens = initLocal?.boxed === true;
+        const initializers = s.init?.kind === "block" ? s.init.body : s.init ? [s.init] : [];
+        const captured = initializers.flatMap((init) => {
+          const local = init.kind === "varDecl" ? this.currentLocals.get(init.localId) : undefined;
+          return local?.boxed === true ? [local] : [];
+        });
+        const freshens = captured.length > 0;
+        const freshen = (): void => {
+          for (const local of captured) {
+            const slot = `%${mangleLocal(local.id)}`;
+            const fresh = B.tmp();
+            const old = B.tmp();
+            B.line(`${fresh} = ${boxNewCall(this.shapeHost, local.type)} ; per-iteration ${local.name}`);
+            B.line(`${old} = load ptr, ptr ${slot}`);
+            const val = this.boxGet(old, local.type);
+            this.boxSet(fresh, local.type, val);
+            this.declare(`declare void @scr_box_release(ptr)`);
+            B.line(`call void @scr_box_release(ptr ${old})`);
+            B.line(`store ptr ${fresh}, ptr ${slot}`);
+          }
+        };
         const lu = s.update || freshens ? B.newLabel("loop.u") : lc;
+        freshen();
         B.br(lc);
         B.startBlock(lc);
         if (integerLoop && integerSlot) {
@@ -3815,20 +3854,7 @@ export class LlEmitter {
         B.br(lu);
         if (lu !== lc) {
           B.startBlock(lu);
-          if (freshens && initLocal) {
-            const slot = `%${mangleLocal(initLocal.id)}`;
-            const fresh = B.tmp();
-            const old = B.tmp();
-            B.line(`${fresh} = ${boxNewCall(this.shapeHost, initLocal.type)} ; per-iteration ${initLocal.name}`);
-            B.line(`${old} = load ptr, ptr ${slot}`);
-            const val = this.boxGet(old, initLocal.type); // ref: +1 out
-            this.boxSet(fresh, initLocal.type, val); // takes ownership
-            this.declare(`declare void @scr_box_release(ptr)`);
-            B.line(`call void @scr_box_release(ptr ${old})`);
-            B.line(`store ptr ${fresh}, ptr ${slot}`);
-            // The wrapper scope's entry releases whatever the slot points
-            // to at loop exit — now the freshest binding. Nothing to fix.
-          }
+          freshen();
           if (integerLoop && integerSlot) {
             const old = B.tmp();
             const next = B.tmp();
@@ -4673,10 +4699,9 @@ export class LlEmitter {
     const adapter = streamTypedRefMaterializeAdapter(
       this,
       t,
-      { prefix, adapters: new Map() },
+      { prefix, adapters: this.liveDynRefAdapters },
       `${prefix}_materialize`,
     );
-    this.liveDynRefAdapters.set(key, adapter);
     return adapter;
   }
 

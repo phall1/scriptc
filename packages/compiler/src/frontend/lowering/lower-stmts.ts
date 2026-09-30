@@ -918,6 +918,14 @@ export function provenanceElidedConstDecl(lowerer: Lowerer, decl: ts.VariableDec
   }
 
 export function lowerStmt(lowerer: Lowerer, stmt: ts.Statement): IrStmt | IrStmt[] | null {
+    if (ts.isClassDeclaration(stmt)) {
+      if (!stmt.name) lowerer.unsupported("SC1090", stmt, "anonymous local class declarations");
+      const info = lowerer.lowerClassExpressionInfo(stmt);
+      const type: IrType = { kind: "classval", className: info.def.name };
+      const local = lowerer.declareLocal(stmt.name, stmt.name.text, type, true);
+      const init = lowerer.lowerClassExpression(stmt);
+      return { kind: "varDecl", localId: local.id, init, loc: locOf(stmt) };
+    }
     if (ts.isVariableStatement(stmt)) {
       // `declare const` — ambient: no storage, no init (collectGlobals
       // skipped it; reads throw Node's ReferenceError at the access).
@@ -3326,13 +3334,9 @@ export function isParseArgsDynCheckerType(lowerer: Lowerer, type: ts.Type): bool
     );
   }
 
-/** For-loop initializers. let/const stay restricted to ONE declarator (JS
-   * per-iteration binding copies for several captured loop variables are
-   * not modeled yet); `var` initializers take any number — a `var` is ONE
-   * function-scoped binding with no per-iteration copies to model, so
-   * `for (var i = 0, n = xs.length; ...)` is just two hoisted-slot
-   * assignments (wrapped in a block when several). Statement position goes
-   * through lowerVarStatement. */
+/** For-loop initializers evaluate left to right in the loop's head scope.
+ * The backend copies each captured lexical binding before the condition
+ * and before every update. Var declarations assign function-scoped slots. */
   export function lowerVarDeclList(lowerer: Lowerer, list: ts.VariableDeclarationList): IrStmt | null {
     if ((list.flags & ts.NodeFlags.Using) !== 0) {
       lowerer.unsupported("SC1090", list, "'using' declarations (dispose-at-scope-exit semantics)");
@@ -3353,26 +3357,22 @@ export function isParseArgsDynCheckerType(lowerer: Lowerer, type: ts.Type): bool
       if (out.length === 1) return out[0]!;
       return { kind: "block", body: out, loc: locOf(list) };
     }
-    if (list.declarations.length !== 1) {
-      lowerer.unsupported("SC1090", list, "multi-declaration for-loop initializers");
+    const out: IrStmt[] = [];
+    for (const decl of list.declarations) {
+      if (ts.isArrayBindingPattern(decl.name) || ts.isObjectBindingPattern(decl.name)) {
+        // Destructuring produces nested initialization blocks; copying
+        // their captured bindings still needs a distinct head-scope plan.
+        lowerer.unsupported(
+          "SC1031",
+          decl.name,
+          "let/const destructuring in for-loop initializers (declare the pattern before the loop, or use var)",
+        );
+      }
+      const lowered = lowerer.lowerVarDecl(decl, isLet);
+      if (!lowered) throw new InternalCompilerError("lowerer bug: for-init declarator resolved to a global");
+      out.push(lowered);
     }
-    const decl = list.declarations[0]!;
-    if (ts.isArrayBindingPattern(decl.name) || ts.isObjectBindingPattern(decl.name)) {
-      // `for (let [x] = init; ...)`: the desugar is a multi-statement
-      // block, and the backend's per-iteration fresh-binding copy (what
-      // makes closures in iteration k see iteration k's let) keys off a
-      // single varDecl init — a captured destructured head would silently
-      // share one binding. `var` heads above have no per-iteration story
-      // and lower; let/const keep an honest fence.
-      lowerer.unsupported(
-        "SC1031",
-        decl.name,
-        "let/const destructuring in for-loop initializers (declare the pattern before the loop, or use var)",
-      );
-    }
-    const lowered = lowerer.lowerVarDecl(decl, isLet);
-    if (!lowered) throw new InternalCompilerError("lowerer bug: for-init declarator resolved to a global");
-    return lowered;
+    return out.length === 1 ? out[0]! : { kind: "block", body: out, loc: locOf(list) };
   }
 
 /** A single static type for an initializer-less JavaScript `let` whose
@@ -3700,7 +3700,9 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
         if (wrapped) return { kind: "assign", localId: g.id, value: wrapped, loc: locOf(decl) };
         return null;
       }
-      const raw = lowerVariableInitializer(lowerer, decl.initializer);
+      const raw = lowerVariableInitializer(lowerer, decl.initializer,
+        g.type.kind === "dyn" && (isNativeBuiltinValueInitializer(lowerer, decl.initializer) ||
+          ts.isArrayLiteralExpression(decl.initializer)) ? DYN : undefined);
       const arithmetic = raw.type.kind === "union"
         ? lowerer.unions.get(raw.type.unionId)?.arms
         : undefined;
@@ -3776,7 +3778,8 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
     const expandsObject = inferredObjectType?.kind === "record" && jsObjectBindingExpands(lowerer, decl, inferredObjectType);
     let init: IrExpr;
     try {
-      init = expandsObject ? lowerer.lowerExprExpecting(decl.initializer, DYN) : immediatelyGuardedAbsenceProbe(lowerer, decl)
+      init = expandsObject || (isJsSourceFile(decl.getSourceFile()) && !decl.type &&
+        isNativeBuiltinValueInitializer(lowerer, decl.initializer)) ? lowerer.lowerExprExpecting(decl.initializer, DYN) : immediatelyGuardedAbsenceProbe(lowerer, decl)
         ? (lowerAbsenceProbe(lowerer, decl.initializer) ?? lowerer.lowerExpr(decl.initializer))
         : lowerVariableInitializer(lowerer, decl.initializer,
             decl.type && (lowerer.typeOf(decl.name).flags & ts.TypeFlags.Never) === 0
@@ -3838,12 +3841,18 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
     }
     const preservesObjectIdentity = init.type.kind === "dyn" &&
       (inferredObjectType?.kind === "record" ||
+        (isJsSourceFile(decl.getSourceFile()) && inferredObjectType?.kind === "date") ||
         (isJsSourceFile(decl.getSourceFile()) && inferredObjectType?.kind === "func") ||
         (isJsSourceFile(decl.getSourceFile()) && inferredObjectType !== null &&
           (isUnitType(inferredObjectType) || inferredObjectType.kind === "union" && lowerer.unions.get(inferredObjectType.unionId)?.arms.every(isUnitType)))) &&
       !decl.type && !hasJsTypeAnnotation(decl);
-    if (expandsObject || preservesObjectIdentity) {
+    if (expandsObject || preservesObjectIdentity || (isJsSourceFile(decl.getSourceFile()) &&
+        !decl.type && isNativeBuiltinValueInitializer(lowerer, decl.initializer))) {
       type = DYN;
+    }
+    if (isJsSourceFile(decl.getSourceFile()) && !decl.type && init.type.kind === "array" && init.type.elem.kind === "dyn" &&
+        (ts.isNewExpression(decl.initializer) || ts.isCallExpression(decl.initializer)) && lowerer.isStdlibGlobal(decl.initializer.expression, "Array")) {
+      type = init.type;
     }
     // A JS `let x = {}`: TS's empty-object-literal type admits ANY later
     // non-nullish assignment (`envs = {}`, later `envs =
@@ -3927,7 +3936,9 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
     // static signature would wrap an arity-narrowing adapter that DROPS
     // arguments JS would deliver; calls through the dyn binding take the
     // boxed thunk's JS arity instead.
-    if (type?.kind === "func" && init.type.kind === "dyn" && isJsSourceFile(decl.getSourceFile())) {
+    if (type?.kind === "func" && init.type.kind === "dyn" &&
+        (isJsSourceFile(decl.getSourceFile()) ||
+          !decl.type && !hasJsTypeAnnotation(decl) && type.rest === true && type.restAbi === undefined)) {
       type = DYN;
     }
     // A checker-`any` CONST whose initializer lowered to a STATIC type
@@ -4511,6 +4522,10 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
     }
     if (obj.type.kind === "dyn") {
       const strict = { kind: "boolLit", value: isStrictDelete(expr), type: BOOL, loc } as const;
+      if (ts.isElementAccessExpression(target)) {
+        const key = lowerer.lowerExprExpecting(target.argumentExpression, DYN);
+        return { kind: "exprStmt", expr: { kind: "libCall", fn: "dyn.keyDeleteComputed", args: [obj, key, strict], type: VOID, loc }, loc };
+      }
       return { kind: "exprStmt", expr: { kind: "libCall", fn: "dyn.keyDelete", args: [obj, lowerKey(), strict], type: VOID, loc }, loc };
     }
     if (obj.type.kind === "record") {
@@ -4920,7 +4935,7 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
       }
     }
     // `yield* inner();` — statement-position delegation desugars to the
-    // forwarding loop (lower-generators); value positions keep the fence.
+    // forwarding loop (lower-generators), dropping the completed value.
     {
       const delegated = lowerYieldStarStatement(lowerer, expr);
       if (delegated) return delegated;
@@ -6947,8 +6962,7 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
       }
       // A CHECKED-DYNAMIC iterable (`unknown[]`, the collapsed
       // `(string | object)[]`, JSON-parsed values, wrapped engine
-      // values): the source packs ONCE through the spread walk and a
-      // hidden index loop binds each element as a dyn value.
+      // values): a checked IteratorRecord binds each yielded dyn value.
       if (iterable.type.kind === "dyn") {
         return lowerForOfDyn(lowerer, stmt, iterable, labels);
       }
@@ -7665,66 +7679,45 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
     }
   }
 
-  /** for-of over an ISLAND value (see lowerForOf's jsval arm): the
-   * engine's iterator protocol desugared over jsOps —
-   *
-   *   it = iterNew(v);            // GetIterator (prelude; may throw)
-   *   while (true) {
-   *     r = it.next();            // callMethod
-   *     if (truthy(r.done)) break;
-   *     <bind loop var(s) from r.value>  // getProp
-   *     ...body
-   *   }
-   *
-   * The loop variable's ELEMENT is an island handle (jsval — exactly what
-   * the checker's package-typed element maps to); identifier heads bind
-   * it per iteration, destructuring heads run the jsval pattern desugar,
-   * pre-declared and var heads keep their fences (the array path's
-   * stories don't carry over mechanically). IteratorClose on early exit
-   * (break/return out of a partial iteration calling it.return()) is NOT
-   * run — a divergence only a custom island iterator with a return()
-   * method can observe. */
-  /** For-of over a CHECKED-DYNAMIC iterable: the source packs ONCE
-   * through the spread walk (dyn.iterPack — dyn arrays element-by-
-   * element, strings by code point, bytes by byte; a WRAPPED engine
-   * value drains through the ENGINE's own iterator protocol via the
-   * iter_drain arm; every other kind throws V8's not-iterable
-   * TypeError, the identifier spelling when the head has one), then a
-   * hidden index loop binds each element as a dyn value. The pack is an
-   * eager SNAPSHOT (the matchAll stance): body mutations of a dyn-array
-   * source don't extend the iteration where JS's live array iterator
-   * would — documented divergence; engine sources drain through their
-   * own protocol, so generators/Maps/Sets step exactly once like Node. */
+  /** A checked IteratorRecord stays live throughout the loop. Cache next once,
+   * read done before value, and close only after a yielded value has arrived.
+   * Abrupt body throws retain precedence over errors raised by return(). */
   function lowerForOfDyn(lowerer: Lowerer, stmt: ts.ForOfStatement, iterable: IrExpr, labels?: string[]): IrStmt {
     const loc = locOf(stmt);
-    const head = stmt.expression;
-    // V8's for-of CallPrinter spellings: named sources (identifiers and
-    // plain property chains) read "<src> is not iterable", call heads
-    // with a nameable callee "<callee> is not a function or its return
-    // value is not iterable"; everything else keeps the runtime kind
-    // wording. The runtime uses the spelling VERBATIM when non-empty.
     const headText = (e: ts.Expression): string | null => {
       if (ts.isIdentifier(e)) return e.text;
       if (ts.isPropertyAccessExpression(e) && !e.questionDotToken && ts.isIdentifier(e.name)) {
         const base = headText(e.expression);
-        return base !== null ? `${base}.${e.name.text}` : null;
+        return base === null ? null : `${base}.${e.name.text}`;
       }
       return null;
     };
-    const headName = headText(head);
-    const calleeName = ts.isCallExpression(head) ? headText(head.expression) : null;
-    const spell =
-      headName !== null
-        ? `${headName} is not iterable`
-        : calleeName !== null
-          ? `${calleeName} is not a function or its return value is not iterable`
-          : "";
-    const pack = lowerer.declareHiddenLocal("%dofpack", DYN);
-    const idx = lowerer.declareHiddenLocal("%dofi", F64);
-    idx.mutable = true;
-    const packRef = (): IrExpr => ({ kind: "varRef", localId: pack.id, type: DYN, loc });
-    const iRef = (): IrExpr => ({ kind: "varRef", localId: idx.id, type: F64, loc });
-    const elemInit = (): IrExpr => ({ kind: "libCall", fn: "dyn.arrAt", args: [packRef(), iRef()], type: DYN, loc });
+    const name = headText(stmt.expression);
+    const callee = ts.isCallExpression(stmt.expression) ? headText(stmt.expression.expression) : null;
+    const spell = name !== null ? `${name} is not iterable` : callee !== null ? `${callee} is not a function or its return value is not iterable` : "";
+    const iterator = lowerer.declareHiddenLocal("%dofIterator", DYN);
+    const next = lowerer.declareHiddenLocal("%dofNext", DYN);
+    const step = lowerer.declareHiddenLocal("%dofStep", DYN);
+    const value = lowerer.declareHiddenLocal("%dofValue", DYN);
+    const returned = lowerer.declareHiddenLocal("%dofReturn", DYN);
+    const needsClose = lowerer.declareHiddenLocal("%dofNeedsClose", BOOL);
+    needsClose.mutable = true;
+    const error = lowerer.declareHiddenLocal("%dofError", CAUGHT);
+    const get = (source: IrExpr, key: string): IrExpr => ({
+      kind: "dynKeyGet", value: source, key: { kind: "strLit", value: key, type: STRING, loc }, type: DYN, loc,
+    });
+    const check = (value: IrExpr): IrExpr => ({ kind: "libCall", fn: "dyn.iteratorResult", args: [value], type: DYN, loc });
+    const call = (callee: IrExpr): IrExpr => check({
+      kind: "dynCall", callee, receiver: varRef(iterator.id, DYN, loc), calleeName: "iterator method", args: [], type: DYN, loc,
+    });
+    const setClose = (value: boolean): IrStmt => ({ kind: "assign", localId: needsClose.id, value: { kind: "boolLit", value, type: BOOL, loc }, loc });
+    const close = (): IrStmt[] => [
+      { kind: "varDecl", localId: returned.id, init: get(varRef(iterator.id, DYN, loc), "return"), loc },
+      { kind: "if", cond: { kind: "unary", op: "!", operand: { kind: "dynTest", test: "nullish", value: varRef(returned.id, DYN, loc), type: BOOL, loc }, type: BOOL, loc }, then: [
+        { kind: "exprStmt", expr: call(varRef(returned.id, DYN, loc)), loc },
+      ], else_: null, loc },
+    ];
+    const elemInit = (): IrExpr => varRef(value.id, DYN, loc);
     lowerer.scopes.push(new Map());
     try {
       const binds: IrStmt[] = [];
@@ -7795,40 +7788,35 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
         }
       }
       const body = lowerer.inCtl("loop", () => lowerer.lowerScopedBlock(stmt.statement), labels);
+      const loop: IrStmt = {
+        kind: "while", cond: { kind: "boolLit", value: true, type: BOOL, loc },
+        body: [
+          setClose(false),
+          { kind: "varDecl", localId: step.id, init: call(varRef(next.id, DYN, loc)), loc },
+          { kind: "if", cond: { kind: "dynTest", test: "truthy", value: get(varRef(step.id, DYN, loc), "done"), type: BOOL, loc }, then: [{ kind: "break", loc }], else_: null, loc },
+          { kind: "varDecl", localId: value.id, init: get(varRef(step.id, DYN, loc), "value"), loc },
+          setClose(true),
+          ...binds, ...body,
+        ],
+        ...(labels && { labels }), loc,
+      };
       return {
         kind: "block",
         body: [
+          { kind: "varDecl", localId: iterator.id, init: check({ kind: "libCall", fn: "dyn.iterator", args: [iterable, { kind: "strLit", value: spell, type: STRING, loc }], type: DYN, loc }), loc },
+          { kind: "varDecl", localId: next.id, init: get(varRef(iterator.id, DYN, loc), "next"), loc },
+          { kind: "varDecl", localId: needsClose.id, init: { kind: "boolLit", value: false, type: BOOL, loc }, loc },
           {
-            kind: "varDecl",
-            localId: pack.id,
-            init: {
-              kind: "libCall",
-              fn: "dyn.iterPack",
-              args: [iterable, { kind: "strLit", value: spell, type: STRING, loc }],
-              type: DYN,
-              loc,
-            },
-            loc,
-          },
-          {
-            kind: "for",
-            init: { kind: "varDecl", localId: idx.id, init: { kind: "numLit", value: 0, type: F64, loc }, loc },
-            cond: {
-              kind: "bin",
-              op: "<",
-              left: iRef(),
-              right: { kind: "libCall", fn: "dyn.arrLen", args: [packRef()], type: F64, loc },
-              type: BOOL,
-              loc,
-            },
-            update: {
-              kind: "assign",
-              localId: idx.id,
-              value: { kind: "bin", op: "+", left: iRef(), right: { kind: "numLit", value: 1, type: F64, loc }, type: F64, loc },
-              loc,
-            },
-            body: [...binds, ...body],
-            ...(labels && { labels }),
+            kind: "tryCatch", tryBody: [loop],
+            catchBody: [
+              { kind: "if", cond: varRef(needsClose.id, BOOL, loc), then: [
+                setClose(false),
+                { kind: "tryCatch", tryBody: close(), catchBody: [], catchLocalId: null, finallyBody: null, loc },
+              ], else_: null, loc },
+              { kind: "rethrow", localId: error.id, loc },
+            ],
+            catchLocalId: error.id,
+            finallyBody: [{ kind: "if", cond: varRef(needsClose.id, BOOL, loc), then: close(), else_: null, loc }],
             loc,
           },
         ],
@@ -7839,6 +7827,25 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
     }
   }
 
+  /** for-of over an ISLAND value (see lowerForOf's jsval arm): the
+   * engine's iterator protocol desugared over jsOps —
+   *
+   *   it = iterNew(v);            // GetIterator (prelude; may throw)
+   *   while (true) {
+   *     r = it.next();            // callMethod
+   *     if (truthy(r.done)) break;
+   *     <bind loop var(s) from r.value>  // getProp
+   *     ...body
+   *   }
+   *
+   * The loop variable's ELEMENT is an island handle (jsval — exactly what
+   * the checker's package-typed element maps to); identifier heads bind
+   * it per iteration, destructuring heads run the jsval pattern desugar,
+   * pre-declared and var heads keep their fences (the array path's
+   * stories don't carry over mechanically). IteratorClose on early exit
+   * (break/return out of a partial iteration calling it.return()) is NOT
+   * run — a divergence only a custom island iterator with a return()
+   * method can observe. */
   function lowerForOfIsland(lowerer: Lowerer, stmt: ts.ForOfStatement, iterable: IrExpr, labels?: string[]): IrStmt {
     const loc = locOf(stmt);
     if (!ts.isVariableDeclarationList(stmt.initializer)) {
