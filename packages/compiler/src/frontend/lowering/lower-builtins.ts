@@ -512,7 +512,7 @@ export function isNativeFfiRequire(lowerer: Lowerer, expr: ts.Expression | undef
     const cr = createRequireSpecOf(lowerer, call);
     if (cr === null || cr.spec === null || canonicalBuiltinModule(cr.spec) !== null) return null;
     const dep = resolveImport(lowerer.program, cr.baseFile, cr.spec) ??
-      npmStaticDepSf7(lowerer.program, cr.baseFile, cr.spec);
+      npmStaticDepSf7(lowerer.program, cr.baseFile, cr.spec, "require");
     if (dep === null || dep.fileName.endsWith(".json")) return null;
     return { spec: cr.spec, baseFile: cr.baseFile, dep };
   }

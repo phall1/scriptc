@@ -8,7 +8,7 @@ import { AstNode } from "../ts7/ast-node.js";
 import { bodyReadsArguments } from "../arguments-usage.js";
 import type { Lowerer } from "./lowerer.js";
 import { lowerGenMethodCall } from "./lower-generators.js";
-import { BYTES_ELEMENT_NAME, BIGINT_T, BOOL, CAUGHT, DYN, F64, type IrExpr, type IrFunction, type IrLocal, type IrParam, type IrStmt, type IrType, JSVAL, NULL_T, STRING, SYMBOL_T, type SrcLoc, UNDEFINED_T, VOID, arrayOf, canBoxFuncIntoDyn, canConvertToDyn, canDynCheckTo, canMarshalTypedFuncIntoIsland, ffiClassType, ffiSourceParamTypes, funcOf, isFfiCallbackParam, isFfiContextParam, isFfiReleaseParam, isUnitType, shapeHasAccessorSlots, typeEquals } from "../../ir/ir.js";
+import { BYTES_ELEMENT_NAME, BIGINT_T, BOOL, CAUGHT, DYN, F64, type IrExpr, type IrFunction, type IrLocal, type IrParam, type IrStmt, type IrType, JSVAL, NULL_T, STRING, SYMBOL_T, type SrcLoc, UNDEFINED_T, VOID, arrayOf, canBoxFuncIntoDyn, canConvertToDyn, canDynCheckTo, canMarshalTypedFuncIntoIsland, ffiClassType, ffiSourceParamTypes, funcOf, isDynTypedRefType, isFfiCallbackParam, isFfiContextParam, isFfiReleaseParam, isUnitType, shapeHasAccessorSlots, typeEquals } from "../../ir/ir.js";
 import type { IrFfiCallbackParam, IrFfiCallbackParamClass, IrFfiImport, IrFfiReleaseParam } from "../../ir/ir.js";
 import { isJsSourceFile, isNodeEsmFile, locOf, requireSpecOf } from "../program.js";
 import { genResultRecord, isGenericCallableMemberType, jsOpenObjectType, typeKey } from "../type-mapper.js";
@@ -604,7 +604,7 @@ function defaultParameterShape(lowerer: Lowerer, param: ts.ParameterDeclaration,
       });
       const fixed = positional.map((shape, i): IrExpr => {
         if (i < passed.length) return passed[i]!;
-        if (shape.mode === "omittable") return shape.callDefault ?? lowerer.undefinedArgFor(shape.type, loc, blame);
+        if (shape.mode === "omittable" || lowerer.bareUndefinedArmedUnion(shape.type)) return shape.callDefault ?? lowerer.undefinedArgFor(shape.type, loc, blame);
         if (shape.type.kind === "dyn") return { kind: "dynFrom", value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc }, type: DYN, loc };
         lowerer.unsupported("SC1090", blame, "this call form");
       });
@@ -630,8 +630,17 @@ function defaultParameterShape(lowerer: Lowerer, param: ts.ParameterDeclaration,
           "spread arguments into fixed parameter positions (a spread can only fill a rest parameter)",
         );
       }
-      if (arg) return lowerer.lowerExprExpecting(arg, shape.type);
-      if (shape.mode !== "omittable") {
+      if (arg) {
+        let operand = arg;
+        while (ts.isParenthesizedExpression(operand)) operand = operand.expression;
+        if (ts.isVoidExpression(operand)) {
+          const absent = omittedArgFor(lowerer, shape.type, loc);
+          const effect = lowerStaticallyUndefinedArgument(lowerer, operand);
+          if (absent && effect) return defaultAfterUndefined(effect, absent);
+        }
+        return lowerer.lowerExprExpecting(arg, shape.type);
+      }
+      if (shape.mode !== "omittable" && !lowerer.bareUndefinedArmedUnion(shape.type)) {
         // A missing argument for a CHECKED-DYNAMIC param (an implicit-any
         // JS signature called short — `mustCall(fn)` with `expected`
         // omitted): JS fills undefined, and the dyn slot holds exactly
@@ -9389,7 +9398,7 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
       // A CHECKED-DYNAMIC receiver (the JS file-scope object-literal
       // identity story): the runtime dyn probe — OBJ member presence, ARR
       // index bounds, Node's ToObject TypeError on nullish.
-      if (probed?.type.kind === "dyn" || (probed?.type.kind === "func" && lowerer.dynConvertible(probed.type))) {
+      if (probed?.type.kind === "dyn" || (probed && isDynTypedRefType(probed.type)) || (probed?.type.kind === "func" && lowerer.dynConvertible(probed.type))) {
         const loc = locOf(call);
         const receiver = lowerer.coerceToExpected(probed, DYN);
         const key = ownPropertyKey(lowerer, lowerer.lowerExpr(keyNode));
@@ -9472,7 +9481,7 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
       const isPrimitive = probed !== null && probed !== undefined &&
         (isUnitType(probed.type) || probed.type.kind === "string" ||
          probed.type.kind === "f64" || probed.type.kind === "bool");
-      if (isDyn || isPrimitive || isFunction) {
+      if (isDyn || isPrimitive || isFunction || (probed && isDynTypedRefType(probed.type))) {
         const fn = member === "keys" ? "dyn.objKeys" : member === "values" ? "dyn.objValues" : "dyn.objEntries";
         let v = lowerer.lowerExpr(argNode);
         if (v.type.kind !== "dyn") v = { kind: "dynFrom", value: v, type: DYN, loc: locOf(call) };

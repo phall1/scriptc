@@ -5452,6 +5452,13 @@ static bool scr_dyn_canonical_own_index(const ScrStr *key, size_t length) {
 }
 
 bool scr_dyn_has_own(const ScrDyn *v, const ScrStr *key) {
+  if (v->kind == SCR_DYN_TYPED_REF) {
+    ScrDyn *view = scr_dyn_typed_ref_materialize(v);
+    if (!view) return false;
+    bool result = scr_dyn_has_own(view, key);
+    scr_dyn_release(view);
+    return result;
+  }
   if (v->kind == SCR_DYN_PROXY) {
     ScrDyn *desc = scr_dyn_own_descriptor(v, key);
     bool has = desc && desc->kind != SCR_DYN_UNDEF;
@@ -5490,8 +5497,7 @@ bool scr_dyn_has_own(const ScrDyn *v, const ScrStr *key) {
     scr_dyn_release(desc);
     return has;
   }
-  if (v->kind == SCR_DYN_HANDLE ||
-      v->kind == SCR_DYN_TYPED_REF) {
+  if (v->kind == SCR_DYN_HANDLE) {
     const char *m = "Own-property checks on this checked-dynamic kind are not supported yet";
     scr_throw_error_msg(SCR_ERR_ERROR, m, strlen(m));
     return false;

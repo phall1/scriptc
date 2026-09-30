@@ -1691,6 +1691,12 @@ export function validateModule(mod: IrModule): IrValidationError[] {
     if (cls.jsLength !== undefined && (!Number.isSafeInteger(cls.jsLength) || cls.jsLength < 0)) {
       errors.push({ message: `class ${cls.name}: invalid constructor length`, loc: cls.loc });
     }
+    if (cls.prototypeDataHelper !== undefined) {
+      const helper = functionsByName.get(cls.prototypeDataHelper);
+      if (!helper || helper.params.length !== 0 || helper.returnType.kind !== "dyn" || helper.captures !== undefined || helper.classCaptures !== undefined) {
+        errors.push({ message: `class ${cls.name}: prototype data helper must be a noncapturing () => dyn function`, loc: cls.loc });
+      }
+    }
     const seen = new Set<string>();
     for (const f of cls.fields) {
       if (seen.has(f.name)) {

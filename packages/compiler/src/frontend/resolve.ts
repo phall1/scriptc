@@ -401,6 +401,7 @@ const EXPORT_CONDITIONS = new Set(["types", "import", "default"]);
  * runtime JS is the compile target). Mirrors the types-stripped
  * package.json the tsgo host serves for the same package. */
 const JS_ONLY_CONDITIONS = new Set(["import", "default"]);
+const JS_REQUIRE_CONDITIONS = new Set(["require", "default"]);
 
 /** Node's ESM runtime conditions. Source-only workspace detection follows
  * the executable branch rather than the checker-only "types" branch. */
@@ -809,6 +810,8 @@ export function resolveBareModule(
    * "runtime-js" and "runtime-source" probe Node's import-condition entry
    * by executable file kind; default follows the active set. */
   mode?: "js-only" | "types-only" | "runtime-js" | "runtime-source",
+  /** Select the actual module edge when compiling an opted-in package. */
+  resolutionKind: "import" | "require" = "import",
 ): BareResolution | null {
   const pkgName = packageNameOfSpecifier(specifier);
   const rest = specifier.slice(pkgName.length).replace(/^\//, "");
@@ -821,7 +824,7 @@ export function resolveBareModule(
   const conditions = runtimeImport
     ? RUNTIME_IMPORT_CONDITIONS
     : npmStatic
-      ? JS_ONLY_CONDITIONS
+      ? resolutionKind === "require" ? JS_REQUIRE_CONDITIONS : JS_ONLY_CONDITIONS
       : EXPORT_CONDITIONS;
   const runtimeOnly = runtimeImport || npmStatic;
 
@@ -850,7 +853,7 @@ export function resolveBareModule(
     };
     const rawPkg = pkgJsonOf(nmPkgDir);
     // The opted-in exports lookup runs over the SAME transformed document
-    // the tsgo host serves (types stripped, import:=require) — the two
+    // the tsgo host serves (types stripped, runtime conditions preserved) — the two
     // resolvers must answer one file. Cloned per lookup; never cached, so
     // the raw cache stays clean for flagless compiles.
     const pkg =

@@ -1146,6 +1146,9 @@ export interface IrClassDef {
   jsName?: string;
   /** JavaScript constructor arity, ending before the first default or rest parameter. */
   jsLength?: number;
+  /** Zero-argument native helper returning the shared prototype data object.
+   * Used when materializing an instance's own-property view. */
+  prototypeDataHelper?: string;
   /** RUNTIME-PROVIDED class (the builtin Error hierarchy): the struct, RC
    * helpers, and vtable live in the runtime (ScrError / scr_error_*), so
    * backends emit no definitions for it — only the preorder-interval

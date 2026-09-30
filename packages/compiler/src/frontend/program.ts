@@ -487,7 +487,7 @@ function createRequireProgramRoots7(program: ts.Program): string[] {
       if (canonicalBuiltinModule(spec) !== null) return "skip";
       let target = resolveProjectModule(sf.fileName, spec);
       if (target === null && !spec.startsWith("#")) {
-        const npm = resolveNpmImport7(sf.fileName, spec);
+        const npm = resolveNpmImport7(sf.fileName, spec, "require");
         if (npm !== null && isNpmStaticPackage(npm.packageName) && isJsSourceFileName(npm.typesFile)) {
           target = npm.typesFile;
         }
@@ -2065,6 +2065,7 @@ function resolveImport7(program: ts.Program, from: ts.SourceFile, specifier: str
 function resolveNpmImport7(
   fromFileName: string,
   specifier: string,
+  resolutionKind: "import" | "require" = "import",
 ): { packageName: string; version?: string; typesFile: string } | null {
   if (isRelativeSpecifier(specifier) || specifier.startsWith("node:")) {
     return null;
@@ -2073,7 +2074,7 @@ function resolveNpmImport7(
   // its attested source compiles as program modules (resolveProjectModule
   // answers the entry), so no island embed and no .d.ts type surface.
   if (provenanceEntryFor(specifier) !== null) return null;
-  const resolved = resolveBareModule(fromFileName, specifier);
+  const resolved = resolveBareModule(fromFileName, specifier, undefined, resolutionKind);
   if (!resolved) return null;
   if (!isNodeModulesPath(resolved.typesFile)) {
     // A workspace-linked package (the node_modules entry is a symlink into
@@ -2426,7 +2427,7 @@ function preflight7(load: LoadResult): {
         entry,
         programFiles,
         [...createRequireProgramRoots7(program), ...forkTargetPaths(program, program.getSourceFiles())],
-        (sf, spec) => resolveImport7(program, sf, spec) ?? npmStaticDepSf7(program, sf, spec),
+        (sf, spec, resolutionKind) => resolveImport7(program, sf, spec) ?? npmStaticDepSf7(program, sf, spec, resolutionKind),
       )
     : programFiles;
   program.getTypeChecker().prefetchSourceFileStructures(userFiles);
@@ -2889,7 +2890,7 @@ function preflight7(load: LoadResult): {
             // form above (bundle dists require their workspace siblings —
             // the same resolution, the same offender discipline on a
             // miss).
-            const npmReq = !req.spec.startsWith("#") ? resolveNpmImport7(sf.fileName, req.spec) : null;
+            const npmReq = !req.spec.startsWith("#") ? resolveNpmImport7(sf.fileName, req.spec, "require") : null;
             if (npmReq !== null && isNpmStaticPackage(npmReq.packageName)) {
               dep = npmStaticProgramDep(program, npmReq.packageName, npmReq.typesFile);
               if (dep === null) continue; // offender recorded — the fallback loop reloads
@@ -2978,7 +2979,7 @@ function preflight7(load: LoadResult): {
         if (!isRelativeSpecifier(spec)) {
           // --npm-static: opted-in packages ride the program-module edge
           // (the statement-level require branch above).
-          const npmReq = !spec.startsWith("#") ? resolveNpmImport7(sf.fileName, spec) : null;
+          const npmReq = !spec.startsWith("#") ? resolveNpmImport7(sf.fileName, spec, "require") : null;
           if (npmReq !== null && isNpmStaticPackage(npmReq.packageName)) {
             const nDep = npmStaticProgramDep(program, npmReq.packageName, npmReq.typesFile);
             if (nDep !== null) deps.push({ dep: nDep });
@@ -3159,7 +3160,7 @@ function cjsNamedImportLinkCheck(
   // Reexport targets union in only when they resolve to CommonJS program
   // files (Node's cjsPreparseModuleExports rule).
   const resolveCjsDep = (from: ts.SourceFile, spec: string): ts.SourceFile | null => {
-    const dep = resolveEdge(from, spec);
+    const dep = resolveImport7(program, from, spec) ?? npmStaticDepSf7(program, from, spec, "require");
     return dep !== null && isCjsJsFile7(dep, program) ? dep : null;
   };
   const visible = (dep: ts.SourceFile, name: string): boolean =>
@@ -3725,10 +3726,10 @@ export function orderedImportsOf(
  * as a module edge), else null. No offender reporting here — preflight
  * already classified the import; this is the lookup the module-order and
  * lowering paths share. */
-export function npmStaticDepSf7(program: ts.Program, sf: ts.SourceFile, spec: string): ts.SourceFile | null {
+export function npmStaticDepSf7(program: ts.Program, sf: ts.SourceFile, spec: string, resolutionKind: "import" | "require" = "import"): ts.SourceFile | null {
   if (!npmStaticActive() || isRelativeSpecifier(spec)) return null;
   if (spec.startsWith("node:") || spec.startsWith("#")) return null;
-  const npm = resolveNpmImport7(sf.fileName, spec);
+  const npm = resolveNpmImport7(sf.fileName, spec, resolutionKind);
   if (npm === null || !isNpmStaticPackage(npm.packageName)) return null;
   if (!isJsSourceFileName(npm.typesFile)) return null;
   return program.getSourceFile(npm.typesFile) ?? null;

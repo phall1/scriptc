@@ -3435,11 +3435,8 @@ export function lowerStaticReadableStreamReaderCall(
     return finish(lowerer.jsvalIn(lowerer.lowerExpr(access.expression), access.expression), entry);
   }
 
-/** Canonical Math constant property reads become typed numeric
-   * literals. Remaining Math properties retain the island/fence path. Math
-   * methods referenced without a call are rejected specifically (no value form
-   * exists, --dynamic or not). Null for non-Math receivers (the property chain
-   * keeps trying). */
+/** Math constants and fixed-arity numeric functions have native value forms.
+ * Remaining properties retain the island/fence path. */
   export function lowerMathProperty(lowerer: Lowerer, expr: ts.PropertyAccessExpression): IrExpr | null {
     const member = lowerer.stdlibGlobalMember(expr, "Math");
     if (member === null) return null;
@@ -3447,6 +3444,14 @@ export function lowerStaticReadableStreamReaderCall(
     const staticValue = own(STATIC_MATH_PROPS, member);
     if (staticValue !== undefined) {
       return { kind: "numLit", value: staticValue, type: F64, loc };
+    }
+    const native = own(STATIC_MATH_FNS, member);
+    if (native && member !== "min" && member !== "max" && member !== "hypot") {
+      const params = Array.from({ length: native.arity }, () => F64);
+      return lowerer.lowerNativeCallableValue({
+        fn: native.fn, params, result: F64,
+        valueParams: params.map((type) => ({ mode: "required", type })),
+      }, `Math.${member}`, loc);
     }
     const propType = own(ISLAND_SURFACE.math.props, member);
     if (propType !== undefined) {

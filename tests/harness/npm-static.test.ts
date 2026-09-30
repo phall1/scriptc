@@ -99,6 +99,39 @@ async function buildStatic(entry: string, npmStatic: string[] | "auto"): Promise
 }
 
 describe(`npm-static pilots${sanitize ? " (sanitized)" : ""}`, () => {
+  test("conditional exports keep distinct import and require behavior", async () => {
+    const dir = mkdtempSync("/tmp/scriptc-conditional-exports-");
+    try {
+      const pkg = join(dir, "node_modules", "dual");
+      mkdirSync(pkg, { recursive: true });
+      writeFileSync(join(pkg, "package.json"), JSON.stringify({
+        name: "dual", type: "module",
+        exports: { ".": { types: "./index.d.ts", node: { import: "./esm.js", require: "./cjs.cjs" }, default: "./browser.js" } },
+      }));
+      writeFileSync(join(pkg, "index.d.ts"), "export declare const value: string;");
+      writeFileSync(join(pkg, "esm.js"), 'console.log("esm init"); export const value = "import";');
+      writeFileSync(join(pkg, "cjs.cjs"), 'console.log("cjs init"); exports.value = "require";');
+      writeFileSync(join(pkg, "browser.js"), 'export const value = "browser";');
+      for (const [name, source] of [
+        ["main.mjs", 'import { value } from "dual"; console.log(value);'],
+        ["main.cjs", 'const { value } = require("dual"); console.log(value);'],
+        ["mixed.mjs", 'import { value } from "dual"; import { createRequire } from "node:module"; const require = createRequire(import.meta.url); const cjs = require("dual"); console.log(value, cjs.value);'],
+      ] as const) {
+        const entry = join(dir, name);
+        writeFileSync(entry, source);
+        const result = await compile(entry, { backend: "llvm", dynamic: false, npmStatic: ["dual"], sanitize,
+          outDir: join(dir, name + "-out"), outPath: join(dir, name + "-program") });
+        if (!result.ok) throw new Error(name + ": " + result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
+        const [reference, native] = await Promise.all([runBinary(process.execPath, [entry]), runBinary(result.binaryPath, [])]);
+        expect(native.stdout).toEqual(reference.stdout);
+        expect(comparableStderr(native.stderr)).toEqual(reference.stderr);
+        expect(native.exitCode).toEqual(reference.exitCode);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test.each(["llvm"] as const)("renderer values and callbacks compile from shipped JavaScript (%s)", async (backend) => {
     const dir = mkdtempSync(join(tmpdir(), "scriptc-renderer-values-"));
     try {

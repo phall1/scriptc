@@ -195,18 +195,9 @@ function shadowTargetOf(path: string): { pkg: string; viaTypes: boolean } | null
  *      and every "types"/"typings" condition key inside "exports"
  *      (recursively; condition objects nest) — so resolution lands on
  *      runtime JS;
- *   2. CJS-first: a condition object carrying BOTH "import" and "require"
- *      has its "import" value REWRITTEN to the "require" target. The
- *      import-side of a wrapper-style dual (commander's esm.mjs) is pure
- *      name plumbing over the CJS implementation — `export const {…} =
- *      cjsDefault`, a re-export shape with no static lowering — while the
- *      CJS side engages the compiler's richest machinery (the CJS lexer
- *      link check, export-identity analysis, require discipline).
- *      Behavior is identical for wrapper duals (both sides evaluate the
- *      same CJS module); genuinely dual-BEHAVIOR packages are outside the
- *      pilot's supported surface — the differential contract gates every
- *      opted-in package. Import-only (pure ESM) packages are untouched
- *      and compile as native ES modules. */
+ *   2. preserve distinct import and require targets. Static compilation
+ *      must execute the same module Node selects, including packages that
+ *      ship separate ESM and CommonJS builds. */
 export function npmStaticTransformPkgJson(pkg: Record<string, unknown>): void {
   delete pkg["types"];
   delete pkg["typings"];
@@ -246,9 +237,6 @@ export function npmStaticTransformPkgJson(pkg: Record<string, unknown>): void {
           if (!(ik in obj)) obj[ik] = iv;
         }
       }
-    }
-    if (obj["import"] !== undefined && obj["require"] !== undefined) {
-      obj["import"] = obj["require"];
     }
     for (const value of Object.values(obj)) transform(value);
   };
