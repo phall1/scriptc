@@ -3585,6 +3585,7 @@ bool scr_dyn_property_is_enumerable(const ScrDyn *value, const ScrStr *key);
  * and scalar/function/handle sources copy nothing. */
 ScrDyn *scr_dyn_assign(ScrDyn *target, const ScrDyn *src);
 ScrDyn *scr_dyn_copy_data_properties(ScrDyn *target, const ScrDyn *src);
+ScrDyn *scr_dyn_copy_property_descriptors(ScrDyn *target, const ScrDyn *src);
 /* Variadic Object.assign (the spread-source form): the compiler packs
  * every source into one fresh dyn array — pack_push retains a plain
  * source in (BORROWED), pack_push_spread flattens a spread source through

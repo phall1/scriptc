@@ -1,4 +1,4 @@
-import { BOOL, DYN, DYN_CLASS_PROPERTIES as PROPERTY_BAG, STRING, VOID, canConvertToDyn, canDynCheckTo, isClassOwnEnumerableFieldName, isDynTypedRefType, isUnitType, typeEquals, typeKey, type IrExpr, type IrFunction, type IrStmt, type IrType } from "../../ir/ir.js";
+import { BOOL, DYN, DYN_CLASS_PROPERTIES as PROPERTY_BAG, STRING, VOID, canConvertToDyn, canDynCheckTo, isClassOwnEnumerableFieldName, isDynTypedRefType, isUnitType, typeEquals, typeKey, type IrExpr, type IrFunction, type IrStmt, type IrType, type SrcLoc } from "../../ir/ir.js";
 import { streamTypedRefEligible } from "../../ir/analysis.js";
 import { varRef } from "../../ir/build.js";
 import { everyStmtList, transformStmtList } from "../../ir/traverse.js";
@@ -19,6 +19,19 @@ interface PropertyDispatch {
   write: boolean;
   fn: IrFunction;
   classes: Set<string>;
+}
+
+export function classPropertiesHelper(lowerer: Lowerer, loc: SrcLoc): IrFunction {
+  const name = "%dyn.class.properties";
+  const existing = lowerer.liftedFns.find((fn) => fn.name === name);
+  if (existing) return existing;
+  const helper: IrFunction = {
+    name, params: [{ localId: "p.0", name: "value", type: DYN }], returnType: DYN,
+    locals: [{ id: "p.0", name: "value", type: DYN, mutable: false }],
+    body: [{ kind: "return", value: varRef("p.0", DYN, loc), loc }], loc,
+  };
+  lowerer.liftedFns.push(helper);
+  return helper;
 }
 
 /** Calls on native class capsules keep the instance's compiled methods. The
@@ -73,14 +86,8 @@ export class ClassDynamicDispatch {
     if (this.boxed.size === 0) return false;
     let changed = false;
     if (!this.propertyBag) {
-      const loc = functions[0]!.loc;
-      this.propertyBag = {
-        name: "%dyn.class.properties", params: [{ localId: "p.0", name: "value", type: DYN }], returnType: DYN,
-        locals: [{ id: "p.0", name: "value", type: DYN, mutable: false }],
-        body: [{ kind: "return", value: varRef("p.0", DYN, loc), loc }], loc,
-      };
+      this.propertyBag = classPropertiesHelper(lowerer, functions[0]!.loc);
       this.generated.add(this.propertyBag);
-      lowerer.liftedFns.push(this.propertyBag);
       changed = true;
     }
     for (const className of this.boxed) {

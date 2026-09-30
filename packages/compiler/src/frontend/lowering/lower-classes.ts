@@ -27,6 +27,7 @@ import { mixinResultBindingClassOf, type MixinInstanceInfo } from "./lower-mixin
 import { rejectStaticThis } from "./static-this.js";
 import { lowerUrlNew } from "./lower-url.js";
 import { isNativeProxyInitializer, lowerNativeProxy } from "./expressions/native-proxy.js";
+import { classStaticDataFor } from "./class-static-data.js";
 
 function functionLocalClass(decl: ts.ClassLikeDeclaration): boolean {
   if (!ts.isClassExpression(decl)) return false;
@@ -89,7 +90,7 @@ export interface ClassInfo {
    * no-dynamic-dispatch semantics by construction). A `gen` entry has a
    * generator body whose direct calls enter through its spawn wrapper. */
   methods: Map<string, ClassMethodSignature>;
-  /** Own JS overrides whose return cannot use the inherited ABI. The slot
+  /** Own JS overrides whose signature cannot use the inherited ABI. The slot
    * retains that ABI, but its implementation throws before executing. */
   methodEntryFences?: Map<string, ScrDiagnostic>;
   /** OWN GENERIC instance methods (own type parameters — `m<T>(x: T)`),
@@ -174,6 +175,8 @@ export interface ClassInfo {
    * same dynamic story: both are named fences). Accessors and
    * initializer-less fields keep the fence. */
   staticFields: { name: string; type: IrType; initializer: ts.Expression; globalId: string; readonly: boolean }[];
+  /** Shared expando data added after a JS class declaration. */
+  staticDataHelper?: string;
   /** STATIC methods — ordinary module functions named `%C.static:m` (the
    * accessor-colon trick: no user identifier can spell it, and statics
    * never join vtables, so IrClassDef doesn't know them). `C.m(args)` is
@@ -1925,23 +1928,26 @@ export function collectClassShapeInner(lowerer: Lowerer, decl: ts.ClassLikeDecla
               !overridden.sig.params.every((p, i) => typeEquals(p.type, shapes[i]!.type)) ||
               !typeEquals(overridden.sig.ret, ft.ret))
           ) {
-            const returnOnlyJsOverride =
+            const fencedJsOverride =
               isJsSourceFile(member.getSourceFile()) &&
               overridden.declarer.decl !== null && isJsSourceFile(overridden.declarer.decl.getSourceFile()) &&
-              overridden.sig.params.length === shapes.length &&
-              overridden.sig.params.every((p, i) => typeEquals(p.type, shapes[i]!.type)) &&
               member.modifiers?.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword) !== true &&
               overridden.sig.async !== true &&
               member.asteriskToken === undefined && overridden.sig.gen === undefined;
-            if (returnOnlyJsOverride) {
+            if (fencedJsOverride) {
               // A dormant JS method must not poison the whole class. Keep
               // the inherited call/dispatch ABI and refuse at method entry;
-              // lowering this body with the base return would change JS.
+              // lowering this body with the base signature would change JS.
+              const returnOnly = overridden.sig.params.length === shapes.length &&
+                overridden.sig.params.every((p, i) => typeEquals(p.type, shapes[i]!.type));
               methodEntryFences.set(mName, unsupportedDiag(
                 "SC1090",
                 locOf(member.name),
-                `overriding method '${mName}' with a different return type (the native return type must match the base declaration exactly)`,
+                returnOnly
+                  ? `overriding method '${mName}' with a different return type (the native return type must match the base declaration exactly)`
+                  : `overriding method '${mName}' with a different signature (the native parameter and return types must match the base declaration exactly)`,
               ));
+              shapes.splice(0, shapes.length, ...overridden.sig.params);
               ft.ret = overridden.sig.ret;
             } else {
               lowerer.unsupported(
@@ -3127,6 +3133,7 @@ export function staticFieldWriteTarget(lowerer: Lowerer, access: ts.PropertyAcce
       // or `C.name` below would fall through to paths that answer for
       // stdlib globals instead of this class.
       propertyAssignedClassInfoOf(lowerer, symbol) ??
+      exactClassOfReceiver(lowerer, expr.expression) ??
       undefined;
     if (!info) return null;
     // A decorated name that can REBIND (a replacing decorator): the
@@ -3170,6 +3177,8 @@ export function staticFieldWriteTarget(lowerer: Lowerer, access: ts.PropertyAcce
     if (expr.name.text === "name" && info.def.jsName !== undefined) {
       return { kind: "strLit", value: info.def.jsName, type: STRING, loc };
     }
+    const data = classStaticDataFor(lowerer, info, expr.name.text, loc);
+    if (data) return { kind: "dynKeyGet", value: data, key: { kind: "strLit", value: expr.name.text, type: STRING, loc }, type: DYN, loc };
     return null;
   }
 

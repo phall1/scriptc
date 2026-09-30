@@ -1518,6 +1518,15 @@ ScrDyn *scr_dyn_bytes_key_get(const ScrDyn *value, const ScrStr *key) {
   if (key->len == 10 && memcmp(key->data, "byteLength", 10) == 0) return scr_dyn_new_num(scr_bytes_byte_len(bytes));
   if (key->len == 10 && memcmp(key->data, "byteOffset", 10) == 0) return scr_dyn_new_num(scr_bytes_byte_offset(bytes));
   if (key->len == 6 && memcmp(key->data, "buffer", 6) == 0) return scr_array_buffer_from_bytes(bytes);
+  if (key->len == 11 && memcmp(key->data, "constructor", 11) == 0) {
+    /* Match the compiler's opaque JS builtin identity values. */
+    char token[64];
+    int length = snprintf(token, sizeof token, "[builtin %s]", value->buffer ? "Buffer" : scr_bytes_elem_name(bytes->elem));
+    ScrStr *name = scr_str_new(token, (size_t)length);
+    ScrDyn *result = scr_dyn_new_str(name);
+    scr_str_release(name);
+    return result;
+  }
   if (key->len && !(key->len > 1 && key->data[0] == '0')) {
     size_t index = 0;
     bool digits = true;
@@ -5353,6 +5362,24 @@ ScrDyn *scr_dyn_copy_data_properties(ScrDyn *target, const ScrDyn *src) {
     scr_dyn_release(assigned);
     scr_dyn_release(copy);
   } else scr_dyn_assign_from(target, src, true);
+  return scr_exc_pending() ? NULL : scr_dyn_retain(target);
+}
+
+/* Compiler-owned native class views retain every property and its flags,
+ * including nonenumerable data, without invoking accessors. */
+ScrDyn *scr_dyn_copy_property_descriptors(ScrDyn *target, const ScrDyn *src) {
+  if (!src || src->kind == SCR_DYN_UNDEF) return scr_dyn_retain(target);
+  ScrDyn *keys = scr_dyn_obj_own_keys(src);
+  if (!keys) return NULL;
+  for (size_t i = 0; i < keys->v.arr.len; i++) {
+    ScrDyn *key = keys->v.arr.items[i];
+    ScrDyn *descriptor = scr_dyn_own_descriptor(src, key->v.str);
+    ScrDyn *result = descriptor ? scr_dyn_define_property(target, key, descriptor) : NULL;
+    scr_dyn_release(descriptor);
+    scr_dyn_release(result);
+    if (scr_exc_pending()) break;
+  }
+  scr_dyn_release(keys);
   return scr_exc_pending() ? NULL : scr_dyn_retain(target);
 }
 

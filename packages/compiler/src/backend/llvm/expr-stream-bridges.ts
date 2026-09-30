@@ -188,14 +188,14 @@ export function streamTypedRefCommitAdapter(host: LlvmEmitterContext,
       }
       if (meta.def.fields.some((field) => field.name === DYN_CLASS_PROPERTIES)) {
         host.declare(`declare ptr @scr_dyn_new_obj()`);
-        host.declare(`declare ptr @scr_dyn_copy_data_properties(ptr, ptr)`);
+        host.declare(`declare ptr @scr_dyn_copy_property_descriptors(ptr, ptr)`);
         host.declare(`declare void @scr_dyn_release_v(ptr)`);
         host.declare(`declare ptr @scr_str_new(ptr, ${host.sizeType})`);
         host.declare(`declare void @scr_str_release(ptr)`);
         host.declare(`declare void @scr_dyn_key_delete(ptr, ptr, i1 zeroext)`);
         lines.push(
           `  %bag = call ptr @scr_dyn_new_obj()`,
-          `  %bag_copy = call ptr @scr_dyn_copy_data_properties(ptr %bag, ptr %d)`,
+          `  %bag_copy = call ptr @scr_dyn_copy_property_descriptors(ptr %bag, ptr %d)`,
           `  call void @scr_dyn_release_v(ptr %bag_copy)`,
           `  %bag_pending = call zeroext i1 @scr_exc_pending()`,
           `  br i1 %bag_pending, label %bag_fail, label %bag_keys`,
@@ -597,13 +597,13 @@ export function streamTypedRefMaterializeAdapter(host: LlvmEmitterContext,
         B.line(`call void @scr_dyn_obj_set(ptr ${out}, ptr ${host.cstr(field.name)}, ${host.sizeType} ${Buffer.byteLength(field.name, "utf8")}, ptr ${boxed})`);
       }
       if (meta.def.fields.some((field) => field.name === DYN_CLASS_PROPERTIES)) {
-        host.declare(`declare ptr @scr_dyn_copy_data_properties(ptr, ptr)`);
+        host.declare(`declare ptr @scr_dyn_copy_property_descriptors(ptr, ptr)`);
         host.declare(`declare void @scr_dyn_release_v(ptr)`);
         const { index } = classFieldIndex(meta, DYN_CLASS_PROPERTIES);
         const slot = B.tmp(), bag = B.tmp(), copied = B.tmp();
         B.line(`${slot} = getelementptr inbounds %${classStructSym(t.className)}, ptr %p, i64 0, i32 ${index}`);
         B.line(`${bag} = load ptr, ptr ${slot}`);
-        B.line(`${copied} = call ptr @scr_dyn_copy_data_properties(ptr ${out}, ptr ${bag})`);
+        B.line(`${copied} = call ptr @scr_dyn_copy_property_descriptors(ptr ${out}, ptr ${bag})`);
         B.line(`call void @scr_dyn_release_v(ptr ${copied})`);
       }
       B.terminate(`ret ptr ${out}`);

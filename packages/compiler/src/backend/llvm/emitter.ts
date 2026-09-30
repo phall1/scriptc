@@ -3772,7 +3772,11 @@ export class LlEmitter {
           B.line(`store ${this.sizeType} 0, ptr ${integerSlot}`);
           this.integerLoopBindings.set(integerLoop.localId, integerSlot);
         } else if (s.init) {
-          this.emitStmt(s.init);
+          // A multi-declarator head shares the loop's scope. Emitting its
+          // IR block as an ordinary block would release captured/ref locals
+          // before the first condition.
+          const initializers = s.init.kind === "block" ? s.init.body : [s.init];
+          for (const initializer of initializers) this.emitStmt(initializer);
         }
         const lc = B.newLabel("loop.c");
         const lb = B.newLabel("loop.b");
@@ -3780,11 +3784,29 @@ export class LlEmitter {
         // JS `for (let i ...)`: each iteration gets a FRESH binding holding
         // a copy of the previous one (closures made in iteration k keep
         // seeing iteration k's value) — only observable, and only emitted,
-        // when the init variable is captured (boxed). The freshening (and
-        // the update) live in the continue-target block.
-        const initLocal = s.init?.kind === "varDecl" ? this.currentLocals.get(s.init.localId) : undefined;
-        const freshens = initLocal?.boxed === true;
-        const lu = s.update || freshens ? B.newLabel("loop.u") : lc;
+        // when a let variable is captured (boxed). Freshen before the first
+        // condition and again in the continue-target block before updating.
+        const initializers = s.init?.kind === "block" ? s.init.body : s.init ? [s.init] : [];
+        const capturedLets = initializers.flatMap((init) => {
+          const local = init.kind === "varDecl" ? this.currentLocals.get(init.localId) : undefined;
+          return local?.boxed && local.mutable ? [local] : [];
+        });
+        const freshenBindings = (): void => {
+          for (const local of capturedLets) {
+            const slot = `%${mangleLocal(local.id)}`;
+            const fresh = B.tmp();
+            const old = B.tmp();
+            B.line(`${fresh} = ${boxNewCall(this.shapeHost, local.type)} ; per-iteration ${local.name}`);
+            B.line(`${old} = load ptr, ptr ${slot}`);
+            const val = this.boxGet(old, local.type);
+            this.boxSet(fresh, local.type, val);
+            this.declare(`declare void @scr_box_release(ptr)`);
+            B.line(`call void @scr_box_release(ptr ${old})`);
+            B.line(`store ptr ${fresh}, ptr ${slot}`);
+          }
+        };
+        const lu = s.update || capturedLets.length > 0 ? B.newLabel("loop.u") : lc;
+        freshenBindings();
         B.br(lc);
         B.startBlock(lc);
         if (integerLoop && integerSlot) {
@@ -3815,20 +3837,7 @@ export class LlEmitter {
         B.br(lu);
         if (lu !== lc) {
           B.startBlock(lu);
-          if (freshens && initLocal) {
-            const slot = `%${mangleLocal(initLocal.id)}`;
-            const fresh = B.tmp();
-            const old = B.tmp();
-            B.line(`${fresh} = ${boxNewCall(this.shapeHost, initLocal.type)} ; per-iteration ${initLocal.name}`);
-            B.line(`${old} = load ptr, ptr ${slot}`);
-            const val = this.boxGet(old, initLocal.type); // ref: +1 out
-            this.boxSet(fresh, initLocal.type, val); // takes ownership
-            this.declare(`declare void @scr_box_release(ptr)`);
-            B.line(`call void @scr_box_release(ptr ${old})`);
-            B.line(`store ptr ${fresh}, ptr ${slot}`);
-            // The wrapper scope's entry releases whatever the slot points
-            // to at loop exit — now the freshest binding. Nothing to fix.
-          }
+          freshenBindings();
           if (integerLoop && integerSlot) {
             const old = B.tmp();
             const next = B.tmp();

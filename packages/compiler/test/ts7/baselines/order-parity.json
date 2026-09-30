@@ -11739,6 +11739,54 @@
     "<repo>/tests/corpus/rest-optional-array-arguments.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/class-data-descriptors.js": {
+   "order": [
+    "<repo>/tests/corpus/class-data-descriptors.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/class-static-data.js": {
+   "order": [
+    "<repo>/tests/corpus/class-static-data.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/for-multiple-bindings.ts": {
+   "order": [
+    "<repo>/tests/corpus/for-multiple-bindings.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/js-dormant-overrides.js": {
+   "order": [
+    "<repo>/tests/corpus/js-dormant-overrides.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/js-primitive-union-addition.js": {
+   "order": [
+    "<repo>/tests/corpus/js-primitive-union-addition.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/js-specialized-field-method.js": {
+   "order": [
+    "<repo>/tests/corpus/js-specialized-field-method.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/typed-array-constructor-identity.js": {
+   "order": [
+    "<repo>/tests/corpus/typed-array-constructor-identity.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/typed-array-constructor-union.ts": {
+   "order": [
+    "<repo>/tests/corpus/typed-array-constructor-union.ts"
+   ],
+   "diags": []
   }
  }
 }

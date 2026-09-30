@@ -1512,6 +1512,10 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
     if (ts.isConditionalExpression(expr)) return lowerTernary(lowerer, expr);
 
     if (ts.isPropertyAccessExpression(expr)) {
+      // Expando statics may still be absent even when JS inference sees
+      // the eventual assignment's scalar type. Preserve the checked value.
+      const staticField = lowerStaticFieldRead(lowerer, expr);
+      if (staticField) return staticField;
       const prototypeData = lowerClassPrototypeData(lowerer, expr);
       if (prototypeData) return prototypeData;
       // `super.x`: the base chain's GETTER, called directly (super
@@ -7075,6 +7079,15 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
         }
         const optionalStringPlus = lowerOptionalStringPlus();
         if (optionalStringPlus) return optionalStringPlus;
+        if (isJsSourceFile(expr.getSourceFile())) {
+          const primitive = (type: IrType): boolean =>
+            type.kind === "f64" || type.kind === "string" || type.kind === "bool" || isUnitType(type) ||
+            (type.kind === "union" && (lowerer.unions.get(type.unionId)?.arms.every(primitive) ?? false));
+          if ((left.type.kind === "union" || right.type.kind === "union") && primitive(left.type) && primitive(right.type)) {
+            lowerer.runtimeOptionalArithmeticTypes.set(expr, DYN);
+            return { kind: "libCall", fn: "dyn.add", args: [lowerer.coerceToExpected(left, DYN), lowerer.coerceToExpected(right, DYN)], type: DYN, loc };
+          }
+        }
         lowerer.unsupported("SC1043", expr);
         break;
       case ts.SyntaxKind.MinusToken:

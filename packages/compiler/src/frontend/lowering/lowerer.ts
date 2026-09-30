@@ -8142,7 +8142,12 @@ export class Lowerer {
         }
       }
     }
-    const e = this.lowerExpr(node);
+    let e = this.lowerExpr(node);
+    if (expected?.kind === "union" && this.armTag(expected.unionId, UNDEFINED_T) >= 0) {
+      // A destination that accepts undefined must retain an unchecked
+      // read's storage value even when the checker still calls it present.
+      e = this.runtimeOptionalSourceValue(node, e) ?? e;
+    }
     return expected ? this.coerceInto(node, e, expected) : e;
   }
 

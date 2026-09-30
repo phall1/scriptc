@@ -39,6 +39,8 @@ import { rejectStaticThis } from "./static-this.js";
 import { fenceNodeModuleMutationCall, lowerRequireCacheKeys } from "./lower-node-module.js";
 import { defaultAfterUndefined, lowerOptionalArgument, lowerStaticallyUndefinedArgument, positionNumber } from "./optional-arguments.js";
 import { fenceSymbolFieldCopy } from "./symbol-fields.js";
+import { lowerClassDataDescriptor } from "./class-descriptors.js";
+import { classStaticDataFor } from "./class-static-data.js";
 
 export { bodyReadsArguments };
 
@@ -6537,6 +6539,12 @@ const inliningPredicates = new Set<ts.Symbol>();
       if (ts.isIdentifier(m.name) || ts.isStringLiteralLike(m.name)) own.add(m.name.text);
       else return null; // computed static names — the answer isn't static
     }
+    if (!own.has(key)) {
+      const loc = locOf(call);
+      const data = classStaticDataFor(lowerer, info, key, loc);
+      if (data) return { kind: "libCall", fn: "dyn.hasOwn", args: [data,
+        { kind: "strLit", value: key, type: STRING, loc }], type: BOOL, loc };
+    }
     return { kind: "boolLit", value: own.has(key), type: BOOL, loc: locOf(call) };
   }
 
@@ -9266,6 +9274,13 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
         (member === "getOwnPropertyDescriptor" && call.arguments.length === 2)) {
       if (call.arguments.some((a) => ts.isSpreadElement(a))) return null;
       let target = tryLowerExpression(lowerer, call.arguments[0]!);
+      if (target && member === "defineProperty") {
+        const native = lowerClassDataDescriptor(lowerer, call, member, target);
+        if (native) return native;
+      }
+      if (target && member === "getOwnPropertyDescriptor" && isDynTypedRefType(target.type)) {
+        target = lowerer.coerceToExpected(target, DYN);
+      }
       // Error.cause owns a live data-property slot shared with its checked
       // view. Other native fields do not yet synchronize descriptor edits.
       const keyNode = call.arguments[1]!;
@@ -9300,6 +9315,10 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
     if (member === "defineProperties" && call.arguments.length === 2 &&
         !call.arguments.some((a) => ts.isSpreadElement(a))) {
       let target = tryLowerExpression(lowerer, call.arguments[0]!);
+      if (target) {
+        const native = lowerClassDataDescriptor(lowerer, call, member, target);
+        if (native) return native;
+      }
       // A FUNCTION-typed target boxes through the dyn boundary: the
       // property table lives on the CLOSURE (shared by every box of this
       // function value), so defining through a fresh box sticks — the
@@ -10845,7 +10864,14 @@ export function lowerFunction(lowerer: Lowerer, decl: ts.FunctionDeclaration): I
   export function lowerObjectMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     access: ts.PropertyAccessExpression,): IrExpr | null {
     if (lowerer.chainBlocked(access, call)) return null;
-    const mappedReceiver = lowerer.mapTypeOf(lowerer.typeOf(access.expression));
+    let mappedReceiver = lowerer.mapTypeOf(lowerer.typeOf(access.expression));
+    // A specialized JS parameter can expose a native field whose checker
+    // type still belongs to the unspecialized body (plane.normal.dot()).
+    // Use the lowered receiver's representation and retain its evaluation.
+    const probe = mappedReceiver?.kind !== "object" && lowerer.implicitParamTypes !== null
+      ? tryLowerExpression(lowerer, access.expression) : null;
+    const specializedReceiver = probe?.type.kind === "object" ? probe : null;
+    if (specializedReceiver) mappedReceiver = specializedReceiver.type;
     if (mappedReceiver?.kind === "union") {
       const dispatched =
         lowerUnionObjectMethodCall(lowerer, call, access, mappedReceiver) ??
@@ -10866,7 +10892,7 @@ export function lowerFunction(lowerer: Lowerer, decl: ts.FunctionDeclaration): I
         : null;
     if (receiverIr === null) return null;
     const lowerReceiver = (): IrExpr => {
-      const receiver = lowerer.lowerExpr(access.expression);
+      const receiver = specializedReceiver ?? lowerer.lowerExpr(access.expression);
       const optional = lowerer.runtimeOptionalPropertyReceiver(
         access.expression,
         receiver,
@@ -10902,7 +10928,7 @@ export function lowerFunction(lowerer: Lowerer, decl: ts.FunctionDeclaration): I
     // (lowerClassGenericMethodCall has the exactness rules).
     if (info && !found) {
       const gfound = findGenericMethodOn(lowerer, info, access.name.text);
-      if (gfound) return lowerClassGenericMethodCall(lowerer, call, access, info, gfound);
+      if (gfound) return lowerClassGenericMethodCall(lowerer, call, access, info, gfound, specializedReceiver ?? undefined);
     }
     // A FUNC-, nullable-FUNC-, or DYN-typed FIELD in call position:
     // `this.cb()` — the ctor-assigned callback field (countdown.js's

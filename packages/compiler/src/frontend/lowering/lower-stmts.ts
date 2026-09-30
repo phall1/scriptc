@@ -23,6 +23,7 @@ import { bindingContextualGenericFnNodeOf, bindingGenericFnAliasInfoOf, bindingG
 import { isMixinFnBinding, mixinResultBindingClassOf } from "./lower-mixins.js";
 import type { ClassInfo, ClassIteratorInfo } from "./lower-classes.js";
 import { isCompiledPrototypeMember } from "./class-prototypes.js";
+import { classStaticDataFor } from "./class-static-data.js";
 import { genericIfaceBindingKeepsClass, staticFieldWriteTarget } from "./lower-classes.js";
 import { lowerStreamUnderscoreAssign, streamClassAliasDecl } from "./lower-stream.js";
 import { lowerHttpResPropertyAssignment, lowerHttpServerTimeoutAssignment, lowerServerCloseOverrideAssignment } from "./lower-server.js";
@@ -3326,13 +3327,9 @@ export function isParseArgsDynCheckerType(lowerer: Lowerer, type: ts.Type): bool
     );
   }
 
-/** For-loop initializers. let/const stay restricted to ONE declarator (JS
-   * per-iteration binding copies for several captured loop variables are
-   * not modeled yet); `var` initializers take any number — a `var` is ONE
-   * function-scoped binding with no per-iteration copies to model, so
-   * `for (var i = 0, n = xs.length; ...)` is just two hoisted-slot
-   * assignments (wrapped in a block when several). Statement position goes
-   * through lowerVarStatement. */
+/** For-loop initializers evaluate declarators from left to right. The LLVM
+ * loop emitter keeps their scope alive and freshens every captured let
+ * binding before the first condition and each subsequent update. */
   export function lowerVarDeclList(lowerer: Lowerer, list: ts.VariableDeclarationList): IrStmt | null {
     if ((list.flags & ts.NodeFlags.Using) !== 0) {
       lowerer.unsupported("SC1090", list, "'using' declarations (dispose-at-scope-exit semantics)");
@@ -3353,26 +3350,20 @@ export function isParseArgsDynCheckerType(lowerer: Lowerer, type: ts.Type): bool
       if (out.length === 1) return out[0]!;
       return { kind: "block", body: out, loc: locOf(list) };
     }
-    if (list.declarations.length !== 1) {
-      lowerer.unsupported("SC1090", list, "multi-declaration for-loop initializers");
+    const out: IrStmt[] = [];
+    for (const decl of list.declarations) {
+      if (ts.isArrayBindingPattern(decl.name) || ts.isObjectBindingPattern(decl.name)) {
+        lowerer.unsupported(
+          "SC1031",
+          decl.name,
+          "let/const destructuring in for-loop initializers (declare the pattern before the loop, or use var)",
+        );
+      }
+      const lowered = lowerer.lowerVarDecl(decl, isLet);
+      if (!lowered) throw new InternalCompilerError("lowerer bug: for-init declarator resolved to a global");
+      out.push(lowered);
     }
-    const decl = list.declarations[0]!;
-    if (ts.isArrayBindingPattern(decl.name) || ts.isObjectBindingPattern(decl.name)) {
-      // `for (let [x] = init; ...)`: the desugar is a multi-statement
-      // block, and the backend's per-iteration fresh-binding copy (what
-      // makes closures in iteration k see iteration k's let) keys off a
-      // single varDecl init — a captured destructured head would silently
-      // share one binding. `var` heads above have no per-iteration story
-      // and lower; let/const keep an honest fence.
-      lowerer.unsupported(
-        "SC1031",
-        decl.name,
-        "let/const destructuring in for-loop initializers (declare the pattern before the loop, or use var)",
-      );
-    }
-    const lowered = lowerer.lowerVarDecl(decl, isLet);
-    if (!lowered) throw new InternalCompilerError("lowerer bug: for-init declarator resolved to a global");
-    return lowered;
+    return out.length === 1 ? out[0]! : { kind: "block", body: out, loc: locOf(list) };
   }
 
 /** A single static type for an initializer-less JavaScript `let` whose
@@ -5181,6 +5172,13 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
             // property instead of writing this storage.
             const classInfo = lowerer.exactClassOfReceiver(expr.left.expression);
             if (classInfo) {
+              const data = classStaticDataFor(lowerer, classInfo, expr.left.name.text, locOf(expr.left));
+              if (data) {
+                const loc = locOf(expr);
+                const key: IrExpr = { kind: "strLit", value: expr.left.name.text, type: STRING, loc };
+                const value = lowerer.lowerExprExpecting(expr.right, DYN);
+                return { kind: "exprStmt", expr: { kind: "libCall", fn: "dyn.keySet", args: [data, key, value], type: VOID, loc }, loc };
+              }
               const found = lowerer.findStaticOn(classInfo, expr.left.name.text);
               if (found?.field !== undefined) {
                 if (found.declarer !== classInfo) {
@@ -7171,7 +7169,9 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
         return forValues(tmp.id, [write, ...body]);
       }
       const local = lowerer.declareLocal(decl.name, decl.name.text, elemValueT, isLet);
-      if (!typeEquals(elemValueT, sourceT.elem)) {
+      const declaredElement = lowerer.mapTypeOf(lowerer.typeOf(decl.name));
+      if (!typeEquals(elemValueT, sourceT.elem) ||
+          (declaredElement !== null && lowerer.runtimeOptionalWidening(elemValueT, declaredElement) !== null)) {
         const root = lowerer.runtimeOptionalRootOf(local);
         lowerer.runtimeOptionalLocals.add(root);
         lowerer.runtimeOptionalStorageLocals.add(root);
