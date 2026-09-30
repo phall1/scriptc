@@ -108,7 +108,7 @@ test("class brand probes borrow a local only across an inert literal key", () =>
   const key: IrExpr = { kind: "strLit", value: "object:Example", type: STRING, loc: receiverLoc };
   const probe: IrExpr = { kind: "libCall", fn: "dyn.typedRefIs", args: [ref(dyn), key], type: BOOL, loc: receiverLoc };
   const borrowed = work(probe, dyn);
-  expect(borrowed).not.toContain("call ptr @scr_dyn_retain");
+  expect(borrowed).not.toContain("call ptr @scr_dyn_retain_v(");
   expect(borrowed).toContain("icmp ne ptr");
   expect(borrowed).toContain("icmp eq i32");
   expect(borrowed).toContain("@scr_dyn_typed_ref_is_key");
@@ -118,7 +118,7 @@ test("class brand probes borrow a local only across an inert literal key", () =>
   const computed = work({ ...probe, args: [ref(dyn), {
     kind: "toString", operand: ref(dyn), type: STRING, loc: receiverLoc,
   }] }, dyn);
-  expect(computed).toContain("call ptr @scr_dyn_retain");
+  expect(computed).toContain("call ptr @scr_dyn_retain_v(");
 });
 
 test("capture boxes keep their ordinary owned-read contract", () => {

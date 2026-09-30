@@ -8698,6 +8698,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/array-truncate-reuse.ts": {
+   "order": [
+    "<repo>/tests/corpus/array-truncate-reuse.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/async-backend-factory.mjs": {
    "order": [
     "<repo>/tests/corpus/async-backend-factory.mjs"

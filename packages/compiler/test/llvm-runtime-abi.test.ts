@@ -199,7 +199,7 @@ interface LlDeclare {
 /** `declare zeroext i1 @scr_x(ptr, i1 zeroext, ...)` → shape (parameter
  * attributes stripped; only the type words matter for the C prototype). */
 function parseDeclare(text: string): LlDeclare | undefined {
-  const m = /^declare\s+(.+?)\s*@([A-Za-z0-9_$.]+)\((.*)\)$/.exec(text.trim());
+  const m = /^declare\s+(.+?)\s*@([A-Za-z0-9_$.]+)\(([^()]*)\)(?:\s+.*)?$/.exec(text.trim());
   if (!m) return undefined;
   const ret = m[1]!.replace(/\b(zeroext|signext|noalias|nonnull)\b/g, " ").replace(/\s+/g, " ").trim();
   const parts = m[3]!.trim() === "" ? [] : m[3]!.split(",").map((p) =>
@@ -227,6 +227,13 @@ function checkDeclare(d: LlDeclare, protos: Map<string, CProto>): string | undef
 }
 
 describe("LLVM backend declares match scr_runtime.h prototypes", () => {
+  test("function memory attributes do not change the declared ABI", async () => {
+    const declaration = parseDeclare("declare zeroext i1 @scr_dyn_typed_ref_is_key(ptr, ptr) memory(read)");
+    expect(declaration).toEqual({ ret: "i1", name: "scr_dyn_typed_ref_is_key", params: ["ptr", "ptr"], variadic: false });
+    const { protos } = await parseHeader();
+    expect(checkDeclare(declaration!, protos)).toBeUndefined();
+  });
+
   test("externally linkable objects reference the versioned runtime marker", async () => {
     const loc = { file: "/source/abi-marker.ts", start: 0, end: 0 };
     const mod: IrModule = {
