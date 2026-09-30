@@ -1,4 +1,65 @@
-import type { IrExpr, IrStmt } from "./ir.js";
+import type { IrExpr, IrModule, IrStmt, IrType, SrcLoc } from "./ir.js";
+
+/** The type tree contains structural children; named shapes are references.
+ * Module traversal visits each shape definition separately. */
+export function everyTypeChild(node: IrType, visit: (node: IrType) => boolean): boolean {
+  switch (node.kind) {
+    case "array": case "set": return visit(node.elem);
+    case "map": return visit(node.key) && visit(node.value);
+    case "func": return node.params.every(visit) && visit(node.ret);
+    case "promise": return visit(node.inner);
+    case "generator": return visit(node.yieldT) && visit(node.retT) && visit(node.nextT);
+    case "f64": case "bigint": case "date": case "string": case "bool":
+    case "regex": case "bytes": case "url": case "searchParams": case "symbol":
+    case "stats": case "fileHandle": case "spawnRes": case "child":
+    case "netServer": case "netSocket": case "http2Session": case "http2Stream":
+    case "dgramSocket": case "testCtx": case "httpReq": case "httpRes":
+    case "httpClientReq": case "childStream": case "childWriter": case "procStream":
+    case "fsWatcher": case "secureCtx": case "cryptoHash": case "cryptoHmac":
+    case "object": case "classval": case "moduleNs": case "record": case "union":
+    case "dyn": case "jsval": case "caught": case "undefinedT": case "nullT": case "void":
+      return true;
+  }
+  node satisfies never;
+  throw new Error("unhandled IR type");
+}
+
+export interface IrModuleVisitor extends IrVisitor {
+  type: (type: IrType, loc: SrcLoc) => boolean;
+}
+
+/** Inspect executable nodes and every typed slot without reflecting over
+ * source text, locations, labels, or other metadata. A false predicate stops
+ * the whole walk. Results are never retained across mutable compiler passes. */
+export function everyModuleNode(mod: IrModule, visitor: IrModuleVisitor): boolean {
+  const type = (node: IrType, loc: SrcLoc): boolean =>
+    visitor.type(node, loc) && everyTypeChild(node, (child) => type(child, loc));
+  const expr = (node: IrExpr): boolean =>
+    visitor.expr(node) && everyExprChild(node, expr, stmt) && type(node.type, node.loc);
+  const stmt = (node: IrStmt): boolean => visitor.stmt(node) && everyStmtChild(node, expr, stmt);
+  const entryLoc: SrcLoc = { file: mod.sourceFile, start: 0, end: 0 };
+  for (const fn of mod.functions) {
+    for (const param of fn.params) if (!type(param.type, fn.loc)) return false;
+    if (!type(fn.returnType, fn.loc)) return false;
+    for (const local of fn.locals) if (!type(local.type, local.source?.loc ?? fn.loc)) return false;
+    for (const capture of fn.captures ?? []) if (!type(capture.type, fn.loc)) return false;
+    for (const capture of fn.classCaptures ?? []) if (!type(capture.type, fn.loc)) return false;
+    if (fn.generator !== undefined && (!type(fn.generator.yieldT, fn.loc) ||
+        !type(fn.generator.nextT, fn.loc) || !type(fn.generator.resultType, fn.loc))) return false;
+    for (const node of fn.body) if (!stmt(node)) return false;
+  }
+  for (const cls of mod.classes ?? []) {
+    for (const capture of cls.localCaptures ?? []) if (!type(capture.type, cls.loc)) return false;
+    for (const field of cls.fields) if (!type(field.type, cls.loc)) return false;
+  }
+  for (const global of mod.globals ?? []) if (!type(global.type, global.source?.loc ?? entryLoc)) return false;
+  for (const record of mod.records ?? []) {
+    for (const field of record.fields) if (!type(field.type, entryLoc)) return false;
+    if (record.indexValue !== undefined && !type(record.indexValue, entryLoc)) return false;
+  }
+  for (const union of mod.unions ?? []) for (const arm of union.arms) if (!type(arm, entryLoc)) return false;
+  return true;
+}
 
 /** Typed structural traversal of executable IR. Types, source locations,
  * captures, labels and other metadata are deliberately not child nodes.

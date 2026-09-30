@@ -9,15 +9,29 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
-const { values } = parseArgs({ options: { iterations: { type: "string", default: "5" } } });
+const { values } = parseArgs({ options: {
+  iterations: { type: "string", default: "5" },
+  compiler: { type: "string" },
+  optimization: { type: "string", default: "dev" },
+  modules: { type: "string", default: "16" },
+  functions: { type: "string", default: "16" },
+  timings: { type: "boolean", default: false },
+  strip: { type: "boolean", default: false },
+} });
 const iterations = Number(values.iterations);
 if (!Number.isInteger(iterations) || iterations < 1 || iterations > 100) {
   throw new Error("--iterations must be an integer between 1 and 100");
 }
+if (!["dev", "release"].includes(values.optimization)) throw new Error("--optimization must be dev or release");
+const modules = Number(values.modules);
+const functions = Number(values.functions);
+for (const [name, value] of [["modules", modules], ["functions", functions]]) {
+  if (!Number.isInteger(value) || value < 1 || value > 256) throw new Error(`--${name} must be an integer between 1 and 256`);
+}
 if (process.env.SCRIPTC_TARGET && process.env.SCRIPTC_TARGET !== "native") {
   throw new Error("bench:builds runs host executables; unset SCRIPTC_TARGET");
 }
-const cli = fileURLToPath(new URL("../packages/cli/dist/bootstrap.js", import.meta.url));
+const cli = values.compiler ?? fileURLToPath(new URL("../packages/cli/dist/bootstrap.js", import.meta.url));
 await access(cli).catch(() => { throw new Error("Build the workspace with pnpm build before running bench:builds"); });
 const root = await mkdtemp(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-bench-builds-"));
 const cache = join(root, "cache");
@@ -27,8 +41,7 @@ const env = { ...process.env, SCRIPTC_CACHE_DIR: cache };
 delete env.SCRIPTC_NO_CACHE;
 delete env.SCRIPTC_CACHE_MAX_MB;
 delete env.SCRIPTC_TEST_STABLE_TOOLCHAIN;
-const modules = 16;
-const functions = 16;
+delete env.SCRIPTC_TIMING;
 const samples = [];
 
 function moduleSource(module, offset) {
@@ -37,8 +50,11 @@ function moduleSource(module, offset) {
   ).join("\n") + "\n";
 }
 
-function run(command, args) {
-  const result = spawnSync(command, args, { env, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: 120_000 });
+function run(command, args, timings = false) {
+  const result = spawnSync(command, args, {
+    env: timings ? { ...env, SCRIPTC_TIMING: "1" } : env,
+    encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: 120_000,
+  });
   if (result.error) throw result.error;
   assert.equal(result.signal, null, `${command} received ${result.signal}`);
   return { stdout: result.stdout, stderr: result.stderr, status: result.status };
@@ -46,7 +62,8 @@ function run(command, args) {
 
 function build(phase) {
   const start = performance.now();
-  const result = run(process.execPath, [cli, "build", entry, "--optimization=dev", "-o", binary]);
+  const args = ["build", entry, `--optimization=${values.optimization}`, "-o", binary, ...(values.strip ? ["--strip"] : [])];
+  const result = values.compiler ? run(cli, args, values.timings) : run(process.execPath, [cli, ...args], values.timings);
   const ms = Math.round((performance.now() - start) * 10) / 10;
   assert.equal(result.status, 0, result.stderr);
   // Correctness checks are outside the timed build and run after EVERY edit,
@@ -54,7 +71,11 @@ function build(phase) {
   const oracle = run(process.execPath, [entry]);
   assert.equal(oracle.status, 0, oracle.stderr);
   assert.deepEqual(run(binary, []), oracle);
-  samples.push({ phase, ms });
+  const timings = result.stderr.split("\n").flatMap((line) => {
+    const prefix = "scriptc timing ";
+    return line.startsWith(prefix) ? [JSON.parse(line.slice(prefix.length))] : [];
+  });
+  samples.push({ phase, ms, ...(values.timings ? { timings } : {}) });
   process.stderr.write(`${phase}: ${ms} ms\n`);
 }
 
@@ -81,10 +102,12 @@ try {
     build("edit");
   }
   process.stdout.write(JSON.stringify({
+    compiler: values.compiler ?? "workspace CLI",
     node: process.version,
     platform: process.platform,
     arch: process.arch,
-    optimization: "dev",
+    optimization: values.optimization,
+    strip: values.strip,
     modules: modules + 1,
     functions: modules * functions,
     iterations,

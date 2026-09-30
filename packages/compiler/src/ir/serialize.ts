@@ -6,8 +6,10 @@ import type { IrModule } from "./ir.js";
 // as negative infinity, so accepting a newer document would miscompile it.
 export const IR_VERSION = 13 as const;
 
-export function serializeModule(mod: IrModule): string {
-  return JSON.stringify(mod, (_key, value) => {
+/** Compiler artifacts use compact JSON to keep large graphs below the host's
+ * string size limit. API consumers can retain the readable default. */
+export function serializeModule(mod: IrModule, compact = false): string {
+  const replacer = (_key: string, value: unknown): unknown => {
     if (typeof value === "number" && !Number.isFinite(value)) {
       return { $nonfinite: Number.isNaN(value) ? "nan" : value > 0 ? "inf" : "-inf" };
     }
@@ -18,7 +20,8 @@ export function serializeModule(mod: IrModule): string {
       return { $nonfinite: "-0" };
     }
     return value;
-  }, 2);
+  };
+  return compact ? JSON.stringify(mod, replacer) : JSON.stringify(mod, replacer, 2);
 }
 
 export function deserializeModule(json: string): IrModule {

@@ -59,6 +59,14 @@ export interface Frontend {
   dispose: () => void;
 }
 
+/** Hosts own transport lifetimes; shared compiler stages own the frontend. */
+export type FrontendFactory = (
+  entryPath: string,
+  npmStatic?: readonly string[] | "auto" | "lib",
+  externalTypes?: Readonly<Record<string, string>>,
+  libraryNpmStatic?: readonly string[],
+) => Frontend;
+
 /** --npm-static=auto (and library mode's mandatory twin): one throwaway
  * load finds every bare npm import the program's own modules make, then
  * the eligibility heuristics (npm-static.ts) pick the packages whose
@@ -112,6 +120,9 @@ function detectAutoPackages(
       // never npm candidates. Auto keeps its original path (the
       // @types/node answer skips them below), byte-for-byte.
       if (mode === "lib" && canonicalBuiltinModule(spec) !== null) continue;
+      // Explicit attempts name the runtime package. Types-first resolution
+      // may instead identify its @types twin, which has no runtime to admit.
+      if (judged?.has(packageNameOfSpecifier(spec))) continue;
       const npm = resolveNpmImport(sf.fileName, spec);
       if (npm !== null && isNodeTypesPath(npm.typesFile)) continue;
       if (npm === null) {
@@ -175,6 +186,7 @@ export function runFrontend(
   loadProgram: ProgramLoader,
   npmStatic?: readonly string[] | "auto" | "lib",
   externalTypes?: Readonly<Record<string, string>>,
+  libraryNpmStatic: readonly string[] = [],
 ): Frontend {
   // A preflight or package probe may throw after its host has opened. Track
   // only live loads, releasing each immediately on normal fallback; this
@@ -194,7 +206,7 @@ export function runFrontend(
     };
   };
   try {
-    return loadFrontend(entryPath, trackedLoader, npmStatic, externalTypes);
+    return loadFrontend(entryPath, trackedLoader, npmStatic, externalTypes, libraryNpmStatic);
   } catch (error) {
     for (const load of active) {
       // Preserve the original failure and attempt every remaining cleanup.
@@ -209,6 +221,7 @@ function loadFrontend(
   loadProgram: ProgramLoader,
   npmStatic?: readonly string[] | "auto" | "lib",
   externalTypes?: Readonly<Record<string, string>>,
+  libraryNpmStatic: readonly string[] = [],
 ): Frontend {
   // Resolver package/workspace metadata is intentionally shared across the
   // several load attempts of ONE auto-detection fixpoint, but never across
@@ -217,7 +230,9 @@ function loadFrontend(
   clearResolveCaches();
   const statuses: NpmStaticStatus[] = [];
   const npmSites = new Map<string, SrcLoc>();
-  const judged = new Set<string>();
+  // Explicit library attempts bypass only the auto-selection heuristics.
+  // The shared preflight/lowering refusal and dependency-closure checks remain.
+  const judged = new Set<string>(libraryNpmStatic);
   let requested: string[] = [];
   let reusableScout: ReturnType<typeof loadProgram> | null = null;
   let reusablePreflight: ScrDiagnostic[] | null = null;
@@ -228,7 +243,7 @@ function loadFrontend(
       const scoutPreflight = checkPreflight(scout);
       requested =
         npmStatic === "lib"
-          ? detectAutoPackages(scout, statuses, "lib", judged, npmSites)
+          ? [...libraryNpmStatic, ...detectAutoPackages(scout, statuses, "lib", judged, npmSites)]
           : detectAutoPackages(scout, statuses);
       // With no package to opt in, the scout already IS the final frontend:
       // same roots, resolution posture, preflight, and module order. Retain it

@@ -312,6 +312,11 @@ enum { SCR_CYC_NURSERY = 0, SCR_CYC_MATURE = 1, SCR_CYC_NGENS = 2 };
 typedef struct ScrCycHdr {
   ScrTraceFn trace;
   ScrCycFreeFn free_fn;
+#if UINTPTR_MAX == UINT32_MAX
+  /* calloc aligns the block for doubles; keep the payload aligned too.
+   * Padding BEFORE color preserves the emitted obj-12 mark-live offset. */
+  uint32_t payload_alignment;
+#endif
   uint32_t color;    /* SCR_CYC_* */
   uint16_t buffered; /* 1 = sitting in its generation's candidate buffer */
   uint16_t gen;      /* SCR_CYC_NURSERY..SCR_CYC_MATURE (the walk filter) */
@@ -330,10 +335,12 @@ _Static_assert(sizeof(ScrCycHdr) == 32, "LLVM backend expects a 32-byte cycle he
 _Static_assert(offsetof(ScrCycHdr, color) == 16,
                "LLVM backend's inlined mark-live stores i32 0 at obj-16");
 #elif UINTPTR_MAX == UINT32_MAX
-_Static_assert(sizeof(ScrCycHdr) == 20, "LLVM backend expects a 20-byte cycle header");
-_Static_assert(offsetof(ScrCycHdr, color) == 8,
+_Static_assert(sizeof(ScrCycHdr) == 24, "wasm32 cycle payloads require an aligned 24-byte header");
+_Static_assert(offsetof(ScrCycHdr, color) == 12,
                "LLVM backend's inlined mark-live stores i32 0 at obj-12");
 #endif
+_Static_assert(sizeof(ScrCycHdr) % _Alignof(double) == 0,
+               "cycle-headered payloads must preserve double alignment");
 _Static_assert(sizeof(((ScrCycHdr *)0)->color) == 4,
                "mark-live is an i32 store: color must own all four bytes");
 _Static_assert(SCR_CYC_BLACK == 0,
@@ -3624,6 +3631,7 @@ bool scr_dyn_property_is_enumerable(const ScrDyn *value, const ScrStr *key);
  * and scalar/function/handle sources copy nothing. */
 ScrDyn *scr_dyn_assign(ScrDyn *target, const ScrDyn *src);
 ScrDyn *scr_dyn_copy_data_properties(ScrDyn *target, const ScrDyn *src);
+ScrDyn *scr_dyn_copy_property_descriptors(ScrDyn *target, const ScrDyn *src);
 /* Variadic Object.assign (the spread-source form): the compiler packs
  * every source into one fresh dyn array — pack_push retains a plain
  * source in (BORROWED), pack_push_spread flattens a spread source through

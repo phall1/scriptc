@@ -7,7 +7,7 @@
   "scripts": {
     "build": "pnpm -r --filter \"./packages/*\" run build",
     "build:fresh": "rm -rf packages/compiler/dist packages/cli/dist node_modules/.cache/scriptc-tsc && pnpm build",
-    "build:native-compiler": "node --max-old-space-size=8192 --import tsx scripts/build-native-compiler.mts",
+    "build:native-compiler": "node --max-old-space-size=8192 --import tsx scripts/build-native-cli.mts",
     "bench:builds": "node scripts/bench-builds.mjs",
     "test": "vitest run",
     "test:ts7": "node scripts/test-ts7.mjs",
@@ -31,6 +31,7 @@
     "effect": "3.22.2",
     "eslint": "^9.20.0",
     "js-yaml": "4.3.0",
+    "rollup": "4.62.2",
     "three": "0.186.1",
     "tsx": "^4.19.0",
     "typescript": "5.9.3",

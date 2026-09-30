@@ -15,7 +15,7 @@ try {
       const statement = mod.functions[0]!.body[0];
       if (statement?.kind === "exprStmt" && statement.expr.kind === "numLit") statement.expr.value = NaN;
     }
-    console.log(serializeModule(mod));
+    console.log(serializeModule(mod, process.argv[3] === "compact"));
   }
 } catch (error) {
   if (error instanceof Error) console.log(error.name + ": " + error.message);

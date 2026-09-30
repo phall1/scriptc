@@ -5,7 +5,7 @@ import {
   HEADER_OFFSET_PARSE_OPTIONS, HEADER_OFFSET_STRING_TABLE, HEADER_OFFSET_STRING_TABLE_OFFSETS,
   HEADER_OFFSET_STRUCTURED_DATA, HEADER_SIZE, KIND_NODE_LIST, NODE_LEN, NODE_OFFSET_DATA,
   NODE_OFFSET_END, NODE_OFFSET_FLAGS, NODE_OFFSET_KIND, NODE_OFFSET_NEXT, NODE_OFFSET_PARENT,
-  NODE_OFFSET_POS, PROTOCOL_VERSION, astChildNames,
+  NODE_OFFSET_POS, PROTOCOL_VERSION, astChildOrder,
 } from "./ast-schema.generated.js";
 
 export interface AstFileReference {
@@ -208,17 +208,8 @@ export class AstWireFile {
   }
 
   namedChild(index: number, name: string): number {
-    const names = astChildNames(this.kind(index));
-    let order = 0;
-    let start = 0;
-    while (start < names.length) {
-      const comma = names.indexOf(",", start);
-      const end = comma < 0 ? names.length : comma;
-      if (names.slice(start, end) === name) return this.childAtOrder(index, order);
-      order++;
-      start = end + 1;
-    }
-    return 0;
+    const order = astChildOrder(this.kind(index), name);
+    return order < 0 ? 0 : this.childAtOrder(index, order);
   }
 
   private childAtOrder(index: number, order: number): number {

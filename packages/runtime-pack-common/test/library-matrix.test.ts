@@ -31,3 +31,15 @@ test("mobile packs ship only library modes and their permitted vendor archives",
   ]);
   expect(mobile.archives.map(({ id }) => id)).toEqual(["libregexp", "zlib"]);
 });
+
+test("Wasm packs include reactor runtimes without thread-local state or a JS engine", () => {
+  const wasm = createRuntimePackMatrix({ target: { object_format: "wasm" }, compileFlags: [], systemLibraries: [] });
+  expect(Object.keys(wasm.flavors).sort()).toEqual(["dev", "library-dev", "library-release", "release"]);
+  for (const name of ["library-release", "library-dev"]) {
+    expect(wasm.flavors[name].defines).toEqual(["SCR_LIB"]);
+    const sources = wasm.flavors[name].runtime_units.map((unit) => unit.source);
+    expect(sources).toContain("scr_library.c");
+    expect(sources).not.toContain("scr_island.c");
+    expect(sources).not.toContain("scr_async.c");
+  }
+});

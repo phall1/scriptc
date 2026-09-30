@@ -8,13 +8,35 @@ import type { NativeLinkFeatures } from "./native-link-info.js";
 import type { NativeTargetSpec } from "./targets.js";
 import {
   RuntimePackError, parseRuntimePackManifest, selectRuntimePackArtifacts, validateRuntimePackIdentity,
-  type RuntimePackArtifact,
+  type RuntimePackArtifact, type RuntimePackArtifacts, type RuntimePackManifest, type RuntimePackMode,
 } from "./runtime-pack-core.js";
 
 export interface NativeRuntimePack {
   runtimeObjects: string[];
   archives: string[];
   systemLibraries: string[];
+}
+
+export interface NativeRuntimeSelection {
+  root: string;
+  manifest: RuntimePackManifest;
+  packageText: string;
+  manifestText: string;
+  selected: RuntimePackArtifacts;
+  flavor: "release" | "dev";
+}
+
+export function selectNativeRuntimePack(
+  root: string, target: NativeTargetSpec, compilerVersion: string,
+  features: NativeLinkFeatures, flavor: "release" | "dev", mode: RuntimePackMode = "executable",
+): NativeRuntimeSelection {
+  const packageText = readFileSync(join(root, "package.json"), "utf8");
+  const manifestText = readFileSync(join(root, "runtime-pack.json"), "utf8");
+  const identity = JSON.parse(packageText) as { name?: string; version?: string };
+  const manifest = parseRuntimePackManifest(JSON.parse(manifestText));
+  validateRuntimePackIdentity(manifest, identity.name, identity.version, target, compilerVersion);
+  const selected = selectRuntimePackArtifacts(manifest, features, flavor, process.env, mode);
+  return { root, manifest, packageText, manifestText, selected, flavor };
 }
 
 function stageArtifact(root: string, stage: string, artifact: RuntimePackArtifact): string {
@@ -48,15 +70,15 @@ export function stageNativeRuntimePack(
   compilerVersion: string,
   features: NativeLinkFeatures,
   flavor: "release" | "dev",
+  mode: RuntimePackMode = "executable",
 ): NativeRuntimePack {
+  return stageNativeRuntimeSelection(selectNativeRuntimePack(root, target, compilerVersion, features, flavor, mode), stageRoot);
+}
+
+export function stageNativeRuntimeSelection(selection: NativeRuntimeSelection, stageRoot: string): NativeRuntimePack {
+  const { root, manifest, selected, packageText, manifestText } = selection;
   const packagePath = join(root, "package.json");
   const manifestPath = join(root, "runtime-pack.json");
-  const packageText = readFileSync(packagePath, "utf8");
-  const manifestText = readFileSync(manifestPath, "utf8");
-  const identity = JSON.parse(packageText) as { name?: string; version?: string };
-  const manifest = parseRuntimePackManifest(JSON.parse(manifestText));
-  validateRuntimePackIdentity(manifest, identity.name, identity.version, target, compilerVersion);
-  const selected = selectRuntimePackArtifacts(manifest, features, flavor);
   const runtimeObjects = selected.runtime.map((artifact) => stageArtifact(root, stageRoot, artifact));
   const archives = selected.archives.map((artifact) => stageArtifact(root, stageRoot, artifact));
   for (const license of manifest.licenses) {

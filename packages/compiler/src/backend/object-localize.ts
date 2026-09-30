@@ -199,7 +199,10 @@ export function localizeElfObject(object: Uint8Array, keep: ReadonlySet<string>)
     for (let i = 0; i < sections.length; i++) sectionMap.push(sectionKept[i] === true ? next++ : -1);
   }
   for (let i = 0; i < sections.length; i++) {
-    if (sectionKept[i] === true) sections[i]!.flags &= ~SHF_GROUP;
+    if (sectionKept[i] === true) {
+      const section = sections[i]!;
+      section.flags = section.flags & ~SHF_GROUP;
+    }
   }
 
   // Demote and drop decisions per symbol. A symbol anchored to a dropped
@@ -228,7 +231,9 @@ export function localizeElfObject(object: Uint8Array, keep: ReadonlySet<string>)
   }
   const symbolOrder = [...localOrder, ...globalOrder];
   const symbolMap: number[] = new Array<number>(symCount).fill(-1);
-  symbolOrder.forEach((oldIndex, newIndex) => (symbolMap[oldIndex] = newIndex));
+  symbolOrder.forEach((oldIndex, newIndex) => {
+    symbolMap[oldIndex] = newIndex;
+  });
 
   const newSymtabData = new Uint8Array(symbolOrder.length * 24);
   const newSymtabView = new DataView(newSymtabData.buffer);
@@ -412,7 +417,8 @@ function parseCoff(object: Uint8Array, label: string): CoffObject {
   const sectionName = (raw: Uint8Array): string => {
     if (raw[0] === 0x2f /* '/' */) {
       const spelled = textDecoder.decode(raw.subarray(1)).replace(/\0+$/, "").trim();
-      const offset = Number.parseInt(spelled, 10);
+      const decimal = /^\d+/.exec(spelled);
+      const offset = decimal === null ? NaN : Number(decimal[0]);
       if (!Number.isFinite(offset)) fail(`${label}: malformed long section name`);
       return readCString(strtab, offset);
     }
@@ -563,7 +569,7 @@ export function mergeAndLocalizeCoffObjects(
   ];
   for (const object of objects) {
     if (object.machine !== IMAGE_FILE_MACHINE_AMD64) {
-      fail(`${object.label}: unsupported COFF machine 0x${object.machine.toString(16)}`);
+      fail(`${object.label}: unsupported COFF machine ${object.machine}`);
     }
   }
 
@@ -601,7 +607,7 @@ export function mergeAndLocalizeCoffObjects(
     for (const sym of object.symbols) {
       if (!coffIsUndefined(sym)) continue;
       if (selectedDefinitions.has(sym.name)) continue;
-      for (const candidate of definers.get(sym.name) ?? []) {
+      for (const candidate of definers.get(sym.name) ?? new Array<number>()) {
         if (included[candidate] !== true) {
           included[candidate] = true;
           addDefinitions(objects[candidate]!);

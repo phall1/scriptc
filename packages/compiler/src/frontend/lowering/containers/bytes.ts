@@ -193,23 +193,14 @@ export function lowerBytesNew(lowerer: Lowerer, expr: ts.NewExpression, symbol: 
       return { kind: "bytesNew", source: count, type, loc };
     }
     const src = lowerer.lowerExpr(argNode);
-    if (src.type.kind === "union" && lowerer.armTag(src.type.unionId, UNDEFINED_T) >= 0) {
-      const present = lowerer.stripUndefinedArm(src.type);
-      if (present.kind === "array" && present.elem.kind === "f64") {
-        const undefTag = lowerer.armTag(src.type.unionId, UNDEFINED_T);
-        const presentTag = lowerer.armTag(src.type.unionId, present);
-        if (undefTag >= 0 && presentTag >= 0) {
-          const empty: IrExpr = { kind: "arrayLit", elems: [], type: present, loc };
-          const source: IrExpr = {
-            kind: "ternary",
-            cond: { kind: "unionIsTag", unionId: src.type.unionId, tag: undefTag, negated: false, value: src, type: BOOL, loc },
-            then: empty,
-            else_: { kind: "unionNarrow", unionId: src.type.unionId, tag: presentTag, value: src, type: present, loc },
-            type: present,
-            loc,
-          };
-          return { kind: "bytesNew", source, type, loc };
-        }
+    if (src.type.kind === "union") {
+      const arms = lowerer.unions.get(src.type.unionId)?.arms;
+      if (arms?.every((arm) => arm.kind === "f64" || arm.kind === "bytes" ||
+          typeEquals(arm, UNDEFINED_T) || (arm.kind === "array" && arm.elem.kind === "f64"))) {
+        // The checked constructor dispatch preserves each arm's copy or
+        // length semantics, including undefined -> empty, and evaluates
+        // an effectful source expression exactly once.
+        return { kind: "bytesNew", source: lowerer.coerceInto(argNode, src, DYN), type, loc };
       }
     }
     if (

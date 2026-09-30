@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   IOS_ARM64_TARGET,
   IOS_SIMULATOR_ARM64_TARGET,
@@ -19,7 +19,46 @@ import {
   windowsSubsystemLinkerArgs,
 } from "./targets.js";
 
+afterEach(() => vi.restoreAllMocks());
+
 describe("native code-generation targets", () => {
+  test("non-Linux and unsupported hosts never collect a process report", async () => {
+    vi.resetModules();
+    const targets = await import("./targets.js");
+    const report = vi.spyOn(process.report, "getReport").mockImplementation(() => {
+      throw new Error("unexpected host libc probe");
+    });
+    for (const [platform, arch, release] of [
+      ["darwin", "arm64", "24.0.0"], ["darwin", "x64", "24.0.0"], ["win32", "x64", "10.0.0"],
+    ] as const) {
+      expect(targets.nativeCodegenTarget({}, platform, arch, release)).not.toBeNull();
+      expect(targets.nativeCodegenTargetRefusal({}, platform, arch, release)).toBeNull();
+      expect(targets.nativeHelperForTarget(LINUX_X64_GNU_TARGET, platform, arch)).not.toBeNull();
+    }
+    expect(targets.nativeCodegenTarget({}, "linux", "ia32", "6.8.0")).toBeNull();
+    expect(targets.nativeHelperForTarget(LINUX_X64_GNU_TARGET, "linux", "ia32")).toBeNull();
+    expect(report).not.toHaveBeenCalled();
+  });
+
+  test.each(["gnu", "musl"] as const)("probes the %s host libc once across target and helper selection", async (libc) => {
+    vi.resetModules();
+    const targets = await import("./targets.js");
+    const report = vi.spyOn(process.report, "getReport").mockReturnValue({
+      header: libc === "gnu" ? { glibcVersionRuntime: "2.36" } : {},
+    } as ReturnType<typeof process.report.getReport>);
+    const target = libc === "gnu" ? LINUX_X64_GNU_TARGET : LINUX_X64_MUSL_TARGET;
+    expect(targets.nativeCodegenTarget({}, "linux", "x64", "6.8.0")).toEqual(target);
+    expect(targets.nativeCodegenTargetRefusal({}, "linux", "x64", "6.8.0")).toBeNull();
+    expect(targets.nativeHelperForTarget(target, "linux", "x64")?.packageName).toBe(`@scriptc/llvm-linux-x64-${libc}`);
+    expect(targets.nativeCodegenTarget({ SCRIPTC_TARGET: "wasm32-wasi" }, "linux", "x64", "6.8.0")).toEqual(WASM32_WASI_TARGET);
+    expect(report).toHaveBeenCalledTimes(1);
+
+    // Explicit host descriptions remain independent of the process memo.
+    expect(targets.nativeCodegenTarget({}, "linux", "x64", "6.8.0", "gnu")).toEqual(LINUX_X64_GNU_TARGET);
+    expect(targets.nativeCodegenTarget({}, "linux", "x64", "6.8.0", "musl")).toEqual(LINUX_X64_MUSL_TARGET);
+    expect(report).toHaveBeenCalledTimes(1);
+  });
+
   test("matches Clang's narrow integer ABI independently of the build host", () => {
     for (const target of [MACOS_ARM64_TARGET, MACOS_X64_TARGET, LINUX_X64_GNU_TARGET, LINUX_X64_MUSL_TARGET, WASM32_WASI_TARGET]) {
       expect(ffiExtendsNarrowIntegers(target.llvmTriple, "win32", "x64")).toBe(true);

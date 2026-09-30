@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 import { compile } from "@scriptc/compiler";
 
-const entry = join(import.meta.dirname, "../fixtures/three/math.mjs");
 const hasZig = spawnSync("zig", ["version"], { stdio: "ignore" }).status === 0;
 const wasiRunner = `
 const {readFileSync} = require('node:fs');
@@ -22,7 +21,10 @@ function run(command: string, args: string[]) {
   return { stdout: result.stdout, stderr: result.stderr, status: result.status, signal: result.signal };
 }
 
-test.for(["native", "wasm32-wasi"])("published three.js math runs statically through LLVM on %s", async (target, context) => {
+const cases = ["math", "spatial", "attributes", "geometry", "scene", "materials", "mesh", "raycast-mesh", "raycast-camera", "raycast-lines-points"].flatMap((fixture) =>
+  ["native", "wasm32-wasi"].map((target) => ({ fixture, target })));
+test.for(cases)("published three.js $fixture runs statically through LLVM on $target", async ({ fixture, target }, context) => {
+  const entry = join(import.meta.dirname, `../fixtures/three/${fixture}.mjs`);
   if (target === "wasm32-wasi" && !hasZig) context.skip();
   const dir = await mkdtemp("/tmp/scriptc-three-");
   const previousTarget = process.env["SCRIPTC_TARGET"];
@@ -34,7 +36,7 @@ test.for(["native", "wasm32-wasi"])("published three.js math runs statically thr
       process.env["SCRIPTC_CC"] = "zigcc";
     }
     const result = await compile(entry, {
-      outDir: dir, outPath: join(dir, wasm ? "math.wasm" : "math"),
+      outDir: dir, outPath: join(dir, wasm ? `${fixture}.wasm` : fixture),
       backend: "llvm", dynamic: false, npmStatic: ["three"],
       sanitize: !wasm && process.env["SCRIPTC_SAN"] === "1",
     });

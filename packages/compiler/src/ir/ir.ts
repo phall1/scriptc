@@ -1,4 +1,5 @@
 import { InternalCompilerError } from "../errors.js";
+import { everyModuleNode, everyExprChild, everyStmtChild } from "./traverse.js";
 /* scriptc IR — the only interface between frontend and backends.
  *
  * Design rules (see docs/ir.md for node-by-node semantics):
@@ -5738,7 +5739,7 @@ export type IrExpr =
    * undefined arm of its union (an optional field) is DROPPED from the
    * output — Node's rule for undefined-valued properties. The value is
    * BORROWED; the result string is owned (+1). Never throws. */
-  | { kind: "jsonStringify"; value: IrExpr; type: IrType; loc: SrcLoc }
+  | { kind: "jsonStringify"; value: IrExpr; indent?: string; type: IrType; loc: SrcLoc }
   /** The dynamic-boundary check — a CHECKED cast `dynValue as T`: validate
    * the dyn value's JSON dyn against `type` (a non-dyn, JSON-representable
    * IR type) and BUILD the typed value (+1), or THROW a catchable
@@ -6433,6 +6434,7 @@ export function canDynCheckTo(
   // Native class capsules already support checked extraction at ordinary
   // boundaries. Callable adapters use the same identity/brand check.
   if (isDynTypedRefType(t)) return true;
+  if (t.kind === "array" && isDynTypedRefType(t.elem)) return true;
   if (t.kind === "func") return canAdaptDynFuncTo(t, getRecord, getUnion);
   if (DYN_HANDLE_KINDS.has(t.kind)) return true;
   if (t.kind === "union") {
@@ -6616,19 +6618,9 @@ function scanRuntimeFeatures(mod: IrModule, stopAt?: keyof RuntimeFeatures): Run
     qs: false, parseArgs: false, fsWatch: false, nodeTest: false, dgram: false,
     http: false, http2: false, tls: false, tlsCa: false,
   };
-  const visit = (value: unknown): void => {
-    if (value === null || typeof value !== "object" || (stopAt !== undefined && features[stopAt])) return;
-    if (Array.isArray(value)) {
-      for (const item of value) visit(item);
-      return;
-    }
-    const node = value as {
-      kind?: unknown; fn?: unknown; method?: unknown; op?: unknown; name?: unknown;
-      type?: { kind?: unknown };
-      value?: { type?: { kind?: unknown; ret?: { kind?: unknown } } };
-    };
-    const kind = node.kind;
-    if (kind === "libCall" && typeof node.fn === "string") {
+  const keepGoing = (): boolean => stopAt === undefined || !features[stopAt];
+  const expr = (node: IrExpr): boolean => {
+    if (node.kind === "libCall") {
       const fn = node.fn;
       if (fn === "regexp.escape" || fn === "dyn.nativeRegexIs") features.regex = true;
       if (fn === "text.decodeLegacy") features.legacyTextDecoder = true;
@@ -6665,8 +6657,8 @@ function scanRuntimeFeatures(mod: IrModule, stopAt?: keyof RuntimeFeatures): Run
       if (fn.startsWith("dgram.") || fn.startsWith("dns.")) features.dgram = true;
       if (fn.startsWith("tlsca.")) features.tlsCa = true;
     } else {
-      switch (kind) {
-        case "regex": case "regexLit": case "regexIntrinsic": features.regex = true; break;
+      switch (node.kind) {
+        case "regexLit": case "regexIntrinsic": features.regex = true; break;
         case "strIntrinsic":
           if (node.method === "toLowerCase" || node.method === "toUpperCase") features.regex = true;
           break;
@@ -6676,44 +6668,49 @@ function scanRuntimeFeatures(mod: IrModule, stopAt?: keyof RuntimeFeatures): Run
         case "bytesIntrinsic":
           if (node.method === "toReversed" || node.method === "with" || node.method === "join" || node.method === "toArray") features.copying = true;
           break;
-        case "fileHandle": features.fileHandle = true; break;
         case "jsOp":
           if (node.op === "globalGet" && node.name === "fetch") features.fetch = true;
           break;
         case "dynInvoke": features.dynInvoke = true; break;
         case "awaitExpr":
-          if (node.type?.kind === "dyn") features.dynAsync = true;
+          if (node.type.kind === "dyn") features.dynAsync = true;
           break;
         case "dynFrom": {
-          const boxed = node.value?.type;
-          if (boxed?.kind === "promise" || (boxed?.kind === "func" && boxed.ret?.kind === "promise")) features.dynAsync = true;
+          const boxed = node.value.type;
+          if (boxed.kind === "promise" || (boxed.kind === "func" && boxed.ret.kind === "promise")) features.dynAsync = true;
           break;
         }
-        case "child": case "childStream": case "childWriter": case "spawnRes": features.childProcess = true; break;
-        case "netServer": case "netSocket": features.net = true; break;
-        case "http2Session": case "http2Stream": features.net = true; features.http2 = true; break;
-        case "httpReq": case "httpRes": case "httpClientReq": features.net = true; features.http = true; break;
-        case "secureCtx": features.net = true; features.http = true; features.tls = true; break;
-        case "symbol": features.symbol = true; break;
-        case "bigint": features.bigint = true; break;
-        case "searchParams": features.searchParams = true; break;
-        case "fsWatcher": features.fsWatch = true; break;
-        case "testCtx": features.nodeTest = true; break;
-        case "dgramSocket": features.dgram = true; break;
       }
     }
-    for (const key of Object.keys(value)) visit((value as Record<string, unknown>)[key]);
+    return keepGoing();
   };
-  visit(mod);
+  const type = (node: IrType): boolean => {
+    switch (node.kind) {
+      case "regex": features.regex = true; break;
+      case "fileHandle": features.fileHandle = true; break;
+      case "child": case "childStream": case "childWriter": case "spawnRes": features.childProcess = true; break;
+      case "netServer": case "netSocket": features.net = true; break;
+      case "http2Session": case "http2Stream": features.net = true; features.http2 = true; break;
+      case "httpReq": case "httpRes": case "httpClientReq": features.net = true; features.http = true; break;
+      case "secureCtx": features.net = true; features.http = true; features.tls = true; break;
+      case "symbol": features.symbol = true; break;
+      case "bigint": features.bigint = true; break;
+      case "searchParams": features.searchParams = true; break;
+      case "fsWatcher": features.fsWatch = true; break;
+      case "testCtx": features.nodeTest = true; break;
+      case "dgramSocket": features.dgram = true; break;
+    }
+    return keepGoing();
+  };
+  if (keepGoing()) everyModuleNode(mod, { expr, stmt: keepGoing, type });
   return features;
 }
 
 /** True when the module contains any regex construct — a regexLit /
  * regexIntrinsic node or a regex-typed slot anywhere. This is the link
  * switch that pulls scr_regex.c + the vendored libregexp into the binary
- * (native-toolchain.ts); regex-free programs keep the historical command line. A generic
- * JSON walk: `kind` discriminants live only on IR objects, so user string
- * VALUES can never false-positive. */
+ * (native-toolchain.ts); regex-free programs keep the historical command line. The
+ * typed traversal visits type slots as well as executable nodes. */
 export function moduleUsesRegex(mod: IrModule): boolean {
   return scanRuntimeFeatures(mod, "regex").regex;
 }
@@ -7075,10 +7072,6 @@ const LIB_MODE_REFUSED_PREFIXES: readonly [string, string][] = [
   ["als.", "AsyncLocalStorage"],
   ["urj.", "unhandled-rejection tracking"],
   ["dc.", "the diagnostics_channel surface"],
-  // NOT the whole "dyn." family: the checked-dynamic tree (ScrDyn) is
-  // static-tier surface hosted by always-linked units; only defineProps
-  // drags the prototype-dispatch unit (scr_dyn_invoke.c → scr_async_dyn.c).
-  ["dyn.defineProps", "checked-dynamic prototype dispatch"],
 ];
 
 /** Value/type kinds whose mere presence means an excluded unit's code (or
@@ -7104,13 +7097,12 @@ const LIB_MODE_REFUSED_KINDS: ReadonlyMap<string, string> = new Map([
   ["httpRes", "the node:http surface"],
   ["httpClientReq", "the node:http surface"],
   ["secureCtx", "the node:tls surface"],
-  ["dynInvoke", "checked-dynamic prototype dispatch"],
 ]);
 
 /** First async/event-loop/ambient-process surface the module graph
  * reaches, or null when the graph is async_free (the v1 library requirement).
- * The generic-walk shape of moduleUsesRegex, tracking the nearest
- * enclosing `loc` so the refusal anchors at the reaching construct; the
+ * Typed slots use their declaration location and executable nodes use their
+ * own location, so the refusal anchors at the reaching construct; the
  * coarse moduleUses* predicates are the safety net behind the fine-grained
  * table (a surface reached only through a spelling the table misses still
  * refuses, anchored at the entry). */
@@ -7123,50 +7115,46 @@ export function moduleLibAsyncSurface(mod: IrModule): { surface: string; loc: Sr
   }
   const entryLoc: SrcLoc = { file: mod.sourceFile, start: 0, end: 0 };
   let found: { surface: string; loc: SrcLoc } | null = null;
-  const visit = (v: unknown, loc: SrcLoc): void => {
-    if (found !== null || v === null || typeof v !== "object") return;
-    if (Array.isArray(v)) {
-      for (const item of v) visit(item, loc);
-      return;
-    }
-    const node = v as { kind?: unknown; fn?: unknown; loc?: SrcLoc };
-    const here = node.loc ?? loc;
-    if (typeof node.kind === "string") {
-      const bad = LIB_MODE_REFUSED_KINDS.get(node.kind);
-      if (bad !== undefined) {
-        found = { surface: bad, loc: here };
-        return;
-      }
-      if (node.kind === "libCall" && typeof node.fn === "string") {
+  const checkKind = (kind: string, loc: SrcLoc): boolean => {
+    const surface = LIB_MODE_REFUSED_KINDS.get(kind);
+    if (surface === undefined) return true;
+    found = { surface, loc };
+    return false;
+  };
+  everyModuleNode(mod, {
+    type: (node, loc) => checkKind(node.kind, loc),
+    stmt: () => true,
+    expr: (node) => {
+      if (!checkKind(node.kind, node.loc)) return false;
+      if (node.kind === "libCall") {
         for (const [prefix, surface] of LIB_MODE_REFUSED_PREFIXES) {
           if (node.fn.startsWith(prefix)) {
-            found = { surface, loc: here };
-            return;
+            found = { surface, loc: node.loc };
+            return false;
           }
         }
       }
-    }
-    for (const key of Object.keys(v)) visit((v as Record<string, unknown>)[key], here);
-  };
-  visit(mod, entryLoc);
+      return true;
+    },
+  });
   if (found !== null) return found;
   // Safety net: the coarse unit predicates, entry-anchored. Every one of
   // these units is excluded from library links, so a true answer that the
   // fine-grained table missed must still refuse.
+  const features = moduleRuntimeFeatures(mod);
   const coarse: [boolean, string][] = [
-    [moduleUsesProcessEvents(mod), "process signal/exit listeners or the stdin event surface"],
-    [moduleUsesNet(mod), "the node:net surface"],
-    [moduleUsesHttpServer(mod), "the node:http surface"],
-    [moduleUsesHttp2(mod), "the node:http2 surface"],
-    [moduleUsesDgram(mod), "the node:dgram surface"],
-    [moduleUsesFsWatch(mod), "fs.watch"],
-    [moduleUsesStream(mod), "the node:stream surface"],
-    [moduleUsesTls(mod), "the node:tls surface"],
-    [moduleUsesFetch(mod), "fetch"],
-    [moduleUsesNodeTest(mod), "the node:test surface"],
-    [moduleUsesDynAsync(mod), "the checked-dynamic async surface"],
-    [moduleUsesDc(mod), "the diagnostics_channel surface"],
-    [moduleUsesDynInvoke(mod), "checked-dynamic prototype dispatch"],
+    [features.processEvents, "process signal/exit listeners or the stdin event surface"],
+    [features.net, "the node:net surface"],
+    [features.http, "the node:http surface"],
+    [features.http2, "the node:http2 surface"],
+    [features.dgram, "the node:dgram surface"],
+    [features.fsWatch, "fs.watch"],
+    [features.stream, "the node:stream surface"],
+    [features.tls, "the node:tls surface"],
+    [features.fetch, "fetch"],
+    [features.nodeTest, "the node:test surface"],
+    [features.dynAsync, "the checked-dynamic async surface"],
+    [features.dc, "the diagnostics_channel surface"],
   ];
   for (const [on, surface] of coarse) {
     if (on) return { surface, loc: entryLoc };
@@ -7239,24 +7227,21 @@ export const LIB_NONDETERMINISTIC_PREFIXES: readonly [string, string][] = [
  * attests `deterministic: true`). */
 export function moduleLibNondeterministicSurface(mod: IrModule): string | null {
   let found: string | null = null;
-  const visit = (v: unknown): void => {
-    if (found !== null || v === null || typeof v !== "object") return;
-    if (Array.isArray(v)) {
-      for (const item of v) visit(item);
-      return;
-    }
-    const node = v as { kind?: unknown; fn?: unknown };
-    if (node.kind === "libCall" && typeof node.fn === "string") {
+  const expr = (node: IrExpr): boolean => {
+    if (node.kind === "libCall") {
       for (const [prefix, surface] of LIB_NONDETERMINISTIC_PREFIXES) {
         if (node.fn.startsWith(prefix)) {
           found = surface;
-          return;
+          return false;
         }
       }
     }
-    for (const key of Object.keys(v)) visit((v as Record<string, unknown>)[key]);
+    return everyExprChild(node, expr, stmt);
   };
-  visit(mod);
+  const stmt = (node: IrStmt): boolean => everyStmtChild(node, expr, stmt);
+  for (const fn of mod.functions) {
+    if (!fn.body.every(stmt)) break;
+  }
   return found;
 }
 

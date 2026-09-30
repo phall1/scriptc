@@ -799,14 +799,20 @@ static ScrDyn *scr_dyn_invoke_impl(
         scr_dyn_this_pop();
         return r;
       }
+      ScrDyn *view = list->kind == SCR_DYN_TYPED_REF && scr_dyn_isl_is_array(list)
+          ? scr_dyn_typed_ref_materialize(list) : NULL;
+      if (scr_exc_pending()) { scr_dyn_release(view); return NULL; }
+      if (view) list = view;
       if (list->kind != SCR_DYN_ARR) {
         scr_throw_error_msg(SCR_ERR_TYPE, "CreateListFromArrayLike called on non-object",
                             strlen("CreateListFromArrayLike called on non-object"));
+        scr_dyn_release(view);
         return NULL;
       }
       scr_dyn_this_push_dyn(thisv);
       ScrDyn *r = scr_dyn_call(recv, list->v.arr.items, list->v.arr.len, what);
       scr_dyn_this_pop();
+      scr_dyn_release(view);
       return r;
     }
     if (dyn_name_is(method, "call")) {
@@ -1092,13 +1098,18 @@ static ScrDyn *scr_dyn_invoke_impl(
       ScrDyn *out = scr_dyn_new_arr();
       for (size_t i = 0; i < len; i++) scr_dyn_arr_push(out, scr_dyn_retain(recv->v.arr.items[i]));
       for (size_t a = 0; a < argc; a++) {
-        if (args[a]->kind == SCR_DYN_ARR) {
-          for (size_t i = 0; i < args[a]->v.arr.len; i++) {
-            scr_dyn_arr_push(out, scr_dyn_retain(args[a]->v.arr.items[i]));
+        ScrDyn *view = args[a]->kind == SCR_DYN_TYPED_REF && scr_dyn_isl_is_array(args[a])
+            ? scr_dyn_typed_ref_materialize(args[a]) : NULL;
+        if (scr_exc_pending()) { scr_dyn_release(view); scr_dyn_release(out); return NULL; }
+        const ScrDyn *source = view ? view : args[a];
+        if (source->kind == SCR_DYN_ARR) {
+          for (size_t i = 0; i < source->v.arr.len; i++) {
+            scr_dyn_arr_push(out, scr_dyn_retain(source->v.arr.items[i]));
           }
         } else {
           scr_dyn_arr_push(out, scr_dyn_retain(args[a]));
         }
+        scr_dyn_release(view);
       }
       return out;
     }
@@ -1370,6 +1381,9 @@ static ScrDyn *scr_dyn_invoke_impl(
    * other Promise.prototype name is `then`-adjacent sugar JS doesn't
    * have, so the not-a-function answer IS the JS answer. */
   if (recv->kind == SCR_DYN_PROMISE) {
+#ifdef SCR_LIB
+    scr_trap("scriptc: promise dispatch is unavailable in library mode\n");
+#else
     if (dyn_name_is(method, "then")) {
       return scr_dyn_promise_then(recv->v.promise, argc >= 1 ? args[0] : NULL,
                                   argc >= 2 ? args[1] : NULL, NULL);
@@ -1382,6 +1396,7 @@ static ScrDyn *scr_dyn_invoke_impl(
     }
     dyn_throw_not_fn(what);
     return NULL;
+#endif
   }
 
   if (recv->kind == SCR_DYN_BYTES) {

@@ -176,3 +176,27 @@ test("failed directory enumeration invalidates when access is restored", async (
     await chmod(packages, 0o700);
   }
 });
+
+test("synchronous tracking restores parents after throws and propagates unstable inputs", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "scriptc-inputs-"));
+  scratch.push(dir);
+  const first = join(dir, "first.ts");
+  const second = join(dir, "second.ts");
+  await writeFile(first, "export const first = 1;");
+  await writeFile(second, "export const second = 2;");
+  const parent = new FrontendInputTracker();
+  const child = new FrontendInputTracker();
+  parent.runSynchronous(() => {
+    expect(() => child.runSynchronous(() => {
+      trackedReadFile(first);
+      markFrontendInputsUnstable();
+      throw new Error("interrupted");
+    })).toThrow("interrupted");
+    trackedReadFile(second);
+  });
+  expect(parent.snapshot().probes.filter((probe) => probe.op === "file").map((probe) => probe.path)).toEqual([first, second]);
+  expect(parent.snapshot().stable).toBe(false);
+  const before = parent.snapshot();
+  trackedFileExists(join(dir, "outside.ts"));
+  expect(parent.snapshot()).toEqual(before);
+});

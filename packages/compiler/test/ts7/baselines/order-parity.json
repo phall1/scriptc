@@ -8688,6 +8688,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/array-fill-unit-values.ts": {
+   "order": [
+    "<repo>/tests/corpus/array-fill-unit-values.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/array-from-checked.js": {
    "order": [
     "<repo>/tests/corpus/array-from-checked.js"
@@ -8700,9 +8706,27 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/array-optional-number-write-index.ts": {
+   "order": [
+    "<repo>/tests/corpus/array-optional-number-write-index.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/array-refined-storage.ts": {
    "order": [
     "<repo>/tests/corpus/array-refined-storage.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/array-sort-unknown-comparator.ts": {
+   "order": [
+    "<repo>/tests/corpus/array-sort-unknown-comparator.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/array-truncate-reuse.ts": {
+   "order": [
+    "<repo>/tests/corpus/array-truncate-reuse.ts"
    ],
    "diags": []
   },
@@ -8859,9 +8883,21 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/class-callback-replacement.js": {
+   "order": [
+    "<repo>/tests/corpus/class-callback-replacement.js"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/class-checked-composites.ts": {
    "order": [
     "<repo>/tests/corpus/class-checked-composites.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/class-checked-upcast.ts": {
+   "order": [
+    "<repo>/tests/corpus/class-checked-upcast.ts"
    ],
    "diags": []
   },
@@ -8877,10 +8913,22 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/class-data-descriptors.js": {
+   "order": [
+    "<repo>/tests/corpus/class-data-descriptors.js"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/class-function-base/main.js": {
    "order": [
     "<repo>/tests/corpus/class-function-base/base.js",
     "<repo>/tests/corpus/class-function-base/main.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/class-instance-constructor.js": {
+   "order": [
+    "<repo>/tests/corpus/class-instance-constructor.js"
    ],
    "diags": []
   },
@@ -8893,6 +8941,18 @@
   "<repo>/tests/corpus/class-prototype-data.js": {
    "order": [
     "<repo>/tests/corpus/class-prototype-data.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/class-static-data.js": {
+   "order": [
+    "<repo>/tests/corpus/class-static-data.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/closure-nullable-union-return.ts": {
+   "order": [
+    "<repo>/tests/corpus/closure-nullable-union-return.ts"
    ],
    "diags": []
   },
@@ -8959,6 +9019,12 @@
   "<repo>/tests/corpus/contextual-return-layouts.ts": {
    "order": [
     "<repo>/tests/corpus/contextual-return-layouts.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/crypto-hash-optional-input.ts": {
+   "order": [
+    "<repo>/tests/corpus/crypto-hash-optional-input.ts"
    ],
    "diags": []
   },
@@ -9058,6 +9124,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/for-multiple-bindings.ts": {
+   "order": [
+    "<repo>/tests/corpus/for-multiple-bindings.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/for-multiple-lexical-bindings.ts": {
    "order": [
     "<repo>/tests/corpus/for-multiple-lexical-bindings.ts"
@@ -9085,6 +9157,18 @@
   "<repo>/tests/corpus/fs-native-realpath.ts": {
    "order": [
     "<repo>/tests/corpus/fs-native-realpath.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/fs-remove-readonly.ts": {
+   "order": [
+    "<repo>/tests/corpus/fs-remove-readonly.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/fs-write-string-bytes-union.ts": {
+   "order": [
+    "<repo>/tests/corpus/fs-write-string-bytes-union.ts"
    ],
    "diags": []
   },
@@ -9246,6 +9330,60 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/js-chained-native-results.mjs": {
+   "order": [
+    "<repo>/tests/corpus/js-chained-native-results.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/js-checked-array-iterator.js": {
+   "order": [
+    "<repo>/tests/corpus/js-checked-array-iterator.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/js-checked-array-reference.js": {
+   "order": [
+    "<repo>/tests/corpus/js-checked-array-reference.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/js-checked-number-negation.mjs": {
+   "order": [
+    "<repo>/tests/corpus/js-checked-number-negation.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/js-checked-sort-result.js": {
+   "order": [
+    "<repo>/tests/corpus/js-checked-sort-result.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/js-class-added-parameters.js": {
+   "order": [
+    "<repo>/tests/corpus/js-class-added-parameters.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/js-class-computed-fields.js": {
+   "order": [
+    "<repo>/tests/corpus/js-class-computed-fields.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/js-class-fluent-overrides.js": {
+   "order": [
+    "<repo>/tests/corpus/js-class-fluent-overrides.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/js-class-subclass-properties.js": {
+   "order": [
+    "<repo>/tests/corpus/js-class-subclass-properties.js"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/js-declared-fields.cjs": {
    "order": [
     "<repo>/tests/corpus/js-declared-fields.cjs"
@@ -9266,9 +9404,33 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/js-derived-constructor-hoisting.js": {
+   "order": [
+    "<repo>/tests/corpus/js-derived-constructor-hoisting.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/js-dormant-array-write.js": {
+   "order": [
+    "<repo>/tests/corpus/js-dormant-array-write.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/js-dormant-overrides.js": {
+   "order": [
+    "<repo>/tests/corpus/js-dormant-overrides.js"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/js-expando-records.js": {
    "order": [
     "<repo>/tests/corpus/js-expando-records.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/js-inherited-parameter-abi.js": {
+   "order": [
+    "<repo>/tests/corpus/js-inherited-parameter-abi.js"
    ],
    "diags": []
   },
@@ -9278,15 +9440,57 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/js-nested-native-descriptors.js": {
+   "order": [
+    "<repo>/tests/corpus/js-nested-native-descriptors.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/js-nullish-inherited-fields.mjs": {
+   "order": [
+    "<repo>/tests/corpus/js-nullish-inherited-fields.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/js-object-returning-constructors.mjs": {
+   "order": [
+    "<repo>/tests/corpus/js-object-returning-constructors.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/js-object-shared-arrays.js": {
+   "order": [
+    "<repo>/tests/corpus/js-object-shared-arrays.js"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/js-omitted-typed-arguments.js": {
    "order": [
     "<repo>/tests/corpus/js-omitted-typed-arguments.js"
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/js-optional-class-fields.js": {
+   "order": [
+    "<repo>/tests/corpus/js-optional-class-fields.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/js-primitive-union-addition.js": {
+   "order": [
+    "<repo>/tests/corpus/js-primitive-union-addition.js"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/js-scalar-iterables.js": {
    "order": [
     "<repo>/tests/corpus/js-scalar-iterables.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/js-specialized-field-method.js": {
+   "order": [
+    "<repo>/tests/corpus/js-specialized-field-method.js"
    ],
    "diags": []
   },
@@ -9527,6 +9731,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/native-class-array-boundaries.ts": {
+   "order": [
+    "<repo>/tests/corpus/native-class-array-boundaries.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/native-class-cache.js": {
    "order": [
     "<repo>/tests/corpus/native-class-cache.js"
@@ -9548,6 +9758,12 @@
   "<repo>/tests/corpus/native-class-property-order.cjs": {
    "order": [
     "<repo>/tests/corpus/native-class-property-order.cjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-class-type-predicates.ts": {
+   "order": [
+    "<repo>/tests/corpus/native-class-type-predicates.ts"
    ],
    "diags": []
   },
@@ -9632,6 +9848,12 @@
   "<repo>/tests/corpus/number-predicates-unknown.ts": {
    "order": [
     "<repo>/tests/corpus/number-predicates-unknown.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/object-enumeration-array-reads.ts": {
+   "order": [
+    "<repo>/tests/corpus/object-enumeration-array-reads.ts"
    ],
    "diags": []
   },
@@ -9770,6 +9992,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/record-optional-json-presence.ts": {
+   "order": [
+    "<repo>/tests/corpus/record-optional-json-presence.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/record-unknown-values.ts": {
    "order": [
     "<repo>/tests/corpus/record-unknown-values.ts"
@@ -9830,6 +10058,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/rest-optional-array-arguments.ts": {
+   "order": [
+    "<repo>/tests/corpus/rest-optional-array-arguments.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/rest-optional-elements.ts": {
    "order": [
     "<repo>/tests/corpus/rest-optional-elements.ts"
@@ -9864,6 +10098,12 @@
    "order": [
     "<repo>/tests/corpus/static-field-updates/counter.ts",
     "<repo>/tests/corpus/static-field-updates/main.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/static-method-receivers.ts": {
+   "order": [
+    "<repo>/tests/corpus/static-method-receivers.ts"
    ],
    "diags": []
   },
@@ -10004,6 +10244,18 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/typed-array-constructor-identity.js": {
+   "order": [
+    "<repo>/tests/corpus/typed-array-constructor-identity.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/typed-array-constructor-union.ts": {
+   "order": [
+    "<repo>/tests/corpus/typed-array-constructor-union.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/typed-array-dynamic-methods.js": {
    "order": [
     "<repo>/tests/corpus/typed-array-dynamic-methods.js"
@@ -10115,6 +10367,12 @@
   "<repo>/tests/corpus/url-runtime-base.ts": {
    "order": [
     "<repo>/tests/corpus/url-runtime-base.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/util-parseargs-wrapped/main.ts": {
+   "order": [
+    "<repo>/tests/corpus/util-parseargs-wrapped/main.ts"
    ],
    "diags": []
   },

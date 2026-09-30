@@ -5,22 +5,23 @@ import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { installBytes } from "../library/cache-primitives.js";
 import { emitNativeArtifact } from "./native-codegen.js";
+import { linkNativeExecutable } from "./linker.js";
 import type { NativeLinkFeatures } from "./native-link-info.js";
 import { isZigDriver, localizeLibraryObjects, type CcDriver, type LibArchiveOptions } from "./native-toolchain.js";
 import { loadRuntimePack, RuntimePackError, stageRuntimePackArtifacts } from "./runtime-pack.js";
-import type { NativeTargetSpec } from "./targets.js";
+import { executableOptimizationLinkerArgs, type NativeTargetSpec } from "./targets.js";
 
 const run = promisify(execFile);
 
 /** Assemble a library from LLVM program objects and verified runtime objects.
  * The runtime's library and per-thread modes are compiled when packaging. */
-export async function compilePackedLibrary(options: LibArchiveOptions, target: NativeTargetSpec): Promise<void> {
+export async function compilePackedLibrary(options: LibArchiveOptions, target: NativeTargetSpec, wasmExports?: readonly string[]): Promise<void> {
   const optimization = options.optimization ?? "release";
   const features: NativeLinkFeatures = {
     dynamic: false, regex: options.regex ?? false, copying: options.copying ?? false,
     textDecoderLegacy: options.textDecoderLegacy ?? false, fileHandle: false, fetch: false,
     netIsland: false, zlib: options.zlib ?? false, assert: options.assert ?? false,
-    inspect: options.inspect ?? false, dynInvoke: false, dc: false, dynAsync: false,
+    inspect: options.inspect ?? false, dynInvoke: options.dynInvoke ?? false, dc: false, dynAsync: false,
     events: false, emitter: options.emitter ?? false, symbol: options.symbol ?? false,
     bigint: options.bigint ?? false, searchParams: options.searchParams ?? false,
     qs: false, parseArgs: false, stream: false, net: false, http: false, http2: false,
@@ -30,6 +31,28 @@ export async function compilePackedLibrary(options: LibArchiveOptions, target: N
     target, features, optimization,
     mode: options.threadInstances ? "library-thread" : "library",
   });
+  if (target.platform === "wasi") {
+    if (wasmExports === undefined) throw new Error("Wasm library linking requires explicit exports");
+    const buildDir = await mkdtemp(join(tmpdir(), "scriptc-wasm-library-"));
+    try {
+      const program = join(buildDir, "program.o");
+      await emitNativeArtifact({
+        outputPath: program, llvm: await readFile(options.cPath, "utf8"), sourcePath: options.cPath,
+        outputKind: "obj", optimization: optimization === "dev" ? "0" : "2", target,
+      });
+      await mkdir(dirname(options.outPath), { recursive: true });
+      await linkNativeExecutable({
+        target, outputPath: options.outPath,
+        inputs: [program, ...selection.runtimeObjects, ...selection.archives],
+        systemLibraries: selection.systemLibraries,
+        driverFlags: ["-target", target.linkerTargetTriple, "-mexec-model=reactor", ...executableOptimizationLinkerArgs(target.platform, optimization), ...wasmExports.map((name) => `-Wl,--export=${name}`)],
+        dependencyPaths: selection.dependencyPaths, programObjectDependencies: [], runtimePack: selection,
+      });
+    } finally {
+      await rm(buildDir, { recursive: true, force: true });
+    }
+    return;
+  }
   const stage = await stageRuntimePackArtifacts(selection);
   try {
     const buildDir = await mkdtemp(join(tmpdir(), "scriptc-library-pack-"));

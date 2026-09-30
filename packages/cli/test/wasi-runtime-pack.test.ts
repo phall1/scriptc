@@ -42,7 +42,7 @@ test.runIf(supported)("WASI helper object plus runtime pack builds and runs with
   })).resolves.toMatchObject({ stdout: "hello world\n" });
 });
 
-test.runIf(supported)("switching WASI LLVM and native C builds preserves both translation units", async () => {
+test.runIf(supported)("switching WASI and native builds retains both executables", async () => {
   const dir = await mkdtemp(join(tmpdir(), "scriptc-wasi-native-output-"));
   dirs.push(dir);
   const entry = join(dir, "hello.ts");
@@ -59,10 +59,12 @@ test.runIf(supported)("switching WASI LLVM and native C builds preserves both tr
   const llvm = await readFile(join(outDir, "hello.ll"));
   const wasm = await readFile(join(outDir, "hello.wasm"));
   await build(["--backend=llvm", "--keep-llvm"], nativeEnv);
-  const c = await readFile(join(outDir, "hello.c"));
-  expect(await readFile(join(outDir, "hello.ll"))).toEqual(llvm);
+  const native = await readFile(join(outDir, process.platform === "win32" ? "hello.exe" : "hello"));
+  const nativeLlvm = await readFile(join(outDir, "hello.ll"));
+  expect(nativeLlvm.equals(llvm)).toBe(false);
   expect(await readFile(join(outDir, "hello.wasm"))).toEqual(wasm);
 
   await build([], wasiEnv);
-  expect(await readFile(join(outDir, "hello.c"))).toEqual(c);
+  expect(await readFile(join(outDir, "hello.ll"))).toEqual(llvm);
+  expect(await readFile(join(outDir, process.platform === "win32" ? "hello.exe" : "hello"))).toEqual(native);
 });

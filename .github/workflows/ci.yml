@@ -10,7 +10,36 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  native_macos:
+    name: build (macOS arm64 native packages)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/native-packages
+        with:
+          target: darwin-arm64
+      - name: Preserve executable permissions in shared packages
+        run: >-
+          tar -czf "$RUNNER_TEMP/native-darwin-arm64.tar.gz"
+          packages/llvm-darwin-arm64/bin
+          packages/runtime-darwin-arm64/artifacts
+          packages/runtime-darwin-arm64/runtime-pack.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-darwin-arm64
+          path: ${{ runner.temp }}/native-darwin-arm64.tar.gz
+          retention-days: 1
+
   tests:
+    needs: native_macos
     name: test (${{ matrix.flavor }}, ${{ matrix.shard }}/10)
     # arm64 macOS: same clang/libc the differential + number-formatting
     # oracles were verified against.
@@ -45,10 +74,12 @@ jobs:
         with:
           node-version-file: .node-version
           cache: pnpm
-      - run: brew install llvm@22
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @scriptc/llvm-darwin-arm64 build:native
-      - run: pnpm --filter @scriptc/runtime-darwin-arm64 build:native
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-darwin-arm64
+          path: ${{ runner.temp }}
+      - run: tar -xzf "$RUNNER_TEMP/native-darwin-arm64.tar.gz"
       - run: pnpm build
       # Separate vitest invocations because the shard axes must not mix: a file
       # lands in exactly ONE --shard slice, so an env-sharded file behind
@@ -68,7 +99,6 @@ jobs:
           --exclude=tests/harness/self-hosting.test.ts
           --exclude=tests/harness/self-hosting-llvm-emitter.test.ts
           --exclude=tests/harness/self-hosting-native-driver.test.ts
-          --exclude=tests/harness/self-hosting-bootstrap.test.ts
           --exclude=tests/harness/fetch.test.ts
           --exclude=tests/harness/npm-static.test.ts
           --exclude=tests/harness/surface-manifest.test.ts
@@ -137,7 +167,7 @@ jobs:
   # Full compiler rebuilds dominate the critical path. Start them immediately
   # after setup, independently of corpus and integration test shards.
   bootstrap:
-    name: test (Linux, ${{ matrix.flavor }}, ${{ matrix.compiler }} bootstrap)
+    name: test (Linux, ${{ matrix.flavor }}, native bootstrap)
     # These contracts are portable. Standard Linux runners have enough memory
     # for LLVM optimization alongside the compiler that produces its input.
     runs-on: ubuntu-24.04
@@ -145,12 +175,6 @@ jobs:
       fail-fast: false
       matrix:
         flavor: [plain, san]
-        compiler: [frontend, native]
-        include:
-          - compiler: frontend
-            test: tests/harness/self-hosting-bootstrap.test.ts
-          - compiler: native
-            test: tests/harness/self-hosting-native-driver.test.ts
     env:
       SCRIPTC_TEST_WORKERS: "1"
       SCRIPTC_SAN: ${{ matrix.flavor == 'san' && '1' || '' }}
@@ -163,23 +187,20 @@ jobs:
         with:
           node-version-file: .node-version
           cache: pnpm
-      - name: Install pinned LLVM development distribution
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes g++ zlib1g-dev libzstd-dev
-          curl -fL --retry 3 -o "$RUNNER_TEMP/llvm.tar.xz" https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/LLVM-22.1.8-Linux-X64.tar.xz
-          tar -xJf "$RUNNER_TEMP/llvm.tar.xz" -C "$RUNNER_TEMP"
-          mv "$RUNNER_TEMP/LLVM-22.1.8-Linux-X64" "$RUNNER_TEMP/llvm-22.1.8"
-          echo "LLVM_DIR=$RUNNER_TEMP/llvm-22.1.8/lib/cmake/llvm" >> "$GITHUB_ENV"
-          echo "$RUNNER_TEMP/llvm-22.1.8/bin" >> "$GITHUB_PATH"
+      - uses: ./.github/actions/llvm-linux
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @scriptc/llvm-linux-x64-gnu build:native
       - uses: vercel-labs/setup-zig@v1
         with:
           version: 0.16.0
-      - run: CC=zig AR=zig pnpm --filter @scriptc/runtime-linux-x64-gnu build:native
+      - uses: ./.github/actions/native-packages
+        with:
+          target: linux-x64-gnu
+      - uses: ./.github/actions/native-packages
+        with:
+          target: wasm32-wasi
+          helper: "false"
       - run: pnpm build
-      - run: pnpm test ${{ matrix.test }}
+      - run: pnpm test tests/harness/self-hosting-native-driver.test.ts
 
   # A real host-clang/glibc build, not the zig cross-target lane: catches
   # Linux feature-test macro omissions at compile time and separate-libm
@@ -203,10 +224,11 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
-      - name: Host clang static-build regression
+      - name: Host clang and sanitizer build regressions
         run: >-
           pnpm test packages/compiler/test/cc-driver.test.ts
-          --testNamePattern "host-native clang static build"
+          packages/compiler/src/native/sanitizer.test.ts
+          --testNamePattern "host-native clang static build|sanitized vendor archives"
 
   # The TS7 parity sweep exercises the compiler frontend, so it can run
   # alongside the Linux LLVM/runtime package build instead of following it.
@@ -241,21 +263,14 @@ jobs:
         with:
           node-version-file: .node-version
           cache: pnpm
-      - name: Install pinned LLVM development distribution
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes g++ zlib1g-dev libzstd-dev
-          curl -fL --retry 3 -o "$RUNNER_TEMP/llvm.tar.xz" https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/LLVM-22.1.8-Linux-X64.tar.xz
-          tar -xJf "$RUNNER_TEMP/llvm.tar.xz" -C "$RUNNER_TEMP"
-          mv "$RUNNER_TEMP/LLVM-22.1.8-Linux-X64" "$RUNNER_TEMP/llvm-22.1.8"
-          echo "LLVM_DIR=$RUNNER_TEMP/llvm-22.1.8/lib/cmake/llvm" >> "$GITHUB_ENV"
-          echo "$RUNNER_TEMP/llvm-22.1.8/bin" >> "$GITHUB_PATH"
+      - uses: ./.github/actions/llvm-linux
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @scriptc/llvm-linux-x64-gnu build:native
       - uses: vercel-labs/setup-zig@v1
         with:
           version: 0.16.0
-      - run: CC=zig AR=zig pnpm --filter @scriptc/runtime-linux-x64-gnu build:native
+      - uses: ./.github/actions/native-packages
+        with:
+          target: linux-x64-gnu
       - name: Build and verify Linux x64 musl release packages
         run: |
           pnpm --filter @scriptc/llvm-linux-x64-musl build:native
@@ -272,7 +287,10 @@ jobs:
               if (value.default_target !== "x86_64-unknown-linux-musl" || !value.supported_targets?.includes("wasm32-unknown-wasi")) process.exit(1);
             '
           node packages/runtime-linux-x64-musl/scripts/verify.mjs
-      - run: pnpm --filter @scriptc/runtime-wasm32-wasi build:native
+      - uses: ./.github/actions/native-packages
+        with:
+          target: wasm32-wasi
+          helper: "false"
       - run: pnpm build
       - name: Linux helper object format and no-clang output contract
         run: |
@@ -288,6 +306,8 @@ jobs:
         run: |
           node packages/cli/dist/main.js build tests/corpus/001-hello.ts -o "$RUNNER_TEMP/hello"
           test "$("$RUNNER_TEMP/hello")" = 'hello world'
+      - name: Linux release runtime reachability and debug payload
+        run: pnpm test tests/harness/runtime-tree-shaking.test.ts
       - name: Debian 12 glibc 2.36 runtime-pack smoke
         run: |
           docker run --rm --volume "$GITHUB_WORKSPACE:/work:ro" --workdir /work node:24-bookworm-slim sh -ec '
@@ -297,9 +317,10 @@ jobs:
             test "$(/tmp/hello)" = "hello world"
           '
       - name: WASI helper object/runtime-pack smoke
-        run: pnpm test packages/cli/test/wasi-runtime-pack.test.ts
+        run: pnpm test packages/cli/test/wasi-runtime-pack.test.ts tests/harness/wasm-library.test.ts
 
   llvm_artifacts_macos_arm64:
+    needs: native_macos
     name: test (macOS arm64 LLVM artifacts, no clang, ${{ matrix.shard }}/5)
     runs-on: macos-15
     # Shard 1 additionally runs package/install and link-parity contracts
@@ -325,10 +346,12 @@ jobs:
         with:
           node-version-file: .node-version
           cache: pnpm
-      - run: brew install llvm@22
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @scriptc/llvm-darwin-arm64 build:native
-      - run: pnpm --filter @scriptc/runtime-darwin-arm64 build:native
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-darwin-arm64
+          path: ${{ runner.temp }}
+      - run: tar -xzf "$RUNNER_TEMP/native-darwin-arm64.tar.gz"
       - run: pnpm build
       - name: No-clang assembly/object contract
         if: matrix.shard == 1
@@ -353,22 +376,29 @@ jobs:
           node scripts/verify-llvm-package.mjs "$RUNNER_TEMP/$(basename "$TARBALL")"
       - name: Packed npm installation smoke
         if: matrix.shard == 1
+        env:
+          # Release optimization is covered by the compiler bootstrap jobs.
+          # This lane verifies packaging and installation with a faster seed.
+          SCRIPTC_NATIVE_OPTIMIZATION: dev
         run: |
+          pnpm --filter @scriptc/cli-darwin-arm64 build:native
           pnpm --dir packages/runtime pack --pack-destination "$RUNNER_TEMP" --silent
           pnpm --dir packages/runtime-darwin-arm64 pack --pack-destination "$RUNNER_TEMP" --silent
           pnpm --dir packages/compiler pack --pack-destination "$RUNNER_TEMP" --silent
+          pnpm --dir packages/cli-darwin-arm64 pack --pack-destination "$RUNNER_TEMP" --silent
           pnpm --dir packages/cli pack --pack-destination "$RUNNER_TEMP" --silent
           PREFIX="$RUNNER_TEMP/installed-scriptc"
-          npm install --prefix "$PREFIX" --ignore-scripts \
+          npm install --prefix "$PREFIX" --no-audit --no-fund \
             "$RUNNER_TEMP/scriptc-runtime-$(node -p "require('./packages/runtime/package.json').version").tgz" \
             "$RUNNER_TEMP/scriptc-runtime-darwin-arm64-$(node -p "require('./packages/runtime-darwin-arm64/package.json').version").tgz" \
             "$RUNNER_TEMP/scriptc-llvm-darwin-arm64-$(node -p "require('./packages/llvm-darwin-arm64/package.json').version").tgz" \
             "$RUNNER_TEMP/scriptc-compiler-$(node -p "require('./packages/compiler/package.json').version").tgz" \
+            "$RUNNER_TEMP/scriptc-cli-darwin-arm64-$(node -p "require('./packages/cli-darwin-arm64/package.json').version").tgz" \
             "$RUNNER_TEMP/scriptc-$(node -p "require('./packages/cli/package.json').version").tgz"
-          "$PREFIX/node_modules/.bin/scriptc" build tests/corpus/001-hello.ts \
+          PATH="" "$PREFIX/node_modules/.bin/scriptc" build tests/corpus/001-hello.ts \
             --emit=obj -o "$RUNNER_TEMP/installed.o"
           file "$RUNNER_TEMP/installed.o" | grep 'Mach-O 64-bit object arm64'
-          "$PREFIX/node_modules/.bin/scriptc" build tests/corpus/001-hello.ts \
+          PATH="" "$PREFIX/node_modules/.bin/scriptc" build tests/corpus/001-hello.ts \
             --print=native-link-info -o "$RUNNER_TEMP/installed-link.o" \
             > "$RUNNER_TEMP/installed-link.json"
           node examples/native-object/link.mjs cc \
@@ -388,10 +418,10 @@ jobs:
         with:
           node-version-file: .node-version
           cache: pnpm
-      - run: brew install llvm@22
       - run: pnpm install --frozen-lockfile
-      - run: LLVM_DIR=/usr/local/opt/llvm@22/lib/cmake/llvm pnpm --filter @scriptc/llvm-darwin-x64 build:native
-      - run: pnpm --filter @scriptc/runtime-darwin-x64 build:native
+      - uses: ./.github/actions/native-packages
+        with:
+          target: darwin-x64
       - run: pnpm build
       - name: Intel Mach-O no-clang object contract
         run: |

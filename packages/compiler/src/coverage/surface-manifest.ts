@@ -187,7 +187,7 @@ export function generateSurfaceManifest(compilerVersion: string): SurfaceManifes
     ["for-using-of", "for (using ... of ...) over arrays", "each array element is disposed at the end of its iteration, including break and continue paths"],
     ["finally-abrupt-completions", "abrupt completions through finally", "return, throw, break, continue, and labeled jumps run crossed finally blocks; a finally completion replaces the pending one"],
     ["spread-arguments", "spread arguments", "non-empty fixed tuples flatten into fixed signatures with evaluate-once ordering; arrays, Sets, and statically represented class iterables spread into typed rest parameters"],
-  ] as const) {
+  ] as [string, string, string][]) {
     add({ id: `syntax.${id}`, kind: "syntax", name, status: "static", note });
   }
 

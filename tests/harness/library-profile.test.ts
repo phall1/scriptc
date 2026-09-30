@@ -48,6 +48,14 @@ function expectSc4001(json: unknown, fragment: string): void {
 }
 
 describe("library profile validation", () => {
+  test("explicit npm source attempts accept package names only", () => {
+    const result = loadLibraryProfile(writeProfile({ ...good, npm_static: ["three", "@scope/pkg", "three"] }));
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.profile.npmStatic).toEqual(["three", "@scope/pkg"]);
+    for (const npm_static of [null, "three", [null], [""], ["three/src/math"], ["../three"]]) {
+      expectSc4001({ ...good, npm_static }, "npm_static");
+    }
+  });
   test("well-formed profile resolves", () => {
     const path = writeProfile(good);
     const r = loadLibraryProfile(path);

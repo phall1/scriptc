@@ -1,4 +1,5 @@
 import { everyExprChild, everyStmtChild } from "../../ir/traverse.js";
+import { sanitizeUnregisteredClassTypes } from "./sanitize-class-types.js";
 import { buildUnionNarrow } from "./union-narrow.js";
 import { planUnionRetag, buildUnionRetag, planRecordUnionWrap, buildRecordUnionWrap } from "./union-retag.js";
 import type { WidthLift } from "./width-lift.js";
@@ -1674,6 +1675,9 @@ export class Lowerer {
   /** Inferred JS methods participating in an override chain keep a vtable
    * ABI instead of call-site specialization. Filled before class collection. */
   readonly virtualJsMethods = new Set<ts.MethodDeclaration>();
+  /** Largest fixed argument list below a JS method, discovered before any
+   * base vtable signature is collected. Unused checked slots carry undefined. */
+  readonly virtualJsMethodArity = new Map<ts.MethodDeclaration, number>();
   /** The class whose members are lowering — `super` binds lexically to it
    * (arrows inside methods lower within this window, so they see it too). */
   currentClass: ClassInfo | null = null;
@@ -3450,8 +3454,12 @@ export class Lowerer {
               }
             }
           }
-          node.arguments.forEach((arg, i) => {
-              const callbackSlot = sig.params[i]?.type;
+          const restAt = sig.params.findIndex((shape) =>
+            shape.mode === "rest" || shape.mode === "dynRest" || shape.mode === "islandRest" || shape.mode === "arguments");
+          node.arguments.forEach((arg, argumentIndex) => {
+              const i = restAt >= 0 && argumentIndex >= restAt ? restAt : argumentIndex;
+              const shape = sig.params[i];
+              const callbackSlot = shape?.type;
               if (callbackSlot?.kind === "func" && !ts.isSpreadElement(arg)) {
                 const optionalCallbackParams = callbackSlot.params.flatMap((type, index) =>
                   type.kind === "union" && this.armTag(type.unionId, UNDEFINED_T) >= 0 ? [index] : []);
@@ -3459,27 +3467,28 @@ export class Lowerer {
                   changed = true;
                 }
               }
-              if (ts.isSpreadElement(arg) || !mayBeOptional(arg)) return;
-              const restAt = sig.params.findIndex((shape) => shape.mode === "rest");
-              if (restAt >= 0 && i >= restAt) {
-                // Rest always supplies an array. An absent source value
-                // widens its elements, never the array parameter itself.
+              if (ts.isSpreadElement(arg) || !mayBeOptional(arg) || !shape) return;
+              if (i === restAt) {
+                // A rest binding always receives an array. An unchecked
+                // argument can make its elements undefined, not the pack.
+                // Keep every virtual implementation on the same array ABI.
                 for (const target of familyBySymbol.get(symbol) ?? [symbol]) {
-                  const shape = signatureBySymbol.get(target)?.params[restAt];
-                  if (shape?.type.kind !== "array") continue;
-                  const element = addUndefined(shape.type.elem);
-                  if (typeEquals(element, shape.type.elem)) continue;
-                  shape.type = arrayOf(element);
-                  const parameter = functionDeclBySymbol.get(target)?.parameters[restAt];
-                  const bound = parameter && ts.isIdentifier(parameter.name) ? symbolOf(parameter.name) : null;
-                  if (bound) this.runtimeOptionalBindingTypes.set(bound, shape.type);
+                  const rest = signatureBySymbol.get(target)?.params[i];
+                  if (rest?.mode !== "rest" || rest.type.kind !== "array") continue;
+                  const widened = arrayOf(addUndefined(rest.type.elem));
+                  if (typeEquals(rest.type, widened)) continue;
+                  rest.type = widened;
+                  const parameter = functionDeclBySymbol.get(target)?.parameters[i];
+                  if (parameter && ts.isIdentifier(parameter.name)) {
+                    const bound = symbolOf(parameter.name);
+                    if (bound) this.runtimeOptionalBindingTypes.set(bound, widened);
+                  }
                   changed = true;
                 }
                 return;
               }
-              if (!sig.params[i]) return;
               const set = optionalParams.get(symbol) ?? new Set<number>();
-              sig.params[i]!.type = addUndefined(sig.params[i]!.type);
+              shape.type = addUndefined(shape.type);
               const before = set.size;
               set.add(i);
               optionalParams.set(symbol, set);
@@ -3836,9 +3845,6 @@ export class Lowerer {
     // slots), uniformly across params/locals/globals/fields/body types so
     // every producer and consumer agrees. Programs with no unregistered
     // reference are untouched — byte-stability holds.
-    if (this.diags.length === 0) {
-      this.sanitizeUnregisteredClassTypes([functions, this.globalsList, artifacts.classes, artifacts.records, artifacts.unions]);
-    }
     const module: IrModule | null =
       this.diags.length > 0
         ? null
@@ -3854,6 +3860,7 @@ export class Lowerer {
             entry: ENTRY_NAME,
             ...(this.ffiImports.length > 0 ? { ffiImports: [...this.ffiImports] } : {}),
           };
+    if (module) sanitizeUnregisteredClassTypes(module, (name) => this.classes.has(name));
     return {
       module,
       diagnostics: this.diags,
@@ -3864,40 +3871,6 @@ export class Lowerer {
       ...(this.npmBuiltins ? { npmBuiltins: this.npmBuiltins } : {}),
       ...(this.npmLazyTraps ? { npmLazyTraps: this.npmLazyTraps } : {}),
     };
-  }
-
-  /** The unregistered-class type sweep (run()'s last step before the
-   * module assembles): every `{kind:"object"}` TYPE naming a class with
-   * no registered ClassInfo is rewritten IN PLACE to the f64 dummy.
-   * classval types are exempt (they emit the class-independent
-   * `ScrClassObj *` — inert-but-valid storage, the validator's own
-   * stance), and only type objects rewrite — node-level classNames
-   * (`new`, upcasts) cannot reach here (their lowerings fence without a
-   * registered class), so the validator still backstops those. */
-  sanitizeUnregisteredClassTypes(roots: unknown[]): void {
-    const isUnregisteredObjectType = (v: unknown): boolean =>
-      typeof v === "object" && v !== null &&
-      (v as { kind?: unknown }).kind === "object" &&
-      typeof (v as { className?: unknown }).className === "string" &&
-      !this.classes.has((v as { className: string }).className);
-    const sweep = (node: unknown): void => {
-      if (node === null || typeof node !== "object") return;
-      if (Array.isArray(node)) {
-        node.forEach((item, i) => {
-          if (isUnregisteredObjectType(item)) node[i] = F64;
-          else sweep(item);
-        });
-        return;
-      }
-      const rec = node as Record<string, unknown>;
-      for (const key of Object.keys(rec)) {
-        if (key === "loc") continue;
-        const v = rec[key];
-        if (isUnregisteredObjectType(v)) rec[key] = F64;
-        else sweep(v);
-      }
-    };
-    for (const root of roots) sweep(root);
   }
 
   /** True when `t` (recursively) names a class instance type with no
@@ -4313,7 +4286,7 @@ export class Lowerer {
     // turn queue more instances. Continue to the joint fixpoint; the initial
     // queue above is the only portion whose discovery order differed from
     // historical emit order.
-    const classDispatch = new ClassDynamicDispatch();
+    const classDispatch = new ClassDynamicDispatch(extraRoots !== undefined);
     for (;;) {
       drainInstances();
       const dispatchChanged = classDispatch.process(this, [
@@ -5355,6 +5328,12 @@ export class Lowerer {
       return { kind: "promiseVoidWiden", value: expr, type: expected, loc: expr.loc };
     }
     if (expected.kind === "dyn" && expr.type.kind !== "dyn") {
+      // Native void calls still have a JavaScript value: undefined. Keep
+      // the call's effects before exposing that value to checked JS code.
+      if (expr.type.kind === "void") {
+        return { kind: "seqExpr", stmts: [{ kind: "exprStmt", expr, loc: expr.loc }],
+          result: dynUndefinedExpr(expr.loc), type: DYN, loc: expr.loc };
+      }
       // An error-HIERARCHY object (builtin subclass or user `extends
       // Error` class) upcasts to the %Error root first — the caughtToDyn
       // encoding (scr_dyn_from_error) carries name/message/code and the
@@ -5795,6 +5774,7 @@ export class Lowerer {
         const sameFamily =
           (src.kind === "record" && arm.kind === "record") ||
           (src.kind === "array" && arm.kind === "array") ||
+          (src.kind === "object" && arm.kind === "object") ||
           // Tuples already lift into ordinary array slots. Consider that
           // same conversion when the array is an arm of a union too.
           (src.kind === "record" && this.shapes.get(src.shapeId)?.tuple === true && arm.kind === "array") ||
@@ -7824,6 +7804,17 @@ export class Lowerer {
    * lowering goes through here (via lowerExprExpecting) or calls this
    * directly when the expression was already lowered. */
   coerceInto(node: ts.Node, expr: IrExpr, expected: IrType): IrExpr {
+    // A union destination can accept the binding's tagged storage directly.
+    // The checker's single-arm flow type can be stale after a callback writes
+    // the binding. Extracting that arm and wrapping it again would discard the
+    // actual tag and could read a different record layout. Retag the stored
+    // value instead; ordinary coercion checks any excluded destination arms.
+    // Explicit assertions keep their own conversion and validation.
+    if (expected.kind === "union" && expr.kind === "unionNarrow") {
+      let source = node;
+      while (ts.isParenthesizedExpression(source) || ts.isSatisfiesExpression(source)) source = source.expression;
+      if (ts.isIdentifier(source) || ts.isShorthandPropertyAssignment(source)) expr = expr.value;
+    }
     // A fresh literal can retain a wider runtime-optional field after its
     // initial contextual layout was chosen. Its known discriminator still
     // selects the destination arm; validate that payload before wrapping.
@@ -7859,6 +7850,15 @@ export class Lowerer {
       }
     }
     let e = this.coerceToExpected(expr, expected);
+    // Existing JavaScript arrays retain mutations and identity across checked
+    // slots. Fresh literals have no prior identity and use checked storage
+    // directly, so later writes can change their inferred element type.
+    let literal = node;
+    while (ts.isParenthesizedExpression(literal)) literal = literal.expression;
+    if (isJsSourceFile(node.getSourceFile()) && !ts.isArrayLiteralExpression(literal) &&
+        e.kind === "dynFrom" && e.value.type.kind === "array") {
+      e = { ...e, liveRef: true };
+    }
     // An 'any' value PROVABLY null/undefined (the unit literal itself, or
     // a read of a binding nothing ever assigns a non-unit value) flowing
     // implicitly into a primitive slot: the validated exit refuses units
@@ -8170,7 +8170,12 @@ export class Lowerer {
         }
       }
     }
-    const e = this.lowerExpr(node);
+    let e = this.lowerExpr(node);
+    if (expected?.kind === "union" && this.armTag(expected.unionId, UNDEFINED_T) >= 0) {
+      // A destination that accepts undefined must retain an unchecked
+      // read's storage value even when the checker still calls it present.
+      e = this.runtimeOptionalSourceValue(node, e) ?? e;
+    }
     return expected ? this.coerceInto(node, e, expected) : e;
   }
 

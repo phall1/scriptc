@@ -1,7 +1,26 @@
 import { readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { NATIVE_TARGETS, type NativeTargetSpec } from "../backend/targets.js";
-import type { NativeToolchain } from "./driver.js";
+import { NATIVE_TARGETS, selectNativeTarget, type NativeTargetSpec, type NativeHelperSpec } from "../backend/targets.js";
+
+export interface NativeToolchain {
+  compilerVersion: string;
+  ts7Executable: string;
+  target: NativeTargetSpec;
+  helper: NativeHelperSpec;
+  helperExecutable: string;
+  helperPackageRoot: string;
+  runtimePackRoot: string;
+  runtimeSourceRoot?: string;
+  linker: string;
+  linkerArgs: string[];
+  dsymutil: string;
+  archiver?: string;
+  archiverArgs?: string[];
+  relocatableLinker?: string;
+  declarationsRoot?: string;
+  comptimeExecutable?: string;
+  wasiNodeRunner?: string;
+}
 
 /** Distribution paths are relative to this manifest, so moving an installed
  * compiler does not bake the seed machine's paths into the native binary. */
@@ -12,9 +31,17 @@ export interface NativeToolchainManifest {
   ts7: string;
   llvm_package: string;
   runtime_pack: string;
+  runtime_sources?: string;
   linker: string;
   linker_args: string[];
   dsymutil: string;
+  declarations?: string;
+  runtime_packs?: { target: string; path: string }[];
+  archiver?: string;
+  archiver_args?: string[];
+  relocatable_linker?: string;
+  comptime?: string;
+  wasi_node_runner?: string;
 }
 
 function pathFrom(root: string, value: string): string {
@@ -25,7 +52,7 @@ function commandFrom(root: string, value: string): string {
   return value.includes("/") || value.includes("\\") ? pathFrom(root, value) : value;
 }
 
-export function loadNativeToolchain(path: string): NativeToolchain {
+export function loadNativeToolchain(path: string, env: NodeJS.ProcessEnv = {}): NativeToolchain {
   const raw: unknown = JSON.parse(readFileSync(path, "utf8"));
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new Error("invalid native toolchain manifest");
   const value = raw as Record<string, unknown>;
@@ -39,18 +66,46 @@ export function loadNativeToolchain(path: string): NativeToolchain {
     }
   }
   const manifest = raw as NativeToolchainManifest;
+  for (const name of ["runtime_sources", "declarations", "archiver", "relocatable_linker", "comptime", "wasi_node_runner"]) {
+    if (value[name] !== undefined && (typeof value[name] !== "string" || value[name] === "")) throw new Error(`native toolchain requires a nonempty string for ${name}`);
+  }
+  const archiverArgs: unknown = value.archiver_args;
+  const runtimePacks: unknown = value.runtime_packs;
+  if (archiverArgs !== undefined && (!Array.isArray(archiverArgs) || !archiverArgs.every((arg) => typeof arg === "string"))) {
+    throw new Error("native toolchain requires a string array for archiver_args");
+  }
+  if (runtimePacks !== undefined && (!Array.isArray(runtimePacks) || !runtimePacks.every((item) => {
+    if (item === null || typeof item !== "object") return false;
+    const pack = item as Record<string, unknown>;
+    return typeof pack.target === "string" && typeof pack.path === "string" && pack.path !== "";
+  }))) {
+    throw new Error("native toolchain requires target/path entries for runtime_packs");
+  }
   const targets: readonly NativeTargetSpec[] = NATIVE_TARGETS;
-  const target = targets.find((item) => item.name === manifest.target);
-  if (target === undefined || target.platform === "wasi") throw new Error(`unsupported native compiler target: ${manifest.target}`);
+  const host = targets.find((item) => item.name === manifest.target);
+  if (host === undefined || host.platform === "wasi") throw new Error(`unsupported native compiler target: ${manifest.target}`);
+  const target = selectNativeTarget(env["SCRIPTC_TARGET"] ?? "", host);
+  if (target === null) throw new Error(`unsupported native compiler target: ${env["SCRIPTC_TARGET"]}`);
   const root = dirname(resolve(path));
-  const helperPackageRoot = pathFrom(root, manifest.llvm_package);
+  const helperPackageRoot = pathFrom(root, env["SCRIPTC_LLVM_PACKAGE"] ?? manifest.llvm_package);
+  const runtimePath = manifest.runtime_packs?.find((pack) => pack.target === target.name)?.path
+    ?? (target.name === host.name ? manifest.runtime_pack : join(dirname(manifest.runtime_pack), target.runtimePackPackage.replace("@scriptc/", "")));
+  const linker = env["SCRIPTC_LINKER"] ?? (target.name === host.name ? manifest.linker : target.defaultLinker);
+  const linkerArgs = env["SCRIPTC_LINKER"] !== undefined ? [] : target.name === host.name ? manifest.linker_args : [...target.defaultLinkerArgs];
   return {
     compilerVersion: manifest.compiler_version,
     ts7Executable: pathFrom(root, manifest.ts7),
-    target, helper: target.helper, helperPackageRoot,
-    helperExecutable: join(helperPackageRoot, "bin", target.platform === "win32" ? "scriptc-llvm-codegen.exe" : "scriptc-llvm-codegen"),
-    runtimePackRoot: pathFrom(root, manifest.runtime_pack),
-    linker: commandFrom(root, manifest.linker), linkerArgs: manifest.linker_args,
-    dsymutil: commandFrom(root, manifest.dsymutil),
+    target, helper: host.helper, helperPackageRoot,
+    helperExecutable: env["SCRIPTC_LLVM_HELPER"] ?? join(helperPackageRoot, "bin", host.platform === "win32" ? "scriptc-llvm-codegen.exe" : "scriptc-llvm-codegen"),
+    runtimePackRoot: pathFrom(root, env["SCRIPTC_RUNTIME_PACK"] ?? runtimePath),
+    ...(manifest.runtime_sources === undefined ? {} : { runtimeSourceRoot: pathFrom(root, manifest.runtime_sources) }),
+    linker: commandFrom(root, linker), linkerArgs,
+    dsymutil: commandFrom(root, env["SCRIPTC_DSYMUTIL"] ?? manifest.dsymutil),
+    ...(manifest.declarations === undefined ? {} : { declarationsRoot: pathFrom(root, manifest.declarations) }),
+    ...(manifest.archiver === undefined ? {} : { archiver: commandFrom(root, manifest.archiver) }),
+    ...(manifest.archiver === undefined ? {} : { archiverArgs: manifest.archiver_args ?? [] }),
+    ...(manifest.relocatable_linker === undefined ? {} : { relocatableLinker: commandFrom(root, manifest.relocatable_linker) }),
+    ...(manifest.comptime === undefined ? {} : { comptimeExecutable: pathFrom(root, manifest.comptime) }),
+    ...(manifest.wasi_node_runner === undefined ? {} : { wasiNodeRunner: pathFrom(root, manifest.wasi_node_runner) }),
   };
 }

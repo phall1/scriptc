@@ -54,6 +54,7 @@ import { isNodeModulesPath, nearestInvalidPackageJsonPath, nearestPackageType, n
 import { probeNodeImportRefusal, probeNodeRequireRefusal } from "./npm.js";
 import { isNpmStaticPackage, npmStaticActive, npmStaticFsShadow, npmStaticPackageOfPath, reportNpmStaticOffender, setNpmStaticDeclarationOverloads, setNpmStaticPackages } from "./npm-static.js";
 import { isPrunedNpmReexport, planNpmStaticReexports } from "./npm-static-prune.js";
+import { isNpmStaticSubclassArgument } from "./npm-static-subtyping.js";
 import { npmStaticDeclarationReexports, npmStaticRuntimeClassTargets, parseNpmStaticDeclarationOverloads, parseNpmStaticDeclarationProperties } from "./npm-static-declaration-syntax.js";
 import type { FrontendServices } from "./services.js";
 import type { NpmStaticDeclarationOverloads, NpmStaticDeclarationProperties, NpmStaticOverloadSignature } from "./npm-static-declaration-syntax.js";
@@ -1392,10 +1393,12 @@ function nodeEsmSyntaxMarker7(sf: ts.SourceFile): ts.Node | null {
       found = node;
       return "stop";
     }
+    // Only await syntax needs an ancestor walk. Doing this for every node
+    // makes a deeply nested expression take quadratic time to classify.
     if (
-      !insideFunctionLike7(node) &&
       (ts.isAwaitExpression(node) ||
-        (ts.isForOfStatement(node) && node.awaitModifier !== undefined))
+        (ts.isForOfStatement(node) && node.awaitModifier !== undefined)) &&
+      !insideFunctionLike7(node)
     ) {
       found = node;
       return "stop";
@@ -2384,6 +2387,7 @@ function preflight7(load: LoadResult): {
         !nodeModulesJsSuppressed(d) &&
         !namespaceCalleeSuppressed(p, d) &&
         !inferredJsDiagnosticSuppressed(p, d) &&
+        !isNpmStaticSubclassArgument(p, d) &&
         !workspaceImplicitAnySuppressed(p, d) &&
         !jsdocTypeSuppressed(p, d, commentDup),
     );

@@ -684,3 +684,768 @@ export function astChildNames(kind: number): string {
     default: return "";
   }
 }
+
+/** Wire slot for a child property, or -1 when the kind has no such child. */
+export function astChildOrder(kind: number, name: string): number {
+  switch (kind) {
+    case 167: // FirstNode
+      switch (name) {
+        case "left": return 0;
+        case "right": return 1;
+        default: return -1;
+      }
+    case 168: // ComputedPropertyName
+    case 171: // Decorator
+    case 218: // ParenthesizedExpression
+    case 221: // DeleteExpression
+    case 222: // TypeOfExpression
+    case 223: // VoidExpression
+    case 224: // AwaitExpression
+    case 231: // SpreadElement
+    case 236: // NonNullExpression
+    case 245: // ExpressionStatement
+    case 254: // ReturnStatement
+    case 258: // ThrowStatement
+    case 284: // ExternalModuleReference
+    case 294: // JsxSpreadAttribute
+    case 305: // SpreadAssignment
+    case 348: // PartiallyEmittedExpression
+      switch (name) {
+        case "expression": return 0;
+        default: return -1;
+      }
+    case 169: // TypeParameter
+      switch (name) {
+        case "modifiers": return 0;
+        case "name": return 1;
+        case "constraint": return 2;
+        case "expression": return 3;
+        case "defaultType": return 4;
+        default: return -1;
+      }
+    case 170: // Parameter
+      switch (name) {
+        case "modifiers": return 0;
+        case "dotDotDotToken": return 1;
+        case "name": return 2;
+        case "questionToken": return 3;
+        case "type": return 4;
+        case "initializer": return 5;
+        default: return -1;
+      }
+    case 172: // PropertySignature
+    case 173: // PropertyDeclaration
+    case 303: // PropertyAssignment
+      switch (name) {
+        case "modifiers": return 0;
+        case "name": return 1;
+        case "postfixToken": return 2;
+        case "type": return 3;
+        case "initializer": return 4;
+        default: return -1;
+      }
+    case 174: // MethodSignature
+      switch (name) {
+        case "modifiers": return 0;
+        case "name": return 1;
+        case "postfixToken": return 2;
+        case "typeParameters": return 3;
+        case "parameters": return 4;
+        case "type": return 5;
+        default: return -1;
+      }
+    case 175: // MethodDeclaration
+      switch (name) {
+        case "modifiers": return 0;
+        case "asteriskToken": return 1;
+        case "name": return 2;
+        case "postfixToken": return 3;
+        case "typeParameters": return 4;
+        case "parameters": return 5;
+        case "type": return 6;
+        case "body": return 7;
+        default: return -1;
+      }
+    case 176: // ClassStaticBlockDeclaration
+      switch (name) {
+        case "modifiers": return 0;
+        case "body": return 1;
+        default: return -1;
+      }
+    case 177: // Constructor
+      switch (name) {
+        case "modifiers": return 0;
+        case "typeParameters": return 1;
+        case "parameters": return 2;
+        case "type": return 3;
+        case "body": return 4;
+        default: return -1;
+      }
+    case 178: // GetAccessor
+    case 179: // SetAccessor
+      switch (name) {
+        case "modifiers": return 0;
+        case "name": return 1;
+        case "typeParameters": return 2;
+        case "parameters": return 3;
+        case "type": return 4;
+        case "body": return 5;
+        default: return -1;
+      }
+    case 180: // CallSignature
+    case 181: // ConstructSignature
+    case 185: // FunctionType
+    case 318: // JSDocSignature
+      switch (name) {
+        case "typeParameters": return 0;
+        case "parameters": return 1;
+        case "type": return 2;
+        default: return -1;
+      }
+    case 182: // IndexSignature
+      switch (name) {
+        case "modifiers": return 0;
+        case "parameters": return 1;
+        case "type": return 2;
+        default: return -1;
+      }
+    case 183: // FirstTypeNode
+      switch (name) {
+        case "assertsModifier": return 0;
+        case "parameterName": return 1;
+        case "type": return 2;
+        default: return -1;
+      }
+    case 184: // TypeReference
+      switch (name) {
+        case "typeName": return 0;
+        case "typeArguments": return 1;
+        default: return -1;
+      }
+    case 186: // ConstructorType
+      switch (name) {
+        case "modifiers": return 0;
+        case "typeParameters": return 1;
+        case "parameters": return 2;
+        case "type": return 3;
+        default: return -1;
+      }
+    case 187: // TypeQuery
+      switch (name) {
+        case "exprName": return 0;
+        case "typeArguments": return 1;
+        default: return -1;
+      }
+    case 188: // TypeLiteral
+      switch (name) {
+        case "members": return 0;
+        default: return -1;
+      }
+    case 189: // ArrayType
+      switch (name) {
+        case "elementType": return 0;
+        default: return -1;
+      }
+    case 190: // TupleType
+    case 207: // ObjectBindingPattern
+    case 208: // ArrayBindingPattern
+    case 210: // ArrayLiteralExpression
+    case 276: // NamedImports
+    case 280: // NamedExports
+      switch (name) {
+        case "elements": return 0;
+        default: return -1;
+      }
+    case 191: // OptionalType
+    case 192: // RestType
+    case 197: // ParenthesizedType
+    case 199: // TypeOperator
+    case 308: // FirstJSDocNode
+    case 311: // JSDocNullableType
+    case 312: // JSDocNonNullableType
+    case 313: // JSDocOptionalType
+    case 314: // JSDocVariadicType
+      switch (name) {
+        case "type": return 0;
+        default: return -1;
+      }
+    case 193: // UnionType
+    case 194: // IntersectionType
+    case 299: // HeritageClause
+      switch (name) {
+        case "types": return 0;
+        default: return -1;
+      }
+    case 195: // ConditionalType
+      switch (name) {
+        case "checkType": return 0;
+        case "extendsType": return 1;
+        case "trueType": return 2;
+        case "falseType": return 3;
+        default: return -1;
+      }
+    case 196: // InferType
+      switch (name) {
+        case "typeParameter": return 0;
+        default: return -1;
+      }
+    case 200: // IndexedAccessType
+      switch (name) {
+        case "objectType": return 0;
+        case "indexType": return 1;
+        default: return -1;
+      }
+    case 201: // MappedType
+      switch (name) {
+        case "readonlyToken": return 0;
+        case "typeParameter": return 1;
+        case "nameType": return 2;
+        case "questionToken": return 3;
+        case "type": return 4;
+        case "members": return 5;
+        default: return -1;
+      }
+    case 202: // LiteralType
+      switch (name) {
+        case "literal": return 0;
+        default: return -1;
+      }
+    case 203: // NamedTupleMember
+      switch (name) {
+        case "dotDotDotToken": return 0;
+        case "name": return 1;
+        case "questionToken": return 2;
+        case "type": return 3;
+        default: return -1;
+      }
+    case 204: // TemplateLiteralType
+    case 229: // TemplateExpression
+      switch (name) {
+        case "head": return 0;
+        case "templateSpans": return 1;
+        default: return -1;
+      }
+    case 205: // TemplateLiteralTypeSpan
+      switch (name) {
+        case "type": return 0;
+        case "literal": return 1;
+        default: return -1;
+      }
+    case 206: // LastTypeNode
+      switch (name) {
+        case "argument": return 0;
+        case "attributes": return 1;
+        case "qualifier": return 2;
+        case "typeArguments": return 3;
+        default: return -1;
+      }
+    case 209: // BindingElement
+      switch (name) {
+        case "dotDotDotToken": return 0;
+        case "propertyName": return 1;
+        case "name": return 2;
+        case "initializer": return 3;
+        default: return -1;
+      }
+    case 211: // ObjectLiteralExpression
+    case 293: // JsxAttributes
+      switch (name) {
+        case "properties": return 0;
+        default: return -1;
+      }
+    case 212: // PropertyAccessExpression
+      switch (name) {
+        case "expression": return 0;
+        case "questionDotToken": return 1;
+        case "name": return 2;
+        default: return -1;
+      }
+    case 213: // ElementAccessExpression
+      switch (name) {
+        case "expression": return 0;
+        case "questionDotToken": return 1;
+        case "argumentExpression": return 2;
+        default: return -1;
+      }
+    case 214: // CallExpression
+      switch (name) {
+        case "expression": return 0;
+        case "questionDotToken": return 1;
+        case "typeArguments": return 2;
+        case "arguments": return 3;
+        default: return -1;
+      }
+    case 215: // NewExpression
+      switch (name) {
+        case "expression": return 0;
+        case "typeArguments": return 1;
+        case "arguments": return 2;
+        default: return -1;
+      }
+    case 216: // TaggedTemplateExpression
+      switch (name) {
+        case "tag": return 0;
+        case "questionDotToken": return 1;
+        case "typeArguments": return 2;
+        case "template": return 3;
+        default: return -1;
+      }
+    case 217: // TypeAssertionExpression
+      switch (name) {
+        case "type": return 0;
+        case "expression": return 1;
+        default: return -1;
+      }
+    case 219: // FunctionExpression
+    case 263: // FunctionDeclaration
+      switch (name) {
+        case "modifiers": return 0;
+        case "asteriskToken": return 1;
+        case "name": return 2;
+        case "typeParameters": return 3;
+        case "parameters": return 4;
+        case "type": return 5;
+        case "body": return 6;
+        default: return -1;
+      }
+    case 220: // ArrowFunction
+      switch (name) {
+        case "modifiers": return 0;
+        case "typeParameters": return 1;
+        case "parameters": return 2;
+        case "type": return 3;
+        case "equalsGreaterThanToken": return 4;
+        case "body": return 5;
+        default: return -1;
+      }
+    case 225: // PrefixUnaryExpression
+    case 226: // PostfixUnaryExpression
+      switch (name) {
+        case "operand": return 0;
+        default: return -1;
+      }
+    case 227: // BinaryExpression
+      switch (name) {
+        case "modifiers": return 0;
+        case "left": return 1;
+        case "type": return 2;
+        case "operatorToken": return 3;
+        case "right": return 4;
+        default: return -1;
+      }
+    case 228: // ConditionalExpression
+      switch (name) {
+        case "condition": return 0;
+        case "questionToken": return 1;
+        case "whenTrue": return 2;
+        case "colonToken": return 3;
+        case "whenFalse": return 4;
+        default: return -1;
+      }
+    case 230: // YieldExpression
+      switch (name) {
+        case "asteriskToken": return 0;
+        case "expression": return 1;
+        default: return -1;
+      }
+    case 232: // ClassExpression
+    case 264: // ClassDeclaration
+    case 265: // InterfaceDeclaration
+      switch (name) {
+        case "modifiers": return 0;
+        case "name": return 1;
+        case "typeParameters": return 2;
+        case "heritageClauses": return 3;
+        case "members": return 4;
+        default: return -1;
+      }
+    case 234: // ExpressionWithTypeArguments
+      switch (name) {
+        case "expression": return 0;
+        case "typeArguments": return 1;
+        default: return -1;
+      }
+    case 235: // AsExpression
+    case 239: // SatisfiesExpression
+      switch (name) {
+        case "expression": return 0;
+        case "type": return 1;
+        default: return -1;
+      }
+    case 237: // MetaProperty
+    case 275: // NamespaceImport
+    case 281: // NamespaceExport
+    case 309: // JSDocNameReference
+    case 319: // JSDocLink
+    case 320: // JSDocLinkCode
+    case 321: // JSDocLinkPlain
+      switch (name) {
+        case "name": return 0;
+        default: return -1;
+      }
+    case 238: // SyntheticExpression
+      switch (name) {
+        case "tupleNameSource": return 0;
+        default: return -1;
+      }
+    case 240: // TemplateSpan
+      switch (name) {
+        case "expression": return 0;
+        case "literal": return 1;
+        default: return -1;
+      }
+    case 242: // Block
+    case 269: // ModuleBlock
+      switch (name) {
+        case "statements": return 0;
+        default: return -1;
+      }
+    case 244: // FirstStatement
+      switch (name) {
+        case "modifiers": return 0;
+        case "declarationList": return 1;
+        default: return -1;
+      }
+    case 246: // IfStatement
+      switch (name) {
+        case "expression": return 0;
+        case "thenStatement": return 1;
+        case "elseStatement": return 2;
+        default: return -1;
+      }
+    case 247: // DoStatement
+      switch (name) {
+        case "statement": return 0;
+        case "expression": return 1;
+        default: return -1;
+      }
+    case 248: // WhileStatement
+    case 255: // WithStatement
+      switch (name) {
+        case "expression": return 0;
+        case "statement": return 1;
+        default: return -1;
+      }
+    case 249: // ForStatement
+      switch (name) {
+        case "initializer": return 0;
+        case "condition": return 1;
+        case "incrementor": return 2;
+        case "statement": return 3;
+        default: return -1;
+      }
+    case 250: // ForInStatement
+    case 251: // ForOfStatement
+      switch (name) {
+        case "awaitModifier": return 0;
+        case "initializer": return 1;
+        case "expression": return 2;
+        case "statement": return 3;
+        default: return -1;
+      }
+    case 252: // ContinueStatement
+    case 253: // BreakStatement
+      switch (name) {
+        case "label": return 0;
+        default: return -1;
+      }
+    case 256: // SwitchStatement
+      switch (name) {
+        case "expression": return 0;
+        case "caseBlock": return 1;
+        default: return -1;
+      }
+    case 257: // LabeledStatement
+      switch (name) {
+        case "label": return 0;
+        case "statement": return 1;
+        default: return -1;
+      }
+    case 259: // TryStatement
+      switch (name) {
+        case "tryBlock": return 0;
+        case "catchClause": return 1;
+        case "finallyBlock": return 2;
+        default: return -1;
+      }
+    case 261: // VariableDeclaration
+      switch (name) {
+        case "name": return 0;
+        case "exclamationToken": return 1;
+        case "type": return 2;
+        case "initializer": return 3;
+        default: return -1;
+      }
+    case 262: // VariableDeclarationList
+      switch (name) {
+        case "declarations": return 0;
+        default: return -1;
+      }
+    case 266: // TypeAliasDeclaration
+    case 345: // JSTypeAliasDeclaration
+      switch (name) {
+        case "modifiers": return 0;
+        case "name": return 1;
+        case "typeParameters": return 2;
+        case "type": return 3;
+        default: return -1;
+      }
+    case 267: // EnumDeclaration
+      switch (name) {
+        case "modifiers": return 0;
+        case "name": return 1;
+        case "members": return 2;
+        default: return -1;
+      }
+    case 268: // ModuleDeclaration
+      switch (name) {
+        case "modifiers": return 0;
+        case "name": return 1;
+        case "body": return 2;
+        default: return -1;
+      }
+    case 270: // CaseBlock
+      switch (name) {
+        case "clauses": return 0;
+        default: return -1;
+      }
+    case 271: // NamespaceExportDeclaration
+      switch (name) {
+        case "modifiers": return 0;
+        case "name": return 1;
+        default: return -1;
+      }
+    case 272: // ImportEqualsDeclaration
+      switch (name) {
+        case "modifiers": return 0;
+        case "name": return 1;
+        case "moduleReference": return 2;
+        default: return -1;
+      }
+    case 273: // ImportDeclaration
+    case 346: // JSImportDeclaration
+      switch (name) {
+        case "modifiers": return 0;
+        case "importClause": return 1;
+        case "moduleSpecifier": return 2;
+        case "attributes": return 3;
+        default: return -1;
+      }
+    case 274: // ImportClause
+      switch (name) {
+        case "name": return 0;
+        case "namedBindings": return 1;
+        default: return -1;
+      }
+    case 277: // ImportSpecifier
+    case 282: // ExportSpecifier
+      switch (name) {
+        case "propertyName": return 0;
+        case "name": return 1;
+        default: return -1;
+      }
+    case 278: // ExportAssignment
+      switch (name) {
+        case "modifiers": return 0;
+        case "type": return 1;
+        case "expression": return 2;
+        default: return -1;
+      }
+    case 279: // ExportDeclaration
+      switch (name) {
+        case "modifiers": return 0;
+        case "exportClause": return 1;
+        case "moduleSpecifier": return 2;
+        case "attributes": return 3;
+        default: return -1;
+      }
+    case 283: // MissingDeclaration
+      switch (name) {
+        case "modifiers": return 0;
+        default: return -1;
+      }
+    case 285: // JsxElement
+      switch (name) {
+        case "openingElement": return 0;
+        case "children": return 1;
+        case "closingElement": return 2;
+        default: return -1;
+      }
+    case 286: // JsxSelfClosingElement
+    case 287: // JsxOpeningElement
+      switch (name) {
+        case "tagName": return 0;
+        case "typeArguments": return 1;
+        case "attributes": return 2;
+        default: return -1;
+      }
+    case 288: // JsxClosingElement
+      switch (name) {
+        case "tagName": return 0;
+        default: return -1;
+      }
+    case 289: // JsxFragment
+      switch (name) {
+        case "openingFragment": return 0;
+        case "children": return 1;
+        case "closingFragment": return 2;
+        default: return -1;
+      }
+    case 292: // JsxAttribute
+    case 306: // EnumMember
+      switch (name) {
+        case "name": return 0;
+        case "initializer": return 1;
+        default: return -1;
+      }
+    case 295: // JsxExpression
+      switch (name) {
+        case "dotDotDotToken": return 0;
+        case "expression": return 1;
+        default: return -1;
+      }
+    case 296: // JsxNamespacedName
+      switch (name) {
+        case "namespace": return 0;
+        case "name": return 1;
+        default: return -1;
+      }
+    case 297: // CaseClause
+    case 298: // DefaultClause
+      switch (name) {
+        case "expression": return 0;
+        case "statements": return 1;
+        default: return -1;
+      }
+    case 300: // CatchClause
+      switch (name) {
+        case "variableDeclaration": return 0;
+        case "block": return 1;
+        default: return -1;
+      }
+    case 301: // ImportAttributes
+      switch (name) {
+        case "attributes": return 0;
+        default: return -1;
+      }
+    case 302: // ImportAttribute
+      switch (name) {
+        case "name": return 0;
+        case "value": return 1;
+        default: return -1;
+      }
+    case 304: // ShorthandPropertyAssignment
+      switch (name) {
+        case "modifiers": return 0;
+        case "name": return 1;
+        case "postfixToken": return 2;
+        case "type": return 3;
+        case "equalsToken": return 4;
+        case "objectAssignmentInitializer": return 5;
+        default: return -1;
+      }
+    case 307: // SourceFile
+      switch (name) {
+        case "statements": return 0;
+        case "endOfFileToken": return 1;
+        default: return -1;
+      }
+    case 315: // JSDoc
+      switch (name) {
+        case "comment": return 0;
+        case "tags": return 1;
+        default: return -1;
+      }
+    case 317: // JSDocTypeLiteral
+      switch (name) {
+        case "jsdocPropertyTags": return 0;
+        default: return -1;
+      }
+    case 322: // FirstJSDocTagNode
+    case 325: // JSDocDeprecatedTag
+    case 326: // JSDocPublicTag
+    case 327: // JSDocPrivateTag
+    case 328: // JSDocProtectedTag
+    case 329: // JSDocReadonlyTag
+    case 330: // JSDocOverrideTag
+      switch (name) {
+        case "tagName": return 0;
+        case "comment": return 1;
+        default: return -1;
+      }
+    case 323: // JSDocAugmentsTag
+    case 324: // JSDocImplementsTag
+      switch (name) {
+        case "tagName": return 0;
+        case "className": return 1;
+        case "comment": return 2;
+        default: return -1;
+      }
+    case 331: // JSDocCallbackTag
+    case 338: // JSDocTypedefTag
+      switch (name) {
+        case "tagName": return 0;
+        case "typeExpression": return 1;
+        case "name": return 2;
+        case "comment": return 3;
+        default: return -1;
+      }
+    case 332: // JSDocOverloadTag
+    case 334: // JSDocReturnTag
+    case 335: // JSDocThisTag
+    case 336: // JSDocTypeTag
+    case 341: // JSDocThrowsTag
+    case 342: // JSDocSatisfiesTag
+      switch (name) {
+        case "tagName": return 0;
+        case "typeExpression": return 1;
+        case "comment": return 2;
+        default: return -1;
+      }
+    case 333: // JSDocParameterTag
+    case 340: // JSDocPropertyTag
+      switch (name) {
+        case "tagName": return 0;
+        case "name": return 1;
+        case "typeExpression": return 2;
+        case "comment": return 3;
+        default: return -1;
+      }
+    case 337: // JSDocTemplateTag
+      switch (name) {
+        case "tagName": return 0;
+        case "constraint": return 1;
+        case "typeParameters": return 2;
+        case "comment": return 3;
+        default: return -1;
+      }
+    case 339: // JSDocSeeTag
+      switch (name) {
+        case "tagName": return 0;
+        case "nameExpression": return 1;
+        case "comment": return 2;
+        default: return -1;
+      }
+    case 343: // LastJSDocTagNode
+      switch (name) {
+        case "tagName": return 0;
+        case "importClause": return 1;
+        case "moduleSpecifier": return 2;
+        case "attributes": return 3;
+        case "comment": return 4;
+        default: return -1;
+      }
+    case 344: // SyntaxList
+      switch (name) {
+        case "children": return 0;
+        default: return -1;
+      }
+    case 349: // SyntheticReferenceExpression
+      switch (name) {
+        case "expression": return 0;
+        case "thisArg": return 1;
+        default: return -1;
+      }
+    default: return -1;
+  }
+}

@@ -52,6 +52,7 @@ static SCR_TL ScrDyn *scr_iterator_symbol;
 static ScrDyn *scr_builtin_iterator_method(const ScrDyn *value);
 static bool scr_builtin_iterable(const ScrDyn *value) {
   return value->kind == SCR_DYN_ARR || value->kind == SCR_DYN_STR || value->kind == SCR_DYN_BYTES ||
+    (value->kind == SCR_DYN_TYPED_REF && scr_dyn_isl_is_array(value)) ||
     (value->kind == SCR_DYN_HANDLE && (value->v.handle.tag == SCR_DYNH_ITERATOR ||
       scr_dyn_handle_ops_of(value)->iter_pack));
 }
@@ -800,6 +801,12 @@ ScrDyn *scr_dyn_map_seed_entries(const ScrDyn *src) {
   if (src->kind == SCR_DYN_NULL || src->kind == SCR_DYN_UNDEF) return scr_dyn_new_arr();
   if (src->kind == SCR_DYN_HANDLE && src->v.handle.tag == SCR_DYNH_MAP)
     return scr_native_map_pack(src->v.handle.ptr);
+  if (src->kind == SCR_DYN_TYPED_REF && scr_dyn_isl_is_array(src)) {
+    ScrDyn *view = scr_dyn_typed_ref_materialize(src);
+    if (!scr_exc_pending() && view->kind == SCR_DYN_ARR) return view;
+    scr_dyn_release(view);
+    if (scr_exc_pending()) return NULL;
+  }
   if (src->kind == SCR_DYN_HANDLE || src->kind == SCR_DYN_TYPED_REF || src->kind == SCR_DYN_JSVAL) {
     static const char message[] = "new Map(entries) over native non-array iterables has no lowering";
     scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
@@ -1656,6 +1663,15 @@ ScrDyn *scr_dyn_bytes_key_get(const ScrDyn *value, const ScrStr *key) {
   if (key->len == 10 && memcmp(key->data, "byteLength", 10) == 0) return scr_dyn_new_num(scr_bytes_byte_len(bytes));
   if (key->len == 10 && memcmp(key->data, "byteOffset", 10) == 0) return scr_dyn_new_num(scr_bytes_byte_offset(bytes));
   if (key->len == 6 && memcmp(key->data, "buffer", 6) == 0) return scr_array_buffer_from_bytes(bytes);
+  if (key->len == 11 && memcmp(key->data, "constructor", 11) == 0) {
+    /* Match the compiler's opaque JS builtin identity values. */
+    char token[64];
+    int length = snprintf(token, sizeof token, "[builtin %s]", value->buffer ? "Buffer" : scr_bytes_elem_name(bytes->elem));
+    ScrStr *name = scr_str_new(token, (size_t)length);
+    ScrDyn *result = scr_dyn_new_str(name);
+    scr_str_release(name);
+    return result;
+  }
   if (key->len && !(key->len > 1 && key->data[0] == '0')) {
     size_t index = 0;
     bool digits = true;
@@ -2099,6 +2115,9 @@ const ScrDynJsvalOps *scr_dyn_jsval_ops(void) {
 
 bool scr_dyn_isl_typeof_is(const ScrDyn *d, const char *name) {
   if (d->kind == SCR_DYN_TYPED_REF) {
+    if (d->v.typed_ref.type_key_len >= 7 &&
+        memcmp(d->v.typed_ref.type_key, "object:", 7) == 0)
+      return strcmp(name, "object") == 0;
     ScrDyn *materialized = scr_dyn_typed_ref_materialize(d);
     bool out = scr_dyn_isl_typeof_is(materialized, name);
     if (materialized->kind != SCR_DYN_JSVAL) {
@@ -2126,6 +2145,8 @@ bool scr_dyn_isl_typeof_is(const ScrDyn *d, const char *name) {
 
 bool scr_dyn_isl_is_array(const ScrDyn *d) {
   if (d->kind == SCR_DYN_TYPED_REF) {
+    if (d->v.typed_ref.type_key_len >= 7 &&
+        memcmp(d->v.typed_ref.type_key, "object:", 7) == 0) return false;
     ScrDyn *materialized = scr_dyn_typed_ref_materialize(d);
     bool out = materialized->kind == SCR_DYN_ARR ||
                scr_dyn_isl_is_array(materialized);
@@ -2460,24 +2481,30 @@ static void scr_native_iterator_release(void *ptr) {
 
 static ScrDyn *scr_native_iterator_next(ScrNativeIterator *iterator) {
   ScrDyn *source = iterator->source;
-  double length = !source ? 0 : source->kind == SCR_DYN_ARR ? (double)source->v.arr.len
-    : source->kind == SCR_DYN_BYTES ? (double)source->v.bytes->len : scr_str_utf16_len(source->v.str);
+  /* Native array capsules retain the live array, so refresh its view at each
+   * step rather than iterating a snapshot taken when the iterator opened. */
+  ScrDyn *view = source && source->kind == SCR_DYN_TYPED_REF ? scr_dyn_typed_ref_materialize(source) : NULL;
+  if (scr_exc_pending()) { scr_dyn_release(view); return NULL; }
+  ScrDyn *items = view ? view : source;
+  double length = !items ? 0 : items->kind == SCR_DYN_ARR ? (double)items->v.arr.len
+    : items->kind == SCR_DYN_BYTES ? (double)items->v.bytes->len : scr_str_utf16_len(items->v.str);
   bool done = !source || iterator->index >= length;
   ScrDyn *value;
   if (done) {
     value = scr_dyn_retain(scr_dyn_undefined());
     iterator->source = NULL;
     scr_dyn_release(source);
-  } else if (source->kind == SCR_DYN_ARR) {
-    value = scr_dyn_arr_at(source, iterator->index++);
-  } else if (source->kind == SCR_DYN_BYTES) {
-    value = scr_dyn_new_num(scr_bytes_get(source->v.bytes, iterator->index++));
+  } else if (items->kind == SCR_DYN_ARR) {
+    value = scr_dyn_arr_at(items, iterator->index++);
+  } else if (items->kind == SCR_DYN_BYTES) {
+    value = scr_dyn_new_num(scr_bytes_get(items->v.bytes, iterator->index++));
   } else {
-    ScrStr *point = scr_str_cp_at(source->v.str, iterator->index);
+    ScrStr *point = scr_str_cp_at(items->v.str, iterator->index);
     iterator->index += scr_str_utf16_len(point);
     value = scr_dyn_new_str(point);
     scr_str_release(point);
   }
+  scr_dyn_release(view);
   if (!value) return NULL;
   ScrDyn *result = scr_dyn_new_obj();
   scr_dyn_obj_set(result, "value", 5, value);
@@ -2544,7 +2571,7 @@ static ScrDyn *scr_native_iterator_new(ScrDyn *source) {
 static ScrDyn *scr_builtin_iterator_checked(int kind) {
   ScrDyn *self = scr_dyn_this_get();
   ScrDyn *result = NULL;
-  if (self->kind == kind)
+  if (self->kind == kind || (kind == SCR_DYN_ARR && self->kind == SCR_DYN_TYPED_REF && scr_dyn_isl_is_array(self)))
     result = scr_native_iterator_new(self);
   else {
     static const char message[] = "Borrowing this native iterator factory has no lowering";
@@ -2589,7 +2616,7 @@ ScrDyn *scr_dyn_array_values_function(void) {
 }
 
 static ScrDyn *scr_builtin_iterator_method(const ScrDyn *value) {
-  if (value->kind == SCR_DYN_ARR) return scr_dyn_array_values_function();
+  if (value->kind == SCR_DYN_ARR || (value->kind == SCR_DYN_TYPED_REF && scr_dyn_isl_is_array(value))) return scr_dyn_array_values_function();
   if (value->kind == SCR_DYN_BYTES) return scr_iterator_function(2, &scr_builtin_bytes_iterator_call, "values");
   if (value->kind == SCR_DYN_STR) return scr_iterator_function(3, &scr_builtin_string_iterator_call, "[Symbol.iterator]");
   if (value->kind == SCR_DYN_HANDLE && scr_dyn_handle_ops_of(value)->iter_pack)
@@ -2695,6 +2722,12 @@ ScrDyn *scr_dyn_array_from_iterator(const ScrDyn *source) {
 }
 
 ScrDyn *scr_dyn_symbol_key_get(const ScrDyn *value, const ScrDyn *key, bool optional) {
+  if (value->kind == SCR_DYN_TYPED_REF && scr_dyn_isl_is_array(value)) {
+    ScrDyn *view = scr_dyn_typed_ref_materialize(value);
+    ScrDyn *result = scr_exc_pending() ? NULL : scr_dyn_symbol_key_get(view, key, optional);
+    scr_dyn_release(view);
+    return result;
+  }
   if (value->kind == SCR_DYN_NULL || value->kind == SCR_DYN_UNDEF) {
     if (optional) return scr_dyn_retain(scr_dyn_undefined());
     ScrStr *name = key->v.symbol.render(key->v.symbol.value);
@@ -2787,6 +2820,13 @@ static bool scr_dyn_key_probe_computed(const ScrDyn *value, const ScrDyn *raw_ke
   if (key->kind != SCR_DYN_SYMBOL) {
     bool out = mode == 0 ? scr_dyn_has_key(value, key->v.str)
       : mode == 1 ? scr_dyn_has_own(value, key->v.str) : scr_dyn_property_is_enumerable(value, key->v.str);
+    scr_dyn_release(key);
+    return out;
+  }
+  if (value->kind == SCR_DYN_TYPED_REF && scr_dyn_isl_is_array(value)) {
+    ScrDyn *view = scr_dyn_typed_ref_materialize(value);
+    bool out = !scr_exc_pending() && scr_dyn_key_probe_computed(view, key, mode);
+    scr_dyn_release(view);
     scr_dyn_release(key);
     return out;
   }
@@ -3097,6 +3137,9 @@ bool scr_dyn_truthy(const ScrDyn *d) {
 ScrStr *scr_dyn_typeof(const ScrDyn *d) {
   const char *s;
   if (d->kind == SCR_DYN_TYPED_REF) {
+    if (d->v.typed_ref.type_key_len >= 7 &&
+        memcmp(d->v.typed_ref.type_key, "object:", 7) == 0)
+      return scr_str_new("object", 6);
     ScrDyn *materialized = scr_dyn_typed_ref_materialize(d);
     ScrStr *out = scr_dyn_typeof(materialized);
     scr_dyn_release(materialized);
@@ -5967,6 +6010,12 @@ static ScrDyn *scr_dyn_objwalk(const ScrDyn *v, ScrObjWalk mode) {
       scr_dyn_release(names);
     }
     if (!raw) return NULL;
+    if (raw->kind == SCR_DYN_TYPED_REF && scr_dyn_isl_is_array(raw)) {
+      ScrDyn *view = scr_dyn_typed_ref_materialize(raw);
+      scr_dyn_release(raw);
+      raw = view;
+      if (scr_exc_pending()) { scr_dyn_release(raw); return NULL; }
+    }
     if (raw->kind != SCR_DYN_ARR) {
       if (scr_dyn_to_primitive_result_is_object(raw)) scr_dyn_proxy_unsupported("array-like ownKeys results");
       else {
@@ -6122,6 +6171,12 @@ ScrDyn *scr_dyn_obj_keys(const ScrDyn *v) { return scr_dyn_objwalk(v, SCR_OBJWAL
  * Non-enumerable own names shadow names farther up the chain. */
 ScrDyn *scr_dyn_for_in_keys(const ScrDyn *v) {
   if (scr_dyn_class_reflection_fence(v)) return NULL;
+  if (v->kind == SCR_DYN_TYPED_REF && scr_dyn_isl_is_array(v)) {
+    ScrDyn *view = scr_dyn_typed_ref_materialize(v);
+    ScrDyn *keys = scr_exc_pending() ? NULL : scr_dyn_for_in_keys(view);
+    scr_dyn_release(view);
+    return keys;
+  }
   switch (v->kind) {
   case SCR_DYN_OBJ: {
     ScrDyn *keys = scr_dyn_new_arr();
@@ -6328,6 +6383,24 @@ ScrDyn *scr_dyn_copy_data_properties(ScrDyn *target, const ScrDyn *src) {
     scr_dyn_release(assigned);
     scr_dyn_release(copy);
   } else scr_dyn_assign_from(target, src, true);
+  return scr_exc_pending() ? NULL : scr_dyn_retain(target);
+}
+
+/* Compiler-owned native class views retain every property and its flags,
+ * including nonenumerable data, without invoking accessors. */
+ScrDyn *scr_dyn_copy_property_descriptors(ScrDyn *target, const ScrDyn *src) {
+  if (!src || src->kind == SCR_DYN_UNDEF) return scr_dyn_retain(target);
+  ScrDyn *keys = scr_dyn_obj_own_keys(src);
+  if (!keys) return NULL;
+  for (size_t i = 0; i < keys->v.arr.len; i++) {
+    ScrDyn *key = keys->v.arr.items[i];
+    ScrDyn *descriptor = scr_dyn_own_descriptor(src, key->v.str);
+    ScrDyn *result = descriptor ? scr_dyn_define_property(target, key, descriptor) : NULL;
+    scr_dyn_release(descriptor);
+    scr_dyn_release(result);
+    if (scr_exc_pending()) break;
+  }
+  scr_dyn_release(keys);
   return scr_exc_pending() ? NULL : scr_dyn_retain(target);
 }
 
@@ -6955,11 +7028,18 @@ static bool scr_ffi_signature_equal(const ScrDyn *entry, const ScrDyn *definitio
   if (!definition || definition->kind != SCR_DYN_OBJ) return false;
   ScrDyn *expected = scr_dyn_obj_get(entry, "arguments", 9);
   ScrDyn *actual = scr_dyn_obj_get(definition, "arguments", 9);
-  if (!actual || actual->kind != SCR_DYN_ARR || actual->v.arr.len != expected->v.arr.len ||
-      !scr_ffi_abi_equal(scr_dyn_obj_get(entry, "return", 6), scr_dyn_obj_get(definition, "return", 6))) return false;
-  for (size_t i = 0; i < actual->v.arr.len; i++)
-    if (!scr_ffi_abi_equal(actual->v.arr.items[i], expected->v.arr.items[i])) return false;
-  return true;
+  if (!actual) return false;
+  // JS object properties can retain a native array by reference. Read its
+  // current contents when checking the requested ABI, just like a dyn array.
+  ScrDyn *view = actual->kind == SCR_DYN_TYPED_REF
+    ? scr_dyn_typed_ref_materialize(actual) : scr_dyn_retain(actual);
+  bool matches = view && view->kind == SCR_DYN_ARR && view->v.arr.len == expected->v.arr.len &&
+    scr_ffi_abi_equal(scr_dyn_obj_get(entry, "return", 6), scr_dyn_obj_get(definition, "return", 6));
+  if (matches) for (size_t i = 0; i < view->v.arr.len; i++) {
+    if (!scr_ffi_abi_equal(view->v.arr.items[i], expected->v.arr.items[i])) { matches = false; break; }
+  }
+  scr_dyn_release(view);
+  return matches;
 }
 
 static void scr_ffi_callback_remove(ScrDyn *entry, ScrDyn *catalog) {

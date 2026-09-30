@@ -72,9 +72,9 @@ class-values.ts:69:16 - error SC1090: constructing through a union of class valu
      |                ^~~~~~~~~~
   70 | void picked;
 
-class-values.ts:75:12 - error SC1090: 'this' in static methods (it names the RECEIVER class — a dynamic value; reference the class by name instead) are not supported yet
+class-values.ts:79:56 - error SC1090: receiver-dependent static methods through a polymorphic class value is not supported yet
 
-  74 |   static self(): string {
-  75 |     return this.name;
-     |            ^~~~
-  76 |   }
+  78 | class OtherThis extends UsesThis {}
+  79 | function self(value: typeof UsesThis): string { return value.self(); }
+     |                                                        ^~~~~~~~~~
+  80 | console.log(self(OtherThis));

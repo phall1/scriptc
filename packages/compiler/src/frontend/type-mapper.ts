@@ -1040,17 +1040,25 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
   // user aliases with the same names on the normal structural path.
   {
     const parseArgsSym = widened.getAliasSymbol() ?? widened.getSymbol();
-    if (
-      parseArgsSym &&
-      PARSE_ARGS_DYN_TYPES.has(parseArgsSym.name) &&
-      checker.declarationsOf(parseArgsSym).some(
-        (d) =>
-          ctx.isStdlibFile(d.getSourceFile()) &&
-          isDeclaredInAmbientModule(d as ts.Declaration, "util"),
-      )
-    ) {
-      return DYN;
-    }
+    const belongs = (declaration: ts.Node): boolean => {
+      if (!ctx.isStdlibFile(declaration.getSourceFile())) return false;
+      let family = false;
+      for (let node: ts.Node | undefined = declaration; node; node = node.parent) {
+        if ((ts.isTypeAliasDeclaration(node) || ts.isInterfaceDeclaration(node)) &&
+          PARSE_ARGS_DYN_TYPES.has(node.name.text)) family = true;
+        if (ts.isModuleDeclaration(node) && ts.isStringLiteral(node.name)) {
+          return family && (node.name.text === "util" || node.name.text === "node:util");
+        }
+      }
+      return false;
+    };
+    if (parseArgsSym && PARSE_ARGS_DYN_TYPES.has(parseArgsSym.name) &&
+      checker.declarationsOf(parseArgsSym).some(belongs)) return DYN;
+    // ReturnType and instantiated conditional types can erase the alias.
+    // Require every member to retain the util declaration provenance so
+    // unrelated records with similar property names keep their own layout.
+    const members = checker.getPropertiesOfType(widened);
+    if (members.length > 0 && members.every((member) => checker.declarationsOf(member).some(belongs))) return DYN;
   }
   // The lib's BOXED wrapper interfaces used as TYPES (`const n: Number =
   // 5`): every value such a slot can hold IS the primitive — `new
@@ -3542,13 +3550,19 @@ export function isUnitOnlyTsType(t: ts.Type, resolveTypeParam?: TypeParamResolve
  * admits, `(() => void) | undefined`) so the interned union is IDENTICAL
  * to what mapping the checker's own `T | undefined` produces. */
 export function withUndefinedArm(t: IrType, unions: UnionRegistry): IrType | null {
+  return withUnitArm(t, "undefinedT", unions);
+}
+
+/** Preserve a nullish runtime value that JavaScript inference omitted. */
+export function withUnitArm(t: IrType, kind: "nullT" | "undefinedT", unions: UnionRegistry): IrType | null {
+  const unit: IrType = { kind };
   if (t.kind === "jsval") return t;
   if (t.kind === "union") {
     const def = unions.get(t.unionId);
     if (!def) return null;
     if (def.arms.some((a) => a.kind === "date")) return null;
-    if (def.arms.some((a) => a.kind === "undefinedT")) return t;
-    const arms = [...def.arms, UNDEFINED_T];
+    if (def.arms.some((a) => a.kind === kind)) return t;
+    const arms = [...def.arms, unit];
     arms.sort((a, b) => (typeKey(a) < typeKey(b) ? -1 : 1));
     return { kind: "union", unionId: unions.transform(def, arms) };
   }
@@ -3560,7 +3574,7 @@ export function withUndefinedArm(t: IrType, unions: UnionRegistry): IrType | nul
   ) {
     return null;
   }
-  const arms = [t, UNDEFINED_T];
+  const arms = [t, unit];
   arms.sort((a, b) => (typeKey(a) < typeKey(b) ? -1 : 1));
   return { kind: "union", unionId: unions.intern(arms) };
 }

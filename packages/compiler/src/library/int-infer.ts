@@ -613,8 +613,7 @@ function globalEffectsOf(mod: IrModule): GlobalEffects {
         default:
           break;
       }
-      for (const key of Object.keys(e) as (keyof typeof e)[]) {
-        const v = e[key] as unknown;
+      for (const [key, v] of Object.entries(e as unknown as Record<string, unknown>)) {
         if (Array.isArray(v)) {
           for (const item of v) {
             if (item !== null && typeof item === "object" && "kind" in (item as object)) {
@@ -646,7 +645,7 @@ function globalEffectsOf(mod: IrModule): GlobalEffects {
         default:
           break;
       }
-      for (const v of Object.values(s) as unknown[]) {
+      for (const v of Object.values(s as unknown as Record<string, unknown>)) {
         if (Array.isArray(v)) {
           for (const item of v) {
             if (item !== null && typeof item === "object" && typeof (item as { kind?: unknown }).kind === "string") {
@@ -684,7 +683,7 @@ function globalEffectsOf(mod: IrModule): GlobalEffects {
           unknown.add(name);
           changed = true;
         }
-        for (const g of writes.get(callee) ?? []) {
+        for (const g of writes.get(callee) ?? new Set<string>()) {
           if (!w.has(g)) {
             w.add(g);
             changed = true;
@@ -936,7 +935,8 @@ class FnAnalyzer {
         // could select. Multiple classified fields intentionally emit
         // independent obligations (their classes and paths may differ).
         if (s.overflowOnly !== true) {
-          for (const slot of this.cfg.records.get(s.shapeId)?.values() ?? []) {
+          const recordSlots = this.cfg.records.get(s.shapeId);
+          for (const slot of recordSlots === undefined ? [] : [...recordSlots.values()]) {
             this.emitRecordSlot(v, slot, s.loc);
           }
         }
@@ -1024,7 +1024,7 @@ class FnAnalyzer {
     const assigned = new Set<string>();
     const visitStmt = (s: IrStmt): void => {
       if (s.kind === "assign" || s.kind === "varDecl") assigned.add(s.localId);
-      for (const v of Object.values(s) as unknown[]) {
+      for (const v of Object.values(s as unknown as Record<string, unknown>)) {
         if (Array.isArray(v)) {
           for (const item of v) {
             if (item !== null && typeof item === "object" && typeof (item as { kind?: unknown }).kind === "string") {
@@ -1046,7 +1046,7 @@ class FnAnalyzer {
     const visitExpr = (e: IrExpr): void => {
       if (e.kind === "assignExpr" || e.kind === "incDec") assigned.add(e.localId);
       if (e.kind === "seqExpr") e.stmts.forEach(visitStmt);
-      for (const v of Object.values(e) as unknown[]) {
+      for (const v of Object.values(e as unknown as Record<string, unknown>)) {
         if (Array.isArray(v)) {
           for (const item of v) {
             if (item !== null && typeof item === "object" && typeof (item as { kind?: unknown }).kind === "string") {
@@ -1579,7 +1579,8 @@ class FnAnalyzer {
           });
         }
         this.havocCall(e.callee, env);
-        if (slots?.ret != null) return classSeed(slots.ret);
+        const returnSlot = slots?.ret;
+        if (returnSlot != null) return classSeed(returnSlot);
         return { ...TOP };
       }
       case "unionWrap": {
@@ -1716,7 +1717,7 @@ function typeContainsFunc(t: unknown): boolean {
  * order for the shapes we don't model precisely). */
 function childExprs(e: IrExpr): IrExpr[] {
   const out: IrExpr[] = [];
-  for (const [key, v] of Object.entries(e)) {
+  for (const [key, v] of Object.entries(e as unknown as Record<string, unknown>)) {
     if (key === "type") continue;
     if (Array.isArray(v)) {
       for (const item of v) {

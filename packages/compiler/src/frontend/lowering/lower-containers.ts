@@ -1,3 +1,4 @@
+import { objectEnumerationReceiver } from "./object-enumeration-receiver.js";
 import { InternalCompilerError } from "../../errors.js";
 /* Container-surface call lowering: array methods (including the HOF family
  * map/filter/forEach with their synthesized helper functions), Map/Set
@@ -2751,7 +2752,17 @@ export function tryLowerNumericIndexRead(lowerer: Lowerer, operand: IrExpr, loc:
     }
     const receiver = lowerer.lowerExpr(access.expression);
     const argNode = call.arguments[0]!;
-    const fnArg = lowerer.lowerExpr(argNode);
+    let fnArg = lowerer.lowerExpr(argNode);
+    // Reusable JS comparators often accept checked values. Adapt the array's
+    // element ABI just as other array callbacks do before sorting.
+    if (fnArg.type.kind === "func" && fnArg.type.params.length <= 2 &&
+        fnArg.type.params.every((param) => lowerer.coercibleValue(elem, param))) {
+      // Arithmetic on inferred JS values retains a checked result because
+      // it can produce BigInt. The sort callback still requires a number.
+      const result = fnArg.type.ret.kind === "dyn" && isJsSourceFile(argNode.getSourceFile()) ? F64 : fnArg.type.ret;
+      const expected = funcOf(fnArg.type.params.map(() => elem), result);
+      if (!typeEquals(fnArg.type, expected)) fnArg = lowerer.coerceToExpected(fnArg, expected);
+    }
     // The comparator receives exactly (a, b); declaring a prefix is
     // ordinary TS. Its result must be number (the spec coerces arbitrary
     // results — no lowering for that).
@@ -6001,7 +6012,8 @@ function mapFromSeedValue(lowerer: Lowerer, seed: IrExpr, mapT: IrType & { kind:
     shape: IrRecordShape,): IrExpr {
     const resultT = lowerer.irTypeOf(call);
     if (resultT.kind !== "array") lowerer.badType(call, lowerer.typeOf(call)); // defensive
-    return objectIterOverIndexShape(lowerer, call, member, argIr, shape, lowerer.lowerExpr(call.arguments[0]!), resultT, locOf(call));
+    return objectIterOverIndexShape(lowerer, call, member, argIr, shape,
+      objectEnumerationReceiver(lowerer, lowerer.lowerExpr(call.arguments[0]!), argIr, locOf(call)), resultT, locOf(call));
   }
 
   /** The construction core, receiver/result pre-resolved — `node` anchors

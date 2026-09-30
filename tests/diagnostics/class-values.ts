@@ -69,10 +69,12 @@ let pick: typeof Left | typeof Right = Left;
 const picked = new pick();
 void picked;
 
-// `this` in a static method names the RECEIVER class — a dynamic value.
+// A polymorphic class value cannot specialize a receiver-dependent method.
 class UsesThis {
   static self(): string {
     return this.name;
   }
 }
-console.log(UsesThis.self());
+class OtherThis extends UsesThis {}
+function self(value: typeof UsesThis): string { return value.self(); }
+console.log(self(OtherThis));

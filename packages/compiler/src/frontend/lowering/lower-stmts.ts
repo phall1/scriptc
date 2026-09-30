@@ -23,6 +23,9 @@ import { bindingContextualGenericFnNodeOf, bindingGenericFnAliasInfoOf, bindingG
 import { isMixinFnBinding, mixinResultBindingClassOf } from "./lower-mixins.js";
 import type { ClassInfo, ClassIteratorInfo } from "./lower-classes.js";
 import { isCompiledPrototypeMember } from "./class-prototypes.js";
+import { classStaticDataFor } from "./class-static-data.js";
+import { objectFactorySignature } from "./object-factory-new.js";
+import { lowerClassCallbackAssign } from "./class-callbacks.js";
 import { genericIfaceBindingKeepsClass, staticFieldWriteTarget } from "./lower-classes.js";
 import { lowerStreamUnderscoreAssign, streamClassAliasDecl } from "./lower-stream.js";
 import { lowerHttpResPropertyAssignment, lowerHttpServerTimeoutAssignment, lowerServerCloseOverrideAssignment } from "./lower-server.js";
@@ -37,7 +40,7 @@ import { isNativeProxyInitializer } from "./expressions/native-proxy.js";
 import { tryLowerExpression } from "./expressions/try-lower-expression.js";
 import { lowerUnionFieldWrite } from "./expressions/union-field-write.js";
 import { UNSUPPORTED, checkerPanicDiag, isCheckerPanic, requiresDynamicDiag } from "../../diagnostics/diagnostic.js";
-import { isParseArgsDynTypeName, isUnitOnlyTsType, unitOnlyUnion } from "../type-mapper.js";
+import { isParseArgsDynTypeName, isUnitOnlyTsType, jsOpenObjectType, unitOnlyUnion } from "../type-mapper.js";
 import { canonicalBuiltinModule } from "../builtin-modules.js";
 import { isRelativeSpecifier } from "../workspace-registry.js";
 import { probeNodeRequireRefusal } from "../npm.js";
@@ -3334,9 +3337,9 @@ export function isParseArgsDynCheckerType(lowerer: Lowerer, type: ts.Type): bool
     );
   }
 
-/** For-loop initializers evaluate left to right in the loop's head scope.
- * The backend copies each captured lexical binding before the condition
- * and before every update. Var declarations assign function-scoped slots. */
+/** For-loop initializers evaluate declarators from left to right. The LLVM
+ * loop emitter keeps their scope alive and freshens every captured let
+ * binding before the first condition and each subsequent update. */
   export function lowerVarDeclList(lowerer: Lowerer, list: ts.VariableDeclarationList): IrStmt | null {
     if ((list.flags & ts.NodeFlags.Using) !== 0) {
       lowerer.unsupported("SC1090", list, "'using' declarations (dispose-at-scope-exit semantics)");
@@ -3840,9 +3843,9 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
       type = DYN;
     }
     const preservesObjectIdentity = init.type.kind === "dyn" &&
-      (inferredObjectType?.kind === "record" ||
-        (isJsSourceFile(decl.getSourceFile()) && inferredObjectType?.kind === "date") ||
-        (isJsSourceFile(decl.getSourceFile()) && inferredObjectType?.kind === "func") ||
+      (inferredObjectType?.kind === "record" || inferredObjectType?.kind === "array" ||
+        (isJsSourceFile(decl.getSourceFile()) && inferredObjectType !== null &&
+          (inferredObjectType.kind === "date" || inferredObjectType.kind === "func" || jsOpenObjectType(decl, inferredObjectType, lowerer.shapes, lowerer.unions).kind === "dyn")) ||
         (isJsSourceFile(decl.getSourceFile()) && inferredObjectType !== null &&
           (isUnitType(inferredObjectType) || inferredObjectType.kind === "union" && lowerer.unions.get(inferredObjectType.unionId)?.arms.every(isUnitType)))) &&
       !decl.type && !hasJsTypeAnnotation(decl);
@@ -3975,6 +3978,9 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
     }
     if (!type) lowerer.badType(decl.name, lowerer.typeOf(decl.name));
     let settledType: IrType = type;
+    if (!isLet && isJsSourceFile(decl.getSourceFile()) && !hasJsTypeAnnotation(decl) && decl.initializer && ts.isNewExpression(decl.initializer)) {
+      settledType = objectFactorySignature(lowerer, decl.initializer)?.returnType ?? settledType;
+    }
     const arithmeticType = decl.initializer ? lowerer.runtimeOptionalArithmeticTypes.get(decl.initializer) : undefined;
     const isStringArithmeticUnion = (t: IrType): boolean => {
       if (t.kind !== "union") return false;
@@ -5189,13 +5195,20 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
           // SUBCLASS name (`D.x = v` creates an OWN property on D in JS —
           // different storage) and through class VALUES (the same dynamic
           // story) are named fences, never a silently-wrong global write.
-          if (!expr.left.questionDotToken && ts.isIdentifier(expr.left.expression)) {
+          if (!expr.left.questionDotToken && (ts.isIdentifier(expr.left.expression) || expr.left.expression.kind === ts.SyntaxKind.ThisKeyword)) {
             // The receiver must BE the class exactly (its name, or a
             // const binding holding a class expression) — a general class
             // VALUE could hold a subclass, where JS creates an own
             // property instead of writing this storage.
             const classInfo = lowerer.exactClassOfReceiver(expr.left.expression);
             if (classInfo) {
+              const data = classStaticDataFor(lowerer, classInfo, expr.left.name.text, locOf(expr.left));
+              if (data) {
+                const loc = locOf(expr);
+                const key: IrExpr = { kind: "strLit", value: expr.left.name.text, type: STRING, loc };
+                const value = lowerer.lowerExprExpecting(expr.right, DYN);
+                return { kind: "exprStmt", expr: { kind: "libCall", fn: "dyn.keySet", args: [data, key, value], type: VOID, loc }, loc };
+              }
               const found = lowerer.findStaticOn(classInfo, expr.left.name.text);
               if (found?.field !== undefined) {
                 if (found.declarer !== classInfo) {
@@ -5320,6 +5333,8 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
             const value = lowerer.lowerExprExpecting(expr.right, target.fieldType);
             return lowerer.fieldSetStmt(target, value, locOf(expr), expr.left);
           }
+          const callback = lowerClassCallbackAssign(lowerer, expr);
+          if (callback) return callback;
           // A write to an ABSTRACT property through an abstract-typed
           // receiver: the read fence's write twin (the declaration is
           // erased at runtime — no shared slot exists to write).
@@ -7185,7 +7200,9 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
         return forValues(tmp.id, [write, ...body]);
       }
       const local = lowerer.declareLocal(decl.name, decl.name.text, elemValueT, isLet);
-      if (!typeEquals(elemValueT, sourceT.elem)) {
+      const declaredElement = lowerer.mapTypeOf(lowerer.typeOf(decl.name));
+      if (!typeEquals(elemValueT, sourceT.elem) ||
+          (declaredElement !== null && lowerer.runtimeOptionalWidening(elemValueT, declaredElement) !== null)) {
         const root = lowerer.runtimeOptionalRootOf(local);
         lowerer.runtimeOptionalLocals.add(root);
         lowerer.runtimeOptionalStorageLocals.add(root);

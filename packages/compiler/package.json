@@ -18,7 +18,13 @@
     "./scriptc.d.ts": "./ambient/scriptc.d.ts",
     "./scriptc-overrides.d.ts": "./ambient/scriptc-overrides.d.ts",
     "./scriptc-node-fallback.d.ts": "./ambient/scriptc-node-fallback.d.ts",
-    "./surface-manifest.json": "./surface-manifest.json"
+    "./surface-manifest.json": "./surface-manifest.json",
+    "./cli/command": "./dist/cli/command.js",
+    "./cli/host": "./dist/cli/host.js",
+    "./cli/paths": "./dist/cli/paths.js",
+    "./cli/output-options": "./dist/cli/output-options.js",
+    "./cli/usage": "./dist/cli/usage.js",
+    "./cli/wasi-runner": "./dist/cli/wasi-runner.js"
   },
   "files": [
     "dist",

@@ -72,6 +72,7 @@ export interface DynHost extends WalkerHost {
   unitInstanceRef(unionId: string, tag: number): string;
   liveDynRefAdapter(t: IrType): { snapshot: string; commit: string };
   isErrorClass(className: string): boolean;
+  classSubtypes(className: string): readonly string[];
 }
 
 const FN_ATTRS = "#0";
@@ -326,6 +327,29 @@ export class LlDyn {
 
   /* ── dynMatchHelper (walkers.ts, ported) ──────────────────────── */
 
+  /** Native subclass capsules also satisfy a checked base-class slot.
+   * Class layouts share their base prefix, so unboxing retains the same
+   * pointer and virtual dispatch still uses the object's original vtable. */
+  private typedRefMatches(B: BlockBuilder, t: IrType): string {
+    this.host.declare(`declare zeroext i1 @scr_dyn_typed_ref_is(ptr, ptr, ${this.S})`);
+    const types: IrType[] = isDynTypedRefType(t)
+      ? this.host.classSubtypes(t.className).map((className) => ({ kind: "object", className }))
+      : [t];
+    let matched = "false";
+    for (const type of types) {
+      const key = typeKey(type);
+      const next = B.tmp();
+      B.line(`${next} = call zeroext i1 @scr_dyn_typed_ref_is(ptr %d, ptr ${this.host.cstr(key)}, ${this.S} ${Buffer.byteLength(key, "utf8")})`);
+      if (matched === "false") matched = next;
+      else {
+        const either = B.tmp();
+        B.line(`${either} = or i1 ${matched}, ${next}`);
+        matched = either;
+      }
+    }
+    return matched;
+  }
+
   /** `sc_dm_<n>(ptr d) -> i1` — does this dyn fit T? Never throws. */
   dynMatchHelper(t: IrType): string {
     const key = typeKey(t);
@@ -335,11 +359,7 @@ export class LlDyn {
     this.dynMatchers.set(key, name);
     const B = new BlockBuilder();
     if (isRefCounted(t) && t.kind !== "dyn") {
-      this.host.declare(`declare zeroext i1 @scr_dyn_typed_ref_is(ptr, ptr, ${this.S})`);
-      const matched = B.tmp();
-      B.line(
-        `${matched} = call zeroext i1 @scr_dyn_typed_ref_is(ptr %d, ptr ${this.host.cstr(key)}, ${this.S} ${Buffer.byteLength(key, "utf8")})`,
-      );
+      const matched = this.typedRefMatches(B, t);
       const lRef = B.newLabel("dm.tr");
       const lNext = B.newLabel("dm.nt");
       B.condBr(matched, lRef, lNext);
@@ -659,12 +679,8 @@ export class LlDyn {
       return name;
     }
     if (isRefCounted(t) && t.kind !== "dyn") {
-      host.declare(`declare zeroext i1 @scr_dyn_typed_ref_is(ptr, ptr, ${host.sizeType})`);
       host.declare(`declare ptr @scr_dyn_typed_ref_unbox(ptr)`);
-      const matched = B.tmp();
-      B.line(
-        `${matched} = call zeroext i1 @scr_dyn_typed_ref_is(ptr %d, ptr ${host.cstr(key)}, ${host.sizeType} ${Buffer.byteLength(key, "utf8")})`,
-      );
+      const matched = this.typedRefMatches(B, t);
       const lRef = B.newLabel("dc.tr");
       const lNext = B.newLabel("dc.nt");
       B.condBr(matched, lRef, lNext);

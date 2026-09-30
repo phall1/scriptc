@@ -8,6 +8,7 @@ import { MAY_THROW_LIB_FNS } from "../../ir/ir.js";
 import { LlvmUnsupportedError } from "./unsupported.js";
 import type { LlvmEmitterContext, LibCallExpr, LibCallPrefix, LlValue } from "./expr-context.js";
 import { LIB_FN_SYMS, USES_TIMERS_LIB_FNS } from "./lib-shared.js";
+import { DYN_KIND } from "./dyn.js";
 
 export function emitAssertInspectLibCall(host: LlvmEmitterContext, e: LibCallExpr): LlValue {
     const B = host.B;
@@ -75,6 +76,39 @@ export function emitIoLibCall(host: LlvmEmitterContext, e: LibCallExpr): LlValue
 
 export function emitGenericLibCall(host: LlvmEmitterContext, e: LibCallExpr): LlValue {
     const B = host.B;
+    if (e.fn === "dyn.typedRefIs") {
+      // A literal brand cannot replace the receiver while being evaluated.
+      // Generated class dispatch uses these probes repeatedly on one local.
+      const value = e.args[1]!.kind === "strLit" ? host.emitReadReceiver(e.args[0]!) : host.emitExpr(e.args[0]!);
+      const key = host.emitExpr(e.args[1]!);
+      // Expose the capsule tag to LLVM so class dispatch can skip the whole
+      // chain of brand comparisons for ordinary checked-dynamic values.
+      // Keep the runtime's null handling and evaluate both operands once.
+      const slot = B.slot();
+      B.entryAllocas.push(`${slot} = alloca i1`);
+      B.line(`store i1 false, ptr ${slot}`);
+      const present = B.tmp();
+      const inspect = B.newLabel("brand.inspect");
+      const capsule = B.newLabel("brand.capsule");
+      const done = B.newLabel("brand.done");
+      B.line(`${present} = icmp ne ptr ${value.name}, null`);
+      B.condBr(present, inspect, done);
+      B.startBlock(inspect);
+      const kind = host.dynKind(value.name);
+      const typed = B.tmp();
+      B.line(`${typed} = icmp eq i32 ${kind}, ${DYN_KIND.TYPED_REF}`);
+      B.condBr(typed, capsule, done);
+      B.startBlock(capsule);
+      host.declare("declare zeroext i1 @scr_dyn_typed_ref_is_key(ptr, ptr) memory(read)");
+      const matches = B.tmp();
+      B.line(`${matches} = call zeroext i1 @scr_dyn_typed_ref_is_key(ptr ${value.name}, ptr ${key.name})`);
+      B.line(`store i1 ${matches}, ptr ${slot}`);
+      B.br(done);
+      B.startBlock(done);
+      const result = B.tmp();
+      B.line(`${result} = load i1, ptr ${slot}`);
+      return { name: result, type: e.type };
+    }
     if (e.fn === "crypto.randomBytesCb" || e.fn === "crypto.pbkdf2Cb") {
       host.usesTimers = true;
       const args = e.args.map((arg) => host.emitExpr(arg));

@@ -41,8 +41,8 @@ export interface FrontendSemanticMatch {
  * named artifacts and a generated directory's formerly-missing observation
  * are excluded. */
 export interface FrontendInputExclusions {
-  outputPaths?: Iterable<string>;
-  outputDirectories?: Iterable<string>;
+  outputPaths?: readonly string[];
+  outputDirectories?: readonly string[];
 }
 
 function frontendSourceDigest(text: string): string {
@@ -73,6 +73,7 @@ function systemRealpath(path: string): string {
 }
 
 const activeTracker = new AsyncLocalStorage<FrontendInputTracker>();
+let synchronousTracker: FrontendInputTracker | undefined;
 
 export class FrontendInputTracker {
   private readonly probes = new Map<string, FrontendInputProbe>();
@@ -86,6 +87,23 @@ export class FrontendInputTracker {
       for (const probe of this.probes.values()) parent.record(probe);
       return result;
     });
+  }
+
+  /** The native frontend is synchronous; its typed result need not cross an
+   * async-context callback boundary. Nested trackers still propagate probes. */
+  runSynchronous<T>(fn: () => T): T {
+    const parent = synchronousTracker;
+    // Install the active tracker so filesystem callbacks can record probes.
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    synchronousTracker = this;
+    try { return fn(); }
+    finally {
+      synchronousTracker = parent;
+      if (parent !== undefined && parent !== this) {
+        for (const probe of this.probes.values()) parent.record(probe);
+        if (!this.stable) parent.markUnstable();
+      }
+    }
   }
 
   record(probe: FrontendInputProbe): void {
@@ -140,13 +158,13 @@ export class FrontendInputTracker {
 }
 
 function record(probe: FrontendInputProbe): void {
-  activeTracker.getStore()?.record(probe);
+  (synchronousTracker ?? activeTracker.getStore())?.record(probe);
 }
 
 /** Mark the active frontend as unsafe to persist because an exact host query
  * bypassed the tracked filesystem wrappers. No-op outside a frontend run. */
 export function markFrontendInputsUnstable(): void {
-  activeTracker.getStore()?.markUnstable();
+  (synchronousTracker ?? activeTracker.getStore())?.markUnstable();
 }
 
 export function trackedReadFile(path: string): string | null {
@@ -411,11 +429,11 @@ export function frontendInputsSemanticallyMatch(
 /** Pure validator used by the persistent-cache reader before any path probes. */
 export function validFrontendInputSnapshot(snapshot: unknown): snapshot is FrontendInputSnapshot {
   if (snapshot === null || typeof snapshot !== "object") return false;
-  const candidate = snapshot as Partial<FrontendInputSnapshot>;
+  const candidate = snapshot as { version?: unknown; stable?: unknown; probes?: unknown };
   if (candidate.version !== 1 || candidate.stable !== true || !Array.isArray(candidate.probes)) return false;
   return candidate.probes.every((probe) => {
     if (probe === null || typeof probe !== "object") return false;
-    const value = probe as Partial<FrontendInputProbe>;
+    const value = probe as Record<string, unknown>;
     if (typeof value.path !== "string" || typeof value.op !== "string") return false;
     switch (value.op) {
       case "file":

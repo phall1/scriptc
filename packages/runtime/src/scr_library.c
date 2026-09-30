@@ -45,6 +45,13 @@ static SCR_TL ScrLibSinkFn scr_library_sink = NULL;
 static SCR_TL void *scr_library_sink_ctx = NULL;
 static SCR_TL bool scr_library_poisoned = false;
 
+#ifdef __wasi__
+/* Reactor hosts receive the same structured panic bytes as native sinks.
+ * A host exception may unwind out of Wasm; poison is set before delivery. */
+__attribute__((import_module("scriptc"), import_name("panic")))
+extern void scr_wasm_panic(const uint8_t *message, size_t length);
+#endif
+
 void scr_library_set_sink(ScrLibSinkFn fn, void *ctx) {
   /* Latest registration wins; re-registration is permitted before a trap.
    * Deliberately NOT poison-guarded: a pure store, touching no runtime
@@ -114,7 +121,7 @@ void scr_library_callback_end(void) {
  * entry prologue below), and the remediation is the profile's for that
  * code when the program TU's overlay table declares one. */
 
-#if defined(__GNUC__) || defined(__clang__)
+#if !defined(__wasi__) && (defined(__GNUC__) || defined(__clang__))
 #define SCR_TRAP_ADDR() ((uint64_t)(uintptr_t)__builtin_return_address(0))
 #else
 #define SCR_TRAP_ADDR() ((uint64_t)0)
@@ -214,9 +221,13 @@ static _Noreturn void scr_library_trap_deliver(const char *msg, size_t len, uint
     msg = buf;
     len = n;
   }
+#ifdef __wasi__
+  scr_wasm_panic((const uint8_t *)msg, len);
+#else
   if (scr_library_sink != NULL) {
     scr_library_sink(scr_library_sink_ctx, (const uint8_t *)msg, len, addr);
   }
+#endif
   abort();
 }
 

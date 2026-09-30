@@ -23,7 +23,7 @@ import {
   filterExistingWorktreePaths,
   workspaceResetCommand,
 } from "./worktree-files.mjs";
-import { REMOTE_COMMAND_PENDING, sandboxCommand, sandboxStatusCommand, shellQuote } from "./sandbox-command.mjs";
+import { REMOTE_COMMAND_PENDING, sandboxCommand, sandboxStatusCommand, waitForSandboxCommand } from "./sandbox-command.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const laneCaseShardedFiles = [
@@ -206,6 +206,7 @@ const {
   localTestWorkers,
   localCaseShards,
   sandboxTimeout,
+  sandboxTimeoutMs,
 } = sandboxRunnerConfig();
 
 if (!["plain", "san", "both"].includes(values.lane)) {
@@ -382,14 +383,14 @@ const execIn = async (
   args,
   env = {},
   task = "",
-  wallTimeoutMs = 15 * 60_000,
+  wallTimeoutMs = sandboxTimeoutMs,
   workdir = "/workspace",
   idleTimeoutMs = 90_000,
 ) => {
   const envArgs = Object.entries(env).flatMap(([key, value]) => ["--env", `${key}=${value}`]);
   const exitMarker = `__SCRIPTC_REMOTE_EXIT_${randomBytes(12).toString("hex")}__`;
   const prepared = sandboxCommand(command, args, exitMarker);
-  const { statusPath } = prepared;
+  const { statusPath, logPath } = prepared;
   const label = task ? `${worker.label} ${task}` : worker.label;
   if (prepared.file) {
     const localScript = join(temp, `${exitMarker}.sh`);
@@ -416,6 +417,11 @@ const execIn = async (
     ...prepared.argv,
   ];
   const deadline = Date.now() + wallTimeoutMs;
+  const recoveredLog = async () => {
+    await vercel(["sandbox", "exec", "--timeout", "1m", "--workdir", workdir, worker.name, "tail", "-n", "160", logPath], {
+      label: `${label} recovered log`, timeoutMs: 60_000, idleTimeoutMs: 30_000,
+    }).catch((error) => console.warn(`[${label}] could not recover ${logPath}: ${error.message}`));
+  };
   try {
     await vercel(commandArgs, {
       exitMarker,
@@ -426,12 +432,10 @@ const execIn = async (
   } catch (error) {
     if (error.remoteExitCode !== undefined) throw error;
     console.warn(`[${label}] CLI completion was not confirmed (${error.message}); checking the remote command status...`);
-    for (;;) {
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) throw new Error(`${label} did not confirm completion before its timeout`, { cause: error });
-      const probeMarker = `__SCRIPTC_REMOTE_PROBE_${randomBytes(12).toString("hex")}__`;
-      const probeScript = sandboxStatusCommand(statusPath, probeMarker, Math.min(20, Math.floor(remaining / 1000)));
-      try {
+    try {
+      await waitForSandboxCommand(async (remaining) => {
+        const probeMarker = `__SCRIPTC_REMOTE_PROBE_${randomBytes(12).toString("hex")}__`;
+        const probeScript = sandboxStatusCommand(statusPath, probeMarker, Math.min(20, Math.floor(remaining / 1000)));
         await vercel(
           ["sandbox", "exec", "--timeout", "1m", "--workdir", workdir, worker.name, "sh", "-c", probeScript],
           {
@@ -441,11 +445,14 @@ const execIn = async (
             timeoutMs: Math.min(60_000, remaining),
           },
         );
-        return;
-      } catch (probeError) {
-        if (probeError.remoteExitCode !== REMOTE_COMMAND_PENDING) throw probeError;
-        console.log(`[${label}] remote command has not recorded completion; waiting...`);
-      }
+      }, {
+        deadline, label,
+        onPending: (probeError) => console.warn(probeError.remoteExitCode === REMOTE_COMMAND_PENDING
+          ? `[${label}] remote command has not recorded completion; waiting...`
+          : `[${label}] remote status probe was not confirmed (${probeError.message}); retrying...`),
+      });
+    } finally {
+      await recoveredLog();
     }
   }
 };

@@ -21,6 +21,12 @@ const execFileAsync = promisify(execFile);
 const sanitize = process.env["SCRIPTC_SAN"] === "1";
 const runOptions = { cwd: root, timeout: 120_000, maxBuffer: 16 * 1024 * 1024, encoding: "utf8" as const };
 
+function comparableStderr(text: string): string {
+  return sanitize
+    ? text.replace(/^==\d+==WARNING: ASan doesn't fully support makecontext\/swapcontext functions and may produce false positives in some cases!\n/gm, "")
+    : text;
+}
+
 const programs = [
   "001-hello.ts",
   "101-arithmetic.ts",
@@ -93,10 +99,7 @@ for (const backend of ["llvm"] as const) {
           expect(result.error, file + "\n" + result.stderr).toBeUndefined();
           expect(result.signal, file + "\n" + result.stderr).toBeNull();
           expect(result.status, file + "\n" + result.stderr).toBe(0);
-          const stderr = sanitize && process.platform === "linux"
-            ? result.stderr.replace(/^==\d+==WARNING: ASan doesn't fully support makecontext\/swapcontext functions and may produce false positives in some cases!\n/gm, "")
-            : result.stderr;
-          expect(stderr, file).toBe("");
+          expect(comparableStderr(result.stderr), file).toBe("");
         }
         const expectedReport = expected.stdout.trim().split("\n").map((line) => JSON.parse(line));
         const actualReport = actual.stdout.trim().split("\n").map((line) => JSON.parse(line));
@@ -135,10 +138,7 @@ for (const backend of ["llvm"] as const) {
           expect(result.status, file + "\n" + result.stderr).toBe(0);
         }
         expect(native.stdout, file).toBe(node.stdout);
-        const nativeStderr = sanitize
-          ? native.stderr.replace(/^==\d+==WARNING: ASan doesn't fully support makecontext\/swapcontext functions and may produce false positives in some cases!\n/gm, "")
-          : native.stderr;
-        expect(nativeStderr, file).toBe(node.stderr);
+        expect(comparableStderr(native.stderr), file).toBe(node.stderr);
       }
 
       for (const [file, npmStatic, packages] of [
@@ -222,7 +222,7 @@ for (const backend of ["llvm"] as const) {
       expect(ffiRun.error).toBeUndefined();
       expect(ffiRun.status, ffiRun.stderr).toBe(0);
       expect(ffiRun.stdout).toBe("42\n");
-      expect(ffiRun.stderr).toBe("");
+      expect(comparableStderr(ffiRun.stderr)).toBe("");
     } finally { rmSync(directory, { recursive: true, force: true }); }
   }, 1_200_000);
 }

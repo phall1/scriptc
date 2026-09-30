@@ -1,3 +1,4 @@
+import { objectEnumerationReceiver } from "./object-enumeration-receiver.js";
 import { InternalCompilerError } from "../../errors.js";
 /* Call lowering: the lowerCall dispatch chain, parameter-shape analysis and
  * argument completion (optional/default/rest, explicit-undefined ≡ omission),
@@ -29,7 +30,8 @@ import { lowerAbsenceProbe, lowerPromiseAllTupleCall, lowerPromiseRejectCall, st
 import { isSafeToDiscard } from "./expressions/evaluation-safety.js";
 import { tryLowerExpression } from "./expressions/try-lower-expression.js";
 import { httpClientFnBindingOf, isStreamUndefCallExpr, lowerCompatReqStreamOptionalCall, lowerHttpClientFnCall } from "./lower-server.js";
-import { EMITTER_API_MEMBERS, exactInstanceClassOf, findGenericMethodOn, lowerClassGenericMethodCall, lowerStaticMethodCall, type ClassInfo } from "./lower-classes.js";
+import { EMITTER_API_MEMBERS, exactInstanceClassOf, findGenericMethodOn, lowerClassGenericMethodCall, lowerStaticMethodCall, returnsOnlyThis, type ClassInfo } from "./lower-classes.js";
+import { classCallbackCall, isClassCallback } from "./class-callbacks.js";
 import { emitterRooted, lowerEmitterMethodCall } from "./lower-event-emitter.js";
 import { lowerConsoleInspectArg, lowerFormatCall } from "./lower-inspect.js";
 import { STREAM_API_MEMBERS, lowerStreamMethodCall, lowerStreamModuleCall, lowerStreamStaticCall, streamSidesOf } from "./lower-stream.js";
@@ -42,6 +44,8 @@ import { rejectStaticThis } from "./static-this.js";
 import { fenceNodeModuleMutationCall, lowerRequireCacheKeys } from "./lower-node-module.js";
 import { defaultAfterUndefined, lowerOptionalArgument, lowerStaticallyUndefinedArgument, positionNumber } from "./optional-arguments.js";
 import { fenceSymbolFieldCopy } from "./symbol-fields.js";
+import { lowerClassDataDescriptor, lowerClassDescriptorRead } from "./class-descriptors.js";
+import { classStaticDataFor } from "./class-static-data.js";
 
 export { bodyReadsArguments };
 
@@ -183,9 +187,12 @@ export interface GenericFnInfo {
    * Instance methods take `this` (object:<declarer>) as param 0 and lower
    * under the declarer's instantiation bindings (generic-class receivers)
    * MERGED with the method instantiation's own; statics lower as plain
-   * module functions with the static-method this/super fence. Absent for
+   * module functions with an exact receiver or the this/super fence. Absent for
    * top-level functions and object-literal methods. */
   member?: { cls: ClassInfo; kind: "method" | "static" };
+  /** Direct static calls specialize lexical this for the proven receiver. */
+  staticReceiver?: ClassInfo;
+  receiverSpecializations?: Map<string, GenericFnInfo>;
   /** Object-literal generic methods (`{ m<T>(x: T) {...} }` and generic
    * arrow/function-expression properties): lowered as plain module
    * functions — `this` inside is fenced (rejectThisInObjectMethod) and the
@@ -1749,19 +1756,24 @@ export function genericFnOf(lowerer: Lowerer, ident: ts.Identifier): GenericFnIn
     lowerer.fnStack.push(fnCtx);
     lowerer.localClassInstantiations.push({ owner: decl, name: inst.name });
     try {
-      // STATIC generic methods: `this`/`super` name the RECEIVER class (a
-      // dynamic value) — the lowerStaticMethod fence, applied here because
-      // generic statics have no non-generic lowering pass. Arrow functions
-      // are transparent (they inherit the method's `this`); this-binding
-      // function forms are opaque.
+      // Static specializations bind lexical this only when the caller
+      // proved its exact receiver. Other instances retain the fence;
+      // super remains unsupported. Arrows inherit the lexical receiver.
       if (info.member?.kind === "static" && decl.body) {
         rejectStaticThis(
           lowerer,
           decl.body,
           (keyword) => `'${keyword}' in static methods (it names the RECEIVER class — a dynamic value; reference the class by name instead)`,
+          false, info.staticReceiver !== undefined,
         );
       }
       const params: IrParam[] = [];
+      const receiverInit: IrStmt[] = [];
+      if (info.staticReceiver) {
+        const value = lowerer.classValueRef(info.staticReceiver, decl);
+        const local = lowerer.declareThis(value.type);
+        receiverInit.push({ kind: "varDecl", localId: local.id, init: value, loc: locOf(decl) });
+      }
       if (cls && info.member!.kind === "method") {
         // Instance methods take `this` as param 0, exactly like plain
         // `%C.method` functions (lowerClassMethodMemberInner).
@@ -1773,7 +1785,7 @@ export function genericFnOf(lowerer: Lowerer, ident: ts.Identifier): GenericFnIn
       // threaded — a default mentioning T resolves like any body expression.
       const declared = lowerer.declareParams(decl.parameters, inst.params);
       params.push(...declared.params);
-      const body = [...declared.prologue];
+      const body = [...receiverInit, ...declared.prologue];
       const bodyBlock = blockBodyOf(decl);
       if (bodyBlock) {
         body.push(...lowerer.lowerStmts(bodyBlock.statements));
@@ -1882,21 +1894,22 @@ export function genericFnOf(lowerer: Lowerer, ident: ts.Identifier): GenericFnIn
     // The wrap pass: settle every recorded return onto `final`, in place.
     for (const e of infer.entries) {
       if (e.stmt.kind !== "return") continue;
-      const st = e.stmt as IrStmt & { kind: "return"; value: IrExpr | null };
+      // Write through the recorded statement. A narrowed local can acquire a
+      // different record layout and copy it in the native compiler.
       const diagsBefore = lowerer.diags.length;
       try {
-        if (st.value === null || st.value === undefined) {
-          if (final.kind === "dyn") st.value = dynUndefinedExpr(st.loc);
+        if (e.stmt.value === null || e.stmt.value === undefined) {
+          if (final.kind === "dyn") e.stmt.value = dynUndefinedExpr(e.stmt.loc);
           else if (final.kind === "union") {
-            const wrapped = lowerer.wrappedUndefined(final, st.loc);
+            const wrapped = lowerer.wrappedUndefined(final, e.stmt.loc);
             if (!wrapped) {
               lowerer.unsupported("SC1090", e.node ?? decl, `bare 'return' in a function whose inferred return type is '${lowerer.fmt(final)}'`);
             }
-            st.value = wrapped;
+            e.stmt.value = wrapped;
           }
           // void final: bare return stands as-is
-        } else if (!typeEquals(st.value.type, final)) {
-          st.value = lowerer.coerceInto(e.node ?? decl, st.value, final);
+        } else if (!typeEquals(e.stmt.value.type, final)) {
+          e.stmt.value = lowerer.coerceInto(e.node ?? decl, e.stmt.value, final);
         }
       } catch (err) {
         if (!(err instanceof PoisonError)) throw err;
@@ -1908,7 +1921,7 @@ export function genericFnOf(lowerer: Lowerer, ident: ts.Identifier): GenericFnIn
         if (ice.length > 0) lowerer.diags.push(...ice);
         lowerer.runtimeFences.push(...captured.filter((d) => d.code !== "SC9001"));
         const first = captured.find((d) => d.code !== "SC9001");
-        const mutable = st as unknown as Record<string, unknown>;
+        const mutable = e.stmt as unknown as Record<string, unknown>;
         delete mutable["value"];
         mutable["kind"] = "runtimeFence";
         mutable["code"] = first?.code ?? "SC1090";
@@ -2172,11 +2185,14 @@ function runtimeOptionalHofGenericBinding(
 
 /** The implicit-type-parameter slots of a JS function-like: parallel to
    * decl.parameters, the param SYMBOL where the slot is a bindable
-   * implicit-any param (identifier-named, no annotation/JSDoc type, not
-   * rest/optional/defaulted, never written), null elsewhere. Null overall
-   * when nothing qualifies — the declaration keeps today's path. */
+   * implicit param (identifier-named, broad inferred/JSDoc type, not
+   * rest/optional/defaulted, never written), null elsewhere. Package JS
+   * methods may also specialize class parameters: JSDoc names a nominal
+   * class even when the body accepts other objects with the same members.
+   * Null overall when nothing qualifies — the declaration keeps its ABI. */
   export function implicitAnyParamSymbolsOf(lowerer: Lowerer,
-    decl: ts.FunctionDeclaration | ts.MethodDeclaration | ts.FunctionExpression | ts.ArrowFunction,): (ts.Symbol | null)[] | null {
+    decl: ts.FunctionDeclaration | ts.MethodDeclaration | ts.FunctionExpression | ts.ArrowFunction,
+    classParams = false,): (ts.Symbol | null)[] | null {
     if (!decl.body) return null;
     if (decl.asteriskToken) return null;
     if (decl.modifiers?.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword)) return null;
@@ -2193,7 +2209,9 @@ function runtimeOptionalHofGenericBinding(
       const broadFunction = lowerer.checker.typeToString(t) === "Function";
       const broadArray = lowerer.checkerAnyArrayType(t);
       const broadPromise = broadPromiseParam(lowerer, t);
-      if ((t.flags & ts.TypeFlags.Any) === 0 && !broadFunction && !broadArray && !broadPromise) return null;
+      const declaredKind = classParams ? lowerer.mapTypeOf(t)?.kind : undefined;
+      const classParam = classParams && (declaredKind === "object" || declaredKind === "array");
+      if ((t.flags & ts.TypeFlags.Any) === 0 && !broadFunction && !broadArray && !broadPromise && !classParam) return null;
       const sym = lowerer.checker.getSymbolAtLocation(param.name);
       if (!sym) return null;
       if (paramWrittenInBody(lowerer, decl.body!, sym, param.name.text)) return null;
@@ -2210,6 +2228,11 @@ function runtimeOptionalHofGenericBinding(
    * selects return INFERENCE with DYN as the recursion pin. */
   function implicitDeclaredReturn(lowerer: Lowerer, info: GenericFnInfo): IrType | null {
     try {
+      // Static JS helpers can accept a structurally compatible class despite
+      // narrower JSDoc (for example a Vector2 target documented as Vector3).
+      // Infer their result from the specialized body as well.
+      if (info.member?.kind === "static" && info.decl.parameters.some((param, index) =>
+          info.implicitParams?.[index] && lowerer.mapTypeOf(lowerer.typeOf(param.name))?.kind === "object")) return null;
       const broadCallbackSymbols = new Set(
         info.decl.parameters.flatMap((param, index) => {
           const symbol = info.implicitParams?.[index];
@@ -2247,6 +2270,8 @@ function runtimeOptionalHofGenericBinding(
       if (retTs.flags & ts.TypeFlags.Any) return null;
       if (retTs.flags & (ts.TypeFlags.Null | ts.TypeFlags.Undefined)) return DYN;
       if (lowerer.checker.isArrayType(retTs)) {
+        if (info.decl.parameters.some((param, index) => info.implicitParams?.[index] &&
+            lowerer.mapTypeOf(lowerer.typeOf(param.name))?.kind === "array")) return null;
         const elem = lowerer.checker.getTypeArguments(retTs as ts.TypeReference)[0];
         // An implicit-any parameter poisons an inferred array result to
         // any[] even when this instance's body produces one concrete
@@ -2412,7 +2437,17 @@ function storedImplicitArgumentType(lowerer: Lowerer, arg: ts.Expression): IrTyp
     const shapes: ParamShape[] = info.decl.parameters.map((param, i) =>
       info.implicitParams![i] ? { type: DYN, mode: "required" as const } : lowerer.paramShape(param),
     );
-    return internImplicitInstance(lowerer, blame, info, shapes, new Map());
+    const argTypes = new Map<ts.Symbol, ts.Type>();
+    // Newly bindable nominal class parameters must not retain their JSDoc
+    // receiver type in the checked fallback. Keep existing broad JS inference.
+    for (let i = 0; i < info.decl.parameters.length; i++) {
+      const symbol = info.implicitParams?.[i];
+      const kind = lowerer.mapTypeOf(lowerer.typeOf(info.decl.parameters[i]!.name))?.kind;
+      if (symbol && (kind === "object" || kind === "array")) {
+        argTypes.set(symbol, lowerer.checker.getUnknownType());
+      }
+    }
+    return internImplicitInstance(lowerer, blame, info, shapes, argTypes);
   }
 
   function internImplicitInstance(lowerer: Lowerer, blame: ts.Node,
@@ -6664,6 +6699,12 @@ const inliningPredicates = new Set<ts.Symbol>();
       if (ts.isIdentifier(m.name) || ts.isStringLiteralLike(m.name)) own.add(m.name.text);
       else return null; // computed static names — the answer isn't static
     }
+    if (!own.has(key)) {
+      const loc = locOf(call);
+      const data = classStaticDataFor(lowerer, info, key, loc);
+      if (data) return { kind: "libCall", fn: "dyn.hasOwn", args: [data,
+        { kind: "strLit", value: key, type: STRING, loc }], type: BOOL, loc };
+    }
     return { kind: "boolLit", value: own.has(key), type: BOOL, loc: locOf(call) };
   }
 
@@ -6886,6 +6927,12 @@ const inliningPredicates = new Set<ts.Symbol>();
   function reconcileOverloadReturn(lowerer: Lowerer, expr: ts.CallExpression | ts.TaggedTemplateExpression, call: IrExpr): IrExpr {
     const rsig = lowerer.checker.getResolvedSignature(expr);
     const rdecl = rsig ? lowerer.checker.signatureDeclaration(rsig) : undefined;
+    // Fluent JS overrides share the base's return ABI, but their result
+    // still has the receiver's subclass layout at the call site.
+    if (call.type.kind === "object" && rdecl && ts.isMethodDeclaration(rdecl) &&
+        isJsSourceFile(rdecl.getSourceFile()) && returnsOnlyThis(rdecl)) {
+      call = lowerer.maybeNarrow(call, expr);
+    }
     const resolvedOverload =
       rsig && rdecl &&
       (ts.isFunctionDeclaration(rdecl) || ts.isMethodDeclaration(rdecl)) &&
@@ -9419,6 +9466,15 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
         (member === "getOwnPropertyDescriptor" && call.arguments.length === 2)) {
       if (call.arguments.some((a) => ts.isSpreadElement(a))) return null;
       let target = tryLowerExpression(lowerer, call.arguments[0]!);
+      if (target && member === "defineProperty") {
+        const native = lowerClassDataDescriptor(lowerer, call, member, target);
+        if (native) return native;
+      }
+      if (target && member === "getOwnPropertyDescriptor" && isDynTypedRefType(target.type)) {
+        const descriptor = lowerClassDescriptorRead(lowerer, call, target);
+        if (descriptor) return descriptor;
+        target = lowerer.coerceToExpected(target, DYN);
+      }
       // Error.cause owns a live data-property slot shared with its checked
       // view. Other native fields do not yet synchronize descriptor edits.
       const keyNode = call.arguments[1]!;
@@ -9453,6 +9509,10 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
     if (member === "defineProperties" && call.arguments.length === 2 &&
         !call.arguments.some((a) => ts.isSpreadElement(a))) {
       let target = tryLowerExpression(lowerer, call.arguments[0]!);
+      if (target) {
+        const native = lowerClassDataDescriptor(lowerer, call, member, target);
+        if (native) return native;
+      }
       // A FUNCTION-typed target boxes through the dyn boundary: the
       // property table lives on the CLOSURE (shared by every box of this
       // function value), so defining through a fresh box sticks — the
@@ -9687,7 +9747,7 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
     const loc = locOf(call);
     const resultT = lowerer.irTypeOf(call);
     if (resultT.kind !== "array") lowerer.badType(call, lowerer.typeOf(call)); // defensive
-    const receiver = lowerer.lowerExpr(argNode);
+    const receiver = objectEnumerationReceiver(lowerer, lowerer.lowerExpr(argNode), argIr, loc);
     if (member === "keys") {
       // The keys walk is shared with for-in (which iterates exactly the
       // keys Object.keys answers — one construction, one intern key).
@@ -10026,7 +10086,9 @@ export function lowerFunction(lowerer: Lowerer, decl: ts.FunctionDeclaration): I
   export function lowerRecordFieldCall(lowerer: Lowerer, call: ts.CallExpression,
     access: ts.PropertyAccessExpression,): IrExpr | null {
     if (lowerer.chainBlocked(call)) return null;
-    const receiverType = lowerer.mapTypeOf(lowerer.typeOf(access.expression));
+    const stored = ts.isIdentifier(access.expression)
+      ? lowerer.peekLocal(access.expression)?.type ?? lowerer.globalOf(access.expression)?.type : undefined;
+    const receiverType = stored?.kind === "record" ? stored : lowerer.mapTypeOf(lowerer.typeOf(access.expression));
     if (receiverType?.kind !== "record" && receiverType?.kind !== "union") return null;
     // A union of records can share a closure-valued field. Its normal
     // property read performs the tag dispatch before arguments evaluate.
@@ -11004,7 +11066,15 @@ export function lowerFunction(lowerer: Lowerer, decl: ts.FunctionDeclaration): I
   export function lowerObjectMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     access: ts.PropertyAccessExpression,): IrExpr | null {
     if (lowerer.chainBlocked(access, call)) return null;
-    const mappedReceiver = lowerer.mapTypeOf(lowerer.typeOf(access.expression));
+    let mappedReceiver = lowerer.mapTypeOf(lowerer.typeOf(access.expression));
+    // A specialized JS parameter can expose a native field whose checker
+    // type still belongs to the unspecialized body (plane.normal.dot()).
+    // Use the lowered receiver's representation and retain its evaluation.
+    const probe = mappedReceiver?.kind !== "object" && (lowerer.implicitParamTypes !== null || ts.isNewExpression(access.expression) ||
+      isJsSourceFile(call.getSourceFile()) && ts.isCallExpression(access.expression))
+      ? tryLowerExpression(lowerer, access.expression) : null;
+    const specializedReceiver = probe?.type.kind === "object" ? probe : null;
+    if (specializedReceiver) mappedReceiver = specializedReceiver.type;
     if (mappedReceiver?.kind === "union") {
       const dispatched =
         lowerUnionObjectMethodCall(lowerer, call, access, mappedReceiver) ??
@@ -11025,7 +11095,7 @@ export function lowerFunction(lowerer: Lowerer, decl: ts.FunctionDeclaration): I
         : null;
     if (receiverIr === null) return null;
     const lowerReceiver = (): IrExpr => {
-      const receiver = lowerer.lowerExpr(access.expression);
+      const receiver = specializedReceiver ?? lowerer.lowerExpr(access.expression);
       const optional = lowerer.runtimeOptionalPropertyReceiver(
         access.expression,
         receiver,
@@ -11061,7 +11131,7 @@ export function lowerFunction(lowerer: Lowerer, decl: ts.FunctionDeclaration): I
     // (lowerClassGenericMethodCall has the exactness rules).
     if (info && !found) {
       const gfound = findGenericMethodOn(lowerer, info, access.name.text);
-      if (gfound) return lowerClassGenericMethodCall(lowerer, call, access, info, gfound);
+      if (gfound) return lowerClassGenericMethodCall(lowerer, call, access, info, gfound, lowerReceiver());
     }
     // A FUNC-, nullable-FUNC-, or DYN-typed FIELD in call position:
     // `this.cb()` — the ctor-assigned callback field (countdown.js's
@@ -11123,6 +11193,21 @@ export function lowerFunction(lowerer: Lowerer, decl: ts.FunctionDeclaration): I
     }
     if (!info || !found) return null;
     const method = access.name.text;
+    if (isClassCallback(lowerer, info, method)) {
+      const loc = locOf(call);
+      const receiver = lowerReceiver();
+      const local = lowerer.declareHiddenLocal("%callbackReceiver", receiver.type);
+      const value: IrExpr = { kind: "varRef", localId: local.id, type: receiver.type, loc };
+      const args = lowerer.completeArgs(call.arguments, found.sig.params, loc, call);
+      const virtual = lowerer.overrideBelow(info, method);
+      if (virtual) lowerer.noteVirtualEdge(info, method);
+      else lowerer.noteEdge(`%${found.declarer.def.name}.${method}`);
+      const fallback: IrExpr = virtual
+        ? { kind: "virtualCall", className: info.def.name, method, args: [lowerer.upcastTo(value, info.def.name), ...args], type: found.sig.ret, loc }
+        : { kind: "call", callee: `%${found.declarer.def.name}.${method}`, args: [lowerer.upcastTo(value, found.declarer.def.name), ...args], type: found.sig.ret, loc };
+      const result = classCallbackCall(lowerer, value, method, call.arguments.map((arg) => lowerer.lowerExprExpecting(arg, DYN)), fallback, loc);
+      return { kind: "seqExpr", stmts: [{ kind: "varDecl", localId: local.id, init: receiver, loc }], result, type: result.type, loc };
+    }
     if (found.declarer.builtinError) {
       return errorToStringCall(lowerer, lowerReceiver());
     }
@@ -11205,7 +11290,10 @@ function lowerUnionObjectMethodCall(
 function paramAbisEqual(left: readonly ParamShape[], right: readonly ParamShape[]): boolean {
   return left.length === right.length && left.every((shape, i) => {
     const other = right[i];
-    return other !== undefined && shape.mode === other.mode && typeEquals(shape.type, other.type);
+    return other !== undefined && typeEquals(shape.type, other.type) &&
+      (shape.mode === other.mode || shape.type.kind === "dyn" &&
+        (shape.mode === "required" || shape.mode === "omittable") &&
+        (other.mode === "required" || other.mode === "omittable"));
   });
 }
 

@@ -1,4 +1,4 @@
-import { BOOL, F64, type IrExpr, type IrStmt, type IrType, type SrcLoc } from "../../ir/ir.js";
+import { BOOL, DYN, F64, NULL_T, type IrExpr, type IrStmt, type IrType, type SrcLoc } from "../../ir/ir.js";
 import { numLit, varRef } from "../../ir/build.js";
 import { typeKey } from "../type-mapper.js";
 import type { Lowerer } from "./lowerer.js";
@@ -40,8 +40,12 @@ export function lowerArrayFill(
   arrType: IrType & { kind: "array" },
   loc: SrcLoc,
 ): IrExpr {
-  const valueType = writeUndefined ? F64 : value!.type;
-  const key = "indexed:fill:" + typeKey(arrType.elem) + ":" + typeKey(valueType) + ":" + writeUndefined;
+  const writeNull = value?.type.kind === "nullT";
+  // Unit literals have no parameter ABI. Pass a numeric placeholder and
+  // synthesize the unit inside the helper's correctly tagged store.
+  const discardValue = writeUndefined || writeNull;
+  const valueType = discardValue ? F64 : value!.type;
+  const key = "indexed:fill:" + typeKey(arrType.elem) + ":" + typeKey(valueType) + ":" + writeUndefined + ":" + writeNull;
   let name = lowerer.arrHofHelpers.get(key);
   if (!name) {
     name = "%arr.fill." + lowerer.arrHofHelpers.size;
@@ -51,7 +55,7 @@ export function lowerArrayFill(
     const i = varRef("i.0", F64, loc);
     const body: IrStmt[] = writeUndefined
       ? [{ kind: "arraySetUndefined", arr: a, index: i, loc }]
-      : [arrayValueStore(lowerer, a, i, varRef("v.0", valueType, loc), arrType.elem, loc)];
+      : [arrayValueStore(lowerer, a, i, writeNull ? { kind: "unitLit", unit: "null", type: NULL_T, loc } : varRef("v.0", valueType, loc), arrType.elem, loc)];
     lowerer.liftedFns.push({
       name,
       params: [
@@ -88,8 +92,9 @@ export function lowerArrayFill(
       loc,
     });
   }
-  const valueArg: IrExpr = value && writeUndefined
-    ? { kind: "seqExpr", stmts: [{ kind: "exprStmt", expr: value, loc }], result: numLit(0, loc), type: F64, loc }
+  const valueArg: IrExpr = discardValue
+    ? value === null || value.kind === "unitLit" ? numLit(0, loc)
+      : { kind: "seqExpr", stmts: [{ kind: "exprStmt", expr: lowerer.coerceToExpected(value, DYN), loc }], result: numLit(0, loc), type: F64, loc }
     : value ?? numLit(0, loc);
   return { kind: "call", callee: name, args: [receiver, valueArg, start, end], type: arrType, loc };
 }

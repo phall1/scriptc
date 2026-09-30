@@ -188,14 +188,14 @@ export function streamTypedRefCommitAdapter(host: LlvmEmitterContext,
       }
       if (meta.def.fields.some((field) => field.name === DYN_CLASS_PROPERTIES)) {
         host.declare(`declare ptr @scr_dyn_new_obj()`);
-        host.declare(`declare ptr @scr_dyn_copy_data_properties(ptr, ptr)`);
+        host.declare(`declare ptr @scr_dyn_copy_property_descriptors(ptr, ptr)`);
         host.declare(`declare void @scr_dyn_release_v(ptr)`);
         host.declare(`declare ptr @scr_str_new(ptr, ${host.sizeType})`);
         host.declare(`declare void @scr_str_release(ptr)`);
         host.declare(`declare void @scr_dyn_key_delete(ptr, ptr, i1 zeroext)`);
         lines.push(
           `  %bag = call ptr @scr_dyn_new_obj()`,
-          `  %bag_copy = call ptr @scr_dyn_copy_data_properties(ptr %bag, ptr %d)`,
+          `  %bag_copy = call ptr @scr_dyn_copy_property_descriptors(ptr %bag, ptr %d)`,
           `  call void @scr_dyn_release_v(ptr %bag_copy)`,
           `  %bag_pending = call zeroext i1 @scr_exc_pending()`,
           `  br i1 %bag_pending, label %bag_fail, label %bag_keys`,
@@ -559,11 +559,9 @@ export function streamTypedRefMaterializeAdapter(host: LlvmEmitterContext,
         return adapter;
       }
     }
-    // Reserve both names before generating field conversions: recursive
-    // class/record conversions can request this adapter while it is in flight.
-    if (isDynTypedRefType(t) || t.kind === "bytes" || t.kind === "array" || t.kind === "record") {
-      adapter.commit = `@${snapshot}_commit`;
-    }
+    // Publish both symbols before their bodies: class-array and callback
+    // converters can request this same adapter while emitting the commit.
+    adapter.commit = `@${snapshot}_commit`;
     adapter.commit = host.streamTypedRefCommitAdapter(t, snapshot);
     const B = new BlockBuilder();
 
@@ -602,13 +600,13 @@ export function streamTypedRefMaterializeAdapter(host: LlvmEmitterContext,
         B.line(`call void @scr_dyn_obj_set(ptr ${out}, ptr ${host.cstr(field.name)}, ${host.sizeType} ${Buffer.byteLength(field.name, "utf8")}, ptr ${boxed})`);
       }
       if (meta.def.fields.some((field) => field.name === DYN_CLASS_PROPERTIES)) {
-        host.declare(`declare ptr @scr_dyn_copy_data_properties(ptr, ptr)`);
+        host.declare(`declare ptr @scr_dyn_copy_property_descriptors(ptr, ptr)`);
         host.declare(`declare void @scr_dyn_release_v(ptr)`);
         const { index } = classFieldIndex(meta, DYN_CLASS_PROPERTIES);
         const slot = B.tmp(), bag = B.tmp(), copied = B.tmp();
         B.line(`${slot} = getelementptr inbounds %${classStructSym(t.className)}, ptr %p, i64 0, i32 ${index}`);
         B.line(`${bag} = load ptr, ptr ${slot}`);
-        B.line(`${copied} = call ptr @scr_dyn_copy_data_properties(ptr ${out}, ptr ${bag})`);
+        B.line(`${copied} = call ptr @scr_dyn_copy_property_descriptors(ptr ${out}, ptr ${bag})`);
         B.line(`call void @scr_dyn_release_v(ptr ${copied})`);
       }
       B.terminate(`ret ptr ${out}`);
@@ -700,6 +698,25 @@ export function streamTypedRefMaterializeAdapter(host: LlvmEmitterContext,
       const len = B.tmp();
       B.line(`${len} = call double @scr_arr_len(ptr %p)`);
       B.countedLoop(len, (index) => {
+        host.declare(`declare double @scr_arr_state(ptr, double)`);
+        host.declare(`declare ptr @scr_dyn_undefined()`);
+        host.declare(`declare ptr @scr_dyn_retain_v(ptr)`);
+        const state = B.tmp();
+        const present = B.tmp();
+        const valueLabel = B.newLabel("live.array.value");
+        const absentLabel = B.newLabel("live.array.absent");
+        const doneLabel = B.newLabel("live.array.done");
+        B.line(`${state} = call double @scr_arr_state(ptr %p, double ${index})`);
+        B.line(`${present} = fcmp oeq double ${state}, 1.0`); // SCR_ARR_VALUE
+        B.condBr(present, valueLabel, absentLabel);
+        B.startBlock(absentLabel);
+        const undefinedValue = B.tmp();
+        const retained = B.tmp();
+        B.line(`${undefinedValue} = call ptr @scr_dyn_undefined()`);
+        B.line(`${retained} = call ptr @scr_dyn_retain_v(ptr ${undefinedValue})`);
+        B.line(`call void @scr_dyn_arr_push(ptr ${out}, ptr ${retained})`);
+        B.br(doneLabel);
+        B.startBlock(valueLabel);
         let value: string;
         if (elem.kind === "f64" || elem.kind === "bool") {
           const valueTy = elem.kind === "f64" ? "double" : "i1";
@@ -718,6 +735,8 @@ export function streamTypedRefMaterializeAdapter(host: LlvmEmitterContext,
         if (isRefCounted(elem)) {
           B.line(`call void ${releaseSym(host.shapeHost, elem)}(ptr ${value})`);
         }
+        B.br(doneLabel);
+        B.startBlock(doneLabel);
       });
       B.terminate(`ret ptr ${out}`);
     } else {

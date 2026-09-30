@@ -83,6 +83,11 @@ for (const backend of ["llvm"] as const) {
       };
 
       const numeric = roundTrip(numericModule());
+      const compact = run(serializeModule(numeric), ["compact"]);
+      expect(compact.native.status).toBe(0);
+      expect(compact.native.stdout.toString().trimEnd()).not.toContain("\n");
+      expect(deserializeModule(compact.native.stdout.toString())).toEqual(numeric);
+      expect(deserializeModule(compact.native.stdout.toString())).toEqual(deserializeModule(compact.oracle.stdout.toString()));
       const print = numeric.functions[0]!.body[1]!;
       expect(print.kind).toBe("exprStmt");
       if (print.kind !== "exprStmt" || print.expr.kind !== "intrinsic") throw new Error("numeric IR changed");
@@ -114,6 +119,7 @@ for (const backend of ["llvm"] as const) {
         "tests/corpus/3089-array-find-narrowing.ts",
         "tests/corpus/3091-json-recursive-discriminants.ts",
         "tests/corpus/3094-json-replacer-traversal.ts",
+        "tests/corpus/1010-json-stringify-space.ts",
       ]) {
         const path = join(dir, "emitted.json");
         const emitted = await compile(join(root, source), { outDir: dir, outPath: path, outputKind: "ir", dynamic: false });

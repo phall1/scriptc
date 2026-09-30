@@ -1,3 +1,10 @@
+import { compilationTiming, type CompilationTiming } from "./timing.js";
+import { prepareExecutableModule } from "./executable/prepare.js";
+import { prepareLibrary, libraryLocalizeSymbols, libraryWasmExports, libraryWasmRefusal } from "./library/prepare.js";
+import { analyzeWithFrontend } from "./frontend/analysis.js";
+import { llvmRefusalDiag, targetRefusalDiag } from "./backend/target-diagnostics.js";
+import type { CompileOptions, CompileSourceOptions, CompileRequestOptions, CompileSourceResult, CompileResult, CompileExecutableResult, CompileRequestResult, CompileLibraryOptions, CompileLibraryResult, AnalyzeOptions, AnalyzeResult } from "./compile-types.js";
+export type { CompileOutputKind, CompileBaseOptions, CompileOptions, CompileSourceOptions, CompileRequestOptions, CompileArtifact, CompileFailure, CompileSourceResult, CompileResult, CompileExecutableResult, CompileRequestResult, CompileLibraryOptions, CompileLibraryResult, AnalyzeOptions, AnalyzeResult } from "./compile-types.js";
 import { compilePackedLibrary } from "./backend/library-pack.js";
 import { InternalCompilerError } from "./errors.js";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
@@ -18,7 +25,7 @@ import { emitNativeArtifact, NativeCodegenError } from "./backend/native-codegen
 import { privateSiblingPath } from "./backend/build-cache.js";
 import { nativeCodegenTarget, nativeCodegenTargetRefusal } from "./backend/targets.js";
 import { windowsSubsystemLinkerArgs, type WindowsSubsystem } from "./backend/targets.js";
-import { createNativeLinkInfo, type NativeLinkInfo } from "./backend/native-link-info.js";
+import { createNativeLinkInfo } from "./backend/native-link-info.js";
 import { RuntimePackError } from "./backend/runtime-pack.js";
 import { createNativeLinkPlan } from "./backend/link-plan.js";
 import {
@@ -29,35 +36,23 @@ import {
 } from "./backend/linker.js";
 import { splitLlvmLibraryProgram, splitLlvmProgram } from "./backend/llvm/split.js";
 import { emitLibraryIdentityLines, replaceLibraryIdentity, stripLibraryIdentity } from "./backend/library-identity-markers.js";
-import { checkerPanicDiag, ffiNativeBuildDiag, libAsyncExportDiag, libAsyncSurfaceDiag, libExportUnresolvedDiag, libGenericExportDiag, libIntBoundaryDiag, libNpmIneligibleDiag, libSidecarDiag, libUnmappableSignatureDiag, iceDiag, isCheckerPanic, LIB_INBOUND_BYTES_TRAP_CODE, LIB_RUNTIME_TRAP_CODES, nativeCodegenDiag, type ScrDiagnostic } from "./diagnostics/diagnostic.js";
-import { checkLibraryIntegerSlots, classSeed, hasIntSlots, numberCarrierKind, type FnIntSlots, type IntSlotConfig } from "./library/int-infer.js";
-import { loadLibraryProfile, profileRemediation, profileTeaching, type LibraryProfile } from "./library/library-profile.js";
-import { clearFenceEvalCaches, decorateLibraryRefusals, evaluateLibraryFences } from "./library/fence-eval.js";
-import { assembleTrapTeaching } from "./library/trap-teaching.js";
+import { ffiNativeBuildDiag, iceDiag, nativeCodegenDiag, type ScrDiagnostic } from "./diagnostics/diagnostic.js";
+import { loadLibraryProfile, type LibraryProfile } from "./library/library-profile.js";
+import { clearFenceEvalCaches, decorateLibraryRefusals } from "./library/fence-eval.js";
 import {
-  buildSidecar,
   canonicalModuleGraph,
-  canonicalPath,
   clearSidecarCaches,
   compilerReleaseVersion,
   libraryIdentityHashes,
   updateSidecarIdentity,
-  type SidecarIntegerSlotFacts,
-  type SidecarIrRecordPattern,
-  type SidecarIrTypePattern,
 } from "./library/sidecar.js";
-import { validateSidecar } from "./library/sidecar-validate.js";
-import type { EntryExportInfo } from "./frontend/lib-exports.js";
-import type { ContractFacts } from "./frontend/lib-contract.js";
-import { moduleRuntimeFeatures, moduleLibAsyncSurface, moduleLibNondeterministicSurface, moduleEmbedsBuiltin, moduleUsesFetch, type IrFfiImport, type IrLibSection, type IrModule, type IrRecordShape, type IrType, type SrcLoc } from "./ir/ir.js";
+import { moduleRuntimeFeatures, type IrModule, type SrcLoc } from "./ir/ir.js";
 import { serializeModule } from "./ir/serialize.js";
 import { validateModule } from "./ir/validate.js";
 import { loadProgram } from "./frontend/program-node.js";
-import { runFrontend } from "./frontend/pipeline.js";
+import { runFrontend, type FrontendFactory } from "./frontend/pipeline.js";
 import { provenanceSources } from "./frontend/provenance-registry.js";
 import { clearResolveCaches } from "./frontend/resolve.js";
-import type { LowerResult } from "./frontend/lowering/lowerer.js";
-import type { CoverageInput } from "./coverage/report.js";
 import { loadFfiProfile, type FfiProfile } from "./ffi/ffi-manifest.js";
 import { executableLinkFeatures } from "./backend/executable-features.js";
 import { FrontendInputTracker, trackedReadFile } from "./frontend/input-tracker.js";
@@ -176,234 +171,6 @@ export {
 } from "./frontend/provenance-registry.js";
 export * as ir from "./ir/ir.js";
 
-export type CompileOutputKind = "ir" | "llvm" | "asm" | "obj" | "exe";
-
-export interface CompileBaseOptions {
-  /** Primary artifact path. The CLI supplies the output-kind default. */
-  outPath: string;
-  /** Where generated intermediates and compatibility side artifacts land. */
-  outDir: string;
-  /** @deprecated This option no longer controls output cleanup; sibling artifacts are retained. */
-  defaultOutputPath?: boolean;
-  /** Compatibility-only additive IR side artifact for executable builds.
-   * The CLI's deprecated --emit-ir flag supplies this option. */
-  emitIr?: boolean;
-  sanitize?: boolean;
-  /** Embed the dynamic-island engine (--dynamic). Off = the static default:
-   * island constructs are diagnostics and nothing about codegen or linking
-   * changes. */
-  dynamic?: boolean;
-  /** LLVM is the production code generator. */
-  backend?: "llvm";
-  /** Native optimization posture. Release is the shipped -O2 default; dev
-   * uses -O0, source line tables, and stable multi-TU object caching for
-   * large LLVM programs. Darwin executables include an adjacent .dSYM. */
-  optimization?: "release" | "dev";
-  /** Remove symbol/debug payload from an executable at link time. */
-  strip?: boolean;
-  /** Windows PE executable subsystem. Console is the default; GUI suppresses
-   * automatic console-window creation. Only valid for Windows executables. */
-  windowsSubsystem?: WindowsSubsystem;
-  /** --npm-static: package names whose shipped, unminified JS compiles
-   * STATICALLY as program modules (inference types the bodies; statements
-   * the lowering cannot prove become runtime fences). "auto" opts in every
-   * directly-imported package passing the eligibility heuristics (own
-   * .d.ts, unminified JS, no build-transform markers). A package whose
-   * preflight refuses marks itself an offender and falls back to the
-   * island (--dynamic) or the requires-dynamic diagnostic (static builds)
-   * — never a silent misbuild. Off by default: nothing changes without
-   * the flag. */
-  npmStatic?: readonly string[] | "auto";
-  /** Outbound native FFI manifest. Its signature-only TypeScript bindings
-   * lower to direct C ABI calls. Source outputs retain those declarations;
-   * archive/system-library inputs join only an executable link. */
-  ffiProfilePath?: string;
-  /** Attach the machine-readable external link recipe to an object result.
-   * Valid only with outputKind "obj"; it never invokes a linker. */
-  nativeLinkInfo?: boolean;
-}
-
-/** Executable compile options. This remains the compatibility type for the
- * historical compile() API, whose omitted output kind means executable. */
-export interface CompileOptions extends CompileBaseOptions {
-  outputKind?: "exe";
-  /** Internal validation lane retained for helper-object artifact tests.
-   * Supported ordinary LLVM executable builds select this path automatically. */
-  nativeProgramObject?: boolean;
-}
-
-/** Source-artifact compile options, discriminated by the required kind. */
-export interface CompileSourceOptions extends CompileBaseOptions {
-  outputKind: Exclude<CompileOutputKind, "exe">;
-}
-
-/** Internal/dynamic request shape for callers that select the kind at runtime.
- * Statically executable/source callers should prefer the narrower interfaces. */
-export interface CompileRequestOptions extends CompileBaseOptions {
-  outputKind?: CompileOutputKind;
-  /** Internal validation lane for executable requests. */
-  nativeProgramObject?: boolean;
-}
-
-export type CompileArtifact =
-  | { kind: "ir"; path: string }
-  | { kind: "llvm"; path: string }
-  | { kind: "asm"; path: string }
-  | { kind: "obj"; path: string; nativeLinkInfo?: NativeLinkInfo }
-  | {
-      kind: "exe";
-      path: string;
-      translationUnitPath: string;
-      backend: "llvm";
-
-    };
-
-export type CompileFailure = {
-  ok: false;
-  diagnostics: ScrDiagnostic[];
-  sourceTexts: Map<string, string>;
-};
-
-export type CompileSourceResult =
-  | { ok: true; artifact: Extract<CompileArtifact, { kind: "ir" | "llvm" | "asm" | "obj" }> }
-  | CompileFailure;
-
-/** Historical executable result shape retained for source compatibility. */
-export type CompileResult =
-  | {
-      ok: true;
-      binaryPath: string;
-      llvmPath: string;
-      irPath?: string;
-      backend: "llvm";
-
-    }
-  | CompileFailure;
-
-export type CompileExecutableResult =
-  /** The generated LLVM source is retained beside the executable. */
-  | (Extract<CompileResult, { ok: true }> & {
-      artifact: Extract<CompileArtifact, { kind: "exe" }>;
-    })
-  | CompileFailure;
-
-/** Result union for callers that choose outputKind dynamically. */
-export type CompileRequestResult = CompileSourceResult | CompileExecutableResult;
-
-/** The LLVM backend's tier refusal as a diagnostic. SC3xxx = backend
- * coverage (the program is fine — this backend doesn't compile it yet);
- * the parenthesized kind tag is machine-readable for the differential
- * harness's histogram. */
-function llvmRefusalDiag(err: LlvmUnsupportedError, entryPath: string): ScrDiagnostic {
-  return {
-    code: "SC3001",
-    message: err.message,
-    loc: err.loc ?? { file: entryPath, start: 0, end: 0 },
-  };
-}
-
-/** A valid program surface that the selected execution target cannot host.
- * SC3xxx stays the backend/target-coverage family: source semantics are
- * valid, but this target deliberately refuses them instead of emitting a
- * binary that traps later. */
-function targetRefusalDiag(target: string, surface: string, loc: SrcLoc): ScrDiagnostic {
-  return {
-    code: "SC3002",
-    message: `${target} target does not support ${surface}`,
-    loc,
-  };
-}
-
-/** APIs that require host capabilities absent from portable WASI Preview 1.
- * These are target diagnostics, not backend-tier gaps: the same language IR
- * (including async, generators, and the dynamic island) is otherwise valid.
- * Keep the fine-grained walk first so diagnostics point at the API use; the
- * embedded-module checks are the entry-anchored safety net for island code. */
-function moduleWasiUnavailableSurface(mod: IrModule): { surface: string; loc: SrcLoc } | null {
-  const entryLoc: SrcLoc = { file: mod.sourceFile, start: 0, end: 0 };
-  const prefixes: readonly (readonly [string, string])[] = [
-    ["cp.", "child processes (WASI Preview 1 has no process-spawning API)"],
-    ["child.", "child processes (WASI Preview 1 has no process-spawning API)"],
-    ["spawnRes.", "child processes (WASI Preview 1 has no process-spawning API)"],
-    ["net.", "network sockets (WASI Preview 1 has no socket API)"],
-    ["http.", "network sockets (WASI Preview 1 has no socket API)"],
-    ["https.", "network sockets (WASI Preview 1 has no socket API)"],
-    ["http2.", "network sockets (WASI Preview 1 has no socket API)"],
-    ["h2.", "network sockets (WASI Preview 1 has no socket API)"],
-    ["dgram.", "network sockets (WASI Preview 1 has no socket API)"],
-    ["dns.", "network sockets (WASI Preview 1 has no socket API)"],
-    ["tls.", "network sockets (WASI Preview 1 has no socket API)"],
-    ["fetch.", "network-backed fetch (WASI Preview 1 has no socket API)"],
-    ["fs.watch", "filesystem watching (WASI Preview 1 has no notification API)"],
-    ["watcher.", "filesystem watching (WASI Preview 1 has no notification API)"],
-  ];
-  const kinds: ReadonlyMap<string, string> = new Map([
-    ["child", "child processes (WASI Preview 1 has no process-spawning API)"],
-    ["spawnRes", "child processes (WASI Preview 1 has no process-spawning API)"],
-    ["childStream", "child processes (WASI Preview 1 has no process-spawning API)"],
-    ["childWriter", "child processes (WASI Preview 1 has no process-spawning API)"],
-    ["netServer", "network sockets (WASI Preview 1 has no socket API)"],
-    ["netSocket", "network sockets (WASI Preview 1 has no socket API)"],
-    ["http2Session", "network sockets (WASI Preview 1 has no socket API)"],
-    ["http2Stream", "network sockets (WASI Preview 1 has no socket API)"],
-    ["dgramSocket", "network sockets (WASI Preview 1 has no socket API)"],
-    ["fsWatcher", "filesystem watching (WASI Preview 1 has no notification API)"],
-    ["httpReq", "network sockets (WASI Preview 1 has no socket API)"],
-    ["httpRes", "network sockets (WASI Preview 1 has no socket API)"],
-    ["httpClientReq", "network sockets (WASI Preview 1 has no socket API)"],
-    ["secureCtx", "network sockets (WASI Preview 1 has no socket API)"],
-  ]);
-  let found: { surface: string; loc: SrcLoc } | null = null;
-  const visit = (value: unknown, inheritedLoc: SrcLoc): void => {
-    if (found !== null || value === null || typeof value !== "object") return;
-    if (Array.isArray(value)) {
-      for (const item of value) visit(item, inheritedLoc);
-      return;
-    }
-    const node = value as { kind?: unknown; fn?: unknown; loc?: SrcLoc };
-    const loc = node.loc ?? inheritedLoc;
-    if (typeof node.kind === "string") {
-      const kindSurface = kinds.get(node.kind);
-      if (kindSurface !== undefined) {
-        found = { surface: kindSurface, loc };
-        return;
-      }
-      if (node.kind === "libCall" && typeof node.fn === "string") {
-        if (node.fn === "process.kill" || node.fn === "process.killNum" ||
-            node.fn === "process.onSignal" || node.fn === "process.offSignal") {
-          found = { surface: "OS signals (WASI Preview 1 has no signal API)", loc };
-          return;
-        }
-        if (node.fn === "os.networkInterfaces") {
-          found = { surface: "network-interface enumeration (WASI Preview 1 has no interface API)", loc };
-          return;
-        }
-        for (const [prefix, surface] of prefixes) {
-          if (node.fn.startsWith(prefix)) {
-            found = { surface, loc };
-            return;
-          }
-        }
-      }
-    }
-    for (const key of Object.keys(value)) {
-      visit((value as Record<string, unknown>)[key], loc);
-    }
-  };
-  visit(mod, entryLoc);
-  if (found !== null) return found;
-
-  if (moduleUsesFetch(mod)) {
-    return { surface: "network-backed fetch (WASI Preview 1 has no socket API)", loc: entryLoc };
-  }
-  for (const builtin of ["node:http", "node:https", "node:net", "node:tls"] as const) {
-    if (moduleEmbedsBuiltin(mod, builtin)) {
-      return { surface: `${builtin} networking (WASI Preview 1 has no socket API)`, loc: entryLoc };
-    }
-  }
-  return null;
-}
-
 /** Clang may print every warning from the generated/runtime translation
  * units before the actionable linker failure. Keep the source diagnostic
  * precise by starting at the first portable linker marker; if the driver
@@ -421,11 +188,6 @@ function ffiNativeBuildDetail(err: CcCompileError): string {
   );
 }
 
-export interface AnalyzeResult {
-  coverage: CoverageInput;
-  sourceTexts: Map<string, string>;
-}
-
 /** Platform semantics depend on the output target, without compiler discovery. */
 export function buildTargetPlatform(env: NodeJS.ProcessEnv = process.env): string {
   return configuredTargetPlatform(env);
@@ -438,108 +200,12 @@ export function sourceTargetPlatform(env: NodeJS.ProcessEnv = process.env): stri
   return configuredTargetPlatform(env);
 }
 
-export interface AnalyzeOptions {
-  /** Analyze as a --dynamic build (island constructs lower instead of
-   * producing requires-dynamic diagnostics). */
-  dynamic?: boolean;
-  /** --npm-static (see CompileOptions.npmStatic): the analysis compiles
-   * opted-in packages' JS as program modules and the coverage report
-   * carries each package's static/fallback status. */
-  npmStatic?: readonly string[] | "auto";
-  /** Analyze with the outbound native bindings from this FFI manifest. */
-  ffiProfilePath?: string;
-  /** Coverage-only external host type surfaces: exact bare module
-   * specifier → local declaration file. The checker uses the declarations
-   * to analyze project code, but imported runtime values remain explicit
-   * SC1010 blockers rather than being counted as executable. */
-  externalTypes?: Readonly<Record<string, string>>;
-}
-
-/** Analysis without codegen: how much of the program compiles statically.
- * Unlike compile(), lowering diagnostics are data here, not failure. */
 export function analyze(entryPath: string, opts: AnalyzeOptions = {}): AnalyzeResult {
-  let ffi: FfiProfile | null = null;
-  if (opts.ffiProfilePath !== undefined) {
-    const loaded = loadFfiProfile(opts.ffiProfilePath);
-    if (!loaded.ok) {
-      return {
-        coverage: {
-          file: entryPath,
-          dynamic: opts.dynamic ?? false,
-          stats: { statementsTotal: 0, statementsFailed: 0, statementsIsland: 0, functionsSkipped: 0 },
-          diagnostics: loaded.diagnostics,
-          preflightFailed: true,
-        },
-        sourceTexts: new Map(),
-      };
-    }
-    ffi = loaded.profile;
-  }
-  const fe = runFrontend(entryPath, loadProgram, opts.npmStatic, opts.externalTypes);
-  try {
-    const emptyStats = { statementsTotal: 0, statementsFailed: 0, statementsIsland: 0, functionsSkipped: 0 };
-
-    const preflight = fe.preflight;
-    // Import-FORM fences don't stop the analysis: the module graph is still
-    // computable (a fenced import contributes no edges), the imported
-    // bindings poison at their use sites, and the fences join the blockers
-    // list beside statement-level ones — the report shows a statement
-    // percentage instead of stopping at the import lines. Everything else —
-    // tsc errors, config incompatibilities, circular imports — still stops
-    // at preflight (no trustworthy program to lower). Builds are unchanged:
-    // compile() fails on every preflight diagnostic exactly as before.
-    const IMPORT_FENCES = new Set(["SC1010", "SC1012", "SC1013", "SC1014", "SC1015"]);
-    if (preflight.some((d) => !IMPORT_FENCES.has(d.code))) {
-      return {
-        coverage: {
-          file: entryPath,
-          dynamic: opts.dynamic ?? false,
-          stats: emptyStats,
-          diagnostics: preflight,
-          ...(fe.npmStatic.length > 0 ? { npmStatic: fe.npmStatic } : {}),
-          preflightFailed: true,
-        },
-        sourceTexts: fe.sourceTexts(),
-      };
-    }
-    // Coverage is whole-program by design: builds stop at what the entry
-    // reaches, but the analysis additionally lowers the unreached remainder
-    // (throwaway) so the report covers everything the source declares — with
-    // the unreached share in its own group.
-    const lowered = fe.lower({
-      dynamic: opts.dynamic ?? false,
-      coverage: true,
-      targetPlatform: buildTargetPlatform(),
-      ...(ffi !== null ? { ffiImports: ffi.functions } : {}),
-    });
-    const provenance = provenanceSources();
-    return {
-      coverage: {
-        file: entryPath,
-        dynamic: opts.dynamic ?? false,
-        stats: lowered.stats,
-        // The import fences report as blockers alongside the statement-level
-        // ones (use sites of the fenced bindings emit matching diagnostics,
-        // which the report groups with these).
-        diagnostics: [...preflight, ...lowered.diagnostics],
-        ...(lowered.runtimeFences.length > 0 ? { runtimeFences: lowered.runtimeFences } : {}),
-        ...(lowered.unreached ? { unreached: lowered.unreached } : {}),
-        ...(lowered.npmBuiltins ? { npmBuiltins: lowered.npmBuiltins } : {}),
-        ...(lowered.npmLazyTraps ? { npmLazyTraps: lowered.npmLazyTraps } : {}),
-        ...(fe.npmStatic.length > 0 ? { npmStatic: fe.npmStatic } : {}),
-        // --provenance-sources: the per-package attribution inputs (the
-        // report aggregates statsByFile under each package's source dir).
-        ...(provenance !== null ? { provenance } : {}),
-        ...(lowered.statsByFile ? { statsByFile: lowered.statsByFile } : {}),
-        ...(lowered.provenanceElided ? { provenanceElided: lowered.provenanceElided } : {}),
-        preflightFailed: false,
-      },
-      sourceTexts: fe.sourceTexts(),
-    };
-  } finally {
-    fe.dispose();
-  }
+  return analyzeWithFrontend(entryPath, opts, buildTargetPlatform(), nodeFrontend);
 }
+
+const nodeFrontend: FrontendFactory = (entry, npmStatic, externalTypes, libraryNpmStatic) =>
+  runFrontend(entry, loadProgram, npmStatic, externalTypes, libraryNpmStatic);
 
 /** The whole pipeline: load → preflight → lower → validate → emit LLVM → link. */
 function clearCompileSessionCaches(): void {
@@ -753,60 +419,12 @@ interface PreparedExecutable {
  * typed IR can be reclaimed before the native optimizer needs its heap. */
 async function prepareExecutableInput(
   entryPath: string, opts: CompileRequestOptions, ffi: FfiProfile | null, buildPlatform: string,
+  timing: CompilationTiming,
 ): Promise<PreparedExecutable | CompileRequestResult> {
   const outputKind = opts.outputKind ?? "exe";
-  const fe = runFrontend(entryPath, loadProgram, opts.npmStatic);
-  let lowered: LowerResult;
-  let sourceTexts: Map<string, string>;
-  // The frontend (and its tsgo server) is released as soon as lowering
-  // ends — clang and the link never hold it open.
-  try {
-    const fail = (diagnostics: ScrDiagnostic[]): CompileFailure => ({
-      ok: false,
-      diagnostics,
-      sourceTexts: fe.sourceTexts(),
-    });
-
-    if (fe.preflight.length > 0) return fail(fe.preflight);
-
-    try {
-      lowered = fe.lower({
-        dynamic: opts.dynamic ?? false,
-        targetPlatform: buildPlatform,
-        ...(ffi !== null ? { ffiImports: ffi.functions } : {}),
-      });
-    } catch (e) {
-      // The last-resort panic fence: an upstream tsgo panic that crossed a
-      // checker call no statement/collection fence wrapped still becomes a
-      // clean failed compile (anchored at the entry), never a crashed CLI.
-      if (!isCheckerPanic(e)) throw e;
-      return fail([
-        checkerPanicDiag(e.message.split("\n", 1)[0]!, { file: entryPath, start: 0, end: 0 }),
-      ]);
-    }
-    if (lowered.module === null) return fail(lowered.diagnostics);
-
-    const validation = validateModule(lowered.module);
-    if (validation.length > 0) {
-      return fail(validation.map((v) => iceDiag(v.message, v.loc)));
-    }
-    if (buildPlatform === "wasi") {
-      const entryLoc: SrcLoc = { file: entryPath, start: 0, end: 0 };
-      if (opts.sanitize) {
-        return fail([targetRefusalDiag("wasm32-wasi", "--sanitize", entryLoc)]);
-      }
-      if (ffi !== null) {
-        return fail([targetRefusalDiag("wasm32-wasi", "native FFI manifests", entryLoc)]);
-      }
-      const unavailable = moduleWasiUnavailableSurface(lowered.module);
-      if (unavailable !== null) {
-        return fail([targetRefusalDiag("wasm32-wasi", unavailable.surface, unavailable.loc)]);
-      }
-    }
-    sourceTexts = fe.sourceTexts();
-  } finally {
-    fe.dispose();
-  }
+  const prepared = prepareExecutableModule(entryPath, opts, ffi, buildPlatform, nodeFrontend, timing);
+  if (!prepared.ok) return prepared;
+  const { mod, sourceTexts } = prepared;
 
   const stem = basename(entryPath).replace(/\.(ts|mts|cts|js|mjs|cjs)$/, "");
   const defaultSourcePaths = {
@@ -819,14 +437,14 @@ async function prepareExecutableInput(
 
   if (outputKind === "ir") {
     await mkdir(dirname(opts.outPath), { recursive: true });
-    await writeFile(opts.outPath, serializeModule(lowered.module));
+    await writeFile(opts.outPath, serializeModule(mod, true));
     return { ok: true, artifact: { kind: "ir", path: opts.outPath } };
   }
 
   if (outputKind === "llvm" || outputKind === "asm" || outputKind === "obj") {
     let llvm: string;
     try {
-      llvm = emitLlvmModule(lowered.module, {
+      llvm = emitLlvmModule(mod, {
         targetTriple: process.env["SCRIPTC_TARGET"] ?? "",
         ...debugOptions,
         pointerBits: buildPlatform === "wasi" ? 32 : 64,
@@ -873,7 +491,7 @@ async function prepareExecutableInput(
             programObject: opts.outPath,
             target,
             features: executableNativeFeatures(
-              lowered.module,
+              mod,
               "llvm",
               opts.dynamic ?? false,
               opts.optimization ?? "release",
@@ -892,7 +510,7 @@ async function prepareExecutableInput(
   const backend = "llvm" as const;
   let llvmSource: string;
   try {
-    llvmSource = emitLlvmModule(lowered.module, {
+    llvmSource = emitLlvmModule(mod, {
       targetTriple: process.env["SCRIPTC_TARGET"] ?? "",
       ...debugOptions,
       pointerBits: buildPlatform === "wasi" ? 32 : 64,
@@ -903,24 +521,28 @@ async function prepareExecutableInput(
     if (!(err instanceof LlvmUnsupportedError)) throw err;
     return { ok: false, diagnostics: [llvmRefusalDiag(err, entryPath)], sourceTexts };
   }
+  timing("llvm-emit");
   await writeFile(llvmPath, llvmSource);
+  timing("llvm-write");
   let irPath: string | undefined;
   if (opts.emitIr) {
     irPath = defaultSourcePaths.ir;
-    await writeFile(irPath, serializeModule(lowered.module));
+    await writeFile(irPath, serializeModule(mod, true));
   }
 
   const nativeFeatures = executableNativeFeatures(
-    lowered.module,
+    mod,
     backend,
     opts.dynamic ?? false,
     opts.optimization ?? "release",
   );
+  timing("link-features");
   const programSplit =
     backend === "llvm" && (opts.optimization ?? "release") === "dev" &&
       !(opts.sanitize ?? false) && llvmSource !== null
       ? splitLlvmProgram(llvmSource)
       : null;
+  timing("llvm-split");
   return { llvmSource, llvmPath, irPath, nativeFeatures, programSplit, sourceTexts };
 }
 
@@ -929,6 +551,7 @@ async function compileTracked(
   opts: CompileRequestOptions,
   frontendInputs: FrontendInputTracker,
 ): Promise<CompileRequestResult> {
+  const timing = compilationTiming();
   entryPath = resolve(entryPath);
   const outputKind = opts.outputKind ?? "exe";
   if ((opts.backend !== undefined && opts.backend !== "llvm") ||
@@ -1129,6 +752,7 @@ async function compileTracked(
     ? null
     : await readEarlyExecutableCache(cacheRoot, earlyCacheOptions);
   if (earlyHit !== null) {
+    timing("executable-cache-hit");
     if (earlyCacheOptions === null) {
       throw new InternalCompilerError("executable cache hit without executable cache options");
     }
@@ -1139,6 +763,7 @@ async function compileTracked(
     await publishEarlyExecutableRoute(cacheRoot, executableCacheOptions).catch(() => undefined);
     if (earlyHit.executableRestored) {
       await pruneBuildCache(cacheRoot);
+      timing("complete");
       return {
         ok: true,
         artifact: {
@@ -1241,7 +866,8 @@ async function compileTracked(
       ...(earlyHit.irPath === undefined ? {} : { irPath: earlyHit.irPath }),
     };
   }
-  const prepared = await prepareExecutableInput(entryPath, opts, ffi, buildPlatform);
+  timing("executable-cache-miss");
+  const prepared = await prepareExecutableInput(entryPath, opts, ffi, buildPlatform, timing);
   if ("ok" in prepared) return prepared;
   const { llvmSource, llvmPath, irPath, nativeFeatures, programSplit, sourceTexts } = prepared;
   const backend = "llvm" as const;
@@ -1265,6 +891,7 @@ async function compileTracked(
       }
       try {
         nativeProgramObject = await emitNativeProgramObject(entryPath, opts, llvmSource);
+        timing("native-object");
       } catch (err) {
         if (!(err instanceof NativeCodegenError)) throw err;
         return {
@@ -1296,6 +923,7 @@ async function compileTracked(
         publishedExecutable = true;
       },
     );
+    timing("native-link");
     if (nativeProgramObject !== null && opts.nativeProgramObject === true) {
       await rename(nativeProgramObject.linkPath, nativeProgramObject.artifactPath);
     }
@@ -1331,6 +959,7 @@ async function compileTracked(
     }).catch(() => undefined);
   }
   await pruneBuildCache(cacheRoot);
+  timing("complete");
   return {
     ok: true,
     artifact: {
@@ -1354,397 +983,6 @@ async function compileTracked(
  * emission; there is no fallback concept on this path (an out-of-tier
  * program under emission "llvm" is SC3001, fail-loudly). */
 
-export interface CompileLibraryOptions {
-  profilePath: string;
-  /** Where the archive and the kept program TU land. */
-  outDir: string;
-  /** Archive path. Default: <outDir>/<stem>.lib.a. */
-  outPath?: string;
-  emitIr?: boolean;
-  sanitize?: boolean;
-}
-
-export type CompileLibraryResult =
-  /** `sidecarPath` is present exactly when the profile declares a
-   * `sidecar` section: the contract JSON written beside the archive by
-   * the same invocation (ask 2). */
-  | { ok: true; archivePath: string; llvmPath: string; backend: "llvm"; irPath?: string; sidecarPath?: string }
-  | { ok: false; diagnostics: ScrDiagnostic[]; sourceTexts: Map<string, string> };
-
-/** The marshalling-class fit over IR types (design §4.2 + the ratified
- * integer plumbing classes): number is every f64-backed class, bool/string
- * map directly, bytes is the u8 element kind. */
-function libClassFits(cls: string, t: IrType): boolean {
-  switch (cls) {
-    case "bool":
-      return t.kind === "bool";
-    case "string":
-      return t.kind === "string";
-    case "bytes":
-      return t.kind === "bytes" && t.elem === "u8";
-    default: // f64 and the u8/u32/i32 plumbing classes
-      return t.kind === "f64";
-  }
-}
-
-/** Resolve the profile's export map against the entry module — SC4002/
- * SC4004/SC4007 from the declaration facts, SC4003 from the lowered IR
- * signatures — and land the library section on the module. */
-function resolveLibrarySection(
-  profile: LibraryProfile,
-  entryInfo: Map<string, EntryExportInfo>,
-  mod: IrModule,
-  entryPath: string,
-): { lib: IrLibSection } | { diagnostics: ScrDiagnostic[] } {
-  const diagnostics: ScrDiagnostic[] = [];
-  const entryLoc = { file: entryPath, start: 0, end: 0 };
-  const fnByName = new Map(mod.functions.map((f) => [f.name, f]));
-  const exports: IrLibSection["exports"] = [];
-  for (const e of profile.exports) {
-    const info = entryInfo.get(e.export);
-    if (info === undefined) {
-      diagnostics.push(
-        libExportUnresolvedDiag(e.export, "the entry module has no exported function declaration by that name", entryLoc),
-      );
-      continue;
-    }
-    if (info.generic) {
-      diagnostics.push(libGenericExportDiag(e.export, info.loc));
-      continue;
-    }
-    if (info.async || info.generator) {
-      diagnostics.push(libAsyncExportDiag(e.export, info.async ? "async" : "generator", info.loc));
-      continue;
-    }
-    const fn = fnByName.get(e.export);
-    if (fn === undefined) {
-      diagnostics.push(
-        libExportUnresolvedDiag(e.export, "the export did not lower to a compiled function", info.loc),
-      );
-      continue;
-    }
-    if (fn.params.length !== e.params.length) {
-      diagnostics.push(
-        libUnmappableSignatureDiag(
-          e.export,
-          "signature",
-          `has ${fn.params.length} parameter(s) but the profile declares ${e.params.length} marshalling class(es)`,
-          info.loc,
-        ),
-      );
-      continue;
-    }
-    let bad = false;
-    e.params.forEach((cls, i) => {
-      if (!libClassFits(cls, fn.params[i]!.type)) {
-        bad = true;
-        diagnostics.push(
-          libUnmappableSignatureDiag(
-            e.export,
-            `parameter ${i + 1} ('${fn.params[i]!.name}')`,
-            `has IR type '${fn.params[i]!.type.kind}', which does not fit the declared marshalling class '${cls}'`,
-            info.loc,
-          ),
-        );
-      }
-    });
-    if (e.returns === "void" ? fn.returnType.kind !== "void" : !libClassFits(e.returns, fn.returnType)) {
-      bad = true;
-      diagnostics.push(
-        libUnmappableSignatureDiag(
-          e.export,
-          "the return",
-          `has IR type '${fn.returnType.kind}', which does not fit the declared marshalling class '${e.returns}'`,
-          info.loc,
-        ),
-      );
-    }
-    if (!bad) {
-      const resolvedExport: IrLibSection["exports"][number] = {
-        symbol: e.symbol,
-        fnName: e.export,
-        params: e.params,
-        returns: e.returns,
-      };
-      if (e.params.includes("bytes")) {
-        // The wrapper's one host-contract trap (an inbound bytes length
-        // past the marshalling class's range) is assembled HERE, once, as
-        // the structured trap-teaching message: the profile's teaching for
-        // SC4012 (or the mode's default text), the code, the trapping
-        // export's C symbol exactly as the host linked it, and the
-        // profile's remediation when supplied — so the backend emits the
-        // same bytes and the sink sees one canonical message.
-        resolvedExport.inboundBytesTrap = assembleTrapTeaching(
-          profileTeaching(profile, LIB_INBOUND_BYTES_TRAP_CODE) ??
-            "scriptc: library inbound bytes length out of range\n",
-          LIB_INBOUND_BYTES_TRAP_CODE,
-          e.symbol,
-          profileRemediation(profile, LIB_INBOUND_BYTES_TRAP_CODE),
-        );
-      }
-      if (e.params.includes("i64") || e.params.includes("u64")) {
-        // The sibling host-contract trap for inbound declared-integer
-        // parameters (ask 4): a value past ±(2^53−1) cannot ride f64
-        // exactly, and silent rounding is a coercion the author never
-        // wrote. Same code (SC4012 — one host-contract story), same
-        // assembly-once discipline.
-        resolvedExport.inboundIntTrap = assembleTrapTeaching(
-          profileTeaching(profile, LIB_INBOUND_BYTES_TRAP_CODE) ??
-            "scriptc: library inbound integer parameter out of range\n",
-          LIB_INBOUND_BYTES_TRAP_CODE,
-          e.symbol,
-          profileRemediation(profile, LIB_INBOUND_BYTES_TRAP_CODE),
-        );
-      }
-      exports.push(resolvedExport);
-    }
-  }
-  if (diagnostics.length > 0) return { diagnostics };
-  // The runtime detected-trap overlay rows: one per family code the profile
-  // declares teaching or remediation text for, in the registry family's
-  // order. LLVM emits these rows as the program TU's overlay table,
-  // which the runtime uses to assemble the sink message. (SC4012 stays compile-time
-  // assembled into the wrapper's message above and never reaches the
-  // funnel's assembly path.)
-  const trapOverlays: IrLibSection["trapOverlays"] = [];
-  for (const code of LIB_RUNTIME_TRAP_CODES) {
-    const teaching = profileTeaching(profile, code);
-    const remediation = profileRemediation(profile, code);
-    if (teaching !== undefined || remediation !== undefined) {
-      trapOverlays.push({
-        code,
-        ...(teaching !== undefined ? { teaching } : {}),
-        ...(remediation !== undefined ? { remediation } : {}),
-      });
-    }
-  }
-  return {
-    lib: {
-      profileName: profile.name,
-      prefix: profile.prefix,
-      initSymbol: profile.initSymbol,
-      sinkRegisterSymbol: profile.sinkRegisterSymbol,
-      collectSymbol: profile.collectSymbol,
-      resultResetSymbol: profile.resultResetSymbol,
-      threadInstances: profile.instancePerThread,
-      // Host-callback channels: declaration order is the runtime slot
-      // assignment, and the unregistered-call trap text is assembled HERE,
-      // once, for consistent constant bytes (a DETECTED
-      // trap: the funnel classifies the "scriptc: library callback "
-      // prefix as SC4025 and names the entry the host called — the entry
-      // is runtime knowledge, so no compile-time SC4012-style assembly
-      // can carry it). Both fields stay absent on callback-free profiles
-      // (the byte-identity guarantee).
-      ...(profile.callbacks.length > 0
-        ? {
-            callbackRegisterSymbol: profile.callbackRegisterSymbol!,
-            callbacks: profile.callbacks.map((cb, i) => ({
-              name: cb.name,
-              slot: i,
-              params: [...cb.params],
-              returns: cb.returns,
-              unregisteredTrap: `scriptc: library callback '${cb.name}' invoked before registration\n`,
-            })),
-          }
-        : {}),
-      exports,
-      trapOverlays,
-    },
-  };
-}
-
-/** The export map's integer-slot obligations (ask 4): i64/u64 params and
- * returns become declared boundary slots keyed `exports.<name>.params[i]`
- * / `exports.<name>.return`; the u8/u32/i32 plumbing classes contribute
- * their proven inbound shapes as parameter seeds (the wrapper's coercion
- * contract), tightening the intraprocedural analysis at zero declaration
- * cost. Sidecar-declared slots (record fields, msg arms, helper params
- * and returns) merge into the same config at sidecar build. */
-function libraryIntSlotConfig(profile: LibraryProfile): IntSlotConfig {
-  const cfg: IntSlotConfig = { fns: new Map(), records: new Map() };
-  for (const e of profile.exports) {
-    const params = e.params.map((c) => (c === "i64" || c === "u64" ? c : null));
-    const ret = e.returns === "i64" || e.returns === "u64" ? e.returns : null;
-    const paramSeeds = e.params.map((c) => (c === "u8" || c === "u32" || c === "i32" ? classSeed(c) : null));
-    if (params.every((p) => p === null) && ret === null && paramSeeds.every((s) => s === null)) continue;
-    const slots: FnIntSlots = {
-      fnName: e.export,
-      params,
-      paramPaths: e.params.map((c, i) => (c === "i64" || c === "u64" ? `exports.${e.export}.params[${i}]` : null)),
-      ret,
-      retPath: ret !== null ? `exports.${e.export}.return` : null,
-      paramSeeds,
-    };
-    cfg.fns.set(e.export, slots);
-  }
-  return cfg;
-}
-
-/** Match the sidecar syntax's exact structural type projection against the
- * frontend's interned IR registries. The pattern deliberately mirrors
- * ShapeRegistry's identity: every field name and recursively mapped field
- * type participates. Tagged payload records additionally accept omission
- * of their `kind` field because the lowering may carry that discriminant
- * only in the surrounding union tag. */
-function sidecarRecordMatcher(
-  mod: IrModule,
-): (pattern: SidecarIrRecordPattern, shape: IrRecordShape) => boolean {
-  const records = new Map((mod.records ?? []).map((shape) => [shape.id, shape]));
-  const unions = new Map((mod.unions ?? []).map((union) => [union.id, union]));
-
-  const recordMatches = (
-    pattern: SidecarIrRecordPattern,
-    shape: IrRecordShape,
-  ): boolean => {
-    if (shape.tuple === true || shape.indexValue !== undefined) return false;
-    const variants = [pattern.fields];
-    if (pattern.kindMayBeOmitted === true) {
-      variants.push(pattern.fields.filter((field) => field.name !== "kind"));
-    }
-    return variants.some(
-      (fields) =>
-        fields.length === shape.fields.length &&
-        fields.every((field) => {
-          const actual = shape.fields.find((candidate) => candidate.name === field.name);
-          return actual !== undefined && typeMatches(field.type, actual.type);
-        }),
-    );
-  };
-
-  const unionMatches = (
-    patterns: SidecarIrTypePattern[],
-    actual: IrType[],
-  ): boolean => {
-    if (patterns.length !== actual.length) return false;
-    const used = new Set<number>();
-    const visit = (index: number): boolean => {
-      if (index === patterns.length) return true;
-      for (let i = 0; i < actual.length; i++) {
-        if (used.has(i) || !typeMatches(patterns[index]!, actual[i]!)) continue;
-        used.add(i);
-        if (visit(index + 1)) return true;
-        used.delete(i);
-      }
-      return false;
-    };
-    return visit(0);
-  };
-
-  const typeMatches = (
-    pattern: SidecarIrTypePattern,
-    actual: IrType,
-  ): boolean => {
-    switch (pattern.kind) {
-      case "f64":
-      case "string":
-      case "bool":
-      case "nullT":
-      case "undefinedT":
-      case "dyn":
-        return actual.kind === pattern.kind;
-      case "bytes":
-        return actual.kind === "bytes" && actual.elem === pattern.elem;
-      case "array":
-        return actual.kind === "array" && typeMatches(pattern.elem, actual.elem);
-      case "record": {
-        if (actual.kind !== "record") return false;
-        const shape = records.get(actual.shapeId);
-        return shape !== undefined && recordMatches(pattern, shape);
-      }
-      case "union": {
-        if (actual.kind !== "union") return false;
-        const union = unions.get(actual.unionId);
-        return union !== undefined && unionMatches(pattern.arms, union.arms);
-      }
-    }
-  };
-
-  return (pattern, shape) => recordMatches(pattern, shape);
-}
-
-/** Merge the sidecar-resolved integer slots (ask 4) into the inference
- * config: helper slots key by function name and IR parameter index (the
- * projection already shifted past the model receiver); record-field
- * slots map onto every interned IR shape whose complete structural field
- * signature matches the projected record's. Shapes intern structurally,
- * so a same-shaped second type shares the obligation. DECLARED paths with
- * the same class coalesce while retaining every source path for verdicts;
- * differing classes refuse because one lowered field cannot seed or check
- * two distinct class contracts without arm provenance. A
- * record fact that matches no shape binds nothing: no compiled code
- * constructs the type (the contract surface — init/update/subscriptions
- * and every helper — is force-lowered whenever integer slots are
- * declared, so this is genuine vacuity, not dead-stripping). */
-function mergeSidecarIntSlots(
-  cfg: IntSlotConfig,
-  facts: SidecarIntegerSlotFacts,
-  mod: IrModule,
-): { ok: true; config: IntSlotConfig } | { ok: false; diagnostic: ScrDiagnostic } {
-  const recordMatches = sidecarRecordMatcher(mod);
-  for (const h of facts.helpers) {
-    const fn = mod.functions.find((f) => f.name === h.fnName);
-    const arity = Math.max(fn?.params.length ?? 0, (h.index ?? 0) + 1);
-    let slots = cfg.fns.get(h.fnName);
-    if (slots === undefined) {
-      slots = {
-        fnName: h.fnName,
-        params: new Array<null>(arity).fill(null),
-        paramPaths: new Array<null>(arity).fill(null),
-        ret: null,
-        retPath: null,
-        paramSeeds: new Array<null>(arity).fill(null),
-      };
-      cfg.fns.set(h.fnName, slots);
-    }
-    if (h.kind === "param") {
-      const i = h.index!;
-      while (slots.params.length <= i) {
-        slots.params.push(null);
-        slots.paramPaths.push(null);
-        slots.paramSeeds.push(null);
-      }
-      slots.params[i] = h.cls;
-      slots.paramPaths[i] = h.path;
-    } else {
-      slots.ret = h.cls;
-      slots.retPath = h.path;
-    }
-  }
-  for (const r of facts.records) {
-    for (const shape of mod.records ?? []) {
-      if (!recordMatches(r.shape, shape)) continue;
-      const target = shape.fields.find((f) => f.name === r.targetField);
-      if (target === undefined || numberCarrierKind(target.type, mod) === null) continue;
-      let m = cfg.records.get(shape.id);
-      if (m === undefined) {
-        m = new Map();
-        cfg.records.set(shape.id, m);
-      }
-      const existing = m.get(r.targetField);
-      if (existing !== undefined && existing.cls !== r.cls) {
-        const paths = [
-          ...existing.paths.map((path) => `'${path}' (${existing.cls})`),
-          `'${r.path}' (${r.cls})`,
-        ];
-        return {
-          ok: false,
-          diagnostic: libSidecarDiag(
-            `integer slots ${paths.join(" and ")} collapse to the same lowered record field '${r.targetField}' — their proof obligations cannot be kept distinct`,
-            r.loc,
-            "kind-tagged union arms and structurally identical records may share one lowered shape — same-class declarations coalesce, but differing classes require distinct structural shapes or at most one classified slot",
-          ),
-        };
-      }
-      if (existing === undefined) {
-        m.set(r.targetField, { cls: r.cls, paths: [r.path] });
-      } else if (!existing.paths.includes(r.path)) {
-        existing.paths.push(r.path);
-      }
-    }
-  }
-  return { ok: true, config: cfg };
-}
-
 function libraryNativeFeatures(
   mod: IrModule,
   backend: "llvm",
@@ -1762,24 +1000,9 @@ function libraryNativeFeatures(
     zlib: features.zlib,
     copying: features.copying,
     textDecoderLegacy: features.legacyTextDecoder,
+    dynInvoke: features.dynInvoke,
     ...(mod.lib?.identity !== undefined ? { buildId: mod.lib.identity.buildId } : {}),
   };
-}
-
-function libraryLocalizeSymbols(profile: LibraryProfile): string[] | undefined {
-  return profile.localizeRuntime
-    ? [
-        profile.initSymbol,
-        profile.sinkRegisterSymbol,
-        ...(profile.collectSymbol !== null ? [profile.collectSymbol] : []),
-        ...(profile.resultResetSymbol !== null ? [profile.resultResetSymbol] : []),
-        ...(profile.callbackRegisterSymbol !== null ? [profile.callbackRegisterSymbol] : []),
-        ...(profile.sidecar !== null
-          ? [profile.sidecar.buildIdSymbol, profile.sidecar.abiVersionSymbol]
-          : []),
-        ...profile.exports.map((entry) => entry.symbol),
-      ]
-    : undefined;
 }
 
 async function compileLibraryNative(
@@ -1789,6 +1012,13 @@ async function compileLibraryNative(
   sanitize: boolean,
   features: EarlyLibraryNativeFeatures,
 ): Promise<void> {
+  const wasmTarget = nativeCodegenTarget();
+  if (wasmTarget?.platform === "wasi") {
+    await compilePackedLibrary({
+      cPath: llvmPath, outPath: archivePath, optimization: profile.optimization, ...features,
+    }, wasmTarget, libraryWasmExports(profile));
+    return;
+  }
   const localizeSymbols = libraryLocalizeSymbols(profile);
   let identityLlvmSource: string | undefined;
   let programSource: string | undefined;
@@ -1845,6 +1075,7 @@ async function compileLibraryNative(
     zlib: features.zlib,
     copying: features.copying,
     textDecoderLegacy: features.textDecoderLegacy,
+    dynInvoke: features.dynInvoke,
   };
   if (packTarget !== null) await compilePackedLibrary(archiveOptions, packTarget);
   else await compileExternalCLibrary(archiveOptions);
@@ -1896,7 +1127,7 @@ async function emitSemanticLibraryHit(
   let irPath: string | undefined;
   if (opts.emitIr) {
     irPath = join(opts.outDir, `${stem}.lib.ir.json`);
-    await writeFile(irPath, serializeModule(mod));
+    await writeFile(irPath, serializeModule(mod, true));
   }
   await compileLibraryNative(
     profile,
@@ -1987,11 +1218,6 @@ async function compileLibraryTracked(
     }
     if (directory === profileDir || dirname(directory) === directory) break;
   }
-  const archivePath = opts.outPath ?? join(
-    opts.outDir,
-    `${basename(entryPath).replace(/\.(ts|mts|cts|js|mjs|cjs)$/, "")}.lib.a`,
-  );
-
   // Mobile-target admission first — a pure env/host check, so a refused
   // pairing never reaches toolchain discovery. iOS targets (device and
   // simulator) build on darwin hosts only: the Apple SDK sysroot and the
@@ -2013,6 +1239,14 @@ async function compileLibraryTracked(
   }
 
   const buildPlatform = buildTargetPlatform();
+  const archivePath = opts.outPath ?? join(
+    opts.outDir,
+    `${basename(entryPath).replace(/\.(ts|mts|cts|js|mjs|cjs)$/, "")}${buildPlatform === "wasi" ? ".wasm" : ".lib.a"}`,
+  );
+  if (buildPlatform === "wasi") {
+    const refusal = libraryWasmRefusal(profile, opts.sanitize ?? false);
+    if (refusal !== null) return { ok: false, diagnostics: [refusal], sourceTexts: new Map() };
+  }
 
   // Multi-instance library mode (abi.localize_runtime) localizes per
   // OBJECT FORMAT: ELF and COFF archives localize from any host (cross
@@ -2021,8 +1255,8 @@ async function compileLibraryTracked(
   // localization runs the macOS host linker, so macos and ios targets
   // admit darwin hosts only (the mobile admission above already refused
   // an ios triple off darwin). Everything else refuses before frontend/
-  // backend work, naming the pairing. WASI retains the general
-  // library-mode refusal below.
+  // backend work, naming the pairing. WASI refuses localization above:
+  // each WebAssembly.Instance already owns its runtime state.
   if (profile.localizeRuntime && buildPlatform !== "wasi") {
     const packTarget = nativeCodegenTarget();
     const driver = opts.sanitize ? resolveCc() : {
@@ -2125,236 +1359,22 @@ async function compileLibraryTracked(
   }
   timing("semantic-cache-miss");
 
-  // Bare npm specifiers in a library graph take the STATIC-OR-REFUSE
-  // posture: "lib" runs the same auto-detection and eligibility bar as
-  // the executable lane's --npm-static (own .d.ts, unminified shipped JS,
-  // no build-transform markers), automatically — the library path has no
-  // island/dynamic tier to offer (SC4006's ground), so eligibility needs
-  // no flag and a miss is a refusal, never a fallback.
-  const fe = runFrontend(entryPath, loadProgram, "lib");
-  timing("frontend-load", {
-    entry_bytes: fe.entryText().length,
-    source_files: fe.sourceTexts().size,
-  });
-  let lowered: LowerResult;
-  let sourceTexts: Map<string, string>;
-  let entryInfo: Map<string, EntryExportInfo>;
-  let contractFacts: ContractFacts | null;
-  try {
-    // Every library refusal leaves through the ask-5 teaching decoration:
-    // profile text attaches by code, manifest id, or fence coverage as the
-    // attributed note (the SC4004/SC4005 rider generalized).
-    const fail = (diagnostics: ScrDiagnostic[]): CompileLibraryResult => ({
-      ok: false,
-      diagnostics: decorateLibraryRefusals(diagnostics, profile),
-      sourceTexts: fe.sourceTexts(),
-    });
-    // Library mode emits a host-embedded static archive with native trap and
-    // C-ABI contracts. wasm32-wasi executable modules are supported, but the
-    // archive/reactor contract is not; refuse before emitting a host-width
-    // LLVM TU or asking Zig to compile the native library runtime for WASI.
-    if (buildPlatform === "wasi") {
-      return fail([
-        targetRefusalDiag(
-          "wasm32-wasi",
-          "library-mode archive builds",
-          { file: entryPath, start: 0, end: 0 },
-        ),
-      ]);
-    }
-    // The npm verdicts FIRST: whatever the shared frontend would have
-    // served from the island — an eligibility miss, an untyped install, a
-    // preflight offender inside a package's files, a dropped inferred
-    // surface — refuses here with the package and the specific bar it
-    // missed. Checked before the general preflight, whose diagnostics for
-    // these same imports speak executable-lane teachings (SC1010/SC0001 at
-    // the unresolvable edge); the library answer is this one.
-    const npmRefused = fe.npmStatic.filter((s) => s.status === "fallback");
-    if (npmRefused.length > 0) {
-      return fail(
-        npmRefused.map((s) =>
-          libNpmIneligibleDiag(
-            s.package,
-            // The one shared offender reason that narrates the executable
-            // lane's fallback loses that clause here — no island exists on
-            // this path to serve anything.
-            (s.detail ?? "its static compilation was refused").replace("; the island serves the package", ""),
-            fe.npmImportSites.get(s.package) ?? { file: entryPath, start: 0, end: 0 },
-          ),
-        ),
-      );
-    }
-    if (fe.preflight.length > 0) return fail(fe.preflight);
-    contractFacts = profile.sidecar !== null ? fe.entryContract() : null;
-    // Ask 4, contract-surface reachability: when the sidecar declares ANY
-    // integer slot, the designated init/update/subscriptions exports and
-    // every contract helper (model-first exported function) seed lowering
-    // too. They are attested surface — a declared record-field or msg-arm
-    // class obligates EVERY write those bodies perform, and a declared
-    // helper param is checked at their internal call sites — so the
-    // attestation must cover COMPILED bodies, never a dead-stripped
-    // vacuity (the bug this closes: a model-slot declaration whose only
-    // writers were dead-stripped attested without any proof).
-    const contractSurfaceRoots: string[] = [];
-    if (profile.sidecar !== null && profile.sidecar.integerSlots.length > 0) {
-      const sc = profile.sidecar;
-      const fnNames = new Set(contractFacts!.functions.filter((f) => !f.generic).map((f) => f.name));
-      for (const name of [sc.initExport, sc.updateExport, sc.subscriptionsExport]) {
-        if (fnNames.has(name)) contractSurfaceRoots.push(name);
-      }
-      for (const fn of contractFacts!.functions) {
-        if (fn.generic) continue;
-        const first = fn.params[0];
-        if (first !== undefined && first.shape !== null && first.shape.k === "ref" && first.shape.name === sc.model) {
-          contractSurfaceRoots.push(fn.name);
-        }
-      }
-    }
-    // The profile's host-callback channels ride the FFI import machinery:
-    // each channel is a signature-only ambient binding whose direct calls
-    // lower to ffiCall nodes (the classes are a subset of the FFI's), and
-    // `libraryCallbacks` flips the recognition to the library flavor —
-    // SC4024 diagnostics, unused channels legal, undeclared references
-    // refused with the callback teaching. The library lane never loads a
-    // native-FFI manifest, so the channel set owns the surface outright.
-    const cbImports: IrFfiImport[] = profile.callbacks.map((cb) => ({
-      name: cb.name,
-      symbol: cb.name,
-      params: [...cb.params],
-      returns: cb.returns,
-    }));
-    try {
-      lowered = fe.lower({
-        dynamic: false,
-        targetPlatform: buildPlatform,
-        ...(cbImports.length > 0 ? { ffiImports: cbImports, libraryCallbacks: true } : {}),
-        // The profile-mapped exports are called from OUTSIDE the graph:
-        // they seed reachability beside the entry's top level (an
-        // executable build would dead-strip an uncalled export). A helper
-        // with a declared integer slot (ask 4) seeds too: its attestation
-        // must cover a COMPILED body, never a dead-stripped vacuity — the
-        // sidecar advertises the slot's class, so the proof must exist.
-        libRoots: [
-          ...new Set([
-            ...profile.exports.map((e) => e.export),
-            ...(profile.sidecar?.integerSlots ?? [])
-              .map((s) => /^helpers\.([^.]+)\.(?:params\[\d+\]|return)$/.exec(s.slot)?.[1])
-              .filter((n): n is string => n !== undefined),
-            ...contractSurfaceRoots,
-          ]),
-        ],
-      });
-      timing("lower", {
-        lib_roots: profile.exports.length + contractSurfaceRoots.length,
-      });
-    } catch (e) {
-      if (!isCheckerPanic(e)) throw e;
-      return fail([checkerPanicDiag(e.message.split("\n", 1)[0]!, { file: entryPath, start: 0, end: 0 })]);
-    }
-    if (lowered.module === null) return fail(lowered.diagnostics);
-    entryInfo = fe.entryExports();
-    sourceTexts = fe.sourceTexts();
-  } finally {
-    fe.dispose();
-  }
-  const mod = lowered.module!;
-  timing("frontend-dispose");
-
+  const prepared = prepareLibrary(profile, opts.profilePath, compilerReleaseVersion(), buildPlatform, nodeFrontend, timing);
+  if (!prepared.ok) return prepared;
+  const { mod, sourceTexts, sidecarJson } = prepared;
   const fail = (diagnostics: ScrDiagnostic[]): CompileLibraryResult => ({
-    ok: false,
-    diagnostics: decorateLibraryRefusals(diagnostics, profile),
-    sourceTexts,
+    ok: false, diagnostics: decorateLibraryRefusals(diagnostics, profile), sourceTexts,
   });
-
-  // Export resolution first (SC4002/SC4003/SC4004/SC4007 anchor at the
-  // mapped declaration — a mapped async export reports as SC4004, not the
-  // graph-wide gate), then the async_free requirement (ratified, SC4005),
-  // then the profile's determinism fences (ask 5, SC4008) over the same
-  // compiled graph the attestation scan reads: all refused before anything
-  // is emitted, so the narrowed library link set below is structural fact.
-  const resolved = resolveLibrarySection(profile, entryInfo, mod, entryPath);
-  if ("diagnostics" in resolved) return fail(resolved.diagnostics);
-  const asyncSurface = moduleLibAsyncSurface(mod);
-  if (asyncSurface !== null) {
-    return fail([libAsyncSurfaceDiag(asyncSurface.surface, asyncSurface.loc)]);
-  }
-  const fenced = evaluateLibraryFences(mod, profile);
-  if (fenced.length > 0) return fail(fenced);
-  mod.lib = resolved.lib;
-
-  // Ask 4's declared integer slots: the export map's i64/u64 classes
-  // seed the config here; sidecar-declared slots (record fields, msg
-  // arms, helper params/returns) merge in after the projection resolves
-  // them below.
-  let intCfg = libraryIntSlotConfig(profile);
-
-  // The ask-2 contract sidecar rides the same invocation. Identity first
-  // (schema §2's worked build_id definition over compiler version, profile
-  // bytes, and the sorted canonical module graph; source_hash per the
-  // profile's "module-graph" contract) — the u64 lands on the IR so native
-  // archive assembly emits the identity getters from the ONE value the
-  // sidecar records (V12's coherence by construction), then the projection into
-  // the schema (declaration orders from the AST) and the V1–V14
-  // self-check before anything is written.
-  let sidecarJson: string | null = null;
-  if (profile.sidecar !== null) {
-    const rootDir = dirname(resolve(opts.profilePath));
-    const modules = canonicalModuleGraph(rootDir, sourceTexts);
-    const { buildId, sourceHash } = libraryIdentityHashes(compilerReleaseVersion(), profile.profileBytes, modules);
-    mod.lib.identity = {
-      buildIdSymbol: profile.sidecar.buildIdSymbol,
-      abiVersionSymbol: profile.sidecar.abiVersionSymbol,
-      buildId,
-      abiVersion: profile.sidecar.abiVersion,
-    };
-    const built = buildSidecar({
-      profile,
-      facts: contractFacts!,
-      compilerVersion: compilerReleaseVersion(),
-      entry: canonicalPath(rootDir, entryPath),
-      buildId,
-      sourceHash,
-      deterministic: moduleLibNondeterministicSurface(mod) === null,
-    });
-    if (!built.ok) return fail(built.diagnostics);
-    const violations = validateSidecar(built.doc);
-    if (violations.length > 0) {
-      // The projection above refuses every user-caused shape; a rule
-      // violation surviving to here is an emitter bug.
-      return fail(violations.map((v) => iceDiag(`sidecar self-check failed — ${v}`, { file: entryPath, start: 0, end: 0 })));
-    }
-    sidecarJson = built.json;
-    const merged = mergeSidecarIntSlots(intCfg, built.integerSlotFacts, mod);
-    if (!merged.ok) return fail([merged.diagnostic]);
-    intCfg = merged.config;
-  }
-  timing("contract-sidecar", { source_files: sourceTexts.size });
-
-  // Ask 4: the integer-boundary inference — every value that can reach a
-  // profile-declared i64/u64 slot must PROVE representability, wholeness,
-  // and range, or the build refuses with the failed obligation, the
-  // observed evidence, and the author's fix (SC4021/SC4022/SC4023). Runs
-  // only when at least one integer slot is declared; the sidecar (already
-  // built above, written only on success) may then attest the classes —
-  // §5's invariant that an attested integer class means the proof was
-  // discharged holds because no artifact leaves this function otherwise.
-  if (hasIntSlots(intCfg)) {
-    const refusals = checkLibraryIntegerSlots(mod, intCfg).filter((v) => v.outcome === "refuse");
-    if (refusals.length > 0) {
-      return fail(refusals.map((v) => libIntBoundaryDiag(v.path, v.cls, v.obligation!, v.detail!, v.fix!, v.loc)));
-    }
-  }
-  timing("integer-proof");
-
-  const validation = validateModule(mod);
-  if (validation.length > 0) return fail(validation.map((v) => iceDiag(v.message, v.loc)));
-  timing("ir-validate");
 
   await mkdir(opts.outDir, { recursive: true });
   const stem = basename(entryPath).replace(/\.(ts|mts|cts|js|mjs|cjs)$/, "");
   const llvmPath = join(opts.outDir, `${stem}.lib.ll`);
   try {
-    const ll = emitLlvmModule(mod, { targetTriple: process.env["SCRIPTC_TARGET"] ?? "" });
+    const ll = emitLlvmModule(mod, {
+      targetTriple: process.env["SCRIPTC_TARGET"] ?? "",
+      pointerBits: buildPlatform === "wasi" ? 32 : 64,
+      wasi: buildPlatform === "wasi",
+    });
     timing("llvm-emit", { output_bytes: Buffer.byteLength(ll) });
     await writeFile(llvmPath, ll);
     timing("llvm-write");
@@ -2366,7 +1386,7 @@ async function compileLibraryTracked(
   let irPath: string | undefined;
   if (opts.emitIr) {
     irPath = join(opts.outDir, `${stem}.lib.ir.json`);
-    await writeFile(irPath, serializeModule(mod));
+    await writeFile(irPath, serializeModule(mod, true));
   }
 
   const nativeFeatures = libraryNativeFeatures(mod, profile.emission);

@@ -76,6 +76,25 @@ for (const [kind, names] of Object.entries(protocol.childProperties)) {
   lines.push(`    case ${kind}: return ${JSON.stringify(names.join(","))}; // ${SyntaxKind[kind]}`);
 }
 lines.push('    default: return "";', "  }", "}", "");
+// Named child access is a hot path in every frontend pass. Generate the
+// ordinal lookup directly instead of allocating substrings per access.
+// Share cases with the same child layout to keep the dispatch compact.
+const childLayouts = new Map();
+for (const [kind, names] of Object.entries(protocol.childProperties)) {
+  if (names.length === 0) continue;
+  const key = JSON.stringify(names);
+  if (!childLayouts.has(key)) childLayouts.set(key, []);
+  childLayouts.get(key).push(kind);
+}
+lines.push("/** Wire slot for a child property, or -1 when the kind has no such child. */",
+  "export function astChildOrder(kind: number, name: string): number {", "  switch (kind) {");
+for (const [layout, kinds] of childLayouts) {
+  for (const kind of kinds) lines.push(`    case ${kind}: // ${SyntaxKind[kind]}`);
+  lines.push("      switch (name) {");
+  for (const [index, name] of JSON.parse(layout).entries()) lines.push(`        case ${JSON.stringify(name)}: return ${index};`);
+  lines.push("        default: return -1;", "      }");
+}
+lines.push("    default: return -1;", "  }", "}", "");
 const output = lines.join("\n");
 const target = join(root, "packages/compiler/src/frontend/ts7/ast-schema.generated.ts");
 if (process.argv.includes("--check")) {

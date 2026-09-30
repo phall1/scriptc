@@ -190,21 +190,21 @@ export function renderCoverage(input: CoverageInput, opts: { color?: boolean; so
   // surface as SC2030 blockers below; "lazy trap" rows DON'T fail the
   // build — the binary embeds Node's call-time error and the call throws
   // at runtime, exactly where Node would have failed.
-  const builtins = (input.dynamic && input.npmBuiltins) || [];
-  const traps = (input.dynamic && input.npmLazyTraps) || [];
+  const builtins = input.dynamic ? input.npmBuiltins ?? [] : [];
+  const traps = input.dynamic ? input.npmLazyTraps ?? [] : [];
   if (builtins.length > 0 || traps.length > 0) {
     out.push(
       `  ${c(DIM, traps.length > 0 ? "embedded npm code imports Node builtins and unresolved specifiers:" : "embedded npm code imports Node builtins:")}`,
     );
-    const widestB = Math.max(
+    const widestB = Math.max(...[
       ...builtins.map((b) => b.builtin.length),
       ...traps.map((t) => t.specifier.length),
-    );
+    ]);
     // Pad the plain words before coloring — escape codes have no width.
-    const widestS = Math.max(
+    const widestS = Math.max(...[
       ...builtins.map((b) => (b.shimmed ? 7 : b.lazy ? 23 : 11)),
       ...traps.map(() => 24),
-    );
+    ]);
     for (const b of builtins) {
       const status = b.shimmed
         ? c(GREEN, "shimmed".padEnd(widestS))
@@ -247,7 +247,7 @@ export function renderCoverage(input: CoverageInput, opts: { color?: boolean; so
       let pFailed = 0;
       let pIsland = 0;
       const dir = pkg.dir.endsWith("/") ? pkg.dir : `${pkg.dir}/`;
-      for (const [file, s] of input.statsByFile ?? []) {
+      for (const [file, s] of input.statsByFile ?? new Map<string, { total: number; failed: number; island: number }>()) {
         if (!file.startsWith(dir)) continue;
         pTotal += s.total;
         pFailed += s.failed;

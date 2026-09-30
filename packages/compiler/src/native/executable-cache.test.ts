@@ -1,0 +1,159 @@
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, expect, test, vi } from "vitest";
+import { contentDigest, NativeCache } from "./cache.js";
+import { NativeExecutableCache } from "./executable-cache.js";
+
+vi.mock("node:child_process", async (original) => ({
+  ...await original<typeof import("node:child_process")>(), spawnSync: vi.fn(),
+}));
+
+const directories: string[] = [];
+afterEach(() => {
+  vi.resetAllMocks();
+  for (const path of directories.splice(0)) rmSync(path, { recursive: true, force: true });
+});
+
+function fixture(debug = false) {
+  const root = mkdtempSync(join(tmpdir(), "scriptc-native-executable-"));
+  directories.push(root);
+  const inputs = join(root, "inputs");
+  const sdk = join(root, "sdk");
+  const stage = join(root, "stage");
+  const restored = join(root, "restored");
+  for (const directory of [inputs, sdk, stage, restored]) mkdirSync(directory);
+  const runtime = join(inputs, "runtime.o");
+  const library = join(sdk, "libSystem.tbd");
+  writeFileSync(runtime, "runtime");
+  writeFileSync(library, "system library");
+  const cache = new NativeCache(join(root, "cache"));
+  const key = contentDigest("llvm and options");
+  const open = () => new NativeExecutableCache(cache, key, "clang", debug, [runtime]);
+  vi.mocked(spawnSync).mockReturnValue({ pid: 1, status: 0, signal: null, output: [], stdout: library + "\n", stderr: "" });
+  const output = join(stage, "program");
+  writeFileSync(output, Buffer.from([0, 128, 255, 10]));
+  if (debug) {
+    const contents = join(output + ".dSYM", "Contents");
+    mkdirSync(join(contents, "Resources", "DWARF"), { recursive: true });
+    writeFileSync(join(contents, "Info.plist"), "property list");
+    writeFileSync(join(contents, "Resources", "DWARF", "program"), "debug information");
+  }
+  const publish = () => {
+    const entry = open();
+    expect(entry.trace(["-o", output], stage)).toBe(true);
+    entry.publish(output);
+  };
+  return { root, inputs, sdk, stage, output, destination: join(restored, "program"), runtime, library, cache, key, open, publish };
+}
+
+test.each([false, true])("restores a complete executable and its debug information (%s)", (debug) => {
+  const f = fixture(debug);
+  f.publish();
+  vi.mocked(spawnSync).mockClear();
+  expect(f.open().restore(f.destination)).toBe(true);
+  expect(readFileSync(f.destination)).toEqual(readFileSync(f.output));
+  if (process.platform !== "win32") expect(statSync(f.destination).mode & 0o111).toBe(0o111);
+  expect(spawnSync).not.toHaveBeenCalled();
+  if (debug) {
+    expect(readFileSync(join(f.destination + ".dSYM/Contents/Resources/DWARF/program"), "utf8")).toBe("debug information");
+    expect(readFileSync(join(f.destination + ".dSYM/Contents/Info.plist"), "utf8")).toBe("property list");
+  }
+});
+
+test.each(["runtime", "library"] as const)("invalidates %s replacement even with restored size and mtime", (input) => {
+  const f = fixture();
+  f.publish();
+  const before = statSync(f[input]);
+  writeFileSync(f[input] + ".new", "x".repeat(before.size));
+  utimesSync(f[input] + ".new", before.atime, before.mtime);
+  renameSync(f[input] + ".new", f[input]);
+  expect(f.open().restore(f.destination)).toBe(false);
+});
+
+test("adding a new SDK library search candidate invalidates the previous link", () => {
+  const f = fixture();
+  f.publish();
+  writeFileSync(join(f.sdk, "libSystem.dylib"), "new candidate");
+  expect(f.open().restore(f.destination)).toBe(false);
+});
+
+test("a library search change during tracing prevents publication", () => {
+  const f = fixture();
+  vi.mocked(spawnSync).mockImplementation(() => {
+    if (vi.mocked(spawnSync).mock.calls.length === 2) writeFileSync(join(f.sdk, "new-library.tbd"), "library");
+    return { pid: 1, status: 0, signal: null, output: [], stdout: f.library + "\n", stderr: "" };
+  });
+  const entry = f.open();
+  expect(entry.trace([], f.stage)).toBe(false);
+  entry.publish(f.output);
+  expect(f.open().restore(f.destination)).toBe(false);
+});
+
+test.skipIf(process.platform === "win32")("retargeting an input symlink invalidates the previous link", () => {
+  const f = fixture();
+  const link = join(f.inputs, "current.o");
+  symlinkSync(f.runtime, link);
+  const open = () => new NativeExecutableCache(f.cache, f.key, "clang", false, [link]);
+  const entry = open();
+  expect(entry.trace([], f.stage)).toBe(true);
+  entry.publish(f.output);
+  expect(open().restore(f.destination)).toBe(true);
+  const replacement = join(f.inputs, "replacement.o");
+  writeFileSync(replacement, "runtime");
+  rmSync(link);
+  symlinkSync(replacement, link);
+  expect(open().restore(f.destination)).toBe(false);
+});
+
+test.each(["executable", "binary", "dsym"])("corrupt %s payloads are misses", (family) => {
+  const f = fixture(true);
+  f.publish();
+  const directory = join(f.cache.root, family);
+  const key = readdirSync(directory).find((name) => /^[0-9a-f]{64}$/.test(name))!;
+  writeFileSync(join(directory, key), "corrupt");
+  expect(f.open().restore(f.destination)).toBe(false);
+});
+
+test("invalid cache metadata is rejected even with a matching integrity digest", () => {
+  const f = fixture();
+  f.publish();
+  const bytes = f.cache.read("executable", f.key)!;
+  const entry = JSON.parse(bytes.toString());
+  entry.inputs = [];
+  f.cache.write("executable", f.key, JSON.stringify(entry));
+  expect(f.open().restore(f.destination)).toBe(false);
+});
+
+test("changing an input during emission prevents cache publication", () => {
+  const f = fixture();
+  const entry = f.open();
+  expect(entry.trace([], f.stage)).toBe(true);
+  writeFileSync(f.runtime, "replacement runtime");
+  entry.publish(f.output);
+  expect(f.open().restore(f.destination)).toBe(false);
+});
+
+test("metadata cannot omit a required runtime input", () => {
+  const f = fixture();
+  f.publish();
+  const bytes = f.cache.read("executable", f.key)!;
+  const entry = JSON.parse(bytes.toString());
+  entry.inputs = entry.inputs.filter((input: { path: string }) => input.path !== f.runtime);
+  f.cache.write("executable", f.key, JSON.stringify(entry));
+  expect(f.open().restore(f.destination)).toBe(false);
+});
+
+test("a failed or empty link trace cannot publish a completed executable", () => {
+  const f = fixture();
+  const entry = f.open();
+  entry.publish(f.output);
+  expect(f.open().restore(f.destination)).toBe(false);
+  vi.mocked(spawnSync).mockReturnValue({ pid: 1, status: 0, signal: null, output: [], stdout: "", stderr: "" });
+  expect(entry.trace([], f.stage)).toBe(false);
+  entry.publish(f.output);
+  expect(f.open().restore(f.destination)).toBe(false);
+  vi.mocked(spawnSync).mockReturnValue({ pid: 1, status: 1, signal: null, output: [], stdout: "", stderr: "failed" });
+  expect(entry.trace([], f.stage)).toBe(false);
+});

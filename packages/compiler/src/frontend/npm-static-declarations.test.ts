@@ -3,12 +3,41 @@ import {
   applyNpmStaticDeclarationProperties,
   applyNpmStaticDeclarationOverloads,
   applyNpmStaticFindReturnWidening,
+  applyNpmStaticJsDocNamepaths,
   applyNpmStaticNullableClassFields,
   npmStaticDeclarationReexports,
   npmStaticRuntimeClassTargets,
   parseNpmStaticDeclarationProperties,
   parseNpmStaticDeclarationOverloads,
 } from "./npm-static-declarations.js";
+
+describe("npm-static JSDoc namepaths", () => {
+  test("keeps unsupported nominal names checked without changing source offsets", () => {
+    const source = `class Owner {
+      /** @param {Array<Owner~Item>} [items=[]] @returns {Owner#Result | null} */
+      collect(items = []) { return items; }
+    }`;
+    const text = applyNpmStaticJsDocNamepaths("index.js", source);
+    expect(text).toBe(source.replace("Owner~Item", "*         ").replace("Owner#Result", "*           "));
+    expect(text?.length).toBe(source.length);
+    expect(applyNpmStaticJsDocNamepaths("index.js", text!)).toBeNull();
+  });
+
+  test("leaves strings, prose, runtime code and valid types alone", () => {
+    const source = `const text = "/** @type {Owner~Item} */";
+      // @type {Owner~Item}
+      /** See Owner~Item. @param {'Owner~Item' | "Owner#Item" | Owner.Item} value */
+      function keep(value) { return "Owner~Item"; }`;
+    expect(applyNpmStaticJsDocNamepaths("index.js", source)).toBeNull();
+  });
+
+  test("handles nested record types and repeated names", () => {
+    const source = `/** @type {{ first: Outer.Inner~Value[], second: Outer.Inner~Value, literal: 'a}~b' }} */
+      const values = {};`;
+    const text = applyNpmStaticJsDocNamepaths("index.js", source);
+    expect(text).toBe(source.replaceAll("Outer.Inner~Value", "*                "));
+  });
+});
 
 const declarations = `
 export class Chainy {

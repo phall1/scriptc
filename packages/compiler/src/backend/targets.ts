@@ -294,7 +294,7 @@ export const WASM32_WASI_TARGET: NativeTargetSpec = {
   linkerTargetTriple: "wasm32-wasi",
   runtimeSystemLibraries: ["wasi-emulated-signal", "wasi-emulated-process-clocks"],
   runtimeCompileDefines: ["_GNU_SOURCE", "_WASI_EMULATED_SIGNAL", "_WASI_EMULATED_PROCESS_CLOCKS"],
-  supports: { asm: true, obj: true, exe: true, library: false },
+  supports: { asm: true, obj: true, exe: true, library: true },
   helperPackage: DARWIN_ARM64_HELPER.packageName, helper: DARWIN_ARM64_HELPER,
   llvmBackend: "WebAssembly",
   hostHelpers: {
@@ -340,24 +340,29 @@ export const NATIVE_TARGETS = [
   IOS_ARM64_TARGET, IOS_SIMULATOR_ARM64_TARGET, ANDROID_ARM64_TARGET,
 ] as const;
 
+let linuxLibcMemo: LinuxLibc | undefined;
+
 function detectedLinuxLibc(): LinuxLibc {
+  if (linuxLibcMemo !== undefined) return linuxLibcMemo;
   // Node exposes glibc's runtime version without any external command or
   // filesystem probe. Its absence on Linux is the portable musl signal used
-  // by npm's own optional-dependency selection conventions.
+  // by npm's own optional-dependency selection conventions. The host libc
+  // cannot change within this process, and generating a full report is costly.
   const report = process.report?.getReport() as { header?: { glibcVersionRuntime?: unknown } } | undefined;
   const header = report?.header;
-  return typeof header?.glibcVersionRuntime === "string" ? "gnu" : "musl";
+  linuxLibcMemo = typeof header?.glibcVersionRuntime === "string" ? "gnu" : "musl";
+  return linuxLibcMemo;
 }
 
 function helperHost(
   platform: NodeJS.Platform,
   arch: string,
-  linuxLibc: LinuxLibc = detectedLinuxLibc(),
+  linuxLibc?: LinuxLibc,
 ): NativeHelperHost | null {
   if (platform === "darwin" && arch === "arm64") return "darwin-arm64";
   if (platform === "darwin" && arch === "x64") return "darwin-x64";
-  if (platform === "linux" && arch === "x64") return `linux-x64-${linuxLibc}`;
-  if (platform === "linux" && arch === "arm64") return `linux-arm64-${linuxLibc}`;
+  if (platform === "linux" && arch === "x64") return `linux-x64-${linuxLibc ?? detectedLinuxLibc()}`;
+  if (platform === "linux" && arch === "arm64") return `linux-arm64-${linuxLibc ?? detectedLinuxLibc()}`;
   if (platform === "win32" && arch === "x64") return "win32-x64";
   return null;
 }
@@ -385,19 +390,18 @@ function nativeHostTarget(
   hostPlatform: NodeJS.Platform,
   hostArch: string,
   hostRelease: string,
-  linuxLibc: LinuxLibc,
+  linuxLibc?: LinuxLibc,
 ): NativeTargetSpec | null {
   if (hostPlatform === "darwin") {
     const major = Number.parseInt(hostRelease.split(".", 1)[0] ?? "", 10);
     if (!Number.isFinite(major) || major < 24) return null;
     return hostArch === "arm64" ? MACOS_ARM64_TARGET : hostArch === "x64" ? MACOS_X64_TARGET : null;
   }
-  if (hostPlatform === "linux") {
+  if (hostPlatform === "linux" && (hostArch === "x64" || hostArch === "arm64")) {
+    const libc = linuxLibc ?? detectedLinuxLibc();
     return hostArch === "x64"
-      ? linuxLibc === "musl" ? LINUX_X64_MUSL_TARGET : LINUX_X64_GNU_TARGET
-      : hostArch === "arm64"
-        ? linuxLibc === "musl" ? LINUX_ARM64_MUSL_TARGET : LINUX_ARM64_GNU_TARGET
-        : null;
+      ? libc === "musl" ? LINUX_X64_MUSL_TARGET : LINUX_X64_GNU_TARGET
+      : libc === "musl" ? LINUX_ARM64_MUSL_TARGET : LINUX_ARM64_GNU_TARGET;
   }
   return hostPlatform === "win32" && hostArch === "x64" ? WINDOWS_X64_MSVC_TARGET : null;
 }
@@ -435,20 +439,12 @@ function requestedTarget(
   }
 }
 
-/** Select only a fully described scriptc target. LLVM accepting an arbitrary
- * triple is never evidence of its object ABI, runtime pack, link, or run. */
-export function nativeCodegenTarget(
-  env: NodeJS.ProcessEnv = process.env,
-  hostPlatform: NodeJS.Platform = process.platform,
-  hostArch: string = process.arch,
-  hostRelease: string = release(),
-  linuxLibc: LinuxLibc = detectedLinuxLibc(),
+/** Native distributions already know their host ABI, including Linux libc. */
+export function selectNativeTarget(
+  raw: string, host: NativeTargetSpec, hostPlatform: string = process.platform,
 ): NativeTargetSpec | null {
-  const host = nativeHostTarget(hostPlatform, hostArch, hostRelease, linuxLibc);
-  const target = requestedTarget(env["SCRIPTC_TARGET"] ?? "", host, hostPlatform);
-  if (host === null || target === null || nativeHelperForTarget(target, hostPlatform, hostArch, linuxLibc) === null) return null;
-  // Cross ELF links use Zig's target libc. A native clang driver cannot
-  // infer or provide another architecture's CRT and sysroot.
+  const target = requestedTarget(raw, host, hostPlatform as NodeJS.Platform);
+  if (target === null) return null;
   if (target.platform === "linux" && target.name !== host.name && target.name !== "android-arm64") {
     return {
       ...target, defaultLinker: "zig", defaultLinkerArgs: ["cc"],
@@ -461,12 +457,27 @@ export function nativeCodegenTarget(
   return target;
 }
 
+/** Select only a fully described scriptc target. LLVM accepting an arbitrary
+ * triple is never evidence of its object ABI, runtime pack, link, or run. */
+export function nativeCodegenTarget(
+  env: NodeJS.ProcessEnv = process.env,
+  hostPlatform: NodeJS.Platform = process.platform,
+  hostArch: string = process.arch,
+  hostRelease: string = release(),
+  linuxLibc?: LinuxLibc,
+): NativeTargetSpec | null {
+  const host = nativeHostTarget(hostPlatform, hostArch, hostRelease, linuxLibc);
+  const target = host === null ? null : selectNativeTarget(env["SCRIPTC_TARGET"] ?? "", host, hostPlatform);
+  if (host === null || target === null || nativeHelperForTarget(target, hostPlatform, hostArch, linuxLibc) === null) return null;
+  return target;
+}
+
 export function nativeCodegenTargetRefusal(
   env: NodeJS.ProcessEnv = process.env,
   hostPlatform: NodeJS.Platform = process.platform,
   hostArch: string = process.arch,
   hostRelease: string = release(),
-  linuxLibc: LinuxLibc = detectedLinuxLibc(),
+  linuxLibc?: LinuxLibc,
 ): string | null {
   if (nativeCodegenTarget(env, hostPlatform, hostArch, hostRelease, linuxLibc) !== null) return null;
   const requested = env["SCRIPTC_TARGET"] ?? "";

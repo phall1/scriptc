@@ -2,8 +2,8 @@ import { createProgram } from "../frontend/ts7/program-adapter.js";
 import { fileURLToPath } from "node:url";
 import { afterAll, expect, test } from "vitest";
 import * as ts from "../frontend/ts7/adapter.js";
-import { BOOL, F64, VOID, type IrExpr, type IrStmt } from "./ir.js";
-import { everyExpr, everyExprChild, everyStmtChild, everyStmtList, mapExprChildren, mapStmtChildren, transformStmtList } from "./traverse.js";
+import { BOOL, F64, VOID, type IrExpr, type IrModule, type IrStmt, type IrType } from "./ir.js";
+import { everyModuleNode, everyTypeChild, everyExpr, everyExprChild, everyStmtChild, everyStmtList, mapExprChildren, mapStmtChildren, transformStmtList } from "./traverse.js";
 
 const loc = { file: "traverse.ts", start: 0, end: 1 };
 const num = (value: number): IrExpr => ({ kind: "numLit", value, type: F64, loc });
@@ -121,4 +121,104 @@ test("preorder transformations traverse replacement children exactly once", () =
   expect(seen).toEqual(["exprStmt", "numLit"]);
   expect(result).toEqual([{ kind: "return", value: { kind: "intrinsic", name: "console.log", args: [], type: VOID, loc }, loc }]);
   expect(body).toEqual([statement(1)]);
+});
+
+// Build the typed slots from the schema too: adding a field to a declaration
+// must fail this audit until module traversal accounts for it.
+test("module traversal covers every declared type slot", () => {
+  const expected: IrType[] = [];
+  const active = new Set<string>();
+  function slots(node: ts.TypeNode): unknown {
+    if (ts.isTypeReferenceNode(node)) {
+      const name = node.typeName.getText();
+      if (name === "IrType") {
+        const value: IrType = { kind: "regex" };
+        expected.push(value);
+        return value;
+      }
+      if (name === "IrExpr") return { kind: "numLit", value: 0, loc, type: slotsType() };
+      if (name === "IrStmt") return { kind: "exprStmt", loc, expr: { kind: "numLit", value: 0, loc, type: slotsType() } };
+      if (name === "SrcLoc") return loc;
+      if (active.has(name)) throw new Error(`unexpected recursive schema reference: ${name}`);
+      const declaration = source.statements.find((item) =>
+        (ts.isInterfaceDeclaration(item) || ts.isTypeAliasDeclaration(item)) && item.name.text === name);
+      if (!declaration) return undefined;
+      active.add(name);
+      const result = ts.isInterfaceDeclaration(declaration) ? fields(declaration.members)
+        : ts.isTypeAliasDeclaration(declaration) ? slots(declaration.type) : undefined;
+      active.delete(name);
+      return result;
+    }
+    if (ts.isTypeLiteralNode(node)) return fields(node.members);
+    if (ts.isArrayTypeNode(node)) return [slots(node.elementType)];
+    if (ts.isParenthesizedTypeNode(node)) return slots(node.type);
+    if (ts.isIntersectionTypeNode(node)) return slots(node.types[0]!);
+    if (ts.isUnionTypeNode(node)) {
+      // Metadata unions can choose any arm: the schema puts executable and
+      // typed alternatives first, followed by null/unit alternatives.
+      return slots(node.types[0]!);
+    }
+    return undefined;
+  }
+  function slotsType(): IrType {
+    const value: IrType = { kind: "regex" };
+    expected.push(value);
+    return value;
+  }
+  function fields(members: readonly ts.TypeElement[]): Record<string, unknown> {
+    const result: Record<string, unknown> = {};
+    for (const member of members) {
+      if (!ts.isPropertySignature(member) || !member.type) continue;
+      const value = slots(member.type);
+      if (value !== undefined) result[member.name.getText()] = value;
+    }
+    return result;
+  }
+  const declaration = source.statements.find((item): item is ts.InterfaceDeclaration =>
+    ts.isInterfaceDeclaration(item) && item.name.text === "IrModule")!;
+  const module = { ...fields(declaration.members), sourceFile: loc.file } as unknown as IrModule;
+  const seen: IrType[] = [];
+  expect(everyModuleNode(module, {
+    expr: () => true, stmt: () => true, type: (node) => { seen.push(node); return true; },
+  })).toBe(true);
+  expect(seen).toHaveLength(expected.length);
+  for (const node of expected) expect(seen.filter((item) => item === node)).toHaveLength(1);
+  for (let stop = 0; stop < expected.length; stop++) {
+    let visits = 0;
+    expect(everyModuleNode(module, {
+      expr: () => true, stmt: () => true, type: () => visits++ !== stop,
+    })).toBe(false);
+    expect(visits).toBe(stop + 1);
+  }
+});
+
+test("type traversal visits all structural children and leaves named shapes as references", () => {
+  const alias = source.statements.find((node): node is ts.TypeAliasDeclaration =>
+    ts.isTypeAliasDeclaration(node) && node.name.text === "IrType")!;
+  if (!ts.isUnionTypeNode(alias.type)) throw new Error("IrType must be a union");
+  for (const variant of alias.type.types) {
+    if (!ts.isTypeLiteralNode(variant)) throw new Error("IrType variants must be records");
+    const members = variant.members.filter(ts.isPropertySignature);
+    const kind = JSON.parse(members.find((member) => member.name.getText() === "kind")!.type!.getText()) as string;
+    const node: Record<string, unknown> = { kind };
+    const expected: IrType[] = [];
+    for (const member of members) {
+      if (!member.type) continue;
+      const child = ts.isTypeReferenceNode(member.type) && member.type.typeName.getText() === "IrType";
+      const array = ts.isArrayTypeNode(member.type) && member.type.elementType.getText() === "IrType";
+      if (!child && !array) continue;
+      const value: IrType = { kind: "fileHandle" };
+      expected.push(value);
+      node[member.name.getText()] = array ? [value] : value;
+    }
+    const seen: IrType[] = [];
+    expect(everyTypeChild(node as IrType, (child) => { seen.push(child); return true; })).toBe(true);
+    expect(seen).toHaveLength(expected.length);
+    expected.forEach((child, i) => expect(seen[i]).toBe(child));
+    for (let stop = 0; stop < expected.length; stop++) {
+      let count = 0;
+      expect(everyTypeChild(node as IrType, () => count++ !== stop)).toBe(false);
+      expect(count).toBe(stop + 1);
+    }
+  }
 });

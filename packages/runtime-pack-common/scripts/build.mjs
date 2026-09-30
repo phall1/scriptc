@@ -86,6 +86,9 @@ async function build() {
     const flavors = {};
     for (const [flavor, flavorSpec] of Object.entries(matrix.flavors)) {
       process.stdout.write(`building ${packageManifest.name} ${flavor} runtime\n`);
+      // Zig emits DWARF by default, including descriptions of functions
+      // removed by section GC. Release packs must opt out explicitly.
+      const debugFlags = flavor.endsWith("release") ? ["-g0"] : [];
       const units = [];
       for (const unit of flavorSpec.runtime_units ?? matrix.runtime_units) {
         const variants = [];
@@ -97,7 +100,7 @@ async function build() {
             ...(unit.source === "scr_tls.c" ? ["-I", join(mbedtls, "include")] : []),
             ...(unit.source === "scr_zlib.c" || unit.source === "scr_fetch.c" ? ["-I", zlib] : []),
           ];
-          await compile(join(runtimeSrc, unit.source), output, [...commonFlags, flavorSpec.optimization, ...variant.defines.map((define) => `-D${define}`), ...includeFlags]);
+          await compile(join(runtimeSrc, unit.source), output, [...commonFlags, flavorSpec.optimization, ...debugFlags, ...variant.defines.map((define) => `-D${define}`), ...includeFlags]);
           variants.push({ id: variant.id, when: variant.when, defines: variant.defines, path: artifactPath(output), sha256: await sha256(output), size: (await stat(output)).size });
         }
         units.push({ source: unit.source, predicate: unit.predicate, variants });
@@ -111,6 +114,7 @@ async function build() {
     const vendorTarget = [
       ...config.targetArgs,
       ...(config.compilerFlags ?? []),
+      "-g0",
       ...(config.runtimeDefines ?? []).map((define) => `-D${define}`),
     ];
     const requestedArchives = new Set(matrix.archives.map((entry) => entry.id));

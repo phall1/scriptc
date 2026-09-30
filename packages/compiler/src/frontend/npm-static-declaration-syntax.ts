@@ -45,6 +45,47 @@ export interface NpmStaticOverloadRewrite {
   insertions: readonly { offset: number; length: number }[];
 }
 
+/** TypeScript truncates JSDoc inner/instance namepaths (`Owner~Item`,
+ * `Owner#Item`) to Owner. That unrelated nominal type must not dictate a
+ * native layout. Keep the unresolved atom checked, preserving containers,
+ * string literal types, executable source and every diagnostic offset. */
+export function applyNpmStaticJsDocNamepaths(sourceFile: ts.SourceFile, source: string): string | null {
+  const replacements = new Map<number, number>();
+  const visit = (node: ts.Node): void => {
+    for (const doc of node.jsDoc ?? []) for (const tag of doc.tags ?? []) {
+      const expression = tag.typeExpression;
+      if (expression?.kind !== ts.SyntaxKind.JSDocTypeExpression) continue;
+      const start = expression.getStart(sourceFile);
+      if (source[start] !== "{") continue;
+      let depth = 1;
+      let quote = "";
+      for (let i = start + 1; i < tag.getEnd() && depth > 0; i++) {
+        const char = source[i]!;
+        if (quote !== "") {
+          if (char === "\\") i++;
+          else if (char === quote) quote = "";
+          continue;
+        }
+        if (char === '"' || char === "'" || char === "`") { quote = char; continue; }
+        if (char === "{") { depth++; continue; }
+        if (char === "}") { depth--; continue; }
+        const name = /^[$A-Z_a-z][$\w]*(?:[.#~][$A-Z_a-z][$\w]*)*/.exec(source.slice(i, tag.getEnd()))?.[0];
+        if (!name) continue;
+        if (name.includes("~") || name.includes("#")) replacements.set(i, name.length);
+        i += name.length - 1;
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  if (replacements.size === 0) return null;
+  let text = source;
+  for (const [offset, length] of replacements) {
+    text = text.slice(0, offset) + "*" + " ".repeat(length - 1) + text.slice(offset + length);
+  }
+  return text;
+}
+
 /** Recover nullable class storage erased by a JavaScript bundle. A null
  * field whose writes construct one named class or call one static factory (or reset to null)
  * keeps that class's native methods instead of an opaque checked value.

@@ -58,8 +58,48 @@ console.log("after");
   }
 });
 
+test("incompatible JS parameter overrides refuse at method entry", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "scriptc-override-parameters-"));
+  try {
+    const entry = join(dir, "main.cjs");
+    writeFileSync(entry, `
+// @ts-nocheck
+class Base {
+  method(value = 1) { return 1; }
+  dispatch(value) { return this.method(value); }
+}
+class Derived extends Base {
+  method(value = "x") { console.log("must not execute", value); return "x"; }
+}
+class Leaf extends Derived { callSuper(value) { super.method(value); } }
+function argument(label) { console.log("argument", label); return 2; }
+const derived = new Derived();
+try { derived.method(argument("direct")); }
+catch (error) { console.log("direct", String(error).includes("SC1090"), String(error).includes("different signature")); }
+try { derived.dispatch(argument("virtual")); }
+catch (error) { console.log("virtual", String(error).includes("SC1090")); }
+try { new Leaf().callSuper(argument("super")); }
+catch (error) { console.log("super", String(error).includes("SC1090")); }
+console.log("after");
+`);
+    const { coverage } = analyze(entry, { dynamic: false });
+    expect(coverage.diagnostics).toEqual([]);
+    expect(coverage.runtimeFences?.map((d) => [d.code, d.message])).toEqual([
+      ["SC1090", expect.stringContaining("overriding method 'method' with a different signature")],
+    ]);
+    const result = await compile(entry, { backend: "llvm", dynamic: false, sanitize, outDir: dir, outPath: join(dir, "program") });
+    expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
+    if (!result.ok) return;
+    const child = spawnSync(result.binaryPath, [], { encoding: "utf8" });
+    expect(child.status).toBe(0);
+    expect(child.stderr).toBe("");
+    expect(child.stdout).toBe("argument direct\ndirect true true\nargument virtual\nvirtual true\nargument super\nsuper true\nafter\n");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test.each([
-  ["parameter types", `class Base { method(value = 1) { return 1; } } class Derived extends Base { method(value = "x") { return "x"; } }`],
   ["async methods", `class Base { method() { return 1; } } class Derived extends Base { async method() { return "x"; } }`],
   ["generators", `class Base { method() { return 1; } } class Derived extends Base { *method() { yield "x"; } }`],
   ["accessors", `class Base { get value() { return 1; } } class Derived extends Base { get value() { return "x"; } }`],

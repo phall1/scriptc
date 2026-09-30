@@ -2303,6 +2303,12 @@ function lowerFsSyncBufferWindow(
     }
     if (bi.module === "fs" && (bi.member === "writeFileSync" || bi.member === "appendFileSync") && expr.arguments.length === 2) {
       const dataIr = lowerer.mapTypeOf(lowerer.typeOf(expr.arguments[1]!));
+      if (dataIr?.kind === "union") {
+        const arms = lowerer.unions.get(dataIr.unionId)?.arms;
+        if (arms && arms.every((arm) => arm.kind === "string" || (arm.kind === "bytes" && arm.elem === "u8"))) {
+          return lowerStringOrBytesWrite(lowerer, expr, dataIr, arms, bi.member === "appendFileSync");
+        }
+      }
       if (dataIr?.kind === "bytes") {
         if (dataIr.elem !== "u8") {
           lowerer.noLowering(
@@ -4995,16 +5001,48 @@ export function lowerForkCall(lowerer: Lowerer, expr: ts.CallExpression, loc: Sr
         );
       }
       const node: IrExpr = { kind: "jsonStringify", value, type: STRING, loc };
-      if (indent !== "") {
-        // The compile-time-resolved indent rides as an extra property (the
-        // node shape in ir/ir.ts is unchanged); the backend re-indents
-        // the compact serializer output with Node's gap algorithm.
-        (node as { indent?: string }).indent = indent;
-      }
+      if (indent !== "") node.indent = indent;
       return node;
     }
     return null; // unknown members are tsc errors before lowering
   }
+
+/** A valid string/byte overload must select its runtime entry from the live
+ * union tag. Coercing the whole argument to the string overload loses bytes. */
+function lowerStringOrBytesWrite(lowerer: Lowerer, call: ts.CallExpression,
+  dataType: Extract<IrType, { kind: "union" }>, arms: readonly IrType[], append: boolean): IrExpr {
+  const loc = locOf(call);
+  const key = `fs.${append ? "append" : "write"}:${dataType.unionId}`;
+  let helper = lowerer.widthHelpers.get(key);
+  if (!helper) {
+    helper = `%fs.writeData.${lowerer.widthHelpers.size}`;
+    lowerer.widthHelpers.set(key, helper);
+    const body: IrStmt[] = [];
+    for (let tag = 0; tag < arms.length; tag++) {
+      const arm = arms[tag]!;
+      const fn: IrLibFn = arm.kind === "bytes"
+        ? append ? "fs.appendFileSyncBytes" : "fs.writeFileSyncBytes"
+        : append ? "fs.appendFileSync" : "fs.writeFileSync";
+      body.push({ kind: "if", loc,
+        cond: { kind: "unionIsTag", unionId: dataType.unionId, tag, negated: false,
+          value: varRef("data.0", dataType, loc), type: BOOL, loc },
+        then: [
+          { kind: "exprStmt", expr: { kind: "libCall", fn, args: [varRef("path.0", STRING, loc),
+            { kind: "unionNarrow", unionId: dataType.unionId, tag, value: varRef("data.0", dataType, loc), type: arm, loc }], type: VOID, loc }, loc },
+          { kind: "return", value: null, loc },
+        ], else_: null,
+      });
+    }
+    body.push({ kind: "return", value: null, loc });
+    lowerer.liftedFns.push({ name: helper, returnType: VOID, loc,
+      params: [{ localId: "path.0", name: "path", type: STRING }, { localId: "data.0", name: "data", type: dataType }],
+      locals: [{ id: "path.0", name: "path", type: STRING, mutable: false }, { id: "data.0", name: "data", type: dataType, mutable: false }],
+      body,
+    });
+  }
+  return { kind: "call", callee: helper, args: [lowerer.lowerExprExpecting(call.arguments[0]!, STRING),
+    lowerer.lowerExprExpecting(call.arguments[1]!, dataType)], type: VOID, loc };
+}
 
 function lowerOptionalStringifyRoot(lowerer: Lowerer, value: IrExpr, indent: string, loc: SrcLoc): IrExpr | null {
   const tags = optionalStringTags(lowerer, value.type);
@@ -5022,7 +5060,7 @@ function lowerOptionalStringifyRoot(lowerer: Lowerer, value: IrExpr, indent: str
       type: STRING,
       loc,
     };
-    if (indent !== "") (serialized as { indent?: string }).indent = indent;
+    if (indent !== "") serialized.indent = indent;
     const missing = lowerer.wrappedUndefined(resultT, loc);
     if (!missing) throw new InternalCompilerError("optional JSON.stringify result needs an undefined arm");
     lowerer.liftedFns.push({
@@ -6137,7 +6175,11 @@ function lowerOptionalStringSearchParams(lowerer: Lowerer, init: IrExpr, loc: Sr
         lowerer.noLowering(`${receiverType.kind === "cryptoHash" ? "Hash" : "Hmac"}.update with ${call.arguments.length} arguments`, call, "update(stringOrBuffer[, inputEncoding]) is supported");
       }
       const dataNode = call.arguments[0]!;
-      const data = lowerer.lowerExpr(dataNode);
+      const dataType = lowerer.mapTypeOf(lowerer.typeOf(dataNode));
+      // Indexed reads can retain optional storage after a nullish fallback
+      // or narrowing. Use the proven argument type through a checked coercion.
+      const data = dataType?.kind === "string" || dataType?.kind === "bytes"
+        ? lowerer.lowerExprExpecting(dataNode, dataType) : lowerer.lowerExpr(dataNode);
       const prefix = receiverType.kind === "cryptoHash" ? "crypto.hashUpdate" : "crypto.hmacUpdate";
       if (data.type.kind === "bytes" && data.type.elem === "u8") {
         if (call.arguments.length !== 1) {
