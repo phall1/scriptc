@@ -39,6 +39,23 @@ function localClassModule(): IrModule {
   return mod;
 }
 
+test("class prototype data helpers retain their ABI after serialization", () => {
+  const mod = expressionModule({ kind: "numLit", value: 0, type: F64, loc }, []);
+  mod.classes = [{ name: "Vector", fields: [], prototypeDataHelper: "%prototype.Vector", loc }];
+  mod.functions.push({ name: "%prototype.Vector", params: [], locals: [], returnType: DYN,
+    body: [{ kind: "return", value: { kind: "dynObjLit", fields: [], type: DYN, loc }, loc }], loc });
+  expect(validateModule(deserializeModule(serializeModule(mod)))).toEqual([]);
+  for (const variant of ["missing", "params", "return", "captures"]) {
+    const bad = structuredClone(mod);
+    const helper = bad.functions[1]!;
+    if (variant === "missing") bad.functions.pop();
+    if (variant === "params") helper.params.push({ localId: "p", name: "p", type: DYN });
+    if (variant === "return") helper.returnType = F64;
+    if (variant === "captures") helper.captures = [];
+    expect(validateModule(bad).some((error) => error.message.includes("prototype data helper"))).toBe(true);
+  }
+});
+
 test("local classes retain serialized capture slots and fresh identity", () => {
   const mod = localClassModule();
   expect(validateModule(mod)).toEqual([]);

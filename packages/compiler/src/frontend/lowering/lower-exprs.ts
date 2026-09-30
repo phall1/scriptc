@@ -50,6 +50,7 @@ import { recordTextCodecClass } from "../../ir/ir.js";
 import { classSymbolKeyOf } from "./symbol-fields.js";
 import { lowerClassMethodValue } from "./class-method-values.js";
 import { lowerGlobalValue } from "./lower-global-value.js";
+import { lowerClassPrototypeData } from "./class-prototypes.js";
 
 /** An assignable `obj.field` target — a class field, a record field, or a
  * class ACCESSOR property (reads become getter calls, writes setter calls;
@@ -1511,6 +1512,8 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
     if (ts.isConditionalExpression(expr)) return lowerTernary(lowerer, expr);
 
     if (ts.isPropertyAccessExpression(expr)) {
+      const prototypeData = lowerClassPrototypeData(lowerer, expr);
+      if (prototypeData) return prototypeData;
       // `super.x`: the base chain's GETTER, called directly (super
       // dispatch is static in JS — never through the dynamic class).
       // super.method() calls are routed at the call site; a bare super
@@ -2149,6 +2152,15 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
           expr,
           `reading the abstract property '${expr.name.text}' through a '${lowerer.checker.typeToString(lowerer.typeOf(expr.expression))}'-typed receiver (abstract property declarations are erased at runtime, so no shared slot exists — type the receiver as the concrete class, or declare an abstract getter instead)`,
         );
+      }
+      if (isDynTypedRefType(recvLowered.type)) {
+        const info = lowerer.classes.get(recvLowered.type.className);
+        if (info && !info.def.runtime && !info.builtinError && !info.builtinEmitter && !info.builtinStream) {
+          return lowerer.maybeNarrow({
+            kind: "dynKeyGet", value: lowerer.coerceToExpected(recvLowered, DYN),
+            key: { kind: "strLit", value: expr.name.text, type: STRING, loc }, type: DYN, loc,
+          }, expr);
+        }
       }
       lowerer.unsupported(
         "SC1090",
@@ -9656,6 +9668,14 @@ function lowerLogicalPair(lowerer: Lowerer, expr: ts.BinaryExpression, left: IrE
     const key: IrExpr = { kind: "strLit", value: field, type: STRING, loc: locOf(expr.name) };
     const keyed = lowerUnionKeyedRead(lowerer, expr, value.type.unionId, value, key, field);
     if (keyed) return keyed;
+    // JavaScript overloads commonly inspect a class brand on a scalar-or-
+    // instance argument (e.g. Matrix4.makeTranslation). Preserve primitive
+    // missing-property semantics and dispatch class data through its native
+    // capsule instead of demanding a field shared by every union arm.
+    if (isJsSourceFile(expr.getSourceFile()) && def.arms.some(isDynTypedRefType) && lowerer.dynConvertible(value.type)) {
+      return { kind: "dynKeyGet", value: lowerer.coerceToExpected(value, DYN), key,
+        ...(hasOptionalChainGuard(expr.expression) ? { optional: true as const } : {}), type: DYN, loc: locOf(expr) };
+    }
     lowerer.unsupported(
       "SC1090",
       expr,

@@ -5,6 +5,7 @@ import { everyStmtList, transformStmtList } from "../../ir/traverse.js";
 import { dynUndefinedExpr, PoisonError, type Lowerer } from "./lowerer.js";
 import { implicitDefaultInstance, type ParamShape } from "./lower-calls.js";
 import { accessorCall, findGenericMethodOn, findMethodOn, upcastTo, type ClassInfo } from "./lower-classes.js";
+import { classPrototypeData, hasClassPrototypeData } from "./class-prototypes.js";
 
 type Invoke = Extract<IrExpr, { kind: "dynInvoke" }>;
 interface Dispatch {
@@ -31,6 +32,7 @@ export class ClassDynamicDispatch {
   private readonly computed = new Map<string, Omit<PropertyDispatch, "name"> & { keyLocal: string; branchIndex: number }>();
   private propertyBag: IrFunction | null = null;
   private readonly bagClasses = new Set<string>();
+  private readonly bagInitializers = new Map<string, Extract<IrStmt, { kind: "fieldSet" }>>();
   private readonly generated = new Set<IrFunction>();
 
   process(lowerer: Lowerer, functions: readonly IrFunction[]): boolean {
@@ -82,9 +84,17 @@ export class ClassDynamicDispatch {
       changed = true;
     }
     for (const className of this.boxed) {
-      if (this.bagClasses.has(className)) continue;
       const info = lowerer.classes.get(className);
       if (!info || info.builtinEmitter || info.builtinStream || info.builtinError) continue;
+      const existingInit = this.bagInitializers.get(className);
+      if (existingInit && existingInit.value.kind === "dynObjLit" && hasClassPrototypeData(info)) {
+        const prototype = classPrototypeData(lowerer, info, existingInit.loc);
+        if (prototype) {
+          existingInit.value = { kind: "libCall", fn: "dyn.objCreate", args: [prototype], type: DYN, loc: existingInit.loc };
+          changed = true;
+        }
+      }
+      if (this.bagClasses.has(className)) continue;
       this.bagClasses.add(className);
       this.ensurePropertyBag(info);
       const loc = this.propertyBag.loc;
@@ -92,11 +102,18 @@ export class ClassDynamicDispatch {
       const value = varRef("p.0", DYN, loc);
       const receiver: IrExpr = { kind: "dynCheck", value, type, loc };
       const bag: IrExpr = { kind: "fieldGet", obj: receiver, className, field: PROPERTY_BAG, type: DYN, loc };
+      const prototype = hasClassPrototypeData(info) ? classPrototypeData(lowerer, info, loc) : null;
+      const initialize: Extract<IrStmt, { kind: "fieldSet" }> = {
+        kind: "fieldSet", obj: receiver, className, field: PROPERTY_BAG, value: prototype
+          ? { kind: "libCall", fn: "dyn.objCreate", args: [prototype], type: DYN, loc }
+          : { kind: "dynObjLit", fields: [], type: DYN, loc }, loc,
+      };
+      this.bagInitializers.set(className, initialize);
       this.propertyBag.body.unshift({
         kind: "if", cond: { kind: "libCall", fn: "dyn.typedRefIs", args: [value, { kind: "strLit", value: typeKey(type), type: STRING, loc }], type: BOOL, loc },
         then: [
           { kind: "if", cond: { kind: "dynTest", test: "undefined", value: bag, type: BOOL, loc }, then: [
-            { kind: "fieldSet", obj: receiver, className, field: PROPERTY_BAG, value: { kind: "dynObjLit", fields: [], type: DYN, loc }, loc },
+            initialize,
           ], else_: null, loc },
           { kind: "return", value: bag, loc },
         ], else_: null, loc,

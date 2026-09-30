@@ -9,7 +9,7 @@ import type { Lowerer } from "./lowerer.js";
 import { arrayValueRead, arrayValueStore, arrayValueType, unionArrayValueRead } from "./array-values.js";
 import { lowerForAwaitGenerator, lowerForOfGenerator, lowerYieldStarStatement, type GenType } from "./lower-generators.js";
 import { lowerForAwaitBuiltin } from "./lower-async-iteration.js";
-import { BOOL, BYTES_U8, CAUGHT, DYN, F64, type IrExpr, type IrGlobal, type IrLocal, type IrStmt, type IrType, JSVAL, STRING, type SrcLoc, UNDEFINED_T, VOID, arrayOf, isUnitType, shapeHasAccessorSlots, typeEquals } from "../../ir/ir.js";
+import { BOOL, BYTES_U8, CAUGHT, DYN, F64, type IrExpr, type IrGlobal, type IrLocal, type IrStmt, type IrType, JSVAL, STRING, type SrcLoc, UNDEFINED_T, VOID, arrayOf, isDynTypedRefType, isUnitType, shapeHasAccessorSlots, typeEquals } from "../../ir/ir.js";
 import { PoisonError, boundIdentifiersOf, dynFallbackType, dynUndefinedExpr, importCallHandleType, neverTaintedJsType, staticImportNamespaceType, stmtUsesIsland, uncheckedOverloadHandleCall } from "./lowerer.js";
 import { enforceLibBoundary } from "./lib-boundary.js";
 import { cjsExportAssignmentOf, cjsExportDiscardReason, cjsExportTargetLiteral, isCjsJsFile, isEsModuleStamp, isJsSourceFile, isNodeEsmFile, locOf, requireSpecOf } from "../program.js";
@@ -22,6 +22,7 @@ import { type ForOfIterProjection, lowerForOfArrayIter, lowerForOfMap, lowerForO
 import { bindingContextualGenericFnNodeOf, bindingGenericFnAliasInfoOf, bindingGenericFnInfoOf, bindingGenericFnNodeOf, bindingNeverReassigned, deadUnmappableBinding, implicitLocalFnInfoOf, implicitLocalFnNodeOf, implicitMethodCallInfersReturn, nullishExprUnitOf, nullishGenericBindingUnitOf, recordKeysArrayCall, registerOverloadedCallableAlias } from "./lower-calls.js";
 import { isMixinFnBinding, mixinResultBindingClassOf } from "./lower-mixins.js";
 import type { ClassInfo, ClassIteratorInfo } from "./lower-classes.js";
+import { isCompiledPrototypeMember } from "./class-prototypes.js";
 import { genericIfaceBindingKeepsClass, staticFieldWriteTarget } from "./lower-classes.js";
 import { lowerStreamUnderscoreAssign, streamClassAliasDecl } from "./lower-stream.js";
 import { lowerHttpResPropertyAssignment, lowerHttpServerTimeoutAssignment, lowerServerCloseOverrideAssignment } from "./lower-server.js";
@@ -5313,6 +5314,21 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
               expr.left,
               `writing the abstract property '${expr.left.name.text}' through a '${lowerer.checker.typeToString(lowerer.typeOf(expr.left.expression))}'-typed receiver (abstract property declarations are erased at runtime, so no shared slot exists — type the receiver as the concrete class, or declare an abstract accessor pair instead)`,
             );
+          }
+          if (!expr.left.questionDotToken) {
+            const recv = tryLowerExpression(lowerer, expr.left.expression);
+            if (recv && isDynTypedRefType(recv.type)) {
+              const info = lowerer.classes.get(recv.type.className);
+              if (info && !info.def.runtime && !info.builtinError && !info.builtinEmitter && !info.builtinStream &&
+                  !isCompiledPrototypeMember(lowerer, info, expr.left.name.text)) {
+                const loc = locOf(expr);
+                return { kind: "exprStmt", expr: {
+                  kind: "libCall", fn: "dyn.keySet", args: [lowerer.coerceToExpected(recv, DYN),
+                    { kind: "strLit", value: expr.left.name.text, type: STRING, loc }, lowerer.lowerExprExpecting(expr.right, DYN)],
+                  type: VOID, loc,
+                }, loc };
+              }
+            }
           }
           // Dot WRITE to an undeclared key of an index-signature shape:
           // the same deliberate fence as the dotted read, with the same

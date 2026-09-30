@@ -2481,7 +2481,7 @@ export class Lowerer {
     const directSpec = requireSpecOf(decl.initializer);
     if (directSpec !== null) {
       return resolveImport(this.program, decl.getSourceFile(), directSpec) ??
-        npmStaticDepSf7(this.program, decl.getSourceFile(), directSpec);
+        npmStaticDepSf7(this.program, decl.getSourceFile(), directSpec, "require");
     }
     return createRequireProgramModuleOf(this, decl.initializer)?.dep ?? null;
   }
@@ -2781,7 +2781,7 @@ export class Lowerer {
     // those globals stay uninitialized: the dep's module body would never
     // run.
     const dep = resolveImport(this.program, node.getSourceFile(), spec) ??
-      npmStaticDepSf7(this.program, node.getSourceFile(), spec);
+      npmStaticDepSf7(this.program, node.getSourceFile(), spec, "require");
     if (!dep || dep.fileName.endsWith(".json")) return null;
     if (this.asyncInitFiles.has(dep)) {
       this.unsupported(
@@ -2872,6 +2872,9 @@ export class Lowerer {
       method?: ClassMethodSignature;
     };
     const signatureBySymbol = new Map<ts.Symbol, RuntimeSig>();
+    const methodFamilies = new Map<string, ts.Symbol[]>();
+    const familyBySymbol = new Map<ts.Symbol, ts.Symbol[]>();
+    const optionalMethodFamilies = new Set<ts.Symbol[]>();
     for (const [symbol, sig] of this.fnSigsBySymbol) signatureBySymbol.set(symbol, { params: sig.params, returnType: sig.returnType, top: sig });
     for (const decl of fnDecls) {
       const symbol = declSymbolOf(this, decl);
@@ -2893,7 +2896,16 @@ export class Lowerer {
         if (!member.name || !(ts.isIdentifier(member.name) || ts.isStringLiteral(member.name))) continue;
         const symbol = symbolOf(member.name);
         const sig = info.methods.get(mName);
-        if (symbol && sig) signatureBySymbol.set(symbol, { params: sig.params, returnType: sig.ret, method: sig });
+        if (symbol && sig) {
+          signatureBySymbol.set(symbol, { params: sig.params, returnType: sig.ret, method: sig });
+          let root = info;
+          for (let base = info.base; base; base = base.base) if (base.methods.has(mName)) root = base;
+          const key = `${root.def.name}:${mName}`;
+          const family = methodFamilies.get(key) ?? [];
+          family.push(symbol);
+          methodFamilies.set(key, family);
+          familyBySymbol.set(symbol, family);
+        }
       }
     }
     const peel = (node: ts.Expression): ts.Expression => {
@@ -2902,6 +2914,20 @@ export class Lowerer {
         e = e.expression;
       }
       return e;
+    };
+    const callableSymbolOf = (node: ts.Expression): ts.Symbol | null => {
+      let symbol = symbolOf(ts.isPropertyAccessExpression(node) ? node.name : node);
+      const seen = new Set<ts.Symbol>();
+      while (symbol && !signatureBySymbol.has(symbol) && !seen.has(symbol)) {
+        seen.add(symbol);
+        const declaration = this.checker.valueDeclarationOf(symbol);
+        if (declaration && ts.isMethodDeclaration(declaration)) {
+          symbol = symbolOf(declaration.name);
+        } else if (declaration && ts.isVariableDeclaration(declaration) && declaration.initializer && ts.isIdentifier(peel(declaration.initializer))) {
+          symbol = symbolOf(peel(declaration.initializer));
+        } else break;
+      }
+      return symbol;
     };
     const explicitlyNonNull = (node: ts.Expression): boolean => {
       let e = node;
@@ -2960,11 +2986,11 @@ export class Lowerer {
         return symbol !== null && optionalSymbols.has(symbol);
       }
       if (ts.isCallExpression(e) && ts.isIdentifier(e.expression)) {
-        const symbol = symbolOf(e.expression);
+        const symbol = callableSymbolOf(e.expression);
         return symbol !== null && optionalReturns.has(symbol);
       }
       if (ts.isCallExpression(e) && ts.isPropertyAccessExpression(e.expression)) {
-        const symbol = symbolOf(e.expression.name);
+        const symbol = callableSymbolOf(e.expression);
         return symbol !== null && optionalReturns.has(symbol);
       }
       if (ts.isConditionalExpression(e)) {
@@ -3362,38 +3388,40 @@ export class Lowerer {
           ts.isCallExpression(node) &&
           (ts.isIdentifier(node.expression) || ts.isPropertyAccessExpression(node.expression))
         ) {
-          const calleeNode = ts.isIdentifier(node.expression) ? node.expression : node.expression.name;
-          const symbol = symbolOf(calleeNode);
+          const symbol = callableSymbolOf(node.expression);
           if (!symbol) return;
           const sig = signatureBySymbol.get(symbol);
-          if (!sig) {
-            const decl = this.checker.valueDeclarationOf(symbol);
-            if (decl && ts.isVariableDeclaration(decl) && decl.initializer && ts.isIdentifier(decl.initializer)) {
-              const source = symbolOf(decl.initializer);
-              const sourceSig = source ? signatureBySymbol.get(source) : undefined;
-              if (sourceSig) {
-                node.arguments.forEach((arg, i) => {
-                  if (ts.isSpreadElement(arg) || !mayBeOptional(arg) || !sourceSig.params[i]) return;
-                  const before = sourceSig.params[i]!.type;
-                  sourceSig.params[i]!.type = this.runtimeOptionalType(before);
-                  if (!typeEquals(before, sourceSig.params[i]!.type)) {
-                    changed = true;
-                    const sourceFn = functionDeclBySymbol.get(source!);
-                    const parameter = sourceFn?.parameters[i];
-                    if (parameter) {
-                      for (const bound of boundIdentifiersOf(parameter.name)) {
-                        const boundSymbol = symbolOf(bound);
-                        if (boundSymbol && !optionalSymbols.has(boundSymbol)) {
-                          optionalSymbols.add(boundSymbol);
-                          changed = true;
-                        }
-                      }
+          if (!sig) return;
+          // JSDoc describes the usual value, not a runtime arity check.
+          // A short JavaScript call still passes undefined. Widen only the
+          // observed slots before bodies lower so both caller and callee
+          // agree on that value's representation.
+          const callee = functionDeclBySymbol.get(symbol);
+          if (callee && isJsSourceFile(callee.getSourceFile()) && !node.arguments.some(ts.isSpreadElement)) {
+            for (let i = 0; i < sig.params.length; i++) {
+              const arg = node.arguments[i];
+              if (arg && (this.typeOf(arg).flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Void)) === 0) continue;
+              const family = familyBySymbol.get(symbol);
+              if (family) optionalMethodFamilies.add(family);
+              for (const target of familyBySymbol.get(symbol) ?? [symbol]) {
+                const shape = signatureBySymbol.get(target)?.params[i];
+                if (!shape || shape.mode !== "required") continue;
+                const widened = addUndefined(shape.type);
+                if (typeEquals(shape.type, widened)) continue;
+                shape.type = widened;
+                const parameter = functionDeclBySymbol.get(target)?.parameters[i];
+                if (parameter) {
+                  for (const bound of boundIdentifiersOf(parameter.name)) {
+                    const boundSymbol = symbolOf(bound);
+                    if (boundSymbol) {
+                      optionalSymbols.add(boundSymbol);
+                      if (ts.isIdentifier(parameter.name)) this.runtimeOptionalBindingTypes.set(boundSymbol, shape.type);
                     }
                   }
-                });
+                }
+                changed = true;
               }
             }
-            return;
           }
           node.arguments.forEach((arg, i) => {
               const callbackSlot = sig.params[i]?.type;
@@ -3406,6 +3434,7 @@ export class Lowerer {
               }
               if (ts.isSpreadElement(arg) || !mayBeOptional(arg) || !sig.params[i]) return;
               const set = optionalParams.get(symbol) ?? new Set<number>();
+              sig.params[i]!.type = addUndefined(sig.params[i]!.type);
               const before = set.size;
               set.add(i);
               optionalParams.set(symbol, set);
@@ -3449,6 +3478,17 @@ export class Lowerer {
       changed = false;
       for (const sf of sourceFiles) if (scanFile(sf)) changed = true;
       for (const [symbol, decl] of functionDeclBySymbol) if (scanReturns(symbol, decl)) changed = true;
+      // Every implementation of a virtual slot must retain the same ABI,
+      // including when just one body forwards an omitted parameter.
+      for (const family of optionalMethodFamilies) {
+        if (!family.some((symbol) => optionalReturns.has(symbol))) continue;
+        for (const symbol of family) {
+          if (!optionalReturns.has(symbol)) {
+            optionalReturns.add(symbol);
+            changed = true;
+          }
+        }
+      }
     }
     for (const [symbol, sig] of signatureBySymbol) {
       const params = optionalParams.get(symbol);
@@ -7813,6 +7853,20 @@ export class Lowerer {
       const helper = this.narrowedRetagHelper(node, e.type.unionId, expected.unionId, e.loc);
       if (helper) {
         e = { kind: "call", callee: helper, args: [e], type: expected, loc: e.loc };
+      }
+      // Shipped JavaScript can select overloads using runtime brand data
+      // that its JSDoc union does not narrow. Preserve the numeric/string/
+      // boolean destination check, just as for an unknown-typed argument;
+      // never reinterpret an object payload as a scalar union arm.
+      if (e.type.kind === "union" && !typeEquals(e.type, expected) && isJsSourceFile(node.getSourceFile()) &&
+          this.dynConvertible(e.type)) {
+        const sourceArms = this.unions.get(e.type.unionId)?.arms ?? [];
+        const targetArms = this.unions.get(expected.unionId)?.arms ?? [];
+        if (sourceArms.some(isDynTypedRefType) && targetArms.length > 0 &&
+            targetArms.every((arm) => isUnitType(arm) || arm.kind === "f64" || arm.kind === "string" || arm.kind === "bool") &&
+            targetArms.some((arm) => !isUnitType(arm) && sourceArms.some((source) => typeEquals(source, arm)))) {
+          e = this.coerceToExpected(this.coerceToExpected(e, DYN), expected);
+        }
       }
     }
     // A JS FUNC value outside the island marshal set flowing into a

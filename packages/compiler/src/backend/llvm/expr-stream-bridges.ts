@@ -3,7 +3,7 @@ import { typedRefConstructor } from "./shapes.js";
 import { InternalCompilerError } from "../../errors.js";
 import { streamTypedRefEligible } from "../../ir/analysis.js";
 import { type IrType, DYN_CLASS_PROPERTIES, classDynViewSupported, isClassOwnEnumerableFieldName, isDynTypedRefType, isRefCounted, typeKey } from "../../ir/ir.js";
-import { mangleRecordStruct } from "../mangle.js";
+import { mangleFunction, mangleRecordStruct } from "../mangle.js";
 import { BlockBuilder } from "./blocks.js";
 import { classFieldIndex, classStructSym } from "./classes.js";
 import { llvmCommentText } from "./common.js";
@@ -201,6 +201,15 @@ export function streamTypedRefCommitAdapter(host: LlvmEmitterContext,
           `  br i1 %bag_pending, label %bag_fail, label %bag_keys`,
           `bag_fail:`, `  call void @scr_dyn_release_v(ptr %bag)`, `  br label %done`, `bag_keys:`,
         );
+        if (meta.def.prototypeDataHelper) {
+          host.declare(`declare ptr @scr_dyn_set_prototype(ptr, ptr)`);
+          lines.push(
+            `  %prototype = call ptr @${mangleFunction(meta.def.prototypeDataHelper)}()`,
+            `  %with_prototype = call ptr @scr_dyn_set_prototype(ptr %bag, ptr %prototype)`,
+            `  call void @scr_dyn_release_v(ptr %prototype)`,
+            `  call void @scr_dyn_release_v(ptr %with_prototype)`,
+          );
+        }
         fields.forEach((field, index) => lines.push(
           `  %bag_key${index} = call ptr @scr_str_new(ptr ${host.cstr(field.name)}, ${host.sizeType} ${Buffer.byteLength(field.name, "utf8")})`,
           `  call void @scr_dyn_key_delete(ptr %bag, ptr %bag_key${index}, i1 zeroext false)`,
@@ -564,6 +573,15 @@ export function streamTypedRefMaterializeAdapter(host: LlvmEmitterContext,
       host.declare(`declare void @scr_dyn_obj_set(ptr, ptr, ${host.sizeType}, ptr)`);
       const out = B.tmp();
       B.line(`${out} = call ptr @scr_dyn_new_obj()`);
+      if (meta.def.prototypeDataHelper) {
+        host.declare(`declare ptr @scr_dyn_set_prototype(ptr, ptr)`);
+        host.declare(`declare void @scr_dyn_release_v(ptr)`);
+        const prototype = B.tmp(), attached = B.tmp();
+        B.line(`${prototype} = call ptr @${mangleFunction(meta.def.prototypeDataHelper)}()`);
+        B.line(`${attached} = call ptr @scr_dyn_set_prototype(ptr ${out}, ptr ${prototype})`);
+        B.line(`call void @scr_dyn_release_v(ptr ${prototype})`);
+        B.line(`call void @scr_dyn_release_v(ptr ${attached})`);
+      }
       for (const field of meta.def.fields.filter((f) => isClassOwnEnumerableFieldName(f.name))) {
         const { index } = classFieldIndex(meta, field.name);
         const fieldPtr = B.tmp();

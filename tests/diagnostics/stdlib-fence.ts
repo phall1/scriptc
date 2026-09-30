@@ -34,7 +34,7 @@ const st = new Set(new Set([1, 2])); // string and array seeds lower; Set-valued
 const agg = new AggregateError([]);
 const stack = new Error("boom").stack;
 // Unlowered members on lowered containers.
-const sinhMethod = Math.sinh;
+const sinhMethod = Math.sinh; // fixed-arity Math function values now lower
 // (n-ary Math.min/max LOWER now — the variadic battery lives in the
 // corpus; the mixed spread/positional list is the form that stays fenced.)
 const clamped = Math.min(1, ...[2, 3]);

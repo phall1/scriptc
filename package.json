@@ -31,6 +31,7 @@
     "effect": "3.22.2",
     "eslint": "^9.20.0",
     "js-yaml": "4.3.0",
+    "three": "0.186.1",
     "tsx": "^4.19.0",
     "typescript": "5.9.3",
     "typescript-eslint": "^8.24.0",

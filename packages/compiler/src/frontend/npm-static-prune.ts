@@ -103,7 +103,7 @@ export function planNpmStaticReexports(
   entry: ts.SourceFile,
   files: readonly ts.SourceFile[],
   extraRoots: readonly string[],
-  resolveEdge: (from: ts.SourceFile, spec: string) => ts.SourceFile | null,
+  resolveEdge: (from: ts.SourceFile, spec: string, resolutionKind?: "import" | "require") => ts.SourceFile | null,
 ): ts.SourceFile[] {
   const available = new Set(files);
   const demanded = new Map<ts.SourceFile, Demand>();
@@ -186,7 +186,7 @@ export function planNpmStaticReexports(
       if (arg === undefined || !ts.isStringLiteralLike(arg)) return undefined;
       if (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
           ts.isIdentifier(node.expression) && node.expression.text === "require") {
-        request(resolveEdge(sf, arg.text), null);
+        request(resolveEdge(sf, arg.text, node.expression.kind === ts.SyntaxKind.ImportKeyword ? "import" : "require"), null);
       }
       return undefined;
     });
