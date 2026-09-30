@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { F64, STRING, VOID, type IrFunction, type IrModule, type IrStmt } from "../../ir/ir.js";
+import { BOOL, F64, STRING, VOID, type IrExpr, type IrFunction, type IrModule, type IrStmt, type IrType } from "../../ir/ir.js";
 import { emitLlvmModule } from "./emitter.js";
 
 const loc = { file: "exception-cleanup.ts", start: 0, end: 0 };
@@ -58,4 +58,120 @@ test("shared exceptional exits preserve the function's scalar return ABI", () =>
   const blocks = cleanupBlocks(moduleFor([call(), call()], { numberReturn: true }));
   expect(blocks).toHaveLength(1);
   expect(blocks[0]).toContain("ret double 0x0000000000000000");
+});
+
+const receiverLoc = { file: "read-receiver.ts", start: 0, end: 0 };
+const leaf: IrType = { kind: "record", shapeId: "leaf" };
+const root: IrType = { kind: "record", shapeId: "root" };
+const union: IrType = { kind: "union", unionId: "value" };
+const ref = (type: IrType): IrExpr => ({ kind: "varRef", localId: "value", type, loc: receiverLoc });
+const narrow = (value: IrExpr): IrExpr => ({ kind: "unionNarrow", unionId: "value", tag: 0, value, type: root, loc: receiverLoc });
+const child = (obj: IrExpr): IrExpr => ({ kind: "recordGet", obj, shapeId: "root", field: "child", type: leaf, loc: receiverLoc });
+const text = (obj: IrExpr): IrExpr => ({ kind: "recordGet", obj, shapeId: "leaf", field: "text", type: STRING, loc: receiverLoc });
+
+function work(expr: IrExpr, parameter: IrType, boxed = false): string {
+  const module: IrModule = {
+    irVersion: 13, sourceFile: receiverLoc.file, entry: "main",
+    records: [
+      { id: "leaf", fields: [{ name: "text", type: STRING }] },
+      { id: "root", fields: [{ name: "child", type: leaf }] },
+    ],
+    unions: [{ id: "value", arms: [root, STRING] }],
+    functions: [
+      { name: "main", params: [], returnType: VOID, locals: [], body: [], loc: receiverLoc },
+      { name: "work", params: [{ name: "value", localId: "value", type: parameter }], returnType: expr.type,
+        locals: [{ id: "value", name: "value", type: parameter, mutable: false, ...(boxed ? { boxed: true } : {}) }],
+        body: [{ kind: "return", value: expr, loc: receiverLoc }], loc: receiverLoc },
+    ],
+  };
+  const llvm = emitLlvmModule(module);
+  const body = /^define internal [^\n]*@sc_f_work\([^]*?^}/m.exec(llvm)?.[0];
+  expect(body).toBeDefined();
+  return body!;
+}
+
+test("nested union and record projections retain only the escaping reference", () => {
+  const llvm = work(text(child(narrow(ref(union)))), union);
+  expect(llvm).not.toContain("call ptr @scr_union_retain_v");
+  expect(llvm).not.toMatch(/call ptr @sc_rretain_/);
+  expect(llvm.match(/call ptr @scr_str_retain_v/g)).toHaveLength(1);
+});
+
+test("tag tests read an owned local without adding a temporary owner", () => {
+  const llvm = work({ kind: "unionIsTag", unionId: "value", value: ref(union), tag: 0, negated: false, type: BOOL, loc: receiverLoc }, union);
+  expect(llvm).not.toContain("call ptr @scr_union_retain_v");
+  expect(llvm).toContain("icmp eq i32");
+});
+
+test("capture boxes keep their ordinary owned-read contract", () => {
+  const llvm = work(text(child(narrow(ref(union)))), union, true);
+  expect(llvm).toContain("call ptr @scr_box_get_ref");
+  expect(llvm).toContain("call void @scr_union_release");
+  expect(llvm.match(/call ptr @scr_str_retain_v/g)).toHaveLength(1);
+});
+
+function sharedFieldModule(prefixes: IrType[][], fieldType: IrType): IrModule {
+  const shared: IrType = { kind: "union", unionId: "shared" };
+  const records = prefixes.map((prefix, index) => ({
+    id: `variant${index}`,
+    fields: [...prefix.map((type, field) => ({ name: `prefix${field}`, type })),
+      { name: "value", type: fieldType }, { name: `tail${index}`, type: index % 2 ? BOOL : F64 }],
+  }));
+  return {
+    irVersion: 13, sourceFile: loc.file, entry: "main", records,
+    unions: [{ id: "shared", arms: records.map((record) => ({ kind: "record", shapeId: record.id })) }],
+    functions: [
+      { name: "main", params: [], returnType: VOID, locals: [], body: [], loc },
+      { name: "read", params: [{ localId: "value", name: "value", type: shared }], returnType: fieldType,
+        locals: [{ id: "value", name: "value", type: shared, mutable: false }], loc,
+        body: [{ kind: "return", value: { kind: "unionDisc", value: ref(shared), unionId: "shared", field: "value", type: fieldType, loc }, loc }] },
+    ],
+  };
+}
+
+test("wide unions share field reads with identical storage prefixes", () => {
+  for (const pointerBits of [32, 64] as const) {
+    const llvm = emitLlvmModule(sharedFieldModule(Array.from({ length: 128 }, () => [BOOL, STRING]), STRING), { pointerBits });
+    const body = /^define internal [^\n]*@sc_f_read\([^]*?^}/m.exec(llvm)![0];
+    expect(body).not.toContain("switch i32");
+    expect(body).toMatch(/icmp ult i32 %\w+, 128/);
+    expect(body).toContain("call void @sc_bad_tag()");
+    expect(body.match(/call ptr @scr_str_retain_v/g)).toHaveLength(1);
+  }
+});
+
+test("different union field offsets retain per-variant dispatch", () => {
+  for (const prefixes of [[[], [BOOL]], [[BOOL], [F64]], [[STRING], [BOOL]]]) {
+    const llvm = emitLlvmModule(sharedFieldModule(prefixes, STRING));
+    const body = /^define internal [^\n]*@sc_f_read\([^]*?^}/m.exec(llvm)![0];
+    expect(body).toContain("switch i32");
+    expect(body.match(/call ptr @scr_str_retain_v/g)).toHaveLength(2);
+  }
+});
+
+test("partially shared union layouts emit one read per storage prefix", () => {
+  const llvm = emitLlvmModule(sharedFieldModule(Array.from({ length: 128 }, (_, index) => index % 2 ? [BOOL] : []), STRING));
+  const body = /^define internal [^\n]*@sc_f_read\([^]*?^}/m.exec(llvm)![0];
+  expect(body).toContain("switch i32");
+  expect(body.match(/call ptr @scr_str_retain_v/g)).toHaveLength(2);
+  const destinations = [...body.matchAll(/i32 \d+, label %(u\.a\d+)/g)].map(match => match[1]);
+  expect(destinations).toHaveLength(128);
+  expect(new Set(destinations).size).toBe(2);
+});
+
+test("shared boolean union fields keep their byte storage and scalar result", () => {
+  const llvm = emitLlvmModule(sharedFieldModule([[], []], BOOL));
+  const body = /^define internal [^\n]*@sc_f_read\([^]*?^}/m.exec(llvm)![0];
+  expect(body).not.toContain("switch i32");
+  expect(body.match(/load i8, ptr/g)).toHaveLength(1);
+  expect(body).toMatch(/trunc i8 %\w+ to i1/);
+});
+
+test("literal zero division emits the JavaScript NaN constant in development builds", () => {
+  const zero: IrExpr = { kind: "numLit", value: 0, type: F64, loc: receiverLoc };
+  const llvm = work({ kind: "bin", op: "/", left: zero, right: zero, type: F64, loc: receiverLoc }, F64);
+  expect(llvm).not.toContain("fdiv");
+  expect(llvm).toContain("ret double 0x7FF8000000000000");
+  const dynamic = work({ kind: "bin", op: "/", left: ref(F64), right: ref(F64), type: F64, loc: receiverLoc }, F64);
+  expect(dynamic).toContain("fdiv double");
 });

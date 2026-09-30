@@ -9,7 +9,7 @@ import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 import {
   sandboxBootstrapCommand,
-  sandboxImageConfig,
+  sandboxTestSourceConfig,
   sandboxRunnerConfig,
   sandboxTestWorkerAllocation,
   sandboxVercelConfig,
@@ -187,6 +187,7 @@ Environment:
   VERCEL_OIDC_TOKEN         Preferred project-scoped Sandbox credential
   VERCEL_TOKEN              Access-token fallback; also set VERCEL_TEAM_ID + VERCEL_PROJECT_ID
   SCRIPTC_SANDBOX_IMAGE     Optional fully qualified VCR image (default: vercel/sandbox/universal)
+  SCRIPTC_SANDBOX_SNAPSHOT  Optional prepared snapshot with the pinned toolchain (exclusive with IMAGE)
   SCRIPTC_SANDBOX_VCPUS     vCPUs per sandbox (default: 8)
   SCRIPTC_SANDBOX_TIMEOUT   sandbox and command timeout (default: 45m)
   SCRIPTC_TEST_WORKERS      Vitest workers per sandbox (default: 4)
@@ -195,9 +196,8 @@ Environment:
   process.exit(0);
 }
 
-const imageConfig = sandboxImageConfig();
-const { sandboxImage: image } = imageConfig;
-const bootstrapCommand = sandboxBootstrapCommand(imageConfig.custom);
+const sourceConfig = sandboxTestSourceConfig();
+const bootstrapCommand = sandboxBootstrapCommand(sourceConfig.prepared);
 const vercelConfig = sandboxVercelConfig();
 const vercelProcessEnv = sandboxVercelEnvironment(vercelConfig);
 const {
@@ -451,11 +451,10 @@ const execIn = async (
 };
 
 async function preflight() {
-  const customImage = imageConfig.custom ? "custom VCR image" : "managed fallback image";
   console.log("Sandbox preflight:");
   console.log(`  auth:  ${vercelConfig.authSource}`);
   console.log(`  scope: ${vercelConfig.scopeSource}`);
-  console.log(`  image: ${image} (${customImage})`);
+  console.log(`  source: ${sourceConfig.reference} (${sourceConfig.description})`);
   console.log(`  shape: ${workers.length} sandboxes, ${vcpus} vCPUs each`);
 
   try {
@@ -530,8 +529,7 @@ async function createWorker(worker) {
     "create",
     "--name",
     worker.name,
-    "--image",
-    image,
+    ...sourceConfig.createArgs,
     "--timeout",
     sandboxTimeout,
     "--vcpus",
@@ -665,7 +663,7 @@ let failure;
 try {
   await preflight();
   console.log(
-    `Running ${lanes.join("+")} corpus lanes in ${workers.length} ${vcpus}-vCPU sandboxes from ${image} (${shardCount} shards/lane).`,
+    `Running ${lanes.join("+")} corpus lanes in ${workers.length} ${vcpus}-vCPU sandboxes from ${sourceConfig.reference} (${shardCount} shards/lane).`,
   );
   console.log("Packing the exact tracked + untracked, non-ignored worktree...");
   await createArchive(archive);
@@ -749,7 +747,7 @@ try {
         "runtime toolchain cleanup",
         60_000,
       );
-    }, imageConfig.custom ? workers.length : 8);
+    }, sourceConfig.prepared ? workers.length : 8);
 
     await allWorkers("Testing", async (worker) => {
       const sharedTestEnv = {

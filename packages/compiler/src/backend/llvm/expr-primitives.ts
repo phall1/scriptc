@@ -69,6 +69,12 @@ export function emitOperatorExpr(host: LlvmEmitterContext, e: ExprOf<"bin" | "un
     const B = host.B;
     switch (e.kind) {
       case "bin": {
+        // JavaScript folds literal 0 / 0 to its positive NaN constant.
+        // An unoptimized x86 division produces a negative NaN instead,
+        // whose sign is observable through Buffer and typed-array writes.
+        if (e.op === "/" && e.left.kind === "numLit" && e.right.kind === "numLit" && e.left.value === 0 && e.right.value === 0) {
+          return { name: f64Lit(NaN), type: e.type };
+        }
         const l = host.emitExpr(e.left);
         const r = host.emitExpr(e.right);
         const t = B.tmp();
@@ -572,14 +578,14 @@ export function emitRecordExpr(host: LlvmEmitterContext, e: ExprOf<"fieldGet" | 
     const B = host.B;
     switch (e.kind) {
       case "fieldGet": {
-        const obj = host.emitExpr(e.obj);
+        const obj = host.emitReadReceiver(e.obj);
         const { ptr, type } = host.classFieldPtr(obj.name, e.className, e.field);
         const v = host.loadField(ptr, type);
         if (isRefCounted(e.type)) return host.own({ name: host.retainValue(v, e.type), type: e.type });
         return { name: v, type: e.type };
       }
       case "recordGet": {
-        const obj = host.emitExpr(e.obj);
+        const obj = host.emitReadReceiver(e.obj);
         const { ptr, type } = host.recordFieldPtr(obj.name, e.shapeId, e.field);
         const v = host.loadField(ptr, type);
         if (isRefCounted(e.type)) return host.own({ name: host.retainValue(v, e.type), type: e.type });

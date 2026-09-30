@@ -81,8 +81,10 @@ test("the standalone compiler builds programs and rebuilds itself with Node unav
     };
     const sample = join(root, "tests/corpus/class-array-optional-return.ts");
     const unionSample = join(root, "tests/corpus/union-nested-layout-discriminant.ts");
+    const receiverSample = join(root, "tests/corpus/llvm-read-receiver-lifetime.ts");
     await checkProgram(seed, sample, "llvm");
     await checkProgram(seed, unionSample, "llvm");
+    await checkProgram(seed, receiverSample, "llvm");
 
     const badSource = join(directory, "bad.ts");
     writeFileSync(badSource, 'const value: number = "wrong"; console.log(value);\n');
@@ -106,6 +108,7 @@ test("the standalone compiler builds programs and rebuilds itself with Node unav
     await checkProgram(rebuilt, join(root, "tests/corpus/nullish-long-chain.ts"), "llvm");
     await checkProgram(rebuilt, sample, "llvm");
     await checkProgram(rebuilt, unionSample, "llvm");
+    await checkProgram(rebuilt, receiverSample, "llvm");
 
     // Compare the LLVM used to build the second generation with its own
     // output. Retaining the build input avoids repeating the seed's work.

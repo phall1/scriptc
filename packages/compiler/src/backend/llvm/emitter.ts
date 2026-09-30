@@ -264,6 +264,7 @@ export class LlEmitter {
    * interned .name literal ref — registered during body emission, the
    * statics and construct thunks assemble around the bodies. */
   private readonly classObjs = new Map<string, { nameSym: string }>();
+  private readonly unionFieldReadGroups = new Map<string, number[][]>();
   /** Preorder intervals of the runtime error classes under THIS module's
    * class-forest numbering (main() stamps scr_error_vts with them, exactly
    * like the runtime ABI’s errorVtStampLines). */
@@ -2667,19 +2668,45 @@ export class LlEmitter {
 
   /** Emits `switch` over a union's tag with one block per arm; each arm
    * body must TERMINATE its block (the callers branch to a join). The
-   * default block is the runtime ABI’s invalid-tag abort. */
-  unionTagSwitch(uName: string, def: IrUnionDef, arm: (armType: IrType, tag: number) => void): void {
+   * default block is the runtime ABI’s invalid-tag abort. Shared field
+   * reads can group equivalent storage prefixes and emit one representative. */
+  unionTagSwitch(uName: string, def: IrUnionDef, arm: (armType: IrType, tag: number) => void, fieldGroups?: number[][]): void {
     const B = this.B;
     const tag = this.unionTag(uName);
     const bad = B.newLabel("u.bad");
-    const labels = def.arms.map(() => B.newLabel("u.a"));
-    B.terminate(
-      `switch i32 ${tag}, label %${bad} [ ${def.arms.map((_, i) => `i32 ${i}, label %${labels[i]}`).join(" ")} ]`,
-    );
-    def.arms.forEach((a, i) => {
-      B.startBlock(labels[i]!);
-      arm(a, i);
-    });
+    const labels: string[] = [];
+    if (fieldGroups) {
+      for (const group of fieldGroups) {
+        const label = B.newLabel("u.a");
+        for (const member of group) {
+          if (member === undefined) throw new InternalCompilerError("llvm emitter bug: missing union field tag");
+          labels[member] = label;
+        }
+      }
+    } else {
+      for (let i = 0; i < def.arms.length; i++) labels.push(B.newLabel("u.a"));
+    }
+    if (fieldGroups?.length === 1) {
+      const valid = B.tmp();
+      B.line(`${valid} = icmp ult i32 ${tag}, ${def.arms.length}`);
+      B.condBr(valid, labels[0]!, bad);
+    } else {
+      B.terminate(
+        `switch i32 ${tag}, label %${bad} [ ${def.arms.map((_, i) => `i32 ${i}, label %${labels[i]}`).join(" ")} ]`,
+      );
+    }
+    if (fieldGroups) {
+      for (const group of fieldGroups) {
+        const representative = group[0]!;
+        B.startBlock(labels[representative]!);
+        arm(def.arms[representative]!, representative);
+      }
+    } else {
+      def.arms.forEach((a, i) => {
+        B.startBlock(labels[i]!);
+        arm(a, i);
+      });
+    }
     B.startBlock(bad);
     this.needsBadTag = true;
     B.line(`call void @sc_bad_tag()`);
@@ -2784,6 +2811,33 @@ export class LlEmitter {
     const shape = this.recordsById.get(shapeId);
     if (!shape) throw new InternalCompilerError(`llvm emitter bug: unknown record shape ${shapeId}`);
     return shape;
+  }
+
+  /** Record prefixes with the same LLVM storage types put a field at the
+   * same offset on every target. Share one field-read block per matching
+   * prefix; class variants retain their own concrete layout dispatch. */
+  unionFieldGroups(def: IrUnionDef, field: string): number[][] {
+    const key = `${def.id}\0${field}`;
+    const cached = this.unionFieldReadGroups.get(key);
+    if (cached !== undefined) return cached;
+    const groups = new Map<string, number[]>();
+    for (let tag = 0; tag < def.arms.length; tag++) {
+      const arm = def.arms[tag]!;
+      let layout = `variant:${tag}`;
+      if (arm.kind === "record") {
+        const shape = this.recordShape(arm.shapeId);
+        const index = shape.fields.findIndex((entry) => entry.name === field);
+        if (index < 0) throw new InternalCompilerError(`llvm emitter bug: missing union field ${field}`);
+        layout = "record:";
+        for (let i = 0; i <= index; i++) layout += `${llFieldType(shape.fields[i]!.type)};`;
+      }
+      const group = groups.get(layout);
+      if (group) group.push(tag);
+      else groups.set(layout, [tag]);
+    }
+    const result = [...groups.values()];
+    this.unionFieldReadGroups.set(key, result);
+    return result;
   }
 
   /** The field-slot pointer of a record member (rc header at index 0). */
@@ -4358,6 +4412,36 @@ export class LlEmitter {
 
   emitJsInteropExpr(e: ExprOf<"jsMarshal" | "jsOp" | "jsExit" | "jsBridgePromise">): LlValue {
     return emitJsInteropExpr(this, e);
+  }
+
+  /** Read a receiver whose value is consumed immediately by a field or tag
+   * load. No user code may run between this read and its consumer. Locals
+   * and their projections already have an owner; other expressions keep
+   * their ordinary statement-frame ownership. The caller must retain any
+   * reference result before evaluating another expression. */
+  emitReadReceiver(e: IrExpr): LlValue {
+    if (!isRefCounted(e.type)) return this.emitExpr(e);
+    if (e.kind === "varRef") {
+      const binding = this.binding(e.localId);
+      // Capture boxes can carry TDZ and caught-value conversion semantics.
+      if (binding.kind === "boxed") return this.emitExpr(e);
+      if (binding.kind === "global") this.checkGlobalTdz(e.localId);
+      const value = this.B.tmp();
+      this.B.line(`${value} = load ptr, ptr ${binding.slot}`);
+      return { name: value, type: e.type };
+    }
+    if (e.kind === "unionNarrow") {
+      const union = this.emitReadReceiver(e.value);
+      return { name: this.unionPeek(union.name), type: e.type };
+    }
+    if (e.kind === "recordGet" || e.kind === "fieldGet") {
+      const receiver = this.emitReadReceiver(e.obj);
+      const { ptr, type } = e.kind === "recordGet"
+        ? this.recordFieldPtr(receiver.name, e.shapeId, e.field)
+        : this.classFieldPtr(receiver.name, e.className, e.field);
+      return { name: this.loadField(ptr, type), type: e.type };
+    }
+    return this.emitExpr(e);
   }
 
   emitExpr(e: IrExpr): LlValue {

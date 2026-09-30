@@ -238,3 +238,27 @@ export function requiredSandboxImageConfig(env) {
   }
   return config;
 }
+
+/** A prepared snapshot reuses the same pinned tools as a custom image.
+ * The runner still replaces the source tree and rebuilds native artifacts. */
+export function sandboxTestSourceConfig(env) {
+  loadLocalEnv();
+  const source = env ?? process.env;
+  const snapshot = source.SCRIPTC_SANDBOX_SNAPSHOT?.trim();
+  if (snapshot) {
+    if (source.SCRIPTC_SANDBOX_IMAGE?.trim()) {
+      throw new Error("Set only one of SCRIPTC_SANDBOX_SNAPSHOT and SCRIPTC_SANDBOX_IMAGE");
+    }
+    if (!/^snap_[A-Za-z0-9]+$/.test(snapshot)) {
+      throw new Error("SCRIPTC_SANDBOX_SNAPSHOT must be a Sandbox snapshot ID (snap_...)");
+    }
+    return { prepared: true, reference: snapshot, description: "prepared snapshot", createArgs: ["--snapshot", snapshot] };
+  }
+  const image = sandboxImageConfig(source);
+  return {
+    prepared: image.custom,
+    reference: image.sandboxImage,
+    description: image.custom ? "custom VCR image" : "managed fallback image",
+    createArgs: ["--image", image.sandboxImage],
+  };
+}
