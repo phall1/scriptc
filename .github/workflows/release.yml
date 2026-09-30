@@ -240,6 +240,11 @@ jobs:
           pnpm --filter @scriptc/compiler --filter scriptc build
           pnpm --filter @scriptc/${{ matrix.cli }} build:native
           node scripts/verify-native-cli.mjs packages/${{ matrix.cli }} --run
+      - name: Verify packed Darwin helper on its build host
+        if: matrix.platform == 'darwin-arm64'
+        run: |
+          TARBALL=$(pnpm --dir packages/llvm-darwin-arm64 pack --pack-destination "$RUNNER_TEMP" --silent)
+          node scripts/verify-llvm-package.mjs "$RUNNER_TEMP/$(basename "$TARBALL")"
       - name: Upload native packages
         uses: actions/upload-artifact@v4
         with:
@@ -295,7 +300,7 @@ jobs:
       !cancelled() && needs.check-release.outputs.should_release == 'true' &&
       (needs.check-release.outputs.reuse_artifacts == 'true' ||
       (needs.build-native-packages.result == 'success' && needs.build-mobile-runtime-packs.result == 'success'))
-    runs-on: macos-15
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: Release
     permissions:
@@ -377,13 +382,6 @@ jobs:
               exit 1
             fi
           done
-
-      - name: Package and verify LLVM helper
-        run: |
-          TARBALL=$(pnpm --dir packages/llvm-darwin-arm64 pack --pack-destination "$RUNNER_TEMP" --silent)
-          HELPER_TARBALL="$RUNNER_TEMP/$(basename "$TARBALL")"
-          node scripts/verify-llvm-package.mjs "$HELPER_TARBALL"
-          echo "HELPER_TARBALL=$HELPER_TARBALL" >> "$GITHUB_ENV"
 
       - name: Publish to npm
         shell: bash
@@ -490,7 +488,7 @@ jobs:
           # Upload all independent platform packages before waiting for npm.
           publish_dir packages/runtime
           publish_dir packages/runtime-darwin-arm64
-          publish_dir packages/llvm-darwin-arm64 "$HELPER_TARBALL"
+          publish_dir packages/llvm-darwin-arm64
           publish_dir packages/runtime-darwin-x64
           publish_dir packages/llvm-darwin-x64
           publish_dir packages/runtime-linux-x64-gnu
