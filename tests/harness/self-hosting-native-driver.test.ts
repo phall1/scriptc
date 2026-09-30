@@ -39,10 +39,10 @@ test("the production CLI relocates, builds programs, and rebuilds itself with No
     const distribution = join(directory, "distribution");
     await bootstrapStep("build production CLI seed", () =>
       exec(process.execPath, ["--max-old-space-size=8192", "--import", "tsx", join(root, "scripts/build-native-cli.mts"), distribution], {
-        // The seed builds an instrumented second generation below. Run
-        // the full sanitizer proof with that generation instead of paying
-        // for two instrumented traversals of the complete compiler graph.
-        ...options, env: { ...process.env, SCRIPTC_SAN: "", SCRIPTC_NATIVE_EMIT_IR: "1" },
+        // Each lane executes its full compiler traversal in the appropriate
+        // seed. Instrumenting the seed avoids another ordinary traversal
+        // before the sanitizer can exercise the compiler.
+        ...options, env: { ...process.env, SCRIPTC_SAN: sanitize ? "1" : "", SCRIPTC_NATIVE_EMIT_IR: "1" },
       }));
     // All compiler assets must survive moving the complete distribution.
     const relocated = join(directory, "relocated");
@@ -88,16 +88,18 @@ test("the production CLI relocates, builds programs, and rebuilds itself with No
     const entry = join(root, "packages/compiler/src/native/cli.ts");
     const ffi = join(directory, ".scriptc/distribution-seed/compiler.ffi.json");
     const rebuilt = executable("scriptc-rebuilt");
-    // Optimize the compiler that will process the full graph again. Small
-    // programs below still exercise development output.
+    // The plain lane optimizes the next generation for its fixed-point
+    // check. The sanitizer lane has already instrumented the seed; it
+    // rebuilds an instrumented development compiler and executes it below.
+    // --strip keeps debug metadata out of the IR/LLVM equality comparison.
     const self = await bootstrapStep("production CLI rebuilds itself", () =>
       invoke(seed, ["build", entry, "-o", rebuilt, "--strip", "--keep-llvm", "--emit-ir", "--ffi", ffi,
-        ...(sanitize ? ["--sanitize"] : [])],
+        ...(sanitize ? ["--sanitize", "--optimization=dev"] : [])],
       "scriptc: warning: --emit-ir is deprecated; use --emit=ir for IR as the primary output\n"));
     expect(self.trim()).toBe(rebuilt);
     // All command, library, and dynamic probes run inside the instrumented
     // compiler in the sanitizer lane, including their failure paths.
-    const probe = sanitize ? rebuilt : seed;
+    const probe = seed;
     expect(await invoke(probe, ["--help"])).toContain("scriptc build");
     expect((await invoke(probe, ["--version"])).trim()).toBe(manifest.compiler_version);
     const checkProgram = async (compiler: string, source: string, extra: string[] = []) => {
@@ -226,17 +228,20 @@ test("the production CLI relocates, builds programs, and rebuilds itself with No
     await checkProgram(rebuilt, receiverSample);
     await checkProgram(rebuilt, join(root, "tests/corpus/1010-json-stringify-space.ts"));
 
-    // Compare the LLVM used to build the second generation with its own
-    // output. Retaining the build input avoids repeating the seed's work.
-    const seedLlvm = join(directory, "cli.ll");
-    const rebuiltLlvm = join(directory, "rebuilt.ll");
-    await bootstrapStep("rebuilt compiler emits itself", () =>
-      invoke(rebuilt, ["build", entry, "--emit=llvm", "-o", rebuiltLlvm, "--ffi", ffi]));
-    // Executable output adds a runtime ABI check; textual LLVM emission
-    // omits it. Compare all other output without changing either mode.
-    const withoutAbiCheck = (path: string): string => readFileSync(path, "utf8")
-      .replace(/^declare void @scr_runtime_abi_v\d+\(\)\n/m, "")
-      .replace(/^  call void @scr_runtime_abi_v\d+\(\)\n/m, "");
-    expect(withoutAbiCheck(seedLlvm) === withoutAbiCheck(rebuiltLlvm), "native compiler generations must emit identical LLVM").toBe(true);
+    // The plain lane owns the third-generation fixed point. The sanitizer
+    // lane already runs the full frontend and emitter under ASan in the
+    // self-rebuild, compares both artifacts, and executes the new compiler.
+    if (!sanitize) {
+      const seedLlvm = join(directory, "cli.ll");
+      const rebuiltLlvm = join(directory, "rebuilt.ll");
+      await bootstrapStep("rebuilt compiler emits itself", () =>
+        invoke(rebuilt, ["build", entry, "--emit=llvm", "-o", rebuiltLlvm, "--ffi", ffi]));
+      // Executable output adds a runtime ABI check; textual LLVM emission
+      // omits it. Compare all other output without changing either mode.
+      const withoutAbiCheck = (path: string): string => readFileSync(path, "utf8")
+        .replace(/^declare void @scr_runtime_abi_v\d+\(\)\n/m, "")
+        .replace(/^  call void @scr_runtime_abi_v\d+\(\)\n/m, "");
+      expect(withoutAbiCheck(seedLlvm) === withoutAbiCheck(rebuiltLlvm), "native compiler generations must emit identical LLVM").toBe(true);
+    }
   } finally { rmSync(directory, { recursive: true, force: true }); }
 }, 5_400_000);

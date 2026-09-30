@@ -7,7 +7,7 @@ on:
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 jobs:
   native_macos:
@@ -189,9 +189,7 @@ jobs:
           cache: pnpm
       - uses: ./.github/actions/llvm-linux
       - run: pnpm install --frozen-lockfile
-      - uses: vercel-labs/setup-zig@v1
-        with:
-          version: 0.16.0
+      - uses: ./.github/actions/zig
       - uses: ./.github/actions/native-packages
         with:
           target: linux-x64-gnu
@@ -265,9 +263,7 @@ jobs:
           cache: pnpm
       - uses: ./.github/actions/llvm-linux
       - run: pnpm install --frozen-lockfile
-      - uses: vercel-labs/setup-zig@v1
-        with:
-          version: 0.16.0
+      - uses: ./.github/actions/zig
       - uses: ./.github/actions/native-packages
         with:
           target: linux-x64-gnu
@@ -451,9 +447,7 @@ jobs:
       SCRIPTC_TARGET: x86_64-windows-gnu
     steps:
       - uses: actions/checkout@v4
-      - uses: vercel-labs/setup-zig@v1
-        with:
-          version: 0.16.0
+      - uses: ./.github/actions/zig
       - uses: pnpm/action-setup@v4
         with:
           version: 11.1.3
@@ -560,9 +554,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Build Windows helper
         run: pnpm --filter @scriptc/llvm-win32-x64-msvc build:native
-      - uses: vercel-labs/setup-zig@v1
-        with:
-          version: 0.16.0
+      - uses: ./.github/actions/zig
       - name: Build Windows runtime pack
         run: pnpm --filter @scriptc/runtime-win32-x64-msvc build:native
       - run: pnpm build

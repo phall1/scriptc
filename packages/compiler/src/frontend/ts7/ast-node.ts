@@ -11,8 +11,10 @@ import { SyntaxKind, NodeFlags } from "./enums.js";
 export class AstFile {
   readonly wire: AstWireFile;
   readonly root: AstNode;
-  private readonly nodes = new Map<number, AstNode>();
-  private readonly lists = new Map<number, AstNode[]>();
+  // Wire ids are bounded dense indices. Direct slots preserve lazy object
+  // creation and avoid hashing and temporary optional boxes on every read.
+  private readonly nodes: (AstNode | undefined)[];
+  private readonly lists: (AstNode[] | undefined)[];
   private readonly references = new Map<number, AstFileReference[]>();
   private readonly structuredNodes = new Map<number, AstNode[]>();
   private readonly strings = new Map<number, string[]>();
@@ -24,8 +26,10 @@ export class AstFile {
     private readonly materialized?: () => void,
   ) {
     this.wire = new AstWireFile(bytes);
+    this.nodes = new Array<AstNode | undefined>(this.wire.nodeCount);
+    this.lists = new Array<AstNode[] | undefined>(this.wire.nodeCount);
     this.root = new AstNode(this, 1);
-    this.nodes.set(1, this.root);
+    this.nodes[1] = this.root;
   }
 
   /** Checker factories also return AST fragments. Only source-file
@@ -37,22 +41,22 @@ export class AstFile {
   }
 
   node(index: number): AstNode {
-    const existing = this.nodes.get(index);
+    const existing = this.nodes[index];
     if (existing !== undefined) return existing;
     if (index === 0 || this.wire.kind(index) === KIND_NODE_LIST) throw new AstDecodeError("expected a node index");
     const node = new AstNode(this, index);
-    this.nodes.set(index, node);
+    this.nodes[index] = node;
     this.materialized?.();
     return node;
   }
 
   list(index: number): AstNode[] {
-    const existing = this.lists.get(index);
+    const existing = this.lists[index];
     if (existing !== undefined) return existing;
     const nodes: AstNode[] = [];
     for (const child of this.wire.list(index)) nodes.push(this.node(child));
     this.listMetadata?.(nodes, this.wire.pos(index) >>> 0, this.wire.end(index) >>> 0);
-    this.lists.set(index, nodes);
+    this.lists[index] = nodes;
     this.materialized?.();
     return nodes;
   }
@@ -108,6 +112,8 @@ export class AstNode {
   readonly end: number;
   readonly flags: NodeFlags;
   readonly data: number;
+  private parentResolved = false;
+  private parentCache: AstNode | undefined;
 
   constructor(readonly file: AstFile, readonly index: number) {
     // Materialize immutable scalar metadata once. Lowering repeatedly reads
@@ -122,8 +128,12 @@ export class AstNode {
 
   get id(): string { return `${this.index}.${this.kind}.${this.file.root.path}`; }
   get parent(): AstNode | undefined {
-    const index = this.file.wire.semanticParent(this.index);
-    return index === 0 || index === this.index ? undefined : this.file.node(index);
+    if (!this.parentResolved) {
+      const index = this.file.wire.semanticParent(this.index);
+      this.parentCache = index === 0 || index === this.index ? undefined : this.file.node(index);
+      this.parentResolved = true;
+    }
+    return this.parentCache;
   }
   get text(): string | undefined { return this.file.wire.text(this.index); }
   get rawText(): string | undefined { return this.file.wire.rawText(this.index); }

@@ -19,13 +19,13 @@ runs:
         if test "$RUNNER_OS" = Linux; then
           echo "zig=$(zig version)" >> "$GITHUB_OUTPUT"
         fi
-    - uses: actions/cache@v4
+    - uses: actions/cache/restore@v4
       id: helper
       if: inputs.helper == 'true'
       with:
         path: packages/llvm-${{ inputs.target }}/bin
         key: helper-v1-${{ inputs.target }}-${{ steps.host.outputs.image }}-${{ steps.host.outputs.zig }}-${{ hashFiles('.node-version', '.github/actions/native-packages/action.yml', '.github/actions/llvm-linux/action.yml', 'native/llvm-codegen/**', 'packages/llvm-*/package.json', 'packages/llvm-*/scripts/**') }}
-    - uses: actions/cache@v4
+    - uses: actions/cache/restore@v4
       id: runtime
       with:
         path: |
@@ -58,3 +58,15 @@ runs:
       env:
         SCRIPTC_PACKAGE_TARGET: ${{ inputs.target }}
       run: node "packages/runtime-$SCRIPTC_PACKAGE_TARGET/scripts/verify.mjs"
+    - uses: actions/cache/save@v4
+      if: inputs.helper == 'true' && steps.helper.outputs.cache-hit != 'true'
+      with:
+        path: packages/llvm-${{ inputs.target }}/bin
+        key: ${{ steps.helper.outputs.cache-primary-key }}
+    - uses: actions/cache/save@v4
+      if: steps.runtime.outputs.cache-hit != 'true'
+      with:
+        path: |
+          packages/runtime-${{ inputs.target }}/artifacts
+          packages/runtime-${{ inputs.target }}/runtime-pack.json
+        key: ${{ steps.runtime.outputs.cache-primary-key }}

@@ -187,6 +187,29 @@ test("checker handles reject cross-file, wrong-kind and nil identities", () => {
   expect(() => file.resolve(`0.${AstKind.SourceFile}.${file.root.path}`)).toThrow("nil");
 });
 
+test("direct node slots preserve lazy parents, identity and invalid-index checks", () => {
+  let materialized = 0;
+  const file = new AstFile(decoded.get("main.ts")!.bytes, undefined, () => { materialized++; });
+  let index = file.wire.nodeCount - 1;
+  while (file.wire.kind(index) === KIND_NODE_LIST || file.wire.semanticParent(index) <= 1) index--;
+  const node = file.node(index);
+  expect(materialized).toBe(1);
+  expect(file.node(index)).toBe(node);
+  expect(materialized).toBe(1);
+  const parent = node.parent;
+  expect(parent?.index).toBe(file.wire.semanticParent(index));
+  expect(materialized).toBe(2);
+  expect(node.parent).toBe(parent);
+  expect(file.node(parent!.index)).toBe(parent);
+  expect(materialized).toBe(2);
+  expect(file.root.parent).toBeUndefined();
+  expect(file.root.parent).toBeUndefined();
+  for (const invalid of [-1, 0, 0.5, NaN, Infinity, file.wire.nodeCount]) {
+    expect(() => file.node(invalid)).toThrow();
+    expect(() => file.list(invalid)).toThrow();
+  }
+});
+
 test("a source view requires a source-file root", () => {
   const bytes = decoded.get("main.ts")!.bytes.slice();
   const words = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
