@@ -87,6 +87,9 @@ export const JS_RELAXED_TSC_CODES: ReadonlySet<number> = new Set([
   2308, 2614,
   // 2740's sibling elaboration ("Property X is missing in type Y")
   2741,
+  // JavaScript subclasses may widen fields or add method parameters.
+  // Class lowering checks native storage and override ABIs at each use.
+  2415,
   // unresolvable modules: Node throws WHEN the require executes — the
   // binding types as any and reached uses fence (never a silent pass)
   2307, 2792,

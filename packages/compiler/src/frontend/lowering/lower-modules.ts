@@ -19,6 +19,7 @@ import { ENTRY_NAME, PoisonError, boundIdentifiersOf, dynFallbackType, dynUndefi
 import { isNativeFfiRequire, builtinMemberRequireDecl, builtinNamespaceDestructureModuleOf, createRequireBindingDecl, createRequireNamespaceDecl, createRequireProgramModuleDecl, createRequireSpecOf, isPromisifyCall, registerBuiltinCallableAlias, stripTypeCasts } from "./lower-builtins.js";
 import { bindingContextualGenericFnNodeOf, bindingGenericFnAliasInfoOf, bindingGenericFnInfoOf, bindingGenericFnNodeOf, bindingNeverReassigned, deadUnmappableBinding, funcTypeFromParamShapes, implicitLocalFnInfoOf, implicitLocalFnNodeOf, nullishGenericBindingUnitOf, registerOverloadedCallableAlias } from "./lower-calls.js";
 import { hasJsTypeAnnotation, isVarDeclared, numericIteratorSourceOf, provenanceElidedConstDecl } from "./lower-stmts.js";
+import { objectFactorySignature } from "./object-factory-new.js";
 import { streamClassAliasDecl } from "./lower-stream.js";
 import { stdlibGlobalAliasDecl, stdlibGlobalAliasNameOf, stdlibGlobalNameOf } from "./surfaces.js";
 import { isNativeBuiltinValueInitializer } from "./lower-builtin-values.js";
@@ -1609,7 +1610,10 @@ export function collectGlobals(lowerer: Lowerer, sf: ts.SourceFile, topStmts: ts
             // and closures created in the init body capture it normally.
             // References from separately-declared functions cascade to
             // their own per-site runtime fences.
-            if (isJsSourceFile(sf) && !lowerer.mapTypeOf(lowerer.typeOf(nameNode))) continue;
+            const factoryType = !isLet && isJsSourceFile(sf) && !decl.type && !hasJsTypeAnnotation(decl) &&
+              ts.isIdentifier(decl.name) && nameNode === decl.name && decl.initializer && ts.isNewExpression(decl.initializer)
+              ? objectFactorySignature(lowerer, decl.initializer)?.returnType : undefined;
+            if (!factoryType && isJsSourceFile(sf) && !lowerer.mapTypeOf(lowerer.typeOf(nameNode))) continue;
             // `var p1 = import("./m")` at file scope: the global holds the
             // island promise/handle — the import expression's only
             // production — whatever the checker's namespace type mapped to
@@ -1624,7 +1628,11 @@ export function collectGlobals(lowerer: Lowerer, sf: ts.SourceFile, topStmts: ts
                   // exactly the local rule (uncheckedOverloadHandleCall).
                   (uncheckedOverloadHandleCall(lowerer, decl.initializer) ? JSVAL : null) : null)
                 : null;
-            let type = handleT ?? lowerer.irTypeOf(nameNode);
+            let type = handleT ?? factoryType ?? lowerer.irTypeOf(nameNode);
+            // JavaScript call results may retain a checked array supplied by
+            // the caller. A typed global here would copy it on extraction.
+            if (isJsSourceFile(sf) && !decl.type && !hasJsTypeAnnotation(decl) && type.kind === "array" &&
+                decl.initializer && ts.isCallExpression(decl.initializer)) type = DYN;
             // Unannotated JavaScript aliases retain an existing native
             // checked object instead of copying it into an inferred record.
             if (isJsSourceFile(sf) && !decl.type && !hasJsTypeAnnotation(decl) &&

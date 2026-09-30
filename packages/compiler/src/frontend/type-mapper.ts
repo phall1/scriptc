@@ -3551,12 +3551,18 @@ export function isUnitOnlyTsType(t: ts.Type, resolveTypeParam?: TypeParamResolve
  * admits, `(() => void) | undefined`) so the interned union is IDENTICAL
  * to what mapping the checker's own `T | undefined` produces. */
 export function withUndefinedArm(t: IrType, unions: UnionRegistry): IrType | null {
+  return withUnitArm(t, "undefinedT", unions);
+}
+
+/** Preserve a nullish runtime value that JavaScript inference omitted. */
+export function withUnitArm(t: IrType, kind: "nullT" | "undefinedT", unions: UnionRegistry): IrType | null {
+  const unit: IrType = { kind };
   if (t.kind === "union") {
     const def = unions.get(t.unionId);
     if (!def) return null;
     if (def.arms.some((a) => a.kind === "date")) return null;
-    if (def.arms.some((a) => a.kind === "undefinedT")) return t;
-    const arms = [...def.arms, UNDEFINED_T];
+    if (def.arms.some((a) => a.kind === kind)) return t;
+    const arms = [...def.arms, unit];
     arms.sort((a, b) => (typeKey(a) < typeKey(b) ? -1 : 1));
     return { kind: "union", unionId: unions.transform(def, arms) };
   }
@@ -3568,7 +3574,7 @@ export function withUndefinedArm(t: IrType, unions: UnionRegistry): IrType | nul
   ) {
     return null;
   }
-  const arms = [t, UNDEFINED_T];
+  const arms = [t, unit];
   arms.sort((a, b) => (typeKey(a) < typeKey(b) ? -1 : 1));
   return { kind: "union", unionId: unions.intern(arms) };
 }

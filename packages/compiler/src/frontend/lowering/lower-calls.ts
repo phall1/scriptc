@@ -184,9 +184,12 @@ export interface GenericFnInfo {
    * Instance methods take `this` (object:<declarer>) as param 0 and lower
    * under the declarer's instantiation bindings (generic-class receivers)
    * MERGED with the method instantiation's own; statics lower as plain
-   * module functions with the static-method this/super fence. Absent for
+   * module functions with an exact receiver or the this/super fence. Absent for
    * top-level functions and object-literal methods. */
   member?: { cls: ClassInfo; kind: "method" | "static" };
+  /** Direct static calls specialize lexical this for the proven receiver. */
+  staticReceiver?: ClassInfo;
+  receiverSpecializations?: Map<string, GenericFnInfo>;
   /** Object-literal generic methods (`{ m<T>(x: T) {...} }` and generic
    * arrow/function-expression properties): lowered as plain module
    * functions — `this` inside is fenced (rejectThisInObjectMethod) and the
@@ -1728,19 +1731,24 @@ export function genericFnOf(lowerer: Lowerer, ident: ts.Identifier): GenericFnIn
     lowerer.fnStack.push(fnCtx);
     lowerer.localClassInstantiations.push({ owner: decl, name: inst.name });
     try {
-      // STATIC generic methods: `this`/`super` name the RECEIVER class (a
-      // dynamic value) — the lowerStaticMethod fence, applied here because
-      // generic statics have no non-generic lowering pass. Arrow functions
-      // are transparent (they inherit the method's `this`); this-binding
-      // function forms are opaque.
+      // Static specializations bind lexical this only when the caller
+      // proved its exact receiver. Other instances retain the fence;
+      // super remains unsupported. Arrows inherit the lexical receiver.
       if (info.member?.kind === "static" && decl.body) {
         rejectStaticThis(
           lowerer,
           decl.body,
           (keyword) => `'${keyword}' in static methods (it names the RECEIVER class — a dynamic value; reference the class by name instead)`,
+          false, info.staticReceiver !== undefined,
         );
       }
       const params: IrParam[] = [];
+      const receiverInit: IrStmt[] = [];
+      if (info.staticReceiver) {
+        const value = lowerer.classValueRef(info.staticReceiver, decl);
+        const local = lowerer.declareThis(value.type);
+        receiverInit.push({ kind: "varDecl", localId: local.id, init: value, loc: locOf(decl) });
+      }
       if (cls && info.member!.kind === "method") {
         // Instance methods take `this` as param 0, exactly like plain
         // `%C.method` functions (lowerClassMethodMemberInner).
@@ -1752,7 +1760,7 @@ export function genericFnOf(lowerer: Lowerer, ident: ts.Identifier): GenericFnIn
       // threaded — a default mentioning T resolves like any body expression.
       const declared = lowerer.declareParams(decl.parameters, inst.params);
       params.push(...declared.params);
-      const body = [...declared.prologue];
+      const body = [...receiverInit, ...declared.prologue];
       const bodyBlock = blockBodyOf(decl);
       if (bodyBlock) {
         body.push(...lowerer.lowerStmts(bodyBlock.statements));
@@ -2173,7 +2181,8 @@ function runtimeOptionalHofGenericBinding(
       const broadFunction = lowerer.checker.typeToString(t) === "Function";
       const broadArray = lowerer.checkerAnyArrayType(t);
       const broadPromise = broadPromiseParam(lowerer, t);
-      const classParam = classParams && lowerer.mapTypeOf(t)?.kind === "object";
+      const declaredKind = classParams ? lowerer.mapTypeOf(t)?.kind : undefined;
+      const classParam = classParams && (declaredKind === "object" || declaredKind === "array");
       if ((t.flags & ts.TypeFlags.Any) === 0 && !broadFunction && !broadArray && !broadPromise && !classParam) return null;
       const sym = lowerer.checker.getSymbolAtLocation(param.name);
       if (!sym) return null;
@@ -2233,6 +2242,8 @@ function runtimeOptionalHofGenericBinding(
       if (retTs.flags & ts.TypeFlags.Any) return null;
       if (retTs.flags & (ts.TypeFlags.Null | ts.TypeFlags.Undefined)) return DYN;
       if (lowerer.checker.isArrayType(retTs)) {
+        if (info.decl.parameters.some((param, index) => info.implicitParams?.[index] &&
+            lowerer.mapTypeOf(lowerer.typeOf(param.name))?.kind === "array")) return null;
         const elem = lowerer.checker.getTypeArguments(retTs as ts.TypeReference)[0];
         // An implicit-any parameter poisons an inferred array result to
         // any[] even when this instance's body produces one concrete
@@ -2375,7 +2386,8 @@ function storedImplicitArgumentType(lowerer: Lowerer, arg: ts.Expression): IrTyp
     // receiver type in the checked fallback. Keep existing broad JS inference.
     for (let i = 0; i < info.decl.parameters.length; i++) {
       const symbol = info.implicitParams?.[i];
-      if (symbol && lowerer.mapTypeOf(lowerer.typeOf(info.decl.parameters[i]!.name))?.kind === "object") {
+      const kind = lowerer.mapTypeOf(lowerer.typeOf(info.decl.parameters[i]!.name))?.kind;
+      if (symbol && (kind === "object" || kind === "array")) {
         argTypes.set(symbol, lowerer.checker.getUnknownType());
       }
     }
@@ -9914,7 +9926,9 @@ export function lowerFunction(lowerer: Lowerer, decl: ts.FunctionDeclaration): I
   export function lowerRecordFieldCall(lowerer: Lowerer, call: ts.CallExpression,
     access: ts.PropertyAccessExpression,): IrExpr | null {
     if (lowerer.chainBlocked(call)) return null;
-    const receiverType = lowerer.mapTypeOf(lowerer.typeOf(access.expression));
+    const stored = ts.isIdentifier(access.expression)
+      ? lowerer.peekLocal(access.expression)?.type ?? lowerer.globalOf(access.expression)?.type : undefined;
+    const receiverType = stored?.kind === "record" ? stored : lowerer.mapTypeOf(lowerer.typeOf(access.expression));
     if (receiverType?.kind !== "record" && receiverType?.kind !== "union") return null;
     // A union of records can share a closure-valued field. Its normal
     // property read performs the tag dispatch before arguments evaluate.
@@ -10896,7 +10910,8 @@ export function lowerFunction(lowerer: Lowerer, decl: ts.FunctionDeclaration): I
     // A specialized JS parameter can expose a native field whose checker
     // type still belongs to the unspecialized body (plane.normal.dot()).
     // Use the lowered receiver's representation and retain its evaluation.
-    const probe = mappedReceiver?.kind !== "object" && (lowerer.implicitParamTypes !== null || ts.isNewExpression(access.expression))
+    const probe = mappedReceiver?.kind !== "object" && (lowerer.implicitParamTypes !== null || ts.isNewExpression(access.expression) ||
+      isJsSourceFile(call.getSourceFile()) && ts.isCallExpression(access.expression))
       ? tryLowerExpression(lowerer, access.expression) : null;
     const specializedReceiver = probe?.type.kind === "object" ? probe : null;
     if (specializedReceiver) mappedReceiver = specializedReceiver.type;

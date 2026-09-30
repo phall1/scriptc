@@ -24,6 +24,7 @@ import { isMixinFnBinding, mixinResultBindingClassOf } from "./lower-mixins.js";
 import type { ClassInfo, ClassIteratorInfo } from "./lower-classes.js";
 import { isCompiledPrototypeMember } from "./class-prototypes.js";
 import { classStaticDataFor } from "./class-static-data.js";
+import { objectFactorySignature } from "./object-factory-new.js";
 import { lowerClassCallbackAssign } from "./class-callbacks.js";
 import { genericIfaceBindingKeepsClass, staticFieldWriteTarget } from "./lower-classes.js";
 import { lowerStreamUnderscoreAssign, streamClassAliasDecl } from "./lower-stream.js";
@@ -3829,7 +3830,7 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
       type = DYN;
     }
     const preservesObjectIdentity = init.type.kind === "dyn" &&
-      (inferredObjectType?.kind === "record" ||
+      (inferredObjectType?.kind === "record" || inferredObjectType?.kind === "array" ||
         (isJsSourceFile(decl.getSourceFile()) && inferredObjectType !== null &&
           (inferredObjectType.kind === "func" || jsOpenObjectType(decl, inferredObjectType, lowerer.shapes, lowerer.unions).kind === "dyn")) ||
         (isJsSourceFile(decl.getSourceFile()) && inferredObjectType !== null &&
@@ -3957,6 +3958,9 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
     }
     if (!type) lowerer.badType(decl.name, lowerer.typeOf(decl.name));
     let settledType: IrType = type;
+    if (!isLet && isJsSourceFile(decl.getSourceFile()) && !hasJsTypeAnnotation(decl) && decl.initializer && ts.isNewExpression(decl.initializer)) {
+      settledType = objectFactorySignature(lowerer, decl.initializer)?.returnType ?? settledType;
+    }
     const arithmeticType = decl.initializer ? lowerer.runtimeOptionalArithmeticTypes.get(decl.initializer) : undefined;
     const isStringArithmeticUnion = (t: IrType): boolean => {
       if (t.kind !== "union") return false;
@@ -5167,7 +5171,7 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
           // SUBCLASS name (`D.x = v` creates an OWN property on D in JS —
           // different storage) and through class VALUES (the same dynamic
           // story) are named fences, never a silently-wrong global write.
-          if (!expr.left.questionDotToken && ts.isIdentifier(expr.left.expression)) {
+          if (!expr.left.questionDotToken && (ts.isIdentifier(expr.left.expression) || expr.left.expression.kind === ts.SyntaxKind.ThisKeyword)) {
             // The receiver must BE the class exactly (its name, or a
             // const binding holding a class expression) — a general class
             // VALUE could hold a subclass, where JS creates an own

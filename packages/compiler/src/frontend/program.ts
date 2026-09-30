@@ -54,6 +54,7 @@ import { isNodeModulesPath, nearestInvalidPackageJsonPath, nearestPackageType, n
 import { probeNodeImportRefusal, probeNodeRequireRefusal } from "./npm.js";
 import { isNpmStaticPackage, npmStaticActive, npmStaticFsShadow, npmStaticPackageOfPath, reportNpmStaticOffender, setNpmStaticDeclarationOverloads, setNpmStaticPackages } from "./npm-static.js";
 import { isPrunedNpmReexport, planNpmStaticReexports } from "./npm-static-prune.js";
+import { isNpmStaticSubclassArgument } from "./npm-static-subtyping.js";
 import { npmStaticDeclarationReexports, npmStaticRuntimeClassTargets, parseNpmStaticDeclarationOverloads, parseNpmStaticDeclarationProperties } from "./npm-static-declaration-syntax.js";
 import type { FrontendServices } from "./services.js";
 import type { NpmStaticDeclarationOverloads, NpmStaticDeclarationProperties, NpmStaticOverloadSignature } from "./npm-static-declaration-syntax.js";
@@ -2382,6 +2383,7 @@ function preflight7(load: LoadResult): {
         !npmStaticFileSuppressed(d) &&
         !nodeModulesJsSuppressed(d) &&
         !namespaceCalleeSuppressed(p, d) &&
+        !isNpmStaticSubclassArgument(p, d) &&
         !workspaceImplicitAnySuppressed(p, d) &&
         !jsdocTypeSuppressed(p, d, commentDup),
     );

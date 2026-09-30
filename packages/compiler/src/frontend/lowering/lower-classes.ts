@@ -8,7 +8,7 @@ import * as ts from "../ts7/adapter.js";
 import type { FnCtx, Lowerer } from "./lowerer.js";
 import { BOOL, DATE_T, DYN, F64, bytesOf, type IrClassDef, type IrExpr, type IrFunction, type IrLocal, type IrParam, type IrStmt, type IrType, JSVAL, RUNTIME_EMITTER_CLASS, RUNTIME_ERROR_CLASSES, RUNTIME_STREAM_CLASSES, STRING, type SrcLoc, UNDEFINED_T, VOID, arrayOf, isSupportedMapKey, isSupportedMapValue, isSupportedSetElem, isUnitType, typeEquals } from "../../ir/ir.js";
 import { MAX_GENERIC_INSTANCES, appendImplicitUndefinedReturn, bodyReadsArguments, generatorMeta, genericCallInstance, implicitAnyParamSymbolsOf, implicitCallInstance, implicitMonoFile, omittedArgFor, type GenericFnInfo, type ParamShape } from "./lower-calls.js";
-import { isGenericCallableMemberType, jsOpenObjectType, typeKey } from "../type-mapper.js";
+import { isGenericCallableMemberType, jsOpenObjectType, typeKey, withUnitArm } from "../type-mapper.js";
 import { cjsClassExprWholeExportOf, isCjsJsFile, isJsSourceFile, isModuleExportsAccess, isNodeTypesPath, locOf } from "../program.js";
 import { PoisonError, dynFallbackType, dynUndefinedExpr, newFnCtx, own } from "./lowerer.js";
 import { lowerArrayConstructor, lowerMapSeedNew, lowerSetSeedNew } from "./lower-containers.js";
@@ -24,10 +24,11 @@ import { builtinFenceHintOf } from "./surfaces.js";
 import { lowerHttpAgentNew, lowerHttpServerNew } from "./lower-server.js";
 import { ambientNsRootOf, ambientUndefReadType, ambientUndefVarRootOf, ambientUndefinedFnSymbolOf, fenceEarlyAliasUse, fenceEarlyNsMemberRef, nsMemberIdentOf, nsUndefRead } from "./lower-namespaces.js";
 import { mixinResultBindingClassOf, type MixinInstanceInfo } from "./lower-mixins.js";
-import { rejectStaticThis } from "./static-this.js";
+import { hasLexicalPrivateReference, hasStaticThis, rejectStaticThis } from "./static-this.js";
 import { lowerUrlNew } from "./lower-url.js";
 import { isNativeProxyInitializer, lowerNativeProxy } from "./expressions/native-proxy.js";
 import { classStaticDataFor } from "./class-static-data.js";
+import { lowerObjectFactoryNew } from "./object-factory-new.js";
 import { lowerInstanceConstructorNew } from "./class-instance-constructor.js";
 
 export function returnsOnlyThis(member: ts.MethodDeclaration): boolean {
@@ -57,6 +58,10 @@ function functionLocalClass(decl: ts.ClassLikeDeclaration): boolean {
 }
 
 export function storedClassValueType(lowerer: Lowerer, expression: ts.Expression): IrType | null {
+  if (expression.kind === ts.SyntaxKind.ThisKeyword) {
+    const stored = lowerer.resolveThis();
+    if (stored?.type.kind === "classval") return stored.type;
+  }
   if (ts.isIdentifier(expression)) {
     const stored = lowerer.peekLocal(expression) ?? lowerer.globalOf(expression);
     if (stored?.type.kind === "classval") return stored.type;
@@ -201,9 +206,9 @@ export interface ClassInfo {
    * never join vtables, so IrClassDef doesn't know them). `C.m(args)` is
    * a direct call; `const f = C.m` a zero-capture closure; calls through
    * class VALUES devirtualize when no strict descendant redeclares the
-   * member. `this`/`super` inside fence at lowering (JS binds `this` to
-   * the RECEIVER class — dynamic). Absent on builtin classes. */
-  staticMethods?: Map<string, { params: ParamShape[]; ret: IrType; member: ts.MethodDeclaration }>;
+   * member. Receiver-dependent methods specialize for exact receivers;
+   * detached methods and `super` retain their fences. Absent on builtins. */
+  staticMethods?: Map<string, { params: ParamShape[]; ret: IrType; member: ts.MethodDeclaration; receiverInfo?: GenericFnInfo }>;
   /** `static { ... }` blocks, in declaration order. They are DECLARATION-TIME
    * CODE, not shape: JS runs each block once when the class statement
    * evaluates, whether or not anything ever references the class — so their
@@ -560,6 +565,29 @@ export interface GenericClassInfo {
     return declared ? (lowerer.classes.get(irName) ?? null) : null;
   }
 
+/** A dictionary lookup may be absent even when its checker type is a
+ * required reference. Keep literal nullish fallbacks in inferred JS storage. */
+function jsFieldInitializerType(lowerer: Lowerer, type: IrType, expression: ts.Expression): IrType {
+  let node = expression;
+  while (ts.isParenthesizedExpression(node)) node = node.expression;
+  if (node.kind === ts.SyntaxKind.NullKeyword) return withUnitArm(type, "nullT", lowerer.unions) ?? type;
+  const inferred = lowerer.typeOf(node);
+  for (const arm of inferred.isUnionType() ? ts.constituentTypes(inferred) : [inferred]) {
+    if ((arm.flags & ts.TypeFlags.Undefined) !== 0) type = lowerer.withUndefinedArmOf(type) ?? type;
+    if ((arm.flags & ts.TypeFlags.Null) !== 0) type = withUnitArm(type, "nullT", lowerer.unions) ?? type;
+  }
+  if (ts.isConditionalExpression(node)) {
+    return jsFieldInitializerType(lowerer, jsFieldInitializerType(lowerer, type, node.whenTrue), node.whenFalse);
+  }
+  if (ts.isBinaryExpression(node)) {
+    if (node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) type = jsFieldInitializerType(lowerer, type, node.left);
+    if (node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken ||
+        node.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
+        node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken) return jsFieldInitializerType(lowerer, type, node.right);
+  }
+  return type;
+}
+
 /** The undefined-armed union of a JS class property's inferred type — the
    * honest slot for a field first assigned outside the constructor's top
    * level (undefined until the write runs, Node-exact). Null when the
@@ -571,6 +599,12 @@ export interface GenericClassInfo {
     let mapped = lowerer.mapTypeOf(t) ?? (site ? dynFallbackType(lowerer, site, t) : null);
     if (mapped && site) mapped = jsOpenObjectType(site, mapped, lowerer.shapes, lowerer.unions);
     if (!mapped || mapped.kind === "void") return null;
+    for (const declaration of lowerer.checker.declarationsOf(p)) {
+      const assignment = ts.isBinaryExpression(declaration) ? declaration : declaration.parent;
+      if (assignment && ts.isBinaryExpression(assignment) && assignment.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+        mapped = jsFieldInitializerType(lowerer, mapped, assignment.right);
+      }
+    }
     // An implicit JS value already carries undefined in its native box.
     if (mapped.kind === "dyn") return mapped;
     const byKey = new Map<string, IrType>();
@@ -2309,6 +2343,7 @@ export function collectClassShapeInner(lowerer: Lowerer, decl: ts.ClassLikeDecla
                 type = inferredEmptyCollectionFieldType(lowerer, decl, name, rhs) ?? type;
               }
               if (!type || type.kind === "void") lowerer.badType(assign, t ?? lowerer.typeOf(assign));
+              type = jsFieldInitializerType(lowerer, type, rhs);
               // A JSDoc claim the BODY contradicts (`@type {Command}`
               // assigned `undefined` — the lazy-init idiom): the
               // representation follows the body — the field widens to the
@@ -3045,7 +3080,7 @@ export function collectClassShapeInner(lowerer: Lowerer, decl: ts.ClassLikeDecla
    * with its OWN storage, exactly JS). */
   export function findStaticOn(lowerer: Lowerer, info: ClassInfo | null, name: string):
     | { declarer: ClassInfo; field: ClassInfo["staticFields"][number]; method?: undefined }
-    | { declarer: ClassInfo; method: { params: ParamShape[]; ret: IrType; member: ts.MethodDeclaration }; field?: undefined }
+    | { declarer: ClassInfo; method: { params: ParamShape[]; ret: IrType; member: ts.MethodDeclaration; receiverInfo?: GenericFnInfo }; field?: undefined }
     | null {
     for (let c = info; c; c = c.base) {
       const field = c.staticFields.find((s) => s.name === name);
@@ -3164,7 +3199,7 @@ export function collectClassShapeInner(lowerer: Lowerer, decl: ts.ClassLikeDecla
  * Inherited writes create a new subclass property in JS, so they must not
  * update the declaring class's global. */
 export function staticFieldWriteTarget(lowerer: Lowerer, access: ts.PropertyAccessExpression): { id: string; type: IrType } | null {
-  if (access.questionDotToken || !ts.isIdentifier(access.expression)) return null;
+  if (access.questionDotToken || (!ts.isIdentifier(access.expression) && access.expression.kind !== ts.SyntaxKind.ThisKeyword)) return null;
   const info = lowerer.exactClassOfReceiver(access.expression);
   if (!info) return null;
   const found = lowerer.findStaticOn(info, access.name.text);
@@ -3186,8 +3221,8 @@ export function staticFieldWriteTarget(lowerer: Lowerer, access: ts.PropertyAcce
    * generic member rejection names the site. */
   export function lowerStaticFieldRead(lowerer: Lowerer, expr: ts.PropertyAccessExpression): IrExpr | null {
     if (expr.questionDotToken) return null;
-    if (!ts.isIdentifier(expr.expression)) return null;
-    const symbol = lowerer.resolveValueSymbol(expr.expression);
+    if (!ts.isIdentifier(expr.expression) && expr.expression.kind !== ts.SyntaxKind.ThisKeyword) return null;
+    const symbol = ts.isIdentifier(expr.expression) ? lowerer.resolveValueSymbol(expr.expression) : null;
     const info =
       (symbol ? lowerer.classBySymbol.get(symbol) : undefined) ??
       // A require binding over `module.exports = class {…}` (the alias
@@ -3409,6 +3444,12 @@ export function staticFieldWriteTarget(lowerer: Lowerer, access: ts.PropertyAcce
    * hit the declaring class's storage exactly (the shadowing hazards of
    * general class values don't arise). Null for everything else. */
   export function exactClassOfReceiver(lowerer: Lowerer, expr: ts.Expression): ClassInfo | null {
+    // A class-valued lexical this is introduced only for an exact static
+    // receiver specialization; ordinary instance this remains an object.
+    if (expr.kind === ts.SyntaxKind.ThisKeyword) {
+      const receiver = lowerer.resolveThis();
+      return receiver?.type.kind === "classval" ? lowerer.classes.get(receiver.type.className) ?? null : null;
+    }
     if (!ts.isIdentifier(expr)) return null;
     const symbol = lowerer.resolveValueSymbol(expr);
     if (!symbol) return null;
@@ -3550,6 +3591,11 @@ export function staticFieldWriteTarget(lowerer: Lowerer, access: ts.PropertyAcce
   export function lowerStaticMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     access: ts.PropertyAccessExpression,): IrExpr | null {
     if (access.questionDotToken) return null;
+    if (access.expression.kind === ts.SyntaxKind.ThisKeyword) {
+      const receiver = lowerer.resolveThis();
+      const info = receiver?.type.kind === "classval" ? lowerer.classes.get(receiver.type.className) : undefined;
+      if (info) return staticCallOn(lowerer, call, access, info, false);
+    }
     // `module.exports.describe()` in a module whose whole export IS a
     // class expression: the receiver is exactly that class (the kept
     // export assignment pins it) — the direct-name rules apply.
@@ -3649,7 +3695,7 @@ export function staticFieldWriteTarget(lowerer: Lowerer, access: ts.PropertyAcce
           `calling the static member '${access.name.text}' through a class value (a subclass of '${info.def.name.replace(/^%|^%m\d+\./, "")}' redeclares it, so the runtime class decides which declaration answers)`,
         );
       }
-      const instance = genericCallInstance(lowerer, call, gfound.info);
+      const instance = genericCallInstance(lowerer, call, staticMethodForReceiver(lowerer, access, gfound.info, info, throughValue));
       const args = lowerer.completeArgs(call.arguments, instance.params, loc, call);
       return { kind: "call", callee: instance.name, args, type: instance.returnType, loc };
     }
@@ -3662,7 +3708,7 @@ export function staticFieldWriteTarget(lowerer: Lowerer, access: ts.PropertyAcce
     }
     const specialized = findGenericStaticOn(lowerer, info, access.name.text);
     if (specialized?.declarer === found.declarer && specialized.info.implicitParams) {
-      const instance = implicitCallInstance(lowerer, call, specialized.info);
+      const instance = implicitCallInstance(lowerer, call, staticMethodForReceiver(lowerer, access, specialized.info, info, throughValue));
       const args = lowerer.completeArgs(call.arguments, instance.params, loc, call);
       return { kind: "call", callee: instance.name, args, type: instance.returnType, loc };
     }
@@ -3682,11 +3728,43 @@ export function staticFieldWriteTarget(lowerer: Lowerer, access: ts.PropertyAcce
       }
       return { kind: "callValue", callee, args, type: found.field.type.ret, loc };
     }
+    if (found.method.member.body && hasStaticThis(found.method.member)) {
+      const generic = found.method.receiverInfo ??= {
+        decl: found.method.member, baseName: access.name.text,
+        qualifiedName: `%${found.declarer.def.name}.static:${access.name.text}`,
+        typeParams: [], instances: new Map(), member: { cls: found.declarer, kind: "static" },
+      };
+      const instance = genericCallInstance(lowerer, call, staticMethodForReceiver(lowerer, access, generic, info, throughValue));
+      return { kind: "call", callee: instance.name,
+        args: lowerer.completeArgs(call.arguments, instance.params, loc, call), type: instance.returnType, loc };
+    }
     const fnName = `%${found.declarer.def.name}.static:${access.name.text}`;
     lowerer.noteEdge(fnName);
     const args = lowerer.completeArgs(call.arguments, found.method.params, loc, call);
     return { kind: "call", callee: fnName, args, type: found.method.ret, loc };
   }
+
+function staticMethodForReceiver(lowerer: Lowerer, access: ts.PropertyAccessExpression, method: GenericFnInfo,
+  receiver: ClassInfo, throughValue: boolean): GenericFnInfo {
+  if (!hasStaticThis(method.decl)) return method;
+  // A private name in the inherited body belongs to the declaring class,
+  // even when the receiver declares a different private with that spelling.
+  // Do not resolve it by receiver name until the static ABI tracks the brand.
+  if (method.member && method.member.cls !== receiver && hasLexicalPrivateReference(method.decl)) {
+    lowerer.unsupported("SC1090", access, "private member references in an inherited receiver-dependent static method");
+  }
+  if (throughValue && !classValueIsExactlyOwn(lowerer, access.expression, receiver)) {
+    lowerer.unsupported("SC1090", access, "receiver-dependent static methods through a polymorphic class value");
+  }
+  const instances = method.receiverSpecializations ??= new Map();
+  let specialized = instances.get(receiver.def.name);
+  if (!specialized) {
+    specialized = { ...method, qualifiedName: `${method.qualifiedName}%on.${receiver.def.name}`,
+      instances: new Map(), staticReceiver: receiver, receiverSpecializations: new Map() };
+    instances.set(receiver.def.name, specialized);
+  }
+  return specialized;
+}
 
 /** Static member access through a class VALUE (`X.m` where X is
    * classval-typed): devirtualized — the member resolves against the
@@ -3711,6 +3789,7 @@ export function staticFieldWriteTarget(lowerer: Lowerer, access: ts.PropertyAcce
     }
     if (
       !ts.isIdentifier(expr.expression) &&
+      expr.expression.kind !== ts.SyntaxKind.ThisKeyword &&
       // `module.exports.label` in a class-replaced CJS module: the
       // receiver is the exact exported class, and the read is
       // side-effect-free — as bindable as an identifier.
@@ -5172,6 +5251,8 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
     const loc = locOf(expr);
     const instanceConstructor = lowerInstanceConstructorNew(lowerer, expr);
     if (instanceConstructor) return instanceConstructor;
+    const objectFactory = lowerObjectFactoryNew(lowerer, expr);
+    if (objectFactory) return objectFactory;
     let selected: ts.Expression = expr.expression;
     while (ts.isParenthesizedExpression(selected)) selected = selected.expression;
     if (ts.isConditionalExpression(selected)) {
