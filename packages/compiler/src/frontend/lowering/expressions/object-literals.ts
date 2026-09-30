@@ -249,10 +249,12 @@ export function lowerDynObjectLiteral(
         key = { kind: "strLit", value: folded, type: STRING, loc: locOf(name) };
       } else {
         let k = lowerer.lowerExpr(name.expression);
-        if (k.type.kind === "f64" || k.type.kind === "bool" || k.type.kind === "dyn") {
+        if (k.type.kind === "symbol") k = lowerer.coerceToExpected(k, DYN);
+        else if (k.type.kind === "dyn") k = { kind: "libCall", fn: "dyn.propertyKey", args: [k], type: DYN, loc: locOf(name) };
+        else if (k.type.kind === "f64" || k.type.kind === "bool") {
           k = { kind: "toString", operand: k, type: STRING, loc: locOf(name) };
         }
-        if (k.type.kind !== "string") {
+        if (k.type.kind !== "string" && k.type.kind !== "dyn") {
           lowerer.unsupported(
             "SC1090",
             name,
@@ -272,7 +274,7 @@ export function lowerDynObjectLiteral(
       flushFields();
       hasAccessors = true;
       acc ??= { kind: "dynObjLit", fields: [], type: DYN, loc };
-      lowerer.rejectThisInObjectMethod(prop.body ?? prop);
+      if (!isJsSourceFile(expr.getSourceFile())) lowerer.rejectThisInObjectMethod(prop.body ?? prop);
       const fn = lowerer.lowerLambda(prop);
       const descriptor: IrExpr = {
         kind: "dynObjLit", type: DYN, loc: locOf(prop), fields: [
@@ -299,7 +301,7 @@ export function lowerDynObjectLiteral(
     try {
       const lowerValue = (): IrExpr =>
         ts.isMethodDeclaration(prop)
-          ? (lowerer.rejectThisInObjectMethod(prop.body ?? prop), lowerer.lowerLambda(prop))
+          ? (isJsSourceFile(expr.getSourceFile()) ? lowerer.lowerLambda(prop) : (lowerer.rejectThisInObjectMethod(prop.body ?? prop), lowerer.lowerLambda(prop)))
           : !boxValue && ts.isObjectLiteralExpression(valueExpr)
             ? lowerer.lowerExprExpecting(valueExpr, DYN)
             : lowerer.lowerExpr(valueExpr as ts.Expression);
@@ -570,6 +572,12 @@ export function lowerObjectLiteral(lowerer: Lowerer, expr: ts.ObjectLiteralExpre
   if (isJsSourceFile(expr.getSourceFile()) && ts.isVariableDeclaration(expr.parent) &&
       expr.parent.initializer === expr && ts.isIdentifier(expr.parent.name) &&
       lowerer.globalOf(expr.parent.name)?.type.kind === "dyn") {
+    return lowerDynObjectLiteral(lowerer, expr);
+  }
+  // A checked spread carries runtime symbol keys and receiver-sensitive
+  // methods absent from its inferred record shape. Copy the real properties.
+  if (!expected && isJsSourceFile(expr.getSourceFile()) && expr.properties.some((property) =>
+      ts.isSpreadAssignment(property) && tryLowerExpression(lowerer, property.expression)?.type.kind === "dyn")) {
     return lowerDynObjectLiteral(lowerer, expr);
   }
   const unionClone = lowerUnionRecordClone(lowerer, expr);
@@ -887,6 +895,11 @@ export function lowerObjectLiteral(lowerer: Lowerer, expr: ts.ObjectLiteralExpre
     }
   }
   let shape = lowerer.shapes.get(type.shapeId)!;
+  // JavaScript Dates carry native object identity in checked storage. An
+  // inferred scalar Date field would erase that identity before boxing.
+  if (isJsSourceFile(expr.getSourceFile()) && shape.fields.some((field) => field.type.kind === "date")) {
+    return lowerDynObjectLiteral(lowerer, expr);
+  }
   // ACCESSOR properties, JS literals only (TS accessors fill the shape's
   // %get:/%set: closure slots below): no record storage exists for them,
   // so the literal's shape NARROWS to its plain fields (reads resolve

@@ -324,6 +324,15 @@ export function emitAsyncExpr(host: LlvmEmitterContext, e: ExprOf<"yieldExpr" | 
           }
         }
         if (host.wasi) host.emitWasiSuspendPrepared();
+        if (e.captureCompletion) {
+          const converter = (type: IrType): string => isRefCounted(type) ? `@${host.dyn.toDynHelper(type)}` : "null";
+          host.declare(`declare ptr @scr_gen_delegate_resume(ptr, ptr, ptr)`);
+          const resumed = B.tmp();
+          B.line(`${resumed} = call ptr @scr_gen_delegate_resume(ptr ${converter(gen.nextT)}, ptr ${converter(e.captureCompletion.returnType)}, ptr @${host.dyn.caughtToDynHelper()})`);
+          const out = host.own({ name: resumed, type: e.type });
+          host.emitPendingCheck();
+          return out;
+        }
         host.emitPendingCheck();
         if (e.type.kind === "void") {
           // An undefined next-channel: nothing to read (the frontend

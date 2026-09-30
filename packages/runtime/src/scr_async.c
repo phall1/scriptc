@@ -3281,13 +3281,19 @@ static void scr_gen_exc_reset(ScrExcCell *cell) {
              cell->kind == SCR_EXC_PRIMITIVE_REF) {
     cell->release_fn(cell->payload);
   }
+  ScrStackFrame *stack = cell->stack;
   memset(cell, 0, sizeof *cell);
+  cell->stack = stack;
 }
 
 static void scr_gen_exc_move(ScrExcCell *dst, ScrExcCell *src) {
   scr_gen_exc_reset(dst);
+  ScrStackFrame *dst_stack = dst->stack;
+  ScrStackFrame *src_stack = src->stack;
   *dst = *src;
+  dst->stack = dst_stack;
   memset(src, 0, sizeof *src);
+  src->stack = src_stack;
 }
 
 struct ScrGen {
@@ -3471,6 +3477,41 @@ double scr_gen_take_in_f64(void) { return scr_gen_slot_take_f64(&scr_gen_self()-
 bool scr_gen_take_in_bool(void) { return scr_gen_slot_take_bool(&scr_gen_self()->in); }
 void *scr_gen_take_in_ref(void) { return scr_gen_slot_take_ref(&scr_gen_self()->in); }
 
+ScrDyn *scr_gen_delegate_resume(ScrDyn *(*next_ref)(void *),
+                                ScrDyn *(*return_ref)(void *),
+                                ScrDyn *(*caught_ref)(const ScrCaught *)) {
+  ScrGen *g = scr_gen_self();
+  ScrExcCell *cell = scr_exc_current_cell();
+  int mode = cell->kind == SCR_EXC_GENRET ? 1 : cell->kind != SCR_EXC_NONE ? 2 : 0;
+  ScrDyn *value;
+  if (mode == 2) {
+    ScrCaught *caught = scr_exc_take();
+    value = caught_ref(caught);
+    scr_caught_release(caught);
+  } else {
+    if (mode == 1) scr_exc_clear();
+    ScrGenSlot *slot = mode == 1 ? &g->ret : &g->in;
+    ScrDyn *(*convert)(void *) = mode == 1 ? return_ref : next_ref;
+    switch (slot->kind) {
+    case SCR_EXC_F64: value = scr_dyn_new_num(slot->f64); break;
+    case SCR_EXC_BOOL: value = scr_dyn_new_bool(slot->b); break;
+    case SCR_EXC_REF: value = convert(slot->payload); break;
+    default: value = scr_dyn_retain(scr_dyn_undefined()); break;
+    }
+    scr_gen_slot_reset(slot);
+  }
+  if (scr_exc_pending()) {
+    scr_dyn_release(value);
+    return NULL;
+  }
+  ScrDyn *result = scr_dyn_new_obj();
+  ScrDyn *kind = scr_dyn_new_num(mode);
+  scr_dyn_obj_set(result, "kind", 4, kind);
+  scr_dyn_obj_set(result, "value", 5, value);
+  /* Object insertion takes ownership of both completion fields. */
+  return result;
+}
+
 /* yield: park the value in OUT and hop back to the resumer. Control
  * returns here at the next resume — possibly with an injected .throw
  * payload or the GENRET sentinel pending (the emitted check handles it). */
@@ -3556,8 +3597,7 @@ static void scr_gen_switch_in(ScrGen *g) {
       } else {
         /* The sync body's exception escapes at the resume site. */
         ScrExcCell *mine = scr_exc_current_cell();
-        *mine = f->exc;
-        memset(&f->exc, 0, sizeof f->exc);
+        scr_gen_exc_move(mine, &f->exc);
       }
     }
     scr_fiber_destroy(f);

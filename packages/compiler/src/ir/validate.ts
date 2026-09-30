@@ -113,15 +113,23 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "json.parse": { argTypes: [STRING], result: DYN },
   "json.parseReviver": { argTypes: [STRING, DYN], result: DYN },
   "json.stringifyReplacer": { argTypes: [DYN, DYN, STRING], result: DYN },
+  "json.stringifyValue": { argTypes: [DYN, DYN, DYN], result: DYN },
   "dyn.keySet": { argTypes: [DYN, STRING, DYN], result: VOID },
   "dyn.keySetComputed": { argTypes: [DYN, DYN, DYN], result: VOID },
   "dyn.keyDelete": { argTypes: [DYN, STRING, BOOL], result: VOID },
+  "dyn.keyDeleteComputed": { argTypes: [DYN, DYN, BOOL], result: VOID },
+  "dyn.hasKeyComputed": { argTypes: [DYN, DYN], result: BOOL },
+  "dyn.hasOwnComputed": { argTypes: [DYN, DYN], result: BOOL },
+  "dyn.propertyIsEnumerableComputed": { argTypes: [DYN, DYN], result: BOOL },
   "dyn.globalSymbolGet": { argTypes: [SYMBOL_T], result: DYN },
   "dyn.globalSymbolSet": { argTypes: [SYMBOL_T, DYN], result: VOID },
   "dyn.globalSymbolHas": { argTypes: [SYMBOL_T], result: BOOL },
   "dyn.globalSymbolDelete": { argTypes: [SYMBOL_T], result: VOID },
   "dyn.typedRefIs": { argTypes: [DYN, STRING], result: BOOL },
   "dyn.iterPack": { argTypes: [DYN, STRING], result: DYN },
+  "dyn.arrayFromIterator": { argTypes: [DYN], result: DYN },
+  "dyn.iterator": { argTypes: [DYN, STRING], result: DYN },
+  "dyn.iteratorResult": { argTypes: [DYN], result: DYN },
   "dyn.mapSeedEntries": { argTypes: [DYN], result: DYN },
   "dyn.mapSeedEntry": { argTypes: [DYN], result: DYN },
   "dyn.arrLen": { argTypes: [DYN], result: F64 },
@@ -131,7 +139,11 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "dyn.isFrozen": { argTypes: [DYN], result: BOOL },
   "dyn.nativeSetNew": { argTypes: [DYN], result: DYN },
   "dyn.nativeSetIs": { argTypes: [DYN], result: BOOL },
+  "dyn.nativeMapIs": { argTypes: [DYN], result: BOOL },
   "dyn.nativeUrlIs": { argTypes: [DYN], result: BOOL },
+  "dyn.nativeDateIs": { argTypes: [DYN], result: BOOL },
+  "date.nativeNew": { argTypes: [DYN], result: DYN },
+  "date.checkedValue": { argTypes: [DYN], result: DATE_T },
   "dyn.nativeRegexIs": { argTypes: [DYN], result: BOOL },
   "dyn.toString": { argTypes: [DYN, DYN, STRING], result: STRING },
   "dyn.defineProps": { argTypes: [DYN, DYN], result: DYN },
@@ -307,6 +319,7 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "sym.new": { argTypes: [STRING], result: SYMBOL_T },
   "sym.newAnon": { argTypes: [], result: SYMBOL_T },
   "sym.for": { argTypes: [STRING], result: SYMBOL_T },
+  "sym.wellKnown": { argTypes: [STRING], result: SYMBOL_T },
   // Result is the interned `string | undefined` union — the libCall case
   // checks the arms (the spawnRes.error pattern).
   "sym.keyFor": { argTypes: [SYMBOL_T], result: VOID },
@@ -1075,6 +1088,7 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "process.builtinId": { argTypes: [DYN, arrayOf(STRING)], result: STRING },
   "process.builtinModule": { argTypes: [STRING, DYN], result: DYN },
   "process.builtinUnsupported": { argTypes: [STRING, STRING], result: DYN },
+  "process.hrtimeValue": { argTypes: [], result: DYN },
   "process.versionsNode": { argTypes: [], result: STRING },
   "process.versionsOpenssl": { argTypes: [], result: STRING },
   "process.kill": { argTypes: [F64, STRING], result: BOOL },
@@ -1093,19 +1107,29 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "error.deleteCause": { argTypes: [null], result: VOID },
   "error.nodeThrow": { argTypes: [F64, STRING, STRING], result: VOID },
   "dyn.toStringCoerce": { argTypes: [DYN], result: STRING },
+  "dyn.stringConstructor": { argTypes: [DYN], result: STRING },
+  "dyn.propertyKey": { argTypes: [DYN], result: DYN },
+  "dyn.toNumeric": { argTypes: [DYN], result: DYN },
+  "dyn.increment": { argTypes: [DYN, BOOL], result: DYN },
   "dyn.numberConstructor": { argTypes: [DYN], result: F64 },
   "dyn.toNumberCoerce": { argTypes: [DYN], result: F64 },
   "dyn.add": { argTypes: [DYN, DYN], result: DYN },
+  "dyn.arithmetic": { argTypes: [DYN, DYN, STRING], result: DYN },
+  "dyn.bitwise": { argTypes: [DYN, DYN, STRING], result: DYN },
   "dyn.proxyNew": { argTypes: [DYN, DYN], result: DYN },
   // Always throws; the result is the READ's declared type (a typed dummy
   // the unwind abandons) — the libCall case skips the result check.
   "global.undefRead": { argTypes: [STRING], result: VOID },
+  "console.native": { argTypes: [], result: DYN },
   "global.native": { argTypes: [arrayOf(STRING)], result: DYN },
   // `X.name` through a class value: the arg is a program-dependent
   // classval (a null slot; the libCall case checks the kind).
   "class.name": { argTypes: [null], result: STRING },
   "error.ctor": { argTypes: [null, STRING], result: VOID },
   "error.toString": { argTypes: [null], result: STRING },
+  "error.stack": { argTypes: [null], result: STRING },
+  "error.stackLimitGet": { argTypes: [], result: F64 },
+  "error.stackLimitSet": { argTypes: [F64], result: VOID },
   // Receiver (any error-hierarchy object) and the program-dependent
   // `string | undefined` result are checked in the libCall case.
   "error.code": { argTypes: [null], result: VOID },
@@ -1156,11 +1180,17 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "dyn.packPushSpreadIter": { argTypes: [DYN, DYN], result: VOID },
   "dyn.assignAll": { argTypes: [DYN, DYN], result: DYN },
   "dyn.objCreateNullProto": { argTypes: [], result: DYN },
+  "dyn.arrayPrototype": { argTypes: [], result: DYN },
+  "dyn.classPrototype": { argTypes: [DYN, DYN], result: DYN },
+  "dyn.classBasePrototype": { argTypes: [DYN], result: DYN },
+  "dyn.classSuper": { argTypes: [DYN, DYN, DYN], result: VOID },
+  "dyn.assignPrototype": { argTypes: [DYN, DYN, DYN], result: DYN },
   "dyn.objCreate": { argTypes: [DYN], result: DYN },
   "dyn.objCreateWithProperties": { argTypes: [DYN, DYN], result: DYN },
   "dyn.getPrototype": { argTypes: [DYN], result: DYN },
   "dyn.setPrototype": { argTypes: [DYN, DYN], result: DYN },
   "dyn.getOwnPropertyNames": { argTypes: [DYN], result: DYN },
+  "dyn.getOwnPropertySymbols": { argTypes: [DYN], result: DYN },
   "dyn.getOwnPropertyDescriptors": { argTypes: [DYN], result: DYN },
   "dyn.preventExtensions": { argTypes: [DYN], result: DYN },
   "dyn.isExtensible": { argTypes: [DYN], result: BOOL },
@@ -1687,8 +1717,20 @@ export function validateModule(mod: IrModule): IrValidationError[] {
       errors.push({ message: `duplicate class "${cls.name}"`, loc: cls.loc });
     }
     classesByName.set(cls.name, cls);
-    if (cls.localCaptures !== undefined && (cls.runtime || cls.base !== undefined || cls.genericOf !== undefined)) {
-      errors.push({ message: `class ${cls.name}: local class cannot use a runtime or inherited layout`, loc: cls.loc });
+    if (cls.localCaptures !== undefined && (cls.runtime || cls.genericOf !== undefined)) {
+      errors.push({ message: `class ${cls.name}: local class cannot use a runtime or generic family layout`, loc: cls.loc });
+    }
+    if (cls.localCaptures !== undefined) {
+      const environment = cls.fields.find((field) => field.name === `%classEnvironment:${cls.name}`);
+      if (environment?.type.kind !== "classval" || environment.type.className !== cls.name) {
+        errors.push({ message: `class ${cls.name}: local class requires its constructor environment field`, loc: cls.loc });
+      }
+    }
+    if (cls.localBaseCapture !== undefined) {
+      const base = cls.localCaptures?.[cls.localBaseCapture];
+      if (!Number.isInteger(cls.localBaseCapture) || base?.type.kind !== "classval" || base.type.className !== cls.base) {
+        errors.push({ message: `class ${cls.name}: invalid local base capture`, loc: cls.loc });
+      }
     }
     if (cls.jsLength !== undefined && (!Number.isSafeInteger(cls.jsLength) || cls.jsLength < 0)) {
       errors.push({ message: `class ${cls.name}: invalid constructor length`, loc: cls.loc });
@@ -1739,8 +1781,8 @@ export function validateModule(mod: IrModule): IrValidationError[] {
       errors.push({ message: `class ${cls.name}: undeclared base "${cls.base}"`, loc: cls.loc });
       continue;
     }
-    if (base.localCaptures !== undefined) {
-      errors.push({ message: `class ${cls.name}: cannot extend a local class`, loc: cls.loc });
+    if (base.localCaptures !== undefined && cls.localBaseCapture === undefined) {
+      errors.push({ message: `class ${cls.name}: local base requires a captured constructor`, loc: cls.loc });
     }
     const seen = new Set<string>([cls.name]);
     for (let c: IrClassDef | undefined = base; c; c = c.base !== undefined ? classesByName.get(c.base) : undefined) {
@@ -2455,12 +2497,19 @@ function validateFunction(
         // Statements in an expression cannot jump out of the expression,
         // but a local state branch is valid: optional array stores must
         // choose ARRAY_VALUE versus ARRAY_UNDEFINED before the final result
-        // is evaluated. Nested blocks/ifs are checked recursively below.
-        const allowed = new Set(["varDecl", "assign", "exprStmt", "fieldSet", "recordSet", "recordKeySet", "arraySet", "arraySetLength", "arraySetUndefined", "arrayDelete", "bytesSet", "block", "if"]);
+        // is evaluated. Delegation also needs a local loop. Nested control
+        // flow is checked recursively; jumps still cannot leave the region.
+        const allowed = new Set(["varDecl", "assign", "exprStmt", "fieldSet", "recordSet", "recordKeySet", "arraySet", "arraySetLength", "arraySetUndefined", "arrayDelete", "bytesSet", "block", "if", "while"]);
+        if (e.generatorDelegate) {
+          if (!fn.generator || fn.async) err("delegation sequence outside a synchronous generator", e.loc);
+          allowed.add("return");
+          allowed.add("throw");
+          allowed.add("runtimeFence");
+        }
         const flat = (ss: IrStmt[]): void => {
           for (const s of ss) {
             if (!allowed.has(s.kind)) {
-              err(`seqExpr statement kind "${s.kind}" is not straight-line`, s.loc);
+              err(`seqExpr statement kind "${s.kind}" can leave the expression`, s.loc);
               continue;
             }
             if (s.kind === "block") {
@@ -2471,6 +2520,12 @@ function validateFunction(
               flat(s.then);
               if (s.else_) flat(s.else_);
               checkExpr(s.cond);
+              continue;
+            }
+            if (s.kind === "while") {
+              expectType(s.cond, BOOL, "seqExpr while condition");
+              checkExpr(s.cond);
+              flat(s.body);
               continue;
             }
             checkStmt(s);
@@ -3056,7 +3111,7 @@ function validateFunction(
           // misjudge JS ===; the frontend fences these.
           err(`arrIntrinsic ${e.method} on union elements (frontend must reject)`, e.loc);
         }
-        if (e.method === "shift" || e.method === "pop") {
+        if ((e.method === "shift" || e.method === "pop") && !(elem.kind === "dyn" && e.type.kind === "dyn")) {
           const rdef = e.type.kind === "union" ? unions.get(e.type.unionId) : undefined;
           if (
             !rdef ||
@@ -3831,7 +3886,7 @@ function validateFunction(
         if (e.type.kind !== "dyn") err(`dynObjLit must be dyn-typed, got ${e.type.kind}`, e.loc);
         for (const f of e.fields ?? []) {
           checkExpr(f.key);
-          if (f.key.type.kind !== "string") err(`dynObjLit key of kind ${f.key.type.kind} (must be string)`, e.loc);
+          if (f.key.type.kind !== "string" && f.key.type.kind !== "dyn") err(`dynObjLit key of kind ${f.key.type.kind} (must be string or dyn)`, e.loc);
           checkExpr(f.value);
           if (f.value.type.kind !== "dyn") err(`dynObjLit field value of kind ${f.value.type.kind} (must be dyn)`, e.loc);
         }
@@ -3895,7 +3950,7 @@ function validateFunction(
         checkExpr(e.value);
         checkExpr(e.key);
         expectType(e.value, { kind: "dyn" }, "dynKeyGet operand");
-        if (e.key.type.kind !== "string") err(`dynKeyGet key is ${e.key.type.kind}, not string`, e.loc);
+        if (e.key.type.kind !== "string" && e.key.type.kind !== "dyn") err(`dynKeyGet key is ${e.key.type.kind}, not string or dyn`, e.loc);
         if (e.type.kind !== "dyn") err("dynKeyGet must be dyn", e.loc);
         break;
       }
@@ -5374,7 +5429,7 @@ function validateFunction(
             break;
           }
         }
-        if (e.fn === "error.cause" || e.fn === "error.hasCause" || e.fn === "error.setCause" || e.fn === "error.deleteCause") {
+        if (e.fn === "error.stack" || e.fn === "error.cause" || e.fn === "error.hasCause" || e.fn === "error.setCause" || e.fn === "error.deleteCause") {
           const recv = e.args[0];
           let cls = recv?.type.kind === "object" ? classes.get(recv.type.className) : undefined;
           while (cls?.base) cls = classes.get(cls.base);
@@ -5481,7 +5536,11 @@ function validateFunction(
         }
         // The undefined next-channel has no C value form: such yields are
         // void-typed (statement position only — the frontend fences reads).
-        if (fn.generator.nextT.kind === "undefinedT") {
+        if (e.captureCompletion) {
+          if (fn.async || e.type.kind !== "dyn" || !typeEquals(e.captureCompletion.returnType, fn.returnType)) {
+            err("invalid captured generator completion", e.loc);
+          }
+        } else if (fn.generator.nextT.kind === "undefinedT") {
           if (e.type.kind !== "void") err("yield result must be void on an undefined next-channel", e.loc);
         } else if (!typeEquals(e.type, fn.generator.nextT)) {
           err(`yield result ${typeKey(e.type)} != next channel ${typeKey(fn.generator.nextT)}`, e.loc);
@@ -5516,7 +5575,6 @@ function validateFunction(
             err("genResume throw with no payload", e.loc);
           } else if (
             e.arg.type.kind === "void" ||
-            e.arg.type.kind === "dyn" ||
             e.arg.type.kind === "caught" ||
             e.arg.type.kind === "date"
           ) {

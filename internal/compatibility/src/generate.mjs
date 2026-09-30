@@ -598,6 +598,15 @@ function publicDetail(tier) {
   if (source.startsWith("surface-manifest:")) return "Implemented for the call shapes accepted by the compiler lowering.";
   if (source.startsWith("compiler-dedicated:")) return "Implemented by a dedicated static compiler/runtime path.";
   if (source.startsWith("compiler-feature:")) {
+    if (/^compiler-feature:process\.process\.hrtime(?:\.bigint)?$/.test(source)) {
+      return "Native monotonic clock supports tuple and bigint results, including stored JavaScript callable values.";
+    }
+    if (source === "compiler-feature:errors.stackTraceLimit") {
+      return "Numeric limits control the frames captured by newly created native errors.";
+    }
+    if (source === "compiler-feature:errors.stack") {
+      return "Native errors capture synchronous source frames; V8 stack customization and async stack stitching remain unsupported.";
+    }
     if (/^compiler-feature:process\.std(?:in|out|err)$/.test(source)) {
       return "Stored JavaScript process streams support native input listeners, pause/resume and buffered reads, synchronous output writes, and output write replacement; other stream operations remain unsupported.";
     }

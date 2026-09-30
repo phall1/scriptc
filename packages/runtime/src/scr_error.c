@@ -47,6 +47,8 @@ static void scr_error_gcfree(void *obj) {
   scr_str_release(e->name);
   scr_str_release(e->message);
   scr_str_release(e->code); /* NULL-safe: absent on most errors */
+  scr_str_release(e->stack_frames);
+  scr_str_release(e->stack);
   if (e->error_cause && scr_error_cause_drop) scr_error_cause_drop(obj);
   scr_obj_free_note();
   scr_cyc_free(e);
@@ -78,6 +80,8 @@ static void scr_error_reld(void *obj) {
     scr_str_release(e->name);
     scr_str_release(e->message);
     scr_str_release(e->code); /* NULL-safe: absent on most errors */
+    scr_str_release(e->stack_frames);
+    scr_str_release(e->stack);
     if (e->error_cause && scr_error_cause_drop) scr_error_cause_drop(obj);
     scr_obj_free_note();
     if (scr_error_traced) scr_cyc_free(e);
@@ -131,6 +135,7 @@ void scr_error_init(void *obj, int kind, ScrStr *message) {
   const char *n = scr_error_names[kind];
   e->name = scr_str_new(n, strlen(n));
   e->message = message ? scr_str_retain(message) : scr_str_new("", 0);
+  e->stack_frames = scr_stack_capture();
 }
 
 /* The Error hierarchy's trace entry point when the program's cycle fixpoint
@@ -207,6 +212,15 @@ ScrStr *scr_error_to_string(ScrError *e) {
   ScrStr *out = scr_str_new(buf, n);
   free(buf);
   return out;
+}
+
+ScrStr *scr_error_stack(ScrError *e) {
+  if (!e->stack) {
+    ScrStr *heading = scr_error_to_string(e);
+    e->stack = e->stack_frames ? scr_str_concat(heading, e->stack_frames) : scr_str_retain(heading);
+    scr_str_release(heading);
+  }
+  return scr_str_retain(e->stack);
 }
 
 bool scr_error_is(const void *obj) {

@@ -13,9 +13,8 @@ test.each([
   ["early hoisted call", 'read(); var key = Symbol.for("x"); function read() { return key; } class C { [key] = true; }'],
   ["early shorthand call", 'const callbacks = { read }; callbacks.read(); var key = Symbol.for("x"); function read() { return key; } class C { [key] = true; }'],
   ["for-of assignment", 'var key = Symbol.for("x"); for (key of [Symbol.for("y")]) {} class C { [key] = true; }'],
-  ["computed registry name", 'const text = "x"; const key = Symbol.for(text); class C { [key] = true; }'],
+  ["runtime registry name", 'function text() { return "x"; } const key = Symbol.for(text()); class C { [key] = true; }'],
   ["local symbol", 'class C { constructor() { const key = Symbol("x"); this[key] = true; } }'],
-  ["uninitialized field", 'const key = Symbol.for("x"); class C { [key]; }'],
   ["distinct symbol collision", 'const key = Symbol("x"); const other = Symbol.for("x"); class C { [key] = true; [other] = false; }'],
 ])("refuses symbol fields with %s", (_name, source) => {
   const dir = mkdtempSync(join(tmpdir(), "scriptc-symbol-fields-"));
@@ -25,6 +24,23 @@ test.each([
     const { coverage } = analyze(entry);
     const diagnostics = [...coverage.diagnostics, ...(coverage.runtimeFences ?? [])];
     expect(diagnostics.some((d) => d.code === "SC1090" && /symbol|computed class fields/i.test(d.message)), JSON.stringify(coverage, null, 2)).toBe(true);
+    expect(coverage.stats.statementsIsland).toBe(0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test.each([
+  ["constant registry name", 'const text = "x"; const key = Symbol.for(text); class C { [key] = true; }'],
+  ["uninitialized JavaScript field", 'const key = Symbol.for("x"); class C { [key]; }'],
+])("accepts symbol fields with %s", (_name, source) => {
+  const dir = mkdtempSync(join(tmpdir(), "scriptc-symbol-fields-"));
+  try {
+    const entry = join(dir, "main.cjs");
+    writeFileSync(entry, source + "\nnew C();\n");
+    const { coverage } = analyze(entry);
+    expect(coverage.preflightFailed).toBe(false);
+    expect([...coverage.diagnostics, ...(coverage.runtimeFences ?? [])]).toEqual([]);
     expect(coverage.stats.statementsIsland).toBe(0);
   } finally {
     rmSync(dir, { recursive: true, force: true });

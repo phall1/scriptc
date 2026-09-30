@@ -56,6 +56,37 @@ ScrSym *scr_sym_new(ScrStr *desc) {
 /* ── the Symbol.for global registry ──────────────────────────────────── */
 
 static SCR_TL ScrSym *g_sym_registry = NULL;
+static SCR_TL ScrSym *g_sym_well_known = NULL;
+
+static void scr_sym_well_known_cleanup(void) {
+  while (g_sym_well_known) {
+    ScrSym *symbol = g_sym_well_known;
+    g_sym_well_known = symbol->reg_next;
+    scr_sym_release(symbol);
+  }
+}
+
+ScrSym *scr_sym_well_known(ScrStr *name) {
+  ScrStr *prefix = scr_str_new("Symbol.", 7);
+  ScrStr *description = scr_str_concat(prefix, name);
+  scr_str_release(prefix);
+  for (ScrSym *symbol = g_sym_well_known; symbol; symbol = symbol->reg_next) {
+    if (!scr_str_eq(description, symbol->desc)) continue;
+    scr_str_release(description);
+    return scr_sym_retain(symbol);
+  }
+  if (!g_sym_well_known) scr_atexit(scr_sym_well_known_cleanup);
+  ScrSym *symbol = scr_sym_new(description);
+  scr_str_release(description);
+  symbol->reg_next = g_sym_well_known;
+  g_sym_well_known = scr_sym_retain(symbol);
+  if (name->len == 8 && !memcmp(name->data, "iterator", 8)) {
+    ScrDyn *key = scr_dyn_new_symbol(symbol);
+    scr_dyn_install_iterator_symbol(key);
+    scr_dyn_release(key);
+  }
+  return symbol;
+}
 
 static void scr_sym_registry_cleanup(void) {
   ScrSym *s = g_sym_registry;
@@ -85,6 +116,10 @@ ScrSym *scr_sym_for(ScrStr *key) {
 ScrStr *scr_sym_desc(ScrSym *s) { return s->desc ? scr_str_retain(s->desc) : NULL; }
 
 ScrStr *scr_sym_key_for(ScrSym *s) { return s->reg_key ? scr_str_retain(s->reg_key) : NULL; }
+
+ScrDyn *scr_dyn_new_symbol(ScrSym *value) {
+  return scr_dyn_symbol_ref(scr_sym_retain(value), scr_sym_release, scr_sym_to_string, scr_sym_desc);
+}
 
 ScrStr *scr_sym_to_string(ScrSym *s) {
   /* "Symbol(desc)" — Symbol.prototype.toString: an absent description

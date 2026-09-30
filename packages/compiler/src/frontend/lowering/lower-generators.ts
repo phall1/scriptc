@@ -13,6 +13,7 @@ import { BOOL, DYN, type IrExpr, type IrStmt, type IrType, type SrcLoc, UNDEFINE
 import { locOf } from "../program.js";
 import { genResultRecord } from "../type-mapper.js";
 import { forOfVarTarget, lowerDestructuringAssign } from "./lower-stmts.js";
+import { lowerCheckedDelegation } from "./generator-delegation.js";
 
 export type GenType = IrType & { kind: "generator" };
 
@@ -41,10 +42,7 @@ function channelUndefined(lowerer: Lowerer, channel: IrType, loc: SrcLoc): IrExp
 }
 
 /** `yield e` / `yield;` — only inside a generator body the signature
- * collection accepted (lowerer.ctx.generator carries the channels). `yield*`
- * lowers in STATEMENT position only (lowerYieldStarStatement — the value
- * of a delegation needs the whole forwarding loop in expression position,
- * which has no lowering yet). */
+ * collection accepted (lowerer.ctx.generator carries the channels). */
 export function lowerYield(lowerer: Lowerer, expr: ts.YieldExpression): IrExpr {
   const loc = locOf(expr);
   const gen = lowerer.ctx.generator;
@@ -54,11 +52,7 @@ export function lowerYield(lowerer: Lowerer, expr: ts.YieldExpression): IrExpr {
     lowerer.unsupported("SC1071", expr);
   }
   if (expr.asteriskToken) {
-    lowerer.unsupported(
-      "SC1071",
-      expr,
-      "the value of 'yield*' (statement-position delegation compiles: 'yield* inner();' — bind the delegate's return value through its .next() protocol instead)",
-    );
+    return lowerYieldStar(lowerer, expr);
   }
   let value: IrExpr;
   let awaited = false;
@@ -170,7 +164,6 @@ export function lowerGenMethodCall(
     }
     if (
       arg.type.kind === "void" ||
-      arg.type.kind === "dyn" ||
       arg.type.kind === "caught" ||
       isUnitType(arg.type)
     ) {
@@ -548,6 +541,10 @@ export function lowerForAwaitGenerator(
  * divergence). Null when this is not a yield* statement. */
 export function lowerYieldStarStatement(lowerer: Lowerer, expr: ts.Expression): IrStmt | null {
   if (!ts.isYieldExpression(expr) || expr.asteriskToken === undefined) return null;
+  return { kind: "exprStmt", expr: lowerYieldStar(lowerer, expr), loc: locOf(expr) };
+}
+
+function lowerYieldStar(lowerer: Lowerer, expr: ts.YieldExpression): IrExpr {
   const gen = lowerer.ctx.generator;
   if (!gen) lowerer.unsupported("SC1071", expr);
   if (lowerer.ctx.isAsync) {
@@ -560,6 +557,7 @@ export function lowerYieldStarStatement(lowerer: Lowerer, expr: ts.Expression): 
   if (!expr.expression) lowerer.unsupported("SC1071", expr, "'yield*' with no operand");
   const loc = locOf(expr);
   const delegate = lowerer.lowerExpr(expr.expression);
+  if (delegate.type.kind === "dyn" || delegate.type.kind === "object") return lowerCheckedDelegation(lowerer, expr, delegate);
   if (delegate.type.kind !== "generator") {
     lowerer.unsupported(
       "SC1071",
@@ -638,9 +636,14 @@ export function lowerYieldStarStatement(lowerer: Lowerer, expr: ts.Expression): 
               loc,
             },
           ];
+    const completed = dT.retT.kind === "void"
+      ? channelUndefined(lowerer, DYN, loc)!
+      : extractIteratorValue(lowerer, dT.retT, valueT, valueRead, loc);
+    if (!completed) lowerer.unsupported("SC1071", expr, "a delegate whose return channel has no extraction");
+    const result = dT.retT.kind === "void" ? completed : lowerer.coerceInto(expr, completed, dT.retT);
     return {
-      kind: "block",
-      body: [
+      kind: "seqExpr", result, type: result.type, loc,
+      stmts: [
         { kind: "varDecl", localId: d.id, init: delegate, loc },
         {
           kind: "varDecl",
@@ -661,7 +664,6 @@ export function lowerYieldStarStatement(lowerer: Lowerer, expr: ts.Expression): 
           loc,
         },
       ],
-      loc,
     };
   } finally {
     lowerer.scopes.pop();

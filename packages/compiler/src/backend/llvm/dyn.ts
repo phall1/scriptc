@@ -63,6 +63,7 @@ export const DYN_KIND = {
   TYPED_REF: 12, /* SCR_DYN_TYPED_REF — static Web-stream transit capsule */
   PROXY: 13,
   BIGINT: 14,
+  SYMBOL: 15,
 } as const;
 
 /** What the dyn helpers need beyond the walker host: interned immortal
@@ -70,6 +71,7 @@ export const DYN_KIND = {
 export interface DynHost extends WalkerHost {
   unitInstanceRef(unionId: string, tag: number): string;
   liveDynRefAdapter(t: IrType): { snapshot: string; commit: string };
+  isErrorClass(className: string): boolean;
   classSubtypes(className: string): readonly string[];
 }
 
@@ -85,6 +87,7 @@ export class LlDyn {
   private readonly promiseDynAdapters = new Map<string, string>();
   private dynToStrFn: string | null = null;
   private caughtToDynFn: string | null = null;
+  private readonly helperMemo = new Map<string, string>();
   /** Emitted function definitions, in interning order. */
   readonly defs: string[] = [];
 
@@ -403,15 +406,19 @@ export class LlDyn {
         B.terminate(`ret i1 ${r}`);
         break;
       }
+      case "map":
       case "set": {
-        this.host.declare(`declare zeroext i1 @scr_dyn_native_set_is(ptr)`);
+        this.host.declare(`declare zeroext i1 @scr_dyn_native_${t.kind}_is(ptr)`);
         const r = B.tmp();
-        B.line(`${r} = call zeroext i1 @scr_dyn_native_set_is(ptr %d)`);
+        B.line(`${r} = call zeroext i1 @scr_dyn_native_${t.kind}_is(ptr %d)`);
         B.terminate(`ret i1 ${r}`);
         break;
       }
       case "bigint":
         kindIs(DYN_KIND.BIGINT);
+        break;
+      case "symbol":
+        kindIs(DYN_KIND.SYMBOL);
         break;
       case "f64":
         kindIs(DYN_KIND.NUM);
@@ -449,6 +456,10 @@ export class LlDyn {
         B.terminate(`ret i1 ${matched}`);
         break;
       }
+      case "generator":
+        // Only an exact native capsule carries these channel types.
+        B.terminate(`ret i1 false`);
+        break;
       case "object": {
         if (t.className !== "%Error") {
           // Exact class capsules returned true before materialization.
@@ -824,10 +835,11 @@ export class LlDyn {
         B.terminate(`ret ptr ${r}`);
         break;
       }
+      case "map":
       case "set": {
-        host.declare(`declare ptr @scr_dyn_native_set_check(ptr, ptr)`);
+        host.declare(`declare ptr @scr_dyn_native_${t.kind}_check(ptr, ptr)`);
         const r = B.tmp();
-        B.line(`${r} = call ptr @scr_dyn_native_set_check(ptr %d, ptr %path)`);
+        B.line(`${r} = call ptr @scr_dyn_native_${t.kind}_check(ptr %d, ptr %path)`);
         B.terminate(`ret ptr ${r}`);
         break;
       }
@@ -837,6 +849,15 @@ export class LlDyn {
         const v = this.payloadOf(B, "%d", "ptr");
         const r = B.tmp();
         B.line(`${r} = call ptr @scr_bigint_retain(ptr ${v})`);
+        B.terminate(`ret ptr ${r}`);
+        break;
+      }
+      case "symbol": {
+        requireKind(DYN_KIND.SYMBOL, "dc");
+        host.declare(`declare ptr @scr_sym_retain(ptr)`);
+        const v = this.payloadOf(B, "%d", "ptr");
+        const r = B.tmp();
+        B.line(`${r} = call ptr @scr_sym_retain(ptr ${v})`);
         B.terminate(`ret ptr ${r}`);
         break;
       }
@@ -886,6 +907,10 @@ export class LlDyn {
         B.terminate(`ret ptr ${r}`);
         break;
       }
+      case "generator":
+        B.line(`call void @scr_dyn_check_fail(ptr %path, ptr ${want}, ptr %d)`);
+        B.terminate(`ret ptr null`);
+        break;
       case "object": {
         // The %Error extraction (an instanceof-Error narrow on unknown):
         // validate the checked-dynamic tree's error encoding — the reserved "%error" marker
@@ -1324,6 +1349,14 @@ export class LlDyn {
         host.declare(`declare void @scr_dyn_release_v(ptr)`);
         const a = B.tmp();
         B.line(`${a} = call ptr @scr_closure_new(ptr @${adapter}, ${host.sizeType} 1)`);
+        const sourceClosure = this.payloadOf(B, "%d", "ptr");
+        const sourceKind = B.tmp();
+        const functionKind = B.tmp();
+        const targetKind = B.tmp();
+        B.line(`${sourceKind} = getelementptr inbounds %ScrClosure, ptr ${sourceClosure}, i64 0, i32 4`);
+        B.line(`${functionKind} = load i32, ptr ${sourceKind}`);
+        B.line(`${targetKind} = getelementptr inbounds %ScrClosure, ptr ${a}, i64 0, i32 4`);
+        B.line(`store i32 ${functionKind}, ptr ${targetKind}`);
         const box = B.tmp();
         B.line(`${box} = call ptr @scr_box_new_obj(ptr @scr_dyn_retain_v, ptr @scr_dyn_release_v, ptr @scr_dyn_trace_v)`);
         const capp = B.tmp();
@@ -1387,10 +1420,11 @@ export class LlDyn {
         B.terminate(`ret ptr ${r}`);
         break;
       }
+      case "map":
       case "set": {
-        host.declare(`declare ptr @scr_dyn_native_set(ptr)`);
+        host.declare(`declare ptr @scr_dyn_native_${t.kind}(ptr)`);
         const r = B.tmp();
-        B.line(`${r} = call ptr @scr_dyn_native_set(ptr %v)`);
+        B.line(`${r} = call ptr @scr_dyn_native_${t.kind}(ptr %v)`);
         B.terminate(`ret ptr ${r}`);
         break;
       }
@@ -1398,6 +1432,13 @@ export class LlDyn {
         host.declare(`declare ptr @scr_dyn_new_bigint(ptr)`);
         const r = B.tmp();
         B.line(`${r} = call ptr @scr_dyn_new_bigint(ptr %v)`);
+        B.terminate(`ret ptr ${r}`);
+        break;
+      }
+      case "symbol": {
+        host.declare(`declare ptr @scr_dyn_new_symbol(ptr)`);
+        const r = B.tmp();
+        B.line(`${r} = call ptr @scr_dyn_new_symbol(ptr %v)`);
         B.terminate(`ret ptr ${r}`);
         break;
       }
@@ -1422,9 +1463,24 @@ export class LlDyn {
         B.terminate(`ret ptr ${r}`);
         break;
       }
+      case "generator": {
+        // Keep the suspended fiber and its channels by identity. Member
+        // calls are generated from the exact capsule key by the frontend.
+        const rc = vAdapters(host, t);
+        const r = B.tmp();
+        const snapshot = `${name}_snapshot`;
+        const message = "property reflection on a native generator through an untyped value is not supported yet";
+        host.declare(`declare void @scr_throw_error_msg_code(i32, ptr, ${host.sizeType}, ptr)`);
+        this.defs.push(`define internal ptr @${snapshot}(ptr %v) ${FN_ATTRS} {`, `entry:`,
+          `  call void @scr_throw_error_msg_code(i32 0, ptr ${host.cstr(message)}, ${host.sizeType} ${Buffer.byteLength(message, "utf8")}, ptr ${host.cstr("SC1071")})`,
+          `  ret ptr null`, `}`, ``);
+        B.line(`${r} = call ptr ${typedRefConstructor(host, t)}(ptr %v, ptr ${rc.retain}, ptr ${rc.release}, ptr ${host.cstr(key)}, ${host.sizeType} ${Buffer.byteLength(key, "utf8")}, ptr @${snapshot}, ptr null)`);
+        B.terminate(`ret ptr ${r}`);
+        break;
+      }
       case "object": {
         const className = t.className;
-        if (className === "%Error") {
+        if (host.isErrorClass(className)) {
           host.declare(`declare ptr @scr_dyn_from_error(ptr)`);
           const r = B.tmp();
           B.line(`${r} = call ptr @scr_dyn_from_error(ptr %v)`);
@@ -1921,7 +1977,7 @@ export class LlDyn {
       const kd = this.kindOf(B, "%d");
       const done = B.newLabel("ds.d");
       const labels = new Map<number, string>();
-      for (const k of [DYN_KIND.NULL, DYN_KIND.BOOL, DYN_KIND.NUM, DYN_KIND.STR, DYN_KIND.ARR, DYN_KIND.OBJ, DYN_KIND.UNDEF, DYN_KIND.BYTES, DYN_KIND.FUNC, DYN_KIND.HANDLE, DYN_KIND.PROMISE, DYN_KIND.JSVAL, DYN_KIND.TYPED_REF, DYN_KIND.PROXY, DYN_KIND.BIGINT]) {
+      for (const k of [DYN_KIND.NULL, DYN_KIND.BOOL, DYN_KIND.NUM, DYN_KIND.STR, DYN_KIND.ARR, DYN_KIND.OBJ, DYN_KIND.UNDEF, DYN_KIND.BYTES, DYN_KIND.FUNC, DYN_KIND.HANDLE, DYN_KIND.PROMISE, DYN_KIND.JSVAL, DYN_KIND.TYPED_REF, DYN_KIND.PROXY, DYN_KIND.BIGINT, DYN_KIND.SYMBOL]) {
         labels.set(k, B.newLabel(`ds.k${k}`));
       }
       const branches: string[] = [];
@@ -1970,6 +2026,14 @@ export class LlDyn {
         const s = B.tmp();
         B.line(`${s} = call ptr @scr_bigint_to_string(ptr ${v}, double ${f64Lit(10)})`);
         this.putScrStr(B, "%b", s);
+        B.line(`call void @scr_str_release(ptr ${s})`);
+        B.br(done);
+      }
+      B.startBlock(labels.get(DYN_KIND.SYMBOL)!);
+      {
+        host.declare(`declare ptr @scr_dyn_string_coerce(ptr)`);
+        const s = B.tmp();
+        B.line(`${s} = call ptr @scr_dyn_string_coerce(ptr %d)`);
         B.line(`call void @scr_str_release(ptr ${s})`);
         B.br(done);
       }
@@ -2342,6 +2406,47 @@ export class LlDyn {
 
   /** `sc_dyn_key_get(ptr d, ptr k, i1 opt) -> ptr` — d[k] on a dyn value.
    * Result +1; throws on non-optional nullish receivers. */
+  dynComputedKeyGetHelper(): string {
+    const name = "sc_dyn_computed_key_get";
+    if (this.helperMemo.has(name)) return name;
+    this.helperMemo.set(name, name);
+    const B = new BlockBuilder();
+    const host = this.host;
+    const stringHelper = this.dynKeyGetHelper();
+    host.declare(`declare ptr @scr_dyn_property_key_value(ptr)`);
+    host.declare(`declare ptr @scr_dyn_symbol_key_get(ptr, ptr, i1 zeroext)`);
+    host.declare(`declare void @scr_dyn_release(ptr)`);
+    const key = B.tmp();
+    B.line(`${key} = call ptr @scr_dyn_property_key_value(ptr %key)`);
+    const missing = B.tmp();
+    B.line(`${missing} = icmp eq ptr ${key}, null`);
+    const fail = B.newLabel("kg.fail");
+    const dispatch = B.newLabel("kg.dispatch");
+    B.condBr(missing, fail, dispatch);
+    B.startBlock(fail);
+    B.terminate("ret ptr null");
+    B.startBlock(dispatch);
+    const kind = this.kindOf(B, key);
+    const symbol = B.tmp();
+    B.line(`${symbol} = icmp eq i32 ${kind}, ${DYN_KIND.SYMBOL}`);
+    const sym = B.newLabel("kg.symbol");
+    const str = B.newLabel("kg.string");
+    B.condBr(symbol, sym, str);
+    B.startBlock(sym);
+    const sv = B.tmp();
+    B.line(`${sv} = call ptr @scr_dyn_symbol_key_get(ptr %d, ptr ${key}, i1 %opt)`);
+    B.line(`call void @scr_dyn_release(ptr ${key})`);
+    B.terminate(`ret ptr ${sv}`);
+    B.startBlock(str);
+    const text = this.payloadOf(B, key, "ptr");
+    const value = B.tmp();
+    B.line(`${value} = call ptr @${stringHelper}(ptr %d, ptr ${text}, i1 %opt)`);
+    B.line(`call void @scr_dyn_release(ptr ${key})`);
+    B.terminate(`ret ptr ${value}`);
+    this.defs.push(`define internal ptr @${name}(ptr %d, ptr %key, i1 zeroext %opt) ${FN_ATTRS} {`, B.render(), "}", "");
+    return name;
+  }
+
   dynKeyGetHelper(): string {
     const memoKey = "%dynKeyGet";
     const existing = this.dynBuilders.get(memoKey);
@@ -2399,6 +2504,19 @@ export class LlDyn {
       B.line(`call void @scr_str_release(ptr ${tail})`);
       B.line(`call void @scr_throw_error(i32 1, ptr ${msg}) ; SCR_ERR_TYPE; takes ownership`);
       B.terminate(`ret ptr null`);
+      B.startBlock(lNext);
+    }
+    {
+      const isSymbol = B.tmp();
+      B.line(`${isSymbol} = icmp eq i32 ${kd}, ${DYN_KIND.SYMBOL}`);
+      const lSymbol = B.newLabel("kg.sym");
+      const lNext = B.newLabel("kg.n");
+      B.condBr(isSymbol, lSymbol, lNext);
+      B.startBlock(lSymbol);
+      host.declare(`declare ptr @scr_dyn_symbol_get(ptr, ptr)`);
+      const r = B.tmp();
+      B.line(`${r} = call ptr @scr_dyn_symbol_get(ptr %d, ptr %k)`);
+      B.terminate(`ret ptr ${r}`);
       B.startBlock(lNext);
     }
     // Typed stream capsules expose their one cached, refreshed dyn view to
@@ -3281,7 +3399,27 @@ export class LlDyn {
     // argument (borrowed by the conversion) and releases.
     let argsPtr = "null";
     const argVals: string[] = [];
-    if (t.params.length > 0) {
+    const checkedRest = t.rest === true && t.restAbi === undefined;
+    let packed: string | null = null;
+    if (checkedRest) {
+      host.declare(`declare ptr @scr_dyn_apply(ptr, ptr, ptr)`);
+      host.declare(`declare ptr @scr_dyn_new_arr()`);
+      host.declare(`declare void @scr_dyn_arr_push(ptr, ptr)`);
+      host.declare(`declare void @scr_dyn_arr_push_spread(ptr, ptr, ptr)`);
+      packed = t.argumentsAll ? "%rest" : B.tmp();
+      if (!t.argumentsAll) B.line(`${packed} = call ptr @scr_dyn_new_arr()`);
+      t.params.forEach((p, i) => {
+        if (!t.argumentsAll) {
+          const v = this.toDynExpr(B, p, `%a${i}`);
+          B.line(`call void @scr_dyn_arr_push(ptr ${packed}, ptr ${v})`);
+        }
+        if (isRefCounted(p)) B.line(`call void ${releaseSym(host, p)}(ptr %a${i})`);
+      });
+      if (!t.argumentsAll) {
+        B.line(`call void @scr_dyn_arr_push_spread(ptr ${packed}, ptr %rest, ptr ${host.cstr("")})`);
+        B.line(`call void @scr_dyn_release(ptr %rest)`);
+      }
+    } else if (t.params.length > 0) {
       const arr = B.slot();
       B.entryAllocas.push(`${arr} = alloca [${t.params.length} x ptr]`);
       t.params.forEach((p, i) => {
@@ -3297,7 +3435,10 @@ export class LlDyn {
     // The kind is FUNC by construction; `what` is unreachable — spelled
     // anyway (the C's "value").
     const r = B.tmp();
-    B.line(`${r} = call ptr @scr_dyn_call(ptr ${fnv}, ptr ${argsPtr}, ${host.sizeType} ${t.params.length}, ptr ${host.cstr("value")})`);
+    if (packed) {
+      B.line(`${r} = call ptr @scr_dyn_apply(ptr ${fnv}, ptr ${packed}, ptr ${host.cstr("value")})`);
+      B.line(`call void @scr_dyn_release(ptr ${packed})`);
+    } else B.line(`${r} = call ptr @scr_dyn_call(ptr ${fnv}, ptr ${argsPtr}, ${host.sizeType} ${t.params.length}, ptr ${host.cstr("value")})`);
     B.line(`call void @scr_dyn_release(ptr ${fnv})`);
     for (const v of argVals) B.line(`call void @scr_dyn_release(ptr ${v})`);
     this.pendingBail(B, "dfa", () => {}, dummy === "void" ? "void" : dummy);
@@ -3314,7 +3455,7 @@ export class LlDyn {
       B.line(`call void @scr_dyn_release(ptr ${r})`);
       B.terminate(`ret ${this.valTy(t.ret)} ${out}`);
     }
-    const params = ["ptr %sc_env", ...t.params.map((p, i) => `${this.valTy(p)} %a${i}`)].join(", ");
+    const params = ["ptr %sc_env", ...t.params.map((p, i) => `${this.valTy(p)} %a${i}`), ...(checkedRest ? ["ptr %rest"] : [])].join(", ");
     this.defs.push(
       `define internal ${retTy === "i1" ? "zeroext i1" : retTy} @${name}(${params}) ${FN_ATTRS} { ; dyn fn adapter to ${key}`,
       B.render(),

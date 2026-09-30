@@ -50,6 +50,7 @@ import { isJsSourceFile, locOf } from "../program.js";
 import { arrayOf, BOOL, canBoxFuncIntoDyn, canConvertToDyn, DYN, F64, type IrExpr, type IrFunction, type IrLocal, type IrParam, type IrStmt, type IrType, isUnitType, STRING, type SrcLoc, typeEquals, typeKey, VOID } from "../../ir/ir.js";
 import { STREAM_FORCED_EVENT_NAMES, streamForcedTuple, streamSidesOf } from "./lower-stream.js";
 import { boolLit, strLit, varRef } from "../../ir/build.js";
+import { tryLowerExpression } from "./expressions/try-lower-expression.js";
 
 /** True when the class descends from (or is) the runtime emitter. */
 export function emitterRooted(lowerer: Lowerer, info: ClassInfo | undefined | null): boolean {
@@ -482,7 +483,12 @@ function dynListenerFlavor(lowerer: Lowerer, node: ts.Expression): "dyn" | "func
     return null;
   }
   if (t?.kind === "dyn") return "dyn";
-  if (t?.kind === "func") return t.params.some((p) => p.kind === "dyn") ? "func" : null;
+  if (t?.kind === "func") {
+    if (t.params.some((p) => p.kind === "dyn")) return "func";
+    // The inferred signature of a wrapper can omit its runtime arguments
+    // pack. Register the checked callable produced by the factory itself.
+    return tryLowerExpression(lowerer, node)?.type.kind === "dyn" ? "dyn" : null;
+  }
   // A statically-known NON-function listener (a literal number, a record,
   // null): route it through the dyn path too — the registration helper's
   // checkListener throws Node's exact ERR_INVALID_ARG_TYPE TypeError

@@ -1,12 +1,3 @@
-stdlib-fence.ts:10:14 - error SC2020: 'Symbol.iterator' is part of the standard library types but has no scriptc lowering yet
-
-   9 | // surface below.)
-  10 | const iter = Symbol.iterator;
-     |              ^~~~~~~~~~~~~~~
-  11 | const g = globalThis;
-
-  hint: the type checker sees the full standard library, but only the supported surface compiles (https://scriptc.dev/limitations)
-
 stdlib-fence.ts:15:15 - error SC1090: statically-decided Array.isArray on computed arguments (bind the value to a variable first) are not supported yet
 
   14 | const n5 = Number.NaN; // lowers now, with the other Number constants
@@ -117,15 +108,6 @@ stdlib-fence.ts:34:13 - error SC2020: 'new AggregateError' is part of the standa
   35 | const stack = new Error("boom").stack;
 
   hint: the type checker sees the full standard library, but only the supported surface compiles (https://scriptc.dev/limitations)
-
-stdlib-fence.ts:35:15 - error SC2020: 'Error.stack' is part of the standard library types but has no scriptc lowering yet
-
-  34 | const agg = new AggregateError([]);
-  35 | const stack = new Error("boom").stack;
-     |               ^~~~~~~~~~~~~~~~~~~~~~~
-  36 | // Unlowered members on lowered containers.
-
-  hint: stack traces are not captured (frames would need runtime bookkeeping); name, message, and toString() are available
 
 stdlib-fence.ts:40:17 - error SC2020: 'Math.min' is part of the standard library types but has no scriptc lowering yet
 

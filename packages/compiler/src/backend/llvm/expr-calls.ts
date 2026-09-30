@@ -4,7 +4,7 @@ import { newValueMayThrow } from "../../ir/analysis.js";
 import { isFfiCallbackParam, isFfiContextParam, isFfiReleaseParam, isRefCounted } from "../../ir/ir.js";
 import { collectFfiRetainedOps, parseFfiCallbackKey } from "../ffi-callbacks.js";
 import { mangleClassNew, mangleClassRetain, mangleClassStruct, mangleFnClosure, mangleFunction, mangleLocal, mangleVtStruct } from "../mangle.js";
-import { classStructSym } from "./classes.js";
+import { classEnvironmentIndex, classStructSym } from "./classes.js";
 import { LlvmUnsupportedError } from "./unsupported.js";
 import type { LlvmEmitterContext, ExprOf, LlValue } from "./expr-context.js";
 import { f64Lit, ffiNativeTypeLl, ffiNativeParamLl, ffiNativeReturnLl } from "./common.js";
@@ -446,6 +446,12 @@ export function emitCallExpr(host: LlvmEmitterContext, e: ExprOf<"call" | "ffiCa
         const c = B.tmp();
         B.line(`${c} = call ptr @scr_closure_new(ptr @${host.callTarget(e.fnName)}, ${host.sizeType} ${e.captures.length})`);
         const out = host.own({ name: c, type: e.type });
+        const functionKind = (target.generator ? 1 : 0) + (target.async ? 2 : 0) + (target.ownsPrototype ? 4 : 0);
+        if (functionKind) {
+          const kindPtr = B.tmp();
+          B.line(`${kindPtr} = getelementptr inbounds %ScrClosure, ptr ${c}, i64 0, i32 4`);
+          B.line(`store i32 ${functionKind}, ptr ${kindPtr}`);
+        }
         e.captures.forEach((localId, i) => {
           const box = host.loadBox(`%${mangleLocal(localId)}`);
           const retained = host.retainBox(box);
@@ -573,11 +579,12 @@ export function emitCallExpr(host: LlvmEmitterContext, e: ExprOf<"call" | "ffiCa
         if (e.value.type.kind !== "object") throw new InternalCompilerError("llvm emitter bug: instanceOfValue on a non-object");
         const v = host.emitExpr(e.value);
         const target = host.emitExpr(e.classValue);
-        if (host.classMeta.get(e.value.type.className)?.def.localCaptures !== undefined) {
+        if (e.classValue.type.kind === "classval" && host.classMeta.get(e.classValue.type.className)?.def.localCaptures !== undefined &&
+            host.classMeta.get(e.value.type.className)?.def.fields.some((field) => field.name === `%classEnvironment:${e.classValue.type.kind === "classval" ? e.classValue.type.className : ""}`)) {
           const slot = B.tmp();
           const actual = B.tmp();
           const result = B.tmp();
-          B.line(`${slot} = getelementptr inbounds %${mangleClassStruct(e.value.type.className)}, ptr ${v.name}, i64 0, i32 1`);
+          B.line(`${slot} = getelementptr inbounds %${mangleClassStruct(e.classValue.type.className)}, ptr ${v.name}, i64 0, i32 ${classEnvironmentIndex(host.classMeta.get(e.classValue.type.className)!)}`);
           B.line(`${actual} = load ptr, ptr ${slot}`);
           B.line(`${result} = icmp eq ptr ${actual}, ${target.name}`);
           return { name: result, type: e.type };

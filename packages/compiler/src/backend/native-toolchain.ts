@@ -989,7 +989,7 @@ export async function compileLibArchive(opts: LibArchiveOptions): Promise<void> 
     ...(isMuslTarget(driver) ? ["scr_musl.c"] : []),
     ...(regex ? ["scr_regex.c"] : []),
     ...(opts.assert || regex || opts.symbol ? ["scr_assert.c"] : []),
-    ...(opts.inspect ? ["scr_inspect.c"] : []),
+    ...(opts.inspect ? ["scr_inspect.c", "scr_console_native.c"] : []),
     ...(opts.symbol ? ["scr_symbol.c"] : []),
     ...(opts.assert && opts.bigint ? ["scr_bigint_assert.c"] : []),
     ...(opts.searchParams ? ["scr_url_params.c"] : []),
@@ -4281,7 +4281,7 @@ async function compileCInternal(
       ? ["-I", vendorEngineDir(), rt(join(rtDir, "scr_regex.c")), ...lreObjects]
       : []),
     ...(opts.assert || regex || opts.symbol ? [rt(join(rtDir, "scr_assert.c"))] : []),
-    ...(opts.inspect ? [rt(join(rtDir, "scr_inspect.c"))] : []),
+    ...(opts.inspect ? [rt(join(rtDir, "scr_inspect.c")), rt(join(rtDir, "scr_console_native.c"))] : []),
     ...((opts.dynInvoke || nativeFetch) ? [rt(join(rtDir, "scr_dyn_invoke.c"))] : []),
     ...(opts.dc ? [rt(join(rtDir, "scr_dc.c"))] : []),
     ...(opts.dynAsync || opts.dynInvoke || opts.dc || opts.fileHandle || nativeFetch ? [rt(join(rtDir, "scr_async_dyn.c"))] : []),
