@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { WASI } from "node:wasi";
 import { expect, test } from "vitest";
 import type { NativeToolchainManifest } from "../../packages/compiler/src/native/toolchain.js";
+import { RUNTIME_ABI_MARKER } from "../../packages/compiler/src/backend/runtime-abi.js";
 import { bootstrapStep } from "./self-hosting-timing.js";
 
 const root = join(import.meta.dirname, "../..");
@@ -216,8 +217,21 @@ test("the production CLI relocates, builds programs, and rebuilds itself with No
         assert.ok(actual.functions.length > 1000);
         assert.deepEqual(validateModule(actual), []);
         assert.ok(isDeepStrictEqual(actual, expected), 'native self-lowering must match the Node seed');
-        assert.ok(readFileSync(process.argv[3], 'utf8') === readFileSync(process.argv[4], 'utf8'),
-          'native LLVM emission must match the Node seed');
+        const seedLlvm = readFileSync(process.argv[3], 'utf8');
+        let nativeLlvm = readFileSync(process.argv[4], 'utf8');
+        if (${sanitize}) {
+          // The Node sanitizer builds runtime sources directly; the native
+          // executable path also emits the runtime ABI check. Pin that
+          // difference before comparing the rest of the complete module.
+          const declaration = 'declare void @' + ${JSON.stringify(RUNTIME_ABI_MARKER)} + '()\\n';
+          const call = '  call void @' + ${JSON.stringify(RUNTIME_ABI_MARKER)} + '()\\n';
+          for (const line of [declaration, call]) {
+            assert.equal(seedLlvm.split(line).length, 1);
+            assert.equal(nativeLlvm.split(line).length, 2);
+            nativeLlvm = nativeLlvm.replace(line, '');
+          }
+        }
+        assert.ok(seedLlvm === nativeLlvm, 'native LLVM emission must match the Node seed');
       `, join(seedDirectory, "cli.ir.json"), join(directory, "cli.ir.json"),
       join(seedDirectory, "cli.ll"), join(directory, "cli.ll")], options));
     expect(comparison.stdout).toBe("");
