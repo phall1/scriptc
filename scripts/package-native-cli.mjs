@@ -25,6 +25,7 @@ for (const name of readdirSync(packages).filter((name) => name.startsWith("cli-"
     const bin = join(distribution, "bin");
     const binary = join(bin, name.includes("win32-") ? "scriptc.exe" : "scriptc");
     const manifest = JSON.parse(readFileSync(binary + ".json", "utf8"));
+    const hostPath = (value) => name.includes("win32-") ? value.replaceAll("\\", "/") : value;
     const packs = new Map();
     for (const packageName of runtimes) {
       const directory = packageName.replace("@scriptc/", "");
@@ -41,8 +42,8 @@ for (const name of readdirSync(packages).filter((name) => name.startsWith("cli-"
     writeFileSync(binary + ".json", JSON.stringify(manifest, null, 2) + "\n");
     // GitHub artifact transport drops executable modes. Restore the native
     // tools before validating and creating the standalone archive.
-    for (const path of [binary, resolve(bin, manifest.ts7), resolve(bin, manifest.comptime),
-      join(resolve(bin, manifest.llvm_package), "bin", name.includes("win32-") ? "scriptc-llvm-codegen.exe" : "scriptc-llvm-codegen")]) {
+    for (const path of [binary, resolve(bin, hostPath(manifest.ts7)), resolve(bin, hostPath(manifest.comptime)),
+      join(resolve(bin, hostPath(manifest.llvm_package)), "bin", name.includes("win32-") ? "scriptc-llvm-codegen.exe" : "scriptc-llvm-codegen")]) {
       chmodSync(path, 0o755);
     }
     execFileSync(process.execPath, [join(repository, "scripts/verify-native-cli.mjs"), stage], { stdio: "inherit" });

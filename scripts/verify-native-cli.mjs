@@ -1,10 +1,13 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 
 const root = realpathSync(resolve(process.argv[2] ?? "."));
 const identity = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const target = identity.name.replace("@scriptc/cli-", "");
+const windows = target.startsWith("win32-");
+const hostPath = (value) => windows ? value.replaceAll("\\", "/") : value;
+const absolutePath = (value) => isAbsolute(value) || (windows && win32.parse(value).root !== "");
 const distribution = join(root, "dist");
 const binary = join(distribution, "bin", target.startsWith("win32-") ? "scriptc.exe" : "scriptc");
 const toolchain = JSON.parse(readFileSync(binary + ".json", "utf8"));
@@ -19,17 +22,17 @@ const within = (path) => {
 };
 for (const name of ["ts7", "llvm_package", "runtime_pack", "runtime_sources", "declarations", "comptime", "wasi_node_runner"]) {
   const value = toolchain[name];
-  if (typeof value !== "string" || isAbsolute(value)) throw new Error(`native toolchain needs a relative ${name}`);
-  within(resolve(dirname(binary), value));
+  if (typeof value !== "string" || absolutePath(value)) throw new Error(`native toolchain needs a relative ${name}`);
+  within(resolve(dirname(binary), hostPath(value)));
 }
-const pack = JSON.parse(readFileSync(resolve(dirname(binary), toolchain.runtime_pack, "runtime-pack.json"), "utf8"));
+const pack = JSON.parse(readFileSync(resolve(dirname(binary), hostPath(toolchain.runtime_pack), "runtime-pack.json"), "utf8"));
 if (pack.version !== identity.version || pack.target.name !== toolchain.target) throw new Error("native compiler runtime identity mismatch");
 const seen = new Set();
 for (const runtime of toolchain.runtime_packs ?? []) {
   if (seen.has(runtime.target)) throw new Error(`duplicate runtime target: ${runtime.target}`);
   seen.add(runtime.target);
-  if (isAbsolute(runtime.path)) throw new Error("native runtime pack paths must be relative");
-  const directory = resolve(dirname(binary), runtime.path);
+  if (typeof runtime.path !== "string" || absolutePath(runtime.path)) throw new Error("native runtime pack paths must be relative");
+  const directory = resolve(dirname(binary), hostPath(runtime.path));
   within(directory);
   const manifest = JSON.parse(readFileSync(join(directory, "runtime-pack.json"), "utf8"));
   const packageIdentity = JSON.parse(readFileSync(join(directory, "package.json"), "utf8"));

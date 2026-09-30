@@ -77,9 +77,13 @@ jobs:
           for (const run of runs) {
             if (String(run.id) === process.env.GITHUB_RUN_ID || run.head_branch !== 'main' ||
                 run.head_repository?.full_name !== repo || !['push', 'workflow_dispatch'].includes(run.event)) continue;
-            // Only workflow edits may differ from the source of reused packages.
+            // Release orchestration, packaging validation, and their tests do
+            // not change the compiled payloads in native build artifacts.
             if (spawnSync('git', ['merge-base', '--is-ancestor', run.head_sha, 'HEAD']).status !== 0 ||
-                spawnSync('git', ['diff', '--quiet', run.head_sha, 'HEAD', '--', '.', ':(exclude).github/workflows/release.yml']).status !== 0) continue;
+                spawnSync('git', ['diff', '--quiet', run.head_sha, 'HEAD', '--', '.',
+                  ':(exclude).github/workflows/release.yml', ':(exclude)scripts/verify-native-cli.mjs',
+                  ':(exclude)scripts/package-native-cli.mjs', ':(exclude)tests/harness/native-cli-packaging.test.ts',
+                ]).status !== 0) continue;
             const artifacts = api(`repos/${repo}/actions/runs/${run.id}/artifacts?per_page=100`).artifacts
               .filter((artifact) => !artifact.expired && artifact.size_in_bytes > 0);
             if (!artifactRun && expected.every((name) => artifacts.filter((artifact) => artifact.name === name).length === 1)) {
