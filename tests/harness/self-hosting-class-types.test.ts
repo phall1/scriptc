@@ -25,6 +25,7 @@ test("native class type cleanup updates shared IR without dynamic snapshots", as
     }
     expect(native.stdout).toBe(oracle.stdout);
     expect(native.stdout).toMatch(/^f64 f64\n/);
+    expect(native.stdout).toContain("false 1024\ntrue true true false\n");
     expect(native.stdout).toMatch(/object object f64\nf64\n$/);
   } finally { rmSync(directory, { recursive: true, force: true }); }
 }, 300_000);

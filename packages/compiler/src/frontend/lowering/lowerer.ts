@@ -1,6 +1,7 @@
 import { everyExprChild, everyStmtChild } from "../../ir/traverse.js";
 import { RuntimeOptionalLocals } from "./runtime-optional-locals.js";
 import { sanitizeUnregisteredClassTypes } from "./sanitize-class-types.js";
+import { UnregisteredClassTypes } from "./unregistered-class-types.js";
 import { buildUnionNarrow } from "./union-narrow.js";
 import { planUnionRetag, buildUnionRetag, planRecordUnionWrap, buildRecordUnionWrap } from "./union-retag.js";
 import type { WidthLift } from "./width-lift.js";
@@ -3765,9 +3766,12 @@ export class Lowerer {
     // fences), so drop it — guarded by a reference scan, with the
     // validator's registration check as the backstop for anything that
     // does slip through with a live reference.
-    const brokenGlobals = this.globalsList.filter((g) => this.typeNamesUnregisteredClass(g.type));
+    const unregistered = new UnregisteredClassTypes(
+      (id) => this.shapes.get(id), (id) => this.unions.get(id), (name) => this.classes.has(name),
+    );
+    const brokenGlobals = this.globalsList.filter((g) => unregistered.has(g.type));
     const brokenLocalFns = functions.filter((fn) =>
-      fn.locals.some((l) => this.typeNamesUnregisteredClass(l.type)),
+      fn.locals.some((l) => unregistered.has(l.type)),
     );
     if (brokenGlobals.length > 0 || brokenLocalFns.length > 0) {
       const referencedIn = (root: unknown): Set<string> => {
@@ -3810,7 +3814,7 @@ export class Lowerer {
         // those out from under them.
         const referenced = referencedIn([fn.body, fn.params, fn.captures ?? [], fn.classCaptures ?? []]);
         fn.locals = fn.locals.filter(
-          (l) => referenced.has(l.id) || !this.typeNamesUnregisteredClass(l.type),
+          (l) => referenced.has(l.id) || !unregistered.has(l.type),
         );
       }
     }
