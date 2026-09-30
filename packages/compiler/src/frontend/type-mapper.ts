@@ -25,6 +25,11 @@ export function jsOpenObjectType(
   if (!decl || !isJsSourceFile(decl.getSourceFile())) return type;
   const arms = type.kind === "union" ? unions.get(type.unionId)?.arms : [type];
   const present = arms?.filter((arm) => arm.kind !== "undefinedT");
+  const parameter = ts.isParameter(decl) ? decl : decl.parent && ts.isParameter(decl.parent) ? decl.parent : null;
+  // Numeric array parameters in JavaScript also accept typed arrays. Keep
+  // their runtime storage at the boundary, including default [] parameters.
+  if (parameter && !parameter.dotDotDotToken && present?.length === 1 &&
+      present[0]!.kind === "array" && present[0]!.elem.kind === "f64") return DYN;
   if (present?.length !== 1 || present[0]!.kind !== "record") return type;
   const shape = shapes.get(present[0]!.shapeId);
   return shape && shape.fields.length === 0 && !shape.indexValue && !shape.tuple ? DYN : type;
@@ -1874,6 +1879,7 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
   // space, so clearTimeout of an Immediate no-ops like Node.
   if (isStdlibInterface("Immediate")) return F64;
   if (isStdlibInterface("ArrayBuffer") || isStdlibInterface("PropertyDescriptor") || isStdlibInterface("ProcessVersions")) return DYN;
+  if (Object.values(BYTES_ELEMENT_NAME).some((name) => isStdlibInterface(`${name}Constructor`))) return DYN;
   if (isStdlibInterface("Uint8Array")) return bytesOf("u8");
   if (isStdlibInterface("Uint32Array")) return bytesOf("u32");
   if (isStdlibInterface("Uint8ClampedArray")) return bytesOf("u8c");
@@ -2773,7 +2779,8 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
     const sigDecl = checker.signatureDeclaration(sig);
     const jsUnitReturn = sigDecl !== undefined && isJsSourceFile(sigDecl.getSourceFile()) &&
       (retT.flags & (ts.TypeFlags.Null | ts.TypeFlags.Undefined)) !== 0;
-    const ret = jsUnitReturn ? DYN : retT.flags & ts.TypeFlags.Never ? VOID : mapType(retT, ctx);
+    let ret = jsUnitReturn ? DYN : retT.flags & ts.TypeFlags.Never ? VOID : mapType(retT, ctx);
+    if (sigDecl && isJsSourceFile(sigDecl.getSourceFile()) && ret?.kind === "array" && ret.elem.kind === "f64") ret = DYN;
     if (!ret) return null;
     return typedRest
       ? { kind: "func", params, ret, rest: true, restAbi: "typed" }

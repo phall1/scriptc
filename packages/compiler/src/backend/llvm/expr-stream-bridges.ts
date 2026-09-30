@@ -294,8 +294,8 @@ export function liveDynUnionRefAdapter(host: LlvmEmitterContext,
     }
     const mutableArms = union.arms
       .map((arm, tag) => ({ arm, tag }))
-      .filter(({ arm }) => streamTypedRefEligible(arm) || isDynTypedRefType(arm));
-    if (mutableArms.length === 0) {
+      .filter(({ arm }) => arm.kind !== "bytes" && (streamTypedRefEligible(arm) || isDynTypedRefType(arm)));
+    if (mutableArms.length === 0 && !union.arms.some((arm) => arm.kind === "bytes")) {
       throw new InternalCompilerError(`llvm emitter bug: live dyn ref of immutable union ${key}`);
     }
 

@@ -1,11 +1,12 @@
 import { BOOL, DYN, DYN_CLASS_PROPERTIES as PROPERTY_BAG, STRING, VOID, canConvertToDyn, canDynCheckTo, isClassOwnEnumerableFieldName, isDynTypedRefType, isUnitType, typeEquals, typeKey, type IrExpr, type IrFunction, type IrStmt, type IrType, type SrcLoc } from "../../ir/ir.js";
 import { streamTypedRefEligible } from "../../ir/analysis.js";
 import { varRef } from "../../ir/build.js";
-import { everyStmtList, transformStmtList } from "../../ir/traverse.js";
+import { everyStmtList, transformExpr, transformStmtList } from "../../ir/traverse.js";
 import { dynUndefinedExpr, PoisonError, type Lowerer } from "./lowerer.js";
 import { implicitDefaultInstance, type ParamShape } from "./lower-calls.js";
-import { accessorCall, findGenericMethodOn, findMethodOn, genericOverrideBelow, upcastTo, type ClassInfo } from "./lower-classes.js";
+import { accessorCall, classValueRef, findGenericMethodOn, findMethodOn, genericOverrideBelow, upcastTo, type ClassInfo } from "./lower-classes.js";
 import { classPrototypeData, hasClassPrototypeData } from "./class-prototypes.js";
+import { compiledMethodValue } from "./class-method-values.js";
 import { isClassCallback } from "./class-callbacks.js";
 
 type Invoke = Extract<IrExpr, { kind: "dynInvoke" }>;
@@ -66,6 +67,9 @@ export class ClassDynamicDispatch {
   private readonly bagInitializers = new Map<string, Extract<IrStmt, { kind: "fieldSet" }>[]>();
   private readonly typedPropertyBags = new Map<string, IrFunction>();
   private readonly generated = new Set<IrFunction>();
+  private constructDispatch: IrFunction | null = null;
+  private readonly constructors = new Map<string, ClassInfo>();
+  private readonly constructed = new Set<string>();
   private readonly instanceTests = new Map<string, Set<string>>();
 
   process(lowerer: Lowerer, functions: readonly IrFunction[]): boolean {
@@ -100,7 +104,7 @@ export class ClassDynamicDispatch {
             rewrite.add(fn);
             break;
           case "libCall":
-            if (expr.fn === "dyn.keySet" || expr.fn === "dyn.keySetComputed") rewrite.add(fn);
+            if (expr.fn === "dyn.keySet" || expr.fn === "dyn.keySetComputed" || expr.fn === "bytes.construct") rewrite.add(fn);
             break;
         }
         return true;
@@ -136,9 +140,19 @@ export class ClassDynamicDispatch {
     for (const className of this.boxed) {
       const info = lowerer.classes.get(className);
       if (!info || info.builtinEmitter || info.builtinStream || info.builtinError) continue;
+      const needsPrototype = (current: ClassInfo): boolean => hasClassPrototypeData(current) || current.subclasses.some(needsPrototype);
+      const prototypeFor = (current: ClassInfo, receiver: IrExpr, loc: SrcLoc): IrExpr | null => {
+        let result = classPrototypeData(lowerer, current, loc);
+        for (const child of current.subclasses) {
+          const selected = prototypeFor(child, receiver, loc);
+          if (selected && result) result = { kind: "ternary", cond: { kind: "instanceOf", value: receiver, className: child.def.name, type: BOOL, loc },
+            then: selected, else_: result, type: DYN, loc };
+        }
+        return result;
+      };
       for (const existingInit of this.bagInitializers.get(className) ?? []) {
-        if (existingInit.value.kind === "dynObjLit" && hasClassPrototypeData(info)) {
-          const prototype = classPrototypeData(lowerer, info, existingInit.loc);
+        if (existingInit.value.kind === "dynObjLit" && needsPrototype(info)) {
+          const prototype = prototypeFor(info, existingInit.obj, existingInit.loc);
           if (prototype) {
             existingInit.value = { kind: "libCall", fn: "dyn.objCreate", args: [prototype], type: DYN, loc: existingInit.loc };
             changed = true;
@@ -153,7 +167,7 @@ export class ClassDynamicDispatch {
       const value = varRef("p.0", DYN, loc);
       const receiver: IrExpr = { kind: "dynCheck", value, type, loc };
       const bag: IrExpr = { kind: "fieldGet", obj: receiver, className, field: PROPERTY_BAG, type: DYN, loc };
-      const prototype = hasClassPrototypeData(info) ? classPrototypeData(lowerer, info, loc) : null;
+      const prototype = needsPrototype(info) ? prototypeFor(info, receiver, loc) : null;
       const initialize: Extract<IrStmt, { kind: "fieldSet" }> = {
         kind: "fieldSet", obj: receiver, className, field: PROPERTY_BAG, value: prototype
           ? { kind: "libCall", fn: "dyn.objCreate", args: [prototype], type: DYN, loc }
@@ -200,6 +214,19 @@ export class ClassDynamicDispatch {
                 return { ...expr, callee: helper.name, args: [boxed.value] };
               }
             }
+          }
+          if (expr.kind === "libCall" && expr.fn === "bytes.construct") {
+            if (!this.constructDispatch) {
+              const loc = expr.loc;
+              const params = [DYN, DYN, STRING].map((type, i) => ({localId: `p.${i}`, name: `p${i}`, type}));
+              this.constructDispatch = { name: "%dyn.class.construct", params, returnType: DYN,
+                locals: params.map((p) => ({ id: p.localId, name: p.name, type: p.type, mutable: false })),
+                body: [{ kind: "return", value: { ...expr, args: params.map((p) => varRef(p.localId, p.type, loc)) }, loc }], loc };
+              this.generated.add(this.constructDispatch);
+              lowerer.liftedFns.push(this.constructDispatch);
+              changed = true;
+            }
+            return { kind: "call", callee: this.constructDispatch.name, args: expr.args, type: DYN, loc: expr.loc };
           }
           const computedRead = expr.kind === "dynKeyGet" && expr.key.kind !== "strLit" ? expr : null;
           const computedWrite = expr.kind === "libCall" && (expr.fn === "dyn.keySetComputed" || expr.fn === "dyn.keySet" && expr.args[1]?.kind !== "strLit") ? expr : null;
@@ -312,11 +339,15 @@ export class ClassDynamicDispatch {
         const type: IrType = { kind: "object", className: info.def.name };
         const receiver = varRef("p.0", DYN, loc);
         if (isClassCallback(lowerer, info, dispatch.source.method)) {
+          const prototypeMethod = lowerer.prototypeMethodAccesses.has(dispatch.source.method);
+          if (prototypeMethod) classPrototypeData(lowerer, info, loc);
           const bag: IrExpr = { kind: "call", callee: this.propertyBag!.name, args: [receiver], type: DYN, loc };
           dispatch.callback.body.unshift({ kind: "if", cond: {
             kind: "libCall", fn: "dyn.typedRefIs", args: [receiver, { kind: "strLit", value: typeKey(type), type: STRING, loc }], type: BOOL, loc,
-          }, then: [{ kind: "return", value: { kind: "libCall", fn: "dyn.getOwnPropertyDescriptor", args: [bag,
-            lowerer.coerceToExpected({ kind: "strLit", value: dispatch.source.method, type: STRING, loc }, DYN)], type: DYN, loc }, loc }], else_: null, loc });
+          }, then: [{ kind: "return", value: { kind: "ternary", cond: prototypeMethod ? { kind: "boolLit", value: true, type: BOOL, loc } : { kind: "libCall", fn: "dyn.hasKey", args: [bag,
+            { kind: "strLit", value: dispatch.source.method, type: STRING, loc }], type: BOOL, loc }, then: { kind: "dynObjLit", fields: [
+              { key: { kind: "strLit", value: "value", type: STRING, loc }, value: { kind: "dynKeyGet", value: bag, key: { kind: "strLit", value: dispatch.source.method, type: STRING, loc }, type: DYN, loc } },
+            ], type: DYN, loc }, else_: dynUndefinedExpr(loc), type: DYN, loc }, loc }], else_: null, loc });
         }
         const before = lowerer.diags.length;
         let branch: IrStmt[];
@@ -340,7 +371,7 @@ export class ClassDynamicDispatch {
       for (const plan of this.propertyReceivers(lowerer)) {
         const { info } = plan;
         if (!isClassOwnEnumerableFieldName(dispatch.name) ||
-            !info.fields.has(dispatch.name) && !findMethodOn(lowerer, info, `get:${dispatch.name}`) && !findMethodOn(lowerer, info, `set:${dispatch.name}`)) continue;
+            !findMethodOn(lowerer, info, dispatch.name) && !findGenericMethodOn(lowerer, info, dispatch.name) && dispatch.name !== "constructor" && !info.fields.has(dispatch.name) && !findMethodOn(lowerer, info, `get:${dispatch.name}`) && !findMethodOn(lowerer, info, `set:${dispatch.name}`)) continue;
         if (dispatch.classes.has(plan.key)) continue;
         dispatch.classes.add(plan.key);
         const loc = dispatch.fn.loc;
@@ -369,9 +400,11 @@ export class ClassDynamicDispatch {
         const loc = dispatch.fn.loc;
         const { receiver, condition } = this.propertyReceiver(plan, loc);
         const names = new Set([...info.fields.keys()].filter(isClassOwnEnumerableFieldName));
+
         for (let owner: ClassInfo | null = info; owner; owner = owner.base) {
           for (const method of owner.methods.keys()) {
             if ((method.startsWith("get:") || method.startsWith("set:")) && isClassOwnEnumerableFieldName(method.slice(4))) names.add(method.slice(4));
+            else if (isClassOwnEnumerableFieldName(method)) names.add(method);
           }
         }
         const branch: IrStmt[] = [];
@@ -390,9 +423,50 @@ export class ClassDynamicDispatch {
             kind: "strEq", left: varRef(dispatch.keyLocal, STRING, loc), right: { kind: "strLit", value: name, type: STRING, loc }, negated: false, type: BOOL, loc,
           }, then: body, else_: null, loc });
         }
-        dispatch.fn.body.splice(dispatch.branchIndex, 0, { kind: "if", cond: condition, then: branch, else_: null, loc });
+        // Keep each class's key table in a separate function. A single
+        // function containing every boxed class grows quadratically during
+        // LLVM's control-flow optimization for large library workloads.
+        const params = [...dispatch.fn.params];
+        if (dispatch.keyLocal !== "p.key") params.push({ localId: dispatch.keyLocal, name: "key", type: STRING });
+        const helper: IrFunction = {
+          name: `%dyn.class.keys.${lowerer.liftedFns.length}`, params, returnType: dispatch.fn.returnType,
+          locals: params.map((p) => ({ id: p.localId, name: p.name, type: p.type, mutable: false })),
+          body: [...branch, ...dispatch.fn.body.slice(dispatch.write ? -2 : -1)], loc,
+        };
+        this.generated.add(helper);
+        lowerer.liftedFns.push(helper);
+        const call: IrExpr = { kind: "call", callee: helper.name,
+          args: params.map((p) => varRef(p.localId, p.type, loc)), type: helper.returnType, loc };
+        const then: IrStmt[] = dispatch.write
+          ? [{ kind: "exprStmt", expr: call, loc }, { kind: "return", value: null, loc }]
+          : [{ kind: "return", value: call, loc }];
+        dispatch.fn.body.splice(dispatch.branchIndex, 0, { kind: "if", cond: condition, then, else_: null, loc });
         changed = true;
       }
+    }
+    if (this.constructDispatch) for (const [name, info] of this.constructors) {
+      if (this.constructed.has(name)) continue;
+      this.constructed.add(name);
+      const loc = this.constructDispatch.loc;
+      const callee = varRef("p.0", DYN, loc), input = varRef("p.1", DYN, loc);
+      const args: IrExpr[] = [];
+      let supported = true;
+      for (let i = 0; i < info.ctorParams.length; i++) {
+        const param = info.ctorParams[i]!;
+        if (param.mode !== "required" && param.mode !== "omittable") { supported = false; break; }
+        const value: IrExpr = { kind: "dynKeyGet", value: input, key: { kind: "strLit", value: String(i), type: STRING, loc }, type: DYN, loc };
+        const arg = lowerer.coerceToExpected(value, param.type);
+        if (!typeEquals(arg.type, param.type)) { supported = false; break; }
+        args.push(arg);
+      }
+      if (!supported || !info.decl) continue;
+      const cls = classValueRef(lowerer, info, info.decl);
+      const result: IrExpr = { kind: "new", className: name, args, type: {kind: "object", className: name}, loc };
+      this.constructDispatch.body.unshift({ kind: "if", cond: {kind: "dynScalarEq", left: callee,
+        right: lowerer.coerceToExpected(cls, DYN), type: BOOL, loc}, then: [
+          { kind: "return", value: lowerer.coerceToExpected(result, DYN), loc },
+        ], else_: null, loc });
+      changed = true;
     }
     return changed;
   }
@@ -407,7 +481,9 @@ export class ClassDynamicDispatch {
     if (!initializers) return null;
     const receiver = varRef("p.0", type, loc);
     const bag: IrExpr = { kind: "fieldGet", obj: receiver, className: type.className, field: PROPERTY_BAG, type: DYN, loc };
-    const initialize: Extract<IrStmt, { kind: "fieldSet" }> = { ...initializers[0]!, obj: receiver, loc };
+    const initialize: Extract<IrStmt, { kind: "fieldSet" }> = { ...initializers[0]!, obj: receiver,
+      value: transformExpr(initializers[0]!.value, { stmt: (stmt) => stmt, expr: (expr) =>
+        expr.kind === "dynCheck" && expr.value.kind === "varRef" && expr.value.localId === "p.0" ? receiver : expr }), loc };
     const helper: IrFunction = {
       name: `%class.properties:${type.className}`, params: [{ localId: "p.0", name: "value", type }], returnType: DYN,
       locals: [{ id: "p.0", name: "value", type, mutable: false }], loc,
@@ -482,6 +558,27 @@ export class ClassDynamicDispatch {
     const getRecord = (id: string) => lowerer.shapes.get(id);
     const getUnion = (id: string) => lowerer.unions.get(id);
     if (!write) {
+      if (name === "constructor" && !field && !accessor && info.decl && !info.generic && !info.localClass && !info.classDecorators) {
+        this.constructors.set(info.def.name, info);
+        const cls = lowerer.coerceToExpected(classValueRef(lowerer, info, info.decl), DYN);
+        const bag: IrExpr = { kind: "call", callee: this.propertyBag!.name, args: [lowerer.coerceToExpected(receiver, DYN)], type: DYN, loc };
+        const key: IrExpr = { kind: "strLit", value: name, type: STRING, loc };
+        return [{ kind: "return", value: { kind: "ternary", cond: { kind: "libCall", fn: "dyn.hasKey", args: [bag, key], type: BOOL, loc },
+          then: { kind: "dynKeyGet", value: bag, key, type: DYN, loc }, else_: cls, type: DYN, loc }, loc }];
+      }
+      if (!field && !accessor && info.decl) {
+        const method = compiledMethodValue(lowerer, info, name, info.decl, loc);
+        if (method) {
+          const prototypeMethod = lowerer.prototypeMethodAccesses.has(name);
+          if (prototypeMethod) classPrototypeData(lowerer, info, loc);
+          const boxed = lowerer.coerceToExpected(method, DYN);
+          if (boxed.type.kind !== "dyn") return fence();
+          const bag: IrExpr = { kind: "call", callee: this.propertyBag!.name, args: [lowerer.coerceToExpected(receiver, DYN)], type: DYN, loc };
+          const key: IrExpr = { kind: "strLit", value: name, type: STRING, loc };
+          return [{ kind: "return", value: { kind: "ternary", cond: { kind: "libCall", fn: "dyn.hasKey", args: [bag, key], type: BOOL, loc },
+            then: { kind: "dynKeyGet", value: bag, key, type: DYN, loc }, else_: prototypeMethod ? dynUndefinedExpr(loc) : boxed, type: DYN, loc }, loc }];
+        }
+      }
       if (!field && !accessor) return [{ kind: "return", value: dynUndefinedExpr(loc), loc }];
       const type = field ?? accessor!.sig.ret;
       if (!canConvertToDyn(type, getRecord, getUnion)) return fence();
@@ -493,6 +590,13 @@ export class ClassDynamicDispatch {
         (t.kind === "union" && (getUnion(t.unionId)?.arms.some(mutable) ?? false));
       if (boxed.kind === "dynFrom" && mutable(boxed.value.type)) boxed.liveRef = true;
       return [{ kind: "return", value: boxed, loc }];
+    }
+    if (!field && !accessor && !findMethodOn(lowerer, info, `get:${name}`)) {
+      const bag: IrExpr = { kind: "call", callee: this.propertyBag!.name,
+        args: [lowerer.coerceToExpected(receiver, DYN)], type: DYN, loc };
+      return [{ kind: "exprStmt", expr: { kind: "libCall", fn: "dyn.keySet", args: [bag,
+        { kind: "strLit", value: name, type: STRING, loc }, varRef("p.1", DYN, loc)], type: VOID, loc }, loc },
+      { kind: "return", value: null, loc }];
     }
     if (!field && !accessor) return [{ kind: "throw", value: {
       kind: "libCall", fn: "error.new", args: [{

@@ -1125,6 +1125,8 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "weakMap.new": { argTypes: [DYN], result: DYN },
   "weakSet.new": { argTypes: [DYN], result: DYN },
   "dyn.fromEntries": { argTypes: [DYN], result: DYN },
+  "bytes.constructor": { argTypes: [STRING], result: DYN },
+  "bytes.construct": { argTypes: [DYN, DYN, STRING], result: DYN },
   "arrayBuffer.new": { argTypes: [DYN], result: DYN },
   "ffi.argument": { argTypes: [DYN, STRING], result: DYN },
   "ffi.memoryModule": { argTypes: [DYN], result: DYN },

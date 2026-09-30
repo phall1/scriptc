@@ -61,7 +61,7 @@ export function emitIntegerLoopIndex(host: LlvmEmitterContext, expr: IrExpr): st
     return index;
   }
 
-export function emitBytesIndex(host: LlvmEmitterContext, receiver: string, index: string, integerIndex = false): string {
+export function emitBytesIndex(host: LlvmEmitterContext, receiver: string, index: string, integerIndex = false, skipInvalid?: string): string {
     const B = host.B;
     const lenPtr = B.tmp();
     const len = B.tmp();
@@ -74,11 +74,14 @@ export function emitBytesIndex(host: LlvmEmitterContext, receiver: string, index
       const valid = B.newLabel("bytes.index.valid");
       B.condBr(inRange, valid, invalid);
       B.startBlock(invalid);
-      const indexF64 = B.tmp();
-      B.line(`${indexF64} = uitofp ${host.sizeType} ${index} to double`);
-      host.declare(`declare double @scr_bytes_get(ptr, double)`);
-      B.line(`call double @scr_bytes_get(ptr ${receiver}, double ${indexF64})`);
-      B.terminate("unreachable");
+      if (skipInvalid) B.br(skipInvalid);
+      else {
+        const indexF64 = B.tmp();
+        B.line(`${indexF64} = uitofp ${host.sizeType} ${index} to double`);
+        host.declare(`declare double @scr_bytes_get(ptr, double)`);
+        B.line(`call double @scr_bytes_get(ptr ${receiver}, double ${indexF64})`);
+        B.terminate("unreachable");
+      }
       B.startBlock(valid);
       return index;
     }
@@ -106,9 +109,12 @@ export function emitBytesIndex(host: LlvmEmitterContext, receiver: string, index
     B.condBr(integral, valid, invalid);
 
     B.startBlock(invalid);
-    host.declare(`declare double @scr_bytes_get(ptr, double)`);
-    B.line(`call double @scr_bytes_get(ptr ${receiver}, double ${index})`);
-    B.terminate("unreachable");
+    if (skipInvalid) B.br(skipInvalid);
+    else {
+      host.declare(`declare double @scr_bytes_get(ptr, double)`);
+      B.line(`call double @scr_bytes_get(ptr ${receiver}, double ${index})`);
+      B.terminate("unreachable");
+    }
 
     B.startBlock(valid);
     return idx;
@@ -251,7 +257,9 @@ export function emitToUint32(host: LlvmEmitterContext, value: string, expr?: IrE
 
 export function emitBytesSet(host: LlvmEmitterContext, elem: IrBytesElem, receiver: string, index: string, value: string, integerIndex = false): void {
     const B = host.B;
-    const idx = host.emitBytesIndex(receiver, index, integerIndex);
+    // Invalid integer-indexed writes are ignored after evaluating the RHS.
+    const done = B.newLabel("bytes.store.done");
+    const idx = emitBytesIndex(host, receiver, index, integerIndex, done);
     let stored: string | null;
     if (elem === "u8c") {
       host.declare(`declare double @scr_bytes_to_u8_clamp(double)`);
@@ -268,22 +276,20 @@ export function emitBytesSet(host: LlvmEmitterContext, elem: IrBytesElem, receiv
       B.line(`${byte} = trunc i32 ${stored!} to i${bits}`);
       B.line(`${p} = getelementptr inbounds i${bits}, ptr ${data}, ${host.sizeType} ${idx}`);
       B.line(`store i${bits} ${byte}, ptr ${p}, align 1`);
-      return;
-    }
-    if (elem === "f32") {
+    } else if (elem === "f32") {
       const narrowed = B.tmp();
       B.line(`${narrowed} = fptrunc double ${value} to float`);
       B.line(`${p} = getelementptr inbounds float, ptr ${data}, ${host.sizeType} ${idx}`);
       B.line(`store float ${narrowed}, ptr ${p}, align 1`);
-      return;
-    }
-    if (elem === "f64") {
+    } else if (elem === "f64") {
       B.line(`${p} = getelementptr inbounds double, ptr ${data}, ${host.sizeType} ${idx}`);
       B.line(`store double ${value}, ptr ${p}, align 1`);
-      return;
+    } else {
+      B.line(`${p} = getelementptr inbounds i32, ptr ${data}, ${host.sizeType} ${idx}`);
+      B.line(`store i32 ${stored!}, ptr ${p}, align 1`);
     }
-    B.line(`${p} = getelementptr inbounds i32, ptr ${data}, ${host.sizeType} ${idx}`);
-    B.line(`store i32 ${stored!}, ptr ${p}, align 1`);
+    B.br(done);
+    B.startBlock(done);
   }
 
 export function emitBytesIntrinsic(host: LlvmEmitterContext, e: IrExpr & { kind: "bytesIntrinsic" }): LlValue {

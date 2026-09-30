@@ -25,7 +25,8 @@ import type { ClassInfo, ClassIteratorInfo } from "./lower-classes.js";
 import { isCompiledPrototypeMember } from "./class-prototypes.js";
 import { classStaticDataFor } from "./class-static-data.js";
 import { objectFactorySignature } from "./object-factory-new.js";
-import { lowerClassCallbackAssign } from "./class-callbacks.js";
+import { isClassCallback, lowerClassCallbackAssign } from "./class-callbacks.js";
+import { classPropertiesHelper } from "./class-dynamic-dispatch.js";
 import { genericIfaceBindingKeepsClass, staticFieldWriteTarget } from "./lower-classes.js";
 import { lowerStreamUnderscoreAssign, streamClassAliasDecl } from "./lower-stream.js";
 import { lowerHttpResPropertyAssignment, lowerHttpServerTimeoutAssignment, lowerServerCloseOverrideAssignment } from "./lower-server.js";
@@ -3959,7 +3960,7 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
     if (!type) lowerer.badType(decl.name, lowerer.typeOf(decl.name));
     let settledType: IrType = type;
     if (!isLet && isJsSourceFile(decl.getSourceFile()) && !hasJsTypeAnnotation(decl) && decl.initializer && ts.isNewExpression(decl.initializer)) {
-      settledType = objectFactorySignature(lowerer, decl.initializer)?.returnType ?? settledType;
+      settledType = init.type.kind === "dyn" ? DYN : objectFactorySignature(lowerer, decl.initializer)?.returnType ?? settledType;
     }
     const arithmeticType = decl.initializer ? lowerer.runtimeOptionalArithmeticTypes.get(decl.initializer) : undefined;
     const isStringArithmeticUnion = (t: IrType): boolean => {
@@ -4503,6 +4504,16 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
       };
     }
     let obj = lowerer.lowerExpr(target.expression);
+    if (isJsSourceFile(expr.getSourceFile()) && obj.type.kind === "object") {
+      const info = lowerer.classes.get(obj.type.className);
+      const keyType = ts.isElementAccessExpression(target) ? lowerer.typeOf(target.argumentExpression) : null;
+      const name = ts.isPropertyAccessExpression(target) ? target.name.text
+        : keyType?.isStringLiteralType() ? keyType.value : null;
+      if (info && name !== null && isClassCallback(lowerer, info, name)) {
+        obj = { kind: "call", callee: classPropertiesHelper(lowerer, loc).name,
+          args: [lowerer.coerceToExpected(obj, DYN)], type: DYN, loc };
+      }
+    }
     if (isJsSourceFile(expr.getSourceFile()) && obj.type.kind === "func" && lowerer.dynConvertible(obj.type)) {
       obj = lowerer.coerceToExpected(obj, DYN);
     }

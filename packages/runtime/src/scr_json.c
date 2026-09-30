@@ -1517,6 +1517,74 @@ ScrBytes *scr_dyn_bytes_unbox(const ScrDyn *d) {
   return scr_bytes_retain(d->v.bytes);
 }
 
+/* Numeric typed-array constructor values share native function identity.
+ * The cache owns one reference until runtime cleanup; arbitrary strings or
+ * functions cannot impersonate one of these constructors. */
+static SCR_TL ScrDyn *scr_bytes_ctors[9];
+static void scr_bytes_ctors_cleanup(void) {
+  for (size_t i = 0; i < 9; i++) {
+    scr_dyn_release(scr_bytes_ctors[i]);
+    scr_bytes_ctors[i] = NULL;
+  }
+}
+static ScrDyn *scr_bytes_ctor_call(ScrClosure *closure, ScrDyn *const *args, size_t argc) {
+  (void)args; (void)argc;
+  for (size_t i = 0; i < 9; i++) {
+    if (!scr_bytes_ctors[i] || scr_bytes_ctors[i]->v.fn.clo != closure) continue;
+    ScrJsonBuf message;
+    scr_jb_init(&message);
+    scr_jb_puts(&message, "Constructor ");
+    scr_jb_puts(&message, scr_bytes_elem_name((ScrBytesElem)i));
+    scr_jb_puts(&message, " requires 'new'");
+    scr_throw_error(SCR_ERR_TYPE, scr_jb_finish(&message));
+    return NULL;
+  }
+  scr_trap("scriptc: invalid typed array constructor\n");
+}
+static ScrDyn *scr_dyn_fn_properties(const ScrDyn *function);
+static ScrDyn *scr_bytes_constructor_for(ScrBytesElem elem) {
+  if (!scr_bytes_ctors[elem]) {
+    bool initialized = false;
+    for (size_t i = 0; i < 9; i++) if (scr_bytes_ctors[i]) initialized = true;
+    if (!initialized) scr_atexit(scr_bytes_ctors_cleanup);
+    scr_bytes_ctors[elem] = scr_dyn_new_func(scr_closure_new(NULL, 0),
+        scr_bytes_ctor_call, 3, "typed-array-constructor", scr_bytes_elem_name(elem));
+    ScrDyn *properties = scr_dyn_fn_properties(scr_bytes_ctors[elem]);
+    scr_dyn_obj_set(properties, "BYTES_PER_ELEMENT", 17, scr_dyn_new_num((double)scr_bytes_elem_size(elem)));
+    ScrDynEntry *entry = &properties->v.obj.entries[properties->v.obj.len - 1];
+    entry->writable = entry->enumerable = entry->configurable = false;
+    scr_dyn_release(properties);
+  }
+  return scr_dyn_retain(scr_bytes_ctors[elem]);
+}
+ScrDyn *scr_bytes_constructor(const ScrStr *name) {
+  for (size_t i = 0; i < 9; i++) {
+    const char *candidate = scr_bytes_elem_name((ScrBytesElem)i);
+    if (strlen(candidate) == name->len && memcmp(candidate, name->data, name->len) == 0)
+      return scr_bytes_constructor_for((ScrBytesElem)i);
+  }
+  scr_trap("scriptc: invalid typed array constructor name\n");
+}
+ScrDyn *scr_bytes_construct(const ScrDyn *callee, const ScrDyn *args, const ScrStr *what) {
+  for (size_t i = 0; i < 9; i++) {
+    if (callee->kind != SCR_DYN_FUNC || !scr_bytes_ctors[i] || callee->v.fn.clo != scr_bytes_ctors[i]->v.fn.clo) continue;
+    const ScrDyn *input = args->v.arr.len > 0 ? args->v.arr.items[0] : scr_dyn_undefined();
+    const ScrDyn *offset = args->v.arr.len > 1 ? args->v.arr.items[1] : scr_dyn_undefined();
+    const ScrDyn *length = args->v.arr.len > 2 ? args->v.arr.items[2] : scr_dyn_undefined();
+    ScrBytes *bytes = scr_array_buffer_view((ScrBytesElem)i, input, offset, length);
+    if (!bytes) return NULL;
+    ScrDyn *result = scr_dyn_new_bytes(bytes);
+    scr_bytes_release(bytes);
+    return result;
+  }
+  ScrJsonBuf message;
+  scr_jb_init(&message);
+  scr_jb_write(&message, what->data, what->len);
+  scr_jb_puts(&message, " is not a supported native constructor");
+  scr_throw_error(SCR_ERR_TYPE, scr_jb_finish(&message));
+  return NULL;
+}
+
 /* Shared view metadata and indexed reads for both compiler backends. */
 ScrDyn *scr_dyn_bytes_key_get(const ScrDyn *value, const ScrStr *key) {
   ScrBytes *bytes = value->v.bytes;
@@ -1525,7 +1593,8 @@ ScrDyn *scr_dyn_bytes_key_get(const ScrDyn *value, const ScrStr *key) {
   if (key->len == 10 && memcmp(key->data, "byteOffset", 10) == 0) return scr_dyn_new_num(scr_bytes_byte_offset(bytes));
   if (key->len == 6 && memcmp(key->data, "buffer", 6) == 0) return scr_array_buffer_from_bytes(bytes);
   if (key->len == 11 && memcmp(key->data, "constructor", 11) == 0) {
-    /* Match the compiler's opaque JS builtin identity values. */
+    if (!value->buffer) return scr_bytes_constructor_for(bytes->elem);
+    /* Buffer retains its separate builtin identity. */
     char token[64];
     int length = snprintf(token, sizeof token, "[builtin %s]", value->buffer ? "Buffer" : scr_bytes_elem_name(bytes->elem));
     ScrStr *name = scr_str_new(token, (size_t)length);

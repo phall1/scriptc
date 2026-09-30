@@ -19,7 +19,9 @@ function run(command: string, args: string[]) {
   return { stdout: result.stdout, stderr, status: result.status, signal: result.signal };
 }
 
-test.for(["native", "wasm32-wasi"])("published spatial queries and output arrays run statically on %s", async (target, context) => {
+const cases = ["three/collision.mjs", "three/buffers-animation.mjs", "npm-static/array-output-parameters.mjs"].flatMap((fixture) =>
+  ["native", "wasm32-wasi"].map((target) => ({ fixture, target })));
+test.for(cases)("published $fixture runs statically on $target", async ({ fixture, target }, context) => {
   if (target === "wasm32-wasi" && !hasZig) context.skip();
   const dir = await mkdtemp("/tmp/scriptc-spatial-");
   const previousTarget = process.env["SCRIPTC_TARGET"], previousCc = process.env["SCRIPTC_CC"];
@@ -30,26 +32,24 @@ test.for(["native", "wasm32-wasi"])("published spatial queries and output arrays
     await writeFile(join(pkg,"package.json"),'{"name":"spatial-fixture","type":"module","main":"index.js"}');
     const entry = join(dir,"main.mjs");
     await writeFile(entry,'import "spatial-fixture";');
-    for (const fixture of ["three/collision.mjs", "npm-static/array-output-parameters.mjs"]) {
-      const source = join(import.meta.dirname,"../fixtures",fixture);
-      const bundle = await rollup({ input:source, plugins:[{name:"three-cpu-entry",resolveId(id) {
-        if(id === "three") return require.resolve("three/src/Three.Core.js");
-        if(id.startsWith("three/")) return require.resolve(id);
-        return null;
-      }}] });
-      try { await bundle.write({file:join(pkg,"index.js"),format:"es"}); }
-      finally { await bundle.close(); }
-      const wasm = target === "wasm32-wasi";
-      const output = join(dir,wasm ? "program.wasm" : "program");
-      const result = await compile(entry,{outDir:dir,outPath:output,backend:"llvm",dynamic:false,npmStatic:["spatial-fixture"],
-        sanitize:!wasm && process.env["SCRIPTC_SAN"] === "1"});
-      if(!result.ok) throw new Error(result.diagnostics.map(d=>`${d.code}: ${d.message}`).join("\n"));
-      if(wasm) expect([...(await readFile(output)).subarray(0,4)]).toEqual([0,97,115,109]);
-      const reference = run(process.execPath,["--no-warnings",source]);
-      expect(reference.status).toBe(0);
-      expect(run(process.execPath,["--no-warnings",entry])).toEqual(reference);
-      expect(wasm ? run(process.execPath,["--no-warnings","-e",wasiRunner,output]) : run(output,[])).toEqual(reference);
-    }
+    const source = join(import.meta.dirname,"../fixtures",fixture);
+    const bundle = await rollup({ input:source, plugins:[{name:"three-cpu-entry",resolveId(id) {
+      if(id === "three") return require.resolve("three/src/Three.Core.js");
+      if(id.startsWith("three/")) return require.resolve(id);
+      return null;
+    }}] });
+    try { await bundle.write({file:join(pkg,"index.js"),format:"es"}); }
+    finally { await bundle.close(); }
+    const wasm = target === "wasm32-wasi";
+    const output = join(dir,wasm ? "program.wasm" : "program");
+    const result = await compile(entry,{outDir:dir,outPath:output,backend:"llvm",dynamic:false,npmStatic:["spatial-fixture"],
+      sanitize:!wasm && process.env["SCRIPTC_SAN"] === "1"});
+    if(!result.ok) throw new Error(result.diagnostics.map(d=>`${d.code}: ${d.message}`).join("\n"));
+    if(wasm) expect([...(await readFile(output)).subarray(0,4)]).toEqual([0,97,115,109]);
+    const reference = run(process.execPath,["--no-warnings",source]);
+    expect(reference.status).toBe(0);
+    expect(run(process.execPath,["--no-warnings",entry])).toEqual(reference);
+    expect(wasm ? run(process.execPath,["--no-warnings","-e",wasiRunner,output]) : run(output,[])).toEqual(reference);
   } finally {
     if(previousTarget === undefined) delete process.env["SCRIPTC_TARGET"]; else process.env["SCRIPTC_TARGET"] = previousTarget;
     if(previousCc === undefined) delete process.env["SCRIPTC_CC"]; else process.env["SCRIPTC_CC"] = previousCc;

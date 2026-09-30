@@ -3666,6 +3666,8 @@ void scr_dyn_proxy_unsupported(const char *operation);
 /* Retains the native view, preserving identity and its shared backing
  * allocation across the checked-dynamic boundary. Borrows b. */
 ScrDyn *scr_dyn_new_bytes(const ScrBytes *b);
+ScrDyn *scr_bytes_constructor(const ScrStr *name);
+ScrDyn *scr_bytes_construct(const ScrDyn *callee, const ScrDyn *args, const ScrStr *what);
 ScrDyn *scr_dyn_bytes_key_get(const ScrDyn *value, const ScrStr *key);
 /* The Buffer-flavored twin (stream chunks): string coercion/toString
  * decode utf8 instead of joining elements. */
@@ -5360,8 +5362,8 @@ double scr_bit_not(double a);
  * construction (owners point at nothing): never part of a cycle, no
  * trace. Element reads widen to double; writes coerce JS-exactly (ToUint8
  * / ToUint32 modular truncation, double→float rounding for f32).
- * Out-of-bounds ELEMENT access traps like arrays (JS returns undefined /
- * ignores the write — documented divergence); the Node-shaped operations
+ * Out-of-bounds typed ELEMENT reads trap like arrays; invalid writes are
+ * ignored as in JavaScript. The Node-shaped operations
  * (construction lengths, set(), the read/write numeric families, the
  * DataView constructor and getters) THROW catchable RangeErrors exactly
  * where Node throws. */
@@ -5517,9 +5519,8 @@ double scr_dataview_get(const ScrBytes *b, double byte_off, ScrDataViewGet kind,
  * with the getters' one RangeError. */
 void scr_dataview_set(ScrBytes *b, double byte_off, double value, ScrDataViewGet kind, bool le);
 
-/* Element read/write. Any invalid index — negative, fractional, NaN, or
- * out of bounds — TRAPS like the array runtime (SEMANTICS.md documents
- * the divergence from JS's undefined-read/ignored-write). Writes coerce
+/* Element read/write. Invalid typed reads trap; invalid writes are ignored.
+ * Checked reads preserve JavaScript's undefined result. Valid writes coerce
  * JS-exactly: u8/u32 by modular truncation (NaN/±Infinity → 0, truncate
  * toward zero, wrap mod 2^8/2^32), f32 by double→float rounding. */
 double scr_bytes_get(const ScrBytes *b, double i);

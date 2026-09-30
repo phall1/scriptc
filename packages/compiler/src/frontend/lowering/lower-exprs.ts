@@ -52,6 +52,7 @@ import { lowerClassMethodValue } from "./class-method-values.js";
 import { classInstanceOf } from "./class-dynamic-dispatch.js";
 import { lowerGlobalValue } from "./lower-global-value.js";
 import { lowerClassPrototypeData } from "./class-prototypes.js";
+import { isClassCallback } from "./class-callbacks.js";
 
 /** An assignable `obj.field` target — a class field, a record field, or a
  * class ACCESSOR property (reads become getter calls, writes setter calls;
@@ -1132,6 +1133,9 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
       ) {
         return primitiveCtorClosure(lowerer, expr.text, loc, jsPrimitiveCtorSelector);
       }
+      if (Object.values(BYTES_ELEMENT_NAME).includes(expr.text) && lowerer.isStdlibSymbol(lowerer.checker.getSymbolAtLocation(expr))) {
+        return { kind: "libCall", fn: "bytes.constructor", args: [{ kind: "strLit", value: expr.text, type: STRING, loc }], type: DYN, loc };
+      }
       // The lib fence's IDENTIFIER chokepoint: the real standard library
       // resolves names the old minimal ambient world never declared
       // (Symbol, Reflect, Infinity, Date, ...) — and the adopted
@@ -1524,6 +1528,11 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
       if (staticField) return staticField;
       const prototypeData = lowerClassPrototypeData(lowerer, expr);
       if (prototypeData) return prototypeData;
+      if (ts.isPropertyAccessExpression(expr.expression) && expr.expression.name.text === "prototype") {
+        const prototype = lowerClassPrototypeData(lowerer, expr.expression);
+        if (prototype) return { kind: "dynKeyGet", value: prototype,
+          key: { kind: "strLit", value: expr.name.text, type: STRING, loc }, type: DYN, loc };
+      }
       // `super.x`: the base chain's GETTER, called directly (super
       // dispatch is static in JS — never through the dynamic class).
       // super.method() calls are routed at the call site; a bare super
@@ -3555,6 +3564,14 @@ function lowerPromiseThenPresence(
       lowerer.checker.isTupleType(lowerer.checker.getBaseTypeOfLiteralType(lowerer.typeOf(expr.expression)));
     if (kind === "child" ? !isChildSurfaceMember(lowerer, expr) : !tupleLengthOnArray && !lowerer.isStdlibMember(expr)) return null;
     const name = expr.name.text;
+    if (kind === "array" && name === "constructor" && isJsSourceFile(expr.getSourceFile())) {
+      const receiver = lowerer.lowerExpr(expr.expression);
+      if (receiver.type.kind === "dyn") return { kind: "dynKeyGet", value: receiver,
+        key: { kind: "strLit", value: name, type: STRING, loc: locOf(expr) }, type: DYN, loc: locOf(expr) };
+      // Ordinary arrays keep the existing Array builtin identity token.
+      const result: IrExpr = { kind: "strLit", value: "[builtin Array]", type: STRING, loc: locOf(expr) };
+      return { kind: "seqExpr", stmts: [{ kind: "exprStmt", expr: receiver, loc: locOf(expr) }], result, type: STRING, loc: locOf(expr) };
+    }
     const strictReceiver = (expected: IrType): IrExpr => {
       const value = lowerer.lowerExpr(expr.expression);
       return lowerer.runtimeOptionalPropertyReceiver(expr.expression, value, expected, name) ?? value;
@@ -3786,6 +3803,12 @@ function lowerPromiseThenPresence(
     }
     if (kind === "bytes") {
       const loc = locOf(expr);
+      if (name === "constructor") {
+        const expected = lowerer.mapTypeOf(lowerer.typeOf(expr.expression));
+        const receiver = expected?.kind === "bytes" ? strictReceiver(expected) : lowerer.lowerExpr(expr.expression);
+        return { kind: "dynKeyGet", value: lowerer.coerceInto(expr.expression, receiver, DYN),
+          key: { kind: "strLit", value: name, type: STRING, loc }, type: DYN, loc };
+      }
       if (name === "length" || name === "byteLength") {
         const expected = lowerer.mapTypeOf(lowerer.typeOf(expr.expression));
         let receiver = expected?.kind === "bytes"
@@ -4535,6 +4558,12 @@ export function lowerOptionalNumber(
       : lowerer.mapTypeOf(lowerer.typeOf(expr.expression));
     if (isJsSourceFile(expr.getSourceFile())) {
       const receiver = tryLowerExpression(lowerer, expr.expression);
+      if (receiver?.type.kind === "dyn") {
+        const key = lowerRecordPropertyKey(lowerer, lowerer.lowerExpr(expr.argumentExpression), expr.argumentExpression);
+        const optional = hasOptionalChainGuard(expr.expression);
+        return lowerer.maybeNarrow({ kind: "dynKeyGet", value: receiver, key,
+          ...(optional ? { optional: true as const } : {}), type: DYN, loc: locOf(expr) }, expr);
+      }
       if (receiver?.type.kind === "func" && lowerer.dynConvertible(receiver.type)) {
         const loc = locOf(expr);
         const fnName = jsFuncNameOf(expr.expression);
@@ -5145,6 +5174,9 @@ export function lowerOptionalNumber(
    * values remain real undefined values, whose JavaScript property spelling
    * is the string "undefined". */
   function lowerRecordPropertyKey(lowerer: Lowerer, key: IrExpr, node: ts.Expression): IrExpr {
+    if (key.type.kind === "union" && lowerer.dynConvertible(key.type)) {
+      return { kind: "libCall", fn: "dyn.toStringCoerce", args: [lowerer.coerceInto(node, key, DYN)], type: STRING, loc: key.loc };
+    }
     if (
       key.type.kind === "f64" || key.type.kind === "bool" || key.type.kind === "dyn" ||
       lowerer.runtimeOptionalWidening(key.type, STRING) !== null
@@ -5468,6 +5500,14 @@ export function lowerElementCompound(lowerer: Lowerer, expr: ts.BinaryExpression
     if (checkedReceiver?.type.kind === "dyn") {
       return { kind: "exprStmt", expr: lowerDynMemberAssignment(lowerer, expr, checkedReceiver), loc: locOf(expr) };
     }
+    if (checkedReceiver?.type.kind === "object" && isJsSourceFile(expr.getSourceFile())) {
+      const info = lowerer.classes.get(checkedReceiver.type.className);
+      const key = recordKeyLiteralText(target.argumentExpression) ?? recordKeyTypeLiteralText(lowerer, target.argumentExpression);
+      if (info && key !== null && isClassCallback(lowerer, info, key)) {
+        const receiver = lowerer.coerceInto(target.expression, checkedReceiver, DYN);
+        return { kind: "exprStmt", expr: lowerDynMemberAssignment(lowerer, expr, receiver), loc: locOf(expr) };
+      }
+    }
     const receiverIr = lowerer.mapTypeOf(lowerer.typeOf(target.expression));
     if (receiverIr?.kind === "jsval") {
       const obj = lowerer.lowerExpr(target.expression);
@@ -5541,8 +5581,7 @@ export function lowerElementCompound(lowerer: Lowerer, expr: ts.BinaryExpression
       }
     }
     // Typed-array element write `b[i] = v` — bytesSet: the value is an f64
-    // the runtime coerces JS-exactly; invalid indices trap (no appends —
-    // typed arrays are fixed-length; JS would ignore the write).
+    // the runtime coerces JS-exactly; invalid indices are ignored.
     if (receiverIr?.kind === "bytes") {
       const recv = lowerer.lowerExpr(target.expression);
       // The write twin: a typed-array .d.ts surface whose VALUE is a
@@ -6595,6 +6634,26 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
           const recv = tryLowerExpression(lowerer, expr.left.expression);
           if (recv?.type.kind === "dyn") {
             return lowerDynMemberAssignment(lowerer, expr, recv);
+          }
+          if (recv?.type.kind === "array" || recv?.type.kind === "bytes") {
+            const receiver = lowerer.declareHiddenLocal("%setArray", recv.type);
+            const index = lowerer.lowerExpr(expr.left.argumentExpression);
+            if (index.type.kind !== "f64") lowerer.unsupported("SC1090", expr.left.argumentExpression, "indexing with non-number keys");
+            const key = lowerer.declareHiddenLocal("%setIndex", F64);
+            const raw = lowerer.lowerExpr(expr.right);
+            const value = lowerer.declareHiddenLocal("%setValue", raw.type);
+            const result = varRef(value.id, raw.type, loc);
+            const arr = varRef(receiver.id, recv.type, loc);
+            const idx = varRef(key.id, F64, loc);
+            const write: IrStmt = recv.type.kind === "array"
+              ? arrayValueStore(lowerer, arr, idx, result, recv.type.elem, loc)
+              : { kind: "bytesSet", arr, index: idx, value: lowerer.coerceInto(expr.right, result, F64), loc };
+            return { kind: "seqExpr", stmts: [
+              { kind: "varDecl", localId: receiver.id, init: recv, loc },
+              { kind: "varDecl", localId: key.id, init: index, loc },
+              { kind: "varDecl", localId: value.id, init: raw, loc },
+              write,
+            ], result, type: result.type, loc };
           }
         }
         // `h.k = v` on an ISLAND receiver in VALUE position: the engine

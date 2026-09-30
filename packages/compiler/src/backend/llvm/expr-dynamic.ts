@@ -37,7 +37,9 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
           isDynTypedRefType(v.type) ||
           (v.type.kind === "union" &&
             (host.unionsById.get(v.type.unionId)?.arms.some(isDynTypedRefType) ?? false));
-        if (e.liveRef || identityRef) {
+        // Bytes already box their shared mutable storage directly. A second
+        // capsule would split identity between checked and native views.
+        if ((e.liveRef && v.type.kind !== "bytes") || identityRef) {
           if (v.type.kind === "union") {
             const adapter = host.liveDynUnionRefAdapter(v.type);
             const boxed = B.tmp();

@@ -33,6 +33,8 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "weakMap.new": "scr_weak_map_new",
   "weakSet.new": "scr_weak_set_new",
   "dyn.fromEntries": "scr_dyn_from_entries",
+  "bytes.constructor": "scr_bytes_constructor",
+  "bytes.construct": "scr_bytes_construct",
   "arrayBuffer.new": "scr_array_buffer_new",
   "ffi.argument": "scr_ffi_argument",
   "ffi.memoryModule": "scr_ffi_memory_module",

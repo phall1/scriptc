@@ -1,10 +1,10 @@
 import * as ts from "../ts7/adapter.js";
-import { BOOL, DYN, STRING, typeEquals, typeKey, type IrExpr, type IrFunction, type IrStmt, type IrType } from "../../ir/ir.js";
+import { BOOL, DYN, STRING, typeEquals, typeKey, type IrExpr, type IrFunction, type IrStmt, type IrType, type SrcLoc } from "../../ir/ir.js";
 import { varRef } from "../../ir/build.js";
 import { everyStmtList, transformStmtList } from "../../ir/traverse.js";
 import { locOf } from "../program.js";
 import type { Lowerer } from "./lowerer.js";
-import { findGenericMethodOn, findMethodOn, type ClassInfo } from "./lower-classes.js";
+import { findGenericMethodOn, findMethodOn, genericOverrideBelow, type ClassInfo } from "./lower-classes.js";
 import { funcTypeFromParamShapes, implicitDefaultInstance, type ParamShape } from "./lower-calls.js";
 import { classCallbackValue, isClassCallback } from "./class-callbacks.js";
 
@@ -52,11 +52,13 @@ export function lowerClassMethodValue(lowerer: Lowerer, expr: ts.PropertyAccessE
 }
 
 function methodValue(lowerer: Lowerer, expr: ts.PropertyAccessExpression, info: ClassInfo): IrExpr | null {
-  const method = expr.name.text;
+  return compiledMethodValue(lowerer, info, expr.name.text, expr, locOf(expr));
+}
+
+export function compiledMethodValue(lowerer: Lowerer, info: ClassInfo, method: string, expr: ts.Node, loc: SrcLoc): IrExpr | null {
   const found = findMethodOn(lowerer, info, method);
   const generic = found ? null : findGenericMethodOn(lowerer, info, method);
   if (!found && !generic) return null;
-  const loc = locOf(expr);
   let owner: ClassInfo;
   let params: ParamShape[];
   let ret: IrType;
@@ -68,7 +70,7 @@ function methodValue(lowerer: Lowerer, expr: ts.PropertyAccessExpression, info: 
     ret = found.sig.ret;
     callee = `%${owner.def.name}.${method}`;
     lowerer.noteEdge(callee);
-  } else if (generic?.info.implicitParams && generic.declarer.decl && !lowerer.inHierarchy(info)) {
+  } else if (generic?.info.implicitParams && generic.declarer.decl && !lowerer.overrideBelow(info, method) && !genericOverrideBelow(lowerer, info, method)) {
     owner = generic.declarer;
     const instance = implicitDefaultInstance(lowerer, owner.decl!, generic.info);
     params = instance.params;

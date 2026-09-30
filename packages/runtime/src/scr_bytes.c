@@ -172,9 +172,8 @@ double scr_bytes_byte_len(const ScrBytes *b) {
 }
 
 /* ── element access ────────────────────────────────────────────────────
- * JS reads undefined and IGNORES writes out of bounds on typed arrays;
- * both are unrepresentable here, so any invalid index traps — the array
- * runtime's exact discipline (SEMANTICS.md). */
+ * Invalid writes are ignored. Typed numeric reads cannot represent
+ * undefined, so invalid reads trap; checked reads return undefined. */
 
 static size_t scr_bytes_check_index(const ScrBytes *b, double i) {
   if (!(i >= 0) || i != trunc(i) || i >= (double)b->len) {
@@ -241,7 +240,8 @@ double scr_bytes_get(const ScrBytes *b, double i) {
 }
 
 void scr_bytes_set(ScrBytes *b, double i, double v) {
-  size_t idx = scr_bytes_check_index(b, i);
+  if (!(i >= 0) || i != trunc(i) || i >= (double)b->len) return;
+  size_t idx = (size_t)i;
   switch (b->elem) {
     case SCR_BYTES_U8: case SCR_BYTES_I8:
       b->data[idx] = (uint8_t)scr_bytes_to_u32(v);

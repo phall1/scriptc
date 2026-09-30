@@ -2016,6 +2016,8 @@ export type IrLibFn =
   | "weakMap.new"
   | "weakSet.new"
   | "dyn.fromEntries"
+  | "bytes.constructor"
+  | "bytes.construct"
   | "arrayBuffer.new"
   | "arrayBuffer.is"
   | "arrayBuffer.isView"
@@ -7222,6 +7224,8 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "weakMap.new",
   "weakSet.new",
   "dyn.fromEntries",
+  "bytes.constructor",
+  "bytes.construct",
   "arrayBuffer.new",
   "arrayBuffer.byteLengthGetter",
   "arrayBuffer.viewU8C",

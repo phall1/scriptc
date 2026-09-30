@@ -1653,6 +1653,9 @@ export class Lowerer {
   /** Keyed by program-wide qualified class name (what IR object types carry). */
   readonly classes = new Map<string, ClassInfo>();
   readonly classBySymbol = new Map<ts.Symbol, ClassInfo>();
+  /** Named method slots observed before class collection need a callable
+   * ABI and shared prototype descriptors instead of call-site specialization. */
+  readonly prototypeMethodAccesses = new Map<string, ts.Node>();
   /** Inferred JS methods participating in an override chain keep a vtable
    * ABI instead of call-site specialization. Filled before class collection. */
   readonly virtualJsMethods = new Set<ts.MethodDeclaration>();

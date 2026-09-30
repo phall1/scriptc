@@ -3527,8 +3527,8 @@ export class LlEmitter {
       case "bytesSet": {
         // Typed-array element write: same evaluation order as arraySet;
         // the value is a scalar (the kind-specific inline path coerces
-        // JS-exactly), so no ownership moves. Any invalid index traps — no
-        // append. IrBytesElem is static, so never rediscover it through the
+        // JS-exactly), so no ownership moves. Invalid writes are ignored.
+        // IrBytesElem is static, so never rediscover it through the
         // generic runtime switch in a hot loop.
         const arr = this.emitStableReceiver(s.arr, [s.index, s.value]);
         const integerIndex = this.emitIntegerLoopIndex(s.index);
