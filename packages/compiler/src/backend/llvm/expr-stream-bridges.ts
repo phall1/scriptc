@@ -8,7 +8,7 @@ import { BlockBuilder } from "./blocks.js";
 import { classFieldIndex, classStructSym } from "./classes.js";
 import { llvmCommentText } from "./common.js";
 import { FN_ATTRS, llFieldType, releaseSym, traceArg, vAdapters } from "./shapes.js";
-import type { LlvmEmitterContext, LlStreamTypedRefAdapter, LlStreamTypedRefContext } from "./expr-context.js";
+import type { LlvmEmitterContext, LlStreamTypedRefAdapter } from "./expr-context.js";
 
 export function dynPromiseAdapter(host: LlvmEmitterContext, inner: IrType): string {
     if (!isRefCounted(inner) || inner.kind === "dyn") {
@@ -304,15 +304,7 @@ export function liveDynUnionRefAdapter(host: LlvmEmitterContext,
 
     const adapters = new Map<number, LlStreamTypedRefAdapter>();
     for (const { arm, tag } of mutableArms) {
-      const prefix = `${sym}_${tag}`;
-      adapters.set(
-        tag,
-        host.streamTypedRefMaterializeAdapter(
-          arm,
-          { prefix, adapters: new Map() },
-          `${prefix}_materialize`,
-        ),
-      );
+      adapters.set(tag, host.liveDynRefAdapter(arm));
     }
 
     const B = new BlockBuilder();
@@ -406,107 +398,10 @@ export function liveDynUnionRefAdapter(host: LlvmEmitterContext,
     return sym;
   }
 
-function nestedTypedRefUnionAdapter(
-    host: LlvmEmitterContext,
-    t: IrType & { kind: "union" },
-    ctx: LlStreamTypedRefContext,
-  ): string {
-    const key = typeKey(t);
-    if (ctx.unions === undefined) ctx.unions = new Map<string, string>();
-    const unions = ctx.unions;
-    const existing = unions.get(key);
-    if (existing) return existing;
-    const def = host.unionsById.get(t.unionId);
-    if (!def) {
-      throw new InternalCompilerError(
-        `llvm emitter bug: typed-ref union ${t.unionId} is undeclared`,
-      );
-    }
-    const sym = `${ctx.prefix}_union_${unions.size}`;
-    unions.set(key, sym);
-
-    const B = new BlockBuilder();
-    const tagPtr = B.tmp();
-    const tagValue = B.tmp();
-    B.line(`${tagPtr} = getelementptr inbounds %ScrUnion, ptr %u, i64 0, i32 1`);
-    B.line(`${tagValue} = load i32, ptr ${tagPtr}`);
-    const bad = B.newLabel("tr.union.bad");
-    const labels = def.arms.map(() => B.newLabel("tr.union.arm"));
-    B.terminate(
-      `switch i32 ${tagValue}, label %${bad} [ ${def.arms.map((_, index) => `i32 ${index}, label %${labels[index]}`).join(" ")} ]`,
-    );
-    def.arms.forEach((arm, index) => {
-      B.startBlock(labels[index]!);
-      if (streamTypedRefEligible(arm) || isDynTypedRefType(arm)) {
-        const adapter = host.streamTypedRefMaterializeAdapter(arm, ctx);
-        const rc = vAdapters(host.shapeHost, arm);
-        const armKey = typeKey(arm);
-        const payloadPtr = B.tmp();
-        const payload = B.tmp();
-        const boxed = B.tmp();
-        B.line(`${payloadPtr} = getelementptr inbounds %ScrUnion, ptr %u, i64 0, i32 5`);
-        B.line(`${payload} = load ptr, ptr ${payloadPtr}`);
-        B.line(
-          `${boxed} = call ptr ${typedRefConstructor(host.shapeHost, arm)}(ptr ${payload}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${host.cstr(armKey)}, ${host.sizeType} ${Buffer.byteLength(armKey, "utf8")}, ptr @${adapter.snapshot}, ptr ${adapter.commit})`,
-        );
-        B.terminate(`ret ptr ${boxed}`);
-      } else if (arm.kind === "undefinedT") {
-        host.declare(`declare ptr @scr_dyn_undefined()`);
-        host.declare(`declare ptr @scr_dyn_retain_v(ptr)`);
-        const undef = B.tmp();
-        const boxed = B.tmp();
-        B.line(`${undef} = call ptr @scr_dyn_undefined()`);
-        B.line(`${boxed} = call ptr @scr_dyn_retain_v(ptr ${undef})`);
-        B.terminate(`ret ptr ${boxed}`);
-      } else if (arm.kind === "nullT") {
-        host.declare(`declare ptr @scr_dyn_new_null()`);
-        const boxed = B.tmp();
-        B.line(`${boxed} = call ptr @scr_dyn_new_null()`);
-        B.terminate(`ret ptr ${boxed}`);
-      } else if (arm.kind === "f64") {
-        host.declare(`declare double @scr_union_get_f64(ptr)`);
-        host.declare(`declare ptr @scr_dyn_new_num(double)`);
-        const value = B.tmp();
-        const boxed = B.tmp();
-        B.line(`${value} = call double @scr_union_get_f64(ptr %u)`);
-        B.line(`${boxed} = call ptr @scr_dyn_new_num(double ${value})`);
-        B.terminate(`ret ptr ${boxed}`);
-      } else if (arm.kind === "bool") {
-        host.declare(`declare zeroext i1 @scr_union_get_bool(ptr)`);
-        host.declare(`declare ptr @scr_dyn_new_bool(i1 zeroext)`);
-        const value = B.tmp();
-        const boxed = B.tmp();
-        B.line(`${value} = call zeroext i1 @scr_union_get_bool(ptr %u)`);
-        B.line(`${boxed} = call ptr @scr_dyn_new_bool(i1 ${value})`);
-        B.terminate(`ret ptr ${boxed}`);
-      } else {
-        const payloadPtr = B.tmp();
-        const payload = B.tmp();
-        const boxed = B.tmp();
-        B.line(`${payloadPtr} = getelementptr inbounds %ScrUnion, ptr %u, i64 0, i32 5`);
-        B.line(`${payload} = load ptr, ptr ${payloadPtr}`);
-        B.line(`${boxed} = call ptr @${host.dyn.toDynHelper(arm)}(ptr ${payload})`);
-        B.terminate(`ret ptr ${boxed}`);
-      }
-    });
-    B.startBlock(bad);
-    host.declare(`declare void @scr_trap(ptr)`);
-    B.line(`call void @scr_trap(ptr ${host.cstr("scriptc: internal error: invalid union tag\n")})`);
-    B.terminate(`unreachable`);
-    host.resolveThunkDefs.push(
-      `define internal ptr @${sym}(ptr %u) ${FN_ATTRS} { ; typed-ref union ${key}`,
-      B.render(),
-      `}`,
-      ``,
-    );
-    return sym;
-  }
-
 export function streamTypedRefBoxValue(host: LlvmEmitterContext,
     B: BlockBuilder,
     t: IrType,
     value: string,
-    ctx: LlStreamTypedRefContext,
   ): string {
     const boxed = B.tmp();
     if (
@@ -515,7 +410,7 @@ export function streamTypedRefBoxValue(host: LlvmEmitterContext,
         (arm) => streamTypedRefEligible(arm) || isDynTypedRefType(arm),
       ) ?? false)
     ) {
-      B.line(`${boxed} = call ptr @${nestedTypedRefUnionAdapter(host, t, ctx)}(ptr ${value})`);
+      B.line(`${boxed} = call ptr @${host.liveDynUnionRefAdapter(t)}(ptr ${value})`);
       return boxed;
     }
     if (!streamTypedRefEligible(t) && !isDynTypedRefType(t)) {
@@ -529,7 +424,7 @@ export function streamTypedRefBoxValue(host: LlvmEmitterContext,
       );
       return boxed;
     }
-    const nested = host.streamTypedRefMaterializeAdapter(t, ctx);
+    const nested = host.liveDynRefAdapter(t);
     const rc = vAdapters(host.shapeHost, t);
     const key = typeKey(t);
 
@@ -541,16 +436,15 @@ export function streamTypedRefBoxValue(host: LlvmEmitterContext,
 
 export function streamTypedRefMaterializeAdapter(host: LlvmEmitterContext,
     t: IrType,
-    ctx: LlStreamTypedRefContext,
-    preferredSnapshot?: string,
   ): LlStreamTypedRefAdapter {
     const key = typeKey(t);
-    const existing = ctx.adapters.get(key);
+    const existing = host.liveDynRefAdapters.get(key);
     if (existing) return existing;
-    const snapshot = preferredSnapshot ??
-      `${ctx.prefix}_nested_${ctx.adapters.size}`;
+    // The converter depends only on the static type. Intern the complete
+    // graph across roots and union arms so recursive types emit once.
+    const snapshot = `sc_ldr_${host.liveDynRefAdapters.size}_materialize`;
     const adapter: LlStreamTypedRefAdapter = { snapshot, commit: "null" };
-    ctx.adapters.set(key, adapter);
+    host.liveDynRefAdapters.set(key, adapter);
     if (isDynTypedRefType(t)) {
       const fields = host.classMeta.get(t.className)?.def.fields;
       if (fields && !classDynViewSupported(fields, (id) => host.recordsById.get(id), (id) => host.unionsById.get(id))) {
@@ -596,7 +490,7 @@ export function streamTypedRefMaterializeAdapter(host: LlvmEmitterContext,
           B.line(`${boolValue} = trunc i8 ${fieldValue} to i1`);
           fieldValue = boolValue;
         }
-        const boxed = host.streamTypedRefBoxValue(B, field.type, fieldValue, ctx);
+        const boxed = host.streamTypedRefBoxValue(B, field.type, fieldValue);
         B.line(`call void @scr_dyn_obj_set(ptr ${out}, ptr ${host.cstr(field.name)}, ${host.sizeType} ${Buffer.byteLength(field.name, "utf8")}, ptr ${boxed})`);
       }
       if (meta.def.fields.some((field) => field.name === DYN_CLASS_PROPERTIES)) {
@@ -650,7 +544,6 @@ export function streamTypedRefMaterializeAdapter(host: LlvmEmitterContext,
             B,
             field.type,
             fieldValue,
-            ctx,
           );
           B.line(`call void @scr_dyn_arr_push(ptr ${out}, ptr ${boxed})`);
         }
@@ -682,7 +575,6 @@ export function streamTypedRefMaterializeAdapter(host: LlvmEmitterContext,
             B,
             field.type,
             fieldValue,
-            ctx,
           );
           B.line(`call void @scr_dyn_obj_set(ptr ${out}, ptr ${host.cstr(field.name)}, ${host.sizeType} ${Buffer.byteLength(field.name, "utf8")}, ptr ${boxed})`);
         }
@@ -730,7 +622,7 @@ export function streamTypedRefMaterializeAdapter(host: LlvmEmitterContext,
           value = B.tmp();
           B.line(`${value} = call ptr @scr_arr_get_ref(ptr %p, double ${index}) ; +1`);
         }
-        const boxed = host.streamTypedRefBoxValue(B, elem, value, ctx);
+        const boxed = host.streamTypedRefBoxValue(B, elem, value);
         B.line(`call void @scr_dyn_arr_push(ptr ${out}, ptr ${boxed})`);
         if (isRefCounted(elem)) {
           B.line(`call void ${releaseSym(host.shapeHost, elem)}(ptr ${value})`);
@@ -779,7 +671,7 @@ export function streamFromArrayAdapter(host: LlvmEmitterContext,
       elem.kind !== "dyn" &&
       elem.kind !== "string" &&
       elem.kind !== "union";
-    const snapshot = `${sym}_materialize`;
+    let snapshot = `${sym}_materialize`;
     let value: string;
     if (elem.kind === "f64") {
       host.declare(`declare double @scr_arr_get_f64(ptr, double)`);
@@ -872,11 +764,9 @@ export function streamFromArrayAdapter(host: LlvmEmitterContext,
       const keyPtr = host.cstr(key);
       let commit: string;
       if (streamTypedRefEligible(elem)) {
-        commit = host.streamTypedRefMaterializeAdapter(
-          elem,
-          { prefix: snapshot, adapters: new Map() },
-          snapshot,
-        ).commit;
+        const adapter = host.liveDynRefAdapter(elem);
+        snapshot = adapter.snapshot;
+        commit = adapter.commit;
       } else {
         commit = host.streamTypedRefCommitAdapter(elem, snapshot);
         host.resolveThunkDefs.push(

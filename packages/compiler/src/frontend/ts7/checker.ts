@@ -288,7 +288,17 @@ export class CheckerFacade {
   /** 5.9.3's type.getProperty(name). */
   getPropertyOfType(type: Type, name: string): Ts7Symbol | undefined {
     this.ensureActive();
-    return this.raw.getPropertyOfType(type, name);
+    let properties = this.cache.propertyOfType.get(type);
+    if (properties === undefined) {
+      properties = new Map<string, Ts7Symbol | undefined>();
+      this.cache.propertyOfType.set(type, properties);
+    }
+    // Absence is an answer too. Both keys belong to this immutable project;
+    // another snapshot or project must ask its own checker.
+    if (properties.has(name)) return properties.get(name);
+    const symbol = this.raw.getPropertyOfType(type, name);
+    properties.set(name, symbol);
+    return symbol;
   }
 
   /** The 5.9.3 checker never answered undefined from getTypeAtLocation-

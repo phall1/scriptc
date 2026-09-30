@@ -89,7 +89,7 @@ import {
   traceArg,
   vAdapters,
 } from "./shapes.js";
-import type { ExprOf, LibCallExpr, LlStreamTypedRefAdapter, LlStreamTypedRefContext, LlValue } from "./expr-context.js";
+import type { ExprOf, LibCallExpr, LlStreamTypedRefAdapter, LlValue } from "./expr-context.js";
 
 export { LlvmUnsupportedError } from "./unsupported.js";
 
@@ -4698,19 +4698,10 @@ export class LlEmitter {
   }
 
   liveDynRefAdapter(t: IrType): LlStreamTypedRefAdapter {
-    const key = typeKey(t);
-    const existing = this.liveDynRefAdapters.get(key);
-    if (existing) return existing;
     if (!streamTypedRefEligible(t) && !isDynTypedRefType(t)) {
-      throw new InternalCompilerError(`llvm emitter bug: live dyn ref of ${key}`);
+      throw new InternalCompilerError(`llvm emitter bug: live dyn ref of ${typeKey(t)}`);
     }
-    const prefix = `sc_ldr_${this.liveDynRefAdapters.size}`;
-    return streamTypedRefMaterializeAdapter(
-      this,
-      t,
-      { prefix, adapters: this.liveDynRefAdapters },
-      `${prefix}_materialize`,
-    );
+    return streamTypedRefMaterializeAdapter(this, t);
   }
 
   liveDynUnionRefAdapter(
@@ -4723,17 +4714,8 @@ export class LlEmitter {
     B: BlockBuilder,
     t: IrType,
     value: string,
-    ctx: LlStreamTypedRefContext,
   ): string {
-    return streamTypedRefBoxValue(this, B, t, value, ctx);
-  }
-
-  streamTypedRefMaterializeAdapter(
-    t: IrType,
-    ctx: LlStreamTypedRefContext,
-    preferredSnapshot?: string,
-  ): LlStreamTypedRefAdapter {
-    return streamTypedRefMaterializeAdapter(this, t, ctx, preferredSnapshot);
+    return streamTypedRefBoxValue(this, B, t, value);
   }
 
   streamFromArrayAdapter(

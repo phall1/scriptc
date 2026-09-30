@@ -23,9 +23,3 @@ export interface LlStreamTypedRefAdapter {
   snapshot: string;
   commit: string;
 }
-
-export interface LlStreamTypedRefContext {
-  prefix: string;
-  adapters: Map<string, LlStreamTypedRefAdapter>;
-  unions?: Map<string, string>;
-}
