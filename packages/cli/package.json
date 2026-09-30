@@ -1,7 +1,7 @@
 {
   "name": "scriptc",
   "version": "0.1.7",
-  "description": "Compile ordinary TypeScript and JavaScript to small, fast native executables — no Node, no V8, no JavaScript engine in the binary",
+  "description": "Compile ordinary TypeScript and JavaScript to small, fast native executables \u2014 no Node, no V8, no JavaScript engine in the binary",
   "license": "Apache-2.0",
   "homepage": "https://scriptc.dev",
   "repository": {
@@ -11,19 +11,41 @@
   },
   "type": "module",
   "bin": {
-    "scriptc": "dist/bootstrap.js"
+    "scriptc": "bin/scriptc.exe"
   },
   "files": [
-    "dist",
+    "bin",
     "scripts"
   ],
   "engines": {
     "node": ">=24"
   },
   "scripts": {
-    "build": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json"
+    "build": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json",
+    "prepack": "node scripts/prepare-native.mjs",
+    "postinstall": "node scripts/install-native.mjs"
   },
-  "dependencies": {
+  "devDependencies": {
     "@scriptc/compiler": "workspace:*"
+  },
+  "optionalDependencies": {
+    "@scriptc/cli-darwin-arm64": "workspace:*",
+    "@scriptc/cli-darwin-x64": "workspace:*",
+    "@scriptc/cli-linux-arm64-gnu": "workspace:*",
+    "@scriptc/cli-linux-arm64-musl": "workspace:*",
+    "@scriptc/cli-linux-x64-gnu": "workspace:*",
+    "@scriptc/cli-linux-x64-musl": "workspace:*",
+    "@scriptc/cli-win32-x64-msvc": "workspace:*",
+    "@scriptc/runtime-darwin-arm64": "workspace:*",
+    "@scriptc/runtime-darwin-x64": "workspace:*",
+    "@scriptc/runtime-linux-x64-gnu": "workspace:*",
+    "@scriptc/runtime-linux-arm64-gnu": "workspace:*",
+    "@scriptc/runtime-linux-x64-musl": "workspace:*",
+    "@scriptc/runtime-linux-arm64-musl": "workspace:*",
+    "@scriptc/runtime-win32-x64-msvc": "workspace:*",
+    "@scriptc/runtime-wasm32-wasi": "workspace:*",
+    "@scriptc/runtime-ios-arm64": "workspace:*",
+    "@scriptc/runtime-ios-simulator-arm64": "workspace:*",
+    "@scriptc/runtime-android-arm64": "workspace:*"
   }
 }

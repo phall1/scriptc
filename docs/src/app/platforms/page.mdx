@@ -2,7 +2,7 @@
 
 ## Owned LLVM targets
 
-Source artifacts selected with <code>--emit=ir|llvm</code> need only Node. On supported hosts, <code>--emit=asm|obj</code> uses the version-matched platform helper installed with scriptc and does not invoke a compiler, archiver, linker, or SDK. Supported assembly/object targets are macOS arm64/x64 (macOS 14.0 artifacts; helper needs macOS 15+), Linux x64/arm64 glibc, Windows x64 MSVC, Linux x64/arm64 musl, and WASI Preview 1. Ordinary LLVM executables additionally need the platform linker and SDK/sysroot; the helper emits the program object and the packaged runtime supplies objects/archives, so that driver compiles neither program nor runtime C. Runtime development with <code>--sanitize</code> requires an external LLVM toolchain and a C compiler for instrumentation. Object output retains undefined runtime references and is not a library archive.
+The compiler runs natively and bundles its TypeScript checker and LLVM helper. Outputs selected with <code>--emit=ir|llvm|asm|obj</code> need no Node installation or external compiler, archiver, linker, or SDK. Supported assembly/object targets are macOS arm64/x64 (macOS 14.0 artifacts; helper needs macOS 15+), Linux x64/arm64 glibc, Windows x64 MSVC, Linux x64/arm64 musl, and WASI Preview 1. Executables additionally need the platform linker and SDK/sysroot; the helper emits the program object and the packaged runtime supplies objects/archives. Runtime development with <code>--sanitize</code> requires an external LLVM toolchain and a C compiler for instrumentation. Object output retains undefined runtime references and is not a library archive.
 
 ## Cross-compilation via zig
 
@@ -57,7 +57,7 @@ The full library-mode feature set applies: profile-declared exports and ABI entr
 
 ### WebAssembly (WASI Preview 1)
 
-Set <code>SCRIPTC_TARGET=wasm32-wasi</code> to produce a standalone <code>.wasm</code> module. Without <code>-o</code>, <code>scriptc build hello.ts</code> writes <code>.scriptc/hello.wasm</code>. <code>scriptc run</code> hosts the module with Node's WASI implementation, inherits stdio and environment, preopens the current working directory as <code>/</code>, and maps the host platform's temporary directory to the guest's <code>/tmp</code>. A built module can run in another WASI Preview 1 host instead.
+Set <code>SCRIPTC_TARGET=wasm32-wasi</code> to produce a standalone <code>.wasm</code> module. Without <code>-o</code>, <code>scriptc build hello.ts</code> writes <code>.scriptc/hello.wasm</code>. Compilation does not require Node. <code>scriptc run</code> requires Node.js 24 or newer on <code>PATH</code> to host the module with Node's WASI implementation, inherits stdio and environment, preopens the current working directory as <code>/</code>, and maps the host platform's temporary directory to the guest's <code>/tmp</code>. A built module can run in another WASI Preview 1 host instead.
 
 WASI is a production LLVM target with the same language tiers as the native targets. Its 32-bit LLVM ABI supports collections, closures, exceptions, classes, checked dynamic values, async/await, promises, synchronous and asynchronous generators, timers, stdin/readline events, process-exit listeners, filesystem callbacks and promises, and the <code>--dynamic</code> QuickJS island.
 

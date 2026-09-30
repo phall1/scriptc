@@ -439,6 +439,24 @@ function requestedTarget(
   }
 }
 
+/** Native distributions already know their host ABI, including Linux libc. */
+export function selectNativeTarget(
+  raw: string, host: NativeTargetSpec, hostPlatform: string = process.platform,
+): NativeTargetSpec | null {
+  const target = requestedTarget(raw, host, hostPlatform as NodeJS.Platform);
+  if (target === null) return null;
+  if (target.platform === "linux" && target.name !== host.name && target.name !== "android-arm64") {
+    return {
+      ...target, defaultLinker: "zig", defaultLinkerArgs: ["cc"],
+      linkerTargetTriple: `${target.architecture === "x64" ? "x86_64" : "aarch64"}-linux-${target.name.endsWith("musl") ? "musl" : "gnu.2.36"}`,
+    };
+  }
+  if (target.platform === "darwin" && hostPlatform !== "darwin") {
+    return { ...target, defaultLinker: "zig", defaultLinkerArgs: ["cc"], linkerTargetTriple: `${target.architecture === "x64" ? "x86_64" : "aarch64"}-macos.14.0` };
+  }
+  return target;
+}
+
 /** Select only a fully described scriptc target. LLVM accepting an arbitrary
  * triple is never evidence of its object ABI, runtime pack, link, or run. */
 export function nativeCodegenTarget(
@@ -449,19 +467,8 @@ export function nativeCodegenTarget(
   linuxLibc?: LinuxLibc,
 ): NativeTargetSpec | null {
   const host = nativeHostTarget(hostPlatform, hostArch, hostRelease, linuxLibc);
-  const target = requestedTarget(env["SCRIPTC_TARGET"] ?? "", host, hostPlatform);
+  const target = host === null ? null : selectNativeTarget(env["SCRIPTC_TARGET"] ?? "", host, hostPlatform);
   if (host === null || target === null || nativeHelperForTarget(target, hostPlatform, hostArch, linuxLibc) === null) return null;
-  // Cross ELF links use Zig's target libc. A native clang driver cannot
-  // infer or provide another architecture's CRT and sysroot.
-  if (target.platform === "linux" && target.name !== host.name && target.name !== "android-arm64") {
-    return {
-      ...target, defaultLinker: "zig", defaultLinkerArgs: ["cc"],
-      linkerTargetTriple: `${target.architecture === "x64" ? "x86_64" : "aarch64"}-linux-${target.name.endsWith("musl") ? "musl" : "gnu.2.36"}`,
-    };
-  }
-  if (target.platform === "darwin" && hostPlatform !== "darwin") {
-    return { ...target, defaultLinker: "zig", defaultLinkerArgs: ["cc"], linkerTargetTriple: `${target.architecture === "x64" ? "x86_64" : "aarch64"}-macos.14.0` };
-  }
   return target;
 }
 

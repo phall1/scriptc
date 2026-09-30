@@ -59,6 +59,14 @@ export interface Frontend {
   dispose: () => void;
 }
 
+/** Hosts own transport lifetimes; shared compiler stages own the frontend. */
+export type FrontendFactory = (
+  entryPath: string,
+  npmStatic?: readonly string[] | "auto" | "lib",
+  externalTypes?: Readonly<Record<string, string>>,
+  libraryNpmStatic?: readonly string[],
+) => Frontend;
+
 /** --npm-static=auto (and library mode's mandatory twin): one throwaway
  * load finds every bare npm import the program's own modules make, then
  * the eligibility heuristics (npm-static.ts) pick the packages whose

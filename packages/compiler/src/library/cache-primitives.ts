@@ -77,7 +77,7 @@ export function frontendOutputExclusions(
       if (dirname(directory) === directory) break;
     }
   }
-  return { outputPaths: outputArtifacts, outputDirectories };
+  return { outputPaths: outputArtifacts, outputDirectories: [...outputDirectories] };
 }
 
 export async function readCachedFile(path: string, expected: string): Promise<Buffer | null> {

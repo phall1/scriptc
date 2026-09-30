@@ -15,7 +15,7 @@ scriptc is experimental and targets macOS, Linux, Windows, and WebAssembly via W
 
 ## Installation
 
-The compiler requires Node.js 24 or newer. `--emit=ir|llvm` needs only Node. `--emit=asm|obj` uses the matching optional platform helper installed with scriptc on supported macOS, Linux, and Windows hosts (and for WASI), but needs no compiler, archiver, linker, or SDK. Ordinary LLVM executable builds need a platform linker driver and SDK/sysroot, but use the bundled helper plus precompiled runtime pack rather than compiling generated or runtime C. Set `SCRIPTC_LINKER` to choose that driver. Runtime development with `--sanitize` additionally needs a C compiler. The executables it produces do not require Node.
+The installed compiler runs natively on supported macOS, Linux, and Windows hosts. Compilation, compile-time evaluation, and native execution do not require Node. `--emit=ir|llvm|asm|obj` uses the bundled TypeScript checker and LLVM helper without an external compiler, archiver, linker, or SDK. Executable builds additionally need a platform linker driver and SDK/sysroot; precompiled runtime packs supply the C runtime. Set `SCRIPTC_LINKER` to choose that driver. Runtime development with `--sanitize` additionally needs a C compiler. Node.js 24 or newer is needed for npm installation, development from a source checkout, the JavaScript compiler API, and `scriptc run` of WASI modules.
 
 ```console
 $ npm install -g scriptc

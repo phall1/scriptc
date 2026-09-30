@@ -9,7 +9,10 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
-const { values } = parseArgs({ options: { iterations: { type: "string", default: "5" } } });
+const { values } = parseArgs({ options: {
+  iterations: { type: "string", default: "5" },
+  compiler: { type: "string" },
+} });
 const iterations = Number(values.iterations);
 if (!Number.isInteger(iterations) || iterations < 1 || iterations > 100) {
   throw new Error("--iterations must be an integer between 1 and 100");
@@ -17,7 +20,7 @@ if (!Number.isInteger(iterations) || iterations < 1 || iterations > 100) {
 if (process.env.SCRIPTC_TARGET && process.env.SCRIPTC_TARGET !== "native") {
   throw new Error("bench:builds runs host executables; unset SCRIPTC_TARGET");
 }
-const cli = fileURLToPath(new URL("../packages/cli/dist/bootstrap.js", import.meta.url));
+const cli = values.compiler ?? fileURLToPath(new URL("../packages/cli/dist/bootstrap.js", import.meta.url));
 await access(cli).catch(() => { throw new Error("Build the workspace with pnpm build before running bench:builds"); });
 const root = await mkdtemp(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-bench-builds-"));
 const cache = join(root, "cache");
@@ -46,7 +49,8 @@ function run(command, args) {
 
 function build(phase) {
   const start = performance.now();
-  const result = run(process.execPath, [cli, "build", entry, "--optimization=dev", "-o", binary]);
+  const args = ["build", entry, "--optimization=dev", "-o", binary];
+  const result = values.compiler ? run(cli, args) : run(process.execPath, [cli, ...args]);
   const ms = Math.round((performance.now() - start) * 10) / 10;
   assert.equal(result.status, 0, result.stderr);
   // Correctness checks are outside the timed build and run after EVERY edit,
@@ -81,6 +85,7 @@ try {
     build("edit");
   }
   process.stdout.write(JSON.stringify({
+    compiler: values.compiler ?? "node",
     node: process.version,
     platform: process.platform,
     arch: process.arch,

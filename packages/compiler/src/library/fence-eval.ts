@@ -439,14 +439,14 @@ export function evaluateLibraryFences(mod: IrModule, profile: FenceProfileView):
 /* ── the generalized teaching rider ────────────────────────────────────── */
 
 function surfaceMatchesDiag(
-  surface: { code?: string; name: string; kind: SurfaceEntryKind },
+  surface: { code?: string | undefined; name: string; kind: SurfaceEntryKind },
   diag: ScrDiagnostic,
 ): boolean {
   if (surface.code === undefined || surface.code !== diag.code) return false;
   // A diagnostic-fence entry IS the code family. Method refusals use a
   // receiver description instead of the manifest's prototype spelling.
   if (surface.kind === "diagnostic-fence" || diag.message.includes(surface.name)) return true;
-  for (const [prefix, receiver] of [["number.prototype.", "numbers"], ["string.prototype.", "strings"]] as const) {
+  for (const [prefix, receiver] of [["number.prototype.", "numbers"], ["string.prototype.", "strings"]] as [string, string][]) {
     if (surface.name.startsWith(prefix)) {
       const method = surface.name.slice(prefix.length);
       return diag.message.includes(`'.${method}()' on ${receiver}`);
@@ -469,14 +469,14 @@ function teachingForRefusal(profile: FenceProfileView, diag: ScrDiagnostic): str
   for (const [key, text] of Object.entries(profile.teachings)) {
     if (!key.includes(".")) continue;
     const entry = fenceTaxonomy().byId.get(key);
-    if (entry !== undefined && surfaceMatchesDiag(entry, diag)) return text;
+    if (entry !== undefined && surfaceMatchesDiag({ code: entry.code, name: entry.name, kind: entry.kind }, diag)) return text;
   }
   // 3. A fence covering the refused surface: the teaching rides the
   // surface's own refusal (the non-static half of fence coverage).
   for (const fence of profile.fences) {
     if (fence.teaching === undefined) continue;
     for (const s of fence.surfaces) {
-      if (surfaceMatchesDiag(s, diag)) return fence.teaching;
+      if (surfaceMatchesDiag({ code: s.code, name: s.name, kind: s.kind }, diag)) return fence.teaching;
     }
   }
   return undefined;

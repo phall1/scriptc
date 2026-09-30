@@ -235,7 +235,7 @@ export function emitSerializationExpr(host: LlvmEmitterContext, e: ExprOf<"jsonS
         // clamp/truncate rules); the interned re-indenter rewrites the
         // compact text with Node's gap algorithm. Compact temp stays
         // frame-owned; the pretty string is a fresh +1.
-        const indent = (e as { indent?: string }).indent;
+        const indent = e.indent;
         if (indent === undefined || indent === "") return compact;
         const rewriter = host.walkers.jsonIndentHelper();
         const t2 = B.tmp();

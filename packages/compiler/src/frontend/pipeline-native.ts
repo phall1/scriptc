@@ -1,6 +1,6 @@
 import { runFrontend, type Frontend } from "./pipeline.js";
 import { loadProgram } from "./program.js";
-import { FrontendServices } from "./services.js";
+import { FrontendServices, type ComptimeEvaluator } from "./services.js";
 import { createNativeTs7Api } from "./ts7/native-api.js";
 
 /** Native callers supply the installed TS7 executable explicitly. The
@@ -11,13 +11,15 @@ export function runNativeFrontend(
   executable: string,
   npmStatic?: readonly string[] | "auto" | "lib",
   externalTypes?: Readonly<Record<string, string>>,
+  evaluateComptime?: ComptimeEvaluator,
+  libraryNpmStatic: readonly string[] = [],
 ): Frontend {
-  const services = new FrontendServices((options) => createNativeTs7Api({ ...options, executable }));
+  const services = new FrontendServices((options) => createNativeTs7Api({ ...options, executable }), process.cwd(), evaluateComptime);
   try {
     const frontend = runFrontend(entryPath, (path, options) => loadProgram(path, services, {
       npmStatic: options.npmStatic ?? [],
       externalTypes: Object.entries(options.externalTypes ?? {}),
-    }), npmStatic, externalTypes);
+    }), npmStatic, externalTypes, libraryNpmStatic);
     return {
       ...frontend,
       dispose: () => {

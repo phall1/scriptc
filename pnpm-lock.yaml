@@ -45,10 +45,79 @@ importers:
   internal/compatibility: {}
 
   packages/cli:
-    dependencies:
+    devDependencies:
       '@scriptc/compiler':
         specifier: workspace:*
         version: link:../compiler
+    optionalDependencies:
+      '@scriptc/cli-darwin-arm64':
+        specifier: workspace:*
+        version: link:../cli-darwin-arm64
+      '@scriptc/cli-darwin-x64':
+        specifier: workspace:*
+        version: link:../cli-darwin-x64
+      '@scriptc/cli-linux-arm64-gnu':
+        specifier: workspace:*
+        version: link:../cli-linux-arm64-gnu
+      '@scriptc/cli-linux-arm64-musl':
+        specifier: workspace:*
+        version: link:../cli-linux-arm64-musl
+      '@scriptc/cli-linux-x64-gnu':
+        specifier: workspace:*
+        version: link:../cli-linux-x64-gnu
+      '@scriptc/cli-linux-x64-musl':
+        specifier: workspace:*
+        version: link:../cli-linux-x64-musl
+      '@scriptc/cli-win32-x64-msvc':
+        specifier: workspace:*
+        version: link:../cli-win32-x64-msvc
+      '@scriptc/runtime-android-arm64':
+        specifier: workspace:*
+        version: link:../runtime-android-arm64
+      '@scriptc/runtime-darwin-arm64':
+        specifier: workspace:*
+        version: link:../runtime-darwin-arm64
+      '@scriptc/runtime-darwin-x64':
+        specifier: workspace:*
+        version: link:../runtime-darwin-x64
+      '@scriptc/runtime-ios-arm64':
+        specifier: workspace:*
+        version: link:../runtime-ios-arm64
+      '@scriptc/runtime-ios-simulator-arm64':
+        specifier: workspace:*
+        version: link:../runtime-ios-simulator-arm64
+      '@scriptc/runtime-linux-arm64-gnu':
+        specifier: workspace:*
+        version: link:../runtime-linux-arm64-gnu
+      '@scriptc/runtime-linux-arm64-musl':
+        specifier: workspace:*
+        version: link:../runtime-linux-arm64-musl
+      '@scriptc/runtime-linux-x64-gnu':
+        specifier: workspace:*
+        version: link:../runtime-linux-x64-gnu
+      '@scriptc/runtime-linux-x64-musl':
+        specifier: workspace:*
+        version: link:../runtime-linux-x64-musl
+      '@scriptc/runtime-wasm32-wasi':
+        specifier: workspace:*
+        version: link:../runtime-wasm32-wasi
+      '@scriptc/runtime-win32-x64-msvc':
+        specifier: workspace:*
+        version: link:../runtime-win32-x64-msvc
+
+  packages/cli-darwin-arm64: {}
+
+  packages/cli-darwin-x64: {}
+
+  packages/cli-linux-arm64-gnu: {}
+
+  packages/cli-linux-arm64-musl: {}
+
+  packages/cli-linux-x64-gnu: {}
+
+  packages/cli-linux-x64-musl: {}
+
+  packages/cli-win32-x64-msvc: {}
 
   packages/compiler:
     dependencies:

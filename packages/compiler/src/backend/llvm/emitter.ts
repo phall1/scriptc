@@ -576,7 +576,7 @@ export class LlEmitter {
           `}`,
           ``,
         );
-        defs.push(...dispatchBody);
+        for (const line of dispatchBody) defs.push(line);
 
         this.declare(`declare ptr @scr_ffi_call_new(ptr, ptr, ptr, ${this.sizeType})`);
         this.declare(`declare void @scr_ffi_post(ptr)`);
@@ -1027,7 +1027,7 @@ export class LlEmitter {
       // finish_top_level initially notes 13. Replace that hint before exit
       // listeners run when a higher-priority verdict was already selected.
       lines.push(`  call void @scr_exit_code_note(i32 ${exitStatus})`);
-      lines.push(...exitListenerLines("xp"));
+      for (const line of exitListenerLines("xp")) lines.push(line);
       if (tracksIslandExit) {
         lines.push(
           `  %tla_exit_version_after = call ${this.sizeType} @scr_island_exit_code_version()`,
@@ -1043,7 +1043,7 @@ export class LlEmitter {
           `  %tla_final_exit = phi i32 [ %tla_listener_exit, %tla_exit_updated ], [ ${exitStatus}, %tla_exit_unchanged ]`,
         );
       }
-      lines.push(...topPendingReleases);
+      for (const line of topPendingReleases) lines.push(line);
       lines.push(`  ret i32 ${tracksIslandExit ? "%tla_final_exit" : exitStatus}`);
       return lines;
     };
@@ -1147,8 +1147,8 @@ export class LlEmitter {
       `%ScrIslandModule = type { ptr, ptr, ${this.sizeType}, ${this.sizeType}, i32, ptr, ${this.sizeType}, ${this.sizeType} }`,
       `%ScrIslandEdge = type { ptr, ptr, ptr, i32 }`,
     ];
-    out.push(...shapes.typeDefs);
-    out.push(...classShapes.typeDefs);
+    for (const line of shapes.typeDefs) out.push(line);
+    for (const line of classShapes.typeDefs) out.push(line);
     // Thread-instanced library state (abi.instance_per_thread): the
     // program TU's mutable globals — module globals, run-once guards, the
     // lazily-compiled regex literal caches — and the runtime globals its
@@ -1293,7 +1293,7 @@ export class LlEmitter {
       }
       out.push(``);
     }
-    out.push(...ffiCallbacks.globals);
+    for (const line of ffiCallbacks.globals) out.push(line);
     if (ffiCallbacks.globals.length > 0) out.push(``);
     for (const g of globals) {
       const ty = this.llType(g.type);
@@ -1302,16 +1302,16 @@ export class LlEmitter {
       out.push(`@${mangleGlobal(g.id)} = internal ${tl}global ${ty} ${zero}${debug ? `, !dbg ${debug}` : ""} ; ${g.name}`);
     }
     if (globals.length > 0) out.push(``);
-    out.push(...helpers);
-    out.push(...ffiCallbacks.defs);
-    out.push(...shapes.defs);
-    out.push(...classShapes.defs);
-    out.push(...classObjDefs);
-    out.push(...this.walkers.defs);
-    out.push(...this.dyn.defs);
-    out.push(...wrappers);
-    out.push(...asyncDefs);
-    out.push(...this.resolveThunkDefs);
+    for (const line of helpers) out.push(line);
+    for (const line of ffiCallbacks.defs) out.push(line);
+    for (const line of shapes.defs) out.push(line);
+    for (const line of classShapes.defs) out.push(line);
+    for (const line of classObjDefs) out.push(line);
+    for (const line of this.walkers.defs) out.push(line);
+    for (const line of this.dyn.defs) out.push(line);
+    for (const line of wrappers) out.push(line);
+    for (const line of asyncDefs) out.push(line);
+    for (const line of this.resolveThunkDefs) out.push(line);
     out.push(fnDefs.join("\n\n"), ``);
 
     // main(): scr_init, the program-dependent error-vt interval stamps,
@@ -1367,7 +1367,7 @@ export class LlEmitter {
     if (this.mod.lib !== undefined) {
       // LIBRARY mode: no @main — the profile-declared external
       // symbols specified by the library IR instead.
-      out.push(...this.emitLibDefs(globals, globalReleaseLines, stamps));
+      for (const line of this.emitLibDefs(globals, globalReleaseLines, stamps)) out.push(line);
       out.push(`attributes #0 = { sanitize_address }`);
       if (this.wasi) out.push(`attributes #1 = { sanitize_address presplitcoroutine }`);
       if (hasNoInlineRecordClone) out.push(`attributes #2 = { noinline sanitize_address }`);
@@ -1661,7 +1661,7 @@ export class LlEmitter {
       // from the poisoned guard and every runtime touch (ratified), so a
       // host can read them before init and after a trap. The u64 rides
       // i64 two's-complement (LLVM integer constants are signed).
-      out.push(...emitLibraryIdentityLines(lib.identity, FN_ATTRS));
+      for (const line of emitLibraryIdentityLines(lib.identity, FN_ATTRS)) out.push(line);
     }
     if (lib.resultResetSymbol !== null) {
       out.push(
@@ -2006,7 +2006,7 @@ export class LlEmitter {
       if (fn.async !== true || fn.generator !== undefined) continue;
       const { definitions, ret, tr, spawnParams, argPackLines } =
         this.emitArgPackAndTrampolinePrologue(fn);
-      out.push(...definitions);
+      for (const line of definitions) out.push(line);
       this.declare(`declare ptr @scr_fiber_promise(ptr)`);
       this.declare(`declare ptr @scr_async_spawn(ptr, ptr)`);
       this.needOom();
@@ -2058,7 +2058,7 @@ export class LlEmitter {
         }
         tr.push(`  ret void`, `}`, ``);
       }
-      out.push(...tr);
+      for (const line of tr) out.push(line);
 
       // Spawn wrapper: pack the args (+1 moves in), spawn the fiber.
       const cache = fn.asyncCacheGlobal !== undefined ? mangleGlobal(fn.asyncCacheGlobal) : null;
@@ -2128,9 +2128,9 @@ export class LlEmitter {
         `}`,
         ``,
       );
-      out.push(...sp);
+      for (const line of sp) out.push(line);
     }
-    out.push(...this.emitGenScaffolding());
+    for (const line of this.emitGenScaffolding()) out.push(line);
     return out;
   }
 
@@ -2154,7 +2154,7 @@ export class LlEmitter {
         spawnParams,
         argPackLines,
       } = this.emitArgPackAndTrampolinePrologue(fn);
-      out.push(...definitions);
+      for (const line of definitions) out.push(line);
       this.declare(`declare zeroext i1 @scr_exc_genret_pending()`);
       this.declare(`declare void @scr_exc_clear()`);
       this.declare(`declare ptr @scr_gen_of_fiber(ptr)`);
@@ -2211,7 +2211,7 @@ export class LlEmitter {
       }
       tr.push(`  br label %done`, `done:`, `  ret void`, `}`, ``);
       }
-      out.push(...tr);
+      for (const line of tr) out.push(line);
 
       let settleAsync: string | null = null;
       if (fn.async) {
@@ -2264,7 +2264,7 @@ export class LlEmitter {
         }
       });
       dr.push(`  call void @free(ptr %ap)`, `  ret void`, `}`, ``);
-      out.push(...dr);
+      for (const line of dr) out.push(line);
 
       // Spawn wrapper: pack the args (+1 moves in), allocate the
       // SUSPENDED fiber — nothing runs until the first .next().
@@ -2284,7 +2284,7 @@ export class LlEmitter {
         `}`,
         ``,
       );
-      out.push(...sp);
+      for (const line of sp) out.push(line);
     }
     return out;
   }

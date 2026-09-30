@@ -1,3 +1,4 @@
+import { objectEnumerationReceiver } from "./object-enumeration-receiver.js";
 import { InternalCompilerError } from "../../errors.js";
 /* Call lowering: the lowerCall dispatch chain, parameter-shape analysis and
  * argument completion (optional/default/rest, explicit-undefined ≡ omission),
@@ -9576,7 +9577,7 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
     const loc = locOf(call);
     const resultT = lowerer.irTypeOf(call);
     if (resultT.kind !== "array") lowerer.badType(call, lowerer.typeOf(call)); // defensive
-    const receiver = lowerer.lowerExpr(argNode);
+    const receiver = objectEnumerationReceiver(lowerer, lowerer.lowerExpr(argNode), argIr, loc);
     if (member === "keys") {
       // The keys walk is shared with for-in (which iterates exactly the
       // keys Object.keys answers — one construction, one intern key).

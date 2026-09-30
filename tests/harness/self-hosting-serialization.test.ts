@@ -114,6 +114,7 @@ for (const backend of ["llvm"] as const) {
         "tests/corpus/3089-array-find-narrowing.ts",
         "tests/corpus/3091-json-recursive-discriminants.ts",
         "tests/corpus/3094-json-replacer-traversal.ts",
+        "tests/corpus/1010-json-stringify-space.ts",
       ]) {
         const path = join(dir, "emitted.json");
         const emitted = await compile(join(root, source), { outDir: dir, outPath: path, outputKind: "ir", dynamic: false });

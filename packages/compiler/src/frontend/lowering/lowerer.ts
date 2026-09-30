@@ -1,4 +1,5 @@
 import { everyExprChild, everyStmtChild } from "../../ir/traverse.js";
+import { sanitizeUnregisteredClassTypes } from "./sanitize-class-types.js";
 import { buildUnionNarrow } from "./union-narrow.js";
 import { planUnionRetag, buildUnionRetag, planRecordUnionWrap, buildRecordUnionWrap } from "./union-retag.js";
 import type { WidthLift } from "./width-lift.js";
@@ -3817,9 +3818,6 @@ export class Lowerer {
     // slots), uniformly across params/locals/globals/fields/body types so
     // every producer and consumer agrees. Programs with no unregistered
     // reference are untouched — byte-stability holds.
-    if (this.diags.length === 0) {
-      this.sanitizeUnregisteredClassTypes([functions, this.globalsList, artifacts.classes, artifacts.records, artifacts.unions]);
-    }
     const module: IrModule | null =
       this.diags.length > 0
         ? null
@@ -3835,6 +3833,7 @@ export class Lowerer {
             entry: ENTRY_NAME,
             ...(this.ffiImports.length > 0 ? { ffiImports: [...this.ffiImports] } : {}),
           };
+    if (module) sanitizeUnregisteredClassTypes(module, (name) => this.classes.has(name));
     return {
       module,
       diagnostics: this.diags,
@@ -3845,40 +3844,6 @@ export class Lowerer {
       ...(this.npmBuiltins ? { npmBuiltins: this.npmBuiltins } : {}),
       ...(this.npmLazyTraps ? { npmLazyTraps: this.npmLazyTraps } : {}),
     };
-  }
-
-  /** The unregistered-class type sweep (run()'s last step before the
-   * module assembles): every `{kind:"object"}` TYPE naming a class with
-   * no registered ClassInfo is rewritten IN PLACE to the f64 dummy.
-   * classval types are exempt (they emit the class-independent
-   * `ScrClassObj *` — inert-but-valid storage, the validator's own
-   * stance), and only type objects rewrite — node-level classNames
-   * (`new`, upcasts) cannot reach here (their lowerings fence without a
-   * registered class), so the validator still backstops those. */
-  sanitizeUnregisteredClassTypes(roots: unknown[]): void {
-    const isUnregisteredObjectType = (v: unknown): boolean =>
-      typeof v === "object" && v !== null &&
-      (v as { kind?: unknown }).kind === "object" &&
-      typeof (v as { className?: unknown }).className === "string" &&
-      !this.classes.has((v as { className: string }).className);
-    const sweep = (node: unknown): void => {
-      if (node === null || typeof node !== "object") return;
-      if (Array.isArray(node)) {
-        node.forEach((item, i) => {
-          if (isUnregisteredObjectType(item)) node[i] = F64;
-          else sweep(item);
-        });
-        return;
-      }
-      const rec = node as Record<string, unknown>;
-      for (const key of Object.keys(rec)) {
-        if (key === "loc") continue;
-        const v = rec[key];
-        if (isUnregisteredObjectType(v)) rec[key] = F64;
-        else sweep(v);
-      }
-    };
-    for (const root of roots) sweep(root);
   }
 
   /** True when `t` (recursively) names a class instance type with no
@@ -7812,6 +7777,17 @@ export class Lowerer {
    * lowering goes through here (via lowerExprExpecting) or calls this
    * directly when the expression was already lowered. */
   coerceInto(node: ts.Node, expr: IrExpr, expected: IrType): IrExpr {
+    // A union destination can accept the binding's tagged storage directly.
+    // The checker's single-arm flow type can be stale after a callback writes
+    // the binding. Extracting that arm and wrapping it again would discard the
+    // actual tag and could read a different record layout. Retag the stored
+    // value instead; ordinary coercion checks any excluded destination arms.
+    // Explicit assertions keep their own conversion and validation.
+    if (expected.kind === "union" && expr.kind === "unionNarrow") {
+      let source = node;
+      while (ts.isParenthesizedExpression(source) || ts.isSatisfiesExpression(source)) source = source.expression;
+      if (ts.isIdentifier(source) || ts.isShorthandPropertyAssignment(source)) expr = expr.value;
+    }
     // A fresh literal can retain a wider runtime-optional field after its
     // initial contextual layout was chosen. Its known discriminator still
     // selects the destination arm; validate that payload before wrapping.

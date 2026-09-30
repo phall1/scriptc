@@ -2971,6 +2971,8 @@ void scr_fs_rename(ScrStr *oldpath, ScrStr *newpath) {
   if (error != 0) scr_fs_rename_error(error, oldpath, newpath);
 }
 
+static int scr_rm_unlink(const char *path, size_t len);
+
 void scr_fs_rm(ScrStr *path) {
   /* Node's rmSync: lstat first (a missing path reports the lstat syscall),
    * refuse directories (Node requires `recursive`, which the scriptc
@@ -2985,7 +2987,7 @@ void scr_fs_rm(ScrStr *path) {
     scr_fs_throw(EISDIR, "rm", path);
     return;
   }
-  if (unlink(path->data) != 0) scr_fs_throw(errno, "unlink", path);
+  if (scr_rm_unlink(path->data, path->len) != 0) scr_fs_throw(errno, "unlink", path);
 }
 
 void scr_fs_rmdir(ScrStr *path) {
@@ -3094,6 +3096,35 @@ static void scr_rm_fail_set(ScrRmFail *f, int err, const char *op, const char *p
   f->path = scr_str_new(path, len);
 }
 
+static int scr_rm_unlink(const char *path, size_t len) {
+  if (unlink(path) == 0) return 0;
+#ifdef _WIN32
+  /* Node's Windows removal clears a file's read-only attribute before
+   * retrying. Private staged runtime objects intentionally use mode 0400. */
+  const int original = errno;
+  if (original != EACCES && original != EPERM) return -1;
+  ScrStr *text = scr_str_new(path, len);
+  WCHAR *wide = scr_fs_win_wide(text);
+  scr_str_release(text);
+  if (!wide) { errno = original; return -1; }
+  const DWORD attributes = GetFileAttributesW(wide);
+  if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_READONLY) &&
+      SetFileAttributesW(wide, attributes & ~FILE_ATTRIBUTE_READONLY)) {
+    if (DeleteFileW(wide)) { free(wide); return 0; }
+    const DWORD error = GetLastError();
+    SetFileAttributesW(wide, attributes);
+    free(wide);
+    errno = scr_fs_win_errno(error);
+    return -1;
+  }
+  free(wide);
+  errno = original;
+#else
+  (void)len;
+#endif
+  return -1;
+}
+
 /* Post-order tree removal for rmSync's recursive form. Stops at (and
  * records) the first failure, with the failing path and syscall name. */
 static void scr_rm_tree_e(const char *path, size_t len, ScrRmFail *f) {
@@ -3103,7 +3134,7 @@ static void scr_rm_tree_e(const char *path, size_t len, ScrRmFail *f) {
     return;
   }
   if (!S_ISDIR(st.st_mode)) {
-    if (unlink(path) != 0) scr_rm_fail_set(f, errno, "unlink", path, len);
+    if (scr_rm_unlink(path, len) != 0) scr_rm_fail_set(f, errno, "unlink", path, len);
     return;
   }
   DIR *d = opendir(path);
@@ -3153,7 +3184,7 @@ static void scr_fs_rm_attempt(ScrStr *path, bool recursive, bool force, ScrRmFai
     scr_rm_tree_e(path->data, path->len, f);
     return;
   }
-  if (unlink(path->data) != 0) scr_rm_fail_set(f, errno, "unlink", path->data, path->len);
+  if (scr_rm_unlink(path->data, path->len) != 0) scr_rm_fail_set(f, errno, "unlink", path->data, path->len);
 }
 
 void scr_fs_rm_opts(ScrStr *path, bool recursive, bool force) {

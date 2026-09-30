@@ -63,8 +63,8 @@ for (const backend of ["llvm"] as const) {
       const toolchain = join(directory, "toolchain.json");
       const config: NativeToolchainManifest = {
         schema: "scriptc.native-toolchain.v1", compiler_version: manifest.version, target: target.name,
-        ts7: "ts7", llvm_package: "llvm", runtime_pack: "pack", runtime_headers: "headers",
-        c_compiler: "cc", c_compiler_args: [], linker: "ld", linker_args: [], dsymutil: "dsymutil",
+        ts7: "ts7", llvm_package: "llvm", runtime_pack: "pack",
+        linker: "ld", linker_args: [], dsymutil: "dsymutil",
       };
       writeFileSync(toolchain, JSON.stringify(config));
       const input = join(directory, "request.json");

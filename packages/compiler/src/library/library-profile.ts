@@ -442,7 +442,7 @@ class ProfileError extends Error {
 }
 
 function req<T>(v: unknown, path: string, kind: "string" | "number" | "boolean"): T {
-  if (typeof v !== kind) {
+  if (!(kind === "string" ? typeof v === "string" : kind === "number" ? typeof v === "number" : typeof v === "boolean")) {
     throw new ProfileError(`'${path}' must be a ${kind}${v === undefined ? " (missing)" : ""}`);
   }
   return v as T;
@@ -513,7 +513,7 @@ export function loadLibraryProfile(
     if (!Array.isArray(npmStaticRaw) || npmStaticRaw.some((name) => typeof name !== "string" || !/^(?:@[a-z0-9_.-]+\/)?[a-z0-9_][a-z0-9_.-]*$/.test(name))) {
       throw new ProfileError("'npm_static' must be an array of npm package names (not subpath specifiers)");
     }
-    const npmStatic = [...new Set(npmStaticRaw)] as string[];
+    const npmStatic = [...new Set(npmStaticRaw as string[])];
     if (name === "") throw new ProfileError("'name' must be a non-empty identity string");
     const entryRel = req<string>(p["entry"], "entry", "string");
     if (entryRel === "") throw new ProfileError("'entry' must name the profile's one entry module");
@@ -868,11 +868,12 @@ export function loadLibraryProfile(
             if (prefix === "") throw new ProfileError(`'${path}.prefix' must be a non-empty manifest id prefix`);
             decl.prefix = prefix;
           }
-          for (const rider of ["teaching", "remediation"] as const) {
+          for (const rider of ["teaching", "remediation"] as ("teaching" | "remediation")[]) {
             if (ff[rider] === undefined) continue;
             const text = req<string>(ff[rider], `${path}.${rider}`, "string");
             checkRiderText(text, `${path}.${rider}`);
-            decl[rider] = text;
+            if (rider === "teaching") decl.teaching = text;
+            else decl.remediation = text;
           }
           return decl;
         });

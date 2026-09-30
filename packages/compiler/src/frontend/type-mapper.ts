@@ -1041,17 +1041,25 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
   // user aliases with the same names on the normal structural path.
   {
     const parseArgsSym = widened.getAliasSymbol() ?? widened.getSymbol();
-    if (
-      parseArgsSym &&
-      PARSE_ARGS_DYN_TYPES.has(parseArgsSym.name) &&
-      checker.declarationsOf(parseArgsSym).some(
-        (d) =>
-          ctx.isStdlibFile(d.getSourceFile()) &&
-          isDeclaredInAmbientModule(d as ts.Declaration, "util"),
-      )
-    ) {
-      return DYN;
-    }
+    const belongs = (declaration: ts.Node): boolean => {
+      if (!ctx.isStdlibFile(declaration.getSourceFile())) return false;
+      let family = false;
+      for (let node: ts.Node | undefined = declaration; node; node = node.parent) {
+        if ((ts.isTypeAliasDeclaration(node) || ts.isInterfaceDeclaration(node)) &&
+          PARSE_ARGS_DYN_TYPES.has(node.name.text)) family = true;
+        if (ts.isModuleDeclaration(node) && ts.isStringLiteral(node.name)) {
+          return family && (node.name.text === "util" || node.name.text === "node:util");
+        }
+      }
+      return false;
+    };
+    if (parseArgsSym && PARSE_ARGS_DYN_TYPES.has(parseArgsSym.name) &&
+      checker.declarationsOf(parseArgsSym).some(belongs)) return DYN;
+    // ReturnType and instantiated conditional types can erase the alias.
+    // Require every member to retain the util declaration provenance so
+    // unrelated records with similar property names keep their own layout.
+    const members = checker.getPropertiesOfType(widened);
+    if (members.length > 0 && members.every((member) => checker.declarationsOf(member).some(belongs))) return DYN;
   }
   // The lib's BOXED wrapper interfaces used as TYPES (`const n: Number =
   // 5`): every value such a slot can hold IS the primitive — `new

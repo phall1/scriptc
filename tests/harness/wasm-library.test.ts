@@ -2,21 +2,49 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { WASI } from "node:wasi";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { compileLibrary } from "@scriptc/compiler";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { compileLibrary as compileNodeLibrary, type CompileLibraryOptions } from "@scriptc/compiler";
+import { NativeCompiler } from "../../packages/compiler/src/native/compiler.js";
+import { nativeCodegenTarget, WASM32_WASI_TARGET } from "../../packages/compiler/src/backend/targets.js";
+import { ts7Executable } from "../../packages/compiler/src/frontend/ts7/rpc-api.js";
+
+// Run both compiler drivers against the same real checker transport in this
+// harness. The production bootstrap separately exercises the native transport.
+vi.mock("../../packages/compiler/src/frontend/pipeline-native.js", async () => {
+  const { runFrontend } = await import("../../packages/compiler/src/frontend/pipeline.js");
+  const { loadProgram } = await import("../../packages/compiler/src/frontend/program-node.js");
+  return { runNativeFrontend: (entry: string, _executable: string, npmStatic?: readonly string[] | "auto" | "lib",
+    externalTypes?: Readonly<Record<string, string>>, _evaluate?: unknown, libraryNpmStatic?: readonly string[]) =>
+    runFrontend(entry, loadProgram, npmStatic, externalTypes, libraryNpmStatic) };
+});
 
 const fixture = join(import.meta.dirname, "../library-mode/wasm");
 const hasZig = spawnSync("zig", ["version"]).status === 0;
 type Api = Record<string, (...args: number[]) => number> & { memory: WebAssembly.Memory };
 
-describe.skipIf(!hasZig)("Wasm library embedding", () => {
+describe.skipIf(!hasZig).each(["node", "native"] as const)("Wasm library embedding (%s driver)", (driver) => {
   let directory: string;
   let module: WebAssembly.Module;
   let oldTarget: string | undefined;
   let profile: any;
+  let native: NativeCompiler;
+  const compileLibrary = (options: CompileLibraryOptions) => driver === "node"
+    ? compileNodeLibrary(options) : Promise.resolve(native.compileLibrary(options));
 
   beforeAll(async () => {
     oldTarget = process.env["SCRIPTC_TARGET"];
+    if (driver === "native") {
+      const host = nativeCodegenTarget()!;
+      const root = join(import.meta.dirname, "../..");
+      const helperPackageRoot = join(root, "packages", host.helper.packageName.replace("@scriptc/", ""));
+      const compilerPackage = JSON.parse(await readFile(join(root, "packages/compiler/package.json"), "utf8"));
+      native = new NativeCompiler({
+        compilerVersion: compilerPackage.version, target: WASM32_WASI_TARGET, helper: host.helper,
+        helperPackageRoot, helperExecutable: join(helperPackageRoot, "bin", process.platform === "win32" ? "scriptc-llvm-codegen.exe" : "scriptc-llvm-codegen"),
+        runtimePackRoot: join(root, "packages/runtime-wasm32-wasi"), ts7Executable: ts7Executable(),
+        linker: "zig", linkerArgs: ["cc"], dsymutil: "unused",
+      });
+    }
     process.env["SCRIPTC_TARGET"] = "wasm32-wasi";
     directory = await mkdtemp("/tmp/scriptc-wasm-library-test-");
     profile = JSON.parse(await readFile(join(fixture, "profile.json"), "utf8"));

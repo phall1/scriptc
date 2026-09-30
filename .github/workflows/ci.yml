@@ -299,7 +299,7 @@ jobs:
             test "$(/tmp/hello)" = "hello world"
           '
       - name: WASI helper object/runtime-pack smoke
-        run: pnpm test packages/cli/test/wasi-runtime-pack.test.ts
+        run: pnpm test packages/cli/test/wasi-runtime-pack.test.ts tests/harness/wasm-library.test.ts
 
   llvm_artifacts_macos_arm64:
     name: test (macOS arm64 LLVM artifacts, no clang, ${{ matrix.shard }}/5)
@@ -355,22 +355,29 @@ jobs:
           node scripts/verify-llvm-package.mjs "$RUNNER_TEMP/$(basename "$TARBALL")"
       - name: Packed npm installation smoke
         if: matrix.shard == 1
+        env:
+          # Release optimization is covered by the compiler bootstrap jobs.
+          # This lane verifies packaging and installation with a faster seed.
+          SCRIPTC_NATIVE_OPTIMIZATION: dev
         run: |
+          pnpm --filter @scriptc/cli-darwin-arm64 build:native
           pnpm --dir packages/runtime pack --pack-destination "$RUNNER_TEMP" --silent
           pnpm --dir packages/runtime-darwin-arm64 pack --pack-destination "$RUNNER_TEMP" --silent
           pnpm --dir packages/compiler pack --pack-destination "$RUNNER_TEMP" --silent
+          pnpm --dir packages/cli-darwin-arm64 pack --pack-destination "$RUNNER_TEMP" --silent
           pnpm --dir packages/cli pack --pack-destination "$RUNNER_TEMP" --silent
           PREFIX="$RUNNER_TEMP/installed-scriptc"
-          npm install --prefix "$PREFIX" --ignore-scripts \
+          npm install --prefix "$PREFIX" --no-audit --no-fund \
             "$RUNNER_TEMP/scriptc-runtime-$(node -p "require('./packages/runtime/package.json').version").tgz" \
             "$RUNNER_TEMP/scriptc-runtime-darwin-arm64-$(node -p "require('./packages/runtime-darwin-arm64/package.json').version").tgz" \
             "$RUNNER_TEMP/scriptc-llvm-darwin-arm64-$(node -p "require('./packages/llvm-darwin-arm64/package.json').version").tgz" \
             "$RUNNER_TEMP/scriptc-compiler-$(node -p "require('./packages/compiler/package.json').version").tgz" \
+            "$RUNNER_TEMP/scriptc-cli-darwin-arm64-$(node -p "require('./packages/cli-darwin-arm64/package.json').version").tgz" \
             "$RUNNER_TEMP/scriptc-$(node -p "require('./packages/cli/package.json').version").tgz"
-          "$PREFIX/node_modules/.bin/scriptc" build tests/corpus/001-hello.ts \
+          PATH="" "$PREFIX/node_modules/.bin/scriptc" build tests/corpus/001-hello.ts \
             --emit=obj -o "$RUNNER_TEMP/installed.o"
           file "$RUNNER_TEMP/installed.o" | grep 'Mach-O 64-bit object arm64'
-          "$PREFIX/node_modules/.bin/scriptc" build tests/corpus/001-hello.ts \
+          PATH="" "$PREFIX/node_modules/.bin/scriptc" build tests/corpus/001-hello.ts \
             --print=native-link-info -o "$RUNNER_TEMP/installed-link.o" \
             > "$RUNNER_TEMP/installed-link.json"
           node examples/native-object/link.mjs cc \

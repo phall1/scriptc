@@ -1,0 +1,67 @@
+/** Build the production CLI seed and its relocatable compiler assets. */
+import { execFileSync } from "node:child_process";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { compile } from "../packages/compiler/src/index.js";
+import { NATIVE_TARGETS, nativeCodegenTarget } from "../packages/compiler/src/backend/targets.js";
+import { ts7Executable } from "../packages/compiler/src/frontend/ts7/rpc-api.js";
+import { stageNativeCliAssets } from "./native-cli-assets.mjs";
+import type { NativeToolchainManifest } from "../packages/compiler/src/native/toolchain.js";
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const output = resolve(process.argv[2] ?? join(root, ".scriptc/native-cli"));
+const target = nativeCodegenTarget();
+if (target === null || target.platform === "wasi") throw new Error("a supported native host is required to build the compiler");
+const bin = join(output, "bin");
+const lib = join(output, "lib");
+const seed = join(dirname(output), ".scriptc", basename(output) + "-seed");
+for (const dir of [bin, lib, seed]) mkdirSync(dir, { recursive: true });
+const compiler = process.env["SCRIPTC_CC"] ?? target.defaultLinker;
+const compilerArgs = process.env["SCRIPTC_CC"] === undefined ? [...target.defaultLinkerArgs] : [];
+const nativeSources = join(root, "packages/compiler/native");
+const functions: unknown[] = [];
+const libraries: string[] = [];
+for (const name of ["ts7-process", "host"]) {
+  const object = join(seed, name + target.outputSuffixes.obj);
+  execFileSync(compiler, [
+    ...compilerArgs, "-std=c11", "-Wall", "-Wextra", "-Werror", "-target", target.linkerTargetTriple,
+    "-c", join(nativeSources, name + ".c"), "-o", object,
+  ], { stdio: "inherit" });
+  const manifest = JSON.parse(readFileSync(join(nativeSources, name + ".ffi.json"), "utf8")) as { functions: unknown[] };
+  functions.push(...manifest.functions);
+  libraries.push(object);
+}
+const ffi = join(seed, "compiler.ffi.json");
+writeFileSync(ffi, JSON.stringify({ ffi_format: 6, functions, libraries }, null, 2) + "\n");
+const executable = join(bin, "scriptc" + target.outputSuffixes.exe);
+const comptime = join(lib, "scriptc-comptime" + target.outputSuffixes.exe);
+execFileSync(compiler, [
+  ...compilerArgs, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-target", target.linkerTargetTriple,
+  "-I", join(root, "packages/runtime/vendor/quickjs-ng"), join(nativeSources, "comptime.c"),
+  join(root, "packages", target.runtimePackPackage.replace("@scriptc/", ""), "artifacts/vendor/quickjs/libscriptc-quickjs.a"),
+  "-lm", "-lpthread", "-o", comptime,
+], { stdio: "inherit" });
+const result = await compile(join(root, "packages/compiler/src/native/cli.ts"), {
+  outDir: seed, outPath: executable, backend: "llvm",
+  optimization: process.env["SCRIPTC_NATIVE_OPTIMIZATION"] === "dev" ? "dev" : "release",
+  strip: process.env["SCRIPTC_NATIVE_KEEP_SYMBOLS"] !== "1", dynamic: false, ffiProfilePath: ffi, sanitize: process.env["SCRIPTC_SAN"] === "1",
+});
+if (!result.ok) throw new Error(result.diagnostics.map((item) =>
+  `${item.loc ? `${item.loc.file}:${item.loc.start}: ` : ""}${item.code}: ${item.message}`,
+).join("\n"));
+const compilerVersion = (JSON.parse(readFileSync(join(root, "packages/compiler/package.json"), "utf8")) as { version: string }).version;
+const assets = stageNativeCliAssets({ repository: root, output, target, ts7: ts7Executable(), compilerVersion });
+// A cross-libc seed may use Zig on the build host. The installed compiler
+// selects the destination platform's ordinary linker and SDK.
+const installedTarget = NATIVE_TARGETS.find((item) => item.name === target.name)!;
+const manifest: NativeToolchainManifest = {
+  schema: "scriptc.native-toolchain.v1", compiler_version: compilerVersion, target: target.name,
+  ...assets,
+  linker: process.env["SCRIPTC_LINKER"] ?? installedTarget.defaultLinker,
+  linker_args: process.env["SCRIPTC_LINKER"] === undefined ? [...installedTarget.defaultLinkerArgs] : [],
+  dsymutil: process.env["SCRIPTC_DSYMUTIL"] ?? "dsymutil",
+  comptime: relative(bin, comptime),
+};
+writeFileSync(executable + ".json", JSON.stringify(manifest, null, 2) + "\n");
+console.log(executable);

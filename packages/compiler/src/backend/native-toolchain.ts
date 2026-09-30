@@ -1,3 +1,8 @@
+import { driverTraceCandidates, linkTraceCandidate } from "./link-trace.js";
+import { toolchainEnvironmentCachePolicy, toolchainEnvironmentFingerprint } from "./toolchain-environment.js";
+export { toolchainEnvironmentCachePolicy, toolchainEnvironmentFingerprint, type ToolchainEnvironmentCachePolicy } from "./toolchain-environment.js";
+import { IPHONEOS_MIN_VERSION, ANDROID_MIN_API, isIosTarget, isAndroidTarget, isMobileTarget, mobileLibraryTarget, mobileTargetRefusal, configuredTargetPlatform } from "./target-platform.js";
+export { IPHONEOS_MIN_VERSION, ANDROID_MIN_API, isIosTarget, isAndroidTarget, isMobileTarget, mobileLibraryTarget, mobileTargetRefusal, configuredTargetPlatform } from "./target-platform.js";
 import { InternalCompilerError } from "../errors.js";
 import { execFile, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -121,114 +126,6 @@ export function executableSectionEliminationFlags(platform: string): {
     default:
       return { compile: [], link: [] };
   }
-}
-
-/** Environment variables consumed by clang, its linker/subtools, or the
- * platform SDK selection. They are implicit command-line inputs: changing one
- * must never reuse an artifact produced under the old toolchain posture. */
-const TOOLCHAIN_ENV_KEYS = [
-  "COMPILER_PATH",
-  "GCC_EXEC_PREFIX",
-  "CPATH",
-  "C_INCLUDE_PATH",
-  "CPLUS_INCLUDE_PATH",
-  "OBJC_INCLUDE_PATH",
-  "OBJCPLUS_INCLUDE_PATH",
-  "LIBRARY_PATH",
-  "LD_LIBRARY_PATH",
-  "LD_RUN_PATH",
-  "DYLD_LIBRARY_PATH",
-  "DYLD_FRAMEWORK_PATH",
-  "DYLD_FALLBACK_LIBRARY_PATH",
-  "DYLD_FALLBACK_FRAMEWORK_PATH",
-  "SDKROOT",
-  "DEVELOPER_DIR",
-  "MACOSX_DEPLOYMENT_TARGET",
-  "IPHONEOS_DEPLOYMENT_TARGET",
-  "TVOS_DEPLOYMENT_TARGET",
-  "WATCHOS_DEPLOYMENT_TARGET",
-  "DRIVERKIT_DEPLOYMENT_TARGET",
-  "XROS_DEPLOYMENT_TARGET",
-  "CCC_OVERRIDE_OPTIONS",
-  "CCC_ADD_ARGS",
-  "CLANG_CONFIG_FILE_SYSTEM_DIR",
-  "CLANG_CONFIG_FILE_USER_DIR",
-  "CC",
-  "CFLAGS",
-  "CPPFLAGS",
-  "LDFLAGS",
-  "AR",
-  "RANLIB",
-  "CMAKE_GENERATOR",
-  "CMAKE_TOOLCHAIN_FILE",
-  "ZIG_LIB_DIR",
-  "ZIG_LIBC",
-  "SOURCE_DATE_EPOCH",
-  "ZERO_AR_DATE",
-  "LANG",
-  "LC_ALL",
-  "LC_CTYPE",
-] as const;
-
-/** Toolchain variables whose values name mutable files/directories consumed
- * while compiling a TU (or can inject arbitrary compiler options). Hashing the
- * value is insufficient: a header, SDK, config, compiler helper, or loaded
- * dylib can change in place while the spelling remains stable. In that posture
- * neither complete artifacts nor per-TU runtime objects are safe to reuse. */
-const MUTABLE_COMPILE_ENV_KEYS = [
-  "COMPILER_PATH",
-  "GCC_EXEC_PREFIX",
-  "CPATH",
-  "C_INCLUDE_PATH",
-  "CPLUS_INCLUDE_PATH",
-  "OBJC_INCLUDE_PATH",
-  "OBJCPLUS_INCLUDE_PATH",
-  "LD_LIBRARY_PATH",
-  "DYLD_LIBRARY_PATH",
-  "DYLD_FRAMEWORK_PATH",
-  "DYLD_FALLBACK_LIBRARY_PATH",
-  "DYLD_FALLBACK_FRAMEWORK_PATH",
-  "SDKROOT",
-  "DEVELOPER_DIR",
-  "CCC_OVERRIDE_OPTIONS",
-  "CCC_ADD_ARGS",
-  "CLANG_CONFIG_FILE_SYSTEM_DIR",
-  "CLANG_CONFIG_FILE_USER_DIR",
-  // `zig cc` resolves its bundled headers/runtime through ZIG_LIB_DIR and a
-  // caller-selected native libc description through ZIG_LIBC. Both values name
-  // mutable compiler inputs whose contents can change behind a stable path.
-  "ZIG_LIB_DIR",
-  "ZIG_LIBC",
-] as const;
-
-/** These variables only redirect link-time inputs. Runtime objects remain
- * reusable, but a complete executable could otherwise retain a library that
- * was rebuilt in place behind the same search-path spelling. */
-const MUTABLE_LINK_ENV_KEYS = ["LIBRARY_PATH", "LD_RUN_PATH"] as const;
-
-export interface ToolchainEnvironmentCachePolicy {
-  completeArtifacts: boolean;
-  runtimeObjects: boolean;
-}
-
-export function toolchainEnvironmentCachePolicy(
-  env: NodeJS.ProcessEnv = process.env,
-): ToolchainEnvironmentCachePolicy {
-  const mutableCompileInput = MUTABLE_COMPILE_ENV_KEYS.some((name) => env[name] !== undefined);
-  const mutableLinkInput = MUTABLE_LINK_ENV_KEYS.some((name) => env[name] !== undefined);
-  return {
-    completeArtifacts: !mutableCompileInput && !mutableLinkInput,
-    runtimeObjects: !mutableCompileInput,
-  };
-}
-
-export function toolchainEnvironmentFingerprint(env: NodeJS.ProcessEnv = process.env): string {
-  const hash = createHash("sha256").update("toolchain-env-v1\0");
-  for (const name of TOOLCHAIN_ENV_KEYS) {
-    const value = env[name];
-    hash.update(name).update(value === undefined ? "\0unset\0" : "\0set\0").update(value ?? "").update("\0");
-  }
-  return hash.digest("hex");
 }
 
 /** Inputs that can change which native tool/runtime implementation an
@@ -645,59 +542,6 @@ export function isZigDriver(driver: Pick<CcDriver, "argv">): boolean {
  * embedder's side of the contract: Xcode links iOS archives against the
  * selected SDK, and Gradle/NDK builds link Android archives against the
  * API-26+ bionic stubs. */
-export const IPHONEOS_MIN_VERSION = "15.0";
-export const ANDROID_MIN_API = 26;
-
-const MOBILE_LIBRARY_TARGETS = [
-  "aarch64-apple-ios",
-  "aarch64-apple-ios-simulator",
-  "aarch64-linux-android",
-] as const;
-
-export function isIosTarget(target: string | null): boolean {
-  return target === "aarch64-apple-ios" || target === "aarch64-apple-ios-simulator";
-}
-
-export function isAndroidTarget(target: string | null): boolean {
-  return target === "aarch64-linux-android";
-}
-
-export function isMobileTarget(target: string | null): boolean {
-  return isIosTarget(target) || isAndroidTarget(target);
-}
-
-/** The canonical mobile triple SCRIPTC_TARGET selects, or null when the
- * environment names none. Pure string inspection — safe to consult before
- * any toolchain discovery runs. */
-export function mobileLibraryTarget(env: NodeJS.ProcessEnv = process.env): string | null {
-  const target = env["SCRIPTC_TARGET"] ?? "";
-  return isMobileTarget(target) ? target : null;
-}
-
-/** The admission verdict for a mobile-family triple: null when the spelling
- * and host pairing are supported, otherwise the refusal text (the same text
- * resolveCc throws and compileLibrary reports as SC3002). Pure string/host
- * inspection — no discovery, no subprocess. */
-export function mobileTargetRefusal(
-  target: string,
-  hostPlatform: NodeJS.Platform = process.platform,
-): string | null {
-  if (isIosTarget(target)) {
-    return hostPlatform === "darwin"
-      ? null
-      : `${target} library archives build on macOS hosts only (the Apple iOS SDK sysroot and Mach-O symbol localization live there); this host is ${hostPlatform}`;
-  }
-  if (isAndroidTarget(target)) return null;
-  // A near-miss mobile spelling must refuse with the supported set named,
-  // never reach zig with no sysroot wired (the compile would fail on the
-  // first libc header) or produce an artifact for an unverified device
-  // class.
-  if (/(?:^|-)(?:ios|tvos|watchos|visionos|android)/.test(target)) {
-    return `unsupported mobile target '${target}' (supported: ${MOBILE_LIBRARY_TARGETS.join(", ")})`;
-  }
-  return null;
-}
-
 /** The Apple SDK root for one mobile platform, discovered through xcrun the
  * way Xcode's own build system selects it. Memoized per SDK name and
  * selection environment: production rediscovers per process, and the two
@@ -906,34 +750,6 @@ function isMuslTarget(driver: Pick<CcDriver, "target">): boolean {
  * analyze(): the FRONTEND consults it too (path.sep / os.EOL literals and
  * the path-module binding follow the target — a win32 triple compiles
  * Node-on-Windows semantics, path.win32 backing the bare module). */
-export function configuredTargetPlatform(
-  env: NodeJS.ProcessEnv = process.env,
-  hostPlatform: NodeJS.Platform = process.platform,
-): string {
-  const target = env["SCRIPTC_TARGET"] ?? "";
-  if (target === "") return hostPlatform;
-  if (target === "wasm32-wasi") return "wasi";
-  if (target.includes("wasi")) {
-    throw new Error(`unsupported WASI target '${target}' (supported: wasm32-wasi)`);
-  }
-  // iOS is a darwin-family target: Mach-O objects, ld64 localization,
-  // POSIX path/EOL semantics. Android falls to the linux arm below —
-  // bionic is a linux libc and its archives are ordinary ELF.
-  if (isIosTarget(target)) return "darwin";
-  if (isAndroidTarget(target)) return "linux";
-  if (/(?:^|-)(?:ios|tvos|watchos|visionos|android)/.test(target)) {
-    throw new Error(
-      `unsupported mobile target '${target}' (supported: ${MOBILE_LIBRARY_TARGETS.join(", ")})`,
-    );
-  }
-  if (target.includes("linux")) return "linux";
-  if (target.includes("windows")) return "win32";
-  if (target.includes("macos") || target.includes("darwin")) return "darwin";
-  throw new Error(
-    `unsupported target '${target}' (supported OS families: linux, windows, macos/darwin, wasm32-wasi)`,
-  );
-}
-
 export function targetPlatform(driver: CcDriver): string {
   if (driver.target === null) return process.platform;
   return configuredTargetPlatform({ SCRIPTC_TARGET: driver.target });
@@ -2978,29 +2794,6 @@ function implicitToolchainFingerprint(
   return implicitToolchainFingerprints(driver, environmentFingerprint).then(
     (fingerprints) => fingerprints.complete,
   );
-}
-
-function linkTraceCandidate(line: string): string[] {
-  const trimmed = line.trim().replace(/^(?:LOAD|load)\s+/, "");
-  if (trimmed === "") return [];
-  const unquoted =
-    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-    (trimmed.startsWith("'") && trimmed.endsWith("'"))
-      ? trimmed.slice(1, -1)
-      : trimmed;
-  const candidates = [unquoted];
-  const member = unquoted.lastIndexOf("(");
-  if (member > 0 && unquoted.endsWith(")")) candidates.push(unquoted.slice(0, member));
-  return candidates;
-}
-
-function driverTraceCandidates(line: string): string[] {
-  const candidates: string[] = [];
-  for (const match of line.matchAll(/"((?:\\.|[^"\\])*)"|'([^']*)'|(\S+)/g)) {
-    const token = (match[1] ?? match[2] ?? match[3] ?? "").replace(/\\(["\\])/g, "$1");
-    if (token !== "") candidates.push(token);
-  }
-  return candidates;
 }
 
 async function existingDriverTracePaths(

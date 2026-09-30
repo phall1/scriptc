@@ -14,7 +14,7 @@
 
 type Dict = Record<string, unknown>;
 
-const TOP_LEVEL_ORDER = [
+const TOP_LEVEL_ORDER: readonly string[] = [
   "format",
   "wire_version",
   "abi_version",
@@ -35,11 +35,11 @@ const TOP_LEVEL_ORDER = [
   "integer_slots",
   "deterministic",
   "async_free",
-] as const;
+];
 
 const HASH_RE = /^[0-9a-f]{16}$/;
 const TYPEREF_KINDS = new Set(["bool", "f64", "i64", "bytes", "void", "optional", "slice", "node", "value", "enum", "union"]);
-const FUNCTION_CHANNELS = ["command_msg", "frame_msg", "key_msg", "pinch_msg"] as const;
+const FUNCTION_CHANNELS = ["command_msg", "frame_msg", "key_msg", "pinch_msg"];
 
 function isDict(v: unknown): v is Dict {
   return v !== null && typeof v === "object" && !Array.isArray(v);
@@ -58,12 +58,12 @@ export function validateSidecar(doc: unknown): string[] {
   /* ── V1: required fields, format, top-level key order ─────────────── */
   const keys = Object.keys(doc);
   for (const k of TOP_LEVEL_ORDER) {
-    if (!(k in doc)) bad("V1", `required field '${k}' is missing`);
+    if (!(Object.hasOwn(doc, k))) bad("V1", `required field '${k}' is missing`);
   }
   for (const k of keys) {
     if (!(TOP_LEVEL_ORDER as readonly string[]).includes(k)) bad("V1", `unknown top-level field '${k}' (emit only format-1 fields)`);
   }
-  const present = TOP_LEVEL_ORDER.filter((k) => k in doc);
+  const present = TOP_LEVEL_ORDER.filter((k) => Object.hasOwn(doc, k));
   const actual = keys.filter((k) => (TOP_LEVEL_ORDER as readonly string[]).includes(k));
   if (present.join(",") !== actual.join(",")) {
     bad("V1", "top-level keys are not emitted in the schema's §1 order");
@@ -348,7 +348,7 @@ export function validateSidecar(doc: unknown): string[] {
         return;
       }
       visiting.add(name);
-      for (const next of edges.get(name) ?? []) visit(next, [...path, name]);
+      for (const next of edges.get(name) ?? new Set<string>()) visit(next, [...path, name]);
       visiting.delete(name);
       done.add(name);
     };
@@ -405,7 +405,7 @@ export function validateSidecar(doc: unknown): string[] {
         bad("V9", `channels.${ch} is ${v} but the suffix '${ch}' is ${v ? "absent from" : "present in"} abi.exports`);
       }
     }
-    for (const ch of ["appearance_msg", "chrome_msg"] as const) {
+    for (const ch of ["appearance_msg", "chrome_msg"]) {
       const v = channels[ch];
       if (v === null) continue;
       if (typeof v !== "string") {
@@ -450,7 +450,7 @@ export function validateSidecar(doc: unknown): string[] {
     while (grew) {
       grew = false;
       for (const name of [...reachable]) {
-        for (const next of edges.get(name) ?? []) {
+        for (const next of edges.get(name) ?? new Set<string>()) {
           if (!reachable.has(next)) {
             reachable.add(next);
             grew = true;

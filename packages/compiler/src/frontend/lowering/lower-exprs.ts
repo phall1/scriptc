@@ -5791,7 +5791,7 @@ export function lowerElementCompound(lowerer: Lowerer, expr: ts.BinaryExpression
     if (arr.type.kind !== "array") {
       lowerer.unsupported("SC1090", target.expression, "assignment through a possibly missing nested array receiver");
     }
-    const index = lowerer.lowerExpr(target.argumentExpression);
+    const index = lowerOptionalNumber(lowerer, lowerer.lowerExpr(target.argumentExpression), locOf(target.argumentExpression), target.argumentExpression);
     if (index.type.kind !== "f64") {
       lowerer.unsupported("SC1090", target.argumentExpression, "indexing with non-number keys");
     }

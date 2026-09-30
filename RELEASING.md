@@ -14,15 +14,7 @@ To prepare a release:
 
 CI (`.github/workflows/release.yml`) compares the version in `packages/cli/package.json` to what `scriptc` has on npm. If it differs, it builds platform packages on matching macOS, Linux, and Windows runners, verifies the version spine, and publishes the runtime, helper, compiler, and CLI packages in dependency order. After the publish succeeds, a separate job creates the git tag `v<version>` and the GitHub release with the marked changelog entry as its body, and attaches `surface-manifest.json` — the machine-readable listing of the surface the static tier compiles at that version (stable per-entry ids, so two releases diff mechanically; see `packages/compiler/src/coverage/surface-manifest.ts` for the schema). The job regenerates the manifest from the tree and fails on any byte difference from the committed file before attaching, so the asset is always the manifest of the code being released. The same file ships inside the `@scriptc/compiler` package as `@scriptc/compiler/surface-manifest.json`.
 
-The release job builds and strips each pinned LLVM helper on its matching host,
-then builds the matching precompiled runtime pack before publishing the
-constrained platform packages ahead of `@scriptc/compiler`. Ordinary LLVM-tier
-executables use the helper for the program object and the platform pack for
-runtime objects; the user's toolchain performs only the final platform link.
-Explicit C builds, LLVM refusals, and `--sanitize` retain the external C
-toolchain path. npm postinstall skips local runtime-cache compilation when the
-platform pack is available. The GitHub release remains a tag, release notes, and the
-manifest asset; the npm publish never waits on the GitHub release.
+The release job builds each pinned LLVM helper, precompiled runtime pack, and native CLI on its matching host. The native CLI bundles its TypeScript checker, LLVM helper, runtime pack, declarations, and comptime evaluator. npm postinstall installs the matching native executable; Node is needed for npm installation but not native compilation or execution. The user's toolchain performs the final platform link. Sanitized builds also use it to instrument program LLVM and compile the C runtime. Platform packages publish ahead of `@scriptc/compiler` and `scriptc`. The GitHub release attaches standalone compiler archives, their SHA-256 checksums, and the surface manifest after npm publication succeeds.
 
 Publishing uses npm trusted publishing (OIDC) — there is no npm token secret.
 Each published package must have a GitHub Actions trusted publisher for

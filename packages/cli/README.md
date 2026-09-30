@@ -22,7 +22,7 @@ $ scriptc build fib.ts -o fib && ./fib
 $ npm install -g scriptc
 ```
 
-Requires Node.js 24. Executable builds require a platform linker driver and SDK/sysroot. On supported macOS, Linux, and Windows hosts, LLVM executables use the matching optional helper and precompiled runtime pack, so the driver only links; select that driver with `SCRIPTC_LINKER`. Runtime development with `--sanitize` additionally needs a C compiler. `--emit=ir|llvm` requires only Node, while `--emit=asm|obj` requires neither an external compiler nor a linker.
+The installed compiler runs natively on supported macOS, Linux, and Windows hosts. Compilation, compile-time evaluation, and native execution do not require Node. `--emit=ir|llvm|asm|obj` uses the bundled TypeScript checker and LLVM helper without an external compiler, archiver, linker, or SDK. Executable builds additionally need a platform linker driver and SDK/sysroot; precompiled runtime packs supply the C runtime. Set `SCRIPTC_LINKER` to choose that driver. Runtime development with `--sanitize` additionally needs a C compiler. Node.js 24 or newer is needed for npm installation and `scriptc run` of WASI modules.
 
 Builds use a bounded persistent cache. Unchanged source can reuse the validated frontend result and LLVM program objects. Library identity getters occupy a separate LLVM module, so an identity change can reuse the large program object. Runtime objects come from the installed pack. Executable cache entries verify their native dependencies; FFI builds relink against current external inputs. Set `SCRIPTC_NO_CACHE=1` to bypass the cache or `SCRIPTC_CACHE_DIR` to select its location. An existing POSIX override must already be private.
 

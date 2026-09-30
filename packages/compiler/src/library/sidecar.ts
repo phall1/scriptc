@@ -145,6 +145,10 @@ export interface SidecarDoc {
 /* ── identity hashing (schema §2 + the "module-graph" source contract) ─── */
 
 let releaseVersion: string | null = null;
+let installedReleaseVersion: string | null = null;
+
+/** Installed native clients read their release identity from the distribution. */
+export function setCompilerReleaseVersion(version: string): void { installedReleaseVersion = version; }
 
 /** The package version is stable within one compilation, but a long-lived
  * source/worktree process may observe a release stamp between compilations. */
@@ -157,6 +161,7 @@ export function clearSidecarCaches(): void {
  * module lives two levels below the package root in src/ and dist/
  * alike). build_id input 1 and the sidecar's `compiler_version`. */
 export function compilerReleaseVersion(): string {
+  if (installedReleaseVersion !== null) return installedReleaseVersion;
   if (releaseVersion === null) {
     const pkgPath = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "package.json");
     releaseVersion = (JSON.parse(readFileSync(pkgPath, "utf8")) as { version: string }).version;
@@ -806,7 +811,7 @@ class Projector {
     if (shape.k === "object") return shape.fields;
     if (shape.k === "array") return this.inlineRecordFields(shape.elem);
     if (shape.k === "union") {
-      const present = shape.parts.filter((part) => part.k !== "absent");
+      const present = shape.parts.filter((part): boolean => part.k !== "absent");
       return present.length === 1 && present.length !== shape.parts.length
         ? this.inlineRecordFields(present[0]!)
         : null;
@@ -1008,7 +1013,7 @@ class Projector {
       case "array":
         return { kind: "slice", elem: this.shapeRef(shape.elem, container, member, loc, synthesizedContext) };
       case "union": {
-        const present = shape.parts.filter((p) => p.k !== "absent");
+        const present = shape.parts.filter((p): boolean => p.k !== "absent");
         const absents = shape.parts.length - present.length;
         if (absents > 0 && present.length === 1) {
           const inner = this.shapeRef(present[0]!, container, member, loc, synthesizedContext);
@@ -1486,8 +1491,9 @@ export function buildSidecar(input: SidecarBuildInput): SidecarBuildResult {
       }
       const r = fn.returns;
       if (r !== null && r.k === "ref" && r.name === config.model) return false;
-      if (r !== null && r.k === "tuple" && r.elems.length === 2 && r.elems[0]!.k === "ref" && (r.elems[0] as { name: string }).name === config.model) {
-        return true;
+      if (r !== null && r.k === "tuple" && r.elems.length === 2) {
+        const first = r.elems[0]!;
+        if (first.k === "ref" && first.name === config.model) return true;
       }
       throw new SidecarError(
         `${which} export '${exportName}' must declare its return as '${config.model}' (bare state) or a two-element tuple '[${config.model}, ...]' (state plus an effect value)`,
@@ -1523,7 +1529,7 @@ export function buildSidecar(input: SidecarBuildInput): SidecarBuildResult {
     const exports = abiExportSuffixes(profile);
     const exportSet = new Set(exports);
     const namedChannel = (constName: "appearanceMsg" | "chromeMsg"): string | null => {
-      const c = facts[constName];
+      const c = constName === "appearanceMsg" ? facts.appearanceMsg : facts.chromeMsg;
       if (c === null) return null;
       const payload = armByName.get(c.value);
       if (payload === undefined) {

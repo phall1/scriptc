@@ -21,6 +21,7 @@ output/
 /packages/runtime-darwin-arm64/runtime-pack.json
 /packages/runtime-darwin-arm64/.runtime-pack-*
 /packages/llvm-*/bin/
+/packages/cli/bin/
 /packages/runtime-*/artifacts/
 /packages/runtime-*/runtime-pack.json
 /packages/runtime-*/.runtime-pack-*

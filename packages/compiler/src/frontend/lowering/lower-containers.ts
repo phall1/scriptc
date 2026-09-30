@@ -1,3 +1,4 @@
+import { objectEnumerationReceiver } from "./object-enumeration-receiver.js";
 import { InternalCompilerError } from "../../errors.js";
 /* Container-surface call lowering: array methods (including the HOF family
  * map/filter/forEach with their synthesized helper functions), Map/Set
@@ -5958,7 +5959,8 @@ function mapFromSeedValue(lowerer: Lowerer, seed: IrExpr, mapT: IrType & { kind:
     shape: IrRecordShape,): IrExpr {
     const resultT = lowerer.irTypeOf(call);
     if (resultT.kind !== "array") lowerer.badType(call, lowerer.typeOf(call)); // defensive
-    return objectIterOverIndexShape(lowerer, call, member, argIr, shape, lowerer.lowerExpr(call.arguments[0]!), resultT, locOf(call));
+    return objectIterOverIndexShape(lowerer, call, member, argIr, shape,
+      objectEnumerationReceiver(lowerer, lowerer.lowerExpr(call.arguments[0]!), argIr, locOf(call)), resultT, locOf(call));
   }
 
   /** The construction core, receiver/result pre-resolved — `node` anchors

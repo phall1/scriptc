@@ -8,7 +8,7 @@ import { compileLibrary } from "@scriptc/compiler";
 const fixture = join(import.meta.dirname, "../library-mode/wasm/dispatch.mjs");
 const modes = ["native", "sanitized", "wasm-dev"] as const;
 
-test.each(modes)("synchronous checked dispatch in a %s library matches Node", async (mode, context) => {
+test.for(modes)("synchronous checked dispatch in a %s library matches Node", async (mode, context) => {
   if (mode === "wasm-dev" ? spawnSync("zig", ["version"]).status !== 0 : process.platform !== "darwin" && process.platform !== "linux") context.skip();
   const directory = await mkdtemp("/tmp/scriptc-library-dispatch-");
   const oldTarget = process.env["SCRIPTC_TARGET"];

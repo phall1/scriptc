@@ -4,15 +4,17 @@ Install the CLI from npm and compile your first binary in a couple of minutes.
 
 ## Prerequisites
 
-- **macOS arm64** is the primary platform ([Linux and Windows](/platforms) are cross-compilation targets).
-- **Node ≥ 24** — to run the compiler. The binaries it produces need no Node at all.
-- **clang** — preinstalled with the Xcode Command Line Tools; required for executable builds, but not for <code>--emit=ir|c|llvm|asm|obj</code>. Assembly/object output uses the matching helper installed with scriptc and requires macOS 15+.
+- **macOS 15+ arm64/x64, Linux arm64/x64, or Windows x64** — see [platform support](/platforms) for target details.
+- **Node ≥ 24 and npm** — for npm installation. The installed compiler and its native output run without Node. Standalone distributions are also available from [GitHub Releases](https://github.com/vercel-labs/scriptc/releases).
+- **A platform linker and SDK** — for executable builds. On macOS, install the Xcode Command Line Tools. <code>--emit=ir|llvm|asm|obj</code> uses bundled tools and needs no external linker or SDK.
 
 ## Install
 
 ```console
 $ npm install -g scriptc
 ```
+
+Keep optional dependencies and installation scripts enabled so npm can install the native command for your platform.
 
 To work from a clone instead (`pnpm install && pnpm build` in the repo, then `pnpm scriptc` from the repo directory), see the [repository](https://github.com/vercel-labs/scriptc).
 
