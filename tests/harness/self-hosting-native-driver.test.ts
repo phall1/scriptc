@@ -39,7 +39,10 @@ test("the production CLI relocates, builds programs, and rebuilds itself with No
     const distribution = join(directory, "distribution");
     await bootstrapStep("build production CLI seed", () =>
       exec(process.execPath, ["--max-old-space-size=8192", "--import", "tsx", join(root, "scripts/build-native-cli.mts"), distribution], {
-        ...options, env: { ...process.env, SCRIPTC_NATIVE_EMIT_IR: "1" },
+        // The seed builds an instrumented second generation below. Run
+        // the full sanitizer proof with that generation instead of paying
+        // for two instrumented traversals of the complete compiler graph.
+        ...options, env: { ...process.env, SCRIPTC_SAN: "", SCRIPTC_NATIVE_EMIT_IR: "1" },
       }));
     // All compiler assets must survive moving the complete distribution.
     const relocated = join(directory, "relocated");
