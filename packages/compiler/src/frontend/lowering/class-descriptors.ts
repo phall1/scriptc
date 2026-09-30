@@ -11,17 +11,34 @@ function literalName(name: ts.PropertyName): string | null {
   return ts.isIdentifier(name) || ts.isStringLiteral(name) ? name.text : null;
 }
 
+function bagOnlyProperty(lowerer: Lowerer, owner: ClassInfo, name: string): boolean {
+  return !owner.fields.has(name) && !isCompiledPrototypeMember(lowerer, owner, name) &&
+    owner.subclasses.every((child) => bagOnlyProperty(lowerer, child, name));
+}
+
+/** A named bag property needs no snapshot of unrelated native fields,
+ * which may contain recursive or otherwise opaque values. */
+export function lowerClassDescriptorRead(lowerer: Lowerer, call: ts.CallExpression, target: IrExpr): IrExpr | null {
+  if (!isDynTypedRefType(target.type)) return null;
+  const info = lowerer.classes.get(target.type.className);
+  const key = call.arguments[1]!;
+  if (!info || info.def.runtime || info.builtinError || info.builtinEmitter || info.builtinStream ||
+      !ts.isStringLiteral(key) || !bagOnlyProperty(lowerer, info, key.text)) return null;
+  const loc = locOf(call);
+  const bag: IrExpr = { kind: "call", callee: classPropertiesHelper(lowerer, loc).name,
+    args: [lowerer.coerceToExpected(target, DYN)], type: DYN, loc };
+  return { kind: "libCall", fn: "dyn.getOwnPropertyDescriptor", args: [bag, lowerer.lowerExprExpecting(key, DYN)], type: DYN, loc };
+}
+
 /** Native layout fields cannot change descriptors. New named data properties
  * live in the instance's shared bag, preserving attributes and identity. */
 export function lowerClassDataDescriptor(lowerer: Lowerer, call: ts.CallExpression, member: string, target: IrExpr): IrExpr | null {
   if (!isDynTypedRefType(target.type)) return null;
   const info = lowerer.classes.get(target.type.className);
   if (!info || info.def.runtime || info.builtinError || info.builtinEmitter || info.builtinStream) return null;
-  const safeName = (owner: ClassInfo, name: string): boolean =>
-    !owner.fields.has(name) && !isCompiledPrototypeMember(lowerer, owner, name) &&
-    owner.subclasses.every((child) => safeName(child, name));
+  const safeName = (owner: ClassInfo, name: string): boolean => bagOnlyProperty(lowerer, owner, name);
   const descriptor = (node: ts.Expression): boolean => ts.isObjectLiteralExpression(node) &&
-    node.properties.every((p) => ts.isPropertyAssignment(p) &&
+    node.properties.every((p) => (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) &&
       ["value", "writable", "enumerable", "configurable"].includes(literalName(p.name) ?? ""));
   const descriptors = call.arguments[member === "defineProperty" ? 2 : 1]!;
   if (member === "defineProperty") {

@@ -32,7 +32,7 @@ test("incompatible JS overrides throw at entry without executing the body", asyn
 class Base { copy(value = 1) { return value; } }
 class Child extends Base { copy(value) { console.log('must not execute'); return value; } }
 const child = new Child();
-try { child.copy(2); } catch (error) { console.log(error.message.includes("overriding method 'copy' with a different signature")); }
+try { child.copy(2); } catch (error) { console.log(error.message.includes("overriding method 'copy' with a different return type")); }
 console.log(new Base().copy());
 `);
   try {
@@ -41,6 +41,29 @@ console.log(new Base().copy());
     const run = spawnSync(result.binaryPath, { encoding: "utf8", timeout: 30_000 });
     expect(run.error).toBeUndefined();
     expect({ status: run.status, signal: run.signal, stdout: run.stdout, stderr: run.stderr }).toEqual({ status: 0, signal: null, stdout: "true\n1\n", stderr: "" });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("replaced instance constructors refuse before evaluating constructor arguments", async () => {
+  const { dir, entry } = fixture(`
+function argument() { console.log('must not execute'); return 2; }
+class Value {
+  constructor(x = 1) { this.x = x; }
+  clone() { return new this.constructor(argument()); }
+}
+function replace(value) { value.constructor = Value; }
+const value = new Value();
+replace(value);
+try { value.clone(); } catch (error) { console.log(error.message.includes('replaced instance constructor')); }
+`);
+  try {
+    const result = await compile(entry, { dynamic: false, outDir: dir, outPath: join(dir, "program"), sanitize: process.env["SCRIPTC_SAN"] === "1" });
+    if (!result.ok) throw new Error(JSON.stringify(result.diagnostics));
+    const run = spawnSync(result.binaryPath, { encoding: "utf8", timeout: 30_000 });
+    expect(run.error).toBeUndefined();
+    expect({ status: run.status, signal: run.signal, stdout: run.stdout, stderr: run.stderr }).toEqual({ status: 0, signal: null, stdout: "true\n", stderr: "" });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -300,7 +300,9 @@ export function lowerDynObjectLiteral(
       const lowerValue = (): IrExpr =>
         ts.isMethodDeclaration(prop)
           ? (lowerer.rejectThisInObjectMethod(prop.body ?? prop), lowerer.lowerLambda(prop))
-          : lowerer.lowerExpr(valueExpr as ts.Expression);
+          : !boxValue && ts.isObjectLiteralExpression(valueExpr)
+            ? lowerer.lowerExprExpecting(valueExpr, DYN)
+            : lowerer.lowerExpr(valueExpr as ts.Expression);
       raw =
         fenceClosureProbe(lowerer, valueExpr, undefined, lowerValue) ??
         lowerValue();

@@ -27,6 +27,7 @@ import { isSafeToDiscard } from "./expressions/evaluation-safety.js";
 import { tryLowerExpression } from "./expressions/try-lower-expression.js";
 import { httpClientFnBindingOf, isStreamUndefCallExpr, lowerCompatReqStreamOptionalCall, lowerHttpClientFnCall } from "./lower-server.js";
 import { EMITTER_API_MEMBERS, exactInstanceClassOf, findGenericMethodOn, lowerClassGenericMethodCall, lowerStaticMethodCall, type ClassInfo } from "./lower-classes.js";
+import { classCallbackCall, isClassCallback } from "./class-callbacks.js";
 import { emitterRooted, lowerEmitterMethodCall } from "./lower-event-emitter.js";
 import { lowerConsoleInspectArg, lowerFormatCall } from "./lower-inspect.js";
 import { STREAM_API_MEMBERS, lowerStreamMethodCall, lowerStreamModuleCall, lowerStreamStaticCall, streamSidesOf } from "./lower-stream.js";
@@ -39,7 +40,7 @@ import { rejectStaticThis } from "./static-this.js";
 import { fenceNodeModuleMutationCall, lowerRequireCacheKeys } from "./lower-node-module.js";
 import { defaultAfterUndefined, lowerOptionalArgument, lowerStaticallyUndefinedArgument, positionNumber } from "./optional-arguments.js";
 import { fenceSymbolFieldCopy } from "./symbol-fields.js";
-import { lowerClassDataDescriptor } from "./class-descriptors.js";
+import { lowerClassDataDescriptor, lowerClassDescriptorRead } from "./class-descriptors.js";
 import { classStaticDataFor } from "./class-static-data.js";
 
 export { bodyReadsArguments };
@@ -9279,6 +9280,8 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
         if (native) return native;
       }
       if (target && member === "getOwnPropertyDescriptor" && isDynTypedRefType(target.type)) {
+        const descriptor = lowerClassDescriptorRead(lowerer, call, target);
+        if (descriptor) return descriptor;
         target = lowerer.coerceToExpected(target, DYN);
       }
       // Error.cause owns a live data-property slot shared with its checked
@@ -10868,7 +10871,7 @@ export function lowerFunction(lowerer: Lowerer, decl: ts.FunctionDeclaration): I
     // A specialized JS parameter can expose a native field whose checker
     // type still belongs to the unspecialized body (plane.normal.dot()).
     // Use the lowered receiver's representation and retain its evaluation.
-    const probe = mappedReceiver?.kind !== "object" && lowerer.implicitParamTypes !== null
+    const probe = mappedReceiver?.kind !== "object" && (lowerer.implicitParamTypes !== null || ts.isNewExpression(access.expression))
       ? tryLowerExpression(lowerer, access.expression) : null;
     const specializedReceiver = probe?.type.kind === "object" ? probe : null;
     if (specializedReceiver) mappedReceiver = specializedReceiver.type;
@@ -10928,7 +10931,7 @@ export function lowerFunction(lowerer: Lowerer, decl: ts.FunctionDeclaration): I
     // (lowerClassGenericMethodCall has the exactness rules).
     if (info && !found) {
       const gfound = findGenericMethodOn(lowerer, info, access.name.text);
-      if (gfound) return lowerClassGenericMethodCall(lowerer, call, access, info, gfound, specializedReceiver ?? undefined);
+      if (gfound) return lowerClassGenericMethodCall(lowerer, call, access, info, gfound, lowerReceiver());
     }
     // A FUNC-, nullable-FUNC-, or DYN-typed FIELD in call position:
     // `this.cb()` — the ctor-assigned callback field (countdown.js's
@@ -10990,6 +10993,21 @@ export function lowerFunction(lowerer: Lowerer, decl: ts.FunctionDeclaration): I
     }
     if (!info || !found) return null;
     const method = access.name.text;
+    if (isClassCallback(lowerer, info, method)) {
+      const loc = locOf(call);
+      const receiver = lowerReceiver();
+      const local = lowerer.declareHiddenLocal("%callbackReceiver", receiver.type);
+      const value: IrExpr = { kind: "varRef", localId: local.id, type: receiver.type, loc };
+      const args = lowerer.completeArgs(call.arguments, found.sig.params, loc, call);
+      const virtual = lowerer.overrideBelow(info, method);
+      if (virtual) lowerer.noteVirtualEdge(info, method);
+      else lowerer.noteEdge(`%${found.declarer.def.name}.${method}`);
+      const fallback: IrExpr = virtual
+        ? { kind: "virtualCall", className: info.def.name, method, args: [lowerer.upcastTo(value, info.def.name), ...args], type: found.sig.ret, loc }
+        : { kind: "call", callee: `%${found.declarer.def.name}.${method}`, args: [lowerer.upcastTo(value, found.declarer.def.name), ...args], type: found.sig.ret, loc };
+      const result = classCallbackCall(lowerer, value, method, call.arguments.map((arg) => lowerer.lowerExprExpecting(arg, DYN)), fallback, loc);
+      return { kind: "seqExpr", stmts: [{ kind: "varDecl", localId: local.id, init: receiver, loc }], result, type: result.type, loc };
+    }
     if (found.declarer.builtinError) {
       // The one builtin method: Error.prototype.toString, a runtime
       // implementation called directly (overriding it is fenced, so no

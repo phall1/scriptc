@@ -5773,6 +5773,7 @@ export class Lowerer {
         const sameFamily =
           (src.kind === "record" && arm.kind === "record") ||
           (src.kind === "array" && arm.kind === "array") ||
+          (src.kind === "object" && arm.kind === "object") ||
           // Tuples already lift into ordinary array slots. Consider that
           // same conversion when the array is an arm of a union too.
           (src.kind === "record" && this.shapes.get(src.shapeId)?.tuple === true && arm.kind === "array") ||

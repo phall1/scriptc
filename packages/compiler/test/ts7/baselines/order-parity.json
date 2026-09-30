@@ -11787,6 +11787,42 @@
     "<repo>/tests/corpus/typed-array-constructor-union.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/class-callback-replacement.js": {
+   "order": [
+    "<repo>/tests/corpus/class-callback-replacement.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/class-instance-constructor.js": {
+   "order": [
+    "<repo>/tests/corpus/class-instance-constructor.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/js-class-computed-fields.js": {
+   "order": [
+    "<repo>/tests/corpus/js-class-computed-fields.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/js-derived-constructor-hoisting.js": {
+   "order": [
+    "<repo>/tests/corpus/js-derived-constructor-hoisting.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/js-inherited-parameter-abi.js": {
+   "order": [
+    "<repo>/tests/corpus/js-inherited-parameter-abi.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/js-nested-native-descriptors.js": {
+   "order": [
+    "<repo>/tests/corpus/js-nested-native-descriptors.js"
+   ],
+   "diags": []
   }
  }
 }

@@ -4,13 +4,15 @@ import { varRef } from "../../ir/build.js";
 import { everyStmtList, transformStmtList } from "../../ir/traverse.js";
 import { dynUndefinedExpr, PoisonError, type Lowerer } from "./lowerer.js";
 import { implicitDefaultInstance, type ParamShape } from "./lower-calls.js";
-import { accessorCall, findGenericMethodOn, findMethodOn, upcastTo, type ClassInfo } from "./lower-classes.js";
+import { accessorCall, findGenericMethodOn, findMethodOn, genericOverrideBelow, upcastTo, type ClassInfo } from "./lower-classes.js";
 import { classPrototypeData, hasClassPrototypeData } from "./class-prototypes.js";
+import { isClassCallback } from "./class-callbacks.js";
 
 type Invoke = Extract<IrExpr, { kind: "dynInvoke" }>;
 interface Dispatch {
   source: Invoke;
   fn: IrFunction;
+  callback: IrFunction;
   classes: Set<string>;
 }
 
@@ -19,6 +21,16 @@ interface PropertyDispatch {
   write: boolean;
   fn: IrFunction;
   classes: Set<string>;
+}
+
+export function classInstanceOf(lowerer: Lowerer, value: IrExpr, info: ClassInfo, loc: SrcLoc): IrExpr {
+  const name = `%dyn.class.instanceof:${info.def.name}`;
+  if (!lowerer.liftedFns.some((fn) => fn.name === name)) lowerer.liftedFns.push({
+    name, params: [{ localId: "value", name: "value", type: DYN }], returnType: BOOL,
+    locals: [{ id: "value", name: "value", type: DYN, mutable: false }],
+    body: [{ kind: "return", value: { kind: "boolLit", value: false, type: BOOL, loc }, loc }], loc,
+  });
+  return { kind: "call", callee: name, args: [value], type: BOOL, loc };
 }
 
 export function classPropertiesHelper(lowerer: Lowerer, loc: SrcLoc): IrFunction {
@@ -47,6 +59,7 @@ export class ClassDynamicDispatch {
   private readonly bagClasses = new Set<string>();
   private readonly bagInitializers = new Map<string, Extract<IrStmt, { kind: "fieldSet" }>>();
   private readonly generated = new Set<IrFunction>();
+  private readonly instanceTests = new Map<string, Set<string>>();
 
   process(lowerer: Lowerer, functions: readonly IrFunction[]): boolean {
     const seenTypes = new Set<string>();
@@ -85,6 +98,26 @@ export class ClassDynamicDispatch {
     });
     if (this.boxed.size === 0) return false;
     let changed = false;
+    for (const fn of functions) {
+      if (!fn.name.startsWith("%dyn.class.instanceof:")) continue;
+      const target = fn.name.slice("%dyn.class.instanceof:".length);
+      let checked = this.instanceTests.get(fn.name);
+      if (!checked) { checked = new Set(); this.instanceTests.set(fn.name, checked); }
+      for (const className of this.boxed) {
+        if (checked.has(className)) continue;
+        checked.add(className);
+        const subtype = className === target || lowerer.isSubclassOf(className, target);
+        if (!subtype && !lowerer.isSubclassOf(target, className)) continue;
+        const loc = fn.loc;
+        const value = varRef("value", DYN, loc);
+        const type: IrType = { kind: "object", className };
+        const result: IrExpr = subtype ? { kind: "boolLit", value: true, type: BOOL, loc }
+          : { kind: "instanceOf", value: { kind: "dynCheck", value, type, loc }, className: target, type: BOOL, loc };
+        fn.body.unshift({ kind: "if", cond: { kind: "libCall", fn: "dyn.typedRefIs", args: [value,
+          { kind: "strLit", value: typeKey(type), type: STRING, loc }], type: BOOL, loc }, then: [{ kind: "return", value: result, loc }], else_: null, loc });
+        changed = true;
+      }
+    }
     if (!this.propertyBag) {
       this.propertyBag = classPropertiesHelper(lowerer, functions[0]!.loc);
       this.generated.add(this.propertyBag);
@@ -220,19 +253,33 @@ export class ClassDynamicDispatch {
           let dispatch = this.dispatches.get(key);
           if (!dispatch) {
             const params = [expr.recv, ...expr.args].map((_, i) => ({ localId: `p.${i}`, name: `p${i}`, type: DYN }));
+            params.splice(1, 0, { localId: "p.callback", name: "callback", type: DYN });
+            const callback: IrFunction = {
+              name: `%dyn.class.callback.${this.dispatches.size}`, params: [params[0]!], returnType: DYN,
+              locals: [{ id: "p.0", name: "receiver", type: DYN, mutable: false }],
+              body: [{ kind: "return", value: dynUndefinedExpr(expr.loc), loc: expr.loc }], loc: expr.loc,
+            };
             const helper: IrFunction = {
               name: `%dyn.class.call.${this.dispatches.size}`, params, returnType: DYN,
               locals: params.map((p) => ({ id: p.localId, name: p.name, type: DYN, mutable: false })),
               body: [{ kind: "return", value: { ...expr, recv: varRef("p.0", DYN, expr.loc), args: expr.args.map((_, i) => varRef(`p.${i + 1}`, DYN, expr.loc)) }, loc: expr.loc }],
               loc: expr.loc,
             };
-            dispatch = { source: expr, fn: helper, classes: new Set() };
+            dispatch = { source: expr, fn: helper, callback, classes: new Set() };
             this.dispatches.set(key, dispatch);
             this.generated.add(helper);
-            lowerer.liftedFns.push(helper);
+            this.generated.add(callback);
+            lowerer.liftedFns.push(helper, callback);
             changed = true;
           }
-          return { kind: "call", callee: dispatch.fn.name, args: [expr.recv, ...expr.args], type: DYN, loc: expr.loc };
+          // Resolve an own callback before argument effects can replace it.
+          const local = { id: `%dispatch.receiver.${fn.locals.length}`, name: "receiver", type: DYN, mutable: false };
+          fn.locals.push(local);
+          const receiver = varRef(local.id, DYN, expr.loc);
+          return { kind: "seqExpr", stmts: [{ kind: "varDecl", localId: local.id, init: expr.recv, loc: expr.loc }], result: {
+            kind: "call", callee: dispatch.fn.name, args: [receiver,
+              { kind: "call", callee: dispatch.callback.name, args: [receiver], type: DYN, loc: expr.loc }, ...expr.args], type: DYN, loc: expr.loc,
+          }, type: DYN, loc: expr.loc };
         },
       });
     }
@@ -243,6 +290,13 @@ export class ClassDynamicDispatch {
         const loc = dispatch.source.loc;
         const type: IrType = { kind: "object", className: info.def.name };
         const receiver = varRef("p.0", DYN, loc);
+        if (isClassCallback(lowerer, info, dispatch.source.method)) {
+          const bag: IrExpr = { kind: "call", callee: this.propertyBag!.name, args: [receiver], type: DYN, loc };
+          dispatch.callback.body.unshift({ kind: "if", cond: {
+            kind: "libCall", fn: "dyn.typedRefIs", args: [receiver, { kind: "strLit", value: typeKey(type), type: STRING, loc }], type: BOOL, loc,
+          }, then: [{ kind: "return", value: { kind: "libCall", fn: "dyn.getOwnPropertyDescriptor", args: [bag,
+            lowerer.coerceToExpected({ kind: "strLit", value: dispatch.source.method, type: STRING, loc }, DYN)], type: DYN, loc }, loc }], else_: null, loc });
+        }
         const before = lowerer.diags.length;
         let branch: IrStmt[];
         try {
@@ -410,7 +464,7 @@ export class ClassDynamicDispatch {
       result = methodInfo.sig.ret;
       callee = `%${owner.def.name}.${method}`;
       virtual = lowerer.overrideBelow(owner, method) || methodInfo.sig.abstract === true;
-    } else if (generic?.info.implicitParams && generic.declarer.decl && !lowerer.inHierarchy(info)) {
+    } else if (generic?.info.implicitParams && generic.declarer.decl && !genericOverrideBelow(lowerer, info, method)) {
       owner = generic.declarer;
       // A failed eager specialization leaves a signature in the instance
       // cache, but no body. Later dispatch arities must retain the fence
@@ -460,6 +514,14 @@ export class ClassDynamicDispatch {
     if (methodInfo) {
       if (virtual) lowerer.noteVirtualEdge(owner, method);
       else lowerer.noteEdge(callee);
+    }
+    if (isClassCallback(lowerer, info, method)) {
+      const descriptor = varRef("p.callback", DYN, loc);
+      body.unshift({ kind: "if", cond: { kind: "dynTest", test: "undefined", negated: true, value: descriptor, type: BOOL, loc }, then: [
+        { kind: "return", value: { kind: "dynCall", callee: { kind: "dynKeyGet", value: descriptor,
+          key: { kind: "strLit", value: "value", type: STRING, loc }, type: DYN, loc }, receiver: varRef("p.0", DYN, loc),
+          args: incoming, calleeName: dispatch.source.calleeName, type: DYN, loc }, loc },
+      ], else_: null, loc });
     }
     return body;
   }

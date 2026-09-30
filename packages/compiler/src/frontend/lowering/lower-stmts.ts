@@ -24,6 +24,7 @@ import { isMixinFnBinding, mixinResultBindingClassOf } from "./lower-mixins.js";
 import type { ClassInfo, ClassIteratorInfo } from "./lower-classes.js";
 import { isCompiledPrototypeMember } from "./class-prototypes.js";
 import { classStaticDataFor } from "./class-static-data.js";
+import { lowerClassCallbackAssign } from "./class-callbacks.js";
 import { genericIfaceBindingKeepsClass, staticFieldWriteTarget } from "./lower-classes.js";
 import { lowerStreamUnderscoreAssign, streamClassAliasDecl } from "./lower-stream.js";
 import { lowerHttpResPropertyAssignment, lowerHttpServerTimeoutAssignment, lowerServerCloseOverrideAssignment } from "./lower-server.js";
@@ -5303,6 +5304,8 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
             const value = lowerer.lowerExprExpecting(expr.right, target.fieldType);
             return lowerer.fieldSetStmt(target, value, locOf(expr), expr.left);
           }
+          const callback = lowerClassCallbackAssign(lowerer, expr);
+          if (callback) return callback;
           // A write to an ABSTRACT property through an abstract-typed
           // receiver: the read fence's write twin (the declaration is
           // erased at runtime — no shared slot exists to write).

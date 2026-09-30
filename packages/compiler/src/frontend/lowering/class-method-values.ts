@@ -6,6 +6,7 @@ import { locOf } from "../program.js";
 import type { Lowerer } from "./lowerer.js";
 import { findGenericMethodOn, findMethodOn, type ClassInfo } from "./lower-classes.js";
 import { funcTypeFromParamShapes, implicitDefaultInstance, type ParamShape } from "./lower-calls.js";
+import { classCallbackValue, isClassCallback } from "./class-callbacks.js";
 
 /** A method value retains its declaration's identity, not the receiver from
  * extraction. Its native thunk validates the receiver supplied at call time. */
@@ -14,10 +15,19 @@ export function lowerClassMethodValue(lowerer: Lowerer, expr: ts.PropertyAccessE
   const value = methodValue(lowerer, expr, info);
   if (!value) return null;
   const loc = locOf(expr);
+  const callback = isClassCallback(lowerer, info, method);
+  const receiver = lowerer.lowerExpr(expr.expression);
+  const local = callback ? lowerer.declareHiddenLocal("%callbackReceiver", receiver.type) : null;
+  const reference = local ? varRef(local.id, receiver.type, loc) : receiver;
+  const finish = (result: IrExpr): IrExpr => {
+    if (!local) return result;
+    const selected = classCallbackValue(lowerer, reference, method, result, loc);
+    return { kind: "seqExpr", stmts: [{ kind: "varDecl", localId: local.id, init: receiver, loc }], result: selected, type: selected.type, loc };
+  };
   const overrides = [...lowerer.classes.values()].filter((candidate) =>
     candidate !== info && lowerer.isSubclassOf(candidate.def.name, info.def.name) && candidate.methods.has(method));
   if (overrides.length === 0) {
-    return { kind: "seqExpr", stmts: [{ kind: "exprStmt", expr: lowerer.lowerExpr(expr.expression), loc }], result: value, type: value.type, loc };
+    return finish({ kind: "seqExpr", stmts: [{ kind: "exprStmt", expr: reference, loc }], result: value, type: value.type, loc });
   }
   // Select the declaration when extracting the value. Calling the value
   // later must not redispatch the method name on a different receiver.
@@ -38,7 +48,7 @@ export function lowerClassMethodValue(lowerer: Lowerer, expr: ts.PropertyAccessE
     lowerer.liftedFns.push({ name, params: [{ localId: "this.0", name: "this", type: receiverType }], returnType: value.type,
       locals: [{ id: "this.0", name: "this", type: receiverType, mutable: false }], body, loc });
   }
-  return { kind: "call", callee: name, args: [lowerer.lowerExpr(expr.expression)], type: value.type, loc };
+  return finish({ kind: "call", callee: name, args: [reference], type: value.type, loc });
 }
 
 function methodValue(lowerer: Lowerer, expr: ts.PropertyAccessExpression, info: ClassInfo): IrExpr | null {

@@ -28,6 +28,7 @@ import { rejectStaticThis } from "./static-this.js";
 import { lowerUrlNew } from "./lower-url.js";
 import { isNativeProxyInitializer, lowerNativeProxy } from "./expressions/native-proxy.js";
 import { classStaticDataFor } from "./class-static-data.js";
+import { lowerInstanceConstructorNew } from "./class-instance-constructor.js";
 
 function functionLocalClass(decl: ts.ClassLikeDeclaration): boolean {
   if (!ts.isClassExpression(decl)) return false;
@@ -1909,6 +1910,20 @@ export function collectClassShapeInner(lowerer: Lowerer, decl: ts.ClassLikeDecla
               `overriding the builtin Error method '${mName}'`,
             );
           }
+          if (overridden && isJsSourceFile(member.getSourceFile())) {
+            // An unannotated JS parameter can use the base's typed ABI.
+            // Defaults stay local to each declaration, so only inherited
+            // required/optional slots participate in this refinement.
+            for (let i = 0; i < shapes.length; i++) {
+              const parameter = member.parameters[i];
+              const inherited = overridden.sig.params[i];
+              if (parameter && inherited && !parameter.type && !parameter.initializer && !parameter.dotDotDotToken &&
+                  shapes[i]!.type.kind === "dyn" && inherited.type.kind !== "dyn" &&
+                  (inherited.mode === "required" || inherited.mode === "omittable")) {
+                shapes[i] = { ...inherited };
+              }
+            }
+          }
           // JS overrides may ignore trailing arguments. Retain the base's
           // checked-value ABI slots as unused parameters, and let shorter
           // calls fill them with undefined. Typed tails and rest/arguments
@@ -3776,7 +3791,7 @@ export function staticFieldWriteTarget(lowerer: Lowerer, access: ts.PropertyAcce
    * method `name` — overrideBelow's twin: generic methods have no vtable
    * slot, so a call that could reach an override compiles only when the
    * receiver's runtime class is statically exact. */
-  function genericOverrideBelow(lowerer: Lowerer, info: ClassInfo, name: string): boolean {
+  export function genericOverrideBelow(lowerer: Lowerer, info: ClassInfo, name: string): boolean {
     return info.subclasses.some(
       (s) => s.genericMethods?.has(name) === true || genericOverrideBelow(lowerer, s, name),
     );
@@ -4675,56 +4690,65 @@ export function lowerClassMembers(lowerer: Lowerer, info: ClassInfo): IrFunction
     forward?: IrExpr[],): IrStmt[] {
     const out: IrStmt[] = [];
     let superSeen = false;
-    for (const stmt of info.ctor!.body!.statements) {
-      const superCall =
-        ts.isExpressionStatement(stmt) &&
-        ts.isCallExpression(stmt.expression) &&
-        stmt.expression.expression.kind === ts.SyntaxKind.SuperKeyword
-          ? stmt.expression
-          : null;
-      if (!superCall) {
-        out.push(...lowerer.lowerStmts([stmt]));
-        continue;
-      }
-      if (!lowerer.suppressStats) {
-        lowerer.stats.statementsTotal++;
-        lowerer.bumpFileStat(locOf(stmt).file, "total");
-      }
-      try {
-        if (superSeen) lowerer.unsupported("SC1090", stmt, "multiple super() calls");
-        superSeen = true;
-        const base = superBaseOf(info)!;
-        if (base.builtinEmitter && superCall.arguments.length > 0) {
-          // @types/node admits super({ captureRejections }) — no lowering.
-          lowerer.unsupported("SC1090", superCall, "EventEmitter constructor options ('captureRejections')");
-        }
-        if (base.builtinStream) {
-          // super(options?) into a runtime stream base: the stream spoke
-          // parses the options and binds overridden underscore methods.
-          out.push(...lowerStreamSuperCall(lowerer, info, base, superCall.arguments, thisLocal, locOf(stmt), stmt));
-          out.push(...lowerer.fieldInitStmts(info, thisLocal));
-          out.push(...paramPropInitStmts(lowerer, info, thisLocal));
+    const statements = info.ctor!.body!.statements;
+    const entry = { stmts: statements, index: 0, ctx: lowerer.ctx, frame: lowerer.scopes[lowerer.scopes.length - 1]!, out };
+    lowerer.activeStmtLists.push(entry);
+    try {
+      for (let index = 0; index < statements.length; index++) {
+        entry.index = index;
+        const stmt = statements[index]!;
+        const superCall =
+          ts.isExpressionStatement(stmt) &&
+          ts.isCallExpression(stmt.expression) &&
+          stmt.expression.expression.kind === ts.SyntaxKind.SuperKeyword
+            ? stmt.expression
+            : null;
+        if (!superCall) {
+          out.push(...lowerer.lowerStmts([stmt]));
           continue;
         }
-        const args = forward !== undefined
-          ? forward
-          : base.builtinError
-            ? lowerer.errorConstructorArgs(superCall.arguments, locOf(stmt), stmt)
-            : base.builtinEmitter
-              ? []
-              : lowerer.completeArgs(superCall.arguments, base.ctorParams, locOf(stmt), stmt);
-        out.push(lowerer.superCallStmt(info, thisLocal, args, locOf(stmt)));
-        // super() returns → field initializers → parameter-property
-        // assignments (Node's order, probed) → the rest of the body.
-        out.push(...lowerer.fieldInitStmts(info, thisLocal));
-        out.push(...paramPropInitStmts(lowerer, info, thisLocal));
-      } catch (e) {
-        if (!(e instanceof PoisonError)) throw e;
         if (!lowerer.suppressStats) {
-          lowerer.stats.statementsFailed++;
-          lowerer.bumpFileStat(locOf(stmt).file, "failed");
+          lowerer.stats.statementsTotal++;
+          lowerer.bumpFileStat(locOf(stmt).file, "total");
+        }
+        try {
+          if (superSeen) lowerer.unsupported("SC1090", stmt, "multiple super() calls");
+          superSeen = true;
+          const base = superBaseOf(info)!;
+          if (base.builtinEmitter && superCall.arguments.length > 0) {
+            // @types/node admits super({ captureRejections }) — no lowering.
+            lowerer.unsupported("SC1090", superCall, "EventEmitter constructor options ('captureRejections')");
+          }
+          if (base.builtinStream) {
+            // super(options?) into a runtime stream base: the stream spoke
+            // parses the options and binds overridden underscore methods.
+            out.push(...lowerStreamSuperCall(lowerer, info, base, superCall.arguments, thisLocal, locOf(stmt), stmt));
+            out.push(...lowerer.fieldInitStmts(info, thisLocal));
+            out.push(...paramPropInitStmts(lowerer, info, thisLocal));
+            continue;
+          }
+          const args = forward !== undefined
+            ? forward
+            : base.builtinError
+              ? lowerer.errorConstructorArgs(superCall.arguments, locOf(stmt), stmt)
+              : base.builtinEmitter
+                ? []
+                : lowerer.completeArgs(superCall.arguments, base.ctorParams, locOf(stmt), stmt);
+          out.push(lowerer.superCallStmt(info, thisLocal, args, locOf(stmt)));
+          // super() returns → field initializers → parameter-property
+          // assignments (Node's order, probed) → the rest of the body.
+          out.push(...lowerer.fieldInitStmts(info, thisLocal));
+          out.push(...paramPropInitStmts(lowerer, info, thisLocal));
+        } catch (e) {
+          if (!(e instanceof PoisonError)) throw e;
+          if (!lowerer.suppressStats) {
+            lowerer.stats.statementsFailed++;
+            lowerer.bumpFileStat(locOf(stmt).file, "failed");
+          }
         }
       }
+    } finally {
+      lowerer.activeStmtLists.pop();
     }
     if (!superSeen) {
       // tsc guarantees the call exists somewhere; if it wasn't a top-level
@@ -5087,6 +5111,22 @@ function assignedThisFieldType(lowerer: Lowerer, expr: ts.NewExpression): IrType
 
 export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
     const loc = locOf(expr);
+    const instanceConstructor = lowerInstanceConstructorNew(lowerer, expr);
+    if (instanceConstructor) return instanceConstructor;
+    let selected: ts.Expression = expr.expression;
+    while (ts.isParenthesizedExpression(selected)) selected = selected.expression;
+    if (ts.isConditionalExpression(selected)) {
+      const yes = exactClassOfReceiver(lowerer, selected.whenTrue);
+      const no = exactClassOfReceiver(lowerer, selected.whenFalse);
+      if (yes && no && !yes.classDecorators && !no.classDecorators) {
+        const yesType: IrType = { kind: "object", className: yes.def.name };
+        const noType: IrType = { kind: "object", className: no.def.name };
+        const type: IrType = yes === no ? yesType : { kind: "union", unionId: lowerer.unions.intern([yesType, noType].sort((a, b) => typeKey(a) < typeKey(b) ? -1 : 1)) };
+        return { kind: "ternary", cond: lowerer.lowerCondition(selected.condition),
+          then: lowerer.coerceInto(expr, lowerProgramClassNew(lowerer, expr, yes, loc), type),
+          else_: lowerer.coerceInto(expr, lowerProgramClassNew(lowerer, expr, no, loc), type), type, loc };
+      }
+    }
     if (ts.isPropertyAccessExpression(expr.expression) && expr.expression.name.text === "Segmenter" &&
         lowerer.isStdlibGlobal(expr.expression.expression, "Intl")) {
       const args = expr.arguments ?? [];

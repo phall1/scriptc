@@ -49,6 +49,7 @@ import { coerceStringSearchValue, defaultAfterUndefined, lowerStaticallyUndefine
 import { recordTextCodecClass } from "../../ir/ir.js";
 import { classSymbolKeyOf } from "./symbol-fields.js";
 import { lowerClassMethodValue } from "./class-method-values.js";
+import { classInstanceOf } from "./class-dynamic-dispatch.js";
 import { lowerGlobalValue } from "./lower-global-value.js";
 import { lowerClassPrototypeData } from "./class-prototypes.js";
 
@@ -667,8 +668,13 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
       // every function and constructor global is "function" (the harness's
       // `typeof queueMicrotask === 'function'` probes). Shadowing locals
       // have non-stdlib symbols and keep the ordinary path.
-      if (ts.isIdentifier(expr.expression)) {
-        const sym = lowerer.checker.getSymbolAtLocation(expr.expression);
+      let tested = expr.expression;
+      while (ts.isParenthesizedExpression(tested)) tested = tested.expression;
+      if (ts.isIdentifier(tested)) {
+        const sym = lowerer.checker.getSymbolAtLocation(tested);
+        if (!sym && !lowerer.dynamic) {
+          return { kind: "strLit", value: "undefined", type: STRING, loc };
+        }
         if (lowerer.isStdlibSymbol(sym)) {
           const t = lowerer.typeOf(expr.expression);
           if (
@@ -5723,9 +5729,9 @@ export function lowerElementCompound(lowerer: Lowerer, expr: ts.BinaryExpression
     // type (static `any` — mapTypeOf answers null without --dynamic)
     // probes the receiver's own lowered world: a dyn value takes the same
     // write, anything else falls through to the fences.
-    if (receiverIr?.kind === "dyn" || receiverIr === null) {
+    if (receiverIr?.kind === "dyn" || receiverIr?.kind === "object" || receiverIr === null) {
       const obj = receiverIr !== null ? lowerer.lowerExpr(target.expression) : tryLowerExpression(lowerer, target.expression);
-      if (obj !== null && obj.type.kind === "dyn") {
+      if (obj !== null && (obj.type.kind === "dyn" || isDynTypedRefType(obj.type))) {
         const loc = locOf(expr);
         const litKey = recordKeyLiteralText(target.argumentExpression);
         let key: IrExpr =
@@ -5744,7 +5750,7 @@ export function lowerElementCompound(lowerer: Lowerer, expr: ts.BinaryExpression
             `storing '${lowerer.fmt(value.type)}' values in a checked-dynamic object (the value cannot convert into the checked-dynamic tree)`,
           );
         }
-        return { kind: "exprStmt", expr: { kind: "libCall", fn: "dyn.keySet", args: [obj, key, value], type: VOID, loc }, loc };
+        return { kind: "exprStmt", expr: { kind: "libCall", fn: "dyn.keySet", args: [lowerer.coerceToExpected(obj, DYN), key, value], type: VOID, loc }, loc };
       }
     }
     if (receiverIr?.kind !== "array") {
@@ -6778,7 +6784,7 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
         const reference = scalarSide.type;
         if ((isDynTypedRefType(reference) || reference.kind === "record" || reference.kind === "array" ||
              reference.kind === "bytes" || reference.kind === "func" || reference.kind === "regex" || reference.kind === "url" ||
-             reference.kind === "bigint" || reference.kind === "set" || DYN_HANDLE_KINDS.has(reference.kind)) &&
+             reference.kind === "bigint" || reference.kind === "set" || reference.kind === "union" || DYN_HANDLE_KINDS.has(reference.kind)) &&
             lowerer.dynConvertible(reference)) {
           const boxed: IrExpr = {
             kind: "dynFrom", value: scalarSide, type: DYN, loc: scalarSide.loc,
@@ -8424,6 +8430,9 @@ function lowerLogicalPair(lowerer: Lowerer, expr: ts.BinaryExpression, left: IrE
     // (name strings are user-writable), so `u instanceof TypeError` keeps
     // the fence. Reads past the narrow bridge through maybeNarrow's
     // validated %Error extraction. SEMANTICS.md 67.
+    if (left.type.kind === "dyn" && !target.def.runtime && !target.builtinError && !target.builtinEmitter && !target.builtinStream && !target.localClass) {
+      return classInstanceOf(lowerer, left, target, loc);
+    }
     if (left.type.kind === "dyn" && target.def.name === "%Error") {
       return { kind: "dynTest", test: "error", value: left, type: BOOL, loc };
     }
