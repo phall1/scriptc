@@ -67,8 +67,12 @@ const results = await Promise.all(jobs); // number[] — compiles
 **The `any`/`unknown` boundary**
 
 - `any` without `--dynamic` is generally a compile error (SC2011) — use `unknown` and a checked cast, or opt into the engine. Native Map and Set type arguments may use `any`; their slots use the same checked values as `unknown` without embedding an engine.
-- `any` and `unknown` ride locals, parameters, and returns; record and tuple fields hold `unknown`. JavaScript instance fields can also hold native checked values without a JavaScript engine: bare fields start as `undefined`, and redeclaring a field with the same checked-value type resets it in initialization order. Explicit TypeScript `any`/`unknown` class fields, static checked-value fields, statically typed array elements, and union arms remain unsupported in static builds. Program class instances can pass through `unknown` and recover at their exact static class type without losing identity, including classes with internal collections. Dynamic property inspection of a class whose own fields cannot cross the checked-value boundary throws a catchable `TypeError`. Supported native handles also retain identity; JSON-shaped records and arrays retain the copy boundary described below.
+- `any` and `unknown` ride locals, parameters, and returns; record and tuple fields hold `unknown`. JavaScript instance fields can also hold native checked values without a JavaScript engine: bare fields start as `undefined`, and redeclaring a field with the same checked-value type resets it in initialization order. Explicit TypeScript `any`/`unknown` class fields, static checked-value fields, statically typed array elements, and union arms remain unsupported in static builds. Program class instances can pass through `unknown` and recover at their exact static class type or a base class without losing identity, including classes with internal collections. Dynamic property inspection of a class whose own fields cannot cross the checked-value boundary throws a catchable `TypeError`. Supported native handles also retain identity. JavaScript argument and return conversions preserve native array references; other JSON-shaped record and array conversions retain the copy boundary described below.
 - Operations on `unknown` beyond the supported surface (truthiness, `typeof` narrowing, property access, `+`, `switch`, `throw`) need a checked cast first.
+
+**Three.js**
+
+With `--npm-static=three`, published three.js modules support CPU math, geometry, scene graphs, materials, and a subset of raycasting in native and WASI builds without a JavaScript engine. Raycasting covers mesh intersections, sorted results, recursive traversal, layers, distance limits, perspective and orthographic camera rays, lines, and points. Mesh attribute interpolation can still fail when three.js reads components beyond the end of a vertex attribute; numeric fields cannot retain the resulting `undefined`. WebGL rendering, browser DOM integration, and native graphics windows remain unsupported.
 
 **Type surface**
 
@@ -90,7 +94,7 @@ A static-tier program otherwise produces byte-identical stdout and the same exit
 
 **A lying cast on dynamic data throws instead of corrupting memory** — the headline divergence, and the point. `JSON.parse(s) as Config` with mismatched data throws a catchable error naming the offending path (`expected number at $.port, got string`) where JS would silently hand you garbage.
 
-**Structural width subtyping copies.** A record flowing into a strict field-subset shape is copied, not aliased: mutations through the narrower reference are invisible to the original. Same stance at the dynamic boundary: values cross by copy, never by reference.
+**Structural width subtyping copies.** A record flowing into a strict field-subset shape is copied, not aliased: mutations through the narrower reference are invisible to the original. Typed records and arrays generally cross the checked-value boundary as copies. JavaScript argument and return conversions preserve native array references, and class instances retain identity at their exact class type or a base class.
 
 **`Object.keys`/`values`/`entries` and `JSON.stringify` report a record's declaration order**, not per-object insertion order. Identical to Node whenever objects are built in declaration order (the overwhelmingly common case).
 

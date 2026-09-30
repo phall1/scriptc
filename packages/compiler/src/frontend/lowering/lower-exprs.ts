@@ -1933,6 +1933,11 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
             expr,
           );
         }
+        if (expr.name.text === "length" && (recv.type.kind === "array" || recv.type.kind === "string")) {
+          return recv.type.kind === "array"
+            ? { kind: "arrIntrinsic", method: "length", receiver: recv, args: [], type: F64, loc }
+            : { kind: "strIntrinsic", method: "length", receiver: recv, args: [], type: F64, loc };
+        }
       }
       // `f.name` / `f.length` / own properties on a FUNCTION-typed JS
       // value (the mustCall wrapper's function-instance members): read

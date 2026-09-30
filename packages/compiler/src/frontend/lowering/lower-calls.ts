@@ -2148,11 +2148,14 @@ function runtimeOptionalHofGenericBinding(
 
 /** The implicit-type-parameter slots of a JS function-like: parallel to
    * decl.parameters, the param SYMBOL where the slot is a bindable
-   * implicit-any param (identifier-named, no annotation/JSDoc type, not
-   * rest/optional/defaulted, never written), null elsewhere. Null overall
-   * when nothing qualifies — the declaration keeps today's path. */
+   * implicit param (identifier-named, broad inferred/JSDoc type, not
+   * rest/optional/defaulted, never written), null elsewhere. Package JS
+   * methods may also specialize class parameters: JSDoc names a nominal
+   * class even when the body accepts other objects with the same members.
+   * Null overall when nothing qualifies — the declaration keeps its ABI. */
   export function implicitAnyParamSymbolsOf(lowerer: Lowerer,
-    decl: ts.FunctionDeclaration | ts.MethodDeclaration | ts.FunctionExpression | ts.ArrowFunction,): (ts.Symbol | null)[] | null {
+    decl: ts.FunctionDeclaration | ts.MethodDeclaration | ts.FunctionExpression | ts.ArrowFunction,
+    classParams = false,): (ts.Symbol | null)[] | null {
     if (!decl.body) return null;
     if (decl.asteriskToken) return null;
     if (decl.modifiers?.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword)) return null;
@@ -2169,7 +2172,8 @@ function runtimeOptionalHofGenericBinding(
       const broadFunction = lowerer.checker.typeToString(t) === "Function";
       const broadArray = lowerer.checkerAnyArrayType(t);
       const broadPromise = broadPromiseParam(lowerer, t);
-      if ((t.flags & ts.TypeFlags.Any) === 0 && !broadFunction && !broadArray && !broadPromise) return null;
+      const classParam = classParams && lowerer.mapTypeOf(t)?.kind === "object";
+      if ((t.flags & ts.TypeFlags.Any) === 0 && !broadFunction && !broadArray && !broadPromise && !classParam) return null;
       const sym = lowerer.checker.getSymbolAtLocation(param.name);
       if (!sym) return null;
       if (paramWrittenInBody(lowerer, decl.body!, sym, param.name.text)) return null;
@@ -2186,6 +2190,11 @@ function runtimeOptionalHofGenericBinding(
    * selects return INFERENCE with DYN as the recursion pin. */
   function implicitDeclaredReturn(lowerer: Lowerer, info: GenericFnInfo): IrType | null {
     try {
+      // Static JS helpers can accept a structurally compatible class despite
+      // narrower JSDoc (for example a Vector2 target documented as Vector3).
+      // Infer their result from the specialized body as well.
+      if (info.member?.kind === "static" && info.decl.parameters.some((param, index) =>
+          info.implicitParams?.[index] && lowerer.mapTypeOf(lowerer.typeOf(param.name))?.kind === "object")) return null;
       const broadCallbackSymbols = new Set(
         info.decl.parameters.flatMap((param, index) => {
           const symbol = info.implicitParams?.[index];
@@ -2360,7 +2369,11 @@ function storedImplicitArgumentType(lowerer: Lowerer, arg: ts.Expression): IrTyp
     const shapes: ParamShape[] = info.decl.parameters.map((param, i) =>
       info.implicitParams![i] ? { type: DYN, mode: "required" as const } : lowerer.paramShape(param),
     );
-    return internImplicitInstance(lowerer, blame, info, shapes, new Map());
+    const argTypes = new Map<ts.Symbol, ts.Type>();
+    for (const symbol of info.implicitParams ?? []) {
+      if (symbol) argTypes.set(symbol, lowerer.checker.getUnknownType());
+    }
+    return internImplicitInstance(lowerer, blame, info, shapes, argTypes);
   }
 
   function internImplicitInstance(lowerer: Lowerer, blame: ts.Node,
@@ -11106,7 +11119,10 @@ function lowerUnionObjectMethodCall(
 function paramAbisEqual(left: readonly ParamShape[], right: readonly ParamShape[]): boolean {
   return left.length === right.length && left.every((shape, i) => {
     const other = right[i];
-    return other !== undefined && shape.mode === other.mode && typeEquals(shape.type, other.type);
+    return other !== undefined && typeEquals(shape.type, other.type) &&
+      (shape.mode === other.mode || shape.type.kind === "dyn" &&
+        (shape.mode === "required" || shape.mode === "omittable") &&
+        (other.mode === "required" || other.mode === "omittable"));
   });
 }
 

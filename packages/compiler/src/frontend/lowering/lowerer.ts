@@ -1655,6 +1655,9 @@ export class Lowerer {
   /** Inferred JS methods participating in an override chain keep a vtable
    * ABI instead of call-site specialization. Filled before class collection. */
   readonly virtualJsMethods = new Set<ts.MethodDeclaration>();
+  /** Largest fixed argument list below a JS method, discovered before any
+   * base vtable signature is collected. Unused checked slots carry undefined. */
+  readonly virtualJsMethodArity = new Map<ts.MethodDeclaration, number>();
   /** The class whose members are lowering — `super` binds lexically to it
    * (arrows inside methods lower within this window, so they see it too). */
   currentClass: ClassInfo | null = null;
@@ -5333,6 +5336,12 @@ export class Lowerer {
       return { kind: "promiseVoidWiden", value: expr, type: expected, loc: expr.loc };
     }
     if (expected.kind === "dyn" && expr.type.kind !== "dyn") {
+      // Native void calls still have a JavaScript value: undefined. Keep
+      // the call's effects before exposing that value to checked JS code.
+      if (expr.type.kind === "void") {
+        return { kind: "seqExpr", stmts: [{ kind: "exprStmt", expr, loc: expr.loc }],
+          result: dynUndefinedExpr(expr.loc), type: DYN, loc: expr.loc };
+      }
       // An error-HIERARCHY object (builtin subclass or user `extends
       // Error` class) upcasts to the %Error root first — the caughtToDyn
       // encoding (scr_dyn_from_error) carries name/message/code and the
@@ -7838,6 +7847,11 @@ export class Lowerer {
       }
     }
     let e = this.coerceToExpected(expr, expected);
+    // JavaScript checked slots retain native arrays by reference. Calls,
+    // returns and argument packs must all share mutations and identity.
+    if (isJsSourceFile(node.getSourceFile()) && e.kind === "dynFrom" && e.value.type.kind === "array") {
+      e = { ...e, liveRef: true };
+    }
     // An 'any' value PROVABLY null/undefined (the unit literal itself, or
     // a read of a binding nothing ever assigns a non-unit value) flowing
     // implicitly into a primitive slot: the validated exit refuses units

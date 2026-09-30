@@ -13,6 +13,10 @@ export function applyNpmStaticFindReturnWidening(path: string, source: string): 
   return syntax.applyNpmStaticFindReturnWidening(nodeFrontendServices().parse(path, source, "js"), source);
 }
 
+export function applyNpmStaticJsDocNamepaths(path: string, source: string): string | null {
+  return syntax.applyNpmStaticJsDocNamepaths(nodeFrontendServices().parse(path, source, "js"), source);
+}
+
 export function parseNpmStaticDeclarationOverloads(path: string, source: string): NpmStaticDeclarationOverloads {
   return syntax.parseNpmStaticDeclarationOverloads(nodeFrontendServices().parse(path, source, "ts"));
 }

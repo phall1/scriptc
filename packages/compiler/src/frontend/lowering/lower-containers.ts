@@ -2746,7 +2746,14 @@ export function tryLowerNumericIndexRead(lowerer: Lowerer, operand: IrExpr, loc:
     }
     const receiver = lowerer.lowerExpr(access.expression);
     const argNode = call.arguments[0]!;
-    const fnArg = lowerer.lowerExpr(argNode);
+    let fnArg = lowerer.lowerExpr(argNode);
+    // Reusable JS comparators often accept checked values. Adapt the array's
+    // element ABI just as other array callbacks do before sorting.
+    if (fnArg.type.kind === "func" && fnArg.type.params.length <= 2 &&
+        fnArg.type.params.every((param) => lowerer.coercibleValue(elem, param))) {
+      const expected = funcOf(fnArg.type.params.map(() => elem), fnArg.type.ret);
+      if (!typeEquals(fnArg.type, expected)) fnArg = lowerer.coerceToExpected(fnArg, expected);
+    }
     // The comparator receives exactly (a, b); declaring a prefix is
     // ordinary TS. Its result must be number (the spec coerces arbitrary
     // results — no lowering for that).

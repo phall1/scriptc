@@ -63,6 +63,10 @@ export class FrontendServices {
   nullableClassFields(path: string, source: string): syntax.NpmStaticOverloadRewrite | null {
     return syntax.applyNpmStaticNullableClassFields(this.parse(path, source, "js"), source);
   }
+  jsDocNamepaths(path: string, source: string): string | null {
+    if (!source.includes("~") && !source.includes("#")) return null;
+    return syntax.applyNpmStaticJsDocNamepaths(this.parse(path, source, "js"), source);
+  }
   findReturnWidening(path: string, source: string): syntax.NpmStaticOverloadRewrite | null {
     return syntax.applyNpmStaticFindReturnWidening(this.parse(path, source, "js"), source);
   }

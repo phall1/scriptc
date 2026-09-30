@@ -1395,6 +1395,15 @@ export function collectClassShapeInner(lowerer: Lowerer, decl: ts.ClassLikeDecla
               lowerer.badType(member.name, lowerer.typeOf(member.name));
             }
             staticMethods.set(member.name.text, { params: shapes, ret: ft.ret, member });
+            if (implicitMonoFile(decl.getSourceFile()) && !functionLocalClass(decl) &&
+                inst === undefined && decl.typeParameters === undefined) {
+              const implicit = implicitAnyParamSymbolsOf(lowerer, member, true);
+              if (implicit) genericStatics.set(member.name.text, {
+                decl: member, baseName: member.name.text,
+                qualifiedName: `%${className}.static:${member.name.text}%implicit`,
+                typeParams: [], instances: new Map(), implicitParams: implicit,
+              });
+            }
           }
           // GENERIC static methods monomorphize like top-level generic
           // functions (`%C.static:m%n`), async ones included — a generic
@@ -1879,7 +1888,7 @@ export function collectClassShapeInner(lowerer: Lowerer, decl: ts.ClassLikeDecla
             !lowerer.findMethodOn(base, member.name.text) &&
             !findGenericMethodOn(lowerer, base, member.name.text)
           ) {
-            const implicit = implicitAnyParamSymbolsOf(lowerer, member);
+            const implicit = implicitAnyParamSymbolsOf(lowerer, member, true);
             if (implicit) {
               genericMethods.set(member.name.text, {
                 decl: member,
@@ -1893,6 +1902,14 @@ export function collectClassShapeInner(lowerer: Lowerer, decl: ts.ClassLikeDecla
             }
           }
           const { shapes, funcType: ft } = lowerer.lambdaSignature(member);
+          // JS subclasses can add parameters to a method. Reserve checked
+          // argument slots in the base before constructing its vtable; shorter
+          // bodies ignore them and omitted call arguments become undefined.
+          const virtualArity = lowerer.virtualJsMethodArity.get(member) ?? shapes.length;
+          if (virtualArity > shapes.length && !bodyReadsArguments(member) &&
+              shapes.every((p) => p.type.kind === "dyn" && (p.mode === "required" || p.mode === "omittable"))) {
+            while (shapes.length < virtualArity) shapes.push({ type: DYN, mode: "omittable" });
+          }
           if (fields.has(mName)) {
             lowerer.unsupported("SC1090", member.name, "methods shadowing inherited fields");
           }
@@ -3643,6 +3660,12 @@ export function staticFieldWriteTarget(lowerer: Lowerer, access: ts.PropertyAcce
         `calling the static member '${access.name.text}' through a class value (a subclass of '${info.def.name.replace(/^%|^%m\d+\./, "")}' redeclares it, so the runtime class decides which declaration answers)`,
       );
     }
+    const specialized = findGenericStaticOn(lowerer, info, access.name.text);
+    if (specialized?.declarer === found.declarer && specialized.info.implicitParams) {
+      const instance = implicitCallInstance(lowerer, call, specialized.info);
+      const args = lowerer.completeArgs(call.arguments, instance.params, loc, call);
+      return { kind: "call", callee: instance.name, args, type: instance.returnType, loc };
+    }
     if (found.field !== undefined) {
       // A func-typed static field in call position: read the global,
       // call through the value (the ctor-assigned-callback pattern).
@@ -3832,15 +3855,14 @@ export function staticFieldWriteTarget(lowerer: Lowerer, access: ts.PropertyAcce
  * collected subclass graph cannot answer this question yet. The checker
  * hierarchy identifies the original declarations through aliases as well. */
 export function collectVirtualJsMethods(lowerer: Lowerer, files: readonly ts.SourceFile[]): void {
-  if (!files.some(implicitMonoFile)) return;
+  if (!files.some(isJsSourceFile)) return;
   const visit = (node: ts.Node): void => {
     if (ts.isClassDeclaration(node) || ts.isClassExpression(node)) {
-      const names = node.members.flatMap((member) =>
+      const members = node.members.filter((member): member is ts.MethodDeclaration =>
         ts.isMethodDeclaration(member) && ts.isIdentifier(member.name) &&
-        !member.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword)
-          ? [member.name.text] : [],
+        !member.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword),
       );
-      if (node.heritageClauses?.length && names.length > 0) {
+      if (node.heritageClauses?.length && members.length > 0) {
         const symbol = lowerer.typeOf(node).getSymbol();
         const instance = symbol ? lowerer.checker.getDeclaredTypeOfSymbol(symbol) : null;
         const seen = new Set<ts.Type>();
@@ -3849,11 +3871,19 @@ export function collectVirtualJsMethods(lowerer: Lowerer, files: readonly ts.Sou
           if (target === undefined || !target.isClassOrInterface() || seen.has(target)) return;
           seen.add(target);
           for (const base of lowerer.checker.getBaseTypes(target)) {
-            for (const name of names) {
-              const property = lowerer.checker.getPropertyOfType(base, name);
+            for (const member of members) {
+              if (!ts.isIdentifier(member.name)) continue;
+              const property = lowerer.checker.getPropertyOfType(base, member.name.text);
               for (const declaration of property ? lowerer.checker.declarationsOf(property) : []) {
-                if (ts.isMethodDeclaration(declaration) && implicitMonoFile(declaration.getSourceFile())) {
+                if (ts.isMethodDeclaration(declaration) && isJsSourceFile(declaration.getSourceFile())) {
                   lowerer.virtualJsMethods.add(declaration);
+                  if (isJsSourceFile(member.getSourceFile()) && !member.typeParameters &&
+                      !member.asteriskToken && !member.modifiers?.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword) &&
+                      !bodyReadsArguments(member) &&
+                      member.parameters.every((p) => !p.initializer && !p.dotDotDotToken)) {
+                    lowerer.virtualJsMethodArity.set(declaration,
+                      Math.max(lowerer.virtualJsMethodArity.get(declaration) ?? 0, member.parameters.length));
+                  }
                 }
               }
             }

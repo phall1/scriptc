@@ -33,6 +33,8 @@ export function runFrontendServices(services: FrontendServices, input: string, o
   const properties = parseNpmStaticDeclarationProperties(declarationFile);
   const nullable = services.nullableClassFields("package.js", request.source);
   const widened = services.findReturnWidening("package.js", nullable?.text ?? request.source);
+  const namepaths = services.jsDocNamepaths("package.js", "/** @returns {Array<Box~Item>} */ function items() { return []; }");
+  check(namepaths !== null && namepaths.includes("Array<*"), "checked JSDoc namepaths");
   const fields = services.declarationProperties("package.js", widened?.text ?? nullable?.text ?? request.source, properties);
   const overloads = services.declarationOverloads("package.js", fields?.text ?? widened?.text ?? nullable?.text ?? request.source, methods);
   const rewritten = services.rewriteCjs(request.bundled, join(request.directory, "bundle.js"));

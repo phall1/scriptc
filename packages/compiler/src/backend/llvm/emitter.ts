@@ -393,6 +393,11 @@ export class LlEmitter {
       cstr: (text) => this.cstr(text),
       unitInstanceRef: (unionId, tag) => this.unitInstanceRef(unionId, tag),
       liveDynRefAdapter: (type) => this.liveDynRefAdapter(type),
+      classSubtypes: (name) => {
+        const target = this.classMetaOf(name);
+        return [...this.classMeta.values()].filter((meta) =>
+          target.pre <= meta.pre && meta.pre <= target.post).map((meta) => meta.def.name);
+      },
     };
     this.walkers = new LlWalkers(this.shapeHost);
     this.dyn = new LlDyn(this.shapeHost);

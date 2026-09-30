@@ -379,8 +379,10 @@ export function npmStaticFsShadow(services: FrontendServices): NpmStaticFsShadow
         if (hit !== undefined) return hit ?? undefined;
         let rewritten: string | null = null;
         try {
-          const source = trackedReadFile(path);
-          if (source !== null) {
+          const original = trackedReadFile(path);
+          if (original !== null) {
+            const namepaths = services.jsDocNamepaths(path, original);
+            const source = namepaths ?? original;
             const classFields = services.nullableClassFields(path, source);
             const findWidened = services.findReturnWidening(path, classFields?.text ?? source);
             const propertyProjected = services.declarationProperties(
@@ -397,7 +399,7 @@ export function npmStaticFsShadow(services: FrontendServices): NpmStaticFsShadow
             if (answer !== null && typeof answer === "object") {
               reportNpmStaticOffender(target.pkg, answer.degrade);
             } else {
-              rewritten = answer ?? projected?.text ?? propertyProjected?.text ?? findWidened?.text ?? classFields?.text ?? null;
+              rewritten = answer ?? projected?.text ?? propertyProjected?.text ?? findWidened?.text ?? classFields?.text ?? namepaths;
             }
           }
         } catch {

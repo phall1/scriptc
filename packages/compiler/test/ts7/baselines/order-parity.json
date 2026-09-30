@@ -11859,6 +11859,30 @@
     "<repo>/tests/corpus/native-class-type-predicates.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/array-sort-unknown-comparator.ts": {
+   "order": [
+    "<repo>/tests/corpus/array-sort-unknown-comparator.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/class-checked-upcast.ts": {
+   "order": [
+    "<repo>/tests/corpus/class-checked-upcast.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/js-checked-array-reference.js": {
+   "order": [
+    "<repo>/tests/corpus/js-checked-array-reference.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/js-class-added-parameters.js": {
+   "order": [
+    "<repo>/tests/corpus/js-class-added-parameters.js"
+   ],
+   "diags": []
   }
  }
 }
