@@ -1,5 +1,4 @@
-// @deferred-fences: 1
-// The incompatible string write is intentionally fenced; toArray stays uncalled.
+// Inferred JavaScript array storage also admits heterogeneous writes in unused methods.
 class Coordinates {
   constructor() { this.value = 3; }
   /** @param {number[]} values */
