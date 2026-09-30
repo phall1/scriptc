@@ -4518,8 +4518,8 @@ function validateFunction(
     if (checkLibFileCall(e)) return;
     if (checkLibProcessCall(e)) return;
     if (checkLibSpecialCall(e)) return;
-    if (checkLibStreamCall(e)) return;
-    if (checkLibEmitterCall(e)) return;
+    if (checkLibStreamCall(e, sig.argTypes.length, sig.result)) return;
+    if (checkLibEmitterCall(e, sig.result)) return;
     if (e.fn === "error.cause" || e.fn === "error.hasCause" || e.fn === "error.setCause" || e.fn === "error.deleteCause") {
       const recv = e.args[0];
       let cls = recv?.type.kind === "object" ? classes.get(recv.type.className) : undefined;
@@ -5486,8 +5486,7 @@ function validateFunction(
     return false;
   }
 
-  function checkLibStreamCall(e: IrExpr & { kind: "libCall" }): boolean {
-    const sig = LIB_FN_SIGS[e.fn];
+  function checkLibStreamCall(e: IrExpr & { kind: "libCall" }, fixedArgs: number, result: IrType): boolean {
     if (
       e.fn.startsWith("readable.") || e.fn.startsWith("writable.") ||
       e.fn.startsWith("duplex.") || e.fn.startsWith("transform.") ||
@@ -5515,7 +5514,7 @@ function validateFunction(
         if (!isStreamObject(e.type)) {
           err(`libCall ${e.fn} must return a stream class, got ${e.type.kind}`, e.loc);
         }
-        for (let i = sig.argTypes.length; i < e.args.length; i++) {
+        for (let i = fixedArgs; i < e.args.length; i++) {
           if (e.args[i]!.type.kind !== "func") {
             err(`libCall ${e.fn} option callback ${i} must be a func`, e.loc);
           }
@@ -5534,7 +5533,7 @@ function validateFunction(
         if (!isStreamObject(e.args[0]?.type)) {
           err(`libCall ${e.fn} receiver must be a stream-hierarchy object`, e.loc);
         }
-        for (let i = sig.argTypes.length; i < e.args.length; i++) {
+        for (let i = fixedArgs; i < e.args.length; i++) {
           if (e.args[i]!.type.kind !== "func") {
             err(`libCall ${e.fn} fallback callback ${i} must be a func`, e.loc);
           }
@@ -5628,16 +5627,15 @@ function validateFunction(
         }
         return true;
       }
-      if (!typeEquals(e.type, sig.result)) {
-        err(`libCall ${e.fn} must be ${sig.result.kind}, got ${e.type.kind}`, e.loc);
+      if (!typeEquals(e.type, result)) {
+        err(`libCall ${e.fn} must be ${result.kind}, got ${e.type.kind}`, e.loc);
       }
       return true;
     }
     return false;
   }
 
-  function checkLibEmitterCall(e: IrExpr & { kind: "libCall" }): boolean {
-    const sig = LIB_FN_SIGS[e.fn];
+  function checkLibEmitterCall(e: IrExpr & { kind: "libCall" }, result: IrType): boolean {
     if (e.fn.startsWith("emitter.") && e.fn !== "emitter.setDefaultMax" &&
         e.fn !== "emitter.setDefaultMaxChk" &&
         e.fn !== "emitter.getDefaultMax" && e.fn !== "emitter.checkListener") {
@@ -5716,8 +5714,8 @@ function validateFunction(
       if (e.fn === "emitter.emit" || e.fn === "emitter.emitFlex" || e.fn === "emitter.count" ||
           e.fn === "emitter.getMax" || e.fn === "emitter.ctor" ||
           e.fn === "emitter.countFn" || e.fn === "emitter.countDyn" || e.fn === "emitter.emitError") {
-        if (!typeEquals(e.type, sig.result)) {
-          err(`libCall ${e.fn} must be ${sig.result.kind}, got ${e.type.kind}`, e.loc);
+        if (!typeEquals(e.type, result)) {
+          err(`libCall ${e.fn} must be ${result.kind}, got ${e.type.kind}`, e.loc);
         }
         return true;
       }
