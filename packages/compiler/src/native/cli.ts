@@ -14,6 +14,7 @@ import { NativeCompiler } from "./compiler.js";
 import { openNativeCache } from "./cache.js";
 import { loadNativeToolchain } from "./toolchain.js";
 import { buildSanitizedRuntime } from "./sanitizer.js";
+import { runCompilerTask } from "./task.js";
 
 declare function compilerNativePrivateDirectory(path: string, harden: boolean): boolean;
 
@@ -33,9 +34,9 @@ async function main(): Promise<number> {
   return runCli(process.argv.slice(2), {
     version: () => loadNativeToolchain(manifestPath).compilerVersion,
     sourceTargetPlatform: () => getCompiler().toolchain.target.platform,
-    analyze: (entry, options) => getCompiler().analyze(entry, options),
-    compile: async (entry, options) => getCompiler().compile(entry, options),
-    compileLibrary: async (options) => getCompiler().compileLibrary(options),
+    analyze: (entry, options) => runCompilerTask(() => getCompiler().analyze(entry, options)),
+    compile: (entry, options) => runCompilerTask(() => getCompiler().compile(entry, options)),
+    compileLibrary: (options) => runCompilerTask(() => getCompiler().compileLibrary(options)),
     resolveProvenanceSources: async (entry) => {
       const toolchain = getCompiler().toolchain;
       const services = new FrontendServices((options) => createNativeTs7Api({ ...options, executable: toolchain.ts7Executable }));

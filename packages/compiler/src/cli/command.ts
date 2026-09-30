@@ -248,7 +248,7 @@ async function main(args: string[], host: CliHost): Promise<number> {
   }
 
   if (command === "coverage") {
-    const { coverage, sourceTexts } = host.analyze(input, {
+    const { coverage, sourceTexts } = await host.analyze(input, {
       dynamic: values.dynamic,
       ...(npmStatic !== undefined ? { npmStatic } : {}),
       ...(ffiProfilePath !== undefined ? { ffiProfilePath } : {}),

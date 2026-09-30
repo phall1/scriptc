@@ -23,7 +23,7 @@ import {
   filterExistingWorktreePaths,
   workspaceResetCommand,
 } from "./worktree-files.mjs";
-import { REMOTE_COMMAND_PENDING, sandboxCommand, sandboxStatusCommand, shellQuote } from "./sandbox-command.mjs";
+import { REMOTE_COMMAND_PENDING, sandboxCommand, sandboxStatusCommand, waitForSandboxCommand } from "./sandbox-command.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const laneCaseShardedFiles = [
@@ -432,15 +432,10 @@ const execIn = async (
   } catch (error) {
     if (error.remoteExitCode !== undefined) throw error;
     console.warn(`[${label}] CLI completion was not confirmed (${error.message}); checking the remote command status...`);
-    for (;;) {
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) {
-        await recoveredLog();
-        throw new Error(`${label} did not confirm completion before its timeout`, { cause: error });
-      }
-      const probeMarker = `__SCRIPTC_REMOTE_PROBE_${randomBytes(12).toString("hex")}__`;
-      const probeScript = sandboxStatusCommand(statusPath, probeMarker, Math.min(20, Math.floor(remaining / 1000)));
-      try {
+    try {
+      await waitForSandboxCommand(async (remaining) => {
+        const probeMarker = `__SCRIPTC_REMOTE_PROBE_${randomBytes(12).toString("hex")}__`;
+        const probeScript = sandboxStatusCommand(statusPath, probeMarker, Math.min(20, Math.floor(remaining / 1000)));
         await vercel(
           ["sandbox", "exec", "--timeout", "1m", "--workdir", workdir, worker.name, "sh", "-c", probeScript],
           {
@@ -450,15 +445,14 @@ const execIn = async (
             timeoutMs: Math.min(60_000, remaining),
           },
         );
-        await recoveredLog();
-        return;
-      } catch (probeError) {
-        if (probeError.remoteExitCode !== REMOTE_COMMAND_PENDING) {
-          await recoveredLog();
-          throw probeError;
-        }
-        console.log(`[${label}] remote command has not recorded completion; waiting...`);
-      }
+      }, {
+        deadline, label,
+        onPending: (probeError) => console.warn(probeError.remoteExitCode === REMOTE_COMMAND_PENDING
+          ? `[${label}] remote command has not recorded completion; waiting...`
+          : `[${label}] remote status probe was not confirmed (${probeError.message}); retrying...`),
+      });
+    } finally {
+      await recoveredLog();
     }
   }
 };

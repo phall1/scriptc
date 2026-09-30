@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { promisify } from "node:util";
+import { WASI } from "node:wasi";
 import { expect, test } from "vitest";
 import type { NativeToolchainManifest } from "../../packages/compiler/src/native/toolchain.js";
 import { bootstrapStep } from "./self-hosting-timing.js";
@@ -117,6 +118,44 @@ test("the production CLI relocates, builds programs, and rebuilds itself with No
     await invoke(seed, ["build", "--lib", "--profile", profile, "-o", archive]);
     expect(JSON.parse(readFileSync(archive + ".contract.json", "utf8")))
       .toEqual(JSON.parse(readFileSync(expectedArchive + ".contract.json", "utf8")));
+
+    // The unmodified package exercises deep validator traversals. Compile it
+    // through the installed CLI, including its async command boundary.
+    const threeProfile = join(root, "tests/library-mode/wasm/three.json");
+    await invoke(seed, ["build", "--lib", "--profile", threeProfile, "-o", join(directory, "three.a")]);
+    if (process.platform !== "win32" && spawnSync("zig", ["version"]).status === 0 && existsSync(join(root, "packages/runtime-wasm32-wasi/runtime-pack.json"))) {
+      const linker = join(directory, "zigcc");
+      writeFileSync(linker, `#!/bin/sh\nexec '${absoluteCommand("zig").replaceAll("'", "'\\''")}' cc "$@"\n`, { mode: 0o755 });
+      const output = join(directory, "three.wasm");
+      const built = await exec(seed, ["build", "--lib", "--profile", threeProfile, "-o", output], {
+        ...nativeOptions, env: { ...nativeOptions.env, SCRIPTC_TARGET: "wasm32-wasi", SCRIPTC_LINKER: linker,
+          SCRIPTC_RUNTIME_PACK: join(root, "packages/runtime-wasm32-wasi"), SCRIPTC_NO_CACHE: "1" },
+      });
+      expect(built.stdout.trim()).toBe(output);
+      expect(comparableStderr(built.stderr)).toBe("");
+      const vertices: number[][] = [];
+      const wasi = new WASI({ version: "preview1" });
+      const instance = new WebAssembly.Instance(new WebAssembly.Module(readFileSync(output)), {
+        ...wasi.getImportObject(), scriptc: {
+          vertex: (...args: number[]) => vertices.push(args.map((value) => Number(value.toFixed(9)))),
+          panic: () => { throw new Error("unexpected Wasm panic"); },
+        },
+      });
+      wasi.initialize(instance);
+      const api = instance.exports as Record<string, (...args: number[]) => number>;
+      api.app_init!();
+      for (const time of [0, 123, 2000]) expect(api.app_frame!(time, 1.5)).toBe(24);
+      const oracle = await exec(process.execPath, ["--input-type=module", "--eval", `
+        const vertices = [];
+        globalThis.vertex = (...args) => vertices.push(args.map(value => Number(value.toFixed(9))));
+        const { frame } = await import(${JSON.stringify(join(root, "tests/library-mode/wasm/three.mjs"))});
+        for (const time of [0, 123, 2000]) frame(time, 1.5);
+        console.log(JSON.stringify(vertices));
+      `], options);
+      expect(vertices).toEqual(JSON.parse(oracle.stdout));
+      expect(oracle.stderr).toBe("");
+      api.app_collect!();
+    }
 
     const badSource = join(directory, "bad.ts");
     writeFileSync(badSource, 'const value: number = "wrong"; console.log(value);\n');

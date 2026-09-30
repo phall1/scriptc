@@ -17,7 +17,7 @@ function version(): string {
 }
 
 process.exitCode = await runCli(process.argv.slice(2), {
-  version, analyze, compile, compileLibrary, resolveProvenanceSources, sourceTargetPlatform, warmNativeCaches,
+  version, analyze: async (entry, options) => analyze(entry, options), compile, compileLibrary, resolveProvenanceSources, sourceTargetPlatform, warmNativeCaches,
   run: (binary) => new Promise<number>((resolveExit) => {
     let child;
     if (sourceTargetPlatform() === "wasi") {

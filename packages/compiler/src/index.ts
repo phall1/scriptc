@@ -1205,11 +1205,6 @@ async function compileLibraryTracked(
     }
     if (directory === profileDir || dirname(directory) === directory) break;
   }
-  const archivePath = opts.outPath ?? join(
-    opts.outDir,
-    `${basename(entryPath).replace(/\.(ts|mts|cts|js|mjs|cjs)$/, "")}${buildTargetPlatform() === "wasi" ? ".wasm" : ".lib.a"}`,
-  );
-
   // Mobile-target admission first — a pure env/host check, so a refused
   // pairing never reaches toolchain discovery. iOS targets (device and
   // simulator) build on darwin hosts only: the Apple SDK sysroot and the
@@ -1231,6 +1226,10 @@ async function compileLibraryTracked(
   }
 
   const buildPlatform = buildTargetPlatform();
+  const archivePath = opts.outPath ?? join(
+    opts.outDir,
+    `${basename(entryPath).replace(/\.(ts|mts|cts|js|mjs|cjs)$/, "")}${buildPlatform === "wasi" ? ".wasm" : ".lib.a"}`,
+  );
   if (buildPlatform === "wasi") {
     const refusal = libraryWasmRefusal(profile, opts.sanitize ?? false);
     if (refusal !== null) return { ok: false, diagnostics: [refusal], sourceTexts: new Map() };

@@ -7,7 +7,7 @@ export type NativeCacheWarmProfile = "runtime" | "tls" | "dynamic";
 export interface CliHost {
   version: () => string;
   sourceTargetPlatform: () => string;
-  analyze: (entry: string, options: AnalyzeOptions) => AnalyzeResult;
+  analyze: (entry: string, options: AnalyzeOptions) => Promise<AnalyzeResult>;
   compile: (entry: string, options: CompileRequestOptions) => Promise<CompileRequestResult>;
   compileLibrary: (options: CompileLibraryOptions) => Promise<CompileLibraryResult>;
   resolveProvenanceSources: (entry: string) => Promise<ProvenanceSources>;

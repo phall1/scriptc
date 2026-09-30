@@ -73,6 +73,13 @@ export function installNativeCli(directory, packageName = nativeCliPackage(proce
     if (!packs.has(pack.target.name)) packs.set(pack.target.name, { target: pack.target.name, path: relative(bin, dirname(path)) });
   }
   manifest.runtime_packs = [...packs.values()];
+  // npm normalizes modes for payloads outside package bin entries. These
+  // tools are launched directly by the compiler after installation.
+  if (process.platform !== "win32") {
+    for (const path of [manifest.ts7, manifest.comptime, join(manifest.llvm_package, "bin/scriptc-llvm-codegen")]) {
+      chmodSync(resolve(bin, path), 0o755);
+    }
+  }
   // The common filename lets npm's Windows shim invoke a native executable.
   // POSIX bin links also execute this file directly, without a JS launcher.
   const destination = join(bin, "scriptc.exe");

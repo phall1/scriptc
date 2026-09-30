@@ -178,6 +178,8 @@ jobs:
         with:
           version: 0.16.0
       - run: CC=zig AR=zig pnpm --filter @scriptc/runtime-linux-x64-gnu build:native
+      - if: matrix.compiler == 'native'
+        run: pnpm --filter @scriptc/runtime-wasm32-wasi build:native
       - run: pnpm build
       - run: pnpm test ${{ matrix.test }}
 

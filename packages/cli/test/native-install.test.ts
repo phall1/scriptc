@@ -29,7 +29,13 @@ function fixture() {
     wasi_node_runner: "../lib/wasi/cli/wasi-runner.js",
   };
   writeFileSync(binary + ".json", JSON.stringify(toolchain));
-  return { root, directory, packageName, platform, binary, toolchain };
+  const helpers = [toolchain.ts7, toolchain.comptime, join(toolchain.llvm_package, "bin/scriptc-llvm-codegen")]
+    .map((path) => resolve(bin, path));
+  for (const path of helpers) {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, "native helper payload", { mode: 0o644 });
+  }
+  return { root, directory, packageName, platform, binary, toolchain, helpers };
 }
 
 test("selects only supported native host packages, including Linux libc", () => {
@@ -46,6 +52,9 @@ test("installs a direct executable and relocatable references to platform assets
   const command = installNativeCli(f.directory, f.packageName);
   expect(readFileSync(command, "utf8")).toBe("native compiler payload");
   if (process.platform !== "win32") expect(statSync(command).mode & 0o111).toBe(0o111);
+  if (process.platform !== "win32") {
+    for (const helper of f.helpers) expect(statSync(helper).mode & 0o111).toBe(0o111);
+  }
   const moved = join(f.root, "relocated");
   renameSync(f.directory, moved);
   const installed = join(moved, "bin/scriptc.exe");
@@ -69,9 +78,16 @@ test("missing and mismatched packages fail without replacing an installed comman
 
 test("npm links the installed native executable without an interpreter", () => {
   const f = fixture();
-  // Use an available native executable to test npm's platform shim itself.
+  // Keep the package payload small while exercising npm's native shim.
   // Production command coverage builds the real compiler in the bootstrap gate.
-  copyFileSync(process.execPath, f.binary);
+  const windows = process.platform === "win32";
+  if (windows) copyFileSync(process.execPath, f.binary);
+  else {
+    const source = join(f.root, "payload.c");
+    writeFileSync(source, '#include <stdio.h>\nint main(void) { puts("native compiler"); return 0; }\n');
+    execFileSync("clang", [source, "-o", f.binary]);
+  }
+  for (const helper of f.helpers) writeFileSync(helper, "#!/bin/sh\nprintf 'native helper\\n'\n");
   const packageName = "scriptc-native-install-test";
   const scripts = join(f.directory, "scripts");
   mkdirSync(scripts);
@@ -101,8 +117,15 @@ test("npm links the installed native executable without an interpreter", () => {
     cwd: installed, env: npmEnv, shell: process.platform === "win32", stdio: "pipe",
   });
   const command = join(installed, "node_modules/.bin", packageName + (process.platform === "win32" ? ".cmd" : ""));
-  const result = execFileSync(command, ["--version"], {
+  const result = execFileSync(command, windows ? ["--version"] : ["native compiler"], {
     env: { ...process.env, PATH: "" }, encoding: "utf8", shell: process.platform === "win32",
   });
-  expect(result.trim()).toBe(process.version);
+  expect(result.trim()).toBe(windows ? process.version : "native compiler");
+  if (process.platform !== "win32") {
+    const bin = join(installed, "node_modules", packageName, "bin");
+    const manifest = JSON.parse(readFileSync(join(bin, "scriptc.exe.json"), "utf8"));
+    for (const helper of [manifest.ts7, manifest.comptime, join(manifest.llvm_package, "bin/scriptc-llvm-codegen")]) {
+      expect(execFileSync(resolve(bin, helper), [], { env: { ...process.env, PATH: "" }, encoding: "utf8" }).trim()).toBe("native helper");
+    }
+  }
 }, 60_000);
