@@ -224,10 +224,11 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
-      - name: Host clang static-build regression
+      - name: Host clang and sanitizer build regressions
         run: >-
           pnpm test packages/compiler/test/cc-driver.test.ts
-          --testNamePattern "host-native clang static build"
+          packages/compiler/src/native/sanitizer.test.ts
+          --testNamePattern "host-native clang static build|sanitized vendor archives"
 
   # The TS7 parity sweep exercises the compiler frontend, so it can run
   # alongside the Linux LLVM/runtime package build instead of following it.

@@ -85,8 +85,21 @@ test("the production CLI relocates, builds programs, and rebuilds itself with No
       expect(comparableStderr(result.stderr)).toBe(expectedStderr);
       return result.stdout;
     };
-    expect(await invoke(seed, ["--help"])).toContain("scriptc build");
-    expect((await invoke(seed, ["--version"])).trim()).toBe(manifest.compiler_version);
+    const entry = join(root, "packages/compiler/src/native/cli.ts");
+    const ffi = join(directory, ".scriptc/distribution-seed/compiler.ffi.json");
+    const rebuilt = executable("scriptc-rebuilt");
+    // Optimize the compiler that will process the full graph again. Small
+    // programs below still exercise development output.
+    const self = await bootstrapStep("production CLI rebuilds itself", () =>
+      invoke(seed, ["build", entry, "-o", rebuilt, "--strip", "--keep-llvm", "--emit-ir", "--ffi", ffi,
+        ...(sanitize ? ["--sanitize"] : [])],
+      "scriptc: warning: --emit-ir is deprecated; use --emit=ir for IR as the primary output\n"));
+    expect(self.trim()).toBe(rebuilt);
+    // All command, library, and dynamic probes run inside the instrumented
+    // compiler in the sanitizer lane, including their failure paths.
+    const probe = sanitize ? rebuilt : seed;
+    expect(await invoke(probe, ["--help"])).toContain("scriptc build");
+    expect((await invoke(probe, ["--version"])).trim()).toBe(manifest.compiler_version);
     const checkProgram = async (compiler: string, source: string, extra: string[] = []) => {
       // This basename formerly collided with the driver's temporary object.
       const output = executable("program.o");
@@ -105,28 +118,28 @@ test("the production CLI relocates, builds programs, and rebuilds itself with No
     const sample = join(root, "tests/corpus/class-array-optional-return.ts");
     const unionSample = join(root, "tests/corpus/union-nested-layout-discriminant.ts");
     const receiverSample = join(root, "tests/corpus/llvm-read-receiver-lifetime.ts");
-    await checkProgram(seed, sample);
-    await checkProgram(seed, unionSample);
-    await checkProgram(seed, receiverSample);
-    await checkProgram(seed, join(root, "tests/corpus/closure-nullable-union-return.ts"));
-    await checkProgram(seed, join(root, "tests/corpus/record-optional-json-presence.ts"));
-    await checkProgram(seed, join(root, "tests/corpus/1010-json-stringify-space.ts"));
-    await checkProgram(seed, join(root, "tests/corpus/fs-write-string-bytes-union.ts"));
+    await checkProgram(probe, sample);
+    await checkProgram(probe, unionSample);
+    await checkProgram(probe, receiverSample);
+    await checkProgram(probe, join(root, "tests/corpus/closure-nullable-union-return.ts"));
+    await checkProgram(probe, join(root, "tests/corpus/record-optional-json-presence.ts"));
+    await checkProgram(probe, join(root, "tests/corpus/1010-json-stringify-space.ts"));
+    await checkProgram(probe, join(root, "tests/corpus/fs-write-string-bytes-union.ts"));
 
     const fetchOptions = join(directory, "fetch-options.ts");
     writeFileSync(fetchOptions, 'async function probe() { const response = await fetch("https://example.invalid", { headers: { accept: "application/json" } }); console.log(response.status); } if (process.env["RUN_NATIVE_FETCH_PROBE"] === "1") await probe();\n');
-    await checkProgram(seed, fetchOptions);
-    expect(await invoke(seed, ["coverage", fetchOptions])).toContain("(100%)");
+    await checkProgram(probe, fetchOptions);
+    expect(await invoke(probe, ["coverage", fetchOptions])).toContain("(100%)");
 
     const dynamic = join(directory, "dynamic.ts");
     writeFileSync(dynamic, 'const value: any = { answer: 42 }; console.log(`answer:${value.answer}`);\n');
-    await checkProgram(seed, dynamic, ["--dynamic"]);
+    await checkProgram(probe, dynamic, ["--dynamic"]);
     const comptime = join(directory, "comptime.ts");
     writeFileSync(comptime, 'const answer = comptime(() => [1, 2, 3].reduce((sum, value) => sum + value, 0) * 7); console.log(answer);\n');
-    expect(await invoke(seed, ["run", comptime, "-o", executable("comptime"), "--strip"])).toBe("42\n");
+    expect(await invoke(probe, ["run", comptime, "-o", executable("comptime"), "--strip"])).toBe("42\n");
 
     const object = join(directory, "program.obj");
-    const linkInfo = JSON.parse(await invoke(seed, ["build", sample, "-o", object, "--print=native-link-info"]));
+    const linkInfo = JSON.parse(await invoke(probe, ["build", sample, "-o", object, "--print=native-link-info"]));
     expect(linkInfo.program.object).toBe(object);
     expect(readFileSync(object).length).toBeGreaterThan(0);
 
@@ -134,19 +147,19 @@ test("the production CLI relocates, builds programs, and rebuilds itself with No
     const archive = join(directory, "contract.a");
     const expectedArchive = join(directory, "contract-node.a");
     await exec(process.execPath, [join(root, "packages/cli/dist/main.js"), "build", "--lib", "--profile", profile, "-o", expectedArchive], options);
-    await invoke(seed, ["build", "--lib", "--profile", profile, "-o", archive]);
+    await invoke(probe, ["build", "--lib", "--profile", profile, "-o", archive]);
     expect(JSON.parse(readFileSync(archive + ".contract.json", "utf8")))
       .toEqual(JSON.parse(readFileSync(expectedArchive + ".contract.json", "utf8")));
 
     // The unmodified package exercises deep validator traversals. Compile it
     // through the installed CLI, including its async command boundary.
     const threeProfile = join(root, "tests/library-mode/wasm/three.json");
-    await invoke(seed, ["build", "--lib", "--profile", threeProfile, "-o", join(directory, "three.a")]);
+    await invoke(probe, ["build", "--lib", "--profile", threeProfile, "-o", join(directory, "three.a")]);
     if (process.platform !== "win32" && spawnSync("zig", ["version"]).status === 0 && existsSync(join(root, "packages/runtime-wasm32-wasi/runtime-pack.json"))) {
       const linker = join(directory, "zigcc");
       writeFileSync(linker, `#!/bin/sh\nexec '${absoluteCommand("zig").replaceAll("'", "'\\''")}' cc "$@"\n`, { mode: 0o755 });
       const output = join(directory, "three.wasm");
-      const built = await exec(seed, ["build", "--lib", "--profile", threeProfile, "-o", output], {
+      const built = await exec(probe, ["build", "--lib", "--profile", threeProfile, "-o", output], {
         ...nativeOptions, env: { ...nativeOptions.env, SCRIPTC_TARGET: "wasm32-wasi", SCRIPTC_LINKER: linker,
           SCRIPTC_RUNTIME_PACK: join(root, "packages/runtime-wasm32-wasi"), SCRIPTC_NO_CACHE: "1" },
       });
@@ -180,21 +193,10 @@ test("the production CLI relocates, builds programs, and rebuilds itself with No
     writeFileSync(badSource, 'const value: number = "wrong"; console.log(value);\n');
     const retained = executable("retained");
     writeFileSync(retained, "existing output");
-    const failed = spawnSync(seed, ["build", badSource, "-o", retained], nativeOptions);
+    const failed = spawnSync(probe, ["build", badSource, "-o", retained], nativeOptions);
     expect(failed.status).toBe(1);
     expect(failed.stderr.toString()).toContain("not assignable");
     expect(readFileSync(retained, "utf8")).toBe("existing output");
-
-    const entry = join(root, "packages/compiler/src/native/cli.ts");
-    const ffi = join(directory, ".scriptc/distribution-seed/compiler.ffi.json");
-    const rebuilt = executable("scriptc-rebuilt");
-    // Optimize the compiler that will process the full graph again. Small
-    // programs above and below still exercise development output.
-    const self = await bootstrapStep("production CLI rebuilds itself", () =>
-      invoke(seed, ["build", entry, "-o", rebuilt, "--strip", "--keep-llvm", "--emit-ir", "--ffi", ffi,
-        ...(sanitize ? ["--sanitize"] : [])],
-      "scriptc: warning: --emit-ir is deprecated; use --emit=ir for IR as the primary output\n"));
-    expect(self.trim()).toBe(rebuilt);
 
     // The production chain owns the complete frontend and emitter proof:
     // compare the Node seed's IR and LLVM with the native self-rebuild, then

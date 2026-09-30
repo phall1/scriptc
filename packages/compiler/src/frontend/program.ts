@@ -1392,10 +1392,12 @@ function nodeEsmSyntaxMarker7(sf: ts.SourceFile): ts.Node | null {
       found = node;
       return "stop";
     }
+    // Only await syntax needs an ancestor walk. Doing this for every node
+    // makes a deeply nested expression take quadratic time to classify.
     if (
-      !insideFunctionLike7(node) &&
       (ts.isAwaitExpression(node) ||
-        (ts.isForOfStatement(node) && node.awaitModifier !== undefined))
+        (ts.isForOfStatement(node) && node.awaitModifier !== undefined)) &&
+      !insideFunctionLike7(node)
     ) {
       found = node;
       return "stop";

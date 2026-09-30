@@ -53,7 +53,8 @@ export function buildSanitizedRuntime(
   }
   const sourceIdentity = sourceFingerprint(sourceRoot);
   const compilerIdentity = runNativeTool(driver, ["--version"]);
-  const flags = sanitizerFlags(toolchain, selection.flavor);
+  const flags = [...sanitizerFlags(toolchain, selection.flavor),
+    ...toolchain.target.runtimeCompileDefines.map((define) => "-D" + define)];
   const src = join(sourceRoot, "src");
   const vendor = join(sourceRoot, "vendor");
   const quickjs = join(vendor, "quickjs-ng");
@@ -86,8 +87,7 @@ export function buildSanitizedRuntime(
   const wanted = new Set(selection.selected.runtime.map((artifact) => artifact.path));
   const common = ["-std=c11", "-pthread", "-DSCR_RC_AUDIT", "-fno-math-errno", "-fno-strict-aliasing",
     "-Wno-deprecated-declarations", "-I", src, "-I", quickjs, "-I", zlib, "-I", join(mbedtls, "include"),
-    ...(toolchain.target.platform === "linux" ? ["-D_GNU_SOURCE", "-ffunction-sections", "-fdata-sections"] : []),
-    ...(toolchain.target.name.endsWith("-musl") ? ["-DSCR_MUSL"] : [])];
+    ...(toolchain.target.platform === "linux" ? ["-ffunction-sections", "-fdata-sections"] : [])];
   const runtimeObjects: string[] = [];
   for (const unit of flavor.runtime_units) {
     for (const variant of unit.variants) {

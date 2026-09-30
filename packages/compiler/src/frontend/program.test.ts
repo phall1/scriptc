@@ -2,8 +2,28 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test, vi } from "vitest";
-import { checkPreflight, loadProgram, makeCycleAdmission, type CycleEdge } from "./program-node.js";
+import { checkPreflight, isNodeEsmFile, loadProgram, makeCycleAdmission, type CycleEdge } from "./program-node.js";
 import * as ts from "./ts7/ast.js";
+import { AstNode } from "./ts7/ast-node.js";
+
+test("ambiguous module classification bounds ancestor work on deep expressions", () => {
+  const directory = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-module-depth-"));
+  const entry = join(directory, "main.js");
+  const depth = 1_000;
+  writeFileSync(join(directory, "package.json"), "{}");
+  writeFileSync(entry, Array.from({ length: depth }, () => "1").join(" + ") + ";\n");
+  const load = loadProgram(entry);
+  try {
+    const parents = vi.spyOn(AstNode.prototype, "parent", "get");
+    try {
+      expect(isNodeEsmFile(load.entry)).toBe(false);
+      expect(parents.mock.calls.length).toBeLessThan(depth * 4);
+    } finally { parents.mockRestore(); }
+  } finally {
+    load.dispose();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 function requireOrderDiagnostics(source: string, dependency = "exports.value = 'ready';\n") {
   const dir = mkdtempSync(join(tmpdir(), "scriptc-require-order-"));
