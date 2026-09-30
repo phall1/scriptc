@@ -30,6 +30,7 @@ test("runner settings are read after loading the sandbox environment", () => {
     localTestWorkers: "3",
     localCaseShards: "4",
     sandboxTimeout: "90m",
+    sandboxTimeoutMs: 5_400_000,
   });
 });
 
@@ -40,7 +41,17 @@ test("runner settings retain their documented defaults", () => {
     localTestWorkers: "2",
     localCaseShards: "2",
     sandboxTimeout: "45m",
+    sandboxTimeoutMs: 2_700_000,
   });
+});
+
+test("the local command deadline follows the configured Sandbox duration", () => {
+  for (const [duration, milliseconds] of [["120m", 7_200_000], ["2h", 7_200_000], ["30 s", 30_000], ["500ms", 500]] as const) {
+    expect(sandboxRunnerConfig({ SCRIPTC_SANDBOX_TIMEOUT: duration }).sandboxTimeoutMs).toBe(milliseconds);
+  }
+  for (const duration of ["0m", "-1h", "forever", "1.5m", "999999999h"]) {
+    expect(() => sandboxRunnerConfig({ SCRIPTC_SANDBOX_TIMEOUT: duration })).toThrow("positive duration");
+  }
 });
 
 test("the managed Sandbox image is the default", () => {

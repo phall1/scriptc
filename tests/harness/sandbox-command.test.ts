@@ -15,13 +15,14 @@ afterEach(async () => {
 
 test("short commands stay inline and retain the remote exit contract", async () => {
   const marker = `__SCRIPTC_COMMAND_TEST_${process.pid}_SHORT__`;
-  const prepared = sandboxCommand("sh", ["-c", "exit 7"], marker);
-  statuses.push(prepared.statusPath);
+  const prepared = sandboxCommand("sh", ["-c", "printf 'failure detail\\n' >&2; exit 7"], marker);
+  statuses.push(prepared.statusPath, prepared.logPath);
 
   expect(prepared.file).toBe(false);
   const output = execFileSync(prepared.argv[0], prepared.argv.slice(1), { encoding: "utf8" });
-  expect(output).toBe(`\n${marker}7\n`);
+  expect(output).toBe(`failure detail\n\n${marker}7\n`);
   expect(await readFile(prepared.statusPath, "utf8")).toBe("7\n");
+  expect(await readFile(prepared.logPath, "utf8")).toBe("failure detail\n");
 });
 
 test("uploaded scripts preserve long and shell-sensitive argument bytes", async () => {
@@ -37,7 +38,7 @@ test("uploaded scripts preserve long and shell-sensitive argument bytes", async 
   ];
   const marker = `__SCRIPTC_COMMAND_TEST_${process.pid}_LONG__`;
   const prepared = sandboxCommand("printf", ["<%s>\n", ...args], marker);
-  statuses.push(prepared.statusPath);
+  statuses.push(prepared.statusPath, prepared.logPath);
   expect(prepared.file).toBe(true);
   expect(prepared.argv).toEqual(["sh", prepared.scriptPath]);
   expect(prepared.argv.every((arg) => arg.length < 128)).toBe(true);
@@ -46,6 +47,7 @@ test("uploaded scripts preserve long and shell-sensitive argument bytes", async 
   await writeFile(localScript, prepared.script);
   const output = execFileSync("sh", [localScript], { encoding: "utf8" });
   expect(output).toBe(args.map((arg) => `<${arg}>\n`).join("") + `\n${marker}0\n`);
+  expect(await readFile(prepared.logPath, "utf8")).toBe(args.map((arg) => `<${arg}>\n`).join(""));
   await expect(readFile(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
   expect(await readFile(prepared.statusPath, "utf8")).toBe("0\n");
 });

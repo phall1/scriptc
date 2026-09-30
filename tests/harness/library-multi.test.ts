@@ -1071,22 +1071,30 @@ test.each(["aarch64-ios", "x86_64-linux-android", "armv7-linux-androideabi"])(
   },
 );
 
-test.each(MOBILE_TARGETS)(
-  "M12: the executable lane refuses %s with the pointer to --lib",
-  async (target) => {
+test.each(MOBILE_TARGETS.flatMap((target) =>
+  ["darwin", "linux", "win32"].map((host) => ({ target, host })),
+))(
+  "M12: the executable lane refuses $target on $host with the pointer to --lib",
+  async ({ target, host }) => {
     const outDir = join(cacheDir, `mobile-exe-refusal-${target}`);
     mkdirSync(outDir, { recursive: true });
     const entry = join(outDir, "main.ts");
     writeFileSync(entry, 'console.log("hi");\n');
-    await withMobileTarget(target, async () => {
-      const result = await compile(entry, { outDir, outPath: join(outDir, "main") });
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.diagnostics[0]!.code).toBe("SC3002");
-        expect(result.diagnostics[0]!.message).toContain(target);
-        expect(result.diagnostics[0]!.message).toContain("scriptc build --lib --profile <profile.json>");
-      }
-    });
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { ...platformDescriptor, value: host });
+    try {
+      await withMobileTarget(target, async () => {
+        const result = await compile(entry, { outDir, outPath: join(outDir, "main") });
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.diagnostics[0]!.code).toBe("SC3002");
+          expect(result.diagnostics[0]!.message).toContain(target);
+          expect(result.diagnostics[0]!.message).toContain("scriptc build --lib --profile <profile.json>");
+        }
+      });
+    } finally {
+      Object.defineProperty(process, "platform", platformDescriptor);
+    }
   },
 );
 

@@ -288,6 +288,8 @@ jobs:
         run: |
           node packages/cli/dist/main.js build tests/corpus/001-hello.ts -o "$RUNNER_TEMP/hello"
           test "$("$RUNNER_TEMP/hello")" = 'hello world'
+      - name: Linux release runtime reachability and debug payload
+        run: pnpm test tests/harness/runtime-tree-shaking.test.ts
       - name: Debian 12 glibc 2.36 runtime-pack smoke
         run: |
           docker run --rm --volume "$GITHUB_WORKSPACE:/work:ro" --workdir /work node:24-bookworm-slim sh -ec '

@@ -972,10 +972,6 @@ async function compileTracked(
       sourceTexts: new Map(),
     };
   }
-  if (outputKind === "exe" && opts.sanitize !== true && process.env["SCRIPTC_FETCH_CURL"] !== "1") {
-    const refusal = nativeCodegenTargetRefusal();
-    if (refusal !== null) return { ok: false, diagnostics: [nativeCodegenDiag("SC3002", refusal, entryPath)], sourceTexts: new Map() };
-  }
   let ffi: FfiProfile | null = null;
   let ffiProfileBytes: Uint8Array | null = null;
   if (opts.ffiProfilePath !== undefined) {
@@ -1079,6 +1075,10 @@ async function compileTracked(
         sourceTexts: new Map(),
       };
     }
+  }
+  if (outputKind === "exe" && opts.sanitize !== true && process.env["SCRIPTC_FETCH_CURL"] !== "1") {
+    const refusal = nativeCodegenTargetRefusal();
+    if (refusal !== null) return { ok: false, diagnostics: [nativeCodegenDiag("SC3002", refusal, entryPath)], sourceTexts: new Map() };
   }
   const cacheRoot = outputKind === "exe" && provenanceSources() === null
     ? await prepareBuildCacheRoot(buildCacheRoot())

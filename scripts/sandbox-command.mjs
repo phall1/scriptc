@@ -8,9 +8,13 @@ export const shellQuote = (value) => `'${value.replaceAll("'", `'"'"'`)}'`;
  * same script records the remote exit status for either transport. */
 export function sandboxCommand(command, args, exitMarker) {
   const statusPath = `/tmp/${exitMarker}.status`;
+  const logPath = `/tmp/${exitMarker}.log`;
+  const pendingStatus = statusPath + ".pending";
   const script =
-    `${[command, ...args].map(shellQuote).join(" ")}; scriptc_status=$?; ` +
-    `printf '%s\\n' "$scriptc_status" > ${shellQuote(statusPath)}; ` +
+    `( ${[command, ...args].map(shellQuote).join(" ")}; scriptc_status=$?; ` +
+    `printf '%s\\n' "$scriptc_status" > ${shellQuote(pendingStatus)} ) 2>&1 | tee ${shellQuote(logPath)}; ` +
+    `mv ${shellQuote(pendingStatus)} ${shellQuote(statusPath)}; ` +
+    `scriptc_status=$(cat ${shellQuote(statusPath)}); ` +
     `printf '\\n${exitMarker}%s\\n' "$scriptc_status"`;
   const scriptPath = `/tmp/${exitMarker}.sh`;
   const file = Buffer.byteLength(script, "utf8") > MAX_INLINE_SANDBOX_COMMAND_BYTES;
@@ -18,6 +22,7 @@ export function sandboxCommand(command, args, exitMarker) {
     script,
     scriptPath,
     statusPath,
+    logPath,
     file,
     argv: file ? ["sh", scriptPath] : ["sh", "-c", script],
   };
