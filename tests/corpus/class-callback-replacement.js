@@ -44,3 +44,12 @@ const hidden = new PrivateSignal();
 function shadowPrivate(value) { value['#changed'] = () => console.log('public'); }
 shadowPrivate(hidden);
 hidden.emit();
+let created = 0;
+function temporary() { created++; return new Signal('temporary-' + created); }
+temporary().emit();
+temporary().replace(callback);
+console.log('created', created);
+let current = new Signal('retained');
+current.replace(function () { current = new Signal('new'); console.log('receiver', this.label); });
+current.emit();
+current.emit();

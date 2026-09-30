@@ -2,6 +2,7 @@ import { expect, test } from "vitest";
 import { DYN, F64, STRING, VOID, type IrExpr, type IrFunction, type IrStmt } from "../../ir/ir.js";
 import { ClassDynamicDispatch } from "./class-dynamic-dispatch.js";
 import type { Lowerer } from "./lowerer.js";
+import type { ClassInfo } from "./lower-classes.js";
 
 const loc = { file: "dispatch.ts", start: 0, end: 1 };
 const variable = (localId: string): IrExpr => ({ kind: "varRef", localId, type: DYN, loc });
@@ -57,4 +58,41 @@ test("discovers dispatch sites added during a later reachability pass", () => {
   target.body.push(statement({ kind: "dynKeyGet", value: variable("receiver"), key: literal("name"), type: DYN, loc }));
   expect(dispatch.process(lowerer, [boxed, target])).toBe(true);
   expect(target.body[0]).toMatchObject({ kind: "exprStmt", expr: { kind: "call" } });
+});
+
+test("known class property bags preserve one owned receiver without boxing", () => {
+  const { lowerer, liftedFns } = context();
+  const type = { kind: "object", className: "Widget" } as const;
+  const info = { def: { name: "Widget", fields: [] }, fields: new Map(), base: null, subclasses: [] } as unknown as ClassInfo;
+  lowerer.classes.set("Widget", info);
+  const receiver: IrExpr = { kind: "call", callee: "makeWidget", args: [], type, loc };
+  const target = fn("target", [statement({ kind: "call", callee: "%dyn.class.properties",
+    args: [{ kind: "dynFrom", value: receiver, type: DYN, loc }], type: DYN, loc })]);
+  const dispatch = new ClassDynamicDispatch();
+  expect(dispatch.process(lowerer, [target])).toBe(true);
+  expect(target.body).toEqual([statement({ kind: "call", callee: "%class.properties:Widget", args: [receiver], type: DYN, loc })]);
+  const helper = liftedFns.find((item) => item.name === "%class.properties:Widget")!;
+  expect(helper.params.map((param) => param.type)).toEqual([type]);
+  expect(helper.body).toMatchObject([
+    { kind: "if", cond: { kind: "dynTest", test: "undefined", value: { kind: "fieldGet", className: "Widget" } },
+      then: [{ kind: "fieldSet", obj: { kind: "varRef", type }, value: { kind: "dynObjLit" } }] },
+    { kind: "return", value: { kind: "fieldGet", className: "Widget" } },
+  ]);
+  expect(dispatch.process(lowerer, [target, ...liftedFns])).toBe(false);
+  // Prototype assignments can appear in a later reachable body. Both
+  // lookup paths must then initialize the same inherited property bag.
+  info.def.prototypeDataHelper = "%prototype.Widget";
+  expect(dispatch.process(lowerer, [target, ...liftedFns])).toBe(true);
+  expect(helper.body[0]).toMatchObject({ then: [{ value: { kind: "libCall", fn: "dyn.objCreate",
+    args: [{ kind: "call", callee: "%prototype.Widget" }] } }] });
+  expect(dispatch.process(lowerer, [target, ...liftedFns])).toBe(false);
+});
+
+test("unknown receivers keep checked class property dispatch", () => {
+  const { lowerer, boxed } = context();
+  const expr: IrExpr = { kind: "call", callee: "%dyn.class.properties", args: [variable("value")], type: DYN, loc };
+  const target = fn("target", [statement(expr)]);
+  const body = target.body;
+  new ClassDynamicDispatch().process(lowerer, [boxed, target]);
+  expect(target.body).toBe(body);
 });

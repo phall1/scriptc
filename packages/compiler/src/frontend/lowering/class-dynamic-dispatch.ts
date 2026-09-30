@@ -63,7 +63,8 @@ export class ClassDynamicDispatch {
   private readonly computed = new Map<string, Omit<PropertyDispatch, "name"> & { keyLocal: string; branchIndex: number }>();
   private propertyBag: IrFunction | null = null;
   private readonly bagClasses = new Set<string>();
-  private readonly bagInitializers = new Map<string, Extract<IrStmt, { kind: "fieldSet" }>>();
+  private readonly bagInitializers = new Map<string, Extract<IrStmt, { kind: "fieldSet" }>[]>();
+  private readonly typedPropertyBags = new Map<string, IrFunction>();
   private readonly generated = new Set<IrFunction>();
   private readonly instanceTests = new Map<string, Set<string>>();
 
@@ -90,6 +91,9 @@ export class ClassDynamicDispatch {
         switch (expr.kind) {
           case "dynFrom":
             discover(expr.value.type);
+            break;
+          case "call":
+            if (expr.callee === "%dyn.class.properties" && expr.args[0]?.kind === "dynFrom" && isDynTypedRefType(expr.args[0].value.type)) rewrite.add(fn);
             break;
           case "dynKeyGet":
           case "dynInvoke":
@@ -132,12 +136,13 @@ export class ClassDynamicDispatch {
     for (const className of this.boxed) {
       const info = lowerer.classes.get(className);
       if (!info || info.builtinEmitter || info.builtinStream || info.builtinError) continue;
-      const existingInit = this.bagInitializers.get(className);
-      if (existingInit && existingInit.value.kind === "dynObjLit" && hasClassPrototypeData(info)) {
-        const prototype = classPrototypeData(lowerer, info, existingInit.loc);
-        if (prototype) {
-          existingInit.value = { kind: "libCall", fn: "dyn.objCreate", args: [prototype], type: DYN, loc: existingInit.loc };
-          changed = true;
+      for (const existingInit of this.bagInitializers.get(className) ?? []) {
+        if (existingInit.value.kind === "dynObjLit" && hasClassPrototypeData(info)) {
+          const prototype = classPrototypeData(lowerer, info, existingInit.loc);
+          if (prototype) {
+            existingInit.value = { kind: "libCall", fn: "dyn.objCreate", args: [prototype], type: DYN, loc: existingInit.loc };
+            changed = true;
+          }
         }
       }
       if (this.bagClasses.has(className)) continue;
@@ -154,7 +159,7 @@ export class ClassDynamicDispatch {
           ? { kind: "libCall", fn: "dyn.objCreate", args: [prototype], type: DYN, loc }
           : { kind: "dynObjLit", fields: [], type: DYN, loc }, loc,
       };
-      this.bagInitializers.set(className, initialize);
+      this.bagInitializers.set(className, [initialize]);
       this.propertyBag.body.unshift({
         kind: "if", cond: { kind: "libCall", fn: "dyn.typedRefIs", args: [value, { kind: "strLit", value: typeKey(type), type: STRING, loc }], type: BOOL, loc },
         then: [
@@ -186,6 +191,16 @@ export class ClassDynamicDispatch {
       fn.body = transformStmtList(fn.body, {
         stmt: (stmt) => stmt,
         expr: (expr) => {
+          if (expr.kind === "call" && expr.callee === this.propertyBag!.name) {
+            const boxed = expr.args[0];
+            if (boxed?.kind === "dynFrom" && isDynTypedRefType(boxed.value.type)) {
+              const helper = this.typedPropertyBag(lowerer, boxed.value.type, expr.loc);
+              if (helper) {
+                changed = true;
+                return { ...expr, callee: helper.name, args: [boxed.value] };
+              }
+            }
+          }
           const computedRead = expr.kind === "dynKeyGet" && expr.key.kind !== "strLit" ? expr : null;
           const computedWrite = expr.kind === "libCall" && (expr.fn === "dyn.keySetComputed" || expr.fn === "dyn.keySet" && expr.args[1]?.kind !== "strLit") ? expr : null;
           if (computedRead || computedWrite) {
@@ -380,6 +395,32 @@ export class ClassDynamicDispatch {
       }
     }
     return changed;
+  }
+
+  /** A known native class can access its shared bag directly. Keep the
+   * receiver as an owned parameter so calls and temporary instances retain
+   * their ordinary evaluation and lifetime rules without a boxed capsule. */
+  private typedPropertyBag(lowerer: Lowerer, type: Extract<IrType, { kind: "object" }>, loc: SrcLoc): IrFunction | null {
+    const existing = this.typedPropertyBags.get(type.className);
+    if (existing) return existing;
+    const initializers = this.bagInitializers.get(type.className);
+    if (!initializers) return null;
+    const receiver = varRef("p.0", type, loc);
+    const bag: IrExpr = { kind: "fieldGet", obj: receiver, className: type.className, field: PROPERTY_BAG, type: DYN, loc };
+    const initialize: Extract<IrStmt, { kind: "fieldSet" }> = { ...initializers[0]!, obj: receiver, loc };
+    const helper: IrFunction = {
+      name: `%class.properties:${type.className}`, params: [{ localId: "p.0", name: "value", type }], returnType: DYN,
+      locals: [{ id: "p.0", name: "value", type, mutable: false }], loc,
+      body: [
+        { kind: "if", cond: { kind: "dynTest", test: "undefined", value: bag, type: BOOL, loc }, then: [initialize], else_: null, loc },
+        { kind: "return", value: bag, loc },
+      ],
+    };
+    initializers.push(initialize);
+    this.typedPropertyBags.set(type.className, helper);
+    this.generated.add(helper);
+    lowerer.liftedFns.push(helper);
+    return helper;
   }
 
   /** The hidden bag is part of the native object layout, so every capsule
