@@ -11703,6 +11703,42 @@
     "<repo>/tests/corpus/llvm-read-receiver-lifetime.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/class-brand-overload.js": {
+   "order": [
+    "<repo>/tests/corpus/class-brand-overload.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/class-prototype-data.js": {
+   "order": [
+    "<repo>/tests/corpus/class-prototype-data.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/js-omitted-typed-arguments.js": {
+   "order": [
+    "<repo>/tests/corpus/js-omitted-typed-arguments.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/math-function-values.js": {
+   "order": [
+    "<repo>/tests/corpus/math-function-values.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/diagnostics/class-prototype-reflection.ts": {
+   "order": [
+    "<repo>/tests/diagnostics/class-prototype-reflection.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/rest-optional-array-arguments.ts": {
+   "order": [
+    "<repo>/tests/corpus/rest-optional-array-arguments.ts"
+   ],
+   "diags": []
   }
  }
 }

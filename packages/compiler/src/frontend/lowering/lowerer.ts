@@ -3423,8 +3423,12 @@ export class Lowerer {
               }
             }
           }
-          node.arguments.forEach((arg, i) => {
-              const callbackSlot = sig.params[i]?.type;
+          const restAt = sig.params.findIndex((shape) =>
+            shape.mode === "rest" || shape.mode === "dynRest" || shape.mode === "islandRest" || shape.mode === "arguments");
+          node.arguments.forEach((arg, argumentIndex) => {
+              const i = restAt >= 0 && argumentIndex >= restAt ? restAt : argumentIndex;
+              const shape = sig.params[i];
+              const callbackSlot = shape?.type;
               if (callbackSlot?.kind === "func" && !ts.isSpreadElement(arg)) {
                 const optionalCallbackParams = callbackSlot.params.flatMap((type, index) =>
                   type.kind === "union" && this.armTag(type.unionId, UNDEFINED_T) >= 0 ? [index] : []);
@@ -3432,9 +3436,28 @@ export class Lowerer {
                   changed = true;
                 }
               }
-              if (ts.isSpreadElement(arg) || !mayBeOptional(arg) || !sig.params[i]) return;
+              if (ts.isSpreadElement(arg) || !mayBeOptional(arg) || !shape) return;
+              if (i === restAt) {
+                // A rest binding always receives an array. An unchecked
+                // argument can make its elements undefined, not the pack.
+                // Keep every virtual implementation on the same array ABI.
+                for (const target of familyBySymbol.get(symbol) ?? [symbol]) {
+                  const rest = signatureBySymbol.get(target)?.params[i];
+                  if (rest?.mode !== "rest" || rest.type.kind !== "array") continue;
+                  const widened = arrayOf(addUndefined(rest.type.elem));
+                  if (typeEquals(rest.type, widened)) continue;
+                  rest.type = widened;
+                  const parameter = functionDeclBySymbol.get(target)?.parameters[i];
+                  if (parameter && ts.isIdentifier(parameter.name)) {
+                    const bound = symbolOf(parameter.name);
+                    if (bound) this.runtimeOptionalBindingTypes.set(bound, widened);
+                  }
+                  changed = true;
+                }
+                return;
+              }
               const set = optionalParams.get(symbol) ?? new Set<number>();
-              sig.params[i]!.type = addUndefined(sig.params[i]!.type);
+              shape.type = addUndefined(shape.type);
               const before = set.size;
               set.add(i);
               optionalParams.set(symbol, set);

@@ -33,8 +33,8 @@ for (const backend of ["llvm"] as const) {
       expect(actual.status, actual.stderr).toBe(expected.status);
       expect(actual.stderr).toBe(expected.stderr);
       expect(actual.stdout).toBe(expected.stdout);
-      expect(actual.stdout).toContain('"import":"./cjs.js","require":"./cjs.js"');
-      expect(actual.stdout).toContain('./feature/use ./lib/use.js');
+      expect(actual.stdout).toContain('"import":"./esm.js","require":"./cjs.js"');
+      expect(actual.stdout).toContain('./feature/use ./esm/use.js');
       expect(actual.stdout).toContain('false true true 7 99');
       expect(actual.stdout).toContain('true lib.es2023.d.ts');
     } finally {
