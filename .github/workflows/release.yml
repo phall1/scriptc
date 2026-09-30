@@ -297,6 +297,9 @@ jobs:
         run: |
           VERSION="${{ needs.check-release.outputs.version }}"
           for pkg in packages/runtime packages/runtime-* packages/llvm-* packages/compiler packages/cli packages/cli-*; do
+            if [ "$(node -p "require('./$pkg/package.json').private === true")" = "true" ]; then
+              continue
+            fi
             V=$(node -p "require('./$pkg/package.json').version")
             if [ "$V" != "$VERSION" ]; then
               echo "Version mismatch: $pkg is $V, expected $VERSION"

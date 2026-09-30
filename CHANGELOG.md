@@ -6,6 +6,36 @@ All notable changes to scriptc will be documented in this file.
 
 <!-- release:start -->
 
+## 0.2.0
+
+### Breaking changes
+
+- **LLVM is the only code generation backend.** C emission, the debugging C backend, and automatic C fallback have been removed. Replace `--backend=c` with the default backend, use `--emit=llvm` to inspect generated code, and change library profiles with `"emission": "c"` to `"emission": "llvm"`. `--emit=c` is no longer accepted.
+- **The installed CLI is a native executable.** npm installs the matching platform package on supported macOS, Linux, and Windows hosts. Native compilation, compile-time evaluation, and native execution no longer require Node. Node 24 or newer is still required for npm installation, the JavaScript compiler API, source development, and `scriptc run` of WASI modules. Executable linking still requires the target's linker and SDK or sysroot; Zig remains required for the targets that use it.
+
+### Features
+
+- **scriptc ships a self-hosted native compiler.** The CLI bundles the native TypeScript 7 parser and checker, LLVM helper, precompiled C runtime pack, declarations, and compile-time evaluator. Standalone compiler archives are available alongside npm packages.
+- **Published Effect generators compile statically.** With `--npm-static=effect`, the tested `Effect.gen`, `Effect.succeed`, `Effect.log`, and `Effect.runPromise` flow compiles from the unmodified package without an embedded JavaScript engine. Unsupported reachable Effect code still produces diagnostics.
+- **Three.js CPU workloads compile natively and to WASI.** Static package compilation supports math, scene graphs, cameras, geometry, meshes, materials, and tested raycasting and collision queries. WebGL rendering, DOM integration, and native graphics windows remain unsupported.
+- **WebAssembly libraries expose callable exports and host imports.** WASI Preview 1 reactors support library profiles, synchronous host callbacks, explicit memory ownership, and independent module instances. Browser hosts supply their own WASI adapter and rendering integration.
+- **Native FFI supports more library interfaces.** Static `node:ffi` bindings add exact 64-bit and pointer ABIs, native memory views, reusable callback pools, and Darwin framework linking.
+- **More ordinary JavaScript stays native.** Support expands across identity collections, numeric typed arrays, property descriptors, local class factories, callable properties, inherited fields and accessors, generator and async methods, and runtime-length argument spreads into supported signatures.
+
+### Performance
+
+- **Compilation does less repeated frontend work.** Syntax metadata, property lookups, library signatures, and recursive class analysis are reused, while optional-value analysis and lowering avoid redundant traversal and copying.
+- **LLVM output shares recursive value converters.** Deduplicated helpers reduce generated code and the work needed to produce native objects.
+- **Startup avoids unnecessary work, and release artifacts are smaller.** Host libc detection is cached, the JavaScript API loads TypeScript 5 only when needed, and release runtime packs omit development debug payloads.
+
+### Fixes
+
+- **Untyped JavaScript boundaries preserve more native values.** Class state, shared arrays, nullable fields, constructor results, collection identity, and typed-array backing storage retain their supported semantics across calls and storage.
+- **Static library builds honor explicit package selections.** Packages named in a library profile's `npm_static` list are attempted even when they do not ship declarations.
+- **Terminal and process integration handles more native behavior.** Stored process streams, terminal signals, and exception handlers that resume queued work are supported across the tested native paths.
+
+<!-- release:end -->
+
 ## 0.1.7
 
 ### Features
@@ -28,8 +58,6 @@ All notable changes to scriptc will be documented in this file.
 - **TypeScript project settings and Node declarations are preserved.** Built-in default imports honor effective project options, and `RequestInfo` remains available across imported sources.
 - **Optional chains and dynamic option records retain supported values.** Array callbacks inside optional chains, narrowed optional receivers, and records containing abort handles compile correctly.
 - **Compiler analysis handles more edge cases safely.** Deep or shared type graphs no longer overwhelm diagnostics, and property names spelled `arguments` are not treated as reads of the special binding.
-
-<!-- release:end -->
 
 ## 0.1.6
 
