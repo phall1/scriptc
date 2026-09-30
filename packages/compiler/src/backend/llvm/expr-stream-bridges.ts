@@ -698,6 +698,25 @@ export function streamTypedRefMaterializeAdapter(host: LlvmEmitterContext,
       const len = B.tmp();
       B.line(`${len} = call double @scr_arr_len(ptr %p)`);
       B.countedLoop(len, (index) => {
+        host.declare(`declare double @scr_arr_state(ptr, double)`);
+        host.declare(`declare ptr @scr_dyn_undefined()`);
+        host.declare(`declare ptr @scr_dyn_retain_v(ptr)`);
+        const state = B.tmp();
+        const present = B.tmp();
+        const valueLabel = B.newLabel("live.array.value");
+        const absentLabel = B.newLabel("live.array.absent");
+        const doneLabel = B.newLabel("live.array.done");
+        B.line(`${state} = call double @scr_arr_state(ptr %p, double ${index})`);
+        B.line(`${present} = fcmp oeq double ${state}, 1.0`); // SCR_ARR_VALUE
+        B.condBr(present, valueLabel, absentLabel);
+        B.startBlock(absentLabel);
+        const undefinedValue = B.tmp();
+        const retained = B.tmp();
+        B.line(`${undefinedValue} = call ptr @scr_dyn_undefined()`);
+        B.line(`${retained} = call ptr @scr_dyn_retain_v(ptr ${undefinedValue})`);
+        B.line(`call void @scr_dyn_arr_push(ptr ${out}, ptr ${retained})`);
+        B.br(doneLabel);
+        B.startBlock(valueLabel);
         let value: string;
         if (elem.kind === "f64" || elem.kind === "bool") {
           const valueTy = elem.kind === "f64" ? "double" : "i1";
@@ -716,6 +735,8 @@ export function streamTypedRefMaterializeAdapter(host: LlvmEmitterContext,
         if (isRefCounted(elem)) {
           B.line(`call void ${releaseSym(host.shapeHost, elem)}(ptr ${value})`);
         }
+        B.br(doneLabel);
+        B.startBlock(doneLabel);
       });
       B.terminate(`ret ptr ${out}`);
     } else {

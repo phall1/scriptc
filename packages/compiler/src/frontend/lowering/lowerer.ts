@@ -7847,9 +7847,13 @@ export class Lowerer {
       }
     }
     let e = this.coerceToExpected(expr, expected);
-    // JavaScript checked slots retain native arrays by reference. Calls,
-    // returns and argument packs must all share mutations and identity.
-    if (isJsSourceFile(node.getSourceFile()) && e.kind === "dynFrom" && e.value.type.kind === "array") {
+    // Existing JavaScript arrays retain mutations and identity across checked
+    // slots. Fresh literals have no prior identity and use checked storage
+    // directly, so later writes can change their inferred element type.
+    let literal = node;
+    while (ts.isParenthesizedExpression(literal)) literal = literal.expression;
+    if (isJsSourceFile(node.getSourceFile()) && !ts.isArrayLiteralExpression(literal) &&
+        e.kind === "dynFrom" && e.value.type.kind === "array") {
       e = { ...e, liveRef: true };
     }
     // An 'any' value PROVABLY null/undefined (the unit literal itself, or

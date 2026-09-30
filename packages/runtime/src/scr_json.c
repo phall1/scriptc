@@ -731,6 +731,12 @@ ScrDyn *scr_dyn_iter_pack(const ScrDyn *src, const ScrStr *msg) {
 ScrDyn *scr_dyn_map_seed_entries(const ScrDyn *src) {
   if (src->kind == SCR_DYN_ARR) return scr_dyn_retain((ScrDyn *)src);
   if (src->kind == SCR_DYN_NULL || src->kind == SCR_DYN_UNDEF) return scr_dyn_new_arr();
+  if (src->kind == SCR_DYN_TYPED_REF && scr_dyn_isl_is_array(src)) {
+    ScrDyn *view = scr_dyn_typed_ref_materialize(src);
+    if (!scr_exc_pending() && view->kind == SCR_DYN_ARR) return view;
+    scr_dyn_release(view);
+    if (scr_exc_pending()) return NULL;
+  }
   if (src->kind == SCR_DYN_HANDLE || src->kind == SCR_DYN_TYPED_REF || src->kind == SCR_DYN_JSVAL) {
     static const char message[] = "new Map(entries) over native non-array iterables has no lowering";
     scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
@@ -5044,6 +5050,12 @@ static ScrDyn *scr_dyn_objwalk(const ScrDyn *v, ScrObjWalk mode) {
       scr_dyn_release(names);
     }
     if (!raw) return NULL;
+    if (raw->kind == SCR_DYN_TYPED_REF && scr_dyn_isl_is_array(raw)) {
+      ScrDyn *view = scr_dyn_typed_ref_materialize(raw);
+      scr_dyn_release(raw);
+      raw = view;
+      if (scr_exc_pending()) { scr_dyn_release(raw); return NULL; }
+    }
     if (raw->kind != SCR_DYN_ARR) {
       if (scr_dyn_to_primitive_result_is_object(raw)) scr_dyn_proxy_unsupported("array-like ownKeys results");
       else {
@@ -5199,6 +5211,12 @@ ScrDyn *scr_dyn_obj_keys(const ScrDyn *v) { return scr_dyn_objwalk(v, SCR_OBJWAL
  * Non-enumerable own names shadow names farther up the chain. */
 ScrDyn *scr_dyn_for_in_keys(const ScrDyn *v) {
   if (scr_dyn_class_reflection_fence(v)) return NULL;
+  if (v->kind == SCR_DYN_TYPED_REF && scr_dyn_isl_is_array(v)) {
+    ScrDyn *view = scr_dyn_typed_ref_materialize(v);
+    ScrDyn *keys = scr_exc_pending() ? NULL : scr_dyn_for_in_keys(view);
+    scr_dyn_release(view);
+    return keys;
+  }
   switch (v->kind) {
   case SCR_DYN_OBJ: {
     ScrDyn *keys = scr_dyn_new_arr();

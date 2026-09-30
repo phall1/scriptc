@@ -3893,9 +3893,8 @@ export function collectVirtualJsMethods(lowerer: Lowerer, files: readonly ts.Sou
         if (instance) markBases(instance);
       }
     }
-    node.forEachChild(visit);
   };
-  for (const file of files) visit(file);
+  for (const file of files) ts.walkPreorder(file, visit);
 }
 
 /** The receiver's EXACT runtime class, when the expression proves it: a

@@ -2370,8 +2370,13 @@ function storedImplicitArgumentType(lowerer: Lowerer, arg: ts.Expression): IrTyp
       info.implicitParams![i] ? { type: DYN, mode: "required" as const } : lowerer.paramShape(param),
     );
     const argTypes = new Map<ts.Symbol, ts.Type>();
-    for (const symbol of info.implicitParams ?? []) {
-      if (symbol) argTypes.set(symbol, lowerer.checker.getUnknownType());
+    // Newly bindable nominal class parameters must not retain their JSDoc
+    // receiver type in the checked fallback. Keep existing broad JS inference.
+    for (let i = 0; i < info.decl.parameters.length; i++) {
+      const symbol = info.implicitParams?.[i];
+      if (symbol && lowerer.mapTypeOf(lowerer.typeOf(info.decl.parameters[i]!.name))?.kind === "object") {
+        argTypes.set(symbol, lowerer.checker.getUnknownType());
+      }
     }
     return internImplicitInstance(lowerer, blame, info, shapes, argTypes);
   }
