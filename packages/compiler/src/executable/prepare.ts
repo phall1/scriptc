@@ -6,6 +6,7 @@ import { validateModule } from "../ir/validate.js";
 import { moduleWasiUnavailableSurface, targetRefusalDiag } from "../backend/target-diagnostics.js";
 import type { LowerResult, LowerStats } from "../frontend/lowering/lowerer.js";
 import type { FrontendFactory } from "../frontend/pipeline.js";
+import type { CompilationTiming } from "../timing.js";
 
 export interface PreparedExecutableModule {
   ok: true;
@@ -21,8 +22,10 @@ export function prepareExecutableModule(
   ffi: FfiProfile | null,
   buildPlatform: string,
   createFrontend: FrontendFactory,
+  timing: CompilationTiming = () => {},
 ): PreparedExecutableModule | CompileFailure {
   const fe = createFrontend(entryPath, opts.npmStatic);
+  timing("frontend-load");
   let lowered: LowerResult;
   let sourceTexts: Map<string, string>;
   // The frontend (and its tsgo server) is released as soon as lowering
@@ -42,6 +45,7 @@ export function prepareExecutableModule(
         targetPlatform: buildPlatform,
         ...(ffi !== null ? { ffiImports: ffi.functions } : {}),
       });
+      timing("lower");
     } catch (e) {
       // The last-resort panic fence: an upstream tsgo panic that crossed a
       // checker call no statement/collection fence wrapped still becomes a
@@ -54,6 +58,7 @@ export function prepareExecutableModule(
     if (lowered.module === null) return fail(lowered.diagnostics);
 
     const validation = validateModule(lowered.module);
+    timing("ir-validate");
     if (validation.length > 0) {
       return fail(validation.map((v) => iceDiag(v.message, v.loc)));
     }
@@ -73,6 +78,7 @@ export function prepareExecutableModule(
     sourceTexts = fe.sourceTexts();
   } finally {
     fe.dispose();
+    timing("frontend-dispose");
   }
 
   return { ok: true, mod: lowered.module!, sourceTexts, stats: lowered.stats };

@@ -41,6 +41,16 @@ test("ordinary strings resembling number sentinels remain strings", () => {
   expect(deserializeModule(serializeModule(mod)).sourceFile).toBe(mod.sourceFile);
 });
 
+test("compact artifacts preserve the full module and special numeric values", () => {
+  const mod = numbers([NaN, Infinity, -Infinity, -0, 0, Number.MIN_VALUE, Number.MAX_VALUE]);
+  mod.sourceFile = "escaped\nsource\t😀.ts";
+  const compact = serializeModule(mod, true);
+  expect(compact).not.toContain("\n");
+  expect(compact.length).toBeLessThan(serializeModule(mod).length);
+  expect(deserializeModule(compact)).toEqual(mod);
+  expect(deserializeModule(compact)).toEqual(deserializeModule(serializeModule(mod)));
+});
+
 test("the new number format rejects documents bearing an older version", () => {
   const json = serializeModule(numbers([NaN])).replace(`"irVersion": ${IR_VERSION}`, `"irVersion": ${IR_VERSION - 1}`);
   expect(() => deserializeModule(json)).toThrow("IR version mismatch");

@@ -1,8 +1,9 @@
 import { execFile, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { promisify } from "node:util";
+import { pathToFileURL } from "node:url";
 import { WASI } from "node:wasi";
 import { expect, test } from "vitest";
 import type { NativeToolchainManifest } from "../../packages/compiler/src/native/toolchain.js";
@@ -37,7 +38,9 @@ test("the production CLI relocates, builds programs, and rebuilds itself with No
   try {
     const distribution = join(directory, "distribution");
     await bootstrapStep("build production CLI seed", () =>
-      exec(process.execPath, ["--max-old-space-size=8192", "--import", "tsx", join(root, "scripts/build-native-cli.mts"), distribution], options));
+      exec(process.execPath, ["--max-old-space-size=8192", "--import", "tsx", join(root, "scripts/build-native-cli.mts"), distribution], {
+        ...options, env: { ...process.env, SCRIPTC_NATIVE_EMIT_IR: "1" },
+      }));
     // All compiler assets must survive moving the complete distribution.
     const relocated = join(directory, "relocated");
     renameSync(distribution, relocated);
@@ -56,14 +59,27 @@ test("the production CLI relocates, builds programs, and rebuilds itself with No
     manifest.archiver = absoluteCommand(process.platform === "win32" ? "zig" : "ar");
     manifest.archiver_args = process.platform === "win32" ? ["ar"] : [];
     writeFileSync(manifestPath, JSON.stringify(manifest));
+    let sanitizerCompiler: string | undefined;
+    if (sanitize) {
+      sanitizerCompiler = absoluteCommand(process.env["SCRIPTC_CC"] ?? "clang");
+      if (process.platform === "linux") {
+        const linker = await exec(sanitizerCompiler, ["--print-prog-name=ld"], options);
+        const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+        const wrapper = join(directory, "sanitizer-clang");
+        // Preserve the empty PATH while making Clang's child linker explicit.
+        writeFileSync(wrapper, `#!/bin/sh\nexec ${quote(sanitizerCompiler)} ${quote("--ld-path=" + absoluteCommand(linker.stdout.trim()))} "$@"\n`);
+        chmodSync(wrapper, 0o755);
+        sanitizerCompiler = wrapper;
+      }
+    }
     const nativeOptions = { ...options, env: { ...process.env, PATH: "", SCRIPTC_TOOLCHAIN: manifestPath,
-      SCRIPTC_CACHE_DIR: join(directory, "cache") } };
-    const invoke = async (compiler: string, args: string[]) => {
+      SCRIPTC_CACHE_DIR: join(directory, "cache"), ...(sanitizerCompiler === undefined ? {} : { SCRIPTC_CC: sanitizerCompiler }) } };
+    const invoke = async (compiler: string, args: string[], expectedStderr = "") => {
       const result = await exec(compiler, args, nativeOptions).catch((error: unknown) => {
         const failure = error as Error & { code?: string | number; signal?: string; stdout?: string; stderr?: string };
         throw new Error(`${failure.message}\ncode=${failure.code} signal=${failure.signal}\n${failure.stderr ?? ""}\n${failure.stdout ?? ""}`, { cause: error });
       });
-      expect(comparableStderr(result.stderr)).toBe("");
+      expect(comparableStderr(result.stderr)).toBe(expectedStderr);
       return result.stdout;
     };
     expect(await invoke(seed, ["--help"])).toContain("scriptc build");
@@ -172,8 +188,33 @@ test("the production CLI relocates, builds programs, and rebuilds itself with No
     // Optimize the compiler that will process the full graph again. Small
     // programs above and below still exercise development output.
     const self = await bootstrapStep("production CLI rebuilds itself", () =>
-      invoke(seed, ["build", entry, "-o", rebuilt, "--strip", "--keep-llvm", "--ffi", ffi]));
+      invoke(seed, ["build", entry, "-o", rebuilt, "--strip", "--keep-llvm", "--emit-ir", "--ffi", ffi,
+        ...(sanitize ? ["--sanitize"] : [])],
+      "scriptc: warning: --emit-ir is deprecated; use --emit=ir for IR as the primary output\n"));
     expect(self.trim()).toBe(rebuilt);
+
+    // The production chain owns the complete frontend and emitter proof:
+    // compare the Node seed's IR and LLVM with the native self-rebuild, then
+    // execute the next compiler generation below. Large structural checks
+    // run in a roomy child so Vitest's worker remains responsive.
+    const seedDirectory = join(directory, ".scriptc/distribution-seed");
+    const comparison = await bootstrapStep("compare Node and native compiler IR and LLVM", () =>
+      exec(process.execPath, ["--max-old-space-size=8192", "--import", "tsx", "--input-type=module", "--eval", `
+        import assert from 'node:assert/strict';
+        import { readFileSync } from 'node:fs';
+        import { isDeepStrictEqual } from 'node:util';
+        import { deserializeModule, validateModule } from ${JSON.stringify(pathToFileURL(join(root, "packages/compiler/src/index.ts")).href)};
+        const expected = deserializeModule(readFileSync(process.argv[1], 'utf8'));
+        const actual = deserializeModule(readFileSync(process.argv[2], 'utf8'));
+        assert.ok(actual.functions.length > 1000);
+        assert.deepEqual(validateModule(actual), []);
+        assert.ok(isDeepStrictEqual(actual, expected), 'native self-lowering must match the Node seed');
+        assert.ok(readFileSync(process.argv[3], 'utf8') === readFileSync(process.argv[4], 'utf8'),
+          'native LLVM emission must match the Node seed');
+      `, join(seedDirectory, "cli.ir.json"), join(directory, "cli.ir.json"),
+      join(seedDirectory, "cli.ll"), join(directory, "cli.ll")], options));
+    expect(comparison.stdout).toBe("");
+    expect(comparison.stderr).toBe("");
     await checkProgram(rebuilt, join(root, "tests/corpus/nullish-long-chain.ts"));
     await checkProgram(rebuilt, sample);
     await checkProgram(rebuilt, unionSample);

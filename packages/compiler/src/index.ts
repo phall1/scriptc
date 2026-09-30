@@ -1,3 +1,4 @@
+import { compilationTiming, type CompilationTiming } from "./timing.js";
 import { prepareExecutableModule } from "./executable/prepare.js";
 import { prepareLibrary, libraryLocalizeSymbols, libraryWasmExports, libraryWasmRefusal } from "./library/prepare.js";
 import { analyzeWithFrontend } from "./frontend/analysis.js";
@@ -418,9 +419,10 @@ interface PreparedExecutable {
  * typed IR can be reclaimed before the native optimizer needs its heap. */
 async function prepareExecutableInput(
   entryPath: string, opts: CompileRequestOptions, ffi: FfiProfile | null, buildPlatform: string,
+  timing: CompilationTiming,
 ): Promise<PreparedExecutable | CompileRequestResult> {
   const outputKind = opts.outputKind ?? "exe";
-  const prepared = prepareExecutableModule(entryPath, opts, ffi, buildPlatform, nodeFrontend);
+  const prepared = prepareExecutableModule(entryPath, opts, ffi, buildPlatform, nodeFrontend, timing);
   if (!prepared.ok) return prepared;
   const { mod, sourceTexts } = prepared;
 
@@ -435,7 +437,7 @@ async function prepareExecutableInput(
 
   if (outputKind === "ir") {
     await mkdir(dirname(opts.outPath), { recursive: true });
-    await writeFile(opts.outPath, serializeModule(mod));
+    await writeFile(opts.outPath, serializeModule(mod, true));
     return { ok: true, artifact: { kind: "ir", path: opts.outPath } };
   }
 
@@ -519,11 +521,13 @@ async function prepareExecutableInput(
     if (!(err instanceof LlvmUnsupportedError)) throw err;
     return { ok: false, diagnostics: [llvmRefusalDiag(err, entryPath)], sourceTexts };
   }
+  timing("llvm-emit");
   await writeFile(llvmPath, llvmSource);
+  timing("llvm-write");
   let irPath: string | undefined;
   if (opts.emitIr) {
     irPath = defaultSourcePaths.ir;
-    await writeFile(irPath, serializeModule(mod));
+    await writeFile(irPath, serializeModule(mod, true));
   }
 
   const nativeFeatures = executableNativeFeatures(
@@ -532,11 +536,13 @@ async function prepareExecutableInput(
     opts.dynamic ?? false,
     opts.optimization ?? "release",
   );
+  timing("link-features");
   const programSplit =
     backend === "llvm" && (opts.optimization ?? "release") === "dev" &&
       !(opts.sanitize ?? false) && llvmSource !== null
       ? splitLlvmProgram(llvmSource)
       : null;
+  timing("llvm-split");
   return { llvmSource, llvmPath, irPath, nativeFeatures, programSplit, sourceTexts };
 }
 
@@ -545,6 +551,7 @@ async function compileTracked(
   opts: CompileRequestOptions,
   frontendInputs: FrontendInputTracker,
 ): Promise<CompileRequestResult> {
+  const timing = compilationTiming();
   entryPath = resolve(entryPath);
   const outputKind = opts.outputKind ?? "exe";
   if ((opts.backend !== undefined && opts.backend !== "llvm") ||
@@ -745,6 +752,7 @@ async function compileTracked(
     ? null
     : await readEarlyExecutableCache(cacheRoot, earlyCacheOptions);
   if (earlyHit !== null) {
+    timing("executable-cache-hit");
     if (earlyCacheOptions === null) {
       throw new InternalCompilerError("executable cache hit without executable cache options");
     }
@@ -755,6 +763,7 @@ async function compileTracked(
     await publishEarlyExecutableRoute(cacheRoot, executableCacheOptions).catch(() => undefined);
     if (earlyHit.executableRestored) {
       await pruneBuildCache(cacheRoot);
+      timing("complete");
       return {
         ok: true,
         artifact: {
@@ -857,7 +866,8 @@ async function compileTracked(
       ...(earlyHit.irPath === undefined ? {} : { irPath: earlyHit.irPath }),
     };
   }
-  const prepared = await prepareExecutableInput(entryPath, opts, ffi, buildPlatform);
+  timing("executable-cache-miss");
+  const prepared = await prepareExecutableInput(entryPath, opts, ffi, buildPlatform, timing);
   if ("ok" in prepared) return prepared;
   const { llvmSource, llvmPath, irPath, nativeFeatures, programSplit, sourceTexts } = prepared;
   const backend = "llvm" as const;
@@ -881,6 +891,7 @@ async function compileTracked(
       }
       try {
         nativeProgramObject = await emitNativeProgramObject(entryPath, opts, llvmSource);
+        timing("native-object");
       } catch (err) {
         if (!(err instanceof NativeCodegenError)) throw err;
         return {
@@ -912,6 +923,7 @@ async function compileTracked(
         publishedExecutable = true;
       },
     );
+    timing("native-link");
     if (nativeProgramObject !== null && opts.nativeProgramObject === true) {
       await rename(nativeProgramObject.linkPath, nativeProgramObject.artifactPath);
     }
@@ -947,6 +959,7 @@ async function compileTracked(
     }).catch(() => undefined);
   }
   await pruneBuildCache(cacheRoot);
+  timing("complete");
   return {
     ok: true,
     artifact: {
@@ -1114,7 +1127,7 @@ async function emitSemanticLibraryHit(
   let irPath: string | undefined;
   if (opts.emitIr) {
     irPath = join(opts.outDir, `${stem}.lib.ir.json`);
-    await writeFile(irPath, serializeModule(mod));
+    await writeFile(irPath, serializeModule(mod, true));
   }
   await compileLibraryNative(
     profile,
@@ -1373,7 +1386,7 @@ async function compileLibraryTracked(
   let irPath: string | undefined;
   if (opts.emitIr) {
     irPath = join(opts.outDir, `${stem}.lib.ir.json`);
-    await writeFile(irPath, serializeModule(mod));
+    await writeFile(irPath, serializeModule(mod, true));
   }
 
   const nativeFeatures = libraryNativeFeatures(mod, profile.emission);

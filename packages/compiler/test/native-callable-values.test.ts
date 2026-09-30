@@ -56,7 +56,10 @@ console.log(handle.fd);
     const path = join(dir, "created.txt");
     const child = spawnSync(result.binaryPath, [path], { encoding: "utf8" });
     expect(child.status, child.stderr).toBe(0);
-    expect(child.stderr).toBe("");
+    const stderr = sanitize
+      ? child.stderr.replace(/^==\d+==WARNING: ASan doesn't fully support makecontext\/swapcontext functions and may produce false positives in some cases!\n/gm, "")
+      : child.stderr;
+    expect(stderr).toBe("");
     expect(child.stdout).toBe("argument\nargument\nargument\nTypeError\ninvoked\nafter:one:two\ntrue\ndescribed\nstring\nTypeError\nTypeError\nTypeError\n-1\n");
     expect(statSync(path).mode & 0o777).toBe(0o600);
   } finally {

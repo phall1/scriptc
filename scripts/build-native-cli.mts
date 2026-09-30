@@ -46,6 +46,7 @@ const result = await compile(join(root, "packages/compiler/src/native/cli.ts"), 
   outDir: seed, outPath: executable, backend: "llvm",
   optimization: process.env["SCRIPTC_NATIVE_OPTIMIZATION"] === "dev" ? "dev" : "release",
   strip: process.env["SCRIPTC_NATIVE_KEEP_SYMBOLS"] !== "1", dynamic: false, ffiProfilePath: ffi, sanitize: process.env["SCRIPTC_SAN"] === "1",
+  emitIr: process.env["SCRIPTC_NATIVE_EMIT_IR"] === "1",
 });
 if (!result.ok) throw new Error(result.diagnostics.map((item) =>
   `${item.loc ? `${item.loc.file}:${item.loc.start}: ` : ""}${item.code}: ${item.message}`,

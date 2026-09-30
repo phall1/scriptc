@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import type { SourceFile, Node } from "typescript/unstable/ast";
 import { AstFile, AstNode } from "./ast-node.js";
-import { AstKind, KIND_NODE_LIST, astChildNames, HEADER_OFFSET_NODES, NODE_LEN, NODE_OFFSET_PARENT } from "./ast-schema.generated.js";
+import { AstKind, KIND_NODE_LIST, astChildNames, astChildOrder, HEADER_OFFSET_NODES, NODE_LEN, NODE_OFFSET_PARENT } from "./ast-schema.generated.js";
 import { walkPreorder } from "./ast.js";
 import { ts7Executable } from "./rpc-api.js";
 import { Ts7RpcClient } from "./rpc-client.js";
@@ -18,6 +18,22 @@ type OracleNode = Node & { index: number; id: string; text?: string; rawText?: s
 type OracleFile = SourceFile & { getOrCreateNodeAtIndex(index: number): OracleNode };
 const { RemoteSourceFile } = require(join(sdkRoot, "dist/api/node/node.js")) as { RemoteSourceFile: new (bytes: Uint8Array, decoder: InstanceType<typeof TextDecoder>) => OracleFile };
 const { Wtf8Decoder } = require(join(sdkRoot, "dist/api/node/wtf8.js")) as { Wtf8Decoder: typeof TextDecoder };
+const { childProperties } = require(join(sdkRoot, "dist/api/node/protocol.js")) as { childProperties: Record<number, string[]> };
+
+test("generated child ordinals match every pinned TypeScript property", () => {
+  const names = [...new Set(Object.values(childProperties).flat())];
+  for (const [kind, properties] of Object.entries(childProperties)) {
+    for (const name of names) {
+      expect(astChildOrder(Number(kind), name), `${kind}.${name}`).toBe(properties.indexOf(name));
+    }
+    for (const name of ["", "name,body", "statementsExtra", "body ", "__proto__"]) {
+      expect(astChildOrder(Number(kind), name)).toBe(-1);
+    }
+  }
+  for (const kind of [-1, 0xffffffff, NaN, KIND_NODE_LIST]) {
+    for (const name of names) expect(astChildOrder(kind, name)).toBe(-1);
+  }
+});
 
 const cases: Record<string, string> = {
   "main.ts": [

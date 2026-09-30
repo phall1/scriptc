@@ -1,3 +1,4 @@
+import type { CompilationTiming } from "../timing.js";
 import { basename, dirname, join, resolve } from "node:path";
 import type { CompileFailure, CompileLibraryOptions, CompileRequestOptions } from "../compile-types.js";
 import { emitLlvmModule } from "../backend/llvm/emitter.js";
@@ -66,6 +67,7 @@ function validCachedInput(value: unknown): value is FrontendCacheEntry {
 export function prepareNativeExecutable(
   entry: string, options: CompileRequestOptions, ffi: FfiProfile | null,
   toolchain: NativeToolchain, frontend: FrontendFactory, cache: NativeCache | null,
+  timing: CompilationTiming = () => {},
 ): NativeExecutableInput | CompileFailure {
   const outputKind = options.outputKind ?? "exe";
   const stem = basename(entry).replace(/\.(ts|mts|cts|js|mjs|cjs)$/, "");
@@ -91,27 +93,33 @@ export function prepareNativeExecutable(
         const cached: unknown = JSON.parse(bytes.toString("utf8"));
         if (validCachedInput(cached) && frontendInputsStillMatch(cached.probes, exclusions)) {
           const input: NativeExecutableInput = cached.input;
+          timing("frontend-cache-hit");
           return input;
         }
       }
     } catch { key = null; }
   }
+  timing("frontend-cache-miss");
   const tracker = new FrontendInputTracker();
-  const prepared = tracker.runSynchronous(() => prepareExecutableModule(entry, options, ffi, toolchain.target.platform, frontend));
+  const prepared = tracker.runSynchronous(() => prepareExecutableModule(entry, options, ffi, toolchain.target.platform, frontend, timing));
   if (!prepared.ok) return prepared;
-  const ir = outputKind === "ir" || options.emitIr ? serializeModule(prepared.mod) : null;
+  const ir = outputKind === "ir" || options.emitIr ? serializeModule(prepared.mod, true) : null;
+  timing("ir-serialize");
   const llvm = outputKind === "ir" ? "" : emitLlvmModule(prepared.mod, {
     targetTriple: toolchain.target.llvmTriple, pointerBits: toolchain.target.pointerBits,
     wasi: toolchain.target.platform === "wasi", runtimeAbiMarker: outputKind === "obj" || outputKind === "exe",
     ...(options.optimization === "dev" && !options.strip ? { debugSources: prepared.sourceTexts } : {}),
   });
+  timing("llvm-emit");
   const input: NativeExecutableInput = { ok: true, llvm, ir, sidecarJson: null,
     features: executableLinkFeatures(prepared.mod, options.dynamic ?? false), sources: [...prepared.sourceTexts] };
+  timing("link-features");
   const probes = tracker.snapshot();
   if (cache !== null && key !== null && probes.stable && frontendInputsStillMatch(probes, exclusions)) {
     const saved: FrontendCacheEntry = { schema: "scriptc.native-frontend.v2", probes, input };
     cache.write("frontend", key, JSON.stringify(saved));
   }
+  timing("frontend-cache-publish");
   return input;
 }
 
@@ -120,6 +128,7 @@ export function prepareNativeExecutable(
 export function prepareNativeLibrary(
   profile: LibraryProfile, options: CompileLibraryOptions, archivePath: string,
   toolchain: NativeToolchain, frontend: FrontendFactory, cache: NativeCache | null,
+  timing: CompilationTiming = () => {},
 ): NativeExecutableInput | CompileFailure {
   const stem = basename(profile.entry).replace(/\.(ts|mts|cts|js|mjs|cjs)$/, "");
   const outputPaths = [archivePath, resolve(options.outDir, stem + ".lib.ll"), resolve(options.outDir, stem + ".lib.ir.json")];
@@ -146,11 +155,13 @@ export function prepareNativeLibrary(
         const cached: unknown = JSON.parse(bytes.toString("utf8"));
         if (validCachedInput(cached) && frontendInputsStillMatch(cached.probes, exclusions)) {
           const input: NativeExecutableInput = cached.input;
+          timing("frontend-cache-hit");
           return input;
         }
       }
     } catch { key = null; }
   }
+  timing("frontend-cache-miss");
   const tracker = new FrontendInputTracker();
   const prepared = tracker.runSynchronous(() => {
     for (let directory = dirname(profile.entry); ; directory = dirname(directory)) {
@@ -158,21 +169,25 @@ export function prepareNativeLibrary(
       trackedReadFile(join(directory, "package.json"));
       if (directory === dirname(resolve(options.profilePath)) || dirname(directory) === directory) break;
     }
-    return prepareLibrary(profile, options.profilePath, toolchain.compilerVersion, toolchain.target.platform, frontend);
+    return prepareLibrary(profile, options.profilePath, toolchain.compilerVersion, toolchain.target.platform, frontend, timing);
   });
   if (!prepared.ok) return prepared;
+  const llvm = emitLlvmModule(prepared.mod, {
+    targetTriple: toolchain.target.llvmTriple, pointerBits: toolchain.target.pointerBits,
+    wasi: toolchain.target.platform === "wasi",
+  });
+  timing("llvm-emit");
   const input: NativeExecutableInput = {
-    ok: true, llvm: emitLlvmModule(prepared.mod, {
-      targetTriple: toolchain.target.llvmTriple, pointerBits: toolchain.target.pointerBits,
-      wasi: toolchain.target.platform === "wasi",
-    }),
-    ir: options.emitIr ? serializeModule(prepared.mod) : null, sidecarJson: prepared.sidecarJson,
+    ok: true, llvm,
+    ir: options.emitIr ? serializeModule(prepared.mod, true) : null, sidecarJson: prepared.sidecarJson,
     features: executableLinkFeatures(prepared.mod, false), sources: [...prepared.sourceTexts],
   };
+  timing("link-features");
   const probes = tracker.snapshot();
   if (cache !== null && key !== null && probes.stable && frontendInputsStillMatch(probes, exclusions)) {
     const saved: FrontendCacheEntry = { schema: "scriptc.native-frontend.v2", probes, input };
     cache.write("frontend", key, JSON.stringify(saved));
   }
+  timing("frontend-cache-publish");
   return input;
 }

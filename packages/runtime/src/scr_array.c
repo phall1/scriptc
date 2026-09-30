@@ -590,9 +590,12 @@ void scr_arr_set_len(ScrArr *a, double length) {
   }
   size_t next = (size_t)length;
   if (next < a->len) {
+    /* Spare capacity is already empty. Repeatedly clearing a reused work
+     * array must cost only the elements removed, not its historical peak. */
+    size_t dense_end = a->len < a->cap ? a->len : a->cap;
+    size_t dense_stop = next < dense_end ? next : dense_end;
     if (scr_elem_is_ref(a->elem)) {
-      size_t dense_stop = next < a->cap ? next : a->cap;
-      for (size_t i = dense_stop; i < a->cap; i++) {
+      for (size_t i = dense_stop; i < dense_end; i++) {
         if (a->present[i] != SCR_ARR_HOLE) {
           uint64_t old = a->data[i];
           uint8_t state = a->present[i];
@@ -610,8 +613,7 @@ void scr_arr_set_len(ScrArr *a, double length) {
         if (state == SCR_ARR_VALUE) scr_elem_release(a, old);
       }
     } else {
-      size_t dense_stop = next < a->cap ? next : a->cap;
-      for (size_t i = dense_stop; i < a->cap; i++) {
+      for (size_t i = dense_stop; i < dense_end; i++) {
         a->present[i] = 0;
         a->data[i] = 0;
       }

@@ -1,3 +1,4 @@
+import { everyModuleNode } from "../ir/traverse.js";
 import type { LlvmUnsupportedError } from "./llvm/emitter.js";
 import type { ScrDiagnostic } from "../diagnostics/diagnostic.js";
 import { moduleUsesFetch, moduleEmbedsBuiltin, type IrModule, type SrcLoc } from "../ir/ir.js";
@@ -66,43 +67,35 @@ export function moduleWasiUnavailableSurface(mod: IrModule): { surface: string; 
     ["secureCtx", "network sockets (WASI Preview 1 has no socket API)"],
   ]);
   let found: { surface: string; loc: SrcLoc } | null = null;
-  const visit = (value: unknown, inheritedLoc: SrcLoc): void => {
-    if (found !== null || value === null || typeof value !== "object") return;
-    if (Array.isArray(value)) {
-      for (const item of value) visit(item, inheritedLoc);
-      return;
-    }
-    const node = value as { kind?: unknown; fn?: unknown; loc?: SrcLoc };
-    const loc = node.loc ?? inheritedLoc;
-    if (typeof node.kind === "string") {
-      const kindSurface = kinds.get(node.kind);
-      if (kindSurface !== undefined) {
-        found = { surface: kindSurface, loc };
-        return;
+  everyModuleNode(mod, {
+    type: (node, loc) => {
+      const surface = kinds.get(node.kind);
+      if (surface === undefined) return true;
+      found = { surface, loc };
+      return false;
+    },
+    stmt: () => true,
+    expr: (node) => {
+      if (node.kind !== "libCall") return true;
+      const loc = node.loc;
+      if (node.fn === "process.kill" || node.fn === "process.killNum" ||
+          node.fn === "process.onSignal" || node.fn === "process.offSignal") {
+        found = { surface: "OS signals (WASI Preview 1 has no signal API)", loc };
+        return false;
       }
-      if (node.kind === "libCall" && typeof node.fn === "string") {
-        if (node.fn === "process.kill" || node.fn === "process.killNum" ||
-            node.fn === "process.onSignal" || node.fn === "process.offSignal") {
-          found = { surface: "OS signals (WASI Preview 1 has no signal API)", loc };
-          return;
-        }
-        if (node.fn === "os.networkInterfaces") {
-          found = { surface: "network-interface enumeration (WASI Preview 1 has no interface API)", loc };
-          return;
-        }
-        for (const [prefix, surface] of prefixes) {
-          if (node.fn.startsWith(prefix)) {
-            found = { surface, loc };
-            return;
-          }
+      if (node.fn === "os.networkInterfaces") {
+        found = { surface: "network-interface enumeration (WASI Preview 1 has no interface API)", loc };
+        return false;
+      }
+      for (const [prefix, surface] of prefixes) {
+        if (node.fn.startsWith(prefix)) {
+          found = { surface, loc };
+          return false;
         }
       }
-    }
-    for (const key of Object.keys(value)) {
-      visit((value as Record<string, unknown>)[key], loc);
-    }
-  };
-  visit(mod, entryLoc);
+      return true;
+    },
+  });
   if (found !== null) return found;
 
   if (moduleUsesFetch(mod)) {

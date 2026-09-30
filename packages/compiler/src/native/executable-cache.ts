@@ -149,7 +149,9 @@ export class NativeExecutableCache {
 
   /** Trace the real object-only link, including the SDK's transitive stubs.
    * Directories from the driver's search line detect a newly added candidate.
-   * Private build inputs already belong to the LLVM/runtime cache identity. */
+   * Private build inputs already belong to the LLVM/runtime cache identity.
+   * A true result means the requested output was linked successfully and its
+   * inputs remained stable. The caller can publish that output directly. */
   trace(args: string[], stage: string): boolean {
     this.traced = false;
     try {

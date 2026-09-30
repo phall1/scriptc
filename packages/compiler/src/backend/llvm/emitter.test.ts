@@ -103,6 +103,24 @@ test("tag tests read an owned local without adding a temporary owner", () => {
   expect(llvm).toContain("icmp eq i32");
 });
 
+test("class brand probes borrow a local only across an inert literal key", () => {
+  const dyn: IrType = { kind: "dyn" };
+  const key: IrExpr = { kind: "strLit", value: "object:Example", type: STRING, loc: receiverLoc };
+  const probe: IrExpr = { kind: "libCall", fn: "dyn.typedRefIs", args: [ref(dyn), key], type: BOOL, loc: receiverLoc };
+  const borrowed = work(probe, dyn);
+  expect(borrowed).not.toContain("call ptr @scr_dyn_retain");
+  expect(borrowed).toContain("icmp ne ptr");
+  expect(borrowed).toContain("icmp eq i32");
+  expect(borrowed).toContain("@scr_dyn_typed_ref_is_key");
+  const boxed = work(probe, dyn, true);
+  expect(boxed).toContain("call ptr @scr_box_get_ref");
+  expect(boxed).toContain("call void @scr_dyn_release");
+  const computed = work({ ...probe, args: [ref(dyn), {
+    kind: "toString", operand: ref(dyn), type: STRING, loc: receiverLoc,
+  }] }, dyn);
+  expect(computed).toContain("call ptr @scr_dyn_retain");
+});
+
 test("capture boxes keep their ordinary owned-read contract", () => {
   const llvm = work(text(child(narrow(ref(union)))), union, true);
   expect(llvm).toContain("call ptr @scr_box_get_ref");

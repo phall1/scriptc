@@ -1,3 +1,4 @@
+import { compilationTiming } from "../timing.js";
 import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import type { AnalyzeOptions, AnalyzeResult, CompileFailure, CompileLibraryOptions, CompileLibraryResult, CompileRequestOptions, CompileRequestResult } from "../compile-types.js";
@@ -99,6 +100,7 @@ export class NativeCompiler {
   }
 
   compile(entry: string, options: CompileRequestOptions): CompileRequestResult {
+    const timing = compilationTiming();
     const toolchain = this.toolchain;
     const target = toolchain.target;
     const output = resolve(options.outPath);
@@ -120,7 +122,7 @@ export class NativeCompiler {
         if (!loaded.ok) return { ok: false, diagnostics: loaded.diagnostics, sourceTexts };
         ffi = loaded.profile;
       }
-      const prepared = prepareNativeExecutable(entry, options, ffi, toolchain, this.frontend, this.cache);
+      const prepared = prepareNativeExecutable(entry, options, ffi, toolchain, this.frontend, this.cache, timing);
       if (!prepared.ok) return prepared;
       sourceTexts = new Map(prepared.sources);
       mkdirSync(dirname(output), { recursive: true });
@@ -138,6 +140,7 @@ export class NativeCompiler {
       mkdirSync(inputDirectory);
       const llvmInput = outputKind === "llvm" ? stagedOutput : join(inputDirectory, "program.ll");
       writeFileSync(llvmInput, llvm);
+      timing("llvm-write");
       if (outputKind === "llvm") {
         renameSync(stagedOutput, output);
         return { ok: true, artifact: { kind: "llvm", path: output } };
@@ -148,12 +151,14 @@ export class NativeCompiler {
       const executableCache = executablePack === null ? null
         : openNativeExecutableCache(this.cache, toolchain, llvm, options, ffi, executablePack);
       const restored = executableCache?.restore(stagedOutput) ?? false;
+      timing(restored ? "executable-cache-hit" : "executable-cache-miss");
       if (!restored) {
         if (options.sanitize) {
           runNativeTool(sanitizerDriver(toolchain), [...sanitizerFlags(toolchain, optimization), "-c", llvmInput, "-o", object]);
           requireNativeArtifact(object);
         } else if (outputKind === "exe") this.emitProgramObject(llvmInput, object, entry, optimization, stage, false);
         else this.emitObject(llvmInput, object, entry, optimization, outputKind === "asm" ? "asm" : "obj");
+        timing("native-object");
         if (outputKind === "asm" || outputKind === "obj") {
           const pack = outputKind === "obj" && options.nativeLinkInfo
             ? selectNativeRuntimePack(toolchain.runtimePackRoot, target, toolchain.compilerVersion, features, optimization) : null;
@@ -166,6 +171,7 @@ export class NativeCompiler {
         const runtime = options.sanitize
           ? buildSanitizedRuntime(toolchain, pack, join(stage, "runtime"), "executable", this.cache)
           : stageNativeRuntimeSelection(pack, join(stage, "runtime"));
+        timing("runtime-stage");
         const plan = executableLinkInputs({
           target, programObject: object, ffiLibraries: ffi?.libraries ?? [], ffiSystemLibraries: ffi?.systemLibraries ?? [],
           ffiFrameworks: ffi?.frameworks ?? [], runtimeObjects: runtime.runtimeObjects, runtimeArchives: runtime.archives,
@@ -175,7 +181,11 @@ export class NativeCompiler {
         const linkArgs = [...(options.sanitize ? ["-fsanitize=address"] : toolchain.linkerArgs), ...plan.driverFlags, ...plan.inputs,
           ...plan.systemLibraries.map((name) => `-l${name}`), "-o", stagedOutput];
         const cacheable = executableCache?.trace(linkArgs, stage) ?? false;
-        runNativeTool(options.sanitize ? sanitizerDriver(toolchain) : toolchain.linker, linkArgs);
+        timing("link-inputs");
+        // A successful dependency trace already produced this executable.
+        // Keep its verified output instead of asking the linker to repeat it.
+        if (!cacheable) runNativeTool(options.sanitize ? sanitizerDriver(toolchain) : toolchain.linker, linkArgs);
+        timing("native-link");
         requireNativeArtifact(stagedOutput);
         if (target.platform === "darwin" && optimization === "dev" && !options.strip) {
           runNativeTool(toolchain.dsymutil, [stagedOutput, "-o", stagedOutput + ".dSYM"]);
@@ -208,10 +218,12 @@ export class NativeCompiler {
     finally {
       if (stage !== null) rmSync(stage, { recursive: true, force: true });
       this.cache?.prune();
+      timing("complete");
     }
   }
 
   compileLibrary(options: CompileLibraryOptions): CompileLibraryResult {
+    const timing = compilationTiming();
     clearFenceEvalCaches();
     const toolchain = this.toolchain;
     let sourceTexts = new Map<string, string>();
@@ -229,7 +241,7 @@ export class NativeCompiler {
       const stem = basename(profile.entry).replace(/\.(ts|mts|cts|js|mjs|cjs)$/, "");
       const archivePath = resolve(options.outPath ?? join(options.outDir, `${stem}${wasm ? ".wasm" : ".lib.a"}`));
       const llvmPath = join(options.outDir, `${stem}.lib.ll`);
-      const prepared = prepareNativeLibrary(profile, options, archivePath, toolchain, this.frontend, this.cache);
+      const prepared = prepareNativeLibrary(profile, options, archivePath, toolchain, this.frontend, this.cache, timing);
       if (!prepared.ok) return prepared;
       sourceTexts = new Map(prepared.sources);
       if (archivePath === profile.entry) throw new Error("output path must differ from the entry source");
@@ -239,12 +251,14 @@ export class NativeCompiler {
       const llvm = prepared.llvm;
       const llvmInput = join(stage, "program.ll");
       writeFileSync(llvmInput, llvm);
+      timing("llvm-write");
       const features = prepared.features;
       const pack = selectNativeRuntimePack(toolchain.runtimePackRoot, toolchain.target, toolchain.compilerVersion,
         features, profile.optimization, profile.instancePerThread ? "library-thread" : "library");
       const runtime = options.sanitize
         ? buildSanitizedRuntime(toolchain, pack, join(stage, "runtime"), profile.instancePerThread ? "library-thread" : "library", this.cache)
         : stageNativeRuntimeSelection(pack, join(stage, "runtime"));
+      timing("runtime-stage");
       const stagedArchive = join(stage, wasm ? "output.wasm" : "output.a");
       const localizeSymbols = libraryLocalizeSymbols(profile);
       const program = join(stage, "program" + toolchain.target.outputSuffixes.obj);
@@ -252,6 +266,7 @@ export class NativeCompiler {
         runNativeTool(sanitizerDriver(toolchain), [...sanitizerFlags(toolchain, profile.optimization), "-c", llvmInput, "-o", program]);
         requireNativeArtifact(program);
       } else this.emitProgramObject(llvmInput, program, profile.entry, profile.optimization, stage, true);
+      timing("native-object");
       if (wasm) {
         linkNativeWasmLibrary({ toolchain, programObject: program, outputPath: stagedArchive,
           runtime, optimization: profile.optimization, exports: libraryWasmExports(profile) });
@@ -259,6 +274,7 @@ export class NativeCompiler {
         archiveNativeLibrary({ toolchain, programObject: program, outputPath: stagedArchive,
           stage, runtime, ...(localizeSymbols === undefined ? {} : { localizeSymbols }) });
       }
+      timing("native-archive");
       writeFileSync(llvmPath, llvm);
       let irPath: string | undefined;
       if (options.emitIr) {
@@ -281,6 +297,10 @@ export class NativeCompiler {
       if (error instanceof RuntimePackError) return { ok: false, diagnostics: [nativeCodegenDiag(error.code === "unsupported" ? "SC3002" : "SC3003", error.message, options.profilePath)], sourceTexts };
       return failure(error, options.profilePath, sourceTexts);
     }
-    finally { if (stage !== null) rmSync(stage, { recursive: true, force: true }); }
+    finally {
+      if (stage !== null) rmSync(stage, { recursive: true, force: true });
+      this.cache?.prune();
+      timing("complete");
+    }
   }
 }
