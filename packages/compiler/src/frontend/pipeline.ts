@@ -112,6 +112,9 @@ function detectAutoPackages(
       // never npm candidates. Auto keeps its original path (the
       // @types/node answer skips them below), byte-for-byte.
       if (mode === "lib" && canonicalBuiltinModule(spec) !== null) continue;
+      // Explicit attempts name the runtime package. Types-first resolution
+      // may instead identify its @types twin, which has no runtime to admit.
+      if (judged?.has(packageNameOfSpecifier(spec))) continue;
       const npm = resolveNpmImport(sf.fileName, spec);
       if (npm !== null && isNodeTypesPath(npm.typesFile)) continue;
       if (npm === null) {
