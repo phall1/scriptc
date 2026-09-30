@@ -21,7 +21,7 @@ function run(command: string, args: string[]) {
   return { stdout: result.stdout, stderr: result.stderr, status: result.status, signal: result.signal };
 }
 
-const cases = ["math", "spatial", "attributes", "geometry", "scene"].flatMap((fixture) =>
+const cases = ["math", "spatial", "attributes", "geometry", "scene", "materials", "mesh"].flatMap((fixture) =>
   ["native", "wasm32-wasi"].map((target) => ({ fixture, target })));
 test.for(cases)("published three.js $fixture runs statically through LLVM on $target", async ({ fixture, target }, context) => {
   const entry = join(import.meta.dirname, `../fixtures/three/${fixture}.mjs`);

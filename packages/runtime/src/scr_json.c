@@ -1951,6 +1951,9 @@ const ScrDynJsvalOps *scr_dyn_jsval_ops(void) {
 
 bool scr_dyn_isl_typeof_is(const ScrDyn *d, const char *name) {
   if (d->kind == SCR_DYN_TYPED_REF) {
+    if (d->v.typed_ref.type_key_len >= 7 &&
+        memcmp(d->v.typed_ref.type_key, "object:", 7) == 0)
+      return strcmp(name, "object") == 0;
     ScrDyn *materialized = scr_dyn_typed_ref_materialize(d);
     bool out = scr_dyn_isl_typeof_is(materialized, name);
     if (materialized->kind != SCR_DYN_JSVAL) {
@@ -1978,6 +1981,8 @@ bool scr_dyn_isl_typeof_is(const ScrDyn *d, const char *name) {
 
 bool scr_dyn_isl_is_array(const ScrDyn *d) {
   if (d->kind == SCR_DYN_TYPED_REF) {
+    if (d->v.typed_ref.type_key_len >= 7 &&
+        memcmp(d->v.typed_ref.type_key, "object:", 7) == 0) return false;
     ScrDyn *materialized = scr_dyn_typed_ref_materialize(d);
     bool out = materialized->kind == SCR_DYN_ARR ||
                scr_dyn_isl_is_array(materialized);
@@ -2425,6 +2430,9 @@ bool scr_dyn_truthy(const ScrDyn *d) {
 ScrStr *scr_dyn_typeof(const ScrDyn *d) {
   const char *s;
   if (d->kind == SCR_DYN_TYPED_REF) {
+    if (d->v.typed_ref.type_key_len >= 7 &&
+        memcmp(d->v.typed_ref.type_key, "object:", 7) == 0)
+      return scr_str_new("object", 6);
     ScrDyn *materialized = scr_dyn_typed_ref_materialize(d);
     ScrStr *out = scr_dyn_typeof(materialized);
     scr_dyn_release(materialized);
@@ -5963,11 +5971,18 @@ static bool scr_ffi_signature_equal(const ScrDyn *entry, const ScrDyn *definitio
   if (!definition || definition->kind != SCR_DYN_OBJ) return false;
   ScrDyn *expected = scr_dyn_obj_get(entry, "arguments", 9);
   ScrDyn *actual = scr_dyn_obj_get(definition, "arguments", 9);
-  if (!actual || actual->kind != SCR_DYN_ARR || actual->v.arr.len != expected->v.arr.len ||
-      !scr_ffi_abi_equal(scr_dyn_obj_get(entry, "return", 6), scr_dyn_obj_get(definition, "return", 6))) return false;
-  for (size_t i = 0; i < actual->v.arr.len; i++)
-    if (!scr_ffi_abi_equal(actual->v.arr.items[i], expected->v.arr.items[i])) return false;
-  return true;
+  if (!actual) return false;
+  // JS object properties can retain a native array by reference. Read its
+  // current contents when checking the requested ABI, just like a dyn array.
+  ScrDyn *view = actual->kind == SCR_DYN_TYPED_REF
+    ? scr_dyn_typed_ref_materialize(actual) : scr_dyn_retain(actual);
+  bool matches = view && view->kind == SCR_DYN_ARR && view->v.arr.len == expected->v.arr.len &&
+    scr_ffi_abi_equal(scr_dyn_obj_get(entry, "return", 6), scr_dyn_obj_get(definition, "return", 6));
+  if (matches) for (size_t i = 0; i < view->v.arr.len; i++) {
+    if (!scr_ffi_abi_equal(view->v.arr.items[i], expected->v.arr.items[i])) { matches = false; break; }
+  }
+  scr_dyn_release(view);
+  return matches;
 }
 
 static void scr_ffi_callback_remove(ScrDyn *entry, ScrDyn *catalog) {

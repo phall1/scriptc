@@ -11823,6 +11823,42 @@
     "<repo>/tests/corpus/js-nested-native-descriptors.js"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/js-class-fluent-overrides.js": {
+   "order": [
+    "<repo>/tests/corpus/js-class-fluent-overrides.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/js-class-subclass-properties.js": {
+   "order": [
+    "<repo>/tests/corpus/js-class-subclass-properties.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/js-object-shared-arrays.js": {
+   "order": [
+    "<repo>/tests/corpus/js-object-shared-arrays.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/js-optional-class-fields.js": {
+   "order": [
+    "<repo>/tests/corpus/js-optional-class-fields.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-class-array-boundaries.ts": {
+   "order": [
+    "<repo>/tests/corpus/native-class-array-boundaries.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-class-type-predicates.ts": {
+   "order": [
+    "<repo>/tests/corpus/native-class-type-predicates.ts"
+   ],
+   "diags": []
   }
  }
 }

@@ -325,6 +325,11 @@ export function lowerDynObjectLiteral(
     let v = boxValue
       ? boxValue(valueExpr as ts.Expression, raw)
       : lowerer.coerceToExpected(raw, DYN);
+    // A JS object's array-valued properties retain the same source array.
+    // Repeated references must compare equal and mutations remain shared.
+    if (!boxValue && isJsSourceFile(prop.getSourceFile()) && v.kind === "dynFrom" && v.value.type.kind === "array") {
+      v = { ...v, liveRef: true };
+    }
     if (v.type.kind !== "dyn") {
       const convDiagsBefore = lowerer.diags.length;
       try {

@@ -48,16 +48,7 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
             throw new InternalCompilerError(`llvm emitter bug: live dyn ref of ${typeKey(v.type)}`);
           }
           const key = typeKey(v.type);
-          let adapter = host.liveDynRefAdapters.get(key);
-          if (!adapter) {
-            const prefix = `sc_ldr_${host.liveDynRefAdapters.size}`;
-            adapter = host.streamTypedRefMaterializeAdapter(
-              v.type,
-              { prefix, adapters: new Map() },
-              `${prefix}_materialize`,
-            );
-            host.liveDynRefAdapters.set(key, adapter);
-          }
+          const adapter = host.liveDynRefAdapter(v.type);
           const rc = vAdapters(host.shapeHost, v.type);
 
           const boxed = B.tmp();

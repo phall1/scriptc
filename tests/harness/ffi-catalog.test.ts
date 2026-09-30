@@ -31,7 +31,7 @@ describe.each(["llvm"] as const)("static node:ffi catalog, %s", backend => {
     expect(native.error).toBeUndefined();
     expect(native.stderr).toBe("");
     expect(native.status).toBe(0);
-    expect(native.stdout).toBe("true\n9007199254740993n\ntrue\n0n 0n\n65 255\n-9223372036854775808n 18446744073709551615n\n" + "TypeError ERR_INVALID_ARG_VALUE\n".repeat(12) + "5\narity\narity\nsignature\nclosed\n42n\nsignature mismatch\n");
+    expect(native.stdout).toBe("true\n9007199254740993n\ntrue\n0n 0n\n65 255\n-9223372036854775808n 18446744073709551615n\n" + "TypeError ERR_INVALID_ARG_VALUE\n".repeat(12) + "5\narity\narity\nsignature\nclosed\n42n\nsignature mismatch\nmutated signature\nmissing arguments Error SC2020\n");
     // A separately linked Node library is only the oracle. scriptc links
     // the object file and must work before this dynamic library exists.
     if (oracle) {
@@ -42,7 +42,7 @@ describe.each(["llvm"] as const)("static node:ffi catalog, %s", backend => {
       expect(node.error).toBeUndefined();
       expect(node.stderr).toBe(native.stderr);
       expect(node.status).toBe(native.status);
-      expect(node.stdout + "signature mismatch\n").toBe(native.stdout);
+      expect(node.stdout + "signature mismatch\nmutated signature\nmissing arguments Error SC2020\n").toBe(native.stdout);
     }
   });
 });

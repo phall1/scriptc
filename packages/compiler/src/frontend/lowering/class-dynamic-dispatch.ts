@@ -16,6 +16,12 @@ interface Dispatch {
   classes: Set<string>;
 }
 
+interface PropertyReceiver {
+  info: ClassInfo;
+  capsule: ClassInfo;
+  key: string;
+}
+
 interface PropertyDispatch {
   name: string;
   write: boolean;
@@ -316,16 +322,18 @@ export class ClassDynamicDispatch {
       }
     }
     for (const dispatch of this.properties.values()) {
-      for (const info of this.propertyCandidates(lowerer, dispatch.name)) {
-        if (dispatch.classes.has(info.def.name)) continue;
-        dispatch.classes.add(info.def.name);
+      for (const plan of this.propertyReceivers(lowerer)) {
+        const { info } = plan;
+        if (!isClassOwnEnumerableFieldName(dispatch.name) ||
+            !info.fields.has(dispatch.name) && !findMethodOn(lowerer, info, `get:${dispatch.name}`) && !findMethodOn(lowerer, info, `set:${dispatch.name}`)) continue;
+        if (dispatch.classes.has(plan.key)) continue;
+        dispatch.classes.add(plan.key);
         const loc = dispatch.fn.loc;
-        const type: IrType = { kind: "object", className: info.def.name };
-        const receiver = varRef("p.0", DYN, loc);
+        const { receiver, condition } = this.propertyReceiver(plan, loc);
         const before = lowerer.diags.length;
         let branch: IrStmt[];
         try {
-          branch = this.propertyBody(lowerer, dispatch, info, { kind: "dynCheck", value: receiver, type, loc });
+          branch = this.propertyBody(lowerer, dispatch, info, receiver);
         } catch (error) {
           if (!(error instanceof PoisonError) || !info.decl) throw error;
           const fence = lowerer.deferToRuntimeFence(before, info.decl, { kind: "statement" });
@@ -333,23 +341,18 @@ export class ClassDynamicDispatch {
           branch = [fence];
         }
         dispatch.fn.body.unshift({
-          kind: "if", cond: {
-            kind: "libCall", fn: "dyn.typedRefIs", args: [receiver, { kind: "strLit", value: typeKey(type), type: STRING, loc }], type: BOOL, loc,
-          }, then: branch, else_: null, loc,
+          kind: "if", cond: condition, then: branch, else_: null, loc,
         });
         changed = true;
       }
     }
     for (const dispatch of this.computed.values()) {
-      for (const className of this.boxed) {
-        if (dispatch.classes.has(className)) continue;
-        const info = lowerer.classes.get(className);
-        if (!info || info.builtinEmitter || info.builtinStream || info.builtinError) continue;
-        dispatch.classes.add(className);
+      for (const plan of this.propertyReceivers(lowerer)) {
+        if (dispatch.classes.has(plan.key)) continue;
+        const { info } = plan;
+        dispatch.classes.add(plan.key);
         const loc = dispatch.fn.loc;
-        const type: IrType = { kind: "object", className };
-        const value = varRef("p.0", DYN, loc);
-        const receiver: IrExpr = { kind: "dynCheck", value, type, loc };
+        const { receiver, condition } = this.propertyReceiver(plan, loc);
         const names = new Set([...info.fields.keys()].filter(isClassOwnEnumerableFieldName));
         for (let owner: ClassInfo | null = info; owner; owner = owner.base) {
           for (const method of owner.methods.keys()) {
@@ -372,9 +375,7 @@ export class ClassDynamicDispatch {
             kind: "strEq", left: varRef(dispatch.keyLocal, STRING, loc), right: { kind: "strLit", value: name, type: STRING, loc }, negated: false, type: BOOL, loc,
           }, then: body, else_: null, loc });
         }
-        dispatch.fn.body.splice(dispatch.branchIndex, 0, { kind: "if", cond: {
-          kind: "libCall", fn: "dyn.typedRefIs", args: [value, { kind: "strLit", value: typeKey(type), type: STRING, loc }], type: BOOL, loc,
-        }, then: branch, else_: null, loc });
+        dispatch.fn.body.splice(dispatch.branchIndex, 0, { kind: "if", cond: condition, then: branch, else_: null, loc });
         changed = true;
       }
     }
@@ -400,13 +401,34 @@ export class ClassDynamicDispatch {
     add(root);
   }
 
-  private propertyCandidates(lowerer: Lowerer, name: string): ClassInfo[] {
-    if (!isClassOwnEnumerableFieldName(name)) return [];
-    return [...this.boxed].flatMap((className) => {
-      const info = lowerer.classes.get(className);
-      if (!info || info.builtinEmitter || info.builtinStream || info.builtinError) return [];
-      return info.fields.has(name) || findMethodOn(lowerer, info, `get:${name}`) || findMethodOn(lowerer, info, `set:${name}`) ? [info] : [];
-    });
+  /** A capsule retains its static type, while its object may be a subclass.
+   * Preorder insertion lets later branches test the most derived layout first. */
+  private propertyReceivers(lowerer: Lowerer): PropertyReceiver[] {
+    const plans: PropertyReceiver[] = [];
+    for (const name of this.boxed) {
+      const capsule = lowerer.classes.get(name);
+      if (!capsule || capsule.builtinEmitter || capsule.builtinStream || capsule.builtinError) continue;
+      const visit = (info: ClassInfo): void => {
+        plans.push({ info, capsule, key: JSON.stringify([name, info.def.name]) });
+        for (const child of info.subclasses) visit(child);
+      };
+      visit(capsule);
+    }
+    return plans;
+  }
+
+  private propertyReceiver(plan: PropertyReceiver, loc: SrcLoc): { receiver: IrExpr; condition: IrExpr } {
+    const value = varRef("p.0", DYN, loc);
+    const type: IrType = { kind: "object", className: plan.capsule.def.name };
+    const checked: IrExpr = { kind: "dynCheck", value, type, loc };
+    const matches: IrExpr = { kind: "libCall", fn: "dyn.typedRefIs", args: [value,
+      { kind: "strLit", value: typeKey(type), type: STRING, loc }], type: BOOL, loc };
+    if (plan.info === plan.capsule) return { receiver: checked, condition: matches };
+    return {
+      receiver: { kind: "downcast", value: checked, type: { kind: "object", className: plan.info.def.name }, loc },
+      condition: { kind: "ternary", cond: matches, then: { kind: "instanceOf", value: checked,
+        className: plan.info.def.name, type: BOOL, loc }, else_: { kind: "boolLit", value: false, type: BOOL, loc }, type: BOOL, loc },
+    };
   }
 
   private propertyBody(lowerer: Lowerer, dispatch: PropertyDispatch, info: ClassInfo, receiver: IrExpr): IrStmt[] {

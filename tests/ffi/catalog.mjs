@@ -2,8 +2,9 @@ import { createRequire } from "node:module";
 const requireModule = createRequire(import.meta.url);
 const ffi = requireModule("node:ffi");
 console.log(ffi === requireModule("node:ffi"));
+const u64Arguments = ["u64"];
 const definitions = {
-  nativeU64: { arguments: ["u64"], return: "u64" },
+  nativeU64: { arguments: u64Arguments, return: "u64" },
   nativePointer: { arguments: ["pointer"], return: "pointer" },
   nativeI64: { arguments: ["int64"], return: "int64" },
   nativeByte: { arguments: ["bool"], return: "uint8" },
@@ -44,4 +45,9 @@ second.lib.close();
 if (process.env.FFI_STATIC === "1") {
   try { ffi.dlopen(process.env.FFI_LIBRARY, { nativeU64: { arguments: ["i64"], return: "u64" } }); }
   catch { console.log("signature mismatch"); }
+  u64Arguments[0] = "i64";
+  try { ffi.dlopen(process.env.FFI_LIBRARY, definitions); }
+  catch { console.log("mutated signature"); }
+  try { ffi.dlopen(process.env.FFI_LIBRARY, { nativeU64: { return: "u64" } }); }
+  catch (error) { console.log("missing arguments", error.name, error.code); }
 }

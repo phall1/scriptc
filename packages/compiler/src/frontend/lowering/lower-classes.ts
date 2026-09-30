@@ -30,6 +30,24 @@ import { isNativeProxyInitializer, lowerNativeProxy } from "./expressions/native
 import { classStaticDataFor } from "./class-static-data.js";
 import { lowerInstanceConstructorNew } from "./class-instance-constructor.js";
 
+export function returnsOnlyThis(member: ts.MethodDeclaration): boolean {
+  const body = member.body;
+  const last = body?.statements.at(-1);
+  if (!body || !last || !ts.isReturnStatement(last)) return false;
+  let valid = true;
+  const visit = (node: ts.Node): void => {
+    if (ts.isFunctionLike(node)) return;
+    if (ts.isReturnStatement(node)) {
+      let value = node.expression;
+      while (value && ts.isParenthesizedExpression(value)) value = value.expression;
+      if (!value || value.kind !== ts.SyntaxKind.ThisKeyword) valid = false;
+    }
+    node.forEachChild(visit);
+  };
+  body.forEachChild(visit);
+  return valid;
+}
+
 function functionLocalClass(decl: ts.ClassLikeDeclaration): boolean {
   if (!ts.isClassExpression(decl)) return false;
   for (let parent: ts.Node | undefined = decl.parent; parent && !ts.isSourceFile(parent); parent = parent.parent) {
@@ -545,13 +563,16 @@ export interface GenericClassInfo {
 /** The undefined-armed union of a JS class property's inferred type — the
    * honest slot for a field first assigned outside the constructor's top
    * level (undefined until the write runs, Node-exact). Null when the
-   * inference is unmappable, checked-dynamic (dyn stays out of class
-   * fields — KEEP NARROW), or an arm-less kind that cannot join a union
+   * inference is unmappable or an arm-less kind that cannot join a union
    * (genResultRecord's list, including scalar-backed Date values). */
   function undefArmedFieldType(lowerer: Lowerer, p: ts.Symbol): IrType | null {
     const t = lowerer.checker.getTypeOfSymbol(p);
-    const mapped = lowerer.mapTypeOf(t);
-    if (!mapped || mapped.kind === "void" || mapped.kind === "dyn") return null;
+    const site = lowerer.checker.declarationsOf(p)[0];
+    let mapped = lowerer.mapTypeOf(t) ?? (site ? dynFallbackType(lowerer, site, t) : null);
+    if (mapped && site) mapped = jsOpenObjectType(site, mapped, lowerer.shapes, lowerer.unions);
+    if (!mapped || mapped.kind === "void") return null;
+    // An implicit JS value already carries undefined in its native box.
+    if (mapped.kind === "dyn") return mapped;
     const byKey = new Map<string, IrType>();
     const arms = mapped.kind === "union" ? (lowerer.unions.get(mapped.unionId)?.arms ?? []) : [mapped];
     for (const a of arms) {
@@ -1911,6 +1932,11 @@ export function collectClassShapeInner(lowerer: Lowerer, decl: ts.ClassLikeDecla
             );
           }
           if (overridden && isJsSourceFile(member.getSourceFile())) {
+            // Fluent overrides return the same native receiver. Keep the
+            // inherited return ABI and upcast `this` when lowering returns.
+            if (overridden.sig.ret.kind === "object" && base &&
+                (base.def.name === overridden.sig.ret.className || lowerer.isSubclassOf(base.def.name, overridden.sig.ret.className)) &&
+                returnsOnlyThis(member)) ft.ret = overridden.sig.ret;
             // An unannotated JS parameter can use the base's typed ABI.
             // Defaults stay local to each declaration, so only inherited
             // required/optional slots participate in this refinement.
@@ -2386,6 +2412,10 @@ export function collectClassShapeInner(lowerer: Lowerer, decl: ts.ClassLikeDecla
           if (isJsSourceFile(decl.getSourceFile())) {
             const armed = undefArmedFieldType(lowerer, p);
             if (armed !== null) {
+              // Unknown JS properties use the instance bag: they do not
+              // exist until assigned, and a subclass may declare the same
+              // name as an ordinary layout field.
+              if (armed.kind === "dyn") continue;
               fields.set(p.name, armed);
               fieldOrder.push({ name: p.name, type: armed, initializer: undefined });
               continue;

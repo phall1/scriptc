@@ -26,7 +26,7 @@ import { lowerAbsenceProbe, lowerPromiseAllTupleCall, lowerPromiseRejectCall, st
 import { isSafeToDiscard } from "./expressions/evaluation-safety.js";
 import { tryLowerExpression } from "./expressions/try-lower-expression.js";
 import { httpClientFnBindingOf, isStreamUndefCallExpr, lowerCompatReqStreamOptionalCall, lowerHttpClientFnCall } from "./lower-server.js";
-import { EMITTER_API_MEMBERS, exactInstanceClassOf, findGenericMethodOn, lowerClassGenericMethodCall, lowerStaticMethodCall, type ClassInfo } from "./lower-classes.js";
+import { EMITTER_API_MEMBERS, exactInstanceClassOf, findGenericMethodOn, lowerClassGenericMethodCall, lowerStaticMethodCall, returnsOnlyThis, type ClassInfo } from "./lower-classes.js";
 import { classCallbackCall, isClassCallback } from "./class-callbacks.js";
 import { emitterRooted, lowerEmitterMethodCall } from "./lower-event-emitter.js";
 import { lowerConsoleInspectArg, lowerFormatCall } from "./lower-inspect.js";
@@ -6768,6 +6768,12 @@ const inliningPredicates = new Set<ts.Symbol>();
   function reconcileOverloadReturn(lowerer: Lowerer, expr: ts.CallExpression | ts.TaggedTemplateExpression, call: IrExpr): IrExpr {
     const rsig = lowerer.checker.getResolvedSignature(expr);
     const rdecl = rsig ? lowerer.checker.signatureDeclaration(rsig) : undefined;
+    // Fluent JS overrides share the base's return ABI, but their result
+    // still has the receiver's subclass layout at the call site.
+    if (call.type.kind === "object" && rdecl && ts.isMethodDeclaration(rdecl) &&
+        isJsSourceFile(rdecl.getSourceFile()) && returnsOnlyThis(rdecl)) {
+      call = lowerer.maybeNarrow(call, expr);
+    }
     const resolvedOverload =
       rsig && rdecl &&
       (ts.isFunctionDeclaration(rdecl) || ts.isMethodDeclaration(rdecl)) &&

@@ -39,7 +39,7 @@ import { isNativeProxyInitializer } from "./expressions/native-proxy.js";
 import { tryLowerExpression } from "./expressions/try-lower-expression.js";
 import { lowerUnionFieldWrite } from "./expressions/union-field-write.js";
 import { UNSUPPORTED, checkerPanicDiag, isCheckerPanic, requiresDynamicDiag } from "../../diagnostics/diagnostic.js";
-import { isParseArgsDynTypeName, isUnitOnlyTsType, unitOnlyUnion } from "../type-mapper.js";
+import { isParseArgsDynTypeName, isUnitOnlyTsType, jsOpenObjectType, unitOnlyUnion } from "../type-mapper.js";
 import { canonicalBuiltinModule } from "../builtin-modules.js";
 import { isRelativeSpecifier } from "../workspace-registry.js";
 import { probeNodeRequireRefusal } from "../npm.js";
@@ -3830,7 +3830,8 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
     }
     const preservesObjectIdentity = init.type.kind === "dyn" &&
       (inferredObjectType?.kind === "record" ||
-        (isJsSourceFile(decl.getSourceFile()) && inferredObjectType?.kind === "func") ||
+        (isJsSourceFile(decl.getSourceFile()) && inferredObjectType !== null &&
+          (inferredObjectType.kind === "func" || jsOpenObjectType(decl, inferredObjectType, lowerer.shapes, lowerer.unions).kind === "dyn")) ||
         (isJsSourceFile(decl.getSourceFile()) && inferredObjectType !== null &&
           (isUnitType(inferredObjectType) || inferredObjectType.kind === "union" && lowerer.unions.get(inferredObjectType.unionId)?.arms.every(isUnitType)))) &&
       !decl.type && !hasJsTypeAnnotation(decl);

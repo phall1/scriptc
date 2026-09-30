@@ -559,6 +559,9 @@ export function streamTypedRefMaterializeAdapter(host: LlvmEmitterContext,
         return adapter;
       }
     }
+    // Publish both symbols before their bodies: class-array and callback
+    // converters can request this same adapter while emitting the commit.
+    adapter.commit = `@${snapshot}_commit`;
     adapter.commit = host.streamTypedRefCommitAdapter(t, snapshot);
     const B = new BlockBuilder();
 

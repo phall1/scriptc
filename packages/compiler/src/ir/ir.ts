@@ -6333,6 +6333,8 @@ function canBoxDynComposite(
     case "regex":
     case "url":
       return true;
+    case "object":
+      return isDynTypedRefType(t);
     case "func":
       return canBoxFuncIntoDyn(t, getRecord, getUnion);
     case "set":
@@ -6386,6 +6388,10 @@ export function canDynCheckTo(
   if (t.kind === "bytes") return true;
   if (t.kind === "classval") return true;
   if (t.kind === "object" && t.className === "%Error") return true;
+  // Native class arrays validate each branded reference, never fabricate
+  // class instances from plain object data.
+  if (isDynTypedRefType(t)) return true;
+  if (t.kind === "array" && isDynTypedRefType(t.elem)) return true;
   if (t.kind === "func") return canAdaptDynFuncTo(t, getRecord, getUnion);
   if (DYN_HANDLE_KINDS.has(t.kind)) return true;
   if (t.kind === "union") {

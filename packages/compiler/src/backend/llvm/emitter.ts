@@ -4679,14 +4679,12 @@ export class LlEmitter {
       throw new InternalCompilerError(`llvm emitter bug: live dyn ref of ${key}`);
     }
     const prefix = `sc_ldr_${this.liveDynRefAdapters.size}`;
-    const adapter = streamTypedRefMaterializeAdapter(
+    return streamTypedRefMaterializeAdapter(
       this,
       t,
-      { prefix, adapters: new Map() },
+      { prefix, adapters: this.liveDynRefAdapters },
       `${prefix}_materialize`,
     );
-    this.liveDynRefAdapters.set(key, adapter);
-    return adapter;
   }
 
   liveDynUnionRefAdapter(

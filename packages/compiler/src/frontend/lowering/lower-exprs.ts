@@ -2163,8 +2163,12 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
           `reading the abstract property '${expr.name.text}' through a '${lowerer.checker.typeToString(lowerer.typeOf(expr.expression))}'-typed receiver (abstract property declarations are erased at runtime, so no shared slot exists — type the receiver as the concrete class, or declare an abstract getter instead)`,
         );
       }
-      if (isDynTypedRefType(recvLowered.type)) {
-        const info = lowerer.classes.get(recvLowered.type.className);
+      // Array reads may add an undefined arm even when the checker still
+      // reports a class. Its property bag must remain reachable, while
+      // an absent element takes the normal checked-value TypeError.
+      const nativeReceiver = lowerer.stripUndefinedArm(recvLowered.type);
+      if (isDynTypedRefType(nativeReceiver)) {
+        const info = lowerer.classes.get(nativeReceiver.className);
         if (info && !info.def.runtime && !info.builtinError && !info.builtinEmitter && !info.builtinStream) {
           return lowerer.maybeNarrow({
             kind: "dynKeyGet", value: lowerer.coerceToExpected(recvLowered, DYN),
@@ -4679,7 +4683,7 @@ export function lowerOptionalNumber(
     // (`pkg.workspaces.packages["0"]` — the lowering world types the
     // unknown-rooted chain `any`); a non-dyn lowering falls through to
     // the fences below (re-lowering is pure IR construction).
-    if (receiverIr?.kind === "dyn" || receiverIr === null) {
+    if (receiverIr?.kind === "dyn" || receiverIr?.kind === "object" || receiverIr?.kind === "union" || receiverIr === null) {
       const obj = lowerer.lowerExpr(expr.expression);
       // A generic mapped type can stay unresolved at this body use even
       // though its instantiated parameter has a concrete record ABI.
@@ -4690,7 +4694,7 @@ export function lowerOptionalNumber(
           return lowerer.lowerRecordKeyRead(expr, obj.type.shapeId, shape);
         }
       }
-      if (obj.type.kind === "dyn") {
+      if (obj.type.kind === "dyn" || isDynTypedRefType(obj.type)) {
         const rawKey = lowerer.lowerExpr(expr.argumentExpression);
         // Number, bool, and DYN keys stringify (ToPropertyKey) — the
         // dyn-keyed read `catchWarning[warning.name]` where the property
@@ -4699,7 +4703,7 @@ export function lowerOptionalNumber(
         if (key.type.kind === "string") {
           const opt = hasOptionalChainGuard(expr.expression);
           return lowerer.maybeNarrow(
-            { kind: "dynKeyGet", key, ...(opt ? { optional: true as const } : {}), value: obj, type: DYN, loc: locOf(expr) },
+            { kind: "dynKeyGet", key, ...(opt ? { optional: true as const } : {}), value: lowerer.coerceToExpected(obj, DYN), type: DYN, loc: locOf(expr) },
             expr,
           );
         }
@@ -9912,6 +9916,9 @@ function representedClassFieldTarget(
     const receiverIr = lowerer.mapTypeOf(lowerer.typeOf(access.expression));
     if (receiverIr?.kind === "object") {
       return classFieldTarget(lowerer, access.expression, receiverIr, access.name.text);
+    }
+    if (receiverIr?.kind === "union" && hasClassPayload(lowerer, receiverIr)) {
+      return representedClassFieldTarget(lowerer, access.expression, access.name.text, lowerer.lowerExpr(access.expression));
     }
     if (receiverIr?.kind === "record") {
       const shape = lowerer.shapes.get(receiverIr.shapeId);
