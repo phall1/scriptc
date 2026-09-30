@@ -118,6 +118,22 @@ function expressionModule(expr: IrExpr, unions: IrUnionDef[]): IrModule {
   };
 }
 
+test("library callbacks retain child, specialized, and generic result diagnostics", () => {
+  const expr: IrExpr = {
+    kind: "libCall", fn: "cp.execFile", type: F64, loc,
+    args: [
+      { kind: "strLit", value: "tool", type: STRING, loc },
+      { kind: "arrayLit", elems: [], type: arrayOf(STRING), loc },
+      { kind: "boolLit", value: true, type: F64, loc },
+    ],
+  };
+  expect(validateModule(expressionModule(expr, [])).map((error) => error.message)).toEqual([
+    "in main: boolLit must be bool",
+    "in main: libCall cp.execFile callback must be a non-rest void function with at most three parameters",
+    "in main: libCall cp.execFile must be child, got f64",
+  ]);
+});
+
 test("nullish chains retain child-before-parent diagnostic order", () => {
   const at = (start: number) => ({ ...loc, start });
   const expr: IrExpr = {

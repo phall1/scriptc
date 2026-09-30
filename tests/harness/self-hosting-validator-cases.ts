@@ -135,6 +135,37 @@ export function validatorCases(): ValidatorCase[] {
   add("library signature", (m) => {
     m.functions[0]!.body = [expression({ kind: "libCall", fn: "number.isFinite", args: [strLit("wrong", loc)], type: BOOL, loc })];
   }, "expected f64");
+  for (const invalid of [false, true]) {
+    add(`library custom union result ${invalid ? "invalid" : "valid"}`, (m) => {
+      m.unions = [{ id: "env", arms: [STRING, { kind: "undefinedT" }] }];
+      m.functions[0]!.body = [expression({ kind: "libCall", fn: "process.envGet",
+        args: [strLit("PATH", loc)], type: invalid ? F64 : { kind: "union", unionId: "env" }, loc })];
+    }, invalid ? "must return the 'string | undefined' union" : undefined);
+    add(`library custom record result ${invalid ? "invalid" : "valid"}`, (m) => {
+      m.records = [{ id: "dirent", fields: [
+        { name: "%dtype", type: invalid ? STRING : F64 },
+        { name: "name", type: STRING }, { name: "parentPath", type: STRING },
+      ] }];
+      m.functions[0]!.body = [expression({ kind: "libCall", fn: "fs.readdirTypesSync",
+        args: [strLit(".", loc)], type: arrayOf({ kind: "record", shapeId: "dirent" }), loc })];
+    }, invalid ? "must return the Dirent record array" : undefined);
+  }
+  for (const [fn, diagnostic] of [
+    ["net.sockRead", "must return the 'Buffer | null' union"],
+    ["spawnRes.status", "must return the 'number | null' union"],
+    ["error.new", "must return a builtin error class"],
+    ["stream.prop", "receiver must be a stream-hierarchy object"],
+    ["emitter.new", "must return '%EventEmitter'"],
+  ] as const) {
+    add(`library specialized validation ${fn}`, (m) => {
+      m.functions[0]!.body = [expression({ kind: "libCall", fn, args: [], type: F64, loc })];
+    }, diagnostic);
+  }
+  add("library callback validation retains generic result check", (m) => {
+    m.functions[0]!.body = [expression({ kind: "libCall", fn: "cp.execFile", args: [
+      strLit("tool", loc), { kind: "arrayLit", elems: [], type: arrayOf(STRING), loc }, numLit(0, loc),
+    ], type: F64, loc })];
+  }, "must be child");
   add("duplicate records", (m) => { m.records = [{ id: "r", fields: [] }, { id: "r", fields: [] }]; }, "duplicate record");
   add("record ordering", (m) => {
     m.records = [{ id: "r", fields: [{ name: "z", type: F64 }, { name: "a", type: STRING }] }];
