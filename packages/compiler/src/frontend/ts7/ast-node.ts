@@ -103,13 +103,23 @@ export class AstFile {
  * properties are views over the wire; they never copy identity-bearing
  * nodes into structural records. */
 export class AstNode {
-  constructor(readonly file: AstFile, readonly index: number) {}
+  readonly kind: SyntaxKind;
+  readonly pos: number;
+  readonly end: number;
+  readonly flags: NodeFlags;
+  readonly data: number;
 
-  get kind(): SyntaxKind { return this.file.wire.kind(this.index); }
-  get pos(): number { return this.file.wire.pos(this.index); }
-  get end(): number { return this.file.wire.end(this.index); }
-  get flags(): NodeFlags { return this.file.wire.flags(this.index); }
-  get data(): number { return this.file.wire.data(this.index); }
+  constructor(readonly file: AstFile, readonly index: number) {
+    // Materialize immutable scalar metadata once. Lowering repeatedly reads
+    // it while refining the same node, without needing another wire decode.
+    const wire = file.wire;
+    this.kind = wire.kind(index);
+    this.pos = wire.pos(index);
+    this.end = wire.end(index);
+    this.flags = wire.flags(index);
+    this.data = wire.data(index);
+  }
+
   get id(): string { return `${this.index}.${this.kind}.${this.file.root.path}`; }
   get parent(): AstNode | undefined {
     const index = this.file.wire.semanticParent(this.index);

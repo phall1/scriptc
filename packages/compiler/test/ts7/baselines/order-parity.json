@@ -9286,6 +9286,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/live-reference-shared-converters.ts": {
+   "order": [
+    "<repo>/tests/corpus/live-reference-shared-converters.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/llvm-read-receiver-lifetime.ts": {
    "order": [
     "<repo>/tests/corpus/llvm-read-receiver-lifetime.ts"

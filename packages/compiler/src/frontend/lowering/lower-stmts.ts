@@ -868,14 +868,14 @@ export function provenanceElidedConstDecl(lowerer: Lowerer, decl: ts.VariableDec
   }
 
   function withRuntimeOptionalScope<T>(lowerer: Lowerer, lower: () => T): T {
-    const optionalOnEntry = [...lowerer.runtimeOptionalLocals];
+    lowerer.runtimeOptionalLocals.beginScope();
     try {
       return lower();
     } finally {
       // A guard inside one branch or loop body proves presence only for
       // its remaining statements. Keep assignments that reactivated a
       // slot, and restore every absence possibility from the outer scope.
-      for (const local of optionalOnEntry) lowerer.runtimeOptionalLocals.add(local);
+      lowerer.runtimeOptionalLocals.endScope();
     }
   }
 
