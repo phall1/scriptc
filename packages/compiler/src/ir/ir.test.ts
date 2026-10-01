@@ -123,6 +123,46 @@ describe("native bigint checked storage", () => {
   });
 });
 
+describe("checked conversion graph traversal", () => {
+  test.each([
+    { label: "boxing", convert: canConvertToDyn },
+    { label: "checking", convert: canDynCheckTo },
+  ])("$label reuses shared record and union subgraphs", ({ convert }) => {
+    const records = new Map<string, IrRecordShape>();
+    const unions = new Map<string, IrUnionDef>();
+    let type: IrType = { kind: "symbol" };
+    for (let i = 0; i < 16; i++) {
+      const id = `r${i}`, unionId = `u${i}`;
+      records.set(id, { id, fields: [{ name: "left", type }, { name: "right", type }] });
+      unions.set(unionId, { id: unionId, arms: [{ kind: "record", shapeId: id }, { kind: "undefinedT" }] });
+      type = { kind: "union", unionId };
+    }
+    let lookups = 0;
+    expect(convert(type,
+      (id) => { lookups++; return records.get(id); },
+      (id) => { lookups++; return unions.get(id); },
+    )).toBe(true);
+    expect(lookups).toBeLessThan(1000);
+  });
+
+  test("failed recursive branches discard dependent conversion results", () => {
+    const records = new Map<string, IrRecordShape>([
+      ["parent", { id: "parent", fields: [
+        { name: "child", type: { kind: "record", shapeId: "child" } },
+        { name: "unsupported", type: { kind: "jsval" } },
+      ] }],
+      ["child", { id: "child", fields: [
+        { name: "parent", type: { kind: "record", shapeId: "parent" } },
+        { name: "symbol", type: { kind: "symbol" } },
+      ] }],
+    ]);
+    const visiting = new Set<string>();
+    const getRecord = (id: string) => records.get(id);
+    expect(canConvertToDyn({ kind: "record", shapeId: "parent" }, getRecord, () => undefined, visiting)).toBe(false);
+    expect(canConvertToDyn({ kind: "record", shapeId: "child" }, getRecord, () => undefined, visiting)).toBe(false);
+  });
+});
+
 
 describe("runtime feature snapshots", () => {
   const loc = { file: "features.ts", start: 0, end: 0 };

@@ -6376,6 +6376,20 @@ function canBoxDynComposite(
   getUnion: (unionId: string) => IrUnionDef | undefined,
   visiting: Set<string> = new Set(),
 ): boolean {
+  const key = `boxed:${typeKey(t)}`;
+  if (visiting.has(key)) return true;
+  const result = canBoxDynCompositeAt(t, getRecord, getUnion, visiting);
+  if (result) visiting.add(key);
+  else clearDynConversionResults(visiting);
+  return result;
+}
+
+function canBoxDynCompositeAt(
+  t: IrType,
+  getRecord: (shapeId: string) => IrRecordShape | undefined,
+  getUnion: (unionId: string) => IrUnionDef | undefined,
+  visiting: Set<string>,
+): boolean {
   switch (t.kind) {
     case "f64":
     case "bigint":
@@ -6447,6 +6461,29 @@ export function canDynCheckTo(
   getRecord: (shapeId: string) => IrRecordShape | undefined,
   getUnion: (unionId: string) => IrUnionDef | undefined,
   visiting: Set<string> = new Set(),
+): boolean {
+  const key = `checked:${typeKey(t)}`;
+  if (visiting.has(key)) return true;
+  const result = canDynCheckToAt(t, getRecord, getUnion, visiting);
+  if (result) visiting.add(key);
+  else clearDynConversionResults(visiting);
+  return result;
+}
+
+/** Reuse completed subgraphs within one conversion query. A failed branch
+ * invalidates successes that may depend on a coinductive back-edge to it;
+ * active recursion keys remain until their owning calls unwind. */
+function clearDynConversionResults(visiting: Set<string>): void {
+  for (const key of visiting) {
+    if (key.startsWith("boxed:") || key.startsWith("checked:")) visiting.delete(key);
+  }
+}
+
+function canDynCheckToAt(
+  t: IrType,
+  getRecord: (shapeId: string) => IrRecordShape | undefined,
+  getUnion: (unionId: string) => IrUnionDef | undefined,
+  visiting: Set<string>,
 ): boolean {
   // Unknown fields keep an owned dyn subtree; checking the surrounding
   // record/array still validates its layout. This is broader than the
