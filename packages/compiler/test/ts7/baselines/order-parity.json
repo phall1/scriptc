@@ -9565,6 +9565,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/inferred-array-assignment-values.mjs": {
+   "order": [
+    "<repo>/tests/corpus/inferred-array-assignment-values.mjs"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/inferred-class-default.mjs": {
    "order": [
     "<repo>/tests/corpus/inferred-class-default.mjs"
