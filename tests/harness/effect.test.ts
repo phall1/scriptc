@@ -5,12 +5,14 @@ import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import { expect, test } from "vitest";
 import { compile } from "@scriptc/compiler";
-import { shardSelect } from "./shard.js";
+import { balancedShardSelect } from "./shard.js";
+import fixtureCosts from "./effect-costs.json";
 
 const exec = promisify(execFile);
 const sanitize = process.env["SCRIPTC_SAN"] === "1";
 const fixtures = globSync(join(import.meta.dirname, "../fixtures/effect/*.ts")).sort();
-const cases = shardSelect(fixtures, (file) => basename(file));
+const costs: Record<string, number> = fixtureCosts;
+const cases = balancedShardSelect(fixtures, (file) => basename(file), (file) => costs[basename(file)] ?? 120);
 
 async function run(command: string, args: string[]) {
   try {
@@ -31,6 +33,7 @@ test.for(cases)("published Effect %s matches Node statically", async (entry) => 
     expect(reference.stdout.trim().length).toBeGreaterThan(0);
     const result = await compile(entry, {
       outDir: dir, outPath: join(dir, "program"), backend: "llvm", dynamic: false,
+      optimization: sanitize ? "dev" : "release",
       npmStatic: ["effect", "fast-check", "pure-rand"], sanitize,
     });
     if (!result.ok) throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));

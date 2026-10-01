@@ -3,6 +3,7 @@ import { expect, test } from "vitest";
 import {
   defaultSandboxImage,
   sandboxBootstrapCommand,
+  sandboxEffectWorkerAllocation,
   sandboxImageConfig,
   sandboxRunnerConfig,
   sandboxTestSourceConfig,
@@ -297,4 +298,20 @@ test("test processes stay within the per-Sandbox worker budget", () => {
     caseWorkers: 1,
     sideConcurrency: 0,
   });
+});
+
+test("isolated Effect concurrency stays within the budget and only uses large Sandboxes", () => {
+  for (const vcpus of [2, 8, 16, 30, 32]) {
+    for (const workers of [1, 2, 4, 8]) {
+      for (const sideTasks of [0, 1, 2, 3]) {
+        const plan = sandboxEffectWorkerAllocation(workers, sideTasks, vcpus);
+        expect(plan.caseWorkers).toBeGreaterThanOrEqual(1);
+        expect(plan.caseWorkers + plan.sideConcurrency + plan.effectConcurrency - 1).toBe(workers);
+        expect(plan.sideConcurrency).toBeLessThanOrEqual(sideTasks);
+        expect(plan.effectConcurrency === 2).toBe(vcpus === 32 && workers >= 4);
+      }
+    }
+  }
+  expect(() => sandboxEffectWorkerAllocation(0, 1, 32)).toThrow();
+  expect(() => sandboxEffectWorkerAllocation(4, -1, 32)).toThrow();
 });

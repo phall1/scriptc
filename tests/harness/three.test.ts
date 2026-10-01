@@ -30,6 +30,7 @@ test.for(cases)("published three.js $fixture runs statically through LLVM on $ta
   const previousTarget = process.env["SCRIPTC_TARGET"];
   const previousCc = process.env["SCRIPTC_CC"];
   const wasm = target === "wasm32-wasi";
+  const sanitize = !wasm && process.env["SCRIPTC_SAN"] === "1";
   try {
     if (wasm) {
       process.env["SCRIPTC_TARGET"] = target;
@@ -38,7 +39,7 @@ test.for(cases)("published three.js $fixture runs statically through LLVM on $ta
     const result = await compile(entry, {
       outDir: dir, outPath: join(dir, wasm ? `${fixture}.wasm` : fixture),
       backend: "llvm", dynamic: false, npmStatic: ["three"],
-      sanitize: !wasm && process.env["SCRIPTC_SAN"] === "1",
+      optimization: sanitize ? "dev" : "release", sanitize,
     });
     if (!result.ok) throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
     expect(result.backend).toBe("llvm");

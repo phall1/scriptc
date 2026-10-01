@@ -11,7 +11,7 @@ import {
   sandboxBootstrapCommand,
   sandboxTestSourceConfig,
   sandboxRunnerConfig,
-  sandboxTestWorkerAllocation,
+  sandboxEffectWorkerAllocation,
   sandboxVercelConfig,
   sandboxVercelEnvironment,
 } from "./sandbox-config.mjs";
@@ -94,6 +94,7 @@ const invariantRemoteFiles = [
   "tests/harness/sandbox-config.test.ts",
   "tests/harness/sandbox-platform.test.ts",
   "tests/harness/shard.test.ts",
+  "tests/harness/ci-test-plan.test.ts",
   "tests/harness/smoke.test.ts",
   "tests/harness/surface-manifest.test.ts",
   "tests/harness/windows-differential.test.ts",
@@ -787,9 +788,10 @@ try {
         ...(worker.lane === onceLane ? invariantCaseShardedFiles : []),
       ];
       const runCacheCases = worker.lane === onceLane;
-      const { caseWorkers, sideConcurrency } = sandboxTestWorkerAllocation(
+      const { caseWorkers, sideConcurrency, effectConcurrency } = sandboxEffectWorkerAllocation(
         remoteWorkerCount,
         runCacheCases ? 2 : 1,
+        vcpus,
       );
       const cases = () =>
         execIn(
@@ -800,6 +802,7 @@ try {
             ...sharedTestEnv,
             SCRIPTC_TEST_SHARD: `${worker.shard}/${shardCount}`,
             SCRIPTC_TEST_WORKERS: String(caseWorkers),
+            SCRIPTC_EFFECT_TEST_CONCURRENCY: String(effectConcurrency),
           },
           "cases",
         );

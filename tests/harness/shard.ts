@@ -56,6 +56,39 @@ export function shardSelect<T>(
   return items.filter((item) => shardOf(keyOf(item), spec.count) === spec.index);
 }
 
+/** Allocate expensive fixture lists by estimated cost. Longest cases go to
+ * the lightest slice first, with key/index tie breakers so every process
+ * independently constructs the same disjoint partition. Unlike hash-based
+ * sharding, fixture additions can move existing cases between slices. */
+export function balancedShardSelect<T>(
+  items: readonly T[],
+  keyOf: (item: T) => string,
+  weightOf: (item: T) => number,
+  spec: ShardSpec | undefined = parseShardSpec(),
+): T[] {
+  if (spec === undefined || spec.count === 1) return [...items];
+  const keys = new Set<string>();
+  const ranked = items.map((item, index) => {
+    const key = keyOf(item);
+    const weight = weightOf(item);
+    if (keys.has(key)) throw new Error(`duplicate balanced shard key: ${key}`);
+    if (!Number.isFinite(weight) || weight <= 0) throw new Error(`invalid balanced shard weight for ${key}: ${weight}`);
+    keys.add(key);
+    return { index, key, weight };
+  }).sort((a, b) => b.weight - a.weight || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  const loads = Array<number>(spec.count).fill(0);
+  const owners = Array<number>(items.length);
+  for (const item of ranked) {
+    let slice = 0;
+    for (let candidate = 1; candidate < loads.length; candidate++) {
+      if (loads[candidate]! < loads[slice]!) slice = candidate;
+    }
+    loads[slice]! += item.weight;
+    owners[item.index] = slice + 1;
+  }
+  return items.filter((_, index) => owners[index] === spec.index);
+}
+
 /** Suffix for describe titles so shard membership is visible in CI logs:
  * ", shard 2/3" under a spec, "" otherwise. */
 export function shardSuffix(spec: ShardSpec | undefined = parseShardSpec()): string {

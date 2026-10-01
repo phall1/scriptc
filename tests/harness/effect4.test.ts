@@ -5,12 +5,17 @@ import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import { expect, test } from "vitest";
 import type { CompileResult } from "@scriptc/compiler";
-import { shardSelect } from "./shard.js";
+import { balancedShardSelect } from "./shard.js";
+import fixtureCosts from "./effect4-costs.json";
 
 const exec = promisify(execFile);
 const sanitize = process.env["SCRIPTC_SAN"] === "1";
 const fixtures = globSync(join(import.meta.dirname, "../fixtures/effect4/*.ts")).filter((file) => !file.endsWith(".d.ts")).sort();
-const cases = shardSelect(fixtures, (file) => basename(file));
+// Recorded plain/sanitizer fixture seconds guide scheduling only. New fixtures
+// receive an estimate and remain in every complete matrix partition.
+const costs: Record<string, number> = fixtureCosts;
+const cases = balancedShardSelect(fixtures, (file) => basename(file), (file) => costs[basename(file)] ?? 40);
+const concurrent = process.env["SCRIPTC_EFFECT_TEST_CONCURRENCY"] === "2";
 
 async function run(command: string, args: string[]) {
   try {
@@ -23,7 +28,7 @@ async function run(command: string, args: string[]) {
   }
 }
 
-test.for(cases)("published Effect 4 %s matches Node statically", async (entry) => {
+test.for(cases)("published Effect 4 %s matches Node statically", { concurrent, timeout: 600_000 }, async (entry) => {
   const dir = await mkdtemp("/tmp/scriptc-effect4-");
   try {
     const reference = await run(process.execPath, ["--no-warnings", entry]);
@@ -54,4 +59,4 @@ test.for(cases)("published Effect 4 %s matches Node statically", async (entry) =
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
-}, 600_000);
+});

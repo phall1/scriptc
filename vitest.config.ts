@@ -26,6 +26,10 @@ if (configuredCacheDir === undefined && process.env["SCRIPTC_NO_CACHE"] !== "1")
 // worker pool (the default — all cores — is unchanged when unset). Full-suite
 // runs additionally queue behind an advisory lock; see suite-lock.mjs.
 const workers = process.env["SCRIPTC_TEST_WORKERS"];
+const effectConcurrency = process.env["SCRIPTC_EFFECT_TEST_CONCURRENCY"];
+if (effectConcurrency !== undefined && effectConcurrency !== "1" && effectConcurrency !== "2") {
+  throw new Error("SCRIPTC_EFFECT_TEST_CONCURRENCY must be 1 or 2");
+}
 
 export default defineConfig({
   resolve: {
@@ -54,6 +58,7 @@ export default defineConfig({
     // passing in 3s isolated and uncached).
     testTimeout: 300_000,
     hookTimeout: 300_000,
+    ...(effectConcurrency === "2" ? { maxConcurrency: 2 } : {}),
     env: {
       SCRIPTC_CACHE_DIR: cacheDir,
       // The differential lanes run against one immutable checkout/toolchain

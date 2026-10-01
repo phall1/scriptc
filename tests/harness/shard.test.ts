@@ -4,9 +4,11 @@
  * and no spec means everything. differential/llvm-differential/npm/server
  * lean on these properties for CI sharding — see shard.ts. */
 import { globSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { parseShardSpec, shardOf, shardSelect, shardSuffix } from "./shard.js";
+import { balancedShardSelect, parseShardSpec, shardOf, shardSelect, shardSuffix } from "./shard.js";
+import fixtureCosts from "./effect4-costs.json";
+import effectCosts from "./effect-costs.json";
 
 const corpusDir = join(import.meta.dirname, "../corpus");
 
@@ -103,5 +105,56 @@ describe("shardSuffix", () => {
   test("names the shard under a spec, empty otherwise", () => {
     expect(shardSuffix({ index: 2, count: 3 })).toBe(", shard 2/3");
     expect(shardSuffix(undefined)).toBe("");
+  });
+});
+
+describe("balancedShardSelect", () => {
+  const costs: Record<string, number> = fixtureCosts;
+  const fixtures = globSync(join(import.meta.dirname, "../fixtures/effect4/*.ts"))
+    .filter((file) => !file.endsWith(".d.ts")).map((file) => basename(file)).sort();
+  const weight = (key: string) => costs[key] ?? 40;
+
+  test.for([2, 3, 5, 8, 10])("the published fixtures partition completely and independently of input order with %i shards", (count) => {
+    const parts = Array.from({ length: count }, (_, index) => balancedShardSelect(fixtures, (key) => key, weight, { index: index + 1, count }));
+    expect(parts.flat().sort()).toEqual(fixtures);
+    expect(new Set(parts.flat()).size).toBe(fixtures.length);
+    for (let index = 0; index < count; index++) {
+      expect(balancedShardSelect([...fixtures].reverse(), (key) => key, weight, { index: index + 1, count }).sort()).toEqual(parts[index]);
+    }
+  });
+
+  test("cost balancing reduces the longest recorded Effect 4 slice", () => {
+    const keys = Object.keys(costs);
+    const total = (slice: string[]) => slice.reduce((sum, key) => sum + weight(key), 0);
+    const hashed = Array.from({ length: 10 }, (_, index) => total(shardSelect(keys, (key) => key, { index: index + 1, count: 10 })));
+    const balanced = Array.from({ length: 10 }, (_, index) => total(balancedShardSelect(keys, (key) => key, weight, { index: index + 1, count: 10 })));
+    expect(Math.max(...balanced)).toBeLessThan(Math.max(...hashed) * 0.8);
+  });
+
+  test("published Effect 3 fixtures also balance without dropping cases", () => {
+    const costs: Record<string, number> = effectCosts;
+    const keys = globSync(join(import.meta.dirname, "../fixtures/effect/*.ts")).map((file) => basename(file)).sort();
+    const weight = (key: string) => costs[key] ?? 120;
+    const parts = Array.from({ length: 10 }, (_, index) => balancedShardSelect(keys, (key) => key, weight, { index: index + 1, count: 10 }));
+    expect(parts.flat().sort()).toEqual(keys);
+    const total = (slice: string[]) => slice.reduce((sum, key) => sum + weight(key), 0);
+    const hashed = Array.from({ length: 10 }, (_, index) => total(shardSelect(keys, (key) => key, { index: index + 1, count: 10 })));
+    expect(Math.max(...parts.map(total))).toBeLessThan(Math.max(...hashed) * 0.8);
+  });
+
+  test("new fixtures remain selected and local runs keep every fixture", () => {
+    const keys = [...fixtures, "new-fixture.ts"];
+    expect(balancedShardSelect(keys, (key) => key, weight, undefined)).toEqual(keys);
+    expect(balancedShardSelect(keys, (key) => key, weight, { index: 1, count: 1 })).toEqual(keys);
+    const parts = Array.from({ length: 3 }, (_, index) => balancedShardSelect(keys, (key) => key, weight, { index: index + 1, count: 3 }));
+    expect(parts.flat().sort()).toEqual(keys.sort());
+  });
+
+  test("ambiguous keys and invalid costs cannot silently drop fixtures", () => {
+    const spec = { index: 1, count: 2 };
+    expect(() => balancedShardSelect(["same", "same"], (key) => key, () => 1, spec)).toThrow(/duplicate/);
+    for (const weight of [0, -1, Infinity, NaN]) {
+      expect(() => balancedShardSelect(["fixture"], (key) => key, () => weight, spec)).toThrow(/weight/);
+    }
   });
 });
