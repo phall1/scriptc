@@ -1800,7 +1800,7 @@ export function isParseArgsDynCheckerType(lowerer: Lowerer, type: ts.Type): bool
             // its value converting into the checked-dynamic tree like any dyn-slot value.
             const rl = lowerer.declareHiddenLocal("%delem", DYN);
             out.push({ kind: "varDecl", localId: rl.id, init: value, loc: elLoc });
-            const dflt = lowerer.coerceToExpected(lowerer.lowerExpr(el.initializer), DYN);
+            const dflt = lowerer.coerceInto(el.initializer, lowerer.lowerExpr(el.initializer), DYN);
             if (dflt.type.kind !== "dyn") {
               lowerer.unsupported(
                 "SC1031",

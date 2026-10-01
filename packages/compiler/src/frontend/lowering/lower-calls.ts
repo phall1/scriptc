@@ -1803,6 +1803,7 @@ export function genericFnOf(lowerer: Lowerer, ident: ts.Identifier): GenericFnIn
         body.push(...lowerer.lowerStmts(bodyBlock.statements));
         if (fnCtx.inferReturn) {
           bodyReturn = resolveInferredReturn(lowerer, inst, fnCtx.inferReturn, body, decl);
+          inst.returnType = bodyReturn;
         }
         appendImplicitUndefinedReturn(lowerer, body, bodyReturn, locOf(decl));
       } else if (ts.isArrowFunction(decl) && decl.body !== undefined && !ts.isBlock(decl.body)) {
@@ -1815,12 +1816,14 @@ export function genericFnOf(lowerer: Lowerer, ident: ts.Identifier): GenericFnIn
           if (value.type.kind === "void") {
             body.push({ kind: "exprStmt", expr: value, loc: locOf(decl.body) });
             bodyReturn = resolveInferredReturn(lowerer, inst, fnCtx.inferReturn, body, decl);
+            inst.returnType = bodyReturn;
             appendImplicitUndefinedReturn(lowerer, body, bodyReturn, locOf(decl));
           } else {
             const stmt: IrStmt = { kind: "return", value, loc: locOf(decl.body) };
             fnCtx.inferReturn.entries.push({ stmt, node: decl.body });
             body.push(stmt);
             bodyReturn = resolveInferredReturn(lowerer, inst, fnCtx.inferReturn, body, decl);
+            inst.returnType = bodyReturn;
           }
         } else {
           const value = lowerer.lowerExprExpecting(decl.body, bodyReturn);
@@ -1870,7 +1873,9 @@ export function genericFnOf(lowerer: Lowerer, ident: ts.Identifier): GenericFnIn
    * adds JS's undefined; DYN when returns disagree (the checked-dynamic
    * result slot — today's shape). Same-key recursion PINNED the fallback
    * type mid-lowering (callers already hold it), so a pinned instance
-   * keeps it and the wrap pass coerces every return to the pin. */
+   * keeps it and the wrap pass coerces every return to the pin. Callers
+   * store the settled type on their full instance; this narrower view
+   * can be a structural copy in native builds. */
   function resolveInferredReturn(lowerer: Lowerer, inst: Pick<GenericInstance, "returnType" | "returnPinned">,
     infer: NonNullable<import("./lowerer.js").FnCtx["inferReturn"]>,
     body: IrStmt[],
@@ -1901,7 +1906,6 @@ export function genericFnOf(lowerer: Lowerer, ident: ts.Identifier): GenericFnIn
       } else {
         final = DYN; // disagreeing returns: the checked-dynamic join
       }
-      inst.returnType = final;
     }
     // The wrap pass: settle every recorded return onto `final`, in place.
     // Write through the stored union arm: optional-field widening on a

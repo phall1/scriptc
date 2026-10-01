@@ -1016,6 +1016,9 @@ export function jsFuncNameOf(node: ts.Node): string | null {
     if (p && ts.isVariableDeclaration(p) && p.initializer === n && ts.isIdentifier(p.name)) {
       return p.name.text;
     }
+    if (p && ts.isBindingElement(p) && p.initializer === n && ts.isIdentifier(p.name)) {
+      return p.name.text;
+    }
     if (p && ts.isPropertyAssignment(p) && p.initializer === n && ts.isIdentifier(p.name)) {
       return p.name.text;
     }

@@ -170,6 +170,26 @@ export function streamTypedRefCommitAdapter(host: LlvmEmitterContext,
           lines.push(
             `  %f${index}_keyraw = load ptr, ptr @${mangleGlobal(symbolGlobal)}`,
             `  %f${index}_key = call ptr @${host.dyn.toDynHelper(SYMBOL_T)}(ptr %f${index}_keyraw)`,
+          );
+          if (field.type.kind === "symbol") {
+            // A base constructor can mutate the instance before this
+            // derived field initializes. An absent snapshot entry leaves
+            // that native slot uninitialized until its declaration runs.
+            host.declare(`declare zeroext i1 @scr_dyn_has_own_computed(ptr, ptr)`);
+            lines.push(
+              `  %f${index}_present = call zeroext i1 @scr_dyn_has_own_computed(ptr %d, ptr %f${index}_key)`,
+              `  %f${index}_priorptr = getelementptr inbounds %${classStructSym(t.className)}, ptr %target, i64 0, i32 ${fieldIndex}`,
+              `  %f${index}_prior = load ptr, ptr %f${index}_priorptr`,
+              `  %f${index}_initialized = icmp ne ptr %f${index}_prior, null`,
+              `  %f${index}_read = or i1 %f${index}_present, %f${index}_initialized`,
+              `  br i1 %f${index}_read, label %f${index}_read_symbol, label %f${index}_absent_symbol`,
+              `f${index}_absent_symbol:`,
+              `  call void @scr_dyn_release_v(ptr %f${index}_key)`,
+              `  br label %${after}`,
+              `f${index}_read_symbol:`,
+            );
+          }
+          lines.push(
             `  %${raw} = call ptr @scr_dyn_symbol_key_get(ptr %d, ptr %f${index}_key, i1 zeroext false)`,
             `  call void @scr_dyn_release_v(ptr %f${index}_key)`,
           );
@@ -535,6 +555,13 @@ export function streamTypedRefMaterializeAdapter(host: LlvmEmitterContext,
         let fieldValue = B.tmp();
         B.line(`${fieldPtr} = getelementptr inbounds %${classStructSym(t.className)}, ptr %p, i64 0, i32 ${index}`);
         B.line(`${fieldValue} = load ${llFieldType(field.type)}, ptr ${fieldPtr}`);
+        const afterSymbol = field.type.kind === "symbol" ? B.newLabel("symbol.after") : null;
+        if (afterSymbol) {
+          const initialized = B.tmp(), present = B.newLabel("symbol.present");
+          B.line(`${initialized} = icmp ne ptr ${fieldValue}, null`);
+          B.condBr(initialized, present, afterSymbol);
+          B.startBlock(present);
+        }
         if (llFieldType(field.type) === "i8") {
           const boolValue = B.tmp();
           B.line(`${boolValue} = trunc i8 ${fieldValue} to i1`);
@@ -548,6 +575,10 @@ export function streamTypedRefMaterializeAdapter(host: LlvmEmitterContext,
         B.line(`call void @scr_dyn_symbol_key_set(ptr ${out}, ptr ${key}, ptr ${value})`);
         B.line(`call void @scr_dyn_release_v(ptr ${key})`);
         B.line(`call void @scr_dyn_release_v(ptr ${value})`);
+        if (afterSymbol) {
+          B.terminate(`br label %${afterSymbol}`);
+          B.startBlock(afterSymbol);
+        }
       }
       if (meta.def.fields.some((field) => field.name === DYN_CLASS_PROPERTIES)) {
         host.declare(`declare ptr @scr_dyn_copy_property_descriptors(ptr, ptr)`);

@@ -6326,10 +6326,10 @@ export function canConvertToDyn(
   // fold extends the JSON-safe core.
   if (canBoxDynComposite(t, getRecord, getUnion, visiting)) return true;
   if (t.kind === "bytes") return true;
-  // %Error converts as the checked-dynamic tree's error encoding ({%error, name, message,
+  // Built-in errors convert as the checked-dynamic tree's error encoding ({%error, name, message,
   // code?} — the caughtToDyn shape, scr_dyn_from_error): the dyn 'error'
   // listener boundary (a mustCall-wrapped handler receiving the payload).
-  if (t.kind === "object" && t.className === "%Error") return true;
+  if (t.kind === "object" && RUNTIME_ERROR_CLASSES.has(t.className)) return true;
   if (isDynTypedRefType(t)) return true;
   if (t.kind === "generator") return true;
   if (t.kind === "classval") return true;
@@ -6399,7 +6399,7 @@ function canBoxDynComposite(
       return canConvertToDyn(t.key, getRecord, getUnion, visiting) && canDynCheckTo(t.key, getRecord, getUnion, visiting) &&
         canConvertToDyn(t.value, getRecord, getUnion, visiting) && canDynCheckTo(t.value, getRecord, getUnion, visiting);
     case "object":
-      return t.className === "%Error" || isDynTypedRefType(t);
+      return RUNTIME_ERROR_CLASSES.has(t.className) || isDynTypedRefType(t);
     case "array":
       return canBoxDynComposite(t.elem, getRecord, getUnion, visiting);
     case "record": {

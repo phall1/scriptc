@@ -9453,6 +9453,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/generator-default-return-pattern.ts": {
+   "order": [
+    "<repo>/tests/corpus/generator-default-return-pattern.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/generator-delegation-values.ts": {
    "order": [
     "<repo>/tests/corpus/generator-delegation-values.ts"
@@ -10808,6 +10814,12 @@
   "<repo>/tests/corpus/weak-map-native.js": {
    "order": [
     "<repo>/tests/corpus/weak-map-native.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/weak-native-class-identity.ts": {
+   "order": [
+    "<repo>/tests/corpus/weak-native-class-identity.ts"
    ],
    "diags": []
   },

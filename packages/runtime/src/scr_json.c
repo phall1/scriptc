@@ -7148,7 +7148,15 @@ ScrError *scr_error_new_options(int kind, const ScrDyn *message, const ScrDyn *o
 
 ScrDyn *scr_error_cause(ScrError *e) {
   for (size_t i = 0; i < scr_errdyn_n; i++) {
-    if (scr_errdyn_cache[i].err == e) return scr_dyn_obj_read(scr_errdyn_cache[i].dyn, "cause", 5);
+    if (scr_errdyn_cache[i].err != e) continue;
+    ScrDyn *value = scr_errdyn_cache[i].dyn;
+    if (value->kind == SCR_DYN_TYPED_REF) {
+      ScrDyn *view = scr_dyn_typed_ref_materialize(value);
+      ScrDyn *cause = scr_dyn_obj_read(view, "cause", 5);
+      scr_dyn_release(view);
+      return cause;
+    }
+    return scr_dyn_obj_read(value, "cause", 5);
   }
   return e->error_cause ? scr_dyn_retain(e->error_cause) : scr_dyn_undefined();
 }

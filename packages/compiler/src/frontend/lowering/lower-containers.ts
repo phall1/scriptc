@@ -618,7 +618,11 @@ function fenceProducedArrayElem(lowerer: Lowerer, node: ts.Node, producer: strin
               "concat of a bare inner array onto an array-of-arrays (JS would SPREAD it one level — wrap it: a.concat([inner]))",
             );
           }
-          const arg = lowerer.lowerExpr(argNode);
+          // Declaration-backed JS methods can return checked values even
+          // when their public signature names a concrete array. Validate
+          // that boundary before spreading the represented elements.
+          let arg = lowerer.lowerExpr(argNode);
+          if (arg.type.kind === "dyn") arg = lowerer.coerceInto(argNode, arg, argArrayType);
           if (arg.type.kind !== "array") lowerer.badType(argNode, lowerer.typeOf(argNode));
           shape.push("a");
           args.push(arg);
@@ -2155,8 +2159,7 @@ export function tryLowerNumericIndexRead(lowerer: Lowerer, operand: IrExpr, loc:
    * undefined unit arm (for REF elements that arm is the unit instance, the
    * standard union machinery). The Last pair is the SAME loop walked
    * backwards (`i = n - 1; i >= 0; i--`), exactly the es2023 spec's
-   * descending index walk. All require a bool-returning callback
-   * (JS's ToBoolean of arbitrary predicate results has no lowering). */
+   * descending index walk. Predicate results use JavaScript ToBoolean. */
   function lowerArrayFindLikeCall(lowerer: Lowerer, call: ts.CallExpression,
     access: ts.PropertyAccessExpression,
     method: "find" | "findIndex" | "findLast" | "findLastIndex" | "some" | "every",
@@ -2175,7 +2178,7 @@ export function tryLowerNumericIndexRead(lowerer: Lowerer, operand: IrExpr, loc:
     // returns the index read's `string | undefined`).
     const fnRet = fnArg.type.ret;
     const truthyRet =
-      fnRet.kind === "bool" || fnRet.kind === "f64" || fnRet.kind === "string" ||
+      fnRet.kind === "bool" || fnRet.kind === "f64" || fnRet.kind === "string" || fnRet.kind === "dyn" ||
       (fnRet.kind === "union" &&
         (lowerer.unions.get(fnRet.unionId)?.arms ?? []).every((a) => a.kind !== "dyn" && a.kind !== "caught" && a.kind !== "jsval"));
     if (!truthyRet) lowerer.badType(argNode, lowerer.typeOf(argNode));
@@ -2227,10 +2230,11 @@ export function tryLowerNumericIndexRead(lowerer: Lowerer, operand: IrExpr, loc:
   }
 
 /** ToBoolean of a predicate result inside a synthesized HOF helper — the
-   * ensureBool subset the find-like path admits (bool through; f64/string/
-   * truthy-answerable unions via toBool). */
+   * ensureBool subset the find-like path admits (bool through; checked
+   * values via dynTest; f64/string/truthy-answerable unions via toBool). */
   function predToBool(e: IrExpr): IrExpr {
     if (e.type.kind === "bool") return e;
+    if (e.type.kind === "dyn") return { kind: "dynTest", test: "truthy", value: e, type: BOOL, loc: e.loc };
     return { kind: "toBool", operand: e, type: BOOL, loc: e.loc };
   }
 

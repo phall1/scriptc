@@ -5247,6 +5247,13 @@ export function lowerOptionalNumber(
       litKey !== null
         ? ({ kind: "strLit", value: litKey, type: STRING, loc: locOf(keyNode) } satisfies IrExpr)
         : lowerer.lowerExpr(keyNode);
+    // Optional string/number keys need ToPropertyKey, not a boxed copy of
+    // the receiver. Keep record reads on their native storage so nested
+    // references retain identity across index-signature reads.
+    if (key.type.kind === "union" &&
+        !lowerer.unions.get(key.type.unionId)?.arms.some((arm) => arm.kind === "symbol" || arm.kind === "dyn")) {
+      key = lowerRecordPropertyKey(lowerer, key, keyNode);
+    }
     if ((key.type.kind === "symbol" || key.type.kind === "dyn" || key.type.kind === "union") &&
         lowerer.dynConvertible(key.type) && lowerer.dynConvertible(obj.type)) {
       const read: IrExpr = { kind: "dynKeyGet", value: lowerer.coerceToExpected(obj, DYN),
@@ -6831,8 +6838,8 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
         // key afterward, then yields the RHS without rereading the property.
         if (ts.isElementAccessExpression(expr.left) && !expr.left.questionDotToken) {
           const recv = tryLowerExpression(lowerer, expr.left.expression);
-          if (recv && (recv.type.kind === "dyn" || recv.type.kind === "array") && lowerer.dynConvertible(recv.type)) {
-            return lowerDynMemberAssignment(lowerer, expr, lowerer.coerceInto(expr.left.expression, recv, DYN));
+          if (recv?.type.kind === "dyn") {
+            return lowerDynMemberAssignment(lowerer, expr, recv);
           }
           if (recv?.type.kind === "array" || recv?.type.kind === "bytes") {
             const receiver = lowerer.declareHiddenLocal("%setArray", recv.type);

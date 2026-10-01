@@ -671,6 +671,13 @@ export function lowerObjectLiteral(lowerer: Lowerer, expr: ts.ObjectLiteralExpre
   }
 
   let tsType = lowerer.checker.getContextualType(expr) ?? lowerer.typeOf(expr);
+  // An inferred binding pattern supplies placeholders such as
+  // { nested: { value: any } }. Construct the literal's own fields so
+  // those placeholders do not erase instantiated generic storage.
+  if (!expected && ts.isVariableDeclaration(expr.parent) && !expr.parent.type &&
+      ts.isObjectBindingPattern(expr.parent.name) && expr.parent.initializer === expr) {
+    tsType = lowerer.typeOf(expr);
+  }
   // `as never` supplies no construction layout. Keep the literal's own
   // fields so an exhaustiveness witness cannot erase a reachable value.
   if (lowerer.checker.isNeverType(tsType)) tsType = lowerer.typeOf(expr);
