@@ -22,7 +22,7 @@ import { NARROW_FIRST, STRING_INDEX_METHODS, STR_METHODS, builtinFenceHintOf, bu
 import { ffiBindingDiag, ffiSignatureDiag, libCallbackDiag, requiresDynamicDiag } from "../../diagnostics/diagnostic.js";
 import type { ScrDiagnostic } from "../../diagnostics/diagnostic.js";
 import { mixinFnShapeOf } from "./lower-mixins.js";
-import { dynStringReceiver, lowerArrayConstructor, lowerArrayFromCall, lowerArrayOfCall, lowerDynArrayFilterCall, lowerDynArrayFlatMapCall, lowerGroupByStaticCall, lowerIteratorHelperCall, lowerObjectAssignIndexShape, lowerObjectFromEntriesCall, lowerObjectIterOverIndexShape, lowerTupleReadMethodCall } from "./lower-containers.js";
+import { dynStringReceiver, lowerArrayConstructor, lowerArrayFromCall, lowerArrayOfCall, lowerDynArrayFilterCall, lowerDynArrayFlatMapCall, lowerGroupByStaticCall, lowerIteratorHelperCall, lowerObjectAssignIndexShape, lowerObjectConstructor, lowerObjectFromEntriesCall, lowerObjectIterOverIndexShape, lowerTupleReadMethodCall } from "./lower-containers.js";
 import { lowerBytesStaticCall } from "./containers/bytes.js";
 import { lowerRegexMethodCall, lowerStringIndexCall, lowerStringMethodCall, lowerStringPaddingCall, lowerStringSplitCall } from "./containers/string-and-regexp.js";
 import { createRequireSpecOf, lowerChildStreamMethodCall, lowerChildWriterMethodCall, lowerCreateRequireCall, lowerCryptoHashMethodCall, lowerDirentMethodCall, lowerFileHandleMethodCall, lowerImportMetaResolveCall, lowerNodeModuleCall, lowerPerfHooksCall, lowerProcStreamMethodCall, lowerReflectCall, lowerRequireResolveCall, lowerWatcherMethodCall } from "./lower-builtins.js";
@@ -278,6 +278,7 @@ export interface GenericInstance {
       return param.initializer ? { type: DYN, mode: "omittable", bodyType: DYN } : { type: DYN, mode: "required" };
     }
     if (lowerer.checkedCallbackParams.has(param)) {
+      if (param.dotDotDotToken) return { type: DYN, mode: "dynRest" };
       return param.initializer
         ? { type: DYN, mode: "omittable", bodyType: DYN }
         : { type: DYN, mode: "required" };
@@ -3668,6 +3669,14 @@ function lowerProjectedBuiltinCall(
 export function lowerCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr {
     const loc = locOf(expr);
 
+    // Object's checker return type is `any`. Claim known object inputs
+    // before generic checked-dynamic dispatch tries to load the constructor.
+    if (ts.isIdentifier(expr.expression) && expr.expression.text === "Object" &&
+        lowerer.isStdlibGlobal(expr.expression, "Object")) {
+      const object = lowerObjectConstructor(lowerer, expr.arguments, loc);
+      if (object) return object;
+    }
+
     // A call whose chain ROOTS at an ambient-undefined name (`declare
     // const value: Y | undefined; value?.foo("a")`, `declare function
     // chain...; chain(o).mapValues(f).value()`, a trap binding's read):
@@ -4992,8 +5001,8 @@ export function lowerCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr {
         // Readable.from — the stream classes' one static (before the
         // stdlib chokepoint claims the member).
         lowerStreamStaticCall(lowerer, expr, expr.expression) ??
-        // Radix-free n.toString() is the STATIC number formatter (identical
-        // to `${n}` / String(n)); the explicit-radix form stays island.
+        // Primitive toString calls, including numeric radices, use the
+        // native formatters before the island method path.
         lowerNumberToStringCall(lowerer, expr, expr.expression) ??
         // Union receivers whose every arm has a text — the ngrok
         // `(chunk: Buffer | string) => chunk.toString()` idiom.
@@ -6741,7 +6750,7 @@ const inliningPredicates = new Set<ts.Symbol>();
    * and String(n) lower to (Number::toString with radix 10 IS that
    * conversion, per spec) — booleans the "true"/"false" texts, and strings
    * the identity read (String.prototype.toString returns `this`). The
-   * explicit-radix number form keeps its island lowering (ISLAND_SURFACE);
+   * explicit-radix number form uses the native radix formatter;
    * null for other receivers, argument shapes, or non-lib members (a
    * user's own `.toString` takes the ordinary paths). */
   function lowerNumberToStringCall(lowerer: Lowerer, call: ts.CallExpression,
@@ -6752,6 +6761,17 @@ const inliningPredicates = new Set<ts.Symbol>();
     if (recvKind !== "f64" && recvKind !== "bool" && recvKind !== "string") return null;
     if (!lowerer.isStdlibMember(access)) return null;
     const operand = lowerer.lowerExpr(access.expression);
+    // JavaScript array and typed-array reads can still be undefined even
+    // when the checker declares a number. Preserve that runtime value and
+    // let native method dispatch format numbers or throw for missing data.
+    if (operand.type.kind === "dyn") {
+      return {
+        kind: "libCall", fn: "dyn.toString", args: [operand,
+          call.arguments[0] ? lowerer.lowerExprExpecting(call.arguments[0], DYN) : dynUndefinedExpr(locOf(call)),
+          { kind: "strLit", value: access.getText(), type: STRING, loc: locOf(call) },
+        ], type: STRING, loc: locOf(call),
+      };
+    }
     if (call.arguments.length === 1) {
       if (operand.type.kind !== "f64") return null;
       return { kind: "libCall", fn: "num.toStringRadix", args: [operand, lowerer.lowerExprExpecting(call.arguments[0]!, DYN)], type: STRING, loc: locOf(call) };

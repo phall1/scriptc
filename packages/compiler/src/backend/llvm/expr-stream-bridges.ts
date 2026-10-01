@@ -2,7 +2,7 @@ import { typedRefConstructor } from "./shapes.js";
 /* Focused LLVM expression emission extracted from emitter.ts. */
 import { InternalCompilerError } from "../../errors.js";
 import { streamTypedRefEligible } from "../../ir/analysis.js";
-import { type IrType, DYN_CLASS_PROPERTIES, SYMBOL_T, classDynViewSupported, isClassOwnEnumerableFieldName, isDynTypedRefType, isRefCounted, typeKey } from "../../ir/ir.js";
+import { type IrType, DYN_CLASS_PROPERTIES, RUNTIME_STREAM_CLASSES, SYMBOL_T, classDynViewSupported, isClassOwnEnumerableFieldName, isDynTypedRefType, isRefCounted, typeKey } from "../../ir/ir.js";
 import { mangleFunction, mangleGlobal, mangleRecordStruct } from "../mangle.js";
 import { BlockBuilder } from "./blocks.js";
 import { classFieldIndex, classStructSym } from "./classes.js";
@@ -543,6 +543,10 @@ export function streamTypedRefMaterializeAdapter(host: LlvmEmitterContext,
       if (meta.root.def.name === "%Error") {
         host.declare(`declare ptr @scr_error_dyn_fields(ptr)`);
         B.line(`${out} = call ptr @scr_error_dyn_fields(ptr %p)`);
+      } else if (meta.def.runtime && RUNTIME_STREAM_CLASSES.has(t.className) &&
+          !meta.def.instancePrototypeHelper && !meta.def.prototypeDataHelper) {
+        host.declare(`declare ptr @scr_stream_dyn_view(ptr)`);
+        B.line(`${out} = call ptr @scr_stream_dyn_view(ptr %p)`);
       } else B.line(`${out} = call ptr @scr_dyn_new_obj()`);
       if (meta.def.instancePrototypeHelper || meta.def.prototypeDataHelper) {
         host.declare(`declare ptr @scr_dyn_set_prototype(ptr, ptr)`);

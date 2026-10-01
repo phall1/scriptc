@@ -2455,7 +2455,21 @@ static void scr_stream_listener_error(ScrClosure *adapter, ScrError *error) {
   scr_dyn_release(fn);
 }
 
+static void scr_stream_listener_data(ScrClosure *adapter, ScrBytes *bytes, ScrStr *string) {
+  ScrDyn *fn = scr_dyn_listener_fn(adapter);
+  ScrDyn *arg = string ? scr_dyn_new_str(string) : scr_dyn_new_bytes(bytes);
+  ScrDyn *answer = scr_dyn_call(fn, &arg, 1, "listener");
+  scr_dyn_release(answer);
+  scr_dyn_release(arg);
+  scr_dyn_release(fn);
+}
+
 ScrStream *scr_stream_on_dyn(ScrStream *s, ScrStr *name, ScrDyn *cb, bool once, bool prepend) {
+  if (name->len == 4 && !memcmp(name->data, "data", 4)) {
+    return (ScrStream *)scr_emitter_on_dyn((ScrEmitter *)s, name, cb,
+      scr_dyn_listener_closure_fn(cb, (void *)scr_stream_listener_data),
+      scr_ee_inv_fixed2, once, prepend);
+  }
   bool error = name->len == 5 && memcmp(name->data, "error", 5) == 0;
   bool empty = (name->len == 8 && memcmp(name->data, "readable", 8) == 0) ||
     (name->len == 3 && memcmp(name->data, "end", 3) == 0) ||
@@ -3185,4 +3199,148 @@ static void scr_stream_dispatch(void) {
 void scr_stream_install(void) {
   scr_emitter_on_hook = &scr_stream_on_listener;
   scr_loop_set_stream(&scr_stream_ticks_pending, &scr_stream_dispatch);
+}
+
+/* Child stdio uses the standard stream machinery once it crosses generic
+ * storage. Child-only programs never reference this optional table. */
+static void scr_stream_child_read(ScrClosure *cb, ScrStream *s, double size) {
+  (void)cb; (void)s; (void)size;
+}
+static ScrStream *scr_stream_child_readable(void) {
+  return scr_stream_new_readable(-1, true, true,
+      scr_closure_new((void *)scr_stream_child_read, 0), scr_stream_child_read,
+      NULL, NULL);
+}
+static ScrStream *scr_stream_child_writable(ScrClosure *write, ScrStreamChunkInv write_inv,
+    ScrClosure *final_cb, ScrStreamPlainInv final_inv) {
+  return scr_stream_new_writable(-1, true, true, write, write_inv,
+      final_cb, final_inv, NULL, NULL);
+}
+const ScrChildStreamOps scr_stream_child_ops = {
+  scr_stream_child_readable, scr_stream_child_writable,
+  scr_stream_retain_v, scr_stream_release_v, scr_stream_trace,
+  scr_stream_push, scr_stream_push_null,
+  scr_stream_write_done, scr_stream_final_done,
+};
+
+static ScrStream *scr_stream_view_receiver(const ScrDyn *value) {
+  if (value->kind == SCR_DYN_TYPED_REF && value->v.typed_ref.type_key_len > 7 &&
+      !memcmp(value->v.typed_ref.type_key, "object:", 7)) {
+    ScrStream *stream = scr_dyn_typed_ref_unbox(value);
+    const ScrVt *vt = stream->vt;
+    if ((vt->pre >= scr_readable_vt.pre && vt->pre <= scr_readable_vt.post) ||
+        (vt->pre >= scr_writable_vt.pre && vt->pre <= scr_writable_vt.post)) return stream;
+    value->v.typed_ref.release(stream);
+  }
+  scr_dyn_arg_type_fail("destination", "an instance of Stream", value);
+  return NULL;
+}
+
+static ScrDyn *scr_stream_view_call(ScrClosure *cb, ScrDyn *const *args, size_t argc) {
+  ScrStream *stream = scr_box_get_ref(cb->caps[0]);
+  ScrStr *name = scr_box_get_ref(cb->caps[1]);
+  const char *method = name->data;
+  ScrDyn *result = NULL;
+  ScrDyn *first = argc ? args[0] : scr_dyn_undefined();
+  if (!strcmp(method, "on") || !strcmp(method, "once") || !strcmp(method, "addListener") ||
+      !strcmp(method, "prependListener") || !strcmp(method, "prependOnceListener")) {
+    if (first->kind != SCR_DYN_STR) scr_dyn_arg_type_fail("event", "of type string", first);
+    else {
+      ScrStream *registered = scr_stream_on_dyn(stream, first->v.str,
+          argc > 1 ? args[1] : scr_dyn_undefined(),
+          !strcmp(method, "once") || !strcmp(method, "prependOnceListener"),
+          !strncmp(method, "prepend", 7));
+      scr_stream_release(registered);
+    }
+  } else if (!strcmp(method, "off") || !strcmp(method, "removeListener")) {
+    if (first->kind != SCR_DYN_STR) scr_dyn_arg_type_fail("event", "of type string", first);
+    else {
+      ScrEmitter *registered = scr_emitter_off_dyn((ScrEmitter *)stream, first->v.str,
+          argc > 1 ? args[1] : scr_dyn_undefined());
+      scr_emitter_release(registered);
+    }
+  } else if (!strcmp(method, "pipe") || !strcmp(method, "unpipe")) {
+    ScrStream *destination = first->kind == SCR_DYN_UNDEF && !strcmp(method, "unpipe")
+      ? NULL : scr_stream_view_receiver(first);
+    if (!scr_exc_pending()) {
+      bool end = true;
+      if (argc > 1 && args[1]->kind != SCR_DYN_UNDEF) {
+        ScrDyn *option = scr_dyn_obj_read(args[1], "end", 3);
+        end = option->kind == SCR_DYN_UNDEF || scr_dyn_truthy(option);
+        scr_dyn_release(option);
+      }
+      ScrStream *returned = !strcmp(method, "pipe")
+          ? scr_stream_pipe(stream, destination, end) : scr_stream_unpipe(stream, destination);
+      scr_stream_release(returned);
+      if (!strcmp(method, "pipe") && !scr_exc_pending()) result = scr_dyn_retain(first);
+    }
+    scr_stream_release(destination);
+  } else if (!strcmp(method, "read")) result = scr_stream_read_dyn(stream, first);
+  else if (!strcmp(method, "pause") || !strcmp(method, "resume")) {
+    ScrStream *returned = !strcmp(method, "pause") ? scr_stream_pause(stream) : scr_stream_resume(stream);
+    scr_stream_release(returned);
+  } else if (!strcmp(method, "isPaused")) result = scr_dyn_new_bool(scr_stream_is_paused(stream));
+  else if (!strcmp(method, "setEncoding")) {
+    if (first->kind != SCR_DYN_STR) scr_dyn_arg_type_fail("encoding", "of type string", first);
+    else scr_stream_release(scr_stream_set_encoding(stream, first->v.str));
+  } else if (!strcmp(method, "write")) {
+    if (argc > 1 && args[1]->kind != SCR_DYN_UNDEF) {
+      static const char message[] = "Native stream method values with write encodings or callbacks have no lowering";
+      scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
+    } else result = scr_dyn_new_bool(scr_stream_write_dyn(stream, first, NULL));
+  } else if (!strcmp(method, "end")) {
+    if (argc > 1 && args[1]->kind != SCR_DYN_UNDEF) {
+      static const char message[] = "Native stream method values with end encodings or callbacks have no lowering";
+      scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
+    } else if (first->kind == SCR_DYN_UNDEF || first->kind == SCR_DYN_NULL) {
+      scr_stream_release(scr_stream_end(stream, NULL, NULL, NULL));
+    } else if (first->kind == SCR_DYN_STR) {
+      scr_stream_release(scr_stream_end(stream, NULL, first->v.str, NULL));
+    } else if (first->kind == SCR_DYN_BYTES) {
+      scr_stream_release(scr_stream_end(stream, first->v.bytes, NULL, NULL));
+    } else scr_dyn_arg_type_fail("chunk", "of type string or an instance of Buffer or Uint8Array", first);
+  } else if (!strcmp(method, "destroy")) {
+    ScrError *error = first->kind == SCR_DYN_UNDEF || first->kind == SCR_DYN_NULL ? NULL : scr_error_from_dyn(first);
+    scr_stream_release(scr_stream_destroy(stream, error));
+    scr_error_release(error);
+  } else if (!strcmp(method, "cork")) scr_stream_cork(stream);
+  else if (!strcmp(method, "uncork")) scr_stream_uncork(stream);
+  if (!result && !scr_exc_pending()) result = scr_dyn_this_get();
+  scr_str_release(name);
+  scr_stream_release(stream);
+  return result;
+}
+
+ScrDyn *scr_stream_dyn_view(ScrStream *stream) {
+  ScrDyn *view = scr_dyn_new_obj();
+  ScrDyn *prototype = scr_dyn_new_obj();
+  static const char *const methods[] = {
+    "on", "once", "addListener", "prependListener", "prependOnceListener",
+    "off", "removeListener", "pipe", "unpipe", "read", "pause", "resume", "isPaused",
+    "setEncoding", "write", "end", "destroy", "cork", "uncork",
+  };
+  for (size_t i = 0; i < sizeof methods / sizeof *methods; i++) {
+    ScrClosure *cb = scr_closure_new((void *)scr_stream_view_call, 2);
+    cb->caps[0] = scr_box_new_obj(scr_stream_retain_v, scr_stream_release_v, scr_stream_trace);
+    cb->caps[1] = scr_box_new(SCR_BOX_STR);
+    scr_box_set_ref(cb->caps[0], scr_stream_retain(stream));
+    scr_box_set_ref(cb->caps[1], scr_str_new(methods[i], strlen(methods[i])));
+    scr_dyn_obj_set(prototype, methods[i], strlen(methods[i]),
+        scr_dyn_new_func(cb, scr_stream_view_call, 0, "native stream method", methods[i]));
+  }
+  static const char *const properties[] = {
+    "readable", "readableEnded", "readableLength", "readableHighWaterMark",
+    "writable", "writableEnded", "writableFinished", "writableLength", "writableHighWaterMark",
+    "writableNeedDrain", "destroyed", "closed",
+  };
+  for (size_t i = 0; i < sizeof properties / sizeof *properties; i++) {
+    double value = scr_stream_prop(stream, properties[i]);
+    bool number = strstr(properties[i], "Length") || strstr(properties[i], "HighWaterMark");
+    scr_dyn_obj_set(view, properties[i], strlen(properties[i]),
+        number ? scr_dyn_new_num(value) : scr_dyn_new_bool(value != 0));
+  }
+  ScrDyn *attached = scr_dyn_set_prototype(view, prototype);
+  scr_dyn_release(attached);
+  scr_dyn_release(prototype);
+  return view;
 }

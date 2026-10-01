@@ -765,7 +765,7 @@ static ScrStr *scr_bytes_decode_utf8_options(const uint8_t *in, size_t n, bool f
   for (size_t i = 0; i <= n; i++) {
     if (i == n) {
       if (needed > 0) { /* EOF inside a sequence: one replacement */
-        if (fatal) { free(out); scr_td_invalid("utf-8"); }
+        if (fatal) { free(out); scr_td_invalid("utf-8"); return NULL; }
         memcpy(out + o, "\xef\xbf\xbd", 3);
         o += 3;
       }
@@ -786,7 +786,7 @@ static ScrStr *scr_bytes_decode_utf8_options(const uint8_t *in, size_t n, bool f
         if (byte == 0xf4) upper = 0x8f;
         needed = 3; cp = byte & 0x7;
       } else {
-        if (fatal) { free(out); scr_td_invalid("utf-8"); }
+        if (fatal) { free(out); scr_td_invalid("utf-8"); return NULL; }
         memcpy(out + o, "\xef\xbf\xbd", 3);
         o += 3;
       }
@@ -794,7 +794,7 @@ static ScrStr *scr_bytes_decode_utf8_options(const uint8_t *in, size_t n, bool f
     }
     if (byte < lower || byte > upper) {
       /* Invalid continuation: replace the subpart, REPROCESS this byte. */
-      if (fatal) { free(out); scr_td_invalid("utf-8"); }
+      if (fatal) { free(out); scr_td_invalid("utf-8"); return NULL; }
       memcpy(out + o, "\xef\xbf\xbd", 3);
       o += 3;
       needed = 0; lower = 0x80; upper = 0xbf;
@@ -1179,7 +1179,7 @@ static void scr_td_error(ScrTdOut *out) {
 }
 
 static ScrStr *scr_td_finish(ScrTdOut *out, bool fatal) {
-  if (fatal && out->failed) { free(out->data); scr_td_invalid("legacy encoding"); }
+  if (fatal && out->failed) { free(out->data); scr_td_invalid("legacy encoding"); return NULL; }
   ScrStr *str = scr_str_new(out->data, out->len);
   free(out->data);
   return str;
@@ -1693,6 +1693,71 @@ ScrStr *scr_text_decode_legacy(const ScrBytes *b, double encoding_value) {
   return scr_text_decode_legacy_options(b, encoding_value, false, false);
 }
 #endif /* SCR_TEXT_DECODER_LEGACY */
+
+/* Streaming decoders retain only an incomplete character and whether the
+ * initial BOM has been handled. The state object belongs to the codec's
+ * private record, so aliases and closure captures share the same decoder. */
+static size_t scr_td_utf8_tail(const uint8_t *bytes, size_t n) {
+  size_t tail = scr_strdec_tail(bytes, n);
+  if (!tail) return 0;
+  uint8_t lead = bytes[n - tail];
+  if (lead < 0xc2 || lead > 0xf4) return 0;
+  if (tail > 1) {
+    uint8_t second = bytes[n - tail + 1];
+    if ((lead == 0xe0 && second < 0xa0) || (lead == 0xed && second > 0x9f) ||
+        (lead == 0xf0 && second < 0x90) || (lead == 0xf4 && second > 0x8f)) return 0;
+  }
+  return tail;
+}
+
+ScrStr *scr_text_decode_stream(ScrDyn *state, const ScrBytes *input,
+    double encoding, bool fatal, bool ignore_bom, bool stream) {
+  ScrDyn *saved = scr_dyn_obj_read(state, "pending", 7);
+  size_t pending = saved->kind == SCR_DYN_BYTES ? saved->v.bytes->len : 0;
+  if (input->len > SIZE_MAX - pending) scr_bytes_oom();
+  ScrBytes *combined = scr_bytes_new(SCR_BYTES_U8, (double)(pending + input->len));
+  if (pending) memcpy(combined->data, saved->v.bytes->data, pending);
+  if (input->len) memcpy(combined->data + pending, input->data, input->len);
+  scr_dyn_release(saved);
+  ScrDyn *bom = scr_dyn_obj_read(state, "bom", 3);
+  bool seen_bom = scr_dyn_truthy(bom);
+  scr_dyn_release(bom);
+  size_t hold = stream && encoding < 0 ? scr_td_utf8_tail(combined->data, combined->len) : 0;
+#ifdef SCR_TEXT_DECODER_LEGACY
+  if (stream && ((unsigned)encoding == SCR_TD_UTF16LE || (unsigned)encoding == SCR_TD_UTF16BE)) {
+    size_t complete = combined->len & ~(size_t)1;
+    hold = combined->len - complete;
+    if (complete >= 2) {
+      const uint8_t *last = combined->data + complete - 2;
+      uint16_t unit = (unsigned)encoding == SCR_TD_UTF16BE
+        ? ((uint16_t)last[0] << 8) | last[1] : last[0] | ((uint16_t)last[1] << 8);
+      if (unit >= 0xd800 && unit <= 0xdbff) hold += 2;
+    }
+  }
+  if (stream && encoding >= SCR_TD_GB18030) {
+    scr_bytes_release(combined);
+    static const char message[] = "Streaming TextDecoder for this legacy encoding has no native lowering";
+    scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
+    return NULL;
+  }
+#endif
+  size_t complete = combined->len - hold;
+  ScrBytes *tail = scr_bytes_new(SCR_BYTES_U8, (double)hold);
+  if (hold) memcpy(tail->data, combined->data + complete, hold);
+  scr_dyn_obj_set(state, "pending", 7, scr_dyn_new_bytes(tail));
+  scr_bytes_release(tail);
+  scr_dyn_obj_set(state, "bom", 3, scr_dyn_new_bool(stream && (seen_bom || complete > 0)));
+  combined->len = complete;
+  ScrStr *result;
+  if (encoding < 0) result = scr_text_decode_options(combined, fatal, ignore_bom || seen_bom);
+#ifdef SCR_TEXT_DECODER_LEGACY
+  else result = scr_text_decode_legacy_options(combined, encoding, fatal, ignore_bom || seen_bom);
+#else
+  else { result = NULL; scr_trap("legacy TextDecoder requires its runtime pack variant"); }
+#endif
+  scr_bytes_release(combined);
+  return result;
+}
 
 /* Decode the next code point from an ScrStr's storage — ALWAYS valid
  * UTF-8 (the string runtime never stores ill-formed sequences), so no

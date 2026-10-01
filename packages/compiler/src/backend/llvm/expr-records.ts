@@ -83,7 +83,8 @@ export function emitRegexIntrinsic(host: LlvmEmitterContext, e: IrExpr & { kind:
         B.line(`${t} = call zeroext i1 @scr_regex_test(ptr ${r.name}, ptr ${args[0]!.name})`);
         return { name: t, type: e.type };
       }
-      case "match": {
+      case "match":
+      case "exec": {
         // +1 string[] or NULL from the runtime; the `string[] | null`
         // union wraps type-directedly, the envGet convention.
         if (e.type.kind !== "union") throw new InternalCompilerError("llvm emitter bug: match result not a union");
@@ -91,9 +92,10 @@ export function emitRegexIntrinsic(host: LlvmEmitterContext, e: IrExpr & { kind:
         const arrTag = def ? def.arms.findIndex((a) => a.kind === "array") : -1;
         const nullTag = def ? def.arms.findIndex((a) => a.kind === "nullT") : -1;
         if (arrTag < 0 || nullTag < 0 || !def) throw new InternalCompilerError("llvm emitter bug: match union lacks its arms");
-        host.declare(`declare ptr @scr_regex_match(ptr, ptr)`);
+        const symbol = e.method === "exec" ? "scr_regex_exec" : "scr_regex_match";
+        host.declare(`declare ptr @${symbol}(ptr, ptr)`);
         const raw = B.tmp();
-        B.line(`${raw} = call ptr @scr_regex_match(ptr ${r.name}, ptr ${args[0]!.name})`);
+        B.line(`${raw} = call ptr @${symbol}(ptr ${r.name}, ptr ${args[0]!.name})`);
         return host.wrapNullable(raw, raw, def.arms[arrTag]!, arrTag, e.type, nullTag);
       }
       case "search": {
@@ -107,6 +109,12 @@ export function emitRegexIntrinsic(host: LlvmEmitterContext, e: IrExpr & { kind:
         const t = B.tmp();
         B.line(`${t} = call ptr @scr_regex_source(ptr ${r.name})`);
         return host.own({ name: t, type: e.type });
+      }
+      case "lastIndex": {
+        host.declare("declare double @scr_regex_last_index(ptr)");
+        const t = B.tmp();
+        B.line(`${t} = call double @scr_regex_last_index(ptr ${r.name})`);
+        return { name: t, type: e.type };
       }
       case "flags": {
         host.declare(`declare ptr @scr_regex_flags(ptr)`);

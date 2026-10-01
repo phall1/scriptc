@@ -11,7 +11,7 @@ import { MAX_GENERIC_INSTANCES, appendImplicitUndefinedReturn, bodyReadsArgument
 import { isGenericCallableMemberType, jsOpenObjectType, typeKey, withUnitArm } from "../type-mapper.js";
 import { cjsClassExprWholeExportOf, isCjsJsFile, isJsSourceFile, isModuleExportsAccess, isNodeTypesPath, locOf } from "../program.js";
 import { PoisonError, dynFallbackType, dynUndefinedExpr, newFnCtx, nodeThrowExpr, own } from "./lowerer.js";
-import { lowerArrayConstructor, lowerMapSeedNew, lowerSetSeedNew } from "./lower-containers.js";
+import { lowerArrayConstructor, lowerMapSeedNew, lowerObjectConstructor, lowerSetSeedNew } from "./lower-containers.js";
 import { bufEncoding } from "./containers/bytes.js";
 import { isSafeToRepeat } from "./expressions/evaluation-safety.js";
 import { lowerSearchParamsNew, lowerTextCodecNew } from "./lower-builtins.js";
@@ -6208,22 +6208,9 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
       // types get their half named specifically instead of the component
       // fence (SC2009, which names Map slots at value positions elsewhere).
       // Both Array() and new Array() share the elements/count lowering.
-      // `new Object()` — the spec's OrdinaryObjectCreate, exactly what the
-      // `{}` literal builds (fresh reference identity, no own properties) —
-      // lowers as the empty record. The ARGUMENT form is Object(x): it
-      // returns its argument for objects and BOXES primitives — the wrapper
-      // story with no lowering — so it keeps the constructor fence.
-      if (
-        symbol?.name === "Object" &&
-        lowerer.isStdlibSymbol(symbol) &&
-        (expr.arguments ?? []).length === 0
-      ) {
-        return {
-          kind: "recordLit",
-          fields: [],
-          type: { kind: "record", shapeId: lowerer.shapes.intern([]) },
-          loc,
-        };
+      if (symbol?.name === "Object" && lowerer.isStdlibSymbol(symbol)) {
+        const object = lowerObjectConstructor(lowerer, expr.arguments ?? [], loc);
+        if (object) return object;
       }
       if (symbol?.name === "Array" && lowerer.isStdlibSymbol(symbol)) {
         return lowerArrayConstructor(lowerer, expr, expr.arguments ?? []);

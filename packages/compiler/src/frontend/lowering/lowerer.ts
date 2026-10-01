@@ -4766,7 +4766,7 @@ export class Lowerer {
         TextEncoder:
           "TextEncoder instances support encode(string) and encode(); other codec operations require a dedicated lowering",
         TextDecoder:
-          "TextDecoder instances support recognized literal labels with default options and whole-buffer decode(Uint8Array); runtime labels and options remain unsupported",
+          "TextDecoder instances support recognized labels, fatal/ignoreBOM option literals, and streaming UTF-8/UTF-16/single-byte decode; runtime option objects remain unsupported",
       };
       this.pushDiag(
         noLoweringDiag(this.checker.typeToString(type), locOf(node), typeHints[stdlibOwnSym?.name ?? ""]),
@@ -5839,8 +5839,26 @@ export class Lowerer {
           (src.kind === "record" && arm.kind === "object");
         if (sameFamily && this.widthLiftPlan(src, arm) !== null) candidates.push({ tag: i, arm });
       });
-      if (candidates.length !== 1) return null;
-      return { how: "liftWrap", tag: candidates[0]!.tag, arm: candidates[0]!.arm };
+      let selected = candidates;
+      if (selected.length > 1 && src.kind === "record") {
+        const source = this.shapes.get(src.shapeId);
+        // An inferred JS union may widen its tag while retaining variants
+        // with and without a value. Prefer the unique layout whose omitted
+        // fields are explicitly undefined, rather than filling an optional
+        // unknown slot and making both variants look equally compatible.
+        const absentOnly = selected.filter(({ arm }) => {
+          if (!source || arm.kind !== "record") return false;
+          const target = this.shapes.get(arm.shapeId);
+          return target !== undefined && target.fields.every((field) => {
+            if (source.fields.some((present) => present.name === field.name)) return true;
+            return isUnitType(field.type) || field.type.kind === "union" &&
+              this.unions.get(field.type.unionId)?.arms.every(isUnitType) === true;
+          });
+        });
+        if (absentOnly.length === 1) selected = absentOnly;
+      }
+      if (selected.length !== 1) return null;
+      return { how: "liftWrap", tag: selected[0]!.tag, arm: selected[0]!.arm };
     }
     // A UNION source into a slot that is ONE of its arms (a width copy
     // whose target field narrowed — the option-table choices shape:
@@ -8158,7 +8176,7 @@ export class Lowerer {
     }
     // An OBJECT LITERAL against a checked-dynamic slot in a JS file (the
     // getSupportInfo options argument — a dyn-ABI param), or against the
-    // standard RequestInit/ErrorOptions types in TypeScript: the value's world IS the
+    // standard native option-bag types in TypeScript: the value's world IS the
     // checked-dynamic tree — build the dyn literal directly.
     if (expected?.kind === "dyn") {
       let x: ts.Expression = node;
@@ -8177,7 +8195,7 @@ export class Lowerer {
         return sym?.name === name && this.isStdlibSymbol(sym);
       });
       if (ts.isObjectLiteralExpression(x)) {
-        if (isJsSourceFile(x.getSourceFile()) || builtinOption("RequestInit") || builtinOption("ErrorOptions") ||
+        if (isJsSourceFile(x.getSourceFile()) || builtinOption("RequestInit") || builtinOption("ErrorOptions") || builtinOption("SpawnOptions") ||
             !this.mapTypeOf(this.typeOf(x))) {
           return lowerDynObjectLiteral(this, x);
         }

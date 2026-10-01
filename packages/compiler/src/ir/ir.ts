@@ -1973,16 +1973,18 @@ export const MAY_THROW_BYTES_METHODS: ReadonlySet<IrBytesIntrinsicMethod> = new 
  * capture groups (JS would splice the captured values into the result) —
  * both catchable: backends' may-throw analyses must seed on these two
  * methods like a `throw`. */
-/** `match` takes a STRING receiver with args[0] the regex (non-g/y — the
- * frontend fences literal g/y flags; a g-flagged value reaching the
- * runtime aborts like test()) and produces the PROGRAM-DEPENDENT
- * `string[] | null` union: the matched slice [whole, ...captures] wrapped
- * into the array arm, or the interned null-arm instance for no match. A
+/** `match` takes a STRING receiver with args[0] the regex and produces
+ * the PROGRAM-DEPENDENT `string[] | null` union: all whole matches for a
+ * global regex, otherwise [whole, ...captures], or null for no match. A
  * NONPARTICIPATING capture holds "" where Node's slot is undefined
  * (SEMANTICS.md divergence). Never throws. */
 export type IrRegexIntrinsicMethod =
   | "test"
   | "match"
+  /** exec uses the same string-first operands but keeps the g/y
+   * lastIndex refusal, independently of global String.match iteration. */
+  | "exec"
+  | "lastIndex"
   /** `s.matchAll(re)` — every match as its honest string[] slice (match's
    * rule), drained EAGERLY into a fresh string[][]: the lazy iterator is
    * unobservable across the lowered surface (strings are immutable; the
@@ -2661,6 +2663,9 @@ export type IrLibFn =
   | "child.disconnect"
   | "child.onMessage"
   | "child.onDisconnect"
+  | "child.onSpawn"
+  /** Rest listeners use the checked function bridge to pack event arguments. */
+  | "child.onDyn"
   | "process.connected"
   | "process.send"
   | "process.sendCb"
@@ -2695,6 +2700,7 @@ export type IrLibFn =
   | "child.kill"
   | "child.killNum"
   | "child.unref"
+  | "child.ref"
   /** The piped-output streams (stdio mode 3 — scr_child.c's stream
    * slice). child.stdout/child.stderr answer the checker's
    * `Readable | null` union (type-directed construction in the backend
@@ -4729,6 +4735,7 @@ export type IrLibFn =
   | "bytes.bufferSource"
   | "text.decodeBufferSource"
   | "text.decodeOptions"
+  | "text.decodeStream"
   | "text.decodeLegacyOptions"
   /** TextDecoder.decode for a compile-time non-UTF-8 WHATWG label. The
    * second f64 is the frontend-owned encoding id consumed by scr_bytes.c;
@@ -4851,6 +4858,9 @@ export type IrLibFn =
    * pairs like cp.execSync's), cwd ""=inherit. Same event/loop story as
    * cp.spawn. */
   | "cp.spawnOpts"
+  /** Runtime options normalized into the native spawn core; unsupported
+   * process features retain explicit refusals. (command, args, options). */
+  | "cp.spawnDynamic"
   /** Atomics.wait(int32Array, idx, expected, timeoutMs) → "not-equal"
    * when the element differs from `expected`, else a real nanosleep for
    * the timeout and "timed-out" (scr_lib.c). scriptc has no threads —
@@ -6744,7 +6754,7 @@ function scanRuntimeFeatures(mod: IrModule, stopAt?: keyof RuntimeFeatures): Run
     if (node.kind === "libCall") {
       const fn = node.fn;
       if (fn === "regexp.escape" || fn === "dyn.nativeRegexIs") features.regex = true;
-      if (fn === "text.decodeLegacy" || fn === "text.decodeLegacyOptions") features.legacyTextDecoder = true;
+      if (fn === "text.decodeLegacy" || fn === "text.decodeLegacyOptions" || fn === "text.decodeStream") features.legacyTextDecoder = true;
       if (fn.startsWith("fetch.")) features.fetch = true;
       if (PROCESS_EVENT_LIB_FNS.has(fn)) features.processEvents = true;
       if (fn.startsWith("emitter.")) features.emitter = true;
@@ -7375,10 +7385,13 @@ export function moduleLibNondeterministicSurface(mod: IrModule): string | null {
  * seed on `dynCheck` and `awaitExpr` nodes, which throw on validation
  * failure / promise rejection). */
 export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
+  "cp.spawnDynamic",
+  "child.onDyn",
   "text.decoderEncoding",
   "dyn.construct",
   "dyn.reflectApply",
   "text.decodeOptions",
+  "text.decodeStream",
   "text.decodeLegacyOptions",
   "dyn.nativeSetNew",
   "ffi.argument",

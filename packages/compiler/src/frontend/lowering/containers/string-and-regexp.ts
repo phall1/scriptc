@@ -391,54 +391,27 @@ export function lowerRegexMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     if (call.arguments.length > 1 || call.arguments.some(ts.isSpreadElement)) {
       lowerer.noLowering("RegExp.prototype.test with surplus or spread arguments", call);
     }
-    // The statefulness fence, at compile time where the flags are
-    // visible: a literal receiver (possibly parenthesized). Values that
-    // flow through variables hit the same fence at runtime.
-    let recv: ts.Expression = access.expression;
-    while (ts.isParenthesizedExpression(recv)) recv = recv.expression;
-    if (ts.isRegularExpressionLiteral(recv)) {
-      const flags = recv.text.slice(recv.text.lastIndexOf("/") + 1);
-      if (flags.includes("g") || flags.includes("y")) {
-        lowerer.unsupported("SC1121", call);
-      }
-    }
     const receiver = lowerReceiver();
     const args = [lowerRegexSubject(lowerer, call.arguments[0], loc)];
     return { kind: "regexIntrinsic", method: "test", receiver, args, type: BOOL, loc };
   }
-  // `re.exec(s)` for non-g/y regexes: spec-identical to `s.match(re)`
-  // (Symbol.match delegates to exec when lastIndex is out of play), so
-  // it lowers to the SAME match intrinsic with the operands swapped —
-  // the honest `string[] | null` slice, nonparticipating captures ""
-  // (match's documented rule). The g/y statefulness fence applies at
-  // compile time on literal receivers, exactly test()'s stance; values
-  // reaching the runtime with those flags abort there.
+  // `re.exec(s)` returns the exec-shaped string[] | null slice, with
+  // numeric lastIndex state for global/sticky regexes. Nonparticipating
+  // captures retain match's documented empty-string representation.
   if (receiverKind === "regex" && name === "exec") {
     if (call.arguments.length > 1 || call.arguments.some(ts.isSpreadElement)) return null;
-    let recv: ts.Expression = access.expression;
-    while (ts.isParenthesizedExpression(recv)) recv = recv.expression;
-    if (ts.isRegularExpressionLiteral(recv)) {
-      const flags = recv.text.slice(recv.text.lastIndexOf("/") + 1);
-      if (flags.includes("g") || flags.includes("y")) {
-        lowerer.unsupported("SC1121", call);
-      }
-    }
     const re = lowerReceiver();
     const subject = lowerRegexSubject(lowerer, call.arguments[0], loc);
     const resultT: IrType = { kind: "union", unionId: lowerer.unions.intern([arrayOf(STRING), { kind: "nullT" }]) };
     // The shared match intrinsic takes the string first; preserve exec's
     // receiver-before-subject evaluation order before swapping operands.
     const saved = lowerer.declareHiddenLocal("%execReceiver", re.type);
-    const result: IrExpr = { kind: "regexIntrinsic", method: "match", receiver: subject, args: [varRef(saved.id, re.type, loc)], type: resultT, loc };
+    const result: IrExpr = { kind: "regexIntrinsic", method: "exec", receiver: subject, args: [varRef(saved.id, re.type, loc)], type: resultT, loc };
     return { kind: "seqExpr", stmts: [{ kind: "varDecl", localId: saved.id, init: re, loc }], result, type: resultT, loc };
   }
-  // `s.match(re)` for non-g/y regexes: Node's exec-shaped result reduced
-  // to the honest slice — the `string[] | null` union holding
-  // [whole match, ...captures] or the null arm. The g-flag match returns
-  // EVERY match (a different shape) and /y is stateful — both fence at
-  // compile time on literal arguments (values reaching the runtime with
-  // those flags abort, the test() stance). `.index`/`.input` reads on
-  // the result fence per member (array-typed value); `.groups` reads
+  // `s.match(re)` returns all whole matches under /g, otherwise the
+  // exec-shaped slice [whole match, ...captures], or null. Non-global /y
+  // uses exec's lastIndex transitions. `.groups` reads
   // desugar at their access sites when the regex is statically known
   // (lowerMatchGroupsRead).
   // `s.match(re)` also claims a NULLABLE string receiver (string + unit
@@ -460,18 +433,6 @@ export function lowerRegexMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     const arg0 = call.arguments[0];
     if (!arg0 || lowerer.mapTypeOf(lowerer.typeOf(arg0))?.kind !== "regex") return null; // string-pattern match: the SC2020 fence
     if (call.arguments.length !== 1) return null;
-    let reNode: ts.Expression = arg0;
-    while (ts.isParenthesizedExpression(reNode)) reNode = reNode.expression;
-    if (ts.isRegularExpressionLiteral(reNode)) {
-      const flags = reNode.text.slice(reNode.text.lastIndexOf("/") + 1);
-      if (flags.includes("g") || flags.includes("y")) {
-        lowerer.unsupported(
-          "SC1120",
-          call,
-          "'.match()' with the 'g' or 'y' flag (an every-match array is a different shape — use replaceAll/split, or test() per position)",
-        );
-      }
-    }
     const receiver = nullableStringRecv
       ? lowerMethodReceiver(lowerer, access.expression, STRING, access.name.text)
       : lowerReceiver();

@@ -411,7 +411,10 @@ export function emitStringExpr(host: LlvmEmitterContext, e: ExprOf<"strConcat" |
           };
           host.regexInstances.set(key, re);
         }
-        return host.own({ name: host.retainValue(`@${re.sym}`, e.type), type: e.type });
+        host.declare("declare ptr @scr_regex_literal(ptr)");
+        const value = B.tmp();
+        B.line(`${value} = call ptr @scr_regex_literal(ptr @${re.sym})`);
+        return host.own({ name: value, type: e.type });
       }
       case "templateStrings": {
         // One immortal static string array per template SITE (the key);

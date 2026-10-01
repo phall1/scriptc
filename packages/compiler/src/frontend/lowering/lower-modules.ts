@@ -743,6 +743,24 @@ export function appendForkModules(
     const pendingClasses: string[] = [];
     const pendingShapes: string[] = [];
     const pendingUnions: string[] = [];
+    const boxedChild = (type: IrType, seen = new Set<string>()): boolean => {
+      switch (type.kind) {
+        case "child": return true;
+        case "array": case "set": return boxedChild(type.elem, seen);
+        case "promise": return boxedChild(type.inner, seen);
+        case "map": return boxedChild(type.key, seen) || boxedChild(type.value, seen);
+        case "func": return boxedChild(type.ret, seen);
+        case "record":
+          if (seen.has(type.shapeId)) return false;
+          seen.add(type.shapeId);
+          return lowerer.shapes.get(type.shapeId)?.fields.some((field) => boxedChild(field.type, seen)) ?? false;
+        case "union":
+          if (seen.has(type.unionId)) return false;
+          seen.add(type.unionId);
+          return lowerer.unions.get(type.unionId)?.arms.some((arm) => boxedChild(arm, seen)) ?? false;
+        default: return false;
+      }
+    };
     const visit = (node: unknown): void => {
       if (Array.isArray(node)) {
         for (const item of node) visit(item);
@@ -750,6 +768,10 @@ export function appendForkModules(
       }
       if (node === null || typeof node !== "object") return;
       const rec = node as Record<string, unknown>;
+      if (rec["kind"] === "dynFrom" && boxedChild((rec["value"] as IrExpr).type)) {
+        // A generic child can expose native stdio without importing stream.
+        visit([{ className: "%Readable" }, { className: "%Writable" }]);
+      }
       if (typeof rec["className"] === "string" && !classNames.has(rec["className"])) {
         classNames.add(rec["className"]);
         pendingClasses.push(rec["className"]);

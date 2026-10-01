@@ -1204,16 +1204,15 @@ ScrStr *scr_str_raw(ScrArr *raw, ScrArr *subs);
 /* ── regular expressions (scr_regex.c — linked ONLY when the program
  * contains a regex literal; see native-toolchain.ts) ────────────────────────────────
  * The engine is quickjs-ng's libregexp (the same bytecode interpreter the
- * dynamic island uses), compiled standalone. A ScrRegex is today ALWAYS an
- * immortal interned literal: the compiler emits one static per distinct
- * (pattern, flags) pair, exactly like string literals, and the bytecode is
- * compiled lazily on first use (cached on the struct, freed at exit).
+ * dynamic island uses), compiled standalone. Each regex literal evaluation
+ * creates a fresh refcounted instance sharing an immortal template per
+ * (pattern, flags) pair. Template bytecode compiles lazily on first use
+ * and is freed at exit; constructed regexes own their bytecode.
  * Subjects are matched as UTF-16 (converted per call from the UTF-8
  * storage), so all observable index behavior is UTF-16-exact like Node.
  *
- * Statefulness fence: /g and /y regexes carry mutable lastIndex in JS.
- * Supported only where iteration is internal (replace/replaceAll/split);
- * test() on a g/y-flagged regex aborts with a clear message.
+ * Global and sticky regexes carry numeric lastIndex. Exec/test update it
+ * after matching; String methods apply their specified state rules.
  *
  * Ownership: subjects/replacements are BORROWED; string/array results
  * return +1. replace_all without /g THROWS a catchable TypeError
@@ -1221,10 +1220,12 @@ ScrStr *scr_str_raw(ScrArr *raw, ScrArr *subs);
  * checks); every other failure mode aborts.
  */
 typedef struct ScrRegex {
-  size_t rc;      /* SIZE_MAX = immortal (every regex literal) */
+  size_t rc;      /* SIZE_MAX = immortal literal template */
   ScrStr *source; /* pattern text between the slashes */
   ScrStr *flags;  /* flags text, source order (alphabet fenced to gimsuy) */
   uint8_t *bc;    /* lazily compiled libregexp bytecode; NULL until first use */
+  double last_index;
+  struct ScrRegex *literal; /* immutable bytecode owner for literal instances */
 } ScrRegex;
 
 static inline ScrRegex *scr_regex_retain(ScrRegex *re) {
@@ -1235,6 +1236,8 @@ static inline ScrRegex *scr_regex_retain(ScrRegex *re) {
 void scr_regex_release(ScrRegex *re); /* NULL-tolerant */
 void *scr_regex_retain_v(void *re);
 void scr_regex_release_v(void *re);
+ScrRegex *scr_regex_literal(ScrRegex *literal); /* fresh state, shared cached bytecode */
+double scr_regex_last_index(ScrRegex *re);
 
 /* new RegExp(pattern, flags): a heap ScrRegex over the same engine. The
  * pattern compiles EAGERLY — an invalid pattern or flag throws Node's
@@ -1243,11 +1246,14 @@ void scr_regex_release_v(void *re);
  * spec's "(?:)" source. Borrows both; +1, NULL after a throw. */
 ScrRegex *scr_regex_new(ScrStr *pattern, ScrStr *flags);
 
-bool scr_regex_test(ScrRegex *re, ScrStr *s); /* aborts on /g or /y */
-/* s.match(re): +1 string[] of [whole, ...captures] (nonparticipating
- * captures hold "" — SEMANTICS.md), or NULL for no match. Aborts on /g
- * or /y like test(). Borrows both. */
+bool scr_regex_test(ScrRegex *re, ScrStr *s); /* exec state transitions */
+/* s.match(re): +1 string[] of whole matches under /g, otherwise
+ * [whole, ...captures] (nonparticipating captures hold ""), or NULL for
+ * no match. Non-global /y uses exec state transitions. Borrows both. */
 ScrArr *scr_regex_match(ScrStr *s, ScrRegex *re);
+/* re.exec(s), string-first ABI: match slice with global/sticky lastIndex
+ * transitions. Borrows both; +1 or NULL. */
+ScrArr *scr_regex_exec(ScrStr *s, ScrRegex *re);
 /* s.search(re): the first match's UTF-16 index, or -1 — a fresh exec from
  * position 0 (Symbol.search never touches lastIndex, so no flag fence:
  * /g is irrelevant, /y anchors at 0). Borrows both; never throws. */
@@ -2877,7 +2883,11 @@ ScrChild *scr_fork(double target, ScrArr *args, double in_mode,
 ScrChild *scr_spawn_opts(ScrStr *cmd, ScrArr *args, double in_mode,
                           double out_mode, double err_mode, double out_fd,
                           double err_fd, bool detached, bool shell, bool has_env,
-                          ScrArr *env_pairs, ScrStr *cwd);
+                         ScrArr *env_pairs, ScrStr *cwd);
+/* Runtime options use the same spawn core; validation and explicit
+ * unsupported-option refusals throw before starting a child. Borrows. */
+ScrChild *scr_spawn_dynamic(ScrStr *cmd, ScrArr *args, const ScrDyn *options);
+void scr_child_on_spawn(ScrChild *child, ScrClosure *cb); /* moves zero-argument callback */
 /* The callback slice: file + args, default options. The returned child has
  * all three stdio slots piped; stdout/stderr are captured internally and
  * the callback moves into the child registry until settlement. */
@@ -2965,9 +2975,28 @@ bool scr_child_killed(ScrChild *c);
 bool scr_child_kill(ScrChild *c, const ScrStr *signal);
 bool scr_child_kill_num(ScrChild *c, double signum);
 void scr_child_unref(ScrChild *c);
+void scr_child_ref(ScrChild *c);
 /* Installs ChildProcess's checked-dynamic handle identity bridge. Emitted
  * programs call this only when the child_process surface is present. */
 void scr_child_dyn_install(void);
+void scr_child_on_dyn(ScrChild *child, ScrStr *event, ScrDyn *listener); /* borrowed */
+/* Optional native-stream bridge. The table avoids a stream dependency
+ * in programs that only use the child-process surface. */
+typedef struct ScrChildStreamOps {
+  ScrStream *(*readable)(void);
+  ScrStream *(*writable)(ScrClosure *, ScrStreamChunkInv, ScrClosure *, ScrStreamPlainInv);
+  void *(*retain)(void *);
+  void (*release)(void *);
+  ScrTraceFn trace;
+  bool (*push)(ScrStream *, ScrBytes *);
+  bool (*end)(ScrStream *);
+  void (*write_done)(ScrStream *, ScrError *);
+  void (*final_done)(ScrStream *, ScrError *);
+} ScrChildStreamOps;
+extern const ScrChildStreamOps scr_stream_child_ops;
+ScrDyn *scr_stream_dyn_view(ScrStream *stream); /* borrowed; +1 live method/property view */
+void scr_child_dyn_streams_install(const ScrChildStreamOps *ops,
+    ScrDyn *(*readable_box)(void *), ScrDyn *(*writable_box)(void *));
 bool scr_children_reffed_pending(void);
 void scr_children_teardown(void);
 /* Node's signal-name table (scr_lib.c), shared with child.kill: the
@@ -5795,6 +5824,7 @@ double scr_text_decoder_encoding(const ScrDyn *label);
 ScrBytes *scr_bytes_buffer_source(const ScrDyn *value);
 ScrStr *scr_text_decode_buffer_source(const ScrDyn *value);
 ScrStr *scr_text_decode_options(const ScrBytes *b, bool fatal, bool ignore_bom);
+ScrStr *scr_text_decode_stream(ScrDyn *state, const ScrBytes *b, double encoding, bool fatal, bool ignore_bom, bool stream);
 ScrStr *scr_text_decode_legacy_options(const ScrBytes *b, double encoding, bool fatal, bool ignore_bom);
 
 /* TextDecoder with a compile-time WHATWG legacy-encoding id. The frontend
@@ -7289,10 +7319,8 @@ void scr_assert_iferror_bool(bool b);
  * %error-marked objects throw with the error's message, everything else
  * with the inspection. */
 void scr_assert_iferror_dyn(const ScrDyn *v);
-/* assert.match / assert.doesNotMatch (scr_regex.c): a fresh exec from
- * index 0 — Node's exec on a fresh regex; lastIndex statefulness is not
- * modeled (SEMANTICS.md's regex stance), so g/y-flagged regexes test like
- * their flag-free twins instead of aborting. */
+/* assert.match / assert.doesNotMatch (scr_regex.c): RegExp.test semantics,
+ * including global/sticky lastIndex transitions. */
 void scr_assert_match(ScrStr *s, ScrRegex *re, bool negated, ScrStr *msg, bool has_msg);
 /* assert.throws(fn, /regex/) whose thrown ERROR did not match: Node tests
  * String(actual) ("Name: message") and reports the regex-mismatch message

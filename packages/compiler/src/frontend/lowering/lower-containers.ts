@@ -20,6 +20,19 @@ import { boolLit, countedFor, numLit, strLit, varRef } from "../../ir/build.js";
 import { defaultAfterUndefined, lowerPositionArgument, lowerStaticallyUndefinedArgument, positionNumber } from "./optional-arguments.js";
 import { lowerArrayCopyWithin, lowerArrayFill } from "./array-indexed-mutation.js";
 
+/** Object() and new Object() preserve known object inputs. Primitive
+ * boxing and unproven checked-dynamic values retain their refusal. */
+export function lowerObjectConstructor(lowerer: Lowerer, args: readonly ts.Expression[], loc: SrcLoc): IrExpr | null {
+  if (args.length === 0) {
+    return { kind: "recordLit", fields: [], type: { kind: "record", shapeId: lowerer.shapes.intern([]) }, loc };
+  }
+  if (args.length !== 1 || ts.isSpreadElement(args[0]!)) return null;
+  const value = lowerer.lowerExpr(args[0]!);
+  if (value.kind === "dynObjLit" || value.kind === "dynArrLit") return value;
+  if (["record", "array", "object", "regex", "date", "bytes", "map", "set", "func", "classval"].includes(value.type.kind)) return value;
+  return null;
+}
+
 function primitivePositionType(lowerer: Lowerer, type: IrType): boolean {
   if (type.kind === "union") {
     return lowerer.unions.get(type.unionId)?.arms.every((arm) => primitivePositionType(lowerer, arm)) ?? false;

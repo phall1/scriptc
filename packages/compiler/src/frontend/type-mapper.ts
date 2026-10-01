@@ -1659,7 +1659,7 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
   ) {
     return {
       kind: "record",
-      shapeId: ctx.shapes.intern([{ name: `%${psym.name}`, type: F64 }, ...(psym.name === "TextDecoder" ? [{ name: "%fatal", type: BOOL }, { name: "%ignoreBOM", type: BOOL }] : [])], false, undefined, []),
+      shapeId: ctx.shapes.intern([{ name: `%${psym.name}`, type: F64 }, ...(psym.name === "TextDecoder" ? [{ name: "%fatal", type: BOOL }, { name: "%ignoreBOM", type: BOOL }, { name: "%state", type: DYN }] : [])], false, undefined, []),
     };
   }
   // string_decoder.StringDecoder: the decoder value is a two-field record
@@ -1739,6 +1739,9 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
   // no-op cast, error-typed listener params accept it, and the `.code`
   // read has its own lowering (errno/syscall/path stay per-member fences).
   if (isStdlibInterface("ErrnoException")) return { kind: "object", className: "%Error" };
+  // spawn consumes a presence-sensitive option bag, including optional
+  // stdio and env values. Keep it checked-dynamic for native normalization.
+  if (isStdlibInterface("SpawnOptions")) return DYN;
   // The fetch ambient slice: under --dynamic these are island handles
   // exactly like npm-declared types. Static fetch has one deliberately
   // narrower native representation: Response is an opaque checked-

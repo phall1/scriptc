@@ -68,6 +68,8 @@ export const REGEX_INTRINSIC_SIGS: Record<
   // VOID here is the process.envGet sentinel; the regexIntrinsic case
   // checks the union's arms.
   match: { receiver: STRING, argTypes: [REGEX], result: VOID },
+  exec: { receiver: STRING, argTypes: [REGEX], result: VOID },
+  lastIndex: { receiver: REGEX, argTypes: [], result: F64 },
   matchAll: { receiver: STRING, argTypes: [REGEX], result: arrayOf(arrayOf(STRING)) },
   matchAllInto: { receiver: STRING, argTypes: [REGEX, arrayOf(F64)], result: arrayOf(arrayOf(STRING)) },
   search: { receiver: STRING, argTypes: [REGEX], result: F64 },
@@ -895,6 +897,8 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "child.disconnect": { argTypes: [CHILD_T], result: VOID },
   "child.onMessage": { argTypes: [CHILD_T, null, BOOL], result: VOID },
   "child.onDisconnect": { argTypes: [CHILD_T, null, BOOL], result: VOID },
+  "child.onSpawn": { argTypes: [CHILD_T, null], result: VOID },
+  "child.onDyn": { argTypes: [CHILD_T, STRING, DYN], result: VOID },
   "process.connected": { argTypes: [], result: BOOL },
   "process.send": { argTypes: [STRING], result: BOOL },
   "process.sendCb": { argTypes: [STRING, null], result: BOOL },
@@ -909,6 +913,7 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
     argTypes: [STRING, arrayOf(STRING), F64, F64, F64, F64, F64, BOOL, BOOL, BOOL, arrayOf(STRING), STRING],
     result: CHILD_T,
   },
+  "cp.spawnDynamic": { argTypes: [STRING, arrayOf(STRING), DYN], result: CHILD_T },
   // The callback's func type is program-dependent (zero params, or the
   // `number | null` union / the %Error class) — the libCall case checks
   // the shape; the slot here only pins arity and the child receiver.
@@ -960,6 +965,7 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "child.kill": { argTypes: [CHILD_T, STRING], result: BOOL },
   "child.killNum": { argTypes: [CHILD_T, F64], result: BOOL },
   "child.unref": { argTypes: [CHILD_T], result: VOID },
+  "child.ref": { argTypes: [CHILD_T], result: VOID },
   "spawnRes.stdout": { argTypes: [SPAWNRES_T], result: STRING },
   "spawnRes.stderr": { argTypes: [SPAWNRES_T], result: STRING },
   "crypto.randomUUID": { argTypes: [], result: STRING },
@@ -1504,6 +1510,7 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "bytes.bufferSource": { argTypes: [DYN], result: BYTES_U8 },
   "text.decodeBufferSource": { argTypes: [DYN], result: STRING },
   "text.decodeOptions": { argTypes: [BYTES_U8, BOOL, BOOL], result: STRING },
+  "text.decodeStream": { argTypes: [DYN, BYTES_U8, F64, BOOL, BOOL, BOOL], result: STRING },
   "text.decodeLegacyOptions": { argTypes: [BYTES_U8, F64, BOOL, BOOL], result: STRING },
   "text.decodeLegacy": { argTypes: [BYTES_U8, F64], result: STRING },
   "text.decoderEncoding": { argTypes: [DYN], result: F64 },
@@ -3033,7 +3040,7 @@ function validateFunction(
           const want = sig.argTypes[i];
           if (want) expectType(a, want, `regexIntrinsic ${e.method} arg ${i}`);
         });
-        if (e.method === "match") {
+        if (e.method === "match" || e.method === "exec") {
           // The `string[] | null` union (program-dependent id) — checked
           // by arms, like the libCall case checks process.envGet.
           const def = e.type.kind === "union" ? unions.get(e.type.unionId) : undefined;
@@ -5311,6 +5318,10 @@ function validateFunction(
           err(`libCall cp.execFile callback stderr parameter must be string`, e.loc);
         }
       }
+    }
+    if (e.fn === "child.onSpawn") {
+      const cb = e.args[1];
+      if (!cb || cb.type.kind !== "func" || cb.type.params.length !== 0 || cb.type.ret.kind !== "void") err("child.onSpawn callback must be () => void", e.loc);
     }
     if (e.fn === "child.onExit" || e.fn === "child.onClose" || e.fn === "child.onError") {
       // The listener: a closure with no params, or exactly the

@@ -1,11 +1,6 @@
-// The regex slice fences. test() on a g/y-flagged literal is the
-// statefulness fence (lastIndex is not modeled); the d/v flags are
-// outside the slice; .groups needs a statically-known regex (named
-// capture groups themselves compile — corpus 2604); method-as-value has
-// no value form; regexes stay out of union arms (ARRAYS of regexes
-// compile — corpus 2448).
-const g = /ab/g.test("abab");
-const y = /ab/y.test("abab");
+// The d/v flags are outside the native slice; .groups needs a
+// statically-known regex. Named capture groups compile (corpus 2604).
+// Method values and regex union arms remain unsupported; arrays compile.
 const indices = /cat/d;
 const sets = /[\p{L}]/v;
 const asValue = /x/.test;

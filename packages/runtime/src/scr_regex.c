@@ -7,10 +7,10 @@
  * the always-compiled runtime source list (see native-toolchain.ts), so regex-free
  * programs keep a byte-identical link line.
  *
- * - Every ScrRegex today is an immortal interned literal (the compiler
- *   emits one static per distinct (pattern, flags) pair, like string
- *   literals). The pattern is compiled to bytecode LAZILY on first use and
- *   cached on the struct; a pattern lre_compile rejects aborts with a clear
+ * - Each literal evaluation creates a refcounted regex with fresh state.
+ *   Instances share an immortal template per (pattern, flags) pair. The
+ *   template compiles and caches bytecode LAZILY on first use; a pattern
+ *   lre_compile rejects aborts with a clear
  *   message (Node throws SyntaxError at parse time — documented divergence;
  *   rare, since tsc's parser has already syntax-checked the literal).
  * - Subjects are matched as UTF-16: lre_exec runs over a per-call
@@ -23,14 +23,14 @@
  *   temporary registers past the capture slots), unmatched groups leave
  *   NULL pointers, and zero-length matches advance by one code unit — or by
  *   a whole surrogate pair under /u (AdvanceStringIndex).
- * - Statefulness fence: /g regexes carry mutable lastIndex in JS. This
- *   slice supports /g (and /y) only where the iteration is internal —
- *   replace/replaceAll/split; test() on a g/y-flagged regex aborts with a
- *   clear message (the frontend already rejects the cases it can see).
+ * - Global and sticky exec/test use numeric lastIndex and update or reset
+ *   it after matching. String matching/replacement follows its own state
+ *   rules; matchAll, search, and split preserve the original regex state.
  */
 #include "scr_runtime.h"
 
 #include <stdio.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -176,6 +176,7 @@ static char *scr_pattern_cesu8(const ScrStr *src, size_t *plen) {
 /* The compiled bytecode, compiling (and caching) on first use. */
 static uint8_t *scr_regex_bc(ScrRegex *re) {
   if (re->bc) return re->bc;
+  if (re->literal) return re->bc = scr_regex_bc(re->literal);
   int flags = scr_lre_flags(re->flags);
   const char *pat = re->source->data;
   size_t pat_len = re->source->len;
@@ -204,21 +205,33 @@ static uint8_t *scr_regex_bc(ScrRegex *re) {
 }
 
 /* ── RC entry points ──────────────────────────────────────────────────
- * Dead paths today (every regex value is an immortal interned literal);
- * correct anyway so dynamic construction can arrive without surprises. */
+ * Literal instances borrow bytecode from their immortal templates;
+ * constructed regexes own their compiled bytecode. */
 
 void scr_regex_release(ScrRegex *re) {
   if (!re || re->rc == SIZE_MAX) return;
   if (--re->rc == 0) {
     scr_str_release(re->source);
     scr_str_release(re->flags);
-    if (re->bc) lre_realloc(lre_opaque(), re->bc, 0);
+    if (re->bc && !re->literal) lre_realloc(lre_opaque(), re->bc, 0);
     free(re);
   }
 }
 
 void *scr_regex_retain_v(void *re) { return scr_regex_retain(re); }
 void scr_regex_release_v(void *re) { scr_regex_release(re); }
+
+ScrRegex *scr_regex_literal(ScrRegex *literal) {
+  ScrRegex *re = calloc(1, sizeof *re);
+  if (!re) scr_regex_oom();
+  re->rc = 1;
+  re->source = scr_str_retain(literal->source);
+  re->flags = scr_str_retain(literal->flags);
+  re->literal = literal;
+  return re;
+}
+
+double scr_regex_last_index(ScrRegex *re) { return re->last_index; }
 
 ScrStr *scr_regex_source(ScrRegex *re) { return scr_str_retain(re->source); }
 ScrStr *scr_regex_flags(ScrRegex *re) { return scr_str_retain(re->flags); }
@@ -404,53 +417,40 @@ static int scr_advance(const uint16_t *u, int len, int i, bool unicode) {
 /* ── test ─────────────────────────────────────────────────────────────── */
 
 void scr_regex_reset_last_index(ScrRegex *re, double index) {
-  uint8_t *bc = scr_regex_bc(re);
-  if (index == 0 && !(lre_get_flags(bc) & (LRE_FLAG_GLOBAL | LRE_FLAG_STICKY))) return;
-  static const char message[] = "Stateful RegExp lastIndex assignments have no lowering";
-  scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
+  re->last_index = index;
 }
 
 bool scr_regex_test(ScrRegex *re, ScrStr *s) {
-  uint8_t *bc = scr_regex_bc(re);
-  if (lre_get_flags(bc) & (LRE_FLAG_GLOBAL | LRE_FLAG_STICKY)) {
-    /* JS test() on a g/y regex reads AND writes lastIndex — stateful
-     * iteration this slice does not model (the frontend rejects the sites
-     * it can see; values that flow through variables land here). */
-    fflush(stdout);
-    scr_trap("scriptc: test() on a regex with the 'g' or 'y' flag is not "
-             "supported (stateful lastIndex); drop the flag, or use "
-             "replace/replaceAll/split\n");
-  }
-  int len;
-  uint16_t *u = scr_to_utf16(s, &len);
-  uint8_t **capture = scr_capture_alloc(bc);
-  int rc = scr_exec(capture, bc, u, 0, len);
-  free(capture);
-  free(u);
-  return rc == 1;
+  ScrArr *result = scr_regex_exec(s, re);
+  bool matched = result != NULL;
+  scr_arr_release(result);
+  return matched;
+}
+
+static int scr_regex_start(ScrRegex *re, int len) {
+  double index = re->last_index;
+  if (isnan(index) || index <= 0) return 0;
+  if (index > len) return -1;
+  return (int)floor(index);
 }
 
 /* ── match ────────────────────────────────────────────────────────────── */
 
-/* s.match(re) for non-g/y regexes: Node's exec-shaped result reduced to
- * the honest slice — a fresh string[] of [whole match, ...captures], or
- * NULL for no match (the compiler wraps the `string[] | null` union). A
- * NONPARTICIPATING capture holds "" where Node's slot is undefined
- * (truthiness tests agree; SEMANTICS.md documents the divergence). g/y
- * regexes abort like test() — a g-flagged match returns EVERY match, a
- * different shape the frontend fences on literals. */
-ScrArr *scr_regex_match(ScrStr *s, ScrRegex *re) {
+/* re.exec(s): a fresh string[] of [whole match, ...captures], or NULL
+ * for no match (the compiler wraps the `string[] | null` union). Global
+ * and sticky regexes start at lastIndex, set it to the match end, and
+ * reset it on failure. Nonparticipating captures retain the documented
+ * empty-string representation. */
+ScrArr *scr_regex_exec(ScrStr *s, ScrRegex *re) {
   uint8_t *bc = scr_regex_bc(re);
-  if (lre_get_flags(bc) & (LRE_FLAG_GLOBAL | LRE_FLAG_STICKY)) {
-    fflush(stdout);
-    scr_trap("scriptc: match() on a regex with the 'g' or 'y' flag is not "
-             "supported (an every-match array is a different shape); drop the "
-             "flag, or use replace/replaceAll/split\n");
-  }
+  bool stateful = (lre_get_flags(bc) & (LRE_FLAG_GLOBAL | LRE_FLAG_STICKY)) != 0;
   int len;
   uint16_t *u = scr_to_utf16(s, &len);
   uint8_t **capture = scr_capture_alloc(bc);
-  int rc = scr_exec(capture, bc, u, 0, len);
+  int pos = stateful ? scr_regex_start(re, len) : 0;
+  int rc = pos < 0 ? 0 : scr_exec(capture, bc, u, pos, len);
+  if (stateful) re->last_index = rc == 1
+    ? (double)((capture[1] - (const uint8_t *)u) >> 1) : 0;
   ScrArr *out = NULL;
   if (rc == 1) {
     const uint8_t *ubase = (const uint8_t *)u;
@@ -474,12 +474,42 @@ ScrArr *scr_regex_match(ScrStr *s, ScrRegex *re) {
   return out; /* +1, or NULL (no match) */
 }
 
+/* Global Symbol.match always starts at zero and drains whole matches,
+ * ignoring capture groups. Its terminating failed exec resets lastIndex
+ * to zero, so no state escapes this internal iteration. Sticky globals
+ * stop at the first gap; empty matches advance by a Unicode code point
+ * under /u and by one UTF-16 unit otherwise. */
+ScrArr *scr_regex_match(ScrStr *s, ScrRegex *re) {
+  uint8_t *bc = scr_regex_bc(re);
+  int flags = lre_get_flags(bc);
+  if (!(flags & LRE_FLAG_GLOBAL)) return scr_regex_exec(s, re);
+  re->last_index = 0;
+  bool unicode = (flags & (LRE_FLAG_UNICODE | LRE_FLAG_UNICODE_SETS)) != 0;
+  int len;
+  uint16_t *u = scr_to_utf16(s, &len);
+  uint8_t **capture = scr_capture_alloc(bc);
+  const uint8_t *ubase = (const uint8_t *)u;
+  ScrArr *out = NULL;
+  int pos = scr_regex_start(re, len);
+  if (pos < 0) pos = len + 1;
+  while (pos <= len && scr_exec(capture, bc, u, pos, len) == 1) {
+    int start = (int)((capture[0] - ubase) >> 1);
+    int end = (int)((capture[1] - ubase) >> 1);
+    if (!out) out = scr_arr_new(SCR_ELEM_STR, 4);
+    scr_arr_push_ref(out, scr_str_from_utf16(u, start, end));
+    pos = start == end ? scr_advance(u, len, end, unicode) : end;
+  }
+  free(capture);
+  free(u);
+  return out;
+}
+
 /* ── search ───────────────────────────────────────────────────────────── */
 
 /* s.search(re): the first match's UTF-16 index, or -1 — Symbol.search's
  * fresh exec from position 0. lastIndex is neither read nor written in JS
- * (the spec saves and restores it), so no flag fence applies here, unlike
- * test/match: /g is irrelevant and /y anchors at 0 (libregexp's sticky
+ * (the spec saves and restores it): /g is irrelevant and /y anchors at 0
+ * (libregexp's sticky
  * bytecode omits the implicit forward scan) — exactly Node. */
 double scr_regex_search(ScrStr *s, ScrRegex *re) {
   uint8_t *bc = scr_regex_bc(re);
@@ -519,7 +549,8 @@ static ScrArr *scr_regex_match_all_core(ScrStr *s, ScrRegex *re, ScrArr *indices
   uint8_t **capture = scr_capture_alloc(bc);
   const uint8_t *ubase = (const uint8_t *)u;
   ScrArr *out = scr_arr_new(SCR_ELEM_ARR, 4);
-  int pos = 0;
+  int pos = scr_regex_start(re, len);
+  if (pos < 0) pos = len + 1;
   while (pos <= len) {
     if (scr_exec(capture, bc, u, pos, len) != 1) break;
     int start = (int)((capture[0] - ubase) >> 1);
@@ -653,6 +684,7 @@ static ScrStr *scr_replace_impl(ScrStr *s, ScrRegex *re, ScrStr *rep) {
   uint8_t *bc = scr_regex_bc(re);
   int re_flags = lre_get_flags(bc);
   bool global = (re_flags & LRE_FLAG_GLOBAL) != 0;
+  bool sticky = (re_flags & LRE_FLAG_STICKY) != 0;
   bool unicode = (re_flags & (LRE_FLAG_UNICODE | LRE_FLAG_UNICODE_SETS)) != 0;
   int capture_count = lre_get_capture_count(bc);
   const char *groupnames = lre_get_groupnames(bc);
@@ -662,11 +694,15 @@ static ScrStr *scr_replace_impl(ScrStr *s, ScrRegex *re, ScrStr *rep) {
   const uint8_t *ubase = (const uint8_t *)u;
   ScrJsonBuf b;
   scr_jb_init(&b);
-  int next = 0, pos = 0;
+  if (global) re->last_index = 0;
+  int next = 0, pos = sticky ? scr_regex_start(re, len) : 0;
+  if (pos < 0) pos = len + 1;
+  if (sticky && !global) re->last_index = 0;
   while (pos <= len) {
     if (scr_exec(capture, bc, u, pos, len) != 1) break;
     int start = (int)((capture[0] - ubase) >> 1);
     int end = (int)((capture[1] - ubase) >> 1);
+    if (sticky && !global) re->last_index = end;
     scr_jb_put_utf16(&b, u, next, start);
     scr_put_substitution(&b, u, len, start, end, capture, capture_count, groupnames, rep);
     next = end;
@@ -888,26 +924,10 @@ ScrStr *scr_str_to_lower(const ScrStr *s) { return scr_str_case_conv(s, 1); }
 ScrStr *scr_str_to_upper(const ScrStr *s) { return scr_str_case_conv(s, 0); }
 
 /* ── assert.match / assert.doesNotMatch ──────────────────────────────────
- * Lives here (not scr_assert.c) because it needs the matcher, and every
- * call site carries a regex value — the regex link switch is already on,
- * so assert-only binaries never pull libregexp. A fresh exec from index 0:
- * Node's exec on a fresh regex literal; lastIndex statefulness is not
- * modeled anywhere in this runtime, so g/y-flagged regexes test like
- * their flag-free twins here instead of aborting (assert.match(s, /x/g)
- * works in Node — matching that beats scr_regex_test's fence;
- * SEMANTICS.md 107 covers reused stateful regexes). */
-/* A fresh exec from index 0 (assert.match's stance: g/y-flagged regexes
- * test like their flag-free twins here — SEMANTICS.md 107 covers reused
- * stateful regexes). */
+ * Lives here because it needs the matcher. Assertion matching follows
+ * RegExp.test, including global and sticky lastIndex transitions. */
 static bool scr_assert_regex_hits(ScrRegex *re, ScrStr *s) {
-  uint8_t *bc = scr_regex_bc(re);
-  int len;
-  uint16_t *u = scr_to_utf16(s, &len);
-  uint8_t **capture = scr_capture_alloc(bc);
-  bool matched = scr_exec(capture, bc, u, 0, len) == 1;
-  free(capture);
-  free(u);
-  return matched;
+  return scr_regex_test(re, s);
 }
 
 /* The regex's own inspection — /source/ + FLAGS IN GETTER ORDER
@@ -1219,6 +1239,7 @@ static ScrDyn *scr_native_regex_get(void *ptr, const char *key, size_t len) {
   ScrRegex *re = ptr;
   if (len == 6 && memcmp(key, "source", 6) == 0) return scr_native_regex_string(scr_regex_source(re));
   if (len == 5 && memcmp(key, "flags", 5) == 0) return scr_native_regex_string(scr_regex_flags(re));
+  if (len == 9 && memcmp(key, "lastIndex", 9) == 0) return scr_dyn_new_num(re->last_index);
   static const struct { const char *name; char flag; } flags[] = {
     {"global", 'g'}, {"ignoreCase", 'i'}, {"multiline", 'm'}, {"dotAll", 's'},
     {"unicode", 'u'}, {"sticky", 'y'}, {"hasIndices", 'd'}, {"unicodeSets", 'v'},
@@ -1227,10 +1248,10 @@ static ScrDyn *scr_native_regex_get(void *ptr, const char *key, size_t len) {
     if (strlen(flags[i].name) == len && memcmp(key, flags[i].name, len) == 0)
       return scr_dyn_new_bool(memchr(re->flags->data, flags[i].flag, re->flags->len) != NULL);
   }
-  static const char *const methods[] = {"test", "exec", "toString", "compile", "lastIndex"};
+  static const char *const methods[] = {"test", "exec", "toString", "compile"};
   for (size_t i = 0; i < sizeof methods / sizeof methods[0]; i++) {
     if (strlen(methods[i]) == len && memcmp(key, methods[i], len) == 0) {
-      static const char message[] = "Native RegExp method values and lastIndex have no lowering";
+      static const char message[] = "Native RegExp method values have no lowering";
       scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
       break;
     }
@@ -1239,7 +1260,15 @@ static ScrDyn *scr_native_regex_get(void *ptr, const char *key, size_t len) {
 }
 
 static bool scr_native_regex_set(void *ptr, const char *key, size_t len, const ScrDyn *value) {
-  (void)ptr; (void)key; (void)len; (void)value;
+  if (len == 9 && memcmp(key, "lastIndex", 9) == 0) {
+    if (value->kind != SCR_DYN_NUM) {
+      static const char message[] = "Non-numeric RegExp.lastIndex values have no native lowering";
+      scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
+      return true;
+    }
+    ((ScrRegex *)ptr)->last_index = value->v.num;
+    return true;
+  }
   return false;
 }
 

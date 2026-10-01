@@ -23,18 +23,37 @@ export function emitChildProcessLibCall(host: LlvmEmitterContext, e: LibCallExpr
       B.line(`${out} = call ptr @scr_exec_file(ptr ${cmd.name}, ptr ${argv.name}, ptr ${cb.name}, ptr @${adapter})`);
       return host.own({ name: out, type: e.type });
     }
-    if (e.fn === "cp.spawn" || e.fn === "cp.spawnOpts" || e.fn === "cp.fork") {
+    if (e.fn === "cp.spawn" || e.fn === "cp.spawnOpts" || e.fn === "cp.spawnDynamic" || e.fn === "cp.fork") {
       // child_process.spawn: the child starts NOW (posix_spawnp); the
       // loop reaps it and fires its listeners. Never throws — spawn
       // failure defers to "error".
       host.usesTimers = true;
-      const sym = e.fn === "cp.spawn" ? "scr_spawn" : e.fn === "cp.fork" ? "scr_fork" : "scr_spawn_opts";
+      const sym = e.fn === "cp.spawn" ? "scr_spawn" : e.fn === "cp.fork" ? "scr_fork" : e.fn === "cp.spawnDynamic" ? "scr_spawn_dynamic" : "scr_spawn_opts";
       const args = e.args.map((a) => host.emitExpr(a));
       const argDecl = args.map((a) => (host.llType(a.type) === "i1" ? "i1 zeroext" : host.llType(a.type))).join(", ");
       host.declare(`declare ptr @${sym}(${argDecl})`);
       const t = B.tmp();
       B.line(`${t} = call ptr @${sym}(${args.map((a) => `${host.llType(a.type)} ${a.name}`).join(", ")})`);
-      return host.own({ name: t, type: e.type });
+      const out = host.own({ name: t, type: e.type });
+      if (e.fn === "cp.spawnDynamic") host.emitPendingCheck();
+      return out;
+    }
+    if (e.fn === "child.onDyn") {
+      const child = host.emitExpr(e.args[0]!);
+      const event = host.emitExpr(e.args[1]!);
+      const cb = host.emitExpr(e.args[2]!);
+      host.declare("declare void @scr_child_on_dyn(ptr, ptr, ptr)");
+      B.line(`call void @scr_child_on_dyn(ptr ${child.name}, ptr ${event.name}, ptr ${cb.name})`);
+      host.emitPendingCheck();
+      return { name: "", type: e.type };
+    }
+    if (e.fn === "child.onSpawn") {
+      const child = host.emitExpr(e.args[0]!);
+      const cb = host.emitExpr(e.args[1]!);
+      host.moveTemp(cb);
+      host.declare("declare void @scr_child_on_spawn(ptr, ptr)");
+      B.line(`call void @scr_child_on_spawn(ptr ${child.name}, ptr ${cb.name})`);
+      return { name: "", type: e.type };
     }
     if (e.fn === "child.onExit" || e.fn === "child.onClose") {
       // The callback MOVES into the child's registry; the third

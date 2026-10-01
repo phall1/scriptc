@@ -181,8 +181,8 @@ export class LlEmitter {
    * immortal (rc == SIZE_MAX) static per (union, unit tag).
    * RC entry points and the collector skip immortals. */
   private readonly unitInstances = new Map<string, string>();
-  /** Interned regex literals: "<flags>/<pattern>" → { symbol, interned
-   * source/flags literal refs } — one immortal ScrRegex per distinct
+  /** Regex literal templates: "<flags>/<pattern>" → { symbol, interned
+   * source/flags literal refs } — one immortal ScrRegex template per distinct
    * (pattern, flags) pair; the bytecode slot starts null and the runtime
    * compiles it lazily on first use. The source/flags strings intern at
    * REGISTRATION (bodies emit before the literal table flushes). */
@@ -949,6 +949,15 @@ export class LlEmitter {
     // Declared NOW — the extern block flushes before main assembles.
     if (usesEvents) this.declare(`declare void @scr_events_install()`);
     if (usesChildProcess) this.declare(`declare void @scr_child_dyn_install()`);
+    const childStreamBoxes = usesChildProcess && usesStream &&
+      this.classMeta.has("%Readable") && this.classMeta.has("%Writable")
+      ? [this.dyn.toDynHelper({ kind: "object", className: "%Readable" }),
+         this.dyn.toDynHelper({ kind: "object", className: "%Writable" })]
+      : null;
+    if (childStreamBoxes) {
+      this.declare(`@scr_stream_child_ops = external constant { ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr }`);
+      this.declare(`declare void @scr_child_dyn_streams_install(ptr, ptr, ptr)`);
+    }
     if (usesFsWatch) this.declare(`declare void @scr_watch_install()`);
     if (this.ffiHasForeignCallback) this.declare(`declare void @scr_ffi_install()`);
     if (usesStream) this.declare(`declare void @scr_stream_install()`);
@@ -1138,7 +1147,7 @@ export class LlEmitter {
       `%ScrUnion = type { ${this.sizeType}, i32, ptr, ptr, ptr, i64 }`,
       `%ScrClosure = type { ${this.sizeType}, ptr, ${this.sizeType}, ptr, i32 }`,
       `%ScrFfiTable = type { ptr, ${this.sizeType}, ${this.sizeType}, ptr, i8, ptr, ptr, ${this.sizeType}, ${this.sizeType}, ${this.sizeType}, ptr, ptr }`,
-      `%ScrRegex = type { ${this.sizeType}, ptr, ptr, ptr }`,
+      `%ScrRegex = type { ${this.sizeType}, ptr, ptr, ptr, double, ptr }`,
       // ScrArr mirrors scr_runtime.h field-for-field. Live dynamic stream
       // commits swap its mutable dense, sparse, presence, and property
       // storage while preserving the target object's identity.
@@ -1250,7 +1259,7 @@ export class LlEmitter {
       // the interned source/flags strings. The bc slot starts null (lazy
       // compile, cached by the runtime) — a mutable global, not constant.
       out.push(
-        `@${re.sym} = internal ${tl}global %ScrRegex { ${this.sizeType} -1, ptr ${re.src}, ptr ${re.fl}, ptr null } ; ${key.replace(/\n/g, "\\n")}`,
+        `@${re.sym} = internal ${tl}global %ScrRegex { ${this.sizeType} -1, ptr ${re.src}, ptr ${re.fl}, ptr null, double 0.0, ptr null } ; ${key.replace(/\n/g, "\\n")}`,
       );
     }
     if (this.regexInstances.size > 0) out.push(``);
@@ -1415,6 +1424,7 @@ export class LlEmitter {
       // this line is emitted (native-toolchain.ts gates on the same predicate).
       ...(usesEvents ? [`  call void @scr_events_install()`] : []),
       ...(usesChildProcess ? [`  call void @scr_child_dyn_install()`] : []),
+      ...(childStreamBoxes ? [`  call void @scr_child_dyn_streams_install(ptr @scr_stream_child_ops, ptr @${childStreamBoxes[0]}, ptr @${childStreamBoxes[1]})`] : []),
       // fs.watch programs fill the loop's watch hooks the same way —
       // scr_watch.c links only when this line is emitted.
       ...(usesFsWatch ? [`  call void @scr_watch_install()`] : []),

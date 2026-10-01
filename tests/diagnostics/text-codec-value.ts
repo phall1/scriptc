@@ -6,7 +6,6 @@ function encodeCaptured(s: string): Uint8Array {
 }
 
 const decoder = new TextDecoder();
-decoder.decode(new Uint8Array([0xc3]), { stream: true });
 new TextDecoder("utf-8", { fatal: true });
 encoder.encodeInto("hello", new Uint8Array(10));
 const forged = JSON.parse("{}") as TextDecoder;

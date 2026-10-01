@@ -1,9 +1,6 @@
 /* Regex behavior that is scriptc-only by nature — deliberately NOT in the
  * differential corpus (tests/corpus/1200.. holds everything Node-comparable):
  *
- * - The statefulness fence at runtime: test() on a g/y regex that flowed
- *   through a variable (the frontend only sees literal receivers) must
- *   abort with the fence message, never silently model lastIndex.
  * - The two size/stability pins: a regex-free program must not reference
  *   the regex runtime at all (byte-identical link line — its C names no
  *   ScrRegex symbol), and a regex-USING static binary pays libregexp
@@ -57,31 +54,6 @@ async function build(
 }
 
 describe("regex (scriptc-only behavior)", () => {
-  test("test() on a g-flagged regex reaching runtime aborts with the fence message", async () => {
-    // The g flag is invisible to the frontend here: the regex flows through
-    // a function parameter, so the RUNTIME fence must catch it.
-    const r = await build(
-      "g-test-runtime",
-      `function check(re: RegExp, s: string): boolean {
-  return re.test(s);
-}
-console.log("before");
-console.log(check(/a/g, "abc"));
-`,
-    );
-    const err = await execFileAsync(r.binaryPath, []).then(
-      () => {
-        throw new Error("expected the g-flagged test() to abort");
-      },
-      (e: Error & { signal?: string; stdout?: string; stderr?: string }) => e,
-    );
-    expect(err.signal).toBe("SIGABRT");
-    expect(err.stdout).toContain("before");
-    expect(err.stderr).toContain(
-      "test() on a regex with the 'g' or 'y' flag is not supported",
-    );
-  });
-
   test("a pattern the engine rejects aborts at first use with a SyntaxError message", async () => {
     // tsc's parser (and V8) accept 300 capture groups; libregexp caps
     // captures at 255, so the engine rejects the pattern at its LAZY

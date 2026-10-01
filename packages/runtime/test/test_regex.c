@@ -8,9 +8,6 @@
  * without /g), capture-group splitting, the CESU-8 pattern re-encoding
  * for non-/u astral patterns, and the UTF-16 buffer round-trip.
  *
- * Special mode: --crash-global-test calls test() on a /g regex and must
- * abort() after printing the statefulness fence message (checked by
- * regex.test.ts, like test_string.c's --crash-repeat).
  */
 #include "../src/scr_runtime.h"
 
@@ -272,12 +269,13 @@ static void test_split(void) {
 }
 
 int main(int argc, char **argv) {
-  if (argc > 1 && strcmp(argv[1], "--crash-global-test") == 0) {
-    ScrStr *s = S("aaa");
-    scr_regex_test(&re_a_g, s); /* must abort with the fence message */
-    fprintf(stderr, "UNREACHABLE: g-flagged test returned\n");
-    return 0;
-  }
+  (void)argc;
+  (void)argv;
+  ScrStr *subject = S("aaa");
+  check(scr_regex_test(&re_a_g, subject) && re_a_g.last_index == 1, "global test advances lastIndex");
+  re_a_g.last_index = 3;
+  check(!scr_regex_test(&re_a_g, subject) && re_a_g.last_index == 0, "failed global test resets lastIndex");
+  scr_str_release(subject);
 
   test_test();
   test_source_flags();

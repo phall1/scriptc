@@ -28,6 +28,8 @@ static void scr_ipc_release(ScrIpc *ipc);
 static void scr_ipc_service(void);
 static bool scr_ipc_pending(void);
 static bool scr_ipc_close_ready(const ScrIpc *ipc);
+static void scr_child_fire_spawn(ScrChild *c);
+static void scr_child_drop_spawn_listeners(ScrChild *c);
 
 static ScrArr *scr_fork_argv(double target, uintptr_t read_handle,
                              uintptr_t write_handle, ScrArr *args) {
@@ -1273,6 +1275,9 @@ struct ScrChild {
   ScrChildState state;
   bool settled;
   bool close_done;
+  bool spawn_done;
+  ScrClosure **spawn_cbs;
+  size_t n_spawn, cap_spawn;
   bool has_code;
   bool killed;
   bool reffed;
@@ -1294,6 +1299,7 @@ struct ScrChild {
   ScrChildStream *out_stream;
   ScrChildStream *err_stream;
   ScrChildWriter *in_stream;
+  ScrDyn *out_dyn, *err_dyn, *in_dyn;
   ScrIpc *ipc;
   struct ScrChild *next; /* the pending registry */
 };
@@ -1308,6 +1314,7 @@ static size_t scr_children_reffed_n = 0;
 static size_t scr_children_unwatched = 0;
 
 static void scr_child_drop_terminal_listeners(ScrChild *c) {
+  scr_child_drop_spawn_listeners(c);
   for (size_t i = 0; i < c->n_exit; i++) scr_closure_release(c->exit_cbs[i].cb);
   for (size_t i = 0; i < c->n_err; i++) scr_closure_release(c->err_cbs[i].cb);
   free(c->exit_cbs);
@@ -1343,6 +1350,9 @@ void scr_child_release(ScrChild *c) {
     scr_child_drop_listeners(c); /* only reachable pre-settle via leaks */
     scr_str_release(c->err_msg);
     scr_str_release(c->exec_display);
+    scr_dyn_release(c->out_dyn);
+    scr_dyn_release(c->err_dyn);
+    scr_dyn_release(c->in_dyn);
     scr_child_stream_release(c->out_stream);
     scr_child_stream_release(c->err_stream);
     scr_child_writer_release(c->in_stream);
@@ -2466,7 +2476,8 @@ bool scr_children_pending(void) {
 
 bool scr_children_failed_pending(void) {
   for (ScrChild *c = scr_children; c; c = c->next) {
-    if (c->state == SCR_CHILD_SPAWN_FAILED && !c->settled) return true;
+    if ((c->state == SCR_CHILD_SPAWN_FAILED && !c->settled) ||
+        (c->state == SCR_CHILD_RUNNING && !c->spawn_done)) return true;
   }
   return false;
 }
@@ -2592,6 +2603,10 @@ static void scr_child_settle(ScrChild *c) {
  * ordering), then every running child answers WaitForSingleObject(h, 0)
  * — the WNOHANG analogue; spawn failures settle on their first pass. */
 void scr_children_poll(void) {
+  for (ScrChild *c = scr_children; c; c = c->next) {
+    if (c->state == SCR_CHILD_RUNNING && !c->spawn_done) scr_child_fire_spawn(c);
+    if (scr_exc_pending()) return;
+  }
   scr_ipc_service();
   if (scr_exc_pending()) return;
   scr_child_writers_service();
@@ -3541,6 +3556,9 @@ struct ScrChild {
   ScrChildState state;
   bool settled;   /* terminal event delivered; listeners released */
   bool close_done;
+  bool spawn_done;
+  ScrClosure **spawn_cbs;
+  size_t n_spawn, cap_spawn;
   bool unwatched; /* no kqueue NOTE_EXIT armed: the loop must poll for it */
   bool has_code;
   bool killed;    /* a kill() successfully sent a signal (Node's flag) */
@@ -3565,6 +3583,7 @@ struct ScrChild {
   ScrChildStream *out_stream;
   ScrChildStream *err_stream;
   ScrChildWriter *in_stream;
+  ScrDyn *out_dyn, *err_dyn, *in_dyn;
   ScrIpc *ipc;
   struct ScrChild *next; /* the pending registry */
 };
@@ -3716,6 +3735,7 @@ bool scr_children_wait(double max_wait_ms) {
 }
 
 static void scr_child_drop_terminal_listeners(ScrChild *c) {
+  scr_child_drop_spawn_listeners(c);
   for (size_t i = 0; i < c->n_exit; i++) scr_closure_release(c->exit_cbs[i].cb);
   for (size_t i = 0; i < c->n_err; i++) scr_closure_release(c->err_cbs[i].cb);
   free(c->exit_cbs);
@@ -3751,6 +3771,9 @@ void scr_child_release(ScrChild *c) {
     scr_child_drop_listeners(c); /* only reachable pre-settle via leaks */
     scr_str_release(c->err_msg);
     scr_str_release(c->exec_display);
+    scr_dyn_release(c->out_dyn);
+    scr_dyn_release(c->err_dyn);
+    scr_dyn_release(c->in_dyn);
     scr_child_stream_release(c->out_stream);
     scr_child_stream_release(c->err_stream);
     scr_child_writer_release(c->in_stream);
@@ -5080,7 +5103,8 @@ bool scr_children_pending(void) {
  * the loop's only-unref'd-children exit gate must not skip it. */
 bool scr_children_failed_pending(void) {
   for (ScrChild *c = scr_children; c; c = c->next) {
-    if (c->state == SCR_CHILD_SPAWN_FAILED && !c->settled) return true;
+    if ((c->state == SCR_CHILD_SPAWN_FAILED && !c->settled) ||
+        (c->state == SCR_CHILD_RUNNING && !c->spawn_done)) return true;
   }
   return false;
 }
@@ -5200,6 +5224,10 @@ static void scr_child_settle(ScrChild *c) {
  * callbacks — a throw stops the pass and leaves the exception pending
  * for the loop. */
 void scr_children_poll(void) {
+  for (ScrChild *c = scr_children; c; c = c->next) {
+    if (c->state == SCR_CHILD_RUNNING && !c->spawn_done) scr_child_fire_spawn(c);
+    if (scr_exc_pending()) return;
+  }
   scr_ipc_service();
   if (scr_exc_pending()) return;
   scr_child_writers_service();
@@ -5251,6 +5279,224 @@ void scr_children_poll(void) {
 }
 
 #endif /* !_WIN32 */
+
+static void scr_child_drop_spawn_listeners(ScrChild *c) {
+  for (size_t i = 0; i < c->n_spawn; i++) scr_closure_release(c->spawn_cbs[i]);
+  free(c->spawn_cbs);
+  c->spawn_cbs = NULL;
+  c->n_spawn = c->cap_spawn = 0;
+}
+
+void scr_child_ref(ScrChild *c) {
+  if (!c->settled && !c->reffed) {
+    c->reffed = true;
+    scr_children_reffed_n++;
+  }
+}
+
+void scr_child_on_spawn(ScrChild *c, ScrClosure *cb) {
+  if (c->spawn_done || c->settled) { scr_closure_release(cb); return; }
+  if (c->n_spawn == c->cap_spawn) {
+    c->cap_spawn = c->cap_spawn ? c->cap_spawn * 2 : 2;
+    ScrClosure **grown = realloc(c->spawn_cbs, c->cap_spawn * sizeof *grown);
+    if (!grown) scr_trap("scriptc: out of memory\n");
+    c->spawn_cbs = grown;
+  }
+  c->spawn_cbs[c->n_spawn++] = cb;
+}
+
+/* Success is observable on the next loop pass, before any data or exit
+ * event. Detaching the snapshot keeps listeners registered by a callback
+ * from participating in an event that has already started. */
+static void scr_child_fire_spawn(ScrChild *c) {
+  c->spawn_done = true;
+  ScrClosure **callbacks = c->spawn_cbs;
+  size_t count = c->n_spawn;
+  c->spawn_cbs = NULL;
+  c->n_spawn = c->cap_spawn = 0;
+  for (size_t i = 0; i < count; i++) {
+    if (!scr_exc_pending()) ((void (*)(ScrClosure *))callbacks[i]->fn)(callbacks[i]);
+    scr_closure_release(callbacks[i]);
+  }
+  free(callbacks);
+}
+
+/* Options produced by JavaScript helpers use the same native spawn core
+ * as inline options. Materialize typed views only for normalization;
+ * descriptor reads still execute getters and propagate their exceptions. */
+static ScrDyn *scr_spawn_option(const ScrDyn *options, const char *name) {
+  if (options->kind == SCR_DYN_TYPED_REF) {
+    ScrDyn *view = scr_dyn_typed_ref_materialize(options);
+    if (!view) return NULL;
+    ScrDyn *value = scr_spawn_option(view, name);
+    scr_dyn_release(view);
+    return value;
+  }
+  return scr_dyn_obj_read(options, name, strlen(name));
+}
+
+static void scr_spawn_refuse(const char *feature) {
+  ScrJsonBuf message;
+  scr_jb_init(&message);
+  scr_jb_puts(&message, "spawn with ");
+  scr_jb_puts(&message, feature);
+  scr_jb_puts(&message, " has no native lowering");
+  ScrStr *text = scr_jb_finish(&message);
+  scr_throw_error_msg_code(SCR_ERR_ERROR, text->data, text->len, "SC2020");
+  scr_str_release(text);
+}
+
+static bool scr_spawn_stdio_mode(const ScrDyn *value, int slot,
+                                double *mode, double *fd) {
+  if (value->kind == SCR_DYN_UNDEF || value->kind == SCR_DYN_NULL) {
+    *mode = 3;
+    return true;
+  }
+  if (value->kind == SCR_DYN_STR) {
+    const ScrStr *s = value->v.str;
+    if (s->len == 4 && !memcmp(s->data, "pipe", 4)) { *mode = 3; return true; }
+    if (s->len == 6 && !memcmp(s->data, "ignore", 6)) { *mode = 0; return true; }
+    if (s->len == 7 && !memcmp(s->data, "inherit", 7)) { *mode = 1; return true; }
+  }
+  if (slot > 0 && value->kind == SCR_DYN_NUM && isfinite(value->v.num) &&
+      value->v.num >= 0 && value->v.num <= 2147483647 && floor(value->v.num) == value->v.num) {
+    *mode = 2;
+    *fd = value->v.num;
+    return true;
+  }
+  scr_spawn_refuse("this stdio slot");
+  return false;
+}
+
+ScrChild *scr_spawn_dynamic(ScrStr *cmd, ScrArr *args, const ScrDyn *options) {
+  ScrDyn *view = options->kind == SCR_DYN_TYPED_REF
+    ? scr_dyn_typed_ref_materialize(options) : scr_dyn_retain((ScrDyn *)options);
+  ScrDyn *stdio = NULL, *value = NULL, *env = NULL, *keys = NULL;
+  ScrArr *pairs = NULL;
+  ScrStr *cwd = NULL;
+  ScrChild *child = NULL;
+  bool detached = false, shell = false, has_env = false;
+  double modes[3] = {3, 3, 3}, fds[3] = {0, 0, 0};
+  if (!view) goto done;
+  if (view->kind != SCR_DYN_UNDEF &&
+      (view->kind == SCR_DYN_NULL || !scr_dyn_is_object(view))) {
+    scr_dyn_arg_type_fail("options", "of type object", view);
+    goto done;
+  }
+  if (view->kind == SCR_DYN_UNDEF) {
+    scr_dyn_release(view);
+    view = scr_dyn_new_obj();
+  }
+
+  /* Retain explicit boundaries for native process features that the
+   * inline lowering does not implement either. Undefined is an omission. */
+  static const char *const unsupported[] = {
+    "uid", "gid", "argv0", "signal", "timeout", "killSignal",
+  };
+  for (size_t i = 0; i < sizeof unsupported / sizeof unsupported[0]; i++) {
+    value = scr_spawn_option(view, unsupported[i]);
+    if (!value || scr_exc_pending()) goto done;
+    if (value->kind != SCR_DYN_UNDEF) {
+      scr_spawn_refuse(unsupported[i]);
+      goto done;
+    }
+    scr_dyn_release(value); value = NULL;
+  }
+  value = scr_spawn_option(view, "windowsVerbatimArguments");
+  if (!value || scr_exc_pending()) goto done;
+  if (scr_dyn_truthy(value)) { scr_spawn_refuse("windowsVerbatimArguments"); goto done; }
+  scr_dyn_release(value); value = NULL;
+
+  cwd = scr_str_new("", 0);
+  value = scr_spawn_option(view, "cwd");
+  if (!value || scr_exc_pending()) goto done;
+  if (value->kind != SCR_DYN_UNDEF && value->kind != SCR_DYN_NULL) {
+    if (value->kind != SCR_DYN_STR) {
+      scr_dyn_prop_type_fail("options.cwd", "of type string or an instance of Buffer or URL", value);
+      goto done;
+    }
+    scr_str_release(cwd); cwd = scr_str_retain(value->v.str);
+  }
+  scr_dyn_release(value); value = NULL;
+  static const char *const booleans[] = {"detached", "shell", "windowsHide"};
+  for (size_t i = 0; i < sizeof booleans / sizeof booleans[0]; i++) {
+    value = scr_spawn_option(view, booleans[i]);
+    if (!value || scr_exc_pending()) goto done;
+    if (value->kind != SCR_DYN_UNDEF) {
+      if (i == 1 && value->kind == SCR_DYN_STR) {
+        scr_spawn_refuse("a custom shell executable");
+        goto done;
+      }
+      if (value->kind != SCR_DYN_BOOL) {
+        char name[40]; snprintf(name, sizeof name, "options.%s", booleans[i]);
+        scr_dyn_prop_type_fail(name, i == 1 ? "of type boolean or string" : "of type boolean", value);
+        goto done;
+      }
+      if (i == 0) detached = value->v.b;
+      else if (i == 1) shell = value->v.b;
+    }
+    scr_dyn_release(value); value = NULL;
+  }
+  if (shell && scr_arr_len(args) != 0) {
+    scr_spawn_refuse("shell enabled and separate arguments");
+    goto done;
+  }
+  stdio = scr_spawn_option(view, "stdio");
+  if (!stdio || scr_exc_pending()) goto done;
+  if (stdio->kind == SCR_DYN_TYPED_REF) {
+    ScrDyn *expanded = scr_dyn_typed_ref_materialize(stdio);
+    scr_dyn_release(stdio); stdio = expanded;
+    if (!stdio) goto done;
+  }
+  if (stdio->kind == SCR_DYN_ARR) {
+    if (stdio->v.arr.len > 3) { scr_spawn_refuse("additional stdio descriptors"); goto done; }
+    for (int i = 0; i < 3; i++) {
+      value = scr_dyn_arr_at(stdio, i);
+      if (!scr_spawn_stdio_mode(value, i, &modes[i], &fds[i])) goto done;
+      scr_dyn_release(value); value = NULL;
+    }
+  } else if (stdio->kind == SCR_DYN_STR || stdio->kind == SCR_DYN_UNDEF || stdio->kind == SCR_DYN_NULL) {
+    if (!scr_spawn_stdio_mode(stdio, 0, &modes[0], &fds[0])) goto done;
+    modes[1] = modes[2] = modes[0];
+  } else { scr_spawn_refuse("this stdio option"); goto done; }
+
+  pairs = scr_arr_new(SCR_ELEM_STR, 8);
+  env = scr_spawn_option(view, "env");
+  if (!env || scr_exc_pending()) goto done;
+  if (env->kind == SCR_DYN_TYPED_REF) {
+    ScrDyn *expanded = scr_dyn_typed_ref_materialize(env);
+    scr_dyn_release(env); env = expanded;
+    if (!env) goto done;
+  }
+  if (env->kind != SCR_DYN_UNDEF && env->kind != SCR_DYN_NULL) {
+    has_env = true;
+    keys = scr_dyn_for_in_keys(env);
+    if (!keys || scr_exc_pending()) goto done;
+    for (size_t i = 0; i < keys->v.arr.len; i++) {
+      ScrStr *key = keys->v.arr.items[i]->v.str;
+      value = scr_spawn_option(env, key->data);
+      if (!value || scr_exc_pending()) goto done;
+      if (value->kind != SCR_DYN_UNDEF) {
+        ScrStr *text = scr_dyn_string_coerce_js(value);
+        if (!text) goto done;
+        scr_arr_push_ref(pairs, scr_str_retain(key));
+        scr_arr_push_ref(pairs, text);
+      }
+      scr_dyn_release(value); value = NULL;
+    }
+  }
+  child = scr_spawn_opts(cmd, args, modes[0], modes[1], modes[2],
+    fds[1], fds[2], detached, shell, has_env, pairs, cwd);
+done:
+  scr_dyn_release(view);
+  scr_dyn_release(stdio);
+  scr_dyn_release(value);
+  scr_dyn_release(env);
+  scr_dyn_release(keys);
+  scr_arr_release(pairs);
+  scr_str_release(cwd);
+  return child;
+}
 
 /* ── fork JSON IPC (shared by Windows and POSIX) ────────────────────── */
 
@@ -5744,30 +5990,300 @@ void scr_process_ipc_on_disconnect(ScrClosure *cb, bool once) {
   scr_ipc_add_disconnect(scr_process_ipc, cb, once);
 }
 
-/* ── checked-dynamic ChildProcess identity bridge ────────────────────
- * Typed code normally checks the box back to ChildProcess before member
- * access, so this table's essential contract is retain/release identity.
- * The three modeled properties also remain useful while a JavaScript
- * package carries the handle through an inferred checked-dynamic slot.
- * Method calls stay loud until their callback signatures have dedicated
- * dyn adapters; they never silently manufacture a different child. */
+static SCR_TL const ScrChildStreamOps *scr_child_stream_ops;
+static SCR_TL ScrDyn *(*scr_child_readable_box)(void *);
+static SCR_TL ScrDyn *(*scr_child_writable_box)(void *);
+
+void scr_child_dyn_streams_install(const ScrChildStreamOps *ops,
+    ScrDyn *(*readable_box)(void *), ScrDyn *(*writable_box)(void *)) {
+  scr_child_stream_ops = ops;
+  scr_child_readable_box = readable_box;
+  scr_child_writable_box = writable_box;
+}
+
+static ScrClosure *scr_child_bridge_callback(void *stream, void *fire) {
+  ScrClosure *cb = scr_closure_new(fire, 1);
+  cb->caps[0] = scr_box_new_obj(scr_child_stream_ops->retain,
+      scr_child_stream_ops->release, scr_child_stream_ops->trace);
+  scr_box_set_ref(cb->caps[0], scr_child_stream_ops->retain(stream));
+  return cb;
+}
+static void scr_child_bridge_data(ScrClosure *cb, ScrBytes *chunk) {
+  ScrStream *stream = scr_box_get_ref(cb->caps[0]);
+  scr_child_stream_ops->push(stream, chunk);
+  scr_child_stream_ops->release(stream);
+}
+static void scr_child_bridge_end(ScrClosure *cb) {
+  ScrStream *stream = scr_box_get_ref(cb->caps[0]);
+  scr_child_stream_ops->end(stream);
+  scr_child_stream_ops->release(stream);
+}
+static ScrDyn *scr_child_bridge_readable(ScrChildStream *reader, ScrDyn **cached) {
+  if (!reader) return scr_dyn_new_null();
+  if (!scr_child_stream_ops) {
+    static const char message[] = "ChildProcess standard streams require the native stream surface";
+    scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
+    return NULL;
+  }
+  if (!*cached) {
+    ScrStream *stream = scr_child_stream_ops->readable();
+    scr_child_stream_on_data(reader, scr_child_bridge_callback(stream, (void *)scr_child_bridge_data),
+        scr_child_bridge_data, false);
+    scr_child_stream_on_end(reader, scr_child_bridge_callback(stream, (void *)scr_child_bridge_end), false);
+    *cached = scr_child_readable_box(stream);
+    scr_child_stream_ops->release(stream);
+  }
+  return scr_dyn_retain(*cached);
+}
+static void scr_child_bridge_write_error(ScrClosure *, ScrStr *);
+static void scr_child_bridge_final_error(ScrClosure *, ScrStr *);
+static void scr_child_bridge_write_drained(ScrClosure *);
+static void scr_child_bridge_final_finished(ScrClosure *);
+
+/* Each pending native stream operation owns its callback until the pipe
+ * actually drains or closes. Remove the alternate completion listener
+ * before finishing the operation, which may synchronously start another. */
+static void scr_child_bridge_remove_error(ScrChildWriter *writer, ScrChildErrFn fn) {
+  for (size_t i = writer->n_write_err; i > 0; i--) {
+    if (writer->err_ls[i - 1].fn != fn) continue;
+    scr_closure_release(writer->err_ls[i - 1].cb);
+    memmove(writer->err_ls + i - 1, writer->err_ls + i,
+        (writer->n_write_err - i) * sizeof *writer->err_ls);
+    writer->n_write_err--;
+  }
+}
+static void scr_child_bridge_remove_zero(ScrChildStreamEndL *listeners, size_t *count, void *fn) {
+  for (size_t i = *count; i > 0; i--) {
+    if (listeners[i - 1].cb->fn != fn) continue;
+    scr_closure_release(listeners[i - 1].cb);
+    memmove(listeners + i - 1, listeners + i, (*count - i) * sizeof *listeners);
+    (*count)--;
+  }
+}
+static ScrClosure *scr_child_bridge_operation(ScrStream *stream, ScrChildWriter *writer, void *fn) {
+  ScrClosure *cb = scr_closure_new(fn, 2);
+  cb->caps[0] = scr_box_new_obj(scr_child_stream_ops->retain,
+      scr_child_stream_ops->release, scr_child_stream_ops->trace);
+  cb->caps[1] = scr_box_new_obj(scr_child_writer_retain_v, scr_child_writer_release_v, NULL);
+  scr_box_set_ref(cb->caps[0], scr_child_stream_ops->retain(stream));
+  scr_box_set_ref(cb->caps[1], scr_child_writer_retain(writer));
+  return cb;
+}
+static void scr_child_bridge_write_drained(ScrClosure *cb) {
+  ScrStream *stream = scr_box_get_ref(cb->caps[0]);
+  ScrChildWriter *writer = scr_box_get_ref(cb->caps[1]);
+  scr_child_bridge_remove_error(writer, scr_child_bridge_write_error);
+  scr_child_stream_ops->write_done(stream, NULL);
+  scr_child_writer_release(writer);
+  scr_child_stream_ops->release(stream);
+}
+static void scr_child_bridge_final_finished(ScrClosure *cb) {
+  ScrStream *stream = scr_box_get_ref(cb->caps[0]);
+  ScrChildWriter *writer = scr_box_get_ref(cb->caps[1]);
+  scr_child_bridge_remove_error(writer, scr_child_bridge_final_error);
+  scr_child_stream_ops->final_done(stream, NULL);
+  scr_child_writer_release(writer);
+  scr_child_stream_ops->release(stream);
+}
+static void scr_child_bridge_operation_error(ScrClosure *cb, ScrStr *message, bool final) {
+  ScrStream *stream = scr_box_get_ref(cb->caps[0]);
+  ScrChildWriter *writer = scr_box_get_ref(cb->caps[1]);
+  if (final) scr_child_bridge_remove_zero(writer->finish_ls, &writer->n_finish, (void *)scr_child_bridge_final_finished);
+  else scr_child_bridge_remove_zero(writer->drain_ls, &writer->n_drain, (void *)scr_child_bridge_write_drained);
+  ScrError *error = scr_error_new(SCR_ERR_ERROR, message);
+  if (writer->err_code) scr_error_set_code(error, writer->err_code);
+  if (final) scr_child_stream_ops->final_done(stream, error);
+  else scr_child_stream_ops->write_done(stream, error);
+  scr_child_writer_release(writer);
+  scr_child_stream_ops->release(stream);
+}
+static void scr_child_bridge_write_error(ScrClosure *cb, ScrStr *message) {
+  scr_child_bridge_operation_error(cb, message, false);
+}
+static void scr_child_bridge_final_error(ScrClosure *cb, ScrStr *message) {
+  scr_child_bridge_operation_error(cb, message, true);
+}
+static void scr_child_bridge_write(ScrClosure *cb, ScrStream *stream, ScrBytes *chunk) {
+  ScrChildWriter *writer = scr_box_get_ref(cb->caps[0]);
+  scr_child_writer_write_bytes(writer, chunk);
+  bool pending = scr_child_writer_queued(writer) > 0;
+#ifdef _WIN32
+  pending = pending || writer->write_pending;
+#endif
+  if (pending || writer->error_pending) {
+    scr_child_writer_on_error(writer,
+        scr_child_bridge_operation(stream, writer, (void *)scr_child_bridge_write_error),
+        scr_child_bridge_write_error, true);
+    if (!writer->error_pending) {
+      writer->need_drain = true;
+      scr_child_writer_on_drain(writer,
+          scr_child_bridge_operation(stream, writer, (void *)scr_child_bridge_write_drained), true);
+    }
+  } else scr_child_stream_ops->write_done(stream, NULL);
+  scr_child_writer_release(writer);
+}
+static void scr_child_bridge_final(ScrClosure *cb, ScrStream *stream) {
+  ScrChildWriter *writer = scr_box_get_ref(cb->caps[0]);
+  scr_child_writer_on_error(writer,
+      scr_child_bridge_operation(stream, writer, (void *)scr_child_bridge_final_error),
+      scr_child_bridge_final_error, true);
+  scr_child_writer_on_finish(writer,
+      scr_child_bridge_operation(stream, writer, (void *)scr_child_bridge_final_finished), true);
+  scr_child_writer_end(writer);
+  scr_child_writer_release(writer);
+}
+static ScrClosure *scr_child_writer_bridge_callback(ScrChildWriter *writer, void *fire) {
+  ScrClosure *cb = scr_closure_new(fire, 1);
+  cb->caps[0] = scr_box_new_obj(scr_child_writer_retain_v, scr_child_writer_release_v, NULL);
+  scr_box_set_ref(cb->caps[0], scr_child_writer_retain(writer));
+  return cb;
+}
+static ScrDyn *scr_child_bridge_writable(ScrChildWriter *writer, ScrDyn **cached) {
+  if (!writer) return scr_dyn_new_null();
+  if (!scr_child_stream_ops) {
+    static const char message[] = "ChildProcess standard streams require the native stream surface";
+    scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
+    return NULL;
+  }
+  if (!*cached) {
+    ScrStream *stream = scr_child_stream_ops->writable(
+        scr_child_writer_bridge_callback(writer, (void *)scr_child_bridge_write), scr_child_bridge_write,
+        scr_child_writer_bridge_callback(writer, (void *)scr_child_bridge_final), scr_child_bridge_final);
+    *cached = scr_child_writable_box(stream);
+    scr_child_stream_ops->release(stream);
+  }
+  return scr_dyn_retain(*cached);
+}
+
+/* ── checked-dynamic ChildProcess dispatch ──────────────────────────── */
+static void scr_child_dyn_fire(ScrClosure *cb, ScrDyn *const *args, size_t argc) {
+  ScrDyn *fn = scr_box_get_ref(cb->caps[0]);
+  ScrDyn *self = scr_box_get_ref(cb->caps[1]);
+  scr_dyn_this_push_dyn(self);
+  ScrDyn *result = scr_dyn_call(fn, args, argc, "child listener");
+  scr_dyn_this_pop();
+  scr_dyn_release(result);
+  scr_dyn_release(self);
+  scr_dyn_release(fn);
+}
+
+static void scr_child_dyn_spawn(ScrClosure *cb) { scr_child_dyn_fire(cb, NULL, 0); }
+static void scr_child_dyn_exit(ScrClosure *cb, bool has_code, double code, const char *signal) {
+  ScrDyn *args[2] = { has_code ? scr_dyn_new_num(code) : scr_dyn_new_null(),
+    signal ? NULL : scr_dyn_new_null() };
+  if (signal) {
+    ScrStr *name = scr_str_new(signal, strlen(signal));
+    args[1] = scr_dyn_new_str(name);
+    scr_str_release(name);
+  }
+  scr_child_dyn_fire(cb, args, 2);
+  scr_dyn_release(args[0]);
+  scr_dyn_release(args[1]);
+}
+static void scr_child_dyn_error(ScrClosure *cb, ScrStr *message) {
+  ScrError *error = scr_error_new(SCR_ERR_ERROR, message);
+  if (scr_child_err_code) scr_error_set_code(error, scr_child_err_code);
+  else if (scr_child_writer_err_code) scr_error_set_code(error, scr_child_writer_err_code);
+  ScrDyn *arg = scr_dyn_from_error(error);
+  scr_error_release(error);
+  scr_child_dyn_fire(cb, &arg, 1);
+  scr_dyn_release(arg);
+}
+
+static ScrClosure *scr_child_dyn_listener(ScrDyn *fn, ScrDyn *self, void *fire) {
+  ScrClosure *cb = scr_closure_new(fire, 2);
+  cb->caps[0] = scr_box_new_obj(scr_dyn_retain_v, scr_dyn_release_v, scr_dyn_trace_v);
+  cb->caps[1] = scr_box_new_obj(scr_dyn_retain_v, scr_dyn_release_v, scr_dyn_trace_v);
+  scr_box_set_ref(cb->caps[0], scr_dyn_retain(fn));
+  scr_box_set_ref(cb->caps[1], scr_dyn_retain(self));
+  return cb;
+}
+
+static bool scr_child_dyn_matches(ScrClosure *cb, void *fire, const ScrDyn *fn) {
+  if (cb->fn != fire) return false;
+  ScrDyn *listener = scr_box_get_ref(cb->caps[0]);
+  bool matches = scr_dyn_strict_eq(listener, fn);
+  scr_dyn_release(listener);
+  return matches;
+}
+
 static ScrDyn *scr_child_dyn_invoke(
     void *h, ScrDyn *self, const char *method,
     ScrDyn *const *args, size_t argc, const char *what) {
-  (void)h;
-  (void)self;
-  (void)method;
-  (void)args;
-  (void)argc;
   (void)what;
-  static const char msg[] =
-      "ChildProcess method calls through an 'unknown' value are not supported yet — narrow the value to ChildProcess first";
-  scr_throw_error_msg(SCR_ERR_ERROR, msg, sizeof msg - 1);
+  ScrChild *child = h;
+  if (!strcmp(method, "ref") || !strcmp(method, "unref")) {
+    if (!strcmp(method, "ref")) scr_child_ref(child); else scr_child_unref(child);
+    return scr_dyn_retain(self);
+  }
+  if (!strcmp(method, "kill")) {
+    const ScrDyn *signal = argc ? args[0] : scr_dyn_undefined();
+    bool killed;
+    if (signal->kind == SCR_DYN_NUM) killed = scr_child_kill_num(child, signal->v.num);
+    else if (signal->kind == SCR_DYN_STR) killed = scr_child_kill(child, signal->v.str);
+    else if (signal->kind == SCR_DYN_UNDEF) {
+      ScrStr *name = scr_str_new("SIGTERM", 7);
+      killed = scr_child_kill(child, name);
+      scr_str_release(name);
+    } else { scr_dyn_arg_type_fail("signal", "of type string or number", signal); return NULL; }
+    return scr_exc_pending() ? NULL : scr_dyn_new_bool(killed);
+  }
+  bool remove = !strcmp(method, "removeListener") || !strcmp(method, "off");
+  if (!strcmp(method, "on") || !strcmp(method, "once") || !strcmp(method, "addListener") || remove) {
+    const ScrDyn *event = argc ? args[0] : scr_dyn_undefined();
+    ScrDyn *listener = argc > 1 ? args[1] : scr_dyn_undefined();
+    if (listener->kind != SCR_DYN_FUNC) scr_dyn_arg_type_fail("listener", "of type function", listener);
+    if (scr_exc_pending()) return NULL;
+    if (event->kind != SCR_DYN_STR) { scr_dyn_arg_type_fail("event", "of type string", event); return NULL; }
+    const ScrStr *name = event->v.str;
+    bool spawn = name->len == 5 && !memcmp(name->data, "spawn", 5);
+    bool exit = name->len == 4 && !memcmp(name->data, "exit", 4);
+    bool close = name->len == 5 && !memcmp(name->data, "close", 5);
+    bool error = name->len == 5 && !memcmp(name->data, "error", 5);
+    if (spawn || exit || close || error) {
+      void *fire = spawn ? (void *)scr_child_dyn_spawn : error ? (void *)scr_child_dyn_error : (void *)scr_child_dyn_exit;
+      if (remove) {
+        if (spawn) {
+          for (size_t i = child->n_spawn; i > 0; i--) if (scr_child_dyn_matches(child->spawn_cbs[i-1], fire, listener)) {
+            scr_closure_release(child->spawn_cbs[i-1]);
+            memmove(child->spawn_cbs+i-1, child->spawn_cbs+i, (child->n_spawn-i)*sizeof *child->spawn_cbs);
+            child->n_spawn--; break;
+          }
+        } else if (error) {
+          for (size_t i = child->n_err; i > 0; i--) if (scr_child_dyn_matches(child->err_cbs[i-1].cb, fire, listener)) {
+            scr_closure_release(child->err_cbs[i-1].cb);
+            memmove(child->err_cbs+i-1, child->err_cbs+i, (child->n_err-i)*sizeof *child->err_cbs);
+            child->n_err--; break;
+          }
+        } else {
+          ScrChildExitEntry *entries = close ? child->close_cbs : child->exit_cbs;
+          size_t *count = close ? &child->n_close : &child->n_exit;
+          for (size_t i = *count; i > 0; i--) if (scr_child_dyn_matches(entries[i-1].cb, fire, listener)) {
+            scr_closure_release(entries[i-1].cb);
+            memmove(entries+i-1, entries+i, (*count-i)*sizeof *entries);
+            (*count)--; break;
+          }
+        }
+      } else {
+        ScrClosure *cb = scr_child_dyn_listener(listener, self, fire);
+        if (spawn) scr_child_on_spawn(child, cb);
+        else if (error) scr_child_on_error(child, cb, scr_child_dyn_error);
+        else if (close) scr_child_on_close(child, cb, scr_child_dyn_exit);
+        else scr_child_on_exit(child, cb, scr_child_dyn_exit);
+      }
+      return scr_dyn_retain(self);
+    }
+  }
+  static const char msg[] = "This ChildProcess method or event has no native lowering";
+  scr_throw_error_msg_code(SCR_ERR_ERROR, msg, sizeof msg - 1, "SC2020");
   return NULL;
 }
 
 static ScrDyn *scr_child_dyn_get(void *h, const char *key, size_t key_len) {
   ScrChild *child = (ScrChild *)h;
+  if (key_len == 6 && !memcmp(key, "stdout", 6)) return scr_child_bridge_readable(child->out_stream, &child->out_dyn);
+  if (key_len == 6 && !memcmp(key, "stderr", 6)) return scr_child_bridge_readable(child->err_stream, &child->err_dyn);
+  if (key_len == 5 && !memcmp(key, "stdin", 5)) return scr_child_bridge_writable(child->in_stream, &child->in_dyn);
   if (key_len == 6 && memcmp(key, "killed", 6) == 0) {
     return scr_dyn_new_bool(scr_child_killed(child));
   }
@@ -5805,4 +6321,15 @@ static const ScrDynHandleOps scr_child_dyn_ops = {
 
 void scr_child_dyn_install(void) {
   scr_dyn_handle_install(SCR_DYNH_CHILD, &scr_child_dyn_ops);
+}
+
+void scr_child_on_dyn(ScrChild *child, ScrStr *event, ScrDyn *listener) {
+  scr_child_dyn_install();
+  ScrDyn *self = scr_dyn_new_handle(child, SCR_DYNH_CHILD);
+  ScrDyn *name = scr_dyn_new_str(event);
+  ScrDyn *args[] = { name, listener };
+  ScrDyn *result = scr_child_dyn_invoke(child, self, "on", args, 2, "child listener");
+  scr_dyn_release(result);
+  scr_dyn_release(name);
+  scr_dyn_release(self);
 }

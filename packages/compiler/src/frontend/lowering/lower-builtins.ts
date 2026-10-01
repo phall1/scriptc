@@ -2874,8 +2874,8 @@ function lowerFsSyncBufferWindow(
   }
 
 /** `spawn(command, args?, options)` → one cp.spawn / cp.spawnOpts
-   * libCall. The options argument, when present, must be an object
-   * LITERAL. Stdio accepts "ignore", "inherit", or "pipe" as the scalar,
+   * libCall. Computed options use native runtime normalization. Inline
+   * stdio accepts "ignore", "inherit", or "pipe" as the scalar,
    * or the 3-tuple whose stdin pipe becomes child.stdin, stdout/stderr
    * pipes become child.stdout/child.stderr, and output slots may also be
    * number fds. Omitting stdio uses Node's default: all three piped. The
@@ -2910,11 +2910,11 @@ function lowerFsSyncBufferWindow(
       else optsNode = second;
     }
     if (optsNode !== undefined && !ts.isObjectLiteralExpression(optsNode)) {
-      lowerer.noLowering(
-        "spawn with a non-literal options argument",
-        optsNode,
-        "pass stdio, detached, env, cwd, windowsHide, and shell in an inline object literal",
-      );
+      return {
+        kind: "libCall", fn: "cp.spawnDynamic",
+        args: [cmd, lowerer.lowerChildArgsArg(argsNode, loc), lowerer.lowerExprExpecting(optsNode, DYN)],
+        type: CHILD_T, loc,
+      };
     }
 
     const emptyStr: IrExpr = { kind: "strLit", value: "", type: STRING, loc };
@@ -6568,7 +6568,7 @@ function lowerProcessIpcSend(lowerer: Lowerer, call: ts.CallExpression): IrExpr 
     if ((name === "on" || name === "once") && call.arguments.length === 2) {
       const evT = lowerer.typeOf(call.arguments[0]!);
       const event = evT.isStringLiteralType() ? evT.value : null;
-      if (event !== "exit" && event !== "close" && event !== "error" && event !== "message" && event !== "disconnect") {
+      if (event !== "spawn" && event !== "exit" && event !== "close" && event !== "error" && event !== "message" && event !== "disconnect") {
         lowerer.noLowering(
           `child.${name}(${event === null ? "non-literal event" : `"${event}"`}, ...)`,
           call.arguments[0]!,
@@ -6602,7 +6602,32 @@ function lowerProcessIpcSend(lowerer: Lowerer, call: ts.CallExpression): IrExpr 
           loc,
         };
       }
+      const listenerNode = stripTypeCasts(call.arguments[1]!);
+      if (isJsSourceFile(listenerNode.getSourceFile()) &&
+          (ts.isArrowFunction(listenerNode) || ts.isFunctionExpression(listenerNode)) &&
+          listenerNode.parameters.some((param) => param.dotDotDotToken) &&
+          listenerNode.parameters.every((param) => !param.type) &&
+          !/@(?:param|type)\b/.test(listenerNode.getSourceFile().text.slice(listenerNode.pos, listenerNode.getStart()))) {
+        for (const param of listenerNode.parameters) lowerer.checkedCallbackParams.add(param);
+      }
       const cb = lowerer.lowerExpr(call.arguments[1]!);
+      if (cb.type.kind === "func" && cb.type.rest) {
+        if (!canBoxFuncIntoDyn(cb.type, (id) => lowerer.shapes.get(id), (id) => lowerer.unions.get(id))) {
+          lowerer.noLowering("child event rest listeners with non-representable parameters", call.arguments[1]!);
+        }
+        return {
+          kind: "libCall", fn: "child.onDyn",
+          args: [receiver, { kind: "strLit", value: event, type: STRING, loc },
+            { kind: "dynFrom", value: cb, type: DYN, loc }],
+          type: VOID, loc,
+        };
+      }
+      if (event === "spawn") {
+        if (cb.type.kind !== "func" || cb.type.params.length !== 0 || cb.type.ret.kind !== "void") {
+          lowerer.noLowering("spawn event listeners with parameters or a returned value", call.arguments[1]!);
+        }
+        return { kind: "libCall", fn: "child.onSpawn", args: [receiver, cb], type: VOID, loc };
+      }
       if (cb.type.kind !== "func" || cb.type.params.length > (event === "error" ? 1 : 2)) {
         lowerer.unsupported(
           "SC1090",
@@ -6707,9 +6732,9 @@ function lowerProcessIpcSend(lowerer: Lowerer, call: ts.CallExpression): IrExpr 
     // child.unref(): drops the child from the event loop's keep-alive set
     // (the process may exit while the child runs — Node's semantics; the
     // child is still reaped while the loop runs for other reasons).
-    if (name === "unref" && call.arguments.length === 0) {
+    if ((name === "unref" || name === "ref") && call.arguments.length === 0) {
       const receiver = lowerer.lowerExpr(access.expression);
-      return { kind: "libCall", fn: "child.unref", args: [receiver], type: VOID, loc };
+      return { kind: "libCall", fn: name === "ref" ? "child.ref" : "child.unref", args: [receiver], type: VOID, loc };
     }
     lowerer.noLowering(
       `ChildProcess.${name}`,
@@ -8882,7 +8907,10 @@ export function lowerTextCodecNew(lowerer: Lowerer, ctor: ts.NewExpression, cls:
   const type = lowerer.mapTypeOf(lowerer.typeOf(ctor));
   if (type?.kind !== "record") lowerer.badType(ctor, lowerer.typeOf(ctor));
   const result: IrExpr = {
-    kind: "recordLit", fields: [{ name: `%${cls}`, value: encoding }, ...(cls === "TextDecoder" ? [...flags].map(([name, value]) => ({ name: `%${name}`, value })) : [])], type, loc,
+    kind: "recordLit", fields: [{ name: `%${cls}`, value: encoding }, ...(cls === "TextDecoder" ? [
+      ...[...flags].map(([name, value]) => ({ name: `%${name}`, value })),
+      { name: "%state", value: { kind: "dynObjLit", fields: [], type: DYN, loc } as IrExpr },
+    ] : [])], type, loc,
   };
   return label === null || label.kind === "strLit" ? result : {
     kind: "seqExpr", stmts: [{ kind: "exprStmt", expr: label, loc }], result, type, loc,
@@ -8901,10 +8929,20 @@ function lowerStoredTextCodecCall(lowerer: Lowerer, call: ts.CallExpression, acc
   const cls = storedTextCodecClassOf(lowerer, access.expression);
   if (cls === null || !lowerer.isStdlibMember(access)) return null;
   if (access.name.text !== (cls === "TextEncoder" ? "encode" : "decode")) return null;
-  if (call.arguments.length > 1) {
-    lowerer.noLowering(cls === "TextDecoder" ? "decode with a stream option" : "TextEncoder.encode with extra arguments", call);
+  if (call.arguments.length > (cls === "TextDecoder" ? 2 : 1)) {
+    lowerer.noLowering(`${cls}.${access.name.text} with extra arguments`, call);
   }
   const loc = locOf(call);
+  let stream: IrExpr = { kind: "boolLit", value: false, type: BOOL, loc };
+  if (cls === "TextDecoder" && call.arguments[1]) {
+    const options = stripTypeCasts(call.arguments[1]);
+    if (!ts.isObjectLiteralExpression(options)) lowerer.noLowering("TextDecoder.decode options outside an object literal", options);
+    for (const property of options.properties) {
+      if ((!ts.isPropertyAssignment(property) && !ts.isShorthandPropertyAssignment(property)) ||
+          !ts.isIdentifier(property.name) || property.name.text !== "stream") lowerer.noLowering("unknown TextDecoder.decode option", property);
+      stream = lowerer.lowerExprExpecting(ts.isPropertyAssignment(property) ? property.initializer : property.name, BOOL);
+    }
+  }
   const receiver = lowerer.lowerExpr(access.expression);
   if (receiver.type.kind !== "record") lowerer.badType(access.expression, lowerer.typeOf(access.expression));
   let arg: IrExpr = call.arguments.length === 0
@@ -8927,22 +8965,22 @@ function lowerStoredTextCodecCall(lowerer: Lowerer, call: ts.CallExpression, acc
     const input = varRef("input.0", arg.type, loc);
     const result: IrExpr = cls === "TextEncoder"
       ? { kind: "libCall", fn: "buffer.fromStr", args: [input, { kind: "strLit", value: "utf8", type: STRING, loc }], type: BYTES_U8, loc }
-      : {
-        kind: "ternary",
-        cond: { kind: "bin", op: "<", left: { kind: "recordGet", obj: varRef("codec.0", recT, loc), shapeId: recT.shapeId, field: "%TextDecoder", type: F64, loc }, right: { kind: "numLit", value: 0, type: F64, loc }, type: BOOL, loc },
-        then: { kind: "libCall", fn: "text.decodeOptions", args: [input, ...["%fatal", "%ignoreBOM"].map((field): IrExpr => ({ kind: "recordGet", obj: varRef("codec.0", recT, loc), shapeId: recT.shapeId, field, type: BOOL, loc }))], type: STRING, loc },
-        else_: { kind: "libCall", fn: "text.decodeLegacyOptions", args: [input, { kind: "recordGet", obj: varRef("codec.0", recT, loc), shapeId: recT.shapeId, field: "%TextDecoder", type: F64, loc }, ...["%fatal", "%ignoreBOM"].map((field): IrExpr => ({ kind: "recordGet", obj: varRef("codec.0", recT, loc), shapeId: recT.shapeId, field, type: BOOL, loc }))], type: STRING, loc },
-        type: STRING, loc,
-      };
+      : { kind: "libCall", fn: "text.decodeStream", args: [
+        { kind: "recordGet", obj: varRef("codec.0", recT, loc), shapeId: recT.shapeId, field: "%state", type: DYN, loc },
+        input,
+        { kind: "recordGet", obj: varRef("codec.0", recT, loc), shapeId: recT.shapeId, field: "%TextDecoder", type: F64, loc },
+        ...["%fatal", "%ignoreBOM"].map((field): IrExpr => ({ kind: "recordGet", obj: varRef("codec.0", recT, loc), shapeId: recT.shapeId, field, type: BOOL, loc })),
+        varRef("stream.0", BOOL, loc),
+      ], type: STRING, loc };
     lowerer.liftedFns.push({
       name,
-      params: [{ localId: "codec.0", name: "codec", type: recT }, { localId: "input.0", name: "input", type: arg.type }],
+      params: [{ localId: "codec.0", name: "codec", type: recT }, { localId: "input.0", name: "input", type: arg.type }, { localId: "stream.0", name: "stream", type: BOOL }],
       returnType: result.type,
-      locals: [{ id: "codec.0", name: "codec", type: recT, mutable: false }, { id: "input.0", name: "input", type: arg.type, mutable: false }],
+      locals: [{ id: "codec.0", name: "codec", type: recT, mutable: false }, { id: "input.0", name: "input", type: arg.type, mutable: false }, { id: "stream.0", name: "stream", type: BOOL, mutable: false }],
       body: [{ kind: "return", value: result, loc }], loc,
     });
   }
-  return { kind: "call", callee: name, args: [receiver, arg], type: cls === "TextEncoder" ? BYTES_U8 : STRING, loc };
+  return { kind: "call", callee: name, args: [receiver, arg, stream], type: cls === "TextEncoder" ? BYTES_U8 : STRING, loc };
 }
 
 /** A direct construction of THE stdlib TextEncoder/TextDecoder, through
@@ -8977,7 +9015,7 @@ function lowerStoredTextCodecCall(lowerer: Lowerer, call: ts.CallExpression, acc
     if (info === null) return lowerStoredTextCodecCall(lowerer, call, access);
     if (!lowerer.isStdlibMember(access)) return null;
     const { cls, ctor: recv } = info;
-    if (cls === "TextDecoder" && (recv.arguments?.length ?? 0) > 1) return lowerStoredTextCodecCall(lowerer, call, access);
+    if (cls === "TextDecoder" && ((recv.arguments?.length ?? 0) > 1 || call.arguments.length > 1)) return lowerStoredTextCodecCall(lowerer, call, access);
     if (!(cls === "TextDecoder" && member === "decode") && !(cls === "TextEncoder" && member === "encode")) {
       return null;
     }

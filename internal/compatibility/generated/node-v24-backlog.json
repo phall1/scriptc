@@ -5749,7 +5749,11 @@
             "tests/corpus/1565-spawn-pipe-streams.ts",
             "tests/corpus/2911-execfile-callback.ts",
             "tests/corpus/2939-child-shell-text.ts",
-            "tests/corpus/2946-child-fork-ipc/main.ts"
+            "tests/corpus/2946-child-fork-ipc/main.ts",
+            "tests/corpus/3127-spawn-runtime-options.ts",
+            "tests/corpus/3130-child-generic-streams.ts",
+            "tests/corpus/3131-child-rest-listeners.js",
+            "tests/corpus/3132-child-generic-stream-completion.ts"
           ]
         },
         "dynamic": {
@@ -5854,7 +5858,11 @@
             "tests/corpus/1565-spawn-pipe-streams.ts",
             "tests/corpus/2911-execfile-callback.ts",
             "tests/corpus/2939-child-shell-text.ts",
-            "tests/corpus/2946-child-fork-ipc/main.ts"
+            "tests/corpus/2946-child-fork-ipc/main.ts",
+            "tests/corpus/3127-spawn-runtime-options.ts",
+            "tests/corpus/3130-child-generic-streams.ts",
+            "tests/corpus/3131-child-rest-listeners.js",
+            "tests/corpus/3132-child-generic-stream-completion.ts"
           ]
         },
         "dynamic": {
@@ -5893,7 +5901,11 @@
             "tests/corpus/1565-spawn-pipe-streams.ts",
             "tests/corpus/2911-execfile-callback.ts",
             "tests/corpus/2939-child-shell-text.ts",
-            "tests/corpus/2946-child-fork-ipc/main.ts"
+            "tests/corpus/2946-child-fork-ipc/main.ts",
+            "tests/corpus/3127-spawn-runtime-options.ts",
+            "tests/corpus/3130-child-generic-streams.ts",
+            "tests/corpus/3131-child-rest-listeners.js",
+            "tests/corpus/3132-child-generic-stream-completion.ts"
           ]
         },
         "dynamic": {
@@ -5932,7 +5944,11 @@
             "tests/corpus/1565-spawn-pipe-streams.ts",
             "tests/corpus/2911-execfile-callback.ts",
             "tests/corpus/2939-child-shell-text.ts",
-            "tests/corpus/2946-child-fork-ipc/main.ts"
+            "tests/corpus/2946-child-fork-ipc/main.ts",
+            "tests/corpus/3127-spawn-runtime-options.ts",
+            "tests/corpus/3130-child-generic-streams.ts",
+            "tests/corpus/3131-child-rest-listeners.js",
+            "tests/corpus/3132-child-generic-stream-completion.ts"
           ]
         },
         "dynamic": {
@@ -6714,7 +6730,8 @@
           "confidence": "high",
           "source": "compiler-feature:child_process.'close'",
           "tests": [
-            "tests/corpus/2939-child-shell-text.ts"
+            "tests/corpus/2939-child-shell-text.ts",
+            "tests/corpus/3131-child-rest-listeners.js"
           ]
         },
         "dynamic": {
@@ -44968,7 +44985,8 @@
           "source": "compiler-feature:globals.TextDecoder",
           "tests": [
             "tests/corpus/1423-text-codec.ts",
-            "tests/corpus/text-codec-values/main.ts"
+            "tests/corpus/text-codec-values/main.ts",
+            "tests/corpus/3133-text-decoder-streaming.ts"
           ]
         },
         "dynamic": {
@@ -45041,7 +45059,8 @@
           "source": "compiler-feature:globals.TextEncoder",
           "tests": [
             "tests/corpus/1423-text-codec.ts",
-            "tests/corpus/text-codec-values/main.ts"
+            "tests/corpus/text-codec-values/main.ts",
+            "tests/corpus/3133-text-decoder-streaming.ts"
           ]
         },
         "dynamic": {
@@ -93873,7 +93892,8 @@
           "tests": [
             "tests/corpus/text-codec-values/main.ts",
             "tests/fixtures/node-types/text-codecs.mts",
-            "tests/harness/project-config.test.ts"
+            "tests/harness/project-config.test.ts",
+            "tests/corpus/3133-text-decoder-streaming.ts"
           ]
         },
         "dynamic": {
@@ -93945,7 +93965,8 @@
           "tests": [
             "tests/corpus/text-codec-values/main.ts",
             "tests/fixtures/node-types/text-codecs.mts",
-            "tests/harness/project-config.test.ts"
+            "tests/harness/project-config.test.ts",
+            "tests/corpus/3133-text-decoder-streaming.ts"
           ]
         },
         "dynamic": {
@@ -94081,7 +94102,8 @@
           "tests": [
             "tests/corpus/text-codec-values/main.ts",
             "tests/fixtures/node-types/text-codecs.mts",
-            "tests/harness/project-config.test.ts"
+            "tests/harness/project-config.test.ts",
+            "tests/corpus/3133-text-decoder-streaming.ts"
           ]
         },
         "dynamic": {
@@ -94120,7 +94142,8 @@
           "tests": [
             "tests/corpus/text-codec-values/main.ts",
             "tests/fixtures/node-types/text-codecs.mts",
-            "tests/harness/project-config.test.ts"
+            "tests/harness/project-config.test.ts",
+            "tests/corpus/3133-text-decoder-streaming.ts"
           ]
         },
         "dynamic": {

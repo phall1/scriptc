@@ -5,50 +5,41 @@ text-codec-value.ts:2:13 - error SC1090: console.log of 'TextEncoder' values (Te
     |             ^~~~~~~
   3 | 
 
-text-codec-value.ts:9:1 - error SC2020: 'decode with a stream option' is part of the standard library types but has no scriptc lowering yet
+text-codec-value.ts:10:1 - error SC2020: 'TextEncoder.encodeInto' is part of the standard library types but has no scriptc lowering yet
 
-   8 | const decoder = new TextDecoder();
-   9 | decoder.decode(new Uint8Array([0xc3]), { stream: true });
-     | ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  10 | new TextDecoder("utf-8", { fatal: true });
-
-  hint: the type checker sees the full standard library, but only the supported surface compiles (https://scriptc.dev/limitations)
-
-text-codec-value.ts:11:1 - error SC2020: 'TextEncoder.encodeInto' is part of the standard library types but has no scriptc lowering yet
-
-  10 | new TextDecoder("utf-8", { fatal: true });
-  11 | encoder.encodeInto("hello", new Uint8Array(10));
+   9 | new TextDecoder("utf-8", { fatal: true });
+  10 | encoder.encodeInto("hello", new Uint8Array(10));
      | ^~~~~~~~~~~~~~~~~~
-  12 | const forged = JSON.parse("{}") as TextDecoder;
+  11 | const forged = JSON.parse("{}") as TextDecoder;
 
   hint: TextEncoder instances can be stored, passed, and captured; encode(string) and encode() compile, while encodeInto and other members have no static lowering
 
-text-codec-value.ts:18:5 - error SC2020: 'uninitialized lexical codec bindings' is part of the standard library types but has no scriptc lowering yet
+text-codec-value.ts:17:5 - error SC2020: 'uninitialized lexical codec bindings' is part of the standard library types but has no scriptc lowering yet
 
-  17 | var varEncoder = new TextEncoder();
-  18 | let uninitializedDecoder: TextDecoder;
+  16 | var varEncoder = new TextEncoder();
+  17 | let uninitializedDecoder: TextDecoder;
      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  19 | function earlyVarCapture(): Uint8Array {
+  18 | function earlyVarCapture(): Uint8Array {
 
   hint: initialize let or const TextEncoder/TextDecoder bindings at their declaration
 
-text-codec-value.ts:20:21 - error SC1030: the reference to 'localEncoder' above its 'var' declaration (a read there would be 'undefined', which the binding's type cannot hold — annotate it '| undefined' or move the declaration up) is not supported yet
+text-codec-value.ts:19:21 - error SC1030: the reference to 'localEncoder' above its 'var' declaration (a read there would be 'undefined', which the binding's type cannot hold — annotate it '| undefined' or move the declaration up) is not supported yet
 
-  19 | function earlyVarCapture(): Uint8Array {
-  20 |   const use = () => localEncoder.encode("x");
+  18 | function earlyVarCapture(): Uint8Array {
+  19 |   const use = () => localEncoder.encode("x");
      |                     ^~~~~~~~~~~~
-  21 |   const bytes = use();
+  20 |   const bytes = use();
 
-text-codec-value.ts:34:15 - error SC1090: the reference to 'caseEncoder' (a binding form with no lowering) is not supported yet
+text-codec-value.ts:33:15 - error SC1090: the reference to 'caseEncoder' (a binding form with no lowering) is not supported yet
 
-  33 |     const Encoded = class {
-  34 |       bytes = caseEncoder.encode("should fence");
+  32 |     const Encoded = class {
+  33 |       bytes = caseEncoder.encode("should fence");
      |               ^~~~~~~~~~~
-  35 |     };
+  34 |     };
 
-text-codec-value.ts:40:17 - error SC1090: codec bindings read from another switch clause before initialization is proven is not supported yet
+text-codec-value.ts:39:17 - error SC1090: codec bindings read from another switch clause before initialization is proven is not supported yet
 
-  39 |     // @ts-expect-error -- dispatch can enter here while caseEncoder is in its TDZ
-  40 |     console.log(caseEncoder.encode("should fence directly").length);
+  38 |     // @ts-expect-error -- dispatch can enter here while caseEncoder is in its TDZ
+  39 |     console.log(caseEncoder.encode("should fence directly").length);
      |                 ^~~~~~~~~~~
-  41 |     break;
+  40 |     break;

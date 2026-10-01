@@ -3943,6 +3943,9 @@ function lowerPromiseThenPresence(
       );
     }
     if (kind === "regex") {
+      if (name === "lastIndex") {
+        return { kind: "regexIntrinsic", method: "lastIndex", receiver: strictReceiver({ kind: "regex" }), args: [], type: F64, loc: locOf(expr) };
+      }
       if (name === "source" || name === "flags") {
         const receiver = strictReceiver({ kind: "regex" });
         return { kind: "regexIntrinsic", method: name, receiver, args: [], type: STRING, loc: locOf(expr) };
@@ -9460,8 +9463,8 @@ function lowerLogicalPair(lowerer: Lowerer, expr: ts.BinaryExpression, left: IrE
     return { kind: "call", callee: helper, args: [keyIr, recv], type: BOOL, loc };
   }
 
-/** A regex literal `/ab+c/gi` → regexLit (interned per (pattern, flags)
-   * by the backend). The TS parser has already syntax-checked the literal;
+/** A regex literal `/ab+c/gi` → regexLit (fresh state per evaluation,
+   * shared bytecode per (pattern, flags) pair). The TS parser has already syntax-checked the literal;
    * what remains here is the flag-alphabet fence (d and v are
    * declared-valid TS flags outside this slice). Named capture groups
    * `(?<name>...)` and `\k<name>` backreferences compile — libregexp
@@ -9606,11 +9609,42 @@ function lowerLogicalPair(lowerer: Lowerer, expr: ts.BinaryExpression, left: IrE
    * caller keeps its fence), or the groups list (possibly empty — a
    * traced regex WITHOUT named groups is the Node-undefined case). */
   export function matchResultNamedGroupsOf(lowerer: Lowerer, e: ts.Expression): { name: string; index: number }[] | null {
+    let producer = e;
+    while (ts.isParenthesizedExpression(producer) || ts.isNonNullExpression(producer)) producer = producer.expression;
+    if (ts.isIdentifier(producer)) {
+      const init = constInitializerOf(lowerer, producer);
+      if (init !== null) return matchResultNamedGroupsOf(lowerer, init);
+    }
     const reExpr = matchProducerRegexOf(lowerer, e);
     if (reExpr === null) return null;
+    if (ts.isCallExpression(producer) && ts.isPropertyAccessExpression(producer.expression) &&
+        producer.expression.name.text === "match") {
+      const flags = staticRegexFlagsOf(lowerer, reExpr);
+      if (flags === null) return null;
+      // Global String.match returns whole matches without a groups
+      // property, even when the pattern contains named captures.
+      if (flags.includes("g")) return [];
+    }
     const pattern = staticRegexPatternOf(lowerer, reExpr);
     if (pattern === null) return null;
     return namedCaptureGroupsOfPattern(pattern);
+  }
+
+  function staticRegexFlagsOf(lowerer: Lowerer, node: ts.Expression): string | null {
+    let expr = node;
+    while (ts.isParenthesizedExpression(expr) || ts.isNonNullExpression(expr)) expr = expr.expression;
+    if (ts.isRegularExpressionLiteral(expr)) return expr.text.slice(expr.text.lastIndexOf("/") + 1);
+    if (ts.isIdentifier(expr)) {
+      const init = constInitializerOf(lowerer, expr);
+      return init !== null ? staticRegexFlagsOf(lowerer, init) : null;
+    }
+    if (ts.isNewExpression(expr) && ts.isIdentifier(expr.expression) &&
+        lowerer.isStdlibGlobal(expr.expression, "RegExp")) {
+      const flags = expr.arguments?.[1];
+      if (!flags) return "";
+      if (ts.isStringLiteral(flags) || ts.isNoSubstitutionTemplateLiteral(flags)) return flags.text;
+    }
+    return null;
   }
 
 /** The regex EXPRESSION whose match produced `e` (see
