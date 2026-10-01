@@ -286,18 +286,13 @@ export const UNSUPPORTED: Record<string, UnsupportedEntry> = {
     hint: "numbers, strings, booleans, JSON-safe records/arrays/unions (a deep copy), functions, program class instances, and supported native handles convert into 'unknown' slots; functions, exact-class round trips, and handles preserve identity, while this value's type has no dynamic representation yet",
   },
   // Regex fences. SC1120 is the shared code for regex features outside the
-  // supported slice (the rejection site names the construct); SC1121 is
-  // the statefulness fence, with its own hint.
+  // supported slice (the rejection site names the construct).
   SC1120: {
     feature: "this regex feature",
     milestone: "later",
     hint: "supported: literal regexes with the g/i/m/s/u/y flags — .test(), .exec()/.match()/.matchAll(), named capture groups (.groups, $<name> templates, \\k<name>), .source/.flags, and string replace/replaceAll/split with string replacement templates",
   },
-  SC1121: {
-    feature: "'.test()' on a regex with the 'g' or 'y' flag",
-    milestone: "later",
-    hint: "g/y regexes carry mutable lastIndex state between calls, which is not modeled; drop the flag for a plain match test, or use replace/replaceAll/split (their iteration is internal)",
-  },
+  // SC1121 (stateful g/y regex tests) shipped — code retired, do not reuse.
 };
 
 /** The construct-fence codes MINTED BY FACTORY FUNCTIONS below (never keys
