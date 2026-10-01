@@ -58,7 +58,7 @@ jobs:
       # san = ASan + RC audit over the same suite; anything but "1" is plain.
       SCRIPTC_SAN: ${{ matrix.flavor == 'san' && '1' || '' }}
       # Within-file partition for the large case-driven harnesses
-      # (differential, llvm-differential, npm, server, Test262, coverage, and
+      # (Effect, differential, llvm-differential, npm, server, Test262, coverage, and
       # Vercel E2E): they hash stable case names into slice i of 10
       # (tests/harness/shard.ts), so the ten shards' unions run every case
       # exactly once. vitest's own --shard is FILE-granular and cannot split
@@ -88,6 +88,7 @@ jobs:
       - name: Tests (file-sharded, case-sharded files excluded)
         run: >-
           pnpm test --shard=${{ matrix.shard }}/10
+          --exclude=tests/harness/effect.test.ts
           --exclude=tests/harness/differential.test.ts
           --exclude=tests/harness/llvm-differential.test.ts
           --exclude=tests/harness/npm.test.ts
@@ -152,6 +153,7 @@ jobs:
           SCRIPTC_LLVM_TEST_MODE: dev
         run: >-
           pnpm test
+          tests/harness/effect.test.ts
           tests/harness/differential.test.ts
           tests/harness/llvm-differential.test.ts
           tests/harness/npm.test.ts
