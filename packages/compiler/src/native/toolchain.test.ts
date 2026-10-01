@@ -21,6 +21,7 @@ test("native toolchain installation paths relocate with the manifest", () => {
     expect(toolchain.linker).toBe(join(root, "tools/linker"));
     expect(toolchain.linkerArgs).toEqual(["cc"]);
     expect(toolchain.target.name).toBe("macos-arm64");
+    expect(loadNativeToolchain(path, { SCRIPTC_TARGET: "aarch64-apple-ios" }).target.name).toBe("ios-arm64");
     for (const invalid of [null, [], {}, { ...manifest, schema: "other" }, { ...manifest, target: "other" },
       { ...manifest, ts7: "" }, { ...manifest, linker_args: [1] }]) {
       writeFileSync(path, JSON.stringify(invalid));

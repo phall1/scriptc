@@ -26,13 +26,16 @@ const seed = join(dirname(output), ".scriptc", basename(output) + "-seed");
 for (const dir of [bin, lib, seed]) mkdirSync(dir, { recursive: true });
 const compiler = process.env["SCRIPTC_CC"] ?? target.defaultLinker;
 const compilerArgs = process.env["SCRIPTC_CC"] === undefined ? [...target.defaultLinkerArgs] : [];
+// Zig's C debug mode otherwise inserts UBSan calls into these objects. They
+// must also link through the destination host's ordinary compiler driver.
+const cFlags = ["-std=c11", "-fno-sanitize=undefined", "-Wall", "-Wextra", "-Werror", "-target", target.linkerTargetTriple];
 const nativeSources = join(root, "packages/compiler/native");
 const functions: unknown[] = [];
 const libraries: string[] = [];
 for (const name of ["ts7-process", "host"]) {
   const object = join(seed, name + target.outputSuffixes.obj);
   execFileSync(compiler, [
-    ...compilerArgs, "-std=c11", "-Wall", "-Wextra", "-Werror", "-target", target.linkerTargetTriple,
+    ...compilerArgs, ...cFlags,
     "-c", join(nativeSources, name + ".c"), "-o", object,
   ], { stdio: "inherit" });
   const manifest = JSON.parse(readFileSync(join(nativeSources, name + ".ffi.json"), "utf8")) as { functions: unknown[] };
@@ -44,7 +47,7 @@ writeFileSync(ffi, JSON.stringify({ ffi_format: 6, functions, libraries }, null,
 const executable = join(bin, "scriptc" + target.outputSuffixes.exe);
 const comptime = join(lib, "scriptc-comptime" + target.outputSuffixes.exe);
 execFileSync(compiler, [
-  ...compilerArgs, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-target", target.linkerTargetTriple,
+  ...compilerArgs, ...cFlags, "-O2",
   "-I", join(root, "packages/runtime/vendor/quickjs-ng"), join(nativeSources, "comptime.c"),
   join(root, "packages", target.runtimePackPackage.replace("@scriptc/", ""), "artifacts/vendor/quickjs/libscriptc-quickjs.a"),
   "-lm", "-lpthread", "-o", comptime,

@@ -97,7 +97,7 @@ export function loadNativeToolchain(path: string, env: NodeJS.ProcessEnv = {}, c
   const targets: readonly NativeTargetSpec[] = NATIVE_TARGETS;
   const host = targets.find((item) => item.name === manifest.target);
   if (host === undefined || host.platform === "wasi") throw new Error(`unsupported native compiler target: ${manifest.target}`);
-  const target = selectNativeTarget(env["SCRIPTC_TARGET"] ?? "", host);
+  const target = selectNativeTarget(env["SCRIPTC_TARGET"] ?? "", host, host.platform);
   if (target === null) throw new Error(`unsupported native compiler target: ${env["SCRIPTC_TARGET"]}`);
   const root = dirname(resolve(path));
   const helperPackageRoot = pathFrom(root, env["SCRIPTC_LLVM_PACKAGE"] ?? manifest.llvm_package);
