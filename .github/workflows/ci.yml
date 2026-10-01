@@ -89,6 +89,7 @@ jobs:
         run: >-
           pnpm test --shard=${{ matrix.shard }}/10
           --exclude=tests/harness/effect.test.ts
+          --exclude=tests/harness/effect4.test.ts
           --exclude=tests/harness/differential.test.ts
           --exclude=tests/harness/llvm-differential.test.ts
           --exclude=tests/harness/npm.test.ts
@@ -154,6 +155,7 @@ jobs:
         run: >-
           pnpm test
           tests/harness/effect.test.ts
+          tests/harness/effect4.test.ts
           tests/harness/differential.test.ts
           tests/harness/llvm-differential.test.ts
           tests/harness/npm.test.ts
