@@ -203,15 +203,15 @@ export class ClassDynamicDispatch {
         const helper = lowerer.liftedFns.find((fn) => fn.name === info.def.prototypeDataHelper);
         const init = helper?.body[0];
         if (!info.prototypeReflectionReady && method && prototype && init?.kind === "if" && canConvertToDyn(method.type, (id) => lowerer.shapes.get(id), (id) => lowerer.unions.get(id))) {
-          info.prototypeJsonDescriptor = { kind: "exprStmt", expr: {
+          const descriptor: IrStmt = { kind: "exprStmt", expr: {
             kind: "libCall", fn: "dyn.defineProperty", args: [prototype,
               { kind: "dynFrom", value: { kind: "strLit", value: "toJSON", type: STRING, loc }, type: DYN, loc },
               { kind: "dynObjLit", fields: [
                 { key: { kind: "strLit", value: "value", type: STRING, loc }, value: { kind: "dynFrom", value: method, type: DYN, loc } },
-                ...["writable", "configurable"].map((key) => ({ key: { kind: "strLit" as const, value: key, type: STRING, loc }, value: { kind: "dynFrom" as const, value: { kind: "boolLit" as const, value: true, type: BOOL, loc }, type: DYN, loc } })),
+                ...["writable", "configurable"].map((key): { key: IrExpr; value: IrExpr } => ({ key: { kind: "strLit", value: key, type: STRING, loc }, value: { kind: "dynFrom", value: { kind: "boolLit", value: true, type: BOOL, loc }, type: DYN, loc } })),
               ], type: DYN, loc },
             ], type: DYN, loc }, loc };
-          init.then.push(info.prototypeJsonDescriptor);
+          init.then.push(descriptor);
           changed = true;
         }
       }

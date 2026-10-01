@@ -129,7 +129,6 @@ export interface ClassInfo {
   prototypeMethodValues?: Map<string, IrExpr>;
   prototypeReflectionReady?: true;
   prototypeReflectionRefusal?: string;
-  prototypeJsonDescriptor?: IrStmt;
   localClass?: {
     context: FnCtx | null;
     bodies: Map<string, IrFunction>;
@@ -1813,6 +1812,11 @@ export function collectClassShapeInner(lowerer: Lowerer, decl: ts.ClassLikeDecla
           // as undefined on construction, verified), and reads/writes ride
           // the ordinary undefined-armed union machinery.
           let type = lowerer.irTypeOf(member.name);
+          // Unannotated JavaScript callback slots retain the original
+          // callable and its receiver instead of adapting its signature.
+          if (isJsSourceFile(member.getSourceFile()) && !member.type &&
+              !/@type\b/.test(member.getSourceFile().text.slice(member.pos, member.getStart())) &&
+              type.kind === "func" && lowerer.dynConvertible(type)) type = DYN;
           // JS permits reads before a constructor's first assignment even
           // when its inferred field type omits undefined.
           if (isJsSourceFile(member.getSourceFile()) && !member.initializer && type.kind !== "dyn") {
@@ -2667,6 +2671,10 @@ export function collectClassShapeInner(lowerer: Lowerer, decl: ts.ClassLikeDecla
       const ctorParams: ParamShape[] = ctor && !mixinForwarding
         ? lowerer.paramShapes(ctor.parameters)
         : (base?.ctorParams ?? (callableBase ? [{ type: DYN, mode: "dynRest" }] : []));
+      if (ctor && !mixinForwarding && isJsSourceFile(ctor.getSourceFile()) &&
+          !ctorParams.some((shape) => shape.mode === "rest" || shape.mode === "dynRest" || shape.mode === "islandRest") && bodyReadsArguments(ctor)) {
+        ctorParams.push({ type: DYN, mode: "arguments" });
+      }
 
       const info: ClassInfo = {
         ...(runtimeStatics.length ? { runtimeStatics } : {}),
@@ -4527,6 +4535,11 @@ export function lowerClassMembers(lowerer: Lowerer, info: ClassInfo): IrFunction
         // defaults on entry, ahead of everything the body does.
         const declared = lowerer.declareParams(info.ctor.parameters, info.ctorParams);
         params.push(...declared.params);
+        if (info.ctorParams.at(-1)?.mode === "arguments") {
+          const local = lowerer.declareHiddenLocal("%arguments", DYN);
+          params.push({ localId: local.id, name: local.name, type: DYN });
+          lowerer.ctx.argumentsLocal = local;
+        }
         body.push(...declared.prologue);
         if (!ctorBase && !info.callableBase) {
           // Node's base-class order: field initializers run at the start
@@ -5171,7 +5184,15 @@ export function lowerClassMembers(lowerer: Lowerer, info: ClassInfo): IrFunction
             out.push(...paramPropInitStmts(lowerer, info, thisLocal));
             continue;
           }
-          const args = forward !== undefined
+          const surplusSpread = forward === undefined && !base.builtinError && !base.builtinEmitter &&
+            base.ctorParams.length === 0 && superCall.arguments.some(ts.isSpreadElement);
+          if (surplusSpread) {
+            // A parameterless base still evaluates and iterates every
+            // supplied argument before its constructor starts.
+            const evaluated = lowerer.completeArgs(superCall.arguments, [{ mode: "dynRest", type: DYN }], locOf(stmt), stmt);
+            for (const value of evaluated) out.push({ kind: "exprStmt", expr: value, loc: locOf(stmt) });
+          }
+          const args = surplusSpread ? [] : forward !== undefined
             ? forward
             : base.builtinError
               ? lowerer.errorConstructorArgs(superCall.arguments, locOf(stmt), stmt)

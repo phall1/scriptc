@@ -1,6 +1,6 @@
 import * as ts from "../../ts7/adapter.js";
 import { DYN, JSVAL, STRING, UNDEFINED_T, VOID, isUnitType, typeEquals } from "../../../ir/ir.js";
-import type { IrExpr, SrcLoc } from "../../../ir/ir.js";
+import type { IrExpr, IrStmt, SrcLoc } from "../../../ir/ir.js";
 import { isNodeEsmFile, locOf } from "../../program.js";
 import type { Lowerer } from "../lowerer.js";
 
@@ -168,6 +168,39 @@ export function lowerOptionalChain(lowerer: Lowerer, expr: ts.CallExpression | t
   const loweredReceiver = lowerer.lowerExpr(recvNode);
   const receiver = lowerer.runtimeOptionalSourceValue(recvNode, loweredReceiver) ?? loweredReceiver;
   if (receiver.type.kind === "dyn") {
+    if (dotNode === expr && ts.isCallExpression(expr)) {
+      const id = `chain.${lowerer.chainCounter++}`;
+      const callee: IrExpr = { kind: "chainRecv", id, type: DYN, loc };
+      const stmts: IrStmt[] = [];
+      let guarded = receiver;
+      let thisValue: IrExpr | undefined;
+      // Member calls retain their receiver, evaluated before the guarded
+      // property read and only once, including effectful computed keys.
+      if (ts.isPropertyAccessExpression(recvNode) || ts.isElementAccessExpression(recvNode)) {
+        const object = lowerer.lowerExpr(recvNode.expression);
+        const local = lowerer.declareHiddenLocal("%optionalThis", object.type);
+        const reference: IrExpr = { kind: "varRef", localId: local.id, type: object.type, loc };
+        stmts.push({ kind: "varDecl", localId: local.id, init: object, loc });
+        thisValue = lowerer.coerceInto(recvNode.expression, reference, DYN);
+        const previous = lowerer.chainRecvByNode.get(recvNode.expression);
+        lowerer.chainRecvByNode.set(recvNode.expression, reference);
+        try { guarded = lowerer.lowerExpr(recvNode); }
+        finally {
+          if (previous) lowerer.chainRecvByNode.set(recvNode.expression, previous);
+          else lowerer.chainRecvByNode.delete(recvNode.expression);
+        }
+      }
+      const spreads: { arg: number; what: string }[] = [];
+      const args = expr.arguments.map((arg, index) => {
+        if (!ts.isSpreadElement(arg)) return lowerer.lowerExprExpecting(arg, DYN);
+        spreads.push({ arg: index, what: arg.expression.getText() });
+        return lowerer.lowerExprExpecting(arg.expression, DYN);
+      });
+      const body: IrExpr = { kind: "dynCall", callee, ...(thisValue ? { receiver: thisValue } : {}),
+        calleeName: recvNode.getText(), args, ...(spreads.length ? { spreads } : {}), type: DYN, loc };
+      const result: IrExpr = { kind: "optChain", id, receiver: guarded, body, type: DYN, loc };
+      return stmts.length ? { kind: "seqExpr", stmts, result, type: DYN, loc } : result;
+    }
     // `pkg?.name` / `pkg?.scripts?.[k]` on a JSON.parse result: dyn
     // represents undefined directly, so the chain step IS the keyed
     // read with the optional (unit-answers-undefined) policy — no

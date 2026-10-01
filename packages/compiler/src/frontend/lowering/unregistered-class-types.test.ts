@@ -59,11 +59,11 @@ test("record and union IDs have independent identities", () => {
 });
 
 test("fresh indexes observe later class registration and type-table completion", () => {
-  let shape: IrRecordShape | undefined;
+  const table: { shape?: IrRecordShape } = {};
   const classes = new Set<string>();
-  const fresh = () => new UnregisteredClassTypes(() => shape, () => undefined, (name) => classes.has(name));
+  const fresh = () => new UnregisteredClassTypes(() => table.shape, () => undefined, (name) => classes.has(name));
   expect(fresh().has(record("r"))).toBe(false);
-  shape = { id: "r", fields: [{ name: "value", type: missing }] };
+  table.shape = { id: "r", fields: [{ name: "value", type: missing }] };
   expect(fresh().has(record("r"))).toBe(true);
   classes.add("Missing");
   expect(fresh().has(record("r"))).toBe(false);

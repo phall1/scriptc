@@ -5,12 +5,14 @@ class Item {
   add(amount) { this.value += amount; return this.value; }
   toJSON() { return { value: this.value }; }
 }
+const originalAdd = Item.prototype.add;
 function copy(value) {
   const prototype = Object.getPrototypeOf(value);
   console.log(Object.getOwnPropertyNames(prototype).join(","));
   console.log(prototype.constructor === Item);
   const descriptors = Object.getOwnPropertyDescriptors(prototype);
   console.log(descriptors.add.enumerable, descriptors.add.writable, descriptors.add.configurable);
+  console.log(descriptors.add.value === originalAdd);
   const result = Object.create(prototype, Object.getOwnPropertyDescriptors(value));
   console.log(result.doubled, result.add(2), value.value);
   result.doubled = 20;

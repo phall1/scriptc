@@ -14,7 +14,6 @@ test.each([
   ["reviver context", `JSON.parse("1", (key, value, context) => context.source);`, "JSON reviver"],
   ["reviver rest context", `JSON.parse("1", (...args) => args.length);`, "JSON reviver"],
   ["reviver arguments context", `JSON.parse("1", function () { return arguments[2].source; });`, "JSON reviver"],
-  ["dynamic gap", `const gap = process.argv[2]; JSON.stringify({ n: 1 }, (key, value) => value, gap);`, "replacer/space"],
 ] as const)("JSON callback boundary: %s", (_name, source, message) => {
   const dir = temp();
   try {
@@ -22,7 +21,7 @@ test.each([
     writeFileSync(entry, source);
     const { coverage } = analyze(entry, { dynamic: false });
     expect(coverage.preflightFailed).toBe(false);
-    expect([...coverage.diagnostics, ...coverage.runtimeFences].some((d) => d.code === "SC2020" && d.message.includes(message)),
+    expect([...coverage.diagnostics, ...(coverage.runtimeFences ?? [])].some((d) => d.code === "SC2020" && d.message.includes(message)),
       JSON.stringify(coverage.diagnostics)).toBe(true);
   } finally {
     rmSync(dir, { recursive: true, force: true });

@@ -245,6 +245,17 @@ function generatorLoopBinding(
   const list = stmt.initializer;
   const decl = list.declarations[0]!;
   const isLet = (list.flags & ts.NodeFlags.Let) !== 0;
+  // The iterator result uses checked storage when its return channel is
+  // unknown. After the done test, restore the declared yield shape for
+  // destructuring without exposing the unrelated return value.
+  if (valueType.kind === "dyn" && (ts.isArrayBindingPattern(decl.name) || ts.isObjectBindingPattern(decl.name))) {
+    const declared = lowerer.mapTypeOf(lowerer.typeOf(decl.name));
+    if (declared?.kind === "record" || declared?.kind === "array") {
+      const converted = lowerer.coerceToExpected(value, declared);
+      value = converted;
+      valueType = converted.type;
+    }
+  }
   if (ts.isIdentifier(decl.name)) {
     const varTarget = forOfVarTarget(lowerer, decl);
     const bound = varTarget

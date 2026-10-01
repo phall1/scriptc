@@ -1777,7 +1777,7 @@ export function isParseArgsDynCheckerType(lowerer: Lowerer, type: ts.Type): bool
             args: [srcRef(), { kind: "strLit", value: dynSpell ?? "", type: STRING, loc }],
             type: DYN,
             loc,
-          } : { kind: "dynIterN", value: srcRef(), count: pattern.elements.length, type: DYN, loc },
+          } : { kind: "dynIterN", value: srcRef(), count: pattern.elements.length, ...(dynSpell ? { notIterableMessage: dynSpell } : {}), type: DYN, loc },
           loc,
         });
         pattern.elements.forEach((el, i) => {
@@ -3783,7 +3783,9 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
     // poisons, still declare the local when its type is representable, so
     // later references to this name don't produce cascading errors.
     const inferredObjectType = isJsSourceFile(decl.getSourceFile()) ? lowerer.mapTypeOf(lowerer.typeOf(decl.name)) : null;
-    const expandsObject = inferredObjectType?.kind === "record" && jsObjectBindingExpands(lowerer, decl, inferredObjectType);
+    const inferredObjectArms = inferredObjectType?.kind === "union"
+      ? lowerer.unions.get(inferredObjectType.unionId)?.arms ?? [] : inferredObjectType ? [inferredObjectType] : [];
+    const expandsObject = inferredObjectArms.some((arm) => arm.kind === "record" && jsObjectBindingExpands(lowerer, decl, arm));
     let init: IrExpr;
     try {
       init = expandsObject || (isJsSourceFile(decl.getSourceFile()) && !decl.type &&
@@ -3849,6 +3851,8 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
     }
     const preservesObjectIdentity = init.type.kind === "dyn" &&
       (inferredObjectType?.kind === "record" || inferredObjectType?.kind === "array" ||
+        (isJsSourceFile(decl.getSourceFile()) && inferredObjectArms.some((arm) => arm.kind === "record") &&
+          inferredObjectArms.every((arm) => isUnitType(arm) || arm.kind === "record")) ||
         (isJsSourceFile(decl.getSourceFile()) && inferredObjectType !== null &&
           (inferredObjectType.kind === "date" || inferredObjectType.kind === "func" || inferredObjectType.kind === "object" || jsOpenObjectType(decl, inferredObjectType, lowerer.shapes, lowerer.unions).kind === "dyn")) ||
         (isJsSourceFile(decl.getSourceFile()) && inferredObjectType !== null &&
@@ -4171,7 +4175,7 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
     if (decl.type || !decl.initializer || !ts.isIdentifier(decl.name) || !isJsSourceFile(decl.getSourceFile())) return false;
     let initializer = decl.initializer;
     while (ts.isParenthesizedExpression(initializer)) initializer = initializer.expression;
-    if (!ts.isObjectLiteralExpression(initializer)) return false;
+    if (!ts.isObjectLiteralExpression(initializer) && !ts.isCallExpression(initializer)) return false;
     if (hasJsTypeAnnotation(decl)) return false;
     // A generic clone retains its declared T contract. Its instantiated
     // record is also the factory's return/capture layout; it is not an

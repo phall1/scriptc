@@ -821,6 +821,10 @@ ScrDyn *scr_dyn_iter_pack(const ScrDyn *src, const ScrStr *msg) {
   return scr_dyn_not_iterable(src, msg);
 }
 
+ScrDyn *scr_dyn_jsval_iter_n(const ScrDyn *src, double count) {
+  return scr_dyn_jsval_ops()->iter_n(src->v.jsval.cell, count);
+}
+
 /* The for-of-over-dyn pack accessors: the emitted index loop drives them
  * over a scr_dyn_iter_pack result (ARR by construction — the defensive
  * arms cover nothing reachable from that lowering). Never throw. */
@@ -2298,6 +2302,13 @@ bool scr_dyn_isl_is_array(const ScrDyn *d) {
 }
 
 bool scr_dyn_isl_is_error(const ScrDyn *d) {
+  /* Registered native Error capsules retain their brand even when their
+   * public property view omits the internal error marker. */
+  ScrError *error = scr_errdyn_err_of(d);
+  if (error) {
+    scr_error_release(error);
+    return true;
+  }
   if (d->kind == SCR_DYN_TYPED_REF) {
     ScrDyn *materialized = scr_dyn_typed_ref_materialize(d);
     bool out =

@@ -41,18 +41,11 @@ utility-types.ts:20:13 - error SC1090: console.log of 'Date' values ('Date' valu
      |             ^~~~
   21 | 
 
-utility-types.ts:22:7 - error SC2001: values of type 'Readonly<Date>' cannot be compiled yet (supported: number, string, boolean, arrays, Maps, Sets, RegExp, read-only Date values, functions, classes, records, unions of those, and 'unknown')
+utility-types.ts:22:33 - error SC1101: converting typed values to 'unknown' is not supported yet
 
   21 | 
   22 | const stamped: Readonly<Date> = new Date(0);
-     |       ^~~~~~~
+     |                                 ^~~~~~~~~~~
   23 | console.log(stamped.getTime());
 
-utility-types.ts:23:13 - error SC2020: 'Readonly<Date>.getTime' is part of the standard library types but has no scriptc lowering yet
-
-  22 | const stamped: Readonly<Date> = new Date(0);
-  23 | console.log(stamped.getTime());
-     |             ^~~~~~~~~~~~~~~
-  24 | 
-
-  hint: the type checker sees the full standard library, but only the supported surface compiles (https://scriptc.dev/limitations)
+  hint: numbers, strings, booleans, JSON-safe records/arrays/unions (a deep copy), functions, program class instances, and supported native handles convert into 'unknown' slots; functions, exact-class round trips, and handles preserve identity, while this value's type has no dynamic representation yet

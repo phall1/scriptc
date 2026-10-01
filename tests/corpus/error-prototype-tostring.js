@@ -8,6 +8,7 @@ function make(label) {
 const first = make("one");
 const second = make("two");
 function print(value) {
+  console.log(value instanceof Error, String(value));
   console.log(value.toString());
   const method = value.toString;
   console.log(method.call(value));

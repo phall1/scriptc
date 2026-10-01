@@ -5563,7 +5563,7 @@ export type IrExpr =
    * (undefined-padded past the end) — the empty pattern passes count 0
    * and uses only the validation. Value is borrowed; the result is owned
    * (+1). */
-  | { kind: "dynIterN"; value: IrExpr; count: number; type: IrType; loc: SrcLoc }
+  | { kind: "dynIterN"; value: IrExpr; count: number; notIterableMessage?: string; type: IrType; loc: SrcLoc }
   /** The OVERFLOW key list of an index-signature record, in JS OWN-KEY
    * order (canonical array indices ascending first, then insertion order —
    * the runtime's scr_map_keys_js_order): a fresh string[] snapshot, the
@@ -6247,7 +6247,7 @@ export function canMarshalTypedFuncIntoIsland(
  * through a dyn value), properties ON function values, and params/results
  * outside the conversion domains (Maps, class instances, ...). Promises
  * CONVERT in (canConvertToDyn's promise arm — an async dyn-boxed closure's
- * return) but do not check OUT (`u as Promise<T>` stays fenced).
+ * return); checking OUT preserves the boxed Promise<unknown> payload ABI.
  */
 
 /** The runtime HANDLE kinds that cross the checked-dynamic boundary as
@@ -6459,6 +6459,7 @@ export function canDynCheckTo(
   if (t.kind === "bytes") return true;
   if (t.kind === "classval") return true;
   if (t.kind === "generator") return true;
+  if (t.kind === "promise") return t.inner.kind === "dyn";
   if (t.kind === "object" && t.className === "%Error") return true;
   // Native class capsules already support checked extraction at ordinary
   // boundaries. Callable adapters use the same identity/brand check.

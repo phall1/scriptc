@@ -2535,7 +2535,7 @@ export class Lowerer {
     if (!ts.isVariableDeclaration(decl) || !ts.isIdentifier(decl.name) || !decl.initializer) return null;
     const directSpec = requireSpecOf(decl.initializer);
     if (directSpec !== null) {
-      return resolveImport(this.program, decl.getSourceFile(), directSpec) ??
+      return resolveImport(this.program, decl.getSourceFile(), directSpec, "require") ??
         npmStaticDepSf7(this.program, decl.getSourceFile(), directSpec, "require");
     }
     return createRequireProgramModuleOf(this, decl.initializer)?.dep ?? null;
@@ -2835,7 +2835,7 @@ export class Lowerer {
     // Without the guarded %init call at this position
     // those globals stay uninitialized: the dep's module body would never
     // run.
-    const dep = resolveImport(this.program, node.getSourceFile(), spec) ??
+    const dep = resolveImport(this.program, node.getSourceFile(), spec, "require") ??
       npmStaticDepSf7(this.program, node.getSourceFile(), spec, "require");
     if (!dep || dep.fileName.endsWith(".json")) return null;
     if (this.asyncInitFiles.has(dep)) {

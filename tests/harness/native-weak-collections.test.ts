@@ -56,7 +56,8 @@ function check(value: any): void {
 check(record);
 check(array);
 check(tuple);
-check(instance);
+console.log(map.set(instance, 3) === map, map.get(instance));
+console.log(set.add(instance) === set, set.has(instance));
 console.log("after");
 `);
       const result = await compile(entry, {
@@ -67,7 +68,8 @@ console.log("after");
       if (!result.ok) return;
       const child = await exec(result.binaryPath);
       expect(child.stdout).toBe([
-        ...Array(8).fill("Weak collection keys of this native reference type have no weak lifetime lowering"),
+        ...Array(6).fill("Weak collection keys of this native reference type have no weak lifetime lowering"),
+        "true 3", "true true",
         "after", "",
       ].join("\n"));
       expect(child.stderr).toBe("");

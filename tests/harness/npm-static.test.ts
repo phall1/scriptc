@@ -924,22 +924,21 @@ describe(`npm-static pilots${sanitize ? " (sanitized)" : ""}`, () => {
     ]);
   }, 120_000);
 
-  // 2469: a TYPE-ONLY surface name (an interface) has no JS value the
-  // inferred surface can carry — the import-site SC0001 NAMES the package,
-  // and the consumer-anchored attribution degrades exactly it to the
-  // island with the note, never a failed gate. Explicit opt-ins degrade
-  // like auto's: the ratified bundle-shape behavior.
-  test("a consumer-anchored surface break degrades the named package with a note", () => {
+  test("published type-only declarations coexist with a static runtime bundle", async () => {
     const entry = join(fixturesRoot, "npm/cases/2469-bundle-offender/main.ts");
     const { coverage } = analyze(entry, { npmStatic: ["gtghost"] });
     expect(coverage.preflightFailed).toBe(false);
     expect(coverage.npmStatic).toEqual([
       {
         package: "gtghost",
-        status: "fallback",
-        detail: expect.stringContaining("inferred export surface breaks 1 import site") as string,
+        status: "static",
       },
     ]);
+    const binary = await buildStatic(entry, ["gtghost"]);
+    const [reference, actual] = await Promise.all([runBinary(process.execPath, [entry]), runBinary(binary, [])]);
+    expect(actual.stdout).toEqual(reference.stdout);
+    expect(comparableStderr(actual.stderr)).toEqual(reference.stderr);
+    expect(actual.exitCode).toBe(reference.exitCode);
   }, 120_000);
 
   // The build-transform-marker relaxation: a getter-table bundle with its

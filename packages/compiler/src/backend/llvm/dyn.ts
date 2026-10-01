@@ -465,6 +465,9 @@ export class LlDyn {
       case "bigint":
         kindIs(DYN_KIND.BIGINT);
         break;
+      case "promise":
+        kindIs(DYN_KIND.PROMISE);
+        break;
       case "symbol":
         kindIs(DYN_KIND.SYMBOL);
         break;
@@ -977,6 +980,14 @@ export class LlDyn {
         B.line(`call void @scr_dyn_check_fail(ptr %path, ptr ${want}, ptr %d)`);
         B.terminate(`ret ptr null`);
         break;
+      case "promise": {
+        requireKind(DYN_KIND.PROMISE, "dc");
+        host.declare(`declare ptr @scr_promise_retain(ptr)`);
+        const promise = this.payloadOf(B, "%d", "ptr"), retained = B.tmp();
+        B.line(`${retained} = call ptr @scr_promise_retain(ptr ${promise})`);
+        B.terminate(`ret ptr ${retained}`);
+        break;
+      }
       case "object": {
         // The %Error extraction (an instanceof-Error narrow on unknown):
         // validate the checked-dynamic tree's error encoding — the reserved "%error" marker
@@ -2963,14 +2974,13 @@ export class LlDyn {
       const materialized = B.tmp();
       const out = B.tmp();
       B.line(`${materialized} = call ptr @scr_dyn_typed_ref_materialize(ptr %d)`);
-      B.line(`${out} = call ptr @${name}(ptr ${materialized}, ${host.sizeType} %n)`);
+      B.line(`${out} = call ptr @${name}(ptr ${materialized}, ${host.sizeType} %n, ptr %spelling)`);
       B.line(`call void @scr_dyn_release_v(ptr ${materialized})`);
       B.terminate(`ret ptr ${out}`);
       B.startBlock(lNext);
     }
-    // ISLAND-held sources: an engine array IS iterable — the not-iterable
-    // TypeError below would be a wrong claim. Loud fence (lane
-    // dyn-routing-ops).
+    // Island-held sources keep the engine's iterator and IteratorClose
+    // behavior while returning checked values for the destructuring slots.
     {
       const isJv = B.tmp();
       B.line(`${isJv} = icmp eq i32 ${kd}, ${DYN_KIND.JSVAL}`);
@@ -2978,10 +2988,12 @@ export class LlDyn {
       const lNotJv = B.newLabel("din.njv");
       B.condBr(isJv, lJv, lNotJv);
       B.startBlock(lJv);
-      host.declare(`declare zeroext i1 @scr_dyn_isl_fence(ptr, ptr)`);
-      const f = B.tmp();
-      B.line(`${f} = call zeroext i1 @scr_dyn_isl_fence(ptr %d, ptr ${host.cstr("iteration")})`);
-      B.terminate(`ret ptr null`);
+      host.declare(`declare ptr @scr_dyn_jsval_iter_n(ptr, double)`);
+      const count = B.tmp();
+      const out = B.tmp();
+      B.line(`${count} = uitofp ${host.sizeType} %n to double`);
+      B.line(`${out} = call ptr @scr_dyn_jsval_iter_n(ptr %d, double ${count})`);
+      B.terminate(`ret ptr ${out}`);
       B.startBlock(lNotJv);
     }
     const okA = B.tmp();
@@ -3002,6 +3014,17 @@ export class LlDyn {
     const buf = "%dib";
     B.entryAllocas.push(`${buf} = alloca %ScrJsonBuf`);
     B.line(`call void @scr_jb_init(ptr ${buf})`);
+    const hasSpelling = B.tmp();
+    B.line(`${hasSpelling} = icmp ne ptr %spelling, null`);
+    const named = B.newLabel("din.named"), unnamed = B.newLabel("din.unnamed");
+    B.condBr(hasSpelling, named, unnamed);
+    B.startBlock(named);
+    B.line(`call void @scr_jb_puts(ptr ${buf}, ptr %spelling)`);
+    const namedMessage = B.tmp();
+    B.line(`${namedMessage} = call ptr @scr_jb_finish(ptr ${buf})`);
+    B.line(`call void @scr_throw_error(i32 1, ptr ${namedMessage})`);
+    B.terminate(`ret ptr null`);
+    B.startBlock(unnamed);
     const lU = B.newLabel("din.u");
     const lN = B.newLabel("din.n");
     const lB2 = B.newLabel("din.b");
@@ -3184,7 +3207,7 @@ export class LlDyn {
     });
     B.terminate(`ret ptr ${out}`);
     this.defs.push(
-      `define internal ptr @${name}(ptr %d, ${host.sizeType} %n) ${FN_ATTRS} { ; destructuring GetIterator + N steps`,
+      `define internal ptr @${name}(ptr %d, ${host.sizeType} %n, ptr %spelling) ${FN_ATTRS} { ; destructuring GetIterator + N steps`,
       B.render(),
       `}`,
       ``,

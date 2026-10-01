@@ -1356,19 +1356,7 @@ static bool isl_dynjs_assign(ScrJsval *cell, const ScrDyn *src) {
 
 static ScrStr *isl_dynjs_to_json(ScrJsval *cell) { return scr_jsval_to_json(cell); }
 
-static ScrDyn *isl_dynjs_iter_drain(ScrJsval *cell, bool spread, const ScrStr *spell) {
-  isl_entry();
-  JSValue m = JS_NewInt32(isl_ctx, spread ? 1 : 0);
-  JSValue s = spell && spell->len > 0
-    ? JS_NewStringLen(isl_ctx, spell->data, spell->len)
-    : JS_UNDEFINED;
-  JSValue argv[3] = {cell->v, m, s};
-  JSValue r = JS_Call(isl_ctx, isl_helpers[ISL_H_ITERDRAIN], JS_UNDEFINED, 3, argv);
-  JS_FreeValue(isl_ctx, s);
-  if (JS_IsException(r)) {
-    isl_bridge_exception();
-    return NULL;
-  }
+static ScrDyn *isl_dynjs_unpack_array(JSValue r) {
   /* The drained engine array unpacks into a fresh dyn array — elements
    * wrap back scalar-normalized (composites stay engine values by
    * reference), exactly the obj_walk unpack. */
@@ -1386,6 +1374,22 @@ static ScrDyn *isl_dynjs_iter_drain(ScrJsval *cell, bool spread, const ScrStr *s
   return out;
 }
 
+static ScrDyn *isl_dynjs_iter_drain(ScrJsval *cell, bool spread, const ScrStr *spell) {
+  isl_entry();
+  JSValue m = JS_NewInt32(isl_ctx, spread ? 1 : 0);
+  JSValue s = spell && spell->len > 0
+    ? JS_NewStringLen(isl_ctx, spell->data, spell->len)
+    : JS_UNDEFINED;
+  JSValue argv[3] = {cell->v, m, s};
+  JSValue r = JS_Call(isl_ctx, isl_helpers[ISL_H_ITERDRAIN], JS_UNDEFINED, 3, argv);
+  JS_FreeValue(isl_ctx, s);
+  if (JS_IsException(r)) {
+    isl_bridge_exception();
+    return NULL;
+  }
+  return isl_dynjs_unpack_array(r);
+}
+
 static ScrDyn *isl_dynjs_iterator(ScrJsval *cell, const ScrStr *spell, bool array_from) {
   isl_entry();
   JSValue s = spell && spell->len ? JS_NewStringLen(isl_ctx, spell->data, spell->len) : JS_UNDEFINED;
@@ -1395,6 +1399,14 @@ static ScrDyn *isl_dynjs_iterator(ScrJsval *cell, const ScrStr *spell, bool arra
   if (JS_IsException(r)) { isl_bridge_exception(); return NULL; }
   ScrDyn *out = isl_dyn_from_value(r);
   JS_FreeValue(isl_ctx, r);
+  return out;
+}
+
+static ScrDyn *isl_dynjs_iter_n(ScrJsval *cell, double count) {
+  ScrJsval *prefix = scr_jsval_iter_n(cell, count);
+  if (!prefix) return NULL;
+  ScrDyn *out = isl_dynjs_unpack_array(JS_DupValue(isl_ctx, prefix->v));
+  scr_jsval_release(prefix);
   return out;
 }
 
@@ -1417,6 +1429,7 @@ static const ScrDynJsvalOps isl_dynjs_ops = {
   isl_dynjs_to_json,
   isl_dynjs_iter_drain,
   isl_dynjs_iterator,
+  isl_dynjs_iter_n,
 };
 
 ScrDyn *scr_dyn_from_jsval(ScrJsval *cell) {

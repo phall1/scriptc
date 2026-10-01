@@ -2213,6 +2213,11 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
       // reports a class. Its property bag must remain reachable, while
       // an absent element takes the normal checked-value TypeError.
       const nativeReceiver = lowerer.stripUndefinedArm(recvLowered.type);
+      if (ts.isPrivateIdentifier(expr.name) && recvLowered.type.kind === "object") {
+        const field = lowerer.classes.get(recvLowered.type.className)?.fields.get(expr.name.text);
+        if (field) return { kind: "fieldGet", obj: recvLowered, className: recvLowered.type.className,
+          field: expr.name.text, type: field, loc };
+      }
       if (nativeReceiver.kind === "object" && nativeReceiver.className === "%Error") {
         return lowerer.maybeNarrow({ kind: "dynKeyGet", value: lowerer.coerceToExpected(recvLowered, DYN),
           key: { kind: "strLit", value: expr.name.text, type: STRING, loc }, type: DYN, loc }, expr);
@@ -3214,6 +3219,10 @@ function lowerNullishPair(lowerer: Lowerer, expr: ts.BinaryExpression, loc: SrcL
     const fresh = rest.length === 1 ? lowerer.emptyCollectionFor(expr.right, rest[0]!) : null;
     if (fresh) return { kind: "nullish", left, right: fresh, type: fresh.type, loc };
     const type = lowerer.irTypeOf(expr);
+    if (type.kind === "dyn" && lowerer.dynConvertible(left.type)) {
+      return { kind: "nullish", left: lowerer.coerceToExpected(left, DYN),
+        right: lowerer.lowerExprExpecting(expr.right, DYN), type: DYN, loc };
+    }
     if (typeEquals(type, left.type) || (rest.length === 1 && typeEquals(type, rest[0]!))) {
       const right = lowerer.lowerExprExpecting(expr.right, type);
       return { kind: "nullish", left, right, type, loc };
@@ -4046,6 +4055,14 @@ function lowerPromiseThenPresence(
     // destination can use the ordinary tuple-to-array coercion afterward.
     const tsType = underConstAssertion(expr) ? lowerer.typeOf(expr) : ctxType ?? lowerer.typeOf(expr);
     let mapped = expected ?? lowerer.mapTypeOf(tsType);
+    // An inferred destructuring pattern supplies a contextual [any, ...]
+    // tuple. Its positions do not erase the literal's inferred element
+    // types; explicit destinations already arrive through expected.
+    if (expected === undefined && ctxType && lowerer.checker.isTupleType(ctxType) &&
+        lowerer.checker.getTypeArguments(ctxType as ts.TypeReference).some((type) => (type.flags & ts.TypeFlags.Any) !== 0)) {
+      const inferred = lowerer.mapTypeOf(lowerer.typeOf(expr));
+      if (inferred?.kind === "array" || inferred?.kind === "record" && lowerer.shapes.get(inferred.shapeId)?.tuple) mapped = inferred;
+    }
     // A JS literal whose OWN inferred type is never-tainted
     // (neverTaintedJsType — the evolving `const gb = []`, the mixed
     // command tuple `['pwd', []]`) carries no element information: route

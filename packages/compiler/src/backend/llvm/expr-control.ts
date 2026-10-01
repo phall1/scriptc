@@ -46,7 +46,7 @@ export function emitControlExpr(host: LlvmEmitterContext, e: ExprOf<"dynDestrChe
         }
         const helper = host.dyn.dynIterNHelper();
         const t = B.tmp();
-        B.line(`${t} = call ptr @${helper}(ptr ${v.name}, ${host.sizeType} ${e.count})`);
+        B.line(`${t} = call ptr @${helper}(ptr ${v.name}, ${host.sizeType} ${e.count}, ptr ${e.notIterableMessage ? host.cstr(e.notIterableMessage) : "null"})`);
         const out = host.own({ name: t, type: e.type });
         host.emitPendingCheck();
         return out;

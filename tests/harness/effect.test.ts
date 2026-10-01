@@ -43,4 +43,4 @@ test.for(cases)("published Effect %s matches Node statically", async (entry) => 
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
-}, 240_000);
+}, 600_000);

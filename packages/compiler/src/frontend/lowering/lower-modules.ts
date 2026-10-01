@@ -1180,8 +1180,11 @@ export function collectGlobals(lowerer: Lowerer, sf: ts.SourceFile, topStmts: ts
             const diagsBefore = lowerer.diags.length;
             try {
               const strict = lowerer.typeOf(rhs);
-              const t = lowerer.mapTypeOf(strict) ??
+              let t = lowerer.mapTypeOf(strict) ??
                 (fnValued || factoryValued ? dynFallbackType(lowerer, rhs, strict) : null);
+              // A returned object remains the live CommonJS root; later
+              // exports.member writes must update that same open object.
+              if (factoryValued && t?.kind === "record" && lowerer.dynConvertible(t)) t = DYN;
               if (t && t.kind !== "void") {
                 const g: IrGlobal = { id: `%g.${tag}exports`, name: "exports", type: t, mutable: false };
                 lowerer.globalsByDeclNode.set(cjs.expr, g);
@@ -1737,6 +1740,11 @@ export function collectGlobals(lowerer: Lowerer, sf: ts.SourceFile, topStmts: ts
             const inferredJsCall = callDeclaration && isJsSourceFile(callDeclaration.getSourceFile()) &&
               !lowerer.mapTypeOf(lowerer.typeOf(nameNode));
             let type = handleT ?? factoryType ?? (inferredJsCall ? DYN : lowerer.irTypeOf(nameNode));
+            if (isJsSourceFile(sf) && !decl.type && !hasJsTypeAnnotation(decl) &&
+                decl.initializer && ts.isCallExpression(decl.initializer) && type.kind === "union") {
+              const arms = lowerer.unions.get(type.unionId)?.arms;
+              if (arms?.some((arm) => arm.kind === "record") && arms.every((arm) => isUnitType(arm) || arm.kind === "record")) type = DYN;
+            }
             if (isJsSourceFile(sf) && !decl.type && !hasJsTypeAnnotation(decl) && decl.initializer &&
                 ts.isNewExpression(decl.initializer) && lowerer.mapTypeOf(lowerer.typeOf(decl.initializer.expression))?.kind === "dyn" &&
                 !(ts.isIdentifier(decl.initializer.expression) && lowerer.isStdlibSymbol(lowerer.checker.getSymbolAtLocation(decl.initializer.expression)))) type = DYN;
@@ -1860,6 +1868,9 @@ export function collectGlobals(lowerer: Lowerer, sf: ts.SourceFile, topStmts: ts
               if (shape && shape.fields.length === 0 && !shape.indexValue && !shape.tuple) type = DYN;
             }
             // Module vars hold real undefined until their declaration runs.
+            // Unannotated JS function values need that state too: callers
+            // before the initializer must see undefined and a TypeError.
+            if (isJsSourceFile(sf) && isVarDeclared(decl) && type.kind === "func" && lowerer.dynConvertible(type)) type = DYN;
             // Codec records keep that state in the ordinary optional union;
             // lexical codec declarations retain their separate TDZ guard.
             const codec = type.kind === "record" && recordTextCodecClass(lowerer.shapes.get(type.shapeId)!) !== null;

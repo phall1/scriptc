@@ -3816,6 +3816,7 @@ void scr_dyn_arr_push_spread(ScrDyn *arr, const ScrDyn *src, const char *what);
  * compile-time source spelling), else the runtime kind wording. Borrows
  * both; NULL with the exception pending on the throw. */
 ScrDyn *scr_dyn_iter_pack(const ScrDyn *src, const ScrStr *msg);
+ScrDyn *scr_dyn_jsval_iter_n(const ScrDyn *src, double count);
 /* Map constructor seeds: retain array inputs for live iteration, accept
  * nullish inputs as empty, and validate each entry before reading 0/1. */
 ScrDyn *scr_dyn_map_seed_entries(const ScrDyn *src);
@@ -4155,6 +4156,7 @@ typedef struct ScrDynJsvalOps {
    * pending. */
   ScrDyn *(*iter_drain)(ScrJsval *cell, bool spread, const ScrStr *spell);
   ScrDyn *(*iterator)(ScrJsval *cell, const ScrStr *spell, bool array_from);
+  ScrDyn *(*iter_n)(ScrJsval *cell, double count);
 } ScrDynJsvalOps;
 
 /* The allocator view the gated constructor uses (installs the ops);

@@ -30,7 +30,11 @@ test.each([
 test("incompatible JS overrides throw at entry without executing the body", async () => {
   const { dir, entry } = fixture(`
 class Base { copy(value = 1) { return value; } }
-class Child extends Base { copy(value) { console.log('must not execute'); return value; } }
+class Child extends Base {
+  /** @returns {string} */
+  // @ts-expect-error Exercise the runtime fence for an incompatible JavaScript override.
+  copy(value) { console.log('must not execute'); return String(value); }
+}
 const child = new Child();
 try { child.copy(2); } catch (error) { console.log(error.message.includes("overriding method 'copy' with a different return type")); }
 console.log(new Base().copy());

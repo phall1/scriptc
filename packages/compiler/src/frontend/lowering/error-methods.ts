@@ -31,7 +31,8 @@ export function refreshErrorPropertyDispatch(lowerer: Lowerer, functions: readon
   const overrides = [...lowerer.classes.values()].filter((info) => !info.builtinError &&
     (hasClassPrototypeData(info) || ["get:name", "set:name", "get:message", "set:message"].some((name) => info.methods.has(name))) &&
     lowerer.isSubclassOf(info.def.name, "%Error"));
-  for (const property of ["name", "message"] as const) {
+  const properties: ("name" | "message")[] = ["name", "message"];
+  for (const property of properties) {
     if (overrides.length && !lowerer.liftedFns.some((fn) => fn.name === `%error.${property}.read`)) {
       errorPropertyRead(lowerer, varRef("error.0", errorType, overrides[0]!.def.loc), property);
       return true;

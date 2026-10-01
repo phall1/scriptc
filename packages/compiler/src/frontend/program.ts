@@ -2073,10 +2073,10 @@ export function makeCycleAdmission(
  * program, or null (unresolvable / outside the program). Exported (as
  * resolveImport) for the lowering: CommonJS require statements lower to
  * guarded %init calls of exactly the module preflight resolved here. */
-function resolveImport7(program: ts.Program, from: ts.SourceFile, specifier: string): ts.SourceFile | null {
+function resolveImport7(program: ts.Program, from: ts.SourceFile, specifier: string, resolutionKind: "import" | "require" = "import"): ts.SourceFile | null {
   const resolved = resolveProjectModule(from.fileName, specifier);
   if (resolved !== null) return program.getSourceFile(resolved) ?? null;
-  const npm = resolveNpmImport7(from.fileName, specifier);
+  const npm = resolveNpmImport7(from.fileName, specifier, resolutionKind);
   return npm && isNpmStaticPackage(npm.packageName)
     ? npmStaticProgramDep(program, npm.packageName, npm.typesFile) : null;
 }
@@ -2453,7 +2453,7 @@ function preflight7(load: LoadResult): {
         entry,
         programFiles,
         [...createRequireProgramRoots7(program), ...forkTargetPaths(program, program.getSourceFiles())],
-        (sf, spec, resolutionKind) => resolveImport7(program, sf, spec) ?? npmStaticDepSf7(program, sf, spec, resolutionKind),
+        (sf, spec, resolutionKind) => resolveImport7(program, sf, spec, resolutionKind) ?? npmStaticDepSf7(program, sf, spec, resolutionKind),
       )
     : programFiles;
   program.getTypeChecker().prefetchSourceFileStructures(userFiles);
@@ -2909,7 +2909,7 @@ function preflight7(load: LoadResult): {
             }
           }
           const isRelative = isRelativeSpecifier(req.spec);
-          let dep = resolveImport7(program, sf, req.spec);
+          let dep = resolveImport7(program, sf, req.spec, "require");
           if (dep === null && !isRelative) {
             // --npm-static: a require() of an OPTED-IN package is a
             // program-module edge exactly like the import-declaration
@@ -2992,7 +2992,7 @@ function preflight7(load: LoadResult): {
         if (load.externalTypes.has(spec)) {
           continue;
         }
-        const projectDep = resolveImport7(program, sf, spec);
+        const projectDep = resolveImport7(program, sf, spec, "require");
         if (projectDep !== null) {
           if (projectDep.fileName.endsWith(".json")) {
             if (bindingKind === "createRequire") continue;
@@ -3186,7 +3186,7 @@ function cjsNamedImportLinkCheck(
   // Reexport targets union in only when they resolve to CommonJS program
   // files (Node's cjsPreparseModuleExports rule).
   const resolveCjsDep = (from: ts.SourceFile, spec: string): ts.SourceFile | null => {
-    const dep = resolveImport7(program, from, spec) ?? npmStaticDepSf7(program, from, spec, "require");
+    const dep = resolveImport7(program, from, spec, "require") ?? npmStaticDepSf7(program, from, spec, "require");
     return dep !== null && isCjsJsFile7(dep, program) ? dep : null;
   };
   const visible = (dep: ts.SourceFile, name: string): boolean =>

@@ -688,6 +688,12 @@ function fenceProducedArrayElem(lowerer: Lowerer, node: ts.Node, producer: strin
       return { kind: "arrIntrinsic", method: "shift", receiver, args: [], type: arrayValueType(lowerer, elem), loc };
     }
     if (name === "join") {
+      if (elem.kind === "dyn") {
+        const receiver = lowerer.coerceToExpected(lowerer.lowerExpr(access.expression), DYN);
+        const args = call.arguments.length ? [lowerer.lowerExprExpecting(call.arguments[0]!, DYN)] : [];
+        return lowerer.coerceToExpected({ kind: "dynInvoke", recv: receiver, method: "join",
+          calleeName: access.getText(), args, type: DYN, loc }, STRING);
+      }
       // The ambient declares join on every Array<T> (a per-element-type
       // interface split isn't expressible there), so string-convertible
       // elements are enforced here: nested arrays would need JS's recursive

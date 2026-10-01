@@ -181,7 +181,7 @@ const PROBES: Probe[] = [
     id: "stdlib.headers.symbol.iterator",
     source: '/// <reference types="node" />\nfunction f([first]: Headers): void {\n  void first;\n}\nvoid f;\n',
   },
-  { id: "diagnostic.sc2011", source: "const y: any = 1;\nconst z = y * 2;\nconsole.log(0);\n" },
+  { id: "diagnostic.sc2011", source: "const y: any = 1;\nconst { z } = y;\nconsole.log(0);\n" },
   // status unsupported — refused with the entry's code
   {
     id: "stdlib.abort-signal.constructor",

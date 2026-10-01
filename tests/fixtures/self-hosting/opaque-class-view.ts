@@ -1,6 +1,7 @@
 class Context {
   readonly values = new Map<string, number>();
   readonly members = new Set<string>();
+  readonly count = (...values: number[]): number => values.length;
   value = 7;
   bump(): number { this.values.set("value", ++this.value); return this.value; }
 }
@@ -14,5 +15,6 @@ for (let i = 0; i < 3; i++) {
   }
   const restored = opaque as Context;
   if (restored !== original || restored.bump() !== 8 + i) throw new Error("capsule identity lost");
+  if (restored.count(1, 2) !== 2) throw new Error("native rest callback lost");
 }
 console.log(original.values.get("value"), original.members.size);

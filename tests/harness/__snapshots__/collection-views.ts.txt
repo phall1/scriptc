@@ -38,37 +38,3 @@ collection-views.ts:16:14 - error SC1090: 'Map<number, number>' values where 'Ma
   16 | console.log((new Map<number, number>([[1, 2]]) as unknown as WordMap).has("word"));
      |              ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   17 | 
-
-collection-views.ts:20:7 - error SC2009: values of type 'TaggedSet' cannot be compiled: the record shape is supported, but its member 'forEach' has type '(callbackfn: (value: string, value2: string, set: ReadonlySet<string>) => void, thisArg?: any) => void', which does not compile
-
-  19 | interface TaggedSet extends ReadonlySet<string> { readonly label: string }
-  20 | const tagged = new Set<string>() as unknown as TaggedSet;
-     |       ^~~~~~
-  21 | console.log(tagged.label);
-
-  hint: the outer shape is supported — the named component is the blocker; restate it inside the compilable set (number, string, boolean, arrays, Maps, Sets, RegExp, functions, classes, records, unions of those, and 'unknown')
-
-collection-views.ts:21:13 - error SC2004: uses of 'tagged' inherit the blocker on its declaration
-
-  20 | const tagged = new Set<string>() as unknown as TaggedSet;
-  21 | console.log(tagged.label);
-     |             ^~~~~~~~~~~~
-  22 | 
-
-  hint: the declaration of 'tagged' did not compile — fix the diagnostic reported there and these sites clear with it
-
-collection-views.ts:27:7 - error SC2009: values of type 'OverloadedSet' cannot be compiled: the record shape is supported, but its member 'has' has type '{ (value: string): boolean; (value: number): boolean; }', which does not compile
-
-  26 | }
-  27 | const overloaded = new Set<string>() as unknown as OverloadedSet;
-     |       ^~~~~~~~~~
-  28 | console.log(overloaded.has(1));
-
-  hint: the outer shape is supported — the named component is the blocker; restate it inside the compilable set (number, string, boolean, arrays, Maps, Sets, RegExp, functions, classes, records, unions of those, and 'unknown')
-
-collection-views.ts:28:13 - error SC1090: method calls like 'overloaded.has' is not supported yet
-
-  27 | const overloaded = new Set<string>() as unknown as OverloadedSet;
-  28 | console.log(overloaded.has(1));
-     |             ^~~~~~~~~~~~~~~~~
-  29 | 

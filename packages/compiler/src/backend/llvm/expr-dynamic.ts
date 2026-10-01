@@ -39,7 +39,8 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
             (host.unionsById.get(v.type.unionId)?.arms.some(isDynTypedRefType) ?? false));
         // Bytes already box their shared mutable storage directly. A second
         // capsule would split identity between checked and native views.
-        if ((e.liveRef && v.type.kind !== "bytes") || identityRef) {
+        const errorRef = v.type.kind === "object" && host.shapeHost.isErrorClass(v.type.className);
+        if (!errorRef && ((e.liveRef && v.type.kind !== "bytes") || identityRef)) {
           if (v.type.kind === "union") {
             const adapter = host.liveDynUnionRefAdapter(v.type);
             const boxed = B.tmp();
@@ -498,9 +499,8 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
           B.line(`${test} = call zeroext i1 @scr_dyn_truthy(ptr ${d.name})`);
         } else if (e.test === "error") {
           // `u instanceof Error`: the checked-dynamic tree's error encoding — an object
-          // carrying the reserved "%error" marker key — or a real engine
-          // Error held by reference (the isl helper answers false for
-          // every non-JSVAL kind, so the call is unconditional).
+          // carrying the reserved "%error" marker key, a registered native
+          // Error view, or a real engine Error held by reference.
           const kd = host.dynKind(d.name);
           const isObj = B.tmp();
           B.line(`${isObj} = icmp eq i32 ${kd}, ${DYN_KIND.OBJ}`);
@@ -519,7 +519,9 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
           const has = B.tmp();
           B.line(`${m} = call ptr @scr_dyn_obj_get(ptr ${d.name}, ptr ${host.cstr("%error")}, ${host.sizeType} 6)`);
           B.line(`${has} = icmp ne ptr ${m}, null`);
-          B.line(`store i1 ${has}, ptr ${slot}`);
+          const branded = B.tmp();
+          B.line(`${branded} = or i1 ${has}, ${isl}`);
+          B.line(`store i1 ${branded}, ptr ${slot}`);
           B.br(lj);
           B.startBlock(lj);
           test = B.tmp();

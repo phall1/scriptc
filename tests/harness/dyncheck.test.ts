@@ -70,6 +70,21 @@ async function compileAndRun(name: string, source: string, ext: "ts" | "cjs" = "
 }
 
 describe(`dynamic-boundary checks (scriptc-only${sanitize ? ", sanitized" : ""})`, () => {
+  test("promise and codec checked casts reject unrelated values", async () => {
+    const r = await compileAndRun("promise-codec-casts", `
+      const value: unknown = {};
+      try { const promise = value as Promise<unknown>; console.log(typeof promise); }
+      catch (error) { console.log(error instanceof TypeError); }
+      try { const optional = value as Promise<unknown> | undefined; console.log(typeof optional); }
+      catch (error) { console.log(error instanceof TypeError); }
+      try { const decoder = value as TextDecoder; console.log(decoder.decode()); }
+      catch (error) { console.log(error instanceof TypeError); }
+    `);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toBe("true\ntrue\ntrue\n");
+    expect(r.stderr).toBe("");
+  });
+
   test("wrong-typed field throws with the path", async () => {
     const r = await compileAndRun(
       "wrong-type",

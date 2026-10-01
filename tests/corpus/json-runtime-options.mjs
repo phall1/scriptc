@@ -13,3 +13,5 @@ let calls = 0;
 try {
   roundtrip("{", { reviver() { calls++; } });
 } catch (error) { console.log(error.name, calls); }
+const gap = process.argv[2];
+console.log(JSON.stringify({ n: 1 }, (key, value) => value, gap));

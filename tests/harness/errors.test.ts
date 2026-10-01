@@ -217,61 +217,17 @@ console.log(two(1, 2, loud()));
     );
   });
 
-  test("Array.from fences an unsupported callback result before emission (JS lane)", async () => {
-    // Callback-driven producers learn their result element from the
-    // lowered callback, bypassing mapType's ordinary T[] gate. A
-    // JavaScript Date values use checked storage, whose callback result
-    // still has no static array element type on this producer path.
-    const r = await compileAndRun(
-      "array-from-length-elements",
-      `const arr = Array.from({ length: 2 }, () => new Date(0));
-console.log(arr.length);
-`,
-      "js",
-    );
-    expect(r.exitCode).toBe(1);
-    expect(r.stdout).toBe("");
-    expect(r.stderr).toMatch(
-      /^Uncaught Error: 'Array\.from\(\{ length \}, mapper\)' with a callback returning 'unknown'-typed values .* \[SC1090 at .*array-from-length-elements\.js:1\]\n$/,
-    );
-  });
-
   test.each([
-    {
-      label: "flatMap",
-      name: "flatmap-elements",
-      producer: "'.flatMap()'",
-      result: "'unknown'-typed values \\(the result array has no static element type — annotate the callback's return\\)",
-      line: 1,
-      source: `const arr = [1].flatMap(() => new Date(0));
-console.log(arr.length);
-`,
-    },
-    {
-      label: "tuple map",
-      name: "tuple-map-elements",
-      producer: "'.map()'",
-      result: "'unknown'-typed values \\(the result array has no static element type — annotate the callback's return\\)",
-      line: 3,
-      source: `/** @type {[number]} */
+    { label: "Array.from", name: "array-from-length-elements", source: `const arr = Array.from({ length: 2 }, () => new Date(0));` },
+    { label: "flatMap", name: "flatmap-elements", source: `const arr = [1].flatMap(() => new Date(0));` },
+    { label: "tuple map", name: "tuple-map-elements", source: `/** @type {[number]} */
 const tuple = [1];
-const arr = tuple.map(() => new Date(0));
-console.log(arr.length);
-`,
-    },
-  ])("$label fences an unsupported callback result before emission (JS lane)", async ({ name, producer, result, line, source }) => {
-    // Both paths construct the ordinary map helper from the lowered
-    // callback return type. They must share Array.from/.map's frontend
-    // fence rather than leave the validator to report an internal error.
-    const r = await compileAndRun(name, source, "js");
-    expect(r.exitCode).toBe(1);
-    expect(r.stdout).toBe("");
-    const quotedProducer = producer.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    expect(r.stderr).toMatch(
-      new RegExp(
-        `^Uncaught Error: ${quotedProducer} with a callback returning ${result} are not supported yet \\[SC1090 at .*${name}\\.js:${line}\\]\\n$`,
-      ),
-    );
+const arr = tuple.map(() => new Date(0));` },
+  ])("$label preserves checked callback results (JS lane)", async ({ name, source }) => {
+    const program = source + "\nconsole.log(arr.length, arr[0].getTime());\n";
+    const r = await compileAndRun(name, program, "js");
+    const reference = await execFileAsync(process.execPath, ["--eval", program], { encoding: "utf8" });
+    expect(r).toEqual({ stdout: reference.stdout, stderr: reference.stderr, exitCode: 0 });
   });
 
   test("extending a property-assigned class ABOVE its assignment is a named deferred fence (JS lane)", async () => {

@@ -31,7 +31,7 @@ import { isSafeToDiscard } from "./expressions/evaluation-safety.js";
 import { tryLowerExpression } from "./expressions/try-lower-expression.js";
 import { hasRuntimeStatics } from "./class-runtime-statics.js";
 import { httpClientFnBindingOf, isStreamUndefCallExpr, lowerCompatReqStreamOptionalCall, lowerHttpClientFnCall } from "./lower-server.js";
-import { EMITTER_API_MEMBERS, exactInstanceClassOf, findGenericMethodOn, lowerClassGenericMethodCall, lowerStaticMethodCall, returnsOnlyThis, type ClassInfo } from "./lower-classes.js";
+import { EMITTER_API_MEMBERS, exactClassOfReceiver, exactInstanceClassOf, findGenericMethodOn, lowerClassGenericMethodCall, lowerStaticMethodCall, returnsOnlyThis, storedClassValueType, type ClassInfo } from "./lower-classes.js";
 import { classCallbackCall, isClassCallback } from "./class-callbacks.js";
 import { emitterRooted, lowerEmitterMethodCall } from "./lower-event-emitter.js";
 import { lowerConsoleInspectArg, lowerFormatCall } from "./lower-inspect.js";
@@ -1138,10 +1138,13 @@ function completeFuncValueArgs(
     // that boundary; their factories keep the native record ABI.
     const asyncReturn = decl.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword) && mappedReturn?.kind === "promise";
     const recordReturn = asyncReturn ? mappedReturn.inner : mappedReturn;
+    const recordArms = recordReturn?.kind === "union" ? lowerer.unions.get(recordReturn.unionId)?.arms : recordReturn ? [recordReturn] : undefined;
+    const inferredRecordReturn = recordArms?.some((arm) => arm.kind === "record" || arm.kind === "object") &&
+      recordArms.every((arm) => isUnitType(arm) || arm.kind === "record" || arm.kind === "object" && !hasExplicitJsDocReturn(decl));
     if (
       isJsSourceFile(decl.getSourceFile()) &&
       decl.type === undefined &&
-      (recordReturn?.kind === "record" || (recordReturn?.kind === "object" && !hasExplicitJsDocReturn(decl))) &&
+      recordReturn !== null && recordReturn !== undefined && inferredRecordReturn &&
       lowerer.dynConvertible(recordReturn) &&
       decl.parameters.every((p) => {
         const mt = lowerer.mapTypeOf(lowerer.typeOf(p));
@@ -2293,7 +2296,10 @@ function runtimeOptionalHofGenericBinding(
       // A JavaScript result inferred from an initial record can later
       // carry additional fields. Settle its representation from the
       // lowered returns instead of copying it back into that initial shape.
-      if ((mapped?.kind === "record" || mapped?.kind === "object" || mapped?.kind === "classval") && !hasExplicitJsDocReturn(info.decl)) return null;
+      const resultArms = mapped?.kind === "union" ? lowerer.unions.get(mapped.unionId)?.arms : mapped ? [mapped] : [];
+      if (resultArms?.some((arm) => arm.kind === "record" || arm.kind === "object" || arm.kind === "classval") &&
+          resultArms.every((arm) => isUnitType(arm) || arm.kind === "record" || arm.kind === "object" || arm.kind === "classval") &&
+          !hasExplicitJsDocReturn(info.decl)) return null;
       // Inferred variadic results carry runtime argument packs. Their
       // factory must retain the lowered callable rather than extracting a
       // fixed native signature from a checked value.
@@ -6251,7 +6257,14 @@ function lowerOptionalStringNumber(
     // unimplemented methods throw a LOUD not-supported Error; names the
     // kind's prototype lacks throw Node's "x.y is not a function"; OBJ
     // receivers call the own member.
-    const dispatched = lowerDynDispatchMethodCall(lowerer, call, access, recv, arrayReceiver);
+    // A stored callback must be read before argument effects, and called
+    // with the original receiver rather than a materialized property view.
+    const callbackProperty = (() => {
+      const prop = lowerer.checker.getPropertyOfType(recvTs, access.name.text);
+      return prop !== undefined && lowerer.checker.declarationsOf(prop).some((decl) =>
+        ts.isPropertyDeclaration(decl) || ts.isPropertySignature(decl));
+    })();
+    const dispatched = callbackProperty ? null : lowerDynDispatchMethodCall(lowerer, call, access, recv, arrayReceiver);
     if (dispatched) return dispatched;
     // Names NO dyn-representable prototype declares: the member can only
     // be an OWN property, so "read the member, call it" IS Node's
@@ -9528,7 +9541,12 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
         (member === "getOwnPropertyDescriptor" && call.arguments.length === 2)) {
       if (call.arguments.some((a) => ts.isSpreadElement(a))) return null;
       let target = tryLowerExpression(lowerer, call.arguments[0]!);
-      const declaredTarget = target?.type.kind === "dyn" ? lowerer.mapTypeOf(lowerer.typeOf(call.arguments[0]!)) : null;
+      const targetNode = call.arguments[0]!;
+      // The checker gives C.prototype the instance type, but its lowered
+      // value is the shared prototype table, not an instance to unbox.
+      const prototypeTarget = ts.isPropertyAccessExpression(targetNode) && targetNode.name.text === "prototype" &&
+        (exactClassOfReceiver(lowerer, targetNode.expression) !== null || storedClassValueType(lowerer, targetNode.expression)?.kind === "classval");
+      const declaredTarget = target?.type.kind === "dyn" && !prototypeTarget ? lowerer.mapTypeOf(lowerer.typeOf(targetNode)) : null;
       if (target && declaredTarget && isDynTypedRefType(declaredTarget)) target = lowerer.coerceToExpected(target, declaredTarget);
       if (target && member === "defineProperty") {
         const native = lowerClassDataDescriptor(lowerer, call, member, target);
@@ -9843,7 +9861,6 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
       const recT = argIr;
       const ref: IrExpr = { kind: "varRef", localId: "r.0", type: recT, loc };
       const outRef: IrExpr = { kind: "varRef", localId: "out.0", type: resultT, loc };
-      lowerer.arrHofHelpers.set(key, helper);
       const fn: IrFunction = {
         name: helper,
         params: [{ localId: "r.0", name: "r", type: recT }],
@@ -9870,6 +9887,7 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
           const elemOf = (value: IrExpr, vt: IrType): IrExpr | null => {
             if (!valueT) return null;
             if (typeEquals(vt, valueT)) return value;
+            if (valueT.kind === "dyn" && lowerer.dynConvertible(vt)) return lowerer.coerceToExpected(value, DYN);
             if (valueT.kind === "union" && vt.kind !== "union") {
               const tag = lowerer.armTag(valueT.unionId, vt);
               if (tag >= 0) {
@@ -9889,7 +9907,7 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
               guardUndefTag = undefTag;
               const arms = lowerer.unions.get(f.type.unionId)?.arms ?? [];
               const others = arms.filter((a): boolean => a.kind !== "undefinedT");
-              if (typeEquals(f.type, valueT ?? f.type)) {
+              if (valueT?.kind === "dyn" || typeEquals(f.type, valueT ?? f.type)) {
               // The field union IS the result union (single-field shapes):
               // push the raw box — but then the undefined skip must NOT
               // narrow. Handled below via vt === valueT.
@@ -9914,7 +9932,7 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
                     "cannot re-tag into the result element type — read the fields directly)",
                 );
               }
-            } else if (!typeEquals(f.type, valueT ?? f.type)) {
+            } else if (valueT?.kind !== "dyn" && !typeEquals(f.type, valueT ?? f.type)) {
               lowerer.unsupported(
                 "SC1090",
                 call,
@@ -9965,6 +9983,7 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
         fn.body = body;
       };
       finalize();
+      lowerer.arrHofHelpers.set(key, helper);
       lowerer.shapeOrderHelperFinalizers.push(finalize);
       lowerer.liftedFns.push(fn);
     }

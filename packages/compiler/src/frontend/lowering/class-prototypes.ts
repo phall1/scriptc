@@ -102,12 +102,14 @@ export function reflectClassPrototype(lowerer: Lowerer, info: ClassInfo, loc: Sr
   const initialization = helper?.body[0];
   if (!helper || initialization?.kind !== "if" || info.prototypeReflectionReady) return prototype;
   info.prototypeReflectionReady = true;
-  // The earlier JSON-only view may already have installed toJSON. Rebuild
-  // descriptors in declaration order when the entire prototype is exposed.
-  if (info.prototypeJsonDescriptor) {
-    const index = initialization.then.indexOf(info.prototypeJsonDescriptor);
-    if (index >= 0) initialization.then.splice(index, 1);
-  }
+  // Earlier method or JSON views may have installed only observed slots.
+  // Rebuild them in declaration order when the entire prototype is exposed.
+  // Lowering passes may have rebuilt these statements, so match their
+  // operation instead of relying on the original statement's identity.
+  initialization.then = initialization.then.filter((statement) =>
+    !(statement.kind === "exprStmt" &&
+      (statement.expr.kind === "libCall" && statement.expr.fn === "dyn.defineProperty" ||
+       statement.expr.kind === "call" && statement.expr.callee === "%dyn.class.defineProperty")));
   const define = (key: IrExpr, fields: { key: string; value: IrExpr }[]): IrStmt => ({ kind: "exprStmt", expr: {
     kind: "libCall", fn: "dyn.defineProperty", args: [prototype, lowerer.coerceToExpected(key, DYN), {
       kind: "dynObjLit", fields: [...fields, { key: "configurable", value: { kind: "boolLit" as const, value: true, type: BOOL, loc } }].map((field) => ({

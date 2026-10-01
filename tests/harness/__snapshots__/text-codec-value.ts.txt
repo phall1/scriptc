@@ -32,13 +32,6 @@ text-codec-value.ts:11:1 - error SC2020: 'TextEncoder.encodeInto' is part of the
 
   hint: TextEncoder instances can be stored, passed, and captured; encode(string) and encode() compile, while encodeInto and other members have no static lowering
 
-text-codec-value.ts:12:16 - error SC1090: a checked cast of 'unknown' to 'TextDecoder' (a dynamic value can only be validated against JSON-representable types: number, string, boolean, records, arrays, and unions of those) is not supported yet
-
-  11 | encoder.encodeInto("hello", new Uint8Array(10));
-  12 | const forged = JSON.parse("{}") as TextDecoder;
-     |                ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  13 | console.log(forged.decode());
-
 text-codec-value.ts:18:5 - error SC2020: 'uninitialized lexical codec bindings' is part of the standard library types but has no scriptc lowering yet
 
   17 | var varEncoder = new TextEncoder();

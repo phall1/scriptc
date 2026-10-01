@@ -23,15 +23,6 @@ record-width.ts:27:13 - error SC1090: console.log of '{ m: ({ a: number; b: numb
      |             ^~~~
   28 | 
 
-record-width.ts:33:38 - error SC1101: converting typed values to 'unknown' is not supported yet
-
-  32 | const withMap: WithMap = { m: new Map(), n: 1 };
-  33 | const bag: Record<string, unknown> = withMap;
-     |                                      ^~~~~~~
-  34 | console.log(bag);
-
-  hint: numbers, strings, booleans, JSON-safe records/arrays/unions (a deep copy), functions, program class instances, and supported native handles convert into 'unknown' slots; functions, exact-class round trips, and handles preserve identity, while this value's type has no dynamic representation yet
-
 record-width.ts:40:18 - error SC2002: record shapes must match exactly or width-coerce: expected '{ a: boolean | undefined; [key: string]: boolean | string | undefined }', got '{ b: string }' — the expected field 'a' ('boolean | undefined') cannot take a runtime key collision from the 'boolean | string | undefined' signature slot
 
   39 | const plain = { b: "hi" };

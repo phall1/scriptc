@@ -155,7 +155,8 @@ export function reflectedClassMethodValue(lowerer: Lowerer, info: ClassInfo, met
       const body = lowerer.liftedFns.find((fn) => fn.name === value.fnName);
       if (body?.captures?.length === 0) delete body.captures;
     }
-    (info.prototypeMethodValues ??= new Map()).set(method, value);
+    info.prototypeMethodValues ??= new Map();
+    info.prototypeMethodValues.set(method, value);
     return value;
   } finally {
     lowerer.fnStack.pop();

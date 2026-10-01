@@ -8662,6 +8662,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/arguments-arrow-capture.mjs": {
+   "order": [
+    "<repo>/tests/corpus/arguments-arrow-capture.mjs"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/arguments-reexport/main.ts": {
    "order": [
     "<repo>/tests/corpus/arguments-reexport/core.js",
@@ -8682,6 +8688,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/array-checked-callback-results.mjs": {
+   "order": [
+    "<repo>/tests/corpus/array-checked-callback-results.mjs"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/array-checked-constructor.js": {
    "order": [
     "<repo>/tests/corpus/array-checked-constructor.js"
@@ -8697,6 +8709,12 @@
   "<repo>/tests/corpus/array-from-checked.js": {
    "order": [
     "<repo>/tests/corpus/array-from-checked.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/array-from-value.mjs": {
+   "order": [
+    "<repo>/tests/corpus/array-from-value.mjs"
    ],
    "diags": []
   },
@@ -8772,6 +8790,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/builtin-prototype-method-values.mjs": {
+   "order": [
+    "<repo>/tests/corpus/builtin-prototype-method-values.mjs"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/callable-module-members.mjs": {
    "order": [
     "<repo>/tests/corpus/callable-module-members.mjs"
@@ -8798,6 +8822,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/catch-capture.ts": {
+   "order": [
+    "<repo>/tests/corpus/catch-capture.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/checked-addition.js": {
    "order": [
     "<repo>/tests/corpus/checked-addition.js"
@@ -8807,6 +8837,19 @@
   "<repo>/tests/corpus/checked-any-addition.ts": {
    "order": [
     "<repo>/tests/corpus/checked-any-addition.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/checked-array-assignment.ts": {
+   "order": [
+    "<repo>/tests/corpus/checked-array-assignment.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/checked-array-flat/main.ts": {
+   "order": [
+    "<repo>/tests/corpus/checked-array-flat/operations.mjs",
+    "<repo>/tests/corpus/checked-array-flat/main.ts"
    ],
    "diags": []
   },
@@ -8829,9 +8872,45 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/checked-callback-options.ts": {
+   "order": [
+    "<repo>/tests/corpus/checked-callback-options.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/checked-class-descriptors.mjs": {
+   "order": [
+    "<repo>/tests/corpus/checked-class-descriptors.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/checked-class-factory.mjs": {
+   "order": [
+    "<repo>/tests/corpus/checked-class-factory.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/checked-collection-iterators.ts": {
+   "order": [
+    "<repo>/tests/corpus/checked-collection-iterators.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/checked-collection-symbol-methods.ts": {
+   "order": [
+    "<repo>/tests/corpus/checked-collection-symbol-methods.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/checked-increment/main.js": {
    "order": [
     "<repo>/tests/corpus/checked-increment/main.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/checked-inherited-fields.ts": {
+   "order": [
+    "<repo>/tests/corpus/checked-inherited-fields.ts"
    ],
    "diags": []
   },
@@ -8847,6 +8926,31 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/checked-optional-calls.mjs": {
+   "order": [
+    "<repo>/tests/corpus/checked-optional-calls.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/checked-promise-recovery.ts": {
+   "order": [
+    "<repo>/tests/corpus/checked-promise-recovery.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/checked-proxy-callback/main.ts": {
+   "order": [
+    "<repo>/tests/corpus/checked-proxy-callback/operations.mjs",
+    "<repo>/tests/corpus/checked-proxy-callback/main.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/checked-record-constructor.ts": {
+   "order": [
+    "<repo>/tests/corpus/checked-record-constructor.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/checked-renderer-defaults.js": {
    "order": [
     "<repo>/tests/corpus/checked-renderer-defaults.js"
@@ -8856,6 +8960,12 @@
   "<repo>/tests/corpus/checked-rest-function-adapters.js": {
    "order": [
     "<repo>/tests/corpus/checked-rest-function-adapters.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/checked-symbol-array.ts": {
+   "order": [
+    "<repo>/tests/corpus/checked-symbol-array.ts"
    ],
    "diags": []
   },
@@ -8913,9 +9023,45 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/class-curried-factory.mjs": {
+   "order": [
+    "<repo>/tests/corpus/class-curried-factory.mjs"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/class-data-descriptors.js": {
    "order": [
     "<repo>/tests/corpus/class-data-descriptors.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/class-factory-inherited-statics.mjs": {
+   "order": [
+    "<repo>/tests/corpus/class-factory-inherited-statics.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/class-factory-parameter-base.mjs": {
+   "order": [
+    "<repo>/tests/corpus/class-factory-parameter-base.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/class-factory-record-base.mjs": {
+   "order": [
+    "<repo>/tests/corpus/class-factory-record-base.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/class-factory-recursive-statics.mjs": {
+   "order": [
+    "<repo>/tests/corpus/class-factory-recursive-statics.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/class-factory-static-members.mjs": {
+   "order": [
+    "<repo>/tests/corpus/class-factory-static-members.mjs"
    ],
    "diags": []
   },
@@ -8938,6 +9084,18 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/class-json-checked.ts": {
+   "order": [
+    "<repo>/tests/corpus/class-json-checked.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/class-local-function-base.mjs": {
+   "order": [
+    "<repo>/tests/corpus/class-local-function-base.mjs"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/class-property-call-values.mjs": {
    "order": [
     "<repo>/tests/corpus/class-property-call-values.mjs"
@@ -8950,9 +9108,39 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/class-prototype-descriptor-copy.mjs": {
+   "order": [
+    "<repo>/tests/corpus/class-prototype-descriptor-copy.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/class-specialized-computed-base.mjs": {
+   "order": [
+    "<repo>/tests/corpus/class-specialized-computed-base.mjs"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/class-static-data.js": {
    "order": [
     "<repo>/tests/corpus/class-static-data.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/class-super-surplus-spread.mjs": {
+   "order": [
+    "<repo>/tests/corpus/class-super-surplus-spread.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/class-symbol-accessors.ts": {
+   "order": [
+    "<repo>/tests/corpus/class-symbol-accessors.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/class-symbol-cache.mjs": {
+   "order": [
+    "<repo>/tests/corpus/class-symbol-cache.mjs"
    ],
    "diags": []
   },
@@ -9001,6 +9189,12 @@
   "<repo>/tests/corpus/compound-presence-guards.ts": {
    "order": [
     "<repo>/tests/corpus/compound-presence-guards.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/conditional-tuple-destructuring.ts": {
+   "order": [
+    "<repo>/tests/corpus/conditional-tuple-destructuring.ts"
    ],
    "diags": []
   },
@@ -9079,6 +9273,24 @@
   "<repo>/tests/corpus/error-cause-writes.js": {
    "order": [
     "<repo>/tests/corpus/error-cause-writes.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/error-inherited-message.mjs": {
+   "order": [
+    "<repo>/tests/corpus/error-inherited-message.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/error-inherited-name.mjs": {
+   "order": [
+    "<repo>/tests/corpus/error-inherited-name.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/error-property-writes.mjs": {
+   "order": [
+    "<repo>/tests/corpus/error-property-writes.mjs"
    ],
    "diags": []
   },
@@ -9178,6 +9390,18 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/function-apply-value.mjs": {
+   "order": [
+    "<repo>/tests/corpus/function-apply-value.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/function-constructor-global.mjs": {
+   "order": [
+    "<repo>/tests/corpus/function-constructor-global.mjs"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/function-constructor-kinds/main.js": {
    "order": [
     "<repo>/tests/corpus/function-constructor-kinds/consumer.js",
@@ -9191,6 +9415,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/function-custom-to-string.mjs": {
+   "order": [
+    "<repo>/tests/corpus/function-custom-to-string.mjs"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/function-object-assign.js": {
    "order": [
     "<repo>/tests/corpus/function-object-assign.js"
@@ -9201,6 +9431,18 @@
    "order": [
     "<repo>/tests/corpus/function-own-prototype/consumer.js",
     "<repo>/tests/corpus/function-own-prototype/main.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/generator-checked-protocol.ts": {
+   "order": [
+    "<repo>/tests/corpus/generator-checked-protocol.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/generator-checked-return.js": {
+   "order": [
+    "<repo>/tests/corpus/generator-checked-return.js"
    ],
    "diags": []
   },
@@ -9314,6 +9556,72 @@
   "<repo>/tests/corpus/indexed-assignment-values.ts": {
    "order": [
     "<repo>/tests/corpus/indexed-assignment-values.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/inferred-class-default.mjs": {
+   "order": [
+    "<repo>/tests/corpus/inferred-class-default.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/inferred-compound-values.mjs": {
+   "order": [
+    "<repo>/tests/corpus/inferred-compound-values.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/inferred-conditional-class.mjs": {
+   "order": [
+    "<repo>/tests/corpus/inferred-conditional-class.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/inferred-error-fields.js": {
+   "order": [
+    "<repo>/tests/corpus/inferred-error-fields.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/inferred-map-patterns.mjs": {
+   "order": [
+    "<repo>/tests/corpus/inferred-map-patterns.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/inferred-method-override.js": {
+   "order": [
+    "<repo>/tests/corpus/inferred-method-override.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/inferred-partial-destructuring.mjs": {
+   "order": [
+    "<repo>/tests/corpus/inferred-partial-destructuring.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/inferred-primitive-properties.mjs": {
+   "order": [
+    "<repo>/tests/corpus/inferred-primitive-properties.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/inferred-record-return.mjs": {
+   "order": [
+    "<repo>/tests/corpus/inferred-record-return.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/inferred-recursive-record.mjs": {
+   "order": [
+    "<repo>/tests/corpus/inferred-recursive-record.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/inferred-undefined-field.mjs": {
+   "order": [
+    "<repo>/tests/corpus/inferred-undefined-field.mjs"
    ],
    "diags": []
   },
@@ -9521,6 +9829,12 @@
   "<repo>/tests/corpus/json-guarded-map-values.ts": {
    "order": [
     "<repo>/tests/corpus/json-guarded-map-values.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/json-runtime-options.mjs": {
+   "order": [
+    "<repo>/tests/corpus/json-runtime-options.mjs"
    ],
    "diags": []
   },
@@ -9851,6 +10165,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/nullable-object-extension.mjs": {
+   "order": [
+    "<repo>/tests/corpus/nullable-object-extension.mjs"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/nullish-assignment-values.ts": {
    "order": [
     "<repo>/tests/corpus/nullish-assignment-values.ts"
@@ -9881,6 +10201,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/object-prototype-identity.mjs": {
+   "order": [
+    "<repo>/tests/corpus/object-prototype-identity.mjs"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/object-reexport/main.js": {
    "order": [
     "<repo>/tests/corpus/object-reexport/core.js",
@@ -9899,6 +10225,12 @@
   "<repo>/tests/corpus/opentui-byte-queue.js": {
    "order": [
     "<repo>/tests/corpus/opentui-byte-queue.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/optional-callback-arity.ts": {
+   "order": [
+    "<repo>/tests/corpus/optional-callback-arity.ts"
    ],
    "diags": []
   },
@@ -10004,6 +10336,18 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/promise-checked-rejections.ts": {
+   "order": [
+    "<repo>/tests/corpus/promise-checked-rejections.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/promise-resolve-void.ts": {
+   "order": [
+    "<repo>/tests/corpus/promise-resolve-void.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/prototype-method-overrides.mjs": {
    "order": [
     "<repo>/tests/corpus/prototype-method-overrides.mjs"
@@ -10025,6 +10369,24 @@
   "<repo>/tests/corpus/record-unknown-values.ts": {
    "order": [
     "<repo>/tests/corpus/record-unknown-values.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/reflect-own-keys.mjs": {
+   "order": [
+    "<repo>/tests/corpus/reflect-own-keys.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/reflect-record-union-keys.mjs": {
+   "order": [
+    "<repo>/tests/corpus/reflect-record-union-keys.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/reflect-typed-record-keys.ts": {
+   "order": [
+    "<repo>/tests/corpus/reflect-typed-record-keys.ts"
    ],
    "diags": []
   },
@@ -10173,6 +10535,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/string-split-checked-separator.mjs": {
+   "order": [
+    "<repo>/tests/corpus/string-split-checked-separator.mjs"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/structural-class-properties.ts": {
    "order": [
     "<repo>/tests/corpus/structural-class-properties.ts"
@@ -10307,6 +10675,13 @@
   "<repo>/tests/corpus/typed-array-unknown.ts": {
    "order": [
     "<repo>/tests/corpus/typed-array-unknown.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/typed-collection-views/main.ts": {
+   "order": [
+    "<repo>/tests/corpus/typed-collection-views/use.mjs",
+    "<repo>/tests/corpus/typed-collection-views/main.ts"
    ],
    "diags": []
   },
