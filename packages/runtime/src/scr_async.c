@@ -156,8 +156,8 @@ typedef struct ScrFiber ScrFiber;
 typedef struct { size_t rc; } ScrPromiseIdentity;
 
 struct ScrPromise {
+  size_t rc; /* The cycle collector reads the reference count at offset zero. */
   ScrPromiseIdentity *identity;
-  size_t rc;
   int state;
   bool top_level_handled; /* uncaughtException handled entry evaluation */
   /* Payload (fulfillment value or rejection reason), ScrExcCell-style.
