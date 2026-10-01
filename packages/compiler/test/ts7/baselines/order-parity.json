@@ -7757,6 +7757,62 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/3125-regex-global-match.ts": {
+   "order": [
+    "<repo>/tests/corpus/3125-regex-global-match.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/3126-js-number-radix/main.ts": {
+   "order": [
+    "<repo>/tests/corpus/3126-js-number-radix/format.js",
+    "<repo>/tests/corpus/3126-js-number-radix/main.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/3127-spawn-runtime-options.ts": {
+   "order": [
+    "<repo>/tests/corpus/3127-spawn-runtime-options.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/3128-regex-last-index.ts": {
+   "order": [
+    "<repo>/tests/corpus/3128-regex-last-index.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/3129-js-token-union/main.ts": {
+   "order": [
+    "<repo>/tests/corpus/3129-js-token-union/lexer.js",
+    "<repo>/tests/corpus/3129-js-token-union/main.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/3130-child-generic-streams.ts": {
+   "order": [
+    "<repo>/tests/corpus/3130-child-generic-streams.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/3131-child-rest-listeners.js": {
+   "order": [
+    "<repo>/tests/corpus/3131-child-rest-listeners.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/3132-child-generic-stream-completion.ts": {
+   "order": [
+    "<repo>/tests/corpus/3132-child-generic-stream-completion.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/3133-text-decoder-streaming.ts": {
+   "order": [
+    "<repo>/tests/corpus/3133-text-decoder-streaming.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/400-fib.ts": {
    "order": [
     "<repo>/tests/corpus/400-fib.ts"
