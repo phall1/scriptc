@@ -48,6 +48,10 @@ const invariantCaseShardedFiles = ["tests/harness/coverage.test.ts"];
 // independent cases can spread across the once lane's Sandboxes without
 // colliding with corpus case selection.
 const cacheCaseShardedFiles = ["packages/compiler/src/backend/native-toolchain.test.ts"];
+const nativeBuildFiles = [
+  "tests/harness/self-hosting-native-driver.test.ts",
+  "packages/runtime/test/glibc-random.test.ts",
+];
 const caseShardedFiles = [
   ...laneCaseShardedFiles,
   ...invariantCaseShardedFiles,
@@ -745,14 +749,17 @@ try {
         "/workspace",
         3 * 60_000,
       );
-      // Zig is a build-only dependency in this lane. Cross-target suites own
-      // the conditional Zig tests; exposing it here would silently expand the
-      // native-cache shard while that shard deliberately disables stable
-      // toolchain caching.
+      // Keep Zig available to the portable compiler bootstrap and entropy
+      // contract, without expanding the conditional cross-target cache tests.
       await execIn(
         worker,
-        "sudo",
-        ["rm", "-f", "/usr/local/bin/zig"],
+        "sh",
+        ["-c", [
+          "set -eu",
+          "mkdir -p /tmp/scriptc-native-build-tools",
+          'ln -sf "$(readlink -f "$(command -v zig)")" /tmp/scriptc-native-build-tools/zig',
+          "sudo rm -f /usr/local/bin/zig",
+        ].join("\n")],
         {},
         "runtime toolchain cleanup",
         60_000,
@@ -805,6 +812,7 @@ try {
             "--passWithNoTests",
             `--shard=${worker.shard}/${shardCount}`,
             ...caseShardedFiles.map((file) => `--exclude=${file}`),
+            ...nativeBuildFiles.map((file) => `--exclude=${file}`),
             ...nativeHostInvariantFiles.map((file) => `--exclude=${file}`),
             ...localLaneFiles.map((file) => `--exclude=${file}`),
             ...localCaseShardedFiles.map((file) => `--exclude=${file}`),
@@ -837,9 +845,17 @@ try {
           },
           "cache",
         );
+      const nativeBuild = () => execIn(
+        worker,
+        "sh",
+        ["-c", 'export PATH="/tmp/scriptc-native-build-tools:$PATH"; exec "$@"', "sh",
+          "pnpm", "test", "--reporter=dot", ...nativeBuildFiles],
+        { ...sharedTestEnv, SCRIPTC_TEST_WORKERS: "1" },
+        "native bootstrap",
+      );
       // The corpus owns the remaining pool while file/cache processes share
       // the reserved side slots (serially when only one slot is available).
-      const sideTasks = [files, ...(runCacheCases ? [cacheCases] : [])];
+      const sideTasks = [...(worker.shard === 1 ? [nativeBuild] : []), files, ...(runCacheCases ? [cacheCases] : [])];
       if (sideConcurrency === 0) {
         await cases();
         await runTaskQueue(sideTasks, 1);
