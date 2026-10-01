@@ -3183,13 +3183,16 @@ export function collectClassShapeInner(lowerer: Lowerer, decl: ts.ClassLikeDecla
       const diagsBefore = lowerer.diags.length;
       try {
         const previousThis = lowerer.ctx.thisLocal;
-        const receiver = lowerer.declareHiddenLocal("%staticThis", { kind: "classval", className: info.def.name });
-        lowerer.noteEdge(`%${info.def.name}.constructor`);
-        out.push({ kind: "varDecl", localId: receiver.id, init: { kind: "classRef", className: info.def.name,
-          type: receiver.type, loc: locOf(f.initializer) }, loc: locOf(f.initializer) });
+        const receiver = f.initializer.kind === ts.SyntaxKind.ThisKeyword || hasStaticThis(f.initializer)
+          ? lowerer.declareHiddenLocal("%staticThis", { kind: "classval", className: info.def.name }) : null;
+        if (receiver) {
+          lowerer.noteEdge(`%${info.def.name}.constructor`);
+          out.push({ kind: "varDecl", localId: receiver.id, init: { kind: "classRef", className: info.def.name,
+            type: receiver.type, loc: locOf(f.initializer) }, loc: locOf(f.initializer) });
+        }
         let value: IrExpr;
         try {
-          lowerer.ctx.thisLocal = receiver;
+          if (receiver) lowerer.ctx.thisLocal = receiver;
           value = lowerer.lowerExprExpecting(f.initializer, f.type);
         } finally { lowerer.ctx.thisLocal = previousThis; }
         out.push({ kind: "assign", localId: f.globalId, value, loc: locOf(f.initializer) });

@@ -3737,8 +3737,7 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
       }
       const raw = lowerVariableInitializer(lowerer, decl.initializer,
         g.type.kind === "dyn" && (isNativeBuiltinValueInitializer(lowerer, decl.initializer) ||
-          ts.isArrayLiteralExpression(decl.initializer) || ts.isObjectLiteralExpression(decl.initializer)) ? DYN :
-          decl.type ? lowerer.mapTypeOf(lowerer.typeOf(decl.name)) ?? undefined : undefined);
+          ts.isArrayLiteralExpression(decl.initializer) || ts.isObjectLiteralExpression(decl.initializer)) ? DYN : undefined);
       const arithmetic = raw.type.kind === "union"
         ? lowerer.unions.get(raw.type.unionId)?.arms
         : undefined;

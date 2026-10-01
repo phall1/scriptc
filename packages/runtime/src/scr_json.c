@@ -6250,6 +6250,12 @@ ScrDyn *scr_dyn_fn_get(const ScrDyn *d, const char *key, size_t key_len) {
 
 void scr_sc_validate_options(const ScrDyn *options) {
   if (options == NULL || options->kind == SCR_DYN_UNDEF || options->kind == SCR_DYN_NULL) return;
+  if (options->kind == SCR_DYN_TYPED_REF) {
+    ScrDyn *view = scr_dyn_typed_ref_materialize(options);
+    if (view && !scr_exc_pending()) scr_sc_validate_options(view);
+    scr_dyn_release(view);
+    return;
+  }
   /* An engine-held options bag IS a dictionary to Node — the "cannot be
    * converted" TypeError would be a wrong claim. Loud fence. */
   if (options->kind == SCR_DYN_JSVAL) {
@@ -6264,10 +6270,14 @@ void scr_sc_validate_options(const ScrDyn *options) {
   }
   ScrDyn *tr = scr_dyn_obj_get(options, "transfer", 8); /* borrowed */
   if (tr == NULL || tr->kind == SCR_DYN_UNDEF) return;
+  ScrDyn *transferView = tr->kind == SCR_DYN_TYPED_REF ? scr_dyn_typed_ref_materialize(tr) : NULL;
+  if (scr_exc_pending()) { scr_dyn_release(transferView); return; }
+  if (transferView) tr = transferView;
   if (tr->kind != SCR_DYN_ARR) {
     static const char msg[] =
         "Failed to execute 'structuredClone': transfer in Options can not be converted to sequence.";
     scr_throw_error_msg_code(SCR_ERR_TYPE, msg, sizeof msg - 1, "ERR_INVALID_ARG_TYPE");
+    scr_dyn_release(transferView);
     return;
   }
   if (tr->v.arr.len > 0) {
@@ -6275,6 +6285,7 @@ void scr_sc_validate_options(const ScrDyn *options) {
      * a non-transferable list member. */
     scr_throw_domex("DataCloneError", "Found invalid value in transferList.");
   }
+  scr_dyn_release(transferView);
 }
 
 /* The parent chain rides the C stack: a revisit is a cycle. */

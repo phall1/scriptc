@@ -5160,7 +5160,8 @@ export function lowerCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr {
       const access = expr.expression;
       const value = tryLowerExpression(lowerer, access.expression);
       if (value?.type.kind === "dyn" || value?.type.kind === "generator" ||
-          value && ["array", "bytes", "string", "map", "set"].includes(value.type.kind) && lowerer.dynConvertible(value.type) ||
+          value && ["array", "bytes", "map", "set"].includes(value.type.kind) && lowerer.dynConvertible(value.type) ||
+          value?.type.kind === "string" && !ts.isStringLiteralLike(access.argumentExpression) && lowerer.dynConvertible(value.type) ||
           value?.type.kind === "object" && !lowerer.classes.get(value.type.className)?.def.runtime) {
         const local = lowerer.declareHiddenLocal("%computedReceiver", value.type);
         const reference: IrExpr = { kind: "varRef", localId: local.id, type: value.type, loc };

@@ -463,14 +463,20 @@ static void scr_fs_cb_schedule(const ScrDyn *callback, ScrDyn *result, const Scr
 #endif
 }
 
+static bool scr_fs_read_validate(const ScrDyn *, const ScrDyn *, const ScrDyn *, const ScrDyn *, const ScrDyn *);
+static bool scr_fs_encoding_chk(const ScrDyn *);
+
 static ScrDyn *scr_fs_cb_invoke(ScrStr *member, ScrDyn *const *args, size_t argc) {
   const char *op = member->data;
-  const ScrDyn *callback = argc ? args[argc - 1] : scr_dyn_undefined();
-  if (!scr_fs_cb_chk(callback, "callback")) return NULL;
+  bool fileCallback = !strcmp(op, "readFile") || !strcmp(op, "mkdtemp");
+  const ScrDyn *callback = argc >= (fileCallback ? 2u : 1u) ? args[argc - 1] : scr_dyn_undefined();
+  if (!scr_fs_cb_chk(callback, fileCallback ? "cb" : "callback")) return NULL;
   size_t count = argc - 1;
 #define ARG(index) scr_fs_cb_arg(args, count, index)
+  if (!strcmp(op, "readFile") && !scr_fs_encoding_chk(ARG(1))) return NULL;
+  if (!strcmp(op, "read") && count >= 4 && !scr_fs_read_validate(ARG(0), ARG(1), ARG(2), ARG(3), ARG(4))) return NULL;
   bool descriptor = !strcmp(op, "close") || !strcmp(op, "fstat") || !strcmp(op, "ftruncate") || !strcmp(op, "fsync") || !strcmp(op, "read") || !strcmp(op, "write");
-  ScrStr *path = descriptor ? NULL : scr_fs_cb_path(ARG(0), "path");
+  ScrStr *path = descriptor ? NULL : scr_fs_cb_path(ARG(0), !strcmp(op, "mkdtemp") ? "prefix" : "path");
   if (!descriptor && !path) return NULL;
   double fd = descriptor ? scr_fs_cb_number(ARG(0), "fd", -1) : -1;
   if (scr_exc_pending()) { scr_str_release(path); return NULL; }
@@ -574,7 +580,7 @@ static ScrDyn *scr_fs_cb_invoke(ScrStr *member, ScrDyn *const *args, size_t argc
     ScrDyn *ownedBuffer = NULL;
     if (readOp && !scr_dyn_bytes_is(options, SCR_BYTES_U8)) { ownedBuffer = scr_fs_cb_option(options, "buffer"); buffer = ownedBuffer; }
     else buffer = options;
-    ScrBytes *bytes = buffer ? scr_dyn_bytes_unbox(buffer) : NULL;
+    ScrBytes *bytes = buffer && buffer->kind == SCR_DYN_BYTES ? scr_dyn_bytes_unbox(buffer) : NULL;
     if (!bytes) scr_dyn_arg_type_fail("buffer", "an instance of Buffer, TypedArray, or DataView", buffer ? buffer : scr_dyn_undefined());
     else {
       double offset = ownedBuffer ? scr_fs_cb_option_number(options, "offset", 0) : scr_fs_cb_number(ARG(2), "offset", 0);
@@ -582,6 +588,7 @@ static ScrDyn *scr_fs_cb_invoke(ScrStr *member, ScrDyn *const *args, size_t argc
       double position = ownedBuffer ? scr_fs_cb_option_number(options, "position", -1) : scr_fs_cb_number(ARG(4), "position", -1);
       if (!scr_exc_pending()) result = scr_dyn_new_num(readOp ? scr_fs_read_sync(fd, bytes, offset, length, position) : scr_fs_write_sync(fd, bytes, offset, length, position));
     }
+    scr_bytes_release(bytes);
     /* The completion retains the original buffer, including options.buffer. */
     if (ownedBuffer) {
       scr_fs_cb_schedule(callback, result, ownedBuffer);
@@ -929,6 +936,12 @@ static bool scr_fs_path_chk(const ScrDyn *p, const char *name) {
  * options record's `encoding` member): Node throws ERR_INVALID_ARG_VALUE
  * for any truthy value Buffer.isEncoding rejects. */
 static bool scr_fs_encoding_chk(const ScrDyn *opts) {
+  if (opts->kind == SCR_DYN_TYPED_REF) {
+    ScrDyn *view = scr_dyn_typed_ref_materialize(opts);
+    bool valid = view && !scr_exc_pending() && scr_fs_encoding_chk(view);
+    scr_dyn_release(view);
+    return valid;
+  }
   const ScrDyn *enc = opts;
   if (opts->kind == SCR_DYN_OBJ) {
     enc = scr_dyn_obj_get(opts, "encoding", 8);
@@ -1216,15 +1229,15 @@ static bool scr_fs_int_range_chk(const ScrDyn *v, const char *name, double min, 
   return true;
 }
 
-void scr_fs_read_chk(const ScrDyn *fd, const ScrDyn *buffer, const ScrDyn *offset,
-                     const ScrDyn *length, const ScrDyn *position, const ScrStr *fence) {
+static bool scr_fs_read_validate(const ScrDyn *fd, const ScrDyn *buffer, const ScrDyn *offset,
+                                 const ScrDyn *length, const ScrDyn *position) {
   if (buffer->kind != SCR_DYN_BYTES) {
     scr_dyn_arg_type_fail("buffer", "an instance of Buffer, TypedArray, or DataView", buffer);
-    return;
+    return false;
   }
   if (fd->kind != SCR_DYN_NUM) {
     scr_dyn_arg_type_fail("fd", "of type number", fd);
-    return;
+    return false;
   }
   double buflen = scr_bytes_byte_len(buffer->v.bytes);
   if (!scr_fs_dyn_absent(offset)) {
@@ -1232,12 +1245,12 @@ void scr_fs_read_chk(const ScrDyn *fd, const ScrDyn *buffer, const ScrDyn *offse
      * Node renders each with its own max. */
     if (!scr_fs_int_range_chk(offset, "offset", 0, 9007199254740991.0,
                               ">= 0 && <= 9007199254740991")) {
-      return;
+      return false;
     }
     if (offset->v.num > buflen) {
       char range[64];
       snprintf(range, sizeof range, ">= 0 && <= %.0f", buflen);
-      if (!scr_fs_int_range_chk(offset, "offset", 0, buflen, range)) return;
+      if (!scr_fs_int_range_chk(offset, "offset", 0, buflen, range)) return false;
     }
   }
   double off = offset->kind == SCR_DYN_NUM ? offset->v.num : 0;
@@ -1254,10 +1267,10 @@ void scr_fs_read_chk(const ScrDyn *fd, const ScrDyn *buffer, const ScrDyn *offse
         int len = snprintf(msg, sizeof msg,
                            "The value of \"length\" is out of range. %s Received %s", shape, recv);
         scr_throw_error_msg_code(SCR_ERR_RANGE, msg, (size_t)len, "ERR_OUT_OF_RANGE");
-        return;
+        return false;
       }
       scr_dyn_arg_type_fail("length", "of type number", length);
-      return;
+      return false;
     }
     if (length->v.num > buflen - off) {
       char recv[48], msg[160];
@@ -1266,20 +1279,26 @@ void scr_fs_read_chk(const ScrDyn *fd, const ScrDyn *buffer, const ScrDyn *offse
                          "The value of \"length\" is out of range. It must be <= %.0f. Received %s",
                          buflen - off, recv);
       scr_throw_error_msg_code(SCR_ERR_RANGE, msg, (size_t)len, "ERR_OUT_OF_RANGE");
-      return;
+      return false;
     }
   }
   if (!scr_fs_dyn_absent(position)) {
     if (position->kind != SCR_DYN_NUM) {
       scr_dyn_arg_type_fail("position", "of type bigint or integer", position);
-      return;
+      return false;
     }
     if (!scr_fs_int_range_chk(position, "position", -1, 9007199254740991.0,
                               ">= -1 && <= 9007199254740991")) {
-      return;
+      return false;
     }
   }
-  scr_throw_lowering_fence(fence);
+  return true;
+}
+
+
+void scr_fs_read_chk(const ScrDyn *fd, const ScrDyn *buffer, const ScrDyn *offset,
+                     const ScrDyn *length, const ScrDyn *position, const ScrStr *fence) {
+  if (scr_fs_read_validate(fd, buffer, offset, length, position)) scr_throw_lowering_fence(fence);
 }
 
 /* createReadStream/createWriteStream(path, options?): getOptions'

@@ -31,6 +31,12 @@ static ScrDyn *scr_hrtime_bigint_call(ScrClosure *closure, ScrDyn *const *args, 
 
 static ScrDyn *scr_hrtime_call(ScrClosure *closure, ScrDyn *const *args, size_t argc) {
   (void)closure;
+  if (argc && args[0]->kind == SCR_DYN_TYPED_REF) {
+    ScrDyn *view = scr_dyn_typed_ref_materialize(args[0]);
+    ScrDyn *result = view && !scr_exc_pending() ? scr_hrtime_call(closure, &view, 1) : NULL;
+    scr_dyn_release(view);
+    return result;
+  }
   uint64_t time = scr_hrtime_ns();
   double seconds = (double)(time / UINT64_C(1000000000));
   double nanos = (double)(time % UINT64_C(1000000000));

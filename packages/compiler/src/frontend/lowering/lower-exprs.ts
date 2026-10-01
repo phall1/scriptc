@@ -5141,8 +5141,8 @@ export function lowerOptionalNumber(
     const index = lowerOptionalNumber(lowerer, lowerer.lowerExpr(expr.argumentExpression), locOf(expr.argumentExpression), expr.argumentExpression);
     if (arr.type.kind === "array" && (index.type.kind === "dyn" ||
         isJsSourceFile(expr.getSourceFile()) && index.type.kind !== "f64" && lowerer.dynConvertible(index.type))) {
-      return lowerer.maybeNarrow({ kind: "dynKeyGet", value: lowerer.coerceToExpected(arr, DYN),
-        key: index, type: DYN, loc: locOf(expr) }, expr);
+      return { kind: "dynKeyGet", value: lowerer.coerceToExpected(arr, DYN),
+        key: index, type: DYN, loc: locOf(expr) };
     }
     if (index.type.kind !== "f64") {
       lowerer.unsupported("SC1090", expr.argumentExpression, "indexing with non-number keys");
