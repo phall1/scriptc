@@ -3176,6 +3176,7 @@ static SfResponse *sf_response_retain(SfResponse *r) {
 
 static void sf_response_release(SfResponse *r) {
   if (!r || --r->rc > 0) return;
+  scr_weak_dispose(r);
   sf_stream_release(r->body);
   sf_headers_release(r->headers);
   scr_str_release(r->url);
@@ -4057,11 +4058,17 @@ static ScrArr *sf_headers_convert_init(const ScrDyn *headers) {
   if (headers->kind == SCR_DYN_ARR) {
     for (size_t i = 0; i < headers->v.arr.len; i++) {
       ScrDyn *pair = scr_dyn_retain(headers->v.arr.items[i]);
+      if (pair->kind == SCR_DYN_TYPED_REF) {
+        ScrDyn *materialized = scr_dyn_typed_ref_materialize(pair);
+        scr_dyn_release(pair);
+        pair = materialized;
+      }
       if (pair->kind != SCR_DYN_ARR || pair->v.arr.len != 2) {
+        bool sequence = pair->kind == SCR_DYN_ARR;
         size_t pair_len = pair->kind == SCR_DYN_ARR ? pair->v.arr.len : 0;
         scr_dyn_release(pair);
         if (!scr_exc_pending()) {
-          if (pair_len > 0 || headers->v.arr.items[i]->kind == SCR_DYN_ARR) {
+          if (sequence) {
             sf_headers_pair_length_error(pair_len);
           } else {
             sf_headers_constructor_type_error();
@@ -5169,7 +5176,250 @@ fail:
   return NULL;
 }
 
+/* Request uses the same body stream and Headers ownership as Response. */
+typedef struct SfRequest {
+  size_t rc;
+  SfResponse *payload;
+  ScrStr *url;
+  ScrStr *method;
+  ScrStr *redirect;
+  SfSignal *signal;
+} SfRequest;
+
+static void *sf_request_retain_v(void *ptr) {
+  SfRequest *r = ptr; r->rc++; return r;
+}
+static void sf_request_release_v(void *ptr) {
+  SfRequest *r = ptr;
+  if (--r->rc) return;
+  scr_weak_dispose(r);
+  sf_response_release(r->payload);
+  scr_str_release(r->url); scr_str_release(r->method); scr_str_release(r->redirect);
+  sf_signal_release(r->signal); free(r);
+}
+static ScrDyn *sf_request_get(void *ptr, const char *key, size_t len) {
+  SfRequest *r = ptr;
+  if (sf_name(key, len, "url")) return scr_dyn_new_str(r->url);
+  if (sf_name(key, len, "method")) return scr_dyn_new_str(r->method);
+  if (sf_name(key, len, "redirect")) return scr_dyn_new_str(r->redirect);
+  if (sf_name(key, len, "signal")) return scr_dyn_new_handle(r->signal, SCR_DYNH_ABORT_SIGNAL);
+  if (sf_name(key, len, "duplex")) { ScrStr *s = scr_str_new("half", 4); ScrDyn *v = scr_dyn_new_str(s); scr_str_release(s); return v; }
+  const char *default_value = NULL;
+  if (sf_name(key, len, "destination") || sf_name(key, len, "integrity") || sf_name(key, len, "referrerPolicy")) default_value = "";
+  if (sf_name(key, len, "mode")) default_value = "cors";
+  if (sf_name(key, len, "credentials")) default_value = "same-origin";
+  if (sf_name(key, len, "cache")) default_value = "default";
+  if (sf_name(key, len, "referrer")) default_value = "about:client";
+  if (default_value) { ScrStr *s = scr_str_new(default_value, strlen(default_value)); ScrDyn *v = scr_dyn_new_str(s); scr_str_release(s); return v; }
+  if (sf_name(key, len, "keepalive") || sf_name(key, len, "isReloadNavigation") || sf_name(key, len, "isHistoryNavigation")) return scr_dyn_new_bool(false);
+  if (sf_name(key, len, "body") || sf_name(key, len, "bodyUsed") || sf_name(key, len, "headers")) return sf_response_get(r->payload, key, len);
+  return scr_dyn_undefined();
+}
+static ScrDyn *sf_request_invoke(void *ptr, ScrDyn *self, const char *method, ScrDyn *const *args, size_t argc, const char *what) {
+  SfRequest *r = ptr;
+  return sf_response_invoke(r->payload, self, method, args, argc, what);
+}
+
+ScrDyn *scr_fetch_headers_new(ScrDyn *init) {
+  ScrArr *converted = sf_headers_convert_init(init);
+  if (!converted) return NULL;
+  ScrArr *pairs = scr_arr_new(SCR_ELEM_STR, 8);
+  bool ok = sf_add_converted_headers(pairs, converted, false);
+  scr_arr_release(converted);
+  if (!ok) { scr_arr_release(pairs); return NULL; }
+  SfHeaders *headers = sf_headers_new(pairs, false);
+  ScrDyn *result = scr_dyn_new_handle(headers, SCR_DYNH_FETCH_HEADERS);
+  sf_headers_release(headers);
+  return result;
+}
+
+ScrDyn *scr_fetch_request_new(ScrDyn *input, ScrDyn *init) {
+  SfRequest *source = input && input->kind == SCR_DYN_HANDLE && input->v.handle.tag == SCR_DYNH_FETCH_REQUEST ? input->v.handle.ptr : NULL;
+  if (init && init->kind != SCR_DYN_UNDEF && init->kind != SCR_DYN_NULL && !sf_response_init_object_like(init)) {
+    sf_type_error("Request constructor init must be an object"); return NULL;
+  }
+  ScrStr *url_text = source ? scr_str_retain(source->url) : scr_dyn_string_coerce_js(input);
+  if (!url_text) return NULL;
+  ScrUrl *url = scr_url_new(url_text);
+  scr_str_release(url_text);
+  if (!url) return NULL;
+  if (url->userinfo->len) { scr_url_release(url); sf_type_error("Request cannot be constructed from a URL that includes credentials"); return NULL; }
+  ScrDyn *dictionary = scr_dyn_new_obj();
+  ScrDyn *method = sf_response_init_get(init, "method", 6);
+  if ((!method || method->kind == SCR_DYN_UNDEF) && source) { scr_dyn_release(method); method = scr_dyn_new_str(source->method); }
+  if (method) scr_dyn_obj_set(dictionary, "method", 6, method);
+  ScrStr *method_text = sf_method_value(dictionary);
+  scr_dyn_release(dictionary);
+  if (!method_text || !sf_method_validate(&method_text)) { scr_str_release(method_text); scr_url_release(url); return NULL; }
+  ScrDyn *body = sf_response_init_get(init, "body", 4);
+  bool supplied = body && body->kind != SCR_DYN_UNDEF && body->kind != SCR_DYN_NULL;
+  if (!supplied && source && !source->payload->null_body) {
+    if (source->payload->body->disturbed || source->payload->body->reader || source->payload->body->internal_lock) {
+      scr_dyn_release(body); scr_str_release(method_text); scr_url_release(url);
+      sf_type_error("Cannot construct a Request with a Request object that has already been used."); return NULL;
+    }
+    scr_dyn_release(body); body = scr_dyn_new_handle(source->payload->body, SCR_DYNH_WEB_STREAM);
+  }
+  bool has_body = body && body->kind != SCR_DYN_UNDEF && body->kind != SCR_DYN_NULL;
+  if (has_body && (sf_name(method_text->data, method_text->len, "GET") || sf_name(method_text->data, method_text->len, "HEAD"))) {
+    scr_dyn_release(body); scr_str_release(method_text); scr_url_release(url); sf_type_error("Request with GET/HEAD method cannot have body."); return NULL;
+  }
+  if (supplied && body->kind == SCR_DYN_HANDLE && body->v.handle.tag == SCR_DYNH_WEB_STREAM) {
+    ScrDyn *duplex = sf_response_init_get(init, "duplex", 6);
+    ScrStr *text = duplex && duplex->kind != SCR_DYN_UNDEF ? scr_dyn_string_coerce_js(duplex) : NULL;
+    scr_dyn_release(duplex);
+    bool half = text && sf_name(text->data, text->len, "half"); scr_str_release(text);
+    if (!half) { scr_dyn_release(body); scr_str_release(method_text); scr_url_release(url); sf_type_error("RequestInit: duplex option is required when sending a body."); return NULL; }
+  }
+  ScrDyn *headers = sf_response_init_get(init, "headers", 7);
+  if ((!headers || headers->kind == SCR_DYN_UNDEF) && source) { scr_dyn_release(headers); headers = scr_dyn_new_handle(source->payload->headers, SCR_DYNH_FETCH_HEADERS); }
+  ScrDyn *payload_init = scr_dyn_new_obj();
+  if (headers) scr_dyn_obj_set(payload_init, "headers", 7, headers);
+  ScrDyn *payload = scr_fetch_response_new(body, payload_init);
+  scr_dyn_release(payload_init); scr_dyn_release(body);
+  if (!payload) { scr_str_release(method_text); scr_url_release(url); return NULL; }
+  ScrDyn *signal = sf_response_init_get(init, "signal", 6);
+  if ((!signal || signal->kind == SCR_DYN_UNDEF) && source) { scr_dyn_release(signal); signal = scr_dyn_new_handle(source->signal, SCR_DYNH_ABORT_SIGNAL); }
+  SfSignal *following = NULL;
+  if (signal && signal->kind != SCR_DYN_UNDEF && signal->kind != SCR_DYN_NULL) {
+    ScrDyn *signals = scr_dyn_new_arr(); scr_dyn_arr_push(signals, scr_dyn_retain(signal));
+    ScrDyn *dependent = scr_fetch_abort_any(signals); scr_dyn_release(signals);
+    if (dependent) { following = sf_signal_retain(dependent->v.handle.ptr); scr_dyn_release(dependent); }
+  } else following = sf_signal_new();
+  scr_dyn_release(signal);
+  if (!following) { scr_dyn_release(payload); scr_str_release(method_text); scr_url_release(url); return NULL; }
+  ScrDyn *redirect = sf_response_init_get(init, "redirect", 8);
+  ScrStr *redirect_text = redirect && redirect->kind != SCR_DYN_UNDEF ? scr_dyn_string_coerce_js(redirect) : source ? scr_str_retain(source->redirect) : scr_str_new("follow", 6);
+  scr_dyn_release(redirect);
+  if (!redirect_text || !(sf_name(redirect_text->data, redirect_text->len, "follow") || sf_name(redirect_text->data, redirect_text->len, "manual") || sf_name(redirect_text->data, redirect_text->len, "error"))) {
+    scr_str_release(redirect_text); sf_signal_release(following); scr_dyn_release(payload); scr_str_release(method_text); scr_url_release(url); sf_type_error("Invalid Request redirect value"); return NULL;
+  }
+  SfRequest *r = calloc(1, sizeof *r); if (!r) sf_oom();
+  r->rc = 1; r->payload = sf_response_retain(payload->v.handle.ptr); scr_dyn_release(payload);
+  r->url = scr_url_href(url); scr_url_release(url); r->method = method_text; r->redirect = redirect_text; r->signal = following;
+  ScrDyn *result = scr_dyn_new_handle(r, SCR_DYNH_FETCH_REQUEST); sf_request_release_v(r); return result;
+}
+
+ScrPromise *scr_fetch_input(ScrDyn *input, ScrDyn *init) {
+  if (init && init->kind == SCR_DYN_TYPED_REF) {
+    ScrDyn *view = scr_dyn_typed_ref_materialize(init);
+    if (scr_exc_pending()) { scr_dyn_release(view); ScrPromise *p = scr_promise_new(); scr_promise_reject_pending(p); return p; }
+    ScrPromise *result = scr_fetch_input(input, view);
+    scr_dyn_release(view);
+    return result;
+  }
+  if (input && input->kind == SCR_DYN_HANDLE && input->v.handle.tag == SCR_DYNH_FETCH_REQUEST) {
+    ScrDyn *converted = scr_fetch_request_new(input, init);
+    if (!converted) { ScrPromise *p = scr_promise_new(); scr_promise_reject_pending(p); return p; }
+    SfRequest *r = converted->v.handle.ptr;
+    ScrDyn *dictionary = scr_dyn_new_obj();
+    scr_dyn_obj_set(dictionary, "method", 6, scr_dyn_new_str(r->method));
+    scr_dyn_obj_set(dictionary, "headers", 7, scr_dyn_new_handle(r->payload->headers, SCR_DYNH_FETCH_HEADERS));
+    scr_dyn_obj_set(dictionary, "signal", 6, scr_dyn_new_handle(r->signal, SCR_DYNH_ABORT_SIGNAL));
+    scr_dyn_obj_set(dictionary, "redirect", 8, scr_dyn_new_str(r->redirect));
+    if (!r->payload->null_body) {
+      scr_dyn_obj_set(dictionary, "body", 4, scr_dyn_new_handle(r->payload->body, SCR_DYNH_WEB_STREAM));
+      ScrStr *half = scr_str_new("half", 4); scr_dyn_obj_set(dictionary, "duplex", 6, scr_dyn_new_str(half)); scr_str_release(half);
+    }
+    ScrPromise *result = scr_fetch_static(r->url, dictionary);
+    scr_dyn_release(dictionary); scr_dyn_release(converted); return result;
+  }
+  ScrStr *url = scr_dyn_string_coerce_js(input);
+  if (!url) { ScrPromise *p = scr_promise_new(); scr_promise_reject_pending(p); return p; }
+  ScrPromise *result = scr_fetch_static(url, init); scr_str_release(url); return result;
+}
+
+static ScrDyn *sf_fetch_function_call(ScrClosure *closure, ScrDyn *const *args, size_t argc) {
+  (void)closure;
+  ScrPromise *p = scr_fetch_input(argc ? args[0] : scr_dyn_undefined(), argc > 1 ? args[1] : scr_dyn_undefined());
+  ScrDyn *result = scr_dyn_new_promise(p); scr_promise_release(p); return result;
+}
+static ScrDyn *sf_fetch_function_value;
+static void sf_fetch_function_cleanup(void) {
+  ScrDyn *value = sf_fetch_function_value;
+  sf_fetch_function_value = NULL;
+  scr_dyn_release(value);
+}
+bool scr_fetch_web_is(const ScrDyn *value, const ScrStr *name) {
+  if (value->kind != SCR_DYN_HANDLE) return false;
+  if (sf_name(name->data, name->len, "Response")) return value->v.handle.tag == SCR_DYNH_FETCH_RESPONSE;
+  if (sf_name(name->data, name->len, "Request")) return value->v.handle.tag == SCR_DYNH_FETCH_REQUEST;
+  return sf_name(name->data, name->len, "Headers") && value->v.handle.tag == SCR_DYNH_FETCH_HEADERS;
+}
+
+bool scr_fetch_stream_is(const ScrDyn *value) {
+  return value && value->kind == SCR_DYN_HANDLE && value->v.handle.tag == SCR_DYNH_WEB_STREAM;
+}
+ScrDyn *scr_fetch_function(void) {
+  if (!sf_fetch_function_value) {
+    sf_fetch_function_value = scr_dyn_new_func(scr_closure_new(NULL, 0), sf_fetch_function_call, 1, "fetch", "fetch");
+    scr_atexit(sf_fetch_function_cleanup);
+  }
+  return scr_dyn_retain(sf_fetch_function_value);
+}
+
+static int sf_data_hex(unsigned char ch) {
+  if (ch >= '0' && ch <= '9') return ch - '0';
+  if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
+  if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
+  return -1;
+}
+
+static ScrDyn *sf_data_response(ScrStr *url) {
+  size_t end = url->len;
+  for (size_t i = 5; i < end; i++) if (url->data[i] == '#') { end = i; break; }
+  size_t comma = 5;
+  while (comma < end && url->data[comma] != ',') comma++;
+  if (comma == end) { sf_type_error("fetch failed"); return NULL; }
+  size_t meta_end = comma;
+  bool base64 = meta_end >= 12 && strncasecmp(url->data + meta_end - 7, ";base64", 7) == 0;
+  if (base64) meta_end -= 7;
+  ScrBytes *bytes = scr_bytes_new(SCR_BYTES_U8, (double)(end - comma - 1));
+  size_t n = 0;
+  for (size_t i = comma + 1; i < end; i++) {
+    int a, b;
+    if (url->data[i] == '%' && i + 2 < end && (a = sf_data_hex(url->data[i + 1])) >= 0 && (b = sf_data_hex(url->data[i + 2])) >= 0) {
+      bytes->data[n++] = (unsigned char)((a << 4) | b); i += 2;
+    } else bytes->data[n++] = (unsigned char)url->data[i];
+  }
+  bytes->len = n;
+  if (base64) {
+    ScrStr *encoded = scr_str_new((const char *)bytes->data, bytes->len);
+    ScrStr *encoding = scr_str_new("base64", 6);
+    ScrBytes *decoded = scr_bytes_from_str(encoded, encoding);
+    scr_str_release(encoded); scr_str_release(encoding); scr_bytes_release(bytes); bytes = decoded;
+  }
+  ScrDyn *body = scr_dyn_new_bytes(bytes); scr_bytes_release(bytes);
+  ScrStr *mime = meta_end == 5 ? scr_str_new("text/plain;charset=US-ASCII", 26) : scr_str_new(url->data + 5, meta_end - 5);
+  if (mime->len && mime->data[0] == ';') {
+    ScrJsonBuf b; scr_jb_init(&b); scr_jb_puts(&b, "text/plain"); for (size_t i = 0; i < mime->len; i++) scr_jb_putc(&b, mime->data[i]);
+    scr_str_release(mime); mime = scr_jb_finish(&b);
+  }
+  ScrDyn *headers = scr_dyn_new_obj(); scr_dyn_obj_set(headers, "content-type", 12, scr_dyn_new_str(mime)); scr_str_release(mime);
+  ScrDyn *init = scr_dyn_new_obj(); scr_dyn_obj_set(init, "headers", 7, headers);
+  ScrStr *ok = scr_str_new("OK", 2); scr_dyn_obj_set(init, "statusText", 10, scr_dyn_new_str(ok)); scr_str_release(ok);
+  ScrDyn *result = scr_fetch_response_new(body, init); scr_dyn_release(body); scr_dyn_release(init);
+  if (result) {
+    SfResponse *response = result->v.handle.ptr;
+    scr_str_release(response->url); response->url = scr_str_new(url->data, end);
+    response->headers->immutable = true;
+  }
+  return result;
+}
+
 ScrPromise *scr_fetch_static(ScrStr *url, ScrDyn *init) {
+  if (init && init->kind == SCR_DYN_TYPED_REF) {
+    ScrDyn *view = scr_dyn_typed_ref_materialize(init);
+    if (scr_exc_pending()) {
+      scr_dyn_release(view);
+      ScrPromise *promise = scr_promise_new();
+      scr_promise_reject_pending(promise);
+      return promise;
+    }
+    ScrPromise *result = scr_fetch_static(url, view);
+    scr_dyn_release(view);
+    return result;
+  }
   ScrPromise *promise = scr_promise_new();
   if (init && init->kind != SCR_DYN_OBJ &&
       init->kind != SCR_DYN_UNDEF && init->kind != SCR_DYN_NULL) {
@@ -5324,7 +5574,8 @@ ScrPromise *scr_fetch_static(ScrStr *url, ScrDyn *init) {
     return sf_reject_now(promise, "fetch failed");
   }
   bool https = sf_eq_ci(u->scheme, "https");
-  if (!https && !sf_eq_ci(u->scheme, "http")) {
+  bool data_url = sf_eq_ci(u->scheme, "data");
+  if (!https && !sf_eq_ci(u->scheme, "http") && !data_url) {
     scr_dyn_release(coerced_body);
     scr_arr_release(headers);
     scr_str_release(method);
@@ -5406,6 +5657,14 @@ ScrPromise *scr_fetch_static(ScrStr *url, ScrDyn *init) {
     return promise;
   }
 
+  if (data_url) {
+    ScrDyn *response = sf_data_response(url);
+    scr_dyn_release(coerced_body); scr_arr_release(headers); scr_str_release(method); scr_url_release(u);
+    if (response) { scr_promise_resolve_dyn(promise, response); }
+    else scr_promise_reject_pending(promise);
+    return promise;
+  }
+
   SfTransfer *t = calloc(1, sizeof *t);
   if (!t) sf_oom();
   t->rc = 1; /* registry */
@@ -5457,6 +5716,9 @@ static const ScrDynHandleOps sf_controller_ops = {
     "ReadableStreamDefaultController", &sf_stream_retain_v,
     &sf_stream_release_v, &sf_controller_invoke, &sf_controller_get,
     &sf_no_set, NULL};
+static const ScrDynHandleOps sf_request_ops = {
+    "Request", &sf_request_retain_v, &sf_request_release_v,
+    &sf_request_invoke, &sf_request_get, &sf_no_set, NULL};
 static const ScrDynHandleOps sf_response_ops = {
     "Response", &sf_response_retain_v, &sf_response_release_v,
     &sf_response_invoke, &sf_response_get, &sf_no_set, NULL};
@@ -5497,6 +5759,7 @@ void scr_fetch_install(void) {
   if (installed) return;
   installed = true;
   scr_tls_ca_install();
+  scr_global_fetch_install(scr_fetch_function);
   sf_proxy_snapshot();
   scr_net_install();
   scr_dyn_handle_install(SCR_DYNH_ABORT_SIGNAL, &sf_signal_ops);
@@ -5505,6 +5768,7 @@ void scr_fetch_install(void) {
   scr_dyn_handle_install(SCR_DYNH_WEB_STREAM, &sf_stream_ops);
   scr_dyn_handle_install(SCR_DYNH_WEB_READER, &sf_reader_ops);
   scr_dyn_handle_install(SCR_DYNH_WEB_CONTROLLER, &sf_controller_ops);
+  scr_dyn_handle_install(SCR_DYNH_FETCH_REQUEST, &sf_request_ops);
   scr_dyn_handle_install(SCR_DYNH_FETCH_RESPONSE, &sf_response_ops);
   scr_dyn_handle_install(SCR_DYNH_FETCH_HEADERS, &sf_headers_ops);
   scr_dyn_handle_install(SCR_DYNH_EVENT, &sf_event_ops);

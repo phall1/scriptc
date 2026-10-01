@@ -170,8 +170,6 @@ const outOfScopeEntry = (
   reason,
 });
 
-const constructorUnsupported =
-  "the interface constructor has no compiler bridge in either tier";
 const widerMemberFence =
   "the member is outside the native static handle projection";
 const typedInterfaceUnsupported =
@@ -259,6 +257,35 @@ export const NODE24_FETCH_COMPAT_PROFILE = {
     readableStreamCalls: ["cancel", "getReader"],
   },
   operations: [
+    {
+      id: "stdlib.headers.constructor",
+      name: "Headers constructor",
+      kind: "constructor",
+      facets: ["webidl-conversion", "mutation", "identity"],
+      scope: "Record and iterable header pairs, including copying native Headers",
+      evidence: [fixture("static-request")],
+    },
+    {
+      id: "stdlib.request.constructor",
+      name: "Request constructor",
+      kind: "constructor",
+      facets: ["webidl-conversion", "body-consumption", "error-shape"],
+      scope: "Absolute URLs with method, headers, body, duplex, redirect, and signal; other RequestInit members retain explicit fences",
+      evidence: [fixture("static-request")],
+    },
+    ...[
+      "method", "url", "headers", "destination", "referrer", "referrerPolicy", "mode", "credentials", "cache", "redirect", "integrity", "keepalive", "isReloadNavigation", "isHistoryNavigation", "signal", "body", "bodyUsed", "duplex",
+    ].map((member): FetchCompatOperation => ({
+      id: `stdlib.request.${member}`, name: `Request.${member}`, kind: "property",
+      facets: ["property-read", "state-machine"],
+      scope: "Reads on native Requests within the constructor's supported RequestInit subset",
+      evidence: [fixture("static-request")],
+    })),
+    ...["arrayBuffer", "text", "json", "bytes"].map((member): FetchCompatOperation => ({
+      id: `stdlib.request.${member}`, name: `Request.${member}`, kind: "method",
+      facets: ["body-consumption", "promise-settlement", "state-machine", "error-shape"],
+      evidence: [fixture("static-request")],
+    })),
     {
       id: "stdlib.response.constructor",
       name: "Response constructor",
@@ -593,13 +620,7 @@ export const NODE24_FETCH_COMPAT_PROFILE = {
         metadataExclusion,
       ),
 
-      unsupportedEntry(
-        "stdlib.headers.constructor",
-        "Headers",
-        "constructor",
-        "constructor",
-        constructorUnsupported,
-      ),
+      staticEntry("stdlib.headers.constructor", "Headers", "constructor", "constructor"),
       ...[
         "append",
         "delete",
@@ -635,13 +656,7 @@ export const NODE24_FETCH_COMPAT_PROFILE = {
         metadataExclusion,
       ),
 
-      unsupportedEntry(
-        "stdlib.request.constructor",
-        "Request",
-        "constructor",
-        "constructor",
-        typedInterfaceUnsupported,
-      ),
+      staticEntry("stdlib.request.constructor", "Request", "constructor", "constructor"),
       ...[
         "method",
         "url",
@@ -670,13 +685,9 @@ export const NODE24_FETCH_COMPAT_PROFILE = {
         "bytes",
         "attribute",
       ].map((member) =>
-        unsupportedEntry(
-          `stdlib.request.${member}`,
-          "Request",
-          member,
-          "prototype",
-          typedInterfaceUnsupported,
-        )
+        ["clone", "blob", "formData", "attribute"].includes(member)
+          ? unsupportedEntry(`stdlib.request.${member}`, "Request", member, "prototype", typedInterfaceUnsupported)
+          : staticEntry(`stdlib.request.${member}`, "Request", member, "prototype")
       ),
       outOfScopeEntry(
         "stdlib.request.symbol.toStringTag",

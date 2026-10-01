@@ -52,24 +52,30 @@ export function lowerShortCircuitAssignment(lowerer: Lowerer, expr: ts.BinaryExp
         write = (value) => ({ kind: "exprStmt", expr: { kind: "libCall", fn: "dyn.keySet", args: [receiver, key, value], type: VOID, loc }, loc });
       } else {
         const field = lowerer.fieldTarget(target);
-        if (!field) lowerer.unsupported("SC1090", target, "short-circuit assignment to an unsupported property");
-        field.obj = save(field.obj, "%shortCircuitReceiver");
-        read = lowerer.fieldGetExpr(field, locOf(target), target);
-        storage = field.fieldType;
-        const blame = target;
-        write = (value) => lowerer.fieldSetStmt(field, value, loc, blame);
+        if (field) {
+          field.obj = save(field.obj, "%shortCircuitReceiver");
+          read = lowerer.fieldGetExpr(field, locOf(target), target);
+          storage = field.fieldType;
+          const blame = target;
+          write = (value) => lowerer.fieldSetStmt(field, value, loc, blame);
+        } else if (probed?.type.kind === "object" && lowerer.dynConvertible(probed.type)) {
+          // Inferred JS fields may live in the instance's property bag.
+          // Its checked capsule writes through to the same native object.
+          const receiver = save(lowerer.coerceToExpected(probed, DYN), "%shortCircuitReceiver");
+          const key: IrExpr = { kind: "strLit", value: target.name.text, type: STRING, loc };
+          storage = DYN;
+          read = { kind: "dynKeyGet", key, value: receiver, type: DYN, loc };
+          write = (value) => ({ kind: "exprStmt", expr: { kind: "libCall", fn: "dyn.keySet", args: [receiver, key, value], type: VOID, loc }, loc });
+        } else lowerer.unsupported("SC1090", target, "short-circuit assignment to an unsupported property");
       }
     } else {
       const receiver = save(lowerer.lowerExpr(target.expression), "%shortCircuitReceiver");
       let key = lowerer.lowerExpr(target.argumentExpression);
       if (receiver.type.kind === "dyn") {
-        if (key.type.kind !== "string" && key.type.kind !== "f64" && key.type.kind !== "bool") {
-          lowerer.unsupported("SC1090", target.argumentExpression, "short-circuit assignment with non-scalar property keys");
-        }
-        key = save(lowerer.ensureString(key, target.argumentExpression), "%shortCircuitKey");
+        key = save({ kind: "libCall", fn: "dyn.propertyKey", args: [lowerer.coerceInto(target.argumentExpression, key, DYN)], type: DYN, loc }, "%shortCircuitKey");
         storage = DYN;
         read = { kind: "dynKeyGet", key, value: receiver, type: DYN, loc };
-        write = (value) => ({ kind: "exprStmt", expr: { kind: "libCall", fn: "dyn.keySet", args: [receiver, key, value], type: VOID, loc }, loc });
+        write = (value) => ({ kind: "exprStmt", expr: { kind: "libCall", fn: "dyn.keySetComputed", args: [receiver, key, value], type: VOID, loc }, loc });
       } else if (receiver.type.kind === "array" && key.type.kind === "f64") {
         key = save(key, "%shortCircuitKey");
         storage = receiver.type.elem;

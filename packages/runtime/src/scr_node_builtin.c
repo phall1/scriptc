@@ -10,6 +10,9 @@ static SCR_TL ScrDyn *scr_global_known;
 static SCR_TL ScrDyn *scr_global_own;
 static SCR_TL bool scr_global_cleanup_registered;
 static SCR_TL ScrDyn *(*scr_global_console_get)(void);
+static SCR_TL ScrDyn *(*scr_global_fetch_get)(void);
+
+void scr_global_fetch_install(ScrDyn *(*get)(void)) { scr_global_fetch_get = get; }
 
 static SCR_TL ScrDyn *scr_hrtime_value;
 static void scr_hrtime_cleanup(void) {
@@ -111,6 +114,7 @@ static ScrDyn *scr_global_get(void *handle, const char *key, size_t length) {
     return scr_dyn_new_handle(&scr_global_known, SCR_DYNH_GLOBAL);
   if (length == 7 && memcmp(key, "console", length) == 0 && scr_global_console_get)
     return scr_global_console_get();
+  if (length == 5 && memcmp(key, "fetch", length) == 0 && scr_global_fetch_get) return scr_global_fetch_get();
   if (length == 9 && memcmp(key, "undefined", length) == 0) return scr_dyn_undefined();
   if (length == 3 && memcmp(key, "NaN", length) == 0) return scr_dyn_new_num(NAN);
   if (length == 8 && memcmp(key, "Infinity", length) == 0) return scr_dyn_new_num(INFINITY);

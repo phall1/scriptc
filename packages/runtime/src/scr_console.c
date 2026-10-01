@@ -107,7 +107,7 @@ static void scr_enable_utf8_console_output(void) {
 }
 #endif
 
-void scr_runtime_abi_v5(void) {}
+void scr_runtime_abi_v6(void) {}
 
 void scr_init(void) {
 #ifdef _WIN32

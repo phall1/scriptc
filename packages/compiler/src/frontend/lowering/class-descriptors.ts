@@ -1,10 +1,9 @@
 import * as ts from "../ts7/adapter.js";
-import { DYN, type IrExpr, type IrStmt, isDynTypedRefType } from "../../ir/ir.js";
+import { BOOL, DYN, STRING, VOID, type SrcLoc, type IrExpr, type IrStmt, isDynTypedRefType } from "../../ir/ir.js";
 import { varRef } from "../../ir/build.js";
 import { locOf } from "../program.js";
 import type { Lowerer } from "./lowerer.js";
 import type { ClassInfo } from "./lower-classes.js";
-import { isCompiledPrototypeMember } from "./class-prototypes.js";
 import { classPropertiesHelper } from "./class-dynamic-dispatch.js";
 
 function literalName(name: ts.PropertyName): string | null {
@@ -12,7 +11,7 @@ function literalName(name: ts.PropertyName): string | null {
 }
 
 function bagOnlyProperty(lowerer: Lowerer, owner: ClassInfo, name: string): boolean {
-  return !owner.fields.has(name) && !isCompiledPrototypeMember(lowerer, owner, name) &&
+  return !owner.fields.has(name) &&
     owner.subclasses.every((child) => bagOnlyProperty(lowerer, child, name));
 }
 
@@ -43,7 +42,7 @@ export function lowerClassDataDescriptor(lowerer: Lowerer, call: ts.CallExpressi
   const descriptors = call.arguments[member === "defineProperty" ? 2 : 1]!;
   if (member === "defineProperty") {
     const key = call.arguments[1]!;
-    if (!ts.isStringLiteral(key) || !safeName(info, key.text) || !descriptor(descriptors)) return null;
+    if (ts.isStringLiteral(key) && !safeName(info, key.text) || !descriptor(descriptors)) return null;
   } else {
     if (!ts.isObjectLiteralExpression(descriptors) || !descriptors.properties.every((p) => {
       if (!ts.isPropertyAssignment(p)) return false;
@@ -54,17 +53,53 @@ export function lowerClassDataDescriptor(lowerer: Lowerer, call: ts.CallExpressi
   const loc = locOf(call);
   const receiver = lowerer.declareHiddenLocal("%descriptorReceiver", target.type);
   const desc = lowerer.declareHiddenLocal("%descriptors", DYN);
+  const key = member === "defineProperty" ? lowerer.declareHiddenLocal("%descriptorKey", DYN) : null;
+  if (key) key.mutable = true;
   const value = varRef(receiver.id, target.type, loc);
   const boxed = lowerer.coerceToExpected(value, DYN);
   const helper = classPropertiesHelper(lowerer, loc);
   const bag: IrExpr = { kind: "call", callee: helper.name, args: [boxed], type: DYN, loc };
   const args = member === "defineProperty"
-    ? [bag, lowerer.lowerExprExpecting(call.arguments[1]!, DYN), varRef(desc.id, DYN, loc)]
+    ? [bag, varRef(key!.id, DYN, loc), varRef(desc.id, DYN, loc)]
     : [bag, varRef(desc.id, DYN, loc)];
   const stmts: IrStmt[] = [
     { kind: "varDecl", localId: receiver.id, init: target, loc },
+    ...(key ? [{ kind: "varDecl" as const, localId: key.id, init: lowerer.lowerExprExpecting(call.arguments[1]!, DYN), loc }] : []),
     { kind: "varDecl", localId: desc.id, init: lowerer.lowerExprExpecting(descriptors, DYN), loc },
+    ...(key && !ts.isStringLiteral(call.arguments[1]!) ? [{ kind: "assign" as const, localId: key.id,
+      value: { kind: "libCall" as const, fn: "dyn.propertyKey" as const, args: [varRef(key.id, DYN, loc)], type: DYN, loc }, loc }, { kind: "exprStmt" as const,
+      expr: { kind: "call" as const, callee: descriptorGuard(lowerer, info, loc), args: [varRef(key.id, DYN, loc)], type: VOID, loc }, loc }] : []),
     { kind: "exprStmt", expr: { kind: "libCall", fn: member === "defineProperty" ? "dyn.defineProperty" : "dyn.defineProps", args, type: DYN, loc }, loc },
   ];
   return { kind: "seqExpr", stmts, result: value, type: value.type, loc };
+}
+
+function descriptorGuard(lowerer: Lowerer, info: ClassInfo, loc: SrcLoc): string {
+  const name = `%descriptorGuard:${info.def.name}`;
+  const existing = lowerer.liftedFns.find((fn) => fn.name === name);
+  const key = varRef("key", DYN, loc);
+  const fields = new Set<string>();
+  const collect = (owner: ClassInfo): void => {
+    for (const field of owner.fields.keys()) fields.add(field);
+    for (const child of owner.subclasses) collect(child);
+  };
+  collect(info);
+  const body: IrStmt[] = [...fields].filter((field) => !field.startsWith("%") && !field.startsWith("#")).map((field): IrStmt => ({
+      kind: "if", cond: { kind: "dynScalarEq", left: key, right: lowerer.coerceToExpected({ kind: "strLit", value: field, type: STRING, loc }, DYN), type: BOOL, loc },
+      then: [{ kind: "runtimeFence", code: "SC2020", message: `changing the descriptor of native field '${field}' is not supported yet`, loc }], else_: null, loc,
+    }));
+  if (existing) { existing.body = body; return name; }
+  lowerer.liftedFns.push({ name, params: [{ localId: "key", name: "key", type: DYN }],
+    locals: [{ id: "key", name: "key", type: DYN, mutable: false }], returnType: VOID, loc,
+    body,
+  });
+  return name;
+}
+
+export function refreshDescriptorGuards(lowerer: Lowerer): void {
+  for (const fn of lowerer.liftedFns) {
+    if (!fn.name.startsWith("%descriptorGuard:")) continue;
+    const info = lowerer.classes.get(fn.name.slice("%descriptorGuard:".length));
+    if (info) descriptorGuard(lowerer, info, fn.loc);
+  }
 }

@@ -4,8 +4,19 @@ import { everyStmtList, transformExpr, transformStmtList } from "../../ir/traver
 import { dynUndefinedExpr, type Lowerer } from "./lowerer.js";
 import type { ParamShape } from "./lower-calls.js";
 import { classPrototypeData } from "./class-prototypes.js";
+import { classInstanceOf } from "./class-dynamic-dispatch.js";
 
 const PREFIX = "%class.construct:";
+const INSTANCEOF = "%class.instanceof:dynamic";
+
+export function checkedClassInstanceOf(lowerer: Lowerer, value: IrExpr, callee: IrExpr, loc: SrcLoc): IrExpr {
+  if (!lowerer.liftedFns.some((fn) => fn.name === INSTANCEOF)) {
+    const params = [{ localId: "value", name: "value", type: DYN }, { localId: "callee", name: "callee", type: DYN }];
+    lowerer.liftedFns.push({ name: INSTANCEOF, params, locals: params.map((p) => ({ id: p.localId, name: p.name, type: p.type, mutable: false })),
+      returnType: BOOL, body: [{ kind: "return", value: { kind: "libCall", fn: "bytes.instanceOf", args: [varRef("value", DYN, loc), varRef("callee", DYN, loc)], type: BOOL, loc }, loc }], loc });
+  }
+  return { kind: "call", callee: INSTANCEOF, args: [value, callee], type: BOOL, loc };
+}
 
 /** Checked construction dispatches to emitted native constructor thunks. */
 export function checkedClassConstruction(lowerer: Lowerer, callee: IrExpr, args: IrExpr[], loc: SrcLoc): IrExpr {
@@ -13,7 +24,7 @@ export function checkedClassConstruction(lowerer: Lowerer, callee: IrExpr, args:
   if (!lowerer.liftedFns.some((fn) => fn.name === name)) {
     const params = [callee, ...args].map((_, index) => ({ localId: `p.${index}`, name: `p${index}`, type: DYN }));
     lowerer.liftedFns.push({ name, params, locals: params.map((p) => ({ id: p.localId, name: p.name, type: p.type, mutable: false })),
-      returnType: DYN, body: [{ kind: "return", value: { kind: "libCall", fn: "bytes.construct", args: [
+      returnType: DYN, body: [{ kind: "return", value: { kind: "libCall", fn: "dyn.construct", args: [
         varRef("p.0", DYN, loc), { kind: "dynArrLit", elems: params.slice(1).map((param) => varRef(param.localId, DYN, loc)), type: DYN, loc },
         { kind: "strLit", value: "constructor", type: STRING, loc },
       ], type: DYN, loc }, loc }], loc });
@@ -96,7 +107,7 @@ export class ClassConstructionDispatch {
       changed = true;
     }
     for (const fn of functions) {
-      if (!fn.name.startsWith(PREFIX)) continue;
+      if (!fn.name.startsWith(PREFIX) && fn.name !== INSTANCEOF) continue;
       let completed = this.completed.get(fn.name);
       if (!completed) this.completed.set(fn.name, completed = new Set());
       const loc = fn.loc;
@@ -105,6 +116,15 @@ export class ClassConstructionDispatch {
         completed.add(name);
         const info = lowerer.classes.get(name);
         if (!info || info.generic || info.def.runtime) continue;
+        if (fn.name === INSTANCEOF) {
+          const type: IrType = { kind: "classval", className: name };
+          const callee = varRef("callee", DYN, loc);
+          const result = classInstanceOf(lowerer, varRef("value", DYN, loc), info, loc, { kind: "dynCheck", value: callee, type, loc });
+          fn.body.unshift({ kind: "if", cond: { kind: "libCall", fn: "dyn.classIs", args: [callee,
+            { kind: "strLit", value: typeKey(type), type: STRING, loc }], type: BOOL, loc }, then: [{ kind: "return", value: result, loc }], else_: null, loc });
+          changed = true;
+          continue;
+        }
         const args = constructorArguments(lowerer, info.ctorParams, fn.params.slice(1).map((param) => varRef(param.localId, DYN, loc)), loc);
         if (!args) continue;
         const type: IrType = { kind: "classval", className: name };

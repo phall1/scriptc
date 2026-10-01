@@ -93,6 +93,11 @@ export function emitOperatorExpr(host: LlvmEmitterContext, e: ExprOf<"bin" | "un
         };
         if ((e.op === "===" || e.op === "!==") && e.left.type.kind === "bool") {
           B.line(`${t} = icmp ${e.op === "===" ? "eq" : "ne"} i1 ${l.name}, ${r.name}`);
+        } else if ((e.op === "===" || e.op === "!==") && e.left.type.kind === "promise" && e.right.type.kind === "promise") {
+          host.declare(`declare zeroext i1 @scr_promise_identity_equal(ptr, ptr)`);
+          const equal = e.op === "===" ? t : B.tmp();
+          B.line(`${equal} = call zeroext i1 @scr_promise_identity_equal(ptr ${l.name}, ptr ${r.name})`);
+          if (e.op === "!==") B.line(`${t} = xor i1 ${equal}, true`);
         } else if ((e.op === "===" || e.op === "!==") && host.llType(e.left.type) === "ptr") {
           // Reference identity (JS object equality) — closures, arrays,
           // records compared as pointers, exactly the C `==`.

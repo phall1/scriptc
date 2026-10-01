@@ -297,14 +297,18 @@ export function lowerStringPaddingCall(
     lowerer.noLowering(`.${method} with ${argumentNodes.length} arguments`, call);
   }
   const loc = locOf(call);
-  const maxLength = lowerPositionArgument(lowerer, argumentNodes[0], numLit(0, loc));
+  const rawLength = lowerPositionArgument(lowerer, argumentNodes[0], numLit(0, loc));
+  const maxLength = (rawLength.type.kind === "record" || rawLength.type.kind === "object") && lowerer.dynConvertible(rawLength.type)
+    ? lowerer.coerceToExpected(rawLength, DYN) : rawLength;
   const fillNode = argumentNodes[1];
   const undefinedFill = fillNode ? lowerStaticallyUndefinedArgument(lowerer, fillNode) : null;
   const rawFill = !fillNode ? strLit(" ", loc) : undefinedFill
     ? defaultAfterUndefined(undefinedFill, strLit(" ", loc))
     : lowerer.lowerExpr(fillNode);
   const fill = rawFill.type.kind === "nullT"
-    ? defaultAfterUndefined(rawFill, strLit("null", loc)) : rawFill;
+    ? defaultAfterUndefined(rawFill, strLit("null", loc))
+    : (rawFill.type.kind === "record" || rawFill.type.kind === "object") && lowerer.dynConvertible(rawFill.type)
+      ? lowerer.coerceToExpected(rawFill, DYN) : rawFill;
   const values = [receiver, maxLength, fill];
   const key = `str.pad:${method}:${values.map(value => typeKey(value.type)).join(":")}`;
   let helper = lowerer.widthHelpers.get(key);

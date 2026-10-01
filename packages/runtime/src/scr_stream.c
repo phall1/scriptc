@@ -2446,6 +2446,45 @@ void scr_stream_unshift_str(ScrStream *s, ScrStr *str) {
   scr_bytes_release(b);
 }
 
+static void scr_stream_listener_error(ScrClosure *adapter, ScrError *error) {
+  ScrDyn *fn = scr_dyn_listener_fn(adapter);
+  ScrDyn *arg = scr_dyn_from_error(error);
+  ScrDyn *answer = scr_dyn_call(fn, &arg, 1, "listener");
+  scr_dyn_release(answer);
+  scr_dyn_release(arg);
+  scr_dyn_release(fn);
+}
+
+ScrStream *scr_stream_on_dyn(ScrStream *s, ScrStr *name, ScrDyn *cb, bool once, bool prepend) {
+  bool error = name->len == 5 && memcmp(name->data, "error", 5) == 0;
+  bool empty = (name->len == 8 && memcmp(name->data, "readable", 8) == 0) ||
+    (name->len == 3 && memcmp(name->data, "end", 3) == 0) ||
+    (name->len == 5 && memcmp(name->data, "close", 5) == 0) ||
+    (name->len == 6 && memcmp(name->data, "finish", 6) == 0) ||
+    (name->len == 5 && memcmp(name->data, "drain", 5) == 0) ||
+    (name->len == 6 && memcmp(name->data, "resume", 6) == 0) ||
+    (name->len == 5 && memcmp(name->data, "pause", 5) == 0) ||
+    (name->len == 9 && memcmp(name->data, "prefinish", 9) == 0);
+  if (error || empty) {
+    ScrClosure *adapter = error ? scr_dyn_listener_closure_fn(cb, (void *)&scr_stream_listener_error) : scr_dyn_listener_closure0(cb);
+    return (ScrStream *)scr_emitter_on_dyn((ScrEmitter *)s, name, cb, adapter,
+      error ? scr_ee_inv_fixed1 : scr_ee_inv_fixed0, once, prepend);
+  }
+  static const char message[] = "this stream event has no checked-dynamic listener adapter";
+  scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
+  return NULL;
+}
+
+ScrDyn *scr_stream_read_dyn(ScrStream *s, ScrDyn *size) {
+  double n = size && size->kind != SCR_DYN_UNDEF ? scr_dyn_number_coerce(size) : -1;
+  if (scr_exc_pending()) return scr_dyn_undefined();
+  void *chunk = s->st->has_r ? scr_stream_read_n(s, n) : NULL;
+  if (!chunk) return scr_dyn_new_null();
+  ScrDyn *result = s->st->r.encoded ? scr_dyn_new_str(chunk) : scr_dyn_new_buffer(chunk);
+  scr_stream_entry_release(s->st, chunk);
+  return result;
+}
+
 ScrBytes *scr_stream_read(ScrStream *s, double size) {
   /* a destroyed readable still DRAINS its buffer (Node: destroy leaves
    * buffered chunks readable; only _read refills are blocked) */

@@ -152,7 +152,8 @@ export function lowerDgramDnsModuleCall(lowerer: Lowerer, expr: ts.CallExpressio
         // fence — abort-driven close has no lowering yet.
         const raw = lowerer.lowerExpr(prop.initializer);
         const provablyNot = raw.type.kind === "string" || raw.type.kind === "f64" ||
-          raw.type.kind === "bool" || raw.type.kind === "record" || raw.type.kind === "array";
+          raw.type.kind === "bool" || raw.type.kind === "record" || raw.type.kind === "array" ||
+          ts.isObjectLiteralExpression(prop.initializer);
         if (provablyNot && lowerer.dynConvertible(raw.type)) {
           return {
             kind: "libCall",
@@ -160,7 +161,7 @@ export function lowerDgramDnsModuleCall(lowerer: Lowerer, expr: ts.CallExpressio
             args: [
               { kind: "strLit", value: "options.signal", type: STRING, loc },
               { kind: "strLit", value: "an instance of AbortSignal", type: STRING, loc },
-              { kind: "dynFrom", value: raw, type: DYN, loc },
+              lowerer.coerceToExpected(raw, DYN),
             ],
             type: DGRAMSOCK_T,
             loc,

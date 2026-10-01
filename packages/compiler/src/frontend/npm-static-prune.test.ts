@@ -50,4 +50,13 @@ describe("npm static namespace re-export pruning", () => {
     expect(files.some((file) => file.endsWith("/cycle-b/spare.js"))).toBe(true);
     expect(files.some((file) => file.endsWith("/cycle-impure/index.js"))).toBe(true);
   });
+  test("per-file sideEffects patterns retain initialization through imports and cycles", () => {
+    const { files, diagnostics } = moduleOrder("selectivebarrel-cli.ts", "selectivebarrel");
+    expect(diagnostics).toEqual([]);
+    expect(files.some((file) => file.endsWith("/selectivebarrel/spare.js"))).toBe(false);
+    for (const name of ["feature.js", "effects/start.js", "bridge.js", "loop-a.js", "loop-b.js", "nested/custom.init.js", "braced/a.js"]) {
+      expect(files.some((file) => file.endsWith(`/selectivebarrel/${name}`)), name).toBe(true);
+    }
+  });
+
 });

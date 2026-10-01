@@ -347,7 +347,8 @@ export function emitClassShapes(
         lines.push(`  call void @scr_cyc_free(ptr %o)`);
       } else {
         host.declare(`declare void @free(ptr)`);
-        lines.push(`  call void @free(ptr %o)`);
+        host.declare(`declare void @scr_weak_dispose(ptr)`);
+        lines.push(`  call void @scr_weak_dispose(ptr %o)`, `  call void @free(ptr %o)`);
       }
     };
 

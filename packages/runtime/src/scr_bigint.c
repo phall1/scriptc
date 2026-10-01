@@ -597,6 +597,14 @@ static ScrBigInt *bi_parse_string(ScrStr *s, bool report_error) {
 
 ScrBigInt *scr_bigint_parse(ScrStr *s) { return bi_parse_string(s, true); }
 
+double scr_bigint_cmp_string(ScrBigInt *a, ScrStr *b) {
+  ScrBigInt *parsed = bi_parse_string(b, false);
+  if (!parsed) return 2;
+  double result = scr_bigint_cmp_f64(a, parsed);
+  scr_bigint_release(parsed);
+  return result;
+}
+
 /* Abstract Equality's String/BigInt arm uses StringToBigInt without
  * surfacing its parse failure: an invalid string compares false instead
  * of throwing. BigInt(string) keeps the public throwing parser above. */

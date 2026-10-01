@@ -14,15 +14,6 @@ text-codec-value.ts:9:1 - error SC2020: 'decode with a stream option' is part of
 
   hint: the type checker sees the full standard library, but only the supported surface compiles (https://scriptc.dev/limitations)
 
-text-codec-value.ts:10:1 - error SC2020: 'new TextDecoder with runtime-valued options or an unknown label' is part of the standard library types but has no scriptc lowering yet
-
-   9 | decoder.decode(new Uint8Array([0xc3]), { stream: true });
-  10 | new TextDecoder("utf-8", { fatal: true });
-     | ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  11 | encoder.encodeInto("hello", new Uint8Array(10));
-
-  hint: a recognized literal WHATWG label with default options compiles
-
 text-codec-value.ts:11:1 - error SC2020: 'TextEncoder.encodeInto' is part of the standard library types but has no scriptc lowering yet
 
   10 | new TextDecoder("utf-8", { fatal: true });

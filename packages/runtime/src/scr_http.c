@@ -5567,6 +5567,8 @@ static ScrDyn *scr_http_dynh_agent_invoke(void *h, ScrDyn *self, const char *met
   }
   if (strcmp(method, "getName") == 0) {
     const ScrDyn *opts = argc > 0 ? args[0] : scr_dyn_undefined();
+    ScrDyn *view = opts->kind == SCR_DYN_TYPED_REF ? scr_dyn_typed_ref_materialize(opts) : NULL;
+    if (view != NULL) opts = view;
     ScrStr *host = scr_http_dynh_opt_str(opts, "host");
     ScrStr *port = scr_http_dynh_opt_str(opts, "port");
     ScrStr *laddr = scr_http_dynh_opt_str(opts, "localAddress");
@@ -5587,6 +5589,7 @@ static ScrDyn *scr_http_dynh_agent_invoke(void *h, ScrDyn *self, const char *met
     scr_str_release(port);
     scr_str_release(laddr);
     scr_str_release(spath);
+    scr_dyn_release(view);
     ScrDyn *d = scr_dyn_new_str(name);
     scr_str_release(name);
     return d;

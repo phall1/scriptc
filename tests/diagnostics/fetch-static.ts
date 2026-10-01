@@ -28,4 +28,4 @@ async function bracketArrayBufferRead(url: string): Promise<void> {
 }
 bracketArrayBufferRead("http://localhost/e");
 const headers = new Headers();
-// The Headers constructor remains fenced even though response.headers is native.
+// Headers construction is native; the detached Response method above remains fenced.

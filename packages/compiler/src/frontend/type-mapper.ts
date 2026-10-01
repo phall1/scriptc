@@ -54,6 +54,7 @@ export function jsOpenObjectType(
  * same names keep their ordinary structural representation. */
 export const ISLAND_AMBIENT_TYPES = [
   "Response",
+  "Request",
   "ResponseInit",
   "RequestInit",
   "Event",
@@ -1658,7 +1659,7 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
   ) {
     return {
       kind: "record",
-      shapeId: ctx.shapes.intern([{ name: `%${psym.name}`, type: F64 }], false, undefined, []),
+      shapeId: ctx.shapes.intern([{ name: `%${psym.name}`, type: F64 }, ...(psym.name === "TextDecoder" ? [{ name: "%fatal", type: BOOL }, { name: "%ignoreBOM", type: BOOL }] : [])], false, undefined, []),
     };
   }
   // string_decoder.StringDecoder: the decoder value is a two-field record
@@ -2719,6 +2720,10 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
   if (widened.isIntersectionType() && checker.getConstructSignatures(widened).length === 0) {
     const hybrid = mapHybridCallableIntersection(widened, ctx);
     if (hybrid) return hybrid;
+    // Recursive and Symbol-keyed callable objects need their complete live
+    // property table; dropping those members into a plain closure loses data.
+    if (!ctx.dynamic && checker.getCallSignatures(widened).length > 0 &&
+        checker.getPropertiesOfType(widened).length > 0) return DYN;
   }
   const callSigs = checker.getCallSignatures(widened);
   if (callSigs.length === 1) {
@@ -2758,6 +2763,11 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
         ts.isParameter(decl) &&
         (decl.questionToken !== undefined || decl.initializer !== undefined);
       let pt = mapType(checker.getTypeOfSymbol(p), ctx);
+      // An inferred JavaScript binding pattern consumes an iterable; it
+      // does not require the caller's array to have exactly this length.
+      if (decl && ts.isParameter(decl) && ts.isArrayBindingPattern(decl.name) &&
+          isJsSourceFile(decl.getSourceFile()) && !decl.type &&
+          !/@(?:param|type)\b/.test(decl.getSourceFile().text.slice(decl.parent?.pos ?? decl.pos, decl.getStart()))) pt = DYN;
       if (pt) pt = jsOpenObjectType(decl, pt, ctx.shapes, ctx.unions);
       // Belt and braces for non-strict type worlds: an optional param's
       // ABI slot is always the undefined-armed union (strictNullChecks
@@ -2786,7 +2796,8 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
     const sigDecl = checker.signatureDeclaration(sig);
     const jsUnitReturn = sigDecl !== undefined && isJsSourceFile(sigDecl.getSourceFile()) &&
       (retT.flags & (ts.TypeFlags.Null | ts.TypeFlags.Undefined)) !== 0;
-    let ret = jsUnitReturn ? DYN : retT.flags & ts.TypeFlags.Never ? VOID : mapType(retT, ctx);
+    let ret = jsUnitReturn || (!ctx.dynamic && (retT.flags & ts.TypeFlags.Any) !== 0)
+      ? DYN : retT.flags & ts.TypeFlags.Never ? VOID : mapType(retT, ctx);
     if (sigDecl && isJsSourceFile(sigDecl.getSourceFile()) && ret?.kind === "array" && ret.elem.kind === "f64") ret = DYN;
     if (!ret) return null;
     return typedRest

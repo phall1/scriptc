@@ -751,8 +751,7 @@ declare var ReadableStream: {
  * unknown — the same dynamic boundary as JSON.parse: cast and validate. */
 /* Headers — a response's native header map (lowercase names,
  * combine-on-append, sorted iteration). The value is a checked-dynamic
- * native handle like Response itself; constructing one statically
- * (`new Headers()`) keeps the constructor fence. */
+ * native handle like Response itself. */
 interface Headers {
   append(name: string, value: string): void;
   delete(name: string): void;
@@ -767,7 +766,7 @@ interface Headers {
   [Symbol.iterator](): IterableIterator<[string, string]>;
 }
 declare var Headers: {
-  new (init?: Record<string, string> | readonly (readonly [string, string])[]): Headers;
+  new (init?: Headers | Record<string, string> | readonly (readonly [string, string])[]): Headers;
   readonly prototype: Headers;
 };
 interface Response {
@@ -810,6 +809,18 @@ interface Request {
   readonly method: string;
   readonly url: string;
   readonly headers: Headers;
+  readonly destination: string;
+  readonly referrer: string;
+  readonly referrerPolicy: string;
+  readonly mode: string;
+  readonly credentials: string;
+  readonly cache: string;
+  readonly redirect: "follow" | "error" | "manual";
+  readonly integrity: string;
+  readonly keepalive: boolean;
+  readonly isReloadNavigation: boolean;
+  readonly isHistoryNavigation: boolean;
+  readonly duplex: "half";
   readonly signal: AbortSignal;
   readonly body: ReadableStream<Uint8Array> | null;
   readonly bodyUsed: boolean;
@@ -1059,14 +1070,12 @@ declare module "node:fs" {
   export function readFileSync(fd: number): Buffer;
   /* The options-object spelling of the utf8 form. */
   export function readFileSync(path: string, options: { encoding: "utf8" | "utf-8" }): string;
-  /* Error-first callback target used by the static util.promisify
-   * projection. Its options stay unknown because direct calls remain
-   * outside the typed fs slice; this also lets checked-JS validation
-   * ladders observe invalid runtime encodings without contextual narrowing. */
+  /* Error-first callbacks select string or Buffer data from their encoding.
+   * Unknown options retain that union until the caller validates the value. */
   export function readFile(
     path: string,
     options: unknown,
-    callback: (error: Error | null, data: string) => void,
+    callback: (error: Error | null, data: string | Buffer) => void,
   ): void;
   /* The options form carries the mode (applied at CREATION only, like
    * Node — an existing file keeps its permissions) and/or the utf8

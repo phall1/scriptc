@@ -28,6 +28,7 @@ import { REMOTE_COMMAND_PENDING, sandboxCommand, sandboxStatusCommand, waitForSa
 const root = fileURLToPath(new URL("../", import.meta.url));
 const laneCaseShardedFiles = [
   "tests/harness/effect.test.ts",
+  "tests/harness/effect4.test.ts",
   "tests/harness/differential.test.ts",
   "tests/harness/llvm-differential.test.ts",
   "tests/harness/npm.test.ts",
@@ -626,10 +627,10 @@ async function cleanup() {
   if (values.keep || created.size === 0) return;
   if (!cleanupPromise) {
     cleanupPromise = (async () => {
-      console.log(`\nRemoving ${created.size} disposable sandbox${created.size === 1 ? "" : "es"}...`);
+      console.log(`\nStopping ${created.size} disposable sandbox${created.size === 1 ? "" : "es"}...`);
       const results = await Promise.allSettled(
         [...created].map((name) =>
-          vercel(["sandbox", "remove", name], {
+          vercel(["sandbox", "stop", name], {
             label: name,
             quiet: true,
             timeoutMs: 60_000,
@@ -638,7 +639,7 @@ async function cleanup() {
       );
       const failures = results.filter((result) => result.status === "rejected");
       if (failures.length) {
-        console.error(`Failed to remove ${failures.length} sandbox${failures.length === 1 ? "" : "es"}.`);
+        console.error(`Failed to stop ${failures.length} sandbox${failures.length === 1 ? "" : "es"}.`);
       }
     })();
   }
@@ -651,10 +652,10 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
     handlingSignal = true;
     for (const child of children) child.kill("SIGTERM");
     if (!values.keep && created.size) {
-      console.log(`\nRemoving ${created.size} disposable sandbox${created.size === 1 ? "" : "es"}...`);
+      console.log(`\nStopping ${created.size} disposable sandbox${created.size === 1 ? "" : "es"}...`);
       spawnSync(
         "vercel",
-        ["sandbox", "remove", ...scopeArgs, ...created],
+        ["sandbox", "stop", ...scopeArgs, ...created],
         {
           cwd: root,
           env: { ...vercelProcessEnv, NO_UPDATE_NOTIFIER: "1" },

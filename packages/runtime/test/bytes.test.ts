@@ -46,6 +46,7 @@ beforeAll(async () => {
     join(testDir, "../src/scr_child.c"),
     join(testDir, "../src/scr_path.c"),
     join(testDir, "../src/scr_url.c"),
+    join(testDir, "../src/scr_url_params.c"),
     "-Wno-deprecated-declarations",
     "-lz",
     ...(process.platform === "linux" ? ["-D_GNU_SOURCE", "-lm"] : []),

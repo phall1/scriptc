@@ -403,6 +403,13 @@ static int scr_advance(const uint16_t *u, int len, int i, bool unicode) {
 
 /* ── test ─────────────────────────────────────────────────────────────── */
 
+void scr_regex_reset_last_index(ScrRegex *re, double index) {
+  uint8_t *bc = scr_regex_bc(re);
+  if (index == 0 && !(lre_get_flags(bc) & (LRE_FLAG_GLOBAL | LRE_FLAG_STICKY))) return;
+  static const char message[] = "Stateful RegExp lastIndex assignments have no lowering";
+  scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
+}
+
 bool scr_regex_test(ScrRegex *re, ScrStr *s) {
   uint8_t *bc = scr_regex_bc(re);
   if (lre_get_flags(bc) & (LRE_FLAG_GLOBAL | LRE_FLAG_STICKY)) {
@@ -449,6 +456,9 @@ ScrArr *scr_regex_match(ScrStr *s, ScrRegex *re) {
     const uint8_t *ubase = (const uint8_t *)u;
     int count = lre_get_capture_count(bc);
     out = scr_arr_new(SCR_ELEM_STR, (size_t)count);
+    out->metadata = scr_dyn_new_obj();
+    scr_dyn_obj_set(out->metadata, "index", 5, scr_dyn_new_num((double)((capture[0] - ubase) >> 1)));
+    scr_dyn_obj_set(out->metadata, "input", 5, scr_dyn_new_str(s));
     for (int k = 0; k < count; k++) {
       const uint8_t *cs = capture[2 * k], *ce = capture[2 * k + 1];
       if (cs == NULL || ce == NULL) {

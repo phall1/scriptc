@@ -5,6 +5,14 @@ const matrix = createRuntimePackMatrix({
   target: { object_format: "macho" }, compileFlags: [], systemLibraries: [],
 });
 
+test("checked URL handles include their search-parameter dependency without a feature opt-in", () => {
+  for (const object_format of ["elf", "macho", "coff", "wasm"]) {
+    const pack = createRuntimePackMatrix({ target: { object_format }, compileFlags: [], systemLibraries: [] });
+    const unit = pack.runtime_units.find((unit) => unit.source === "scr_url_params.c");
+    expect(unit?.predicate).toBe(true);
+  }
+});
+
 test("library pack modes preserve pure runtime features and exclude ambient event-loop code", () => {
   for (const optimization of ["release", "dev"]) {
     for (const mode of ["library", "library-thread"]) {

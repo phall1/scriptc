@@ -36,7 +36,7 @@
  * The pass never rewrites a well-typed argument: typeEquals matches are
  * untouched, so byte-stability holds for every program that lowered
  * cleanly before. The validator stays the backstop for anything else. */
-import { everyExprChild, everyStmtChild } from "../../ir/traverse.js";
+import { everyExprChild, everyStmtChild, mapExprChildren, mapStmtChildren } from "../../ir/traverse.js";
 import type { Lowerer } from "./lowerer.js";
 import { PoisonError } from "./lowerer.js";
 import { canAdaptDynFuncTo, canMarshalTypedFuncIntoIsland, DYN, DYN_HANDLE_KINDS, type IrExpr, type IrStmt, type IrType, JSVAL, type SrcLoc, STRING, isDynTypedRefType, isUnitType, typeEquals } from "../../ir/ir.js";
@@ -263,4 +263,52 @@ function enforceExprBoundary(lowerer: Lowerer, node: IrExpr): void {
     });
     return;
   }
+}
+
+/** JavaScript evaluates surplus arguments before invoking a fixed native callback. */
+export function lowerSurplusCalls(lowerer: Lowerer, body: IrStmt[]): IrStmt[] {
+  const stmt = (value: IrStmt): IrStmt => {
+    // Only JavaScript permits this call shape. Preserve untouched IR
+    // identities, including the compiler's own recursive union layouts.
+    let needed = false;
+    const inspectStmt = (node: IrStmt): boolean => everyStmtChild(node, inspectExpr, inspectStmt);
+    const inspectExpr = (node: IrExpr): boolean => {
+      if (node.kind === "callValue" && node.callee.type.kind === "func" &&
+          node.args.length > node.callee.type.params.length && /\.(?:[cm]?js)$/.test(node.loc.file)) needed = true;
+      return everyExprChild(node, inspectExpr, inspectStmt);
+    };
+    inspectStmt(value);
+    if (!needed) return value;
+    const next = mapStmtChildren(value, expr, stmt);
+    if (next.kind === "return") for (const entry of lowerer.ctx.inferReturn?.entries ?? []) {
+      if (entry.stmt === value) entry.stmt = next;
+    }
+    return next;
+  };
+  const expr = (value: IrExpr): IrExpr => {
+    const e = mapExprChildren(value, expr, stmt);
+    if (e.kind !== "callValue" || e.callee.type.kind !== "func") return e;
+    const params = e.callee.type.params;
+    if (e.args.length > params.length && /\.(?:[cm]?js)$/.test(e.loc.file)) {
+      const callee = lowerer.declareHiddenLocal("%surplusCallee", e.callee.type);
+      const stmts: IrStmt[] = [{ kind: "varDecl", localId: callee.id, init: e.callee, loc: e.loc }];
+      let receiver = e.receiver;
+      if (receiver) {
+        const local = lowerer.declareHiddenLocal("%surplusReceiver", receiver.type);
+        stmts.push({ kind: "varDecl", localId: local.id, init: receiver, loc: receiver.loc });
+        receiver = { kind: "varRef", localId: local.id, type: receiver.type, loc: receiver.loc };
+      }
+      const args = e.args.map((value) => {
+        const local = lowerer.declareHiddenLocal("%surplusArgument", value.type);
+        stmts.push({ kind: "varDecl", localId: local.id, init: value, loc: value.loc });
+        return { kind: "varRef" as const, localId: local.id, type: local.type, loc: value.loc };
+      });
+      const result: IrExpr = { ...e, callee: { kind: "varRef", localId: callee.id, type: e.callee.type, loc: e.loc }, args: args.slice(0, params.length) };
+      if (receiver) result.receiver = receiver;
+      result.args.forEach((value, i) => { result.args[i] = coerceSlot(lowerer, value, params[i]!, `argument ${i + 1} of the call`); });
+      return { kind: "seqExpr", stmts, result, type: e.type, loc: e.loc };
+    }
+    return e;
+  };
+  return body.map(stmt);
 }

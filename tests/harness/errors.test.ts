@@ -375,7 +375,7 @@ subtle.digest('SHA-256');
     expect(r.exitCode).toBe(1);
     expect(r.stdout).toBe("bound true\n");
     expect(r.stderr).toMatch(
-      /^Uncaught Error: method calls like 'subtle\.digest' is not supported yet \[SC1090 at .*destructure-opaque-global\.cjs:4\]\n$/,
+      /^Uncaught TypeError: subtle\.digest is not a function\n$/,
     );
   });
 

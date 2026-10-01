@@ -1,7 +1,7 @@
 // @dynamic
 // Checked-dynamic producers stay in dyn storage under an `any` spelling to
-// preserve aliases, but JS-coercive operators cross their operands into the
-// island. Strict equality remains native so object identity is not copied.
+// preserve aliases. Static builds support coercive operators natively;
+// the dynamic tier retains its island conversions. Strict equality preserves identity.
 function answer(): number {
   const value: any = JSON.parse("41");
   return value + 1;

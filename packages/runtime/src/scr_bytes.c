@@ -7,6 +7,7 @@
  * encoding conversions (utf8 with WHATWG replacement, hex, base64) match
  * Node byte-for-byte — the differential corpus holds them to it. */
 #include "scr_runtime.h"
+#include "scr_text_decoder_labels.h"
 #ifdef SCR_TEXT_DECODER_LEGACY
 #include "scr_text_decoder_data.h"
 #endif
@@ -15,6 +16,46 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+static bool scr_td_label_space(unsigned char c) {
+  return c == 9 || c == 10 || c == 12 || c == 13 || c == 32;
+}
+
+double scr_text_decoder_encoding(const ScrDyn *label) {
+  if (!label || label->kind == SCR_DYN_UNDEF) return -1;
+  ScrStr *text = scr_dyn_string_coerce_js(label);
+  if (!text) return -1;
+  size_t start = 0, end = text->len;
+  while (start < end && scr_td_label_space((unsigned char)text->data[start])) start++;
+  while (end > start && scr_td_label_space((unsigned char)text->data[end - 1])) end--;
+  for (size_t i = 0; i < sizeof scr_td_labels / sizeof scr_td_labels[0]; i++) {
+    const char *candidate = scr_td_labels[i].label;
+    if (strlen(candidate) != end - start) continue;
+    bool matches = true;
+    for (size_t j = start; j < end; j++) {
+      unsigned char c = (unsigned char)text->data[j];
+      if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+      if (c != (unsigned char)candidate[j - start]) { matches = false; break; }
+    }
+    if (matches) {
+      double result = scr_td_labels[i].encoding;
+      scr_str_release(text);
+      return result;
+    }
+  }
+  static const char prefix[] = "The \"";
+  static const char suffix[] = "\" encoding is not supported";
+  size_t length = sizeof prefix - 1 + text->len + sizeof suffix - 1;
+  char *message = malloc(length + 1);
+  if (!message) scr_trap("scriptc: out of memory\n");
+  memcpy(message, prefix, sizeof prefix - 1);
+  memcpy(message + sizeof prefix - 1, text->data, text->len);
+  memcpy(message + sizeof prefix - 1 + text->len, suffix, sizeof suffix);
+  scr_throw_error_msg_code(SCR_ERR_RANGE, message, length, "ERR_ENCODING_NOT_SUPPORTED");
+  free(message);
+  scr_str_release(text);
+  return -1;
+}
 
 #ifdef SCR_RC_AUDIT
 static SCR_TL long scr_live_bytes = 0;
@@ -70,6 +111,7 @@ static ScrBytes *scr_bytes_alloc(ScrBytesElem elem, size_t len) {
   if (!b->data) scr_bytes_oom();
   b->backing = NULL;
   b->is_buffer = false;
+  b->is_data_view = false;
   b->external = false;
 #ifdef SCR_RC_AUDIT
   scr_live_bytes++;
@@ -129,6 +171,7 @@ ScrBytes *scr_bytes_raw_view(ScrBytes *bytes) {
 
 ScrBytes *scr_bytes_as_buffer(ScrBytes *bytes) {
   bytes->is_buffer = true;
+  bytes->is_data_view = false;
   return scr_bytes_retain(bytes);
 }
 
@@ -341,6 +384,7 @@ ScrBytes *scr_bytes_subarray(ScrBytes *b, double start, double end) {
   v->data = b->data + s * scr_bytes_elem_size(b->elem);
   v->backing = scr_bytes_retain(owner);
   v->is_buffer = b->is_buffer;
+  v->is_data_view = false;
   v->external = false;
 #ifdef SCR_RC_AUDIT
   scr_live_bytes++;
@@ -554,6 +598,7 @@ ScrBytes *scr_dataview_new(ScrBytes *src, double byte_off, bool has_len, double 
   v->data = owner->data + (size_t)off;
   v->backing = scr_bytes_retain(owner);
   v->is_buffer = false;
+  v->is_data_view = true;
   v->external = false;
 #ifdef SCR_RC_AUDIT
   scr_live_bytes++;
@@ -581,6 +626,7 @@ ScrBytes *scr_bytes_buffer_view(ScrBytes *src, ScrBytesElem elem,
   if (!view) return NULL;
   view->elem = elem;
   view->len /= width;
+  view->is_data_view = false;
   return view;
 }
 
@@ -699,7 +745,13 @@ static const char scr_hex_digits[] = "0123456789abcdef";
 /* WHATWG UTF-8 decode with U+FFFD replacement per maximal invalid subpart
  * — what Buffer.prototype.toString("utf8") does. Output re-encodes as
  * (now valid) UTF-8: worst case 3 bytes per input byte. */
-static ScrStr *scr_bytes_decode_utf8(const uint8_t *in, size_t n) {
+static void scr_td_invalid(const char *encoding) {
+  char message[160];
+  int n = snprintf(message, sizeof message, "The encoded data was not valid for encoding %s", encoding);
+  scr_throw_error_msg_code(SCR_ERR_TYPE, message, (size_t)n, "ERR_ENCODING_INVALID_ENCODED_DATA");
+}
+
+static ScrStr *scr_bytes_decode_utf8_options(const uint8_t *in, size_t n, bool fatal) {
   if (in == NULL && n != 0) {
     scr_trap("scriptc: native callback passed a NULL span with nonzero length\n");
   }
@@ -713,6 +765,7 @@ static ScrStr *scr_bytes_decode_utf8(const uint8_t *in, size_t n) {
   for (size_t i = 0; i <= n; i++) {
     if (i == n) {
       if (needed > 0) { /* EOF inside a sequence: one replacement */
+        if (fatal) { free(out); scr_td_invalid("utf-8"); }
         memcpy(out + o, "\xef\xbf\xbd", 3);
         o += 3;
       }
@@ -733,6 +786,7 @@ static ScrStr *scr_bytes_decode_utf8(const uint8_t *in, size_t n) {
         if (byte == 0xf4) upper = 0x8f;
         needed = 3; cp = byte & 0x7;
       } else {
+        if (fatal) { free(out); scr_td_invalid("utf-8"); }
         memcpy(out + o, "\xef\xbf\xbd", 3);
         o += 3;
       }
@@ -740,6 +794,7 @@ static ScrStr *scr_bytes_decode_utf8(const uint8_t *in, size_t n) {
     }
     if (byte < lower || byte > upper) {
       /* Invalid continuation: replace the subpart, REPROCESS this byte. */
+      if (fatal) { free(out); scr_td_invalid("utf-8"); }
       memcpy(out + o, "\xef\xbf\xbd", 3);
       o += 3;
       needed = 0; lower = 0x80; upper = 0xbf;
@@ -772,6 +827,10 @@ static ScrStr *scr_bytes_decode_utf8(const uint8_t *in, size_t n) {
   return s;
 }
 
+static ScrStr *scr_bytes_decode_utf8(const uint8_t *in, size_t n) {
+  return scr_bytes_decode_utf8_options(in, n, false);
+}
+
 ScrStr *scr_str_from_utf8_lossy(const uint8_t *bytes, size_t len) {
   return scr_bytes_decode_utf8(bytes, len);
 }
@@ -780,14 +839,47 @@ ScrStr *scr_str_from_utf8_lossy(const uint8_t *bytes, size_t len) {
  * subpart replacement decode as toString("utf8") above, with one
  * difference — a leading UTF-8 BOM is stripped (ignoreBOM defaults to
  * false in the spec; Buffer.toString keeps the BOM as U+FEFF). */
-ScrStr *scr_text_decode(const ScrBytes *b) {
+ScrStr *scr_text_decode_options(const ScrBytes *b, bool fatal, bool ignore_bom) {
   const uint8_t *in = b->data;
   size_t n = b->len;
-  if (n >= 3 && in[0] == 0xef && in[1] == 0xbb && in[2] == 0xbf) {
+  if (!ignore_bom && n >= 3 && in[0] == 0xef && in[1] == 0xbb && in[2] == 0xbf) {
     in += 3;
     n -= 3;
   }
-  return scr_bytes_decode_utf8(in, n);
+  return scr_bytes_decode_utf8_options(in, n, fatal);
+}
+
+ScrBytes *scr_bytes_buffer_source(const ScrDyn *value) {
+  if (value->kind == SCR_DYN_TYPED_REF) {
+    ScrDyn *materialized = scr_dyn_typed_ref_materialize(value);
+    if (!materialized) return NULL;
+    ScrBytes *result = scr_bytes_buffer_source(materialized);
+    scr_dyn_release(materialized);
+    return result;
+  }
+  if (value->kind == SCR_DYN_UNDEF) return scr_bytes_new(SCR_BYTES_U8, 0);
+  if (value->kind == SCR_DYN_BYTES) {
+    ScrBytes *bytes = value->v.bytes;
+    return scr_bytes_buffer_view(bytes, SCR_BYTES_U8, scr_bytes_byte_offset(bytes), true, scr_bytes_byte_len(bytes));
+  }
+  if (scr_array_buffer_is(value)) {
+    return scr_array_buffer_view(SCR_BYTES_U8, value, scr_dyn_undefined(), scr_dyn_undefined());
+  }
+  static const char message[] = "The input argument must be an instance of SharedArrayBuffer, ArrayBuffer or ArrayBufferView.";
+  scr_throw_error_msg_code(SCR_ERR_TYPE, message, sizeof message - 1, "ERR_INVALID_ARG_TYPE");
+  return NULL;
+}
+
+ScrStr *scr_text_decode_buffer_source(const ScrDyn *value) {
+  ScrBytes *view = scr_bytes_buffer_source(value);
+  if (!view) return NULL;
+  ScrStr *out = scr_text_decode(view);
+  scr_bytes_release(view);
+  return out;
+}
+
+ScrStr *scr_text_decode(const ScrBytes *b) {
+  return scr_text_decode_options(b, false, false);
 }
 
 /* ── node:string_decoder, the utf8 StringDecoder ─────────────────────────
@@ -1067,11 +1159,12 @@ enum {
 typedef struct {
   char *data;
   size_t len;
+  bool failed;
 } ScrTdOut;
 
 static ScrTdOut scr_td_out_new(size_t input_len) {
   if (input_len > (SIZE_MAX - 8) / 3) scr_bytes_oom();
-  ScrTdOut out = { malloc(input_len * 3 + 8), 0 };
+  ScrTdOut out = { malloc(input_len * 3 + 8), 0, false };
   if (!out.data) scr_bytes_oom();
   return out;
 }
@@ -1081,39 +1174,42 @@ static void scr_td_put(ScrTdOut *out, uint32_t cp) {
 }
 
 static void scr_td_error(ScrTdOut *out) {
+  out->failed = true;
   scr_td_put(out, 0xfffd);
 }
 
-static ScrStr *scr_td_finish(ScrTdOut *out) {
+static ScrStr *scr_td_finish(ScrTdOut *out, bool fatal) {
+  if (fatal && out->failed) { free(out->data); scr_td_invalid("legacy encoding"); }
   ScrStr *str = scr_str_new(out->data, out->len);
   free(out->data);
   return str;
 }
 
-static ScrStr *scr_td_single_byte(const ScrBytes *b, unsigned encoding) {
+static ScrStr *scr_td_single_byte(const ScrBytes *b, unsigned encoding, bool fatal) {
   ScrTdOut out = scr_td_out_new(b->len);
   for (size_t i = 0; i < b->len; i++) {
     uint8_t byte = b->data[i];
-    scr_td_put(&out, byte < 0x80 ? byte : scr_td_single[encoding][byte - 0x80]);
+    uint32_t cp = byte < 0x80 ? byte : scr_td_single[encoding][byte - 0x80];
+    if (cp == 0xfffd) scr_td_error(&out); else scr_td_put(&out, cp);
   }
-  return scr_td_finish(&out);
+  return scr_td_finish(&out, fatal);
 }
 
-static ScrStr *scr_td_x_user_defined(const ScrBytes *b) {
+static ScrStr *scr_td_x_user_defined(const ScrBytes *b, bool fatal) {
   ScrTdOut out = scr_td_out_new(b->len);
   for (size_t i = 0; i < b->len; i++) {
     uint8_t byte = b->data[i];
     scr_td_put(&out, byte < 0x80 ? byte : 0xf780 + byte - 0x80);
   }
-  return scr_td_finish(&out);
+  return scr_td_finish(&out, fatal);
 }
 
-static ScrStr *scr_td_utf16(const ScrBytes *b, bool be) {
+static ScrStr *scr_td_utf16(const ScrBytes *b, bool be, bool fatal, bool ignore_bom) {
   const uint8_t *in = b->data;
   size_t n = b->len;
   /* TextDecoder's BOM handling strips only the BOM matching the selected
    * endian decoder. The opposite BOM decodes to U+FFFE and remains. */
-  if (n >= 2 && ((!be && in[0] == 0xff && in[1] == 0xfe) ||
+  if (!ignore_bom && n >= 2 && ((!be && in[0] == 0xff && in[1] == 0xfe) ||
                  (be && in[0] == 0xfe && in[1] == 0xff))) {
     in += 2;
     n -= 2;
@@ -1146,7 +1242,7 @@ static ScrStr *scr_td_utf16(const ScrBytes *b, bool be) {
     else scr_td_put(&out, cu);
   }
   if (i < n) scr_td_error(&out); /* odd trailing byte */
-  return scr_td_finish(&out);
+  return scr_td_finish(&out, fatal);
 }
 
 static uint32_t scr_td_gb_range(uint32_t pointer) {
@@ -1165,7 +1261,7 @@ static uint32_t scr_td_gb_range(uint32_t pointer) {
 /* A tiny prepend stack models the Encoding Standard's I/O queue restore.
  * The gb18030 decoder is the only legacy decoder which can restore three
  * bytes after discovering a malformed four-byte sequence. */
-static ScrStr *scr_td_gb18030_decode(const ScrBytes *b) {
+static ScrStr *scr_td_gb18030_decode(const ScrBytes *b, bool fatal) {
   ScrTdOut out = scr_td_out_new(b->len);
   uint8_t first = 0, second = 0, third = 0;
   uint8_t replay[3];
@@ -1238,10 +1334,10 @@ static ScrStr *scr_td_gb18030_decode(const ScrBytes *b) {
     else scr_td_error(&out);
   }
   if (first || second || third) scr_td_error(&out);
-  return scr_td_finish(&out);
+  return scr_td_finish(&out, fatal);
 }
 
-static ScrStr *scr_td_big5_decode(const ScrBytes *b) {
+static ScrStr *scr_td_big5_decode(const ScrBytes *b, bool fatal) {
   ScrTdOut out = scr_td_out_new(b->len);
   uint8_t lead = 0;
   for (size_t i = 0; i < b->len; i++) {
@@ -1267,10 +1363,10 @@ static ScrStr *scr_td_big5_decode(const ScrBytes *b) {
     else scr_td_error(&out);
   }
   if (lead) scr_td_error(&out);
-  return scr_td_finish(&out);
+  return scr_td_finish(&out, fatal);
 }
 
-static ScrStr *scr_td_euc_jp_decode(const ScrBytes *b) {
+static ScrStr *scr_td_euc_jp_decode(const ScrBytes *b, bool fatal) {
   ScrTdOut out = scr_td_out_new(b->len);
   uint8_t lead = 0;
   bool jis0212 = false;
@@ -1330,10 +1426,10 @@ static ScrStr *scr_td_euc_jp_decode(const ScrBytes *b) {
     else scr_td_error(&out);
   }
   if (lead) scr_td_error(&out);
-  return scr_td_finish(&out);
+  return scr_td_finish(&out, fatal);
 }
 
-static ScrStr *scr_td_shift_jis_decode(const ScrBytes *b) {
+static ScrStr *scr_td_shift_jis_decode(const ScrBytes *b, bool fatal) {
   ScrTdOut out = scr_td_out_new(b->len);
   uint8_t lead = 0;
   for (size_t i = 0; i < b->len; i++) {
@@ -1367,10 +1463,10 @@ static ScrStr *scr_td_shift_jis_decode(const ScrBytes *b) {
     else scr_td_error(&out);
   }
   if (lead) scr_td_error(&out);
-  return scr_td_finish(&out);
+  return scr_td_finish(&out, fatal);
 }
 
-static ScrStr *scr_td_euc_kr_decode(const ScrBytes *b) {
+static ScrStr *scr_td_euc_kr_decode(const ScrBytes *b, bool fatal) {
   ScrTdOut out = scr_td_out_new(b->len);
   uint8_t lead = 0;
   for (size_t i = 0; i < b->len; i++) {
@@ -1393,7 +1489,7 @@ static ScrStr *scr_td_euc_kr_decode(const ScrBytes *b) {
     else scr_td_error(&out);
   }
   if (lead) scr_td_error(&out);
-  return scr_td_finish(&out);
+  return scr_td_finish(&out, fatal);
 }
 
 enum ScrTdIsoState {
@@ -1406,7 +1502,7 @@ enum ScrTdIsoState {
   SCR_TD_ISO_ESCAPE,
 };
 
-static ScrStr *scr_td_iso_2022_jp_decode(const ScrBytes *b) {
+static ScrStr *scr_td_iso_2022_jp_decode(const ScrBytes *b, bool fatal) {
   ScrTdOut out = scr_td_out_new(b->len);
   enum ScrTdIsoState state = SCR_TD_ISO_ASCII;
   enum ScrTdIsoState output_state = SCR_TD_ISO_ASCII;
@@ -1574,24 +1670,27 @@ static ScrStr *scr_td_iso_2022_jp_decode(const ScrBytes *b) {
       }
     }
   }
-  return scr_td_finish(&out);
+  return scr_td_finish(&out, fatal);
 }
 
-ScrStr *scr_text_decode_legacy(const ScrBytes *b, double encoding_value) {
+ScrStr *scr_text_decode_legacy_options(const ScrBytes *b, double encoding_value, bool fatal, bool ignore_bom) {
   unsigned encoding = (unsigned)encoding_value;
-  if (encoding < SCR_TD_SINGLE_COUNT) return scr_td_single_byte(b, encoding);
+  if (encoding < SCR_TD_SINGLE_COUNT) return scr_td_single_byte(b, encoding, fatal);
   switch (encoding) {
-    case SCR_TD_X_USER_DEFINED: return scr_td_x_user_defined(b);
-    case SCR_TD_UTF16LE: return scr_td_utf16(b, false);
-    case SCR_TD_UTF16BE: return scr_td_utf16(b, true);
-    case SCR_TD_GB18030: return scr_td_gb18030_decode(b);
-    case SCR_TD_BIG5: return scr_td_big5_decode(b);
-    case SCR_TD_EUC_JP: return scr_td_euc_jp_decode(b);
-    case SCR_TD_ISO_2022_JP: return scr_td_iso_2022_jp_decode(b);
-    case SCR_TD_SHIFT_JIS: return scr_td_shift_jis_decode(b);
-    case SCR_TD_EUC_KR: return scr_td_euc_kr_decode(b);
+    case SCR_TD_X_USER_DEFINED: return scr_td_x_user_defined(b, fatal);
+    case SCR_TD_UTF16LE: return scr_td_utf16(b, false, fatal, ignore_bom);
+    case SCR_TD_UTF16BE: return scr_td_utf16(b, true, fatal, ignore_bom);
+    case SCR_TD_GB18030: return scr_td_gb18030_decode(b, fatal);
+    case SCR_TD_BIG5: return scr_td_big5_decode(b, fatal);
+    case SCR_TD_EUC_JP: return scr_td_euc_jp_decode(b, fatal);
+    case SCR_TD_ISO_2022_JP: return scr_td_iso_2022_jp_decode(b, fatal);
+    case SCR_TD_SHIFT_JIS: return scr_td_shift_jis_decode(b, fatal);
+    case SCR_TD_EUC_KR: return scr_td_euc_kr_decode(b, fatal);
     default: return scr_str_new("", 0); /* compiler invariant */
   }
+}
+ScrStr *scr_text_decode_legacy(const ScrBytes *b, double encoding_value) {
+  return scr_text_decode_legacy_options(b, encoding_value, false, false);
 }
 #endif /* SCR_TEXT_DECODER_LEGACY */
 

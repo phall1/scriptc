@@ -16,7 +16,6 @@ test.each([
   "Object.defineProperties(value, {x: {value: 2}});",
   "Object.defineProperty(value, 'data', {get() { return this.x; }});",
   "Object.defineProperties(value, {data: {get() { return this.x; }}});",
-  "Object.defineProperty(value, String('data'), {value: 2});",
 ])("keeps unsafe native descriptor changes fenced: %s", (operation) => {
   const { dir, entry } = fixture(`class Value { constructor() { this.x = 1; } } const value = new Value(); ${operation}`);
   try {
@@ -71,4 +70,27 @@ try { value.clone(); } catch (error) { console.log(error.message.includes('repla
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+
+test("derived constructor boundaries preserve initialization and refuse repeated super", async () => {
+  const { dir, entry } = fixture(`
+class Base { constructor(value) { this.value = value; } }
+class Before extends Base { constructor() {
+// @ts-expect-error Exercise the runtime initialization guard.
+this.value; super(1); } }
+class Missing extends Base { constructor(flag) { if (flag) super(1); } }
+class Repeated extends Base { constructor() { super(1); super(2); } }
+try { new Before(); } catch (error) { console.log(error instanceof ReferenceError); }
+try { new Missing(false); } catch (error) { console.log(error instanceof ReferenceError); }
+try { new Repeated(); } catch (error) { console.log(error.code === 'SC2020'); }
+`);
+  try {
+    const result = await compile(entry, { outDir: dir, outPath: join(dir, "program"), backend: "llvm", optimization: "dev" });
+    if (!result.ok) throw new Error(JSON.stringify(result.diagnostics));
+    const execution = spawnSync(result.binaryPath, [], { encoding: "utf8" });
+    expect(execution.status).toBe(0);
+    expect(execution.stdout).toBe("true\ntrue\ntrue\n");
+    expect(execution.stderr).toBe("");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

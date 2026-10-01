@@ -555,7 +555,15 @@ static bool dyn_name_is(const char *m, const char *n) { return strcmp(m, n) == 0
  * accessor reports). */
 static ScrDyn *scr_dynh_dispatch(ScrDyn *recv, const char *method, ScrDyn *const *args, size_t argc, const char *what) {
   const ScrDynHandleOps *ops = scr_dyn_handle_ops_of(recv);
-  return ops->invoke(recv->v.handle.ptr, recv, method, args, argc, what);
+  if (ops->invoke) return ops->invoke(recv->v.handle.ptr, recv, method, args, argc, what);
+  ScrDyn *callable = ops->get ? ops->get(recv->v.handle.ptr, method, strlen(method)) : NULL;
+  if (scr_exc_pending()) { scr_dyn_release(callable); return NULL; }
+  if (!callable) callable = scr_dyn_retain(scr_dyn_undefined());
+  scr_dyn_this_push_dyn(recv);
+  ScrDyn *result = scr_dyn_call(callable, args, argc, what);
+  scr_dyn_this_pop();
+  scr_dyn_release(callable);
+  return result;
 }
 
 /* JS Array.prototype.sort over a dyn array: the spec's snapshot-sort —
@@ -697,6 +705,29 @@ static bool dyn_bytes_proto_real(const char *m) {
 static ScrDyn *scr_dyn_invoke_impl(
     ScrDyn *recv, const char *method, ScrDyn *const *args, size_t argc,
     const char *what, ScrDyn *callback_recv);
+
+ScrDyn *scr_dyn_prepare_method(ScrDyn *recv, const char *method) {
+  if (recv->kind == SCR_DYN_UNDEF || recv->kind == SCR_DYN_NULL)
+    return scr_dyn_invoke(recv, method, NULL, 0, method);
+  if (recv->kind == SCR_DYN_OBJ)
+    return scr_dyn_obj_read(recv, method, strlen(method));
+  if (recv->kind == SCR_DYN_PROXY) {
+    ScrStr *key = scr_str_new(method, strlen(method));
+    ScrDyn *result = scr_dyn_proxy_get(recv, key);
+    scr_str_release(key);
+    return result;
+  }
+  return NULL;
+}
+
+ScrDyn *scr_dyn_invoke_prepared(ScrDyn *recv, ScrDyn *callee, const char *method,
+                               ScrDyn *const *args, size_t argc, const char *what) {
+  if (!callee) return scr_dyn_invoke(recv, method, args, argc, what);
+  scr_dyn_this_push_dyn(recv);
+  ScrDyn *result = scr_dyn_call(callee, args, argc, what);
+  scr_dyn_this_pop();
+  return result;
+}
 
 ScrDyn *scr_dyn_invoke(ScrDyn *recv, const char *method,
                        ScrDyn *const *args, size_t argc,
@@ -861,9 +892,11 @@ static ScrDyn *scr_dyn_invoke_impl(
       if ((dyn_name_is(method, "indexOf") || dyn_name_is(method, "lastIndexOf") ||
            dyn_name_is(method, "includes")) &&
           argc >= 1 && args[0]->kind == SCR_DYN_STR) {
-        if (dyn_name_is(method, "includes")) return scr_dyn_new_bool(scr_str_includes(s, args[0]->v.str));
-        if (dyn_name_is(method, "indexOf")) return scr_dyn_new_num(scr_str_index_of(s, args[0]->v.str, 0));
-        return scr_dyn_new_num(scr_str_last_index_of(s, args[0]->v.str));
+        double position = dyn_index_arg(args, argc, 1, dyn_name_is(method, "lastIndexOf") ? INFINITY : 0, what);
+        if (scr_exc_pending()) return NULL;
+        if (dyn_name_is(method, "includes")) return scr_dyn_new_bool(scr_str_index_of(s, args[0]->v.str, position) >= 0);
+        if (dyn_name_is(method, "indexOf")) return scr_dyn_new_num(scr_str_index_of(s, args[0]->v.str, position));
+        return scr_dyn_new_num(scr_str_last_index_of_from(s, args[0]->v.str, position));
       }
       dyn_throw_unsupported("String", method);
       return NULL;
@@ -1302,6 +1335,12 @@ static ScrDyn *scr_dyn_invoke_impl(
             cb, item, i, callback_recv ? callback_recv : recv);
         scr_dyn_release(item);
         if (!r) { scr_dyn_release(out); return NULL; }
+        if (r->kind == SCR_DYN_TYPED_REF && scr_dyn_isl_is_array(r)) {
+          ScrDyn *view = scr_dyn_typed_ref_materialize(r);
+          scr_dyn_release(r);
+          r = view;
+          if (!r) { scr_dyn_release(out); return NULL; }
+        }
         if (r->kind == SCR_DYN_ARR) {
           for (size_t j = 0; j < r->v.arr.len; j++) {
             scr_dyn_arr_push(out, scr_dyn_retain(r->v.arr.items[j]));

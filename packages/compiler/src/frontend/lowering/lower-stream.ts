@@ -1185,7 +1185,7 @@ function lowerStreamArg(lowerer: Lowerer, node: ts.Expression, what: "finished" 
             v.type.kind === "bool" || v.type.kind === "nullT") {
           argTypeThrow("body", PIPELINE_STAGE_EXPECTED);
         }
-      } else if (v.type.kind === "record" || v.type.kind === "string" || v.type.kind === "f64" ||
+      } else if ((ts.isObjectLiteralExpression(node) && node.properties.length === 0) || v.type.kind === "record" || v.type.kind === "string" || v.type.kind === "f64" ||
                  v.type.kind === "bool" || v.type.kind === "array" || v.type.kind === "nullT") {
         argTypeThrow("stream", "an instance of ReadableStream, WritableStream, or Stream");
       }

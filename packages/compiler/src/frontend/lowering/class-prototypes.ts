@@ -92,6 +92,9 @@ export function reflectClassPrototype(lowerer: Lowerer, info: ClassInfo, loc: Sr
     return { kind: "call", callee: name, args: [], type: DYN, loc };
   };
   if (info.prototypeReflectionRefusal) return { kind: "call", callee: info.prototypeReflectionRefusal, args: [], type: DYN, loc };
+  // Local JavaScript factories initialize captured prototype members on
+  // their constructor value, so the shared runtime view is already complete.
+  if (info.localClass && info.runtimePrototypeMembers) return prototype;
   if (info.localClass) return refuse("prototype reflection on a function-local class is not supported yet");
   if (info.base && !info.base.builtinError) {
     reflectClassPrototype(lowerer, info.base, loc, info.def.baseValueGlobal

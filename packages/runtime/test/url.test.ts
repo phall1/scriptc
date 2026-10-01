@@ -19,6 +19,7 @@ beforeAll(async () => {
     "-o", bin,
     join(testDir, "test_url.c"),
     join(testDir, "../src/scr_url.c"),
+    join(testDir, "../src/scr_url_params.c"),
     join(testDir, "../src/scr_path.c"),
     join(testDir, "../src/scr_string.c"),
     join(testDir, "../src/scr_number.c"),

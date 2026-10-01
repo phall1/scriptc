@@ -12,7 +12,7 @@ const BASE_RUNTIME_SOURCES = [
   "scr_number.c", "scr_bigint.c", "scr_string.c", "scr_grapheme.c", "scr_array.c", "scr_bytes.c",
   "scr_bytes_io.c", "scr_map.c", "scr_closure.c", "scr_ffi.c",
   "scr_object.c", "scr_union.c", "scr_exception.c", "scr_error.c",
-  "scr_console.c", "scr_lib.c", "scr_path.c", "scr_url.c", "scr_json.c", "scr_node_builtin.c",
+  "scr_console.c", "scr_lib.c", "scr_path.c", "scr_url.c", "scr_url_params.c", "scr_json.c", "scr_node_builtin.c",
   "scr_async.c", "scr_crypto_async.c", "scr_child.c", "scr_cycle.c",
 ];
 
@@ -24,7 +24,7 @@ const OPTIONAL = [
   ["scr_zlib.c", "zlib"], ["scr_zlib_island.c", all("zlib", "dynamic")],
   ["scr_events.c", "events"], ["scr_readline.c", "events"],
   ["scr_events_emitter.c", "emitter"], ["scr_dyn_handle.c", any("emitter", "netEffective")],
-  ["scr_symbol.c", "symbol"], ["scr_url_params.c", "searchParams"],
+  ["scr_symbol.c", "symbol"],
   ["scr_bigint_assert.c", all("assert", "bigint")],
   ["scr_qs.c", "qs"], ["scr_util.c", "parseArgs"], ["scr_stream.c", "stream"],
   ["scr_loop_kqueue.c", any("netEffective", "dgram")],

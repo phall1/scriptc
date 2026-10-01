@@ -805,7 +805,7 @@ export const BUILTIN_MODULE_FNS: Record<string, Record<string, BuiltinModuleFn |
     // form KEEPS its one-libCall lowering (lowerCryptoComposedCall runs
     // first and the Buffer never materializes there); this entry covers
     // the bare calls and non-composed uses.
-    randomBytes: { fn: "crypto.randomBytes", params: [F64], result: BYTES_U8 },
+    randomBytes: { fn: "crypto.randomBytes", params: [F64], result: BYTES_U8, valueParams: exactValueParams(F64) },
     // The crypto utility surface is special-cased for overloads and
     // string/Buffer splits in lowerCryptoModuleCall. These rows carry the
     // canonical signatures for manifest projection and fallback dispatch.
@@ -1078,6 +1078,13 @@ export interface AmbientSurfaceRow {
 }
 
 export const AMBIENT_SURFACE_FNS: readonly AmbientSurfaceRow[] = [
+  {
+    id: "node-builtin.fs.callbacks",
+    kind: "node-builtin",
+    name: "fs error-first callbacks",
+    fns: ["fs.callbackValue", "fs.callbackCall"],
+    note: "native filesystem callbacks, including stored platform adapter functions",
+  },
   // ── the Date slice (lowerDateCall/lowerNew): statics, construction,
   // stored read-only values, calendar getters, and ISO formatting.
   {
@@ -1331,9 +1338,17 @@ function ownEntry<T>(table: Record<string, T | undefined>, key: string): T | und
 /** One MEMBER's table entry, own-property-safe (`path.toString` must not
  * answer Object.prototype.toString as a BuiltinModuleFn). */
 export function builtinModuleFnOf(lowerer: Lowerer, module: string, member: string): BuiltinModuleFn | undefined {
+  if (module === "fs" && FS_CALLBACK_MEMBERS.has(member)) return { fn: "fs.callbackCall", params: [], result: DYN };
   const mod = builtinModuleFnsOf(lowerer, module);
   return mod ? ownEntry(mod, member) : undefined;
 }
+
+/** Native error-first function values used by platform service adapters. */
+export const FS_CALLBACK_MEMBERS = new Set([
+  "access", "cp", "copyFile", "chmod", "chown", "glob", "link", "mkdir", "mkdtemp", "rm", "rmdir", "unlink",
+  "open", "close", "fstat", "ftruncate", "fsync", "read", "write", "readlink", "realpath", "rename", "stat", "lstat",
+  "symlink", "truncate", "utimes", "readFile", "writeFile", "appendFile", "readdir",
+]);
 
 /** One member's fence hint, own-property-safe (a collision would print an
  * inherited function into the diagnostic text). */
@@ -1792,7 +1807,7 @@ export const BUILTIN_MODULE_FENCE_HINTS: Record<string, Record<string, string | 
    * anything else, so property-lowering chains keep trying other
    * receivers. */
   export function stdlibGlobalMember(lowerer: Lowerer, access: ts.PropertyAccessExpression, name: string): string | null {
-    if (access.questionDotToken) return null;
+    if (lowerer.chainBlocked(access)) return null;
     return lowerer.isStdlibGlobal(access.expression, name) ? access.name.text : null;
   }
 
@@ -1847,12 +1862,10 @@ export const BUILTIN_MODULE_FENCE_HINTS: Record<string, Record<string, string | 
       ts.isVariableDeclaration(init.parent) &&
       (lowerer.typeOf(init.parent.name).flags & ts.TypeFlags.Any) !== 0
     ) return null;
-    // Only alias OBJECT-shaped globals whose members lower by receiver
-    // identity (process, console, globalThis itself, and perf_hooks'
-    // performance — the mockable-clock idiom snapshots it). Function-valued
-    // globals (setTimeout) taken as values are a different story — the
-    // ordinary value paths (and their fences) apply.
-    return name === "process" || name === "console" || name === "globalThis" || name === "performance"
+    // These globals have provenance-aware call or member lowering, so a
+    // stable snapshot keeps the same dispatch as the original global.
+    // Other callable globals still use their ordinary value paths.
+    return ["process", "console", "globalThis", "performance", "Array", "Buffer", "BigInt", "Number", "String", "Boolean"].includes(name)
       ? name
       : null;
   }

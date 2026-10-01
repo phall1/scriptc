@@ -6,7 +6,7 @@ import { InternalCompilerError } from "../../errors.js";
 import * as ts from "../ts7/adapter.js";
 import type { Lowerer } from "./lowerer.js";
 import { arrayOf, BOOL, BYTES_U8, DYN, F64, type IrExpr, type IrStmt, type IrType, JSVAL, MAX_ISLAND_CALLBACK_ARITY, STRING, VOID, canConvertToDyn, canMarshalTypedFuncIntoIsland, islandPromisePayloadTag, isUnitType } from "../../ir/ir.js";
-import { ISLAND_SURFACE, type IslandFnEntry, STATIC_MATH_FNS, STATIC_MATH_PROPS, boundaryIntoIslandMsg } from "./surfaces.js";
+import { ISLAND_SURFACE, type IslandFnEntry, STATIC_MATH_FNS, STATIC_MATH_PROPS, boundaryIntoIslandMsg, stdlibGlobalNameOf } from "./surfaces.js";
 import { requiresDynamicApiDiag, requiresDynamicPackageDiag } from "../../diagnostics/diagnostic.js";
 import { esmNamedImportLinkCrash, isCjsJsFile, isJsSourceFile, locOf, npmPackageNameOf } from "../program.js";
 import { foldedStringKeyOf, lowerDynObjectLiteral } from "./expressions/object-literals.js";
@@ -824,11 +824,11 @@ function fenceRequestInitValue(
               type: STRING,
               loc: locOf(inputNode),
             }
-          : lowerer.coerceInto(inputNode, inputRef, STRING);
+          : input.type.kind === "dyn" ? inputRef : lowerer.coerceInto(inputNode, inputRef, STRING);
       const answer: IrExpr = {
         kind: "libCall",
-        fn: "fetch.start",
-        args: [url, initRef],
+        fn: input.type.kind === "dyn" ? "fetch.input" : "fetch.start",
+        args: [input.type.kind === "dyn" ? inputRef : url, initRef],
         type: { kind: "promise", inner: DYN },
         loc,
       };
@@ -2429,6 +2429,25 @@ export function lowerStaticReadableStreamNew(
   };
 }
 
+/** Native Request and Headers values share the fetch runtime's handles. */
+export function lowerFetchWebNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr | null {
+  const name = stdlibGlobalNameOf(lowerer, expr.expression);
+  if (name !== "Request" && name !== "Headers") return null;
+  const args = expr.arguments ?? [];
+  if (args.some(ts.isSpreadElement)) return null;
+  const loc = locOf(expr);
+  if (lowerer.dynamic) return { kind: "jsOp", op: "construct", args: [
+    { kind: "jsOp", op: "globalGet", name, args: [], type: JSVAL, loc },
+    ...args.map((arg) => lowerer.jsvalIn(lowerer.lowerExpr(arg), arg)),
+  ], type: JSVAL, loc };
+  if (name === "Request" && args[1]) fenceRequestInitValue(lowerer, args[1]);
+  const lowered = args.map((arg) => ts.isObjectLiteralExpression(arg)
+    ? lowerDynObjectLiteral(lowerer, arg) : lowerLiveWebValue(lowerer, arg));
+  return { kind: "libCall", fn: name === "Request" ? "fetch.requestNew" : "fetch.headersNew",
+    args: name === "Request" ? [lowered[0] ?? dynUndefinedExpr(loc), lowered[1] ?? dynUndefinedExpr(loc)]
+      : [lowered[0] ?? dynUndefinedExpr(loc)], type: DYN, loc };
+}
+
 /** `new Response(body?, init?)`. Dynamic builds construct the island's
  * Web Response directly. Static builds hand a checked-dynamic BodyInit and
  * ResponseInit snapshot to the native fetch runtime, which returns the same
@@ -2437,14 +2456,7 @@ export function lowerResponseNew(
   lowerer: Lowerer,
   expr: ts.NewExpression,
 ): IrExpr | null {
-  if (
-    !ts.isIdentifier(expr.expression) ||
-    expr.expression.text !== "Response"
-  ) {
-    return null;
-  }
-  const symbol = lowerer.resolveValueSymbol(expr.expression);
-  if (!symbol || !lowerer.isStdlibSymbol(symbol)) return null;
+  if (stdlibGlobalNameOf(lowerer, expr.expression) !== "Response") return null;
   const args = expr.arguments ?? [];
   if (args.some(ts.isSpreadElement)) return null;
   const loc = locOf(expr);

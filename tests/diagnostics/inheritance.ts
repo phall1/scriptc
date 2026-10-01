@@ -57,7 +57,7 @@ class Bivariant extends Animal {
   }
 }
 
-// super() must be a top-level constructor statement
+// Conditional super() is supported; both branches initialize the receiver.
 class Conditional extends Animal {
   constructor(flag: boolean) {
     if (flag) {
@@ -68,7 +68,7 @@ class Conditional extends Animal {
   }
 }
 
-// instanceof needs a class instance on the left...
+// A record cannot be an instance of this native class and answers false.
 const rec = { name: "r" };
 console.log(rec instanceof Animal);
 

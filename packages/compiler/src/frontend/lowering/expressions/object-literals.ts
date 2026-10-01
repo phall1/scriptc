@@ -1,3 +1,4 @@
+import { pathModuleValue } from "../lower-builtin-values.js";
 import { InternalCompilerError } from "../../../errors.js";
 import * as ts from "../../ts7/adapter.js";
 import {
@@ -18,11 +19,11 @@ import type { IrExpr, IrLocal, IrRecordShape, IrStmt, IrType, SrcLoc } from "../
 import { isCjsExportTableLiteral, isJsSourceFile, locOf } from "../../program.js";
 import { NARROW_FIRST } from "../surfaces.js";
 import { recordShapeMismatchDiag } from "../../../diagnostics/diagnostic.js";
-import { PoisonError, dynUndefinedExpr } from "../lowerer.js";
+import { PoisonError, dynUndefinedExpr, neverTaintedJsType } from "../lowerer.js";
 import type { Lowerer } from "../lowerer.js";
 import { lowerIndexMergeHelper } from "../lower-containers.js";
 import type { IndexMergeContributor } from "../lower-containers.js";
-import { isGenericCallableMemberType } from "../../type-mapper.js";
+import { isGenericCallableMemberType, jsOpenObjectType } from "../../type-mapper.js";
 import { numLit, strLit, varRef } from "../../../ir/build.js";
 import { isSafeToRepeat } from "./evaluation-safety.js";
 import { tryLowerExpression } from "./try-lower-expression.js";
@@ -229,7 +230,10 @@ export function lowerDynObjectLiteral(
   for (const prop of expr.properties) {
     if (ts.isSpreadAssignment(prop)) {
       flushFields();
-      const raw = lowerer.lowerExpr(prop.expression);
+      const builtin = lowerer.builtinNamespaceModuleOf(prop.expression);
+      const raw = builtin === "path" || builtin === "path/posix" || builtin === "path/win32"
+        ? pathModuleValue(lowerer, builtin === "path" ? "path/posix" : builtin, locOf(prop))
+        : lowerer.lowerExpr(prop.expression);
       fenceSymbolFieldCopy(lowerer, prop.expression, raw.type);
       const source = boxValue
         ? boxValue(prop.expression, raw)
@@ -565,6 +569,24 @@ return prefix.length === 0 ? selected : { kind: "seqExpr", stmts: prefix, result
 
 export function lowerObjectLiteral(lowerer: Lowerer, expr: ts.ObjectLiteralExpression,
   expected?: IrType & { kind: "record" },): IrExpr {
+  // Unannotated JavaScript accumulator fields have no element contract.
+  // Preserve their checked arrays instead of assigning never[] a numeric ABI.
+  if (!expected && isJsSourceFile(expr.getSourceFile()) && expr.properties.some((prop) =>
+      ts.isPropertyAssignment(prop) && (ts.isArrayLiteralExpression(prop.initializer) &&
+      prop.initializer.elements.length === 0 || neverTaintedJsType(lowerer, prop.initializer, lowerer.typeOf(prop.initializer))))) {
+    return lowerDynObjectLiteral(lowerer, expr);
+  }
+  if (!expected && isJsSourceFile(expr.getSourceFile()) && expr.properties.some((prop) =>
+      ts.isPropertyAssignment(prop) && lowerer.mapTypeOf(lowerer.typeOf(prop.initializer))?.kind === "array" &&
+      tryLowerExpression(lowerer, prop.initializer)?.type.kind === "dyn")) {
+    return lowerDynObjectLiteral(lowerer, expr);
+  }
+  // JavaScript object methods/accessors carry a live receiver. Keep the
+  // literal in checked native storage instead of erasing its prototype ABI.
+  if (isJsSourceFile(expr.getSourceFile()) && (expr.properties.length === 0 || expr.properties.some((prop) =>
+      ts.isMethodDeclaration(prop) || ts.isGetAccessorDeclaration(prop) || ts.isSetAccessorDeclaration(prop)))) {
+    return lowerDynObjectLiteral(lowerer, expr);
+  }
   const loc = locOf(expr);
   // Module collection already chose checked storage for this JavaScript
   // binding. Construct in that representation: an intermediate record would
@@ -577,7 +599,8 @@ export function lowerObjectLiteral(lowerer: Lowerer, expr: ts.ObjectLiteralExpre
   // A checked spread carries runtime symbol keys and receiver-sensitive
   // methods absent from its inferred record shape. Copy the real properties.
   if (!expected && isJsSourceFile(expr.getSourceFile()) && expr.properties.some((property) =>
-      ts.isSpreadAssignment(property) && tryLowerExpression(lowerer, property.expression)?.type.kind === "dyn")) {
+      ts.isSpreadAssignment(property) && (lowerer.builtinNamespaceModuleOf(property.expression)?.startsWith("path") ||
+        tryLowerExpression(lowerer, property.expression)?.type.kind === "dyn"))) {
     return lowerDynObjectLiteral(lowerer, expr);
   }
   const unionClone = lowerUnionRecordClone(lowerer, expr);
@@ -594,7 +617,7 @@ export function lowerObjectLiteral(lowerer: Lowerer, expr: ts.ObjectLiteralExpre
     expr.properties.some(
       (p) => {
         const n = ts.isSpreadAssignment(p) ? undefined : p.name;
-        return n !== undefined && ts.isComputedPropertyName(n) && literalComputedKey(lowerer, n) === null;
+        return n !== undefined && ts.isComputedPropertyName(n);
       },
     )
   ) {
@@ -879,7 +902,8 @@ export function lowerObjectLiteral(lowerer: Lowerer, expr: ts.ObjectLiteralExpre
   // descriptor records with `any` values) — builds as a dyn OBJECT:
   // each field converts through the usual dyn boundary, and dynamic
   // consumers ride the keyed-dyn paths. TypeScript keeps the fence.
-  if (mapped?.kind === "dyn" || (!mapped && isJsSourceFile(expr.getSourceFile()))) {
+  if (mapped?.kind === "dyn" || (!mapped && isJsSourceFile(expr.getSourceFile())) ||
+      (!expected && mapped && jsOpenObjectType(expr, mapped, lowerer.shapes, lowerer.unions).kind === "dyn")) {
     return lowerDynObjectLiteral(lowerer, expr);
   }
   if (!mapped || mapped.kind !== "record") lowerer.badType(expr, tsType);
@@ -2213,7 +2237,9 @@ export function lowerShorthandValue(lowerer: Lowerer, prop: ts.ShorthandProperty
       lowerer.requireExactArityValue(prop, propName, sig.params, funcType);
       return { kind: "closure", fnName: sig.name, captures: [], type: funcType, loc };
     }
-    if (lowerer.genericFnsBySymbol.has(resolved)) {
+    const generic = lowerer.genericFnsBySymbol.get(resolved);
+    if (generic?.implicitParams) return lowerer.lowerGenericFnValue(propName, generic);
+    if (generic) {
       lowerer.unsupported(
         "SC1090",
         prop,

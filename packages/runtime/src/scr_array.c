@@ -420,6 +420,7 @@ ScrArr *scr_arr_new(ScrElemKind elem, size_t initial_cap) {
   a->props = NULL;
   a->prop_len = 0;
   a->prop_cap = 0;
+  a->metadata = NULL;
   if (initial_cap > 0) scr_arr_grow_dense(a, initial_cap);
 #ifdef SCR_RC_AUDIT
   scr_live_arrays++;
@@ -433,6 +434,7 @@ ScrArr *scr_arr_new(ScrElemKind elem, size_t initial_cap) {
  * below releases none — the complement contract in scr_runtime.h. */
 void scr_arr_trace_v(void *a0, ScrTraceVisit visit, void *ctx) {
   ScrArr *a = (ScrArr *)a0;
+  visit(a->metadata, ctx);
   for (size_t i = 0; i < a->cap; i++) {
     if (a->present[i] == SCR_ARR_VALUE) visit(scr_slot_to_ptr(a->data[i]), ctx);
   }
@@ -486,6 +488,7 @@ ScrArr *scr_arr_new_ref(void *(*elem_retain)(void *),
   a->props = NULL;
   a->prop_len = 0;
   a->prop_cap = 0;
+  a->metadata = NULL;
   if (initial_cap > 0) scr_arr_grow_dense(a, initial_cap);
 #ifdef SCR_RC_AUDIT
   scr_live_arrays++;
@@ -497,6 +500,8 @@ void scr_arr_release(ScrArr *a) {
   if (!a || a->rc == SIZE_MAX) return; /* NULL: an uninitialized `let` local */
   if (--a->rc == 0) {
     if (a->elem_trace) scr_cyc_on_dead(a);
+    scr_dyn_release(a->metadata);
+    a->metadata = NULL;
     if (scr_elem_is_ref(a->elem)) {
       for (size_t i = 0; i < a->cap; i++) {
         if (a->present[i] != SCR_ARR_HOLE) {
@@ -534,6 +539,7 @@ void scr_arr_release(ScrArr *a) {
 #ifdef SCR_RC_AUDIT
       scr_live_arrays--;
 #endif
+      scr_weak_dispose(a);
       free(a);
     }
   } else if (a->elem_trace) {
@@ -1441,4 +1447,14 @@ ScrStr *scr_str_raw(ScrArr *raw, ScrArr *subs) {
   ScrStr *out = scr_str_new(buf, len);
   free(buf);
   return out;
+}
+
+void scr_arr_copy_metadata(ScrArr *a, ScrDyn *target) {
+  if (!a->metadata) return;
+  for (size_t i = 0; i < a->metadata->v.obj.len; i++) {
+    ScrDynEntry *entry = &a->metadata->v.obj.entries[i];
+    ScrStr *key = scr_str_new(entry->key, entry->key_len);
+    scr_dyn_key_set(target, key, entry->value);
+    scr_str_release(key);
+  }
 }

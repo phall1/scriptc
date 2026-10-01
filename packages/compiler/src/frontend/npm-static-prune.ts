@@ -5,7 +5,7 @@
  * the link checks, and emitted module init headers must see one graph. */
 
 import * as ts from "./ts7/adapter.js";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { nearestPackageType, resolveBareModule } from "./resolve.js";
 import { npmStaticPackageOfPath } from "./npm-static.js";
 import { trackedReadFile } from "./input-tracker.js";
@@ -28,8 +28,29 @@ function packageJson(path: string): Record<string, unknown> | null {
   }
 }
 
-function noSideEffects(value: unknown): boolean {
-  return value === false || (Array.isArray(value) && value.length === 0);
+/** sideEffects patterns use package-relative POSIX paths. A pattern with no
+ * slash matches a basename at any depth, as in bundler package metadata. */
+function sideEffectPattern(pattern: string): RegExp {
+  // Unrecognized glob syntax must retain the module rather than silently
+  // treating a possible side-effect match as a literal path.
+  if (/[\[\]\\!@+()]/.test(pattern)) throw new Error("unsupported sideEffects glob");
+  pattern = pattern.replace(/^\.\//, "");
+  if (!pattern.includes("/")) pattern = "**/" + pattern;
+  let source = "^";
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i]!;
+    if (ch === "*" && pattern[i + 1] === "*") {
+      i++;
+      if (pattern[i + 1] === "/") { source += "(?:.*/)?"; i++; }
+      else source += ".*";
+    } else if (ch === "*") source += "[^/]*";
+    else if (ch === "?") source += "[^/]";
+    else if (ch === "{") source += "(?:";
+    else if (ch === "}") source += ")";
+    else if (ch === ",") source += "|";
+    else source += ch.replace(/[\\^$+?.()|[\]]/g, "\\$&");
+  }
+  return new RegExp(source + "$");
 }
 
 /** A nested format scope such as dist/esm/package.json is not the package's
@@ -48,49 +69,24 @@ function packageRootJsonPath(fromFile: string, packageName: string): string | nu
   return root;
 }
 
-/** A package's own sideEffects declaration cannot cover imports of a
- * dependency that runs at module init. Require the whole declared runtime
- * dependency tree to make the same promise before removing an edge. A cycle
- * back-edge is provisionally pure, but its result cannot be cached for a
- * descendant until all dependencies of the ancestor have been checked. */
-type PackagePurity = { pure: boolean; provisional: boolean };
-
-function purePackageTree(
-  path: string,
-  memo: Map<string, boolean>,
-  visiting: Set<string>,
-): PackagePurity {
-  const cached = memo.get(path);
-  if (cached !== undefined) return { pure: cached, provisional: false };
-  if (visiting.has(path)) return { pure: true, provisional: true };
+// An external package's executable sources may not be in this program.
+// Preserve the conservative whole-dependency promise in that case.
+function pureExternalPackage(path: string, visiting = new Set<string>()): boolean {
+  if (visiting.has(path)) return true;
   const json = packageJson(path);
-  if (json === null || !noSideEffects(json["sideEffects"])) {
-    memo.set(path, false);
-    return { pure: false, provisional: false };
-  }
+  const value = json?.["sideEffects"];
+  if (json === null || !(value === false || Array.isArray(value) && value.length === 0)) return false;
   visiting.add(path);
-  let pure = true;
-  let provisional = false;
   for (const field of ["dependencies", "optionalDependencies", "peerDependencies"]) {
     const dependencies = json[field];
-    if (dependencies === null || typeof dependencies !== "object" || Array.isArray(dependencies)) continue;
-    for (const name of Object.keys(dependencies as Record<string, unknown>)) {
+    if (!dependencies || typeof dependencies !== "object" || Array.isArray(dependencies)) continue;
+    for (const name of Object.keys(dependencies)) {
       const resolved = resolveBareModule(path, name, "js-only");
-      const depPath = resolved === null ? null : packageRootJsonPath(resolved.typesFile, name);
-      const dep = depPath === null ? { pure: false, provisional: false } : purePackageTree(depPath, memo, visiting);
-      if (!dep.pure) {
-        pure = false;
-        break;
-      }
-      provisional ||= dep.provisional;
+      const root = resolved === null ? null : packageRootJsonPath(resolved.typesFile, name);
+      if (root === null || !pureExternalPackage(root, visiting)) return false;
     }
-    if (!pure) break;
   }
-  visiting.delete(path);
-  // False is final. A true result is final only when it did not borrow an
-  // ancestor's optimistic back-edge, or when the entire traversal is done.
-  if (!pure || !provisional || visiting.size === 0) memo.set(path, pure);
-  return { pure, provisional };
+  return true;
 }
 
 type Demand = Set<string> | null; // null requests the entire namespace
@@ -131,15 +127,60 @@ export function planNpmStaticReexports(
   request(entry, null);
   for (const path of extraRoots) request(program.getSourceFile(path) ?? null, null);
 
-  const pureMemo = new Map<string, boolean>();
+  const pureMemo = new Map<ts.SourceFile, boolean>();
+  const filePure = (sf: ts.SourceFile): boolean => {
+    const pkg = npmPackageNameOf(sf.fileName) ?? npmStaticPackageOfPath(sf.fileName);
+    const path = pkg === null ? null : packageRootJsonPath(sf.fileName, pkg);
+    const json = path === null ? null : packageJson(path);
+    const value = json?.["sideEffects"];
+    if (value === false) return true;
+    if (!Array.isArray(value) || !value.every((pattern) => typeof pattern === "string") || path === null) return false;
+    const name = relative(dirname(path), sf.fileName).replaceAll("\\", "/");
+    try { return !value.some((pattern: string) => sideEffectPattern(pattern).test(name)); }
+    catch { return false; }
+  };
+  // Check the actual imported closure: metadata for one file never vouches
+  // for its side-effectful descendants, even across a package or a cycle.
+  const pureModuleTree = (root: ts.SourceFile): boolean => {
+    const cached = pureMemo.get(root);
+    if (cached !== undefined) return cached;
+    const visited = new Set<ts.SourceFile>();
+    const visit = (sf: ts.SourceFile): boolean => {
+      if (visited.has(sf)) return true;
+      if (pureMemo.get(sf) === false || !filePure(sf)) return false;
+      visited.add(sf);
+      const edges: { spec: string; kind?: "import" | "require" }[] = [];
+      for (const stmt of sf.statements) {
+        if (ts.isImportDeclaration(stmt) && stmt.importClause?.phaseModifier !== ts.SyntaxKind.TypeKeyword && ts.isStringLiteral(stmt.moduleSpecifier)) edges.push({ spec: stmt.moduleSpecifier.text });
+        else if (ts.isExportDeclaration(stmt) && !stmt.isTypeOnly && stmt.moduleSpecifier && ts.isStringLiteral(stmt.moduleSpecifier)) edges.push({ spec: stmt.moduleSpecifier.text });
+      }
+      ts.walkPreorder(sf, (node) => {
+        if (!ts.isCallExpression(node) || node.arguments.length !== 1) return;
+        const arg = node.arguments[0];
+        if (!arg || !ts.isStringLiteralLike(arg)) return;
+        if (node.expression.kind === ts.SyntaxKind.ImportKeyword) edges.push({ spec: arg.text, kind: "import" });
+        else if (ts.isIdentifier(node.expression) && node.expression.text === "require") edges.push({ spec: arg.text, kind: "require" });
+      });
+      return edges.every((edge) => {
+        const dep = resolveEdge(sf, edge.spec, edge.kind);
+        if (dep !== null) return visit(dep);
+        const resolved = resolveBareModule(sf.fileName, edge.spec, "js-only");
+        const pkg = resolved === null ? null : npmPackageNameOf(resolved.typesFile);
+        const root = pkg === null || resolved === null ? null : packageRootJsonPath(resolved.typesFile, pkg);
+        return root !== null && pureExternalPackage(root);
+      });
+    };
+    const pure = visit(root);
+    if (pure) for (const sf of visited) pureMemo.set(sf, true);
+    else pureMemo.set(root, false);
+    return pure;
+  };
   const canPrune = (sf: ts.SourceFile, stmt: ts.ExportDeclaration, dep: ts.SourceFile | null): boolean => {
     if (dep === null || stmt.exportClause === undefined || !ts.isNamespaceExport(stmt.exportClause)) return false;
     const pkg = npmStaticPackageOfPath(sf.fileName);
     if (pkg === null || npmStaticPackageOfPath(dep.fileName) !== pkg) return false;
-    const pkgPath = packageRootJsonPath(sf.fileName, pkg);
-    if (pkgPath === null) return false;
     if (nearestPackageType(sf.fileName) !== "module") return false;
-    if (!purePackageTree(pkgPath, pureMemo, new Set()).pure) return false;
+    if (!pureModuleTree(dep)) return false;
     const names = demanded.get(sf);
     return names !== undefined && names !== null && !names.has(stmt.exportClause.name.text);
   };

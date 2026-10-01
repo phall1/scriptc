@@ -205,6 +205,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/110-number-radix.ts": {
+   "order": [
+    "<repo>/tests/corpus/110-number-radix.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/1100-island-eval-basics.ts": {
    "order": [
     "<repo>/tests/corpus/1100-island-eval-basics.ts"
@@ -220,6 +226,12 @@
   "<repo>/tests/corpus/1102-island-rc-stress.ts": {
    "order": [
     "<repo>/tests/corpus/1102-island-rc-stress.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/111-record-entries.ts": {
+   "order": [
+    "<repo>/tests/corpus/111-record-entries.ts"
    ],
    "diags": []
   },
@@ -283,6 +295,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/112-class-descriptor-key.js": {
+   "order": [
+    "<repo>/tests/corpus/112-class-descriptor-key.js"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/1120-web-globals-encoders.ts": {
    "order": [
     "<repo>/tests/corpus/1120-web-globals-encoders.ts"
@@ -310,6 +328,48 @@
   "<repo>/tests/corpus/1124-union-narrowed-retag.ts": {
    "order": [
     "<repo>/tests/corpus/1124-union-narrowed-retag.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/113-promise-checked-exits.ts": {
+   "order": [
+    "<repo>/tests/corpus/113-promise-checked-exits.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/114-live-record-delete.ts": {
+   "order": [
+    "<repo>/tests/corpus/114-live-record-delete.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/115-array-compound.js": {
+   "order": [
+    "<repo>/tests/corpus/115-array-compound.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/116-text-decoder-runtime.js": {
+   "order": [
+    "<repo>/tests/corpus/116-text-decoder-runtime.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/117-weak-cache-cycle.js": {
+   "order": [
+    "<repo>/tests/corpus/117-weak-cache-cycle.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/118-fs-stored-callbacks.cjs": {
+   "order": [
+    "<repo>/tests/corpus/118-fs-stored-callbacks.cjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/119-native-patterns.js": {
+   "order": [
+    "<repo>/tests/corpus/119-native-patterns.js"
    ],
    "diags": []
   },

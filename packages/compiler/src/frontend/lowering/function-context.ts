@@ -12,6 +12,11 @@ export interface FnCtx {
   /** Lexical this has no checker symbol and one binding per function.
    * Direct parameters and threaded captures use this same slot. */
   thisLocal: IrLocal | null;
+  /** Derived constructors initialize fields at the actual super() site,
+   * including sites nested in a try/finally block. Nested functions do not
+   * inherit this hook. */
+  superInitialized?: IrLocal;
+  superCall?: (call: ts.CallExpression) => unknown;
   localCounters: Map<string, number>;
   /** Bindings belong to this lowering of the body. Generic specializations
    * share checker symbols and AST declarations, but never local storage. */

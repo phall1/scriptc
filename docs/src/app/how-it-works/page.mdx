@@ -13,7 +13,7 @@ TypeScript ──tsc: parse + typecheck──▶ lowering ──▶ typed IR ─
 3. **LLVM backend** — `--emit=llvm` writes textual LLVM IR and stops. On supported macOS, Linux, and Windows hosts and for WASI, `--emit=asm|obj` sends LLVM IR to the matching LLVM 22 helper. Executable and library builds use the same LLVM backend.
 4. **Link** — runtime packs contain precompiled C runtime objects plus the required vendor archives. A hashed manifest selects objects from the program's runtime features, optimization mode, and library state model. The target platform linker and SDK/sysroot produce the executable. Runtime development with AddressSanitizer uses an instrumented C runtime.
 
-Program objects define <code>main</code> and leave their selected <code>scr_*</code> runtime functions undefined. The <code>scr_runtime_abi_v5</code> reference is a strong link-time compatibility check. <code>--print=native-link-info</code> exposes the exact precompiled runtime pack and link ordering for external builds; that object ABI is currently experimental and exact-runtime-version compatible, not semver-stable.
+Program objects define <code>main</code> and leave their selected <code>scr_*</code> runtime functions undefined. The <code>scr_runtime_abi_v6</code> reference is a strong link-time compatibility check. <code>--print=native-link-info</code> exposes the exact precompiled runtime pack and link ordering for external builds; that object ABI is currently experimental and exact-runtime-version compatible, not semver-stable.
 
 Inspect any stage yourself:
 

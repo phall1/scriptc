@@ -153,7 +153,10 @@ enum { SCR_PROM_PENDING = 0, SCR_PROM_FULFILLED = 1, SCR_PROM_REJECTED = 2 };
 
 typedef struct ScrFiber ScrFiber;
 
+typedef struct { size_t rc; } ScrPromiseIdentity;
+
 struct ScrPromise {
+  ScrPromiseIdentity *identity;
   size_t rc;
   int state;
   bool top_level_handled; /* uncaughtException handled entry evaluation */
@@ -257,6 +260,7 @@ static void scr_promise_gcfree(void *o) {
   for (size_t i = 0; i < p->ncbs; i++) {
     if (p->cbs[i].all) scr_promise_all_state_release(p->cbs[i].all);
   }
+  if (--p->identity->rc == 0) free(p->identity);
   free(p->waiters);
   free(p->cbs);
 #ifdef SCR_RC_AUDIT
@@ -268,10 +272,24 @@ static void scr_promise_gcfree(void *o) {
 ScrPromise *scr_promise_new(void) {
   ScrPromise *p = scr_cyc_alloc(sizeof *p, &scr_promise_trace, &scr_promise_gcfree);
   p->rc = 1;
+  p->identity = malloc(sizeof *p->identity);
+  if (!p->identity) scr_oom();
+  p->identity->rc = 1;
 #ifdef SCR_RC_AUDIT
   scr_live_promises++;
 #endif
   return p;
+}
+
+void scr_promise_share_identity(ScrPromise *dst, ScrPromise *src) {
+  if (dst->identity == src->identity) return;
+  if (--dst->identity->rc == 0) free(dst->identity);
+  dst->identity = src->identity;
+  dst->identity->rc++;
+}
+
+bool scr_promise_identity_equal(ScrPromise *a, ScrPromise *b) {
+  return a->identity == b->identity;
 }
 
 /* The 'rejectionHandled' hook (scr_async_dyn.c installs it at listener
@@ -328,6 +346,7 @@ void scr_promise_release(ScrPromise *p) {
   if (--p->rc == 0) {
     scr_cyc_on_dead(p);
     scr_promise_release_payload(p);
+    if (--p->identity->rc == 0) free(p->identity);
     free(p->waiters);
     for (size_t i = 0; i < p->ncbs; i++) {
       scr_promise_release(p->cbs[i].dst);

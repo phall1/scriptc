@@ -65,6 +65,12 @@ const TEXT_DECODER_LEGACY_LABELS: Record<string, number | undefined> = (() => {
 
 type StaticTextDecoderEncoding = { kind: "utf8" } | { kind: "legacy"; id: number };
 
+/** Shared input for the native constructor's generated label registry. */
+export const textDecoderLabels: readonly (readonly [string, number])[] = [
+  ...[...TEXT_DECODER_UTF8_LABELS].map((label) => [label, -1] as const),
+  ...Object.entries(TEXT_DECODER_LEGACY_LABELS).map(([label, id]) => [label, id!] as const),
+];
+
 /** TextDecoder's get-an-encoding normalization: trim ASCII whitespace and
  * fold ASCII case only (Unicode case folding must not manufacture a label). */
 export function staticTextDecoderEncoding(label: string): StaticTextDecoderEncoding | null {

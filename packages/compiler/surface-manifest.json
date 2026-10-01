@@ -897,6 +897,13 @@
       "status": "static"
     },
     {
+      "id": "node-builtin.fs.callbacks",
+      "kind": "node-builtin",
+      "name": "fs error-first callbacks",
+      "status": "static",
+      "note": "native filesystem callbacks, including stored platform adapter functions"
+    },
+    {
       "id": "node-builtin.fs.chmodSync",
       "kind": "node-builtin",
       "name": "fs.chmodSync",
@@ -2624,9 +2631,8 @@
       "id": "stdlib.headers.constructor",
       "kind": "stdlib",
       "name": "Headers constructor",
-      "status": "unsupported",
-      "code": "SC2020",
-      "note": "Node 24.15.0 / Undici 7.24.4; the interface constructor has no compiler bridge in either tier"
+      "status": "static",
+      "note": "Node 24.15.0 / Undici 7.24.4; facets: webidl-conversion, mutation, identity; supported scope: Record and iterable header pairs, including copying native Headers; differential evidence: fixture:static-request"
     },
     {
       "id": "stdlib.headers.delete",
@@ -3211,9 +3217,8 @@
       "id": "stdlib.request.arrayBuffer",
       "kind": "stdlib",
       "name": "Request.arrayBuffer",
-      "status": "unsupported",
-      "code": "SC2020",
-      "note": "Node 24.15.0 / Undici 7.24.4; typed source has no compiler bridge for this interface in either tier"
+      "status": "static",
+      "note": "Node 24.15.0 / Undici 7.24.4; facets: body-consumption, promise-settlement, state-machine, error-shape; differential evidence: fixture:static-request"
     },
     {
       "id": "stdlib.request.attribute",
@@ -3235,33 +3240,29 @@
       "id": "stdlib.request.body",
       "kind": "stdlib",
       "name": "Request.body",
-      "status": "unsupported",
-      "code": "SC2020",
-      "note": "Node 24.15.0 / Undici 7.24.4; typed source has no compiler bridge for this interface in either tier"
+      "status": "static",
+      "note": "Node 24.15.0 / Undici 7.24.4; facets: property-read, state-machine; supported scope: Reads on native Requests within the constructor's supported RequestInit subset; differential evidence: fixture:static-request"
     },
     {
       "id": "stdlib.request.bodyUsed",
       "kind": "stdlib",
       "name": "Request.bodyUsed",
-      "status": "unsupported",
-      "code": "SC2020",
-      "note": "Node 24.15.0 / Undici 7.24.4; typed source has no compiler bridge for this interface in either tier"
+      "status": "static",
+      "note": "Node 24.15.0 / Undici 7.24.4; facets: property-read, state-machine; supported scope: Reads on native Requests within the constructor's supported RequestInit subset; differential evidence: fixture:static-request"
     },
     {
       "id": "stdlib.request.bytes",
       "kind": "stdlib",
       "name": "Request.bytes",
-      "status": "unsupported",
-      "code": "SC2020",
-      "note": "Node 24.15.0 / Undici 7.24.4; typed source has no compiler bridge for this interface in either tier"
+      "status": "static",
+      "note": "Node 24.15.0 / Undici 7.24.4; facets: body-consumption, promise-settlement, state-machine, error-shape; differential evidence: fixture:static-request"
     },
     {
       "id": "stdlib.request.cache",
       "kind": "stdlib",
       "name": "Request.cache",
-      "status": "unsupported",
-      "code": "SC2020",
-      "note": "Node 24.15.0 / Undici 7.24.4; typed source has no compiler bridge for this interface in either tier"
+      "status": "static",
+      "note": "Node 24.15.0 / Undici 7.24.4; facets: property-read, state-machine; supported scope: Reads on native Requests within the constructor's supported RequestInit subset; differential evidence: fixture:static-request"
     },
     {
       "id": "stdlib.request.clone",
@@ -3275,33 +3276,29 @@
       "id": "stdlib.request.constructor",
       "kind": "stdlib",
       "name": "Request constructor",
-      "status": "unsupported",
-      "code": "SC2020",
-      "note": "Node 24.15.0 / Undici 7.24.4; typed source has no compiler bridge for this interface in either tier"
+      "status": "static",
+      "note": "Node 24.15.0 / Undici 7.24.4; facets: webidl-conversion, body-consumption, error-shape; supported scope: Absolute URLs with method, headers, body, duplex, redirect, and signal; other RequestInit members retain explicit fences; differential evidence: fixture:static-request"
     },
     {
       "id": "stdlib.request.credentials",
       "kind": "stdlib",
       "name": "Request.credentials",
-      "status": "unsupported",
-      "code": "SC2020",
-      "note": "Node 24.15.0 / Undici 7.24.4; typed source has no compiler bridge for this interface in either tier"
+      "status": "static",
+      "note": "Node 24.15.0 / Undici 7.24.4; facets: property-read, state-machine; supported scope: Reads on native Requests within the constructor's supported RequestInit subset; differential evidence: fixture:static-request"
     },
     {
       "id": "stdlib.request.destination",
       "kind": "stdlib",
       "name": "Request.destination",
-      "status": "unsupported",
-      "code": "SC2020",
-      "note": "Node 24.15.0 / Undici 7.24.4; typed source has no compiler bridge for this interface in either tier"
+      "status": "static",
+      "note": "Node 24.15.0 / Undici 7.24.4; facets: property-read, state-machine; supported scope: Reads on native Requests within the constructor's supported RequestInit subset; differential evidence: fixture:static-request"
     },
     {
       "id": "stdlib.request.duplex",
       "kind": "stdlib",
       "name": "Request.duplex",
-      "status": "unsupported",
-      "code": "SC2020",
-      "note": "Node 24.15.0 / Undici 7.24.4; typed source has no compiler bridge for this interface in either tier"
+      "status": "static",
+      "note": "Node 24.15.0 / Undici 7.24.4; facets: property-read, state-machine; supported scope: Reads on native Requests within the constructor's supported RequestInit subset; differential evidence: fixture:static-request"
     },
     {
       "id": "stdlib.request.formData",
@@ -3315,113 +3312,99 @@
       "id": "stdlib.request.headers",
       "kind": "stdlib",
       "name": "Request.headers",
-      "status": "unsupported",
-      "code": "SC2020",
-      "note": "Node 24.15.0 / Undici 7.24.4; typed source has no compiler bridge for this interface in either tier"
+      "status": "static",
+      "note": "Node 24.15.0 / Undici 7.24.4; facets: property-read, state-machine; supported scope: Reads on native Requests within the constructor's supported RequestInit subset; differential evidence: fixture:static-request"
     },
     {
       "id": "stdlib.request.integrity",
       "kind": "stdlib",
       "name": "Request.integrity",
-      "status": "unsupported",
-      "code": "SC2020",
-      "note": "Node 24.15.0 / Undici 7.24.4; typed source has no compiler bridge for this interface in either tier"
+      "status": "static",
+      "note": "Node 24.15.0 / Undici 7.24.4; facets: property-read, state-machine; supported scope: Reads on native Requests within the constructor's supported RequestInit subset; differential evidence: fixture:static-request"
     },
     {
       "id": "stdlib.request.isHistoryNavigation",
       "kind": "stdlib",
       "name": "Request.isHistoryNavigation",
-      "status": "unsupported",
-      "code": "SC2020",
-      "note": "Node 24.15.0 / Undici 7.24.4; typed source has no compiler bridge for this interface in either tier"
+      "status": "static",
+      "note": "Node 24.15.0 / Undici 7.24.4; facets: property-read, state-machine; supported scope: Reads on native Requests within the constructor's supported RequestInit subset; differential evidence: fixture:static-request"
     },
     {
       "id": "stdlib.request.isReloadNavigation",
       "kind": "stdlib",
       "name": "Request.isReloadNavigation",
-      "status": "unsupported",
-      "code": "SC2020",
-      "note": "Node 24.15.0 / Undici 7.24.4; typed source has no compiler bridge for this interface in either tier"
+      "status": "static",
+      "note": "Node 24.15.0 / Undici 7.24.4; facets: property-read, state-machine; supported scope: Reads on native Requests within the constructor's supported RequestInit subset; differential evidence: fixture:static-request"
     },
     {
       "id": "stdlib.request.json",
       "kind": "stdlib",
       "name": "Request.json",
-      "status": "unsupported",
-      "code": "SC2020",
-      "note": "Node 24.15.0 / Undici 7.24.4; typed source has no compiler bridge for this interface in either tier"
+      "status": "static",
+      "note": "Node 24.15.0 / Undici 7.24.4; facets: body-consumption, promise-settlement, state-machine, error-shape; differential evidence: fixture:static-request"
     },
     {
       "id": "stdlib.request.keepalive",
       "kind": "stdlib",
       "name": "Request.keepalive",
-      "status": "unsupported",
-      "code": "SC2020",
-      "note": "Node 24.15.0 / Undici 7.24.4; typed source has no compiler bridge for this interface in either tier"
+      "status": "static",
+      "note": "Node 24.15.0 / Undici 7.24.4; facets: property-read, state-machine; supported scope: Reads on native Requests within the constructor's supported RequestInit subset; differential evidence: fixture:static-request"
     },
     {
       "id": "stdlib.request.method",
       "kind": "stdlib",
       "name": "Request.method",
-      "status": "unsupported",
-      "code": "SC2020",
-      "note": "Node 24.15.0 / Undici 7.24.4; typed source has no compiler bridge for this interface in either tier"
+      "status": "static",
+      "note": "Node 24.15.0 / Undici 7.24.4; facets: property-read, state-machine; supported scope: Reads on native Requests within the constructor's supported RequestInit subset; differential evidence: fixture:static-request"
     },
     {
       "id": "stdlib.request.mode",
       "kind": "stdlib",
       "name": "Request.mode",
-      "status": "unsupported",
-      "code": "SC2020",
-      "note": "Node 24.15.0 / Undici 7.24.4; typed source has no compiler bridge for this interface in either tier"
+      "status": "static",
+      "note": "Node 24.15.0 / Undici 7.24.4; facets: property-read, state-machine; supported scope: Reads on native Requests within the constructor's supported RequestInit subset; differential evidence: fixture:static-request"
     },
     {
       "id": "stdlib.request.redirect",
       "kind": "stdlib",
       "name": "Request.redirect",
-      "status": "unsupported",
-      "code": "SC2020",
-      "note": "Node 24.15.0 / Undici 7.24.4; typed source has no compiler bridge for this interface in either tier"
+      "status": "static",
+      "note": "Node 24.15.0 / Undici 7.24.4; facets: property-read, state-machine; supported scope: Reads on native Requests within the constructor's supported RequestInit subset; differential evidence: fixture:static-request"
     },
     {
       "id": "stdlib.request.referrer",
       "kind": "stdlib",
       "name": "Request.referrer",
-      "status": "unsupported",
-      "code": "SC2020",
-      "note": "Node 24.15.0 / Undici 7.24.4; typed source has no compiler bridge for this interface in either tier"
+      "status": "static",
+      "note": "Node 24.15.0 / Undici 7.24.4; facets: property-read, state-machine; supported scope: Reads on native Requests within the constructor's supported RequestInit subset; differential evidence: fixture:static-request"
     },
     {
       "id": "stdlib.request.referrerPolicy",
       "kind": "stdlib",
       "name": "Request.referrerPolicy",
-      "status": "unsupported",
-      "code": "SC2020",
-      "note": "Node 24.15.0 / Undici 7.24.4; typed source has no compiler bridge for this interface in either tier"
+      "status": "static",
+      "note": "Node 24.15.0 / Undici 7.24.4; facets: property-read, state-machine; supported scope: Reads on native Requests within the constructor's supported RequestInit subset; differential evidence: fixture:static-request"
     },
     {
       "id": "stdlib.request.signal",
       "kind": "stdlib",
       "name": "Request.signal",
-      "status": "unsupported",
-      "code": "SC2020",
-      "note": "Node 24.15.0 / Undici 7.24.4; typed source has no compiler bridge for this interface in either tier"
+      "status": "static",
+      "note": "Node 24.15.0 / Undici 7.24.4; facets: property-read, state-machine; supported scope: Reads on native Requests within the constructor's supported RequestInit subset; differential evidence: fixture:static-request"
     },
     {
       "id": "stdlib.request.text",
       "kind": "stdlib",
       "name": "Request.text",
-      "status": "unsupported",
-      "code": "SC2020",
-      "note": "Node 24.15.0 / Undici 7.24.4; typed source has no compiler bridge for this interface in either tier"
+      "status": "static",
+      "note": "Node 24.15.0 / Undici 7.24.4; facets: body-consumption, promise-settlement, state-machine, error-shape; differential evidence: fixture:static-request"
     },
     {
       "id": "stdlib.request.url",
       "kind": "stdlib",
       "name": "Request.url",
-      "status": "unsupported",
-      "code": "SC2020",
-      "note": "Node 24.15.0 / Undici 7.24.4; typed source has no compiler bridge for this interface in either tier"
+      "status": "static",
+      "note": "Node 24.15.0 / Undici 7.24.4; facets: property-read, state-machine; supported scope: Reads on native Requests within the constructor's supported RequestInit subset; differential evidence: fixture:static-request"
     },
     {
       "id": "stdlib.response-init.headers",

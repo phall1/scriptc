@@ -732,22 +732,6 @@ void scr_process_emit_warning(ScrDyn *args) {
  * (SEMANTICS.md 67). Shared by the dc trace choreography, the checked-dynamic tree
  * promise reactions, and the unhandled-rejection dispatch. Borrows the
  * box; result +1. */
-ScrDyn *scr_caught_to_dyn(const ScrCaught *c) {
-  switch (c->kind) {
-  case SCR_EXC_F64: return scr_dyn_new_num(c->f64);
-  case SCR_EXC_BOOL: return scr_dyn_new_bool(c->b);
-  case SCR_EXC_STR: return scr_dyn_new_str((ScrStr *)c->payload);
-  case SCR_EXC_REF:
-  case SCR_EXC_PRIMITIVE_REF:
-    if (c->retain_fn == scr_dyn_retain_v) return scr_dyn_retain((ScrDyn *)c->payload);
-    return scr_dyn_new_obj();
-  case SCR_EXC_OBJ:
-    if (scr_error_is(c->payload)) return scr_dyn_from_error((const ScrError *)c->payload);
-    return scr_dyn_new_obj();
-  default:
-    return scr_dyn_new_obj();
-  }
-}
 
 /* Await a dyn-CROSSING promise (SCR_DYN_PROMISE's boundary contract —
  * dyn or void fulfillment): the payload as a dyn value (+1; a void
@@ -820,7 +804,10 @@ ScrDyn *scr_promise_reason_dyn(const ScrPromise *p) {
  * promise<dyn> directly and every other inner type through the adapting
  * constructor below. */
 
+extern bool (*scr_dyn_promise_identity_fn)(ScrPromise *, ScrPromise *);
+
 ScrDyn *scr_dyn_new_promise(ScrPromise *p) {
+  scr_dyn_promise_identity_fn = scr_promise_identity_equal;
   ScrDyn *d = scr_dyn_alloc_promise(scr_promise_release);
   d->v.promise = scr_promise_retain(p);
   return d;
@@ -835,6 +822,8 @@ ScrDyn *scr_dyn_new_promise(ScrPromise *p) {
 ScrDyn *scr_dyn_new_promise_adapting(ScrPromise *src,
                                      void (*adapt)(ScrPromise *dst, ScrPromise *src)) {
   ScrPromise *dst = scr_promise_new();
+  scr_promise_share_identity(dst, src);
+  scr_dyn_promise_identity_fn = scr_promise_identity_equal;
   scr_promise_race_add(dst, src, adapt);
   ScrDyn *d = scr_dyn_alloc_promise(scr_promise_release);
   d->v.promise = dst; /* the constructor's +1 moves in */
@@ -843,4 +832,46 @@ ScrDyn *scr_dyn_new_promise_adapting(ScrPromise *src,
 
 ScrPromise *scr_dyn_promise_of(const ScrDyn *d) {
   return d->kind == SCR_DYN_PROMISE ? d->v.promise : NULL;
+}
+
+/* The checked native WebCrypto digest entry keeps promise and ArrayBuffer results native. */
+static ScrDyn *scr_crypto_digest_call(ScrClosure *closure, ScrDyn *const *args, size_t argc) {
+  (void)closure;
+  ScrPromise *promise = scr_promise_new();
+  ScrDyn *algorithm = argc ? args[0] : scr_dyn_undefined();
+  ScrDyn *name = algorithm->kind == SCR_DYN_OBJ ? scr_dyn_obj_read(algorithm, "name", 4) : scr_dyn_retain(algorithm);
+  ScrStr *text = name ? scr_dyn_string_coerce_js(name) : NULL;
+  scr_dyn_release(name);
+  ScrBytes *bytes = argc > 1 && args[1]->kind == SCR_DYN_BYTES ? scr_dyn_bytes_unbox(args[1]) : NULL;
+  if (!bytes && argc > 1 && scr_array_buffer_is(args[1])) bytes = scr_array_buffer_view(SCR_BYTES_U8, args[1], scr_dyn_undefined(), scr_dyn_undefined());
+  const char *native = NULL;
+  if (text) {
+    if (text->len == 7 && strncasecmp(text->data, "SHA-256", 7) == 0) native = "sha256";
+    else if (text->len == 5 && strncasecmp(text->data, "SHA-1", 5) == 0) native = "sha1";
+  }
+  if (!text || !bytes || !native) {
+    static const char message[] = "Unsupported WebCrypto digest algorithm or BufferSource";
+    if (!scr_exc_pending()) scr_throw_error_msg_code(SCR_ERR_TYPE, message, sizeof message - 1, "SC2020");
+    scr_promise_reject_pending(promise);
+  } else {
+    ScrStr *alg = scr_str_new(native, strlen(native));
+    ScrCryptoHash *hash = scr_crypto_hash_new(alg);
+    scr_str_release(alg);
+    if (hash) {
+      scr_crypto_hash_update_bytes(hash, bytes);
+      ScrBytes *digest = scr_exc_pending() ? NULL : scr_crypto_hash_digest_buffer(hash);
+      scr_crypto_hash_release(hash);
+      if (digest) {
+        ScrDyn *buffer = scr_array_buffer_from_bytes(digest); scr_bytes_release(digest);
+        scr_promise_resolve_dyn(promise, buffer);
+      } else scr_promise_reject_pending(promise);
+    } else scr_promise_reject_pending(promise);
+  }
+  scr_str_release(text); scr_bytes_release(bytes);
+  ScrDyn *result = scr_dyn_new_promise(promise); scr_promise_release(promise); return result;
+}
+ScrDyn *scr_crypto_native(void) {
+  ScrDyn *subtle = scr_dyn_new_obj();
+  scr_dyn_obj_set(subtle, "digest", 6, scr_dyn_new_func(scr_closure_new(NULL, 0), scr_crypto_digest_call, 2, "crypto.subtle.digest", "digest"));
+  ScrDyn *result = scr_dyn_new_obj(); scr_dyn_obj_set(result, "subtle", 6, subtle); return result;
 }

@@ -1315,6 +1315,9 @@ function lowerFsSyncBufferWindow(
   export function lowerFsLadderCall(lowerer: Lowerer, expr: ts.CallExpression,
     bi: { module: string; member: string },
     loc: SrcLoc,): IrExpr | null {
+    if (bi.module === "fs" && bi.member !== "rename" && builtinModuleFnOf(lowerer, bi.module, bi.member)?.fn === "fs.callbackCall") {
+      return lowerer.lowerBuiltinModuleCall(expr, bi, { fn: "fs.callbackCall", params: [], result: DYN }, loc);
+    }
     if (bi.module !== "fs" && bi.module !== "fs/promises") return null;
     if (!isJsSourceFile(expr.getSourceFile())) return null;
     const args = expr.arguments;
@@ -1576,6 +1579,11 @@ function lowerFsSyncBufferWindow(
     fn: BuiltinModuleFn,
     loc: SrcLoc,): IrExpr {
     const name = expr.expression.getText();
+    if (fn.fn === "fs.callbackCall" && bi.member !== "rename") {
+      if (expr.arguments.some(ts.isSpreadElement)) lowerer.noLowering("filesystem callback call with spread arguments", expr);
+      const args: IrExpr = { kind: "dynArrLit", elems: expr.arguments.map((arg) => lowerer.lowerExprExpecting(arg, DYN)), type: DYN, loc };
+      return { kind: "libCall", fn: "fs.callbackCall", args: [{ kind: "strLit", value: bi.member, type: STRING, loc }, args], type: DYN, loc };
+    }
     // Numeric open flags are interpreted symbolically at the call site. The
     // O_* bit values differ between Darwin and Linux, so emit a stable mask
     // and let the target runtime select its own native constants.
@@ -2638,11 +2646,10 @@ function lowerFsSyncBufferWindow(
     const bi = ts.isPropertyAccessExpression(targetNode) ? lowerer.builtinMemberOf(targetNode) : null;
     const fn = bi ? builtinModuleFnOf(lowerer, bi.module, bi.member) : null;
     if (!fn || fn.variadicPack !== true) {
-      lowerer.noLowering(
-        `Reflect.apply of '${targetNode.getText()}'`,
-        targetNode,
-        fenceHint,
-      );
+      const target = lowerer.lowerExprExpecting(targetNode, DYN);
+      const receiver = lowerer.lowerExprExpecting(call.arguments[1]!, DYN);
+      const argumentsList = lowerer.lowerExprExpecting(call.arguments[2]!, DYN);
+      return { kind: "libCall", fn: "dyn.reflectApply", args: [target, receiver, argumentsList], type: DYN, loc };
     }
     const thisNode = call.arguments[1]!;
     const effectFree =
@@ -5577,6 +5584,9 @@ function errorFirstBytesCallback(lowerer: Lowerer, node: ts.Expression, api: str
       return acc;
     }
     const init = lowerer.lowerExpr(arg);
+    if (init.type.kind === "dyn") {
+      return { kind: "libCall", fn: "sp.newChecked", args: [init], type: SEARCH_PARAMS_T, loc };
+    }
     if (init.type.kind === "string") {
       return { kind: "libCall", fn: "sp.parse", args: [init], type: SEARCH_PARAMS_T, loc };
     }
@@ -7132,13 +7142,13 @@ function lowerProcessIpcSend(lowerer: Lowerer, call: ts.CallExpression): IrExpr 
     if (!ts.isIdentifier(expr.expression)) return null;
     const bi = lowerer.builtinImportOf(expr.expression);
     if (!bi || bi.module !== "fs" || bi.member !== "constants") return null;
-    const MODES: Record<string, number | undefined> = { F_OK: 0, X_OK: 1, W_OK: 2, R_OK: 4 };
+    const MODES: Record<string, number | undefined> = { F_OK: 0, X_OK: 1, W_OK: 2, R_OK: 4, COPYFILE_EXCL: 1, COPYFILE_FICLONE: 2, COPYFILE_FICLONE_FORCE: 4 };
     const value = own(MODES, expr.name.text);
     if (value === undefined) {
       lowerer.noLowering(
         `fs.constants.${expr.name.text}`,
         expr,
-        "F_OK, R_OK, W_OK, and X_OK are the lowered constants",
+        "F_OK, R_OK, W_OK, X_OK, and COPYFILE_* are the lowered constants",
       );
     }
     return { kind: "numLit", value, type: F64, loc: locOf(expr) };
@@ -8842,24 +8852,37 @@ type TextCodecCtor = {
 export function lowerTextCodecNew(lowerer: Lowerer, ctor: ts.NewExpression, cls: TextCodecCtor["cls"]): IrExpr {
   const args = ctor.arguments ?? [];
   const loc = locOf(ctor);
-  let encoding = -1;
+  let encoding: IrExpr = { kind: "numLit", value: -1, type: F64, loc };
   let label: IrExpr | null = null;
   if (cls === "TextEncoder") {
     if (args.length !== 0) lowerer.noLowering("new TextEncoder with arguments", ctor);
   } else if (args.length !== 0) {
     const labelT = lowerer.typeOf(args[0]!);
     const parsed = labelT.isStringLiteralType() ? staticTextDecoderEncoding(labelT.value) : null;
-    if (args.length !== 1 || parsed === null) {
-      lowerer.noLowering("new TextDecoder with runtime-valued options or an unknown label", ctor,
-        "a recognized literal WHATWG label with default options compiles");
+    if (args.length > 2) lowerer.noLowering("new TextDecoder with extra arguments", ctor);
+    if (parsed === null) {
+      encoding = { kind: "libCall", fn: "text.decoderEncoding", args: [lowerer.lowerExprExpecting(args[0]!, DYN)], type: F64, loc };
+    } else {
+      encoding = { kind: "numLit", value: parsed.kind === "utf8" ? -1 : parsed.id, type: F64, loc };
+      label = lowerer.lowerExprExpecting(args[0]!, STRING);
     }
-    encoding = parsed.kind === "utf8" ? -1 : parsed.id;
-    label = lowerer.lowerExprExpecting(args[0]!, STRING);
+  }
+  const options = args[1] ? stripTypeCasts(args[1]) : null;
+  const flags = new Map<string, IrExpr>();
+  for (const name of ["fatal", "ignoreBOM"]) flags.set(name, { kind: "boolLit", value: false, type: BOOL, loc });
+  if (options) {
+    if (!ts.isObjectLiteralExpression(options)) lowerer.noLowering("TextDecoder options outside an object literal", options);
+    for (const property of options.properties) {
+      if ((!ts.isPropertyAssignment(property) && !ts.isShorthandPropertyAssignment(property)) ||
+          !ts.isIdentifier(property.name) || !flags.has(property.name.text)) lowerer.noLowering("unknown TextDecoder option", property);
+      const value = ts.isPropertyAssignment(property) ? property.initializer : property.name;
+      flags.set(property.name.text, lowerer.lowerExprExpecting(value, BOOL));
+    }
   }
   const type = lowerer.mapTypeOf(lowerer.typeOf(ctor));
   if (type?.kind !== "record") lowerer.badType(ctor, lowerer.typeOf(ctor));
   const result: IrExpr = {
-    kind: "recordLit", fields: [{ name: `%${cls}`, value: { kind: "numLit", value: encoding, type: F64, loc } }], type, loc,
+    kind: "recordLit", fields: [{ name: `%${cls}`, value: encoding }, ...(cls === "TextDecoder" ? [...flags].map(([name, value]) => ({ name: `%${name}`, value })) : [])], type, loc,
   };
   return label === null || label.kind === "strLit" ? result : {
     kind: "seqExpr", stmts: [{ kind: "exprStmt", expr: label, loc }], result, type, loc,
@@ -8884,10 +8907,13 @@ function lowerStoredTextCodecCall(lowerer: Lowerer, call: ts.CallExpression, acc
   const loc = locOf(call);
   const receiver = lowerer.lowerExpr(access.expression);
   if (receiver.type.kind !== "record") lowerer.badType(access.expression, lowerer.typeOf(access.expression));
-  const arg: IrExpr = call.arguments.length === 0
+  let arg: IrExpr = call.arguments.length === 0
     ? cls === "TextEncoder" ? strLit("", loc)
       : { kind: "bytesNew", source: null, type: BYTES_U8, loc }
     : cls === "TextEncoder" ? lowerer.lowerExprExpecting(call.arguments[0]!, STRING) : lowerer.lowerExpr(call.arguments[0]!);
+  if (cls === "TextDecoder" && (arg.type.kind === "dyn" || arg.type.kind === "bytes" && arg.type.elem !== "u8")) {
+    arg = { kind: "libCall", fn: "bytes.bufferSource", args: [lowerer.coerceInto(call.arguments[0]!, arg, DYN)], type: BYTES_U8, loc };
+  }
   if (cls === "TextDecoder" && !(arg.type.kind === "bytes" && arg.type.elem === "u8")) {
     lowerer.noLowering(`TextDecoder.decode of '${lowerer.fmt(arg.type)}' values`, call,
       "Uint8Array/Buffer input decodes (ArrayBuffer values have no representation)");
@@ -8904,8 +8930,8 @@ function lowerStoredTextCodecCall(lowerer: Lowerer, call: ts.CallExpression, acc
       : {
         kind: "ternary",
         cond: { kind: "bin", op: "<", left: { kind: "recordGet", obj: varRef("codec.0", recT, loc), shapeId: recT.shapeId, field: "%TextDecoder", type: F64, loc }, right: { kind: "numLit", value: 0, type: F64, loc }, type: BOOL, loc },
-        then: { kind: "libCall", fn: "text.decode", args: [input], type: STRING, loc },
-        else_: { kind: "libCall", fn: "text.decodeLegacy", args: [input, { kind: "recordGet", obj: varRef("codec.0", recT, loc), shapeId: recT.shapeId, field: "%TextDecoder", type: F64, loc }], type: STRING, loc },
+        then: { kind: "libCall", fn: "text.decodeOptions", args: [input, ...["%fatal", "%ignoreBOM"].map((field): IrExpr => ({ kind: "recordGet", obj: varRef("codec.0", recT, loc), shapeId: recT.shapeId, field, type: BOOL, loc }))], type: STRING, loc },
+        else_: { kind: "libCall", fn: "text.decodeLegacyOptions", args: [input, { kind: "recordGet", obj: varRef("codec.0", recT, loc), shapeId: recT.shapeId, field: "%TextDecoder", type: F64, loc }, ...["%fatal", "%ignoreBOM"].map((field): IrExpr => ({ kind: "recordGet", obj: varRef("codec.0", recT, loc), shapeId: recT.shapeId, field, type: BOOL, loc }))], type: STRING, loc },
         type: STRING, loc,
       };
     lowerer.liftedFns.push({
@@ -8951,6 +8977,7 @@ function lowerStoredTextCodecCall(lowerer: Lowerer, call: ts.CallExpression, acc
     if (info === null) return lowerStoredTextCodecCall(lowerer, call, access);
     if (!lowerer.isStdlibMember(access)) return null;
     const { cls, ctor: recv } = info;
+    if (cls === "TextDecoder" && (recv.arguments?.length ?? 0) > 1) return lowerStoredTextCodecCall(lowerer, call, access);
     if (!(cls === "TextDecoder" && member === "decode") && !(cls === "TextEncoder" && member === "encode")) {
       return null;
     }
@@ -8967,11 +8994,7 @@ function lowerStoredTextCodecCall(lowerer: Lowerer, call: ts.CallExpression, acc
         ? staticTextDecoderEncoding(labelT.value)
         : null;
       if (ctorArgs.length > 1 || encoding === null) {
-        lowerer.noLowering(
-          "new TextDecoder with runtime-valued options or an unknown label",
-          recv,
-          "a recognized literal WHATWG label with default options compiles",
-        );
+        return lowerStoredTextCodecCall(lowerer, call, access);
       }
       const labelEffect = ctorArgs.length === 1
         ? lowerer.lowerExprExpecting(ctorArgs[0]!, STRING)
@@ -8998,7 +9021,10 @@ function lowerStoredTextCodecCall(lowerer: Lowerer, call: ts.CallExpression, acc
         );
       }
       const argNode = call.arguments[0]!;
-      const arg = lowerer.lowerExpr(argNode);
+      let arg = lowerer.lowerExpr(argNode);
+      if (arg.type.kind === "dyn" || arg.type.kind === "bytes" && arg.type.elem !== "u8") {
+        arg = { kind: "libCall", fn: "bytes.bufferSource", args: [lowerer.coerceInto(argNode, arg, DYN)], type: BYTES_U8, loc };
+      }
       if (!(arg.type.kind === "bytes" && arg.type.elem === "u8")) {
         lowerer.noLowering(
           `TextDecoder.decode of '${lowerer.fmt(arg.type)}' values`,
@@ -9273,7 +9299,7 @@ function lowerStoredTextCodecCall(lowerer: Lowerer, call: ts.CallExpression, acc
         // reads are the routed keyed ops). All-static tuples keep the
         // typed fence hint below. --dynamic only by construction: jsval
         // entries exist only there.
-        if (elems.some((e) => e.type.kind === "jsval")) {
+        if (lowerer.dynamic && elems.some((e) => e.type.kind === "jsval" || e.type.kind === "dyn")) {
           const diagsBefore = lowerer.diags.length;
           try {
             const marshaled = argNode.elements.map((el, i) => lowerer.jsvalIn(elems[i]!, el));
@@ -9309,7 +9335,7 @@ function lowerStoredTextCodecCall(lowerer: Lowerer, call: ts.CallExpression, acc
       // lifts per element by reference), the result staying an island
       // value the static side awaits through the island→static bridge.
       if (
-        entries.type.kind === "jsval" ||
+        entries.type.kind === "jsval" || lowerer.dynamic && entries.type.kind === "dyn" ||
         (entries.type.kind === "array" && entries.type.elem.kind === "jsval")
       ) {
         const diagsBefore = lowerer.diags.length;

@@ -171,7 +171,9 @@ export function traceArg(host: ShapeHost, t: IrType): string {
 
 /** Keep native capsule edges visible when the referent is cycle-capable. */
 export function typedRefConstructor(host: ShapeHost, t: IrType): string {
-  const name = traceAdapter(host, t) === null ? "scr_dyn_new_typed_ref" : "scr_dyn_new_typed_ref_traced";
+  const observed = t.kind === "record" || t.kind === "array" || t.kind === "map" || t.kind === "set" ||
+    t.kind === "object" && !RUNTIME_ERROR_CLASSES.has(t.className) && t.className !== RUNTIME_EMITTER_CLASS && !RUNTIME_STREAM_CLASSES.has(t.className);
+  const name = traceAdapter(host, t) !== null ? "scr_dyn_new_typed_ref_traced" : observed ? "scr_dyn_new_typed_ref_observed" : "scr_dyn_new_typed_ref";
   host.declare(`declare ptr @${name}(ptr, ptr, ptr, ptr, ${host.sizeType}, ptr, ptr)`);
   return `@${name}`;
 }
@@ -438,7 +440,8 @@ export function emitRecordShapes(host: ShapeHost, mod: IrModule): { typeDefs: st
       freeBody.push(`  call void @scr_cyc_free(ptr %o)`);
     } else {
       host.declare(`declare void @free(ptr)`);
-      freeBody.push(`  call void @free(ptr %o)`);
+      host.declare(`declare void @scr_weak_dispose(ptr)`);
+      freeBody.push(`  call void @scr_weak_dispose(ptr %o)`, `  call void @free(ptr %o)`);
     }
     defs.push(...releaseBody(host, mangleRecordRelease(shape.id), traced, freeBody), ``);
 

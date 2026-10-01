@@ -85,6 +85,25 @@ describe(`dynamic-boundary checks (scriptc-only${sanitize ? ", sanitized" : ""})
     expect(r.stderr).toBe("");
   });
 
+  test("typed Promise exits validate fulfillment and preserve rejection", async () => {
+    const result = await compileAndRun("promise-exit-payload", `
+      async function main() {
+        const value: unknown = Promise.resolve("wrong");
+        try { await (value as Promise<number>); }
+        catch (error) { console.log(error instanceof TypeError, (error as Error).message); }
+        const rejected: unknown = Promise.reject(new Error("original"));
+        try { await (rejected as Promise<number>); }
+        catch (error) { console.log((error as Error).message); }
+      }
+      main();
+    `);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("true expected number at $, got string\noriginal\n");
+    expect(result.stderr.split("\n").filter((line) =>
+      !sanitize || !/^==\d+==WARNING: ASan doesn't fully support makecontext\/swapcontext/.test(line),
+    ).join("\n")).toBe("");
+  });
+
   test("wrong-typed field throws with the path", async () => {
     const r = await compileAndRun(
       "wrong-type",
@@ -612,9 +631,8 @@ console.log("recovered");
     expect(r.stdout).toBe("assigned 2\nnever: boom\nrecovered\n");
   });
 
-  test("a NAMED record into an `any` slot is a deep copy — dyn writes never alias the original", async () => {
-    // dynFrom's aliasing stance (documented for 'unknown' slots) applies
-    // to any-typed storage identically: JS would alias, the dyn copies.
+  test("a named record retains identity and mutations through an `any` slot", async () => {
+    // Checked storage keeps the live native record shared with its source.
     const r = await compileAndRun(
       "any-record-copy",
       `const base = { a: 1 };
@@ -624,7 +642,7 @@ console.log(base.a, boxed.a);
 `,
     );
     expect(r.exitCode).toBe(0);
-    expect(r.stdout).toBe("1 2\n");
+    expect(r.stdout).toBe("2 2\n");
   });
 
   test("an uninitialized `any` binding is the dyn undefined, not a trap", async () => {

@@ -19,7 +19,7 @@ const es = m.entries();
 // lowered iteration forms.
 const spread = [...m];
 
-// set() is declared void (not the JS `this`), so chaining is a type error.
+// set() returns the same Map, so chained mutations compile.
 m.set("a", 1).set("b", 2);
 
 // The forEach callback receives (value, key) — no third map parameter.

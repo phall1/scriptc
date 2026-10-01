@@ -1,10 +1,10 @@
-import { BOOL, DYN, DYN_CLASS_PROPERTIES as PROPERTY_BAG, STRING, VOID, canConvertToDyn, canDynCheckTo, isClassOwnEnumerableFieldName, isDynTypedRefType, isUnitType, typeEquals, typeKey, type IrExpr, type IrFunction, type IrStmt, type IrType, type SrcLoc } from "../../ir/ir.js";
+import { BOOL, DYN, F64, DYN_CLASS_PROPERTIES as PROPERTY_BAG, STRING, VOID, canConvertToDyn, canDynCheckTo, isClassOwnEnumerableFieldName, isDynTypedRefType, isUnitType, typeEquals, typeKey, type IrExpr, type IrFunction, type IrStmt, type IrType, type SrcLoc } from "../../ir/ir.js";
 import { streamTypedRefEligible } from "../../ir/analysis.js";
 import { varRef } from "../../ir/build.js";
 import { everyStmtList, transformExpr, transformStmtList } from "../../ir/traverse.js";
 import { dynUndefinedExpr, PoisonError, type Lowerer } from "./lowerer.js";
 import { implicitDefaultInstance, type ParamShape } from "./lower-calls.js";
-import { accessorCall, classValueRef, findGenericMethodOn, findMethodOn, genericOverrideBelow, upcastTo, type ClassInfo } from "./lower-classes.js";
+import { accessorCall, classValueRef, findGenericMethodOn, findMethodOn, findStaticOn, genericOverrideBelow, upcastTo, type ClassInfo } from "./lower-classes.js";
 import { classPrototypeData, hasClassPrototypeData, reflectClassPrototype } from "./class-prototypes.js";
 import { errorPropertyRead, errorPropertyWrite, errorToStringCall, errorToStringMethod, refreshErrorPropertyDispatch, refreshErrorMethodDispatch } from "./error-methods.js";
 import { GeneratorDynamicDispatch } from "./generator-dynamic-dispatch.js";
@@ -12,7 +12,13 @@ import { classMethodValue } from "./class-method-values.js";
 import * as ts from "../ts7/adapter.js";
 import { SYMBOL_T } from "../../ir/ir.js";
 import { isClassCallback } from "./class-callbacks.js";
+import { refreshDescriptorGuards } from "./class-descriptors.js";
 import { ClassConstructionDispatch } from "./class-construction.js";
+
+const STREAM_METHODS = new Set(["on", "addListener", "once", "prependListener", "prependOnceListener", "off", "removeListener", "read", "pause", "resume", "isPaused", "destroy"]);
+const STREAM_BOOL_PROPERTIES = new Set(["readable", "readableEnded", "writable", "writableEnded", "writableFinished", "writableNeedDrain", "destroyed", "closed", "readableObjectMode", "writableObjectMode", "allowHalfOpen"]);
+const STREAM_NUM_PROPERTIES = new Set(["readableLength", "readableHighWaterMark", "writableLength", "writableHighWaterMark", "writableCorked"]);
+const streamProperty = (name: string): boolean => STREAM_BOOL_PROPERTIES.has(name) || STREAM_NUM_PROPERTIES.has(name);
 
 type Invoke = Extract<IrExpr, { kind: "dynInvoke" }>;
 interface Dispatch {
@@ -85,6 +91,7 @@ export class ClassDynamicDispatch {
   private readonly generatorDispatch = new GeneratorDynamicDispatch();
   private readonly constructionDispatch = new ClassConstructionDispatch();
   private readonly boxed = new Set<string>();
+  private readonly boxedConstructors = new Set<string>();
   private readonly dispatches = new Map<string, Dispatch>();
   private readonly properties = new Map<string, PropertyDispatch>();
   private readonly computed = new Map<string, Omit<PropertyDispatch, "name"> & { keyLocal: string; branchIndex: number; dynamicKey: boolean; probe: "in" | "own" | "enumerable" | undefined }>();
@@ -115,7 +122,10 @@ export class ClassDynamicDispatch {
       const key = typeKey(type);
       if (seenTypes.has(key)) return;
       seenTypes.add(key);
-      if (isDynTypedRefType(type)) this.boxed.add(type.className);
+      if (type.kind === "object") {
+        if (isDynTypedRefType(type)) this.boxed.add(type.className);
+      }
+      else if (type.kind === "classval") this.boxedConstructors.add(type.className);
       else if (type.kind === "array") discover(type.elem);
       else if (type.kind === "record") {
         const shape = lowerer.shapes.get(type.shapeId);
@@ -295,13 +305,15 @@ export class ClassDynamicDispatch {
       });
       changed = true;
     }
+    refreshDescriptorGuards(lowerer);
     const byMethod = new Map<string, ClassInfo[]>();
     const candidates = (method: string): ClassInfo[] => {
       const found = byMethod.get(method);
       if (found) return found;
       const matching = [...this.boxed].flatMap((name) => {
         const info = lowerer.classes.get(name);
-        if (!info || info.fields.has(method) || info.builtinEmitter || info.builtinStream || info.builtinError) return [];
+        if (!info || info.fields.has(method) || info.builtinEmitter || info.builtinError) return [];
+        if (info.builtinStream) return STREAM_METHODS.has(method) ? [info] : [];
         return findMethodOn(lowerer, info, method) || findGenericMethodOn(lowerer, info, method) ? [info] : [];
       });
       byMethod.set(method, matching);
@@ -575,10 +587,25 @@ export class ClassDynamicDispatch {
       }
     }
     for (const dispatch of this.properties.values()) {
-      for (const plan of this.propertyReceivers(lowerer)) {
+      if (!dispatch.write) for (const name of this.boxedConstructors) {
+        const info = lowerer.classes.get(name);
+        const field = info && findStaticOn(lowerer, info, dispatch.name)?.field;
+        const key = `constructor:${name}`;
+        if (!field || dispatch.name.startsWith("#") || dispatch.classes.has(key)) continue;
+        dispatch.classes.add(key);
+        const loc = dispatch.fn.loc;
+        const value = varRef("p.0", DYN, loc);
+        const type: IrType = { kind: "classval", className: name };
+        dispatch.fn.body.unshift({ kind: "if", cond: { kind: "libCall", fn: "dyn.classIs", args: [value,
+          { kind: "strLit", value: typeKey(type), type: STRING, loc }], type: BOOL, loc }, then: [
+          { kind: "return", value: lowerer.coerceToExpected(varRef(field.globalId, field.type, loc), DYN), loc },
+        ], else_: null, loc });
+        changed = true;
+      }
+      for (const plan of this.propertyReceivers(lowerer, true)) {
         const { info } = plan;
         if (!isClassOwnEnumerableFieldName(dispatch.name) ||
-            !findMethodOn(lowerer, info, dispatch.name) && !findGenericMethodOn(lowerer, info, dispatch.name) && dispatch.name !== "constructor" && !info.fields.has(dispatch.name) && !findMethodOn(lowerer, info, `get:${dispatch.name}`) && !findMethodOn(lowerer, info, `set:${dispatch.name}`)) continue;
+            !(info.builtinStream !== undefined && streamProperty(dispatch.name)) && !findMethodOn(lowerer, info, dispatch.name) && !findGenericMethodOn(lowerer, info, dispatch.name) && dispatch.name !== "constructor" && !info.fields.has(dispatch.name) && !findMethodOn(lowerer, info, `get:${dispatch.name}`) && !findMethodOn(lowerer, info, `set:${dispatch.name}`)) continue;
         if (dispatch.classes.has(plan.key)) continue;
         dispatch.classes.add(plan.key);
         const loc = dispatch.fn.loc;
@@ -600,7 +627,7 @@ export class ClassDynamicDispatch {
       }
     }
     for (const dispatch of this.computed.values()) {
-      for (const plan of this.propertyReceivers(lowerer)) {
+      for (const plan of this.propertyReceivers(lowerer, true)) {
         if (dispatch.classes.has(plan.key)) continue;
         const { info } = plan;
         dispatch.classes.add(plan.key);
@@ -612,6 +639,7 @@ export class ClassDynamicDispatch {
               ? { kind: "fieldGet", obj: lowerer.upcastTo(receiver, "%Error"), className: "%Error", field: `%${name}Present`, type: BOOL, loc }
               : { kind: "fieldGet", obj: lowerer.upcastTo(receiver, "%Error"), className: "%Error", field: `%${name}Enumerable`, type: BOOL, loc }, loc,
           }];
+          if (info.builtinStream !== undefined && streamProperty(name) && dispatch.probe) return [{ kind: "return", value: { kind: "boolLit", value: dispatch.probe === "in", type: BOOL, loc }, loc }];
           if (!dispatch.probe) return this.propertyBody(lowerer, { ...dispatch, name }, info, receiver);
           const prototypeMethod = lowerer.prototypeMethodAccesses.has(name);
           if (info.fields.has(name) || dispatch.probe === "in" && !prototypeMethod) {
@@ -675,6 +703,7 @@ export class ClassDynamicDispatch {
           }
         }
         const names = new Set([...info.fields.keys()].filter(isClassOwnEnumerableFieldName));
+        if (info.builtinStream) for (const name of [...STREAM_BOOL_PROPERTIES, ...STREAM_NUM_PROPERTIES]) names.add(name);
 
         for (let owner: ClassInfo | null = info; owner; owner = owner.base) {
           const methodNames = [...owner.methods.keys()];
@@ -800,11 +829,11 @@ export class ClassDynamicDispatch {
 
   /** A capsule retains its static type, while its object may be a subclass.
    * Preorder insertion lets later branches test the most derived layout first. */
-  private propertyReceivers(lowerer: Lowerer): PropertyReceiver[] {
+  private propertyReceivers(lowerer: Lowerer, streams = false): PropertyReceiver[] {
     const plans: PropertyReceiver[] = [];
     for (const name of this.boxed) {
       const capsule = lowerer.classes.get(name);
-      if (!capsule || capsule.builtinEmitter || capsule.builtinStream || capsule.builtinError) continue;
+      if (!capsule || capsule.builtinEmitter || capsule.builtinStream && !streams || capsule.builtinError) continue;
       const visit = (info: ClassInfo): void => {
         plans.push({ info, capsule, key: JSON.stringify([name, info.def.name]) });
         for (const child of info.subclasses) visit(child);
@@ -831,6 +860,10 @@ export class ClassDynamicDispatch {
   private propertyBody(lowerer: Lowerer, dispatch: PropertyDispatch, info: ClassInfo, receiver: IrExpr): IrStmt[] {
     const { name, write } = dispatch;
     const loc = dispatch.fn.loc;
+    if (info.builtinStream !== undefined && streamProperty(name)) {
+      if (write) return [{ kind: "runtimeFence", code: "SC2020", message: `writing stream property '${name}' through an untyped value is not supported`, loc }];
+      return [{ kind: "return", value: lowerer.coerceToExpected({ kind: "libCall", fn: "stream.prop", args: [receiver, { kind: "strLit", value: name, type: STRING, loc }], type: STREAM_BOOL_PROPERTIES.has(name) ? BOOL : F64, loc }, DYN), loc }];
+    }
     if ((name === "message" || name === "name") && lowerer.isSubclassOf(info.def.name, "%Error")) return write
       ? [errorPropertyWrite(lowerer, receiver, lowerer.coerceToExpected(varRef("p.1", DYN, loc), STRING), name), { kind: "return", value: null, loc }]
       : [{ kind: "return", value: lowerer.coerceToExpected(errorPropertyRead(lowerer, receiver, name), DYN), loc }];
@@ -911,6 +944,14 @@ export class ClassDynamicDispatch {
       const mutable = (t: IrType): boolean => streamTypedRefEligible(t) ||
         (t.kind === "union" && (getUnion(t.unionId)?.arms.some(mutable) ?? false));
       if (boxed.kind === "dynFrom" && mutable(boxed.value.type)) boxed.liveRef = true;
+      if (accessor) {
+        const bag: IrExpr = { kind: "call", callee: this.propertyBag!.name,
+          args: [lowerer.coerceToExpected(receiver, DYN)], type: DYN, loc };
+        const key: IrExpr = { kind: "strLit", value: name, type: STRING, loc };
+        return [{ kind: "if", cond: { kind: "libCall", fn: "dyn.hasOwn", args: [bag, key], type: BOOL, loc },
+          then: [{ kind: "return", value: { kind: "dynKeyGet", value: bag, key, type: DYN, loc }, loc }], else_: null, loc },
+          { kind: "return", value: boxed, loc }];
+      }
       return [{ kind: "return", value: boxed, loc }];
     }
     if (!field && !accessor && isClassOwnEnumerableFieldName(name) && !name.startsWith("sym:") && !findMethodOn(lowerer, info, `get:${name}`)) {
@@ -940,6 +981,25 @@ export class ClassDynamicDispatch {
   private methodBody(lowerer: Lowerer, dispatch: Dispatch, info: ClassInfo, receiver: IrExpr): IrStmt[] {
     const { method, loc } = dispatch.source;
     const fence = (): IrStmt[] => [{ kind: "runtimeFence", code: "SC2020", message: `calling '${method}' on this native class through an untyped value is not supported yet`, loc }];
+    if (info.builtinStream) {
+      const incoming = dispatch.source.args.map((_, i) => varRef(`p.${i + 1}`, DYN, loc));
+      const registering = ["on", "addListener", "once", "prependListener", "prependOnceListener"].includes(method);
+      const removing = method === "off" || method === "removeListener";
+      const ret = (value: IrExpr): IrStmt[] => [{ kind: "return", value: lowerer.coerceToExpected(value, DYN), loc }];
+      if (registering || removing) {
+        if (incoming.length < 2) return fence();
+        const event = lowerer.coerceToExpected(incoming[0]!, STRING);
+        const cb = incoming[1]!;
+        return [{ kind: "exprStmt", expr: { kind: "libCall", fn: "emitter.checkListener", args: [cb], type: VOID, loc }, loc }, ...ret({ kind: "libCall", fn: registering ? "stream.onDyn" : "emitter.offDyn", args: [receiver, event, cb, ...(registering ? [
+          { kind: "boolLit" as const, value: method === "once" || method === "prependOnceListener", type: BOOL, loc },
+          { kind: "boolLit" as const, value: method.startsWith("prepend"), type: BOOL, loc },
+        ] : [])], type: receiver.type, loc })];
+      }
+      if (method === "read") return ret({ kind: "libCall", fn: "readable.readDyn", args: [receiver, incoming[0] ?? dynUndefinedExpr(loc)], type: DYN, loc });
+      if (method === "pause" || method === "resume" || method === "isPaused") return ret({ kind: "libCall", fn: method === "pause" ? "readable.pause" : method === "resume" ? "readable.resume" : "readable.isPaused", args: [receiver], type: method === "isPaused" ? BOOL : receiver.type, loc });
+      if (method === "destroy" && (!incoming.length || incoming[0]?.kind === "unitLit")) return ret({ kind: "libCall", fn: "stream.destroy", args: [receiver], type: receiver.type, loc });
+      return fence();
+    }
     const methodInfo = findMethodOn(lowerer, info, method);
     if (this.asyncFree && (methodInfo?.sig.gen || methodInfo?.sig.async)) {
       return [{ kind: "runtimeFence", code: "SC4005", message: `calling async or generator method '${method}' through an untyped library value is not supported`, loc }];

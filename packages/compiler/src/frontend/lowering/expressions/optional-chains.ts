@@ -2,7 +2,7 @@ import * as ts from "../../ts7/adapter.js";
 import { DYN, JSVAL, STRING, UNDEFINED_T, VOID, isUnitType, typeEquals } from "../../../ir/ir.js";
 import type { IrExpr, IrStmt, SrcLoc } from "../../../ir/ir.js";
 import { isNodeEsmFile, locOf } from "../../program.js";
-import type { Lowerer } from "../lowerer.js";
+import { dynUndefinedExpr, type Lowerer } from "../lowerer.js";
 
 /** One optional-chain STEP: `a?.b`, `a?.m(...)`, `a?.[i]` (the token on
  * the member access) and `f?.()` (the token on the call). The receiver
@@ -87,14 +87,13 @@ export function isRequireMainFilename(lowerer: Lowerer, expr: ts.Expression): bo
 
 /** True when `expr` is the tail of an optional chain that must short-circuit
  * whole: an unhandled deeper `?.` guarded by a unit-armed union or an island
- * value. An island tail needs the guard because an ordinary engine read of
- * the short-circuited undefined would throw. Dyn ('unknown') tails use
- * their optional keyed reads; never-nullish receivers fold at the token. */
+ * value. Dynamic tails need the guard because an ordinary read of the
+ * short-circuited undefined would throw; never-nullish receivers fold at the token. */
 export function isOptionalChainTail(lowerer: Lowerer, expr: ts.Expression): boolean {
   const tail = chainTailDot(lowerer, expr);
   if (!tail) return false;
   const recvT = lowerer.mapTypeOf(lowerer.typeOf(tail.expression));
-  if (recvT?.kind === "jsval") return true;
+  if (recvT?.kind === "jsval" || recvT?.kind === "dyn") return true;
   if (recvT?.kind !== "union") return false;
   const def = lowerer.unions.get(recvT.unionId);
   return !!def && def.arms.some(isUnitType);
@@ -135,7 +134,7 @@ export function lowerOptionalChain(lowerer: Lowerer, expr: ts.CallExpression | t
     recvNode = expr.expression;
   } else if (
     ts.isCallExpression(expr) &&
-    ts.isPropertyAccessExpression(expr.expression) &&
+    (ts.isPropertyAccessExpression(expr.expression) || ts.isElementAccessExpression(expr.expression)) &&
     expr.expression.questionDotToken
   ) {
     dotNode = expr.expression; // a?.m()
@@ -210,17 +209,16 @@ export function lowerOptionalChain(lowerer: Lowerer, expr: ts.CallExpression | t
       return lowerer.maybeNarrow({ kind: "dynKeyGet", key, optional: true, value: receiver, type: DYN, loc }, expr);
     }
     if (dotNode === expr && ts.isElementAccessExpression(expr)) {
-      const key = lowerer.lowerExpr(expr.argumentExpression);
-      if (key.type.kind === "string") {
-        return lowerer.maybeNarrow({ kind: "dynKeyGet", key, optional: true, value: receiver, type: DYN, loc }, expr);
-      }
-      // NUMBER-typed indices (`entries?.[0]`): the property key is
-      // ToString(i), exactly JS — the canonical number text answers
-      // array indices in the dyn helper, anything else (fractions,
-      // negatives, NaN) reads as an absent key.
-      if (key.type.kind === "f64") {
-        const skey: IrExpr = { kind: "toString", operand: key, type: STRING, loc: key.loc };
-        return lowerer.maybeNarrow({ kind: "dynKeyGet", key: skey, optional: true, value: receiver, type: DYN, loc }, expr);
+      const id = `chain.${lowerer.chainCounter++}`;
+      const reference: IrExpr = { kind: "chainRecv", id, type: DYN, loc };
+      lowerer.chainRecvByNode.set(recvNode, reference);
+      lowerer.chainHandled.add(dotNode);
+      try {
+        const body = lowerer.lowerExpr(expr);
+        return { kind: "optChain", id, receiver, body: lowerer.coerceToExpected(body, DYN), type: DYN, loc };
+      } finally {
+        lowerer.chainRecvByNode.delete(recvNode);
+        lowerer.chainHandled.delete(dotNode);
       }
     }
     // The METHOD-call step (`rawName?.match(re)` on a dyn value): a
@@ -264,7 +262,18 @@ export function lowerOptionalChain(lowerer: Lowerer, expr: ts.CallExpression | t
       }
       return { kind: "optChain", id, receiver, body, type: DYN, loc };
     }
-    lowerer.unsupported("SC1100", expr, "optional chaining on 'unknown' values");
+    const id = `chain.${lowerer.chainCounter++}`;
+    const reference: IrExpr = { kind: "chainRecv", id, type: DYN, loc };
+    lowerer.chainRecvByNode.set(recvNode, reference);
+    lowerer.chainHandled.add(dotNode);
+    try {
+      const body = lowerer.lowerExpr(expr);
+      if (body.type.kind === "void") return { kind: "optChain", id, receiver, body, type: VOID, loc };
+      return { kind: "optChain", id, receiver, body: lowerer.coerceToExpected(body, DYN), type: DYN, loc };
+    } finally {
+      lowerer.chainRecvByNode.delete(recvNode);
+      lowerer.chainHandled.delete(dotNode);
+    }
   }
   // An 'any' (island-handle) receiver: the nullish test asks the ENGINE
   // value at runtime — null/undefined short-circuit to the engine's
@@ -341,11 +350,8 @@ export function lowerOptionalChain(lowerer: Lowerer, expr: ts.CallExpression | t
   }
   const rest = def.arms.filter((a) => !isUnitType(a));
   if (rest.length === 0) {
-    lowerer.unsupported(
-      "SC1090",
-      expr,
-      `'?.' on '${lowerer.fmt(receiver.type)}' without a non-nullish receiver`,
-    );
+    const result = dynUndefinedExpr(loc);
+    return { kind: "seqExpr", stmts: [{ kind: "exprStmt", expr: receiver, loc }], result, type: DYN, loc };
   }
   const narrowed = rest.length === 1
     ? rest[0]!

@@ -15,7 +15,7 @@ import { islandPrimitiveExit, lowerDynDispatchMethodCall } from "./lower-calls.j
 import { buildArraySortFn } from "./lower-array-sort.js";
 import { arrayIndexPresent, arrayValueRead, arrayValueStore, arrayValueType, currentArrayIndexPresent } from "./array-values.js";
 import { typeKey } from "../type-mapper.js";
-import { type WidthLift, newFnCtx, nodeThrowExpr } from "./lowerer.js";
+import { type WidthLift, dynUndefinedExpr, newFnCtx, nodeThrowExpr } from "./lowerer.js";
 import { boolLit, countedFor, numLit, strLit, varRef } from "../../ir/build.js";
 import { defaultAfterUndefined, lowerPositionArgument, lowerStaticallyUndefinedArgument, positionNumber } from "./optional-arguments.js";
 import { lowerArrayCopyWithin, lowerArrayFill } from "./array-indexed-mutation.js";
@@ -1854,6 +1854,9 @@ export function lowerTupleReadMethodCall(
   const { fnArg, arity } = hofCallbackArg(lowerer, callback, [elem], receiver.type);
   const ret = fnArg.type.ret;
   if (ret.kind === "void" || ret.kind === "func") lowerer.badType(call, lowerer.typeOf(call));
+  if (method === "flatMap" && (ret.kind === "dyn" || ret.kind === "jsval" || (ret.kind === "record" && lowerer.shapes.get(ret.shapeId)?.tuple))) {
+    return { kind: "dynInvoke", recv: { kind: "dynFrom", value: receiver, type: DYN, loc }, method: "flatMap", calleeName: access.getText(), args: [{ kind: "dynFrom", value: fnArg, type: DYN, loc }], type: DYN, loc };
+  }
   if (method === "flatMap" && ret.kind === "union" && lowerer.unions.get(ret.unionId)!.arms.some(arm => arm.kind === "array")) {
     lowerer.noLowering("tuple .flatMap callback mixing array and scalar results", callback, "return an array from every path");
   }
@@ -2451,6 +2454,9 @@ export function tryLowerNumericIndexRead(lowerer: Lowerer, operand: IrExpr, loc:
     if (!argNode) lowerer.unsupported("SC1090", call, "this call form"); // tsc-guarded
     const { fnArg, arity } = hofCallbackArg(lowerer, argNode, [arrayValueType(lowerer, elem)], arrT);
     const fnRet = fnArg.type.ret;
+    if (fnRet.kind === "dyn" || fnRet.kind === "jsval" || (fnRet.kind === "record" && lowerer.shapes.get(fnRet.shapeId)?.tuple)) {
+      return { kind: "dynInvoke", recv: { kind: "dynFrom", value: receiver, liveRef: true, type: DYN, loc }, method: "flatMap", calleeName: access.getText(), args: [{ kind: "dynFrom", value: fnArg, type: DYN, loc }], type: DYN, loc };
+    }
     if (fnRet.kind === "union") {
       const def = lowerer.unions.get(fnRet.unionId);
       if (def?.arms.some((a) => a.kind === "array")) {
@@ -3113,7 +3119,7 @@ export function lowerArrayOfCall(lowerer: Lowerer, call: ts.CallExpression,
 
 /** Mapper-less checked Array.from: acquire once, then step through emitted
  * property and call dispatch so native class iterators retain their methods. */
-function lowerCheckedArrayFrom(lowerer: Lowerer, source: IrExpr, loc: SrcLoc, mapper?: IrExpr, receiver?: IrExpr): Extract<IrExpr, { kind: "seqExpr" }> {
+export function lowerCheckedArrayFrom(lowerer: Lowerer, source: IrExpr, loc: SrcLoc, mapper?: IrExpr, receiver?: IrExpr, numeric = false): Extract<IrExpr, { kind: "seqExpr" }> {
   const iterator = lowerer.declareHiddenLocal("%fromIterator", DYN);
   const next = lowerer.declareHiddenLocal("%fromNext", DYN);
   const step = lowerer.declareHiddenLocal("%fromStep", DYN);
@@ -3126,7 +3132,8 @@ function lowerCheckedArrayFrom(lowerer: Lowerer, source: IrExpr, loc: SrcLoc, ma
   const item = get(varRef(step.id, DYN, loc), "value");
   const mapped: IrExpr = mapper && index ? { kind: "ternary", cond: { kind: "dynTest", test: "undefined", value: mapper, type: BOOL, loc },
     then: item, else_: { kind: "dynCall", callee: mapper, ...(receiver ? { receiver } : {}), calleeName: "Array.from mapper", args: [item, lowerer.coerceToExpected(varRef(index.id, F64, loc), DYN)], type: DYN, loc }, type: DYN, loc } : item;
-  let append: IrStmt = { kind: "exprStmt", expr: { kind: "dynInvoke", recv: varRef(out.id, DYN, loc), method: "push", calleeName: "Array.from", args: [mapped], type: DYN, loc }, loc };
+  const element = numeric ? lowerer.coerceToExpected({ kind: "libCall", fn: "dyn.toNumberCoerce", args: [mapped], type: F64, loc }, DYN) : mapped;
+  let append: IrStmt = { kind: "exprStmt", expr: { kind: "dynInvoke", recv: varRef(out.id, DYN, loc), method: "push", calleeName: "Array.from", args: [element], type: DYN, loc }, loc };
   if (mapper) {
     const error = lowerer.declareHiddenLocal("%fromError", CAUGHT);
     const close = lowerer.declareHiddenLocal("%fromReturn", DYN);
@@ -3207,6 +3214,25 @@ export function lowerArrayFromValue(lowerer: Lowerer, loc: SrcLoc): IrExpr {
     if (access.name.text !== "from") return null;
     const loc = locOf(call);
     const args = call.arguments;
+    if (isJsSourceFile(call.getSourceFile()) && args.length >= 1 && args.length <= 3 && !args.some(ts.isSpreadElement)) {
+      const name = "%builtin.Array.fromDirect";
+      if (!lowerer.liftedFns.some((fn) => fn.name === name)) {
+        const context = newFnCtx(false, null, null, DYN);
+        lowerer.fnStack.push(context);
+        try {
+          const params = ["source", "mapper", "receiver"].map((name) => {
+            const local = lowerer.declareHiddenLocal(name, DYN);
+            return { localId: local.id, name, type: DYN };
+          });
+          const refs = params.map((param) => varRef(param.localId, DYN, loc));
+          const value = lowerCheckedArrayFrom(lowerer, refs[0]!, loc, refs[1], refs[2]);
+          lowerer.liftedFns.push({ name, params, returnType: DYN, locals: context.locals,
+            body: [...value.stmts, { kind: "return", value: value.result, loc }], loc });
+        } finally { lowerer.fnStack.pop(); }
+      }
+      return { kind: "call", callee: name, args: [0, 1, 2].map((i) => args[i]
+        ? lowerer.lowerExprExpecting(args[i]!, DYN) : dynUndefinedExpr(loc)), type: DYN, loc };
+    }
     // MAPPER-LESS `Array.from({ length: n })` (usually with an explicit
     // type argument — the pMap results-array idiom): a length-n array of
     // ABSENT slots, filled by index before any read. Union elements with
@@ -3534,13 +3560,10 @@ function buildArrayFromArrayFn(lowerer: Lowerer, name: string, elem: IrType,
     }
     if (receiverIr?.kind !== "map") return null;
     // Collection views can refine has() while retaining its native ABI.
-    if (!lowerer.isStdlibMember(access) && name !== "has") return null;
+    if (!probedUntyped && !lowerer.isStdlibMember(access) && name !== "has") return null;
     const loc = locOf(call);
     const value = lowerer.lowerExpr(access.expression);
     const receiver = lowerer.runtimeOptionalPropertyReceiver(access.expression, value, receiverIr, name) ?? value;
-    // The lib's `set` returns the Map (chaining typechecks); the lowered
-    // set is a void statement, so a chained receiver has no value — fence
-    // it instead of emitting a void receiver.
     if (receiver.type.kind !== "map") {
       lowerer.noLowering(
         "chained Map method calls",
@@ -3572,7 +3595,12 @@ function buildArrayFromArrayFn(lowerer: Lowerer, name: string, elem: IrType,
       const v = receiverIr.value.kind === "dyn"
         ? lowerer.lowerCollectionKey(call.arguments[1]!, receiverIr.value)
         : lowerer.lowerExprExpecting(call.arguments[1]!, receiverIr.value);
-      return { kind: "mapIntrinsic", method: "set", receiver, args: [k, v], type: VOID, loc };
+      const slot = lowerer.declareHiddenLocal("%mapSetReceiver", receiver.type);
+      const ref = varRef(slot.id, receiver.type, loc);
+      return { kind: "seqExpr", stmts: [
+        { kind: "varDecl", localId: slot.id, init: receiver, loc },
+        { kind: "exprStmt", expr: { kind: "mapIntrinsic", method: "set", receiver: ref, args: [k, v], type: VOID, loc }, loc },
+      ], result: ref, type: receiver.type, loc };
     }
     if (name === "has" || name === "delete") {
       const k = lowerer.lowerCollectionKey(call.arguments[0]!, receiverIr.key);
@@ -3961,19 +3989,23 @@ export function lowerCollectionSpread(lowerer: Lowerer, source: IrExpr, node: ts
     const name = access.name.text;
     if (!SET_METHODS.has(name) && !SET_COMBINE_METHODS.has(name)) return null;
     let receiverIr = lowerer.mapTypeOf(lowerer.typeOf(access.expression));
+    let probedUntyped = false;
     // The identity-Set idiom (JS): the CHECKER type is an unmappable
     // Set<union-of-signatures>, but the VALUE lowered as a real Set of
     // identity tokens (the new-Set probe) — the lowered receiver's type
     // is the honest dispatch key.
     if (receiverIr?.kind !== "set" && isJsSourceFile(access.getSourceFile())) {
       const probed = tryLowerExpression(lowerer, access.expression);
-      if (probed?.type.kind === "set") receiverIr = probed.type;
+      if (probed?.type.kind === "set") {
+        receiverIr = probed.type;
+        probedUntyped = true;
+      }
     }
     if (receiverIr?.kind !== "set") return null;
     // A collection interface may refine has() into a type predicate.
     // Type mapping checked that view's native ABI; the value check below
     // still rejects structural mocks and assertions over other objects.
-    if (!lowerer.isStdlibMember(access) && name !== "has") return null;
+    if (!probedUntyped && !lowerer.isStdlibMember(access) && name !== "has") return null;
     const loc = locOf(call);
     const value = lowerer.lowerExpr(access.expression);
     const receiver = lowerer.runtimeOptionalPropertyReceiver(access.expression, value, receiverIr, name) ?? value;
@@ -5914,7 +5946,8 @@ function mapFromSeedValue(lowerer: Lowerer, seed: IrExpr, mapT: IrType & { kind:
       }
       return { kind: "call", callee: name, args: [seed], type: mapT, loc };
     }
-    if (seed.type.kind === "dyn" || seed.type.kind === "array" && seed.type.elem.kind === "dyn") {
+    if (seed.type.kind === "dyn" || seed.type.kind === "array" &&
+        (seed.type.elem.kind === "dyn" || seed.type.elem.kind === "array")) {
       const key = `checked-seed:${typeKey(mapT)}`;
       let name = lowerer.mapHofHelpers.get(key);
       if (!name) {

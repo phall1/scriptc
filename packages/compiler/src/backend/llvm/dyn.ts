@@ -71,6 +71,7 @@ export const DYN_KIND = {
 export interface DynHost extends WalkerHost {
   unitInstanceRef(unionId: string, tag: number): string;
   liveDynRefAdapter(t: IrType): { snapshot: string; commit: string };
+  dynPromiseAdapter(t: IrType): string;
   isErrorClass(className: string): boolean;
   classSubtypes(className: string): readonly string[];
 }
@@ -439,10 +440,12 @@ export class LlDyn {
         B.terminate(`ret i1 ${r}`);
         break;
       }
-      case "url": {
-        this.host.declare(`declare zeroext i1 @scr_dyn_native_url_is(ptr)`);
+      case "url":
+      case "searchParams": {
+        const native = t.kind === "url" ? "url" : "search_params";
+        this.host.declare(`declare zeroext i1 @scr_dyn_native_${native}_is(ptr)`);
         const r = B.tmp();
-        B.line(`${r} = call zeroext i1 @scr_dyn_native_url_is(ptr %d)`);
+        B.line(`${r} = call zeroext i1 @scr_dyn_native_${native}_is(ptr %d)`);
         B.terminate(`ret i1 ${r}`);
         break;
       }
@@ -753,7 +756,7 @@ export class LlDyn {
       if (t.kind !== "union") {
         host.declare(`declare ptr @scr_dyn_typed_ref_materialize(ptr)`);
         host.declare(`declare ptr @scr_dyn_typed_ref_cached_cast(ptr, ptr, ${host.sizeType})`);
-        host.declare(`declare void @scr_dyn_typed_ref_cache_cast(ptr, ptr, ${host.sizeType}, ptr, ptr, ptr)`);
+        host.declare(`declare void @scr_dyn_typed_ref_cache_cast(ptr, ptr, ${host.sizeType}, ptr, ptr, ptr, i1)`);
         host.declare(`declare void @scr_dyn_release_v(ptr)`);
         const rc = vAdapters(host, t);
         const kind = this.kindOf(B, "%d");
@@ -853,14 +856,14 @@ export class LlDyn {
           B.line(`call void ${releaseSym(host, t)}(ptr ${checked})`);
           B.terminate(`ret ptr ${cached}`);
           B.startBlock(lCache);
-          B.line(`call void @scr_dyn_typed_ref_cache_cast(ptr %d, ptr ${host.cstr(key)}, ${host.sizeType} ${Buffer.byteLength(key, "utf8")}, ptr ${checked}, ptr ${rc.retain}, ptr ${rc.release})`);
+          B.line(`call void @scr_dyn_typed_ref_cache_cast(ptr %d, ptr ${host.cstr(key)}, ${host.sizeType} ${Buffer.byteLength(key, "utf8")}, ptr ${checked}, ptr ${rc.retain}, ptr ${rc.release}, i1 ${traceAdapter(host, t) !== null ? "true" : "false"})`);
           B.terminate(`ret ptr ${checked}`);
         } else {
           const lCache = B.newLabel("dc.tr.put");
           const lReturn = B.newLabel("dc.tr.ret");
           B.condBr(ok, lCache, lReturn);
           B.startBlock(lCache);
-          B.line(`call void @scr_dyn_typed_ref_cache_cast(ptr %d, ptr ${host.cstr(key)}, ${host.sizeType} ${Buffer.byteLength(key, "utf8")}, ptr ${checked}, ptr ${rc.retain}, ptr ${rc.release})`);
+          B.line(`call void @scr_dyn_typed_ref_cache_cast(ptr %d, ptr ${host.cstr(key)}, ${host.sizeType} ${Buffer.byteLength(key, "utf8")}, ptr ${checked}, ptr ${rc.retain}, ptr ${rc.release}, i1 ${traceAdapter(host, t) !== null ? "true" : "false"})`);
           B.br(lReturn);
           B.startBlock(lReturn);
           B.terminate(`ret ptr ${checked}`);
@@ -889,10 +892,12 @@ export class LlDyn {
         B.terminate(`ret double ${r}`);
         break;
       }
-      case "url": {
-        host.declare(`declare ptr @scr_dyn_native_url_check(ptr, ptr)`);
+      case "url":
+      case "searchParams": {
+        const native = t.kind === "url" ? "url" : "search_params";
+        host.declare(`declare ptr @scr_dyn_native_${native}_check(ptr, ptr)`);
         const r = B.tmp();
-        B.line(`${r} = call ptr @scr_dyn_native_url_check(ptr %d, ptr %path)`);
+        B.line(`${r} = call ptr @scr_dyn_native_${native}_check(ptr %d, ptr %path)`);
         B.terminate(`ret ptr ${r}`);
         break;
       }
@@ -984,6 +989,16 @@ export class LlDyn {
         requireKind(DYN_KIND.PROMISE, "dc");
         host.declare(`declare ptr @scr_promise_retain(ptr)`);
         const promise = this.payloadOf(B, "%d", "ptr"), retained = B.tmp();
+        if (t.inner.kind !== "dyn") {
+          host.declare(`declare ptr @scr_promise_new()`);
+          host.declare(`declare void @scr_promise_race_add(ptr, ptr, ptr)`);
+          B.line(`${retained} = call ptr @scr_promise_new()`);
+          host.declare(`declare void @scr_promise_share_identity(ptr, ptr)`);
+          B.line(`call void @scr_promise_share_identity(ptr ${retained}, ptr ${promise})`);
+          B.line(`call void @scr_promise_race_add(ptr ${retained}, ptr ${promise}, ptr @${host.dynPromiseAdapter(t.inner)})`);
+          B.terminate(`ret ptr ${retained}`);
+          break;
+        }
         B.line(`${retained} = call ptr @scr_promise_retain(ptr ${promise})`);
         B.terminate(`ret ptr ${retained}`);
         break;
@@ -1288,7 +1303,7 @@ export class LlDyn {
         // live narrowed alias).
         host.declare(`declare ptr @scr_dyn_typed_ref_materialize(ptr)`);
         host.declare(`declare ptr @scr_dyn_typed_ref_cached_cast(ptr, ptr, ${host.sizeType})`);
-        host.declare(`declare void @scr_dyn_typed_ref_cache_cast(ptr, ptr, ${host.sizeType}, ptr, ptr, ptr)`);
+        host.declare(`declare void @scr_dyn_typed_ref_cache_cast(ptr, ptr, ${host.sizeType}, ptr, ptr, ptr, i1)`);
         host.declare(`declare void @scr_dyn_release_v(ptr)`);
         host.declare(`declare void @scr_union_release(ptr)`);
         const rc = vAdapters(host, t);
@@ -1349,7 +1364,7 @@ export class LlDyn {
         B.line(`call void @scr_union_release(ptr ${checked})`);
         B.terminate(`ret ptr ${cached}`);
         B.startBlock(lCache);
-        B.line(`call void @scr_dyn_typed_ref_cache_cast(ptr %d, ptr ${host.cstr(key)}, ${host.sizeType} ${Buffer.byteLength(key, "utf8")}, ptr ${checked}, ptr ${rc.retain}, ptr ${rc.release})`);
+        B.line(`call void @scr_dyn_typed_ref_cache_cast(ptr %d, ptr ${host.cstr(key)}, ${host.sizeType} ${Buffer.byteLength(key, "utf8")}, ptr ${checked}, ptr ${rc.retain}, ptr ${rc.release}, i1 ${traceAdapter(host, t) !== null ? "true" : "false"})`);
         B.terminate(`ret ptr ${checked}`);
         B.startBlock(lFail);
         B.line(`call void @scr_dyn_check_fail(ptr %path, ptr ${want}, ptr %d)`);
@@ -1451,10 +1466,12 @@ export class LlDyn {
     const B = new BlockBuilder();
     let sourceAccessor: { name: string; release: string } | null = null;
     switch (t.kind) {
-      case "url": {
-        host.declare(`declare ptr @scr_dyn_native_url(ptr)`);
+      case "url":
+      case "searchParams": {
+        const native = t.kind === "url" ? "url" : "search_params";
+        host.declare(`declare ptr @scr_dyn_native_${native}(ptr)`);
         const r = B.tmp();
-        B.line(`${r} = call ptr @scr_dyn_native_url(ptr %v)`);
+        B.line(`${r} = call ptr @scr_dyn_native_${native}(ptr %v)`);
         B.terminate(`ret ptr ${r}`);
         break;
       }
@@ -1781,6 +1798,8 @@ export class LlDyn {
           B.terminate(`br label %${doneLabel}`);
           B.startBlock(doneLabel);
         });
+        host.declare(`declare void @scr_arr_copy_metadata(ptr, ptr)`);
+        B.line(`call void @scr_arr_copy_metadata(ptr %v, ptr ${d})`);
         if (cyclicArr) B.line(`call void @scr_dyn_from_leave()`);
         host.declare(`declare ptr @scr_dyn_mark_snapshot(ptr)`);
         B.line(`call ptr @scr_dyn_mark_snapshot(ptr ${d})`);

@@ -11,7 +11,7 @@ import { FN_ATTRS, llFieldType, releaseSym, traceArg, vAdapters } from "./shapes
 import type { LlvmEmitterContext, LlStreamTypedRefAdapter } from "./expr-context.js";
 
 export function dynPromiseAdapter(host: LlvmEmitterContext, inner: IrType): string {
-    if (!isRefCounted(inner) || inner.kind === "dyn") {
+    if (inner.kind === "dyn") {
       throw new InternalCompilerError(
         `dynamic promise adapter requires a concrete reference type, got ${typeKey(inner)}`,
       );
@@ -31,7 +31,7 @@ export function dynPromiseAdapter(host: LlvmEmitterContext, inner: IrType): stri
     const pending = B.tmp();
     B.line(`${dyn} = call ptr @scr_promise_payload_ref(ptr %src)`);
     B.line(
-      `${value} = call ptr @${host.dyn.dynCheckHelper(inner)}(ptr ${dyn}, ptr null)`,
+      inner.kind === "void" ? `; void fulfillment ignores the checked payload` : `${value} = call ${host.llType(inner)} @${host.dyn.dynCheckHelper(inner)}(ptr ${dyn}, ptr null)`,
     );
     B.line(`call void @scr_dyn_release_v(ptr ${dyn})`);
     B.line(`${pending} = call zeroext i1 @scr_exc_pending()`);
@@ -42,7 +42,14 @@ export function dynPromiseAdapter(host: LlvmEmitterContext, inner: IrType): stri
     B.line(`call void @scr_promise_reject_pending(ptr %dst)`);
     B.terminate(`ret void`);
     B.startBlock(ok);
-    if (inner.kind === "string") {
+    if (inner.kind === "void") {
+      host.declare(`declare void @scr_promise_fulfill_void(ptr)`);
+      B.line(`call void @scr_promise_fulfill_void(ptr %dst)`);
+    } else if (inner.kind === "f64" || inner.kind === "date" || inner.kind === "bool") {
+      const fn = inner.kind !== "bool" ? "scr_promise_fulfill_f64" : "scr_promise_fulfill_bool";
+      host.declare(`declare void @${fn}(ptr, ${host.llType(inner)}${inner.kind === "bool" ? " zeroext" : ""})`);
+      B.line(`call void @${fn}(ptr %dst, ${host.llType(inner)}${inner.kind === "bool" ? " zeroext" : ""} ${value})`);
+    } else if (inner.kind === "string") {
       host.declare(`declare void @scr_promise_fulfill_str(ptr, ptr)`);
       B.line(`call void @scr_promise_fulfill_str(ptr %dst, ptr ${value})`);
     } else {
@@ -111,6 +118,7 @@ export function streamTypedRefCommitAdapter(host: LlvmEmitterContext,
         { name: "props", index: 12, type: "ptr" },
         { name: "prop_len", index: 13, type: host.sizeType },
         { name: "prop_cap", index: 14, type: host.sizeType },
+        { name: "metadata", index: 15, type: "ptr" },
       ];
       for (const member of storageMembers) {
         lines.push(
@@ -460,7 +468,7 @@ export function streamTypedRefBoxValue(host: LlvmEmitterContext,
       B.line(`${boxed} = call ptr @${host.liveDynUnionRefAdapter(t)}(ptr ${value})`);
       return boxed;
     }
-    if (!streamTypedRefEligible(t) && !isDynTypedRefType(t)) {
+    if (t.kind === "bytes" || !streamTypedRefEligible(t) && !isDynTypedRefType(t)) {
       const valueTy = t.kind === "f64"
         ? "double"
         : t.kind === "bool"
@@ -512,6 +520,22 @@ export function streamTypedRefMaterializeAdapter(host: LlvmEmitterContext,
         throw new InternalCompilerError(
           `llvm emitter bug: typed-ref materialize of unknown class ${t.className}`,
         );
+      }
+      if (meta.hierarchy && meta.children.length) {
+        const vtSlot = B.tmp(), vt = B.tmp(), preSlot = B.tmp(), pre = B.tmp();
+        B.line(`${vtSlot} = getelementptr inbounds %${classStructSym(t.className)}, ptr %p, i64 0, i32 1`);
+        B.line(`${vt} = load ptr, ptr ${vtSlot}`);
+        B.line(`${preSlot} = getelementptr inbounds %ScrVt, ptr ${vt}, i64 0, i32 0`);
+        B.line(`${pre} = load ${host.sizeType}, ptr ${preSlot}`);
+        const descendants = (current: typeof meta): (typeof meta)[] => current.children.flatMap((child) => [child, ...descendants(child)]);
+        for (const child of descendants(meta).reverse()) {
+          const childAdapter = host.liveDynRefAdapter({ kind: "object", className: child.def.name });
+          const exact = B.tmp(), yes = B.newLabel("class.derived"), next = B.newLabel("class.next");
+          B.line(`${exact} = icmp eq ${host.sizeType} ${pre}, ${child.pre}`);
+          B.condBr(exact, yes, next); B.startBlock(yes);
+          const result = B.tmp(); B.line(`${result} = call ptr @${childAdapter.snapshot}(ptr %p)`);
+          B.terminate(`ret ptr ${result}`); B.startBlock(next);
+        }
       }
       host.declare(`declare ptr @scr_dyn_new_obj()`);
       host.declare(`declare void @scr_dyn_obj_set(ptr, ptr, ${host.sizeType}, ptr)`);
@@ -717,6 +741,8 @@ export function streamTypedRefMaterializeAdapter(host: LlvmEmitterContext,
         B.br(doneLabel);
         B.startBlock(doneLabel);
       });
+      host.declare(`declare void @scr_arr_copy_metadata(ptr, ptr)`);
+      B.line(`call void @scr_arr_copy_metadata(ptr %p, ptr ${out})`);
       B.terminate(`ret ptr ${out}`);
     } else {
       const out = B.tmp();

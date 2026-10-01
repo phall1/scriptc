@@ -86,7 +86,7 @@ function stableTestMemo<T>(
   return pending;
 }
 
-export const EXECUTABLE_RUNTIME_SOURCES = ["scr_number.c", "scr_bigint.c", "scr_string.c", "scr_grapheme.c", "scr_array.c", "scr_bytes.c", "scr_bytes_io.c", "scr_map.c", "scr_closure.c", "scr_ffi.c", "scr_object.c", "scr_union.c", "scr_exception.c", "scr_error.c", "scr_console.c", "scr_lib.c", "scr_path.c", "scr_url.c", "scr_json.c", "scr_node_builtin.c", "scr_async.c", "scr_crypto_async.c", "scr_child.c", "scr_cycle.c"] as const;
+export const EXECUTABLE_RUNTIME_SOURCES = ["scr_number.c", "scr_bigint.c", "scr_string.c", "scr_grapheme.c", "scr_array.c", "scr_bytes.c", "scr_bytes_io.c", "scr_map.c", "scr_closure.c", "scr_ffi.c", "scr_object.c", "scr_union.c", "scr_exception.c", "scr_error.c", "scr_console.c", "scr_lib.c", "scr_path.c", "scr_url.c", "scr_url_params.c", "scr_json.c", "scr_node_builtin.c", "scr_async.c", "scr_crypto_async.c", "scr_child.c", "scr_cycle.c"] as const;
 
 /**
  * Per-target section-elimination recipe. This belongs beside the native
@@ -311,11 +311,8 @@ export interface CcOptions {
    * Symbol-free binaries keep their exact link line. */
   symbol?: boolean;
   bigint?: boolean;
-  /** The program uses the URLSearchParams surface (moduleUsesSearchParams
-   * on the IR): compiles scr_url_params.c into the binary — the symbol
-   * gating precedent: pure data structure (no loop hooks, no install),
-   * cross-compiles everywhere. sp-free binaries keep their exact link
-   * line (scr_url.c never references the unit). */
+  /** Records URLSearchParams use in the build identity. Its runtime unit is
+   * part of the base sources because checked URL handles expose searchParams. */
   searchParams?: boolean;
   /** The program uses the node:querystring surface (moduleUsesQs on the
    * IR): compiles scr_qs.c into the binary — the searchParams gating
@@ -992,7 +989,6 @@ export async function compileLibArchive(opts: LibArchiveOptions): Promise<void> 
     ...(opts.inspect ? ["scr_inspect.c", "scr_console_native.c"] : []),
     ...(opts.symbol ? ["scr_symbol.c"] : []),
     ...(opts.assert && opts.bigint ? ["scr_bigint_assert.c"] : []),
-    ...(opts.searchParams ? ["scr_url_params.c"] : []),
     ...(opts.emitter ? ["scr_events_emitter.c", "scr_dyn_handle.c"] : []),
     ...(opts.dynInvoke ? ["scr_dyn_invoke.c"] : []),
     ...(opts.zlib ? ["scr_zlib.c"] : []),
@@ -4310,7 +4306,6 @@ async function compileCInternal(
     ...(opts.emitter || net ? [rt(join(rtDir, "scr_dyn_handle.c"))] : []),
     ...(opts.symbol ? [rt(join(rtDir, "scr_symbol.c"))] : []),
     ...(opts.assert && opts.bigint ? [rt(join(rtDir, "scr_bigint_assert.c"))] : []),
-    ...(opts.searchParams ? [rt(join(rtDir, "scr_url_params.c"))] : []),
     ...(opts.qs ? [rt(join(rtDir, "scr_qs.c"))] : []),
     ...(opts.parseArgs ? [rt(join(rtDir, "scr_util.c"))] : []),
     ...(opts.stream ? [rt(join(rtDir, "scr_stream.c"))] : []),

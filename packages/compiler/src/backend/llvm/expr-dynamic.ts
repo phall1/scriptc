@@ -157,6 +157,11 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
         // BORROWED by scr_dyn_invoke; the result is owned and may ride a
         // pending exception.
         const recv = host.emitExpr(e.recv);
+        host.declare(`declare ptr @scr_dyn_prepare_method(ptr, ptr)`);
+        const prepared = B.tmp();
+        B.line(`${prepared} = call ptr @scr_dyn_prepare_method(ptr ${recv.name}, ptr ${host.cstr(e.method)})`);
+        host.own({ name: prepared, type: { kind: "dyn" } });
+        host.emitPendingCheck();
         const args = e.args.map((a) => host.emitExpr(a));
         let argsPtr = "null";
         if (args.length > 0) {
@@ -169,10 +174,10 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
           });
           argsPtr = arr;
         }
-        host.declare(`declare ptr @scr_dyn_invoke(ptr, ptr, ptr, ${host.sizeType}, ptr)`);
+        host.declare(`declare ptr @scr_dyn_invoke_prepared(ptr, ptr, ptr, ptr, ${host.sizeType}, ptr)`);
         const t = B.tmp();
         B.line(
-          `${t} = call ptr @scr_dyn_invoke(ptr ${recv.name}, ptr ${host.cstr(e.method)}, ptr ${argsPtr}, ${host.sizeType} ${args.length}, ptr ${host.cstr(e.calleeName)})`,
+          `${t} = call ptr @scr_dyn_invoke_prepared(ptr ${recv.name}, ptr ${prepared}, ptr ${host.cstr(e.method)}, ptr ${argsPtr}, ${host.sizeType} ${args.length}, ptr ${host.cstr(e.calleeName)})`,
         );
         const out = host.own({ name: t, type: e.type });
         host.emitPendingCheck();
@@ -490,9 +495,9 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
         const d = host.emitExpr(e.value);
         let test: string;
         if (e.test === "bytes") {
-          host.declare(`declare zeroext i1 @scr_dyn_bytes_is(ptr, i32)`);
+          host.declare(`declare zeroext i1 @scr_dyn_typed_array_is(ptr, i32)`);
           test = B.tmp();
-          B.line(`${test} = call zeroext i1 @scr_dyn_bytes_is(ptr ${d.name}, i32 ${BYTES_ELEM_NUM[e.bytesElem ?? "u8"]})`);
+          B.line(`${test} = call zeroext i1 @scr_dyn_typed_array_is(ptr ${d.name}, i32 ${BYTES_ELEM_NUM[e.bytesElem ?? "u8"]})`);
         } else if (e.test === "truthy") {
           host.declare(`declare zeroext i1 @scr_dyn_truthy(ptr)`);
           test = B.tmp();

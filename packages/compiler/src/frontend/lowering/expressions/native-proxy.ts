@@ -34,8 +34,9 @@ export function lowerNativeProxy(lowerer: Lowerer, expr: ts.NewExpression): IrEx
     }
   }
   const inputs = args.map((arg) => {
-    const value = ts.isObjectLiteralExpression(arg)
+    let value = ts.isObjectLiteralExpression(arg)
       ? lowerer.lowerExprExpecting(arg, DYN) : lowerer.lowerExpr(arg);
+    if (value.type.kind !== "dyn" && lowerer.dynConvertible(value.type)) value = lowerer.coerceToExpected(value, DYN);
     if (value.type.kind !== "dyn") {
       lowerer.unsupported("SC1090", arg, "Proxy targets and handlers outside checked-native object storage");
     }

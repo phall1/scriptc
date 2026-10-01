@@ -1,7 +1,6 @@
-// @deferred-fences: 1
 // Unsupported JS statements remain deferred behind untaken branches.
 // Both bigint and number table arms now have native checked storage;
-// the absent-global Proxy expression remains the deferred fence.
+// the Proxy expression also has native checked storage.
 'use strict';
 
 function platformScale(ms) {

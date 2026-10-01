@@ -99,6 +99,22 @@ async function buildStatic(entry: string, npmStatic: string[] | "auto"): Promise
 }
 
 describe(`npm-static pilots${sanitize ? " (sanitized)" : ""}`, () => {
+  test.each([
+    ["effect4-shape-string-constructor.ts", "effect4-shapes"],
+    ["effect4-shape-prototype-factory.ts", "effect4-shapes"],
+    ["effect4-shape-semantics.ts", "effect4-shapes"],
+    ["effect4-shape-match-metadata.ts", "effect4-shapes"],
+    ["selectivebarrel-cli.ts", "selectivebarrel"],
+  ])("%s preserves native object layout and module initialization", async (name, pkg) => {
+    const entry = join(pilotRoot, name);
+    const reference = await runBinary(process.execPath, [entry]);
+    const binary = await buildStatic(entry, [pkg]);
+    const actual = await runBinary(binary, []);
+    actual.stderr = comparableStderr(actual.stderr);
+    expect(actual).toEqual(reference);
+    expect(actual.exitCode).toBe(0);
+  });
+
   test("conditional exports keep distinct import and require behavior", async () => {
     const dir = mkdtempSync("/tmp/scriptc-conditional-exports-");
     try {

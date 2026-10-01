@@ -120,11 +120,12 @@ test("JavaScript builtin aliases keep their deferred value fence", async () => {
   );
 });
 
-test("any-typed checked-dynamic locals honor the --dynamic coverage promise", () => {
+test("any-typed checked-dynamic operators compile in both tiers", () => {
   const file = join(repoRoot, "tests/corpus/2856-dynamic-any-local-operators.ts");
   const staticCoverage = analyze(file).coverage;
-  expect(staticCoverage.diagnostics.length).toBeGreaterThan(0);
-  expect(new Set(staticCoverage.diagnostics.map((d) => d.code))).toEqual(new Set(["SC2011"]));
+  expect(staticCoverage.diagnostics).toEqual([]);
+  expect(staticCoverage.stats.statementsFailed).toBe(0);
+  expect(staticCoverage.stats.statementsIsland).toBe(0);
 
   const dynamicCoverage = analyze(file, { dynamic: true }).coverage;
   expect(dynamicCoverage.diagnostics).toEqual([]);

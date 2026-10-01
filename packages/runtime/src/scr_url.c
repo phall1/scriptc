@@ -1167,9 +1167,10 @@ ScrStr *scr_url_hash(ScrUrl *u) {
 /* Checked native URL values preserve their handle across unknown storage. */
 static ScrDyn *scr_native_url_get(void *ptr, const char *key, size_t len) {
   if (len == 12 && !memcmp(key, "searchParams", len)) {
-    static const char message[] = "Checked URL.searchParams has no native lowering";
-    scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
-    return NULL;
+    ScrSearchParams *params = scr_url_search_params(ptr);
+    ScrDyn *result = scr_dyn_native_search_params(params);
+    scr_sp_release(params);
+    return result;
   }
   ScrStr *text = NULL;
 #define URL_GET(name) if (len == sizeof(#name) - 1 && memcmp(key, #name, len) == 0) text = scr_url_##name(ptr)
@@ -1221,6 +1222,174 @@ bool scr_dyn_native_url_is(const ScrDyn *value) {
 ScrUrl *scr_dyn_native_url_check(const ScrDyn *value, const ScrDynPath *path) {
   if (!scr_dyn_native_url_is(value)) { scr_dyn_check_fail(path, "URL", value); return NULL; }
   return scr_url_retain(value->v.handle.ptr);
+}
+
+static ScrDyn *scr_native_sp_get(void *ptr, const char *key, size_t len) {
+  if (len == 4 && !memcmp(key, "size", len)) return scr_dyn_new_num(scr_sp_size(ptr));
+  return scr_dyn_retain(scr_dyn_undefined());
+}
+
+static ScrDyn *scr_native_sp_step(void *ptr, double *index, unsigned selection) {
+  bool done = *index >= scr_sp_size(ptr);
+  ScrDyn *value = scr_dyn_retain(scr_dyn_undefined());
+  if (!done) {
+    scr_dyn_release(value);
+    ScrStr *key = scr_sp_key_at(ptr, *index), *text = scr_sp_val_at(ptr, *index);
+    (*index)++;
+    if (selection == 2) {
+      value = scr_dyn_new_arr();
+      scr_dyn_arr_push(value, scr_dyn_new_str(key));
+      scr_dyn_arr_push(value, scr_dyn_new_str(text));
+    } else value = scr_dyn_new_str(selection == 1 ? key : text);
+    scr_str_release(key); scr_str_release(text);
+  }
+  ScrDyn *result = scr_dyn_new_obj();
+  scr_dyn_obj_set(result, "done", 4, scr_dyn_new_bool(done));
+  scr_dyn_obj_set(result, "value", 5, value);
+  return result;
+}
+
+static ScrDyn *scr_native_sp_invoke(void *ptr, ScrDyn *self, const char *method,
+    ScrDyn *const *args, size_t argc, const char *what) {
+  if (!strcmp(method, "entries") || !strcmp(method, "keys") || !strcmp(method, "values"))
+    return scr_dyn_native_handle_iterator(self, !strcmp(method, "entries") ? 2 : !strcmp(method, "keys") ? 1 : 0);
+  if (!strcmp(method, "toString")) {
+    ScrStr *text = scr_sp_to_string(ptr);
+    ScrDyn *result = scr_dyn_new_str(text);
+    scr_str_release(text);
+    return result;
+  }
+  if (!strcmp(method, "sort")) { scr_sp_sort(ptr); return scr_dyn_retain(scr_dyn_undefined()); }
+  if (!strcmp(method, "forEach")) {
+    if (!argc) { scr_dyn_arg_type_fail("callback", "of type function", scr_dyn_undefined()); return NULL; }
+    for (double i = 0; i < scr_sp_size(ptr); i++) {
+      ScrStr *key = scr_sp_key_at(ptr, i), *value = scr_sp_val_at(ptr, i);
+      ScrDyn *argv[] = {scr_dyn_new_str(value), scr_dyn_new_str(key), self};
+      scr_str_release(key); scr_str_release(value);
+      scr_dyn_this_push_dyn(argc > 1 ? args[1] : NULL);
+      ScrDyn *called = scr_dyn_call(args[0], argv, 3, "callback");
+      scr_dyn_this_pop();
+      scr_dyn_release(called); scr_dyn_release(argv[0]); scr_dyn_release(argv[1]);
+      if (scr_exc_pending()) return NULL;
+    }
+    return scr_dyn_retain(scr_dyn_undefined());
+  }
+  bool two = !strcmp(method, "append") || !strcmp(method, "set");
+  bool one = !strcmp(method, "get") || !strcmp(method, "getAll") || !strcmp(method, "has") || !strcmp(method, "delete");
+  if (!one && !two) {
+    scr_dyn_arg_type_fail(what, "of type function", scr_dyn_undefined());
+    return NULL;
+  }
+  if (argc < (two ? 2 : 1)) {
+    static const char message[] = "Not enough arguments";
+    scr_throw_error_msg_code(SCR_ERR_TYPE, message, sizeof message - 1, "ERR_MISSING_ARGS");
+    return NULL;
+  }
+  ScrStr *key = scr_dyn_string_coerce_js(args[0]);
+  if (scr_exc_pending()) return NULL;
+  ScrStr *value = NULL;
+  if (two || argc > 1 && args[1]->kind != SCR_DYN_UNDEF) value = scr_dyn_string_coerce_js(args[1]);
+  if (scr_exc_pending()) { scr_str_release(key); return NULL; }
+  ScrDyn *result = NULL;
+  if (!strcmp(method, "get")) {
+    ScrStr *found = scr_sp_get(ptr, key);
+    result = found ? scr_dyn_new_str(found) : scr_dyn_new_null();
+    scr_str_release(found);
+  } else if (!strcmp(method, "getAll")) {
+    ScrArr *found = scr_sp_get_all(ptr, key);
+    result = scr_dyn_new_arr();
+    for (size_t i = 0; i < found->len; i++) {
+      ScrStr *text = scr_arr_get_ref(found, i);
+      scr_dyn_arr_push(result, scr_dyn_new_str(text));
+      scr_str_release(text);
+    }
+    scr_arr_release(found);
+  } else if (!strcmp(method, "has")) result = scr_dyn_new_bool(value ? scr_sp_has_value(ptr, key, value) : scr_sp_has(ptr, key));
+  else {
+    if (!strcmp(method, "append")) scr_sp_append(ptr, key, value);
+    else if (!strcmp(method, "set")) scr_sp_set(ptr, key, value);
+    else if (value) scr_sp_delete_value(ptr, key, value);
+    else scr_sp_delete(ptr, key);
+    result = scr_dyn_retain(scr_dyn_undefined());
+  }
+  scr_str_release(key); scr_str_release(value);
+  return result;
+}
+
+ScrDyn *scr_dyn_native_search_params(ScrSearchParams *value) {
+  static const ScrDynHandleOps ops = {
+    "URLSearchParams", &scr_sp_retain_v, &scr_sp_release_v, &scr_native_sp_invoke,
+    &scr_native_sp_get, NULL, NULL, NULL, &scr_native_sp_step,
+  };
+  scr_dyn_handle_install(SCR_DYNH_SEARCH_PARAMS, &ops);
+  return scr_dyn_new_handle(value, SCR_DYNH_SEARCH_PARAMS);
+}
+
+bool scr_dyn_native_search_params_is(const ScrDyn *value) {
+  return value && value->kind == SCR_DYN_HANDLE && value->v.handle.tag == SCR_DYNH_SEARCH_PARAMS;
+}
+
+ScrSearchParams *scr_dyn_native_search_params_check(const ScrDyn *value, const ScrDynPath *path) {
+  if (!scr_dyn_native_search_params_is(value)) { scr_dyn_check_fail(path, "URLSearchParams", value); return NULL; }
+  return scr_sp_retain(value->v.handle.ptr);
+}
+
+ScrSearchParams *scr_sp_new_checked(const ScrDyn *value) {
+  if (!value || value->kind == SCR_DYN_UNDEF || value->kind == SCR_DYN_NULL) return scr_sp_new();
+  if (scr_dyn_native_search_params_is(value)) return scr_sp_copy(value->v.handle.ptr);
+  if (value->kind == SCR_DYN_OBJ || value->kind == SCR_DYN_ARR || value->kind == SCR_DYN_TYPED_REF) {
+    ScrDyn *iterator = scr_dyn_iterator_optional(value);
+    if (scr_exc_pending()) return NULL;
+    ScrSearchParams *result = scr_sp_new();
+    if (iterator) {
+      for (;;) {
+        ScrStr *next_key = scr_str_new("next", 4);
+        ScrDyn *next = iterator->kind == SCR_DYN_HANDLE ? scr_dyn_handle_key_get(iterator, next_key) : scr_dyn_obj_read(iterator, "next", 4);
+        scr_str_release(next_key);
+        scr_dyn_this_push_dyn(iterator);
+        ScrDyn *step = scr_exc_pending() ? NULL : scr_dyn_call(next, NULL, 0, "iterator.next");
+        scr_dyn_this_pop();
+        scr_dyn_release(next);
+        if (scr_exc_pending()) break;
+        ScrDyn *done = scr_dyn_obj_read(step, "done", 4);
+        bool end = scr_dyn_truthy(done);
+        scr_dyn_release(done);
+        if (end) { scr_dyn_release(step); scr_dyn_release(iterator); return result; }
+        ScrDyn *row = scr_dyn_obj_read(step, "value", 5);
+        ScrDyn *pair = scr_dyn_iter_pack(row, NULL);
+        scr_dyn_release(row); scr_dyn_release(step);
+        if (scr_exc_pending()) { scr_dyn_release(pair); break; }
+        if (!pair || pair->kind != SCR_DYN_ARR || pair->v.arr.len != 2) {
+          static const char message[] = "Each query pair must be an iterable [name, value] tuple";
+          scr_throw_error_msg_code(SCR_ERR_TYPE, message, sizeof message - 1, "ERR_INVALID_TUPLE");
+          scr_dyn_release(pair); break;
+        }
+        ScrStr *key = scr_dyn_string_coerce_js(pair->v.arr.items[0]);
+        ScrStr *text = scr_exc_pending() ? NULL : scr_dyn_string_coerce_js(pair->v.arr.items[1]);
+        if (!scr_exc_pending()) scr_sp_append(result, key, text);
+        scr_str_release(key); scr_str_release(text); scr_dyn_release(pair);
+        if (scr_exc_pending()) break;
+      }
+      scr_dyn_release(iterator); scr_sp_release(result); return NULL;
+    }
+    ScrDyn *keys = scr_dyn_obj_keys(value);
+    if (scr_exc_pending()) { scr_sp_release(result); return NULL; }
+    for (size_t i = 0; i < keys->v.arr.len; i++) {
+      ScrStr *key = keys->v.arr.items[i]->v.str;
+      ScrDyn *entry = scr_dyn_obj_read(value, key->data, key->len);
+      ScrStr *text = scr_exc_pending() ? NULL : scr_dyn_string_coerce_js(entry);
+      scr_dyn_release(entry);
+      if (!scr_exc_pending()) scr_sp_append(result, key, text);
+      scr_str_release(text);
+      if (scr_exc_pending()) { scr_dyn_release(keys); scr_sp_release(result); return NULL; }
+    }
+    scr_dyn_release(keys); return result;
+  }
+  ScrStr *text = scr_dyn_string_coerce_js(value);
+  if (scr_exc_pending()) return NULL;
+  ScrSearchParams *result = scr_sp_parse(text);
+  scr_str_release(text);
+  return result;
 }
 
 ScrStr *scr_url_checked_to_path(const ScrDyn *value) {

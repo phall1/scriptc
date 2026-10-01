@@ -1002,6 +1002,12 @@ static const char *isl_dyn_unmarshalable(const ScrDyn *d) {
     return "a promise";
   case SCR_DYN_PROXY:
     return "a native Proxy";
+  case SCR_DYN_TYPED_REF: {
+    ScrDyn *view = scr_dyn_typed_ref_materialize(d);
+    const char *result = isl_dyn_unmarshalable(view);
+    scr_dyn_release(view);
+    return result;
+  }
   case SCR_DYN_ARR:
     for (size_t i = 0; i < d->v.arr.len; i++) {
       const char *r = isl_dyn_unmarshalable(d->v.arr.items[i]);
@@ -1040,6 +1046,12 @@ static JSValue isl_from_bytes(const ScrBytes *b) {
 
 static JSValue isl_from_dyn(const ScrDyn *d) {
   switch (d->kind) {
+  case SCR_DYN_TYPED_REF: {
+    ScrDyn *view = scr_dyn_typed_ref_materialize(d);
+    JSValue result = isl_from_dyn(view);
+    scr_dyn_release(view);
+    return result;
+  }
   case SCR_DYN_FUNC:
     /* A boxed dyn function enters as ONE generic host-function shim over
      * its uniform call thunk (ScrDynThunk): engine args wrap as dyn

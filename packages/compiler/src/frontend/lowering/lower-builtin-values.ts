@@ -144,6 +144,22 @@ const MODULES = ["path/posix", "path/win32", "os", "worker_threads"] as const;
 
 const box = (value: IrExpr): IrExpr => value.type.kind === "dyn" ? value : { kind: "dynFrom", value, type: DYN, loc: value.loc };
 
+export function pathModuleValue(lowerer: Lowerer, module: string, loc: SrcLoc): IrExpr {
+  const fields: { key: IrExpr; value: IrExpr }[] = [];
+  const add = (member: string, value: IrExpr): void => { fields.push({ key: strLit(member, loc), value: box(value) }); };
+  for (const member of Object.keys(BUILTIN_MODULE_FNS[module] ?? {})) {
+    const value = lowerer.lowerBuiltinCallableValue({ module, member }, loc);
+    if (value) add(member, value);
+  }
+  for (const member of Object.keys(BUILTIN_MODULE_CONSTS[module] ?? {})) {
+    const value = builtinModuleConstOf(lowerer, module, member);
+    if (value !== undefined) add(member, builtinConstLit(value, loc));
+  }
+  add("posix", moduleValue(lowerer, "path/posix", loc));
+  add("win32", moduleValue(lowerer, "path/win32", loc));
+  return { kind: "dynObjLit", fields, type: DYN, loc };
+}
+
 function moduleValue(lowerer: Lowerer, module: string, loc: SrcLoc): IrExpr {
   const cacheKey = `%builtin.module.get.${module}`;
   let name = lowerer.builtinCallableValueFns.get(cacheKey);

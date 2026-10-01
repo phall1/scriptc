@@ -89,6 +89,10 @@ export const REGEX_INTRINSIC_SIGS: Record<
 export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result: IrType }> = {
   "fetch.start": { argTypes: [STRING, DYN], result: { kind: "promise", inner: DYN } },
   "fetch.responseNew": { argTypes: [DYN, DYN], result: DYN },
+  "fetch.input": { argTypes: [DYN, DYN], result: { kind: "promise", inner: DYN } },
+  "fetch.function": { argTypes: [], result: DYN },
+  "fetch.requestNew": { argTypes: [DYN, DYN], result: DYN },
+  "fetch.headersNew": { argTypes: [DYN], result: DYN },
   "fetch.responseArrayBuffer": { argTypes: [DYN], result: { kind: "promise", inner: DYN } },
   "fetch.responseJson": { argTypes: [DYN], result: { kind: "promise", inner: DYN } },
   "fetch.responseText": { argTypes: [DYN], result: { kind: "promise", inner: STRING } },
@@ -101,6 +105,8 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   // Program-dependent iterable: typed arrays/bytes/string stay intact so
   // the native stream can pull lazily; checked-dynamic values are the
   // fallback. The libCall validator below checks the closed set.
+  "fetch.webIs": { argTypes: [DYN, STRING], result: BOOL },
+  "fetch.streamIs": { argTypes: [DYN], result: BOOL },
   "fetch.streamFrom": { argTypes: [null], result: DYN },
   // The chunk/result record depends on ReadableStream<T>; validated below.
   "fetch.readerRead": { argTypes: [DYN], result: VOID },
@@ -310,11 +316,13 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "str.btoa": { argTypes: [DYN], result: STRING },
   "str.b64Missing": { argTypes: [], result: STRING },
   "str.decodeUriComponent": { argTypes: [STRING], result: STRING },
+  "str.decodeUri": { argTypes: [STRING], result: STRING },
   "str.encodeUri": { argTypes: [STRING], result: STRING },
   "regexp.escape": { argTypes: [STRING], result: STRING },
   "num.toExponential": { argTypes: [F64], result: STRING },
   "num.toFixed0": { argTypes: [F64], result: STRING },
   "num.toFixed": { argTypes: [F64, F64], result: STRING },
+  "num.toStringRadix": { argTypes: [F64, DYN], result: STRING },
   "num.sameValue": { argTypes: [F64, F64], result: BOOL },
   "intl.numFormatEnUs": { argTypes: [F64], result: STRING },
   "sym.new": { argTypes: [STRING], result: SYMBOL_T },
@@ -373,6 +381,7 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "url.pathToFileURLPlatform": { argTypes: [STRING, BOOL], result: URL_T },
   "url.pathToFileURLWin32": { argTypes: [STRING], result: URL_T },
   "sp.new": { argTypes: [], result: SEARCH_PARAMS_T },
+  "sp.newChecked": { argTypes: [DYN], result: SEARCH_PARAMS_T },
   "sp.parse": { argTypes: [STRING], result: SEARCH_PARAMS_T },
   "sp.copy": { argTypes: [SEARCH_PARAMS_T], result: SEARCH_PARAMS_T },
   // The pairs argument is string[][] — checked structurally below (the
@@ -958,6 +967,7 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "crypto.randomBytes": { argTypes: [F64], result: BYTES_U8 },
   "crypto.hashDigestStr": { argTypes: [STRING, STRING, STRING], result: STRING },
   "crypto.hashDigestBytes": { argTypes: [STRING, BYTES_U8, STRING], result: STRING },
+  "crypto.native": { argTypes: [], result: DYN },
   "crypto.hashNew": { argTypes: [STRING], result: CRYPTOHASH_T },
   "crypto.hmacNewStr": { argTypes: [STRING, STRING], result: CRYPTOHMAC_T },
   "crypto.hmacNewBytes": { argTypes: [STRING, BYTES_U8], result: CRYPTOHMAC_T },
@@ -983,6 +993,7 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "buffer.brand": { argTypes: [BYTES_U8], result: BYTES_U8 },
   "buffer.fromDyn": { argTypes: [DYN, STRING], result: BYTES_U8 },
   "buffer.concat": { argTypes: [arrayOf(BYTES_U8)], result: BYTES_U8 },
+  "buffer.byteLenDyn": { argTypes: [DYN, STRING], result: F64 },
   "buffer.byteLenStr": { argTypes: [STRING, STRING], result: F64 },
   "buffer.isEncoding": { argTypes: [STRING], result: BOOL },
   "buffer.concatLen": { argTypes: [arrayOf(BYTES_U8), F64], result: BYTES_U8 },
@@ -1090,6 +1101,8 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "process.builtinId": { argTypes: [DYN, arrayOf(STRING)], result: STRING },
   "process.builtinModule": { argTypes: [STRING, DYN], result: DYN },
   "process.builtinUnsupported": { argTypes: [STRING, STRING], result: DYN },
+  "fs.callbackValue": { argTypes: [STRING], result: DYN },
+  "fs.callbackCall": { argTypes: [STRING, DYN], result: DYN },
   "process.hrtimeValue": { argTypes: [], result: DYN },
   "process.versionsNode": { argTypes: [], result: STRING },
   "process.versionsOpenssl": { argTypes: [], result: STRING },
@@ -1106,6 +1119,7 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "error.cause": { argTypes: [null], result: DYN },
   "error.hasCause": { argTypes: [null], result: BOOL },
   "error.setCause": { argTypes: [null, DYN], result: VOID },
+  "error.defineCause": { argTypes: [null, DYN], result: VOID },
   "error.deleteCause": { argTypes: [null], result: VOID },
   "error.nodeThrow": { argTypes: [F64, STRING, STRING], result: VOID },
   "dyn.toStringCoerce": { argTypes: [DYN], result: STRING },
@@ -1114,9 +1128,11 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "dyn.toNumeric": { argTypes: [DYN], result: DYN },
   "dyn.increment": { argTypes: [DYN, BOOL], result: DYN },
   "dyn.numberConstructor": { argTypes: [DYN], result: F64 },
+  "dyn.bigintConstructor": { argTypes: [DYN], result: BIGINT_T },
   "dyn.toNumberCoerce": { argTypes: [DYN], result: F64 },
   "dyn.add": { argTypes: [DYN, DYN], result: DYN },
   "dyn.arithmetic": { argTypes: [DYN, DYN, STRING], result: DYN },
+  "dyn.compare": { argTypes: [DYN, DYN, STRING], result: BOOL },
   "dyn.bitwise": { argTypes: [DYN, DYN, STRING], result: DYN },
   "dyn.proxyNew": { argTypes: [DYN, DYN], result: DYN },
   // Always throws; the result is the READ's declared type (a typed dummy
@@ -1153,7 +1169,11 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "weakSet.new": { argTypes: [DYN], result: DYN },
   "dyn.fromEntries": { argTypes: [DYN], result: DYN },
   "bytes.constructor": { argTypes: [STRING], result: DYN },
+  "bytes.instanceOf": { argTypes: [DYN, DYN], result: BOOL },
   "bytes.construct": { argTypes: [DYN, DYN, STRING], result: DYN },
+  "dyn.dataViewIs": { argTypes: [DYN], result: BOOL },
+  "dyn.construct": { argTypes: [DYN, DYN, STRING], result: DYN },
+  "arrayBuffer.constructor": { argTypes: [], result: DYN },
   "arrayBuffer.new": { argTypes: [DYN], result: DYN },
   "ffi.argument": { argTypes: [DYN, STRING], result: DYN },
   "ffi.memoryModule": { argTypes: [DYN], result: DYN },
@@ -1178,9 +1198,11 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "dyn.propertyIsEnumerable": { argTypes: [DYN, STRING], result: BOOL },
   "dyn.assign": { argTypes: [DYN, DYN], result: DYN },
   "dyn.copyDataProperties": { argTypes: [DYN, DYN], result: DYN },
+  "dyn.objectRest": { argTypes: [DYN, DYN], result: DYN },
   "dyn.packPush": { argTypes: [DYN, DYN], result: VOID },
   "dyn.packPushSpread": { argTypes: [DYN, DYN, STRING], result: VOID },
   "dyn.packPushSpreadIter": { argTypes: [DYN, DYN], result: VOID },
+  "dyn.reflectApply": { argTypes: [DYN, DYN, DYN], result: DYN },
   "dyn.assignAll": { argTypes: [DYN, DYN], result: DYN },
   "dyn.objCreateNullProto": { argTypes: [], result: DYN },
   "dyn.arrayPrototype": { argTypes: [], result: DYN },
@@ -1210,6 +1232,7 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "dyn.cloneMissing": { argTypes: [], result: DYN },
   "dyn.cloneTransferFail": { argTypes: [], result: DYN },
   "regex.new": { argTypes: [STRING, STRING], result: REGEX },
+  "regex.resetLastIndex": { argTypes: [REGEX, F64], result: VOID },
   "regex.newChecked": { argTypes: [DYN, DYN], result: REGEX },
   // node:events EventEmitter: receivers are emitter-hierarchy objects and
   // the chaining forms (on/off/removeAll/setMax) return the receiver's
@@ -1297,6 +1320,8 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "readable.pushDyn": { argTypes: [null, DYN], result: BOOL },
   "readable.unshift": { argTypes: [null, BYTES_U8], result: VOID },
   "readable.unshiftStr": { argTypes: [null, STRING], result: VOID },
+  "stream.onDyn": { argTypes: [null, STRING, DYN, BOOL, BOOL], result: VOID },
+  "readable.readDyn": { argTypes: [null, DYN], result: DYN },
   "readable.read": { argTypes: [null, F64], result: VOID },
   "readable.pause": { argTypes: [null], result: VOID },
   "readable.setEncoding": { argTypes: [null, STRING], result: VOID },
@@ -1476,7 +1501,12 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "date.parseGetTime": { argTypes: [STRING], result: F64 },
   "date.utc": { argTypes: [F64, F64, F64, F64, F64, F64, F64], result: F64 },
   "text.decode": { argTypes: [BYTES_U8], result: STRING },
+  "bytes.bufferSource": { argTypes: [DYN], result: BYTES_U8 },
+  "text.decodeBufferSource": { argTypes: [DYN], result: STRING },
+  "text.decodeOptions": { argTypes: [BYTES_U8, BOOL, BOOL], result: STRING },
+  "text.decodeLegacyOptions": { argTypes: [BYTES_U8, F64, BOOL, BOOL], result: STRING },
   "text.decodeLegacy": { argTypes: [BYTES_U8, F64], result: STRING },
+  "text.decoderEncoding": { argTypes: [DYN], result: F64 },
   "fs.mkdirRecursiveSync": { argTypes: [STRING], result: VOID },
   "fs.rmOptsSync": { argTypes: [STRING, BOOL, BOOL], result: VOID },
   "fs.rmRetrySync": { argTypes: [STRING, BOOL, BOOL, F64, F64], result: VOID },
@@ -4603,7 +4633,7 @@ function validateFunction(
     if (checkLibSpecialCall(e)) return;
     if (checkLibStreamCall(e, sig.argTypes.length, sig.result)) return;
     if (checkLibEmitterCall(e, sig.result)) return;
-    if (e.fn === "error.stack" || e.fn === "error.cause" || e.fn === "error.hasCause" || e.fn === "error.setCause" || e.fn === "error.deleteCause") {
+    if (e.fn === "error.stack" || e.fn === "error.cause" || e.fn === "error.hasCause" || e.fn === "error.setCause" || e.fn === "error.defineCause" || e.fn === "error.deleteCause") {
       const recv = e.args[0];
       let cls = recv?.type.kind === "object" ? classes.get(recv.type.className) : undefined;
       while (cls?.base) cls = classes.get(cls.base);
@@ -5719,7 +5749,7 @@ function validateFunction(
   }
 
   function checkLibEmitterCall(e: IrExpr & { kind: "libCall" }, result: IrType): boolean {
-    if (e.fn.startsWith("emitter.") && e.fn !== "emitter.setDefaultMax" &&
+    if ((e.fn.startsWith("emitter.") || e.fn === "stream.onDyn") && e.fn !== "emitter.setDefaultMax" &&
         e.fn !== "emitter.setDefaultMaxChk" &&
         e.fn !== "emitter.getDefaultMax" && e.fn !== "emitter.checkListener") {
       // Receiver: an emitter-hierarchy object (the %EventEmitter class
@@ -5746,7 +5776,7 @@ function validateFunction(
       }
       // The chaining forms return the receiver's own static class.
       if (e.fn === "emitter.on" || e.fn === "emitter.off" ||
-          e.fn === "emitter.onDyn" || e.fn === "emitter.onFlex" || e.fn === "emitter.offDyn" ||
+          e.fn === "emitter.onDyn" || (e.fn === "emitter.onFlex" || e.fn === "stream.onDyn") || e.fn === "emitter.offDyn" ||
           e.fn === "emitter.onData" || e.fn === "emitter.onDataDyn" ||
           e.fn === "emitter.removeAll" || e.fn === "emitter.setMax" ||
           e.fn === "emitter.setMaxChk") {

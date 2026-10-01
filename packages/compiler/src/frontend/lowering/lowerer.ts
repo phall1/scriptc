@@ -1,3 +1,4 @@
+import { pathModuleValue } from "./lower-builtin-values.js";
 import { everyExprChild, everyStmtChild } from "../../ir/traverse.js";
 import { RuntimeOptionalLocals } from "./runtime-optional-locals.js";
 import { sanitizeUnregisteredClassTypes } from "./sanitize-class-types.js";
@@ -125,7 +126,7 @@ import { lowerRegexMethodCall, lowerStringMethodCall } from "./containers/string
 import { lowerStreamModuleCall } from "./lower-stream.js";
 import { lowerEmitOverrideSpec, type ComputedEventPattern, type EmitSpecCtx, type EmitSpecRequest, type EventSig } from "./lower-event-emitter.js";
 import { builtinImportOf, createRequireBindingDecl, createRequireNamespaceDecl, createRequireProgramModuleOf, createRequireSpecOf, stripTypeCasts, lowerBuiltinModuleCall, lowerNodeModuleCall, lowerTimersPromisesSetInterval, lowerFsToUnixTimestampCall, lowerFsLadderCall, lowerChildArgsArg, lowerSpawnSyncCall, lowerSpawnCall, lowerExecFileCall, lowerExecSyncCall, recordToEnvPairs, lowerJsonMethodCall, fencedBuiltinImportOf, lowerCryptoComposedCall, lowerUrlMethodCall, lowerSearchParamsMethodCall, lowerStatsMethodCall, lowerChildMethodCall, lowerAtomicsCall, lowerBuiltinExtraProperty, registerPromisifiedBuiltinDecl, lowerExecFileAsyncCall, execFileAsyncHelper, lowerStringDecoderMethodCall, strdecHelper, lowerReadlineMethodCall, lowerDcChannelMethodCall, lowerDcChannelProperty, lowerAlsMethodCall, lowerDcTracingChannelMethodCall, lowerDcTracingChannelProperty, lowerJsonProperty, lowerErrorCodeProperty, lowerProcessProperty, isProcessEnv, envValueType, lowerProcessEnvGet, lowerProcessMethodCall, lowerProcessOptionalMethodCall, lowerTimeoutMethodCall, envSnapshotHelper, isConsoleLog, consoleCallMember, lowerNumberStaticCall, lowerNumberStaticProperty, lowerDateCall, lowerTextCodecCall, lowerCryptoModuleCall, lowerFsConstantsProperty, lowerBuiltinConstantsProperty, builtinConstantBindingOf, builtinConstantsDestructureDecl, lowerProcessStreamProperty, lowerStringStaticCall, lowerStringLastIndexOfCall, lowerPromiseStaticCall } from "./lower-builtins.js";
-import { fenceFetchObjectAssignment, fenceFetchObjectBinding, fenceStaticAbortControllerMemberRead, fenceStaticHeadersIteration, fenceStaticHeadersMember, fenceStaticReadableStreamMember, fenceStaticResponseMember, fenceUnsupportedFetchConstructorMember, isIslandExpr, islandFuncValueFence, islandRegexpOf, jsvalIn, requireDynamicApi, islandGlobalFnOf, lowerAbortControllerNew, lowerDynamicHeadersIteratorCall, lowerDynamicHeadersSpread, lowerDynamicImportCall, lowerFetchCall, lowerFetchElementMethodCall, lowerResponseNew, lowerStaticFetchCompanionCall, lowerStaticAbortControllerCall, lowerStaticAbortSignalListenerCall, lowerStaticReadableStreamCancelCall, lowerStaticReadableStreamControllerCall, lowerStaticReadableStreamNew, lowerStaticReadableStreamReaderCall, lowerStaticResponseCall, lowerIslandMethodCall, lowerMathProperty, npmPackageOf, npmMemberFence, npmPackageOfSymbol } from "./lower-island.js";
+import { fenceFetchObjectAssignment, fenceFetchObjectBinding, fenceStaticAbortControllerMemberRead, fenceStaticHeadersIteration, fenceStaticHeadersMember, fenceStaticReadableStreamMember, fenceStaticResponseMember, fenceUnsupportedFetchConstructorMember, isIslandExpr, islandFuncValueFence, islandRegexpOf, jsvalIn, requireDynamicApi, islandGlobalFnOf, lowerAbortControllerNew, lowerDynamicHeadersIteratorCall, lowerDynamicHeadersSpread, lowerDynamicImportCall, lowerFetchCall, lowerFetchElementMethodCall, lowerResponseNew, lowerFetchWebNew, lowerStaticFetchCompanionCall, lowerStaticAbortControllerCall, lowerStaticAbortSignalListenerCall, lowerStaticReadableStreamCancelCall, lowerStaticReadableStreamControllerCall, lowerStaticReadableStreamNew, lowerStaticReadableStreamReaderCall, lowerStaticResponseCall, lowerIslandMethodCall, lowerMathProperty, npmPackageOf, npmMemberFence, npmPackageOfSymbol } from "./lower-island.js";
 import { lowerHttpHeadersElement, lowerNetModuleCall, lowerServerMethodCall, lowerServerProperty, lowerTlsRootCertificates } from "./lower-server.js";
 import { lowerDgramDnsModuleCall, lowerDgramMethodCall } from "./lower-dgram.js";
 import { lowerNodeTestModuleCall, lowerTestDirectCall, lowerTestMethodCall, lowerTestCtxProperty } from "./lower-test.js";
@@ -705,7 +706,7 @@ export function dynUndefinedExpr(loc: SrcLoc): IrExpr {
  * symbol-to-string TypeError). kind 0 Error / 1 TypeError / 2 RangeError;
  * an empty code means no code slot. `type` is the replaced expression's
  * own (never materialized — the global.undefRead pattern). */
-export function nodeThrowExpr(kind: 0 | 1 | 2, code: string, message: string, type: IrType, loc: SrcLoc): IrExpr {
+export function nodeThrowExpr(kind: 0 | 1 | 2 | 5, code: string, message: string, type: IrType, loc: SrcLoc): IrExpr {
   return {
     kind: "libCall",
     fn: "error.nodeThrow",
@@ -767,6 +768,11 @@ export function dynFallbackType(lowerer: Lowerer, node: ts.Node, t: ts.Type): Ir
   if (t.flags & ts.TypeFlags.Void) return null;
   if (!isJsSourceFile(node.getSourceFile())) {
     if (t.flags & ts.TypeFlags.Any) return DYN;
+    const symbol = t.getSymbol();
+    const args = symbol && lowerer.isStdlibSymbol(symbol) ? lowerer.checker.getTypeArguments(t as ts.TypeReference) : [];
+    if (symbol?.name === "Promise" && args[0] && args[0].flags & ts.TypeFlags.Any) return jsFallbackPromiseType(lowerer, t);
+    if (symbol && ["Generator", "AsyncGenerator", "IterableIterator"].includes(symbol.name) && args.some((arg) => arg.flags & ts.TypeFlags.Any)) return jsFallbackGeneratorType(lowerer, t);
+    if (lowerer.checker.isArrayType(t) && ((lowerer.checker.getTypeArguments(t as ts.TypeReference)[0]?.flags ?? 0) & ts.TypeFlags.Any) !== 0) return DYN;
     // TS single-call-signature function types: per-piece fallback, but
     // ONLY `any` pieces fall to dyn — any other unmappable piece keeps
     // the whole type's own fence.
@@ -4552,6 +4558,7 @@ export class Lowerer {
   }
 
   badType(node: ts.Node, type: ts.Type): never {
+
     const widened = this.checker.getBaseTypeOfLiteralType(type);
     // Types declared by the ADOPTED @types/node (Buffer, NodeJS.Timeout,
     // the undici Response, ...) are supported-surface provenance, not npm
@@ -5396,7 +5403,10 @@ export class Lowerer {
         };
       }
       if (expr.kind === "unitLit" || this.dynConvertible(expr.type)) {
-        return { kind: "dynFrom", value: expr, type: DYN, loc: expr.loc };
+        const shape = expr.type.kind === "record" ? this.shapes.get(expr.type.shapeId) : undefined;
+        const liveRef = expr.type.kind === "array" || !!shape && (shape.fields.length > 0 || shape.indexValue !== undefined);
+        return { kind: "dynFrom", value: expr, type: DYN, loc: expr.loc,
+          ...(liveRef ? { liveRef: true as const } : {}) };
       }
       return expr;
     }
@@ -7896,7 +7906,9 @@ export class Lowerer {
         }
       }
     }
-    let e = this.coerceToExpected(expr, expected);
+    let e = this.dynamic && expr.type.kind === "dyn" && expected.kind === "array" && expected.elem.kind === "jsval"
+      ? { kind: "jsExit" as const, value: this.jsvalIn(expr, node), type: expected, loc: expr.loc }
+      : this.coerceToExpected(expr, expected);
     // Existing JavaScript arrays retain mutations and identity across checked
     // slots. Fresh literals have no prior identity and use checked storage
     // directly, so later writes can change their inferred element type.
@@ -10109,7 +10121,7 @@ export class Lowerer {
       const arg = this.lowerExpr(expr.arguments[0]!);
       return { kind: "jsOp", op: "construct", args: [ctor, arg], type: JSVAL, loc };
     }
-    const builtin = lowerAbortControllerNew(this, expr) ?? lowerResponseNew(this, expr) ?? lowerStaticReadableStreamNew(this, expr);
+    const builtin = lowerAbortControllerNew(this, expr) ?? lowerFetchWebNew(this, expr) ?? lowerResponseNew(this, expr) ?? lowerStaticReadableStreamNew(this, expr);
     return builtin ?? this.withRuntimeOptionalClassValue(expr.expression, () => lowerNew(this, expr));
   }
 
@@ -10400,13 +10412,13 @@ export class Lowerer {
     if (!expr.questionDotToken && ts.isPropertyAccessExpression(expr.expression)) {
       const inner = this.builtinMemberOf(expr.expression);
       if (inner && inner.module === "fs" && inner.member === "constants") {
-        const MODES: Record<string, number | undefined> = { F_OK: 0, X_OK: 1, W_OK: 2, R_OK: 4 };
+        const MODES: Record<string, number | undefined> = { F_OK: 0, X_OK: 1, W_OK: 2, R_OK: 4, COPYFILE_EXCL: 1, COPYFILE_FICLONE: 2, COPYFILE_FICLONE_FORCE: 4 };
         const value = own(MODES, expr.name.text);
         if (value === undefined) {
           this.noLowering(
             `fs.constants.${expr.name.text}`,
             expr,
-            "F_OK, R_OK, W_OK, and X_OK are the lowered constants",
+            "F_OK, R_OK, W_OK, X_OK, and COPYFILE_* are the lowered constants",
           );
         }
         return { kind: "numLit", value, type: F64, loc };
@@ -10414,6 +10426,10 @@ export class Lowerer {
     }
     const bi = this.builtinMemberOf(expr);
     if (!bi) return null;
+    if ((bi.module === "path" || bi.module === "path/posix" || bi.module === "path/win32") &&
+        (bi.member === "posix" || bi.member === "win32")) {
+      return pathModuleValue(this, `path/${bi.member}`, loc);
+    }
     // events.defaultMaxListeners READS the process-wide default (its
     // write twin routes through emitter.setDefaultMaxChk).
     if (bi.module === "events" && bi.member === "defaultMaxListeners") {
@@ -10446,7 +10462,7 @@ export class Lowerer {
     }
     if (bi.member === "constants" && bi.module === "fs") {
       // A bare `fs.constants` read (not one of the baked bits above).
-      this.noLowering(`fs.constants`, expr, "F_OK, R_OK, W_OK, and X_OK are the lowered constants");
+      this.noLowering(`fs.constants`, expr, "F_OK, R_OK, W_OK, X_OK, and COPYFILE_* are the lowered constants");
     }
     if (builtinModuleFnOf(this, bi.module, bi.member)) {
       this.unsupported(
@@ -10472,6 +10488,9 @@ export class Lowerer {
     bi: { module: string; member: string },
     loc: SrcLoc,
   ): IrExpr | null {
+    if (bi.module === "fs" && builtinModuleFnOf(this, bi.module, bi.member)?.fn === "fs.callbackCall") {
+      return { kind: "libCall", fn: "fs.callbackValue", args: [{ kind: "strLit", value: bi.member, type: STRING, loc }], type: DYN, loc };
+    }
     const fn = builtinModuleFnOf(this, bi.module, bi.member);
     return fn ? this.lowerNativeCallableValue(fn, `${bi.module}.${bi.member}`, loc) : null;
   }
