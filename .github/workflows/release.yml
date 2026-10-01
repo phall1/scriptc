@@ -244,6 +244,18 @@ jobs:
           pnpm --filter @scriptc/compiler --filter scriptc build
           pnpm --filter @scriptc/${{ matrix.cli }} build:native
           node scripts/verify-native-cli.mjs packages/${{ matrix.cli }} --run
+      - name: Verify GNU npm distribution on glibc 2.34
+        if: matrix.platform == 'linux-x64' || matrix.platform == 'linux-arm64'
+        run: |
+          NODE_ROOT=$(dirname "$(dirname "$(command -v node)")")
+          docker run --rm --volume "$GITHUB_WORKSPACE:/work:ro" --volume "$NODE_ROOT:/node:ro" \
+            --env PATH=/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin \
+            --workdir /work amazonlinux:2023 sh -c '
+              set -eu
+              dnf install --assumeyes clang tar gzip
+              test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.34"
+              node scripts/smoke-native-install.mjs packages/${{ matrix.cli }}
+            '
       - name: Verify packed Darwin helper on its build host
         if: matrix.platform == 'darwin-arm64'
         run: |

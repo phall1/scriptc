@@ -56,23 +56,6 @@ export function installNativeCli(directory, packageName = nativeCliPackage(proce
   const bin = join(directory, "bin");
   mkdirSync(bin, { recursive: true });
   const manifest = relocateToolchain(original, sourceDirectory, bin);
-  const packs = new Map((manifest.runtime_packs ?? []).map((pack) => [pack.target, pack]));
-  for (const suffix of ["darwin-arm64", "darwin-x64", "linux-x64-gnu", "linux-arm64-gnu", "linux-x64-musl", "linux-arm64-musl",
-    "win32-x64-msvc", "wasm32-wasi", "ios-arm64", "ios-simulator-arm64", "android-arm64"]) {
-    const name = `@scriptc/runtime-${suffix}`;
-    if (packageManifest.optionalDependencies?.[name] === undefined) continue;
-    let path;
-    try { path = require.resolve(`${name}/package.json`); }
-    catch { continue; }
-    const packIdentity = JSON.parse(readFileSync(path, "utf8"));
-    if (packIdentity.name !== name || packIdentity.version !== version) throw new Error(`scriptc requires ${name}@${version}`);
-    const pack = JSON.parse(readFileSync(join(dirname(path), "runtime-pack.json"), "utf8"));
-    if (pack.schema !== "scriptc.runtime-pack.v1" || pack.package !== name || pack.version !== version) {
-      throw new Error(`invalid runtime pack installed for ${name}@${version}`);
-    }
-    if (!packs.has(pack.target.name)) packs.set(pack.target.name, { target: pack.target.name, path: relative(bin, dirname(path)) });
-  }
-  manifest.runtime_packs = [...packs.values()];
   // npm normalizes modes for payloads outside package bin entries. These
   // tools are launched directly by the compiler after installation.
   if (process.platform !== "win32") {

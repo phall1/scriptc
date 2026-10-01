@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { NATIVE_TARGETS, selectNativeTarget, type NativeTargetSpec, type NativeHelperSpec } from "../backend/targets.js";
 
@@ -52,7 +52,20 @@ function commandFrom(root: string, value: string): string {
   return value.includes("/") || value.includes("\\") ? pathFrom(root, value) : value;
 }
 
-export function loadNativeToolchain(path: string, env: NodeJS.ProcessEnv = {}): NativeToolchain {
+/** Additional targets are ordinary project dependencies. Resolve them when
+ * requested so adding a pack never requires reinstalling the compiler. */
+function installedRuntimePack(start: string, packageName: string): string | undefined {
+  let directory = resolve(start);
+  for (;;) {
+    const candidate = join(directory, "node_modules", packageName);
+    if (existsSync(join(candidate, "package.json"))) return candidate;
+    const parent = dirname(directory);
+    if (parent === directory) return undefined;
+    directory = parent;
+  }
+}
+
+export function loadNativeToolchain(path: string, env: NodeJS.ProcessEnv = {}, cwd: string = process.cwd()): NativeToolchain {
   const raw: unknown = JSON.parse(readFileSync(path, "utf8"));
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new Error("invalid native toolchain manifest");
   const value = raw as Record<string, unknown>;
@@ -88,10 +101,16 @@ export function loadNativeToolchain(path: string, env: NodeJS.ProcessEnv = {}): 
   if (target === null) throw new Error(`unsupported native compiler target: ${env["SCRIPTC_TARGET"]}`);
   const root = dirname(resolve(path));
   const helperPackageRoot = pathFrom(root, env["SCRIPTC_LLVM_PACKAGE"] ?? manifest.llvm_package);
-  const runtimePath = manifest.runtime_packs?.find((pack) => pack.target === target.name)?.path
+  let runtimePath = manifest.runtime_packs?.find((pack) => pack.target === target.name)?.path
     ?? (target.name === host.name ? manifest.runtime_pack : join(dirname(manifest.runtime_pack), target.runtimePackPackage.replace("@scriptc/", "")));
-  const linker = env["SCRIPTC_LINKER"] ?? (target.name === host.name ? manifest.linker : target.defaultLinker);
-  const linkerArgs = env["SCRIPTC_LINKER"] !== undefined ? [] : target.name === host.name ? manifest.linker_args : [...target.defaultLinkerArgs];
+  if (target.name !== host.name && env["SCRIPTC_RUNTIME_PACK"] === undefined && !existsSync(pathFrom(root, runtimePath))) {
+    runtimePath = installedRuntimePack(cwd, target.runtimePackPackage)
+      ?? installedRuntimePack(root, target.runtimePackPackage)
+      ?? runtimePath;
+  }
+  const hostLinker = target.name === host.name && target.defaultLinker === host.defaultLinker;
+  const linker = env["SCRIPTC_LINKER"] ?? (hostLinker ? manifest.linker : target.defaultLinker);
+  const linkerArgs = env["SCRIPTC_LINKER"] !== undefined ? [] : hostLinker ? manifest.linker_args : [...target.defaultLinkerArgs];
   return {
     compilerVersion: manifest.compiler_version,
     ts7Executable: pathFrom(root, manifest.ts7),

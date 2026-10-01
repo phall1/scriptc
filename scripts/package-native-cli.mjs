@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -10,7 +10,6 @@ const packages = resolve(process.argv[2] ?? join(repository, "packages"));
 const output = resolve(process.argv[3] ?? join(repository, ".scriptc/releases"));
 mkdirSync(output, { recursive: true });
 const compiler = JSON.parse(readFileSync(join(packages, "compiler/package.json"), "utf8"));
-const runtimes = Object.keys(compiler.optionalDependencies).filter((name) => name.startsWith("@scriptc/runtime-"));
 const sums = [];
 
 for (const name of readdirSync(packages).filter((name) => name.startsWith("cli-")).sort()) {
@@ -26,20 +25,6 @@ for (const name of readdirSync(packages).filter((name) => name.startsWith("cli-"
     const binary = join(bin, name.includes("win32-") ? "scriptc.exe" : "scriptc");
     const manifest = JSON.parse(readFileSync(binary + ".json", "utf8"));
     const hostPath = (value) => name.includes("win32-") ? value.replaceAll("\\", "/") : value;
-    const packs = new Map();
-    for (const packageName of runtimes) {
-      const directory = packageName.replace("@scriptc/", "");
-      const from = join(packages, directory);
-      const to = join(distribution, "lib", directory);
-      const runtime = JSON.parse(readFileSync(join(from, "runtime-pack.json"), "utf8"));
-      if (runtime.version !== identity.version || runtime.package !== packageName) throw new Error(`runtime version mismatch: ${packageName}`);
-      for (const member of ["package.json", "runtime-pack.json", "artifacts"]) {
-        cpSync(join(from, member), join(to, member), { recursive: true });
-      }
-      packs.set(runtime.target.name, { target: runtime.target.name, path: relative(bin, to) });
-    }
-    manifest.runtime_packs = [...packs.values()];
-    writeFileSync(binary + ".json", JSON.stringify(manifest, null, 2) + "\n");
     // GitHub artifact transport drops executable modes. Restore the native
     // tools before validating and creating the standalone archive.
     for (const path of [binary, resolve(bin, hostPath(manifest.ts7)), resolve(bin, hostPath(manifest.comptime)),

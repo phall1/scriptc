@@ -1,4 +1,4 @@
-const GLIBC_RUNTIME_FLOOR = "2.36";
+export const GLIBC_RUNTIME_FLOOR = "2.34";
 
 const GNU_ARCHITECTURES = {
   x64: "x86_64",

@@ -14,9 +14,9 @@ set(SCRIPTC_ALLOWED_TARGETS "arm64-apple-macosx14.0.0,x86_64-apple-macosx14.0.0,
 set(SCRIPTC_HELPER_ARCH "arm64" CACHE STRING
     "macOS architecture of the helper executable")
 # LLVM's official Linux archives use the host libstdc++ and glibc ABIs. The
-# musl package therefore ships this process-isolated helper as a fully static
-# host executable; its configured output targets and runtime pack remain musl.
-option(SCRIPTC_MUSL_BUILD "Configure the Linux musl helper package" OFF)
+# Linux packages ship this process-isolated helper as a fully static host
+# executable so it runs independently of the destination libc and libstdc++.
+option(SCRIPTC_STATIC_LINUX_BUILD "Build a static Linux helper executable" OFF)
 
 # These must be cache variables before project() enables the Apple toolchain.
 # A target property named OSX_DEPLOYMENT_TARGET is not recognized by CMake and
@@ -34,7 +34,7 @@ endif()
 project(scriptc_llvm_codegen LANGUAGES C CXX)
 
 if(CMAKE_C_COMPILER_TARGET MATCHES "linux-musl")
-  set(SCRIPTC_MUSL_BUILD ON)
+  set(SCRIPTC_STATIC_LINUX_BUILD ON)
 endif()
 
 # Official LLVM binary distributions retain zstd as an imported dependency in
@@ -43,16 +43,16 @@ endif()
 find_package(zstd CONFIG QUIET)
 
 # LLVM's Linux archives retain ZLIB and zstd target edges in LLVMSupport. The
-# musl package flattens that imported graph below and appends portable library
+# static Linux helper flattens that imported graph below and appends portable library
 # names explicitly, so use interface placeholders instead of embedding host
 # library paths in the flattened graph.
-if(SCRIPTC_MUSL_BUILD AND NOT TARGET ZLIB::ZLIB)
+if(SCRIPTC_STATIC_LINUX_BUILD AND NOT TARGET ZLIB::ZLIB)
   add_library(ZLIB::ZLIB INTERFACE IMPORTED)
 endif()
-if(SCRIPTC_MUSL_BUILD AND NOT TARGET zstd::libzstd_static)
+if(SCRIPTC_STATIC_LINUX_BUILD AND NOT TARGET zstd::libzstd_static)
   add_library(zstd::libzstd_static INTERFACE IMPORTED)
 endif()
-if(SCRIPTC_MUSL_BUILD AND NOT TARGET zstd::libzstd_shared)
+if(SCRIPTC_STATIC_LINUX_BUILD AND NOT TARGET zstd::libzstd_shared)
   add_library(zstd::libzstd_shared INTERFACE IMPORTED)
 endif()
 
@@ -126,11 +126,14 @@ target_compile_definitions(scriptc-llvm-codegen PRIVATE
   SCRIPTC_ALLOWED_TARGETS="${SCRIPTC_ALLOWED_TARGETS}"
 )
 
-if(SCRIPTC_MUSL_BUILD)
+if(SCRIPTC_STATIC_LINUX_BUILD)
   # CMake's imported LLVM targets carry transitive archive interfaces that
   # duplicate most of this large static graph. Flatten it to one absolute
-  # archive path per target for the resource-constrained musl release link.
+  # archive path per target for the Linux release link.
   function(scriptc_collect_llvm_target target)
+    if(target STREQUAL "ZLIB::ZLIB" OR target MATCHES "^zstd::")
+      return()
+    endif()
     get_property(seen GLOBAL PROPERTY SCRIPTC_LLVM_LINK_SEEN)
     if(target IN_LIST seen)
       return()
@@ -157,6 +160,17 @@ if(SCRIPTC_MUSL_BUILD)
     if(NOT location OR location MATCHES "-NOTFOUND$")
       get_target_property(location "${target}" IMPORTED_LOCATION)
     endif()
+    if(NOT location OR location MATCHES "-NOTFOUND$")
+      # Distribution packages can export RELWITHDEBINFO rather than RELEASE.
+      get_target_property(configurations "${target}" IMPORTED_CONFIGURATIONS)
+      foreach(configuration IN LISTS configurations)
+        string(TOUPPER "${configuration}" configuration)
+        get_target_property(location "${target}" "IMPORTED_LOCATION_${configuration}")
+        if(location AND NOT location MATCHES "-NOTFOUND$")
+          break()
+        endif()
+      endforeach()
+    endif()
     if(location AND NOT location MATCHES "-NOTFOUND$")
       set_property(GLOBAL APPEND PROPERTY SCRIPTC_LLVM_LINK_LIBS "${location}")
     endif()
@@ -175,6 +189,9 @@ if(SCRIPTC_MUSL_BUILD)
   list(REMOVE_DUPLICATES SCRIPTC_LLVM_LIBS)
   list(REVERSE SCRIPTC_LLVM_LIBS)
   list(REMOVE_DUPLICATES SCRIPTC_LLVM_SYSTEM_LIBS)
+  # Some distribution builds attach Z3 to LLVMSupport. The helper never uses
+  # the solver, and its shared library cannot be part of a static executable.
+  list(FILTER SCRIPTC_LLVM_SYSTEM_LIBS EXCLUDE REGEX "(^|/)(lib)?([zZ]3|z|zstd)([.].*)?$")
   list(APPEND SCRIPTC_LLVM_SYSTEM_LIBS z zstd)
 else()
   llvm_map_components_to_libnames(SCRIPTC_LLVM_LIBS

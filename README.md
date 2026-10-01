@@ -17,6 +17,8 @@ scriptc is experimental and targets macOS, Linux, Windows, and WebAssembly via W
 
 The installed compiler runs natively on supported macOS, Linux, and Windows hosts. Compilation, compile-time evaluation, and native execution do not require Node. `--emit=ir|llvm|asm|obj` uses the bundled TypeScript checker and LLVM helper without an external compiler, archiver, linker, or SDK. Executable builds additionally need a platform linker driver and SDK/sysroot; precompiled runtime packs supply the C runtime. Set `SCRIPTC_LINKER` to choose that driver. Runtime development with `--sanitize` additionally needs a C compiler. Node.js 24 or newer is needed for npm installation, development from a source checkout, the JavaScript compiler API, and `scriptc run` of WASI modules.
 
+The native compiler includes its host runtime pack. Cross-compilation uses additional `@scriptc/runtime-<target>` packages installed in your project at the same version as `scriptc --version`. For example, WASI builds use `@scriptc/runtime-wasm32-wasi`. Run the compiler from that project or set `SCRIPTC_RUNTIME_PACK` to the pack directory. Linux GNU distributions require glibc 2.34 or newer; the bundled LLVM helper is statically linked.
+
 ```console
 $ npm install -g scriptc
 ```

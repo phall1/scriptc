@@ -24,6 +24,8 @@ $ npm install -g scriptc
 
 The installed compiler runs natively on supported macOS, Linux, and Windows hosts. Compilation, compile-time evaluation, and native execution do not require Node. `--emit=ir|llvm|asm|obj` uses the bundled TypeScript checker and LLVM helper without an external compiler, archiver, linker, or SDK. Executable builds additionally need a platform linker driver and SDK/sysroot; precompiled runtime packs supply the C runtime. Set `SCRIPTC_LINKER` to choose that driver. Runtime development with `--sanitize` additionally needs a C compiler. Node.js 24 or newer is needed for npm installation and `scriptc run` of WASI modules.
 
+The native compiler includes its host runtime pack. Cross-compilation uses additional `@scriptc/runtime-<target>` packages installed in your project at the same version as `scriptc --version`. WASI builds use `@scriptc/runtime-wasm32-wasi`, for example. Run the compiler from that project or set `SCRIPTC_RUNTIME_PACK` to the pack directory. Linux GNU distributions require glibc 2.34 or newer.
+
 Builds use a bounded persistent cache. Unchanged source can reuse the validated frontend result and LLVM program objects. Library identity getters occupy a separate LLVM module, so an identity change can reuse the large program object. Runtime objects come from the installed pack. Executable cache entries verify their native dependencies; FFI builds relink against current external inputs. Set `SCRIPTC_NO_CACHE=1` to bypass the cache or `SCRIPTC_CACHE_DIR` to select its location. An existing POSIX override must already be private.
 
 ## Commands

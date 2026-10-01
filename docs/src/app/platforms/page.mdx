@@ -6,6 +6,10 @@ The compiler runs natively and bundles its TypeScript checker and LLVM helper. O
 
 ## Cross-compilation via zig
 
+The installed compiler includes its host runtime pack. Other runtime packs are optional project dependencies, pinned to the same version as <code>scriptc --version</code>. Install the appropriate <code>@scriptc/runtime-&lt;target&gt;</code> package, such as <code>@scriptc/runtime-linux-arm64-gnu</code> or <code>@scriptc/runtime-wasm32-wasi</code>, and run the compiler from your project. You can also set <code>SCRIPTC_RUNTIME_PACK</code> to a pack directory, including with standalone compiler archives. Adding a pack does not require reinstalling the compiler. Assembly and object output do not require a runtime pack.
+
+GNU/Linux compiler distributions and runtime packs support glibc 2.34 or newer. The LLVM helper is statically linked and does not require the build machine's libc or C++ runtime to be installed.
+
 The installed host LLVM helper emits cross-target program objects and the matching runtime pack supplies precompiled support objects. Install [zig](https://ziglang.org) for Linux, Windows, and WASI cross-linking, then select the output target:
 
 <dl>

@@ -1,5 +1,5 @@
 import { execFile, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -45,6 +45,15 @@ test("the production CLI relocates, builds programs, and rebuilds itself with No
         // before the sanitizer can exercise the compiler.
         ...options, env: { ...process.env, SCRIPTC_SAN: sanitize ? "1" : "", SCRIPTC_NATIVE_EMIT_IR: "1" },
       }));
+    // CI reuses this already-built seed for npm and older-libc installation
+    // smoke tests, avoiding another full compiler build on the critical path.
+    const packageDirectory = process.env["SCRIPTC_BOOTSTRAP_PACKAGE_DIR"];
+    if (!sanitize && packageDirectory !== undefined) {
+      if (process.platform !== "linux" || process.arch !== "x64") throw new Error("bootstrap package export requires the Linux x64 GNU CI host");
+      mkdirSync(packageDirectory, { recursive: true });
+      cpSync(join(root, "packages/cli-linux-x64-gnu/package.json"), join(packageDirectory, "package.json"));
+      cpSync(distribution, join(packageDirectory, "dist"), { recursive: true });
+    }
     // All compiler assets must survive moving the complete distribution.
     const relocated = join(directory, "relocated");
     renameSync(distribution, relocated);
@@ -162,9 +171,14 @@ test("the production CLI relocates, builds programs, and rebuilds itself with No
       const linker = join(directory, "zigcc");
       writeFileSync(linker, `#!/bin/sh\nexec '${absoluteCommand("zig").replaceAll("'", "'\\''")}' cc "$@"\n`, { mode: 0o755 });
       const output = join(directory, "three.wasm");
+      // Install the cross-target pack after relocating the native compiler.
+      // Its resolver must discover project dependencies without Node on PATH.
+      const scope = join(directory, "node_modules/@scriptc");
+      mkdirSync(scope, { recursive: true });
+      symlinkSync(join(root, "packages/runtime-wasm32-wasi"), join(scope, "runtime-wasm32-wasi"), "dir");
       const built = await exec(probe, ["build", "--lib", "--profile", threeProfile, "-o", output], {
-        ...nativeOptions, env: { ...nativeOptions.env, SCRIPTC_TARGET: "wasm32-wasi", SCRIPTC_LINKER: linker,
-          SCRIPTC_RUNTIME_PACK: join(root, "packages/runtime-wasm32-wasi"), SCRIPTC_NO_CACHE: "1" },
+        ...nativeOptions, cwd: directory, env: { ...nativeOptions.env, SCRIPTC_TARGET: "wasm32-wasi", SCRIPTC_LINKER: linker,
+          SCRIPTC_RUNTIME_PACK: undefined, SCRIPTC_NO_CACHE: "1" },
       });
       expect(built.stdout.trim()).toBe(output);
       expect(comparableStderr(built.stderr)).toBe("");

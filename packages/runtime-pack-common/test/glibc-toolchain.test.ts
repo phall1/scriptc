@@ -2,11 +2,11 @@ import { expect, test } from "vitest";
 import { glibcRuntimeToolchain } from "../scripts/glibc-toolchain.mjs";
 
 test.each([
-  ["x64", "x86_64-linux-gnu.2.36"],
-  ["arm64", "aarch64-linux-gnu.2.36"],
+  ["x64", "x86_64-linux-gnu.2.34"],
+  ["arm64", "aarch64-linux-gnu.2.34"],
 ])("pins the %s GNU runtime to its glibc floor", (architecture, target) => {
   expect(glibcRuntimeToolchain(architecture)).toEqual({
-    minimumOs: "glibc 2.36",
+    minimumOs: "glibc 2.34",
     compiler: "zig",
     compilerArgs: ["cc"],
     archiver: "zig",

@@ -2,7 +2,7 @@
  * selected artifact is hashed and copied from the same read into private
  * storage. This host has no persistent cache or mutable installed link inputs. */
 import { createHash } from "node:crypto";
-import { closeSync, constants, mkdirSync, openSync, readFileSync, writeSync } from "node:fs";
+import { closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { NativeLinkFeatures } from "./native-link-info.js";
 import type { NativeTargetSpec } from "./targets.js";
@@ -30,6 +30,9 @@ export function selectNativeRuntimePack(
   root: string, target: NativeTargetSpec, compilerVersion: string,
   features: NativeLinkFeatures, flavor: "release" | "dev", mode: RuntimePackMode = "executable",
 ): NativeRuntimeSelection {
+  if (!existsSync(join(root, "package.json"))) {
+    throw new RuntimePackError(`runtime pack for ${target.name} is not installed; install ${target.runtimePackPackage}@${compilerVersion} in your project or set SCRIPTC_RUNTIME_PACK to its directory`, "missing");
+  }
   const packageText = readFileSync(join(root, "package.json"), "utf8");
   const manifestText = readFileSync(join(root, "runtime-pack.json"), "utf8");
   const identity = JSON.parse(packageText) as { name?: string; version?: string };

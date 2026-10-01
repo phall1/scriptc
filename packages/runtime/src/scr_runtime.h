@@ -78,6 +78,31 @@ void scr_runtime_abi_v5(void);
  * structured trap-teaching form before delivery (a message that already
  * begins with the 0x01 marker passes verbatim) — see ScrLibSinkFn below. */
 _Noreturn void scr_trap(const char *msg);
+
+/* glibc added arc4random_buf in 2.36. Older GNU targets use the same kernel
+ * CSPRNG as the musl shim, with no global state or persistent descriptor. */
+#ifdef __GLIBC__
+#if !__GLIBC_PREREQ(2, 36)
+#include <errno.h>
+#include <stdlib.h>
+#include <sys/random.h>
+static inline void scr_glibc_random_buf(void *buf, size_t n) {
+  unsigned char *p = buf;
+  while (n > 0) {
+    ssize_t got = getrandom(p, n, 0);
+    if (got > 0) {
+      p += (size_t)got;
+      n -= (size_t)got;
+    } else if (got < 0 && errno == EINTR) {
+      continue;
+    } else {
+      scr_trap("scriptc: getrandom failed\n");
+    }
+  }
+}
+#define arc4random_buf scr_glibc_random_buf
+#endif
+#endif
 _Noreturn void scr_trap_fmt(const char *fmt, ...);
 
 /* ── library mode (scr_library.c, linked only into library artifacts) ─────

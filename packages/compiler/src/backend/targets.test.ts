@@ -121,6 +121,14 @@ describe("native code-generation targets", () => {
     }
   });
 
+  test.each(["x64", "arm64"])("GNU %s release links honor an explicit libc floor on the same host", (architecture) => {
+    const triple = `${architecture === "x64" ? "x86_64" : "aarch64"}-linux-gnu.2.34`;
+    expect(nativeCodegenTarget({ SCRIPTC_TARGET: triple }, "linux", architecture, "6.8.0", "gnu"))
+      .toMatchObject({ minimumOs: "glibc 2.34", defaultLinker: "zig", defaultLinkerArgs: ["cc"], linkerTargetTriple: triple });
+    expect(nativeCodegenTarget({ SCRIPTC_TARGET: triple.replace(".2.34", "") }, "darwin", "arm64", "24.0.0"))
+      .toMatchObject({ minimumOs: "glibc 2.34", linkerTargetTriple: triple });
+  });
+
   test("owns helper executable linker arguments in the target specification", () => {
     expect(MACOS_ARM64_TARGET.executableLinkerArgs).toEqual([
       "-target",

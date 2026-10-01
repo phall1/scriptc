@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
+import { verifyLinuxAbi } from "./verify-linux-abi.mjs";
 
 const root = realpathSync(resolve(process.argv[2] ?? "."));
 const identity = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
@@ -47,6 +48,12 @@ for (const directory of [distribution, join(distribution, "lib/runtime-sources/v
   if (readdirSync(directory).some((name) => ["node_modules", ".cache", "seed"].includes(name))) throw new Error(`development files present in ${directory}`);
 }
 if (process.argv.includes("--run")) {
+  if (target.startsWith("linux-")) {
+    for (const executable of [binary, resolve(dirname(binary), toolchain.ts7), resolve(dirname(binary), toolchain.comptime)]) {
+      verifyLinuxAbi(executable, { staticOnly: target.endsWith("-musl") });
+    }
+    verifyLinuxAbi(resolve(dirname(binary), toolchain.llvm_package, "bin/scriptc-llvm-codegen"), { staticOnly: true });
+  }
   const version = execFileSync(binary, ["--version"], { encoding: "utf8", env: { ...process.env, PATH: "" } }).trim();
   if (version !== identity.version) throw new Error(`native command reported ${version}, expected ${identity.version}`);
 }

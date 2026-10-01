@@ -35,17 +35,6 @@
     "@scriptc/cli-linux-arm64-musl": "workspace:*",
     "@scriptc/cli-linux-x64-gnu": "workspace:*",
     "@scriptc/cli-linux-x64-musl": "workspace:*",
-    "@scriptc/cli-win32-x64-msvc": "workspace:*",
-    "@scriptc/runtime-darwin-arm64": "workspace:*",
-    "@scriptc/runtime-darwin-x64": "workspace:*",
-    "@scriptc/runtime-linux-x64-gnu": "workspace:*",
-    "@scriptc/runtime-linux-arm64-gnu": "workspace:*",
-    "@scriptc/runtime-linux-x64-musl": "workspace:*",
-    "@scriptc/runtime-linux-arm64-musl": "workspace:*",
-    "@scriptc/runtime-win32-x64-msvc": "workspace:*",
-    "@scriptc/runtime-wasm32-wasi": "workspace:*",
-    "@scriptc/runtime-ios-arm64": "workspace:*",
-    "@scriptc/runtime-ios-simulator-arm64": "workspace:*",
-    "@scriptc/runtime-android-arm64": "workspace:*"
+    "@scriptc/cli-win32-x64-msvc": "workspace:*"
   }
 }

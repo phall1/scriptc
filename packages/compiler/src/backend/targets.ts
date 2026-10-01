@@ -217,7 +217,7 @@ export const MACOS_X64_TARGET: NativeTargetSpec = {
 export const LINUX_X64_GNU_TARGET: NativeTargetSpec = {
   name: "linux-x64-gnu", llvmTriple: "x86_64-unknown-linux-gnu", dataLayout: X64_ELF_LAYOUT,
   cpu: "generic", features: "", pointerBits: 64, endianness: "little", objectFormat: "elf",
-  relocationModel: "pic", codeModel: "small", minimumOs: "glibc 2.36", helperMinimumOs: "glibc 2.35",
+  relocationModel: "pic", codeModel: "small", minimumOs: "glibc 2.34", helperMinimumOs: "static Linux executable",
   architecture: "x64", platform: "linux", outputSuffixes: { asm: ".s", obj: ".o", exe: "" },
   executableLinkerArgs: ["-target", "x86_64-unknown-linux-gnu", "-pthread", "-Wl,--gc-sections"],
   defaultLinker: "clang", defaultLinkerArgs: [], runtimeSystemLibraries: ["m"],
@@ -232,7 +232,7 @@ export const LINUX_X64_GNU_TARGET: NativeTargetSpec = {
 export const LINUX_ARM64_GNU_TARGET: NativeTargetSpec = {
   name: "linux-arm64-gnu", llvmTriple: "aarch64-unknown-linux-gnu", dataLayout: ARM64_ELF_LAYOUT,
   cpu: "generic", features: "", pointerBits: 64, endianness: "little", objectFormat: "elf",
-  relocationModel: "pic", codeModel: "small", minimumOs: "glibc 2.36", helperMinimumOs: "glibc 2.35",
+  relocationModel: "pic", codeModel: "small", minimumOs: "glibc 2.34", helperMinimumOs: "static Linux executable",
   architecture: "arm64", platform: "linux", outputSuffixes: { asm: ".s", obj: ".o", exe: "" },
   executableLinkerArgs: ["-target", "aarch64-unknown-linux-gnu", "-pthread", "-Wl,--gc-sections"],
   defaultLinker: "clang", defaultLinkerArgs: [], runtimeSystemLibraries: ["m"],
@@ -264,7 +264,7 @@ export const WINDOWS_X64_MSVC_TARGET: NativeTargetSpec = {
 export const LINUX_X64_MUSL_TARGET: NativeTargetSpec = {
   ...LINUX_X64_GNU_TARGET,
   name: "linux-x64-musl", llvmTriple: "x86_64-unknown-linux-musl",
-  minimumOs: "musl 1.2", helperMinimumOs: "glibc 2.35",
+  minimumOs: "musl 1.2", helperMinimumOs: "static Linux executable",
   executableLinkerArgs: ["-target", "x86_64-unknown-linux-musl", "-pthread", "-Wl,--gc-sections"],
   defaultLinker: "zig", defaultLinkerArgs: ["cc"], linkerTargetTriple: "x86_64-linux-musl",
   runtimePackPackage: "@scriptc/runtime-linux-x64-musl",
@@ -276,7 +276,7 @@ export const LINUX_X64_MUSL_TARGET: NativeTargetSpec = {
 export const LINUX_ARM64_MUSL_TARGET: NativeTargetSpec = {
   ...LINUX_ARM64_GNU_TARGET,
   name: "linux-arm64-musl", llvmTriple: "aarch64-unknown-linux-musl",
-  minimumOs: "musl 1.2", helperMinimumOs: "glibc 2.35",
+  minimumOs: "musl 1.2", helperMinimumOs: "static Linux executable",
   executableLinkerArgs: ["-target", "aarch64-unknown-linux-musl", "-pthread", "-Wl,--gc-sections"],
   defaultLinker: "zig", defaultLinkerArgs: ["cc"], linkerTargetTriple: "aarch64-linux-musl",
   runtimePackPackage: "@scriptc/runtime-linux-arm64-musl",
@@ -420,9 +420,11 @@ function requestedTarget(
     case "x86_64-macos": return MACOS_X64_TARGET;
     case "x86_64-unknown-linux-gnu":
     case "x86_64-linux-gnu":
+    case "x86_64-linux-gnu.2.34":
     case "x86_64-linux-gnu.2.36": return LINUX_X64_GNU_TARGET;
     case "aarch64-unknown-linux-gnu":
     case "aarch64-linux-gnu":
+    case "aarch64-linux-gnu.2.34":
     case "aarch64-linux-gnu.2.36": return LINUX_ARM64_GNU_TARGET;
     case "x86_64-unknown-linux-musl":
     case "x86_64-linux-musl": return LINUX_X64_MUSL_TARGET;
@@ -445,10 +447,12 @@ export function selectNativeTarget(
 ): NativeTargetSpec | null {
   const target = requestedTarget(raw, host, hostPlatform as NodeJS.Platform);
   if (target === null) return null;
-  if (target.platform === "linux" && target.name !== host.name && target.name !== "android-arm64") {
+  if (target.platform === "linux" && target.name !== "android-arm64" &&
+      (target.name !== host.name || raw.endsWith("-gnu.2.34") || raw.endsWith("-gnu.2.36"))) {
     return {
       ...target, defaultLinker: "zig", defaultLinkerArgs: ["cc"],
-      linkerTargetTriple: `${target.architecture === "x64" ? "x86_64" : "aarch64"}-linux-${target.name.endsWith("musl") ? "musl" : "gnu.2.36"}`,
+      linkerTargetTriple: raw.endsWith("-gnu.2.36") ? raw
+        : `${target.architecture === "x64" ? "x86_64" : "aarch64"}-linux-${target.name.endsWith("musl") ? "musl" : "gnu.2.34"}`,
     };
   }
   if (target.platform === "darwin" && hostPlatform !== "darwin") {

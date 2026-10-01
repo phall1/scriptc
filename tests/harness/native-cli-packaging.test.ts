@@ -76,7 +76,8 @@ test.each([true, false])("verify and archive a native distribution across packag
   const manifest = JSON.parse(readFileSync(join(unpacked, "bin", f.executable + ".json"), "utf8"));
   expect(manifest.ts7).toBe(f.manifest.ts7);
   const runtime = manifest.runtime_packs[0];
-  expect(JSON.parse(readFileSync(join(unpacked, "bin", runtime.path, "runtime-pack.json"), "utf8")).target.name).toBe(f.manifest.target);
+  expect(JSON.parse(readFileSync(join(unpacked, "bin", runtime.path.replaceAll("\\", "/"), "runtime-pack.json"), "utf8")).target.name).toBe(f.manifest.target);
+  expect(manifest.runtime_packs).toEqual(f.manifest.runtime_packs);
   expect(readFileSync(f.manifestPath)).toEqual(original);
 });
 
