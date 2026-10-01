@@ -882,7 +882,7 @@ function cjsScalarLiteral(e: ts.Expression): boolean {
  * a checked-dynamic (or unit) value, so a DYN module global can hold it:
  * no initializer, a unit literal, or a checker-`any` call/member/
  * identifier read (any-typed operations lower through the checked-dynamic tree in JS).
- * `new` expressions stay OUT even when checker-any (`new Anon.Sub()` over
+ * User-class `new` expressions stay OUT even when checker-any (`new Anon.Sub()` over
  * an expando class member constructs a TYPED instance — corpus 2032), as
  * does everything else (object/array literals have their own rules;
  * typed-but-unmappable initializers keep the %init-local adoption). */
@@ -901,6 +901,10 @@ function jsDynHoldableInitializer(lowerer: Lowerer, init: ts.Expression | undefi
   let e: ts.Expression = init;
   while (ts.isParenthesizedExpression(e)) e = e.expression;
   if (checkedGlobalReference(lowerer, e)) return true;
+  // The built-in Array constructor can create an evolving array whose
+  // inferred element type has no native mapping. Its checked reference
+  // must remain shared with separately declared functions and aliases.
+  if ((ts.isCallExpression(e) || ts.isNewExpression(e)) && lowerer.isStdlibGlobal(e.expression, "Array")) return true;
   // JavaScript process streams lower to native checked handles even when
   // their declared method overloads prevent a structural type mapping.
   // Register the shared slot before separately declared functions lower.

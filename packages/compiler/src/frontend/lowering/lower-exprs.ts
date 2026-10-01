@@ -6838,8 +6838,9 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
         // key afterward, then yields the RHS without rereading the property.
         if (ts.isElementAccessExpression(expr.left) && !expr.left.questionDotToken) {
           const recv = tryLowerExpression(lowerer, expr.left.expression);
-          if (recv?.type.kind === "dyn") {
-            return lowerDynMemberAssignment(lowerer, expr, recv);
+          if (recv && (recv.type.kind === "dyn" ||
+              recv.type.kind === "array" && isJsSourceFile(expr.getSourceFile()) && lowerer.dynConvertible(recv.type))) {
+            return lowerDynMemberAssignment(lowerer, expr, lowerer.coerceInto(expr.left.expression, recv, DYN));
           }
           if (recv?.type.kind === "array" || recv?.type.kind === "bytes") {
             const receiver = lowerer.declareHiddenLocal("%setArray", recv.type);
