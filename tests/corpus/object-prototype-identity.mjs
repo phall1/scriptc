@@ -10,4 +10,3 @@ console.log(prototype(Object.prototype) === null, prototype(bare) === null);
 console.log(prototype([]) === Array.prototype);
 console.log(prototype(Array.prototype) === Object.prototype);
 console.log(prototype(child) === plain, child.value);
-

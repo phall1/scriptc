@@ -6,4 +6,3 @@ console.log(answer);
 const pair: [any, any] = [answer, "done"];
 const [value, label] = pair;
 console.log(value, label);
-

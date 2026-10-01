@@ -6367,9 +6367,9 @@ export function canConvertToDyn(
 /** The composite extension of the dynFrom domain: JSON-safe scalars plus
  * numeric typed arrays and boxable functions anywhere, recursing through records
  * (fields + index value), arrays, and unit-armed unions — exactly the
- * sc_td_* walker's capability. Returns false for a composite carrying a
- * kind the walker cannot box (Maps or handles nested in a record); those
- * still fence. */
+ * sc_td_* walker's capability. Map and Set payloads must also support
+ * checked extraction back into native storage. Other unsupported nested
+ * kinds retain their conversion fence. */
 function canBoxDynComposite(
   t: IrType,
   getRecord: (shapeId: string) => IrRecordShape | undefined,
