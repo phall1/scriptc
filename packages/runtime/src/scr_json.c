@@ -8822,10 +8822,13 @@ ScrMap *scr_dyn_native_collection_check(const ScrDyn *value, int map, const char
 }
 
 ScrStr *scr_dyn_to_string_method(const ScrDyn *d, const ScrStr *enc, const ScrStr *what) {
-  if (d->kind == SCR_DYN_FUNC) {
-    ScrDyn *member = scr_dyn_fn_get(d, "toString", 8);
+  /* Object.create receivers must run their inherited formatter before the
+   * default object tag; Effect shard keys use it to produce distinct hashes. */
+  const bool object_method = d->kind == SCR_DYN_OBJ && scr_dyn_property_owner(d, "toString", 8);
+  if (d->kind == SCR_DYN_FUNC || object_method) {
+    ScrDyn *member = object_method ? scr_dyn_obj_read(d, "toString", 8) : scr_dyn_fn_get(d, "toString", 8);
     if (scr_exc_pending()) { scr_dyn_release(member); return NULL; }
-    if (member && member->kind != SCR_DYN_UNDEF) {
+    if (member && (object_method || member->kind != SCR_DYN_UNDEF)) {
       scr_dyn_this_push_dyn(d);
       ScrDyn *value = scr_dyn_call(member, NULL, 0, what->data);
       scr_dyn_this_pop();
