@@ -17,6 +17,7 @@ import {
   mangleClassTrace,
   mangleCtorThunk,
   mangleFunction,
+  mangleGlobal,
   mangleVtInstance,
   mangleVtStruct,
 } from "../mangle.js";
@@ -537,18 +538,34 @@ export function emitClassObjDefs(
     let localOwner = meta;
     let localValue = "%class";
     let localIndex = 0;
-    while (localOwner.def.localBaseCapture !== undefined && localOwner.base) {
+    while (localOwner.base) {
+      if (localOwner.def.localBaseCapture === undefined && localOwner.def.baseValueGlobal === undefined) {
+        localOwner = localOwner.base;
+        continue;
+      }
       host.declare(`declare ptr @scr_box_get_ref(ptr)`);
       const id = localIndex++;
       const base = localOwner.base;
-      localBaseInits.push(
+      if (localOwner.def.baseValueGlobal !== undefined) {
+        host.declare(`declare ptr @scr_classobj_retain_v(ptr)`);
+        localBaseInits.push(
+          `  %base.raw${id} = load ptr, ptr @${mangleGlobal(localOwner.def.baseValueGlobal)}`,
+          `  %base.value${id} = call ptr @scr_classobj_retain_v(ptr %base.raw${id})`,
+        );
+      } else localBaseInits.push(
         `  %base.caps${id} = getelementptr inbounds %ScrClassObj, ptr ${localValue}, i64 1`,
         `  %base.cap${id} = getelementptr inbounds ptr, ptr %base.caps${id}, ${host.sizeType} ${localOwner.def.localBaseCapture}`,
         `  %base.box${id} = load ptr, ptr %base.cap${id}`,
         `  %base.value${id} = call ptr @scr_box_get_ref(ptr %base.box${id})`,
+      );
+      if (base.def.localCaptures !== undefined) localBaseInits.push(
         `  %base.slot${id} = getelementptr inbounds %${mangleClassStruct(base.def.name)}, ptr %o, i64 0, i32 ${classEnvironmentIndex(base)}`,
         `  store ptr %base.value${id}, ptr %base.slot${id}`,
       );
+      else {
+        host.declare(`declare void @scr_classobj_release_v(ptr)`);
+        localBaseInits.push(`  call void @scr_classobj_release_v(ptr %base.value${id})`);
+      }
       localOwner = base;
       localValue = `%base.value${id}`;
     }
@@ -567,7 +584,7 @@ export function emitClassObjDefs(
       `  ret ptr %o`,
       `}`,
       `@${mangleClassObj(className)} = internal global %ScrClassObj ` +
-        `{ ${host.sizeType} -1, ${host.sizeType} ${intervalMeta.pre}, ${host.sizeType} ${intervalMeta.post}, ptr @${mangleCtorThunk(className)}, ptr ${nameSym}, ${host.sizeType} 0, ${host.sizeType} ${meta.def.jsLength ?? 0}, ptr null } ; class ${className}`,
+        `{ ${host.sizeType} -1, ${host.sizeType} ${intervalMeta.pre}, ${host.sizeType} ${intervalMeta.post}, ptr @${mangleCtorThunk(className)}, ptr ${nameSym}, ${host.sizeType} 0, ${host.sizeType} ${meta.def.jsLength ?? 0}, ptr null, ptr null } ; class ${className}`,
       ``,
     );
   }

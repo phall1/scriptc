@@ -3298,6 +3298,7 @@ static void scr_gen_exc_move(ScrExcCell *dst, ScrExcCell *src) {
 
 struct ScrGen {
   size_t rc;
+  ScrDyn *receiver;
   ScrFiber *fiber; /* NULL once torn down (done, or unstarted release) */
   int state;
   ScrGenSlot out; /* yielded value / completion value */
@@ -3322,6 +3323,7 @@ static ScrGen *scr_gen_new_common(void (*entry)(ScrFiber *, void *), void *argpa
   ScrGen *g = calloc(1, sizeof *g);
   if (!g) scr_oom();
   g->rc = 1;
+  g->receiver = scr_dyn_this_get();
   g->state = SCR_GEN_UNSTARTED;
   g->drop_args = drop_args;
   g->is_async = settle_async != NULL;
@@ -3368,6 +3370,7 @@ ScrGen *scr_gen_retain(ScrGen *g) {
 
 void scr_gen_release(ScrGen *g) {
   if (!g || --g->rc != 0) return;
+  scr_dyn_release(g->receiver);
   scr_gen_slot_reset(&g->out);
   scr_gen_slot_reset(&g->in);
   scr_gen_slot_reset(&g->ret);
@@ -3399,6 +3402,9 @@ void scr_gen_release_v(void *g) { scr_gen_release((ScrGen *)g); }
 
 bool scr_gen_done(ScrGen *g) { return g->state == SCR_GEN_DONE; }
 ScrGen *scr_gen_of_fiber(ScrFiber *f) { return f->gen; }
+ScrDyn *scr_gen_receiver(void) {
+  return scr_dyn_retain(scr_current && scr_current->gen ? scr_current->gen->receiver : scr_dyn_undefined());
+}
 
 /* Slot setters (release the previous occupant; payloads MOVE in). */
 static void scr_gen_slot_f64(ScrGenSlot *s, double v) {

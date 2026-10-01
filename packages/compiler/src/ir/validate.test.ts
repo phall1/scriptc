@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { BOOL, DYN, F64, NULL_T, STRING, UNDEFINED_T, VOID, arrayOf, mapOf, setOf, type IrExpr, type IrModule, type IrType, type IrUnionDef } from "./ir.js";
+import { BOOL, DYN, F64, NULL_T, STRING, SYMBOL_T, UNDEFINED_T, VOID, arrayOf, mapOf, setOf, type IrExpr, type IrModule, type IrType, type IrUnionDef } from "./ir.js";
 import { deserializeModule, serializeModule } from "./serialize.js";
 import { validateModule } from "./validate.js";
 
@@ -60,6 +60,57 @@ test("local classes retain serialized capture slots and fresh identity", () => {
   const mod = localClassModule();
   expect(validateModule(mod)).toEqual([]);
   expect(deserializeModule(serializeModule(mod))).toEqual(mod);
+});
+
+test("instance prototype helpers require the class receiver ABI", () => {
+  const mod = localClassModule();
+  mod.classes![0]!.instancePrototypeHelper = "%Local.prototype";
+  const receiver: IrType = { kind: "object", className: "Local" };
+  mod.functions.push({ name: "%Local.prototype", params: [{ localId: "this", name: "this", type: receiver }],
+    locals: [{ id: "this", name: "this", type: receiver, mutable: false }], returnType: DYN,
+    body: [{ kind: "return", value: { kind: "dynObjLit", fields: [], type: DYN, loc }, loc }], loc });
+  expect(validateModule(deserializeModule(serializeModule(mod)))).toEqual([]);
+  for (const variant of ["missing", "params", "receiver", "return", "captures"]) {
+    const bad = structuredClone(mod);
+    const helper = bad.functions.at(-1)!;
+    if (variant === "missing") bad.functions.pop();
+    if (variant === "params") helper.params = [];
+    if (variant === "receiver") helper.params[0]!.type = DYN;
+    if (variant === "return") helper.returnType = F64;
+    if (variant === "captures") helper.captures = [];
+    expect(validateModule(bad).some((error) => error.message.includes("instance prototype helper"))).toBe(true);
+  }
+});
+
+test("computed bases retain their constructor globals after serialization", () => {
+  const mod = expressionModule({ kind: "numLit", value: 0, type: F64, loc }, []);
+  mod.classes = [{ name: "Base", fields: [], loc }, { name: "Child", base: "Base", fields: [], baseValueGlobal: "%g.computed", loc }];
+  mod.globals = [{ id: "%g.computed", name: "computed", type: { kind: "classval", className: "Base" }, mutable: false }];
+  expect(deserializeModule(serializeModule(mod))).toEqual(mod);
+  expect(validateModule(deserializeModule(serializeModule(mod)))).toEqual([]);
+  for (const variant of ["missing", "type", "class", "capture"]) {
+    const bad = structuredClone(mod);
+    if (variant === "missing") bad.globals = [];
+    if (variant === "type") bad.globals![0]!.type = DYN;
+    if (variant === "class") bad.globals![0]!.type = { kind: "classval", className: "Child" };
+    if (variant === "capture") bad.classes![1]!.localBaseCapture = 0;
+    expect(validateModule(bad).some((error) => error.message.includes("computed base global"))).toBe(true);
+  }
+});
+
+test("class symbol fields preserve their identity metadata after serialization", () => {
+  const mod = expressionModule({ kind: "numLit", value: 0, type: F64, loc }, []);
+  mod.classes = [{ name: "Item", fields: [{ name: "sym:key", type: STRING }], symbolFields: [{ field: "sym:key", globalId: "%g.key" }], loc }];
+  mod.globals = [{ id: "%g.key", name: "key", type: SYMBOL_T, mutable: false }];
+  expect(deserializeModule(serializeModule(mod))).toEqual(mod);
+  expect(validateModule(deserializeModule(serializeModule(mod)))).toEqual([]);
+  for (const variant of ["global", "type", "field"]) {
+    const bad = structuredClone(mod);
+    if (variant === "global") bad.globals = [];
+    if (variant === "type") bad.globals![0]!.type = STRING;
+    if (variant === "field") bad.classes![0]!.fields = [];
+    expect(validateModule(bad).some((error) => error.message.includes("symbol field metadata"))).toBe(true);
+  }
 });
 
 test.each(["missing", "unboxed", "type", "slot", "receiver", "closure", "layout", "direct-new"])("local classes reject an invalid %s environment", (variant) => {

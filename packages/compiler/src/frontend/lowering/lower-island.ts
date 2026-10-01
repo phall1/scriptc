@@ -3454,6 +3454,10 @@ export function lowerStaticReadableStreamReaderCall(
       return { kind: "numLit", value: staticValue, type: F64, loc };
     }
     const native = own(STATIC_MATH_FNS, member);
+    if (native && (member === "min" || member === "max" || member === "hypot")) return lowerer.lowerNativeCallableValue({
+      fn: member === "min" ? "math.minArr" : member === "max" ? "math.maxArr" : "math.hypotArr",
+      params: [arrayOf(F64)], result: F64, valueParams: [{ mode: "rest", type: F64 }],
+    }, `Math.${member}`, loc);
     if (native && member !== "min" && member !== "max" && member !== "hypot") {
       const params = Array.from({ length: native.arity }, () => F64);
       return lowerer.lowerNativeCallableValue({

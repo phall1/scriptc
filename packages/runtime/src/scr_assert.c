@@ -134,6 +134,7 @@ void scr_assert_fail_msg(ScrStr *message) {
   scr_str_release(message); /* scr_error_new retained its copy */
   scr_str_release(e->name);
   e->name = scr_str_new("AssertionError", 14);
+  e->name_present = true;
   scr_error_set_code(e, "ERR_ASSERTION");
   scr_throw_obj(e, &scr_error_retain_v, &scr_error_release_v, scr_error_trace_arg());
 }

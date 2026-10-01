@@ -139,11 +139,24 @@ void scr_exc_clear(void) { scr_exc_reset(); }
 
 /* ── catch bindings (ScrCaught — contract in scr_runtime.h) ──────────── */
 
-ScrCaught *scr_exc_take(void) {
-  ScrCaught *c = calloc(1, sizeof *c);
-  if (!c) {
-    scr_trap("scriptc: out of memory\n");
+void scr_caught_trace_v(void *object, ScrTraceVisit visit, void *ctx) {
+  ScrCaught *c = object;
+  if (c->payload && c->trace_fn) visit(c->payload, ctx);
+}
+
+static void scr_caught_gcfree(void *object) {
+  ScrCaught *c = object;
+  if (c->kind == SCR_EXC_STR) {
+    scr_str_release((ScrStr *)c->payload);
+  } else if (c->payload && c->release_fn && !c->trace_fn) {
+    c->release_fn(c->payload);
   }
+  scr_obj_free_note();
+  scr_cyc_free(c);
+}
+
+ScrCaught *scr_exc_take(void) {
+  ScrCaught *c = scr_cyc_alloc(sizeof *c, scr_caught_trace_v, scr_caught_gcfree);
   c->rc = 1;
   c->kind = scr_exc_kind;
   c->f64 = scr_exc_f64;
@@ -169,6 +182,7 @@ ScrCaught *scr_caught_retain(ScrCaught *c) {
 void scr_caught_release(ScrCaught *c) {
   if (!c) return;
   if (--c->rc == 0) {
+    scr_cyc_on_dead(c);
     if (c->kind == SCR_EXC_STR) {
       scr_str_release((ScrStr *)c->payload);
     } else if (c->kind == SCR_EXC_REF || c->kind == SCR_EXC_OBJ ||
@@ -176,7 +190,9 @@ void scr_caught_release(ScrCaught *c) {
       c->release_fn(c->payload);
     }
     scr_obj_free_note();
-    free(c);
+    scr_cyc_free(c);
+  } else {
+    scr_cyc_on_release(c);
   }
 }
 

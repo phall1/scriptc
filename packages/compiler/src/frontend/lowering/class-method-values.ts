@@ -2,9 +2,9 @@ import * as ts from "../ts7/adapter.js";
 import { BOOL, DYN, STRING, RUNTIME_ERROR_CLASSES, typeEquals, typeKey, type IrExpr, type IrFunction, type IrStmt, type IrType, type SrcLoc } from "../../ir/ir.js";
 import { varRef } from "../../ir/build.js";
 import { everyStmtList, transformStmtList } from "../../ir/traverse.js";
-import { locOf } from "../program.js";
-import type { Lowerer } from "./lowerer.js";
-import { findGenericMethodOn, findMethodOn, genericOverrideBelow, type ClassInfo } from "./lower-classes.js";
+import { isJsSourceFile, locOf } from "../program.js";
+import { newFnCtx, type Lowerer } from "./lowerer.js";
+import { classMemberNameOf, findGenericMethodOn, findMethodOn, genericOverrideBelow, type ClassInfo } from "./lower-classes.js";
 import { funcTypeFromParamShapes, implicitDefaultInstance, type ParamShape } from "./lower-calls.js";
 import { errorToStringMethod } from "./error-methods.js";
 import { classCallbackValue, isClassCallback } from "./class-callbacks.js";
@@ -16,7 +16,7 @@ export function lowerClassMethodValue(lowerer: Lowerer, expr: ts.PropertyAccessE
   if (method === "toString" && findMethodOn(lowerer, info, method)?.declarer.builtinError) {
     return errorToStringMethod(lowerer, lowerer.lowerExpr(expr.expression));
   }
-  const value = methodValue(lowerer, expr, info);
+  let value = methodValue(lowerer, expr, info);
   if (!value) return null;
   const loc = locOf(expr);
   const callback = isClassCallback(lowerer, info, method);
@@ -30,6 +30,11 @@ export function lowerClassMethodValue(lowerer: Lowerer, expr: ts.PropertyAccessE
   };
   const overrides = [...lowerer.classes.values()].filter((candidate) =>
     candidate !== info && lowerer.isSubclassOf(candidate.def.name, info.def.name) && candidate.methods.has(method));
+  const checked = isJsSourceFile(expr.getSourceFile()) && lowerer.dynConvertible(value.type) && overrides.every((candidate) => {
+    const selected = methodValue(lowerer, expr, candidate);
+    return selected !== null && lowerer.dynConvertible(selected.type);
+  });
+  if (checked && overrides.length) value = lowerer.coerceToExpected(value, DYN);
   if (overrides.length === 0) {
     return finish({ kind: "seqExpr", stmts: [{ kind: "exprStmt", expr: reference, loc }], result: value, type: value.type, loc });
   }
@@ -42,7 +47,8 @@ export function lowerClassMethodValue(lowerer: Lowerer, expr: ts.PropertyAccessE
     const body: IrStmt[] = [];
     overrides.sort((a, b) => lowerer.isSubclassOf(a.def.name, b.def.name) ? -1 : lowerer.isSubclassOf(b.def.name, a.def.name) ? 1 : 0);
     for (const candidate of overrides) {
-      const selected = methodValue(lowerer, expr, candidate);
+      let selected = methodValue(lowerer, expr, candidate);
+      if (selected && checked) selected = lowerer.coerceToExpected(selected, DYN);
       if (!selected || !typeEquals(selected.type, value.type)) {
         lowerer.unsupported("SC1090", expr, "method values with incompatible override signatures");
       }
@@ -63,6 +69,11 @@ export function classMethodValue(lowerer: Lowerer, blame: ts.Node, info: ClassIn
   const found = findMethodOn(lowerer, info, method);
   const generic = found ? null : findGenericMethodOn(lowerer, info, method);
   if (!found && !generic) return null;
+  const declaration = found?.declarer ?? generic!.declarer;
+  const reflected = declaration.prototypeMethodValues?.get(method);
+  if (reflected) return reflected;
+  const checkedMethod = reflectedClassMethodValue(lowerer, declaration, method);
+  if (checkedMethod) return checkedMethod;
   let owner: ClassInfo;
   let params: ParamShape[];
   let ret: IrType;
@@ -112,6 +123,44 @@ export function classMethodValue(lowerer: Lowerer, blame: ts.Node, info: ClassIn
     lowerer.liftedFns.push(fn);
   }
   return { kind: "closure", fnName: name, captures: [], type, loc };
+}
+
+/** Public JS prototype methods are ordinary callables over their actual
+ * receiver, including descriptor-created copies of class instances. */
+export function reflectedClassMethodValue(lowerer: Lowerer, info: ClassInfo, method: string): IrExpr | null {
+  const existing = info.prototypeMethodValues?.get(method);
+  if (existing) return existing;
+  const declaration = info.decl;
+  if (!declaration) return null;
+  const member = declaration.members.find((member) => {
+    if ((!ts.isMethodDeclaration(member) && !ts.isAccessor(member)) || !member.name ||
+        ts.getModifiers(member)?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword)) return false;
+    const name = classMemberNameOf(lowerer, member.name);
+    return (ts.isMethodDeclaration(member) ? name : ts.isGetAccessor(member) ? `get:${name}` : ts.isSetAccessor(member) ? `set:${name}` : null) === method;
+  });
+  if (!member || (!ts.isMethodDeclaration(member) && !ts.isAccessor(member)) || !member.body) return null;
+  let needsNativeReceiver = !isJsSourceFile(declaration.getSourceFile()) || info.localClass !== undefined ||
+    lowerer.errorHierarchyClassOf(info.def.name);
+  ts.walkPreorder(member, (node) => {
+    if (ts.isPrivateIdentifier(node) || node.kind === ts.SyntaxKind.SuperKeyword) needsNativeReceiver = true;
+  });
+  if (needsNativeReceiver) return null;
+  const context = newFnCtx(false, null, null, DYN);
+  const previousClass = lowerer.currentClass;
+  lowerer.currentClass = info;
+  lowerer.fnStack.push(context);
+  try {
+    const value = lowerer.lowerLambda(member);
+    if (value.kind === "closure" && value.captures.length === 0) {
+      const body = lowerer.liftedFns.find((fn) => fn.name === value.fnName);
+      if (body?.captures?.length === 0) delete body.captures;
+    }
+    (info.prototypeMethodValues ??= new Map()).set(method, value);
+    return value;
+  } finally {
+    lowerer.fnStack.pop();
+    lowerer.currentClass = previousClass;
+  }
 }
 
 /** Complete adapters after all native class bodies and instantiations exist. */

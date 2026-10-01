@@ -46,6 +46,12 @@ export function lowerStringSplitCall(
       type: { kind: "union", unionId: lowerer.unions.intern([{ kind: "nullT" }, UNDEFINED_T]) }, loc,
     };
   }
+  if (separator.type.kind === "dyn") {
+    separator = {
+      kind: "dynCheck", value: separator,
+      type: { kind: "union", unionId: lowerer.unions.intern([STRING, F64, BOOL, { kind: "bigint" }, { kind: "nullT" }, UNDEFINED_T]) }, loc,
+    };
+  }
   const scalar = separator.type.kind === "string" || separator.type.kind === "f64" ||
     separator.type.kind === "bool" || separator.type.kind === "bigint" ||
     (separator.type.kind === "union" && (lowerer.unions.get(separator.type.unionId)?.arms.every((arm) =>

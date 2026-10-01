@@ -28,7 +28,7 @@ import { collectExpandoMembers } from "./lower-expando.js";
 import { recordTextCodecClass } from "../../ir/ir.js";
 import { isUnitOnlyTsType, unitOnlyUnion } from "../type-mapper.js";
 import type { ClassInfo } from "./lower-classes.js";
-import { collectVirtualJsMethods, decoratorNodesOf, genericIfaceBindingKeepsClass, guaranteedDecorationThrow } from "./lower-classes.js";
+import { collectVirtualJsMethods, decoratorNodesOf, genericIfaceBindingKeepsClass, guaranteedDecorationThrow, storedClassValueType } from "./lower-classes.js";
 import { isMixinFnBinding, mixinResultBindingClassOf } from "./lower-mixins.js";
 import { cjsModuleRef, cjsModuleRegistryPrelude } from "./lower-node-module.js";
 import { forkTargetPaths } from "../fork-target.js";
@@ -250,10 +250,32 @@ export function appendForkModules(
    * signatures are cheap and calls resolve against them; only BODY lowering
    * is reachability-gated. */
   export function collectProgram(lowerer: Lowerer, parts: FileParts[]): void {
+    const computed = new Set<ts.ClassDeclaration>();
+    for (const fp of parts) for (const decl of fp.classDecls) {
+      const heritage = decl.heritageClauses?.find((clause) => clause.token === ts.SyntaxKind.ExtendsKeyword)?.types[0]?.expression;
+      if (heritage && ts.isCallExpression(heritage)) computed.add(decl);
+    }
+    // Descendants need the computed ancestor's completed layout before
+    // their own fields and inherited methods can be collected.
+    const computedSymbols = new Set([...computed].map((decl) => declSymbolOf(lowerer, decl)).filter((symbol) => symbol !== undefined));
+    let expanded = true;
+    while (expanded) {
+      expanded = false;
+      for (const fp of parts) for (const decl of fp.classDecls) {
+        if (computed.has(decl)) continue;
+        const heritage = decl.heritageClauses?.find((clause) => clause.token === ts.SyntaxKind.ExtendsKeyword)?.types[0]?.expression;
+        const base = heritage && ts.isIdentifier(heritage) ? lowerer.resolveValueSymbol(heritage) : undefined;
+        if (!base || !computedSymbols.has(base)) continue;
+        computed.add(decl);
+        const symbol = declSymbolOf(lowerer, decl);
+        if (symbol) computedSymbols.add(symbol);
+        expanded = true;
+      }
+    }
     lowerer.collecting = true;
     try {
       collectVirtualJsMethods(lowerer, parts.map((part) => part.sf));
-      for (const fp of parts) for (const decl of fp.classDecls) lowerer.collectClassShape(decl);
+      for (const fp of parts) for (const decl of fp.classDecls) if (!computed.has(decl)) lowerer.collectClassShape(decl);
       for (const fp of parts) for (const decl of fp.fnDecls) lowerer.collectSignature(decl);
     } finally {
       lowerer.collecting = false;
@@ -275,6 +297,52 @@ export function appendForkModules(
       for (const fp of parts) lowerer.collectGlobals(fp.sf, fp.topStmts);
       lowerer.collectNpmImports(parts);
       lowerer.collectJsonImports(parts);
+    }
+    for (const decl of computed) {
+      const symbol = declSymbolOf(lowerer, decl);
+      const wasCollecting: boolean = lowerer.collecting;
+      lowerer.collecting = true;
+      const previousSink = lowerer.diagSink;
+      const deferred: import("../../diagnostics/diagnostic.js").ScrDiagnostic[] = [];
+      lowerer.diagSink = deferred;
+      const expression = decl.heritageClauses!.find((clause) => clause.token === ts.SyntaxKind.ExtendsKeyword)!.types[0]!.expression;
+      const context = newFnCtx(false, null, null, DYN);
+      lowerer.fnStack.push(context);
+      try {
+        let value = lowerer.lowerExpr(expression);
+        const known = value.type.kind === "dyn" ? storedClassValueType(lowerer, expression) : null;
+        if (known?.kind === "classval") value = lowerer.coerceToExpected(value, known);
+        if (value.type.kind === "dyn" || value.type.kind === "func") {
+          const name = `%class.base.${lowerer.classNamer(decl)}`;
+          const loc = locOf(expression);
+          lowerer.liftedFns.push({ name, params: [], returnType: value.type, locals: context.locals,
+            body: [{ kind: "return", value, loc }], loc });
+          lowerer.computedCallableBases.set(decl, { kind: "call", callee: name, args: [], type: value.type, loc });
+        }
+        if (value.type.kind === "classval") {
+          const classInfo = lowerer.classes.get(value.type.className);
+          if (classInfo) {
+            const name = `%class.base.${lowerer.classNamer(decl)}`;
+            const loc = locOf(expression);
+            lowerer.liftedFns.push({ name, params: [], returnType: value.type, locals: context.locals,
+              body: [{ kind: "return", value, loc }], loc });
+            lowerer.computedClassBases.set(lowerer.classNamer(decl), { value: { kind: "call", callee: name, args: [], type: value.type, loc }, classInfo });
+          }
+        }
+      } catch (error) {
+        if (!(error instanceof PoisonError)) throw error;
+      } finally {
+        lowerer.fnStack.pop();
+        lowerer.diagSink = previousSink;
+      }
+      lowerer.diagSink = deferred;
+      try { lowerer.collectClassShape(decl); }
+      finally { lowerer.diagSink = previousSink; }
+      if (symbol && deferred.length) {
+        lowerer.deferredDiags.set(symbol, [...(lowerer.deferredDiags.get(symbol) ?? []), ...deferred]);
+        lowerer.deferredClassByName.set(lowerer.classNamer(decl), symbol);
+      }
+      lowerer.collecting = wasCollecting;
     }
   }
 
@@ -839,6 +907,7 @@ function jsDynHoldableInitializer(lowerer: Lowerer, init: ts.Expression | undefi
   if (ts.isPropertyAccessExpression(e)) {
     const member = lowerer.stdlibGlobalMember(e, "process");
     if (member === "stdin" || member === "stdout" || member === "stderr") return true;
+    if (e.name.text === "constructor" && lowerer.checker.getCallSignatures(lowerer.typeOf(e.expression)).length > 0) return true;
   }
   if (e.kind === ts.SyntaxKind.NullKeyword) return true;
   if (ts.isIdentifier(e) && e.text === "undefined") return true;
@@ -1659,7 +1728,15 @@ export function collectGlobals(lowerer: Lowerer, sf: ts.SourceFile, topStmts: ts
                   // exactly the local rule (uncheckedOverloadHandleCall).
                   (uncheckedOverloadHandleCall(lowerer, decl.initializer) ? JSVAL : null) : null)
                 : null;
-            let type = handleT ?? factoryType ?? lowerer.irTypeOf(nameNode);
+            // Unannotated results of JavaScript calls can carry callable
+            // objects or heterogeneous unions absent from the native type
+            // map. Their compiled initializer still validates every crossing.
+            const callSignature = !decl.type && !hasJsTypeAnnotation(decl) && decl.initializer && ts.isCallExpression(decl.initializer)
+              ? lowerer.checker.getResolvedSignature(decl.initializer) : undefined;
+            const callDeclaration = callSignature && lowerer.checker.signatureDeclaration(callSignature);
+            const inferredJsCall = callDeclaration && isJsSourceFile(callDeclaration.getSourceFile()) &&
+              !lowerer.mapTypeOf(lowerer.typeOf(nameNode));
+            let type = handleT ?? factoryType ?? (inferredJsCall ? DYN : lowerer.irTypeOf(nameNode));
             if (isJsSourceFile(sf) && !decl.type && !hasJsTypeAnnotation(decl) && decl.initializer &&
                 ts.isNewExpression(decl.initializer) && lowerer.mapTypeOf(lowerer.typeOf(decl.initializer.expression))?.kind === "dyn" &&
                 !(ts.isIdentifier(decl.initializer.expression) && lowerer.isStdlibSymbol(lowerer.checker.getSymbolAtLocation(decl.initializer.expression)))) type = DYN;
@@ -2188,7 +2265,7 @@ export function collectGlobals(lowerer: Lowerer, sf: ts.SourceFile, topStmts: ts
           // SITE's position instead (below) — their inner class node may
           // even live in another file.
           c.decl && ts.isClassDeclaration(c.decl) && !c.mixinInstance && c.decl.getSourceFile() === sf &&
-          (c.callableBase !== undefined || c.staticFields.length > 0 || (c.staticBlocks?.length ?? 0) > 0 || c.classDecorators !== undefined))
+          (c.callableBase !== undefined || c.def.baseValueGlobal !== undefined || c.staticFields.length > 0 || (c.staticBlocks?.length ?? 0) > 0 || c.classDecorators !== undefined))
         .map((c) => ({ pos: c.decl!.getStart(), info: c }));
       // Statics-bearing MIXIN instantiations whose call evaluates in THIS
       // file: their declaration-time code runs when the call does — the

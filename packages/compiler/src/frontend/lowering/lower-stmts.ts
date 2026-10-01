@@ -1606,8 +1606,10 @@ export function isParseArgsDynCheckerType(lowerer: Lowerer, type: ts.Type): bool
     dynSpell?: string,
     allowDynObject = false,): void {
     if (ts.isObjectBindingPattern(pattern)) {
-      const patternSymbol = lowerer.typeOf(pattern).getSymbol();
+      const patternType = lowerer.typeOf(pattern);
+      const patternSymbol = patternType.getSymbol();
       allowDynObject ||= patternSymbol?.name === "SegmentData" && lowerer.isStdlibSymbol(patternSymbol);
+      allowDynObject ||= (patternType.flags & ts.TypeFlags.Object) !== 0 && lowerer.mapTypeOf(patternType)?.kind === "dyn";
     }
     const present = patternSourceValue(lowerer, srcRef(), ts.isArrayBindingPattern(pattern), out, locOf(pattern), dynSpell);
     if (!typeEquals(present.type, srcType)) {
@@ -1769,20 +1771,22 @@ export function isParseArgsDynCheckerType(lowerer: Lowerer, type: ts.Type): bool
         out.push({
           kind: "varDecl",
           localId: pack.id,
-          init: {
+          init: pattern.elements.some((element) => ts.isBindingElement(element) && element.dotDotDotToken) ? {
             kind: "libCall",
             fn: "dyn.iterPack",
             args: [srcRef(), { kind: "strLit", value: dynSpell ?? "", type: STRING, loc }],
             type: DYN,
             loc,
-          },
+          } : { kind: "dynIterN", value: srcRef(), count: pattern.elements.length, type: DYN, loc },
           loc,
         });
         pattern.elements.forEach((el, i) => {
           if (ts.isOmittedExpression(el) || el.name === undefined) return; // hole: the position skips
           const elLoc = locOf(el);
           if (el.dotDotDotToken) {
-            lowerer.unsupported("SC1031", el, "rest elements over checked-dynamic sources");
+            lowerer.bindPatternTarget(el.name, { kind: "dynInvoke", recv: varRef(pack.id, DYN, elLoc),
+              method: "slice", calleeName: "Array.prototype.slice", args: [lowerer.coerceToExpected(numLit(i, elLoc), DYN)], type: DYN, loc: elLoc }, isLet, out);
+            return;
           }
           let value: IrExpr = {
             kind: "dynKeyGet",
@@ -3846,9 +3850,9 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
     const preservesObjectIdentity = init.type.kind === "dyn" &&
       (inferredObjectType?.kind === "record" || inferredObjectType?.kind === "array" ||
         (isJsSourceFile(decl.getSourceFile()) && inferredObjectType !== null &&
-          (inferredObjectType.kind === "date" || inferredObjectType.kind === "func" || jsOpenObjectType(decl, inferredObjectType, lowerer.shapes, lowerer.unions).kind === "dyn")) ||
+          (inferredObjectType.kind === "date" || inferredObjectType.kind === "func" || inferredObjectType.kind === "object" || jsOpenObjectType(decl, inferredObjectType, lowerer.shapes, lowerer.unions).kind === "dyn")) ||
         (isJsSourceFile(decl.getSourceFile()) && inferredObjectType !== null &&
-          (isUnitType(inferredObjectType) || inferredObjectType.kind === "union" && lowerer.unions.get(inferredObjectType.unionId)?.arms.every(isUnitType)))) &&
+          (inferredObjectType.kind === "void" || isUnitType(inferredObjectType) || inferredObjectType.kind === "union" && lowerer.unions.get(inferredObjectType.unionId)?.arms.every(isUnitType)))) &&
       !decl.type && !hasJsTypeAnnotation(decl);
     if (expandsObject || preservesObjectIdentity || (isJsSourceFile(decl.getSourceFile()) &&
         !decl.type && isNativeBuiltinValueInitializer(lowerer, decl.initializer))) {
@@ -4410,9 +4414,10 @@ function lowerBranchSwitch(
    *   narrowing tests (`e instanceof C` over hierarchy classes, `typeof e
    *   === "string"/"number"/"boolean"`), reads under a proven narrow
    *   (caughtRead bridges them with caughtNarrow, trust-the-checker like
-   *   unionNarrow), and rethrow (`throw e`). Raw uses, captures, and
-   *   assignment are fenced (SC1063 and friends); destructuring patterns
-   *   are SC1062. The `: any` / `: unknown` annotations tsc admits both
+   *   unionNarrow), and rethrow (`throw e`). Unsupported raw uses and
+   *   assignments are fenced (SC1063 and friends); destructuring patterns
+   *   are SC1062. Captures retain the snapshot beyond the catch scope.
+   *   The `: any` / `: unknown` annotations tsc admits both
    *   lower the same way (tsc narrows either through the tests).
    * - `finally` runs on normal completion, exception paths, and every
    *   abrupt completion that crosses it. Return values are snapshotted
@@ -5358,6 +5363,13 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
           }
           if (!expr.left.questionDotToken) {
             const recv = tryLowerExpression(lowerer, expr.left.expression);
+            if (recv?.type.kind === "object" && recv.type.className === "%Error") {
+              const loc = locOf(expr);
+              return { kind: "exprStmt", expr: { kind: "libCall", fn: "dyn.keySet", args: [
+                lowerer.coerceToExpected(recv, DYN), { kind: "strLit", value: expr.left.name.text, type: STRING, loc },
+                lowerer.lowerExprExpecting(expr.right, DYN),
+              ], type: VOID, loc }, loc };
+            }
             if (recv && isDynTypedRefType(recv.type)) {
               const info = lowerer.classes.get(recv.type.className);
               if (info && !info.def.runtime && !info.builtinError && !info.builtinEmitter && !info.builtinStream &&

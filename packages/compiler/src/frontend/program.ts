@@ -522,20 +522,19 @@ export function entryPackageFilePredicate(entryPath: string): (file: string) => 
   };
 }
 
-/** maxNodeModuleJsDepth omits even relative JS imports within an installed
- * entry's own package. Add those sources as roots to the existing discovery
- * fixpoint without raising the checker depth for other packages. */
+/** maxNodeModuleJsDepth can omit relative imports within an admitted
+ * package. Discover its runtime sources to a fixpoint so the checker and
+ * module resolver see the same graph regardless of import traversal order. */
 function entryPackageProgramRoots7(program: ts.Program, entryPath: string): string[] {
-  if (!isNodeModulesPath(entryPath)) return [];
   const belongsToEntry = entryPackageFilePredicate(entryPath);
   const roots = new Set<string>();
   for (const sf of program.getSourceFiles()) {
-    if (sf.isDeclarationFile || !belongsToEntry(sf.fileName)) continue;
+    if (sf.isDeclarationFile || (!belongsToEntry(sf.fileName) && npmStaticPackageOfPath(sf.fileName) === null)) continue;
     for (const specifier of sf.imports) {
       if (!ts.isStringLiteralLike(specifier)) continue;
       const target = resolveProjectModule(sf.fileName, specifier.text);
       if (
-        target !== null && belongsToEntry(target) && isJsSourceFileName(target) &&
+        target !== null && (belongsToEntry(target) || npmStaticPackageOfPath(target) !== null) && isJsSourceFileName(target) &&
         program.getSourceFile(target) === undefined
       ) roots.add(target);
     }
@@ -771,12 +770,28 @@ export function loadProgram(
   const host = services.createProgramHost({ cwd: dirname(entryPath), fsShadow });
   try {
     const load = loadProgram7(host, entryPath, externalTypes);
+    let authoredHost: ts.Ts7Host | null = null;
+    let authoredLoad: ReturnType<typeof loadProgram7> | null = null;
     return {
       ...load,
       services,
+      projectWorld: npmStaticPackages.length === 0 ? load.projectWorld : () => {
+        // Check authored code against the package's published declarations.
+        // Runtime bodies still lower from JavaScript in the original world;
+        // inference there must not manufacture errors in valid user code.
+        if (!authoredLoad) {
+          authoredHost = services.createProgramHost({ cwd: dirname(entryPath) });
+          authoredLoad = loadProgram7(authoredHost, entryPath, externalTypes);
+        }
+        return authoredLoad.projectWorld();
+      },
       dispose: () => {
-        try { load.disposeAll(); }
-        finally { host.close(); }
+        try { authoredLoad?.disposeAll(); }
+        finally {
+          authoredHost?.close();
+          try { load.disposeAll(); }
+          finally { host.close(); }
+        }
       },
     };
   } catch (error) {
@@ -810,7 +825,10 @@ export function checkPreflight<T extends LoadResult>(load: T): ScrDiagnostic[] {
  *    assignments in CJS classes (`this[kSym] = v` under `module.exports =
  *    Class`) — 5.9.3 synthesized expando symbols, tsgo trips its
  *    redeclaration check instead (the corpus's countdown fixture). */
-const TS7_JS_RELAXED_EXTRA: ReadonlySet<number> = new Set([2309, 2323]);
+// Ordinary JavaScript functions are constructable even when the checker
+// retains only their call signature after a factory return. Heritage
+// lowering separately verifies the actual constructor implementation.
+const TS7_JS_RELAXED_EXTRA: ReadonlySet<number> = new Set([2309, 2323, 2507]);
 
 function suppressedJsStrictness7(d: ts.Diagnostic): boolean {
   const file = d.fileName;
@@ -2057,8 +2075,10 @@ export function makeCycleAdmission(
  * guarded %init calls of exactly the module preflight resolved here. */
 function resolveImport7(program: ts.Program, from: ts.SourceFile, specifier: string): ts.SourceFile | null {
   const resolved = resolveProjectModule(from.fileName, specifier);
-  if (resolved === null) return null;
-  return program.getSourceFile(resolved) ?? null;
+  if (resolved !== null) return program.getSourceFile(resolved) ?? null;
+  const npm = resolveNpmImport7(from.fileName, specifier);
+  return npm && isNpmStaticPackage(npm.packageName)
+    ? npmStaticProgramDep(program, npm.packageName, npm.typesFile) : null;
 }
 
 /** An import that resolves into node_modules: the package's shipped .d.ts

@@ -135,6 +135,7 @@ void scr_error_init(void *obj, int kind, ScrStr *message) {
   const char *n = scr_error_names[kind];
   e->name = scr_str_new(n, strlen(n));
   e->message = message ? scr_str_retain(message) : scr_str_new("", 0);
+  e->message_present = message != NULL;
   e->stack_frames = scr_stack_capture();
 }
 
@@ -172,9 +173,28 @@ ScrError *scr_error_new(int kind, ScrStr *message) {
   return e;
 }
 
-ScrStr *scr_error_to_string(ScrError *e) {
-  /* ECMA-262 Error.prototype.toString over the two fields (no prototype
-   * chain exists: constructors always initialize both) — except Node's
+static SCR_TL ScrStr *(*scr_error_message_reader)(ScrError *);
+static SCR_TL ScrStr *(*scr_error_name_reader)(ScrError *);
+
+void scr_error_install_message_reader(ScrStr *(*reader)(ScrError *)) {
+  scr_error_message_reader = reader;
+}
+
+void scr_error_install_name_reader(ScrStr *(*reader)(ScrError *)) {
+  scr_error_name_reader = reader;
+}
+
+ScrStr *scr_error_default_name(const ScrError *e) {
+  for (int i = 1; i < SCR_ERR_COUNT; i++) {
+    if (i == SCR_ERR_DOMEX) continue;
+    if (scr_error_vts[i].pre <= e->vt->pre && e->vt->pre <= scr_error_vts[i].post)
+      return scr_str_new(scr_error_names[i], strlen(scr_error_names[i]));
+  }
+  return scr_str_new("Error", 5);
+}
+
+static ScrStr *scr_error_format(ScrError *e, ScrStr *name, ScrStr *message) {
+  /* ECMA-262 Error.prototype.toString over the resolved properties — except Node's
    * OWN error classes: AssertionError's toString and the NodeError
    * family's construction-time name both render "name [code]: message".
    * Every ERR_*-coded error this runtime mints IS one of those classes
@@ -182,8 +202,6 @@ ScrStr *scr_error_to_string(ScrError *e) {
    * the code-prefix test is exact for runtime-thrown errors; a user
    * assigning an ERR_* code onto a plain Error would bracket here where
    * Node would not (documented — user code owns that spelling). */
-  ScrStr *name = e->name;
-  ScrStr *message = e->message;
   bool assertion = name && e->code && e->code->len >= 4 &&
                    memcmp(e->code->data, "ERR_", 4) == 0;
   if (!name || name->len == 0) {
@@ -214,9 +232,36 @@ ScrStr *scr_error_to_string(ScrError *e) {
   return out;
 }
 
+ScrStr *scr_error_to_string(ScrError *e) {
+  // Diagnostic formatting can run with the original error still pending.
+  // Accessors execute with a clear cell, and cannot replace that error.
+  ScrCaught *pending = scr_exc_pending() ? scr_exc_take() : NULL;
+  ScrStr *name = !e->name_present && scr_error_name_reader
+    ? scr_error_name_reader(scr_error_retain(e)) : scr_str_retain(e->name);
+  ScrStr *message = scr_exc_pending() ? NULL : !e->message_present && scr_error_message_reader
+    ? scr_error_message_reader(scr_error_retain(e)) : scr_str_retain(e->message);
+  if (pending) {
+    if (scr_exc_pending()) {
+      scr_exc_clear();
+      scr_str_release(message);
+      message = scr_str_retain(e->message);
+      scr_str_release(name);
+      name = scr_str_retain(e->name);
+    }
+    scr_rethrow(pending);
+    scr_caught_release(pending);
+  }
+  if (!name || !message) { scr_str_release(name); scr_str_release(message); return NULL; }
+  ScrStr *result = scr_error_format(e, name, message);
+  scr_str_release(name);
+  scr_str_release(message);
+  return result;
+}
+
 ScrStr *scr_error_stack(ScrError *e) {
   if (!e->stack) {
     ScrStr *heading = scr_error_to_string(e);
+    if (!heading) return NULL;
     e->stack = e->stack_frames ? scr_str_concat(heading, e->stack_frames) : scr_str_retain(heading);
     scr_str_release(heading);
   }
@@ -367,6 +412,8 @@ void scr_throw_error_named(ScrStr *name, ScrStr *message) {
   ScrError *e = scr_error_alloc(kind);
   e->name = name;       /* ownership moves in (engine names may be custom) */
   e->message = message; /* ownership moves in */
+  e->name_present = kind == SCR_ERR_ERROR && !(name->len == 5 && memcmp(name->data, "Error", 5) == 0);
+  e->message_present = true;
   scr_throw_obj(e, &scr_error_retain_v, &scr_error_release_v,
                  scr_error_traced ? &scr_error_trace : NULL);
 }

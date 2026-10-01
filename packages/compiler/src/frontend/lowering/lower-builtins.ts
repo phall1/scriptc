@@ -8,6 +8,7 @@ import { builtinModules } from "node:module";
 import { dirname, isAbsolute, resolve } from "node:path";
 import * as ts from "../ts7/adapter.js";
 import type { Lowerer } from "./lowerer.js";
+import { lowerCheckedPredicateValue } from "./lower-builtin-values.js";
 import { PoisonError, dynUndefinedExpr, ladderFenceExpr, nodeThrowExpr, own } from "./lowerer.js";
 import { canonicalBuiltinModule, isCreateRequireBinding7, isJsSourceFile, isNodeEsmFile, locOf, npmStaticDepSf7, requireSpecOf, resolveImport } from "../program.js";
 import { isRelativeSpecifier } from "../workspace-registry.js";
@@ -2610,16 +2611,21 @@ function lowerFsSyncBufferWindow(
     return { kind: "libCall", fn: fn.fn, args, type: fn.result, loc };
   }
 
-/** Reflect.apply(target, thisArg, argsList) where the TARGET is a builtin
+/** Reflect.ownKeys uses native computed-key reflection. Reflect.apply(target,
+   * thisArg, argsList) where the TARGET is a builtin
    * rest-parameter table fn (path.join / path.resolve — test/common
    * fixtures.js's fixturesPath forwards its rest args exactly this way):
    * the packed libCall over a validated string[] extraction of argsList.
    * The builtins ignore the receiver, so thisArg must be an effect-free
    * spelling (`this`, an identifier, a unit literal) whose dropped
    * evaluation is unobservable; every other Reflect.apply keeps the
-   * fence. Null when this isn't a Reflect.apply call. */
-  export function lowerReflectApplyCall(lowerer: Lowerer, call: ts.CallExpression,
+   * fence. Null when this isn't a supported Reflect call. */
+  export function lowerReflectCall(lowerer: Lowerer, call: ts.CallExpression,
     access: ts.PropertyAccessExpression,): IrExpr | null {
+    if (!call.questionDotToken && !access.questionDotToken && lowerer.stdlibGlobalMember(access, "Reflect") === "ownKeys" &&
+        call.arguments.length === 1 && !ts.isSpreadElement(call.arguments[0]!)) {
+      return { kind: "libCall", fn: "dyn.ownKeys", args: [lowerer.lowerExprExpecting(call.arguments[0]!, DYN)], type: DYN, loc: locOf(call) };
+    }
     if (call.questionDotToken) return null;
     if (lowerer.stdlibGlobalMember(access, "Reflect") !== "apply") return null;
     const loc = locOf(call);
@@ -4887,6 +4893,18 @@ export function lowerForkCall(lowerer: Lowerer, expr: ts.CallExpression, loc: Sr
       return { kind: "libCall", fn: "json.parseReviver", args: [text, callback], type: DYN, loc };
     }
     if (member === "stringify") {
+      const replacerNode = call.arguments[1];
+      const spaceNode = call.arguments[2];
+      const runtimeOptions = replacerNode && !jsonNullishArgument(lowerer, replacerNode) &&
+        lowerer.mapTypeOf(lowerer.typeOf(replacerNode))?.kind === "dyn" ||
+        spaceNode && !jsonNullishArgument(lowerer, spaceNode) &&
+        !ts.isNumericLiteral(spaceNode) && !ts.isStringLiteral(spaceNode) && !ts.isNoSubstitutionTemplateLiteral(spaceNode) &&
+        !(ts.isPrefixUnaryExpression(spaceNode) && ts.isNumericLiteral(spaceNode.operand));
+      if (runtimeOptions && call.arguments[0]) {
+        const args = [0, 1, 2].map((index) => call.arguments[index]
+          ? lowerer.lowerExprExpecting(call.arguments[index]!, DYN) : dynUndefinedExpr(loc));
+        return { kind: "libCall", fn: "json.stringifyValue", args, type: DYN, loc };
+      }
       const indent = stringifySpaceIndent(lowerer, call);
       if (call.arguments.length === 0) {
         return lowerer.wrappedUndefined(lowerer.withUndefinedArm(STRING), loc)!;
@@ -5098,6 +5116,10 @@ function jsonNullishArgument(lowerer: Lowerer, node: ts.Expression): boolean {
  * refuse signatures that request one until that protocol is implemented. */
 function lowerJsonCallback(lowerer: Lowerer, node: ts.Expression, role: "replacer" | "reviver"): IrExpr {
   const callback = lowerer.lowerExpr(node);
+  if (callback.type.kind === "dyn") return callback;
+  if (callback.type.kind === "union" && lowerer.dynConvertible(callback.type) &&
+      lowerer.unions.get(callback.type.unionId)?.arms.every((arm) => isUnitType(arm) || arm.kind === "func" &&
+        arm.params.length <= 2 && (role !== "reviver" || (!arm.rest && !arm.argumentsAll)))) return lowerer.coerceToExpected(callback, DYN);
   if (callback.type.kind === "func" && callback.type.params.length <= 2 &&
       (role !== "reviver" || (!callback.type.rest && !callback.type.argumentsAll)) &&
       canBoxFuncIntoDyn(callback.type, (id) => lowerer.shapes.get(id), (id) => lowerer.unions.get(id))) {
@@ -9513,11 +9535,12 @@ function lowerStoredTextCodecCall(lowerer: Lowerer, call: ts.CallExpression, acc
         return { kind: "intrinsic", name: "promise.resolve", args: [], type: { kind: "promise", inner: VOID }, loc };
       }
       if (resultT.inner.kind === "void") {
-        // Promise.resolve(expr) at a void-promise type: the argument's
-        // effects must still run — no statement slot exists here for
-        // them, so only effect-free spellings could drop it honestly;
-        // fence rather than model that corner.
-        lowerer.noLowering("Promise.resolve with an argument at a void-promise type", call);
+        return {
+          kind: "seqExpr",
+          stmts: [lowerer.lowerExprStatement(argNode)],
+          result: { kind: "intrinsic", name: "promise.resolve", args: [], type: resultT, loc },
+          type: resultT, loc,
+        };
       }
       if (isUnitType(resultT.inner)) {
         // A unit payload (Promise<undefined>/Promise<null>) has no
@@ -9537,6 +9560,8 @@ function lowerStoredTextCodecCall(lowerer: Lowerer, call: ts.CallExpression, acc
   export function lowerNumberStaticProperty(lowerer: Lowerer, expr: ts.PropertyAccessExpression): IrExpr | null {
     const member = lowerer.stdlibGlobalMember(expr, "Number");
     if (member === null) return null;
+    const predicate = own(NUMBER_STATIC_PREDICATES, member);
+    if (predicate) return lowerCheckedPredicateValue(lowerer, `Number.${member}`, "number", locOf(expr), predicate);
     const value = own(NUMBER_CONSTANTS, member);
     if (value === undefined) return null;
     return { kind: "numLit", value, type: F64, loc: locOf(expr) };

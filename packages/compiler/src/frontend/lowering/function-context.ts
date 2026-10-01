@@ -41,6 +41,8 @@ export interface FnCtx {
    * rest param): the synthetic trailing dyn-array param `arguments`
    * reads resolve to. */
   argumentsLocal?: IrLocal | null;
+  /** Arrows inherit the nearest ordinary function's arguments binding. */
+  inheritsArguments?: boolean;
   /** Declared return type — lets `return` detect record-shape mismatches
    * (SC2002) before the validator would ICE on them. */
   returnType: IrType;
@@ -110,8 +112,9 @@ export function declareContextThis(ctx: FnCtx, type: IrType): IrLocal {
 }
 
 /** Look up a binding without allocating captures or boxing its source. */
-export function bindingInContext(ctx: FnCtx, symbol: ts.Symbol | undefined): IrLocal | null {
+export function bindingInContext(ctx: FnCtx, symbol: ts.Symbol | "arguments" | undefined): IrLocal | null {
   if (symbol === undefined) return ctx.thisLocal;
+  if (symbol === "arguments") return ctx.argumentsLocal ?? null;
   for (let i = ctx.scopes.length - 1; i >= 0; i--) {
     const local = ctx.scopes[i]!.get(symbol);
     if (local) return local;
@@ -122,7 +125,7 @@ export function bindingInContext(ctx: FnCtx, symbol: ts.Symbol | undefined): IrL
 export interface ContextBindingResult {
   local: IrLocal | null;
   origin: IrLocal | null;
-  error: "caught" | "plain" | null;
+  error: "plain" | null;
 }
 
 /** Resolve a declared binding across function boundaries. Checker queries,
@@ -135,7 +138,7 @@ export interface ContextBindingResult {
  * metadata to the same binding without duplicating the lookup algorithm. */
 export function captureContextBinding(
   stack: FnCtx[],
-  symbol: ts.Symbol | undefined,
+  symbol: ts.Symbol | "arguments" | undefined,
   onCapture: (parent: IrLocal, child: IrLocal) => void,
 ): ContextBindingResult {
   const current = stack[stack.length - 1];
@@ -145,22 +148,20 @@ export function captureContextBinding(
   for (let depth = stack.length - 2; depth >= 0; depth--) {
     const origin = bindingInContext(stack[depth]!, symbol);
     if (origin === null) continue;
-    // Caught values are scoped exception storage. A typed local derived
-    // from the exception can escape; the catch binding itself cannot.
-    if (origin.type.kind === "caught") return { local: null, origin, error: "caught" };
     // dyn/jsval retain their existing untraced box contract. Typed
     // references use the backends' box tracing for capture cycles.
     origin.boxed = true;
     let parentEntry = origin;
     for (let j = depth + 1; j < stack.length; j++) {
       const ctx = stack[j]!;
-      let entry = symbol === undefined ? ctx.thisLocal : ctx.captureBySymbol.get(symbol);
+      let entry = symbol === undefined ? ctx.thisLocal : symbol === "arguments" ? ctx.argumentsLocal : ctx.captureBySymbol.get(symbol);
       if (!entry) {
         if (ctx.captures === null) return { local: null, origin, error: "plain" };
         entry = declareContextLocal(ctx, origin.name, origin.type, origin.mutable, undefined, origin.source);
         entry.boxed = true;
         if (origin.tdz) entry.tdz = true;
         if (symbol === undefined) ctx.thisLocal = entry;
+        else if (symbol === "arguments") ctx.argumentsLocal = entry;
         else ctx.captureBySymbol.set(symbol, entry);
         ctx.captures.push({ localId: entry.id, name: entry.name, type: entry.type });
         ctx.captureSources.push(parentEntry.id);
@@ -171,4 +172,10 @@ export function captureContextBinding(
     return { local: parentEntry, origin, error: null };
   }
   return { local: null, origin: null, error: null };
+}
+
+export function captureContextArguments(stack: FnCtx[]): IrLocal | null {
+  let owner = stack.length - 1;
+  while (owner > 0 && stack[owner]!.inheritsArguments) owner--;
+  return captureContextBinding(stack.slice(owner), "arguments", () => {}).local;
 }

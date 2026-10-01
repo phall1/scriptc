@@ -106,6 +106,9 @@ export function releaseSym(host: ShapeHost, t: IrType): string {
  * cannot participate in a cycle. */
 export function traceAdapter(host: ShapeHost, t: IrType): string | null {
   switch (t.kind) {
+    case "caught":
+      host.declare(`declare void @scr_caught_trace_v(ptr, ptr, ptr)`);
+      return "@scr_caught_trace_v";
     case "dyn":
       host.declare(`declare void @scr_dyn_trace_v(ptr, ptr, ptr)`);
       return "@scr_dyn_trace_v";

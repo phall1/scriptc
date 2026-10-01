@@ -627,6 +627,8 @@ function exactValueParams(...types: IrType[]): BuiltinValueParam[] {
 /** Object helpers whose checked-native ABI is also their stored value ABI.
  * These adapters operate on the live checked object/property table. */
 export const OBJECT_CALLABLE_VALUES: Record<string, BuiltinModuleFn | undefined> = {
+  is: { fn: "dyn.sameValue", params: [DYN, DYN], result: BOOL, valueParams: exactValueParams(DYN, DYN) },
+  create: { fn: "dyn.objCreateWithProperties", params: [DYN, DYN], result: DYN, valueParams: exactValueParams(DYN, DYN) },
   defineProperty: { fn: "dyn.defineProperty", params: [DYN, DYN, DYN], result: DYN, valueParams: exactValueParams(DYN, DYN, DYN) },
   getOwnPropertyDescriptor: { fn: "dyn.getOwnPropertyDescriptor", params: [DYN, DYN], result: DYN, valueParams: exactValueParams(DYN, DYN) },
   getOwnPropertyDescriptors: { fn: "dyn.getOwnPropertyDescriptors", params: [DYN], result: DYN, valueParams: exactValueParams(DYN) },
@@ -636,6 +638,8 @@ export const OBJECT_CALLABLE_VALUES: Record<string, BuiltinModuleFn | undefined>
   entries: { fn: "dyn.objEntries", params: [DYN], result: DYN, valueParams: exactValueParams(DYN) },
   fromEntries: { fn: "dyn.fromEntries", params: [DYN], result: DYN, valueParams: exactValueParams(DYN) },
   getOwnPropertySymbols: { fn: "dyn.getOwnPropertySymbols", params: [DYN], result: DYN, valueParams: exactValueParams(DYN) },
+  getOwnPropertyNames: { fn: "dyn.getOwnPropertyNames", params: [DYN], result: DYN, valueParams: exactValueParams(DYN) },
+  getPrototypeOf: { fn: "dyn.getPrototype", params: [DYN], result: DYN, valueParams: exactValueParams(DYN) },
 };
 
 /** The lowerable surface of the supported node builtin modules, keyed by

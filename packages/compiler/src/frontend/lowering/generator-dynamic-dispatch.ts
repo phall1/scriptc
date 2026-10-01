@@ -1,4 +1,4 @@
-import { BOOL, DYN, STRING, canConvertToDyn, typeEquals, typeKey, type IrExpr, type IrFunction, type IrStmt, type IrType } from "../../ir/ir.js";
+import { BOOL, DYN, STRING, canConvertToDyn, funcOf, typeEquals, typeKey, type IrExpr, type IrFunction, type IrStmt, type IrType } from "../../ir/ir.js";
 import { varRef } from "../../ir/build.js";
 import { everyStmtList, transformStmtList } from "../../ir/traverse.js";
 import { genResultRecord } from "../type-mapper.js";
@@ -13,6 +13,7 @@ export class GeneratorDynamicDispatch {
   private readonly generators = new Map<string, GeneratorType>();
   private readonly dispatches = new Map<string, { fn: IrFunction; source: Invoke; types: Set<string> }>();
   private readonly generated = new Set<IrFunction>();
+  private readonly properties = new Map<string, { fn: IrFunction; types: Set<string> }>();
 
   process(lowerer: Lowerer, functions: readonly IrFunction[], classHelpers: ReadonlySet<IrFunction>): boolean {
     const seen = new Set<string>();
@@ -31,6 +32,7 @@ export class GeneratorDynamicDispatch {
     for (const fn of functions) everyStmtList(fn.body, { stmt: () => true, expr: (expr) => {
       if (expr.kind === "dynFrom") discover(expr.value.type);
       if (expr.kind === "dynInvoke" && ["next", "return", "throw"].includes(expr.method)) rewrite.add(fn);
+      if (expr.kind === "dynKeyGet" && expr.key.kind === "strLit" && ["next", "return", "throw"].includes(expr.key.value)) rewrite.add(fn);
       return true;
     } });
     let changed = false;
@@ -40,6 +42,29 @@ export class GeneratorDynamicDispatch {
       // to the generator helper and form an indirect recursion cycle.
       if (this.generated.has(fn) || classHelpers.has(fn) || !rewrite.has(fn)) continue;
       fn.body = transformStmtList(fn.body, { stmt: (stmt) => stmt, expr: (expr) => {
+        if (expr.kind === "dynKeyGet" && expr.key.kind === "strLit" && ["next", "return", "throw"].includes(expr.key.value)) {
+          const method = expr.key.value;
+          let property = this.properties.get(method);
+          if (!property) {
+            const loc = expr.loc;
+            const fn: IrFunction = { name: `%dyn.generator.get.${method}`,
+              params: [{ localId: "value", name: "value", type: DYN }], returnType: DYN,
+              locals: [{ id: "value", name: "value", type: DYN, mutable: false }],
+              body: [{ kind: "return", value: { ...expr, value: varRef("value", DYN, loc) }, loc }], loc };
+            property = { fn, types: new Set() };
+            this.properties.set(method, property);
+            this.generated.add(fn);
+            lowerer.liftedFns.push(fn);
+            lowerer.liftedFns.push({ name: `%dyn.generator.method.${method}`,
+              params: [{ localId: "arg", name: "arg", type: DYN }], returnType: DYN,
+              locals: [{ id: "arg", name: "arg", type: DYN, mutable: false }],
+              body: [{ kind: "return", value: { kind: "dynInvoke", method, calleeName: `Generator.${method}`,
+                recv: { kind: "libCall", fn: "dyn.this", args: [], type: DYN, loc },
+                args: [varRef("arg", DYN, loc)], type: DYN, loc }, loc }], loc });
+            changed = true;
+          }
+          return { kind: "call", callee: property.fn.name, args: [expr.value], type: DYN, loc: expr.loc };
+        }
         if (expr.kind !== "dynInvoke" || !["next", "return", "throw"].includes(expr.method)) return expr;
         const key = JSON.stringify([expr.method, expr.args.length, expr.calleeName]);
         let dispatch = this.dispatches.get(key);
@@ -59,6 +84,16 @@ export class GeneratorDynamicDispatch {
         }
         return { kind: "call", callee: dispatch.fn.name, args: [expr.recv, ...expr.args], type: DYN, loc: expr.loc };
       } });
+    }
+    for (const [method, property] of this.properties) for (const [key] of this.generators) {
+      if (property.types.has(key)) continue;
+      property.types.add(key);
+      const loc = property.fn.loc;
+      property.fn.body.unshift({ kind: "if", cond: { kind: "libCall", fn: "dyn.typedRefIs",
+        args: [varRef("value", DYN, loc), { kind: "strLit", value: key, type: STRING, loc }], type: BOOL, loc },
+        then: [{ kind: "return", value: { kind: "dynFrom", value: { kind: "closure", fnName: `%dyn.generator.method.${method}`,
+          captures: [], type: funcOf([DYN], DYN), loc }, type: DYN, loc }, loc }], else_: null, loc });
+      changed = true;
     }
     for (const dispatch of this.dispatches.values()) for (const [key, type] of this.generators) {
       if (dispatch.types.has(key)) continue;

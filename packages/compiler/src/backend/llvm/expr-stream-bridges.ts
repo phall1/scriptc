@@ -2,8 +2,8 @@ import { typedRefConstructor } from "./shapes.js";
 /* Focused LLVM expression emission extracted from emitter.ts. */
 import { InternalCompilerError } from "../../errors.js";
 import { streamTypedRefEligible } from "../../ir/analysis.js";
-import { type IrType, DYN_CLASS_PROPERTIES, classDynViewSupported, isClassOwnEnumerableFieldName, isDynTypedRefType, isRefCounted, typeKey } from "../../ir/ir.js";
-import { mangleFunction, mangleRecordStruct } from "../mangle.js";
+import { type IrType, DYN_CLASS_PROPERTIES, SYMBOL_T, classDynViewSupported, isClassOwnEnumerableFieldName, isDynTypedRefType, isRefCounted, typeKey } from "../../ir/ir.js";
+import { mangleFunction, mangleGlobal, mangleRecordStruct } from "../mangle.js";
 import { BlockBuilder } from "./blocks.js";
 import { classFieldIndex, classStructSym } from "./classes.js";
 import { llvmCommentText } from "./common.js";
@@ -148,7 +148,9 @@ export function streamTypedRefCommitAdapter(host: LlvmEmitterContext,
         `define internal void @${commit}(ptr %target, ptr %d) ${FN_ATTRS} { ; commit unknown class ${typeKey(t)}`,
         `entry:`,
       ];
-      const fields = meta.def.fields.filter((field) => isClassOwnEnumerableFieldName(field.name));
+      const symbols = new Map((meta.def.symbolFields ?? []).map((symbol) => [symbol.field, symbol.globalId]));
+      const fields = meta.def.fields.filter((field) => (isClassOwnEnumerableFieldName(field.name) || symbols.has(field.name)) &&
+        !(meta.root.def.name === "%Error" && (field.name === "message" || field.name === "name")));
       for (const [index, field] of fields.entries()) {
         const next = `f${index}_next`;
         const raw = `f${index}_raw`;
@@ -161,12 +163,23 @@ export function streamTypedRefCommitAdapter(host: LlvmEmitterContext,
         const { index: fieldIndex } = classFieldIndex(meta, field.name);
         const fieldTy = llFieldType(field.type);
         const checkTy = field.type.kind === "f64" ? "double" : field.type.kind === "bool" ? "i1" : "ptr";
+        const symbolGlobal = symbols.get(field.name);
+        if (symbolGlobal) {
+          host.declare(`declare ptr @scr_dyn_symbol_key_get(ptr, ptr, i1 zeroext)`);
+          host.declare(`declare void @scr_dyn_release_v(ptr)`);
+          lines.push(
+            `  %f${index}_keyraw = load ptr, ptr @${mangleGlobal(symbolGlobal)}`,
+            `  %f${index}_key = call ptr @${host.dyn.toDynHelper(SYMBOL_T)}(ptr %f${index}_keyraw)`,
+            `  %${raw} = call ptr @scr_dyn_symbol_key_get(ptr %d, ptr %f${index}_key, i1 zeroext false)`,
+            `  call void @scr_dyn_release_v(ptr %f${index}_key)`,
+          );
+        } else lines.push(`  %${raw} = call ptr @scr_dyn_obj_get(ptr %d, ptr ${host.cstr(field.name)}, ${host.sizeType} ${Buffer.byteLength(field.name, "utf8")})`);
         lines.push(
-          `  %${raw} = call ptr @scr_dyn_obj_get(ptr %d, ptr ${host.cstr(field.name)}, ${host.sizeType} ${Buffer.byteLength(field.name, "utf8")})`,
           `  %${missing} = icmp eq ptr %${raw}, null`,
           `  %${undef} = call ptr @scr_dyn_undefined()`,
           `  %${input} = select i1 %${missing}, ptr %${undef}, ptr %${raw}`,
           `  %${next} = call ${field.type.kind === "bool" ? "zeroext " : ""}${checkTy} @${host.dyn.dynCheckHelper(field.type)}(ptr %${input}, ptr null)`,
+          ...(symbolGlobal ? [`  call void @scr_dyn_release_v(ptr %${raw})`] : []),
           `  %${pending} = call zeroext i1 @scr_exc_pending()`,
           `  br i1 %${pending}, label %done, label %${store}`,
           `${store}:`,
@@ -201,19 +214,29 @@ export function streamTypedRefCommitAdapter(host: LlvmEmitterContext,
           `  br i1 %bag_pending, label %bag_fail, label %bag_keys`,
           `bag_fail:`, `  call void @scr_dyn_release_v(ptr %bag)`, `  br label %done`, `bag_keys:`,
         );
-        if (meta.def.prototypeDataHelper) {
+        if (meta.def.instancePrototypeHelper || meta.def.prototypeDataHelper) {
           host.declare(`declare ptr @scr_dyn_set_prototype(ptr, ptr)`);
           lines.push(
-            `  %prototype = call ptr @${mangleFunction(meta.def.prototypeDataHelper)}()`,
+            ...(meta.def.instancePrototypeHelper ? [
+              `  %prototype_receiver = call ptr ${vAdapters(host.shapeHost, t).retain}(ptr %target)`,
+              `  %prototype = call ptr @${mangleFunction(meta.def.instancePrototypeHelper)}(ptr %prototype_receiver)`,
+            ] : [`  %prototype = call ptr @${mangleFunction(meta.def.prototypeDataHelper!)}()`]),
             `  %with_prototype = call ptr @scr_dyn_set_prototype(ptr %bag, ptr %prototype)`,
             `  call void @scr_dyn_release_v(ptr %prototype)`,
             `  call void @scr_dyn_release_v(ptr %with_prototype)`,
           );
         }
-        fields.forEach((field, index) => lines.push(
+        fields.filter((field) => !symbols.has(field.name)).forEach((field, index) => lines.push(
           `  %bag_key${index} = call ptr @scr_str_new(ptr ${host.cstr(field.name)}, ${host.sizeType} ${Buffer.byteLength(field.name, "utf8")})`,
           `  call void @scr_dyn_key_delete(ptr %bag, ptr %bag_key${index}, i1 zeroext false)`,
           `  call void @scr_str_release(ptr %bag_key${index})`,
+        ));
+        if (symbols.size > 0) host.declare(`declare void @scr_dyn_key_delete_computed(ptr, ptr, i1 zeroext)`);
+        [...symbols.values()].forEach((globalId, index) => lines.push(
+          `  %bag_symraw${index} = load ptr, ptr @${mangleGlobal(globalId)}`,
+          `  %bag_sym${index} = call ptr @${host.dyn.toDynHelper(SYMBOL_T)}(ptr %bag_symraw${index})`,
+          `  call void @scr_dyn_key_delete_computed(ptr %bag, ptr %bag_sym${index}, i1 zeroext false)`,
+          `  call void @scr_dyn_release_v(ptr %bag_sym${index})`,
         ));
         const { index } = classFieldIndex(meta, DYN_CLASS_PROPERTIES);
         lines.push(
@@ -222,6 +245,10 @@ export function streamTypedRefCommitAdapter(host: LlvmEmitterContext,
           `  store ptr %bag, ptr %bag_ptr`,
           `  call void @scr_dyn_release_v(ptr %bag_old)`,
         );
+      }
+      if (meta.root.def.name === "%Error") {
+        host.declare(`declare void @scr_error_commit_dyn(ptr, ptr)`);
+        lines.push(`  call void @scr_error_commit_dyn(ptr %target, ptr %d)`);
       }
       lines.push(`  br label %done`, `done:`, `  ret void`, `}`, ``);
       host.resolveThunkDefs.push(...lines);
@@ -469,17 +496,25 @@ export function streamTypedRefMaterializeAdapter(host: LlvmEmitterContext,
       host.declare(`declare ptr @scr_dyn_new_obj()`);
       host.declare(`declare void @scr_dyn_obj_set(ptr, ptr, ${host.sizeType}, ptr)`);
       const out = B.tmp();
-      B.line(`${out} = call ptr @scr_dyn_new_obj()`);
-      if (meta.def.prototypeDataHelper) {
+      if (meta.root.def.name === "%Error") {
+        host.declare(`declare ptr @scr_error_dyn_fields(ptr)`);
+        B.line(`${out} = call ptr @scr_error_dyn_fields(ptr %p)`);
+      } else B.line(`${out} = call ptr @scr_dyn_new_obj()`);
+      if (meta.def.instancePrototypeHelper || meta.def.prototypeDataHelper) {
         host.declare(`declare ptr @scr_dyn_set_prototype(ptr, ptr)`);
         host.declare(`declare void @scr_dyn_release_v(ptr)`);
         const prototype = B.tmp(), attached = B.tmp();
-        B.line(`${prototype} = call ptr @${mangleFunction(meta.def.prototypeDataHelper)}()`);
+        if (meta.def.instancePrototypeHelper) {
+          const receiver = B.tmp();
+          B.line(`${receiver} = call ptr ${vAdapters(host.shapeHost, t).retain}(ptr %p)`);
+          B.line(`${prototype} = call ptr @${mangleFunction(meta.def.instancePrototypeHelper)}(ptr ${receiver})`);
+        } else B.line(`${prototype} = call ptr @${mangleFunction(meta.def.prototypeDataHelper!)}()`);
         B.line(`${attached} = call ptr @scr_dyn_set_prototype(ptr ${out}, ptr ${prototype})`);
         B.line(`call void @scr_dyn_release_v(ptr ${prototype})`);
         B.line(`call void @scr_dyn_release_v(ptr ${attached})`);
       }
-      for (const field of meta.def.fields.filter((f) => isClassOwnEnumerableFieldName(f.name))) {
+      for (const field of meta.def.fields.filter((f) => isClassOwnEnumerableFieldName(f.name) &&
+        !(meta.root.def.name === "%Error" && (f.name === "message" || f.name === "name")))) {
         const { index } = classFieldIndex(meta, field.name);
         const fieldPtr = B.tmp();
         let fieldValue = B.tmp();
@@ -492,6 +527,27 @@ export function streamTypedRefMaterializeAdapter(host: LlvmEmitterContext,
         }
         const boxed = host.streamTypedRefBoxValue(B, field.type, fieldValue);
         B.line(`call void @scr_dyn_obj_set(ptr ${out}, ptr ${host.cstr(field.name)}, ${host.sizeType} ${Buffer.byteLength(field.name, "utf8")}, ptr ${boxed})`);
+      }
+      for (const symbol of meta.def.symbolFields ?? []) {
+        const field = meta.def.fields.find((field) => field.name === symbol.field)!;
+        const { index } = classFieldIndex(meta, symbol.field);
+        const fieldPtr = B.tmp(), rawKey = B.tmp();
+        let fieldValue = B.tmp();
+        B.line(`${fieldPtr} = getelementptr inbounds %${classStructSym(t.className)}, ptr %p, i64 0, i32 ${index}`);
+        B.line(`${fieldValue} = load ${llFieldType(field.type)}, ptr ${fieldPtr}`);
+        if (llFieldType(field.type) === "i8") {
+          const boolValue = B.tmp();
+          B.line(`${boolValue} = trunc i8 ${fieldValue} to i1`);
+          fieldValue = boolValue;
+        }
+        B.line(`${rawKey} = load ptr, ptr @${mangleGlobal(symbol.globalId)}`);
+        const key = host.streamTypedRefBoxValue(B, SYMBOL_T, rawKey);
+        const value = host.streamTypedRefBoxValue(B, field.type, fieldValue);
+        host.declare(`declare void @scr_dyn_symbol_key_set(ptr, ptr, ptr)`);
+        host.declare(`declare void @scr_dyn_release_v(ptr)`);
+        B.line(`call void @scr_dyn_symbol_key_set(ptr ${out}, ptr ${key}, ptr ${value})`);
+        B.line(`call void @scr_dyn_release_v(ptr ${key})`);
+        B.line(`call void @scr_dyn_release_v(ptr ${value})`);
       }
       if (meta.def.fields.some((field) => field.name === DYN_CLASS_PROPERTIES)) {
         host.declare(`declare ptr @scr_dyn_copy_property_descriptors(ptr, ptr)`);

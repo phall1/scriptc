@@ -30,9 +30,18 @@ export function jsOpenObjectType(
   // their runtime storage at the boundary, including default [] parameters.
   if (parameter && !parameter.dotDotDotToken && present?.length === 1 &&
       present[0]!.kind === "array" && present[0]!.elem.kind === "f64") return DYN;
+  // An unannotated JavaScript parameter's object default is a fallback,
+  // not a closed class contract. Published code routinely passes another
+  // implementation of the same protocol through a boxed callable.
+  if (parameter?.initializer && !parameter.type &&
+      present?.some((arm) => arm.kind === "object") &&
+      arms?.every((arm) => canConvertToDyn(arm, (id) => shapes.get(id), (id) => unions.get(id)))) return DYN;
   if (present?.length !== 1 || present[0]!.kind !== "record") return type;
   const shape = shapes.get(present[0]!.shapeId);
-  return shape && shape.fields.length === 0 && !shape.indexValue && !shape.tuple ? DYN : type;
+  const unitOnly = (field: IrType): boolean => isUnitType(field) || field.kind === "void" ||
+    field.kind === "union" && unions.get(field.unionId)?.arms.every(isUnitType) === true;
+  return shape && !shape.tuple && !shape.indexValue &&
+    (shape.fields.length === 0 || shape.fields.some((field) => unitOnly(field.type))) ? DYN : type;
 }
 
 /** The ambient TYPE names of the fetch slice. Under --dynamic their
@@ -859,11 +868,8 @@ export interface TypeMapperCtx {
  *   sentinel; any/unknown ride dyn; undefined-only yields have no C value
  *   form (null); else the mapped type.
  * - return: void/undefined/never carry no value (VOID — the done-value is
- *   the undefined arm); any/unknown are DEFAULTS (`Generator<number>` is
- *   Generator<number, any, any>), and a defaulted return channel means
- *   "no modeled return value" — VOID, not dyn (a dyn return channel would
- *   force the yield channel dyn too; bodies that `return v` under a
- *   defaulted TReturn keep their fence at the return site).
+ *   the undefined arm); any/unknown carry checked values. A defaulted or
+ *   inferred return channel can still return a value and must preserve it.
  * - next: void/undefined/never mean valueless resumes (the undefined
  *   unit); any/unknown ride dyn; else the mapped type (`.next(v)` then
  *   requires its argument — fenced at the call site).
@@ -886,9 +892,9 @@ function genChannels(
     if (yieldT?.kind === "void" || (yieldT && isUnitType(yieldT))) yieldT = null;
   }
   if (!yieldT) return null;
-  const retT = retTs === undefined || retTs.flags & (UNITISH | ANYISH)
+  const retT = retTs === undefined || retTs.flags & UNITISH
     ? VOID
-    : mapType(retTs, ctx);
+    : retTs.flags & ANYISH ? DYN : mapType(retTs, ctx);
   if (!retT || (retT.kind !== "void" && isUnitType(retT))) return null;
   const nextT = nextTs === undefined || nextTs.flags & UNITISH
     ? UNDEFINED_T
@@ -1326,7 +1332,7 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
     }
     const fields: { name: string; type: IrType }[] = [];
     for (let i = 0; i < args.length; i++) {
-      let et = mapType(args[i]!, ctx);
+      let et = !ctx.dynamic && (args[i]!.flags & ts.TypeFlags.Any) !== 0 ? DYN : mapType(args[i]!, ctx);
       // A unit-only element (`[number, undefined]`) rides the unit-only
       // union, the record-field rule.
       if (et?.kind === "void" && isUnitOnlyTsType(args[i]!, ctx.resolveTypeParam)) et = unitOnlyUnion(unions);
@@ -2339,6 +2345,8 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
     if (!inner) return null;
     return { kind: "promise", inner };
   }
+  // Native collection iterators use checked runtime iterator objects.
+  if (isStdlibInterface("MapIterator") || isStdlibInterface("SetIterator")) return DYN;
   // Generator<T, TReturn, TNext>, AsyncGenerator<T, TReturn, TNext> (and
   // the lib's IterableIterator<T, ...>, the older sync annotation spelling):
   // the generator kind. Channel normalization keeps the runtime honest:
@@ -3759,7 +3767,12 @@ function recordProvenanceOk(t: ts.Type, ctx: TypeMapperCtx): boolean {
   if (isMappedShape(t)) return true;
   const tSym = t.getSymbol();
   const decls = tSym ? checker.declarationsOf(tSym) : undefined;
-  if (!decls || decls.length === 0) return false;
+  if (!decls || decls.length === 0) {
+    // Inferred destructuring parameters can have a synthesized anonymous
+    // shape with no declaration or member symbols to trace to a source.
+    return checker.getPropertiesOfType(t).every((property) => checker.declarationsOf(property).every((decl) =>
+      !decl.getSourceFile().isDeclarationFile || ctx.isExternalTypeFile(decl.getSourceFile())));
+  }
   return !decls.some((d) => {
     const sf = d.getSourceFile();
     return sf.isDeclarationFile && !ctx.isExternalTypeFile(sf);
@@ -3988,6 +4001,9 @@ function mapRecordTypeInner(widened: ts.Type, ctx: TypeMapperCtx): IrType | Reco
   const computed = widened.isIntersectionType() || isMappedShape(widened);
   {
     const props = checker.getPropertiesOfType(widened);
+    // Symbol-keyed records use the checked object's descriptor table. A
+    // checker-internal __@ name is not a string field in a native struct.
+    if (props.some((property) => property.name.startsWith("__@"))) return DYN;
     // A computed shape with NO members is not a real empty record: inside a
     // generic body `Partial<T>` resolves to no members at all (keyof T is
     // still unknown there) — interning `{}` would be silently wrong. The
@@ -4105,6 +4121,7 @@ function mapRecordTypeInner(widened: ts.Type, ctx: TypeMapperCtx): IrType | Reco
       if ((pt === null || pt.kind === "jsval") && (fieldTs.flags & ts.TypeFlags.Any) !== 0 && constAssertedEmptyArrayProp(p, ctx)) {
         pt = arrayOf(unitOnlyUnion(ctx.unions));
       }
+      if (pt === null && !ctx.dynamic && (fieldTs.flags & ts.TypeFlags.Any) !== 0) pt = DYN;
       // Unit-only FIELDS (`{ msg?: undefined }` — the discriminated-union
       // absent-field idiom — and `{ p: undefined }` spellings): the
       // unit-only union. The runtime value is the interned unit, JSON

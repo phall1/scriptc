@@ -300,8 +300,8 @@ export type IrType =
    * JS-exact semantics; exits back to static types are validated (jsExit).
    * This kind exists only with the dynamic option. */
   | { kind: "jsval" }
-  /** A catch binding — the type of `catch (e)`'s local, and NOTHING else
-   * (never params, returns, fields, arms, elements, globals, captures).
+  /** A catch binding or its closure capture (never parameters, returns,
+   * fields, arms, elements or globals).
    * Runtime representation is a refcounted snapshot box (ScrCaught) holding
    * the taken exception: a kind tag plus the payload. Even NARROWER than
    * dyn: the only expressions a caught value may appear in are `caughtTest`
@@ -1140,6 +1140,8 @@ export interface IrClassDef {
   localCaptures?: IrParam[];
   /** Capture holding the evaluated local base constructor, if any. */
   localBaseCapture?: number;
+  /** Evaluated module-scope heritage constructor for a factory-produced base. */
+  baseValueGlobal?: string;
   /** The JS-observable `.name` of the class (the runtime class object's
    * name string, and what `C.name` folds to). Differs from `name` because
    * IR names are program-qualified (`%m1.C`, `%cx…` for class
@@ -1152,6 +1154,10 @@ export interface IrClassDef {
   /** Zero-argument native helper returning the shared prototype data object.
    * Used when materializing an instance's own-property view. */
   prototypeDataHelper?: string;
+  /** Native instance to its actual prototype, including factory captures and subclasses. */
+  instancePrototypeHelper?: string;
+  /** Stable module symbol identities for public instance layout fields. */
+  symbolFields?: { field: string; globalId: string }[];
   /** RUNTIME-PROVIDED class (the builtin Error hierarchy): the struct, RC
    * helpers, and vtable live in the runtime (ScrError / scr_error_*), so
    * backends emit no definitions for it — only the preorder-interval
@@ -2114,6 +2120,7 @@ export type IrLibFn =
   | "dyn.globalSymbolDelete"
   /** Exact native class capsule identity, without materializing its fields. */
   | "dyn.typedRefIs"
+  | "dyn.classIs"
   /** Destructuring pack over a dyn source — `const [a, b] = d`, a
    * destructured dyn callback param (args: the source and the STATIC
    * TypeError spelling, "" when the source has none — both borrowed;
@@ -2415,6 +2422,8 @@ export type IrLibFn =
    * result; never throws. (Union-armed operands take unionEq's sameValue
    * flag instead — this is the both-f64 fast path.) */
   | "num.sameValue"
+  /** SameValue over checked values, including NaN, signed zero and reference identity. */
+  | "dyn.sameValue"
   /** `new Intl.NumberFormat("en-US").format(x)` and
    * `x.toLocaleString("en-US")` with DEFAULT options — the one locale
    * whose data the runtime embeds (Node's default-build locale): decimal
@@ -3661,6 +3670,7 @@ export type IrLibFn =
    * (the strict-mode plain-call answer, the old constant). Zero args →
    * dyn (+1). Never throws. */
   | "dyn.this"
+  | "dyn.generatorThis"
   /** process.execPath: the compiled binary's own resolved absolute path
    * (one interned string, +1 per read) — the honest answer where Node's
    * is the node executable's (SEMANTICS.md divergence 12). Never throws. */
@@ -3874,7 +3884,8 @@ export type IrLibFn =
    * receiver (already allocated by the derived class's new) + borrowed
    * message, void; the receiver's type names the builtin class whose name
    * field to stamp. error.toString: borrowed `%Error`-typed receiver, +1
-   * string in Node's "name: message" shape. None of the three throws. */
+   * string in Node's "name: message" shape. Formatting can invoke a user
+   * message accessor, which can throw. */
   | "error.new"
   /** ECMAScript constructors with raw checked-dynamic message/options.
    * Options retain cause presence; constructor calls borrow their args.
@@ -4014,8 +4025,12 @@ export type IrLibFn =
    * only; --dynamic routes Object.create through the engine instead. */
   | "dyn.objCreateNullProto"
   | "dyn.arrayPrototype"
+  | "dyn.objectPrototype"
+  | "dyn.functionApply"
+  | "dyn.builtinMethod"
   | "dyn.classPrototype"
   | "dyn.classBasePrototype"
+  | "dyn.classInherit"
   | "dyn.classSuper"
   | "dyn.assignPrototype"
   | "dyn.objCreate"
@@ -4023,6 +4038,7 @@ export type IrLibFn =
   | "dyn.getPrototype"
   | "dyn.setPrototype"
   | "dyn.getOwnPropertyNames"
+  | "dyn.ownKeys"
   | "dyn.getOwnPropertySymbols"
   | "dyn.getOwnPropertyDescriptors"
   | "dyn.preventExtensions"
@@ -6300,6 +6316,7 @@ export function canConvertToDyn(
   t: IrType,
   getRecord: (shapeId: string) => IrRecordShape | undefined,
   getUnion: (unionId: string) => IrUnionDef | undefined,
+  visiting: Set<string> = new Set(),
 ): boolean {
   if (isJsonSafeType(t, getRecord, getUnion)) return true;
   // numeric typed arrays and boxable functions are dyn kinds the walker boxes
@@ -6307,7 +6324,7 @@ export function canConvertToDyn(
   // in records/arrays/unions. isJsonSafeType rejects them, but dynFrom
   // needs only that the walker can build the dyn value, so this composite
   // fold extends the JSON-safe core.
-  if (canBoxDynComposite(t, getRecord, getUnion)) return true;
+  if (canBoxDynComposite(t, getRecord, getUnion, visiting)) return true;
   if (t.kind === "bytes") return true;
   // %Error converts as the checked-dynamic tree's error encoding ({%error, name, message,
   // code?} — the caughtToDyn shape, scr_dyn_from_error): the dyn 'error'
@@ -6316,7 +6333,7 @@ export function canConvertToDyn(
   if (isDynTypedRefType(t)) return true;
   if (t.kind === "generator") return true;
   if (t.kind === "classval") return true;
-  if (t.kind === "func") return canBoxFuncIntoDyn(t, getRecord, getUnion);
+  if (t.kind === "func") return canBoxFuncIntoDyn(t, getRecord, getUnion, visiting);
   if (DYN_HANDLE_KINDS.has(t.kind)) return true;
   // Promises box by REFERENCE (SCR_DYN_PROMISE): promise<dyn> carries its
   // ScrPromise directly (the payload is already a dyn value), any other
@@ -6328,7 +6345,7 @@ export function canConvertToDyn(
     return (
       t.inner.kind === "dyn" ||
       t.inner.kind === "void" ||
-      canConvertToDyn(t.inner, getRecord, getUnion)
+      canConvertToDyn(t.inner, getRecord, getUnion, visiting)
     );
   }
   if (t.kind === "union") {
@@ -6340,8 +6357,8 @@ export function canConvertToDyn(
     return !!def && def.arms.every((a) =>
       a.kind === "undefinedT" || isJsonSafeType(a, getRecord, getUnion) ||
       isDynTypedRefType(a) || a.kind === "classval" || DYN_HANDLE_KINDS.has(a.kind) ||
-      (a.kind === "func" && canBoxFuncIntoDyn(a, getRecord, getUnion)) ||
-      (a.kind === "promise" && canConvertToDyn(a, getRecord, getUnion)),
+      (a.kind === "func" && canBoxFuncIntoDyn(a, getRecord, getUnion, visiting)) ||
+      (a.kind === "promise" && canConvertToDyn(a, getRecord, getUnion, visiting)),
     );
   }
   return false;
@@ -6375,11 +6392,12 @@ function canBoxDynComposite(
     case "url":
       return true;
     case "func":
-      return canBoxFuncIntoDyn(t, getRecord, getUnion);
+      return canBoxFuncIntoDyn(t, getRecord, getUnion, visiting);
     case "set":
-      return t.elem.kind === "dyn";
+      return canConvertToDyn(t.elem, getRecord, getUnion, visiting) && canDynCheckTo(t.elem, getRecord, getUnion, visiting);
     case "map":
-      return t.key.kind === "dyn" && t.value.kind === "dyn";
+      return canConvertToDyn(t.key, getRecord, getUnion, visiting) && canDynCheckTo(t.key, getRecord, getUnion, visiting) &&
+        canConvertToDyn(t.value, getRecord, getUnion, visiting) && canDynCheckTo(t.value, getRecord, getUnion, visiting);
     case "object":
       return t.className === "%Error" || isDynTypedRefType(t);
     case "array":
@@ -6391,20 +6409,28 @@ function canBoxDynComposite(
       // Recursive shapes answer coinductively, like isJsonSafeType.
       if (visiting.has(t.shapeId)) return true;
       visiting.add(t.shapeId);
-      for (const field of shape.fields) {
-        if (!canBoxDynComposite(field.type, getRecord, getUnion, visiting)) return false;
+      try {
+        for (const field of shape.fields) {
+          if (!canBoxDynComposite(field.type, getRecord, getUnion, visiting)) return false;
+        }
+        return !shape.indexValue || canBoxDynComposite(shape.indexValue, getRecord, getUnion, visiting);
+      } finally {
+        visiting.delete(t.shapeId);
       }
-      return !shape.indexValue || canBoxDynComposite(shape.indexValue, getRecord, getUnion, visiting);
     }
     case "union": {
       const def = getUnion(t.unionId);
       if (!def) return false;
       if (visiting.has(t.unionId)) return true;
       visiting.add(t.unionId);
-      for (const arm of def.arms) {
-        if (!canBoxDynComposite(arm, getRecord, getUnion, visiting)) return false;
+      try {
+        for (const arm of def.arms) {
+          if (!canBoxDynComposite(arm, getRecord, getUnion, visiting)) return false;
+        }
+        return true;
+      } finally {
+        visiting.delete(t.unionId);
       }
-      return true;
     }
     default:
       return false;
@@ -6420,6 +6446,7 @@ export function canDynCheckTo(
   t: IrType,
   getRecord: (shapeId: string) => IrRecordShape | undefined,
   getUnion: (unionId: string) => IrUnionDef | undefined,
+  visiting: Set<string> = new Set(),
 ): boolean {
   // Unknown fields keep an owned dyn subtree; checking the surrounding
   // record/array still validates its layout. This is broader than the
@@ -6427,8 +6454,8 @@ export function canDynCheckTo(
   // serializable. Backends already retain dyn fields and fill missing
   // unknown record fields with the undefined value.
   if (isJsonSafeAt(t, getRecord, getUnion, false, false, new Set(), true)) return true;
-  if (t.kind === "bigint" || t.kind === "symbol" || t.kind === "set" && t.elem.kind === "dyn") return true;
-  if (t.kind === "map" && t.key.kind === "dyn" && t.value.kind === "dyn") return true;
+  if (t.kind === "bigint" || t.kind === "symbol" || t.kind === "date") return true;
+  if (t.kind === "map" || t.kind === "set") return canBoxDynComposite(t, getRecord, getUnion, visiting);
   if (t.kind === "bytes") return true;
   if (t.kind === "classval") return true;
   if (t.kind === "generator") return true;
@@ -6436,15 +6463,33 @@ export function canDynCheckTo(
   // Native class capsules already support checked extraction at ordinary
   // boundaries. Callable adapters use the same identity/brand check.
   if (isDynTypedRefType(t)) return true;
-  if (t.kind === "array" && isDynTypedRefType(t.elem)) return true;
-  if (t.kind === "func") return canAdaptDynFuncTo(t, getRecord, getUnion);
+  if (t.kind === "array") {
+    const key = typeKey(t);
+    if (visiting.has(key)) return false;
+    visiting.add(key);
+    const result = canDynCheckTo(t.elem, getRecord, getUnion, visiting);
+    visiting.delete(key);
+    return result;
+  }
+  if (t.kind === "record") {
+    const key = typeKey(t);
+    if (visiting.has(key)) return false;
+    const shape = getRecord(t.shapeId);
+    if (!shape || shapeHasAccessorSlots(shape)) return false;
+    visiting.add(key);
+    const result = shape.fields.every((field) => canDynCheckTo(field.type, getRecord, getUnion, visiting)) &&
+      (!shape.indexValue || canDynCheckTo(shape.indexValue, getRecord, getUnion, visiting));
+    visiting.delete(key);
+    return result;
+  }
+  if (t.kind === "func") return canAdaptDynFuncTo(t, getRecord, getUnion, visiting);
   if (DYN_HANDLE_KINDS.has(t.kind)) return true;
   if (t.kind === "union") {
     const def = getUnion(t.unionId);
     // Optional native callbacks and handles retain the same checked
     // conversion as their bare value. The union matcher selects the arm
     // before its adapter/extractor runs.
-    return !!def && def.arms.every((a) => isUnitType(a) || (a.kind !== "union" && canDynCheckTo(a, getRecord, getUnion)));
+    return !!def && def.arms.every((a) => isUnitType(a) || (a.kind !== "union" && canDynCheckTo(a, getRecord, getUnion, visiting)));
   }
   return false;
 }
@@ -6457,6 +6502,7 @@ export function canBoxFuncIntoDyn(
   t: IrType,
   getRecord: (shapeId: string) => IrRecordShape | undefined,
   getUnion: (unionId: string) => IrUnionDef | undefined,
+  visiting: Set<string> = new Set(),
 ): boolean {
   return (
     t.kind === "func" &&
@@ -6469,11 +6515,11 @@ export function canBoxFuncIntoDyn(
     // thunk (wrapped cells unwrap by reference, dyn data deep-copies) —
     // the checker-'any' callback params of the routed-dispatch lane
     // (`bag.list.map((x) => ...)` with x typed any).
-    t.params.every((p) => p.kind === "dyn" || p.kind === "jsval" || canDynCheckTo(p, getRecord, getUnion)) &&
+    t.params.every((p) => p.kind === "dyn" || p.kind === "jsval" || canDynCheckTo(p, getRecord, getUnion, visiting)) &&
     // A jsval return converts through the by-reference wrap
     // (dynFromJsval — the thunk's result conversion), so engine-returning
     // callbacks box too: the routed-dispatch lane's flatMap shape.
-    (t.ret.kind === "void" || t.ret.kind === "dyn" || t.ret.kind === "jsval" || canConvertToDyn(t.ret, getRecord, getUnion))
+    (t.ret.kind === "void" || t.ret.kind === "dyn" || t.ret.kind === "jsval" || canConvertToDyn(t.ret, getRecord, getUnion, visiting))
   );
 }
 
@@ -6485,14 +6531,15 @@ export function canAdaptDynFuncTo(
   t: IrType,
   getRecord: (shapeId: string) => IrRecordShape | undefined,
   getUnion: (unionId: string) => IrUnionDef | undefined,
+  visiting: Set<string> = new Set(),
 ): boolean {
   return (
     t.kind === "func" &&
     // Checked rest and arguments packs retain all actual arguments. Typed
     // and island rest ABIs still require their own conversion plan.
     (t.rest !== true || t.restAbi === undefined) &&
-    t.params.every((p) => p.kind === "dyn" || canConvertToDyn(p, getRecord, getUnion)) &&
-    (t.ret.kind === "void" || t.ret.kind === "dyn" || canDynCheckTo(t.ret, getRecord, getUnion))
+    t.params.every((p) => p.kind === "dyn" || canConvertToDyn(p, getRecord, getUnion, visiting)) &&
+    (t.ret.kind === "void" || t.ret.kind === "dyn" || canDynCheckTo(t.ret, getRecord, getUnion, visiting))
   );
 }
 
@@ -6615,7 +6662,9 @@ function scanRuntimeFeatures(mod: IrModule, stopAt?: keyof RuntimeFeatures): Run
     processEvents: false, emitter: (mod.classes ?? []).some((c) => c.name === RUNTIME_EMITTER_CLASS),
     stream: (mod.classes ?? []).some((c) => RUNTIME_STREAM_CLASSES.has(c.name)),
     zlib: mod.embedded?.edges.some((e) => e.to === "node:zlib") ?? false,
-    dc: false, assert: false, dynInvoke: false, dynAsync: false, inspect: false,
+    dc: false, assert: false, dynInvoke: false,
+    dynAsync: mod.functions.some((fn) => fn.async === true && fn.generator === undefined && fn.returnType.kind === "dyn"),
+    inspect: false,
     childProcess: false, net: false, symbol: false, bigint: false, searchParams: false,
     qs: false, parseArgs: false, fsWatch: false, nodeTest: false, dgram: false,
     http: false, http2: false, tls: false, tlsCa: false,
@@ -6636,7 +6685,7 @@ function scanRuntimeFeatures(mod: IrModule, stopAt?: keyof RuntimeFeatures): Run
       if (fn.startsWith("zlib.")) features.zlib = true;
       if (fn.startsWith("dc.")) features.dc = true;
       if (fn.startsWith("assert.")) features.assert = true;
-      if (fn === "dyn.defineProps" || fn === "dyn.defineProperty" || fn === "dyn.objCreateWithProperties" || fn === "dyn.arrayProtoCall" || fn === "dyn.arrayPrototype") features.dynInvoke = true;
+      if (fn === "dyn.defineProps" || fn === "dyn.defineProperty" || fn === "dyn.objCreateWithProperties" || fn === "dyn.arrayProtoCall" || fn === "dyn.arrayPrototype" || fn === "dyn.functionApply" || fn === "dyn.builtinMethod") features.dynInvoke = true;
       if (DYN_ASYNC_LIB_FNS.has(fn)) features.dynAsync = true;
       if (fn.startsWith("insp.") || fn === "console.native" || fn === "global.native") features.inspect = true;
       if (fn.startsWith("cp.") || fn.startsWith("child.") || fn.startsWith("writer.") || fn.startsWith("spawnRes.") ||
@@ -7507,6 +7556,8 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   // Error messages use the same coercion protocol before installing cause.
   "error.newOptions",
   "error.ctorOptions",
+  "error.toString",
+  "error.stack",
   "error.cause",
   "error.setCause",
   "error.deleteCause",
@@ -7519,6 +7570,7 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "dyn.bitwise",
   "dyn.proxyNew",
   "dyn.classBasePrototype",
+  "dyn.classInherit",
   "dyn.classSuper",
   "dyn.hasKey",
   "child.kill",
@@ -7598,6 +7650,7 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "dyn.getPrototype",
   "dyn.setPrototype",
   "dyn.getOwnPropertyNames",
+  "dyn.ownKeys",
   "dyn.getOwnPropertySymbols",
   "dyn.getOwnPropertyDescriptors",
   "dyn.preventExtensions",

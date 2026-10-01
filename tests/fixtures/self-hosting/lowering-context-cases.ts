@@ -132,8 +132,8 @@ function runContextCase(services: FrontendServices, entry: string): string[] {
     const caughtLocal = declareContextLocal(caught, "caught", CAUGHT, false, outerSymbol, source);
     const caughtChild = newFnCtx(true, null, null, VOID);
     const caughtResult = captureContextBinding([caught, caughtChild], outerSymbol, capture);
-    requireValue(caughtResult.error === "caught" && caughtResult.origin === caughtLocal, "catch capture did not report its boundary");
-    requireValue(caughtLocal.boxed === undefined && caughtChild.captures?.length === 0, "catch refusal allocated storage");
+    requireValue(caughtResult.error === null && caughtResult.origin === caughtLocal, "catch capture lost its source binding");
+    requireValue(caughtLocal.boxed === true && caughtChild.captures?.length === 1, "catch capture did not allocate shared storage");
     const plain = newFnCtx(false, null, null, VOID);
     const plainResult = captureContextBinding([root, plain], outerSymbol, capture);
     requireValue(plainResult.error === "plain" && plainResult.local === null, "plain function accepted captures");

@@ -220,6 +220,7 @@ const errorFields = [
   { name: "name", type: STRING }, { name: "message", type: STRING },
   { name: "%code", type: STRING }, { name: "%cause", type: { kind: "dyn" } as IrType },
   { name: "%causeEnumerable", type: BOOL },
+  { name: "%messagePresent", type: BOOL },
 ];
 const classes: IrClassDef[] = [
   { name: "%Error", runtime: true, fields: errorFields, loc },

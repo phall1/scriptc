@@ -557,7 +557,7 @@ function lowerYieldStar(lowerer: Lowerer, expr: ts.YieldExpression): IrExpr {
   if (!expr.expression) lowerer.unsupported("SC1071", expr, "'yield*' with no operand");
   const loc = locOf(expr);
   const delegate = lowerer.lowerExpr(expr.expression);
-  if (delegate.type.kind === "dyn" || delegate.type.kind === "object") return lowerCheckedDelegation(lowerer, expr, delegate);
+  if (delegate.type.kind === "dyn" || delegate.type.kind === "object" || delegate.type.kind === "classval") return lowerCheckedDelegation(lowerer, expr, delegate);
   if (delegate.type.kind !== "generator") {
     lowerer.unsupported(
       "SC1071",

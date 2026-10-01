@@ -13,7 +13,9 @@ export function lowerInstanceConstructorNew(lowerer: Lowerer, expr: ts.NewExpres
   let access = expr.expression;
   while (ts.isParenthesizedExpression(access)) access = access.expression;
   if (!ts.isPropertyAccessExpression(access) || access.name.text !== "constructor" || access.questionDotToken) return null;
-  const receiver = lowerer.lowerExpr(access.expression);
+  let receiver = lowerer.lowerExpr(access.expression);
+  const declared = receiver.type.kind === "dyn" ? lowerer.mapTypeOf(lowerer.typeOf(access.expression)) : null;
+  if (declared?.kind === "object") receiver = lowerer.coerceToExpected(receiver, declared);
   if (receiver.type.kind !== "object") return null;
   const info = lowerer.classes.get(receiver.type.className);
   if (!info || info.def.runtime) return null;

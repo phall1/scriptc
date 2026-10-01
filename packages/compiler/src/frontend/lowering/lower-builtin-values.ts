@@ -1,8 +1,26 @@
 import * as ts from "../ts7/adapter.js";
-import { BOOL, DYN, NULL_T, STRING, UNDEFINED_T, type IrExpr, type IrStmt, type SrcLoc } from "../../ir/ir.js";
+import { BOOL, DYN, F64, NULL_T, STRING, UNDEFINED_T, arrayOf, type IrExpr, type IrLibFn, type IrStmt, type SrcLoc } from "../../ir/ir.js";
 import { strLit, varRef } from "../../ir/build.js";
 import type { Lowerer } from "./lowerer.js";
-import { BUILTIN_MODULE_CONSTS, BUILTIN_MODULE_FNS, OBJECT_CALLABLE_VALUES, builtinConstLit, builtinModuleConstOf, builtinModulesArrayLit } from "./surfaces.js";
+import { BUILTIN_MODULE_CONSTS, BUILTIN_MODULE_FNS, OBJECT_CALLABLE_VALUES, builtinConstLit, builtinModuleConstOf, builtinModulesArrayLit, stdlibGlobalNameOf } from "./surfaces.js";
+
+const PROTOTYPE_METHODS: Record<string, readonly string[]> = {
+  Date: ["getTime", "valueOf", "toISOString", "toJSON"],
+  Map: ["get", "set", "has", "delete", "clear", "keys", "values", "entries", "forEach"],
+  Set: ["add", "has", "delete", "clear", "keys", "values", "entries", "forEach"],
+  WeakMap: ["get", "set", "has", "delete"],
+  WeakSet: ["add", "has", "delete"],
+  String: ["split", "startsWith", "endsWith", "substring", "slice", "toLowerCase", "toUpperCase", "padStart", "charCodeAt", "normalize", "replace", "toString", "valueOf"],
+  Number: ["toString", "valueOf"],
+  Object: ["hasOwnProperty", "propertyIsEnumerable", "toString", "valueOf"],
+};
+
+export function builtinPrototypeMethod(lowerer: Lowerer, expr: ts.PropertyAccessExpression): string | null {
+  const prototype = expr.expression;
+  if (!ts.isPropertyAccessExpression(prototype) || prototype.name.text !== "prototype") return null;
+  const owner = stdlibGlobalNameOf(lowerer, prototype.expression);
+  return owner && PROTOTYPE_METHODS[owner]?.includes(expr.name.text) ? owner : null;
+}
 
 /** These native callables own their argument checks. Unannotated JS aliases
  * keep the checked value instead of narrowing it to the ambient signature.
@@ -10,6 +28,11 @@ import { BUILTIN_MODULE_CONSTS, BUILTIN_MODULE_FNS, OBJECT_CALLABLE_VALUES, buil
 export function isNativeBuiltinValueInitializer(lowerer: Lowerer, expr: ts.Expression | undefined, seen = new Set<ts.Symbol>()): boolean {
   if (!expr) return false;
   while (ts.isParenthesizedExpression(expr)) expr = expr.expression;
+  // JS global snapshots may use an opaque builtin identity rather than
+  // the ambient constructor's callable ABI. Store that actual value in
+  // the checked representation, including optional capability probes.
+  const global = ts.isIdentifier(expr) ? stdlibGlobalNameOf(lowerer, expr) : null;
+  if (global && !["undefined", "Infinity", "NaN"].includes(global)) return true;
   if (lowerer.isStdlibGlobal(expr, "console")) return true;
   if (ts.isNewExpression(expr) && lowerer.isStdlibGlobal(expr.expression, "Date")) return true;
   if (ts.isConditionalExpression(expr)) {
@@ -17,14 +40,24 @@ export function isNativeBuiltinValueInitializer(lowerer: Lowerer, expr: ts.Expre
       isNativeBuiltinValueInitializer(lowerer, expr.whenFalse, new Set(seen));
   }
   if (ts.isPropertyAccessExpression(expr)) {
-    return lowerer.stdlibGlobalMember(expr, "console") !== null ||
+    return builtinPrototypeMethod(lowerer, expr) !== null ||
+      lowerer.stdlibGlobalMember(expr, "console") !== null ||
       lowerer.stdlibGlobalMember(expr, "globalThis") === "console" ||
       lowerer.stdlibGlobalMember(expr, "process") === "getBuiltinModule" ||
       lowerer.stdlibGlobalMember(expr, "process") === "hrtime" ||
       (expr.name.text === "bigint" && ts.isPropertyAccessExpression(expr.expression) &&
         lowerer.stdlibGlobalMember(expr.expression, "process") === "hrtime") ||
       lowerer.stdlibGlobalMember(expr, "Array") === "isArray" ||
+      lowerer.stdlibGlobalMember(expr, "Array") === "from" ||
+      lowerer.stdlibGlobalMember(expr, "Reflect") === "ownKeys" ||
+      ["fromCharCode", "fromCodePoint"].includes(lowerer.stdlibGlobalMember(expr, "String") ?? "") ||
+      ["parseInt", "parseFloat"].includes(lowerer.stdlibGlobalMember(expr, "Number") ?? "") ||
+      lowerer.stdlibGlobalMember(expr, "Buffer") === "isBuffer" ||
       lowerer.stdlibGlobalMember(expr, "Array") === "prototype" ||
+      (ts.isPropertyAccessExpression(expr.expression) && lowerer.stdlibGlobalMember(expr.expression, "Array") === "prototype") ||
+      lowerer.stdlibGlobalMember(expr, "Object") === "assign" ||
+      lowerer.stdlibGlobalMember(expr, "Object") === "create" ||
+      (expr.name.text === "apply" && ts.isPropertyAccessExpression(expr.expression) && lowerer.stdlibGlobalMember(expr.expression, "Function") === "prototype") ||
       lowerer.stdlibGlobalMember(expr, "JSON") === "stringify" ||
       (lowerer.isStdlibGlobal(expr.expression, "Object") && Object.hasOwn(OBJECT_CALLABLE_VALUES, expr.name.text));
   }
@@ -51,6 +84,58 @@ export function lowerArrayIsArrayValue(lowerer: Lowerer, loc: SrcLoc): IrExpr {
     });
   }
   return { kind: "closure", fnName: name, captures: [], type: { kind: "func", params: [DYN], ret: BOOL }, loc };
+}
+
+export function lowerStringCodesValue(lowerer: Lowerer, member: "fromCharCode" | "fromCodePoint", loc: SrcLoc): IrExpr {
+  const name = `%builtin.String.${member}`;
+  if (!lowerer.liftedFns.some((fn) => fn.name === name)) {
+    const values = varRef("values", DYN, loc), index = varRef("index", F64, loc), codes = varRef("codes", arrayOf(F64), loc), code = varRef("code", F64, loc);
+    const number = (value: number): IrExpr => ({ kind: "numLit", value, type: F64, loc });
+    lowerer.liftedFns.push({ name, params: [{ localId: "first", name: "first", type: DYN }, { localId: "values", name: "values", type: DYN }], returnType: STRING,
+      locals: [{ id: "first", name: "first", type: DYN, mutable: false }, { id: "values", name: "values", type: DYN, mutable: false },
+        { id: "codes", name: "codes", type: arrayOf(F64), mutable: false }, { id: "index", name: "index", type: F64, mutable: true }, { id: "code", name: "code", type: F64, mutable: false }], loc,
+      body: [
+        { kind: "varDecl", localId: "codes", init: { kind: "arrayLit", elems: [], type: arrayOf(F64), loc }, loc },
+        { kind: "varDecl", localId: "index", init: number(0), loc },
+        { kind: "while", cond: { kind: "bin", op: "<", left: index, right: { kind: "dynCheck", value: { kind: "dynKeyGet", value: values, key: strLit("length", loc), type: DYN, loc }, type: F64, loc }, type: BOOL, loc }, loc, body: [
+          { kind: "varDecl", localId: "code", init: { kind: "libCall", fn: "dyn.toNumberCoerce", args: [{ kind: "dynKeyGet", value: values, key: lowerer.coerceToExpected(index, DYN), type: DYN, loc }], type: F64, loc }, loc },
+          ...(member === "fromCodePoint" ? [{ kind: "exprStmt" as const, expr: { kind: "libCall" as const, fn: "string.fromCodePoint" as const,
+            args: [{ kind: "arrayLit" as const, elems: [code], type: arrayOf(F64), loc }], type: STRING, loc }, loc }] : []),
+          { kind: "exprStmt", expr: { kind: "arrIntrinsic", method: "push", receiver: codes, args: [code], type: F64, loc }, loc },
+          { kind: "assign", localId: "index", value: { kind: "bin", op: "+", left: index, right: number(1), type: F64, loc }, loc },
+        ] },
+        { kind: "return", value: { kind: "libCall", fn: `string.${member}`, args: [codes], type: STRING, loc }, loc },
+      ],
+    });
+  }
+  return { kind: "dynFrom", value: { kind: "closure", fnName: name, captures: [], type: { kind: "func", params: [DYN], ret: STRING, rest: true, argumentsAll: true }, loc }, fnName: member, type: DYN, loc };
+}
+
+export function lowerCheckedPredicateValue(lowerer: Lowerer, display: string, test: "number" | "buffer", loc: SrcLoc, predicate?: IrLibFn): IrExpr {
+  const name = `%builtin.${display}`;
+  if (!lowerer.liftedFns.some((fn) => fn.name === name)) {
+    const value = varRef("value", DYN, loc);
+    const matches: IrExpr = { kind: "dynTest", test, value, type: BOOL, loc };
+    const result: IrExpr = predicate ? { kind: "ternary", cond: matches,
+      then: { kind: "libCall", fn: predicate, args: [{ kind: "dynCheck", value, type: F64, loc }], type: BOOL, loc },
+      else_: { kind: "boolLit", value: false, type: BOOL, loc }, type: BOOL, loc } : matches;
+    lowerer.liftedFns.push({ name, params: [{ localId: "value", name: "value", type: DYN }], returnType: BOOL,
+      locals: [{ id: "value", name: "value", type: DYN, mutable: false }], body: [{ kind: "return", value: result, loc }], loc });
+  }
+  return { kind: "closure", fnName: name, captures: [], type: { kind: "func", params: [DYN], ret: BOOL }, loc };
+}
+
+export function lowerNumberParserValue(lowerer: Lowerer, member: "parseInt" | "parseFloat", loc: SrcLoc): IrExpr {
+  const name = `%builtin.Number.${member}`;
+  const types = member === "parseInt" ? [DYN, DYN] : [DYN];
+  if (!lowerer.liftedFns.some((fn) => fn.name === name)) {
+    const params = types.map((type, index) => ({ localId: `p.${index}`, name: `p${index}`, type }));
+    const text: IrExpr = { kind: "libCall", fn: "dyn.toStringCoerce", args: [varRef("p.0", DYN, loc)], type: STRING, loc };
+    const radix: IrExpr = { kind: "libCall", fn: "dyn.toNumberCoerce", args: [varRef("p.1", DYN, loc)], type: F64, loc };
+    lowerer.liftedFns.push({ name, params, returnType: F64, locals: params.map((p) => ({ id: p.localId, name: p.name, type: p.type, mutable: false })),
+      body: [{ kind: "return", value: { kind: "libCall", fn: `num.${member}`, args: member === "parseInt" ? [text, radix] : [text], type: F64, loc }, loc }], loc });
+  }
+  return { kind: "dynFrom", value: { kind: "closure", fnName: name, captures: [], type: { kind: "func", params: types, ret: F64 }, loc }, fnName: member, type: DYN, loc };
 }
 
 // These module values expose existing native callable lowerings and main-thread
@@ -104,6 +189,17 @@ function moduleValue(lowerer: Lowerer, module: string, loc: SrcLoc): IrExpr {
 
 /** A first-class loader uses the same native functions as direct imports.
  * Module handles cache values and preserve aliases without a JS engine. */
+export function lowerObjectAssignValue(lowerer: Lowerer, loc: SrcLoc): IrExpr {
+  const name = "%builtin.Object.assign";
+  if (!lowerer.liftedFns.some((fn) => fn.name === name)) lowerer.liftedFns.push({
+    name, params: [{ localId: "target", name: "target", type: DYN }, { localId: "sources", name: "sources", type: DYN }],
+    returnType: DYN,
+    locals: [{ id: "target", name: "target", type: DYN, mutable: false }, { id: "sources", name: "sources", type: DYN, mutable: false }],
+    body: [{ kind: "return", value: { kind: "libCall", fn: "dyn.assignAll", args: [varRef("target", DYN, loc), varRef("sources", DYN, loc)], type: DYN, loc }, loc }], loc,
+  });
+  return { kind: "closure", fnName: name, captures: [], type: { kind: "func", params: [DYN], ret: DYN, rest: true }, loc };
+}
+
 export function lowerBuiltinLoaderValue(lowerer: Lowerer, loc: SrcLoc): IrExpr {
   const cacheKey = "%builtin.process.getBuiltinModule";
   let name = lowerer.builtinCallableValueFns.get(cacheKey);

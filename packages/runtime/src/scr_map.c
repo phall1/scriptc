@@ -256,6 +256,7 @@ static void scr_map_trace(void *o, ScrTraceVisit visit, void *ctx) {
  * an identity-key map may trace keys, values, or both independently. */
 static void scr_map_gcfree(void *o) {
   ScrMap *m = (ScrMap *)o;
+  scr_weak_dispose(m);
   for (size_t e = 0; e < m->nentries; e++) {
     if (!m->entries[e].live) continue;
     if (!m->key_trace) scr_map_release_key(m, m->entries[e].key);
@@ -314,6 +315,7 @@ ScrMap *scr_map_retain(ScrMap *m) {
 void scr_map_release(ScrMap *m) {
   if (!m || m->rc == SIZE_MAX) return; /* NULL: an uninitialized `let` local */
   if (--m->rc == 0) {
+    scr_weak_dispose(m);
     if (m->key_trace || m->val_trace) scr_cyc_on_dead(m);
     for (size_t e = 0; e < m->nentries; e++) {
       if (!m->entries[e].live) continue;
@@ -600,6 +602,51 @@ double scr_map_iter_val_f64(const ScrMap *m, double i) {
 
 bool scr_map_iter_val_bool(const ScrMap *m, double i) {
   return scr_map_iter_at(m, i)->val != 0;
+}
+
+void scr_map_dyn_attach(ScrMap *map, const ScrMapDynOps *ops) {
+  map->dyn_ops = ops;
+}
+
+ScrDyn *scr_map_dyn_key(const ScrMap *map, double index) {
+  uint64_t slot = scr_map_iter_at(map, index)->key;
+  return map->dyn_ops ? map->dyn_ops->key_box(slot) : scr_dyn_retain(scr_map_slot_to_ptr(slot));
+}
+
+ScrDyn *scr_map_dyn_value(const ScrMap *map, double index) {
+  uint64_t slot = scr_map_iter_at(map, index)->val;
+  return map->dyn_ops ? map->dyn_ops->val_box(slot) : scr_dyn_retain(scr_map_slot_to_ptr(slot));
+}
+
+static size_t scr_map_dyn_find(ScrMap *map, const ScrDyn *key) {
+  if (map->dyn_ops && !map->dyn_ops->key_matches(key)) return SCR_MAP_EMPTY;
+  uint64_t slot = map->dyn_ops ? map->dyn_ops->key_unbox(key) : scr_map_slot_from_ptr(scr_dyn_retain((ScrDyn *)key));
+  if (scr_exc_pending()) return SCR_MAP_EMPTY;
+  if (map->key_kind == SCR_MAP_KEY_F64) slot = scr_map_f64_bits(scr_map_slot_to_f64(slot));
+  size_t entry = scr_map_find(map, scr_map_hash_key(map, slot), slot);
+  scr_map_release_key(map, slot);
+  return entry;
+}
+
+ScrDyn *scr_map_dyn_get(ScrMap *map, const ScrDyn *key) {
+  size_t entry = scr_map_dyn_find(map, key);
+  if (scr_exc_pending()) return NULL;
+  return entry == SCR_MAP_EMPTY ? scr_dyn_retain(scr_dyn_undefined()) : scr_map_dyn_value(map, (double)entry);
+}
+
+bool scr_map_dyn_has(ScrMap *map, const ScrDyn *key, bool remove) {
+  size_t entry = scr_map_dyn_find(map, key);
+  return remove ? scr_map_delete_found(map, entry) : entry != SCR_MAP_EMPTY;
+}
+
+void scr_map_dyn_set(ScrMap *map, const ScrDyn *key, const ScrDyn *value, bool set) {
+  uint64_t key_slot = map->dyn_ops ? map->dyn_ops->key_unbox(key) : scr_map_slot_from_ptr(scr_dyn_retain((ScrDyn *)key));
+  if (scr_exc_pending()) return;
+  uint64_t value_slot = set ? 0 : map->dyn_ops ? map->dyn_ops->val_unbox(value) : scr_map_slot_from_ptr(scr_dyn_retain((ScrDyn *)value));
+  if (scr_exc_pending()) { scr_map_release_key(map, key_slot); return; }
+  if (map->key_kind == SCR_MAP_KEY_F64) key_slot = scr_map_f64_bits(scr_map_slot_to_f64(key_slot));
+  scr_map_set(map, scr_map_hash_key(map, key_slot), key_slot, value_slot);
+  scr_map_release_key(map, key_slot);
 }
 
 void *scr_map_iter_val_ref(const ScrMap *m, double i) {

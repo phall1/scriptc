@@ -25,7 +25,7 @@ import { InternalCompilerError } from "../../errors.js";
  *   ScrDynPath { parent, key, index } — the %ScrDynPath type. */
 import type { IrType, IrUnionDef } from "../../ir/ir.js";
 import { DYN_HANDLE_KINDS, isDynTypedRefType, isRefCounted, typeKey } from "../../ir/ir.js";
-import { dynDesc, undefinedArmTag } from "../../ir/analysis.js";
+import { dynDesc } from "../../ir/analysis.js";
 import { mangleRecordNew, mangleRecordStruct } from "../mangle.js";
 import { BlockBuilder } from "./blocks.js";
 import { llvmCommentText } from "./common.js";
@@ -85,6 +85,7 @@ export class LlDyn {
   private readonly dynFuncBoxes = new Map<string, string>();
   private readonly dynFuncAdapters = new Map<string, string>();
   private readonly promiseDynAdapters = new Map<string, string>();
+  private readonly mapDynOps = new Map<string, string>();
   private dynToStrFn: string | null = null;
   private caughtToDynFn: string | null = null;
   private readonly helperMemo = new Map<string, string>();
@@ -129,7 +130,38 @@ export class LlDyn {
 
   /** The value LLVM type of a dynCheck result / toDyn operand for `t`. */
   private valTy(t: IrType): string {
-    return t.kind === "f64" ? "double" : t.kind === "bool" ? "i1" : "ptr";
+    return t.kind === "f64" || t.kind === "date" ? "double" : t.kind === "bool" ? "i1" : "ptr";
+  }
+
+  private collectionDynOps(t: IrType & { kind: "map" | "set" }): string {
+    const key = typeKey(t);
+    const prior = this.mapDynOps.get(key);
+    if (prior) return prior;
+    const name = `sc_map_dyn_${this.mapDynOps.size}`;
+    this.mapDynOps.set(key, name);
+    const keyType = t.kind === "map" ? t.key : t.elem;
+    const valueType: IrType = t.kind === "map" ? t.value : { kind: "f64" };
+    const emitSlot = (type: IrType, role: string): void => {
+      const ty = this.valTy(type);
+      const unpack = ty === "double" ? "bitcast i64 %slot to double" : ty === "i1" ? "trunc i64 %slot to i1" : "inttoptr i64 %slot to ptr";
+      const pack = ty === "double" ? "bitcast double %value to i64" : ty === "i1" ? "zext i1 %value to i64" : "ptrtoint ptr %value to i64";
+      const box = this.toDynHelper(type);
+      const unbox = this.dynCheckHelper(type);
+      this.defs.push(
+        `define internal ptr @${name}_${role}_box(i64 %slot) ${FN_ATTRS} {`,
+        `  %value = ${unpack}`,
+        `  %result = call ptr @${box}(${ty} %value)`,
+        `  ret ptr %result`, `}`, "",
+        `define internal i64 @${name}_${role}_unbox(ptr %d) ${FN_ATTRS} {`,
+        `  %value = call ${ty === "i1" ? "zeroext i1" : ty} @${unbox}(ptr %d, ptr null)`,
+        `  %result = ${pack}`,
+        `  ret i64 %result`, `}`, "",
+      );
+    };
+    emitSlot(keyType, "key");
+    emitSlot(valueType, "value");
+    this.defs.push(`@${name} = internal constant { ptr, ptr, ptr, ptr, ptr, ptr } { ptr ${this.host.cstr(key)}, ptr @${name}_key_box, ptr @${name}_key_unbox, ptr @${this.dynMatchHelper(keyType)}, ptr @${name}_value_box, ptr @${name}_value_unbox }`, "");
+    return name;
   }
 
   /* ── dyn node plumbing ─────────────────────────────────────────────── */
@@ -245,6 +277,14 @@ export class LlDyn {
     const len = Buffer.byteLength(key, "utf8");
     B.line(`${t} = call ptr @scr_dyn_obj_get(ptr ${d}, ptr ${this.host.cstr(key)}, ${this.S} ${len}) ; .${llvmCommentText(key)}`);
     return t;
+  }
+
+  /** Ordinary property lookup, including inherited data and accessors (+1). */
+  private objReadLit(B: BlockBuilder, d: string, key: string): string {
+    this.host.declare(`declare ptr @scr_dyn_obj_read(ptr, ptr, ${this.S})`);
+    const value = B.tmp();
+    B.line(`${value} = call ptr @scr_dyn_obj_read(ptr ${d}, ptr ${this.host.cstr(key)}, ${this.S} ${Buffer.byteLength(key, "utf8")})`);
+    return value;
   }
 
   /** Appends an ScrStr's bytes into a ScrJsonBuf (walkers' putScrStr). */
@@ -392,6 +432,13 @@ export class LlDyn {
       B.terminate(`ret i1 ${r}`);
     };
     switch (t.kind) {
+      case "date": {
+        this.host.declare(`declare zeroext i1 @scr_dyn_native_date_is(ptr)`);
+        const r = B.tmp();
+        B.line(`${r} = call zeroext i1 @scr_dyn_native_date_is(ptr %d)`);
+        B.terminate(`ret i1 ${r}`);
+        break;
+      }
       case "url": {
         this.host.declare(`declare zeroext i1 @scr_dyn_native_url_is(ptr)`);
         const r = B.tmp();
@@ -408,9 +455,10 @@ export class LlDyn {
       }
       case "map":
       case "set": {
-        this.host.declare(`declare zeroext i1 @scr_dyn_native_${t.kind}_is(ptr)`);
+        this.host.declare(`declare zeroext i1 @scr_dyn_native_collection_is(ptr, i32, ptr)`);
         const r = B.tmp();
-        B.line(`${r} = call zeroext i1 @scr_dyn_native_${t.kind}_is(ptr %d)`);
+        const typed = t.kind === "map" ? t.key.kind !== "dyn" || t.value.kind !== "dyn" : t.elem.kind !== "dyn";
+        B.line(`${r} = call zeroext i1 @scr_dyn_native_collection_is(ptr %d, i32 ${t.kind === "map" ? 1 : 0}, ptr ${typed ? this.host.cstr(typeKey(t)) : "null"})`);
         B.terminate(`ret i1 ${r}`);
         break;
       }
@@ -518,26 +566,25 @@ export class LlDyn {
         const isObj = B.tmp();
         B.line(`${isObj} = icmp eq i32 ${kd}, ${DYN_KIND.OBJ}`);
         const l0 = B.newLabel("dm.o");
-        B.condBr(isObj, l0, fail);
+        let readable = isObj;
+        if (!shape.indexValue) {
+          const proxy = B.tmp();
+          readable = B.tmp();
+          B.line(`${proxy} = icmp eq i32 ${kd}, ${DYN_KIND.PROXY}`);
+          B.line(`${readable} = or i1 ${isObj}, ${proxy}`);
+        }
+        B.condBr(readable, l0, fail);
         B.startBlock(l0);
         // dyn ('unknown') fields match ANY value, present or missing.
         for (const f of shape.fields) {
           if (f.type.kind === "dyn") continue;
-          const m = this.objGetLit(B, "%d", f.name);
-          const has = B.tmp();
-          B.line(`${has} = icmp ne ptr ${m}, null`);
-          const lTest = B.newLabel("dm.t");
+          const m = this.objReadLit(B, "%d", f.name);
           const lNext = B.newLabel("dm.n");
-          if (undefinedArmTag(f.type, this.host.unionsById) >= 0) {
-            // Optional-flavored field: a MISSING key is the undefined arm
-            // (a match); a PRESENT key must fit the union as usual.
-            B.condBr(has, lTest, lNext);
-          } else {
-            B.condBr(has, lTest, fail);
-          }
-          B.startBlock(lTest);
+          this.host.declare(`declare void @scr_dyn_release(ptr)`);
+          this.pendingBail(B, "dm.read", () => B.line(`call void @scr_dyn_release(ptr ${m})`), "i1 false");
           const ok = B.tmp();
           B.line(`${ok} = call zeroext i1 @${this.dynMatchHelper(f.type)}(ptr ${m})`);
+          B.line(`call void @scr_dyn_release(ptr ${m})`);
           B.condBr(ok, lNext, fail);
           B.startBlock(lNext);
         }
@@ -680,6 +727,17 @@ export class LlDyn {
     }
     if (isRefCounted(t) && t.kind !== "dyn") {
       host.declare(`declare ptr @scr_dyn_typed_ref_unbox(ptr)`);
+      if (t.kind === "object" && t.className === "%Error") {
+        host.declare(`declare ptr @scr_errdyn_err_of(ptr)`);
+        const error = B.tmp(), found = B.tmp();
+        B.line(`${error} = call ptr @scr_errdyn_err_of(ptr %d)`);
+        B.line(`${found} = icmp ne ptr ${error}, null`);
+        const yes = B.newLabel("dc.error"), next = B.newLabel("dc.noterror");
+        B.condBr(found, yes, next);
+        B.startBlock(yes);
+        B.terminate(`ret ptr ${error}`);
+        B.startBlock(next);
+      }
       const matched = this.typedRefMatches(B, t);
       const lRef = B.newLabel("dc.tr");
       const lNext = B.newLabel("dc.nt");
@@ -821,6 +879,13 @@ export class LlDyn {
       B.startBlock(lo);
     };
     switch (t.kind) {
+      case "date": {
+        host.declare(`declare double @scr_dyn_native_date_value(ptr)`);
+        const r = B.tmp();
+        B.line(`${r} = call double @scr_dyn_native_date_value(ptr %d)`);
+        B.terminate(`ret double ${r}`);
+        break;
+      }
       case "url": {
         host.declare(`declare ptr @scr_dyn_native_url_check(ptr, ptr)`);
         const r = B.tmp();
@@ -837,9 +902,10 @@ export class LlDyn {
       }
       case "map":
       case "set": {
-        host.declare(`declare ptr @scr_dyn_native_${t.kind}_check(ptr, ptr)`);
+        host.declare(`declare ptr @scr_dyn_native_collection_check(ptr, i32, ptr, ptr)`);
         const r = B.tmp();
-        B.line(`${r} = call ptr @scr_dyn_native_${t.kind}_check(ptr %d, ptr %path)`);
+        const typed = t.kind === "map" ? t.key.kind !== "dyn" || t.value.kind !== "dyn" : t.elem.kind !== "dyn";
+        B.line(`${r} = call ptr @scr_dyn_native_collection_check(ptr %d, i32 ${t.kind === "map" ? 1 : 0}, ptr ${typed ? host.cstr(typeKey(t)) : "null"}, ptr %path)`);
         B.terminate(`ret ptr ${r}`);
         break;
       }
@@ -1023,7 +1089,19 @@ export class LlDyn {
           B.terminate(`ret ptr %r0`);
           break;
         }
-        requireKind(DYN_KIND.OBJ, "dcr");
+        if (shape.indexValue) requireKind(DYN_KIND.OBJ, "dcr");
+        else {
+          const kind = this.kindOf(B, "%d"), object = B.tmp(), proxy = B.tmp(), readable = B.tmp();
+          B.line(`${object} = icmp eq i32 ${kind}, ${DYN_KIND.OBJ}`);
+          B.line(`${proxy} = icmp eq i32 ${kind}, ${DYN_KIND.PROXY}`);
+          B.line(`${readable} = or i1 ${object}, ${proxy}`);
+          const ok = B.newLabel("dcr.object"), fail = B.newLabel("dcr.fail");
+          B.condBr(readable, ok, fail);
+          B.startBlock(fail);
+          B.line(`call void @scr_dyn_check_fail(ptr %path, ptr ${want}, ptr %d)`);
+          B.terminate(`ret ptr null`);
+          B.startBlock(ok);
+        }
         if (shape.fields.length === 0 && !shape.indexValue) {
           const sourceAccessor = `${this.toDynHelper(t)}_source_access`;
           const rc = vAdapters(host, t);
@@ -1041,59 +1119,15 @@ export class LlDyn {
         }
         B.line(`%r0 = call ptr @${mangleRecordNew(t.shapeId)}()`);
         for (const f of shape.fields) {
-          const fieldWant = host.cstr(dynDesc(f.type, this.host.recordsById, this.host.unionsById));
-          const utag = f.type.kind === "union" ? undefinedArmTag(f.type, host.unionsById) : -1;
-          const m = this.objGetLit(B, "%d", f.name);
-          if (f.type.kind === "dyn") {
-            // An `unknown` field: a present key passes through, a missing
-            // one IS the undefined dyn value. Go through the dyn builder so
-            // a Web-stream typed-ref capsule cannot escape inside a checked
-            // record field.
-            const has = B.tmp();
-            B.line(`${has} = icmp ne ptr ${m}, null`);
-            const sel = B.tmp();
-            const u = this.undef(B);
-            B.line(`${sel} = select i1 ${has}, ptr ${m}, ptr ${u}`);
-            const value = B.tmp();
-            B.line(`${value} = call ptr @${this.dynCheckHelper(f.type)}(ptr ${sel}, ptr ${pathSlot})`);
-            storeInto(f.name, f.type, value);
-          } else if (utag >= 0 && f.type.kind === "union") {
-            const unit = host.unitInstanceRef(f.type.unionId, utag);
-            const has = B.tmp();
-            B.line(`${has} = icmp ne ptr ${m}, null`);
-            const lp = B.newLabel("dcr.p");
-            const la = B.newLabel("dcr.a");
-            const lj = B.newLabel("dcr.j");
-            B.condBr(has, lp, la);
-            B.startBlock(la);
-            storeInto(f.name, f.type, unit); // absent key -> the undefined arm
-            B.br(lj);
-            B.startBlock(lp);
-            setPath(f.name, "0");
-            const v = B.tmp();
-            B.line(`${v} = call ptr @${this.dynCheckHelper(f.type)}(ptr ${m}, ptr ${pathSlot})`);
-            storeInto(f.name, f.type, v);
-            this.pendingBail(B, "dcr", releaseR, "ptr null");
-            B.br(lj);
-            B.startBlock(lj);
-          } else {
-            const has = B.tmp();
-            B.line(`${has} = icmp ne ptr ${m}, null`);
-            const lp = B.newLabel("dcr.p");
-            const la = B.newLabel("dcr.a");
-            B.condBr(has, lp, la);
-            B.startBlock(la);
-            setPath(f.name, "0");
-            B.line(`call void @scr_dyn_check_fail(ptr ${pathSlot}, ptr ${fieldWant}, ptr null)`);
-            releaseR();
-            B.terminate(`ret ptr null`);
-            B.startBlock(lp);
-            setPath(f.name, "0");
-            const v = B.tmp();
-            B.line(`${v} = call ${this.valTy(f.type)} @${this.dynCheckHelper(f.type)}(ptr ${m}, ptr ${pathSlot})`);
-            storeInto(f.name, f.type, v);
-            this.pendingBail(B, "dcr", releaseR, "ptr null");
-          }
+          const m = this.objReadLit(B, "%d", f.name);
+          host.declare(`declare void @scr_dyn_release(ptr)`);
+          this.pendingBail(B, "dcr.read", () => { B.line(`call void @scr_dyn_release(ptr ${m})`); releaseR(); }, "ptr null");
+          setPath(f.name, "0");
+          const value = B.tmp();
+          B.line(`${value} = call ${this.valTy(f.type)} @${this.dynCheckHelper(f.type)}(ptr ${m}, ptr ${pathSlot})`);
+          B.line(`call void @scr_dyn_release(ptr ${m})`);
+          storeInto(f.name, f.type, value);
+          this.pendingBail(B, "dcr", releaseR, "ptr null");
         }
         // Index-signature shapes CAPTURE undeclared keys into the
         // overflow map.
@@ -1423,6 +1457,10 @@ export class LlDyn {
       case "map":
       case "set": {
         host.declare(`declare ptr @scr_dyn_native_${t.kind}(ptr)`);
+        if (t.kind === "map" ? t.key.kind !== "dyn" || t.value.kind !== "dyn" : t.elem.kind !== "dyn") {
+          host.declare(`declare void @scr_map_dyn_attach(ptr, ptr)`);
+          B.line(`call void @scr_map_dyn_attach(ptr %v, ptr @${this.collectionDynOps(t)})`);
+        }
         const r = B.tmp();
         B.line(`${r} = call ptr @scr_dyn_native_${t.kind}(ptr %v)`);
         B.terminate(`ret ptr ${r}`);

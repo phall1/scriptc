@@ -45,7 +45,7 @@ import { findConstantNumericTables, type ConstantNumericTable } from "../../ir/c
 import { allocateFfiCallbackAdapters, hasForeignFfiCallback, hasRetainedFfiCallback, type FfiCallbackAdapter } from "../ffi-callbacks.js";
 import { RUNTIME_ABI_MARKER } from "../runtime-abi.js";
 import { computeMayThrow } from "../may-throw.js";
-import { mangleArgPack, mangleAsyncSpawn, mangleClassObj, mangleClassStruct, mangleFnClosure, mangleFunction, mangleGenDrop, mangleGenSpawn, mangleGlobal, mangleLocal, mangleRecordStruct, mangleTrampoline, mangleWrapper } from "../mangle.js";
+import { mangleArgPack, mangleAsyncSpawn, mangleClassObj, mangleClassStruct, mangleFnClosure, mangleFunction, mangleGenDrop, mangleGenSpawn, mangleGlobal, mangleLocal, mangleRecordStruct, mangleTrampoline, mangleWrapper, mangleVtInstance } from "../mangle.js";
 import { BlockBuilder } from "./blocks.js";
 import { LlvmDebugInfo } from "./debug-info.js";
 import { f64Lit, ffiNativeTypeLl, ffiNativeParamLl, ffiNativeReturnLl, llvmCommentText } from "./common.js";
@@ -89,6 +89,7 @@ import {
   releaseSym,
   retainSym,
   traceArg,
+  typedRefConstructor,
   vAdapters,
 } from "./shapes.js";
 import type { ExprOf, LibCallExpr, LlStreamTypedRefAdapter, LlValue } from "./expr-context.js";
@@ -815,6 +816,24 @@ export class LlEmitter {
     // emit), then the file assembles around them — the runtime ABI’s order.
     const fnDefs: string[] = [];
     for (const fn of this.mod.functions) fnDefs.push(this.emitFunction(fn));
+    const errorViews: string[] = [];
+    for (const property of ["name", "message"]) if (this.mod.functions.some((fn) => fn.name === `%error.${property}.read`)) {
+      this.declare(`declare void @scr_error_install_${property}_reader(ptr)`);
+      errorViews.push(`  call void @scr_error_install_${property}_reader(ptr @${mangleFunction(`%error.${property}.read`)})`);
+    }
+    for (const meta of this.classMeta.values()) {
+      if (meta.def.runtime || meta.root.def.name !== "%Error") continue;
+      const type: IrType = { kind: "object", className: meta.def.name };
+      const adapter = this.liveDynRefAdapter(type);
+      const rc = vAdapters(this.shapeHost, type);
+      const key = typeKey(type);
+      const name = `sc_error_view_${errorViews.length}`;
+      this.resolveThunkDefs.push(`define internal ptr @${name}(ptr %v) ${FN_ATTRS} {`, `entry:`,
+        `  %d = call ptr ${typedRefConstructor(this.shapeHost, type)}(ptr %v, ptr ${rc.retain}, ptr ${rc.release}, ptr ${this.cstr(key)}, ${this.sizeType} ${Buffer.byteLength(key, "utf8")}, ptr @${adapter.snapshot}, ptr ${adapter.commit})`,
+        `  ret ptr %d`, `}`, ``);
+      this.declare(`declare void @scr_error_register_dyn(ptr, ptr)`);
+      errorViews.push(`  call void @scr_error_register_dyn(ptr @${mangleVtInstance(meta.def.name)}, ptr @${name})`);
+    }
     const layouts = emitLlvmLayouts(this.shapeHost, this.mod, this.classMeta, this.classObjs, this.fnByName, (t) => this.llType(t));
     const shapes = layouts.records;
     const classShapes = layouts.classes;
@@ -864,8 +883,9 @@ export class LlEmitter {
     // sc_release_globals tail). Only when the dispatch unit is even
     // linked (defineProps is the only writer).
     const runtimeFeatures = moduleRuntimeFeatures(this.mod);
-    const fnValueProps = runtimeFeatures.dynInvoke ? [...this.fnValues] : [];
+    const fnValueProps = [...this.fnValues];
     if (fnValueProps.length > 0) this.declare(`declare void @scr_box_release(ptr)`);
+    if (this.classObjs.size > 0) this.declare(`declare void @scr_classobj_clear_properties(ptr)`);
     const globalReleaseLines = (prefix: string): string[] => {
       const lines: string[] = [];
       globals.forEach((g, i) => {
@@ -884,6 +904,7 @@ export class LlEmitter {
           `  store ptr null, ptr getelementptr inbounds (%ScrClosure, ptr @${mangleFnClosure(name)}, i64 0, i32 3)`,
         );
       });
+      for (const name of this.classObjs.keys()) lines.push(`  call void @scr_classobj_clear_properties(ptr @${mangleClassObj(name)})`);
       return lines;
     };
     // Exit listeners can read MODULE GLOBALS directly, so they must run
@@ -1124,8 +1145,8 @@ export class LlEmitter {
       // The runtime error prefix { rc, vt, name, message, code, cause } and the
       // class-object shape { rc, pre, post, ctor, name } — field reads on
       // builtin errors and classval loads GEP through these.
-      `%ScrError = type { ${this.sizeType}, ptr, ptr, ptr, ptr, ptr }`,
-      `%ScrClassObj = type { ${this.sizeType}, ${this.sizeType}, ${this.sizeType}, ptr, ptr, ${this.sizeType}, ${this.sizeType}, ptr }`,
+      `%ScrError = type { ${this.sizeType}, ptr, ptr, ptr, ptr, ptr, i8, i8, i8, i8, i8, ptr, ptr }`,
+      `%ScrClassObj = type { ${this.sizeType}, ${this.sizeType}, ${this.sizeType}, ptr, ptr, ${this.sizeType}, ${this.sizeType}, ptr, ptr }`,
       // The runtime emitter prefix { rc, vt, reg, cls } — user subclasses
       // embed it (classes.ts), and bare-emitter GEPs address through it.
       `%ScrEmitter = type { ${this.sizeType}, ptr, ptr, ptr }`,
@@ -1325,7 +1346,7 @@ export class LlEmitter {
     // scr_lib_init(argc, argv), then the entry function. An uncaught
     // exception escaping top-level code prints and exits 1 (Node).
     // The exception epilogue is emitted when the entry may throw.
-    const stamps: string[] = [];
+    const stamps: string[] = [...errorViews];
     for (const iv of this.errorIntervals) {
       const fields: [number, number][] = [[0, iv.pre], [1, iv.post]];
       for (const [field, value] of fields) {
@@ -2049,6 +2070,10 @@ export class LlEmitter {
           case "string":
             this.declare(`declare void @scr_promise_fulfill_str(ptr, ptr)`);
             tr.push(`  call void @scr_promise_fulfill_str(ptr %pr, ptr %r) ; moves in`);
+            break;
+          case "dyn":
+            this.declare(`declare void @scr_promise_resolve_dyn(ptr, ptr)`);
+            tr.push(`  call void @scr_promise_resolve_dyn(ptr %pr, ptr %r) ; moves in`);
             break;
           default: {
             const v = vAdapters(this.shapeHost, ret);
@@ -3184,6 +3209,10 @@ export class LlEmitter {
         this.declare(`declare void @scr_promise_fulfill_str(ptr, ptr)`);
         this.B.line(`call void @scr_promise_fulfill_str(ptr ${pr}, ptr ${v!.name}) ; moves in`);
         break;
+      case "dyn":
+        this.declare(`declare void @scr_promise_resolve_dyn(ptr, ptr)`);
+        this.B.line(`call void @scr_promise_resolve_dyn(ptr ${pr}, ptr ${v!.name}) ; moves in`);
+        break;
       default: {
         const rc = vAdapters(this.shapeHost, ret);
         this.declare(`declare void @scr_promise_fulfill_ref(ptr, ptr, ptr, ptr, ptr)`);
@@ -3576,6 +3605,17 @@ export class LlEmitter {
           this.releaseValue(old, type);
         } else {
           this.storeField(ptr, type, v.name);
+        }
+        if (s.kind === "fieldSet" && s.field === "name" && this.classMeta.get(s.className)?.root.def.name === "%Error") {
+          const present = this.classFieldPtr(obj.name, s.className, "%namePresent").ptr;
+          const enumerable = this.classFieldPtr(obj.name, s.className, "%nameEnumerable").ptr;
+          const wasPresent = B.tmp(), wasEnumerable = B.tmp(), isPresent = B.tmp(), nextEnumerable = B.tmp();
+          B.line(`${wasPresent} = load i8, ptr ${present}`);
+          B.line(`${wasEnumerable} = load i8, ptr ${enumerable}`);
+          B.line(`${isPresent} = icmp ne i8 ${wasPresent}, 0`);
+          B.line(`${nextEnumerable} = select i1 ${isPresent}, i8 ${wasEnumerable}, i8 1`);
+          B.line(`store i8 1, ptr ${present}`);
+          B.line(`store i8 ${nextEnumerable}, ptr ${enumerable}`);
         }
         break;
       }
@@ -4073,10 +4113,9 @@ export class LlEmitter {
       case "rethrow": {
         // Re-raise the saved snapshot (payload retained — the binding
         // local releases with its scope) and unwind like `throw`.
-        const c = B.tmp();
-        B.line(`${c} = load ptr, ptr %${mangleLocal(s.localId)}`);
+        const c = this.emitExpr({ kind: "varRef", localId: s.localId, type: CAUGHT, loc: s.loc });
         this.declare(`declare void @scr_rethrow(ptr)`);
-        B.line(`call void @scr_rethrow(ptr ${c})`);
+        B.line(`call void @scr_rethrow(ptr ${c.name})`);
         this.emitUnwind();
         break;
       }
@@ -4199,8 +4238,16 @@ export class LlEmitter {
         this.emitBlock(s.catchBody!, (scope) => {
           const c = B.tmp();
           B.line(`${c} = call ptr @scr_exc_take() ; catch binding`);
-          B.line(`store ptr ${c}, ptr ${slot}`);
-          scope.push({ slot, type: CAUGHT });
+          if (this.currentLocals.get(s.catchLocalId!)?.boxed) {
+            const box = B.tmp();
+            B.line(`${box} = ${boxNewCall(this.shapeHost, CAUGHT)} ; captured exception`);
+            this.boxSet(box, CAUGHT, c);
+            B.line(`store ptr ${box}, ptr ${slot}`);
+            scope.push({ slot, type: CAUGHT, boxed: true });
+          } else {
+            B.line(`store ptr ${c}, ptr ${slot}`);
+            scope.push({ slot, type: CAUGHT });
+          }
         });
       } else {
         this.declare(`declare void @scr_exc_clear()`);

@@ -64,6 +64,7 @@ export function computeTraced(mod: IrModule): { shapes: Set<string>; unions: Set
       case "dyn":
       case "classval":
       case "promise":
+      case "caught":
         return true;
       case "object":
         return tracedShapes.has(`object:${t.className}`);

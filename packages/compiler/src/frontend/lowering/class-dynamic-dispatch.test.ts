@@ -62,8 +62,9 @@ test("discovers dispatch sites added during a later reachability pass", () => {
 
 test("known class property bags preserve one owned receiver without boxing", () => {
   const { lowerer, liftedFns } = context();
+  lowerer.isSubclassOf = () => false;
   const type = { kind: "object", className: "Widget" } as const;
-  const info = { def: { name: "Widget", fields: [] }, fields: new Map(), base: null, subclasses: [] } as unknown as ClassInfo;
+  const info = { def: { name: "Widget", fields: [] }, fields: new Map(), methods: new Map(), base: null, subclasses: [] } as unknown as ClassInfo;
   lowerer.classes.set("Widget", info);
   const receiver: IrExpr = { kind: "call", callee: "makeWidget", args: [], type, loc };
   const target = fn("target", [statement({ kind: "call", callee: "%dyn.class.properties",

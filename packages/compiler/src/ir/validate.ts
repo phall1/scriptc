@@ -126,6 +126,7 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "dyn.globalSymbolHas": { argTypes: [SYMBOL_T], result: BOOL },
   "dyn.globalSymbolDelete": { argTypes: [SYMBOL_T], result: VOID },
   "dyn.typedRefIs": { argTypes: [DYN, STRING], result: BOOL },
+  "dyn.classIs": { argTypes: [DYN, STRING], result: BOOL },
   "dyn.iterPack": { argTypes: [DYN, STRING], result: DYN },
   "dyn.arrayFromIterator": { argTypes: [DYN], result: DYN },
   "dyn.iterator": { argTypes: [DYN, STRING], result: DYN },
@@ -1080,6 +1081,7 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "process.cwd": { argTypes: [], result: STRING },
   "process.pid": { argTypes: [], result: F64 },
   "dyn.this": { argTypes: [], result: DYN },
+  "dyn.generatorThis": { argTypes: [], result: DYN },
   "process.getuid": { argTypes: [], result: F64 },
   "process.getgid": { argTypes: [], result: F64 },
   "process.execPath": { argTypes: [], result: STRING },
@@ -1127,6 +1129,7 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "class.name": { argTypes: [null], result: STRING },
   "error.ctor": { argTypes: [null, STRING], result: VOID },
   "error.toString": { argTypes: [null], result: STRING },
+  "dyn.sameValue": { argTypes: [DYN, DYN], result: BOOL },
   "error.stack": { argTypes: [null], result: STRING },
   "error.stackLimitGet": { argTypes: [], result: F64 },
   "error.stackLimitSet": { argTypes: [F64], result: VOID },
@@ -1181,8 +1184,12 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "dyn.assignAll": { argTypes: [DYN, DYN], result: DYN },
   "dyn.objCreateNullProto": { argTypes: [], result: DYN },
   "dyn.arrayPrototype": { argTypes: [], result: DYN },
+  "dyn.objectPrototype": { argTypes: [], result: DYN },
+  "dyn.functionApply": { argTypes: [], result: DYN },
+  "dyn.builtinMethod": { argTypes: [STRING, STRING], result: DYN },
   "dyn.classPrototype": { argTypes: [DYN, DYN], result: DYN },
   "dyn.classBasePrototype": { argTypes: [DYN], result: DYN },
+  "dyn.classInherit": { argTypes: [DYN, DYN], result: DYN },
   "dyn.classSuper": { argTypes: [DYN, DYN, DYN], result: VOID },
   "dyn.assignPrototype": { argTypes: [DYN, DYN, DYN], result: DYN },
   "dyn.objCreate": { argTypes: [DYN], result: DYN },
@@ -1190,6 +1197,7 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "dyn.getPrototype": { argTypes: [DYN], result: DYN },
   "dyn.setPrototype": { argTypes: [DYN, DYN], result: DYN },
   "dyn.getOwnPropertyNames": { argTypes: [DYN], result: DYN },
+  "dyn.ownKeys": { argTypes: [DYN], result: DYN },
   "dyn.getOwnPropertySymbols": { argTypes: [DYN], result: DYN },
   "dyn.getOwnPropertyDescriptors": { argTypes: [DYN], result: DYN },
   "dyn.preventExtensions": { argTypes: [DYN], result: DYN },
@@ -1732,6 +1740,12 @@ export function validateModule(mod: IrModule): IrValidationError[] {
         errors.push({ message: `class ${cls.name}: invalid local base capture`, loc: cls.loc });
       }
     }
+    if (cls.baseValueGlobal !== undefined) {
+      const global = mod.globals?.find((global) => global.id === cls.baseValueGlobal);
+      if (cls.localBaseCapture !== undefined || !cls.base || global?.type.kind !== "classval" || global.type.className !== cls.base) {
+        errors.push({ message: `class ${cls.name}: invalid computed base global`, loc: cls.loc });
+      }
+    }
     if (cls.jsLength !== undefined && (!Number.isSafeInteger(cls.jsLength) || cls.jsLength < 0)) {
       errors.push({ message: `class ${cls.name}: invalid constructor length`, loc: cls.loc });
     }
@@ -1739,6 +1753,20 @@ export function validateModule(mod: IrModule): IrValidationError[] {
       const helper = functionsByName.get(cls.prototypeDataHelper);
       if (!helper || helper.params.length !== 0 || helper.returnType.kind !== "dyn" || helper.captures !== undefined || helper.classCaptures !== undefined) {
         errors.push({ message: `class ${cls.name}: prototype data helper must be a noncapturing () => dyn function`, loc: cls.loc });
+      }
+    }
+    if (cls.instancePrototypeHelper !== undefined) {
+      const helper = functionsByName.get(cls.instancePrototypeHelper);
+      const receiver = helper?.params[0]?.type;
+      if (!helper || helper.params.length !== 1 || receiver?.kind !== "object" || receiver.className !== cls.name ||
+          helper.returnType.kind !== "dyn" || helper.captures !== undefined || helper.classCaptures !== undefined) {
+        errors.push({ message: `class ${cls.name}: instance prototype helper must be a noncapturing (instance) => dyn function`, loc: cls.loc });
+      }
+    }
+    for (const symbol of cls.symbolFields ?? []) {
+      const global = mod.globals?.find((global) => global.id === symbol.globalId);
+      if (global?.type.kind !== "symbol" || !cls.fields.some((field) => field.name === symbol.field)) {
+        errors.push({ message: `class ${cls.name}: invalid symbol field metadata`, loc: cls.loc });
       }
     }
     const seen = new Set<string>();
@@ -1781,7 +1809,7 @@ export function validateModule(mod: IrModule): IrValidationError[] {
       errors.push({ message: `class ${cls.name}: undeclared base "${cls.base}"`, loc: cls.loc });
       continue;
     }
-    if (base.localCaptures !== undefined && cls.localBaseCapture === undefined) {
+    if (base.localCaptures !== undefined && cls.localBaseCapture === undefined && cls.baseValueGlobal === undefined) {
       errors.push({ message: `class ${cls.name}: local base requires a captured constructor`, loc: cls.loc });
     }
     const seen = new Set<string>([cls.name]);
@@ -2175,9 +2203,8 @@ function validateFunction(
   if (isUnitType(fn.returnType)) {
     err(`return type is bare unit type ${fn.returnType.kind}`, fn.loc);
   }
-  // Caught (catch-binding) values are local-only by construction: they can
-  // never be parameters, returns, or captures (the frontend fences every
-  // escape; a caught anywhere else is frontend breakage).
+  // Exception snapshots may be captured, but are never public parameters
+  // or return values. Their payload crosses those boundaries explicitly.
   if (fn.returnType.kind === "caught") err("return type is caught", fn.loc);
   for (const p of fn.params) {
     if (!locals.has(p.localId)) {
@@ -2190,7 +2217,6 @@ function validateFunction(
     if (!local) err(`capture "${c.name}" has no local entry "${c.localId}"`, fn.loc);
     else if (!local.boxed) err(`capture local "${c.localId}" is not boxed`, fn.loc);
     else if (!typeEquals(local.type, c.type)) err(`capture local "${c.localId}" has the wrong type`, fn.loc);
-    if (c.type.kind === "caught") err(`capture "${c.name}" is caught-typed`, fn.loc);
   }
   if (fn.classCaptures !== undefined) {
     const self = fn.params[0];
@@ -2908,7 +2934,7 @@ function validateFunction(
             !def.arms.every(
               (a) =>
                 a.kind === "undefinedT" || a.kind === "nullT" ||
-                a.kind === "string" || a.kind === "f64" || a.kind === "bool" ||
+                a.kind === "string" || a.kind === "f64" || a.kind === "bigint" || a.kind === "bool" ||
                 (a.kind === "bytes" && a.elem === "u8"),
             )
           ) {

@@ -27,6 +27,7 @@ import { REMOTE_COMMAND_PENDING, sandboxCommand, sandboxStatusCommand, waitForSa
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const laneCaseShardedFiles = [
+  "tests/harness/effect.test.ts",
   "tests/harness/differential.test.ts",
   "tests/harness/llvm-differential.test.ts",
   "tests/harness/npm.test.ts",

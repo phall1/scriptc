@@ -1831,7 +1831,10 @@ export class Lowerer {
   /** One Error-method helper belongs to this lowering session. Its cached
    * dispatch revision needs no weak-key identity or process-global state. */
   errorMethodDispatchRevision: string | null = null;
+  errorPropertyDispatchRevision: string | null = null;
   lambdaCounter = 0;
+  readonly preparedClassFactories = new Map<ts.ArrowFunction | ts.FunctionExpression, IrExpr>();
+  readonly preparingClassFactories = new Set<ts.ArrowFunction | ts.FunctionExpression>();
 
   /** Statement lists currently mid-lowering, innermost last: the forward-
    * capture machinery needs to know which later statements of an OPEN list
@@ -1977,6 +1980,22 @@ export class Lowerer {
           ? { kind: "object", className: this.mixinTypeContext.className }
           : null,
       localClassInstance: (decl) => {
+        // Computed heritage can close over parameters of its factory.
+        // A speculative checker query outside that factory must not lower
+        // the extends expression in the caller's lexical scope.
+        if (!this.classes.has(this.classNamer(decl)) && !this.collectingExprClasses.has(decl) &&
+            decl.heritageClauses?.some((clause) => clause.token === ts.SyntaxKind.ExtendsKeyword && clause.types.some((base) => {
+              const expression = base.expression;
+              if (ts.isCallExpression(expression)) return true;
+              if (ts.isIdentifier(expression) && this.isStdlibGlobal(expression, expression.text)) return false;
+              const symbol = this.checker.getSymbolAtLocation(ts.isPropertyAccessExpression(expression) ? expression.name : expression);
+              const resolved = symbol && symbol.flags & ts.SymbolFlags.Alias ? this.checker.getAliasedSymbol(symbol) : symbol;
+              if (ts.isPropertyAccessExpression(expression) && this.isStdlibGlobal(expression.expression, "globalThis") &&
+                  this.builtinErrorInfoOf(resolved)) return false;
+              if (resolved && this.classBySymbol.has(resolved)) return false;
+              const mapped = this.mapTypeOf(this.typeOf(expression));
+              return mapped?.kind !== "classval" || !this.classes.has(mapped.className);
+            }))) return null;
         for (let parent: ts.Node | undefined = decl.parent; parent && !ts.isSourceFile(parent); parent = parent.parent) {
           if (!ts.isFunctionDeclaration(parent) && !ts.isFunctionExpression(parent) &&
               !ts.isArrowFunction(parent) && !ts.isMethodDeclaration(parent)) continue;
@@ -3982,6 +4001,8 @@ export class Lowerer {
     // before collectProgram visits them one by one; reached body lowering
     // will reuse the same answers later.
     this.prefetchClassCollection(parts.flatMap((fp) => fp.classDecls));
+    const collectionEdges = new Set<string>();
+    this.onEdge = (name) => { collectionEdges.add(name); };
     this.collectProgram(parts);
     this.analyzeRuntimeOptionalArrayReads(parts);
     // Decorated classes analyze post-collection here too: the %init seeds
@@ -4050,13 +4071,13 @@ export class Lowerer {
         units.set(`%${cName}.constructor`, {
           order: unitOrder++,
           roots: classCtorRoots(info),
-          lower: () => this.lowerClassCtor(info),
+          lower: () => info.localClass && !info.localClass.ready ? null : this.lowerClassCtor(info),
         });
         for (const { mName, member } of this.classMethodMembers(info)) {
           units.set(`%${cName}.${mName}`, {
             order: unitOrder++,
             roots: functionRoots(member),
-            lower: () => this.lowerClassMethodMember(info, member),
+            lower: () => info.localClass && !info.localClass.ready ? null : this.lowerClassMethodMember(info, member),
           });
         }
         for (const prop of info.throwingSetters) {
@@ -4146,14 +4167,15 @@ export class Lowerer {
         lower: () => IrFunction | null,
       ): void => {
         units.set(name, { order: unitOrder++, roots, lower });
+        if (reachable.has(name)) queue.push(name);
         metadataPriority.set(name, [3, expressionMetadataOrder++]);
       };
-      register(`%${cName}.constructor`, classCtorRoots(info), () => this.lowerClassCtor(info));
+      register(`%${cName}.constructor`, classCtorRoots(info), () => info.localClass && !info.localClass.ready ? null : this.lowerClassCtor(info));
       for (const { mName, member } of this.classMethodMembers(info)) {
         register(
           `%${cName}.${mName}`,
           functionRoots(member),
-          () => this.lowerClassMethodMember(info, member),
+          () => info.localClass && !info.localClass.ready ? null : this.lowerClassMethodMember(info, member),
         );
       }
       if (info.staticMethods) for (const [name, entry] of info.staticMethods) {
@@ -4167,6 +4189,7 @@ export class Lowerer {
         register(`%${cName}.set:${prop}`, [], () => this.throwingSetterFn(info, prop));
       }
     };
+    for (const name of collectionEdges) this.onEdge(name);
     // Generic instances queued by the bodies above lower here (an instance
     // body fires edges of its own and can queue further instances of
     // either kind — function instances and class instantiations drain to
@@ -4825,6 +4848,11 @@ export class Lowerer {
   }
 
   typeOf(node: ts.Node): ts.Type {
+    // A checked JS method receives its actual call-site receiver. Its
+    // declaration's inferred class type must not turn property reads back
+    // into native field loads when the method is borrowed by another object.
+    if (node.kind === ts.SyntaxKind.ThisKeyword && isJsSourceFile(node.getSourceFile()) &&
+        this.fnStack.length > 0 && this.resolveThis()?.type.kind === "dyn") return this.checker.getUnknownType();
     // Inside an optional-chain body the guarded receiver is typed by its
     // NON-NULLISH type (the chain's tag test proved it), so every
     // receiver-kind check downstream sees the narrowed arm.
@@ -5353,17 +5381,13 @@ export class Lowerer {
         return { kind: "seqExpr", stmts: [{ kind: "exprStmt", expr, loc: expr.loc }],
           result: dynUndefinedExpr(expr.loc), type: DYN, loc: expr.loc };
       }
-      // An error-HIERARCHY object (builtin subclass or user `extends
-      // Error` class) upcasts to the %Error root first — the caughtToDyn
-      // encoding (scr_dyn_from_error) carries name/message/code and the
-      // runtime CACHES the identity edge, so `instanceof TypeError` on
-      // the dyn side still answers exactly (dyn.errInstanceof). Only the
-      // root spelling was convertible before; the harness passes typed
-      // errors into untyped helpers constantly.
+      // Preserve the concrete class so checked property/method dispatch
+      // discovers user Error subclasses. Runtime boxing selects the live
+      // view by vtable even when an error first crosses through its base.
       if (expr.type.kind === "object" && this.errorHierarchyClassOf(expr.type.className)) {
         return {
           kind: "dynFrom",
-          value: this.upcastTo(expr, "%Error"),
+          value: expr,
           type: DYN,
           loc: expr.loc,
         };
@@ -5793,6 +5817,7 @@ export class Lowerer {
         const sameFamily =
           (src.kind === "record" && arm.kind === "record") ||
           (src.kind === "array" && arm.kind === "array") ||
+          (src.kind === "func" && arm.kind === "func") ||
           (src.kind === "object" && arm.kind === "object") ||
           // Tuples already lift into ordinary array slots. Consider that
           // same conversion when the array is an arm of a union too.
@@ -8137,7 +8162,8 @@ export class Lowerer {
         return sym?.name === name && this.isStdlibSymbol(sym);
       });
       if (ts.isObjectLiteralExpression(x)) {
-        if (isJsSourceFile(x.getSourceFile()) || builtinOption("RequestInit") || builtinOption("ErrorOptions")) {
+        if (isJsSourceFile(x.getSourceFile()) || builtinOption("RequestInit") || builtinOption("ErrorOptions") ||
+            !this.mapTypeOf(this.typeOf(x))) {
           return lowerDynObjectLiteral(this, x);
         }
       }
@@ -8448,12 +8474,13 @@ export class Lowerer {
    * symbol reports eagerly (nothing could ever reference it). */
   collectDeferring(symbolOf: () => ts.Symbol | undefined, collect: () => void): ts.Symbol | null {
     const sink: ScrDiagnostic[] = [];
+    const previousSink = this.diagSink;
     this.diagSink = sink;
     try {
       collect();
       return null;
     } catch (e) {
-      this.diagSink = null;
+      this.diagSink = previousSink;
       const symbol = (() => {
         // symbolOf queries the checker too — a second panic must not
         // escape the fence that is handling the first.
@@ -8485,7 +8512,7 @@ export class Lowerer {
       this.deferredDiags.set(symbol, list);
       return symbol;
     } finally {
-      this.diagSink = null;
+      this.diagSink = previousSink;
     }
   }
 
@@ -8691,6 +8718,8 @@ export class Lowerer {
    * BEFORE that statement (JS's order for the supported whole-initializer
    * positions). */
   readonly pendingClassExprInits: IrStmt[] = [];
+  readonly computedClassBases = new Map<string, { value: IrExpr; classInfo: ClassInfo }>();
+  readonly computedCallableBases = new Map<ts.ClassLikeDeclaration, IrExpr>();
   /** Discovery hook: registers a just-collected expression class's member
    * bodies as worklist units (the units map is otherwise built before
    * lowering starts). Null in the emit pass. */
@@ -8790,11 +8819,7 @@ export class Lowerer {
       // Computed method names resolve exactly like collection did
       // (classMemberNameOf — folded keys and the sym:iterator slot);
       // unresolvable ones never collected, so they skip here too.
-      const baseName = ts.isMethodDeclaration(fnLike)
-        ? classMemberNameOf(this, fnLike.name)
-        : ts.isIdentifier(fnLike.name) || ts.isPrivateIdentifier(fnLike.name)
-          ? fnLike.name.text
-          : null;
+      const baseName = classMemberNameOf(this, fnLike.name);
       if (baseName === null) continue;
       const mName = ts.isMethodDeclaration(fnLike) ? baseName : `${ts.isGetAccessor(fnLike) ? "get" : "set"}:${baseName}`;
       if (!info.methods.get(mName) || !fnLike.body) continue;
@@ -9183,9 +9208,7 @@ export class Lowerer {
     });
     if (resolved.error !== null) {
       const location = blame ?? (symbol === undefined ? undefined : this.checker.declarationsOf(symbol)[0]) ?? this.entry;
-      const message = resolved.error === "caught"
-        ? "closures capturing catch bindings (narrow into a typed local first)"
-        : `the binding '${resolved.origin!.name}' captured through a plain nested function (the declaration has no static storage a capture can thread — bind the value through a typed const, or read it in the declaring scope)`;
+      const message = `the binding '${resolved.origin!.name}' captured through a plain nested function (the declaration has no static storage a capture can thread — bind the value through a typed const, or read it in the declaring scope)`;
       this.unsupported("SC1090", location, message);
     }
     if (resolved.local !== null) return resolved.local;

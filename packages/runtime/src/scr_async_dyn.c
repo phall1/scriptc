@@ -496,6 +496,47 @@ ScrDyn *scr_dyn_promise_then(ScrPromise *src, ScrDyn *onf, ScrDyn *onr, ScrDyn *
   scr_promise_release(waiter); /* the entry never rejects; nobody awaits it */
   return boxed;
 }
+typedef struct {
+  ScrPromise *destination;
+  ScrDyn *value;
+} ScrDynResolvePack;
+
+static void scr_dyn_resolve_entry(ScrFiber *self, void *opaque) {
+  (void)self;
+  ScrDynResolvePack *pack = opaque;
+  /* Promise resolution schedules a job before attaching its reaction. */
+  scr_await_hop();
+  ScrDyn *value = scr_await_dyn(pack->value->v.promise);
+  if (scr_exc_pending()) scr_promise_reject_pending(pack->destination);
+  else scr_promise_resolve_dyn(pack->destination, value);
+  scr_dyn_release(pack->value);
+  scr_promise_release(pack->destination);
+  free(pack);
+}
+
+/* The destination is borrowed; value moves in. An async function may
+ * return a native promise hidden behind any/unknown without an explicit
+ * await, so its completion must use resolution rather than fulfillment. */
+void scr_promise_resolve_dyn(ScrPromise *destination, ScrDyn *value) {
+  if (value->kind != SCR_DYN_PROMISE) {
+    scr_promise_fulfill_ref(destination, value, scr_dyn_retain_v, scr_dyn_release_v, scr_dyn_trace_v);
+    return;
+  }
+  if (value->v.promise == destination) {
+    static const char message[] = "Chaining cycle detected for promise #<Promise>";
+    scr_throw_error_msg(SCR_ERR_TYPE, message, sizeof message - 1);
+    scr_promise_reject_pending(destination);
+    scr_dyn_release(value);
+    return;
+  }
+  ScrDynResolvePack *pack = malloc(sizeof *pack);
+  if (!pack) scr_ad_oom();
+  pack->destination = scr_promise_retain(destination);
+  pack->value = value;
+  ScrPromise *waiter = scr_async_spawn(scr_dyn_resolve_entry, pack);
+  scr_promise_release(waiter);
+}
+
 /* `await v` where v is a CHECKED-DYNAMIC value: a dyn promise adopts
  * (the boxed promise awaits — rejections re-throw); every other kind is
  * JS's await-of-a-non-thenable — one microtask hop, the value itself
@@ -597,6 +638,7 @@ void scr_emit_warning(const char *name, const char *code, ScrStr *message) {
   ScrError *e = scr_error_new(SCR_ERR_ERROR, message);
   scr_str_release(e->name);
   e->name = scr_str_new(name ? name : "Warning", strlen(name ? name : "Warning"));
+  e->name_present = true;
   if (code) e->code = scr_str_new(code, strlen(code));
   ScrDyn *w = scr_dyn_from_error(e);
   scr_error_release(e);
@@ -670,6 +712,7 @@ void scr_process_emit_warning(ScrDyn *args) {
   ScrError *e = scr_error_new(SCR_ERR_ERROR, (ScrStr *)warning->v.str);
   scr_str_release(e->name);
   e->name = type ? scr_str_retain((ScrStr *)type) : scr_str_new("Warning", 7);
+  e->name_present = true;
   if (code) e->code = scr_str_retain((ScrStr *)code);
   ScrDyn *w = scr_dyn_from_error(e);
   scr_error_release(e);
