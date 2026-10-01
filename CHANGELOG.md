@@ -6,6 +6,22 @@ All notable changes to scriptc will be documented in this file.
 
 <!-- release:start -->
 
+## 0.2.1
+
+### Features
+
+- **More Effect 3 and Effect 4 programs compile statically.** Support expands across tested async and concurrent flows, services and layers, resource management, streams, schemas, and collections in the published packages.
+- **Three.js CPU workloads cover more geometry and animation.** Geometry merging, instancing, and keyframe interpolation compile without an embedded JavaScript engine.
+- **Typed-array constructors and prototype methods preserve more JavaScript behavior.** Native compilation supports constructor aliases, shared backing storage, chained indexed assignments, and mutable prototype methods with receiver dispatch.
+
+### Fixes
+
+- **Native installs are smaller and more portable.** GNU/Linux compiler distributions support glibc 2.34 or newer and use statically linked LLVM helpers. The compiler bundles its host runtime; cross-target runtime packs are optional project dependencies pinned to the compiler version.
+- **Native values retain identity across more typed and untyped boundaries.** Collections, class instances, inferred arrays, and mixed JavaScript return values preserve their supported storage and dispatch behavior.
+- **Effect platform callbacks and native streams preserve their state.** Expanded lowering retains callback behavior, and promise storage keeps the layout required by cycle collection.
+
+<!-- release:end -->
+
 ## 0.2.0
 
 ### Breaking changes
@@ -33,8 +49,6 @@ All notable changes to scriptc will be documented in this file.
 - **Untyped JavaScript boundaries preserve more native values.** Class state, shared arrays, nullable fields, constructor results, collection identity, and typed-array backing storage retain their supported semantics across calls and storage.
 - **Static library builds honor explicit package selections.** Packages named in a library profile's `npm_static` list are attempted even when they do not ship declarations.
 - **Terminal and process integration handles more native behavior.** Stored process streams, terminal signals, and exception handlers that resume queued work are supported across the tested native paths.
-
-<!-- release:end -->
 
 ## 0.1.7
 
