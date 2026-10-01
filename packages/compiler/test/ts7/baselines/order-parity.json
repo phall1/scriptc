@@ -10329,6 +10329,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/object-inherited-to-string.js": {
+   "order": [
+    "<repo>/tests/corpus/object-inherited-to-string.js"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/object-prototype-identity.mjs": {
    "order": [
     "<repo>/tests/corpus/object-prototype-identity.mjs"
