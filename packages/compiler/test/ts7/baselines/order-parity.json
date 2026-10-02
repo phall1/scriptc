@@ -10812,6 +10812,18 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/typed-collection-iterator-references.ts": {
+   "order": [
+    "<repo>/tests/corpus/typed-collection-iterator-references.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/typed-collection-iterators.ts": {
+   "order": [
+    "<repo>/tests/corpus/typed-collection-iterators.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/typed-collection-views/main.ts": {
    "order": [
     "<repo>/tests/corpus/typed-collection-views/use.mjs",
@@ -11141,6 +11153,12 @@
   "<repo>/tests/diagnostics/class-values.ts": {
    "order": [
     "<repo>/tests/diagnostics/class-values.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/diagnostics/collection-iterator-helpers.ts": {
+   "order": [
+    "<repo>/tests/diagnostics/collection-iterator-helpers.ts"
    ],
    "diags": []
   },
