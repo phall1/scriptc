@@ -10572,7 +10572,7 @@ export function lowerFunction(lowerer: Lowerer, decl: ts.FunctionDeclaration): I
       const receiver = target && receiverLocal ? lowerer.coerceToExpected(target.obj, DYN) : undefined;
       const spread = call.arguments.some(ts.isSpreadElement) ? lowerSpreadArgsCall(lowerer, call, callee, loc) : null;
       if (spread && spread.kind !== "dynCall") lowerer.unsupported("SC1090", call, "checked record property call spread arguments");
-      const result: IrExpr = spread ? { ...spread, ...(receiver ? { receiver } : {}) } : {
+      const result: IrExpr = spread ? (receiver ? { ...spread, receiver } : spread) : {
         kind: "dynCall", callee, ...(receiver ? { receiver } : {}), calleeName: access.getText(),
         args: call.arguments.map((arg) => lowerer.lowerExprExpecting(arg, DYN)), type: DYN, loc,
       };

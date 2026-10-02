@@ -1,6 +1,7 @@
 import * as Facade from "./facade.js";
-import decorated, { service, makeObject, makeOptions } from "./internal.js";
+import decorated, { annotatedValue, readAnnotatedValue, service, makeObject, makeOptions } from "./internal.js";
 console.log(decorated(4), decorated.fromState(4));
+console.log(annotatedValue(), readAnnotatedValue());
 const key = service("key");
 console.log(key.pipe(value => value + "!"));
 const initialized = service()("other");

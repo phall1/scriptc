@@ -1,4 +1,10 @@
 export const toDate = value => new Date(value);
+function annotatedFactory() {
+  return Object.assign(function() { return "callable"; }, { read: () => "annotated" });
+}
+/** @type {Function} */
+export const annotatedValue = annotatedFactory();
+export function readAnnotatedValue() { return annotatedValue.read(); }
 export function service() {
   function Key() {}
   Object.setPrototypeOf(Key, {
@@ -18,7 +24,7 @@ export function makeObject(options) {
     ...(options.description !== undefined ? { description: options.description } : {}),
   });
 }
-function invoke(options) { return options.commit(42); }
+function invoke(options) { return options.commit(42) + "/" + options.commit(...[42]); }
 export function makeOptions(options) {
   const commit = options.commit ?? "COMMIT";
   return invoke({

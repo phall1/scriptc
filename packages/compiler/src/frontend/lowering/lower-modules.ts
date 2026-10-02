@@ -1803,16 +1803,17 @@ export function collectGlobals(lowerer: Lowerer, sf: ts.SourceFile, topStmts: ts
                   // exactly the local rule (uncheckedOverloadHandleCall).
                   (uncheckedOverloadHandleCall(lowerer, decl.initializer) ? JSVAL : null) : null)
                 : null;
-            // Unannotated results of JavaScript calls can carry callable
-            // objects or heterogeneous unions absent from the native type
-            // map. Their compiled initializer still validates every crossing.
-            const callSignature = !decl.type && !hasJsTypeAnnotation(decl) && decl.initializer && ts.isCallExpression(decl.initializer)
+            // JavaScript factory results with unmappable annotations still
+            // need shared storage. Unannotated callable unions also use a
+            // checked slot; mappable authored annotations keep their layout.
+            const unannotatedCall = !decl.type && !hasJsTypeAnnotation(decl);
+            const callSignature = (isJsSourceFile(sf) || unannotatedCall) && decl.initializer && ts.isCallExpression(decl.initializer)
               ? lowerer.checker.getResolvedSignature(decl.initializer) : undefined;
             const callDeclaration = callSignature && lowerer.checker.signatureDeclaration(callSignature);
             const callType = callDeclaration && isJsSourceFile(callDeclaration.getSourceFile())
               ? lowerer.mapTypeOf(lowerer.typeOf(nameNode)) : null;
             const inferredJsCall = callDeclaration && isJsSourceFile(callDeclaration.getSourceFile()) &&
-              (!callType || callType.kind === "union" && lowerer.unions.get(callType.unionId)?.arms.some((arm) => arm.kind === "func"));
+              (!callType || unannotatedCall && callType.kind === "union" && lowerer.unions.get(callType.unionId)?.arms.some((arm) => arm.kind === "func"));
             if (!factoryType && !inferredJsCall && isJsSourceFile(sf) && !lowerer.mapTypeOf(lowerer.typeOf(nameNode))) continue;
             let type = handleT ?? factoryType ?? (inferredJsCall ? DYN : lowerer.irTypeOf(nameNode));
             if (isJsSourceFile(sf) && !decl.type && !hasJsTypeAnnotation(decl) && decl.initializer &&
