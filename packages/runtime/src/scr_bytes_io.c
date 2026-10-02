@@ -20,8 +20,12 @@
 #ifndef O_SYNC
 #define O_SYNC 0 /* Windows CRT opens have no separate synchronous flag. */
 #endif
-#if !defined(_WIN32) && !defined(__wasi__)
+/* Bionic added glob/globfree in API 28; Android packs target API 26. */
+#if !defined(_WIN32) && !defined(__wasi__) && (!defined(__ANDROID__) || __ANDROID_API__ >= 28)
 #include <glob.h>
+#define SCR_FS_HAS_GLOB 1
+#else
+#define SCR_FS_HAS_GLOB 0
 #endif
 #ifdef __APPLE__
 #include <sys/stat.h> /* lchmod(2) — the fs.lchmodSync ladder's real tail */
@@ -544,7 +548,7 @@ static ScrDyn *scr_fs_cb_invoke(ScrStr *member, ScrDyn *const *args, size_t argc
       scr_dyn_release(force); scr_str_release(destination);
     }
   } else if (!strcmp(op, "glob")) {
-#if !defined(_WIN32) && !defined(__wasi__)
+#if SCR_FS_HAS_GLOB
     if (strstr(path->data, "**") || scr_fs_cb_option_bool(ARG(1), "withFileTypes")) {
       const char *message = "Recursive glob patterns and Dirent results have no native lowering";
       scr_throw_error_msg_code(SCR_ERR_ERROR, message, strlen(message), "SC2020");

@@ -565,10 +565,30 @@ jobs:
             packages/runtime-win32-x64-msvc/runtime-pack.json
           retention-days: 1
 
+  mobile_runtime_packs:
+    name: test (${{ matrix.runtime }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runtime: runtime-ios-arm64
+            runner: macos-15
+          - runtime: runtime-ios-simulator-arm64
+            runner: macos-15
+          - runtime: runtime-android-arm64
+            runner: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/mobile-runtime-pack
+        with:
+          runtime: ${{ matrix.runtime }}
+
   # Retain the pre-matrix "test" check for branch protection and badges. It
   # passes only when every matrix shard and independent integration job does.
   test:
-    needs: [tests, effects, bootstrap, linux_host_clang, ts7_parity, llvm_artifacts_linux_x64, llvm_artifacts_macos_arm64, llvm_artifacts_macos_x64, windows_cli, llvm_artifacts_windows_x64]
+    needs: [tests, effects, bootstrap, linux_host_clang, ts7_parity, llvm_artifacts_linux_x64, llvm_artifacts_macos_arm64, llvm_artifacts_macos_x64, windows_cli, llvm_artifacts_windows_x64, mobile_runtime_packs]
     # A superseded run must release its concurrency slot immediately.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
@@ -585,3 +605,4 @@ jobs:
           test "${{ needs.llvm_artifacts_macos_x64.result }}" = success
           test "${{ needs.windows_cli.result }}" = success
           test "${{ needs.llvm_artifacts_windows_x64.result }}" = success
+          test "${{ needs.mobile_runtime_packs.result }}" = success
