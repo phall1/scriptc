@@ -86,7 +86,7 @@ Verifies and reads the installed precompiled runtime objects and vendor archives
   <dd>Build an object (equivalent to <code>--emit=obj</code>) and print its machine-readable external link recipe as JSON instead of printing the artifact path. The document names the exact installed precompiled runtime pack and all link inputs, but does not invoke a linker.</dd>
 
   <dt><code>--dynamic</code></dt>
-  <dd>Embed the dynamic engine (~620KB) so npm dependencies and <code>any</code>-typed code can run. Static stays the default — without this flag, dynamic-tier sites are per-site compile errors. See <a href="/dependencies">npm Dependencies</a>.</dd>
+  <dd>Embed the JavaScript engine to run npm dependencies and supported <code>any</code>-typed code. Static compilation is the default; without this flag, dynamic-tier sites produce compilation errors. See <a href="/dependencies">npm Dependencies</a>.</dd>
 
   <dt><code>--ffi &lt;file&gt;</code></dt>
   <dd>Bind signature-only TypeScript declarations to native C ABI symbols and link the manifest's archive, object, and system-library inputs. See <a href="/ffi">Native FFI</a>.</dd>

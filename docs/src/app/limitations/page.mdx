@@ -189,7 +189,7 @@ Uncaught exceptions print `Uncaught <value>` to stderr instead of Node.js's stac
 
 ## Embedded JavaScript engine
 
-`--dynamic` uses [quickjs-ng](https://github.com/quickjs-ng/quickjs) to run embedded dependency code. CPU-bound dependency code can run more slowly than under Node.js. Node builtin modules are provided by shims with their own supported APIs; the [coverage report](/coverage) lists the builtins used by the embedded dependency graph.
+`--dynamic` uses [quickjs-ng](https://github.com/quickjs-ng/quickjs) to run embedded dependency code. Node builtin modules are provided by shims with their own supported APIs; the [coverage report](/coverage) lists the builtins used by the embedded dependency graph.
 
 In a TypeScript `--dynamic` build, `const host: any = globalThis` or `(globalThis as any).TextDecoder` accesses the engine's global object. Its Node globals use those shims even without an embedded npm package. For example, the engine's `TextDecoder` supports UTF-8 labels only. Optional capabilities such as `fetch` are installed only when the build links their bridge.
 

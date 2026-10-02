@@ -1,8 +1,12 @@
 # npm Dependencies
 
-npm packages are the dynamic frontier: their shipped JavaScript is untyped, minified, and written against V8. scriptc's answer is the **dynamic island** — an embedded JavaScript engine ([quickjs-ng](https://github.com/quickjs-ng/quickjs), ~620KB) that executes dependency code inside your binary, opted in with `--dynamic`, with every value validated as it crosses back into static code.
+scriptc can embed an npm package's JavaScript and execute it inside the compiled binary. Enable this behavior with `--dynamic`. Dependency code runs in [quickjs-ng](https://github.com/quickjs-ng/quickjs), while supported statically typed application code compiles to native code.
 
-## The island story
+The embedded engine is also called the dynamic island. It has its own heap and job queue. Values crossing back into static types are validated at runtime.
+
+## Use a package
+
+Create `tool.ts`:
 
 ```ts:tool.ts
 import { Command } from "commander";
@@ -12,7 +16,7 @@ const program = new Command();
 program
   .name("greet")
   .argument("<name>", "who to greet")
-  .option("-u, --upper", "shout it")
+  .option("-u, --upper", "use uppercase")
   .action((name: string, opts: { upper?: boolean }) => {
     const text = `hello, ${name}`;
     console.log(opts.upper ? text.toUpperCase() : text);
@@ -21,48 +25,55 @@ program
 program.parse();
 ```
 
+Install the dependency, then build and run the executable:
+
 ```console
 $ npm install commander
-$ scriptc build tool.ts --dynamic -o greet
+$ scriptc build tool.ts --dynamic -o greet >/dev/null
 $ ./greet ada --upper
 HELLO, ADA
 ```
 
-What happened, step by step:
+The callback body compiles statically. The `commander` implementation runs in the embedded engine. Use [`scriptc coverage --dynamic`](/coverage#analyze-with-dynamic) to inspect a program's static and dynamic statement counts and the builtin modules its dependencies import.
 
-1. **Resolution** — `commander` resolves with Node's own resolution algorithm from your `node_modules`, honoring package.json `exports` conditions.
-2. **Types** — the package's shipped `.d.ts` is the type surface your code checks against, exactly as in a Node project.
-3. **Embedding** — the package's JavaScript (and everything it imports, resolved the same way) is embedded into the binary **at build time**. The executable never reads `node_modules` at runtime — it runs from any directory on any machine of the same platform.
-4. **Execution** — embedded code runs in the engine with full JavaScript semantics: the real `commander`, unmodified.
-5. **The boundary** — values cross by copy, never by reference. Your callback's typed parameters (`name: string`) are validated at call time: if the package passes something that isn't a string, that's a catchable `TypeError`, not memory corruption.
+## Package resolution and embedding
 
-Your own code — the `.action` callback body, the functions it calls — still compiles statically. The engine runs only what must be dynamic, and [`scriptc coverage --dynamic`](/coverage) shows the exact split, including which Node builtins the embedded packages import and whether each is shimmed.
+The compiler resolves packages from `node_modules` using Node.js package resolution, including `package.json` export conditions. Shipped or installed type declarations provide the types used to check application code.
 
-Workspace packages whose executable entry is TypeScript compile automatically as part of your program, including package-internal `.js` import spellings that resolve to `.ts` source. Workspace packages that ship executable JavaScript keep the normal dependency policy: use `--dynamic` for the island or opt them into `--npm-static`.
+The package's JavaScript and its resolved imports are embedded at build time. The executable does not load `node_modules` at runtime. Deploy it to a machine compatible with the build's target platform.
 
-## What the island is
+Workspace packages with a TypeScript executable entry compile as program modules, including `.js` import specifiers that resolve to `.ts` source. Workspace packages with JavaScript executable entries use the same policy as other JavaScript dependencies: execute them with `--dynamic`, or attempt static compilation with `--npm-static`.
 
-- **It's quickjs-ng, not V8.** Embedded dependency code runs correctly but slower than under Node for CPU-bound work. The win is startup, size, memory, and deployment shape — not raw dependency throughput.
-- **Shims, not Node.** Embedded package code that requires builtins (`node:events`, `node:path`, `node:process`, ...) gets faithful in-island implementations, several of which bridge to the same native runtime functions static code uses. The coverage report names every builtin the embedded graph reaches; an unshimmed one is reported, never silently stubbed.
-- **The boundary copies.** A static value flowing into dependency code marshals by value; mutations made by dynamic code are invisible to the static original, and vice versa. Where JS would alias, scriptc copies — a documented [divergence](/limitations).
-- **`any`-typed code runs there too.** Under `--dynamic`, expressions the checker types as `any` execute in the engine with full JS semantics, and every `any` → static edge is a validated exit.
-- **One engine per process**, created lazily on first use. An island-free `--dynamic` build emits the same code as a static one.
+## Runtime behavior
 
-## --npm-static (experimental)
+### Engine and builtin modules
 
-`--npm-static <pkg[,pkg…]|auto>` asks the compiler to take the named packages **out** of the island: their shipped JavaScript is compiled statically as program modules, type-informed by their own `.d.ts`.
+Node.js builtin modules are provided by shims, some of which bridge to the native runtime. Each shim has a supported subset; the [coverage report](/coverage#embedded-nodejs-builtins) lists the modules reached by the dependency graph, and the [compatibility reference](/compatibility) lists API support.
 
-This is experimental. Real packages compile statically at high but partial coverage. Sites the static compiler can't take are *deferred* — the build succeeds and the report names every deferred site, but reaching one at runtime is an error naming the exact unsupported operation. Some packages' code hits the static frontier outright and fails to build statically today; a package the preflight refuses falls back to the island with a coverage note. If a package matters to you statically, try it and read the report — the answer is specific, per package.
+The engine is created lazily on first use, with one engine per process. A `--dynamic` build that does not use the engine emits the same code as a static build. Supported `any`-typed expressions also execute in the engine when `--dynamic` is enabled.
 
-## --provenance-sources (experimental)
+### Value conversion
 
-`--provenance-sources` goes one step further: for packages published with npm provenance attestations, the compiler fetches the package's **source** at the attested commit and compiles that — TypeScript compiled as TypeScript, instead of the shipped JS. Packages without a usable attestation keep the engine path, with a note, never a failure. Same maturity caveats as `--npm-static`.
+Values passed between static and dynamic code are copied. Mutations to a copied value in one execution tier do not change the original in the other tier. This differs from ordinary JavaScript reference sharing.
 
-## Where this scales
+Typed callback parameters and values returned to static code are validated. If the package supplies a value that does not match the expected type, the conversion throws a catchable `TypeError`. See [Limitations](/limitations) for runtime differences and restrictions on values that can cross the boundary.
 
-The design goal is unmodified real-world packages. The measuring stick used during development is the published [Vercel CLI](https://www.npmjs.com/package/vercel) — straight off the registry, compiled with `--dynamic` into a single self-contained executable that runs its real workflows, replacing a ~120MB Node runtime plus 181MB of `node_modules`.
+## Static package compilation (experimental)
 
-## Current limits
+`--npm-static <pkg[,pkg…]|auto>` attempts to compile packages' shipped JavaScript as static program modules, using their type declarations. Named packages are selected explicitly; `auto` selects eligible direct imports.
 
-- Packages without shipped or installed type declarations fail the typecheck gate (the standard `Could not find a declaration file` error) — add `@types/<pkg>` or a local declaration, as you would in any strict TypeScript project.
-- Class instances and promises can't flow *into* `any` slots (no island representation); closures cross as host functions in specific shapes. Each refusal is a compile error naming the fix.
+Support is partial. An accepted package may contain deferred operations: the build succeeds and coverage lists those sites, but executing an unsupported deferred operation raises a runtime error. A package rejected during preflight falls back to the embedded engine with a coverage note; that path requires `--dynamic`. Other unsupported forms can still prevent a static build.
+
+Check the coverage report for each package before depending on static execution.
+
+## Provenance sources (experimental)
+
+`--provenance-sources` attempts to compile a package from source at its npm provenance-attested commit. This allows TypeScript source to compile as TypeScript instead of compiling the published JavaScript.
+
+Packages without usable attestations retain the embedded-engine path, with a note. This option has the same partial-support restrictions as `--npm-static`.
+
+## Type declarations and boundary restrictions
+
+Packages require shipped or installed type declarations. If TypeScript reports that it cannot find a declaration file, install the corresponding `@types` package or add a local declaration.
+
+Class instances and promises cannot pass into `any` slots in the engine. Closures can cross as host functions only in supported forms. Unsupported conversions produce compilation diagnostics with guidance where available.

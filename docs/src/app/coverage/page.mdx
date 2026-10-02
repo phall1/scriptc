@@ -1,85 +1,123 @@
 # Coverage Reports
 
-`scriptc coverage` answers "how much of my program compiles to native code?" It analyzes the program without building it and assigns every statement to a tier. No global scoreboard, no hand-waving: the numbers are for *your* program, and every non-static site is named with an error code.
+`scriptc coverage` analyzes a program without building an executable. It reports how many executable statements compile statically, which operations require the embedded JavaScript engine, and which operations are unsupported.
 
-## A fully static program
+The counts apply to the program being analyzed, not to JavaScript or Node.js support in general. Dependency implementation statements are excluded from these totals.
+
+## Static programs
+
+The following program compiles entirely to native code:
 
 ```console
-$ scriptc coverage app.ts
+$ cat hello.ts
+const who: string = process.argv.length > 2 ? process.argv[2] : "world";
+console.log(`hello, ${who}`);
 
-  statements analyzed   10
-  compile statically    10  (100%)
+$ scriptc coverage hello.ts
+
+  statements analyzed   2
+  compile statically    2  (100%)
 
   fully static — this program has no dynamic remainder.
 ```
 
-This is the common case for typed application code: the whole program becomes native code, and a `scriptc build` binary carries no engine.
+A static executable does not include a JavaScript engine.
 
-## A program with a dynamic remainder
+## Programs that require dynamic execution
 
-Import an npm package and the report changes shape:
+This program imports an npm package whose JavaScript requires the embedded engine:
 
 ```console
+$ cat cli.ts
+import pc from "picocolors";
+
+console.log(pc.green("hello"));
+
 $ scriptc coverage cli.ts
 
-  statements analyzed   4
-  compile statically    3  (75%)
+  statements analyzed   1
+  compile statically    0  (0%)
 
-  runs with --dynamic   2 sites (embeds a JS engine, ~620KB — static stays the default)
+  runs with --dynamic   2 sites
       ×1  importing 'picocolors' requires the embedded dynamic engine, which this build does not include — the package's implementation runs there  SC2013
       ×1  values from the 'picocolors' package run in the embedded dynamic engine, which this build does not include                                SC2013
 ```
 
-Reading it line by line:
+The package must be installed before analysis; the quickstart shows [how to install and use it](/quickstart#use-an-npm-dependency).
+
+### Report fields
 
 <table>
   <thead>
     <tr>
-      <th>Line</th>
+      <th>Field</th>
       <th>Meaning</th>
     </tr>
   </thead>
   <tbody>
     <tr>
       <td><code>statements analyzed</code></td>
-      <td>Every executable statement in your program (not in dependencies).</td>
+      <td>Executable statements in the program, excluding dependency implementation code.</td>
     </tr>
     <tr>
       <td><code>compile statically</code></td>
-      <td>Statements that become native code — no engine involved.</td>
+      <td>Statements that compile to native code.</td>
     </tr>
     <tr>
       <td><code>runs with --dynamic</code></td>
-      <td>Sites that <em>would</em> run in the embedded engine if you rebuilt with <code>--dynamic</code>. Without the flag, each is a compile error — this build does not include an engine, and never will silently.</td>
+      <td>Sites that require the embedded engine. Without <code>--dynamic</code>, these sites are compilation errors. Site counts can differ from statement counts.</td>
     </tr>
     <tr>
       <td><code>blockers</code></td>
-      <td>Statements that compile in <em>no</em> tier yet, each with a count, a one-line reason, and its <code>SC</code> code. These are the rejected tier: rebuilding with <code>--dynamic</code> does not make them go away.</td>
+      <td>Unsupported operations, listed with a count, reason, and diagnostic code. Enabling <code>--dynamic</code> does not resolve these blockers.</td>
     </tr>
   </tbody>
 </table>
 
-## The --dynamic view
+## Analyze with --dynamic
 
-`scriptc coverage --dynamic` answers a different question: **what would a `--dynamic` build compile, and what still blocks it?**
+Add `--dynamic` to include dynamic execution in the analysis:
 
 ```console
+$ cat cli.ts
+import pc from "picocolors";
+
+console.log(pc.green("hello"));
+
 $ scriptc coverage cli.ts --dynamic
 
-  statements analyzed   4
-  compile statically    3  (75%)
-  compile dynamically   1  (25%) (island sites — the embedded engine runs them)
+  statements analyzed   1
+  compile statically    0  (0%)
+  compile dynamically   1  (100%) (island sites — the embedded engine runs them)
 
   builds with --dynamic — no remaining blockers (the island sites above run in the embedded engine).
 ```
 
-The closing line is the actionable verdict: this program builds with `--dynamic`. When it doesn't, the remaining blockers are listed exactly like the static view's.
+The final line indicates whether the program can build with `--dynamic`. Any remaining blockers are listed in the report.
 
-## The embedded-builtins report
+## Embedded Node.js builtins
 
-When embedded npm code imports Node builtin modules, the `--dynamic` report says so — each builtin the embedded dependency graph reaches, whether it's shimmed inside the engine, and which package wanted it:
+When embedded dependencies import Node.js builtin modules, the dynamic report lists each module, its shim status, and the package that imports it.
+
+The [commander example](/dependencies#use-a-package) uses the following source:
 
 ```console
+$ cat tool.ts
+import { Command } from "commander";
+
+const program = new Command();
+
+program
+  .name("greet")
+  .argument("<name>", "who to greet")
+  .option("-u, --upper", "use uppercase")
+  .action((name: string, opts: { upper?: boolean }) => {
+    const text = `hello, ${name}`;
+    console.log(opts.upper ? text.toUpperCase() : text);
+  });
+
+program.parse();
+
 $ scriptc coverage tool.ts --dynamic
 
   statements analyzed   5
@@ -97,45 +135,24 @@ $ scriptc coverage tool.ts --dynamic
   builds with --dynamic — no remaining blockers (the island sites above run in the embedded engine).
 ```
 
-The shims are reimplementations inside the engine, not Node itself — see [npm Dependencies](/dependencies) for what that means.
+Shims provide supported Node.js APIs inside the embedded engine. They are separate implementations from Node.js's modules. See [npm Dependencies](/dependencies#runtime-behavior) and the [Node.js compatibility reference](/compatibility) for their restrictions.
 
-## What the fences mean
+## Diagnostic codes
 
-Blocker lines carry `SC` codes — the same codes `scriptc build` errors with, so the coverage report and the compiler never disagree. A few common shapes:
+Coverage uses the same diagnostic codes as `scriptc build`. Common examples include:
 
-- `'X' is part of the standard library types but has no scriptc lowering yet (SC2020)` — the type checker sees the full standard library, but only the supported surface compiles. The build error at that site includes the supported-alternatives hint.
-- `importing 'pkg' requires the embedded dynamic engine (SC2013)` — npm package implementations run in the engine; add `--dynamic` or drop the dependency.
-- `passing 'unknown' values where 'any' is expected (SC1100)` — the `any`/`unknown` boundary rules; narrow or cast first.
+- `SC2020`: a declared standard-library or Node.js API has no supported compiler implementation. Use the diagnostic's suggested alternative where available.
+- `SC2013`: a package import or package value requires the embedded engine. Enable `--dynamic`, remove the dependency, or evaluate the experimental [static package options](/dependencies#static-package-compilation-experimental).
+- `SC1100`: a value crosses an unsupported `unknown`/`any` boundary. Narrow or cast the value as directed by the diagnostic.
 
-## Type errors gate the analysis
+## Type errors
 
-Coverage only analyzes programs that typecheck. A program with TypeScript errors reports them instead of numbers:
+Coverage requires a program that typechecks. If type checking fails, the report identifies the errors instead of producing statement counts. Fix those errors before interpreting compilation coverage.
 
-```console
-$ scriptc coverage broken.ts
+## External host type declarations
 
-  not analyzable: 1 TypeScript error — fix type errors first (scriptc only analyzes programs that typecheck)
-```
+An embedder may provide modules that are absent from `node_modules`. Use `--external-types` to map an exact bare module specifier to the embedder's declaration file during analysis. For example: `scriptc coverage src/core.ts --external-types @native-sdk/core=types/native-sdk-core.d.ts`.
 
-This is deliberate: tier assignment is driven by types, so numbers computed over an ill-typed program would be fiction.
+The option is repeatable. Relative declaration paths resolve from the current working directory. Supported declaration extensions are `.d.ts`, `.d.mts`, and `.d.cts`. Relative declaration imports and re-exports are included, so the mapped file can be an `index.d.ts` barrel. Project-owned code using these types participates in coverage; type-only imports add no runtime boundary.
 
-## External host type surfaces
-
-Some applications run inside an embedder that provides modules which do not
-exist in `node_modules`. When the embedder ships a declaration restating that
-surface, map its exact bare specifier during coverage:
-
-`scriptc coverage src/core.ts --external-types @native-sdk/core=types/native-sdk-core.d.ts`
-
-The option is repeatable. Relative declaration paths resolve from the current
-working directory; `.d.ts`, `.d.mts`, and `.d.cts` files are accepted. The
-declaration participates in type checking, so project-owned modules and local
-values using its structural types can be measured. Type-only imports add no
-runtime boundary. Relative declaration imports and re-exports are included, so
-the mapped file may be a conventional `index.d.ts` barrel.
-
-This mapping deliberately does not claim that the host module can execute in a
-scriptc binary. Value imports and uses appear as `SC1010` external-host
-blockers, while coverage continues counting the rest of the application. The
-option is available only on `scriptc coverage`; builds still require an actual
-module implementation or an explicit runtime integration.
+The mapping supplies types for analysis, not a runtime implementation. Value imports and uses remain `SC1010` external-host blockers while analysis counts the rest of the application. This option is available only for coverage; builds require a module implementation or runtime integration.

@@ -39,7 +39,7 @@ Build with the <code>wasm32-wasi</code> target and select the output with <code>
 
 The profile uses the native library schema. <code>sink_register_symbol</code> and <code>callback_register_symbol</code> name native registration functions; a Wasm reactor does not export them. Wasm binds callbacks during instantiation and delivers panics through <code>scriptc.panic</code>.
 
-Set <code>"optimization": "dev"</code> in the profile for faster builds. Eligible npm dependencies are attempted automatically. A profile may add <code>"npm_static": ["three"]</code> to explicitly attempt compilation from a package's source, including packages without bundled declarations. Unsupported reachable code still produces a compiler diagnostic.
+Set <code>"optimization": "dev"</code> in the profile to disable release optimization. Eligible npm dependencies are attempted automatically. A profile may add <code>"npm_static": ["three"]</code> to explicitly attempt compilation from a package's source, including packages without bundled declarations. Unsupported reachable code still produces a compiler diagnostic.
 
 ## Instantiate and initialize
 

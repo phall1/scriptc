@@ -11,48 +11,52 @@ console.log(fib(30));
 $ scriptc run fib.ts
 832040
 
-$ scriptc build fib.ts -o fib && ./fib
+$ scriptc build fib.ts -o fib >/dev/null
+$ ./fib
 832040`;
 
-const COVERAGE_DEMO = `$ scriptc coverage cli.ts
+const COVERAGE_DEMO = `$ cat hello.ts
+const who: string = process.argv.length > 2 ? process.argv[2] : "world";
+console.log(\`hello, \${who}\`);
 
-  statements analyzed   4
-  compile statically    3  (75%)
+$ scriptc coverage hello.ts
 
-  runs with --dynamic   2 sites (embeds a JS engine, ~620KB — static stays the default)
-      ×1  importing 'picocolors' requires the embedded dynamic engine — the package's implementation runs there  SC2013`;
+  statements analyzed   2
+  compile statically    2  (100%)
+
+  fully static — this program has no dynamic remainder.`;
 
 const tiers = [
   {
     title: "Compiled statically",
-    body: "The default. Ordinary TypeScript — classes, closures, async/await, the stdlib, Node's fs/path/process/http surface — becomes native code with no engine in the binary.",
+    body: "Supported TypeScript and JavaScript operations compile to native code. Static executables run without Node.js or a JavaScript engine.",
   },
   {
     title: "Runs dynamically",
-    body: "Opt in with --dynamic: an embedded JavaScript engine (~620KB) executes what can't be static — npm dependencies' shipped JS, any-typed code. Every value crossing back into static code is validated at runtime.",
+    body: "Enable --dynamic to run npm packages and supported any-typed code in an embedded JavaScript engine. Values converted to static types are checked at runtime.",
   },
   {
     title: "Rejected at compile time",
-    body: "Everything else fails the build with a specific error code, a code frame, and usually a rewrite hint. Nothing is ever silently miscompiled.",
+    body: "Unsupported operations produce a diagnostic with an error code, a source location, and a rewrite hint where available.",
   },
 ];
 
 const points = [
   {
-    title: "No code changes",
-    body: "No annotations, no dialect, no special stdlib. The same TypeScript you run on Node, type-checked by the real TypeScript compiler.",
+    title: "TypeScript type checking",
+    body: "The compiler uses TypeScript's type information and narrowing rules to select native representations and identify unsupported operations.",
   },
   {
-    title: "Small and fast",
-    body: "A hello-world binary is ~320KB, starts in about 4ms, and links against nothing but libSystem. Node needs a ~120MB runtime and ~35ms to print the same line.",
+    title: "Native executables",
+    body: "Build a program into an executable for a supported target. JavaScript dependencies used with --dynamic are embedded at build time.",
   },
   {
-    title: "Measured coverage",
-    body: "scriptc coverage tells you, statement by statement, what compiles statically, what needs the dynamic engine, and exactly what blocks the rest.",
+    title: "Compilation coverage",
+    body: "Coverage reports show static and dynamic statement counts and list compilation blockers for the program being analyzed.",
   },
   {
     title: "Differentially tested",
-    body: "Every corpus program runs under Node and as a native binary; stdout, stderr, and exit codes must match byte-for-byte. The whole corpus re-runs under AddressSanitizer.",
+    body: "The test corpus compares program output and exit codes under Node.js and compiled execution. A sanitizer lane checks for memory errors.",
   },
 ];
 
@@ -86,8 +90,8 @@ export default function Home() {
             Compiler
           </h1>
           <p className="mx-auto mt-4 max-w-2xl copy-16 text-gray-900 sm:copy-18">
-            Ordinary TypeScript becomes a small, fast native binary — no Node, no V8, no
-            JavaScript engine required.
+            Compile TypeScript and JavaScript to native executables and WebAssembly.
+            Check compilation support with coverage reports.
           </p>
           <div className="mt-8 flex items-center justify-center gap-3">
             <Link
@@ -114,10 +118,10 @@ export default function Home() {
       {/* Three tiers */}
       <section className="border-t border-gray-alpha-400">
         <div className="mx-auto max-w-[1200px] px-6 py-16">
-          <h2 className="heading-24 text-gray-1000">Three tiers, always explicit</h2>
+          <h2 className="heading-24 text-gray-1000">Compilation modes</h2>
           <p className="mt-3 max-w-2xl copy-14 text-gray-900">
-            Every construct in your program lands in exactly one tier, and the tier is the
-            promise.
+            Programs can combine native code and an optional embedded JavaScript engine.
+            Unsupported operations produce compilation diagnostics.
           </p>
           <div className="mt-8 grid gap-6 md:grid-cols-3">
             {tiers.map((tier, i) => (
@@ -138,12 +142,11 @@ export default function Home() {
         <div className="mx-auto max-w-[1200px] px-6 py-16">
           <div className="grid items-center gap-10 lg:grid-cols-2">
             <div>
-              <h2 className="heading-24 text-gray-1000">Staticness you can see</h2>
+              <h2 className="heading-24 text-gray-1000">Check compilation support</h2>
               <p className="mt-3 copy-14 text-gray-900">
-                Most TypeScript is far more static than the ecosystem assumes. {siteName}{" "}
-                decides, construct by construct, what can compile to native code — and tells
-                you. A binary never silently grows an engine: the dynamic tier is opt-in, and
-                the coverage report names every site that needs it.
+                Use {siteName} coverage to analyze a program before building it. The report
+                identifies operations that compile statically, require the embedded engine,
+                or remain unsupported.
               </p>
               <Link
                 href="/coverage"
@@ -176,8 +179,8 @@ export default function Home() {
         <div className="mx-auto max-w-[1200px] px-6 py-16 text-center">
           <h2 className="heading-24 text-gray-1000">Compile your first binary</h2>
           <p className="mx-auto mt-3 max-w-xl copy-14 text-gray-900">
-            Clone the repository, build the compiler, and turn a TypeScript file into a native
-            executable in a couple of minutes.
+            Install the CLI, create a TypeScript file, and build an executable. The
+            quickstart covers platform requirements and npm dependencies.
           </p>
           <div className="mt-6 flex justify-center gap-3">
             <Link

@@ -1,12 +1,12 @@
 # Quickstart
 
-Install the CLI from npm and compile your first binary in a couple of minutes.
+Install scriptc, compile a TypeScript file, and run the resulting executable.
 
 ## Prerequisites
 
-- **macOS 15+ arm64/x64, Linux arm64/x64, or Windows x64** — see [platform support](/platforms) for target details.
-- **Node ≥ 24 and npm** — for npm installation. The installed compiler and its native output run without Node. Standalone distributions are also available from [GitHub Releases](https://github.com/vercel-labs/scriptc/releases).
-- **A platform linker and SDK** — for executable builds. On macOS, install the Xcode Command Line Tools. <code>--emit=ir|llvm|asm|obj</code> uses bundled tools and needs no external linker or SDK.
+- macOS 15+ on arm64 or x64, Linux on arm64 or x64, or Windows on x64. See [Platform Support](/platforms) for target details.
+- Node.js 24 or later and npm for installation. The installed native compiler and its output run without Node.js. Standalone distributions are available from [GitHub Releases](https://github.com/vercel-labs/scriptc/releases).
+- A platform linker and SDK for executable builds. On macOS, install the Xcode Command Line Tools. IR, LLVM IR, assembly, and object output use bundled tools and do not require an external linker or SDK.
 
 ## Install
 
@@ -14,45 +14,47 @@ Install the CLI from npm and compile your first binary in a couple of minutes.
 $ npm install -g scriptc
 ```
 
-Keep optional dependencies and installation scripts enabled so npm can install the native command for your platform.
+Keep optional dependencies and installation scripts enabled so npm can install the native command for your platform. For development from a source checkout, see the [repository](https://github.com/vercel-labs/scriptc).
 
-To work from a clone instead (`pnpm install && pnpm build` in the repo, then `pnpm scriptc` from the repo directory), see the [repository](https://github.com/vercel-labs/scriptc).
+## Create a program
 
-## Your first binary
-
-Write ordinary TypeScript:
+Create `hello.ts`:
 
 ```ts:hello.ts
 const who: string = process.argv.length > 2 ? process.argv[2] : "world";
 console.log(`hello, ${who}`);
 ```
 
-Compile and run in one step:
+This program reads the first command-line argument, or uses `"world"` when no argument is provided.
+
+## Compile and run
+
+Use `scriptc run` to compile and execute the program:
 
 ```console
 $ scriptc run hello.ts
 hello, world
 ```
 
-Or produce the executable:
+To pass arguments, build an executable and invoke it directly:
 
 ```console
-$ scriptc build hello.ts -o hello
+$ scriptc build hello.ts -o hello >/dev/null
 $ ./hello scriptc
 hello, scriptc
-$ ls -la hello
--rwxr-xr-x  1 you  staff  329752  hello
 ```
 
-That is a self-contained native binary — no Node, no node_modules, no JavaScript engine. It starts in about 4ms where Node takes ~35ms to print the same line.
+This program compiles statically, so the executable does not include a JavaScript engine. The shell examples use POSIX syntax; on Windows, build `hello.exe` and invoke it with `.\hello.exe`.
 
-Note the `process.argv.length` guard in `hello.ts`: scriptc arrays are dense, so an out-of-bounds read like `process.argv[2]` with no third argument is a runtime trap, not `undefined`. This is one of the documented [divergences](/limitations); the compiler and runtime tell you rather than silently differing.
+## Check compilation support
 
-## See what compiles
-
-Ask the compiler how static your program is — and what, precisely, isn't:
+`scriptc coverage` analyzes a program without creating an executable:
 
 ```console
+$ cat hello.ts
+const who: string = process.argv.length > 2 ? process.argv[2] : "world";
+console.log(`hello, ${who}`);
+
 $ scriptc coverage hello.ts
 
   statements analyzed   2
@@ -61,37 +63,32 @@ $ scriptc coverage hello.ts
   fully static — this program has no dynamic remainder.
 ```
 
-For programs that import npm packages or use `any`, the report names each dynamic site and each blocker with an error code. See [Coverage Reports](/coverage).
+For programs that need dynamic execution or contain unsupported operations, the report lists the affected sites and diagnostic codes. See [Coverage Reports](/coverage).
 
 ## Use an npm dependency
 
-npm packages run in an embedded JavaScript engine, opted in with `--dynamic`:
+Create `cli.ts`:
 
 ```ts:cli.ts
 import pc from "picocolors";
 
-function banner(text: string): string {
-  return pc.bold(pc.green(text));
-}
-
-const args = process.argv.slice(2);
-console.log(banner("scriptc demo"));
-console.log(`args: ${args.length}`);
+console.log(pc.green("hello"));
 ```
+
+Install the package and enable the embedded engine with `--dynamic`:
 
 ```console
 $ npm install picocolors
-$ scriptc build cli.ts --dynamic -o demo
-$ ./demo one two
-scriptc demo
-args: 2
+$ scriptc build cli.ts --dynamic -o demo >/dev/null
+$ ./demo
+hello
 ```
 
-The package's JS is embedded into the binary at build time — the executable never reads `node_modules` and runs from anywhere. See [npm Dependencies](/dependencies) for how the boundary works.
+The package's JavaScript is embedded at build time. The executable does not read `node_modules` at runtime. See [npm Dependencies](/dependencies) for package resolution, type declarations, and runtime behavior.
 
 ## Next steps
 
-- [CLI Reference](/cli) — every command and flag, including `--emit`, `--backend llvm`, and `--sanitize`.
-- [Native Program Objects](/native-objects) — consume `app.o` from an external C or linker build.
-- [Platform Support](/platforms) — cross-compiling to Linux and Windows with zig.
-- [Limitations](/limitations) — what doesn't compile yet.
+- [CLI Reference](/cli): commands and options, including output formats and sanitizers.
+- [Native Program Objects](/native-objects): use program objects in external builds.
+- [Platform Support](/platforms): supported hosts and cross-compilation.
+- [Limitations](/limitations): compilation restrictions and runtime differences.
