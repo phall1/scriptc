@@ -3044,6 +3044,13 @@ export function lowerArrayConstructor(lowerer: Lowerer,
   if (args.some(ts.isSpreadElement)) {
     lowerer.noLowering("Array constructor with spread arguments", expr);
   }
+  // JavaScript constructor results keep their checked reference, including
+  // holes created by the numeric length form. Boxing a dense native array
+  // would turn those holes into present undefined properties.
+  if (!lowerer.dynamic && isJsSourceFile(expr.getSourceFile())) {
+    return { kind: "dynCall", callee: { kind: "libCall", fn: "dyn.arrayConstructor", args: [], type: DYN, loc },
+      calleeName: "Array", args: args.map((arg) => lowerer.lowerExprExpecting(arg, DYN)), type: DYN, loc };
+  }
   let result = lowerer.mapTypeOf(lowerer.typeOf(expr));
   if (result?.kind !== "array") {
     const contextual = lowerer.checker.getContextualType(expr);
@@ -3132,7 +3139,7 @@ export function lowerArrayOfCall(lowerer: Lowerer, call: ts.CallExpression,
 
 /** Mapper-less checked Array.from: acquire once, then step through emitted
  * property and call dispatch so native class iterators retain their methods. */
-export function lowerCheckedArrayFrom(lowerer: Lowerer, source: IrExpr, loc: SrcLoc, mapper?: IrExpr, receiver?: IrExpr, numeric = false): Extract<IrExpr, { kind: "seqExpr" }> {
+export function lowerCheckedArrayFrom(lowerer: Lowerer, source: IrExpr, loc: SrcLoc, mapper?: IrExpr, receiver?: IrExpr, numeric = false, iterable?: IrExpr): Extract<IrExpr, { kind: "seqExpr" }> {
   const iterator = lowerer.declareHiddenLocal("%fromIterator", DYN);
   const next = lowerer.declareHiddenLocal("%fromNext", DYN);
   const step = lowerer.declareHiddenLocal("%fromStep", DYN);
@@ -3166,7 +3173,7 @@ export function lowerCheckedArrayFrom(lowerer: Lowerer, source: IrExpr, loc: Src
         { kind: "exprStmt" as const, expr: nodeThrowExpr(1, "", "Array.from mapper is not a function", DYN, loc), loc },
       ], loc },
     ], loc }] : []),
-    { kind: "varDecl", localId: iterator.id, init: { kind: "libCall", fn: "dyn.iteratorResult", args: [{ kind: "libCall", fn: "dyn.arrayFromIterator", args: [source], type: DYN, loc }], type: DYN, loc }, loc },
+    { kind: "varDecl", localId: iterator.id, init: { kind: "libCall", fn: "dyn.iteratorResult", args: [{ kind: "libCall", fn: iterable ? "dyn.iterator" : "dyn.arrayFromIterator", args: iterable ? [source, iterable] : [source], type: DYN, loc }], type: DYN, loc }, loc },
     { kind: "varDecl", localId: next.id, init: get(varRef(iterator.id, DYN, loc), "next"), loc },
     { kind: "varDecl", localId: out.id, init: { kind: "dynArrLit", elems: [], type: DYN, loc }, loc },
     { kind: "varDecl", localId: done.id, init: boolLit(false, loc), loc },
@@ -5965,7 +5972,7 @@ function mapFromSeedValue(lowerer: Lowerer, seed: IrExpr, mapT: IrType & { kind:
       return { kind: "call", callee: name, args: [seed], type: mapT, loc };
     }
     if (seed.type.kind === "dyn" || seed.type.kind === "array" &&
-        (seed.type.elem.kind === "dyn" || seed.type.elem.kind === "array")) {
+        !(seed.type.elem.kind === "record" && lowerer.shapes.get(seed.type.elem.shapeId)?.tuple)) {
       const key = `checked-seed:${typeKey(mapT)}`;
       let name = lowerer.mapHofHelpers.get(key);
       if (!name) {

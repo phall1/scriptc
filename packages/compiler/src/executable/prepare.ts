@@ -3,7 +3,7 @@ import type { FfiProfile } from "../ffi/ffi-manifest.js";
 import { checkerPanicDiag, iceDiag, isCheckerPanic, type ScrDiagnostic } from "../diagnostics/diagnostic.js";
 import type { IrModule, SrcLoc } from "../ir/ir.js";
 import { validateModule } from "../ir/validate.js";
-import { moduleWasiUnavailableSurface, targetRefusalDiag } from "../backend/target-diagnostics.js";
+import { fenceSpeculativeWasiFunctions, moduleWasiUnavailableSurface, targetRefusalDiag } from "../backend/target-diagnostics.js";
 import type { LowerResult, LowerStats } from "../frontend/lowering/lowerer.js";
 import type { FrontendFactory } from "../frontend/pipeline.js";
 import type { CompilationTiming } from "../timing.js";
@@ -70,6 +70,7 @@ export function prepareExecutableModule(
       if (ffi !== null) {
         return fail([targetRefusalDiag("wasm32-wasi", "native FFI manifests", entryLoc)]);
       }
+      fenceSpeculativeWasiFunctions(lowered.module);
       const unavailable = moduleWasiUnavailableSurface(lowered.module);
       if (unavailable !== null) {
         return fail([targetRefusalDiag("wasm32-wasi", unavailable.surface, unavailable.loc)]);

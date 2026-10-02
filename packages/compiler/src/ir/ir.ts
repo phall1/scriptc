@@ -1364,6 +1364,9 @@ export interface IrFunction {
   /** Original TS name (mangling is a backend concern). Lifted lambdas get
    * synthetic '%'-prefixed names ('%' can't appear in a TS identifier). */
   name: string;
+  /** Generated reflection dispatch contains speculative source-member edges.
+   * Target-only host operations behind those edges retain runtime refusals. */
+  speculativeDispatch?: boolean;
   params: IrParam[];
   returnType: IrType;
   /** All locals including params, pre-collected and scope-flat: ids are
@@ -1772,6 +1775,7 @@ export type IrStrIntrinsicMethod =
   | "padEnd"
   | "toLowerCase"
   | "toUpperCase"
+  | "normalize"
   // isWellFormed()/toWellFormed() — no-ops over the runtime's well-formed
   // storage (lone surrogates became U+FFFD at their producers): constant
   // true and the identity, per spec on well-formed input.
@@ -2067,6 +2071,10 @@ export type IrLibFn =
   | "fetch.abortTimeout"
   | "fetch.abortNow"
   | "fetch.abortAny"
+  | "abort.controllerNew"
+  | "abort.timeout"
+  | "abort.now"
+  | "abort.any"
   | "fetch.webIs"
   | "fetch.streamIs"
   | "fetch.streamNew"
@@ -2169,6 +2177,7 @@ export type IrLibFn =
   | "dyn.defineProperty"
   | "dyn.getOwnPropertyDescriptor"
   | "dyn.arrayProtoCall"
+  | "dyn.promiseAll"
   /** Bare `typeof v` on a dyn value AS A STRING (arg: the dyn value,
    * borrowed; result: an owned string) — the dyn kind's JS answer:
    * undefined→"undefined", null/object/array/bytes→"object" (JS's oldest
@@ -4045,6 +4054,10 @@ export type IrLibFn =
   | "dyn.packPushSpreadIter"
   | "dyn.assignAll"
   | "dyn.reflectApply"
+  | "dyn.reflectGet"
+  | "dyn.reflectSet"
+  | "dyn.reflectDefine"
+  | "dyn.abstractEq"
   /** `Object.create(null)` (scr_json.c): a fresh NULL-PROTOTYPE dyn
    * dictionary. The checked-dynamic tree's OBJ dispatch is already own-member-only —
    * Node's null-proto answer — so the flag's whole job is the observations
@@ -4053,6 +4066,7 @@ export type IrLibFn =
    * only; --dynamic routes Object.create through the engine instead. */
   | "dyn.objCreateNullProto"
   | "dyn.arrayPrototype"
+  | "dyn.arrayConstructor"
   | "dyn.objectPrototype"
   | "dyn.functionApply"
   | "dyn.builtinMethod"
@@ -4061,6 +4075,9 @@ export type IrLibFn =
   | "dyn.classInherit"
   | "dyn.classSuper"
   | "dyn.assignPrototype"
+  | "dyn.definePrototypeProps"
+  | "dyn.bagGet"
+  | "dyn.bagSet"
   | "dyn.objCreate"
   | "dyn.objCreateWithProperties"
   | "dyn.getPrototype"
@@ -5476,7 +5493,7 @@ export type IrExpr =
    * the nullish text spells), evaluated and flattened left-to-right (JS's
    * ArgumentListEvaluation). The emitters build one fresh argument array
    * and apply through it. */
-  | { kind: "dynCall"; callee: IrExpr; receiver?: IrExpr; calleeName: string; args: IrExpr[]; spreads?: { arg: number; what: string }[]; type: IrType; loc: SrcLoc }
+  | { kind: "dynCall"; callee: IrExpr; receiver?: IrExpr; calleeName: string; calleeNameValue?: IrExpr; args: IrExpr[]; spreads?: { arg: number; what: string }[]; type: IrType; loc: SrcLoc }
   /** Prototype-method DISPATCH on a dyn receiver — `recv.m(...)` where `m`
    * is a name a dyn-representable prototype declares (Array/String/
    * Function shared names: push, slice, join, forEach, map, apply, ...),
@@ -5490,7 +5507,7 @@ export type IrExpr =
    * "Cannot read properties of ...". Arguments are already dyn.
    * `calleeName` is the source spelling for the error texts. Receiver and
    * args are borrowed; the result is owned (+1). MAY THROW. */
-  | { kind: "dynInvoke"; recv: IrExpr; method: string; calleeName: string; args: IrExpr[]; type: IrType; loc: SrcLoc }
+  | { kind: "dynInvoke"; recv: IrExpr; method: string; calleeName: string; calleeNameValue?: IrExpr; args: IrExpr[]; type: IrType; loc: SrcLoc }
   /** A dyn ARRAY built element-by-element (JS mixed-element literals —
    * `['pwd', []]` — and evolving `[]` declarations): each element is
    * already a dyn value; the result owns them. Never throws. */
@@ -5785,7 +5802,7 @@ export type IrExpr =
    * the may-throw seed set (MAY_THROW_LIB_FNS) in their analysis and emit
    * pending checks; process.* members never throw. `process.exit` flushes
    * stdout and terminates the process without running exit handlers. */
-  | { kind: "libCall"; fn: IrLibFn; args: IrExpr[]; type: IrType; loc: SrcLoc }
+  | { kind: "libCall"; fn: IrLibFn; args: IrExpr[]; type: IrType; loc: SrcLoc; prototypeIdentityOnly?: true }
   /** `JSON.stringify(v)` — type-DIRECTED serialization: `value`'s static IR
    * type must be JSON-safe (f64/string/bool/record/array/union of those,
    * recursively — validated), and backends emit one serializer per type used
@@ -6721,6 +6738,7 @@ export interface RuntimeFeatures {
 const DYN_ASYNC_LIB_FNS: ReadonlySet<string> = new Set([
   "fs.callbackValue", "fs.callbackCall",
   "async.awaitDyn", "timers.immediatePromise", "crypto.native",
+  "dyn.promiseAll",
   "process.onUncaughtException", "process.offUncaughtException",
   "process.onUnhandledRejection", "process.offUnhandledRejection",
   "process.onRejectionHandled", "process.offRejectionHandled",
@@ -6765,7 +6783,7 @@ function scanRuntimeFeatures(mod: IrModule, stopAt?: keyof RuntimeFeatures): Run
       if (fn.startsWith("zlib.")) features.zlib = true;
       if (fn.startsWith("dc.")) features.dc = true;
       if (fn.startsWith("assert.")) features.assert = true;
-      if (fn === "dyn.defineProps" || fn === "dyn.defineProperty" || fn === "dyn.objCreateWithProperties" || fn === "dyn.arrayProtoCall" || fn === "dyn.arrayPrototype" || fn === "dyn.functionApply" || fn === "dyn.builtinMethod") features.dynInvoke = true;
+      if (fn === "dyn.defineProps" || fn === "dyn.definePrototypeProps" || fn === "dyn.defineProperty" || fn === "dyn.objCreateWithProperties" || fn === "dyn.arrayProtoCall" || fn === "dyn.arrayPrototype" || fn === "dyn.functionApply" || fn === "dyn.builtinMethod") features.dynInvoke = true;
       if (DYN_ASYNC_LIB_FNS.has(fn)) features.dynAsync = true;
       if (fn.startsWith("insp.") || fn === "console.native" || fn === "global.native") features.inspect = true;
       if (fn.startsWith("cp.") || fn.startsWith("child.") || fn.startsWith("writer.") || fn.startsWith("spawnRes.") ||
@@ -6791,7 +6809,7 @@ function scanRuntimeFeatures(mod: IrModule, stopAt?: keyof RuntimeFeatures): Run
       switch (node.kind) {
         case "regexLit": case "regexIntrinsic": features.regex = true; break;
         case "strIntrinsic":
-          if (node.method === "toLowerCase" || node.method === "toUpperCase") features.regex = true;
+          if (node.method === "toLowerCase" || node.method === "toUpperCase" || node.method === "normalize") features.regex = true;
           break;
         case "arrIntrinsic":
           if (node.method === "toReversed" || node.method === "toSpliced" || node.method === "with" || node.method === "withUndefined") features.copying = true;
@@ -7390,6 +7408,10 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "text.decoderEncoding",
   "dyn.construct",
   "dyn.reflectApply",
+  "dyn.reflectGet",
+  "dyn.reflectSet",
+  "dyn.reflectDefine",
+  "dyn.abstractEq",
   "text.decodeOptions",
   "text.decodeStream",
   "text.decodeLegacyOptions",
@@ -7442,6 +7464,8 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "fetch.responseNew",
   "fetch.abortTimeout",
   "fetch.abortAny",
+  "abort.timeout",
+  "abort.any",
   "fetch.streamNew",
   "fetch.streamFrom",
   "num.toFixed",
@@ -7791,6 +7815,9 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "dyn.toString",
   "string.fromCodePoint",
   "dyn.defineProps",
+  "dyn.definePrototypeProps",
+  "dyn.bagGet",
+  "dyn.bagSet",
   "dyn.defineProperty",
   "dyn.getOwnPropertyDescriptor",
   "dyn.arrayProtoCall",

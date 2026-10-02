@@ -201,10 +201,14 @@ describe.skipIf(!hasZig).each(["node", "native"] as const)("Wasm library embeddi
     const wasi = new WASI({ version: "preview1" });
     let api: Api;
     const vertices: number[][] = [];
+    const surfaces: number[][] = [];
+    const resources: number[][] = [];
     const instance = new WebAssembly.Instance(new WebAssembly.Module(await readFile(result.archivePath)), {
       ...wasi.getImportObject(),
       scriptc: {
         vertex: (...args: number[]) => vertices.push(args.map((x) => Number(x.toFixed(9)))),
+        surface: (...args: number[]) => surfaces.push(args.map((x) => Number(x.toFixed(9)))),
+        resource: (...args: number[]) => resources.push(args),
         panic: (p: number, n: number) => { throw new Error(new TextDecoder().decode(new Uint8Array(api.memory.buffer, p, n))); },
       },
     });
@@ -212,14 +216,18 @@ describe.skipIf(!hasZig).each(["node", "native"] as const)("Wasm library embeddi
     wasi.initialize(instance);
     api.app_init();
     for (const time of [0, 123, 2000]) expect(api.app_frame(time, 1.5)).toBe(24);
+    api.app_dispose();
     const reference = spawnSync(process.execPath, ["--no-warnings", "--input-type=module", "-e", `
-      const vertices=[];
+      const vertices=[],surfaces=[],resources=[];
       globalThis.vertex=(...args)=>vertices.push(args.map(x=>Number(x.toFixed(9))));
-      const {frame}=await import(${JSON.stringify(join(fixture, "three.mjs"))});
+      globalThis.surface=(...args)=>surfaces.push(args.map(x=>Number(x.toFixed(9))));
+      globalThis.resource=(...args)=>resources.push(args);
+      const {frame,dispose}=await import(${JSON.stringify(join(fixture, "three.mjs"))});
       for (const time of [0,123,2000]) frame(time,1.5);
-      console.log(JSON.stringify(vertices));
+      dispose();
+      console.log(JSON.stringify({vertices,surfaces,resources}));
     `], { encoding: "utf8" });
-    expect({ stdout: JSON.stringify(vertices) + "\n", stderr: "", status: 0 }).toEqual({ stdout: reference.stdout, stderr: reference.stderr, status: reference.status });
+    expect({ stdout: JSON.stringify({vertices,surfaces,resources}) + "\n", stderr: "", status: 0 }).toEqual({ stdout: reference.stdout, stderr: reference.stderr, status: reference.status });
     api.app_collect();
     api.app_init();
     expect(api.app_frame(0, 1)).toBe(24);

@@ -25,7 +25,7 @@ export function classStaticDataFor(lowerer: Lowerer, info: ClassInfo, name: stri
   return classStaticData(lowerer, info, loc);
 }
 
-function classStaticData(lowerer: Lowerer, info: ClassInfo, loc: SrcLoc): IrExpr | null {
+export function classStaticData(lowerer: Lowerer, info: ClassInfo, loc: SrcLoc): IrExpr | null {
   if (info.localClass || info.mixinInstance || info.generic || info.genericInstance || info.classDecorators || info.def.runtime || info.builtinEmitter || info.builtinStream || info.builtinError) return null;
   if (info.staticDataHelper === undefined) {
     const base = info.base && !info.base.builtinError ? classStaticData(lowerer, info.base, loc) : null;

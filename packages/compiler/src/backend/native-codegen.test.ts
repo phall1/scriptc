@@ -136,6 +136,18 @@ test("resolves a package helper, emits atomically, and caches by all native inpu
   expect(secondArtifact.dependencies).toEqual(firstArtifact.dependencies);
 });
 
+test("chunked LLVM input preserves emitted bytes and the native cache identity", async () => {
+  const pkg = await fakePackage();
+  const first = request(pkg.root, pkg.packageJson, join(pkg.root, "chunks.o"));
+  const chunks = [first.llvm.slice(0, 17), first.llvm.slice(17, 23), first.llvm.slice(23)];
+  await emitNativeArtifact({ ...first, llvm: chunks });
+  const second = request(pkg.root, pkg.packageJson, join(pkg.root, "text.o"));
+  await emitNativeArtifact(second);
+  expect(await readFile(first.outputPath, "utf8")).toBe(first.llvm);
+  expect(await readFile(second.outputPath)).toEqual(await readFile(first.outputPath));
+  expect((await readFile(pkg.log, "utf8")).trim().split("\n")).toHaveLength(1);
+});
+
 test("returns the pre-emission helper snapshot when its package changes during emission", async () => {
   const pkg = await fakePackage({ changePackageDuringEmit: true });
 

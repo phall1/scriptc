@@ -1,5 +1,5 @@
 import { InternalCompilerError } from "../../errors.js";
-import { BOOL, DYN_HANDLE_KINDS, F64, type IrExpr, type IrStmt, type IrType, type SrcLoc, isUnitType, typeEquals } from "../../ir/ir.js";
+import { BOOL, DYN, DYN_HANDLE_KINDS, F64, type IrExpr, type IrStmt, type IrType, type SrcLoc, isUnitType, typeEquals } from "../../ir/ir.js";
 import { boolLit, numLit, varRef } from "../../ir/build.js";
 import type { Lowerer } from "./lowerer.js";
 
@@ -262,6 +262,10 @@ export function lowerAbstractEquality(
   negated: boolean,
   loc: SrcLoc,
 ): IrExpr | null {
+  if ((left.type.kind === "dyn" || right.type.kind === "dyn") && lowerer.dynConvertible(left.type) && lowerer.dynConvertible(right.type)) {
+    const result: IrExpr = { kind: "libCall", fn: "dyn.abstractEq", args: [lowerer.coerceToExpected(left, DYN), lowerer.coerceToExpected(right, DYN)], type: BOOL, loc };
+    return negated ? { kind: "unary", op: "!", operand: result, type: BOOL, loc } : result;
+  }
   if (!supportsPair(lowerer, left.type, right.type)) return null;
   if (left.kind === "strLit" && right.kind === "strLit") {
     return { kind: "boolLit", value: (left.value === right.value) !== negated, type: BOOL, loc };

@@ -1259,8 +1259,10 @@ static void scr_fiber_finish(ScrFiber *self) {
      * (moved from the fiber's cell into the promise). */
     scr_promise_reject_from_cell(p, &self->exc);
   }
-  /* Fulfillment payload was stored by the trampoline before finishing. */
-  scr_promise_settle_wake(p);
+  /* A returned checked promise may still be resolving after its function
+   * body finishes. Its resolver owns settlement and must not wake awaiters
+   * until adoption completes (WASI continuations cannot park a C stack). */
+  if (p->state != SCR_PROM_PENDING) scr_promise_settle_wake(p);
   self->done = true;
 }
 

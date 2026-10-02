@@ -92,7 +92,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef SCR_FETCH_SIGNAL_ONLY
 #include <zlib.h>
+#else
+static void sf_signal_install(void);
+#endif
 
 /*
  * The static tier is a small native Web-platform island of its own:
@@ -289,6 +293,7 @@ struct SfResponse {
   bool null_body;
 };
 
+#ifndef SCR_FETCH_SIGNAL_ONLY
 struct SfTransfer {
   size_t rc;                 /* live registry + one per listener closure */
   ScrPromise *promise;       /* owned */
@@ -323,12 +328,15 @@ struct SfTransfer {
 };
 
 static SfTransfer *sf_live;
+#endif
 /* Weak registries: owners unlink themselves on destruction. They let the
  * fetch teardown sever opaque native→dyn edges before final cycle collection,
  * including otherwise-untraceable callback/reason→handle backedges. */
 static SfSignal *sf_callback_signals;
 static SfSignal *sf_reason_signals;
+#ifndef SCR_FETCH_SIGNAL_ONLY
 static SfStream *sf_callback_streams;
+#endif
 
 static void sf_oom(void) {
   fputs("scriptc: out of memory\n", stderr);
@@ -484,6 +492,9 @@ static void sf_signal_drop_reason(SfSignal *s) {
 }
 
 static SfSignal *sf_signal_new(void) {
+#ifdef SCR_FETCH_SIGNAL_ONLY
+  sf_signal_install();
+#endif
   SfSignal *s = calloc(1, sizeof *s);
   if (!s) sf_oom();
   s->rc = 1;
@@ -1339,6 +1350,8 @@ static bool sf_signal_set(void *ptr, const char *key, size_t len,
 }
 
 /* ── ReadableStream ──────────────────────────────────────────────── */
+
+#ifndef SCR_FETCH_SIGNAL_ONLY
 
 static void sf_stream_track_callbacks(SfStream *s) {
   if (s->callbacks_tracked || (!s->pull_cb && !s->cancel_cb)) return;
@@ -5775,7 +5788,38 @@ void scr_fetch_install(void) {
   scr_atexit(sf_teardown);
 }
 
-#else
+#else /* SCR_FETCH_SIGNAL_ONLY */
+
+static bool sf_no_set(void *ptr, const char *key, size_t len, const ScrDyn *value) {
+  (void)ptr; (void)key; (void)len; (void)value;
+  return false;
+}
+static const ScrDynHandleOps sf_signal_ops = {
+  "AbortSignal", &sf_signal_retain_v, &sf_signal_release_v,
+  &sf_signal_invoke, &sf_signal_get, &sf_signal_set, NULL };
+static const ScrDynHandleOps sf_abort_controller_ops = {
+  "AbortController", &sf_signal_retain_v, &sf_signal_release_v,
+  &sf_abort_controller_invoke, &sf_abort_controller_get, &sf_no_set, NULL };
+static const ScrDynHandleOps sf_event_ops = {
+  "Event", &sf_event_retain_v, &sf_event_release_v,
+  &sf_event_invoke, &sf_event_get, &sf_event_set, NULL };
+static void sf_signal_teardown(void) {
+  while (sf_callback_signals) sf_signal_drop_callbacks(sf_callback_signals);
+  while (sf_reason_signals) sf_signal_drop_reason(sf_reason_signals);
+}
+static void sf_signal_install(void) {
+  static bool installed;
+  if (installed) return;
+  installed = true;
+  scr_dyn_handle_install(SCR_DYNH_ABORT_SIGNAL, &sf_signal_ops);
+  scr_dyn_handle_install(SCR_DYNH_ABORT_CONTROLLER, &sf_abort_controller_ops);
+  scr_dyn_handle_install(SCR_DYNH_EVENT, &sf_event_ops);
+  scr_atexit(sf_signal_teardown);
+}
+
+#endif /* SCR_FETCH_SIGNAL_ONLY */
+
+#else /* SCR_DYNAMIC */
 
 #include "scr_runtime.h"
 #include "scr_url_internal.h"

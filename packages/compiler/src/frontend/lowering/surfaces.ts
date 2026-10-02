@@ -418,6 +418,7 @@ export const STR_METHODS: Record<
   // flips the regex LINK switch (moduleUsesRegex).
   toLowerCase: { method: "toLowerCase", result: STRING, minArgs: 0, maxArgs: 0 },
   toUpperCase: { method: "toUpperCase", result: STRING, minArgs: 0, maxArgs: 0 },
+  normalize: { method: "normalize", result: STRING, minArgs: 0, maxArgs: 1 },
   // The ES2024 well-formedness pair — no-ops over the runtime's
   // well-formed storage (constant true / the identity, per spec on
   // well-formed input; where Node would answer false the program already

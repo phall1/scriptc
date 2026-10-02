@@ -3,7 +3,9 @@
   "name": "three-wasm-embedding",
   "entry": "three.mjs",
   "emission": "llvm",
-  "npm_static": ["three"],
+  "npm_static": [
+    "three"
+  ],
   "abi": {
     "prefix": "app_",
     "init_symbol": "app_init",
@@ -22,6 +24,26 @@
         "f64"
       ],
       "returns": "void"
+    },
+    {
+      "name": "surface",
+      "params": [
+        "f64",
+        "f64",
+        "f64",
+        "f64",
+        "f64"
+      ],
+      "returns": "void"
+    },
+    {
+      "name": "resource",
+      "params": [
+        "u32",
+        "f64",
+        "f64"
+      ],
+      "returns": "void"
     }
   ],
   "exports": [
@@ -32,6 +54,12 @@
         "f64",
         "f64"
       ],
+      "returns": "f64"
+    },
+    {
+      "export": "dispose",
+      "symbol": "app_dispose",
+      "params": [],
       "returns": "f64"
     }
   ]

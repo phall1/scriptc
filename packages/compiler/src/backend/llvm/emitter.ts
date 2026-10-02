@@ -161,6 +161,14 @@ export function emitLlvmModule(mod: IrModule, options: LlvmTargetOptions = {}): 
   return new LlEmitter(options.debugSources === undefined ? scalarizeNumericRecords(mod) : mod, options).emit();
 }
 
+/** Keep large translation units below the host's single-string limit. */
+export function emitLlvmModuleSource(mod: IrModule, options: LlvmTargetOptions = {}): string | readonly string[] {
+  const parts = new LlEmitter(options.debugSources === undefined ? scalarizeNumericRecords(mod) : mod, options).emitParts();
+  const length = parts.reduce((total, part) => total + part.length, Math.max(0, parts.length - 1));
+  if (length <= 256 * 1024 * 1024) return parts.join("\n");
+  return parts.flatMap((part, index) => index === 0 ? [part] : ["\n", part]);
+}
+
 function llStrBytes(text: string): string {
   return llBytes(Buffer.from(text, "utf8"));
 }
@@ -814,6 +822,10 @@ export class LlEmitter {
   }
 
   emit(): string {
+    return this.emitParts().join("\n");
+  }
+
+  emitParts(): string[] {
     // Function bodies first (the literal/unit/fn-value tables fill as they
     // emit), then the file assembles around them — the runtime ABI’s order.
     const fnDefs: string[] = [];
@@ -1351,7 +1363,9 @@ export class LlEmitter {
     for (const line of wrappers) out.push(line);
     for (const line of asyncDefs) out.push(line);
     for (const line of this.resolveThunkDefs) out.push(line);
-    out.push(fnDefs.join("\n\n"), ``);
+    out.push(fnDefs[0] ?? "");
+    for (let i = 1; i < fnDefs.length; i++) out.push("", fnDefs[i]!);
+    out.push("");
 
     // main(): scr_init, the program-dependent error-vt interval stamps,
     // scr_lib_init(argc, argv), then the entry function. An uncaught
@@ -1412,7 +1426,7 @@ export class LlEmitter {
       if (hasNoInlineRecordClone) out.push(`attributes #2 = { noinline sanitize_address }`);
       out.push(``);
       if (this.debug !== null) out.push(this.debug.render());
-      return out.join("\n");
+      return out;
     }
     out.push(
       `define i32 @${this.wasi ? "__main_argc_argv" : "main"}(i32 %argc, ptr %argv) ${FN_ATTRS} {`,
@@ -1552,7 +1566,7 @@ export class LlEmitter {
       ``,
     );
     if (this.debug !== null) out.push(this.debug.render());
-    return out.join("\n");
+    return out;
   }
 
   /** LIBRARY mode: the profile-declared external definitions — the

@@ -522,6 +522,13 @@ struct ScrDyn *scr_dyn_class_base_prototype(struct ScrDyn *constructor);
 struct ScrDyn *scr_dyn_class_inherit(struct ScrDyn *constructor, struct ScrDyn *base);
 void scr_dyn_class_super(struct ScrDyn *constructor, struct ScrDyn *receiver, struct ScrDyn *arguments);
 struct ScrDyn *scr_dyn_assign_prototype(struct ScrDyn *target, struct ScrDyn *sources, struct ScrDyn *protected_keys);
+struct ScrDyn *scr_dyn_bag_get(struct ScrDyn *bag, ScrStr *key, struct ScrDyn *receiver);
+struct ScrDyn *scr_dyn_reflect_get(struct ScrDyn *target, struct ScrDyn *key, struct ScrDyn *receiver);
+bool scr_dyn_reflect_set(struct ScrDyn *target, struct ScrDyn *key, struct ScrDyn *value, struct ScrDyn *receiver);
+bool scr_dyn_reflect_define(struct ScrDyn *receiver, struct ScrDyn *key, struct ScrDyn *value);
+bool scr_dyn_abstract_eq(const struct ScrDyn *left, const struct ScrDyn *right);
+int scr_dyn_function_kind(const struct ScrDyn *value);
+void scr_dyn_bag_set(struct ScrDyn *bag, ScrStr *key, struct ScrDyn *value, struct ScrDyn *receiver);
 /* The keyed-write miss on a fixed-shape record: throws the catchable
  * TypeError naming the key (JS would add the property — the documented
  * monomorphic-struct divergence). scr_object.c. */
@@ -772,6 +779,7 @@ ScrStr *scr_str_trim(ScrStr *s);
  * sets the regex link flag for case-conversion sites). Borrow s; +1. */
 ScrStr *scr_str_to_lower(const ScrStr *s);
 ScrStr *scr_str_to_upper(const ScrStr *s);
+ScrStr *scr_str_normalize(const ScrStr *s, const ScrStr *form);
 
 /* charAt(i): 1-code-unit string; out of range → empty string. Half of an
  * astral pair → U+FFFD (divergence, see above). Returns +1. */
@@ -1545,7 +1553,7 @@ typedef struct ScrClosure {
    * (like the dyn→closure edge): a cycle through it is merely never
    * collected. */
   ScrBox *props;
-  uint32_t function_kind; /* low bits: 0 ordinary, 1 generator, 2 async, 3 async generator; bit 2: ordinary own prototype */
+  uint32_t function_kind; /* low bits: 0 ordinary, 1 generator, 2 async, 3 async generator; bit 2: ordinary own prototype; bit 3: checked callable adapter in caps[0] */
   ScrBox *caps[];
 } ScrClosure;
 
@@ -3607,7 +3615,7 @@ struct ScrDyn {
     ScrBigInt *bigint; /* owned (SCR_DYN_BIGINT) */
     /* Callbacks keep the optional symbol unit out of symbol-free binaries. */
     struct { ScrSym *value; void (*release)(ScrSym *); ScrStr *(*render)(ScrSym *); ScrStr *(*description)(ScrSym *); } symbol;
-    struct { size_t len; size_t cap; ScrDyn **items; struct ScrDyn *properties; bool sealed; bool frozen; } arr; /* owned */
+    struct { size_t len; size_t cap; ScrDyn **items; struct ScrDyn *properties; bool sealed; bool frozen; unsigned char *presence; } arr; /* owned; NULL presence means dense */
     struct {
       size_t len;
       size_t cap;
@@ -3793,6 +3801,9 @@ ScrDyn *scr_dyn_increment(const ScrDyn *value, bool increment);
 ScrDyn *scr_dyn_symbol_ref(ScrSym *value, void (*release)(ScrSym *), ScrStr *(*render)(ScrSym *), ScrStr *(*description)(ScrSym *));
 ScrDyn *scr_dyn_new_str(ScrStr *s);
 ScrDyn *scr_dyn_new_arr(void);
+ScrDyn *scr_dyn_array_constructor(void);
+bool scr_dyn_arr_has_index(const ScrDyn *arr, size_t index);
+void scr_dyn_arr_push_hole(ScrDyn *arr);
 ScrDyn *scr_dyn_new_obj(void);
 ScrDyn *scr_dyn_iterator(const ScrDyn *value, const ScrStr *spell);
 ScrDyn *scr_dyn_iterator_optional(const ScrDyn *value);
@@ -3823,6 +3834,7 @@ bool scr_dyn_is_extensible(ScrDyn *object);
 ScrDyn *scr_dyn_seal(ScrDyn *object);
 bool scr_dyn_is_sealed(const ScrDyn *object);
 ScrDyn *scr_dyn_proxy_new(const ScrDyn *target, const ScrDyn *handler);
+bool scr_dyn_is_callable(const ScrDyn *value);
 ScrDyn *scr_dyn_proxy_get(const ScrDyn *proxy, const ScrStr *key);
 bool scr_dyn_proxy_has(const ScrDyn *proxy, const ScrStr *key);
 ScrDyn *scr_dyn_own_descriptor(const ScrDyn *value, const ScrStr *key);
@@ -3969,6 +3981,7 @@ bool scr_dyn_number_coerce_js(const ScrDyn *d, double *out);
 double scr_dyn_number_coerce(const ScrDyn *d);
 double scr_dyn_number_constructor(const ScrDyn *d);
 ScrBigInt *scr_dyn_bigint_constructor(const ScrDyn *d);
+ScrBigInt *scr_dyn_bigint_coerce(const ScrDyn *d);
 ScrDyn *scr_dyn_add(const ScrDyn *left, const ScrDyn *right); /* borrowed; +1 or NULL/pending */
 ScrDyn *scr_dyn_arithmetic(const ScrDyn *left, const ScrDyn *right, const ScrStr *operation);
 bool scr_dyn_compare(const ScrDyn *left, const ScrDyn *right, const ScrStr *operation);
@@ -4045,6 +4058,7 @@ ScrDyn *scr_dyn_fn_get(const ScrDyn *d, const char *key, size_t key_len);
  * Returns the target (+1, JS's return), or NULL with a pending catchable
  * TypeError (non-object target/descriptor — Node's messages). */
 ScrDyn *scr_dyn_define_props(ScrDyn *target, ScrDyn *descs);
+ScrDyn *scr_dyn_define_prototype_props(ScrDyn *target, ScrDyn *descs, ScrDyn *protected_keys);
 /* Boxes a closure as a callable dyn value. Ownership of `clo` MOVES in
  * (callers retain first when they keep their own reference); `sig`/`name`
  * must be static literals (the box never frees them; name may be NULL). */
@@ -4185,6 +4199,7 @@ ScrDyn *scr_dyn_new_promise_adapting(ScrPromise *src,
                                      void (*adapt)(ScrPromise *dst, ScrPromise *src));
 /* BORROWED peek at the boxed promise; NULL when d is not a promise box. */
 ScrPromise *scr_dyn_promise_of(const ScrDyn *d);
+ScrPromise *scr_dyn_promise_all(const ScrDyn *entries);
 
 /* ── island values in the checked-dynamic tree (SCR_DYN_JSVAL) ─────────────────────────
  * Engine routing ops for JSVAL nodes, installed by the gated constructor
@@ -4513,6 +4528,7 @@ void scr_promise_rethrow_top_level(ScrPromise *p);
  * payload as a dyn value (+1; void fulfillments answer the undefined
  * value), or NULL with the rejection re-thrown into the awaiter. */
 ScrDyn *scr_await_dyn(ScrPromise *p);
+ScrDyn *scr_await_dyn_value_settled(ScrDyn *value);
 void scr_promise_resolve_dyn(ScrPromise *destination, ScrDyn *value);
 /* `await v` over a checked-dynamic VALUE: dyn promises adopt, everything
  * else takes JS's one-hop non-thenable await and answers itself (+1). */

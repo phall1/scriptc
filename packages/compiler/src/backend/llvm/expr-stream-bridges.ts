@@ -712,11 +712,21 @@ export function streamTypedRefMaterializeAdapter(host: LlvmEmitterContext,
         const present = B.tmp();
         const valueLabel = B.newLabel("live.array.value");
         const absentLabel = B.newLabel("live.array.absent");
+        const holeLabel = B.newLabel("live.array.hole");
+        const undefinedLabel = B.newLabel("live.array.undefined");
         const doneLabel = B.newLabel("live.array.done");
         B.line(`${state} = call double @scr_arr_state(ptr %p, double ${index})`);
         B.line(`${present} = fcmp oeq double ${state}, 1.0`); // SCR_ARR_VALUE
         B.condBr(present, valueLabel, absentLabel);
         B.startBlock(absentLabel);
+        const hole = B.tmp();
+        B.line(`${hole} = fcmp oeq double ${state}, 0.0`); // SCR_ARR_HOLE
+        B.condBr(hole, holeLabel, undefinedLabel);
+        B.startBlock(holeLabel);
+        host.declare(`declare void @scr_dyn_arr_push_hole(ptr)`);
+        B.line(`call void @scr_dyn_arr_push_hole(ptr ${out})`);
+        B.br(doneLabel);
+        B.startBlock(undefinedLabel);
         const undefinedValue = B.tmp();
         const retained = B.tmp();
         B.line(`${undefinedValue} = call ptr @scr_dyn_undefined()`);

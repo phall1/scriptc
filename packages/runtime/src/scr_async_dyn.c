@@ -421,6 +421,24 @@ typedef struct {
   ScrDyn *onf, *onr, *onfin; /* owned or NULL */
 } ScrDynThenPack;
 
+typedef struct {
+  ScrPromise *src, *dst;
+  ScrDyn *result;
+} ScrDynFinallyPack;
+
+static void scr_dyn_finally_entry(ScrFiber *self, void *opaque) {
+  (void)self;
+  ScrDynFinallyPack *pack = opaque;
+  ScrDyn *result = scr_await_dyn(pack->result->v.promise);
+  if (scr_exc_pending()) scr_promise_reject_pending(pack->dst);
+  else scr_promise_adapt_copy(pack->dst, pack->src);
+  scr_dyn_release(result);
+  scr_dyn_release(pack->result);
+  scr_promise_release(pack->src);
+  scr_promise_release(pack->dst);
+  free(pack);
+}
+
 static void scr_dyn_then_entry(ScrFiber *self, void *ap) {
   (void)self;
   ScrDynThenPack *a = (ScrDynThenPack *)ap;
@@ -428,7 +446,7 @@ static void scr_dyn_then_entry(ScrFiber *self, void *ap) {
   bool rejected = scr_exc_pending();
   ScrCaught *c = rejected ? scr_exc_take() : NULL;
   ScrDyn *handler = a->onfin ? a->onfin : (rejected ? a->onr : a->onf);
-  if (handler != NULL && handler->kind == SCR_DYN_FUNC) {
+  if (handler != NULL && scr_dyn_is_callable(handler)) {
     ScrDyn *arg = NULL;
     if (a->onfin == NULL) arg = rejected ? scr_caught_to_dyn(c) : scr_dyn_retain(v);
     ScrDyn *r = scr_dyn_call(handler, arg ? &arg : NULL, arg ? 1 : 0, "handler");
@@ -437,30 +455,24 @@ static void scr_dyn_then_entry(ScrFiber *self, void *ap) {
       /* The handler threw: dst rejects with that. */
       scr_promise_reject_pending(a->dst);
     } else if (a->onfin != NULL) {
-      /* finally: the callback's value is dropped and the source
-       * settlement passes through (JS — a finally callback returning a
-       * promise would delay adoption; that refinement waits for a use). */
-      scr_dyn_release(r);
-      if (rejected) {
+      if (r->kind == SCR_DYN_PROMISE) {
+        ScrDynFinallyPack *pack = malloc(sizeof *pack);
+        if (!pack) scr_ad_oom();
+        pack->src = scr_promise_retain(a->src);
+        pack->dst = scr_promise_retain(a->dst);
+        pack->result = r;
+        ScrPromise *waiter = scr_async_spawn_after(r->v.promise, scr_dyn_finally_entry, pack);
+        scr_promise_release(waiter);
+      } else if (rejected) {
+        scr_dyn_release(r);
         scr_rethrow(c);
         scr_promise_reject_pending(a->dst);
       } else {
+        scr_dyn_release(r);
         scr_promise_fulfill_ref(a->dst, scr_dyn_retain(v), scr_dyn_retain_v, scr_dyn_release_v, NULL);
       }
     } else {
-      /* Adopt dyn-promise results (JS's resolve walk). */
-      while (r != NULL && r->kind == SCR_DYN_PROMISE) {
-        ScrDyn *inner = scr_await_dyn(r->v.promise);
-        scr_dyn_release(r);
-        r = inner;
-        if (scr_exc_pending()) {
-          scr_promise_reject_pending(a->dst);
-          break;
-        }
-      }
-      if (r != NULL) {
-        scr_promise_fulfill_ref(a->dst, r, scr_dyn_retain_v, scr_dyn_release_v, NULL);
-      }
+      scr_promise_resolve_dyn(a->dst, r);
     }
   } else if (rejected) {
     scr_rethrow(c);
@@ -492,7 +504,7 @@ ScrDyn *scr_dyn_promise_then(ScrPromise *src, ScrDyn *onf, ScrDyn *onr, ScrDyn *
   a->onr = onr ? scr_dyn_retain(onr) : NULL;
   a->onfin = onfin ? scr_dyn_retain(onfin) : NULL;
   ScrDyn *boxed = scr_dyn_new_promise(a->dst);
-  ScrPromise *waiter = scr_async_spawn(scr_dyn_then_entry, a);
+  ScrPromise *waiter = scr_async_spawn_after(src, scr_dyn_then_entry, a);
   scr_promise_release(waiter); /* the entry never rejects; nobody awaits it */
   return boxed;
 }
@@ -504,8 +516,10 @@ typedef struct {
 static void scr_dyn_resolve_entry(ScrFiber *self, void *opaque) {
   (void)self;
   ScrDynResolvePack *pack = opaque;
+#ifndef __wasi__
   /* Promise resolution schedules a job before attaching its reaction. */
   scr_await_hop();
+#endif
   ScrDyn *value = scr_await_dyn(pack->value->v.promise);
   if (scr_exc_pending()) scr_promise_reject_pending(pack->destination);
   else scr_promise_resolve_dyn(pack->destination, value);
@@ -513,6 +527,19 @@ static void scr_dyn_resolve_entry(ScrFiber *self, void *opaque) {
   scr_promise_release(pack->destination);
   free(pack);
 }
+
+#ifdef __wasi__
+static void scr_dyn_resolve_job(ScrClosure *closure) {
+  ScrPromise *destination = scr_box_get_ref(closure->caps[0]);
+  ScrDyn *value = scr_box_get_ref(closure->caps[1]);
+  ScrDynResolvePack *pack = malloc(sizeof *pack);
+  if (!pack) scr_ad_oom();
+  pack->destination = destination;
+  pack->value = value;
+  ScrPromise *waiter = scr_async_spawn_after(value->v.promise, scr_dyn_resolve_entry, pack);
+  scr_promise_release(waiter);
+}
+#endif
 
 /* The destination is borrowed; value moves in. An async function may
  * return a native promise hidden behind any/unknown without an explicit
@@ -529,12 +556,21 @@ void scr_promise_resolve_dyn(ScrPromise *destination, ScrDyn *value) {
     scr_dyn_release(value);
     return;
   }
+#ifdef __wasi__
+  ScrClosure *job = scr_closure_new((void *)scr_dyn_resolve_job, 2);
+  job->caps[0] = scr_box_new_obj(scr_promise_retain_v, scr_promise_release_v, scr_promise_trace_v);
+  scr_box_set_ref(job->caps[0], scr_promise_retain(destination));
+  job->caps[1] = scr_box_new_obj(scr_dyn_retain_v, scr_dyn_release_v, scr_dyn_trace_v);
+  scr_box_set_ref(job->caps[1], value);
+  scr_queue_microtask(job);
+#else
   ScrDynResolvePack *pack = malloc(sizeof *pack);
   if (!pack) scr_ad_oom();
   pack->destination = scr_promise_retain(destination);
   pack->value = value;
   ScrPromise *waiter = scr_async_spawn(scr_dyn_resolve_entry, pack);
   scr_promise_release(waiter);
+#endif
 }
 
 /* `await v` where v is a CHECKED-DYNAMIC value: a dyn promise adopts
@@ -546,6 +582,13 @@ ScrDyn *scr_await_dyn_value(ScrDyn *v) {
   if (v->kind == SCR_DYN_PROMISE) return scr_await_dyn(v->v.promise);
   scr_await_hop();
   return scr_dyn_retain(v);
+}
+
+/* The WASI emitter has already suspended on the value's actual promise,
+ * or taken the non-promise microtask hop. Extraction must never suspend a
+ * runtime-authored C frame. */
+ScrDyn *scr_await_dyn_value_settled(ScrDyn *value) {
+  return value->kind == SCR_DYN_PROMISE ? scr_await_dyn(value->v.promise) : scr_dyn_retain(value);
 }
 
 /* ── process warnings (emitWarning + the 'warning' event) ─────────────
@@ -832,6 +875,54 @@ ScrDyn *scr_dyn_new_promise_adapting(ScrPromise *src,
 
 ScrPromise *scr_dyn_promise_of(const ScrDyn *d) {
   return d->kind == SCR_DYN_PROMISE ? d->v.promise : NULL;
+}
+
+static void scr_dyn_all_result(ScrPromise *destination, ScrPromise *source) {
+  ScrArr *values = scr_promise_payload_ref(source);
+  ScrDyn *result = scr_dyn_new_arr();
+  for (size_t i = 0; i < values->len; i++) scr_dyn_arr_push(result, scr_arr_get_ref(values, (double)i));
+  scr_arr_release(values);
+  scr_promise_fulfill_ref(destination, result, scr_dyn_retain_v, scr_dyn_release_v, scr_dyn_trace_v);
+}
+
+ScrPromise *scr_dyn_promise_all(const ScrDyn *entries) {
+  ScrArr *promises = scr_arr_new_ref(scr_promise_retain_v, scr_promise_release_v, scr_promise_trace_v, entries->v.arr.len);
+  ScrArr *values = scr_arr_new_ref(scr_dyn_retain_v, scr_dyn_release_v, scr_dyn_trace_v, entries->v.arr.len);
+  for (size_t i = 0; i < entries->v.arr.len; i++) {
+    ScrDyn *value = entries->v.arr.items[i];
+    ScrPromise *source;
+    if (value->kind == SCR_DYN_PROMISE) source = scr_promise_retain(value->v.promise);
+    else {
+      source = scr_promise_new();
+      if (value->kind == SCR_DYN_OBJ || value->kind == SCR_DYN_FUNC || value->kind == SCR_DYN_PROXY) {
+        ScrStr *key = scr_str_new("then", 4);
+        ScrDyn *then = value->kind == SCR_DYN_PROXY ? scr_dyn_proxy_get(value, key)
+          : value->kind == SCR_DYN_FUNC ? scr_dyn_fn_get(value, "then", 4) : scr_dyn_obj_read(value, "then", 4);
+        scr_str_release(key);
+        if (then && then->kind == SCR_DYN_FUNC) {
+          static const char message[] = "Promise.all over custom thenables is not supported yet";
+          scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
+        }
+        scr_dyn_release(then);
+      }
+      if (scr_exc_pending()) scr_promise_reject_pending(source);
+      else scr_promise_fulfill_ref(source, scr_dyn_retain(value), scr_dyn_retain_v, scr_dyn_release_v, scr_dyn_trace_v);
+    }
+    /* Each element contributes a reaction job, even an already fulfilled
+     * plain value. The aggregate preserves input order and Node's hops. */
+    scr_promise_mark_handled(source);
+    ScrDyn *reaction = scr_dyn_promise_then(source, NULL, NULL, NULL);
+    scr_arr_push_ref(promises, scr_promise_retain(reaction->v.promise));
+    scr_dyn_release(reaction);
+    scr_promise_release(source);
+  }
+  ScrPromise *all = scr_promise_all(promises, values, scr_promise_all_store_ref);
+  ScrPromise *result = scr_promise_new();
+  scr_promise_race_add(result, all, scr_dyn_all_result);
+  scr_promise_release(all);
+  scr_arr_release(values);
+  scr_arr_release(promises);
+  return result;
 }
 
 /* The checked native WebCrypto digest entry keeps promise and ArrayBuffer results native. */

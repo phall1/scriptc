@@ -1,5 +1,5 @@
 import * as ts from "../ts7/adapter.js";
-import { BOOL, DYN, STRING, SYMBOL_T, type IrExpr, type IrFunction, type IrStmt, type SrcLoc } from "../../ir/ir.js";
+import { BOOL, DYN, STRING, SYMBOL_T, isUnitType, type IrExpr, type IrFunction, type IrStmt, type SrcLoc } from "../../ir/ir.js";
 import { varRef } from "../../ir/build.js";
 import { locOf } from "../program.js";
 import { classMemberNameOf, classValueRef, exactClassOfReceiver, storedClassValueType, findGenericMethodOn, findMethodOn, type ClassInfo } from "./lower-classes.js";
@@ -10,7 +10,7 @@ import { classMethodValue } from "./class-method-values.js";
 /** Data added to a top-level class prototype has shared identity and remains
  * separate from instance fields. Allocate lazily so inheritance and module
  * initialization order do not require hoisting source assignments. */
-export function classPrototypeData(lowerer: Lowerer, info: ClassInfo, loc: SrcLoc, receiver?: IrExpr): IrExpr | null {
+export function classPrototypeData(lowerer: Lowerer, info: ClassInfo, loc: SrcLoc, receiver?: IrExpr, metadataOnly = false): IrExpr | null {
   if (info.localClass) {
     if (!receiver) return null;
     info.localPrototypeData = true;
@@ -32,7 +32,7 @@ export function classPrototypeData(lowerer: Lowerer, info: ClassInfo, loc: SrcLo
   if (info.def.prototypeDataHelper === undefined) {
     const base = info.callableBase ? varRef(info.callableBase.prototypeId, DYN, loc)
       : info.base && !info.base.builtinError ? classPrototypeData(lowerer, info.base, loc,
-        info.def.baseValueGlobal ? varRef(info.def.baseValueGlobal, { kind: "classval", className: info.base.def.name }, loc) : undefined) : null;
+        info.def.baseValueGlobal ? varRef(info.def.baseValueGlobal, { kind: "classval", className: info.base.def.name }, loc) : undefined, metadataOnly) : null;
     if (info.base && !info.base.builtinError && base === null) return null;
     const name = `%prototype.data.${info.def.name}`;
     const globalId = `%g.${name}`;
@@ -43,7 +43,7 @@ export function classPrototypeData(lowerer: Lowerer, info: ClassInfo, loc: SrcLo
     lowerer.globalsList.push({ id: readyId, name: `${className}.prototype.ready`, type: BOOL, mutable: true });
     const value = varRef(globalId, DYN, loc);
     const helper: IrFunction = {
-      name, params: [], returnType: DYN, locals: [], loc,
+      name, params: [], returnType: DYN, locals: [], loc, speculativeDispatch: true,
       body: [
         { kind: "if", cond: { kind: "unary", op: "!", operand: varRef(readyId, BOOL, loc), type: BOOL, loc }, then: [
           { kind: "assign", localId: globalId, value: base
@@ -54,6 +54,12 @@ export function classPrototypeData(lowerer: Lowerer, info: ClassInfo, loc: SrcLo
         { kind: "return", value, loc },
       ],
     };
+    lowerer.liftedFns.push(helper);
+  }
+  if (!metadataOnly && !info.prototypeObservedMethodsReady) {
+    info.prototypeObservedMethodsReady = true;
+    const helper = lowerer.liftedFns.find((fn) => fn.name === info.def.prototypeDataHelper)!;
+    const value = varRef(`%g.${info.def.prototypeDataHelper}`, DYN, loc);
     // Materialize only observed method slots. Own declarations stop lookup
     // at the correct prototype even if an ancestor is replaced later.
     for (const [method, access] of lowerer.prototypeMethodAccesses) {
@@ -69,7 +75,6 @@ export function classPrototypeData(lowerer: Lowerer, info: ClassInfo, loc: SrcLo
       if (init.kind === "if") init.then.push({ kind: "exprStmt", expr: { kind: "libCall", fn: "dyn.defineProperty", args: [value,
         lowerer.coerceToExpected({ kind: "strLit", value: method, type: STRING, loc }, DYN), descriptor], type: DYN, loc }, loc });
     }
-    lowerer.liftedFns.push(helper);
   }
   return { kind: "call", callee: info.def.prototypeDataHelper, args: [], type: DYN, loc };
 }
@@ -169,6 +174,9 @@ export function lowerClassPrototypeData(lowerer: Lowerer, expr: ts.PropertyAcces
     : ts.isElementAccessExpression(parent) && parent.expression === expr && parent.argumentExpression && ts.isStringLiteral(parent.argumentExpression)
       ? parent.argumentExpression.text : descriptorKey;
   const method = name !== null && lowerer.prototypeMethodAccesses.has(name) && findMethodOn(lowerer, info, name);
+  if (name === "constructor") {
+    return reflectClassPrototype(lowerer, info, locOf(expr), classValueRef(lowerer, info, expr));
+  }
   if (name === null || isCompiledPrototypeMember(lowerer, info, name) && !method) {
     lowerer.unsupported("SC1090", expr, "class prototype reflection and accessor replacement (named prototype data and methods compile)");
   }
@@ -192,6 +200,13 @@ export function lowerClassPrototypeAssign(lowerer: Lowerer, call: ts.CallExpress
   const value = classPrototypeData(lowerer, info, loc, info.localClass
     ? lowerer.lowerExprExpecting(target.expression, { kind: "classval", className: info.def.name }) : undefined);
   if (!value) lowerer.unsupported("SC1090", target, "prototype data on generic, mixin, or runtime-provided classes");
+  const sources = call.arguments.slice(1).map((node) => lowerer.lowerExprExpecting(node, DYN));
+  return { kind: "libCall", fn: "dyn.assignPrototype", args: [value,
+    { kind: "dynArrLit", elems: sources, type: DYN, loc }, prototypeProtectedKeys(lowerer, info, target, loc),
+  ], type: DYN, loc };
+}
+
+function prototypeProtectedKeys(lowerer: Lowerer, info: ClassInfo, target: ts.Node, loc: SrcLoc): IrExpr {
   const keys: IrExpr[] = ["constructor", "__proto__"].map((name) => ({ kind: "strLit", value: name, type: STRING, loc }));
   for (let owner: ClassInfo | null = info; owner; owner = owner.base) {
     const methodNames = new Set([...owner.methods.keys()]);
@@ -212,9 +227,50 @@ export function lowerClassPrototypeAssign(lowerer: Lowerer, call: ts.CallExpress
       } else keys.push({ kind: "strLit", value: name.replace(/^(get|set):/, ""), type: STRING, loc });
     }
   }
-  const sources = call.arguments.slice(1).map((node) => lowerer.lowerExprExpecting(node, DYN));
-  return { kind: "libCall", fn: "dyn.assignPrototype", args: [value,
-    { kind: "dynArrLit", elems: sources, type: DYN, loc },
-    { kind: "dynArrLit", elems: keys.map((key) => key.type.kind === "dyn" ? key : { kind: "dynFrom", value: key, type: DYN, loc }), type: DYN, loc },
-  ], type: DYN, loc };
+  return { kind: "dynArrLit", elems: keys.map((key) => key.type.kind === "dyn" ? key : { kind: "dynFrom", value: key, type: DYN, loc }), type: DYN, loc };
+}
+
+/** Computed additions share the prototype bag without exposing or replacing
+ * native method slots. Preserve reference/RHS evaluation and assignment value. */
+export function lowerClassPrototypeComputedAssignment(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr | null {
+  const target = expr.left;
+  if (!ts.isElementAccessExpression(target) || !ts.isPropertyAccessExpression(target.expression) ||
+      target.expression.name.text !== "prototype") return null;
+  const prototypeNode = target.expression;
+  const info = exactClassOfReceiver(lowerer, prototypeNode.expression);
+  if (!info) return null;
+  const loc = locOf(expr);
+  const prototype = classPrototypeData(lowerer, info, loc, info.localClass
+    ? lowerer.lowerExprExpecting(prototypeNode.expression, { kind: "classval", className: info.def.name }) : undefined);
+  if (!prototype) lowerer.unsupported("SC1090", target, "prototype data on generic, mixin, or runtime-provided classes");
+  const receiver = lowerer.declareHiddenLocal("%prototypeReceiver", DYN);
+  const key = lowerer.declareHiddenLocal("%prototypeKey", DYN);
+  const raw = lowerer.lowerExpr(expr.right);
+  const value = raw.type.kind === "void" ? { kind: "seqExpr" as const, stmts: [{ kind: "exprStmt" as const, expr: raw, loc }],
+    result: dynUndefinedExpr(loc), type: DYN, loc }
+    : isUnitType(raw.type) ? lowerer.coerceInto(expr.right, raw, DYN) : raw;
+  const assigned = lowerer.declareHiddenLocal("%prototypeValue", value.type);
+  const result = varRef(assigned.id, value.type, loc);
+  return { kind: "seqExpr", stmts: [
+    { kind: "varDecl", localId: receiver.id, init: prototype, loc },
+    { kind: "varDecl", localId: key.id, init: lowerer.lowerExprExpecting(target.argumentExpression, DYN), loc },
+    { kind: "varDecl", localId: assigned.id, init: value, loc },
+    { kind: "exprStmt", expr: { kind: "libCall", fn: "dyn.assignPrototype", args: [varRef(receiver.id, DYN, loc),
+      { kind: "dynArrLit", elems: [{ kind: "dynObjLit", fields: [{ key: varRef(key.id, DYN, loc), value: lowerer.coerceInto(expr.right, result, DYN) }], type: DYN, loc }], type: DYN, loc },
+      prototypeProtectedKeys(lowerer, info, prototypeNode, loc)], type: DYN, loc }, loc },
+  ], result, type: result.type, loc };
+}
+
+export function lowerClassPrototypeDescriptors(lowerer: Lowerer, call: ts.CallExpression, member: string): IrExpr | null {
+  const target = call.arguments[0];
+  if (member !== "defineProperties" || call.arguments.length !== 2 || call.arguments.some(ts.isSpreadElement) ||
+      !target || !ts.isPropertyAccessExpression(target) || target.name.text !== "prototype") return null;
+  const info = exactClassOfReceiver(lowerer, target.expression);
+  if (!info) return null;
+  const loc = locOf(call);
+  const prototype = classPrototypeData(lowerer, info, loc, info.localClass
+    ? lowerer.lowerExprExpecting(target.expression, { kind: "classval", className: info.def.name }) : undefined);
+  if (!prototype) lowerer.unsupported("SC1090", target, "prototype data on generic, mixin, or runtime-provided classes");
+  return { kind: "libCall", fn: "dyn.definePrototypeProps", args: [prototype,
+    lowerer.lowerExprExpecting(call.arguments[1]!, DYN), prototypeProtectedKeys(lowerer, info, target, loc)], type: DYN, loc };
 }

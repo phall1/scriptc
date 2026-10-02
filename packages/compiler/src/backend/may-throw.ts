@@ -211,6 +211,9 @@ export function computeMayThrow(mod: IrModule): { fns: Set<string>; indirect: bo
         case "arraySetLength":
           f.throws = true;
           break;
+        case "strIntrinsic":
+          if (rec.method === "normalize") f.throws = true;
+          break;
         case "regexIntrinsic":
           // Keep the conservative exception check for these operations;
           // replaceAll and matchAll without /g throw Node's TypeError.

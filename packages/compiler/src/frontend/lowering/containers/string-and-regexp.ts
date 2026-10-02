@@ -397,7 +397,7 @@ export function lowerRegexMethodCall(lowerer: Lowerer, call: ts.CallExpression,
   }
   // `re.exec(s)` returns the exec-shaped string[] | null slice, with
   // numeric lastIndex state for global/sticky regexes. Nonparticipating
-  // captures retain match's documented empty-string representation.
+  // captures retain match's present undefined element state.
   if (receiverKind === "regex" && name === "exec") {
     if (call.arguments.length > 1 || call.arguments.some(ts.isSpreadElement)) return null;
     const re = lowerReceiver();
@@ -572,6 +572,11 @@ export function lowerStringMethodCall(lowerer: Lowerer, call: ts.CallExpression,
   if (replaceMethod) return lowerStringReplacement(lowerer, call, replaceMethod, receiver, argumentNodes);
   if (indexMethod) return lowerStringIndexCall(lowerer, call, indexMethod, receiver, access.expression, argumentNodes);
   if (!entry) return null;
+  if (entry.method === "normalize") {
+    const form = argumentNodes[0];
+    const value = form ? lowerOptionalArgument(lowerer, form, STRING, strLit("NFC", loc)) : strLit("NFC", loc);
+    return { kind: "strIntrinsic", method: "normalize", receiver, args: [value], type: STRING, loc };
+  }
   if (entry.method === "split") return lowerStringSplitCall(lowerer, call, receiver, access.expression, argumentNodes);
   if (entry.method === "padStart" || entry.method === "padEnd") {
     return lowerStringPaddingCall(lowerer, call, entry.method, receiver, access.expression, argumentNodes);

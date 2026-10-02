@@ -1,32 +1,36 @@
 import * as ts from "../ts7/adapter.js";
-import type { IrExpr } from "../../ir/ir.js";
+import { DYN, type IrExpr, type IrType } from "../../ir/ir.js";
 import { isJsSourceFile, locOf } from "../program.js";
 import type { Lowerer } from "./lowerer.js";
-import { bindingNeverReassigned, type FnSig } from "./lower-calls.js";
+import { bindingNeverReassigned, implicitDefaultInstance, type FnSig } from "./lower-calls.js";
 
 /** An ordinary constructor's explicit object return replaces its receiver.
  * Without observing this or new.target, it can use the function's call ABI. */
-export function objectFactorySignature(lowerer: Lowerer, expr: ts.NewExpression): FnSig | null {
-  if (!ts.isIdentifier(expr.expression) || lowerer.peekLocal(expr.expression)) return null;
+function isObjectFactoryNew(lowerer: Lowerer, expr: ts.NewExpression): boolean {
+  if (!ts.isIdentifier(expr.expression) || lowerer.peekLocal(expr.expression)) return false;
   // This probe also sees ordinary classes during global collection. Leave
   // their deferred diagnostics for the class declaration's lowering.
   const wasCollecting = lowerer.collecting;
   let symbol: ts.Symbol | null = null;
   lowerer.collecting = true;
   try {
-    if (!lowerer.isTopLevelFnSymbol(expr.expression)) return null;
     symbol = lowerer.resolveValueSymbol(expr.expression);
   } finally {
     lowerer.collecting = wasCollecting;
   }
-  if (!symbol) return null;
-  const declaration = lowerer.checker.declarationsOf(symbol).find((node): node is ts.FunctionDeclaration =>
-    ts.isFunctionDeclaration(node) && node.body !== undefined,
+  if (!symbol) return false;
+  const owner = lowerer.checker.declarationsOf(symbol).find((node) =>
+    ts.isFunctionDeclaration(node) && node.body !== undefined ||
+    ts.isVariableDeclaration(node) && node.initializer && ts.isFunctionExpression(node.initializer),
   );
-  if (!declaration?.body || !bindingNeverReassigned(lowerer, symbol, declaration) || !isJsSourceFile(declaration.getSourceFile()) || declaration.asteriskToken ||
-      declaration.modifiers?.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword)) return null;
+  const declaration = owner && ts.isVariableDeclaration(owner) && owner.initializer && ts.isFunctionExpression(owner.initializer)
+    ? owner.initializer : owner && ts.isFunctionDeclaration(owner) ? owner : null;
+  if (!owner || !declaration?.body || !bindingNeverReassigned(lowerer, symbol, owner) || !isJsSourceFile(declaration.getSourceFile()) || declaration.asteriskToken ||
+      declaration.modifiers?.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword)) return false;
+  const objectReturn = (expression: ts.Expression): boolean => ts.isObjectLiteralExpression(expression) ||
+    ts.isArrayLiteralExpression(expression) || ts.isArrowFunction(expression) || ts.isFunctionExpression(expression) || ts.isNewExpression(expression);
   const last = declaration.body.statements.at(-1);
-  if (!last || !ts.isReturnStatement(last) || !last.expression || !ts.isObjectLiteralExpression(last.expression)) return null;
+  if (!last || !ts.isReturnStatement(last) || !last.expression || !objectReturn(last.expression)) return false;
   let safe = true;
   const visit = (node: ts.Node, nestedArrow = false): void => {
     if (ts.isClassDeclaration(node) || ts.isClassExpression(node)) { safe = false; return; }
@@ -35,13 +39,24 @@ export function objectFactorySignature(lowerer: Lowerer, expr: ts.NewExpression)
       nestedArrow = true;
     }
     if (node.kind === ts.SyntaxKind.ThisKeyword || ts.isMetaProperty(node)) safe = false;
-    if (!nestedArrow && ts.isReturnStatement(node) && (!node.expression || !ts.isObjectLiteralExpression(node.expression))) safe = false;
+    if (!nestedArrow && ts.isReturnStatement(node) && (!node.expression || !objectReturn(node.expression))) safe = false;
     ts.forEachChild(node, (child) => visit(child, nestedArrow));
   };
   for (const parameter of declaration.parameters) visit(parameter);
   visit(declaration.body);
-  if (!safe) return null;
-  const signature = lowerer.fnSigOf(expr.expression);
+  return safe;
+}
+
+/** Collection must register the shared result before reaching factory
+ * bodies: those bodies can reference later globals in the same module. */
+export function objectFactoryGlobalType(lowerer: Lowerer, expr: ts.NewExpression): IrType | null {
+  return isObjectFactoryNew(lowerer, expr) ? DYN : null;
+}
+
+export function objectFactorySignature(lowerer: Lowerer, expr: ts.NewExpression): FnSig | null {
+  if (!ts.isIdentifier(expr.expression) || !isObjectFactoryNew(lowerer, expr)) return null;
+  const generic = lowerer.genericFnOf(expr.expression);
+  const signature = generic?.implicitParams ? implicitDefaultInstance(lowerer, expr, generic) : lowerer.fnSigOf(expr.expression);
   return signature && signature.returnType.kind !== "void" ? signature : null;
 }
 

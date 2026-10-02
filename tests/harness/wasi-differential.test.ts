@@ -107,6 +107,16 @@ describe.skipIf(!zigOnPath())("wasm32-wasi differential", () => {
   });
 
   test.each([
+    "js-prototype-host-boundary.js",
+    "js-regex-record-captures.js",
+    "js-callable-proxy.js",
+    "js-implicit-call-results.js",
+    "js-reflect-receivers.js",
+    "js-loose-dynamic-primitives.js",
+    "js-promise-pending-reactions.js",
+    "js-promise-all-values.js",
+    "js-promise-catch-handler.js",
+    "js-abort-portable.js",
     "4031-event-emitter-long-tuples.ts",
     "2700-wasi-core.ts",
     "1612-cjs-module-globals.cjs",

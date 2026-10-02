@@ -514,7 +514,12 @@ export class LlDyn {
         break;
       }
       case "func":
-        kindIs(DYN_KIND.FUNC);
+        this.host.declare(`declare zeroext i1 @scr_dyn_is_callable(ptr)`);
+        {
+          const matched = B.tmp();
+          B.line(`${matched} = call zeroext i1 @scr_dyn_is_callable(ptr %d)`);
+          B.terminate(`ret i1 ${matched}`);
+        }
         break;
       case "classval": {
         this.host.declare(`declare zeroext i1 @scr_dyn_class_is(ptr, ptr)`);
@@ -660,7 +665,16 @@ export class LlDyn {
         B.startBlock(l0);
         const n = this.lenOf(B, "%d");
         const items = this.itemsOf(B, "%d");
-        this.i64Loop(B, "dm.el", n, (i) => {
+        this.i64Loop(B, "dm.el", n, (i, brNext) => {
+          this.host.declare(`declare zeroext i1 @scr_dyn_arr_has_index(ptr, ${this.S})`);
+          const present = B.tmp();
+          B.line(`${present} = call zeroext i1 @scr_dyn_arr_has_index(ptr %d, ${this.S} ${i})`);
+          const valueLabel = B.newLabel("dm.present");
+          const holeLabel = B.newLabel("dm.hole");
+          B.condBr(present, valueLabel, holeLabel);
+          B.startBlock(holeLabel);
+          brNext();
+          B.startBlock(valueLabel);
           const e = this.itemAt(B, items, i);
           const ok = B.tmp();
           B.line(`${ok} = call zeroext i1 @${m}(ptr ${e})`);
@@ -1247,6 +1261,22 @@ export class LlDyn {
           `declare double @scr_arr_push_${acc}(ptr, ${acc === "bool" ? "i1 zeroext" : accTy})`,
         );
         this.i64Loop(B, "dca", n, (i) => {
+          host.declare(`declare zeroext i1 @scr_dyn_arr_has_index(ptr, ${this.S})`);
+          const present = B.tmp();
+          B.line(`${present} = call zeroext i1 @scr_dyn_arr_has_index(ptr %d, ${this.S} ${i})`);
+          const valueLabel = B.newLabel("dca.present");
+          const holeLabel = B.newLabel("dca.hole");
+          const doneLabel = B.newLabel("dca.done");
+          B.condBr(present, valueLabel, holeLabel);
+          B.startBlock(holeLabel);
+          host.declare(`declare void @scr_arr_set_len(ptr, double)`);
+          const index = B.tmp();
+          const length = B.tmp();
+          B.line(`${index} = uitofp ${this.S} ${i} to double`);
+          B.line(`${length} = fadd double ${index}, 1.0`);
+          B.line(`call void @scr_arr_set_len(ptr ${a}, double ${length})`);
+          B.br(doneLabel);
+          B.startBlock(valueLabel);
           const pp = B.tmp();
           const kp = B.tmp();
           const ip = B.tmp();
@@ -1265,6 +1295,8 @@ export class LlDyn {
           }, "ptr null");
           const pushed = B.tmp();
           B.line(`${pushed} = call double @scr_arr_push_${acc}(ptr ${a}, ${accTy} ${v})`);
+          B.br(doneLabel);
+          B.startBlock(doneLabel);
         });
         B.terminate(`ret ptr ${a}`);
         break;
@@ -1391,7 +1423,22 @@ export class LlDyn {
         // caps[0] obj-box owns the dyn value (untraced).
         const adapter = this.dynFuncAdapterHelper(t);
         const sigLit = host.cstr(key);
-        requireKind(DYN_KIND.FUNC, "dcf");
+        const lWrap = B.newLabel("dcf.w");
+        host.declare(`declare zeroext i1 @scr_dyn_is_callable(ptr)`);
+        const callable = B.tmp();
+        const valid = B.newLabel("dcf.k");
+        const invalid = B.newLabel("dcf.f");
+        B.line(`${callable} = call zeroext i1 @scr_dyn_is_callable(ptr %d)`);
+        B.condBr(callable, valid, invalid);
+        B.startBlock(invalid);
+        B.line(`call void @scr_dyn_check_fail(ptr %path, ptr ${want}, ptr %d)`);
+        B.terminate(`ret ${dummy}`);
+        B.startBlock(valid);
+        const direct = B.tmp();
+        const lSignature = B.newLabel("dcf.signature");
+        B.line(`${direct} = icmp eq i32 ${this.kindOf(B, "%d")}, ${DYN_KIND.FUNC}`);
+        B.condBr(direct, lSignature, lWrap);
+        B.startBlock(lSignature);
         host.declare(`declare i32 @strcmp(ptr, ptr)`);
         const sigp = B.tmp();
         const sig = B.tmp();
@@ -1402,7 +1449,6 @@ export class LlDyn {
         B.line(`${cmp} = call i32 @strcmp(ptr ${sig}, ptr ${sigLit})`);
         B.line(`${same} = icmp eq i32 ${cmp}, 0`);
         const lSame = B.newLabel("dcf.s");
-        const lWrap = B.newLabel("dcf.w");
         B.condBr(same, lSame, lWrap);
         B.startBlock(lSame);
         host.declare(`declare ptr @scr_closure_retain_v(ptr)`);
@@ -1422,14 +1468,14 @@ export class LlDyn {
         host.declare(`declare void @scr_dyn_release_v(ptr)`);
         const a = B.tmp();
         B.line(`${a} = call ptr @scr_closure_new(ptr @${adapter}, ${host.sizeType} 1)`);
-        const sourceClosure = this.payloadOf(B, "%d", "ptr");
-        const sourceKind = B.tmp();
+        host.declare(`declare i32 @scr_dyn_function_kind(ptr)`);
         const functionKind = B.tmp();
         const targetKind = B.tmp();
-        B.line(`${sourceKind} = getelementptr inbounds %ScrClosure, ptr ${sourceClosure}, i64 0, i32 4`);
-        B.line(`${functionKind} = load i32, ptr ${sourceKind}`);
+        B.line(`${functionKind} = call i32 @scr_dyn_function_kind(ptr %d)`);
         B.line(`${targetKind} = getelementptr inbounds %ScrClosure, ptr ${a}, i64 0, i32 4`);
-        B.line(`store i32 ${functionKind}, ptr ${targetKind}`);
+        const adapterKind = B.tmp();
+        B.line(`${adapterKind} = or i32 ${functionKind}, 8 ; preserves the checked callable in caps[0]`);
+        B.line(`store i32 ${adapterKind}, ptr ${targetKind}`);
         const box = B.tmp();
         B.line(`${box} = call ptr @scr_box_new_obj(ptr @scr_dyn_retain_v, ptr @scr_dyn_release_v, ptr @scr_dyn_trace_v)`);
         const capp = B.tmp();
@@ -1774,9 +1820,19 @@ export class LlDyn {
           const state = B.tmp();
           const undefinedState = B.tmp();
           const undefinedLabel = B.newLabel("tda.undefined");
+          const holeLabel = B.newLabel("tda.hole");
+          const presentLabel = B.newLabel("tda.present");
           const valueLabel = B.newLabel("tda.value");
           const doneLabel = B.newLabel("tda.done");
           B.line(`${state} = call double @scr_arr_state(ptr %v, double ${i})`);
+          const hole = B.tmp();
+          B.line(`${hole} = fcmp oeq double ${state}, 0.0`); // SCR_ARR_HOLE
+          B.condBr(hole, holeLabel, presentLabel);
+          B.startBlock(holeLabel);
+          host.declare(`declare void @scr_dyn_arr_push_hole(ptr)`);
+          B.line(`call void @scr_dyn_arr_push_hole(ptr ${d})`);
+          B.br(doneLabel);
+          B.startBlock(presentLabel);
           B.line(`${undefinedState} = fcmp oeq double ${state}, 2.0`); // SCR_ARR_UNDEFINED
           B.terminate(`br i1 ${undefinedState}, label %${undefinedLabel}, label %${valueLabel}`);
           B.startBlock(undefinedLabel);

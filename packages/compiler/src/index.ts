@@ -20,7 +20,7 @@ import {
   mobileTargetRefusal,
   resolveCc,
 } from "./backend/external-c.js";
-import { emitLlvmModule, LlvmUnsupportedError } from "./backend/llvm/emitter.js";
+import { emitLlvmModuleSource, LlvmUnsupportedError } from "./backend/llvm/emitter.js";
 import { emitNativeArtifact, NativeCodegenError } from "./backend/native-codegen.js";
 import { privateSiblingPath } from "./backend/build-cache.js";
 import { nativeCodegenTarget, nativeCodegenTargetRefusal } from "./backend/targets.js";
@@ -367,7 +367,7 @@ async function compileExecutableNative(
 async function emitNativeProgramObject(
   entryPath: string,
   opts: CompileRequestOptions,
-  llvm: string,
+  llvm: string | readonly string[],
 ): Promise<{ linkPath: string; artifactPath: string; dependencies: NativeArtifactDependency[] }> {
   const stem = basename(entryPath).replace(/\.(ts|mts|cts|js|mjs|cjs)$/, "");
   const artifactPath = join(opts.outDir, `${stem}.helper.o`);
@@ -407,7 +407,7 @@ function runtimePackDiagnostic(error: RuntimePackError, entryPath: string): ScrD
 }
 
 interface PreparedExecutable {
-  llvmSource: string;
+  llvmSource: string | readonly string[];
   llvmPath: string;
   irPath: string | undefined;
   nativeFeatures: EarlyExecutableNativeFeatures;
@@ -442,9 +442,9 @@ async function prepareExecutableInput(
   }
 
   if (outputKind === "llvm" || outputKind === "asm" || outputKind === "obj") {
-    let llvm: string;
+    let llvm: string | readonly string[];
     try {
-      llvm = emitLlvmModule(mod, {
+      llvm = emitLlvmModuleSource(mod, {
         targetTriple: process.env["SCRIPTC_TARGET"] ?? "",
         ...debugOptions,
         pointerBits: buildPlatform === "wasi" ? 32 : 64,
@@ -508,9 +508,9 @@ async function prepareExecutableInput(
   await mkdir(opts.outDir, { recursive: true });
   const llvmPath = defaultSourcePaths.llvm;
   const backend = "llvm" as const;
-  let llvmSource: string;
+  let llvmSource: string | readonly string[];
   try {
-    llvmSource = emitLlvmModule(mod, {
+    llvmSource = emitLlvmModuleSource(mod, {
       targetTriple: process.env["SCRIPTC_TARGET"] ?? "",
       ...debugOptions,
       pointerBits: buildPlatform === "wasi" ? 32 : 64,
@@ -539,7 +539,7 @@ async function prepareExecutableInput(
   timing("link-features");
   const programSplit =
     backend === "llvm" && (opts.optimization ?? "release") === "dev" &&
-      !(opts.sanitize ?? false) && llvmSource !== null
+      !(opts.sanitize ?? false) && typeof llvmSource === "string"
       ? splitLlvmProgram(llvmSource)
       : null;
   timing("llvm-split");
@@ -1370,12 +1370,12 @@ async function compileLibraryTracked(
   const stem = basename(entryPath).replace(/\.(ts|mts|cts|js|mjs|cjs)$/, "");
   const llvmPath = join(opts.outDir, `${stem}.lib.ll`);
   try {
-    const ll = emitLlvmModule(mod, {
+    const ll = emitLlvmModuleSource(mod, {
       targetTriple: process.env["SCRIPTC_TARGET"] ?? "",
       pointerBits: buildPlatform === "wasi" ? 32 : 64,
       wasi: buildPlatform === "wasi",
     });
-    timing("llvm-emit", { output_bytes: Buffer.byteLength(ll) });
+    timing("llvm-emit", { output_bytes: typeof ll === "string" ? Buffer.byteLength(ll) : ll.reduce((bytes, part) => bytes + Buffer.byteLength(part), 0) });
     await writeFile(llvmPath, ll);
     timing("llvm-write");
   } catch (err) {

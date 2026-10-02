@@ -9,6 +9,16 @@ import { funcTypeFromParamShapes, implicitDefaultInstance, type ParamShape } fro
 import { errorToStringMethod } from "./error-methods.js";
 import { classCallbackValue, isClassCallback } from "./class-callbacks.js";
 
+export interface ClassMethodValueSelection {
+  expression: ts.PropertyAccessExpression;
+  info: ClassInfo;
+  method: string;
+  fallback: IrExpr;
+  fn: IrFunction;
+  checked: boolean;
+  values: Map<string, IrExpr>;
+}
+
 /** A method value retains its declaration's identity, not the receiver from
  * extraction. Its native thunk validates the receiver supplied at call time. */
 export function lowerClassMethodValue(lowerer: Lowerer, expr: ts.PropertyAccessExpression, info: ClassInfo): IrExpr | null {
@@ -16,11 +26,16 @@ export function lowerClassMethodValue(lowerer: Lowerer, expr: ts.PropertyAccessE
   if (method === "toString" && findMethodOn(lowerer, info, method)?.declarer.builtinError) {
     return errorToStringMethod(lowerer, lowerer.lowerExpr(expr.expression));
   }
+  const loc = locOf(expr);
+  const receiver = lowerer.lowerExpr(expr.expression);
+  // A JS checker may name a class while the value is held in checked
+  // storage. Read its actual property so own replacements and getters
+  // participate, and never pass a dynamic value to a native selector.
+  if (receiver.type.kind === "dyn") return { kind: "dynKeyGet", value: receiver,
+    key: { kind: "strLit", value: method, type: STRING, loc }, type: DYN, loc };
   let value = methodValue(lowerer, expr, info);
   if (!value) return null;
-  const loc = locOf(expr);
   const callback = isClassCallback(lowerer, info, method);
-  const receiver = lowerer.lowerExpr(expr.expression);
   const local = callback ? lowerer.declareHiddenLocal("%callbackReceiver", receiver.type) : null;
   const reference = local ? varRef(local.id, receiver.type, loc) : receiver;
   const finish = (result: IrExpr): IrExpr => {
@@ -28,38 +43,53 @@ export function lowerClassMethodValue(lowerer: Lowerer, expr: ts.PropertyAccessE
     const selected = classCallbackValue(lowerer, reference, method, result, loc);
     return { kind: "seqExpr", stmts: [{ kind: "varDecl", localId: local.id, init: receiver, loc }], result: selected, type: selected.type, loc };
   };
-  const overrides = [...lowerer.classes.values()].filter((candidate) =>
-    candidate !== info && lowerer.isSubclassOf(candidate.def.name, info.def.name) && candidate.methods.has(method));
-  const checked = isJsSourceFile(expr.getSourceFile()) && lowerer.dynConvertible(value.type) && overrides.every((candidate) => {
-    const selected = methodValue(lowerer, expr, candidate);
-    return selected !== null && lowerer.dynConvertible(selected.type);
-  });
-  if (checked && overrides.length) value = lowerer.coerceToExpected(value, DYN);
-  if (overrides.length === 0) {
-    return finish({ kind: "seqExpr", stmts: [{ kind: "exprStmt", expr: reference, loc }], result: value, type: value.type, loc });
-  }
+  const checked = isJsSourceFile(expr.getSourceFile()) && lowerer.dynConvertible(value.type);
+  if (checked) value = lowerer.coerceToExpected(value, DYN);
   // Select the declaration when extracting the value. Calling the value
   // later must not redispatch the method name on a different receiver.
-  const name = `%method.select:${info.def.name}.${method}`;
+  const name = `%method.select:${info.def.name}.${method}:${checked ? "checked" : "typed"}`;
   const receiverType: IrType = { kind: "object", className: info.def.name };
   if (!lowerer.classMethodValueHelpers.has(name)) {
     const receiver = varRef("this.0", receiverType, loc);
     const body: IrStmt[] = [];
-    overrides.sort((a, b) => lowerer.isSubclassOf(a.def.name, b.def.name) ? -1 : lowerer.isSubclassOf(b.def.name, a.def.name) ? 1 : 0);
-    for (const candidate of overrides) {
-      let selected = methodValue(lowerer, expr, candidate);
-      if (selected && checked) selected = lowerer.coerceToExpected(selected, DYN);
-      if (!selected || !typeEquals(selected.type, value.type)) {
-        lowerer.unsupported("SC1090", expr, "method values with incompatible override signatures");
-      }
-      body.push({ kind: "if", cond: { kind: "instanceOf", value: receiver, className: candidate.def.name, type: BOOL, loc }, then: [{ kind: "return", value: selected, loc }], else_: null, loc });
-    }
     body.push({ kind: "return", value, loc });
-    lowerer.liftedFns.push({ name, params: [{ localId: "this.0", name: "this", type: receiverType }], returnType: value.type,
-      locals: [{ id: "this.0", name: "this", type: receiverType, mutable: false }], body, loc });
+    const fn: IrFunction = { name, params: [{ localId: "this.0", name: "this", type: receiverType }], returnType: value.type,
+      locals: [{ id: "this.0", name: "this", type: receiverType, mutable: false }], body, loc };
+    lowerer.liftedFns.push(fn);
+    lowerer.classMethodValueSelections.set(name, { expression: expr, info, method, fallback: value, fn, checked, values: new Map() });
     lowerer.classMethodValueHelpers.add(name);
   }
   return finish({ kind: "call", callee: name, args: [reference], type: value.type, loc });
+}
+
+/** Method extraction selects only constructible descendants, then expands
+ * at the same reachability fixed point as constructors. A late class must
+ * join an existing selector without reaching every imported subclass. */
+export function refreshClassMethodValueSelections(lowerer: Lowerer): boolean {
+  let changed = false;
+  for (const selection of lowerer.classMethodValueSelections.values()) {
+    let added = false;
+    for (const candidate of lowerer.classes.values()) {
+      if (candidate === selection.info || selection.values.has(candidate.def.name) ||
+          !lowerer.classCanBeConstructed(candidate) || !lowerer.isSubclassOf(candidate.def.name, selection.info.def.name) ||
+          !candidate.methods.has(selection.method)) continue;
+      let value = methodValue(lowerer, selection.expression, candidate);
+      if (value && selection.checked) value = lowerer.coerceToExpected(value, DYN);
+      if (!value || !typeEquals(value.type, selection.fallback.type)) lowerer.unsupported("SC1090", selection.expression, "method values with incompatible override signatures");
+      selection.values.set(candidate.def.name, value);
+      added = true;
+    }
+    if (!added) continue;
+    const loc = selection.fn.loc;
+    const receiver = varRef("this.0", selection.fn.params[0]!.type, loc);
+    const values = [...selection.values].sort(([a], [b]) => lowerer.isSubclassOf(a, b) ? -1 : lowerer.isSubclassOf(b, a) ? 1 : 0);
+    selection.fn.body = values.map(([className, value]): IrStmt => ({ kind: "if",
+      cond: { kind: "instanceOf", value: receiver, className, type: BOOL, loc },
+      then: [{ kind: "return", value, loc }], else_: null, loc }));
+    selection.fn.body.push({ kind: "return", value: selection.fallback, loc });
+    changed = true;
+  }
+  return changed;
 }
 
 function methodValue(lowerer: Lowerer, expr: ts.PropertyAccessExpression, info: ClassInfo): IrExpr | null {
@@ -131,13 +161,23 @@ export function classMethodValue(lowerer: Lowerer, blame: ts.Node, info: ClassIn
 /** Public JS prototype methods are ordinary callables over their actual
  * receiver, including descriptor-created copies of class instances. */
 export function reflectedClassMethodValue(lowerer: Lowerer, info: ClassInfo, method: string): IrExpr | null {
-  const existing = info.prototypeMethodValues?.get(method);
+  return reflectedMethodValue(lowerer, info, method, false);
+}
+
+/** Static JavaScript methods retain their identity and receive the class
+ * value supplied by the call, including inherited and detached methods. */
+export function reflectedClassStaticMethodValue(lowerer: Lowerer, info: ClassInfo, method: string): IrExpr | null {
+  return reflectedMethodValue(lowerer, info, method, true);
+}
+
+function reflectedMethodValue(lowerer: Lowerer, info: ClassInfo, method: string, staticMethod: boolean): IrExpr | null {
+  const existing = (staticMethod ? info.staticMethodValues : info.prototypeMethodValues)?.get(method);
   if (existing) return existing;
   const declaration = info.decl;
   if (!declaration) return null;
   const member = declaration.members.find((member) => {
     if ((!ts.isMethodDeclaration(member) && !ts.isAccessor(member)) || !member.name ||
-        ts.getModifiers(member)?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword)) return false;
+        !!ts.getModifiers(member)?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword) !== staticMethod) return false;
     const name = classMemberNameOf(lowerer, member.name);
     return (ts.isMethodDeclaration(member) ? name : ts.isGetAccessor(member) ? `get:${name}` : ts.isSetAccessor(member) ? `set:${name}` : null) === method;
   });
@@ -158,8 +198,8 @@ export function reflectedClassMethodValue(lowerer: Lowerer, info: ClassInfo, met
       const body = lowerer.liftedFns.find((fn) => fn.name === value.fnName);
       if (body?.captures?.length === 0) delete body.captures;
     }
-    info.prototypeMethodValues ??= new Map();
-    info.prototypeMethodValues.set(method, value);
+    const cache = staticMethod ? info.staticMethodValues ??= new Map() : info.prototypeMethodValues ??= new Map();
+    cache.set(method, value);
     return value;
   } finally {
     lowerer.fnStack.pop();

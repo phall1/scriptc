@@ -29,7 +29,7 @@ export function lowerClassDescriptorRead(lowerer: Lowerer, call: ts.CallExpressi
   return { kind: "libCall", fn: "dyn.getOwnPropertyDescriptor", args: [bag, lowerer.lowerExprExpecting(key, DYN)], type: DYN, loc };
 }
 
-/** Native layout fields cannot change descriptors. New named data properties
+/** Native layout fields cannot change descriptors. New named properties
  * live in the instance's shared bag, preserving attributes and identity. */
 export function lowerClassDataDescriptor(lowerer: Lowerer, call: ts.CallExpression, member: string, target: IrExpr): IrExpr | null {
   if (!isDynTypedRefType(target.type)) return null;
@@ -37,8 +37,8 @@ export function lowerClassDataDescriptor(lowerer: Lowerer, call: ts.CallExpressi
   if (!info || info.def.runtime || info.builtinError || info.builtinEmitter || info.builtinStream) return null;
   const safeName = (owner: ClassInfo, name: string): boolean => bagOnlyProperty(lowerer, owner, name);
   const descriptor = (node: ts.Expression): boolean => ts.isObjectLiteralExpression(node) &&
-    node.properties.every((p) => (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) &&
-      ["value", "writable", "enumerable", "configurable"].includes(literalName(p.name) ?? ""));
+    node.properties.every((p) => (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p) || ts.isMethodDeclaration(p)) &&
+      ["value", "writable", "enumerable", "configurable", "get", "set"].includes(literalName(p.name) ?? ""));
   const descriptors = call.arguments[member === "defineProperty" ? 2 : 1]!;
   if (member === "defineProperty") {
     const key = call.arguments[1]!;

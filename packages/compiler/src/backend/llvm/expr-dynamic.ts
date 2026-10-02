@@ -94,6 +94,13 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
         // spelling rides along for Node's "<name> is not a function".
         const callee = host.emitExpr(e.callee);
         const receiver = e.receiver === undefined ? null : host.emitExpr(e.receiver);
+        const calleeName = (): string => {
+          if (e.calleeNameValue === undefined) return host.cstr(e.calleeName);
+          const name = host.emitExpr(e.calleeNameValue);
+          const data = B.tmp();
+          B.line(`${data} = getelementptr inbounds %ScrStr, ptr ${name.name}, i32 1`);
+          return data;
+        };
         host.declare("declare void @scr_dyn_this_push_dyn(ptr)");
         host.declare("declare void @scr_dyn_this_pop()");
         if (e.spreads !== undefined && e.spreads.length > 0) {
@@ -124,8 +131,9 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
             }
           });
           const t = B.tmp();
+          const name = calleeName();
           B.line(`call void @scr_dyn_this_push_dyn(ptr ${receiver?.name ?? "null"})`);
-          B.line(`${t} = call ptr @scr_dyn_apply(ptr ${callee.name}, ptr ${pack}, ptr ${host.cstr(e.calleeName)})`);
+          B.line(`${t} = call ptr @scr_dyn_apply(ptr ${callee.name}, ptr ${pack}, ptr ${name})`);
           B.line("call void @scr_dyn_this_pop()");
           const out = host.own({ name: t, type: e.type });
           host.emitPendingCheck();
@@ -145,8 +153,9 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
         }
         host.declare(`declare ptr @scr_dyn_call(ptr, ptr, ${host.sizeType}, ptr)`);
         const t = B.tmp();
+        const name = calleeName();
         B.line(`call void @scr_dyn_this_push_dyn(ptr ${receiver?.name ?? "null"})`);
-        B.line(`${t} = call ptr @scr_dyn_call(ptr ${callee.name}, ptr ${argsPtr}, ${host.sizeType} ${args.length}, ptr ${host.cstr(e.calleeName)})`);
+        B.line(`${t} = call ptr @scr_dyn_call(ptr ${callee.name}, ptr ${argsPtr}, ${host.sizeType} ${args.length}, ptr ${name})`);
         B.line("call void @scr_dyn_this_pop()");
         const out = host.own({ name: t, type: e.type });
         host.emitPendingCheck();
@@ -175,9 +184,15 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
           argsPtr = arr;
         }
         host.declare(`declare ptr @scr_dyn_invoke_prepared(ptr, ptr, ptr, ptr, ${host.sizeType}, ptr)`);
+        let name = host.cstr(e.calleeName);
+        if (e.calleeNameValue !== undefined) {
+          const value = host.emitExpr(e.calleeNameValue);
+          name = B.tmp();
+          B.line(`${name} = getelementptr inbounds %ScrStr, ptr ${value.name}, i32 1`);
+        }
         const t = B.tmp();
         B.line(
-          `${t} = call ptr @scr_dyn_invoke_prepared(ptr ${recv.name}, ptr ${prepared}, ptr ${host.cstr(e.method)}, ptr ${argsPtr}, ${host.sizeType} ${args.length}, ptr ${host.cstr(e.calleeName)})`,
+          `${t} = call ptr @scr_dyn_invoke_prepared(ptr ${recv.name}, ptr ${prepared}, ptr ${host.cstr(e.method)}, ptr ${argsPtr}, ${host.sizeType} ${args.length}, ptr ${name})`,
         );
         const out = host.own({ name: t, type: e.type });
         host.emitPendingCheck();
@@ -577,13 +592,22 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
             // `typeof v === "object"`: objects, arrays, bytes, native
             // handles, promises, AND null — engine-held objects by the
             // engine's own typeof.
-            test = orIsl(oneOf([DYN_KIND.OBJ, DYN_KIND.ARR, DYN_KIND.BYTES, DYN_KIND.HANDLE, DYN_KIND.PROMISE, DYN_KIND.PROXY, DYN_KIND.NULL]), "scr_dyn_isl_typeof_is", host.cstr("object"));
+            const object = orIsl(oneOf([DYN_KIND.OBJ, DYN_KIND.ARR, DYN_KIND.BYTES, DYN_KIND.HANDLE, DYN_KIND.PROMISE, DYN_KIND.PROXY, DYN_KIND.NULL]), "scr_dyn_isl_typeof_is", host.cstr("object"));
+            host.declare("declare zeroext i1 @scr_dyn_is_callable(ptr)");
+            const callable = B.tmp();
+            const nonCallable = B.tmp();
+            test = B.tmp();
+            B.line(`${callable} = call zeroext i1 @scr_dyn_is_callable(ptr ${d.name})`);
+            B.line(`${nonCallable} = xor i1 ${callable}, true`);
+            B.line(`${test} = and i1 ${object}, ${nonCallable}`);
           } else if (e.test === "array") {
             // Array.isArray: the checked-dynamic tree's array kind, or the engine's own
             // answer for an engine-held value.
             test = orIsl(oneOf([DYN_KIND.ARR]), "scr_dyn_isl_is_array");
           } else if (e.test === "function") {
-            test = orIsl(oneOf([DYN_KIND.FUNC]), "scr_dyn_isl_typeof_is", host.cstr("function"));
+            host.declare("declare zeroext i1 @scr_dyn_is_callable(ptr)");
+            test = B.tmp();
+            B.line(`${test} = call zeroext i1 @scr_dyn_is_callable(ptr ${d.name})`);
           } else {
             const kindOf: Record<string, number> = {
               bigint: DYN_KIND.BIGINT,

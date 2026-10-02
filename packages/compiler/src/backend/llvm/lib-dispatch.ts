@@ -76,6 +76,35 @@ export function emitIoLibCall(host: LlvmEmitterContext, e: LibCallExpr): LlValue
 
 export function emitGenericLibCall(host: LlvmEmitterContext, e: LibCallExpr): LlValue {
     const B = host.B;
+    if (host.wasi && e.fn === "async.hop") {
+      host.emitWasiSuspend(null);
+      return { name: "", type: e.type };
+    }
+    if (host.wasi && e.fn === "async.awaitDyn") {
+      const value = host.emitExpr(e.args[0]!);
+      host.declare(`declare ptr @scr_dyn_promise_of(ptr)`);
+      const promise = B.tmp();
+      const isPromise = B.tmp();
+      const wait = B.newLabel("await.dyn.promise");
+      const hop = B.newLabel("await.dyn.value");
+      const ready = B.newLabel("await.dyn.ready");
+      B.line(`${promise} = call ptr @scr_dyn_promise_of(ptr ${value.name})`);
+      B.line(`${isPromise} = icmp ne ptr ${promise}, null`);
+      B.condBr(isPromise, wait, hop);
+      B.startBlock(wait);
+      host.emitWasiSuspend(promise);
+      B.br(ready);
+      B.startBlock(hop);
+      host.emitWasiSuspend(null);
+      B.br(ready);
+      B.startBlock(ready);
+      host.declare(`declare ptr @scr_await_dyn_value_settled(ptr)`);
+      const result = B.tmp();
+      B.line(`${result} = call ptr @scr_await_dyn_value_settled(ptr ${value.name})`);
+      const output = host.own({ name: result, type: e.type });
+      host.emitPendingCheck();
+      return output;
+    }
     if (e.fn === "dyn.typedRefIs") {
       // A literal brand cannot replace the receiver while being evaluated.
       // Generated class dispatch uses these probes repeatedly on one local.
@@ -228,6 +257,7 @@ export function emitLibCall(host: LlvmEmitterContext, e: LibCallExpr): LlValue {
     const prefix = e.fn.slice(0, e.fn.indexOf(".")) as LibCallPrefix;
     switch (prefix) {
       case "fetch":
+      case "abort":
       case "island":
       case "json":
         return host.emitWebLibCall(e);

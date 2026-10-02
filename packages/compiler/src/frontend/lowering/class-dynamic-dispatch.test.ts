@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { DYN, F64, STRING, VOID, type IrExpr, type IrFunction, type IrStmt } from "../../ir/ir.js";
+import { BOOL, DYN, F64, STRING, VOID, type IrExpr, type IrFunction, type IrStmt } from "../../ir/ir.js";
 import { ClassDynamicDispatch } from "./class-dynamic-dispatch.js";
 import type { Lowerer } from "./lowerer.js";
 import type { ClassInfo } from "./lower-classes.js";
@@ -11,7 +11,7 @@ const statement = (expr: IrExpr): IrStmt => ({ kind: "exprStmt", expr, loc });
 const fn = (name: string, body: IrStmt[]): IrFunction => ({ name, params: [], returnType: VOID, locals: [], body, loc });
 function context() {
   const liftedFns: IrFunction[] = [];
-  const lowerer = { shapes: new Map(), unions: new Map(), classes: new Map(), liftedFns } as unknown as Lowerer;
+  const lowerer = { shapes: new Map(), unions: new Map(), classes: new Map(), liftedFns, diags: [], prototypeMethodAccesses: new Map(), classMethodValueSelections: new Map() } as unknown as Lowerer;
   const boxed = fn("box", [statement({ kind: "dynFrom", value: { kind: "varRef", localId: "instance", type: { kind: "object", className: "Widget" }, loc }, type: DYN, loc })]);
   return { lowerer, liftedFns, boxed };
 }
@@ -60,6 +60,47 @@ test("discovers dispatch sites added during a later reachability pass", () => {
   expect(target.body[0]).toMatchObject({ kind: "exprStmt", expr: { kind: "call" } });
 });
 
+test.each(["dyn.reflectGet", "dyn.reflectSet"] as const)("rewrites isolated %s calls and preserves the supplied receiver", (operation) => {
+  const { lowerer, boxed, liftedFns } = context();
+  lowerer.coerceToExpected = (value, type) => value.type.kind === type.kind ? value : { kind: "dynFrom", value, type, loc };
+  const args = [variable("target"), variable("key"), ...(operation === "dyn.reflectSet" ? [variable("stored")] : []), variable("receiver")];
+  const target = fn("reflect", [statement({ kind: "libCall", fn: operation, args, type: operation === "dyn.reflectSet" ? BOOL : DYN, loc })]);
+  const dispatch = new ClassDynamicDispatch();
+  expect(dispatch.process(lowerer, [boxed, target])).toBe(true);
+  expect(target.body[0]).toMatchObject({ kind: "exprStmt", expr: { kind: "call", callee: expect.stringMatching(/^%dyn\.class\.computed\./), args } });
+  const helper = liftedFns.find((item) => item.name.startsWith("%dyn.class.computed."))!;
+  expect(helper.body.at(-1)).toMatchObject({ kind: "return", value: { kind: "libCall", fn: operation, args: expect.arrayContaining([variable("p.reflectReceiver")]) } });
+  expect(dispatch.process(lowerer, [boxed, target, ...liftedFns])).toBe(false);
+});
+
+test("shares method dispatch while preserving source error labels and callback evaluation order", () => {
+  const { lowerer, boxed, liftedFns } = context();
+  lowerer.classes.set("Widget", { def: { name: "Widget", fields: [] }, fields: new Map(),
+    methods: new Map([["work", { params: [{ name: "value", type: DYN, mode: "required" }], ret: DYN }]]),
+    base: null, subclasses: [], decl: null } as unknown as ClassInfo);
+  lowerer.classCanBeConstructed = () => true;
+  lowerer.isSubclassOf = (left, right) => left === right;
+  lowerer.overrideBelow = () => false;
+  lowerer.coerceToExpected = (value, type) => value.type.kind === type.kind ? value : { kind: "dynFrom", value, type, loc };
+  lowerer.upcastTo = (value) => value;
+  lowerer.noteEdge = () => {};
+  const invocations = ["left.work", "right.work"].map((calleeName) => statement({ kind: "dynInvoke", recv: variable(calleeName),
+    method: "work", calleeName, args: [{ kind: "call", callee: "argumentEffect", args: [], type: DYN, loc }], type: DYN, loc }));
+  const target = fn("target", invocations);
+  new ClassDynamicDispatch().process(lowerer, [boxed, target]);
+  const calls = liftedFns.filter((helper) => helper.name.startsWith("%dyn.class.call."));
+  expect(calls).toHaveLength(1);
+  expect(calls[0]?.body.at(-1)).toMatchObject({ kind: "return", value: { kind: "dynInvoke", calleeNameValue: { kind: "varRef", localId: "p.calleeName" } } });
+  target.body.forEach((statement, index) => {
+    expect(statement).toMatchObject({ kind: "exprStmt", expr: { kind: "seqExpr", result: {
+      kind: "call", callee: calls[0]!.name, args: [
+        { kind: "varRef" }, { kind: "call", callee: expect.stringMatching(/^%dyn\.class\.callback\./) },
+        { kind: "call", callee: "argumentEffect" }, { kind: "strLit", value: ["left.work", "right.work"][index] },
+      ],
+    } } });
+  });
+});
+
 test("known class property bags preserve one owned receiver without boxing", () => {
   const { lowerer, liftedFns } = context();
   lowerer.isSubclassOf = () => false;
@@ -96,4 +137,28 @@ test("unknown receivers keep checked class property dispatch", () => {
   const body = target.body;
   new ClassDynamicDispatch().process(lowerer, [boxed, target]);
   expect(target.body).toBe(body);
+});
+
+test("normalizes base capsules before dispatching each derived member once", () => {
+  const { lowerer, liftedFns } = context();
+  const base = { def: { name: "Base", fields: [{ name: "value", type: F64 }] }, fields: new Map([["value", F64]]), methods: new Map(), base: null, subclasses: [] } as unknown as ClassInfo;
+  const child = { def: { name: "Child", base: "Base", fields: [{ name: "value", type: F64 }] }, fields: new Map([["value", F64]]), methods: new Map(), base, subclasses: [] } as unknown as ClassInfo;
+  base.subclasses.push(child);
+  lowerer.classes.set("Base", base);
+  lowerer.classes.set("Child", child);
+  lowerer.classCanBeConstructed = () => true;
+  lowerer.isSubclassOf = (name, parent) => name === "Child" && parent === "Base";
+  lowerer.coerceToExpected = (value, type) => type.kind === "dyn" ? { kind: "dynFrom", value, type, loc } : value;
+  const boxes = fn("boxes", [base, child].map((info) => statement({ kind: "dynFrom", value: {
+    kind: "varRef", localId: info.def.name, type: { kind: "object", className: info.def.name }, loc,
+  }, type: DYN, loc })));
+  const read = fn("read", [statement({ kind: "dynKeyGet", value: variable("value"), key: literal("value"), type: DYN, loc })]);
+  new ClassDynamicDispatch().process(lowerer, [boxes, read]);
+  const dispatch = liftedFns.find((helper) => helper.name.startsWith("%dyn.class.property."))!;
+  expect(dispatch.body[0]).toMatchObject({ kind: "assign", localId: "p.0", value: { kind: "call", callee: "%dyn.class.normalize" } });
+  expect(dispatch.body.filter((statement) => statement.kind === "if")).toHaveLength(2);
+  const normalize = liftedFns.find((helper) => helper.name === "%dyn.class.normalize")!;
+  expect(normalize.body[0]).toMatchObject({ kind: "if", then: [{ kind: "if", then: [{ kind: "return", value: {
+    kind: "dynFrom", value: { kind: "downcast", type: { kind: "object", className: "Child" } },
+  } }] }] });
 });

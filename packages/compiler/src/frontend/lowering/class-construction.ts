@@ -1,4 +1,4 @@
-import { BOOL, DYN, STRING, typeEquals, typeKey, type IrExpr, type IrFunction, type IrStmt, type IrType, type SrcLoc } from "../../ir/ir.js";
+import { BOOL, DYN, F64, STRING, typeEquals, typeKey, type IrExpr, type IrFunction, type IrStmt, type IrType, type SrcLoc } from "../../ir/ir.js";
 import { varRef } from "../../ir/build.js";
 import { everyStmtList, transformExpr, transformStmtList } from "../../ir/traverse.js";
 import { dynUndefinedExpr, type Lowerer } from "./lowerer.js";
@@ -7,6 +7,7 @@ import { classPrototypeData } from "./class-prototypes.js";
 import { classInstanceOf } from "./class-dynamic-dispatch.js";
 
 const PREFIX = "%class.construct:";
+const PACKED = `${PREFIX}packed`;
 const INSTANCEOF = "%class.instanceof:dynamic";
 
 export function checkedClassInstanceOf(lowerer: Lowerer, value: IrExpr, callee: IrExpr, loc: SrcLoc): IrExpr {
@@ -24,7 +25,7 @@ export function checkedClassConstruction(lowerer: Lowerer, callee: IrExpr, args:
   if (!lowerer.liftedFns.some((fn) => fn.name === name)) {
     const params = [callee, ...args].map((_, index) => ({ localId: `p.${index}`, name: `p${index}`, type: DYN }));
     lowerer.liftedFns.push({ name, params, locals: params.map((p) => ({ id: p.localId, name: p.name, type: p.type, mutable: false })),
-      returnType: DYN, body: [{ kind: "return", value: { kind: "libCall", fn: "dyn.construct", args: [
+      returnType: DYN, speculativeDispatch: true, body: [{ kind: "return", value: { kind: "libCall", fn: "dyn.construct", args: [
         varRef("p.0", DYN, loc), { kind: "dynArrLit", elems: params.slice(1).map((param) => varRef(param.localId, DYN, loc)), type: DYN, loc },
         { kind: "strLit", value: "constructor", type: STRING, loc },
       ], type: DYN, loc }, loc }], loc });
@@ -32,10 +33,32 @@ export function checkedClassConstruction(lowerer: Lowerer, callee: IrExpr, args:
   return { kind: "call", callee: name, args: [callee, ...args], type: DYN, loc };
 }
 
-function constructorArguments(lowerer: Lowerer, params: ParamShape[], incoming: IrExpr[], loc: SrcLoc): IrExpr[] | null {
+/** Runtime-length constructor spreads keep argument evaluation before defaults. */
+export function checkedClassConstructionPacked(lowerer: Lowerer, callee: IrExpr, packed: IrExpr, loc: SrcLoc): IrExpr {
+  if (!lowerer.liftedFns.some((fn) => fn.name === PACKED)) {
+    const params = [{ localId: "p.0", name: "callee", type: DYN }, { localId: "p.1", name: "arguments", type: DYN }];
+    lowerer.liftedFns.push({ name: PACKED, params, locals: params.map((param) => ({ id: param.localId, name: param.name, type: param.type, mutable: false })),
+      returnType: DYN, speculativeDispatch: true, body: [{ kind: "return", value: { kind: "libCall", fn: "dyn.construct", args: [
+        varRef("p.0", DYN, loc), varRef("p.1", DYN, loc), { kind: "strLit", value: "constructor", type: STRING, loc },
+      ], type: DYN, loc }, loc }], loc });
+  }
+  return { kind: "call", callee: PACKED, args: [callee, packed], type: DYN, loc };
+}
+
+function constructorArguments(lowerer: Lowerer, params: ParamShape[], incoming: IrExpr[], loc: SrcLoc, packed?: IrExpr): IrExpr[] | null {
   const args: IrExpr[] = [];
   let index = 0;
   for (const param of params) {
+    if (packed && (param.mode === "rest" || param.mode === "dynRest" || param.mode === "arguments")) {
+      const rest: IrExpr = param.mode === "arguments" ? packed : { kind: "libCall", fn: "dyn.arrayProtoCall", args: [packed,
+        { kind: "strLit", value: "slice", type: STRING, loc }, { kind: "dynArrLit", elems: [
+          { kind: "dynFrom", value: { kind: "numLit", value: index, type: F64, loc }, type: DYN, loc },
+        ], type: DYN, loc }], type: DYN, loc };
+      const converted = lowerer.coerceToExpected(rest, param.type);
+      if (!typeEquals(converted.type, param.type)) return null;
+      args.push(converted);
+      continue;
+    }
     if ((param.mode === "dynRest" || param.mode === "arguments") && param.type.kind === "dyn") {
       args.push({ kind: "dynArrLit", elems: param.mode === "arguments" ? incoming : incoming.slice(index), type: DYN, loc });
       index = incoming.length;
@@ -46,7 +69,12 @@ function constructorArguments(lowerer: Lowerer, params: ParamShape[], incoming: 
       index = incoming.length;
     } else {
       if (param.mode !== "required" && param.mode !== "omittable") return null;
-      const value = incoming[index++] ?? param.callDefault ?? dynUndefinedExpr(loc);
+      let value: IrExpr = packed ? { kind: "libCall", fn: "dyn.arrAt", args: [packed,
+        { kind: "numLit", value: index++, type: F64, loc }], type: DYN, loc }
+        : incoming[index++] ?? param.callDefault ?? dynUndefinedExpr(loc);
+      if (param.callDefault && value.type.kind === "dyn") value = { kind: "ternary",
+        cond: { kind: "dynTest", test: "undefined", value, type: BOOL, loc },
+        then: lowerer.coerceToExpected(param.callDefault, DYN), else_: value, type: DYN, loc };
       const converted = lowerer.coerceToExpected(value, param.type);
       if (!typeEquals(converted.type, param.type)) return null;
       args.push(converted);
@@ -125,7 +153,8 @@ export class ClassConstructionDispatch {
           changed = true;
           continue;
         }
-        const args = constructorArguments(lowerer, info.ctorParams, fn.params.slice(1).map((param) => varRef(param.localId, DYN, loc)), loc);
+        const args = constructorArguments(lowerer, info.ctorParams, fn.params.slice(1).map((param) => varRef(param.localId, DYN, loc)), loc,
+          fn.name === PACKED ? varRef("p.1", DYN, loc) : undefined);
         if (!args) continue;
         const type: IrType = { kind: "classval", className: name };
         const callee = varRef("p.0", DYN, loc);

@@ -3,8 +3,13 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 import { compile } from "@scriptc/compiler";
+import { balancedShardSelect } from "./shard.js";
 
 const hasZig = spawnSync("zig", ["version"], { stdio: "ignore" }).status === 0;
+const requestedMode = process.env["SCRIPTC_LLVM_TEST_MODE"];
+if (requestedMode !== undefined && requestedMode !== "release" && requestedMode !== "dev") {
+  throw new Error("SCRIPTC_LLVM_TEST_MODE must be release or dev when set");
+}
 const wasiRunner = `
 const {readFileSync} = require('node:fs');
 const {WASI} = require('node:wasi');
@@ -21,9 +26,12 @@ function run(command: string, args: string[]) {
   return { stdout: result.stdout, stderr: result.stderr, status: result.status, signal: result.signal };
 }
 
-const cases = ["math", "spatial", "attributes", "geometry", "scene", "materials", "mesh", "raycast-mesh", "raycast-camera", "raycast-lines-points"].flatMap((fixture) =>
-  ["native", "wasm32-wasi"].map((target) => ({ fixture, target })));
-test.for(cases)("published three.js $fixture runs statically through LLVM on $target", async ({ fixture, target }, context) => {
+// Relative scheduling estimates spread the large TSL imports and loaders
+// across workers; every target/fixture pair remains in the complete gate.
+const cases = balancedShardSelect(["math", "spatial", "attributes", "geometry", "scene", "materials", "mesh", "raycast-mesh", "raycast-camera", "raycast-lines-points", "buffers-animation", "collision", "package-imports", "curves", "textures", "math-extended", "procedural-geometry", "render-data", "mesh-workflows", "animation", "loaders", "gltf", "nodes"].flatMap((fixture) =>
+  ["native", "wasm32-wasi"].map((target) => ({ fixture, target }))), ({ fixture, target }) => `three:${fixture}:${target}`,
+  ({ fixture }) => fixture === "nodes" ? 8 : fixture === "loaders" || fixture === "gltf" ? 4 : 1);
+test.for(cases)("published three.js $fixture runs statically through LLVM on $target", { timeout: 600_000 }, async ({ fixture, target }, context) => {
   const entry = join(import.meta.dirname, `../fixtures/three/${fixture}.mjs`);
   if (target === "wasm32-wasi" && !hasZig) context.skip();
   const dir = await mkdtemp("/tmp/scriptc-three-");
@@ -39,7 +47,7 @@ test.for(cases)("published three.js $fixture runs statically through LLVM on $ta
     const result = await compile(entry, {
       outDir: dir, outPath: join(dir, wasm ? `${fixture}.wasm` : fixture),
       backend: "llvm", dynamic: false, npmStatic: ["three"],
-      optimization: sanitize ? "dev" : "release", sanitize,
+      optimization: sanitize ? "dev" : requestedMode ?? "release", sanitize,
     });
     if (!result.ok) throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
     expect(result.backend).toBe("llvm");

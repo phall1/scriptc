@@ -61,7 +61,7 @@ const resolvedHelperCache = new Map<string, Promise<ResolvedHelper>>();
 
 export interface NativeCodegenOptions {
   outputPath: string;
-  llvm: string;
+  llvm: string | readonly string[];
   outputKind: NativeCodegenOutputKind;
   sourcePath: string;
   optimization?: "0" | "1" | "2" | "3" | "s" | "z";
@@ -246,9 +246,9 @@ async function resolveHelper(
 }
 
 function cacheKey(options: NativeCodegenOptions, target: NativeTargetSpec, helper: HelperIdentity): string {
-  return createHash("sha256")
-    .update("scriptc-native-codegen-v1\0")
-    .update(options.llvm)
+  const hash = createHash("sha256").update("scriptc-native-codegen-v1\0");
+  for (const part of typeof options.llvm === "string" ? [options.llvm] : options.llvm) hash.update(part);
+  return hash
     .update("\0")
     .update(JSON.stringify(target))
     .update("\0")

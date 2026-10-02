@@ -439,8 +439,8 @@ static int scr_regex_start(ScrRegex *re, int len) {
 /* re.exec(s): a fresh string[] of [whole match, ...captures], or NULL
  * for no match (the compiler wraps the `string[] | null` union). Global
  * and sticky regexes start at lastIndex, set it to the match end, and
- * reset it on failure. Nonparticipating captures retain the documented
- * empty-string representation. */
+ * reset it on failure. Nonparticipating captures are present undefined
+ * elements, distinct from participating empty captures and array holes. */
 ScrArr *scr_regex_exec(ScrStr *s, ScrRegex *re) {
   uint8_t *bc = scr_regex_bc(re);
   bool stateful = (lre_get_flags(bc) & (LRE_FLAG_GLOBAL | LRE_FLAG_STICKY)) != 0;
@@ -462,7 +462,7 @@ ScrArr *scr_regex_exec(ScrStr *s, ScrRegex *re) {
     for (int k = 0; k < count; k++) {
       const uint8_t *cs = capture[2 * k], *ce = capture[2 * k + 1];
       if (cs == NULL || ce == NULL) {
-        scr_arr_push_ref(out, scr_str_new("", 0));
+        scr_arr_set_undefined(out, (double)out->len);
       } else {
         scr_arr_push_ref(
             out, scr_str_from_utf16(u, (int)((cs - ubase) >> 1), (int)((ce - ubase) >> 1)));
@@ -525,7 +525,7 @@ double scr_regex_search(ScrStr *s, ScrRegex *re) {
 }
 
 /* matchAll(re): every match as its honest slice string[] (whole match +
- * captures, nonparticipating = "" — match()'s rule) drained EAGERLY into
+ * captures, nonparticipating = undefined — match()'s rule) drained EAGERLY into
  * a fresh string[][]. The lazy iterator is unobservable across the
  * lowered surface: strings are immutable and the spec clones the regex at
  * the call, so nothing can perturb the drain. Non-global regexes throw
@@ -559,7 +559,7 @@ static ScrArr *scr_regex_match_all_core(ScrStr *s, ScrRegex *re, ScrArr *indices
     for (int k = 0; k < capture_count; k++) {
       const uint8_t *cs = capture[2 * k], *ce = capture[2 * k + 1];
       if (cs == NULL || ce == NULL) {
-        scr_arr_push_ref(row, scr_str_new("", 0));
+        scr_arr_set_undefined(row, (double)row->len);
       } else {
         scr_arr_push_ref(
             row, scr_str_from_utf16(u, (int)((cs - ubase) >> 1), (int)((ce - ubase) >> 1)));
@@ -922,6 +922,43 @@ static ScrStr *scr_str_case_conv(const ScrStr *s, int to_lower) {
 
 ScrStr *scr_str_to_lower(const ScrStr *s) { return scr_str_case_conv(s, 1); }
 ScrStr *scr_str_to_upper(const ScrStr *s) { return scr_str_case_conv(s, 0); }
+
+static void *scr_normalize_realloc(void *opaque, void *ptr, size_t size) {
+  (void)opaque;
+  if (!size) { free(ptr); return NULL; }
+  return realloc(ptr, size);
+}
+
+ScrStr *scr_str_normalize(const ScrStr *s, const ScrStr *form) {
+  UnicodeNormalizationEnum mode;
+  if (form->len == 3 && !memcmp(form->data, "NFC", 3)) mode = UNICODE_NFC;
+  else if (form->len == 3 && !memcmp(form->data, "NFD", 3)) mode = UNICODE_NFD;
+  else if (form->len == 4 && !memcmp(form->data, "NFKC", 4)) mode = UNICODE_NFKC;
+  else if (form->len == 4 && !memcmp(form->data, "NFKD", 4)) mode = UNICODE_NFKD;
+  else {
+    static const char message[] = "The normalization form should be one of NFC, NFD, NFKC, NFKD.";
+    scr_throw_error(SCR_ERR_RANGE, scr_str_new(message, sizeof message - 1));
+    return NULL;
+  }
+  if (s->len > INT32_MAX / sizeof(uint32_t)) scr_regex_oom();
+  uint32_t *input = malloc((s->len + 1) * sizeof(uint32_t));
+  if (!input) scr_regex_oom();
+  int length = 0;
+  for (size_t offset = 0; offset < s->len;) {
+    size_t step;
+    input[length++] = scr_case_decode(s->data + offset, &step);
+    offset += step;
+  }
+  uint32_t *output = NULL;
+  int count = unicode_normalize(&output, input, length, mode, NULL, scr_normalize_realloc);
+  free(input);
+  if (count < 0) scr_regex_oom();
+  ScrJsonBuf buffer;
+  scr_jb_init(&buffer);
+  for (int i = 0; i < count; i++) scr_case_put_cp(&buffer, output[i]);
+  free(output);
+  return scr_jb_finish(&buffer);
+}
 
 /* ── assert.match / assert.doesNotMatch ──────────────────────────────────
  * Lives here because it needs the matcher. Assertion matching follows

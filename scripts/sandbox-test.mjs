@@ -34,6 +34,7 @@ const laneCaseShardedFiles = [
   "tests/harness/npm.test.ts",
   "tests/harness/server.test.ts",
   "tests/harness/test262.test.ts",
+  "tests/harness/three.test.ts",
 ];
 // Coverage analysis is frontend-only: SCRIPTC_SAN cannot change its result.
 // It still case-shards across the selected lane so every corpus entry is
@@ -803,6 +804,7 @@ try {
             SCRIPTC_TEST_SHARD: `${worker.shard}/${shardCount}`,
             SCRIPTC_TEST_WORKERS: String(caseWorkers),
             SCRIPTC_EFFECT_TEST_CONCURRENCY: String(effectConcurrency),
+            SCRIPTC_LLVM_TEST_MODE: "dev",
           },
           "cases",
         );

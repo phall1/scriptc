@@ -111,9 +111,11 @@ A program that passes its project's TypeScript check may still use unsupported o
 
 ### three.js
 
-With `--npm-static=three`, native and WASI builds support CPU math, geometry, scene graphs, materials, and a subset of raycasting. Supported raycasting includes mesh intersections, sorted results, recursive traversal, layers, distance limits, perspective and orthographic camera rays, lines, and points.
+With `--npm-static=three`, native and WASI builds support published package imports and tested CPU workflows for math, bounds, procedural geometry, curves, shapes, extrusion, text geometry, scene graphs, cameras, lights, materials, textures, and render-target data. Mesh workflows include instancing, batching, morph targets, skeletal deformation, LOD, and sprites. Raycasting includes mesh intersections, sorted results, recursive traversal, layers, distance limits, camera rays, lines, and points.
 
-Mesh attribute interpolation can fail when three.js reads beyond the end of a vertex attribute, because numeric fields cannot retain `undefined`. WebGL rendering, browser DOM integration, and native graphics windows are unsupported.
+Animation coverage includes tracks, clips, property binding, mixer playback, blending, and fading. In-memory loading covers scene, material, geometry, and animation JSON, OBJ, STL, PLY, and self-contained glTF/GLB scenes with buffers, PBR material data, and animation. This establishes the exercised workflows, not every loader extension or overload.
+
+WebGL/WebGPU rendering, DOM controls, image and video resources, audio, and worker-based decoders require external host bindings. A browser or native application can render geometry and material state produced by a compiled library and receive its resource lifecycle notifications. Compressed model and texture decoding belongs to that host; shader execution and rendered output are outside the CPU coverage described here.
 
 ## Runtime differences from Node.js
 
@@ -231,6 +233,6 @@ Numbers use JavaScript's double-precision representation. Integer inference and 
 
 ## Browser embedding
 
-Wasm reactors require a host-provided WASI Preview 1 adapter. DOM APIs, browser graphics bindings, and three.js `WebGLRenderer` are unsupported. A reactor can run supported three.js CPU operations while an external web application renders the results.
+Wasm reactors require a host-provided WASI Preview 1 adapter. A reactor can run supported three.js CPU operations and send animated geometry, material state, and resource lifecycle notifications to an external web application through declared imports. The application supplies DOM, graphics, media, audio, and decoder bindings, including the renderer.
 
 Library mode excludes promises, async functions, timers, and the embedded JavaScript engine. See [WebAssembly Modules](/docs/wasm) for the embedding contract.

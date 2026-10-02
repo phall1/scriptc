@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { BOOL, F64, STRING, VOID, type IrExpr, type IrFunction, type IrModule, type IrStmt, type IrType } from "../../ir/ir.js";
-import { emitLlvmModule } from "./emitter.js";
+import { emitLlvmModule, emitLlvmModuleSource, LlEmitter } from "./emitter.js";
 
 const loc = { file: "exception-cleanup.ts", start: 0, end: 0 };
 const call = (): IrStmt => ({ kind: "exprStmt", expr: { kind: "call", callee: "throws", args: [], type: VOID, loc }, loc });
@@ -24,6 +24,15 @@ function cleanupBlocks(module: IrModule): string[] {
   const llvm = emitLlvmModule(module);
   return [...llvm.matchAll(/^exc\.cleanup\d+:\n(?:  [^\n]*\n)+/gm)].map((match) => match[0]!);
 }
+
+test("separate LLVM parts preserve complete module bytes in native, WASI, and debug builds", () => {
+  const module = moduleFor([call()]);
+  for (const options of [{}, { wasi: true, pointerBits: 32 as const }, { debugSources: new Map([[loc.file, "function main() {}"]]) }]) {
+    const expected = emitLlvmModule(module, options);
+    expect(new LlEmitter(module, options).emitParts().join("\n")).toBe(expected);
+    expect(emitLlvmModuleSource(module, options)).toBe(expected);
+  }
+});
 
 test("throwing-call count does not multiply identical scope cleanup", () => {
   for (const boxed of [false, true]) {

@@ -1,5 +1,5 @@
 import { pathModuleValue } from "./lower-builtin-values.js";
-import { everyExprChild, everyStmtChild } from "../../ir/traverse.js";
+import { everyExprChild, everyStmtChild, transformStmtList } from "../../ir/traverse.js";
 import { RuntimeOptionalLocals } from "./runtime-optional-locals.js";
 import { sanitizeUnregisteredClassTypes } from "./sanitize-class-types.js";
 import { UnregisteredClassTypes } from "./unregistered-class-types.js";
@@ -13,6 +13,7 @@ import type { FrontendServices } from "../services.js";
 import { InternalCompilerError } from "../../errors.js";
 import { defaultAfterUndefined, lowerStaticallyUndefinedArgument } from "./optional-arguments.js";
 import { ClassDynamicDispatch } from "./class-dynamic-dispatch.js";
+import { DeferredModuleInitializers } from "./deferred-module-initializers.js";
 import { finalizeClassMethodValues } from "./class-method-values.js";
 import type { ClassSymbolKey } from "./symbol-fields.js";
 import type { HttpClientFnBinding } from "./lower-server.js";
@@ -1365,13 +1366,13 @@ export class Lowerer {
 
   /** Recover the original optional union when a checked single-arm helper
    * was installed before a strict property consumer could name its member.
-   * Recovery is limited to array element reads and storage roots marked by
-   * the optional-read analysis, so ordinary assertions keep their generic
+   * Recovery covers member reads and storage roots marked by the
+   * optional-read analysis, so ordinary assertions keep their generic
    * checked-narrow behavior. */
   runtimeOptionalSourceValue(node: ts.Expression, value: IrExpr): IrExpr | null {
     let origin: ts.Expression = node;
     while (ts.isParenthesizedExpression(origin)) origin = origin.expression;
-    let optionalOrigin = ts.isElementAccessExpression(origin);
+    let optionalOrigin = ts.isElementAccessExpression(origin) || ts.isPropertyAccessExpression(origin);
     if (ts.isIdentifier(origin)) {
       const local = this.resolveLocal(origin);
       const root = local ? this.runtimeOptionalRootOf(local) : null;
@@ -1382,6 +1383,10 @@ export class Lowerer {
           (global.type.kind === "union" && this.armTag(global.type.unionId, UNDEFINED_T) >= 0)));
     }
     if (!optionalOrigin) return null;
+
+    // A checked JavaScript indexed read can already be boxed. The checker
+    // calls the element present, but that inference is not a runtime guard.
+    if (isJsSourceFile(node.getSourceFile()) && value.kind === "dynCheck" && value.value.type.kind === "dyn") return value.value;
 
     let source = value;
     if (
@@ -1605,6 +1610,7 @@ export class Lowerer {
   /** Method adapter names are owned by class-method-values. Looking them
    * up must not scan and retain every unrelated lifted function. */
   readonly classMethodValueHelpers = new Set<string>();
+  readonly classMethodValueSelections = new Map<string, import("./class-method-values.js").ClassMethodValueSelection>();
   /** Callee names of every interned coercion helper whose CALL mints a
    * FRESH closure per evaluation (%fn.width.*, %fn.adapt.*,
    * %fnval.spawnres.*). Registered at the mint site — NOT recovered by
@@ -1701,6 +1707,8 @@ export class Lowerer {
   /** Largest fixed argument list below a JS method, discovered before any
    * base vtable signature is collected. Unused checked slots carry undefined. */
   readonly virtualJsMethodArity = new Map<ts.MethodDeclaration, number>();
+  readonly checkedVirtualJsMethods = new Set<ts.MethodDeclaration>();
+  readonly checkedVirtualJsValueReturns = new Set<ts.MethodDeclaration>();
   /** The class whose members are lowering — `super` binds lexically to it
    * (arrows inside methods lower within this window, so they see it too). */
   currentClass: ClassInfo | null = null;
@@ -1841,6 +1849,7 @@ export class Lowerer {
    * a reference to a lowerable body reports its name here — recorded even
    * when the enclosing statement later poisons. */
   onEdge: ((name: string) => void) | null = null;
+  deferredModuleInitializers: DeferredModuleInitializers | null = null;
 
   // Stack of function contexts (bottom = the function being declared at
   // top level, top = the innermost nested function currently lowering).
@@ -1889,6 +1898,16 @@ export class Lowerer {
    * is assembled directly. The configured reachable set remains null so
    * demand-driven instance lowering keeps its existing gates. */
   reachableForArtifacts: ReadonlySet<string> | null = null;
+  /** Constructors retained by the active worklist. A boxed base receiver
+   * can contain any retained descendant, but importing its declaration
+   * alone does not make every descendant constructible. */
+  private constructedClasses: Set<string> | null = null;
+  private readonly virtualEdges = new Map<ClassInfo, Set<string>>();
+
+  classCanBeConstructed(info: ClassInfo): boolean {
+    return this.constructedClasses === null || this.constructedClasses.has(info.def.name) ||
+      info.genericInstance !== undefined || info.mixinInstance !== undefined;
+  }
   /** Coverage remainder mode: the reachability gate inverts (see wantBody)
    * and no module is built. */
   readonly remainder: boolean;
@@ -3995,6 +4014,7 @@ export class Lowerer {
    * body; both fire edges through the same hooks and are not units
    * themselves. */
   emitReachable(extraRoots?: readonly string[]): { reachable: Set<string>; result: LowerResult } {
+    this.deferredModuleInitializers = new DeferredModuleInitializers();
     const parts = this.splitFiles();
     // Direct lowering callers do not necessarily run program preflight.
     // Establish the same managed header/top-level batch here before
@@ -4165,6 +4185,7 @@ export class Lowerer {
       return owner;
     };
     const reachable = new Set<string>();
+    this.constructedClasses = new Set();
     const queue: string[] = [];
     const loweredUnits = new Map<string, IrFunction>();
     const initFunctions: IrFunction[] = [];
@@ -4173,6 +4194,10 @@ export class Lowerer {
       if (reachable.has(name)) return;
       reachable.add(name);
       if (units.has(name)) queue.push(name);
+      if (this.constructedClasses && name.endsWith(".constructor")) {
+        this.constructedClasses.add(name.slice(1, -".constructor".length));
+        for (const [owner, methods] of this.virtualEdges) for (const method of methods) this.noteVirtualEdge(owner, method);
+      }
     };
     // Class EXPRESSIONS collect while init bodies lower (below): their
     // member units register the moment collection finishes — before any
@@ -4349,10 +4374,13 @@ export class Lowerer {
     const classDispatch = new ClassDynamicDispatch(extraRoots !== undefined);
     for (;;) {
       drainInstances();
+      const initializerChanged = this.deferredModuleInitializers.process(this, [
+        ...loweredUnits.values(), ...initFunctions, ...instanceFunctions, ...this.liftedFns, ...this.implicitFns,
+      ]);
       const dispatchChanged = classDispatch.process(this, [
         ...loweredUnits.values(), ...initFunctions, ...instanceFunctions, ...this.liftedFns, ...this.implicitFns,
       ]);
-      if (queue.length === 0 && !dispatchChanged) break;
+      if (queue.length === 0 && !dispatchChanged && !initializerChanged) break;
       drainUnits();
       this.restoreGenericInstanceOrder(instLowered);
       this.restoreGenericClassInstanceOrder(clsInstLowered);
@@ -4372,6 +4400,18 @@ export class Lowerer {
       ...this.liftedFns,
       ...this.implicitFns,
     ];
+    // The worklist can leave a virtual site with only its base method.
+    // Devirtualize after construction/override reachability has settled.
+    for (const fn of functions) fn.body = transformStmtList(fn.body, { stmt: (statement) => statement, expr: (expression) => {
+      if (expression.kind !== "virtualCall") return expression;
+      const info = this.classes.get(expression.className);
+      const method = info && this.findMethodOn(info, expression.method);
+      if (!method || method.sig.abstract || [...this.classes.values()].some((candidate) =>
+        this.isSubclassOf(candidate.def.name, expression.className) && candidate.def.name !== expression.className &&
+        candidate.methods.has(expression.method) && reachable.has(`%${candidate.def.name}.${expression.method}`))) return expression;
+      return { kind: "call", callee: `%${method.declarer.def.name}.${expression.method}`,
+        args: [this.upcastTo(expression.args[0]!, method.declarer.def.name), ...expression.args.slice(1)], type: expression.type, loc: expression.loc };
+    } });
     this.reachableForArtifacts = reachable;
     return { reachable, result: this.finishModule(functions) };
   }
@@ -4389,11 +4429,16 @@ export class Lowerer {
    * them). */
   noteVirtualEdge(info: ClassInfo, method: string): void {
     if (!this.onEdge) return;
+    if (this.constructedClasses) {
+      const methods = this.virtualEdges.get(info) ?? new Set<string>();
+      methods.add(method);
+      this.virtualEdges.set(info, methods);
+    }
     const above = this.findMethodOn(info, method);
     if (above) this.noteEdge(`%${above.declarer.def.name}.${method}`);
     const below = (c: ClassInfo): void => {
       for (const s of c.subclasses) {
-        if (s.methods.has(method)) this.noteEdge(`%${s.def.name}.${method}`);
+        if (this.classCanBeConstructed(s) && s.methods.has(method)) this.noteEdge(`%${s.def.name}.${method}`);
         below(s);
       }
     };
@@ -4867,6 +4912,16 @@ export class Lowerer {
   }
 
   typeOf(node: ts.Node): ts.Type {
+    if (ts.isPropertyAccessExpression(node) && isJsSourceFile(node.getSourceFile())) {
+      const receiver = node.expression.kind === ts.SyntaxKind.ThisKeyword && this.fnStack.length > 0
+        ? this.resolveThis()?.type : this.mapTypeOf(this.checker.getTypeAtLocation(node.expression));
+      const checkedThis = node.expression.kind === ts.SyntaxKind.ThisKeyword && this.fnStack.length > 0 && receiver?.kind === "dyn"
+        ? this.currentClass : null;
+      if (receiver?.kind === "object" && this.classes.get(receiver.className)?.fields.get(node.name.text)?.kind === "dyn" ||
+          checkedThis?.fields.get(node.name.text)?.kind === "dyn") {
+        return this.checker.getUnknownType();
+      }
+    }
     // A checked JS method receives its actual call-site receiver. Its
     // declaration's inferred class type must not turn property reads back
     // into native field loads when the method is borrowed by another object.
@@ -4911,7 +4966,15 @@ export class Lowerer {
         // A checked value can contain any runtime kind. A checker-proven
         // branch narrow therefore cannot contradict this specialization;
         // reads still validate the payload through maybeNarrow.
-        if (boundIr.kind === "dyn") return t;
+        if (boundIr.kind === "dyn") {
+          // JSDoc and initializer inference are declaration types, not flow
+          // proofs. A checked specialization must not reinstate those
+          // stale layouts (mutable/null slots and heterogeneous JS arrays).
+          const declaration = sym && this.checker.valueDeclarationOf(sym);
+          const declared = declaration && ts.isParameter(declaration)
+            ? this.mapTypeOf(this.checker.getTypeAtLocation(declaration.name)) : null;
+          return declared && typeEquals(declared, narrowedIr) ? bound : t;
+        }
         // A union binding narrowed to one of its arms (typeof/equality
         // guards over string|number bindings) — the narrow is truth.
         if (boundIr.kind === "union") {
@@ -5392,7 +5455,14 @@ export class Lowerer {
     // undefined/null literals store the dyn unit values. Types outside the
     // dyn's domain (bytes, classes, Maps, ...) fall through to
     // requireExactShape's SC1101 fence.
-    // A promise flowing into a VOID-promise slot (an inferred
+    // Promise payloads may widen at a checked return boundary, including
+    // arrays inferred as tuple results by Promise.all. Keep both payload
+    // ABIs explicit: box settlement, then validate the destination payload.
+    if (expected.kind === "promise" && expected.inner.kind !== "void" && expr.type.kind === "promise" &&
+        !typeEquals(expected, expr.type) && this.dynConvertible(expr.type) &&
+        canDynCheckTo(expected, (id) => this.shapes.get(id), (id) => this.unions.get(id))) {
+      return { kind: "dynCheck", value: this.coerceToExpected(expr, DYN), type: expected, loc: expr.loc };
+    }
     // Promise<never> return holding a `return Promise.reject(value)` the
     // dyn arm typed promise<dyn>): awaiting through the slot ignores the
     // fulfillment payload (scr_await_void) and rejections flow untyped,
@@ -8280,7 +8350,7 @@ export class Lowerer {
       }
     }
     let e = this.lowerExpr(node);
-    if (expected?.kind === "union" && this.armTag(expected.unionId, UNDEFINED_T) >= 0) {
+    if (expected?.kind === "union" && this.armTag(expected.unionId, UNDEFINED_T) >= 0 || expected?.kind === "dyn" && isJsSourceFile(node.getSourceFile())) {
       // A destination that accepts undefined must retain an unchecked
       // read's storage value even when the checker still calls it present.
       e = this.runtimeOptionalSourceValue(node, e) ?? e;

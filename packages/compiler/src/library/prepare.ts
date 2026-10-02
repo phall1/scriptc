@@ -1,6 +1,6 @@
 import { dirname, resolve } from "node:path";
 import type { CompileFailure } from "../compile-types.js";
-import { moduleWasiUnavailableSurface, targetRefusalDiag } from "../backend/target-diagnostics.js";
+import { fenceSpeculativeWasiFunctions, moduleWasiUnavailableSurface, targetRefusalDiag } from "../backend/target-diagnostics.js";
 import { checkerPanicDiag, libAsyncExportDiag, libAsyncSurfaceDiag, libExportUnresolvedDiag, libGenericExportDiag, libIntBoundaryDiag, libNpmIneligibleDiag, libSidecarDiag, libUnmappableSignatureDiag, iceDiag, isCheckerPanic, LIB_INBOUND_BYTES_TRAP_CODE, LIB_RUNTIME_TRAP_CODES, type ScrDiagnostic } from "../diagnostics/diagnostic.js";
 import { checkLibraryIntegerSlots, classSeed, hasIntSlots, numberCarrierKind, type FnIntSlots, type IntSlotConfig } from "./int-infer.js";
 import { profileRemediation, profileTeaching, type LibraryProfile } from "./library-profile.js";
@@ -548,6 +548,7 @@ export function prepareLibrary(
   if (fenced.length > 0) return fail(fenced);
   mod.lib = resolved.lib;
   if (buildPlatform === "wasi") {
+    fenceSpeculativeWasiFunctions(mod);
     const unavailable = moduleWasiUnavailableSurface(mod);
     if (unavailable !== null) return fail([targetRefusalDiag("wasm32-wasi", unavailable.surface, unavailable.loc)]);
   }

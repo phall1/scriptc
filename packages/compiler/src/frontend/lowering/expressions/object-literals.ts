@@ -228,6 +228,13 @@ export function lowerDynObjectLiteral(
     fields = [];
   };
   for (const prop of expr.properties) {
+    if (ts.isPropertyAssignment(prop) && !ts.isComputedPropertyName(prop.name) && prop.name.text === "__proto__") {
+      if (prop.initializer.kind !== ts.SyntaxKind.NullKeyword) lowerer.unsupported("SC1090", prop, "object-literal prototypes other than null (use Object.setPrototypeOf)");
+      flushFields();
+      acc ??= { kind: "dynObjLit", fields: [], type: DYN, loc };
+      acc = { kind: "libCall", fn: "dyn.setPrototype", args: [acc, lowerer.lowerExprExpecting(prop.initializer, DYN)], type: DYN, loc: locOf(prop) };
+      continue;
+    }
     if (ts.isSpreadAssignment(prop)) {
       flushFields();
       const builtin = lowerer.builtinNamespaceModuleOf(prop.expression);

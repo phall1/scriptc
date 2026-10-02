@@ -1,4 +1,5 @@
 import { staticTextDecoderEncoding } from "./text-decoder-encoding.js";
+import { checkedPromiseAll } from "./checked-promise-all.js";
 import { InternalCompilerError } from "../../errors.js";
 /* Builtin-surface lowering: node builtin-module calls (fs, path, os, url,
  * crypto, child_process spawn/spawnSync and child/stats/spawn-result
@@ -2635,6 +2636,19 @@ function lowerFsSyncBufferWindow(
       return { kind: "libCall", fn: "dyn.ownKeys", args: [lowerer.lowerExprExpecting(call.arguments[0]!, DYN)], type: DYN, loc: locOf(call) };
     }
     if (call.questionDotToken) return null;
+    const reflectMember = lowerer.stdlibGlobalMember(access, "Reflect");
+    if (reflectMember === "get" || reflectMember === "set") {
+      const required = reflectMember === "get" ? 2 : 3;
+      if (call.arguments.length < required || call.arguments.length > required + 1 || call.arguments.some(ts.isSpreadElement)) {
+        lowerer.noLowering(`Reflect.${reflectMember} with this argument shape`, call, `use Reflect.${reflectMember}(target, key${reflectMember === "set" ? ", value" : ""}, receiver?)`);
+      }
+      const loc = locOf(call);
+      const args = call.arguments.map((arg) => lowerer.lowerExprExpecting(arg, DYN));
+      const target = call.arguments.length === required ? lowerer.declareHiddenLocal("%reflectTarget", DYN) : null;
+      const operation: IrExpr = { kind: "libCall", fn: reflectMember === "get" ? "dyn.reflectGet" : "dyn.reflectSet",
+        args: target ? [varRef(target.id, DYN, loc), ...args.slice(1), varRef(target.id, DYN, loc)] : args, type: reflectMember === "get" ? DYN : BOOL, loc };
+      return target ? { kind: "seqExpr", stmts: [{ kind: "varDecl", localId: target.id, init: args[0]!, loc }], result: operation, type: operation.type, loc } : operation;
+    }
     if (lowerer.stdlibGlobalMember(access, "Reflect") !== "apply") return null;
     const loc = locOf(call);
     const fenceHint =
@@ -9359,6 +9373,9 @@ function lowerStoredTextCodecCall(lowerer: Lowerer, call: ts.CallExpression, acc
             lowerer.diags.splice(diagsBefore);
           }
         }
+        if (!lowerer.dynamic && isJsSourceFile(call.getSourceFile()) && elems.every((entry) => lowerer.dynConvertible(entry.type))) {
+          return checkedPromiseAll(lowerer, { kind: "arrayLit", elems: elems.map((entry) => lowerer.coerceToExpected(entry, DYN)), type: arrayOf(DYN), loc }, loc);
+        }
         lowerer.noLowering(
           "Promise.all over this argument shape",
           argNode,
@@ -9366,6 +9383,7 @@ function lowerStoredTextCodecCall(lowerer: Lowerer, call: ts.CallExpression, acc
         );
       }
       const entries = lowerer.lowerExpr(argNode);
+      if (!lowerer.dynamic && isJsSourceFile(call.getSourceFile()) && entries.type.kind === "dyn") return checkedPromiseAll(lowerer, entries, loc);
       // A NON-literal island argument (`Promise.all(plugins.map((p) =>
       // loadPlugin(p)))` — the loadPlugins shape, where the checker
       // spells `any[]`): the ENGINE's own Promise.all runs over the

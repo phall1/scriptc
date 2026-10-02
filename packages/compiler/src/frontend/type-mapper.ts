@@ -8,6 +8,7 @@ import { literalValues } from "./literal-values.js";
 import { remapUnionDiscriminant } from "./union-discriminants.js";
 
 import { isJsSourceFile, isNodeTypesPath } from "./program.js";
+import { functionCanFallThrough } from "./function-completion.js";
 import { accessorSlotProp, recordTextCodecClass } from "../ir/ir.js";
 // typeKey moved to ir/ir.ts (the backend needs it too, for per-type
 // helper interning); re-exported here so frontend call sites keep their
@@ -26,10 +27,11 @@ export function jsOpenObjectType(
   const arms = type.kind === "union" ? unions.get(type.unionId)?.arms : [type];
   const present = arms?.filter((arm) => arm.kind !== "undefinedT");
   const parameter = ts.isParameter(decl) ? decl : decl.parent && ts.isParameter(decl.parent) ? decl.parent : null;
-  // Numeric array parameters in JavaScript also accept typed arrays. Keep
+  // Array parameters in JavaScript also accept typed arrays. Keep
   // their runtime storage at the boundary, including default [] parameters.
   if (parameter && !parameter.dotDotDotToken && present?.length === 1 &&
-      present[0]!.kind === "array" && present[0]!.elem.kind === "f64") return DYN;
+      present[0]!.kind === "array") return DYN;
+  if (parameter && !parameter.dotDotDotToken && present?.length === 1 && present[0]!.kind === "bytes") return DYN;
   // An unannotated JavaScript parameter's object default is a fallback,
   // not a closed class contract. Published code routinely passes another
   // implementation of the same protocol through a boxed callable.
@@ -38,6 +40,9 @@ export function jsOpenObjectType(
       arms?.every((arm) => canConvertToDyn(arm, (id) => shapes.get(id), (id) => unions.get(id)))) return DYN;
   if (present?.length !== 1 || present[0]!.kind !== "record") return type;
   const shape = shapes.get(present[0]!.shapeId);
+  // JavaScript dictionaries allow missing keys and inherited properties.
+  // A typed index slot cannot represent either of those reads faithfully.
+  if (shape?.indexValue && !shape.tuple) return DYN;
   const unitOnly = (field: IrType): boolean => isUnitType(field) || field.kind === "void" ||
     field.kind === "union" && unions.get(field.unionId)?.arms.every(isUnitType) === true;
   return shape && !shape.tuple && !shape.indexValue &&
@@ -1889,9 +1894,8 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
   // ArrayBuffer value exists. The other TypedArray flavors stay
   // unmapped (the record path's index-signature check rejects them).
   // RegExpMatchArray (s.match's result) IS a string[] here — the honest
-  // slice: [whole match, ...captures] (a nonparticipating capture reads
-  // "" — SEMANTICS.md). The `.index`/`.input`/`.groups` extras fence per
-  // member like any other unlowered array property.
+  // slice: [whole match, ...captures]. Nonparticipating captures use the
+  // array's undefined element state; numeric access preserves that state.
   if (isStdlibInterface("RegExpMatchArray")) return arrayOf(STRING);
   // TemplateStringsArray (a tag function's first parameter): a string[] —
   // the cooked spans the templateStrings site value carries. The `.raw`
@@ -2794,9 +2798,18 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
         ts.isParameter(decl) &&
         (decl.questionToken !== undefined || decl.initializer !== undefined);
       let pt = mapType(checker.getTypeOfSymbol(p), ctx);
+      if (decl && ts.isParameter(decl) && ts.isSetAccessorDeclaration(decl.parent) && isJsSourceFile(decl.getSourceFile())) pt = DYN;
       // An inferred JavaScript binding pattern consumes an iterable; it
       // does not require the caller's array to have exactly this length.
-      if (decl && ts.isParameter(decl) && ts.isArrayBindingPattern(decl.name) &&
+      const executor = decl && ts.isParameter(decl) ? decl.parent : null;
+      const construction = executor?.parent;
+      const constructorSymbol = construction && ts.isNewExpression(construction)
+        ? checker.getSymbolAtLocation(construction.expression) : undefined;
+      const nativeExecutor = executor && (ts.isArrowFunction(executor) || ts.isFunctionExpression(executor)) &&
+        construction && ts.isNewExpression(construction) && construction.arguments?.[0] === executor &&
+        ts.isIdentifier(construction.expression) && construction.expression.text === "Promise" &&
+        constructorSymbol && checker.declarationsOf(constructorSymbol).some((site) => ctx.isStdlibFile(site.getSourceFile()));
+      if (!nativeExecutor && decl && ts.isParameter(decl) && !decl.dotDotDotToken && !ts.isSetAccessorDeclaration(decl.parent) &&
           isJsSourceFile(decl.getSourceFile()) && !decl.type &&
           !/@(?:param|type)\b/.test(decl.getSourceFile().text.slice(decl.parent?.pos ?? decl.pos, decl.getStart()))) pt = DYN;
       if (pt) pt = jsOpenObjectType(decl, pt, ctx.shapes, ctx.unions);
@@ -2829,7 +2842,11 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
       (retT.flags & (ts.TypeFlags.Null | ts.TypeFlags.Undefined)) !== 0;
     let ret = jsUnitReturn || (!ctx.dynamic && (retT.flags & ts.TypeFlags.Any) !== 0)
       ? DYN : retT.flags & ts.TypeFlags.Never ? VOID : mapType(retT, ctx);
-    if (sigDecl && isJsSourceFile(sigDecl.getSourceFile()) && ret?.kind === "array" && ret.elem.kind === "f64") ret = DYN;
+    if (sigDecl && ts.isGetAccessorDeclaration(sigDecl) && isJsSourceFile(sigDecl.getSourceFile())) ret = DYN;
+    if (sigDecl && isJsSourceFile(sigDecl.getSourceFile()) && ret?.kind === "array") ret = DYN;
+    if (sigDecl && ts.isFunctionLike(sigDecl) && isJsSourceFile(sigDecl.getSourceFile()) && !sigDecl.type &&
+        !/@returns?\b/.test(sigDecl.getSourceFile().text.slice(sigDecl.pos, sigDecl.getStart())) && ret?.kind === "record") ret = DYN;
+    if (ret && sigDecl && isJsSourceFile(sigDecl.getSourceFile()) && functionCanFallThrough(sigDecl)) ret = withUndefinedArm(ret, ctx.unions) ?? ret;
     if (!ret) return null;
     return typedRest
       ? { kind: "func", params, ret, rest: true, restAbi: "typed" }

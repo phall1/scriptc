@@ -49,15 +49,16 @@ export function classCallbackValue(lowerer: Lowerer, receiver: IrExpr, name: str
   return { kind: "seqExpr", stmts: [{ kind: "varDecl", localId: bag.id, init: callbackBag(lowerer, receiver, loc, name), loc }], result, type: DYN, loc };
 }
 
-export function classCallbackCall(lowerer: Lowerer, receiver: IrExpr, name: string, args: IrExpr[], fallback: IrExpr, loc: SrcLoc): IrExpr {
+export function classCallbackCall(lowerer: Lowerer, receiver: IrExpr, name: string, args: IrExpr[], fallback: IrExpr, loc: SrcLoc, calleeName = name): IrExpr {
   const bag = lowerer.declareHiddenLocal("%callbackBag", DYN);
   const present = lowerer.declareHiddenLocal("%callbackPresent", BOOL);
   const callback = lowerer.declareHiddenLocal("%callback", DYN);
   const value = varRef(bag.id, DYN, loc);
   const key: IrExpr = { kind: "strLit", value: name, type: STRING, loc };
   const call: IrExpr = { kind: "dynCall", callee: varRef(callback.id, DYN, loc), receiver: lowerer.coerceToExpected(receiver, DYN),
-    calleeName: name, args, type: DYN, loc };
-  const result: IrExpr = { kind: "ternary", cond: varRef(present.id, BOOL, loc), then: call,
+    calleeName, args, type: DYN, loc };
+  const result: IrExpr = lowerer.prototypeMethodAccesses.has(name) ? call
+    : { kind: "ternary", cond: varRef(present.id, BOOL, loc), then: call,
     else_: fallback.type.kind === "void"
       ? { kind: "seqExpr", stmts: [{ kind: "exprStmt", expr: fallback, loc }], result: dynUndefinedExpr(loc), type: DYN, loc }
       : lowerer.coerceToExpected(fallback, DYN), type: DYN, loc };
