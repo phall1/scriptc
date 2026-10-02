@@ -117,6 +117,7 @@ describe.skipIf(!zigOnPath())("wasm32-wasi differential", () => {
     "js-inferred-object-values.js",
     "js-static-accessors.js",
     "js-class-enumeration.js",
+    "js-class-symbol-spread.cjs",
     "js-class-member-dispatch.js",
     "js-class-return-shapes.js",
     "js-optional-member-call.js",

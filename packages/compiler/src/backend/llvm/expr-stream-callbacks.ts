@@ -281,10 +281,10 @@ export function cryptoBytesThunkFor(host: LlvmEmitterContext, cbT: IrType & { ki
       host.declare(`declare void @scr_bytes_release(ptr)`);
       d.push(`  call void @scr_bytes_release(ptr %value)`);
     } else if (value.kind === "dyn") {
-      host.declare(`declare ptr @scr_dyn_new_bytes(ptr)`);
+      host.declare(`declare ptr @scr_dyn_new_buffer(ptr)`);
       host.declare(`declare void @scr_bytes_release(ptr)`);
       d.push(
-        `  %result = call ptr @scr_dyn_new_bytes(ptr %value)`,
+        `  %result = call ptr @scr_dyn_new_buffer(ptr %value)`,
         `  call void @scr_bytes_release(ptr %value)`,
       );
       passed.push("ptr %result");
@@ -360,7 +360,7 @@ export function zlibBytesThunkFor(host: LlvmEmitterContext, cbT: IrType & { kind
       host.declare(`declare void @scr_bytes_release(ptr)`);
       d.push(`  call void @scr_bytes_release(ptr %value)`);
     } else if (value.kind === "dyn") {
-      host.declare(`declare ptr @scr_dyn_new_bytes(ptr)`);
+      host.declare(`declare ptr @scr_dyn_new_buffer(ptr)`);
       host.declare(`declare ptr @scr_dyn_undefined()`);
       host.declare(`declare void @scr_bytes_release(ptr)`);
       d.push(
@@ -368,7 +368,7 @@ export function zlibBytesThunkFor(host: LlvmEmitterContext, cbT: IrType & { kind
         `  %hasvalue = icmp ne ptr %value, null`,
         `  br i1 %hasvalue, label %value_yes, label %value_no`,
         `value_yes:`,
-        `  %db = call ptr @scr_dyn_new_bytes(ptr %value)`,
+        `  %db = call ptr @scr_dyn_new_buffer(ptr %value)`,
         `  call void @scr_bytes_release(ptr %value)`,
         `  store ptr %db, ptr %rslot`,
         `  br label %value_go`,

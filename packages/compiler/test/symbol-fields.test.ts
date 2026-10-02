@@ -50,8 +50,6 @@ test.each([
 test.each([
   ["rest declaration", "const { name, ...copy } = value; console.log(copy);"],
   ["rest assignment", "let copy = {}; let name; ({ name, ...copy } = value); console.log(copy);"],
-  ["spread", "const copy = { ...value }; console.log(copy);"],
-  ["computed-key spread", 'let name = "extra"; const copy = { [name]: 1, ...value }; console.log(copy);'],
   ["Object.assign", "const copy = Object.assign({}, value); console.log(copy);"],
   ["Object.assign with several sources", "const copy = Object.assign({}, value, { extra: 1 }); console.log(copy);"],
   ["Object.assign with spread sources", "const copy = Object.assign({}, ...[value]); console.log(copy);"],
@@ -63,6 +61,23 @@ test.each([
     const { coverage } = analyze(entry);
     const diagnostics = [...coverage.diagnostics, ...(coverage.runtimeFences ?? [])];
     expect(diagnostics.some((d) => /rest bindings|copying class instances|object spread/.test(d.message)), JSON.stringify(coverage, null, 2)).toBe(true);
+    expect(coverage.stats.statementsIsland).toBe(0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test.each([
+  ["spread", "const copy = { ...value }; console.log(copy[key]);"],
+  ["computed-key spread", 'let name = "extra"; const copy = { [name]: 1, ...value }; console.log(copy[key]);'],
+])("accepts %s copies of symbol fields", (_name, copy) => {
+  const dir = mkdtempSync(join(tmpdir(), "scriptc-symbol-copy-"));
+  try {
+    const entry = join(dir, "main.cjs");
+    writeFileSync(entry, `const key = Symbol.for("x"); class Base { [key] = true; name = "base"; } class C extends Base {} const value = new C(); ${copy}`);
+    const { coverage } = analyze(entry);
+    expect(coverage.preflightFailed).toBe(false);
+    expect([...coverage.diagnostics, ...(coverage.runtimeFences ?? [])]).toEqual([]);
     expect(coverage.stats.statementsIsland).toBe(0);
   } finally {
     rmSync(dir, { recursive: true, force: true });

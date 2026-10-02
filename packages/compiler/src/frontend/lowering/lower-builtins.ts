@@ -6625,14 +6625,15 @@ function lowerProcessIpcSend(lowerer: Lowerer, call: ts.CallExpression): IrExpr 
         for (const param of listenerNode.parameters) lowerer.checkedCallbackParams.add(param);
       }
       const cb = lowerer.lowerExpr(call.arguments[1]!);
-      if (cb.type.kind === "func" && cb.type.rest) {
-        if (!canBoxFuncIntoDyn(cb.type, (id) => lowerer.shapes.get(id), (id) => lowerer.unions.get(id))) {
-          lowerer.noLowering("child event rest listeners with non-representable parameters", call.arguments[1]!);
+      if (isJsSourceFile(listenerNode.getSourceFile()) && cb.type.kind === "dyn" ||
+          cb.type.kind === "func" && (cb.type.rest || isJsSourceFile(listenerNode.getSourceFile()) && cb.type.params.some((param) => param.kind === "dyn"))) {
+        if (cb.type.kind !== "dyn" && !canBoxFuncIntoDyn(cb.type, (id) => lowerer.shapes.get(id), (id) => lowerer.unions.get(id))) {
+          lowerer.noLowering("child event listeners with non-representable parameters", call.arguments[1]!);
         }
         return {
           kind: "libCall", fn: "child.onDyn",
           args: [receiver, { kind: "strLit", value: event, type: STRING, loc },
-            { kind: "dynFrom", value: cb, type: DYN, loc }],
+            cb.type.kind === "dyn" ? cb : { kind: "dynFrom", value: cb, type: DYN, loc }],
           type: VOID, loc,
         };
       }

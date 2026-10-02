@@ -181,10 +181,14 @@ test("the production CLI relocates, builds programs, and rebuilds itself with No
         expect(built.stdout.trim()).toBe(output);
         expect(comparableStderr(built.stderr)).toBe("");
         const vertices: number[][] = [];
+        const surfaces: number[][] = [];
+        const resources: number[][] = [];
         const wasi = new WASI({ version: "preview1" });
         const instance = new WebAssembly.Instance(new WebAssembly.Module(readFileSync(output)), {
           ...wasi.getImportObject(), scriptc: {
             vertex: (...args: number[]) => vertices.push(args.map((value) => Number(value.toFixed(9)))),
+            surface: (...args: number[]) => surfaces.push(args.map((value) => Number(value.toFixed(9)))),
+            resource: (...args: number[]) => resources.push(args),
             panic: () => { throw new Error("unexpected Wasm panic"); },
           },
         });
@@ -192,14 +196,18 @@ test("the production CLI relocates, builds programs, and rebuilds itself with No
         const api = instance.exports as Record<string, (...args: number[]) => number>;
         api.app_init!();
         for (const time of [0, 123, 2000]) expect(api.app_frame!(time, 1.5)).toBe(24);
+        api.app_dispose!();
         const oracle = await exec(process.execPath, ["--input-type=module", "--eval", `
-          const vertices = [];
+          const vertices = [], surfaces = [], resources = [];
           globalThis.vertex = (...args) => vertices.push(args.map(value => Number(value.toFixed(9))));
-          const { frame } = await import(${JSON.stringify(join(root, "tests/library-mode/wasm/three.mjs"))});
+          globalThis.surface = (...args) => surfaces.push(args.map(value => Number(value.toFixed(9))));
+          globalThis.resource = (...args) => resources.push(args);
+          const { frame, dispose } = await import(${JSON.stringify(join(root, "tests/library-mode/wasm/three.mjs"))});
           for (const time of [0, 123, 2000]) frame(time, 1.5);
-          console.log(JSON.stringify(vertices));
+          dispose();
+          console.log(JSON.stringify({ vertices, surfaces, resources }));
         `], options);
-        expect(vertices).toEqual(JSON.parse(oracle.stdout));
+        expect({ vertices, surfaces, resources }).toEqual(JSON.parse(oracle.stdout));
         expect(oracle.stderr).toBe("");
         api.app_collect!();
       }

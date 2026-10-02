@@ -9802,6 +9802,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/js-buffer-callback-brand.cjs": {
+   "order": [
+    "<repo>/tests/corpus/js-buffer-callback-brand.cjs"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/js-callable-proxy.js": {
    "order": [
     "<repo>/tests/corpus/js-callable-proxy.js"
@@ -9835,6 +9841,12 @@
   "<repo>/tests/corpus/js-checked-sort-result.js": {
    "order": [
     "<repo>/tests/corpus/js-checked-sort-result.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/js-child-error-listener.cjs": {
+   "order": [
+    "<repo>/tests/corpus/js-child-error-listener.cjs"
    ],
    "diags": []
   },
@@ -9914,6 +9926,12 @@
   "<repo>/tests/corpus/js-class-subclass-properties.js": {
    "order": [
     "<repo>/tests/corpus/js-class-subclass-properties.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/js-class-symbol-spread.cjs": {
+   "order": [
+    "<repo>/tests/corpus/js-class-symbol-spread.cjs"
    ],
    "diags": []
   },

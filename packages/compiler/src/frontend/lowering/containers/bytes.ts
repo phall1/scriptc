@@ -1155,8 +1155,9 @@ function lowerBufferStaticValue(lowerer: Lowerer, call: ts.CallExpression,
       // Untyped stream chunks retain the native checked value's Buffer
       // flavor. Plain bytes are Uint8Arrays at this boundary; inspecting
       // only the bytes tag would incorrectly identify them as Buffers.
-      if (v.type.kind === "dyn") {
-        return { kind: "dynTest", test: "buffer", value: v, type: BOOL, loc };
+      const checked = isJsSourceFile(call.getSourceFile()) && v.kind === "dynCheck" && v.value.type.kind === "dyn" ? v.value : v;
+      if (checked.type.kind === "dyn") {
+        return { kind: "dynTest", test: "buffer", value: checked, type: BOOL, loc };
       }
       // Primitive storage cannot carry a Buffer. Keep argument effects
       // even when its representation makes the answer constant.
