@@ -788,11 +788,19 @@ export function appendForkModules(
         if (key !== "loc") visit(rec[key]);
       }
     };
-    // Keep these large lists in typed storage. Passing the complete array to
-    // the reflective walker makes a native iterator refresh every function
-    // at each step; only the individual entry needs a checked-dynamic view.
-    for (const fn of functions) visit(fn);
-    for (const global of lowerer.globalsList) visit(global);
+    // Keep function lists and their typed slots in native storage. Reflective
+    // array iteration refreshes a complete view at each step; only executable
+    // nodes and individual types need the general dependency walk.
+    for (const fn of functions) {
+      for (const param of fn.params) visit(param.type);
+      visit(fn.returnType);
+      for (const local of fn.locals) visit(local.type);
+      for (const capture of fn.captures ?? []) visit(capture.type);
+      for (const capture of fn.classCaptures ?? []) visit(capture.type);
+      visit(fn.generator);
+      for (const stmt of fn.body) visit(stmt);
+    }
+    for (const global of lowerer.globalsList) visit(global.type);
     // The builtin error classes ride EVERY module: the runtime's own throws
     // (JSON/dynCheck/regex failures) mint instances of them whether or not
     // user code mentions Error, and the uncaught printer tells Error
