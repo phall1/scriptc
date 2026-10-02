@@ -123,6 +123,8 @@ describe.skipIf(!zigOnPath())("wasm32-wasi differential", () => {
     "js-promise-finally-order.js",
     "js-cjs-callable-snapshots/main.cjs",
     "js-inferred-callback-exports/main.js",
+    "js-array-constructor.js",
+    "error-inherited-message.mjs",
     "js-class-shadowed-methods.js",
     "js-default-listener-arguments.cjs",
     "js-reflect-receivers.js",

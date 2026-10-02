@@ -33,3 +33,7 @@ sparseCopy[1] = 7;
 for (const copy of [sparseCopy.toReversed(), sparseCopy.toSorted(), sparseCopy.with(1, 8), sparseCopy.toSpliced()]) {
   console.log(copy.length, Object.keys(copy).join(','), copy.join(','));
 }
+const numbers = new Array(0, 1);
+numbers[4294967294] = 2;
+numbers[4294967295] = 3;
+console.log(numbers.length, numbers.indexOf(2, 4294967290), numbers.indexOf(3, 4294967290), numbers[4294967295]);

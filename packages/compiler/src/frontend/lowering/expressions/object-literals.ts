@@ -240,7 +240,9 @@ export function lowerDynObjectLiteral(
       const builtin = lowerer.builtinNamespaceModuleOf(prop.expression);
       const raw = builtin === "path" || builtin === "path/posix" || builtin === "path/win32"
         ? pathModuleValue(lowerer, builtin === "path" ? "path/posix" : builtin, locOf(prop))
-        : lowerer.lowerExpr(prop.expression);
+        : isJsSourceFile(expr.getSourceFile())
+          ? lowerer.lowerExprExpecting(prop.expression, DYN)
+          : lowerer.lowerExpr(prop.expression);
       fenceSymbolFieldCopy(lowerer, prop.expression, raw.type);
       const source = boxValue
         ? boxValue(prop.expression, raw)

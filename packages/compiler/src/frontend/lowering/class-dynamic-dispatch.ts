@@ -27,10 +27,19 @@ const streamProperty = (name: string): boolean => STREAM_BOOL_PROPERTIES.has(nam
 function symbolMemberKey(lowerer: Lowerer, info: ClassInfo, name: string, loc: SrcLoc): IrExpr | null {
   if (name.startsWith("sym:")) return lowerer.coerceToExpected({ kind: "libCall", fn: "sym.wellKnown",
     args: [{ kind: "strLit", value: name.slice(4), type: STRING, loc }], type: SYMBOL_T, loc }, DYN);
-  for (const [symbol, member] of [...(info.symbolFields ?? []), ...(info.symbolMethods ?? [])]) {
-    if (member !== name) continue;
-    const global = lowerer.globalsBySymbol.get(symbol);
-    if (global) return lowerer.coerceToExpected(varRef(global.id, global.type, loc), DYN);
+  if (info.symbolFields !== undefined) {
+    for (const [symbol, member] of info.symbolFields) {
+      if (member !== name) continue;
+      const global = lowerer.globalsBySymbol.get(symbol);
+      if (global) return lowerer.coerceToExpected(varRef(global.id, global.type, loc), DYN);
+    }
+  }
+  if (info.symbolMethods !== undefined) {
+    for (const [symbol, member] of info.symbolMethods) {
+      if (member !== name) continue;
+      const global = lowerer.globalsBySymbol.get(symbol);
+      if (global) return lowerer.coerceToExpected(varRef(global.id, global.type, loc), DYN);
+    }
   }
   return null;
 }

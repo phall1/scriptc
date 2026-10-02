@@ -3044,14 +3044,15 @@ export function lowerArrayConstructor(lowerer: Lowerer,
   if (args.some(ts.isSpreadElement)) {
     lowerer.noLowering("Array constructor with spread arguments", expr);
   }
-  // JavaScript constructor results keep their checked reference, including
-  // holes created by the numeric length form. Boxing a dense native array
-  // would turn those holes into present undefined properties.
-  if (!lowerer.dynamic && isJsSourceFile(expr.getSourceFile())) {
+  let result = lowerer.mapTypeOf(lowerer.typeOf(expr));
+  // Constructors without a concrete element layout keep their checked
+  // reference. Known element forms retain native arrays, including their
+  // existing sparse storage and indexed property contracts.
+  if (!lowerer.dynamic && isJsSourceFile(expr.getSourceFile()) &&
+      (result?.kind !== "array" || result.elem.kind === "dyn")) {
     return { kind: "dynCall", callee: { kind: "libCall", fn: "dyn.arrayConstructor", args: [], type: DYN, loc },
       calleeName: "Array", args: args.map((arg) => lowerer.lowerExprExpecting(arg, DYN)), type: DYN, loc };
   }
-  let result = lowerer.mapTypeOf(lowerer.typeOf(expr));
   if (result?.kind !== "array") {
     const contextual = lowerer.checker.getContextualType(expr);
     if (contextual) result = lowerer.mapTypeOf(contextual);
@@ -5786,8 +5787,8 @@ export function lowerSetSeedNew(lowerer: Lowerer, node: ts.Expression, setT: IrT
       (source.type.kind === "dyn" || source.type.kind === "jsval")) {
     source = lowerer.coerceInto(node, source, STRING);
   }
-  if (source.type.kind === "dyn" && setT.elem.kind === "dyn") {
-    return { kind: "dynCheck", value: { kind: "libCall", fn: "dyn.nativeSetNew", args: [source], type: DYN, loc }, type: setT, loc };
+  if (setT.elem.kind === "dyn" && lowerer.dynConvertible(source.type)) {
+    return { kind: "dynCheck", value: { kind: "libCall", fn: "dyn.nativeSetNew", args: [lowerer.coerceInto(node, source, DYN)], type: DYN, loc }, type: setT, loc };
   }
   if (declared?.kind === "array" && typeEquals(declared.elem, setT.elem)) {
     // Preserve the existing checked scalar-iterable bridge. Reference

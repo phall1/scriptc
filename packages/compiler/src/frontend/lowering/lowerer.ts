@@ -3122,11 +3122,10 @@ export class Lowerer {
       }
       if (ts.isBinaryExpression(e)) {
         const op = e.operatorToken.kind;
-        if (
-          op === ts.SyntaxKind.AmpersandAmpersandToken ||
-          op === ts.SyntaxKind.BarBarToken ||
-          op === ts.SyntaxKind.QuestionQuestionToken
-        ) return mayBeOptional(e.left) || mayBeOptional(e.right);
+        // Nullish/falsy left values select the fallback, so only that
+        // fallback can make the whole expression undefined.
+        if (op === ts.SyntaxKind.BarBarToken || op === ts.SyntaxKind.QuestionQuestionToken) return mayBeOptional(e.right);
+        if (op === ts.SyntaxKind.AmpersandAmpersandToken) return mayBeOptional(e.left) || mayBeOptional(e.right);
       }
       if (ts.isPropertyAccessExpression(e) && ts.isIdentifier(e.expression)) {
         const symbol = symbolOf(e.expression);
@@ -3242,6 +3241,14 @@ export class Lowerer {
       });
     }
     for (const [symbol, signature] of signatureBySymbol) {
+      const declaration = functionDeclBySymbol.get(symbol);
+      if (!declaration || !isJsSourceFile(declaration.getSourceFile())) continue;
+      const checked = this.checker.getSignatureFromDeclaration(declaration);
+      const checkedReturn = checked ? this.checker.getReturnTypeOfSignature(checked) : null;
+      // Checker-known optional results already narrow at each use. Only
+      // propagate undefined that JavaScript's runtime ABI adds beyond them.
+      if (checkedReturn && ((checkedReturn.flags & ts.TypeFlags.Undefined) !== 0 ||
+          checkedReturn.isUnionType() && ts.constituentTypes(checkedReturn).some((arm) => (arm.flags & ts.TypeFlags.Undefined) !== 0))) continue;
       if (signature.returnType.kind === "union" && this.armTag(signature.returnType.unionId, UNDEFINED_T) >= 0) optionalReturns.add(symbol);
     }
     const promoteHofCallback = (callback: ts.Expression, parameterIndices: readonly number[], seen = new Set<ts.Symbol>()): boolean => {

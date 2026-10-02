@@ -1806,11 +1806,13 @@ export function collectGlobals(lowerer: Lowerer, sf: ts.SourceFile, topStmts: ts
             // Unannotated results of JavaScript calls can carry callable
             // objects or heterogeneous unions absent from the native type
             // map. Their compiled initializer still validates every crossing.
-            const callSignature = isJsSourceFile(sf) && decl.initializer && ts.isCallExpression(decl.initializer)
+            const callSignature = !decl.type && !hasJsTypeAnnotation(decl) && decl.initializer && ts.isCallExpression(decl.initializer)
               ? lowerer.checker.getResolvedSignature(decl.initializer) : undefined;
             const callDeclaration = callSignature && lowerer.checker.signatureDeclaration(callSignature);
+            const callType = callDeclaration && isJsSourceFile(callDeclaration.getSourceFile())
+              ? lowerer.mapTypeOf(lowerer.typeOf(nameNode)) : null;
             const inferredJsCall = callDeclaration && isJsSourceFile(callDeclaration.getSourceFile()) &&
-              !lowerer.mapTypeOf(lowerer.typeOf(nameNode));
+              (!callType || callType.kind === "union" && lowerer.unions.get(callType.unionId)?.arms.some((arm) => arm.kind === "func"));
             if (!factoryType && !inferredJsCall && isJsSourceFile(sf) && !lowerer.mapTypeOf(lowerer.typeOf(nameNode))) continue;
             let type = handleT ?? factoryType ?? (inferredJsCall ? DYN : lowerer.irTypeOf(nameNode));
             if (isJsSourceFile(sf) && !decl.type && !hasJsTypeAnnotation(decl) && decl.initializer &&
@@ -1862,7 +1864,8 @@ export function collectGlobals(lowerer: Lowerer, sf: ts.SourceFile, topStmts: ts
             if (isJsSourceFile(sf) && !decl.type && !hasJsTypeAnnotation(decl) && type.kind === "array" &&
                 decl.initializer && ts.isCallExpression(decl.initializer)) type = DYN;
             if (!lowerer.dynamic && isJsSourceFile(sf) && !decl.type && !hasJsTypeAnnotation(decl) &&
-                decl.initializer && ts.isNewExpression(decl.initializer) && lowerer.isStdlibGlobal(decl.initializer.expression, "Array")) type = DYN;
+                decl.initializer && ts.isNewExpression(decl.initializer) && lowerer.isStdlibGlobal(decl.initializer.expression, "Array") &&
+                (type.kind !== "array" || type.elem.kind === "dyn")) type = DYN;
             // Unannotated JavaScript aliases retain an existing native
             // checked object instead of copying it into an inferred record.
             if (isJsSourceFile(sf) && !decl.type && !hasJsTypeAnnotation(decl) &&

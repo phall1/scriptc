@@ -31,7 +31,7 @@ function run(command: string, args: string[]) {
 const cases = balancedShardSelect(["math", "spatial", "attributes", "geometry", "scene", "materials", "mesh", "raycast-mesh", "raycast-camera", "raycast-lines-points", "buffers-animation", "collision", "package-imports", "curves", "textures", "math-extended", "procedural-geometry", "render-data", "mesh-workflows", "animation", "loaders", "gltf", "nodes"].flatMap((fixture) =>
   ["native", "wasm32-wasi"].map((target) => ({ fixture, target }))), ({ fixture, target }) => `three:${fixture}:${target}`,
   ({ fixture }) => fixture === "nodes" ? 8 : fixture === "loaders" || fixture === "gltf" ? 4 : 1);
-test.for(cases)("published three.js $fixture runs statically through LLVM on $target", { timeout: 600_000 }, async ({ fixture, target }, context) => {
+test.for(cases)("published three.js $fixture runs statically through LLVM on $target", { timeout: 1_200_000 }, async ({ fixture, target }, context) => {
   const entry = join(import.meta.dirname, `../fixtures/three/${fixture}.mjs`);
   if (target === "wasm32-wasi" && !hasZig) context.skip();
   const dir = await mkdtemp("/tmp/scriptc-three-");

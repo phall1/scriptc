@@ -1,7 +1,7 @@
 import { BUF_NUM_METHODS } from "./buffer-numeric-methods.js";
 import * as ts from "../../ts7/adapter.js";
 import { BYTES_ELEMENT_SIZE, BIGINT_T, BOOL, BYTES_U8, DYN, F64, type IrBytesElem, type IrBytesIntrinsicMethod, type IrExpr, type IrType, STRING, type SrcLoc, UNDEFINED_T, VOID, arrayOf, bytesOf, typeEquals } from "../../../ir/ir.js";
-import { locOf } from "../../program.js";
+import { isJsSourceFile, locOf } from "../../program.js";
 import type { Lowerer } from "../lowerer.js";
 import { dynUndefinedExpr, newFnCtx, own } from "../lowerer.js";
 import { buildBytesSortFn } from "../lower-array-sort.js";
@@ -308,6 +308,15 @@ export function lowerBytesMethodCall(lowerer: Lowerer, call: ts.CallExpression,
   if (!lowerer.isStdlibMember(access)) return null;
   const loc = locOf(call);
   const nArgs = call.arguments.length;
+  // Encoded stream callbacks can receive strings even when JavaScript's
+  // contextual inference still describes their parameter as a Buffer.
+  if (name === "toString" && nArgs <= 1 && isJsSourceFile(call.getSourceFile())) {
+    const lowered = lowerer.lowerExpr(access.expression);
+    const receiver = lowered.kind === "dynCheck" && lowered.value.type.kind === "dyn" ? lowered.value : lowered;
+    if (receiver.type.kind === "dyn") return { kind: "libCall", fn: "dyn.toString", args: [receiver,
+      call.arguments[0] ? lowerer.lowerExprExpecting(call.arguments[0], DYN) : dynUndefinedExpr(loc),
+      { kind: "strLit", value: access.getText(), type: STRING, loc }], type: STRING, loc };
+  }
   if (receiverIr.elem === "u8" && name === "toSorted") {
     return lowerBytesToSortedCall(lowerer, call, access, receiverIr);
   }

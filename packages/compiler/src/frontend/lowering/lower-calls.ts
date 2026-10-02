@@ -10566,6 +10566,18 @@ export function lowerFunction(lowerer: Lowerer, decl: ts.FunctionDeclaration): I
     // reserved %call slot — `colors.blue("x")` where blue also carries
     // `.bold` (the chalk shape).
     if (callee.type.kind === "record") callee = lowerer.hybridCallUnwrap(callee);
+    // Inferred JavaScript option records can retain checked callables in
+    // fields even when the checker only describes those members as any.
+    if (callee.type.kind === "dyn" && isJsSourceFile(call.getSourceFile())) {
+      const receiver = target && receiverLocal ? lowerer.coerceToExpected(target.obj, DYN) : undefined;
+      const spread = call.arguments.some(ts.isSpreadElement) ? lowerSpreadArgsCall(lowerer, call, callee, loc) : null;
+      if (spread && spread.kind !== "dynCall") lowerer.unsupported("SC1090", call, "checked record property call spread arguments");
+      const result: IrExpr = spread ? { ...spread, ...(receiver ? { receiver } : {}) } : {
+        kind: "dynCall", callee, ...(receiver ? { receiver } : {}), calleeName: access.getText(),
+        args: call.arguments.map((arg) => lowerer.lowerExprExpecting(arg, DYN)), type: DYN, loc,
+      };
+      return init ? { kind: "seqExpr", stmts: [init], result, type: result.type, loc } : result;
+    }
     if (callee.type.kind !== "func") lowerer.badType(access, lowerer.typeOf(access));
     const args = completeFuncValueArgs(lowerer, call, callee.type, locOf(call));
     const result: IrExpr = { kind: "callValue", callee, ...(target && receiverLocal ? { receiver: lowerer.coerceToExpected(target.obj, DYN) } : {}), args, type: callee.type.ret, loc };

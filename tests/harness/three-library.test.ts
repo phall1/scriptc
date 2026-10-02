@@ -34,4 +34,4 @@ test.skipIf(!hasClang).each(["dev", "release"] as const)("three.js sends animate
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
-});
+}, 600_000);

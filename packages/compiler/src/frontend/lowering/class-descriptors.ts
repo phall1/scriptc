@@ -15,13 +15,20 @@ function bagOnlyProperty(lowerer: Lowerer, owner: ClassInfo, name: string): bool
     owner.subclasses.every((child) => bagOnlyProperty(lowerer, child, name));
 }
 
+function runtimeRooted(info: ClassInfo): boolean {
+  for (let current: ClassInfo | null = info; current; current = current.base) {
+    if (current.def.runtime || current.builtinError || current.builtinEmitter || current.builtinStream) return true;
+  }
+  return false;
+}
+
 /** A named bag property needs no snapshot of unrelated native fields,
  * which may contain recursive or otherwise opaque values. */
 export function lowerClassDescriptorRead(lowerer: Lowerer, call: ts.CallExpression, target: IrExpr): IrExpr | null {
   if (!isDynTypedRefType(target.type)) return null;
   const info = lowerer.classes.get(target.type.className);
   const key = call.arguments[1]!;
-  if (!info || info.def.runtime || info.builtinError || info.builtinEmitter || info.builtinStream ||
+  if (!info || runtimeRooted(info) ||
       !ts.isStringLiteral(key) || !bagOnlyProperty(lowerer, info, key.text)) return null;
   const loc = locOf(call);
   const bag: IrExpr = { kind: "call", callee: classPropertiesHelper(lowerer, loc).name,
@@ -34,7 +41,7 @@ export function lowerClassDescriptorRead(lowerer: Lowerer, call: ts.CallExpressi
 export function lowerClassDataDescriptor(lowerer: Lowerer, call: ts.CallExpression, member: string, target: IrExpr): IrExpr | null {
   if (!isDynTypedRefType(target.type)) return null;
   const info = lowerer.classes.get(target.type.className);
-  if (!info || info.def.runtime || info.builtinError || info.builtinEmitter || info.builtinStream) return null;
+  if (!info || runtimeRooted(info)) return null;
   const safeName = (owner: ClassInfo, name: string): boolean => bagOnlyProperty(lowerer, owner, name);
   const descriptor = (node: ts.Expression): boolean => ts.isObjectLiteralExpression(node) &&
     node.properties.every((p) => (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p) || ts.isMethodDeclaration(p)) &&
