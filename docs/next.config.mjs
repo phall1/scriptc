@@ -1,29 +1,22 @@
-import createMDX from "@next/mdx";
-import { createRequire } from "node:module";
+import { createGeistdocs } from "@vercel/geistdocs/next";
 
-// Resolve the plugin to an absolute path (still a string, so the config
-// stays serializable for Turbopack). A bare "remark-gfm" is require()d
-// from the MDX loader's own package context, which under pnpm's strict
-// module isolation cannot see this app's dependencies — production
-// builds resolved it, the Turbopack dev server did not.
-const require = createRequire(import.meta.url);
-
-const withMDX = createMDX({
-  options: {
-    // GFM is what gives .mdx pages autolinks and strikethrough. Tables are
-    // authored as literal HTML per AGENTS.md, but the plugin stays so a
-    // stray pipe table degrades gracefully instead of rendering as a
-    // paragraph of pipes.
-    remarkPlugins: [[require.resolve("remark-gfm")]],
-  },
-});
+const withGeistdocs = createGeistdocs();
+const legacySlugs = ["quickstart", "coverage", "dependencies", "ffi", "native-objects", "wasm", "platforms", "cli", "how-it-works", "limitations"];
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  pageExtensions: ["ts", "tsx", "md", "mdx"],
-  // CI-style builds set NEXT_DIST_DIR so `pnpm check` never shares .next
-  // with a running dev server (a shared dist dir corrupts the dev cache).
+  agentRules: false,
+  allowedDevOrigins: ["127.0.0.1"],
   distDir: process.env.NEXT_DIST_DIR || ".next",
+  skipProxyUrlNormalize: true,
+  async redirects() {
+    return [
+      { source: "/introduction", destination: "/docs", permanent: true },
+      { source: "/docs/introduction", destination: "/docs", permanent: true },
+      ...legacySlugs.map((slug) => ({ source: `/${slug}`, destination: `/docs/${slug}`, permanent: true })),
+    ];
+  },
+  outputFileTracingIncludes: { "/og/[...slug]": ["./public/*.ttf"], "/og": ["./public/*.ttf"] },
 };
 
-export default withMDX(nextConfig);
+export default withGeistdocs(nextConfig);

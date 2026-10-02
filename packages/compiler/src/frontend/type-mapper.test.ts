@@ -1,31 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { F64, NULL_T, STRING, UNDEFINED_T, VOID, mapOf, setOf, type IrType, type IrUnionDef } from "../ir/ir.js";
 import { formatIrType, genResultRecord, ShapeRegistry, UnionRegistry, withUndefinedArm } from "./type-mapper.js";
-import type { Type } from "./ts7/adapter.js";
-
-describe("union arm lookup", () => {
-  test("indexes large unions while preserving exact equality for colliding function keys", () => {
-    const unions = new UnionRegistry();
-    const ordinary: IrType = { kind: "func", params: [], ret: VOID };
-    const explicit: IrType = { kind: "func", params: [], ret: VOID, argumentsAll: true };
-    const arms: IrType[] = [ordinary, explicit, ...Array.from({ length: 12 }, (_, i): IrType => ({ kind: "record", shapeId: `r${i}` }))];
-    const union = unions.intern(arms);
-    for (let i = 0; i < arms.length; i++) expect(unions.armTag(union, arms[i]!)).toBe(i);
-    expect(unions.armTag(union, { kind: "func", params: [], ret: VOID, restAbi: "typed" })).toBe(-1);
-    expect(unions.armTag(union, STRING)).toBe(-1);
-    expect(unions.armTag("missing", STRING)).toBe(-1);
-  });
-
-  test("sees finalized recursive arms after a missing lookup", () => {
-    const unions = new UnionRegistry();
-    const recursive = {} as Type;
-    const union = unions.recursiveRef(recursive);
-    expect(unions.armTag(union, STRING)).toBe(-1);
-    unions.finalizeRecursive(recursive, [F64, STRING, ...Array.from({ length: 10 }, (_, i): IrType => ({ kind: "record", shapeId: `r${i}` }))]);
-    expect(unions.armTag(union, STRING)).toBe(1);
-    expect(unions.armTag(union, { kind: "record", shapeId: "r9" })).toBe(11);
-  });
-});
 
 describe("nullable collection union builders", () => {
   test.each([mapOf(STRING, F64), setOf(STRING)])("optional %j fields and generator results share the same union", (type) => {

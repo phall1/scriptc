@@ -1,0 +1,132 @@
+---
+title: "How It Works"
+---
+
+scriptc uses TypeScript's type checker, a typed intermediate representation, and LLVM to compile programs. Executable builds link the generated code with a native runtime.
+
+## Compiler pipeline
+
+```text
+TypeScript / JavaScript
+         |
+         v
+TypeScript parser and type checker
+         |
+         v
+Lowering and typed IR ----> serialized IR (--emit=ir)
+         |
+         v
+LLVM IR -----------------> LLVM source (--emit=llvm)
+         |
+         v
+LLVM helper -------------> assembly / object (--emit=asm|obj)
+         |
+         v
+Runtime pack and linker -> executable
+```
+
+1. **Frontend:** TypeScript parses and checks the program against `es2025`, scriptc's ambient declarations, and available project declarations. `tsconfig.json` controls checker strictness. The compiler uses the checked types and narrowing information to lower supported operations; unsupported operations produce diagnostics.
+2. **Typed IR:** A validated, serializable intermediate representation connects the frontend and backend. Types are concrete: generic functions are specialized, unions use tags, and closures have explicit captures. `--emit=ir` writes this representation as JSON.
+3. **LLVM backend:** `--emit=llvm` writes textual LLVM IR. The matching LLVM 22 helper generates assembly or objects on supported macOS, Linux, and Windows hosts, including output targeting WASI. Executable and library builds use this backend.
+4. **Linking:** Runtime packs contain precompiled C objects and vendor archives. A hashed manifest selects artifacts for the program's features, optimization mode, and library state model. The target linker and SDK or sysroot produce the executable. Sanitizer builds use an instrumented C runtime.
+
+## Inspect compiler output
+
+The following examples use this program:
+
+```ts:fib.ts
+function fib(n: number): number {
+  return n < 2 ? n : fib(n - 1) + fib(n - 2);
+}
+console.log(fib(30));
+```
+
+Select an output stage with `--emit`:
+
+```console
+$ scriptc build fib.ts --emit=ir >/dev/null
+$ ls .scriptc/
+fib.ir.json
+$ scriptc build fib.ts --emit=llvm >/dev/null
+$ ls .scriptc/
+fib.ir.json
+fib.ll
+$ scriptc build fib.ts --emit=asm >/dev/null
+$ ls .scriptc/
+fib.ir.json
+fib.ll
+fib.s
+$ scriptc build fib.ts --emit=obj >/dev/null
+$ ls .scriptc/
+fib.ir.json
+fib.ll
+fib.o
+fib.s
+```
+
+Without `-o`, artifacts are written to `.scriptc/` next to the input. Different output kinds accumulate in that directory; rebuilding a kind updates its file.
+
+### External linking
+
+Program objects define `main` and leave selected `scr_*` runtime functions undefined. A strong reference to `scr_runtime_abi_v6` checks runtime compatibility at link time.
+
+`--print=native-link-info` emits the program object and a JSON recipe containing the runtime pack and link order for external builds. This object ABI is experimental and requires an exact runtime version. See [Native Program Objects](/docs/native-objects) for examples.
+
+## Native runtime
+
+- **Memory:** Values use reference counting. Acyclic values are freed when their last reference is released, and a cycle collector runs at defined collection points. Some cycles involving opaque native values or the embedded engine can remain allocated.
+- **Concurrency:** `async`/`await` uses stackful fibers. The native event loop schedules microtasks, timers, and I/O, using kqueue on macOS and epoll on Linux. Static tasks and embedded-engine jobs use separate queues; their interleaving can differ from Node.js.
+- **Networking:** Supported `net`, `http`, `https`, `tls`, `dgram`, and `dns` APIs use native implementations. TLS uses vendored mbedTLS.
+- **Numbers:** Values use JavaScript's double-precision representation. Number-to-string formatting uses shortest-roundtrip output and is tested against Node.js.
+- **Regular expressions:** The runtime uses QuickJS's regular-expression bytecode interpreter, linked into programs that use regex operations.
+
+See [Limitations](/docs/limitations) for runtime differences and the [Node.js compatibility reference](/compatibility) for API support.
+
+## Testing
+
+The differential corpus runs programs under Node.js and as compiled executables, comparing stdout, stderr, and exit codes. Server tests use client drivers against both implementations. Number formatting also has fuzz-test coverage against Node.js's `String(x)`.
+
+The sanitizer lane runs the corpus with AddressSanitizer and a reference-count audit at exit to detect leaks and memory errors. Supported executable builds can enable these checks with `--sanitize`.
+
+Test coverage provides evidence for the cases exercised. It does not establish complete compatibility with Node.js.
+
+## Embedded JavaScript engine
+
+`--dynamic` includes quickjs-ng for npm dependencies and supported `any`-typed code. The engine has its own heap and microtask queue. Conversions between static and dynamic values copy data, and conversions to static types validate it at runtime. A mismatched value raises a catchable `TypeError`.
+
+See [npm Dependencies](/docs/dependencies) for package execution, value conversion, and experimental static package options.
+
+## Repository layout
+
+<table>
+  <thead>
+    <tr>
+      <th>Path</th>
+      <th>Purpose</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>packages/compiler</code></td>
+      <td>Frontend, typed IR, validation, serialization, LLVM backend, native-helper integration, and coverage analysis.</td>
+    </tr>
+    <tr>
+      <td><code>native/llvm-codegen</code></td>
+      <td>LLVM 22 helper for verification, optimization, assembly, and object output.</td>
+    </tr>
+    <tr>
+      <td><code>packages/runtime</code></td>
+      <td>C runtime, reference counting and cycle collection, fibers, event loop, networking, and engine integration.</td>
+    </tr>
+    <tr>
+      <td><code>packages/runtime-*</code></td>
+      <td>Runtime object packs and manifests for individual targets.</td>
+    </tr>
+    <tr>
+      <td><code>packages/cli</code></td>
+      <td>CLI commands, including <code>build</code>, <code>run</code>, and <code>coverage</code>.</td>
+    </tr>
+  </tbody>
+</table>
+
+See the [repository README](https://github.com/vercel-labs/scriptc) for the development workflow.

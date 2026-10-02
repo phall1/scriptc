@@ -162,7 +162,7 @@ pnpm --filter @internal/compatibility check:upstream  # networked pinned-input c
 
 ## Documentation site
 
-The docs site is a standalone pnpm workspace under `docs/`. It uses Next.js App Router + MDX, with one topic per `docs/src/app/<topic>/page.mdx`.
+The docs site is a standalone pnpm workspace under `docs/`. It uses Next.js App Router and the public `@vercel/geistdocs` package with Labs branding. Content lives in `docs/content/docs`; local adapters under `docs/src` configure the package's layout, search, Markdown routes, and proxy. Keep shared runtime behavior in the package.
 
 ### Naming and content
 
@@ -182,10 +182,10 @@ The docs site is a standalone pnpm workspace under `docs/`. It uses Next.js App 
 
 ### Adding a docs page
 
-1. Add `docs/src/app/<topic>/page.mdx`.
-2. Add `docs/src/app/<topic>/layout.tsx` exporting `pageMetadata("<topic>")`.
-3. Add the slug to `PAGE_TITLES` in `docs/src/lib/page-titles.ts`.
-4. Add navigation in `docs/src/lib/docs-navigation.ts`; it also drives mobile navigation and the sitemap.
+1. Add `docs/content/docs/<topic>.mdx` with a `title` in YAML frontmatter. Geistdocs renders the page title, so do not duplicate it as a Markdown H1. `index.mdx` is served at `/docs`; other pages are served at `/docs/<topic>`.
+2. Add the topic to `docs/content/docs/meta.json` to set sidebar order and groups.
+3. Add the slug to `PAGE_TITLES` in `docs/src/lib/page-titles.ts` for the existing social image routes.
+4. Keep internal links on the canonical `/docs` paths. Redirect retired public URLs in `docs/next.config.mjs`.
 
 ### Docs development and verification
 
@@ -196,7 +196,7 @@ cd docs
 NEXT_DIST_DIR=.next-check pnpm check
 ```
 
-`pnpm check` runs the compatibility drift check, TypeScript check, and production build. It is required before landing docs or compatibility output changes.
+`pnpm check` generates the content source and route types, then runs the compatibility drift check, TypeScript check, production build, and HTTP route tests. It is required before landing docs or compatibility output changes. The route tests start and stop their own production server on an available local port and use `NEXT_DIST_DIR` when set. The site preserves the repository's `language:filename` fences through `docs/src/lib/remark-docs.ts`.
 
 ## Releases
 

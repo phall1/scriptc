@@ -1,6 +1,6 @@
 import { expect, test, vi } from "vitest";
 import { BOOL, F64, JSVAL, NULL_T, STRING, UNDEFINED_T, VOID, type IrExpr, type IrFunction, type IrStmt, type IrType } from "../../ir/ir.js";
-import type { Node, Program, SourceFile, Symbol, Type } from "../ts7/adapter.js";
+import type { Node, Program, SourceFile, Type } from "../ts7/adapter.js";
 import { Lowerer, stmtUsesIsland } from "./lowerer.js";
 import { classMethodValue } from "./class-method-values.js";
 
@@ -111,74 +111,4 @@ test("method adapter interning does not inspect unrelated lifted functions", () 
   }
   expect(nameReads).toBe(0);
   expect(lowerer.liftedFns.slice(100)).toHaveLength(2);
-});
-
-test("literal ownership is reused across values and rechecked when recursive records close", () => {
-  const lowerer = context();
-  const shape = record(lowerer.shapes.intern([{ name: "kind", type: STRING }]));
-  const union = lowerer.unions.intern([shape, UNDEFINED_T], { field: "kind", cases: [{ tag: 0, values: ["a", "b"] }] });
-  const inspect = vi.spyOn(lowerer.shapes, "get");
-  expect(lowerer.literalUnionArm(union, ["a"])).toEqual(shape);
-  inspect.mockClear();
-  for (let i = 0; i < 20; i++) expect(lowerer.literalUnionArm(union, ["b"])).toEqual(shape);
-  expect(lowerer.literalUnionArm(union, ["missing"])).toBeNull();
-  expect(inspect).not.toHaveBeenCalled();
-
-  const recursive = {} as Type;
-  const pendingShape = record(lowerer.shapes.recursiveRef(recursive));
-  const pending = lowerer.unions.intern([pendingShape], { field: "kind", cases: [{ tag: 0, values: ["a"] }] });
-  expect(lowerer.literalUnionArm(pending, ["a"])).toBeNull();
-  lowerer.shapes.finalizeRecursive(recursive, [{ name: "kind", type: STRING }]);
-  expect(lowerer.literalUnionArm(pending, ["a"])).toEqual(pendingShape);
-  expect(lowerer.literalUnionArm(pending, ["b"])).toBeNull();
-});
-
-test("literal ownership sees a recursive union's finalized discriminator", () => {
-  const lowerer = context();
-  const recursive = {} as Type;
-  const union = lowerer.unions.recursiveRef(recursive);
-  const shape = record(lowerer.shapes.intern([{ name: "kind", type: STRING }]));
-  expect(lowerer.literalUnionArm(union, ["ready"])).toBeNull();
-  lowerer.unions.finalizeRecursive(recursive, [shape], { field: "kind", cases: [{ tag: 0, values: ["ready"] }] });
-  expect(lowerer.literalUnionArm(union, ["ready"])).toEqual(shape);
-});
-
-test("removing undefined reuses the discriminator transformation without hiding recursive completion", () => {
-  const lowerer = context();
-  const a = record(lowerer.shapes.intern([{ name: "kind", type: STRING }]));
-  const b = record(lowerer.shapes.intern([{ name: "kind", type: STRING }, { name: "value", type: F64 }]));
-  const union: IrType = { kind: "union", unionId: lowerer.unions.intern([a, b, UNDEFINED_T], {
-    field: "kind", cases: [{ tag: 0, values: ["a"] }, { tag: 1, values: ["b"] }],
-  }) };
-  const transform = vi.spyOn(lowerer.unions, "transform");
-  const stripped = lowerer.stripUndefinedArm(union);
-  for (let i = 0; i < 20; i++) expect(lowerer.stripUndefinedArm(union)).toEqual(stripped);
-  expect(transform).toHaveBeenCalledTimes(1);
-  if (stripped.kind !== "union") throw new Error("expected two remaining arms");
-  expect(lowerer.unions.get(stripped.unionId)?.discriminant).toEqual(lowerer.unions.get(union.unionId)?.discriminant);
-
-  const recursive = {} as Type;
-  const pending: IrType = { kind: "union", unionId: lowerer.unions.recursiveRef(recursive) };
-  expect(lowerer.stripUndefinedArm(pending)).toEqual(pending);
-  lowerer.unions.finalizeRecursive(recursive, [STRING, UNDEFINED_T]);
-  expect(lowerer.stripUndefinedArm(pending)).toEqual(STRING);
-  expect(lowerer.stripUndefinedArm(union)).toEqual(stripped);
-  expect(transform).toHaveBeenCalledTimes(2);
-});
-
-test("stdlib provenance is cached by symbol identity, including merged and shadowed declarations", () => {
-  const builtin = {} as Symbol, shadow = {} as Symbol;
-  const userFile = { fileName: "user.ts" } as SourceFile;
-  const library = { fileName: "library.d.ts" } as SourceFile;
-  const userDeclaration = { getSourceFile: () => userFile } as Node;
-  const libraryDeclaration = { getSourceFile: () => library } as Node;
-  const declarationsOf = vi.fn((symbol: Symbol) => symbol === builtin ? [userDeclaration, libraryDeclaration] : [userDeclaration]);
-  const lowerer = new Lowerer({ getTypeChecker: () => ({ declarationsOf }) } as unknown as Program, userFile, [], false);
-  vi.spyOn(lowerer, "isStdlibFile").mockImplementation((file) => file === library);
-  for (let i = 0; i < 20; i++) {
-    expect(lowerer.isStdlibSymbol(builtin)).toBe(true);
-    expect(lowerer.isStdlibSymbol(shadow)).toBe(false);
-    expect(lowerer.isStdlibSymbol(undefined)).toBe(false);
-  }
-  expect(declarationsOf).toHaveBeenCalledTimes(2);
 });

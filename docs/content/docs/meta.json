@@ -1,0 +1,19 @@
+{
+  "title": "Documentation",
+  "pages": [
+    "---Get Started---",
+    "index",
+    "quickstart",
+    "---Guides---",
+    "coverage",
+    "dependencies",
+    "ffi",
+    "native-objects",
+    "wasm",
+    "platforms",
+    "---Reference---",
+    "cli",
+    "how-it-works",
+    "limitations"
+  ]
+}

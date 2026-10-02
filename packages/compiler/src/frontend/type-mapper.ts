@@ -367,7 +367,6 @@ export class UnionRegistry {
   revision = 0;
   private readonly byKey = new Map<string, string>();
   private readonly byId = new Map<string, IrUnionDef>();
-  private readonly armTags = new Map<string, Map<string, number[]>>();
   /** All interned unions in first-seen (`u0`, `u1`, ...) order. */
   readonly unions: IrUnionDef[] = [];
   /** ts.Types currently being mapped — a back-reference to one is the
@@ -422,7 +421,6 @@ export class UnionRegistry {
       def.arms.push(...arms);
       if (discriminant) def.discriminant = discriminant;
       this.pendingRec.delete(id);
-      this.armTags.delete(id);
       this.revision++;
       const key = JSON.stringify([arms.map(typeKey), discriminant]);
       if (!this.byKey.has(key)) this.byKey.set(key, id);
@@ -451,26 +449,6 @@ export class UnionRegistry {
 
   get(unionId: string): IrUnionDef | undefined {
     return this.byId.get(unionId);
-  }
-
-  /** Index large arm lists once. Exact equality still resolves type-key
-   * collisions, including optional function ABI flags. */
-  armTag(unionId: string, arm: IrType): number {
-    const def = this.byId.get(unionId);
-    if (!def) return -1;
-    if (def.arms.length < 8) return def.arms.findIndex((candidate) => typeEquals(candidate, arm));
-    let tags = this.armTags.get(unionId);
-    if (!tags) {
-      tags = new Map<string, number[]>();
-      def.arms.forEach((candidate, tag) => {
-        const key = typeKey(candidate);
-        const previous = tags!.get(key);
-        if (previous) previous.push(tag);
-        else tags!.set(key, [tag]);
-      });
-      this.armTags.set(unionId, tags);
-    }
-    return tags.get(typeKey(arm))?.find((tag) => typeEquals(def.arms[tag]!, arm)) ?? -1;
   }
 }
 
