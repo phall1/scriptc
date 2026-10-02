@@ -12,7 +12,7 @@ export { newFnCtx, type FnCtx } from "./function-context.js";
 import type { FrontendServices } from "../services.js";
 import { InternalCompilerError } from "../../errors.js";
 import { defaultAfterUndefined, lowerStaticallyUndefinedArgument } from "./optional-arguments.js";
-import { ClassDynamicDispatch } from "./class-dynamic-dispatch.js";
+import { ClassDynamicDispatch, trackClassFieldCreation } from "./class-dynamic-dispatch.js";
 import { DeferredModuleInitializers } from "./deferred-module-initializers.js";
 import { finalizeClassMethodValues } from "./class-method-values.js";
 import type { ClassSymbolKey } from "./symbol-fields.js";
@@ -1704,6 +1704,9 @@ export class Lowerer {
   /** Inferred JS methods participating in an override chain keep a vtable
    * ABI instead of call-site specialization. Filled before class collection. */
   readonly virtualJsMethods = new Set<ts.MethodDeclaration>();
+  /** Descendant writes must widen the original JS field before collecting
+   * any class layout; base and derived instances share its storage ABI. */
+  readonly inheritedJsFieldWrites = new Map<ts.ClassDeclaration | ts.ClassExpression, Map<string, ts.Expression[]>>();
   /** Largest fixed argument list below a JS method, discovered before any
    * base vtable signature is collected. Unused checked slots carry undefined. */
   readonly virtualJsMethodArity = new Map<ts.MethodDeclaration, number>();
@@ -3841,6 +3844,7 @@ export class Lowerer {
    * and the retained reachability worklist. */
   finishModule(functions: IrFunction[]): LowerResult {
     finalizeClassMethodValues(this, functions);
+    trackClassFieldCreation(this, functions);
 
     // Globals typed by a class that never REGISTERED (a JS class whose
     // collection fenced — Symbol-keyed fields, an unsupported base): the

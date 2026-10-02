@@ -20,3 +20,5 @@ console.log('uv', uv.x.toFixed(3), uv.y.toFixed(3));
 const clone = texture.clone();
 console.log('clone', clone !== texture, clone.source === texture.source, clone.image.data === texture.image.data);
 console.log('3d', new Data3DTexture(new Uint8Array(8), 2, 2, 2).image.depth, new DataArrayTexture(new Uint8Array(8), 2, 2, 2).image.depth, new DepthTexture(2, 3).image.height);
+const depth = new DepthTexture();
+console.log('default depth', depth.image.width, depth.image.height, depth.image.depth);

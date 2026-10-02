@@ -1156,6 +1156,10 @@ export interface IrClassDef {
   prototypeDataHelper?: string;
   /** Native instance to its actual prototype, including factory captures and subclasses. */
   instancePrototypeHelper?: string;
+  /** Public JavaScript fields record their creation in the shared property
+   * bag. Its descriptors preserve presence and insertion order independently
+   * of native layout order; field values remain in their native slots. */
+  tracksOwnFields?: boolean;
   /** Stable module symbol identities for public instance layout fields. */
   symbolFields?: { field: string; globalId: string }[];
   /** RUNTIME-PROVIDED class (the builtin Error hierarchy): the struct, RC

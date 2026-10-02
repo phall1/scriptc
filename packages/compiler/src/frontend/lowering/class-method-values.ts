@@ -50,7 +50,6 @@ export function lowerClassMethodValue(lowerer: Lowerer, expr: ts.PropertyAccessE
   const name = `%method.select:${info.def.name}.${method}:${checked ? "checked" : "typed"}`;
   const receiverType: IrType = { kind: "object", className: info.def.name };
   if (!lowerer.classMethodValueHelpers.has(name)) {
-    const receiver = varRef("this.0", receiverType, loc);
     const body: IrStmt[] = [];
     body.push({ kind: "return", value, loc });
     const fn: IrFunction = { name, params: [{ localId: "this.0", name: "this", type: receiverType }], returnType: value.type,

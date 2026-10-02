@@ -22,11 +22,16 @@ console.log(again === proxy, again.label, again(2, 5));
 class FunctionState {
   constructor() { this.options = { value: 1 }; }
   configure(options) { this.options.value = options.value; return this; }
+  once(value = null) { this.options.value = value; return this; }
+  async onceAsync(value = null) { this.options.value = value; return this; }
 }
 const state = new FunctionState();
 const configured = new Proxy(target, { get(fn, key, receiver) { return Reflect.get(state, key, receiver); } });
 const preserved = checkedIdentity(configured);
 console.log(preserved.configure({ value: 9 }) === configured, preserved.options.value);
+console.log(preserved.once() === configured, preserved.options.value);
+console.log(preserved.once(7) === configured, state.options.value);
+console.log(await preserved.onceAsync(8) === configured, state.options.value);
 const other = new Proxy(target, { apply(fn, receiver, values) { return receiver.base + values[0]; } });
 const owner = { base: 10, other };
 console.log(owner.other(5));

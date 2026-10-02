@@ -588,6 +588,20 @@ export function lowerObjectLiteral(lowerer: Lowerer, expr: ts.ObjectLiteralExpre
       tryLowerExpression(lowerer, prop.initializer)?.type.kind === "dyn")) {
     return lowerDynObjectLiteral(lowerer, expr);
   }
+  // A JS constructor parameter can hold omitted values even when its
+  // documentation names a number. Inferred literal fields must preserve
+  // the represented binding rather than checking it back into that type.
+  if (!expected && isJsSourceFile(expr.getSourceFile()) && expr.properties.some((prop) => {
+    let value = ts.isPropertyAssignment(prop) ? prop.initializer
+      : ts.isShorthandPropertyAssignment(prop) ? prop.name : null;
+    while (value && ts.isParenthesizedExpression(value)) value = value.expression;
+    if (!value || !ts.isIdentifier(value)) return false;
+    const stored = lowerer.peekLocal(value)?.type ?? lowerer.globalOf(value)?.type;
+    const inferred = lowerer.mapTypeOf(lowerer.typeOf(value));
+    return stored?.kind === "dyn" && inferred !== null && inferred.kind !== "dyn" && lowerer.dynConvertible(inferred);
+  })) {
+    return lowerDynObjectLiteral(lowerer, expr);
+  }
   // JavaScript object methods/accessors carry a live receiver. Keep the
   // literal in checked native storage instead of erasing its prototype ABI.
   if (isJsSourceFile(expr.getSourceFile()) && (expr.properties.length === 0 || expr.properties.some((prop) =>

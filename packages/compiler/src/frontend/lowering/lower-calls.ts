@@ -2472,8 +2472,10 @@ function storedImplicitArgumentType(lowerer: Lowerer, arg: ts.Expression): IrTyp
     const represented = tryLowerExpression(lowerer, arg);
     if (represented) return represented.type;
   }
-  if (ts.isCallExpression(arg) && isJsSourceFile(arg.getSourceFile())) {
-    // Builtin and member calls can also return checked storage wider than
+  if (isJsSourceFile(arg.getSourceFile()) && (ts.isCallExpression(arg) || ts.isConditionalExpression(arg) ||
+      ts.isBinaryExpression(arg) && (arg.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
+        arg.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken || arg.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken))) {
+    // Calls and fallback expressions can retain checked storage wider than
     // the checker's inference (for example Object.assign on a JS instance).
     const represented = tryLowerExpression(lowerer, arg);
     if (represented?.type.kind === "dyn" || represented?.type.kind === "func") return represented.type;
@@ -6422,7 +6424,8 @@ function lowerOptionalStringNumber(
     if (recv.type.kind !== "dyn") return null;
     if (access.name.text === "normalize" && call.arguments.length <= 1 && !call.arguments.some(ts.isSpreadElement)) {
       const loc = locOf(call);
-      const name = "%dyn.string.normalize";
+      const hasArgument = call.arguments.length === 1;
+      const name = `%dyn.string.normalize:${hasArgument ? 1 : 0}`;
       if (!lowerer.liftedFns.some((fn) => fn.name === name)) {
         const value = varRef("receiver", DYN, loc);
         const argument = varRef("form", DYN, loc);
@@ -6434,7 +6437,7 @@ function lowerOptionalStringNumber(
           locals: [{ id: "receiver", name: "receiver", type: DYN, mutable: false }, { id: "form", name: "form", type: DYN, mutable: false }], returnType: DYN, loc,
           body: [{ kind: "if", cond: { kind: "dynTest", value, test: "string", type: BOOL, loc }, then: [
             { kind: "return", value: { kind: "dynFrom", value: result, type: DYN, loc }, loc },
-          ], else_: null, loc }, { kind: "return", value: { kind: "dynInvoke", recv: value, method: "normalize", calleeName: access.getText(), args: [argument], type: DYN, loc }, loc }] });
+          ], else_: null, loc }, { kind: "return", value: { kind: "dynInvoke", recv: value, method: "normalize", calleeName: access.getText(), args: hasArgument ? [argument] : [], type: DYN, loc }, loc }] });
       }
       return { kind: "call", callee: name, args: [recv, call.arguments[0] ? lowerer.lowerExprExpecting(call.arguments[0], DYN) : dynUndefinedExpr(loc)], type: DYN, loc };
     }
@@ -7769,6 +7772,13 @@ function loweredTemplateStrings(
     const signature = lowerer.lambdaSignature(node);
     const { shapes } = signature;
     let { funcType } = signature;
+    // Reflected JS methods receive the caller's actual `this`, which may
+    // be a Proxy or a descriptor-created object rather than the class.
+    // Fluent methods must return that receiver without a class cast.
+    if (ts.isMethodDeclaration(node) && isJsSourceFile(node.getSourceFile()) &&
+        !node.type && !node.asteriskToken && !hasExplicitJsDocReturn(node) && returnsOnlyThis(node)) {
+      funcType = { ...funcType, ret: funcType.ret.kind === "promise" ? { ...funcType.ret, inner: DYN } : DYN };
+    }
     // A lambda IS a value: the completed-ABI rule applies at birth. The
     // contextual (target) type decides — `(x?: number) => void` may flow
     // into a slot annotated `(x: number | undefined) => void` (same ABI
@@ -9686,7 +9696,7 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
       if (isJsSourceFile(call.getSourceFile()) && call.arguments.length > 0 && !call.arguments.some(ts.isSpreadElement)) {
         const target = tryLowerExpression(lowerer, call.arguments[0]!);
         if (target && ((target.type.kind === "func" && lowerer.dynConvertible(target.type)) ||
-            (target.type.kind === "object" && lowerer.errorHierarchyClassOf(target.type.className)))) {
+            (target.type.kind === "object" && lowerer.dynConvertible(target.type)))) {
           const loc = locOf(call);
           return { kind: "libCall", fn: "dyn.assignAll", args: [lowerer.coerceToExpected(target, DYN),
             { kind: "dynArrLit", elems: call.arguments.slice(1).map((arg) => lowerer.lowerExprExpecting(arg, DYN)), type: DYN, loc },

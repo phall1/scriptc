@@ -156,6 +156,25 @@ export function streamTypedRefCommitAdapter(host: LlvmEmitterContext,
         `define internal void @${commit}(ptr %target, ptr %d) ${FN_ATTRS} { ; commit unknown class ${typeKey(t)}`,
         `entry:`,
       ];
+      if (meta.hierarchy && meta.children.length) {
+        lines.push(
+          `  %derived_vt_slot = getelementptr inbounds %${classStructSym(t.className)}, ptr %target, i64 0, i32 1`,
+          `  %derived_vt = load ptr, ptr %derived_vt_slot`,
+          `  %derived_pre_slot = getelementptr inbounds %ScrVt, ptr %derived_vt, i64 0, i32 0`,
+          `  %derived_pre = load ${host.sizeType}, ptr %derived_pre_slot`,
+        );
+        const descendants = (current: typeof meta): (typeof meta)[] => current.children.flatMap((child) => [child, ...descendants(child)]);
+        descendants(meta).reverse().forEach((child, index) => {
+          const adapter = host.liveDynRefAdapter({ kind: "object", className: child.def.name });
+          lines.push(
+            `  %derived${index} = icmp eq ${host.sizeType} %derived_pre, ${child.pre}`,
+            `  br i1 %derived${index}, label %derived${index}_commit, label %derived${index}_next`,
+            `derived${index}_commit:`,
+            `  call void ${adapter.commit}(ptr %target, ptr %d)`,
+            `  ret void`, `derived${index}_next:`,
+          );
+        });
+      }
       const symbols = new Map((meta.def.symbolFields ?? []).map((symbol) => [symbol.field, symbol.globalId]));
       const fields = meta.def.fields.filter((field) => (isClassOwnEnumerableFieldName(field.name) || symbols.has(field.name)) &&
         !(meta.root.def.name === "%Error" && (field.name === "message" || field.name === "name")));
@@ -202,6 +221,11 @@ export function streamTypedRefCommitAdapter(host: LlvmEmitterContext,
             `  call void @scr_dyn_release_v(ptr %f${index}_key)`,
           );
         } else lines.push(`  %${raw} = call ptr @scr_dyn_obj_get(ptr %d, ptr ${host.cstr(field.name)}, ${host.sizeType} ${Buffer.byteLength(field.name, "utf8")})`);
+        if (meta.def.tracksOwnFields && !symbolGlobal) lines.push(
+          `  %f${index}_present = icmp ne ptr %${raw}, null`,
+          `  br i1 %f${index}_present, label %f${index}_read, label %${after}`,
+          `f${index}_read:`,
+        );
         lines.push(
           `  %${missing} = icmp eq ptr %${raw}, null`,
           `  %${undef} = call ptr @scr_dyn_undefined()`,
@@ -234,6 +258,10 @@ export function streamTypedRefCommitAdapter(host: LlvmEmitterContext,
         host.declare(`declare ptr @scr_str_new(ptr, ${host.sizeType})`);
         host.declare(`declare void @scr_str_release(ptr)`);
         host.declare(`declare void @scr_dyn_key_delete(ptr, ptr, i1 zeroext)`);
+        if (meta.def.tracksOwnFields) {
+          host.declare(`declare ptr @scr_dyn_retain_v(ptr)`);
+          host.declare(`declare void @scr_dyn_obj_set(ptr, ptr, ${host.sizeType}, ptr)`);
+        }
         lines.push(
           `  %bag = call ptr @scr_dyn_new_obj()`,
           `  %bag_copy = call ptr @scr_dyn_copy_property_descriptors(ptr %bag, ptr %d)`,
@@ -254,11 +282,23 @@ export function streamTypedRefCommitAdapter(host: LlvmEmitterContext,
             `  call void @scr_dyn_release_v(ptr %with_prototype)`,
           );
         }
-        fields.filter((field) => !symbols.has(field.name)).forEach((field, index) => lines.push(
-          `  %bag_key${index} = call ptr @scr_str_new(ptr ${host.cstr(field.name)}, ${host.sizeType} ${Buffer.byteLength(field.name, "utf8")})`,
-          `  call void @scr_dyn_key_delete(ptr %bag, ptr %bag_key${index}, i1 zeroext false)`,
-          `  call void @scr_str_release(ptr %bag_key${index})`,
-        ));
+        fields.filter((field) => !symbols.has(field.name)).forEach((field, index) => {
+          if (meta.def.tracksOwnFields) lines.push(
+            `  %bag_field${index} = call ptr @scr_dyn_obj_get(ptr %bag, ptr ${host.cstr(field.name)}, ${host.sizeType} ${Buffer.byteLength(field.name, "utf8")})`,
+            `  %bag_present${index} = icmp ne ptr %bag_field${index}, null`,
+            `  br i1 %bag_present${index}, label %bag_field${index}_present, label %bag_field${index}_after`,
+            `bag_field${index}_present:`,
+            `  %bag_undefined${index} = call ptr @scr_dyn_undefined()`,
+            `  %bag_placeholder${index} = call ptr @scr_dyn_retain_v(ptr %bag_undefined${index})`,
+            `  call void @scr_dyn_obj_set(ptr %bag, ptr ${host.cstr(field.name)}, ${host.sizeType} ${Buffer.byteLength(field.name, "utf8")}, ptr %bag_placeholder${index})`,
+            `  br label %bag_field${index}_after`, `bag_field${index}_after:`,
+          );
+          else lines.push(
+            `  %bag_key${index} = call ptr @scr_str_new(ptr ${host.cstr(field.name)}, ${host.sizeType} ${Buffer.byteLength(field.name, "utf8")})`,
+            `  call void @scr_dyn_key_delete(ptr %bag, ptr %bag_key${index}, i1 zeroext false)`,
+            `  call void @scr_str_release(ptr %bag_key${index})`,
+          );
+        });
         if (symbols.size > 0) host.declare(`declare void @scr_dyn_key_delete_computed(ptr, ptr, i1 zeroext)`);
         [...symbols.values()].forEach((globalId, index) => lines.push(
           `  %bag_symraw${index} = load ptr, ptr @${mangleGlobal(globalId)}`,
@@ -548,6 +588,16 @@ export function streamTypedRefMaterializeAdapter(host: LlvmEmitterContext,
         host.declare(`declare ptr @scr_stream_dyn_view(ptr)`);
         B.line(`${out} = call ptr @scr_stream_dyn_view(ptr %p)`);
       } else B.line(`${out} = call ptr @scr_dyn_new_obj()`);
+      if (meta.def.tracksOwnFields) {
+        host.declare(`declare ptr @scr_dyn_copy_property_descriptors(ptr, ptr)`);
+        host.declare(`declare void @scr_dyn_release_v(ptr)`);
+        const { index } = classFieldIndex(meta, DYN_CLASS_PROPERTIES);
+        const slot = B.tmp(), bag = B.tmp(), copied = B.tmp();
+        B.line(`${slot} = getelementptr inbounds %${classStructSym(t.className)}, ptr %p, i64 0, i32 ${index}`);
+        B.line(`${bag} = load ptr, ptr ${slot}`);
+        B.line(`${copied} = call ptr @scr_dyn_copy_property_descriptors(ptr ${out}, ptr ${bag})`);
+        B.line(`call void @scr_dyn_release_v(ptr ${copied})`);
+      }
       if (meta.def.instancePrototypeHelper || meta.def.prototypeDataHelper) {
         host.declare(`declare ptr @scr_dyn_set_prototype(ptr, ptr)`);
         host.declare(`declare void @scr_dyn_release_v(ptr)`);
@@ -563,6 +613,14 @@ export function streamTypedRefMaterializeAdapter(host: LlvmEmitterContext,
       }
       for (const field of meta.def.fields.filter((f) => isClassOwnEnumerableFieldName(f.name) &&
         !(meta.root.def.name === "%Error" && (f.name === "message" || f.name === "name")))) {
+        const afterField = meta.def.tracksOwnFields ? B.newLabel("field.after") : null;
+        if (afterField) {
+          host.declare(`declare ptr @scr_dyn_obj_get(ptr, ptr, ${host.sizeType})`);
+          const value = B.tmp(), present = B.tmp(), yes = B.newLabel("field.present");
+          B.line(`${value} = call ptr @scr_dyn_obj_get(ptr ${out}, ptr ${host.cstr(field.name)}, ${host.sizeType} ${Buffer.byteLength(field.name, "utf8")})`);
+          B.line(`${present} = icmp ne ptr ${value}, null`);
+          B.condBr(present, yes, afterField); B.startBlock(yes);
+        }
         const { index } = classFieldIndex(meta, field.name);
         const fieldPtr = B.tmp();
         let fieldValue = B.tmp();
@@ -575,6 +633,7 @@ export function streamTypedRefMaterializeAdapter(host: LlvmEmitterContext,
         }
         const boxed = host.streamTypedRefBoxValue(B, field.type, fieldValue);
         B.line(`call void @scr_dyn_obj_set(ptr ${out}, ptr ${host.cstr(field.name)}, ${host.sizeType} ${Buffer.byteLength(field.name, "utf8")}, ptr ${boxed})`);
+        if (afterField) { B.br(afterField); B.startBlock(afterField); }
       }
       for (const symbol of meta.def.symbolFields ?? []) {
         const field = meta.def.fields.find((field) => field.name === symbol.field)!;
@@ -608,7 +667,7 @@ export function streamTypedRefMaterializeAdapter(host: LlvmEmitterContext,
           B.startBlock(afterSymbol);
         }
       }
-      if (meta.def.fields.some((field) => field.name === DYN_CLASS_PROPERTIES)) {
+      if (!meta.def.tracksOwnFields && meta.def.fields.some((field) => field.name === DYN_CLASS_PROPERTIES)) {
         host.declare(`declare ptr @scr_dyn_copy_property_descriptors(ptr, ptr)`);
         host.declare(`declare void @scr_dyn_release_v(ptr)`);
         const { index } = classFieldIndex(meta, DYN_CLASS_PROPERTIES);

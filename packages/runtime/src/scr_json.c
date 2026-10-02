@@ -4999,9 +4999,16 @@ static void scr_dyn_object_key_set(ScrDyn *recv, ScrStr *key, ScrDyn *value, con
     }
   }
   if (!scr_dyn_entry(recv, key)) {
-    for (const ScrDyn *current = recv->prototype; current && current->kind == SCR_DYN_OBJ; current = current->prototype) {
-      ScrDynEntry *inherited = scr_dyn_entry((ScrDyn *)current, key);
-      if (!inherited) continue;
+    for (const ScrDyn *current = recv->prototype; current;) {
+      ScrDyn *table = current->kind == SCR_DYN_FUNC ? scr_dyn_fn_properties(current) : NULL;
+      const ScrDyn *object = table ? table : current;
+      if (object->kind != SCR_DYN_OBJ) { scr_dyn_release(table); break; }
+      ScrDynEntry *inherited = scr_dyn_entry((ScrDyn *)object, key);
+      if (!inherited) {
+        current = object->prototype;
+        scr_dyn_release(table);
+        continue;
+      }
       if (inherited->accessor && inherited->setter) {
         ScrDyn *args[] = {value};
         ScrDyn *setter = scr_dyn_retain(inherited->setter);
@@ -5010,13 +5017,16 @@ static void scr_dyn_object_key_set(ScrDyn *recv, ScrStr *key, ScrDyn *value, con
         scr_dyn_this_pop();
         scr_dyn_release(setter);
         scr_dyn_release(result);
+        scr_dyn_release(table);
         return;
       }
       if (inherited->accessor || !inherited->writable) {
         static const char message[] = "Cannot assign to read only property";
         scr_throw_error_msg(SCR_ERR_TYPE, message, sizeof message - 1);
+        scr_dyn_release(table);
         return;
       }
+      scr_dyn_release(table);
       break;
     }
   }
@@ -6420,7 +6430,7 @@ ScrDyn *scr_dyn_fn_get(const ScrDyn *d, const char *key, size_t key_len) {
     return scr_dyn_new_num((double)d->v.fn.arity);
   }
   if (key_len == 5 && memcmp(key, "apply", 5) == 0) return scr_dyn_function_apply();
-  if (d->v.fn.class_obj) {
+  if (d->v.fn.class_obj && !d->v.fn.class_obj->static_data) {
     static const char message[] = "scriptc: class properties through unknown other than name and length are not supported";
     scr_throw_error_msg(SCR_ERR_TYPE, message, sizeof message - 1);
   }
@@ -7319,7 +7329,8 @@ ScrDyn *scr_dyn_obj_keys(const ScrDyn *v) { return scr_dyn_objwalk(v, SCR_OBJWAL
  * Non-enumerable own names shadow names farther up the chain. */
 ScrDyn *scr_dyn_for_in_keys(const ScrDyn *v) {
   if (scr_dyn_class_reflection_fence(v)) return NULL;
-  if (v->kind == SCR_DYN_TYPED_REF && scr_dyn_isl_is_array(v)) {
+  if (v->kind == SCR_DYN_TYPED_REF && (scr_dyn_isl_is_array(v) ||
+      !strncmp(v->v.typed_ref.type_key, "record:", 7))) {
     ScrDyn *view = scr_dyn_typed_ref_materialize(v);
     ScrDyn *keys = scr_exc_pending() ? NULL : scr_dyn_for_in_keys(view);
     scr_dyn_release(view);

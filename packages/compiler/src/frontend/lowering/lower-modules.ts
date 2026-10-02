@@ -28,7 +28,7 @@ import { collectExpandoMembers } from "./lower-expando.js";
 import { recordTextCodecClass } from "../../ir/ir.js";
 import { isUnitOnlyTsType, unitOnlyUnion } from "../type-mapper.js";
 import type { ClassInfo } from "./lower-classes.js";
-import { collectVirtualJsMethods, decoratorNodesOf, genericIfaceBindingKeepsClass, guaranteedDecorationThrow, storedClassValueType } from "./lower-classes.js";
+import { collectInheritedJsFieldWrites, collectVirtualJsMethods, decoratorNodesOf, genericIfaceBindingKeepsClass, guaranteedDecorationThrow, storedClassValueType } from "./lower-classes.js";
 import { isMixinFnBinding, mixinResultBindingClassOf } from "./lower-mixins.js";
 import { cjsModuleRef, cjsModuleRegistryPrelude } from "./lower-node-module.js";
 import { forkTargetPaths } from "../fork-target.js";
@@ -275,6 +275,7 @@ export function appendForkModules(
     lowerer.collecting = true;
     try {
       collectVirtualJsMethods(lowerer, parts.map((part) => part.sf));
+      collectInheritedJsFieldWrites(lowerer, parts.map((part) => part.sf));
       for (const fp of parts) for (const decl of fp.classDecls) if (!computed.has(decl)) lowerer.collectClassShape(decl);
       for (const fp of parts) for (const decl of fp.fnDecls) lowerer.collectSignature(decl);
     } finally {
@@ -2353,7 +2354,7 @@ export function collectGlobals(lowerer: Lowerer, sf: ts.SourceFile, topStmts: ts
           // SITE's position instead (below) — their inner class node may
           // even live in another file.
           c.decl && ts.isClassDeclaration(c.decl) && !c.mixinInstance && c.decl.getSourceFile() === sf &&
-          (c.callableBase !== undefined || c.def.baseValueGlobal !== undefined || c.staticFields.length > 0 || (c.staticBlocks?.length ?? 0) > 0 || c.classDecorators !== undefined))
+          (c.callableBase !== undefined || c.def.baseValueGlobal !== undefined || c.runtimeStatics !== undefined || c.staticFields.length > 0 || (c.staticBlocks?.length ?? 0) > 0 || c.classDecorators !== undefined))
         .map((c) => ({ pos: c.decl!.getStart(), info: c }));
       // Statics-bearing MIXIN instantiations whose call evaluates in THIS
       // file: their declaration-time code runs when the call does — the

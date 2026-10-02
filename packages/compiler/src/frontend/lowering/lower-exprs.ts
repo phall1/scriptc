@@ -2692,12 +2692,25 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
       if (isJsSourceFile(node.getSourceFile()) && ts.isPropertyAccessExpression(node)) {
         const receiver = lowerer.mapTypeOf(lowerer.typeOf(node.expression));
         if (receiver?.kind === "object" && lowerer.classes.get(receiver.className)?.fields.get(node.name.text)?.kind === "dyn") return expr;
+        if (receiver?.kind === "classval") {
+          const info = lowerer.classes.get(receiver.className);
+          if (info && hasRuntimeStatics(info)) return expr;
+        }
       }
       if (isJsSourceFile(node.getSourceFile()) &&
           (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node))) {
         let receiver = node.expression;
-        while (ts.isPropertyAccessExpression(receiver) || ts.isElementAccessExpression(receiver) || ts.isParenthesizedExpression(receiver)) receiver = receiver.expression;
+        while (ts.isPropertyAccessExpression(receiver) || ts.isElementAccessExpression(receiver) || ts.isParenthesizedExpression(receiver)) {
+          if (ts.isPropertyAccessExpression(receiver)) {
+            const owner = lowerer.mapTypeOf(lowerer.typeOf(receiver.expression));
+            if (owner?.kind === "object" && lowerer.classes.get(owner.className)?.fields.get(receiver.name.text)?.kind === "dyn") return expr;
+          }
+          receiver = receiver.expression;
+        }
+        if (receiver.kind === ts.SyntaxKind.ThisKeyword && lowerer.resolveThis()?.type.kind === "dyn") return expr;
         if (ts.isIdentifier(receiver)) {
+          const stored = lowerer.peekLocal(receiver)?.type ?? lowerer.globalOf(receiver)?.type;
+          if (stored?.kind === "dyn") return expr;
           const symbol = lowerer.resolveValueSymbol(receiver);
           const bound = symbol && lowerer.implicitParamTypes?.get(symbol);
           if (bound && lowerer.mapTypeOf(bound)?.kind === "dyn") return expr;
@@ -5757,9 +5770,14 @@ export function lowerElementCompound(lowerer: Lowerer, expr: ts.BinaryExpression
     if (!isJsSourceFile(expr.getSourceFile()) ||
         (!ts.isPropertyAccessExpression(target) && !ts.isElementAccessExpression(target)) ||
         target.questionDotToken) return null;
-    // Class statics and prototype tables have their own assignment paths.
-    // Probing them as ordinary functions would retain a constructor (or
-    // materialize every watched prototype method) even when declined.
+    // Checked constructors share the callable's live property descriptors.
+    const classType = storedClassValueType(lowerer, target.expression);
+    const staticClass = classType?.kind === "classval" ? lowerer.classes.get(classType.className) : undefined;
+    if (staticClass && hasRuntimeStatics(staticClass)) {
+      return lowerDynMemberAssignment(lowerer, expr, lowerer.lowerExprExpecting(target.expression, DYN));
+    }
+    // Other class statics and prototype tables have their own paths.
+    // Probing them as ordinary functions could materialize unused methods.
     if (lowerer.exactClassOfReceiver(target.expression) ||
         ts.isPropertyAccessExpression(target.expression) && target.expression.name.text === "prototype" &&
         lowerer.exactClassOfReceiver(target.expression.expression)) return null;
@@ -11024,7 +11042,9 @@ function representedClassFieldTarget(
     // NaN — SEMANTICS.md), combine, write back (dyn.keySet). The
     // receiver and member read are saved before evaluating the RHS.
     if (ts.isPropertyAccessExpression(access)) {
-      const probed = tryLowerExpression(lowerer, access.expression);
+      let probed = tryLowerExpression(lowerer, access.expression);
+      const staticClass = probed?.type.kind === "classval" ? lowerer.classes.get(probed.type.className) : undefined;
+      if (probed && staticClass && hasRuntimeStatics(staticClass)) probed = lowerer.coerceToExpected(probed, DYN);
       if (probed?.type.kind === "dyn") {
         const receiver = save(probed, "%compoundReceiver");
         const key: IrExpr = { kind: "strLit", value: access.name.text, type: STRING, loc: locOf(access.name) };

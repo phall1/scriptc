@@ -3,7 +3,7 @@ import { BOOL, DYN, STRING, type IrExpr, type IrStmt } from "../../ir/ir.js";
 import { varRef } from "../../ir/build.js";
 import { locOf } from "../program.js";
 import { dynUndefinedExpr, type Lowerer } from "./lowerer.js";
-import type { ClassInfo } from "./lower-classes.js";
+import { classValueRef, type ClassInfo } from "./lower-classes.js";
 import { classPrototypeData } from "./class-prototypes.js";
 
 export function hasRuntimeStatics(info: ClassInfo): boolean {
@@ -13,23 +13,38 @@ export function hasRuntimeStatics(info: ClassInfo): boolean {
   return false;
 }
 
-/** Factory evaluations own their static fields and closures. Defining them
- * on the constructor preserves inherited getter receivers and independent
- * state when one factory is called repeatedly. */
+/** Constructor descriptors preserve inherited getter receivers and static
+ * initialization order. Factory evaluations additionally own independent
+ * fields and closures when the same factory is called repeatedly. */
 export function initializeRuntimeStatics(lowerer: Lowerer, info: ClassInfo, value: IrExpr): IrExpr {
   if (!info.runtimeStatics && !info.runtimePrototypeMembers) return value;
   const loc = value.loc;
   const local = lowerer.declareHiddenLocal("%staticClass", value.type);
   const receiver = varRef(local.id, value.type, loc);
   const boxed = lowerer.coerceToExpected(receiver, DYN);
+  const base = !info.localClass && info.base && !info.def.baseValueGlobal
+    ? lowerer.coerceToExpected(classValueRef(lowerer, info.base, info.decl!), DYN)
+    : dynUndefinedExpr(loc);
   const statements: IrStmt[] = [
     { kind: "varDecl", localId: local.id, init: value, loc },
-    { kind: "exprStmt", expr: { kind: "libCall", fn: "dyn.classInherit", args: [boxed, dynUndefinedExpr(loc)], type: DYN, loc }, loc },
+    { kind: "exprStmt", expr: { kind: "libCall", fn: "dyn.classInherit", args: [boxed, base], type: DYN, loc }, loc },
   ];
   const previousThis = lowerer.ctx.thisLocal;
-  lowerer.ctx.thisLocal = local;
   try {
-    for (const member of [...(info.runtimeStatics ?? []), ...(info.runtimePrototypeMembers ?? [])]) {
+    const members = [...(info.runtimeStatics ?? []), ...(info.runtimePrototypeMembers ?? [])];
+    const computedKeys = new Map<ts.ClassElement, IrExpr>();
+    for (const member of members) {
+      if (!member.name || !ts.isComputedPropertyName(member.name)) continue;
+      const key = lowerer.declareHiddenLocal("%staticKey", DYN);
+      statements.push({ kind: "varDecl", localId: key.id, init: { kind: "libCall", fn: "dyn.propertyKey",
+        args: [lowerer.lowerExprExpecting(member.name.expression, DYN)], type: DYN, loc: locOf(member.name) }, loc: locOf(member.name) });
+      computedKeys.set(member, varRef(key.id, DYN, locOf(member.name)));
+    }
+    lowerer.ctx.thisLocal = local;
+    // Methods and accessors exist before any static initializer executes.
+    const definitions = members.filter((member) => ts.isMethodDeclaration(member) || ts.isAccessor(member));
+    const initializers = members.filter((member) => !ts.isMethodDeclaration(member) && !ts.isAccessor(member));
+    for (const member of [...definitions, ...initializers]) {
       if (ts.isClassStaticBlockDeclaration(member)) {
         statements.push(...lowerer.lowerStmts(member.body.statements));
         continue;
@@ -37,8 +52,9 @@ export function initializeRuntimeStatics(lowerer: Lowerer, info: ClassInfo, valu
       if (!member.name) continue;
       const memberLoc = locOf(member);
       const key: IrExpr = ts.isComputedPropertyName(member.name)
-        ? lowerer.lowerExprExpecting(member.name.expression, DYN)
-        : lowerer.coerceToExpected({ kind: "strLit", value: member.name.text!, type: STRING, loc: memberLoc }, DYN);
+        ? computedKeys.get(member)!
+        : lowerer.coerceToExpected({ kind: "strLit", value: ts.isNumericLiteral(member.name)
+          ? String(Number(member.name.text)) : member.name.text!, type: STRING, loc: memberLoc }, DYN);
       const fields: { key: string; value: IrExpr }[] = [
         { key: "configurable", value: lowerer.coerceToExpected({ kind: "boolLit", value: true, type: BOOL, loc: memberLoc }, DYN) },
         { key: "enumerable", value: lowerer.coerceToExpected({ kind: "boolLit", value: ts.isPropertyDeclaration(member), type: BOOL, loc: memberLoc }, DYN) },

@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { BOOL, DYN, F64, NULL_T, STRING, SYMBOL_T, UNDEFINED_T, VOID, arrayOf, mapOf, setOf, type IrExpr, type IrModule, type IrType, type IrUnionDef } from "./ir.js";
+import { BOOL, DYN, DYN_CLASS_PROPERTIES, F64, NULL_T, STRING, SYMBOL_T, UNDEFINED_T, VOID, arrayOf, mapOf, setOf, type IrExpr, type IrModule, type IrType, type IrUnionDef } from "./ir.js";
 import { deserializeModule, serializeModule } from "./serialize.js";
 import { validateModule } from "./validate.js";
 
@@ -38,6 +38,20 @@ function localClassModule(): IrModule {
   });
   return mod;
 }
+
+test("serialized field presence tracking requires native property storage", () => {
+  const mod = expressionModule({ kind: "numLit", value: 0, type: F64, loc }, []);
+  mod.classes = [{ name: "Value", fields: [{ name: DYN_CLASS_PROPERTIES, type: DYN }], tracksOwnFields: true, loc }];
+  expect(validateModule(deserializeModule(serializeModule(mod)))).toEqual([]);
+  for (const variant of ["missing", "type", "runtime"]) {
+    const bad = structuredClone(mod);
+    const cls = bad.classes![0]!;
+    if (variant === "missing") cls.fields = [];
+    if (variant === "type") cls.fields[0]!.type = F64;
+    if (variant === "runtime") cls.runtime = true;
+    expect(validateModule(bad).some((error) => error.message.includes("field presence tracking"))).toBe(true);
+  }
+});
 
 test("class prototype data helpers retain their ABI after serialization", () => {
   const mod = expressionModule({ kind: "numLit", value: 0, type: F64, loc }, []);

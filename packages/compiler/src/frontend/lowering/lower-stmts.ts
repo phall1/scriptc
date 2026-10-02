@@ -27,7 +27,7 @@ import { isCompiledPrototypeMember } from "./class-prototypes.js";
 import { classStaticDataFor } from "./class-static-data.js";
 import { objectFactorySignature } from "./object-factory-new.js";
 import { isClassCallback, lowerClassCallbackAssign } from "./class-callbacks.js";
-import { classPropertiesHelper } from "./class-dynamic-dispatch.js";
+import { classForInHasKey, classPropertiesHelper } from "./class-dynamic-dispatch.js";
 import { genericIfaceBindingKeepsClass, staticFieldWriteTarget } from "./lower-classes.js";
 import { lowerStreamUnderscoreAssign, streamClassAliasDecl } from "./lower-stream.js";
 import { lowerHttpResPropertyAssignment, lowerHttpServerTimeoutAssignment, lowerServerCloseOverrideAssignment } from "./lower-server.js";
@@ -8216,9 +8216,8 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
    *   properties, so the enumeration is honestly EMPTY (zero iterations;
    *   the body typechecked but never evaluates — SEMANTICS.md documents
    *   the divergence).
-   * - class instances fence: which keys exist on one depends on runtime
-   *   property creation (unset declared fields, useDefineForClassFields)
-   *   that the struct model does not track — named, not guessed.
+   * - JavaScript program classes use their live property-creation table.
+   *   TypeScript and runtime-owned layouts keep the class-instance fence.
    * Bindings mirror for-of's: const/let declare the per-iteration string
    * local, `var` assigns the hoisted shared slot, a pre-declared
    * identifier target assigns per pass; destructuring heads are tsc
@@ -8229,7 +8228,16 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
     if (stdlibGlobalNameOf(lowerer, stmt.expression) === "globalThis") {
       return { kind: "block", body: [], loc };
     }
-    const receiver = lowerer.lowerExpr(stmt.expression);
+    let receiver = lowerer.lowerExpr(stmt.expression);
+    if (receiver.type.kind === "object") {
+      const info = lowerer.classes.get(receiver.type.className);
+      let root = info;
+      while (root?.base) root = root.base;
+      if (info?.decl && isJsSourceFile(info.decl.getSourceFile()) && !info.def.runtime &&
+          !root?.def.runtime && !info.builtinError && !info.builtinEmitter && !info.builtinStream) {
+        receiver = lowerer.coerceToExpected(receiver, DYN);
+      }
+    }
     const recvT = receiver.type;
     if (recvT.kind === "dyn") {
       const recv = lowerer.declareHiddenLocal("%indyn", DYN);
@@ -8238,9 +8246,7 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
         kind: "dynCheck", value: { kind: "libCall", fn: "dyn.forInKeys", args: [ref], type: DYN, loc },
         type: arrayOf(STRING), loc,
       };
-      const loop = lowerForInOverKeys(lowerer, stmt, keys, labels, (key) => ({
-        kind: "libCall", fn: "dyn.hasKey", args: [ref, key], type: BOOL, loc,
-      }));
+      const loop = lowerForInOverKeys(lowerer, stmt, keys, labels, (key) => classForInHasKey(lowerer, ref, key, loc));
       return { kind: "block", body: [{ kind: "varDecl", localId: recv.id, init: receiver, loc }, loop], loc };
     }
     if (recvT.kind === "array") return lowerForInArray(lowerer, stmt, labels, receiver);

@@ -19,7 +19,7 @@ import type {
   SrcLoc,
 } from "./ir.js";
 import { arrayOf, BYTES_ELEMENT_NAME, BOOL, BYTES_U8, bytesOf, canAdaptDynFuncTo, canDynCheckTo, canConvertToDyn, canExitIslandToType, canMarshalIntoIsland, canMarshalTypedFuncIntoIsland, CHILD_T, CHILDSTREAM_T, CHILDWRITER_T, CRYPTOHASH_T, CRYPTOHMAC_T, DATE_T, DGRAMSOCK_T, DYN, DYN_HANDLE_KINDS, F64, ffiClassType, ffiSourceParamTypes, FILEHANDLE_T, FSWATCHER_T, HTTP2SESSION_T, HTTP2STREAM_T, HTTPCLIENTREQ_T, HTTPREQ_T, HTTPRES_T, islandPromisePayloadTag, isDynTypedRefType, isFfiCallbackParam, isFfiContextParam, isFfiReleaseParam, isJsonSafeType, isJsonStringifySafeType, isRefCounted, isSupportedArrayElem, isSupportedIndexValue, isSupportedMapKey, isSupportedMapValue, isSupportedSetElem, isUnitType, jsOpResultKind, JSVAL, NETSERVER_T, NETSOCKET_T, PROCSTREAM_T, REF_TRUTHY_KINDS, REGEX, RUNTIME_EMITTER_CLASS, RUNTIME_ERROR_CLASSES, RUNTIME_STREAM_CLASSES, SEARCH_PARAMS_T, SECURECTX_T, shapeHasAccessorSlots, SPAWNRES_T, STATS_T, STRING, SYMBOL_T, TESTCTX_T, typeEquals, typeKey, unionContainerArmsOk, URL_T, VOID } from "./ir.js";
-import { BIGINT_T } from "./ir.js";
+import { BIGINT_T, DYN_CLASS_PROPERTIES } from "./ir.js";
 import { unionWideningTags } from "./analysis.js";
 import { alwaysReturns } from "./control-flow.js";
 
@@ -1799,6 +1799,9 @@ export function validateModule(mod: IrModule): IrValidationError[] {
     }
     if (cls.jsLength !== undefined && (!Number.isSafeInteger(cls.jsLength) || cls.jsLength < 0)) {
       errors.push({ message: `class ${cls.name}: invalid constructor length`, loc: cls.loc });
+    }
+    if (cls.tracksOwnFields && (cls.runtime || cls.fields.find((field) => field.name === DYN_CLASS_PROPERTIES)?.type.kind !== "dyn")) {
+      errors.push({ message: `class ${cls.name}: field presence tracking requires a native dyn property bag`, loc: cls.loc });
     }
     if (cls.prototypeDataHelper !== undefined) {
       const helper = functionsByName.get(cls.prototypeDataHelper);
