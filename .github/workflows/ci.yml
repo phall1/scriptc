@@ -187,28 +187,10 @@ jobs:
           target: wasm32-wasi
           helper: "false"
       - run: pnpm build
-      - run: pnpm test tests/harness/self-hosting-native-driver.test.ts
+      - name: Native bootstrap and package installation checks
+        run: node scripts/ci-native-bootstrap.mjs
         env:
           SCRIPTC_BOOTSTRAP_PACKAGE_DIR: ${{ runner.temp }}/native-cli-package
-      - name: Verify packed compiler and Linux ABI
-        if: matrix.flavor == 'plain'
-        run: |
-          pnpm test packages/runtime/test/glibc-random.test.ts
-          node scripts/verify-native-cli.mjs "$RUNNER_TEMP/native-cli-package" --run
-          node scripts/smoke-native-install.mjs "$RUNNER_TEMP/native-cli-package"
-      - name: Install and compile on Amazon Linux 2023 (glibc 2.34)
-        if: matrix.flavor == 'plain'
-        run: |
-          NODE_ROOT=$(dirname "$(dirname "$(command -v node)")")
-          docker run --rm --volume "$GITHUB_WORKSPACE:/work:ro" \
-            --volume "$RUNNER_TEMP/native-cli-package:/native:ro" --volume "$NODE_ROOT:/node:ro" \
-            --env PATH=/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin \
-            --workdir /work amazonlinux:2023 sh -c '
-              set -eu
-              dnf install --assumeyes clang tar gzip
-              test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.34"
-              node scripts/smoke-native-install.mjs /native
-            '
 
   # A real host-clang/glibc build, not the zig cross-target lane: catches
   # Linux feature-test macro omissions at compile time and separate-libm

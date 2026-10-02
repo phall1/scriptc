@@ -3527,6 +3527,7 @@ function localArtifactIdentity(
     hash.update("optimization-linker-flags\0")
       .update(executableOptimizationFlags.join("\x1f")).update("\0");
   }
+  if (opts.sanitize && opts.optimization === "dev") hash.update("sanitized-runtime-o1-v1\0");
   if (programShardMerge !== null) {
     updateProgramShardCacheIdentity(
       hash,
@@ -3782,8 +3783,9 @@ export async function stageRuntimeObjects(
 
 /** Compiles one C program together with the runtime sources.
  * With caching disabled, the runtime (a dozen small files) is recompiled on
- * every build in one clang invocation — no cached-archive
- * staleness bugs. --dynamic additionally compiles
+ * every build — no cached-archive staleness bugs. Sanitized dev builds compile
+ * the program separately so its O0 setting does not slow the O1 runtime.
+ * Other builds use one clang invocation. --dynamic additionally compiles
  * scr_island.c under SCR_DYNAMIC and links the cached engine archive (built
  * lazily, see above); regex-using programs additionally compile scr_regex.c
  * and link libregexp (the cached objects, or the archive's own copy under
@@ -4238,7 +4240,7 @@ async function compileCInternal(
     ...driver.targetArgs,
     ...threadArgs,
     ...(sanitize
-      ? [optimization === "dev" ? "-O0" : "-O1", "-fsanitize=address", "-DSCR_RC_AUDIT"]
+      ? ["-O1", "-fsanitize=address", "-DSCR_RC_AUDIT"]
       : [optimization === "dev" ? "-O0" : "-O2"]),
     ...executableSectionFlags.compile,
     ...(opts.textDecoderLegacy ? ["-DSCR_TEXT_DECODER_LEGACY"] : []),
@@ -4422,16 +4424,15 @@ async function compileCInternal(
     ...executableLinkFlags,
     "-o", build.outPath ?? opts.outPath,
   ];
-  // Compile-only flags shared by runtime-object population and the caller-TU
-  // dependency probe. They reproduce the option set every TU sees in the
-  // historical single clang invocation.
+  // Runtime-object flags. Program compilation and dependency discovery add
+  // the dev sanitizer override below so both cache identities match reality.
   const cflags = [
     "-std=c11",
     ...debugFlags,
     ...driver.targetArgs,
     ...threadArgs,
     ...(sanitize
-      ? [optimization === "dev" ? "-O0" : "-O1", "-fsanitize=address", "-DSCR_RC_AUDIT"]
+      ? ["-O1", "-fsanitize=address", "-DSCR_RC_AUDIT"]
       : [optimization === "dev" ? "-O0" : "-O2"]),
     ...executableSectionFlags.compile,
     ...(opts.textDecoderLegacy ? ["-DSCR_TEXT_DECODER_LEGACY"] : []),
@@ -4445,9 +4446,15 @@ async function compileCInternal(
     ...(tlsArchive !== null ? ["-I", join(vendorTlsDir(), "include")] : []),
     ...(dynamic ? ["-DSCR_DYNAMIC"] : []),
   ];
-  const programCompilerArgs = opts.cPath.endsWith(".ll")
-    ? [...cflags, "-Wno-override-module"]
-    : cflags;
+  // Keep sanitizer runtime objects optimized in both postures. Large dev
+  // programs still compile at O0, avoiding an expensive LLVM optimization
+  // pass while retaining ASan and reference-count checks in every runtime unit.
+  const separateSanitizedProgram = sanitize && optimization === "dev";
+  const programCompilerArgs = [
+    ...cflags,
+    ...(separateSanitizedProgram ? ["-O0"] : []),
+    ...(opts.cPath.endsWith(".ll") ? ["-Wno-override-module"] : []),
+  ];
   const programSourceExtension = opts.cPath.endsWith(".ll") ? ".ll" : ".c";
   const ccName = driver.argv.join(" ");
   const runClang = async (args: string[]): Promise<void> => {
@@ -4470,6 +4477,31 @@ async function compileCInternal(
       );
     }
   };
+  const buildExecutable = async (
+    runtimeInput: (path: string) => string,
+    build: { programPath?: string; outPath?: string; compilerVisibleSource?: string } = {},
+  ): Promise<void> => {
+    if (!separateSanitizedProgram) {
+      await runClang(buildArgs(runtimeInput, build));
+      return;
+    }
+    const stage = await mkdtemp(join(tmpdir(), "scriptc-sanitized-program-"));
+    try {
+      const object = join(stage, "program.o");
+      await runClang([
+        ...programCompilerArgs,
+        ...(build.compilerVisibleSource === undefined ? [] : [
+          `-ffile-prefix-map=${build.programPath}=${build.compilerVisibleSource}`,
+          "-iquote", dirname(resolve(build.compilerVisibleSource)),
+        ]),
+        "-c", build.programPath ?? opts.cPath, "-o", object,
+      ]);
+      await runClang(buildArgs(runtimeInput, { programPath: object, outPath: build.outPath ?? opts.outPath }));
+      if (darwinDebugSymbols) await createDarwinDebugSymbols(build.outPath ?? opts.outPath);
+    } finally {
+      await rm(stage, { recursive: true, force: true });
+    }
+  };
   const runUncachedBuild = async (): Promise<void> => {
     const privateVendorRoot = transientVendorRoot ?? join(
       tmpdir(),
@@ -4477,7 +4509,7 @@ async function compileCInternal(
     );
     try {
       await materializeVendorPrerequisites(undefined, privateVendorRoot);
-      await runClang(buildArgs((p) => p));
+      await buildExecutable((p) => p);
     } finally {
       await rm(privateVendorRoot, { recursive: true, force: true }).catch(() => undefined);
     }
@@ -4529,7 +4561,7 @@ async function compileCInternal(
       if (compileMetadataStamp === null) {
         const [runtimeInvocation, programInvocation] = await Promise.all([
           effectiveCompilerInvocationFingerprint(driver, toolchainEnv, cflags),
-          programSourceExtension === ".ll"
+          programSourceExtension === ".ll" || separateSanitizedProgram
             ? effectiveCompilerInvocationFingerprint(
                 driver,
                 toolchainEnv,
@@ -4625,7 +4657,7 @@ async function compileCInternal(
   // compile/link flag shape: wrappers commonly inject flags or native inputs
   // conditionally on optimization, sanitizer, dynamic, or platform switches.
   const effectiveLinkInvocationArgs = [
-    ...programCompilerArgs,
+    ...(separateSanitizedProgram ? cflags : programCompilerArgs),
     ...(targetPlatform(driver) === "win32"
       ? ["-ladvapi32", "-liphlpapi", "-lws2_32"]
       : []),
@@ -4682,7 +4714,7 @@ async function compileCInternal(
       [programDependencies, implicitLinker] = await Promise.all([
         translationUnitDependencyFingerprint(
           driver,
-          cflags,
+          programCompilerArgs,
           opts.cPath,
           cBytes,
           toolchainEnv,
@@ -4766,7 +4798,7 @@ async function compileCInternal(
       const [dependencies, invocation] = await Promise.all([
         translationUnitDependencyFingerprint(
           driver,
-          cflags,
+          programCompilerArgs,
           opts.cPath,
           cBytes,
           toolchainEnv,
@@ -4961,7 +4993,7 @@ async function compileCInternal(
         const programDependencyHash = programDependencies ??
           await translationUnitDependencyFingerprint(
             driver,
-            cflags,
+            programCompilerArgs,
             opts.cPath,
             cBytes,
             toolchainEnv,
@@ -5039,7 +5071,7 @@ async function compileCInternal(
                 ),
                 translationUnitDependencyFingerprint(
                   driver,
-                  cflags,
+                  programCompilerArgs,
                   opts.cPath,
                   cBytes,
                   toolchainEnv,
@@ -5077,13 +5109,11 @@ async function compileCInternal(
       // cache key describing a successful shard projection/merge.
       cacheInputsStable = false;
     }
-    await runClang(
-      buildArgs(
-        (p) => objects?.get(p) ?? p,
-        shardedProgramObject === null
-          ? { programPath, outPath: privateOut, compilerVisibleSource: opts.cPath }
-          : { programPath: shardedProgramObject, outPath: privateOut },
-      ),
+    await buildExecutable(
+      (p) => objects?.get(p) ?? p,
+      shardedProgramObject === null
+        ? { programPath, outPath: privateOut, compilerVisibleSource: opts.cPath }
+        : { programPath: shardedProgramObject, outPath: privateOut },
     );
     if (darwinDebugSymbols) {
       // clang invokes dsymutil when compiling a source TU while linking.
@@ -5115,7 +5145,7 @@ async function compileCInternal(
           ).catch(() => null),
           translationUnitDependencyFingerprint(
             driver,
-            cflags,
+            programCompilerArgs,
             opts.cPath,
             cBytes,
             toolchainEnv,

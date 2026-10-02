@@ -54,6 +54,7 @@ test("the production CLI relocates, builds programs, and rebuilds itself with No
       mkdirSync(packageDirectory, { recursive: true });
       cpSync(join(root, "packages/cli-linux-x64-gnu/package.json"), join(packageDirectory, "package.json"));
       cpSync(distribution, join(packageDirectory, "dist"), { recursive: true });
+      writeFileSync(packageDirectory + ".ready", "ready\n");
     }
     // All compiler assets must survive moving the complete distribution.
     const relocated = join(directory, "relocated");
@@ -227,57 +228,64 @@ test("the production CLI relocates, builds programs, and rebuilds itself with No
       // execute the next compiler generation below. Large structural checks
       // run in a roomy child so Vitest's worker remains responsive.
       const seedDirectory = join(directory, ".scriptc/distribution-seed");
-      const comparison = await bootstrapStep("compare Node and native compiler IR and LLVM", () =>
-        exec(process.execPath, ["--max-old-space-size=8192", "--import", "tsx", "--input-type=module", "--eval", `
-          import assert from 'node:assert/strict';
-          import { readFileSync } from 'node:fs';
-          import { isDeepStrictEqual } from 'node:util';
-          import { deserializeModule, validateModule } from ${JSON.stringify(pathToFileURL(join(root, "packages/compiler/src/index.ts")).href)};
-          const expected = deserializeModule(readFileSync(process.argv[1], 'utf8'));
-          const actual = deserializeModule(readFileSync(process.argv[2], 'utf8'));
-          assert.ok(actual.functions.length > 1000);
-          assert.deepEqual(validateModule(actual), []);
-          assert.ok(isDeepStrictEqual(actual, expected), 'native self-lowering must match the Node seed');
-          const seedLlvm = readFileSync(process.argv[3], 'utf8');
-          let nativeLlvm = readFileSync(process.argv[4], 'utf8');
-          if (${sanitize}) {
-            // The Node sanitizer builds runtime sources directly; the native
-            // executable path also emits the runtime ABI check. Pin that
-            // difference before comparing the rest of the complete module.
-            const declaration = 'declare void @' + ${JSON.stringify(RUNTIME_ABI_MARKER)} + '()\\n';
-            const call = '  call void @' + ${JSON.stringify(RUNTIME_ABI_MARKER)} + '()\\n';
-            for (const line of [declaration, call]) {
-              assert.equal(seedLlvm.split(line).length, 1);
-              assert.equal(nativeLlvm.split(line).length, 2);
-              nativeLlvm = nativeLlvm.replace(line, '');
+      const compareArtifacts = async () => {
+        const comparison = await bootstrapStep("compare Node and native compiler IR and LLVM", () =>
+          exec(process.execPath, ["--max-old-space-size=8192", "--import", "tsx", "--input-type=module", "--eval", `
+            import assert from 'node:assert/strict';
+            import { readFileSync } from 'node:fs';
+            import { isDeepStrictEqual } from 'node:util';
+            import { deserializeModule, validateModule } from ${JSON.stringify(pathToFileURL(join(root, "packages/compiler/src/index.ts")).href)};
+            const expected = deserializeModule(readFileSync(process.argv[1], 'utf8'));
+            const actual = deserializeModule(readFileSync(process.argv[2], 'utf8'));
+            assert.ok(actual.functions.length > 1000);
+            assert.deepEqual(validateModule(actual), []);
+            assert.ok(isDeepStrictEqual(actual, expected), 'native self-lowering must match the Node seed');
+            const seedLlvm = readFileSync(process.argv[3], 'utf8');
+            let nativeLlvm = readFileSync(process.argv[4], 'utf8');
+            if (${sanitize}) {
+              // The Node sanitizer builds runtime sources directly; the native
+              // executable path also emits the runtime ABI check. Pin that
+              // difference before comparing the rest of the complete module.
+              const declaration = 'declare void @' + ${JSON.stringify(RUNTIME_ABI_MARKER)} + '()\\n';
+              const call = '  call void @' + ${JSON.stringify(RUNTIME_ABI_MARKER)} + '()\\n';
+              for (const line of [declaration, call]) {
+                assert.equal(seedLlvm.split(line).length, 1);
+                assert.equal(nativeLlvm.split(line).length, 2);
+                nativeLlvm = nativeLlvm.replace(line, '');
+              }
             }
-          }
-          assert.ok(seedLlvm === nativeLlvm, 'native LLVM emission must match the Node seed');
-        `, join(seedDirectory, "cli.ir.json"), join(directory, "cli.ir.json"),
-        join(seedDirectory, "cli.ll"), join(directory, "cli.ll")], options));
-      expect(comparison.stdout).toBe("");
-      expect(comparison.stderr).toBe("");
-      await checkProgram(rebuilt, join(root, "tests/corpus/nullish-long-chain.ts"));
-      await checkProgram(rebuilt, sample);
-      await checkProgram(rebuilt, unionSample);
-      await checkProgram(rebuilt, receiverSample);
-      await checkProgram(rebuilt, join(root, "tests/corpus/1010-json-stringify-space.ts"));
-
-      // The plain lane owns the third-generation fixed point. The sanitizer
-      // lane already runs the full frontend and emitter under ASan in the
-      // self-rebuild, compares both artifacts, and executes the new compiler.
-      if (!sanitize) {
-        const seedLlvm = join(directory, "cli.ll");
-        const rebuiltLlvm = join(directory, "rebuilt.ll");
-        await bootstrapStep("rebuilt compiler emits itself", () =>
-          invoke(rebuilt, ["build", entry, "--emit=llvm", "-o", rebuiltLlvm, "--ffi", ffi]));
-        // Executable output adds a runtime ABI check; textual LLVM emission
-        // omits it. Compare all other output without changing either mode.
-        const withoutAbiCheck = (path: string): string => readFileSync(path, "utf8")
-          .replace(/^declare void @scr_runtime_abi_v\d+\(\)\n/m, "")
-          .replace(/^  call void @scr_runtime_abi_v\d+\(\)\n/m, "");
-        expect(withoutAbiCheck(seedLlvm) === withoutAbiCheck(rebuiltLlvm), "native compiler generations must emit identical LLVM").toBe(true);
-      }
+            assert.ok(seedLlvm === nativeLlvm, 'native LLVM emission must match the Node seed');
+          `, join(seedDirectory, "cli.ir.json"), join(directory, "cli.ir.json"),
+          join(seedDirectory, "cli.ll"), join(directory, "cli.ll")], options));
+        expect(comparison.stdout).toBe("");
+        expect(comparison.stderr).toBe("");
+      };
+      const probeRebuilt = async () => {
+        await checkProgram(rebuilt, join(root, "tests/corpus/nullish-long-chain.ts"));
+        await checkProgram(rebuilt, sample);
+        await checkProgram(rebuilt, unionSample);
+        await checkProgram(rebuilt, receiverSample);
+        await checkProgram(rebuilt, join(root, "tests/corpus/1010-json-stringify-space.ts"));
+      };
+      const fixedPoint = async () => {
+        // The plain lane owns the third-generation fixed point. The sanitizer
+        // lane already runs the full frontend and emitter under ASan in the
+        // self-rebuild, compares both artifacts, and executes the new compiler.
+        if (!sanitize) {
+          const seedLlvm = join(directory, "cli.ll");
+          const rebuiltLlvm = join(directory, "rebuilt.ll");
+          await bootstrapStep("rebuilt compiler emits itself", () =>
+            invoke(rebuilt, ["build", entry, "--emit=llvm", "-o", rebuiltLlvm, "--ffi", ffi]));
+          // Executable output adds a runtime ABI check; textual LLVM emission
+          // omits it. Compare all other output without changing either mode.
+          const withoutAbiCheck = (path: string): string => readFileSync(path, "utf8")
+            .replace(/^declare void @scr_runtime_abi_v\d+\(\)\n/m, "")
+            .replace(/^  call void @scr_runtime_abi_v\d+\(\)\n/m, "");
+          expect(withoutAbiCheck(seedLlvm) === withoutAbiCheck(rebuiltLlvm), "native compiler generations must emit identical LLVM").toBe(true);
+        }
+      };
+      const checks = await Promise.allSettled([compareArtifacts(), probeRebuilt(), fixedPoint()]);
+      for (const check of checks) if (check.status === "rejected") throw check.reason;
     };
     const outcomes = await Promise.allSettled([
       bootstrapStep("seed command and library probes", seedChecks), rebuildChecks(),

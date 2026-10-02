@@ -53,7 +53,9 @@ export function buildSanitizedRuntime(
   }
   const sourceIdentity = sourceFingerprint(sourceRoot);
   const compilerIdentity = runNativeTool(driver, ["--version"]);
-  const flags = [...sanitizerFlags(toolchain, selection.flavor),
+  // Runtime allocation and tracing are hot even when the caller skips
+  // program optimization. Preserve ASan while keeping these small C units fast.
+  const flags = [...sanitizerFlags(toolchain, "release"),
     ...toolchain.target.runtimeCompileDefines.map((define) => "-D" + define)];
   const src = join(sourceRoot, "src");
   const vendor = join(sourceRoot, "vendor");

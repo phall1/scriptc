@@ -4315,3 +4315,72 @@ test.skipIf(process.platform === "win32" || zigExecutable === undefined)(
     }
   },
 );
+
+for (const cached of [false, true]) {
+  test.skipIf(process.platform === "win32" || clangExecutable === undefined)(
+    `sanitized dev executables keep program O0 and runtime O1 (${cached ? "cached" : "uncached"})`,
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "scriptc-sanitized-posture-"));
+      scratch.push(directory);
+      const wrapperDirectory = join(directory, "tools");
+      const invocationLog = join(directory, "invocations.jsonl");
+      const source = join(directory, "program.c");
+      const environmentKeys = ["PATH", "SCRIPTC_CC", "SCRIPTC_TARGET", "SCRIPTC_CACHE_DIR", "SCRIPTC_NO_CACHE", "SCRIPTC_TEST_DISABLE_CCACHE"];
+      const previous = new Map(environmentKeys.map((key) => [key, process.env[key]]));
+      try {
+        await mkdir(wrapperDirectory);
+        await writeFile(join(directory, "sibling.h"), '#define MESSAGE "sanitized dev"\n');
+        await writeFile(source, `#include <stdio.h>
+#include "sibling.h"
+#if defined(__OPTIMIZE__)
+#error dev program must remain unoptimized
+#endif
+#if !__has_feature(address_sanitizer)
+#error program must retain AddressSanitizer
+#endif
+int main(void) { puts(MESSAGE); return 0; }
+`);
+        await writeFile(join(wrapperDirectory, "clang"), `#!/usr/bin/env node
+const { appendFileSync } = require('node:fs');
+const { spawnSync } = require('node:child_process');
+const args = process.argv.slice(2);
+if ((args.includes('-c') || args.some(arg => arg.endsWith('/scr_cycle.c'))) && !args.includes('-###')) appendFileSync(${JSON.stringify(invocationLog)}, JSON.stringify(args) + '\\n');
+const result = spawnSync(${JSON.stringify(clangExecutable)}, args, { stdio: 'inherit' });
+if (result.error) throw result.error;
+process.exit(result.status ?? 1);
+`);
+        await chmod(join(wrapperDirectory, "clang"), 0o755);
+        process.env["PATH"] = wrapperDirectory + delimiter + (previous.get("PATH") ?? "");
+        process.env["SCRIPTC_CC"] = "clang";
+        process.env["SCRIPTC_CACHE_DIR"] = join(directory, "cache");
+        process.env["SCRIPTC_TEST_DISABLE_CCACHE"] = "1";
+        if (cached) delete process.env["SCRIPTC_NO_CACHE"];
+        else process.env["SCRIPTC_NO_CACHE"] = "1";
+        delete process.env["SCRIPTC_TARGET"];
+        trustInstrumentedCompilerWrapper();
+        const options = { cPath: source, sanitize: true, optimization: "dev" as const,
+          ...(cached ? { cacheIdentity: TEST_CACHE_IDENTITY, systemLibraries: ["m"] } : {}) };
+        for (let index = 0; index < (cached ? 2 : 1); index++) {
+          const output = join(directory, "program-" + index);
+          await compileC({ ...options, outPath: output });
+          expect(execFileSync(output, { encoding: "utf8" })).toBe("sanitized dev\n");
+          if (process.platform === "darwin") expect(existsSync(output + ".dSYM")).toBe(true);
+        }
+        const invocations = (await readFile(invocationLog, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as string[]);
+        const programCompiles = invocations.filter((args) => args.some((arg) => arg.endsWith("/program.c")));
+        expect(programCompiles.length).toBeGreaterThanOrEqual(cached ? 2 : 1);
+        for (const args of programCompiles) expect(args.filter((arg) => /^-O\d$/.test(arg)).at(-1)).toBe("-O0");
+        const runtimeCompiles = invocations.filter((args) => args.some((arg) => arg.endsWith("/scr_cycle.c")));
+        expect(runtimeCompiles).toHaveLength(1);
+        expect(runtimeCompiles[0]!.filter((arg) => /^-O\d$/.test(arg)).at(-1)).toBe("-O1");
+        expect(runtimeCompiles[0]).toContain("-fsanitize=address");
+        expect(runtimeCompiles[0]).toContain("-DSCR_RC_AUDIT");
+      } finally {
+        for (const [key, value] of previous) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+      }
+    },
+  );
+}
