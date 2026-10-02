@@ -53,9 +53,10 @@ export function literalUnionArm(
   union: IrUnionDef,
   values: readonly UnionLiteral[],
   shapeOf: (id: string) => IrRecordShape | undefined,
+  validatedOwners?: ReadonlyMap<string, number> | null,
 ): (IrType & { kind: "record" }) | null {
   if (values.length === 0) return null;
-  const owners = discriminantOwners(union, shapeOf);
+  const owners = validatedOwners === undefined ? discriminantOwners(union, shapeOf) : validatedOwners;
   if (owners === null) return null;
   let tag: number | undefined;
   for (const value of values) {
