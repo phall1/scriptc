@@ -7,7 +7,7 @@ import { InternalCompilerError } from "../../errors.js";
 import * as ts from "../ts7/adapter.js";
 import type { Lowerer } from "./lowerer.js";
 import { BOOL, CAUGHT, DYN, F64, type IrExpr, type IrFunction, type IrLocal, type IrMapIntrinsicMethod, type IrParam, type IrRecordShape, type IrSetIntrinsicMethod, type IrStmt, type IrType, JSVAL, STRING, type SrcLoc, UNDEFINED_T, VOID, arrayOf, funcOf, isRefCounted, isSupportedArrayElem, isSupportedIndexValue, isUnitType, typeEquals } from "../../ir/ir.js";
-import { ARRAY_METHODS, MAP_METHODS, SET_COMBINE_METHODS, SET_METHODS } from "./surfaces.js";
+import { ARRAY_METHODS, COLLECTION_ITERATOR_METHODS, MAP_METHODS, SET_COMBINE_METHODS, SET_METHODS } from "./surfaces.js";
 import { tryLowerExpression } from "./expressions/try-lower-expression.js";
 import { forOfVarTarget, lowerDestructuringAssign } from "./lower-stmts.js";
 import { isJsSourceFile, locOf } from "../program.js";
@@ -3561,7 +3561,7 @@ function buildArrayFromArrayFn(lowerer: Lowerer, name: string, elem: IrType,
     access: ts.PropertyAccessExpression,): IrExpr | null {
     if (lowerer.chainBlocked(access, call)) return null;
     const name = access.name.text;
-    if (!MAP_METHODS.has(name) && !MAP_ITER_METHODS.has(name)) return null;
+    if (!MAP_METHODS.has(name)) return null;
     let receiverIr = lowerer.mapTypeOf(lowerer.typeOf(access.expression));
     let probedUntyped = false;
     if (receiverIr?.kind !== "map" && isJsSourceFile(access.getSourceFile())) {
@@ -3622,27 +3622,35 @@ function buildArrayFromArrayFn(lowerer: Lowerer, name: string, elem: IrType,
     if (name === "clear") {
       return { kind: "mapIntrinsic", method: "clear", receiver, args: [], type: VOID, loc };
     }
-    if (MAP_ITER_METHODS.has(name)) {
+    if (COLLECTION_ITERATOR_METHODS.has(name)) {
       return lowerMapIterDrainCall(lowerer, call, receiver, receiverIr, name as "keys" | "values" | "entries");
     }
     // forEach
     return lowerMapForEachCall(lowerer, call, receiver, receiverIr, probedUntyped);
   }
 
-/** The iterator methods the lowering DOES cover — in exactly one context. */
-const MAP_ITER_METHODS = new Set(["keys", "values", "entries"]);
+/** Stored collection iterators retain the native collection by reference. The
+ * checked-value runtime supplies the live cursor without embedding an engine. */
+function lowerCollectionIteratorCall(lowerer: Lowerer, call: ts.CallExpression,
+  receiver: IrExpr, method: string): IrExpr {
+  const access = call.expression;
+  if (!ts.isPropertyAccessExpression(access)) throw new InternalCompilerError("collection iterator requires a member call");
+  const boxed = lowerer.coerceInto(access.expression, receiver, DYN);
+  const result = lowerDynDispatchMethodCall(lowerer, call, access, boxed, false);
+  if (!result) throw new InternalCompilerError(`missing collection iterator dispatch: ${method}`);
+  return result;
+}
 
 /** `[...m.keys()]` / `[...m.values()]` / `[...m.entries()]` — the iterator
-   * methods, lowered ONLY as the operand of a spread inside an array
+   * methods use an optimized drain as the operand of a spread inside an array
    * literal, where JS drains the iterator on the spot. The call desugars to
    * a direct call of a synthetic drain function whose loop walks the same
    * iteration primitives as the forEach desugar and pushes each live entry
    * into a fresh array — key, value, or `[K, V]` tuple record per method.
    * No user code runs mid-drain (and nothing here mutates the map), so no
    * compaction can shift indices: the enter/exit bracket is unnecessary and
-   * the snapshot IS what JS's immediate drain observes. Every other context
-   * (storing the iterator, .next(), passing it along) would need a real
-   * iterator value — fenced with the spread spelling as the hint. */
+   * the snapshot IS what JS's immediate drain observes. Other contexts keep
+   * a live iterator through the native checked-value runtime. */
   function lowerMapIterDrainCall(lowerer: Lowerer, call: ts.CallExpression,
     receiver: IrExpr,
     mapT: IrType & { kind: "map" },
@@ -3650,13 +3658,7 @@ const MAP_ITER_METHODS = new Set(["keys", "values", "entries"]);
     const loc = locOf(call);
     const inArraySpread =
       ts.isSpreadElement(call.parent) && ts.isArrayLiteralExpression(call.parent.parent);
-    if (!inArraySpread) {
-      lowerer.noLowering(
-        `.${method}() outside an immediate array spread`,
-        call,
-        `iterator objects have no lowering — drain it into an array where it is made: [...m.${method}()]`,
-      );
-    }
+    if (!inArraySpread) return lowerCollectionIteratorCall(lowerer, call, receiver, method);
     // The pushed element type. For entries the checker's own element type —
     // the [K, V] tuple behind MapIterator<[K, V]> — carries the interned
     // tuple shape the surrounding literal will intern too.
@@ -4037,6 +4039,9 @@ export function lowerCollectionSpread(lowerer: Lowerer, source: IrExpr, node: ts
         call,
         "the thisArg parameter has no lowering — use an arrow function",
       );
+    }
+    if (COLLECTION_ITERATOR_METHODS.has(name)) {
+      return lowerCollectionIteratorCall(lowerer, call, receiver, name);
     }
     if (SET_COMBINE_METHODS.has(name)) {
       return lowerSetCombineCall(lowerer, call, name, receiver, receiverIr);

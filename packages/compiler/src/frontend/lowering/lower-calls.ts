@@ -6261,6 +6261,14 @@ function lowerOptionalStringNumber(
     // take the ordinary typed paths, but there is no static home for an
     // any-elemented array). Typed receivers keep their own lowerings.
     const recvTs = lowerer.typeOf(access.expression);
+    const recvSymbol = recvTs.getSymbol();
+    if (recvSymbol && ["MapIterator", "SetIterator"].includes(recvSymbol.name) &&
+        lowerer.isStdlibSymbol(recvSymbol) &&
+        ["map", "filter", "take", "drop", "flatMap", "toArray", "forEach", "reduce", "some", "every", "find"].includes(access.name.text) &&
+        lowerer.isStdlibMember(access)) {
+      lowerer.noLowering(`collection iterator .${access.name.text}()`, call,
+        "stored Map/Set iterators support .next() and iteration; iterator helper methods have no lowering");
+    }
     const arrayReceiver = lowerer.checker.isArrayType(recvTs);
     const anyArray =
       arrayReceiver &&

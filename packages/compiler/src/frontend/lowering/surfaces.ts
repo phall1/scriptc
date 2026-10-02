@@ -329,11 +329,13 @@ export const ARRAY_METHODS = new Set([
  * only half the check — the resolved symbol must be declared by the
  * standard library (isStdlibMember). `size` is a property, handled in
  * property-access position. */
-export const MAP_METHODS = new Set(["get", "set", "has", "delete", "clear", "forEach"]);
+export const COLLECTION_ITERATOR_METHODS = new Set(["keys", "values", "entries"]);
+
+export const MAP_METHODS = new Set(["get", "set", "has", "delete", "clear", "forEach", ...COLLECTION_ITERATOR_METHODS]);
 
 /** The lowered Set<T> method surface — Map's minus get/set plus add.
  * `size` is a property, handled in property-access position. */
-export const SET_METHODS = new Set(["add", "has", "delete", "clear", "forEach"]);
+export const SET_METHODS = new Set(["add", "has", "delete", "clear", "forEach", ...COLLECTION_ITERATOR_METHODS]);
 
 /** The ES2025 Set composition surface (union/intersection/…): desugared
  * to interned helper loops over the set iteration primitives — no user

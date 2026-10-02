@@ -47,6 +47,7 @@ import {
   BUILTIN_MODULE_CONSTS,
   BUILTIN_MODULE_FENCE_HINTS,
   BUILTIN_MODULE_FNS,
+  COLLECTION_ITERATOR_METHODS,
   COMPOUND_ASSIGN_OPS,
   ISLAND_SURFACE,
   MAP_METHODS,
@@ -211,10 +212,12 @@ export function generateSurfaceManifest(compilerVersion: string): SurfaceManifes
     add({ id: `stdlib.array.${name}`, kind: "stdlib", name: `Array.prototype.${name}`, status: "static" });
   }
   for (const name of [...MAP_METHODS]) {
-    add({ id: `stdlib.map.${name}`, kind: "stdlib", name: `Map.prototype.${name}`, status: "static" });
+    add({ id: `stdlib.map.${name}`, kind: "stdlib", name: `Map.prototype.${name}`, status: "static",
+      ...(COLLECTION_ITERATOR_METHODS.has(name) ? { note: "live native iterators support next(), for...of, and drains; iterator helper methods are refused" } : {}) });
   }
   for (const name of [...SET_METHODS]) {
-    add({ id: `stdlib.set.${name}`, kind: "stdlib", name: `Set.prototype.${name}`, status: "static" });
+    add({ id: `stdlib.set.${name}`, kind: "stdlib", name: `Set.prototype.${name}`, status: "static",
+      ...(COLLECTION_ITERATOR_METHODS.has(name) ? { note: "live native iterators support next(), for...of, and drains; iterator helper methods are refused" } : {}) });
   }
   for (const name of [...SET_COMBINE_METHODS]) {
     add({

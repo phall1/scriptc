@@ -25,7 +25,7 @@ import { InternalCompilerError } from "../../errors.js";
  *   ScrDynPath { parent, key, index } — the %ScrDynPath type. */
 import type { IrType, IrUnionDef } from "../../ir/ir.js";
 import { DYN_HANDLE_KINDS, isDynTypedRefType, isRefCounted, typeKey } from "../../ir/ir.js";
-import { dynDesc } from "../../ir/analysis.js";
+import { dynDesc, streamTypedRefEligible } from "../../ir/analysis.js";
 import { mangleRecordNew, mangleRecordStruct } from "../mangle.js";
 import { BlockBuilder } from "./blocks.js";
 import { llvmCommentText } from "./common.js";
@@ -71,6 +71,7 @@ export const DYN_KIND = {
 export interface DynHost extends WalkerHost {
   unitInstanceRef(unionId: string, tag: number): string;
   liveDynRefAdapter(t: IrType): { snapshot: string; commit: string };
+  liveDynUnionRefAdapter(t: IrType & { kind: "union" }): string;
   dynPromiseAdapter(t: IrType): string;
   isErrorClass(className: string): boolean;
   classSubtypes(className: string): readonly string[];
@@ -146,13 +147,25 @@ export class LlDyn {
       const ty = this.valTy(type);
       const unpack = ty === "double" ? "bitcast i64 %slot to double" : ty === "i1" ? "trunc i64 %slot to i1" : "inttoptr i64 %slot to ptr";
       const pack = ty === "double" ? "bitcast double %value to i64" : ty === "i1" ? "zext i1 %value to i64" : "ptrtoint ptr %value to i64";
-      const box = this.toDynHelper(type);
+      // Collection reads expose the original mutable element, including
+      // records/arrays inside unions, rather than a detached dyn snapshot.
+      const B = new BlockBuilder();
+      B.line(`%value = ${unpack}`);
+      if (type.kind === "union" && this.host.unionsById.get(type.unionId)?.arms.some(streamTypedRefEligible)) {
+        B.line(`%result = call ptr @${this.host.liveDynUnionRefAdapter(type)}(ptr %value)`);
+      } else if (type.kind === "record" || type.kind === "array") {
+        const adapter = this.host.liveDynRefAdapter(type);
+        const rc = vAdapters(this.host, type);
+        const typeId = typeKey(type);
+        B.line(`%result = call ptr ${typedRefConstructor(this.host, type)}(ptr %value, ptr ${rc.retain}, ptr ${rc.release}, ptr ${this.host.cstr(typeId)}, ${this.S} ${Buffer.byteLength(typeId, "utf8")}, ptr @${adapter.snapshot}, ptr ${adapter.commit})`);
+      } else {
+        B.line(`%result = call ptr @${this.toDynHelper(type)}(${ty} %value)`);
+      }
+      B.terminate("ret ptr %result");
       const unbox = this.dynCheckHelper(type);
       this.defs.push(
         `define internal ptr @${name}_${role}_box(i64 %slot) ${FN_ATTRS} {`,
-        `  %value = ${unpack}`,
-        `  %result = call ptr @${box}(${ty} %value)`,
-        `  ret ptr %result`, `}`, "",
+        B.render(), `}`, "",
         `define internal i64 @${name}_${role}_unbox(ptr %d) ${FN_ATTRS} {`,
         `  %value = call ${ty === "i1" ? "zeroext i1" : ty} @${unbox}(ptr %d, ptr null)`,
         `  %result = ${pack}`,

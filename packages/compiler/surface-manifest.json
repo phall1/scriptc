@@ -2713,6 +2713,13 @@
       "status": "static"
     },
     {
+      "id": "stdlib.map.entries",
+      "kind": "stdlib",
+      "name": "Map.prototype.entries",
+      "status": "static",
+      "note": "live native iterators support next(), for...of, and drains; iterator helper methods are refused"
+    },
+    {
       "id": "stdlib.map.forEach",
       "kind": "stdlib",
       "name": "Map.prototype.forEach",
@@ -2731,10 +2738,24 @@
       "status": "static"
     },
     {
+      "id": "stdlib.map.keys",
+      "kind": "stdlib",
+      "name": "Map.prototype.keys",
+      "status": "static",
+      "note": "live native iterators support next(), for...of, and drains; iterator helper methods are refused"
+    },
+    {
       "id": "stdlib.map.set",
       "kind": "stdlib",
       "name": "Map.prototype.set",
       "status": "static"
+    },
+    {
+      "id": "stdlib.map.values",
+      "kind": "stdlib",
+      "name": "Map.prototype.values",
+      "status": "static",
+      "note": "live native iterators support next(), for...of, and drains; iterator helper methods are refused"
     },
     {
       "id": "stdlib.math.E",
@@ -3592,6 +3613,13 @@
       "note": "compiles over Set receivers with Set arguments (the general ReadonlySetLike argument forms are refused per site)"
     },
     {
+      "id": "stdlib.set.entries",
+      "kind": "stdlib",
+      "name": "Set.prototype.entries",
+      "status": "static",
+      "note": "live native iterators support next(), for...of, and drains; iterator helper methods are refused"
+    },
+    {
       "id": "stdlib.set.forEach",
       "kind": "stdlib",
       "name": "Set.prototype.forEach",
@@ -3632,6 +3660,13 @@
       "note": "compiles over Set receivers with Set arguments (the general ReadonlySetLike argument forms are refused per site)"
     },
     {
+      "id": "stdlib.set.keys",
+      "kind": "stdlib",
+      "name": "Set.prototype.keys",
+      "status": "static",
+      "note": "live native iterators support next(), for...of, and drains; iterator helper methods are refused"
+    },
+    {
       "id": "stdlib.set.symmetricDifference",
       "kind": "stdlib",
       "name": "Set.prototype.symmetricDifference",
@@ -3644,6 +3679,13 @@
       "name": "Set.prototype.union",
       "status": "static",
       "note": "compiles over Set receivers with Set arguments (the general ReadonlySetLike argument forms are refused per site)"
+    },
+    {
+      "id": "stdlib.set.values",
+      "kind": "stdlib",
+      "name": "Set.prototype.values",
+      "status": "static",
+      "note": "live native iterators support next(), for...of, and drains; iterator helper methods are refused"
     },
     {
       "id": "stdlib.string.at",
