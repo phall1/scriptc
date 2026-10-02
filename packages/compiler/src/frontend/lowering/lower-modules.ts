@@ -763,7 +763,9 @@ export function appendForkModules(
     };
     const visit = (node: unknown): void => {
       if (Array.isArray(node)) {
-        for (const item of node) visit(item);
+        // This walk only reads compiler-owned arrays. A callback traversal
+        // reuses one checked view instead of refreshing it at each step.
+        node.forEach(visit);
         return;
       }
       if (node === null || typeof node !== "object") return;
