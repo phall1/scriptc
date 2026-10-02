@@ -10,13 +10,14 @@ export const IR_VERSION = 13 as const;
  * string size limit. API consumers can retain the readable default. */
 export function serializeModule(mod: IrModule, compact = false): string {
   const replacer = (_key: string, value: unknown): unknown => {
-    if (typeof value === "number" && !Number.isFinite(value)) {
+    if (typeof value !== "number") return value;
+    if (!Number.isFinite(value)) {
       return { $nonfinite: Number.isNaN(value) ? "nan" : value > 0 ? "inf" : "-inf" };
     }
     // JSON.stringify(-0) prints "0", silently losing the sign a numLit's
     // f64 semantics depend on (String(-0) is "0" but 1/-0 is -Infinity) —
     // the same sentinel mechanism carries it.
-    if (typeof value === "number" && Object.is(value, -0)) {
+    if (Object.is(value, -0)) {
       return { $nonfinite: "-0" };
     }
     return value;
