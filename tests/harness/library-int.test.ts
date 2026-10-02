@@ -99,6 +99,27 @@ const CORPUS: CorpusCase[] = [
     expected: "prove",
   },
   {
+    name: "signed-zero-division-clamp",
+    body: `if (a === 0) send(Math.trunc(Math.max(-1, Math.min(1 / a, 1))));`,
+    param: true,
+    args: ["0", "-0"],
+    expected: "prove",
+  },
+  {
+    name: "signed-zero-power-clamp",
+    body: `if (a === 0) send(Math.trunc(Math.max(-1, Math.min(a ** -1, 1))));`,
+    param: true,
+    args: ["0", "-0"],
+    expected: "prove",
+  },
+  {
+    name: "signed-zero-even-power-clamp",
+    body: `if (a === 0) send(Math.trunc(Math.min(a ** -2, 1)));`,
+    param: true,
+    args: ["0", "-0"],
+    expected: "prove",
+  },
+  {
     name: "times-half-unprovable",
     body: `if (a >= 0 && a <= 1000) {\n  const t = a * 0.5;\n  send(t);\n}`,
     param: true,
@@ -339,6 +360,42 @@ describe.each(EMISSIONS)("ask-4 corpus, %s emission", (emission) => {
       }
     });
   }
+
+  test.each([
+    { name: "division-upper-i64", expr: "Math.trunc(Math.min(1 / z, 1))", cls: "i64" },
+    { name: "division-upper-u64", expr: "Math.trunc(Math.min(1 / z, 1))", cls: "u64" },
+    { name: "division-lower-i64", expr: "Math.trunc(Math.max(-1 / z, -1))", cls: "i64" },
+    ...[-1, -3, -5].map((exponent) => ({
+      name: `power-${exponent}-i64`,
+      expr: `Math.trunc(Math.min(z ** (${exponent}), 1))`,
+      cls: "i64",
+    })),
+  ])("signed-zero $name refuses an infinite return", async ({ name, expr, cls }) => {
+    const oracle = new Function("z", `return ${expr};`) as (z: number) => number;
+    expect(Number.isFinite(oracle(0))).toBe(true);
+    expect(Number.isFinite(oracle(-0))).toBe(false);
+    const source = `export function f(z: number): number {\n  if (z === 0) return ${expr};\n  return 0;\n}\n`;
+    const profile = {
+      profile_format: 1,
+      name: "signed-zero-return",
+      entry: "lib.ts",
+      emission,
+      abi: {
+        prefix: "sz_",
+        init_symbol: "sz_init",
+        sink_register_symbol: "sz_set_panic_sink",
+        collect_symbol: null,
+        result_reset_symbol: null,
+      },
+      exports: [{ export: "f", symbol: "sz_f", params: ["f64"], returns: cls }],
+    };
+    const r = await buildCase(`signed-zero-${name}-${emission}`, source, profile);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.diagnostics.map((d) => d.code)).toEqual(["SC4023"]);
+    expect(r.diagnostics[0]!.message).toContain("'exports.f.return'");
+    expect(r.diagnostics[0]!.message).toContain("Infinity");
+  });
 
   /* ── outbound integer returns: real int64_t/uint64_t crossings ─────── */
 

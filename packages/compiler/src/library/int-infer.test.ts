@@ -366,6 +366,54 @@ describe("the ask-4 conformance corpus over scriptc IR", () => {
   });
 });
 
+describe("signed zero in arithmetic before integer boundaries", () => {
+  test.each([
+    { name: "positive dividend with an upper clamp", value: math("min", bin("/", num(1), ref("z.0")), num(1)), callee: "send" },
+    { name: "positive dividend at a u64 slot", value: math("min", bin("/", num(1), ref("z.0")), num(1)), callee: "sendU64" },
+    { name: "negative dividend with a lower clamp", value: math("max", bin("/", num(-1), ref("z.0")), num(-1)), callee: "send" },
+    ...[-1, -3, -5].map((exponent) => ({
+      name: `negative odd exponent ${exponent}`,
+      value: math("min", bin("**", ref("z.0"), num(exponent)), num(1)),
+      callee: "send",
+    })),
+  ])("$name refuses a reachable infinity", ({ value, callee }) => {
+    const v = only(caseModule(["z"], [], [
+      iff(bin("===", ref("z.0"), num(0)), [send(math("trunc", value), callee)]),
+    ]));
+    expect(v.outcome).toBe("refuse");
+    expect(v.obligation).toBe("range");
+    expect(v.detail).toContain("Infinity");
+  });
+
+  test.each(["/", "**"] as const)("a two-sided clamp after %s contains both zero signs' results", (op) => {
+    const value = op === "/" ? bin("/", num(1), ref("z.0")) : bin("**", ref("z.0"), num(-1));
+    const v = only(caseModule(["z"], [], [
+      iff(bin("===", ref("z.0"), num(0)), [send(math("trunc", math("max", num(-1), math("min", value, num(1)))))]),
+    ]));
+    expect(v.outcome).toBe("prove");
+    expect(v.provenLo).toBe(-1);
+    expect(v.provenHi).toBe(1);
+  });
+
+  test.each([-2, -4])("an even negative exponent %s still permits a one-sided clamp", (exponent) => {
+    const v = only(caseModule(["z"], [], [
+      iff(bin("===", ref("z.0"), num(0)), [send(math("trunc", math("min", bin("**", ref("z.0"), num(exponent)), num(1))))]),
+    ]));
+    expect(v.outcome).toBe("prove");
+    expect(v.provenLo).toBe(1);
+    expect(v.provenHi).toBe(1);
+  });
+
+  test("zero divided by either zero sign still refuses NaN", () => {
+    const v = only(caseModule(["z"], [], [
+      iff(bin("===", ref("z.0"), num(0)), [send(math("trunc", math("min", bin("/", num(0), ref("z.0")), num(1))))]),
+    ]));
+    expect(v.outcome).toBe("refuse");
+    expect(v.obligation).toBe("wholeness");
+    expect(v.detail).toContain("NaN");
+  });
+});
+
 describe("the domain's edges beyond the corpus", () => {
   test("a declared i64 parameter seeds whole-in-safe-range inside its own function", () => {
     // send's own body forwards its parameter to sendU64: the i64 seed is
