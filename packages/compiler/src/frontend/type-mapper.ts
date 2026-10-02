@@ -134,6 +134,8 @@ function comparePriority(left: DeclaredOrderPriority, right: DeclaredOrderPriori
  * struct). Owned by the Lowerer; `mapType` needs it to intern the object
  * types it encounters, which is why it is threaded through as a parameter. */
 export class ShapeRegistry {
+  /** Existing layouts change only when a recursive placeholder closes. */
+  revision = 0;
   private readonly byKey = new Map<string, string>();
   private readonly byId = new Map<string, IrRecordShape>();
   /** Historical emit-order rank of the declaration-order metadata each
@@ -306,6 +308,7 @@ export class ShapeRegistry {
       if (indexValue) shape.indexValue = indexValue;
       this.adoptDeclaredOrder(shape, declaredOrder);
       this.pendingRec.delete(id);
+      this.revision++;
       const key = this.keyOf(fields, false, indexValue);
       if (!this.byKey.has(key)) this.byKey.set(key, id);
     }
@@ -360,6 +363,8 @@ export class ShapeRegistry {
  * discriminator contract. An arm's index in that list IS its runtime tag.
  * Owned by the Lowerer; threaded through mapType like ShapeRegistry. */
 export class UnionRegistry {
+  /** Existing arm/discriminator contracts change when a placeholder closes. */
+  revision = 0;
   private readonly byKey = new Map<string, string>();
   private readonly byId = new Map<string, IrUnionDef>();
   /** All interned unions in first-seen (`u0`, `u1`, ...) order. */
@@ -416,6 +421,7 @@ export class UnionRegistry {
       def.arms.push(...arms);
       if (discriminant) def.discriminant = discriminant;
       this.pendingRec.delete(id);
+      this.revision++;
       const key = JSON.stringify([arms.map(typeKey), discriminant]);
       if (!this.byKey.has(key)) this.byKey.set(key, id);
     }

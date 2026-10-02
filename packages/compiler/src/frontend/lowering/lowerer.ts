@@ -1596,6 +1596,12 @@ export class Lowerer {
   /** Union re-tag helpers (%union.retag.N), interned per (from, to)
    * unionId pair — see unionRetagHelper. */
   readonly retagHelpers = new Map<string, string>();
+  /** Copy-only routes depend on the two union contracts and discriminator
+   * layouts, without recursive width assumptions or evolving class members. */
+  private readonly copyRetagHelpers = new Map<string, { name: string; shapes: number; unions: number }>();
+  /** Method adapter names are owned by class-method-values. Looking them
+   * up must not scan and retain every unrelated lifted function. */
+  readonly classMethodValueHelpers = new Set<string>();
   /** Callee names of every interned coercion helper whose CALL mints a
    * FRESH closure per evaluation (%fn.width.*, %fn.adapt.*,
    * %fnval.spawnres.*). Registered at the mint site — NOT recovered by
@@ -7416,6 +7422,9 @@ export class Lowerer {
     const from = this.unions.get(fromId);
     const to = this.unions.get(toId);
     if (!from || !to) return null;
+    const request = `${fromId}:${toId}:${trappable === undefined ? "" : [...trappable].sort((a, b) => a - b).join(".")}`;
+    const cached = this.copyRetagHelpers.get(request);
+    if (cached && cached.shapes === this.shapes.revision && cached.unions === this.unions.revision) return cached.name;
     const plan = planUnionRetag(from, to, (id) => this.shapes.get(id),
       (src, dst) => this.widthLiftPlan(src, dst), trappable);
     if (plan === null) return null;
@@ -7426,11 +7435,18 @@ export class Lowerer {
     plan.forEach((arm, tag) => { if (arm.kind === "trap") stranded.push(tag); });
     const key = `${fromId}:${toId}:${stranded.join(".")}`;
     const existing = this.retagHelpers.get(key);
-    if (existing) return existing;
-    const name = `%union.retag.${this.retagHelpers.size}`;
-    this.retagHelpers.set(key, name);
-    this.liftedFns.push(buildUnionRetag(name, from, to, plan, loc,
-      (lift, value, dst) => this.applyWidthLift(lift, value, dst, loc), (type) => this.fmt(type)));
+    const name = existing ?? `%union.retag.${this.retagHelpers.size}`;
+    if (!existing) {
+      this.retagHelpers.set(key, name);
+      this.liftedFns.push(buildUnionRetag(name, from, to, plan, loc,
+        (lift, value, dst) => this.applyWidthLift(lift, value, dst, loc), (type) => this.fmt(type)));
+    }
+    // Width routes still revalidate on every request. Only a complete plan
+    // of exact payload copies and site-proven traps can bypass planning.
+    if (plan.every((arm) => arm.kind === "trap" || (arm.kind === "direct"
+      ? arm.route.lift.how === "copy" : arm.routes.every((route) => route.lift.how === "copy")))) {
+      this.copyRetagHelpers.set(request, { name, shapes: this.shapes.revision, unions: this.unions.revision });
+    }
     return name;
   }
 

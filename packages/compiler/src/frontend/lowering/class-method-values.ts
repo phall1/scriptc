@@ -42,7 +42,7 @@ export function lowerClassMethodValue(lowerer: Lowerer, expr: ts.PropertyAccessE
   // later must not redispatch the method name on a different receiver.
   const name = `%method.select:${info.def.name}.${method}`;
   const receiverType: IrType = { kind: "object", className: info.def.name };
-  if (!lowerer.liftedFns.some((fn) => fn.name === name)) {
+  if (!lowerer.classMethodValueHelpers.has(name)) {
     const receiver = varRef("this.0", receiverType, loc);
     const body: IrStmt[] = [];
     overrides.sort((a, b) => lowerer.isSubclassOf(a.def.name, b.def.name) ? -1 : lowerer.isSubclassOf(b.def.name, a.def.name) ? 1 : 0);
@@ -57,6 +57,7 @@ export function lowerClassMethodValue(lowerer: Lowerer, expr: ts.PropertyAccessE
     body.push({ kind: "return", value, loc });
     lowerer.liftedFns.push({ name, params: [{ localId: "this.0", name: "this", type: receiverType }], returnType: value.type,
       locals: [{ id: "this.0", name: "this", type: receiverType, mutable: false }], body, loc });
+    lowerer.classMethodValueHelpers.add(name);
   }
   return finish({ kind: "call", callee: name, args: [reference], type: value.type, loc });
 }
@@ -97,14 +98,15 @@ export function classMethodValue(lowerer: Lowerer, blame: ts.Node, info: ClassIn
   }
   const type = funcTypeFromParamShapes(params, ret);
   const name = `%method.value:${callee}`;
-  if (!lowerer.liftedFns.some((fn) => fn.name === name)) {
+  if (!lowerer.classMethodValueHelpers.has(name)) {
     const thunkParams = params.map((param, i) => ({ localId: `p.${i}`, name: `p${i}`, type: param.type }));
     const receiverType: IrType = { kind: "object", className: owner.def.name };
     const receiverName = `%method.receiver:${owner.def.name}`;
-    if (!lowerer.liftedFns.some((fn) => fn.name === receiverName)) {
+    if (!lowerer.classMethodValueHelpers.has(receiverName)) {
       lowerer.liftedFns.push({ name: receiverName, params: [{ localId: "this.0", name: "this", type: DYN }], returnType: receiverType,
         locals: [{ id: "this.0", name: "this", type: DYN, mutable: false }],
         body: [{ kind: "return", value: { kind: "dynCheck", value: varRef("this.0", DYN, loc), type: receiverType, loc }, loc }], loc });
+      lowerer.classMethodValueHelpers.add(receiverName);
     }
     const receiver: IrExpr = { kind: "call", callee: receiverName,
       args: [{ kind: "libCall", fn: "dyn.this", args: [], type: DYN, loc }], type: receiverType, loc };
@@ -121,6 +123,7 @@ export function classMethodValue(lowerer: Lowerer, blame: ts.Node, info: ClassIn
         : [{ kind: "return", value: call, loc }], loc,
     };
     lowerer.liftedFns.push(fn);
+    lowerer.classMethodValueHelpers.add(name);
   }
   return { kind: "closure", fnName: name, captures: [], type, loc };
 }
