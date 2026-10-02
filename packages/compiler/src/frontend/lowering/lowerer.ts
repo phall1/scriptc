@@ -35,7 +35,7 @@ import { bindingSource } from "../binding-source.js";
 import { tsgoPath } from "../dts-paths.js";
 import * as ts from "../ts7/adapter.js";
 import { literalValues } from "../literal-values.js";
-import { literalUnionArm } from "../union-discriminants.js";
+import { discriminantOwners, literalUnionArm, type UnionLiteral } from "../union-discriminants.js";
 import type { ScrDiagnostic } from "../../diagnostics/diagnostic.js";
 import {
   anyOpRequiresDynamicDiag,
@@ -1599,6 +1599,9 @@ export class Lowerer {
   /** Copy-only routes depend on the two union contracts and discriminator
    * layouts, without recursive width assumptions or evolving class members. */
   private readonly copyRetagHelpers = new Map<string, { name: string; shapes: number; unions: number }>();
+  private readonly unionLiteralOwners = new Map<string, { owners: Map<string, number> | null; shapes: number; unions: number }>();
+  private readonly strippedUndefinedArms = new Map<string, { type: IrType; unions: number }>();
+  private readonly stdlibSymbols = new Map<ts.Symbol, boolean>();
   /** Method adapter names are owned by class-method-values. Looking them
    * up must not scan and retain every unrelated lifted function. */
   readonly classMethodValueHelpers = new Set<string>();
@@ -5269,8 +5272,20 @@ export class Lowerer {
    * this is THE tag for that (union, arm) pair program-wide — every wrap,
    * narrow, and tag test agrees by construction. */
   armTag(unionId: string, arm: IrType): number {
+    return this.unions.armTag(unionId, arm);
+  }
+
+  /** Literal ownership depends only on the union contract and record layouts.
+   * Recheck it when recursive placeholders close, not for every literal. */
+  literalUnionArm(unionId: string, values: readonly UnionLiteral[]): (IrType & { kind: "record" }) | null {
     const def = this.unions.get(unionId);
-    return def ? def.arms.findIndex((a) => typeEquals(a, arm)) : -1;
+    if (!def || values.length === 0) return null;
+    let cached = this.unionLiteralOwners.get(unionId);
+    if (!cached || cached.shapes !== this.shapes.revision || cached.unions !== this.unions.revision) {
+      cached = { owners: discriminantOwners(def, (id) => this.shapes.get(id)), shapes: this.shapes.revision, unions: this.unions.revision };
+      this.unionLiteralOwners.set(unionId, cached);
+    }
+    return literalUnionArm(def, values, (id) => this.shapes.get(id), cached.owners);
   }
 
   /** Implicit union construction. Wherever a value flows into a typed slot
@@ -7918,7 +7933,7 @@ export class Lowerer {
         const property = this.checker.getPropertyOfType(this.typeOf(literal), def.discriminant.field);
         if (property && !(property.flags & (ts.SymbolFlags.Optional | ts.SymbolFlags.GetAccessor | ts.SymbolFlags.SetAccessor))) {
           const values = literalValues(this.checker.getTypeOfSymbol(property));
-          const arm = values && literalUnionArm(def, values, (id) => this.shapes.get(id));
+          const arm = values && this.literalUnionArm(def.id, values);
           if (arm) expr = this.coerceInto(node, expr, arm);
         }
       }
@@ -8185,7 +8200,7 @@ export class Lowerer {
         const property = this.checker.getPropertyOfType(this.typeOf(node), def.discriminant.field);
         if (property && !(property.flags & (ts.SymbolFlags.Optional | ts.SymbolFlags.GetAccessor | ts.SymbolFlags.SetAccessor))) {
           const values = literalValues(this.checker.getTypeOfSymbol(property));
-          const arm = values && literalUnionArm(def, values, (id) => this.shapes.get(id));
+          const arm = values && this.literalUnionArm(def.id, values);
           if (arm) return this.coerceInto(node, this.lowerObjectLiteral(node, arm), expected);
         }
       }
@@ -8439,12 +8454,15 @@ export class Lowerer {
    * the body — the default removes exactly the undefined possibility. */
   stripUndefinedArm(t: IrType): IrType {
     if (t.kind !== "union") return t;
+    const cached = this.strippedUndefinedArms.get(t.unionId);
+    if (cached && cached.unions === this.unions.revision) return cached.type;
     const def = this.unions.get(t.unionId);
-    if (!def || !def.arms.some((a) => a.kind === "undefinedT")) return t;
+    if (!def || this.armTag(t.unionId, UNDEFINED_T) < 0) return t;
     const rest = def.arms.filter((a): boolean => a.kind !== "undefinedT");
-    if (rest.length === 1) return rest[0]!;
     // Removing an arm keeps canonical (typeKey-sorted) order.
-    return { kind: "union", unionId: this.unions.transform(def, rest) };
+    const type: IrType = rest.length === 1 ? rest[0]! : { kind: "union", unionId: this.unions.transform(def, rest) };
+    this.strippedUndefinedArms.set(t.unionId, { type, unions: this.unions.revision });
+    return type;
   }
 
   /** The interned `T | undefined` union over a non-union arm type — the ABI
@@ -9725,7 +9743,14 @@ export class Lowerer {
   }
 
   isStdlibSymbol(symbol: ts.Symbol | undefined): boolean {
-    return isStdlibSymbol(this, symbol);
+    if (!symbol) return false;
+    const cached = this.stdlibSymbols.get(symbol);
+    if (cached !== undefined) return cached;
+    // A compilation's checker declarations and library provenance are fixed.
+    // Global alias and narrowing state remain outside this symbol-only cache.
+    const result = isStdlibSymbol(this, symbol);
+    this.stdlibSymbols.set(symbol, result);
+    return result;
   }
 
   isStdlibGlobal(expr: ts.Expression, name: string): boolean {
