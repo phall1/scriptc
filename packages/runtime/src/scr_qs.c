@@ -460,6 +460,12 @@ static void qs_stringify_value(QsBuf *b, const ScrDyn *v) {
 
 ScrStr *scr_qs_stringify(const ScrDyn *obj, const ScrStr *sep,
                          const ScrStr *eq) {
+  if (obj && obj->kind == SCR_DYN_TYPED_REF) {
+    ScrDyn *view = scr_dyn_typed_ref_materialize(obj);
+    ScrStr *result = view && !scr_exc_pending() ? scr_qs_stringify(view, sep, eq) : NULL;
+    scr_dyn_release(view);
+    return result;
+  }
   const char *sep_b = (sep && sep->len) ? sep->data : "&";
   size_t sep_len = (sep && sep->len) ? sep->len : 1;
   const char *eq_b = (eq && eq->len) ? eq->data : "=";
@@ -475,6 +481,9 @@ ScrStr *scr_qs_stringify(const ScrDyn *obj, const ScrStr *sep,
     const ScrStr *k = kd->v.str;
     const ScrDyn *v = scr_dyn_obj_get(obj, k->data, k->len);
     if (!v) continue; /* unreachable: keys came from the object */
+    ScrDyn *view = v->kind == SCR_DYN_TYPED_REF ? scr_dyn_typed_ref_materialize(v) : NULL;
+    if (view) v = view;
+    if (scr_exc_pending()) { scr_dyn_release(view); scr_dyn_release(keys); free(fields.data); return NULL; }
     ScrStr *ks = scr_str_encode_uri_component((ScrStr *)k);
     if (v->kind == SCR_DYN_ARR) {
       for (size_t j = 0; j < v->v.arr.len; j++) {
@@ -490,6 +499,7 @@ ScrStr *scr_qs_stringify(const ScrDyn *obj, const ScrStr *sep,
       qs_stringify_value(&fields, v);
     }
     scr_str_release(ks);
+    scr_dyn_release(view);
   }
   scr_dyn_release(keys);
   return qb_take(&fields);

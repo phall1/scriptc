@@ -41,12 +41,14 @@ stdlib-fence.ts:20:7 - error SC2020: 'NumberFormat' is part of the standard libr
 
   hint: Intl formatter values have no representation — the COMPOSED en-US forms lower: new Intl.NumberFormat("en-US").format(x) and x.toLocaleString("en-US") with default options; the rest is ICU locale data the binary does not carry
 
-stdlib-fence.ts:20:13 - error SC1090: constructing values other than classes declared in the program is not supported yet
+stdlib-fence.ts:20:13 - error SC2020: 'new Intl.NumberFormat' is part of the standard library types but has no scriptc lowering yet
 
   19 | const parsedMs = Date.parse;
   20 | const fmt = new Intl.NumberFormat();
      |             ^~~~~~~~~~~~~~~~~~~~~~~
   21 | 
+
+  hint: the type checker sees the full standard library, but only the supported surface compiles (https://scriptc.dev/limitations)
 
 stdlib-fence.ts:23:11 - error SC2020: 'new Date with 2 arguments' is part of the standard library types but has no scriptc lowering yet
 
@@ -133,15 +135,6 @@ stdlib-fence.ts:41:17 - error SC2020: 'number[].entries' is part of the standard
   41 | const entries = [1, 2].entries();
      |                 ^~~~~~~~~~~~~~
   42 | const arrAt = [1, 2].at(0);
-
-  hint: the type checker sees the full standard library, but only the supported surface compiles (https://scriptc.dev/limitations)
-
-stdlib-fence.ts:43:14 - error SC2020: 'string.normalize' is part of the standard library types but has no scriptc lowering yet
-
-  42 | const arrAt = [1, 2].at(0);
-  43 | const norm = "abc".normalize();
-     |              ^~~~~~~~~~~~~~~
-  44 | const limited = "a,b,c".split(Math.random() ? "," : /,/, 2); // union separators stay fenced; limits lower
 
   hint: the type checker sees the full standard library, but only the supported surface compiles (https://scriptc.dev/limitations)
 

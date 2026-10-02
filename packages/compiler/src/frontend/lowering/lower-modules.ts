@@ -736,6 +736,7 @@ export function appendForkModules(
     records: IrRecordShape[];
     unions: IrUnionDef[];
   } {
+    const valueInstanceOfRoots = new Set<string>();
     const classNames = new Set<string>();
     const shapeIds = new Set<string>();
     const unionIds = new Set<string>();
@@ -769,6 +770,16 @@ export function appendForkModules(
       }
       if (node === null || typeof node !== "object") return;
       const rec = node as Record<string, unknown>;
+      if (rec["kind"] === "instanceOfValue") {
+        const expression = node as Extract<IrExpr, { kind: "instanceOfValue" }>;
+        for (const type of [expression.value.type, expression.classValue.type]) {
+          if (type.kind !== "object" && type.kind !== "classval") continue;
+          let root = lowerer.classes.get(type.className);
+          if (!root) continue;
+          while (root.base) root = root.base;
+          valueInstanceOfRoots.add(root.def.name);
+        }
+      }
       if (rec["kind"] === "dynFrom" && boxedChild((rec["value"] as IrExpr).type)) {
         // A generic child can expose native stdio without importing stream.
         visit([{ className: "%Readable" }, { className: "%Writable" }]);
@@ -843,7 +854,7 @@ export function appendForkModules(
           let root = info;
           while (root.base) root = root.base;
           const wholeTree = (c: ClassInfo): void => {
-            if (lowerer.classCanBeConstructed(c)) visit([{ className: c.def.name }]);
+            if (valueInstanceOfRoots.has(root.def.name) || lowerer.classCanBeConstructed(c)) visit([{ className: c.def.name }]);
             for (const s of c.subclasses) wholeTree(s);
           };
           wholeTree(root);
@@ -1093,6 +1104,9 @@ export function collectGlobals(lowerer: Lowerer, sf: ts.SourceFile, topStmts: ts
           }
           let type = lowerer.mapTypeOf(tsType) ?? dynFallbackType(lowerer, stmt.expression, tsType);
           if (type === null) lowerer.badType(stmt.expression, tsType);
+          // Inferred JavaScript factory exports keep their original value,
+          // including callable objects decorated with Object.assign.
+          if (isJsSourceFile(sf) && ts.isCallExpression(stmt.expression) && type.kind === "record" && lowerer.dynConvertible(type)) type = DYN;
           // `export default undefined` — the unit-only union, like any
           // unit-only binding (`export default null` maps via mapType).
           if (type.kind === "void" && isUnitOnlyTsType(tsType)) {
@@ -1136,34 +1150,22 @@ export function collectGlobals(lowerer: Lowerer, sf: ts.SourceFile, topStmts: ts
             const strict = lowerer.checker.getTypeOfSymbol(symbol);
             const t = lowerer.mapTypeOf(strict) ?? dynFallbackType(lowerer, nameNode, strict);
             if (!t || t.kind === "void") lowerer.badType(typeNode, strict);
-            // `module.exports.Strings = Strings` naming a dyn-HOLDING
-            // const (the JS file-scope object-literal identity story): the
-            // export ALIASES the const's own dyn global — one storage, one
-            // owner, identity by construction (a record-typed second slot
-            // would either copy or mismatch the dyn value — that mismatch
-            // was an ICE; a second same-named global double-released at
-            // teardown). The statement's assign degenerates to a harmless
-            // self-assign. Mutable (`let`) sources keep the registration
-            // below: Node copies the VALUE at this statement, and separate
-            // storage is exactly that copy.
+            // An immutable export source shares its live storage and native
+            // callable ABI. Mutable sources need a separate snapshot slot:
+            // later writes to the binding do not change the exported value.
             {
               let rhs: ts.Node = typeNode;
               while (ts.isParenthesizedExpression(rhs)) rhs = rhs.expression;
               if (ts.isIdentifier(rhs)) {
                 const vSym = lowerer.checker.getSymbolAtLocation(rhs);
                 const vG = vSym && lowerer.globalsBySymbol.get(vSym);
-                if (vG?.type.kind === "dyn") {
+                if (vG) {
                   if (!vG.mutable) {
                     lowerer.globalsBySymbol.set(symbol, vG);
                     for (const d of lowerer.checker.declarationsOf(symbol)) lowerer.globalsByDeclNode.set(d, vG);
                     return;
                   }
-                  // A mutable (`let`) dyn source: separate DYN storage IS
-                  // Node's copy-of-the-reference at this statement (later
-                  // reassignments of the let stay invisible through the
-                  // export). The id must not collide with the let's own
-                  // `%g.<tag><name>` global.
-                  const g: IrGlobal = { id: `%g.${tag}%export.${name}`, name, type: DYN, mutable: false };
+                  const g: IrGlobal = { id: `%g.${tag}%export.${name}`, name, type: vG.type, mutable: false };
                   lowerer.globalsBySymbol.set(symbol, g);
                   for (const d of lowerer.checker.declarationsOf(symbol)) lowerer.globalsByDeclNode.set(d, g);
                   lowerer.globalsList.push(g);
@@ -1171,7 +1173,7 @@ export function collectGlobals(lowerer: Lowerer, sf: ts.SourceFile, topStmts: ts
                 }
               }
             }
-            const g: IrGlobal = { id: `%g.${tag}${name}`, name, type: t, mutable: false };
+            const g: IrGlobal = { id: `%g.${tag}%export.${name}`, name, type: t, mutable: false };
             lowerer.globalsBySymbol.set(symbol, g);
             // Importer aliases resolve to a DISTINCT late-bound symbol with
             // the same declaration — key the node too (globalOf's fallback).
@@ -1815,6 +1817,18 @@ export function collectGlobals(lowerer: Lowerer, sf: ts.SourceFile, topStmts: ts
                 (ts.isArrowFunction(decl.initializer) || ts.isFunctionExpression(decl.initializer)) &&
                 !decl.initializer.typeParameters?.length) {
               type = lowerer.lambdaSignature(decl.initializer).funcType;
+            }
+            // Namespace aliases of inferred helpers carry the helper's
+            // settled callable, whose return can differ from checker inference.
+            // Keep a shared checked slot before any consumer specializes it.
+            if (isJsSourceFile(sf) && !decl.type && !hasJsTypeAnnotation(decl) && type.kind === "func" &&
+                decl.initializer && ts.isPropertyAccessExpression(decl.initializer)) {
+              const member = nsMemberIdentOf(lowerer, decl.initializer);
+              if (member && lowerer.genericFnOf(member)?.implicitParams) type = DYN;
+              else if (member) {
+                const source = lowerer.globalOf(member);
+                if (source?.type.kind === "func") type = source.type;
+              }
             }
             if (isJsSourceFile(sf) && !decl.type && !hasJsTypeAnnotation(decl) &&
                 decl.initializer && ts.isCallExpression(decl.initializer) && type.kind === "union") {

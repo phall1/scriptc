@@ -102,10 +102,9 @@ test("settled generic rest-order fences count each source statement once", () =>
   expect(coverage.stats.statementsFailed).toBe(2);
 });
 
-test("JS inference gaps land where 'any' lands: SC2011 static, island dynamic", async () => {
-  // The js-gap fixture's tsconfig turns noImplicitAny off, so the untyped
-  // parameter types `any` — the static analysis reports the site as
-  // dynamic-capable (SC2011) while the JSDoc-typed neighbor stays static.
+test("inferred JavaScript stays static with or without the island enabled", async () => {
+  // The js-gap fixture turns noImplicitAny off. Its inferred parameter
+  // uses checked native values alongside the JSDoc-typed neighbor.
   await expect(report(fixture("js-gap/gap.js"))).toMatchFileSnapshot(
     "__snapshots__/coverage-js-gap.txt",
   );

@@ -134,6 +134,7 @@ export class DeferredModuleInitializers {
       if (!fn) continue;
       everyStmtList(fn.body, { stmt: () => true, expr: (expr) => {
         demandType(expr.type);
+        if (expr.kind === "varRef" && this.pending.has(expr.localId)) demanded.add(expr.localId);
         if (expr.kind === "call") {
           const owner = classHelpers.get(expr.callee);
           if (owner) {
@@ -188,8 +189,11 @@ function registryInitializer(lowerer: Lowerer, expression: ts.Expression, statem
     return ts.isVariableDeclaration(declaration) && initialized(declaration) && !!declaration.initializer &&
       (ts.isArrowFunction(declaration.initializer) || ts.isFunctionExpression(declaration.initializer));
   };
-  const value = (node: ts.Expression): boolean => {
-    if (ts.isParenthesizedExpression(node)) return value(node.expression);
+  const value = (node: ts.Expression, depth = 0): boolean => {
+    // Let ordinary expression lowering report its named depth limit.
+    // Registry discovery must not overflow before that check runs.
+    if (depth > 200) return false;
+    if (ts.isParenthesizedExpression(node)) return value(node.expression, depth + 1);
     if (ts.isPrefixUnaryExpression(node) && (node.operator === ts.SyntaxKind.MinusToken || node.operator === ts.SyntaxKind.PlusToken) && ts.isNumericLiteral(node.operand)) return true;
     if (ts.isNumericLiteral(node) || ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) ||
         node.kind === ts.SyntaxKind.TrueKeyword || node.kind === ts.SyntaxKind.FalseKeyword || node.kind === ts.SyntaxKind.NullKeyword) return true;
@@ -201,7 +205,7 @@ function registryInitializer(lowerer: Lowerer, expression: ts.Expression, statem
       const trivia = node.getSourceFile().text.slice(node.pos, node.getStart());
       if (!/[@#]__PURE__/.test(trivia)) return false;
       if (!callable(node.expression)) return false;
-      return (node.arguments ?? []).every(value);
+      return (node.arguments ?? []).every((argument) => value(argument, depth + 1));
     }
     if (ts.isPropertyAccessExpression(node) && ts.isPropertyAccessExpression(node.expression) &&
         node.expression.name.text === "prototype") {
@@ -217,14 +221,14 @@ function registryInitializer(lowerer: Lowerer, expression: ts.Expression, statem
       const owner = ts.isIdentifier(node.expression) ? lowerer.resolveValueSymbol(node.expression) : undefined;
       return !!declaration && ts.isPropertyAssignment(declaration) &&
         !ts.isComputedPropertyName(declaration.name) && propertyName(declaration.name) !== "__proto__" &&
-        !!owner && registryOwnerIsData(lowerer, owner, statement) && value(node.expression);
+        !!owner && registryOwnerIsData(lowerer, owner, statement) && value(node.expression, depth + 1);
     }
-    if (ts.isArrayLiteralExpression(node)) return node.elements.every((element) => !ts.isSpreadElement(element) && value(element));
+    if (ts.isArrayLiteralExpression(node)) return node.elements.every((element) => !ts.isSpreadElement(element) && value(element, depth + 1));
     if (ts.isObjectLiteralExpression(node)) return node.properties.every((property) => {
       if (ts.isMethodDeclaration(property) || ts.isGetAccessorDeclaration(property) || ts.isSetAccessorDeclaration(property)) return !!property.name && !ts.isComputedPropertyName(property.name);
-      if (ts.isShorthandPropertyAssignment(property)) return !property.objectAssignmentInitializer && ts.isIdentifier(property.name) && value(property.name);
+      if (ts.isShorthandPropertyAssignment(property)) return !property.objectAssignmentInitializer && ts.isIdentifier(property.name) && value(property.name, depth + 1);
       return ts.isPropertyAssignment(property) && !ts.isComputedPropertyName(property.name) &&
-        (propertyName(property.name) !== "__proto__" || property.initializer.kind === ts.SyntaxKind.NullKeyword) && value(property.initializer);
+        (propertyName(property.name) !== "__proto__" || property.initializer.kind === ts.SyntaxKind.NullKeyword) && value(property.initializer, depth + 1);
     });
     if (!ts.isIdentifier(node)) return false;
     if (node.text === "undefined" && lowerer.isStdlibGlobal(node, "undefined")) return true;

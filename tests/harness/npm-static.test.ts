@@ -337,11 +337,6 @@ describe(`npm-static pilots${sanitize ? " (sanitized)" : ""}`, () => {
     expect(nativeRes.exitCode).toBe(nodeRes.exitCode);
   });
 
-  // Tier 1: fully static, byte-exact against Node. ms's driven surface —
-  // BOTH the parse and format directions — joined when implicit-any
-  // monomorphization and aliased-typeof narrowing landed; its one
-  // remaining fence sits on the garbage-input path (pinned below), which
-  // ms-cli.ts deliberately never drives.
   test.each(["release", "dev"] as const)("inferred class methods dispatch through inherited checked receivers (%s)", async (optimization) => {
     const entry = join(pilotRoot, "class-helper-cli.ts");
     const outDir = join(cacheDir, `class-helper-${optimization}-${sanitize ? "san" : "plain"}`);
@@ -359,6 +354,7 @@ describe(`npm-static pilots${sanitize ? " (sanitized)" : ""}`, () => {
     ["escape-string-regexp", "escape-cli.ts"],
     ["slash", "slash-cli.ts"],
     ["ms", "ms-cli.ts"],
+    ["ms", "ms-invalid-cli.ts"],
     // dualist pins the "node" exports condition: Node runs ./node.js
     // (yaml's browser-vs-node shape) and the opted-in resolution must
     // land on the SAME artifact, never the browser build.
@@ -515,26 +511,12 @@ describe(`npm-static pilots${sanitize ? " (sanitized)" : ""}`, () => {
     ]);
   }, 120_000);
 
-  // ms's coverage, pinned: aliased-typeof narrowing carried the entry
-  // conditional (`var type = typeof val` — the checker only narrows const
-  // aliases), and the whole driven surface is static. What remains is
-  // parse()'s undefined-returning GARBAGE paths against its JSDoc
-  // `@return {Number}` claim: two bare `return;`s stay runtime fences,
-  // and the switch's `return undefined` now COMPILES to the stranded-unit
-  // trap (divergence 335) — the same loud TypeError, thrown by compiled
-  // code instead of a deferred fence. Node answers undefined there, a
-  // value the declared representation cannot hold, so each path traps
-  // loudly instead of misbehaving. The frontier only moves deliberately.
-  test("ms compiles static with the JSDoc-contradicting undefined returns pinned", () => {
-    const { coverage } = analyze(join(pilotRoot, "ms-cli.ts"), { npmStatic: ["ms"] });
+  test("ms supports invalid duration strings without runtime fences", () => {
+    const { coverage } = analyze(join(pilotRoot, "ms-invalid-cli.ts"), { npmStatic: ["ms"] });
     expect(coverage.npmStatic).toEqual([{ package: "ms", status: "static" }]);
     expect(coverage.preflightFailed).toBe(false);
-    expect(coverage.diagnostics).toHaveLength(0); // builds — fences are runtime
-    const fences = coverage.runtimeFences ?? [];
-    expect(fences.length).toBe(2);
-    for (const f of fences) {
-      expect(f.message).toMatch(/bare 'return'/);
-    }
+    expect(coverage.diagnostics).toHaveLength(0);
+    expect(coverage.runtimeFences ?? []).toEqual([]);
   }, 120_000);
 
   // Commander is the declaration-backed npm-static vertical slice: its

@@ -7141,7 +7141,8 @@ function lowerProcessIpcSend(lowerer: Lowerer, call: ts.CallExpression): IrExpr 
     while (info && info.base) info = info.base;
     if (!info || info.def.name !== "%Error") return null;
     if (!lowerer.isStdlibMember(expr)) return null;
-    const receiver = lowerer.lowerExpr(expr.expression);
+    const rawReceiver = lowerer.lowerExpr(expr.expression);
+    const receiver = rawReceiver.type.kind === "dyn" ? lowerer.coerceInto(expr.expression, rawReceiver, recvT) : rawReceiver;
     return {
       kind: "libCall",
       fn: expr.name.text === "stack" ? "error.stack" : expr.name.text === "cause" ? "error.cause" : "error.code",

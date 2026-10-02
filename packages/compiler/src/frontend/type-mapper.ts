@@ -8,7 +8,7 @@ import { literalValues } from "./literal-values.js";
 import { remapUnionDiscriminant } from "./union-discriminants.js";
 
 import { isJsSourceFile, isNodeTypesPath } from "./program.js";
-import { functionCanFallThrough } from "./function-completion.js";
+import { functionCanReturnUndefined } from "./function-completion.js";
 import { accessorSlotProp, recordTextCodecClass } from "../ir/ir.js";
 // typeKey moved to ir/ir.ts (the backend needs it too, for per-type
 // helper interning); re-exported here so frontend call sites keep their
@@ -2846,7 +2846,10 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
     if (sigDecl && isJsSourceFile(sigDecl.getSourceFile()) && ret?.kind === "array") ret = DYN;
     if (sigDecl && ts.isFunctionLike(sigDecl) && isJsSourceFile(sigDecl.getSourceFile()) && !sigDecl.type &&
         !/@returns?\b/.test(sigDecl.getSourceFile().text.slice(sigDecl.pos, sigDecl.getStart())) && ret?.kind === "record") ret = DYN;
-    if (ret && sigDecl && isJsSourceFile(sigDecl.getSourceFile()) && functionCanFallThrough(sigDecl)) ret = withUndefinedArm(ret, ctx.unions) ?? ret;
+    if (sigDecl && ts.isFunctionLike(sigDecl) && isJsSourceFile(sigDecl.getSourceFile()) && !sigDecl.type &&
+        !/@returns?\b/.test(sigDecl.getSourceFile().text.slice(sigDecl.pos, sigDecl.getStart())) &&
+        (ret?.kind === "date" || ret?.kind === "union" && ctx.unions.get(ret.unionId)?.arms.some((arm) => arm.kind === "func"))) ret = DYN;
+    if (ret && sigDecl && isJsSourceFile(sigDecl.getSourceFile()) && functionCanReturnUndefined(sigDecl)) ret = withUndefinedArm(ret, ctx.unions) ?? ret;
     if (!ret) return null;
     return typedRest
       ? { kind: "func", params, ret, rest: true, restAbi: "typed" }

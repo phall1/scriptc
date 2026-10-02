@@ -48,7 +48,7 @@ import { fenceSymbolFieldCopy } from "./symbol-fields.js";
 import { lowerClassDataDescriptor, lowerClassDescriptorRead } from "./class-descriptors.js";
 import { classStaticDataFor } from "./class-static-data.js";
 import { jsBindingHasOpenWrites } from "./lower-stmts.js";
-import { functionCanFallThrough } from "../function-completion.js";
+import { functionCanReturnUndefined } from "../function-completion.js";
 import { checkedIterableSpread } from "./checked-iterable-spread.js";
 
 export { bodyReadsArguments };
@@ -1138,7 +1138,7 @@ function completeFuncValueArgs(
       const fallback = dynFallbackType(lowerer, decl, retTsType);
       return fallback?.kind === "promise" ? fallback : { kind: "promise", inner: DYN };
     }
-    if (mappedReturn && isJsSourceFile(decl.getSourceFile()) && functionCanFallThrough(decl)) mappedReturn = lowerer.withUndefinedArmOf(mappedReturn) ?? mappedReturn;
+    if (mappedReturn && isJsSourceFile(decl.getSourceFile()) && functionCanReturnUndefined(decl)) mappedReturn = lowerer.withUndefinedArmOf(mappedReturn) ?? mappedReturn;
     if (isJsSourceFile(decl.getSourceFile()) && mappedReturn?.kind === "void") {
       let returnsValue = false;
       const scan = (node: ts.Node): void => {
@@ -1152,6 +1152,8 @@ function completeFuncValueArgs(
     if (isJsSourceFile(decl.getSourceFile()) && mappedReturn?.kind === "array") return DYN;
     if (isJsSourceFile(decl.getSourceFile()) && !decl.type && !hasExplicitJsDocReturn(decl) && mappedReturn?.kind === "record") return DYN;
     if (isJsSourceFile(decl.getSourceFile()) && !decl.type && !hasExplicitJsDocReturn(decl) && mappedReturn?.kind === "date") return DYN;
+    if (isJsSourceFile(decl.getSourceFile()) && !decl.type && !hasExplicitJsDocReturn(decl) &&
+        mappedReturn?.kind === "union" && lowerer.unions.get(mappedReturn.unionId)?.arms.some((arm) => arm.kind === "func")) return DYN;
     // JS inference assigns Number to arithmetic over any, although the
     // runtime operands can both be BigInts. Preserve that native result.
     if (isJsSourceFile(decl.getSourceFile()) && !decl.type && !hasExplicitJsDocReturn(decl) &&
@@ -2379,6 +2381,11 @@ function runtimeOptionalHofGenericBinding(
         if (elem && (elem.flags & ts.TypeFlags.Any) !== 0) return null;
       }
       const mapped = lowerer.mapTypeOf(retTs);
+      // Mixed inferred results can select a closure or a class instance.
+      // Their callable ABI is settled by the lowered body, including native
+      // classes whose reflected calls return checked values.
+      if (mapped?.kind === "union" && !hasExplicitJsDocReturn(info.decl) &&
+          lowerer.unions.get(mapped.unionId)?.arms.some((arm) => arm.kind === "func")) return null;
       if (mapped?.kind === "symbol" && !hasExplicitJsDocReturn(info.decl)) return null;
       if (mapped?.kind === "date" && !hasExplicitJsDocReturn(info.decl)) return DYN;
       if (!hasExplicitJsDocReturn(info.decl) && info.decl.body) {
@@ -6263,7 +6270,7 @@ function lowerOptionalStringNumber(
     }
     if (
       spreadParts.length > 0 &&
-      spreadParts.every((p) => p.v.type.kind === "jsval") &&
+      (spreadParts.every((p) => p.v.type.kind === "jsval") || callee.type.kind === "func" && callee.type.restAbi === "jsval") &&
       (callee.type.kind === "jsval" || callee.type.kind === "func")
     ) {
       if (spreadParts.length !== 1 || parts[parts.length - 1]!.spreadOf === null) {
@@ -6281,7 +6288,7 @@ function lowerOptionalStringNumber(
       const last = parts[parts.length - 1]!;
       // The spelling rides in `name` for V8's nullish spread-call
       // TypeError ("v is not iterable (cannot read property ...)").
-      return { kind: "jsOp", op: "callSpread", name: last.spreadOf!.getText(), args: [f, preArr, last.v], type: JSVAL, loc };
+      return { kind: "jsOp", op: "callSpread", name: last.spreadOf!.getText(), args: [f, preArr, lowerer.coerceInto(last.spreadOf!, last.v, JSVAL)], type: JSVAL, loc };
     }
     // No lane fits (a spread source outside both tiers, a callee neither
     // boxable nor marshalable, mixed dyn/jsval spreads): fence HERE — the
@@ -6375,7 +6382,7 @@ function lowerOptionalStringNumber(
           !["call", "apply", "bind", "toString", "valueOf", "constructor"].includes(access.name.text) &&
           canBoxFuncIntoDyn(probed.type, (id) => lowerer.shapes.get(id), (id) => lowerer.unions.get(id))) {
         const loc = locOf(call);
-        const fnName = jsFuncNameOf(access.expression);
+        const fnName = jsFuncNameOf(access.expression, lowerer);
         const boxed: IrExpr = { kind: "dynFrom", value: probed, type: DYN, loc, ...(fnName !== null ? { fnName } : {}) };
         const local = lowerer.declareHiddenLocal("%callableReceiver", DYN);
         const receiver: IrExpr = { kind: "varRef", localId: local.id, type: DYN, loc };
@@ -6398,7 +6405,7 @@ function lowerOptionalStringNumber(
       }
       if (probed?.type.kind === "union" && isJsSourceFile(call.getSourceFile()) &&
           lowerer.unions.get(probed.type.unionId)?.arms.every((arm) =>
-            isUnitType(arm) || arm.kind === "object" || arm.kind === "record") && lowerer.dynConvertible(probed.type)) {
+            isUnitType(arm) || arm.kind === "object" || arm.kind === "record" || arm.kind === "func") && lowerer.dynConvertible(probed.type)) {
         recv = lowerer.coerceToExpected(probed, DYN);
       } else {
         if (probed?.type.kind !== "dyn") return null;
@@ -6499,6 +6506,9 @@ function lowerOptionalStringNumber(
     // with the original receiver rather than a materialized property view.
     const callbackProperty = (() => {
       const prop = lowerer.checker.getPropertyOfType(recvTs, access.name.text);
+      const mapped = lowerer.mapTypeOf(recvTs);
+      if (mapped?.kind === "union" && lowerer.unions.get(mapped.unionId)?.arms.every((arm) =>
+          arm.kind === "object" && lowerer.classes.get(arm.className)?.fields.has(access.name.text))) return true;
       return prop !== undefined && lowerer.checker.declarationsOf(prop).some((decl) =>
         ts.isPropertyDeclaration(decl) || ts.isPropertySignature(decl));
     })();
@@ -6534,17 +6544,23 @@ function lowerOptionalStringNumber(
       type: DYN,
       loc: locOf(access),
     };
+    const calleeLocal = lowerer.declareHiddenLocal("%dynCallCallee", DYN);
+    const callee = varRef(calleeLocal.id, DYN, loc);
+    const stmts: IrStmt[] = [
+      { kind: "varDecl", localId: receiverLocal.id, init: recv, loc },
+      { kind: "varDecl", localId: calleeLocal.id, init: member, loc },
+    ];
     if (call.arguments.some(ts.isSpreadElement)) {
-      const spread = lowerSpreadArgsCall(lowerer, call, member, loc);
+      const spread = lowerSpreadArgsCall(lowerer, call, callee, loc);
       if (spread?.kind === "dynCall") return { kind: "seqExpr",
-        stmts: [{ kind: "varDecl", localId: receiverLocal.id, init: recv, loc }],
+        stmts,
         result: { ...spread, receiver }, type: DYN, loc };
       lowerer.unsupported("SC1090", call, "spread arguments in calls through 'unknown' values");
     }
     const args = call.arguments.map((a) => lowerer.lowerExprExpecting(a, DYN));
     return {
-      kind: "seqExpr", stmts: [{ kind: "varDecl", localId: receiverLocal.id, init: recv, loc }],
-      result: { kind: "dynCall", callee: member, receiver, calleeName: access.getText(), args, type: DYN, loc }, type: DYN, loc,
+      kind: "seqExpr", stmts,
+      result: { kind: "dynCall", callee, receiver, calleeName: access.getText(), args, type: DYN, loc }, type: DYN, loc,
     };
   }
 
@@ -8379,7 +8395,7 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
             value: {
               kind: "dynCall",
               callee: { kind: "varRef", localId: cbLocal.id, type: DYN, loc },
-              calleeName: jsFuncNameOf(call.arguments[0]!) ?? "onFulfilled",
+              calleeName: jsFuncNameOf(call.arguments[0]!, lowerer) ?? "onFulfilled",
               args: handlerArgs,
               type: DYN,
               loc,
@@ -8510,6 +8526,14 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
 
     if (member === "finally") {
       const cb = lowerer.lowerExpr(call.arguments[0]!);
+      if (lowerer.dynConvertible(promT) && lowerer.dynConvertible(cb.type)) {
+        const result: IrExpr = {
+          kind: "dynInvoke", recv: lowerer.coerceToExpected(receiver, DYN),
+          method: "finally", calleeName: access.getText(),
+          args: [lowerer.coerceToExpected(cb, DYN)], type: DYN, loc,
+        };
+        return lowerer.coerceToExpected(result, promT);
+      }
       if (cb.type.kind !== "func" || cb.type.params.length !== 0 || cb.type.ret.kind !== "void") {
         lowerer.unsupported(
           "SC1090",
@@ -8621,7 +8645,7 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
               value: {
                 kind: "dynCall",
                 callee: { kind: "varRef", localId: cbLocal.id, type: DYN, loc },
-                calleeName: jsFuncNameOf(call.arguments[0]!) ?? "onRejected",
+                calleeName: jsFuncNameOf(call.arguments[0]!, lowerer) ?? "onRejected",
                 args: [
                   {
                     kind: "caughtToDyn",
@@ -9482,7 +9506,7 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
         !call.arguments.some(ts.isSpreadElement) && !lowerer.dynamic) {
       let object = lowerer.lowerExpr(call.arguments[0]!);
       if (object.type.kind === "func") {
-        const fnName = jsFuncNameOf(call.arguments[0]!);
+        const fnName = jsFuncNameOf(call.arguments[0]!, lowerer);
         object = { kind: "dynFrom", value: object, type: DYN, loc: locOf(call),
           ...(fnName !== null ? { fnName } : {}) };
       }
@@ -9892,7 +9916,7 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
         target = lowerer.coerceToExpected(target, DYN);
       }
       if (target?.type.kind === "func" && lowerer.dynConvertible(target.type)) {
-        const fnName = jsFuncNameOf(call.arguments[0]!);
+        const fnName = jsFuncNameOf(call.arguments[0]!, lowerer);
         target = { kind: "dynFrom", value: target, type: DYN, loc: locOf(call.arguments[0]!), ...(fnName !== null ? { fnName } : {}) };
       }
       const descriptorPrimitive = member === "getOwnPropertyDescriptor" && target &&
@@ -9932,7 +9956,7 @@ export function lowerPromiseMethodCall(lowerer: Lowerer, call: ts.CallExpression
         target && target.type.kind === "func" &&
         canBoxFuncIntoDyn(target.type, (id) => lowerer.shapes.get(id), (id) => lowerer.unions.get(id))
       ) {
-        const fnName = jsFuncNameOf(call.arguments[0]!);
+        const fnName = jsFuncNameOf(call.arguments[0]!, lowerer);
         target = { kind: "dynFrom", value: target, type: DYN, loc: locOf(call.arguments[0]!), ...(fnName !== null ? { fnName } : {}) };
       }
       if (target && isUnitType(target.type)) {
@@ -11524,8 +11548,7 @@ export function lowerFunction(lowerer: Lowerer, decl: ts.FunctionDeclaration): I
       const arms = lowerer.unions.get(mappedReceiver.unionId)?.arms;
       if (isJsSourceFile(call.getSourceFile()) && arms?.every((arm) => arm.kind === "object" &&
           !lowerer.classes.get(arm.className)?.def.runtime) && lowerer.dynConvertible(mappedReceiver)) {
-        const receiver = lowerer.coerceInto(access.expression, lowerer.lowerExpr(access.expression), DYN);
-        return lowerDynDispatchMethodCall(lowerer, call, access, receiver, false);
+        return lowerDynReceiverMethodCall(lowerer, call, access);
       }
     }
     const receiverIr = mappedReceiver?.kind === "object"

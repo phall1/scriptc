@@ -3351,6 +3351,15 @@ ScrDyn *scr_dyn_symbol_key_get(const ScrDyn *value, const ScrDyn *key, bool opti
   return out;
 }
 
+/* Native field tables retain presence and attributes without owning a second
+ * copy of the field's value. This internal update bypasses writable flags. */
+void scr_dyn_symbol_key_placeholder(ScrDyn *value, ScrDyn *key) {
+  ScrDynEntry *entry = scr_dyn_symbol_entry(value, key, true);
+  if (!entry || entry->accessor) return;
+  scr_dyn_release(entry->value);
+  entry->value = scr_dyn_retain(scr_dyn_undefined());
+}
+
 void scr_dyn_symbol_key_set(ScrDyn *value, ScrDyn *key, ScrDyn *stored) {
   ScrDyn *receiver = scr_dyn_symbol_receiver(value);
   if (!receiver) {
@@ -7587,6 +7596,19 @@ ScrDyn *scr_dyn_copy_property_descriptors(ScrDyn *target, const ScrDyn *src) {
     if (scr_exc_pending()) break;
   }
   scr_dyn_release(keys);
+  if (!scr_exc_pending()) {
+    ScrDyn *symbols = scr_dyn_get_own_property_symbols(src);
+    if (!symbols) return NULL;
+    for (size_t i = 0; i < symbols->v.arr.len; i++) {
+      ScrDyn *key = symbols->v.arr.items[i];
+      ScrDyn *descriptor = scr_dyn_get_own_property_descriptor((ScrDyn *)src, key);
+      ScrDyn *result = descriptor ? scr_dyn_define_property(target, key, descriptor) : NULL;
+      scr_dyn_release(descriptor);
+      scr_dyn_release(result);
+      if (scr_exc_pending()) break;
+    }
+    scr_dyn_release(symbols);
+  }
   return scr_exc_pending() ? NULL : scr_dyn_retain(target);
 }
 

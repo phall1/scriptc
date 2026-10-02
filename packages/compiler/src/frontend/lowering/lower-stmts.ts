@@ -585,7 +585,9 @@ export function provenanceElidedConstDecl(lowerer: Lowerer, decl: ts.VariableDec
       if (idx < entry.index || entry.ctx === lowerer.ctx || entry.ctx.tdzPredeclared.has(symbol)) return false;
       let type = lowerer.irTypeOf(decl.name);
       if (isJsSourceFile(decl.getSourceFile()) && !decl.type && !hasJsTypeAnnotation(decl) &&
-          ts.isObjectLiteralExpression(decl.initializer) && lowerer.dynConvertible(type)) type = DYN;
+          (ts.isObjectLiteralExpression(decl.initializer) ||
+            (ts.isCallExpression(decl.initializer) && ts.isPropertyAccessExpression(decl.initializer.expression) &&
+              decl.initializer.expression.name.text === "assign" && lowerer.isStdlibGlobal(decl.initializer.expression.expression, "Object"))) && lowerer.dynConvertible(type)) type = DYN;
       if (!TDZ_KINDS.has(type.kind) || isUnitType(type)) return false;
       const name = decl.name.text;
       const count = entry.ctx.localCounters.get(name) ?? 0;
@@ -1016,12 +1018,9 @@ export function lowerStmt(lowerer: Lowerer, stmt: ts.Statement): IrStmt | IrStmt
       // (JS), which the undefined arm carries — tsc only allows the bare
       // form when the return type includes undefined/void. A CHECKED-
       // DYNAMIC return slot holds the dyn undefined directly (the
-      // appendImplicitUndefinedReturn rule). What remains is JS-only —
-      // a JSDoc return claim the body contradicts (ms's parse: `@return
-      // {Number}` with a bare early `return;`): no undefined fits the
-      // declared representation, so the statement fences honestly (the
-      // per-statement JS deferral — the claimed paths still run) instead
-      // of slipping an empty return past the validator.
+      // appendImplicitUndefinedReturn rule). JavaScript signatures include
+      // observed empty returns even when JSDoc omits undefined. Any remaining
+      // incompatible boundary keeps the ordinary per-statement refusal.
       let value: IrExpr | null = null;
       if (stmt.expression) {
         return lowerer.lowerReturnStmt(stmt.expression, locOf(stmt));
@@ -3713,7 +3712,8 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
       : (declSymbol ? lowerer.globalsBySymbol.get(declSymbol) : undefined);
     if (g) {
       let promotedGlobal = lowerer.runtimeOptionalBindingType(decl.name, g.type);
-      if (g.type.kind === "func" && decl.initializer !== undefined && ts.isIdentifier(decl.initializer)) {
+      if (g.type.kind === "func" && !decl.type && !hasJsTypeAnnotation(decl) &&
+          decl.initializer !== undefined && ts.isIdentifier(decl.initializer)) {
         const sig = lowerer.fnSigOf(decl.initializer);
         if (sig) {
           promotedGlobal = {
@@ -3745,6 +3745,8 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
       const raw = lowerVariableInitializer(lowerer, decl.initializer,
         g.type.kind === "dyn" && (isNativeBuiltinValueInitializer(lowerer, decl.initializer) ||
           ts.isArrayLiteralExpression(decl.initializer) || ts.isObjectLiteralExpression(decl.initializer)) ? DYN : undefined);
+      if (isJsSourceFile(decl.getSourceFile()) && !decl.type && !hasJsTypeAnnotation(decl) && raw.type.kind === "dyn" &&
+          (g.type.kind === "record" || g.type.kind === "object")) g.type = DYN;
       g.type = inferredOptionalRecordType(lowerer, decl, g.type, raw.type);
       const arithmetic = raw.type.kind === "union"
         ? lowerer.unions.get(raw.type.unionId)?.arms
@@ -4000,6 +4002,8 @@ export function lowerVarDecl(lowerer: Lowerer, decl: ts.VariableDeclaration, isL
           !decl.type && !hasJsTypeAnnotation(decl) && type.rest === true && type.restAbi === undefined)) {
       type = DYN;
     }
+    if (isJsSourceFile(decl.getSourceFile()) && !decl.type && !hasJsTypeAnnotation(decl) && init.type.kind === "dyn" &&
+        (type?.kind === "record" || type?.kind === "object")) type = DYN;
     // A checker-`any` CONST whose initializer lowered to a STATIC type
     // (`const name = rawName ? rawName.replace(...) : null` — the
     // dyn-receiver machinery and the any-ternary join answer static IR):

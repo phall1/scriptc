@@ -57,6 +57,8 @@ test.for(cases)("published three.js $fixture runs statically through LLVM on $ta
     const actual = wasm
       ? run(process.execPath, ["--no-warnings", "-e", wasiRunner, result.binaryPath])
       : run(result.binaryPath, []);
+    if (sanitize) actual.stderr = actual.stderr.split("\n").filter((line) =>
+      !/^==\d+==WARNING: ASan doesn't fully support makecontext\/swapcontext/.test(line)).join("\n");
     expect(actual).toEqual(reference);
   } finally {
     if (previousTarget === undefined) delete process.env["SCRIPTC_TARGET"];

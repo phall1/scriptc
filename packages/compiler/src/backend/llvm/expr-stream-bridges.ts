@@ -299,11 +299,15 @@ export function streamTypedRefCommitAdapter(host: LlvmEmitterContext,
             `  call void @scr_str_release(ptr %bag_key${index})`,
           );
         });
-        if (symbols.size > 0) host.declare(`declare void @scr_dyn_key_delete_computed(ptr, ptr, i1 zeroext)`);
+        if (symbols.size > 0) host.declare(meta.def.tracksOwnFields
+          ? `declare void @scr_dyn_symbol_key_placeholder(ptr, ptr)`
+          : `declare void @scr_dyn_key_delete_computed(ptr, ptr, i1 zeroext)`);
         [...symbols.values()].forEach((globalId, index) => lines.push(
           `  %bag_symraw${index} = load ptr, ptr @${mangleGlobal(globalId)}`,
           `  %bag_sym${index} = call ptr @${host.dyn.toDynHelper(SYMBOL_T)}(ptr %bag_symraw${index})`,
-          `  call void @scr_dyn_key_delete_computed(ptr %bag, ptr %bag_sym${index}, i1 zeroext false)`,
+          meta.def.tracksOwnFields
+            ? `  call void @scr_dyn_symbol_key_placeholder(ptr %bag, ptr %bag_sym${index})`
+            : `  call void @scr_dyn_key_delete_computed(ptr %bag, ptr %bag_sym${index}, i1 zeroext false)`,
           `  call void @scr_dyn_release_v(ptr %bag_sym${index})`,
         ));
         const { index } = classFieldIndex(meta, DYN_CLASS_PROPERTIES);
@@ -642,10 +646,15 @@ export function streamTypedRefMaterializeAdapter(host: LlvmEmitterContext,
         let fieldValue = B.tmp();
         B.line(`${fieldPtr} = getelementptr inbounds %${classStructSym(t.className)}, ptr %p, i64 0, i32 ${index}`);
         B.line(`${fieldValue} = load ${llFieldType(field.type)}, ptr ${fieldPtr}`);
-        const afterSymbol = field.type.kind === "symbol" ? B.newLabel("symbol.after") : null;
+        B.line(`${rawKey} = load ptr, ptr @${mangleGlobal(symbol.globalId)}`);
+        const key = host.streamTypedRefBoxValue(B, SYMBOL_T, rawKey);
+        const afterSymbol = meta.def.tracksOwnFields || field.type.kind === "symbol" ? B.newLabel("symbol.after") : null;
         if (afterSymbol) {
           const initialized = B.tmp(), present = B.newLabel("symbol.present");
-          B.line(`${initialized} = icmp ne ptr ${fieldValue}, null`);
+          if (meta.def.tracksOwnFields) {
+            host.declare(`declare zeroext i1 @scr_dyn_has_own_computed(ptr, ptr)`);
+            B.line(`${initialized} = call zeroext i1 @scr_dyn_has_own_computed(ptr ${out}, ptr ${key})`);
+          } else B.line(`${initialized} = icmp ne ptr ${fieldValue}, null`);
           B.condBr(initialized, present, afterSymbol);
           B.startBlock(present);
         }
@@ -654,18 +663,16 @@ export function streamTypedRefMaterializeAdapter(host: LlvmEmitterContext,
           B.line(`${boolValue} = trunc i8 ${fieldValue} to i1`);
           fieldValue = boolValue;
         }
-        B.line(`${rawKey} = load ptr, ptr @${mangleGlobal(symbol.globalId)}`);
-        const key = host.streamTypedRefBoxValue(B, SYMBOL_T, rawKey);
         const value = host.streamTypedRefBoxValue(B, field.type, fieldValue);
         host.declare(`declare void @scr_dyn_symbol_key_set(ptr, ptr, ptr)`);
         host.declare(`declare void @scr_dyn_release_v(ptr)`);
         B.line(`call void @scr_dyn_symbol_key_set(ptr ${out}, ptr ${key}, ptr ${value})`);
-        B.line(`call void @scr_dyn_release_v(ptr ${key})`);
         B.line(`call void @scr_dyn_release_v(ptr ${value})`);
         if (afterSymbol) {
           B.terminate(`br label %${afterSymbol}`);
           B.startBlock(afterSymbol);
         }
+        B.line(`call void @scr_dyn_release_v(ptr ${key})`);
       }
       if (!meta.def.tracksOwnFields && meta.def.fields.some((field) => field.name === DYN_CLASS_PROPERTIES)) {
         host.declare(`declare ptr @scr_dyn_copy_property_descriptors(ptr, ptr)`);

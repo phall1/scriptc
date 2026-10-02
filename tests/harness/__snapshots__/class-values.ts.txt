@@ -16,27 +16,6 @@ class-values.ts:22:11 - error SC2020: 'Error' is part of the standard library ty
 
   hint: the type checker sees the full standard library, but only the supported surface compiles (https://scriptc.dev/limitations)
 
-class-values.ts:31:33 - error SC1090: structurally-typed class-value flows ('typeof Unrelated' into a 'typeof Base' slot: only a class and its subclasses share a slot — extend the base class) are not supported yet
-
-  30 | // is the IR's only class subtyping.
-  31 | const structural: typeof Base = Unrelated;
-     |                                 ^~~~~~~~~
-  32 | 
-
-class-values.ts:35:30 - error SC1090: class values whose constructor signatures differ ('typeof Derived' into a 'typeof Base' slot: construction through the slot completes against the base signature, which 'Derived' does not share — declare matching constructor parameters) is not supported yet
-
-  34 | // would dispatch a mismatched signature.
-  35 | const widened: typeof Base = Derived;
-     |                              ^~~~~~~
-  36 | 
-
-class-values.ts:40:1 - error SC1090: assigning the inherited static 'tag' through a subclass name (JS creates an OWN property on the subclass — assign through 'Base' instead) is not supported yet
-
-  39 | class PlainSub extends Base {}
-  40 | PlainSub.tag = "write";
-     | ^~~~~~~~~~~~
-  41 | 
-
 class-values.ts:44:1 - error SC1090: assigning the static 'tag' through a class value (JS creates an OWN property on the runtime class — assign through the declaring class's name, which subclasses here) is not supported yet
 
   43 | let someClass: typeof Base = Base;
@@ -64,13 +43,6 @@ class-values.ts:59:18 - error SC1090: class expressions with static initializers
   59 | const pair = [1, class WithStatic { static x = 1; }] as const;
      |                  ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   60 | 
-
-class-values.ts:69:16 - error SC1090: constructing through a union of class values (annotate the slot with the common constructor type — e.g. `new () => Base` — or narrow first) are not supported yet
-
-  68 | let pick: typeof Left | typeof Right = Left;
-  69 | const picked = new pick();
-     |                ^~~~~~~~~~
-  70 | void picked;
 
 class-values.ts:79:56 - error SC1090: receiver-dependent static methods through a polymorphic class value is not supported yet
 

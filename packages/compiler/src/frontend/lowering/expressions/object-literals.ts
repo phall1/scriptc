@@ -260,6 +260,7 @@ export function lowerDynObjectLiteral(
         key = { kind: "strLit", value: folded, type: STRING, loc: locOf(name) };
       } else {
         let k = lowerer.lowerExpr(name.expression);
+        if (k.type.kind === "union" && lowerer.dynConvertible(k.type)) k = lowerer.coerceToExpected(k, DYN);
         if (k.type.kind === "symbol") k = lowerer.coerceToExpected(k, DYN);
         else if (k.type.kind === "dyn") k = { kind: "libCall", fn: "dyn.propertyKey", args: [k], type: DYN, loc: locOf(name) };
         else if (k.type.kind === "f64" || k.type.kind === "bool") {
@@ -1168,6 +1169,7 @@ export function lowerObjectLiteral(lowerer: Lowerer, expr: ts.ObjectLiteralExpre
       // Number/boolean/unknown keys stringify (ToPropertyKey).
       if (ts.isPropertyAssignment(prop) && ts.isComputedPropertyName(prop.name)) {
         let k = lowerer.lowerExpr(prop.name.expression);
+        if (k.type.kind === "union" && lowerer.dynConvertible(k.type)) k = lowerer.coerceToExpected(k, DYN);
         if (k.type.kind === "f64" || k.type.kind === "bool" || k.type.kind === "dyn") {
           k = { kind: "toString", operand: k, type: STRING, loc: locOf(prop.name) };
         }

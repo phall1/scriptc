@@ -6360,6 +6360,8 @@ function mapFromSeedValue(lowerer: Lowerer, seed: IrExpr, mapT: IrType & { kind:
     const argNode = call.arguments[0]!;
     const argIr = lowerer.mapTypeOf(lowerer.typeOf(argNode));
     if (argIr?.kind !== "array") return null;
+    const represented = tryLowerExpression(lowerer, argNode);
+    if (represented && !typeEquals(represented.type, argIr)) return null;
     // `Object.fromEntries(rows)` over a `string[][]` VALUE — the env-line
     // idiom (`envArray.map((env) => env.split('='))`). The checker has no
     // tuple to type here (string[] misses the lib's [PropertyKey, T]

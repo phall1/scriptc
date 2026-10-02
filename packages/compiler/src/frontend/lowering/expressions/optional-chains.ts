@@ -129,19 +129,19 @@ export function lowerOptionalChain(lowerer: Lowerer, expr: ts.CallExpression | t
   // The node CARRYING the ?. token and the receiver expression it guards.
   let dotNode: ts.Node;
   let recvNode: ts.Expression;
-  if (ts.isCallExpression(expr) && expr.questionDotToken) {
+  if (ts.isCallExpression(expr) && expr.questionDotToken && !lowerer.chainHandled.has(expr)) {
     dotNode = expr; // f?.()
     recvNode = expr.expression;
   } else if (
     ts.isCallExpression(expr) &&
     (ts.isPropertyAccessExpression(expr.expression) || ts.isElementAccessExpression(expr.expression)) &&
-    expr.expression.questionDotToken
+    expr.expression.questionDotToken && !lowerer.chainHandled.has(expr.expression)
   ) {
     dotNode = expr.expression; // a?.m()
     recvNode = expr.expression.expression;
   } else if (
     (ts.isPropertyAccessExpression(expr) || ts.isElementAccessExpression(expr)) &&
-    expr.questionDotToken
+    expr.questionDotToken && !lowerer.chainHandled.has(expr)
   ) {
     dotNode = expr; // a?.b / a?.[i]
     recvNode = expr.expression;

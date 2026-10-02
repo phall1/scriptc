@@ -26,7 +26,7 @@ export function lowerModuleNamespaceElement(lowerer: Lowerer, expr: ts.ElementAc
         const target = exported.flags & ts.SymbolFlags.Alias ? lowerer.checker.getAliasedSymbol(exported) : exported;
         if (!(target.flags & ts.SymbolFlags.Value)) return;
         const declaration = lowerer.checker.valueDeclarationOf(target);
-        const identifier = declaration && "name" in declaration ? declaration.name as ts.Node | undefined : undefined;
+        const identifier = declaration?.name as ts.Node | undefined;
         if (!identifier || !ts.isIdentifier(identifier)) {
           lowerer.unsupported("SC1090", expr, "computed namespace reads of unnamed exports");
         }
@@ -36,7 +36,7 @@ export function lowerModuleNamespaceElement(lowerer: Lowerer, expr: ts.ElementAc
       });
       body.push({ kind: "return", value: dynUndefinedExpr(loc), loc });
       const fn: IrFunction = { name, params: [{ localId: "namespace", name: "namespace", type }, { localId: "key", name: "key", type: STRING }],
-        returnType: DYN, locals: [{ id: "namespace", name: "namespace", type, mutable: false }, { id: "key", name: "key", type: STRING, mutable: false }, ...context.locals.values()], body, loc };
+        returnType: DYN, locals: [{ id: "namespace", name: "namespace", type, mutable: false }, { id: "key", name: "key", type: STRING, mutable: false }, ...context.locals], body, loc };
       lowerer.liftedFns.push(fn);
     } finally {
       lowerer.fnStack.pop();

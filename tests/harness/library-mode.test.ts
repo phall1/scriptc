@@ -942,16 +942,16 @@ describe.each(EMISSIONS)("K14: determinism fences, %s emission", (emission) => {
 
   test("a code-keyed teachings entry rides a non-fence refusal as the attributed note", async () => {
     const diags = await refusal(
-      `export function f(): number { return "abc".normalize().length; }\n`,
+      `export function f(): number { return (1234.5).toLocaleString().length; }\n`,
       {
         exports: [{ export: "f", symbol: "kx_f", params: [], returns: "f64" }],
-        determinism: { teachings: { SC2020: "host strings arrive normalized; never renormalize in a core" } },
+        determinism: { teachings: { SC2020: "locale comes from the host; never infer it in a core" } },
       },
       emission,
     );
     expect(diags[0]!.code).toBe("SC2020");
     expect(diags[0]!.note).toBe(
-      "from the 'refusal-fixture' profile: host strings arrive normalized; never renormalize in a core",
+      "from the 'refusal-fixture' profile: locale comes from the host; never infer it in a core",
     );
   });
 

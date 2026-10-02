@@ -134,7 +134,7 @@ import { lowerNodeTestModuleCall, lowerTestDirectCall, lowerTestMethodCall, lowe
 import { lowerAssertModuleCall, lowerAssertDirectCall } from "./lower-assert.js";
 import { lowerUtilModuleCall } from "./lower-inspect.js";
 import { lowerComptime, comptimeBakeable, rejectComptimeCaptures, comptimeValueToIr } from "./lower-comptime.js";
-import { lowerStmts, noteBlockedBindings, isBlockedBinding, lowerScopedBlock, predeclareForwardCapture, predeclareForwardFnDecl, predeclareForwardVar, lowerStmt, lowerVarStatement, lowerDestructuringDecl, lowerDestructuringAssignParts, lowerBindingPattern, lowerJsvalBindingPattern, checkBindingElement, bindPatternTarget, isParseArgsDynCheckerType, lowerVarDeclList, lowerVarDecl, lowerSwitch, lowerTry, lowerExprStatement, lowerForOf, lowerForStatement } from "./lower-stmts.js";
+import { lowerStmts, hasJsTypeAnnotation, noteBlockedBindings, isBlockedBinding, lowerScopedBlock, predeclareForwardCapture, predeclareForwardFnDecl, predeclareForwardVar, lowerStmt, lowerVarStatement, lowerDestructuringDecl, lowerDestructuringAssignParts, lowerBindingPattern, lowerJsvalBindingPattern, checkBindingElement, bindPatternTarget, isParseArgsDynCheckerType, lowerVarDeclList, lowerVarDecl, lowerSwitch, lowerTry, lowerExprStatement, lowerForOf, lowerForStatement } from "./lower-stmts.js";
 import { type FieldTarget, lowerExpr, maybeNarrow, lowerUnitComparison, lowerNullishCoalesce, lowerCondition, ensureBool, requireTruthyUnion, eqComparableUnion, lowerIntrinsicProperty, lowerArrayLiteral, lowerElementAccess, lowerElementWrite, lowerRecordKeyRead, ensureString, lowerTemplate, lowerAsExpression, lowerPrefixUnary, lowerBinary, lowerCaughtTypeofTest, caughtRead, caughtLocalOf, caughtToString, lowerInstanceOf, lowerRegexLiteral, lowerFieldRead, lowerUnionProperty, fieldTarget, fieldGetExpr, fieldSetStmt, lowerFieldCompound, uniqueSymbolKeyOf } from "./lower-exprs.js";
 import { finishOptionalChain, isOptionalChainTail, lowerOptionalChain } from "./expressions/optional-chains.js";
 import { foldedStringKeyOf, lowerDynObjectLiteral, lowerObjectLiteral, lowerShorthandValue, rejectThisInObjectMethod } from "./expressions/object-literals.js";
@@ -1004,17 +1004,27 @@ function anyPiecedFuncType(lowerer: Lowerer, node: ts.Node, t: ts.Type): IrType 
   return { kind: "func", params, ret };
 }
 
-/** The best-effort JS `Function.prototype.name` of an expression flowing
- * into a dyn slot (the boxed function kind's inspect/error name):
- * identifier and property reads answer the referenced NAME (a
- * REFERENCE-SITE approximation of JS's creation-site naming — an aliased
- * binding reports the alias; SEMANTICS.md), named function expressions
+/** The JS `Function.prototype.name` of an expression flowing into a dyn
+ * slot. Immutable identifier aliases retain their creation-site name; property
+ * reads answer the referenced name. Named function expressions
  * their own name, anonymous function/arrow expressions their
  * NamedEvaluation home (a variable initializer or property assignment).
  * Null when nothing names the value (the box stays anonymous). */
-export function jsFuncNameOf(node: ts.Node): string | null {
+export function jsFuncNameOf(node: ts.Node, lowerer?: Lowerer): string | null {
   let n: ts.Node = node;
   while (ts.isParenthesizedExpression(n)) n = n.expression;
+  const seen = new Set<ts.Symbol>();
+  while (lowerer && ts.isIdentifier(n)) {
+    const symbol = lowerer.resolveValueSymbol(n);
+    if (!symbol || seen.has(symbol)) break;
+    seen.add(symbol);
+    const declaration = lowerer.checker.valueDeclarationOf(symbol);
+    if (declaration && ts.isFunctionDeclaration(declaration)) { n = declaration; break; }
+    if (!declaration || !ts.isVariableDeclaration(declaration) || !declaration.initializer ||
+        (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) === 0) break;
+    n = declaration.initializer;
+    while (ts.isParenthesizedExpression(n)) n = n.expression;
+  }
   if (ts.isIdentifier(n)) return n.text;
   if (ts.isPropertyAccessExpression(n)) return n.name.text;
   if ((ts.isFunctionExpression(n) || ts.isFunctionDeclaration(n)) && n.name) return n.name.text;
@@ -1334,7 +1344,7 @@ export class Lowerer {
     // the initializer cannot fall back to a narrowing adapter.
     if (ts.isIdentifier(node) && fallback?.kind === "func") {
       const decl = this.checker.valueDeclarationOf(symbol);
-      if (decl && ts.isVariableDeclaration(decl) && decl.initializer) {
+      if (decl && ts.isVariableDeclaration(decl) && !decl.type && !hasJsTypeAnnotation(decl) && decl.initializer) {
         let init: ts.Expression = decl.initializer;
         while (ts.isParenthesizedExpression(init)) init = init.expression;
         if (ts.isIdentifier(init)) {
@@ -1711,6 +1721,7 @@ export class Lowerer {
    * base vtable signature is collected. Unused checked slots carry undefined. */
   readonly virtualJsMethodArity = new Map<ts.MethodDeclaration, number>();
   readonly checkedVirtualJsMethods = new Set<ts.MethodDeclaration>();
+  readonly checkedVirtualJsAccessors = new Set<ts.GetAccessorDeclaration | ts.SetAccessorDeclaration>();
   readonly checkedVirtualJsValueReturns = new Set<ts.MethodDeclaration>();
   /** The class whose members are lowering — `super` binds lexically to it
    * (arrows inside methods lower within this window, so they see it too). */
@@ -2712,7 +2723,10 @@ export class Lowerer {
     const symbol = this.resolveValueSymbol(ident);
     if (!symbol) return null;
     const g = this.globalsBySymbol.get(symbol);
-    if (g) return g;
+    if (g) {
+      if (g.type.kind === "func") g.type = this.runtimeOptionalBindingType(ident, g.type);
+      return g;
+    }
     for (const d of this.checker.declarationsOf(symbol)) {
       const byDecl = this.globalsByDeclNode.get(d);
       if (byDecl) return byDecl;
@@ -2956,6 +2970,13 @@ export class Lowerer {
       const s = this.checker.getSymbolAtLocation(node);
       if (!s) return null;
       return s.flags & ts.SymbolFlags.Alias ? this.checker.getAliasedSymbol(s) : s;
+    };
+    const signatureOf = (node: ts.Identifier): FnSig | null => {
+      const symbol = symbolOf(node);
+      if (!symbol) return null;
+      const projection = this.staticCallables.get(symbol);
+      return this.fnSigsBySymbol.get(symbol) ??
+        (projection?.kind === "declared-function" ? projection.signature : null);
     };
     const functionDeclBySymbol = new Map<ts.Symbol, ts.FunctionLikeDeclaration>();
     type RuntimeSig = {
@@ -3213,6 +3234,16 @@ export class Lowerer {
       for (const expression of returnsOf(fn)) if (mayBeOptional(expression)) found = true;
       return found;
     };
+    const jsLambdas: ts.FunctionLikeDeclaration[] = [];
+    for (const sf of sourceFiles) {
+      if (!isJsSourceFile(sf)) continue;
+      ts.walkPreorder(sf, (node) => {
+        if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) jsLambdas.push(node);
+      });
+    }
+    for (const [symbol, signature] of signatureBySymbol) {
+      if (signature.returnType.kind === "union" && this.armTag(signature.returnType.unionId, UNDEFINED_T) >= 0) optionalReturns.add(symbol);
+    }
     const promoteHofCallback = (callback: ts.Expression, parameterIndices: readonly number[], seen = new Set<ts.Symbol>()): boolean => {
       let changed = false;
       const checkerTypeContainsTypeParameter = (type: ts.Type): boolean => {
@@ -3607,6 +3638,20 @@ export class Lowerer {
       changed = false;
       for (const sf of sourceFiles) if (scanFile(sf)) changed = true;
       for (const [symbol, decl] of functionDeclBySymbol) if (scanReturns(symbol, decl)) changed = true;
+      for (const fn of jsLambdas) {
+        if (!bodyReturnsOptional(fn)) continue;
+        const mapped = this.mapTypeOf(this.typeOf(fn));
+        if (mapped?.kind !== "func") continue;
+        const previous = this.runtimeOptionalFunctionReturnType(fn, mapped.ret);
+        if (previous.kind === "generator") continue;
+        const next = previous.kind === "promise"
+          ? { ...previous, inner: this.runtimeOptionalType(previous.inner) }
+          : this.runtimeOptionalType(previous);
+        if (!typeEquals(previous, next)) {
+          this.runtimeOptionalFunctionReturns.set(fn, next);
+          changed = true;
+        }
+      }
       // Every implementation of a virtual slot must retain the same ABI,
       // including when just one body forwards an omitted parameter.
       for (const family of optionalMethodFamilies) {
@@ -3644,11 +3689,32 @@ export class Lowerer {
         if (decl) this.runtimeOptionalFunctionReturns.set(decl, arithmetic);
       }
     }
+    for (const [declaration, global] of this.globalsByDeclNode) {
+      if (global.type.kind !== "func" || !ts.isBinaryExpression(declaration) || !isJsSourceFile(declaration.getSourceFile())) continue;
+      const value = peel(declaration.right);
+      if (!ts.isFunctionExpression(value) && !ts.isArrowFunction(value)) continue;
+      global.type = { ...global.type, ret: this.runtimeOptionalFunctionReturnType(value, global.type.ret) };
+    }
     for (const sf of sourceFiles) {
       ts.walkPreorder(sf, (node) => {
         if (!ts.isVariableDeclaration(node) || !ts.isIdentifier(node.name)) return;
         const symbol = symbolOf(node.name);
         if (!symbol) return;
+        if (isJsSourceFile(sf) && !node.type && !hasJsTypeAnnotation(node) && node.initializer &&
+            (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))) {
+          const global = this.globalsBySymbol.get(symbol);
+          if (global?.type.kind === "func") global.type = { ...global.type, ret: this.runtimeOptionalFunctionReturnType(node.initializer, global.type.ret) };
+        }
+        if (!node.type && !hasJsTypeAnnotation(node) && node.initializer && ts.isIdentifier(node.initializer)) {
+          const global = this.globalsBySymbol.get(symbol);
+          const current = global?.type ?? this.mapTypeOf(this.typeOf(node.name));
+          const source = current?.kind === "func" ? signatureOf(node.initializer) : null;
+          if (source && current?.kind === "func") {
+            const promoted: IrType = { ...current, params: source.params.filter((param) => param.mode !== "dynRest" && param.mode !== "arguments").map((param) => param.type), ret: source.returnType };
+            this.runtimeOptionalBindingTypes.set(symbol, promoted);
+            if (global) global.type = promoted;
+          }
+        }
         const fields = optionalFields.get(symbol);
         if (!dynamicObjectEntryRows.has(symbol) && !optionalSymbols.has(symbol) && !fields) return;
         const current = this.mapTypeOf(this.typeOf(node.name));
@@ -3656,7 +3722,7 @@ export class Lowerer {
         let promoted = dynamicObjectEntryRows.has(symbol) ? DYN : current;
         if (!dynamicObjectEntryRows.has(symbol) && optionalSymbols.has(symbol)) promoted = addUndefined(promoted);
         if (promoted.kind === "func" && node.initializer && ts.isIdentifier(node.initializer)) {
-          const sourceSig = this.fnSigOf(node.initializer);
+          const sourceSig = signatureOf(node.initializer);
           if (sourceSig) {
             promoted = {
               ...promoted,
@@ -8070,7 +8136,7 @@ export class Lowerer {
     // NamedEvaluation through a variable initializer) — inspect prints
     // [Function: name] and call errors spell it, like Node.
     if (e.kind === "dynFrom" && e.value.type.kind === "func" && e.fnName === undefined) {
-      const name = jsFuncNameOf(node);
+      const name = jsFuncNameOf(node, this);
       if (name !== null) e = { ...e, fnName: name };
     }
     // A union the plain re-tag declined (stranded NON-unit arms): when the

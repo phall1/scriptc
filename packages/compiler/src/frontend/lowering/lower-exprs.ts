@@ -1,4 +1,5 @@
 import { InternalCompilerError } from "../../errors.js";
+import { SYMBOL_T } from "../../ir/ir.js";
 import { literalValues } from "../literal-values.js";
 import { literalUnionArm } from "../union-discriminants.js";
 /* Expression lowering: the expression dispatch (lowerExpr), literals
@@ -2691,7 +2692,10 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
       // objects). Extract at the consuming operation, not at the read.
       if (isJsSourceFile(node.getSourceFile()) && ts.isPropertyAccessExpression(node)) {
         const receiver = lowerer.mapTypeOf(lowerer.typeOf(node.expression));
-        if (receiver?.kind === "object" && lowerer.classes.get(receiver.className)?.fields.get(node.name.text)?.kind === "dyn") return expr;
+        if (receiver?.kind === "object") {
+          const info = lowerer.classes.get(receiver.className);
+          if (info?.fields.get(node.name.text)?.kind === "dyn" || lowerer.findMethodOn(info ?? null, `get:${node.name.text}`)?.sig.ret.kind === "dyn") return expr;
+        }
         if (receiver?.kind === "classval") {
           const info = lowerer.classes.get(receiver.className);
           if (info && hasRuntimeStatics(info)) return expr;
@@ -2718,6 +2722,8 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
       }
       if (isJsSourceFile(node.getSourceFile()) && ts.isIdentifier(node)) {
         const symbol = lowerer.resolveValueSymbol(node);
+        if (symbol && lowerer.checker.declarationsOf(symbol).some((decl) => ts.isParameter(decl) &&
+            ts.isMethodDeclaration(decl.parent) && lowerer.checkedVirtualJsMethods.has(decl.parent))) return expr;
         if (symbol && lowerer.checker.declarationsOf(symbol).some((decl) =>
             ts.isParameter(decl) && ts.isConstructorDeclaration(decl.parent))) return expr;
         if (symbol && lowerer.checker.declarationsOf(symbol).some((decl) =>
@@ -3917,7 +3923,7 @@ function lowerPromiseThenPresence(
       // (the child.stdout pattern); a checker-narrowed read extracts
       // through maybeNarrow like any union member.
       if (name === "description") {
-        const receiver = lowerer.lowerExpr(expr.expression);
+        const receiver = lowerer.coerceToExpected(lowerer.lowerExpr(expr.expression), SYMBOL_T);
         const type: IrType = { kind: "union", unionId: lowerer.unions.intern([STRING, UNDEFINED_T]) };
         return { kind: "libCall", fn: "sym.desc", args: [receiver], type, loc };
       }
@@ -10101,6 +10107,13 @@ function lowerLogicalPair(lowerer: Lowerer, expr: ts.BinaryExpression, left: IrE
     if (receiverIr?.kind === "record") {
       const shape = lowerer.shapes.get(receiverIr.shapeId);
       if (shape?.indexValue && !shape.fields.some((f) => f.name === expr.name.text)) {
+        const actual = tryLowerExpression(lowerer, expr.expression);
+        if (actual?.type.kind === "dyn") return { kind: "dynKeyGet", value: actual,
+          key: { kind: "strLit", value: expr.name.text, type: STRING, loc: locOf(expr.name) }, type: DYN, loc: locOf(expr) };
+        if (actual?.type.kind === "record") {
+          const field = lowerer.shapes.get(actual.type.shapeId)?.fields.find((field) => field.name === expr.name.text);
+          if (field) return { kind: "recordGet", obj: actual, shapeId: actual.type.shapeId, field: field.name, type: field.type, loc: locOf(expr) };
+        }
         lowerer.unsupported(
           "SC1090",
           expr,
@@ -10489,6 +10502,7 @@ function representedClassFieldTarget(
    * receivers) a declared accessor property. Returns the pieces of a
    * fieldSet/recordSet/accessor-call (minus value/kind) or null. */
   export function fieldTarget(lowerer: Lowerer, access: ts.PropertyAccessExpression): FieldTarget | null {
+    if (lowerer.cjsLocalModuleBindingOf(access.expression)) return null;
     if (lowerer.chainBlocked(access)) return null;
     if (access.name.text === "stackTraceLimit" && lowerer.isStdlibGlobal(access.expression, "Error")) {
       return { container: "errorStackLimit", obj: { kind: "numLit", value: 0, type: F64, loc: locOf(access) }, field: "stackTraceLimit", fieldType: F64 };
@@ -10593,7 +10607,11 @@ function representedClassFieldTarget(
           return declaredArms.every((a) => ivArms.some((b) => typeEquals(a, b)));
         };
         if (!nameSym || nameSym.name === ts.InternalSymbolName.Index || canonicalized()) {
-          const obj = lowerer.lowerExpr(access.expression);
+          let obj = lowerer.lowerExpr(access.expression);
+          if (obj.type.kind === "union" && lowerer.armTag(obj.type.unionId, UNDEFINED_T) >= 0) {
+            const present = lowerer.stripUndefinedArm(obj.type);
+            obj = present.kind === "record" ? lowerer.runtimeOptionalPropertyReceiver(access.expression, obj, present, access.name.text) ?? obj : lowerer.maybeNarrow(obj, access.expression);
+          }
           if (obj.type.kind !== "record") return null;
           const actualShape = lowerer.shapes.get(obj.type.shapeId);
           if (!actualShape?.indexValue) return null;

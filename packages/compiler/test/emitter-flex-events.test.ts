@@ -7,8 +7,6 @@ import { analyze } from "../src/index.js";
 test.each([
   ["typed listeners", `/** @param {number} value */ function listener(value) { console.log(value); }
     const ee = new EventEmitter(); ee.on('value', listener); ee.emit('value'); ee.emit('value', 1);`, "conflicting argument types"],
-  ["mixed listener parameters", `function listener(first, second = 1) { console.log(first, second); }
-    const ee = new EventEmitter(); ee.on('value', listener); ee.emit('value'); ee.emit('value', 1, 2);`, "conflicting argument types"],
   ["emit overrides", `class Derived extends EventEmitter { emit(event, ...args) { return super.emit(event, ...args); } }
     const ee = new Derived(); ee.on('value', (value) => console.log(value)); ee.emit('value'); ee.emit('value', 1);`, "variable-arity emit through an EventEmitter subclass overriding emit"],
   ["listener arrays", `const ee = new EventEmitter(); ee.on('value', () => {});

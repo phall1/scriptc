@@ -831,8 +831,21 @@ function returnsWidenedJsField(lowerer: Lowerer, decl: ts.ClassDeclaration | ts.
   const widened = (expression: ts.Expression): boolean => {
     if (ts.isParenthesizedExpression(expression)) return widened(expression.expression);
     if (ts.isConditionalExpression(expression)) return widened(expression.whenTrue) || widened(expression.whenFalse);
+    if (ts.isCallExpression(expression)) {
+      const callee = expression.expression;
+      const symbol = ts.isPropertyAccessExpression(callee) ? lowerer.checker.getSymbolAtLocation(callee.name)
+        : ts.isElementAccessExpression(callee) ? lowerer.checker.getPropertyOfType(lowerer.typeOf(callee.expression), lowerer.foldedStringKeyOf(callee.argumentExpression) ?? "")
+        : undefined;
+      if (symbol && lowerer.checker.declarationsOf(symbol).some((declaration) =>
+          ts.isMethodDeclaration(declaration) && lowerer.checkedVirtualJsMethods.has(declaration))) return true;
+    }
     const name = ts.isPropertyAccessExpression(expression) ? expression.name.text
       : ts.isElementAccessExpression(expression) ? lowerer.foldedStringKeyOf(expression.argumentExpression) : null;
+    if (ts.isPropertyAccessExpression(expression)) {
+      const symbol = lowerer.checker.getSymbolAtLocation(expression.name);
+      if (symbol && lowerer.checker.declarationsOf(symbol).some((declaration) =>
+          (ts.isGetAccessorDeclaration(declaration) || ts.isSetAccessorDeclaration(declaration)) && lowerer.checkedVirtualJsAccessors.has(declaration))) return true;
+    }
     if (name !== null && (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) &&
         expression.expression.kind === ts.SyntaxKind.ThisKeyword) {
       return fields.get(name)?.kind === "dyn" || inheritedJsFieldType(lowerer, decl, name, ret).kind === "dyn";
@@ -1736,6 +1749,9 @@ export function collectClassShapeInner(lowerer: Lowerer, decl: ts.ClassLikeDecla
             member.initializer &&
             member.postfixToken?.kind !== ts.SyntaxKind.QuestionToken
           ) {
+            const initializerSymbol = ts.isIdentifier(member.initializer) ? lowerer.resolveValueSymbol(member.initializer) : null;
+            // Enum namespace aliases are erased; member reads fold through the checker.
+            if (initializerSymbol && (initializerSymbol.flags & ts.SymbolFlags.Enum) !== 0) continue;
             const type = lowerer.irTypeOf(member.name);
             if (type.kind === "void") lowerer.badType(member.name, lowerer.typeOf(member.name));
             if (type.kind === "dyn" && !isJsSourceFile(member.getSourceFile()) &&
@@ -2420,6 +2436,7 @@ export function collectClassShapeInner(lowerer: Lowerer, decl: ts.ClassLikeDecla
           }
           if (
             overridden &&
+            member.asteriskToken === undefined &&
             (overridden.sig.params.length !== shapes.length ||
               !overridden.sig.params.every((p, i) => typeEquals(p.type, shapes[i]!.type)) ||
               !typeEquals(overridden.sig.ret, ft.ret))
@@ -2427,7 +2444,7 @@ export function collectClassShapeInner(lowerer: Lowerer, decl: ts.ClassLikeDecla
             const fencedJsOverride =
               isJsSourceFile(member.getSourceFile()) &&
               overridden.declarer.decl !== null && isJsSourceFile(overridden.declarer.decl.getSourceFile()) &&
-              member.asteriskToken === undefined && overridden.sig.gen === undefined;
+              overridden.sig.gen === undefined;
             if (fencedJsOverride) {
               // A dormant JS method must not poison the whole class. Keep
               // the inherited call/dispatch ABI and refuse at method entry;
@@ -2547,6 +2564,10 @@ export function collectClassShapeInner(lowerer: Lowerer, decl: ts.ClassLikeDecla
           } else {
             // tsc rejects optional/default/rest setter params (TS1051-53).
             sig = { params: lowerer.paramShapes(member.parameters), ret: VOID };
+          }
+          if (lowerer.checkedVirtualJsAccessors.has(member)) {
+            if (isGet) sig.ret = DYN;
+            else for (const parameter of sig.params) parameter.type = DYN;
           }
           // One property, ONE type: tsc (5.1+) admits get/set pairs with
           // unrelated annotated types; a property slot here has a single
@@ -3823,7 +3844,7 @@ export function staticFieldWriteTarget(lowerer: Lowerer, access: ts.PropertyAcce
       // JavaScript often assigns public statics after the class declaration.
       // Their storage stays mutable and checked, while reads retain the
       // checker's concrete type instead of losing the method receiver.
-      const type = lowerer.mapTypeOf(lowerer.typeOf(expr));
+      const type = isJsSourceFile(expr.getSourceFile()) ? null : lowerer.mapTypeOf(lowerer.typeOf(expr));
       return type ? lowerer.coerceToExpected(value, type) : value;
     }
     return null;
@@ -4650,6 +4671,35 @@ export function collectVirtualJsMethods(lowerer: Lowerer, files: readonly ts.Sou
   });
   const visit = (node: ts.Node): void => {
     if (ts.isClassDeclaration(node) || ts.isClassExpression(node)) {
+      const accessors = node.members.filter((member): member is ts.GetAccessorDeclaration | ts.SetAccessorDeclaration =>
+        (ts.isGetAccessorDeclaration(member) || ts.isSetAccessorDeclaration(member)) && ts.isIdentifier(member.name) &&
+        !member.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword));
+      if (node.heritageClauses?.length && accessors.length && isJsSourceFile(node.getSourceFile())) {
+        const symbol = lowerer.typeOf(node).getSymbol();
+        const instance = symbol ? lowerer.checker.getDeclaredTypeOfSymbol(symbol) : null;
+        const seen = new Set<ts.Type>();
+        const markAccessors = (type: ts.Type): void => {
+          const target = type.isTypeReference() ? type.getTarget() : type;
+          if (!target?.isClassOrInterface() || seen.has(target)) return;
+          seen.add(target);
+          for (const base of lowerer.checker.getBaseTypes(target)) {
+            for (const member of accessors) {
+              if (!ts.isIdentifier(member.name)) continue;
+              const property = lowerer.checker.getPropertyOfType(base, member.name.text);
+              for (const declaration of property ? lowerer.checker.declarationsOf(property) : []) {
+                if ((ts.isGetAccessorDeclaration(declaration) || ts.isSetAccessorDeclaration(declaration)) && isJsSourceFile(declaration.getSourceFile())) {
+                  lowerer.checkedVirtualJsAccessors.add(declaration);
+                  lowerer.checkedVirtualJsAccessors.add(member);
+                  for (const twin of node.members) if ((ts.isGetAccessorDeclaration(twin) || ts.isSetAccessorDeclaration(twin)) &&
+                      ts.isIdentifier(twin.name) && twin.name.text === member.name.text) lowerer.checkedVirtualJsAccessors.add(twin);
+                }
+              }
+            }
+            markAccessors(base);
+          }
+        };
+        if (instance) markAccessors(instance);
+      }
       const members = node.members.filter((member): member is ts.MethodDeclaration =>
         ts.isMethodDeclaration(member) && ts.isIdentifier(member.name) &&
         !member.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword),
@@ -6027,6 +6077,14 @@ function assignedThisFieldType(lowerer: Lowerer, expr: ts.NewExpression): IrType
 
 export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
     const loc = locOf(expr);
+    let intlConstructor = expr.expression;
+    if (ts.isIdentifier(intlConstructor)) {
+      const symbol = lowerer.resolveValueSymbol(intlConstructor);
+      const declaration = symbol ? lowerer.checker.valueDeclarationOf(symbol) : undefined;
+      if (declaration && ts.isVariableDeclaration(declaration) && declaration.initializer) intlConstructor = declaration.initializer;
+    }
+    const intl = ts.isPropertyAccessExpression(intlConstructor) ? lowerer.stdlibGlobalMember(intlConstructor, "Intl") : null;
+    if (intl && intl !== "Segmenter") lowerer.noLowering(`new Intl.${intl}`, expr, undefined, lowerer.checker.getSymbolAtLocation(expr.expression));
     const instanceConstructor = lowerInstanceConstructorNew(lowerer, expr);
     if (instanceConstructor) return instanceConstructor;
     const objectFactory = lowerObjectFactoryNew(lowerer, expr);

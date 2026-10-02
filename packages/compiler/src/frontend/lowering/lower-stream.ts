@@ -1257,6 +1257,7 @@ function lowerEosCallback(
     if (v.type.kind === "dyn") return { cb: v, dyn: true };
   } else if (t?.kind === "func") {
     const cb = lowerer.lowerExpr(node);
+    if (cb.type.kind === "dyn") return { cb, dyn: true };
     if (cb.type.kind === "func" && canBoxFuncIntoDyn(cb.type, getRecord, getUnion)) {
       return { cb: { kind: "dynFrom", value: cb, type: DYN, loc: locOf(node) }, dyn: true };
     }

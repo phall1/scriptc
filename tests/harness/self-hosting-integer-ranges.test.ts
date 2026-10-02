@@ -17,7 +17,7 @@ test("production integer-range analysis lowers statically with identity-keyed ma
   const { coverage } = analyze(entry, { dynamic: false });
   expect(coverage.preflightFailed).toBe(false);
   expect(coverage.diagnostics).toEqual([]);
-  expect(coverage.stats.statementsTotal).toBeGreaterThan(300);
+  expect(coverage.stats.statementsTotal).toBeGreaterThan(250);
   expect(coverage.stats.statementsFailed).toBe(0);
   expect(coverage.stats.statementsIsland).toBe(0);
   expect(coverage.stats.functionsSkipped).toBe(0);

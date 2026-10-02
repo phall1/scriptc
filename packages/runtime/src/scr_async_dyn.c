@@ -455,22 +455,25 @@ static void scr_dyn_then_entry(ScrFiber *self, void *ap) {
       /* The handler threw: dst rejects with that. */
       scr_promise_reject_pending(a->dst);
     } else if (a->onfin != NULL) {
-      if (r->kind == SCR_DYN_PROMISE) {
-        ScrDynFinallyPack *pack = malloc(sizeof *pack);
-        if (!pack) scr_ad_oom();
-        pack->src = scr_promise_retain(a->src);
-        pack->dst = scr_promise_retain(a->dst);
-        pack->result = r;
-        ScrPromise *waiter = scr_async_spawn_after(r->v.promise, scr_dyn_finally_entry, pack);
-        scr_promise_release(waiter);
-      } else if (rejected) {
-        scr_dyn_release(r);
-        scr_rethrow(c);
-        scr_promise_reject_pending(a->dst);
-      } else {
-        scr_dyn_release(r);
-        scr_promise_fulfill_ref(a->dst, scr_dyn_retain(v), scr_dyn_retain_v, scr_dyn_release_v, NULL);
+      /* finally returns PromiseResolve(result).then(valueThunk), which
+       * the outer reaction adopts. Even an undefined result takes those
+       * jobs before propagating the original fulfillment or rejection. */
+      if (r->kind != SCR_DYN_PROMISE) {
+        ScrPromise *result = scr_promise_new();
+        scr_promise_fulfill_ref(result, r, scr_dyn_retain_v, scr_dyn_release_v, scr_dyn_trace_v);
+        r = scr_dyn_new_promise(result);
+        scr_promise_release(result);
       }
+      ScrPromise *passthrough = scr_promise_new();
+      ScrDynFinallyPack *pack = malloc(sizeof *pack);
+      if (!pack) scr_ad_oom();
+      pack->src = scr_promise_retain(a->src);
+      pack->dst = scr_promise_retain(passthrough);
+      pack->result = r;
+      ScrPromise *waiter = scr_async_spawn_after(r->v.promise, scr_dyn_finally_entry, pack);
+      scr_promise_release(waiter);
+      scr_promise_resolve_dyn(a->dst, scr_dyn_new_promise(passthrough));
+      scr_promise_release(passthrough);
     } else {
       scr_promise_resolve_dyn(a->dst, r);
     }

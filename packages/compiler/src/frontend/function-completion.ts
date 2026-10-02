@@ -5,7 +5,7 @@ import * as ts from "./ts7/adapter.js";
 export function functionCanFallThrough(declaration: ts.Node): boolean {
   if (!ts.isFunctionLike(declaration) || declaration.asteriskToken ||
       declaration.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword)) return false;
-  const body = "body" in declaration ? declaration.body as ts.Block | ts.Expression | undefined : undefined;
+  const body = declaration.body as ts.Block | ts.Expression | undefined;
   if (!body || !ts.isBlock(body)) return false;
   const completes = (statement: ts.Statement): boolean => {
     if (ts.isReturnStatement(statement) || ts.isThrowStatement(statement)) return false;
@@ -21,4 +21,19 @@ export function functionCanFallThrough(declaration: ts.Node): boolean {
   };
   const sequence = (statements: readonly ts.Statement[]): boolean => statements.every(completes);
   return sequence(body.statements);
+}
+
+/** A documented JavaScript result must also represent explicit empty returns. */
+export function functionCanReturnUndefined(declaration: ts.Node): boolean {
+  if (functionCanFallThrough(declaration)) return true;
+  if (!ts.isFunctionLike(declaration) || declaration.asteriskToken ||
+      declaration.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword)) return false;
+  const body = declaration.body;
+  if (!body) return false;
+  let emptyReturn = false;
+  ts.walkPreorder(body, (node) => {
+    if (node !== body && ts.isFunctionLike(node)) return "skip";
+    if (ts.isReturnStatement(node) && (!node.expression || ts.isVoidExpression(node.expression))) emptyReturn = true;
+  });
+  return emptyReturn;
 }

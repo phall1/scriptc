@@ -960,7 +960,7 @@ static ScrDyn *scr_dyn_invoke_impl(
         scr_str_release(name);
         scr_dyn_release(pack);
         return result;
-      } else if (dyn_arr_proto_mutates(method) && !dyn_name_is(method, "fill") && !dyn_name_is(method, "push") && !dyn_name_is(method, "pop")) {
+      } else if (dyn_arr_proto_mutates(method) && !dyn_name_is(method, "fill") && !dyn_name_is(method, "push") && !dyn_name_is(method, "pop") && !dyn_name_is(method, "shift")) {
         static const char message[] = "This checked array mutation over holes is not supported yet";
         scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
         return NULL;
@@ -1052,6 +1052,7 @@ static ScrDyn *scr_dyn_invoke_impl(
       }
       ScrDyn *first = recv->v.arr.items[0];
       memmove(recv->v.arr.items, recv->v.arr.items + 1, (len - 1) * sizeof(ScrDyn *));
+      if (recv->v.arr.presence) memmove(recv->v.arr.presence, recv->v.arr.presence + 1, len - 1);
       recv->v.arr.len = len - 1;
       return first; /* ownership moves out */
     }

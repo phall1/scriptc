@@ -1,4 +1,4 @@
-import { DYN, STRING, type IrExpr, type SrcLoc } from "../../ir/ir.js";
+import { BOOL, DYN, STRING, type IrExpr, type SrcLoc } from "../../ir/ir.js";
 import { varRef } from "../../ir/build.js";
 import { newFnCtx, type Lowerer } from "./lowerer.js";
 import { lowerCheckedArrayFrom } from "./lower-containers.js";
@@ -11,7 +11,13 @@ export function checkedIterableSpread(lowerer: Lowerer, source: IrExpr, spelling
     lowerer.fnStack.push(context);
     try {
       const params = [{ localId: "source", name: "source", type: DYN }, { localId: "spelling", name: "spelling", type: STRING }];
-      const result = lowerCheckedArrayFrom(lowerer, varRef("source", DYN, loc), loc, undefined, undefined, false, varRef("spelling", STRING, loc));
+      const sourceValue = varRef("source", DYN, loc);
+      const text = (value: string): IrExpr => ({ kind: "strLit", value, type: STRING, loc });
+      const nullishMessage = (value: string): IrExpr => ({ kind: "strConcat", left: varRef("spelling", STRING, loc), right: text(` is not iterable (cannot read property ${value})`), type: STRING, loc });
+      const message: IrExpr = { kind: "ternary", cond: { kind: "dynTest", test: "null", value: sourceValue, type: BOOL, loc }, then: nullishMessage("null"),
+        else_: { kind: "ternary", cond: { kind: "dynTest", test: "undefined", value: sourceValue, type: BOOL, loc }, then: nullishMessage("undefined"),
+          else_: text("Spread syntax requires ...iterable[Symbol.iterator] to be a function"), type: STRING, loc }, type: STRING, loc };
+      const result = lowerCheckedArrayFrom(lowerer, sourceValue, loc, undefined, undefined, false, message);
       lowerer.liftedFns.push({ name, params, returnType: DYN,
         locals: [...params.map((param) => ({ id: param.localId, name: param.name, type: param.type, mutable: false })), ...context.locals],
         body: [{ kind: "return", value: result, loc }], loc });

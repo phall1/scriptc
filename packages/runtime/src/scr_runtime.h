@@ -3789,6 +3789,7 @@ ScrSym *scr_sym_well_known(ScrStr *name);
 ScrDyn *scr_dyn_symbol_get(const ScrDyn *value, const ScrStr *key);
 ScrDyn *scr_dyn_symbol_key_get(const ScrDyn *value, const ScrDyn *key, bool optional);
 void scr_dyn_symbol_key_set(ScrDyn *value, ScrDyn *key, ScrDyn *stored);
+void scr_dyn_symbol_key_placeholder(ScrDyn *value, ScrDyn *key);
 bool scr_dyn_has_key_computed(const ScrDyn *value, const ScrDyn *key);
 bool scr_dyn_has_own_computed(const ScrDyn *value, const ScrDyn *key);
 bool scr_dyn_property_is_enumerable_computed(const ScrDyn *value, const ScrDyn *key);

@@ -7,7 +7,7 @@ import { analyze, compile } from "../src/index.js";
 
 const sanitize = process.env["SCRIPTC_SAN"] === "1";
 
-test.each(["llvm"] as const)("incompatible JS return overrides refuse only when called (%s)", async (backend) => {
+test.each(["llvm"] as const)("JS return overrides preserve calls and argument order (%s)", async (backend) => {
   const dir = mkdtempSync(join(tmpdir(), "scriptc-override-returns-"));
   try {
     const entry = join(dir, "main.cjs");
@@ -17,15 +17,15 @@ class Base {
   dispatch(value) { return this.method(value, undefined); }
 }
 class Derived extends Base {
-  // @ts-expect-error Deliberately exercise the native override refusal.
-  method(value, other) { console.log("must not execute", value, other); }
+  // @ts-expect-error JavaScript permits a different return type at runtime.
+  method(value, other) { console.log("body", value, other); }
 }
 class Leaf extends Derived {
   callSuper(value) { super.method(value, undefined); }
 }
 class Short extends Base {
-  // @ts-expect-error Deliberately exercise the native override refusal.
-  method(value) { console.log("must not execute short", value); }
+  // @ts-expect-error JavaScript permits a different return type at runtime.
+  method(value) { console.log("short body", value); }
 }
 function argument(label) { console.log("argument", label); return label; }
 const derived = new Derived();
@@ -42,23 +42,22 @@ console.log("after");
     const { coverage } = analyze(entry, { dynamic: false });
     expect(coverage.diagnostics).toEqual([]);
     expect(coverage.stats.statementsIsland).toBe(0);
-    expect(coverage.runtimeFences?.map((d) => [d.code, d.message])).toEqual([
-      ["SC1090", expect.stringContaining("overriding method 'method' with a different return type")],
-      ["SC1090", expect.stringContaining("overriding method 'method' with a different return type")],
-    ]);
+    expect(coverage.runtimeFences ?? []).toEqual([]);
     const result = await compile(entry, { backend, dynamic: false, sanitize, outDir: dir, outPath: join(dir, "program") });
     expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
     if (!result.ok) return;
     const child = spawnSync(result.binaryPath, [], { encoding: "utf8" });
     expect(child.status).toBe(0);
     expect(child.stderr).toBe("");
-    expect(child.stdout).toBe("argument direct first\nargument direct second\ndirect true true\nargument virtual\nvirtual true\nargument super\nsuper true\nargument short\nshort true\nafter\n");
+    const oracle = spawnSync(process.execPath, [entry], { encoding: "utf8" });
+    expect(oracle.status).toBe(0);
+    expect(child.stdout).toBe(oracle.stdout);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("incompatible JS parameter overrides refuse at method entry", async () => {
+test("JS parameter overrides preserve calls and argument order", async () => {
   const dir = mkdtempSync(join(tmpdir(), "scriptc-override-parameters-"));
   try {
     const entry = join(dir, "main.cjs");
@@ -69,7 +68,7 @@ class Base {
   dispatch(value) { return this.method(value); }
 }
 class Derived extends Base {
-  method(value = "x") { console.log("must not execute", value); return "x"; }
+  method(value = "x") { console.log("body", value); return "x"; }
 }
 class Leaf extends Derived { callSuper(value) { super.method(value); } }
 function argument(label) { console.log("argument", label); return 2; }
@@ -84,16 +83,16 @@ console.log("after");
 `);
     const { coverage } = analyze(entry, { dynamic: false });
     expect(coverage.diagnostics).toEqual([]);
-    expect(coverage.runtimeFences?.map((d) => [d.code, d.message])).toEqual([
-      ["SC1090", expect.stringContaining("overriding method 'method' with a different signature")],
-    ]);
+    expect(coverage.runtimeFences ?? []).toEqual([]);
     const result = await compile(entry, { backend: "llvm", dynamic: false, sanitize, outDir: dir, outPath: join(dir, "program") });
     expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
     if (!result.ok) return;
     const child = spawnSync(result.binaryPath, [], { encoding: "utf8" });
     expect(child.status).toBe(0);
     expect(child.stderr).toBe("");
-    expect(child.stdout).toBe("argument direct\ndirect true true\nargument virtual\nvirtual true\nargument super\nsuper true\nafter\n");
+    const oracle = spawnSync(process.execPath, [entry], { encoding: "utf8" });
+    expect(oracle.status).toBe(0);
+    expect(child.stdout).toBe(oracle.stdout);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -102,15 +101,14 @@ console.log("after");
 test.each([
   ["async methods", `class Base { method() { return 1; } } class Derived extends Base { async method() { return "x"; } }`],
   ["generators", `class Base { method() { return 1; } } class Derived extends Base { *method() { yield "x"; } }`],
-  ["accessors", `class Base { get value() { return 1; } } class Derived extends Base { get value() { return "x"; } }`],
-])("%s retain their class signature refusal", (_name, source) => {
+])("%s retain their method entry refusal", (_name, source) => {
   const dir = mkdtempSync(join(tmpdir(), "scriptc-override-signatures-"));
   try {
     const entry = join(dir, "main.cjs");
-    writeFileSync(entry, "// @ts-nocheck\n" + source + "\nnew Derived();\n");
+    writeFileSync(entry, "// @ts-nocheck\n" + source + "\nnew Derived().method();\n");
     const { coverage } = analyze(entry, { dynamic: false });
     const diagnostics = [...coverage.diagnostics, ...(coverage.runtimeFences ?? [])];
-    expect(diagnostics.some((d) => d.code === "SC1090" && /overriding.*different (signature|type)/.test(d.message)), JSON.stringify(diagnostics)).toBe(true);
+    expect(diagnostics.some((d) => d.code === "SC1090" && /overriding.*(async|generator|different (signature|type))/.test(d.message)), JSON.stringify(diagnostics)).toBe(true);
     expect(diagnostics.some((d) => /different return type/.test(d.message))).toBe(false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
