@@ -306,7 +306,8 @@ test("isolated Effect concurrency stays within the budget and only uses large Sa
       for (const sideTasks of [0, 1, 2, 3]) {
         const plan = sandboxEffectWorkerAllocation(workers, sideTasks, vcpus);
         expect(plan.caseWorkers).toBeGreaterThanOrEqual(1);
-        expect(plan.caseWorkers + plan.sideConcurrency + plan.effectConcurrency - 1).toBe(workers);
+        const extraCompilers = Math.min(2, plan.caseWorkers) * (plan.effectConcurrency - 1);
+        expect(plan.caseWorkers + plan.sideConcurrency + extraCompilers).toBeLessThanOrEqual(workers);
         expect(plan.sideConcurrency).toBeLessThanOrEqual(sideTasks);
         expect(plan.effectConcurrency === 2).toBe(vcpus === 32 && workers >= 4);
       }

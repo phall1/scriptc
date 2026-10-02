@@ -477,16 +477,24 @@ function createRequireProgramRoots7(program: ts.Program): string[] {
   const roots = new Set<string>();
   for (const sf of program.getSourceFiles()) {
     if (sf.isDeclarationFile || sf.fileName.endsWith(".json")) continue;
+    const calls: { callee: ts.Identifier; spec: string }[] = [];
     ts.walkPreorder(sf, (node) => {
       if (
         !ts.isCallExpression(node) || node.questionDotToken !== undefined ||
         node.arguments.length !== 1 || !ts.isStringLiteralLike(node.arguments[0]!) ||
-        !ts.isIdentifier(node.expression) || !isCreateRequireBinding7(program, node.expression)
+        !ts.isIdentifier(node.expression)
       ) {
         return undefined;
       }
-      const spec = node.arguments[0]!.text;
-      if (canonicalBuiltinModule(spec) !== null) return "skip";
+      calls.push({ callee: node.expression, spec: node.arguments[0]!.text });
+    });
+    // Root discovery only needs the callee's binding. A first-miss lookup
+    // otherwise fetches symbols and types for every identifier in the file,
+    // including all unreachable bodies in large published packages.
+    program.getTypeChecker().prefetchSymbolNodesExact(calls.map((call) => call.callee));
+    for (const { callee, spec } of calls) {
+      if (!isCreateRequireBinding7(program, callee)) continue;
+      if (canonicalBuiltinModule(spec) !== null) continue;
       let target = resolveProjectModule(sf.fileName, spec);
       if (target === null && !spec.startsWith("#")) {
         const npm = resolveNpmImport7(sf.fileName, spec, "require");
@@ -497,11 +505,10 @@ function createRequireProgramRoots7(program: ts.Program): string[] {
       // A directory's package.json may point at a native addon. Keep it
       // out of TypeScript's source roots so the require call can report
       // the native-addon boundary instead of an unsupported-file error.
-      if (target === null || target.endsWith(".json") || target.endsWith(".node")) return "skip";
+      if (target === null || target.endsWith(".json") || target.endsWith(".node")) continue;
       const normalized = tsgoPath(resolve(target));
       if (!known.has(normalized)) roots.add(normalized);
-      return "skip";
-    });
+    }
   }
   return [...roots].sort();
 }

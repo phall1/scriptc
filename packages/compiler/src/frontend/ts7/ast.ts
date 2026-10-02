@@ -112,6 +112,9 @@ export function walkPreorder(
   const stack: Node[] = [root];
   const depths: number[] = [0];
   const children: Node[] = [];
+  // The buffer belongs to this walk. Reuse its visitor too: constructing a
+  // closure per node adds allocation and cycle-collection work natively.
+  const appendChild = (child: Node): void => { children.push(child); };
   while (stack.length > 0) {
     const n = stack.pop()!;
     const depth = depths.pop()!;
@@ -119,9 +122,7 @@ export function walkPreorder(
     if (verdict === "stop") return;
     if (verdict === "skip") continue;
     children.length = 0;
-    n.forEachChild((c) => {
-      children.push(c);
-    });
+    n.forEachChild(appendChild);
     for (let i = children.length - 1; i >= 0; i--) {
       stack.push(children[i]!);
       depths.push(depth + 1);

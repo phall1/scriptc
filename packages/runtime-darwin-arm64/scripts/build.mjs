@@ -2,6 +2,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { availableParallelism } from "node:os";
+import { parallelMap } from "../../runtime-pack-common/scripts/parallel-map.mjs";
 import {
   copyFile, mkdir, readFile, readdir, rm, stat, writeFile,
 } from "node:fs/promises";
@@ -71,9 +72,7 @@ async function build() {
 
   async function parallel(items, task) {
     const width = Math.max(1, Math.min(8, availableParallelism()));
-    for (let i = 0; i < items.length; i += width) {
-      await Promise.all(items.slice(i, i + width).map(task));
-    }
+    return parallelMap(items, width, task);
   }
 
   async function archive(id, sources, sourceRoot, flags) {
@@ -100,8 +99,7 @@ async function build() {
   try {
     const flavors = {};
     for (const [flavor, flavorSpec] of Object.entries(RUNTIME_PACK_MATRIX.flavors)) {
-      const units = [];
-      for (const unit of flavorSpec.runtime_units ?? RUNTIME_PACK_MATRIX.runtime_units) {
+      const units = await parallel(flavorSpec.runtime_units ?? RUNTIME_PACK_MATRIX.runtime_units, async (unit) => {
         const variants = [];
         for (const baseVariant of unit.variants) {
           const variant = { ...baseVariant, defines: [...(flavorSpec.defines ?? []), ...baseVariant.defines] };
@@ -136,8 +134,8 @@ async function build() {
             size: (await stat(output)).size,
           });
         }
-        units.push({ source: unit.source, predicate: unit.predicate, variants });
-      }
+        return { source: unit.source, predicate: unit.predicate, variants };
+      });
       flavors[flavor] = { optimization: flavorSpec.optimization, runtime_units: units };
     }
 

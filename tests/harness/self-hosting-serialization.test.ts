@@ -88,6 +88,14 @@ for (const backend of ["llvm"] as const) {
       expect(compact.native.stdout.toString().trimEnd()).not.toContain("\n");
       expect(deserializeModule(compact.native.stdout.toString())).toEqual(numeric);
       expect(deserializeModule(compact.native.stdout.toString())).toEqual(deserializeModule(compact.oracle.stdout.toString()));
+      const manyFunctions: IrModule = {
+        ...numeric, sourceFile: 'escaped "functions":[] $&.ts',
+        functions: Array.from({ length: 64 }, (_, index) => ({ ...numeric.functions[0]!, name: `function${index}` })),
+      };
+      const many = run(serializeModule(manyFunctions), ["compact"]);
+      expect(many.native.status).toBe(0);
+      expect(deserializeModule(many.native.stdout.toString())).toEqual(manyFunctions);
+      expect(deserializeModule(many.native.stdout.toString())).toEqual(deserializeModule(many.oracle.stdout.toString()));
       const print = numeric.functions[0]!.body[1]!;
       expect(print.kind).toBe("exprStmt");
       if (print.kind !== "exprStmt" || print.expr.kind !== "intrinsic") throw new Error("numeric IR changed");

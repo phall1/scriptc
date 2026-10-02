@@ -10,6 +10,7 @@ import { createRuntimePackMatrix } from "../runtime-pack-matrix.mjs";
 import { assertArtifactsExcludeStrings } from "./artifact-policy.mjs";
 import { createDeterministicArchive } from "./archive.mjs";
 import { installRuntimePack, withBuildLock } from "./build-state.mjs";
+import { parallelMap } from "./parallel-map.mjs";
 
 const run = promisify(execFile);
 const packageRoot = process.env.SCRIPTC_RUNTIME_PACK_ROOT;
@@ -56,7 +57,7 @@ async function build() {
   };
   const parallel = async (items, task) => {
     const width = Math.max(1, Math.min(8, availableParallelism()));
-    for (let i = 0; i < items.length; i += width) await Promise.all(items.slice(i, i + width).map(task));
+    return parallelMap(items, width, task);
   };
   const archive = async (id, sources, sourceRoot, flags) => {
     process.stdout.write(`building ${packageManifest.name} ${id} archive\n`);
@@ -89,8 +90,7 @@ async function build() {
       // Zig emits DWARF by default, including descriptions of functions
       // removed by section GC. Release packs must opt out explicitly.
       const debugFlags = flavor.endsWith("release") ? ["-g0"] : [];
-      const units = [];
-      for (const unit of flavorSpec.runtime_units ?? matrix.runtime_units) {
+      const units = await parallel(flavorSpec.runtime_units ?? matrix.runtime_units, async (unit) => {
         const variants = [];
         for (const baseVariant of unit.variants) {
           const variant = { ...baseVariant, defines: [...(flavorSpec.defines ?? []), ...baseVariant.defines] };
@@ -103,8 +103,8 @@ async function build() {
           await compile(join(runtimeSrc, unit.source), output, [...commonFlags, flavorSpec.optimization, ...debugFlags, ...variant.defines.map((define) => `-D${define}`), ...includeFlags]);
           variants.push({ id: variant.id, when: variant.when, defines: variant.defines, path: artifactPath(output), sha256: await sha256(output), size: (await stat(output)).size });
         }
-        units.push({ source: unit.source, predicate: unit.predicate, variants });
-      }
+        return { source: unit.source, predicate: unit.predicate, variants };
+      });
       flavors[flavor] = { optimization: flavorSpec.optimization, runtime_units: units };
     }
     const mbedtlsSources = (await readdir(join(mbedtls, "library"))).filter((name) => !name.startsWith(".") && name.endsWith(".c")).sort();

@@ -5,6 +5,24 @@ import { expect, test, vi } from "vitest";
 import { checkPreflight, isNodeEsmFile, loadProgram, makeCycleAdmission, type CycleEdge } from "./program-node.js";
 import * as ts from "./ts7/ast.js";
 import { AstNode } from "./ts7/ast-node.js";
+import { SemanticChecker } from "./ts7/semantic-checker.js";
+
+test("program-root discovery does not fetch types for unrelated string calls", () => {
+  const dir = mkdtempSync(join(tmpdir(), "scriptc-root-queries-"));
+  const entry = join(dir, "main.ts");
+  writeFileSync(join(dir, "package.json"), '{"type":"module"}');
+  writeFileSync(entry, 'function label(text: string) { return text; } console.log(label("ready"));\n');
+  const types = vi.spyOn(SemanticChecker.prototype, "getTypeOfSymbol");
+  const load = loadProgram(entry);
+  try {
+    expect(types).not.toHaveBeenCalled();
+    expect(checkPreflight(load)).toEqual([]);
+  } finally {
+    types.mockRestore();
+    load.dispose();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test("ambiguous module classification bounds ancestor work on deep expressions", () => {
   const directory = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-module-depth-"));

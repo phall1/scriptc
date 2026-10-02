@@ -203,15 +203,21 @@ export function sandboxTestWorkerAllocation(workerCount, sideTaskCount) {
   };
 }
 
-/** Isolated Effect 4 compilers can each use 8 GiB. Only large Sandboxes
- * run two fixtures together, reserving the extra slot inside the same
+/** Isolated Effect compilers can each use 8 GiB. Only large Sandboxes
+ * run two fixtures together, reserving each file's extra slot inside the same
  * worker budget and keeping their side processes serial. */
 export function sandboxEffectWorkerAllocation(workerCount, sideTaskCount, vcpus) {
   const effectConcurrency = Number(vcpus) >= 32 && workerCount >= 4 ? 2 : 1;
   const allocation = sandboxTestWorkerAllocation(
-    workerCount - (effectConcurrency - 1),
+    workerCount,
     effectConcurrency === 2 ? Math.min(sideTaskCount, 1) : sideTaskCount,
   );
+  if (effectConcurrency === 2) {
+    // Both Effect files may occupy a Vitest worker at the same time.
+    while (allocation.caseWorkers + Math.min(2, allocation.caseWorkers) + allocation.sideConcurrency > workerCount) {
+      allocation.caseWorkers--;
+    }
+  }
   return { ...allocation, effectConcurrency };
 }
 

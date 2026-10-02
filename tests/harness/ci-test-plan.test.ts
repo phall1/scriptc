@@ -1,12 +1,12 @@
 import { expect, test } from "vitest";
-import { ciTestPlan, corpusFiles, fileExclusions } from "../../scripts/ci-test-plan.mjs";
+import { ciTestPlan, corpusFiles, effectFiles, fileExclusions } from "../../scripts/ci-test-plan.mjs";
 import { runCiTestPlan } from "../../scripts/ci-test.mjs";
 
 test.for([1, 3, 5, 10])("CI retains every suite with %i shards without mixing partition axes", (count) => {
   for (const flavor of ["plain", "san"]) {
     const plans = Array.from({ length: count }, (_, index) => ciTestPlan({ shard: `${index + 1}/${count}`, flavor }));
     const sideFiles = plans.flatMap((plan) => plan.side.filter((task) => task.args.length === 2).map((task) => task.args[1]));
-    for (const file of fileExclusions.filter((file) => !corpusFiles.includes(file) && !file.includes("native-driver") && !file.includes("coverage") && !file.includes("native-toolchain"))) {
+    for (const file of fileExclusions.filter((file) => !corpusFiles.includes(file) && !effectFiles.includes(file) && !file.includes("native-driver") && !file.includes("coverage") && !file.includes("native-toolchain"))) {
       expect(sideFiles.filter((selected) => selected === file), file).toHaveLength(1);
     }
     for (const plan of plans) {

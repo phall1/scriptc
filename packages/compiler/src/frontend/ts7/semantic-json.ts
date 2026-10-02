@@ -2,12 +2,11 @@
  * JSON.parse itself validates grammar. A valid surrogate pair is preserved;
  * a lone escape must not silently change a type literal or symbol name. */
 export function checkSemanticJsonStrings(json: string, preservesSurrogates: boolean): void {
-  if (preservesSurrogates) return;
-  let inString = false;
-  for (let index = 0; index < json.length; index++) {
-    const code = json.charCodeAt(index);
-    if (code === 34) { inString = !inString; continue; }
-    if (!inString || code !== 92) continue;
+  // Most checker responses contain no Unicode escapes. Inspect only escape
+  // sequences instead of mapping every native string index to UTF-16. Valid
+  // JSON has no backslashes outside strings; JSON.parse checks the grammar.
+  if (preservesSurrogates || !json.includes("\\u")) return;
+  for (let index = json.indexOf("\\"); index >= 0; index = json.indexOf("\\", index + 1)) {
     if (json.charCodeAt(++index) !== 117) continue;
     const unit = jsonHexUnit(json, index + 1);
     index += 4;

@@ -21,7 +21,16 @@ export function serializeModule(mod: IrModule, compact = false): string {
     }
     return value;
   };
-  return compact ? JSON.stringify(mod, replacer) : JSON.stringify(mod, replacer, 2);
+  if (!compact) return JSON.stringify(mod, replacer, 2);
+  // A replacer reads through live native views. Serializing the complete
+  // function array through one view refreshes every function capsule for
+  // each element, making large compiler artifacts quadratic. The sentinel
+  // replacer is key-independent, so encode each function as its own root.
+  const header = JSON.stringify({ ...mod, functions: [] }, replacer);
+  const slot = '"functions":[]';
+  const offset = header.indexOf(slot);
+  const functions = mod.functions.map((fn) => JSON.stringify(fn, replacer) ?? "null").join(",");
+  return header.slice(0, offset) + '"functions":[' + functions + "]" + header.slice(offset + slot.length);
 }
 
 export function deserializeModule(json: string): IrModule {

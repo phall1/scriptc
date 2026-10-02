@@ -1,6 +1,6 @@
 // Case-sharded harnesses run in every job without Vitest file sharding.
+export const effectFiles = ["tests/harness/effect.test.ts", "tests/harness/effect4.test.ts"];
 export const corpusFiles = [
-  "tests/harness/effect.test.ts", "tests/harness/effect4.test.ts",
   "tests/harness/differential.test.ts", "tests/harness/llvm-differential.test.ts",
   "tests/harness/npm.test.ts", "tests/harness/server.test.ts",
   "tests/harness/test262.test.ts", "tests/harness/vercel-e2e.test.ts",
@@ -17,7 +17,7 @@ const isolatedFiles = [
   ["npm static", "tests/harness/npm-static.test.ts", 4],
   ["surface manifest", "tests/harness/surface-manifest.test.ts", 5],
 ];
-export const fileExclusions = [...corpusFiles, coverageFile, cacheFile,
+export const fileExclusions = [...corpusFiles, ...effectFiles, coverageFile, cacheFile,
   ...isolatedFiles.map(([,file]) => file), "tests/harness/self-hosting-native-driver.test.ts"];
 
 export function ciTestPlan({shard, flavor, workers = 4}) {

@@ -114,7 +114,7 @@ describe("balancedShardSelect", () => {
     .filter((file) => !file.endsWith(".d.ts")).map((file) => basename(file)).sort();
   const weight = (key: string) => costs[key] ?? 40;
 
-  test.for([2, 3, 5, 8, 10])("the published fixtures partition completely and independently of input order with %i shards", (count) => {
+  test.for([2, 3, 5, 8, 10, 12])("the published fixtures partition completely and independently of input order with %i shards", (count) => {
     const parts = Array.from({ length: count }, (_, index) => balancedShardSelect(fixtures, (key) => key, weight, { index: index + 1, count }));
     expect(parts.flat().sort()).toEqual(fixtures);
     expect(new Set(parts.flat()).size).toBe(fixtures.length);
@@ -131,11 +131,11 @@ describe("balancedShardSelect", () => {
     expect(Math.max(...balanced)).toBeLessThan(Math.max(...hashed) * 0.8);
   });
 
-  test("published Effect 3 fixtures also balance without dropping cases", () => {
+  test.for([10, 12])("published Effect 3 fixtures also balance without dropping cases across %i shards", (count) => {
     const costs: Record<string, number> = effectCosts;
     const keys = globSync(join(import.meta.dirname, "../fixtures/effect/*.ts")).map((file) => basename(file)).sort();
     const weight = (key: string) => costs[key] ?? 120;
-    const parts = Array.from({ length: 10 }, (_, index) => balancedShardSelect(keys, (key) => key, weight, { index: index + 1, count: 10 }));
+    const parts = Array.from({ length: count }, (_, index) => balancedShardSelect(keys, (key) => key, weight, { index: index + 1, count }));
     expect(parts.flat().sort()).toEqual(keys);
     const total = (slice: string[]) => slice.reduce((sum, key) => sum + weight(key), 0);
     const hashed = Array.from({ length: 10 }, (_, index) => total(shardSelect(keys, (key) => key, { index: index + 1, count: 10 })));
