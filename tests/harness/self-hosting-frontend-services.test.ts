@@ -21,6 +21,11 @@ function input(directory: string) {
   writeFileSync(join(packageDirectory, "package.json"), JSON.stringify({ name: "service-fetch", main: "index.js" }));
   writeFileSync(join(packageDirectory, "index.js"), 'exports.request = globalThis.fetch; exports.leaf = require("./leaf.js"); exports.later = () => require("./missing.js");');
   writeFileSync(join(packageDirectory, "leaf.js"), 'exports.local = 1;');
+  const typedDirectory = join(directory, "node_modules/service-typescript");
+  mkdirSync(typedDirectory, { recursive: true });
+  writeFileSync(join(typedDirectory, "package.json"), JSON.stringify({ name: "service-typescript", type: "module", main: "index.ts" }));
+  writeFileSync(join(typedDirectory, "index.ts"), 'import type { Missing } from "missing-types"; import { value } from "./value.mts"; export function get(): number { return value; }');
+  writeFileSync(join(typedDirectory, "value.mts"), 'export const value: number = 42;');
   return {
     modules: npmFetchCases.map((item, index) => ({ key: `${index}.js`, source: item.source, format: "cjs" })),
     directory,
@@ -83,9 +88,13 @@ for (const backend of ["llvm"] as const) {
       expect(result.overloads).not.toBeNull();
       expect(result.widened).not.toBeNull();
       expect(typeof result.rewritten).toBe("string");
-      expect(result.graph.modules).toHaveLength(2);
+      expect(result.graph.modules).toHaveLength(4);
       expect(result.graph.modules.filter((module: { usesFetch: boolean }) => module.usesFetch)).toHaveLength(1);
       expect(result.graph.modules[0].facade).toContain("request");
+      expect(result.graph.modules.filter((module: { key: string }) => /\.(?:ts|mts)$/.test(module.key))).toEqual([
+        { key: join(directory, "node_modules/service-typescript/index.ts").replaceAll("\\", "/"), format: "esm", usesFetch: false, facade: "" },
+        { key: join(directory, "node_modules/service-typescript/value.mts").replaceAll("\\", "/"), format: "esm", usesFetch: false, facade: "" },
+      ]);
       expect(result.graph.lazyTraps).toEqual([{ specifier: "./missing.js", via: ["require"], packages: ["service-fetch"] }]);
       expect(result.versions).toEqual(["export const original = 1;", "export const changed = 2;"]);
     } finally { rmSync(directory, { recursive: true, force: true }); }
