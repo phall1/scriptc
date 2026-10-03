@@ -41,6 +41,16 @@ interface RunResult {
   exitCode: number;
 }
 
+function programStderr(stderr: Buffer): Buffer {
+  if (!sanitize) return stderr;
+  // Linux ASan emits this instrumentation warning at the first fiber swap.
+  // Latin-1 preserves every other byte, including non-UTF-8 program output.
+  return Buffer.from(stderr.toString("latin1").replace(
+    /^==\d+==WARNING: ASan doesn't fully support makecontext\/swapcontext functions and may produce false positives in some cases!\n/gm,
+    "",
+  ), "latin1");
+}
+
 async function runBinary(cmd: string, args: string[]): Promise<RunResult> {
   try {
     // stdin closes immediately (differential.test.ts's contract): fixture
@@ -185,7 +195,7 @@ describe(`npm differential (${cases.length} programs${sanitize ? ", sanitized" :
         expect.unreachable("stdout differed at byte level but not after utf8 decode");
       }
       expect(nativeRes.exitCode, label).toBe(nodeRes.exitCode);
-      if (c.compareStderr) expect(nativeRes.stderr, label).toEqual(nodeRes.stderr);
+      if (c.compareStderr) expect(programStderr(nativeRes.stderr), label).toEqual(nodeRes.stderr);
     }
   }, 120_000);
 });
