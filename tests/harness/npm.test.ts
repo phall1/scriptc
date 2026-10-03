@@ -37,6 +37,7 @@ const cases = shardSelect(npmCases(fixturesRoot), (c) => c.name);
 
 interface RunResult {
   stdout: Buffer;
+  stderr: Buffer;
   exitCode: number;
 }
 
@@ -47,12 +48,12 @@ async function runBinary(cmd: string, args: string[]): Promise<RunResult> {
     // the island now), and a default open pipe would hang both lanes.
     const pending = execFileAsync(cmd, args, { encoding: "buffer" });
     pending.child.stdin?.end();
-    const { stdout } = await pending;
-    return { stdout, exitCode: 0 };
+    const { stdout, stderr } = await pending;
+    return { stdout, stderr, exitCode: 0 };
   } catch (err) {
-    const e = err as { code?: unknown; stdout?: Buffer };
-    if (typeof e.code !== "number" || !Buffer.isBuffer(e.stdout)) throw err;
-    return { stdout: e.stdout, exitCode: e.code };
+    const e = err as { code?: unknown; stdout?: Buffer; stderr?: Buffer };
+    if (typeof e.code !== "number" || !Buffer.isBuffer(e.stdout) || !Buffer.isBuffer(e.stderr)) throw err;
+    return { stdout: e.stdout, stderr: e.stderr, exitCode: e.code };
   }
 }
 
@@ -60,10 +61,9 @@ async function runBinary(cmd: string, args: string[]): Promise<RunResult> {
  * the fixture packages so edits to either rebuild. */
 async function build(entry: string): Promise<string> {
   const hash = createHash("sha256");
-  const fixtureDir = join(entry, "../..");
   const inputs = [
     entry,
-    ...globSync(join(fixtureDir, "**/node_modules/**/*.{js,mjs,cjs,json,d.ts,node}")).sort(),
+    ...globSync(join(fixturesRoot, "**/node_modules/**/*.{js,mjs,cjs,json,d.ts,node}")).sort(),
   ];
   for (const f of inputs) hash.update(f).update(readFileSync(f));
   const key = hash.update(sanitize ? "san" : "plain").digest("hex").slice(0, 16);
@@ -185,6 +185,7 @@ describe(`npm differential (${cases.length} programs${sanitize ? ", sanitized" :
         expect.unreachable("stdout differed at byte level but not after utf8 decode");
       }
       expect(nativeRes.exitCode, label).toBe(nodeRes.exitCode);
+      if (c.compareStderr) expect(nativeRes.stderr, label).toEqual(nodeRes.stderr);
     }
   }, 120_000);
 });
