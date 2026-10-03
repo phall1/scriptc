@@ -40,6 +40,9 @@ function report() {
   ]) show({ args: ["--no-x"], options, allowNegative: true, strict: false, tokens: true });
   for (const config of [
     null,
+    { args: [], strict: "has'quote" }, { args: [], strict: "line\nend" },
+    { args: [], strict: "x".repeat(28) }, { args: [], strict: "x".repeat(29) },
+    { args: [], options: { x: { type: "invalid".repeat(8) } } },
     { args: "bad", strict: 1 }, { args: [], strict: 1 }, { args: [], allowPositionals: 1 },
     { args: [], tokens: "yes" }, { args: [], allowNegative: 0 }, { args: [], options: [] },
     { args: [], options: { x: null } }, { args: [], options: { x: {} } },
