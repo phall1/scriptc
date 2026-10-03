@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { analyze, compile } from "@scriptc/compiler";
@@ -44,7 +44,7 @@ function input(directory: string) {
 
 for (const backend of ["llvm"] as const) {
   test(`owned frontend services run without Node (${backend})`, async () => {
-    const directory = mkdtempSync(join(tempRoot, "scriptc-frontend-services-native-"));
+    const directory = realpathSync(mkdtempSync(join(tempRoot, "scriptc-frontend-services-native-")));
     try {
       const object = join(directory, "process.o");
       execFileSync("clang", ["-std=c11", "-Wall", "-Wextra", "-Werror", ...(sanitize ? ["-fsanitize=address"] : []),
