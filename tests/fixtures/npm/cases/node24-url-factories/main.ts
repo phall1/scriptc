@@ -1,4 +1,4 @@
 // @dynamic
 // @stderr
-import { reportUrls } from "urlzoo/factories.js";
+import { reportUrls } from "node24-url-fixture/factories.js";
 reportUrls();
