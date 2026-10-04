@@ -1672,6 +1672,27 @@ function lowerFsSyncBufferWindow(
         ? lowerFsTimestampValue(lowerer, arg, loc) : lowerer.lowerExprExpecting(arg, DYN)), type: DYN, loc };
       return { kind: "libCall", fn: "fs.callbackCall", args: [{ kind: "strLit", value: bi.member, type: STRING, loc }, args], type: DYN, loc };
     }
+    if ((bi.module === "fs" && ["linkSync", "symlinkSync", "readlinkSync"].includes(bi.member)) ||
+        (bi.module === "fs/promises" && ["link", "symlink", "readlink"].includes(bi.member))) {
+      const symbolic = bi.member === "symlinkSync" || bi.member === "symlink";
+      const reading = bi.member === "readlinkSync" || bi.member === "readlink";
+      const arity = symbolic ? 3 : 2;
+      if (expr.arguments.length > arity || expr.arguments.some(ts.isSpreadElement)) lowerer.noLowering(`${name} with this argument shape`, expr);
+      const args = Array.from({ length: arity }, (_, index) => expr.arguments[index]
+        ? lowerer.lowerExprExpecting(expr.arguments[index]!, DYN) : dynUndefinedExpr(loc));
+      if (reading) {
+        const promise = bi.module === "fs/promises";
+        const result = lowerer.mapTypeOf(lowerer.typeOf(expr)) ?? fn.result;
+        const inner = result.kind === "promise" ? result.inner : result;
+        const bytes = inner.kind === "bytes";
+        const text = inner.kind === "string";
+        const selected = promise ? bytes ? "fsp.readlinkBuffer" : text ? "fsp.readlinkStr" : "fsp.readlink"
+          : bytes ? "fs.readlinkSyncBuffer" : text ? "fs.readlinkSyncStr" : "fs.readlinkSync";
+        const valueType = bytes ? BYTES_U8 : text ? STRING : DYN;
+        return { kind: "libCall", fn: selected, args, type: promise ? { kind: "promise", inner: valueType } : valueType, loc };
+      }
+      return { kind: "libCall", fn: fn.fn, args, type: fn.result, loc };
+    }
     if ((bi.module === "fs" && ["utimesSync", "futimesSync", "lutimesSync"].includes(bi.member)) ||
         (bi.module === "fs/promises" && ["utimes", "lutimes"].includes(bi.member))) {
       if (expr.arguments.length > 3 || expr.arguments.some(ts.isSpreadElement)) lowerer.noLowering(`${name} with this argument shape`, expr);

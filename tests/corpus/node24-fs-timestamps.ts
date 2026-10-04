@@ -29,7 +29,8 @@ try {
   const before = Date.now() - 2000;
   utimesSync(file, -1, "Infinity");
   const current = statSync(file);
-  console.log("current", current.atimeMs >= before && current.atimeMs <= Date.now(), current.mtimeMs >= before && current.mtimeMs <= Date.now());
+  // UTIME_NOW can preserve submillisecond precision; Date.now is integral.
+  console.log("current", current.atimeMs >= before && current.atimeMs <= Date.now() + 1, current.mtimeMs >= before && current.mtimeMs <= Date.now() + 1);
   utimesSync(file, "-Infinity", new Date(NaN));
   console.log("negative infinity", statSync(file).atimeMs >= before);
   let order = "";

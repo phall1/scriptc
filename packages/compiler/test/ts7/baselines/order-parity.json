@@ -10662,6 +10662,42 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/node24-fs-links-callbacks.cjs": {
+   "order": [
+    "<repo>/tests/corpus/node24-fs-links-callbacks.cjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/node24-fs-links-errors.cjs": {
+   "order": [
+    "<repo>/tests/corpus/node24-fs-links-errors.cjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/node24-fs-links-options.cjs": {
+   "order": [
+    "<repo>/tests/corpus/node24-fs-links-options.cjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/node24-fs-links-promise-errors.cjs": {
+   "order": [
+    "<repo>/tests/corpus/node24-fs-links-promise-errors.cjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/node24-fs-links-promises.ts": {
+   "order": [
+    "<repo>/tests/corpus/node24-fs-links-promises.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/node24-fs-links.ts": {
+   "order": [
+    "<repo>/tests/corpus/node24-fs-links.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/node24-fs-timestamps-callbacks.cjs": {
    "order": [
     "<repo>/tests/corpus/node24-fs-timestamps-callbacks.cjs"
@@ -13316,6 +13352,12 @@
   "<repo>/tests/fixtures/node-types/fetch-static.ts": {
    "order": [
     "<repo>/tests/fixtures/node-types/fetch-static.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/fixtures/node-types/fs-links.ts": {
+   "order": [
+    "<repo>/tests/fixtures/node-types/fs-links.ts"
    ],
    "diags": []
   },

@@ -1099,7 +1099,18 @@ declare module "node:fs" {
   export function chmodSync(path: string, mode: number): void;
   export function fchmodSync(fd: number, mode: number): void;
   export function fsyncSync(fd: number): void;
-  export function linkSync(existingPath: string, newPath: string): void;
+  export function linkSync(existingPath: string | Uint8Array | URL, newPath: string | Uint8Array | URL): void;
+  export function symlinkSync(target: string | Uint8Array | URL, path: string | Uint8Array | URL, type?: string | null): void;
+  export function symlink(target: string | Uint8Array | URL, path: string | Uint8Array | URL, callback: (err: NodeJS.ErrnoException | null) => void): void;
+  export function symlink(target: string | Uint8Array | URL, path: string | Uint8Array | URL, type: string | null | undefined, callback: (err: NodeJS.ErrnoException | null) => void): void;
+  export function link(existingPath: string | Uint8Array | URL, newPath: string | Uint8Array | URL, callback: (err: NodeJS.ErrnoException | null) => void): void;
+  export function readlink(path: string | Uint8Array | URL, callback: (err: NodeJS.ErrnoException | null, target: string) => void): void;
+  export function readlink(path: string | Uint8Array | URL, options: "buffer" | { encoding: "buffer" }, callback: (err: NodeJS.ErrnoException | null, target: Buffer) => void): void;
+  export function readlink(path: string | Uint8Array | URL, options: BufferEncoding | { encoding?: BufferEncoding | null } | null, callback: (err: NodeJS.ErrnoException | null, target: string) => void): void;
+  export function readlink(path: string | Uint8Array | URL, options: string | { encoding?: string | null } | null, callback: (err: NodeJS.ErrnoException | null, target: string | Buffer) => void): void;
+  export function readlinkSync(path: string | Uint8Array | URL, options: "buffer" | { encoding: "buffer" }): Buffer;
+  export function readlinkSync(path: string | Uint8Array | URL, options?: BufferEncoding | { encoding?: BufferEncoding | null } | null): string;
+  export function readlinkSync(path: string | Uint8Array | URL, options: string | { encoding?: string | null } | null): string | Buffer;
   export function chownSync(path: string, uid: number, gid: number): void;
   /* The 2-argument form only (Node's mode flags have no lowering). The
    * destination is created or truncated carrying the SOURCE's mode. */
@@ -1324,6 +1335,11 @@ declare module "fs/promises" {
     [Symbol.asyncDispose](): Promise<void>;
   }
   export function open(path: string, flags?: string, mode?: number): Promise<FileHandle>;
+  export function link(existingPath: string | Uint8Array | URL, newPath: string | Uint8Array | URL): Promise<void>;
+  export function symlink(target: string | Uint8Array | URL, path: string | Uint8Array | URL, type?: string | null): Promise<void>;
+  export function readlink(path: string | Uint8Array | URL, options: "buffer" | { encoding: "buffer" }): Promise<Buffer>;
+  export function readlink(path: string | Uint8Array | URL, options?: BufferEncoding | { encoding?: BufferEncoding | null } | null): Promise<string>;
+  export function readlink(path: string | Uint8Array | URL, options: string | { encoding?: string | null } | null): Promise<string | Buffer>;
   export function utimes(path: string | Uint8Array | URL, atime: number | string | Date, mtime: number | string | Date): Promise<void>;
   export function lutimes(path: string | Uint8Array | URL, atime: number | string | Date, mtime: number | string | Date): Promise<void>;
   export function readFile(path: string, encoding: "utf8" | "utf-8"): Promise<string>;

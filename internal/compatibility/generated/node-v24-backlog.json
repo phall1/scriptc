@@ -8,8 +8,8 @@
     "tiers": {
       "static": {
         "replace-refusal": 42,
-        "verify-gap": 2466,
-        "audit-partial": 705,
+        "verify-gap": 2458,
+        "audit-partial": 713,
         "classify": 2,
         "implement": 80
       },
@@ -35505,12 +35505,16 @@
       "priority": "high",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:fs",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "surface-manifest:node-builtin.fs.promises.link",
+          "tests": [
+            "tests/corpus/node24-fs-links-promises.ts",
+            "tests/corpus/node24-fs-links-promise-errors.cjs",
+            "tests/fixtures/node-types/fs-links.ts"
+          ]
         },
         "dynamic": {
           "status": "not-implemented",
@@ -35839,12 +35843,17 @@
       "priority": "high",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:fs",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "surface-manifest:node-builtin.fs.promises.readlink",
+          "tests": [
+            "tests/corpus/node24-fs-links-promises.ts",
+            "tests/corpus/node24-fs-links-options.cjs",
+            "tests/corpus/node24-fs-links-promise-errors.cjs",
+            "tests/fixtures/node-types/fs-links.ts"
+          ]
         },
         "dynamic": {
           "status": "partial",
@@ -36105,12 +36114,17 @@
       "priority": "high",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:fs",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "surface-manifest:node-builtin.fs.promises.symlink",
+          "tests": [
+            "tests/corpus/node24-fs-links-promises.ts",
+            "tests/corpus/node24-fs-links-options.cjs",
+            "tests/corpus/node24-fs-links-promise-errors.cjs",
+            "tests/fixtures/node-types/fs-links.ts"
+          ]
         },
         "dynamic": {
           "status": "not-implemented",
@@ -37103,12 +37117,17 @@
       "priority": "high",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:fs",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "compiler-feature:fs.fs.link",
+          "tests": [
+            "tests/corpus/node24-fs-links-callbacks.cjs",
+            "tests/corpus/node24-fs-links-errors.cjs",
+            "tests/corpus/node24-fs-links-options.cjs",
+            "tests/fixtures/node-types/fs-links.ts"
+          ]
         },
         "dynamic": {
           "status": "not-implemented",
@@ -37526,12 +37545,17 @@
       "priority": "high",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:fs",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "compiler-feature:fs.fs.readlink",
+          "tests": [
+            "tests/corpus/node24-fs-links-callbacks.cjs",
+            "tests/corpus/node24-fs-links-errors.cjs",
+            "tests/corpus/node24-fs-links-options.cjs",
+            "tests/fixtures/node-types/fs-links.ts"
+          ]
         },
         "dynamic": {
           "status": "partial",
@@ -37851,12 +37875,17 @@
       "priority": "high",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:fs",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "compiler-feature:fs.fs.symlink",
+          "tests": [
+            "tests/corpus/node24-fs-links-callbacks.cjs",
+            "tests/corpus/node24-fs-links-errors.cjs",
+            "tests/corpus/node24-fs-links-options.cjs",
+            "tests/fixtures/node-types/fs-links.ts"
+          ]
         },
         "dynamic": {
           "status": "not-implemented",
@@ -39033,7 +39062,10 @@
           "confidence": "high",
           "source": "surface-manifest:node-builtin.fs.linkSync",
           "tests": [
-            "tests/corpus/2950-fs-descriptor-publication.ts"
+            "tests/corpus/2950-fs-descriptor-publication.ts",
+            "tests/corpus/node24-fs-links.ts",
+            "tests/corpus/node24-fs-links-errors.cjs",
+            "tests/fixtures/node-types/fs-links.ts"
           ]
         },
         "dynamic": {
@@ -39374,12 +39406,17 @@
       "priority": "high",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:fs",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "surface-manifest:node-builtin.fs.readlinkSync",
+          "tests": [
+            "tests/corpus/node24-fs-links.ts",
+            "tests/corpus/node24-fs-links-options.cjs",
+            "tests/corpus/node24-fs-links-errors.cjs",
+            "tests/fixtures/node-types/fs-links.ts"
+          ]
         },
         "dynamic": {
           "status": "partial",
@@ -39803,12 +39840,17 @@
       "priority": "high",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:fs",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "surface-manifest:node-builtin.fs.symlinkSync",
+          "tests": [
+            "tests/corpus/node24-fs-links.ts",
+            "tests/corpus/node24-fs-links-options.cjs",
+            "tests/corpus/node24-fs-links-errors.cjs",
+            "tests/fixtures/node-types/fs-links.ts"
+          ]
         },
         "dynamic": {
           "status": "not-implemented",

@@ -507,9 +507,9 @@
       "apiEntries": 276,
       "static": {
         "supported": 0,
-        "partial": 86,
+        "partial": 94,
         "refused": 0,
-        "not-implemented": 190,
+        "not-implemented": 182,
         "by-design": 0,
         "unreviewed": 0,
         "not-applicable": 0
@@ -50948,11 +50948,18 @@
           "tests/corpus/3136-fs-file-handle-options.ts",
           "tests/corpus/3137-fs-vector-callbacks.cjs",
           "tests/corpus/fs-native-realpath.ts",
+          "tests/corpus/node24-fs-links-callbacks.cjs",
+          "tests/corpus/node24-fs-links-errors.cjs",
+          "tests/corpus/node24-fs-links-options.cjs",
+          "tests/corpus/node24-fs-links-promise-errors.cjs",
+          "tests/corpus/node24-fs-links-promises.ts",
+          "tests/corpus/node24-fs-links.ts",
           "tests/corpus/node24-fs-timestamps-callbacks.cjs",
           "tests/corpus/node24-fs-timestamps-errors.cjs",
           "tests/corpus/node24-fs-timestamps-promises.ts",
           "tests/corpus/node24-fs-timestamps-symlinks.ts",
           "tests/corpus/node24-fs-timestamps.ts",
+          "tests/fixtures/node-types/fs-links.ts",
           "tests/fixtures/node-types/fs-timestamps.ts"
         ]
       },
@@ -52268,8 +52275,13 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:fs"
+        "status": "partial",
+        "evidence": "surface-manifest:node-builtin.fs.promises.link",
+        "tests": [
+          "tests/corpus/node24-fs-links-promises.ts",
+          "tests/corpus/node24-fs-links-promise-errors.cjs",
+          "tests/fixtures/node-types/fs-links.ts"
+        ]
       },
       "dynamic": {
         "status": "not-implemented",
@@ -52559,8 +52571,14 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:fs"
+        "status": "partial",
+        "evidence": "surface-manifest:node-builtin.fs.promises.readlink",
+        "tests": [
+          "tests/corpus/node24-fs-links-promises.ts",
+          "tests/corpus/node24-fs-links-options.cjs",
+          "tests/corpus/node24-fs-links-promise-errors.cjs",
+          "tests/fixtures/node-types/fs-links.ts"
+        ]
       },
       "dynamic": {
         "status": "partial",
@@ -52793,8 +52811,14 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:fs"
+        "status": "partial",
+        "evidence": "surface-manifest:node-builtin.fs.promises.symlink",
+        "tests": [
+          "tests/corpus/node24-fs-links-promises.ts",
+          "tests/corpus/node24-fs-links-options.cjs",
+          "tests/corpus/node24-fs-links-promise-errors.cjs",
+          "tests/fixtures/node-types/fs-links.ts"
+        ]
       },
       "dynamic": {
         "status": "not-implemented",
@@ -53701,8 +53725,14 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:fs"
+        "status": "partial",
+        "evidence": "compiler-feature:fs.fs.link",
+        "tests": [
+          "tests/corpus/node24-fs-links-callbacks.cjs",
+          "tests/corpus/node24-fs-links-errors.cjs",
+          "tests/corpus/node24-fs-links-options.cjs",
+          "tests/fixtures/node-types/fs-links.ts"
+        ]
       },
       "dynamic": {
         "status": "not-implemented",
@@ -54115,8 +54145,14 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:fs"
+        "status": "partial",
+        "evidence": "compiler-feature:fs.fs.readlink",
+        "tests": [
+          "tests/corpus/node24-fs-links-callbacks.cjs",
+          "tests/corpus/node24-fs-links-errors.cjs",
+          "tests/corpus/node24-fs-links-options.cjs",
+          "tests/fixtures/node-types/fs-links.ts"
+        ]
       },
       "dynamic": {
         "status": "partial",
@@ -54395,8 +54431,14 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:fs"
+        "status": "partial",
+        "evidence": "compiler-feature:fs.fs.symlink",
+        "tests": [
+          "tests/corpus/node24-fs-links-callbacks.cjs",
+          "tests/corpus/node24-fs-links-errors.cjs",
+          "tests/corpus/node24-fs-links-options.cjs",
+          "tests/fixtures/node-types/fs-links.ts"
+        ]
       },
       "dynamic": {
         "status": "not-implemented",
@@ -55553,7 +55595,10 @@
         "status": "partial",
         "evidence": "surface-manifest:node-builtin.fs.linkSync",
         "tests": [
-          "tests/corpus/2950-fs-descriptor-publication.ts"
+          "tests/corpus/2950-fs-descriptor-publication.ts",
+          "tests/corpus/node24-fs-links.ts",
+          "tests/corpus/node24-fs-links-errors.cjs",
+          "tests/fixtures/node-types/fs-links.ts"
         ]
       },
       "dynamic": {
@@ -55856,8 +55901,14 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:fs"
+        "status": "partial",
+        "evidence": "surface-manifest:node-builtin.fs.readlinkSync",
+        "tests": [
+          "tests/corpus/node24-fs-links.ts",
+          "tests/corpus/node24-fs-links-options.cjs",
+          "tests/corpus/node24-fs-links-errors.cjs",
+          "tests/fixtures/node-types/fs-links.ts"
+        ]
       },
       "dynamic": {
         "status": "partial",
@@ -56237,8 +56288,14 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:fs"
+        "status": "partial",
+        "evidence": "surface-manifest:node-builtin.fs.symlinkSync",
+        "tests": [
+          "tests/corpus/node24-fs-links.ts",
+          "tests/corpus/node24-fs-links-options.cjs",
+          "tests/corpus/node24-fs-links-errors.cjs",
+          "tests/fixtures/node-types/fs-links.ts"
+        ]
       },
       "dynamic": {
         "status": "not-implemented",

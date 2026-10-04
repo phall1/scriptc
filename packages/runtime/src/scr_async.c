@@ -1763,6 +1763,35 @@ ScrPromise *scr_fsp_utimes(const ScrDyn *path, const ScrDyn *atime, const ScrDyn
   return scr_promise_settled_void();
 }
 
+ScrPromise *scr_fsp_link(const ScrDyn *existing, const ScrDyn *destination) {
+  scr_fs_link_checked(existing, destination);
+  return scr_promise_settled_void();
+}
+
+ScrPromise *scr_fsp_symlink(const ScrDyn *target, const ScrDyn *destination, const ScrDyn *type) {
+  scr_fs_symlink_promise_checked(target, destination, type);
+  return scr_promise_settled_void();
+}
+
+ScrPromise *scr_fsp_readlink_dyn(const ScrDyn *path, const ScrDyn *options) {
+  ScrDyn *result = scr_fs_readlink_checked(path, options, true);
+  return scr_promise_settled_ref(result, scr_dyn_retain_v, scr_dyn_release_v, scr_dyn_trace_v);
+}
+
+ScrPromise *scr_fsp_readlink_str(const ScrDyn *path, const ScrDyn *options) {
+  ScrDyn *result = scr_fs_readlink_checked(path, options, true);
+  ScrStr *text = result && result->kind == SCR_DYN_STR ? scr_str_retain(result->v.str) : NULL;
+  scr_dyn_release(result);
+  return scr_promise_settled_str(text);
+}
+
+ScrPromise *scr_fsp_readlink_buffer(const ScrDyn *path, const ScrDyn *options) {
+  ScrDyn *result = scr_fs_readlink_checked(path, options, true);
+  ScrBytes *bytes = result ? scr_dyn_bytes_unbox(result) : NULL;
+  scr_dyn_release(result);
+  return scr_promise_settled_ref(bytes, scr_bytes_retain_v, scr_bytes_release_v, NULL);
+}
+
 ScrPromise *scr_fsp_lutimes(const ScrDyn *path, const ScrDyn *atime, const ScrDyn *mtime) {
   scr_fs_lutimes_checked(path, atime, mtime);
   return scr_promise_settled_void();

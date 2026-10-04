@@ -601,6 +601,9 @@ function publicDetail(tier) {
   }
   if (source.startsWith("compiler-dedicated:")) return "Implemented by a dedicated static compiler/runtime path.";
   if (source.startsWith("compiler-feature:")) {
+    if (/^compiler-feature:fs\.fs\.(?:link|symlink|readlink)$/.test(source)) {
+      return "Creates hard or symbolic links and reads link targets using string, Buffer, or file URL paths, with encoded results and deferred error-first callbacks; complete filesystem error metadata remains unsupported.";
+    }
     if (/^compiler-feature:fs\.(?:fs\.(?:utimes|futimes|lutimes)|filehandle\.utimes)$/.test(source)) {
       return "Changes timestamps using numeric seconds, numeric strings, and Dates with tested argument validation; link variants update the symlink itself.";
     }

@@ -482,6 +482,10 @@ jobs:
         env:
           SCRIPTC_NO_CACHE: "0"
         run: pnpm exec vitest run packages/cli/test/windows-subsystem.test.ts
+      - name: Windows filesystem links differential
+        run: >-
+          pnpm exec vitest run tests/harness/differential.test.ts tests/harness/project-config.test.ts
+          --testNamePattern "node24-fs-links|filesystem links"
       - name: Windows CA-store differential
         shell: pwsh
         run: |
