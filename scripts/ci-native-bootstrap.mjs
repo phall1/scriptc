@@ -13,7 +13,7 @@ export function nativeBootstrapPlan({ phase = "all", sanitize = false } = {}) {
 }
 
 export async function runNativeBootstrapChecks(plan, checks) {
-  const results = await Promise.allSettled(plan.phases.map((phase) => Promise.resolve().then(checks[phase])));
+  const results = await Promise.allSettled(plan.phases.map((phase) => Promise.resolve().then(() => checks[phase]())));
   const failures = results.filter((result) => result.status === "rejected").map((result) => result.reason);
   if (failures.length) throw new AggregateError(failures, "native bootstrap phases failed");
 }

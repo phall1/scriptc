@@ -77,6 +77,12 @@ test("invalid bootstrap phase selection fails before any contracts can be skippe
   }
 });
 
+test("a missing phase callback fails instead of silently passing its contracts", async () => {
+  await expect(runNativeBootstrapChecks(nativeBootstrapPlan({ phase: "rebuild" }), {
+    commands: async () => {},
+  })).rejects.toMatchObject({ errors: [expect.any(TypeError)] });
+});
+
 test("package checks wait for publication and overlap the running bootstrap", async () => {
   const published = latch();
   const checked = latch();
