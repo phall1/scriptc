@@ -1,10 +1,12 @@
 import { isRefCounted, typeEquals, type IrExpr, type IrFunction, type IrType, type IrUnionDef } from "../../ir/ir.js";
 import { everyStmtList } from "../../ir/traverse.js";
 import { analyzeCallLifetimes, type CallLifetimes } from "./call-lifetimes.js";
-import type { LlvmEmitterContext } from "./expr-context.js";
+import type { LlValue, LlvmEmitterContext } from "./expr-context.js";
 import { isStableReceiverOperand } from "../../ir/analysis.js";
+import { borrowsStringInputs } from "./string-lifetimes.js";
 
 export interface LocalArrayRead {
+  type: IrType;
   array: IrExpr;
   index: IrExpr;
   element: IrType;
@@ -24,7 +26,8 @@ function preservesArrayElements(fn: IrFunction, preservesCall: (call: IrExpr & {
       switch (e.kind) {
         case "numLit": case "boolLit": case "strLit": case "varRef": case "bin": case "unary": case "incDec":
         case "toBool": case "logical": case "ternary": case "seqExpr": case "fieldGet": case "recordGet":
-        case "unionNarrow": case "unionIsTag": return true;
+        case "unionNarrow": case "unionIsTag": case "strConcat": case "strEq": case "strCmp": return true;
+        case "strIntrinsic": return borrowsStringInputs(e.method);
         case "libCall": return e.fn === "error.nodeThrow" || isStableReceiverOperand(e, "");
         case "call": return preservesCall(e);
         case "arrIntrinsic": return e.method === "length";
@@ -46,13 +49,13 @@ function preservesArrayElements(fn: IrFunction, preservesCall: (call: IrExpr & {
  * call, not purity or absence of exceptions. Unknown effects remain unsafe.
  * Scan each body once, then propagate unsafe callees through reverse edges.
  * Each function is removed at most once, including recursive call groups. */
-export function findArrayPreservingFunctions(functions: ReadonlyMap<string, IrFunction>, unions: ReadonlyMap<string, IrUnionDef>): Set<string> {
+export function findArrayPreservingFunctions(functions: ReadonlyMap<string, IrFunction>, unions: ReadonlyMap<string, IrUnionDef>, reads = new OptionalArrayReads(functions, unions)): Set<string> {
   const safe = new Set<string>();
   const callers = new Map<string, Set<string>>();
   const unsafe: string[] = [];
   for (const fn of functions.values()) {
     const preserves = preservesArrayElements(fn, (call) => {
-      if (optionalArrayRead(call, functions, unions)) return true;
+      if (reads.get(call)) return true;
       if (!functions.has(call.callee)) return false;
       let incoming = callers.get(call.callee);
       if (!incoming) callers.set(call.callee, incoming = new Set());
@@ -72,17 +75,21 @@ export function findArrayPreservingFunctions(functions: ReadonlyMap<string, IrFu
   return safe;
 }
 
-/** Recognize the complete optional-array-read body, not the helper's name.
- * Both operands will be evaluated once, in call argument order. */
-function optionalArrayRead(call: IrExpr, functions: ReadonlyMap<string, IrFunction>, unions: ReadonlyMap<string, IrUnionDef>): LocalArrayRead | null {
-  if (call.kind !== "call" || call.args.length !== 2 || call.type.kind !== "union") return null;
-  const fn = functions.get(call.callee);
-  if (!fn || fn.async || fn.generator || fn.captures || fn.classCaptures || fn.params.length !== 2 || fn.body.length !== 1 ||
+interface ArrayReadShape {
+  type: IrType;
+  element: IrType;
+  presentTag: number;
+  missingTag: number;
+}
+
+/** Recognize the complete optional-array-read body, not the helper's name. */
+function arrayReadShape(fn: IrFunction, unions: ReadonlyMap<string, IrUnionDef>): ArrayReadShape | null {
+  if (fn.returnType.kind !== "union" || fn.async || fn.generator || fn.captures || fn.classCaptures || fn.params.length !== 2 || fn.body.length !== 1 ||
       fn.locals.length !== 2 || fn.locals.some((l) => l.boxed || l.tdz)) return null;
   const [array, index] = fn.params;
   if (array!.type.kind !== "array" || index!.type.kind !== "f64") return null;
   const element = array!.type.elem;
-  const arms = unions.get(call.type.unionId)?.arms;
+  const arms = unions.get(fn.returnType.unionId)?.arms;
   if (!isRefCounted(element) || element.kind === "union" || !arms || arms.length !== 2) return null;
   const presentTag = arms.findIndex((a) => typeEquals(a, element));
   const missingTag = arms.findIndex((a) => a.kind === "undefinedT");
@@ -94,14 +101,35 @@ function optionalArrayRead(call: IrExpr, functions: ReadonlyMap<string, IrFuncti
   if (cond.kind !== "bin" || cond.op !== "===" || cond.left.kind !== "arrayState" ||
       !operand(cond.left.arr, array!.localId) || !operand(cond.left.index, index!.localId) ||
       cond.right.kind !== "numLit" || cond.right.value !== 1 ||
-      then.kind !== "unionWrap" || then.unionId !== call.type.unionId || then.tag !== presentTag ||
+      then.kind !== "unionWrap" || then.unionId !== fn.returnType.unionId || then.tag !== presentTag ||
       then.value.kind !== "arrayGet" || !operand(then.value.arr, array!.localId) || !operand(then.value.index, index!.localId) ||
-      missing.kind !== "unionWrap" || missing.unionId !== call.type.unionId || missing.tag !== missingTag ||
+      missing.kind !== "unionWrap" || missing.unionId !== fn.returnType.unionId || missing.tag !== missingTag ||
       missing.value.kind !== "unitLit" || missing.value.unit !== "undefined") return null;
-  return { array: call.args[0]!, index: call.args[1]!, element, presentTag, missingTag };
+  return { type: fn.returnType, element, presentTag, missingTag };
 }
 
-export function findLocalArrayReads(fn: IrFunction, functions: ReadonlyMap<string, IrFunction>, unions: ReadonlyMap<string, IrUnionDef>, arrayPreservingFunctions: ReadonlySet<string>, lifetimes: CallLifetimes = analyzeCallLifetimes(functions)): Map<string, LocalArrayRead> {
+/** One index for finalized IR, shared by effect and lifetime consumers.
+ * Recognizing a helper once avoids rescanning its body for every read site.
+ * Only operands vary between uses; payload ownership is proved separately. */
+export class OptionalArrayReads {
+  private readonly shapes = new Map<string, ArrayReadShape>();
+
+  constructor(functions: ReadonlyMap<string, IrFunction>, unions: ReadonlyMap<string, IrUnionDef>) {
+    for (const fn of functions.values()) {
+      const shape = arrayReadShape(fn, unions);
+      if (shape) this.shapes.set(fn.name, shape);
+    }
+  }
+
+  get(call: IrExpr): LocalArrayRead | null {
+    if (call.kind !== "call" || call.args.length !== 2) return null;
+    const shape = this.shapes.get(call.callee);
+    if (!shape || !typeEquals(shape.type, call.type)) return null;
+    return { ...shape, array: call.args[0]!, index: call.args[1]! };
+  }
+}
+
+export function findLocalArrayReads(fn: IrFunction, functions: ReadonlyMap<string, IrFunction>, unions: ReadonlyMap<string, IrUnionDef>, arrayPreservingFunctions: ReadonlySet<string>, lifetimes: CallLifetimes = analyzeCallLifetimes(functions), reads = new OptionalArrayReads(functions, unions)): Map<string, LocalArrayRead> {
   const result = new Map<string, LocalArrayRead>();
   if (fn.async || fn.generator) return result;
   const locals = new Map(fn.locals.map((l) => [l.id, l]));
@@ -112,7 +140,7 @@ export function findLocalArrayReads(fn: IrFunction, functions: ReadonlyMap<strin
     if (node.kind !== "varDecl" || !node.init) return true;
     const local = locals.get(node.localId);
     if (!local || local.mutable || local.boxed || local.tdz || captures.has(local.id) || params.has(local.id)) return true;
-    const read = optionalArrayRead(node.init, functions, unions);
+    const read = reads.get(node.init);
     if (read && lifetimes.locals.get(fn.name)?.has(local.id)) {
       if (borrow && read.array.kind === "varRef" && params.has(read.array.localId) && !locals.get(read.array.localId)?.boxed) read.borrow = true;
       result.set(local.id, read);
@@ -122,73 +150,118 @@ export function findLocalArrayReads(fn: IrFunction, functions: ReadonlyMap<strin
   return result;
 }
 
+/** An immediate argument needs no heap union when its parameter only
+ * projects the box. The payload owns a snapshot through all later arguments
+ * and the call, unless the enclosing function preserves its parameter's
+ * array edges. The latter proof includes every later argument and callee,
+ * so a mutation anywhere keeps the independent payload owner. */
+export function findCallArrayReads(fn: IrFunction, reads: OptionalArrayReads, arrayPreservingFunctions: ReadonlySet<string>, lifetimes: CallLifetimes): Map<IrExpr, LocalArrayRead> {
+  const result = new Map<IrExpr, LocalArrayRead>();
+  if (fn.async || fn.generator) return result;
+  const params = new Set(fn.params.map((param) => param.localId));
+  const locals = new Map(fn.locals.map((local) => [local.id, local]));
+  const borrow = arrayPreservingFunctions.has(fn.name);
+  everyStmtList(fn.body, { stmt: () => true, expr: (node) => {
+    if (node.kind !== "call") return true;
+    const parameters = lifetimes.parameters.get(node.callee);
+    if (!parameters) return true;
+    node.args.forEach((arg, index) => {
+      if (!parameters.has(index)) return;
+      const read = reads.get(arg);
+      if (!read) return;
+      if (borrow && read.array.kind === "varRef" && params.has(read.array.localId) && !locals.get(read.array.localId)?.boxed) read.borrow = true;
+      result.set(arg, read);
+    });
+    return true;
+  } });
+  return result;
+}
+
+/** Call-scoped owners are released by the existing argument frame on both
+ * normal and exceptional exits. Each use gets a distinct stack box: nested
+ * calls and repeated operands must never overwrite an earlier snapshot. */
+export function emitCallArrayRead(host: LlvmEmitterContext, read: LocalArrayRead): LlValue {
+  const slot = host.B.slot();
+  host.B.entryAllocas.push(`${slot} = alloca ptr`);
+  // Snapshot arguments already cross a runtime ownership boundary. Keep
+  // their lookup compact instead of duplicating the dense fast path at
+  // every call site; proven borrowed reads still expose that path to LLVM.
+  const owner = emitLocalArrayRead(host, read, slot, read.borrow === true);
+  if (owner) host.ownSlot(owner.slot, owner.type);
+  const value = host.B.tmp();
+  host.B.line(`${value} = load ptr, ptr ${slot}`);
+  return { name: value, type: read.type };
+}
+
 /** A private stack box keeps the ordinary tag/projection ABI. Its payload
  * either borrows from an array parameter proven to keep it alive, or owns
  * one reference released on every lexical exit, including exceptions. The
  * box never reaches runtime code; LLVM can scalar-replace its slots. */
-export function emitLocalArrayRead(host: LlvmEmitterContext, read: LocalArrayRead, localSlot: string): { slot: string; type: IrType } | null {
+export function emitLocalArrayRead(host: LlvmEmitterContext, read: LocalArrayRead, localSlot: string, inline = true): { slot: string; type: IrType } | null {
   const B = host.B;
   const array = host.emitStableReceiver(read.array, [read.index]);
-  const integerIndex = host.emitIntegerLoopIndex(read.index);
+  const integerIndex = inline ? host.emitIntegerLoopIndex(read.index) : null;
   const index = host.emitExpr(read.index);
   const box = B.slot(), payload = B.slot(), tag = B.slot();
   B.entryAllocas.push(`${box} = alloca %ScrUnion`);
   B.entryAllocas.push(`${payload} = getelementptr inbounds %ScrUnion, ptr ${box}, i32 0, i32 5`);
   B.entryAllocas.push(`${tag} = getelementptr inbounds %ScrUnion, ptr ${box}, i32 0, i32 1`);
-  // The dense path uses the existing ScrArr ABI. Sparse indices and
-  // noncanonical numeric properties retain the runtime lookup semantics.
-  const capPtr = B.tmp(), cap = B.tmp(), capNumber = B.tmp(), nonnegative = B.tmp(), belowCap = B.tmp(), inRange = B.tmp();
-  B.line(`${capPtr} = getelementptr inbounds %ScrArr, ptr ${array.name}, i32 0, i32 2`);
-  host.markMemoryPointer(capPtr, "array:header");
-  B.line(`${cap} = load ${host.sizeType}, ptr ${capPtr}${host.fieldAliasAttachment(capPtr)}`);
-  if (integerIndex) B.line(`${inRange} = icmp ult ${host.sizeType} ${integerIndex}, ${cap}`);
-  else {
-    B.line(`${capNumber} = uitofp ${host.sizeType} ${cap} to double`);
-    B.line(`${nonnegative} = fcmp oge double ${index.name}, 0.0`);
-    B.line(`${belowCap} = fcmp olt double ${index.name}, ${capNumber}`);
-    B.line(`${inRange} = and i1 ${nonnegative}, ${belowCap}`);
-  }
   const range = B.newLabel("local.array.range"), dense = B.newLabel("local.array.dense"), slow = B.newLabel("local.array.slow");
   const no = B.newLabel("local.array.missing"), join = B.newLabel("local.array.join");
-  B.condBr(inRange, range, slow);
-  B.startBlock(range);
-  const offset = integerIndex ?? B.tmp(), roundTrip = B.tmp(), integral = B.tmp();
-  if (integerIndex) B.br(dense);
-  else {
-    B.line(`${offset} = fptoui double ${index.name} to ${host.sizeType}`);
-    B.line(`${roundTrip} = uitofp ${host.sizeType} ${offset} to double`);
-    B.line(`${integral} = fcmp oeq double ${index.name}, ${roundTrip}`);
-    B.condBr(integral, dense, slow);
-  }
-  B.startBlock(dense);
-  const lenPtr = B.tmp(), len = B.tmp(), belowLen = B.tmp();
-  B.line(`${lenPtr} = getelementptr inbounds %ScrArr, ptr ${array.name}, i32 0, i32 1`);
-  host.markMemoryPointer(lenPtr, "array:header");
-  B.line(`${len} = load ${host.sizeType}, ptr ${lenPtr}${host.fieldAliasAttachment(lenPtr)}`);
-  B.line(`${belowLen} = icmp ult ${host.sizeType} ${offset}, ${len}`);
-  const stateLabel = B.newLabel("local.array.state"), valueLabel = B.newLabel("local.array.value");
-  B.condBr(belowLen, stateLabel, no);
-  B.startBlock(stateLabel);
-  const statesPtr = B.tmp(), states = B.tmp(), statePtr = B.tmp(), denseState = B.tmp(), densePresent = B.tmp();
-  B.line(`${statesPtr} = getelementptr inbounds %ScrArr, ptr ${array.name}, i32 0, i32 8`);
-  host.markMemoryPointer(statesPtr, "array:header");
-  B.line(`${states} = load ptr, ptr ${statesPtr}${host.fieldAliasAttachment(statesPtr)}`);
-  B.line(`${statePtr} = getelementptr inbounds i8, ptr ${states}, ${host.sizeType} ${offset}`);
-  host.markMemoryPointer(statePtr, "array:present");
-  B.line(`${denseState} = load i8, ptr ${statePtr}${host.fieldAliasAttachment(statePtr)}`);
-  B.line(`${densePresent} = icmp eq i8 ${denseState}, 1`);
-  B.condBr(densePresent, valueLabel, no);
-  B.startBlock(valueLabel);
-  const dataPtr = B.tmp(), data = B.tmp(), valuePtr = B.tmp(), raw = B.tmp();
-  B.line(`${dataPtr} = getelementptr inbounds %ScrArr, ptr ${array.name}, i32 0, i32 7`);
-  host.markMemoryPointer(dataPtr, "array:header");
-  B.line(`${data} = load ptr, ptr ${dataPtr}${host.fieldAliasAttachment(dataPtr)}`);
-  B.line(`${valuePtr} = getelementptr inbounds i64, ptr ${data}, ${host.sizeType} ${offset}`);
-  host.markMemoryPointer(valuePtr, "array:elements");
-  B.line(`${raw} = load ptr, ptr ${valuePtr}${host.fieldAliasAttachment(valuePtr)}`);
-  B.line(`store ptr ${read.borrow ? raw : host.retainValue(raw, read.element)}, ptr ${payload}`);
-  B.line(`store i32 ${read.presentTag}, ptr ${tag}`);
-  B.br(join);
+  if (inline) {
+    // The dense path uses the existing ScrArr ABI. Sparse indices and
+    // noncanonical numeric properties retain the runtime lookup semantics.
+    const capPtr = B.tmp(), cap = B.tmp(), capNumber = B.tmp(), nonnegative = B.tmp(), belowCap = B.tmp(), inRange = B.tmp();
+    B.line(`${capPtr} = getelementptr inbounds %ScrArr, ptr ${array.name}, i32 0, i32 2`);
+    host.markMemoryPointer(capPtr, "array:header");
+    B.line(`${cap} = load ${host.sizeType}, ptr ${capPtr}${host.fieldAliasAttachment(capPtr)}`);
+    if (integerIndex) B.line(`${inRange} = icmp ult ${host.sizeType} ${integerIndex}, ${cap}`);
+    else {
+      B.line(`${capNumber} = uitofp ${host.sizeType} ${cap} to double`);
+      B.line(`${nonnegative} = fcmp oge double ${index.name}, 0.0`);
+      B.line(`${belowCap} = fcmp olt double ${index.name}, ${capNumber}`);
+      B.line(`${inRange} = and i1 ${nonnegative}, ${belowCap}`);
+    }
+    B.condBr(inRange, range, slow);
+    B.startBlock(range);
+    const offset = integerIndex ?? B.tmp(), roundTrip = B.tmp(), integral = B.tmp();
+    if (integerIndex) B.br(dense);
+    else {
+      B.line(`${offset} = fptoui double ${index.name} to ${host.sizeType}`);
+      B.line(`${roundTrip} = uitofp ${host.sizeType} ${offset} to double`);
+      B.line(`${integral} = fcmp oeq double ${index.name}, ${roundTrip}`);
+      B.condBr(integral, dense, slow);
+    }
+    B.startBlock(dense);
+    const lenPtr = B.tmp(), len = B.tmp(), belowLen = B.tmp();
+    B.line(`${lenPtr} = getelementptr inbounds %ScrArr, ptr ${array.name}, i32 0, i32 1`);
+    host.markMemoryPointer(lenPtr, "array:header");
+    B.line(`${len} = load ${host.sizeType}, ptr ${lenPtr}${host.fieldAliasAttachment(lenPtr)}`);
+    B.line(`${belowLen} = icmp ult ${host.sizeType} ${offset}, ${len}`);
+    const stateLabel = B.newLabel("local.array.state"), valueLabel = B.newLabel("local.array.value");
+    B.condBr(belowLen, stateLabel, no);
+    B.startBlock(stateLabel);
+    const statesPtr = B.tmp(), states = B.tmp(), statePtr = B.tmp(), denseState = B.tmp(), densePresent = B.tmp();
+    B.line(`${statesPtr} = getelementptr inbounds %ScrArr, ptr ${array.name}, i32 0, i32 8`);
+    host.markMemoryPointer(statesPtr, "array:header");
+    B.line(`${states} = load ptr, ptr ${statesPtr}${host.fieldAliasAttachment(statesPtr)}`);
+    B.line(`${statePtr} = getelementptr inbounds i8, ptr ${states}, ${host.sizeType} ${offset}`);
+    host.markMemoryPointer(statePtr, "array:present");
+    B.line(`${denseState} = load i8, ptr ${statePtr}${host.fieldAliasAttachment(statePtr)}`);
+    B.line(`${densePresent} = icmp eq i8 ${denseState}, 1`);
+    B.condBr(densePresent, valueLabel, no);
+    B.startBlock(valueLabel);
+    const dataPtr = B.tmp(), data = B.tmp(), valuePtr = B.tmp(), raw = B.tmp();
+    B.line(`${dataPtr} = getelementptr inbounds %ScrArr, ptr ${array.name}, i32 0, i32 7`);
+    host.markMemoryPointer(dataPtr, "array:header");
+    B.line(`${data} = load ptr, ptr ${dataPtr}${host.fieldAliasAttachment(dataPtr)}`);
+    B.line(`${valuePtr} = getelementptr inbounds i64, ptr ${data}, ${host.sizeType} ${offset}`);
+    host.markMemoryPointer(valuePtr, "array:elements");
+    B.line(`${raw} = load ptr, ptr ${valuePtr}${host.fieldAliasAttachment(valuePtr)}`);
+    B.line(`store ptr ${read.borrow ? raw : host.retainValue(raw, read.element)}, ptr ${payload}`);
+    B.line(`store i32 ${read.presentTag}, ptr ${tag}`);
+    B.br(join);
+  } else B.br(slow);
   B.startBlock(slow);
   const value = B.tmp(), present = B.tmp();
   host.declare("declare ptr @scr_arr_peek_ref(ptr, double) memory(read)");

@@ -8,6 +8,7 @@ import { LlvmUnsupportedError } from "./unsupported.js";
 import type { LlvmEmitterContext, ExprOf, LlValue } from "./expr-context.js";
 
 import { BYTES_ELEM_NUM, f64Lit } from "./common.js";
+import { emitStringInputs } from "./string-lifetimes.js";
 
 export function emitLiteralExpr(host: LlvmEmitterContext, e: ExprOf<"numLit" | "boolLit" | "strLit" | "moduleNsRef" | "unitLit" | "varRef">): LlValue {
     const B = host.B;
@@ -252,33 +253,30 @@ export function emitStringExpr(host: LlvmEmitterContext, e: ExprOf<"strConcat" |
     const B = host.B;
     switch (e.kind) {
       case "strConcat": {
-        const l = host.emitExpr(e.left);
-        const r = host.emitExpr(e.right);
+        const [l, r] = emitStringInputs(host, [e.left, e.right]);
         host.declare(`declare ptr @scr_str_concat(ptr, ptr)`);
         const t = B.tmp();
-        B.line(`${t} = call ptr @scr_str_concat(ptr ${l.name}, ptr ${r.name})`);
+        B.line(`${t} = call ptr @scr_str_concat(ptr ${l!.name}, ptr ${r!.name})`);
         return host.own({ name: t, type: e.type });
       }
       case "strEq": {
-        const l = host.emitExpr(e.left);
-        const r = host.emitExpr(e.right);
+        const [l, r] = emitStringInputs(host, [e.left, e.right]);
         host.declare(`declare zeroext i1 @scr_str_eq(ptr, ptr)`);
         const eq = B.tmp();
-        B.line(`${eq} = call zeroext i1 @scr_str_eq(ptr ${l.name}, ptr ${r.name})`);
+        B.line(`${eq} = call zeroext i1 @scr_str_eq(ptr ${l!.name}, ptr ${r!.name})`);
         if (!e.negated) return { name: eq, type: e.type };
         const t = B.tmp();
         B.line(`${t} = xor i1 ${eq}, true`);
         return { name: t, type: e.type };
       }
       case "strCmp": {
-        const l = host.emitExpr(e.left);
-        const r = host.emitExpr(e.right);
+        const [l, r] = emitStringInputs(host, [e.left, e.right]);
         const fn = e.utf16 === true ? "scr_str_cmp_u16" : "scr_str_cmp";
         host.declare(`declare i32 @${fn}(ptr, ptr)`);
         const c = B.tmp();
         const t = B.tmp();
         const pred = { "<": "slt", "<=": "sle", ">": "sgt", ">=": "sge" }[e.op];
-        B.line(`${c} = call i32 @${fn}(ptr ${l.name}, ptr ${r.name})`);
+        B.line(`${c} = call i32 @${fn}(ptr ${l!.name}, ptr ${r!.name})`);
         B.line(`${t} = icmp ${pred} i32 ${c}, 0`);
         return { name: t, type: e.type };
       }

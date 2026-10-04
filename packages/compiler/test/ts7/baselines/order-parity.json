@@ -14021,6 +14021,62 @@
     "<repo>/tests/corpus/call-lifetimes-virtual-optionals.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/array-argument-lifetimes-exits.ts": {
+   "order": [
+    "<repo>/tests/corpus/array-argument-lifetimes-exits.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/array-argument-lifetimes-mutation.ts": {
+   "order": [
+    "<repo>/tests/corpus/array-argument-lifetimes-mutation.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/array-argument-lifetimes-strings.ts": {
+   "order": [
+    "<repo>/tests/corpus/array-argument-lifetimes-strings.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/array-argument-lifetimes-values.ts": {
+   "order": [
+    "<repo>/tests/corpus/array-argument-lifetimes-values.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/input-lifetimes-modules/main.ts": {
+   "order": [
+    "<repo>/tests/corpus/input-lifetimes-modules/model.ts",
+    "<repo>/tests/corpus/input-lifetimes-modules/helpers.ts",
+    "<repo>/tests/corpus/input-lifetimes-modules/main.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/string-lifetimes-boundaries.ts": {
+   "order": [
+    "<repo>/tests/corpus/string-lifetimes-boundaries.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/string-lifetimes-evaluation.ts": {
+   "order": [
+    "<repo>/tests/corpus/string-lifetimes-evaluation.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/string-lifetimes-iteration.ts": {
+   "order": [
+    "<repo>/tests/corpus/string-lifetimes-iteration.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/string-lifetimes-operations.ts": {
+   "order": [
+    "<repo>/tests/corpus/string-lifetimes-operations.ts"
+   ],
+   "diags": []
   }
  }
 }

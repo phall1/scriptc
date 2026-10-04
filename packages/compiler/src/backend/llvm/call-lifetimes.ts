@@ -1,5 +1,6 @@
 import { type IrExpr, type IrFunction, type IrLocal, type IrStmt } from "../../ir/ir.js";
 import { everyExprChild, everyStmtChild } from "../../ir/traverse.js";
+import { borrowsStringInputs } from "./string-lifetimes.js";
 
 interface ForwardedUse {
   callee: string;
@@ -18,7 +19,8 @@ interface Parameter {
 }
 
 export interface CallLifetimes {
-  /** Parameters consumed only by projections or other proven parameters.
+  /** Parameters consumed only by projections, borrowing string operations,
+   * or other proven parameters.
    * This is a lifetime fact, not a purity or nonthrowing guarantee. */
   parameters: Map<string, Set<number>>;
   /** Immutable locals with the same use restriction. Their initialization
@@ -30,12 +32,12 @@ function eligible(local: IrLocal, parameter = false): boolean {
   // Source parameters are writable bindings even when the body never
   // assigns them. Actual writes are rejected by collectUses below.
   return (parameter || !local.mutable) && !local.boxed && !local.tdz &&
-    (local.type.kind === "union" || local.type.kind === "object" || local.type.kind === "record");
+    (local.type.kind === "union" || local.type.kind === "object" || local.type.kind === "record" || local.type.kind === "string");
 }
 
 /** Read each function once. A whole-value use is unsafe unless it is an
- * explicitly supported projection or a direct-call argument whose target
- * parameter can be proved separately. Traversal of every other consumer
+ * explicitly supported projection, borrowing string operation, or direct-call
+ * argument whose target parameter can be proved separately. Traversal of every other consumer
  * reaches the ordinary varRef rejection, including future IR nodes.
  *
  * Projection results may escape: the existing emitter retains extracted
@@ -43,8 +45,17 @@ function eligible(local: IrLocal, parameter = false): boolean {
  * stored, returned, captured, or passed to arbitrary runtime code. */
 function collectUses(fn: IrFunction): Uses {
   const uses: Uses = { invalid: new Set(), declarations: new Map(), forwards: new Map() };
+  const stringInput = (value: IrExpr): boolean => {
+    if (value.kind === "varRef" && value.type.kind === "string") return true;
+    return expr(value);
+  };
   function expr(node: IrExpr): boolean {
     switch (node.kind) {
+      case "strEq": case "strCmp": case "strConcat":
+        return stringInput(node.left) && stringInput(node.right);
+      case "strIntrinsic":
+        if (borrowsStringInputs(node.method)) return stringInput(node.receiver) && node.args.every(stringInput);
+        break;
       case "unionNarrow": case "unionIsTag":
         if (node.value.kind === "varRef") return true;
         break;

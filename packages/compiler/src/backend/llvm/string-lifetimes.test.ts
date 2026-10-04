@@ -1,0 +1,299 @@
+import { expect, test } from "vitest";
+import { BOOL, F64, STRING, VOID, funcOf, type IrExpr, type IrFunction, type IrModule, type IrStmt, type IrStrIntrinsicMethod, type IrType } from "../../ir/ir.js";
+import { validateModule } from "../../ir/validate.js";
+import { analyzeCallLifetimes } from "./call-lifetimes.js";
+import { emitLlvmModule } from "./emitter.js";
+import { borrowsStringInputs } from "./string-lifetimes.js";
+
+const loc = { file: "strings.ts", start: 0, end: 1 };
+const ref = (id: string, type: IrType = STRING): IrExpr => ({ kind: "varRef", localId: id, type, loc });
+const str = (value: string): IrExpr => ({ kind: "strLit", value, type: STRING, loc });
+const num = (value: number): IrExpr => ({ kind: "numLit", value, type: F64, loc });
+const ret = (value: IrExpr): IrStmt => ({ kind: "return", value, loc });
+const equal = (left: IrExpr, right: IrExpr): IrExpr => ({ kind: "strEq", left, right, negated: false, type: BOOL, loc });
+const concat = (left: IrExpr, right: IrExpr): IrExpr => ({ kind: "strConcat", left, right, type: STRING, loc });
+const intrinsic = (receiver: IrExpr, method: IrStrIntrinsicMethod, args: IrExpr[], type: IrType): IrExpr => ({ kind: "strIntrinsic", receiver, method, args, type, loc });
+const call = (callee: string, args: IrExpr[], type: IrType): IrExpr => ({ kind: "call", callee, args, type, loc });
+
+function fn(name: string, names: string[], value: IrExpr): IrFunction {
+  return { name, loc, params: names.map((id) => ({ localId: id, name: id, type: STRING })),
+    locals: names.map((id) => ({ id, name: id, type: STRING, mutable: true })),
+    returnType: value.type, body: [ret(value)] };
+}
+function mod(...functions: IrFunction[]): IrModule {
+  return { irVersion: 13, sourceFile: loc.file, entry: "main", functions: [
+    { name: "main", loc, params: [], locals: [], returnType: VOID, body: [] }, ...functions,
+  ] };
+}
+function body(module: IrModule, name: string, bits: 32 | 64 = 64): string {
+  expect(validateModule(module)).toEqual([]);
+  const match = new RegExp(`^define internal [^\\n]*@${name}\\([^]*?^}`, "m").exec(emitLlvmModule(module, { pointerBits: bits }));
+  expect(match, name).not.toBeNull();
+  return match![0];
+}
+function facts(...functions: IrFunction[]) {
+  return analyzeCallLifetimes(new Map(functions.map((f) => [f.name, f])));
+}
+
+test("string comparisons borrow parameters while owned entry adapters release them", () => {
+  const compare = fn("compare", ["left", "right"], equal(ref("left"), ref("right")));
+  expect(facts(compare).parameters.get("compare")).toEqual(new Set([0, 1]));
+  for (const bits of [32, 64] as const) {
+    const borrowed = body(mod(compare), "sc_bf_compare", bits);
+    expect(borrowed).toContain("@scr_str_eq");
+    expect(borrowed).not.toContain("@scr_str_retain");
+    expect(borrowed).not.toContain("@scr_str_release");
+    const owned = body(mod(compare), "sc_f_compare", bits);
+    expect(owned).toContain("@sc_bf_compare");
+    expect(owned.match(/call void @scr_str_release/g)).toHaveLength(2);
+  }
+});
+
+test("borrowed string forwarding is solved independently for each parameter", () => {
+  const leaf = fn("leaf", ["text", "escape"], concat(ref("text"), str("!")));
+  leaf.body.unshift({ kind: "exprStmt", expr: call("owner", [ref("escape")], STRING), loc });
+  const owner = fn("owner", ["text"], ref("text"));
+  const relay = fn("relay", ["a", "b"], call("leaf", [ref("b"), ref("a")], STRING));
+  expect(facts(relay, leaf, owner).parameters.get("leaf")).toEqual(new Set([0]));
+  expect(facts(relay, leaf, owner).parameters.get("relay")).toEqual(new Set([1]));
+  const ir = body(mod(relay, leaf, owner), "sc_bf_relay");
+  expect(ir).toContain("@sc_bf_leaf");
+  expect(ir.match(/call ptr @scr_str_retain_v/g)).toHaveLength(1);
+});
+
+test("recursive string consumers retain the conservative escape boundary", () => {
+  const a = fn("a", ["text"], call("b", [ref("text")], BOOL));
+  const b = fn("b", ["text"], equal(ref("text"), str("done")));
+  b.body.unshift({ kind: "exprStmt", expr: call("a", [ref("text")], BOOL), loc });
+  expect(facts(a, b).parameters.size).toBe(2);
+  b.body.unshift({ kind: "exprStmt", expr: call("unknown", [ref("text")], STRING), loc });
+  expect(facts(a, b).parameters.size).toBe(0);
+});
+
+test("returning the input retains the owned calling convention", () => {
+  const identity = fn("identity", ["text"], ref("text"));
+  expect(facts(identity).parameters.size).toBe(0);
+  const ir = body(mod(identity), "sc_f_identity");
+  expect(ir).toContain("@scr_str_retain_v");
+  expect(ir).toContain("@scr_str_release");
+});
+
+test.each(["assignment", "declaration", "boxed", "tdz", "capture", "class capture", "async", "generator"])("a %s keeps a string parameter on the owned path", (reason) => {
+  const f = fn("read", ["text"], intrinsic(ref("text"), "length", [], F64));
+  if (reason === "assignment") f.body.unshift({ kind: "assign", localId: "text", value: str("new"), loc });
+  if (reason === "declaration") f.body.unshift({ kind: "varDecl", localId: "text", init: str("new"), loc });
+  if (reason === "boxed") f.locals[0]!.boxed = true;
+  if (reason === "tdz") f.locals[0]!.tdz = true;
+  if (reason === "capture") f.captures = [];
+  if (reason === "class capture") f.classCaptures = [];
+  if (reason === "async") f.async = true;
+  if (reason === "generator") f.generator = { yieldT: F64, nextT: F64, resultType: { kind: "record", shapeId: "result" } };
+  expect(facts(f).parameters.size).toBe(0);
+});
+
+test("literal arguments remain immortal while the called body borrows them", () => {
+  const inspect = fn("inspect", ["value"], intrinsic(ref("value"), "length", [], F64));
+  const caller = fn("caller", [], call("inspect", [str("literal")], F64));
+  const ir = body(mod(caller, inspect), "sc_f_caller");
+  expect(ir).toContain("@sc_bf_inspect");
+  expect(ir).not.toContain("@scr_str_retain_v");
+  expect(ir).not.toContain("@scr_str_release");
+});
+
+test("reference-producing string operations retain their result owner", () => {
+  for (const value of [concat(ref("text"), str("!")), intrinsic(ref("text"), "trim", [], STRING), intrinsic(ref("text"), "toWellFormed", [], STRING)]) {
+    const f = fn("transform", ["text"], value);
+    expect(facts(f).parameters.get("transform")).toEqual(new Set([0]));
+    const ir = body(mod(f), "sc_bf_transform");
+    expect(ir).not.toContain("@scr_str_retain_v");
+    expect(ir).toMatch(/ret ptr %/);
+    expect(ir).not.toContain("@scr_str_release");
+  }
+});
+
+test("string operands preserve their left-to-right snapshot when a later assignment replaces the binding", () => {
+  const assigned: IrExpr = { kind: "assignExpr", localId: "text", value: str("replacement"), type: STRING, loc };
+  const f = fn("replace", ["text"], equal(ref("text"), assigned));
+  const ir = body(mod(f), "sc_f_replace");
+  expect(ir.indexOf("@scr_str_retain_v")).toBeLessThan(ir.indexOf("@scr_str_release"));
+  expect(ir).toContain("@scr_str_eq");
+  expect(facts(f).parameters.has("replace")).toBe(false);
+});
+
+test("an effectful later operand keeps mutable string arguments owned", () => {
+  const source = fn("source", [], str("next"));
+  const compare = fn("compare", ["text"], equal(ref("text"), call("source", [], STRING)));
+  // A later write anywhere in this function rules out parameter borrowing.
+  compare.body.unshift({ kind: "assign", localId: "text", value: str("first"), loc });
+  const ir = body(mod(source, compare), "sc_f_compare");
+  const sourceCall = ir.indexOf("@sc_f_source");
+  expect(sourceCall).toBeGreaterThan(0);
+  expect(ir.slice(0, sourceCall)).toContain("@scr_str_retain_v");
+});
+
+test("immutable lexical owners survive arbitrary later operands", () => {
+  const source = fn("source", [], str("other"));
+  const f = fn("compare", [], equal(ref("text"), call("source", [], STRING)));
+  f.locals.push({ id: "text", name: "text", type: STRING, mutable: false });
+  f.body.unshift({ kind: "varDecl", localId: "text", init: str("first"), loc });
+  const ir = body(mod(source, f), "sc_f_compare");
+  const sourceCall = ir.indexOf("@sc_f_source");
+  // Only the initializer takes a reference; the comparison borrows it.
+  expect(ir.slice(0, sourceCall).match(/@scr_str_retain_v/g)).toHaveLength(1);
+  expect(ir).toContain("@scr_str_release");
+});
+
+test("reference fields borrow only at their immediate consuming operation", () => {
+  const record: IrType = { kind: "record", shapeId: "text" };
+  const projection: IrExpr = { kind: "recordGet", obj: ref("holder", record), shapeId: "text", field: "value", type: STRING, loc };
+  const source = fn("source", [], str("other"));
+  const f = fn("compare", [], equal(projection, call("source", [], STRING)));
+  f.params = [{ localId: "holder", name: "holder", type: record }];
+  f.locals = [{ id: "holder", name: "holder", type: record, mutable: true }];
+  const module = mod(source, f);
+  module.records = [{ id: "text", fields: [{ name: "value", type: STRING }] }];
+  const ir = body(module, "sc_bf_compare");
+  expect(ir.slice(0, ir.indexOf("@sc_f_source"))).toContain("@scr_str_retain_v");
+  f.body = [ret(equal(str("constant"), projection))];
+  expect(body(module, "sc_bf_compare")).not.toContain("@scr_str_retain_v");
+});
+
+test("throwing string operations leave owned adapters responsible for parameters", () => {
+  const f = fn("normalize", ["text", "form"], intrinsic(ref("text"), "normalize", [ref("form")], STRING));
+  const module = mod(f);
+  const borrowed = body(module, "sc_bf_normalize");
+  expect(borrowed).toContain("@scr_str_normalize");
+  expect(borrowed).toContain("@scr_exc_pending");
+  expect(borrowed).not.toContain("@scr_str_retain_v");
+  const owned = body(module, "sc_f_normalize");
+  expect(owned.match(/@scr_str_release/g)).toHaveLength(2);
+});
+
+test("a temporary receiver stays owned across a throwing argument", () => {
+  const source = fn("source", [], str("temporary"));
+  const failure = fn("failure", [], num(1));
+  failure.body = [{ kind: "throw", value: str("failure"), loc }];
+  const f = fn("inspect", [], intrinsic(call("source", [], STRING), "charAt", [call("failure", [], F64)], STRING));
+  const ir = body(mod(source, failure, f), "sc_f_inspect");
+  const argument = ir.indexOf("@sc_f_failure");
+  expect(argument).toBeGreaterThan(ir.indexOf("@sc_f_source"));
+  expect(ir.slice(argument)).toContain("@scr_exc_pending");
+  expect(ir.slice(argument)).toContain("@scr_str_release");
+});
+
+test("indirect calls keep the ordinary ABI even for a borrowing body", () => {
+  const inspect = fn("inspect", ["text"], intrinsic(ref("text"), "length", [], F64));
+  const value: IrExpr = { kind: "closure", fnName: "inspect", captures: [], type: funcOf([STRING], F64), loc };
+  const caller = fn("caller", [], { kind: "callValue", callee: value, args: [str("text")], type: F64, loc });
+  const llvm = emitLlvmModule(mod(inspect, caller));
+  expect(llvm).toContain("@sc_f_inspect");
+  expect(body(mod(inspect, caller), "sc_f_inspect")).toContain("@scr_str_release");
+  expect(body(mod(inspect, caller), "sc_f_caller")).toContain("@scr_str_retain_v");
+});
+
+test("string method admission is explicit and unknown methods stay conservative", () => {
+  const methods: IrStrIntrinsicMethod[] = ["length", "charCodeAt", "charAt", "indexOf", "includes", "startsWith", "endsWith", "slice", "substring", "repeat", "trim", "trimStart", "trimEnd", "split", "padStart", "padEnd", "toLowerCase", "toUpperCase", "normalize", "isWellFormed", "toWellFormed", "cpAt"];
+  for (const method of methods) expect(borrowsStringInputs(method)).toBe(true);
+  expect(borrowsStringInputs("futureMethod" as IrStrIntrinsicMethod)).toBe(false);
+});
+
+const methodCases: { method: IrStrIntrinsicMethod; args: IrExpr[]; result: IrType; target: string }[] = [
+  { method: "length", args: [], result: F64, target: "utf16_len" },
+  { method: "charCodeAt", args: [num(1)], result: F64, target: "char_code_at" },
+  { method: "charAt", args: [num(1)], result: STRING, target: "char_at" },
+  { method: "indexOf", args: [ref("argument"), num(1)], result: F64, target: "index_of" },
+  { method: "includes", args: [ref("argument")], result: BOOL, target: "includes" },
+  { method: "startsWith", args: [ref("argument"), num(1)], result: BOOL, target: "starts_with_from" },
+  { method: "endsWith", args: [ref("argument"), num(4)], result: BOOL, target: "ends_with_from" },
+  { method: "slice", args: [num(1), num(3)], result: STRING, target: "slice" },
+  { method: "substring", args: [num(1), num(3)], result: STRING, target: "substring" },
+  { method: "repeat", args: [num(2)], result: STRING, target: "repeat" },
+  { method: "trim", args: [], result: STRING, target: "trim" },
+  { method: "trimStart", args: [], result: STRING, target: "trim_start" },
+  { method: "trimEnd", args: [], result: STRING, target: "trim_end" },
+  { method: "split", args: [ref("argument"), num(2)], result: { kind: "array", elem: STRING }, target: "split_limit" },
+  { method: "padStart", args: [num(5), ref("argument")], result: STRING, target: "pad_start" },
+  { method: "padEnd", args: [num(5), ref("argument")], result: STRING, target: "pad_end" },
+  { method: "toLowerCase", args: [], result: STRING, target: "to_lower" },
+  { method: "toUpperCase", args: [], result: STRING, target: "to_upper" },
+  { method: "normalize", args: [ref("argument")], result: STRING, target: "normalize" },
+  { method: "isWellFormed", args: [], result: BOOL, target: "is_well_formed" },
+  { method: "toWellFormed", args: [], result: STRING, target: "to_well_formed" },
+  { method: "cpAt", args: [num(1)], result: STRING, target: "cp_at" },
+];
+
+test.each(methodCases)("$method passes borrowed string inputs through its runtime ABI", ({ method, args, result, target }) => {
+  const f = fn("method", ["receiver", "argument"], intrinsic(ref("receiver"), method, args, result));
+  for (const bits of [32, 64] as const) {
+    const ir = body(mod(f), "sc_bf_method", bits);
+    expect(ir).toContain(`@scr_str_${target}(`);
+    expect(ir).not.toContain("@scr_str_retain_v");
+    if (method !== "normalize") expect(ir).not.toContain("@scr_str_release");
+    expect(ir).toContain(result.kind === "f64" ? "ret double" : result.kind === "bool" ? "ret i1" : "ret ptr");
+  }
+});
+
+test("string search snapshots both receiver and needle before an effectful numeric argument", () => {
+  const position = fn("position", [], num(0));
+  const search = fn("search", ["text", "needle"], intrinsic(ref("text"), "indexOf", [ref("needle"), call("position", [], F64)], F64));
+  search.body.unshift(
+    { kind: "assign", localId: "text", value: str("abc"), loc },
+    { kind: "assign", localId: "needle", value: str("b"), loc },
+  );
+  const ir = body(mod(position, search), "sc_f_search");
+  const start = ir.indexOf("@sc_f_position");
+  const searchCall = ir.indexOf("@scr_str_index_of");
+  expect(start).toBeGreaterThan(0);
+  expect(searchCall).toBeGreaterThan(start);
+  // Initializers own their literals and both reads take independent snapshots.
+  expect(ir.slice(0, start).match(/@scr_str_retain_v/g)).toHaveLength(4);
+  expect(ir.slice(searchCall)).toContain("@scr_str_release");
+});
+
+test("global string ownership cannot be inferred from an immutable-looking reference", () => {
+  const replacement = fn("replacement", [], str("later"));
+  const inspect = fn("inspect", [], equal(ref("%g.global"), call("replacement", [], STRING)));
+  const module = mod(replacement, inspect);
+  module.globals = [{ id: "%g.global", name: "global", type: STRING, mutable: true }];
+  const ir = body(module, "sc_f_inspect");
+  expect(ir.slice(0, ir.indexOf("@sc_f_replacement"))).toContain("@scr_str_retain_v");
+  inspect.returnType = F64;
+  inspect.body = [ret(intrinsic(ref("%g.global"), "length", [], F64))];
+  expect(body(module, "sc_f_inspect")).not.toContain("@scr_str_retain_v");
+});
+
+test("boxed string parameters retain their checked binding reads", () => {
+  const inspect = fn("inspect", ["value"], intrinsic(ref("value"), "length", [], F64));
+  inspect.locals[0]!.boxed = true;
+  const ir = body(mod(inspect), "sc_f_inspect");
+  expect(ir).toContain("@scr_box_");
+  expect(ir).toContain("@scr_str_release");
+  expect(ir).toContain("@scr_str_utf16_len");
+});
+
+test("borrowed literal inputs do not change string equality or ordering operators", () => {
+  for (const op of ["<", "<=", ">", ">="] as const) {
+    const compare = fn("compare", [], { kind: "strCmp", op, left: str("a"), right: str("b"), utf16: true, type: BOOL, loc });
+    const ir = body(mod(compare), "sc_f_compare");
+    expect(ir).toContain("@scr_str_cmp_u16");
+    expect(ir).not.toContain("@scr_str_retain_v");
+    expect(ir).not.toContain("@scr_str_release");
+  }
+  const comparison = equal(str("a"), str("b"));
+  if (comparison.kind !== "strEq") throw new Error("missing comparison");
+  comparison.negated = true;
+  expect(body(mod(fn("compare", [], comparison)), "sc_f_compare")).toContain("xor i1");
+});
+
+test("emission does not mutate lifetime inputs or reuse facts after a body changes", () => {
+  const inspect = fn("inspect", ["value"], intrinsic(ref("value"), "length", [], F64));
+  const module = mod(inspect);
+  const before = JSON.stringify(module);
+  const first = emitLlvmModule(module);
+  expect(JSON.stringify(module)).toBe(before);
+  expect(emitLlvmModule(module)).toBe(first);
+  inspect.body.unshift({ kind: "assign", localId: "value", value: str("new"), loc });
+  const second = emitLlvmModule(module);
+  expect(second).not.toContain("define internal double @sc_bf_inspect");
+  expect(second).toContain("define internal double @sc_f_inspect");
+});

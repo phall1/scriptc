@@ -2,7 +2,8 @@ import { expect, test } from "vitest";
 import { BOOL, F64, VOID, UNDEFINED_T, arrayOf, funcOf, type IrExpr, type IrFunction, type IrModule, type IrStmt, type IrType } from "../../ir/ir.js";
 import { validateModule } from "../../ir/validate.js";
 import { emitLlvmModule } from "./emitter.js";
-import { findArrayPreservingFunctions, findLocalArrayReads } from "./local-array-reads.js";
+import { findArrayPreservingFunctions, findLocalArrayReads, findCallArrayReads, OptionalArrayReads } from "./local-array-reads.js";
+import { analyzeCallLifetimes } from "./call-lifetimes.js";
 
 const loc = { file: "local-array.ts", start: 0, end: 0 };
 const element: IrType = { kind: "record", shapeId: "cell" };
@@ -253,4 +254,204 @@ test("a later mutating argument snapshots the payload before entering the helper
   expect(body).not.toContain("@scr_union_retain");
   expect(body.indexOf("@sc_rretain_")).toBeLessThan(body.indexOf("@scr_arr_set_len"));
   expect(body.indexOf("@scr_arr_set_len")).toBeLessThan(body.indexOf("@sc_bf_helper"));
+});
+
+function immediateFixture(): IrModule {
+  const module = fixture();
+  const consume: IrFunction = {
+    name: "consume", loc, params: [{ localId: "value", name: "value", type: optional }],
+    locals: [{ id: "value", name: "value", type: optional, mutable: true }], returnType: F64,
+    body: [{ kind: "return", value: { kind: "recordGet", obj: narrow, shapeId: "cell", field: "x", type: F64, loc }, loc }],
+  };
+  const work = module.functions[2]!;
+  work.locals = work.locals.filter((local) => local.id !== "value");
+  work.body = [{ kind: "return", value: {
+    kind: "call", callee: "consume", args: [{ kind: "call", callee: "read", args: [ref("a", array), ref("i", F64)], type: optional, loc }], type: F64, loc,
+  }, loc }];
+  module.functions.push(consume);
+  return module;
+}
+function immediateFacts(module: IrModule) {
+  const functions = new Map(module.functions.map((f) => [f.name, f]));
+  const unions = new Map(module.unions!.map((u) => [u.id, u]));
+  const reads = new OptionalArrayReads(functions, unions);
+  const preserving = findArrayPreservingFunctions(functions, unions, reads);
+  const lifetimes = analyzeCallLifetimes(functions);
+  return findCallArrayReads(module.functions[2]!, reads, preserving, lifetimes);
+}
+function immediateCall(module: IrModule): IrExpr & { kind: "call" } {
+  const stmt = module.functions[2]!.body[0]!;
+  if (stmt.kind !== "return" || stmt.value?.kind !== "call") throw new Error("missing call");
+  return stmt.value;
+}
+
+test("immediate optional reads borrow preserved parameter edges on both pointer widths", () => {
+  const module = immediateFixture();
+  const read = immediateCall(module).args[0]!;
+  expect(immediateFacts(module).get(read)?.borrow).toBe(true);
+  for (const bits of [32, 64] as const) {
+    const ir = workBody(module, bits);
+    expect(ir).toContain("alloca %ScrUnion");
+    expect(ir).toContain("@sc_bf_consume");
+    expect(ir).toContain("local.array.dense");
+    expect(ir).not.toContain("@sc_f_read");
+    expect(ir).not.toContain("@scr_union_new_ref");
+    expect(ir).not.toContain("@scr_union_release");
+    expect(ir).not.toContain("@sc_rretain_");
+    expect(ir).not.toContain("@sc_rrelease_");
+  }
+});
+
+test("a later argument that removes an array edge keeps an independent payload owner", () => {
+  const module = immediateFixture();
+  const consume = module.functions[3]!;
+  consume.params.push({ localId: "other", name: "other", type: F64 });
+  consume.locals.push({ id: "other", name: "other", type: F64, mutable: false });
+  immediateCall(module).args.push({ kind: "seqExpr", stmts: [
+    { kind: "arraySetLength", arr: ref("a", array), length: num(0), loc },
+  ], result: num(1), type: F64, loc });
+  const read = immediateCall(module).args[0]!;
+  expect(immediateFacts(module).get(read)?.borrow).not.toBe(true);
+  expect(validateModule(module)).toEqual([]);
+  const ir = workBody(module);
+  expect(ir).toContain("@sc_rretain_");
+  expect(ir).toContain("@sc_rrelease_");
+  expect(ir).toContain("@scr_arr_peek_ref");
+  expect(ir).not.toContain("local.array.dense");
+  expect(ir.match(/@sc_rretain_/g)).toHaveLength(1);
+  expect(ir).not.toContain("@scr_union_release");
+  expect(ir.indexOf("@sc_rretain_")).toBeLessThan(ir.indexOf("@sc_bf_consume"));
+});
+
+test("mutation inside the consuming helper also snapshots an immediate payload", () => {
+  const module = immediateFixture();
+  const consume = module.functions[3]!;
+  consume.params.push({ localId: "array", name: "array", type: array });
+  consume.locals.push({ id: "array", name: "array", type: array, mutable: false });
+  consume.body.unshift({ kind: "arraySetLength", arr: ref("array", array), length: num(0), loc });
+  immediateCall(module).args.push(ref("a", array));
+  const read = immediateCall(module).args[0]!;
+  expect(immediateFacts(module).get(read)?.borrow).not.toBe(true);
+  expect(validateModule(module)).toEqual([]);
+  const ir = workBody(module);
+  expect(ir).toContain("@sc_bf_consume");
+  expect(ir).toContain("@sc_rretain_");
+  expect(ir).toContain("@sc_rrelease_");
+});
+
+test("escaping consumers keep the heap union and ordinary call", () => {
+  const module = immediateFixture();
+  const consume = module.functions[3]!;
+  consume.returnType = optional;
+  consume.body = [{ kind: "return", value: unionValue, loc }];
+  module.functions[2]!.returnType = optional;
+  immediateCall(module).type = optional;
+  expect(immediateFacts(module).size).toBe(0);
+  const ir = workBody(module);
+  expect(ir).toContain("@sc_f_read");
+  expect(ir).toContain("@sc_f_consume");
+  expect(ir).not.toContain("alloca %ScrUnion");
+});
+
+test("async and generator callers keep their established suspension representation", () => {
+  for (const suspend of ["async", "generator"] as const) {
+    const module = immediateFixture();
+    const work = module.functions[2]!;
+    if (suspend === "async") work.async = true;
+    else work.generator = { yieldT: F64, nextT: F64, resultType: { kind: "record", shapeId: "result" } };
+    expect(immediateFacts(module).size).toBe(0);
+  }
+});
+
+test("indirect consumers do not receive immediate stack unions", () => {
+  const module = immediateFixture();
+  const call = immediateCall(module);
+  module.functions[2]!.body = [{ kind: "return", loc, value: {
+    kind: "callValue", callee: { kind: "closure", fnName: "consume", captures: [], type: funcOf([optional], F64), loc },
+    args: call.args, type: F64, loc,
+  } }];
+  expect(immediateFacts(module).size).toBe(0);
+  expect(workBody(module)).toContain("@sc_f_read");
+});
+
+test("each immediate argument has separate tag and payload storage", () => {
+  const module = immediateFixture();
+  const consume = module.functions[3]!;
+  consume.params.push({ localId: "second", name: "second", type: optional });
+  consume.locals.push({ id: "second", name: "second", type: optional, mutable: false });
+  consume.body.unshift({ kind: "exprStmt", expr: {
+    kind: "unionIsTag", value: ref("second", optional), unionId: "optional", tag: 1, negated: false, type: BOOL, loc,
+  }, loc });
+  immediateCall(module).args.push({ kind: "call", callee: "read", args: [ref("a", array), num(1)], type: optional, loc });
+  expect(immediateFacts(module).size).toBe(2);
+  const ir = workBody(module);
+  expect(ir.match(/alloca %ScrUnion/g)).toHaveLength(2);
+  expect(ir.match(/@scr_arr_peek_ref/g)).toHaveLength(2);
+  expect(ir).not.toContain("@sc_f_read");
+});
+
+test("throwing later arguments release a completed read snapshot", () => {
+  const module = immediateFixture();
+  const consume = module.functions[3]!;
+  consume.params.push({ localId: "other", name: "other", type: F64 });
+  consume.locals.push({ id: "other", name: "other", type: F64, mutable: false });
+  const failure: IrFunction = {
+    name: "failure", params: [], locals: [], returnType: F64, loc,
+    body: [{ kind: "throw", value: num(7), loc }],
+  };
+  module.functions.push(failure);
+  immediateCall(module).args.push({ kind: "call", callee: "failure", args: [], type: F64, loc });
+  const ir = workBody(module);
+  const later = ir.indexOf("@sc_f_failure");
+  expect(later).toBeGreaterThan(0);
+  expect(ir.slice(later)).toContain("@scr_exc_pending");
+  expect(ir.slice(later)).toContain("@sc_rrelease_");
+});
+
+test("a temporary array receiver lives through its indexed lookup", () => {
+  const module = immediateFixture();
+  const read = immediateCall(module).args[0]!;
+  if (read.kind !== "call") throw new Error("missing read");
+  read.args[0] = { kind: "arrayLit", elems: [], type: array, loc };
+  expect(immediateFacts(module).get(read)?.borrow).not.toBe(true);
+  const ir = workBody(module);
+  expect(ir.indexOf("@scr_arr_new")).toBeLessThan(ir.indexOf("@scr_arr_peek_ref"));
+  expect(ir).toContain("@scr_arr_release");
+  expect(ir).not.toContain("@sc_f_read");
+});
+
+test("helper recognition is reused by multiple sites and isolated to one finalized module", () => {
+  const module = immediateFixture();
+  const functions = new Map(module.functions.map((fn) => [fn.name, fn]));
+  const unions = new Map(module.unions!.map((union) => [union.id, union]));
+  const read = immediateCall(module).args[0]!;
+  const index = new OptionalArrayReads(functions, unions);
+  const helper = module.functions[1]!;
+  const original = helper.body;
+  let bodyReads = 0;
+  Object.defineProperty(helper, "body", { configurable: true, get: () => { bodyReads++; return original; } });
+  for (let i = 0; i < 100; i++) expect(index.get(read)?.presentTag).toBe(0);
+  expect(bodyReads).toBe(0);
+  Object.defineProperty(helper, "body", { configurable: true, writable: true, value: [] });
+  expect(new OptionalArrayReads(functions, unions).get(read)).toBeNull();
+});
+
+test("read descriptors never share a mutable borrowing decision between uses", () => {
+  const module = immediateFixture();
+  const functions = new Map(module.functions.map((fn) => [fn.name, fn]));
+  const unions = new Map(module.unions!.map((union) => [union.id, union]));
+  const index = new OptionalArrayReads(functions, unions);
+  const read = immediateCall(module).args[0]!;
+  const first = index.get(read)!;
+  first.borrow = true;
+  expect(index.get(read)?.borrow).toBeUndefined();
+  expect(index.get(read)?.array).toBe(first.array);
+});
+
+test("recognition checks the helper result representation as well as its body", () => {
+  const module = immediateFixture();
+  module.functions[1]!.returnType = F64;
+  const functions = new Map(module.functions.map((fn) => [fn.name, fn]));
+  const unions = new Map(module.unions!.map((union) => [union.id, union]));
+  expect(new OptionalArrayReads(functions, unions).get(immediateCall(module).args[0]!)).toBeNull();
 });

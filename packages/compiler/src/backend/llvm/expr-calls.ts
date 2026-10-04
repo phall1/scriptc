@@ -9,6 +9,7 @@ import { LlvmUnsupportedError } from "./unsupported.js";
 import type { LlvmEmitterContext, ExprOf, LlValue } from "./expr-context.js";
 import { f64Lit, ffiNativeTypeLl, ffiNativeParamLl, ffiNativeReturnLl } from "./common.js";
 import { canStackUnion, emitStackUnion } from "./stack-unions.js";
+import { emitCallArrayRead } from "./local-array-reads.js";
 
 export function emitCallExpr(host: LlvmEmitterContext, e: ExprOf<"call" | "ffiCall" | "closure" | "callValue" | "selfRef" | "new" | "classRef" | "newValue" | "instanceOfValue" | "promiseVoidWiden" | "upcast" | "downcast" | "instanceOf" | "virtualCall">): LlValue {
     const B = host.B;
@@ -24,6 +25,8 @@ export function emitCallExpr(host: LlvmEmitterContext, e: ExprOf<"call" | "ffiCa
         if (borrowed) host.frames.push([]);
         const args = e.args.map((a, index) => {
           if (borrowed?.has(index)) {
+            const read = host.callArrayReads.get(a);
+            if (read) return emitCallArrayRead(host, read);
             if (host.canBorrowCallArgument(a)) return host.emitReadReceiver(a);
             if (canStackUnion(a, host.unionsById)) return emitStackUnion(host, a).value;
           }

@@ -9,6 +9,8 @@ function moduleFor(body: IrStmt[], options: { boxed?: boolean; numberReturn?: bo
   const params = ["first", "second", "third"].map((name) => ({ name, localId: name, type: STRING }));
   const work: IrFunction = {
     name: "work", params, returnType: options.numberReturn ? F64 : VOID,
+    // Exercise owned scope cleanup independently of direct-call borrowing.
+    captures: [],
     locals: [...params.map((p) => ({ id: p.localId, name: p.name, type: p.type, mutable: false, ...(options.boxed ? { boxed: true as const } : {}) })),
       { id: "later", name: "later", type: STRING, mutable: true }],
     body: [...body, ...(options.numberReturn ? [{ kind: "return" as const, value: { kind: "numLit" as const, value: 7, type: F64, loc }, loc }] : [])], loc,

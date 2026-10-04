@@ -6,6 +6,7 @@ import { mangleResolveThunk } from "../mangle.js";
 import { elemAccess, FN_ATTRS, mapKeyAccess, mapKeyKindNum, mapValKindNum, traceArg, vAdapters } from "./shapes.js";
 import type { LlvmEmitterContext, LlValue } from "./expr-context.js";
 import { F64_INF, f64Lit } from "./common.js";
+import { borrowsStringInputs, emitStringInputs } from "./string-lifetimes.js";
 
 export function resolveThunkFor(host: LlvmEmitterContext, inner: IrType): string {
     const key = typeKey(inner);
@@ -60,13 +61,14 @@ export function emitArrayCopyLoop(host: LlvmEmitterContext, dst: string, src: st
   }
 
 export function emitStrIntrinsic(host: LlvmEmitterContext, e: IrExpr & { kind: "strIntrinsic" }): LlValue {
-    // Receiver and string arguments are owned temps in the current frame;
-    // every scr_str_* method BORROWS them. String/array-returning methods
-    // hand back a +1 reference, which own() registers like any other.
+    // String/array-returning methods hand back a +1 reference, including
+    // identity returns. Inputs keep either a proven owner or a frame temp.
     // Omitted optional args get the C-side defaults from docs/ir.md.
     const B = host.B;
-    const r = host.emitExpr(e.receiver);
-    const args = e.args.map((a) => host.emitExpr(a));
+    const inputs = [e.receiver, ...e.args];
+    const values = borrowsStringInputs(e.method) ? emitStringInputs(host, inputs) : inputs.map((a) => host.emitExpr(a));
+    const r = values[0]!;
+    const args = values.slice(1);
     const call = (sym: string, sig: string, argText: string, retTy: string, owned: boolean): LlValue => {
       // sig reads "<ret> (<params>)" — respelled to LLVM's declare form.
       const m = /^(.+?) \((.*)\)$/.exec(sig);

@@ -49,7 +49,7 @@ import { mangleArgPack, mangleAsyncSpawn, mangleBorrowedFunction, mangleClassObj
 import { analyzeCallLifetimes, type CallLifetimes } from "./call-lifetimes.js";
 import { emitStackUnion, findLocalStackUnions } from "./stack-unions.js";
 import { BlockBuilder } from "./blocks.js";
-import { emitLocalArrayRead, findArrayPreservingFunctions, findLocalArrayReads, type LocalArrayRead } from "./local-array-reads.js";
+import { emitLocalArrayRead, findArrayPreservingFunctions, findLocalArrayReads, findCallArrayReads, OptionalArrayReads, type LocalArrayRead } from "./local-array-reads.js";
 import { emitBorrowedFieldSequence } from "./borrowed-receivers.js";
 import { LlvmDebugInfo } from "./debug-info.js";
 import { f64Lit, ffiNativeTypeLl, ffiNativeParamLl, ffiNativeReturnLl, llvmCommentText } from "./common.js";
@@ -265,6 +265,8 @@ export class LlEmitter {
 
   readonly fnByName = new Map<string, IrFunction>();
   private readonly arrayPreservingFunctions: ReadonlySet<string>;
+  private readonly optionalArrayReads: OptionalArrayReads;
+  callArrayReads = new Map<IrExpr, LocalArrayRead>();
   readonly callLifetimes: CallLifetimes;
   private borrowedParameters = new Set<string>();
   /** Manifest-bound native imports, used by ffiCall emission. */
@@ -433,7 +435,8 @@ export class LlEmitter {
       }
     }
     for (const u of mod.unions ?? []) this.unionsById.set(u.id, u);
-    this.arrayPreservingFunctions = findArrayPreservingFunctions(this.fnByName, this.unionsById);
+    this.optionalArrayReads = new OptionalArrayReads(this.fnByName, this.unionsById);
+    this.arrayPreservingFunctions = findArrayPreservingFunctions(this.fnByName, this.unionsById, this.optionalArrayReads);
     this.callLifetimes = analyzeCallLifetimes(this.fnByName);
     for (const r of mod.records ?? []) this.recordsById.set(r.id, r);
     const traced = computeTraced(mod);
@@ -3320,7 +3323,8 @@ export class LlEmitter {
     this.integerLoopBindings.clear();
     this.fieldPointerTags.clear();
     this.integerArrayBindings.clear();
-    this.localArrayReads = findLocalArrayReads(fn, this.fnByName, this.unionsById, this.arrayPreservingFunctions, this.callLifetimes);
+    this.localArrayReads = findLocalArrayReads(fn, this.fnByName, this.unionsById, this.arrayPreservingFunctions, this.callLifetimes, this.optionalArrayReads);
+    this.callArrayReads = findCallArrayReads(fn, this.optionalArrayReads, this.arrayPreservingFunctions, this.callLifetimes);
     this.localStackUnions = findLocalStackUnions(fn, this.callLifetimes, this.unionsById);
     this.integerRanges = analyzeIntegerRanges(fn);
     this.chainSlots.clear();
@@ -3532,6 +3536,7 @@ export class LlEmitter {
    * and the callee execute. Global, captured, TDZ and mutable bindings need
    * an owned snapshot, even when the callee only inspects the value. */
   canBorrowCallArgument(value: IrExpr): boolean {
+    if (value.kind === "strLit") return true;
     if (value.kind !== "varRef") return false;
     const binding = this.binding(value.localId);
     return binding.kind === "local" && binding.local !== undefined &&
@@ -4663,6 +4668,7 @@ export class LlEmitter {
    * reference result before evaluating another expression. */
   emitReadReceiver(e: IrExpr): LlValue {
     if (!isRefCounted(e.type)) return this.emitExpr(e);
+    if (e.kind === "strLit") return { name: this.internLiteral(e.value), type: e.type };
     if (e.kind === "varRef") {
       const binding = this.binding(e.localId);
       // Capture boxes can carry TDZ and caught-value conversion semantics.
