@@ -42,7 +42,7 @@ test("source priority retains every dependency and leaves earlier snapshots unch
     trackedReadFile(source);
   });
   const ordinary = tracker.snapshot();
-  const prioritized = tracker.snapshot(new Set([source]));
+  const prioritized = tracker.snapshot(new Map([[source, ""]]));
   expect(prioritized.probes[0]?.path).toBe(source);
   expect(prioritized.probes).toHaveLength(ordinary.probes.length);
   expect(prioritized.probes).toEqual(expect.arrayContaining(ordinary.probes));
@@ -65,7 +65,7 @@ async function semanticFixture() {
   await writeFile(dependency, "declare const dependency: number;\n");
   const tracker = new FrontendInputTracker();
   tracker.run(() => { trackedReadFile(source); trackedReadFile(dependency); });
-  return { dir, source, dependency, previous, snapshot: tracker.snapshot(new Set([source])), sources: new Map([[source, previous]]) };
+  return { dir, source, dependency, previous, snapshot: tracker.snapshot(new Map([[source, ""]])), sources: new Map([[source, previous]]) };
 }
 
 test("semantic reuse reads unchanged dependencies once and revalidates accepted sources", async () => {

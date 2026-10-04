@@ -924,7 +924,7 @@ async function compileTracked(
           native: nativeFeatures,
           executableRestored: true,
           nativeDependencies: dependencies,
-          frontend: frontendInputs.snapshot(new Set(sourceTexts.keys())),
+          frontend: frontendInputs.snapshot(sourceTexts),
           ...(irPath === undefined ? {} : { irPath }),
         });
         publishedExecutable = true;
@@ -961,7 +961,7 @@ async function compileTracked(
       llvmPath,
       native: nativeFeatures,
       executableRestored: false,
-      frontend: frontendInputs.snapshot(new Set(sourceTexts.keys())),
+      frontend: frontendInputs.snapshot(sourceTexts),
       ...(irPath === undefined ? {} : { irPath }),
     }).catch(() => undefined);
   }
@@ -1420,7 +1420,7 @@ async function compileLibraryTracked(
   const earlyPublish: EarlyLibraryCachePublish = {
     llvmPath,
     native: nativeFeatures,
-    frontend: frontendInputs.snapshot(new Set(sourceTexts.keys())),
+    frontend: frontendInputs.snapshot(sourceTexts),
     semantic: { mod, sources: sourceTexts },
     ...(irPath !== undefined ? { irPath } : {}),
     ...(sidecarPath !== undefined ? { sidecarPath } : {}),

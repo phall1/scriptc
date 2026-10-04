@@ -148,15 +148,15 @@ export class FrontendInputTracker {
 
   /** Check program sources before declaration and resolution inputs, retaining
    * every observation and deterministic ordering within each group. */
-  snapshot(sourcePaths: ReadonlySet<string> = new Set()): FrontendInputSnapshot {
+  snapshot(sourceTexts: ReadonlyMap<string, string> = new Map()): FrontendInputSnapshot {
     const ordered = [...this.probes.values()].sort((a, b) =>
       a.path === b.path ? a.op.localeCompare(b.op) : a.path.localeCompare(b.path)
     );
-    if (sourcePaths.size === 0) return { version: 1, probes: ordered, stable: this.stable };
+    if (sourceTexts.size === 0) return { version: 1, probes: ordered, stable: this.stable };
     const sources: FrontendInputProbe[] = [];
     const dependencies: FrontendInputProbe[] = [];
     for (const probe of ordered) {
-      if (sourcePaths.has(probe.path)) sources.push(probe);
+      if (sourceTexts.has(probe.path)) sources.push(probe);
       else dependencies.push(probe);
     }
     return { version: 1, probes: [...sources, ...dependencies], stable: this.stable };
