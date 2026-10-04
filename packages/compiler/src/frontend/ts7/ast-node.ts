@@ -20,8 +20,6 @@ export class AstFile {
   private readonly strings = new Map<number, string[]>();
   private lines: number[] | undefined;
   private childIndices: Uint32Array | undefined;
-  private fileNameCache: string | undefined;
-  private pathCache: string | undefined;
 
   constructor(
     bytes: Uint8Array,
@@ -93,21 +91,6 @@ export class AstFile {
     return node;
   }
 
-  // Keep root-only metadata on the file rather than adding unused fields
-  // to every node. Decode lazily: checker fragments need not have source
-  // metadata, and unrelated malformed fields must still fail on access.
-  fileName(index: number): string {
-    if (index !== 1) return this.wire.string(this.wire.extendedWord(index, 4));
-    if (this.fileNameCache === undefined) this.fileNameCache = this.wire.string(this.wire.extendedWord(index, 4));
-    return this.fileNameCache;
-  }
-
-  path(index: number): string {
-    if (index !== 1) return this.wire.string(this.wire.extendedWord(index, 8));
-    if (this.pathCache === undefined) this.pathCache = this.wire.string(this.wire.extendedWord(index, 8));
-    return this.pathCache;
-  }
-
   fileReferences(offset: number): AstFileReference[] {
     let result = this.references.get(offset);
     if (result === undefined) {
@@ -153,8 +136,6 @@ export class AstNode {
   readonly data: number;
   private parentResolved = false;
   private parentCache: AstNode | undefined;
-  private textResolved = false;
-  private textCache: string | undefined;
 
   constructor(readonly file: AstFile, readonly index: number) {
     // Materialize immutable scalar metadata once. Lowering repeatedly reads
@@ -176,13 +157,7 @@ export class AstNode {
     }
     return this.parentCache;
   }
-  get text(): string | undefined {
-    if (!this.textResolved) {
-      this.textCache = this.file.wire.text(this.index);
-      this.textResolved = true;
-    }
-    return this.textCache;
-  }
+  get text(): string | undefined { return this.file.wire.text(this.index); }
   get rawText(): string | undefined { return this.file.wire.rawText(this.index); }
 
   childNode(name: string): AstNode | undefined {
@@ -435,8 +410,8 @@ export class AstNode {
 
   // Source-file fields stay on the same nominal class, matching the wire's
   // single node representation. Their extended-data accesses are checked.
-  get fileName(): string { return this.file.fileName(this.index); }
-  get path(): string { return this.file.path(this.index); }
+  get fileName(): string { return this.file.wire.string(this.file.wire.extendedWord(this.index, 4)); }
+  get path(): string { return this.file.wire.string(this.file.wire.extendedWord(this.index, 8)); }
   get languageVariant(): number { return this.file.wire.extendedWord(this.index, 12); }
   get scriptKind(): number { return this.file.wire.extendedWord(this.index, 16); }
   get isDeclarationFile(): boolean { return (this.flags & AstNodeFlags.Ambient) !== 0; }
