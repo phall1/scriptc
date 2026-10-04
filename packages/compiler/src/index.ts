@@ -508,6 +508,7 @@ async function prepareExecutableInput(
   await mkdir(opts.outDir, { recursive: true });
   const llvmPath = defaultSourcePaths.llvm;
   const backend = "llvm" as const;
+  const useRuntimePack = opts.nativeProgramObject === true || usesPrecompiledRuntimePack(opts, backend);
   let llvmSource: string | readonly string[];
   try {
     llvmSource = emitLlvmModuleSource(mod, {
@@ -515,7 +516,7 @@ async function prepareExecutableInput(
       ...debugOptions,
       pointerBits: buildPlatform === "wasi" ? 32 : 64,
       wasi: buildPlatform === "wasi",
-      runtimeAbiMarker: opts.nativeProgramObject === true || usesPrecompiledRuntimePack(opts, "llvm"),
+      runtimeAbiMarker: useRuntimePack,
     });
   } catch (err) {
     if (!(err instanceof LlvmUnsupportedError)) throw err;
@@ -538,7 +539,7 @@ async function prepareExecutableInput(
   );
   timing("link-features");
   const programSplit =
-    backend === "llvm" && (opts.optimization ?? "release") === "dev" &&
+    !useRuntimePack && backend === "llvm" && (opts.optimization ?? "release") === "dev" &&
       !(opts.sanitize ?? false) && typeof llvmSource === "string"
       ? splitLlvmProgram(llvmSource)
       : null;

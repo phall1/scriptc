@@ -4,9 +4,10 @@ import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "n
 import { release as osRelease, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { compile, compileC } from "../src/index.js";
 import { MACOS_ARM64_TARGET } from "../src/backend/targets.js";
+import * as llvmSplit from "../src/backend/llvm/split.js";
 
 const execFileAsync = promisify(execFile);
 const supported = process.platform === "darwin" && process.arch === "arm64" &&
@@ -49,6 +50,25 @@ async function run(command: string, args: string[]) {
 }
 
 describe.runIf(supported)("LLVM native helper integration", () => {
+  test("dev helper-object emission does not prepare unused program shards", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "scriptc-helper-dev-"));
+    dirs.push(dir);
+    const split = vi.spyOn(llvmSplit, "splitLlvmProgram");
+    try {
+      const result = await compile(join(repoRoot, "tests/corpus/001-hello.ts"), {
+        outDir: dir, outPath: join(dir, "program"), backend: "llvm",
+        optimization: "dev", nativeProgramObject: true,
+      });
+      if (!result.ok) throw new Error(result.diagnostics.map((d) => d.message).join("\n"));
+      expect(split).not.toHaveBeenCalled();
+      expect(await run(result.binaryPath, [])).toEqual({
+        stdout: Buffer.from("hello world\n"), stderr: Buffer.alloc(0), exitCode: 0,
+      });
+    } finally {
+      split.mockRestore();
+    }
+  });
+
   test("release codegen vectorizes independent scalar arithmetic without fast math", async () => {
     const dir = await mkdtemp(join(tmpdir(), "scriptc-helper-vectorize-"));
     dirs.push(dir);
