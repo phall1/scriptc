@@ -4,6 +4,20 @@ import { dirname, resolve } from "node:path";
 import { setTimeout } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
+export function nativeBootstrapPlan({ phase = "all", sanitize = false } = {}) {
+  if (!["all", "commands", "rebuild"].includes(phase)) {
+    throw new Error("SCRIPTC_BOOTSTRAP_PHASE must be all, commands, or rebuild");
+  }
+  const phases = phase === "all" ? ["commands", "rebuild"] : [phase];
+  return { phases, packageChecks: !sanitize && phases.includes("commands") };
+}
+
+export async function runNativeBootstrapChecks(plan, checks) {
+  const results = await Promise.allSettled(plan.phases.map((phase) => Promise.resolve().then(checks[phase])));
+  const failures = results.filter((result) => result.status === "rejected").map((result) => result.reason);
+  if (failures.length) throw new AggregateError(failures, "native bootstrap phases failed");
+}
+
 export async function runBootstrapAndPackageChecks({ bootstrap, packageReady, packageChecks, poll = () => setTimeout(100) }) {
   let finished = false;
   const building = Promise.resolve().then(bootstrap).finally(() => { finished = true; });
@@ -30,8 +44,9 @@ async function command(executable, args) {
 }
 
 async function main() {
+  const plan = nativeBootstrapPlan({ phase: process.env.SCRIPTC_BOOTSTRAP_PHASE, sanitize: process.env.SCRIPTC_SAN === "1" });
   const bootstrap = () => command("pnpm", ["test", "tests/harness/self-hosting-native-driver.test.ts"]);
-  if (process.env.SCRIPTC_SAN === "1") return bootstrap();
+  if (!plan.packageChecks) return bootstrap();
   const packageDirectory = process.env.SCRIPTC_BOOTSTRAP_PACKAGE_DIR;
   if (!packageDirectory) throw new Error("SCRIPTC_BOOTSTRAP_PACKAGE_DIR is required");
   const ready = packageDirectory + ".ready";

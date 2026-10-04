@@ -153,10 +153,11 @@ jobs:
       - run: tar -xzf "$RUNNER_TEMP/native-linux-x64-gnu.tar.gz"
       - run: pnpm test tests/harness/effect.test.ts tests/harness/effect4.test.ts
 
-  # Full compiler rebuilds dominate the critical path. Start them immediately
-  # after setup, independently of corpus and integration test shards.
+  # Give command probes and full compiler rebuilds independent runners so
+  # their compiler, checker, and linker processes do not compete for memory.
+  # Each job builds its own seed; local invocations still cover both phases.
   bootstrap:
-    name: test (Linux, ${{ matrix.flavor }}, native bootstrap)
+    name: test (Linux, ${{ matrix.flavor }}, native bootstrap, ${{ matrix.phase }})
     # These contracts are portable. Standard Linux runners have enough memory
     # for LLVM optimization alongside the compiler that produces its input.
     runs-on: ubuntu-24.04
@@ -164,9 +165,11 @@ jobs:
       fail-fast: false
       matrix:
         flavor: [plain, san]
+        phase: [commands, rebuild]
     env:
       SCRIPTC_TEST_WORKERS: "1"
       SCRIPTC_SAN: ${{ matrix.flavor == 'san' && '1' || '' }}
+      SCRIPTC_BOOTSTRAP_PHASE: ${{ matrix.phase }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -183,6 +186,7 @@ jobs:
         with:
           target: linux-x64-gnu
       - uses: ./.github/actions/native-packages
+        if: matrix.phase == 'commands'
         with:
           target: wasm32-wasi
           helper: "false"

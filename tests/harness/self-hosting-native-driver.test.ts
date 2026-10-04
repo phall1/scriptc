@@ -8,11 +8,14 @@ import { WASI } from "node:wasi";
 import { expect, test } from "vitest";
 import type { NativeToolchainManifest } from "../../packages/compiler/src/native/toolchain.js";
 import { RUNTIME_ABI_MARKER } from "../../packages/compiler/src/backend/runtime-abi.js";
+import { nativeBootstrapPlan, runNativeBootstrapChecks } from "../../scripts/ci-native-bootstrap.mjs";
 import { bootstrapStep } from "./self-hosting-timing.js";
 
 const root = join(import.meta.dirname, "../..");
 const exec = promisify(execFile);
 const sanitize = process.env["SCRIPTC_SAN"] === "1";
+const phase = process.env["SCRIPTC_BOOTSTRAP_PHASE"] ?? "all";
+const plan = nativeBootstrapPlan({ phase, sanitize });
 
 function comparableStderr(text: string): string {
   return sanitize
@@ -32,7 +35,7 @@ function absoluteCommand(command: string): string {
   throw new Error(`native tool is not on PATH: ${command}`);
 }
 
-test("the production CLI relocates, builds programs, and rebuilds itself with Node unavailable", async () => {
+test(`the production CLI passes ${phase} bootstrap contracts with Node unavailable`, async () => {
   const directory = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-native-bootstrap-"));
   const executable = (name: string) => join(directory, name + (process.platform === "win32" ? ".exe" : ""));
   const options = { cwd: root, timeout: sanitize ? 5_400_000 : 1_800_000, maxBuffer: 16 * 1024 * 1024 };
@@ -49,7 +52,7 @@ test("the production CLI relocates, builds programs, and rebuilds itself with No
     // CI reuses this already-built seed for npm and older-libc installation
     // smoke tests, avoiding another full compiler build on the critical path.
     const packageDirectory = process.env["SCRIPTC_BOOTSTRAP_PACKAGE_DIR"];
-    if (!sanitize && packageDirectory !== undefined) {
+    if (plan.packageChecks && packageDirectory !== undefined) {
       if (process.platform !== "linux" || process.arch !== "x64") throw new Error("bootstrap package export requires the Linux x64 GNU CI host");
       mkdirSync(packageDirectory, { recursive: true });
       cpSync(join(root, "packages/cli-linux-x64-gnu/package.json"), join(packageDirectory, "package.json"));
@@ -120,8 +123,8 @@ test("the production CLI relocates, builds programs, and rebuilds itself with No
     const sample = join(root, "tests/corpus/class-array-optional-return.ts");
     const unionSample = join(root, "tests/corpus/union-nested-layout-discriminant.ts");
     const receiverSample = join(root, "tests/corpus/llvm-read-receiver-lifetime.ts");
-    // The self-rebuild and seed probes have independent outputs. Keep both
-    // queues busy, and drain them before cleanup even when either fails.
+    // CI assigns command probes and self-rebuilds to separate runners. A
+    // direct invocation retains both phases and drains them before cleanup.
     const seedChecks = async () => {
       // All command, library, and dynamic probes run inside the instrumented
       // compiler in the sanitizer lane, including their failure paths.
@@ -295,9 +298,9 @@ test("the production CLI relocates, builds programs, and rebuilds itself with No
       const checks = await Promise.allSettled([compareArtifacts(), probeRebuilt(), fixedPoint()]);
       for (const check of checks) if (check.status === "rejected") throw check.reason;
     };
-    const outcomes = await Promise.allSettled([
-      bootstrapStep("seed command and library probes", seedChecks), rebuildChecks(),
-    ]);
-    for (const outcome of outcomes) if (outcome.status === "rejected") throw outcome.reason;
+    await runNativeBootstrapChecks(plan, {
+      commands: () => bootstrapStep("seed command and library probes", seedChecks),
+      rebuild: rebuildChecks,
+    });
   } finally { rmSync(directory, { recursive: true, force: true }); }
 }, sanitize ? 10_800_000 : 5_400_000);
