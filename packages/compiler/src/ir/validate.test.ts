@@ -183,6 +183,85 @@ function expressionModule(expr: IrExpr, unions: IrUnionDef[]): IrModule {
   };
 }
 
+function virtualCallModule(): IrModule {
+  const receiver: IrType = { kind: "object", className: "Base" };
+  const mod = expressionModule({ kind: "numLit", value: 0, type: F64, loc }, []);
+  mod.classes = [
+    { name: "Base", fields: [], methods: ["run"], abstractMethods: ["run"], loc },
+    { name: "Unrelated", fields: [], methods: ["run"], loc },
+    { name: "First", base: "Base", fields: [], methods: ["run"], loc },
+    { name: "Second", base: "Base", fields: [], methods: ["run"], loc },
+  ];
+  for (const name of ["Unrelated", "First", "Second"]) {
+    mod.functions.push({ name: `%${name}.run`, params: [{ localId: "self", name: "self", type: receiver }],
+      locals: [{ id: "self", name: "self", type: receiver, mutable: false }], returnType: F64,
+      body: [{ kind: "return", value: { kind: "numLit", value: 1, type: F64, loc }, loc }], loc });
+  }
+  for (let i = 0; i < 2; i++) {
+    const at = { ...loc, start: i + 1 };
+    mod.functions.push({ name: `caller${i}`, params: [{ localId: "self", name: "self", type: receiver }],
+      locals: [{ id: "self", name: "self", type: receiver, mutable: false }], returnType: VOID,
+      body: [{ kind: "exprStmt", expr: { kind: "virtualCall", className: "Base", method: "run",
+        args: [{ kind: "varRef", localId: "self", type: receiver, loc: at }], type: F64, loc: at }, loc: at }], loc: at });
+  }
+  return mod;
+}
+
+test("virtual-call validation preserves each call site's diagnostic and excludes unrelated classes", () => {
+  const mod = virtualCallModule();
+  expect(validateModule(deserializeModule(serializeModule(mod)))).toEqual([]);
+  mod.classes = mod.classes!.filter((cls) => cls.name !== "First" && cls.name !== "Second");
+  expect(validateModule(mod).map((error) => [error.loc.start, error.message])).toEqual([
+    [1, "in caller0: virtualCall Base.run: no concrete override below the static class"],
+    [1, "in caller0: virtualCall Base.run: no implementation function exists"],
+    [2, "in caller1: virtualCall Base.run: no concrete override below the static class"],
+    [2, "in caller1: virtualCall Base.run: no implementation function exists"],
+  ]);
+});
+
+test("virtual-call validation resolves an abstract slot in class-table order and rechecks each ABI", () => {
+  const mod = virtualCallModule();
+  const second = mod.functions.find((fn) => fn.name === "%Second.run")!;
+  second.returnType = STRING;
+  second.body = [{ kind: "return", value: { kind: "strLit", value: "second", type: STRING, loc }, loc }];
+  expect(validateModule(mod)).toEqual([]);
+  mod.classes!.reverse();
+  expect(validateModule(mod).map((error) => error.message)).toEqual([
+    "in caller0: virtualCall Base.run result type mismatch",
+    "in caller1: virtualCall Base.run result type mismatch",
+  ]);
+  mod.classes!.reverse();
+  const caller = mod.functions.find((fn) => fn.name === "caller1")!;
+  const statement = caller.body[0]!;
+  if (statement.kind !== "exprStmt" || statement.expr.kind !== "virtualCall") throw new Error("fixture");
+  statement.expr.args.push({ kind: "boolLit", value: true, type: BOOL, loc });
+  expect(validateModule(mod).map((error) => error.message)).toEqual([
+    "in caller1: virtualCall Base.run: 2 args, method expects 1",
+  ]);
+  statement.expr.args.pop();
+  mod.functions = mod.functions.filter((fn) => fn.name !== "%First.run");
+  second.returnType = F64;
+  second.body = [{ kind: "return", value: { kind: "numLit", value: 1, type: F64, loc }, loc }];
+  expect(validateModule(mod).map((error) => error.message)).toEqual([
+    'class First: missing method function "run"',
+  ]);
+});
+
+test("virtual-call validation uses the nearest concrete ancestor instead of an override's ABI", () => {
+  const mod = virtualCallModule();
+  mod.classes!.unshift({ name: "Root", fields: [], methods: ["run"], loc });
+  mod.classes!.find((cls) => cls.name === "Base")!.base = "Root";
+  mod.functions.push({ name: "%Root.run", params: [{ localId: "self", name: "self", type: { kind: "object", className: "Base" } }],
+    locals: [{ id: "self", name: "self", type: { kind: "object", className: "Base" }, mutable: false }], returnType: STRING,
+    body: [{ kind: "return", value: { kind: "strLit", value: "root", type: STRING, loc }, loc }], loc });
+  expect(validateModule(mod).map((error) => error.message)).toEqual([
+    "in caller0: virtualCall Base.run result type mismatch",
+    "in caller1: virtualCall Base.run result type mismatch",
+  ]);
+  mod.classes!.find((cls) => cls.name === "Root")!.methods = [];
+  expect(validateModule(mod)).toEqual([]);
+});
+
 test("library callbacks retain child, specialized, and generic result diagnostics", () => {
   const expr: IrExpr = {
     kind: "libCall", fn: "cp.execFile", type: F64, loc,

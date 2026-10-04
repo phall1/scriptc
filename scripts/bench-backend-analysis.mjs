@@ -5,17 +5,18 @@ import assert from "node:assert/strict";
 import { parseArgs } from "node:util";
 import { computeMayThrow } from "../packages/compiler/dist/backend/may-throw.js";
 import { computeTraced } from "../packages/compiler/dist/backend/cycle-analysis.js";
+import { validateModule } from "../packages/compiler/dist/ir/validate.js";
 import { F64, VOID } from "../packages/compiler/dist/ir/ir.js";
 
 const { values } = parseArgs({ options: {
   iterations: { type: "string", default: "5" },
   sizes: { type: "string", default: "500,2000,4000,8000" },
-  workloads: { type: "string", default: "may-throw,cycle-analysis,class-values-wide,class-values-deep" },
+  workloads: { type: "string", default: "may-throw,cycle-analysis,class-values-wide,class-values-deep,class-validation-wide,virtual-validation-wide,virtual-validation-shared" },
 } });
 const iterations = Number(values.iterations);
 const sizes = values.sizes.split(",").map(Number);
 const selected = values.workloads.split(",");
-const names = ["may-throw", "cycle-analysis", "class-values-wide", "class-values-deep"];
+const names = ["may-throw", "cycle-analysis", "class-values-wide", "class-values-deep", "class-validation-wide", "virtual-validation-wide", "virtual-validation-shared"];
 assert.ok(Number.isInteger(iterations) && iterations >= 1 && iterations <= 100, "--iterations must be an integer between 1 and 100");
 assert.ok(sizes.length >= 1 && sizes.length <= 16 && sizes.every((n) => Number.isInteger(n) && n >= 1 && n <= 100_000), "--sizes must contain 1–16 integers between 1 and 100000");
 assert.ok(selected.length >= 1 && selected.every((name) => names.includes(name)), `--workloads must select from ${names.join(",")}`);
@@ -68,6 +69,33 @@ for (const size of sizes) {
         assert.equal(answer.fns.has(`%C${i}.constructor`), deep ? i === size - 1 : i % 2 === 0, `%C${i}.constructor`);
       }
     } });
+  }
+  const layouts = { ...mod,
+    classes: Array.from({ length: size }, (_, i) => ({ name: `C${i}`, fields: [], loc })),
+    functions: functions.map((fn) => ({ ...fn, body: [] })),
+  };
+  workloads.push({ name: "class-validation-wide", run: () => validateModule(layouts), check: (answer) => assert.deepEqual(answer, []) });
+  for (const shared of [false, true]) {
+    const name = shared ? "virtual-validation-shared" : "virtual-validation-wide";
+    if (!selected.includes(name)) continue;
+    const virtual = { ...mod, classes: [], functions: [{ name: "main", params: [], locals: [], returnType: VOID, body: [], loc }], entry: "main" };
+    for (let i = 0; i < size; i++) {
+      const base = `Base${i}`;
+      const derived = `Derived${i}`;
+      const method = shared ? "run" : `method${i}`;
+      virtual.classes.push({ name: base, fields: [], methods: [method], abstractMethods: [method], loc });
+      virtual.classes.push({ name: derived, base, fields: [], methods: [method], loc });
+      const object = { kind: "object", className: base };
+      const self = { localId: "self", name: "self", type: object };
+      virtual.functions.push({ name: `%${derived}.${method}`, params: [self], locals: [{ id: "self", name: "self", type: object, mutable: false }],
+        returnType: F64, body: [{ kind: "return", value, loc }], loc });
+      for (let j = 0; j < 4; j++) {
+        virtual.functions.push({ name: `caller${i}_${j}`, params: [self], locals: [{ id: "self", name: "self", type: object, mutable: false }],
+          returnType: VOID, body: [{ kind: "exprStmt", expr: { kind: "virtualCall", className: base, method,
+            args: [{ kind: "varRef", localId: "self", type: object, loc }], type: F64, loc }, loc }], loc });
+      }
+    }
+    workloads.push({ name, run: () => validateModule(virtual), check: (answer) => assert.deepEqual(answer, []) });
   }
   for (const { name, run, check } of workloads) {
     if (!selected.includes(name)) continue;

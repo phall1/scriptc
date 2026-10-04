@@ -1617,6 +1617,18 @@ function callSiteReturnType(fn: IrFunction): IrType {
   return fn.returnType;
 }
 
+interface VirtualCallInfo {
+  declared: boolean;
+  hasOverride: boolean;
+  implementation: IrFunction | undefined;
+}
+
+interface ClassValidation {
+  hierarchy: Set<string>;
+  implementations: Map<string, IrClassDef[]>;
+  virtualCalls: Map<string, Map<string, VirtualCallInfo>>;
+}
+
 export function validateModule(mod: IrModule): IrValidationError[] {
   const errors: IrValidationError[] = [];
   const functionsByName = new Map<string, IrFunction>();
@@ -2203,6 +2215,24 @@ export function validateModule(mod: IrModule): IrValidationError[] {
       }
     }
   }
+  // Class metadata is invariant across functions. Keep hierarchy membership
+  // and virtual-call resolution local to this validation invocation.
+  const classValidation: ClassValidation = {
+    hierarchy: new Set(), implementations: new Map(), virtualCalls: new Map(),
+  };
+  for (const cls of classesByName.values()) {
+    if (cls.base !== undefined) {
+      classValidation.hierarchy.add(cls.name);
+      classValidation.hierarchy.add(cls.base);
+    }
+    if (cls.name === RUNTIME_EMITTER_CLASS) classValidation.hierarchy.add(cls.name);
+    for (const method of new Set(cls.methods ?? [])) {
+      if (cls.abstractMethods?.includes(method)) continue;
+      let implementations = classValidation.implementations.get(method);
+      if (!implementations) classValidation.implementations.set(method, (implementations = []));
+      implementations.push(cls);
+    }
+  }
   for (const fn of mod.functions) {
     validateFunction(
       fn,
@@ -2212,6 +2242,7 @@ export function validateModule(mod: IrModule): IrValidationError[] {
       recordsById,
       unionsById,
       globalsById,
+      classValidation,
       errors,
     );
   }
@@ -2226,6 +2257,7 @@ function validateFunction(
   records: Map<string, IrRecordShape>,
   unions: Map<string, IrUnionDef>,
   globals: Map<string, IrGlobal>,
+  classValidation: ClassValidation,
   errors: IrValidationError[],
 ): void {
   const locals = new Map(fn.locals.map((l) => [l.id, l]));
@@ -2277,16 +2309,37 @@ function validateFunction(
     }
     return false;
   };
-  const hierarchy = new Set<string>();
-  for (const c of classes.values()) {
-    if (c.base !== undefined) {
-      hierarchy.add(c.name);
-      hierarchy.add(c.base);
+  const hierarchy = classValidation.hierarchy;
+  const virtualCallInfo = (className: string, method: string): VirtualCallInfo => {
+    let methods = classValidation.virtualCalls.get(className);
+    const cached = methods?.get(method);
+    if (cached) return cached;
+    if (!methods) classValidation.virtualCalls.set(className, (methods = new Map()));
+    let declared = false;
+    let implementation: IrFunction | undefined;
+    for (let c = classes.get(className); c; c = c.base !== undefined ? classes.get(c.base) : undefined) {
+      if (c.methods?.includes(method)) {
+        declared = true;
+        if (!c.abstractMethods?.includes(method)) {
+          implementation = functions.get(`%${c.name}.${method}`);
+          break;
+        }
+      }
     }
-    // The runtime emitter class is ALWAYS a hierarchy member: ScrEmitter
-    // carries its vtable word even with no subclass in the program.
-    if (c.name === RUNTIME_EMITTER_CLASS) hierarchy.add(c.name);
-  }
+    let hasOverride = false;
+    if (declared) {
+      // Preserve class-table order when choosing an abstract slot's ABI.
+      for (const c of classValidation.implementations.get(method) ?? []) {
+        if (!isStrictSubclass(c.name, className)) continue;
+        hasOverride = true;
+        implementation ??= functions.get(`%${c.name}.${method}`);
+        if (implementation) break;
+      }
+    }
+    const result = { declared, hasOverride, implementation };
+    methods.set(method, result);
+    return result;
+  };
 
   // Unit kinds live only inside unions: a bare-unit local, param, or
   // return type is frontend breakage (mapType never produces them).
@@ -3960,33 +4013,15 @@ function validateFunction(
         // is then well-formed against any concrete override below — the
         // frontend's override-exactness rule makes every implementation
         // ABI-identical, so any one of them carries the slot's signature.
-        let declared = false;
-        let impl: IrFunction | undefined;
-        for (let c = classes.get(e.className); c; c = c.base !== undefined ? classes.get(c.base) : undefined) {
-          if (c.methods?.includes(e.method)) {
-            declared = true;
-            if (!c.abstractMethods?.includes(e.method)) {
-              impl = functions.get(`%${c.name}.${e.method}`);
-              break;
-            }
-          }
-        }
-        if (!declared) {
+        const info = virtualCallInfo(e.className, e.method);
+        if (!info.declared) {
           err(`virtualCall ${e.className}.${e.method}: no declaration on the base chain`, e.loc);
           break;
         }
-        const concreteBelow = [...classes.values()].filter(
-          (c) =>
-            c.methods?.includes(e.method) &&
-            !c.abstractMethods?.includes(e.method) &&
-            isStrictSubclass(c.name, e.className),
-        );
-        if (concreteBelow.length === 0) {
+        if (!info.hasOverride) {
           err(`virtualCall ${e.className}.${e.method}: no concrete override below the static class`, e.loc);
         }
-        impl ??= concreteBelow
-          .map((c) => functions.get(`%${c.name}.${e.method}`))
-          .find((f) => f !== undefined);
+        const impl = info.implementation;
         if (!impl) {
           err(`virtualCall ${e.className}.${e.method}: no implementation function exists`, e.loc);
           break;
