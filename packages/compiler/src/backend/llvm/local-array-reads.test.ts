@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import { BOOL, F64, VOID, UNDEFINED_T, arrayOf, funcOf, type IrExpr, type IrFunction, type IrModule, type IrStmt, type IrType } from "../../ir/ir.js";
 import { validateModule } from "../../ir/validate.js";
 import { emitLlvmModule } from "./emitter.js";
-import { findLocalArrayReads } from "./local-array-reads.js";
+import { findArrayPreservingFunctions, findLocalArrayReads } from "./local-array-reads.js";
 
 const loc = { file: "local-array.ts", start: 0, end: 0 };
 const element: IrType = { kind: "record", shapeId: "cell" };
@@ -36,7 +36,9 @@ function fixture(): IrModule {
     functions: [{ name: "main", params: [], returnType: VOID, locals: [], body: [], loc }, producer, work] };
 }
 function candidates(mod: IrModule) {
-  return findLocalArrayReads(mod.functions[2]!, new Map(mod.functions.map((f) => [f.name, f])), new Map(mod.unions!.map((u) => [u.id, u])));
+  const functions = new Map(mod.functions.map((f) => [f.name, f]));
+  const unions = new Map(mod.unions!.map((u) => [u.id, u]));
+  return findLocalArrayReads(mod.functions[2]!, functions, unions, findArrayPreservingFunctions(functions, unions));
 }
 function workBody(mod: IrModule, pointerBits: 32 | 64 = 64) {
   return /^define internal [^\n]*@sc_f_work\([^]*?^}/m.exec(emitLlvmModule(mod, { pointerBits }))![0];
@@ -95,4 +97,77 @@ test("unknown calls and reference stores disable array borrowing", () => {
     mod.functions[2]!.body.splice(1, 0, effect);
     expect(candidates(mod).get("value")?.borrow).not.toBe(true);
   }
+});
+
+function scalarHelper(name: string, callee?: string): IrFunction {
+  return {
+    name, params: [{ localId: "n", name: "n", type: F64 }], returnType: F64, loc,
+    locals: [{ id: "n", name: "n", type: F64, mutable: false }],
+    body: [{ kind: "return", loc, value: callee
+      ? { kind: "call", callee, args: [ref("n", F64)], type: F64, loc }
+      : { kind: "bin", op: "+", left: ref("n", F64), right: num(1), type: F64, loc } }],
+  };
+}
+
+function callHelper(mod: IrModule, callee: string, argument: IrExpr = num(2)): void {
+  mod.functions[2]!.body.splice(1, 0, { kind: "exprStmt", loc, expr: { kind: "call", callee, args: [argument], type: F64, loc } });
+}
+
+test("borrows array payloads across direct and transitive scalar helpers", () => {
+  const mod = fixture();
+  mod.functions.push(scalarHelper("outer", "inner"), scalarHelper("inner"));
+  callHelper(mod, "outer");
+  expect(validateModule(mod)).toEqual([]);
+  expect(candidates(mod).get("value")?.borrow).toBe(true);
+  for (const pointerBits of [32, 64] as const) {
+    const body = workBody(mod, pointerBits);
+    expect(body).toContain("@sc_f_outer(");
+    expect(body).not.toContain("@sc_rretain_");
+    expect(body).not.toContain("@sc_rrelease_");
+  }
+});
+
+test("propagates reference mutation through a recursive call group", () => {
+  const mod = fixture();
+  const outer = scalarHelper("outer", "inner");
+  const inner = scalarHelper("inner", "outer");
+  mod.functions.push(outer, inner);
+  callHelper(mod, "outer");
+  expect(validateModule(mod)).toEqual([]);
+  expect(candidates(mod).get("value")?.borrow).toBe(true);
+  inner.locals.push({ id: "owned", name: "owned", type: array, mutable: true });
+  inner.body.unshift({ kind: "assign", localId: "owned", value: ref("owned", array), loc });
+  expect(candidates(mod).get("value")?.borrow).not.toBe(true);
+  expect(workBody(mod)).toContain("@sc_rretain_");
+});
+
+test.each(["unknown", "callback", "async", "capture", "reference store"])("rejects helpers with %s effects through callers", (effect) => {
+  const mod = fixture();
+  const inner = scalarHelper("inner");
+  mod.functions.push(scalarHelper("outer", "inner"), inner);
+  callHelper(mod, "outer");
+  if (effect === "unknown") inner.body[0] = { kind: "return", loc, value: { kind: "call", callee: "unavailable", args: [], type: F64, loc } };
+  if (effect === "callback") inner.body[0] = { kind: "return", loc, value: { kind: "callValue", callee: ref("callback", funcOf([], F64)), args: [], type: F64, loc } };
+  if (effect === "async") inner.async = true;
+  if (effect === "capture") inner.captures = [];
+  if (effect === "reference store") inner.body.unshift({ kind: "arraySetLength", arr: ref("items", array), length: num(0), loc });
+  expect(candidates(mod).get("value")?.borrow).not.toBe(true);
+});
+
+test("checks side effects in arguments even when the callee preserves references", () => {
+  const mod = fixture();
+  mod.functions.push(scalarHelper("helper"));
+  callHelper(mod, "helper", { kind: "seqExpr", loc, type: F64,
+    stmts: [{ kind: "arraySetLength", arr: ref("a", array), length: num(0), loc }], result: num(0) });
+  expect(validateModule(mod)).toEqual([]);
+  expect(candidates(mod).get("value")?.borrow).not.toBe(true);
+  expect(workBody(mod)).toContain("@sc_rretain_");
+});
+
+test("iteratively propagates an unsafe leaf through a long call chain", () => {
+  const functions = new Map<string, IrFunction>();
+  for (let i = 0; i < 10000; i++) functions.set(`f${i}`, scalarHelper(`f${i}`, `f${i + 1}`));
+  expect(findArrayPreservingFunctions(functions, new Map()).size).toBe(0);
+  functions.set("f10000", scalarHelper("f10000"));
+  expect(findArrayPreservingFunctions(functions, new Map()).size).toBe(10001);
 });

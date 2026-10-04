@@ -47,7 +47,7 @@ import { RUNTIME_ABI_MARKER } from "../runtime-abi.js";
 import { computeMayThrow } from "../may-throw.js";
 import { mangleArgPack, mangleAsyncSpawn, mangleClassObj, mangleClassStruct, mangleFnClosure, mangleFunction, mangleGenDrop, mangleGenSpawn, mangleGlobal, mangleLocal, mangleRecordStruct, mangleTrampoline, mangleWrapper, mangleVtInstance } from "../mangle.js";
 import { BlockBuilder } from "./blocks.js";
-import { emitLocalArrayRead, findLocalArrayReads, type LocalArrayRead } from "./local-array-reads.js";
+import { emitLocalArrayRead, findArrayPreservingFunctions, findLocalArrayReads, type LocalArrayRead } from "./local-array-reads.js";
 import { emitBorrowedFieldSequence } from "./borrowed-receivers.js";
 import { LlvmDebugInfo } from "./debug-info.js";
 import { f64Lit, ffiNativeTypeLl, ffiNativeParamLl, ffiNativeReturnLl, llvmCommentText } from "./common.js";
@@ -261,6 +261,7 @@ export class LlEmitter {
   private needsRetainBox = false;
 
   readonly fnByName = new Map<string, IrFunction>();
+  private readonly arrayPreservingFunctions: ReadonlySet<string>;
   /** Manifest-bound native imports, used by ffiCall emission. */
   readonly ffiByName = new Map<string, IrFfiImport>();
   /** C-ABI callback trampolines and (for raw/no-userdata callbacks) their
@@ -427,6 +428,7 @@ export class LlEmitter {
       }
     }
     for (const u of mod.unions ?? []) this.unionsById.set(u.id, u);
+    this.arrayPreservingFunctions = findArrayPreservingFunctions(this.fnByName, this.unionsById);
     for (const r of mod.records ?? []) this.recordsById.set(r.id, r);
     const traced = computeTraced(mod);
     this.tracedShapes = traced.shapes;
@@ -3307,7 +3309,7 @@ export class LlEmitter {
     this.integerLoopBindings.clear();
     this.fieldPointerTags.clear();
     this.integerArrayBindings.clear();
-    this.localArrayReads = findLocalArrayReads(fn, this.fnByName, this.unionsById);
+    this.localArrayReads = findLocalArrayReads(fn, this.fnByName, this.unionsById, this.arrayPreservingFunctions);
     this.integerRanges = analyzeIntegerRanges(fn);
     this.chainSlots.clear();
     this.finallyStack = [];

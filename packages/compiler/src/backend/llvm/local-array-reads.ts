@@ -12,10 +12,12 @@ export interface LocalArrayRead {
   borrow?: boolean;
 }
 
-/** With no reference writes, user calls, callbacks or suspension, an
- * unboxed array parameter owns all its elements throughout the function.
- * Scalar field writes are allowed: they cannot remove an array edge. */
-function preservesArrayElements(fn: IrFunction, functions: ReadonlyMap<string, IrFunction>, unions: ReadonlyMap<string, IrUnionDef>): boolean {
+/** With no reference writes, callbacks or suspension, an unboxed array
+ * parameter owns all its elements throughout the function. Scalar field
+ * writes are allowed: they cannot remove an array edge. A direct call's
+ * arguments are visited too, independently of the callee's guarantee. */
+function preservesArrayElements(fn: IrFunction, preservesCall: (call: IrExpr & { kind: "call" }) => boolean): boolean {
+  if (fn.async || fn.generator || fn.captures || fn.classCaptures) return false;
   return everyStmtList(fn.body, {
     expr: (e) => {
       switch (e.kind) {
@@ -23,7 +25,7 @@ function preservesArrayElements(fn: IrFunction, functions: ReadonlyMap<string, I
         case "toBool": case "logical": case "ternary": case "seqExpr": case "fieldGet": case "recordGet":
         case "unionNarrow": case "unionIsTag": return true;
         case "libCall": return e.fn === "error.nodeThrow" || isStableReceiverOperand(e, "");
-        case "call": return optionalArrayRead(e, functions, unions) !== null;
+        case "call": return preservesCall(e);
         case "arrIntrinsic": return e.method === "length";
         default: return false;
       }
@@ -37,6 +39,36 @@ function preservesArrayElements(fn: IrFunction, functions: ReadonlyMap<string, I
       }
     },
   });
+}
+
+/** This proves only that existing reference edges survive a synchronous
+ * call, not purity or absence of exceptions. Unknown effects remain unsafe.
+ * Scan each body once, then propagate unsafe callees through reverse edges.
+ * Each function is removed at most once, including recursive call groups. */
+export function findArrayPreservingFunctions(functions: ReadonlyMap<string, IrFunction>, unions: ReadonlyMap<string, IrUnionDef>): Set<string> {
+  const safe = new Set<string>();
+  const callers = new Map<string, Set<string>>();
+  const unsafe: string[] = [];
+  for (const fn of functions.values()) {
+    const preserves = preservesArrayElements(fn, (call) => {
+      if (optionalArrayRead(call, functions, unions)) return true;
+      if (!functions.has(call.callee)) return false;
+      let incoming = callers.get(call.callee);
+      if (!incoming) callers.set(call.callee, incoming = new Set());
+      incoming.add(fn.name);
+      return true;
+    });
+    if (preserves) safe.add(fn.name);
+    else unsafe.push(fn.name);
+  }
+  for (let i = 0; i < unsafe.length; i++) {
+    const incoming = callers.get(unsafe[i]!);
+    if (!incoming) continue;
+    for (const caller of incoming) {
+      if (safe.delete(caller)) unsafe.push(caller);
+    }
+  }
+  return safe;
 }
 
 /** Recognize the complete optional-array-read body, not the helper's name.
@@ -91,13 +123,13 @@ function projectionOnly(fn: IrFunction, id: string): boolean {
   return fn.body.every(stmt) && declarations === 1;
 }
 
-export function findLocalArrayReads(fn: IrFunction, functions: ReadonlyMap<string, IrFunction>, unions: ReadonlyMap<string, IrUnionDef>): Map<string, LocalArrayRead> {
+export function findLocalArrayReads(fn: IrFunction, functions: ReadonlyMap<string, IrFunction>, unions: ReadonlyMap<string, IrUnionDef>, arrayPreservingFunctions: ReadonlySet<string>): Map<string, LocalArrayRead> {
   const result = new Map<string, LocalArrayRead>();
   if (fn.async || fn.generator) return result;
   const locals = new Map(fn.locals.map((l) => [l.id, l]));
   const captures = new Set([...(fn.captures ?? []), ...(fn.classCaptures ?? [])].map((c) => c.localId));
   const params = new Set(fn.params.map((p) => p.localId));
-  const borrow = preservesArrayElements(fn, functions, unions);
+  const borrow = arrayPreservingFunctions.has(fn.name);
   everyStmtList(fn.body, { expr: () => true, stmt: (node) => {
     if (node.kind !== "varDecl" || !node.init) return true;
     const local = locals.get(node.localId);
