@@ -7,6 +7,7 @@ import { elemAccess, FN_ATTRS, mapKeyAccess, mapKeyKindNum, mapValKindNum, trace
 import type { LlvmEmitterContext, LlValue } from "./expr-context.js";
 import { F64_INF, f64Lit } from "./common.js";
 import { borrowsStringInputs, emitStringInputs } from "./string-lifetimes.js";
+import { borrowsMapReadInputs } from "./map-read-lifetimes.js";
 
 export function resolveThunkFor(host: LlvmEmitterContext, inner: IrType): string {
     const key = typeKey(inner);
@@ -559,7 +560,8 @@ export function emitMapLikeIntrinsic(host: LlvmEmitterContext,
     e: Extract<IrExpr, { kind: "mapIntrinsic" | "setIntrinsic" }>,
   ): LlValue {
     const B = host.B;
-    const r = host.emitExpr(e.receiver);
+    const borrowInputs = borrowsMapReadInputs(e);
+    const r = borrowInputs ? host.emitStableReceiver(e.receiver, e.args) : host.emitExpr(e.receiver);
     const receiverType = e.receiver.type;
     if (e.kind === "mapIntrinsic" && receiverType.kind !== "map") {
       throw new InternalCompilerError("llvm emitter bug: mapIntrinsic on non-map");
@@ -633,7 +635,7 @@ export function emitMapLikeIntrinsic(host: LlvmEmitterContext,
         // behind a found flag; a miss is the interned undefined-arm
         // instance. When V is itself a union, the stored box IS the
         // result (`undefined` sorts last in canonical arm order).
-        const k = host.emitExpr(e.args[0]!);
+        const k = borrowInputs ? host.emitReadReceiver(e.args[0]!) : host.emitExpr(e.args[0]!);
         if (value.kind === "dyn") {
           host.declare(`declare ptr @scr_map_get_${kAcc}_ref(ptr, ${kTy})`);
           host.declare(`declare ptr @scr_dyn_undefined()`);
@@ -721,7 +723,7 @@ export function emitMapLikeIntrinsic(host: LlvmEmitterContext,
         return { name: "", type: e.type };
       }
       case "has": {
-        const k = host.emitExpr(e.args[0]!);
+        const k = borrowInputs ? host.emitReadReceiver(e.args[0]!) : host.emitExpr(e.args[0]!);
         host.declare(`declare zeroext i1 @scr_map_has_${kAcc}(ptr, ${kTy})`);
         const t = B.tmp();
         B.line(`${t} = call zeroext i1 @scr_map_has_${kAcc}(ptr ${r.name}, ${kTy} ${k.name})`);

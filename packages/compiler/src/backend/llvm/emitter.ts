@@ -50,6 +50,7 @@ import { analyzeCallLifetimes, type CallLifetimes } from "./call-lifetimes.js";
 import { emitStackUnion, findLocalStackUnions } from "./stack-unions.js";
 import { BlockBuilder } from "./blocks.js";
 import { emitLocalArrayRead, findArrayPreservingFunctions, findLocalArrayReads, findCallArrayReads, OptionalArrayReads, type LocalArrayRead } from "./local-array-reads.js";
+import { emitStackMapRead, findMapReadLifetimes, type MapReadLifetimes } from "./map-read-lifetimes.js";
 import { emitBorrowedFieldSequence } from "./borrowed-receivers.js";
 import { LlvmDebugInfo } from "./debug-info.js";
 import { f64Lit, ffiNativeTypeLl, ffiNativeParamLl, ffiNativeReturnLl, llvmCommentText } from "./common.js";
@@ -267,6 +268,7 @@ export class LlEmitter {
   private readonly arrayPreservingFunctions: ReadonlySet<string>;
   private readonly optionalArrayReads: OptionalArrayReads;
   callArrayReads = new Map<IrExpr, LocalArrayRead>();
+  mapReadLifetimes: MapReadLifetimes = { locals: new Map(), arguments: new Map() };
   readonly callLifetimes: CallLifetimes;
   private borrowedParameters = new Set<string>();
   /** Manifest-bound native imports, used by ffiCall emission. */
@@ -3325,6 +3327,7 @@ export class LlEmitter {
     this.integerArrayBindings.clear();
     this.localArrayReads = findLocalArrayReads(fn, this.fnByName, this.unionsById, this.arrayPreservingFunctions, this.callLifetimes, this.optionalArrayReads);
     this.callArrayReads = findCallArrayReads(fn, this.optionalArrayReads, this.arrayPreservingFunctions, this.callLifetimes);
+    this.mapReadLifetimes = findMapReadLifetimes(fn, this.unionsById, this.callLifetimes);
     this.localStackUnions = findLocalStackUnions(fn, this.callLifetimes, this.unionsById);
     this.integerRanges = analyzeIntegerRanges(fn);
     this.chainSlots.clear();
@@ -3600,6 +3603,13 @@ export class LlEmitter {
         if (localRead) {
           const owner = emitLocalArrayRead(this, localRead, b.slot);
           if (owner) this.scopes[this.scopes.length - 1]!.push(owner);
+          break;
+        }
+        const mapRead = this.mapReadLifetimes.locals.get(s.localId);
+        if (mapRead) {
+          const result = emitStackMapRead(this, mapRead);
+          B.line(`store ptr ${result.value.name}, ptr ${b.slot}`);
+          if (result.owner) this.scopes[this.scopes.length - 1]!.push(result.owner);
           break;
         }
         if (b.kind === "boxed") {

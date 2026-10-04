@@ -1,6 +1,7 @@
 import { type IrExpr, type IrFunction, type IrLocal, type IrStmt } from "../../ir/ir.js";
 import { everyExprChild, everyStmtChild } from "../../ir/traverse.js";
 import { borrowsStringInputs } from "./string-lifetimes.js";
+import { borrowsMapReadInputs } from "./map-read-lifetimes.js";
 
 interface ForwardedUse {
   callee: string;
@@ -55,6 +56,9 @@ function collectUses(fn: IrFunction): Uses {
         return stringInput(node.left) && stringInput(node.right);
       case "strIntrinsic":
         if (borrowsStringInputs(node.method)) return stringInput(node.receiver) && node.args.every(stringInput);
+        break;
+      case "mapIntrinsic": case "setIntrinsic":
+        if (borrowsMapReadInputs(node)) return expr(node.receiver) && node.args.every(stringInput);
         break;
       case "unionNarrow": case "unionIsTag":
         if (node.value.kind === "varRef") return true;
