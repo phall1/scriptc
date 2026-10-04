@@ -13811,6 +13811,36 @@
     "<repo>/tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/fixtures/npm/cases/node24-web-stream-pipes/main.ts": {
+   "order": [
+    "<repo>/tests/fixtures/npm/cases/node24-web-stream-pipes/main.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/fixtures/npm/cases/node24-web-stream-pipe-errors/main.ts": {
+   "order": [
+    "<repo>/tests/fixtures/npm/cases/node24-web-stream-pipe-errors/main.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/fixtures/npm/cases/node24-web-stream-pipe-abort/main.ts": {
+   "order": [
+    "<repo>/tests/fixtures/npm/cases/node24-web-stream-pipe-abort/main.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/fixtures/npm/cases/node24-web-stream-transforms/main.ts": {
+   "order": [
+    "<repo>/tests/fixtures/npm/cases/node24-web-stream-transforms/main.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts": {
+   "order": [
+    "<repo>/tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts"
+   ],
+   "diags": []
   }
  }
 }

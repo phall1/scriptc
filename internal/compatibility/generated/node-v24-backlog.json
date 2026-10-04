@@ -14,10 +14,10 @@
         "implement": 80
       },
       "dynamic": {
-        "audit-partial": 885,
-        "verify-gap": 2145,
+        "audit-partial": 900,
+        "verify-gap": 2132,
         "replace-refusal": 112,
-        "implement": 208
+        "implement": 206
       }
     },
     "priorities": {
@@ -45608,11 +45608,11 @@
           "tests": []
         },
         "dynamic": {
-          "status": "not-implemented",
-          "action": "implement",
-          "verification": "verified-absence",
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
           "confidence": "high",
-          "source": "island-global-absent:TextEncoderStream",
+          "source": "island-global:TextEncoderStream",
           "tests": [
             "tests/harness/web-globals.test.ts"
           ]
@@ -45678,11 +45678,11 @@
           "tests": []
         },
         "dynamic": {
-          "status": "not-implemented",
-          "action": "implement",
-          "verification": "verified-absence",
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
           "confidence": "high",
-          "source": "island-global-absent:TransformStreamDefaultController",
+          "source": "island-global:TransformStreamDefaultController",
           "tests": [
             "tests/harness/web-globals.test.ts"
           ]
@@ -104244,7 +104244,12 @@
             "tests/fixtures/npm/cases/web-streams/main.ts",
             "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
             "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
-            "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
+            "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipes/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipe-errors/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipe-abort/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-transforms/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts"
           ]
         }
       }
@@ -104372,12 +104377,16 @@
           "tests": []
         },
         "dynamic": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "island-unmatched:webstreams",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "island-feature:webstreams.readableStream.pipeThrough",
+          "tests": [
+            "tests/fixtures/npm/cases/node24-web-stream-pipes/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipe-errors/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipe-abort/main.ts"
+          ]
         }
       }
     },
@@ -104405,12 +104414,16 @@
           "tests": []
         },
         "dynamic": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "island-unmatched:webstreams",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "island-feature:webstreams.readableStream.pipeTo",
+          "tests": [
+            "tests/fixtures/npm/cases/node24-web-stream-pipes/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipe-errors/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipe-abort/main.ts"
+          ]
         }
       }
     },
@@ -105376,7 +105389,12 @@
             "tests/fixtures/npm/cases/web-streams/main.ts",
             "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
             "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
-            "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
+            "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipes/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipe-errors/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipe-abort/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-transforms/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts"
           ]
         }
       }
@@ -105562,7 +105580,12 @@
             "tests/fixtures/npm/cases/web-streams/main.ts",
             "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
             "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
-            "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
+            "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipes/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipe-errors/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipe-abort/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-transforms/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts"
           ]
         }
       }
@@ -105859,7 +105882,12 @@
             "tests/fixtures/npm/cases/web-streams/main.ts",
             "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
             "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
-            "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
+            "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipes/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipe-errors/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipe-abort/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-transforms/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts"
           ]
         }
       }
@@ -105971,7 +105999,12 @@
             "tests/fixtures/npm/cases/web-streams/main.ts",
             "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
             "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
-            "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
+            "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipes/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipe-errors/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipe-abort/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-transforms/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts"
           ]
         }
       }
@@ -106000,12 +106033,15 @@
           "tests": []
         },
         "dynamic": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "island-unmatched:webstreams",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "island-feature:webstreams.readable",
+          "tests": [
+            "tests/fixtures/npm/cases/node24-web-stream-transforms/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipes/main.ts"
+          ]
         }
       }
     },
@@ -106033,12 +106069,15 @@
           "tests": []
         },
         "dynamic": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "island-unmatched:webstreams",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "island-feature:webstreams.writable",
+          "tests": [
+            "tests/fixtures/npm/cases/node24-web-stream-transforms/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipes/main.ts"
+          ]
         }
       }
     },
@@ -106066,12 +106105,22 @@
           "tests": []
         },
         "dynamic": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "island-unmatched:webstreams",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "island-export:node:stream/web.TransformStreamDefaultController",
+          "tests": [
+            "tests/fixtures/npm/cases/web-streams/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipes/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipe-errors/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipe-abort/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-transforms/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts"
+          ]
         }
       }
     },
@@ -106099,12 +106148,14 @@
           "tests": []
         },
         "dynamic": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "island-unmatched:webstreams",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "island-feature:webstreams.transformStreamDefaultController.enqueue",
+          "tests": [
+            "tests/fixtures/npm/cases/node24-web-stream-transforms/main.ts"
+          ]
         }
       }
     },
@@ -106132,12 +106183,14 @@
           "tests": []
         },
         "dynamic": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "island-unmatched:webstreams",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "island-feature:webstreams.transformStreamDefaultController.error",
+          "tests": [
+            "tests/fixtures/npm/cases/node24-web-stream-transforms/main.ts"
+          ]
         }
       }
     },
@@ -106165,12 +106218,14 @@
           "tests": []
         },
         "dynamic": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "island-unmatched:webstreams",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "island-feature:webstreams.transformStreamDefaultController.terminate",
+          "tests": [
+            "tests/fixtures/npm/cases/node24-web-stream-transforms/main.ts"
+          ]
         }
       }
     },
@@ -106198,12 +106253,14 @@
           "tests": []
         },
         "dynamic": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "island-unmatched:webstreams",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "island-feature:webstreams.desiredSize",
+          "tests": [
+            "tests/fixtures/npm/cases/node24-web-stream-transforms/main.ts"
+          ]
         }
       }
     },
@@ -106240,7 +106297,12 @@
             "tests/fixtures/npm/cases/web-streams/main.ts",
             "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
             "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
-            "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
+            "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipes/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipe-errors/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipe-abort/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-transforms/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts"
           ]
         }
       }
@@ -106352,7 +106414,12 @@
             "tests/fixtures/npm/cases/web-streams/main.ts",
             "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
             "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
-            "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
+            "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipes/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipe-errors/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipe-abort/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-transforms/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts"
           ]
         }
       }
@@ -106455,12 +106522,22 @@
           "tests": []
         },
         "dynamic": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "island-unmatched:webstreams",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "island-export:node:stream/web.TextEncoderStream",
+          "tests": [
+            "tests/fixtures/npm/cases/web-streams/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipes/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipe-errors/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipe-abort/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-transforms/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts"
+          ]
         }
       }
     },
@@ -106488,12 +106565,14 @@
           "tests": []
         },
         "dynamic": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "island-unmatched:webstreams",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "island-feature:webstreams.encoding",
+          "tests": [
+            "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts"
+          ]
         }
       }
     },
@@ -106521,12 +106600,14 @@
           "tests": []
         },
         "dynamic": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "island-unmatched:webstreams",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "island-feature:webstreams.readable",
+          "tests": [
+            "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts"
+          ]
         }
       }
     },
@@ -106554,12 +106635,14 @@
           "tests": []
         },
         "dynamic": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "island-unmatched:webstreams",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "island-feature:webstreams.writable",
+          "tests": [
+            "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts"
+          ]
         }
       }
     },
@@ -106596,7 +106679,12 @@
             "tests/fixtures/npm/cases/web-streams/main.ts",
             "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
             "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
-            "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
+            "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipes/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipe-errors/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-pipe-abort/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-transforms/main.ts",
+            "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts"
           ]
         }
       }

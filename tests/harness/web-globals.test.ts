@@ -136,16 +136,16 @@ describe(`island web globals (scriptc-only${sanitize ? ", sanitized" : ""})`, ()
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout.trimEnd()).toBe(
-      "function function function function function function function true false true true false false true",
+      "function function function function function function function true true true true false false true",
     );
   });
 
-  test("writable stream constructors and strategies are installed without an npm graph", async () => {
+  test("stream constructors and strategies are installed without an npm graph", async () => {
     const out = await islandEval(
       "web-writable-presence",
-      `[typeof WritableStream, typeof WritableStreamDefaultWriter, typeof WritableStreamDefaultController, typeof CountQueuingStrategy, typeof ByteLengthQueuingStrategy].join(' ')`,
+      `[typeof WritableStream, typeof WritableStreamDefaultWriter, typeof WritableStreamDefaultController, typeof CountQueuingStrategy, typeof ByteLengthQueuingStrategy, typeof TransformStreamDefaultController, typeof TextEncoderStream].join(' ')`,
     );
-    expect(out).toBe("function function function function function");
+    expect(out).toBe("function function function function function function function");
   });
 
   test("structuredClone clones deep (cycles included) and validates options like Node", async () => {
@@ -201,14 +201,13 @@ describe(`island web globals (scriptc-only${sanitize ? ", sanitized" : ""})`, ()
     expect(out).toBe("function function true true");
   });
 
-  test("tee, pipeTo, BYOB readers, and byte streams are fenced with clear errors", async () => {
+  test("tee, BYOB readers, and byte streams are fenced with clear errors", async () => {
     const out = await islandEval(
       "web-fences",
       `(() => {
         const grab = (f) => { try { f(); return 'no-throw'; } catch (e) { return e.message; } };
         return [
           grab(() => new ReadableStream().tee()),
-          grab(() => new ReadableStream().pipeTo({})),
           grab(() => new ReadableStream().getReader({ mode: 'byob' })),
           grab(() => new ReadableStream({ type: 'bytes' })),
         ].join(' | ');
@@ -217,7 +216,6 @@ describe(`island web globals (scriptc-only${sanitize ? ", sanitized" : ""})`, ()
     expect(out).toBe(
       [
         "ReadableStream.tee is not supported in the scriptc island",
-        "ReadableStream.pipeTo is not supported in the scriptc island (use pipeThrough or a reader)",
         "BYOB readers are not supported in the scriptc island",
         "byte streams (type: 'bytes') are not supported in the scriptc island",
       ].join(" | "),
