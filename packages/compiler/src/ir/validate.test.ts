@@ -183,6 +183,88 @@ function expressionModule(expr: IrExpr, unions: IrUnionDef[]): IrModule {
   };
 }
 
+test("record declarations accept forward, mutual, and self references and refresh missing IDs", () => {
+  const mod = expressionModule({ kind: "numLit", value: 0, type: F64, loc }, []);
+  mod.records = [
+    { id: "first", fields: [{ name: "next", type: { kind: "record", shapeId: "second" } }] },
+    { id: "second", fields: [{ name: "next", type: { kind: "record", shapeId: "first" } }] },
+    { id: "self", fields: [{ name: "next", type: { kind: "record", shapeId: "self" } }] },
+  ];
+  expect(validateModule(deserializeModule(serializeModule(mod)))).toEqual([]);
+  mod.records[1]!.fields.unshift({ name: "missing", type: { kind: "record", shapeId: "later" } });
+  expect(validateModule(mod)).toEqual([
+    { message: 'record second: field "missing" references undeclared shape "later"', loc },
+  ]);
+  mod.records.push({ id: "later", fields: [] });
+  expect(validateModule(mod)).toEqual([]);
+});
+
+function recordValidationModule(): IrModule {
+  const type: IrType = { kind: "record", shapeId: "row" };
+  const source: IrExpr = { kind: "varRef", localId: "row", type, loc };
+  const mod = expressionModule({ kind: "recordGet", obj: source, shapeId: "row", field: "value", type: STRING, loc }, []);
+  mod.records = [{ id: "row", fields: [{ name: "value", type: STRING }] }];
+  mod.functions[0]!.locals = [{ id: "row", name: "row", type, mutable: false }];
+  mod.functions[0]!.params = [{ localId: "row", name: "row", type }];
+  mod.functions[0]!.body.push(
+    { kind: "recordSet", obj: source, shapeId: "row", field: "value", value: { kind: "strLit", value: "write", type: STRING, loc }, loc },
+    { kind: "exprStmt", expr: { kind: "recordClone", source, overrides: [{ name: "value", value: { kind: "strLit", value: "clone", type: STRING, loc } }], type, loc }, loc },
+  );
+  return mod;
+}
+
+test("record validation preserves first-field reads and writes and last-field initialization on duplicate declarations", () => {
+  const mod = recordValidationModule();
+  expect(validateModule(mod)).toEqual([]);
+  mod.records!.unshift({ id: "row", fields: [{ name: "value", type: BOOL }] });
+  mod.records![1]!.fields.push({ name: "value", type: F64 });
+  const statement = mod.functions[0]!.body[2]!;
+  if (statement.kind !== "exprStmt" || statement.expr.kind !== "recordClone") throw new Error("fixture");
+  statement.expr.overrides[0]!.value = { kind: "numLit", value: 1, type: F64, loc };
+  mod.functions[0]!.body.push({ kind: "exprStmt", expr: { kind: "recordLit", type: statement.expr.type, loc,
+    fields: [1, 2].map((value) => ({ name: "value", value: { kind: "numLit", value, type: F64, loc } })),
+  }, loc });
+  expect(validateModule(deserializeModule(serializeModule(mod)))).toEqual([
+    { message: 'duplicate record shape "row"', loc },
+    { message: 'record row: duplicate field "value"', loc },
+    { message: 'in main: recordLit initializes field "value" twice', loc },
+  ]);
+});
+
+test("record validation refreshes field types and missing members between invocations", () => {
+  const mod = recordValidationModule();
+  expect(validateModule(mod)).toEqual([]);
+  mod.records![0]!.fields[0]!.type = F64;
+  expect(validateModule(mod).map((error) => error.message)).toEqual([
+    "in main: recordGet row.value type mismatch",
+    "in main: recordSet row.value: expected f64, got string",
+    'in main: recordClone field "value": expected f64, got string',
+  ]);
+  mod.records![0]!.fields = [];
+  expect(validateModule(mod).map((error) => error.message)).toEqual([
+    'in main: shape row has no field "value"',
+    'in main: shape row has no field "value"',
+    'in main: shape row has no field "value"',
+  ]);
+});
+
+test("record clone validation refreshes accessor boundaries and preserves call-site locations across functions", () => {
+  const mod = recordValidationModule();
+  const statement = mod.functions[0]!.body[2]!;
+  if (statement.kind !== "exprStmt" || statement.expr.kind !== "recordClone") throw new Error("fixture");
+  mod.functions[0]!.body = [statement];
+  mod.functions.push({ ...structuredClone(mod.functions[0]!), name: "other" });
+  const other = mod.functions[1]!.body[0]!;
+  if (other.kind !== "exprStmt") throw new Error("fixture");
+  other.expr.loc = { ...loc, start: 10, end: 20 };
+  expect(validateModule(mod)).toEqual([]);
+  mod.records![0]!.fields.unshift({ name: "%get:value", type: F64 });
+  expect(validateModule(mod)).toEqual([
+    { message: "in main: recordClone requires a plain declared-field shape, got row", loc },
+    { message: "in other: recordClone requires a plain declared-field shape, got row", loc: other.expr.loc },
+  ]);
+});
+
 function virtualCallModule(): IrModule {
   const receiver: IrType = { kind: "object", className: "Base" };
   const mod = expressionModule({ kind: "numLit", value: 0, type: F64, loc }, []);

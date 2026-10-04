@@ -1625,6 +1625,12 @@ interface VirtualCallInfo {
   implementation: IrFunction | undefined;
 }
 
+interface RecordValidation {
+  fields: Map<string, IrType>;
+  initializationFields: Map<string, IrType>;
+  hasAccessorSlots: boolean;
+}
+
 interface ClassValidation {
   hierarchy: Set<string>;
   implementations: Map<string, IrClassDef[]>;
@@ -1964,30 +1970,40 @@ export function validateModule(mod: IrModule): IrValidationError[] {
   }
   const noLoc: SrcLoc = { file: mod.sourceFile, start: 0, end: 0 };
   const recordsById = new Map<string, IrRecordShape>();
+  const recordIds = new Set((mod.records ?? []).map((record) => record.id));
+  const recordValidation = new Map<string, RecordValidation>();
   for (const rec of mod.records ?? []) {
     if (recordsById.has(rec.id)) {
       errors.push({ message: `duplicate record shape "${rec.id}"`, loc: noLoc });
     }
     recordsById.set(rec.id, rec);
-    const seen = new Set<string>();
+    const fields = new Map<string, IrType>();
     for (const f of rec.fields) {
-      if (seen.has(f.name)) {
+      if (fields.has(f.name)) {
         errors.push({ message: `record ${rec.id}: duplicate field "${f.name}"`, loc: noLoc });
       }
-      seen.add(f.name);
+      else fields.set(f.name, f.type);
       // Unit kinds (undefinedT/nullT) exist only as union arms — a BARE
       // unit field is as malformed as a void one. dyn and jsval slots
       // are valid; both are refcounted values held by the record shape.
       if (f.type.kind === "void" || isUnitType(f.type)) {
         errors.push({ message: `record ${rec.id}: field "${f.name}" is ${f.type.kind}`, loc: noLoc });
       }
-      if (f.type.kind === "record" && !new Set((mod.records ?? []).map((r) => r.id)).has(f.type.shapeId)) {
+      if (f.type.kind === "record" && !recordIds.has(f.type.shapeId)) {
         errors.push({
           message: `record ${rec.id}: field "${f.name}" references undeclared shape "${f.type.shapeId}"`,
           loc: noLoc,
         });
       }
     }
+    // Reads historically use the first duplicate field, while literal and
+    // clone checks use the last. Preserve both on malformed shapes; valid
+    // shapes share one index. All indexes belong to this validation call.
+    recordValidation.set(rec.id, {
+      fields,
+      initializationFields: fields.size === rec.fields.length ? fields : new Map(rec.fields.map((field) => [field.name, field.type])),
+      hasAccessorSlots: shapeHasAccessorSlots(rec),
+    });
     // Canonical order is the shape's identity — enforce it.
     const sorted = [...rec.fields].map((f) => f.name).sort();
     if (rec.fields.some((f, i) => f.name !== sorted[i])) {
@@ -2042,7 +2058,7 @@ export function validateModule(mod: IrModule): IrValidationError[] {
       for (const candidate of cases) {
         const arm = u.arms[candidate.tag];
         const record = arm?.kind === "record" ? recordsById.get(arm.shapeId) : undefined;
-        const member = record?.fields.find((entry) => entry.name === field);
+        const member = record ? recordValidation.get(record.id)?.fields.get(field) : undefined;
         if (!Number.isInteger(candidate.tag) || candidate.tag < 0 || !member || tags.has(candidate.tag)) {
           errors.push({ message: `union ${u.id}: invalid discriminant tag ${candidate.tag}`, loc: noLoc });
         }
@@ -2055,8 +2071,8 @@ export function validateModule(mod: IrModule): IrValidationError[] {
             errors.push({ message: `union ${u.id}: undefined discriminant value`, loc: noLoc });
             continue;
           }
-          const fieldTypes = member?.type.kind === "union"
-            ? unionsById.get(member.type.unionId)?.arms ?? [] : member ? [member.type] : [];
+          const fieldTypes = member?.kind === "union"
+            ? unionsById.get(member.unionId)?.arms ?? [] : member ? [member] : [];
           const valid = fieldTypes.some((type) => typeof value === "string" ? type.kind === "string"
             : typeof value === "boolean" ? type.kind === "bool"
             : typeof value === "number" && Number.isFinite(value) && type.kind === "f64");
@@ -2242,6 +2258,7 @@ export function validateModule(mod: IrModule): IrValidationError[] {
       ffiByName,
       classesByName,
       recordsById,
+      recordValidation,
       unionsById,
       globalsById,
       classValidation,
@@ -2257,6 +2274,7 @@ function validateFunction(
   ffiByName: Map<string, NonNullable<IrModule["ffiImports"]>[number]>,
   classes: Map<string, IrClassDef>,
   records: Map<string, IrRecordShape>,
+  recordValidation: Map<string, RecordValidation>,
   unions: Map<string, IrUnionDef>,
   globals: Map<string, IrGlobal>,
   classValidation: ClassValidation,
@@ -4068,7 +4086,7 @@ function validateFunction(
           err(`recordLit of undeclared shape "${e.type.shapeId}"`, e.loc);
           break;
         }
-        const want = new Map(shape.fields.map((f) => [f.name, f.type]));
+        const want = recordValidation.get(shape.id)!.initializationFields;
         const seen = new Set<string>();
         for (const f of e.fields) {
           checkExpr(f.value);
@@ -4118,11 +4136,11 @@ function validateFunction(
           err(`recordClone of undeclared shape "${e.type.shapeId}"`, e.loc);
           break;
         }
-        if (shape.tuple || shape.indexValue || shapeHasAccessorSlots(shape)) {
+        if (shape.tuple || shape.indexValue || recordValidation.get(shape.id)!.hasAccessorSlots) {
           err(`recordClone requires a plain declared-field shape, got ${shape.id}`, e.loc);
         }
         expectType(e.source, e.type, "recordClone source");
-        const want = new Map(shape.fields.map((f) => [f.name, f.type]));
+        const want = recordValidation.get(shape.id)!.initializationFields;
         const seen = new Set<string>();
         for (const f of e.overrides) {
           checkExpr(f.value);
@@ -4137,12 +4155,12 @@ function validateFunction(
       case "recordGet": {
         checkExpr(e.obj);
         const shape = records.get(e.shapeId);
-        const field = shape?.fields.find((f) => f.name === e.field);
+        const field = recordValidation.get(e.shapeId)?.fields.get(e.field);
         if (!shape) err(`recordGet on undeclared shape "${e.shapeId}"`, e.loc);
         else if (!field) err(`shape ${e.shapeId} has no field "${e.field}"`, e.loc);
         else {
           expectType(e.obj, { kind: "record", shapeId: e.shapeId }, "recordGet receiver");
-          if (!typeEquals(e.type, field.type)) {
+          if (!typeEquals(e.type, field)) {
             err(`recordGet ${e.shapeId}.${e.field} type mismatch`, e.loc);
           }
         }
@@ -4504,7 +4522,7 @@ function validateFunction(
         def.arms.forEach((arm, i) => {
           const fieldType =
             arm.kind === "record"
-              ? records.get(arm.shapeId)?.fields.find((f) => f.name === e.field)?.type
+              ? recordValidation.get(arm.shapeId)?.fields.get(e.field)
               : arm.kind === "object"
                 ? classes.get(arm.className)?.fields.find((f) => f.name === e.field)?.type
                 : undefined;
@@ -4568,7 +4586,7 @@ function validateFunction(
             return;
           }
           const literal = e.key.kind === "strLit" ? e.key.value : null;
-          const declared = literal !== null ? shape.fields.find((f) => f.name === literal)?.type : undefined;
+          const declared = literal !== null ? recordValidation.get(shape.id)?.fields.get(literal) : undefined;
           if (declared) {
             if (!surfaces(declared)) {
               err(`unionKeyGet: arm ${i} field "${literal}" of type ${declared.kind} cannot surface as the result`, e.loc);
@@ -4774,12 +4792,12 @@ function validateFunction(
       const countName = e.fn === "fileHandle.read" || e.fn === "fileHandle.readv" ? "bytesRead" : "bytesWritten";
       const payloadName = e.fn === "fileHandle.readv" || e.fn === "fileHandle.writev" ? "buffers" : "buffer";
       const payload = e.args[1]?.type;
-      const count = shape?.fields.find((f) => f.name === countName);
-      const buffer = shape?.fields.find((f) => f.name === payloadName);
+      const count = shape ? recordValidation.get(shape.id)?.fields.get(countName) : undefined;
+      const buffer = shape ? recordValidation.get(shape.id)?.fields.get(payloadName) : undefined;
       const ok =
         shape !== undefined && !shape.tuple && shape.indexValue === undefined && shape.fields.length === 2 &&
-        count?.type.kind === "f64" && payload !== undefined && buffer !== undefined &&
-        typeEquals(buffer.type, payload);
+        count?.kind === "f64" && payload !== undefined && buffer !== undefined &&
+        typeEquals(buffer, payload);
       if (!ok) {
         err(`libCall ${e.fn} must return a promise of { ${countName}: number, ${payloadName} }`, e.loc);
       }
@@ -6106,16 +6124,16 @@ function validateFunction(
           break;
         }
         const rec = records.get(resultT.shapeId);
-        const doneF = rec?.fields.find((f) => f.name === "done");
-        const valueF = rec?.fields.find((f) => f.name === "value");
-        if (!rec || rec.fields.length !== 2 || doneF?.type.kind !== "bool" || valueF === undefined) {
+        const doneF = rec ? recordValidation.get(rec.id)?.fields.get("done") : undefined;
+        const valueF = rec ? recordValidation.get(rec.id)?.fields.get("value") : undefined;
+        if (!rec || rec.fields.length !== 2 || doneF?.kind !== "bool" || valueF === undefined) {
           err(`genResume result record ${resultT.shapeId} is not { done: bool, value: V }`, e.loc);
           break;
         }
-        if (valueF.type.kind === "dyn") break;
-        const vdef = valueF.type.kind === "union" ? unions.get(valueF.type.unionId) : undefined;
+        if (valueF.kind === "dyn") break;
+        const vdef = valueF.kind === "union" ? unions.get(valueF.unionId) : undefined;
         if (!vdef || !vdef.arms.some((a) => a.kind === "undefinedT")) {
-          err(`genResume value slot ${typeKey(valueF.type)} is neither dyn nor an undefined-armed union`, e.loc);
+          err(`genResume value slot ${typeKey(valueF)} is neither dyn nor an undefined-armed union`, e.loc);
         }
         break;
       }
@@ -6197,10 +6215,10 @@ function validateFunction(
           break;
         }
         const shape = records.get(e.type.shapeId);
-        const fields = new Map(shape?.fields.map((f) => [f.name, f.type]) ?? []);
-        const prom = fields.get("promise");
-        const resolve = fields.get("resolve");
-        const reject = fields.get("reject");
+        const fields = recordValidation.get(e.type.shapeId)?.initializationFields;
+        const prom = fields?.get("promise");
+        const resolve = fields?.get("resolve");
+        const reject = fields?.get("reject");
         if (!shape || shape.fields.length !== 3 || !prom || !resolve || !reject) {
           err("promiseWithResolvers record must be { promise, resolve, reject }", e.loc);
           break;
@@ -6520,12 +6538,12 @@ function validateFunction(
         checkExpr(s.obj);
         checkExpr(s.value);
         const shape = records.get(s.shapeId);
-        const field = shape?.fields.find((f) => f.name === s.field);
+        const field = recordValidation.get(s.shapeId)?.fields.get(s.field);
         if (!shape) err(`recordSet on undeclared shape "${s.shapeId}"`, s.loc);
         else if (!field) err(`shape ${s.shapeId} has no field "${s.field}"`, s.loc);
         else {
           expectType(s.obj, { kind: "record", shapeId: s.shapeId }, "recordSet receiver");
-          expectType(s.value, field.type, `recordSet ${s.shapeId}.${s.field}`);
+          expectType(s.value, field, `recordSet ${s.shapeId}.${s.field}`);
         }
         break;
       }

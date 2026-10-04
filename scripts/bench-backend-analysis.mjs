@@ -11,12 +11,12 @@ import { F64, VOID } from "../packages/compiler/dist/ir/ir.js";
 const { values } = parseArgs({ options: {
   iterations: { type: "string", default: "5" },
   sizes: { type: "string", default: "500,2000,4000,8000" },
-  workloads: { type: "string", default: "may-throw,cycle-analysis,class-values-wide,class-values-deep,class-validation-wide,virtual-validation-wide,virtual-validation-shared" },
+  workloads: { type: "string", default: "may-throw,cycle-analysis,class-values-wide,class-values-deep,class-validation-wide,virtual-validation-wide,virtual-validation-shared,record-validation-references,record-validation-fields" },
 } });
 const iterations = Number(values.iterations);
 const sizes = values.sizes.split(",").map(Number);
 const selected = values.workloads.split(",");
-const names = ["may-throw", "cycle-analysis", "class-values-wide", "class-values-deep", "class-validation-wide", "virtual-validation-wide", "virtual-validation-shared"];
+const names = ["may-throw", "cycle-analysis", "class-values-wide", "class-values-deep", "class-validation-wide", "virtual-validation-wide", "virtual-validation-shared", "record-validation-references", "record-validation-fields"];
 assert.ok(Number.isInteger(iterations) && iterations >= 1 && iterations <= 100, "--iterations must be an integer between 1 and 100");
 assert.ok(sizes.length >= 1 && sizes.length <= 16 && sizes.every((n) => Number.isInteger(n) && n >= 1 && n <= 100_000), "--sizes must contain 1–16 integers between 1 and 100000");
 assert.ok(selected.length >= 1 && selected.every((name) => names.includes(name)), `--workloads must select from ${names.join(",")}`);
@@ -96,6 +96,24 @@ for (const size of sizes) {
       }
     }
     workloads.push({ name, run: () => validateModule(virtual), check: (answer) => assert.deepEqual(answer, []) });
+  }
+  if (selected.includes("record-validation-references")) {
+    const references = { ...layouts, classes: [], records };
+    workloads.push({ name: "record-validation-references", run: () => validateModule(references), check: (answer) => assert.deepEqual(answer, []) });
+  }
+  if (selected.includes("record-validation-fields")) {
+    const fields = Array.from({ length: size }, (_, i) => ({ name: `field${String(i).padStart(6, "0")}`, type: F64 }));
+    const type = { kind: "record", shapeId: "wide" };
+    const receiver = { kind: "varRef", localId: "record", type, loc };
+    const wide = { ...mod, entry: "main", records: [{ id: "wide", fields }], functions: [{
+      name: "main", params: [{ localId: "record", name: "record", type }],
+      locals: [{ id: "record", name: "record", type, mutable: false }], returnType: VOID, loc,
+      body: fields.flatMap(({ name }) => [
+        { kind: "exprStmt", expr: { kind: "recordGet", obj: receiver, shapeId: "wide", field: name, type: F64, loc }, loc },
+        { kind: "exprStmt", expr: { kind: "recordClone", source: receiver, overrides: [{ name, value }], type, loc }, loc },
+      ]),
+    }] };
+    workloads.push({ name: "record-validation-fields", run: () => validateModule(wide), check: (answer) => assert.deepEqual(answer, []) });
   }
   for (const { name, run, check } of workloads) {
     if (!selected.includes(name)) continue;
