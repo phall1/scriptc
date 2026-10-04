@@ -13949,6 +13949,12 @@
     "<repo>/tests/fixtures/npm/cases/node24-web-stream-tee/main.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/array-read-helper-effects.ts": {
+   "order": [
+    "<repo>/tests/corpus/array-read-helper-effects.ts"
+   ],
+   "diags": []
   }
  }
 }
