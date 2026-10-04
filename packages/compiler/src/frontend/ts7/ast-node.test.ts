@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import type { SourceFile, Node } from "typescript/unstable/ast";
 import { AstFile, AstNode } from "./ast-node.js";
-import { AstKind, KIND_NODE_LIST, astChildNames, astChildOrder, HEADER_OFFSET_NODES, NODE_LEN, NODE_OFFSET_PARENT } from "./ast-schema.generated.js";
+import { AstKind, KIND_NODE_LIST, astChildNames, astChildOrder, HEADER_OFFSET_NODES, NODE_LEN, NODE_OFFSET_NEXT, NODE_OFFSET_PARENT } from "./ast-schema.generated.js";
 import { walkPreorder } from "./ast.js";
 import { ts7Executable } from "./rpc-api.js";
 import { Ts7RpcClient } from "./rpc-client.js";
@@ -23,6 +23,7 @@ const { childProperties } = require(join(sdkRoot, "dist/api/node/protocol.js")) 
 test("generated child ordinals match every pinned TypeScript property", () => {
   const names = [...new Set(Object.values(childProperties).flat())];
   for (const [kind, properties] of Object.entries(childProperties)) {
+    expect(properties.length).toBeLessThanOrEqual(8);
     for (const name of names) {
       expect(astChildOrder(Number(kind), name), `${kind}.${name}`).toBe(properties.indexOf(name));
     }
@@ -207,6 +208,62 @@ test("direct node slots preserve lazy parents, identity and invalid-index checks
   for (const invalid of [-1, 0, 0.5, NaN, Infinity, file.wire.nodeCount]) {
     expect(() => file.node(invalid)).toThrow();
     expect(() => file.list(invalid)).toThrow();
+  }
+});
+
+test("named child access shares node and list identities without materializing siblings", () => {
+  let materialized = 0;
+  const file = new AstFile(decoded.get("main.ts")!.bytes, undefined, () => { materialized++; });
+  let index = 1;
+  while (file.wire.kind(index) !== AstKind.FunctionDeclaration) index++;
+  const node = file.node(index);
+  const nameIndex = file.wire.namedChild(index, "name");
+  const bodyIndex = file.wire.namedChild(index, "body");
+  const paramsIndex = file.wire.namedChild(index, "parameters");
+  expect(materialized).toBe(1);
+  const name = node.childNode("name");
+  expect(name?.index).toBe(nameIndex);
+  expect(materialized).toBe(2);
+  expect(node.child("name")).toBe(name);
+  expect(node.name).toBe(name);
+  expect(materialized).toBe(2);
+  expect(node.child("__proto__")).toBeUndefined();
+  expect(node.childList("typeParameters")).toBeUndefined();
+  const parameters = node.childList("parameters");
+  expect(parameters?.map((parameter) => parameter.index)).toEqual(file.wire.list(paramsIndex));
+  expect(node.child("parameters")).toBe(parameters);
+  expect(node.parameters).toBe(parameters);
+  const body = node.childNode("body");
+  expect(body?.index).toBe(bodyIndex);
+  expect(node.child("body")).toBe(body);
+  expect(node.childNode("name")).toBe(name);
+  expect(() => node.childNode("parameters")).toThrow("expected a node index");
+  expect(() => node.childList("name")).toThrow("expected a node list");
+  const another = new AstFile(decoded.get("main.ts")!.bytes).node(index);
+  expect(another.name?.index).toBe(nameIndex);
+  expect(another.name).not.toBe(name);
+  expect(() => file.namedChild(another, "name")).toThrow("another source file");
+});
+
+test("warming a named child preserves lazy failures in later malformed sibling links", () => {
+  const bytes = decoded.get("main.ts")!.bytes;
+  const wire = new AstFile(bytes).wire;
+  let index = 1;
+  while (wire.kind(index) !== AstKind.FunctionDeclaration) index++;
+  const name = wire.namedChild(index, "name");
+  const body = wire.namedChild(index, "body");
+  const table = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(HEADER_OFFSET_NODES, true);
+  for (const variant of ["parent", "next"]) {
+    const broken = Uint8Array.from(bytes);
+    const view = new DataView(broken.buffer);
+    if (variant === "parent") view.setUint32(table + body * NODE_LEN + NODE_OFFSET_PARENT, 0, true);
+    else view.setUint32(table + name * NODE_LEN + NODE_OFFSET_NEXT, name, true);
+    const node = new AstFile(broken).node(index);
+    expect(node.childNode("name")?.index).toBe(name);
+    expect(node.childNode("name")?.index).toBe(name);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      expect(() => node.childNode("body")).toThrow(variant === "parent" ? "named child belongs to another parent" : "invalid sibling link");
+    }
   }
 });
 

@@ -1,5 +1,5 @@
 import { AstDecodeError } from "./ast-bytes.js";
-import { AstKind, AstModifierFlags, AstNodeFlags, KIND_NODE_LIST } from "./ast-schema.generated.js";
+import { AstKind, AstModifierFlags, AstNodeFlags, KIND_NODE_LIST, astChildOrder } from "./ast-schema.generated.js";
 import { astLineOfPosition, astLineStarts, astSkipTrivia } from "./ast-text.js";
 import { AstWireFile, parseAstNodeHandle, type AstFileReference } from "./ast-wire.js";
 import type { SourceFile } from "./ast-types.js";
@@ -19,6 +19,7 @@ export class AstFile {
   private readonly structuredNodes = new Map<number, AstNode[]>();
   private readonly strings = new Map<number, string[]>();
   private lines: number[] | undefined;
+  private childIndices: Uint32Array | undefined;
 
   constructor(
     bytes: Uint8Array,
@@ -59,6 +60,27 @@ export class AstFile {
     this.lists[index] = nodes;
     this.materialized?.();
     return nodes;
+  }
+
+  namedChild(node: AstNode, name: string): number {
+    if (node.file !== this) throw new AstDecodeError("named child belongs to another source file");
+    const order = astChildOrder(node.kind, name);
+    if (order < 0) return 0;
+    const mask = (node.data >>> 30) === 0 ? node.data & 0xff : 0xff;
+    if ((mask & (1 << order)) === 0) return 0;
+    const slot = node.index * 8 + order;
+    const indices = this.childIndices;
+    if (indices !== undefined) {
+      const cached = indices[slot]!;
+      if (cached !== 0) return cached;
+    }
+    const index = this.wire.namedChild(node.index, name);
+    // The pinned wire has at most eight named children per node. One packed
+    // table avoids per-node arrays; allocate it only after successful access
+    // so malformed siblings still fail lazily in the checked wire decoder.
+    if (this.childIndices === undefined) this.childIndices = new Uint32Array(this.wire.nodeCount * 8);
+    this.childIndices[slot] = index;
+    return index;
   }
 
   resolve(handle: string): AstNode {
@@ -139,15 +161,15 @@ export class AstNode {
   get rawText(): string | undefined { return this.file.wire.rawText(this.index); }
 
   childNode(name: string): AstNode | undefined {
-    const index = this.file.wire.namedChild(this.index, name);
+    const index = this.file.namedChild(this, name);
     return index === 0 ? undefined : this.file.node(index);
   }
   childList(name: string): AstNode[] | undefined {
-    const index = this.file.wire.namedChild(this.index, name);
+    const index = this.file.namedChild(this, name);
     return index === 0 ? undefined : this.file.list(index);
   }
   child(name: string): AstNode | AstNode[] | undefined {
-    const index = this.file.wire.namedChild(this.index, name);
+    const index = this.file.namedChild(this, name);
     if (index === 0) return undefined;
     return this.file.wire.kind(index) === KIND_NODE_LIST ? this.file.list(index) : this.file.node(index);
   }
