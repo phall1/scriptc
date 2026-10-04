@@ -279,22 +279,132 @@ static ScrStr *scr_fs_cb_path(const ScrDyn *value, const char *name) {
   ScrStr *path = value->kind == SCR_DYN_STR ? scr_str_retain(value->v.str)
     : scr_str_new((const char *)value->v.bytes->data, value->v.bytes->len);
   if (memchr(path->data, 0, path->len)) {
-    if (!strcmp(name, "path")) scr_fs_invalid_path(value, path);
-    else scr_dyn_arg_value_fail(name, "must be a string, Uint8Array, or URL without null bytes", value);
+    scr_fs_invalid_named_path(value, path, name);
     scr_str_release(path);
     return NULL;
   }
   return path;
 }
 
-static ScrStr *scr_fs_timestamp_path(const ScrDyn *value) {
-  if (!scr_dyn_native_url_is(value)) return scr_fs_cb_path(value, "path");
+static ScrStr *scr_fs_checked_path(const ScrDyn *value, const char *name) {
+  if (!scr_dyn_native_url_is(value)) return scr_fs_cb_path(value, name);
   ScrStr *path = scr_url_checked_to_path(value);
   if (!path) return NULL;
   ScrDyn input = { .kind = SCR_DYN_STR, .v.str = path };
-  ScrStr *checked = scr_fs_cb_path(&input, "path");
+  ScrStr *checked = scr_fs_cb_path(&input, name);
   scr_str_release(path);
   return checked;
+}
+
+static ScrStr *scr_fs_timestamp_path(const ScrDyn *value) {
+  return scr_fs_checked_path(value, "path");
+}
+
+/* validateOneOf runs before either path, even on POSIX where the type has
+ * no syscall effect. -1 means infer the target's kind on Windows. */
+static int scr_fs_symlink_type(const ScrDyn *type) {
+  if (scr_fs_dyn_absent(type)) return -1;
+  if (type->kind == SCR_DYN_STR) {
+    const ScrStr *s = type->v.str;
+    if (s->len == 4 && !memcmp(s->data, "file", 4)) return 0;
+    if (s->len == 3 && !memcmp(s->data, "dir", 3)) return 1;
+    if (s->len == 8 && !memcmp(s->data, "junction", 8)) return 2;
+  }
+  scr_dyn_arg_value_fail("type", "must be one of: 'dir', 'file', 'junction', null, undefined", type);
+  return -1;
+}
+
+void scr_fs_link_checked(const ScrDyn *existing, const ScrDyn *destination) {
+  ScrStr *from = scr_fs_checked_path(existing, "existingPath");
+  if (!from) return;
+  ScrStr *to = scr_fs_checked_path(destination, "newPath");
+  if (to) scr_fs_link(from, to);
+  scr_str_release(from); scr_str_release(to);
+}
+
+void scr_fs_symlink_checked(const ScrDyn *target, const ScrDyn *destination, const ScrDyn *type) {
+  int kind = scr_fs_symlink_type(type);
+  if (scr_exc_pending()) return;
+  ScrStr *from = scr_fs_checked_path(target, "target");
+  if (!from) return;
+  ScrStr *to = scr_fs_checked_path(destination, "path");
+  if (to) scr_fs_symlink(from, to, kind);
+  scr_str_release(from); scr_str_release(to);
+}
+
+/* getOptions accepts functions as defaults and validates signals without
+ * cancelling readlink. Unlike readFile, an aborted signal is ignored. */
+static ScrDyn *scr_fs_readlink_encoding(const ScrDyn *options) {
+  if (scr_fs_dyn_absent(options) || options->kind == SCR_DYN_FUNC) return scr_dyn_retain(scr_dyn_undefined());
+  if (options->kind != SCR_DYN_STR && options->kind != SCR_DYN_OBJ &&
+      options->kind != SCR_DYN_ARR && options->kind != SCR_DYN_TYPED_REF &&
+      options->kind != SCR_DYN_HANDLE && options->kind != SCR_DYN_BYTES) {
+    scr_dyn_arg_type_fail("options", "one of type string or object", options);
+    return NULL;
+  }
+  ScrDyn *encoding = options->kind == SCR_DYN_STR ? scr_dyn_retain((ScrDyn *)options) : scr_fs_cb_option(options, "encoding");
+  if (!encoding) return NULL;
+  bool buffer = encoding->kind == SCR_DYN_STR && encoding->v.str->len == 6 && !memcmp(encoding->v.str->data, "buffer", 6);
+  if (!buffer && scr_dyn_truthy(encoding) &&
+      (encoding->kind != SCR_DYN_STR || !scr_bytes_is_encoding(encoding->v.str))) {
+    scr_dyn_arg_value_fail("encoding", "is invalid encoding", encoding);
+    scr_dyn_release(encoding);
+    return NULL;
+  }
+  if (options->kind != SCR_DYN_STR) {
+    ScrDyn *signal = scr_fs_cb_option(options, "signal");
+    if (!signal) { scr_dyn_release(encoding); return NULL; }
+    bool valid = signal->kind == SCR_DYN_UNDEF || (signal->kind == SCR_DYN_HANDLE && signal->v.handle.tag == SCR_DYNH_ABORT_SIGNAL);
+    if (!valid) scr_dyn_prop_type_fail("options.signal", "an instance of AbortSignal", signal);
+    scr_dyn_release(signal);
+    if (!valid) { scr_dyn_release(encoding); return NULL; }
+  }
+  return encoding;
+}
+
+static ScrDyn *scr_fs_readlink_result(ScrStr *path, const ScrDyn *encoding) {
+  ScrBytes *bytes = scr_fs_readlink_bytes(path);
+  if (!bytes) return NULL;
+  ScrDyn *result;
+  if (encoding->kind == SCR_DYN_STR && encoding->v.str->len == 6 && !memcmp(encoding->v.str->data, "buffer", 6)) {
+    result = scr_dyn_new_buffer(bytes);
+  }
+  else {
+    ScrStr *codec = encoding->kind == SCR_DYN_STR && encoding->v.str->len ? scr_str_retain(encoding->v.str) : scr_str_new("utf8", 4);
+    ScrStr *text = scr_bytes_to_str(bytes, codec);
+    scr_str_release(codec);
+    result = text ? scr_dyn_new_str(text) : NULL;
+    scr_str_release(text);
+  }
+  scr_bytes_release(bytes);
+  return result;
+}
+
+ScrDyn *scr_fs_readlink_checked(const ScrDyn *input, const ScrDyn *options, bool promise) {
+  ScrDyn *encoding = scr_fs_readlink_encoding(options);
+  if (!encoding) return NULL;
+  ScrStr *path = scr_fs_checked_path(input, promise ? "oldPath" : "path");
+  ScrDyn *result = path ? scr_fs_readlink_result(path, encoding) : NULL;
+  scr_str_release(path); scr_dyn_release(encoding);
+  return result;
+}
+
+ScrDyn *scr_fs_readlink_dyn(const ScrDyn *path, const ScrDyn *options) {
+  return scr_fs_readlink_checked(path, options, false);
+}
+
+ScrStr *scr_fs_readlink_str(const ScrDyn *path, const ScrDyn *options) {
+  ScrDyn *result = scr_fs_readlink_dyn(path, options);
+  ScrStr *text = result && result->kind == SCR_DYN_STR ? scr_str_retain(result->v.str) : NULL;
+  scr_dyn_release(result);
+  return text;
+}
+
+ScrBytes *scr_fs_readlink_buffer(const ScrDyn *path, const ScrDyn *options) {
+  ScrDyn *result = scr_fs_readlink_dyn(path, options);
+  ScrBytes *bytes = result ? scr_dyn_bytes_unbox(result) : NULL;
+  scr_dyn_release(result);
+  return bytes;
 }
 
 static ScrDyn *scr_fs_cb_string(ScrStr *text) {
@@ -517,6 +627,35 @@ static ScrArr *scr_fs_cb_vectors(const ScrDyn *buffers) {
 
 static ScrDyn *scr_fs_cb_invoke(ScrStr *member, ScrDyn *const *args, size_t argc) {
   const char *op = member->data;
+  if (!strcmp(op, "link") || !strcmp(op, "symlink") || !strcmp(op, "readlink")) {
+    const ScrDyn *first = scr_fs_cb_arg(args, argc, 0);
+    const ScrDyn *second = scr_fs_cb_arg(args, argc, 1);
+    bool symbolic = !strcmp(op, "symlink"), reading = !strcmp(op, "readlink");
+    const ScrDyn *third = scr_fs_cb_arg(args, argc, 2);
+    const ScrDyn *fourth = scr_fs_cb_arg(args, argc, 3);
+    const ScrDyn *callback = symbolic && fourth->kind != SCR_DYN_UNDEF ? fourth
+      : reading && second->kind == SCR_DYN_FUNC ? second : third;
+    int kind = -1;
+    if (symbolic && fourth->kind != SCR_DYN_UNDEF) {
+      kind = scr_fs_symlink_type(third);
+      if (scr_exc_pending()) return NULL;
+    } else if (!scr_fs_cb_chk(callback, "cb")) return NULL;
+    ScrDyn *encoding = reading ? scr_fs_readlink_encoding(second) : NULL;
+    if (reading && !encoding) return NULL;
+    ScrStr *from = scr_fs_checked_path(first, symbolic ? "target" : reading ? "path" : "existingPath");
+    if (!from) { scr_dyn_release(encoding); return NULL; }
+    ScrStr *to = reading ? NULL : scr_fs_checked_path(second, symbolic ? "path" : "newPath");
+    if ((!reading && !to) || (symbolic && fourth->kind != SCR_DYN_UNDEF && !scr_fs_cb_chk(callback, "cb"))) {
+      scr_str_release(from); scr_str_release(to); scr_dyn_release(encoding); return NULL;
+    }
+    ScrDyn *result = NULL;
+    if (reading) result = scr_fs_readlink_result(from, encoding);
+    else if (symbolic) scr_fs_symlink(from, to, kind);
+    else scr_fs_link(from, to);
+    scr_str_release(from); scr_str_release(to); scr_dyn_release(encoding);
+    scr_fs_cb_schedule(callback, result, NULL);
+    return scr_dyn_retain(scr_dyn_undefined());
+  }
   bool vector = !strcmp(op, "readv") || !strcmp(op, "writev");
   bool timestamp = !strcmp(op, "utimes") || !strcmp(op, "lutimes") || !strcmp(op, "futimes");
   bool timestamp_fd = !strcmp(op, "futimes");
@@ -673,11 +812,10 @@ static ScrDyn *scr_fs_cb_invoke(ScrStr *member, ScrDyn *const *args, size_t argc
       scr_dyn_release(ownedBuffer); scr_str_release(path);
       return scr_dyn_retain(scr_dyn_undefined());
     }
-  } else if (!strcmp(op, "copyFile") || !strcmp(op, "rename") || !strcmp(op, "link") || !strcmp(op, "symlink")) {
+  } else if (!strcmp(op, "copyFile") || !strcmp(op, "rename")) {
     ScrStr *destination = scr_fs_cb_path(ARG(1), "dest");
     if (destination) {
       if (!strcmp(op, "rename")) scr_fs_rename(path, destination);
-      else if (!strcmp(op, "link")) scr_fs_link(path, destination);
       else if (!strcmp(op, "copyFile")) {
         double flags = scr_fs_cb_number(ARG(2), "mode", 0);
         if (flags == 1 && scr_fs_exists(destination)) scr_fs_throw(EEXIST, "copyfile", destination);
@@ -685,13 +823,6 @@ static ScrDyn *scr_fs_cb_invoke(ScrStr *member, ScrDyn *const *args, size_t argc
           static const char message[] = "fs.copyFile clone flags have no native lowering";
           scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
         } else if (!scr_exc_pending()) scr_fs_copyfile(path, destination);
-      }
-      else {
-#if !defined(_WIN32)
-        if (symlink(path->data, destination->data) < 0) scr_fs_throw(errno, "symlink", path);
-#else
-        scr_fs_throw(ENOSYS, "symlink", path);
-#endif
       }
       scr_str_release(destination);
     }
@@ -701,23 +832,6 @@ static ScrDyn *scr_fs_cb_invoke(ScrStr *member, ScrDyn *const *args, size_t argc
       if (descriptor) scr_fs_ftruncate(fd, length);
       else if (truncate(path->data, (off_t)length) < 0) scr_fs_throw(errno, "truncate", path);
     }
-  } else if (!strcmp(op, "readlink")) {
-#ifndef _WIN32
-    size_t capacity = 256;
-    char *text = NULL;
-    for (;;) {
-      char *grown = realloc(text, capacity);
-      if (!grown) scr_bytes_io_oom();
-      text = grown;
-      ssize_t size = readlink(path->data, text, capacity);
-      if (size < 0) { scr_fs_throw(errno, "readlink", path); break; }
-      if ((size_t)size < capacity) { result = scr_fs_cb_string(scr_str_new(text, (size_t)size)); break; }
-      capacity *= 2;
-    }
-    free(text);
-#else
-    scr_fs_throw(ENOSYS, "readlink", path);
-#endif
   } else if (timestamp) {
     if (timestamp_fd) scr_fs_futimes(fd, access, modified);
     else scr_fs_utimes(path, access, modified, !strcmp(op, "lutimes"));

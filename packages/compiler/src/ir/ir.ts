@@ -3667,6 +3667,11 @@ export type IrLibFn =
   | "fsp.mkdirRecursiveMode"
   | "fsp.unlink"
   | "fsp.chmod"
+  | "fsp.link"
+  | "fsp.symlink"
+  | "fsp.readlink"
+  | "fsp.readlinkStr"
+  | "fsp.readlinkBuffer"
   | "fsp.utimes"
   | "fsp.lutimes"
   | "fsp.rename"
@@ -4850,6 +4855,10 @@ export type IrLibFn =
   | "fs.readvSync"
   | "fs.writevSync"
   | "fs.linkSync"
+  | "fs.symlinkSync"
+  | "fs.readlinkSync"
+  | "fs.readlinkSyncStr"
+  | "fs.readlinkSyncBuffer"
   /** fs.openSync(path, flags) → the raw fd as f64; fs.readSync/fs.writeSync
    * over Buffer windows perform sequential I/O when position is -1 and
    * offset-preserving positioned I/O otherwise; fs.writeStrSync is the
@@ -8065,6 +8074,10 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "fs.readvSync",
   "fs.writevSync",
   "fs.linkSync",
+  "fs.symlinkSync",
+  "fs.readlinkSync",
+  "fs.readlinkSyncStr",
+  "fs.readlinkSyncBuffer",
   "fs.writeFileModeSync",
   "fs.mkdirModeSync",
   "fs.mkdirRecursiveModeSync",

@@ -1005,6 +1005,12 @@
       "status": "static"
     },
     {
+      "id": "node-builtin.fs.promises.link",
+      "kind": "node-builtin",
+      "name": "fs/promises.link",
+      "status": "static"
+    },
+    {
       "id": "node-builtin.fs.promises.lstat",
       "kind": "node-builtin",
       "name": "fs/promises.lstat",
@@ -1041,6 +1047,12 @@
       "status": "static"
     },
     {
+      "id": "node-builtin.fs.promises.readlink",
+      "kind": "node-builtin",
+      "name": "fs/promises.readlink",
+      "status": "static"
+    },
+    {
       "id": "node-builtin.fs.promises.realpath",
       "kind": "node-builtin",
       "name": "fs/promises.realpath",
@@ -1062,6 +1074,12 @@
       "id": "node-builtin.fs.promises.stat",
       "kind": "node-builtin",
       "name": "fs/promises.stat",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.fs.promises.symlink",
+      "kind": "node-builtin",
+      "name": "fs/promises.symlink",
       "status": "static"
     },
     {
@@ -1098,6 +1116,12 @@
       "id": "node-builtin.fs.readdirSync",
       "kind": "node-builtin",
       "name": "fs.readdirSync",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.fs.readlinkSync",
+      "kind": "node-builtin",
+      "name": "fs.readlinkSync",
       "status": "static"
     },
     {
@@ -1146,6 +1170,12 @@
       "id": "node-builtin.fs.statSync",
       "kind": "node-builtin",
       "name": "fs.statSync",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.fs.symlinkSync",
+      "kind": "node-builtin",
+      "name": "fs.symlinkSync",
       "status": "static"
     },
     {

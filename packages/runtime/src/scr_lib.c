@@ -869,10 +869,12 @@ ScrDyn *scr_util_parse_env(const ScrDyn *content) {
   return scr_env_parse_content(content->v.str, true);
 }
 
-void scr_fs_invalid_path(const ScrDyn *value, const ScrStr *path) {
+void scr_fs_invalid_named_path(const ScrDyn *value, const ScrStr *path, const char *name) {
   ScrJsonBuf b;
   scr_jb_init(&b);
-  scr_jb_puts(&b, "The argument 'path' must be a string, Uint8Array, or URL without null bytes. Received ");
+  scr_jb_puts(&b, "The argument '");
+  scr_jb_puts(&b, name);
+  scr_jb_puts(&b, "' must be a string, Uint8Array, or URL without null bytes. Received ");
   if (value->kind == SCR_DYN_BYTES) {
     const ScrBytes *bytes = value->v.bytes;
     if (value->buffer) {
@@ -914,6 +916,10 @@ void scr_fs_invalid_path(const ScrDyn *value, const ScrStr *path) {
   ScrStr *message = scr_jb_finish(&b);
   scr_throw_error_msg_code(SCR_ERR_TYPE, message->data, message->len, "ERR_INVALID_ARG_VALUE");
   scr_str_release(message);
+}
+
+void scr_fs_invalid_path(const ScrDyn *value, const ScrStr *path) {
+  scr_fs_invalid_named_path(value, path, "path");
 }
 
 void scr_process_load_env_file(const ScrDyn *value) {
@@ -3239,18 +3245,15 @@ void scr_fs_link(ScrStr *source, ScrStr *dest) {
   WCHAR *from = scr_fs_win_wide(source);
   WCHAR *to = scr_fs_win_wide(dest);
   if (!from || !to) {
+    DWORD error = GetLastError();
     free(from); free(to);
-    scr_fs_throw2(EINVAL, "link", source, dest);
+    scr_fs_throw2(scr_fs_win_errno(error), "link", source, dest);
     return;
   }
   BOOL ok = CreateHardLinkW(to, from, NULL);
   DWORD error = ok ? 0 : GetLastError();
   free(from); free(to);
-  if (!ok) {
-    int code = error == ERROR_ALREADY_EXISTS || error == ERROR_FILE_EXISTS ? EEXIST :
-      error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND ? ENOENT : EACCES;
-    scr_fs_throw2(code, "link", source, dest);
-  }
+  if (!ok) scr_fs_throw2(scr_fs_win_errno(error), "link", source, dest);
 #else
   if (link(source->data, dest->data) != 0) scr_fs_throw2(errno, "link", source, dest);
 #endif
@@ -4068,7 +4071,7 @@ typedef struct {
 /* Node/libuv reports a Windows link's target-text length as st_size. The
  * ordinary handle information does not carry that value, so read the reparse
  * payload while the no-follow handle is live. */
-static bool scr_stats_link_size(HANDLE h, DWORD tag, double *size_out) {
+static bool scr_stats_link_target(HANDLE h, DWORD tag, double *size_out, ScrStr **text_out) {
   union {
     ScrStatsReparseData align;
     unsigned char bytes[MAXIMUM_REPARSE_DATA_BUFFER_SIZE];
@@ -4113,6 +4116,7 @@ static bool scr_stats_link_size(HANDLE h, DWORD tag, double *size_out) {
     /* WSL's LX symlink payload is a version word followed by UTF-8 bytes. */
     if (data->data_len < sizeof(ULONG)) return false;
     *size_out = (double)(data->data_len - sizeof(ULONG));
+    if (text_out) *text_out = scr_str_new((const char *)data->body.generic.bytes + sizeof(ULONG), data->data_len - sizeof(ULONG));
     return true;
   } else {
     /* App execution links carry a counted UTF-16 string list; the third
@@ -4141,6 +4145,10 @@ static bool scr_stats_link_size(HANDLE h, DWORD tag, double *size_out) {
     double size = scr_stats_utf16_len(target, len);
     if (size < 0) return false;
     *size_out = size;
+    if (text_out) {
+      *text_out = scr_fs_win_utf8(target, len);
+      if (!*text_out) return false;
+    }
     return true;
   }
 
@@ -4166,6 +4174,10 @@ static bool scr_stats_link_size(HANDLE h, DWORD tag, double *size_out) {
   double size = scr_stats_utf16_len(target, len);
   if (size < 0) return false;
   *size_out = size;
+  if (text_out) {
+    *text_out = scr_fs_win_utf8(target, len);
+    if (!*text_out) return false;
+  }
   return true;
 }
 
@@ -4204,7 +4216,7 @@ static ScrStats *scr_stats_of_path(const ScrStr *path, const char *op,
       CloseHandle(h);
       return scr_stats_of_path(path, op, false);
     }
-    if (!scr_stats_link_size(h, tagged.ReparseTag, &link_size)) {
+    if (!scr_stats_link_target(h, tagged.ReparseTag, &link_size, NULL)) {
       /* A mount-point tag may name a mounted volume rather than a junction.
        * libuv treats those (and malformed/unsupported link payloads) as
        * ordinary reparse points and retries with the final component
@@ -4280,6 +4292,128 @@ static ScrStats *scr_stats_of(const struct stat *st) {
   return s;
 }
 #endif
+
+/* Symbolic link targets are stored verbatim on POSIX. Windows junctions
+ * instead carry an absolute NT path in a bounded mount-point reparse record. */
+#ifdef _WIN32
+static DWORD scr_fs_win_junction(const WCHAR *target, const WCHAR *destination) {
+  size_t len = wcslen(target);
+  /* libuv permits drive-absolute junctions, not UNC mount targets. */
+  size_t skip = len >= 4 && !wcsncmp(target, L"\\\\?\\", 4) ? 4 : 0;
+  const WCHAR *plain = target + skip;
+  size_t chars = len - skip;
+  if (chars < 3 || !((plain[0] >= L'A' && plain[0] <= L'Z') || (plain[0] >= L'a' && plain[0] <= L'z')) || plain[1] != L':' || plain[2] != L'\\') return ERROR_INVALID_PARAMETER;
+  size_t fixed = offsetof(ScrStatsReparseData, body.mount.path);
+  size_t total = fixed + (4 + chars + 1 + chars + 1) * sizeof(WCHAR);
+  if (total > MAXIMUM_REPARSE_DATA_BUFFER_SIZE) return ERROR_FILENAME_EXCED_RANGE;
+  ScrStatsReparseData *data = calloc(1, total);
+  if (!data) return ERROR_NOT_ENOUGH_MEMORY;
+  data->tag = IO_REPARSE_TAG_MOUNT_POINT;
+  data->data_len = (USHORT)(total - offsetof(ScrStatsReparseData, body));
+  data->body.mount.substitute_offset = 0;
+  data->body.mount.substitute_len = (USHORT)((4 + chars) * sizeof(WCHAR));
+  data->body.mount.print_offset = (USHORT)((4 + chars + 1) * sizeof(WCHAR));
+  data->body.mount.print_len = (USHORT)(chars * sizeof(WCHAR));
+  memcpy(data->body.mount.path, L"\\??\\", 4 * sizeof(WCHAR));
+  memcpy(data->body.mount.path + 4, plain, chars * sizeof(WCHAR));
+  memcpy(data->body.mount.path + 4 + chars + 1, plain, chars * sizeof(WCHAR));
+  DWORD error = 0, used;
+  bool created = CreateDirectoryW(destination, NULL) != 0;
+  HANDLE h = INVALID_HANDLE_VALUE;
+  if (!created) error = GetLastError();
+  else {
+    h = CreateFileW(destination, GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
+                    FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    if (h == INVALID_HANDLE_VALUE) error = GetLastError();
+    else if (!DeviceIoControl(h, FSCTL_SET_REPARSE_POINT, data, (DWORD)total, NULL, 0, &used, NULL)) error = GetLastError();
+  }
+  if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+  if (error && created) RemoveDirectoryW(destination);
+  free(data);
+  return error;
+}
+#endif
+
+void scr_fs_symlink(ScrStr *target, ScrStr *destination, int kind) {
+#ifdef _WIN32
+  ScrArr *parts = scr_arr_new_ref(scr_str_retain_v, scr_str_release_v, NULL, 3);
+  scr_arr_push_ref(parts, scr_str_retain(destination));
+  scr_arr_push_ref(parts, scr_str_new("..", 2));
+  scr_arr_push_ref(parts, scr_str_retain(target));
+  ScrStr *absolute = scr_path_win32_resolve(parts);
+  scr_arr_release(parts);
+  if (kind == -1) {
+    WCHAR *probe = scr_fs_win_wide(absolute);
+    DWORD attributes = probe ? GetFileAttributesW(probe) : INVALID_FILE_ATTRIBUTES;
+    free(probe);
+    kind = attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) ? 1 : 0;
+  }
+  ScrStr *stored;
+  if (kind == 2) stored = scr_path_win32_to_namespaced_path(absolute);
+  else if (scr_path_win32_is_absolute(target)) stored = scr_path_win32_to_namespaced_path(target);
+  else {
+    char *text = malloc(target->len ? target->len : 1);
+    if (!text) scr_trap("scriptc: out of memory\n");
+    for (size_t i = 0; i < target->len; i++) text[i] = target->data[i] == '/' ? '\\' : target->data[i];
+    stored = scr_str_new(text, target->len);
+    free(text);
+  }
+  scr_str_release(absolute);
+  WCHAR *from = scr_fs_win_wide(stored), *to = scr_fs_win_wide(destination);
+  DWORD error = !from || !to ? GetLastError() : 0;
+  if (!error && kind == 2) error = scr_fs_win_junction(from, to);
+  else if (!error) {
+    DWORD flags = (kind == 1 ? SYMBOLIC_LINK_FLAG_DIRECTORY : 0) | 0x2; /* ALLOW_UNPRIVILEGED_CREATE */
+    if (!CreateSymbolicLinkW(to, from, flags)) {
+      error = GetLastError();
+      if (error == ERROR_INVALID_PARAMETER) error = CreateSymbolicLinkW(to, from, flags & ~0x2u) ? 0 : GetLastError();
+    }
+  }
+  free(from); free(to); scr_str_release(stored);
+  if (error) scr_fs_throw2(scr_fs_win_errno(error), "symlink", target, destination);
+#else
+  (void)kind;
+  if (symlink(target->data, destination->data) != 0) scr_fs_throw2(errno, "symlink", target, destination);
+#endif
+}
+
+ScrBytes *scr_fs_readlink_bytes(ScrStr *path) {
+#ifdef _WIN32
+  WCHAR *wide = scr_fs_win_wide(path);
+  if (!wide) { scr_fs_throw(scr_fs_win_errno(GetLastError()), "readlink", path); return NULL; }
+  HANDLE h = CreateFileW(wide, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                        FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, NULL);
+  free(wide);
+  if (h == INVALID_HANDLE_VALUE) { scr_fs_throw(scr_fs_win_errno(GetLastError()), "readlink", path); return NULL; }
+  FILE_ATTRIBUTE_TAG_INFO tagged;
+  ScrStr *text = NULL;
+  double size;
+  bool ok = GetFileInformationByHandleEx(h, FileAttributeTagInfo, &tagged, sizeof tagged) &&
+    scr_stats_link_target(h, tagged.ReparseTag, &size, &text);
+  CloseHandle(h);
+  if (!ok || !text) { scr_str_release(text); scr_fs_throw(EINVAL, "readlink", path); return NULL; }
+  ScrBytes *bytes = scr_bytes_from_data((const uint8_t *)text->data, text->len);
+  scr_str_release(text);
+  return bytes;
+#else
+  size_t capacity = 256;
+  uint8_t *text = NULL;
+  for (;;) {
+    uint8_t *grown = realloc(text, capacity);
+    if (!grown) { free(text); scr_trap("scriptc: out of memory\n"); }
+    text = grown;
+    ssize_t size = readlink(path->data, (char *)text, capacity);
+    if (size < 0) { int error = errno; free(text); scr_fs_throw(error, "readlink", path); return NULL; }
+    if ((size_t)size < capacity) {
+      ScrBytes *bytes = scr_bytes_from_data(text, (size_t)size);
+      free(text);
+      return bytes;
+    }
+    if (capacity > SIZE_MAX / 2) { free(text); scr_fs_throw(ENAMETOOLONG, "readlink", path); return NULL; }
+    capacity *= 2;
+  }
+#endif
+}
 
 ScrStats *scr_fs_stat(ScrStr *path) {
 #ifdef _WIN32

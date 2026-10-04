@@ -728,7 +728,13 @@ export const BUILTIN_MODULE_FNS: Record<string, Record<string, BuiltinModuleFn |
     lutimesSync: { fn: "fs.lutimesSync", params: [DYN, DYN, DYN], result: VOID },
     readvSync: { fn: "fs.readvSync", params: [F64, arrayOf(BYTES_U8), F64], result: F64 },
     writevSync: { fn: "fs.writevSync", params: [F64, arrayOf(BYTES_U8), F64], result: F64 },
-    linkSync: { fn: "fs.linkSync", params: [STRING, STRING], result: VOID, valueParams: exactValueParams(STRING, STRING) },
+    linkSync: { fn: "fs.linkSync", params: [DYN, DYN], result: VOID, valueParams: exactValueParams(DYN, DYN) },
+    symlinkSync: { fn: "fs.symlinkSync", params: [DYN, DYN, DYN], result: VOID, valueParams: [
+      ...exactValueParams(DYN, DYN), { mode: "optional", type: DYN, defaultValue: undefined },
+    ] },
+    readlinkSync: { fn: "fs.readlinkSync", params: [DYN, DYN], result: DYN, valueParams: [
+      ...exactValueParams(DYN), { mode: "optional", type: DYN, defaultValue: undefined },
+    ] },
     // realpath(3) — Node's realpathSync (failures spell syscall "lstat",
     // Node's own message shape).
     realpathSync: { fn: "fs.realpathSync", params: [STRING], result: STRING },
@@ -767,6 +773,13 @@ export const BUILTIN_MODULE_FNS: Record<string, Record<string, BuiltinModuleFn |
     lstat: { fn: "fsp.lstat", params: [STRING], result: { kind: "promise", inner: STATS_T } },
     unlink: { fn: "fsp.unlink", params: [STRING], result: { kind: "promise", inner: VOID }, valueParams: exactValueParams(STRING) },
     chmod: { fn: "fsp.chmod", params: [STRING, F64], result: { kind: "promise", inner: VOID }, valueParams: exactValueParams(STRING, F64) },
+    link: { fn: "fsp.link", params: [DYN, DYN], result: { kind: "promise", inner: VOID }, valueParams: exactValueParams(DYN, DYN) },
+    symlink: { fn: "fsp.symlink", params: [DYN, DYN, DYN], result: { kind: "promise", inner: VOID }, valueParams: [
+      ...exactValueParams(DYN, DYN), { mode: "optional", type: DYN, defaultValue: undefined },
+    ] },
+    readlink: { fn: "fsp.readlink", params: [DYN, DYN], result: { kind: "promise", inner: DYN }, valueParams: [
+      ...exactValueParams(DYN), { mode: "optional", type: DYN, defaultValue: undefined },
+    ] },
     utimes: { fn: "fsp.utimes", params: [DYN, DYN, DYN], result: { kind: "promise", inner: VOID } },
     lutimes: { fn: "fsp.lutimes", params: [DYN, DYN, DYN], result: { kind: "promise", inner: VOID } },
     rename: { fn: "fsp.rename", params: [STRING, STRING], result: { kind: "promise", inner: VOID }, valueParams: exactValueParams(STRING, STRING) },
@@ -1072,6 +1085,7 @@ export const BUILTIN_MODULE_FN_ALIASES: Record<string, Record<string, readonly I
     // The Buffer form (no encoding), the fd forms (readFileSync(fd[,
     // "utf8"])), and the checked-dynamic encoding form.
     readFileSync: ["fs.readFileSyncBuf", "fs.readFileSyncBytes", "fs.readFileSyncDyn", "fs.readFdSync", "fs.readFdSyncBytes"],
+    readlinkSync: ["fs.readlinkSyncStr", "fs.readlinkSyncBuffer"],
     // The bytes-data form and the { mode } options form.
     writeFileSync: ["fs.writeFileSyncBytes", "fs.writeFileModeSync"],
     appendFileSync: ["fs.appendFileSyncBytes"],
@@ -1097,6 +1111,7 @@ export const BUILTIN_MODULE_FN_ALIASES: Record<string, Record<string, readonly I
   "fs/promises": {
     // The Buffer form (no encoding).
     readFile: ["fsp.readFileBytes"],
+    readlink: ["fsp.readlinkStr", "fsp.readlinkBuffer"],
     // The string-data { mode } options form.
     writeFile: ["fsp.writeFileMode"],
     // The { withFileTypes: true } Dirent form.
