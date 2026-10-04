@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 const root = fs.mkdtempSync(join(tmpdir(), "scriptc-links-"));
+const outside = fs.mkdtempSync(join(tmpdir(), "scriptc-link-target-"));
+fs.writeFileSync(join(outside, "keep"), "preserved");
 const file = join(root, "target.txt");
 const hard = join(root, "hard.txt");
 const nested = join(root, "nested");
@@ -42,6 +44,17 @@ try {
   // Junctions do not require Windows symlink privileges. POSIX ignores type.
   fs.symlinkSync("nested", join(root, "junction"), "junction");
   console.log("junction", fs.statSync(join(root, "junction")).isDirectory(), fs.readlinkSync(join(root, "junction")) === (process.platform === "win32" ? nested : "nested"));
+  fs.unlinkSync(join(root, "junction"));
+  console.log("unlink directory link", fs.statSync(nested).isDirectory());
+  fs.symlinkSync("nested", join(root, "remove"), "junction");
+  fs.rmSync(join(root, "remove"));
+  console.log("remove directory link", fs.statSync(nested).isDirectory());
+  fs.symlinkSync(outside, join(root, "outside"), "junction");
   fs.unlinkSync(file);
   console.log("survives", fs.readFileSync(hard, "utf8"));
-} finally { fs.rmSync(root, { recursive: true, force: true }); }
+} finally {
+  try {
+    fs.rmSync(root, { recursive: true, force: true });
+    console.log("no-follow cleanup", fs.readFileSync(join(outside, "keep"), "utf8"));
+  } finally { fs.rmSync(outside, { recursive: true, force: true }); }
+}

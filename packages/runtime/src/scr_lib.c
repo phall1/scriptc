@@ -55,6 +55,8 @@
 
 static WCHAR *scr_fs_win_wide(const ScrStr *path);
 static int scr_fs_win_errno(DWORD error);
+static bool scr_stats_is_link_tag(DWORD tag);
+static bool scr_stats_link_target(HANDLE h, DWORD tag, double *size_out, ScrStr **text_out);
 
 static ScrStr *scr_fs_win_utf8(const WCHAR *text, size_t length) {
   if (length > INT_MAX) { SetLastError(ERROR_FILENAME_EXCED_RANGE); return NULL; }
@@ -2507,7 +2509,45 @@ void scr_fs_mkdir_mode(ScrStr *path, double mode) {
   if (scr_sys_mkdir(path->data, (mode_t)mode) != 0) scr_fs_throw(errno, "mkdir", path);
 }
 
+#ifdef _WIN32
+/* The CRT's stat follows junctions. Recognize real link reparse records
+ * before unlink/rm dispatch so a tree walk never descends into their targets.
+ * Return 1 for a removed link, 0 for an ordinary entry, -1 on failure. */
+static int scr_fs_win_remove_link(const char *path, size_t len) {
+  ScrStr *text = scr_str_new(path, len);
+  WCHAR *wide = scr_fs_win_wide(text);
+  scr_str_release(text);
+  if (!wide) { errno = scr_fs_win_errno(GetLastError()); return -1; }
+  DWORD attributes = GetFileAttributesW(wide);
+  if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_REPARSE_POINT)) { free(wide); return 0; }
+  HANDLE h = CreateFileW(wide, FILE_READ_ATTRIBUTES,
+    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+    FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+  if (h == INVALID_HANDLE_VALUE) { DWORD error = GetLastError(); free(wide); errno = scr_fs_win_errno(error); return -1; }
+  FILE_ATTRIBUTE_TAG_INFO tagged;
+  if (!GetFileInformationByHandleEx(h, FileAttributeTagInfo, &tagged, sizeof tagged)) {
+    DWORD error = GetLastError(); CloseHandle(h); free(wide); errno = scr_fs_win_errno(error); return -1;
+  }
+  double size;
+  bool link = scr_stats_is_link_tag(tagged.ReparseTag);
+  // Mount-point tags also represent mounted volumes. Only junction payloads
+  // are links; keep the existing ordinary-directory behavior for volumes.
+  if (link && tagged.ReparseTag == IO_REPARSE_TAG_MOUNT_POINT) link = scr_stats_link_target(h, tagged.ReparseTag, &size, NULL);
+  CloseHandle(h);
+  if (!link) { free(wide); return 0; }
+  BOOL ok = attributes & FILE_ATTRIBUTE_DIRECTORY ? RemoveDirectoryW(wide) : DeleteFileW(wide);
+  DWORD error = ok ? 0 : GetLastError();
+  free(wide);
+  if (!ok) { errno = scr_fs_win_errno(error); return -1; }
+  return 1;
+}
+#endif
+
 void scr_fs_unlink(ScrStr *path) {
+#ifdef _WIN32
+  int link = scr_fs_win_remove_link(path->data, path->len);
+  if (link != 0) { if (link < 0) scr_fs_throw(errno, "unlink", path); return; }
+#endif
   if (unlink(path->data) != 0) scr_fs_throw(errno, "unlink", path);
 }
 
@@ -3424,6 +3464,10 @@ void scr_fs_rename(ScrStr *oldpath, ScrStr *newpath) {
 static int scr_rm_unlink(const char *path, size_t len);
 
 void scr_fs_rm(ScrStr *path) {
+#ifdef _WIN32
+  int link = scr_fs_win_remove_link(path->data, path->len);
+  if (link != 0) { if (link < 0) scr_fs_throw(errno, "unlink", path); return; }
+#endif
   /* Node's rmSync: lstat first (a missing path reports the lstat syscall),
    * refuse directories (Node requires `recursive`, which the scriptc
    * surface doesn't declare — the message wording diverges from Node's
@@ -3578,6 +3622,10 @@ static int scr_rm_unlink(const char *path, size_t len) {
 /* Post-order tree removal for rmSync's recursive form. Stops at (and
  * records) the first failure, with the failing path and syscall name. */
 static void scr_rm_tree_e(const char *path, size_t len, ScrRmFail *f) {
+#ifdef _WIN32
+  int link = scr_fs_win_remove_link(path, len);
+  if (link != 0) { if (link < 0) scr_rm_fail_set(f, errno, "unlink", path, len); return; }
+#endif
   struct stat st;
   if (lstat(path, &st) != 0) {
     scr_rm_fail_set(f, errno, "lstat", path, len);
@@ -3618,6 +3666,10 @@ static void scr_rm_tree_e(const char *path, size_t len, ScrRmFail *f) {
  * force's ENOENT swallow, the non-recursive directory rejection, and the
  * tree walk — failures recorded in `f`, never thrown. */
 static void scr_fs_rm_attempt(ScrStr *path, bool recursive, bool force, ScrRmFail *f) {
+#ifdef _WIN32
+  int link = scr_fs_win_remove_link(path->data, path->len);
+  if (link != 0) { if (link < 0) scr_rm_fail_set(f, errno, "unlink", path->data, path->len); return; }
+#endif
   struct stat st;
   if (lstat(path->data, &st) != 0) {
     if (force && errno == ENOENT) return; /* Node: force swallows ENOENT */
