@@ -3670,6 +3670,7 @@ export type IrLibFn =
   | "fsp.link"
   | "fsp.symlink"
   | "fsp.readlink"
+  | "fsp.statfs"
   | "fsp.readlinkStr"
   | "fsp.readlinkBuffer"
   | "fsp.utimes"
@@ -4857,6 +4858,7 @@ export type IrLibFn =
   | "fs.linkSync"
   | "fs.symlinkSync"
   | "fs.readlinkSync"
+  | "fs.statfsSync"
   | "fs.readlinkSyncStr"
   | "fs.readlinkSyncBuffer"
   /** fs.openSync(path, flags) → the raw fd as f64; fs.readSync/fs.writeSync
@@ -8076,6 +8078,7 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "fs.linkSync",
   "fs.symlinkSync",
   "fs.readlinkSync",
+  "fs.statfsSync",
   "fs.readlinkSyncStr",
   "fs.readlinkSyncBuffer",
   "fs.writeFileModeSync",

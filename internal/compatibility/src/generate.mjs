@@ -595,12 +595,21 @@ function publicDetail(tier) {
   if (tier.status === "unreviewed") return "Not yet classified; tracked as open parity work.";
   if (source.startsWith("surface-manifest:unsupported:")) return "Explicitly rejected by a named compiler diagnostic.";
   if (source.startsWith("surface-manifest:dynamic-only:")) return "Explicitly refused in static code; this form requires the dynamic island.";
+  if (/^surface-manifest:node-builtin\.fs\.(?:statfsSync|promises\.statfs)$/.test(source) || source === "compiler-feature:fs.fs.statfs") {
+    return "Reads filesystem capacity using string, Buffer, or file URL paths with number or BigInt fields and deferred callbacks; StatFs prototype behavior and complete filesystem error metadata remain unsupported.";
+  }
   if (source.startsWith("surface-manifest:")) return "Implemented for the call shapes accepted by the compiler lowering.";
   if (/^compiler-dedicated:assert\.doesNot(?:Throw|Reject)$/.test(source)) {
     return "Supports callbacks or native promises with messages, Error classes, regular expressions, and validators accepting unknown values; object expectations and complete AssertionError metadata remain unsupported.";
   }
   if (source.startsWith("compiler-dedicated:")) return "Implemented by a dedicated static compiler/runtime path.";
   if (source.startsWith("compiler-feature:")) {
+    if (source === "compiler-feature:fs.fs.StatFs") {
+      return "Capacity snapshots expose seven mutable number or BigInt fields; StatFs prototype reflection and constructor behavior remain unsupported.";
+    }
+    if (/^compiler-feature:fs\.(?:type|bsize|blocks|bfree|bavail|files|ffree)$/.test(source)) {
+      return "Filesystem-capacity fields preserve unsigned platform values as numbers or BigInts.";
+    }
     if (/^compiler-feature:fs\.fs\.(?:link|symlink|readlink)$/.test(source)) {
       return "Creates hard or symbolic links and reads link targets using string, Buffer, or file URL paths, with encoded results and deferred error-first callbacks; complete filesystem error metadata remains unsupported.";
     }

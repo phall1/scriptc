@@ -2003,6 +2003,15 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
   ) {
     return { kind: "stats" };
   }
+  // Capacity snapshots and options keep their live object representation
+  // across numeric/BigInt overloads, runtime options, and callbacks.
+  if (
+    (psym?.name === "StatsFs" || psym?.name === "BigIntStatsFs" || psym?.name === "StatFsOptions") &&
+    checker.declarationsOf(psym).some(
+      (d) => (ts.isInterfaceDeclaration(d) || ts.isClassDeclaration(d)) &&
+        ctx.isStdlibFile(d.getSourceFile()) && isDeclaredInAmbientModule(d, "fs"),
+    )
+  ) return DYN;
   // fs/promises.FileHandle: an owned descriptor object. Module provenance
   // distinguishes it from user interfaces with the same name; both the
   // fallback and @types/node declare it in "fs/promises".

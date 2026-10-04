@@ -1225,16 +1225,25 @@ declare module "node:fs" {
   }
   /* statfs(2)/statvfs(3) — the filesystem-capacity snapshot (the fields
    * Node's statfsSync reports; bavail × bsize is the free-space probe). */
-  export interface StatsFs {
-    readonly type: number;
-    readonly bsize: number;
-    readonly blocks: number;
-    readonly bfree: number;
-    readonly bavail: number;
-    readonly files: number;
-    readonly ffree: number;
+  export interface StatsFsBase<T> {
+    type: T;
+    bsize: T;
+    blocks: T;
+    bfree: T;
+    bavail: T;
+    files: T;
+    ffree: T;
   }
-  export function statfsSync(path: string): StatsFs;
+  export interface StatsFs extends StatsFsBase<number> {}
+  export interface BigIntStatsFs extends StatsFsBase<bigint> {}
+  export interface StatFsOptions { bigint?: boolean; }
+  export function statfsSync(path: string | Uint8Array | URL, options?: StatFsOptions & { bigint?: false }): StatsFs;
+  export function statfsSync(path: string | Uint8Array | URL, options: StatFsOptions & { bigint: true }): BigIntStatsFs;
+  export function statfsSync(path: string | Uint8Array | URL, options?: StatFsOptions): StatsFs | BigIntStatsFs;
+  export function statfs(path: string | Uint8Array | URL, callback: (err: NodeJS.ErrnoException | null, stats: StatsFs) => void): void;
+  export function statfs(path: string | Uint8Array | URL, options: (StatFsOptions & { bigint?: false }) | undefined, callback: (err: NodeJS.ErrnoException | null, stats: StatsFs) => void): void;
+  export function statfs(path: string | Uint8Array | URL, options: StatFsOptions & { bigint: true }, callback: (err: NodeJS.ErrnoException | null, stats: BigIntStatsFs) => void): void;
+  export function statfs(path: string | Uint8Array | URL, options: StatFsOptions | undefined, callback: (err: NodeJS.ErrnoException | null, stats: StatsFs | BigIntStatsFs) => void): void;
   /* fs.watch — the file-watching slice (scr_watch.c, kqueue EVFILT_VNODE):
    * "rename"/"change" events on ONE path, watcher.close() to stop. The
    * listener takes zero parameters or the eventType string (the filename
@@ -1363,6 +1372,9 @@ declare module "fs/promises" {
   ): Promise<import("node:fs").Dirent[]>;
   export function rm(path: string): Promise<void>;
   export function stat(path: string): Promise<import("node:fs").Stats>;
+  export function statfs(path: string | Uint8Array | URL, options?: import("node:fs").StatFsOptions & { bigint?: false }): Promise<import("node:fs").StatsFs>;
+  export function statfs(path: string | Uint8Array | URL, options: import("node:fs").StatFsOptions & { bigint: true }): Promise<import("node:fs").BigIntStatsFs>;
+  export function statfs(path: string | Uint8Array | URL, options?: import("node:fs").StatFsOptions): Promise<import("node:fs").StatsFs | import("node:fs").BigIntStatsFs>;
   export function realpath(path: string): Promise<string>;
   export function lstat(path: string): Promise<import("node:fs").Stats>;
   export function unlink(path: string): Promise<void>;

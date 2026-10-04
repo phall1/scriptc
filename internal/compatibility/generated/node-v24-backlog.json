@@ -4,12 +4,12 @@
   "nodeCommit": "848430679556aed0bd073f2bc263331ad84fa119",
   "summary": {
     "taskCount": 3368,
-    "tierItemCount": 6645,
+    "tierItemCount": 6638,
     "tiers": {
       "static": {
         "replace-refusal": 42,
-        "verify-gap": 2458,
-        "audit-partial": 713,
+        "verify-gap": 2447,
+        "audit-partial": 717,
         "classify": 2,
         "implement": 80
       },
@@ -21,7 +21,7 @@
       }
     },
     "priorities": {
-      "high": 4482,
+      "high": 4475,
       "normal": 1411,
       "low": 752
     }
@@ -36081,12 +36081,17 @@
       "priority": "high",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:fs",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "surface-manifest:node-builtin.fs.promises.statfs",
+          "tests": [
+            "tests/corpus/node24-fs-statfs.ts",
+            "tests/corpus/node24-fs-statfs-options.cjs",
+            "tests/corpus/node24-fs-statfs-errors.cjs",
+            "tests/fixtures/node-types/fs-statfs.ts"
+          ]
         },
         "dynamic": {
           "status": "not-implemented",
@@ -37842,12 +37847,17 @@
       "priority": "high",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:fs",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "compiler-feature:fs.fs.statfs",
+          "tests": [
+            "tests/corpus/node24-fs-statfs-callbacks.cjs",
+            "tests/corpus/node24-fs-statfs-options.cjs",
+            "tests/corpus/node24-fs-statfs-errors.cjs",
+            "tests/fixtures/node-types/fs-statfs.ts"
+          ]
         },
         "dynamic": {
           "status": "not-implemented",
@@ -39807,12 +39817,17 @@
       "priority": "high",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:fs",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "surface-manifest:node-builtin.fs.statfsSync",
+          "tests": [
+            "tests/corpus/node24-fs-statfs.ts",
+            "tests/corpus/node24-fs-statfs-options.cjs",
+            "tests/corpus/node24-fs-statfs-errors.cjs",
+            "tests/fixtures/node-types/fs-statfs.ts"
+          ]
         },
         "dynamic": {
           "status": "not-implemented",
@@ -42489,12 +42504,16 @@
       "priority": "high",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:fs",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "compiler-feature:fs.fs.StatFs",
+          "tests": [
+            "tests/corpus/node24-fs-statfs.ts",
+            "tests/corpus/node24-fs-statfs-options.cjs",
+            "tests/fixtures/node-types/fs-statfs.ts"
+          ]
         },
         "dynamic": {
           "status": "not-implemented",
@@ -42521,14 +42540,6 @@
       },
       "priority": "high",
       "tiers": {
-        "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:fs",
-          "tests": []
-        },
         "dynamic": {
           "status": "not-implemented",
           "action": "verify-gap",
@@ -42554,14 +42565,6 @@
       },
       "priority": "high",
       "tiers": {
-        "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:fs",
-          "tests": []
-        },
         "dynamic": {
           "status": "not-implemented",
           "action": "verify-gap",
@@ -42587,14 +42590,6 @@
       },
       "priority": "high",
       "tiers": {
-        "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:fs",
-          "tests": []
-        },
         "dynamic": {
           "status": "not-implemented",
           "action": "verify-gap",
@@ -42620,14 +42615,6 @@
       },
       "priority": "high",
       "tiers": {
-        "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:fs",
-          "tests": []
-        },
         "dynamic": {
           "status": "not-implemented",
           "action": "verify-gap",
@@ -42653,14 +42640,6 @@
       },
       "priority": "high",
       "tiers": {
-        "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:fs",
-          "tests": []
-        },
         "dynamic": {
           "status": "not-implemented",
           "action": "verify-gap",
@@ -42686,14 +42665,6 @@
       },
       "priority": "high",
       "tiers": {
-        "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:fs",
-          "tests": []
-        },
         "dynamic": {
           "status": "not-implemented",
           "action": "verify-gap",
@@ -42719,14 +42690,6 @@
       },
       "priority": "high",
       "tiers": {
-        "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:fs",
-          "tests": []
-        },
         "dynamic": {
           "status": "not-implemented",
           "action": "verify-gap",

@@ -27,6 +27,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#if defined(__linux__)
+#include <sys/vfs.h>
+#elif defined(__APPLE__) || defined(__FreeBSD__)
+#include <sys/mount.h>
+#elif !defined(_WIN32) && !defined(__wasi__)
+#include <sys/statvfs.h>
+#endif
 #include <time.h>
 
 #ifdef _WIN32
@@ -4457,6 +4464,76 @@ void scr_fs_symlink(ScrStr *target, ScrStr *destination, int kind) {
   (void)kind;
   if (symlink(target->data, destination->data) != 0) scr_fs_throw2(errno, "symlink", target, destination);
 #endif
+}
+
+/* Keep the unsigned libuv statfs representation before selecting Number or
+ * BigInt. Free-space counts are live snapshots, not cached volume metadata. */
+ScrDyn *scr_fs_statfs(ScrStr *path, bool bigint) {
+  uint64_t fields[7];
+#if defined(_WIN32)
+  ScrStr *syscall_path = scr_path_win32_to_namespaced_path(path);
+  WCHAR *wide = scr_fs_win_wide(syscall_path);
+  scr_str_release(syscall_path);
+  if (!wide) { scr_fs_throw(scr_fs_win_errno(GetLastError()), "statfs", path); return NULL; }
+  DWORD sectors, bytes, free_clusters, total_clusters;
+  BOOL ok = GetDiskFreeSpaceW(wide, &sectors, &bytes, &free_clusters, &total_clusters);
+  DWORD error = ok ? 0 : GetLastError();
+  if (!ok && error == ERROR_DIRECTORY) {
+    /* libuv retries a file path's parent once, preserving the original path
+     * in errors. GetFullPathName also expands relative and drive paths. */
+    DWORD size = GetFullPathNameW(wide, 0, NULL, NULL);
+    WCHAR *absolute = size ? malloc((size_t)size * sizeof *absolute) : NULL;
+    if (size && !absolute) scr_trap("scriptc: out of memory\n");
+    WCHAR *part = NULL;
+    DWORD length = absolute ? GetFullPathNameW(wide, size, absolute, &part) : 0;
+    if (length && length < size) {
+      if (part) *part = L'\0';
+      ok = GetDiskFreeSpaceW(absolute, &sectors, &bytes, &free_clusters, &total_clusters);
+      if (!ok) error = GetLastError();
+    }
+    free(absolute);
+  }
+  free(wide);
+  if (!ok) { scr_fs_throw(scr_fs_win_errno(error), "statfs", path); return NULL; }
+  fields[0] = 0;
+  fields[1] = (DWORD)(bytes * sectors);
+  fields[2] = total_clusters;
+  fields[3] = fields[4] = free_clusters;
+  fields[5] = fields[6] = 0;
+#elif defined(__wasi__)
+  (void)path; (void)bigint;
+  static const char message[] = "Filesystem capacity queries have no native WASI syscall";
+  scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
+  return NULL;
+#else
+#if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
+  struct statfs snapshot;
+  if (statfs(path->data, &snapshot) != 0) { scr_fs_throw(errno, "statfs", path); return NULL; }
+  fields[0] = (uint64_t)snapshot.f_type;
+#else
+  struct statvfs snapshot;
+  if (statvfs(path->data, &snapshot) != 0) { scr_fs_throw(errno, "statfs", path); return NULL; }
+  fields[0] = 0;
+#endif
+  fields[1] = (uint64_t)snapshot.f_bsize;
+  fields[2] = (uint64_t)snapshot.f_blocks;
+  fields[3] = (uint64_t)snapshot.f_bfree;
+  fields[4] = (uint64_t)snapshot.f_bavail;
+  fields[5] = (uint64_t)snapshot.f_files;
+  fields[6] = (uint64_t)snapshot.f_ffree;
+#endif
+  static const char *names[] = { "type", "bsize", "blocks", "bfree", "bavail", "files", "ffree" };
+  ScrDyn *result = scr_dyn_new_obj();
+  for (size_t i = 0; i < 7; i++) {
+    ScrDyn *value;
+    if (bigint) {
+      ScrBigInt *number = scr_bigint_from_u64(fields[i]);
+      value = scr_dyn_new_bigint(number);
+      scr_bigint_release(number);
+    } else value = scr_dyn_new_num((double)fields[i]);
+    scr_dyn_obj_set(result, names[i], strlen(names[i]), value);
+  }
+  return result;
 }
 
 ScrBytes *scr_fs_readlink_bytes(ScrStr *path) {

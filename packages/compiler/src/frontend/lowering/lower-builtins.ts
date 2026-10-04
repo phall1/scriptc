@@ -1672,8 +1672,8 @@ function lowerFsSyncBufferWindow(
         ? lowerFsTimestampValue(lowerer, arg, loc) : lowerer.lowerExprExpecting(arg, DYN)), type: DYN, loc };
       return { kind: "libCall", fn: "fs.callbackCall", args: [{ kind: "strLit", value: bi.member, type: STRING, loc }, args], type: DYN, loc };
     }
-    if ((bi.module === "fs" && ["linkSync", "symlinkSync", "readlinkSync"].includes(bi.member)) ||
-        (bi.module === "fs/promises" && ["link", "symlink", "readlink"].includes(bi.member))) {
+    if ((bi.module === "fs" && ["linkSync", "symlinkSync", "readlinkSync", "statfsSync"].includes(bi.member)) ||
+        (bi.module === "fs/promises" && ["link", "symlink", "readlink", "statfs"].includes(bi.member))) {
       const symbolic = bi.member === "symlinkSync" || bi.member === "symlink";
       const reading = bi.member === "readlinkSync" || bi.member === "readlink";
       const arity = symbolic ? 3 : 2;

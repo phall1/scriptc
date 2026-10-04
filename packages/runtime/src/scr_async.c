@@ -1778,6 +1778,11 @@ ScrPromise *scr_fsp_readlink_dyn(const ScrDyn *path, const ScrDyn *options) {
   return scr_promise_settled_ref(result, scr_dyn_retain_v, scr_dyn_release_v, scr_dyn_trace_v);
 }
 
+ScrPromise *scr_fsp_statfs(const ScrDyn *path, const ScrDyn *options) {
+  ScrDyn *result = scr_fs_statfs_checked(path, options);
+  return scr_promise_settled_ref(result, scr_dyn_retain_v, scr_dyn_release_v, scr_dyn_trace_v);
+}
+
 ScrPromise *scr_fsp_readlink_str(const ScrDyn *path, const ScrDyn *options) {
   ScrDyn *result = scr_fs_readlink_checked(path, options, true);
   ScrStr *text = result && result->kind == SCR_DYN_STR ? scr_str_retain(result->v.str) : NULL;

@@ -2645,6 +2645,9 @@ void scr_fs_symlink_checked(const ScrDyn *target, const ScrDyn *destination, con
 void scr_fs_symlink_promise_checked(const ScrDyn *target, const ScrDyn *destination, const ScrDyn *type);
 ScrDyn *scr_fs_readlink_checked(const ScrDyn *path, const ScrDyn *options, bool promise);
 ScrDyn *scr_fs_readlink_dyn(const ScrDyn *path, const ScrDyn *options);
+ScrDyn *scr_fs_statfs(ScrStr *path, bool bigint);
+ScrDyn *scr_fs_statfs_checked(const ScrDyn *path, const ScrDyn *options);
+ScrPromise *scr_fsp_statfs(const ScrDyn *path, const ScrDyn *options);
 ScrStr *scr_fs_readlink_str(const ScrDyn *path, const ScrDyn *options);
 ScrBytes *scr_fs_readlink_buffer(const ScrDyn *path, const ScrDyn *options);
 ScrPromise *scr_fsp_link(const ScrDyn *existing, const ScrDyn *destination);

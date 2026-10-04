@@ -735,6 +735,9 @@ export const BUILTIN_MODULE_FNS: Record<string, Record<string, BuiltinModuleFn |
     readlinkSync: { fn: "fs.readlinkSync", params: [DYN, DYN], result: DYN, valueParams: [
       ...exactValueParams(DYN), { mode: "optional", type: DYN, defaultValue: undefined },
     ] },
+    statfsSync: { fn: "fs.statfsSync", params: [DYN, DYN], result: DYN, valueParams: [
+      ...exactValueParams(DYN), { mode: "optional", type: DYN, defaultValue: undefined },
+    ] },
     // realpath(3) — Node's realpathSync (failures spell syscall "lstat",
     // Node's own message shape).
     realpathSync: { fn: "fs.realpathSync", params: [STRING], result: STRING },
@@ -778,6 +781,9 @@ export const BUILTIN_MODULE_FNS: Record<string, Record<string, BuiltinModuleFn |
       ...exactValueParams(DYN, DYN), { mode: "optional", type: DYN, defaultValue: undefined },
     ] },
     readlink: { fn: "fsp.readlink", params: [DYN, DYN], result: { kind: "promise", inner: DYN }, valueParams: [
+      ...exactValueParams(DYN), { mode: "optional", type: DYN, defaultValue: undefined },
+    ] },
+    statfs: { fn: "fsp.statfs", params: [DYN, DYN], result: { kind: "promise", inner: DYN }, valueParams: [
       ...exactValueParams(DYN), { mode: "optional", type: DYN, defaultValue: undefined },
     ] },
     utimes: { fn: "fsp.utimes", params: [DYN, DYN, DYN], result: { kind: "promise", inner: VOID } },
@@ -1411,7 +1417,7 @@ export function builtinModuleFnOf(lowerer: Lowerer, module: string, member: stri
 export const FS_CALLBACK_MEMBERS = new Set([
   "access", "cp", "copyFile", "chmod", "chown", "glob", "link", "mkdir", "mkdtemp", "rm", "rmdir", "unlink",
   "open", "close", "fstat", "ftruncate", "fsync", "fdatasync", "fchmod", "read", "write", "readv", "writev", "readlink", "realpath", "rename", "stat", "lstat",
-  "symlink", "truncate", "utimes", "futimes", "lutimes", "readFile", "writeFile", "appendFile", "readdir",
+  "symlink", "statfs", "truncate", "utimes", "futimes", "lutimes", "readFile", "writeFile", "appendFile", "readdir",
 ]);
 
 /** One member's fence hint, own-property-safe (a collision would print an

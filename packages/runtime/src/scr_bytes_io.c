@@ -300,6 +300,30 @@ static ScrStr *scr_fs_timestamp_path(const ScrDyn *value) {
   return scr_fs_checked_path(value, "path");
 }
 
+/* statfs reads options.bigint without validating/coercing the options object.
+ * Undefined selects the default; null throws, and only boolean true opts in. */
+static bool scr_fs_statfs_bigint(const ScrDyn *options) {
+  if (options->kind == SCR_DYN_UNDEF) return false;
+  if (options->kind == SCR_DYN_NULL) {
+    static const char message[] = "Cannot read properties of null (reading 'bigint')";
+    scr_throw_error_msg(SCR_ERR_TYPE, message, sizeof message - 1);
+    return false;
+  }
+  ScrDyn *value = scr_fs_cb_option(options, "bigint");
+  bool bigint = value && value->kind == SCR_DYN_BOOL && value->v.b;
+  scr_dyn_release(value);
+  return bigint;
+}
+
+ScrDyn *scr_fs_statfs_checked(const ScrDyn *input, const ScrDyn *options) {
+  ScrStr *path = scr_fs_checked_path(input, "path");
+  if (!path) return NULL;
+  bool bigint = scr_fs_statfs_bigint(options);
+  ScrDyn *result = scr_exc_pending() ? NULL : scr_fs_statfs(path, bigint);
+  scr_str_release(path);
+  return result;
+}
+
 /* validateOneOf runs before either path, even on POSIX where the type has
  * no syscall effect. -1 means infer the target's kind on Windows. */
 static int scr_fs_symlink_type(const ScrDyn *type) {
@@ -673,6 +697,22 @@ static ScrArr *scr_fs_cb_vectors(const ScrDyn *buffers) {
 
 static ScrDyn *scr_fs_cb_invoke(ScrStr *member, ScrDyn *const *args, size_t argc) {
   const char *op = member->data;
+  if (!strcmp(op, "statfs")) {
+    const ScrDyn *options = scr_fs_cb_arg(args, argc, 1);
+    const ScrDyn *callback = options->kind == SCR_DYN_FUNC ? options : scr_fs_cb_arg(args, argc, 2);
+    if (!scr_fs_cb_chk(callback, "cb")) return NULL;
+    ScrStr *path = scr_fs_checked_path(scr_fs_cb_arg(args, argc, 0), "path");
+    if (!path) return NULL;
+    if (options->kind == SCR_DYN_FUNC) options = scr_dyn_undefined();
+    bool bigint = scr_fs_statfs_bigint(options);
+    /* FSReqCallback captures the first read; binding.statfs reads it again. */
+    if (!scr_exc_pending()) (void)scr_fs_statfs_bigint(options);
+    if (scr_exc_pending()) { scr_str_release(path); return NULL; }
+    ScrDyn *result = scr_fs_statfs(path, bigint);
+    scr_str_release(path);
+    scr_fs_cb_schedule(callback, result, NULL);
+    return scr_dyn_retain(scr_dyn_undefined());
+  }
   if (!strcmp(op, "link") || !strcmp(op, "symlink") || !strcmp(op, "readlink")) {
     const ScrDyn *first = scr_fs_cb_arg(args, argc, 0);
     const ScrDyn *second = scr_fs_cb_arg(args, argc, 1);

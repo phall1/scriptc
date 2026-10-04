@@ -10692,6 +10692,30 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/node24-fs-statfs-callbacks.cjs": {
+   "order": [
+    "<repo>/tests/corpus/node24-fs-statfs-callbacks.cjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/node24-fs-statfs-errors.cjs": {
+   "order": [
+    "<repo>/tests/corpus/node24-fs-statfs-errors.cjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/node24-fs-statfs-options.cjs": {
+   "order": [
+    "<repo>/tests/corpus/node24-fs-statfs-options.cjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/node24-fs-statfs.ts": {
+   "order": [
+    "<repo>/tests/corpus/node24-fs-statfs.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/node24-fs-timestamps-callbacks.cjs": {
    "order": [
     "<repo>/tests/corpus/node24-fs-timestamps-callbacks.cjs"
@@ -13346,6 +13370,12 @@
   "<repo>/tests/fixtures/node-types/fs-links.ts": {
    "order": [
     "<repo>/tests/fixtures/node-types/fs-links.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/fixtures/node-types/fs-statfs.ts": {
+   "order": [
+    "<repo>/tests/fixtures/node-types/fs-statfs.ts"
    ],
    "diags": []
   },

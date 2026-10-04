@@ -506,10 +506,10 @@
       "entries": 308,
       "apiEntries": 276,
       "static": {
-        "supported": 0,
-        "partial": 94,
+        "supported": 7,
+        "partial": 98,
         "refused": 0,
-        "not-implemented": 182,
+        "not-implemented": 171,
         "by-design": 0,
         "unreviewed": 0,
         "not-applicable": 0
@@ -50954,12 +50954,17 @@
           "tests/corpus/node24-fs-links-promise-errors.cjs",
           "tests/corpus/node24-fs-links-promises.ts",
           "tests/corpus/node24-fs-links.ts",
+          "tests/corpus/node24-fs-statfs-callbacks.cjs",
+          "tests/corpus/node24-fs-statfs-errors.cjs",
+          "tests/corpus/node24-fs-statfs-options.cjs",
+          "tests/corpus/node24-fs-statfs.ts",
           "tests/corpus/node24-fs-timestamps-callbacks.cjs",
           "tests/corpus/node24-fs-timestamps-errors.cjs",
           "tests/corpus/node24-fs-timestamps-promises.ts",
           "tests/corpus/node24-fs-timestamps-symlinks.ts",
           "tests/corpus/node24-fs-timestamps.ts",
           "tests/fixtures/node-types/fs-links.ts",
+          "tests/fixtures/node-types/fs-statfs.ts",
           "tests/fixtures/node-types/fs-timestamps.ts"
         ]
       },
@@ -52784,8 +52789,14 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:fs"
+        "status": "partial",
+        "evidence": "surface-manifest:node-builtin.fs.promises.statfs",
+        "tests": [
+          "tests/corpus/node24-fs-statfs.ts",
+          "tests/corpus/node24-fs-statfs-options.cjs",
+          "tests/corpus/node24-fs-statfs-errors.cjs",
+          "tests/fixtures/node-types/fs-statfs.ts"
+        ]
       },
       "dynamic": {
         "status": "not-implemented",
@@ -54404,8 +54415,14 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:fs"
+        "status": "partial",
+        "evidence": "compiler-feature:fs.fs.statfs",
+        "tests": [
+          "tests/corpus/node24-fs-statfs-callbacks.cjs",
+          "tests/corpus/node24-fs-statfs-options.cjs",
+          "tests/corpus/node24-fs-statfs-errors.cjs",
+          "tests/fixtures/node-types/fs-statfs.ts"
+        ]
       },
       "dynamic": {
         "status": "not-implemented",
@@ -56261,8 +56278,14 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:fs"
+        "status": "partial",
+        "evidence": "surface-manifest:node-builtin.fs.statfsSync",
+        "tests": [
+          "tests/corpus/node24-fs-statfs.ts",
+          "tests/corpus/node24-fs-statfs-options.cjs",
+          "tests/corpus/node24-fs-statfs-errors.cjs",
+          "tests/fixtures/node-types/fs-statfs.ts"
+        ]
       },
       "dynamic": {
         "status": "not-implemented",
@@ -58562,8 +58585,13 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:fs"
+        "status": "partial",
+        "evidence": "compiler-feature:fs.fs.StatFs",
+        "tests": [
+          "tests/corpus/node24-fs-statfs.ts",
+          "tests/corpus/node24-fs-statfs-options.cjs",
+          "tests/fixtures/node-types/fs-statfs.ts"
+        ]
       },
       "dynamic": {
         "status": "not-implemented",
@@ -58589,8 +58617,13 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:fs"
+        "status": "supported",
+        "evidence": "compiler-feature:fs.bavail",
+        "tests": [
+          "tests/corpus/node24-fs-statfs.ts",
+          "tests/corpus/node24-fs-statfs-options.cjs",
+          "tests/fixtures/node-types/fs-statfs.ts"
+        ]
       },
       "dynamic": {
         "status": "not-implemented",
@@ -58616,8 +58649,13 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:fs"
+        "status": "supported",
+        "evidence": "compiler-feature:fs.bfree",
+        "tests": [
+          "tests/corpus/node24-fs-statfs.ts",
+          "tests/corpus/node24-fs-statfs-options.cjs",
+          "tests/fixtures/node-types/fs-statfs.ts"
+        ]
       },
       "dynamic": {
         "status": "not-implemented",
@@ -58643,8 +58681,13 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:fs"
+        "status": "supported",
+        "evidence": "compiler-feature:fs.blocks",
+        "tests": [
+          "tests/corpus/node24-fs-statfs.ts",
+          "tests/corpus/node24-fs-statfs-options.cjs",
+          "tests/fixtures/node-types/fs-statfs.ts"
+        ]
       },
       "dynamic": {
         "status": "not-implemented",
@@ -58670,8 +58713,13 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:fs"
+        "status": "supported",
+        "evidence": "compiler-feature:fs.bsize",
+        "tests": [
+          "tests/corpus/node24-fs-statfs.ts",
+          "tests/corpus/node24-fs-statfs-options.cjs",
+          "tests/fixtures/node-types/fs-statfs.ts"
+        ]
       },
       "dynamic": {
         "status": "not-implemented",
@@ -58697,8 +58745,13 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:fs"
+        "status": "supported",
+        "evidence": "compiler-feature:fs.ffree",
+        "tests": [
+          "tests/corpus/node24-fs-statfs.ts",
+          "tests/corpus/node24-fs-statfs-options.cjs",
+          "tests/fixtures/node-types/fs-statfs.ts"
+        ]
       },
       "dynamic": {
         "status": "not-implemented",
@@ -58724,8 +58777,13 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:fs"
+        "status": "supported",
+        "evidence": "compiler-feature:fs.files",
+        "tests": [
+          "tests/corpus/node24-fs-statfs.ts",
+          "tests/corpus/node24-fs-statfs-options.cjs",
+          "tests/fixtures/node-types/fs-statfs.ts"
+        ]
       },
       "dynamic": {
         "status": "not-implemented",
@@ -58751,8 +58809,13 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:fs"
+        "status": "supported",
+        "evidence": "compiler-feature:fs.type",
+        "tests": [
+          "tests/corpus/node24-fs-statfs.ts",
+          "tests/corpus/node24-fs-statfs-options.cjs",
+          "tests/fixtures/node-types/fs-statfs.ts"
+        ]
       },
       "dynamic": {
         "status": "not-implemented",

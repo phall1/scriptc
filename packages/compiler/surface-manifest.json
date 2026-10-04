@@ -1077,6 +1077,12 @@
       "status": "static"
     },
     {
+      "id": "node-builtin.fs.promises.statfs",
+      "kind": "node-builtin",
+      "name": "fs/promises.statfs",
+      "status": "static"
+    },
+    {
       "id": "node-builtin.fs.promises.symlink",
       "kind": "node-builtin",
       "name": "fs/promises.symlink",
@@ -1170,6 +1176,12 @@
       "id": "node-builtin.fs.statSync",
       "kind": "node-builtin",
       "name": "fs.statSync",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.fs.statfsSync",
+      "kind": "node-builtin",
+      "name": "fs.statfsSync",
       "status": "static"
     },
     {

@@ -165,6 +165,21 @@ function isParseArgsDynProperty(lowerer: Lowerer, expr: ts.PropertyAccessExpress
   });
 }
 
+function isStatFsDynProperty(lowerer: Lowerer, expr: ts.PropertyAccessExpression): boolean {
+  if (!["type", "bsize", "blocks", "bfree", "bavail", "files", "ffree", "bigint"].includes(expr.name.text)) return false;
+  const symbol = lowerer.checker.getSymbolAtLocation(expr.name);
+  return !!symbol && lowerer.checker.declarationsOf(symbol).some((declaration) => {
+    if (!lowerer.isStdlibFile(declaration.getSourceFile())) return false;
+    const parent = declaration.parent;
+    if (!ts.isInterfaceDeclaration(parent)) return false;
+    if (expr.name.text === "bigint" ? parent.name.text !== "StatFsOptions" : !["StatsFsBase", "StatsFs", "BigIntStatsFs"].includes(parent.name.text)) return false;
+    for (let node: ts.Node | undefined = parent.parent; node; node = node.parent) {
+      if (ts.isModuleDeclaration(node) && ts.isStringLiteral(node.name)) return node.name.text === "fs" || node.name.text === "node:fs";
+    }
+    return false;
+  });
+}
+
 export function lowerExpr(lowerer: Lowerer, expr: ts.Expression): IrExpr {
     if (lowerExprDepth >= LOWER_EXPR_MAX_DEPTH) {
       lowerer.unsupported("SC1090", expr, `expressions nested deeper than ${LOWER_EXPR_MAX_DEPTH} levels`);
@@ -2119,16 +2134,13 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
           if (t) return nsUndefRead(lowerer, ambientRoot.text, expr, t);
         }
       }
-      // parseArgs results/tokens live in the checked-dynamic tree. A token
-      // discriminant check narrows its checker type to one anonymous arm,
-      // whose ambient property symbols would otherwise hit SC2020 before
-      // the generic dyn receiver path below. Provenance is limited to the
-      // node:util parseArgs family; every other stdlib member keeps its
-      // ordinary surface fence.
+      // Checked-dynamic stdlib results retain ambient property symbols,
+      // including parseArgs tokens narrowed to anonymous union arms. Only
+      // members owned by these implemented families bypass the stdlib fence.
       const segmentDataSymbol = lowerer.typeOf(expr.expression).getSymbol();
       const segmentDataProperty = segmentDataSymbol?.name === "SegmentData" && lowerer.isStdlibSymbol(segmentDataSymbol) &&
         ["segment", "index", "input", "isWordLike"].includes(expr.name.text);
-      if (isParseArgsDynProperty(lowerer, expr) || segmentDataProperty) {
+      if (isParseArgsDynProperty(lowerer, expr) || isStatFsDynProperty(lowerer, expr) || segmentDataProperty) {
         const recv = lowerer.lowerExpr(expr.expression);
         if (recv.type.kind === "dyn") {
           const key: IrExpr = {

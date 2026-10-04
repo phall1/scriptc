@@ -457,10 +457,10 @@
       "entries": 276,
       "apiEntries": 276,
       "static": {
-        "supported": 0,
-        "partial": 94,
+        "supported": 7,
+        "partial": 98,
         "refused": 0,
-        "not-implemented": 182,
+        "not-implemented": 171,
         "by-design": 0,
         "unreviewed": 0,
         "not-applicable": 0
@@ -36525,9 +36525,9 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "detail": "No static compiler lowering is registered for this API yet.",
-        "verification": "registry-gap"
+        "status": "partial",
+        "detail": "Reads filesystem capacity using string, Buffer, or file URL paths with number or BigInt fields and deferred callbacks; StatFs prototype behavior and complete filesystem error metadata remain unsupported.",
+        "verification": "test-backed"
       },
       "dynamic": {
         "status": "not-implemented",
@@ -37897,9 +37897,9 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "detail": "No static compiler lowering is registered for this API yet.",
-        "verification": "registry-gap"
+        "status": "partial",
+        "detail": "Reads filesystem capacity using string, Buffer, or file URL paths with number or BigInt fields and deferred callbacks; StatFs prototype behavior and complete filesystem error metadata remain unsupported.",
+        "verification": "test-backed"
       },
       "dynamic": {
         "status": "not-implemented",
@@ -39353,9 +39353,9 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "detail": "No static compiler lowering is registered for this API yet.",
-        "verification": "registry-gap"
+        "status": "partial",
+        "detail": "Reads filesystem capacity using string, Buffer, or file URL paths with number or BigInt fields and deferred callbacks; StatFs prototype behavior and complete filesystem error metadata remain unsupported.",
+        "verification": "test-backed"
       },
       "dynamic": {
         "status": "not-implemented",
@@ -41537,9 +41537,9 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "detail": "No static compiler lowering is registered for this API yet.",
-        "verification": "registry-gap"
+        "status": "partial",
+        "detail": "Capacity snapshots expose seven mutable number or BigInt fields; StatFs prototype reflection and constructor behavior remain unsupported.",
+        "verification": "test-backed"
       },
       "dynamic": {
         "status": "not-implemented",
@@ -41565,9 +41565,9 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "detail": "No static compiler lowering is registered for this API yet.",
-        "verification": "registry-gap"
+        "status": "supported",
+        "detail": "Filesystem-capacity fields preserve unsigned platform values as numbers or BigInts.",
+        "verification": "test-backed"
       },
       "dynamic": {
         "status": "not-implemented",
@@ -41593,9 +41593,9 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "detail": "No static compiler lowering is registered for this API yet.",
-        "verification": "registry-gap"
+        "status": "supported",
+        "detail": "Filesystem-capacity fields preserve unsigned platform values as numbers or BigInts.",
+        "verification": "test-backed"
       },
       "dynamic": {
         "status": "not-implemented",
@@ -41621,9 +41621,9 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "detail": "No static compiler lowering is registered for this API yet.",
-        "verification": "registry-gap"
+        "status": "supported",
+        "detail": "Filesystem-capacity fields preserve unsigned platform values as numbers or BigInts.",
+        "verification": "test-backed"
       },
       "dynamic": {
         "status": "not-implemented",
@@ -41649,9 +41649,9 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "detail": "No static compiler lowering is registered for this API yet.",
-        "verification": "registry-gap"
+        "status": "supported",
+        "detail": "Filesystem-capacity fields preserve unsigned platform values as numbers or BigInts.",
+        "verification": "test-backed"
       },
       "dynamic": {
         "status": "not-implemented",
@@ -41677,9 +41677,9 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "detail": "No static compiler lowering is registered for this API yet.",
-        "verification": "registry-gap"
+        "status": "supported",
+        "detail": "Filesystem-capacity fields preserve unsigned platform values as numbers or BigInts.",
+        "verification": "test-backed"
       },
       "dynamic": {
         "status": "not-implemented",
@@ -41705,9 +41705,9 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "detail": "No static compiler lowering is registered for this API yet.",
-        "verification": "registry-gap"
+        "status": "supported",
+        "detail": "Filesystem-capacity fields preserve unsigned platform values as numbers or BigInts.",
+        "verification": "test-backed"
       },
       "dynamic": {
         "status": "not-implemented",
@@ -41733,9 +41733,9 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "detail": "No static compiler lowering is registered for this API yet.",
-        "verification": "registry-gap"
+        "status": "supported",
+        "detail": "Filesystem-capacity fields preserve unsigned platform values as numbers or BigInts.",
+        "verification": "test-backed"
       },
       "dynamic": {
         "status": "not-implemented",

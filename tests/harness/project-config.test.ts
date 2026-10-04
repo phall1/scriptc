@@ -25,6 +25,17 @@ const fixture = (name: string) => join(repoRoot, "tests/fixtures/strictness", na
 const nodeTypesDir = join(repoRoot, "tests/fixtures/node-types");
 const sanitize = process.env["SCRIPTC_SAN"] === "1";
 
+test("node-types: filesystem capacity supports typed number and BigInt results under @types/node", async () => {
+  const outDir = outDirFor("fs-statfs");
+  const entry = join(nodeTypesDir, "fs-statfs.ts");
+  const result = await compile(entry, { outPath: join(outDir, process.platform === "win32" ? "fs-statfs.exe" : "fs-statfs"), outDir, sanitize });
+  expect(result.ok, !result.ok ? JSON.stringify(result.diagnostics, null, 2) : "").toBe(true);
+  if (!result.ok) return;
+  const [native, node] = await Promise.all([execFileAsync(result.binaryPath), execFileAsync(process.execPath, ["--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", entry])]);
+  expect(native.stdout).toBe(node.stdout);
+  expect(native.stderr).toBe(node.stderr);
+});
+
 test("node-types: filesystem links accept URL and Buffer paths and typed readlink results under @types/node", async () => {
   const outDir = outDirFor("fs-links");
   const entry = join(nodeTypesDir, "fs-links.ts");
