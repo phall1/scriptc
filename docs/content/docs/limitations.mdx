@@ -207,6 +207,8 @@ Uncaught exceptions print `Uncaught <value>` to stderr instead of Node.js's stac
 
 In a TypeScript `--dynamic` build, `const host: any = globalThis` or `(globalThis as any).TextDecoder` accesses the engine's global object. Its Node globals use those shims even without an embedded npm package. For example, the engine's `TextDecoder` supports UTF-8 labels only. Optional capabilities such as `fetch` are installed only when the build links their bridge.
 
+Embedded Web Streams support default readable streams, writable streams and their writers/controllers, count and byte-length queuing strategies, transform streams, and UTF-8 decoder streams. Writable sinks serialize queued writes, wait for asynchronous start/close/abort callbacks, and expose queue backpressure through `ready` and `desiredSize`. Transform streams still run without readable-side backpressure. Byte streams, BYOB readers, `tee()`, `pipeTo()`, stream transfer, and piping with AbortSignal remain unsupported. These embedded APIs do not broaden the separate static Web Streams surface.
+
 Static tasks drain before engine jobs run at event-loop quiescence. A static `await` racing a package promise can therefore resolve in a different order from Node.js.
 
 Top-level `await` is unsupported in embedded ESM packages. It is supported in the program's own ESM graph and packages compiled through `--npm-static`.

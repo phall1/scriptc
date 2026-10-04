@@ -13793,6 +13793,24 @@
     "<repo>/tests/fixtures/npm/cases/node24-url-authority/main.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/fixtures/npm/cases/node24-web-stream-queues/main.ts": {
+   "order": [
+    "<repo>/tests/fixtures/npm/cases/node24-web-stream-queues/main.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts": {
+   "order": [
+    "<repo>/tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/fixtures/npm/cases/node24-web-stream-errors/main.ts": {
+   "order": [
+    "<repo>/tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
+   ],
+   "diags": []
   }
  }
 }

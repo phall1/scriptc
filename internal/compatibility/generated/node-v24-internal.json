@@ -540,9 +540,9 @@
       },
       "dynamic": {
         "supported": 0,
-        "partial": 33,
+        "partial": 38,
         "refused": 0,
-        "not-implemented": 59,
+        "not-implemented": 54,
         "by-design": 0,
         "unreviewed": 0,
         "not-applicable": 0
@@ -1452,9 +1452,9 @@
       },
       "dynamic": {
         "supported": 0,
-        "partial": 4,
+        "partial": 27,
         "refused": 0,
-        "not-implemented": 84,
+        "not-implemented": 61,
         "by-design": 0,
         "unreviewed": 0,
         "not-applicable": 0
@@ -60497,8 +60497,8 @@
         "evidence": "compiler-unmatched:globals"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-global-absent:ByteLengthQueuingStrategy",
+        "status": "partial",
+        "evidence": "island-global:ByteLengthQueuingStrategy",
         "tests": [
           "tests/harness/web-globals.test.ts"
         ]
@@ -60587,8 +60587,8 @@
         "evidence": "compiler-unmatched:globals"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-global-absent:CountQueuingStrategy",
+        "status": "partial",
+        "evidence": "island-global:CountQueuingStrategy",
         "tests": [
           "tests/harness/web-globals.test.ts"
         ]
@@ -61860,8 +61860,8 @@
         "evidence": "compiler-unmatched:globals"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-global-absent:WritableStream",
+        "status": "partial",
+        "evidence": "island-global:WritableStream",
         "tests": [
           "tests/harness/web-globals.test.ts"
         ]
@@ -61890,8 +61890,8 @@
         "evidence": "compiler-unmatched:globals"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-global-absent:WritableStreamDefaultController",
+        "status": "partial",
+        "evidence": "island-global:WritableStreamDefaultController",
         "tests": [
           "tests/harness/web-globals.test.ts"
         ]
@@ -61920,8 +61920,8 @@
         "evidence": "compiler-unmatched:globals"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-global-absent:WritableStreamDefaultWriter",
+        "status": "partial",
+        "evidence": "island-global:WritableStreamDefaultWriter",
         "tests": [
           "tests/harness/web-globals.test.ts"
         ]
@@ -122757,6 +122757,9 @@
         "status": "partial",
         "evidence": "derived:descendants",
         "tests": [
+          "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
           "tests/fixtures/npm/cases/web-streams/main.ts"
         ]
       },
@@ -123057,7 +123060,10 @@
         "status": "partial",
         "evidence": "island-export:node:stream/web.ReadableStream",
         "tests": [
-          "tests/fixtures/npm/cases/web-streams/main.ts"
+          "tests/fixtures/npm/cases/web-streams/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -123708,8 +123714,12 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-feature:webstreams.desiredSize",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
+        ]
       },
       "anchorSource": "ancestor"
     },
@@ -124005,8 +124015,14 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-export:node:stream/web.WritableStream",
+        "tests": [
+          "tests/fixtures/npm/cases/web-streams/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
+        ]
       },
       "anchorSource": "exact"
     },
@@ -124059,8 +124075,13 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-feature:webstreams.writableStream.abort",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
+        ]
       },
       "anchorSource": "exact"
     },
@@ -124086,8 +124107,13 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-feature:webstreams.writableStream.close",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
+        ]
       },
       "anchorSource": "exact"
     },
@@ -124113,8 +124139,13 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-feature:webstreams.writableStream.getWriter",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
+        ]
       },
       "anchorSource": "exact"
     },
@@ -124140,8 +124171,13 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-feature:webstreams.locked",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
+        ]
       },
       "anchorSource": "ancestor"
     },
@@ -124167,8 +124203,14 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-export:node:stream/web.WritableStreamDefaultWriter",
+        "tests": [
+          "tests/fixtures/npm/cases/web-streams/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
+        ]
       },
       "anchorSource": "exact"
     },
@@ -124194,8 +124236,13 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-feature:webstreams.writableStreamDefaultWriter.abort",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
+        ]
       },
       "anchorSource": "exact"
     },
@@ -124221,8 +124268,13 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-feature:webstreams.writableStreamDefaultWriter.close",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
+        ]
       },
       "anchorSource": "exact"
     },
@@ -124248,8 +124300,13 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-feature:webstreams.writableStreamDefaultWriter.releaseLock",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
+        ]
       },
       "anchorSource": "exact"
     },
@@ -124275,8 +124332,13 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-feature:webstreams.writableStreamDefaultWriter.write",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
+        ]
       },
       "anchorSource": "exact"
     },
@@ -124302,8 +124364,13 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-feature:webstreams.closed",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
+        ]
       },
       "anchorSource": "ancestor"
     },
@@ -124329,8 +124396,13 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-feature:webstreams.desiredSize",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
+        ]
       },
       "anchorSource": "ancestor"
     },
@@ -124356,8 +124428,13 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-feature:webstreams.ready",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
+        ]
       },
       "anchorSource": "ancestor"
     },
@@ -124383,8 +124460,14 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-export:node:stream/web.WritableStreamDefaultController",
+        "tests": [
+          "tests/fixtures/npm/cases/web-streams/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
+        ]
       },
       "anchorSource": "exact"
     },
@@ -124410,8 +124493,13 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-feature:webstreams.writableStreamDefaultController.error",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
+        ]
       },
       "anchorSource": "exact"
     },
@@ -124437,8 +124525,13 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-feature:webstreams.signal",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
+        ]
       },
       "anchorSource": "ancestor"
     },
@@ -124467,7 +124560,10 @@
         "status": "partial",
         "evidence": "island-export:node:stream/web.TransformStream",
         "tests": [
-          "tests/fixtures/npm/cases/web-streams/main.ts"
+          "tests/fixtures/npm/cases/web-streams/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -124710,8 +124806,14 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-export:node:stream/web.ByteLengthQueuingStrategy",
+        "tests": [
+          "tests/fixtures/npm/cases/web-streams/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
+        ]
       },
       "anchorSource": "exact"
     },
@@ -124737,8 +124839,13 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-feature:webstreams.highWaterMark",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
+        ]
       },
       "anchorSource": "ancestor"
     },
@@ -124764,8 +124871,13 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-feature:webstreams.size",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
+        ]
       },
       "anchorSource": "ancestor"
     },
@@ -124791,8 +124903,14 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-export:node:stream/web.CountQueuingStrategy",
+        "tests": [
+          "tests/fixtures/npm/cases/web-streams/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
+        ]
       },
       "anchorSource": "exact"
     },
@@ -124818,8 +124936,13 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-feature:webstreams.highWaterMark",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
+        ]
       },
       "anchorSource": "ancestor"
     },
@@ -124845,8 +124968,13 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-feature:webstreams.size",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
+        ]
       },
       "anchorSource": "ancestor"
     },
@@ -124983,7 +125111,10 @@
         "status": "partial",
         "evidence": "island-export:node:stream/web.TextDecoderStream",
         "tests": [
-          "tests/fixtures/npm/cases/web-streams/main.ts"
+          "tests/fixtures/npm/cases/web-streams/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
         ]
       },
       "anchorSource": "exact"

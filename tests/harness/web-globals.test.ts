@@ -118,13 +118,13 @@ describe(`island web globals (scriptc-only${sanitize ? ", sanitized" : ""})`, ()
     // CLI's graph started loading undici (its fileapi classes extend
     // Event and buffer.Blob at LOAD); structuredClone joined with the
     // globals lane (the HTML StructuredSerialize subset, cycles
-    // included); WritableStream/FormData/WebSocket stay fenced by
+    // included); FormData/WebSocket stay fenced by
     // absence. URL and Buffer are installed only when the embedded npm
     // module bootstrap runs; immediate timers use the native check queue.
     expect(out).toBe(
       "function function function function function function function function function " +
         "object object function function function function function function " +
-        "undefined function undefined undefined undefined undefined function function",
+        "function function undefined undefined undefined undefined function function",
     );
   });
 
@@ -136,8 +136,16 @@ describe(`island web globals (scriptc-only${sanitize ? ", sanitized" : ""})`, ()
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout.trimEnd()).toBe(
-      "function function function function function function function false false false false false false false",
+      "function function function function function function function true false true true false false true",
     );
+  });
+
+  test("writable stream constructors and strategies are installed without an npm graph", async () => {
+    const out = await islandEval(
+      "web-writable-presence",
+      `[typeof WritableStream, typeof WritableStreamDefaultWriter, typeof WritableStreamDefaultController, typeof CountQueuingStrategy, typeof ByteLengthQueuingStrategy].join(' ')`,
+    );
+    expect(out).toBe("function function function function function");
   });
 
   test("structuredClone clones deep (cycles included) and validates options like Node", async () => {
