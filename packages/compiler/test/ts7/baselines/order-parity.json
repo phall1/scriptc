@@ -10397,6 +10397,18 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/map-read-lifetimes-exits.ts": {
+   "order": [
+    "<repo>/tests/corpus/map-read-lifetimes-exits.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/map-read-lifetimes.ts": {
+   "order": [
+    "<repo>/tests/corpus/map-read-lifetimes.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/map-seeds-and-spreads.ts": {
    "order": [
     "<repo>/tests/corpus/map-seeds-and-spreads.ts"
