@@ -146,20 +146,14 @@ export class FrontendInputTracker {
     this.stable = false;
   }
 
-  /** Check program sources before declaration and resolution inputs, retaining
-   * every observation and deterministic ordering within each group. */
-  snapshot(sourceTexts: ReadonlyMap<string, string> = new Map()): FrontendInputSnapshot {
-    const ordered = [...this.probes.values()].sort((a, b) =>
-      a.path === b.path ? a.op.localeCompare(b.op) : a.path.localeCompare(b.path)
-    );
-    if (sourceTexts.size === 0) return { version: 1, probes: ordered, stable: this.stable };
-    const sources: FrontendInputProbe[] = [];
-    const dependencies: FrontendInputProbe[] = [];
-    for (const probe of ordered) {
-      if (sourceTexts.has(probe.path)) sources.push(probe);
-      else dependencies.push(probe);
-    }
-    return { version: 1, probes: [...sources, ...dependencies], stable: this.stable };
+  snapshot(): FrontendInputSnapshot {
+    return {
+      version: 1,
+      probes: [...this.probes.values()].sort((a, b) =>
+        a.path === b.path ? a.op.localeCompare(b.op) : a.path.localeCompare(b.path)
+      ),
+      stable: this.stable,
+    };
   }
 }
 
@@ -399,34 +393,36 @@ export function frontendInputsSemanticallyMatch(
   }
   const changed: FrontendSemanticChange[] = [];
   const currentSources = new Map<string, string>();
-  const probes: FrontendInputProbe[] = [];
-  for (const probe of snapshot.probes) {
-    const previous = probe.op === "file" ? previousSources.get(probe.path) : undefined;
-    if (probe.op !== "file" || previous === undefined) {
-      probes.push(probe);
-      continue;
-    }
-    if (sourceProbes.get(probe.path)?.digest !== probe.digest) return null;
-    let current: string;
-    try {
-      current = readFileSync(probe.path, "utf8");
-    } catch {
-      return null;
-    }
-    const currentDigest = frontendSourceDigest(current);
-    currentSources.set(probe.path, current);
-    if (currentDigest === probe.digest) {
-      probes.push(probe);
-      continue;
-    }
-    if (!isSemanticEquivalent(probe.path, previous, current)) return null;
-    changed.push({ path: probe.path, previous, current });
-    probes.push({ ...probe, digest: currentDigest });
-  }
-  const adjusted: FrontendInputSnapshot = { ...snapshot, probes };
-  // Re-read accepted inputs: an equivalence callback or concurrent writer may
-  // have changed them while the source edits were being examined.
+  const adjusted: FrontendInputSnapshot = {
+    ...snapshot,
+    probes: snapshot.probes.map((probe) => {
+      if (probe.op !== "file") return probe;
+      let current: string;
+      try {
+        current = readFileSync(probe.path, "utf8");
+      } catch {
+        return probe;
+      }
+      const previous = previousSources.get(probe.path);
+      const currentDigest = frontendSourceDigest(current);
+      if (previous === undefined || frontendSourceDigest(previous) !== probe.digest) return probe;
+      currentSources.set(probe.path, current);
+      if (currentDigest === probe.digest) return probe;
+      if (!isSemanticEquivalent(probe.path, previous, current)) return probe;
+      changed.push({ path: probe.path, previous, current });
+      return { ...probe, digest: currentDigest };
+    }),
+  };
   if (!frontendInputsStillMatch(adjusted, exclusions)) return null;
+  for (const [path, previous] of previousSources) {
+    if (!currentSources.has(path)) {
+      try {
+        currentSources.set(path, readFileSync(path, "utf8"));
+      } catch {
+        currentSources.set(path, previous);
+      }
+    }
+  }
   return { changed, currentSources, snapshot: adjusted };
 }
 
