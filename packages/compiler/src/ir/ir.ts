@@ -5279,12 +5279,10 @@ export type IrExpr =
     }
   /** `new Set<T>()` — allocate an empty set. `type` is the set type (the
    * element fence already enforced by the frontend); the result is owned
-   * (+1). `seed` carries the SUPPORTED seeded form — `new Set(values)`
-   * where values is any T[]-typed expression (literal or variable; T
-   * already a legal element type) — one borrowed array whose elements
-   * add() in order (duplicates collapse, first insertion position wins,
-   * SameValueZero — exactly JS). Non-array seeds (another Set, general
-   * iterables) stay frontend-fenced. */
+   * (+1). `seed` is one borrowed array whose elements add() in order
+   * (duplicates collapse, first insertion position wins, SameValueZero).
+   * The frontend materializes supported non-array seeds, including Sets,
+   * strings, tuples, and collection iterators, before constructing this IR. */
   | { kind: "setNew"; seed?: IrExpr; type: IrType; loc: SrcLoc }
   /** Set method/property on a set receiver (`type` of the receiver is the
    * set; T below is its element type): `add` (one T arg, borrowed — the
@@ -5901,8 +5899,10 @@ export type IrExpr =
    * The dyn operand is borrowed; the result is owned (+1). This is
    * scriptc-specific behavior — JS `as` never checks (SEMANTICS.md
    * documents it as the headline divergence: a lying cast throws instead of
-   * corrupting memory). */
-  | { kind: "dynCheck"; value: IrExpr; type: IrType; loc: SrcLoc }
+   * corrupting memory). `preserveRefs` refuses structural copies of native
+   * references, including references nested in newly materialized arrays or
+   * tuples; collection seeds use it to preserve key identity. */
+  | { kind: "dynCheck"; value: IrExpr; preserveRefs?: true; type: IrType; loc: SrcLoc }
   /** Static → island marshal (--dynamic builds only). `value`'s type is
    * f64/string/bool (marshaled by value) or a JSON-safe composite
    * (record/array/union — marshaled as a DEEP COPY through the emitted

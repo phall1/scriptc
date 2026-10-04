@@ -98,7 +98,7 @@ export class LlDyn {
 
   /** Branch to a variant only after its literal discriminator and complete
    * structure match. Use the same path for predicates and builders. */
-  private unionArmMatch(B: BlockBuilder, def: IrUnionDef, tag: number, yes: string, no: string): void {
+  private unionArmMatch(B: BlockBuilder, def: IrUnionDef, tag: number, yes: string, no: string, preserveRefs = false): void {
     const guard = def.discriminant?.cases.find((candidate) => candidate.tag === tag);
     if (guard && def.discriminant) {
       const structure = B.newLabel("du.shape");
@@ -118,7 +118,7 @@ export class LlDyn {
       B.startBlock(structure);
     }
     const matches = B.tmp();
-    B.line(`${matches} = call zeroext i1 @${this.dynMatchHelper(def.arms[tag]!)}(ptr %d)`);
+    B.line(`${matches} = call zeroext i1 @${this.dynMatchHelper(def.arms[tag]!, preserveRefs)}(ptr %d)`);
     B.condBr(matches, yes, no);
   }
 
@@ -405,12 +405,13 @@ export class LlDyn {
   }
 
   /** `sc_dm_<n>(ptr d) -> i1` — does this dyn fit T? Never throws. */
-  dynMatchHelper(t: IrType): string {
+  dynMatchHelper(t: IrType, preserveRefs = false): string {
     const key = typeKey(t);
-    const existing = this.dynMatchers.get(key);
+    const matcherKey = preserveRefs ? `identity:${key}` : key;
+    const existing = this.dynMatchers.get(matcherKey);
     if (existing) return existing;
     const name = `sc_dm_${this.dynMatchers.size}`;
-    this.dynMatchers.set(key, name);
+    this.dynMatchers.set(matcherKey, name);
     const B = new BlockBuilder();
     if (isRefCounted(t) && t.kind !== "dyn") {
       const matched = this.typedRefMatches(B, t);
@@ -431,12 +432,16 @@ export class LlDyn {
       const lPlain = B.newLabel("dm.tr.plain");
       B.condBr(capsule, lCapsule, lPlain);
       B.startBlock(lCapsule);
-      const materialized = B.tmp();
-      const matched = B.tmp();
-      B.line(`${materialized} = call ptr @scr_dyn_typed_ref_materialize(ptr %d)`);
-      B.line(`${matched} = call zeroext i1 @${name}(ptr ${materialized})`);
-      B.line(`call void @scr_dyn_release_v(ptr ${materialized})`);
-      B.terminate(`ret i1 ${matched}`);
+      if (preserveRefs) {
+        B.terminate(`ret i1 false`);
+      } else {
+        const materialized = B.tmp();
+        const matched = B.tmp();
+        B.line(`${materialized} = call ptr @scr_dyn_typed_ref_materialize(ptr %d)`);
+        B.line(`${matched} = call zeroext i1 @${name}(ptr ${materialized})`);
+        B.line(`call void @scr_dyn_release_v(ptr ${materialized})`);
+        B.terminate(`ret i1 ${matched}`);
+      }
       B.startBlock(lPlain);
     }
     const kindIs = (k: number): void => {
@@ -584,7 +589,7 @@ export class LlDyn {
           for (const [i, f] of byIndex.entries()) {
             const e = this.itemAt(B, items, `${i}`);
             const m = B.tmp();
-            B.line(`${m} = call zeroext i1 @${this.dynMatchHelper(f.type)}(ptr ${e})`);
+            B.line(`${m} = call zeroext i1 @${this.dynMatchHelper(f.type, preserveRefs)}(ptr ${e})`);
             const ln = B.newLabel("dm.i");
             B.condBr(m, ln, fail);
             B.startBlock(ln);
@@ -614,7 +619,7 @@ export class LlDyn {
           this.host.declare(`declare void @scr_dyn_release(ptr)`);
           this.pendingBail(B, "dm.read", () => B.line(`call void @scr_dyn_release(ptr ${m})`), "i1 false");
           const ok = B.tmp();
-          B.line(`${ok} = call zeroext i1 @${this.dynMatchHelper(f.type)}(ptr ${m})`);
+          B.line(`${ok} = call zeroext i1 @${this.dynMatchHelper(f.type, preserveRefs)}(ptr ${m})`);
           B.line(`call void @scr_dyn_release(ptr ${m})`);
           B.condBr(ok, lNext, fail);
           B.startBlock(lNext);
@@ -650,7 +655,7 @@ export class LlDyn {
               B.startBlock(lNo);
             }
             const ok = B.tmp();
-            B.line(`${ok} = call zeroext i1 @${this.dynMatchHelper(shape.indexValue!)}(ptr ${ent.value})`);
+            B.line(`${ok} = call zeroext i1 @${this.dynMatchHelper(shape.indexValue!, preserveRefs)}(ptr ${ent.value})`);
             const lOk = B.newLabel("dm.vo");
             B.condBr(ok, lOk, fail);
             B.startBlock(lOk);
@@ -662,7 +667,7 @@ export class LlDyn {
         break;
       }
       case "array": {
-        const m = this.dynMatchHelper(t.elem);
+        const m = this.dynMatchHelper(t.elem, preserveRefs);
         const fail = B.newLabel("dm.f");
         const kd = this.kindOf(B, "%d");
         const isArr = B.tmp();
@@ -701,7 +706,7 @@ export class LlDyn {
         const yes = B.newLabel("dm.y");
         for (let tag = 0; tag < def.arms.length; tag++) {
           const ln = B.newLabel("dm.n");
-          this.unionArmMatch(B, def, tag, yes, ln);
+          this.unionArmMatch(B, def, tag, yes, ln, preserveRefs);
           B.startBlock(ln);
         }
         B.terminate(`ret i1 false`);
@@ -745,12 +750,13 @@ export class LlDyn {
   /** `sc_dc_<n>(ptr d, ptr path) -> T` — validate the checked-dynamic tree against T and
    * BUILD the typed value (+1), or throw the catchable path-annotated
    * TypeError and return a dummy with the pending flag set. */
-  dynCheckHelper(t: IrType): string {
+  dynCheckHelper(t: IrType, preserveRefs = false): string {
     const key = typeKey(t);
-    const existing = this.dynBuilders.get(key);
+    const builderKey = preserveRefs ? `identity:${key}` : key;
+    const existing = this.dynBuilders.get(builderKey);
     if (existing) return existing;
     const name = `sc_dc_${this.dynBuilders.size}`;
-    this.dynBuilders.set(key, name);
+    this.dynBuilders.set(builderKey, name);
     const host = this.host;
     const retTy = this.valTy(t);
     const dummy = retTy === "double" ? `double ${f64Lit(0)}` : retTy === "i1" ? "i1 false" : "ptr null";
@@ -787,7 +793,18 @@ export class LlDyn {
       B.line(`${ref} = call ptr @scr_dyn_typed_ref_unbox(ptr %d)`);
       B.terminate(`ret ptr ${ref}`);
       B.startBlock(lNext);
-      if (t.kind !== "union") {
+      if (t.kind !== "union" && preserveRefs) {
+        const kind = this.kindOf(B, "%d");
+        const capsule = B.tmp();
+        B.line(`${capsule} = icmp eq i32 ${kind}, ${DYN_KIND.TYPED_REF}`);
+        const reject = B.newLabel("dc.identity.reject");
+        const plain = B.newLabel("dc.identity.plain");
+        B.condBr(capsule, reject, plain);
+        B.startBlock(reject);
+        B.line(`call void @scr_dyn_check_fail(ptr %path, ptr ${host.cstr("reference with its original layout")}, ptr %d)`);
+        B.terminate(`ret ${dummy}`);
+        B.startBlock(plain);
+      } else if (t.kind !== "union") {
         host.declare(`declare ptr @scr_dyn_typed_ref_materialize(ptr)`);
         host.declare(`declare ptr @scr_dyn_typed_ref_cached_cast(ptr, ptr, ${host.sizeType})`);
         host.declare(`declare void @scr_dyn_typed_ref_cache_cast(ptr, ptr, ${host.sizeType}, ptr, ptr, ptr, i1)`);
@@ -1149,7 +1166,7 @@ export class LlDyn {
             setPath(null, `${i}`);
             const e = this.itemAt(B, items, `${i}`);
             const v = B.tmp();
-            B.line(`${v} = call ${this.valTy(f.type)} @${this.dynCheckHelper(f.type)}(ptr ${e}, ptr ${pathSlot})`);
+            B.line(`${v} = call ${this.valTy(f.type)} @${this.dynCheckHelper(f.type, preserveRefs)}(ptr ${e}, ptr ${pathSlot})`);
             storeInto(f.name, f.type, v);
             this.pendingBail(B, "dct", releaseR, "ptr null");
           });
@@ -1191,7 +1208,7 @@ export class LlDyn {
           this.pendingBail(B, "dcr.read", () => { B.line(`call void @scr_dyn_release(ptr ${m})`); releaseR(); }, "ptr null");
           setPath(f.name, "0");
           const value = B.tmp();
-          B.line(`${value} = call ${this.valTy(f.type)} @${this.dynCheckHelper(f.type)}(ptr ${m}, ptr ${pathSlot})`);
+          B.line(`${value} = call ${this.valTy(f.type)} @${this.dynCheckHelper(f.type, preserveRefs)}(ptr ${m}, ptr ${pathSlot})`);
           B.line(`call void @scr_dyn_release(ptr ${m})`);
           storeInto(f.name, f.type, value);
           this.pendingBail(B, "dcr", releaseR, "ptr null");
@@ -1238,7 +1255,7 @@ export class LlDyn {
             } else {
               setPathKeyPtr(ent.key);
               ev = B.tmp();
-              B.line(`${ev} = call ${this.valTy(iv)} @${this.dynCheckHelper(iv)}(ptr ${ent.value}, ptr ${pathSlot})`);
+              B.line(`${ev} = call ${this.valTy(iv)} @${this.dynCheckHelper(iv, preserveRefs)}(ptr ${ent.value}, ptr ${pathSlot})`);
               this.pendingBail(B, "dcv", releaseR, "ptr null");
             }
             const ek = B.tmp();
@@ -1261,7 +1278,7 @@ export class LlDyn {
       }
       case "array": {
         const elem = t.elem;
-        const c = this.dynCheckHelper(elem);
+        const c = this.dynCheckHelper(elem, preserveRefs);
         requireKind(DYN_KIND.ARR, "dca");
         const n = this.lenOf(B, "%d");
         const a = B.tmp();
@@ -1323,7 +1340,7 @@ export class LlDyn {
         def.arms.forEach((arm, i) => {
           const lHit = B.newLabel("dcu.h");
           const lNext = B.newLabel("dcu.n");
-          this.unionArmMatch(B, def, i, lHit, lNext);
+          this.unionArmMatch(B, def, i, lHit, lNext, preserveRefs);
           B.startBlock(lHit);
           if (arm.kind === "undefinedT" || arm.kind === "nullT") {
             // A matched unit arm builds nothing: THE interned immortal
@@ -1333,14 +1350,14 @@ export class LlDyn {
             host.declare(`declare ptr @scr_union_new_f64(i32, double)`);
             const x = B.tmp();
             const u = B.tmp();
-            B.line(`${x} = call double @${this.dynCheckHelper(arm)}(ptr %d, ptr %path)`);
+            B.line(`${x} = call double @${this.dynCheckHelper(arm, preserveRefs)}(ptr %d, ptr %path)`);
             B.line(`${u} = call ptr @scr_union_new_f64(i32 ${i}, double ${x})`);
             B.terminate(`ret ptr ${u}`);
           } else if (arm.kind === "bool") {
             host.declare(`declare ptr @scr_union_new_bool(i32, i1 zeroext)`);
             const x = B.tmp();
             const u = B.tmp();
-            B.line(`${x} = call zeroext i1 @${this.dynCheckHelper(arm)}(ptr %d, ptr %path)`);
+            B.line(`${x} = call zeroext i1 @${this.dynCheckHelper(arm, preserveRefs)}(ptr %d, ptr %path)`);
             B.line(`${u} = call ptr @scr_union_new_bool(i32 ${i}, i1 ${x})`);
             B.terminate(`ret ptr ${u}`);
           } else {
@@ -1348,7 +1365,7 @@ export class LlDyn {
             host.declare(`declare ptr @scr_union_new_ref(i32, ptr, ptr, ptr, ptr)`);
             const x = B.tmp();
             const u = B.tmp();
-            B.line(`${x} = call ptr @${this.dynCheckHelper(arm)}(ptr %d, ptr %path)`);
+            B.line(`${x} = call ptr @${this.dynCheckHelper(arm, preserveRefs)}(ptr %d, ptr %path)`);
             B.line(
               `${u} = call ptr @scr_union_new_ref(i32 ${i}, ptr ${x}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${traceArg(host, arm)})`,
             );
@@ -1356,6 +1373,11 @@ export class LlDyn {
           }
           B.startBlock(lNext);
         });
+        if (preserveRefs) {
+          B.line(`call void @scr_dyn_check_fail(ptr %path, ptr ${host.cstr("reference with its original layout")}, ptr %d)`);
+          B.terminate(`ret ptr null`);
+          break;
+        }
         // Preserve an exact typed-ref arm above. If no producer tag matched,
         // retry the union against the ordinary copy-based structural
         // snapshot (the compiler's width-coercion stance, rather than a

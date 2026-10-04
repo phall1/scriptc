@@ -5778,7 +5778,8 @@ export function lowerSetSeedNew(lowerer: Lowerer, node: ts.Expression, setT: IrT
     const elems = node.elements.map((element) => lowerer.lowerCollectionKey(element, setT.elem));
     return { kind: "setNew", seed: { kind: "arrayLit", elems, type: arrayOf(setT.elem), loc }, type: setT, loc };
   }
-  const declared = lowerer.mapTypeOf(lowerer.typeOf(node));
+  const seedType = lowerer.typeOf(node);
+  const declared = lowerer.mapTypeOf(seedType);
   const scalar = setT.elem.kind === "f64" || setT.elem.kind === "string";
   let source = !scalar && (declared?.kind === "array" || declared?.kind === "record")
     ? lowerer.lowerCollectionKey(node, declared)
@@ -5786,6 +5787,21 @@ export function lowerSetSeedNew(lowerer: Lowerer, node: ts.Expression, setT: IrT
   if (declared?.kind === "string" && setT.elem.kind === "string" &&
       (source.type.kind === "dyn" || source.type.kind === "jsval")) {
     source = lowerer.coerceInto(node, source, STRING);
+  }
+  const seedSymbol = seedType.getSymbol();
+  if (source.type.kind === "dyn" && seedSymbol &&
+      (seedSymbol.name === "MapIterator" || seedSymbol.name === "SetIterator") &&
+      lowerer.isStdlibSymbol(seedSymbol)) {
+    const element = lowerer.checker.getTypeArguments(seedType as ts.TypeReference)[0];
+    const mappedElement = element ? lowerer.mapTypeOf(element) : null;
+    // Exact element layouts let checked references unbox without copying
+    // identity keys. Drain the existing cursor so aliases observe exhaustion.
+    if (!mappedElement || !typeEquals(mappedElement, setT.elem)) return null;
+    const seed: IrExpr = {
+      kind: "dynCheck", value: lowerCheckedArrayFrom(lowerer, source, loc),
+      preserveRefs: true, type: arrayOf(setT.elem), loc,
+    };
+    return { kind: "setNew", seed, type: setT, loc };
   }
   if (setT.elem.kind === "dyn" && lowerer.dynConvertible(source.type)) {
     return { kind: "dynCheck", value: { kind: "libCall", fn: "dyn.nativeSetNew", args: [lowerer.coerceInto(node, source, DYN)], type: DYN, loc }, type: setT, loc };

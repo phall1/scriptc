@@ -6658,8 +6658,8 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
           type: DYN, loc,
         };
       }
-      // `new Set<T>()`: construct + bulk add from native arrays, tuples,
-      // or strings. Duplicates collapse in insertion order.
+      // `new Set<T>()`: construct + bulk add from supported values,
+      // including live collection cursors. Duplicates collapse in insertion order.
       if (symbol?.name === "Set" && lowerer.isStdlibSymbol(symbol)) {
         const tsType = lowerer.typeOf(expr);
         let mapped = lowerer.mapTypeOf(tsType);
@@ -6702,7 +6702,7 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
           lowerer.noLowering(
             "new Set(values)",
             expr,
-            "construct the Set empty and add() each value — only nullish values or a matching Set, string, array, or fixed tuple of " +
+            "construct the Set empty and add() each value — only nullish values or a matching Set, collection iterator, string, array, or fixed tuple of " +
               "already-legal elements (numbers, strings, or identity references) seeds a Set",
           );
         }

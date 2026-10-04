@@ -251,7 +251,7 @@ export function emitSerializationExpr(host: LlvmEmitterContext, e: ExprOf<"jsonS
         // joins the frame BEFORE the pending check so an unwind releases
         // the dummy harmlessly.
         const dynV = host.emitExpr(e.value);
-        const helper = host.dyn.dynCheckHelper(e.type);
+        const helper = host.dyn.dynCheckHelper(e.type, e.preserveRefs);
         const ty = host.llType(e.type);
         const t = B.tmp();
         B.line(`${t} = call ${ty === "i1" ? "zeroext i1" : ty} @${helper}(ptr ${dynV.name}, ptr null)`);
