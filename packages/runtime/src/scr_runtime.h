@@ -927,6 +927,10 @@ struct ScrDyn *scr_util_system_error_entries(void);
  * Arguments are borrowed; parseEnv returns a fresh ordinary object (+1).
  * Validation and file failures leave a coded exception pending. */
 struct ScrDyn *scr_util_parse_env(const struct ScrDyn *content);
+/* Checked primitives, ordinary records/arrays and byte views. Opaque native
+ * objects and accessor descriptors retain explicit catchable refusals. */
+bool scr_util_is_deep_strict_equal(const struct ScrDyn *a, const struct ScrDyn *b,
+                                  const struct ScrDyn *skip_prototype);
 void scr_process_load_env_file(const struct ScrDyn *path);
 
 /* querystring.stringify — Node's stringify over a borrowed dyn value (the

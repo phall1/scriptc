@@ -637,6 +637,9 @@ function publicDetail(tier) {
     if (source === "compiler-feature:util.util.toUSVString") {
       return "Converts native strings, primitives, and tested object conversion hooks to well-formed Unicode strings; native storage replaces unpaired surrogates at creation.";
     }
+    if (source === "compiler-feature:util.util.isDeepStrictEqual") {
+      return "Compares primitives, ordinary records and arrays, cycles, enumerable properties, and byte views with optional prototype skipping; opaque native objects and accessor properties remain refused.";
+    }
     if (/^compiler-feature:util\.util\.getSystemError(?:Name|Message)$/.test(source)) {
       return "Converts platform-specific negative error codes to names or messages, with Node-compatible validation for common argument forms.";
     }
@@ -727,6 +730,9 @@ function publicDetail(tier) {
     }
     if (source === "island-feature:util.util.getSystemErrorMap") {
       return "Returns a fresh mutable Map of platform-specific error codes, names, and messages.";
+    }
+    if (source === "island-feature:util.util.isDeepStrictEqual") {
+      return "Compares tested object, collection, cycle, byte-view, and builtin-value families with Node 24 prototype skipping; some exotic object brands remain unsupported.";
     }
     if (/^island-feature:util\.util\.getSystemError(?:Name|Message)$/.test(source)) {
       return "Converts platform-specific negative error codes to names or messages, with Node-compatible validation for common argument forms.";

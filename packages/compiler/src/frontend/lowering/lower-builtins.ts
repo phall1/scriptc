@@ -3955,7 +3955,7 @@ export function lowerForkCall(lowerer: Lowerer, expr: ts.CallExpression, loc: Sr
     // These checked native functions retain a runtime slot in JavaScript so
     // aliases can escape without narrowing their arguments to string.
     if (isJsSourceFile(nameNode.getSourceFile()) && target.module === "util" &&
-        ["stripVTControlCharacters", "toUSVString"].includes(target.member)) return false;
+        ["stripVTControlCharacters", "toUSVString", "isDeepStrictEqual"].includes(target.member)) return false;
     if (lowerer.checker.getCallSignatures(lowerer.typeOf(nameNode)).length === 0) return false;
     const symbol = lowerer.checker.getSymbolAtLocation(nameNode);
     if (!symbol) return false;

@@ -8,8 +8,8 @@
     "tiers": {
       "static": {
         "replace-refusal": 42,
-        "verify-gap": 2510,
-        "audit-partial": 660,
+        "verify-gap": 2509,
+        "audit-partial": 661,
         "classify": 2,
         "implement": 81
       },
@@ -95486,21 +95486,27 @@
       "priority": "high",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:util",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "compiler-feature:util.util.isDeepStrictEqual",
+          "tests": [
+            "tests/corpus/node24-deep-equality.ts",
+            "tests/corpus/node24-deep-equality.cjs",
+            "tests/corpus/node24-deep-equality-properties.js",
+            "tests/fixtures/node-types/deep-equality.ts",
+            "packages/compiler/test/deep-equality.test.ts"
+          ]
         },
         "dynamic": {
           "status": "partial",
           "action": "audit-partial",
           "verification": "test-backed",
           "confidence": "high",
-          "source": "island-export:node:util.isDeepStrictEqual",
+          "source": "island-feature:util.util.isDeepStrictEqual",
           "tests": [
-            "tests/fixtures/npm/cases/util-shims/main.ts"
+            "tests/fixtures/npm/cases/node24-deep-equality/main.ts"
           ]
         }
       }

@@ -40,6 +40,7 @@ const featureCalls: readonly [string, IrLibFn][] = [
   ["searchParams", "sp.new"],
   ["qs", "qs.parse"],
   ["parseArgs", "util.parseArgs"],
+  ["parseArgs", "util.isDeepStrictEqual"],
   ["fsWatch", "fs.watch"],
   ["nodeTest", "test.register"],
   ["dgram", "dgram.createSocket"],
@@ -95,7 +96,7 @@ for (const backend of ["llvm"] as const) {
           name: "callback", params: [], locals: [], returnType: VOID, loc,
           body: [{ kind: "block", body: [{ kind: "exprStmt", expr: lib(fn), loc }], loc }],
         });
-        check(fn, module, [feature]);
+        check(fn, module, fn === "util.isDeepStrictEqual" ? [feature, "symbol"] : [feature]);
       }
       const regex = empty();
       regex.functions[0]!.body.push({ kind: "exprStmt", expr: {

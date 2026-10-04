@@ -1889,6 +1889,7 @@ declare module "util" {
   export function getSystemErrorMap(): Map<number, [string, string]>;
   export function stripVTControlCharacters(str: string): string;
   export function toUSVString(string: string): string;
+  export function isDeepStrictEqual(val1: unknown, val2: unknown, skipPrototype?: boolean): boolean;
   export function parseEnv(content: string): { [key: string]: string | undefined };
   export type TextEncoder = globalThis.TextEncoder;
   export type TextDecoder = globalThis.TextDecoder;

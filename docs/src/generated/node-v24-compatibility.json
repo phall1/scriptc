@@ -1202,9 +1202,9 @@
       "apiEntries": 105,
       "static": {
         "supported": 0,
-        "partial": 20,
+        "partial": 21,
         "refused": 0,
-        "not-implemented": 85,
+        "not-implemented": 84,
         "by-design": 0,
         "unreviewed": 0,
         "not-applicable": 0
@@ -85402,13 +85402,13 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "detail": "No static compiler lowering is registered for this API yet.",
-        "verification": "registry-gap"
+        "status": "partial",
+        "detail": "Compares primitives, ordinary records and arrays, cycles, enumerable properties, and byte views with optional prototype skipping; opaque native objects and accessor properties remain refused.",
+        "verification": "test-backed"
       },
       "dynamic": {
         "status": "partial",
-        "detail": "Available through the embedded Node compatibility shim; exact member and overload coverage may be narrower.",
+        "detail": "Compares tested object, collection, cycle, byte-view, and builtin-value families with Node 24 prototype skipping; some exotic object brands remain unsupported.",
         "verification": "test-backed"
       }
     },

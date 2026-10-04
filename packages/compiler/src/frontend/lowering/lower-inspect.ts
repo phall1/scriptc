@@ -1383,6 +1383,22 @@ export function lowerUtilModuleCall(
 ): IrExpr | null {
   if (bi.module !== "util") return null;
   switch (bi.member) {
+    case "isDeepStrictEqual": {
+      if (expr.arguments.some(ts.isSpreadElement)) lowerer.noLowering("util.isDeepStrictEqual with spread arguments", expr);
+      const stmts: IrStmt[] = [];
+      const args: IrExpr[] = [];
+      // Save all inputs before evaluating surplus arguments: comparison may
+      // read mutable objects or throw, so it must happen after every argument.
+      for (let i = 0; i < 3; i++) {
+        const input: IrExpr = expr.arguments[i] ? lowerer.lowerExprExpecting(expr.arguments[i]!, DYN)
+          : { kind: "dynFrom", value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc }, type: DYN, loc };
+        const saved = lowerer.declareHiddenLocal("%deepEqualInput", DYN);
+        stmts.push({ kind: "varDecl", localId: saved.id, init: input, loc });
+        args.push(varRef(saved.id, DYN, loc));
+      }
+      for (const arg of expr.arguments.slice(3)) stmts.push({ kind: "exprStmt", expr: lowerer.lowerExpr(arg), loc });
+      return { kind: "seqExpr", stmts, result: { kind: "libCall", fn: "util.isDeepStrictEqual", args, type: BOOL, loc }, type: BOOL, loc };
+    }
     case "getSystemErrorMap": {
       if (expr.arguments.some(ts.isSpreadElement)) lowerer.noLowering("util.getSystemErrorMap with spread arguments", expr);
       const result = lowerSystemErrorMap(lowerer, loc);

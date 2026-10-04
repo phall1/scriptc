@@ -79,9 +79,12 @@ Some builtins can be stored and passed as functions:
 
 - Lowered `node:path` functions across the bare, POSIX, and win32 modules, including optional `basename` and variadic `join`/`resolve`.
 - Supported zero-argument `node:os` functions and `querystring.escape`/`unescape`.
+- `util.isDeepStrictEqual`, `stripVTControlCharacters`, and `toUSVString`.
 - `fs.existsSync`, `unlinkSync`, `chmodSync`, `chownSync`, `renameSync`, and `closeSync`, and `fs/promises.unlink`, `chmod`, and `rename`.
 
 Other immutable aliases of table-backed Node builtins support direct calls, but cannot be passed elsewhere. `util.promisify` supports compile-time conversions of `child_process.execFile` and UTF-8 `fs.readFile`.
+
+`util.isDeepStrictEqual` supports primitives, ordinary records and arrays, cycles, enumerable string and symbol properties, and byte views in static code. Its optional third argument skips prototype and constructor comparisons. Structural comparisons of native Maps, Sets, class instances, Errors, proxies, accessor properties, and function-valued own `constructor` properties remain refused. Comparisons running inside the embedded JavaScript engine support a wider range of object and collection types.
 
 Synchronous and promise filesystem APIs with trailing arguments that affect behavior remain call-only. This includes writers, open, directory creation/removal, metadata readers, and directory readers. Passing them as values could discard modes, flags, encodings, or options during function-signature adaptation.
 

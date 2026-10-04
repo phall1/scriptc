@@ -2579,6 +2579,7 @@ export type IrLibFn =
   | "util.systemErrorEntries"
   | "util.stripVTControlCharacters"
   | "util.toUSVString"
+  | "util.isDeepStrictEqual"
   /** ES Symbol values (scr_symbol.c — link-gated by moduleUsesSymbol).
    * sym.new: `Symbol(desc)` — a fresh runtime-unique identity (+1) whose
    * one arg is the description string (borrowed); sym.newAnon is the
@@ -6838,12 +6839,12 @@ function scanRuntimeFeatures(mod: IrModule, stopAt?: keyof RuntimeFeatures): Run
         features.net = true; features.http = true; features.tls = true;
       }
       if (fn.startsWith("http2.") && !HTTP2_LEGACY_FNS.has(fn)) features.http2 = true;
-      if (fn.startsWith("sym.")) features.symbol = true;
+      if (fn.startsWith("sym.") || fn === "util.isDeepStrictEqual") features.symbol = true;
       if (fn === "process.hrtimeValue") features.bigint = true;
       if (fn.startsWith("bigint.")) features.bigint = true;
       if (fn.startsWith("sp.") || fn === "url.searchParams") features.searchParams = true;
       if (fn === "qs.parse" || fn === "qs.stringify" || fn === "qs.unescape") features.qs = true;
-      if (fn === "util.parseArgs") features.parseArgs = true;
+      if (fn === "util.parseArgs" || fn === "util.isDeepStrictEqual") features.parseArgs = true;
       if (fn.startsWith("fs.watch") || fn.startsWith("watcher.")) features.fsWatch = true;
       if (fn.startsWith("test.")) features.nodeTest = true;
       if (fn.startsWith("dgram.") || fn.startsWith("dns.")) features.dgram = true;
@@ -7132,7 +7133,7 @@ export function moduleUsesQs(mod: IrModule): boolean {
   return scanRuntimeFeatures(mod, "qs").qs;
 }
 
-/** True when the module uses native util.parseArgs — the link switch for
+/** True when the module uses native util.parseArgs or isDeepStrictEqual — the link switch for
  * scr_util.c. The implementation is a pure checked-dynamic data transform,
  * cross-platform and independent of the island's node:util shim. */
 export function moduleUsesParseArgs(mod: IrModule): boolean {
@@ -7788,6 +7789,7 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "util.getSystemErrorName",
   "util.getSystemErrorMessage",
   "util.stripVTControlCharacters",
+  "util.isDeepStrictEqual",
   "util.toUSVString",
   // decodeURIComponent throws the spec's URIError on bad hex/invalid
   // UTF-8 octets (encodeURIComponent never throws — see the IrLibFn doc).

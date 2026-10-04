@@ -10638,6 +10638,24 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/node24-deep-equality-properties.js": {
+   "order": [
+    "<repo>/tests/corpus/node24-deep-equality-properties.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/node24-deep-equality.cjs": {
+   "order": [
+    "<repo>/tests/corpus/node24-deep-equality.cjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/node24-deep-equality.ts": {
+   "order": [
+    "<repo>/tests/corpus/node24-deep-equality.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/nullable-object-extension.mjs": {
    "order": [
     "<repo>/tests/corpus/nullable-object-extension.mjs"
@@ -13019,6 +13037,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/fixtures/npm/cases/node24-deep-equality/main.ts": {
+   "order": [
+    "<repo>/tests/fixtures/npm/cases/node24-deep-equality/main.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/fixtures/npm/cases/node24-fs-descriptors/main.ts": {
    "order": [
     "<repo>/tests/fixtures/npm/cases/node24-fs-descriptors/main.ts"
@@ -13232,6 +13256,12 @@
   "<repo>/tests/fixtures/node-types/crypto-kdf.ts": {
    "order": [
     "<repo>/tests/fixtures/node-types/crypto-kdf.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/fixtures/node-types/deep-equality.ts": {
+   "order": [
+    "<repo>/tests/fixtures/node-types/deep-equality.ts"
    ],
    "diags": []
   },

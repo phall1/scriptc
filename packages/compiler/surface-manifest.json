@@ -1954,6 +1954,12 @@
       "status": "static"
     },
     {
+      "id": "node-builtin.util.isDeepStrictEqual",
+      "kind": "node-builtin",
+      "name": "util.isDeepStrictEqual",
+      "status": "static"
+    },
+    {
       "id": "node-builtin.util.parseArgs",
       "kind": "node-builtin",
       "name": "util.parseArgs",

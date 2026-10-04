@@ -1323,9 +1323,9 @@
       "apiEntries": 105,
       "static": {
         "supported": 0,
-        "partial": 20,
+        "partial": 21,
         "refused": 0,
-        "not-implemented": 85,
+        "not-implemented": 84,
         "by-design": 0,
         "unreviewed": 0,
         "not-applicable": 0
@@ -111271,12 +111271,16 @@
         "status": "partial",
         "evidence": "derived:descendants",
         "tests": [
+          "packages/compiler/test/deep-equality.test.ts",
           "tests/corpus/1473-promisify-execfile.ts",
           "tests/corpus/1573-promisify-execfile-env-spread.ts",
           "tests/corpus/2440-console-inspect-args.ts",
           "tests/corpus/2678-util-parseargs.ts",
           "tests/corpus/2912-promisify-fs-readfile.ts",
           "tests/corpus/3133-text-decoder-streaming.ts",
+          "tests/corpus/node24-deep-equality-properties.js",
+          "tests/corpus/node24-deep-equality.cjs",
+          "tests/corpus/node24-deep-equality.ts",
           "tests/corpus/node24-env-imports.cjs",
           "tests/corpus/node24-env-parse-errors.ts",
           "tests/corpus/node24-env-parse.ts",
@@ -111291,6 +111295,7 @@
           "tests/corpus/node24-text-utilities.cjs",
           "tests/corpus/node24-text-utilities.ts",
           "tests/corpus/text-codec-values/main.ts",
+          "tests/fixtures/node-types/deep-equality.ts",
           "tests/fixtures/node-types/env-files.ts",
           "tests/fixtures/node-types/system-errors.ts",
           "tests/fixtures/node-types/text-codecs.mts",
@@ -111303,6 +111308,7 @@
         "status": "partial",
         "evidence": "derived:descendants",
         "tests": [
+          "tests/fixtures/npm/cases/node24-deep-equality/main.ts",
           "tests/fixtures/npm/cases/node24-env/main.ts",
           "tests/fixtures/npm/cases/node24-mime-errors/main.ts",
           "tests/fixtures/npm/cases/node24-mime/main.ts",
@@ -113044,14 +113050,21 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:util"
+        "status": "partial",
+        "evidence": "compiler-feature:util.util.isDeepStrictEqual",
+        "tests": [
+          "tests/corpus/node24-deep-equality.ts",
+          "tests/corpus/node24-deep-equality.cjs",
+          "tests/corpus/node24-deep-equality-properties.js",
+          "tests/fixtures/node-types/deep-equality.ts",
+          "packages/compiler/test/deep-equality.test.ts"
+        ]
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util.isDeepStrictEqual",
+        "evidence": "island-feature:util.util.isDeepStrictEqual",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-deep-equality/main.ts"
         ]
       },
       "anchorSource": "exact"

@@ -89,6 +89,7 @@
     "node-builtin.url.fileURLToPath": ["tests/corpus/file-url-percent-decoding.ts", "tests/corpus/node24-file-url-options.ts", "tests/corpus/node24-file-url-errors.js"],
     "node-builtin.url.fileURLToPathBuffer": ["tests/corpus/node24-file-url-buffer.ts", "tests/corpus/node24-file-url-options.ts", "tests/corpus/node24-file-url-errors.js", "tests/fixtures/node-types/file-url-conversion.ts"],
     "node-builtin.util.parseArgs": ["tests/corpus/2678-util-parseargs.ts", "tests/corpus/node24-parseargs.js"],
+    "node-builtin.util.isDeepStrictEqual": ["tests/corpus/node24-deep-equality.ts", "tests/corpus/node24-deep-equality.cjs", "tests/corpus/node24-deep-equality-properties.js", "tests/fixtures/node-types/deep-equality.ts", "packages/compiler/test/deep-equality.test.ts"],
     "node-builtin.util": ["tests/corpus/2440-console-inspect-args.ts", "tests/corpus/2912-promisify-fs-readfile.ts"],
     "node-builtin.worker_threads": ["tests/corpus/957-builtins-namespace.ts"],
     "node-builtin.zlib": ["tests/corpus/1404-zlib-crypto-bytes.ts", "tests/corpus/2921-zlib-callbacks.ts", "tests/corpus/3115-zlib-static-compression-levels.ts"],
@@ -102,6 +103,7 @@
     "stdlib.abort": ["tests/harness/fetch-conformance.test.ts"]
   },
   "features": [
+    { "chapter": "util", "symbols": ["util.isDeepStrictEqual"], "status": "partial", "evidence": ["tests/corpus/node24-deep-equality.ts", "tests/corpus/node24-deep-equality.cjs", "tests/corpus/node24-deep-equality-properties.js", "tests/fixtures/node-types/deep-equality.ts", "packages/compiler/test/deep-equality.test.ts"] },
     { "chapter": "deprecations", "symbols": ["util.toUSVString"], "status": "not-applicable" },
     { "chapter": "util", "symbols": ["util.stripVTControlCharacters", "util.toUSVString"], "status": "partial", "evidence": ["tests/corpus/node24-text-utilities.ts", "tests/corpus/node24-text-utilities-validation.js", "tests/corpus/node24-text-utilities-coercion.js", "tests/corpus/node24-text-utilities.cjs", "tests/fixtures/node-types/text-utilities.ts"] },
     { "chapter": "util", "symbols": ["util.getSystemErrorName", "util.getSystemErrorMessage", "util.getSystemErrorMap"], "status": "partial", "evidence": ["tests/corpus/node24-system-errors.ts", "tests/corpus/node24-system-error-validation.js", "tests/corpus/node24-system-errors.cjs", "tests/fixtures/node-types/system-errors.ts"] },

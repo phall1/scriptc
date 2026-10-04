@@ -437,6 +437,7 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "util.systemErrorEntries": { argTypes: [], result: DYN },
   "util.stripVTControlCharacters": { argTypes: [DYN], result: STRING },
   "util.toUSVString": { argTypes: [DYN], result: STRING },
+  "util.isDeepStrictEqual": { argTypes: [DYN, DYN, DYN], result: BOOL },
   "fs.statSync": { argTypes: [STRING], result: STATS_T },
   "fs.lstatSync": { argTypes: [STRING], result: STATS_T },
   "fs.fstatSync": { argTypes: [F64], result: STATS_T },
