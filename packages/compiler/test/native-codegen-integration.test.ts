@@ -49,6 +49,39 @@ async function run(command: string, args: string[]) {
 }
 
 describe.runIf(supported)("LLVM native helper integration", () => {
+  test("release codegen vectorizes independent scalar arithmetic without fast math", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "scriptc-helper-vectorize-"));
+    dirs.push(dir);
+    const input = join(dir, "pairs.ll");
+    const output = join(dir, "pairs.s");
+    await writeFile(input, `
+define void @pairs(ptr noalias %out, ptr %a, ptr %b) {
+  %a1 = getelementptr double, ptr %a, i64 1
+  %b1 = getelementptr double, ptr %b, i64 1
+  %out1 = getelementptr double, ptr %out, i64 1
+  %x0 = load double, ptr %a
+  %x1 = load double, ptr %a1
+  %y0 = load double, ptr %b
+  %y1 = load double, ptr %b1
+  %p0 = fmul double %x0, %y0
+  %p1 = fmul double %x1, %y1
+  %r0 = fadd double %p0, %x0
+  %r1 = fadd double %p1, %x1
+  store double %r0, ptr %out
+  store double %r1, ptr %out1
+  ret void
+}
+`);
+    const args = helperArgs(input, output);
+    args[args.indexOf("--filetype") + 1] = "asm";
+    const result = await run(helper, args);
+    expect(result).toEqual({ stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), exitCode: 0 });
+    const assembly = await readFile(output, "utf8");
+    expect(assembly).toMatch(/fmul\.2d\b/);
+    expect(assembly).toMatch(/fadd\.2d\b/);
+    expect(assembly).not.toMatch(/\bfm(?:add|la)\b/);
+  });
+
   test("malformed IR and unsupported targets are structured and preserve caller output", async () => {
     const dir = await mkdtemp(join(tmpdir(), "scriptc-helper-errors-"));
     dirs.push(dir);

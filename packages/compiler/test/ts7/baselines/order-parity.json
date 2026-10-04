@@ -10482,6 +10482,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/native-array-read-lifetimes.ts": {
+   "order": [
+    "<repo>/tests/corpus/native-array-read-lifetimes.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/native-array-reduce-find-last.js": {
    "order": [
     "<repo>/tests/corpus/native-array-reduce-find-last.js"
@@ -11160,6 +11166,12 @@
   "<repo>/tests/corpus/tuple-callback-visitation.ts": {
    "order": [
     "<repo>/tests/corpus/tuple-callback-visitation.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/tuple-forof-visitation.ts": {
+   "order": [
+    "<repo>/tests/corpus/tuple-forof-visitation.ts"
    ],
    "diags": []
   },

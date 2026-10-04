@@ -796,6 +796,11 @@ static bool scr_arr_read_value(const ScrArr *a, double i, uint64_t *slot) {
   return state == SCR_ARR_VALUE;
 }
 
+void *scr_arr_peek_ref(const ScrArr *a, double i) {
+  uint64_t slot;
+  return scr_arr_read_value(a, i, &slot) ? scr_slot_to_ptr(slot) : NULL;
+}
+
 double scr_arr_get_number(const ScrArr *a, double i) {
   /* Keep this hot numeric-only entry self-contained: routing it through
    * scr_arr_read_value adds an out-of-line call at -O2 on native targets. */

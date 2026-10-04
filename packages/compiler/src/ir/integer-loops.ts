@@ -92,3 +92,26 @@ export function matchIntegerBytesForLoop(
 
   return { localId: init.localId, limitReceiver: cond.right.receiver };
 }
+
+/** Array lengths are uint32, so zero-based loops and nested `j = i + 1`
+ * loops have exact integer induction even when the body changes length.
+ * Only active array induction bindings may seed a nested loop. Their body
+ * values are at most 2^32 - 2, making the increment safe on 32-bit targets. */
+export function matchIntegerArrayForLoop(
+  stmt: IrStmt & { kind: "for" }, locals: ReadonlyMap<string, IrLocal>, outer: ReadonlySet<string>,
+): IntegerBytesForLoop | null {
+  const init = stmt.init;
+  if (init?.kind !== "varDecl" || !init.init) return null;
+  const start = init.init;
+  const zero = start.kind === "numLit" && start.value === 0 && !Object.is(start.value, -0);
+  const nested = start.kind === "bin" && start.op === "+" && start.left.kind === "varRef" && outer.has(start.left.localId) &&
+    start.right.kind === "numLit" && start.right.value === 1;
+  const local = locals.get(init.localId);
+  if ((!zero && !nested) || local?.type.kind !== "f64" || !local.mutable || local.boxed || local.tdz) return null;
+  const cond = stmt.cond;
+  if (cond?.kind !== "bin" || cond.op !== "<" || cond.left.kind !== "varRef" || cond.left.localId !== local.id ||
+      cond.right.kind !== "arrIntrinsic" || cond.right.method !== "length" || cond.right.receiver.kind !== "varRef" ||
+      cond.right.receiver.type.kind !== "array" || locals.get(cond.right.receiver.localId)?.boxed ||
+      !isUnitIncrement(stmt.update, local.id) || writesLocal(stmt.body, local.id)) return null;
+  return { localId: local.id, limitReceiver: cond.right.receiver };
+}

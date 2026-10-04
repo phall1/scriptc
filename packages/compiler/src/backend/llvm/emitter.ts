@@ -37,7 +37,7 @@ import type {
   SrcLoc,
 } from "../../ir/ir.js";
 import { CAUGHT, ffiCallbackType, isDynTypedRefType, isFfiContextParam, isRefCounted, isUnitType, moduleRuntimeFeatures, moduleEmbedsBuiltin, moduleEmbedsCompressedNpm, NPM_COMPRESS_MIN, POINTER_KINDS, RUNTIME_EMITTER_CLASS, RUNTIME_ERROR_CLASSES, RUNTIME_STREAM_CLASSES, typeKey, VOID } from "../../ir/ir.js";
-import { matchIntegerBytesForLoop } from "../../ir/integer-loops.js";
+import { matchIntegerArrayForLoop, matchIntegerBytesForLoop } from "../../ir/integer-loops.js";
 import { scalarizeNumericRecords } from "../../ir/scalar-records.js";
 import { everyStmtList } from "../../ir/traverse.js";
 import { analyzeIntegerRanges, type IntegerRanges } from "../../ir/integer-ranges.js";
@@ -47,6 +47,8 @@ import { RUNTIME_ABI_MARKER } from "../runtime-abi.js";
 import { computeMayThrow } from "../may-throw.js";
 import { mangleArgPack, mangleAsyncSpawn, mangleClassObj, mangleClassStruct, mangleFnClosure, mangleFunction, mangleGenDrop, mangleGenSpawn, mangleGlobal, mangleLocal, mangleRecordStruct, mangleTrampoline, mangleWrapper, mangleVtInstance } from "../mangle.js";
 import { BlockBuilder } from "./blocks.js";
+import { emitLocalArrayRead, findLocalArrayReads, type LocalArrayRead } from "./local-array-reads.js";
+import { emitBorrowedFieldSequence } from "./borrowed-receivers.js";
 import { LlvmDebugInfo } from "./debug-info.js";
 import { f64Lit, ffiNativeTypeLl, ffiNativeParamLl, ffiNativeReturnLl, llvmCommentText } from "./common.js";
 import { ffiExtendsNarrowIntegers } from "../targets.js";
@@ -174,6 +176,42 @@ function llStrBytes(text: string): string {
 }
 
 export class LlEmitter {
+  localArrayReads = new Map<string, LocalArrayRead>();
+  integerArrayBindings = new Set<string>();
+  private readonly fieldAliasTags = new Map<string, number>();
+  private readonly fieldPointerTags = new Map<string, number>();
+
+  /** Native class fields with different property names cannot occupy the
+   * same slot of one object. Inherited views of the same property share a
+   * tag. Array storage has its own disjoint categories; untagged runtime
+   * operations and record views conservatively alias all of them. */
+  private markFieldPointer(ptr: string, field: string): void {
+    this.markMemoryPointer(ptr, `field:${field}`);
+  }
+
+  markMemoryPointer(ptr: string, field: string): void {
+    if (this.debug !== null) return;
+    let tag = this.fieldAliasTags.get(field);
+    if (tag === undefined) {
+      tag = 2 + this.fieldAliasTags.size * 2;
+      this.fieldAliasTags.set(field, tag);
+    }
+    this.fieldPointerTags.set(ptr, tag);
+  }
+
+  fieldAliasAttachment(ptr: string): string {
+    const tag = this.fieldPointerTags.get(ptr);
+    return tag === undefined ? "" : `, !tbaa !${tag}`;
+  }
+
+  private fieldAliasMetadata(): string[] {
+    if (this.fieldAliasTags.size === 0) return [];
+    const lines = ['!0 = !{!"scriptc native fields"}'];
+    for (const tag of this.fieldAliasTags.values()) {
+      lines.push(`!${tag - 1} = !{!"field.${tag}", !0, i64 0}`, `!${tag} = !{!${tag - 1}, !${tag - 1}, i64 0}`);
+    }
+    return lines;
+  }
   private readonly debug: LlvmDebugInfo | null;
   private debugScope: string | null = null;
   readonly sizeType: "i32" | "i64";
@@ -1427,6 +1465,7 @@ export class LlEmitter {
       if (this.wasi) out.push(`attributes #1 = { sanitize_address presplitcoroutine }`);
       if (hasNoInlineRecordClone) out.push(`attributes #2 = { noinline sanitize_address }`);
       out.push(``);
+      out.push(...this.fieldAliasMetadata());
       if (this.debug !== null) out.push(this.debug.render());
       return out;
     }
@@ -1568,6 +1607,7 @@ export class LlEmitter {
       ...(hasNoInlineRecordClone ? [`attributes #2 = { noinline sanitize_address }`] : []),
       ``,
     );
+    out.push(...this.fieldAliasMetadata());
     if (this.debug !== null) out.push(this.debug.render());
     return out;
   }
@@ -2863,6 +2903,7 @@ export class LlEmitter {
     this.B.line(
       `${p} = getelementptr inbounds %${classStructSym(className)}, ptr ${objName}, i64 0, i32 ${index}`,
     );
+    this.markFieldPointer(p, field);
     return { ptr: p, type };
   }
 
@@ -2957,7 +2998,7 @@ export class LlEmitter {
     const B = this.B;
     const fieldTy = llFieldType(t);
     const raw = B.tmp();
-    B.line(`${raw} = load ${fieldTy}, ptr ${ptr}`);
+    B.line(`${raw} = load ${fieldTy}, ptr ${ptr}${this.fieldAliasAttachment(ptr)}`);
     if (fieldTy !== "i8") return raw;
     const b = B.tmp();
     B.line(`${b} = trunc i8 ${raw} to i1`);
@@ -2969,12 +3010,12 @@ export class LlEmitter {
     const B = this.B;
     const fieldTy = llFieldType(t);
     if (fieldTy !== "i8") {
-      B.line(`store ${fieldTy} ${value}, ptr ${ptr}`);
+      B.line(`store ${fieldTy} ${value}, ptr ${ptr}${this.fieldAliasAttachment(ptr)}`);
       return;
     }
     const z = B.tmp();
     B.line(`${z} = zext i1 ${value} to i8`);
-    B.line(`store i8 ${z}, ptr ${ptr}`);
+    B.line(`store i8 ${z}, ptr ${ptr}${this.fieldAliasAttachment(ptr)}`);
   }
 
   // ── bindings ────────────────────────────────────────────────────────────
@@ -3264,6 +3305,9 @@ export class LlEmitter {
     this.currentLocals = new Map(fn.locals.map((l) => [l.id, l]));
     this.captureIds = new Set([...(fn.captures ?? []), ...(fn.classCaptures ?? [])].map((c) => c.localId));
     this.integerLoopBindings.clear();
+    this.fieldPointerTags.clear();
+    this.integerArrayBindings.clear();
+    this.localArrayReads = findLocalArrayReads(fn, this.fnByName, this.unionsById);
     this.integerRanges = analyzeIntegerRanges(fn);
     this.chainSlots.clear();
     this.finallyStack = [];
@@ -3493,6 +3537,12 @@ export class LlEmitter {
     switch (s.kind) {
       case "varDecl": {
         const b = this.binding(s.localId);
+        const localRead = this.localArrayReads.get(s.localId);
+        if (localRead) {
+          const owner = emitLocalArrayRead(this, localRead, b.slot);
+          if (owner) this.scopes[this.scopes.length - 1]!.push(owner);
+          break;
+        }
         if (b.kind === "boxed") {
           // Box FIRST, then evaluate the initializer: a named function
           // expression's closure captures this box during init evaluation.
@@ -3620,7 +3670,7 @@ export class LlEmitter {
         // release — a release can trigger a cycle collection, which must
         // never see a heap edge whose count was already given up).
         // Classes and records share the struct layout, so one emission.
-        const obj = this.emitExpr(s.obj);
+        const obj = isRefCounted(s.value.type) ? this.emitExpr(s.obj) : this.emitStableReceiver(s.obj, [s.value]);
         const v = this.emitExpr(s.value);
         const { ptr, type } =
           s.kind === "fieldSet"
@@ -3875,13 +3925,21 @@ export class LlEmitter {
       case "for": {
         // The init's scope wraps the whole loop (break/continue must NOT
         // release it — scopeDepth captured after the push, C parity).
-        const integerLoop = this.debug === null ? matchIntegerBytesForLoop(s, this.currentLocals) : null;
+        const integerArrayLoop = this.debug === null ? matchIntegerArrayForLoop(s, this.currentLocals, this.integerArrayBindings) : null;
+        const integerLoop = integerArrayLoop ?? (this.debug === null ? matchIntegerBytesForLoop(s, this.currentLocals) : null);
         this.scopes.push([]);
         let integerSlot: string | null = null;
         if (integerLoop) {
           integerSlot = B.slot();
           B.entryAllocas.push(`${integerSlot} = alloca ${this.sizeType} ; integer induction ${this.currentLocals.get(integerLoop.localId)!.name}`);
-          B.line(`store ${this.sizeType} 0, ptr ${integerSlot}`);
+          let start = "0";
+          if (integerArrayLoop && s.init?.kind === "varDecl" && s.init.init) {
+            const value = this.emitExpr(s.init.init);
+            start = B.tmp();
+            B.line(`${start} = fptoui double ${value.name} to ${this.sizeType}`);
+            this.integerArrayBindings.add(integerLoop.localId);
+          }
+          B.line(`store ${this.sizeType} ${start}, ptr ${integerSlot}`);
           this.integerLoopBindings.set(integerLoop.localId, integerSlot);
         } else if (s.init) {
           // A multi-declarator head shares the loop's scope. Emitting its
@@ -3927,8 +3985,9 @@ export class LlEmitter {
           const len = B.tmp();
           const index = B.tmp();
           const inBounds = B.tmp();
-          B.line(`${lenPtr} = getelementptr inbounds %ScrBytes, ptr ${receiver.name}, i64 0, i32 1`);
-          B.line(`${len} = load ${this.sizeType}, ptr ${lenPtr}`);
+          B.line(`${lenPtr} = getelementptr inbounds %${integerArrayLoop ? "ScrArr" : "ScrBytes"}, ptr ${receiver.name}, i64 0, i32 1`);
+          if (integerArrayLoop) this.markMemoryPointer(lenPtr, "array:header");
+          B.line(`${len} = load ${this.sizeType}, ptr ${lenPtr}${this.fieldAliasAttachment(lenPtr)}`);
           B.line(`${index} = load ${this.sizeType}, ptr ${integerSlot}`);
           B.line(`${inBounds} = icmp ult ${this.sizeType} ${index}, ${len}`);
           B.condBr(inBounds, lb, le);
@@ -3962,6 +4021,7 @@ export class LlEmitter {
         B.startBlock(le);
         this.releaseScope(this.scopes.pop()!);
         if (integerLoop) this.integerLoopBindings.delete(integerLoop.localId);
+        if (integerArrayLoop) this.integerArrayBindings.delete(integerArrayLoop.localId);
         break;
       }
       case "forOf": {
@@ -4452,7 +4512,7 @@ export class LlEmitter {
       // to this expression's frame so they survive those reads and still
       // die on the path that created them, including inside lazy branches.
       this.scopes.push([]);
-      const result = emitOperatorExpr(this, e);
+      const result = emitBorrowedFieldSequence(this, e) ?? emitOperatorExpr(this, e);
       for (const local of this.scopes.pop()!) {
         this.currentFrame().push({ name: local.slot, type: local.type, slot: true, ...(local.boxed ? { boxed: true } : {}) });
       }
@@ -4569,7 +4629,42 @@ export class LlEmitter {
         : this.classFieldPtr(receiver.name, e.className, e.field);
       return { name: this.loadField(ptr, type), type: e.type };
     }
+    if (e.kind === "ternary" && this.canBorrowReceiver(e.then) && this.canBorrowReceiver(e.else_)) {
+      // Checked projections lower to a ternary with an always-throwing
+      // arm. Keep that check at the use, but borrow the successful arm.
+      const B = this.B;
+      const cond = this.emitExpr(e.cond);
+      const slot = B.slot();
+      B.entryAllocas.push(`${slot} = alloca ptr`);
+      const yes = B.newLabel("read.then"), no = B.newLabel("read.else"), join = B.newLabel("read.join");
+      B.condBr(cond.name, yes, no);
+      for (const [label, value] of [[yes, e.then], [no, e.else_]] as const) {
+        B.startBlock(label);
+        this.frames.push([]);
+        const result = this.emitReadReceiver(value);
+        B.line(`store ptr ${result.name}, ptr ${slot}`);
+        this.releaseFrame(this.frames.pop()!);
+        B.br(join);
+      }
+      B.startBlock(join);
+      const value = B.tmp();
+      B.line(`${value} = load ptr, ptr ${slot}`);
+      return { name: value, type: e.type };
+    }
     return this.emitExpr(e);
+  }
+
+  canBorrowReceiver(e: IrExpr): boolean {
+    switch (e.kind) {
+      case "varRef": return this.binding(e.localId).kind !== "boxed";
+      case "unionNarrow": return this.canBorrowReceiver(e.value);
+      case "fieldGet": case "recordGet": return this.canBorrowReceiver(e.obj);
+      case "ternary": return this.canBorrowReceiver(e.then) && this.canBorrowReceiver(e.else_);
+      // The runtime always sets a pending exception; its unreachable
+      // typed dummy is null and owns no receiver.
+      case "libCall": return e.fn === "error.nodeThrow";
+      default: return false;
+    }
   }
 
   emitExpr(e: IrExpr): LlValue {

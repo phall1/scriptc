@@ -198,6 +198,7 @@ export function emitStableReceiver(host: LlvmEmitterContext, receiver: IrExpr, f
     ) {
       const b = host.binding(receiver.localId);
       if (b.kind !== "boxed") {
+        if (b.kind === "global") host.checkGlobalTdz(receiver.localId);
         const value = host.B.tmp();
         host.B.line(`${value} = load ptr, ptr ${b.slot}`);
         return { name: value, type: receiver.type };
@@ -208,9 +209,9 @@ export function emitStableReceiver(host: LlvmEmitterContext, receiver: IrExpr, f
 
 export function emitArrIntrinsic(host: LlvmEmitterContext, e: IrExpr & { kind: "arrIntrinsic" }): LlValue {
     const B = host.B;
-    // getNumber/indexEq produce scalars without invoking user code. A stable
+    // Scalar reads do not invoke user code. A stable
     // binding can own its receiver until that lookup finishes.
-    const r = e.method === "getNumber" || e.method === "indexEq"
+    const r = e.method === "getNumber" || e.method === "indexEq" || e.method === "length"
       ? host.emitStableReceiver(e.receiver, e.args)
       : host.emitExpr(e.receiver);
     if (e.receiver.type.kind !== "array") throw new InternalCompilerError("llvm emitter bug: arrIntrinsic on non-array");
@@ -221,9 +222,11 @@ export function emitArrIntrinsic(host: LlvmEmitterContext, e: IrExpr & { kind: "
     const method = e.method;
     switch (method) {
       case "length": {
-        host.declare(`declare double @scr_arr_len(ptr)`);
-        const t = B.tmp();
-        B.line(`${t} = call double @scr_arr_len(ptr ${r.name})`);
+        const p = B.tmp(), len = B.tmp(), t = B.tmp();
+        B.line(`${p} = getelementptr inbounds %ScrArr, ptr ${r.name}, i32 0, i32 1`);
+        host.markMemoryPointer(p, "array:header");
+        B.line(`${len} = load ${host.sizeType}, ptr ${p}${host.fieldAliasAttachment(p)}`);
+        B.line(`${t} = uitofp ${host.sizeType} ${len} to double`);
         return { name: t, type: e.type };
       }
       case "getNumber": {

@@ -25,6 +25,12 @@ const fixture = (name: string) => join(repoRoot, "tests/fixtures/strictness", na
 const nodeTypesDir = join(repoRoot, "tests/fixtures/node-types");
 const sanitize = process.env["SCRIPTC_SAN"] === "1";
 
+function comparableStderr(text: string): string {
+  return sanitize
+    ? text.replace(/^==\d+==WARNING: ASan doesn't fully support makecontext\/swapcontext functions and may produce false positives in some cases!\n/gm, "")
+    : text;
+}
+
 test("node-types: filesystem timestamps accept Date, Buffer, URL, and FileHandle inputs under @types/node", async () => {
   const outDir = outDirFor("fs-timestamps");
   const entry = join(nodeTypesDir, "fs-timestamps.ts");
@@ -33,7 +39,7 @@ test("node-types: filesystem timestamps accept Date, Buffer, URL, and FileHandle
   if (!result.ok) return;
   const [native, node] = await Promise.all([execFileAsync(result.binaryPath), execFileAsync(process.execPath, ["--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", entry])]);
   expect(native.stdout).toBe(node.stdout);
-  expect(native.stderr).toBe(node.stderr);
+  expect(comparableStderr(native.stderr)).toBe(node.stderr);
 });
 
 test("node-types: ESM metadata supports computed and destructured reads under @types/node", async () => {
@@ -44,7 +50,7 @@ test("node-types: ESM metadata supports computed and destructured reads under @t
   if (!result.ok) return;
   const [native, node] = await Promise.all([execFileAsync(result.binaryPath), execFileAsync(process.execPath, [entry])]);
   expect(native.stdout).toBe(node.stdout);
-  expect(native.stderr).toBe(node.stderr);
+  expect(comparableStderr(native.stderr)).toBe(node.stderr);
 });
 
 test("node-types: util.types supports native brands and predicate narrowing under @types/node", async () => {
@@ -55,7 +61,7 @@ test("node-types: util.types supports native brands and predicate narrowing unde
   if (!result.ok) return;
   const [native, node] = await Promise.all([execFileAsync(result.binaryPath), execFileAsync(process.execPath, ["--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", entry])]);
   expect(native.stdout).toBe(node.stdout);
-  expect(native.stderr).toBe(node.stderr);
+  expect(comparableStderr(native.stderr)).toBe(node.stderr);
 });
 
 test("node-types: util.styleText supports stored calls and standard streams under @types/node", async () => {
@@ -66,7 +72,7 @@ test("node-types: util.styleText supports stored calls and standard streams unde
   if (!result.ok) return;
   const [native, node] = await Promise.all([execFileAsync(result.binaryPath), execFileAsync(process.execPath, ["--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", entry])]);
   expect(native.stdout).toBe(node.stdout);
-  expect(native.stderr).toBe(node.stderr);
+  expect(comparableStderr(native.stderr)).toBe(node.stderr);
 });
 
 function outDirFor(name: string): string {
@@ -145,7 +151,7 @@ test("node-types: URL port and hash getters lower statically under @types/node",
     execFileAsync(process.execPath, [entry]),
   ]);
   expect(native.stdout).toBe(node.stdout);
-  expect(native.stderr).toBe(node.stderr);
+  expect(comparableStderr(native.stderr)).toBe(node.stderr);
 });
 
 test("node-types: captured NodeJS.WritableStream values write through the procStream scalar", async () => {
@@ -159,7 +165,7 @@ test("node-types: captured NodeJS.WritableStream values write through the procSt
   if (!result.ok) return;
   const { stdout, stderr } = await execFileAsync(result.binaryPath);
   expect(stdout).toBe("[out] line\n[out] line\ndone\n");
-  expect(stderr).toBe("[err] line\n");
+  expect(comparableStderr(stderr)).toBe("[err] line\n");
 });
 
 test("node-types: refined spawn returns expose writable child stdin", async () => {
@@ -247,7 +253,7 @@ test("node-types: imported TypeScript sources can use the RequestInfo global", a
     execFileAsync(process.execPath, [entry]),
   ]);
   expect(native.stdout).toBe(node.stdout);
-  expect(native.stderr).toBe(node.stderr);
+  expect(comparableStderr(native.stderr)).toBe(node.stderr);
 });
 
 test("node-types: global and node:util codec instances share the stored native representation", async () => {
@@ -258,7 +264,7 @@ test("node-types: global and node:util codec instances share the stored native r
   if (!result.ok) return;
   const [native, node] = await Promise.all([execFileAsync(result.binaryPath), execFileAsync(process.execPath, [entry])]);
   expect(native.stdout).toBe(node.stdout);
-  expect(native.stderr).toBe(node.stderr);
+  expect(comparableStderr(native.stderr)).toBe(node.stderr);
 });
 
 test("node-types: imported console methods share native output formatting", async () => {
@@ -269,7 +275,7 @@ test("node-types: imported console methods share native output formatting", asyn
   if (!result.ok) return;
   const [native, node] = await Promise.all([execFileAsync(result.binaryPath), execFileAsync(process.execPath, [entry])]);
   expect(native.stdout).toBe(node.stdout);
-  expect(native.stderr).toBe(node.stderr);
+  expect(comparableStderr(native.stderr)).toBe(node.stderr);
 });
 
 test("node-types: crypto key derivation and SHA-2 match Node under @types/node", async () => {
@@ -280,7 +286,7 @@ test("node-types: crypto key derivation and SHA-2 match Node under @types/node",
   if (!result.ok) return;
   const [native, node] = await Promise.all([execFileAsync(result.binaryPath), execFileAsync(process.execPath, ["--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", entry])]);
   expect(native.stdout).toBe(node.stdout);
-  expect(native.stderr).toBe(node.stderr);
+  expect(comparableStderr(native.stderr)).toBe(node.stderr);
 });
 
 test("node-types: URL mutation matches Node under @types/node", async () => {
@@ -291,7 +297,7 @@ test("node-types: URL mutation matches Node under @types/node", async () => {
   if (!result.ok) return;
   const [native, node] = await Promise.all([execFileAsync(result.binaryPath), execFileAsync(process.execPath, ["--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", entry])]);
   expect(native.stdout).toBe(node.stdout);
-  expect(native.stderr).toBe(node.stderr);
+  expect(comparableStderr(native.stderr)).toBe(node.stderr);
 });
 
 test("node-types: URL factories match Node under @types/node", async () => {
@@ -302,7 +308,7 @@ test("node-types: URL factories match Node under @types/node", async () => {
   if (!result.ok) return;
   const [native, node] = await Promise.all([execFileAsync(result.binaryPath), execFileAsync(process.execPath, ["--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", entry])]);
   expect(native.stdout).toBe(node.stdout);
-  expect(native.stderr).toBe(node.stderr);
+  expect(comparableStderr(native.stderr)).toBe(node.stderr);
 });
 
 test("node-types: no-error assertions match Node under @types/node", async () => {
@@ -313,7 +319,7 @@ test("node-types: no-error assertions match Node under @types/node", async () =>
   if (!result.ok) return;
   const [native, node] = await Promise.all([execFileAsync(result.binaryPath), execFileAsync(process.execPath, ["--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", entry])]);
   expect(native.stdout).toBe(node.stdout);
-  expect(native.stderr).toBe(node.stderr);
+  expect(comparableStderr(native.stderr)).toBe(node.stderr);
 });
 
 test("node-types: text utilities match Node under @types/node", async () => {
@@ -324,7 +330,7 @@ test("node-types: text utilities match Node under @types/node", async () => {
   if (!result.ok) return;
   const [native, node] = await Promise.all([execFileAsync(result.binaryPath), execFileAsync(process.execPath, ["--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", entry])]);
   expect(native.stdout).toBe(node.stdout);
-  expect(native.stderr).toBe(node.stderr);
+  expect(comparableStderr(native.stderr)).toBe(node.stderr);
 });
 
 test("node-types: system error utilities match Node under @types/node", async () => {
@@ -335,7 +341,7 @@ test("node-types: system error utilities match Node under @types/node", async ()
   if (!result.ok) return;
   const [native, node] = await Promise.all([execFileAsync(result.binaryPath), execFileAsync(process.execPath, ["--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", entry])]);
   expect(native.stdout).toBe(node.stdout);
-  expect(native.stderr).toBe(node.stderr);
+  expect(comparableStderr(native.stderr)).toBe(node.stderr);
 });
 
 test("node-types: deep equality matches Node under @types/node", async () => {
@@ -346,7 +352,7 @@ test("node-types: deep equality matches Node under @types/node", async () => {
   if (!result.ok) return;
   const [native, node] = await Promise.all([execFileAsync(result.binaryPath), execFileAsync(process.execPath, ["--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", entry])]);
   expect(native.stdout).toBe(node.stdout);
-  expect(native.stderr).toBe(node.stderr);
+  expect(comparableStderr(native.stderr)).toBe(node.stderr);
 });
 
 test("node-types: file URL conversions match Node under @types/node", async () => {
@@ -357,7 +363,7 @@ test("node-types: file URL conversions match Node under @types/node", async () =
   if (!result.ok) return;
   const [native, node] = await Promise.all([execFileAsync(result.binaryPath), execFileAsync(process.execPath, ["--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", entry])]);
   expect(native.stdout).toBe(node.stdout);
-  expect(native.stderr).toBe(node.stderr);
+  expect(comparableStderr(native.stderr)).toBe(node.stderr);
 });
 
 test("node-types: environment-file APIs match Node under @types/node", async () => {
@@ -368,7 +374,7 @@ test("node-types: environment-file APIs match Node under @types/node", async () 
   if (!result.ok) return;
   const [native, node] = await Promise.all([execFileAsync(result.binaryPath), execFileAsync(process.execPath, ["--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", entry])]);
   expect(native.stdout).toBe(node.stdout);
-  expect(native.stderr).toBe(node.stderr);
+  expect(comparableStderr(native.stderr)).toBe(node.stderr);
 });
 
 test("node-types: text encoding APIs match Node under @types/node", async () => {
@@ -379,7 +385,7 @@ test("node-types: text encoding APIs match Node under @types/node", async () => 
   if (!result.ok) return;
   const [native, node] = await Promise.all([execFileAsync(result.binaryPath), execFileAsync(process.execPath, ["--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", entry])]);
   expect(native.stdout).toBe(node.stdout);
-  expect(native.stderr).toBe(node.stderr);
+  expect(comparableStderr(native.stderr)).toBe(node.stderr);
 });
 
 test("node-types: declared-but-not-lowered surface fences, naming @types/node", async () => {
