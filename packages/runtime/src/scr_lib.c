@@ -4243,8 +4243,21 @@ static ScrStats *scr_stats_of_path(const ScrStr *path, const char *op,
   HANDLE h = CreateFileW(wide, FILE_READ_ATTRIBUTES,
                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                          NULL, OPEN_EXISTING, flags, NULL);
+  if (h == INVALID_HANDLE_VALUE) {
+    DWORD error = GetLastError();
+    DWORD attributes = GetFileAttributesW(wide);
+    free(wide);
+    /* CRT stat can report the link entry when its target cannot be opened,
+     * hiding dangling links and Windows file/directory type mismatches.
+     * libuv preserves the failed follow operation for reparse points. */
+    if (!no_follow && attributes != INVALID_FILE_ATTRIBUTES &&
+        (attributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+      scr_fs_throw(scr_fs_win_errno(error), op, path);
+      return NULL;
+    }
+    return scr_stats_crt_fallback(path, op);
+  }
   free(wide);
-  if (h == INVALID_HANDLE_VALUE) return scr_stats_crt_fallback(path, op);
 
   DWORD file_type = GetFileType(h);
   if (file_type != FILE_TYPE_DISK) {
@@ -4423,9 +4436,7 @@ void scr_fs_symlink(ScrStr *target, ScrStr *destination, int kind) {
     free(text);
   }
   scr_str_release(absolute);
-  /* Node's binding namespaces the link path before passing it to libuv.
-   * In particular, Windows can reject a file link to a directory differently
-   * when the destination uses the extended-length path syntax. */
+  /* Node's binding namespaces the link path before passing it to libuv. */
   ScrStr *link_path = scr_path_win32_to_namespaced_path(destination);
   WCHAR *from = scr_fs_win_wide(stored), *to = scr_fs_win_wide(link_path);
   DWORD error = !from || !to ? GetLastError() : 0;

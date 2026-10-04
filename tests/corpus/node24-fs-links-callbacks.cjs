@@ -38,7 +38,9 @@ async function main() {
     // Buffer paths bypass that probe and use the file-link fallback.
     try {
       await call(fs.symlink, "dir", Buffer.from(join(root, "inferred")));
-      console.log("inferred", fs.statSync(join(root, "inferred")).isDirectory());
+      console.log("inferred link", fs.lstatSync(join(root, "inferred")).isSymbolicLink());
+      try { console.log("inferred stat", fs.statSync(join(root, "inferred")).isDirectory()); }
+      catch (e) { console.log("inferred stat", e.name, e.code, e.message.includes("stat")); }
     } catch (e) { if (process.platform === "win32" && e.code === "EPERM") console.log("symlink privilege boundary"); else throw e; }
     let synchronous = true;
     await new Promise(resolve => {

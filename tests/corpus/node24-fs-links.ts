@@ -32,8 +32,17 @@ try {
     console.log("absolute", fs.readlinkSync(join(root, "absolute")) === file);
     fs.symlinkSync("missing-target", join(root, "dangling"), null);
     console.log("dangling", fs.readlinkSync(join(root, "dangling")), fs.lstatSync(join(root, "dangling")).isSymbolicLink());
+    try { fs.statSync(join(root, "dangling")); } catch (e) { const err = e as NodeJS.ErrnoException; console.log("dangling stat", err.name, err.code); }
     fs.symlinkSync("nested", join(root, "directory"), "dir");
     console.log("directory", fs.statSync(join(root, "directory")).isDirectory());
+    fs.symlinkSync("nested", join(root, "file-directory"), "file");
+    console.log("file-directory link", fs.lstatSync(join(root, "file-directory")).isSymbolicLink(), fs.readlinkSync(join(root, "file-directory")) === "nested");
+    try { console.log("file-directory stat", fs.statSync(join(root, "file-directory")).isDirectory()); }
+    catch (e) { const err = e as NodeJS.ErrnoException; console.log("file-directory stat", err.name, err.code); }
+    fs.symlinkSync("target.txt", join(root, "directory-file"), "dir");
+    console.log("directory-file link", fs.lstatSync(join(root, "directory-file")).isSymbolicLink());
+    try { console.log("directory-file stat", fs.statSync(join(root, "directory-file")).isFile()); }
+    catch (e) { const err = e as NodeJS.ErrnoException; console.log("directory-file stat", err.name, err.code); }
     if (process.platform !== "win32") {
       fs.symlinkSync("x".repeat(600), join(root, "long"), "file");
       console.log("long", fs.readlinkSync(join(root, "long")).length);
