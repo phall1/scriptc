@@ -632,6 +632,28 @@ static void test_sparse_holes(void) {
 #endif
 }
 
+static void test_borrowed_ref_read(void) {
+  ScrArr *a = scr_arr_new(SCR_ELEM_STR, 0);
+  ScrStr *value = scr_str_new("borrowed", 8);
+  double keys[] = {0, -0.0, 0.5, -1, NAN, INFINITY, -INFINITY, 4294967294.0, 4294967295.0};
+  for (size_t i = 0; i < sizeof keys / sizeof *keys; i++) {
+    scr_arr_set_ref(a, keys[i], scr_str_retain(value));
+    size_t before = value->rc;
+    check(scr_arr_peek_ref(a, keys[i]) == value, "borrowed ref lookup preserves identity");
+    check(value->rc == before, "borrowed ref lookup does not retain");
+    scr_arr_set_undefined(a, keys[i]);
+    check(scr_arr_peek_ref(a, keys[i]) == NULL, "borrowed ref lookup of undefined");
+    scr_arr_delete(a, keys[i]);
+    check(scr_arr_peek_ref(a, keys[i]) == NULL, "borrowed ref lookup of deleted slot");
+  }
+  check(scr_arr_peek_ref(a, 3) == NULL, "borrowed ref lookup of hole");
+  scr_arr_set_len(a, 0);
+  check(scr_arr_peek_ref(a, 0) == NULL, "borrowed ref lookup after truncation");
+  check(value->rc == 1, "borrowed reads leave only the original owner");
+  scr_str_release(value);
+  scr_arr_release(a);
+}
+
 int main(int argc, char **argv) {
   if (argc > 1) {
     ScrArr *a = scr_arr_new(SCR_ELEM_F64, 0);
@@ -656,6 +678,7 @@ int main(int argc, char **argv) {
 
   test_f64_basics();
   test_numeric_read();
+  test_borrowed_ref_read();
   test_bool();
   test_dense_replacement();
   test_unshift_reverse();

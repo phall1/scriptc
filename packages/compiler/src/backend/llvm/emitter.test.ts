@@ -137,6 +137,24 @@ test("capture boxes keep their ordinary owned-read contract", () => {
   expect(llvm.match(/call ptr @scr_str_retain_v/g)).toHaveLength(1);
 });
 
+test("checked field receivers borrow only the successful projection", () => {
+  const checked: IrExpr = {
+    kind: "ternary", type: root, loc: receiverLoc,
+    cond: { kind: "unionIsTag", unionId: "value", value: ref(union), tag: 1, negated: false, type: BOOL, loc: receiverLoc },
+    then: { kind: "libCall", fn: "error.nodeThrow", args: [
+      { kind: "numLit", value: 1, type: F64, loc: receiverLoc }, literal(""), literal("missing receiver"),
+    ], type: root, loc: receiverLoc },
+    else_: narrow(ref(union)),
+  };
+  const llvm = work(text(child(checked)), union);
+  expect(llvm).toContain("@scr_throw_node_coded");
+  expect(llvm).toContain("@scr_exc_pending");
+  expect(llvm).not.toContain("@scr_union_retain_v");
+  expect(llvm).not.toMatch(/call ptr @sc_rretain_/);
+  // A captured union must still produce an owned receiver through its box.
+  expect(work(text(child(checked)), union, true)).toContain("@scr_box_get_ref");
+});
+
 function sharedFieldModule(prefixes: IrType[][], fieldType: IrType): IrModule {
   const shared: IrType = { kind: "union", unionId: "shared" };
   const records = prefixes.map((prefix, index) => ({

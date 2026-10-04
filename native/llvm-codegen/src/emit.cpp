@@ -123,7 +123,15 @@ int emit(const EmitOptions &Options) {
   FunctionAnalysisManager FAM;
   CGSCCAnalysisManager CGAM;
   ModuleAnalysisManager MAM;
-  PassBuilder PB(Machine.get());
+  // Library defaults leave SLP vectorization disabled. Enable both
+  // vectorizers for speed builds, without permitting floating-point
+  // reassociation or changing the size/debug optimization policies.
+  PipelineTuningOptions Tuning;
+  if (Options.OptLevel == "2" || Options.OptLevel == "3") {
+    Tuning.LoopVectorization = true;
+    Tuning.SLPVectorization = true;
+  }
+  PassBuilder PB(Machine.get(), Tuning);
   PB.registerModuleAnalyses(MAM);
   PB.registerCGSCCAnalyses(CGAM);
   PB.registerFunctionAnalyses(FAM);

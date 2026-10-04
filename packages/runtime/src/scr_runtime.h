@@ -1135,6 +1135,10 @@ double scr_arr_get_number(const ScrArr *a, double i);
 bool scr_arr_index_eq(const ScrArr *a, double i, const ScrArr *b, double j);
 bool scr_arr_get_bool(ScrArr *a, double i);  /* trap missing/hole */
 void *scr_arr_get_ref(ScrArr *a, double i);  /* trap missing/hole; +1 */
+/* Borrow a non-null reference element, or NULL for a hole/undefined/missing
+ * property. Keep the array alive and retain before removing its element.
+ * This read does not invoke retain callbacks or mutate runtime state. */
+void *scr_arr_peek_ref(const ScrArr *a, double i);
 
 /* i == len appends; the _ref variant releases the old element (when
  * replacing) and takes ownership of the new one. */

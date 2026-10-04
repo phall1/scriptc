@@ -35,7 +35,6 @@ import { lowerHttpResPropertyAssignment, lowerHttpServerTimeoutAssignment, lower
 import { lowerUrlAssignment, isNativeFfiRequire, builtinMemberRequireDecl, builtinNamespaceDestructureModuleOf, createRequireBindingDecl, createRequireCalleeFileOf, createRequireNamespaceDecl, createRequireProgramModuleDecl, createRequireProgramModuleOf, lowerNodeModuleCall, registerBuiltinCallableAlias } from "./lower-builtins.js";
 import { lowerEnumDeclaration } from "./lower-enums.js";
 import { abstractPropertyDeclOf, aliasTypeofNarrows, isMatchSliceType, lowerAbsenceProbe, lowerCompoundValueToTarget, lowerElementCompound, lowerIncDec, lowerGroupsProjection, matchResultNamedGroupsOf, runtimeOptionalGuardIds, runtimeOptionalTrueIds, symbolFieldInfo, withRuntimeOptionalNarrowed } from "./lower-exprs.js";
-import { isSafeToRepeat } from "./expressions/evaluation-safety.js";
 import { globalSymbolKey } from "./expressions/global-symbols.js";
 import { lowerShortCircuitAssignment } from "./expressions/nullish-assignment.js";
 import { lowerEnvironmentKey, lowerNativeFunctionAssignment } from "./lower-exprs.js";
@@ -6996,6 +6995,7 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
     }
     iterSrc ??= stmt.expression;
     let iterable = lowerer.lowerExpr(iterSrc);
+    let tupleSource: { shapeId: string; fields: { name: string; type: IrType }[]; elem: IrType } | null = null;
     // A nested loop receiver can be an OOB-safe array read from the outer
     // loop (`for (const row of grid) for (const cell of row)`). The checker
     // sees the inner value as an array, while its runtime slot retains
@@ -7008,7 +7008,8 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
     if (iterable.type.kind === "union" && checkerIterable !== null &&
         (checkerIterable.kind === "array" || checkerIterable.kind === "map" || checkerIterable.kind === "set" ||
          checkerIterable.kind === "bytes" || checkerIterable.kind === "string" || checkerIterable.kind === "searchParams" ||
-         checkerIterable.kind === "generator" || checkerIterable.kind === "object")) {
+         checkerIterable.kind === "generator" || checkerIterable.kind === "object" ||
+         (checkerIterable.kind === "record" && lowerer.shapes.get(checkerIterable.shapeId)?.tuple))) {
       const helper = lowerer.narrowedArmHelper(iterable.type.unionId, checkerIterable, locOf(iterSrc));
       if (helper) iterable = { kind: "call", callee: helper, args: [iterable], type: checkerIterable, loc: locOf(iterSrc) };
     }
@@ -7069,58 +7070,26 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
         iterable.type.kind === "record" &&
         lowerer.shapes.get(iterable.type.shapeId)?.tuple
       ) {
-        // A tuple read PURELY iterates: the positions snapshot into a
-        // fresh array at loop entry and the ordinary array for-of runs
-        // over it — the allowlist-iteration idiom. HOMOGENEOUS tuples
-        // (`["a", "b"] as const`) snapshot at their one position type;
-        // heterogeneous tuples ([string, boolean]) snapshot into the
-        // positions' UNION when it interns, each read wrapping into its
-        // arm — exactly the string|boolean the checker gives the loop
-        // variable. Pure receivers only (the reads re-emit per position);
-        // JS reads positions lazily, so a body that WRITES a later
-        // position of a mutable tuple would observe its old value here —
-        // readonly (as-const) tuples, the shape that actually occurs,
-        // cannot be written at all.
+        // Retain the tuple once and read positions lazily through the
+        // indexed loop below. Copying positions into an array would hide
+        // writes made by earlier iterations and reject computed receivers.
         const shape = lowerer.shapes.get(iterable.type.shapeId)!;
-        const byIndex = [...shape.fields].sort((a, b) => Number(a.name) - Number(b.name));
-        const first = byIndex[0]?.type;
-        const homogeneous = first !== undefined && byIndex.every((f) => typeEquals(f.type, first));
-        let elemT: IrType | null = homogeneous ? first : null;
-        if (!homogeneous && byIndex.length > 0) {
-          const arms: IrType[] = [];
-          for (const f of byIndex) {
-            const arm = f.type.kind === "union" ? null : f.type;
-            if (arm === null) { elemT = null; break; }
-            if (!arms.some((a) => typeEquals(a, arm))) arms.push(arm);
-            elemT = { kind: "union", unionId: lowerer.unions.intern(arms) };
+        const fields = [...shape.fields].sort((a, b) => Number(a.name) - Number(b.name));
+        const first = fields[0]?.type;
+        const homogeneous = first !== undefined && fields.every((field) => typeEquals(field.type, first));
+        const arms: IrType[] = [];
+        if (!homogeneous) {
+          for (const field of fields) {
+            const types = field.type.kind === "union" ? lowerer.unions.get(field.type.unionId)!.arms : [field.type];
+            for (const type of types) if (!arms.some((arm) => typeEquals(arm, type))) arms.push(type);
           }
         }
-        if (elemT !== null && isSafeToRepeat(iterable)) {
-          const loc = locOf(stmt.expression);
-          const shapeId = iterable.type.shapeId;
-          const snapshotElem = elemT;
-          iterable = {
-            kind: "arrayLit",
-            elems: byIndex.map((f) => {
-              const read: IrExpr = {
-                kind: "recordGet",
-                obj: iterable,
-                shapeId,
-                field: f.name,
-                type: f.type,
-                loc,
-              };
-              return typeEquals(f.type, snapshotElem)
-                ? read
-                : lowerer.coerceInto(stmt.expression, read, snapshotElem);
-            }),
-            type: arrayOf(snapshotElem),
-            loc,
-          };
-        } else {
-          lowerer.noLowering("for-of over tuples", stmt.expression,
-            "tuples with union-typed or unrepresentable positions are fixed-shape — read t[0], t[1], ... directly (plain-position tuples purely iterate)");
+        const elem = homogeneous ? first : arms.length === 1 ? arms[0] : arms.length > 1
+          ? { kind: "union" as const, unionId: lowerer.unions.intern(arms) } : undefined;
+        if (elem === undefined) {
+          lowerer.noLowering("for-of over tuples", stmt.expression, "tuple positions must have represented value types");
         }
+        tupleSource = { shapeId: iterable.type.shapeId, fields, elem };
       }
       // An ISLAND value (`for (const store of stores)` where stores is a
       // package-typed array — one engine handle): the engine's OWN
@@ -7138,19 +7107,20 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
       if (iterable.type.kind === "dyn") {
         return lowerForOfDyn(lowerer, stmt, iterable, labels);
       }
-      if (iterable.type.kind !== "array") {
+      if (tupleSource === null) {
         lowerer.badType(stmt.expression, lowerer.typeOf(stmt.expression));
       }
     }
-    const yieldedT = arrayValueType(lowerer, iterable.type.elem);
+    const elementType = iterable.type.kind === "array" ? iterable.type.elem : tupleSource!.elem;
+    const yieldedT = tupleSource === null ? arrayValueType(lowerer, elementType) : elementType;
     let elemValueT = yieldedT;
     let awaitPromiseTag: number | null = null;
     if (awaitArray) {
       let promiseElem: (IrType & { kind: "promise" }) | null = null;
-      if (iterable.type.elem.kind === "promise") {
-        promiseElem = iterable.type.elem;
-      } else if (iterable.type.elem.kind === "union") {
-        const arms = lowerer.unions.get(iterable.type.elem.unionId)?.arms;
+      if (elementType.kind === "promise") {
+        promiseElem = elementType;
+      } else if (elementType.kind === "union") {
+        const arms = lowerer.unions.get(elementType.unionId)?.arms;
         if (arms?.length === 2 && arms.some((arm) => arm.kind === "undefinedT")) {
           const arm = arms.find((candidate) => candidate.kind === "promise");
           if (arm?.kind === "promise") promiseElem = arm;
@@ -7173,7 +7143,7 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
         !["void", "union", "dyn", "jsval", "undefinedT", "nullT"].includes(promiseElem.inner.kind)) {
         awaitPromiseTag = lowerer.armTag(yieldedT.unionId, promiseElem);
         elemValueT = lowerer.withUndefinedArm(promiseElem.inner);
-      } else if (!nonThenable(iterable.type.elem)) {
+      } else if (!nonThenable(elementType)) {
         lowerer.unsupported("SC1070", stmt.expression, "for-await over array values that may be promises or thenables");
       }
     }
@@ -7187,7 +7157,27 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
       const loc = locOf(stmt);
       const needsClose = awaitArray ? lowerer.declareHiddenLocal("%arrayIteratorNeedsClose", BOOL) : null;
       if (needsClose) needsClose.mutable = true;
-      const yielded = arrayValueRead(lowerer, varRef(source.id, sourceT, loc), varRef(cursor.id, F64, loc), sourceT.elem, loc);
+      let yielded: IrExpr;
+      if (tupleSource !== null) {
+        const tuple = tupleSource;
+        const read = (index: number): IrExpr => {
+          const field = tuple.fields[index]!;
+          return lowerer.coerceInto(stmt.expression, {
+            kind: "recordGet", obj: varRef(source.id, sourceT, loc), shapeId: tuple.shapeId,
+            field: field.name, type: field.type, loc,
+          }, elementType);
+        };
+        yielded = read(tuple.fields.length - 1);
+        for (let index = tuple.fields.length - 2; index >= 0; index--) {
+          yielded = {
+            kind: "ternary", cond: {
+              kind: "bin", op: "===", left: varRef(cursor.id, F64, loc), right: numLit(index, loc), type: BOOL, loc,
+            }, then: read(index), else_: yielded, type: elementType, loc,
+          };
+        }
+      } else {
+        yielded = arrayValueRead(lowerer, varRef(source.id, sourceT, loc), varRef(cursor.id, F64, loc), elementType, loc);
+      }
       const init: IrExpr = awaitPromiseTag === null ? yielded : {
         kind: "awaitUnionExpr", value: yielded, promiseTag: awaitPromiseTag, type: elemValueT, loc,
       };
@@ -7211,9 +7201,9 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
         finallyBody: null,
         loc,
       } : readValue;
-      const length = (): IrExpr => ({
+      const length = (): IrExpr => tupleSource !== null ? numLit(tupleSource.fields.length, loc) : {
         kind: "arrIntrinsic", method: "length", receiver: varRef(source.id, sourceT, loc), args: [], type: F64, loc,
-      });
+      };
       const loop: IrStmt = {
         kind: "for",
         init: { kind: "varDecl", localId: cursor.id, init: numLit(0, loc), loc },
@@ -7358,7 +7348,7 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
       }
       const local = lowerer.declareLocal(decl.name, decl.name.text, elemValueT, isLet);
       const declaredElement = lowerer.mapTypeOf(lowerer.typeOf(decl.name));
-      if (!typeEquals(elemValueT, sourceT.elem) ||
+      if (!typeEquals(elemValueT, elementType) ||
           (declaredElement !== null && lowerer.runtimeOptionalWidening(elemValueT, declaredElement) !== null)) {
         const root = lowerer.runtimeOptionalRootOf(local);
         lowerer.runtimeOptionalLocals.add(root);
