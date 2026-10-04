@@ -13648,6 +13648,42 @@
     "<repo>/tests/diagnostics/no-error-assertion-fences.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/node24-style-text-validation.js": {
+   "order": [
+    "<repo>/tests/corpus/node24-style-text-validation.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/node24-style-text.cjs": {
+   "order": [
+    "<repo>/tests/corpus/node24-style-text.cjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/node24-style-text.ts": {
+   "order": [
+    "<repo>/tests/corpus/node24-style-text.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/fixtures/node-types/style-text.ts": {
+   "order": [
+    "<repo>/tests/fixtures/node-types/style-text.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/fixtures/npm/cases/node24-style-text/main.ts": {
+   "order": [
+    "<repo>/tests/fixtures/npm/cases/node24-style-text/main.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/node24-style-text-environment.js": {
+   "order": [
+    "<repo>/tests/corpus/node24-style-text-environment.js"
+   ],
+   "diags": []
   }
  }
 }

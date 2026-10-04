@@ -1062,6 +1062,15 @@ ScrDyn *scr_process_stdio(double fd) {
   return scr_dyn_new_handle(&scr_stdio_streams[fd == 0 ? 0 : fd == 2 ? 2 : 1], SCR_DYNH_STDIO);
 }
 
+bool scr_dyn_process_stdio_is(const ScrDyn *value) {
+  return value->kind == SCR_DYN_HANDLE && value->v.handle.tag == SCR_DYNH_STDIO;
+}
+
+double scr_dyn_process_stdio_fd(const ScrDyn *value, const ScrDynPath *path) {
+  ScrStdio *stream = scr_dyn_handle_unbox(value, SCR_DYNH_STDIO, path, "ProcessStream");
+  return stream ? stream->fd : 0;
+}
+
 /* ── the process 'exit' event ─────────────────────────────────────────
  * Listeners run SYNCHRONOUSLY when the process exits: at the end of a
  * normal run (the unit's atexit, registered by scr_events_install after

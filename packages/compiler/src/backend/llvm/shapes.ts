@@ -271,6 +271,7 @@ export function llFieldType(t: IrType): "double" | "i8" | "ptr" {
   switch (t.kind) {
     case "f64":
     case "date":
+    case "procStream":
       return "double";
     case "bool":
       return "i8";

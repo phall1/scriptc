@@ -132,7 +132,7 @@ export class LlDyn {
 
   /** The value LLVM type of a dynCheck result / toDyn operand for `t`. */
   private valTy(t: IrType): string {
-    return t.kind === "f64" || t.kind === "date" ? "double" : t.kind === "bool" ? "i1" : "ptr";
+    return t.kind === "f64" || t.kind === "date" || t.kind === "procStream" ? "double" : t.kind === "bool" ? "i1" : "ptr";
   }
 
   private collectionDynOps(t: IrType & { kind: "map" | "set" }): string {
@@ -484,6 +484,13 @@ export class LlDyn {
       case "promise":
         kindIs(DYN_KIND.PROMISE);
         break;
+      case "procStream": {
+        this.host.declare(`declare zeroext i1 @scr_dyn_process_stdio_is(ptr)`);
+        const matched = B.tmp();
+        B.line(`${matched} = call zeroext i1 @scr_dyn_process_stdio_is(ptr %d)`);
+        B.terminate(`ret i1 ${matched}`);
+        break;
+      }
       case "symbol":
         kindIs(DYN_KIND.SYMBOL);
         break;
@@ -991,6 +998,13 @@ export class LlDyn {
         B.terminate(`ret ptr ${retained}`);
         break;
       }
+      case "procStream": {
+        host.declare(`declare double @scr_dyn_process_stdio_fd(ptr, ptr)`);
+        const r = B.tmp();
+        B.line(`${r} = call double @scr_dyn_process_stdio_fd(ptr %d, ptr %path)`);
+        B.terminate(`ret double ${r}`);
+        break;
+      }
       case "bytes": {
         host.declare(`declare zeroext i1 @scr_dyn_bytes_is(ptr, i32)`);
         const matched = B.tmp();
@@ -1315,7 +1329,7 @@ export class LlDyn {
             // A matched unit arm builds nothing: THE interned immortal
             // instance (rc == SIZE_MAX — no retain owed).
             B.terminate(`ret ptr ${host.unitInstanceRef(t.unionId, i)}`);
-          } else if (arm.kind === "f64") {
+          } else if (arm.kind === "f64" || arm.kind === "procStream") {
             host.declare(`declare ptr @scr_union_new_f64(i32, double)`);
             const x = B.tmp();
             const u = B.tmp();
@@ -1578,6 +1592,13 @@ export class LlDyn {
         host.declare(`declare ptr @scr_dyn_new_bool(i1 zeroext)`);
         const r = B.tmp();
         B.line(`${r} = call ptr @scr_dyn_new_bool(i1 %v)`);
+        B.terminate(`ret ptr ${r}`);
+        break;
+      }
+      case "procStream": {
+        host.declare(`declare ptr @scr_process_stdio(double)`);
+        const r = B.tmp();
+        B.line(`${r} = call ptr @scr_process_stdio(double %v)`);
         B.terminate(`ret ptr ${r}`);
         break;
       }
@@ -1898,13 +1919,12 @@ export class LlDyn {
             const r = B.tmp();
             B.line(`${r} = call ptr @scr_dyn_new_null()`);
             B.terminate(`ret ptr ${r}`);
-          } else if (arm.kind === "f64") {
+          } else if (arm.kind === "f64" || arm.kind === "procStream") {
             host.declare(`declare double @scr_union_get_f64(ptr)`);
-            host.declare(`declare ptr @scr_dyn_new_num(double)`);
             const x = B.tmp();
             const r = B.tmp();
             B.line(`${x} = call double @scr_union_get_f64(ptr %v)`);
-            B.line(`${r} = call ptr @scr_dyn_new_num(double ${x})`);
+            B.line(`${r} = call ptr @${this.toDynHelper(arm)}(double ${x})`);
             B.terminate(`ret ptr ${r}`);
           } else if (arm.kind === "bool") {
             host.declare(`declare zeroext i1 @scr_union_get_bool(ptr)`);
@@ -2037,13 +2057,13 @@ export class LlDyn {
         fulfill(dv);
         break;
       }
+      case "procStream":
       case "f64": {
         host.declare(`declare double @scr_promise_payload_f64(ptr)`);
-        host.declare(`declare ptr @scr_dyn_new_num(double)`);
         const x = B.tmp();
         const dv = B.tmp();
         B.line(`${x} = call double @scr_promise_payload_f64(ptr %src)`);
-        B.line(`${dv} = call ptr @scr_dyn_new_num(double ${x})`);
+        B.line(`${dv} = call ptr @${this.toDynHelper(inner)}(double ${x})`);
         fulfill(dv);
         break;
       }

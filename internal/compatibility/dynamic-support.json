@@ -19,6 +19,7 @@
     "wasi": "by-design"
   },
   "features": [
+    { "chapter": "util", "symbols": ["util.styleText"], "status": "partial", "evidence": ["tests/fixtures/npm/cases/node24-style-text/main.ts"] },
     { "chapter": "util", "symbols": ["util.isDeepStrictEqual"], "status": "partial", "evidence": ["tests/fixtures/npm/cases/node24-deep-equality/main.ts"] },
     { "chapter": "assert", "symbols": ["assert.doesNotThrow", "assert.doesNotReject"], "status": "partial", "evidence": ["tests/fixtures/npm/cases/node24-no-error-assertions/main.ts"] },
     { "chapter": "util", "symbols": ["util.stripVTControlCharacters", "util.toUSVString"], "status": "supported", "evidence": ["tests/fixtures/npm/cases/node24-text-utilities/main.ts"] },

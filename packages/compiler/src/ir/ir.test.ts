@@ -123,6 +123,25 @@ describe("native bigint checked storage", () => {
   });
 });
 
+describe("native process stream checked storage", () => {
+  test("preserves stream fields and union arms without claiming scalar array storage", () => {
+    const stream: IrType = { kind: "procStream" };
+    const optional: IrType = { kind: "union", unionId: "optionalStream" };
+    const record = (id: string): IrRecordShape | undefined => id === "options"
+      ? { id, fields: [{ name: "stream", type: optional }] } : undefined;
+    const union = (id: string): IrUnionDef | undefined => id === "optionalStream"
+      ? { id, arms: [stream, { kind: "undefinedT" }] } : undefined;
+    for (const type of [stream, optional, { kind: "record", shapeId: "options" } as IrType, arrayOf(optional)]) {
+      expect(canConvertToDyn(type, record, union)).toBe(true);
+      expect(canDynCheckTo(type, record, union)).toBe(true);
+      expect(isJsonSafeType(type, record, union)).toBe(false);
+      expect(isIslandCallbackParamType(type, record, union)).toBe(false);
+    }
+    expect(canConvertToDyn(arrayOf(stream), record, union)).toBe(false);
+    expect(canDynCheckTo(arrayOf(stream), record, union)).toBe(false);
+  });
+});
+
 describe("checked conversion graph traversal", () => {
   test.each([
     { label: "boxing", convert: canConvertToDyn },

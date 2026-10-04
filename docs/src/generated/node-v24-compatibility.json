@@ -1202,9 +1202,9 @@
       "apiEntries": 105,
       "static": {
         "supported": 0,
-        "partial": 21,
+        "partial": 22,
         "refused": 0,
-        "not-implemented": 84,
+        "not-implemented": 83,
         "by-design": 0,
         "unreviewed": 0,
         "not-applicable": 0
@@ -85598,13 +85598,13 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "detail": "No static compiler lowering is registered for this API yet.",
-        "verification": "registry-gap"
+        "status": "partial",
+        "detail": "Applies standard styles and aliases, nested ANSI resets, explicit color enabling, and standard process streams; custom native streams and inspect color-table mutation remain unsupported.",
+        "verification": "test-backed"
       },
       "dynamic": {
         "status": "partial",
-        "detail": "Available through the embedded Node compatibility shim; exact member and overload coverage may be narrower.",
+        "detail": "Applies standard styles and aliases with nested ANSI resets, stream validation, color environment settings, and tested option and conversion hooks; terminal metadata and warnings follow the embedded runtime.",
         "verification": "test-backed"
       }
     },

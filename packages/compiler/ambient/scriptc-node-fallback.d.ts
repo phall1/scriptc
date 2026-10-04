@@ -1890,6 +1890,7 @@ declare module "util" {
   export function stripVTControlCharacters(str: string): string;
   export function toUSVString(string: string): string;
   export function isDeepStrictEqual(val1: unknown, val2: unknown, skipPrototype?: boolean): boolean;
+  export function styleText(format: string | readonly string[], text: string, options?: { validateStream?: boolean; stream?: unknown }): string;
   export function parseEnv(content: string): { [key: string]: string | undefined };
   export type TextEncoder = globalThis.TextEncoder;
   export type TextDecoder = globalThis.TextDecoder;

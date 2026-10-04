@@ -192,7 +192,7 @@ export function keyedRecordReadInto(host: LlvmEmitterContext,
           B.line(`store ptr ${r}, ptr ${slot}`);
         } else {
           const conv = host.dyn.toDynHelper(type);
-          const vTy = type.kind === "f64" ? "double" : type.kind === "bool" ? "i1" : "ptr";
+          const vTy = host.llType(type);
           const r = B.tmp();
           B.line(`${r} = call ptr @${conv}(${vTy} ${v})`);
           B.line(`store ptr ${r}, ptr ${slot}`);

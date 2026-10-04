@@ -637,6 +637,9 @@ function publicDetail(tier) {
     if (source === "compiler-feature:util.util.toUSVString") {
       return "Converts native strings, primitives, and tested object conversion hooks to well-formed Unicode strings; native storage replaces unpaired surrogates at creation.";
     }
+    if (source === "compiler-feature:util.util.styleText") {
+      return "Applies standard styles and aliases, nested ANSI resets, explicit color enabling, and standard process streams; custom native streams and inspect color-table mutation remain unsupported.";
+    }
     if (source === "compiler-feature:util.util.isDeepStrictEqual") {
       return "Compares primitives, ordinary records and arrays, cycles, enumerable properties, and byte views with optional prototype skipping; opaque native objects and accessor properties remain refused.";
     }
@@ -705,6 +708,7 @@ function publicDetail(tier) {
     if (/^island-feature:assert\.assert\.doesNot(?:Throw|Reject)$/.test(source)) {
       return "Supports no-error assertions over callbacks, promises, and promise-like objects, with Error classes, regular expressions, validation functions, and Node-compatible failure metadata for the tested forms.";
     }
+    if (source === "island-feature:util.util.styleText") return "Applies standard styles and aliases with nested ANSI resets, stream validation, color environment settings, and tested option and conversion hooks; terminal metadata and warnings follow the embedded runtime.";
     if (source === "island-feature:util.util.stripVTControlCharacters") return "Removes ANSI control sequences with the Node matcher and validates non-string arguments.";
     if (source === "island-feature:util.util.toUSVString") return "Replaces unpaired surrogate code units and preserves Node string coercion, custom conversion hooks, and conversion errors.";
     if (source.startsWith("island-feature:diagnostics_channel.")) return "Publishes synchronous, promise, and callback tracing lifecycle events with result/error identity, subscriber management, and store bindings. Bound stores follow the embedded engine's synchronous AsyncLocalStorage model and do not propagate across awaits.";

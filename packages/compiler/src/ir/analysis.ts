@@ -75,6 +75,7 @@ export function dynDesc(
     case "undefinedT": return "undefined";
     case "dyn": return "unknown";
     case "promise": return "Promise";
+    case "procStream": return "ProcessStream";
     case "bytes": return BYTES_ELEMENT_NAME[t.elem];
     case "object": return t.className.replace(/^%/, "");
     case "union": {

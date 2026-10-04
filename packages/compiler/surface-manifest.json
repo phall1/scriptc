@@ -1986,6 +1986,12 @@
       "status": "static"
     },
     {
+      "id": "node-builtin.util.styleText",
+      "kind": "node-builtin",
+      "name": "util.styleText",
+      "status": "static"
+    },
+    {
       "id": "node-builtin.util.toUSVString",
       "kind": "node-builtin",
       "name": "util.toUSVString",

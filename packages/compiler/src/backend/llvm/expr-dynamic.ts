@@ -72,7 +72,7 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
           return host.own({ name: t, type: e.type });
         }
         const conv = host.dyn.toDynHelper(v.type);
-        const valTy = v.type.kind === "f64" ? "double" : v.type.kind === "bool" ? "i1" : "ptr";
+        const valTy = host.llType(v.type);
         const t = B.tmp();
         B.line(`${t} = call ptr @${conv}(${valTy} ${v.name})`);
         return host.own({ name: t, type: e.type });

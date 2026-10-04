@@ -916,6 +916,7 @@ void scr_qs_parse_into(ScrMap *out, const ScrStr *qs, const ScrStr *sep,
  * a fresh ParsedResults object whose `values` child has null prototype.
  * Borrows config; returns +1, or NULL with a Node-coded TypeError pending. */
 struct ScrDyn *scr_util_parse_args(const struct ScrDyn *config);
+ScrStr *scr_util_style_text(const struct ScrDyn *format, const struct ScrDyn *text, const struct ScrDyn *options);
 
 /* Node/libuv system error utilities. Arguments are checked without coercion;
  * entries is a fresh array of [number, [name, message]] pairs (+1). */
@@ -4212,6 +4213,8 @@ ScrDyn *scr_global_native(ScrArr *known);
 ScrDyn *scr_global_native_init(ScrArr *known, ScrDyn *(*console_get)(void));
 ScrDyn *scr_console_native(void);
 ScrDyn *scr_process_stdio(double fd);
+bool scr_dyn_process_stdio_is(const ScrDyn *value);
+double scr_dyn_process_stdio_fd(const ScrDyn *value, const ScrDynPath *path);
 
 void scr_dyn_handle_install(ScrDynHandleTag tag, const ScrDynHandleOps *ops);
 void scr_file_handle_dyn_install(void);

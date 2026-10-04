@@ -2580,6 +2580,7 @@ export type IrLibFn =
   | "util.stripVTControlCharacters"
   | "util.toUSVString"
   | "util.isDeepStrictEqual"
+  | "util.styleText"
   /** ES Symbol values (scr_symbol.c — link-gated by moduleUsesSymbol).
    * sym.new: `Symbol(desc)` — a fresh runtime-unique identity (+1) whose
    * one arg is the description string (borrowed); sym.newAnon is the
@@ -6492,6 +6493,7 @@ function canBoxDynCompositeAt(
   visiting: Set<string>,
 ): boolean {
   switch (t.kind) {
+    case "procStream":
     case "f64":
     case "bigint":
     case "symbol":
@@ -6517,7 +6519,9 @@ function canBoxDynCompositeAt(
     case "object":
       return RUNTIME_ERROR_CLASSES.has(t.className) || isDynTypedRefType(t);
     case "array":
-      return canBoxDynComposite(t.elem, getRecord, getUnion, visiting);
+      // Process streams have scalar storage only in fields, closures and
+      // unions. A direct procStream array has no native ScrArr layout.
+      return t.elem.kind !== "procStream" && canBoxDynComposite(t.elem, getRecord, getUnion, visiting);
     case "record": {
       const shape = getRecord(t.shapeId);
       if (!shape) return false;
@@ -6587,6 +6591,7 @@ function canDynCheckToAt(
   getUnion: (unionId: string) => IrUnionDef | undefined,
   visiting: Set<string>,
 ): boolean {
+  if (t.kind === "procStream") return true;
   // Unknown fields keep an owned dyn subtree; checking the surrounding
   // record/array still validates its layout. This is broader than the
   // stringify/island JSON domain, which cannot assume opaque slots are
@@ -6604,6 +6609,7 @@ function canDynCheckToAt(
   // boundaries. Callable adapters use the same identity/brand check.
   if (isDynTypedRefType(t)) return true;
   if (t.kind === "array") {
+    if (t.elem.kind === "procStream") return false;
     const key = typeKey(t);
     if (visiting.has(key)) return false;
     visiting.add(key);
@@ -6786,7 +6792,7 @@ const DYN_ASYNC_LIB_FNS: ReadonlySet<string> = new Set([
   "process.onUncaughtException", "process.offUncaughtException",
   "process.onUnhandledRejection", "process.offUnhandledRejection",
   "process.onRejectionHandled", "process.offRejectionHandled",
-  "process.onWarning", "process.offWarning", "process.emitWarning",
+  "process.onWarning", "process.offWarning", "process.emitWarning", "util.styleText",
   "als.new", "als.get", "als.run", "als.exitRun", "als.enterWith", "als.disable",
   "dc.chanBindStore", "dc.chanUnbindStore", "dc.chanRunStores",
 ]);
@@ -6829,7 +6835,7 @@ function scanRuntimeFeatures(mod: IrModule, stopAt?: keyof RuntimeFeatures): Run
       if (fn.startsWith("assert.")) features.assert = true;
       if (fn === "dyn.defineProps" || fn === "dyn.definePrototypeProps" || fn === "dyn.defineProperty" || fn === "dyn.objCreateWithProperties" || fn === "dyn.arrayProtoCall" || fn === "dyn.arrayPrototype" || fn === "dyn.functionApply" || fn === "dyn.builtinMethod") features.dynInvoke = true;
       if (DYN_ASYNC_LIB_FNS.has(fn)) features.dynAsync = true;
-      if (fn.startsWith("insp.") || fn === "console.native" || fn === "global.native") features.inspect = true;
+      if (fn.startsWith("insp.") || fn === "console.native" || fn === "global.native" || fn === "util.styleText") features.inspect = true;
       if (fn.startsWith("cp.") || fn.startsWith("child.") || fn.startsWith("writer.") || fn.startsWith("spawnRes.") ||
           fn === "process.forkTarget" || fn === "process.connected" || fn === "process.send" || fn === "process.sendCb" ||
           fn === "process.disconnect" || fn === "process.onMessage" || fn === "process.onDisconnect") features.childProcess = true;
@@ -6844,7 +6850,8 @@ function scanRuntimeFeatures(mod: IrModule, stopAt?: keyof RuntimeFeatures): Run
       if (fn.startsWith("bigint.")) features.bigint = true;
       if (fn.startsWith("sp.") || fn === "url.searchParams") features.searchParams = true;
       if (fn === "qs.parse" || fn === "qs.stringify" || fn === "qs.unescape") features.qs = true;
-      if (fn === "util.parseArgs" || fn === "util.isDeepStrictEqual") features.parseArgs = true;
+      if (fn === "util.parseArgs" || fn === "util.isDeepStrictEqual" || fn === "util.styleText") features.parseArgs = true;
+      if (fn === "util.styleText") features.processEvents = true;
       if (fn.startsWith("fs.watch") || fn.startsWith("watcher.")) features.fsWatch = true;
       if (fn.startsWith("test.")) features.nodeTest = true;
       if (fn.startsWith("dgram.") || fn.startsWith("dns.")) features.dgram = true;
@@ -6881,6 +6888,7 @@ function scanRuntimeFeatures(mod: IrModule, stopAt?: keyof RuntimeFeatures): Run
     switch (node.kind) {
       case "regex": features.regex = true; break;
       case "fileHandle": features.fileHandle = true; break;
+      case "procStream": features.processEvents = true; break;
       case "child": case "childStream": case "childWriter": case "spawnRes": features.childProcess = true; break;
       case "netServer": case "netSocket": features.net = true; break;
       case "http2Session": case "http2Stream": features.net = true; features.http2 = true; break;
@@ -7790,6 +7798,7 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "util.getSystemErrorMessage",
   "util.stripVTControlCharacters",
   "util.isDeepStrictEqual",
+  "util.styleText",
   "util.toUSVString",
   // decodeURIComponent throws the spec's URIError on bad hex/invalid
   // UTF-8 octets (encodeURIComponent never throws — see the IrLibFn doc).

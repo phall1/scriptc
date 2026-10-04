@@ -883,6 +883,7 @@ export const BUILTIN_MODULE_FNS: Record<string, Record<string, BuiltinModuleFn |
   // the dedicated static member; the spoke owns its optional arity and
   // call-site-specific result type before this canonical signature is used.
   util: {
+    styleText: { fn: "util.styleText", params: [DYN, DYN, DYN], result: STRING, valueParams: [{ mode: "required", type: DYN }, { mode: "required", type: DYN }, { mode: "optional", type: DYN, defaultValue: undefined }] },
     isDeepStrictEqual: { fn: "util.isDeepStrictEqual", params: [DYN, DYN, DYN], result: BOOL, valueParams: [{ mode: "required", type: DYN }, { mode: "required", type: DYN }, { mode: "optional", type: DYN, defaultValue: undefined }] },
     parseArgs: { fn: "util.parseArgs", params: [DYN], result: DYN },
     parseEnv: { fn: "util.parseEnv", params: [DYN], result: DYN },

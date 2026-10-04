@@ -45,7 +45,7 @@ export function dynPromiseAdapter(host: LlvmEmitterContext, inner: IrType): stri
     if (inner.kind === "void") {
       host.declare(`declare void @scr_promise_fulfill_void(ptr)`);
       B.line(`call void @scr_promise_fulfill_void(ptr %dst)`);
-    } else if (inner.kind === "f64" || inner.kind === "date" || inner.kind === "bool") {
+    } else if (inner.kind === "f64" || inner.kind === "date" || inner.kind === "procStream" || inner.kind === "bool") {
       const fn = inner.kind !== "bool" ? "scr_promise_fulfill_f64" : "scr_promise_fulfill_bool";
       host.declare(`declare void @${fn}(ptr, ${host.llType(inner)}${inner.kind === "bool" ? " zeroext" : ""})`);
       B.line(`call void @${fn}(ptr %dst, ${host.llType(inner)}${inner.kind === "bool" ? " zeroext" : ""} ${value})`);
@@ -189,7 +189,7 @@ export function streamTypedRefCommitAdapter(host: LlvmEmitterContext,
         const after = `f${index}_after`;
         const { index: fieldIndex } = classFieldIndex(meta, field.name);
         const fieldTy = llFieldType(field.type);
-        const checkTy = field.type.kind === "f64" ? "double" : field.type.kind === "bool" ? "i1" : "ptr";
+        const checkTy = host.llType(field.type);
         const symbolGlobal = symbols.get(field.name);
         if (symbolGlobal) {
           host.declare(`declare ptr @scr_dyn_symbol_key_get(ptr, ptr, i1 zeroext)`);
@@ -458,13 +458,12 @@ export function liveDynUnionRefAdapter(host: LlvmEmitterContext,
         const boxed = B.tmp();
         B.line(`${boxed} = call ptr @scr_dyn_new_null()`);
         B.terminate(`ret ptr ${boxed}`);
-      } else if (arm.kind === "f64") {
+      } else if (arm.kind === "f64" || arm.kind === "procStream") {
         host.declare(`declare double @scr_union_get_f64(ptr)`);
-        host.declare(`declare ptr @scr_dyn_new_num(double)`);
         const value = B.tmp();
         const boxed = B.tmp();
         B.line(`${value} = call double @scr_union_get_f64(ptr %u)`);
-        B.line(`${boxed} = call ptr @scr_dyn_new_num(double ${value})`);
+        B.line(`${boxed} = call ptr @${host.dyn.toDynHelper(arm)}(double ${value})`);
         B.terminate(`ret ptr ${boxed}`);
       } else if (arm.kind === "bool") {
         host.declare(`declare zeroext i1 @scr_union_get_bool(ptr)`);
@@ -513,11 +512,7 @@ export function streamTypedRefBoxValue(host: LlvmEmitterContext,
       return boxed;
     }
     if (t.kind === "bytes" || !streamTypedRefEligible(t) && !isDynTypedRefType(t)) {
-      const valueTy = t.kind === "f64"
-        ? "double"
-        : t.kind === "bool"
-          ? "i1"
-          : "ptr";
+      const valueTy = host.llType(t);
       B.line(
         `${boxed} = call ptr @${host.dyn.toDynHelper(t)}(${valueTy} ${value})`,
       );

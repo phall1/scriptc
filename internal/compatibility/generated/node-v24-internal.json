@@ -1323,9 +1323,9 @@
       "apiEntries": 105,
       "static": {
         "supported": 0,
-        "partial": 21,
+        "partial": 22,
         "refused": 0,
-        "not-implemented": 84,
+        "not-implemented": 83,
         "by-design": 0,
         "unreviewed": 0,
         "not-applicable": 0
@@ -111285,6 +111285,10 @@
           "tests/corpus/node24-env-parse-errors.ts",
           "tests/corpus/node24-env-parse.ts",
           "tests/corpus/node24-parseargs.js",
+          "tests/corpus/node24-style-text-environment.js",
+          "tests/corpus/node24-style-text-validation.js",
+          "tests/corpus/node24-style-text.cjs",
+          "tests/corpus/node24-style-text.ts",
           "tests/corpus/node24-system-error-validation.js",
           "tests/corpus/node24-system-errors.cjs",
           "tests/corpus/node24-system-errors.ts",
@@ -111297,6 +111301,7 @@
           "tests/corpus/text-codec-values/main.ts",
           "tests/fixtures/node-types/deep-equality.ts",
           "tests/fixtures/node-types/env-files.ts",
+          "tests/fixtures/node-types/style-text.ts",
           "tests/fixtures/node-types/system-errors.ts",
           "tests/fixtures/node-types/text-codecs.mts",
           "tests/fixtures/node-types/text-encoding.ts",
@@ -111313,6 +111318,7 @@
           "tests/fixtures/npm/cases/node24-mime-errors/main.ts",
           "tests/fixtures/npm/cases/node24-mime/main.ts",
           "tests/fixtures/npm/cases/node24-parseargs/main.ts",
+          "tests/fixtures/npm/cases/node24-style-text/main.ts",
           "tests/fixtures/npm/cases/node24-system-errors/main.ts",
           "tests/fixtures/npm/cases/node24-text-encoding/main.ts",
           "tests/fixtures/npm/cases/node24-text-utilities/main.ts",
@@ -113321,14 +113327,21 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:util"
+        "status": "partial",
+        "evidence": "compiler-feature:util.util.styleText",
+        "tests": [
+          "tests/corpus/node24-style-text.ts",
+          "tests/corpus/node24-style-text-validation.js",
+          "tests/corpus/node24-style-text-environment.js",
+          "tests/corpus/node24-style-text.cjs",
+          "tests/fixtures/node-types/style-text.ts"
+        ]
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util.styleText",
+        "evidence": "island-feature:util.util.styleText",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-style-text/main.ts"
         ]
       },
       "anchorSource": "exact"

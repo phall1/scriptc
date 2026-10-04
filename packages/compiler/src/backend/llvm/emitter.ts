@@ -2802,7 +2802,7 @@ export class LlEmitter {
    * a retained peek. */
   unionExtract(uName: string, arm: IrType): string {
     const B = this.B;
-    if (arm.kind === "f64") {
+    if (arm.kind === "f64" || arm.kind === "procStream") {
       const t = B.tmp();
       this.declare(`declare double @scr_union_get_f64(ptr)`);
       B.line(`${t} = call double @scr_union_get_f64(ptr ${uName})`);
@@ -2823,7 +2823,7 @@ export class LlEmitter {
   unionNewOwned(tag: number, v: LlValue): string {
     const B = this.B;
     const t = B.tmp();
-    if (v.type.kind === "f64") {
+    if (v.type.kind === "f64" || v.type.kind === "procStream") {
       this.declare(`declare ptr @scr_union_new_f64(i32, double)`);
       B.line(`${t} = call ptr @scr_union_new_f64(i32 ${tag}, double ${v.name})`);
       return t;
