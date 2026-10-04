@@ -32,7 +32,7 @@ import { classForInHasKey, classPropertiesHelper } from "./class-dynamic-dispatc
 import { genericIfaceBindingKeepsClass, staticFieldWriteTarget } from "./lower-classes.js";
 import { lowerStreamUnderscoreAssign, streamClassAliasDecl } from "./lower-stream.js";
 import { lowerHttpResPropertyAssignment, lowerHttpServerTimeoutAssignment, lowerServerCloseOverrideAssignment } from "./lower-server.js";
-import { isNativeFfiRequire, builtinMemberRequireDecl, builtinNamespaceDestructureModuleOf, createRequireBindingDecl, createRequireCalleeFileOf, createRequireNamespaceDecl, createRequireProgramModuleDecl, createRequireProgramModuleOf, lowerNodeModuleCall, registerBuiltinCallableAlias } from "./lower-builtins.js";
+import { lowerUrlAssignment, isNativeFfiRequire, builtinMemberRequireDecl, builtinNamespaceDestructureModuleOf, createRequireBindingDecl, createRequireCalleeFileOf, createRequireNamespaceDecl, createRequireProgramModuleDecl, createRequireProgramModuleOf, lowerNodeModuleCall, registerBuiltinCallableAlias } from "./lower-builtins.js";
 import { lowerEnumDeclaration } from "./lower-enums.js";
 import { abstractPropertyDeclOf, aliasTypeofNarrows, isMatchSliceType, lowerAbsenceProbe, lowerCompoundValueToTarget, lowerElementCompound, lowerIncDec, lowerGroupsProjection, matchResultNamedGroupsOf, runtimeOptionalGuardIds, runtimeOptionalTrueIds, symbolFieldInfo, withRuntimeOptionalNarrowed } from "./lower-exprs.js";
 import { isSafeToRepeat } from "./expressions/evaluation-safety.js";
@@ -5196,6 +5196,10 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
           body: [lowerExprStatement(lowerer, expr.left), lowerExprStatement(lowerer, expr.right)],
           loc: locOf(expr),
         };
+      }
+      if (opKind === ts.SyntaxKind.EqualsToken || (opKind >= ts.SyntaxKind.FirstCompoundAssignment && opKind <= ts.SyntaxKind.LastCompoundAssignment)) {
+        const urlWrite = lowerUrlAssignment(lowerer, expr);
+        if (urlWrite) return { kind: "exprStmt", expr: urlWrite, loc: locOf(expr) };
       }
       if (opKind === ts.SyntaxKind.EqualsToken) {
         const callableWrite = lowerNativeFunctionAssignment(lowerer, expr);

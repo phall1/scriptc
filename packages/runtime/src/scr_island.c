@@ -11165,33 +11165,11 @@ ScrJsval *scr_jsval_from_bytes(const ScrBytes *b) {
  * installs a minimal class: construction re-parses through the SAME
  * WHATWG parser the static URL uses (scr_url.c, via a host function), so
  * a marshaled URL and `new URL(href)` in embedded code agree exactly.
- * href/protocol/pathname are the components the native accessors expose;
- * the other component reads and ALL component writes throw a clear
- * TypeError instead of silently diverging from the live re-serializing
- * accessors a real URL has (SEMANTICS.md). If a URL global already exists
+ * Component reads and selected writes share the native parser and setter
+ * state overrides. Other setters remain refused. If a URL global already exists
  * (a future web-prelude one, or embedded code's own), it wins — the
  * marshal constructs through whatever globalThis.URL is. */
-static JSValue isl_url_parse_host(JSContext *ctx, JSValueConst this_val,
-                                  int argc, JSValueConst *argv) {
-  (void)this_val;
-  if (argc < 1) return JS_ThrowTypeError(ctx, "Invalid URL");
-  ScrStr *in = isl_arg_str(ctx, argv[0]);
-  if (!in) return JS_EXCEPTION;
-  ScrStr *base = argc > 1 && !JS_IsUndefined(argv[1]) ? isl_arg_str(ctx, argv[1]) : NULL;
-  if (argc > 1 && !JS_IsUndefined(argv[1]) && !base) {
-    scr_str_release(in);
-    return JS_EXCEPTION;
-  }
-  ScrUrl *u = base ? scr_url_new_base(in, base) : scr_url_new(in);
-  scr_str_release(in);
-  scr_str_release(base);
-  if (!u) {
-    if (argc > 2 && JS_ToBool(ctx, argv[2])) {
-      scr_exc_clear();
-      return JS_NULL;
-    }
-    return isl_throw_pending(ctx);
-  }
+static JSValue isl_url_components(JSContext *ctx, ScrUrl *u) {
   ScrStr *href = scr_url_href(u);
   ScrStr *protocol = scr_url_protocol(u);
   ScrStr *pathname = scr_url_pathname(u);
@@ -11230,14 +11208,60 @@ static JSValue isl_url_parse_host(JSContext *ctx, JSValueConst this_val,
   return arr;
 }
 
+static JSValue isl_url_parse_host(JSContext *ctx, JSValueConst this_val,
+                                  int argc, JSValueConst *argv) {
+  (void)this_val;
+  if (argc < 1) return JS_ThrowTypeError(ctx, "Invalid URL");
+  ScrStr *in = isl_arg_str(ctx, argv[0]);
+  if (!in) return JS_EXCEPTION;
+  ScrStr *base = argc > 1 && !JS_IsUndefined(argv[1]) ? isl_arg_str(ctx, argv[1]) : NULL;
+  if (argc > 1 && !JS_IsUndefined(argv[1]) && !base) {
+    scr_str_release(in);
+    return JS_EXCEPTION;
+  }
+  ScrUrl *u = base ? scr_url_new_base(in, base) : scr_url_new(in);
+  scr_str_release(in);
+  scr_str_release(base);
+  if (!u) {
+    if (argc > 2 && JS_ToBool(ctx, argv[2])) {
+      scr_exc_clear();
+      return JS_NULL;
+    }
+    return isl_throw_pending(ctx);
+  }
+  return isl_url_components(ctx, u);
+}
+
+static JSValue isl_url_set_host(JSContext *ctx, JSValueConst this_val,
+                                int argc, JSValueConst *argv) {
+  (void)this_val;
+  if (argc < 3) return JS_ThrowTypeError(ctx, "Invalid URL");
+  ScrStr *href = isl_arg_str(ctx, argv[0]);
+  if (!href) return JS_EXCEPTION;
+  ScrStr *field = isl_arg_str(ctx, argv[1]);
+  if (!field) { scr_str_release(href); return JS_EXCEPTION; }
+  ScrStr *value = isl_arg_str(ctx, argv[2]);
+  if (!value) { scr_str_release(href); scr_str_release(field); return JS_EXCEPTION; }
+  ScrUrl *u = scr_url_new(href);
+  scr_str_release(href);
+  if (u) scr_url_set(u, field, value);
+  scr_str_release(field);
+  scr_str_release(value);
+  if (!u || scr_exc_pending()) {
+    scr_url_release(u);
+    return isl_throw_pending(ctx);
+  }
+  return isl_url_components(ctx, u);
+}
+
 static const char isl_url_src[] =
-    "(function (parse) {\n"
+    "(function (parse, mutate) {\n"
     "  'use strict';\n"
-    "  const def = (o, n, v) => Object.defineProperty(o, n, { value: v, enumerable: true });\n"
     "  const text = (v) => {\n"
     "    if (typeof v === 'symbol') throw new TypeError('Cannot convert a Symbol value to a string');\n"
     "    return `${v}`;\n"
     "  };\n"
+    "  const fields = ['href', 'protocol', 'pathname', 'host', 'hostname', 'search', 'origin', 'username', 'password', 'hash', 'port'];\n"
     "  class URL {\n"
     "    constructor(input, base) {\n"
     "      if (arguments.length === 0) throw URL._missing();\n"
@@ -11251,65 +11275,35 @@ static const char isl_url_src[] =
     "      return error;\n"
     "    }\n"
     "    _init(c) {\n"
-    /* href and search are LIVE-COUPLED (the one WHATWG mutation loop the
-     * a real CLI's API client drives: url.searchParams.set('teamId', …)
-     * then fetch(url)): both live in writable slots, the search setter
-     * recomposes href around the old query, and the searchParams getter
-     * hands out ONE URLSearchParams whose mutators write back through
-     * it. The other components stay parse-time snapshots. */
-    "      Object.defineProperty(this, '_href', { value: c[0], writable: true });\n"
-    "      Object.defineProperty(this, '_search', { value: c[5], writable: true });\n"
-    "      const self = this;\n"
-    "      Object.defineProperty(this, 'href', { enumerable: true, get: () => self._href });\n"
-    "      Object.defineProperty(this, 'search', {\n"
-    "        enumerable: true,\n"
-    "        get: () => self._search,\n"
-    "        set: (v) => {\n"
-    "          self._applySearch(String(v));\n"
-    "          if (self._sp !== undefined) {\n"
-    "            self._sp._pairs.length = 0;\n"
-    "            for (const [k, val] of new globalThis.URLSearchParams(self._search)) self._sp._pairs.push([k, val]);\n"
-    "          }\n"
-    "        },\n"
-    "      });\n"
-    "      def(this, 'protocol', c[1]);\n"
-    "      def(this, 'pathname', c[2]);\n"
-    "      def(this, 'host', c[3]);\n"
-    "      def(this, 'hostname', c[4]);\n"
-    "      def(this, 'origin', c[6]);\n"
-    "      def(this, 'username', c[7]);\n"
-    "      def(this, 'password', c[8]);\n"
-    "      def(this, 'hash', c[9]);\n"
-    "      def(this, 'port', c[10]);\n"
+    "      Object.defineProperty(this, '_components', { value: c, writable: true });\n"
+    "      for (let i = 0; i < fields.length; i++) {\n"
+    "        const name = fields[i];\n"
+    "        const descriptor = { enumerable: true, get: () => this._components[i] };\n"
+    "        if (['href', 'pathname', 'search', 'hash'].includes(name)) descriptor.set = (v) => this._set(name, v);\n"
+    "        Object.defineProperty(this, name, descriptor);\n"
+    "      }\n"
     "    }\n"
-    /* The search half of the live coupling: normalize the assigned
-     * query, splice it into href between the pre-query part and the
-     * fragment. */
-    "    _applySearch(v) {\n"
-    "      let s = String(v);\n"
-    "      if (s !== '' && !s.startsWith('?')) s = '?' + s;\n"
-    "      if (s === '?') s = '';\n"
-    "      const base = this._href.split('#')[0].split('?')[0];\n"
-    "      this._search = s;\n"
-    "      this._href = base + s + this.hash;\n"
+    "    _set(name, value) {\n"
+    "      const href = this.href;\n"
+    "      const ignored = name === 'pathname' && !href.slice(this.protocol.length).startsWith('/');\n"
+    "      const converted = text(value);\n"
+    "      if (ignored) return;\n"
+    "      this._components = mutate(name === 'href' ? this.href : href, name, converted);\n"
+    "      if ((name === 'search' || name === 'href') && this._sp !== undefined) {\n"
+    "        this._sp._pairs.length = 0;\n"
+    "        for (const [k, v] of new globalThis.URLSearchParams(this.search)) this._sp._pairs.push([k, v]);\n"
+    "      }\n"
     "    }\n"
-    /* searchParams: ONE URLSearchParams per URL (identity stable, like
-     * the spec) whose mutators — append/set/delete/sort — write the
-     * serialized list back into search/href. Reads AND writes agree with
-     * Node for the query component; the other components stay parse-time
-     * snapshots. */
     "    get searchParams() {\n"
     "      if (this._sp === undefined) {\n"
     "        const sp = new globalThis.URLSearchParams(this.search);\n"
     "        const sync = () => {\n"
     "          const q = sp.toString();\n"
-    "          this._applySearch(q === '' ? '' : '?' + q);\n"
+    "          this._set('search', q === '' ? '' : '?' + q);\n"
     "        };\n"
     "        for (const m of ['append', 'set', 'delete', 'sort']) {\n"
     "          const orig = sp[m].bind(sp);\n"
-    "          Object.defineProperty(sp, m, {\n"
-    "            value: (...args) => { const r = orig(...args); sync(); return r; },\n"
-    "          });\n"
+    "          Object.defineProperty(sp, m, { value: (...args) => { const r = orig(...args); sync(); return r; } });\n"
     "        }\n"
     "        Object.defineProperty(this, '_sp', { value: sp });\n"
     "      }\n"
@@ -11352,7 +11346,10 @@ static void isl_install_url_class(void) {
       abort(); /* fixed source; failing to parse is a build defect */
     }
     JSValue parse = JS_NewCFunction(isl_ctx, isl_url_parse_host, "__scr_url_parse", 3);
-    JSValue r = JS_Call(isl_ctx, installer, JS_UNDEFINED, 1, &parse);
+    JSValue mutate = JS_NewCFunction(isl_ctx, isl_url_set_host, "__scr_url_set", 3);
+    JSValue args[2] = {parse, mutate};
+    JSValue r = JS_Call(isl_ctx, installer, JS_UNDEFINED, 2, args);
+    JS_FreeValue(isl_ctx, mutate);
     JS_FreeValue(isl_ctx, parse);
     JS_FreeValue(isl_ctx, installer);
     if (JS_IsException(r)) {

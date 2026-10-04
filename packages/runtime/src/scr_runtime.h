@@ -3220,7 +3220,7 @@ double scr_fs_read_zero(double fd, double position);
 void scr_fs_close(double fd);
 
 /* ── WHATWG URL (scr_url.c) ──────────────────────────────────────────
- * An immutable, refcounted URL value, parsed once at construction. The
+ * A mutable, refcounted URL value with selected component setters. The
  * parser covers the WHATWG algorithm's common ground exactly (see
  * scr_url.c's header comment for the covered surface and the documented
  * divergences: no IDNA, no IPv6, opaque paths verbatim).
@@ -3252,6 +3252,8 @@ ScrStr *scr_url_hostname(ScrUrl *u); /* +1 port-less host ("" when none) */
 ScrStr *scr_url_port(ScrUrl *u);     /* +1 "" or normalized non-default port */
 ScrStr *scr_url_pathname(ScrUrl *u); /* +1 */
 ScrStr *scr_url_href(ScrUrl *u);     /* +1; also toString() */
+void scr_url_set(ScrUrl *u, ScrStr *field, ScrStr *value); /* borrowed; href may throw */
+void scr_url_set_checked(ScrUrl *u, ScrStr *field, const ScrDyn *value); /* borrowed; conversion may throw */
 ScrStr *scr_url_to_path(ScrUrl *u);      /* +1, or throws */
 ScrStr *scr_url_str_to_path(ScrStr *s);  /* +1, or throws */
 ScrUrl *scr_url_from_path(ScrStr *path); /* +1; throws on win32 UNC malformations only */

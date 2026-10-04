@@ -8,14 +8,14 @@
     "tiers": {
       "static": {
         "replace-refusal": 42,
-        "verify-gap": 2483,
-        "audit-partial": 688,
+        "verify-gap": 2480,
+        "audit-partial": 691,
         "classify": 2,
         "implement": 80
       },
       "dynamic": {
-        "audit-partial": 847,
-        "verify-gap": 2178,
+        "audit-partial": 851,
+        "verify-gap": 2174,
         "replace-refusal": 112,
         "implement": 213
       }
@@ -91789,7 +91789,10 @@
           "confidence": "high",
           "source": "compiler-feature:url.URL",
           "tests": [
-            "tests/corpus/url-runtime-base.ts"
+            "tests/corpus/url-runtime-base.ts",
+            "tests/corpus/node24-url-mutation.ts",
+            "tests/corpus/node24-url-mutation-coercion.js",
+            "tests/fixtures/node-types/url-mutation.ts"
           ]
         },
         "dynamic": {
@@ -92062,16 +92065,20 @@
           "confidence": "high",
           "source": "compiler-feature:url.hash",
           "tests": [
-            "tests/corpus/2946-url-port-hash.ts"
+            "tests/corpus/node24-url-mutation.ts",
+            "tests/corpus/node24-url-mutation-coercion.js",
+            "tests/fixtures/node-types/url-mutation.ts"
           ]
         },
         "dynamic": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "island-unmatched:url",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "island-feature:url.hash",
+          "tests": [
+            "tests/fixtures/npm/cases/node24-url-mutation/main.ts"
+          ]
         }
       }
     },
@@ -92157,20 +92164,26 @@
       "priority": "high",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:url",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "compiler-feature:url.href",
+          "tests": [
+            "tests/corpus/node24-url-mutation.ts",
+            "tests/corpus/node24-url-mutation-coercion.js",
+            "tests/fixtures/node-types/url-mutation.ts"
+          ]
         },
         "dynamic": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "island-unmatched:url",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "island-feature:url.href",
+          "tests": [
+            "tests/fixtures/npm/cases/node24-url-mutation/main.ts"
+          ]
         }
       }
     },
@@ -92256,20 +92269,26 @@
       "priority": "high",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:url",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "compiler-feature:url.pathname",
+          "tests": [
+            "tests/corpus/node24-url-mutation.ts",
+            "tests/corpus/node24-url-mutation-coercion.js",
+            "tests/fixtures/node-types/url-mutation.ts"
+          ]
         },
         "dynamic": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "island-unmatched:url",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "island-feature:url.pathname",
+          "tests": [
+            "tests/fixtures/npm/cases/node24-url-mutation/main.ts"
+          ]
         }
       }
     },
@@ -92357,20 +92376,26 @@
       "priority": "high",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:url",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "compiler-feature:url.search",
+          "tests": [
+            "tests/corpus/node24-url-mutation.ts",
+            "tests/corpus/node24-url-mutation-coercion.js",
+            "tests/fixtures/node-types/url-mutation.ts"
+          ]
         },
         "dynamic": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "island-unmatched:url",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "island-feature:url.search",
+          "tests": [
+            "tests/fixtures/npm/cases/node24-url-mutation/main.ts"
+          ]
         }
       }
     },

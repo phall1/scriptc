@@ -59,7 +59,7 @@ import { lowerClassPrototypeData, lowerClassPrototypeComputedAssignment } from "
 import { isClassCallback } from "./class-callbacks.js";
 import { builtinPrototypeMethod, lowerArrayIsArrayValue, lowerCheckedPredicateValue, lowerNumberParserValue, lowerObjectAssignValue, lowerStringCodesValue } from "./lower-builtin-values.js";
 import { lowerArrayFromValue } from "./lower-containers.js";
-import { lowerPerfHooksTypeof } from "./lower-builtins.js";
+import { lowerPerfHooksTypeof, lowerUrlAssignment } from "./lower-builtins.js";
 import { jsBindingHasOpenWrites } from "./lower-stmts.js";
 import { checkedClassInstanceOf } from "./class-construction.js";
 import { lowerModuleNamespaceElement } from "./module-namespace-elements.js";
@@ -6893,6 +6893,8 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
     if (cacheHas) return cacheHas;
 
     if (op === ts.SyntaxKind.EqualsToken || (op >= ts.SyntaxKind.FirstCompoundAssignment && op <= ts.SyntaxKind.LastCompoundAssignment)) {
+      const urlWrite = lowerUrlAssignment(lowerer, expr);
+      if (urlWrite) return urlWrite;
       if (op === ts.SyntaxKind.EqualsToken) {
         const prototypeWrite = lowerClassPrototypeComputedAssignment(lowerer, expr);
         if (prototypeWrite) return prototypeWrite;

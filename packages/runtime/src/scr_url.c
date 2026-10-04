@@ -1,4 +1,4 @@
-/* The WHATWG URL slice (scr_runtime.h has the API contract): an immutable,
+/* The WHATWG URL slice (scr_runtime.h has the API contract): a mutable,
  * refcounted URL value parsed once at construction, plus the file-URL
  * bridge pair (fileURLToPath / pathToFileURL).
  *
@@ -646,6 +646,7 @@ ScrUrl *scr_url_new(ScrStr *input) {
   u->fragment = fragment;
   u->has_authority = has_authority;
   u->sp_cache = NULL;
+  u->sp_reload = NULL;
   return u;
 }
 
@@ -878,10 +879,134 @@ ScrStr *scr_url_href(ScrUrl *u) {
       ub_append(&b, u->port->data, u->port->len);
     }
   }
+  /* A host-less hierarchical path starting with // must not serialize
+   * as an authority (the URL Standard's /. escape). */
+  if (!u->has_authority && u->path->len >= 2 && !memcmp(u->path->data, "//", 2)) ub_append(&b, "/.", 2);
   ub_append(&b, u->path->data, u->path->len);
   ub_append(&b, u->query->data, u->query->len);
   ub_append(&b, u->fragment->data, u->fragment->len);
   return ub_take(&b);
+}
+
+static bool url_opaque(ScrUrl *u) {
+  return !u->has_authority && (u->path->len == 0 || u->path->data[0] != '/');
+}
+
+static void url_strip_opaque_spaces(ScrUrl *u) {
+  if (!url_opaque(u) || u->query->len || u->fragment->len) return;
+  size_t end = u->path->len;
+  while (end && u->path->data[end - 1] == ' ') end--;
+  if (end != u->path->len) {
+    ScrStr *path = scr_str_new(u->path->data, end);
+    scr_str_release(u->path);
+    u->path = path;
+  }
+}
+
+/* Setter state overrides preserve the other components. Unlike the full
+ * parser they strip TAB/LF/CR without trimming surrounding spaces. */
+static void url_copy_fields(ScrUrl *u, ScrUrl *next) {
+  scr_str_release(u->scheme); u->scheme = scr_str_retain(next->scheme);
+  scr_str_release(u->userinfo); u->userinfo = scr_str_retain(next->userinfo);
+  scr_str_release(u->host); u->host = scr_str_retain(next->host);
+  scr_str_release(u->port); u->port = scr_str_retain(next->port);
+  scr_str_release(u->path); u->path = scr_str_retain(next->path);
+  scr_str_release(u->query); u->query = scr_str_retain(next->query);
+  scr_str_release(u->fragment); u->fragment = scr_str_retain(next->fragment);
+  u->has_authority = next->has_authority;
+}
+
+void scr_url_set(ScrUrl *u, ScrStr *field, ScrStr *value) {
+  if (field->len == 4 && !memcmp(field->data, "href", 4)) {
+    ScrUrl *next = scr_url_new(value);
+    if (!next) return;
+    url_copy_fields(u, next);
+    scr_url_release(next);
+    if (u->sp_cache) u->sp_reload(u->sp_cache, u->query);
+    return;
+  }
+  bool pathname = field->len == 8 && !memcmp(field->data, "pathname", 8);
+  bool search = field->len == 6 && !memcmp(field->data, "search", 6);
+  bool hash = field->len == 4 && !memcmp(field->data, "hash", 4);
+  if (!pathname && !search && !hash) {
+    static const char message[] = "Native URL setter has no lowering";
+    scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
+    return;
+  }
+  if (pathname && url_opaque(u)) return;
+  UrlBuf raw;
+  ub_init(&raw);
+  size_t start = !pathname && value->len && value->data[0] == (search ? '?' : '#') ? 1 : 0;
+  for (size_t i = start; i < value->len; i++) {
+    char c = value->data[i];
+    if (c != '\t' && c != '\n' && c != '\r') ub_push(&raw, c);
+  }
+  bool special = is_special_scheme(u->scheme->data, u->scheme->len);
+  if (pathname) {
+    bool file = u->scheme->len == 4 && !memcmp(u->scheme->data, "file", 4);
+    ScrStr *path = parse_rooted_path_mode(raw.data, raw.len, special, file);
+    if (!path->len && (special || !u->has_authority)) {
+      scr_str_release(path);
+      path = scr_str_new("/", 1);
+    }
+    scr_str_release(u->path);
+    u->path = path;
+  } else {
+    UrlBuf encoded;
+    ub_init(&encoded);
+    if (value->len) {
+      char prefix = search ? '?' : '#';
+      ub_push(&encoded, prefix);
+      for (size_t i = 0; i < raw.len; i++) {
+        unsigned char c = (unsigned char)raw.data[i];
+        bool needs = search ? enc_query(c, special) : enc_fragment(c);
+        if (needs) {
+          char hex[4];
+          snprintf(hex, sizeof hex, "%%%02X", c);
+          ub_append(&encoded, hex, 3);
+        } else ub_push(&encoded, (char)c);
+      }
+    }
+    ScrStr **slot = search ? &u->query : &u->fragment;
+    scr_str_release(*slot);
+    *slot = ub_take(&encoded);
+    url_strip_opaque_spaces(u);
+    if (search && u->sp_cache) u->sp_reload(u->sp_cache, u->query);
+  }
+  free(raw.data);
+}
+
+/* Node snapshots a component setter's URL before invoking user string
+ * conversion. href converts first, and opaque pathname writes are ignored. */
+void scr_url_set_checked(ScrUrl *u, ScrStr *field, const ScrDyn *value) {
+  bool href = field->len == 4 && !memcmp(field->data, "href", 4);
+  bool ignored = field->len == 8 && !memcmp(field->data, "pathname", 8) && url_opaque(u);
+  ScrUrl *saved = NULL;
+  if (!href && !ignored) {
+    saved = malloc(sizeof *saved);
+    if (!saved) abort();
+    *saved = *u;
+    saved->rc = 1;
+    saved->sp_cache = NULL;
+    saved->sp_reload = NULL;
+    saved->scheme = scr_str_retain(u->scheme);
+    saved->userinfo = scr_str_retain(u->userinfo);
+    saved->host = scr_str_retain(u->host);
+    saved->port = scr_str_retain(u->port);
+    saved->path = scr_str_retain(u->path);
+    saved->query = scr_str_retain(u->query);
+    saved->fragment = scr_str_retain(u->fragment);
+  }
+  ScrStr *text = scr_dyn_string_coerce_js(value);
+  if (text && !ignored) {
+    scr_url_set(saved ? saved : u, field, text);
+    if (saved && !scr_exc_pending()) {
+      url_copy_fields(u, saved);
+      if (field->len == 6 && !memcmp(field->data, "search", 6) && u->sp_cache) u->sp_reload(u->sp_cache, u->query);
+    }
+  }
+  scr_str_release(text);
+  scr_url_release(saved);
 }
 
 /* ── the file-URL bridge ─────────────────────────────────────────────── */
@@ -1027,6 +1152,7 @@ static ScrUrl *scr_url_new_file(ScrStr *host, ScrStr *encoded_path) {
   u->fragment = scr_str_new("", 0);
   u->has_authority = true;
   u->sp_cache = NULL;
+  u->sp_reload = NULL;
   return u;
 }
 
@@ -1238,10 +1364,20 @@ static ScrDyn *scr_native_url_invoke(void *ptr, ScrDyn *self, const char *method
   return NULL;
 }
 
+static bool scr_native_url_set(void *ptr, const char *key, size_t len, const ScrDyn *value) {
+  bool modeled = (len == 4 && (!memcmp(key, "href", 4) || !memcmp(key, "hash", 4))) ||
+    (len == 8 && !memcmp(key, "pathname", 8)) || (len == 6 && !memcmp(key, "search", 6));
+  if (!modeled) return false;
+  ScrStr *field = scr_str_new(key, len);
+  scr_url_set_checked(ptr, field, value);
+  scr_str_release(field);
+  return true;
+}
+
 ScrDyn *scr_dyn_native_url(ScrUrl *value) {
   static const ScrDynHandleOps ops = {
     "URL", &scr_url_retain_v, &scr_url_release_v, &scr_native_url_invoke,
-    &scr_native_url_get, NULL, NULL, NULL,
+    &scr_native_url_get, &scr_native_url_set, NULL, NULL,
   };
   scr_dyn_handle_install(SCR_DYNH_URL, &ops);
   return scr_dyn_new_handle(value, SCR_DYNH_URL);

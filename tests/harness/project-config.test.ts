@@ -272,6 +272,17 @@ test("node-types: crypto key derivation and SHA-2 match Node under @types/node",
   expect(native.stderr).toBe(node.stderr);
 });
 
+test("node-types: URL mutation matches Node under @types/node", async () => {
+  const outDir = outDirFor("node-url-mutation");
+  const entry = join(nodeTypesDir, "url-mutation.ts");
+  const result = await compile(entry, { outPath: join(outDir, "url-mutation"), outDir, sanitize });
+  expect(result.ok, !result.ok ? JSON.stringify(result.diagnostics, null, 2) : "").toBe(true);
+  if (!result.ok) return;
+  const [native, node] = await Promise.all([execFileAsync(result.binaryPath), execFileAsync(process.execPath, ["--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", entry])]);
+  expect(native.stdout).toBe(node.stdout);
+  expect(native.stderr).toBe(node.stderr);
+});
+
 test("node-types: URL factories match Node under @types/node", async () => {
   const outDir = outDirFor("node-url-factories");
   const entry = join(nodeTypesDir, "url-factories.ts");

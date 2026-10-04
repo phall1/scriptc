@@ -1484,13 +1484,13 @@ interface URL {
   readonly origin: string;
   readonly username: string;
   readonly password: string;
-  readonly pathname: string;
-  readonly href: string;
+  pathname: string;
+  href: string;
   readonly host: string;
   readonly hostname: string;
   readonly port: string;
-  readonly search: string;
-  readonly hash: string;
+  search: string;
+  hash: string;
   readonly searchParams: URLSearchParams;
   toString(): string;
   toJSON(): string;

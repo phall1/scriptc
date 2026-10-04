@@ -35,6 +35,7 @@ import {
 import { lowerAbsenceProbe } from "./lower-exprs.js";
 import { conditionalSpreadOf, lowerDynObjectLiteral } from "./expressions/object-literals.js";
 import { isSafeToDiscard } from "./expressions/evaluation-safety.js";
+import { tryLowerExpression } from "./expressions/try-lower-expression.js";
 import { defaultAfterUndefined, lowerOptionalArgument, lowerStaticallyUndefinedArgument, lowerStringSearchArgument } from "./optional-arguments.js";
 import { HTTP2_CONSTANTS } from "./http2-constants.js";
 import { CRYPTO_CIPHERS, CRYPTO_CONSTANTS, CRYPTO_CURVES, CRYPTO_HASHES } from "./crypto-tables.js";
@@ -57,6 +58,59 @@ function optionalStringTags(lowerer: Lowerer, type: IrType): { stringTag: number
   const stringTag = lowerer.armTag(type.unionId, STRING);
   const undefinedTag = lowerer.armTag(type.unionId, UNDEFINED_T);
   return stringTag >= 0 && undefinedTag >= 0 ? { stringTag, undefinedTag } : null;
+}
+
+/** URL component assignment captures its receiver and RHS once, and yields
+ * the original RHS after the setter performs string conversion. */
+export function lowerUrlAssignment(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr | null {
+  let target = expr.left;
+  while (ts.isParenthesizedExpression(target)) target = target.expression;
+  if ((!ts.isPropertyAccessExpression(target) && !ts.isElementAccessExpression(target)) || target.questionDotToken) return null;
+  const receiverType = lowerer.typeOf(target.expression);
+  const native = lowerer.mapTypeOf(receiverType)?.kind === "url";
+  if (!native && !(receiverType.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown))) return null;
+  const receiver = native ? lowerer.lowerExpr(target.expression) : tryLowerExpression(lowerer, target.expression);
+  if (!receiver || receiver.type.kind !== "url") return null;
+  const name = ts.isPropertyAccessExpression(target) ? target.name.text : lowerer.foldedStringKeyOf(target.argumentExpression);
+  if (name !== "href" && name !== "pathname" && name !== "search" && name !== "hash") {
+    lowerer.unsupported("SC1090", target, "URL setters beyond href, pathname, search, and hash with statically known keys");
+  }
+  const op = expr.operatorToken.kind;
+  if (op !== ts.SyntaxKind.EqualsToken && op !== ts.SyntaxKind.PlusEqualsToken) {
+    lowerer.unsupported("SC1090", expr, "URL setter assignment operators beyond = and +=");
+  }
+  const loc = locOf(expr);
+  const recv = lowerer.declareHiddenLocal("%urlReceiver", receiver.type);
+  const recvRef = varRef(recv.id, receiver.type, loc);
+  const stmts: IrStmt[] = [{ kind: "varDecl", localId: recv.id, init: receiver, loc }];
+  let prior: IrExpr | null = null;
+  if (op === ts.SyntaxKind.PlusEqualsToken) {
+    const old = lowerer.declareHiddenLocal("%urlOld", STRING);
+    const fn = name === "href" ? "url.href" : name === "pathname" ? "url.pathname" : name === "search" ? "url.search" : "url.hash";
+    stmts.push({ kind: "varDecl", localId: old.id, init: { kind: "libCall", fn, args: [recvRef], type: STRING, loc }, loc });
+    prior = varRef(old.id, STRING, loc);
+  }
+  const raw = lowerer.lowerExpr(expr.right);
+  if (prior && raw.type.kind !== "string" && raw.type.kind !== "f64" && raw.type.kind !== "bool" && raw.type.kind !== "bigint" && !isUnitType(raw.type)) {
+    lowerer.unsupported("SC1090", expr.right, "URL += operands requiring object-to-primitive conversion (assign an explicit string)");
+  }
+  const value = lowerer.declareHiddenLocal("%urlValue", raw.type);
+  stmts.push({ kind: "varDecl", localId: value.id, init: raw, loc });
+  const valueRef = varRef(value.id, raw.type, loc);
+  let result = valueRef;
+  let assigned = valueRef;
+  if (prior) {
+    const text: IrExpr = raw.type.kind === "string" ? valueRef : {
+      kind: "libCall", fn: "dyn.toStringCoerce", args: [lowerer.coerceInto(expr.right, valueRef, DYN)], type: STRING, loc,
+    };
+    const joined = lowerer.declareHiddenLocal("%urlJoined", STRING);
+    stmts.push({ kind: "varDecl", localId: joined.id, init: { kind: "strConcat", left: prior, right: text, type: STRING, loc }, loc });
+    result = varRef(joined.id, STRING, loc);
+    assigned = result;
+  }
+  const checked = !prior && raw.type.kind !== "string";
+  stmts.push({ kind: "exprStmt", expr: { kind: "libCall", fn: checked ? "url.setChecked" : "url.set", args: [recvRef, strLit(name, loc), checked ? lowerer.coerceInto(expr.right, valueRef, DYN) : assigned], type: VOID, loc }, loc });
+  return { kind: "seqExpr", stmts, result, type: result.type, loc };
 }
 
 /** timers/promises.setInterval(delay, value), the first Node API built on

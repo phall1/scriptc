@@ -461,6 +461,8 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "url.port": "scr_url_port",
   "url.pathname": "scr_url_pathname",
   "url.href": "scr_url_href",
+  "url.set": "scr_url_set",
+  "url.setChecked": "scr_url_set_checked",
   "url.search": "scr_url_search",
   "url.hash": "scr_url_hash",
   "url.searchParams": "scr_url_search_params",

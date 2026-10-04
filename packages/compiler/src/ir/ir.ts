@@ -2464,7 +2464,7 @@ export type IrLibFn =
    * result is constant true there). Borrows the name; never throws. */
   | "process.envUnset"
   /** node:url + the URL class (scr_url.c). url.new parses one absolute
-   * URL string into an immutable URL value (+1) — invalid input THROWS a
+   * URL string into a mutable URL value (+1) — invalid input THROWS a
    * catchable TypeError ("Invalid URL"), like Node's constructor. The
    * getters (borrowed receiver, +1 string) never throw; url.href doubles
    * as toString(). fileURLToPath has one libFn per receiver form (URL
@@ -2489,6 +2489,10 @@ export type IrLibFn =
   | "url.port"
   | "url.pathname"
   | "url.href"
+  /** Selected component writes borrow the receiver and converted string.
+   * href replaces its parsed fields while retaining cached params identity. */
+  | "url.set"
+  | "url.setChecked"
   | "url.fileURLToPathUrl"
   | "url.fileURLToPathChecked"
   | "url.fileURLToPathOptions"
@@ -7900,6 +7904,8 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "fs.readdirTypesSync",
   "url.new",
   "url.newBase",
+  "url.set",
+  "url.setChecked",
   "url.fileURLToPathUrl",
   "url.fileURLToPathChecked",
   "url.fileURLToPathOptions",
