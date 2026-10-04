@@ -352,7 +352,7 @@ async function compileAndRun(file: string): Promise<RunResult> {
   const outDir = join(cacheDir, key);
   mkdirSync(outDir, { recursive: true });
   const result = await compile(file, {
-    outPath: join(outDir, "program"),
+    outPath: join(outDir, process.platform === "win32" ? "program.exe" : "program"),
     outDir,
     sanitize,
     dynamic,
