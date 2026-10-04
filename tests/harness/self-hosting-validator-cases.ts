@@ -185,6 +185,36 @@ export function validatorCases(): ValidatorCase[] {
   add("undeclared record", (m) => {
     m.records = [{ id: "node", fields: [{ name: "child", type: { kind: "record", shapeId: "missing" } }] }];
   }, "undeclared shape");
+  for (const [variant, diagnostic] of [
+    ["valid", undefined], ["type", "type mismatch"], ["field", "has no field"],
+    ["class", "undeclared class"], ["duplicates", "duplicate field"], ["empty duplicate", "has no field"],
+  ] as const) {
+    add(`class field lookups ${variant}`, (m) => {
+      const type: IrType = { kind: "object", className: "Value" };
+      const union: IrType = { kind: "union", unionId: "variants" };
+      const receiver = varRef("self", type, loc);
+      m.classes = [{ name: "Value", fields: [{ name: "score", type: F64 }], loc }];
+      m.records = [{ id: "row", fields: [{ name: "score", type: F64 }] }];
+      m.unions = [{ id: "variants", arms: [type, { kind: "record", shapeId: "row" }] }];
+      m.functions[0]!.params = [{ localId: "self", name: "self", type }, { localId: "variant", name: "variant", type: union }];
+      m.functions[0]!.locals = [{ id: "self", name: "self", type, mutable: false }, { id: "variant", name: "variant", type: union, mutable: false }];
+      m.functions[0]!.body = [
+        expression({ kind: "fieldGet", obj: receiver, className: "Value", field: "score", type: F64, loc }),
+        { kind: "fieldSet", obj: receiver, className: "Value", field: "score", value: numLit(1, loc), loc },
+        expression({ kind: "fieldIncDec", obj: receiver, className: "Value", field: "score", op: "+", prefix: true, fieldDyn: false, type: F64, loc }),
+        expression({ kind: "unionDisc", value: varRef("variant", union, loc), unionId: "variants", field: "score", type: F64, loc }),
+      ];
+      m.functions.push({ ...structuredClone(m.functions[0]!), name: "other" });
+      if (variant === "type") m.classes[0]!.fields[0]!.type = STRING;
+      if (variant === "field") m.classes[0]!.fields = [];
+      if (variant === "class") m.classes = [];
+      if (variant === "duplicates") {
+        m.classes.unshift({ name: "Value", fields: [{ name: "score", type: STRING }], loc });
+        m.classes[1]!.fields.push({ name: "score", type: STRING });
+      }
+      if (variant === "empty duplicate") m.classes.push({ name: "Value", fields: [], loc });
+    }, diagnostic);
+  }
   add("duplicate union arms", (m) => { m.unions = [{ id: "u", arms: [F64, F64] }]; }, "identical");
   add("short union", (m) => { m.unions = [{ id: "u", arms: [F64] }]; }, "fewer than 2");
   add("union payload", (m) => {

@@ -265,6 +265,88 @@ test("record clone validation refreshes accessor boundaries and preserves call-s
   ]);
 });
 
+function classFieldModule(): IrModule {
+  const type: IrType = { kind: "object", className: "Value" };
+  const source: IrExpr = { kind: "varRef", localId: "object", type, loc };
+  const union: IrType = { kind: "union", unionId: "variants" };
+  const mod = expressionModule({ kind: "fieldGet", obj: source, className: "Value", field: "score", type: F64, loc }, [
+    { id: "variants", arms: [type, { kind: "record", shapeId: "row" }] },
+  ]);
+  mod.classes = [{ name: "Value", fields: [{ name: "score", type: F64 }, { name: "dynamic", type: DYN }], loc }];
+  mod.records = [{ id: "row", fields: [{ name: "score", type: F64 }] }];
+  mod.functions[0]!.params = [{ localId: "object", name: "object", type }, { localId: "variant", name: "variant", type: union }];
+  mod.functions[0]!.locals = [{ id: "object", name: "object", type, mutable: false }, { id: "variant", name: "variant", type: union, mutable: false }];
+  mod.functions[0]!.body.push(
+    { kind: "fieldSet", obj: source, className: "Value", field: "score", value: { kind: "numLit", value: 1, type: F64, loc }, loc },
+    { kind: "exprStmt", expr: { kind: "fieldIncDec", obj: source, className: "Value", field: "score", fieldDyn: false, op: "+", prefix: true, type: F64, loc }, loc },
+    { kind: "exprStmt", expr: { kind: "fieldIncDec", obj: source, className: "Value", field: "dynamic", fieldDyn: true, op: "-", prefix: false, type: F64, loc }, loc },
+    { kind: "exprStmt", expr: { kind: "unionDisc", value: { kind: "varRef", localId: "variant", type: union, loc }, unionId: "variants", field: "score", type: F64, loc }, loc },
+  );
+  return mod;
+}
+
+test("class field validation preserves last-class and first-field lookup on duplicate declarations", () => {
+  const mod = classFieldModule();
+  expect(validateModule(deserializeModule(serializeModule(mod)))).toEqual([]);
+  mod.classes!.unshift({ name: "Value", fields: [{ name: "score", type: STRING }, { name: "dynamic", type: F64 }], loc });
+  mod.classes![1]!.fields.push({ name: "score", type: STRING }, { name: "dynamic", type: F64 });
+  expect(validateModule(deserializeModule(serializeModule(mod)))).toEqual([
+    { message: 'duplicate class "Value"', loc },
+    { message: 'class Value: duplicate field "score"', loc },
+    { message: 'class Value: duplicate field "dynamic"', loc },
+  ]);
+});
+
+test("class field validation refreshes types, missing fields, and missing classes between invocations", () => {
+  const mod = classFieldModule();
+  expect(validateModule(mod)).toEqual([]);
+  mod.classes![0]!.fields[0]!.type = STRING;
+  mod.classes![0]!.fields[1]!.type = F64;
+  expect(validateModule(mod).map((error) => error.message)).toEqual([
+    "in main: fieldGet Value.score type mismatch",
+    "in main: fieldSet Value.score: expected string, got f64",
+    "in main: fieldIncDec Value.score field/flag mismatch (string)",
+    "in main: fieldIncDec Value.dynamic field/flag mismatch (f64)",
+    'in main: unionDisc: arm 0 field "score" is string, not f64',
+  ]);
+  mod.classes![0]!.fields = [];
+  expect(validateModule(mod).map((error) => error.message)).toEqual([
+    'in main: class Value has no field "score"',
+    'in main: class Value has no field "score"',
+    'in main: class Value has no field "score"',
+    'in main: class Value has no field "dynamic"',
+    'in main: unionDisc: arm 0 of variants has no field "score"',
+  ]);
+  mod.classes = [];
+  expect(validateModule(mod).map((error) => error.message)).toEqual([
+    'in main: fieldGet on undeclared class "Value"',
+    'in main: fieldSet on undeclared class "Value"',
+    'in main: fieldIncDec on undeclared class "Value"',
+    'in main: fieldIncDec on undeclared class "Value"',
+    'in main: unionDisc: arm 0 of variants has no field "score"',
+  ]);
+});
+
+test("class field validation shares inherited layouts across functions and preserves call-site diagnostics", () => {
+  const mod = classFieldModule();
+  mod.classes!.unshift({ name: "Base", fields: structuredClone(mod.classes![0]!.fields), loc });
+  mod.classes![1]!.base = "Base";
+  const other = structuredClone(mod.functions[0]!);
+  other.name = "other";
+  other.body = other.body.slice(0, 1);
+  mod.functions.push(other);
+  expect(validateModule(deserializeModule(serializeModule(mod)))).toEqual([]);
+  const statement = other.body[0]!;
+  if (statement.kind !== "exprStmt" || statement.expr.kind !== "fieldGet") throw new Error("fixture");
+  statement.expr.loc = { ...loc, start: 10, end: 20 };
+  statement.expr.type = STRING;
+  statement.expr.obj = { kind: "numLit", value: 0, type: F64, loc };
+  expect(validateModule(mod)).toEqual([
+    { message: "in other: fieldGet receiver: expected object, got f64", loc },
+    { message: "in other: fieldGet Value.score type mismatch", loc: statement.expr.loc },
+  ]);
+});
+
 function virtualCallModule(): IrModule {
   const receiver: IrType = { kind: "object", className: "Base" };
   const mod = expressionModule({ kind: "numLit", value: 0, type: F64, loc }, []);

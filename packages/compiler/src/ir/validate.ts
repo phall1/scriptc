@@ -1632,6 +1632,7 @@ interface RecordValidation {
 }
 
 interface ClassValidation {
+  fields: Map<string, Map<string, IrType>>;
   hierarchy: Set<string>;
   implementations: Map<string, IrClassDef[]>;
   virtualCalls: Map<string, Map<string, VirtualCallInfo>>;
@@ -1831,6 +1832,7 @@ export function validateModule(mod: IrModule): IrValidationError[] {
     });
   }
   const classesByName = new Map<string, IrClassDef>();
+  const classFields = new Map<string, Map<string, IrType>>();
   for (const cls of mod.classes ?? []) {
     if (classesByName.has(cls.name)) {
       errors.push({ message: `duplicate class "${cls.name}"`, loc: cls.loc });
@@ -1883,16 +1885,20 @@ export function validateModule(mod: IrModule): IrValidationError[] {
         errors.push({ message: `class ${cls.name}: invalid symbol field metadata`, loc: cls.loc });
       }
     }
-    const seen = new Set<string>();
+    // Reuse duplicate detection as the field index for function validation.
+    // Array.find selected the first field, even in an invalid duplicate layout.
+    const seen = new Map<string, IrType>();
     for (const f of cls.fields) {
       if (seen.has(f.name)) {
         errors.push({ message: `class ${cls.name}: duplicate field "${f.name}"`, loc: cls.loc });
-      }
-      seen.add(f.name);
+      } else seen.set(f.name, f.type);
       if (isUnitType(f.type)) {
         errors.push({ message: `class ${cls.name}: field "${f.name}" is ${f.type.kind}`, loc: cls.loc });
       }
     }
+    // Duplicate class names, like classesByName, select the last declaration.
+    if (seen.size > 0) classFields.set(cls.name, seen);
+    else classFields.delete(cls.name);
     // Constructor presence is checked at `new` sites (below): a class kept
     // only for its layout/type (reachability never constructs it) carries
     // no constructor function, and that is fine — nothing calls it.
@@ -2233,9 +2239,10 @@ export function validateModule(mod: IrModule): IrValidationError[] {
       }
     }
   }
-  // Class metadata is invariant across functions. Keep hierarchy membership
-  // and virtual-call resolution local to this validation invocation.
+  // Class metadata is invariant across functions. Keep field lookup, hierarchy
+  // membership, and virtual-call resolution local to this validation invocation.
   const classValidation: ClassValidation = {
+    fields: classFields,
     hierarchy: new Set(), implementations: new Map(), virtualCalls: new Map(),
   };
   for (const cls of classesByName.values()) {
@@ -2800,13 +2807,13 @@ function validateFunction(
         // dyn field with fieldDyn set (validated numeric read-modify-write).
         checkExpr(e.obj);
         const cls = classes.get(e.className);
-        const field = cls?.fields.find((f) => f.name === e.field);
+        const fieldType = classValidation.fields.get(e.className)?.get(e.field);
         if (!cls) err(`fieldIncDec on undeclared class "${e.className}"`, e.loc);
-        else if (!field) err(`class ${e.className} has no field "${e.field}"`, e.loc);
+        else if (!fieldType) err(`class ${e.className} has no field "${e.field}"`, e.loc);
         else {
           expectType(e.obj, { kind: "object", className: e.className }, "fieldIncDec receiver");
-          if (e.fieldDyn ? field.type.kind !== "dyn" : field.type.kind !== "f64") {
-            err(`fieldIncDec ${e.className}.${e.field} field/flag mismatch (${field.type.kind})`, e.loc);
+          if (e.fieldDyn ? fieldType.kind !== "dyn" : fieldType.kind !== "f64") {
+            err(`fieldIncDec ${e.className}.${e.field} field/flag mismatch (${fieldType.kind})`, e.loc);
           }
         }
         if (e.type.kind !== "f64") err("fieldIncDec must be f64", e.loc);
@@ -3858,12 +3865,12 @@ function validateFunction(
       case "fieldGet": {
         checkExpr(e.obj);
         const cls = classes.get(e.className);
-        const field = cls?.fields.find((f) => f.name === e.field);
+        const fieldType = classValidation.fields.get(e.className)?.get(e.field);
         if (!cls) err(`fieldGet on undeclared class "${e.className}"`, e.loc);
-        else if (!field) err(`class ${e.className} has no field "${e.field}"`, e.loc);
+        else if (!fieldType) err(`class ${e.className} has no field "${e.field}"`, e.loc);
         else {
           expectType(e.obj, { kind: "object", className: e.className }, "fieldGet receiver");
-          if (!typeEquals(e.type, field.type)) {
+          if (!typeEquals(e.type, fieldType)) {
             err(`fieldGet ${e.className}.${e.field} type mismatch`, e.loc);
           }
         }
@@ -4524,7 +4531,7 @@ function validateFunction(
             arm.kind === "record"
               ? recordValidation.get(arm.shapeId)?.fields.get(e.field)
               : arm.kind === "object"
-                ? classes.get(arm.className)?.fields.find((f) => f.name === e.field)?.type
+                ? classValidation.fields.get(arm.className)?.get(e.field)
                 : undefined;
           if (!fieldType) {
             err(`unionDisc: arm ${i} of ${e.unionId} has no field "${e.field}"`, e.loc);
@@ -6525,12 +6532,12 @@ function validateFunction(
         checkExpr(s.obj);
         checkExpr(s.value);
         const cls = classes.get(s.className);
-        const field = cls?.fields.find((f) => f.name === s.field);
+        const fieldType = classValidation.fields.get(s.className)?.get(s.field);
         if (!cls) err(`fieldSet on undeclared class "${s.className}"`, s.loc);
-        else if (!field) err(`class ${s.className} has no field "${s.field}"`, s.loc);
+        else if (!fieldType) err(`class ${s.className} has no field "${s.field}"`, s.loc);
         else {
           expectType(s.obj, { kind: "object", className: s.className }, "fieldSet receiver");
-          expectType(s.value, field.type, `fieldSet ${s.className}.${s.field}`);
+          expectType(s.value, fieldType, `fieldSet ${s.className}.${s.field}`);
         }
         break;
       }

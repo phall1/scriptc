@@ -1,5 +1,5 @@
 /* Isolate whole-module analysis from frontend/native toolchain timings.
- * Call chains and class hierarchies expose depth-dependent rescanning;
+ * Call chains, class hierarchies, and wide field layouts expose repeated work;
  * every measured run verifies the complete analysis result. */
 import assert from "node:assert/strict";
 import { parseArgs } from "node:util";
@@ -11,12 +11,12 @@ import { F64, VOID } from "../packages/compiler/dist/ir/ir.js";
 const { values } = parseArgs({ options: {
   iterations: { type: "string", default: "5" },
   sizes: { type: "string", default: "500,2000,4000,8000" },
-  workloads: { type: "string", default: "may-throw,cycle-analysis,class-values-wide,class-values-deep,class-validation-wide,virtual-validation-wide,virtual-validation-shared,record-validation-references,record-validation-fields" },
+  workloads: { type: "string", default: "may-throw,cycle-analysis,class-values-wide,class-values-deep,class-validation-wide,virtual-validation-wide,virtual-validation-shared,record-validation-references,record-validation-fields,class-validation-fields,class-validation-layouts" },
 } });
 const iterations = Number(values.iterations);
 const sizes = values.sizes.split(",").map(Number);
 const selected = values.workloads.split(",");
-const names = ["may-throw", "cycle-analysis", "class-values-wide", "class-values-deep", "class-validation-wide", "virtual-validation-wide", "virtual-validation-shared", "record-validation-references", "record-validation-fields"];
+const names = ["may-throw", "cycle-analysis", "class-values-wide", "class-values-deep", "class-validation-wide", "virtual-validation-wide", "virtual-validation-shared", "record-validation-references", "record-validation-fields", "class-validation-fields", "class-validation-layouts"];
 assert.ok(Number.isInteger(iterations) && iterations >= 1 && iterations <= 100, "--iterations must be an integer between 1 and 100");
 assert.ok(sizes.length >= 1 && sizes.length <= 16 && sizes.every((n) => Number.isInteger(n) && n >= 1 && n <= 100_000), "--sizes must contain 1–16 integers between 1 and 100000");
 assert.ok(selected.length >= 1 && selected.every((name) => names.includes(name)), `--workloads must select from ${names.join(",")}`);
@@ -114,6 +114,29 @@ for (const size of sizes) {
       ]),
     }] };
     workloads.push({ name: "record-validation-fields", run: () => validateModule(wide), check: (answer) => assert.deepEqual(answer, []) });
+  }
+  for (const name of ["class-validation-fields", "class-validation-layouts"]) {
+    if (!selected.includes(name)) continue;
+    const fields = Array.from({ length: size }, (_, i) => ({ name: `field${String(i).padStart(6, "0")}`, type: F64 }));
+    const type = { kind: "object", className: "Derived" };
+    const unionType = { kind: "union", unionId: "variants" };
+    const receiver = { kind: "varRef", localId: "object", type, loc };
+    const union = { kind: "varRef", localId: "variant", type: unionType, loc };
+    const wide = { ...mod, entry: "main",
+      classes: [{ name: "Base", fields, loc }, { name: "Derived", base: "Base", fields, loc }],
+      unions: [{ id: "variants", arms: [{ kind: "object", className: "Base" }, type] }],
+      functions: [{ name: "main", returnType: VOID, loc,
+        params: [{ localId: "object", name: "object", type }, { localId: "variant", name: "variant", type: unionType }],
+        locals: [{ id: "object", name: "object", type, mutable: false }, { id: "variant", name: "variant", type: unionType, mutable: false }],
+        body: name === "class-validation-layouts" ? [] : fields.flatMap(({ name: field }) => [
+          { kind: "exprStmt", expr: { kind: "fieldGet", obj: receiver, className: "Derived", field, type: F64, loc }, loc },
+          { kind: "exprStmt", expr: { kind: "fieldIncDec", obj: receiver, className: "Derived", field, op: "+", prefix: true, fieldDyn: false, type: F64, loc }, loc },
+          { kind: "fieldSet", obj: receiver, className: "Derived", field, value, loc },
+          { kind: "exprStmt", expr: { kind: "unionDisc", value: union, unionId: "variants", field, type: F64, loc }, loc },
+        ]),
+      }],
+    };
+    workloads.push({ name, run: () => validateModule(wide), check: (answer) => assert.deepEqual(answer, []) });
   }
   for (const { name, run, check } of workloads) {
     if (!selected.includes(name)) continue;
