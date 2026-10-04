@@ -11085,6 +11085,18 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/set-iterator-seed-references.ts": {
+   "order": [
+    "<repo>/tests/corpus/set-iterator-seed-references.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/set-iterator-seeds.ts": {
+   "order": [
+    "<repo>/tests/corpus/set-iterator-seeds.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/set-optional-seeds.ts": {
    "order": [
     "<repo>/tests/corpus/set-optional-seeds.ts"
