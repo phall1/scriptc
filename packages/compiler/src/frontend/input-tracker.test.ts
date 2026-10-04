@@ -1,10 +1,12 @@
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, test } from "vitest";
+import * as fs from "node:fs";
+import { afterEach, expect, test, vi } from "vitest";
 import {
   FrontendInputTracker,
   frontendInputsStillMatch,
+  frontendInputsSemanticallyMatch,
   trackedAccessibleEntries,
   trackedDirectoryExists,
   trackedFileExists,
@@ -13,10 +15,114 @@ import {
   validFrontendInputSnapshot,
 } from "./input-tracker.js";
 
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, readFileSync: vi.fn(actual.readFileSync) };
+});
+
 const scratch: string[] = [];
 
 afterEach(async () => {
+  vi.clearAllMocks();
   await Promise.all(scratch.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+});
+
+test("source priority retains every dependency and leaves earlier snapshots unchanged", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "scriptc-inputs-"));
+  scratch.push(dir);
+  const source = join(dir, "z-source.ts");
+  const declaration = join(dir, "a-types.d.ts");
+  const candidate = join(dir, "missing.ts");
+  await writeFile(source, "export const value = 1;");
+  await writeFile(declaration, "declare const value: number;");
+  const tracker = new FrontendInputTracker();
+  tracker.run(() => {
+    trackedReadFile(declaration);
+    trackedFileExists(candidate);
+    trackedReadFile(source);
+  });
+  const ordinary = tracker.snapshot();
+  const prioritized = tracker.snapshot(new Set([source]));
+  expect(prioritized.probes[0]?.path).toBe(source);
+  expect(prioritized.probes).toHaveLength(ordinary.probes.length);
+  expect(prioritized.probes).toEqual(expect.arrayContaining(ordinary.probes));
+  expect(tracker.snapshot()).toEqual(ordinary);
+  expect(frontendInputsStillMatch(prioritized)).toBe(true);
+  await writeFile(declaration, "declare const value: string;");
+  expect(frontendInputsStillMatch(prioritized)).toBe(false);
+  await writeFile(declaration, "declare const value: number;");
+  await writeFile(candidate, "export {};");
+  expect(frontendInputsStillMatch(prioritized)).toBe(false);
+});
+
+async function semanticFixture() {
+  const dir = await mkdtemp(join(tmpdir(), "scriptc-inputs-"));
+  scratch.push(dir);
+  const source = join(dir, "source.ts");
+  const dependency = join(dir, "types.d.ts");
+  const previous = "export const value = 1;\n";
+  await writeFile(source, previous);
+  await writeFile(dependency, "declare const dependency: number;\n");
+  const tracker = new FrontendInputTracker();
+  tracker.run(() => { trackedReadFile(source); trackedReadFile(dependency); });
+  return { dir, source, dependency, previous, snapshot: tracker.snapshot(new Set([source])), sources: new Map([[source, previous]]) };
+}
+
+test("semantic reuse reads unchanged dependencies once and revalidates accepted sources", async () => {
+  const f = await semanticFixture();
+  const current = `// comment\n${f.previous}`;
+  await writeFile(f.source, current);
+  const reads = vi.mocked(fs.readFileSync).mockClear();
+  const equivalent = vi.fn(() => true);
+  const result = frontendInputsSemanticallyMatch(f.snapshot, f.sources, equivalent);
+  expect(result?.changed).toEqual([{ path: f.source, previous: f.previous, current }]);
+  expect(result?.currentSources).toEqual(new Map([[f.source, current]]));
+  expect(equivalent).toHaveBeenCalledOnce();
+  expect(reads.mock.calls.filter(([path]) => path === f.dependency)).toHaveLength(1);
+  expect(reads.mock.calls.filter(([path]) => path === f.source)).toHaveLength(2);
+  expect(frontendInputsStillMatch(f.snapshot)).toBe(false);
+  expect(result !== null && frontendInputsStillMatch(result.snapshot)).toBe(true);
+});
+
+test("semantic rejection stops before unrelated content reads", async () => {
+  const f = await semanticFixture();
+  await writeFile(f.source, "export const value = 2;\n");
+  const reads = vi.mocked(fs.readFileSync).mockClear();
+  expect(frontendInputsSemanticallyMatch(f.snapshot, f.sources, () => false)).toBeNull();
+  expect(reads.mock.calls.filter(([path]) => path === f.dependency)).toHaveLength(0);
+});
+
+test("semantic validation refuses missing sources and mismatched stored source text", async () => {
+  const f = await semanticFixture();
+  const equivalent = vi.fn(() => true);
+  expect(frontendInputsSemanticallyMatch(f.snapshot, new Map([[f.source, "different"]]), equivalent)).toBeNull();
+  await rm(f.source);
+  expect(frontendInputsSemanticallyMatch(f.snapshot, f.sources, equivalent)).toBeNull();
+  expect(equivalent).not.toHaveBeenCalled();
+});
+
+test("semantic validation rejects source changes during equivalence checking", async () => {
+  const f = await semanticFixture();
+  await writeFile(f.source, `// comment\n${f.previous}`);
+  const result = frontendInputsSemanticallyMatch(f.snapshot, f.sources, () => {
+    fs.writeFileSync(f.source, "export const value = 2;\n");
+    return true;
+  });
+  expect(result).toBeNull();
+});
+
+test("semantic validation checks non-source content and missing resolution candidates", async () => {
+  const f = await semanticFixture();
+  await writeFile(f.source, `// comment\n${f.previous}`);
+  await writeFile(f.dependency, "declare const dependency: string;\n");
+  expect(frontendInputsSemanticallyMatch(f.snapshot, f.sources, () => true)).toBeNull();
+  await writeFile(f.dependency, "declare const dependency: number;\n");
+  const candidate = join(f.dir, "new-module.ts");
+  const tracker = new FrontendInputTracker();
+  tracker.run(() => trackedFileExists(candidate));
+  const snapshot = { ...f.snapshot, probes: [...f.snapshot.probes, ...tracker.snapshot().probes] };
+  await writeFile(candidate, "export {};\n");
+  expect(frontendInputsSemanticallyMatch(snapshot, f.sources, () => true)).toBeNull();
 });
 
 test("tracked frontend reads invalidate on byte edits", async () => {

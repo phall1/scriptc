@@ -114,7 +114,7 @@ export function prepareNativeExecutable(
   const input: NativeExecutableInput = { ok: true, llvm, ir, sidecarJson: null,
     features: executableLinkFeatures(prepared.mod, options.dynamic ?? false), sources: [...prepared.sourceTexts] };
   timing("link-features");
-  const probes = tracker.snapshot();
+  const probes = tracker.snapshot(new Set(prepared.sourceTexts.keys()));
   if (cache !== null && key !== null && probes.stable && frontendInputsStillMatch(probes, exclusions)) {
     const saved: FrontendCacheEntry = { schema: "scriptc.native-frontend.v2", probes, input };
     cache.write("frontend", key, JSON.stringify(saved));
@@ -183,7 +183,7 @@ export function prepareNativeLibrary(
     features: executableLinkFeatures(prepared.mod, false), sources: [...prepared.sourceTexts],
   };
   timing("link-features");
-  const probes = tracker.snapshot();
+  const probes = tracker.snapshot(new Set(prepared.sourceTexts.keys()));
   if (cache !== null && key !== null && probes.stable && frontendInputsStillMatch(probes, exclusions)) {
     const saved: FrontendCacheEntry = { schema: "scriptc.native-frontend.v2", probes, input };
     cache.write("frontend", key, JSON.stringify(saved));

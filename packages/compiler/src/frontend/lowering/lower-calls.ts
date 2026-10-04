@@ -439,8 +439,9 @@ export interface GenericInstance {
     blameOf?: (param: ts.ParameterDeclaration, index: number) => ts.Node,
   ): ParamShape[] {
     if (!signature) return params.filter((p) => !isThisParameter(p)).map((param) => lowerer.paramShape(param));
+    const symbols = signature.getParameters();
     return params.map((declParam, i) => {
-      const symbol = signature.getParameters()[i];
+      const symbol = symbols[i];
       const tsType = symbol ? lowerer.checker.getTypeOfSymbol(symbol) : lowerer.typeOf(declParam.name);
       const mapped = jsOpenObjectType(declParam, lowerer.runtimeOptionalBindingType(
         declParam.name,
@@ -1747,8 +1748,9 @@ export function genericFnOf(lowerer: Lowerer, ident: ts.Identifier): GenericFnIn
       if (dSigs.length === 1 && iSigs.length === 1) {
         const ds = dSigs[0]!;
         const is = iSigs[0]!;
+        const instanceParams = is.getParameters();
         ds.getParameters().forEach((dp, i) => {
-          const ip = is.getParameters()[i];
+          const ip = instanceParams[i];
           if (ip) unify(lowerer.checker.getTypeOfSymbol(dp), lowerer.checker.getTypeOfSymbol(ip), depth + 1);
         });
         unify(lowerer.checker.getReturnTypeOfSignature(ds), lowerer.checker.getReturnTypeOfSignature(is), depth + 1);
@@ -1764,8 +1766,9 @@ export function genericFnOf(lowerer: Lowerer, ident: ts.Identifier): GenericFnIn
 
     const declSig = lowerer.checker.getSignatureFromDeclaration(info.decl);
     if (declSig) {
+      const instanceParams = rsig.getParameters();
       declSig.getParameters().forEach((dp, i) => {
-        const ip = rsig.getParameters()[i];
+        const ip = instanceParams[i];
         if (ip) unify(lowerer.checker.getTypeOfSymbol(dp), lowerer.checker.getTypeOfSymbol(ip));
       });
       unify(
