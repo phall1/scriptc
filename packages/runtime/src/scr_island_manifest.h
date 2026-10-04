@@ -132,7 +132,8 @@ static const struct {
     {"node:stream/web",
      "ReadableStream,TransformStream,TextDecoderStream,WritableStream,WritableStreamDefaultWri"
      "ter,WritableStreamDefaultController,CountQueuingStrategy,ByteLengthQueuingStrategy,Trans"
-     "formStreamDefaultController,TextEncoderStream"},
+     "formStreamDefaultController,TextEncoderStream,ReadableStreamDefaultReader,ReadableStream"
+     "DefaultController"},
     {"node:crypto",
      "createHash,createHmac,hash,Hash,Hmac,randomBytes,randomFillSync,randomFill,randomInt,ran"
      "domUUID,getRandomValues,timingSafeEqual,pbkdf2,pbkdf2Sync,getHashes,getCiphers,getCurves"

@@ -7536,6 +7536,7 @@ static const char isl_modules_bootstrap[] =
     "    const g = globalThis;\n"
     "    const w = {\n"
     "      ReadableStream: g.ReadableStream, TransformStream: g.TransformStream,\n"
+    "      ReadableStreamDefaultReader: g.ReadableStreamDefaultReader, ReadableStreamDefaultController: g.ReadableStreamDefaultController,\n"
     "      TextDecoderStream: g.TextDecoderStream, TextEncoderStream: g.TextEncoderStream,\n"
     "      TransformStreamDefaultController: g.TransformStreamDefaultController,\n"
     "      WritableStream: g.WritableStream, WritableStreamDefaultWriter: g.WritableStreamDefaultWriter,\n"

@@ -491,9 +491,9 @@
       },
       "dynamic": {
         "supported": 0,
-        "partial": 40,
+        "partial": 42,
         "refused": 0,
-        "not-implemented": 52,
+        "not-implemented": 50,
         "by-design": 0,
         "unreviewed": 0,
         "not-applicable": 0
@@ -1331,9 +1331,9 @@
       },
       "dynamic": {
         "supported": 0,
-        "partial": 40,
+        "partial": 53,
         "refused": 0,
-        "not-implemented": 48,
+        "not-implemented": 35,
         "by-design": 0,
         "unreviewed": 0,
         "not-applicable": 0
@@ -43950,9 +43950,9 @@
         "verification": "registry-gap"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "detail": "This API is not implemented by the dynamic-island shim.",
-        "verification": "registry-gap"
+        "status": "partial",
+        "detail": "Provided by the embedded engine's web/global compatibility layer.",
+        "verification": "test-backed"
       }
     },
     {
@@ -43978,9 +43978,9 @@
         "verification": "registry-gap"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "detail": "This API is not implemented by the dynamic-island shim.",
-        "verification": "registry-gap"
+        "status": "partial",
+        "detail": "Provided by the embedded engine's web/global compatibility layer.",
+        "verification": "test-backed"
       }
     },
     {
@@ -94279,9 +94279,9 @@
         "verification": "registry-gap"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "detail": "This API is not implemented by the dynamic-island shim.",
-        "verification": "registry-gap"
+        "status": "partial",
+        "detail": "Implemented for the documented embedded module-loader subset.",
+        "verification": "test-backed"
       }
     },
     {
@@ -94307,9 +94307,9 @@
         "verification": "registry-gap"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "detail": "This API is not implemented by the dynamic-island shim.",
-        "verification": "registry-gap"
+        "status": "partial",
+        "detail": "Implemented for the documented embedded module-loader subset.",
+        "verification": "test-backed"
       }
     },
     {
@@ -94391,9 +94391,9 @@
         "verification": "registry-gap"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "detail": "This API is not implemented by the dynamic-island shim.",
-        "verification": "registry-gap"
+        "status": "partial",
+        "detail": "Implemented for the documented embedded module-loader subset.",
+        "verification": "test-backed"
       }
     },
     {
@@ -94447,9 +94447,9 @@
         "verification": "registry-gap"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "detail": "This API is not implemented by the dynamic-island shim.",
-        "verification": "registry-gap"
+        "status": "partial",
+        "detail": "Implemented for the documented embedded module-loader subset.",
+        "verification": "test-backed"
       }
     },
     {
@@ -94475,9 +94475,9 @@
         "verification": "registry-gap"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "detail": "This API is not implemented by the dynamic-island shim.",
-        "verification": "registry-gap"
+        "status": "partial",
+        "detail": "Available through the embedded Node compatibility shim; exact member and overload coverage may be narrower.",
+        "verification": "test-backed"
       }
     },
     {
@@ -94503,9 +94503,9 @@
         "verification": "registry-gap"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "detail": "This API is not implemented by the dynamic-island shim.",
-        "verification": "registry-gap"
+        "status": "partial",
+        "detail": "Implemented for the documented embedded module-loader subset.",
+        "verification": "test-backed"
       }
     },
     {
@@ -94531,9 +94531,9 @@
         "verification": "registry-gap"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "detail": "This API is not implemented by the dynamic-island shim.",
-        "verification": "registry-gap"
+        "status": "partial",
+        "detail": "Implemented for the documented embedded module-loader subset.",
+        "verification": "test-backed"
       }
     },
     {
@@ -94559,9 +94559,9 @@
         "verification": "registry-gap"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "detail": "This API is not implemented by the dynamic-island shim.",
-        "verification": "registry-gap"
+        "status": "partial",
+        "detail": "Implemented for the documented embedded module-loader subset.",
+        "verification": "test-backed"
       }
     },
     {
@@ -94587,9 +94587,9 @@
         "verification": "registry-gap"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "detail": "This API is not implemented by the dynamic-island shim.",
-        "verification": "registry-gap"
+        "status": "partial",
+        "detail": "Implemented for the documented embedded module-loader subset.",
+        "verification": "test-backed"
       }
     },
     {
@@ -94755,9 +94755,9 @@
         "verification": "registry-gap"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "detail": "This API is not implemented by the dynamic-island shim.",
-        "verification": "registry-gap"
+        "status": "partial",
+        "detail": "Available through the embedded Node compatibility shim; exact member and overload coverage may be narrower.",
+        "verification": "test-backed"
       }
     },
     {
@@ -94783,9 +94783,9 @@
         "verification": "registry-gap"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "detail": "This API is not implemented by the dynamic-island shim.",
-        "verification": "registry-gap"
+        "status": "partial",
+        "detail": "Implemented for the documented embedded module-loader subset.",
+        "verification": "test-backed"
       }
     },
     {
@@ -94811,9 +94811,9 @@
         "verification": "registry-gap"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "detail": "This API is not implemented by the dynamic-island shim.",
-        "verification": "registry-gap"
+        "status": "partial",
+        "detail": "Implemented for the documented embedded module-loader subset.",
+        "verification": "test-backed"
       }
     },
     {
@@ -94839,9 +94839,9 @@
         "verification": "registry-gap"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "detail": "This API is not implemented by the dynamic-island shim.",
-        "verification": "registry-gap"
+        "status": "partial",
+        "detail": "Implemented for the documented embedded module-loader subset.",
+        "verification": "test-backed"
       }
     },
     {

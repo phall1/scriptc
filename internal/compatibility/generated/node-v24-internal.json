@@ -540,9 +540,9 @@
       },
       "dynamic": {
         "supported": 0,
-        "partial": 40,
+        "partial": 42,
         "refused": 0,
-        "not-implemented": 52,
+        "not-implemented": 50,
         "by-design": 0,
         "unreviewed": 0,
         "not-applicable": 0
@@ -1452,9 +1452,9 @@
       },
       "dynamic": {
         "supported": 0,
-        "partial": 40,
+        "partial": 53,
         "refused": 0,
-        "not-implemented": 48,
+        "not-implemented": 35,
         "by-design": 0,
         "unreviewed": 0,
         "not-applicable": 0
@@ -61346,8 +61346,11 @@
         "evidence": "compiler-unmatched:globals"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:globals"
+        "status": "partial",
+        "evidence": "island-global:ReadableStreamDefaultController",
+        "tests": [
+          "tests/harness/web-globals.test.ts"
+        ]
       },
       "anchorSource": "exact"
     },
@@ -61373,8 +61376,11 @@
         "evidence": "compiler-unmatched:globals"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:globals"
+        "status": "partial",
+        "evidence": "island-global:ReadableStreamDefaultReader",
+        "tests": [
+          "tests/harness/web-globals.test.ts"
+        ]
       },
       "anchorSource": "exact"
     },
@@ -122764,6 +122770,9 @@
           "tests/fixtures/npm/cases/node24-web-stream-pipe-errors/main.ts",
           "tests/fixtures/npm/cases/node24-web-stream-pipes/main.ts",
           "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readable-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readers/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-tee/main.ts",
           "tests/fixtures/npm/cases/node24-web-stream-transforms/main.ts",
           "tests/fixtures/npm/cases/web-streams/main.ts"
         ]
@@ -123073,7 +123082,10 @@
           "tests/fixtures/npm/cases/node24-web-stream-pipe-errors/main.ts",
           "tests/fixtures/npm/cases/node24-web-stream-pipe-abort/main.ts",
           "tests/fixtures/npm/cases/node24-web-stream-transforms/main.ts",
-          "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts"
+          "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readers/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readable-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-tee/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -123154,8 +123166,13 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-feature:webstreams.readableStream.cancel",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-web-stream-readers/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readable-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-tee/main.ts"
+        ]
       },
       "anchorSource": "exact"
     },
@@ -123181,8 +123198,13 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-feature:webstreams.readableStream.getReader",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-web-stream-readers/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readable-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-tee/main.ts"
+        ]
       },
       "anchorSource": "exact"
     },
@@ -123272,8 +123294,13 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-feature:webstreams.readableStream.tee",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-web-stream-readers/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readable-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-tee/main.ts"
+        ]
       },
       "anchorSource": "exact"
     },
@@ -123329,8 +123356,13 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-feature:webstreams.locked",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-web-stream-readers/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readable-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-tee/main.ts"
+        ]
       },
       "anchorSource": "ancestor"
     },
@@ -123356,8 +123388,22 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-export:node:stream/web.ReadableStreamDefaultReader",
+        "tests": [
+          "tests/fixtures/npm/cases/web-streams/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-pipes/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-pipe-errors/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-pipe-abort/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-transforms/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readers/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readable-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-tee/main.ts"
+        ]
       },
       "anchorSource": "exact"
     },
@@ -123383,8 +123429,12 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-feature:webstreams.readableStreamDefaultReader.cancel",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-web-stream-readers/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readable-lifecycle/main.ts"
+        ]
       },
       "anchorSource": "exact"
     },
@@ -123410,8 +123460,12 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-feature:webstreams.readableStreamDefaultReader.read",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-web-stream-readers/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readable-lifecycle/main.ts"
+        ]
       },
       "anchorSource": "exact"
     },
@@ -123437,8 +123491,12 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-feature:webstreams.readableStreamDefaultReader.releaseLock",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-web-stream-readers/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readable-lifecycle/main.ts"
+        ]
       },
       "anchorSource": "exact"
     },
@@ -123464,8 +123522,12 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-feature:webstreams.closed",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-web-stream-readers/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readable-lifecycle/main.ts"
+        ]
       },
       "anchorSource": "ancestor"
     },
@@ -123626,8 +123688,22 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-export:node:stream/web.ReadableStreamDefaultController",
+        "tests": [
+          "tests/fixtures/npm/cases/web-streams/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-pipes/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-pipe-errors/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-pipe-abort/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-transforms/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readers/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readable-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-tee/main.ts"
+        ]
       },
       "anchorSource": "exact"
     },
@@ -123653,8 +123729,12 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-feature:webstreams.readableStreamDefaultController.close",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-web-stream-readers/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readable-lifecycle/main.ts"
+        ]
       },
       "anchorSource": "exact"
     },
@@ -123680,8 +123760,12 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-feature:webstreams.readableStreamDefaultController.enqueue",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-web-stream-readers/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readable-lifecycle/main.ts"
+        ]
       },
       "anchorSource": "exact"
     },
@@ -123707,8 +123791,12 @@
         "evidence": "compiler-unmatched:webstreams"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:webstreams"
+        "status": "partial",
+        "evidence": "island-feature:webstreams.readableStreamDefaultController.error",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-web-stream-readers/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readable-lifecycle/main.ts"
+        ]
       },
       "anchorSource": "exact"
     },
@@ -123738,7 +123826,9 @@
         "evidence": "island-feature:webstreams.desiredSize",
         "tests": [
           "tests/fixtures/npm/cases/node24-web-stream-queues/main.ts",
-          "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts"
+          "tests/fixtures/npm/cases/node24-web-stream-errors/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readers/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readable-lifecycle/main.ts"
         ]
       },
       "anchorSource": "ancestor"
@@ -124046,7 +124136,10 @@
           "tests/fixtures/npm/cases/node24-web-stream-pipe-errors/main.ts",
           "tests/fixtures/npm/cases/node24-web-stream-pipe-abort/main.ts",
           "tests/fixtures/npm/cases/node24-web-stream-transforms/main.ts",
-          "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts"
+          "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readers/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readable-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-tee/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -124239,7 +124332,10 @@
           "tests/fixtures/npm/cases/node24-web-stream-pipe-errors/main.ts",
           "tests/fixtures/npm/cases/node24-web-stream-pipe-abort/main.ts",
           "tests/fixtures/npm/cases/node24-web-stream-transforms/main.ts",
-          "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts"
+          "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readers/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readable-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-tee/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -124501,7 +124597,10 @@
           "tests/fixtures/npm/cases/node24-web-stream-pipe-errors/main.ts",
           "tests/fixtures/npm/cases/node24-web-stream-pipe-abort/main.ts",
           "tests/fixtures/npm/cases/node24-web-stream-transforms/main.ts",
-          "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts"
+          "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readers/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readable-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-tee/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -124603,7 +124702,10 @@
           "tests/fixtures/npm/cases/node24-web-stream-pipe-errors/main.ts",
           "tests/fixtures/npm/cases/node24-web-stream-pipe-abort/main.ts",
           "tests/fixtures/npm/cases/node24-web-stream-transforms/main.ts",
-          "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts"
+          "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readers/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readable-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-tee/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -124730,7 +124832,10 @@
           "tests/fixtures/npm/cases/node24-web-stream-pipe-errors/main.ts",
           "tests/fixtures/npm/cases/node24-web-stream-pipe-abort/main.ts",
           "tests/fixtures/npm/cases/node24-web-stream-transforms/main.ts",
-          "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts"
+          "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readers/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readable-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-tee/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -124888,7 +124993,10 @@
           "tests/fixtures/npm/cases/node24-web-stream-pipe-errors/main.ts",
           "tests/fixtures/npm/cases/node24-web-stream-pipe-abort/main.ts",
           "tests/fixtures/npm/cases/node24-web-stream-transforms/main.ts",
-          "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts"
+          "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readers/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readable-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-tee/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -124990,7 +125098,10 @@
           "tests/fixtures/npm/cases/node24-web-stream-pipe-errors/main.ts",
           "tests/fixtures/npm/cases/node24-web-stream-pipe-abort/main.ts",
           "tests/fixtures/npm/cases/node24-web-stream-transforms/main.ts",
-          "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts"
+          "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readers/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readable-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-tee/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -125092,7 +125203,10 @@
           "tests/fixtures/npm/cases/node24-web-stream-pipe-errors/main.ts",
           "tests/fixtures/npm/cases/node24-web-stream-pipe-abort/main.ts",
           "tests/fixtures/npm/cases/node24-web-stream-transforms/main.ts",
-          "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts"
+          "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readers/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readable-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-tee/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -125220,7 +125334,10 @@
           "tests/fixtures/npm/cases/node24-web-stream-pipe-errors/main.ts",
           "tests/fixtures/npm/cases/node24-web-stream-pipe-abort/main.ts",
           "tests/fixtures/npm/cases/node24-web-stream-transforms/main.ts",
-          "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts"
+          "tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readers/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-readable-lifecycle/main.ts",
+          "tests/fixtures/npm/cases/node24-web-stream-tee/main.ts"
         ]
       },
       "anchorSource": "exact"

@@ -13841,6 +13841,24 @@
     "<repo>/tests/fixtures/npm/cases/node24-web-stream-encoding/main.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/fixtures/npm/cases/node24-web-stream-readers/main.ts": {
+   "order": [
+    "<repo>/tests/fixtures/npm/cases/node24-web-stream-readers/main.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/fixtures/npm/cases/node24-web-stream-readable-lifecycle/main.ts": {
+   "order": [
+    "<repo>/tests/fixtures/npm/cases/node24-web-stream-readable-lifecycle/main.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/fixtures/npm/cases/node24-web-stream-tee/main.ts": {
+   "order": [
+    "<repo>/tests/fixtures/npm/cases/node24-web-stream-tee/main.ts"
+   ],
+   "diags": []
   }
  }
 }
