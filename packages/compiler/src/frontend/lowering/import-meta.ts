@@ -26,7 +26,7 @@ export function importMetaField(lowerer: Lowerer, node: ts.Node, name: string): 
     case "filename": return { kind: "strLit", value: fileName, type: STRING, loc };
     case "dirname": return { kind: "strLit", value: lowerer.targetPlatform === "wasi" ? posix.dirname(fileName) : dirname(fileName), type: STRING, loc };
     case "main": return { kind: "boolLit", value: sf === lowerer.entry, type: BOOL, loc };
-    default: return lowerer.unsupported("SC1090", node, `'import.meta.${name}' (only url, filename, dirname, and main are supported in static ESM)`);
+    default: lowerer.unsupported("SC1090", node, `'import.meta.${name}' (only url, filename, dirname, and main are supported in static ESM)`);
   }
 }
 
