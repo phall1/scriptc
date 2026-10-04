@@ -10656,6 +10656,36 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/node24-fs-timestamps-callbacks.cjs": {
+   "order": [
+    "<repo>/tests/corpus/node24-fs-timestamps-callbacks.cjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/node24-fs-timestamps-errors.cjs": {
+   "order": [
+    "<repo>/tests/corpus/node24-fs-timestamps-errors.cjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/node24-fs-timestamps-promises.ts": {
+   "order": [
+    "<repo>/tests/corpus/node24-fs-timestamps-promises.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/node24-fs-timestamps-symlinks.ts": {
+   "order": [
+    "<repo>/tests/corpus/node24-fs-timestamps-symlinks.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/node24-fs-timestamps.ts": {
+   "order": [
+    "<repo>/tests/corpus/node24-fs-timestamps.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/nullable-object-extension.mjs": {
    "order": [
     "<repo>/tests/corpus/nullable-object-extension.mjs"
@@ -13274,6 +13304,12 @@
   "<repo>/tests/fixtures/node-types/fetch-static.ts": {
    "order": [
     "<repo>/tests/fixtures/node-types/fetch-static.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/fixtures/node-types/fs-timestamps.ts": {
+   "order": [
+    "<repo>/tests/fixtures/node-types/fs-timestamps.ts"
    ],
    "diags": []
   },
