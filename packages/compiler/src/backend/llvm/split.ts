@@ -141,6 +141,7 @@ function stableBucket(symbol: string, count: number): number {
 function chunksOf(
   functions: readonly FunctionDef[],
   targetBytes: number,
+  maximumBuckets: number,
 ): { bucket: number; functions: FunctionDef[] }[] {
   const totalBytes = functions.reduce((sum, fn) => sum + Buffer.byteLength(fn.source) + 2, 0);
   // A power-of-two bucket count changes only when the program crosses a wide
@@ -148,7 +149,7 @@ function chunksOf(
   // symbol-hash bucket; ceil(total/target) would reshuffle the whole program
   // whenever a small edit happened to add the next bucket.
   const required = Math.max(2, Math.ceil(totalBytes / targetBytes));
-  const count = 2 ** Math.ceil(Math.log2(required));
+  const count = Math.min(maximumBuckets, 2 ** Math.ceil(Math.log2(required)));
   const chunks = Array.from({ length: count }, (): FunctionDef[] => []);
   for (const fn of functions) chunks[stableBucket(fn.symbol, count)]!.push(fn);
   return chunks.flatMap((chunk, bucket) =>
@@ -161,7 +162,8 @@ export function splitLlvmProgram(
   options: LlvmProgramSplitOptions = {},
 ): LlvmProgramSplit | null {
   const minimumBytes = options.minimumBytes ?? DEFAULT_MINIMUM_BYTES;
-  if (Buffer.byteLength(source) < minimumBytes) return null;
+  const sourceBytes = Buffer.byteLength(source);
+  if (sourceBytes < minimumBytes) return null;
   const targetBytes = Math.max(64 * 1024, options.targetBytes ?? DEFAULT_TARGET_BYTES);
   const lines = source.split("\n");
   const preamble: string[] = [];
@@ -205,9 +207,19 @@ export function splitLlvmProgram(
     else if (!sawDefinition || line.trim() !== "") preamble.push(line);
   }
   if (functions.length < 2) return null;
-  const chunks = chunksOf(functions, targetBytes);
-  if (chunks.length < 2) return null;
   const globalDecls = globals.flatMap((global) => global.declaration === null ? [] : [global.declaration]);
+  // Every shard repeats declarations and metadata. Bound that shared text
+  // before materializing sources: function size alone can otherwise turn a
+  // large debug module into many times its original size. Coarsen stable
+  // power-of-two buckets, retaining the canonical path when even two would
+  // exceed the budget. Small modules allow one target-sized shared budget.
+  const sharedBytes = [...preamble, ...globalDecls, ...trailer].reduce(
+    (bytes, line) => bytes + Buffer.byteLength(line) + 1, 0,
+  ) + functions.reduce((bytes, fn) => bytes + Buffer.byteLength(fn.declaration) + 1, 0);
+  const bucketLimit = Math.floor(Math.max(sourceBytes, DEFAULT_TARGET_BYTES) / sharedBytes) - 1;
+  if (bucketLimit < 2) return null;
+  const chunks = chunksOf(functions, targetBytes, 2 ** Math.floor(Math.log2(bucketLimit)));
+  if (chunks.length < 2) return null;
   const tail = trailer.length === 0 ? "" : `\n${trailer.join("\n")}`;
   const functionShards = chunks.map(({ bucket, functions: chunk }) => {
     const owned = new Set(chunk);

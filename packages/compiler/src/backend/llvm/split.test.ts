@@ -79,6 +79,29 @@ test("thread-local program state conservatively keeps the single-TU path", () =>
   expect(splitLlvmProgram(tls, { minimumBytes: 0, targetBytes: 64 * 1024 })).toBeNull();
 });
 
+test("shared metadata bounds shard growth while preserving every definition", () => {
+  const names = Array.from({ length: 120 }, (_, i) => `metadata_pad_${i}`);
+  const body = names.map((name) =>
+    `define internal i64 @${name}() #0 {\nentry:\n  ; ${"x".repeat(32 * 1024)}\n  ret i64 1\n}\n`,
+  ).join("\n");
+  const source = SAMPLE.replace("define i64 @public_entry", `${body}\ndefine i64 @public_entry`) +
+    `!0 = !{!"${"x".repeat(256 * 1024)}"}\n`;
+  const split = splitLlvmProgram(source, { minimumBytes: 0, targetBytes: 64 * 1024 });
+  expect(split).not.toBeNull();
+  expect(split!.shards.length).toBeGreaterThan(1);
+  expect(split!.shards.reduce((bytes, shard) => bytes + Buffer.byteLength(shard.source), 0))
+    .toBeLessThanOrEqual(2 * Buffer.byteLength(source));
+  const definitions = split!.shards.flatMap((shard) =>
+    [...shard.source.matchAll(/^define (?:hidden )?i64 @(\w+)\(/gm)].map((match) => match[1]),
+  );
+  expect(definitions.sort()).toEqual([...names, "left", "right", "public_entry"].sort());
+  expect(split!.publicSymbols).toEqual(["public_value", "public_entry"]);
+
+  // A metadata-heavy module with little code cannot repay duplication.
+  const shared = SAMPLE + `!0 = !{!"${"x".repeat(2 * 1024 * 1024)}"}\n`;
+  expect(splitLlvmProgram(shared, { minimumBytes: 0 })).toBeNull();
+});
+
 test("debug metadata stays on definitions when splitting LLVM modules", async () => {
   const debug = new LlvmDebugInfo("/source/main.ts", new Map([["/source/main.ts", "console.log(1);\n"]]));
   let source = SAMPLE;
