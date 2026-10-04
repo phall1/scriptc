@@ -2632,6 +2632,9 @@ void scr_fs_fchmod(double fd, double mode);
 void scr_fs_fsync(double fd);
 void scr_fs_fdatasync(double fd);
 void scr_fs_ftruncate(double fd, double length);
+void scr_fs_utimes(ScrStr *path, double atime, double mtime, bool nofollow);
+void scr_fs_invalid_path(const ScrDyn *value, const ScrStr *path);
+void scr_fs_futimes(double fd, double atime, double mtime);
 void scr_fs_link(ScrStr *source, ScrStr *dest);
 ScrStats *scr_stats_retain(ScrStats *s);
 void scr_stats_release(ScrStats *s);
@@ -2664,6 +2667,8 @@ ScrPromise *scr_fsp_mkdir_recursive(ScrStr *path);
 ScrPromise *scr_fsp_mkdir_recursive_mode(ScrStr *path, double mode);
 ScrPromise *scr_fsp_unlink(ScrStr *path);
 ScrPromise *scr_fsp_chmod(ScrStr *path, double mode);
+ScrPromise *scr_fsp_utimes(const ScrDyn *path, const ScrDyn *atime, const ScrDyn *mtime);
+ScrPromise *scr_fsp_lutimes(const ScrDyn *path, const ScrDyn *atime, const ScrDyn *mtime);
 ScrPromise *scr_fsp_readdir(ScrStr *path);
 ScrPromise *scr_fsp_rm(ScrStr *path);
 ScrPromise *scr_fsp_stat(ScrStr *path);
@@ -2672,6 +2677,7 @@ ScrPromise *scr_fsp_lstat(ScrStr *path);
 ScrPromise *scr_fsp_rename(ScrStr *oldpath, ScrStr *newpath);
 ScrPromise *scr_fsp_open(ScrStr *path, ScrStr *flags, double mode);
 ScrPromise *scr_file_handle_close_promise(ScrFileHandle *h);
+ScrPromise *scr_file_handle_utimes_promise(ScrFileHandle *h, const ScrDyn *atime, const ScrDyn *mtime);
 ScrPromise *scr_file_handle_read_file_promise(ScrFileHandle *h, ScrStr *encoding);
 ScrPromise *scr_file_handle_read_file_bytes_promise(ScrFileHandle *h, ScrStr *encoding);
 ScrPromise *scr_file_handle_write_file_promise(ScrFileHandle *h, ScrStr *data, ScrStr *encoding);
@@ -5980,6 +5986,10 @@ ScrBytes *scr_buffer_new_string_fail(const ScrDyn *got);
  * numbers coerce (negatives answer now/1000), the rest throw Node's
  * ERR_INVALID_ARG_TYPE. Borrowed. */
 double scr_fs_to_unix_timestamp(const ScrDyn *t);
+double scr_fs_timestamp_value(const ScrDyn *t, const char *name);
+void scr_fs_utimes_checked(const ScrDyn *path, const ScrDyn *atime, const ScrDyn *mtime);
+void scr_fs_lutimes_checked(const ScrDyn *path, const ScrDyn *atime, const ScrDyn *mtime);
+void scr_fs_futimes_checked(const ScrDyn *fd, const ScrDyn *atime, const ScrDyn *mtime);
 /* The fs argument-validation ladders (the fs.*Chk libCalls): Node-order
  * validation over dyn values with Node's exact typed errors; a pass
  * meets the real operation where one exists (mkdtempSync, macOS

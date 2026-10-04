@@ -25,6 +25,17 @@ const fixture = (name: string) => join(repoRoot, "tests/fixtures/strictness", na
 const nodeTypesDir = join(repoRoot, "tests/fixtures/node-types");
 const sanitize = process.env["SCRIPTC_SAN"] === "1";
 
+test("node-types: filesystem timestamps accept Date, Buffer, URL, and FileHandle inputs under @types/node", async () => {
+  const outDir = outDirFor("fs-timestamps");
+  const entry = join(nodeTypesDir, "fs-timestamps.ts");
+  const result = await compile(entry, { outPath: join(outDir, "fs-timestamps"), outDir, sanitize });
+  expect(result.ok, !result.ok ? JSON.stringify(result.diagnostics, null, 2) : "").toBe(true);
+  if (!result.ok) return;
+  const [native, node] = await Promise.all([execFileAsync(result.binaryPath), execFileAsync(process.execPath, ["--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", entry])]);
+  expect(native.stdout).toBe(node.stdout);
+  expect(native.stderr).toBe(node.stderr);
+});
+
 test("node-types: ESM metadata supports computed and destructured reads under @types/node", async () => {
   const outDir = outDirFor("esm-metadata");
   const entry = join(nodeTypesDir, "esm-metadata.mts");

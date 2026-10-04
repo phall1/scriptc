@@ -1350,17 +1350,26 @@ function lowerFsSyncBufferWindow(
    * Node's exact ERR_INVALID_ARG_TYPE. The argument crosses as a dyn
    * value so the runtime renders the Received tail. Null when this is
    * not that call (the table fence stays for other shapes). */
+  function lowerFsTimestampValue(lowerer: Lowerer, node: ts.Expression | undefined, loc: SrcLoc): IrExpr {
+    if (!node) return dynUndefinedExpr(loc);
+    const box = (value: IrExpr): IrExpr => {
+      if (value.type.kind === "date") {
+        const milliseconds: IrExpr = { kind: "libCall", fn: "date.getTime", args: [value], type: F64, loc };
+        return { kind: "libCall", fn: "date.nativeNew", args: [{ kind: "dynArrLit", elems: [
+          { kind: "dynFrom", value: milliseconds, type: DYN, loc },
+        ], type: DYN, loc }], type: DYN, loc };
+      }
+      return lowerer.coerceInto(node, value, DYN);
+    };
+    return box(lowerer.lowerExpr(node));
+  }
+
   export function lowerFsToUnixTimestampCall(lowerer: Lowerer, expr: ts.CallExpression,
     bi: { module: string; member: string },
     loc: SrcLoc,): IrExpr | null {
     if (bi.module !== "fs" || bi.member !== "_toUnixTimestamp") return null;
     if (expr.arguments.length !== 1 || ts.isSpreadElement(expr.arguments[0]!)) return null;
-    const raw = lowerer.lowerExpr(expr.arguments[0]!);
-    if (raw.type.kind === "dyn" || raw.kind === "unitLit" || lowerer.dynConvertible(raw.type)) {
-      const arg: IrExpr = raw.type.kind === "dyn" ? raw : { kind: "dynFrom", value: raw, type: DYN, loc };
-      return { kind: "libCall", fn: "fs.toUnixTimestamp", args: [arg], type: F64, loc };
-    }
-    return null;
+    return { kind: "libCall", fn: "fs.toUnixTimestamp", args: [lowerFsTimestampValue(lowerer, expr.arguments[0], loc)], type: F64, loc };
   }
 
   /** The fs validation-ladder spoke (checked-dynamic lane, JS sources
@@ -1658,8 +1667,16 @@ function lowerFsSyncBufferWindow(
     }
     if (fn.fn === "fs.callbackCall" && bi.member !== "rename") {
       if (expr.arguments.some(ts.isSpreadElement)) lowerer.noLowering("filesystem callback call with spread arguments", expr);
-      const args: IrExpr = { kind: "dynArrLit", elems: expr.arguments.map((arg) => lowerer.lowerExprExpecting(arg, DYN)), type: DYN, loc };
+      const timestamp = ["utimes", "futimes", "lutimes"].includes(bi.member);
+      const args: IrExpr = { kind: "dynArrLit", elems: expr.arguments.map((arg, index) => timestamp && (index === 1 || index === 2)
+        ? lowerFsTimestampValue(lowerer, arg, loc) : lowerer.lowerExprExpecting(arg, DYN)), type: DYN, loc };
       return { kind: "libCall", fn: "fs.callbackCall", args: [{ kind: "strLit", value: bi.member, type: STRING, loc }, args], type: DYN, loc };
+    }
+    if ((bi.module === "fs" && ["utimesSync", "futimesSync", "lutimesSync"].includes(bi.member)) ||
+        (bi.module === "fs/promises" && ["utimes", "lutimes"].includes(bi.member))) {
+      if (expr.arguments.length > 3 || expr.arguments.some(ts.isSpreadElement)) lowerer.noLowering(`${name} with this argument shape`, expr);
+      const path = expr.arguments[0] ? lowerer.lowerExprExpecting(expr.arguments[0], DYN) : dynUndefinedExpr(loc);
+      return { kind: "libCall", fn: fn.fn, args: [path, lowerFsTimestampValue(lowerer, expr.arguments[1], loc), lowerFsTimestampValue(lowerer, expr.arguments[2], loc)], type: fn.result, loc };
     }
     if (bi.module === "fs" && (bi.member === "readvSync" || bi.member === "writevSync" || bi.member === "ftruncateSync")) {
       const vector = bi.member !== "ftruncateSync";
@@ -6153,6 +6170,10 @@ function lowerOptionalStringSearchParams(lowerer: Lowerer, init: IrExpr, loc: Sr
         kind: "libCall", fn: name === "truncate" ? "fileHandle.truncate" : "fileHandle.chmod",
         args: [receiver(), num(call.arguments[0], 0).value], type: promise(VOID), loc,
       };
+    }
+    if (name === "utimes") {
+      if (call.arguments.length !== 2 || call.arguments.some(ts.isSpreadElement)) lowerer.noLowering("FileHandle.utimes with this argument shape", call);
+      return { kind: "libCall", fn: "fileHandle.utimes", args: [receiver(), lowerFsTimestampValue(lowerer, call.arguments[0], loc), lowerFsTimestampValue(lowerer, call.arguments[1], loc)], type: promise(VOID), loc };
     }
     if (name === "readv" || name === "writev") {
       if (call.arguments.length < 1 || call.arguments.length > 2)

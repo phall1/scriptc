@@ -279,11 +279,22 @@ static ScrStr *scr_fs_cb_path(const ScrDyn *value, const char *name) {
   ScrStr *path = value->kind == SCR_DYN_STR ? scr_str_retain(value->v.str)
     : scr_str_new((const char *)value->v.bytes->data, value->v.bytes->len);
   if (memchr(path->data, 0, path->len)) {
-    scr_dyn_arg_value_fail(name, "must be a string, Uint8Array, or URL without null bytes", value);
+    if (!strcmp(name, "path")) scr_fs_invalid_path(value, path);
+    else scr_dyn_arg_value_fail(name, "must be a string, Uint8Array, or URL without null bytes", value);
     scr_str_release(path);
     return NULL;
   }
   return path;
+}
+
+static ScrStr *scr_fs_timestamp_path(const ScrDyn *value) {
+  if (!scr_dyn_native_url_is(value)) return scr_fs_cb_path(value, "path");
+  ScrStr *path = scr_url_checked_to_path(value);
+  if (!path) return NULL;
+  ScrDyn input = { .kind = SCR_DYN_STR, .v.str = path };
+  ScrStr *checked = scr_fs_cb_path(&input, "path");
+  scr_str_release(path);
+  return checked;
 }
 
 static ScrDyn *scr_fs_cb_string(ScrStr *text) {
@@ -472,6 +483,13 @@ static bool scr_fs_encoding_chk(const ScrDyn *);
 static bool scr_fs_int_range_chk(const ScrDyn *, const char *, double, double, const char *);
 static bool scr_fs_mode_chk(const ScrDyn *, const char *);
 
+static bool scr_fs_callback_times(const ScrDyn *atime, const ScrDyn *mtime, bool descriptor, double *access, double *modified) {
+  *access = scr_fs_timestamp_value(atime, descriptor ? "atime" : "time");
+  if (scr_exc_pending()) return false;
+  *modified = scr_fs_timestamp_value(mtime, descriptor ? "mtime" : "time");
+  return !scr_exc_pending();
+}
+
 static ScrArr *scr_fs_cb_vectors(const ScrDyn *buffers) {
   ScrDyn *snapshot = buffers->kind == SCR_DYN_TYPED_REF && scr_dyn_isl_is_array(buffers)
     ? scr_dyn_typed_ref_materialize(buffers) : NULL;
@@ -500,20 +518,29 @@ static ScrArr *scr_fs_cb_vectors(const ScrDyn *buffers) {
 static ScrDyn *scr_fs_cb_invoke(ScrStr *member, ScrDyn *const *args, size_t argc) {
   const char *op = member->data;
   bool vector = !strcmp(op, "readv") || !strcmp(op, "writev");
+  bool timestamp = !strcmp(op, "utimes") || !strcmp(op, "lutimes") || !strcmp(op, "futimes");
+  bool timestamp_fd = !strcmp(op, "futimes");
+  double access = 0, modified = 0;
+  // futimes converts times before checking the callback; path variants do
+  // callback and path validation first. Validation failures throw immediately.
+  if (timestamp_fd && !scr_fs_callback_times(scr_fs_cb_arg(args, argc, 1), scr_fs_cb_arg(args, argc, 2), true, &access, &modified)) return NULL;
   bool newControl = !strcmp(op, "fdatasync") || !strcmp(op, "fchmod") || !strcmp(op, "ftruncate");
   if ((vector || newControl) && !scr_fs_int_range_chk(scr_fs_cb_arg(args, argc, 0), "fd", 0, 2147483647.0, ">= 0 && <= 2147483647")) return NULL;
   ScrArr *vectors = vector ? scr_fs_cb_vectors(scr_fs_cb_arg(args, argc, 1)) : NULL;
   if (vector && !vectors) return NULL;
   bool fileCallback = !strcmp(op, "readFile") || !strcmp(op, "mkdtemp");
-  const ScrDyn *callback = argc >= (fileCallback ? 2u : 1u) ? args[argc - 1] : scr_dyn_undefined();
-  if (!scr_fs_cb_chk(callback, fileCallback || vector ? "cb" : "callback")) { scr_arr_release(vectors); return NULL; }
-  size_t count = argc - 1;
+  const ScrDyn *callback = timestamp ? scr_fs_cb_arg(args, argc, 3)
+    : argc >= (fileCallback ? 2u : 1u) ? args[argc - 1] : scr_dyn_undefined();
+  if (!scr_fs_cb_chk(callback, fileCallback || vector || timestamp ? "cb" : "callback")) { scr_arr_release(vectors); return NULL; }
+  size_t count = timestamp ? argc : argc - 1;
 #define ARG(index) scr_fs_cb_arg(args, count, index)
   if (!strcmp(op, "readFile") && !scr_fs_encoding_chk(ARG(1))) return NULL;
   if (!strcmp(op, "read") && count >= 4 && !scr_fs_read_validate(ARG(0), ARG(1), ARG(2), ARG(3), ARG(4))) return NULL;
-  bool descriptor = vector || newControl || !strcmp(op, "close") || !strcmp(op, "fstat") || !strcmp(op, "fsync") || !strcmp(op, "read") || !strcmp(op, "write");
-  ScrStr *path = descriptor ? NULL : scr_fs_cb_path(ARG(0), !strcmp(op, "mkdtemp") ? "prefix" : "path");
+  bool descriptor = timestamp_fd || vector || newControl || !strcmp(op, "close") || !strcmp(op, "fstat") || !strcmp(op, "fsync") || !strcmp(op, "read") || !strcmp(op, "write");
+  ScrStr *path = descriptor ? NULL : timestamp ? scr_fs_timestamp_path(ARG(0)) : scr_fs_cb_path(ARG(0), !strcmp(op, "mkdtemp") ? "prefix" : "path");
   if (!descriptor && !path) return NULL;
+  if (timestamp && !timestamp_fd && !scr_fs_callback_times(ARG(1), ARG(2), false, &access, &modified)) { scr_str_release(path); return NULL; }
+  if (timestamp_fd && !scr_fs_int_range_chk(ARG(0), "fd", 0, 2147483647.0, ">= 0 && <= 2147483647")) return NULL;
   double fd = descriptor ? scr_fs_cb_number(ARG(0), "fd", -1) : -1;
   if (scr_exc_pending()) { scr_str_release(path); scr_arr_release(vectors); return NULL; }
   if (newControl && strcmp(op, "fdatasync")) {
@@ -691,18 +718,9 @@ static ScrDyn *scr_fs_cb_invoke(ScrStr *member, ScrDyn *const *args, size_t argc
 #else
     scr_fs_throw(ENOSYS, "readlink", path);
 #endif
-  } else if (!strcmp(op, "utimes")) {
-    double access = scr_fs_to_unix_timestamp(ARG(1)), modified = scr_fs_to_unix_timestamp(ARG(2));
-#if !defined(_WIN32)
-    struct timespec times[2] = {
-      { (time_t)floor(access), (long)((access - floor(access)) * 1000000000) },
-      { (time_t)floor(modified), (long)((modified - floor(modified)) * 1000000000) },
-    };
-    if (!scr_exc_pending() && utimensat(AT_FDCWD, path->data, times, 0) < 0) scr_fs_throw(errno, "utime", path);
-#else
-    struct utimbuf times = { (time_t)access, (time_t)modified };
-    if (!scr_exc_pending() && utime(path->data, &times) < 0) scr_fs_throw(errno, "utime", path);
-#endif
+  } else if (timestamp) {
+    if (timestamp_fd) scr_fs_futimes(fd, access, modified);
+    else scr_fs_utimes(path, access, modified, !strcmp(op, "lutimes"));
   } else if (!strcmp(op, "readdir")) {
     if (scr_fs_cb_refuse_option(ARG(1), "encoding") || scr_fs_cb_option_bool(ARG(1), "withFileTypes") || scr_fs_cb_option_bool(ARG(1), "recursive")) {
       if (!scr_exc_pending()) { const char *message = "Recursive readdir and Dirent results have no native lowering"; scr_throw_error_msg_code(SCR_ERR_ERROR, message, strlen(message), "SC2020"); }
@@ -929,10 +947,11 @@ ScrBytes *scr_buffer_new_string_fail(const ScrDyn *got) {
  * its time arguments (fs.js's toUnixTimestamp, underscore-exported):
  * numeric STRINGS pass ToNumber's loose-equality gate (+time == time —
  * whitespace-only strings answer 0), finite numbers pass (negatives
- * answer now/1000, Node's "past times" shape), everything else throws
+ * answer now/1000, Node's "past times" shape), Dates supply milliseconds,
+ * and everything else throws
  * Node's exact ERR_INVALID_ARG_TYPE. Borrowed; the throw is pending on
  * the dummy 0 return. */
-double scr_fs_to_unix_timestamp(const ScrDyn *t) {
+double scr_fs_timestamp_value(const ScrDyn *t, const char *name) {
   if (t->kind == SCR_DYN_STR) {
     double n = scr_string_to_number(t->v.str);
     /* +time == time: NaN fails; every parsed number loosely equals its
@@ -943,12 +962,39 @@ double scr_fs_to_unix_timestamp(const ScrDyn *t) {
     if (t->v.num < 0) {
       struct timespec ts;
       clock_gettime(CLOCK_REALTIME, &ts);
-      return ((double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1e6) / 1000.0;
+      return ((double)ts.tv_sec * 1000.0 + (double)(ts.tv_nsec / 1000000)) / 1000.0;
     }
     return t->v.num;
   }
-  scr_dyn_arg_type_fail("time", "an instance of Date or an Time in seconds", t);
+  if (scr_dyn_native_date_is(t)) return scr_dyn_native_date_value(t) / 1000.0;
+  scr_dyn_arg_type_fail(name, "an instance of Date or an Time in seconds", t);
   return 0;
+}
+
+double scr_fs_to_unix_timestamp(const ScrDyn *t) {
+  return scr_fs_timestamp_value(t, "time");
+}
+
+static void scr_fs_path_times_checked(const ScrDyn *input, const ScrDyn *atime, const ScrDyn *mtime, bool nofollow) {
+  ScrStr *path = scr_fs_timestamp_path(input);
+  if (!path) return;
+  double access, modified;
+  if (scr_fs_callback_times(atime, mtime, false, &access, &modified)) scr_fs_utimes(path, access, modified, nofollow);
+  scr_str_release(path);
+}
+
+void scr_fs_utimes_checked(const ScrDyn *path, const ScrDyn *atime, const ScrDyn *mtime) {
+  scr_fs_path_times_checked(path, atime, mtime, false);
+}
+
+void scr_fs_lutimes_checked(const ScrDyn *path, const ScrDyn *atime, const ScrDyn *mtime) {
+  scr_fs_path_times_checked(path, atime, mtime, true);
+}
+
+void scr_fs_futimes_checked(const ScrDyn *fd, const ScrDyn *atime, const ScrDyn *mtime) {
+  double access, modified;
+  if (!scr_fs_callback_times(atime, mtime, true, &access, &modified)) return;
+  if (scr_fs_int_range_chk(fd, "fd", 0, 2147483647.0, ">= 0 && <= 2147483647")) scr_fs_futimes(fd->v.num, access, modified);
 }
 
 /* ── the fs argument-validation ladders (checked-dynamic lane) ─────────

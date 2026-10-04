@@ -497,6 +497,17 @@ ScrPromise *scr_file_handle_chmod_promise(ScrFileHandle *h, double mode) {
   return scr_promise_settled_void();
 }
 
+ScrPromise *scr_file_handle_utimes_promise(ScrFileHandle *h, const ScrDyn *atime, const ScrDyn *mtime) {
+  if (scr_file_handle_require_open(h)) {
+    double access = scr_fs_timestamp_value(atime, "atime");
+    if (!scr_exc_pending()) {
+      double modified = scr_fs_timestamp_value(mtime, "mtime");
+      if (!scr_exc_pending()) scr_fs_futimes((double)h->fd, access, modified);
+    }
+  }
+  return scr_promise_settled_void();
+}
+
 double scr_file_handle_readv(ScrFileHandle *h, ScrArr *buffers, double position) {
   if (!scr_file_handle_require_open(h)) return 0;
   return scr_fs_readv_sync((double)h->fd, buffers, position);

@@ -1758,6 +1758,16 @@ ScrPromise *scr_fsp_chmod(ScrStr *path, double mode) {
   return scr_promise_settled_void();
 }
 
+ScrPromise *scr_fsp_utimes(const ScrDyn *path, const ScrDyn *atime, const ScrDyn *mtime) {
+  scr_fs_utimes_checked(path, atime, mtime);
+  return scr_promise_settled_void();
+}
+
+ScrPromise *scr_fsp_lutimes(const ScrDyn *path, const ScrDyn *atime, const ScrDyn *mtime) {
+  scr_fs_lutimes_checked(path, atime, mtime);
+  return scr_promise_settled_void();
+}
+
 ScrPromise *scr_fsp_readdir(ScrStr *path) {
   ScrArr *names = scr_fs_readdir(path);
   return scr_promise_settled_ref(names, &scr_arr_retain_v, &scr_arr_release_v, NULL);

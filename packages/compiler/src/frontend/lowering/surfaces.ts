@@ -723,6 +723,9 @@ export const BUILTIN_MODULE_FNS: Record<string, Record<string, BuiltinModuleFn |
     fsyncSync: { fn: "fs.fsyncSync", params: [F64], result: VOID, valueParams: exactValueParams(F64) },
     fdatasyncSync: { fn: "fs.fdatasyncSync", params: [F64], result: VOID, valueParams: exactValueParams(F64) },
     ftruncateSync: { fn: "fs.ftruncateSync", params: [F64, F64], result: VOID },
+    utimesSync: { fn: "fs.utimesSync", params: [DYN, DYN, DYN], result: VOID },
+    futimesSync: { fn: "fs.futimesSync", params: [DYN, DYN, DYN], result: VOID },
+    lutimesSync: { fn: "fs.lutimesSync", params: [DYN, DYN, DYN], result: VOID },
     readvSync: { fn: "fs.readvSync", params: [F64, arrayOf(BYTES_U8), F64], result: F64 },
     writevSync: { fn: "fs.writevSync", params: [F64, arrayOf(BYTES_U8), F64], result: F64 },
     linkSync: { fn: "fs.linkSync", params: [STRING, STRING], result: VOID, valueParams: exactValueParams(STRING, STRING) },
@@ -764,6 +767,8 @@ export const BUILTIN_MODULE_FNS: Record<string, Record<string, BuiltinModuleFn |
     lstat: { fn: "fsp.lstat", params: [STRING], result: { kind: "promise", inner: STATS_T } },
     unlink: { fn: "fsp.unlink", params: [STRING], result: { kind: "promise", inner: VOID }, valueParams: exactValueParams(STRING) },
     chmod: { fn: "fsp.chmod", params: [STRING, F64], result: { kind: "promise", inner: VOID }, valueParams: exactValueParams(STRING, F64) },
+    utimes: { fn: "fsp.utimes", params: [DYN, DYN, DYN], result: { kind: "promise", inner: VOID } },
+    lutimes: { fn: "fsp.lutimes", params: [DYN, DYN, DYN], result: { kind: "promise", inner: VOID } },
     rename: { fn: "fsp.rename", params: [STRING, STRING], result: { kind: "promise", inner: VOID }, valueParams: exactValueParams(STRING, STRING) },
     // open's optional flags/mode completion is special-cased in
     // lowerBuiltinModuleCall; this row routes all import spellings and
@@ -1391,7 +1396,7 @@ export function builtinModuleFnOf(lowerer: Lowerer, module: string, member: stri
 export const FS_CALLBACK_MEMBERS = new Set([
   "access", "cp", "copyFile", "chmod", "chown", "glob", "link", "mkdir", "mkdtemp", "rm", "rmdir", "unlink",
   "open", "close", "fstat", "ftruncate", "fsync", "fdatasync", "fchmod", "read", "write", "readv", "writev", "readlink", "realpath", "rename", "stat", "lstat",
-  "symlink", "truncate", "utimes", "readFile", "writeFile", "appendFile", "readdir",
+  "symlink", "truncate", "utimes", "futimes", "lutimes", "readFile", "writeFile", "appendFile", "readdir",
 ]);
 
 /** One member's fence hint, own-property-safe (a collision would print an

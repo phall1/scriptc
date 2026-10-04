@@ -507,9 +507,9 @@
       "apiEntries": 276,
       "static": {
         "supported": 0,
-        "partial": 77,
+        "partial": 86,
         "refused": 0,
-        "not-implemented": 199,
+        "not-implemented": 190,
         "by-design": 0,
         "unreviewed": 0,
         "not-applicable": 0
@@ -50947,7 +50947,13 @@
           "tests/corpus/3135-fs-file-handle-controls.ts",
           "tests/corpus/3136-fs-file-handle-options.ts",
           "tests/corpus/3137-fs-vector-callbacks.cjs",
-          "tests/corpus/fs-native-realpath.ts"
+          "tests/corpus/fs-native-realpath.ts",
+          "tests/corpus/node24-fs-timestamps-callbacks.cjs",
+          "tests/corpus/node24-fs-timestamps-errors.cjs",
+          "tests/corpus/node24-fs-timestamps-promises.ts",
+          "tests/corpus/node24-fs-timestamps-symlinks.ts",
+          "tests/corpus/node24-fs-timestamps.ts",
+          "tests/fixtures/node-types/fs-timestamps.ts"
         ]
       },
       "dynamic": {
@@ -51671,8 +51677,12 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:fs"
+        "status": "partial",
+        "evidence": "compiler-feature:fs.filehandle.utimes",
+        "tests": [
+          "tests/corpus/node24-fs-timestamps-promises.ts",
+          "tests/fixtures/node-types/fs-timestamps.ts"
+        ]
       },
       "dynamic": {
         "status": "not-implemented",
@@ -52227,8 +52237,12 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:fs"
+        "status": "partial",
+        "evidence": "surface-manifest:node-builtin.fs.promises.lutimes",
+        "tests": [
+          "tests/corpus/node24-fs-timestamps-promises.ts",
+          "tests/corpus/node24-fs-timestamps-symlinks.ts"
+        ]
       },
       "dynamic": {
         "status": "not-implemented",
@@ -52870,8 +52884,11 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:fs"
+        "status": "partial",
+        "evidence": "surface-manifest:node-builtin.fs.promises.utimes",
+        "tests": [
+          "tests/corpus/node24-fs-timestamps-promises.ts"
+        ]
       },
       "dynamic": {
         "status": "not-implemented",
@@ -53539,8 +53556,13 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:fs"
+        "status": "partial",
+        "evidence": "compiler-feature:fs.fs.futimes",
+        "tests": [
+          "tests/corpus/node24-fs-timestamps-callbacks.cjs",
+          "tests/corpus/node24-fs-timestamps-symlinks.ts",
+          "tests/corpus/node24-fs-timestamps-errors.cjs"
+        ]
       },
       "dynamic": {
         "status": "not-implemented",
@@ -53647,8 +53669,13 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:fs"
+        "status": "partial",
+        "evidence": "compiler-feature:fs.fs.lutimes",
+        "tests": [
+          "tests/corpus/node24-fs-timestamps-callbacks.cjs",
+          "tests/corpus/node24-fs-timestamps-symlinks.ts",
+          "tests/corpus/node24-fs-timestamps-errors.cjs"
+        ]
       },
       "dynamic": {
         "status": "not-implemented",
@@ -54484,8 +54511,13 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:fs"
+        "status": "partial",
+        "evidence": "compiler-feature:fs.fs.utimes",
+        "tests": [
+          "tests/corpus/node24-fs-timestamps-callbacks.cjs",
+          "tests/corpus/node24-fs-timestamps-symlinks.ts",
+          "tests/corpus/node24-fs-timestamps-errors.cjs"
+        ]
       },
       "dynamic": {
         "status": "not-implemented",
@@ -55374,8 +55406,12 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:fs"
+        "status": "partial",
+        "evidence": "surface-manifest:node-builtin.fs.futimesSync",
+        "tests": [
+          "tests/corpus/node24-fs-timestamps.ts",
+          "tests/corpus/node24-fs-timestamps-errors.cjs"
+        ]
       },
       "dynamic": {
         "status": "not-implemented",
@@ -55482,8 +55518,13 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:fs"
+        "status": "partial",
+        "evidence": "surface-manifest:node-builtin.fs.lutimesSync",
+        "tests": [
+          "tests/corpus/node24-fs-timestamps.ts",
+          "tests/corpus/node24-fs-timestamps-symlinks.ts",
+          "tests/corpus/node24-fs-timestamps-errors.cjs"
+        ]
       },
       "dynamic": {
         "status": "not-implemented",
@@ -56287,8 +56328,13 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:fs"
+        "status": "partial",
+        "evidence": "surface-manifest:node-builtin.fs.utimesSync",
+        "tests": [
+          "tests/corpus/node24-fs-timestamps.ts",
+          "tests/corpus/node24-fs-timestamps-errors.cjs",
+          "tests/fixtures/node-types/fs-timestamps.ts"
+        ]
       },
       "dynamic": {
         "status": "not-implemented",

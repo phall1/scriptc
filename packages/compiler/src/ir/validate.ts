@@ -450,6 +450,9 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "fs.fsyncSync": { argTypes: [F64], result: VOID },
   "fs.fdatasyncSync": { argTypes: [F64], result: VOID },
   "fs.ftruncateSync": { argTypes: [F64, F64], result: VOID },
+  "fs.utimesSync": { argTypes: [DYN, DYN, DYN], result: VOID },
+  "fs.futimesSync": { argTypes: [DYN, DYN, DYN], result: VOID },
+  "fs.lutimesSync": { argTypes: [DYN, DYN, DYN], result: VOID },
   "fs.readvSync": { argTypes: [F64, arrayOf(BYTES_U8), F64], result: F64 },
   "fs.writevSync": { argTypes: [F64, arrayOf(BYTES_U8), F64], result: F64 },
   "fs.linkSync": { argTypes: [STRING, STRING], result: VOID },
@@ -1094,6 +1097,8 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "fsp.mkdirRecursiveMode": { argTypes: [STRING, F64], result: { kind: "promise", inner: VOID } },
   "fsp.unlink": { argTypes: [STRING], result: { kind: "promise", inner: VOID } },
   "fsp.chmod": { argTypes: [STRING, F64], result: { kind: "promise", inner: VOID } },
+  "fsp.utimes": { argTypes: [DYN, DYN, DYN], result: { kind: "promise", inner: VOID } },
+  "fsp.lutimes": { argTypes: [DYN, DYN, DYN], result: { kind: "promise", inner: VOID } },
   "fsp.rename": { argTypes: [STRING, STRING], result: { kind: "promise", inner: VOID } },
   "fsp.readdir": { argTypes: [STRING], result: { kind: "promise", inner: arrayOf(STRING) } },
   // Result is promise<call-site Dirent record array>; the libCall case
@@ -1110,6 +1115,7 @@ export const LIB_FN_SIGS: Record<IrLibFn, { argTypes: (IrType | null)[]; result:
   "fileHandle.datasync": { argTypes: [FILEHANDLE_T], result: { kind: "promise", inner: VOID } },
   "fileHandle.truncate": { argTypes: [FILEHANDLE_T, F64], result: { kind: "promise", inner: VOID } },
   "fileHandle.chmod": { argTypes: [FILEHANDLE_T, F64], result: { kind: "promise", inner: VOID } },
+  "fileHandle.utimes": { argTypes: [FILEHANDLE_T, DYN, DYN], result: { kind: "promise", inner: VOID } },
   "fileHandle.readv": { argTypes: [FILEHANDLE_T, arrayOf(BYTES_U8), F64], result: { kind: "promise", inner: VOID } },
   "fileHandle.writev": { argTypes: [FILEHANDLE_T, arrayOf(BYTES_U8), F64], result: { kind: "promise", inner: VOID } },
   // read/write carry call-site result record shapes; the validator checks

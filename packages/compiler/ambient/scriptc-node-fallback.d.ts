@@ -1175,6 +1175,12 @@ declare module "node:fs" {
   export function closeSync(fd: number): void;
   export function fdatasyncSync(fd: number): void;
   export function ftruncateSync(fd: number, len?: number): void;
+  export function utimesSync(path: string | Uint8Array | URL, atime: number | string | Date, mtime: number | string | Date): void;
+  export function futimesSync(fd: number, atime: number | string | Date, mtime: number | string | Date): void;
+  export function lutimesSync(path: string | Uint8Array | URL, atime: number | string | Date, mtime: number | string | Date): void;
+  export function utimes(path: string | Uint8Array | URL, atime: number | string | Date, mtime: number | string | Date, callback: (err: NodeJS.ErrnoException | null) => void): void;
+  export function futimes(fd: number, atime: number | string | Date, mtime: number | string | Date, callback: (err: NodeJS.ErrnoException | null) => void): void;
+  export function lutimes(path: string | Uint8Array | URL, atime: number | string | Date, mtime: number | string | Date, callback: (err: NodeJS.ErrnoException | null) => void): void;
   export function readvSync(fd: number, buffers: Uint8Array[], position?: number | null): number;
   export function writevSync(fd: number, buffers: Uint8Array[], position?: number | null): number;
   /* Read into a caller buffer from the fd's current position when position
@@ -1291,6 +1297,7 @@ declare module "fs/promises" {
     datasync(): Promise<void>;
     truncate(len?: number): Promise<void>;
     chmod(mode: number): Promise<void>;
+    utimes(atime: number | string | Date, mtime: number | string | Date): Promise<void>;
     readv<T extends Uint8Array[]>(buffers: T, position?: number | null): Promise<FileReadvResult<T>>;
     writev<T extends Uint8Array[]>(buffers: T, position?: number | null): Promise<FileWritevResult<T>>;
     read<T extends Uint8Array = Buffer>(options?: FileReadOptions<T> | null): Promise<FileReadResult<T>>;
@@ -1317,6 +1324,8 @@ declare module "fs/promises" {
     [Symbol.asyncDispose](): Promise<void>;
   }
   export function open(path: string, flags?: string, mode?: number): Promise<FileHandle>;
+  export function utimes(path: string | Uint8Array | URL, atime: number | string | Date, mtime: number | string | Date): Promise<void>;
+  export function lutimes(path: string | Uint8Array | URL, atime: number | string | Date, mtime: number | string | Date): Promise<void>;
   export function readFile(path: string, encoding: "utf8" | "utf-8"): Promise<string>;
   export function readFile(path: string): Promise<Buffer>;
   export function writeFile(

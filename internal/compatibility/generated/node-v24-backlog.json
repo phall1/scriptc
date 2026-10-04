@@ -8,8 +8,8 @@
     "tiers": {
       "static": {
         "replace-refusal": 42,
-        "verify-gap": 2475,
-        "audit-partial": 696,
+        "verify-gap": 2466,
+        "audit-partial": 705,
         "classify": 2,
         "implement": 80
       },
@@ -34820,12 +34820,15 @@
       "priority": "high",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:fs",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "compiler-feature:fs.filehandle.utimes",
+          "tests": [
+            "tests/corpus/node24-fs-timestamps-promises.ts",
+            "tests/fixtures/node-types/fs-timestamps.ts"
+          ]
         },
         "dynamic": {
           "status": "not-implemented",
@@ -35466,12 +35469,15 @@
       "priority": "high",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:fs",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "surface-manifest:node-builtin.fs.promises.lutimes",
+          "tests": [
+            "tests/corpus/node24-fs-timestamps-promises.ts",
+            "tests/corpus/node24-fs-timestamps-symlinks.ts"
+          ]
         },
         "dynamic": {
           "status": "not-implemented",
@@ -36206,12 +36212,14 @@
       "priority": "high",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:fs",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "surface-manifest:node-builtin.fs.promises.utimes",
+          "tests": [
+            "tests/corpus/node24-fs-timestamps-promises.ts"
+          ]
         },
         "dynamic": {
           "status": "not-implemented",
@@ -36922,12 +36930,16 @@
       "priority": "high",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:fs",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "compiler-feature:fs.fs.futimes",
+          "tests": [
+            "tests/corpus/node24-fs-timestamps-callbacks.cjs",
+            "tests/corpus/node24-fs-timestamps-symlinks.ts",
+            "tests/corpus/node24-fs-timestamps-errors.cjs"
+          ]
         },
         "dynamic": {
           "status": "not-implemented",
@@ -37054,12 +37066,16 @@
       "priority": "high",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:fs",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "compiler-feature:fs.fs.lutimes",
+          "tests": [
+            "tests/corpus/node24-fs-timestamps-callbacks.cjs",
+            "tests/corpus/node24-fs-timestamps-symlinks.ts",
+            "tests/corpus/node24-fs-timestamps-errors.cjs"
+          ]
         },
         "dynamic": {
           "status": "not-implemented",
@@ -37973,12 +37989,16 @@
       "priority": "high",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:fs",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "compiler-feature:fs.fs.utimes",
+          "tests": [
+            "tests/corpus/node24-fs-timestamps-callbacks.cjs",
+            "tests/corpus/node24-fs-timestamps-symlinks.ts",
+            "tests/corpus/node24-fs-timestamps-errors.cjs"
+          ]
         },
         "dynamic": {
           "status": "not-implemented",
@@ -38835,12 +38855,15 @@
       "priority": "high",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:fs",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "surface-manifest:node-builtin.fs.futimesSync",
+          "tests": [
+            "tests/corpus/node24-fs-timestamps.ts",
+            "tests/corpus/node24-fs-timestamps-errors.cjs"
+          ]
         },
         "dynamic": {
           "status": "not-implemented",
@@ -38967,12 +38990,16 @@
       "priority": "high",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:fs",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "surface-manifest:node-builtin.fs.lutimesSync",
+          "tests": [
+            "tests/corpus/node24-fs-timestamps.ts",
+            "tests/corpus/node24-fs-timestamps-symlinks.ts",
+            "tests/corpus/node24-fs-timestamps-errors.cjs"
+          ]
         },
         "dynamic": {
           "status": "not-implemented",
@@ -39883,12 +39910,16 @@
       "priority": "high",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "verify-gap",
-          "verification": "registry-gap",
-          "confidence": "low",
-          "source": "compiler-unmatched:fs",
-          "tests": []
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
+          "source": "surface-manifest:node-builtin.fs.utimesSync",
+          "tests": [
+            "tests/corpus/node24-fs-timestamps.ts",
+            "tests/corpus/node24-fs-timestamps-errors.cjs",
+            "tests/fixtures/node-types/fs-timestamps.ts"
+          ]
         },
         "dynamic": {
           "status": "not-implemented",

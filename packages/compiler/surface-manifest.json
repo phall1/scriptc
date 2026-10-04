@@ -950,6 +950,12 @@
       "status": "static"
     },
     {
+      "id": "node-builtin.fs.futimesSync",
+      "kind": "node-builtin",
+      "name": "fs.futimesSync",
+      "status": "static"
+    },
+    {
       "id": "node-builtin.fs.linkSync",
       "kind": "node-builtin",
       "name": "fs.linkSync",
@@ -959,6 +965,12 @@
       "id": "node-builtin.fs.lstatSync",
       "kind": "node-builtin",
       "name": "fs.lstatSync",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.fs.lutimesSync",
+      "kind": "node-builtin",
+      "name": "fs.lutimesSync",
       "status": "static"
     },
     {
@@ -996,6 +1008,12 @@
       "id": "node-builtin.fs.promises.lstat",
       "kind": "node-builtin",
       "name": "fs/promises.lstat",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.fs.promises.lutimes",
+      "kind": "node-builtin",
+      "name": "fs/promises.lutimes",
       "status": "static"
     },
     {
@@ -1050,6 +1068,12 @@
       "id": "node-builtin.fs.promises.unlink",
       "kind": "node-builtin",
       "name": "fs/promises.unlink",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.fs.promises.utimes",
+      "kind": "node-builtin",
+      "name": "fs/promises.utimes",
       "status": "static"
     },
     {
@@ -1128,6 +1152,12 @@
       "id": "node-builtin.fs.unlinkSync",
       "kind": "node-builtin",
       "name": "fs.unlinkSync",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.fs.utimesSync",
+      "kind": "node-builtin",
+      "name": "fs.utimesSync",
       "status": "static"
     },
     {

@@ -869,7 +869,7 @@ ScrDyn *scr_util_parse_env(const ScrDyn *content) {
   return scr_env_parse_content(content->v.str, true);
 }
 
-static void scr_env_invalid_path(const ScrDyn *value, const ScrStr *path) {
+void scr_fs_invalid_path(const ScrDyn *value, const ScrStr *path) {
   ScrJsonBuf b;
   scr_jb_init(&b);
   scr_jb_puts(&b, "The argument 'path' must be a string, Uint8Array, or URL without null bytes. Received ");
@@ -928,7 +928,7 @@ void scr_process_load_env_file(const ScrDyn *value) {
   }
   if (!path) return;
   if (memchr(path->data, 0, path->len)) {
-    scr_env_invalid_path(value, path);
+    scr_fs_invalid_path(value, path);
     scr_str_release(path);
     return;
   }
@@ -2662,6 +2662,80 @@ void scr_fs_ftruncate(double fd, double length) {
   if (error) scr_fs_throw_nopath(error, "ftruncate");
 #else
   if (ftruncate((int)fd, (off_t)length) != 0) scr_fs_throw_nopath(errno, "ftruncate");
+#endif
+}
+
+#ifdef _WIN32
+static bool scr_fs_set_times(HANDLE handle, double access, double modified) {
+  FILETIME atime, mtime, now;
+  if (isinf(access) || isinf(modified)) GetSystemTimeAsFileTime(&now);
+  double values[2] = { access, modified };
+  FILETIME *files[2] = { &atime, &mtime };
+  for (size_t i = 0; i < 2; i++) {
+    if (isnan(values[i])) { files[i] = NULL; continue; }
+    if (isinf(values[i])) { *files[i] = now; continue; }
+    double ticks = values[i] * 10000000.0 + 116444736000000000.0;
+    if (ticks < -9223372036854775808.0 || ticks >= 9223372036854775808.0) {
+      SetLastError(ERROR_INVALID_PARAMETER);
+      return false;
+    }
+    int64_t time = (int64_t)ticks;
+    files[i]->dwLowDateTime = (DWORD)(uint64_t)time;
+    files[i]->dwHighDateTime = (DWORD)((uint64_t)time >> 32);
+  }
+  return SetFileTime(handle, NULL, files[0], files[1]) != 0;
+}
+
+static DWORD scr_fs_set_path_times(WCHAR *path, double atime, double mtime, bool nofollow) {
+  DWORD flags = FILE_FLAG_BACKUP_SEMANTICS | (nofollow ? FILE_FLAG_OPEN_REPARSE_POINT : 0);
+  HANDLE handle = CreateFileW(path, FILE_WRITE_ATTRIBUTES,
+    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, flags, NULL);
+  if (handle == INVALID_HANDLE_VALUE) return GetLastError();
+  DWORD error = scr_fs_set_times(handle, atime, mtime) ? 0 : GetLastError();
+  CloseHandle(handle);
+  return error;
+}
+#else
+/* Match the pinned libuv conversion: microsecond truncation, normalized
+ * negative fractions, and the special current/unchanged time sentinels. */
+static bool scr_fs_timespec(double time, struct timespec *out) {
+  if (isinf(time)) { *out = (struct timespec){ 0, UTIME_NOW }; return true; }
+  if (isnan(time)) { *out = (struct timespec){ 0, UTIME_OMIT }; return true; }
+  if (time < -9223372036854775808.0 || time >= 9223372036854775808.0) return false;
+  out->tv_sec = (time_t)time;
+  out->tv_nsec = (long)((time - (double)out->tv_sec) * 1000000000.0);
+  out->tv_nsec -= out->tv_nsec % 1000;
+  if (out->tv_nsec < 0) { out->tv_nsec += 1000000000; out->tv_sec--; }
+  return true;
+}
+#endif
+
+void scr_fs_utimes(ScrStr *path, double atime, double mtime, bool nofollow) {
+  const char *op = nofollow ? "lutime" : "utime";
+#ifdef _WIN32
+  WCHAR *wide = scr_fs_win_wide(path);
+  if (!wide) { scr_fs_throw(scr_fs_win_errno(GetLastError()), op, path); return; }
+  DWORD error = scr_fs_set_path_times(wide, atime, mtime, nofollow);
+  if (nofollow && (error == ERROR_SYMLINK_NOT_SUPPORTED || error == ERROR_NOT_A_REPARSE_POINT))
+    error = scr_fs_set_path_times(wide, atime, mtime, false);
+  free(wide);
+  if (error) scr_fs_throw(scr_fs_win_errno(error), op, path);
+#else
+  struct timespec times[2];
+  if (!scr_fs_timespec(atime, &times[0]) || !scr_fs_timespec(mtime, &times[1])) { scr_fs_throw(EINVAL, op, path); return; }
+  if (utimensat(AT_FDCWD, path->data, times, nofollow ? AT_SYMLINK_NOFOLLOW : 0) != 0) scr_fs_throw(errno, op, path);
+#endif
+}
+
+void scr_fs_futimes(double fd, double atime, double mtime) {
+#ifdef _WIN32
+  HANDLE handle = (HANDLE)_get_osfhandle((int)fd);
+  if (handle == INVALID_HANDLE_VALUE) { scr_fs_throw_nopath(EBADF, "futime"); return; }
+  if (!scr_fs_set_times(handle, atime, mtime)) scr_fs_throw_nopath(scr_fs_win_errno(GetLastError()), "futime");
+#else
+  struct timespec times[2];
+  if (!scr_fs_timespec(atime, &times[0]) || !scr_fs_timespec(mtime, &times[1])) { scr_fs_throw_nopath(EINVAL, "futime"); return; }
+  if (futimens((int)fd, times) != 0) scr_fs_throw_nopath(errno, "futime");
 #endif
 }
 

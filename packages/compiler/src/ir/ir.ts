@@ -3667,6 +3667,8 @@ export type IrLibFn =
   | "fsp.mkdirRecursiveMode"
   | "fsp.unlink"
   | "fsp.chmod"
+  | "fsp.utimes"
+  | "fsp.lutimes"
   | "fsp.rename"
   | "fsp.readdir"
   /** `fs.promises.readdir(path, { withFileTypes: true })` — the settled-
@@ -3690,6 +3692,7 @@ export type IrLibFn =
   | "fileHandle.datasync"
   | "fileHandle.truncate"
   | "fileHandle.chmod"
+  | "fileHandle.utimes"
   | "fileHandle.readv"
   | "fileHandle.writev"
   | "fileHandle.read"
@@ -4841,6 +4844,9 @@ export type IrLibFn =
   | "fs.fsyncSync"
   | "fs.fdatasyncSync"
   | "fs.ftruncateSync"
+  | "fs.utimesSync"
+  | "fs.futimesSync"
+  | "fs.lutimesSync"
   | "fs.readvSync"
   | "fs.writevSync"
   | "fs.linkSync"
@@ -8053,6 +8059,9 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "fs.fsyncSync",
   "fs.fdatasyncSync",
   "fs.ftruncateSync",
+  "fs.utimesSync",
+  "fs.futimesSync",
+  "fs.lutimesSync",
   "fs.readvSync",
   "fs.writevSync",
   "fs.linkSync",
