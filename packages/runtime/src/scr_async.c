@@ -1769,7 +1769,7 @@ ScrPromise *scr_fsp_link(const ScrDyn *existing, const ScrDyn *destination) {
 }
 
 ScrPromise *scr_fsp_symlink(const ScrDyn *target, const ScrDyn *destination, const ScrDyn *type) {
-  scr_fs_symlink_checked(target, destination, type);
+  scr_fs_symlink_promise_checked(target, destination, type);
   return scr_promise_settled_void();
 }
 

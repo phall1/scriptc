@@ -13,7 +13,7 @@ async function main(): Promise<void> {
     await link(Buffer.from(file), pathToFileURL(join(root, "hard")));
     console.log("link fulfilled");
     console.log("hard", fs.readFileSync(join(root, "hard"), "utf8"));
-    await symlink("directory", Buffer.from(join(root, "junction")), "junction");
+    await symlink(Buffer.from("directory"), pathToFileURL(join(root, "junction")), "junction");
     console.log("symlink fulfilled");
     const target = await readlink(pathToFileURL(join(root, "junction")));
     const bytes = await readlink(Buffer.from(join(root, "junction")), "buffer");

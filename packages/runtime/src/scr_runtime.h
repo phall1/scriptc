@@ -2638,9 +2638,11 @@ void scr_fs_invalid_named_path(const ScrDyn *value, const ScrStr *path, const ch
 void scr_fs_futimes(double fd, double atime, double mtime);
 void scr_fs_link(ScrStr *source, ScrStr *dest);
 void scr_fs_symlink(ScrStr *target, ScrStr *destination, int kind);
+int scr_fs_symlink_infer(ScrStr *absolute);
 ScrBytes *scr_fs_readlink_bytes(ScrStr *path);
 void scr_fs_link_checked(const ScrDyn *existing, const ScrDyn *destination);
 void scr_fs_symlink_checked(const ScrDyn *target, const ScrDyn *destination, const ScrDyn *type);
+void scr_fs_symlink_promise_checked(const ScrDyn *target, const ScrDyn *destination, const ScrDyn *type);
 ScrDyn *scr_fs_readlink_checked(const ScrDyn *path, const ScrDyn *options, bool promise);
 ScrDyn *scr_fs_readlink_dyn(const ScrDyn *path, const ScrDyn *options);
 ScrStr *scr_fs_readlink_str(const ScrDyn *path, const ScrDyn *options);

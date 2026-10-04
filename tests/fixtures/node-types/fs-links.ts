@@ -17,7 +17,7 @@ async function main(): Promise<void> {
     const text: string = readlinkSync(Buffer.from(path));
     const bytes: Buffer = readlinkSync(pathToFileURL(path), { encoding: "buffer" });
     console.log("sync", text === bytes.toString());
-    await symlinkPromise("dir", Buffer.from(join(root, "promise")), "junction");
+    await symlinkPromise(Buffer.from("dir"), pathToFileURL(join(root, "promise")), "junction");
     const promised: Buffer = await readlinkPromise(join(root, "promise"), "buffer");
     console.log("promise", await readlinkPromise(join(root, "promise")) === promised.toString());
     await new Promise<void>((resolve, reject) => symlink("dir", join(root, "callback"), "junction", err => err ? reject(err) : resolve()));

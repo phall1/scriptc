@@ -322,14 +322,60 @@ void scr_fs_link_checked(const ScrDyn *existing, const ScrDyn *destination) {
   scr_str_release(from); scr_str_release(to);
 }
 
-void scr_fs_symlink_checked(const ScrDyn *target, const ScrDyn *destination, const ScrDyn *type) {
+static void scr_fs_symlink_checked_core(const ScrDyn *target, const ScrDyn *destination, const ScrDyn *type, bool promise) {
   int kind = scr_fs_symlink_type(type);
   if (scr_exc_pending()) return;
+#ifdef _WIN32
+  if (kind == -1) {
+    // Sync/promise inference stringifies the raw destination and target before
+    // getValidatedPath. Sync stat exposes null-byte errors in the resolved path;
+    // the promise form catches inference failures and continues as a file link.
+    ScrStr *link = scr_dyn_string_coerce_js(destination);
+    ScrStr *source = !scr_exc_pending() ? scr_dyn_string_coerce_js(target) : NULL;
+    ScrStr *absolute = NULL;
+    if (link && source && !scr_exc_pending()) {
+      ScrArr *parts = scr_arr_new_ref(scr_str_retain_v, scr_str_release_v, NULL, 3);
+      scr_arr_push_ref(parts, scr_str_retain(link));
+      scr_arr_push_ref(parts, scr_str_new("..", 2));
+      scr_arr_push_ref(parts, scr_str_retain(source));
+      absolute = scr_path_win32_resolve(parts);
+      scr_arr_release(parts);
+    }
+    kind = 0;
+    if (absolute && !scr_exc_pending()) {
+      ScrDyn input = { .kind = SCR_DYN_STR, .v.str = absolute };
+      ScrStr *checked = scr_fs_cb_path(&input, "path");
+      if (checked) kind = scr_fs_symlink_infer(checked);
+      scr_str_release(checked);
+    }
+    scr_str_release(link); scr_str_release(source); scr_str_release(absolute);
+    if (scr_exc_pending()) {
+      if (!promise) return;
+      scr_caught_release(scr_exc_take());
+    }
+  }
+#else
+  (void)promise;
+#endif
   ScrStr *from = scr_fs_checked_path(target, "target");
   if (!from) return;
   ScrStr *to = scr_fs_checked_path(destination, "path");
+#ifdef _WIN32
+  if (to && kind == 2 && scr_dyn_bytes_is(destination, SCR_BYTES_U8)) {
+    scr_dyn_arg_type_fail("paths[0]", "of type string", destination);
+    scr_str_release(to); to = NULL;
+  }
+#endif
   if (to) scr_fs_symlink(from, to, kind);
   scr_str_release(from); scr_str_release(to);
+}
+
+void scr_fs_symlink_checked(const ScrDyn *target, const ScrDyn *destination, const ScrDyn *type) {
+  scr_fs_symlink_checked_core(target, destination, type, false);
+}
+
+void scr_fs_symlink_promise_checked(const ScrDyn *target, const ScrDyn *destination, const ScrDyn *type) {
+  scr_fs_symlink_checked_core(target, destination, type, true);
 }
 
 /* getOptions accepts functions as defaults and validates signals without
@@ -648,6 +694,17 @@ static ScrDyn *scr_fs_cb_invoke(ScrStr *member, ScrDyn *const *args, size_t argc
     if ((!reading && !to) || (symbolic && fourth->kind != SCR_DYN_UNDEF && !scr_fs_cb_chk(callback, "cb"))) {
       scr_str_release(from); scr_str_release(to); scr_dyn_release(encoding); return NULL;
     }
+#ifdef _WIN32
+    if (symbolic) {
+      if (kind == 2 && scr_dyn_bytes_is(second, SCR_BYTES_U8)) {
+        scr_dyn_arg_type_fail("paths[0]", "of type string", second);
+        scr_str_release(from); scr_str_release(to); return NULL;
+      }
+      // Callback inference passes validated paths directly to path.resolve;
+      // Buffer paths fail that probe and fall back to a file link.
+      if (kind == -1 && (scr_dyn_bytes_is(first, SCR_BYTES_U8) || scr_dyn_bytes_is(second, SCR_BYTES_U8))) kind = 0;
+    }
+#endif
     ScrDyn *result = NULL;
     if (reading) result = scr_fs_readlink_result(from, encoding);
     else if (symbolic) scr_fs_symlink(from, to, kind);

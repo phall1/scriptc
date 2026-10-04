@@ -4386,6 +4386,18 @@ static DWORD scr_fs_win_junction(const WCHAR *target, const WCHAR *destination) 
 }
 #endif
 
+int scr_fs_symlink_infer(ScrStr *absolute) {
+#ifdef _WIN32
+  WCHAR *probe = scr_fs_win_wide(absolute);
+  DWORD attributes = probe ? GetFileAttributesW(probe) : INVALID_FILE_ATTRIBUTES;
+  free(probe);
+  return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) ? 1 : 0;
+#else
+  (void)absolute;
+  return 0;
+#endif
+}
+
 void scr_fs_symlink(ScrStr *target, ScrStr *destination, int kind) {
 #ifdef _WIN32
   ScrArr *parts = scr_arr_new_ref(scr_str_retain_v, scr_str_release_v, NULL, 3);
@@ -4394,12 +4406,7 @@ void scr_fs_symlink(ScrStr *target, ScrStr *destination, int kind) {
   scr_arr_push_ref(parts, scr_str_retain(target));
   ScrStr *absolute = scr_path_win32_resolve(parts);
   scr_arr_release(parts);
-  if (kind == -1) {
-    WCHAR *probe = scr_fs_win_wide(absolute);
-    DWORD attributes = probe ? GetFileAttributesW(probe) : INVALID_FILE_ATTRIBUTES;
-    free(probe);
-    kind = attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) ? 1 : 0;
-  }
+  if (kind == -1) kind = scr_fs_symlink_infer(absolute);
   ScrStr *stored;
   if (kind == 2) stored = scr_path_win32_to_namespaced_path(absolute);
   else if (scr_path_win32_is_absolute(target)) stored = scr_path_win32_to_namespaced_path(target);
