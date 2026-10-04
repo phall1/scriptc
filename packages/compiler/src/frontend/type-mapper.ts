@@ -2834,7 +2834,9 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
     }
     const params: IrType[] = [];
     let typedRest = false;
-    for (const p of sig.getParameters()) {
+    const parameterSymbols = sig.getParameters();
+    checker.prefetchSymbolTypes(parameterSymbols);
+    for (const p of parameterSymbols) {
       const decl = checker.valueDeclarationOf(p);
       const rest = decl !== undefined && ts.isParameter(decl) && decl.dotDotDotToken !== undefined;
       // JavaScript rest values retain the checked-dynamic/island runtime-
@@ -4145,6 +4147,7 @@ function mapRecordTypeInner(widened: ts.Type, ctx: TypeMapperCtx): IrType | Reco
       return DYN;
     }
     const fields: { name: string; type: IrType }[] = [];
+    checker.prefetchSymbolTypes(props);
     for (const p of props) {
       if (p.flags & (ts.SymbolFlags.GetAccessor | ts.SymbolFlags.SetAccessor)) {
         // OBJECT-LITERAL get/set accessors (TS sources): the property has

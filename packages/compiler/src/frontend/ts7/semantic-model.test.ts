@@ -269,12 +269,40 @@ test("signature handles use type, symbol and signature registries independently"
   expect(signature.getTypeParameters()[0]?.isTypeParameter()).toBe(true);
   const parameters = signature.getParameters();
   expect(signature.getThisParameter()).toBe(parameters[1]);
-  expect(signature.getParameters()).toEqual(parameters);
+  expect(signature.getParameters()).toBe(parameters);
   expect(signature.getTypeParameters()[0]).toBe(first.type({ id: 2, flags: TypeFlags.TypeParameter }));
   expect(signature.getTarget()).toBe(first.signature({ id: 2, flags: 0 }));
   expect(signature.getTarget()).not.toBe(signature);
   expect(signature.hasRestParameter && signature.isConstruct && signature.isAbstract).toBe(true);
   expect(requests).toHaveLength(3);
+});
+
+test("signature list caches retain project identity and reject reads after disposal", () => {
+  const { first, second, snapshot, requests, symbol } = harness();
+  const data = { id: 1, flags: 0, parameters: [2, 2], typeParameters: [3] };
+  const shared = first.symbol(symbol(2));
+  const type = first.type({ id: 3, flags: TypeFlags.TypeParameter });
+  const otherType = second.type({ id: 3, flags: TypeFlags.String });
+  const a = first.signature(data), b = second.signature(data);
+  const parameters = a.getParameters(), types = a.getTypeParameters();
+  expect(parameters).toEqual([shared, shared]);
+  expect(types).toEqual([type]);
+  expect(a.getParameters()).toBe(parameters);
+  expect(a.getTypeParameters()).toBe(types);
+  expect(b.getTypeParameters()).toEqual([otherType]);
+  expect(b.getParameters()).not.toBe(parameters);
+  const empty = first.signature({ id: 4, flags: 0 });
+  expect(empty.getParameters()).toBe(empty.getParameters());
+  expect(empty.getTypeParameters()).toBe(empty.getTypeParameters());
+  expect(requests).toEqual([]);
+  first.dispose();
+  for (const signature of [a, empty]) {
+    expect(() => signature.getParameters()).toThrow("disposed");
+    expect(() => signature.getTypeParameters()).toThrow("disposed");
+  }
+  expect(b.getParameters()).toEqual([shared, shared]);
+  snapshot.dispose();
+  expect(() => b.getParameters()).toThrow("disposed");
 });
 
 test("literal metadata preserves zero, false, empty strings and arbitrary precision integers", () => {

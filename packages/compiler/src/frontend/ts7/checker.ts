@@ -113,6 +113,32 @@ const TYPE_PREFETCH_KINDS = new Set<SyntaxKind>([
   SyntaxKind.ConditionalExpression,
 ]);
 
+/** Names in property and type syntax normally need binding identity, not
+ * a value type. Keep symbol prefetch independent, and leave uncommon type
+ * queries on these nodes to the direct memoized path. Computed keys and
+ * shorthand values remain expressions and still join the type wave. */
+function shouldPrefetchType(node: Node): boolean {
+  if (!TYPE_PREFETCH_KINDS.has(node.kind)) return false;
+  if (node.kind !== SyntaxKind.Identifier) return true;
+  const parent = node.parent;
+  if (parent === undefined) return true;
+  switch (parent.kind) {
+    case SyntaxKind.PropertyAccessExpression:
+    case SyntaxKind.PropertyAssignment:
+    case SyntaxKind.PropertySignature:
+      return parent.name !== node;
+    case SyntaxKind.TypeReference:
+    case SyntaxKind.QualifiedName:
+    case SyntaxKind.ImportSpecifier:
+    case SyntaxKind.ExportSpecifier:
+    case SyntaxKind.NamespaceImport:
+    case SyntaxKind.ImportClause:
+      return false;
+    default:
+      return true;
+  }
+}
+
 /** Constituents are owned by the type's semantic project. The type checks
  * its lifetime even for warm reads, and releases cached references when
  * that project is disposed. No process-global cache retains old snapshots. */
@@ -416,7 +442,7 @@ export class CheckerFacade {
 
   private prefetchTypeNodes(allNodes: readonly Node[]): void {
     const nodes = allNodes.filter(
-      (n) => TYPE_PREFETCH_KINDS.has(n.kind) && !this.cache.typeAtLocation.has(n),
+      (n) => shouldPrefetchType(n) && !this.cache.typeAtLocation.has(n),
     );
     const types = chunked(nodes, (chunk) => this.typesWithPanicFence(chunk));
     nodes.forEach((n, i) => this.cache.typeAtLocation.set(n, types[i]));
@@ -458,11 +484,23 @@ export class CheckerFacade {
     // Include warm node answers too: a preceding symbol-only analysis may
     // have populated symbolAtLocation without fetching symbol types, and a
     // later reachable-body wave must still batch those missing types.
-    const distinct: Ts7Symbol[] = [];
-    const seen = new Set<Ts7Symbol>();
+    const mentioned: Ts7Symbol[] = [];
     for (const node of symbolNodes) {
       const symbol = this.cache.symbolAtLocation.get(node);
-      if (symbol === undefined || seen.has(symbol) || this.cache.typeOfSymbol.has(symbol)) continue;
+      if (symbol !== undefined) mentioned.push(symbol);
+    }
+    this.prefetchSymbolTypes(mentioned);
+  }
+
+  /** Consumers that already need a record's fields or a signature's
+   * parameters can resolve that list together without traversing other
+   * types. Share the ordinary memo, including absent and panic answers. */
+  prefetchSymbolTypes(symbols: readonly Ts7Symbol[]): void {
+    this.ensureActive();
+    const distinct: Ts7Symbol[] = [];
+    const seen = new Set<Ts7Symbol>();
+    for (const symbol of symbols) {
+      if (seen.has(symbol) || this.cache.typeOfSymbol.has(symbol)) continue;
       seen.add(symbol);
       distinct.push(symbol);
     }

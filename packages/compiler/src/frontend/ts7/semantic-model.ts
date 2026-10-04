@@ -227,6 +227,7 @@ export class SemanticProject {
     this.disposed = true;
     for (const type of this.types.values()) type.dispose();
     this.types.clear();
+    for (const signature of this.signatures.values()) signature.dispose();
     this.signatures.clear();
     // Detach before invoking callbacks so reentrant disposal is harmless.
     const cleanups = this.cleanups.slice();
@@ -432,6 +433,8 @@ export class SemanticSignature {
   readonly id: number;
   readonly flags: number;
   readonly declaration: SemanticNodeHandle | undefined;
+  private typeParameters: readonly SemanticType[] | undefined;
+  private parameters: readonly SemanticSymbol[] | undefined;
 
   constructor(private readonly data: SignatureResponse, readonly project: SemanticProject) {
     this.id = data.id;
@@ -439,8 +442,20 @@ export class SemanticSignature {
     this.declaration = data.declaration ? new SemanticNodeHandle(data.declaration, project) : undefined;
   }
 
-  getTypeParameters(): SemanticType[] { return this.project.fetchTypes(this.id, "getTypeParametersOfSignature", this.data.typeParameters ?? []); }
-  getParameters(): SemanticSymbol[] { return this.project.fetchSymbols(this.id, "getParametersOfSignature", this.data.parameters ?? []); }
+  getTypeParameters(): readonly SemanticType[] {
+    this.project.ensureActive();
+    if (this.typeParameters === undefined) this.typeParameters = this.project.fetchTypes(this.id, "getTypeParametersOfSignature", this.data.typeParameters ?? []);
+    return this.typeParameters;
+  }
+  getParameters(): readonly SemanticSymbol[] {
+    this.project.ensureActive();
+    if (this.parameters === undefined) this.parameters = this.project.fetchSymbols(this.id, "getParametersOfSignature", this.data.parameters ?? []);
+    return this.parameters;
+  }
+  dispose(): void {
+    this.typeParameters = undefined;
+    this.parameters = undefined;
+  }
   getThisParameter(): SemanticSymbol | undefined { return this.project.fetchSymbol(this.id, "getThisParameterOfSignature", this.data.thisParameter); }
   getTarget(): SemanticSignature | undefined { return this.project.fetchSignature(this.id, "getTargetOfSignature", this.data.target); }
   get hasRestParameter(): boolean { return (this.flags & SignatureFlags.HasRestParameter) !== 0; }

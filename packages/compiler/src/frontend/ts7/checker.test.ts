@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { CheckerFacade, constituentTypes } from "./checker.js";
 import { Ts7RpcClient } from "./rpc-client.js";
 import { registerTs7FileSystem, TS7_FILE_SYSTEM_CALLBACKS } from "./rpc-filesystem.js";
@@ -10,7 +10,8 @@ import { ts7Executable } from "./rpc-api.js";
 import { Ts7Session } from "./session.js";
 import { SemanticChecker } from "./semantic-checker.js";
 import { SemanticSnapshot } from "./semantic-model.js";
-import { TypeFlags } from "./enums.js";
+import { SyntaxKind, TypeFlags } from "./enums.js";
+import { walkPreorder } from "./ast.js";
 import { createProgram, Ts7Host } from "./program-adapter.js";
 import type { AstNode } from "./ast-node.js";
 import type { SourceFile } from "./ast-types.js";
@@ -143,6 +144,7 @@ test("all public query and prefetch entry points reject a disposed facade before
       prefetchSymbolNodesExact: () => facade.prefetchSymbolNodesExact([]),
       prefetchCollectionTypes: () => facade.prefetchCollectionTypes([]),
       prefetchClassCollection: () => facade.prefetchClassCollection([], []),
+      prefetchSymbolTypes: () => facade.prefetchSymbolTypes([symbol]),
       getTypeAtLocation: () => facade.getTypeAtLocation(name),
       getSymbolAtLocation: () => facade.getSymbolAtLocation(name),
       getTypeOfSymbol: () => facade.getTypeOfSymbol(symbol),
@@ -182,6 +184,122 @@ test("all public query and prefetch entry points reject a disposed facade before
     expect(h.rpc.timing().requests).toBe(before);
     expect(project.checker.typeToString(type)).toBe("42");
   } finally { h.close(); }
+});
+
+test("type waves leave property and type names cold while retaining symbol batches and direct fallbacks", () => {
+  const h = connect({
+    "tsconfig.json": config,
+    "dependency.ts": "export interface Value { field: number } export const seed = 1;",
+    "main.ts": `
+      import { type Value as Input, seed } from "./dependency.js";
+      import * as dep from "./dependency.js";
+      export type Alias = dep.Value;
+      interface Shape { field: number }
+      export const source: Input = { field: seed };
+      export function read(value: Shape) {
+        const key = "field";
+        const object = { field: value.field, [key]: seed, seed };
+        return object.field;
+      }
+    `,
+  });
+  try {
+    const snapshot = h.session.updateSnapshot({ openProjects: [h.path("tsconfig.json")] });
+    const project = snapshot.getProjects()[0]!;
+    const root = project.program.getSourceFile(h.path("main.ts"))!;
+    const raw = project.checker;
+    const queries = vi.spyOn(raw, "getTypeAtLocation");
+    const facade = new CheckerFacade(raw, { project: raw.project });
+    const cold: AstNode[] = [];
+    const expressions: AstNode[] = [];
+    walkPreorder(root, (node) => {
+      const parent = node.parent;
+      if (node.kind !== SyntaxKind.Identifier || !parent) return;
+      if ((parent.kind === SyntaxKind.PropertyAccessExpression || parent.kind === SyntaxKind.PropertyAssignment || parent.kind === SyntaxKind.PropertySignature) && parent.name === node ||
+          parent.kind === SyntaxKind.TypeReference || parent.kind === SyntaxKind.QualifiedName || parent.kind === SyntaxKind.ImportSpecifier || parent.kind === SyntaxKind.NamespaceImport) cold.push(node);
+      if (parent.kind === SyntaxKind.ComputedPropertyName || parent.kind === SyntaxKind.ShorthandPropertyAssignment ||
+          parent.kind === SyntaxKind.PropertyAccessExpression && parent.expression === node) expressions.push(node);
+    });
+    facade.prefetchSourceFile(root);
+    const prefetched = queries.mock.calls.flatMap(([input]) => Array.isArray(input) ? input : []);
+    expect(cold.length).toBeGreaterThan(8);
+    expect(expressions.length).toBeGreaterThan(2);
+    for (const node of cold) expect(prefetched).not.toContain(node);
+    for (const node of expressions) expect(prefetched).toContain(node);
+    const beforeSymbols = h.rpc.timing().requests;
+    for (const node of cold) facade.getSymbolAtLocation(node);
+    expect(h.rpc.timing().requests).toBe(beforeSymbols);
+    for (const node of cold) {
+      const before = queries.mock.calls.length;
+      const actual = facade.getTypeAtLocation(node);
+      expect(queries.mock.calls.length).toBe(before + 1);
+      expect(facade.getTypeAtLocation(node)).toBe(actual);
+      expect(queries.mock.calls.length).toBe(before + 1);
+      expect(actual).toBe(raw.getTypeAtLocation(node) ?? raw.getAnyType());
+    }
+    // Explicit collection requests remain exact, including cold name roles.
+    const exact = new CheckerFacade(raw, { project: raw.project });
+    const name = cold[0]!;
+    exact.prefetchClassCollection([name], []);
+    const before = queries.mock.calls.length;
+    exact.getTypeAtLocation(name);
+    expect(queries.mock.calls.length).toBe(before);
+  } finally { h.close(); }
+});
+
+test("symbol type batches deduplicate, bound requests and retain absent answers", () => {
+  const chunks: number[][] = [];
+  const snapshot = new SemanticSnapshot(1, {
+    text(method, payload) {
+      if (method === "getAnyType") return JSON.stringify({ id: 9000, flags: TypeFlags.Any });
+      expect(method).toBe("getTypesOfSymbols");
+      const { symbols } = JSON.parse(payload) as { symbols: number[] };
+      chunks.push(symbols);
+      return JSON.stringify(symbols.map((id) => id === 2 ? null : { id, flags: TypeFlags.Number }));
+    },
+    binary() { throw new Error("unexpected binary request"); },
+  });
+  const project = snapshot.addProject("/project.json", () => undefined);
+  const raw = new SemanticChecker(project);
+  const facade = new CheckerFacade(raw);
+  const symbols = Array.from({ length: 2050 }, (_, index) => project.symbol({
+    id: index + 1, name: `field${index}`, flags: 4, checkFlags: 0, project: project.id,
+  }));
+  facade.prefetchSymbolTypes([...symbols, ...symbols]);
+  expect(chunks.map((chunk) => chunk.length)).toEqual([2048, 2]);
+  expect(new Set(chunks.flat()).size).toBe(symbols.length);
+  expect(facade.getTypeOfSymbol(symbols[1]!).flags).toBe(TypeFlags.Any);
+  for (const symbol of symbols) facade.getTypeOfSymbol(symbol);
+  facade.prefetchSymbolTypes(symbols);
+  facade.prefetchSymbolTypes([]);
+  expect(chunks).toHaveLength(2);
+  snapshot.dispose();
+  expect(() => facade.prefetchSymbolTypes(symbols)).toThrow("disposed");
+});
+
+test("a panicking symbol does not discard healthy batched answers or retry a warm miss", () => {
+  const requests: number[][] = [];
+  const snapshot = new SemanticSnapshot(1, {
+    text(method, payload) {
+      if (method === "getAnyType") return JSON.stringify({ id: 9, flags: TypeFlags.Any });
+      expect(method).toBe("getTypesOfSymbols");
+      const { symbols } = JSON.parse(payload) as { symbols: number[] };
+      requests.push(symbols);
+      if (symbols.includes(2)) throw new Error("checker could not resolve this symbol");
+      return JSON.stringify(symbols.map((id) => ({ id, flags: TypeFlags.Number })));
+    },
+    binary() { throw new Error("unexpected binary request"); },
+  });
+  const project = snapshot.addProject("/project.json", () => undefined);
+  const facade = new CheckerFacade(new SemanticChecker(project));
+  const symbols = [1, 2, 3].map((id) => project.symbol({ id, name: `field${id}`, flags: 4, checkFlags: 0, project: project.id }));
+  facade.prefetchSymbolTypes(symbols);
+  expect(requests.length).toBeGreaterThan(1);
+  const warm = requests.length;
+  expect(symbols.map((symbol) => facade.getTypeOfSymbol(symbol).flags)).toEqual([TypeFlags.Number, TypeFlags.Any, TypeFlags.Number]);
+  facade.prefetchSymbolTypes(symbols);
+  expect(requests).toHaveLength(warm);
+  snapshot.dispose();
 });
 
 test("session shutdown invalidates every retained facade without explicit program disposal", () => {
