@@ -3013,7 +3013,7 @@ export class Lowerer {
       });
     }
     for (const info of this.classes.values()) {
-      for (const { mName, member } of this.classMethodMembers(info)) {
+      for (const { mName, member } of this.classMethodMembers(info, true)) {
         if (!member.name || !(ts.isIdentifier(member.name) || ts.isStringLiteral(member.name))) continue;
         const symbol = symbolOf(member.name);
         const sig = info.methods.get(mName);
@@ -3605,21 +3605,30 @@ export class Lowerer {
                 }
                 return;
               }
-              const set = optionalParams.get(symbol) ?? new Set<number>();
-              shape.type = addUndefined(shape.type);
-              const before = set.size;
-              set.add(i);
-              optionalParams.set(symbol, set);
-              if (set.size !== before) {
-                changed = true;
-                const callee = functionDeclBySymbol.get(symbol);
-                const parameter = callee?.parameters[i];
-                if (parameter) {
-                  for (const bound of boundIdentifiersOf(parameter.name)) {
-                    const boundSymbol = symbolOf(bound);
-                    if (boundSymbol && !optionalSymbols.has(boundSymbol)) {
-                      optionalSymbols.add(boundSymbol);
-                      changed = true;
+              // A virtual slot has one argument representation, even when
+              // the unchecked read reaches only a base-typed call site.
+              // Promote every implementation and its parameter bindings so
+              // downstream calls and returns see the same optional value.
+              const family = familyBySymbol.get(symbol);
+              if (family) optionalMethodFamilies.add(family);
+              for (const target of family ?? [symbol]) {
+                const parameterShape = signatureBySymbol.get(target)?.params[i];
+                if (!parameterShape) continue;
+                parameterShape.type = addUndefined(parameterShape.type);
+                const set = optionalParams.get(target) ?? new Set<number>();
+                const before = set.size;
+                set.add(i);
+                optionalParams.set(target, set);
+                if (set.size !== before) {
+                  changed = true;
+                  const parameter = functionDeclBySymbol.get(target)?.parameters[i];
+                  if (parameter) {
+                    for (const bound of boundIdentifiersOf(parameter.name)) {
+                      const boundSymbol = symbolOf(bound);
+                      if (boundSymbol && !optionalSymbols.has(boundSymbol)) {
+                        optionalSymbols.add(boundSymbol);
+                        changed = true;
+                      }
                     }
                   }
                 }
@@ -9025,10 +9034,12 @@ export class Lowerer {
     return lowerStaticFieldInits(this, info);
   }
 
-  /** The method-like members (methods and accessors) of a class that have
-   * lowerable bodies, with their collected method-map names. */
+  /** Method-like members with their collected method-map names. Body
+   * lowering omits abstract declarations; ABI analysis must include them
+   * because an abstract-typed call selects the same virtual slot. */
   *classMethodMembers(
     info: ClassInfo,
+    includeAbstract = false,
   ): Generator<{ mName: string; member: ts.MethodDeclaration | ts.AccessorDeclaration }> {
     if (!info.decl) return; // builtin error classes: runtime-provided bodies
     for (const member of info.decl.members) {
@@ -9050,7 +9061,8 @@ export class Lowerer {
       const baseName = classMemberNameOf(this, fnLike.name);
       if (baseName === null) continue;
       const mName = ts.isMethodDeclaration(fnLike) ? baseName : `${ts.isGetAccessor(fnLike) ? "get" : "set"}:${baseName}`;
-      if (!info.methods.get(mName) || !fnLike.body) continue;
+      const signature = info.methods.get(mName);
+      if (!signature || (!fnLike.body && !(includeAbstract && signature.abstract))) continue;
       yield { mName, member: fnLike };
     }
   }

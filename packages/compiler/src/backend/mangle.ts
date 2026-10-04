@@ -29,6 +29,11 @@ export function mangleFunction(name: string): string {
   return `sc_f_${sanitize(name)}`;
 }
 
+/** Synchronous body whose proven parameters borrow from the caller. */
+export function mangleBorrowedFunction(name: string): string {
+  return `sc_bf_${sanitize(name)}`;
+}
+
 export function mangleLocal(localId: string): string {
   return `sc_l_${sanitize(localId)}`;
 }

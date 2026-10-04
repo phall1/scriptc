@@ -45,7 +45,9 @@ import { findConstantNumericTables, type ConstantNumericTable } from "../../ir/c
 import { allocateFfiCallbackAdapters, hasForeignFfiCallback, hasRetainedFfiCallback, type FfiCallbackAdapter } from "../ffi-callbacks.js";
 import { RUNTIME_ABI_MARKER } from "../runtime-abi.js";
 import { computeMayThrow } from "../may-throw.js";
-import { mangleArgPack, mangleAsyncSpawn, mangleClassObj, mangleClassStruct, mangleFnClosure, mangleFunction, mangleGenDrop, mangleGenSpawn, mangleGlobal, mangleLocal, mangleRecordStruct, mangleTrampoline, mangleWrapper, mangleVtInstance } from "../mangle.js";
+import { mangleArgPack, mangleAsyncSpawn, mangleBorrowedFunction, mangleClassObj, mangleClassStruct, mangleFnClosure, mangleFunction, mangleGenDrop, mangleGenSpawn, mangleGlobal, mangleLocal, mangleRecordStruct, mangleTrampoline, mangleWrapper, mangleVtInstance } from "../mangle.js";
+import { analyzeCallLifetimes, type CallLifetimes } from "./call-lifetimes.js";
+import { emitStackUnion, findLocalStackUnions } from "./stack-unions.js";
 import { BlockBuilder } from "./blocks.js";
 import { emitLocalArrayRead, findArrayPreservingFunctions, findLocalArrayReads, type LocalArrayRead } from "./local-array-reads.js";
 import { emitBorrowedFieldSequence } from "./borrowed-receivers.js";
@@ -177,6 +179,7 @@ function llStrBytes(text: string): string {
 
 export class LlEmitter {
   localArrayReads = new Map<string, LocalArrayRead>();
+  private localStackUnions = new Map<string, IrExpr & { kind: "unionWrap" }>();
   integerArrayBindings = new Set<string>();
   private readonly fieldAliasTags = new Map<string, number>();
   private readonly fieldPointerTags = new Map<string, number>();
@@ -262,6 +265,8 @@ export class LlEmitter {
 
   readonly fnByName = new Map<string, IrFunction>();
   private readonly arrayPreservingFunctions: ReadonlySet<string>;
+  readonly callLifetimes: CallLifetimes;
+  private borrowedParameters = new Set<string>();
   /** Manifest-bound native imports, used by ffiCall emission. */
   readonly ffiByName = new Map<string, IrFfiImport>();
   /** C-ABI callback trampolines and (for raw/no-userdata callbacks) their
@@ -429,6 +434,7 @@ export class LlEmitter {
     }
     for (const u of mod.unions ?? []) this.unionsById.set(u.id, u);
     this.arrayPreservingFunctions = findArrayPreservingFunctions(this.fnByName, this.unionsById);
+    this.callLifetimes = analyzeCallLifetimes(this.fnByName);
     for (const r of mod.records ?? []) this.recordsById.set(r.id, r);
     const traced = computeTraced(mod);
     this.tracedShapes = traced.shapes;
@@ -3305,11 +3311,17 @@ export class LlEmitter {
     this.unwindCleanups.clear();
     this.jumpTargets = [];
     this.currentLocals = new Map(fn.locals.map((l) => [l.id, l]));
+    this.borrowedParameters.clear();
+    const borrowedParameterIndexes = this.callLifetimes.parameters.get(fn.name);
+    if (borrowedParameterIndexes) {
+      for (const index of borrowedParameterIndexes) this.borrowedParameters.add(fn.params[index]!.localId);
+    }
     this.captureIds = new Set([...(fn.captures ?? []), ...(fn.classCaptures ?? [])].map((c) => c.localId));
     this.integerLoopBindings.clear();
     this.fieldPointerTags.clear();
     this.integerArrayBindings.clear();
-    this.localArrayReads = findLocalArrayReads(fn, this.fnByName, this.unionsById, this.arrayPreservingFunctions);
+    this.localArrayReads = findLocalArrayReads(fn, this.fnByName, this.unionsById, this.arrayPreservingFunctions, this.callLifetimes);
+    this.localStackUnions = findLocalStackUnions(fn, this.callLifetimes, this.unionsById);
     this.integerRanges = analyzeIntegerRanges(fn);
     this.chainSlots.clear();
     this.finallyStack = [];
@@ -3402,7 +3414,8 @@ export class LlEmitter {
     // params (callees own their params — callers passed +1). Boxed params
     // allocate the shared binding and move the raw value in.
     const fnScope: LlScopeEntry[] = [];
-    for (const p of fn.params) {
+    const borrowed = this.callLifetimes.parameters.get(fn.name);
+    for (const [index, p] of fn.params.entries()) {
       const local = this.currentLocals.get(p.localId)!;
       const slot = `%${mangleLocal(p.localId)}`;
       if (local.boxed) {
@@ -3414,7 +3427,7 @@ export class LlEmitter {
         continue;
       }
       B.line(`store ${this.llType(p.type)} %p_${mangleLocal(p.localId)}, ptr ${slot}`);
-      if (isRefCounted(p.type)) fnScope.push({ slot, type: p.type });
+      if (isRefCounted(p.type) && !borrowed?.has(index)) fnScope.push({ slot, type: p.type });
     }
     this.scopes.push(fnScope);
     // Stackful native fibers retain these frames while suspended. The
@@ -3493,7 +3506,36 @@ export class LlEmitter {
     const ret = this.llType(fn.returnType);
     const attrs = coro !== null ? "#1" : FN_ATTRS;
     const debug = this.debugScope === null ? "" : ` !dbg ${this.debugScope}`;
-    return `define internal ${ret} @${mangleFunction(fn.name)}(${params.join(", ")}) ${attrs}${debug} { ; ${fn.name}\n${B.render()}\n}`;
+    const symbol = borrowed ? mangleBorrowedFunction(fn.name) : mangleFunction(fn.name);
+    const body = `define internal ${ret} @${symbol}(${params.join(", ")}) ${attrs}${debug} { ; ${fn.name}\n${B.render()}\n}`;
+    return borrowed ? body + "\n" + this.emitOwnedCallAdapter(fn, borrowed) : body;
+  }
+
+  /** Keep the ordinary owned ABI for closures, virtual dispatch, generated
+   * runtime adapters and library exports. Only direct IR calls select the
+   * borrowing body. Ownership of other parameters moves into that body;
+   * borrowed parameters are released here on normal and exceptional exits.
+   * The pending exception remains for the adapter's caller to handle. */
+  private emitOwnedCallAdapter(fn: IrFunction, borrowed: ReadonlySet<number>): string {
+    const B = new BlockBuilder();
+    this.B = B;
+    const params = fn.params.map((param, index) => `${this.llType(param.type)} %p${index}`);
+    const ret = this.llType(fn.returnType);
+    const call = `call ${ret} @${mangleBorrowedFunction(fn.name)}(${params.join(", ")})`;
+    B.line(ret === "void" ? call : `%result = ${call}`);
+    for (const index of borrowed) this.releaseValue(`%p${index}`, fn.params[index]!.type);
+    B.terminate(ret === "void" ? "ret void" : `ret ${ret} %result`);
+    return `define internal ${ret} @${mangleFunction(fn.name)}(${params.join(", ")}) ${FN_ATTRS} {\n${B.render()}\n}`;
+  }
+
+  /** A local immutable binding keeps its value alive while later arguments
+   * and the callee execute. Global, captured, TDZ and mutable bindings need
+   * an owned snapshot, even when the callee only inspects the value. */
+  canBorrowCallArgument(value: IrExpr): boolean {
+    if (value.kind !== "varRef") return false;
+    const binding = this.binding(value.localId);
+    return binding.kind === "local" && binding.local !== undefined &&
+      (!binding.local.mutable || this.borrowedParameters.has(value.localId)) && !binding.local.boxed && !binding.local.tdz;
   }
 
   // ── statements ──────────────────────────────────────────────────────────
@@ -3539,6 +3581,16 @@ export class LlEmitter {
     switch (s.kind) {
       case "varDecl": {
         const b = this.binding(s.localId);
+        const localUnion = this.localStackUnions.get(s.localId);
+        if (localUnion) {
+          const union = emitStackUnion(this, localUnion);
+          B.line(`store ptr ${union.value.name}, ptr ${b.slot}`);
+          if (union.payload) {
+            this.moveTemp(union.payload);
+            this.scopes[this.scopes.length - 1]!.push({ slot: union.payloadSlot, type: union.payload.type });
+          }
+          break;
+        }
         const localRead = this.localArrayReads.get(s.localId);
         if (localRead) {
           const owner = emitLocalArrayRead(this, localRead, b.slot);

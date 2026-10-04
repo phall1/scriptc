@@ -94,7 +94,7 @@ function work(expr: IrExpr, parameter: IrType, boxed = false): string {
     ],
   };
   const llvm = emitLlvmModule(module);
-  const body = /^define internal [^\n]*@sc_f_work\([^]*?^}/m.exec(llvm)?.[0];
+  const body = /^define internal [^\n]*@sc_(?:b)?f_work\([^]*?^}/m.exec(llvm)?.[0];
   expect(body).toBeDefined();
   return body!;
 }

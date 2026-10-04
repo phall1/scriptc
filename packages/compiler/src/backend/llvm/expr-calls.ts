@@ -3,11 +3,12 @@ import { InternalCompilerError } from "../../errors.js";
 import { newValueMayThrow } from "../../ir/analysis.js";
 import { isFfiCallbackParam, isFfiContextParam, isFfiReleaseParam, isRefCounted } from "../../ir/ir.js";
 import { collectFfiRetainedOps, parseFfiCallbackKey } from "../ffi-callbacks.js";
-import { mangleClassNew, mangleClassRetain, mangleClassStruct, mangleFnClosure, mangleFunction, mangleLocal, mangleVtStruct } from "../mangle.js";
+import { mangleBorrowedFunction, mangleClassNew, mangleClassRetain, mangleClassStruct, mangleFnClosure, mangleFunction, mangleLocal, mangleVtStruct } from "../mangle.js";
 import { classEnvironmentIndex, classStructSym } from "./classes.js";
 import { LlvmUnsupportedError } from "./unsupported.js";
 import type { LlvmEmitterContext, ExprOf, LlValue } from "./expr-context.js";
 import { f64Lit, ffiNativeTypeLl, ffiNativeParamLl, ffiNativeReturnLl } from "./common.js";
+import { canStackUnion, emitStackUnion } from "./stack-unions.js";
 
 export function emitCallExpr(host: LlvmEmitterContext, e: ExprOf<"call" | "ffiCall" | "closure" | "callValue" | "selfRef" | "new" | "classRef" | "newValue" | "instanceOfValue" | "promiseVoidWiden" | "upcast" | "downcast" | "instanceOf" | "virtualCall">): LlValue {
     const B = host.B;
@@ -16,8 +17,22 @@ export function emitCallExpr(host: LlvmEmitterContext, e: ExprOf<"call" | "ffiCa
         const callee = host.fnByName.get(e.callee);
         if (!callee) throw new InternalCompilerError(`llvm emitter bug: unknown callee ${e.callee}`);
         if (callee.captures !== undefined) throw new InternalCompilerError(`llvm emitter bug: direct call to lifted function ${e.callee}`);
-        const args = e.args.map((a) => host.emitExpr(a));
-        for (const a of args) host.moveTemp(a); // callees own their params
+        const borrowed = host.callLifetimes.parameters.get(e.callee);
+        // Borrowed snapshots live through this call, not through the whole
+        // enclosing expression. Otherwise a large initializer accumulates
+        // owners and repeats their cleanup at every later throwing call.
+        if (borrowed) host.frames.push([]);
+        const args = e.args.map((a, index) => {
+          if (borrowed?.has(index)) {
+            if (host.canBorrowCallArgument(a)) return host.emitReadReceiver(a);
+            if (canStackUnion(a, host.unionsById)) return emitStackUnion(host, a).value;
+          }
+          return host.emitExpr(a);
+        });
+        // A borrowed parameter's owned argument stays in the caller frame.
+        // This also preserves snapshots when a later argument mutates its
+        // source, and releases earlier arguments if evaluation throws.
+        args.forEach((a, index) => { if (!borrowed?.has(index)) host.moveTemp(a); });
         const argList = args
           .map((a, i) => `${host.llType(callee.params[i]!.type)} ${a.name}`)
           .join(", ");
@@ -25,16 +40,22 @@ export function emitCallExpr(host: LlvmEmitterContext, e: ExprOf<"call" | "ffiCa
         // first suspension and returns the promise (+1). The call itself
         // never unwinds — rejections surface at await (computeMayThrow's
         // async exclusion).
-        const target = `@${host.callTarget(e.callee)}`;
+        const target = `@${borrowed ? mangleBorrowedFunction(e.callee) : host.callTarget(e.callee)}`;
         if (e.type.kind === "void") {
           B.line(`call void ${target}(${argList})`);
           if (host.mayThrow.has(e.callee)) host.emitPendingCheck();
+          if (borrowed) host.releaseFrame(host.frames.pop()!);
           return { name: "", type: e.type };
         }
         const t = B.tmp();
         B.line(`${t} = call ${host.llType(e.type)} ${target}(${argList})`);
         const out = host.own({ name: t, type: e.type });
         if (host.mayThrow.has(e.callee)) host.emitPendingCheck();
+        if (borrowed) {
+          host.moveTemp(out);
+          host.releaseFrame(host.frames.pop()!);
+          return host.own(out);
+        }
         return out;
       }
       case "ffiCall": {

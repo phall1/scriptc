@@ -171,3 +171,86 @@ test("iteratively propagates an unsafe leaf through a long call chain", () => {
   functions.set("f10000", scalarHelper("f10000"));
   expect(findArrayPreservingFunctions(functions, new Map()).size).toBe(10001);
 });
+
+function projectionHelper(name: string, callee?: string): IrFunction {
+  return {
+    name, params: [{ localId: "value", name: "value", type: optional }], returnType: F64, loc,
+    locals: [{ id: "value", name: "value", type: optional, mutable: true }],
+    body: [{ kind: "return", loc, value: callee
+      ? { kind: "call", callee, args: [unionValue], type: F64, loc }
+      : { kind: "recordGet", obj: narrow, shapeId: "cell", field: "x", type: F64, loc } }],
+  };
+}
+
+function passOptional(mod: IrModule, callee: string): void {
+  mod.functions[2]!.body[1] = { kind: "return", loc,
+    value: { kind: "call", callee, args: [unionValue], type: F64, loc } };
+}
+
+test("keeps optional array boxes local across transitive projection helpers", () => {
+  const mod = fixture();
+  mod.functions.push(projectionHelper("outer", "inner"), projectionHelper("inner"));
+  passOptional(mod, "outer");
+  expect(validateModule(mod)).toEqual([]);
+  expect(candidates(mod).get("value")?.borrow).toBe(true);
+  for (const width of [32, 64] as const) {
+    const body = workBody(mod, width);
+    expect(body).toContain("alloca %ScrUnion");
+    expect(body).toContain("@sc_bf_outer");
+    expect(body).not.toContain("@sc_f_read(");
+    expect(body).not.toMatch(/@scr_union_(?:new|retain|release)/);
+    expect(body).not.toContain("@sc_rretain_");
+    expect(body).not.toContain("@sc_rrelease_");
+  }
+});
+
+test("a mutating helper preserves the local box but requires its payload owner", () => {
+  const mod = fixture();
+  const helper = projectionHelper("helper");
+  helper.params.push({ localId: "items", name: "items", type: array });
+  helper.locals.push({ id: "items", name: "items", type: array, mutable: false });
+  helper.body.unshift({ kind: "arraySetLength", arr: ref("items", array), length: num(0), loc });
+  mod.functions.push(helper);
+  mod.functions[2]!.body[1] = { kind: "return", loc,
+    value: { kind: "call", callee: "helper", args: [unionValue, ref("a", array)], type: F64, loc } };
+  expect(validateModule(mod)).toEqual([]);
+  expect(candidates(mod).get("value")?.borrow).not.toBe(true);
+  const body = workBody(mod);
+  expect(body).toContain("alloca %ScrUnion");
+  expect(body).toContain("@sc_rretain_");
+  expect(body).toContain("@sc_rrelease_");
+  expect(body).not.toContain("@scr_union_release");
+});
+
+test("an escaping leaf restores heap boxes throughout a recursive forwarding group", () => {
+  const mod = fixture();
+  const outer = projectionHelper("outer", "inner"), inner = projectionHelper("inner", "outer");
+  mod.functions.push(outer, inner);
+  passOptional(mod, "outer");
+  expect(candidates(mod).has("value")).toBe(true);
+  inner.locals.push({ id: "alias", name: "alias", type: optional, mutable: false });
+  inner.body.unshift({ kind: "varDecl", localId: "alias", init: unionValue, loc });
+  expect(validateModule(mod)).toEqual([]);
+  expect(candidates(mod).has("value")).toBe(false);
+  const body = workBody(mod);
+  expect(body).toContain("@sc_f_read(");
+  expect(body).toContain("@scr_union_release");
+});
+
+test("a later mutating argument snapshots the payload before entering the helper", () => {
+  const mod = fixture();
+  const helper = projectionHelper("helper");
+  helper.params.push({ localId: "count", name: "count", type: F64 });
+  helper.locals.push({ id: "count", name: "count", type: F64, mutable: true });
+  mod.functions.push(helper);
+  const later: IrExpr = { kind: "seqExpr", loc, type: F64,
+    stmts: [{ kind: "arraySetLength", arr: ref("a", array), length: num(0), loc }], result: num(1) };
+  mod.functions[2]!.body[1] = { kind: "return", loc,
+    value: { kind: "call", callee: "helper", args: [unionValue, later], type: F64, loc } };
+  expect(validateModule(mod)).toEqual([]);
+  expect(candidates(mod).get("value")?.borrow).not.toBe(true);
+  const body = workBody(mod);
+  expect(body).not.toContain("@scr_union_retain");
+  expect(body.indexOf("@sc_rretain_")).toBeLessThan(body.indexOf("@scr_arr_set_len"));
+  expect(body.indexOf("@scr_arr_set_len")).toBeLessThan(body.indexOf("@sc_bf_helper"));
+});

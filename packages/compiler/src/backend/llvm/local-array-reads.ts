@@ -1,5 +1,6 @@
-import { isRefCounted, typeEquals, type IrExpr, type IrFunction, type IrStmt, type IrType, type IrUnionDef } from "../../ir/ir.js";
-import { everyExprChild, everyStmtChild, everyStmtList } from "../../ir/traverse.js";
+import { isRefCounted, typeEquals, type IrExpr, type IrFunction, type IrType, type IrUnionDef } from "../../ir/ir.js";
+import { everyStmtList } from "../../ir/traverse.js";
+import { analyzeCallLifetimes, type CallLifetimes } from "./call-lifetimes.js";
 import type { LlvmEmitterContext } from "./expr-context.js";
 import { isStableReceiverOperand } from "../../ir/analysis.js";
 
@@ -100,30 +101,7 @@ function optionalArrayRead(call: IrExpr, functions: ReadonlyMap<string, IrFuncti
   return { array: call.args[0]!, index: call.args[1]!, element, presentTag, missingTag };
 }
 
-/** Only the box must stay local: a narrowed payload may escape normally.
- * Captures, aliases, reassignment and all other union consumers keep the
- * heap representation. Unknown future IR nodes cannot opt in implicitly. */
-function projectionOnly(fn: IrFunction, id: string): boolean {
-  let declarations = 0;
-  function expr(node: IrExpr): boolean {
-    if ((node.kind === "unionNarrow" || node.kind === "unionIsTag") && node.value.kind === "varRef" && node.value.localId === id) return true;
-    switch (node.kind) {
-      case "varRef": case "assignExpr": case "incDec": if (node.localId === id) return false; break;
-      case "closure": case "classRef": if (node.captures?.includes(id)) return false; break;
-    }
-    return everyExprChild(node, expr, stmt);
-  }
-  function stmt(node: IrStmt): boolean {
-    switch (node.kind) {
-      case "varDecl": if (node.localId === id && ++declarations !== 1) return false; break;
-      case "assign": case "forOf": case "rethrow": if (node.localId === id) return false; break;
-    }
-    return everyStmtChild(node, expr, stmt);
-  }
-  return fn.body.every(stmt) && declarations === 1;
-}
-
-export function findLocalArrayReads(fn: IrFunction, functions: ReadonlyMap<string, IrFunction>, unions: ReadonlyMap<string, IrUnionDef>, arrayPreservingFunctions: ReadonlySet<string>): Map<string, LocalArrayRead> {
+export function findLocalArrayReads(fn: IrFunction, functions: ReadonlyMap<string, IrFunction>, unions: ReadonlyMap<string, IrUnionDef>, arrayPreservingFunctions: ReadonlySet<string>, lifetimes: CallLifetimes = analyzeCallLifetimes(functions)): Map<string, LocalArrayRead> {
   const result = new Map<string, LocalArrayRead>();
   if (fn.async || fn.generator) return result;
   const locals = new Map(fn.locals.map((l) => [l.id, l]));
@@ -135,7 +113,7 @@ export function findLocalArrayReads(fn: IrFunction, functions: ReadonlyMap<strin
     const local = locals.get(node.localId);
     if (!local || local.mutable || local.boxed || local.tdz || captures.has(local.id) || params.has(local.id)) return true;
     const read = optionalArrayRead(node.init, functions, unions);
-    if (read && projectionOnly(fn, local.id)) {
+    if (read && lifetimes.locals.get(fn.name)?.has(local.id)) {
       if (borrow && read.array.kind === "varRef" && params.has(read.array.localId) && !locals.get(read.array.localId)?.boxed) read.borrow = true;
       result.set(local.id, read);
     }

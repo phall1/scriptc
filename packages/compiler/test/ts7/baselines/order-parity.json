@@ -13985,6 +13985,42 @@
     "<repo>/tests/corpus/array-read-helper-effects.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/call-lifetimes-argument-order.ts": {
+   "order": [
+    "<repo>/tests/corpus/call-lifetimes-argument-order.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/call-lifetimes-control-flow.ts": {
+   "order": [
+    "<repo>/tests/corpus/call-lifetimes-control-flow.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/call-lifetimes-owned-boundaries.ts": {
+   "order": [
+    "<repo>/tests/corpus/call-lifetimes-owned-boundaries.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/call-lifetimes-projections.ts": {
+   "order": [
+    "<repo>/tests/corpus/call-lifetimes-projections.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/call-lifetimes-union-values.ts": {
+   "order": [
+    "<repo>/tests/corpus/call-lifetimes-union-values.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/call-lifetimes-virtual-optionals.ts": {
+   "order": [
+    "<repo>/tests/corpus/call-lifetimes-virtual-optionals.ts"
+   ],
+   "diags": []
   }
  }
 }

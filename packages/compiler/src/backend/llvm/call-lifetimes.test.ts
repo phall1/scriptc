@@ -1,0 +1,213 @@
+import { expect, test } from "vitest";
+import { BOOL, F64, UNDEFINED_T, funcOf, type IrExpr, type IrFunction, type IrLocal, type IrStmt, type IrType } from "../../ir/ir.js";
+import { analyzeCallLifetimes } from "./call-lifetimes.js";
+
+const loc = { file: "lifetimes.ts", start: 0, end: 0 };
+const record: IrType = { kind: "record", shapeId: "cell" };
+const optional: IrType = { kind: "union", unionId: "optional" };
+const ref = (localId: string, type: IrType = optional): IrExpr => ({ kind: "varRef", localId, type, loc });
+const num = (value = 1): IrExpr => ({ kind: "numLit", value, type: F64, loc });
+const ret = (value: IrExpr): IrStmt => ({ kind: "return", value, loc });
+const local = (id: string, type: IrType = optional): IrLocal => ({ id, name: id, type, mutable: false });
+const tag = (id: string): IrExpr => ({ kind: "unionIsTag", value: ref(id), unionId: "optional", tag: 0, negated: false, type: BOOL, loc });
+const narrow = (id: string): IrExpr => ({ kind: "unionNarrow", value: ref(id), unionId: "optional", tag: 0, type: record, loc });
+const call = (callee: string, args: IrExpr[]): IrExpr => ({ kind: "call", callee, args, type: F64, loc });
+
+function helper(name: string, ids = ["value"]): IrFunction {
+  return {
+    name, loc, returnType: F64,
+    params: ids.map((id) => ({ localId: id, name: id, type: optional })),
+    locals: ids.map((id) => local(id)),
+    body: ids.map((id) => ({ kind: "exprStmt", expr: tag(id), loc })),
+  };
+}
+
+function analyze(...functions: IrFunction[]) {
+  return analyzeCallLifetimes(new Map(functions.map((fn) => [fn.name, fn])));
+}
+
+test("tracks the lifetime of the box separately from an escaping payload", () => {
+  const fn = helper("extract");
+  fn.returnType = record;
+  fn.body = [ret(narrow("value"))];
+  expect(analyze(fn).parameters.get(fn.name)).toEqual(new Set([0]));
+  fn.returnType = optional;
+  fn.body = [ret(ref("value"))];
+  expect(analyze(fn).parameters.has(fn.name)).toBe(false);
+});
+
+test("class and record field reads borrow their root", () => {
+  const cls: IrType = { kind: "object", className: "Cell" };
+  const fn = helper("read", ["left", "right"]);
+  fn.params[0]!.type = fn.locals[0]!.type = record;
+  fn.params[1]!.type = fn.locals[1]!.type = cls;
+  fn.body = [ret({ kind: "bin", op: "+", type: F64, loc,
+    left: { kind: "recordGet", obj: ref("left", record), shapeId: "cell", field: "x", type: F64, loc },
+    right: { kind: "fieldGet", obj: ref("right", cls), className: "Cell", field: "x", type: F64, loc },
+  })];
+  expect(analyze(fn).parameters.get(fn.name)).toEqual(new Set([0, 1]));
+});
+
+test("keeps independent parameter facts through argument permutations", () => {
+  const leaf = helper("leaf", ["kept", "escaped"]);
+  leaf.body.push(ret(ref("escaped")));
+  const middle = helper("middle", ["first", "second"]);
+  middle.body = [ret(call("leaf", [ref("second"), ref("first")]))];
+  const outer = helper("outer", ["a", "b"]);
+  outer.body = [ret(call("middle", [ref("b"), ref("a")]))];
+  const result = analyze(outer, middle, leaf);
+  expect(result.parameters.get("leaf")).toEqual(new Set([0]));
+  expect(result.parameters.get("middle")).toEqual(new Set([1]));
+  expect(result.parameters.get("outer")).toEqual(new Set([0]));
+});
+
+test("joins every use of a parameter, including repeated call arguments", () => {
+  const leaf = helper("leaf", ["a", "b"]);
+  leaf.body.push(ret(ref("b")));
+  const outer = helper("outer");
+  outer.body = [ret(call("leaf", [ref("value"), ref("value")]))];
+  expect(analyze(outer, leaf).parameters.has("outer")).toBe(false);
+});
+
+test("solves safe recursive groups and propagates a single escape around a cycle", () => {
+  const left = helper("left"), right = helper("right");
+  left.body.push(ret(call("right", [ref("value")])));
+  right.body.push(ret(call("left", [ref("value")])));
+  expect(analyze(left, right).parameters.size).toBe(2);
+  right.body.push(ret(ref("value")));
+  expect(analyze(left, right).parameters.size).toBe(0);
+});
+
+test("does not confuse the same local id in unrelated functions", () => {
+  const safe = helper("safe"), unsafe = helper("unsafe");
+  unsafe.body.push(ret(ref("value")));
+  expect(analyze(safe, unsafe).parameters.get("safe")).toEqual(new Set([0]));
+  expect(analyze(safe, unsafe).parameters.has("unsafe")).toBe(false);
+});
+
+test.each(["absent", "missing parameter", "async", "generator", "capture", "class capture"])("refuses forwarding to a %s target", (reason) => {
+  const outer = helper("outer"), leaf = helper("leaf");
+  outer.body = [ret(call("leaf", [ref("value")]))];
+  if (reason === "missing parameter") leaf.params = [];
+  if (reason === "async") leaf.async = true;
+  if (reason === "generator") leaf.generator = { yieldT: F64, nextT: F64, resultType: { kind: "record", shapeId: "result" } };
+  if (reason === "capture") leaf.captures = [];
+  if (reason === "class capture") leaf.classCaptures = [];
+  const result = reason === "absent" ? analyze(outer) : analyze(outer, leaf);
+  expect(result.parameters.has("outer")).toBe(false);
+});
+
+test.each(["boxed", "tdz", "redeclared", "assign", "assign expression", "increment"])("rejects a %s binding even when reads are projections", (reason) => {
+  const fn = helper("read");
+  if (reason === "boxed") fn.locals[0]!.boxed = true;
+  if (reason === "tdz") fn.locals[0]!.tdz = true;
+  if (reason === "redeclared") fn.body.push({ kind: "varDecl", localId: "value", init: null, loc });
+  if (reason === "assign") fn.body.push({ kind: "assign", localId: "value", value: ref("value"), loc });
+  if (reason === "assign expression") fn.body.push(ret({ kind: "assignExpr", localId: "value", value: ref("value"), type: optional, loc }));
+  if (reason === "increment") fn.body.push(ret({ kind: "incDec", localId: "value", op: "+", prefix: true, type: F64, loc }));
+  expect(analyze(fn).parameters.size).toBe(0);
+});
+
+test("proves unassigned source parameters despite their writable declaration", () => {
+  const fn = helper("read");
+  fn.locals[0]!.mutable = true;
+  expect(analyze(fn).parameters.get("read")).toEqual(new Set([0]));
+  fn.body.push({ kind: "assign", localId: "value", value: ref("value"), loc });
+  expect(analyze(fn).parameters.size).toBe(0);
+});
+
+test("rejects metadata captures that are not expression children", () => {
+  for (const kind of ["closure", "classRef"] as const) {
+    const fn = helper("read");
+    const expr: IrExpr = kind === "closure"
+      ? { kind, fnName: "captured", captures: ["value"], type: funcOf([], F64), loc }
+      : { kind, className: "Captured", captures: ["value"], type: { kind: "classval", className: "Captured" }, loc };
+    fn.body.push({ kind: "exprStmt", expr, loc });
+    expect(analyze(fn).parameters.size).toBe(0);
+  }
+});
+
+test("unknown indirect and runtime consumers cannot receive stack boxes", () => {
+  const consumers: IrExpr[] = [
+    { kind: "callValue", callee: ref("cb", funcOf([optional], F64)), args: [ref("value")], type: F64, loc },
+    { kind: "unionWrap", value: ref("value"), unionId: "nested", tag: 0, type: optional, loc },
+    { kind: "recordLit", fields: [{ name: "value", value: ref("value") }], type: { kind: "record", shapeId: "holder" }, loc },
+  ];
+  for (const expr of consumers) {
+    const fn = helper("read");
+    fn.body.push(ret(expr));
+    expect(analyze(fn).parameters.size).toBe(0);
+  }
+});
+
+test("a local alias is an owned use, while scalar control flow does not escape", () => {
+  const fn = helper("read");
+  fn.body = [{ kind: "if", cond: tag("value"), then: [ret(num())], else_: [ret(num(2))], loc }];
+  expect(analyze(fn).parameters.size).toBe(1);
+  fn.locals.push(local("alias"));
+  fn.body.unshift({ kind: "varDecl", localId: "alias", init: ref("value"), loc });
+  expect(analyze(fn).parameters.size).toBe(0);
+});
+
+test("records safe local consumers without accepting duplicate or absent declarations", () => {
+  const fn = helper("work", []), leaf = helper("leaf");
+  fn.locals.push(local("item"));
+  const init: IrExpr = { kind: "unionWrap", unionId: "optional", tag: 1,
+    value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc }, type: optional, loc };
+  const declaration: IrStmt = { kind: "varDecl", localId: "item", init, loc };
+  fn.body = [declaration, ret(call("leaf", [ref("item")]))];
+  expect(analyze(fn, leaf).locals.get("work")).toEqual(new Set(["item"]));
+  fn.body.push(declaration);
+  expect(analyze(fn, leaf).locals.get("work")?.size).toBe(0);
+  fn.body = [ret(call("leaf", [ref("item")]))];
+  expect(analyze(fn, leaf).locals.get("work")?.size).toBe(0);
+});
+
+test("visits nested argument effects even when the outer helper is safe", () => {
+  const fn = helper("work"), leaf = helper("leaf");
+  const nested: IrExpr = { kind: "seqExpr", stmts: [ret(ref("value"))], result: num(), type: F64, loc };
+  fn.body.push(ret(call("leaf", [nested])));
+  expect(analyze(fn, leaf).parameters.has("work")).toBe(false);
+});
+
+test("unused parameters are borrowed but scalar values never change ABI", () => {
+  const fn = helper("unused", ["value", "count"]);
+  fn.params[1]!.type = fn.locals[1]!.type = F64;
+  fn.body = [ret(num())];
+  expect(analyze(fn).parameters.get(fn.name)).toEqual(new Set([0]));
+});
+
+test("a late unsafe leaf invalidates a deep chain without recursive graph traversal", () => {
+  const functions: IrFunction[] = [];
+  for (let i = 0; i < 12000; i++) {
+    const fn = helper(`f${i}`);
+    fn.body = [ret(call(`f${i + 1}`, [ref("value")]))];
+    functions.push(fn);
+  }
+  const leaf = helper("f12000");
+  expect(analyze(...functions, leaf).parameters.size).toBe(12001);
+  leaf.body.push(ret(ref("value")));
+  expect(analyze(...functions, leaf).parameters.size).toBe(0);
+});
+
+test("joins a wide graph without tying safe siblings to escaping parameters", () => {
+  const leaf = helper("leaf", ["safe", "escaped"]);
+  leaf.body.push(ret(ref("escaped")));
+  const callers = Array.from({ length: 1000 }, (_, i) => {
+    const fn = helper(`caller${i}`, ["a", "b"]);
+    fn.body = [ret(call("leaf", [ref("a"), ref("b")]))];
+    return fn;
+  });
+  const result = analyze(leaf, ...callers);
+  for (const fn of callers) expect(result.parameters.get(fn.name)).toEqual(new Set([0]));
+});
+
+test("analysis does not mutate IR or carry stale facts across emissions", () => {
+  const fn = helper("work");
+  const before = JSON.stringify(fn);
+  const first = analyze(fn);
+  expect(JSON.stringify(fn)).toBe(before);
+  fn.body.push(ret(ref("value")));
+  expect(analyze(fn).parameters.size).toBe(0);
+  expect(first.parameters.get("work")).toEqual(new Set([0]));
+});
