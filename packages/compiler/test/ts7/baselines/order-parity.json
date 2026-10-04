@@ -13775,6 +13775,24 @@
     "<repo>/tests/fixtures/npm/cases/node24-url-mutation/main.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/node24-url-authority.ts": {
+   "order": [
+    "<repo>/tests/corpus/node24-url-authority.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/node24-url-authority-coercion.js": {
+   "order": [
+    "<repo>/tests/corpus/node24-url-authority-coercion.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/fixtures/npm/cases/node24-url-authority/main.ts": {
+   "order": [
+    "<repo>/tests/fixtures/npm/cases/node24-url-authority/main.ts"
+   ],
+   "diags": []
   }
  }
 }

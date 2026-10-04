@@ -3253,6 +3253,7 @@ ScrStr *scr_url_port(ScrUrl *u);     /* +1 "" or normalized non-default port */
 ScrStr *scr_url_pathname(ScrUrl *u); /* +1 */
 ScrStr *scr_url_href(ScrUrl *u);     /* +1; also toString() */
 void scr_url_set(ScrUrl *u, ScrStr *field, ScrStr *value); /* borrowed; href may throw */
+bool scr_url_set_component(ScrUrl *u, ScrStr *field, ScrStr *value); /* borrowed; false for ignored writes */
 void scr_url_set_checked(ScrUrl *u, ScrStr *field, const ScrDyn *value); /* borrowed; conversion may throw */
 ScrStr *scr_url_to_path(ScrUrl *u);      /* +1, or throws */
 ScrStr *scr_url_str_to_path(ScrStr *s);  /* +1, or throws */

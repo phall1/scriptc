@@ -72,8 +72,13 @@ export function lowerUrlAssignment(lowerer: Lowerer, expr: ts.BinaryExpression):
   const receiver = native ? lowerer.lowerExpr(target.expression) : tryLowerExpression(lowerer, target.expression);
   if (!receiver || receiver.type.kind !== "url") return null;
   const name = ts.isPropertyAccessExpression(target) ? target.name.text : lowerer.foldedStringKeyOf(target.argumentExpression);
-  if (name !== "href" && name !== "pathname" && name !== "search" && name !== "hash") {
-    lowerer.unsupported("SC1090", target, "URL setters beyond href, pathname, search, and hash with statically known keys");
+  const getters: Record<string, IrLibFn> = {
+    href: "url.href", pathname: "url.pathname", search: "url.search", hash: "url.hash",
+    protocol: "url.protocol", username: "url.username", password: "url.password",
+    host: "url.host", hostname: "url.hostname", port: "url.port",
+  };
+  if (name === null || name === undefined || !Object.hasOwn(getters, name)) {
+    lowerer.unsupported("SC1090", target, "URL assignments to read-only members or runtime property keys");
   }
   const op = expr.operatorToken.kind;
   if (op !== ts.SyntaxKind.EqualsToken && op !== ts.SyntaxKind.PlusEqualsToken) {
@@ -86,7 +91,7 @@ export function lowerUrlAssignment(lowerer: Lowerer, expr: ts.BinaryExpression):
   let prior: IrExpr | null = null;
   if (op === ts.SyntaxKind.PlusEqualsToken) {
     const old = lowerer.declareHiddenLocal("%urlOld", STRING);
-    const fn = name === "href" ? "url.href" : name === "pathname" ? "url.pathname" : name === "search" ? "url.search" : "url.hash";
+    const fn = getters[name]!;
     stmts.push({ kind: "varDecl", localId: old.id, init: { kind: "libCall", fn, args: [recvRef], type: STRING, loc }, loc });
     prior = varRef(old.id, STRING, loc);
   }

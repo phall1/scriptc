@@ -322,6 +322,47 @@ static ScrStr *parse_rooted_path(const char *raw, size_t len, bool special) {
   return parse_rooted_path_mode(raw, len, special, false);
 }
 
+/* Shared constructor/setter host parsing keeps the existing ASCII-host
+ * boundary and canonical IPv6 serialization in both execution tiers. */
+static bool parse_host(const char *hp, size_t host_len, bool special, bool is_file,
+                       ScrStr **host) {
+  bool ipv6 = host_len > 0 && hp[0] == '[';
+  size_t ipv6_end = host_len ? host_len - 1 : 0;
+  if (ipv6 && (host_len < 3 || hp[ipv6_end] != ']')) return false;
+  /* Validate + lowercase (special) the host. Divergence: non-ASCII and
+   * %-escapes (IDNA territory) are rejected outright. */
+  UrlBuf hb;
+  ub_init(&hb);
+  if (ipv6) {
+    if (!ub_append_ipv6(&hb, hp + 1, ipv6_end - 1)) {
+      free(hb.data);
+      return false;
+    }
+  } else {
+    for (size_t i = 0; i < host_len; i++) {
+      unsigned char c = (unsigned char)hp[i];
+      if (c >= 0x80 || c == '%' || c == ':' || c == '[' || c == ']' ||
+          c <= 0x20 || c == '#' || c == '/' || c == '<' || c == '>' ||
+          c == '?' || c == '@' || c == '\\' || c == '^' || c == '|') {
+        free(hb.data);
+        return false;
+      }
+      if (special && c >= 'A' && c <= 'Z') {
+        c = (unsigned char)(c - 'A' + 'a');
+      }
+      ub_push(&hb, (char)c);
+    }
+  }
+  /* file: "localhost" normalizes to "" at parse time (Node). */
+  if (is_file && hb.len == 9 && memcmp(hb.data, "localhost", 9) == 0) hb.len = 0;
+  if (hb.len == 0 && special && !is_file) {
+    free(hb.data);
+    return false; /* http:// — special non-file needs a host */
+  }
+  *host = ub_take(&hb);
+  return true;
+}
+
 /* Parses `authority` (between the slashes and the path/query/fragment):
  * [userinfo@]host[:port]. Returns false (throws) on invalid input. */
 static bool parse_authority(const char *raw, size_t len, bool special, bool is_file,
@@ -376,37 +417,7 @@ static bool parse_authority(const char *raw, size_t len, bool special, bool is_f
     }
     host_len = colon >= 0 ? (size_t)colon : hp_len;
   }
-  /* Validate + lowercase (special) the host. Divergence: non-ASCII and
-   * %-escapes (IDNA territory) are rejected outright. */
-  UrlBuf hb;
-  ub_init(&hb);
-  if (ipv6) {
-    if (!ub_append_ipv6(&hb, hp + 1, ipv6_end - 1)) {
-      free(hb.data);
-      return false;
-    }
-  } else {
-    for (size_t i = 0; i < host_len; i++) {
-      unsigned char c = (unsigned char)hp[i];
-      if (c >= 0x80 || c == '%' || c == ':' || c == '[' || c == ']' ||
-          c <= 0x20 || c == '#' || c == '/' || c == '<' || c == '>' ||
-          c == '?' || c == '@' || c == '\\' || c == '^' || c == '|') {
-        free(hb.data);
-        return false;
-      }
-      if (special && c >= 'A' && c <= 'Z') {
-        c = (unsigned char)(c - 'A' + 'a');
-      }
-      ub_push(&hb, (char)c);
-    }
-  }
-  /* file: "localhost" normalizes to "" at parse time (Node). */
-  if (is_file && hb.len == 9 && memcmp(hb.data, "localhost", 9) == 0) hb.len = 0;
-  if (hb.len == 0 && special && !is_file) {
-    free(hb.data);
-    return false; /* http:// — special non-file needs a host */
-  }
-  *host = ub_take(&hb);
+  if (!parse_host(hp, host_len, special, is_file, host)) return false;
   /* Port: digits only, leading zeros stripped, defaults dropped. */
   UrlBuf pb;
   ub_init(&pb);
@@ -645,6 +656,7 @@ ScrUrl *scr_url_new(ScrStr *input) {
   u->query = query;
   u->fragment = fragment;
   u->has_authority = has_authority;
+  u->host_path_escape = false;
   u->sp_cache = NULL;
   u->sp_reload = NULL;
   return u;
@@ -798,12 +810,15 @@ ScrStr *scr_url_pathname(ScrUrl *u) { return scr_str_retain(u->path); }
  * normalized form findRoute-style authority compares want (lowercased
  * host, no default :443/:80). */
 ScrStr *scr_url_host(ScrUrl *u) {
-  if (u->port->len == 0) return scr_str_retain(u->host);
+  if (u->port->len == 0 && !u->host_path_escape) return scr_str_retain(u->host);
   UrlBuf b;
   ub_init(&b);
   ub_append(&b, u->host->data, u->host->len);
-  ub_push(&b, ':');
-  ub_append(&b, u->port->data, u->port->len);
+  if (u->port->len) {
+    ub_push(&b, ':');
+    ub_append(&b, u->port->data, u->port->len);
+  }
+  if (u->host_path_escape) ub_append(&b, "/.", 2);
   return ub_take(&b);
 }
 
@@ -881,7 +896,7 @@ ScrStr *scr_url_href(ScrUrl *u) {
   }
   /* A host-less hierarchical path starting with // must not serialize
    * as an authority (the URL Standard's /. escape). */
-  if (!u->has_authority && u->path->len >= 2 && !memcmp(u->path->data, "//", 2)) ub_append(&b, "/.", 2);
+  if (u->host_path_escape || (!u->has_authority && u->path->len >= 2 && !memcmp(u->path->data, "//", 2))) ub_append(&b, "/.", 2);
   ub_append(&b, u->path->data, u->path->len);
   ub_append(&b, u->query->data, u->query->len);
   ub_append(&b, u->fragment->data, u->fragment->len);
@@ -914,35 +929,165 @@ static void url_copy_fields(ScrUrl *u, ScrUrl *next) {
   scr_str_release(u->query); u->query = scr_str_retain(next->query);
   scr_str_release(u->fragment); u->fragment = scr_str_retain(next->fragment);
   u->has_authority = next->has_authority;
+  u->host_path_escape = next->host_path_escape;
 }
 
-void scr_url_set(ScrUrl *u, ScrStr *field, ScrStr *value) {
+static bool url_file(ScrUrl *u) {
+  return u->scheme->len == 4 && !memcmp(u->scheme->data, "file", 4);
+}
+
+static bool url_cannot_have_credentials_or_port(ScrUrl *u) {
+  return !u->host->len || url_file(u) || url_opaque(u);
+}
+
+static bool url_set_port(ScrUrl *u, const char *raw, size_t len, bool empty_input) {
+  if (url_cannot_have_credentials_or_port(u)) return false;
+  if (empty_input) {
+    scr_str_release(u->port);
+    u->port = scr_str_new("", 0);
+    return true;
+  }
+  if (!len) return true; /* TAB/LF/CR-only input leaves the port unchanged. */
+  if (raw[0] < '0' || raw[0] > '9') return false;
+  unsigned int number = 0;
+  for (size_t i = 0; i < len && raw[i] >= '0' && raw[i] <= '9'; i++) {
+    number = number * 10 + (unsigned int)(raw[i] - '0');
+    if (number > 65535) return false;
+  }
+  char digits[6];
+  size_t size = (size_t)snprintf(digits, sizeof digits, "%u", number);
+  const char *dflt = default_port(u->scheme->data, u->scheme->len);
+  scr_str_release(u->port);
+  u->port = scr_str_new(digits, dflt && strlen(dflt) == size && !memcmp(dflt, digits, size) ? 0 : size);
+  return true;
+}
+
+static bool url_set_protocol(ScrUrl *u, const char *raw, size_t len) {
+  if (!len) return true;
+  if (!((raw[0] >= 'a' && raw[0] <= 'z') || (raw[0] >= 'A' && raw[0] <= 'Z'))) return false;
+  size_t end = 1;
+  while (end < len && ((raw[end] >= 'a' && raw[end] <= 'z') ||
+         (raw[end] >= 'A' && raw[end] <= 'Z') || (raw[end] >= '0' && raw[end] <= '9') ||
+         raw[end] == '+' || raw[end] == '-' || raw[end] == '.')) end++;
+  if (end < len && raw[end] != ':') return false;
+  UrlBuf normalized;
+  ub_init(&normalized);
+  for (size_t i = 0; i < end; i++) {
+    char c = raw[i];
+    ub_push(&normalized, c >= 'A' && c <= 'Z' ? (char)(c + 'a' - 'A') : c);
+  }
+  ScrStr *scheme = ub_take(&normalized);
+  bool special = is_special_scheme(scheme->data, scheme->len);
+  bool file = scheme->len == 4 && !memcmp(scheme->data, "file", 4);
+  if (is_special_scheme(u->scheme->data, u->scheme->len) != special ||
+      (file && (u->userinfo->len || u->port->len)) || (url_file(u) && !u->host->len)) {
+    scr_str_release(scheme);
+    /* Ada reports a successful unchanged URL for non-special targets,
+     * so these writes still replace the pre-conversion snapshot in Node. */
+    return !special;
+  }
+  scr_str_release(u->scheme);
+  u->scheme = scheme;
+  const char *dflt = default_port(scheme->data, scheme->len);
+  if (dflt && u->port->len == strlen(dflt) && !memcmp(u->port->data, dflt, u->port->len)) {
+    scr_str_release(u->port);
+    u->port = scr_str_new("", 0);
+  }
+  return true;
+}
+
+static bool url_set_credentials(ScrUrl *u, ScrStr *value, bool username) {
+  if (url_cannot_have_credentials_or_port(u)) return false;
+  ScrStr *other = username ? scr_url_password(u) : scr_url_username(u);
+  UrlBuf encoded;
+  ub_init(&encoded);
+  for (size_t i = 0; i < value->len; i++) ub_push_encoded(&encoded, (unsigned char)value->data[i], enc_userinfo);
+  ScrStr *part = ub_take(&encoded);
+  ScrStr *user = username ? part : other;
+  ScrStr *pass = username ? other : part;
+  UrlBuf combined;
+  ub_init(&combined);
+  ub_append(&combined, user->data, user->len);
+  if (pass->len) {
+    ub_push(&combined, ':');
+    ub_append(&combined, pass->data, pass->len);
+  }
+  scr_str_release(u->userinfo);
+  u->userinfo = ub_take(&combined);
+  scr_str_release(other);
+  scr_str_release(part);
+  return true;
+}
+
+static bool url_set_host(ScrUrl *u, const char *raw, size_t len, bool hostname) {
+  if (url_opaque(u)) return false;
+  bool file = url_file(u);
+  bool special = is_special_scheme(u->scheme->data, u->scheme->len);
+  size_t end = 0;
+  bool bracket = false, colon = false;
+  for (; end < len; end++) {
+    char c = raw[end];
+    if (c == '/' || c == '?' || c == '#' || (special && c == '\\')) break;
+    if (!file && c == ':' && !bracket) { colon = true; break; }
+    if (c == '[') bracket = true;
+    if (c == ']') bracket = false;
+  }
+  if (colon && (hostname || !end)) return false;
+  if (!end && !file && (special || u->userinfo->len || u->port->len)) return false;
+  ScrStr *host = NULL;
+  if (!parse_host(raw, end, special, file, &host)) return false;
+  bool escaped_path = !u->has_authority && u->path->len >= 2 && !memcmp(u->path->data, "//", 2);
+  scr_str_release(u->host);
+  u->host = host;
+  if (host->len || escaped_path) u->has_authority = true;
+  if (colon) {
+    u->host_path_escape = escaped_path;
+    if (end + 1 < len) url_set_port(u, raw + end + 1, len - end - 1, false);
+  }
+  return true;
+}
+
+/* The result distinguishes successful state overrides from ignored writes:
+ * only successful writes replace Node's pre-conversion URL snapshot. */
+static bool url_apply_component(ScrUrl *u, ScrStr *field, ScrStr *value) {
   if (field->len == 4 && !memcmp(field->data, "href", 4)) {
     ScrUrl *next = scr_url_new(value);
-    if (!next) return;
+    if (!next) return false;
     url_copy_fields(u, next);
     scr_url_release(next);
     if (u->sp_cache) u->sp_reload(u->sp_cache, u->query);
-    return;
+    return true;
   }
   bool pathname = field->len == 8 && !memcmp(field->data, "pathname", 8);
   bool search = field->len == 6 && !memcmp(field->data, "search", 6);
   bool hash = field->len == 4 && !memcmp(field->data, "hash", 4);
-  if (!pathname && !search && !hash) {
+  bool protocol = field->len == 8 && !memcmp(field->data, "protocol", 8);
+  bool username = field->len == 8 && !memcmp(field->data, "username", 8);
+  bool password = field->len == 8 && !memcmp(field->data, "password", 8);
+  bool host = field->len == 4 && !memcmp(field->data, "host", 4);
+  bool hostname = field->len == 8 && !memcmp(field->data, "hostname", 8);
+  bool port = field->len == 4 && !memcmp(field->data, "port", 4);
+  if (!pathname && !search && !hash && !protocol && !username && !password && !host && !hostname && !port) {
     static const char message[] = "Native URL setter has no lowering";
     scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
-    return;
+    return false;
   }
-  if (pathname && url_opaque(u)) return;
+  if (username || password) return url_set_credentials(u, value, username);
+  if (pathname && url_opaque(u)) return false;
   UrlBuf raw;
   ub_init(&raw);
-  size_t start = !pathname && value->len && value->data[0] == (search ? '?' : '#') ? 1 : 0;
+  size_t start = (search || hash) && value->len && value->data[0] == (search ? '?' : '#') ? 1 : 0;
   for (size_t i = start; i < value->len; i++) {
     char c = value->data[i];
+    if ((host || hostname) && c == '#') break;
     if (c != '\t' && c != '\n' && c != '\r') ub_push(&raw, c);
   }
   bool special = is_special_scheme(u->scheme->data, u->scheme->len);
-  if (pathname) {
+  bool applied = true;
+  if (protocol) applied = url_set_protocol(u, raw.data, raw.len);
+  else if (port) applied = url_set_port(u, raw.data, raw.len, !value->len);
+  else if (host || hostname) applied = url_set_host(u, raw.data, raw.len, hostname);
+  else if (pathname) {
     bool file = u->scheme->len == 4 && !memcmp(u->scheme->data, "file", 4);
     ScrStr *path = parse_rooted_path_mode(raw.data, raw.len, special, file);
     if (!path->len && (special || !u->has_authority)) {
@@ -974,6 +1119,29 @@ void scr_url_set(ScrUrl *u, ScrStr *field, ScrStr *value) {
     if (search && u->sp_cache) u->sp_reload(u->sp_cache, u->query);
   }
   free(raw.data);
+  return applied;
+}
+
+bool scr_url_set_component(ScrUrl *u, ScrStr *field, ScrStr *value) {
+  if (field->len == 4 && !memcmp(field->data, "href", 4)) return url_apply_component(u, field, value);
+  /* Node's binding reparses the captured href before applying an override.
+   * This matters after protocol writes to file://localhost and for the
+   * host-to-port serialization escape. Ignored overrides retain the live URL. */
+  ScrStr *href = scr_url_href(u);
+  ScrUrl *next = scr_url_new(href);
+  scr_str_release(href);
+  if (!next) return false;
+  bool applied = url_apply_component(next, field, value);
+  if (applied) {
+    url_copy_fields(u, next);
+    if (field->len == 6 && !memcmp(field->data, "search", 6) && u->sp_cache) u->sp_reload(u->sp_cache, u->query);
+  }
+  scr_url_release(next);
+  return applied;
+}
+
+void scr_url_set(ScrUrl *u, ScrStr *field, ScrStr *value) {
+  scr_url_set_component(u, field, value);
 }
 
 /* Node snapshots a component setter's URL before invoking user string
@@ -999,8 +1167,8 @@ void scr_url_set_checked(ScrUrl *u, ScrStr *field, const ScrDyn *value) {
   }
   ScrStr *text = scr_dyn_string_coerce_js(value);
   if (text && !ignored) {
-    scr_url_set(saved ? saved : u, field, text);
-    if (saved && !scr_exc_pending()) {
+    bool applied = scr_url_set_component(saved ? saved : u, field, text);
+    if (saved && applied && !scr_exc_pending()) {
       url_copy_fields(u, saved);
       if (field->len == 6 && !memcmp(field->data, "search", 6) && u->sp_cache) u->sp_reload(u->sp_cache, u->query);
     }
@@ -1151,6 +1319,7 @@ static ScrUrl *scr_url_new_file(ScrStr *host, ScrStr *encoded_path) {
   u->query = scr_str_new("", 0);
   u->fragment = scr_str_new("", 0);
   u->has_authority = true;
+  u->host_path_escape = false;
   u->sp_cache = NULL;
   u->sp_reload = NULL;
   return u;
@@ -1365,8 +1534,9 @@ static ScrDyn *scr_native_url_invoke(void *ptr, ScrDyn *self, const char *method
 }
 
 static bool scr_native_url_set(void *ptr, const char *key, size_t len, const ScrDyn *value) {
-  bool modeled = (len == 4 && (!memcmp(key, "href", 4) || !memcmp(key, "hash", 4))) ||
-    (len == 8 && !memcmp(key, "pathname", 8)) || (len == 6 && !memcmp(key, "search", 6));
+  bool modeled = (len == 4 && (!memcmp(key, "href", 4) || !memcmp(key, "hash", 4) || !memcmp(key, "host", 4) || !memcmp(key, "port", 4))) ||
+    (len == 8 && (!memcmp(key, "pathname", 8) || !memcmp(key, "protocol", 8) || !memcmp(key, "username", 8) || !memcmp(key, "password", 8) || !memcmp(key, "hostname", 8))) ||
+    (len == 6 && !memcmp(key, "search", 6));
   if (!modeled) return false;
   ScrStr *field = scr_str_new(key, len);
   scr_url_set_checked(ptr, field, value);

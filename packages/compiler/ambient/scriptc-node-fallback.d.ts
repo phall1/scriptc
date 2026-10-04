@@ -1473,22 +1473,22 @@ declare module "node:os" {
  * href reflects immediately; every read answers the same object, Node's
  * caching), toString()/toJSON() (href serialization), and the non-throwing
  * canParse()/parse() factories (conversion errors still propagate).
- * URL values have no SETTERS — the component fields are read-only (the
- * one supported mutation path is searchParams) — and participate in
+ * URL components except origin and searchParams support assignment;
+ * the live searchParams view also mutates the query. URL values participate in
  * unions (URL | undefined). The parser covers the common CLI schemes
  * exactly (http/https/ws/wss/ftp/file authority URLs, opaque paths like
  * data: and mailto:) — divergences from the full WHATWG algorithm are
  * documented in SEMANTICS.md. */
 interface URL {
-  readonly protocol: string;
+  protocol: string;
   readonly origin: string;
-  readonly username: string;
-  readonly password: string;
+  username: string;
+  password: string;
   pathname: string;
   href: string;
-  readonly host: string;
-  readonly hostname: string;
-  readonly port: string;
+  host: string;
+  hostname: string;
+  port: string;
   search: string;
   hash: string;
   readonly searchParams: URLSearchParams;

@@ -11165,8 +11165,8 @@ ScrJsval *scr_jsval_from_bytes(const ScrBytes *b) {
  * installs a minimal class: construction re-parses through the SAME
  * WHATWG parser the static URL uses (scr_url.c, via a host function), so
  * a marshaled URL and `new URL(href)` in embedded code agree exactly.
- * Component reads and selected writes share the native parser and setter
- * state overrides. Other setters remain refused. If a URL global already exists
+ * Component reads and writes share the native parser and setter
+ * state overrides. If a URL global already exists
  * (a future web-prelude one, or embedded code's own), it wins — the
  * marshal constructs through whatever globalThis.URL is. */
 static JSValue isl_url_components(JSContext *ctx, ScrUrl *u) {
@@ -11244,13 +11244,14 @@ static JSValue isl_url_set_host(JSContext *ctx, JSValueConst this_val,
   if (!value) { scr_str_release(href); scr_str_release(field); return JS_EXCEPTION; }
   ScrUrl *u = scr_url_new(href);
   scr_str_release(href);
-  if (u) scr_url_set(u, field, value);
+  bool applied = u && scr_url_set_component(u, field, value);
   scr_str_release(field);
   scr_str_release(value);
   if (!u || scr_exc_pending()) {
     scr_url_release(u);
     return isl_throw_pending(ctx);
   }
+  if (!applied) { scr_url_release(u); return JS_NULL; }
   return isl_url_components(ctx, u);
 }
 
@@ -11279,7 +11280,7 @@ static const char isl_url_src[] =
     "      for (let i = 0; i < fields.length; i++) {\n"
     "        const name = fields[i];\n"
     "        const descriptor = { enumerable: true, get: () => this._components[i] };\n"
-    "        if (['href', 'pathname', 'search', 'hash'].includes(name)) descriptor.set = (v) => this._set(name, v);\n"
+    "        if (name !== 'origin') descriptor.set = (v) => this._set(name, v);\n"
     "        Object.defineProperty(this, name, descriptor);\n"
     "      }\n"
     "    }\n"
@@ -11288,7 +11289,9 @@ static const char isl_url_src[] =
     "      const ignored = name === 'pathname' && !href.slice(this.protocol.length).startsWith('/');\n"
     "      const converted = text(value);\n"
     "      if (ignored) return;\n"
-    "      this._components = mutate(name === 'href' ? this.href : href, name, converted);\n"
+    "      const components = mutate(name === 'href' ? this.href : href, name, converted);\n"
+    "      if (components === null) return;\n"
+    "      this._components = components;\n"
     "      if ((name === 'search' || name === 'href') && this._sp !== undefined) {\n"
     "        this._sp._pairs.length = 0;\n"
     "        for (const [k, v] of new globalThis.URLSearchParams(this.search)) this._sp._pairs.push([k, v]);\n"

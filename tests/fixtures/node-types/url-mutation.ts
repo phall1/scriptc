@@ -3,6 +3,12 @@ import { URL as NodeURL } from "node:url";
 function update(u: NodeURL) {
   const params = u.searchParams;
   const alias = u;
+  u.protocol = "http";
+  u.username = "new user";
+  u.password = "new secret";
+  u.host = "NEW.example:81";
+  u.hostname = "OTHER.example";
+  u.port += "2";
   u.pathname = "/a/../new path";
   console.log(u.search = "a=two words", u.href);
   u.hash += "new fragment";

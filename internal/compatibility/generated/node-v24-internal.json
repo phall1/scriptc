@@ -1299,18 +1299,18 @@
       "apiEntries": 62,
       "static": {
         "supported": 0,
-        "partial": 14,
+        "partial": 19,
         "refused": 0,
-        "not-implemented": 48,
+        "not-implemented": 43,
         "by-design": 0,
         "unreviewed": 0,
         "not-applicable": 0
       },
       "dynamic": {
         "supported": 0,
-        "partial": 35,
+        "partial": 41,
         "refused": 0,
-        "not-implemented": 27,
+        "not-implemented": 21,
         "by-design": 0,
         "unreviewed": 0,
         "not-applicable": 0
@@ -109196,10 +109196,11 @@
         "status": "partial",
         "evidence": "derived:descendants",
         "tests": [
-          "tests/corpus/2946-url-port-hash.ts",
           "tests/corpus/node24-file-url-buffer.ts",
           "tests/corpus/node24-file-url-errors.js",
           "tests/corpus/node24-file-url-options.ts",
+          "tests/corpus/node24-url-authority-coercion.js",
+          "tests/corpus/node24-url-authority.ts",
           "tests/corpus/node24-url-factories.ts",
           "tests/corpus/node24-url-factory-errors.ts",
           "tests/corpus/node24-url-mutation-coercion.js",
@@ -109218,6 +109219,7 @@
           "tests/fixtures/npm/cases/island-web-plumbing/main.ts",
           "tests/fixtures/npm/cases/misc-shims/main.ts",
           "tests/fixtures/npm/cases/node24-file-url-conversion/main.ts",
+          "tests/fixtures/npm/cases/node24-url-authority/main.ts",
           "tests/fixtures/npm/cases/node24-url-factories/main.ts",
           "tests/fixtures/npm/cases/node24-url-mutation/main.ts"
         ]
@@ -109602,12 +109604,20 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:url"
+        "status": "partial",
+        "evidence": "compiler-feature:url.host",
+        "tests": [
+          "tests/corpus/node24-url-authority.ts",
+          "tests/corpus/node24-url-authority-coercion.js",
+          "tests/fixtures/node-types/url-mutation.ts"
+        ]
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:url"
+        "status": "partial",
+        "evidence": "island-feature:url.host",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-url-authority/main.ts"
+        ]
       },
       "anchorSource": "ancestor"
     },
@@ -109629,12 +109639,20 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:url"
+        "status": "partial",
+        "evidence": "compiler-feature:url.hostname",
+        "tests": [
+          "tests/corpus/node24-url-authority.ts",
+          "tests/corpus/node24-url-authority-coercion.js",
+          "tests/fixtures/node-types/url-mutation.ts"
+        ]
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:url"
+        "status": "partial",
+        "evidence": "island-feature:url.hostname",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-url-authority/main.ts"
+        ]
       },
       "anchorSource": "ancestor"
     },
@@ -109718,12 +109736,20 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:url"
+        "status": "partial",
+        "evidence": "compiler-feature:url.password",
+        "tests": [
+          "tests/corpus/node24-url-authority.ts",
+          "tests/corpus/node24-url-authority-coercion.js",
+          "tests/fixtures/node-types/url-mutation.ts"
+        ]
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:url"
+        "status": "partial",
+        "evidence": "island-feature:url.password",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-url-authority/main.ts"
+        ]
       },
       "anchorSource": "ancestor"
     },
@@ -109783,12 +109809,17 @@
         "status": "partial",
         "evidence": "compiler-feature:url.port",
         "tests": [
-          "tests/corpus/2946-url-port-hash.ts"
+          "tests/corpus/node24-url-authority.ts",
+          "tests/corpus/node24-url-authority-coercion.js",
+          "tests/fixtures/node-types/url-mutation.ts"
         ]
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:url"
+        "status": "partial",
+        "evidence": "island-feature:url.port",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-url-authority/main.ts"
+        ]
       },
       "anchorSource": "ancestor"
     },
@@ -109810,12 +109841,20 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:url"
+        "status": "partial",
+        "evidence": "compiler-feature:url.protocol",
+        "tests": [
+          "tests/corpus/node24-url-authority.ts",
+          "tests/corpus/node24-url-authority-coercion.js",
+          "tests/fixtures/node-types/url-mutation.ts"
+        ]
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:url"
+        "status": "partial",
+        "evidence": "island-feature:url.protocol",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-url-authority/main.ts"
+        ]
       },
       "anchorSource": "ancestor"
     },
@@ -109926,12 +109965,20 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:url"
+        "status": "partial",
+        "evidence": "compiler-feature:url.username",
+        "tests": [
+          "tests/corpus/node24-url-authority.ts",
+          "tests/corpus/node24-url-authority-coercion.js",
+          "tests/fixtures/node-types/url-mutation.ts"
+        ]
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-unmatched:url"
+        "status": "partial",
+        "evidence": "island-feature:url.username",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-url-authority/main.ts"
+        ]
       },
       "anchorSource": "ancestor"
     },
