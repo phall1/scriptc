@@ -10,6 +10,32 @@ const fixturesRoot = fileURLToPath(new URL("../../../../tests/fixtures/npm/", im
 const fixture = (...parts: string[]): string => join(fixturesRoot, ...parts);
 const portable = (path: string): string => path.replaceAll("\\", "/");
 
+test("ESM percent escapes preserve module paths and distinct CommonJS filename rules", () => {
+  const builder = new NpmGraphBuilder();
+  builder.addImport(fixture("cases", "node24-esm-metadata", "main.ts"), "node24-esm-metadata-fixture");
+  const graph = builder.finish();
+  expect(graph.errors).toEqual([]);
+  const encodedChild = graph.edges.find(edge => edge.specifier === "./child%20%25%20%23%20%C3%BC.js");
+  expect(encodedChild?.to).toMatch(/child % # ü\.js$/);
+  const pair = graph.edges.filter(edge => edge.specifier === "./pair%20file.cjs");
+  expect(pair).toHaveLength(2);
+  expect(pair.find(edge => edge.kind === "import")?.to).toMatch(/pair file\.cjs$/);
+  expect(pair.find(edge => edge.kind === "require")?.to).toMatch(/pair%20file\.cjs$/);
+});
+
+test.each(["?version=1", "#fragment"])("escaped ESM module identity %s stays explicitly refused", (suffix) => {
+  const dir = mkdtempSync(join(tmpdir(), "scriptc-esm-identity-"));
+  try {
+    writeFileSync(join(dir, "index.mjs"), `import './child%20file.mjs${suffix}';`);
+    writeFileSync(join(dir, "child file.mjs"), "export const value = 1;");
+    const builder = new NpmGraphBuilder();
+    builder.addFileImport(join(dir, "main.mjs"), "./index.mjs");
+    expect(builder.finish().errors).toEqual([{
+      message: expect.stringContaining("distinct URL query or fragment module instances are not supported"),
+    }]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("TypeScript runtime entries embed emitted JS and only its runtime dependencies", () => {
   const entry = fixture("typescript", "main.ts");
   const builder = new NpmGraphBuilder();

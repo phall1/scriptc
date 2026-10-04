@@ -11,7 +11,6 @@ import { literalUnionArm } from "../union-discriminants.js";
 import * as ts from "../ts7/adapter.js";
 import { dirname } from "node:path";
 import * as posix from "node:path/posix";
-import { pathToFileURL } from "node:url";
 import type { Lowerer } from "./lowerer.js";
 import { captureContextArguments } from "./function-context.js";
 import { OBJECT_CALLABLE_VALUES } from "./surfaces.js";
@@ -55,6 +54,7 @@ import { classSymbolKeyOf } from "./symbol-fields.js";
 import { lowerClassMethodValue } from "./class-method-values.js";
 import { classInstanceOf } from "./class-dynamic-dispatch.js";
 import { lowerGlobalValue } from "./lower-global-value.js";
+import { importMetaField, isImportMeta } from "./import-meta.js";
 import { lowerClassPrototypeData, lowerClassPrototypeComputedAssignment } from "./class-prototypes.js";
 import { isClassCallback } from "./class-callbacks.js";
 import { builtinPrototypeMethod, lowerArrayIsArrayValue, lowerCheckedPredicateValue, lowerNumberParserValue, lowerObjectAssignValue, lowerStringCodesValue } from "./lower-builtin-values.js";
@@ -2321,41 +2321,7 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
   }
 
   function importMetaProperty(lowerer: Lowerer, expr: ts.PropertyAccessExpression): IrExpr | null {
-    if (!ts.isMetaProperty(expr.expression)) return null;
-    const meta = expr.expression;
-    if (meta.keywordToken !== ts.SyntaxKind.ImportKeyword || meta.name.text !== "meta") return null;
-
-    const sf = expr.getSourceFile();
-    const fileName = moduleFileName(lowerer, sf);
-    switch (expr.name.text) {
-      case "env":
-        return dynUndefinedExpr(locOf(expr));
-      case "url":
-        return {
-          kind: "strLit",
-          value: pathToFileURL(fileName, { windows: lowerer.targetPlatform === "win32" }).href,
-          type: STRING,
-          loc: locOf(expr),
-        };
-      case "filename":
-        return { kind: "strLit", value: fileName, type: STRING, loc: locOf(expr) };
-      case "dirname":
-        return {
-          kind: "strLit",
-          value: lowerer.targetPlatform === "wasi" ? posix.dirname(fileName) : dirname(fileName),
-          type: STRING,
-          loc: locOf(expr),
-        };
-      case "main":
-        return { kind: "boolLit", value: sf === lowerer.entry, type: BOOL, loc: locOf(expr) };
-      default:
-        lowerer.unsupported(
-          "SC1090",
-          expr,
-          `'import.meta.${expr.name.text}' (only url, filename, dirname, and main are supported in static ESM)`,
-        );
-        return null;
-    }
+    return isImportMeta(expr.expression) ? importMetaField(lowerer, expr, expr.name.text) : null;
   }
 
 /** `c ? a : b`. An explicit destination constructs each branch at that
@@ -4707,6 +4673,12 @@ export function lowerOptionalNumber(
    * string-key element access (`a["length"]`) and string indexing (`s[0]`
    * typechecks against the lib's index signature; use .charAt) stay out. */
   export function lowerElementAccess(lowerer: Lowerer, expr: ts.ElementAccessExpression): IrExpr {
+    if (isImportMeta(expr.expression)) {
+      const name = lowerer.foldedStringKeyOf(expr.argumentExpression);
+      if (name === null) lowerer.unsupported("SC1090", expr, "import.meta with a runtime-computed key (use a statically-known metadata field)");
+      return importMetaField(lowerer, expr, name);
+    }
+
     // `a?.[i]`: the guard lowers as an optional-chain step around the
     // plain element read below.
     if (expr.questionDotToken && !lowerer.chainHandled.has(expr)) {

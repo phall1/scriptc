@@ -9,15 +9,15 @@
       "static": {
         "replace-refusal": 42,
         "verify-gap": 2483,
-        "audit-partial": 687,
+        "audit-partial": 688,
         "classify": 2,
-        "implement": 81
+        "implement": 80
       },
       "dynamic": {
-        "audit-partial": 843,
+        "audit-partial": 847,
         "verify-gap": 2178,
         "replace-refusal": 112,
-        "implement": 217
+        "implement": 213
       }
     },
     "priorities": {
@@ -61351,20 +61351,26 @@
       "priority": "high",
       "tiers": {
         "static": {
-          "status": "not-implemented",
-          "action": "implement",
-          "verification": "declared-gap",
-          "confidence": "medium",
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
           "source": "compiler-feature:esm.meta",
-          "tests": []
+          "tests": [
+            "tests/corpus/2701-import-meta/main.mjs",
+            "tests/corpus/node24-esm-metadata/main.mjs",
+            "tests/fixtures/node-types/esm-metadata.mts"
+          ]
         },
         "dynamic": {
-          "status": "not-implemented",
-          "action": "implement",
-          "verification": "declared-gap",
-          "confidence": "medium",
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
           "source": "island-feature:esm.meta",
-          "tests": []
+          "tests": [
+            "tests/fixtures/npm/cases/node24-esm-metadata/main.ts"
+          ]
         }
       }
     },
@@ -61400,7 +61406,8 @@
           "confidence": "high",
           "source": "island-feature:esm.import.meta.resolve",
           "tests": [
-            "tests/fixtures/npm/cases/dual-entry/main.ts"
+            "tests/fixtures/npm/cases/dual-entry/main.ts",
+            "tests/fixtures/npm/cases/node24-esm-metadata/main.ts"
           ]
         }
       }
@@ -61427,16 +61434,20 @@
           "confidence": "high",
           "source": "compiler-feature:esm.dirname",
           "tests": [
-            "tests/corpus/2701-import-meta/main.mjs"
+            "tests/corpus/2701-import-meta/main.mjs",
+            "tests/corpus/node24-esm-metadata/main.mjs",
+            "tests/fixtures/node-types/esm-metadata.mts"
           ]
         },
         "dynamic": {
-          "status": "not-implemented",
-          "action": "implement",
-          "verification": "declared-gap",
-          "confidence": "medium",
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
           "source": "island-feature:esm.dirname",
-          "tests": []
+          "tests": [
+            "tests/fixtures/npm/cases/node24-esm-metadata/main.ts"
+          ]
         }
       }
     },
@@ -61462,16 +61473,20 @@
           "confidence": "high",
           "source": "compiler-feature:esm.filename",
           "tests": [
-            "tests/corpus/2701-import-meta/main.mjs"
+            "tests/corpus/2701-import-meta/main.mjs",
+            "tests/corpus/node24-esm-metadata/main.mjs",
+            "tests/fixtures/node-types/esm-metadata.mts"
           ]
         },
         "dynamic": {
-          "status": "not-implemented",
-          "action": "implement",
-          "verification": "declared-gap",
-          "confidence": "medium",
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
           "source": "island-feature:esm.filename",
-          "tests": []
+          "tests": [
+            "tests/fixtures/npm/cases/node24-esm-metadata/main.ts"
+          ]
         }
       }
     },
@@ -61497,7 +61512,9 @@
           "confidence": "high",
           "source": "compiler-feature:esm.url",
           "tests": [
-            "tests/corpus/2701-import-meta/main.mjs"
+            "tests/corpus/2701-import-meta/main.mjs",
+            "tests/corpus/node24-esm-metadata/main.mjs",
+            "tests/fixtures/node-types/esm-metadata.mts"
           ]
         },
         "dynamic": {
@@ -61507,8 +61524,7 @@
           "confidence": "high",
           "source": "island-feature:esm.url",
           "tests": [
-            "tests/fixtures/npm/cases/dynamic-import/main.ts",
-            "tests/corpus/2646-top-level-await.ts"
+            "tests/fixtures/npm/cases/node24-esm-metadata/main.ts"
           ]
         }
       }
@@ -61535,16 +61551,20 @@
           "confidence": "high",
           "source": "compiler-feature:esm.main",
           "tests": [
-            "tests/corpus/2701-import-meta/main.mjs"
+            "tests/corpus/2701-import-meta/main.mjs",
+            "tests/corpus/node24-esm-metadata/main.mjs",
+            "tests/fixtures/node-types/esm-metadata.mts"
           ]
         },
         "dynamic": {
-          "status": "not-implemented",
-          "action": "implement",
-          "verification": "declared-gap",
-          "confidence": "medium",
+          "status": "partial",
+          "action": "audit-partial",
+          "verification": "test-backed",
+          "confidence": "high",
           "source": "island-feature:esm.main",
-          "tests": []
+          "tests": [
+            "tests/fixtures/npm/cases/node24-esm-metadata/main.ts"
+          ]
         }
       }
     },

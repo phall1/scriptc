@@ -87,6 +87,7 @@
  * re-export hops).
  */
 import { dirname, extname, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { FrontendServices } from "./services.js";
 import { moduleSpecifiersOfFile, type ModuleSpecifiers } from "./module-syntax.js";
 import { packageNameOfSpecifier as packageNameOf } from "./workspace-registry.js";
@@ -1289,7 +1290,6 @@ export class NpmGraphBuilder {
     if (specifiers === null) return;
     for (const use of specifiers.uses) {
       const spec = use.specifier;
-      const via = { require: use.require, dynamicImport: use.dynamicImport, static: use.static };
       const eager = !lazy && use.static;
       // CommonJS treats bare "." and ".." as directory-relative requires.
       const requireDirectory = (spec === "." || spec === "..") && use.require && !use.static && !use.dynamicImport;
@@ -1297,34 +1297,49 @@ export class NpmGraphBuilder {
         if (use.importMetaResolve && !use.static && !use.dynamicImport && !use.require) {
           continue;
         }
-        // A relative file: no conditions apply, so every call form shares
-        // one "any" edge. A blocked lazy one embeds the import trap only
-        // for import()/static-in-lazy sites — require-reached specs embed
-        // NO edge and the island's require shim throws Node's
-        // MODULE_NOT_FOUND with the live require stack at the call.
-        const file = this.resolveFile(resolve(dirname(key), spec));
-        const to = file === null ? null : this.host.realpath(file);
-        if (!to) {
-          if (eager) {
-            this.errors.push({
-              message:
-                `package '${pkgName}' cannot resolve '${spec}' from ${key}` +
-                ` (dependency chain: ${NpmGraphBuilder.chainOf(chain)})`,
-            });
-          } else {
-            this.noteLazyTrap(spec, via, pkgName, lazy);
-            if (use.dynamicImport || (lazy && use.static)) {
-              pushEdge(key, spec, this.importNotFoundTrap(key, spec), "import");
+        // ESM percent escapes name decoded filesystem paths; CommonJS
+        // keeps the literal filename. Most specs share an edge, but a
+        // percent-escaped spec used by both forms needs separate targets.
+        const importing = use.static || use.dynamicImport;
+        const requests: { kind: "any" | "import" | "require"; path: string | null }[] = [];
+        let importPath: string | null = resolve(dirname(key), spec);
+        if (importing && spec.includes("%")) {
+          try {
+            const url = new URL(spec, pathToFileURL(key));
+            if (url.search || url.hash) {
+              this.errors.push({ message: `package '${pkgName}' cannot embed '${spec}' from ${key}: distinct URL query or fragment module instances are not supported` });
+              continue;
             }
+            importPath = fileURLToPath(url);
           }
-          continue;
+          catch { importPath = null; }
         }
-        // A resolved .node addon embeds as a throwing dlopen stub (see
-        // walk) — the inventory row keeps the coverage report honest
-        // about what the binary cannot reach.
-        if (to.endsWith(".node")) this.noteLazyTrap(spec, via, pkgName, lazy, true);
-        pushEdge(key, spec, to, "any");
-        this.walk(to, chain, lazy || !use.static);
+        if (use.require && importing && spec.includes("%")) {
+          requests.push({ kind: "require", path: resolve(dirname(key), spec) }, { kind: "import", path: importPath });
+        } else {
+          requests.push({ kind: "any", path: importPath });
+        }
+        for (const request of requests) {
+          const importRequest = request.kind !== "require" && importing;
+          const requestVia = { require: request.kind !== "import" && use.require, dynamicImport: importRequest && use.dynamicImport, static: importRequest && use.static };
+          const file = request.path === null ? null : this.resolveFile(request.path);
+          const to = file === null ? null : this.host.realpath(file);
+          if (!to) {
+            if (!lazy && requestVia.static) {
+              this.errors.push({ message: `package '${pkgName}' cannot resolve '${spec}' from ${key}` +
+                ` (dependency chain: ${NpmGraphBuilder.chainOf(chain)})` });
+            } else {
+              this.noteLazyTrap(spec, requestVia, pkgName, lazy);
+              if (requestVia.dynamicImport || (lazy && requestVia.static)) {
+                pushEdge(key, spec, this.importNotFoundTrap(key, spec), "import");
+              }
+            }
+            continue;
+          }
+          if (to.endsWith(".node")) this.noteLazyTrap(spec, requestVia, pkgName, lazy, true);
+          pushEdge(key, spec, to, request.kind);
+          this.walk(to, chain, lazy || !requestVia.static);
+        }
         continue;
       }
       if (

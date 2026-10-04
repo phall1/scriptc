@@ -5176,6 +5176,8 @@ typedef struct ScrIslandEdge {
  * after scr_lib_init. */
 void scr_island_modules(const ScrIslandModule *mods, size_t nmods,
                          const ScrIslandEdge *edges, size_t nedges);
+/* The logical source entry, independent of the installed binary path. */
+void scr_island_entry_module(const char *filename);
 
 /* The inflater for compressed embedded module text (raw DEFLATE, exact
  * inflated size known from the table row). The emitted main installs

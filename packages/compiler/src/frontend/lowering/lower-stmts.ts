@@ -1,4 +1,5 @@
 import { lowerDynObjectLiteral } from "./expressions/object-literals.js";
+import { importMetaBindingSource } from "./import-meta.js";
 import { InternalCompilerError } from "../../errors.js";
 /* Statement lowering: the statement dispatch (lowerStmt), variable
  * declarations including destructuring patterns, scoped blocks, control
@@ -1441,7 +1442,7 @@ export function isParseArgsDynCheckerType(lowerer: Lowerer, type: ts.Type): bool
       const tokenBound = stdlibGlobalTokenDestructure(lowerer, decl, isLet);
       if (tokenBound !== null) return tokenBound;
     }
-    let init = lowerer.lowerExpr(decl.initializer);
+    let init = importMetaBindingSource(lowerer, decl.name, decl.initializer) ?? lowerer.lowerExpr(decl.initializer);
     const parseArgsDynObject =
       init.type.kind === "dyn" && isParseArgsDynCheckerType(lowerer, lowerer.typeOf(decl.initializer));
     // A TS `any`-origin source whose lowered value is NOT a destructurable

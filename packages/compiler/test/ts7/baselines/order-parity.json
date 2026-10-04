@@ -13714,6 +13714,25 @@
     "<repo>/tests/fixtures/node-types/util-types.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/node24-esm-metadata/main.mjs": {
+   "order": [
+    "<repo>/tests/corpus/node24-esm-metadata/child with ü.mjs",
+    "<repo>/tests/corpus/node24-esm-metadata/main.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/fixtures/npm/cases/node24-esm-metadata/main.ts": {
+   "order": [
+    "<repo>/tests/fixtures/npm/cases/node24-esm-metadata/main.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/diagnostics/import-meta-rest.ts": {
+   "order": [
+    "<repo>/tests/diagnostics/import-meta-rest.ts"
+   ],
+   "diags": []
   }
  }
 }

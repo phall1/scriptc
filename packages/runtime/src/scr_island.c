@@ -135,6 +135,11 @@ static const ScrIslandModule *isl_mods = NULL;
 static size_t isl_nmods = 0;
 static const ScrIslandEdge *isl_edges = NULL;
 static size_t isl_nedges = 0;
+static const char *isl_main_module = NULL;
+
+void scr_island_entry_module(const char *filename) {
+  isl_main_module = filename;
+}
 
 /* Compressed embedded module text (src_raw/esm_raw > 0: raw DEFLATE, the
  * emitter's size lever) inflates LAZILY at a module's first load and the
@@ -2652,32 +2657,49 @@ static JSModuleDef *isl_module_load(JSContext *ctx, const char *name, void *opaq
   free(heap);
   if (JS_IsException(v)) return NULL;
   JSModuleDef *def = JS_VALUE_GET_PTR(v);
-  /* import.meta.url — Node sets the module's file:// URL; embedded keys
-   * are realpaths, builtins keep their node: name. Emscripten factory
-   * modules read it (_scriptName, createRequire(import.meta.url)). */
+  /* File-backed metadata uses the same converters as node:url. Embedded
+   * keys are resolved paths, including spaces, percent signs and Unicode;
+   * concatenating file:// would reinterpret those as URL syntax. */
   JSValue meta = JS_GetImportMeta(ctx, def);
   if (!JS_IsException(meta)) {
     JSValue url;
-    if (name[0] == '/') {
-      size_t n = strlen(name) + 8;
-      char *buf2 = malloc(n);
-      if (buf2) {
-        snprintf(buf2, n, "file://%s", name);
-        url = JS_NewString(ctx, buf2);
-        free(buf2);
-      } else {
-        url = JS_NewString(ctx, name);
+    bool file_backed = name[0] == '/' ||
+      (name[0] && name[1] == ':' && (name[2] == '/' || name[2] == '\\')) ||
+      (name[0] == '\\' && name[1] == '\\');
+    if (file_backed) {
+      ScrStr *path = scr_str_new(name, strlen(name));
+      ScrUrl *parsed = scr_url_from_path(path);
+      ScrStr *href = parsed ? scr_url_href(parsed) : NULL;
+      ScrStr *dir = scr_path_dirname(path);
+      if (!href || !dir) {
+        if (href) scr_str_release(href);
+        if (dir) scr_str_release(dir);
+        if (parsed) scr_url_release(parsed);
+        scr_str_release(path);
+        isl_throw_pending(ctx);
+        JS_FreeValue(ctx, meta);
+        JS_FreeValue(ctx, v);
+        return NULL;
       }
+      JS_SetPropertyStr(ctx, meta, "dirname", JS_NewStringLen(ctx, dir->data, dir->len));
+      JS_SetPropertyStr(ctx, meta, "filename", JS_NewStringLen(ctx, path->data, path->len));
+      url = JS_NewStringLen(ctx, href->data, href->len);
+      scr_str_release(href);
+      scr_str_release(dir);
+      scr_url_release(parsed);
+      scr_str_release(path);
     } else {
       url = JS_NewString(ctx, name);
     }
-    JS_SetPropertyStr(ctx, meta, "url", url); /* consumed */
+    JS_SetPropertyStr(ctx, meta, "main", JS_NewBool(ctx, isl_main_module && strcmp(isl_main_module, name) == 0));
     JSValue key = JS_NewString(ctx, name);
     JSValueConst data[1] = {key};
     JSValue resolve_fn = JS_NewCFunctionData(ctx, isl_import_meta_resolve, 1,
                                              0, 1, data);
     JS_FreeValue(ctx, key); /* resolve_fn's func_data retains it */
+    JS_DefinePropertyValueStr(ctx, resolve_fn, "name", JS_NewString(ctx, "resolve"), JS_PROP_CONFIGURABLE);
     JS_SetPropertyStr(ctx, meta, "resolve", resolve_fn); /* consumed */
+    JS_SetPropertyStr(ctx, meta, "url", url); /* consumed */
     JS_FreeValue(ctx, meta);
   }
   JS_FreeValue(ctx, v);
@@ -10684,7 +10706,8 @@ static const char isl_modules_bootstrap[] =
     "    const spec = String(raw);\n"
     "    const bare = spec.startsWith('node:') ? spec.slice(5) : spec;\n"
     "    if (builtinModules.includes(bare) && (spec.startsWith('node:') || bare !== 'test')) return 'node:' + bare;\n"
-    "    const base = from.startsWith('/') ? new URL('file://' + from).href : from;\n"
+    "    const filePath = (s) => s.startsWith('/') || /^[A-Za-z]:[\\\\/]/.test(s) || s.startsWith('\\\\\\\\');\n"
+    "    const base = filePath(from) ? host.urlFromPath(from) : from;\n"
     "    if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(spec) || spec.startsWith('./') || spec.startsWith('../') || spec.startsWith('/')) {\n"
     "      return new URL(spec, base).href;\n"
     "    }\n"
@@ -10694,7 +10717,7 @@ static const char isl_modules_bootstrap[] =
     "      err.code = 'ERR_MODULE_NOT_FOUND';\n"
     "      throw err;\n"
     "    }\n"
-    "    return to.startsWith('/') ? new URL('file://' + to).href : to;\n"
+    "    return filePath(to) ? host.urlFromPath(to) : to;\n"
     "  };\n"
     "  return (key, name) => {\n"
     "    const exports = requireKey(key);\n"

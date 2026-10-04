@@ -986,6 +986,7 @@ export class LlEmitter {
     if (embedsNet) this.declare(`declare void @scr_net_island_install()`);
     if (usesIsland) {
       this.declare(`declare void @scr_island_modules(ptr, ${this.sizeType}, ptr, ${this.sizeType})`);
+      this.declare(`declare void @scr_island_entry_module(ptr)`);
       this.declare(`declare i32 @scr_island_exit_code()`);
       if (moduleEmbedsCompressedNpm(this.mod)) {
         this.declare(`declare void @scr_island_set_inflate(ptr)`);
@@ -1293,6 +1294,7 @@ export class LlEmitter {
       );
     }
     if (this.templateStringsInstances.size > 0) out.push(``);
+    const islandEntryPath = usesIsland ? this.cstr(this.mod.sourceFile) : null;
     for (const [text, c] of this.cstrs) {
       // NUL-terminated byte-array constants for scr_jb_puts and indentation.
       out.push(
@@ -1456,6 +1458,7 @@ export class LlEmitter {
       `  call void @scr_lib_init(i32 %argc, ptr %argv)`,
       ...(usesIsland
         ? [
+            `  call void @scr_island_entry_module(ptr ${islandEntryPath})`,
             ...(moduleEmbedsCompressedNpm(this.mod)
               ? [`  call void @scr_island_set_inflate(ptr @scr_zlib_inflate_exact)`]
               : []),

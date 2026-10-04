@@ -699,18 +699,18 @@
       "apiEntries": 22,
       "static": {
         "supported": 0,
-        "partial": 12,
+        "partial": 13,
         "refused": 0,
-        "not-implemented": 10,
+        "not-implemented": 9,
         "by-design": 0,
         "unreviewed": 0,
         "not-applicable": 0
       },
       "dynamic": {
         "supported": 0,
-        "partial": 9,
+        "partial": 13,
         "refused": 0,
-        "not-implemented": 13,
+        "not-implemented": 9,
         "by-design": 0,
         "unreviewed": 0,
         "not-applicable": 0
@@ -76503,7 +76503,9 @@
           "tests/corpus/2933-static-dynamic-import/main.ts",
           "tests/corpus/2934-static-import-stored.ts",
           "tests/corpus/2935-module-namespace-values/main.ts",
-          "tests/corpus/950-modules-basic/main.ts"
+          "tests/corpus/950-modules-basic/main.ts",
+          "tests/corpus/node24-esm-metadata/main.mjs",
+          "tests/fixtures/node-types/esm-metadata.mts"
         ]
       },
       "dynamic": {
@@ -76512,7 +76514,8 @@
         "tests": [
           "tests/corpus/2646-top-level-await.ts",
           "tests/fixtures/npm/cases/dual-entry/main.ts",
-          "tests/fixtures/npm/cases/dynamic-import/main.ts"
+          "tests/fixtures/npm/cases/dynamic-import/main.ts",
+          "tests/fixtures/npm/cases/node24-esm-metadata/main.ts"
         ]
       },
       "anchorSource": "chapter"
@@ -76535,12 +76538,20 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-feature:esm.meta"
+        "status": "partial",
+        "evidence": "compiler-feature:esm.meta",
+        "tests": [
+          "tests/corpus/2701-import-meta/main.mjs",
+          "tests/corpus/node24-esm-metadata/main.mjs",
+          "tests/fixtures/node-types/esm-metadata.mts"
+        ]
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-feature:esm.meta"
+        "status": "partial",
+        "evidence": "island-feature:esm.meta",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-esm-metadata/main.ts"
+        ]
       },
       "anchorSource": "chapter"
     },
@@ -76572,7 +76583,8 @@
         "status": "partial",
         "evidence": "island-feature:esm.import.meta.resolve",
         "tests": [
-          "tests/fixtures/npm/cases/dual-entry/main.ts"
+          "tests/fixtures/npm/cases/dual-entry/main.ts",
+          "tests/fixtures/npm/cases/node24-esm-metadata/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -76598,12 +76610,17 @@
         "status": "partial",
         "evidence": "compiler-feature:esm.dirname",
         "tests": [
-          "tests/corpus/2701-import-meta/main.mjs"
+          "tests/corpus/2701-import-meta/main.mjs",
+          "tests/corpus/node24-esm-metadata/main.mjs",
+          "tests/fixtures/node-types/esm-metadata.mts"
         ]
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-feature:esm.dirname"
+        "status": "partial",
+        "evidence": "island-feature:esm.dirname",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-esm-metadata/main.ts"
+        ]
       },
       "anchorSource": "chapter"
     },
@@ -76628,12 +76645,17 @@
         "status": "partial",
         "evidence": "compiler-feature:esm.filename",
         "tests": [
-          "tests/corpus/2701-import-meta/main.mjs"
+          "tests/corpus/2701-import-meta/main.mjs",
+          "tests/corpus/node24-esm-metadata/main.mjs",
+          "tests/fixtures/node-types/esm-metadata.mts"
         ]
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-feature:esm.filename"
+        "status": "partial",
+        "evidence": "island-feature:esm.filename",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-esm-metadata/main.ts"
+        ]
       },
       "anchorSource": "chapter"
     },
@@ -76658,15 +76680,16 @@
         "status": "partial",
         "evidence": "compiler-feature:esm.url",
         "tests": [
-          "tests/corpus/2701-import-meta/main.mjs"
+          "tests/corpus/2701-import-meta/main.mjs",
+          "tests/corpus/node24-esm-metadata/main.mjs",
+          "tests/fixtures/node-types/esm-metadata.mts"
         ]
       },
       "dynamic": {
         "status": "partial",
         "evidence": "island-feature:esm.url",
         "tests": [
-          "tests/fixtures/npm/cases/dynamic-import/main.ts",
-          "tests/corpus/2646-top-level-await.ts"
+          "tests/fixtures/npm/cases/node24-esm-metadata/main.ts"
         ]
       },
       "anchorSource": "chapter"
@@ -76692,12 +76715,17 @@
         "status": "partial",
         "evidence": "compiler-feature:esm.main",
         "tests": [
-          "tests/corpus/2701-import-meta/main.mjs"
+          "tests/corpus/2701-import-meta/main.mjs",
+          "tests/corpus/node24-esm-metadata/main.mjs",
+          "tests/fixtures/node-types/esm-metadata.mts"
         ]
       },
       "dynamic": {
-        "status": "not-implemented",
-        "evidence": "island-feature:esm.main"
+        "status": "partial",
+        "evidence": "island-feature:esm.main",
+        "tests": [
+          "tests/fixtures/npm/cases/node24-esm-metadata/main.ts"
+        ]
       },
       "anchorSource": "chapter"
     },

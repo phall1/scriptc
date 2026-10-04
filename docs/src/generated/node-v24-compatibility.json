@@ -626,18 +626,18 @@
       "apiEntries": 22,
       "static": {
         "supported": 0,
-        "partial": 12,
+        "partial": 13,
         "refused": 0,
-        "not-implemented": 10,
+        "not-implemented": 9,
         "by-design": 0,
         "unreviewed": 0,
         "not-applicable": 0
       },
       "dynamic": {
         "supported": 0,
-        "partial": 9,
+        "partial": 13,
         "refused": 0,
-        "not-implemented": 13,
+        "not-implemented": 9,
         "by-design": 0,
         "unreviewed": 0,
         "not-applicable": 0
@@ -57077,14 +57077,14 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "detail": "Not implemented in scriptc's static module-loader subset yet.",
-        "verification": "declared-gap"
+        "status": "partial",
+        "detail": "Implemented for the documented scriptc module-loader subset.",
+        "verification": "test-backed"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "detail": "Not implemented in the embedded module-loader subset yet.",
-        "verification": "declared-gap"
+        "status": "partial",
+        "detail": "Implemented for the documented embedded module-loader subset.",
+        "verification": "test-backed"
       }
     },
     {
@@ -57138,9 +57138,9 @@
         "verification": "test-backed"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "detail": "Not implemented in the embedded module-loader subset yet.",
-        "verification": "declared-gap"
+        "status": "partial",
+        "detail": "Implemented for the documented embedded module-loader subset.",
+        "verification": "test-backed"
       }
     },
     {
@@ -57166,9 +57166,9 @@
         "verification": "test-backed"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "detail": "Not implemented in the embedded module-loader subset yet.",
-        "verification": "declared-gap"
+        "status": "partial",
+        "detail": "Implemented for the documented embedded module-loader subset.",
+        "verification": "test-backed"
       }
     },
     {
@@ -57222,9 +57222,9 @@
         "verification": "test-backed"
       },
       "dynamic": {
-        "status": "not-implemented",
-        "detail": "Not implemented in the embedded module-loader subset yet.",
-        "verification": "declared-gap"
+        "status": "partial",
+        "detail": "Implemented for the documented embedded module-loader subset.",
+        "verification": "test-backed"
       }
     },
     {
