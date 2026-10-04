@@ -2,10 +2,10 @@ import { createRequire } from "node:module";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterAll, beforeAll, expect, test } from "vitest";
+import { afterAll, beforeAll, expect, test, vi } from "vitest";
 import type { SourceFile, Node } from "typescript/unstable/ast";
 import { AstFile, AstNode } from "./ast-node.js";
-import { AstKind, KIND_NODE_LIST, astChildNames, astChildOrder, HEADER_OFFSET_NODES, NODE_LEN, NODE_OFFSET_NEXT, NODE_OFFSET_PARENT } from "./ast-schema.generated.js";
+import { AstKind, KIND_NODE_LIST, astChildNames, astChildOrder, HEADER_OFFSET_EXTENDED_DATA, HEADER_OFFSET_NODES, NODE_LEN, NODE_OFFSET_DATA, NODE_OFFSET_NEXT, NODE_OFFSET_PARENT } from "./ast-schema.generated.js";
 import { walkPreorder } from "./ast.js";
 import { ts7Executable } from "./rpc-api.js";
 import { Ts7RpcClient } from "./rpc-client.js";
@@ -186,6 +186,58 @@ test("checker handles reject cross-file, wrong-kind and nil identities", () => {
   expect(() => file.resolve(`1.${AstKind.Identifier}.${file.root.path}`)).toThrow("kind");
   expect(() => file.resolve(`1.${AstKind.SourceFile}.${file.root.path}.other`)).toThrow("another source file");
   expect(() => file.resolve(`0.${AstKind.SourceFile}.${file.root.path}`)).toThrow("nil");
+});
+
+test("immutable node text and root metadata reuse decoded answers within their file", () => {
+  for (const name of ["main.ts", "empty.ts"]) {
+    const { bytes, oracle } = decoded.get(name)!;
+    const file = new AstFile(bytes);
+    const text = vi.spyOn(file.wire, "text");
+    const metadata = vi.spyOn(file.wire, "extendedWord");
+    expect(file.root.fileName).toBe(oracle.fileName);
+    expect(file.root.fileName).toBe(oracle.fileName);
+    expect(file.root.path).toBe(oracle.path);
+    expect(file.root.path).toBe(oracle.path);
+    expect(metadata.mock.calls).toEqual([[1, 4], [1, 8]]);
+    let nodes = 0;
+    for (let index = 1; index < file.wire.nodeCount; index++) {
+      if (file.wire.kind(index) === KIND_NODE_LIST) continue;
+      const node = file.node(index);
+      const expected = oracle.getOrCreateNodeAtIndex(index).text;
+      expect(node.text).toBe(expected);
+      expect(node.text).toBe(expected);
+      nodes++;
+    }
+    // Includes absent text, empty source, literals and UTF-16 escapes.
+    expect(text).toHaveBeenCalledTimes(nodes);
+    const other = new AstFile(decoded.get("other.ts")!.bytes);
+    expect(other.root.fileName).toBe(decoded.get("other.ts")!.oracle.fileName);
+    expect(other.root.text).toBe(cases["other.ts"]);
+  }
+});
+
+test("text and metadata caches retain lazy checked failures", () => {
+  for (const [property, offset] of [["text", 0], ["fileName", 4], ["path", 8]] as const) {
+    const bytes = decoded.get("main.ts")!.bytes.slice();
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const nodes = view.getUint32(HEADER_OFFSET_NODES, true);
+    const extended = view.getUint32(HEADER_OFFSET_EXTENDED_DATA, true);
+    const data = view.getUint32(nodes + NODE_LEN + NODE_OFFSET_DATA, true) & 0x00ffffff;
+    view.setUint32(extended + data + offset, 0xffffffff, true);
+    const file = new AstFile(bytes);
+    const read = vi.spyOn(file.wire, "extendedWord");
+    expect(file.root.kind).toBe(AstKind.SourceFile);
+    expect(file.root.statements?.length).toBeGreaterThan(0);
+    expect(read).not.toHaveBeenCalled();
+    expect(() => file.root[property]).toThrow("invalid string index");
+    expect(() => file.root[property]).toThrow("invalid string index");
+    expect(read.mock.calls).toEqual([[1, offset], [1, offset]]);
+    // A bad root field does not poison another file or a non-root access.
+    expect(new AstFile(decoded.get("empty.ts")!.bytes).root.text).toBe("");
+    const identifier = file.node(Array.from({ length: file.wire.nodeCount }, (_, i) => i).find((i) => file.wire.kind(i) === AstKind.Identifier)!);
+    expect(() => identifier.fileName).toThrow("extended data");
+    expect(() => identifier.path).toThrow("extended data");
+  }
 });
 
 test("direct node slots preserve lazy parents, identity and invalid-index checks", () => {
