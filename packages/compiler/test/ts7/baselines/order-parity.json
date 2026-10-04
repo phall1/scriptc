@@ -13733,6 +13733,48 @@
     "<repo>/tests/diagnostics/import-meta-rest.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/node24-url-mutation-coercion.js": {
+   "order": [
+    "<repo>/tests/corpus/node24-url-mutation-coercion.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/node24-url-mutation.ts": {
+   "order": [
+    "<repo>/tests/corpus/node24-url-mutation.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/diagnostics/url-mutation-object-plus.ts": {
+   "order": [
+    "<repo>/tests/diagnostics/url-mutation-object-plus.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/diagnostics/url-mutation-operator.ts": {
+   "order": [
+    "<repo>/tests/diagnostics/url-mutation-operator.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/diagnostics/url-mutation-runtime-key.ts": {
+   "order": [
+    "<repo>/tests/diagnostics/url-mutation-runtime-key.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/fixtures/node-types/url-mutation.ts": {
+   "order": [
+    "<repo>/tests/fixtures/node-types/url-mutation.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/fixtures/npm/cases/node24-url-mutation/main.ts": {
+   "order": [
+    "<repo>/tests/fixtures/npm/cases/node24-url-mutation/main.ts"
+   ],
+   "diags": []
   }
  }
 }
