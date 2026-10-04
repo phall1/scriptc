@@ -301,7 +301,7 @@ _Static_assert(offsetof(ScrBytes, is_buffer) == 40, "LLVM ScrBytes.is_buffer off
     const failures: string[] = [];
     let checked = 0;
     for (const file of await readdir(llvmSrcDir)) {
-      if (!file.endsWith(".ts")) continue;
+      if (!file.endsWith(".ts") || file.endsWith(".test.ts")) continue;
       const src = await readFile(join(llvmSrcDir, file), "utf8");
       // Fully-literal declares only: an interpolated symbol or signature is
       // per-call-site and covered by the emitted scan below.
@@ -324,7 +324,8 @@ _Static_assert(offsetof(ScrBytes, is_buffer) == 40, "LLVM ScrBytes.is_buffer off
     const { protos, dataSyms } = await parseHeader();
     const names = new Map<string, string>(); // name → first file seen in
     for (const file of await readdir(llvmSrcDir)) {
-      if (!file.endsWith(".ts")) continue;
+      // Co-located tests contain assertion fragments, not emitted symbols.
+      if (!file.endsWith(".ts") || file.endsWith(".test.ts")) continue;
       const src = await readFile(join(llvmSrcDir, file), "utf8");
       // The static string tables: every double-quoted scr_* literal is a
       // symbol name some path can hand to the .ll (LIB_FN_SYMS et al.).
