@@ -69,3 +69,10 @@ function nested(): string {
   return value + ((value = "middle") + (value = "right"));
 }
 console.log(nested());
+// Heap strings can have spare append capacity; reusing one must preserve it.
+function appendTwice(value: string): string { return value + ":" + value; }
+function heapAliases(): void {
+  const heap = "<" + String(7) + ">";
+  console.log(appendTwice(heap), heap);
+}
+heapAliases();

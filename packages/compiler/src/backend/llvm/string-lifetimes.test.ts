@@ -67,7 +67,7 @@ test("literal arguments remain immortal while the called body borrows them", () 
 });
 
 test("reference-producing string operations retain their result owner", () => {
-  for (const value of [concat(ref("text"), str("!")), intrinsic(ref("text"), "trim", [], STRING), intrinsic(ref("text"), "toWellFormed", [], STRING)]) {
+  for (const value of [intrinsic(ref("text"), "trim", [], STRING), intrinsic(ref("text"), "toWellFormed", [], STRING)]) {
     const f = fn("transform", ["text"], value);
     expect(facts(f).parameters.get("transform")).toEqual(new Set([0]));
     const ir = body(mod(f), "sc_bf_transform");
@@ -75,6 +75,14 @@ test("reference-producing string operations retain their result owner", () => {
     expect(ir).toMatch(/ret ptr %/);
     expect(ir).not.toContain("@scr_str_release");
   }
+});
+
+test("concatenation protects a borrowed left binding from unique-reference append", () => {
+  const f = fn("append", ["left", "right"], concat(ref("left"), ref("right")));
+  const ir = body(mod(f), "sc_bf_append");
+  const operation = ir.indexOf("@scr_str_concat");
+  expect(ir.slice(0, operation).match(/@scr_str_retain_v/g)).toHaveLength(1);
+  expect(ir.slice(operation)).toContain("@scr_str_release");
 });
 
 test("string operands preserve their left-to-right snapshot when a later assignment replaces the binding", () => {

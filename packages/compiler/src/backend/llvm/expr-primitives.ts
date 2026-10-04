@@ -253,10 +253,13 @@ export function emitStringExpr(host: LlvmEmitterContext, e: ExprOf<"strConcat" |
     const B = host.B;
     switch (e.kind) {
       case "strConcat": {
-        const [l, r] = emitStringInputs(host, [e.left, e.right]);
+        // Concat may append to a uniquely owned left temporary. A retained
+        // read protects an existing binding from that in-place operation.
+        const l = host.emitExpr(e.left);
+        const [r] = emitStringInputs(host, [e.right]);
         host.declare(`declare ptr @scr_str_concat(ptr, ptr)`);
         const t = B.tmp();
-        B.line(`${t} = call ptr @scr_str_concat(ptr ${l!.name}, ptr ${r!.name})`);
+        B.line(`${t} = call ptr @scr_str_concat(ptr ${l.name}, ptr ${r!.name})`);
         return host.own({ name: t, type: e.type });
       }
       case "strEq": {
