@@ -26,7 +26,16 @@ async function main() {
     await new Promise((resolve, reject) => fs.readlink(join(root, "junction"), "hex", (err, value) => {
       if (err) reject(err); else { console.log("hex", value === bytes.toString("hex")); resolve(undefined); }
     }, "ignored"));
-    // Exercise omitted type and Windows's directory inference.
+    // String and URL paths participate in Windows's directory inference.
+    try {
+      await call(fs.symlink, "dir", join(root, "inferred-string"));
+      console.log("inferred string", fs.statSync(join(root, "inferred-string")).isDirectory());
+      await call(fs.symlink, "dir", pathToFileURL(join(root, "inferred-url")), null);
+      console.log("inferred URL", fs.statSync(join(root, "inferred-url")).isDirectory());
+      await call(fs.symlink, Buffer.from("file"), join(root, "buffer-file"));
+      console.log("buffer file", fs.statSync(join(root, "buffer-file")).isFile());
+    } catch (e) { if (process.platform === "win32" && e.code === "EPERM") console.log("inference privilege boundary"); else throw e; }
+    // Buffer paths bypass that probe and use the file-link fallback.
     try {
       await call(fs.symlink, "dir", Buffer.from(join(root, "inferred")));
       console.log("inferred", fs.statSync(join(root, "inferred")).isDirectory());

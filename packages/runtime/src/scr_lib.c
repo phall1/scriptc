@@ -4386,6 +4386,11 @@ static DWORD scr_fs_win_junction(const WCHAR *target, const WCHAR *destination) 
 }
 #endif
 
+#ifdef _WIN32
+/* libuv keeps this fallback for later calls once Windows rejects the flag. */
+static DWORD scr_fs_symlink_usermode_flag = 0x2; /* ALLOW_UNPRIVILEGED_CREATE */
+#endif
+
 int scr_fs_symlink_infer(ScrStr *absolute) {
 #ifdef _WIN32
   WCHAR *probe = scr_fs_win_wide(absolute);
@@ -4418,17 +4423,24 @@ void scr_fs_symlink(ScrStr *target, ScrStr *destination, int kind) {
     free(text);
   }
   scr_str_release(absolute);
-  WCHAR *from = scr_fs_win_wide(stored), *to = scr_fs_win_wide(destination);
+  /* Node's binding namespaces the link path before passing it to libuv.
+   * In particular, Windows can reject a file link to a directory differently
+   * when the destination uses the extended-length path syntax. */
+  ScrStr *link_path = scr_path_win32_to_namespaced_path(destination);
+  WCHAR *from = scr_fs_win_wide(stored), *to = scr_fs_win_wide(link_path);
   DWORD error = !from || !to ? GetLastError() : 0;
   if (!error && kind == 2) error = scr_fs_win_junction(from, to);
   else if (!error) {
-    DWORD flags = (kind == 1 ? SYMBOLIC_LINK_FLAG_DIRECTORY : 0) | 0x2; /* ALLOW_UNPRIVILEGED_CREATE */
+    DWORD flags = (kind == 1 ? SYMBOLIC_LINK_FLAG_DIRECTORY : 0) | scr_fs_symlink_usermode_flag;
     if (!CreateSymbolicLinkW(to, from, flags)) {
       error = GetLastError();
-      if (error == ERROR_INVALID_PARAMETER) error = CreateSymbolicLinkW(to, from, flags & ~0x2u) ? 0 : GetLastError();
+      if (error == ERROR_INVALID_PARAMETER && scr_fs_symlink_usermode_flag) {
+        scr_fs_symlink_usermode_flag = 0;
+        error = CreateSymbolicLinkW(to, from, flags & ~0x2u) ? 0 : GetLastError();
+      }
     }
   }
-  free(from); free(to); scr_str_release(stored);
+  free(from); free(to); scr_str_release(stored); scr_str_release(link_path);
   if (error) scr_fs_throw2(scr_fs_win_errno(error), "symlink", target, destination);
 #else
   (void)kind;
