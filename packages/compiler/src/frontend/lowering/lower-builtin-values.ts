@@ -30,6 +30,7 @@ export function isNativeBuiltinValueInitializer(lowerer: Lowerer, expr: ts.Expre
   while (ts.isParenthesizedExpression(expr)) expr = expr.expression;
   const builtin = ts.isIdentifier(expr) ? lowerer.builtinImportOf(expr)
     : ts.isPropertyAccessExpression(expr) ? lowerer.builtinMemberOf(expr) : null;
+  if (builtin?.module === "util/types") return true;
   if (builtin?.module === "util" && ["stripVTControlCharacters", "toUSVString", "isDeepStrictEqual", "styleText"].includes(builtin.member)) return true;
   // JS global snapshots may use an opaque builtin identity rather than
   // the ambient constructor's callable ABI. Store that actual value in
@@ -143,7 +144,7 @@ export function lowerNumberParserValue(lowerer: Lowerer, member: "parseInt" | "p
 
 // These module values expose existing native callable lowerings and main-thread
 // metadata. Other exports keep an explicit runtime refusal, including Worker.
-const MODULES = ["path/posix", "path/win32", "os", "worker_threads"] as const;
+const MODULES = ["path/posix", "path/win32", "os", "worker_threads", "util/types"] as const;
 
 const box = (value: IrExpr): IrExpr => value.type.kind === "dyn" ? value : { kind: "dynFrom", value, type: DYN, loc: value.loc };
 
@@ -161,6 +162,23 @@ export function pathModuleValue(lowerer: Lowerer, module: string, loc: SrcLoc): 
   add("posix", moduleValue(lowerer, "path/posix", loc));
   add("win32", moduleValue(lowerer, "path/win32", loc));
   return { kind: "dynObjLit", fields, type: DYN, loc };
+}
+
+export function utilTypesModuleValue(lowerer: Lowerer, loc: SrcLoc): IrExpr {
+  return moduleValue(lowerer, "util/types", loc);
+}
+
+export function lowerUtilTypeValue(lowerer: Lowerer, member: string, loc: SrcLoc): IrExpr {
+  const name = `%builtin.util/types.${member}`;
+  if (!lowerer.builtinCallableValueFns.has(name)) {
+    lowerer.builtinCallableValueFns.set(name, name);
+    lowerer.liftedFns.push({ name, params: [{ localId: "value", name: "value", type: DYN }], returnType: BOOL,
+      locals: [{ id: "value", name: "value", type: DYN, mutable: false }], loc,
+      body: [{ kind: "return", value: { kind: "libCall", fn: "util.typeIs", args: [varRef("value", DYN, loc), strLit(member, loc)], type: BOOL, loc }, loc }],
+    });
+  }
+  const value: IrExpr = { kind: "closure", fnName: name, captures: [], type: { kind: "func", params: [DYN], ret: BOOL }, loc };
+  return { kind: "libCall", fn: "util.typeValue", args: [box(value), strLit(member, loc)], type: DYN, loc };
 }
 
 function moduleValue(lowerer: Lowerer, module: string, loc: SrcLoc): IrExpr {

@@ -13684,6 +13684,36 @@
     "<repo>/tests/corpus/node24-style-text-environment.js"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/node24-util-types.ts": {
+   "order": [
+    "<repo>/tests/corpus/node24-util-types.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/node24-util-types.js": {
+   "order": [
+    "<repo>/tests/corpus/node24-util-types.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/node24-util-types.cjs": {
+   "order": [
+    "<repo>/tests/corpus/node24-util-types.cjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/fixtures/npm/cases/node24-util-types/main.ts": {
+   "order": [
+    "<repo>/tests/fixtures/npm/cases/node24-util-types/main.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/fixtures/node-types/util-types.ts": {
+   "order": [
+    "<repo>/tests/fixtures/node-types/util-types.ts"
+   ],
+   "diags": []
   }
  }
 }

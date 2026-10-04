@@ -2005,6 +2005,156 @@
       "note": "recognized module (bare and node:-prefixed specifiers)"
     },
     {
+      "id": "node-builtin.util.types.isAnyArrayBuffer",
+      "kind": "node-builtin",
+      "name": "util/types.isAnyArrayBuffer",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.util.types.isArrayBuffer",
+      "kind": "node-builtin",
+      "name": "util/types.isArrayBuffer",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.util.types.isArrayBufferView",
+      "kind": "node-builtin",
+      "name": "util/types.isArrayBufferView",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.util.types.isAsyncFunction",
+      "kind": "node-builtin",
+      "name": "util/types.isAsyncFunction",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.util.types.isDataView",
+      "kind": "node-builtin",
+      "name": "util/types.isDataView",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.util.types.isFloat32Array",
+      "kind": "node-builtin",
+      "name": "util/types.isFloat32Array",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.util.types.isFloat64Array",
+      "kind": "node-builtin",
+      "name": "util/types.isFloat64Array",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.util.types.isGeneratorFunction",
+      "kind": "node-builtin",
+      "name": "util/types.isGeneratorFunction",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.util.types.isGeneratorObject",
+      "kind": "node-builtin",
+      "name": "util/types.isGeneratorObject",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.util.types.isInt16Array",
+      "kind": "node-builtin",
+      "name": "util/types.isInt16Array",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.util.types.isInt32Array",
+      "kind": "node-builtin",
+      "name": "util/types.isInt32Array",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.util.types.isInt8Array",
+      "kind": "node-builtin",
+      "name": "util/types.isInt8Array",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.util.types.isMap",
+      "kind": "node-builtin",
+      "name": "util/types.isMap",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.util.types.isNativeError",
+      "kind": "node-builtin",
+      "name": "util/types.isNativeError",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.util.types.isPromise",
+      "kind": "node-builtin",
+      "name": "util/types.isPromise",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.util.types.isProxy",
+      "kind": "node-builtin",
+      "name": "util/types.isProxy",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.util.types.isRegExp",
+      "kind": "node-builtin",
+      "name": "util/types.isRegExp",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.util.types.isSet",
+      "kind": "node-builtin",
+      "name": "util/types.isSet",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.util.types.isTypedArray",
+      "kind": "node-builtin",
+      "name": "util/types.isTypedArray",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.util.types.isUint16Array",
+      "kind": "node-builtin",
+      "name": "util/types.isUint16Array",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.util.types.isUint32Array",
+      "kind": "node-builtin",
+      "name": "util/types.isUint32Array",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.util.types.isUint8Array",
+      "kind": "node-builtin",
+      "name": "util/types.isUint8Array",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.util.types.isUint8ClampedArray",
+      "kind": "node-builtin",
+      "name": "util/types.isUint8ClampedArray",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.util.types.isWeakMap",
+      "kind": "node-builtin",
+      "name": "util/types.isWeakMap",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.util.types.isWeakSet",
+      "kind": "node-builtin",
+      "name": "util/types.isWeakSet",
+      "status": "static"
+    },
+    {
       "id": "node-builtin.worker_threads",
       "kind": "node-builtin",
       "name": "worker_threads",

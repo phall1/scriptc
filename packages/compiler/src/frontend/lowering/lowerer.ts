@@ -1,4 +1,4 @@
-import { pathModuleValue } from "./lower-builtin-values.js";
+import { lowerUtilTypeValue, pathModuleValue, utilTypesModuleValue } from "./lower-builtin-values.js";
 import { everyExprChild, everyStmtChild, transformStmtList } from "../../ir/traverse.js";
 import { RuntimeOptionalLocals } from "./runtime-optional-locals.js";
 import { sanitizeUnregisteredClassTypes } from "./sanitize-class-types.js";
@@ -10430,6 +10430,8 @@ export class Lowerer {
     // Default and CommonJS process bindings alias the global object, whose
     // methods and properties keep their existing process lowerings.
     if (stdlibGlobalNameOf(this, expr) === "process") return null;
+    const imported = ts.isIdentifier(expr) ? this.builtinImportOf(expr) : null;
+    if (imported?.module === "util" && imported.member === "types") return "util/types";
     const stored = ts.isIdentifier(expr)
       ? (this.peekLocal(expr)?.type ?? this.globalOf(expr)?.type)
       : undefined;
@@ -10711,6 +10713,8 @@ export class Lowerer {
     bi: { module: string; member: string },
     loc: SrcLoc,
   ): IrExpr | null {
+    if (bi.module === "util" && bi.member === "types") return utilTypesModuleValue(this, loc);
+    if (bi.module === "util/types" && builtinModuleFnOf(this, bi.module, bi.member)) return lowerUtilTypeValue(this, bi.member, loc);
     if (bi.module === "util" && bi.member === "getSystemErrorMap") return lowerSystemErrorMapValue(this, loc);
     if (bi.module === "fs" && builtinModuleFnOf(this, bi.module, bi.member)?.fn === "fs.callbackCall") {
       return { kind: "libCall", fn: "fs.callbackValue", args: [{ kind: "strLit", value: bi.member, type: STRING, loc }], type: DYN, loc };

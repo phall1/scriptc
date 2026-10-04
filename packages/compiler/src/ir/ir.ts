@@ -2581,6 +2581,8 @@ export type IrLibFn =
   | "util.toUSVString"
   | "util.isDeepStrictEqual"
   | "util.styleText"
+  | "util.typeIs"
+  | "util.typeValue"
   /** ES Symbol values (scr_symbol.c — link-gated by moduleUsesSymbol).
    * sym.new: `Symbol(desc)` — a fresh runtime-unique identity (+1) whose
    * one arg is the description string (borrowed); sym.newAnon is the

@@ -1914,6 +1914,56 @@ bool scr_dyn_typed_array_is(const ScrDyn *d, int elem) {
   return d && d->kind == SCR_DYN_BYTES && !d->v.bytes->is_data_view && d->v.bytes->elem == (ScrBytesElem)elem;
 }
 
+/* Node util.types reads internal brands, never user properties or prototypes. */
+bool scr_dyn_util_type_is(const ScrDyn *value, const ScrStr *probe) {
+  if (!value) return false;
+  if (value->kind == SCR_DYN_JSVAL) return scr_dyn_jsval_ops()->type_probe(value->v.jsval.cell, probe);
+#define PROBE(name) (probe->len == sizeof(name) - 1 && memcmp(probe->data, name, sizeof(name) - 1) == 0)
+  if (PROBE("isAnyArrayBuffer") || PROBE("isArrayBuffer")) return scr_array_buffer_is(value);
+  if (PROBE("isArrayBufferView")) return value->kind == SCR_DYN_BYTES;
+  if (PROBE("isDataView")) return value->kind == SCR_DYN_BYTES && value->v.bytes->is_data_view;
+  if (PROBE("isTypedArray")) return value->kind == SCR_DYN_BYTES && !value->v.bytes->is_data_view;
+  if (PROBE("isUint8Array")) return scr_dyn_typed_array_is(value, SCR_BYTES_U8);
+  if (PROBE("isUint8ClampedArray")) return scr_dyn_typed_array_is(value, SCR_BYTES_U8C);
+  if (PROBE("isUint16Array")) return scr_dyn_typed_array_is(value, SCR_BYTES_U16);
+  if (PROBE("isUint32Array")) return scr_dyn_typed_array_is(value, SCR_BYTES_U32);
+  if (PROBE("isInt8Array")) return scr_dyn_typed_array_is(value, SCR_BYTES_I8);
+  if (PROBE("isInt16Array")) return scr_dyn_typed_array_is(value, SCR_BYTES_I16);
+  if (PROBE("isInt32Array")) return scr_dyn_typed_array_is(value, SCR_BYTES_I32);
+  if (PROBE("isFloat32Array")) return scr_dyn_typed_array_is(value, SCR_BYTES_F32);
+  if (PROBE("isFloat64Array")) return scr_dyn_typed_array_is(value, SCR_BYTES_F64);
+  if (PROBE("isMap")) return value->kind == SCR_DYN_HANDLE && value->v.handle.tag == SCR_DYNH_MAP;
+  if (PROBE("isSet")) return value->kind == SCR_DYN_HANDLE && value->v.handle.tag == SCR_DYNH_SET;
+  if (PROBE("isWeakMap")) return value->kind == SCR_DYN_HANDLE && value->v.handle.tag == SCR_DYNH_WEAK_MAP;
+  if (PROBE("isWeakSet")) return value->kind == SCR_DYN_HANDLE && value->v.handle.tag == SCR_DYNH_WEAK_SET;
+  if (PROBE("isRegExp")) return value->kind == SCR_DYN_HANDLE && value->v.handle.tag == SCR_DYNH_REGEXP;
+  if (PROBE("isPromise")) return value->kind == SCR_DYN_PROMISE;
+  if (PROBE("isProxy")) return value->kind == SCR_DYN_PROXY;
+  if (PROBE("isAsyncFunction")) return value->kind == SCR_DYN_FUNC && (value->v.fn.clo->function_kind & 2) != 0;
+  if (PROBE("isGeneratorFunction")) return value->kind == SCR_DYN_FUNC && (value->v.fn.clo->function_kind & 1) != 0;
+  if (PROBE("isGeneratorObject")) return scr_dyn_generator(value);
+  if (PROBE("isNativeError")) {
+    ScrError *error = scr_errdyn_err_of(value);
+    if (!error) return false;
+    scr_error_release(error);
+    return true;
+  }
+#undef PROBE
+  return false;
+}
+
+/* Node's JavaScript wrappers have names/arity; engine-native probes are
+ * anonymous with length zero. Keep their native closure identity intact. */
+ScrDyn *scr_dyn_util_type_value(const ScrDyn *value, const ScrStr *probe) {
+  static const char *const named[] = { "isTypedArray", "isUint8Array", "isUint8ClampedArray", "isUint16Array", "isUint32Array",
+    "isInt8Array", "isInt16Array", "isInt32Array", "isFloat32Array", "isFloat64Array" };
+  const char *name = "";
+  if (probe->len == 17 && memcmp(probe->data, "isArrayBufferView", 17) == 0) name = "isView";
+  for (size_t i = 0; i < sizeof named / sizeof named[0]; i++)
+    if (probe->len == strlen(named[i]) && memcmp(probe->data, named[i], probe->len) == 0) name = named[i];
+  return scr_dyn_new_func(scr_closure_retain(value->v.fn.clo), value->v.fn.thunk, *name ? 1 : 0, value->v.fn.sig, name);
+}
+
 bool scr_dyn_bytes_is(const ScrDyn *d, int elem) {
   return d && d->kind == SCR_DYN_BYTES && d->v.bytes->elem == (ScrBytesElem)elem;
 }
@@ -9289,7 +9339,8 @@ ScrMap *scr_dyn_native_map_check(const ScrDyn *value, const ScrDynPath *path) {
 bool scr_dyn_native_collection_is(const ScrDyn *value, int map, const char *type) {
   if (!(map ? scr_dyn_native_map_is(value) : scr_dyn_native_set_is(value))) return false;
   const ScrMap *storage = value->v.handle.ptr;
-  return type ? storage->dyn_ops && strcmp(storage->dyn_ops->type, type) == 0 : !storage->dyn_ops;
+  // A generic checked view uses dyn_ops to box/unbox the same live storage.
+  return !type || (storage->dyn_ops && strcmp(storage->dyn_ops->type, type) == 0);
 }
 
 ScrMap *scr_dyn_native_collection_check(const ScrDyn *value, int map, const char *type, const ScrDynPath *path) {

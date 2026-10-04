@@ -90,6 +90,14 @@ export function computeMayThrow(mod: IrModule): { fns: Set<string>; indirect: bo
             sawDynFuncAdapter = true;
           }
           break;
+        case "mapIntrinsic":
+        case "setIntrinsic": {
+          const receiver = rec.receiver.type;
+          const generic = receiver.kind === "map" ? receiver.key.kind === "dyn" && receiver.value.kind === "dyn"
+            : receiver.kind === "set" && receiver.elem.kind === "dyn";
+          if (generic && ["get", "set", "add", "has", "delete"].includes(rec.method)) f.throws = true;
+          break;
+        }
         case "fieldIncDec":
           // A checked-dynamic field's ++/-- validates the number out of
           // the box — that dynCheck throws catchably on non-numbers.

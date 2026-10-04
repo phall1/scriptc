@@ -222,6 +222,7 @@ static const char *isl_edge_find(const char *from, const char *spec, int want) {
 
 /* Defined with the module system below; called from isl_init. */
 static void isl_install_module_loader(void);
+static void isl_init_type_brands(void);
 /* Defined with the host-function machinery below; called from isl_init. */
 static void isl_register_hostfn_class(void);
 /* Defined with the island → static promise bridge below; called from the
@@ -536,6 +537,7 @@ static void isl_init(void) {
     fprintf(stderr, "scriptc: island engine context allocation failed\n");
     abort();
   }
+  isl_init_type_brands();
   JSValue arr = JS_Eval(isl_ctx, isl_prelude, sizeof isl_prelude - 1,
                         "<scr-prelude>", JS_EVAL_TYPE_GLOBAL);
   if (JS_IsException(arr)) {
@@ -1154,6 +1156,103 @@ static bool isl_dynjs_strict_eq(ScrJsval *a, ScrJsval *b) {
 static bool isl_dynjs_is_array(ScrJsval *cell) { return JS_IsArray(cell->v); }
 static bool isl_dynjs_is_error(ScrJsval *cell) { return JS_IsError(cell->v); }
 
+/* Cache engine class IDs from pristine builtins before user code runs.
+ * Class comparisons never inspect public properties or execute traps. */
+static SCR_TL JSClassID isl_module_namespace_class;
+static const char *const isl_brand_names[] = { "SharedArrayBuffer", "GeneratorFunction", "AsyncGeneratorFunction", "Generator", "AsyncGenerator",
+  "Arguments", "Arguments", "Map Iterator", "Set Iterator", "Number", "String", "Boolean", "Symbol", "BigInt" };
+static SCR_TL JSClassID isl_brand_classes[sizeof isl_brand_names / sizeof isl_brand_names[0]];
+static void isl_init_type_brands(void) {
+  static const char brand_source[] =
+    "[new SharedArrayBuffer(0), function*(){}, async function*(){}, (function*(){})(), (async function*(){})(),"
+    "(function(){'use strict';return arguments})(1), Function('a','return arguments')(1),"
+    "new Map().entries(), new Set().values(), Object(0), Object(''), Object(false), Object(Symbol()), Object(0n)]";
+  JSValue brands = JS_Eval(isl_ctx, brand_source, sizeof brand_source - 1, "<scr-type-brands>", JS_EVAL_TYPE_GLOBAL);
+  if (JS_IsException(brands)) {
+    fprintf(stderr, "scriptc: island type brands failed to initialize\n");
+    abort();
+  }
+  for (size_t i = 0; i < sizeof isl_brand_classes / sizeof isl_brand_classes[0]; i++) {
+    JSValue value = JS_GetPropertyUint32(isl_ctx, brands, (uint32_t)i);
+    isl_brand_classes[i] = JS_GetClassID(value);
+    JS_FreeValue(isl_ctx, value);
+  }
+  JS_FreeValue(isl_ctx, brands);
+  static const char namespace_source[] = "export {};";
+  JSValue module = JS_Eval(isl_ctx, namespace_source, sizeof namespace_source - 1,
+      "<scr-type-brands>", JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+  JSValue evaluated = JS_IsException(module) ? JS_EXCEPTION : JS_EvalFunction(isl_ctx, JS_DupValue(isl_ctx, module));
+  JSValue namespace = JS_IsException(evaluated) ? JS_EXCEPTION : JS_GetModuleNamespace(isl_ctx, JS_VALUE_GET_PTR(module));
+  if (JS_IsException(namespace)) {
+    fprintf(stderr, "scriptc: island type brands failed to initialize\n");
+    abort();
+  }
+  isl_module_namespace_class = JS_GetClassID(namespace);
+  JS_FreeValue(isl_ctx, namespace);
+  JS_FreeValue(isl_ctx, evaluated);
+  JS_FreeValue(isl_ctx, module);
+}
+
+static bool isl_class_named(JSValueConst value, const char *name) {
+  JSClassID id = JS_GetClassID(value);
+  if (!id) return false;
+  for (size_t i = 0; i < sizeof isl_brand_names / sizeof isl_brand_names[0]; i++)
+    if (id == isl_brand_classes[i] && strcmp(isl_brand_names[i], name) == 0) return true;
+  return false;
+}
+
+static bool isl_type_probe(JSValueConst value, const char *probe, size_t len) {
+#define PROBE(name) (len == sizeof(name) - 1 && memcmp(probe, name, sizeof(name) - 1) == 0)
+  int typed = JS_GetTypedArrayType(value);
+  if (PROBE("isTypedArray")) return typed >= 0;
+  if (PROBE("isArrayBufferView")) return typed >= 0 || JS_IsDataView(value);
+  if (PROBE("isUint8Array")) return typed == JS_TYPED_ARRAY_UINT8;
+  if (PROBE("isUint8ClampedArray")) return typed == JS_TYPED_ARRAY_UINT8C;
+  if (PROBE("isUint16Array")) return typed == JS_TYPED_ARRAY_UINT16;
+  if (PROBE("isUint32Array")) return typed == JS_TYPED_ARRAY_UINT32;
+  if (PROBE("isInt8Array")) return typed == JS_TYPED_ARRAY_INT8;
+  if (PROBE("isInt16Array")) return typed == JS_TYPED_ARRAY_INT16;
+  if (PROBE("isInt32Array")) return typed == JS_TYPED_ARRAY_INT32;
+  if (PROBE("isFloat16Array")) return typed == JS_TYPED_ARRAY_FLOAT16;
+  if (PROBE("isFloat32Array")) return typed == JS_TYPED_ARRAY_FLOAT32;
+  if (PROBE("isFloat64Array")) return typed == JS_TYPED_ARRAY_FLOAT64;
+  if (PROBE("isBigInt64Array")) return typed == JS_TYPED_ARRAY_BIG_INT64;
+  if (PROBE("isBigUint64Array")) return typed == JS_TYPED_ARRAY_BIG_UINT64;
+  if (PROBE("isArrayBuffer")) return JS_IsArrayBuffer(value);
+  if (PROBE("isDataView")) return JS_IsDataView(value);
+  if (PROBE("isDate")) return JS_IsDate(value);
+  if (PROBE("isMap")) return JS_IsMap(value);
+  if (PROBE("isSet")) return JS_IsSet(value);
+  if (PROBE("isWeakMap")) return JS_IsWeakMap(value);
+  if (PROBE("isWeakSet")) return JS_IsWeakSet(value);
+  if (PROBE("isRegExp")) return JS_IsRegExp(value);
+  if (PROBE("isPromise")) return JS_IsPromise(value);
+  if (PROBE("isProxy")) return JS_IsProxy(value);
+  if (PROBE("isNativeError")) return JS_IsError(value);
+  if (PROBE("isAnyArrayBuffer")) return JS_IsArrayBuffer(value) || isl_class_named(value, "SharedArrayBuffer");
+  if (PROBE("isSharedArrayBuffer")) return isl_class_named(value, "SharedArrayBuffer");
+  if (PROBE("isAsyncFunction")) return JS_IsAsyncFunction(value) || isl_class_named(value, "AsyncGeneratorFunction");
+  if (PROBE("isGeneratorFunction")) return isl_class_named(value, "GeneratorFunction") || isl_class_named(value, "AsyncGeneratorFunction");
+  if (PROBE("isGeneratorObject")) return isl_class_named(value, "Generator") || isl_class_named(value, "AsyncGenerator");
+  if (PROBE("isArgumentsObject")) return isl_class_named(value, "Arguments");
+  if (PROBE("isMapIterator")) return isl_class_named(value, "Map Iterator");
+  if (PROBE("isSetIterator")) return isl_class_named(value, "Set Iterator");
+  if (PROBE("isModuleNamespaceObject")) return isl_module_namespace_class && JS_GetClassID(value) == isl_module_namespace_class;
+  if (PROBE("isNumberObject")) return isl_class_named(value, "Number");
+  if (PROBE("isStringObject")) return isl_class_named(value, "String");
+  if (PROBE("isBooleanObject")) return isl_class_named(value, "Boolean");
+  if (PROBE("isSymbolObject")) return isl_class_named(value, "Symbol");
+  if (PROBE("isBigIntObject")) return isl_class_named(value, "BigInt");
+  if (PROBE("isBoxedPrimitive")) return isl_class_named(value, "Number") || isl_class_named(value, "String") ||
+    isl_class_named(value, "Boolean") || isl_class_named(value, "Symbol") || isl_class_named(value, "BigInt");
+#undef PROBE
+  return false;
+}
+
+static bool isl_dynjs_type_probe(ScrJsval *cell, const ScrStr *probe) {
+  return isl_type_probe(cell->v, probe->data, probe->len);
+}
+
 static const ScrDynJsvalOps isl_dynjs_ops;
 
 /* The jsval→dyn wrap over a RAW engine value (BORROWED) — the scalar
@@ -1442,6 +1541,7 @@ static const ScrDynJsvalOps isl_dynjs_ops = {
   isl_dynjs_iter_drain,
   isl_dynjs_iterator,
   isl_dynjs_iter_n,
+  isl_dynjs_type_probe,
 };
 
 ScrDyn *scr_dyn_from_jsval(ScrJsval *cell) {
@@ -3710,6 +3810,18 @@ static JSValue isl_host_hostname(JSContext *ctx, JSValueConst this_val, int argc
 #endif
   buf[sizeof buf - 1] = '\0';
   return JS_NewString(ctx, buf);
+}
+
+static JSValue isl_host_type_probe(JSContext *ctx, JSValueConst this_val,
+    int argc, JSValueConst *argv) {
+  (void)this_val;
+  if (argc < 2) return JS_FALSE;
+  size_t len;
+  const char *probe = JS_ToCStringLen(ctx, &len, argv[0]);
+  if (!probe) return JS_EXCEPTION;
+  bool result = isl_type_probe(argv[1], probe, len);
+  JS_FreeCString(ctx, probe);
+  return JS_NewBool(ctx, result);
 }
 
 /* The bootstrap: the CommonJS require shim over the embedded map, the
@@ -8527,101 +8639,63 @@ static const char isl_modules_bootstrap[] =
     "    return fn;\n"
     "  };\n"
     "  const tagOf = (v) => Object.prototype.toString.call(v).slice(8, -1);\n"
-    "  const taggedTest = (tag) => (v) => tagOf(v) === tag && typeof v === \"object\";\n"
     "  const taTagGetter = Object.getOwnPropertyDescriptor(\n"
     "    Object.getPrototypeOf(Object.getPrototypeOf(new Uint8Array(0))), Symbol.toStringTag).get;\n"
-    "  const brandTA = (v) => {\n"
-    "    try {\n"
-    "      return taTagGetter.call(v) !== undefined;\n"
-    "    } catch (e) {\n"
-    "      return false;\n"
-    "    }\n"
-    "  };\n"
     "  const types = {\n"
-    "    isAnyArrayBuffer: (v) => tagOf(v) === \"ArrayBuffer\" || tagOf(v) === \"SharedArrayBuffer\",\n"
-    "    isArrayBufferView: (v) => ArrayBuffer.isView(v),\n"
-    "    isArgumentsObject: taggedTest(\"Arguments\"),\n"
-    "    isArrayBuffer: (v) => {\n"
-    "      try { Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, \"byteLength\").get.call(v); return true; }\n"
-    "      catch (e) { return false; }\n"
-    "    },\n"
-    "    isAsyncFunction: (v) => typeof v === \"function\" && tagOf(v) === \"AsyncFunction\",\n"
-    "    isBigInt64Array: (v) => tagOf(v) === \"BigInt64Array\",\n"
-    "    isBigUint64Array: (v) => tagOf(v) === \"BigUint64Array\",\n"
-    "    isBooleanObject: (v) => {\n"
-    "      try { Boolean.prototype.valueOf.call(v); return typeof v === \"object\"; }\n"
-    "      catch (e) { return false; }\n"
-    "    },\n"
-    "    isBoxedPrimitive: (v) =>\n"
-    "      types.isStringObject(v) || types.isNumberObject(v) || types.isBooleanObject(v) ||\n"
-    "      types.isSymbolObject(v) || types.isBigIntObject(v),\n"
-    "    isBigIntObject: (v) => {\n"
-    "      try { BigInt.prototype.valueOf.call(v); return typeof v === \"object\"; }\n"
-    "      catch (e) { return false; }\n"
-    "    },\n"
-    "    isCryptoKey: () => false,\n"
-    "    isDataView: (v) => {\n"
-    "      try { Object.getOwnPropertyDescriptor(DataView.prototype, \"byteLength\").get.call(v); return true; }\n"
-    "      catch (e) { return false; }\n"
-    "    },\n"
-    "    isDate: (v) => {\n"
-    "      try { Date.prototype.getTime.call(v); return true; }\n"
-    "      catch (e) { return false; }\n"
-    "    },\n"
-    "    isExternal: () => false,\n"
-    "    isFloat16Array: (v) => tagOf(v) === \"Float16Array\",\n"
-    "    isFloat32Array: (v) => tagOf(v) === \"Float32Array\",\n"
-    "    isFloat64Array: (v) => tagOf(v) === \"Float64Array\",\n"
-    "    isGeneratorFunction: (v) => typeof v === \"function\" && tagOf(v) === \"GeneratorFunction\",\n"
-    "    isGeneratorObject: (v) => typeof v === \"object\" && v !== null && tagOf(v) === \"Generator\",\n"
-    "    isInt8Array: (v) => tagOf(v) === \"Int8Array\",\n"
-    "    isInt16Array: (v) => tagOf(v) === \"Int16Array\",\n"
-    "    isInt32Array: (v) => tagOf(v) === \"Int32Array\",\n"
-    "    isKeyObject: () => false,\n"
-    "    isMap: (v) => {\n"
-    "      try { Object.getOwnPropertyDescriptor(Map.prototype, \"size\").get.call(v); return true; }\n"
-    "      catch (e) { return false; }\n"
-    "    },\n"
-    "    isMapIterator: (v) => tagOf(v) === \"Map Iterator\",\n"
-    "    isModuleNamespaceObject: (v) => typeof v === \"object\" && v !== null && tagOf(v) === \"Module\",\n"
-    "    isNativeError: (v) => v instanceof Error && (\n"
-    "      [\"Error\", \"EvalError\", \"RangeError\", \"ReferenceError\", \"SyntaxError\", \"TypeError\", \"URIError\", \"AggregateError\", \"SuppressedError\"].includes(tagOf(v))\n"
-    "    ),\n"
-    "    isNumberObject: (v) => {\n"
-    "      try { Number.prototype.valueOf.call(v); return typeof v === \"object\"; }\n"
-    "      catch (e) { return false; }\n"
-    "    },\n"
-    "    isPromise: (v) => v instanceof Promise,\n"
-    "    isProxy: () => false,\n"
-    "    isRegExp: (v) => tagOf(v) === \"RegExp\",\n"
-    "    isSet: (v) => {\n"
-    "      try { Object.getOwnPropertyDescriptor(Set.prototype, \"size\").get.call(v); return true; }\n"
-    "      catch (e) { return false; }\n"
-    "    },\n"
-    "    isSetIterator: (v) => tagOf(v) === \"Set Iterator\",\n"
-    "    isSharedArrayBuffer: (v) => tagOf(v) === \"SharedArrayBuffer\",\n"
-    "    isStringObject: (v) => {\n"
-    "      try { String.prototype.valueOf.call(v); return typeof v === \"object\"; }\n"
-    "      catch (e) { return false; }\n"
-    "    },\n"
-    "    isSymbolObject: (v) => {\n"
-    "      try { Symbol.prototype.valueOf.call(v); return typeof v === \"object\"; }\n"
-    "      catch (e) { return false; }\n"
-    "    },\n"
-    "    isTypedArray: brandTA,\n"
-    "    isUint8Array: (v) => tagOf(v) === \"Uint8Array\",\n"
-    "    isUint8ClampedArray: (v) => tagOf(v) === \"Uint8ClampedArray\",\n"
-    "    isUint16Array: (v) => tagOf(v) === \"Uint16Array\",\n"
-    "    isUint32Array: (v) => tagOf(v) === \"Uint32Array\",\n"
-    "    isWeakMap: (v) => {\n"
-    "      try { WeakMap.prototype.has.call(v, {}); return true; }\n"
-    "      catch (e) { return false; }\n"
-    "    },\n"
-    "    isWeakSet: (v) => {\n"
-    "      try { WeakSet.prototype.has.call(v, {}); return true; }\n"
-    "      catch (e) { return false; }\n"
-    "    },\n"
+    "    isAnyArrayBuffer: (v) => env.typeProbe(\"isAnyArrayBuffer\", v),\n"
+    "    isArrayBufferView: (v) => env.typeProbe(\"isArrayBufferView\", v),\n"
+    "    isArgumentsObject: (v) => env.typeProbe(\"isArgumentsObject\", v),\n"
+    "    isArrayBuffer: (v) => env.typeProbe(\"isArrayBuffer\", v),\n"
+    "    isAsyncFunction: (v) => env.typeProbe(\"isAsyncFunction\", v),\n"
+    "    isBigInt64Array: (v) => env.typeProbe(\"isBigInt64Array\", v),\n"
+    "    isBigUint64Array: (v) => env.typeProbe(\"isBigUint64Array\", v),\n"
+    "    isBooleanObject: (v) => env.typeProbe(\"isBooleanObject\", v),\n"
+    "    isBoxedPrimitive: (v) => env.typeProbe(\"isBoxedPrimitive\", v),\n"
+    "    isBigIntObject: (v) => env.typeProbe(\"isBigIntObject\", v),\n"
+    "    isCryptoKey: (v) => env.typeProbe(\"isCryptoKey\", v),\n"
+    "    isDataView: (v) => env.typeProbe(\"isDataView\", v),\n"
+    "    isDate: (v) => env.typeProbe(\"isDate\", v),\n"
+    "    isExternal: (v) => env.typeProbe(\"isExternal\", v),\n"
+    "    isFloat16Array: (v) => env.typeProbe(\"isFloat16Array\", v),\n"
+    "    isFloat32Array: (v) => env.typeProbe(\"isFloat32Array\", v),\n"
+    "    isFloat64Array: (v) => env.typeProbe(\"isFloat64Array\", v),\n"
+    "    isGeneratorFunction: (v) => env.typeProbe(\"isGeneratorFunction\", v),\n"
+    "    isGeneratorObject: (v) => env.typeProbe(\"isGeneratorObject\", v),\n"
+    "    isInt8Array: (v) => env.typeProbe(\"isInt8Array\", v),\n"
+    "    isInt16Array: (v) => env.typeProbe(\"isInt16Array\", v),\n"
+    "    isInt32Array: (v) => env.typeProbe(\"isInt32Array\", v),\n"
+    "    isKeyObject: (v) => env.typeProbe(\"isKeyObject\", v),\n"
+    "    isMap: (v) => env.typeProbe(\"isMap\", v),\n"
+    "    isMapIterator: (v) => env.typeProbe(\"isMapIterator\", v),\n"
+    "    isModuleNamespaceObject: (v) => env.typeProbe(\"isModuleNamespaceObject\", v),\n"
+    "    isNativeError: (v) => env.typeProbe(\"isNativeError\", v),\n"
+    "    isNumberObject: (v) => env.typeProbe(\"isNumberObject\", v),\n"
+    "    isPromise: (v) => env.typeProbe(\"isPromise\", v),\n"
+    "    isProxy: (v) => env.typeProbe(\"isProxy\", v),\n"
+    "    isRegExp: (v) => env.typeProbe(\"isRegExp\", v),\n"
+    "    isSet: (v) => env.typeProbe(\"isSet\", v),\n"
+    "    isSetIterator: (v) => env.typeProbe(\"isSetIterator\", v),\n"
+    "    isSharedArrayBuffer: (v) => env.typeProbe(\"isSharedArrayBuffer\", v),\n"
+    "    isStringObject: (v) => env.typeProbe(\"isStringObject\", v),\n"
+    "    isSymbolObject: (v) => env.typeProbe(\"isSymbolObject\", v),\n"
+    "    isTypedArray: (v) => env.typeProbe(\"isTypedArray\", v),\n"
+    "    isUint8Array: (v) => env.typeProbe(\"isUint8Array\", v),\n"
+    "    isUint8ClampedArray: (v) => env.typeProbe(\"isUint8ClampedArray\", v),\n"
+    "    isUint16Array: (v) => env.typeProbe(\"isUint16Array\", v),\n"
+    "    isUint32Array: (v) => env.typeProbe(\"isUint32Array\", v),\n"
+    "    isWeakMap: (v) => env.typeProbe(\"isWeakMap\", v),\n"
+    "    isWeakSet: (v) => env.typeProbe(\"isWeakSet\", v),\n"
     "  };\n"
+    "  for (const [name, probe] of Object.entries(types)) {\n"
+    "    const wrapper = name === \"isTypedArray\" || /Array$/.test(name) && name !== \"isAnyArrayBuffer\" && name !== \"isArrayBuffer\";\n"
+    "    if (!wrapper && name !== \"isArrayBufferView\" && name !== \"isCryptoKey\" && name !== \"isKeyObject\") {\n"
+    "      Object.defineProperty(probe, \"name\", { value: \"\", configurable: true });\n"
+    "      Object.defineProperty(probe, \"length\", { value: 0, configurable: true });\n"
+    "    }\n"
+    "  }\n"
+    "  types.isArrayBufferView = ArrayBuffer.isView;\n"
+    "  Object.defineProperty(types.isCryptoKey, \"name\", { value: \"value\", configurable: true });\n"
+    "  Object.defineProperty(types.isKeyObject, \"name\", { value: \"value\", configurable: true });\n"
     "  const deepConstructors = new Set([Array, ArrayBuffer, BigInt, Boolean, DataView, Date, Error, Function,\n"
     "    Map, Number, Object, Promise, RegExp, Set, String, Symbol, WeakMap, WeakSet, Uint8Array,\n"
     "    Uint8ClampedArray, Uint16Array, Uint32Array, Int8Array, Int16Array, Int32Array, Float32Array,\n"
@@ -9171,6 +9245,7 @@ static const char isl_modules_bootstrap[] =
     "  return util;\n"
     "}\n"
     "    const util = makeUtil({\n"
+    "      typeProbe: host.typeProbe,\n"
     "      promiseState: (p) => host.promiseState(p),\n"
     "      writeErr: (s) => host.write(2, s),\n"
     "      env: builtins.process().env,\n"
@@ -9185,7 +9260,6 @@ static const char isl_modules_bootstrap[] =
      * same object; require('util/types') === require('util').types). */
     "  builtins['util/types'] = memo(() => {\n"
     "    const t = builtins.util().types;\n"
-    "    t.default = t;\n"
     "    return t;\n"
     "  });\n"
     "  builtins.child_process = memo(() => {\n"
@@ -10652,6 +10726,7 @@ static void isl_modules_boot(void) {
     abort();
   }
   JSValue host = JS_NewObject(isl_ctx);
+  JS_SetPropertyStr(isl_ctx, host, "typeProbe", JS_NewCFunction(isl_ctx, isl_host_type_probe, "typeProbe", 2));
   /* JS_SetPropertyStr consumes the function values. */
   JS_SetPropertyStr(isl_ctx, host, "source", JS_NewCFunction(isl_ctx, isl_host_source, "source", 1));
   JS_SetPropertyStr(isl_ctx, host, "resolve", JS_NewCFunction(isl_ctx, isl_host_resolve, "resolve", 2));

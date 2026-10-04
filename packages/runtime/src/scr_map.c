@@ -649,6 +649,14 @@ void scr_map_dyn_set(ScrMap *map, const ScrDyn *key, const ScrDyn *value, bool s
   scr_map_release_key(map, key_slot);
 }
 
+ScrArr *scr_set_to_arr_dyn(const ScrMap *map) {
+  ScrArr *out = scr_arr_new_ref(scr_dyn_retain_v, scr_dyn_release_v, scr_dyn_trace_v, map->nlive);
+  for (size_t i = 0; i < map->nentries; i++) {
+    if (scr_map_iter_live(map, (double)i)) scr_arr_push_ref(out, scr_map_dyn_key(map, (double)i));
+  }
+  return out;
+}
+
 void *scr_map_iter_val_ref(const ScrMap *m, double i) {
   return m->val_retain(scr_map_slot_to_ptr(scr_map_iter_at(m, i)->val)); /* +1 */
 }

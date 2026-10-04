@@ -25,6 +25,17 @@ const fixture = (name: string) => join(repoRoot, "tests/fixtures/strictness", na
 const nodeTypesDir = join(repoRoot, "tests/fixtures/node-types");
 const sanitize = process.env["SCRIPTC_SAN"] === "1";
 
+test("node-types: util.types supports native brands and predicate narrowing under @types/node", async () => {
+  const outDir = outDirFor("util-types");
+  const entry = join(nodeTypesDir, "util-types.ts");
+  const result = await compile(entry, { outPath: join(outDir, "util-types"), outDir, sanitize });
+  expect(result.ok, !result.ok ? JSON.stringify(result.diagnostics, null, 2) : "").toBe(true);
+  if (!result.ok) return;
+  const [native, node] = await Promise.all([execFileAsync(result.binaryPath), execFileAsync(process.execPath, ["--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", entry])]);
+  expect(native.stdout).toBe(node.stdout);
+  expect(native.stderr).toBe(node.stderr);
+});
+
 test("node-types: util.styleText supports stored calls and standard streams under @types/node", async () => {
   const outDir = outDirFor("style-text");
   const entry = join(nodeTypesDir, "style-text.ts");

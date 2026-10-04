@@ -1580,6 +1580,14 @@ function lowerFsSyncBufferWindow(
     fn: BuiltinModuleFn,
     loc: SrcLoc,): IrExpr {
     const name = expr.expression.getText();
+    if (bi.module === "util/types") {
+      if (expr.arguments.some(ts.isSpreadElement)) lowerer.noLowering(`${name} with spread arguments`, expr);
+      const input = expr.arguments[0] ? lowerer.lowerExprExpecting(expr.arguments[0], DYN) : dynUndefinedExpr(loc);
+      const saved = lowerer.declareHiddenLocal("%utilTypeInput", DYN);
+      return { kind: "seqExpr", stmts: [{ kind: "varDecl", localId: saved.id, init: input, loc },
+        ...expr.arguments.slice(1).map((arg): IrStmt => ({ kind: "exprStmt", expr: lowerer.lowerExpr(arg), loc }))],
+        result: { kind: "libCall", fn: "util.typeIs", args: [varRef(saved.id, DYN, loc), strLit(bi.member, loc)], type: BOOL, loc }, type: BOOL, loc };
+    }
     if (bi.module === "process" && bi.member === "loadEnvFile") return lowerProcessLoadEnvFile(lowerer, expr);
     if (bi.module === "buffer" && ["isAscii", "isUtf8", "transcode"].includes(bi.member)) {
       if (expr.arguments.some(ts.isSpreadElement)) lowerer.noLowering("buffer encoding call with spread arguments", expr);

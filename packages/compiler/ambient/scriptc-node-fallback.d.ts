@@ -1884,6 +1884,7 @@ declare module "node:child_process" {
  * the latter resolves the callback's data argument. Other targets and bare
  * promisify values fence per site. */
 declare module "util" {
+  export * as types from "util/types";
   export function getSystemErrorName(err: number): string;
   export function getSystemErrorMessage(err: number): string;
   export function getSystemErrorMap(): Map<number, [string, string]>;
@@ -1975,10 +1976,34 @@ declare module "node:util" {
   export * from "util";
 }
 
-/* node:util/types — the type probes. isModuleNamespaceObject answers a
- * REAL question about compiled modules and fences until it lowers; the
- * rest of Node's surface is undeclared (honest type errors). */
+/* node:util/types — native runtime brands. Other forms retain their
+ * per-member lowering boundaries. */
 declare module "util/types" {
+  export function isAnyArrayBuffer(value: unknown): boolean;
+  export function isArrayBuffer(value: unknown): value is ArrayBuffer;
+  export function isArrayBufferView(value: unknown): value is ArrayBufferView;
+  export function isDataView(value: unknown): value is DataView;
+  export function isTypedArray(value: unknown): boolean;
+  export function isUint8Array(value: unknown): value is Uint8Array;
+  export function isUint8ClampedArray(value: unknown): value is Uint8ClampedArray;
+  export function isUint16Array(value: unknown): value is Uint16Array;
+  export function isUint32Array(value: unknown): value is Uint32Array;
+  export function isInt8Array(value: unknown): value is Int8Array;
+  export function isInt16Array(value: unknown): value is Int16Array;
+  export function isInt32Array(value: unknown): value is Int32Array;
+  export function isFloat32Array(value: unknown): value is Float32Array;
+  export function isFloat64Array(value: unknown): value is Float64Array;
+  export function isMap(value: unknown): value is Map<unknown, unknown>;
+  export function isSet(value: unknown): value is Set<unknown>;
+  export function isWeakMap(value: unknown): value is WeakMap<object, unknown>;
+  export function isWeakSet(value: unknown): value is WeakSet<object>;
+  export function isRegExp(value: unknown): value is RegExp;
+  export function isNativeError(value: unknown): value is Error;
+  export function isPromise(value: unknown): value is Promise<unknown>;
+  export function isProxy(value: unknown): boolean;
+  export function isAsyncFunction(value: unknown): boolean;
+  export function isGeneratorFunction(value: unknown): boolean;
+  export function isGeneratorObject(value: unknown): boolean;
   export function isModuleNamespaceObject(value: unknown): boolean;
 }
 declare module "node:util/types" {

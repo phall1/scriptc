@@ -190,3 +190,15 @@ test("propagates construction through a deep hierarchy without descendant expans
   mod.classes = Array.from({ length: size }, (_, i) => ({ name: `C${i}`, ...(i > 0 ? { base: `C${i - 1}` } : {}), fields: [], loc })).reverse();
   expect(computeMayThrow(mod)).toEqual({ fns: new Set(mod.functions.map((f) => f.name)), indirect: false });
 });
+
+test("generic collection mutation propagates checked storage failures to callers", () => {
+  const mapType = { kind: "map" as const, key: DYN, value: DYN };
+  const setType = { kind: "set" as const, elem: DYN };
+  const map: IrExpr = { kind: "varRef", localId: "map", type: mapType, loc };
+  const set: IrExpr = { kind: "varRef", localId: "set", type: setType, loc };
+  const input: IrExpr = { kind: "varRef", localId: "input", type: DYN, loc };
+  const write: IrExpr = { kind: "mapIntrinsic", method: "set", receiver: map, args: [input, input], type: VOID, loc };
+  const add: IrExpr = { kind: "setIntrinsic", method: "add", receiver: set, args: [input], type: VOID, loc };
+  const caller = fn("caller", [exprStmt({ kind: "call", callee: "write", args: [], type: VOID, loc })], []);
+  expect(computeMayThrow(moduleWith(caller, fn("write", [exprStmt(write)], []), fn("add", [exprStmt(add)], []))).fns).toEqual(new Set(["caller", "write", "add"]));
+});

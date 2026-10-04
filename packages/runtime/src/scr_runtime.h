@@ -1482,6 +1482,7 @@ void scr_set_add_all(ScrMap *set, ScrArr *values);
 ScrArr *scr_set_to_arr_f64(const ScrMap *s);
 ScrArr *scr_set_to_arr_str(const ScrMap *s);
 ScrArr *scr_set_to_arr_ref(const ScrMap *s);
+ScrArr *scr_set_to_arr_dyn(const ScrMap *s);
 
 /* REF-element Set construction: a set-shaped map whose keys are refcounted
  * pointers under identity hashing (see SCR_MAP_KEY_REF above). The element
@@ -3944,6 +3945,8 @@ ScrBytes *scr_dyn_bytes_unbox(const ScrDyn *d);
 /* Exact numeric typed-array brand; elem is a ScrBytesElem tag. */
 bool scr_dyn_bytes_is(const ScrDyn *d, int elem);
 bool scr_dyn_typed_array_is(const ScrDyn *d, int elem);
+bool scr_dyn_util_type_is(const ScrDyn *value, const ScrStr *probe);
+ScrDyn *scr_dyn_util_type_value(const ScrDyn *value, const ScrStr *probe);
 void scr_dyn_arr_push(ScrDyn *arr, ScrDyn *item);
 /* Spread completion for a runtime-arity argument list (`f(...xs)` in the
  * checked-dynamic tier): flattens `src` into `arr` per JS's spread over the
@@ -4319,6 +4322,7 @@ typedef struct ScrDynJsvalOps {
   ScrDyn *(*iter_drain)(ScrJsval *cell, bool spread, const ScrStr *spell);
   ScrDyn *(*iterator)(ScrJsval *cell, const ScrStr *spell, bool array_from);
   ScrDyn *(*iter_n)(ScrJsval *cell, double count);
+  bool (*type_probe)(ScrJsval *cell, const ScrStr *probe); /* internal brand; no property access */
 } ScrDynJsvalOps;
 
 /* The allocator view the gated constructor uses (installs the ops);

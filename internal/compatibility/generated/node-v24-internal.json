@@ -1323,18 +1323,18 @@
       "apiEntries": 105,
       "static": {
         "supported": 0,
-        "partial": 22,
+        "partial": 47,
         "refused": 0,
-        "not-implemented": 83,
+        "not-implemented": 58,
         "by-design": 0,
         "unreviewed": 0,
         "not-applicable": 0
       },
       "dynamic": {
         "supported": 18,
-        "partial": 74,
+        "partial": 71,
         "refused": 0,
-        "not-implemented": 13,
+        "not-implemented": 16,
         "by-design": 0,
         "unreviewed": 0,
         "not-applicable": 0
@@ -111274,7 +111274,6 @@
           "packages/compiler/test/deep-equality.test.ts",
           "tests/corpus/1473-promisify-execfile.ts",
           "tests/corpus/1573-promisify-execfile-env-spread.ts",
-          "tests/corpus/2440-console-inspect-args.ts",
           "tests/corpus/2678-util-parseargs.ts",
           "tests/corpus/2912-promisify-fs-readfile.ts",
           "tests/corpus/3133-text-decoder-streaming.ts",
@@ -111298,6 +111297,9 @@
           "tests/corpus/node24-text-utilities-validation.js",
           "tests/corpus/node24-text-utilities.cjs",
           "tests/corpus/node24-text-utilities.ts",
+          "tests/corpus/node24-util-types.cjs",
+          "tests/corpus/node24-util-types.js",
+          "tests/corpus/node24-util-types.ts",
           "tests/corpus/text-codec-values/main.ts",
           "tests/fixtures/node-types/deep-equality.ts",
           "tests/fixtures/node-types/env-files.ts",
@@ -111306,6 +111308,7 @@
           "tests/fixtures/node-types/text-codecs.mts",
           "tests/fixtures/node-types/text-encoding.ts",
           "tests/fixtures/node-types/text-utilities.ts",
+          "tests/fixtures/node-types/util-types.ts",
           "tests/harness/project-config.test.ts"
         ]
       },
@@ -111323,6 +111326,7 @@
           "tests/fixtures/npm/cases/node24-text-encoding/main.ts",
           "tests/fixtures/npm/cases/node24-text-utilities/main.ts",
           "tests/fixtures/npm/cases/node24-util-adapters/main.ts",
+          "tests/fixtures/npm/cases/node24-util-types/main.ts",
           "tests/fixtures/npm/cases/util-shims/main.ts"
         ]
       },
@@ -113485,8 +113489,10 @@
         "status": "partial",
         "evidence": "surface-manifest:node-builtin.util.types",
         "tests": [
-          "tests/corpus/2440-console-inspect-args.ts",
-          "tests/corpus/2912-promisify-fs-readfile.ts"
+          "tests/corpus/node24-util-types.ts",
+          "tests/corpus/node24-util-types.js",
+          "tests/corpus/node24-util-types.cjs",
+          "tests/fixtures/node-types/util-types.ts"
         ]
       },
       "dynamic": {
@@ -113516,14 +113522,20 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:util"
+        "status": "partial",
+        "evidence": "compiler-feature:util.util.types.isAnyArrayBuffer",
+        "tests": [
+          "tests/corpus/node24-util-types.ts",
+          "tests/corpus/node24-util-types.js",
+          "tests/corpus/node24-util-types.cjs",
+          "tests/fixtures/node-types/util-types.ts"
+        ]
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isAnyArrayBuffer",
+        "evidence": "island-feature:util.util.types.isAnyArrayBuffer",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -113546,14 +113558,20 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:util"
+        "status": "partial",
+        "evidence": "compiler-feature:util.util.types.isArrayBufferView",
+        "tests": [
+          "tests/corpus/node24-util-types.ts",
+          "tests/corpus/node24-util-types.js",
+          "tests/corpus/node24-util-types.cjs",
+          "tests/fixtures/node-types/util-types.ts"
+        ]
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isArrayBufferView",
+        "evidence": "island-feature:util.util.types.isArrayBufferView",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -113581,9 +113599,9 @@
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isArgumentsObject",
+        "evidence": "island-feature:util.util.types.isArgumentsObject",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -113606,14 +113624,20 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:util"
+        "status": "partial",
+        "evidence": "compiler-feature:util.util.types.isArrayBuffer",
+        "tests": [
+          "tests/corpus/node24-util-types.ts",
+          "tests/corpus/node24-util-types.js",
+          "tests/corpus/node24-util-types.cjs",
+          "tests/fixtures/node-types/util-types.ts"
+        ]
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isArrayBuffer",
+        "evidence": "island-feature:util.util.types.isArrayBuffer",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -113636,14 +113660,20 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:util"
+        "status": "partial",
+        "evidence": "compiler-feature:util.util.types.isAsyncFunction",
+        "tests": [
+          "tests/corpus/node24-util-types.ts",
+          "tests/corpus/node24-util-types.js",
+          "tests/corpus/node24-util-types.cjs",
+          "tests/fixtures/node-types/util-types.ts"
+        ]
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isAsyncFunction",
+        "evidence": "island-feature:util.util.types.isAsyncFunction",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -113671,9 +113701,9 @@
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isBigInt64Array",
+        "evidence": "island-feature:util.util.types.isBigInt64Array",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -113701,9 +113731,9 @@
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isBigIntObject",
+        "evidence": "island-feature:util.util.types.isBigIntObject",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -113731,9 +113761,9 @@
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isBigUint64Array",
+        "evidence": "island-feature:util.util.types.isBigUint64Array",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -113761,9 +113791,9 @@
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isBooleanObject",
+        "evidence": "island-feature:util.util.types.isBooleanObject",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -113791,9 +113821,9 @@
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isBoxedPrimitive",
+        "evidence": "island-feature:util.util.types.isBoxedPrimitive",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -113820,11 +113850,8 @@
         "evidence": "compiler-unmatched:util"
       },
       "dynamic": {
-        "status": "partial",
-        "evidence": "island-export:node:util/types.isCryptoKey",
-        "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
-        ]
+        "status": "not-implemented",
+        "evidence": "island-feature:util.util.types.isCryptoKey"
       },
       "anchorSource": "exact"
     },
@@ -113846,14 +113873,20 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:util"
+        "status": "partial",
+        "evidence": "compiler-feature:util.util.types.isDataView",
+        "tests": [
+          "tests/corpus/node24-util-types.ts",
+          "tests/corpus/node24-util-types.js",
+          "tests/corpus/node24-util-types.cjs",
+          "tests/fixtures/node-types/util-types.ts"
+        ]
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isDataView",
+        "evidence": "island-feature:util.util.types.isDataView",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -113881,9 +113914,9 @@
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isDate",
+        "evidence": "island-feature:util.util.types.isDate",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -113910,11 +113943,8 @@
         "evidence": "compiler-unmatched:util"
       },
       "dynamic": {
-        "status": "partial",
-        "evidence": "island-export:node:util/types.isExternal",
-        "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
-        ]
+        "status": "not-implemented",
+        "evidence": "island-feature:util.util.types.isExternal"
       },
       "anchorSource": "exact"
     },
@@ -113941,9 +113971,9 @@
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isFloat16Array",
+        "evidence": "island-feature:util.util.types.isFloat16Array",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -113966,14 +113996,20 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:util"
+        "status": "partial",
+        "evidence": "compiler-feature:util.util.types.isFloat32Array",
+        "tests": [
+          "tests/corpus/node24-util-types.ts",
+          "tests/corpus/node24-util-types.js",
+          "tests/corpus/node24-util-types.cjs",
+          "tests/fixtures/node-types/util-types.ts"
+        ]
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isFloat32Array",
+        "evidence": "island-feature:util.util.types.isFloat32Array",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -113996,14 +114032,20 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:util"
+        "status": "partial",
+        "evidence": "compiler-feature:util.util.types.isFloat64Array",
+        "tests": [
+          "tests/corpus/node24-util-types.ts",
+          "tests/corpus/node24-util-types.js",
+          "tests/corpus/node24-util-types.cjs",
+          "tests/fixtures/node-types/util-types.ts"
+        ]
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isFloat64Array",
+        "evidence": "island-feature:util.util.types.isFloat64Array",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -114026,14 +114068,20 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:util"
+        "status": "partial",
+        "evidence": "compiler-feature:util.util.types.isGeneratorFunction",
+        "tests": [
+          "tests/corpus/node24-util-types.ts",
+          "tests/corpus/node24-util-types.js",
+          "tests/corpus/node24-util-types.cjs",
+          "tests/fixtures/node-types/util-types.ts"
+        ]
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isGeneratorFunction",
+        "evidence": "island-feature:util.util.types.isGeneratorFunction",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -114056,14 +114104,20 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:util"
+        "status": "partial",
+        "evidence": "compiler-feature:util.util.types.isGeneratorObject",
+        "tests": [
+          "tests/corpus/node24-util-types.ts",
+          "tests/corpus/node24-util-types.js",
+          "tests/corpus/node24-util-types.cjs",
+          "tests/fixtures/node-types/util-types.ts"
+        ]
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isGeneratorObject",
+        "evidence": "island-feature:util.util.types.isGeneratorObject",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -114086,14 +114140,20 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:util"
+        "status": "partial",
+        "evidence": "compiler-feature:util.util.types.isInt8Array",
+        "tests": [
+          "tests/corpus/node24-util-types.ts",
+          "tests/corpus/node24-util-types.js",
+          "tests/corpus/node24-util-types.cjs",
+          "tests/fixtures/node-types/util-types.ts"
+        ]
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isInt8Array",
+        "evidence": "island-feature:util.util.types.isInt8Array",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -114116,14 +114176,20 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:util"
+        "status": "partial",
+        "evidence": "compiler-feature:util.util.types.isInt16Array",
+        "tests": [
+          "tests/corpus/node24-util-types.ts",
+          "tests/corpus/node24-util-types.js",
+          "tests/corpus/node24-util-types.cjs",
+          "tests/fixtures/node-types/util-types.ts"
+        ]
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isInt16Array",
+        "evidence": "island-feature:util.util.types.isInt16Array",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -114146,14 +114212,20 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:util"
+        "status": "partial",
+        "evidence": "compiler-feature:util.util.types.isInt32Array",
+        "tests": [
+          "tests/corpus/node24-util-types.ts",
+          "tests/corpus/node24-util-types.js",
+          "tests/corpus/node24-util-types.cjs",
+          "tests/fixtures/node-types/util-types.ts"
+        ]
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isInt32Array",
+        "evidence": "island-feature:util.util.types.isInt32Array",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -114180,11 +114252,8 @@
         "evidence": "compiler-unmatched:util"
       },
       "dynamic": {
-        "status": "partial",
-        "evidence": "island-export:node:util/types.isKeyObject",
-        "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
-        ]
+        "status": "not-implemented",
+        "evidence": "island-feature:util.util.types.isKeyObject"
       },
       "anchorSource": "exact"
     },
@@ -114206,14 +114275,20 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:util"
+        "status": "partial",
+        "evidence": "compiler-feature:util.util.types.isMap",
+        "tests": [
+          "tests/corpus/node24-util-types.ts",
+          "tests/corpus/node24-util-types.js",
+          "tests/corpus/node24-util-types.cjs",
+          "tests/fixtures/node-types/util-types.ts"
+        ]
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isMap",
+        "evidence": "island-feature:util.util.types.isMap",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -114241,9 +114316,9 @@
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isMapIterator",
+        "evidence": "island-feature:util.util.types.isMapIterator",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -114271,9 +114346,9 @@
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isModuleNamespaceObject",
+        "evidence": "island-feature:util.util.types.isModuleNamespaceObject",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -114296,14 +114371,20 @@
         "inherited": false
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:util"
+        "status": "partial",
+        "evidence": "compiler-feature:util.util.types.isNativeError",
+        "tests": [
+          "tests/corpus/node24-util-types.ts",
+          "tests/corpus/node24-util-types.js",
+          "tests/corpus/node24-util-types.cjs",
+          "tests/fixtures/node-types/util-types.ts"
+        ]
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isNativeError",
+        "evidence": "island-feature:util.util.types.isNativeError",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -114331,9 +114412,9 @@
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isNumberObject",
+        "evidence": "island-feature:util.util.types.isNumberObject",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -114356,14 +114437,20 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:util"
+        "status": "partial",
+        "evidence": "compiler-feature:util.util.types.isPromise",
+        "tests": [
+          "tests/corpus/node24-util-types.ts",
+          "tests/corpus/node24-util-types.js",
+          "tests/corpus/node24-util-types.cjs",
+          "tests/fixtures/node-types/util-types.ts"
+        ]
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isPromise",
+        "evidence": "island-feature:util.util.types.isPromise",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -114386,14 +114473,20 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:util"
+        "status": "partial",
+        "evidence": "compiler-feature:util.util.types.isProxy",
+        "tests": [
+          "tests/corpus/node24-util-types.ts",
+          "tests/corpus/node24-util-types.js",
+          "tests/corpus/node24-util-types.cjs",
+          "tests/fixtures/node-types/util-types.ts"
+        ]
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isProxy",
+        "evidence": "island-feature:util.util.types.isProxy",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -114416,14 +114509,20 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:util"
+        "status": "partial",
+        "evidence": "compiler-feature:util.util.types.isRegExp",
+        "tests": [
+          "tests/corpus/node24-util-types.ts",
+          "tests/corpus/node24-util-types.js",
+          "tests/corpus/node24-util-types.cjs",
+          "tests/fixtures/node-types/util-types.ts"
+        ]
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isRegExp",
+        "evidence": "island-feature:util.util.types.isRegExp",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -114446,14 +114545,20 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:util"
+        "status": "partial",
+        "evidence": "compiler-feature:util.util.types.isSet",
+        "tests": [
+          "tests/corpus/node24-util-types.ts",
+          "tests/corpus/node24-util-types.js",
+          "tests/corpus/node24-util-types.cjs",
+          "tests/fixtures/node-types/util-types.ts"
+        ]
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isSet",
+        "evidence": "island-feature:util.util.types.isSet",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -114481,9 +114586,9 @@
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isSetIterator",
+        "evidence": "island-feature:util.util.types.isSetIterator",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -114511,9 +114616,9 @@
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isSharedArrayBuffer",
+        "evidence": "island-feature:util.util.types.isSharedArrayBuffer",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -114541,9 +114646,9 @@
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isStringObject",
+        "evidence": "island-feature:util.util.types.isStringObject",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -114571,9 +114676,9 @@
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isSymbolObject",
+        "evidence": "island-feature:util.util.types.isSymbolObject",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -114596,14 +114701,20 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:util"
+        "status": "partial",
+        "evidence": "compiler-feature:util.util.types.isTypedArray",
+        "tests": [
+          "tests/corpus/node24-util-types.ts",
+          "tests/corpus/node24-util-types.js",
+          "tests/corpus/node24-util-types.cjs",
+          "tests/fixtures/node-types/util-types.ts"
+        ]
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isTypedArray",
+        "evidence": "island-feature:util.util.types.isTypedArray",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -114626,14 +114737,20 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:util"
+        "status": "partial",
+        "evidence": "compiler-feature:util.util.types.isUint8Array",
+        "tests": [
+          "tests/corpus/node24-util-types.ts",
+          "tests/corpus/node24-util-types.js",
+          "tests/corpus/node24-util-types.cjs",
+          "tests/fixtures/node-types/util-types.ts"
+        ]
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isUint8Array",
+        "evidence": "island-feature:util.util.types.isUint8Array",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -114656,14 +114773,20 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:util"
+        "status": "partial",
+        "evidence": "compiler-feature:util.util.types.isUint8ClampedArray",
+        "tests": [
+          "tests/corpus/node24-util-types.ts",
+          "tests/corpus/node24-util-types.js",
+          "tests/corpus/node24-util-types.cjs",
+          "tests/fixtures/node-types/util-types.ts"
+        ]
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isUint8ClampedArray",
+        "evidence": "island-feature:util.util.types.isUint8ClampedArray",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -114686,14 +114809,20 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:util"
+        "status": "partial",
+        "evidence": "compiler-feature:util.util.types.isUint16Array",
+        "tests": [
+          "tests/corpus/node24-util-types.ts",
+          "tests/corpus/node24-util-types.js",
+          "tests/corpus/node24-util-types.cjs",
+          "tests/fixtures/node-types/util-types.ts"
+        ]
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isUint16Array",
+        "evidence": "island-feature:util.util.types.isUint16Array",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -114716,14 +114845,20 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:util"
+        "status": "partial",
+        "evidence": "compiler-feature:util.util.types.isUint32Array",
+        "tests": [
+          "tests/corpus/node24-util-types.ts",
+          "tests/corpus/node24-util-types.js",
+          "tests/corpus/node24-util-types.cjs",
+          "tests/fixtures/node-types/util-types.ts"
+        ]
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isUint32Array",
+        "evidence": "island-feature:util.util.types.isUint32Array",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -114746,14 +114881,20 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:util"
+        "status": "partial",
+        "evidence": "compiler-feature:util.util.types.isWeakMap",
+        "tests": [
+          "tests/corpus/node24-util-types.ts",
+          "tests/corpus/node24-util-types.js",
+          "tests/corpus/node24-util-types.cjs",
+          "tests/fixtures/node-types/util-types.ts"
+        ]
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isWeakMap",
+        "evidence": "island-feature:util.util.types.isWeakMap",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"
@@ -114776,14 +114917,20 @@
         "inherited": true
       },
       "static": {
-        "status": "not-implemented",
-        "evidence": "compiler-unmatched:util"
+        "status": "partial",
+        "evidence": "compiler-feature:util.util.types.isWeakSet",
+        "tests": [
+          "tests/corpus/node24-util-types.ts",
+          "tests/corpus/node24-util-types.js",
+          "tests/corpus/node24-util-types.cjs",
+          "tests/fixtures/node-types/util-types.ts"
+        ]
       },
       "dynamic": {
         "status": "partial",
-        "evidence": "island-export:node:util/types.isWeakSet",
+        "evidence": "island-feature:util.util.types.isWeakSet",
         "tests": [
-          "tests/fixtures/npm/cases/util-shims/main.ts"
+          "tests/fixtures/npm/cases/node24-util-types/main.ts"
         ]
       },
       "anchorSource": "exact"

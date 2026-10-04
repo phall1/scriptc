@@ -64,6 +64,8 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "util.toUSVString": "scr_util_to_usv_string",
   "util.isDeepStrictEqual": "scr_util_is_deep_strict_equal",
   "util.styleText": "scr_util_style_text",
+  "util.typeIs": "scr_dyn_util_type_is",
+  "util.typeValue": "scr_dyn_util_type_value",
   "math.maxArr": "scr_math_max_arr",
   "math.minArr": "scr_math_min_arr",
   "math.hypotArr": "scr_math_hypot_arr",

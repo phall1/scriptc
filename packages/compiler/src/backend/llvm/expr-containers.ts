@@ -569,6 +569,55 @@ export function emitMapLikeIntrinsic(host: LlvmEmitterContext,
     const kAcc = mapKeyAccess(key);
     const kTy = kAcc === "f64" ? "double" : "ptr";
     const method = e.method;
+    // A generic Map/Set view may share typed native storage. These accessors
+    // consult its boxing adapters instead of reinterpreting scalar slots.
+    if (key.kind === "dyn" && (receiverType.kind === "set" || receiverType.value.kind === "dyn")) {
+      switch (method) {
+        case "get": {
+          const k = host.emitExpr(e.args[0]!);
+          host.declare(`declare ptr @scr_map_dyn_get(ptr, ptr)`);
+          const result = B.tmp();
+          B.line(`${result} = call ptr @scr_map_dyn_get(ptr ${r.name}, ptr ${k.name})`);
+          const owned = host.own({ name: result, type: e.type });
+          host.emitPendingCheck();
+          return owned;
+        }
+        case "set":
+        case "add": {
+          const k = host.emitExpr(e.args[0]!);
+          const v = method === "set" ? host.emitExpr(e.args[1]!) : null;
+          host.declare(`declare void @scr_map_dyn_set(ptr, ptr, ptr, i1 zeroext)`);
+          B.line(`call void @scr_map_dyn_set(ptr ${r.name}, ptr ${k.name}, ptr ${v?.name ?? "null"}, i1 ${method === "add" ? "true" : "false"})`);
+          host.emitPendingCheck();
+          return { name: "", type: e.type };
+        }
+        case "has":
+        case "delete": {
+          const k = host.emitExpr(e.args[0]!);
+          host.declare(`declare zeroext i1 @scr_map_dyn_has(ptr, ptr, i1 zeroext)`);
+          const result = B.tmp();
+          B.line(`${result} = call zeroext i1 @scr_map_dyn_has(ptr ${r.name}, ptr ${k.name}, i1 ${method === "delete" ? "true" : "false"})`);
+          host.emitPendingCheck();
+          return { name: result, type: e.type };
+        }
+        case "iterKey":
+        case "iterValue": {
+          const index = host.emitExpr(e.args[0]!);
+          const accessor = method === "iterKey" ? "key" : "value";
+          host.declare(`declare ptr @scr_map_dyn_${accessor}(ptr, double)`);
+          const result = B.tmp();
+          B.line(`${result} = call ptr @scr_map_dyn_${accessor}(ptr ${r.name}, double ${index.name})`);
+          return host.own({ name: result, type: e.type });
+        }
+        case "toArray": {
+          host.declare(`declare ptr @scr_set_to_arr_dyn(ptr)`);
+          const result = B.tmp();
+          B.line(`${result} = call ptr @scr_set_to_arr_dyn(ptr ${r.name})`);
+          return host.own({ name: result, type: e.type });
+        }
+        default: break;
+      }
+    }
     switch (method) {
       case "get": {
         if (receiverType.kind !== "map") throw new InternalCompilerError("unreachable");

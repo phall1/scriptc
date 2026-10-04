@@ -60,7 +60,7 @@ import {
   STATIC_NUMBER_METHODS,
   STR_METHODS,
 } from "../frontend/lowering/surfaces.js";
-import type { IrModule, SrcLoc } from "../ir/ir.js";
+import type { IrExpr, IrModule, SrcLoc } from "../ir/ir.js";
 import { compilerReleaseVersion } from "./sidecar.js";
 
 /** One raw fence declaration as the profile spelled it (validated for
@@ -147,7 +147,7 @@ function fenceTaxonomy(): FenceTaxonomy {
     const root = new Set<string>();
     for (const [member, entry] of Object.entries(members!)) {
       if (entry === undefined) continue;
-      const fns = new Set([entry.fn]);
+      const fns = new Set([mod === "util/types" ? `${entry.fn}.${member}` : entry.fn]);
       // The bare-path and url tables rebind per TARGET platform
       // (builtinModuleFnsOf): a fence on the bare id covers both flavors.
       if (mod === "path") {
@@ -375,7 +375,14 @@ function collectReachedSurfaces(mod: IrModule): ReachedSurfaces {
     const node = v as { kind?: unknown; fn?: unknown; method?: unknown; loc?: SrcLoc };
     const here = node.loc ?? loc;
     if (typeof node.kind === "string") {
-      if (node.kind === "libCall" && typeof node.fn === "string") note(reached.libFns, node.fn, here);
+      if (node.kind === "libCall" && typeof node.fn === "string") {
+        note(reached.libFns, node.fn, here);
+        if (node.fn === "util.typeIs") {
+          const call = v as Extract<IrExpr, { kind: "libCall" }>;
+          const probe = call.args[1];
+          if (probe?.kind === "strLit") note(reached.libFns, `${node.fn}.${probe.value}`, here);
+        }
+      }
       else if (typeof node.method === "string") {
         if (node.kind === "strIntrinsic") note(reached.strMethods, node.method, here);
         else if (node.kind === "arrIntrinsic") note(reached.arrMethods, node.method, here);
