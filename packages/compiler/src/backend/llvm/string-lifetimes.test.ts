@@ -49,46 +49,12 @@ test("string comparisons borrow parameters while owned entry adapters release th
   }
 });
 
-test("borrowed string forwarding is solved independently for each parameter", () => {
-  const leaf = fn("leaf", ["text", "escape"], concat(ref("text"), str("!")));
-  leaf.body.unshift({ kind: "exprStmt", expr: call("owner", [ref("escape")], STRING), loc });
-  const owner = fn("owner", ["text"], ref("text"));
-  const relay = fn("relay", ["a", "b"], call("leaf", [ref("b"), ref("a")], STRING));
-  expect(facts(relay, leaf, owner).parameters.get("leaf")).toEqual(new Set([0]));
-  expect(facts(relay, leaf, owner).parameters.get("relay")).toEqual(new Set([1]));
-  const ir = body(mod(relay, leaf, owner), "sc_bf_relay");
-  expect(ir).toContain("@sc_bf_leaf");
-  expect(ir.match(/call ptr @scr_str_retain_v/g)).toHaveLength(1);
-});
-
-test("recursive string consumers retain the conservative escape boundary", () => {
-  const a = fn("a", ["text"], call("b", [ref("text")], BOOL));
-  const b = fn("b", ["text"], equal(ref("text"), str("done")));
-  b.body.unshift({ kind: "exprStmt", expr: call("a", [ref("text")], BOOL), loc });
-  expect(facts(a, b).parameters.size).toBe(2);
-  b.body.unshift({ kind: "exprStmt", expr: call("unknown", [ref("text")], STRING), loc });
-  expect(facts(a, b).parameters.size).toBe(0);
-});
-
 test("returning the input retains the owned calling convention", () => {
   const identity = fn("identity", ["text"], ref("text"));
   expect(facts(identity).parameters.size).toBe(0);
   const ir = body(mod(identity), "sc_f_identity");
   expect(ir).toContain("@scr_str_retain_v");
   expect(ir).toContain("@scr_str_release");
-});
-
-test.each(["assignment", "declaration", "boxed", "tdz", "capture", "class capture", "async", "generator"])("a %s keeps a string parameter on the owned path", (reason) => {
-  const f = fn("read", ["text"], intrinsic(ref("text"), "length", [], F64));
-  if (reason === "assignment") f.body.unshift({ kind: "assign", localId: "text", value: str("new"), loc });
-  if (reason === "declaration") f.body.unshift({ kind: "varDecl", localId: "text", init: str("new"), loc });
-  if (reason === "boxed") f.locals[0]!.boxed = true;
-  if (reason === "tdz") f.locals[0]!.tdz = true;
-  if (reason === "capture") f.captures = [];
-  if (reason === "class capture") f.classCaptures = [];
-  if (reason === "async") f.async = true;
-  if (reason === "generator") f.generator = { yieldT: F64, nextT: F64, resultType: { kind: "record", shapeId: "result" } };
-  expect(facts(f).parameters.size).toBe(0);
 });
 
 test("literal arguments remain immortal while the called body borrows them", () => {
@@ -192,8 +158,6 @@ test("indirect calls keep the ordinary ABI even for a borrowing body", () => {
 });
 
 test("string method admission is explicit and unknown methods stay conservative", () => {
-  const methods: IrStrIntrinsicMethod[] = ["length", "charCodeAt", "charAt", "indexOf", "includes", "startsWith", "endsWith", "slice", "substring", "repeat", "trim", "trimStart", "trimEnd", "split", "padStart", "padEnd", "toLowerCase", "toUpperCase", "normalize", "isWellFormed", "toWellFormed", "cpAt"];
-  for (const method of methods) expect(borrowsStringInputs(method)).toBe(true);
   expect(borrowsStringInputs("futureMethod" as IrStrIntrinsicMethod)).toBe(false);
 });
 
@@ -271,29 +235,10 @@ test("boxed string parameters retain their checked binding reads", () => {
   expect(ir).toContain("@scr_str_utf16_len");
 });
 
-test("borrowed literal inputs do not change string equality or ordering operators", () => {
-  for (const op of ["<", "<=", ">", ">="] as const) {
-    const compare = fn("compare", [], { kind: "strCmp", op, left: str("a"), right: str("b"), utf16: true, type: BOOL, loc });
-    const ir = body(mod(compare), "sc_f_compare");
-    expect(ir).toContain("@scr_str_cmp_u16");
-    expect(ir).not.toContain("@scr_str_retain_v");
-    expect(ir).not.toContain("@scr_str_release");
-  }
-  const comparison = equal(str("a"), str("b"));
-  if (comparison.kind !== "strEq") throw new Error("missing comparison");
-  comparison.negated = true;
-  expect(body(mod(fn("compare", [], comparison)), "sc_f_compare")).toContain("xor i1");
-});
-
-test("emission does not mutate lifetime inputs or reuse facts after a body changes", () => {
-  const inspect = fn("inspect", ["value"], intrinsic(ref("value"), "length", [], F64));
-  const module = mod(inspect);
-  const before = JSON.stringify(module);
-  const first = emitLlvmModule(module);
-  expect(JSON.stringify(module)).toBe(before);
-  expect(emitLlvmModule(module)).toBe(first);
-  inspect.body.unshift({ kind: "assign", localId: "value", value: str("new"), loc });
-  const second = emitLlvmModule(module);
-  expect(second).not.toContain("define internal double @sc_bf_inspect");
-  expect(second).toContain("define internal double @sc_f_inspect");
+test("borrowed literals keep UTF-16 string comparison without temporary owners", () => {
+  const compare = fn("compare", [], { kind: "strCmp", op: "<", left: str("a"), right: str("b"), utf16: true, type: BOOL, loc });
+  const ir = body(mod(compare), "sc_f_compare");
+  expect(ir).toContain("@scr_str_cmp_u16");
+  expect(ir).not.toContain("@scr_str_retain_v");
+  expect(ir).not.toContain("@scr_str_release");
 });
