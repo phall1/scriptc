@@ -397,15 +397,15 @@ export function frontendInputsSemanticallyMatch(
     ...snapshot,
     probes: snapshot.probes.map((probe) => {
       if (probe.op !== "file") return probe;
+      const previous = previousSources.get(probe.path);
+      if (previous === undefined || frontendSourceDigest(previous) !== probe.digest) return probe;
       let current: string;
       try {
         current = readFileSync(probe.path, "utf8");
       } catch {
         return probe;
       }
-      const previous = previousSources.get(probe.path);
       const currentDigest = frontendSourceDigest(current);
-      if (previous === undefined || frontendSourceDigest(previous) !== probe.digest) return probe;
       currentSources.set(probe.path, current);
       if (currentDigest === probe.digest) return probe;
       if (!isSemanticEquivalent(probe.path, previous, current)) return probe;

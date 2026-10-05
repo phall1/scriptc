@@ -1,9 +1,11 @@
+import * as fs from "node:fs";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import {
   FrontendInputTracker,
+  frontendInputsSemanticallyMatch,
   frontendInputsStillMatch,
   trackedAccessibleEntries,
   trackedDirectoryExists,
@@ -15,8 +17,47 @@ import {
 
 const scratch: string[] = [];
 
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  return { ...actual, readFileSync: vi.fn(actual.readFileSync) };
+});
+
 afterEach(async () => {
+  vi.clearAllMocks();
   await Promise.all(scratch.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+});
+
+test("semantic validation reads non-source dependencies once and still invalidates edits", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "scriptc-inputs-"));
+  scratch.push(dir);
+  const source = join(dir, "entry.ts");
+  const dependency = join(dir, "dependency.d.ts");
+  const previous = "export const answer = 1;\n";
+  const current = `// comment\n${previous}`;
+  await writeFile(source, previous);
+  await writeFile(dependency, "export declare const value: number;\n");
+  const tracker = new FrontendInputTracker();
+  tracker.run(() => {
+    trackedReadFile(source);
+    trackedReadFile(dependency);
+  });
+  const snapshot = tracker.snapshot();
+  await writeFile(source, current);
+  const reads = vi.mocked(fs.readFileSync);
+  reads.mockClear();
+  const equivalent = vi.fn(() => true);
+  const sources = new Map([[source, previous]]);
+
+  const result = frontendInputsSemanticallyMatch(snapshot, sources, equivalent);
+  expect(result?.currentSources).toEqual(new Map([[source, current]]));
+  expect(result?.changed).toEqual([{ path: source, previous, current }]);
+  expect(equivalent).toHaveBeenCalledExactlyOnceWith(source, previous, current);
+  expect(reads.mock.calls.filter(([path]) => path === dependency)).toHaveLength(1);
+
+  await writeFile(dependency, "export declare const value: string;\n");
+  reads.mockClear();
+  expect(frontendInputsSemanticallyMatch(snapshot, sources, equivalent)).toBeNull();
+  expect(reads.mock.calls.filter(([path]) => path === dependency)).toHaveLength(1);
 });
 
 test("tracked frontend reads invalidate on byte edits", async () => {
