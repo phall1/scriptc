@@ -9,6 +9,7 @@ import type { LlvmEmitterContext, ExprOf, LlValue } from "./expr-context.js";
 
 import { BYTES_ELEM_NUM, f64Lit } from "./common.js";
 import { emitStringInputs } from "./string-lifetimes.js";
+import { emitStringParts, stringParts } from "./string-construction.js";
 import { emitBorrowedInput } from "./borrowed-inputs.js";
 import { exactInteger, widenInteger, integerNumber } from "./integer-values.js";
 import { integerArithmeticRange } from "../../ir/integer-ranges.js";
@@ -282,6 +283,9 @@ export function emitStringExpr(host: LlvmEmitterContext, e: ExprOf<"strConcat" |
     const B = host.B;
     switch (e.kind) {
       case "strConcat": {
+        if (e.left.kind === "strConcat" || e.right.kind === "strConcat") {
+          return emitStringParts(host, stringParts(e));
+        }
         // Concat may append to a uniquely owned left temporary. A retained
         // read protects an existing binding from that in-place operation.
         const l = host.emitExpr(e.left);

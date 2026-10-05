@@ -1335,21 +1335,26 @@ bool scr_arr_includes_ref(ScrArr *a, void *v) {
 
 /* ── join ──────────────────────────────────────────────────────────────── */
 
-static void scr_join_append(char **buf, size_t *len, size_t *cap,
-                             const char *bytes, size_t n) {
-  if (*len + n > *cap) {
-    size_t cap2 = *cap;
-    while (*len + n > cap2) {
-      if (cap2 > SIZE_MAX / 2) scr_arr_oom();
-      cap2 *= 2;
-    }
-    char *grown = realloc(*buf, cap2);
-    if (!grown) scr_arr_oom();
-    *buf = grown;
-    *cap = cap2;
+static size_t scr_join_size(size_t len, size_t extra) {
+  if (extra > SIZE_MAX - sizeof(ScrStr) - 1 - len) scr_arr_oom();
+  return len + extra;
+}
+
+/* The builder owns the final string allocation throughout construction.
+ * It has no aliases or index-cache entries, and no user callbacks run while
+ * appending primitive array values. Finish by publishing the terminator. */
+static void scr_join_append(ScrStr **out, const char *bytes, size_t n) {
+  ScrStr *s = *out;
+  size_t need = scr_join_size(s->len, n);
+  if (need > s->cap) {
+    const size_t limit = SIZE_MAX - sizeof(ScrStr) - 1;
+    size_t cap = s->cap;
+    while (cap < need) cap = cap > limit / 2 ? need : cap * 2;
+    s = scr_str_regrow(s, cap);
+    *out = s;
   }
-  memcpy(*buf + *len, bytes, n);
-  *len += n;
+  memcpy(s->data + s->len, bytes, n);
+  s->len = need;
 }
 
 /* `a.slice(start?, end?)` — a fresh shallow copy of the index range,
@@ -1392,11 +1397,24 @@ ScrArr *scr_arr_slice(ScrArr *a, double start, double end) {
 }
 
 ScrStr *scr_arr_join(ScrArr *a, ScrStr *sep) {
-  size_t cap = 64, len = 0;
-  char *buf = malloc(cap);
-  if (!buf) scr_arr_oom();
+  size_t cap = 64;
+  /* String widths are already known. Size once to avoid growth and copying
+   * even when the array holds holes, explicit undefined or sparse slots.
+   * Numeric formatting stays single-pass rather than formatting twice. */
+  if (a->elem == SCR_ELEM_STR) {
+    const size_t limit = SIZE_MAX - sizeof(ScrStr) - 1;
+    if (a->len > 1 && sep->len > limit / (a->len - 1)) scr_arr_oom();
+    cap = a->len > 1 ? (a->len - 1) * sep->len : 0;
+    for (size_t i = 0; i < a->len; i++) {
+      uint64_t slot;
+      if (scr_arr_state_at(a, i, &slot) != SCR_ARR_VALUE) continue;
+      const ScrStr *s = (const ScrStr *)scr_slot_to_ptr(slot);
+      if (s) cap = scr_join_size(cap, s->len);
+    }
+  }
+  ScrStr *out = scr_str_alloc_raw(0, cap);
   for (size_t i = 0; i < a->len; i++) {
-    if (i > 0) scr_join_append(&buf, &len, &cap, sep->data, sep->len);
+    if (i > 0) scr_join_append(&out, sep->data, sep->len);
     uint64_t slot;
     uint8_t state = scr_arr_state_at(a, i, &slot);
     if (state != SCR_ARR_VALUE) continue;
@@ -1404,16 +1422,16 @@ ScrStr *scr_arr_join(ScrArr *a, ScrStr *sep) {
       case SCR_ELEM_F64: {
         char nb[32];
         size_t n = scr_f64_to_str(scr_slot_to_f64(slot), nb);
-        scr_join_append(&buf, &len, &cap, nb, n);
+        scr_join_append(&out, nb, n);
         break;
       }
       case SCR_ELEM_BOOL:
-        if (slot != 0) scr_join_append(&buf, &len, &cap, "true", 4);
-        else scr_join_append(&buf, &len, &cap, "false", 5);
+        if (slot != 0) scr_join_append(&out, "true", 4);
+        else scr_join_append(&out, "false", 5);
         break;
       case SCR_ELEM_STR: {
         const ScrStr *s = (const ScrStr *)scr_slot_to_ptr(slot);
-        if (s) scr_join_append(&buf, &len, &cap, s->data, s->len);
+        if (s) scr_join_append(&out, s->data, s->len);
         break;
       }
       case SCR_ELEM_ARR:
@@ -1423,8 +1441,7 @@ ScrStr *scr_arr_join(ScrArr *a, ScrStr *sep) {
         scr_trap("scriptc: internal error: join on a ref-element array\n");
     }
   }
-  ScrStr *out = scr_str_new(buf, len);
-  free(buf);
+  out->data[out->len] = '\0';
   return out;
 }
 
@@ -1434,25 +1451,22 @@ ScrStr *scr_arr_join(ScrArr *a, ScrStr *sep) {
  * missing ones skip, exactly the spec's loop. Both arrays are
  * SCR_ELEM_STR; borrows both; +1 result. Never throws. */
 ScrStr *scr_str_raw(ScrArr *raw, ScrArr *subs) {
-  size_t cap = 64, len = 0;
-  char *buf = malloc(cap);
-  if (!buf) scr_arr_oom();
+  ScrStr *out = scr_str_alloc_raw(0, 64);
   for (size_t i = 0; i < raw->len; i++) {
     uint64_t raw_slot;
     if (scr_arr_slot_at(raw, i, &raw_slot)) {
       const ScrStr *s = (const ScrStr *)scr_slot_to_ptr(raw_slot);
-      if (s) scr_join_append(&buf, &len, &cap, s->data, s->len);
+      if (s) scr_join_append(&out, s->data, s->len);
     }
     if (i + 1 < raw->len && i < subs->len) {
       uint64_t sub_slot;
       if (scr_arr_slot_at(subs, i, &sub_slot)) {
         const ScrStr *v = (const ScrStr *)scr_slot_to_ptr(sub_slot);
-        if (v) scr_join_append(&buf, &len, &cap, v->data, v->len);
+        if (v) scr_join_append(&out, v->data, v->len);
       }
     }
   }
-  ScrStr *out = scr_str_new(buf, len);
-  free(buf);
+  out->data[out->len] = '\0';
   return out;
 }
 

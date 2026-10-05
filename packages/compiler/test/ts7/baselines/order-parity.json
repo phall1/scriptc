@@ -14210,6 +14210,12 @@
     "<repo>/tests/corpus/checked-dispatch-input-lifetimes.js"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/string-construction-order.ts": {
+   "order": [
+    "<repo>/tests/corpus/string-construction-order.ts"
+   ],
+   "diags": []
   }
  }
 }

@@ -437,7 +437,7 @@ typedef struct ScrVt {
  *
  * cap is the usable byte capacity of data[] excluding the NUL (allocation
  * is sizeof(ScrStr) + cap + 1); cap == len for interned literals and plain
- * allocations. Spare capacity (cap > len) exists only on concat results so
+ * allocations. Builders and concat results may have spare capacity so
  * scr_str_concat can append in place when the left operand is uniquely
  * owned (rc == 1) — observable immutability is preserved: a string with
  * rc > 1 or rc == SIZE_MAX is never mutated.
@@ -454,7 +454,7 @@ ScrStr *scr_str_new(const char *bytes, size_t len); /* returns +1 */
  * malformed subsequences with U+FFFD. NULL with len == 0 is an empty span. */
 ScrStr *scr_str_from_utf8_lossy(const uint8_t *bytes, size_t len); /* +1 */
 
-/* Internal allocators for buffer builders (scr_json.c): a +1 string with
+/* Internal allocators for buffer builders: a +1 string with
  * UNINITIALIZED data (the builder fills bytes, then len and the NUL), and
  * an rc==1-only realloc that grows capacity in place. Both keep the RC
  * audit's live count exact. */
@@ -470,6 +470,8 @@ void scr_str_release(ScrStr *s); /* NULL-tolerant (uninitialized locals) */
 
 /* Borrow both args, return +1. */
 ScrStr *scr_str_concat(ScrStr *a, ScrStr *b);
+/* Borrow each part without mutation; return one independently owned result. */
+ScrStr *scr_str_concat_parts(ScrStr *const *parts, size_t count);
 
 bool scr_str_eq(ScrStr *a, ScrStr *b);
 

@@ -9431,6 +9431,7 @@ function lowerStoredTextCodecCall(lowerer: Lowerer, call: ts.CallExpression, acc
       }
       const subs = call.arguments.slice(1).map((a): IrExpr => {
         const v = lowerer.lowerExpr(a);
+        if (isUnitType(v.type)) return lowerer.ensureString(v, a);
         if (v.type.kind === "string") return v;
         if (v.type.kind === "f64" || v.type.kind === "bool" || v.type.kind === "record") {
           return { kind: "toString", operand: v, type: STRING, loc };

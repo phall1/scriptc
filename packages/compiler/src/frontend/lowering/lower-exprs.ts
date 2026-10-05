@@ -6311,8 +6311,18 @@ export function ensureString(lowerer: Lowerer, e: IrExpr, node: ts.Node): IrExpr
       );
     }
     if (isUnitType(e.type)) {
-      // `${undefined}` / "" + null: Node prints "undefined"/"null", but
-      // these only arise spelled literally — reject rather than special-case.
+      if (e.kind === "unitLit") {
+        return { kind: "strLit", value: e.unit, type: STRING, loc: e.loc };
+      }
+      // Keep sequencing and branch effects even though the final unit's
+      // spelling is constant. Never turn an unknown producer into a literal.
+      if (e.kind === "seqExpr") {
+        return { ...e, result: lowerer.ensureString(e.result, node), type: STRING };
+      }
+      if (e.kind === "ternary") {
+        return { ...e, then: lowerer.ensureString(e.then, node),
+          else_: lowerer.ensureString(e.else_, node), type: STRING };
+      }
       lowerer.unsupported(
         "SC1090",
         node,

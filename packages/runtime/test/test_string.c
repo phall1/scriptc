@@ -171,6 +171,41 @@ static void handoff_append(ScrStr **binding, ScrStr *suffix) {
   scr_str_release(snapshot);
 }
 
+static void construction_asserts(void) {
+  ScrStr *empty = scr_str_new("", 0);
+  ScrStr *value = scr_str_new("a\0\xE6\x97\xA5", 5);
+  ScrStr *parts[] = {empty, value, empty, value};
+  ScrStr *out = scr_str_concat_parts(parts, 4);
+  total++;
+  if (out->len != 10 || memcmp(out->data, value->data, 5) != 0 ||
+      memcmp(out->data + 5, value->data, 5) != 0 || out->data[10] != '\0' ||
+      value->rc != 1 || value->len != 5) {
+    failed++;
+    fputs("CONSTRUCTION: duplicate inputs, embedded zero or ownership\n", stderr);
+  }
+  scr_str_release(out);
+  ScrStr *single = scr_str_concat_parts(parts, 3);
+  ScrStr *left = scr_str_concat(empty, value);
+  ScrStr *right = scr_str_concat(value, empty);
+  total++;
+  if (single != value || left != value || right != value || value->rc != 4) {
+    failed++;
+    fputs("CONSTRUCTION: empty operands must preserve independent owners\n", stderr);
+  }
+  scr_str_release(single);
+  scr_str_release(left);
+  scr_str_release(right);
+  out = scr_str_concat_parts(NULL, 0);
+  total++;
+  if (out->len != 0 || out->data[0] != '\0') {
+    failed++;
+    fputs("CONSTRUCTION: empty part list\n", stderr);
+  }
+  scr_str_release(out);
+  scr_str_release(value);
+  scr_str_release(empty);
+}
+
 static void accumulation_asserts(void) {
   ScrStr *piece = scr_str_new("x", 1);
   ScrStr *acc = scr_str_new("", 0);
@@ -733,6 +768,7 @@ int main(int argc, char **argv) {
   if (in != stdin) fclose(in);
 
   divergence_asserts();
+  construction_asserts();
   accumulation_asserts();
   short_string_asserts();
 #ifdef SCR_SIDX_TEST

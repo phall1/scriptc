@@ -271,6 +271,7 @@ ScrStr *scr_str_alloc_raw(size_t len, size_t cap) {
 }
 
 ScrStr *scr_str_regrow(ScrStr *s, size_t newcap) {
+  if (newcap < s->len || newcap > SIZE_MAX - sizeof(ScrStr) - 1) scr_oom();
   scr_short_forget(s);
   scr_sidx_purge(s); /* realloc may move; the old address may be recycled */
   ScrStr *r = realloc(s, sizeof(ScrStr) + newcap + 1);
@@ -300,6 +301,8 @@ void scr_str_release(ScrStr *s) {
 }
 
 ScrStr *scr_str_concat(ScrStr *a, ScrStr *b) {
+  if (a->len == 0) return scr_str_retain(b);
+  if (b->len == 0) return scr_str_retain(a);
   if (a->len > SIZE_MAX - b->len - sizeof(ScrStr) - 1) scr_oom();
   size_t newlen = a->len + b->len;
   /* In-place append: a is uniquely owned by the caller's borrow (rc == 1 —
@@ -341,6 +344,32 @@ ScrStr *scr_str_concat(ScrStr *a, ScrStr *b) {
   memcpy(s->data + a->len, b->data, b->len);
   s->data[newlen] = '\0';
   return s;
+}
+
+ScrStr *scr_str_concat_parts(ScrStr *const *parts, size_t count) {
+  const size_t limit = SIZE_MAX - sizeof(ScrStr) - 1;
+  size_t len = 0;
+  ScrStr *only = NULL;
+  size_t nonempty = 0;
+  for (size_t i = 0; i < count; i++) {
+    const size_t n = parts[i]->len;
+    if (n > limit - len) scr_oom();
+    len += n;
+    if (n != 0) {
+      only = parts[i];
+      nonempty++;
+    }
+  }
+  if (nonempty == 1) return scr_str_retain(only);
+  ScrStr *out = scr_str_alloc_raw(len, len);
+  size_t offset = 0;
+  for (size_t i = 0; i < count; i++) {
+    const ScrStr *part = parts[i];
+    memcpy(out->data + offset, part->data, part->len);
+    offset += part->len;
+  }
+  out->data[len] = '\0';
+  return out;
 }
 
 bool scr_str_eq(ScrStr *a, ScrStr *b) {

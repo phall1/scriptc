@@ -549,6 +549,36 @@ static void test_join(void) {
   scr_str_release(sep2);
   scr_arr_release(s);
 
+  s = scr_arr_new(SCR_ELEM_STR, 1);
+  ScrStr *shared = scr_str_new("x\0y", 3);
+  scr_arr_set_ref(s, 0, scr_str_retain(shared));
+  scr_arr_set_undefined(s, 1);
+  scr_arr_set_ref(s, 8192, scr_str_retain(shared));
+  scr_arr_set_ref(s, -1, scr_str_new("ignored", 7));
+  sep0 = scr_str_new("", 0);
+  strs = scr_arr_join(s, sep0);
+  check(strs->len == 6 && memcmp(strs->data, "x\0yx\0y", 6) == 0,
+        "join handles sparse values and embedded zero without properties");
+  check(shared->rc == 3 && strs->data[strs->len] == '\0',
+        "join preserves duplicate input owners and terminates final storage");
+  scr_str_release(strs);
+  strs = scr_arr_join(s, sep);
+  check(strs->len == 8198 && strs->data[3] == ',' && strs->data[8195] == 'x',
+        "join sizing includes separators for sparse holes and undefined");
+  scr_str_release(strs);
+  scr_arr_release(s);
+  scr_str_release(shared);
+  scr_str_release(sep0);
+
+  n = scr_arr_new(SCR_ELEM_F64, 0);
+  for (size_t i = 0; i < 300; i++) scr_arr_push_f64(n, 123.5);
+  nums = scr_arr_join(n, sep);
+  check(nums->len == 1799 && nums->data[1799] == '\0' &&
+        memcmp(nums->data + 1794, "123.5", 5) == 0,
+        "numeric join grows final storage without losing its suffix");
+  scr_str_release(nums);
+  scr_arr_release(n);
+
   scr_str_release(sep);
 #ifdef SCR_RC_AUDIT
   check(scr_str_live_count() == strings0, "join: no strings leaked");
