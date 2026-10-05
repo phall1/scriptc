@@ -3,6 +3,7 @@ import type { IntegerRanges } from "../../ir/integer-ranges.js";
 import { integerArithmeticRange, type IntegerRange } from "../../ir/integer-ranges.js";
 import { everyExprChild, everyStmtChild, everyStmtList } from "../../ir/traverse.js";
 import { isStableReceiverOperand } from "../../ir/analysis.js";
+import { byteNumberAccess } from "../../ir/byte-numbers.js";
 
 interface Extent { receiver: string; offset: number }
 interface Bound extends Extent { counter: string; minimum: number }
@@ -34,7 +35,8 @@ export function findBytesBounds(fn: IrFunction, ranges: IntegerRanges): Readonly
   const cached = new Map<string, Extent | null>();
   const resolving = new Set<string>();
   function extent(e: IrExpr, cache: boolean): Extent | null {
-    if (e.kind === "bytesIntrinsic" && e.method === "length" && e.receiver.kind === "varRef" &&
+    if (e.kind === "bytesIntrinsic" && (e.method === "length" || e.method === "byteLength" &&
+        e.receiver.type.kind === "bytes" && (e.receiver.type.elem === "u8" || e.receiver.type.elem === "u8c")) && e.receiver.kind === "varRef" &&
         eligible(e.receiver.localId) && (!cache || !changed.has(e.receiver.localId))) return { receiver: e.receiver.localId, offset: 0 };
     if (e.kind === "varRef" && eligible(e.localId) && !changed.has(e.localId)) {
       const previous = cached.get(e.localId);
@@ -112,7 +114,7 @@ export function findBytesBounds(fn: IrFunction, ranges: IntegerRanges): Readonly
     }
     return result && stable(s.body, result.receiver, counter) ? result : null;
   }
-  function access(node: Node, array: IrExpr, index: IrExpr, active: Bound[]): void {
+  function access(node: Node, array: IrExpr, index: IrExpr, active: Bound[], width: number): void {
     const integer = ranges.get(index);
     let safe = false;
     if (array.kind === "varRef" && eligible(array.localId)) {
@@ -120,17 +122,19 @@ export function findBytesBounds(fn: IrFunction, ranges: IntegerRanges): Readonly
         if (array.localId !== bound.receiver) continue;
         if (!integer && !affineRange(index, bound)) continue;
         const offset = affine(index, bound.counter);
-        if (offset !== null && bound.minimum + offset >= 0 && bound.offset + offset <= 0) { safe = true; break; }
+        if (offset !== null && bound.minimum + offset >= 0 && bound.offset + offset + width - 1 <= 0) { safe = true; break; }
       }
     }
     proved.set(node, (proved.get(node) ?? true) && safe);
   }
   function expr(e: IrExpr, active: Bound[]): boolean {
-    if (e.kind === "bytesIntrinsic" && e.method === "get" && e.args[0]) access(e, e.receiver, e.args[0], active);
+    if (e.kind === "bytesIntrinsic" && e.method === "get" && e.args[0]) access(e, e.receiver, e.args[0], active, 1);
+    const numeric = byteNumberAccess(e);
+    if (numeric && e.kind === "bytesIntrinsic") access(e, e.receiver, e.args[numeric.offsetArg]!, active, numeric.width);
     return everyExprChild(e, (child) => expr(child, active), (child) => stmt(child, active));
   }
   function stmt(s: IrStmt, active: Bound[]): boolean {
-    if (s.kind === "bytesSet") access(s, s.arr, s.index, active);
+    if (s.kind === "bytesSet") access(s, s.arr, s.index, active, 1);
     if (s.kind === "for") {
       if (s.init) stmt(s.init, active);
       if (s.cond) expr(s.cond, active);

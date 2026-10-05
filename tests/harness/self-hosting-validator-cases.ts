@@ -26,6 +26,15 @@ export function validatorCases(): ValidatorCase[] {
     cases.push({ name, module, ...(diagnostic ? { diagnostic } : {}) });
   };
   add("empty module", () => {});
+  for (const variant of ["valid", "token", "storage"]) {
+    add(`numeric byte ${variant}`, (m) => {
+      const bytes: IrType = { kind: "bytes", elem: variant === "storage" ? "u32" : "u8" };
+      m.functions[0]!.locals = [{ id: "bytes", name: "bytes", type: bytes, mutable: false }];
+      m.functions[0]!.body = [expression(variant === "storage"
+        ? { kind: "bytesIntrinsic", method: "dvSetUint32", receiver: varRef("bytes", bytes, loc), args: [numLit(0, loc), numLit(1, loc)], type: VOID, loc }
+        : { kind: "bytesIntrinsic", method: "readNum", receiver: varRef("bytes", bytes, loc), args: [strLit(variant === "token" ? "toString" : "u32le", loc), numLit(0, loc)], type: F64, loc })];
+    }, variant === "token" ? "invalid kind token" : variant === "storage" ? "u8 only" : undefined);
+  }
   for (const direction of ["left", "right", "alternating"]) {
     for (const invalid of [false, true]) {
       add(`deep logical ${direction} ${invalid ? "invalid" : "valid"}`, (m) => {

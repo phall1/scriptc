@@ -62,3 +62,24 @@ function remainders(limit: number): void {
   for (let i = 0; i < limit; i++) console.log("remainders", i % 0, i % -3, i % 1.5, i % Infinity, (i % 17) % 3);
 }
 remainders(4);
+
+// The last update may round outside the exact range, but it must leave the
+// loop before that rounded counter can be observed by the body.
+function stridedEdges(limit: number): void {
+  let visits = 0;
+  for (let i = 9007199254740987; i < limit; i += 3) {
+    console.log("stride-up", i, i >>> 0);
+    if (++visits === 5) break;
+  }
+  visits = 0;
+  for (let i = -9007199254740987; i > -limit; i -= 3) {
+    console.log("stride-down", i, i >>> 0);
+    if (++visits === 5) break;
+  }
+  visits = 0;
+  for (let i = 9007199254740987; i <= limit; i += 3) {
+    console.log("stride-inclusive", i, i >>> 0);
+    if (++visits === 5) break;
+  }
+}
+for (const limit of [9007199254740990, 9007199254740991, 9007199254740992, 9007199254740994, Infinity, NaN]) stridedEdges(limit);

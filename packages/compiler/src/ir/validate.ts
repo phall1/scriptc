@@ -3,6 +3,7 @@
  * produce invalid IR), but it still carries the user's source location:
  * an ICE that points at source is a gift to whoever debugs it.
  */
+import { validByteNumberToken } from "./byte-numbers.js";
 import type {
   IrClassDef,
   IrExpr,
@@ -3326,10 +3327,10 @@ function validateFunction(
           break;
         }
         const recv = e.receiver.type;
-        // The dvGet* getters read through a DataView — always a bytes<u8>
+        // The DataView getters and setters use a bytes<u8>
         // view; dataViewNew and byteOffset take ANY elem kind (views form
         // over any typed array's storage, owners answer byteOffset 0).
-        const isDvGet = e.method.startsWith("dvGet");
+        const isDv = e.method.startsWith("dvGet") || e.method.startsWith("dvSet");
         const isNum =
           e.method === "readNum" || e.method === "writeNum" || e.method === "readNumVar" || e.method === "writeNumVar";
         const U8_ONLY_EXTRA: ReadonlySet<string> = new Set([
@@ -3337,7 +3338,7 @@ function validateFunction(
           "indexOfNum", "lastIndexOfNum", "includesNum", "fill", "fillNum", "fillStr",
           "copy", "swap16", "swap32", "swap64", "writeStr",
         ]);
-        const u8Only = U8_ONLY_EXTRA.has(e.method) || isNum || isDvGet;
+        const u8Only = U8_ONLY_EXTRA.has(e.method) || isNum || isDv;
         if (u8Only && recv.elem !== "u8") {
           err(`bytesIntrinsic ${e.method} on a ${recv.elem} receiver (u8 only)`, e.loc);
         }
@@ -3346,6 +3347,8 @@ function validateFunction(
         // time; a runtime-valued kind has no meaning).
         if (isNum && e.args[0]?.kind !== "strLit") {
           err(`bytesIntrinsic ${e.method} args[0] must be a strLit kind token`, e.loc);
+        } else if (isNum && e.args[0]?.kind === "strLit" && !validByteNumberToken(e.method, e.args[0].value)) {
+          err(`bytesIntrinsic ${e.method} invalid kind token '${e.args[0].value}'`, e.loc);
         }
         // fillStr/writeStr carry their NORMALIZED encoding as args[1],
         // always a strLit (the frontend folds the aliases).

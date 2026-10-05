@@ -42,6 +42,18 @@ test("suspending bodies and environments cannot inherit synchronous guarantees",
   expect(preservesRegexInputs("matchAllInto")).toBe(false);
 });
 
+test("numeric byte operations preserve owners but argument replacement and callbacks do not", () => {
+  const bytes: IrExpr = { kind: "varRef", localId: "bytes", type: { kind: "bytes", elem: "u8" }, loc };
+  const read: IrExpr = { kind: "bytesIntrinsic", method: "dvGetUint32", receiver: bytes, args: [number], type: F64, loc };
+  const write: IrExpr = { kind: "bytesIntrinsic", method: "dvSetUint32", receiver: bytes, args: [number, read], type: VOID, loc };
+  const summary = effects([fn("read", [read]), fn("write", [write])]);
+  expect(summary.functions).toEqual(new Set(["read", "write"]));
+  expect(summary.preserves(write)).toBe(true);
+  const replace: IrExpr = { kind: "assignExpr", localId: "bytes", value: bytes, type: bytes.type, loc };
+  expect(summary.preserves({ ...read, receiver: replace })).toBe(false);
+  expect(summary.preserves({ ...read, args: [call("unknown")] })).toBe(false);
+});
+
 test("long call graphs use a worklist and facts are rebuilt for changed bodies", () => {
   const functions = Array.from({ length: 2000 }, (_, i) => fn(`f${i}`, i === 1999 ? [] : [call(`f${i + 1}`)]));
   expect(effects(functions).functions.size).toBe(functions.length);

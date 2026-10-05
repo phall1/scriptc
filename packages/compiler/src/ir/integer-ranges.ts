@@ -1,5 +1,6 @@
 import type { IrExpr, IrFunction, IrStmt } from "./ir.js";
 import { everyExprChild, everyStmtChild, everyStmtList } from "./traverse.js";
+import { byteNumberAccess, byteNumberRange } from "./byte-numbers.js";
 
 /** Exactly representable integers, excluding negative zero. Facts describe
  * the evaluated value, never a later read of the same local binding. */
@@ -170,9 +171,11 @@ export function analyzeIntegerRanges(fn: IrFunction): IntegerRanges {
         }
         break;
       }
-      case "bytesIntrinsic":
+      case "bytesIntrinsic": {
         expr(e.receiver, facts); for (const arg of e.args) expr(arg, facts);
-        if (e.method === "length") range = { min: 0, max: Number.MAX_SAFE_INTEGER };
+        const numeric = byteNumberAccess(e);
+        if (numeric && !numeric.write) range = byteNumberRange(numeric);
+        else if (e.method === "length" || e.method === "byteLength" || e.method === "byteOffset") range = { min: 0, max: Number.MAX_SAFE_INTEGER };
         else if (e.method === "get" && e.receiver.type.kind === "bytes") {
           const elem = e.receiver.type.elem;
           if (elem === "u8" || elem === "u8c") range = { min: 0, max: 255 };
@@ -183,6 +186,7 @@ export function analyzeIntegerRanges(fn: IrFunction): IntegerRanges {
           else if (elem === "i32") range = SIGNED;
         }
         break;
+      }
       case "arrIntrinsic":
         // Callbacks and arguments can have writes hidden in lazy lowering.
         invalidate(facts, [e]);

@@ -2,6 +2,7 @@ import type { IrExpr, IrLocal, IrStmt } from "./ir.js";
 import type { IntegerRange, IntegerRanges } from "./integer-ranges.js";
 
 import { everyExprChild, everyStmtChild, everyStmtList } from "./traverse.js";
+import { byteNumberAccess } from "./byte-numbers.js";
 
 /** A canonical byte loop whose induction variable is mathematically an
  * unsigned integer for every body entry. Backends may keep this binding in
@@ -47,7 +48,8 @@ function stableLoopValue(value: IrExpr, locals: ReadonlyMap<string, IrLocal>, bo
       return (value.op === "+" || value.op === "-" || value.op === "&" || value.op === ">>>" || value.op === "|") &&
         stableLoopValue(value.left, locals, body, invariant, counter) && stableLoopValue(value.right, locals, body, invariant, counter);
     case "bytesIntrinsic": case "arrIntrinsic":
-      return value.method === "length" && (value.kind === "bytesIntrinsic" || !invariant) && value.receiver.kind === "varRef" &&
+      return (value.method === "length" || value.kind === "bytesIntrinsic" && value.method === "byteLength") &&
+        (value.kind === "bytesIntrinsic" || !invariant) && value.receiver.kind === "varRef" &&
         stableLoopValue(value.receiver, locals, body, invariant, counter);
     default: return false;
   }
@@ -55,8 +57,9 @@ function stableLoopValue(value: IrExpr, locals: ReadonlyMap<string, IrLocal>, bo
 
 /** Normalize finite loop progress into signed i64 storage. Unknown limits
  * are guarded before versioning small innermost loops; proven bounds need
- * no duplicate body. A bounded step keeps the final update exactly
- * representable, preserving the floating fallback at both 2^53 fixed points. */
+ * no duplicate body. Every body entry must remain exactly representable.
+ * A final update may round beyond the limit: the scoped counter cannot be
+ * observed after that update, and both representations exit the loop. */
 export function matchIntegerCountedForLoop(
   stmt: IrStmt & { kind: "for" }, locals: ReadonlyMap<string, IrLocal>, ranges: IntegerRanges = new Map(),
 ): IntegerCountedForLoop | null {
@@ -82,7 +85,7 @@ export function matchIntegerCountedForLoop(
   if (step > 0 ? op !== "<" && op !== "<=" : op !== ">" && op !== ">=") return null;
   if (!stableLoopValue(limit, locals, stmt.body, true, local.id)) return null;
   const inclusive = op === "<=" || op === ">=";
-  const guardLimit = step > 0 ? 2 ** 53 - step + (inclusive ? 0 : 1) : -(2 ** 53) - step - (inclusive ? 0 : 1);
+  const guardLimit = step > 0 ? 2 ** 53 - (inclusive ? 1 : 0) : -(2 ** 53) + (inclusive ? 1 : 0);
   const boundRange = limit.kind === "numLit" ? { min: limit.value, max: limit.value } : ranges.get(limit);
   const guarded = !boundRange || (step > 0 ? !(boundRange.max <= guardLimit) : !(boundRange.min >= guardLimit));
   if (guarded && limit.kind === "numLit") return null;
@@ -93,7 +96,11 @@ export function matchIntegerCountedForLoop(
   const expr = (e: IrExpr): boolean => {
     if (e.kind === "bin" && ((e.op === "&" || e.op === "|" || e.op === "^" || e.op === "<<" || e.op === ">>" || e.op === ">>>") && (counter(e.left) || counter(e.right)) ||
         e.op === "%" && counter(e.left))) useful = true;
-    if (e.kind === "bytesIntrinsic" && e.method === "get" && e.args[0] && counter(e.args[0])) useful = true;
+    if (e.kind === "bytesIntrinsic") {
+      const numeric = byteNumberAccess(e);
+      const offset = e.args[numeric ? numeric.offsetArg : 0];
+      if ((numeric || e.method === "get") && offset && counter(offset)) useful = true;
+    }
     if (e.kind === "libCall" && (e.fn === "math.imul" || e.fn === "math.clz32") && e.args.some(counter)) useful = true;
     return (!guarded || ++cost <= 80) && everyExprChild(e, expr, bodyStmt);
   };
@@ -104,8 +111,8 @@ export function matchIntegerCountedForLoop(
   };
   if (!stmt.body.every(bodyStmt) || !useful) return null;
   const range = step > 0
-    ? { min: startRange.min, max: Math.max(startRange.min, Math.min(2 ** 53 - step, boundRange ? Math.ceil(boundRange.max) - (inclusive ? 0 : 1) : Number.MAX_SAFE_INTEGER)) }
-    : { min: Math.min(startRange.max, Math.max(-(2 ** 53) - step, boundRange ? Math.floor(boundRange.min) + (inclusive ? 0 : 1) : -Number.MAX_SAFE_INTEGER)), max: startRange.max };
+    ? { min: startRange.min, max: Math.max(startRange.min, Math.min(Number.MAX_SAFE_INTEGER, boundRange ? Math.ceil(boundRange.max) - (inclusive ? 0 : 1) : Number.MAX_SAFE_INTEGER)) }
+    : { min: Math.min(startRange.max, Math.max(-Number.MAX_SAFE_INTEGER, boundRange ? Math.floor(boundRange.min) + (inclusive ? 0 : 1) : -Number.MAX_SAFE_INTEGER)), max: startRange.max };
   return { localId: local.id, start, limit, step, inclusive, guarded, guardLimit, range };
 }
 

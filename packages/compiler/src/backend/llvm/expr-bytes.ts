@@ -5,6 +5,8 @@ import { BYTES_ELEMENT_SIZE, F64, type IrBytesElem, type IrExpr } from "../../ir
 import type { LlvmEmitterContext, LlValue } from "./expr-context.js";
 import { F64_INF, f64Lit } from "./common.js";
 import { exactInteger, widenInteger } from "./integer-values.js";
+import { byteNumberAccess } from "../../ir/byte-numbers.js";
+import { emitByteNumber } from "./byte-numbers.js";
 
 const BYTES_NUM_KIND: Record<string, { kind: number; le: boolean } | undefined> = {
   u8: { kind: 0, le: false },
@@ -333,27 +335,31 @@ export function emitBytesIntrinsic(host: LlvmEmitterContext, e: IrExpr & { kind:
     if (e.method === "readNum" || e.method === "writeNum" || e.method === "readNumVar" || e.method === "writeNumVar") {
       const tok = e.args[0]!;
       if (tok.kind !== "strLit") throw new InternalCompilerError(`llvm emitter bug: bytesIntrinsic ${e.method} kind must be a strLit`);
-      const r0 = emitBorrowedInput(host, e.receiver);
+      const r0 = host.emitStableReceiver(e.receiver, e.args.slice(1));
       const rest = e.args.slice(1).map((a) => host.emitExpr(a));
+      const access = byteNumberAccess(e);
+      const numeric = (fallback: () => LlValue): LlValue => access
+        ? emitByteNumber(host, e, access, r0, rest[access.offsetArg - 1]!, access.write ? rest[access.valueArg - 1]! : null, String(access.littleEndian), fallback)
+        : fallback();
       if (e.method === "readNum" || e.method === "writeNum") {
         const spec = BYTES_NUM_KIND[tok.value];
         if (!spec) throw new InternalCompilerError(`llvm emitter bug: bytes numeric kind '${tok.value}'`);
-        return e.method === "readNum"
+        return numeric(() => e.method === "readNum"
           ? call("scr_bytes_read_num", "double (ptr, double, i32, i1 zeroext)",
               `ptr ${r0.name}, double ${rest[0]!.name}, i32 ${spec.kind}, i1 ${spec.le}`, false, true)
           : call("scr_bytes_write_num", "double (ptr, double, double, i32, i1 zeroext)",
-              `ptr ${r0.name}, double ${rest[0]!.name}, double ${rest[1]!.name}, i32 ${spec.kind}, i1 ${spec.le}`, false, true);
+              `ptr ${r0.name}, double ${rest[0]!.name}, double ${rest[1]!.name}, i32 ${spec.kind}, i1 ${spec.le}`, false, true));
       }
       const spec = BYTES_NUM_VAR[tok.value];
       if (!spec) throw new InternalCompilerError(`llvm emitter bug: bytes variable-width kind '${tok.value}'`);
-      return e.method === "readNumVar"
+      return numeric(() => e.method === "readNumVar"
         ? call("scr_bytes_read_var", "double (ptr, double, double, i1 zeroext, i1 zeroext)",
             `ptr ${r0.name}, double ${rest[0]!.name}, double ${rest[1]!.name}, i1 ${spec.sign}, i1 ${spec.le}`, false, true)
         : call("scr_bytes_write_var", "double (ptr, double, double, double, i1 zeroext, i1 zeroext)",
-            `ptr ${r0.name}, double ${rest[0]!.name}, double ${rest[1]!.name}, double ${rest[2]!.name}, i1 ${spec.sign}, i1 ${spec.le}`, false, true);
+            `ptr ${r0.name}, double ${rest[0]!.name}, double ${rest[1]!.name}, double ${rest[2]!.name}, i1 ${spec.sign}, i1 ${spec.le}`, false, true));
     }
     const method = e.method;
-    const directElementAccess = method === "length" || method === "byteLength" || method === "get";
+    const directElementAccess = method === "length" || method === "byteLength" || method === "get" || byteNumberAccess(e) !== null;
     const r = directElementAccess
       ? host.emitStableReceiver(e.receiver, e.args)
       : emitBorrowedInput(host, e.receiver);
@@ -615,16 +621,17 @@ export function emitBytesIntrinsic(host: LlvmEmitterContext, e: IrExpr & { kind:
       case "dvGetFloat32":
       case "dvGetFloat64":
       case "dvGetBigUint64Number":
-      case "dvGetBigInt64Number":
+      case "dvGetBigInt64Number": {
         // DataView getters: an omitted littleEndian is big-endian (the JS
         // default). Throw Node's constant RangeError on a bad offset.
-        return call(
+        return emitByteNumber(host, e, byteNumberAccess(e)!, r, args[0]!, null, args[1]?.name ?? "false", () => call(
           "scr_dataview_get",
           "double (ptr, double, i32, i1 zeroext)",
           `ptr ${r.name}, double ${args[0]!.name}, i32 ${DV_GET_KIND[method]}, i1 ${args[1]?.name ?? "false"}`,
           false,
           true,
-        );
+        ));
+      }
       case "dvSetUint8":
       case "dvSetInt8":
       case "dvSetUint16":
@@ -632,17 +639,18 @@ export function emitBytesIntrinsic(host: LlvmEmitterContext, e: IrExpr & { kind:
       case "dvSetUint32":
       case "dvSetInt32":
       case "dvSetFloat32":
-      case "dvSetFloat64":
+      case "dvSetFloat64": {
         // DataView setters: [offset, value, littleEndian?] — void; throw
         // the getters' constant RangeError on a bad offset.
-        return call(
+        return emitByteNumber(host, e, byteNumberAccess(e)!, r, args[0]!, args[1]!, args[2]?.name ?? "false", () => call(
           "scr_dataview_set",
           "void (ptr, double, double, i32, i1 zeroext)",
           `ptr ${r.name}, double ${args[0]!.name}, double ${args[1]!.name}, ` +
             `i32 ${DV_SET_KIND[method]}, i1 ${args[2]?.name ?? "false"}`,
           false,
           true,
-        );
+        ));
+      }
       default: {
         const _exhaustive: never = method;
         void _exhaustive;

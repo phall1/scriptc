@@ -51,6 +51,7 @@ for (const backend of ["llvm"] as const) {
         "tests/corpus/3109-identity-union-collections.ts",
         "tests/corpus/collection-value-keys.ts",
         "tests/corpus/collection-storage-copies.ts",
+        "tests/corpus/byte-number-pipeline.ts",
         "tests/corpus/nullish-long-chain.ts",
       ]) {
         const irPath = join(dir, "emitted.json");
