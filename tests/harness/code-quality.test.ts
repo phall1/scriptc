@@ -47,6 +47,8 @@ test("compiler import fences reject cross-layer and cross-parser imports", () =>
   const cases = [
     ["packages/compiler/src/backend/probe.ts", "../frontend/program.js"],
     ["packages/compiler/src/frontend/probe.ts", "../backend/llvm/emitter.js"],
+    ["packages/compiler/src/frontend/lowering/probe.ts", "../../ir/validate.js"],
+    ["packages/compiler/src/frontend/cjs-lexer.ts", "../ir/validate.js"],
     ["packages/compiler/src/ir/probe.ts", "typescript5"],
     ["packages/compiler/src/frontend/ts7/probe.ts", "typescript5/lib/typescript.js"],
     ["packages/compiler/src/frontend/npm.ts", "../backend/llvm/emitter.js"],
@@ -67,6 +69,11 @@ test("IR imports and the explicit parser islands remain usable", () => {
   const work = workspace();
   source(work, "packages/compiler/src/backend/probe.ts", 'export { value } from "../ir/ir.js";\n');
   source(work, "packages/compiler/src/frontend/probe.ts", 'export { value } from "../ir/ir.js";\n');
+  source(
+    work,
+    "packages/compiler/src/frontend/lowering/probe.ts",
+    'export { LIB_FN_SIGS } from "../../ir/builtin-signatures.js";\nexport { STR_INTRINSIC_SIGS } from "../../ir/intrinsic-signatures.js";\n',
+  );
   for (const name of [
     "frontend/npm.ts",
     "frontend/cjs-lexer.ts",

@@ -13,6 +13,7 @@ import {
   validateModule,
 } from "@scriptc/compiler";
 import { emitLlvmModule } from "../../packages/compiler/src/backend/llvm/emitter.js";
+import { type IrModule } from "../../packages/compiler/src/ir/ir.js";
 import {
   moduleUsesAssert,
   moduleUsesBigInt,
@@ -25,8 +26,7 @@ import {
   moduleUsesStream,
   moduleUsesSymbol,
   moduleUsesZlib,
-  type IrModule,
-} from "../../packages/compiler/src/ir/ir.js";
+} from "../../packages/compiler/src/ir/runtime-features.js";
 import {
   llvmEmitterCases,
   llvmEmitterOptions,

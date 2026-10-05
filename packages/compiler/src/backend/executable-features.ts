@@ -1,10 +1,10 @@
 /** Runtime requirements derived from the lowered program, shared by compiler hosts. */
+import { type IrModule } from "../ir/ir.js";
 import {
   moduleEmbedsBuiltin,
   moduleEmbedsCompressedNpm,
   moduleRuntimeFeatures,
-  type IrModule,
-} from "../ir/ir.js";
+} from "../ir/runtime-features.js";
 import { hasForeignFfiCallback } from "./ffi-callbacks.js";
 import type { NativeLinkFeatures } from "./native-link-info.js";
 

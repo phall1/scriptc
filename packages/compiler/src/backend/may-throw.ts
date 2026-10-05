@@ -1,12 +1,8 @@
 /* Cheap whole-module may-throw analysis (see computeMayThrow). Pure function
  * of the IR module; the emitter consults the result to place unwind checks. */
 import type { IrExpr, IrStmt, IrModule } from "../ir/ir.js";
-import {
-  isFfiCallbackParam,
-  MAY_THROW_ARR_METHODS,
-  MAY_THROW_BYTES_METHODS,
-  MAY_THROW_LIB_FNS,
-} from "../ir/ir.js";
+import { isFfiCallbackParam, MAY_THROW_ARR_METHODS, MAY_THROW_BYTES_METHODS } from "../ir/ir.js";
+import { MAY_THROW_LIB_FNS } from "../ir/builtin-effects.js";
 import { everyStmtList } from "../ir/traverse.js";
 import { hasRetainedFfiCallback } from "./ffi-callbacks.js";
 

@@ -15,13 +15,13 @@ import {
   type AnalyzeResult,
 } from "@scriptc/compiler";
 import { everyStmtList } from "../../packages/compiler/src/ir/traverse.js";
+import { type IrModule } from "../../packages/compiler/src/ir/ir.js";
 import {
   moduleUsesInspect,
   moduleUsesDynInvoke,
   moduleUsesRegex,
   moduleUsesCopying,
-  type IrModule,
-} from "../../packages/compiler/src/ir/ir.js";
+} from "../../packages/compiler/src/ir/runtime-features.js";
 import { backendAnalysisCases } from "./self-hosting-backend-cases.js";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));

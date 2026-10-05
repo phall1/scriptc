@@ -9,6 +9,7 @@ import { compileC, deserializeModule, emitLlvmModule, validateModule } from "@sc
 import type { compile } from "@scriptc/compiler";
 import type { IrModule } from "../../packages/compiler/src/ir/ir.js";
 import { ts7Executable } from "../../packages/compiler/src/frontend/ts7/rpc-api.js";
+
 import {
   moduleUsesAssert,
   moduleUsesBigInt,
@@ -18,7 +19,7 @@ import {
   moduleUsesRegex,
   moduleUsesSymbol,
   moduleUsesZlib,
-} from "../../packages/compiler/src/ir/ir.js";
+} from "../../packages/compiler/src/ir/runtime-features.js";
 
 const root = join(import.meta.dirname, "../..");
 const entry = join(root, "tests/fixtures/self-hosting/frontend-pipeline.ts");
