@@ -1,6 +1,7 @@
 #include "scr_runtime.h"
 #include <assert.h>
 #include <stdio.h>
+#include <string.h>
 
 static void put(ScrDyn *map, ScrDyn *key, ScrDyn *value) {
   ScrDyn *args[] = {key, value};
@@ -20,8 +21,79 @@ static ScrDyn *nothing(ScrClosure *closure, ScrDyn *const *args, size_t argc) {
   return scr_dyn_retain(scr_dyn_undefined());
 }
 
+static void checked_storage(void) {
+  /* Reuse after deletion, changing field order, embedded NUL and escaped
+   * duplicate names must leave independently owned keys and values. */
+  for (int round = 0; round < 100; round++) {
+    const char *text = round % 2 ? "{\"alpha\":1,\"beta\":2,\"gamma\":3}"
+      : "{\"gamma\":3,\"alpha\":0,\"\\u0061lpha\":1,\"beta\":2}";
+    ScrStr *input = scr_str_new(text, strlen(text));
+    ScrDyn *object = scr_json_parse(input);
+    scr_str_release(input);
+    assert(object && object->v.obj.len == 3);
+    assert(scr_dyn_obj_get(object, "alpha", 5)->v.num == 1);
+    ScrStr *key = scr_str_new("beta", 4);
+    scr_dyn_key_delete(object, key, true);
+    scr_str_release(key);
+    assert(!scr_dyn_obj_get(object, "beta", 4));
+    assert(scr_dyn_obj_get(object, "gamma", 5)->v.num == 3);
+    char mutable_key[] = "new\0key";
+    scr_dyn_obj_set(object, mutable_key, sizeof mutable_key - 1, scr_dyn_new_num(4));
+    mutable_key[0] = 'x';
+    assert(scr_dyn_obj_get(object, "new\0key", 7)->v.num == 4);
+    scr_dyn_release(object);
+  }
+  /* Larger objects and long names leave no stale pooled tail keys when a
+   * later small object grows through the same capacity. */
+  for (int round = 0; round < 4; round++) {
+    ScrDyn *object = scr_dyn_new_obj();
+    for (int i = 0; i < 80; i++) {
+      char key[160];
+      memset(key, 'a' + i % 20, sizeof key);
+      int prefix = snprintf(key, sizeof key, "%d:", i);
+      memset(key + prefix, 'a' + i % 20, sizeof key - (size_t)prefix);
+      scr_dyn_obj_set(object, key, sizeof key, scr_dyn_new_num(i));
+      assert(scr_dyn_obj_get(object, key, sizeof key)->v.num == i);
+    }
+    scr_dyn_release(object);
+  }
+  /* A direct step is authorized only by the captured builtin method. */
+  ScrDyn *source = scr_dyn_new_arr();
+  scr_dyn_arr_push(source, scr_dyn_new_num(7));
+  scr_dyn_arr_push(source, scr_dyn_retain(scr_dyn_undefined()));
+  ScrStr *spell = scr_str_new("source", 6);
+  ScrDyn *iterator = scr_dyn_iterator(source, spell);
+  scr_str_release(spell);
+  ScrDyn *next = scr_dyn_handle_ops_of(iterator)->get(iterator->v.handle.ptr, "next", 4);
+  assert(scr_dyn_iterator_can_step(iterator, next));
+  assert(!scr_dyn_iterator_can_step(source, next));
+  assert(!scr_dyn_iterator_can_step(iterator, scr_dyn_undefined()));
+  ScrDyn *item = scr_dyn_iterator_step(iterator);
+  assert(item->v.num == 7 && !scr_dyn_iterator_step_done(iterator));
+  scr_dyn_release(item);
+  item = scr_dyn_iterator_step(iterator);
+  assert(item->kind == SCR_DYN_UNDEF && !scr_dyn_iterator_step_done(iterator));
+  scr_dyn_release(item);
+  scr_dyn_arr_push(source, scr_dyn_new_num(9));
+  item = scr_dyn_iterator_step(iterator);
+  assert(item->v.num == 9 && !scr_dyn_iterator_step_done(iterator));
+  scr_dyn_release(item);
+  item = scr_dyn_iterator_step(iterator);
+  assert(item->kind == SCR_DYN_UNDEF && scr_dyn_iterator_step_done(iterator));
+  scr_dyn_release(item);
+  scr_dyn_arr_push(source, scr_dyn_new_num(11));
+  item = scr_dyn_iterator_step(iterator);
+  assert(item->kind == SCR_DYN_UNDEF && scr_dyn_iterator_step_done(iterator));
+  scr_dyn_release(item);
+  scr_dyn_release(next);
+  scr_dyn_release(iterator);
+  scr_dyn_release(source);
+  assert(!scr_exc_pending());
+}
+
 int main(void) {
   scr_init();
+  checked_storage();
   /* Native Set boxes may own headerless scalar/string maps. Collecting an
    * enclosing cycle must neither trace those leaves nor skip their release. */
   for (int i = 0; i < 2000; i++) {
@@ -177,6 +249,6 @@ int main(void) {
   scr_dyn_release(key);
   scr_dyn_release(first);
   assert(!scr_exc_pending());
-  puts("weak metadata lifetime checks passed");
+  puts("checked storage and weak metadata lifetime checks passed");
   return 0;
 }

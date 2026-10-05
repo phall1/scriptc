@@ -1,5 +1,6 @@
 import { lowerDynObjectLiteral } from "./expressions/object-literals.js";
 import { importMetaBindingSource } from "./import-meta.js";
+import { iteratorCanStep, iteratorValue } from "./iterator-consumption.js";
 import { InternalCompilerError } from "../../errors.js";
 /* Statement lowering: the statement dispatch (lowerStmt), variable
  * declarations including destructuring patterns, scoped blocks, control
@@ -7861,7 +7862,9 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
     const spell = name !== null ? `${name} is not iterable` : callee !== null ? `${callee} is not a function or its return value is not iterable` : "";
     const iterator = lowerer.declareHiddenLocal("%dofIterator", DYN);
     const next = lowerer.declareHiddenLocal("%dofNext", DYN);
-    const step = lowerer.declareHiddenLocal("%dofStep", DYN);
+    const fast = lowerer.declareHiddenLocal("%dofNative", BOOL);
+    const done = lowerer.declareHiddenLocal("%dofDone", BOOL);
+    done.mutable = true;
     const value = lowerer.declareHiddenLocal("%dofValue", DYN);
     const returned = lowerer.declareHiddenLocal("%dofReturn", DYN);
     const needsClose = lowerer.declareHiddenLocal("%dofNeedsClose", BOOL);
@@ -7956,9 +7959,8 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
         kind: "while", cond: { kind: "boolLit", value: true, type: BOOL, loc },
         body: [
           setClose(false),
-          { kind: "varDecl", localId: step.id, init: call(varRef(next.id, DYN, loc)), loc },
-          { kind: "if", cond: { kind: "dynTest", test: "truthy", value: get(varRef(step.id, DYN, loc), "done"), type: BOOL, loc }, then: [{ kind: "break", loc }], else_: null, loc },
-          { kind: "varDecl", localId: value.id, init: get(varRef(step.id, DYN, loc), "value"), loc },
+          { kind: "varDecl", localId: value.id, init: iteratorValue(lowerer, varRef(iterator.id, DYN, loc), varRef(next.id, DYN, loc), varRef(fast.id, BOOL, loc), done, loc, "iterator method"), loc },
+          { kind: "if", cond: varRef(done.id, BOOL, loc), then: [{ kind: "break", loc }], else_: null, loc },
           setClose(true),
           ...binds, ...body,
         ],
@@ -7969,6 +7971,8 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
         body: [
           { kind: "varDecl", localId: iterator.id, init: check({ kind: "libCall", fn: "dyn.iterator", args: [iterable, { kind: "strLit", value: spell, type: STRING, loc }], type: DYN, loc }), loc },
           { kind: "varDecl", localId: next.id, init: get(varRef(iterator.id, DYN, loc), "next"), loc },
+          { kind: "varDecl", localId: fast.id, init: iteratorCanStep(varRef(iterator.id, DYN, loc), varRef(next.id, DYN, loc), loc), loc },
+          { kind: "varDecl", localId: done.id, init: { kind: "boolLit", value: false, type: BOOL, loc }, loc },
           { kind: "varDecl", localId: needsClose.id, init: { kind: "boolLit", value: false, type: BOOL, loc }, loc },
           {
             kind: "tryCatch", tryBody: [loop],

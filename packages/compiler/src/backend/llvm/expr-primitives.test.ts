@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { F64, VOID, type IrExpr, type IrModule, type IrStmt } from "../../ir/ir.js";
+import { BOOL, F64, STRING, VOID, type IrExpr, type IrModule, type IrStmt } from "../../ir/ir.js";
 import { emitLlvmModule } from "./emitter.js";
 
 const loc = { file: "bitwise-emission.ts", start: 0, end: 0 };
@@ -37,4 +37,25 @@ test("LLVM emits bitwise number operators as native i32 instructions", () => {
   expect(llvm).toMatch(/ = xor i32 .*?, -1$/m);
   expect(llvm).toMatch(/ = uitofp i32 .*? to double$/m);
   expect(llvm).toMatch(/ = sitofp i32 .*? to double$/m);
+});
+
+test.each([32, 64] as const)("string zero-length comparisons use the %i-bit byte count only", (bits) => {
+  const receiver: IrExpr = { kind: "varRef", localId: "text", type: STRING, loc };
+  const length: IrExpr = { kind: "strIntrinsic", method: "length", receiver, args: [], type: F64, loc };
+  const mod = fixture();
+  mod.functions = [
+    { name: "__main", params: [], returnType: VOID, locals: [], body: [], loc },
+    ...([0, 1] as const).map((number) => ({
+      name: `length_${number}`, params: [{ name: "text", localId: "text", type: STRING }], returnType: BOOL,
+      locals: [{ id: "text", name: "text", type: STRING, mutable: false }], loc,
+      body: [{ kind: "return" as const, loc, value: { kind: "bin" as const, op: "===" as const, left: length,
+        right: { kind: "numLit" as const, value: number, type: F64, loc }, type: BOOL, loc } }],
+    })),
+  ];
+  const llvm = emitLlvmModule(mod, { pointerBits: bits });
+  const zero = /^define internal [^\n]*@sc_[bf]+_length_0\([^]*?^}/m.exec(llvm)![0];
+  const one = /^define internal [^\n]*@sc_[bf]+_length_1\([^]*?^}/m.exec(llvm)![0];
+  expect(zero).toContain(`getelementptr inbounds i${bits}`);
+  expect(zero).not.toContain("@scr_str_utf16_len");
+  expect(one).toContain("@scr_str_utf16_len");
 });

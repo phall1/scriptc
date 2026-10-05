@@ -171,6 +171,34 @@ static void handoff_append(ScrStr **binding, ScrStr *suffix) {
   scr_str_release(snapshot);
 }
 
+static void split_storage_asserts(void) {
+  /* Cross the runtime's dense-storage boundary without allocating a
+   * million distinct strings: each piece is the shared single-byte "a". */
+  size_t boundary = (size_t)1 << 20, count = boundary + 3;
+  char *bytes = malloc(count * 2 - 1);
+  for (size_t i = 0; i < count; i++) {
+    bytes[i * 2] = 'a';
+    if (i + 1 < count) bytes[i * 2 + 1] = ',';
+  }
+  ScrStr *input = scr_str_new(bytes, count * 2 - 1);
+  free(bytes);
+  ScrStr *separator = scr_str_new(",", 1);
+  ScrArr *parts = scr_str_split(input, separator);
+  total++;
+  if (parts->len != count) failed++;
+  size_t positions[] = {0, boundary - 1, boundary, count - 1};
+  for (size_t i = 0; i < sizeof positions / sizeof *positions; i++) {
+    total++;
+    if (!scr_arr_has(parts, positions[i])) { failed++; continue; }
+    ScrStr *piece = scr_arr_get_ref(parts, positions[i]);
+    check("split-storage", "dense/sparse", input, piece->data, piece->len, "a", 1);
+    scr_str_release(piece);
+  }
+  scr_arr_release(parts);
+  scr_str_release(separator);
+  scr_str_release(input);
+}
+
 static void construction_asserts(void) {
   ScrStr *empty = scr_str_new("", 0);
   ScrStr *value = scr_str_new("a\0\xE6\x97\xA5", 5);
@@ -769,6 +797,7 @@ int main(int argc, char **argv) {
 
   divergence_asserts();
   construction_asserts();
+  split_storage_asserts();
   accumulation_asserts();
   short_string_asserts();
 #ifdef SCR_SIDX_TEST

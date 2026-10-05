@@ -417,7 +417,33 @@ static SCR_TL ScrDyn *scr_builtin_array_prototype;
 static SCR_TL ScrDyn *scr_dyn_free_arr, *scr_dyn_free_obj, *scr_dyn_free_misc;
 static SCR_TL size_t scr_dyn_free_count;
 #define SCR_DYN_FREE_MAX 8192
+/* Recycled small objects may retain key bytes, but never values or an
+ * unbounded document's keys. This budget applies across the whole pool. */
+static SCR_TL size_t scr_dyn_cached_key_bytes;
+#define SCR_DYN_KEY_CACHE_MAX ((size_t)64 * 1024)
+#define SCR_DYN_KEY_CACHE_SLOTS 16
+#define SCR_DYN_KEY_CACHE_LENGTH 64
 #endif
+
+static void scr_dyn_obj_drop_keys(ScrDyn *d, bool cache) {
+  for (size_t i = 0; i < d->v.obj.cap; i++) {
+    ScrDynEntry *entry = &d->v.obj.entries[i];
+    if (!entry->key) continue;
+#ifndef SCR_RC_AUDIT
+    if (cache && d->v.obj.cap <= SCR_DYN_KEY_CACHE_SLOTS &&
+        entry->key_len <= SCR_DYN_KEY_CACHE_LENGTH &&
+        entry->key_len + 1 <= SCR_DYN_KEY_CACHE_MAX - scr_dyn_cached_key_bytes) {
+      scr_dyn_cached_key_bytes += entry->key_len + 1;
+      continue;
+    }
+#else
+    (void)cache;
+#endif
+    free(entry->key);
+    entry->key = NULL;
+    entry->key_len = 0;
+  }
+}
 
 /* Checked objects and functions can close over one another. All heap dyn
  * nodes carry a collector header so a captured unknown value has one uniform
@@ -539,6 +565,12 @@ static ScrDyn *scr_dyn_alloc(ScrDynKind kind) {
       d->v.arr.presence = NULL;
     } else if (kind == SCR_DYN_OBJ) {
       d->v.obj.len = 0; /* cap/entries preserved */
+      if (d->v.obj.cap <= SCR_DYN_KEY_CACHE_SLOTS) {
+        for (size_t i = 0; i < d->v.obj.cap; i++) {
+          ScrDynEntry *entry = &d->v.obj.entries[i];
+          if (entry->key) scr_dyn_cached_key_bytes -= entry->key_len + 1;
+        }
+      }
       d->v.obj.source_identity = NULL;
       d->v.obj.source_access = NULL;
     } else {
@@ -592,12 +624,14 @@ static void scr_dyn_dispose(ScrDyn *d, bool collected) {
     break;
   case SCR_DYN_OBJ:
     for (size_t i = 0; i < d->v.obj.len; i++) {
-      free(d->v.obj.entries[i].key);
       if (!collected) {
         scr_dyn_release(d->v.obj.entries[i].value);
         scr_dyn_release(d->v.obj.entries[i].getter);
         scr_dyn_release(d->v.obj.entries[i].setter);
       }
+      d->v.obj.entries[i].value = NULL;
+      d->v.obj.entries[i].getter = NULL;
+      d->v.obj.entries[i].setter = NULL;
     }
     if (d->v.obj.source_identity) {
       d->v.obj.source_access(d->v.obj.source_identity, false);
@@ -646,6 +680,7 @@ static void scr_dyn_dispose(ScrDyn *d, bool collected) {
 #endif
 #ifndef SCR_RC_AUDIT
   if (!collected && scr_dyn_free_count < SCR_DYN_FREE_MAX) {
+    if (d->kind == SCR_DYN_OBJ) scr_dyn_obj_drop_keys(d, true);
     /* Pooled blocks retain their headers and count toward the bounded
      * allocated heap, but never remain in a candidate buffer. */
     scr_weak_dispose(d);
@@ -659,7 +694,10 @@ static void scr_dyn_dispose(ScrDyn *d, bool collected) {
   }
 #endif
   if (d->kind == SCR_DYN_ARR) free(d->v.arr.items);
-  else if (d->kind == SCR_DYN_OBJ) free(d->v.obj.entries);
+  else if (d->kind == SCR_DYN_OBJ) {
+    scr_dyn_obj_drop_keys(d, false);
+    free(d->v.obj.entries);
+  }
   scr_cyc_free(d);
 }
 
@@ -983,15 +1021,14 @@ ScrDyn *scr_dyn_arr_named_get(const ScrDyn *d, const ScrStr *key) {
   return value;
 }
 
-/* Takes ownership of key (malloc'd) and value. Duplicate keys: the LATER
- * value wins (like JS JSON.parse) — the old value is released and the new
- * key buffer freed (the surviving entry keeps its original, equal key). */
-static void scr_dyn_obj_put(ScrDyn *obj, char *key, size_t key_len, ScrDyn *value) {
+/* Borrows key and takes ownership of value. Duplicate keys retain their
+ * original spelling/storage and insertion position; the later value wins.
+ * A recycled entry can reuse equal key bytes without a malloc/free pair. */
+static void scr_dyn_obj_put(ScrDyn *obj, const char *key, size_t key_len, ScrDyn *value) {
   for (size_t i = 0; i < obj->v.obj.len; i++) {
     ScrDynEntry *e = &obj->v.obj.entries[i];
     if (e->key_len == key_len && memcmp(e->key, key, key_len) == 0) {
       if (e->accessor || !e->writable) {
-        free(key);
         scr_dyn_release(value);
         static const char message[] = "Cannot assign to read only property";
         scr_throw_error_msg(SCR_ERR_TYPE, message, sizeof message - 1);
@@ -1000,12 +1037,10 @@ static void scr_dyn_obj_put(ScrDyn *obj, char *key, size_t key_len, ScrDyn *valu
       ScrDyn *old = e->value;
       e->value = value;
       scr_dyn_release(old);
-      free(key);
       return;
     }
   }
   if (obj->non_extensible) {
-    free(key);
     scr_dyn_release(value);
     static const char message[] = "Cannot add property, object is not extensible";
     scr_throw_error_msg(SCR_ERR_TYPE, message, sizeof message - 1);
@@ -1015,11 +1050,18 @@ static void scr_dyn_obj_put(ScrDyn *obj, char *key, size_t key_len, ScrDyn *valu
     size_t cap = obj->v.obj.cap ? obj->v.obj.cap * 2 : 4;
     ScrDynEntry *entries = realloc(obj->v.obj.entries, cap * sizeof *entries);
     if (!entries) scr_json_oom();
+    memset(entries + obj->v.obj.cap, 0, (cap - obj->v.obj.cap) * sizeof *entries);
     obj->v.obj.entries = entries;
     obj->v.obj.cap = cap;
   }
   ScrDynEntry *e = &obj->v.obj.entries[obj->v.obj.len++];
-  e->key = key;
+  if (!e->key || e->key_len != key_len || memcmp(e->key, key, key_len)) {
+    free(e->key);
+    e->key = malloc(key_len + 1);
+    if (!e->key) scr_json_oom();
+    memcpy(e->key, key, key_len);
+    e->key[key_len] = '\0';
+  }
   e->key_len = key_len;
   e->value = value;
   e->getter = NULL;
@@ -2827,14 +2869,10 @@ static void scr_dyn_handle_key_set(ScrDyn *recv, ScrStr *key, ScrDyn *value) {
   scr_throw_error(SCR_ERR_ERROR, scr_jb_finish(&b));
 }
 
-/* Public obj insertion: COPIES the key bytes (the internal put takes a
- * malloc'd buffer), owns the value, later duplicate keys win. */
+/* Public obj insertion copies a new key only when needed, owns the value,
+ * and preserves the existing entry for duplicate keys. */
 void scr_dyn_obj_set(ScrDyn *obj, const char *key, size_t key_len, ScrDyn *value) {
-  char *copy = malloc(key_len + 1);
-  if (!copy) scr_json_oom();
-  memcpy(copy, key, key_len);
-  copy[key_len] = '\0';
-  scr_dyn_obj_put(obj, copy, key_len, value);
+  scr_dyn_obj_put(obj, key, key_len, value);
 }
 
 static ScrStr *scr_dyn_property_key(const ScrDyn *key) {
@@ -3030,6 +3068,7 @@ typedef struct {
   unsigned kind; /* 0: array, 1: string, 2: Map, 3: Set */
   unsigned selection; /* 0: values, 1: keys, 2: entries */
   bool array_like;
+  bool step_done; /* completion of the last compiler-consumed step */
   double limit;
 } ScrNativeIterator;
 
@@ -3071,21 +3110,18 @@ static void scr_native_iterator_release(void *ptr) {
   free(iterator);
 }
 
-static ScrDyn *scr_native_iterator_next(ScrNativeIterator *iterator) {
+/* Produce an owned value without allocating the protocol result. The
+ * compiler uses this only after checking the captured next function; public
+ * next() calls still receive a fresh, independently mutable result object. */
+static ScrDyn *scr_native_iterator_value(ScrNativeIterator *iterator, bool *done_out) {
   ScrDyn *source = iterator->source;
-  if (source && iterator->kind == 4) {
-    ScrDyn *result = scr_dyn_handle_ops_of(source)->iter_step(source->v.handle.ptr, &iterator->index, iterator->selection);
-    if (!result) return NULL;
-    if (scr_dyn_truthy(scr_dyn_obj_get(result, "done", 4))) {
-      iterator->source = NULL;
-      scr_dyn_release(source);
-    }
-    return result;
-  }
+  /* An inherited indexed getter can advance this same iterator recursively.
+   * Keep the source alive even if that nested call exhausts the iterator. */
+  if (source) scr_dyn_retain(source);
   /* Native array capsules retain the live array, so refresh its view at each
    * step rather than iterating a snapshot taken when the iterator opened. */
   ScrDyn *view = source && source->kind == SCR_DYN_TYPED_REF ? scr_dyn_typed_ref_materialize(source) : NULL;
-  if (scr_exc_pending()) { scr_dyn_release(view); return NULL; }
+  if (scr_exc_pending()) { scr_dyn_release(view); scr_dyn_release(source); return NULL; }
   ScrDyn *items = view ? view : source;
   ScrMap *map = source && (iterator->kind == 2 || iterator->kind == 3) ? source->v.handle.ptr : NULL;
   if (map) while (iterator->index < scr_map_iter_count(map) && !scr_map_iter_live(map, iterator->index)) iterator->index++;
@@ -3131,6 +3167,24 @@ static ScrDyn *scr_native_iterator_next(ScrNativeIterator *iterator) {
     scr_str_release(point);
   }
   scr_dyn_release(view);
+  scr_dyn_release(source);
+  *done_out = done;
+  return value;
+}
+
+static ScrDyn *scr_native_iterator_next(ScrNativeIterator *iterator) {
+  ScrDyn *source = iterator->source;
+  if (source && iterator->kind == 4) {
+    ScrDyn *result = scr_dyn_handle_ops_of(source)->iter_step(source->v.handle.ptr, &iterator->index, iterator->selection);
+    if (!result) return NULL;
+    if (scr_dyn_truthy(scr_dyn_obj_get(result, "done", 4))) {
+      iterator->source = NULL;
+      scr_dyn_release(source);
+    }
+    return result;
+  }
+  bool done;
+  ScrDyn *value = scr_native_iterator_value(iterator, &done);
   if (!value) return NULL;
   ScrDyn *result = scr_dyn_new_obj();
   scr_dyn_obj_set(result, "value", 5, value);
@@ -3178,6 +3232,28 @@ static ScrDyn *scr_native_set_iterator_next_call(ScrClosure *closure, ScrDyn *co
 static ScrDyn *scr_native_handle_iterator_next_call(ScrClosure *closure, ScrDyn *const *args, size_t argc) {
   (void)closure; (void)args; (void)argc;
   return scr_native_iterator_next_checked(4);
+}
+
+bool scr_dyn_iterator_can_step(const ScrDyn *iterator, const ScrDyn *next) {
+  if (iterator->kind != SCR_DYN_HANDLE || iterator->v.handle.tag != SCR_DYNH_ITERATOR) return false;
+  unsigned kind = ((ScrNativeIterator *)iterator->v.handle.ptr)->kind;
+  if (kind > 3) return false;
+  size_t index = kind == 3 ? 8 : kind == 2 ? 7 : kind == 1 ? 5 : 0;
+  return next == scr_iterator_functions[index];
+}
+
+ScrDyn *scr_dyn_iterator_step(const ScrDyn *value) {
+  ScrNativeIterator *iterator = value->v.handle.ptr;
+  bool done = false;
+  ScrDyn *item = scr_native_iterator_value(iterator, &done);
+  /* Publish after getters finish, so recursive steps cannot overwrite this
+   * step's completion. No user code runs between step and step_done. */
+  iterator->step_done = done;
+  return item;
+}
+
+bool scr_dyn_iterator_step_done(const ScrDyn *value) {
+  return ((ScrNativeIterator *)value->v.handle.ptr)->step_done;
 }
 
 static ScrDyn *scr_native_iterator_get(void *ptr, const char *key, size_t len) {
@@ -5926,10 +6002,12 @@ static ScrDyn *scr_json_object(ScrJsonP *p) {
       scr_json_throw_pos("Expected property name or '}'", p->pos);
       return NULL;
     }
-    /* Key: fast span path (no escapes) copies straight into the malloc'd
-     * key buffer; the slow path decodes into a ScrStr first. */
+    /* Keep the key borrowed until insertion determines whether it already
+     * exists or can reuse a recycled slot. Escaped keys own their decoded
+     * string until the value has been parsed and inserted. */
     size_t key_len = 0;
-    char *key;
+    const char *key;
+    ScrStr *decoded_key = NULL;
     {
       const char *span;
       size_t span_len;
@@ -5939,27 +6017,21 @@ static ScrDyn *scr_json_object(ScrJsonP *p) {
         return NULL;
       }
       if (r > 0) {
-        key = malloc(span_len + 1);
-        if (!key) scr_json_oom();
-        memcpy(key, span, span_len);
-        key[span_len] = '\0';
+        key = span;
         key_len = span_len;
       } else {
-        ScrStr *ks = scr_json_string_slow(p);
-        if (!ks) {
+        decoded_key = scr_json_string_slow(p);
+        if (!decoded_key) {
           scr_dyn_release(obj);
           return NULL;
         }
-        key = malloc(ks->len + 1);
-        if (!key) scr_json_oom();
-        memcpy(key, ks->data, ks->len + 1);
-        key_len = ks->len;
-        scr_str_release(ks);
+        key = decoded_key->data;
+        key_len = decoded_key->len;
       }
     }
     scr_json_ws(p);
     if (p->pos >= p->len || p->s[p->pos] != ':') {
-      free(key);
+      scr_str_release(decoded_key);
       scr_dyn_release(obj);
       if (p->pos >= p->len) scr_json_throw("Unexpected end of JSON input");
       else scr_json_throw_pos("Expected ':' after property name", p->pos);
@@ -5968,11 +6040,12 @@ static ScrDyn *scr_json_object(ScrJsonP *p) {
     p->pos++; /* ':' */
     ScrDyn *value = scr_json_value(p);
     if (!value) {
-      free(key);
+      scr_str_release(decoded_key);
       scr_dyn_release(obj);
       return NULL;
     }
     scr_dyn_obj_put(obj, key, key_len, value); /* later duplicate keys win */
+    scr_str_release(decoded_key);
     scr_json_ws(p);
     if (p->pos >= p->len) {
       scr_dyn_release(obj);
@@ -6121,6 +6194,9 @@ static void scr_json_delete_member(ScrDyn *object, const ScrStr *key) {
     ScrDynEntry removed = *entry;
     memmove(entry, entry + 1, (object->v.obj.len - i - 1) * sizeof *entry);
     object->v.obj.len--;
+    /* The moved tail aliases a live entry; spare slots own only their own
+     * retained key bytes, never a second pointer to a surviving property. */
+    memset(&object->v.obj.entries[object->v.obj.len], 0, sizeof *entry);
     free(removed.key);
     scr_dyn_release(removed.value);
     scr_dyn_release(removed.getter);

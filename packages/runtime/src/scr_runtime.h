@@ -3925,6 +3925,12 @@ void scr_dyn_install_async_iterator_symbol(ScrDyn *key);
 ScrDyn *scr_dyn_array_values_function(void);
 ScrDyn *scr_dyn_array_from_iterator(const ScrDyn *value);
 ScrDyn *scr_dyn_iterator_result(ScrDyn *value);
+/* Internal consumption of a captured builtin next method. Check can_step
+ * once before entering the loop. step returns an owned ordinary value;
+ * read step_done immediately afterward, before running any user code. */
+bool scr_dyn_iterator_can_step(const ScrDyn *iterator, const ScrDyn *next);
+ScrDyn *scr_dyn_iterator_step(const ScrDyn *iterator);
+bool scr_dyn_iterator_step_done(const ScrDyn *iterator);
 /* The ordinary object snapshot plus a retained typed source. source_access
  * releases that source when materialize=false and returns a fresh snapshot
  * when true. */

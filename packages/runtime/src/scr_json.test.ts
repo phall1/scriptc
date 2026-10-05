@@ -7,7 +7,7 @@ import { expect, test } from "vitest";
 
 const exec = promisify(execFile);
 
-test.each([false, true])("weak metadata releases values when native keys die (audit=%s)", async (audit) => {
+test.each([false, true])("checked storage and weak metadata preserve ownership (audit=%s)", async (audit) => {
   const scratch = await mkdtemp(join(tmpdir(), "scriptc-weak-map-"));
   const src = import.meta.dirname;
   const binary = join(scratch, "weak-map");
@@ -26,7 +26,7 @@ test.each([false, true])("weak metadata releases values when native keys die (au
     const result = await exec(binary, [], {
       env: { ...process.env, ASAN_OPTIONS: "detect_leaks=0:halt_on_error=1", UBSAN_OPTIONS: "halt_on_error=1" },
     });
-    expect(result.stdout).toBe("weak metadata lifetime checks passed\n");
+    expect(result.stdout).toBe("checked storage and weak metadata lifetime checks passed\n");
     expect(result.stderr).toBe("");
   } finally {
     await rm(scratch, { recursive: true, force: true });

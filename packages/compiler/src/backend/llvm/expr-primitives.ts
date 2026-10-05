@@ -87,6 +87,21 @@ export function emitOperatorExpr(host: LlvmEmitterContext, e: ExprOf<"bin" | "un
     const B = host.B;
     switch (e.kind) {
       case "bin": {
+        // UTF-8 and UTF-16 disagree on length, but agree exactly on zero.
+        // A literal comparison has no second operand effects; evaluate the
+        // receiver once and keep its normal ownership through the load.
+        if (e.op === "===" || e.op === "!==") {
+          const length = e.left.kind === "numLit" && e.left.value === 0 ? e.right
+            : e.right.kind === "numLit" && e.right.value === 0 ? e.left : null;
+          if (length?.kind === "strIntrinsic" && length.method === "length" && length.args.length === 0) {
+            const receiver = emitStringInputs(host, [length.receiver])[0]!;
+            const pointer = B.tmp(), bytes = B.tmp(), result = B.tmp();
+            B.line(`${pointer} = getelementptr inbounds ${host.sizeType}, ptr ${receiver.name}, i32 1`);
+            B.line(`${bytes} = load ${host.sizeType}, ptr ${pointer}`);
+            B.line(`${result} = icmp ${e.op === "===" ? "eq" : "ne"} ${host.sizeType} ${bytes}, 0`);
+            return { name: result, type: e.type };
+          }
+        }
         // JavaScript folds literal 0 / 0 to its positive NaN constant.
         // An unoptimized x86 division produces a negative NaN instead,
         // whose sign is observable through Buffer and typed-array writes.
