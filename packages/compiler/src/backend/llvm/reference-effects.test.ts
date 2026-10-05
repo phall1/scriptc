@@ -1,20 +1,43 @@
 import { expect, test } from "vitest";
-import { BOOL, DYN, F64, STRING, VOID, type IrExpr, type IrFunction, type IrStmt } from "../../ir/ir.js";
+import {
+  BOOL,
+  DYN,
+  F64,
+  STRING,
+  VOID,
+  type IrExpr,
+  type IrFunction,
+  type IrStmt,
+} from "../../ir/ir.js";
 import { ReferenceEffects, preservesRegexInputs } from "./reference-effects.js";
 
 const loc = { file: "effects.ts", start: 0, end: 0 };
 const number: IrExpr = { kind: "numLit", value: 1, type: F64, loc };
 const text: IrExpr = { kind: "strLit", value: "text", type: STRING, loc };
-const call = (callee: string, args: IrExpr[] = []): IrExpr => ({ kind: "call", callee, args, type: F64, loc });
+const call = (callee: string, args: IrExpr[] = []): IrExpr => ({
+  kind: "call",
+  callee,
+  args,
+  type: F64,
+  loc,
+});
 function fn(name: string, expressions: IrExpr[] = []): IrFunction {
-  return { name, params: [], locals: [], body: expressions.map((expr) => ({ kind: "exprStmt", expr, loc })), returnType: VOID, loc };
+  return {
+    name,
+    params: [],
+    locals: [],
+    body: expressions.map((expr) => ({ kind: "exprStmt", expr, loc })),
+    returnType: VOID,
+    loc,
+  };
 }
 function effects(functions: IrFunction[]): ReferenceEffects {
   return new ReferenceEffects(new Map(functions.map((f) => [f.name, f])), () => false);
 }
 
 test("reference preservation allows recursive scalar work but propagates a reference write", () => {
-  const first = fn("first", [call("second")]), second = fn("second", [call("first")]);
+  const first = fn("first", [call("second")]),
+    second = fn("second", [call("first")]);
   second.body.push({ kind: "assign", localId: "scalar", value: number, loc });
   const safe = effects([first, second]);
   expect(safe.functions).toEqual(new Set(["first", "second"]));
@@ -25,8 +48,20 @@ test("reference preservation allows recursive scalar work but propagates a refer
 
 test("later argument statements and indirect calls remain part of the lifetime proof", () => {
   const summary = effects([fn("read")]);
-  const assignment: IrExpr = { kind: "assignExpr", localId: "owner", value: text, type: STRING, loc };
-  const sequence: IrExpr = { kind: "seqExpr", stmts: [{ kind: "assign", localId: "owner", value: text, loc }], result: number, type: F64, loc };
+  const assignment: IrExpr = {
+    kind: "assignExpr",
+    localId: "owner",
+    value: text,
+    type: STRING,
+    loc,
+  };
+  const sequence: IrExpr = {
+    kind: "seqExpr",
+    stmts: [{ kind: "assign", localId: "owner", value: text, loc }],
+    result: number,
+    type: F64,
+    loc,
+  };
   expect(summary.preserves(call("read", [assignment]))).toBe(false);
   expect(summary.preserves(call("read", [sequence]))).toBe(false);
   expect(summary.preserves(call("unknown"))).toBe(false);
@@ -34,8 +69,10 @@ test("later argument statements and indirect calls remain part of the lifetime p
 });
 
 test("suspending bodies and environments cannot inherit synchronous guarantees", () => {
-  const async = fn("async"); async.async = true;
-  const capture = fn("capture"); capture.captures = [];
+  const async = fn("async");
+  async.async = true;
+  const capture = fn("capture");
+  capture.captures = [];
   const callers = [fn("a", [call("async")]), fn("b", [call("capture")])];
   expect(effects([async, capture, ...callers]).functions.size).toBe(0);
   expect(preservesRegexInputs("futureMethod")).toBe(false);
@@ -43,25 +80,51 @@ test("suspending bodies and environments cannot inherit synchronous guarantees",
 });
 
 test("numeric byte operations preserve owners but argument replacement and callbacks do not", () => {
-  const bytes: IrExpr = { kind: "varRef", localId: "bytes", type: { kind: "bytes", elem: "u8" }, loc };
-  const read: IrExpr = { kind: "bytesIntrinsic", method: "dvGetUint32", receiver: bytes, args: [number], type: F64, loc };
-  const write: IrExpr = { kind: "bytesIntrinsic", method: "dvSetUint32", receiver: bytes, args: [number, read], type: VOID, loc };
+  const bytes: IrExpr = {
+    kind: "varRef",
+    localId: "bytes",
+    type: { kind: "bytes", elem: "u8" },
+    loc,
+  };
+  const read: IrExpr = {
+    kind: "bytesIntrinsic",
+    method: "dvGetUint32",
+    receiver: bytes,
+    args: [number],
+    type: F64,
+    loc,
+  };
+  const write: IrExpr = {
+    kind: "bytesIntrinsic",
+    method: "dvSetUint32",
+    receiver: bytes,
+    args: [number, read],
+    type: VOID,
+    loc,
+  };
   const summary = effects([fn("read", [read]), fn("write", [write])]);
   expect(summary.functions).toEqual(new Set(["read", "write"]));
   expect(summary.preserves(write)).toBe(true);
-  const replace: IrExpr = { kind: "assignExpr", localId: "bytes", value: bytes, type: bytes.type, loc };
+  const replace: IrExpr = {
+    kind: "assignExpr",
+    localId: "bytes",
+    value: bytes,
+    type: bytes.type,
+    loc,
+  };
   expect(summary.preserves({ ...read, receiver: replace })).toBe(false);
   expect(summary.preserves({ ...read, args: [call("unknown")] })).toBe(false);
 });
 
 test("long call graphs use a worklist and facts are rebuilt for changed bodies", () => {
-  const functions = Array.from({ length: 2000 }, (_, i) => fn(`f${i}`, i === 1999 ? [] : [call(`f${i + 1}`)]));
+  const functions = Array.from({ length: 2000 }, (_, i) =>
+    fn(`f${i}`, i === 1999 ? [] : [call(`f${i + 1}`)]),
+  );
   expect(effects(functions).functions.size).toBe(functions.length);
   const write: IrStmt = { kind: "assign", localId: "owner", value: text, loc };
   functions[1999]!.body.push(write);
   expect(effects(functions).functions.size).toBe(0);
 });
-
 
 test("checked scalar tests preserve owners while materializing reads stay conservative", () => {
   const value: IrExpr = { kind: "varRef", localId: "value", type: DYN, loc };
@@ -72,8 +135,12 @@ test("checked scalar tests preserve owners while materializing reads stay conser
   for (const test of ["object", "array", "function", "error"] as const) {
     expect(summary.preserves({ kind: "dynTest", value, test, type: BOOL, loc }), test).toBe(false);
   }
-  expect(summary.preserves({ kind: "dynScalarEq", left: value, right: text, type: BOOL, loc })).toBe(true);
+  expect(
+    summary.preserves({ kind: "dynScalarEq", left: value, right: text, type: BOOL, loc }),
+  ).toBe(true);
   expect(summary.preserves({ kind: "dynKeyGet", value, key: text, type: DYN, loc })).toBe(false);
   const replace: IrExpr = { kind: "assignExpr", localId: "value", value, type: DYN, loc };
-  expect(summary.preserves({ kind: "dynScalarEq", left: value, right: replace, type: BOOL, loc })).toBe(false);
+  expect(
+    summary.preserves({ kind: "dynScalarEq", left: value, right: replace, type: BOOL, loc }),
+  ).toBe(false);
 });

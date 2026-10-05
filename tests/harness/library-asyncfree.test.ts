@@ -68,7 +68,9 @@ describe("async_free detection over the IR", () => {
   });
 
   test("setTimeout refuses as the timers surface", async () => {
-    expect(await surfaceOf("timer", `setTimeout(() => console.log("t"), 1);\n`)).toContain("timers");
+    expect(await surfaceOf("timer", `setTimeout(() => console.log("t"), 1);\n`)).toContain(
+      "timers",
+    );
   });
 
   test("child_process refuses even in its synchronous spelling", async () => {
@@ -82,7 +84,10 @@ describe("async_free detection over the IR", () => {
 
   test("process signal listeners refuse", async () => {
     expect(
-      await surfaceOf("sig", `process.on("SIGINT", () => console.log("int"));\nconsole.log("armed");\n`),
+      await surfaceOf(
+        "sig",
+        `process.on("SIGINT", () => console.log("int"));\nconsole.log("armed");\n`,
+      ),
     ).toContain("signal");
   });
 

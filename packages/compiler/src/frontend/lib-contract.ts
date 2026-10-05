@@ -104,7 +104,13 @@ export interface ContractFacts {
   malformedConsts: { name: string; detail: string; loc: SrcLoc }[];
 }
 
-const CONVENTION_CONSTS = new Set(["modelUnbound", "msgUnbound", "appearanceMsg", "chromeMsg", "envMsgs"]);
+const CONVENTION_CONSTS = new Set([
+  "modelUnbound",
+  "msgUnbound",
+  "appearanceMsg",
+  "chromeMsg",
+  "envMsgs",
+]);
 const CONTRACT_GLOBAL_TYPES = new Set(["Array", "ReadonlyArray", "Uint8Array"]);
 type TypeBindings = Map<ts.SourceFile, Set<string>>;
 
@@ -162,16 +168,27 @@ function localTypeBindings(file: ts.SourceFile, bindings: TypeBindings): Set<str
 
 /** Whether a bare type name reaches the ambient global rather than a local
  * declaration/import or a type parameter in an enclosing declaration. */
-function isUnshadowedGlobalType(file: ts.SourceFile, node: ts.TypeNode, name: string, bindings: TypeBindings): boolean {
+function isUnshadowedGlobalType(
+  file: ts.SourceFile,
+  node: ts.TypeNode,
+  name: string,
+  bindings: TypeBindings,
+): boolean {
   if (localTypeBindings(file, bindings).has(name)) return false;
   for (let scope = node.parent; scope !== undefined && scope !== file; scope = scope.parent) {
     const params = scope.typeParameters;
-    if (params?.some((p) => ts.isTypeParameterDeclaration(p) && p.name.text === name) === true) return false;
+    if (params?.some((p) => ts.isTypeParameterDeclaration(p) && p.name.text === name) === true)
+      return false;
   }
   return true;
 }
 
-function shapeOfMembers(file: ts.SourceFile, members: readonly ts.Node[], onBad: (text: string) => void, bindings: TypeBindings): ContractField[] {
+function shapeOfMembers(
+  file: ts.SourceFile,
+  members: readonly ts.Node[],
+  onBad: (text: string) => void,
+  bindings: TypeBindings,
+): ContractField[] {
   const fields: ContractField[] = [];
   for (const m of members) {
     if (!ts.isPropertySignature(m)) {
@@ -183,8 +200,16 @@ function shapeOfMembers(file: ts.SourceFile, members: readonly ts.Node[], onBad:
       onBad("a computed property name");
       continue;
     }
-    const shape = m.type !== undefined ? typeShape(file, m.type, bindings) : ({ k: "unsupported", text: "missing type annotation" } as const);
-    fields.push({ name, optional: m.postfixToken?.kind === ts.SyntaxKind.QuestionToken, shape, loc: locOf(file, m) });
+    const shape =
+      m.type !== undefined
+        ? typeShape(file, m.type, bindings)
+        : ({ k: "unsupported", text: "missing type annotation" } as const);
+    fields.push({
+      name,
+      optional: m.postfixToken?.kind === ts.SyntaxKind.QuestionToken,
+      shape,
+      loc: locOf(file, m),
+    });
   }
   return fields;
 }
@@ -192,7 +217,11 @@ function shapeOfMembers(file: ts.SourceFile, members: readonly ts.Node[], onBad:
 /** The syntactic shape of a type node, over the closed vocabulary the
  * sidecar schema can express. Anything else lands as `unsupported` with
  * the source text preserved for the refusal message. */
-function typeShape(file: ts.SourceFile, node: ts.TypeNode, bindings: TypeBindings): ContractTypeShape {
+function typeShape(
+  file: ts.SourceFile,
+  node: ts.TypeNode,
+  bindings: TypeBindings,
+): ContractTypeShape {
   switch (node.kind) {
     case ts.SyntaxKind.BooleanKeyword:
       return { k: "bool" };
@@ -221,7 +250,8 @@ function typeShape(file: ts.SourceFile, node: ts.TypeNode, bindings: TypeBinding
     if (lit.kind === ts.SyntaxKind.NullKeyword) return { k: "absent", unit: "null" };
     return { k: "unsupported", text: node.getText(file) };
   }
-  if (ts.isArrayTypeNode(node)) return { k: "array", elem: typeShape(file, node.elementType, bindings) };
+  if (ts.isArrayTypeNode(node))
+    return { k: "array", elem: typeShape(file, node.elementType, bindings) };
   if (ts.isTupleTypeNode(node)) {
     const elems: ContractTypeShape[] = [];
     for (const e of node.elements) {
@@ -236,14 +266,23 @@ function typeShape(file: ts.SourceFile, node: ts.TypeNode, bindings: TypeBinding
   }
   if (ts.isTypeLiteralNode(node)) {
     let bad: string | null = null;
-    const fields = shapeOfMembers(file, node.members, (text) => {
-      bad = text;
-    }, bindings);
+    const fields = shapeOfMembers(
+      file,
+      node.members,
+      (text) => {
+        bad = text;
+      },
+      bindings,
+    );
     if (bad !== null) return { k: "unsupported", text: bad };
     return { k: "object", fields };
   }
   if (ts.isConditionalTypeNode(node)) {
-    return { k: "unsupported", text: `a conditional type (${node.getText(file)})`, computed: "conditional" };
+    return {
+      k: "unsupported",
+      text: `a conditional type (${node.getText(file)})`,
+      computed: "conditional",
+    };
   }
   if (ts.isMappedTypeNode(node)) {
     return { k: "unsupported", text: `a mapped type (${node.getText(file)})`, computed: "mapped" };
@@ -251,12 +290,19 @@ function typeShape(file: ts.SourceFile, node: ts.TypeNode, bindings: TypeBinding
   if (ts.isTypeReferenceNode(node)) {
     if (!ts.isIdentifier(node.typeName)) return { k: "unsupported", text: node.getText(file) };
     const name = node.typeName.text;
-    const global = CONTRACT_GLOBAL_TYPES.has(name) && isUnshadowedGlobalType(file, node, name, bindings);
-    if (global && name === "Uint8Array" && (node.typeArguments?.length ?? 0) === 0) return { k: "bytes" };
-    if (global && (name === "Array" || name === "ReadonlyArray") && node.typeArguments?.length === 1) {
+    const global =
+      CONTRACT_GLOBAL_TYPES.has(name) && isUnshadowedGlobalType(file, node, name, bindings);
+    if (global && name === "Uint8Array" && (node.typeArguments?.length ?? 0) === 0)
+      return { k: "bytes" };
+    if (
+      global &&
+      (name === "Array" || name === "ReadonlyArray") &&
+      node.typeArguments?.length === 1
+    ) {
       return { k: "array", elem: typeShape(file, node.typeArguments[0]!, bindings) };
     }
-    if ((node.typeArguments?.length ?? 0) > 0) return { k: "unsupported", text: node.getText(file) };
+    if ((node.typeArguments?.length ?? 0) > 0)
+      return { k: "unsupported", text: node.getText(file) };
     return { k: "ref", name };
   }
   return { k: "unsupported", text: node.getText(file) };
@@ -324,7 +370,10 @@ function siteOf(file: ts.SourceFile, node: ts.Node): string {
  * declarations from the whole graph (entry first, other modules in
  * canonical path order), each in statement (declaration) order. Call
  * before the frontend is disposed. */
-export function entryContractFacts(entry: ts.SourceFile, modules: readonly ts.SourceFile[] = []): ContractFacts {
+export function entryContractFacts(
+  entry: ts.SourceFile,
+  modules: readonly ts.SourceFile[] = [],
+): ContractFacts {
   // One contract read owns its syntax cache; no AST or native handle is
   // retained after the projection finishes.
   const bindings: TypeBindings = new Map();
@@ -362,7 +411,10 @@ export function entryContractFacts(entry: ts.SourceFile, modules: readonly ts.So
   const collectTypes = (file: ts.SourceFile): void => {
     const exportedHere = new Set<string>();
     for (const stmt of file.statements) {
-      if ((ts.isInterfaceDeclaration(stmt) || ts.isTypeAliasDeclaration(stmt)) && isExported(stmt)) {
+      if (
+        (ts.isInterfaceDeclaration(stmt) || ts.isTypeAliasDeclaration(stmt)) &&
+        isExported(stmt)
+      ) {
         exportedHere.add(stmt.name.text);
       }
     }
@@ -379,9 +431,14 @@ export function entryContractFacts(entry: ts.SourceFile, modules: readonly ts.So
         declared.add(name);
         if (ts.isInterfaceDeclaration(stmt)) {
           let bad: string | null = null;
-          const fields = shapeOfMembers(file, stmt.members, (text) => {
-            bad = text;
-          }, bindings);
+          const fields = shapeOfMembers(
+            file,
+            stmt.members,
+            (text) => {
+              bad = text;
+            },
+            bindings,
+          );
           const generic = (stmt.typeParameters?.length ?? 0) > 0;
           const heritage = (stmt.heritageClauses?.length ?? 0) > 0;
           facts.types.push({
@@ -402,13 +459,20 @@ export function entryContractFacts(entry: ts.SourceFile, modules: readonly ts.So
           facts.types.push({
             name,
             form: "alias",
-            shape: generic ? { k: "unsupported", text: "a generic type alias" } : typeShape(file, stmt.type, bindings),
+            shape: generic
+              ? { k: "unsupported", text: "a generic type alias" }
+              : typeShape(file, stmt.type, bindings),
             loc: locOf(file, stmt),
           });
         }
         continue;
       }
-      if (ts.isModuleDeclaration(stmt) && ts.isStringLiteral(stmt.name) && stmt.body !== undefined && ts.isModuleBlock(stmt.body)) {
+      if (
+        ts.isModuleDeclaration(stmt) &&
+        ts.isStringLiteral(stmt.name) &&
+        stmt.body !== undefined &&
+        ts.isModuleBlock(stmt.body)
+      ) {
         for (const inner of stmt.body.statements) {
           if (ts.isInterfaceDeclaration(inner) || ts.isTypeAliasDeclaration(inner)) {
             addSite(inner.name.text, siteOf(file, inner));
@@ -433,7 +497,8 @@ export function entryContractFacts(entry: ts.SourceFile, modules: readonly ts.So
   for (const stmt of entry.statements) {
     if (ts.isFunctionDeclaration(stmt) && stmt.name !== undefined) {
       if (!isExported(stmt)) continue;
-      if (stmt.body === undefined && facts.functions.some((f) => f.name === stmt.name!.text)) continue; // overload signature
+      if (stmt.body === undefined && facts.functions.some((f) => f.name === stmt.name!.text))
+        continue; // overload signature
       facts.functions.push({
         name: stmt.name.text,
         params: stmt.parameters.map((p) => ({
@@ -459,7 +524,11 @@ export function entryContractFacts(entry: ts.SourceFile, modules: readonly ts.So
         if (name === "appearanceMsg" || name === "chromeMsg") {
           const v = unwrapConst(decl.initializer);
           if (!ts.isStringLiteral(v)) {
-            facts.malformedConsts.push({ name, detail: "must be a string literal naming a msg arm", loc });
+            facts.malformedConsts.push({
+              name,
+              detail: "must be a string literal naming a msg arm",
+              loc,
+            });
             continue;
           }
           if (name === "appearanceMsg") facts.appearanceMsg = { value: v.text, loc };
@@ -471,7 +540,8 @@ export function entryContractFacts(entry: ts.SourceFile, modules: readonly ts.So
           if (v === null) {
             facts.malformedConsts.push({
               name,
-              detail: 'must be an array of { env: "NAME", msg: "arm" } object literals with string-literal values',
+              detail:
+                'must be an array of { env: "NAME", msg: "arm" } object literals with string-literal values',
               loc,
             });
             continue;

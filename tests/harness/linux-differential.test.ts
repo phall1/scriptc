@@ -109,7 +109,12 @@ function nodeOracleFile(file: string): string {
     compilerOptions: { target: ts5.ScriptTarget.ES2022, module: ts5.ModuleKind.ESNext },
     fileName: file,
   }).outputText;
-  const key = createHash("sha256").update(ts5.version).update("\0").update(src).digest("hex").slice(0, 16);
+  const key = createHash("sha256")
+    .update(ts5.version)
+    .update("\0")
+    .update(src)
+    .digest("hex")
+    .slice(0, 16);
   const path = join(cacheDir, `dec-oracle-${key}.mjs`);
   mkdirSync(cacheDir, { recursive: true });
   // Atomic publish: concurrent suites (the other flavor's full run, or
@@ -153,7 +158,9 @@ const ROSETTA_SPAWN_SKIPS = new Set([
   "1657-spawn-async-neutral.ts",
 ]);
 const emulatedX64 =
-  process.platform === "darwin" && process.arch === "arm64" && /^x86_64/.test(process.env["SCRIPTC_LINUX_TARGET"] ?? "");
+  process.platform === "darwin" &&
+  process.arch === "arm64" &&
+  (process.env["SCRIPTC_LINUX_TARGET"] ?? "").startsWith("x86_64");
 
 const filter = process.env["SCRIPTC_LINUX_FILTER"];
 const ENTRY_EXTS = ["ts", "js", "mjs", "cjs"];
@@ -192,13 +199,22 @@ function expectedExitCode(file: string): number {
  * immediately (differential.test.ts's contract: fd-0 readers see an empty
  * closed stream), cwd = the mounted repo root, the harness env marker set.
  * `env` adds per-run variables (the fetch legs' proxy poison / opt-in). */
-async function runInContainer(argv: string[], env: Record<string, string> = {}): Promise<RunResult> {
+async function runInContainer(
+  argv: string[],
+  env: Record<string, string> = {},
+): Promise<RunResult> {
   const pending = execFileAsync(
     "docker",
     [
-      "exec", "-i", "-w", mountPoint, "-e", "SCRIPTC_TEST_ENV=from-harness",
+      "exec",
+      "-i",
+      "-w",
+      mountPoint,
+      "-e",
+      "SCRIPTC_TEST_ENV=from-harness",
       ...Object.entries(env).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
-      containerName, ...argv,
+      containerName,
+      ...argv,
     ],
     { encoding: "buffer" },
   );
@@ -231,10 +247,14 @@ async function runLinuxNode(file: string): Promise<RunResult> {
     ...(directiveHead(file).some((l) => /^\/\/ @no-deprecation\s*$/.test(l))
       ? ["--no-deprecation"]
       : []),
-    ...(directiveHead(file).includes("// @no-node-shims") ? [] : [
-      "--import", inContainer(join(repoRoot, "tests/harness/comptime-shim.mjs")),
-      "--import", inContainer(join(repoRoot, "tests/harness/island-shim.mjs")),
-    ]),
+    ...(directiveHead(file).includes("// @no-node-shims")
+      ? []
+      : [
+          "--import",
+          inContainer(join(repoRoot, "tests/harness/comptime-shim.mjs")),
+          "--import",
+          inContainer(join(repoRoot, "tests/harness/island-shim.mjs")),
+        ]),
     inContainer(nodeOracleFile(file)),
   ]);
 }
@@ -254,7 +274,12 @@ async function crossCompileAndRun(file: string): Promise<RunResult> {
   const key = hash.update("linux\0").update(target).digest("hex").slice(0, 16);
   const outDir = join(cacheDir, key);
   mkdirSync(outDir, { recursive: true });
-  const result = await compile(file, { outPath: join(outDir, "program"), outDir, dynamic: wantsDynamic(file), backend: "llvm" });
+  const result = await compile(file, {
+    outPath: join(outDir, "program"),
+    outDir,
+    dynamic: wantsDynamic(file),
+    backend: "llvm",
+  });
   if (!result.ok) {
     throw new Error(
       "corpus program failed to cross-compile:\n" +
@@ -341,7 +366,11 @@ async function crossCompileFixture(entry: string): Promise<string> {
   const key = hash.update("linux\0").update(target).digest("hex").slice(0, 16);
   const outDir = join(cacheDir, key);
   mkdirSync(outDir, { recursive: true });
-  const result = await compile(entry, { outPath: join(outDir, "program"), outDir, backend: "llvm" });
+  const result = await compile(entry, {
+    outPath: join(outDir, "program"),
+    outDir,
+    backend: "llvm",
+  });
   if (!result.ok) {
     throw new Error(
       "fixture failed to cross-compile:\n" +
@@ -417,16 +446,30 @@ const nodeTestCases = enabled
 
 const linuxStdinCases = enabled
   ? eventLoopCases.filter(
-      (c) => filter === undefined || new RegExp(filter).test(join(repoRoot, "tests/fixtures/event-loop", c.fixture)),
+      (c) =>
+        filter === undefined ||
+        new RegExp(filter).test(join(repoRoot, "tests/fixtures/event-loop", c.fixture)),
     )
   : [];
 
 /** Runs one lane with a scripted stdin through docker exec -i. */
-function runWithStdinInContainer(argv: string[], script: StdinScript): Promise<{ stdout: string; exitCode: number }> {
+function runWithStdinInContainer(
+  argv: string[],
+  script: StdinScript,
+): Promise<{ stdout: string; exitCode: number }> {
   return new Promise((resolve, reject) => {
     const child = spawn(
       "docker",
-      ["exec", "-i", "-w", mountPoint, "-e", "SCRIPTC_TEST_ENV=from-harness", containerName, ...argv],
+      [
+        "exec",
+        "-i",
+        "-w",
+        mountPoint,
+        "-e",
+        "SCRIPTC_TEST_ENV=from-harness",
+        containerName,
+        ...argv,
+      ],
       { stdio: ["pipe", "pipe", "pipe"] },
     );
     const out: Buffer[] = [];
@@ -469,7 +512,12 @@ async function crossCompileNpmCase(entry: string): Promise<string> {
   const key = hash.update("linux\0").update(target).digest("hex").slice(0, 16);
   const outDir = join(cacheDir, key);
   mkdirSync(outDir, { recursive: true });
-  const result = await compile(entry, { outPath: join(outDir, "program"), outDir, dynamic: true, backend: "llvm" });
+  const result = await compile(entry, {
+    outPath: join(outDir, "program"),
+    outDir,
+    dynamic: true,
+    backend: "llvm",
+  });
   if (!result.ok) {
     throw new Error(
       "npm case failed to cross-compile:\n" +
@@ -486,13 +534,20 @@ async function crossCompileFetchFixture(entry: string): Promise<string> {
   const hash = createHash("sha256");
   const inputs = [
     entry,
-    ...globSync(join(repoRoot, "tests/fixtures/fetch/node_modules/**/*.{js,mjs,cjs,json,d.ts}")).sort(),
+    ...globSync(
+      join(repoRoot, "tests/fixtures/fetch/node_modules/**/*.{js,mjs,cjs,json,d.ts}"),
+    ).sort(),
   ];
   for (const f of inputs) hash.update(f).update(readFileSync(f));
   const key = hash.update("linux\0").update(target).digest("hex").slice(0, 16);
   const outDir = join(cacheDir, key);
   mkdirSync(outDir, { recursive: true });
-  const result = await compile(entry, { outPath: join(outDir, "program"), outDir, dynamic: true, backend: "llvm" });
+  const result = await compile(entry, {
+    outPath: join(outDir, "program"),
+    outDir,
+    dynamic: true,
+    backend: "llvm",
+  });
   if (!result.ok) {
     throw new Error(
       "fetch fixture failed to cross-compile:\n" +
@@ -506,7 +561,9 @@ describe.skipIf(!enabled)(`linux differential (${target})`, () => {
   beforeAll(async () => {
     // Fail loudly, not skip: SCRIPTC_LINUX=1 promises a Linux verdict.
     await execFileAsync("zig", ["version"]).catch(() => {
-      throw new Error("SCRIPTC_LINUX=1 needs zig on PATH (zigup) — the lane cross-compiles with `zig cc`.");
+      throw new Error(
+        "SCRIPTC_LINUX=1 needs zig on PATH (zigup) — the lane cross-compiles with `zig cc`.",
+      );
     });
     await execFileAsync("docker", ["info"]).catch(() => {
       throw new Error("SCRIPTC_LINUX=1 needs the Docker daemon running (`open -a Docker`).");
@@ -514,18 +571,24 @@ describe.skipIf(!enabled)(`linux differential (${target})`, () => {
     const nodeVersion = readFileSync(join(repoRoot, ".node-version"), "utf8").trim();
     const image = `node:${nodeVersion}-${muslTarget ? "alpine" : "bookworm"}`;
     await execFileAsync("docker", [
-      "run", "-d", "--rm",
+      "run",
+      "-d",
+      "--rm",
       // The container's CPU arch follows the TARGET triple, so
       // SCRIPTC_LINUX_TARGET selects the container architecture from the
       // triple: x86_64 targets run the whole lane under linux/amd64
       // (Rosetta/qemu on Apple-silicon Docker), while AArch64 targets use
       // linux/arm64. The oracle Node and cross binaries always share it.
-      "--platform", target.startsWith("x86_64") ? "linux/amd64" : "linux/arm64",
-      "--name", containerName,
-      "-v", `${repoRoot}:${mountPoint}`,
+      "--platform",
+      target.startsWith("x86_64") ? "linux/amd64" : "linux/arm64",
+      "--name",
+      containerName,
+      "-v",
+      `${repoRoot}:${mountPoint}`,
       "--init",
       image,
-      "sleep", "infinity",
+      "sleep",
+      "infinity",
     ]);
   }, 300_000);
 
@@ -548,7 +611,9 @@ describe.skipIf(!enabled)(`linux differential (${target})`, () => {
           // see native-toolchain.ts) SKIP with the gate's reason: they are follow-up
           // scope, not Linux failures. Everything else is a real failure.
           if (err instanceof Error && err.message.includes("not supported under a cross target")) {
-            ctx.skip(err.message.split("\n").find((l) => l.includes("not supported")) ?? err.message);
+            ctx.skip(
+              err.message.split("\n").find((l) => l.includes("not supported")) ?? err.message,
+            );
           }
           throw err;
         }
@@ -584,8 +649,13 @@ describe.skipIf(!enabled)(`linux differential (${target})`, () => {
           } catch (err) {
             // A case needing a still-gated feature skips with the gate's
             // reason (nothing in these fixture sets does today).
-            if (err instanceof Error && err.message.includes("not supported under a cross target")) {
-              ctx.skip(err.message.split("\n").find((l) => l.includes("not supported")) ?? err.message);
+            if (
+              err instanceof Error &&
+              err.message.includes("not supported under a cross target")
+            ) {
+              ctx.skip(
+                err.message.split("\n").find((l) => l.includes("not supported")) ?? err.message,
+              );
             }
             throw err;
           }
@@ -662,7 +732,8 @@ describe.skipIf(!enabled)(`linux differential (${target})`, () => {
      * a relative-path request the counting branch never counts). */
     async function proxiedCount(): Promise<number> {
       const res = await runInContainer([
-        "node", "-e",
+        "node",
+        "-e",
         'fetch(process.argv[1] + "/__count").then((r) => r.text()).then((t) => process.stdout.write(t))',
         proxyBase,
       ]);
@@ -725,62 +796,73 @@ describe.skipIf(!enabled)(`linux differential (${target})`, () => {
     );
   });
 
-  describe.skipIf(linuxNpmCases.length === 0)(`npm differential (${linuxNpmCases.length} programs)`, () => {
-    test.for(linuxNpmCases.map((c) => [c.name, c] as const))(
-      "%s",
-      async ([, c]) => {
-        const binary = await crossCompileNpmCase(c.entry);
-        for (const argv of c.argvs ?? [[]]) {
-          const [nodeRes, nativeRes] = await Promise.all([
-            runInContainer(["node", inContainer(c.entry), ...argv]),
-            runInContainer([inContainer(binary), ...argv]),
-          ]);
-          const label = argv.join(" ");
-          if (!nodeRes.stdout.equals(nativeRes.stdout)) {
-            expect(nativeRes.stdout.toString("utf8"), label).toBe(nodeRes.stdout.toString("utf8"));
-            expect.unreachable("stdout differed at byte level but not after utf8 decode");
+  describe.skipIf(linuxNpmCases.length === 0)(
+    `npm differential (${linuxNpmCases.length} programs)`,
+    () => {
+      test.for(linuxNpmCases.map((c) => [c.name, c] as const))(
+        "%s",
+        async ([, c]) => {
+          const binary = await crossCompileNpmCase(c.entry);
+          for (const argv of c.argvs ?? [[]]) {
+            const [nodeRes, nativeRes] = await Promise.all([
+              runInContainer(["node", inContainer(c.entry), ...argv]),
+              runInContainer([inContainer(binary), ...argv]),
+            ]);
+            const label = argv.join(" ");
+            if (!nodeRes.stdout.equals(nativeRes.stdout)) {
+              expect(nativeRes.stdout.toString("utf8"), label).toBe(
+                nodeRes.stdout.toString("utf8"),
+              );
+              expect.unreachable("stdout differed at byte level but not after utf8 decode");
+            }
+            expect(nativeRes.exitCode, label).toBe(nodeRes.exitCode);
           }
-          expect(nativeRes.exitCode, label).toBe(nodeRes.exitCode);
-        }
-      },
-      120_000,
-    );
-  });
+        },
+        120_000,
+      );
+    },
+  );
 
-  describe.skipIf(nodeTestCases.length === 0)(`node:test differential (${nodeTestCases.length} programs)`, () => {
-    test.for(nodeTestCases.map((c) => [c.name, c] as const))(
-      "%s",
-      async ([, c]) => {
-        const binary = await crossCompileFixture(c.entry);
-        const [nodeRes, nativeRes] = await Promise.all([
-          runInContainer(["node", inContainer(c.entry)]),
-          runInContainer([inContainer(binary)]),
-        ]);
-        expect(normalizeNodeTestOutput(nativeRes.stdout.toString("utf8"))).toBe(
-          normalizeNodeTestOutput(nodeRes.stdout.toString("utf8")),
-        );
-        const wanted = expectedExitCode(c.entry);
-        expect(nodeRes.exitCode).toBe(wanted); // keeps `// @exit:` honest
-        expect(nativeRes.exitCode).toBe(wanted);
-      },
-      120_000,
-    );
-  });
+  describe.skipIf(nodeTestCases.length === 0)(
+    `node:test differential (${nodeTestCases.length} programs)`,
+    () => {
+      test.for(nodeTestCases.map((c) => [c.name, c] as const))(
+        "%s",
+        async ([, c]) => {
+          const binary = await crossCompileFixture(c.entry);
+          const [nodeRes, nativeRes] = await Promise.all([
+            runInContainer(["node", inContainer(c.entry)]),
+            runInContainer([inContainer(binary)]),
+          ]);
+          expect(normalizeNodeTestOutput(nativeRes.stdout.toString("utf8"))).toBe(
+            normalizeNodeTestOutput(nodeRes.stdout.toString("utf8")),
+          );
+          const wanted = expectedExitCode(c.entry);
+          expect(nodeRes.exitCode).toBe(wanted); // keeps `// @exit:` honest
+          expect(nativeRes.exitCode).toBe(wanted);
+        },
+        120_000,
+      );
+    },
+  );
 
-  describe.skipIf(linuxStdinCases.length === 0)(`piped stdin (${linuxStdinCases.length} cases)`, () => {
-    test.for(linuxStdinCases.map((c) => [c.title, c] as const))(
-      "%s",
-      async ([, c]) => {
-        const entry = join(repoRoot, "tests/fixtures/event-loop", c.fixture);
-        const binary = await crossCompileFixture(entry);
-        const [nodeRes, nativeRes] = await Promise.all([
-          runWithStdinInContainer(["node", inContainer(entry)], c.script),
-          runWithStdinInContainer([inContainer(binary)], c.script),
-        ]);
-        expect(nativeRes.stdout).toBe(nodeRes.stdout);
-        expect(nativeRes.exitCode).toBe(nodeRes.exitCode);
-      },
-      120_000,
-    );
-  });
+  describe.skipIf(linuxStdinCases.length === 0)(
+    `piped stdin (${linuxStdinCases.length} cases)`,
+    () => {
+      test.for(linuxStdinCases.map((c) => [c.title, c] as const))(
+        "%s",
+        async ([, c]) => {
+          const entry = join(repoRoot, "tests/fixtures/event-loop", c.fixture);
+          const binary = await crossCompileFixture(entry);
+          const [nodeRes, nativeRes] = await Promise.all([
+            runWithStdinInContainer(["node", inContainer(entry)], c.script),
+            runWithStdinInContainer([inContainer(binary)], c.script),
+          ]);
+          expect(nativeRes.stdout).toBe(nodeRes.stdout);
+          expect(nativeRes.exitCode).toBe(nodeRes.exitCode);
+        },
+        120_000,
+      );
+    },
+  );
 });

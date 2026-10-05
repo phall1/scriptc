@@ -46,22 +46,41 @@ export class Ts7SourceParser {
     if (this.closed) throw new Error("TypeScript source parser is closed");
     // The native parser selects its grammar from the extension. Preserve a
     // matching source name, including declaration and module suffixes.
-    const extensionMatches = kind === "ts" ? /\.(?:[cm]?ts)$/.test(fileName)
-      : kind === "js" ? /\.(?:[cm]?js)$/.test(fileName)
-      : fileName.endsWith("." + kind);
+    const extensionMatches =
+      kind === "ts"
+        ? /\.(?:[cm]?ts)$/.test(fileName)
+        : kind === "js"
+          ? /\.(?:[cm]?js)$/.test(fileName)
+          : fileName.endsWith("." + kind);
     const path = tsgoPath(resolve(this.cwd, extensionMatches ? fileName : fileName + "." + kind));
-    if (path === this.configPath) throw new Error("source path conflicts with the parser configuration");
-    if (path === this.previousPath && source === this.previousText && this.previousFile !== undefined) return this.previousFile;
+    if (path === this.configPath)
+      throw new Error("source path conflicts with the parser configuration");
+    if (
+      path === this.previousPath &&
+      source === this.previousText &&
+      this.previousFile !== undefined
+    )
+      return this.previousFile;
     const previousPath = this.previousPath;
     this.files.clear();
     this.files.set(path, source);
-    this.files.set(this.configPath, JSON.stringify({
-      compilerOptions: {
-        target: "esnext", module: "esnext", jsx: "preserve", allowJs: true,
-        noResolve: true, noLib: true, types: [], noEmit: true,
-      },
-      files: [path], include: [],
-    }));
+    this.files.set(
+      this.configPath,
+      JSON.stringify({
+        compilerOptions: {
+          target: "esnext",
+          module: "esnext",
+          jsx: "preserve",
+          allowJs: true,
+          noResolve: true,
+          noLib: true,
+          types: [],
+          noEmit: true,
+        },
+        files: [path],
+        include: [],
+      }),
+    );
     // Invalidate the bounded project instead of retaining every source path
     // ever parsed. A previous result remains a detached, immutable AST.
     const snapshot = this.api.updateSnapshot({

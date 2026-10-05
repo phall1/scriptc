@@ -13,7 +13,11 @@ export interface ClassSymbolKey {
 
 const FIELD_PREFIX = "%symbol:";
 
-function constantSymbolDescription(lowerer: Lowerer, expression: ts.Expression, seen = new Set<ts.Symbol>()): string | null {
+function constantSymbolDescription(
+  lowerer: Lowerer,
+  expression: ts.Expression,
+  seen = new Set<ts.Symbol>(),
+): string | null {
   while (ts.isParenthesizedExpression(expression)) expression = expression.expression;
   if (ts.isStringLiteralLike(expression)) return expression.text;
   if (!ts.isIdentifier(expression) && !ts.isPropertyAccessExpression(expression)) return null;
@@ -23,8 +27,14 @@ function constantSymbolDescription(lowerer: Lowerer, expression: ts.Expression, 
   if (!symbol || seen.has(symbol)) return null;
   seen.add(symbol);
   const declaration = lowerer.checker.valueDeclarationOf(symbol);
-  if (!declaration || !ts.isVariableDeclaration(declaration) || !declaration.initializer ||
-      !ts.isVariableDeclarationList(declaration.parent) || !(declaration.parent.flags & ts.NodeFlags.Const)) return null;
+  if (
+    !declaration ||
+    !ts.isVariableDeclaration(declaration) ||
+    !declaration.initializer ||
+    !ts.isVariableDeclarationList(declaration.parent) ||
+    !(declaration.parent.flags & ts.NodeFlags.Const)
+  )
+    return null;
   return constantSymbolDescription(lowerer, declaration.initializer, seen);
 }
 
@@ -36,22 +46,37 @@ export function symbolFieldDisplayName(field: string): string {
  * by Object.keys/JSON. Refuse known symbol-bearing sources before boxing
  * erases their class type. A spread call argument supplies sources from
  * its array/tuple elements, rather than copying the container itself. */
-export function fenceSymbolFieldCopy(lowerer: Lowerer, node: ts.Node, type: IrType, spread = false): void {
+export function fenceSymbolFieldCopy(
+  lowerer: Lowerer,
+  node: ts.Node,
+  type: IrType,
+  spread = false,
+): void {
   if (type.kind === "union") {
-    for (const arm of lowerer.unions.get(type.unionId)?.arms ?? []) fenceSymbolFieldCopy(lowerer, node, arm, spread);
+    for (const arm of lowerer.unions.get(type.unionId)?.arms ?? [])
+      fenceSymbolFieldCopy(lowerer, node, arm, spread);
   } else if (spread) {
     if (type.kind === "array") fenceSymbolFieldCopy(lowerer, node, type.elem);
     else if (type.kind === "record") {
       const shape = lowerer.shapes.get(type.shapeId);
-      if (shape?.tuple) for (const field of shape.fields) fenceSymbolFieldCopy(lowerer, node, field.type);
+      if (shape?.tuple)
+        for (const field of shape.fields) fenceSymbolFieldCopy(lowerer, node, field.type);
     }
   } else if (type.kind === "object" && lowerer.classes.get(type.className)?.symbolFields?.size) {
-    lowerer.unsupported("SC1031", node, "copying class instances with symbol-keyed fields (the copied symbols have no record form)");
+    lowerer.unsupported(
+      "SC1031",
+      node,
+      "copying class instances with symbol-keyed fields (the copied symbols have no record form)",
+    );
   }
 }
 
 export function classSymbolKeyOf(lowerer: Lowerer, key: ts.Expression): ClassSymbolKey | null {
-  if (!ts.isIdentifier(key) && (!ts.isPropertyAccessExpression(key) || key.questionDotToken || !ts.isIdentifier(key.name))) return null;
+  if (
+    !ts.isIdentifier(key) &&
+    (!ts.isPropertyAccessExpression(key) || key.questionDotToken || !ts.isIdentifier(key.name))
+  )
+    return null;
   const type = lowerer.typeOf(key);
   if (!(type.flags & (ts.TypeFlags.UniqueESSymbol | ts.TypeFlags.ESSymbol))) return null;
   const id = ts.isPropertyAccessExpression(key) ? key.name : key;
@@ -71,25 +96,46 @@ export function classSymbolKeyOfSymbol(lowerer: Lowerer, sym: ts.Symbol): ClassS
   cache.set(sym, null);
   const decls = lowerer.checker.declarationsOf(sym);
   const decl = lowerer.checker.valueDeclarationOf(sym);
-  if (decls.length !== 1 || !decl || !ts.isVariableDeclaration(decl) || !ts.isIdentifier(decl.name)) return null;
+  if (decls.length !== 1 || !decl || !ts.isVariableDeclaration(decl) || !ts.isIdentifier(decl.name))
+    return null;
   const list = decl.parent;
-  if (!ts.isVariableDeclarationList(list) || !ts.isVariableStatement(list.parent) || !ts.isSourceFile(list.parent.parent)) return null;
+  if (
+    !ts.isVariableDeclarationList(list) ||
+    !ts.isVariableStatement(list.parent) ||
+    !ts.isSourceFile(list.parent.parent)
+  )
+    return null;
   const init = decl.initializer;
   if (init && (ts.isIdentifier(init) || ts.isPropertyAccessExpression(init))) {
     const target = classSymbolKeyOf(lowerer, init);
     if (!target || bindingWritten(lowerer, sym, decl.getSourceFile())) return null;
     const preceding = list.declarations.slice(0, list.declarations.indexOf(decl));
-    if (bindingEarlyUse7(lowerer.program, decl.getSourceFile(), decl.getSourceFile().statements.indexOf(list.parent), decl, preceding) !== null) return null;
+    if (
+      bindingEarlyUse7(
+        lowerer.program,
+        decl.getSourceFile(),
+        decl.getSourceFile().statements.indexOf(list.parent),
+        decl,
+        preceding,
+      ) !== null
+    )
+      return null;
     const alias = { ...target, sym };
     cache.set(sym, alias);
     return alias;
   }
   if (!init || !ts.isCallExpression(init) || init.questionDotToken) return null;
   const callee = init.expression;
-  const registered = ts.isPropertyAccessExpression(callee) && !callee.questionDotToken && callee.name.text === "for";
+  const registered =
+    ts.isPropertyAccessExpression(callee) && !callee.questionDotToken && callee.name.text === "for";
   const root = registered ? callee.expression : callee;
   if (!ts.isIdentifier(root) || !lowerer.isStdlibGlobal(root, "Symbol")) return null;
-  const arg = init.arguments.length === 0 ? null : init.arguments.length === 1 ? init.arguments[0]! : undefined;
+  const arg =
+    init.arguments.length === 0
+      ? null
+      : init.arguments.length === 1
+        ? init.arguments[0]!
+        : undefined;
   if (arg === undefined || (registered && arg === null)) return null;
   const description = arg === null ? "" : constantSymbolDescription(lowerer, arg);
   if (description === null) return null;
@@ -105,16 +151,34 @@ export function classSymbolKeyOfSymbol(lowerer: Lowerer, sym: ts.Symbol): ClassS
   // preflight independently.
   const inertInitializer = (declaration: ts.VariableDeclaration): boolean => {
     const init = declaration.initializer;
-    return ts.isIdentifier(declaration.name) && init !== undefined &&
-      (ts.isArrowFunction(init) || ts.isFunctionExpression(init) || ts.isStringLiteralLike(init) ||
-        ts.isNumericLiteral(init) || init.kind === ts.SyntaxKind.TrueKeyword ||
-        init.kind === ts.SyntaxKind.FalseKeyword || init.kind === ts.SyntaxKind.NullKeyword);
+    return (
+      ts.isIdentifier(declaration.name) &&
+      init !== undefined &&
+      (ts.isArrowFunction(init) ||
+        ts.isFunctionExpression(init) ||
+        ts.isStringLiteralLike(init) ||
+        ts.isNumericLiteral(init) ||
+        init.kind === ts.SyntaxKind.TrueKeyword ||
+        init.kind === ts.SyntaxKind.FalseKeyword ||
+        init.kind === ts.SyntaxKind.NullKeyword)
+    );
   };
-  const prefixIsInert = sf.statements.slice(0, sf.statements.indexOf(list.parent)).every((statement) =>
-    ts.isImportDeclaration(statement) || ts.isFunctionDeclaration(statement) ||
-    ts.isVariableStatement(statement) && statement.declarationList.declarations.every(inertInitializer),
-  ) && preceding.every(inertInitializer);
-  if (!prefixIsInert && bindingEarlyUse7(lowerer.program, sf, sf.statements.indexOf(list.parent), decl, preceding) !== null) return null;
+  const prefixIsInert =
+    sf.statements
+      .slice(0, sf.statements.indexOf(list.parent))
+      .every(
+        (statement) =>
+          ts.isImportDeclaration(statement) ||
+          ts.isFunctionDeclaration(statement) ||
+          (ts.isVariableStatement(statement) &&
+            statement.declarationList.declarations.every(inertInitializer)),
+      ) && preceding.every(inertInitializer);
+  if (
+    !prefixIsInert &&
+    bindingEarlyUse7(lowerer.program, sf, sf.statements.indexOf(list.parent), decl, preceding) !==
+      null
+  )
+    return null;
   // A registry name denotes one symbol even when several source bindings
   // initialize it. Intern those names into a representative checker symbol;
   // the layout table then has one identity-keyed domain for both forms.
@@ -155,12 +219,22 @@ function bindingWritten(lowerer: Lowerer, sym: ts.Symbol, sf: ts.SourceFile): bo
   };
   ts.walkPreorder(sf, (node) => {
     if (written) return "stop";
-    if (ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+      node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+    ) {
       scanTarget(node.left);
-    } else if ((ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
-      (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken)) {
+    } else if (
+      (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+      (node.operator === ts.SyntaxKind.PlusPlusToken ||
+        node.operator === ts.SyntaxKind.MinusMinusToken)
+    ) {
       scanTarget(node.operand);
-    } else if ((ts.isForOfStatement(node) || ts.isForInStatement(node)) && !ts.isVariableDeclarationList(node.initializer)) {
+    } else if (
+      (ts.isForOfStatement(node) || ts.isForInStatement(node)) &&
+      !ts.isVariableDeclarationList(node.initializer)
+    ) {
       scanTarget(node.initializer);
     }
   });

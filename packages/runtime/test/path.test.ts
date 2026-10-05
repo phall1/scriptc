@@ -14,9 +14,14 @@ const bin = join(testDir, "build", "test_path");
 beforeAll(async () => {
   await mkdir(join(testDir, "build"), { recursive: true });
   await execFileAsync("clang", [
-    "-std=c11", "-O1", "-Wall", "-Wextra",
-    "-fsanitize=address", "-DSCR_RC_AUDIT",
-    "-o", bin,
+    "-std=c11",
+    "-O1",
+    "-Wall",
+    "-Wextra",
+    "-fsanitize=address",
+    "-DSCR_RC_AUDIT",
+    "-o",
+    bin,
     join(testDir, "test_path.c"),
     join(testDir, "../src/scr_path.c"),
     // join/resolve take a packed string[]; the array module and its own

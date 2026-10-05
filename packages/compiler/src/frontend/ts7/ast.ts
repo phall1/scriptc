@@ -58,13 +58,18 @@ export { tokenToString } from "./ast-tokens.generated.js";
 
 /* ---- the seven renamed guards, under their 5.9.3 names ---- */
 
-export const isParameter: (node: Node | undefined) => node is ParameterDeclaration = isParameterDeclaration;
+export const isParameter: (node: Node | undefined) => node is ParameterDeclaration =
+  isParameterDeclaration;
 export const isPropertySignature: (node: Node | undefined) => node is PropertySignatureDeclaration =
   isPropertySignatureDeclaration;
-export const isStringLiteralLike: (node: Node | undefined) => node is StringLiteralLikeNode = isStringLiteralLikeNode;
-export const isGetAccessor: (node: Node | undefined) => node is GetAccessorDeclaration = isGetAccessorDeclaration;
-export const isSetAccessor: (node: Node | undefined) => node is SetAccessorDeclaration = isSetAccessorDeclaration;
-export const isAccessor: (node: Node | undefined) => node is AccessorDeclaration = isAccessorDeclaration;
+export const isStringLiteralLike: (node: Node | undefined) => node is StringLiteralLikeNode =
+  isStringLiteralLikeNode;
+export const isGetAccessor: (node: Node | undefined) => node is GetAccessorDeclaration =
+  isGetAccessorDeclaration;
+export const isSetAccessor: (node: Node | undefined) => node is SetAccessorDeclaration =
+  isSetAccessorDeclaration;
+export const isAccessor: (node: Node | undefined) => node is AccessorDeclaration =
+  isAccessorDeclaration;
 
 /* ---- renamed types, under their 5.9.3 names ---- */
 
@@ -114,7 +119,9 @@ export function walkPreorder(
   const children: Node[] = [];
   // The buffer belongs to this walk. Reuse its visitor too: constructing a
   // closure per node adds allocation and cycle-collection work natively.
-  const appendChild = (child: Node): void => { children.push(child); };
+  const appendChild = (child: Node): void => {
+    children.push(child);
+  };
   while (stack.length > 0) {
     const n = stack.pop()!;
     const depth = depths.pop()!;
@@ -184,23 +191,40 @@ export function getModifiers(node: Node): readonly Modifier[] | undefined {
 /* Modifier token kind -> ModifierFlags bit, both sides 7's enums. */
 function modifierToFlag(kind: number): number {
   switch (kind) {
-    case SyntaxKind.StaticKeyword: return ModifierFlags.Static;
-    case SyntaxKind.PublicKeyword: return ModifierFlags.Public;
-    case SyntaxKind.ProtectedKeyword: return ModifierFlags.Protected;
-    case SyntaxKind.PrivateKeyword: return ModifierFlags.Private;
-    case SyntaxKind.AbstractKeyword: return ModifierFlags.Abstract;
-    case SyntaxKind.AccessorKeyword: return ModifierFlags.Accessor;
-    case SyntaxKind.AsyncKeyword: return ModifierFlags.Async;
-    case SyntaxKind.ReadonlyKeyword: return ModifierFlags.Readonly;
-    case SyntaxKind.OverrideKeyword: return ModifierFlags.Override;
-    case SyntaxKind.ExportKeyword: return ModifierFlags.Export;
-    case SyntaxKind.DeclareKeyword: return ModifierFlags.Ambient;
-    case SyntaxKind.ConstKeyword: return ModifierFlags.Const;
-    case SyntaxKind.DefaultKeyword: return ModifierFlags.Default;
-    case SyntaxKind.InKeyword: return ModifierFlags.In;
-    case SyntaxKind.OutKeyword: return ModifierFlags.Out;
-    case SyntaxKind.Decorator: return ModifierFlags.Decorator;
-    default: return ModifierFlags.None;
+    case SyntaxKind.StaticKeyword:
+      return ModifierFlags.Static;
+    case SyntaxKind.PublicKeyword:
+      return ModifierFlags.Public;
+    case SyntaxKind.ProtectedKeyword:
+      return ModifierFlags.Protected;
+    case SyntaxKind.PrivateKeyword:
+      return ModifierFlags.Private;
+    case SyntaxKind.AbstractKeyword:
+      return ModifierFlags.Abstract;
+    case SyntaxKind.AccessorKeyword:
+      return ModifierFlags.Accessor;
+    case SyntaxKind.AsyncKeyword:
+      return ModifierFlags.Async;
+    case SyntaxKind.ReadonlyKeyword:
+      return ModifierFlags.Readonly;
+    case SyntaxKind.OverrideKeyword:
+      return ModifierFlags.Override;
+    case SyntaxKind.ExportKeyword:
+      return ModifierFlags.Export;
+    case SyntaxKind.DeclareKeyword:
+      return ModifierFlags.Ambient;
+    case SyntaxKind.ConstKeyword:
+      return ModifierFlags.Const;
+    case SyntaxKind.DefaultKeyword:
+      return ModifierFlags.Default;
+    case SyntaxKind.InKeyword:
+      return ModifierFlags.In;
+    case SyntaxKind.OutKeyword:
+      return ModifierFlags.Out;
+    case SyntaxKind.Decorator:
+      return ModifierFlags.Decorator;
+    default:
+      return ModifierFlags.None;
   }
 }
 

@@ -10,13 +10,16 @@ test("tuple iteration retains one computed receiver without allocating an array 
   try {
     const entry = join(dir, "main.ts");
     const outPath = join(dir, "main.ir.json");
-    await writeFile(entry, `
+    await writeFile(
+      entry,
+      `
 let calls = 0;
 function pair(): [number, number] { calls++; return [2, 3]; }
 let total = 0;
 for (const n of pair()) total += n;
 console.log(total, calls);
-`);
+`,
+    );
     const result = await compile(entry, { outDir: dir, outPath, outputKind: "ir", dynamic: false });
     if (!result.ok) throw new Error(result.diagnostics.map((d) => d.message).join("\n"));
     const mod = deserializeModule(await readFile(outPath, "utf8"));

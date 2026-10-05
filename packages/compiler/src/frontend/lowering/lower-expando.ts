@@ -55,7 +55,10 @@ export interface ExpandoMembers {
   symbols: Map<ts.Symbol, ExpandoMember>;
 }
 
-function memberOf(members: ExpandoMembers | undefined, key: string | ts.Symbol): ExpandoMember | undefined {
+function memberOf(
+  members: ExpandoMembers | undefined,
+  key: string | ts.Symbol,
+): ExpandoMember | undefined {
   return typeof key === "string" ? members?.names.get(key) : members?.symbols.get(key);
 }
 
@@ -68,7 +71,10 @@ const READONLY_FN_MEMBERS = new Set(["length", "name", "caller", "arguments", "p
 /** The member key of an assignment target / read site: a spelled or
  * folded string name, a unique-symbol const's ts.Symbol, or null (not a
  * routable key). */
-function memberKeyOf(lowerer: Lowerer, expr: ts.PropertyAccessExpression | ts.ElementAccessExpression): string | ts.Symbol | null {
+function memberKeyOf(
+  lowerer: Lowerer,
+  expr: ts.PropertyAccessExpression | ts.ElementAccessExpression,
+): string | ts.Symbol | null {
   if (ts.isPropertyAccessExpression(expr)) {
     return ts.isIdentifier(expr.name) ? expr.name.text : null;
   }
@@ -98,15 +104,25 @@ function expandoFnSymbolOf(lowerer: Lowerer, recv: ts.Expression): ts.Symbol | n
     return ts.isSourceFile(decl.parent) ? sym : null;
   }
   if (ts.isVariableDeclaration(decl)) {
-    if (!ts.isVariableStatement(decl.parent?.parent) || !ts.isSourceFile(decl.parent?.parent?.parent)) return null;
+    if (
+      !ts.isVariableStatement(decl.parent?.parent) ||
+      !ts.isSourceFile(decl.parent?.parent?.parent)
+    )
+      return null;
     if ((ts.getCombinedNodeFlags(decl) & ts.NodeFlags.Const) === 0) return null;
     // The const's VALUE must be a function created here (arrow/function
     // initializer) — a callable TYPE alone can be satisfied by island
     // handles and other values whose members live elsewhere.
     let init = decl.initializer;
-    while (init !== undefined && (ts.isParenthesizedExpression(init) || ts.isAsExpression(init) || ts.isTypeAssertion(init))) init = init.expression;
-    if (init === undefined || (!ts.isArrowFunction(init) && !ts.isFunctionExpression(init))) return null;
-    if (lowerer.checker.getCallSignatures(lowerer.checker.getTypeOfSymbol(sym)).length === 0) return null;
+    while (
+      init !== undefined &&
+      (ts.isParenthesizedExpression(init) || ts.isAsExpression(init) || ts.isTypeAssertion(init))
+    )
+      init = init.expression;
+    if (init === undefined || (!ts.isArrowFunction(init) && !ts.isFunctionExpression(init)))
+      return null;
+    if (lowerer.checker.getCallSignatures(lowerer.checker.getTypeOfSymbol(sym)).length === 0)
+      return null;
     return sym;
   }
   return null;
@@ -117,10 +133,17 @@ function expandoFnSymbolOf(lowerer: Lowerer, recv: ts.Expression): ts.Symbol | n
 function expandoWriteOf(
   lowerer: Lowerer,
   node: ts.Node,
-): { fnSym: ts.Symbol; key: string | ts.Symbol; access: ts.PropertyAccessExpression | ts.ElementAccessExpression } | null {
+): {
+  fnSym: ts.Symbol;
+  key: string | ts.Symbol;
+  access: ts.PropertyAccessExpression | ts.ElementAccessExpression;
+} | null {
   if (!ts.isBinaryExpression(node)) return null;
   const op = node.operatorToken.kind;
-  if (op !== ts.SyntaxKind.EqualsToken && (op < ts.SyntaxKind.FirstCompoundAssignment || op > ts.SyntaxKind.LastCompoundAssignment)) {
+  if (
+    op !== ts.SyntaxKind.EqualsToken &&
+    (op < ts.SyntaxKind.FirstCompoundAssignment || op > ts.SyntaxKind.LastCompoundAssignment)
+  ) {
     return null;
   }
   const left = node.left;
@@ -156,7 +179,10 @@ export function collectExpandoMembers(lowerer: Lowerer, sf: ts.SourceFile): void
       const existing = memberOf(members, w.key);
       if (existing) {
         existing.firstWriteStart = Math.min(existing.firstWriteStart, node.getStart());
-      } else if (!(typeof w.key === "string" && READONLY_FN_MEMBERS.has(w.key)) && !nsOwnedMember(lowerer, w.access)) {
+      } else if (
+        !(typeof w.key === "string" && READONLY_FN_MEMBERS.has(w.key)) &&
+        !nsOwnedMember(lowerer, w.access)
+      ) {
         // The member slot's type is the checker's DECLARED member type at
         // the access (expando members widen across all assignments;
         // interface members carry their declared type). Mapping failures
@@ -174,7 +200,10 @@ export function collectExpandoMembers(lowerer: Lowerer, sf: ts.SourceFile): void
         if (type?.kind === "void" && isUnitOnlyTsType(tsType)) type = unitOnlyUnion(lowerer.unions);
         if (type && type.kind !== "void") {
           const fnName = w.fnSym.name;
-          const memberName = typeof w.key === "string" ? w.key : `sym%${w.key.name}%${lowerer.checker.declarationsOf(w.key)[0]?.getStart() ?? 0}`;
+          const memberName =
+            typeof w.key === "string"
+              ? w.key
+              : `sym%${w.key.name}%${lowerer.checker.declarationsOf(w.key)[0]?.getStart() ?? 0}`;
           const g: IrGlobal = {
             id: `%g.${tag}${fnName}%.${memberName}`,
             name: `${fnName}.${memberName}`,
@@ -204,14 +233,24 @@ export function collectExpandoMembers(lowerer: Lowerer, sf: ts.SourceFile): void
  * nsWritableTarget routes them). Ambient (`declare namespace`) members
  * have no storage anywhere and are exactly the declared-expando idiom
  * this module lowers. */
-function nsOwnedMember(lowerer: Lowerer, access: ts.PropertyAccessExpression | ts.ElementAccessExpression): boolean {
+function nsOwnedMember(
+  lowerer: Lowerer,
+  access: ts.PropertyAccessExpression | ts.ElementAccessExpression,
+): boolean {
   const nameNode = ts.isPropertyAccessExpression(access) ? access.name : access.argumentExpression;
   const sym = lowerer.checker.getSymbolAtLocation(nameNode);
   if (!sym) return false;
   for (const d of lowerer.checker.declarationsOf(sym)) {
-    for (let p: ts.Node | undefined = d.parent; p !== undefined && !ts.isSourceFile(p); p = p.parent) {
+    for (
+      let p: ts.Node | undefined = d.parent;
+      p !== undefined && !ts.isSourceFile(p);
+      p = p.parent
+    ) {
       if (ts.isModuleDeclaration(p)) {
-        return !(p.modifiers?.some((m) => m.kind === ts.SyntaxKind.DeclareKeyword) || p.getSourceFile().isDeclarationFile);
+        return !(
+          p.modifiers?.some((m) => m.kind === ts.SyntaxKind.DeclareKeyword) ||
+          p.getSourceFile().isDeclarationFile
+        );
       }
     }
   }
@@ -281,7 +320,12 @@ export function expandoMemberRead(
       `reading the function member '${name}' above its first assignment (JS answers undefined there, which the member's type cannot hold — move the read below the assignment)`,
     );
   }
-  return { kind: "varRef", localId: member.global.id, type: member.global.type, loc: locOf(access) };
+  return {
+    kind: "varRef",
+    localId: member.global.id,
+    type: member.global.type,
+    loc: locOf(access),
+  };
 }
 
 /** The statement lowering for `<fn>.<key> = <value>`: an ordinary global

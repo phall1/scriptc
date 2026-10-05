@@ -10,7 +10,9 @@ test("numeric Math operands borrow stable receivers across calls and preserve re
   try {
     const entry = join(dir, "main.ts");
     const outPath = join(dir, "main.ir.json");
-    await writeFile(entry, `
+    await writeFile(
+      entry,
+      `
 function safe(bytes: Uint8Array, value: number): number {
   bytes[Math.floor(0)] = Math.min(255, Math.max(0, Math.floor(value)));
   return bytes[Math.ceil(0)];
@@ -25,14 +27,20 @@ const buffer = new Uint8Array(1);
 console.log(safe(buffer, 17.9), readArray([4]));
 throughCall(buffer, 8.9);
 replaced(buffer, new Uint8Array(1));
-`);
+`,
+    );
     const result = await compile(entry, { outDir: dir, outPath, outputKind: "ir" });
-    if (!result.ok) throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
+    if (!result.ok)
+      throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
     const mod = deserializeModule(await readFile(outPath, "utf8"));
 
     const ll = emitLlvmModule(mod);
     const llBody = (name: string, owned = false): string => {
-      const match = ll.match(new RegExp(`define internal [^\\n]+ @sc_${owned ? "" : "(?:b)?"}f_${name}\\([^\\n]*\\) #0 \\{([\\s\\S]*?)\\n\\}`));
+      const match = ll.match(
+        new RegExp(
+          `define internal [^\\n]+ @sc_${owned ? "" : "(?:b)?"}f_${name}\\([^\\n]*\\) #0 \\{([\\s\\S]*?)\\n\\}`,
+        ),
+      );
       expect(match, `${name} LLVM function`).not.toBeNull();
       return match![1]!;
     };
@@ -45,5 +53,7 @@ replaced(buffer, new Uint8Array(1));
     expect(llBody("throughCall")).not.toContain("@scr_bytes_retain_v(");
     expect(llBody("replaced")).toContain("@scr_bytes_retain_v(");
     expect(llBody("readArray")).not.toContain("@scr_arr_retain_v(");
-  } finally { await rm(dir, { recursive: true, force: true }); }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

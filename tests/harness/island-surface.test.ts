@@ -26,7 +26,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, test } from "vitest";
 import * as ts from "../../packages/compiler/src/frontend/ts7/adapter.js";
-import { ambientDtsPath, ir, ISLAND_SURFACE, overridesDtsPath, STATIC_MATH_PROPS, type IslandFnEntry } from "@scriptc/compiler";
+import {
+  ambientDtsPath,
+  ir,
+  ISLAND_SURFACE,
+  overridesDtsPath,
+  STATIC_MATH_PROPS,
+  type IslandFnEntry,
+} from "@scriptc/compiler";
 import { loadProgram } from "../../packages/compiler/src/frontend/program-node.js";
 
 function placeholder(t: ir.IrType): string {
@@ -52,16 +59,24 @@ interface Probe {
 
 const probes: Probe[] = [
   ...Object.entries(ISLAND_SURFACE.math.fns).map(([name, entry]) => ({
-    what: `Math.${name}`, callee: `Math.${name}`, entry: entry!,
+    what: `Math.${name}`,
+    callee: `Math.${name}`,
+    entry: entry!,
   })),
   ...Object.entries(ISLAND_SURFACE.number).map(([name, entry]) => ({
-    what: `number.${name}`, callee: `__num.${name}`, entry: entry!,
+    what: `number.${name}`,
+    callee: `__num.${name}`,
+    entry: entry!,
   })),
   ...Object.entries(ISLAND_SURFACE.string).map(([name, entry]) => ({
-    what: `string.${name}`, callee: `__str.${name}`, entry: entry!,
+    what: `string.${name}`,
+    callee: `__str.${name}`,
+    entry: entry!,
   })),
   ...Object.entries(ISLAND_SURFACE.globals).map(([name, entry]) => ({
-    what: name, callee: name, entry: entry!,
+    what: name,
+    callee: name,
+    entry: entry!,
   })),
 ];
 const propProbes = Object.entries(ISLAND_SURFACE.math.props).map(([name, propType]) => ({
@@ -179,7 +194,9 @@ describe("every ISLAND_SURFACE entry is declared standard-library surface", () =
 
 describe("static Math properties", () => {
   test("the standard constants are declared in the static table", () => {
-    expect(Object.keys(ISLAND_SURFACE.math.props)).not.toEqual(expect.arrayContaining(Object.keys(STATIC_MATH_PROPS)));
+    expect(Object.keys(ISLAND_SURFACE.math.props)).not.toEqual(
+      expect.arrayContaining(Object.keys(STATIC_MATH_PROPS)),
+    );
     expect(STATIC_MATH_PROPS).toEqual({
       E: 2.718281828459045,
       LN10: 2.302585092994046,
@@ -192,11 +209,17 @@ describe("static Math properties", () => {
     });
   });
 
-  test.for(staticMathPropProbes.map((p, i) => [p.what, p, i] as const))("%s is a number", ([, probe, i]) => {
-    const decl = decls.get(`__staticProp${i}`);
-    expect(decl, `${probe.what}: probe declaration missing`).toBeDefined();
-    expect(isStdlibDeclared(calleeSymbol(decl!)), `${probe.what}: no standard-library declaration`).toBe(true);
-    expect(checker.typeToString(checker.getTypeAtLocation(decl!.name))).toBe("number");
-    expect(probe.value).toBeTypeOf("number");
-  });
+  test.for(staticMathPropProbes.map((p, i) => [p.what, p, i] as const))(
+    "%s is a number",
+    ([, probe, i]) => {
+      const decl = decls.get(`__staticProp${i}`);
+      expect(decl, `${probe.what}: probe declaration missing`).toBeDefined();
+      expect(
+        isStdlibDeclared(calleeSymbol(decl!)),
+        `${probe.what}: no standard-library declaration`,
+      ).toBe(true);
+      expect(checker.typeToString(checker.getTypeAtLocation(decl!.name))).toBe("number");
+      expect(probe.value).toBeTypeOf("number");
+    },
+  );
 });

@@ -7,11 +7,15 @@ import { spawnTs7Wire } from "./rpc-process.js";
 
 const require = createRequire(import.meta.url);
 const packageRoot = dirname(require.resolve("typescript/package.json"));
-const { default: getExePath } = require(join(packageRoot, "lib/getExePath.js")) as { default: () => string };
+const { default: getExePath } = require(join(packageRoot, "lib/getExePath.js")) as {
+  default: () => string;
+};
 
 /** Platform-package discovery and process creation remain at the host
  * boundary. The session itself uses no SDK implementation or Node process. */
-export function ts7Executable(): string { return getExePath(); }
+export function ts7Executable(): string {
+  return getExePath();
+}
 
 export class Ts7Api extends ConnectedTs7Api {
   constructor(options: { cwd: string; fs: Ts7FileSystem; collectTiming?: boolean }) {

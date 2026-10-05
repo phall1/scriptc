@@ -10,6 +10,16 @@ $ pnpm install && pnpm -r build
 
 The workspace build compiles the TypeScript packages and checks the compatibility inventory. It does not rebuild packaged native artifacts and needs no local LLVM installation.
 
+## Code quality
+
+Run `pnpm lint` and `pnpm format:check` before submitting changes. `pnpm lint:fix` applies safe oxlint fixes; review the diff afterward. `pnpm format` applies oxfmt formatting. The commands cover owned JavaScript and TypeScript in packages, repository scripts, compatibility tooling, the test harness, and the root test configuration. CI runs the same checks without waiting for native builds.
+
+Use `pnpm lint --format=agent` for compact diagnostics or `pnpm lint --format=json` for structured output. These use the same rules and exclusions as the ordinary check.
+
+The root configurations exclude program fixtures, generated outputs, vendor code, and the standalone documentation workspace. Deliberately invalid or poorly formatted programs are test data. Formatting also preserves embedded source strings and import execution order. Native C and C++ use their existing conventions.
+
+Keep the compiler's frontend/backend import boundary and the explicit TypeScript parser islands intact. Lint exceptions must explain the semantic reason and apply to the smallest useful scope; do not disable a correctness check just to clear a finding. The compiler's non-null assertions remain permitted where existing proofs establish the value, while redundant and unsafe optional-chain assertions are checked.
+
 ## Tests
 
 The test corpus runs each program under Node.js and as a compiled native binary, then compares stdout, stderr, and exit codes byte-for-byte. Run focused tests while developing; use `pnpm test:sandbox` for the full validation gate. Both the plain and sanitized lanes must pass. The sanitized lane enables AddressSanitizer and the runtime reference-count audit.

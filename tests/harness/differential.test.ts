@@ -116,7 +116,12 @@ function nodeOracleFile(file: string): string {
     compilerOptions: { target: ts5.ScriptTarget.ES2022, module: ts5.ModuleKind.ESNext },
     fileName: file,
   }).outputText;
-  const key = createHash("sha256").update(ts5.version).update("\0").update(src).digest("hex").slice(0, 16);
+  const key = createHash("sha256")
+    .update(ts5.version)
+    .update("\0")
+    .update(src)
+    .digest("hex")
+    .slice(0, 16);
   const path = join(cacheDir, `dec-oracle-${key}.mjs`);
   mkdirSync(cacheDir, { recursive: true });
   // Atomic publish: concurrent suites (the other flavor's full run, or
@@ -146,7 +151,8 @@ function nodeOracleArgs(file: string): string[] {
   // --import makes Node load even a CJS entry through its ESM loader,
   // changing an entry throw's uncaughtException origin to unhandledRejection.
   const shims = directiveHead(file).includes("// @no-node-shims")
-    ? [] : ["--import", comptimeShim, "--import", islandShim];
+    ? []
+    : ["--import", comptimeShim, "--import", islandShim];
   return [...transform, ...nodep, ...shims, nodeOracleFile(file)];
 }
 
@@ -245,14 +251,20 @@ function oracleKeyBase(): Promise<string> {
   oracleKeyBaseMemo ??= execFileAsync("node", ["--version"]).then(({ stdout }) =>
     createHash("sha256")
       .update("oracle-v1\0")
-      .update(stdout.trim()).update("\0")
+      .update(stdout.trim())
+      .update("\0")
       // Decorator programs run tsc's downlevel on the Node side — its
       // emitter version is part of the verdict.
-      .update(ts5.version).update("\0")
-      .update(readFileSync(fileURLToPath(comptimeShim))).update("\0")
-      .update(readFileSync(fileURLToPath(islandShim))).update("\0")
-      .update(process.env["SCRIPTC_TEST_ENV"] ?? "").update("\0")
-      .update(process.cwd()).update("\0")
+      .update(ts5.version)
+      .update("\0")
+      .update(readFileSync(fileURLToPath(comptimeShim)))
+      .update("\0")
+      .update(readFileSync(fileURLToPath(islandShim)))
+      .update("\0")
+      .update(process.env["SCRIPTC_TEST_ENV"] ?? "")
+      .update("\0")
+      .update(process.cwd())
+      .update("\0")
       .digest("hex"),
   );
   return oracleKeyBaseMemo;

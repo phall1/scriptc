@@ -4,7 +4,10 @@ import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:pa
 import type { CompileRequestOptions } from "../compile-types.js";
 import type { FfiProfile } from "../ffi/ffi-manifest.js";
 import { driverTraceCandidates, linkTraceCandidate } from "../backend/link-trace.js";
-import { toolchainEnvironmentCachePolicy, toolchainEnvironmentFingerprint } from "../backend/toolchain-environment.js";
+import {
+  toolchainEnvironmentCachePolicy,
+  toolchainEnvironmentFingerprint,
+} from "../backend/toolchain-environment.js";
 import { runNativeTool } from "../backend/native-tools.js";
 import type { NativeRuntimeSelection } from "../backend/runtime-pack-native.js";
 import type { NativeToolchain } from "./toolchain.js";
@@ -31,21 +34,37 @@ interface ExecutableEntry {
 function identity(path: string): InputIdentity {
   path = resolve(path);
   const info = statSync(path);
-  if (!info.isFile() && !info.isDirectory()) throw new Error(`unsupported native cache input: ${path}`);
-  return { path, canonical: realpathSync(path), kind: info.isFile() ? "file" : "directory",
-    dev: info.dev, ino: info.ino, size: info.size, mtime: info.mtimeMs, ctime: info.ctimeMs };
+  if (!info.isFile() && !info.isDirectory())
+    throw new Error(`unsupported native cache input: ${path}`);
+  return {
+    path,
+    canonical: realpathSync(path),
+    kind: info.isFile() ? "file" : "directory",
+    dev: info.dev,
+    ino: info.ino,
+    size: info.size,
+    mtime: info.mtimeMs,
+    ctime: info.ctimeMs,
+  };
 }
 
 function stillMatches(inputs: InputIdentity[]): boolean {
-  try { return inputs.every((input) => JSON.stringify(identity(input.path)) === JSON.stringify(input)); }
-  catch { return false; }
+  try {
+    return inputs.every((input) => JSON.stringify(identity(input.path)) === JSON.stringify(input));
+  } catch {
+    return false;
+  }
 }
 
 function commandPath(command: string): string {
   if (command.includes("/") || command.includes("\\")) return resolve(command);
   for (const directory of (process.env["PATH"] ?? "/usr/bin:/bin").split(delimiter)) {
     const candidate = join(directory || process.cwd(), command);
-    try { if (statSync(candidate).isFile()) return candidate; } catch { /* Try the next PATH entry. */ }
+    try {
+      if (statSync(candidate).isFile()) return candidate;
+    } catch {
+      /* Try the next PATH entry. */
+    }
   }
   throw new Error(`native command is unavailable: ${command}`);
 }
@@ -53,7 +72,8 @@ function commandPath(command: string): string {
 function toolOutput(executable: string, args: string[]): string {
   const result = spawnSync(executable, args, { encoding: "utf8", stdio: "pipe" });
   if (result.error) throw result.error;
-  if (result.status !== 0 || result.signal !== null) throw new Error("could not trace native link inputs");
+  if (result.status !== 0 || result.signal !== null)
+    throw new Error("could not trace native link inputs");
   return result.stdout + "\n" + result.stderr;
 }
 
@@ -61,7 +81,9 @@ function tracePaths(output: string, driver: boolean, roots: string[]): string[] 
   const paths = new Set<string>();
   for (const line of output.split(/\r?\n/)) {
     for (const candidate of driver ? driverTraceCandidates(line) : linkTraceCandidate(line)) {
-      const option = driver ? ["-L", "-F", "--sysroot="].find((prefix) => candidate.startsWith(prefix)) : undefined;
+      const option = driver
+        ? ["-L", "-F", "--sysroot="].find((prefix) => candidate.startsWith(prefix))
+        : undefined;
       const spelling = option === undefined ? candidate : candidate.slice(option.length);
       if (!isAbsolute(spelling)) continue;
       const path = resolve(spelling);
@@ -73,10 +95,17 @@ function tracePaths(output: string, driver: boolean, roots: string[]): string[] 
         if (input.kind === "directory" && path.endsWith(".sdk")) {
           for (const name of ["SDKSettings.json", "SDKSettings.plist"]) {
             const settings = join(path, name);
-            try { identity(settings); paths.add(settings); } catch { /* The SDK directory observes new settings files. */ }
+            try {
+              identity(settings);
+              paths.add(settings);
+            } catch {
+              /* The SDK directory observes new settings files. */
+            }
           }
         }
-      } catch { /* Non-path trace tokens are not dependencies. */ }
+      } catch {
+        /* Non-path trace tokens are not dependencies. */
+      }
     }
   }
   return [...paths].sort();
@@ -85,13 +114,27 @@ function tracePaths(output: string, driver: boolean, roots: string[]): string[] 
 function validEntry(value: unknown): value is ExecutableEntry {
   if (value === null || typeof value !== "object") return false;
   const entry = value as Partial<ExecutableEntry>;
-  return entry.schema === "scriptc.native-executable.v1" && typeof entry.binary === "string" &&
-    /^[0-9a-f]{64}$/.test(entry.binary) && (entry.symbols === null ||
+  return (
+    entry.schema === "scriptc.native-executable.v1" &&
+    typeof entry.binary === "string" &&
+    /^[0-9a-f]{64}$/.test(entry.binary) &&
+    (entry.symbols === null ||
       (typeof entry.symbols === "string" && /^[0-9a-f]{64}$/.test(entry.symbols))) &&
-    Array.isArray(entry.inputs) && entry.inputs.length > 0 && entry.inputs.every((input) =>
-      input !== null && typeof input === "object" && typeof input.path === "string" && isAbsolute(input.path) &&
-      typeof input.canonical === "string" && (input.kind === "file" || input.kind === "directory") &&
-      [input.dev, input.ino, input.size, input.mtime, input.ctime].every((value) => typeof value === "number" && Number.isFinite(value)));
+    Array.isArray(entry.inputs) &&
+    entry.inputs.length > 0 &&
+    entry.inputs.every(
+      (input) =>
+        input !== null &&
+        typeof input === "object" &&
+        typeof input.path === "string" &&
+        isAbsolute(input.path) &&
+        typeof input.canonical === "string" &&
+        (input.kind === "file" || input.kind === "directory") &&
+        [input.dev, input.ino, input.size, input.mtime, input.ctime].every(
+          (value) => typeof value === "number" && Number.isFinite(value),
+        ),
+    )
+  );
 }
 
 function readSymbols(binary: string): Buffer {
@@ -105,7 +148,8 @@ function readSymbols(binary: string): Buffer {
 }
 
 function stageSymbols(bytes: Buffer, binary: string): void {
-  if (bytes.length < 12 || bytes.subarray(0, 8).toString() !== "SCDSYM01") throw new Error("invalid cached dSYM");
+  if (bytes.length < 12 || bytes.subarray(0, 8).toString() !== "SCDSYM01")
+    throw new Error("invalid cached dSYM");
   const end = 12 + bytes.readUInt32LE(8);
   if (end <= 12 || end >= bytes.length) throw new Error("invalid cached dSYM sizes");
   const contents = join(binary + ".dSYM", "Contents");
@@ -122,8 +166,13 @@ export class NativeExecutableCache {
   private inputs: InputIdentity[];
   private traced = false;
 
-  constructor(private readonly cache: NativeCache, private readonly key: string,
-    private readonly linker: string, private readonly debug: boolean, paths: string[]) {
+  constructor(
+    private readonly cache: NativeCache,
+    private readonly key: string,
+    private readonly linker: string,
+    private readonly debug: boolean,
+    paths: string[],
+  ) {
     this.inputs = [...new Set(paths)].sort().map(identity);
   }
 
@@ -132,9 +181,16 @@ export class NativeExecutableCache {
       const metadata = this.cache.read("executable", this.key);
       if (metadata === null) return false;
       const entry: unknown = JSON.parse(metadata.toString("utf8"));
-      if (!validEntry(entry) || !stillMatches(entry.inputs) || !stillMatches(this.inputs)) return false;
-      if (!this.inputs.every((input) => entry.inputs.some((saved) => saved.path === input.path &&
-        JSON.stringify(saved) === JSON.stringify(input)))) return false;
+      if (!validEntry(entry) || !stillMatches(entry.inputs) || !stillMatches(this.inputs))
+        return false;
+      if (
+        !this.inputs.every((input) =>
+          entry.inputs.some(
+            (saved) => saved.path === input.path && JSON.stringify(saved) === JSON.stringify(input),
+          ),
+        )
+      )
+        return false;
       if (this.debug !== (entry.symbols !== null)) return false;
       const binary = this.cache.read("binary", entry.binary);
       const symbols = entry.symbols === null ? null : this.cache.read("dsym", entry.symbols);
@@ -144,7 +200,9 @@ export class NativeExecutableCache {
       writeFileSync(output, binary);
       chmodSync(output, 0o755);
       return true;
-    } catch { return false; }
+    } catch {
+      return false;
+    }
   }
 
   /** Trace the real object-only link, including the SDK's transitive stubs.
@@ -160,11 +218,14 @@ export class NativeExecutableCache {
       const driverInputs = tracePaths(dry, true, roots).map(identity);
       const linked = toolOutput(this.linker, [...args, "-Wl,-t"]);
       const paths = tracePaths(linked, false, roots);
-      if (paths.length === 0 || !stillMatches(this.inputs) || !stillMatches(driverInputs)) return false;
+      if (paths.length === 0 || !stillMatches(this.inputs) || !stillMatches(driverInputs))
+        return false;
       this.inputs.push(...driverInputs, ...paths.map(identity));
       this.traced = true;
       return true;
-    } catch { return false; }
+    } catch {
+      return false;
+    }
   }
 
   publish(output: string): void {
@@ -177,36 +238,78 @@ export class NativeExecutableCache {
       this.cache.write("binary", binaryKey, binary);
       if (symbols !== null && symbolsKey !== null) this.cache.write("dsym", symbolsKey, symbols);
       if (!stillMatches(this.inputs)) return;
-      const entry: ExecutableEntry = { schema: "scriptc.native-executable.v1", inputs: this.inputs, binary: binaryKey, symbols: symbolsKey };
+      const entry: ExecutableEntry = {
+        schema: "scriptc.native-executable.v1",
+        inputs: this.inputs,
+        binary: binaryKey,
+        symbols: symbolsKey,
+      };
       this.cache.write("executable", this.key, JSON.stringify(entry));
-    } catch { /* Build artifacts remain valid when caching is unavailable. */ }
+    } catch {
+      /* Build artifacts remain valid when caching is unavailable. */
+    }
   }
 }
 
-export function openNativeExecutableCache(cache: NativeCache | null, toolchain: NativeToolchain,
-  llvm: string, options: CompileRequestOptions, ffi: FfiProfile | null, pack: NativeRuntimeSelection): NativeExecutableCache | null {
+export function openNativeExecutableCache(
+  cache: NativeCache | null,
+  toolchain: NativeToolchain,
+  llvm: string,
+  options: CompileRequestOptions,
+  ffi: FfiProfile | null,
+  pack: NativeRuntimeSelection,
+): NativeExecutableCache | null {
   // Match the established complete-cache contract: default Apple driver,
   // known runtime inputs, and no wrapper or caller-supplied library searches.
-  if (cache === null || toolchain.target.platform !== "darwin" || options.sanitize ||
-    process.env["SCRIPTC_LINKER"] !== undefined || process.env["SCRIPTC_LLVM_HELPER"] !== undefined ||
-    toolchain.linkerArgs.length !== 0 || ffi !== null || !toolchainEnvironmentCachePolicy().completeArtifacts) return null;
+  if (
+    cache === null ||
+    toolchain.target.platform !== "darwin" ||
+    options.sanitize ||
+    process.env["SCRIPTC_LINKER"] !== undefined ||
+    process.env["SCRIPTC_LLVM_HELPER"] !== undefined ||
+    toolchain.linkerArgs.length !== 0 ||
+    ffi !== null ||
+    !toolchainEnvironmentCachePolicy().completeArtifacts
+  )
+    return null;
   try {
     const linker = commandPath(toolchain.linker);
     if (realpathSync(linker) !== "/usr/bin/clang") return null;
     const effective = commandPath(runNativeTool(linker, ["-print-prog-name=clang"]).trim());
     const debug = options.optimization === "dev" && !options.strip;
-    const paths = [linker, effective, toolchain.helperExecutable, join(toolchain.helperPackageRoot, "package.json"),
-      join(toolchain.runtimePackRoot, "package.json"), join(toolchain.runtimePackRoot, "runtime-pack.json"),
-      ...[...pack.selected.runtime, ...pack.selected.archives, ...pack.manifest.licenses].map((artifact) => join(pack.root, artifact.path))];
+    const paths = [
+      linker,
+      effective,
+      toolchain.helperExecutable,
+      join(toolchain.helperPackageRoot, "package.json"),
+      join(toolchain.runtimePackRoot, "package.json"),
+      join(toolchain.runtimePackRoot, "runtime-pack.json"),
+      ...[...pack.selected.runtime, ...pack.selected.archives, ...pack.manifest.licenses].map(
+        (artifact) => join(pack.root, artifact.path),
+      ),
+    ];
     if (debug) {
       const dsymutil = commandPath(toolchain.dsymutil);
       if (realpathSync(dsymutil) !== "/usr/bin/dsymutil") return null;
       paths.push(dsymutil);
     }
-    const key = contentDigest(JSON.stringify({ schema: 1, llvm: contentDigest(llvm), options, toolchain,
-      runtimeIdentity: pack.packageText, runtimeManifest: pack.manifestText,
-      linker: identity(linker), effective: identity(effective), environment: toolchainEnvironmentFingerprint(),
-      cwd: process.cwd(), path: process.env["PATH"] ?? null }));
+    const key = contentDigest(
+      JSON.stringify({
+        schema: 1,
+        llvm: contentDigest(llvm),
+        options,
+        toolchain,
+        runtimeIdentity: pack.packageText,
+        runtimeManifest: pack.manifestText,
+        linker: identity(linker),
+        effective: identity(effective),
+        environment: toolchainEnvironmentFingerprint(),
+        cwd: process.cwd(),
+        path: process.env["PATH"] ?? null,
+      }),
+    );
     return new NativeExecutableCache(cache, key, linker, debug, paths);
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }

@@ -8,7 +8,9 @@ test("accepts artifacts whose imports stay within the declared libc floor", asyn
   const root = await mkdtemp(join(tmpdir(), "scriptc-artifact-policy-"));
   try {
     await writeFile(join(root, "runtime.o"), Buffer.from("strtol\0__isoc99_sscanf\0"));
-    await expect(assertArtifactsExcludeStrings(root, ["__isoc23_", "__ubsan_"])).resolves.toBeUndefined();
+    await expect(
+      assertArtifactsExcludeStrings(root, ["__isoc23_", "__ubsan_"]),
+    ).resolves.toBeUndefined();
   } finally {
     await rm(root, { recursive: true, force: true });
   }

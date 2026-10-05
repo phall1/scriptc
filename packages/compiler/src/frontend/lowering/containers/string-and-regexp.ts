@@ -1,15 +1,42 @@
 import { nodeThrowExpr, numLit, strLit, varRef } from "../../../ir/build.js";
 import * as ts from "../../ts7/adapter.js";
-import { BOOL, DYN, F64, type IrExpr, type IrFunction, type IrStmt, type IrType, STRING, type SrcLoc, UNDEFINED_T, arrayOf, isUnitType, typeEquals, typeKey } from "../../../ir/ir.js";
+import {
+  BOOL,
+  DYN,
+  F64,
+  type IrExpr,
+  type IrFunction,
+  type IrStmt,
+  type IrType,
+  STRING,
+  type SrcLoc,
+  UNDEFINED_T,
+  arrayOf,
+  isUnitType,
+  typeEquals,
+  typeKey,
+} from "../../../ir/ir.js";
 import { locOf } from "../../program.js";
 import type { Lowerer } from "../lowerer.js";
 import { own } from "../lowerer.js";
 import { isRequireMainFilename } from "../expressions/optional-chains.js";
 import { STRING_INDEX_METHODS, STRING_REPLACE_METHODS, STR_METHODS } from "../surfaces.js";
 import { lowerStringReplacement } from "./string-replacement.js";
-import { coerceStringSearchValue, defaultAfterUndefined, lowerOptionalArgument, lowerPositionArgument, lowerStaticallyUndefinedArgument, lowerStringSearchArgument, positionNumber } from "../optional-arguments.js";
+import {
+  coerceStringSearchValue,
+  defaultAfterUndefined,
+  lowerOptionalArgument,
+  lowerPositionArgument,
+  lowerStaticallyUndefinedArgument,
+  lowerStringSearchArgument,
+  positionNumber,
+} from "../optional-arguments.js";
 
-function lowerSplitLimitArg(lowerer: Lowerer, node: ts.Expression | undefined, loc: SrcLoc): IrExpr {
+function lowerSplitLimitArg(
+  lowerer: Lowerer,
+  node: ts.Expression | undefined,
+  loc: SrcLoc,
+): IrExpr {
   const defaultValue: IrExpr = { kind: "numLit", value: 4294967295, type: F64, loc };
   return node ? lowerOptionalArgument(lowerer, node, F64, defaultValue) : defaultValue;
 }
@@ -30,33 +57,67 @@ export function lowerStringSplitCall(
     lowerer.noLowering(`.split with ${argumentNodes.length} arguments`, call);
   }
   const separatorNode = argumentNodes[0];
-  const undefinedSeparator = separatorNode ? lowerStaticallyUndefinedArgument(lowerer, separatorNode) : null;
+  const undefinedSeparator = separatorNode
+    ? lowerStaticallyUndefinedArgument(lowerer, separatorNode)
+    : null;
   const absent = !separatorNode || undefinedSeparator !== null;
   let separator: IrExpr = absent
     ? undefinedSeparator
       ? defaultAfterUndefined(undefinedSeparator, strLit("undefined", loc))
       : strLit("undefined", loc)
     : lowerer.lowerExpr(separatorNode);
-  if (separator.type.kind === "nullT") separator = defaultAfterUndefined(separator, strLit("null", loc));
+  if (separator.type.kind === "nullT")
+    separator = defaultAfterUndefined(separator, strLit("null", loc));
   // JS functions returning null use a boxed ABI. Recover the nullish
   // value through a checked union; keep object/@@split forms fenced.
-  if (separator.type.kind === "dyn" && separatorNode && (lowerer.typeOf(separatorNode).flags & ts.TypeFlags.Null) !== 0) {
+  if (
+    separator.type.kind === "dyn" &&
+    separatorNode &&
+    (lowerer.typeOf(separatorNode).flags & ts.TypeFlags.Null) !== 0
+  ) {
     separator = {
-      kind: "dynCheck", value: separator,
-      type: { kind: "union", unionId: lowerer.unions.intern([{ kind: "nullT" }, UNDEFINED_T]) }, loc,
+      kind: "dynCheck",
+      value: separator,
+      type: { kind: "union", unionId: lowerer.unions.intern([{ kind: "nullT" }, UNDEFINED_T]) },
+      loc,
     };
   }
   if (separator.type.kind === "dyn") {
     separator = {
-      kind: "dynCheck", value: separator,
-      type: { kind: "union", unionId: lowerer.unions.intern([STRING, F64, BOOL, { kind: "bigint" }, { kind: "nullT" }, UNDEFINED_T]) }, loc,
+      kind: "dynCheck",
+      value: separator,
+      type: {
+        kind: "union",
+        unionId: lowerer.unions.intern([
+          STRING,
+          F64,
+          BOOL,
+          { kind: "bigint" },
+          { kind: "nullT" },
+          UNDEFINED_T,
+        ]),
+      },
+      loc,
     };
   }
-  const scalar = separator.type.kind === "string" || separator.type.kind === "f64" ||
-    separator.type.kind === "bool" || separator.type.kind === "bigint" ||
-    (separator.type.kind === "union" && (lowerer.unions.get(separator.type.unionId)?.arms.every((arm) =>
-      arm.kind === "string" || arm.kind === "f64" || arm.kind === "bool" ||
-      arm.kind === "bigint" || arm.kind === "nullT" || arm.kind === "undefinedT") ?? false));
+  const scalar =
+    separator.type.kind === "string" ||
+    separator.type.kind === "f64" ||
+    separator.type.kind === "bool" ||
+    separator.type.kind === "bigint" ||
+    (separator.type.kind === "union" &&
+      (lowerer.unions
+        .get(separator.type.unionId)
+        ?.arms.every(
+          (arm) =>
+            arm.kind === "string" ||
+            arm.kind === "f64" ||
+            arm.kind === "bool" ||
+            arm.kind === "bigint" ||
+            arm.kind === "nullT" ||
+            arm.kind === "undefinedT",
+        ) ??
+        false));
   if (!scalar) {
     lowerer.unsupported(
       "SC1090",
@@ -66,69 +127,144 @@ export function lowerStringSplitCall(
   }
   const defaultLimit = numLit(4294967295, loc);
   const suppliedLimit = lowerPositionArgument(lowerer, argumentNodes[1], defaultLimit);
-  const limit = suppliedLimit.type.kind === "record" && argumentNodes[1]
-    ? lowerer.coerceInto(argumentNodes[1], suppliedLimit, DYN) : suppliedLimit;
+  const limit =
+    suppliedLimit.type.kind === "record" && argumentNodes[1]
+      ? lowerer.coerceInto(argumentNodes[1], suppliedLimit, DYN)
+      : suppliedLimit;
   const resultType = arrayOf(STRING);
-  if (receiver.type.kind === "string" && separator.type.kind === "string" && limit.type.kind === "f64" && !absent) {
-    return { kind: "strIntrinsic", method: "split", receiver, args: [separator, limit], type: resultType, loc };
+  if (
+    receiver.type.kind === "string" &&
+    separator.type.kind === "string" &&
+    limit.type.kind === "f64" &&
+    !absent
+  ) {
+    return {
+      kind: "strIntrinsic",
+      method: "split",
+      receiver,
+      args: [separator, limit],
+      type: resultType,
+      loc,
+    };
   }
   const key = `str.split:${receiver.type.kind === "union" ? typeKey(receiver.type) : receiver.type.kind}:${typeKey(separator.type)}:${typeKey(limit.type)}:${absent}`;
   let helper = lowerer.valueHelpers.get(key);
   if (!helper) {
     helper = `%str.split.${lowerer.valueHelpers.size}`;
     const values = [receiver, separator, limit];
-    const params = values.map((value, index) => ({ localId: `arg.${index}`, name: `arg${index}`, type: value.type }));
+    const params = values.map((value, index) => ({
+      localId: `arg.${index}`,
+      name: `arg${index}`,
+      type: value.type,
+    }));
     const rawReceiver = varRef("arg.0", receiver.type, loc);
     const rawSeparator = varRef("arg.1", separator.type, loc);
     const rawLimit = varRef("arg.2", limit.type, loc);
     const stringReceiver = varRef("receiver.0", STRING, loc);
     const numericLimit = varRef("limit.0", F64, loc);
     const stringSeparator = varRef("separator.0", STRING, loc);
-    const undefinedTag = separator.type.kind === "union"
-      ? lowerer.unions.get(separator.type.unionId)!.arms.findIndex((arm) => arm.kind === "undefinedT") : -1;
+    const undefinedTag =
+      separator.type.kind === "union"
+        ? lowerer.unions
+            .get(separator.type.unionId)!
+            .arms.findIndex((arm) => arm.kind === "undefinedT")
+        : -1;
     const separatorIsUndefined: IrExpr = absent
       ? { kind: "boolLit", value: true, type: BOOL, loc }
       : undefinedTag >= 0 && separator.type.kind === "union"
-        ? { kind: "unionIsTag", unionId: separator.type.unionId, tag: undefinedTag, value: rawSeparator, negated: false, type: BOOL, loc }
+        ? {
+            kind: "unionIsTag",
+            unionId: separator.type.unionId,
+            tag: undefinedTag,
+            value: rawSeparator,
+            negated: false,
+            type: BOOL,
+            loc,
+          }
         : { kind: "boolLit", value: false, type: BOOL, loc };
     const split: IrExpr = {
-      kind: "strIntrinsic", method: "split", receiver: stringReceiver,
-      args: [stringSeparator, numericLimit], type: resultType, loc,
+      kind: "strIntrinsic",
+      method: "split",
+      receiver: stringReceiver,
+      args: [stringSeparator, numericLimit],
+      type: resultType,
+      loc,
     };
     const result: IrExpr = {
       kind: "ternary",
       cond: {
-        kind: "bin", op: "===",
+        kind: "bin",
+        op: "===",
         left: { kind: "bin", op: ">>>", left: numericLimit, right: numLit(0, loc), type: F64, loc },
-        right: numLit(0, loc), type: BOOL, loc,
+        right: numLit(0, loc),
+        type: BOOL,
+        loc,
       },
       then: { kind: "arrayLit", elems: [], type: resultType, loc },
       else_: {
-        kind: "ternary", cond: separatorIsUndefined,
+        kind: "ternary",
+        cond: separatorIsUndefined,
         then: { kind: "arrayLit", elems: [stringReceiver], type: resultType, loc },
-        else_: split, type: resultType, loc,
+        else_: split,
+        type: resultType,
+        loc,
       },
-      type: resultType, loc,
+      type: resultType,
+      loc,
     };
     lowerer.valueHelpers.set(key, helper);
     lowerer.liftedFns.push({
-      name: helper, params, returnType: resultType,
+      name: helper,
+      params,
+      returnType: resultType,
       locals: [
-        ...params.map(param => ({ id: param.localId, name: param.name, type: param.type, mutable: false })),
+        ...params.map((param) => ({
+          id: param.localId,
+          name: param.name,
+          type: param.type,
+          mutable: false,
+        })),
         { id: "receiver.0", name: "receiver", type: STRING, mutable: false },
         { id: "limit.0", name: "limit", type: F64, mutable: false },
         { id: "separator.0", name: "separator", type: STRING, mutable: false },
       ],
       body: [
-        { kind: "varDecl", localId: "receiver.0", init: lowerer.ensureString(rawReceiver, receiverNode), loc },
-        { kind: "varDecl", localId: "limit.0", init: positionNumber(lowerer, rawLimit, defaultLimit, argumentNodes[1] ?? call, "string split limit"), loc },
-        { kind: "varDecl", localId: "separator.0", init: lowerer.ensureString(rawSeparator, separatorNode ?? call), loc },
+        {
+          kind: "varDecl",
+          localId: "receiver.0",
+          init: lowerer.ensureString(rawReceiver, receiverNode),
+          loc,
+        },
+        {
+          kind: "varDecl",
+          localId: "limit.0",
+          init: positionNumber(
+            lowerer,
+            rawLimit,
+            defaultLimit,
+            argumentNodes[1] ?? call,
+            "string split limit",
+          ),
+          loc,
+        },
+        {
+          kind: "varDecl",
+          localId: "separator.0",
+          init: lowerer.ensureString(rawSeparator, separatorNode ?? call),
+          loc,
+        },
         { kind: "return", value: result, loc },
       ],
       loc,
     });
   }
-  return { kind: "call", callee: helper, args: [receiver, separator, limit], type: resultType, loc };
+  return {
+    kind: "call",
+    callee: helper,
+    args: [receiver, separator, limit],
+    type: resultType,
+    loc,
+  };
 }
 
 function lowerRegexSubject(lowerer: Lowerer, node: ts.Expression | undefined, loc: SrcLoc): IrExpr {
@@ -173,12 +309,16 @@ export function lowerStringIndexCall(
   }
   const indexNode = argumentNodes[0];
   let index = lowerPositionArgument(lowerer, indexNode, numLit(0, loc));
-  if (indexNode && (index.type.kind === "record" || index.type.kind === "array" || index.type.kind === "func")) {
+  if (
+    indexNode &&
+    (index.type.kind === "record" || index.type.kind === "array" || index.type.kind === "func")
+  ) {
     index = lowerer.coerceInto(indexNode, index, DYN);
   }
   const valueType = method === "at" ? STRING : F64;
   const resultType = lowerer.withUndefinedArmOf(valueType);
-  if (!resultType || resultType.kind !== "union") lowerer.noLowering(`String.prototype.${method} result`, call);
+  if (!resultType || resultType.kind !== "union")
+    lowerer.noLowering(`String.prototype.${method} result`, call);
   const undefinedTag = lowerer.armTag(resultType.unionId, UNDEFINED_T);
   const valueTag = lowerer.armTag(resultType.unionId, valueType);
   const key = `str.index:${method}:${typeKey(receiver.type)}:${typeKey(index.type)}`;
@@ -193,45 +333,176 @@ export function lowerStringIndexCall(
     const position = varRef("position.0", F64, loc);
     const first = varRef("first.0", F64, loc);
     const second = varRef("second.0", F64, loc);
-    const bin = (op: "<" | ">=" | ">" | "+" | "-" | "*", left: IrExpr, right: IrExpr): IrExpr =>
-      ({ kind: "bin", op, left, right, type: op === "<" || op === ">=" || op === ">" ? BOOL : F64, loc });
-    const either = (left: IrExpr, right: IrExpr): IrExpr => ({ kind: "logical", op: "||", left, right, type: BOOL, loc });
-    const wrap = (value: IrExpr): IrExpr => ({ kind: "unionWrap", unionId: resultType.unionId, tag: valueTag, value, type: resultType, loc });
+    const bin = (op: "<" | ">=" | ">" | "+" | "-" | "*", left: IrExpr, right: IrExpr): IrExpr => ({
+      kind: "bin",
+      op,
+      left,
+      right,
+      type: op === "<" || op === ">=" || op === ">" ? BOOL : F64,
+      loc,
+    });
+    const either = (left: IrExpr, right: IrExpr): IrExpr => ({
+      kind: "logical",
+      op: "||",
+      left,
+      right,
+      type: BOOL,
+      loc,
+    });
+    const wrap = (value: IrExpr): IrExpr => ({
+      kind: "unionWrap",
+      unionId: resultType.unionId,
+      tag: valueTag,
+      value,
+      type: resultType,
+      loc,
+    });
     const miss: IrExpr = {
-      kind: "unionWrap", unionId: resultType.unionId, tag: undefinedTag,
-      value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc }, type: resultType, loc,
+      kind: "unionWrap",
+      unionId: resultType.unionId,
+      tag: undefinedTag,
+      value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc },
+      type: resultType,
+      loc,
     };
-    const numeric = positionNumber(lowerer, rawIndex, numLit(0, loc), indexNode ?? call, "string index");
+    const numeric = positionNumber(
+      lowerer,
+      rawIndex,
+      numLit(0, loc),
+      indexNode ?? call,
+      "string index",
+    );
     const numericValue = varRef("numeric.0", F64, loc);
     const body: IrStmt[] = [
-      { kind: "varDecl", localId: "receiver.0", init: lowerer.ensureString(rawReceiver, receiverNode), loc },
-      { kind: "varDecl", localId: "length.0", init: { kind: "strIntrinsic", method: "length", receiver: stringReceiver, args: [], type: F64, loc }, loc },
+      {
+        kind: "varDecl",
+        localId: "receiver.0",
+        init: lowerer.ensureString(rawReceiver, receiverNode),
+        loc,
+      },
+      {
+        kind: "varDecl",
+        localId: "length.0",
+        init: {
+          kind: "strIntrinsic",
+          method: "length",
+          receiver: stringReceiver,
+          args: [],
+          type: F64,
+          loc,
+        },
+        loc,
+      },
       { kind: "varDecl", localId: "numeric.0", init: numeric, loc },
-      { kind: "varDecl", localId: "position.0", init: {
-        kind: "ternary", cond: { kind: "libCall", fn: "num.isNaN", args: [numericValue], type: BOOL, loc },
-        then: numLit(0, loc), else_: { kind: "libCall", fn: "math.trunc", args: [numericValue], type: F64, loc }, type: F64, loc,
-      }, loc },
+      {
+        kind: "varDecl",
+        localId: "position.0",
+        init: {
+          kind: "ternary",
+          cond: { kind: "libCall", fn: "num.isNaN", args: [numericValue], type: BOOL, loc },
+          then: numLit(0, loc),
+          else_: { kind: "libCall", fn: "math.trunc", args: [numericValue], type: F64, loc },
+          type: F64,
+          loc,
+        },
+        loc,
+      },
     ];
     if (method === "at") {
-      body.push({ kind: "if", cond: bin("<", position, numLit(0, loc)),
-        then: [{ kind: "assign", localId: "position.0", value: bin("+", position, length), loc }], else_: null, loc });
+      body.push({
+        kind: "if",
+        cond: bin("<", position, numLit(0, loc)),
+        then: [{ kind: "assign", localId: "position.0", value: bin("+", position, length), loc }],
+        else_: null,
+        loc,
+      });
     }
-    body.push({ kind: "if", cond: either(bin("<", position, numLit(0, loc)), bin(">=", position, length)),
-      then: [{ kind: "return", value: miss, loc }], else_: null, loc });
+    body.push({
+      kind: "if",
+      cond: either(bin("<", position, numLit(0, loc)), bin(">=", position, length)),
+      then: [{ kind: "return", value: miss, loc }],
+      else_: null,
+      loc,
+    });
     if (method === "at") {
-      body.push({ kind: "return", value: wrap({ kind: "strIntrinsic", method: "charAt", receiver: stringReceiver, args: [position], type: STRING, loc }), loc });
+      body.push({
+        kind: "return",
+        value: wrap({
+          kind: "strIntrinsic",
+          method: "charAt",
+          receiver: stringReceiver,
+          args: [position],
+          type: STRING,
+          loc,
+        }),
+        loc,
+      });
     } else {
-      body.push({ kind: "varDecl", localId: "first.0", init: { kind: "strIntrinsic", method: "charCodeAt", receiver: stringReceiver, args: [position], type: F64, loc }, loc });
-      body.push({ kind: "if", cond: either(either(bin("<", first, numLit(0xd800, loc)), bin(">", first, numLit(0xdbff, loc))), bin(">=", bin("+", position, numLit(1, loc)), length)),
-        then: [{ kind: "return", value: wrap(first), loc }], else_: null, loc });
-      body.push({ kind: "varDecl", localId: "second.0", init: { kind: "strIntrinsic", method: "charCodeAt", receiver: stringReceiver, args: [bin("+", position, numLit(1, loc))], type: F64, loc }, loc });
-      body.push({ kind: "if", cond: either(bin("<", second, numLit(0xdc00, loc)), bin(">", second, numLit(0xdfff, loc))),
-        then: [{ kind: "return", value: wrap(first), loc }], else_: null, loc });
-      body.push({ kind: "return", value: wrap(bin("+", bin("+", bin("*", bin("-", first, numLit(0xd800, loc)), numLit(1024, loc)), bin("-", second, numLit(0xdc00, loc))), numLit(0x10000, loc))), loc });
+      body.push({
+        kind: "varDecl",
+        localId: "first.0",
+        init: {
+          kind: "strIntrinsic",
+          method: "charCodeAt",
+          receiver: stringReceiver,
+          args: [position],
+          type: F64,
+          loc,
+        },
+        loc,
+      });
+      body.push({
+        kind: "if",
+        cond: either(
+          either(bin("<", first, numLit(0xd800, loc)), bin(">", first, numLit(0xdbff, loc))),
+          bin(">=", bin("+", position, numLit(1, loc)), length),
+        ),
+        then: [{ kind: "return", value: wrap(first), loc }],
+        else_: null,
+        loc,
+      });
+      body.push({
+        kind: "varDecl",
+        localId: "second.0",
+        init: {
+          kind: "strIntrinsic",
+          method: "charCodeAt",
+          receiver: stringReceiver,
+          args: [bin("+", position, numLit(1, loc))],
+          type: F64,
+          loc,
+        },
+        loc,
+      });
+      body.push({
+        kind: "if",
+        cond: either(bin("<", second, numLit(0xdc00, loc)), bin(">", second, numLit(0xdfff, loc))),
+        then: [{ kind: "return", value: wrap(first), loc }],
+        else_: null,
+        loc,
+      });
+      body.push({
+        kind: "return",
+        value: wrap(
+          bin(
+            "+",
+            bin(
+              "+",
+              bin("*", bin("-", first, numLit(0xd800, loc)), numLit(1024, loc)),
+              bin("-", second, numLit(0xdc00, loc)),
+            ),
+            numLit(0x10000, loc),
+          ),
+        ),
+        loc,
+      });
     }
     lowerer.liftedFns.push({
       name: helper,
-      params: [{ localId: "arg.0", name: "receiver", type: receiver.type }, { localId: "arg.1", name: "index", type: index.type }],
+      params: [
+        { localId: "arg.0", name: "receiver", type: receiver.type },
+        { localId: "arg.1", name: "index", type: index.type },
+      ],
       returnType: resultType,
       locals: [
         { id: "arg.0", name: "receiver", type: receiver.type, mutable: false },
@@ -240,12 +511,15 @@ export function lowerStringIndexCall(
         { id: "length.0", name: "length", type: F64, mutable: false },
         { id: "numeric.0", name: "numeric", type: F64, mutable: false },
         { id: "position.0", name: "position", type: F64, mutable: method === "at" },
-        ...(method === "codePointAt" ? [
-          { id: "first.0", name: "first", type: F64, mutable: false },
-          { id: "second.0", name: "second", type: F64, mutable: false },
-        ] : []),
+        ...(method === "codePointAt"
+          ? [
+              { id: "first.0", name: "first", type: F64, mutable: false },
+              { id: "second.0", name: "second", type: F64, mutable: false },
+            ]
+          : []),
       ],
-      body, loc,
+      body,
+      loc,
     });
   }
   return { kind: "call", callee: helper, args: [receiver, index], type: resultType, loc };
@@ -261,7 +535,8 @@ function paddingFillString(lowerer: Lowerer, value: IrExpr, node: ts.Node): IrEx
       cond: { kind: "dynTest", test: "undefined", value, type: BOOL, loc },
       then: strLit(" ", loc),
       else_: { kind: "libCall", fn: "dyn.toStringCoerce", args: [value], type: STRING, loc },
-      type: STRING, loc,
+      type: STRING,
+      loc,
     };
   }
   if (value.type.kind === "union") {
@@ -271,11 +546,17 @@ function paddingFillString(lowerer: Lowerer, value: IrExpr, node: ts.Node): IrEx
     for (let tag = arms.length - 1; tag >= 0; tag--) {
       const narrowed: IrExpr = { kind: "unionNarrow", unionId, tag, value, type: arms[tag]!, loc };
       const converted = paddingFillString(lowerer, narrowed, node);
-      result = tag === arms.length - 1 ? converted : {
-        kind: "ternary",
-        cond: { kind: "unionIsTag", unionId, tag, value, negated: false, type: BOOL, loc },
-        then: converted, else_: result, type: STRING, loc,
-      };
+      result =
+        tag === arms.length - 1
+          ? converted
+          : {
+              kind: "ternary",
+              cond: { kind: "unionIsTag", unionId, tag, value, negated: false, type: BOOL, loc },
+              then: converted,
+              else_: result,
+              type: STRING,
+              loc,
+            };
     }
     return result;
   }
@@ -298,65 +579,132 @@ export function lowerStringPaddingCall(
   }
   const loc = locOf(call);
   const rawLength = lowerPositionArgument(lowerer, argumentNodes[0], numLit(0, loc));
-  const maxLength = (rawLength.type.kind === "record" || rawLength.type.kind === "object") && lowerer.dynConvertible(rawLength.type)
-    ? lowerer.coerceToExpected(rawLength, DYN) : rawLength;
+  const maxLength =
+    (rawLength.type.kind === "record" || rawLength.type.kind === "object") &&
+    lowerer.dynConvertible(rawLength.type)
+      ? lowerer.coerceToExpected(rawLength, DYN)
+      : rawLength;
   const fillNode = argumentNodes[1];
   const undefinedFill = fillNode ? lowerStaticallyUndefinedArgument(lowerer, fillNode) : null;
-  const rawFill = !fillNode ? strLit(" ", loc) : undefinedFill
-    ? defaultAfterUndefined(undefinedFill, strLit(" ", loc))
-    : lowerer.lowerExpr(fillNode);
-  const fill = rawFill.type.kind === "nullT"
-    ? defaultAfterUndefined(rawFill, strLit("null", loc))
-    : (rawFill.type.kind === "record" || rawFill.type.kind === "object") && lowerer.dynConvertible(rawFill.type)
-      ? lowerer.coerceToExpected(rawFill, DYN) : rawFill;
+  const rawFill = !fillNode
+    ? strLit(" ", loc)
+    : undefinedFill
+      ? defaultAfterUndefined(undefinedFill, strLit(" ", loc))
+      : lowerer.lowerExpr(fillNode);
+  const fill =
+    rawFill.type.kind === "nullT"
+      ? defaultAfterUndefined(rawFill, strLit("null", loc))
+      : (rawFill.type.kind === "record" || rawFill.type.kind === "object") &&
+          lowerer.dynConvertible(rawFill.type)
+        ? lowerer.coerceToExpected(rawFill, DYN)
+        : rawFill;
   const values = [receiver, maxLength, fill];
-  const key = `str.pad:${method}:${values.map(value => typeKey(value.type)).join(":")}`;
+  const key = `str.pad:${method}:${values.map((value) => typeKey(value.type)).join(":")}`;
   let helper = lowerer.valueHelpers.get(key);
   if (!helper) {
     helper = `%str.pad.${lowerer.valueHelpers.size}`;
-    const params = values.map((value, index) => ({ localId: `arg.${index}`, name: `arg${index}`, type: value.type }));
+    const params = values.map((value, index) => ({
+      localId: `arg.${index}`,
+      name: `arg${index}`,
+      type: value.type,
+    }));
     const rawReceiver = varRef("arg.0", receiver.type, loc);
-    const convertedReceiver: IrExpr = receiver.type.kind === "dyn" ? {
-      kind: "ternary",
-      cond: { kind: "dynTest", test: "nullish", value: rawReceiver, type: BOOL, loc },
-      then: nodeThrowExpr(1, "", `String.prototype.${method} called on null or undefined`, STRING, loc),
-      else_: { kind: "libCall", fn: "dyn.toStringCoerce", args: [rawReceiver], type: STRING, loc },
-      type: STRING, loc,
-    } : lowerer.ensureString(rawReceiver, receiverNode);
+    const convertedReceiver: IrExpr =
+      receiver.type.kind === "dyn"
+        ? {
+            kind: "ternary",
+            cond: { kind: "dynTest", test: "nullish", value: rawReceiver, type: BOOL, loc },
+            then: nodeThrowExpr(
+              1,
+              "",
+              `String.prototype.${method} called on null or undefined`,
+              STRING,
+              loc,
+            ),
+            else_: {
+              kind: "libCall",
+              fn: "dyn.toStringCoerce",
+              args: [rawReceiver],
+              type: STRING,
+              loc,
+            },
+            type: STRING,
+            loc,
+          }
+        : lowerer.ensureString(rawReceiver, receiverNode);
     const stringReceiver = varRef("receiver.0", STRING, loc);
     const length = varRef("length.0", F64, loc);
     const fillValue = varRef("arg.2", fill.type, loc);
     const padded: IrExpr = {
-      kind: "strIntrinsic", method, receiver: stringReceiver,
-      args: [length, paddingFillString(lowerer, fillValue, fillNode ?? call)], type: STRING, loc,
+      kind: "strIntrinsic",
+      method,
+      receiver: stringReceiver,
+      args: [length, paddingFillString(lowerer, fillValue, fillNode ?? call)],
+      type: STRING,
+      loc,
     };
     const result: IrExpr = {
       kind: "ternary",
       cond: {
-        kind: "bin", op: ">=", left: length,
+        kind: "bin",
+        op: ">=",
+        left: length,
         right: {
-          kind: "bin", op: "+",
-          left: { kind: "strIntrinsic", method: "length", receiver: stringReceiver, args: [], type: F64, loc },
-          right: numLit(1, loc), type: F64, loc,
+          kind: "bin",
+          op: "+",
+          left: {
+            kind: "strIntrinsic",
+            method: "length",
+            receiver: stringReceiver,
+            args: [],
+            type: F64,
+            loc,
+          },
+          right: numLit(1, loc),
+          type: F64,
+          loc,
         },
-        type: BOOL, loc,
+        type: BOOL,
+        loc,
       },
-      then: padded, else_: stringReceiver, type: STRING, loc,
+      then: padded,
+      else_: stringReceiver,
+      type: STRING,
+      loc,
     };
     const body: IrStmt[] = [
       { kind: "varDecl", localId: "receiver.0", init: convertedReceiver, loc },
-      { kind: "varDecl", localId: "length.0", init: positionNumber(lowerer, varRef("arg.1", maxLength.type, loc), numLit(0, loc), argumentNodes[0] ?? call, "string padding length"), loc },
+      {
+        kind: "varDecl",
+        localId: "length.0",
+        init: positionNumber(
+          lowerer,
+          varRef("arg.1", maxLength.type, loc),
+          numLit(0, loc),
+          argumentNodes[0] ?? call,
+          "string padding length",
+        ),
+        loc,
+      },
       { kind: "return", value: result, loc },
     ];
     lowerer.valueHelpers.set(key, helper);
     lowerer.liftedFns.push({
-      name: helper, params, returnType: STRING,
+      name: helper,
+      params,
+      returnType: STRING,
       locals: [
-        ...params.map(param => ({ id: param.localId, name: param.name, type: param.type, mutable: false })),
+        ...params.map((param) => ({
+          id: param.localId,
+          name: param.name,
+          type: param.type,
+          mutable: false,
+        })),
         { id: "receiver.0", name: "receiver", type: STRING, mutable: false },
         { id: "length.0", name: "length", type: F64, mutable: false },
       ],
-      body, loc,
+      body,
+      loc,
     });
   }
   return { kind: "call", callee: helper, args: values, type: STRING, loc };
@@ -368,9 +716,12 @@ export function lowerStringPaddingCall(
  * overloads keep their island lowering — the argument's mapped type is
  * what routes here, before lowerIslandMethodCall can claim the name).
  * Null when neither shape matches. */
-export function lowerRegexMethodCall(lowerer: Lowerer, call: ts.CallExpression,
+export function lowerRegexMethodCall(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
   access: ts.PropertyAccessExpression,
-  dynReceiver?: () => IrExpr,): IrExpr | null {
+  dynReceiver?: () => IrExpr,
+): IrExpr | null {
   // chainBlocked, not a raw token test: an optional-chain re-dispatch
   // (`rawName?.match(re)` — the receiver reads back chain-narrowed)
   // rides the same lowering as the plain spelling.
@@ -379,11 +730,15 @@ export function lowerRegexMethodCall(lowerer: Lowerer, call: ts.CallExpression,
   // by construction — the symbol gate doesn't apply to `any` receivers.
   if (dynReceiver === undefined && !lowerer.isStdlibMember(access)) return null;
   const name = access.name.text;
-  const receiverKind = dynReceiver ? "string" : lowerer.mapTypeOf(lowerer.typeOf(access.expression))?.kind;
+  const receiverKind = dynReceiver
+    ? "string"
+    : lowerer.mapTypeOf(lowerer.typeOf(access.expression))?.kind;
   const lowerReceiver = (): IrExpr => {
     if (dynReceiver) return dynReceiver();
-    if (receiverKind === "string") return lowerMethodReceiver(lowerer, access.expression, STRING, access.name.text);
-    if (receiverKind === "regex") return lowerMethodReceiver(lowerer, access.expression, { kind: "regex" }, access.name.text);
+    if (receiverKind === "string")
+      return lowerMethodReceiver(lowerer, access.expression, STRING, access.name.text);
+    if (receiverKind === "regex")
+      return lowerMethodReceiver(lowerer, access.expression, { kind: "regex" }, access.name.text);
     return lowerer.lowerExpr(access.expression);
   };
   const loc = locOf(call);
@@ -391,7 +746,14 @@ export function lowerRegexMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     if (call.arguments.length !== 0) {
       lowerer.noLowering("RegExp.prototype.toString with arguments", call);
     }
-    return { kind: "regexIntrinsic", method: "toString", receiver: lowerReceiver(), args: [], type: STRING, loc };
+    return {
+      kind: "regexIntrinsic",
+      method: "toString",
+      receiver: lowerReceiver(),
+      args: [],
+      type: STRING,
+      loc,
+    };
   }
   if (receiverKind === "regex" && name === "test") {
     if (call.arguments.length > 1 || call.arguments.some(ts.isSpreadElement)) {
@@ -408,12 +770,28 @@ export function lowerRegexMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     if (call.arguments.length > 1 || call.arguments.some(ts.isSpreadElement)) return null;
     const re = lowerReceiver();
     const subject = lowerRegexSubject(lowerer, call.arguments[0], loc);
-    const resultT: IrType = { kind: "union", unionId: lowerer.unions.intern([arrayOf(STRING), { kind: "nullT" }]) };
+    const resultT: IrType = {
+      kind: "union",
+      unionId: lowerer.unions.intern([arrayOf(STRING), { kind: "nullT" }]),
+    };
     // The shared match intrinsic takes the string first; preserve exec's
     // receiver-before-subject evaluation order before swapping operands.
     const saved = lowerer.declareHiddenLocal("%execReceiver", re.type);
-    const result: IrExpr = { kind: "regexIntrinsic", method: "exec", receiver: subject, args: [varRef(saved.id, re.type, loc)], type: resultT, loc };
-    return { kind: "seqExpr", stmts: [{ kind: "varDecl", localId: saved.id, init: re, loc }], result, type: resultT, loc };
+    const result: IrExpr = {
+      kind: "regexIntrinsic",
+      method: "exec",
+      receiver: subject,
+      args: [varRef(saved.id, re.type, loc)],
+      type: resultT,
+      loc,
+    };
+    return {
+      kind: "seqExpr",
+      stmts: [{ kind: "varDecl", localId: saved.id, init: re, loc }],
+      result,
+      type: resultT,
+      loc,
+    };
   }
   // `s.match(re)` returns all whole matches under /g, otherwise the
   // exec-shaped slice [whole match, ...captures], or null. Non-global /y
@@ -433,7 +811,10 @@ export function lowerRegexMethodCall(lowerer: Lowerer, call: ts.CallExpression,
       const t = lowerer.mapTypeOf(lowerer.typeOf(access.expression));
       if (t?.kind !== "union") return false;
       const arms = lowerer.unions.get(t.unionId)?.arms ?? [];
-      return arms.some((a) => a.kind === "string") && arms.every((a) => a.kind === "string" || isUnitType(a));
+      return (
+        arms.some((a) => a.kind === "string") &&
+        arms.every((a) => a.kind === "string" || isUnitType(a))
+      );
     })();
   if ((receiverKind === "string" || nullableStringRecv) && name === "match") {
     const arg0 = call.arguments[0];
@@ -448,7 +829,10 @@ export function lowerRegexMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     // or when it maps to something WIDER (an optional-chain call node
     // types `s?.match(re)` with the chain's `| undefined`; the intrinsic
     // itself answers string[] | null, and the chain wrapper widens).
-    const exactT: IrType = { kind: "union", unionId: lowerer.unions.intern([arrayOf(STRING), { kind: "nullT" }]) };
+    const exactT: IrType = {
+      kind: "union",
+      unionId: lowerer.unions.intern([arrayOf(STRING), { kind: "nullT" }]),
+    };
     const mapped = lowerer.mapTypeOf(lowerer.typeOf(call));
     const resultT: IrType = mapped && typeEquals(mapped, exactT) ? mapped : exactT;
     return { kind: "regexIntrinsic", method: "match", receiver, args: [re], type: resultT, loc };
@@ -499,15 +883,25 @@ export function lowerRegexMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     // Split's omitted or undefined limit is 2^32-1. Complete it here so
     // the LLVM backend and runtime have one required (regex, limit)
     // shape; an optional-number value selects the default at runtime.
-    const args = name === "split"
-      ? [lowerer.lowerExprExpecting(arg0, { kind: "regex" }), lowerSplitLimitArg(lowerer, call.arguments[1], loc)]
-      : call.arguments.map((a, index) => index === 0 ? lowerer.lowerExprExpecting(a, { kind: "regex" }) : lowerer.lowerExpr(a));
+    const args =
+      name === "split"
+        ? [
+            lowerer.lowerExprExpecting(arg0, { kind: "regex" }),
+            lowerSplitLimitArg(lowerer, call.arguments[1], loc),
+          ]
+        : call.arguments.map((a, index) =>
+            index === 0 ? lowerer.lowerExprExpecting(a, { kind: "regex" }) : lowerer.lowerExpr(a),
+          );
     if (name !== "split") {
       const replacement = args[1];
-      const templateType = (type: IrType): boolean => type.kind === "union"
-        ? lowerer.unions.get(type.unionId)!.arms.every(templateType)
-        : type.kind === "string" || type.kind === "f64" || type.kind === "bool" ||
-          type.kind === "bigint" || isUnitType(type);
+      const templateType = (type: IrType): boolean =>
+        type.kind === "union"
+          ? lowerer.unions.get(type.unionId)!.arms.every(templateType)
+          : type.kind === "string" ||
+            type.kind === "f64" ||
+            type.kind === "bool" ||
+            type.kind === "bigint" ||
+            isUnitType(type);
       if (!replacement || !templateType(replacement.type)) {
         lowerer.unsupported(
           "SC1120",
@@ -535,16 +929,23 @@ export function lowerRegexMethodCall(lowerer: Lowerer, call: ts.CallExpression,
 /** `s.slice(1, 4)` and friends → strIntrinsic. Null when this isn't an
  * ambient string method call (caller keeps its generic rejection).
  * Complete position defaults and conversions here before code generation. */
-export function lowerStringMethodCall(lowerer: Lowerer, call: ts.CallExpression,
+export function lowerStringMethodCall(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
   access: ts.PropertyAccessExpression,
   dynReceiver?: () => IrExpr,
   argumentNodes: readonly ts.Expression[] = call.arguments,
 ): IrExpr | null {
   if (lowerer.chainBlocked(access, call)) return null;
-  if (dynReceiver === undefined && access.name.text === "localeCompare") return lowerLocaleCompareCall(lowerer, call, access);
+  if (dynReceiver === undefined && access.name.text === "localeCompare")
+    return lowerLocaleCompareCall(lowerer, call, access);
   const entry = own(STR_METHODS, access.name.text);
-  const indexMethod = STRING_INDEX_METHODS.has(access.name.text) ? access.name.text as "at" | "codePointAt" : null;
-  const replaceMethod = STRING_REPLACE_METHODS.has(access.name.text) ? access.name.text as "replace" | "replaceAll" : null;
+  const indexMethod = STRING_INDEX_METHODS.has(access.name.text)
+    ? (access.name.text as "at" | "codePointAt")
+    : null;
+  const replaceMethod = STRING_REPLACE_METHODS.has(access.name.text)
+    ? (access.name.text as "replace" | "replaceAll")
+    : null;
   if (!entry && !indexMethod && !replaceMethod) return null;
   // A validated dyn receiver (`pkg.name.replace(...)` on a JSON.parse
   // value) arrives pre-extracted through `dynReceiver`; its checker type
@@ -552,20 +953,33 @@ export function lowerStringMethodCall(lowerer: Lowerer, call: ts.CallExpression,
   // methods can only BE the string intrinsics.
   if (dynReceiver === undefined) {
     const receiverIr = lowerer.mapTypeOf(lowerer.typeOf(access.expression));
-    const nullableString = receiverIr?.kind === "union" &&
-      (lowerer.unions.get(receiverIr.unionId)?.arms.some((arm) => arm.kind === "string") ?? false) &&
-      (lowerer.unions.get(receiverIr.unionId)?.arms.every((arm) => arm.kind === "string" || isUnitType(arm)) ?? false);
+    const nullableString =
+      receiverIr?.kind === "union" &&
+      (lowerer.unions.get(receiverIr.unionId)?.arms.some((arm) => arm.kind === "string") ??
+        false) &&
+      (lowerer.unions
+        .get(receiverIr.unionId)
+        ?.arms.every((arm) => arm.kind === "string" || isUnitType(arm)) ??
+        false);
     // `require.main?.filename.startsWith(...)`: the checker types the
     // receiver `string | undefined` (the chain's short-circuit arm), but
     // the entry-module fold lowers it to a compile-time STRING — the
     // suite harness's skip() shape. Everything else keeps the strict
     // string gate.
-    if (receiverIr?.kind !== "string" && !nullableString && !isRequireMainFilename(lowerer, access.expression)) return null;
+    if (
+      receiverIr?.kind !== "string" &&
+      !nullableString &&
+      !isRequireMainFilename(lowerer, access.expression)
+    )
+      return null;
     if (!lowerer.isStdlibMember(access)) return null;
   }
   // The lib declares optional parameters beyond some lowered forms; fence
   // those arities instead of passing arguments the runtime doesn't take.
-  if (argumentNodes.length < (entry?.minArgs ?? 0) || argumentNodes.length > (entry?.maxArgs ?? (replaceMethod ? 2 : 1))) {
+  if (
+    argumentNodes.length < (entry?.minArgs ?? 0) ||
+    argumentNodes.length > (entry?.maxArgs ?? (replaceMethod ? 2 : 1))
+  ) {
     lowerer.noLowering(
       `.${access.name.text} with ${argumentNodes.length} argument${argumentNodes.length === 1 ? "" : "s"} on strings`,
       call,
@@ -575,23 +989,59 @@ export function lowerStringMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     ? dynReceiver()
     : lowerMethodReceiver(lowerer, access.expression, STRING, access.name.text);
   const loc = locOf(call);
-  if (replaceMethod) return lowerStringReplacement(lowerer, call, replaceMethod, receiver, argumentNodes);
-  if (indexMethod) return lowerStringIndexCall(lowerer, call, indexMethod, receiver, access.expression, argumentNodes);
+  if (replaceMethod)
+    return lowerStringReplacement(lowerer, call, replaceMethod, receiver, argumentNodes);
+  if (indexMethod)
+    return lowerStringIndexCall(
+      lowerer,
+      call,
+      indexMethod,
+      receiver,
+      access.expression,
+      argumentNodes,
+    );
   if (!entry) return null;
   if (entry.method === "normalize") {
     const form = argumentNodes[0];
-    const value = form ? lowerOptionalArgument(lowerer, form, STRING, strLit("NFC", loc)) : strLit("NFC", loc);
-    return { kind: "strIntrinsic", method: "normalize", receiver, args: [value], type: STRING, loc };
+    const value = form
+      ? lowerOptionalArgument(lowerer, form, STRING, strLit("NFC", loc))
+      : strLit("NFC", loc);
+    return {
+      kind: "strIntrinsic",
+      method: "normalize",
+      receiver,
+      args: [value],
+      type: STRING,
+      loc,
+    };
   }
-  if (entry.method === "split") return lowerStringSplitCall(lowerer, call, receiver, access.expression, argumentNodes);
+  if (entry.method === "split")
+    return lowerStringSplitCall(lowerer, call, receiver, access.expression, argumentNodes);
   if (entry.method === "padStart" || entry.method === "padEnd") {
-    return lowerStringPaddingCall(lowerer, call, entry.method, receiver, access.expression, argumentNodes);
+    return lowerStringPaddingCall(
+      lowerer,
+      call,
+      entry.method,
+      receiver,
+      access.expression,
+      argumentNodes,
+    );
   }
-  const searchMethod = entry.method === "indexOf" || entry.method === "includes" ||
-    entry.method === "startsWith" || entry.method === "endsWith";
+  const searchMethod =
+    entry.method === "indexOf" ||
+    entry.method === "includes" ||
+    entry.method === "startsWith" ||
+    entry.method === "endsWith";
   if (searchMethod && argumentNodes.length < 2) {
     const needle = lowerStringSearchArgument(lowerer, argumentNodes[0], loc);
-    return { kind: "strIntrinsic", method: entry.method, receiver, args: [needle], type: entry.result, loc };
+    return {
+      kind: "strIntrinsic",
+      method: entry.method,
+      receiver,
+      args: [needle],
+      type: entry.result,
+      loc,
+    };
   }
   if (searchMethod && argumentNodes.length === 2) {
     const needleNode = argumentNodes[0]!;
@@ -600,84 +1050,185 @@ export function lowerStringMethodCall(lowerer: Lowerer, call: ts.CallExpression,
       ? defaultAfterUndefined(undefinedArg, strLit("undefined", loc))
       : lowerer.lowerExpr(needleNode);
     if (isUnitType(needle.type)) needle = coerceStringSearchValue(lowerer, needle, needleNode, loc);
-    const scalarUnion = needle.type.kind === "union" &&
-      (lowerer.unions.get(needle.type.unionId)?.arms.every((arm) =>
-        arm.kind === "string" || arm.kind === "f64" || arm.kind === "bool" || arm.kind === "bigint" || isUnitType(arm)) ?? false);
-    const scalarNeedle = needle.type.kind === "f64" || needle.type.kind === "bool" || needle.type.kind === "bigint" || scalarUnion;
+    const scalarUnion =
+      needle.type.kind === "union" &&
+      (lowerer.unions
+        .get(needle.type.unionId)
+        ?.arms.every(
+          (arm) =>
+            arm.kind === "string" ||
+            arm.kind === "f64" ||
+            arm.kind === "bool" ||
+            arm.kind === "bigint" ||
+            isUnitType(arm),
+        ) ??
+        false);
+    const scalarNeedle =
+      needle.type.kind === "f64" ||
+      needle.type.kind === "bool" ||
+      needle.type.kind === "bigint" ||
+      scalarUnion;
     if (needle.type.kind !== "string" && needle.type.kind !== "dyn" && !scalarNeedle) {
       lowerer.noLowering(`.${entry.method} with '${lowerer.fmt(needle.type)}' search values`, call);
     }
-    const defaultPosition: IrExpr = entry.method === "endsWith"
-      ? { kind: "bin", op: "/", left: numLit(1, loc), right: numLit(0, loc), type: F64, loc }
-      : numLit(0, loc);
+    const defaultPosition: IrExpr =
+      entry.method === "endsWith"
+        ? { kind: "bin", op: "/", left: numLit(1, loc), right: numLit(0, loc), type: F64, loc }
+        : numLit(0, loc);
     const position = lowerPositionArgument(lowerer, argumentNodes[1], defaultPosition);
-    if (needle.type.kind === "string" && (position.type.kind === "f64" || position.type.kind === "jsval")) {
-      return { kind: "strIntrinsic", method: entry.method, receiver, args: [needle, position], type: entry.result, loc };
+    if (
+      needle.type.kind === "string" &&
+      (position.type.kind === "f64" || position.type.kind === "jsval")
+    ) {
+      return {
+        kind: "strIntrinsic",
+        method: entry.method,
+        receiver,
+        args: [needle, position],
+        type: entry.result,
+        loc,
+      };
     }
     const key = `str.positions:${entry.method}:${typeKey(needle.type)}:${typeKey(position.type)}`;
     let helper = lowerer.valueHelpers.get(key);
     if (!helper) {
       helper = `%str.positions.${lowerer.valueHelpers.size}`;
-      const params = [receiver, needle, position].map((arg, index) => ({ localId: `arg.${index}`, name: `arg${index}`, type: arg.type }));
+      const params = [receiver, needle, position].map((arg, index) => ({
+        localId: `arg.${index}`,
+        name: `arg${index}`,
+        type: arg.type,
+      }));
       const coerceNeedle = needle.type.kind !== "string";
-      const search: IrExpr = coerceNeedle ? varRef("search.0", STRING, loc) : varRef("arg.1", STRING, loc);
+      const search: IrExpr = coerceNeedle
+        ? varRef("search.0", STRING, loc)
+        : varRef("arg.1", STRING, loc);
       const result: IrExpr = {
-        kind: "strIntrinsic", method: entry.method, receiver: varRef("arg.0", STRING, loc),
+        kind: "strIntrinsic",
+        method: entry.method,
+        receiver: varRef("arg.0", STRING, loc),
         args: [
           search,
-          positionNumber(lowerer, varRef("arg.2", position.type, loc), defaultPosition, argumentNodes[1]!, "string position"),
+          positionNumber(
+            lowerer,
+            varRef("arg.2", position.type, loc),
+            defaultPosition,
+            argumentNodes[1]!,
+            "string position",
+          ),
         ],
-        type: entry.result, loc,
+        type: entry.result,
+        loc,
       };
-      const locals = params.map(param => ({ id: param.localId, name: param.name, type: param.type, mutable: false }));
+      const locals = params.map((param) => ({
+        id: param.localId,
+        name: param.name,
+        type: param.type,
+        mutable: false,
+      }));
       const body: IrStmt[] = [];
       if (coerceNeedle) {
         const value = varRef("arg.1", needle.type, loc);
-        const init: IrExpr = needle.type.kind === "dyn"
-          ? { kind: "libCall", fn: "dyn.toStringCoerce", args: [value], type: STRING, loc }
-          : coerceStringSearchValue(lowerer, value, needleNode, loc);
+        const init: IrExpr =
+          needle.type.kind === "dyn"
+            ? { kind: "libCall", fn: "dyn.toStringCoerce", args: [value], type: STRING, loc }
+            : coerceStringSearchValue(lowerer, value, needleNode, loc);
         locals.push({ id: "search.0", name: "search", type: STRING, mutable: false });
         body.push({ kind: "varDecl", localId: "search.0", init, loc });
       }
       body.push({ kind: "return", value: result, loc });
       lowerer.valueHelpers.set(key, helper);
       lowerer.liftedFns.push({
-        name: helper, params, returnType: entry.result,
-        locals, body, loc,
+        name: helper,
+        params,
+        returnType: entry.result,
+        locals,
+        body,
+        loc,
       });
     }
-    return { kind: "call", callee: helper, args: [receiver, needle, position], type: entry.result, loc };
+    return {
+      kind: "call",
+      callee: helper,
+      args: [receiver, needle, position],
+      type: entry.result,
+      loc,
+    };
   }
-  if (entry.method === "charAt" || entry.method === "charCodeAt" || entry.method === "slice" || entry.method === "substring" || entry.method === "repeat") {
+  if (
+    entry.method === "charAt" ||
+    entry.method === "charCodeAt" ||
+    entry.method === "slice" ||
+    entry.method === "substring" ||
+    entry.method === "repeat"
+  ) {
     const defaults: IrExpr[] = [numLit(0, loc)];
     if (entry.method === "slice" || entry.method === "substring") {
-      defaults.push({ kind: "bin", op: "/", left: numLit(1, loc), right: numLit(0, loc), type: F64, loc });
+      defaults.push({
+        kind: "bin",
+        op: "/",
+        left: numLit(1, loc),
+        right: numLit(0, loc),
+        type: F64,
+        loc,
+      });
     }
-    const args = defaults.map((value, index) => lowerPositionArgument(lowerer, argumentNodes[index], value));
+    const args = defaults.map((value, index) =>
+      lowerPositionArgument(lowerer, argumentNodes[index], value),
+    );
     const subject = entry.method === "repeat" ? "string repeat count" : "string position";
     // Keep ordinary numeric calls on the direct intrinsic path, including the
     // existing boundary validation for island values in numeric slots.
-    if (args.every(arg => arg.type.kind === "f64" || arg.type.kind === "jsval")) {
-      return { kind: "strIntrinsic", method: entry.method, receiver, args, type: entry.result, loc };
+    if (args.every((arg) => arg.type.kind === "f64" || arg.type.kind === "jsval")) {
+      return {
+        kind: "strIntrinsic",
+        method: entry.method,
+        receiver,
+        args,
+        type: entry.result,
+        loc,
+      };
     }
     // A helper evaluates all arguments before conversions can invoke hooks or
     // throw. Its parameters also give owned strings/unions a per-call lifetime
     // when the call occurs in a loop condition or short-circuit expression.
-    const key = `str.positions:${entry.method}:${args.map(arg => typeKey(arg.type)).join(":")}`;
+    const key = `str.positions:${entry.method}:${args.map((arg) => typeKey(arg.type)).join(":")}`;
     let helper = lowerer.valueHelpers.get(key);
     if (!helper) {
       helper = `%str.positions.${lowerer.valueHelpers.size}`;
-      const params = [receiver, ...args].map((arg, index) => ({ localId: `arg.${index}`, name: `arg${index}`, type: arg.type }));
+      const params = [receiver, ...args].map((arg, index) => ({
+        localId: `arg.${index}`,
+        name: `arg${index}`,
+        type: arg.type,
+      }));
       const result: IrExpr = {
-        kind: "strIntrinsic", method: entry.method, receiver: varRef("arg.0", STRING, loc),
-        args: args.map((arg, index) => positionNumber(lowerer, varRef(`arg.${index + 1}`, arg.type, loc), defaults[index]!, argumentNodes[index] ?? call, subject)),
-        type: entry.result, loc,
+        kind: "strIntrinsic",
+        method: entry.method,
+        receiver: varRef("arg.0", STRING, loc),
+        args: args.map((arg, index) =>
+          positionNumber(
+            lowerer,
+            varRef(`arg.${index + 1}`, arg.type, loc),
+            defaults[index]!,
+            argumentNodes[index] ?? call,
+            subject,
+          ),
+        ),
+        type: entry.result,
+        loc,
       };
       lowerer.valueHelpers.set(key, helper);
       lowerer.liftedFns.push({
-        name: helper, params, returnType: entry.result,
-        locals: params.map(param => ({ id: param.localId, name: param.name, type: param.type, mutable: false })),
-        body: [{ kind: "return", value: result, loc }], loc,
+        name: helper,
+        params,
+        returnType: entry.result,
+        locals: params.map((param) => ({
+          id: param.localId,
+          name: param.name,
+          type: param.type,
+          mutable: false,
+        })),
+        body: [{ kind: "return", value: result, loc }],
+        loc,
       });
     }
     return { kind: "call", callee: helper, args: [receiver, ...args], type: entry.result, loc };
@@ -701,8 +1252,11 @@ export function lowerStringMethodCall(lowerer: Lowerer, call: ts.CallExpression,
  * "a" < "B" under ICU while code units say "B" < "a"). For same-case
  * ASCII the orders agree. Null when the receiver isn't a stdlib string
  * (caller keeps its generic rejection). */
-function lowerLocaleCompareCall(lowerer: Lowerer, call: ts.CallExpression,
-  access: ts.PropertyAccessExpression,): IrExpr | null {
+function lowerLocaleCompareCall(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
+  access: ts.PropertyAccessExpression,
+): IrExpr | null {
   const receiverIr = lowerer.mapTypeOf(lowerer.typeOf(access.expression));
   if (receiverIr?.kind !== "string") return null;
   if (!lowerer.isStdlibMember(access)) return null;
@@ -717,7 +1271,8 @@ function lowerLocaleCompareCall(lowerer: Lowerer, call: ts.CallExpression,
   }
   const receiver = lowerMethodReceiver(lowerer, access.expression, STRING, access.name.text);
   const arg = lowerer.lowerExpr(call.arguments[0]!);
-  if (arg.type.kind !== "string") lowerer.badType(call.arguments[0]!, lowerer.typeOf(call.arguments[0]!));
+  if (arg.type.kind !== "string")
+    lowerer.badType(call.arguments[0]!, lowerer.typeOf(call.arguments[0]!));
   const key = "localeCompare";
   let helper = lowerer.arrHofHelpers.get(key);
   if (!helper) {
@@ -732,8 +1287,14 @@ function lowerLocaleCompareCall(lowerer: Lowerer, call: ts.CallExpression,
  * relational operators' exact machinery — one interned helper, no new IR
  * or runtime surface). */
 function buildLocaleCompareFn(name: string, loc: SrcLoc): IrFunction {
-
-  const cmp = (op: "<" | ">"): IrExpr => ({ kind: "strCmp", op, left: varRef("a.0", STRING, loc), right: varRef("b.0", STRING, loc), type: BOOL, loc });
+  const cmp = (op: "<" | ">"): IrExpr => ({
+    kind: "strCmp",
+    op,
+    left: varRef("a.0", STRING, loc),
+    right: varRef("b.0", STRING, loc),
+    type: BOOL,
+    loc,
+  });
   const body: IrStmt[] = [
     {
       kind: "return",
@@ -741,7 +1302,14 @@ function buildLocaleCompareFn(name: string, loc: SrcLoc): IrFunction {
         kind: "ternary",
         cond: cmp("<"),
         then: numLit(-1, loc),
-        else_: { kind: "ternary", cond: cmp(">"), then: numLit(1, loc), else_: numLit(0, loc), type: F64, loc },
+        else_: {
+          kind: "ternary",
+          cond: cmp(">"),
+          then: numLit(1, loc),
+          else_: numLit(0, loc),
+          type: F64,
+          loc,
+        },
         type: F64,
         loc,
       },

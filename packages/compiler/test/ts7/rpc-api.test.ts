@@ -9,7 +9,12 @@ import type { Ts7FileSystem } from "../../src/frontend/ts7/rpc-filesystem.js";
 import { spawnTs7Wire } from "../../src/frontend/ts7/rpc-process.js";
 import { AstNode } from "../../src/frontend/ts7/ast-node.js";
 import { SemanticChecker } from "../../src/frontend/ts7/semantic-checker.js";
-import { SemanticNodeHandle, SemanticSignature, SemanticSymbol, SemanticType } from "../../src/frontend/ts7/semantic-model.js";
+import {
+  SemanticNodeHandle,
+  SemanticSignature,
+  SemanticSymbol,
+  SemanticType,
+} from "../../src/frontend/ts7/semantic-model.js";
 
 function tsgoPath(path: string): string {
   return process.platform === "win32" ? path.replaceAll("\\", "/") : path;
@@ -52,7 +57,10 @@ test("production RPC bridge preserves pinned SDK parser/checker behavior", () =>
   const dir = mkdtempSync(join(tempRoot, "scriptc-ts7-rpc-parity-"));
   const config = tsgoPath(join(dir, "tsconfig.json"));
   const path = tsgoPath(join(dir, "main.ts"));
-  writeFileSync(config, JSON.stringify({ compilerOptions: { strict: true, noEmit: true, types: [] }, files: [path] }));
+  writeFileSync(
+    config,
+    JSON.stringify({ compilerOptions: { strict: true, noEmit: true, types: [] }, files: [path] }),
+  );
   writeFileSync(path, 'export const answer = 42;\nexport const invalid: number = "wrong";\n');
   const nativeClient = new Ts7Api({ cwd: dir, fs: fallback });
   const sdk = new API({ cwd: dir });
@@ -80,10 +88,15 @@ test("production RPC bridge preserves pinned SDK parser/checker behavior", () =>
     expect(symbol!.declarations[0]!.resolve()).toBe(symbol!.declarations[0]!.resolve());
     const declaration = symbol!.declarations[0]!.resolve()!;
     expect(declaration).toBeInstanceOf(AstNode);
-    const variable = source.statements[0]! as import("../../src/frontend/ts7/ast-types.js").VariableStatement;
+    const variable = source
+      .statements[0]! as import("../../src/frontend/ts7/ast-types.js").VariableStatement;
     expect(variable.declarationList.declarations[0]).toBe(declaration);
-    expect(project.checker.getSymbolAtLocation(variable.declarationList.declarations[0]!.name)).toBe(symbol);
-    expect(project.checker.getTypeAtLocation(variable.declarationList.declarations[0]!.name)).toBe(first);
+    expect(
+      project.checker.getSymbolAtLocation(variable.declarationList.declarations[0]!.name),
+    ).toBe(symbol);
+    expect(project.checker.getTypeAtLocation(variable.declarationList.declarations[0]!.name)).toBe(
+      first,
+    );
     const expectedSource = expected.getProject(config)!.program.getSourceFile(path)!;
     expect(source.statements.map((node) => [node.kind, node.pos, node.end])).toEqual(
       expectedSource.statements.map((node) => [node.kind, node.pos, node.end]),
@@ -132,7 +145,11 @@ test("snapshots share unchanged source files and release independently", () => {
     const updated = project.program.getSourceFile(path)!;
     expect(updated.text).toBe('export const answer = "updated";\n');
     expect(updated).not.toBe(thirdFile);
-    expect(project.checker.typeToString(project.checker.getTypeAtPosition(path, updated.text.indexOf("answer"))!)).toBe('"updated"');
+    expect(
+      project.checker.typeToString(
+        project.checker.getTypeAtPosition(path, updated.text.indexOf("answer"))!,
+      ),
+    ).toBe('"updated"');
     expect(firstFile!.text).toBe("export const answer = 42;\n");
     api.close();
     expect(fourth.isDisposed()).toBe(true);
@@ -150,8 +167,16 @@ test("native semantic registries preserve project scope and snapshot lifetimes",
   const firstConfig = tsgoPath(join(dir, "first.json"));
   const secondConfig = tsgoPath(join(dir, "second.json"));
   const path = tsgoPath(join(dir, "shared.ts"));
-  for (const config of [firstConfig, secondConfig]) writeFileSync(config, JSON.stringify({ compilerOptions: { strict: true, target: "esnext", types: [] }, files: [path] }));
-  const source = "export function identity<T>(value: T): T { return value; }\nexport const answer = 42;\n";
+  for (const config of [firstConfig, secondConfig])
+    writeFileSync(
+      config,
+      JSON.stringify({
+        compilerOptions: { strict: true, target: "esnext", types: [] },
+        files: [path],
+      }),
+    );
+  const source =
+    "export function identity<T>(value: T): T { return value; }\nexport const answer = 42;\n";
   writeFileSync(path, source);
   const api = new Ts7Api({ cwd: dir, fs: fallback });
   const sdk = new API({ cwd: dir });
@@ -169,19 +194,29 @@ test("native semantic registries preserve project scope and snapshot lifetimes",
     const signatureB = b.checker.getSignatureFromDeclaration(fileB.statements[0]!)!;
     return {
       shape: {
-        sharedSymbol: symbolA === symbolB, sharedType: typeA === typeB, sharedSignature: signatureA === signatureB,
+        sharedSymbol: symbolA === symbolB,
+        sharedType: typeA === typeB,
+        sharedSignature: signatureA === signatureB,
         sameDeclaration: symbolA.declarations[0]!.resolve() === symbolB.declarations[0]!.resolve(),
-        explicitDeclaration: symbolB.declarations[0]!.resolve(b) === (fileB.statements[1] as import("typescript/unstable/ast").VariableStatement).declarationList.declarations[0],
+        explicitDeclaration:
+          symbolB.declarations[0]!.resolve(b) ===
+          (fileB.statements[1] as import("typescript/unstable/ast").VariableStatement)
+            .declarationList.declarations[0],
         texts: [a.checker.typeToString(typeA), b.checker.typeToString(typeB)],
         parameters: signatureA.getParameters().map((symbol) => symbol.name),
       },
-      symbolA, typeA, signatureA, fileA,
+      symbolA,
+      typeA,
+      signatureA,
+      fileA,
     };
   }
   try {
     const first = api.updateSnapshot({ openProjects: [firstConfig, secondConfig] });
     const actual = facts(first as unknown as Snapshot);
-    expect(actual.shape).toEqual(facts(sdk.updateSnapshot({ openProjects: [firstConfig, secondConfig] })).shape);
+    expect(actual.shape).toEqual(
+      facts(sdk.updateSnapshot({ openProjects: [firstConfig, secondConfig] })).shape,
+    );
     expect(actual.signatureA).toBeInstanceOf(SemanticSignature);
     expect(actual.typeA).toBeInstanceOf(SemanticType);
     const second = api.updateSnapshot({ openProjects: [] });
@@ -219,13 +254,22 @@ test("virtual filesystem callbacks retain empty, hidden, and fallback files", ()
     ...fallback,
     readFile(path) {
       reads.add(path);
-      if (path === config) return JSON.stringify({ compilerOptions: { types: [] }, files: [empty, hidden, real, virtual] });
+      if (path === config)
+        return JSON.stringify({
+          compilerOptions: { types: [] },
+          files: [empty, hidden, real, virtual],
+        });
       if (path === empty) return "";
       if (path === hidden) return null;
       if (path === virtual) return 'export const answer = "virtual";';
       return undefined;
     },
-    fileExists: (path) => path === hidden ? false : path === empty || path === virtual || path === config ? true : undefined,
+    fileExists: (path) =>
+      path === hidden
+        ? false
+        : path === empty || path === virtual || path === config
+          ? true
+          : undefined,
   };
   const api = new Ts7Api({ cwd: dir, fs });
   try {
@@ -287,7 +331,9 @@ test("real server refusals leave the production process channel reusable", () =>
 
 test("failed process startup has no uncaught error or leaked exit hook", async () => {
   const before = process.listenerCount("exit");
-  expect(() => spawnTs7Wire(join(tempRoot, "scriptc-ts7-does-not-exist", "tsgo"), [])).toThrow("Unable to start TypeScript server");
+  expect(() => spawnTs7Wire(join(tempRoot, "scriptc-ts7-does-not-exist", "tsgo"), [])).toThrow(
+    "Unable to start TypeScript server",
+  );
   await new Promise<void>((resolve) => setImmediate(resolve));
   expect(process.listenerCount("exit")).toBe(before);
 });

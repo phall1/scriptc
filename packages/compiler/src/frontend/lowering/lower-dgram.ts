@@ -12,7 +12,19 @@ import * as ts from "../ts7/adapter.js";
 import type { Lowerer } from "./lowerer.js";
 import { ladderFenceExpr } from "./lowerer.js";
 import { isJsSourceFile, locOf } from "../program.js";
-import { BOOL, canBoxFuncIntoDyn, DGRAMSOCK_T, DYN, F64, type IrExpr, type IrLibFn, type IrType, type SrcLoc, STRING, VOID } from "../../ir/ir.js";
+import {
+  BOOL,
+  canBoxFuncIntoDyn,
+  DGRAMSOCK_T,
+  DYN,
+  F64,
+  type IrExpr,
+  type IrLibFn,
+  type IrType,
+  type SrcLoc,
+  STRING,
+  VOID,
+} from "../../ir/ir.js";
 import { DNS_LOOKUP_DOCUMENTED_OPTIONS, fenceOrDropOptionKey } from "./surfaces.js";
 import { resultIsDiscarded } from "./call-position.js";
 import { lowerCallbackArg as lowerCallbackArgShared } from "./callback-arg.js";
@@ -67,18 +79,28 @@ function isErrorOrNullUnion(lowerer: Lowerer, t: IrType): boolean {
 
 /** True iff `t` is a record of exactly the given (name-sorted) string/f64
  * fields — the AddressInfo/RemoteInfo shape check. */
-function isRecordOfFields(lowerer: Lowerer, t: IrType, fields: [string, "string" | "f64"][]): boolean {
+function isRecordOfFields(
+  lowerer: Lowerer,
+  t: IrType,
+  fields: [string, "string" | "f64"][],
+): boolean {
   if (t.kind !== "record") return false;
   const shape = lowerer.shapes.get(t.shapeId);
-  if (!shape || shape.tuple || shape.indexValue || shape.fields.length !== fields.length) return false;
+  if (!shape || shape.tuple || shape.indexValue || shape.fields.length !== fields.length)
+    return false;
   return shape.fields.every((f, i) => f.name === fields[i]![0] && f.type.kind === fields[i]![1]);
 }
 
 const ADDRINFO_FIELDS: [string, "string" | "f64"][] = [
-  ["address", "string"], ["family", "string"], ["port", "f64"],
+  ["address", "string"],
+  ["family", "string"],
+  ["port", "f64"],
 ];
 const RINFO_FIELDS: [string, "string" | "f64"][] = [
-  ["address", "string"], ["family", "string"], ["port", "f64"], ["size", "f64"],
+  ["address", "string"],
+  ["family", "string"],
+  ["port", "f64"],
+  ["size", "f64"],
 ];
 
 /** Module-function calls on dgram/dns import bindings (named imports AND
@@ -86,9 +108,12 @@ const RINFO_FIELDS: [string, "string" | "f64"][] = [
  * reuseAddr? }), dns.lookup(hostname, { family: 4 }, cb). Null for other
  * modules (the caller falls through); every dgram/dns member lands here —
  * unlowered ones fence with their module-qualified name. */
-export function lowerDgramDnsModuleCall(lowerer: Lowerer, expr: ts.CallExpression,
+export function lowerDgramDnsModuleCall(
+  lowerer: Lowerer,
+  expr: ts.CallExpression,
   bi: { module: string; member: string },
-  loc: SrcLoc,): IrExpr | null {
+  loc: SrcLoc,
+): IrExpr | null {
   if (bi.module === "dns") return lowerDnsModuleCall(lowerer, expr, bi, loc);
   if (bi.module !== "dgram") return null;
   const args = expr.arguments;
@@ -105,12 +130,19 @@ export function lowerDgramDnsModuleCall(lowerer: Lowerer, expr: ts.CallExpressio
     const argT = lowerer.typeOf(arg);
     if (argT.isStringLiteralType()) {
       if (argT.value !== "udp4") {
-        lowerer.noLowering(`createSocket("${argT.value}")`, arg, '"udp4" is the supported socket type');
+        lowerer.noLowering(
+          `createSocket("${argT.value}")`,
+          arg,
+          '"udp4" is the supported socket type',
+        );
       }
       lowerer.lowerExpr(arg); // side-effect order (a call producing the literal type)
       return {
-        kind: "libCall", fn: "dgram.createSocket",
-        args: [boolLit(false, loc)], type: DGRAMSOCK_T, loc,
+        kind: "libCall",
+        fn: "dgram.createSocket",
+        args: [boolLit(false, loc)],
+        type: DGRAMSOCK_T,
+        loc,
       };
     }
     // createSocket({ type: "udp4", reuseAddr?: <bool> }) — an OBJECT
@@ -151,8 +183,12 @@ export function lowerDgramDnsModuleCall(lowerer: Lowerer, expr: ts.CallExpressio
         // validateAbortSignal ladder; plausible signal values keep the
         // fence — abort-driven close has no lowering yet.
         const raw = lowerer.lowerExpr(prop.initializer);
-        const provablyNot = raw.type.kind === "string" || raw.type.kind === "f64" ||
-          raw.type.kind === "bool" || raw.type.kind === "record" || raw.type.kind === "array" ||
+        const provablyNot =
+          raw.type.kind === "string" ||
+          raw.type.kind === "f64" ||
+          raw.type.kind === "bool" ||
+          raw.type.kind === "record" ||
+          raw.type.kind === "array" ||
           ts.isObjectLiteralExpression(prop.initializer);
         if (provablyNot && lowerer.dynConvertible(raw.type)) {
           return {
@@ -188,8 +224,11 @@ export function lowerDgramDnsModuleCall(lowerer: Lowerer, expr: ts.CallExpressio
       );
     }
     return {
-      kind: "libCall", fn: "dgram.createSocket",
-      args: [reuseAddr ?? boolLit(false, loc)], type: DGRAMSOCK_T, loc,
+      kind: "libCall",
+      fn: "dgram.createSocket",
+      args: [reuseAddr ?? boolLit(false, loc)],
+      type: DGRAMSOCK_T,
+      loc,
     };
   }
   lowerer.noLowering(
@@ -203,9 +242,12 @@ export function lowerDgramDnsModuleCall(lowerer: Lowerer, expr: ts.CallExpressio
 /** dns.lookup(hostname, { family: 4 }, (err, address[, family]) => ...) —
  * the ONE lowered dns member. getaddrinfo runs at call time; the callback
  * defers to the next loop turn (SEMANTICS.md documents the split). */
-function lowerDnsModuleCall(lowerer: Lowerer, expr: ts.CallExpression,
+function lowerDnsModuleCall(
+  lowerer: Lowerer,
+  expr: ts.CallExpression,
   bi: { module: string; member: string },
-  loc: SrcLoc,): IrExpr {
+  loc: SrcLoc,
+): IrExpr {
   if (bi.member !== "lookup") {
     lowerer.noLowering(
       `dns.${bi.member}`,
@@ -249,7 +291,11 @@ function lowerDnsModuleCall(lowerer: Lowerer, expr: ts.CallExpression,
       // documented dns.lookup knobs with no lowering — they fence by
       // name; undocumented keys drop like Node drops them.
       fenceOrDropOptionKey(
-        lowerer, prop, prop.name.text, "lookup", DNS_LOOKUP_DOCUMENTED_OPTIONS,
+        lowerer,
+        prop,
+        prop.name.text,
+        "lookup",
+        DNS_LOOKUP_DOCUMENTED_OPTIONS,
         "family: 4 is the supported option",
         {
           all: "the all-addresses callback shape has no lowering — the lowered callback is (err, address, family) over one IPv4 answer",
@@ -275,11 +321,12 @@ function lowerDnsModuleCall(lowerer: Lowerer, expr: ts.CallExpression,
     );
   }
   const { cb } = lowerCallbackArg(
-    lowerer, args[2]!, "lookup callbacks", 3,
+    lowerer,
+    args[2]!,
+    "lookup callbacks",
+    3,
     (p, i) =>
-      i === 0 ? isErrorOrNullUnion(lowerer, p)
-      : i === 1 ? p.kind === "string"
-      : p.kind === "f64",
+      i === 0 ? isErrorOrNullUnion(lowerer, p) : i === 1 ? p.kind === "string" : p.kind === "f64",
     "use (err, address) — err is Error | null, address a string",
   );
   return { kind: "libCall", fn: "dns.lookup", args: [hostname, family, cb], type: VOID, loc };
@@ -288,8 +335,11 @@ function lowerDnsModuleCall(lowerer: Lowerer, expr: ts.CallExpression,
 /** Method calls on dgram.Socket receivers — one entry in lower-calls.ts's
  * intrinsic chain (after lowerServerMethodCall). Null for other
  * receivers. */
-export function lowerDgramMethodCall(lowerer: Lowerer, call: ts.CallExpression,
-  access: ts.PropertyAccessExpression,): IrExpr | null {
+export function lowerDgramMethodCall(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
+  access: ts.PropertyAccessExpression,
+): IrExpr | null {
   if (call.questionDotToken || access.questionDotToken) return null;
   if (lowerer.mapTypeOf(lowerer.typeOf(access.expression))?.kind !== "dgramSocket") return null;
   if (!lowerer.isStdlibMember(access)) return null;
@@ -328,11 +378,7 @@ export function lowerDgramMethodCall(lowerer: Lowerer, call: ts.CallExpression,
       const fn: IrLibFn = name === "bind" ? "dgram.bind" : "dgram.connect";
       return { kind: "libCall", fn, args: [receiver, port, host], type: VOID, loc };
     }
-    const { cb } = lowerCallbackArg(
-      lowerer, cbNode, `${name} callbacks`, 0,
-      () => false,
-      "use ()",
-    );
+    const { cb } = lowerCallbackArg(lowerer, cbNode, `${name} callbacks`, 0, () => false, "use ()");
     const fn: IrLibFn = name === "bind" ? "dgram.bindCb" : "dgram.connectCb";
     return { kind: "libCall", fn, args: [receiver, port, host, cb], type: VOID, loc };
   }
@@ -345,13 +391,17 @@ export function lowerDgramMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     // the connected-state errors — with the compiler-rendered fence as
     // the post-validation tail for the callback/list/connected forms.
     const staticShape =
-      args.length === 3 && !args.some(ts.isSpreadElement) &&
+      args.length === 3 &&
+      !args.some(ts.isSpreadElement) &&
       (() => {
         const dataT = lowerer.mapTypeOf(lowerer.typeOf(args[0]!));
         const portT = lowerer.mapTypeOf(lowerer.typeOf(args[1]!));
         const hostT = lowerer.mapTypeOf(lowerer.typeOf(args[2]!));
-        return (dataT?.kind === "string" || (dataT?.kind === "bytes" && dataT.elem === "u8")) &&
-               portT?.kind === "f64" && hostT?.kind === "string";
+        return (
+          (dataT?.kind === "string" || (dataT?.kind === "bytes" && dataT.elem === "u8")) &&
+          portT?.kind === "f64" &&
+          hostT?.kind === "string"
+        );
       })();
     if (staticShape) {
       const receiver = lowerer.lowerExpr(access.expression);
@@ -361,7 +411,11 @@ export function lowerDgramMethodCall(lowerer: Lowerer, call: ts.CallExpression,
       const fn: IrLibFn = data.type.kind === "string" ? "dgram.sendStr" : "dgram.sendBytes";
       return { kind: "libCall", fn, args: [receiver, data, port, host], type: VOID, loc };
     }
-    if (isJsSourceFile(call.getSourceFile()) && args.length <= 5 && !args.some(ts.isSpreadElement)) {
+    if (
+      isJsSourceFile(call.getSourceFile()) &&
+      args.length <= 5 &&
+      !args.some(ts.isSpreadElement)
+    ) {
       const receiver = lowerer.lowerExpr(access.expression);
       const slots: IrExpr[] = [];
       let ok = true;
@@ -373,9 +427,16 @@ export function lowerDgramMethodCall(lowerer: Lowerer, call: ts.CallExpression,
         }
         const raw = lowerer.lowerExpr(n);
         if (raw.type.kind === "dyn") slots.push(raw);
-        else if (raw.kind === "unitLit" || lowerer.dynConvertible(raw.type) ||
-                 (raw.type.kind === "func" &&
-                  canBoxFuncIntoDyn(raw.type, (id) => lowerer.shapes.get(id), (id) => lowerer.unions.get(id)))) {
+        else if (
+          raw.kind === "unitLit" ||
+          lowerer.dynConvertible(raw.type) ||
+          (raw.type.kind === "func" &&
+            canBoxFuncIntoDyn(
+              raw.type,
+              (id) => lowerer.shapes.get(id),
+              (id) => lowerer.unions.get(id),
+            ))
+        ) {
           slots.push({ kind: "dynFrom", value: raw, type: DYN, loc });
         } else {
           ok = false;
@@ -386,8 +447,16 @@ export function lowerDgramMethodCall(lowerer: Lowerer, call: ts.CallExpression,
         return {
           kind: "libCall",
           fn: "dgram.sendChk",
-          args: [receiver, ...slots, ladderFenceExpr(lowerer, `send in this form`, call,
-            "send(msg, port, address) — one string or Buffer datagram — is the lowered form; callback, list, and connected sends have no lowering yet")],
+          args: [
+            receiver,
+            ...slots,
+            ladderFenceExpr(
+              lowerer,
+              `send in this form`,
+              call,
+              "send(msg, port, address) — one string or Buffer datagram — is the lowered form; callback, list, and connected sends have no lowering yet",
+            ),
+          ],
           type: VOID,
           loc,
         };
@@ -401,7 +470,11 @@ export function lowerDgramMethodCall(lowerer: Lowerer, call: ts.CallExpression,
   }
   if (name === "address") {
     if (args.length !== 0) {
-      lowerer.noLowering(`address with ${args.length} arguments`, call, "address() takes no arguments");
+      lowerer.noLowering(
+        `address with ${args.length} arguments`,
+        call,
+        "address() takes no arguments",
+      );
     }
     // The declared AddressInfo return must map to the {address, family,
     // port} record — the runtime fills exactly those three fields.
@@ -419,7 +492,11 @@ export function lowerDgramMethodCall(lowerer: Lowerer, call: ts.CallExpression,
   if (name === "close") {
     requireStatementPosition(lowerer, call, "socket.close(...)");
     if (args.length > 1) {
-      lowerer.noLowering(`close with ${args.length} arguments`, call, "the supported form is close([callback])");
+      lowerer.noLowering(
+        `close with ${args.length} arguments`,
+        call,
+        "the supported form is close([callback])",
+      );
     }
     const receiver = lowerer.lowerExpr(access.expression);
     if (args.length === 0) {
@@ -431,7 +508,11 @@ export function lowerDgramMethodCall(lowerer: Lowerer, call: ts.CallExpression,
   if (name === "unref" || name === "ref") {
     requireStatementPosition(lowerer, call, `socket.${name}()`);
     if (args.length !== 0) {
-      lowerer.noLowering(`${name} with ${args.length} arguments`, call, `${name}() takes no arguments`);
+      lowerer.noLowering(
+        `${name} with ${args.length} arguments`,
+        call,
+        `${name}() takes no arguments`,
+      );
     }
     const receiver = lowerer.lowerExpr(access.expression);
     const fn: IrLibFn = name === "unref" ? "dgram.unref" : "dgram.ref";
@@ -445,28 +526,50 @@ export function lowerDgramMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     const receiver = lowerer.lowerExpr(access.expression);
     if (event === "message") {
       const { cb } = lowerCallbackArg(
-        lowerer, args[1]!, "message listeners", 2,
+        lowerer,
+        args[1]!,
+        "message listeners",
+        2,
         (p, i) =>
-          i === 0 ? p.kind === "bytes" && p.elem === "u8"
-          : isRecordOfFields(lowerer, p, RINFO_FIELDS),
+          i === 0
+            ? p.kind === "bytes" && p.elem === "u8"
+            : isRecordOfFields(lowerer, p, RINFO_FIELDS),
         "use (msg: Buffer, rinfo) or (msg: Buffer) or ()",
       );
-      return { kind: "libCall", fn: "dgram.onMessage", args: [receiver, cb, once], type: VOID, loc };
+      return {
+        kind: "libCall",
+        fn: "dgram.onMessage",
+        args: [receiver, cb, once],
+        type: VOID,
+        loc,
+      };
     }
     if (event === "error") {
       const { cb } = lowerCallbackArg(
-        lowerer, args[1]!, "error listeners", 1,
+        lowerer,
+        args[1]!,
+        "error listeners",
+        1,
         (p) => p.kind === "object" && p.className === "%Error",
         "use (err) or ()",
       );
       return { kind: "libCall", fn: "dgram.onError", args: [receiver, cb, once], type: VOID, loc };
     }
     if (event === "listening" || event === "close" || event === "connect") {
-      const { cb } = lowerCallbackArg(lowerer, args[1]!, `${event} listeners`, 0, () => false, "use ()");
+      const { cb } = lowerCallbackArg(
+        lowerer,
+        args[1]!,
+        `${event} listeners`,
+        0,
+        () => false,
+        "use ()",
+      );
       const fn: IrLibFn =
-        event === "listening" ? "dgram.onListening"
-        : event === "close" ? "dgram.onClose"
-        : "dgram.onConnect";
+        event === "listening"
+          ? "dgram.onListening"
+          : event === "close"
+            ? "dgram.onClose"
+            : "dgram.onConnect";
       return { kind: "libCall", fn, args: [receiver, cb, once], type: VOID, loc };
     }
     lowerer.noLowering(
@@ -475,8 +578,13 @@ export function lowerDgramMethodCall(lowerer: Lowerer, call: ts.CallExpression,
       '"message", "listening", "close", "connect", and "error" are the supported socket events (as literals)',
     );
   }
-  if (name.startsWith("setMulticast") || name === "addMembership" || name === "dropMembership" ||
-      name === "setBroadcast" || name === "setTTL") {
+  if (
+    name.startsWith("setMulticast") ||
+    name === "addMembership" ||
+    name === "dropMembership" ||
+    name === "setBroadcast" ||
+    name === "setTTL"
+  ) {
     lowerer.noLowering(
       `dgram.Socket.${name}`,
       call,

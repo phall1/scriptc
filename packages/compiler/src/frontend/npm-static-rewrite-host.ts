@@ -57,7 +57,7 @@ function resolveBareRequireCjs(fromFile: string, spec: string): string | null {
   const name = packageNameOfSpecifier(spec);
   const subparts = spec.startsWith("@") ? parts.slice(2) : parts.slice(1);
   const subpath = subparts.length > 0 ? `./${subparts.join("/")}` : ".";
-  for (let dir = dirname(fromFile); ; ) {
+  for (let dir = dirname(fromFile); ;) {
     const pkgDir = join(dir, "node_modules", name);
     try {
       if (trackedDirectoryExists(pkgDir)) {
@@ -65,9 +65,8 @@ function resolveBareRequireCjs(fromFile: string, spec: string): string | null {
         let exports: unknown;
         try {
           const pkgText = trackedReadFile(pkgPath);
-          exports = pkgText === null
-            ? undefined
-            : (JSON.parse(pkgText) as { exports?: unknown }).exports;
+          exports =
+            pkgText === null ? undefined : (JSON.parse(pkgText) as { exports?: unknown }).exports;
         } catch {
           return null;
         }
@@ -96,7 +95,12 @@ function resolveBareRequireCjs(fromFile: string, spec: string): string | null {
  * require(…)` forwarding chains follow. False (the CJS answer: `default`
  * IS module.exports) everywhere else, unresolvable targets included —
  * their require throws before `default` matters. */
-function requireTargetEsModuleStamped(parser: Ts7SourceParser, fromFile: string, spec: string, depth = 0): boolean {
+function requireTargetEsModuleStamped(
+  parser: Ts7SourceParser,
+  fromFile: string,
+  spec: string,
+  depth = 0,
+): boolean {
   if (depth > 8) return false;
   const file =
     spec.startsWith("./") || spec.startsWith("../") || spec.startsWith("/")
@@ -107,7 +111,7 @@ function requireTargetEsModuleStamped(parser: Ts7SourceParser, fromFile: string,
   if (file.endsWith(".json")) return false;
   if (file.endsWith(".js")) {
     // the nearest package.json "type" decides the .js format
-    for (let dir = dirname(file); ; ) {
+    for (let dir = dirname(file); ;) {
       const pkgPath = join(dir, "package.json");
       const pkgText = trackedReadFile(pkgPath);
       if (pkgText !== null) {
@@ -155,8 +159,11 @@ function starTargetNames(parser: Ts7SourceParser, file: string): Set<string> {
   }
 }
 
-
-export function rewriteBundlerCjsWithParser(parser: Ts7SourceParser, source: string, filePath: string): string | { degrade: string } | null {
+export function rewriteBundlerCjsWithParser(
+  parser: Ts7SourceParser,
+  source: string,
+  filePath: string,
+): string | { degrade: string } | null {
   if (!isBundlerCjsCandidate(source)) return null;
   return rewriteBundlerCjsSyntax(parser.parse(filePath, source, "js"), filePath, {
     requireTargetEsModuleStamped: (from, spec) => requireTargetEsModuleStamped(parser, from, spec),

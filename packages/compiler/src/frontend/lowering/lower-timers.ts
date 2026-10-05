@@ -1,7 +1,17 @@
 import { dynUndefinedExpr, numLit, varRef } from "../../ir/build.js";
 import * as ts from "../ts7/adapter.js";
 import { isJsSourceFile } from "../program.js";
-import { BOOL, canBoxFuncIntoDyn, DYN, F64, VOID, type IrExpr, type IrType, type SrcLoc, typeKey } from "../../ir/ir.js";
+import {
+  BOOL,
+  canBoxFuncIntoDyn,
+  DYN,
+  F64,
+  VOID,
+  type IrExpr,
+  type IrType,
+  type SrcLoc,
+  typeKey,
+} from "../../ir/ir.js";
 import { buildFunctionAdapter } from "./coercions/builders.js";
 import type { Lowerer } from "./lowerer.js";
 
@@ -14,7 +24,12 @@ import type { Lowerer } from "./lowerer.js";
  * invocation delivers (resolve(undefined) fulfills with undefined).
  * Zero-param callbacks pass through; any other parameterized callback
  * fences (a value for its parameter would have to be invented). */
-export function adaptZeroArgTimerCallback(lowerer: Lowerer, cb: IrExpr, node: ts.Node, loc: SrcLoc): IrExpr {
+export function adaptZeroArgTimerCallback(
+  lowerer: Lowerer,
+  cb: IrExpr,
+  node: ts.Node,
+  loc: SrcLoc,
+): IrExpr {
   // A REST-marked callback is not the zero-param ABI even with an empty
   // fixed-param list — `setTimeout(function(){ arguments }, 0)` infers
   // func(...dyn[])=>void (the variadic `arguments` form), and passing it
@@ -22,7 +37,11 @@ export function adaptZeroArgTimerCallback(lowerer: Lowerer, cb: IrExpr, node: ts
   // 12-settimeout-arguments ICE). It adapts below like any other
   // parameterized callback: boxed through the checked-dynamic boundary
   // when boxable, the named fence otherwise.
-  if (cb.type.kind !== "func" || (cb.type.params.length === 0 && !cb.type.rest && cb.type.ret.kind === "void")) return cb;
+  if (
+    cb.type.kind !== "func" ||
+    (cb.type.params.length === 0 && !cb.type.rest && cb.type.ret.kind === "void")
+  )
+    return cb;
   // A zero-param callback whose RETURN isn't void (`setTimeout(push, 1)`
   // where push answers boolean|undefined; async callbacks — func()=>
   // promise): JS ignores a timer callback's return value, so the shape
@@ -38,32 +57,53 @@ export function adaptZeroArgTimerCallback(lowerer: Lowerer, cb: IrExpr, node: ts
     const name = existing ?? `%timer.dropret.${lowerer.arrHofHelpers.size}`;
     if (!existing) {
       lowerer.arrHofHelpers.set(key, name);
-      lowerer.liftedFns.push(...buildFunctionAdapter(name, fromT, toT, [], [], [
-        {
-          kind: "exprStmt",
-          expr: {
-            kind: "callValue",
-            callee: { kind: "varRef", localId: "f.0", type: fromT, loc },
-            args: [],
-            type: fromT.ret,
-            loc,
-          },
+      lowerer.liftedFns.push(
+        ...buildFunctionAdapter(
+          name,
+          fromT,
+          toT,
+          [],
+          [],
+          [
+            {
+              kind: "exprStmt",
+              expr: {
+                kind: "callValue",
+                callee: { kind: "varRef", localId: "f.0", type: fromT, loc },
+                args: [],
+                type: fromT.ret,
+                loc,
+              },
+              loc,
+            },
+          ],
           loc,
-        },
-      ], loc));
+        ),
+      );
     }
     return { kind: "call", callee: name, args: [cb], type: toT, loc };
   }
   const fromT = cb.type;
   const toT0: IrType = { kind: "func", params: [], ret: VOID };
-  if (fromT.rest || fromT.params.length !== 1 || fromT.params[0]!.kind !== "dyn" || fromT.ret.kind !== "void") {
+  if (
+    fromT.rest ||
+    fromT.params.length !== 1 ||
+    fromT.params[0]!.kind !== "dyn" ||
+    fromT.ret.kind !== "void"
+  ) {
     // Any other BOXABLE signature rides the checked-dynamic function
     // boundary instead: box the closure (dynFrom), adapt to () => void
     // (dynCheck) — the thunk delivers JS's zero-argument invocation
     // (each param sees undefined; a param type undefined fails checks
     // throws the catchable TypeError, the SEMANTICS.md 117 stance).
     // The JS-inferred mustCall wrapper (func(dyn,dyn)=>dyn) lands here.
-    if (canBoxFuncIntoDyn(fromT, (id) => lowerer.shapes.get(id), (id) => lowerer.unions.get(id))) {
+    if (
+      canBoxFuncIntoDyn(
+        fromT,
+        (id) => lowerer.shapes.get(id),
+        (id) => lowerer.unions.get(id),
+      )
+    ) {
       const boxed: IrExpr = { kind: "dynFrom", value: cb, type: DYN, loc };
       return { kind: "dynCheck", value: boxed, type: toT0, loc };
     }
@@ -79,19 +119,29 @@ export function adaptZeroArgTimerCallback(lowerer: Lowerer, cb: IrExpr, node: ts
   const name = existing ?? `%timer.droparg.${lowerer.arrHofHelpers.size}`;
   if (!existing) {
     lowerer.arrHofHelpers.set(key, name);
-    lowerer.liftedFns.push(...buildFunctionAdapter(name, fromT, toT, [], [], [
-      {
-        kind: "exprStmt",
-        expr: {
-          kind: "callValue",
-          callee: { kind: "varRef", localId: "f.0", type: fromT, loc },
-          args: [dynUndefinedExpr(loc)],
-          type: VOID,
-          loc,
-        },
+    lowerer.liftedFns.push(
+      ...buildFunctionAdapter(
+        name,
+        fromT,
+        toT,
+        [],
+        [],
+        [
+          {
+            kind: "exprStmt",
+            expr: {
+              kind: "callValue",
+              callee: { kind: "varRef", localId: "f.0", type: fromT, loc },
+              args: [dynUndefinedExpr(loc)],
+              type: VOID,
+              loc,
+            },
+            loc,
+          },
+        ],
         loc,
-      },
-    ], loc));
+      ),
+    );
   }
   return { kind: "call", callee: name, args: [cb], type: toT, loc };
 }
@@ -104,7 +154,12 @@ export function adaptZeroArgTimerCallback(lowerer: Lowerer, cb: IrExpr, node: ts
  * (per-argument checks against the callee's declared signature, extras
  * ignored, a non-function callee throwing the catchable TypeError).
  * Non-boxable callbacks fence. */
-export function timerStyleCallback(lowerer: Lowerer, callArgs: readonly ts.Expression[], what: string, loc: SrcLoc): IrExpr {
+export function timerStyleCallback(
+  lowerer: Lowerer,
+  callArgs: readonly ts.Expression[],
+  what: string,
+  loc: SrcLoc,
+): IrExpr {
   // The shared callback adaptation for timer-shaped surfaces whose
   // trailing arguments start right after the callback (setImmediate,
   // process.nextTick): zero-arg callbacks pass through, boxable
@@ -115,14 +170,24 @@ export function timerStyleCallback(lowerer: Lowerer, callArgs: readonly ts.Expre
     : adaptZeroArgTimerCallback(lowerer, lowerer.lowerExpr(callArgs[0]!), callArgs[0]!, loc);
 }
 
-function makeTimerArgsThunk(lowerer: Lowerer, cbNode: ts.Expression, argNodes: readonly ts.Expression[], what: string, loc: SrcLoc): IrExpr {
+function makeTimerArgsThunk(
+  lowerer: Lowerer,
+  cbNode: ts.Expression,
+  argNodes: readonly ts.Expression[],
+  what: string,
+  loc: SrcLoc,
+): IrExpr {
   const cbLowered = lowerer.lowerExpr(cbNode);
   let boxedCb: IrExpr;
   if (cbLowered.type.kind === "dyn") {
     boxedCb = cbLowered;
   } else if (
     cbLowered.type.kind === "func" &&
-    canBoxFuncIntoDyn(cbLowered.type, (id) => lowerer.shapes.get(id), (id) => lowerer.unions.get(id))
+    canBoxFuncIntoDyn(
+      cbLowered.type,
+      (id) => lowerer.shapes.get(id),
+      (id) => lowerer.unions.get(id),
+    )
   ) {
     boxedCb = { kind: "dynFrom", value: cbLowered, type: DYN, loc };
   } else {
@@ -148,7 +213,13 @@ function makeTimerArgsThunk(lowerer: Lowerer, cbNode: ts.Expression, argNodes: r
       params: [],
       returnType: VOID,
       captures: capIds.map((id, i) => ({ localId: id, name: capNames[i]!, type: DYN })),
-      locals: capIds.map((id, i) => ({ id, name: capNames[i]!, type: DYN, mutable: false, boxed: true })),
+      locals: capIds.map((id, i) => ({
+        id,
+        name: capNames[i]!,
+        type: DYN,
+        mutable: false,
+        boxed: true,
+      })),
       body: [
         {
           kind: "exprStmt",
@@ -157,7 +228,9 @@ function makeTimerArgsThunk(lowerer: Lowerer, cbNode: ts.Expression, argNodes: r
             callee: { kind: "varRef", localId: "f.0", type: DYN, loc },
             calleeName: "callback",
             receiver: { kind: "libCall", fn: "dyn.this", args: [], type: DYN, loc },
-            args: args.map((_, i) => ({ kind: "varRef", localId: `a${i}.0`, type: DYN, loc }) as IrExpr),
+            args: args.map(
+              (_, i) => ({ kind: "varRef", localId: `a${i}.0`, type: DYN, loc }) as IrExpr,
+            ),
             type: DYN,
             loc,
           },
@@ -170,9 +243,19 @@ function makeTimerArgsThunk(lowerer: Lowerer, cbNode: ts.Expression, argNodes: r
       name,
       params: capIds.map((id, i) => ({ localId: id, name: capNames[i]!, type: DYN })),
       returnType: toT,
-      locals: capIds.map((id, i) => ({ id, name: capNames[i]!, type: DYN, mutable: false, boxed: true })),
+      locals: capIds.map((id, i) => ({
+        id,
+        name: capNames[i]!,
+        type: DYN,
+        mutable: false,
+        boxed: true,
+      })),
       body: [
-        { kind: "return", value: { kind: "closure", fnName: impl, captures: capIds, type: toT, loc }, loc },
+        {
+          kind: "return",
+          value: { kind: "closure", fnName: impl, captures: capIds, type: toT, loc },
+          loc,
+        },
       ],
       loc,
     });
@@ -184,7 +267,12 @@ function makeTimerArgsThunk(lowerer: Lowerer, cbNode: ts.Expression, argNodes: r
  * node:timers module's exports (one set: Node's timers module re-exports
  * the globals). */
 export const TIMER_MODULE_MEMBERS: ReadonlySet<string> = new Set([
-  "setTimeout", "clearTimeout", "setInterval", "clearInterval", "setImmediate", "clearImmediate",
+  "setTimeout",
+  "clearTimeout",
+  "setInterval",
+  "clearInterval",
+  "setImmediate",
+  "clearImmediate",
 ]);
 
 /** Node tolerates clearTimeout/clearInterval/clearImmediate of anything
@@ -199,7 +287,8 @@ function tolerantClearNoop(lowerer: Lowerer, expr: ts.CallExpression, loc: SrcLo
   if (expr.arguments.length !== 1) return null;
   let arg = expr.arguments[0]!;
   // `{} as never` / parenthesized spellings: the cast changes no value.
-  while (ts.isAsExpression(arg) || ts.isTypeAssertion(arg) || ts.isParenthesizedExpression(arg)) arg = arg.expression;
+  while (ts.isAsExpression(arg) || ts.isTypeAssertion(arg) || ts.isParenthesizedExpression(arg))
+    arg = arg.expression;
   if (arg.kind === ts.SyntaxKind.NullKeyword) return noop;
   if (ts.isObjectLiteralExpression(arg) && arg.properties.length === 0) return noop;
   if (ts.isIdentifier(arg)) {
@@ -214,19 +303,35 @@ function tolerantClearNoop(lowerer: Lowerer, expr: ts.CallExpression, loc: SrcLo
  * globals, the node:timers named/destructured imports, and the namespace
  * form (`timers.setTimeout(...)`). Null when the member isn't a lowered
  * timer function (the caller's fence machinery takes over). */
-export function lowerTimersMemberCall(lowerer: Lowerer, expr: ts.CallExpression, member: string, loc: SrcLoc): IrExpr | null {
+export function lowerTimersMemberCall(
+  lowerer: Lowerer,
+  expr: ts.CallExpression,
+  member: string,
+  loc: SrcLoc,
+): IrExpr | null {
   // Delayed timers share callback adaptation and the 1ms default. Trailing
   // arguments are captured now and delivered when the callback fires.
   if (member === "setTimeout" || member === "setInterval") {
     if (expr.arguments.length === 0) {
-      lowerer.noLowering(`${member} with 0 arguments`, expr, `the supported form is ${member}(callback, ms?, ...args)`);
+      lowerer.noLowering(
+        `${member} with 0 arguments`,
+        expr,
+        `the supported form is ${member}(callback, ms?, ...args)`,
+      );
     }
-    const cb = expr.arguments.length > 2
-      ? makeTimerArgsThunk(lowerer, expr.arguments[0]!, expr.arguments.slice(2), member, loc)
-      : adaptZeroArgTimerCallback(lowerer, lowerer.lowerExpr(expr.arguments[0]!), expr.arguments[0]!, loc);
-    const ms: IrExpr = expr.arguments.length >= 2
-      ? lowerer.lowerExpr(expr.arguments[1]!)
-      : { kind: "numLit", value: 1, type: F64, loc };
+    const cb =
+      expr.arguments.length > 2
+        ? makeTimerArgsThunk(lowerer, expr.arguments[0]!, expr.arguments.slice(2), member, loc)
+        : adaptZeroArgTimerCallback(
+            lowerer,
+            lowerer.lowerExpr(expr.arguments[0]!),
+            expr.arguments[0]!,
+            loc,
+          );
+    const ms: IrExpr =
+      expr.arguments.length >= 2
+        ? lowerer.lowerExpr(expr.arguments[1]!)
+        : { kind: "numLit", value: 1, type: F64, loc };
     if (member === "setInterval") {
       return { kind: "libCall", fn: "timers.setInterval", args: [cb, ms], type: F64, loc };
     }
@@ -255,10 +360,18 @@ export function lowerTimersMemberCall(lowerer: Lowerer, expr: ts.CallExpression,
       const stored = lowerer.declareHiddenLocal("%timer.clear", DYN);
       const ref = varRef(stored.id, DYN, loc);
       handle = {
-        kind: "seqExpr", stmts: [{ kind: "varDecl", localId: stored.id, init: handle, loc }], result: {
-          kind: "ternary", cond: { kind: "dynTest", test: "number", value: ref, type: BOOL, loc },
-          then: lowerer.coerceInto(expr.arguments[0]!, ref, F64), else_: numLit(0, loc), type: F64, loc,
-        }, type: F64, loc
+        kind: "seqExpr",
+        stmts: [{ kind: "varDecl", localId: stored.id, init: handle, loc }],
+        result: {
+          kind: "ternary",
+          cond: { kind: "dynTest", test: "number", value: ref, type: BOOL, loc },
+          then: lowerer.coerceInto(expr.arguments[0]!, ref, F64),
+          else_: numLit(0, loc),
+          type: F64,
+          loc,
+        },
+        type: F64,
+        loc,
       };
     }
     if (handle.type.kind !== "f64") {
@@ -291,11 +404,27 @@ export function lowerTimersMemberCall(lowerer: Lowerer, expr: ts.CallExpression,
   // no-ops, like Node); the callback adapts like setTimeout's.
   if (member === "setImmediate") {
     if (expr.arguments.length === 0) {
-      lowerer.noLowering("setImmediate with 0 arguments", expr, "the supported form is setImmediate(callback, ...args)");
+      lowerer.noLowering(
+        "setImmediate with 0 arguments",
+        expr,
+        "the supported form is setImmediate(callback, ...args)",
+      );
     }
-    const cb = expr.arguments.length > 1
-      ? makeTimerArgsThunk(lowerer, expr.arguments[0]!, expr.arguments.slice(1), "setImmediate", loc)
-      : adaptZeroArgTimerCallback(lowerer, lowerer.lowerExpr(expr.arguments[0]!), expr.arguments[0]!, loc);
+    const cb =
+      expr.arguments.length > 1
+        ? makeTimerArgsThunk(
+            lowerer,
+            expr.arguments[0]!,
+            expr.arguments.slice(1),
+            "setImmediate",
+            loc,
+          )
+        : adaptZeroArgTimerCallback(
+            lowerer,
+            lowerer.lowerExpr(expr.arguments[0]!),
+            expr.arguments[0]!,
+            loc,
+          );
     return { kind: "libCall", fn: "timers.setImmediate", args: [cb], type: F64, loc };
   }
   if (member === "clearImmediate") {

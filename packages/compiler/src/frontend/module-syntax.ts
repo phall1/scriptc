@@ -62,7 +62,10 @@ export function moduleSpecifiersOfFile(sf: ts.SourceFile): ModuleSpecifiers {
   /** Uses with `__require(…)` sites — attributed local vs helper AFTER the
    * walk, once the (hoisted) import declarations have all been seen. */
   const viaHelperIdent = new Set<SpecifierUse>();
-  const push = (spec: string, kind: "static" | "requireLocal" | "dynamicImport" | null): SpecifierUse => {
+  const push = (
+    spec: string,
+    kind: "static" | "requireLocal" | "dynamicImport" | null,
+  ): SpecifierUse => {
     let use = bySpec.get(spec);
     if (!use) {
       use = {
@@ -118,15 +121,22 @@ export function moduleSpecifiersOfFile(sf: ts.SourceFile): ModuleSpecifiers {
         n.expression.name.text === "resolve" &&
         ts.isMetaProperty(n.expression.expression) &&
         n.expression.expression.keywordToken === ts.SyntaxKind.ImportKeyword &&
-        n.arguments.length >= 1 && arg !== undefined && ts.isStringLiteralLike(arg)
+        n.arguments.length >= 1 &&
+        arg !== undefined &&
+        ts.isStringLiteralLike(arg)
       ) {
         push(arg.text, null).importMetaResolve = true;
       } else if (
         ((ts.isPropertyAccessExpression(n.expression) && n.expression.name.text === "require") ||
-          (ts.isElementAccessExpression(n.expression) && n.expression.argumentExpression !== undefined &&
-            ts.isStringLiteralLike(n.expression.argumentExpression) && n.expression.argumentExpression.text === "require")) &&
-        ts.isIdentifier(n.expression.expression) && n.expression.expression.text === "module" &&
-        n.arguments.length === 1 && arg !== undefined && ts.isStringLiteralLike(arg)
+          (ts.isElementAccessExpression(n.expression) &&
+            n.expression.argumentExpression !== undefined &&
+            ts.isStringLiteralLike(n.expression.argumentExpression) &&
+            n.expression.argumentExpression.text === "require")) &&
+        ts.isIdentifier(n.expression.expression) &&
+        n.expression.expression.text === "module" &&
+        n.arguments.length === 1 &&
+        arg !== undefined &&
+        ts.isStringLiteralLike(arg)
       ) {
         push(arg.text, "requireLocal");
       } else if (
@@ -145,7 +155,9 @@ export function moduleSpecifiersOfFile(sf: ts.SourceFile): ModuleSpecifiers {
       }
     }
   };
-  ts.walkPreorder(sf, (node) => { visit(node); });
+  ts.walkPreorder(sf, (node) => {
+    visit(node);
+  });
   for (const use of viaHelperIdent) {
     if (requireHelperImport !== null) use.requireViaHelper = true;
     else use.requireLocal = true;
@@ -172,12 +184,16 @@ export function sourceImportsOfFile(sf: ts.SourceFile): { spec: string; typeOnly
         arg !== undefined &&
         ts.isStringLiteralLike(arg) &&
         (n.expression.kind === ts.SyntaxKind.ImportKeyword ||
-          (ts.isIdentifier(n.expression) && n.expression.text === "require" && n.arguments.length === 1))
+          (ts.isIdentifier(n.expression) &&
+            n.expression.text === "require" &&
+            n.arguments.length === 1))
       ) {
         out.push({ spec: arg.text, typeOnly: false });
       }
     }
   };
-  ts.walkPreorder(sf, (node) => { visit(node); });
+  ts.walkPreorder(sf, (node) => {
+    visit(node);
+  });
   return out;
 }

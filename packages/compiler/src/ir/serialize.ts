@@ -46,8 +46,14 @@ export function serializeModule(mod: IrModule, compact = false): string {
   const header = JSON.stringify({ ...mod, functions: [] }, replacer);
   const slot = '"functions":[]';
   const offset = header.indexOf(slot);
-  const functions = mod.functions.map((fn) => (ordinaryNumbers(fn) ? JSON.stringify(fn) : JSON.stringify(fn, replacer)) ?? "null").join(",");
-  return header.slice(0, offset) + '"functions":[' + functions + "]" + header.slice(offset + slot.length);
+  const functions = mod.functions
+    .map(
+      (fn) => (ordinaryNumbers(fn) ? JSON.stringify(fn) : JSON.stringify(fn, replacer)) ?? "null",
+    )
+    .join(",");
+  return (
+    header.slice(0, offset) + '"functions":[' + functions + "]" + header.slice(offset + slot.length)
+  );
 }
 
 export function deserializeModule(json: string): IrModule {

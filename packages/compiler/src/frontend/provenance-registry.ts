@@ -62,10 +62,7 @@ let state: RegistryState | null = null;
  * Passing null (or an empty set) clears the registry. */
 export function setProvenanceSources(sources: ProvenanceSources | null): void {
   if (sources === null || sources.packages.length === 0) {
-    state =
-      sources === null
-        ? null
-        : { bySpecifier: new Map(), packageDirs: [], sources };
+    state = sources === null ? null : { bySpecifier: new Map(), packageDirs: [], sources };
     return;
   }
   const bySpecifier = new Map<string, string>();

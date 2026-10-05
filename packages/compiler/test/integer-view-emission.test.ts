@@ -32,9 +32,15 @@ console.log(mix(-0, new Uint32Array(3)), floating(1.75, false), observedAfter(1.
 `;
     await writeFile(entry, source);
     const result = await compile(entry, { outDir: dir, outPath, outputKind: "ir" });
-    if (!result.ok) throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
+    if (!result.ok)
+      throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
     const mod = deserializeModule(await readFile(outPath, "utf8"));
-    const body = (ll: string, name: string): string => ll.match(new RegExp(`define internal [^\\n]+ @sc_(?:b)?f_${name}\\([^\\n]*\\) #0 \\{([\\s\\S]*?)\\n\\}`))![1]!;
+    const body = (ll: string, name: string): string =>
+      ll.match(
+        new RegExp(
+          `define internal [^\\n]+ @sc_(?:b)?f_${name}\\([^\\n]*\\) #0 \\{([\\s\\S]*?)\\n\\}`,
+        ),
+      )![1]!;
     for (const pointerBits of [32, 64] as const) {
       const ll = emitLlvmModule(mod, { pointerBits, wasi: pointerBits === 32 });
       const mix = body(ll, "mix");
@@ -54,5 +60,7 @@ console.log(mix(-0, new Uint32Array(3)), floating(1.75, false), observedAfter(1.
     const debug = emitLlvmModule(mod, { debugSources: new Map([[entry, source]]) });
     expect(debug).not.toContain("integer view state");
     expect(debug).toContain("@llvm.dbg.declare");
-  } finally { await rm(dir, { recursive: true, force: true }); }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

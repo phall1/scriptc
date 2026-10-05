@@ -7,11 +7,32 @@
 import * as ts from "../ts7/adapter.js";
 import type { Lowerer } from "./lowerer.js";
 import { UNSUPPORTED } from "../../diagnostics/diagnostic.js";
-import { BOOL, BYTES_U8, CHILD_T, CRYPTOHASH_T, CRYPTOHMAC_T, DYN, F64, FILEHANDLE_T, type IrExpr, type IrLibFn, type IrStrIntrinsicMethod, type IrType, SPAWNRES_T, STATS_T, STRING, URL_T, VOID, arrayOf } from "../../ir/ir.js";
+import {
+  BOOL,
+  BYTES_U8,
+  CHILD_T,
+  CRYPTOHASH_T,
+  CRYPTOHMAC_T,
+  DYN,
+  F64,
+  FILEHANDLE_T,
+  type IrExpr,
+  type IrLibFn,
+  type IrStrIntrinsicMethod,
+  type IrType,
+  SPAWNRES_T,
+  STATS_T,
+  STRING,
+  URL_T,
+  VOID,
+  arrayOf,
+} from "../../ir/ir.js";
 import { isJsSourceFile, isNodeTypesPath, requireSpecOf } from "../program.js";
 
 /** Statement-level constructs rejected wholesale, keyed by syntax kind. */
-export const UNSUPPORTED_STMT: Partial<Record<ts.SyntaxKind, { code: keyof typeof UNSUPPORTED; feature?: string }>> = {
+export const UNSUPPORTED_STMT: Partial<
+  Record<ts.SyntaxKind, { code: keyof typeof UNSUPPORTED; feature?: string }>
+> = {
   // DoStatement / SwitchStatement are supported; handled in lowerStmt.
   // ForOfStatement is supported (arrays); handled in lowerStmt.
   // ThrowStatement / TryStatement are supported (exceptions); handled in
@@ -32,11 +53,14 @@ export const UNSUPPORTED_STMT: Partial<Record<ts.SyntaxKind, { code: keyof typeo
   // uncompilable by design, and already an error in strict-mode JS.
   [ts.SyntaxKind.WithStatement]: {
     code: "SC1090",
-    feature: "'with' statements (runtime scope injection has no static resolution — bind the object to a variable and read members through it)",
+    feature:
+      "'with' statements (runtime scope injection has no static resolution — bind the object to a variable and read members through it)",
   },
 };
 
-export const UNSUPPORTED_EXPR: Partial<Record<ts.SyntaxKind, { code: keyof typeof UNSUPPORTED; feature?: string }>> = {
+export const UNSUPPORTED_EXPR: Partial<
+  Record<ts.SyntaxKind, { code: keyof typeof UNSUPPORTED; feature?: string }>
+> = {
   // ArrowFunction / FunctionExpression are supported (closures); handled in
   // lowerExpr before this table.
   [ts.SyntaxKind.ClassExpression]: { code: "SC1020" },
@@ -97,22 +121,33 @@ export const NARROW_FIRST =
  * a property read (getters), or an assignment does not. */
 export function sideEffectFreeOptionValue(node: ts.Expression): boolean {
   let e = node;
-  while (ts.isParenthesizedExpression(e) || ts.isAsExpression(e) || ts.isTypeAssertion(e)) e = e.expression;
+  while (ts.isParenthesizedExpression(e) || ts.isAsExpression(e) || ts.isTypeAssertion(e))
+    e = e.expression;
   if (ts.isIdentifier(e)) return true; // includes `undefined`
   if (ts.isStringLiteralLike(e) || ts.isNumericLiteral(e) || ts.isBigIntLiteral(e)) return true;
-  if (e.kind === ts.SyntaxKind.TrueKeyword || e.kind === ts.SyntaxKind.FalseKeyword ||
-      e.kind === ts.SyntaxKind.NullKeyword) return true;
+  if (
+    e.kind === ts.SyntaxKind.TrueKeyword ||
+    e.kind === ts.SyntaxKind.FalseKeyword ||
+    e.kind === ts.SyntaxKind.NullKeyword
+  )
+    return true;
   if (ts.isArrowFunction(e) || ts.isFunctionExpression(e)) return true;
-  if (ts.isPrefixUnaryExpression(e) &&
-      (e.operator === ts.SyntaxKind.MinusToken || e.operator === ts.SyntaxKind.PlusToken ||
-       e.operator === ts.SyntaxKind.ExclamationToken)) {
+  if (
+    ts.isPrefixUnaryExpression(e) &&
+    (e.operator === ts.SyntaxKind.MinusToken ||
+      e.operator === ts.SyntaxKind.PlusToken ||
+      e.operator === ts.SyntaxKind.ExclamationToken)
+  ) {
     return sideEffectFreeOptionValue(e.operand);
   }
   if (ts.isObjectLiteralExpression(e)) {
-    return e.properties.every((p) =>
-      ts.isShorthandPropertyAssignment(p) ||
-      (ts.isPropertyAssignment(p) && !ts.isComputedPropertyName(p.name) &&
-        sideEffectFreeOptionValue(p.initializer)));
+    return e.properties.every(
+      (p) =>
+        ts.isShorthandPropertyAssignment(p) ||
+        (ts.isPropertyAssignment(p) &&
+          !ts.isComputedPropertyName(p.name) &&
+          sideEffectFreeOptionValue(p.initializer)),
+    );
   }
   if (ts.isArrayLiteralExpression(e)) {
     return e.elements.every((el) => !ts.isSpreadElement(el) && sideEffectFreeOptionValue(el));
@@ -183,11 +218,31 @@ export function fenceOrDropOptionKey(
  * `http.request(options)` and `net.socket.connect` tables); everything
  * else on a client options literal is undocumented and drops. */
 export const HTTP_CLIENT_DOCUMENTED_OPTIONS: ReadonlySet<string> = new Set([
-  "agent", "auth", "createConnection", "defaultPort", "family", "headers",
-  "hints", "host", "hostname", "insecureHTTPParser", "joinDuplicateHeaders",
-  "localAddress", "localPort", "lookup", "maxHeaderSize", "method", "path",
-  "port", "protocol", "setDefaultHeaders", "setHost", "signal", "socketPath",
-  "timeout", "uniqueHeaders",
+  "agent",
+  "auth",
+  "createConnection",
+  "defaultPort",
+  "family",
+  "headers",
+  "hints",
+  "host",
+  "hostname",
+  "insecureHTTPParser",
+  "joinDuplicateHeaders",
+  "localAddress",
+  "localPort",
+  "lookup",
+  "maxHeaderSize",
+  "method",
+  "path",
+  "port",
+  "protocol",
+  "setDefaultHeaders",
+  "setHost",
+  "signal",
+  "socketPath",
+  "timeout",
+  "uniqueHeaders",
 ]);
 
 /** http.createServer / http.Server's documented option keys (Node v24 —
@@ -196,11 +251,25 @@ export const HTTP_CLIENT_DOCUMENTED_OPTIONS: ReadonlySet<string> = new Set([
  * keepAliveTimeoutBuffer storage; the rest fence by name here, and
  * unknown keys drop like Node drops them. */
 export const HTTP_SERVER_DOCUMENTED_OPTIONS: ReadonlySet<string> = new Set([
-  "IncomingMessage", "ServerResponse", "allowHalfOpen", "connectionsCheckingInterval",
-  "headersTimeout", "highWaterMark", "insecureHTTPParser", "joinDuplicateHeaders",
-  "keepAlive", "keepAliveInitialDelay", "keepAliveTimeout", "keepAliveTimeoutBuffer", "maxHeaderSize",
-  "noDelay", "pauseOnConnect", "rejectNonStandardBodyWrites", "requestTimeout",
-  "requireHostHeader", "uniqueHeaders",
+  "IncomingMessage",
+  "ServerResponse",
+  "allowHalfOpen",
+  "connectionsCheckingInterval",
+  "headersTimeout",
+  "highWaterMark",
+  "insecureHTTPParser",
+  "joinDuplicateHeaders",
+  "keepAlive",
+  "keepAliveInitialDelay",
+  "keepAliveTimeout",
+  "keepAliveTimeoutBuffer",
+  "maxHeaderSize",
+  "noDelay",
+  "pauseOnConnect",
+  "rejectNonStandardBodyWrites",
+  "requestTimeout",
+  "requireHostHeader",
+  "uniqueHeaders",
 ]);
 
 /** new http.Agent(options)'s documented keys (Node v24 — the Agent
@@ -209,83 +278,171 @@ export const HTTP_SERVER_DOCUMENTED_OPTIONS: ReadonlySet<string> = new Set([
  * maxFreeSockets/timeout/port (+ scheduling, dropped: no free pool
  * exists); the rest fence by name and unknown keys drop like Node. */
 export const AGENT_DOCUMENTED_OPTIONS: ReadonlySet<string> = new Set([
-  "family", "hints", "host", "keepAliveInitialDelay", "localAddress",
-  "localPort", "lookup", "maxTotalSockets", "noDelay", "path",
+  "family",
+  "hints",
+  "host",
+  "keepAliveInitialDelay",
+  "localAddress",
+  "localPort",
+  "lookup",
+  "maxTotalSockets",
+  "noDelay",
+  "path",
 ]);
 
 /** https.request adds tls.connect's client-side TLS knobs. */
 export const HTTPS_CLIENT_DOCUMENTED_OPTIONS: ReadonlySet<string> = new Set([
   ...HTTP_CLIENT_DOCUMENTED_OPTIONS,
-  "ca", "cert", "checkServerIdentity", "ciphers", "clientCertEngine", "crl",
-  "dhparam", "ecdhCurve", "highWaterMark", "honorCipherOrder", "key",
-  "maxVersion", "minVersion", "passphrase", "pfx", "privateKeyEngine",
-  "privateKeyIdentifier", "rejectUnauthorized", "secureOptions",
-  "secureProtocol", "servername", "session", "sessionIdContext",
-  "sessionTimeout", "sigalgs", "ticketKeys",
+  "ca",
+  "cert",
+  "checkServerIdentity",
+  "ciphers",
+  "clientCertEngine",
+  "crl",
+  "dhparam",
+  "ecdhCurve",
+  "highWaterMark",
+  "honorCipherOrder",
+  "key",
+  "maxVersion",
+  "minVersion",
+  "passphrase",
+  "pfx",
+  "privateKeyEngine",
+  "privateKeyIdentifier",
+  "rejectUnauthorized",
+  "secureOptions",
+  "secureProtocol",
+  "servername",
+  "session",
+  "sessionIdContext",
+  "sessionTimeout",
+  "sigalgs",
+  "ticketKeys",
 ]);
 
 /** tls.createServer / tls.createSecureContext / https.createServer /
  * http2.createSecureServer's documented TLS-side option keys (Node v24 —
  * tls.createSecureContext + tls.createServer + net.createServer). */
 export const TLS_SERVER_DOCUMENTED_OPTIONS: ReadonlySet<string> = new Set([
-  "ALPNProtocols", "ALPNCallback", "SNICallback", "allowHalfOpen", "ca",
-  "cert", "ciphers", "clientCertEngine", "crl", "dhparam", "ecdhCurve",
-  "enableTrace", "handshakeTimeout", "highWaterMark", "honorCipherOrder",
-  "keepAlive", "keepAliveInitialDelay", "key", "maxVersion", "minVersion",
-  "noDelay", "passphrase", "pauseOnConnect", "pfx", "privateKeyEngine",
-  "privateKeyIdentifier", "pskCallback", "pskIdentityHint",
-  "rejectUnauthorized", "requestCert", "requestOCSP", "secureContext",
-  "secureOptions", "secureProtocol", "sessionIdContext", "sessionTimeout",
-  "sigalgs", "ticketKeys",
+  "ALPNProtocols",
+  "ALPNCallback",
+  "SNICallback",
+  "allowHalfOpen",
+  "ca",
+  "cert",
+  "ciphers",
+  "clientCertEngine",
+  "crl",
+  "dhparam",
+  "ecdhCurve",
+  "enableTrace",
+  "handshakeTimeout",
+  "highWaterMark",
+  "honorCipherOrder",
+  "keepAlive",
+  "keepAliveInitialDelay",
+  "key",
+  "maxVersion",
+  "minVersion",
+  "noDelay",
+  "passphrase",
+  "pauseOnConnect",
+  "pfx",
+  "privateKeyEngine",
+  "privateKeyIdentifier",
+  "pskCallback",
+  "pskIdentityHint",
+  "rejectUnauthorized",
+  "requestCert",
+  "requestOCSP",
+  "secureContext",
+  "secureOptions",
+  "secureProtocol",
+  "sessionIdContext",
+  "sessionTimeout",
+  "sigalgs",
+  "ticketKeys",
 ]);
 
 /** http2.createSecureServer's documented keys: the h2 knobs on top of the
  * TLS server set. */
 export const HTTP2_SECURE_SERVER_DOCUMENTED_OPTIONS: ReadonlySet<string> = new Set([
   ...TLS_SERVER_DOCUMENTED_OPTIONS,
-  "allowHTTP1", "maxDeflateDynamicTableSize", "maxSettings",
-  "maxSessionMemory", "maxHeaderListPairs", "maxOutstandingPings",
-  "maxSendHeaderBlockLength", "origins", "paddingStrategy",
-  "peerMaxConcurrentStreams", "remoteCustomSettings", "selectPadding",
-  "settings", "streamResetBurst", "streamResetRate",
+  "allowHTTP1",
+  "maxDeflateDynamicTableSize",
+  "maxSettings",
+  "maxSessionMemory",
+  "maxHeaderListPairs",
+  "maxOutstandingPings",
+  "maxSendHeaderBlockLength",
+  "origins",
+  "paddingStrategy",
+  "peerMaxConcurrentStreams",
+  "remoteCustomSettings",
+  "selectPadding",
+  "settings",
+  "streamResetBurst",
+  "streamResetRate",
   "unknownProtocolTimeout",
 ]);
 
 /** fs.watch's documented option keys. */
 export const FS_WATCH_DOCUMENTED_OPTIONS: ReadonlySet<string> = new Set([
-  "persistent", "recursive", "encoding", "signal",
+  "persistent",
+  "recursive",
+  "encoding",
+  "signal",
 ]);
 
 /** fs.readdirSync's documented option keys. */
 export const FS_READDIR_DOCUMENTED_OPTIONS: ReadonlySet<string> = new Set([
-  "encoding", "withFileTypes", "recursive",
+  "encoding",
+  "withFileTypes",
+  "recursive",
 ]);
 
 /** fs.writeFileSync's documented option keys. */
 export const FS_WRITE_FILE_DOCUMENTED_OPTIONS: ReadonlySet<string> = new Set([
-  "encoding", "mode", "flag", "flush", "signal",
+  "encoding",
+  "mode",
+  "flag",
+  "flush",
+  "signal",
 ]);
 
 /** dns.lookup's documented option keys. */
 export const DNS_LOOKUP_DOCUMENTED_OPTIONS: ReadonlySet<string> = new Set([
-  "family", "hints", "all", "order", "verbatim",
+  "family",
+  "hints",
+  "all",
+  "order",
+  "verbatim",
 ]);
 
 /** querystring.parse's documented option keys (Node v24). */
 export const QS_PARSE_DOCUMENTED_OPTIONS: ReadonlySet<string> = new Set([
-  "maxKeys", "decodeURIComponent",
+  "maxKeys",
+  "decodeURIComponent",
 ]);
 
 /** querystring.stringify's documented option keys (Node v24). */
-export const QS_STRINGIFY_DOCUMENTED_OPTIONS: ReadonlySet<string> = new Set([
-  "encodeURIComponent",
-]);
+export const QS_STRINGIFY_DOCUMENTED_OPTIONS: ReadonlySet<string> = new Set(["encodeURIComponent"]);
 
 /** readline.createInterface's documented option keys. */
 export const READLINE_DOCUMENTED_OPTIONS: ReadonlySet<string> = new Set([
-  "input", "output", "completer", "terminal", "history", "historySize",
-  "removeHistoryDuplicates", "prompt", "crlfDelay", "escapeCodeTimeout",
-  "tabSize", "signal",
+  "input",
+  "output",
+  "completer",
+  "terminal",
+  "history",
+  "historySize",
+  "removeHistoryDuplicates",
+  "prompt",
+  "crlfDelay",
+  "escapeCodeTimeout",
+  "tabSize",
+  "signal",
 ]);
 
 /** The lowered Array<T> method surface. Like STR_METHODS, membership is
@@ -331,11 +488,26 @@ export const ARRAY_METHODS = new Set([
  * property-access position. */
 export const COLLECTION_ITERATOR_METHODS = new Set(["keys", "values", "entries"]);
 
-export const MAP_METHODS = new Set(["get", "set", "has", "delete", "clear", "forEach", ...COLLECTION_ITERATOR_METHODS]);
+export const MAP_METHODS = new Set([
+  "get",
+  "set",
+  "has",
+  "delete",
+  "clear",
+  "forEach",
+  ...COLLECTION_ITERATOR_METHODS,
+]);
 
 /** The lowered Set<T> method surface — Map's minus get/set plus add.
  * `size` is a property, handled in property-access position. */
-export const SET_METHODS = new Set(["add", "has", "delete", "clear", "forEach", ...COLLECTION_ITERATOR_METHODS]);
+export const SET_METHODS = new Set([
+  "add",
+  "has",
+  "delete",
+  "clear",
+  "forEach",
+  ...COLLECTION_ITERATOR_METHODS,
+]);
 
 /** The ES2025 Set composition surface (union/intersection/…): desugared
  * to interned helper loops over the set iteration primitives — no user
@@ -480,13 +652,37 @@ export const ISLAND_SURFACE = {
   math: {
     // The static table below handles these methods at its admitted arities.
     fns: {
-      abs: ISL_N1, acos: ISL_N1, asin: ISL_N1, atan: ISL_N1, atan2: ISL_N2,
-      acosh: ISL_N1, asinh: ISL_N1, atanh: ISL_N1,
-      cbrt: ISL_N1, ceil: ISL_N1, clz32: ISL_N1, cos: ISL_N1, cosh: ISL_N1,
-      exp: ISL_N1, expm1: ISL_N1, fround: ISL_N1,
-      hypot: ISL_N2, imul: ISL_N2, log: ISL_N1, log1p: ISL_N1, log2: ISL_N1, log10: ISL_N1, pow: ISL_N2,
+      abs: ISL_N1,
+      acos: ISL_N1,
+      asin: ISL_N1,
+      atan: ISL_N1,
+      atan2: ISL_N2,
+      acosh: ISL_N1,
+      asinh: ISL_N1,
+      atanh: ISL_N1,
+      cbrt: ISL_N1,
+      ceil: ISL_N1,
+      clz32: ISL_N1,
+      cos: ISL_N1,
+      cosh: ISL_N1,
+      exp: ISL_N1,
+      expm1: ISL_N1,
+      fround: ISL_N1,
+      hypot: ISL_N2,
+      imul: ISL_N2,
+      log: ISL_N1,
+      log1p: ISL_N1,
+      log2: ISL_N1,
+      log10: ISL_N1,
+      pow: ISL_N2,
       round: ISL_N1,
-      sign: ISL_N1, sin: ISL_N1, sinh: ISL_N1, sqrt: ISL_N1, tan: ISL_N1, tanh: ISL_N1, trunc: ISL_N1,
+      sign: ISL_N1,
+      sin: ISL_N1,
+      sinh: ISL_N1,
+      sqrt: ISL_N1,
+      tan: ISL_N1,
+      tanh: ISL_N1,
+      trunc: ISL_N1,
     } as Record<string, IslandFnEntry | undefined>,
     // Math constants are compile-time literals, not island properties.
     props: {} as Record<string, IrType | undefined>,
@@ -630,19 +826,69 @@ function exactValueParams(...types: IrType[]): BuiltinValueParam[] {
 /** Object helpers whose checked-native ABI is also their stored value ABI.
  * These adapters operate on the live checked object/property table. */
 export const OBJECT_CALLABLE_VALUES: Record<string, BuiltinModuleFn | undefined> = {
-  is: { fn: "dyn.sameValue", params: [DYN, DYN], result: BOOL, valueParams: exactValueParams(DYN, DYN) },
-  create: { fn: "dyn.objCreateWithProperties", params: [DYN, DYN], result: DYN, valueParams: exactValueParams(DYN, DYN) },
-  defineProperty: { fn: "dyn.defineProperty", params: [DYN, DYN, DYN], result: DYN, valueParams: exactValueParams(DYN, DYN, DYN) },
-  getOwnPropertyDescriptor: { fn: "dyn.getOwnPropertyDescriptor", params: [DYN, DYN], result: DYN, valueParams: exactValueParams(DYN, DYN) },
-  getOwnPropertyDescriptors: { fn: "dyn.getOwnPropertyDescriptors", params: [DYN], result: DYN, valueParams: exactValueParams(DYN) },
-  defineProperties: { fn: "dyn.defineProps", params: [DYN, DYN], result: DYN, valueParams: exactValueParams(DYN, DYN) },
+  is: {
+    fn: "dyn.sameValue",
+    params: [DYN, DYN],
+    result: BOOL,
+    valueParams: exactValueParams(DYN, DYN),
+  },
+  create: {
+    fn: "dyn.objCreateWithProperties",
+    params: [DYN, DYN],
+    result: DYN,
+    valueParams: exactValueParams(DYN, DYN),
+  },
+  defineProperty: {
+    fn: "dyn.defineProperty",
+    params: [DYN, DYN, DYN],
+    result: DYN,
+    valueParams: exactValueParams(DYN, DYN, DYN),
+  },
+  getOwnPropertyDescriptor: {
+    fn: "dyn.getOwnPropertyDescriptor",
+    params: [DYN, DYN],
+    result: DYN,
+    valueParams: exactValueParams(DYN, DYN),
+  },
+  getOwnPropertyDescriptors: {
+    fn: "dyn.getOwnPropertyDescriptors",
+    params: [DYN],
+    result: DYN,
+    valueParams: exactValueParams(DYN),
+  },
+  defineProperties: {
+    fn: "dyn.defineProps",
+    params: [DYN, DYN],
+    result: DYN,
+    valueParams: exactValueParams(DYN, DYN),
+  },
   keys: { fn: "dyn.objKeys", params: [DYN], result: DYN, valueParams: exactValueParams(DYN) },
   values: { fn: "dyn.objValues", params: [DYN], result: DYN, valueParams: exactValueParams(DYN) },
   entries: { fn: "dyn.objEntries", params: [DYN], result: DYN, valueParams: exactValueParams(DYN) },
-  fromEntries: { fn: "dyn.fromEntries", params: [DYN], result: DYN, valueParams: exactValueParams(DYN) },
-  getOwnPropertySymbols: { fn: "dyn.getOwnPropertySymbols", params: [DYN], result: DYN, valueParams: exactValueParams(DYN) },
-  getOwnPropertyNames: { fn: "dyn.getOwnPropertyNames", params: [DYN], result: DYN, valueParams: exactValueParams(DYN) },
-  getPrototypeOf: { fn: "dyn.getPrototype", params: [DYN], result: DYN, valueParams: exactValueParams(DYN) },
+  fromEntries: {
+    fn: "dyn.fromEntries",
+    params: [DYN],
+    result: DYN,
+    valueParams: exactValueParams(DYN),
+  },
+  getOwnPropertySymbols: {
+    fn: "dyn.getOwnPropertySymbols",
+    params: [DYN],
+    result: DYN,
+    valueParams: exactValueParams(DYN),
+  },
+  getOwnPropertyNames: {
+    fn: "dyn.getOwnPropertyNames",
+    params: [DYN],
+    result: DYN,
+    valueParams: exactValueParams(DYN),
+  },
+  getPrototypeOf: {
+    fn: "dyn.getPrototype",
+    params: [DYN],
+    result: DYN,
+    valueParams: exactValueParams(DYN),
+  },
 };
 
 /** The lowerable surface of the supported node builtin modules, keyed by
@@ -658,33 +904,144 @@ export const OBJECT_CALLABLE_VALUES: Record<string, BuiltinModuleFn | undefined>
  * platform's rules on any host). toNamespacedPath is the posix identity
  * (Node: a non-op on posix systems). */
 const PATH_MODULE_FNS: Record<string, BuiltinModuleFn | undefined> = {
-  join: { fn: "path.join", params: [STRING], result: STRING, variadicPack: true, valueParams: [{ mode: "rest", type: STRING }] },
-  resolve: { fn: "path.resolve", params: [STRING], result: STRING, variadicPack: true, valueParams: [{ mode: "rest", type: STRING }] },
-  normalize: { fn: "path.normalize", params: [STRING], result: STRING, valueParams: [{ mode: "required", type: STRING }] },
-  dirname: { fn: "path.dirname", params: [STRING], result: STRING, valueParams: [{ mode: "required", type: STRING }] },
-  basename: { fn: "path.basename", params: [STRING, STRING], result: STRING, defaults: [""], valueParams: [{ mode: "required", type: STRING }, { mode: "optional", type: STRING, defaultValue: "" }] },
-  extname: { fn: "path.extname", params: [STRING], result: STRING, valueParams: [{ mode: "required", type: STRING }] },
-  isAbsolute: { fn: "path.isAbsolute", params: [STRING], result: BOOL, valueParams: [{ mode: "required", type: STRING }] },
-  relative: { fn: "path.relative", params: [STRING, STRING], result: STRING, valueParams: [{ mode: "required", type: STRING }, { mode: "required", type: STRING }] },
-  toNamespacedPath: { fn: "path.toNamespacedPath", params: [STRING], result: STRING, valueParams: [{ mode: "required", type: STRING }] },
+  join: {
+    fn: "path.join",
+    params: [STRING],
+    result: STRING,
+    variadicPack: true,
+    valueParams: [{ mode: "rest", type: STRING }],
+  },
+  resolve: {
+    fn: "path.resolve",
+    params: [STRING],
+    result: STRING,
+    variadicPack: true,
+    valueParams: [{ mode: "rest", type: STRING }],
+  },
+  normalize: {
+    fn: "path.normalize",
+    params: [STRING],
+    result: STRING,
+    valueParams: [{ mode: "required", type: STRING }],
+  },
+  dirname: {
+    fn: "path.dirname",
+    params: [STRING],
+    result: STRING,
+    valueParams: [{ mode: "required", type: STRING }],
+  },
+  basename: {
+    fn: "path.basename",
+    params: [STRING, STRING],
+    result: STRING,
+    defaults: [""],
+    valueParams: [
+      { mode: "required", type: STRING },
+      { mode: "optional", type: STRING, defaultValue: "" },
+    ],
+  },
+  extname: {
+    fn: "path.extname",
+    params: [STRING],
+    result: STRING,
+    valueParams: [{ mode: "required", type: STRING }],
+  },
+  isAbsolute: {
+    fn: "path.isAbsolute",
+    params: [STRING],
+    result: BOOL,
+    valueParams: [{ mode: "required", type: STRING }],
+  },
+  relative: {
+    fn: "path.relative",
+    params: [STRING, STRING],
+    result: STRING,
+    valueParams: [
+      { mode: "required", type: STRING },
+      { mode: "required", type: STRING },
+    ],
+  },
+  toNamespacedPath: {
+    fn: "path.toNamespacedPath",
+    params: [STRING],
+    result: STRING,
+    valueParams: [{ mode: "required", type: STRING }],
+  },
 };
 
 /** The win32 twins (scr_path.c's Node-v24 path.win32 port, byte-for-byte):
  * "path/win32" everywhere, and the bare-module table when the build
  * TARGETS win32 — Node on Windows is path.win32. */
 const PATH_WIN32_MODULE_FNS: Record<string, BuiltinModuleFn | undefined> = {
-  join: { fn: "path.win32Join", params: [STRING], result: STRING, variadicPack: true, valueParams: [{ mode: "rest", type: STRING }] },
-  resolve: { fn: "path.win32Resolve", params: [STRING], result: STRING, variadicPack: true, valueParams: [{ mode: "rest", type: STRING }] },
-  normalize: { fn: "path.win32Normalize", params: [STRING], result: STRING, valueParams: [{ mode: "required", type: STRING }] },
-  dirname: { fn: "path.win32Dirname", params: [STRING], result: STRING, valueParams: [{ mode: "required", type: STRING }] },
-  basename: { fn: "path.win32Basename", params: [STRING, STRING], result: STRING, defaults: [""], valueParams: [{ mode: "required", type: STRING }, { mode: "optional", type: STRING, defaultValue: "" }] },
-  extname: { fn: "path.win32Extname", params: [STRING], result: STRING, valueParams: [{ mode: "required", type: STRING }] },
-  isAbsolute: { fn: "path.win32IsAbsolute", params: [STRING], result: BOOL, valueParams: [{ mode: "required", type: STRING }] },
-  relative: { fn: "path.win32Relative", params: [STRING, STRING], result: STRING, valueParams: [{ mode: "required", type: STRING }, { mode: "required", type: STRING }] },
-  toNamespacedPath: { fn: "path.win32ToNamespacedPath", params: [STRING], result: STRING, valueParams: [{ mode: "required", type: STRING }] },
+  join: {
+    fn: "path.win32Join",
+    params: [STRING],
+    result: STRING,
+    variadicPack: true,
+    valueParams: [{ mode: "rest", type: STRING }],
+  },
+  resolve: {
+    fn: "path.win32Resolve",
+    params: [STRING],
+    result: STRING,
+    variadicPack: true,
+    valueParams: [{ mode: "rest", type: STRING }],
+  },
+  normalize: {
+    fn: "path.win32Normalize",
+    params: [STRING],
+    result: STRING,
+    valueParams: [{ mode: "required", type: STRING }],
+  },
+  dirname: {
+    fn: "path.win32Dirname",
+    params: [STRING],
+    result: STRING,
+    valueParams: [{ mode: "required", type: STRING }],
+  },
+  basename: {
+    fn: "path.win32Basename",
+    params: [STRING, STRING],
+    result: STRING,
+    defaults: [""],
+    valueParams: [
+      { mode: "required", type: STRING },
+      { mode: "optional", type: STRING, defaultValue: "" },
+    ],
+  },
+  extname: {
+    fn: "path.win32Extname",
+    params: [STRING],
+    result: STRING,
+    valueParams: [{ mode: "required", type: STRING }],
+  },
+  isAbsolute: {
+    fn: "path.win32IsAbsolute",
+    params: [STRING],
+    result: BOOL,
+    valueParams: [{ mode: "required", type: STRING }],
+  },
+  relative: {
+    fn: "path.win32Relative",
+    params: [STRING, STRING],
+    result: STRING,
+    valueParams: [
+      { mode: "required", type: STRING },
+      { mode: "required", type: STRING },
+    ],
+  },
+  toNamespacedPath: {
+    fn: "path.win32ToNamespacedPath",
+    params: [STRING],
+    result: STRING,
+    valueParams: [{ mode: "required", type: STRING }],
+  },
 };
 
-export const BUILTIN_MODULE_FNS: Record<string, Record<string, BuiltinModuleFn | undefined> | undefined> = {
+export const BUILTIN_MODULE_FNS: Record<
+  string,
+  Record<string, BuiltinModuleFn | undefined> | undefined
+> = {
   fs: {
     readFileSync: { fn: "fs.readFileSync", params: [STRING, STRING], result: STRING },
     // The exact-API subset is first-class. A fixed native ABI is not enough:
@@ -693,7 +1050,12 @@ export const BUILTIN_MODULE_FNS: Record<string, Record<string, BuiltinModuleFn |
     // options before entering the fixed runtime call.
     writeFileSync: { fn: "fs.writeFileSync", params: [STRING, STRING], result: VOID },
     appendFileSync: { fn: "fs.appendFileSync", params: [STRING, STRING], result: VOID },
-    existsSync: { fn: "fs.existsSync", params: [STRING], result: BOOL, valueParams: exactValueParams(STRING) },
+    existsSync: {
+      fn: "fs.existsSync",
+      params: [STRING],
+      result: BOOL,
+      valueParams: exactValueParams(STRING),
+    },
     mkdirSync: { fn: "fs.mkdirSync", params: [STRING], result: VOID },
     rmSync: { fn: "fs.rmSync", params: [STRING], result: VOID },
     rmdirSync: { fn: "fs.rmdirSync", params: [STRING], result: VOID },
@@ -703,9 +1065,24 @@ export const BUILTIN_MODULE_FNS: Record<string, Record<string, BuiltinModuleFn |
     // accessSync's omitted mode completes to 0 (F_OK) in the special case
     // in lowerBuiltinModuleCall — string `defaults` can't spell a number.
     accessSync: { fn: "fs.accessSync", params: [STRING, F64], result: VOID },
-    unlinkSync: { fn: "fs.unlinkSync", params: [STRING], result: VOID, valueParams: exactValueParams(STRING) },
-    chmodSync: { fn: "fs.chmodSync", params: [STRING, F64], result: VOID, valueParams: exactValueParams(STRING, F64) },
-    chownSync: { fn: "fs.chownSync", params: [STRING, F64, F64], result: VOID, valueParams: exactValueParams(STRING, F64, F64) },
+    unlinkSync: {
+      fn: "fs.unlinkSync",
+      params: [STRING],
+      result: VOID,
+      valueParams: exactValueParams(STRING),
+    },
+    chmodSync: {
+      fn: "fs.chmodSync",
+      params: [STRING, F64],
+      result: VOID,
+      valueParams: exactValueParams(STRING, F64),
+    },
+    chownSync: {
+      fn: "fs.chownSync",
+      params: [STRING, F64, F64],
+      result: VOID,
+      valueParams: exactValueParams(STRING, F64, F64),
+    },
     // The 2-argument form only: Node's mode flags (COPYFILE_EXCL, ...)
     // land on the arity fence.
     copyFileSync: { fn: "fs.copyFileSync", params: [STRING, STRING], result: VOID },
@@ -714,30 +1091,78 @@ export const BUILTIN_MODULE_FNS: Record<string, Record<string, BuiltinModuleFn |
     // adapter. The row still projects the static surface and routes the
     // dispatch.
     rename: { fn: "fs.renameCb", params: [], result: VOID },
-    renameSync: { fn: "fs.renameSync", params: [STRING, STRING], result: VOID, valueParams: exactValueParams(STRING, STRING) },
+    renameSync: {
+      fn: "fs.renameSync",
+      params: [STRING, STRING],
+      result: VOID,
+      valueParams: exactValueParams(STRING, STRING),
+    },
     // statSync's no-follow sibling; stats.isSymbolicLink answers what the
     // follow-free snapshot saw.
     lstatSync: { fn: "fs.lstatSync", params: [STRING], result: STATS_T },
-    fstatSync: { fn: "fs.fstatSync", params: [F64], result: STATS_T, valueParams: exactValueParams(F64) },
-    fchmodSync: { fn: "fs.fchmodSync", params: [F64, F64], result: VOID, valueParams: exactValueParams(F64, F64) },
-    fsyncSync: { fn: "fs.fsyncSync", params: [F64], result: VOID, valueParams: exactValueParams(F64) },
-    fdatasyncSync: { fn: "fs.fdatasyncSync", params: [F64], result: VOID, valueParams: exactValueParams(F64) },
+    fstatSync: {
+      fn: "fs.fstatSync",
+      params: [F64],
+      result: STATS_T,
+      valueParams: exactValueParams(F64),
+    },
+    fchmodSync: {
+      fn: "fs.fchmodSync",
+      params: [F64, F64],
+      result: VOID,
+      valueParams: exactValueParams(F64, F64),
+    },
+    fsyncSync: {
+      fn: "fs.fsyncSync",
+      params: [F64],
+      result: VOID,
+      valueParams: exactValueParams(F64),
+    },
+    fdatasyncSync: {
+      fn: "fs.fdatasyncSync",
+      params: [F64],
+      result: VOID,
+      valueParams: exactValueParams(F64),
+    },
     ftruncateSync: { fn: "fs.ftruncateSync", params: [F64, F64], result: VOID },
     utimesSync: { fn: "fs.utimesSync", params: [DYN, DYN, DYN], result: VOID },
     futimesSync: { fn: "fs.futimesSync", params: [DYN, DYN, DYN], result: VOID },
     lutimesSync: { fn: "fs.lutimesSync", params: [DYN, DYN, DYN], result: VOID },
     readvSync: { fn: "fs.readvSync", params: [F64, arrayOf(BYTES_U8), F64], result: F64 },
     writevSync: { fn: "fs.writevSync", params: [F64, arrayOf(BYTES_U8), F64], result: F64 },
-    linkSync: { fn: "fs.linkSync", params: [DYN, DYN], result: VOID, valueParams: exactValueParams(DYN, DYN) },
-    symlinkSync: { fn: "fs.symlinkSync", params: [DYN, DYN, DYN], result: VOID, valueParams: [
-      ...exactValueParams(DYN, DYN), { mode: "optional", type: DYN, defaultValue: undefined },
-    ] },
-    readlinkSync: { fn: "fs.readlinkSync", params: [DYN, DYN], result: DYN, valueParams: [
-      ...exactValueParams(DYN), { mode: "optional", type: DYN, defaultValue: undefined },
-    ] },
-    statfsSync: { fn: "fs.statfsSync", params: [DYN, DYN], result: DYN, valueParams: [
-      ...exactValueParams(DYN), { mode: "optional", type: DYN, defaultValue: undefined },
-    ] },
+    linkSync: {
+      fn: "fs.linkSync",
+      params: [DYN, DYN],
+      result: VOID,
+      valueParams: exactValueParams(DYN, DYN),
+    },
+    symlinkSync: {
+      fn: "fs.symlinkSync",
+      params: [DYN, DYN, DYN],
+      result: VOID,
+      valueParams: [
+        ...exactValueParams(DYN, DYN),
+        { mode: "optional", type: DYN, defaultValue: undefined },
+      ],
+    },
+    readlinkSync: {
+      fn: "fs.readlinkSync",
+      params: [DYN, DYN],
+      result: DYN,
+      valueParams: [
+        ...exactValueParams(DYN),
+        { mode: "optional", type: DYN, defaultValue: undefined },
+      ],
+    },
+    statfsSync: {
+      fn: "fs.statfsSync",
+      params: [DYN, DYN],
+      result: DYN,
+      valueParams: [
+        ...exactValueParams(DYN),
+        { mode: "optional", type: DYN, defaultValue: undefined },
+      ],
+    },
     // realpath(3) — Node's realpathSync (failures spell syscall "lstat",
     // Node's own message shape).
     realpathSync: { fn: "fs.realpathSync", params: [STRING], result: STRING },
@@ -757,7 +1182,12 @@ export const BUILTIN_MODULE_FNS: Record<string, Record<string, BuiltinModuleFn |
     // overloads lower to separate fixed-width runtime ABIs. As with
     // readSync, -1 is the current-offset sentinel.
     writeSync: { fn: "fs.writeSync", params: [F64, BYTES_U8, F64, F64, F64], result: F64 },
-    closeSync: { fn: "fs.closeSync", params: [F64], result: VOID, valueParams: exactValueParams(F64) },
+    closeSync: {
+      fn: "fs.closeSync",
+      params: [F64],
+      result: VOID,
+      valueParams: exactValueParams(F64),
+    },
     // Entirely special-cased (lowerFsWatchCall — the callback needs an
     // adapter per listener shape); this entry only routes the dispatch.
     watch: { fn: "fs.watch", params: [], result: VOID },
@@ -766,37 +1196,96 @@ export const BUILTIN_MODULE_FNS: Record<string, Record<string, BuiltinModuleFn |
     // The sync operations behind already-settled promises: failures
     // REJECT (catchable at the await) instead of throwing. readFile is
     // utf8-fenced exactly like readFileSync (same special case below).
-    readFile: { fn: "fsp.readFile", params: [STRING, STRING], result: { kind: "promise", inner: STRING } },
-    writeFile: { fn: "fsp.writeFile", params: [STRING, STRING], result: { kind: "promise", inner: VOID } },
+    readFile: {
+      fn: "fsp.readFile",
+      params: [STRING, STRING],
+      result: { kind: "promise", inner: STRING },
+    },
+    writeFile: {
+      fn: "fsp.writeFile",
+      params: [STRING, STRING],
+      result: { kind: "promise", inner: VOID },
+    },
     mkdir: { fn: "fsp.mkdir", params: [STRING], result: { kind: "promise", inner: VOID } },
-    readdir: { fn: "fsp.readdir", params: [STRING], result: { kind: "promise", inner: arrayOf(STRING) } },
+    readdir: {
+      fn: "fsp.readdir",
+      params: [STRING],
+      result: { kind: "promise", inner: arrayOf(STRING) },
+    },
     rm: { fn: "fsp.rm", params: [STRING], result: { kind: "promise", inner: VOID } },
     stat: { fn: "fsp.stat", params: [STRING], result: { kind: "promise", inner: STATS_T } },
     realpath: { fn: "fsp.realpath", params: [STRING], result: { kind: "promise", inner: STRING } },
     lstat: { fn: "fsp.lstat", params: [STRING], result: { kind: "promise", inner: STATS_T } },
-    unlink: { fn: "fsp.unlink", params: [STRING], result: { kind: "promise", inner: VOID }, valueParams: exactValueParams(STRING) },
-    chmod: { fn: "fsp.chmod", params: [STRING, F64], result: { kind: "promise", inner: VOID }, valueParams: exactValueParams(STRING, F64) },
-    link: { fn: "fsp.link", params: [DYN, DYN], result: { kind: "promise", inner: VOID }, valueParams: exactValueParams(DYN, DYN) },
-    symlink: { fn: "fsp.symlink", params: [DYN, DYN, DYN], result: { kind: "promise", inner: VOID }, valueParams: [
-      ...exactValueParams(DYN, DYN), { mode: "optional", type: DYN, defaultValue: undefined },
-    ] },
-    readlink: { fn: "fsp.readlink", params: [DYN, DYN], result: { kind: "promise", inner: DYN }, valueParams: [
-      ...exactValueParams(DYN), { mode: "optional", type: DYN, defaultValue: undefined },
-    ] },
-    statfs: { fn: "fsp.statfs", params: [DYN, DYN], result: { kind: "promise", inner: DYN }, valueParams: [
-      ...exactValueParams(DYN), { mode: "optional", type: DYN, defaultValue: undefined },
-    ] },
+    unlink: {
+      fn: "fsp.unlink",
+      params: [STRING],
+      result: { kind: "promise", inner: VOID },
+      valueParams: exactValueParams(STRING),
+    },
+    chmod: {
+      fn: "fsp.chmod",
+      params: [STRING, F64],
+      result: { kind: "promise", inner: VOID },
+      valueParams: exactValueParams(STRING, F64),
+    },
+    link: {
+      fn: "fsp.link",
+      params: [DYN, DYN],
+      result: { kind: "promise", inner: VOID },
+      valueParams: exactValueParams(DYN, DYN),
+    },
+    symlink: {
+      fn: "fsp.symlink",
+      params: [DYN, DYN, DYN],
+      result: { kind: "promise", inner: VOID },
+      valueParams: [
+        ...exactValueParams(DYN, DYN),
+        { mode: "optional", type: DYN, defaultValue: undefined },
+      ],
+    },
+    readlink: {
+      fn: "fsp.readlink",
+      params: [DYN, DYN],
+      result: { kind: "promise", inner: DYN },
+      valueParams: [
+        ...exactValueParams(DYN),
+        { mode: "optional", type: DYN, defaultValue: undefined },
+      ],
+    },
+    statfs: {
+      fn: "fsp.statfs",
+      params: [DYN, DYN],
+      result: { kind: "promise", inner: DYN },
+      valueParams: [
+        ...exactValueParams(DYN),
+        { mode: "optional", type: DYN, defaultValue: undefined },
+      ],
+    },
     utimes: { fn: "fsp.utimes", params: [DYN, DYN, DYN], result: { kind: "promise", inner: VOID } },
-    lutimes: { fn: "fsp.lutimes", params: [DYN, DYN, DYN], result: { kind: "promise", inner: VOID } },
-    rename: { fn: "fsp.rename", params: [STRING, STRING], result: { kind: "promise", inner: VOID }, valueParams: exactValueParams(STRING, STRING) },
+    lutimes: {
+      fn: "fsp.lutimes",
+      params: [DYN, DYN, DYN],
+      result: { kind: "promise", inner: VOID },
+    },
+    rename: {
+      fn: "fsp.rename",
+      params: [STRING, STRING],
+      result: { kind: "promise", inner: VOID },
+      valueParams: exactValueParams(STRING, STRING),
+    },
     // open's optional flags/mode completion is special-cased in
     // lowerBuiltinModuleCall; this row routes all import spellings and
     // gives coverage the static member.
-    open: { fn: "fsp.open", params: [STRING, STRING, F64], result: { kind: "promise", inner: FILEHANDLE_T }, valueParams: [
-      { mode: "required", type: STRING },
-      { mode: "optional", type: STRING, defaultValue: "r" },
-      { mode: "optional", type: F64, defaultValue: 0o666 },
-    ] },
+    open: {
+      fn: "fsp.open",
+      params: [STRING, STRING, F64],
+      result: { kind: "promise", inner: FILEHANDLE_T },
+      valueParams: [
+        { mode: "required", type: STRING },
+        { mode: "optional", type: STRING, defaultValue: "r" },
+        { mode: "optional", type: F64, defaultValue: 0o666 },
+      ],
+    },
   },
   // The bare module's POSIX-target binding; a win32 target rebinds it to
   // the win32 table (builtinModuleFnsOf — Node on Windows IS path.win32).
@@ -836,7 +1325,12 @@ export const BUILTIN_MODULE_FNS: Record<string, Record<string, BuiltinModuleFn |
     // form KEEPS its one-libCall lowering (lowerCryptoComposedCall runs
     // first and the Buffer never materializes there); this entry covers
     // the bare calls and non-composed uses.
-    randomBytes: { fn: "crypto.randomBytes", params: [F64], result: BYTES_U8, valueParams: exactValueParams(F64) },
+    randomBytes: {
+      fn: "crypto.randomBytes",
+      params: [F64],
+      result: BYTES_U8,
+      valueParams: exactValueParams(F64),
+    },
     // The crypto utility surface is special-cased for overloads and
     // string/Buffer splits in lowerCryptoModuleCall. These rows carry the
     // canonical signatures for manifest projection and fallback dispatch.
@@ -846,9 +1340,17 @@ export const BUILTIN_MODULE_FNS: Record<string, Record<string, BuiltinModuleFn |
     timingSafeEqual: { fn: "crypto.timingSafeEqual", params: [BYTES_U8, BYTES_U8], result: BOOL },
     randomFillSync: { fn: "crypto.randomFill", params: [BYTES_U8, F64, F64], result: BYTES_U8 },
     randomInt: { fn: "crypto.randomInt", params: [F64, F64], result: F64 },
-    pbkdf2Sync: { fn: "crypto.pbkdf2", params: [BYTES_U8, BYTES_U8, F64, F64, STRING], result: BYTES_U8 },
+    pbkdf2Sync: {
+      fn: "crypto.pbkdf2",
+      params: [BYTES_U8, BYTES_U8, F64, F64, STRING],
+      result: BYTES_U8,
+    },
     pbkdf2: { fn: "crypto.pbkdf2Cb", params: [], result: VOID },
-    hkdfSync: { fn: "crypto.hkdf", params: [STRING, BYTES_U8, BYTES_U8, BYTES_U8, F64], result: DYN },
+    hkdfSync: {
+      fn: "crypto.hkdf",
+      params: [STRING, BYTES_U8, BYTES_U8, BYTES_U8, F64],
+      result: DYN,
+    },
     hkdf: { fn: "crypto.hkdfCb", params: [], result: VOID },
     scryptSync: { fn: "crypto.scrypt", params: [BYTES_U8, BYTES_U8, F64, DYN], result: BYTES_U8 },
     scrypt: { fn: "crypto.scryptCb", params: [], result: VOID },
@@ -875,9 +1377,33 @@ export const BUILTIN_MODULE_FNS: Record<string, Record<string, BuiltinModuleFn |
     crc32: { fn: "zlib.crc32", params: [], result: F64 },
   },
   url: {
-    fileURLToPath: { fn: "url.fileURLToPathOptions", params: [DYN, DYN], result: STRING, valueParams: [{ mode: "required", type: DYN }, { mode: "optional", type: DYN, defaultValue: undefined }] },
-    fileURLToPathBuffer: { fn: "url.fileURLToPathBuffer", params: [DYN, DYN], result: BYTES_U8, valueParams: [{ mode: "required", type: DYN }, { mode: "optional", type: DYN, defaultValue: undefined }] },
-    pathToFileURL: { fn: "url.pathToFileURLChecked", params: [DYN, DYN], result: URL_T, valueParams: [{ mode: "required", type: DYN }, { mode: "optional", type: DYN, defaultValue: undefined }] },
+    fileURLToPath: {
+      fn: "url.fileURLToPathOptions",
+      params: [DYN, DYN],
+      result: STRING,
+      valueParams: [
+        { mode: "required", type: DYN },
+        { mode: "optional", type: DYN, defaultValue: undefined },
+      ],
+    },
+    fileURLToPathBuffer: {
+      fn: "url.fileURLToPathBuffer",
+      params: [DYN, DYN],
+      result: BYTES_U8,
+      valueParams: [
+        { mode: "required", type: DYN },
+        { mode: "optional", type: DYN, defaultValue: undefined },
+      ],
+    },
+    pathToFileURL: {
+      fn: "url.pathToFileURLChecked",
+      params: [DYN, DYN],
+      result: URL_T,
+      valueParams: [
+        { mode: "required", type: DYN },
+        { mode: "optional", type: DYN, defaultValue: undefined },
+      ],
+    },
   },
   child_process: {
     // spawnSync's and spawn's call completions are entirely special-cased
@@ -907,15 +1433,53 @@ export const BUILTIN_MODULE_FNS: Record<string, Record<string, BuiltinModuleFn |
   // the dedicated static member; the spoke owns its optional arity and
   // call-site-specific result type before this canonical signature is used.
   util: {
-    styleText: { fn: "util.styleText", params: [DYN, DYN, DYN], result: STRING, valueParams: [{ mode: "required", type: DYN }, { mode: "required", type: DYN }, { mode: "optional", type: DYN, defaultValue: undefined }] },
-    isDeepStrictEqual: { fn: "util.isDeepStrictEqual", params: [DYN, DYN, DYN], result: BOOL, valueParams: [{ mode: "required", type: DYN }, { mode: "required", type: DYN }, { mode: "optional", type: DYN, defaultValue: undefined }] },
+    styleText: {
+      fn: "util.styleText",
+      params: [DYN, DYN, DYN],
+      result: STRING,
+      valueParams: [
+        { mode: "required", type: DYN },
+        { mode: "required", type: DYN },
+        { mode: "optional", type: DYN, defaultValue: undefined },
+      ],
+    },
+    isDeepStrictEqual: {
+      fn: "util.isDeepStrictEqual",
+      params: [DYN, DYN, DYN],
+      result: BOOL,
+      valueParams: [
+        { mode: "required", type: DYN },
+        { mode: "required", type: DYN },
+        { mode: "optional", type: DYN, defaultValue: undefined },
+      ],
+    },
     parseArgs: { fn: "util.parseArgs", params: [DYN], result: DYN },
     parseEnv: { fn: "util.parseEnv", params: [DYN], result: DYN },
-    getSystemErrorName: { fn: "util.getSystemErrorName", params: [DYN], result: STRING, valueParams: exactValueParams(DYN) },
-    getSystemErrorMessage: { fn: "util.getSystemErrorMessage", params: [DYN], result: STRING, valueParams: exactValueParams(DYN) },
+    getSystemErrorName: {
+      fn: "util.getSystemErrorName",
+      params: [DYN],
+      result: STRING,
+      valueParams: exactValueParams(DYN),
+    },
+    getSystemErrorMessage: {
+      fn: "util.getSystemErrorMessage",
+      params: [DYN],
+      result: STRING,
+      valueParams: exactValueParams(DYN),
+    },
     getSystemErrorMap: { fn: "util.systemErrorEntries", params: [], result: DYN },
-    stripVTControlCharacters: { fn: "util.stripVTControlCharacters", params: [DYN], result: STRING, valueParams: exactValueParams(DYN) },
-    toUSVString: { fn: "util.toUSVString", params: [DYN], result: STRING, valueParams: exactValueParams(DYN) },
+    stripVTControlCharacters: {
+      fn: "util.stripVTControlCharacters",
+      params: [DYN],
+      result: STRING,
+      valueParams: exactValueParams(DYN),
+    },
+    toUSVString: {
+      fn: "util.toUSVString",
+      params: [DYN],
+      result: STRING,
+      valueParams: exactValueParams(DYN),
+    },
   },
   // The util/types spoke supplies the probe name to the shared brand check.
   "util/types": {
@@ -971,8 +1535,18 @@ export const BUILTIN_MODULE_FNS: Record<string, Record<string, BuiltinModuleFn |
     decode: { fn: "qs.parse", params: [STRING], result: VOID },
     stringify: { fn: "qs.stringify", params: [DYN], result: STRING },
     encode: { fn: "qs.stringify", params: [DYN], result: STRING },
-    escape: { fn: "qs.escape", params: [STRING], result: STRING, valueParams: [{ mode: "required", type: STRING }] },
-    unescape: { fn: "qs.unescape", params: [STRING], result: STRING, valueParams: [{ mode: "required", type: STRING }] },
+    escape: {
+      fn: "qs.escape",
+      params: [STRING],
+      result: STRING,
+      valueParams: [{ mode: "required", type: STRING }],
+    },
+    unescape: {
+      fn: "qs.unescape",
+      params: [STRING],
+      result: STRING,
+      valueParams: [{ mode: "required", type: STRING }],
+    },
   },
   // node:readline: createInterface's options are entirely special-cased
   // (exactly { input: process.stdin, output?: process.stdout } — see
@@ -992,8 +1566,16 @@ export const BUILTIN_MODULE_FNS: Record<string, Record<string, BuiltinModuleFn |
     // The process-wide happy-eyeballs attempt budget: one runtime double
     // in the core unit (never links scr_net.c by itself), default 250ms
     // like Node's.
-    getDefaultAutoSelectFamilyAttemptTimeout: { fn: "net.getAutoSelTimeout", params: [], result: F64 },
-    setDefaultAutoSelectFamilyAttemptTimeout: { fn: "net.setAutoSelTimeout", params: [F64], result: VOID },
+    getDefaultAutoSelectFamilyAttemptTimeout: {
+      fn: "net.getAutoSelTimeout",
+      params: [],
+      result: F64,
+    },
+    setDefaultAutoSelectFamilyAttemptTimeout: {
+      fn: "net.setAutoSelTimeout",
+      params: [F64],
+      result: VOID,
+    },
   },
   http: {},
   // node:tls and node:https ride the same spoke (tls.createServer's
@@ -1062,7 +1644,10 @@ export const BUILTIN_MODULE_FNS: Record<string, Record<string, BuiltinModuleFn |
  * main-thread truths: a compiled binary IS the main thread (no JS-engine
  * thread machinery) and never runs as a cluster worker (cluster forks the
  * node binary itself) — Node's own answers for a directly-run script. */
-export const BUILTIN_MODULE_CONSTS: Record<string, Record<string, string | number | boolean | undefined> | undefined> = {
+export const BUILTIN_MODULE_CONSTS: Record<
+  string,
+  Record<string, string | number | boolean | undefined> | undefined
+> = {
   http: { maxHeaderSize: 16384 },
   path: { sep: "/", delimiter: ":" },
   "path/posix": { sep: "/", delimiter: ":" },
@@ -1080,7 +1665,10 @@ export const BUILTIN_MODULE_CONSTS: Record<string, Record<string, string | numbe
  * fences the operation, the trimLeft/trimStart rule). Keyed like
  * BUILTIN_MODULE_FNS; consumed by the fence taxonomy
  * (library/fence-eval.ts) and the attestation-parity test. */
-export const BUILTIN_MODULE_FN_ALIASES: Record<string, Record<string, readonly IrLibFn[] | undefined> | undefined> = {
+export const BUILTIN_MODULE_FN_ALIASES: Record<
+  string,
+  Record<string, readonly IrLibFn[] | undefined> | undefined
+> = {
   url: {
     fileURLToPath: ["url.fileURLToPathStr", "url.fileURLToPathUrl", "url.fileURLToPathChecked"],
     pathToFileURL: ["url.pathToFileURL", "url.pathToFileURLPlatform", "url.pathToFileURLWin32"],
@@ -1090,7 +1678,13 @@ export const BUILTIN_MODULE_FN_ALIASES: Record<string, Record<string, readonly I
     openSync: ["fs.openNumericSync"],
     // The Buffer form (no encoding), the fd forms (readFileSync(fd[,
     // "utf8"])), and the checked-dynamic encoding form.
-    readFileSync: ["fs.readFileSyncBuf", "fs.readFileSyncBytes", "fs.readFileSyncDyn", "fs.readFdSync", "fs.readFdSyncBytes"],
+    readFileSync: [
+      "fs.readFileSyncBuf",
+      "fs.readFileSyncBytes",
+      "fs.readFileSyncDyn",
+      "fs.readFdSync",
+      "fs.readFdSyncBytes",
+    ],
     readlinkSync: ["fs.readlinkSyncStr", "fs.readlinkSyncBuffer"],
     // The bytes-data form and the { mode } options form.
     writeFileSync: ["fs.writeFileSyncBytes", "fs.writeFileModeSync"],
@@ -1216,23 +1810,103 @@ export const AMBIENT_SURFACE_FNS: readonly AmbientSurfaceRow[] = [
     fns: ["date.toISOString", "date.toISOStringValue"],
     note: "UTC ISO formatting over constructed and stored Date values",
   },
-  { id: "stdlib.date.getFullYear", kind: "stdlib", name: "Date.prototype.getFullYear", fns: ["date.getFullYear"] },
-  { id: "stdlib.date.getUTCFullYear", kind: "stdlib", name: "Date.prototype.getUTCFullYear", fns: ["date.getUTCFullYear"] },
-  { id: "stdlib.date.getMonth", kind: "stdlib", name: "Date.prototype.getMonth", fns: ["date.getMonth"] },
-  { id: "stdlib.date.getUTCMonth", kind: "stdlib", name: "Date.prototype.getUTCMonth", fns: ["date.getUTCMonth"] },
-  { id: "stdlib.date.getDate", kind: "stdlib", name: "Date.prototype.getDate", fns: ["date.getDate"] },
-  { id: "stdlib.date.getUTCDate", kind: "stdlib", name: "Date.prototype.getUTCDate", fns: ["date.getUTCDate"] },
+  {
+    id: "stdlib.date.getFullYear",
+    kind: "stdlib",
+    name: "Date.prototype.getFullYear",
+    fns: ["date.getFullYear"],
+  },
+  {
+    id: "stdlib.date.getUTCFullYear",
+    kind: "stdlib",
+    name: "Date.prototype.getUTCFullYear",
+    fns: ["date.getUTCFullYear"],
+  },
+  {
+    id: "stdlib.date.getMonth",
+    kind: "stdlib",
+    name: "Date.prototype.getMonth",
+    fns: ["date.getMonth"],
+  },
+  {
+    id: "stdlib.date.getUTCMonth",
+    kind: "stdlib",
+    name: "Date.prototype.getUTCMonth",
+    fns: ["date.getUTCMonth"],
+  },
+  {
+    id: "stdlib.date.getDate",
+    kind: "stdlib",
+    name: "Date.prototype.getDate",
+    fns: ["date.getDate"],
+  },
+  {
+    id: "stdlib.date.getUTCDate",
+    kind: "stdlib",
+    name: "Date.prototype.getUTCDate",
+    fns: ["date.getUTCDate"],
+  },
   { id: "stdlib.date.getDay", kind: "stdlib", name: "Date.prototype.getDay", fns: ["date.getDay"] },
-  { id: "stdlib.date.getUTCDay", kind: "stdlib", name: "Date.prototype.getUTCDay", fns: ["date.getUTCDay"] },
-  { id: "stdlib.date.getHours", kind: "stdlib", name: "Date.prototype.getHours", fns: ["date.getHours"] },
-  { id: "stdlib.date.getUTCHours", kind: "stdlib", name: "Date.prototype.getUTCHours", fns: ["date.getUTCHours"] },
-  { id: "stdlib.date.getMinutes", kind: "stdlib", name: "Date.prototype.getMinutes", fns: ["date.getMinutes"] },
-  { id: "stdlib.date.getUTCMinutes", kind: "stdlib", name: "Date.prototype.getUTCMinutes", fns: ["date.getUTCMinutes"] },
-  { id: "stdlib.date.getSeconds", kind: "stdlib", name: "Date.prototype.getSeconds", fns: ["date.getSeconds"] },
-  { id: "stdlib.date.getUTCSeconds", kind: "stdlib", name: "Date.prototype.getUTCSeconds", fns: ["date.getUTCSeconds"] },
-  { id: "stdlib.date.getMilliseconds", kind: "stdlib", name: "Date.prototype.getMilliseconds", fns: ["date.getMilliseconds"] },
-  { id: "stdlib.date.getUTCMilliseconds", kind: "stdlib", name: "Date.prototype.getUTCMilliseconds", fns: ["date.getUTCMilliseconds"] },
-  { id: "stdlib.date.getTimezoneOffset", kind: "stdlib", name: "Date.prototype.getTimezoneOffset", fns: ["date.getTimezoneOffset"] },
+  {
+    id: "stdlib.date.getUTCDay",
+    kind: "stdlib",
+    name: "Date.prototype.getUTCDay",
+    fns: ["date.getUTCDay"],
+  },
+  {
+    id: "stdlib.date.getHours",
+    kind: "stdlib",
+    name: "Date.prototype.getHours",
+    fns: ["date.getHours"],
+  },
+  {
+    id: "stdlib.date.getUTCHours",
+    kind: "stdlib",
+    name: "Date.prototype.getUTCHours",
+    fns: ["date.getUTCHours"],
+  },
+  {
+    id: "stdlib.date.getMinutes",
+    kind: "stdlib",
+    name: "Date.prototype.getMinutes",
+    fns: ["date.getMinutes"],
+  },
+  {
+    id: "stdlib.date.getUTCMinutes",
+    kind: "stdlib",
+    name: "Date.prototype.getUTCMinutes",
+    fns: ["date.getUTCMinutes"],
+  },
+  {
+    id: "stdlib.date.getSeconds",
+    kind: "stdlib",
+    name: "Date.prototype.getSeconds",
+    fns: ["date.getSeconds"],
+  },
+  {
+    id: "stdlib.date.getUTCSeconds",
+    kind: "stdlib",
+    name: "Date.prototype.getUTCSeconds",
+    fns: ["date.getUTCSeconds"],
+  },
+  {
+    id: "stdlib.date.getMilliseconds",
+    kind: "stdlib",
+    name: "Date.prototype.getMilliseconds",
+    fns: ["date.getMilliseconds"],
+  },
+  {
+    id: "stdlib.date.getUTCMilliseconds",
+    kind: "stdlib",
+    name: "Date.prototype.getUTCMilliseconds",
+    fns: ["date.getUTCMilliseconds"],
+  },
+  {
+    id: "stdlib.date.getTimezoneOffset",
+    kind: "stdlib",
+    name: "Date.prototype.getTimezoneOffset",
+    fns: ["date.getTimezoneOffset"],
+  },
   // ── perf_hooks (lowerPerfHooksCall): the monotonic clock.
   {
     id: "node-builtin.perf_hooks.performance.now",
@@ -1251,25 +1925,75 @@ export const AMBIENT_SURFACE_FNS: readonly AmbientSurfaceRow[] = [
     fns: ["process.envGet", "process.envSet", "process.envUnset", "process.envPairs"],
     note: "reads, writes, deletes, and enumeration of the process environment (the process global)",
   },
-  { id: "node-builtin.process.argv", kind: "node-builtin", name: "process.argv", fns: ["process.argv"] },
-  { id: "node-builtin.process.hrtime", kind: "node-builtin", name: "process.hrtime", fns: ["process.hrtimeValue"], note: "native monotonic tuple clock and bigint member; direct calls and stored JavaScript callable values" },
   {
-    id: "node-builtin.process.getBuiltinModule", kind: "node-builtin", name: "process.getBuiltinModule",
+    id: "node-builtin.process.argv",
+    kind: "node-builtin",
+    name: "process.argv",
+    fns: ["process.argv"],
+  },
+  {
+    id: "node-builtin.process.hrtime",
+    kind: "node-builtin",
+    name: "process.hrtime",
+    fns: ["process.hrtimeValue"],
+    note: "native monotonic tuple clock and bigint member; direct calls and stored JavaScript callable values",
+  },
+  {
+    id: "node-builtin.process.getBuiltinModule",
+    kind: "node-builtin",
+    name: "process.getBuiltinModule",
     fns: ["process.builtinId", "process.builtinModule", "process.builtinUnsupported"],
     note: "native path and os export subsets plus main-thread worker_threads metadata; other modules and exports throw SC2020",
   },
   {
-    id: "node-builtin.process.versions", kind: "node-builtin", name: "process.versions",
+    id: "node-builtin.process.versions",
+    kind: "node-builtin",
+    name: "process.versions",
     fns: ["process.versions"],
     note: "shared version dictionary containing node and openssl; other components are absent unless defined by the program",
   },
-  { id: "node-builtin.process.cwd", kind: "node-builtin", name: "process.cwd", fns: ["process.cwd"] },
-  { id: "node-builtin.process.chdir", kind: "node-builtin", name: "process.chdir", fns: ["process.chdir"] },
-  { id: "node-builtin.process.pid", kind: "node-builtin", name: "process.pid", fns: ["process.pid"] },
-  { id: "node-builtin.process.getuid", kind: "node-builtin", name: "process.getuid", fns: ["process.getuid"] },
-  { id: "node-builtin.process.getgid", kind: "node-builtin", name: "process.getgid", fns: ["process.getgid"] },
-  { id: "node-builtin.process.execPath", kind: "node-builtin", name: "process.execPath", fns: ["process.execPath"] },
-  { id: "node-builtin.process.uptime", kind: "node-builtin", name: "process.uptime", fns: ["process.uptime"] },
+  {
+    id: "node-builtin.process.cwd",
+    kind: "node-builtin",
+    name: "process.cwd",
+    fns: ["process.cwd"],
+  },
+  {
+    id: "node-builtin.process.chdir",
+    kind: "node-builtin",
+    name: "process.chdir",
+    fns: ["process.chdir"],
+  },
+  {
+    id: "node-builtin.process.pid",
+    kind: "node-builtin",
+    name: "process.pid",
+    fns: ["process.pid"],
+  },
+  {
+    id: "node-builtin.process.getuid",
+    kind: "node-builtin",
+    name: "process.getuid",
+    fns: ["process.getuid"],
+  },
+  {
+    id: "node-builtin.process.getgid",
+    kind: "node-builtin",
+    name: "process.getgid",
+    fns: ["process.getgid"],
+  },
+  {
+    id: "node-builtin.process.execPath",
+    kind: "node-builtin",
+    name: "process.execPath",
+    fns: ["process.execPath"],
+  },
+  {
+    id: "node-builtin.process.uptime",
+    kind: "node-builtin",
+    name: "process.uptime",
+    fns: ["process.uptime"],
+  },
   {
     id: "node-builtin.process.availableMemory",
     kind: "node-builtin",
@@ -1293,14 +2017,25 @@ export const AMBIENT_SURFACE_FNS: readonly AmbientSurfaceRow[] = [
     id: "node-builtin.process.cpuUsage",
     kind: "node-builtin",
     name: "process.cpuUsage",
-    fns: ["process.cpuUser", "process.cpuSystem", "process.cpuUserDiff", "process.cpuSystemDiff", "process.cpuPrevValidate"],
+    fns: [
+      "process.cpuUser",
+      "process.cpuSystem",
+      "process.cpuUserDiff",
+      "process.cpuSystemDiff",
+      "process.cpuPrevValidate",
+    ],
     note: "the plain-sample and previous-value diff forms are one surface",
   },
   {
     id: "node-builtin.process.threadCpuUsage",
     kind: "node-builtin",
     name: "process.threadCpuUsage",
-    fns: ["process.threadCpuUser", "process.threadCpuSystem", "process.threadCpuUserDiff", "process.threadCpuSystemDiff"],
+    fns: [
+      "process.threadCpuUser",
+      "process.threadCpuSystem",
+      "process.threadCpuUserDiff",
+      "process.threadCpuSystemDiff",
+    ],
     note: "the plain-sample and previous-value diff forms are one surface",
   },
   {
@@ -1331,7 +2066,12 @@ export const AMBIENT_SURFACE_FNS: readonly AmbientSurfaceRow[] = [
     fns: ["process.kill", "process.killNum"],
     note: "the signal-name and signal-number forms are one surface",
   },
-  { id: "node-builtin.process.umask", kind: "node-builtin", name: "process.umask", fns: ["process.umask"] },
+  {
+    id: "node-builtin.process.umask",
+    kind: "node-builtin",
+    name: "process.umask",
+    fns: ["process.umask"],
+  },
   {
     id: "node-builtin.process.exit",
     kind: "node-builtin",
@@ -1380,7 +2120,10 @@ export const AMBIENT_SURFACE_FNS: readonly AmbientSurfaceRow[] = [
 /** The win32-target overrides of the bare modules' constants: path's
  * constants ARE the path/win32 namespace's, and os.EOL is CRLF (Node's
  * `isWindows ? '\r\n' : '\n'`). */
-const WIN32_TARGET_CONSTS: Record<string, Record<string, string | number | boolean | undefined> | undefined> = {
+const WIN32_TARGET_CONSTS: Record<
+  string,
+  Record<string, string | number | boolean | undefined> | undefined
+> = {
   path: BUILTIN_MODULE_CONSTS["path/win32"],
   os: { EOL: "\r\n" },
 };
@@ -1389,7 +2132,10 @@ const WIN32_TARGET_CONSTS: Record<string, Record<string, string | number | boole
  * TARGET: a win32 triple compiles Node-on-Windows semantics — `path` is
  * path.win32 and url's bridge selects the Windows runtime behavior. Fence wording is
  * unaffected — callers keep naming the module the source spelled. */
-function builtinModuleFnsOf(lowerer: Lowerer, module: string): Record<string, BuiltinModuleFn | undefined> | undefined {
+function builtinModuleFnsOf(
+  lowerer: Lowerer,
+  module: string,
+): Record<string, BuiltinModuleFn | undefined> | undefined {
   if (lowerer.targetPlatform === "win32") {
     if (module === "path") return BUILTIN_MODULE_FNS["path/win32"];
   }
@@ -1407,17 +2153,57 @@ function ownEntry<T>(table: Record<string, T | undefined>, key: string): T | und
 
 /** One MEMBER's table entry, own-property-safe (`path.toString` must not
  * answer Object.prototype.toString as a BuiltinModuleFn). */
-export function builtinModuleFnOf(lowerer: Lowerer, module: string, member: string): BuiltinModuleFn | undefined {
-  if (module === "fs" && FS_CALLBACK_MEMBERS.has(member)) return { fn: "fs.callbackCall", params: [], result: DYN };
+export function builtinModuleFnOf(
+  lowerer: Lowerer,
+  module: string,
+  member: string,
+): BuiltinModuleFn | undefined {
+  if (module === "fs" && FS_CALLBACK_MEMBERS.has(member))
+    return { fn: "fs.callbackCall", params: [], result: DYN };
   const mod = builtinModuleFnsOf(lowerer, module);
   return mod ? ownEntry(mod, member) : undefined;
 }
 
 /** Native error-first function values used by platform service adapters. */
 export const FS_CALLBACK_MEMBERS = new Set([
-  "access", "cp", "copyFile", "chmod", "chown", "glob", "link", "mkdir", "mkdtemp", "rm", "rmdir", "unlink",
-  "open", "close", "fstat", "ftruncate", "fsync", "fdatasync", "fchmod", "read", "write", "readv", "writev", "readlink", "realpath", "rename", "stat", "lstat",
-  "symlink", "statfs", "truncate", "utimes", "futimes", "lutimes", "readFile", "writeFile", "appendFile", "readdir",
+  "access",
+  "cp",
+  "copyFile",
+  "chmod",
+  "chown",
+  "glob",
+  "link",
+  "mkdir",
+  "mkdtemp",
+  "rm",
+  "rmdir",
+  "unlink",
+  "open",
+  "close",
+  "fstat",
+  "ftruncate",
+  "fsync",
+  "fdatasync",
+  "fchmod",
+  "read",
+  "write",
+  "readv",
+  "writev",
+  "readlink",
+  "realpath",
+  "rename",
+  "stat",
+  "lstat",
+  "symlink",
+  "statfs",
+  "truncate",
+  "utimes",
+  "futimes",
+  "lutimes",
+  "readFile",
+  "writeFile",
+  "appendFile",
+  "readdir",
 ]);
 
 /** One member's fence hint, own-property-safe (a collision would print an
@@ -1429,7 +2215,11 @@ export function builtinFenceHintOf(module: string, member: string): string | und
 
 /** BUILTIN_MODULE_CONSTS with the win32-target overrides applied — the
  * constants twin of builtinModuleFnsOf. */
-export function builtinModuleConstOf(lowerer: Lowerer, module: string, member: string): string | number | boolean | undefined {
+export function builtinModuleConstOf(
+  lowerer: Lowerer,
+  module: string,
+  member: string,
+): string | number | boolean | undefined {
   if (lowerer.targetPlatform === "win32") {
     const mod = ownEntry(WIN32_TARGET_CONSTS, module);
     const w = mod ? ownEntry(mod, member) : undefined;
@@ -1442,7 +2232,10 @@ export function builtinModuleConstOf(lowerer: Lowerer, module: string, member: s
 /** The IR literal of a builtin-module constant — one place so both value
  * paths (named-import bindings and namespace member reads) emit the same
  * kinds. */
-export function builtinConstLit(value: string | number | boolean, loc: { file: string; start: number; end: number }): IrExpr {
+export function builtinConstLit(
+  value: string | number | boolean,
+  loc: { file: string; start: number; end: number },
+): IrExpr {
   if (typeof value === "string") return { kind: "strLit", value, type: STRING, loc };
   if (typeof value === "number") return { kind: "numLit", value, type: F64, loc };
   return { kind: "boolLit", value, type: BOOL, loc };
@@ -1456,20 +2249,78 @@ export function builtinConstLit(value: string | number | boolean, loc: { file: s
  * array — a divergence only mutation could observe, and mutating Node's
  * frozen array throws anyway. */
 export const NODE_BUILTIN_MODULES_V24: readonly string[] = [
-  "_http_agent", "_http_client", "_http_common", "_http_incoming",
-  "_http_outgoing", "_http_server", "_stream_duplex", "_stream_passthrough",
-  "_stream_readable", "_stream_transform", "_stream_wrap", "_stream_writable",
-  "_tls_common", "_tls_wrap", "assert", "assert/strict", "async_hooks",
-  "buffer", "child_process", "cluster", "console", "constants", "crypto",
-  "dgram", "diagnostics_channel", "dns", "dns/promises", "domain", "events",
-  "fs", "fs/promises", "http", "http2", "https", "inspector",
-  "inspector/promises", "module", "net", "os", "path", "path/posix",
-  "path/win32", "perf_hooks", "process", "punycode", "querystring",
-  "readline", "readline/promises", "repl", "stream", "stream/consumers",
-  "stream/promises", "stream/web", "string_decoder", "sys", "timers",
-  "timers/promises", "tls", "trace_events", "tty", "url", "util",
-  "util/types", "v8", "vm", "wasi", "worker_threads", "zlib",
-  "node:sea", "node:sqlite", "node:test", "node:test/reporters",
+  "_http_agent",
+  "_http_client",
+  "_http_common",
+  "_http_incoming",
+  "_http_outgoing",
+  "_http_server",
+  "_stream_duplex",
+  "_stream_passthrough",
+  "_stream_readable",
+  "_stream_transform",
+  "_stream_wrap",
+  "_stream_writable",
+  "_tls_common",
+  "_tls_wrap",
+  "assert",
+  "assert/strict",
+  "async_hooks",
+  "buffer",
+  "child_process",
+  "cluster",
+  "console",
+  "constants",
+  "crypto",
+  "dgram",
+  "diagnostics_channel",
+  "dns",
+  "dns/promises",
+  "domain",
+  "events",
+  "fs",
+  "fs/promises",
+  "http",
+  "http2",
+  "https",
+  "inspector",
+  "inspector/promises",
+  "module",
+  "net",
+  "os",
+  "path",
+  "path/posix",
+  "path/win32",
+  "perf_hooks",
+  "process",
+  "punycode",
+  "querystring",
+  "readline",
+  "readline/promises",
+  "repl",
+  "stream",
+  "stream/consumers",
+  "stream/promises",
+  "stream/web",
+  "string_decoder",
+  "sys",
+  "timers",
+  "timers/promises",
+  "tls",
+  "trace_events",
+  "tty",
+  "url",
+  "util",
+  "util/types",
+  "v8",
+  "vm",
+  "wasi",
+  "worker_threads",
+  "zlib",
+  "node:sea",
+  "node:sqlite",
+  "node:test",
+  "node:test/reporters",
 ];
 
 /** The array-literal read of module.builtinModules — both value paths
@@ -1478,9 +2329,12 @@ export const NODE_BUILTIN_MODULES_V24: readonly string[] = [
 export function builtinModulesArrayLit(loc: { file: string; start: number; end: number }): IrExpr {
   return {
     kind: "arrayLit",
-    elems: NODE_BUILTIN_MODULES_V24.map(
-      (m): IrExpr => ({ kind: "strLit", value: m, type: STRING, loc }),
-    ),
+    elems: NODE_BUILTIN_MODULES_V24.map((m): IrExpr => ({
+      kind: "strLit",
+      value: m,
+      type: STRING,
+      loc,
+    })),
     type: arrayOf(STRING),
     loc,
   };
@@ -1506,16 +2360,20 @@ const ASSERT_MODULE_HINTS: Record<string, string | undefined> = {
     "assert.strictEqual(err, undefined)",
   rejects:
     "await the promise inside assert.throws's callback story instead: " +
-    "try { await p; assert.fail(\"expected rejection\") } catch { ... }",
+    'try { await p; assert.fail("expected rejection") } catch { ... }',
   doesNotReject: "await the promise directly — an unexpected rejection already fails the test",
   AssertionError:
     "the class itself has no lowering — catch and test err.name === " +
     '"AssertionError" or err.code === "ERR_ASSERTION"',
 };
 
-export const BUILTIN_MODULE_FENCE_HINTS: Record<string, Record<string, string | undefined> | undefined> = {
+export const BUILTIN_MODULE_FENCE_HINTS: Record<
+  string,
+  Record<string, string | undefined> | undefined
+> = {
   console: {
-    Console: "custom Console instances are not supported yet; direct node:console log/info/debug/error/warn calls use the process output streams",
+    Console:
+      "custom Console instances are not supported yet; direct node:console log/info/debug/error/warn calls use the process output streams",
   },
   assert: ASSERT_MODULE_HINTS,
   // The strict module's equal/notEqual/deepEqual/notDeepEqual ARE the
@@ -1558,12 +2416,26 @@ export const BUILTIN_MODULE_FENCE_HINTS: Record<string, Record<string, string | 
   crypto: {
     ...Object.fromEntries(
       [
-        "generateKeyPair", "generateKeyPairSync", "generateKey", "generateKeySync",
-        "createPrivateKey", "createPublicKey", "createSecretKey",
-        "createSign", "createVerify", "sign", "verify",
-        "createDiffieHellman", "createDiffieHellmanGroup", "getDiffieHellman",
-        "createECDH", "diffieHellman",
-        "publicEncrypt", "publicDecrypt", "privateEncrypt", "privateDecrypt",
+        "generateKeyPair",
+        "generateKeyPairSync",
+        "generateKey",
+        "generateKeySync",
+        "createPrivateKey",
+        "createPublicKey",
+        "createSecretKey",
+        "createSign",
+        "createVerify",
+        "sign",
+        "verify",
+        "createDiffieHellman",
+        "createDiffieHellmanGroup",
+        "getDiffieHellman",
+        "createECDH",
+        "diffieHellman",
+        "publicEncrypt",
+        "publicDecrypt",
+        "privateEncrypt",
+        "privateDecrypt",
       ].map((m) => [
         m,
         "asymmetric-key operations need a public-key stack (bignum, RSA/EC/EdDSA math) and a " +
@@ -1610,196 +2482,222 @@ export const BUILTIN_MODULE_FENCE_HINTS: Record<string, Record<string, string | 
 };
 
 /** The MEMBER chokepoint of the lib fence: called from the property-read
-   * and method-call fallbacks after every lowering has passed. When the
-   * accessed member is stdlib-declared, the use is standard-library surface
-   * with no lowering — report SC2020 naming `<container>.<member>` (the
-   * receiver's global name when it IS a stdlib global like Math or Promise,
-   * its widened type text otherwise). Returns silently for non-stdlib
-   * members so the caller's generic rejection applies. */
-  export function stdlibMemberFence(lowerer: Lowerer, access: ts.PropertyAccessExpression): void {
-    const sym = lowerer.checker.getSymbolAtLocation(access.name);
-    if (!sym || !lowerer.isStdlibSymbol(sym)) return;
-    const member = access.name.text;
-    const recv = access.expression;
-    // A CHECKED-DYNAMIC receiver whose checker type is a concrete stdlib
-    // class mapped to dyn (the http Agent handle): its members dispatch
-    // at runtime through the dyn/handle machinery — the keyed-read claim
-    // below this fence answers, member-or-refusal ladder, so no compile
-    // fence belongs here.
-    if (lowerer.mapTypeOf(lowerer.typeOf(recv))?.kind === "dyn") return;
-    // Name the container the way the source reads: the global's name when
-    // the receiver IS a stdlib global (Math, process), the dotted path for
-    // a member of one (process.stdout — its TYPE text would be the useless
-    // 'WriteStream & { fd: 1; }'), the receiver's widened type text
-    // otherwise.
-    const globalPathOf = (e: ts.Expression): string | null => {
-      if (ts.isIdentifier(e) && lowerer.isStdlibSymbol(lowerer.checker.getSymbolAtLocation(e))) {
-        return e.text;
-      }
-      if (ts.isPropertyAccessExpression(e) && ts.isIdentifier(e.expression)) {
-        const base = globalPathOf(e.expression);
-        if (base !== null) return `${base}.${e.name.text}`;
-      }
-      return null;
-    };
-    const container =
-      globalPathOf(recv) ??
-      lowerer.checker.typeToString(lowerer.checker.getBaseTypeOfLiteralType(lowerer.typeOf(recv)));
-    let hint: string | undefined;
-    const recvIr = lowerer.mapTypeOf(lowerer.typeOf(recv));
-    if (recvIr?.kind === "promise" && (member === "then" || member === "catch" || member === "finally")) {
-      hint =
-        "'await' is the supported way to chain (p.then(f) with one fulfillment handler, p.catch " +
-        "with an INLINE handler, and p.finally(cb) compile) — try { await p } catch (e) is the general form";
-    } else if (recvIr?.kind === "f64" && member === "toString") {
-      hint = "radix-free conversion is a template literal away: `${x}`; toString(radix) runs under --dynamic";
-    } else if (container === "Math" && (member === "min" || member === "max")) {
-      hint =
-        `Math.${member} lowers with any number of plain arguments or ONE number[] spread — ` +
-        `mixed spread/positional lists don't: spread a single array (Math.${member}(...xs))`;
-    } else if (
-      recvIr?.kind === "array" &&
-      member === "index" &&
-      (container === "RegExpExecArray" || container === "RegExpMatchArray")
-    ) {
-      hint =
-        "'.index' is supported on the const binding of a for-of over a DIRECT matchAll call " +
-        "(for (const m of s.matchAll(re)) { ... m.index ... }); stored rows are honest " +
-        "string[] slices without it";
-    } else if (
-      recvIr?.kind === "array" &&
-      member === "groups" &&
-      (container === "RegExpExecArray" || container === "RegExpMatchArray")
-    ) {
-      hint =
-        "'.groups' lowers when the match's regex is STATICALLY known — a regex literal, or a " +
-        "const initialized with one (the group-name table is built at compile time) — and the " +
-        "read is not an optional-chain step: narrow the match instead (if (m) { m.groups } or " +
-        "m!.groups)";
-    } else if (recvIr?.kind === "array" && member === "flat") {
-      hint =
-        "flat has no lowering (flatMap does) — flatten into an accumulator instead: " +
-        "for (const x of xs) for (const y of x) out.push(y)";
-    } else if (container === "process.stdin" || (container === "process" && member === "stdin")) {
-      hint =
-        "isTTY, destroy(), on/once of the data/end/error events, and " +
-        "`for await (const chunk of process.stdin)` are the supported stdin surface " +
-        '(or read everything at once: readFileSync(0, "utf8") from node:fs)';
-    } else if (
-      (container === "process" && (member === "stdout" || member === "stderr")) ||
-      container === "process.stdout" ||
-      container === "process.stderr"
-    ) {
-      // @types/node territory: the fallback declarations don't have these
-      // members at all (a type error), so this fence only fires with the
-      // project's real Node types adopted.
-      hint =
-        "console.log is the supported way to write a line to stdout; " +
-        "the stdout/stderr stream objects have no lowering";
-    } else if (container === "console") {
-      hint =
-        "console.log/info/debug (stdout) and console.error/warn (stderr) are the supported " +
-        "console surface (arguments render with Node's console semantics: strings verbatim, " +
-        "everything else through the static util.inspect)";
-    } else if (container === "TextEncoder") {
-      hint =
-        "TextEncoder instances can be stored, passed, and captured; encode(), encodeInto(string, Uint8Array), and encoding compile";
-    } else if (container === "TextDecoder") {
-      hint =
-        "TextDecoder instances support recognized labels, encoding/fatal/ignoreBOM properties, literal constructor options, and streaming UTF-8/UTF-16/single-byte decode; runtime option objects remain unsupported";
-    } else if (member === "prototype") {
-      hint =
-        "prototype objects are not values here (method lookup is static) — call the method on an instance instead";
-    } else if (
-      recvIr?.kind === "func" &&
-      (member === "call" || member === "apply" || member === "bind")
-    ) {
-      hint =
-        "call the function directly — plain and arrow functions here never read `this`, so " +
-        "f.call(thisArg, ...args) is f(...args), and bind's partial application is an arrow: (...rest) => f(a, ...rest)";
-    } else if (
-      recvIr?.kind === "string" &&
-      (member === "match" || member === "matchAll" || member === "search")
-    ) {
-      hint =
-        "the regex-LITERAL argument forms lower (s.match(/re/)); a string pattern constructs " +
-        "a RegExp at runtime, which has no lowering";
-    } else if (container === "ArrayBuffer" || container.startsWith("ArrayBuffer<")) {
-      hint =
-        "native ArrayBuffer storage is fixed-length; resize and transfer are unsupported — " +
-        "allocate a new buffer and copy through typed-array views instead";
-    } else if (container === "SharedArrayBuffer" || container.startsWith("SharedArrayBuffer<")) {
-      hint =
-        "no shared-memory threads exist in a compiled program — Uint8Array is the byte storage " +
-        "(a fixed-length allocation: grow has nothing to share it with)";
-    } else if (
-      container === "Intl" || container.startsWith("Intl.") ||
-      ["NumberFormat", "DateTimeFormat", "DurationFormat", "PluralRules", "Collator", "Locale",
-        "RelativeTimeFormat", "ListFormat", "Segmenter", "DisplayNames"].includes(container) ||
-      member === "toLocaleString" || member === "toLocaleDateString" ||
-      member === "toLocaleTimeString" || member === "toLocaleLowerCase" ||
-      member === "toLocaleUpperCase"
-    ) {
-      hint =
-        "locale- and ICU-backed behavior lives outside the static runtime (the localeCompare " +
-        "stance: code-unit order, no collation/locale data) — what lowers: the composed " +
-        'new Intl.NumberFormat("en-US").format(x) and x.toLocaleString("en-US") with default ' +
-        "options, plus default Unicode grapheme segmentation with Intl.Segmenter; locale " +
-        "negotiation, word/sentence segmentation, and resolvedOptions remain unsupported";
-    } else if (container === "Object" && member === "assign") {
-      hint =
-        "spread instead: { ...a, ...b } builds the merged record; what lowers: the empty-target " +
-        "literal-source shape (Object.assign({}, { ... }) IS the source literal) and merges INTO " +
-        "an index-signature record whose value slot every source value enters — " +
-        "other aliased targets are real mutation, and a function target (Object.assign(fn, { prop })) " +
-        "is a function-with-properties value the model cannot represent: bind the property separately";
+ * and method-call fallbacks after every lowering has passed. When the
+ * accessed member is stdlib-declared, the use is standard-library surface
+ * with no lowering — report SC2020 naming `<container>.<member>` (the
+ * receiver's global name when it IS a stdlib global like Math or Promise,
+ * its widened type text otherwise). Returns silently for non-stdlib
+ * members so the caller's generic rejection applies. */
+export function stdlibMemberFence(lowerer: Lowerer, access: ts.PropertyAccessExpression): void {
+  const sym = lowerer.checker.getSymbolAtLocation(access.name);
+  if (!sym || !lowerer.isStdlibSymbol(sym)) return;
+  const member = access.name.text;
+  const recv = access.expression;
+  // A CHECKED-DYNAMIC receiver whose checker type is a concrete stdlib
+  // class mapped to dyn (the http Agent handle): its members dispatch
+  // at runtime through the dyn/handle machinery — the keyed-read claim
+  // below this fence answers, member-or-refusal ladder, so no compile
+  // fence belongs here.
+  if (lowerer.mapTypeOf(lowerer.typeOf(recv))?.kind === "dyn") return;
+  // Name the container the way the source reads: the global's name when
+  // the receiver IS a stdlib global (Math, process), the dotted path for
+  // a member of one (process.stdout — its TYPE text would be the useless
+  // 'WriteStream & { fd: 1; }'), the receiver's widened type text
+  // otherwise.
+  const globalPathOf = (e: ts.Expression): string | null => {
+    if (ts.isIdentifier(e) && lowerer.isStdlibSymbol(lowerer.checker.getSymbolAtLocation(e))) {
+      return e.text;
     }
-    lowerer.noLowering(`${container}.${member}`, access, hint, sym);
+    if (ts.isPropertyAccessExpression(e) && ts.isIdentifier(e.expression)) {
+      const base = globalPathOf(e.expression);
+      if (base !== null) return `${base}.${e.name.text}`;
+    }
+    return null;
+  };
+  const container =
+    globalPathOf(recv) ??
+    lowerer.checker.typeToString(lowerer.checker.getBaseTypeOfLiteralType(lowerer.typeOf(recv)));
+  let hint: string | undefined;
+  const recvIr = lowerer.mapTypeOf(lowerer.typeOf(recv));
+  if (
+    recvIr?.kind === "promise" &&
+    (member === "then" || member === "catch" || member === "finally")
+  ) {
+    hint =
+      "'await' is the supported way to chain (p.then(f) with one fulfillment handler, p.catch " +
+      "with an INLINE handler, and p.finally(cb) compile) — try { await p } catch (e) is the general form";
+  } else if (recvIr?.kind === "f64" && member === "toString") {
+    hint =
+      "radix-free conversion is a template literal away: `${x}`; toString(radix) runs under --dynamic";
+  } else if (container === "Math" && (member === "min" || member === "max")) {
+    hint =
+      `Math.${member} lowers with any number of plain arguments or ONE number[] spread — ` +
+      `mixed spread/positional lists don't: spread a single array (Math.${member}(...xs))`;
+  } else if (
+    recvIr?.kind === "array" &&
+    member === "index" &&
+    (container === "RegExpExecArray" || container === "RegExpMatchArray")
+  ) {
+    hint =
+      "'.index' is supported on the const binding of a for-of over a DIRECT matchAll call " +
+      "(for (const m of s.matchAll(re)) { ... m.index ... }); stored rows are honest " +
+      "string[] slices without it";
+  } else if (
+    recvIr?.kind === "array" &&
+    member === "groups" &&
+    (container === "RegExpExecArray" || container === "RegExpMatchArray")
+  ) {
+    hint =
+      "'.groups' lowers when the match's regex is STATICALLY known — a regex literal, or a " +
+      "const initialized with one (the group-name table is built at compile time) — and the " +
+      "read is not an optional-chain step: narrow the match instead (if (m) { m.groups } or " +
+      "m!.groups)";
+  } else if (recvIr?.kind === "array" && member === "flat") {
+    hint =
+      "flat has no lowering (flatMap does) — flatten into an accumulator instead: " +
+      "for (const x of xs) for (const y of x) out.push(y)";
+  } else if (container === "process.stdin" || (container === "process" && member === "stdin")) {
+    hint =
+      "isTTY, destroy(), on/once of the data/end/error events, and " +
+      "`for await (const chunk of process.stdin)` are the supported stdin surface " +
+      '(or read everything at once: readFileSync(0, "utf8") from node:fs)';
+  } else if (
+    (container === "process" && (member === "stdout" || member === "stderr")) ||
+    container === "process.stdout" ||
+    container === "process.stderr"
+  ) {
+    // @types/node territory: the fallback declarations don't have these
+    // members at all (a type error), so this fence only fires with the
+    // project's real Node types adopted.
+    hint =
+      "console.log is the supported way to write a line to stdout; " +
+      "the stdout/stderr stream objects have no lowering";
+  } else if (container === "console") {
+    hint =
+      "console.log/info/debug (stdout) and console.error/warn (stderr) are the supported " +
+      "console surface (arguments render with Node's console semantics: strings verbatim, " +
+      "everything else through the static util.inspect)";
+  } else if (container === "TextEncoder") {
+    hint =
+      "TextEncoder instances can be stored, passed, and captured; encode(), encodeInto(string, Uint8Array), and encoding compile";
+  } else if (container === "TextDecoder") {
+    hint =
+      "TextDecoder instances support recognized labels, encoding/fatal/ignoreBOM properties, literal constructor options, and streaming UTF-8/UTF-16/single-byte decode; runtime option objects remain unsupported";
+  } else if (member === "prototype") {
+    hint =
+      "prototype objects are not values here (method lookup is static) — call the method on an instance instead";
+  } else if (
+    recvIr?.kind === "func" &&
+    (member === "call" || member === "apply" || member === "bind")
+  ) {
+    hint =
+      "call the function directly — plain and arrow functions here never read `this`, so " +
+      "f.call(thisArg, ...args) is f(...args), and bind's partial application is an arrow: (...rest) => f(a, ...rest)";
+  } else if (
+    recvIr?.kind === "string" &&
+    (member === "match" || member === "matchAll" || member === "search")
+  ) {
+    hint =
+      "the regex-LITERAL argument forms lower (s.match(/re/)); a string pattern constructs " +
+      "a RegExp at runtime, which has no lowering";
+  } else if (container === "ArrayBuffer" || container.startsWith("ArrayBuffer<")) {
+    hint =
+      "native ArrayBuffer storage is fixed-length; resize and transfer are unsupported — " +
+      "allocate a new buffer and copy through typed-array views instead";
+  } else if (container === "SharedArrayBuffer" || container.startsWith("SharedArrayBuffer<")) {
+    hint =
+      "no shared-memory threads exist in a compiled program — Uint8Array is the byte storage " +
+      "(a fixed-length allocation: grow has nothing to share it with)";
+  } else if (
+    container === "Intl" ||
+    container.startsWith("Intl.") ||
+    [
+      "NumberFormat",
+      "DateTimeFormat",
+      "DurationFormat",
+      "PluralRules",
+      "Collator",
+      "Locale",
+      "RelativeTimeFormat",
+      "ListFormat",
+      "Segmenter",
+      "DisplayNames",
+    ].includes(container) ||
+    member === "toLocaleString" ||
+    member === "toLocaleDateString" ||
+    member === "toLocaleTimeString" ||
+    member === "toLocaleLowerCase" ||
+    member === "toLocaleUpperCase"
+  ) {
+    hint =
+      "locale- and ICU-backed behavior lives outside the static runtime (the localeCompare " +
+      "stance: code-unit order, no collation/locale data) — what lowers: the composed " +
+      'new Intl.NumberFormat("en-US").format(x) and x.toLocaleString("en-US") with default ' +
+      "options, plus default Unicode grapheme segmentation with Intl.Segmenter; locale " +
+      "negotiation, word/sentence segmentation, and resolvedOptions remain unsupported";
+  } else if (container === "Object" && member === "assign") {
+    hint =
+      "spread instead: { ...a, ...b } builds the merged record; what lowers: the empty-target " +
+      "literal-source shape (Object.assign({}, { ... }) IS the source literal) and merges INTO " +
+      "an index-signature record whose value slot every source value enters — " +
+      "other aliased targets are real mutation, and a function target (Object.assign(fn, { prop })) " +
+      "is a function-with-properties value the model cannot represent: bind the property separately";
   }
+  lowerer.noLowering(`${container}.${member}`, access, hint, sym);
+}
 
 /** True iff the accessed member is declared by the standard library —
-   * the same technique as isConsoleLog: trust declarations, not names. */
-  export function isStdlibMember(lowerer: Lowerer, access: ts.PropertyAccessExpression): boolean {
-    const direct = lowerer.checker.getSymbolAtLocation(access.name);
-    if (direct) return lowerer.isStdlibSymbol(direct);
-    // An IMPLICIT-ANY instance body (the checker sees an `any` receiver —
-    // no member symbol resolves) or an ALIASED-TYPEOF narrow (the checker
-    // sees the un-narrowed union — `val.length` on String|Number has no
-    // property symbol): typeOf answers the bound/narrowed type — resolve
-    // the member from it, the same provenance answer the checker would
-    // give on a typed receiver (`path.startsWith` with path bound string
-    // IS String.prototype.startsWith).
-    if (lowerer.implicitParamTypes !== null || lowerer.aliasNarrowTypes.size > 0) {
-      const viaType = lowerer.checker.getPropertyOfType(lowerer.typeOf(access.expression), access.name.text);
-      return lowerer.isStdlibSymbol(viaType ?? undefined);
-    }
-    return false;
+ * the same technique as isConsoleLog: trust declarations, not names. */
+export function isStdlibMember(lowerer: Lowerer, access: ts.PropertyAccessExpression): boolean {
+  const direct = lowerer.checker.getSymbolAtLocation(access.name);
+  if (direct) return lowerer.isStdlibSymbol(direct);
+  // An IMPLICIT-ANY instance body (the checker sees an `any` receiver —
+  // no member symbol resolves) or an ALIASED-TYPEOF narrow (the checker
+  // sees the un-narrowed union — `val.length` on String|Number has no
+  // property symbol): typeOf answers the bound/narrowed type — resolve
+  // the member from it, the same provenance answer the checker would
+  // give on a typed receiver (`path.startsWith` with path bound string
+  // IS String.prototype.startsWith).
+  if (lowerer.implicitParamTypes !== null || lowerer.aliasNarrowTypes.size > 0) {
+    const viaType = lowerer.checker.getPropertyOfType(
+      lowerer.typeOf(access.expression),
+      access.name.text,
+    );
+    return lowerer.isStdlibSymbol(viaType ?? undefined);
   }
+  return false;
+}
 
 /** The provenance check the CHILD receiver lowerings use: a stdlib
-   * member, OR a member the user's own child-shaped interface declares
-   * (the NgrokChildProcess idiom — mapType's duck rule admits an
-   * interface only when EVERY member names the lowered ChildProcess
-   * surface, so accepting its members here cannot widen the surface;
-   * the receiver-kind gate already proved the type maps to child). */
-  export function isChildSurfaceMember(lowerer: Lowerer, access: ts.PropertyAccessExpression): boolean {
-    if (isStdlibMember(lowerer, access)) return true;
-    const sym = lowerer.checker.getSymbolAtLocation(access.name);
-    const decl = sym ? lowerer.checker.declarationsOf(sym)[0] : undefined;
-    const iface = decl?.parent;
-    if (!decl || !iface || !ts.isInterfaceDeclaration(iface)) return false;
-    if (lowerer.isStdlibFile(decl.getSourceFile())) return false;
-    return lowerer.mapTypeOf(lowerer.checker.getTypeAtLocation(iface.name))?.kind === "child";
-  }
+ * member, OR a member the user's own child-shaped interface declares
+ * (the NgrokChildProcess idiom — mapType's duck rule admits an
+ * interface only when EVERY member names the lowered ChildProcess
+ * surface, so accepting its members here cannot widen the surface;
+ * the receiver-kind gate already proved the type maps to child). */
+export function isChildSurfaceMember(
+  lowerer: Lowerer,
+  access: ts.PropertyAccessExpression,
+): boolean {
+  if (isStdlibMember(lowerer, access)) return true;
+  const sym = lowerer.checker.getSymbolAtLocation(access.name);
+  const decl = sym ? lowerer.checker.declarationsOf(sym)[0] : undefined;
+  const iface = decl?.parent;
+  if (!decl || !iface || !ts.isInterfaceDeclaration(iface)) return false;
+  if (lowerer.isStdlibFile(decl.getSourceFile())) return false;
+  return lowerer.mapTypeOf(lowerer.checker.getTypeAtLocation(iface.name))?.kind === "child";
+}
 
 /** True iff some declaration of the symbol lives in the standard library
-   * (shipped ambient or default lib — the provenance half of every
-   * supported-surface check). `some`, not `[0]`: divergence overrides merge
-   * with lib interfaces, so a member can carry declarations from both. A
-   * user's own declaration is in neither, so shadowing never matches. */
-  export function isStdlibSymbol(lowerer: Lowerer, symbol: ts.Symbol | undefined): boolean {
-    return !!symbol && lowerer.checker.declarationsOf(symbol).some((d) => lowerer.isStdlibFile(d.getSourceFile()));
-  }
+ * (shipped ambient or default lib — the provenance half of every
+ * supported-surface check). `some`, not `[0]`: divergence overrides merge
+ * with lib interfaces, so a member can carry declarations from both. A
+ * user's own declaration is in neither, so shadowing never matches. */
+export function isStdlibSymbol(lowerer: Lowerer, symbol: ts.Symbol | undefined): boolean {
+  return (
+    !!symbol &&
+    lowerer.checker.declarationsOf(symbol).some((d) => lowerer.isStdlibFile(d.getSourceFile()))
+  );
+}
 
 /** The canonical stdlib-global name `expr` denotes, or null. Three
  * spellings reach the same global (Node's own aliasing):
@@ -1807,154 +2705,191 @@ export const BUILTIN_MODULE_FENCE_HINTS: Record<string, Record<string, string | 
  *   - the default import from `process`/`node:process`, whose value is
  *     exactly the global process object;
  *   - the `global` identifier — Node's alias of globalThis — and
-   *     `globalThis` itself both canonicalize to "globalThis";
-   *   - a property read off globalThis (`globalThis.process`,
-   *     `global.process`) — `declare var` globals ARE properties of
-   *     `typeof globalThis`, same symbol either way;
-   *   - a local alias binding (`const process = globalThis.process`, the
-   *     tamper-guard prologue) registered in stdlibGlobalAliases. */
-  export function stdlibGlobalNameOf(lowerer: Lowerer, expr: ts.Expression): string | null {
-    if (ts.isParenthesizedExpression(expr)) return stdlibGlobalNameOf(lowerer, expr.expression);
-    if (ts.isIdentifier(expr)) {
-      const symbol = lowerer.checker.getSymbolAtLocation(expr);
-      // `globalThis` itself: a reserved intrinsic — tsc rejects user
-      // global bindings, but local parameters can shadow it. Its special
-      // symbol has no ordinary declarations for the provenance check.
-      if (expr.text === "globalThis" && (!symbol || lowerer.checker.declarationsOf(symbol).length === 0 || lowerer.isStdlibSymbol(symbol))) return "globalThis";
-      if (!symbol) return null;
-      const alias = lowerer.stdlibGlobalAliases.get(symbol);
-      if (alias !== undefined) return alias;
-      const decl = lowerer.checker.declarationsOf(symbol)[0];
-      if (decl !== undefined && ts.isImportClause(decl) && decl.name !== undefined) {
-        const importDecl = decl.parent;
-        if (ts.isImportDeclaration(importDecl) && ts.isStringLiteral(importDecl.moduleSpecifier)) {
-          const spec = importDecl.moduleSpecifier.text;
-          if (spec === "process" || spec === "node:process") return "process";
-        }
+ *     `globalThis` itself both canonicalize to "globalThis";
+ *   - a property read off globalThis (`globalThis.process`,
+ *     `global.process`) — `declare var` globals ARE properties of
+ *     `typeof globalThis`, same symbol either way;
+ *   - a local alias binding (`const process = globalThis.process`, the
+ *     tamper-guard prologue) registered in stdlibGlobalAliases. */
+export function stdlibGlobalNameOf(lowerer: Lowerer, expr: ts.Expression): string | null {
+  if (ts.isParenthesizedExpression(expr)) return stdlibGlobalNameOf(lowerer, expr.expression);
+  if (ts.isIdentifier(expr)) {
+    const symbol = lowerer.checker.getSymbolAtLocation(expr);
+    // `globalThis` itself: a reserved intrinsic — tsc rejects user
+    // global bindings, but local parameters can shadow it. Its special
+    // symbol has no ordinary declarations for the provenance check.
+    if (
+      expr.text === "globalThis" &&
+      (!symbol ||
+        lowerer.checker.declarationsOf(symbol).length === 0 ||
+        lowerer.isStdlibSymbol(symbol))
+    )
+      return "globalThis";
+    if (!symbol) return null;
+    const alias = lowerer.stdlibGlobalAliases.get(symbol);
+    if (alias !== undefined) return alias;
+    const decl = lowerer.checker.declarationsOf(symbol)[0];
+    if (decl !== undefined && ts.isImportClause(decl) && decl.name !== undefined) {
+      const importDecl = decl.parent;
+      if (ts.isImportDeclaration(importDecl) && ts.isStringLiteral(importDecl.moduleSpecifier)) {
+        const spec = importDecl.moduleSpecifier.text;
+        if (spec === "process" || spec === "node:process") return "process";
       }
-      // An IMPORTED binding of a builtin module's re-exported global
-      // (`import { Buffer } from "node:buffer"` — Node's module spelling
-      // of the same object) resolves through the alias to the fallback
-      // file's own export, so provenance and name check out exactly like
-      // the bare-global spelling. A user module re-exporting its own
-      // `Buffer` resolves to a user-file declaration and still misses.
-      const resolved = symbol.flags & ts.SymbolFlags.Alias ? lowerer.checker.getAliasedSymbol(symbol) : symbol;
-      if (!lowerer.isStdlibSymbol(resolved)) return null;
-      return resolved.name === "global" ? "globalThis" : resolved.name;
     }
-    if (ts.isPropertyAccessExpression(expr) && !expr.questionDotToken) {
-      if (stdlibGlobalNameOf(lowerer, expr.expression) !== "globalThis") return null;
-      const symbol = lowerer.checker.getSymbolAtLocation(expr.name);
-      if (!symbol || !lowerer.isStdlibSymbol(symbol)) return null;
-      return symbol.name === "global" ? "globalThis" : symbol.name;
-    }
-    return null;
+    // An IMPORTED binding of a builtin module's re-exported global
+    // (`import { Buffer } from "node:buffer"` — Node's module spelling
+    // of the same object) resolves through the alias to the fallback
+    // file's own export, so provenance and name check out exactly like
+    // the bare-global spelling. A user module re-exporting its own
+    // `Buffer` resolves to a user-file declaration and still misses.
+    const resolved =
+      symbol.flags & ts.SymbolFlags.Alias ? lowerer.checker.getAliasedSymbol(symbol) : symbol;
+    if (!lowerer.isStdlibSymbol(resolved)) return null;
+    return resolved.name === "global" ? "globalThis" : resolved.name;
   }
+  if (ts.isPropertyAccessExpression(expr) && !expr.questionDotToken) {
+    if (stdlibGlobalNameOf(lowerer, expr.expression) !== "globalThis") return null;
+    const symbol = lowerer.checker.getSymbolAtLocation(expr.name);
+    if (!symbol || !lowerer.isStdlibSymbol(symbol)) return null;
+    return symbol.name === "global" ? "globalThis" : symbol.name;
+  }
+  return null;
+}
 
 /** True iff `expr` denotes THE standard-library global `name` — name AND
-   * provenance, because neither alone suffices: several globals share
-   * member names (Math.log must never lower as console.log), and a user
-   * binding shadowing a global's name has a different, non-stdlib symbol.
-   * All of stdlibGlobalNameOf's spellings answer (globalThis.process is
-   * process; `const process = globalThis.process` aliases through). */
-  export function isStdlibGlobal(lowerer: Lowerer, expr: ts.Expression, name: string): boolean {
-    return stdlibGlobalNameOf(lowerer, expr) === name;
-  }
+ * provenance, because neither alone suffices: several globals share
+ * member names (Math.log must never lower as console.log), and a user
+ * binding shadowing a global's name has a different, non-stdlib symbol.
+ * All of stdlibGlobalNameOf's spellings answer (globalThis.process is
+ * process; `const process = globalThis.process` aliases through). */
+export function isStdlibGlobal(lowerer: Lowerer, expr: ts.Expression, name: string): boolean {
+  return stdlibGlobalNameOf(lowerer, expr) === name;
+}
 
 /** The member name of a `<global>.<member>` access whose receiver is THE
-   * standard-library global `name` (console, JSON, process, Math). Null for
-   * anything else, so property-lowering chains keep trying other
-   * receivers. */
-  export function stdlibGlobalMember(lowerer: Lowerer, access: ts.PropertyAccessExpression, name: string): string | null {
-    if (lowerer.chainBlocked(access)) return null;
-    return lowerer.isStdlibGlobal(access.expression, name) ? access.name.text : null;
-  }
+ * standard-library global `name` (console, JSON, process, Math). Null for
+ * anything else, so property-lowering chains keep trying other
+ * receivers. */
+export function stdlibGlobalMember(
+  lowerer: Lowerer,
+  access: ts.PropertyAccessExpression,
+  name: string,
+): string | null {
+  if (lowerer.chainBlocked(access)) return null;
+  return lowerer.isStdlibGlobal(access.expression, name) ? access.name.text : null;
+}
 
 /** `const process = globalThis.process` (and any `const x = <stdlib
-   * global>` snapshot — the suite harness's tamper-guard prologue): the
-   * binding is pure alias plumbing. Nothing in a compiled program can
-   * reassign a stdlib global, so the snapshot IS the global: the symbol
-   * registers in stdlibGlobalAliases (every receiver check resolves
-   * through it — see stdlibGlobalNameOf) and the declaration emits
-   * nothing. Only the globals with lowered member surfaces alias this
-   * way; aliasing, say, `Math` would change nothing (its members lower
-   * by receiver too). Returns true when recognized. */
-  export function stdlibGlobalAliasNameOf(lowerer: Lowerer, init: ts.Expression | undefined): string | null {
-    if (!init) return null;
-    // CommonJS packages commonly guard Node's always-present globals for
-    // browser bundlers (`let p = process || {}`). In the Node execution
-    // model the left object is unconditionally truthy, so the fallback is
-    // never evaluated and the binding is the same global snapshot as the
-    // direct spelling. Keep this deliberately to `||` with a surfaced
-    // stdlib-global left operand; arbitrary capability probes retain their
-    // runtime value semantics.
-    let aliasExpr = init;
-    while (ts.isParenthesizedExpression(aliasExpr)) aliasExpr = aliasExpr.expression;
-    if (
-      ts.isBinaryExpression(aliasExpr) &&
-      aliasExpr.operatorToken.kind === ts.SyntaxKind.BarBarToken &&
-      stdlibGlobalNameOf(lowerer, aliasExpr.left) !== null
-    ) {
-      aliasExpr = aliasExpr.left;
-    }
-    // `const process = require('node:process')`: Node's process MODULE is
-    // the global process object (module.exports === globalThis.process),
-    // so the binding aliases the global exactly like `const process =
-    // globalThis.process`. Preflight admits exactly this shape
-    // (processModuleAliasRequire7); commander's lib/command.js opens with
-    // it.
-    const requireSpec = requireSpecOf(aliasExpr);
-    const name =
-      requireSpec === "process" || requireSpec === "node:process"
-        ? "process"
-        : stdlibGlobalNameOf(lowerer, aliasExpr);
-    if (name === null) return null;
-    // An explicitly any-typed globalThis binding in dynamic TypeScript
-    // holds the engine's global object. Keep the static alias for JS files
-    // (their bare-global value path uses identity tokens) and for the
-    // `globalThis || global` guard that the static alias path folds.
-    let directInit = init;
-    while (ts.isParenthesizedExpression(directInit)) directInit = directInit.expression;
-    if (
-      name === "globalThis" && lowerer.dynamic && !isJsSourceFile(init.getSourceFile()) &&
-      ts.isIdentifier(directInit) && directInit.text === "globalThis" &&
-      ts.isVariableDeclaration(init.parent) &&
-      (lowerer.typeOf(init.parent.name).flags & ts.TypeFlags.Any) !== 0
-    ) return null;
-    // These globals have provenance-aware call or member lowering, so a
-    // stable snapshot keeps the same dispatch as the original global.
-    // Other callable globals still use their ordinary value paths.
-    return ["process", "console", "globalThis", "performance", "Array", "Buffer", "BigInt", "Number", "String", "Boolean"].includes(name)
-      ? name
-      : null;
+ * global>` snapshot — the suite harness's tamper-guard prologue): the
+ * binding is pure alias plumbing. Nothing in a compiled program can
+ * reassign a stdlib global, so the snapshot IS the global: the symbol
+ * registers in stdlibGlobalAliases (every receiver check resolves
+ * through it — see stdlibGlobalNameOf) and the declaration emits
+ * nothing. Only the globals with lowered member surfaces alias this
+ * way; aliasing, say, `Math` would change nothing (its members lower
+ * by receiver too). Returns true when recognized. */
+export function stdlibGlobalAliasNameOf(
+  lowerer: Lowerer,
+  init: ts.Expression | undefined,
+): string | null {
+  if (!init) return null;
+  // CommonJS packages commonly guard Node's always-present globals for
+  // browser bundlers (`let p = process || {}`). In the Node execution
+  // model the left object is unconditionally truthy, so the fallback is
+  // never evaluated and the binding is the same global snapshot as the
+  // direct spelling. Keep this deliberately to `||` with a surfaced
+  // stdlib-global left operand; arbitrary capability probes retain their
+  // runtime value semantics.
+  let aliasExpr = init;
+  while (ts.isParenthesizedExpression(aliasExpr)) aliasExpr = aliasExpr.expression;
+  if (
+    ts.isBinaryExpression(aliasExpr) &&
+    aliasExpr.operatorToken.kind === ts.SyntaxKind.BarBarToken &&
+    stdlibGlobalNameOf(lowerer, aliasExpr.left) !== null
+  ) {
+    aliasExpr = aliasExpr.left;
   }
+  // `const process = require('node:process')`: Node's process MODULE is
+  // the global process object (module.exports === globalThis.process),
+  // so the binding aliases the global exactly like `const process =
+  // globalThis.process`. Preflight admits exactly this shape
+  // (processModuleAliasRequire7); commander's lib/command.js opens with
+  // it.
+  const requireSpec = requireSpecOf(aliasExpr);
+  const name =
+    requireSpec === "process" || requireSpec === "node:process"
+      ? "process"
+      : stdlibGlobalNameOf(lowerer, aliasExpr);
+  if (name === null) return null;
+  // An explicitly any-typed globalThis binding in dynamic TypeScript
+  // holds the engine's global object. Keep the static alias for JS files
+  // (their bare-global value path uses identity tokens) and for the
+  // `globalThis || global` guard that the static alias path folds.
+  let directInit = init;
+  while (ts.isParenthesizedExpression(directInit)) directInit = directInit.expression;
+  if (
+    name === "globalThis" &&
+    lowerer.dynamic &&
+    !isJsSourceFile(init.getSourceFile()) &&
+    ts.isIdentifier(directInit) &&
+    directInit.text === "globalThis" &&
+    ts.isVariableDeclaration(init.parent) &&
+    (lowerer.typeOf(init.parent.name).flags & ts.TypeFlags.Any) !== 0
+  )
+    return null;
+  // These globals have provenance-aware call or member lowering, so a
+  // stable snapshot keeps the same dispatch as the original global.
+  // Other callable globals still use their ordinary value paths.
+  return [
+    "process",
+    "console",
+    "globalThis",
+    "performance",
+    "Array",
+    "Buffer",
+    "BigInt",
+    "Number",
+    "String",
+    "Boolean",
+  ].includes(name)
+    ? name
+    : null;
+}
 
-  export function stdlibGlobalAliasDecl(lowerer: Lowerer, nameNode: ts.Node, init: ts.Expression | undefined): boolean {
-    if (!ts.isIdentifier(nameNode)) return false;
-    const name = stdlibGlobalAliasNameOf(lowerer, init);
-    if (name === null) return false;
-    // Mutable global-object bindings keep real storage, even when never
-    // reassigned: var can be observed before initialization and let has TDZ.
-    if (name === "globalThis" && ts.isVariableDeclaration(nameNode.parent) &&
-        (ts.getCombinedNodeFlags(nameNode.parent) & ts.NodeFlags.Const) === 0) return false;
-    const symbol = lowerer.checker.getSymbolAtLocation(nameNode);
-    if (!symbol) return false;
-    lowerer.stdlibGlobalAliases.set(symbol, name);
-    return true;
-  }
+export function stdlibGlobalAliasDecl(
+  lowerer: Lowerer,
+  nameNode: ts.Node,
+  init: ts.Expression | undefined,
+): boolean {
+  if (!ts.isIdentifier(nameNode)) return false;
+  const name = stdlibGlobalAliasNameOf(lowerer, init);
+  if (name === null) return false;
+  // Mutable global-object bindings keep real storage, even when never
+  // reassigned: var can be observed before initialization and let has TDZ.
+  if (
+    name === "globalThis" &&
+    ts.isVariableDeclaration(nameNode.parent) &&
+    (ts.getCombinedNodeFlags(nameNode.parent) & ts.NodeFlags.Const) === 0
+  )
+    return false;
+  const symbol = lowerer.checker.getSymbolAtLocation(nameNode);
+  if (!symbol) return false;
+  lowerer.stdlibGlobalAliases.set(symbol, name);
+  return true;
+}
 
 /** True iff the symbol is declared ONLY by the adopted @types/node
-   * surface (no es-lib or shipped-ambient declaration merges in) — chooses
-   * the SC2020 fence's wording: "typed by @types/node", not "standard
-   * library". */
-  export function nodeTypesOnlySymbol(lowerer: Lowerer, sym: ts.Symbol | null | undefined): boolean {
-    const decls = sym ? lowerer.checker.declarationsOf(sym) : undefined;
-    if (!decls || decls.length === 0) return false;
-    let viaNode = false;
-    for (const d of decls) {
-      const sf = d.getSourceFile();
-      if (sf.isDeclarationFile && isNodeTypesPath(sf.fileName)) viaNode = true;
-      else if (lowerer.isStdlibFile(sf)) return false;
-    }
-    return viaNode;
+ * surface (no es-lib or shipped-ambient declaration merges in) — chooses
+ * the SC2020 fence's wording: "typed by @types/node", not "standard
+ * library". */
+export function nodeTypesOnlySymbol(lowerer: Lowerer, sym: ts.Symbol | null | undefined): boolean {
+  const decls = sym ? lowerer.checker.declarationsOf(sym) : undefined;
+  if (!decls || decls.length === 0) return false;
+  let viaNode = false;
+  for (const d of decls) {
+    const sf = d.getSourceFile();
+    if (sf.isDeclarationFile && isNodeTypesPath(sf.fileName)) viaNode = true;
+    else if (lowerer.isStdlibFile(sf)) return false;
   }
+  return viaNode;
+}

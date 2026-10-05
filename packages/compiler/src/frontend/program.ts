@@ -50,14 +50,42 @@ import {
   tscPassthroughDiag,
   unsupportedDiag,
 } from "../diagnostics/diagnostic.js";
-import { isNodeModulesPath, nearestInvalidPackageJsonPath, nearestPackageType, nearestPkgJsonPath, projectDtsRuntimeSibling, resolveBareModule, resolveProjectModule, resolveTypeDirective, setProjectPathMappings, setProjectRealm } from "./resolve.js";
+import {
+  isNodeModulesPath,
+  nearestInvalidPackageJsonPath,
+  nearestPackageType,
+  nearestPkgJsonPath,
+  projectDtsRuntimeSibling,
+  resolveBareModule,
+  resolveProjectModule,
+  resolveTypeDirective,
+  setProjectPathMappings,
+  setProjectRealm,
+} from "./resolve.js";
 import { probeNodeImportRefusal, probeNodeRequireRefusal } from "./npm.js";
-import { isNpmStaticPackage, npmStaticActive, npmStaticFsShadow, npmStaticPackageOfPath, reportNpmStaticOffender, setNpmStaticDeclarationOverloads, setNpmStaticPackages } from "./npm-static.js";
+import {
+  isNpmStaticPackage,
+  npmStaticActive,
+  npmStaticFsShadow,
+  npmStaticPackageOfPath,
+  reportNpmStaticOffender,
+  setNpmStaticDeclarationOverloads,
+  setNpmStaticPackages,
+} from "./npm-static.js";
 import { isPrunedNpmReexport, planNpmStaticReexports } from "./npm-static-prune.js";
 import { isNpmStaticSubclassArgument } from "./npm-static-subtyping.js";
-import { npmStaticDeclarationReexports, npmStaticRuntimeClassTargets, parseNpmStaticDeclarationOverloads, parseNpmStaticDeclarationProperties } from "./npm-static-declaration-syntax.js";
+import {
+  npmStaticDeclarationReexports,
+  npmStaticRuntimeClassTargets,
+  parseNpmStaticDeclarationOverloads,
+  parseNpmStaticDeclarationProperties,
+} from "./npm-static-declaration-syntax.js";
 import type { FrontendServices } from "./services.js";
-import type { NpmStaticDeclarationOverloads, NpmStaticDeclarationProperties, NpmStaticOverloadSignature } from "./npm-static-declaration-syntax.js";
+import type {
+  NpmStaticDeclarationOverloads,
+  NpmStaticDeclarationProperties,
+  NpmStaticOverloadSignature,
+} from "./npm-static-declaration-syntax.js";
 import { provenanceEntryFor, provenancePaths } from "./provenance-registry.js";
 import { cjsLexedExportsOfFile, cjsVisibleNames } from "./cjs-syntax.js";
 import {
@@ -168,17 +196,23 @@ function jsoncSyntaxError(text: string): string | null {
  * import forms were legal in the original project. */
 function projectAllowsSyntheticDefaultImports(options: Record<string, unknown>): boolean {
   const explicitSyntheticDefaultImports = options["allowSyntheticDefaultImports"];
-  if (explicitSyntheticDefaultImports !== undefined) return explicitSyntheticDefaultImports === true;
+  if (explicitSyntheticDefaultImports !== undefined)
+    return explicitSyntheticDefaultImports === true;
   const moduleKind = options["module"];
   const explicitEsModuleInterop = options["esModuleInterop"];
-  const esModuleInterop = explicitEsModuleInterop !== undefined
-    ? explicitEsModuleInterop === true
-    : moduleKind === ts.ModuleKind.Node16 ||
-      moduleKind === ts.ModuleKind.Node18 ||
-      moduleKind === ts.ModuleKind.Node20 ||
-      moduleKind === ts.ModuleKind.NodeNext ||
-      moduleKind === ts.ModuleKind.Preserve;
-  return esModuleInterop || moduleKind === ts.ModuleKind.System || options["moduleResolution"] === ts.ModuleResolutionKind.Bundler;
+  const esModuleInterop =
+    explicitEsModuleInterop !== undefined
+      ? explicitEsModuleInterop === true
+      : moduleKind === ts.ModuleKind.Node16 ||
+        moduleKind === ts.ModuleKind.Node18 ||
+        moduleKind === ts.ModuleKind.Node20 ||
+        moduleKind === ts.ModuleKind.NodeNext ||
+        moduleKind === ts.ModuleKind.Preserve;
+  return (
+    esModuleInterop ||
+    moduleKind === ts.ModuleKind.System ||
+    options["moduleResolution"] === ts.ModuleResolutionKind.Bundler
+  );
 }
 
 /** The project's tsconfig adoption in the 7 world: tsgo's own config parser
@@ -216,15 +250,18 @@ function adoptProjectConfig7(
   if (rawPaths !== undefined && typeof rawPaths === "object" && rawPaths !== null) {
     const configDir = dirname(configFile);
     const rawBaseUrl = parsed.options["baseUrl"];
-    const base = typeof rawBaseUrl === "string"
-      ? (isAbsolute(rawBaseUrl) ? rawBaseUrl : resolve(configDir, rawBaseUrl))
-      : configDir;
+    const base =
+      typeof rawBaseUrl === "string"
+        ? isAbsolute(rawBaseUrl)
+          ? rawBaseUrl
+          : resolve(configDir, rawBaseUrl)
+        : configDir;
     const paths: Record<string, string[]> = {};
     for (const [key, targets] of Object.entries(rawPaths as Record<string, unknown>)) {
       if (!Array.isArray(targets)) continue;
       paths[key] = targets
         .filter((target): target is string => typeof target === "string")
-        .map((target) => isAbsolute(target) ? target : resolve(base, target));
+        .map((target) => (isAbsolute(target) ? target : resolve(base, target)));
     }
     adopted["paths"] = paths;
   }
@@ -309,7 +346,9 @@ function runtimeReexportTarget(fromFile: string, specifier: string): string | nu
     resolve(base, "index.mjs"),
     resolve(base, "index.cjs"),
   ];
-  const target = candidates.find((candidate) => trackedFileExists(candidate) && isJsSourceFileName(candidate));
+  const target = candidates.find(
+    (candidate) => trackedFileExists(candidate) && isJsSourceFileName(candidate),
+  );
   return target === undefined ? null : (trackedRealpath(target) ?? target);
 }
 
@@ -323,7 +362,9 @@ function visitNpmStaticDeclarationClosure(
 ): void {
   const seen = new Set<string>();
   const packageJson = nearestPkgJsonPath(entryPath);
-  const packageRoot = (packageJson === null ? dirname(entryPath) : dirname(packageJson)).split("\\").join("/");
+  const packageRoot = (packageJson === null ? dirname(entryPath) : dirname(packageJson))
+    .split("\\")
+    .join("/");
   const visit = (path: string): void => {
     path = resolve(path);
     const normalized = path.split("\\").join("/");
@@ -341,11 +382,17 @@ function visitNpmStaticDeclarationClosure(
   visit(entryPath);
 }
 
-function npmStaticDeclarationOverloadsOf(services: FrontendServices, entryPath: string): NpmStaticDeclarationOverloads {
+function npmStaticDeclarationOverloadsOf(
+  services: FrontendServices,
+  entryPath: string,
+): NpmStaticDeclarationOverloads {
   const classes = new Map<string, Map<string, readonly NpmStaticOverloadSignature[]>>();
   visitNpmStaticDeclarationClosure(services, entryPath, (path, source) => {
-    for (const [className, methods] of parseNpmStaticDeclarationOverloads(services.parse(path, source, "ts"))) {
-      const target = classes.get(className) ?? new Map<string, readonly NpmStaticOverloadSignature[]>();
+    for (const [className, methods] of parseNpmStaticDeclarationOverloads(
+      services.parse(path, source, "ts"),
+    )) {
+      const target =
+        classes.get(className) ?? new Map<string, readonly NpmStaticOverloadSignature[]>();
       classes.set(className, target);
       for (const [methodName, signatures] of methods) {
         if (!target.has(methodName)) target.set(methodName, signatures);
@@ -355,10 +402,15 @@ function npmStaticDeclarationOverloadsOf(services: FrontendServices, entryPath: 
   return classes;
 }
 
-function npmStaticDeclarationPropertiesOf(services: FrontendServices, entryPath: string): NpmStaticDeclarationProperties {
+function npmStaticDeclarationPropertiesOf(
+  services: FrontendServices,
+  entryPath: string,
+): NpmStaticDeclarationProperties {
   const classes = new Map<string, Map<string, string>>();
   visitNpmStaticDeclarationClosure(services, entryPath, (path, source) => {
-    for (const [className, properties] of parseNpmStaticDeclarationProperties(services.parse(path, source, "ts"))) {
+    for (const [className, properties] of parseNpmStaticDeclarationProperties(
+      services.parse(path, source, "ts"),
+    )) {
       const target = classes.get(className) ?? new Map<string, string>();
       classes.set(className, target);
       for (const [propertyName, type] of properties) {
@@ -461,9 +513,7 @@ function externalTypeFileClosure7(
       admit(program.getSourceFile(depPath) ?? null);
     }
   }
-  return new Map(
-    [...ownersByFile].map(([file, owners]) => [file, [...owners]] as const),
-  );
+  return new Map([...ownersByFile].map(([file, owners]) => [file, [...owners]] as const));
 }
 
 /** Program roots hidden behind canonical createRequire bindings. tsgo
@@ -480,8 +530,10 @@ function createRequireProgramRoots7(program: ts.Program): string[] {
     const calls: { callee: ts.Identifier; spec: string }[] = [];
     ts.walkPreorder(sf, (node) => {
       if (
-        !ts.isCallExpression(node) || node.questionDotToken !== undefined ||
-        node.arguments.length !== 1 || !ts.isStringLiteralLike(node.arguments[0]!) ||
+        !ts.isCallExpression(node) ||
+        node.questionDotToken !== undefined ||
+        node.arguments.length !== 1 ||
+        !ts.isStringLiteralLike(node.arguments[0]!) ||
         !ts.isIdentifier(node.expression)
       ) {
         return undefined;
@@ -498,7 +550,11 @@ function createRequireProgramRoots7(program: ts.Program): string[] {
       let target = resolveProjectModule(sf.fileName, spec);
       if (target === null && !spec.startsWith("#")) {
         const npm = resolveNpmImport7(sf.fileName, spec, "require");
-        if (npm !== null && isNpmStaticPackage(npm.packageName) && isJsSourceFileName(npm.typesFile)) {
+        if (
+          npm !== null &&
+          isNpmStaticPackage(npm.packageName) &&
+          isJsSourceFileName(npm.typesFile)
+        ) {
           target = npm.typesFile;
         }
       }
@@ -517,14 +573,17 @@ function createRequireProgramRoots7(program: ts.Program): string[] {
 export function entryPackageFilePredicate(entryPath: string): (file: string) => boolean {
   const entryFile = tsgoPath(entryPath);
   const installedAt = entryFile.lastIndexOf("/node_modules/");
-  const prefix = installedAt < 0
-    ? null
-    : entryFile.slice(0, installedAt) + "/node_modules/" + npmPackageNameOf(entryFile) + "/";
+  const prefix =
+    installedAt < 0
+      ? null
+      : entryFile.slice(0, installedAt) + "/node_modules/" + npmPackageNameOf(entryFile) + "/";
   return (file) => {
     const normalized = tsgoPath(file);
-    return normalized === entryFile || (
-      prefix !== null && normalized.startsWith(prefix) &&
-      !normalized.slice(prefix.length).split("/").includes("node_modules")
+    return (
+      normalized === entryFile ||
+      (prefix !== null &&
+        normalized.startsWith(prefix) &&
+        !normalized.slice(prefix.length).split("/").includes("node_modules"))
     );
   };
 }
@@ -536,14 +595,21 @@ function entryPackageProgramRoots7(program: ts.Program, entryPath: string): stri
   const belongsToEntry = entryPackageFilePredicate(entryPath);
   const roots = new Set<string>();
   for (const sf of program.getSourceFiles()) {
-    if (sf.isDeclarationFile || (!belongsToEntry(sf.fileName) && npmStaticPackageOfPath(sf.fileName) === null)) continue;
+    if (
+      sf.isDeclarationFile ||
+      (!belongsToEntry(sf.fileName) && npmStaticPackageOfPath(sf.fileName) === null)
+    )
+      continue;
     for (const specifier of sf.imports) {
       if (!ts.isStringLiteralLike(specifier)) continue;
       const target = resolveProjectModule(sf.fileName, specifier.text);
       if (
-        target !== null && (belongsToEntry(target) || npmStaticPackageOfPath(target) !== null) && isJsSourceFileName(target) &&
+        target !== null &&
+        (belongsToEntry(target) || npmStaticPackageOfPath(target) !== null) &&
+        isJsSourceFileName(target) &&
         program.getSourceFile(target) === undefined
-      ) roots.add(target);
+      )
+        roots.add(target);
     }
   }
   return [...roots].sort();
@@ -558,7 +624,7 @@ function loadProgram7(
   const configuredPaths = config.options["paths"];
   setProjectPathMappings(
     configuredPaths !== undefined && typeof configuredPaths === "object" && configuredPaths !== null
-      ? configuredPaths as Record<string, string[]>
+      ? (configuredPaths as Record<string, string[]>)
       : null,
   );
   const nodeTypes = config.configFile ? resolveNodeTypes7(entryPath) : null;
@@ -567,7 +633,9 @@ function loadProgram7(
   // not scriptc's fence and drowns real diagnostics in hundreds of
   // .d.ts-internal errors. Fence discipline never depended on it: the
   // lowerer checks provenance and forms at every use site.
-  let options: ts.Ts7CompilerOptions = nodeTypes ? { ...config.options, skipLibCheck: true } : { ...config.options };
+  let options: ts.Ts7CompilerOptions = nodeTypes
+    ? { ...config.options, skipLibCheck: true }
+    : { ...config.options };
   // --npm-static: opted-in packages' shipped JS must be TYPE-INCLUDED (not
   // just resolved) — without maxNodeModuleJsDepth, node_modules JS types as
   // an implicit-any module (TS7016) and nothing infers. Only flagged
@@ -583,6 +651,8 @@ function loadProgram7(
   if (provenance !== null || externalTypes.size > 0) {
     const paths: Record<string, string[]> = {
       ...(configuredPaths as Record<string, string[]> | undefined),
+      // Keep an index-signature source for native lowering when provenance is absent.
+      // oxlint-disable-next-line unicorn/no-useless-fallback-in-spread
       ...(provenance ?? {}),
     };
     for (const [specifier, declarationPath] of externalTypes) {
@@ -622,8 +692,11 @@ function loadProgram7(
       externalTypeSpecifiersByFile,
       projectWorld: () => (projectWorld ??= host.createProgram(programRoots, options)),
       disposeAll: () => {
-        try { projectWorld?.dispose(); }
-        finally { program.dispose(); }
+        try {
+          projectWorld?.dispose();
+        } finally {
+          program.dispose();
+        }
       },
     };
   } catch (error) {
@@ -695,16 +768,24 @@ export function loadProgram(
     if (runtime === null || !isJsSourceFileName(runtime.typesFile)) continue;
     const runtimeSource = trackedReadFile(runtime.typesFile);
     if (runtimeSource === null) continue;
-    const targets = npmStaticRuntimeClassTargets(services.parse(runtime.typesFile, runtimeSource, "js"), runtimeSource, classNames);
+    const targets = npmStaticRuntimeClassTargets(
+      services.parse(runtime.typesFile, runtimeSource, "js"),
+      runtimeSource,
+      classNames,
+    );
     for (const [className, { specifier, localName }] of targets) {
       const methods = overloads.get(className);
       const fields = properties.get(className);
       if (methods === undefined && fields === undefined) continue;
-      const target = specifier === null ? runtime.typesFile : runtimeReexportTarget(runtime.typesFile, specifier);
+      const target =
+        specifier === null
+          ? runtime.typesFile
+          : runtimeReexportTarget(runtime.typesFile, specifier);
       if (target === null) continue;
       const targetPackage = npmPackageNameOf(target);
       const targetNorm = target.split("\\").join("/");
-      const insideWorkspace = runtime.workspaceDir !== undefined &&
+      const insideWorkspace =
+        runtime.workspaceDir !== undefined &&
         targetNorm.startsWith(runtime.workspaceDir.split("\\").join("/") + "/");
       if (targetPackage !== pkg && !insideWorkspace) continue;
       const projectionKey = JSON.stringify([targetNorm, localName]);
@@ -724,22 +805,37 @@ export function loadProgram(
       projectionOwners.set(projectionKey, className);
       // The safe declaration grammar can name only its own class. Bind
       // that type to the actual runtime class after a named ESM alias.
-      const renameSelf = (type: string): string => type.split(/([\s[\]<>()|,]+)/).map((name) => name === className ? localName : name).join("");
+      const renameSelf = (type: string): string =>
+        type
+          .split(/([\s[\]<>()|,]+)/)
+          .map((name) => (name === className ? localName : name))
+          .join("");
       if (methods !== undefined) {
         const byClass = new Map(declarationOverloads.get(targetNorm) ?? []);
-        byClass.set(localName, new Map([...methods].map(([name, signatures]) => [name, signatures.map((signature) => ({
-          parameters: signature.parameters.map((parameter) => ({
-            name: parameter.name,
-            type: renameSelf(parameter.type),
-            optional: parameter.optional,
-          })),
-          returnType: renameSelf(signature.returnType),
-        }))])));
+        byClass.set(
+          localName,
+          new Map(
+            [...methods].map(([name, signatures]) => [
+              name,
+              signatures.map((signature) => ({
+                parameters: signature.parameters.map((parameter) => ({
+                  name: parameter.name,
+                  type: renameSelf(parameter.type),
+                  optional: parameter.optional,
+                })),
+                returnType: renameSelf(signature.returnType),
+              })),
+            ]),
+          ),
+        );
         declarationOverloads.set(targetNorm, byClass);
       }
       if (fields !== undefined) {
         const byClass = new Map(declarationProperties.get(targetNorm) ?? []);
-        byClass.set(localName, new Map([...fields].map(([name, type]) => [name, renameSelf(type)])));
+        byClass.set(
+          localName,
+          new Map([...fields].map(([name, type]) => [name, renameSelf(type)])),
+        );
         declarationProperties.set(targetNorm, byClass);
       }
     }
@@ -757,7 +853,8 @@ export function loadProgram(
   clearWorkspacePackages();
   for (const pkg of opts?.npmStatic ?? []) {
     const probe = resolveBareModule(entryPath, pkg);
-    if (probe?.workspaceDir !== undefined) registerWorkspacePackage(probe.packageName, probe.workspaceDir);
+    if (probe?.workspaceDir !== undefined)
+      registerWorkspacePackage(probe.packageName, probe.workspaceDir);
   }
   // Declaration-twin hiding is scoped to the entry's own package realm
   // (see projectDtsRuntimeSibling) — set before the host exists so the
@@ -782,22 +879,29 @@ export function loadProgram(
     return {
       ...load,
       services,
-      projectWorld: npmStaticPackages.length === 0 ? load.projectWorld : () => {
-        // Check authored code against the package's published declarations.
-        // Runtime bodies still lower from JavaScript in the original world;
-        // inference there must not manufacture errors in valid user code.
-        if (!authoredLoad) {
-          authoredHost = services.createProgramHost({ cwd: dirname(entryPath) });
-          authoredLoad = loadProgram7(authoredHost, entryPath, externalTypes);
-        }
-        return authoredLoad.projectWorld();
-      },
+      projectWorld:
+        npmStaticPackages.length === 0
+          ? load.projectWorld
+          : () => {
+              // Check authored code against the package's published declarations.
+              // Runtime bodies still lower from JavaScript in the original world;
+              // inference there must not manufacture errors in valid user code.
+              if (!authoredLoad) {
+                authoredHost = services.createProgramHost({ cwd: dirname(entryPath) });
+                authoredLoad = loadProgram7(authoredHost, entryPath, externalTypes);
+              }
+              return authoredLoad.projectWorld();
+            },
       dispose: () => {
-        try { authoredLoad?.disposeAll(); }
-        finally {
+        try {
+          authoredLoad?.disposeAll();
+        } finally {
           authoredHost?.close();
-          try { load.disposeAll(); }
-          finally { host.close(); }
+          try {
+            load.disposeAll();
+          } finally {
+            host.close();
+          }
         }
       },
     };
@@ -859,8 +963,10 @@ function suppressedJsStrictness7(d: ts.Diagnostic): boolean {
 function requireSpecOf7(node: ts.Node): string | null {
   let value = node;
   while (
-    ts.isParenthesizedExpression(value) || ts.isAsExpression(value) ||
-    ts.isTypeAssertion(value) || ts.isNonNullExpression(value)
+    ts.isParenthesizedExpression(value) ||
+    ts.isAsExpression(value) ||
+    ts.isTypeAssertion(value) ||
+    ts.isNonNullExpression(value)
   ) {
     value = value.expression;
   }
@@ -880,7 +986,10 @@ function isRequireStatement7(stmt: ts.Statement): boolean {
   if (ts.isExpressionStatement(stmt)) return requireSpecOf7(stmt.expression) !== null;
   if (!ts.isVariableStatement(stmt)) return false;
   const decls = stmt.declarationList.declarations;
-  return decls.length > 0 && decls.every((d) => d.initializer !== undefined && requireSpecOf7(d.initializer) !== null);
+  return (
+    decls.length > 0 &&
+    decls.every((d) => d.initializer !== undefined && requireSpecOf7(d.initializer) !== null)
+  );
 }
 
 /** The require() occurrences of one top-level statement: the declaration
@@ -916,7 +1025,11 @@ export function isEsModuleStamp(expr: ts.Expression): boolean {
     return false;
   }
   if (expr.arguments.length !== 3) return false;
-  const [recv, nameArg, desc] = expr.arguments as unknown as [ts.Expression, ts.Expression, ts.Expression];
+  const [recv, nameArg, desc] = expr.arguments as unknown as [
+    ts.Expression,
+    ts.Expression,
+    ts.Expression,
+  ];
   const isExports =
     (ts.isIdentifier(recv) && recv.text === "exports") ||
     (ts.isPropertyAccessExpression(recv) &&
@@ -955,7 +1068,9 @@ function pureCjsExport7(program: ts.Program, stmt: ts.Statement): boolean {
       receiver = receiver.expression;
       return ts.isIdentifier(receiver) && !sourceBinding7(program, receiver);
     }
-    return ts.isIdentifier(receiver) && receiver.text === "exports" && !sourceBinding7(program, receiver);
+    return (
+      ts.isIdentifier(receiver) && receiver.text === "exports" && !sourceBinding7(program, receiver)
+    );
   };
   if (cjs.kind === "member") {
     if (!plainMember(cjs.expr.left)) return false;
@@ -970,32 +1085,48 @@ function pureCjsExport7(program: ts.Program, stmt: ts.Statement): boolean {
     value = value.right;
   }
   if (ts.isVoidExpression(value) && ts.isNumericLiteral(value.expression)) return true;
-  if (ts.isStringLiteralLike(value) || ts.isNumericLiteral(value) ||
-      value.kind === ts.SyntaxKind.TrueKeyword || value.kind === ts.SyntaxKind.FalseKeyword ||
-      value.kind === ts.SyntaxKind.NullKeyword) return true;
+  if (
+    ts.isStringLiteralLike(value) ||
+    ts.isNumericLiteral(value) ||
+    value.kind === ts.SyntaxKind.TrueKeyword ||
+    value.kind === ts.SyntaxKind.FalseKeyword ||
+    value.kind === ts.SyntaxKind.NullKeyword
+  )
+    return true;
   if (!ts.isIdentifier(value)) return false;
   if (value.text === "undefined" && !sourceBinding7(program, value)) return true;
   const checker = program.getTypeChecker();
   const symbol = checker.getSymbolAtLocation(value);
-  return symbol !== undefined && checker.declarationsOf(symbol).some(
-    (decl) => ts.isFunctionDeclaration(decl) && decl.parent === stmt.parent,
+  return (
+    symbol !== undefined &&
+    checker
+      .declarationsOf(symbol)
+      .some((decl) => ts.isFunctionDeclaration(decl) && decl.parent === stmt.parent)
   );
 }
 
 function sourceBinding7(program: ts.Program, ident: ts.Identifier): boolean {
   const checker = program.getTypeChecker();
   const symbol = checker.getSymbolAtLocation(ident);
-  return symbol !== undefined && checker.declarationsOf(symbol).some(
-    (decl) => !decl.getSourceFile().isDeclarationFile && !ts.isSourceFile(decl),
+  return (
+    symbol !== undefined &&
+    checker
+      .declarationsOf(symbol)
+      .some((decl) => !decl.getSourceFile().isDeclarationFile && !ts.isSourceFile(decl))
   );
 }
 
 function purePrefixDecl7(decl: ts.VariableDeclaration): boolean {
   const init = decl.initializer;
-  return init === undefined || requireSpecOf7(init) !== null ||
-    ts.isStringLiteralLike(init) || ts.isNumericLiteral(init) ||
-    init.kind === ts.SyntaxKind.TrueKeyword || init.kind === ts.SyntaxKind.FalseKeyword ||
-    init.kind === ts.SyntaxKind.NullKeyword;
+  return (
+    init === undefined ||
+    requireSpecOf7(init) !== null ||
+    ts.isStringLiteralLike(init) ||
+    ts.isNumericLiteral(init) ||
+    init.kind === ts.SyntaxKind.TrueKeyword ||
+    init.kind === ts.SyntaxKind.FalseKeyword ||
+    init.kind === ts.SyntaxKind.NullKeyword
+  );
 }
 
 /** True for top-level statements that cannot run user code: directives,
@@ -1013,7 +1144,12 @@ function purePrefixStmt7(program: ts.Program, s: ts.Statement): boolean {
       const object = (call.expression as ts.PropertyAccessExpression).expression as ts.Identifier;
       let receiver = call.arguments[0]!;
       if (ts.isPropertyAccessExpression(receiver)) receiver = receiver.expression;
-      if (!sourceBinding7(program, object) && ts.isIdentifier(receiver) && !sourceBinding7(program, receiver)) return true;
+      if (
+        !sourceBinding7(program, object) &&
+        ts.isIdentifier(receiver) &&
+        !sourceBinding7(program, receiver)
+      )
+        return true;
     }
     if (pureCjsExport7(program, s)) return true;
   }
@@ -1048,7 +1184,8 @@ export function bindingEarlyUse7(
   const bound: ts.Identifier[] = [];
   if (ts.isIdentifier(decl.name)) bound.push(decl.name);
   else if (ts.isObjectBindingPattern(decl.name)) {
-    for (const el of decl.name.elements) if (el.name !== undefined && ts.isIdentifier(el.name)) bound.push(el.name);
+    for (const el of decl.name.elements)
+      if (el.name !== undefined && ts.isIdentifier(el.name)) bound.push(el.name);
   }
   const bindings = new Map<ts.Symbol, string>();
   for (const id of bound) {
@@ -1168,9 +1305,15 @@ function isCreateRequireImport7(program: ts.Program, ident: ts.Identifier): bool
     const target = checker.getAliasedSymbol(symbol);
     const targetDecl = checker.declarationsOf(target)[0];
     if (targetDecl !== undefined && targetDecl.getSourceFile().isDeclarationFile) {
-      for (let p: ts.Node | undefined = targetDecl.parent; p !== undefined && !ts.isSourceFile(p); p = p.parent) {
+      for (
+        let p: ts.Node | undefined = targetDecl.parent;
+        p !== undefined && !ts.isSourceFile(p);
+        p = p.parent
+      ) {
         if (ts.isModuleDeclaration(p) && ts.isStringLiteral(p.name)) {
-          return canonicalBuiltinModule(p.name.text) === "module" && target.name === "createRequire";
+          return (
+            canonicalBuiltinModule(p.name.text) === "module" && target.name === "createRequire"
+          );
         }
       }
     }
@@ -1185,7 +1328,9 @@ export function isCreateRequireBinding7(program: ts.Program, callee: ts.Identifi
   const checker = program.getTypeChecker();
   const symbol = checker.getSymbolAtLocation(callee);
   const decl = symbol
-    ? checker.declarationsOf(symbol).find((d): d is ts.VariableDeclaration => ts.isVariableDeclaration(d))
+    ? checker
+        .declarationsOf(symbol)
+        .find((d): d is ts.VariableDeclaration => ts.isVariableDeclaration(d))
     : undefined;
   if (
     decl === undefined ||
@@ -1194,9 +1339,10 @@ export function isCreateRequireBinding7(program: ts.Program, callee: ts.Identifi
   ) {
     return false;
   }
-  return isCreateRequireBaseCall7(program, decl.initializer) && (
-    (decl.parent.flags & ts.NodeFlags.Const) !== 0 ||
-    stableCreateRequireBindingReason7(program, decl) === null
+  return (
+    isCreateRequireBaseCall7(program, decl.initializer) &&
+    ((decl.parent.flags & ts.NodeFlags.Const) !== 0 ||
+      stableCreateRequireBindingReason7(program, decl) === null)
   );
 }
 
@@ -1206,27 +1352,52 @@ export function isCreateRequireBinding7(program: ts.Program, callee: ts.Identifi
 function staticCreateRequireUse7(expr: ts.Expression): boolean {
   let use: ts.Node = expr;
   while (ts.isParenthesizedExpression(use.parent)) use = use.parent;
-  if (ts.isPropertyAccessExpression(use.parent) && use.parent.expression === use && use.parent.name.text === "resolve" && !use.parent.questionDotToken) {
+  if (
+    ts.isPropertyAccessExpression(use.parent) &&
+    use.parent.expression === use &&
+    use.parent.name.text === "resolve" &&
+    !use.parent.questionDotToken
+  ) {
     use = use.parent;
-    if (ts.isPropertyAccessExpression(use.parent) && use.parent.expression === use && use.parent.name.text === "paths" && !use.parent.questionDotToken) use = use.parent;
+    if (
+      ts.isPropertyAccessExpression(use.parent) &&
+      use.parent.expression === use &&
+      use.parent.name.text === "paths" &&
+      !use.parent.questionDotToken
+    )
+      use = use.parent;
   }
   const call = use.parent;
-  return ts.isCallExpression(call) && call.expression === use && !call.questionDotToken &&
-    call.arguments.length === 1 && ts.isStringLiteralLike(call.arguments[0]!);
+  return (
+    ts.isCallExpression(call) &&
+    call.expression === use &&
+    !call.questionDotToken &&
+    call.arguments.length === 1 &&
+    ts.isStringLiteralLike(call.arguments[0]!)
+  );
 }
 
-function stableCreateRequireBindingReason7(program: ts.Program, decl: ts.VariableDeclaration): string | null {
+function stableCreateRequireBindingReason7(
+  program: ts.Program,
+  decl: ts.VariableDeclaration,
+): string | null {
   const cache = program.analysis.createRequireReasons;
   if (cache.has(decl)) return cache.get(decl)!;
   const check = (): string | null => {
     const stmt = decl.parent?.parent;
-    if (!ts.isIdentifier(decl.name) || !ts.isVariableStatement(stmt) || !ts.isSourceFile(stmt.parent)) {
+    if (
+      !ts.isIdentifier(decl.name) ||
+      !ts.isVariableStatement(stmt) ||
+      !ts.isSourceFile(stmt.parent)
+    ) {
       return "its mutable createRequire binding is outside the module's top level";
     }
     const checker = program.getTypeChecker();
     const symbol = checker.getSymbolAtLocation(decl.name);
-    if (!symbol || checker.declarationsOf(symbol).length !== 1) return "its createRequire binding is redeclared";
-    if ((ts.getCombinedModifierFlags(decl) & ts.ModifierFlags.Export) !== 0) return "its createRequire result escapes through an exported binding";
+    if (!symbol || checker.declarationsOf(symbol).length !== 1)
+      return "its createRequire binding is redeclared";
+    if ((ts.getCombinedModifierFlags(decl) & ts.ModifierFlags.Export) !== 0)
+      return "its createRequire result escapes through an exported binding";
     const sf = decl.getSourceFile();
     const refs = identifierOccurrences7(sf, decl.name.text);
     checker.prefetchSymbolNodesExact(refs);
@@ -1235,12 +1406,16 @@ function stableCreateRequireBindingReason7(program: ts.Program, decl: ts.Variabl
       let target = ts.isShorthandPropertyAssignment(ref.parent)
         ? checker.getShorthandAssignmentValueSymbol(ref.parent)
         : checker.getSymbolAtLocation(ref);
-      if (target && (target.flags & ts.SymbolFlags.Alias) !== 0) target = checker.getAliasedSymbol(target);
+      if (target && (target.flags & ts.SymbolFlags.Alias) !== 0)
+        target = checker.getAliasedSymbol(target);
       if (target === symbol && !staticCreateRequireUse7(ref)) {
         return "its createRequire binding is reassigned, escapes, or uses a computed specifier";
       }
     }
-    const preceding = stmt.declarationList.declarations.slice(0, stmt.declarationList.declarations.indexOf(decl));
+    const preceding = stmt.declarationList.declarations.slice(
+      0,
+      stmt.declarationList.declarations.indexOf(decl),
+    );
     if (bindingEarlyUse7(program, sf, sf.statements.indexOf(stmt), decl, preceding) !== null) {
       return "its createRequire binding can be used before initialization";
     }
@@ -1277,7 +1452,10 @@ function isCreateRequireBaseCall7(program: ts.Program, expr: ts.Expression): boo
  * fallback for require indirection the lowering cannot erase, while
  * admitting literal calls through the same stable/inline shapes as program
  * code. Inspect symbols, not names: nested shadows are unrelated bindings. */
-function npmStaticModuleImportReason7(program: ts.Program, stmt: ts.ImportDeclaration): string | null {
+function npmStaticModuleImportReason7(
+  program: ts.Program,
+  stmt: ts.ImportDeclaration,
+): string | null {
   const clause = stmt.importClause;
   if (!clause) return null;
   const bindings = clause.namedBindings;
@@ -1295,18 +1473,35 @@ function npmStaticModuleImportReason7(program: ts.Program, stmt: ts.ImportDeclar
     let reason: string | null = null;
     const checkUse = (expr: ts.Expression): void => {
       if (!staticCreateRequireUse7(expr)) {
-        reason = "its createRequire result escapes or is used with a computed specifier (static requires need literal specifiers)";
+        reason =
+          "its createRequire result escapes or is used with a computed specifier (static requires need literal specifiers)";
       }
     };
     ts.walkPreorder(sf, (node) => {
-      if (reason || !ts.isIdentifier(node) || node.text !== specifier.name.text || node === specifier.name || checker.getSymbolAtLocation(node) !== imported) return;
+      if (
+        reason ||
+        !ts.isIdentifier(node) ||
+        node.text !== specifier.name.text ||
+        node === specifier.name ||
+        checker.getSymbolAtLocation(node) !== imported
+      )
+        return;
       const call = node.parent;
-      if (!ts.isCallExpression(call) || call.expression !== node || !isCreateRequireBaseCall7(program, call)) {
-        reason = "its createRequire import is used outside a supported call based on the current file";
+      if (
+        !ts.isCallExpression(call) ||
+        call.expression !== node ||
+        !isCreateRequireBaseCall7(program, call)
+      ) {
+        reason =
+          "its createRequire import is used outside a supported call based on the current file";
         return;
       }
       const decl = call.parent;
-      if (ts.isVariableDeclaration(decl) && decl.initializer === call && ts.isIdentifier(decl.name)) {
+      if (
+        ts.isVariableDeclaration(decl) &&
+        decl.initializer === call &&
+        ts.isIdentifier(decl.name)
+      ) {
         if ((ts.getCombinedModifierFlags(decl) & ts.ModifierFlags.Export) !== 0) {
           reason = "its createRequire result escapes through an exported binding";
           return;
@@ -1319,7 +1514,13 @@ function npmStaticModuleImportReason7(program: ts.Program, stmt: ts.ImportDeclar
         const name = decl.name.text;
         checker.prefetchSymbolNodesExact(identifierOccurrences7(sf, name));
         ts.walkPreorder(sf, (ref) => {
-          if (ts.isIdentifier(ref) && ref.text === name && ref !== decl.name && checker.getSymbolAtLocation(ref) === sym) checkUse(ref);
+          if (
+            ts.isIdentifier(ref) &&
+            ref.text === name &&
+            ref !== decl.name &&
+            checker.getSymbolAtLocation(ref) === sym
+          )
+            checkUse(ref);
         });
       } else {
         checkUse(call);
@@ -1343,7 +1544,7 @@ function requireCallBindingKind7(program: ts.Program, node: ts.Node): RequireCal
   const symbol = checker.getSymbolAtLocation(call.expression);
   if (symbol === undefined) return "ambient";
   const decls = checker.declarationsOf(symbol);
-  if (decls.length === 0 || decls.every((d) => d.getSourceFile().isDeclarationFile)) return "ambient";
+  if (decls.every((d) => d.getSourceFile().isDeclarationFile)) return "ambient";
   return isCreateRequireBinding7(program, call.expression) ? "createRequire" : "source";
 }
 
@@ -1381,11 +1582,7 @@ function insideFunctionLike7(node: ts.Node): boolean {
 function nodeEsmSyntaxMarker7(sf: ts.SourceFile): ts.Node | null {
   for (const stmt of sf.statements) {
     if (ts.isImportDeclaration(stmt) && !erasedTypeOnlyImport(stmt)) return stmt;
-    if (
-      ts.isExportDeclaration(stmt) &&
-      !stmt.isTypeOnly &&
-      !erasedTypeOnlyReexport(stmt)
-    ) {
+    if (ts.isExportDeclaration(stmt) && !stmt.isTypeOnly && !erasedTypeOnlyReexport(stmt)) {
       return stmt;
     }
     if (ts.isExportAssignment(stmt)) return stmt;
@@ -1404,17 +1601,18 @@ function nodeEsmSyntaxMarker7(sf: ts.SourceFile): ts.Node | null {
         if (hit !== null) return hit;
       }
     }
-    if (ts.isClassDeclaration(stmt) && stmt.name !== undefined && CJS_WRAPPER_NAMES.has(stmt.name.text)) {
+    if (
+      ts.isClassDeclaration(stmt) &&
+      stmt.name !== undefined &&
+      CJS_WRAPPER_NAMES.has(stmt.name.text)
+    ) {
       return stmt.name;
     }
   }
 
   let found: ts.Node | null = null;
   ts.walkPreorder(sf, (node) => {
-    if (
-      ts.isMetaProperty(node) &&
-      node.keywordToken === ts.SyntaxKind.ImportKeyword
-    ) {
+    if (ts.isMetaProperty(node) && node.keywordToken === ts.SyntaxKind.ImportKeyword) {
       found = node;
       return "stop";
     }
@@ -1448,11 +1646,12 @@ function isNodeEsmFile7(sf: ts.SourceFile, program?: ts.Program): boolean {
     result = true;
   } else {
     const packageType = nearestPackageType(sf.fileName);
-    result = packageType === "module"
-      ? true
-      : packageType === "commonjs"
-        ? false
-        : nodeEsmSyntaxMarker7(sf) !== null;
+    result =
+      packageType === "module"
+        ? true
+        : packageType === "commonjs"
+          ? false
+          : nodeEsmSyntaxMarker7(sf) !== null;
   }
   program?.analysis.nodeEsmFiles.set(sf, result);
   return result;
@@ -1557,7 +1756,8 @@ function selfImportTdzFences7(
         const memberSym = checker.getSymbolAtLocation(node.name);
         if (memberSym !== undefined) {
           const end = tdzEndOf(memberSym);
-          if (end !== null && node.getStart(sf) < end) fence(node.expression, `${nsName.text}.${node.name.text}`);
+          if (end !== null && node.getStart(sf) < end)
+            fence(node.expression, `${nsName.text}.${node.name.text}`);
         }
       }
       ts.forEachChild(node, visit);
@@ -1589,7 +1789,13 @@ function nsBindingUsesAreBareStatements7(
       node.text === nsName.text &&
       checker.getSymbolAtLocation(node) === bindingSym
     ) {
-      if (!(node.parent !== undefined && ts.isExpressionStatement(node.parent) && node.parent.expression === node)) {
+      if (
+        !(
+          node.parent !== undefined &&
+          ts.isExpressionStatement(node.parent) &&
+          node.parent.expression === node
+        )
+      ) {
         bareOnly = false;
         return;
       }
@@ -1643,7 +1849,11 @@ export interface CycleEdge {
  * itself — not deferred. */
 function inDeferredPosition7(node: ts.Node): boolean {
   let child: ts.Node = node;
-  for (let p: ts.Node | undefined = node.parent; p !== undefined && !ts.isSourceFile(p); p = p.parent) {
+  for (
+    let p: ts.Node | undefined = node.parent;
+    p !== undefined && !ts.isSourceFile(p);
+    p = p.parent
+  ) {
     if (p.kind === ts.SyntaxKind.Decorator) return false;
     if (ts.isClassStaticBlockDeclaration(p)) return false;
     if (ts.isFunctionLike(p)) {
@@ -1667,7 +1877,11 @@ function inDeferredPosition7(node: ts.Node): boolean {
  * CLASS `extends` heritage expression is the one TypeNode-shaped position
  * that IS a runtime read. */
 function inTypePosition7(node: ts.Node): boolean {
-  for (let p: ts.Node | undefined = node.parent; p !== undefined && !ts.isSourceFile(p); p = p.parent) {
+  for (
+    let p: ts.Node | undefined = node.parent;
+    p !== undefined && !ts.isSourceFile(p);
+    p = p.parent
+  ) {
     if (ts.isTypeNode(p)) {
       const heritage = p.parent;
       const isClassExtends =
@@ -1714,7 +1928,8 @@ function nonInertTopLevel7(program: ts.Program, sf: ts.SourceFile): ts.Node | nu
    * calls are runtime-implemented, never user code. */
   const dtsRooted = (e: ts.Expression): boolean => {
     let root: ts.Expression = e;
-    while (ts.isPropertyAccessExpression(root) || ts.isElementAccessExpression(root)) root = root.expression;
+    while (ts.isPropertyAccessExpression(root) || ts.isElementAccessExpression(root))
+      root = root.expression;
     if (ts.isMetaProperty(root)) return true; // import.meta
     if (!ts.isIdentifier(root)) return false;
     let sym = checker.getSymbolAtLocation(root);
@@ -1724,7 +1939,9 @@ function nonInertTopLevel7(program: ts.Program, sf: ts.SourceFile): ts.Node | nu
     return decls.length > 0 && decls.every((d) => d.getSourceFile().isDeclarationFile);
   };
   const hasDecorator = (n: ts.Node): boolean =>
-    ((n as { modifiers?: readonly ts.Node[] }).modifiers ?? []).some((m) => m.kind === ts.SyntaxKind.Decorator);
+    ((n as { modifiers?: readonly ts.Node[] }).modifiers ?? []).some(
+      (m) => m.kind === ts.SyntaxKind.Decorator,
+    );
   /** No function-like node anywhere in the subtree — arguments to builtin
    * calls must not smuggle a callback the builtin could invoke. */
   const containsFunctionLike = (n: ts.Node): boolean => {
@@ -1749,7 +1966,8 @@ function nonInertTopLevel7(program: ts.Program, sf: ts.SourceFile): ts.Node | nu
       if (hasDecorator(m)) return m;
       const memberName = (m as { name?: ts.PropertyName }).name;
       if (memberName !== undefined && ts.isComputedPropertyName(memberName)) {
-        if (!inert(memberName.expression) || !primitiveTyped(memberName.expression)) return memberName;
+        if (!inert(memberName.expression) || !primitiveTyped(memberName.expression))
+          return memberName;
       }
       if (
         ts.isPropertyDeclaration(m) &&
@@ -1789,7 +2007,12 @@ function nonInertTopLevel7(program: ts.Program, sf: ts.SourceFile): ts.Node | nu
       return true;
     }
     if (ts.isClassExpression(e)) return inertClass(e) === null;
-    if (ts.isParenthesizedExpression(e) || ts.isAsExpression(e) || ts.isSatisfiesExpression(e) || ts.isNonNullExpression(e)) {
+    if (
+      ts.isParenthesizedExpression(e) ||
+      ts.isAsExpression(e) ||
+      ts.isSatisfiesExpression(e) ||
+      ts.isNonNullExpression(e)
+    ) {
       return inert(e.expression);
     }
     if (ts.isPropertyAccessExpression(e)) return dtsRooted(e);
@@ -1816,8 +2039,10 @@ function nonInertTopLevel7(program: ts.Program, sf: ts.SourceFile): ts.Node | nu
       if (COERCING_FREE.has(e.operatorToken.kind)) return true;
       return primitiveTyped(e.left) && primitiveTyped(e.right);
     }
-    if (ts.isConditionalExpression(e)) return inert(e.condition) && inert(e.whenTrue) && inert(e.whenFalse);
-    if (ts.isArrayLiteralExpression(e)) return e.elements.every((el) => !ts.isSpreadElement(el) && inert(el));
+    if (ts.isConditionalExpression(e))
+      return inert(e.condition) && inert(e.whenTrue) && inert(e.whenFalse);
+    if (ts.isArrayLiteralExpression(e))
+      return e.elements.every((el) => !ts.isSpreadElement(el) && inert(el));
     if (ts.isObjectLiteralExpression(e)) {
       return e.properties.every((p) => {
         if (ts.isShorthandPropertyAssignment(p)) return true;
@@ -1852,7 +2077,9 @@ function nonInertTopLevel7(program: ts.Program, sf: ts.SourceFile): ts.Node | nu
       ts.isInterfaceDeclaration(stmt) ||
       ts.isTypeAliasDeclaration(stmt) ||
       ts.isEmptyStatement(stmt) ||
-      (ts.getCombinedModifierFlags(stmt as unknown as ts.Declaration) & ts.ModifierFlags.Ambient) !== 0
+      (ts.getCombinedModifierFlags(stmt as unknown as ts.Declaration) &
+        ts.ModifierFlags.Ambient) !==
+        0
     ) {
       continue;
     }
@@ -1889,7 +2116,8 @@ function nonInertTopLevel7(program: ts.Program, sf: ts.SourceFile): ts.Node | nu
 /** The head of a property/element-access chain. */
 function chainRoot7(e: ts.Expression): ts.Expression {
   let root: ts.Expression = e;
-  while (ts.isPropertyAccessExpression(root) || ts.isElementAccessExpression(root)) root = root.expression;
+  while (ts.isPropertyAccessExpression(root) || ts.isElementAccessExpression(root))
+    root = root.expression;
   return root;
 }
 
@@ -1923,7 +2151,9 @@ function backEdgeUseOffence7(
   if (clause.name !== undefined) bindingNames.push(clause.name);
   if (clause.namedBindings !== undefined) {
     if (ts.isNamespaceImport(clause.namedBindings)) bindingNames.push(clause.namedBindings.name);
-    else for (const el of clause.namedBindings.elements) if (!el.isTypeOnly) bindingNames.push(el.name);
+    else
+      for (const el of clause.namedBindings.elements)
+        if (!el.isTypeOnly) bindingNames.push(el.name);
   }
   for (const bindingName of bindingNames) {
     const sym = checker.getSymbolAtLocation(bindingName);
@@ -2080,12 +2310,18 @@ export function makeCycleAdmission(
  * program, or null (unresolvable / outside the program). Exported (as
  * resolveImport) for the lowering: CommonJS require statements lower to
  * guarded %init calls of exactly the module preflight resolved here. */
-function resolveImport7(program: ts.Program, from: ts.SourceFile, specifier: string, resolutionKind: "import" | "require" = "import"): ts.SourceFile | null {
+function resolveImport7(
+  program: ts.Program,
+  from: ts.SourceFile,
+  specifier: string,
+  resolutionKind: "import" | "require" = "import",
+): ts.SourceFile | null {
   const resolved = resolveProjectModule(from.fileName, specifier);
   if (resolved !== null) return program.getSourceFile(resolved) ?? null;
   const npm = resolveNpmImport7(from.fileName, specifier, resolutionKind);
   return npm && isNpmStaticPackage(npm.packageName)
-    ? npmStaticProgramDep(program, npm.packageName, npm.typesFile) : null;
+    ? npmStaticProgramDep(program, npm.packageName, npm.typesFile)
+    : null;
 }
 
 /** An import that resolves into node_modules: the package's shipped .d.ts
@@ -2249,7 +2485,8 @@ function preflight7(load: LoadResult): {
       if (probed.has(key)) return;
       probed.add(key);
       const r = resolveBareModule(fromFile, spec);
-      if (r !== null && r.workspaceDir !== undefined) registerWorkspacePackage(r.packageName, r.workspaceDir);
+      if (r !== null && r.workspaceDir !== undefined)
+        registerWorkspacePackage(r.packageName, r.workspaceDir);
     };
     for (const sf of program.getSourceFiles()) {
       if (sf.isDeclarationFile || sf.fileName.endsWith(".json")) continue;
@@ -2367,7 +2604,11 @@ function preflight7(load: LoadResult): {
     const close = text.indexOf("*/", open + 2);
     return close === -1 || close >= pos;
   };
-  const jsdocTypeSuppressed = (p: ts.Program, d: ts.Diagnostic, commentDup: Set<string>): boolean => {
+  const jsdocTypeSuppressed = (
+    p: ts.Program,
+    d: ts.Diagnostic,
+    commentDup: Set<string>,
+  ): boolean => {
     if (d.fileName === undefined || !isJsSourceFileName(d.fileName)) return false;
     if (d.code !== 2304 && d.code !== 2552 && d.code !== 2300 && d.code !== 1003) return false;
     if (d.pos === undefined) return false;
@@ -2388,11 +2629,14 @@ function preflight7(load: LoadResult): {
    * registration pass above runs first) is suppressed, and the import
    * takes the same per-site island story as any untyped npm package. */
   const workspaceImplicitAnySuppressed = (p: ts.Program, d: ts.Diagnostic): boolean => {
-    if (d.code !== 7016 || d.fileName === undefined || d.pos === undefined || d.end === undefined) return false;
+    if (d.code !== 7016 || d.fileName === undefined || d.pos === undefined || d.end === undefined)
+      return false;
     const sf = p.getSourceFile(d.fileName);
     if (!sf) return false;
     const spec = sf.text.slice(d.pos, d.end).replace(/^['"]|['"]$/g, "");
-    const prefix = spec.startsWith("@") ? spec.split("/").slice(0, 2).join("/") : spec.split("/")[0]!;
+    const prefix = spec.startsWith("@")
+      ? spec.split("/").slice(0, 2).join("/")
+      : spec.split("/")[0]!;
     return isWorkspacePackageName(prefix);
   };
   const errorsOf = (p: ts.Program): ts.Diagnostic[] => {
@@ -2401,10 +2645,12 @@ function preflight7(load: LoadResult): {
     // the second pass forgives.
     const commentDup = new Set<string>();
     for (const d of all) {
-      if (d.code !== 2300 || d.fileName === undefined || d.pos === undefined || d.end === undefined) continue;
+      if (d.code !== 2300 || d.fileName === undefined || d.pos === undefined || d.end === undefined)
+        continue;
       if (!isJsSourceFileName(d.fileName)) continue;
       const sf = p.getSourceFile(d.fileName);
-      if (sf && insideBlockComment(sf.text, d.pos)) commentDup.add(`${d.fileName}:${sf.text.slice(d.pos, d.end)}`);
+      if (sf && insideBlockComment(sf.text, d.pos))
+        commentDup.add(`${d.fileName}:${sf.text.slice(d.pos, d.end)}`);
     }
     return all.filter(
       (d) =>
@@ -2451,7 +2697,9 @@ function preflight7(load: LoadResult): {
         sf.fileName !== ambient &&
         !sf.isDeclarationFile &&
         !sf.fileName.endsWith(".json") &&
-        (!isNodeModulesPath(sf.fileName) || entryPackageFile(sf.fileName) || npmStaticPackageOfPath(sf.fileName) !== null) &&
+        (!isNodeModulesPath(sf.fileName) ||
+          entryPackageFile(sf.fileName) ||
+          npmStaticPackageOfPath(sf.fileName) !== null) &&
         !islandJsFile(sf.fileName),
     );
   const userFiles = npmStaticActive()
@@ -2459,8 +2707,13 @@ function preflight7(load: LoadResult): {
         program,
         entry,
         programFiles,
-        [...createRequireProgramRoots7(program), ...forkTargetPaths(program, program.getSourceFiles())],
-        (sf, spec, resolutionKind) => resolveImport7(program, sf, spec, resolutionKind) ?? npmStaticDepSf7(program, sf, spec, resolutionKind),
+        [
+          ...createRequireProgramRoots7(program),
+          ...forkTargetPaths(program, program.getSourceFiles()),
+        ],
+        (sf, spec, resolutionKind) =>
+          resolveImport7(program, sf, spec, resolutionKind) ??
+          npmStaticDepSf7(program, sf, spec, resolutionKind),
       )
     : programFiles;
   program.getTypeChecker().prefetchSourceFileStructures(userFiles);
@@ -2482,7 +2735,9 @@ function preflight7(load: LoadResult): {
     if (invalidConfig !== null) {
       if (!invalidPackageConfigs.has(invalidConfig)) {
         invalidPackageConfigs.add(invalidConfig);
-        diags.push(invalidPackageConfigDiag(invalidConfig, { file: sf.fileName, start: 0, end: 0 }));
+        diags.push(
+          invalidPackageConfigDiag(invalidConfig, { file: sf.fileName, start: 0, end: 0 }),
+        );
       }
       continue;
     }
@@ -2568,10 +2823,16 @@ function preflight7(load: LoadResult): {
         // lowers to nothing.
         if (ts.isExternalModuleReference(stmt.moduleReference) && !stmt.isTypeOnly) {
           const spec = stmt.moduleReference.expression;
-          if (spec !== undefined && ts.isStringLiteralLike(spec) && load.externalTypes.has(spec.text)) {
+          if (
+            spec !== undefined &&
+            ts.isStringLiteralLike(spec) &&
+            load.externalTypes.has(spec.text)
+          ) {
             diags.push(externalHostModuleDiag7(spec.text, stmt));
           } else {
-            diags.push(unsupportedDiag("SC1013", locOf7(stmt), "import = require(...) assignments"));
+            diags.push(
+              unsupportedDiag("SC1013", locOf7(stmt), "import = require(...) assignments"),
+            );
           }
         }
         continue;
@@ -2583,7 +2844,8 @@ function preflight7(load: LoadResult): {
         continue;
       }
       if (ts.isExportDeclaration(stmt)) {
-        if (stmt.isTypeOnly || erasedTypeOnlyReexport(stmt) || isPrunedNpmReexport(program, stmt)) continue;
+        if (stmt.isTypeOnly || erasedTypeOnlyReexport(stmt) || isPrunedNpmReexport(program, stmt))
+          continue;
         if (!stmt.moduleSpecifier) continue;
         const fromSpec = ts.isStringLiteral(stmt.moduleSpecifier) ? stmt.moduleSpecifier.text : "";
         if (load.externalTypes.has(fromSpec)) {
@@ -2625,7 +2887,9 @@ function preflight7(load: LoadResult): {
           ) {
             continue;
           }
-          diags.push(unsupportedDiag("SC1014", locOf7(stmt), "re-exports from packages or builtin modules"));
+          diags.push(
+            unsupportedDiag("SC1014", locOf7(stmt), "re-exports from packages or builtin modules"),
+          );
           continue;
         }
         const reDep = projectReexport;
@@ -2637,7 +2901,13 @@ function preflight7(load: LoadResult): {
         // there is no namespace object to materialize.
         if (stmt.exportClause && ts.isNamespaceExport(stmt.exportClause)) {
           if (reDep === null || reDep.fileName.endsWith(".json") || isCjsJsFile7(reDep, program)) {
-            diags.push(unsupportedDiag("SC1013", locOf7(stmt), "namespace re-exports (export * as ns) of this module form"));
+            diags.push(
+              unsupportedDiag(
+                "SC1013",
+                locOf7(stmt),
+                "namespace re-exports (export * as ns) of this module form",
+              ),
+            );
             continue;
           }
         }
@@ -2700,9 +2970,10 @@ function preflight7(load: LoadResult): {
       const projDep = isBare ? resolveImport7(program, sf, spec) : null;
       // "#" specifiers can never name an npm package — they are the
       // imports-field family, resolved by the project arm above.
-      const npm = isBare && projDep === null && !spec.startsWith("#")
-        ? resolveNpmImport7(sf.fileName, spec)
-        : null;
+      const npm =
+        isBare && projDep === null && !spec.startsWith("#")
+          ? resolveNpmImport7(sf.fileName, spec)
+          : null;
       if (npm && isNodeTypesPath(npm.typesFile)) {
         diags.push(unsupportedDiag("SC1010", locOf7(stmt), unsupportedModuleFeatureOf(spec)));
         continue;
@@ -2727,7 +2998,11 @@ function preflight7(load: LoadResult): {
           // island candidate — there is nothing to execute anywhere.
           const refusal = probeNodeImportRefusal(sf.fileName, spec);
           if (refusal !== null) {
-            refuse(refusal.message, "%Error", `the '${spec}' package (its runtime resolution fails: ${refusal.message})`);
+            refuse(
+              refusal.message,
+              "%Error",
+              `the '${spec}' package (its runtime resolution fails: ${refusal.message})`,
+            );
           }
           continue;
         }
@@ -2824,11 +3099,14 @@ function preflight7(load: LoadResult): {
         // stay allowed everywhere. The process default is the global process
         // alias, including when combined with named builtin imports.
         const syntheticDefaultsOn =
-          (program.getCompilerOptions() as { allowSyntheticDefaultImports?: boolean }).allowSyntheticDefaultImports === true;
+          (program.getCompilerOptions() as { allowSyntheticDefaultImports?: boolean })
+            .allowSyntheticDefaultImports === true;
         const defaultOk =
-          spec === "process" || spec === "node:process" ||
+          spec === "process" ||
+          spec === "node:process" ||
           builtinDefaultImportModule(spec) !== null ||
-          ((isJsSourceFileName(sf.fileName) || syntheticDefaultsOn) && canonicalBuiltinModule(spec) !== null);
+          ((isJsSourceFileName(sf.fileName) || syntheticDefaultsOn) &&
+            canonicalBuiltinModule(spec) !== null);
         if (clause.name && !isJson && dep === null && !defaultOk) {
           diags.push(unsupportedDiag("SC1012", locOf7(clause.name)));
         }
@@ -2853,7 +3131,13 @@ function preflight7(load: LoadResult): {
           // and unresolved specifiers. Supported builtins pass through as
           // before (their namespace members are the declared surface).
           if (isJson) {
-            diags.push(unsupportedDiag("SC1013", locOf7(clause.namedBindings), "namespace imports of JSON modules"));
+            diags.push(
+              unsupportedDiag(
+                "SC1013",
+                locOf7(clause.namedBindings),
+                "namespace imports of JSON modules",
+              ),
+            );
           } else if (dep !== null && isCjsJsFile7(dep, program)) {
             // A CJS namespace binding whose every use is a bare expression
             // statement (`cjs;` — the corpus's "the import linked"
@@ -2864,7 +3148,13 @@ function preflight7(load: LoadResult): {
             // partially-built exports are never observed). Any OTHER use
             // keeps the fence.
             if (!nsBindingUsesAreBareStatements7(program, sf, clause.namedBindings.name)) {
-              diags.push(unsupportedDiag("SC1013", locOf7(clause.namedBindings), "namespace imports of CommonJS modules"));
+              diags.push(
+                unsupportedDiag(
+                  "SC1013",
+                  locOf7(clause.namedBindings),
+                  "namespace imports of CommonJS modules",
+                ),
+              );
             }
           } else if (dep === null && !(!isRelative && ambientModules.has(spec))) {
             diags.push(unsupportedDiag("SC1013", locOf7(clause.namedBindings)));
@@ -2908,11 +3198,19 @@ function preflight7(load: LoadResult): {
           }
           if (req.decl && ts.isObjectBindingPattern(req.decl.name)) {
             const bad = req.decl.name.elements.find(
-              (e) => e.name === undefined || !ts.isIdentifier(e.name) || e.initializer !== undefined || e.dotDotDotToken !== undefined,
+              (e) =>
+                e.name === undefined ||
+                !ts.isIdentifier(e.name) ||
+                e.initializer !== undefined ||
+                e.dotDotDotToken !== undefined,
             );
             if (bad) {
               diags.push(
-                unsupportedDiag("SC1012", loc, "require() destructuring with defaults, rest, or nested patterns"),
+                unsupportedDiag(
+                  "SC1012",
+                  loc,
+                  "require() destructuring with defaults, rest, or nested patterns",
+                ),
               );
               continue;
             }
@@ -2925,7 +3223,9 @@ function preflight7(load: LoadResult): {
             // form above (bundle dists require their workspace siblings —
             // the same resolution, the same offender discipline on a
             // miss).
-            const npmReq = !req.spec.startsWith("#") ? resolveNpmImport7(sf.fileName, req.spec, "require") : null;
+            const npmReq = !req.spec.startsWith("#")
+              ? resolveNpmImport7(sf.fileName, req.spec, "require")
+              : null;
             if (npmReq !== null && isNpmStaticPackage(npmReq.packageName)) {
               dep = npmStaticProgramDep(program, npmReq.packageName, npmReq.typesFile);
               if (dep === null) continue; // offender recorded — the fallback loop reloads
@@ -2961,10 +3261,15 @@ function preflight7(load: LoadResult): {
           // Earlier declarators run too: `const x = read(), dep =
           // require('./dep')` must not lose the guard merely because both
           // initializers share one VariableStatement.
-          const precedingDecls = req.decl && ts.isVariableStatement(stmt)
-            ? stmt.declarationList.declarations.slice(0, stmt.declarationList.declarations.indexOf(req.decl))
-            : [];
-          const prefixCanRun = (firstRunnable >= 0 && firstRunnable < k) ||
+          const precedingDecls =
+            req.decl && ts.isVariableStatement(stmt)
+              ? stmt.declarationList.declarations.slice(
+                  0,
+                  stmt.declarationList.declarations.indexOf(req.decl),
+                )
+              : [];
+          const prefixCanRun =
+            (firstRunnable >= 0 && firstRunnable < k) ||
             precedingDecls.some((decl) => !purePrefixDecl7(decl));
           const tdzName =
             prefixCanRun && req.decl
@@ -2984,9 +3289,13 @@ function preflight7(load: LoadResult): {
         }
       }
       const nestedBareRequires = nestedBareRequiresOf7(sf);
-      program.getTypeChecker().prefetchSymbolNodesExact(
-        nestedBareRequires.flatMap((call) => ts.isIdentifier(call.expression) ? [call.expression] : []),
-      );
+      program
+        .getTypeChecker()
+        .prefetchSymbolNodesExact(
+          nestedBareRequires.flatMap((call) =>
+            ts.isIdentifier(call.expression) ? [call.expression] : [],
+          ),
+        );
       for (const call of nestedBareRequires) {
         const spec = requireSpecOf7(call)!;
         const loc = { file: sf.fileName, start: call.getStart(sf), end: call.getEnd() };
@@ -3014,7 +3323,9 @@ function preflight7(load: LoadResult): {
         if (!isRelativeSpecifier(spec)) {
           // --npm-static: opted-in packages ride the program-module edge
           // (the statement-level require branch above).
-          const npmReq = !spec.startsWith("#") ? resolveNpmImport7(sf.fileName, spec, "require") : null;
+          const npmReq = !spec.startsWith("#")
+            ? resolveNpmImport7(sf.fileName, spec, "require")
+            : null;
           if (npmReq !== null && isNpmStaticPackage(npmReq.packageName)) {
             const nDep = npmStaticProgramDep(program, npmReq.packageName, npmReq.typesFile);
             if (nDep !== null) deps.push({ dep: nDep });
@@ -3131,13 +3442,14 @@ function preflight7(load: LoadResult): {
     }
   }
 
-  const linkCrash = resolveCrash !== null
-    ? null
-    : earlierLinkCrash(
-        order,
-        cjsNamedImportLinkCheck(program, entry, order, diags),
-        esmNamedImportLinkCheck(program, entry, order, diags),
-      );
+  const linkCrash =
+    resolveCrash !== null
+      ? null
+      : earlierLinkCrash(
+          order,
+          cjsNamedImportLinkCheck(program, entry, order, diags),
+          esmNamedImportLinkCheck(program, entry, order, diags),
+        );
 
   return { diags, moduleOrder: order, startupCrash: resolveCrash ?? linkCrash };
 }
@@ -3195,14 +3507,17 @@ function cjsNamedImportLinkCheck(
   // Reexport targets union in only when they resolve to CommonJS program
   // files (Node's cjsPreparseModuleExports rule).
   const resolveCjsDep = (from: ts.SourceFile, spec: string): ts.SourceFile | null => {
-    const dep = resolveImport7(program, from, spec, "require") ?? npmStaticDepSf7(program, from, spec, "require");
+    const dep =
+      resolveImport7(program, from, spec, "require") ??
+      npmStaticDepSf7(program, from, spec, "require");
     return dep !== null && isCjsJsFile7(dep, program) ? dep : null;
   };
   const visible = (dep: ts.SourceFile, name: string): boolean =>
     // `default` is the module.exports binding itself — always provided.
     // The program already owns native source ASTs; reuse them without
     // starting another syntax session or reparsing their source text.
-    name === "default" || cjsVisibleNames(dep, cjsLexedExportsOfFile, resolveCjsDep, lexMemo).has(name);
+    name === "default" ||
+    cjsVisibleNames(dep, cjsLexedExportsOfFile, resolveCjsDep, lexMemo).has(name);
 
   /** The statement's resolved LOCAL CommonJS dependency, when it is an
    * import/re-export from one. */
@@ -3215,9 +3530,20 @@ function cjsNamedImportLinkCheck(
    * check order: all regular named imports sorted by local binding name,
    * then `export { x } from` elements in source order. */
   const firstInvisibleOf = (sf: ts.SourceFile): BadCjsImport | null => {
-    const entries: { local: string; exportName: string; nameNode: ts.Node; spec: string; dep: ts.SourceFile }[] = [];
+    const entries: {
+      local: string;
+      exportName: string;
+      nameNode: ts.Node;
+      spec: string;
+      dep: ts.SourceFile;
+    }[] = [];
     for (const stmt of sf.statements) {
-      if (!ts.isImportDeclaration(stmt) || stmt.moduleSpecifier === undefined || !ts.isStringLiteral(stmt.moduleSpecifier)) continue;
+      if (
+        !ts.isImportDeclaration(stmt) ||
+        stmt.moduleSpecifier === undefined ||
+        !ts.isStringLiteral(stmt.moduleSpecifier)
+      )
+        continue;
       const clause = stmt.importClause;
       if (!clause || clause.phaseModifier === ts.SyntaxKind.TypeKeyword) continue;
       if (!clause.namedBindings || !ts.isNamedImports(clause.namedBindings)) continue;
@@ -3232,7 +3558,8 @@ function cjsNamedImportLinkCheck(
     }
     entries.sort((a, b) => (a.local < b.local ? -1 : a.local > b.local ? 1 : 0));
     for (const e of entries) {
-      if (!visible(e.dep, e.exportName)) return { exportName: e.exportName, spec: e.spec, nameNode: e.nameNode, sf };
+      if (!visible(e.dep, e.exportName))
+        return { exportName: e.exportName, spec: e.spec, nameNode: e.nameNode, sf };
     }
     for (const stmt of sf.statements) {
       if (!ts.isExportDeclaration(stmt) || stmt.isTypeOnly) continue;
@@ -3259,9 +3586,14 @@ function cjsNamedImportLinkCheck(
     if (visited.has(sf)) return null;
     visited.add(sf);
     for (const stmt of sf.statements) {
-      if (!ts.isImportDeclaration(stmt) && !(ts.isExportDeclaration(stmt) && !stmt.isTypeOnly)) continue;
+      if (!ts.isImportDeclaration(stmt) && !(ts.isExportDeclaration(stmt) && !stmt.isTypeOnly))
+        continue;
       if (ts.isExportDeclaration(stmt) && isPrunedNpmReexport(program, stmt)) continue;
-      if (ts.isImportDeclaration(stmt) && stmt.importClause?.phaseModifier === ts.SyntaxKind.TypeKeyword) continue;
+      if (
+        ts.isImportDeclaration(stmt) &&
+        stmt.importClause?.phaseModifier === ts.SyntaxKind.TypeKeyword
+      )
+        continue;
       const specNode = stmt.moduleSpecifier;
       if (specNode === undefined || !ts.isStringLiteral(specNode)) continue;
       const spec = specNode.text;
@@ -3299,10 +3631,16 @@ function cjsNamedImportLinkCheck(
   // commonJsDeps — a deep module's failure keeps the generic wording).
   let flavored = false;
   for (const stmt of entry.statements) {
-    if (!ts.isImportDeclaration(stmt) && !(ts.isExportDeclaration(stmt) && !stmt.isTypeOnly)) continue;
-    if (ts.isImportDeclaration(stmt) && stmt.importClause?.phaseModifier === ts.SyntaxKind.TypeKeyword) continue;
+    if (!ts.isImportDeclaration(stmt) && !(ts.isExportDeclaration(stmt) && !stmt.isTypeOnly))
+      continue;
+    if (
+      ts.isImportDeclaration(stmt) &&
+      stmt.importClause?.phaseModifier === ts.SyntaxKind.TypeKeyword
+    )
+      continue;
     const specNode = stmt.moduleSpecifier;
-    if (specNode === undefined || !ts.isStringLiteral(specNode) || specNode.text !== bad.spec) continue;
+    if (specNode === undefined || !ts.isStringLiteral(specNode) || specNode.text !== bad.spec)
+      continue;
     if (cjsDepOf(entry, bad.spec) !== null) {
       flavored = true;
       break;
@@ -3310,7 +3648,11 @@ function cjsNamedImportLinkCheck(
   }
   const loc = locOf7(bad.nameNode);
   if (!flavored) {
-    return { message: `The requested module '${bad.spec}' does not provide an export named '${bad.exportName}'`, className: "%SyntaxError", loc };
+    return {
+      message: `The requested module '${bad.spec}' does not provide an export named '${bad.exportName}'`,
+      className: "%SyntaxError",
+      loc,
+    };
   }
   // The destructuring hint: Node regexes the failing name's SOURCE LINE
   // for its brace group (greedy, first `{` to last `}` on the line) and
@@ -3407,12 +3749,18 @@ function analyzeEsmNamedImportLinks(
       if (
         name === "default" &&
         hasNodeTsDefaultInterfacePlaceholder7(dep) &&
-        checker.declarationsOf(resolved).some(
-          (declaration) =>
-            ts.isInterfaceDeclaration(declaration) &&
-            ts.getModifiers(declaration)?.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword) === true &&
-            ts.getModifiers(declaration)?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword) === true,
-        )
+        checker
+          .declarationsOf(resolved)
+          .some(
+            (declaration) =>
+              ts.isInterfaceDeclaration(declaration) &&
+              ts
+                .getModifiers(declaration)
+                ?.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword) === true &&
+              ts
+                .getModifiers(declaration)
+                ?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword) === true,
+          )
       ) {
         return resolved;
       }
@@ -3427,10 +3775,12 @@ function analyzeEsmNamedImportLinks(
     if (name === "default") return undefined;
     let starExport: ts.Symbol | undefined;
     for (const stmt of dep.statements) {
-      if (!ts.isExportDeclaration(stmt) || stmt.isTypeOnly || stmt.exportClause !== undefined) continue;
+      if (!ts.isExportDeclaration(stmt) || stmt.isTypeOnly || stmt.exportClause !== undefined)
+        continue;
       if (stmt.moduleSpecifier === undefined || !ts.isStringLiteral(stmt.moduleSpecifier)) continue;
       const target = resolveEdge(dep, stmt.moduleSpecifier.text);
-      if (target === null || target.fileName.endsWith(".json") || !isNodeEsmFile7(target, program)) continue;
+      if (target === null || target.fileName.endsWith(".json") || !isNodeEsmFile7(target, program))
+        continue;
       const candidate = runtimeExport(target, name, nextSeen);
       if (candidate === undefined) continue;
       if (starExport !== undefined && starExport !== candidate) return undefined;
@@ -3440,7 +3790,13 @@ function analyzeEsmNamedImportLinks(
   };
 
   const firstMissingOf = (sf: ts.SourceFile): BadEsmImport | null => {
-    const imports: { local: string; exportName: string; spec: string; nameNode: ts.Node; dep: ts.SourceFile }[] = [];
+    const imports: {
+      local: string;
+      exportName: string;
+      spec: string;
+      nameNode: ts.Node;
+      dep: ts.SourceFile;
+    }[] = [];
     for (const stmt of sf.statements) {
       if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier)) continue;
       const clause = stmt.importClause;
@@ -3449,7 +3805,13 @@ function analyzeEsmNamedImportLinks(
       const dep = resolveEdge(sf, spec);
       if (dep === null || dep.fileName.endsWith(".json") || !isNodeEsmFile7(dep, program)) continue;
       if (clause.name !== undefined) {
-        imports.push({ local: clause.name.text, exportName: "default", spec, nameNode: clause.name, dep });
+        imports.push({
+          local: clause.name.text,
+          exportName: "default",
+          spec,
+          nameNode: clause.name,
+          dep,
+        });
       }
       if (clause.namedBindings === undefined || !ts.isNamedImports(clause.namedBindings)) continue;
       for (const element of clause.namedBindings.elements) {
@@ -3507,9 +3869,14 @@ function analyzeEsmNamedImportLinks(
     if (visited.has(sf)) return null;
     visited.add(sf);
     for (const stmt of sf.statements) {
-      if (!ts.isImportDeclaration(stmt) && !(ts.isExportDeclaration(stmt) && !stmt.isTypeOnly)) continue;
+      if (!ts.isImportDeclaration(stmt) && !(ts.isExportDeclaration(stmt) && !stmt.isTypeOnly))
+        continue;
       if (ts.isExportDeclaration(stmt) && isPrunedNpmReexport(program, stmt)) continue;
-      if (ts.isImportDeclaration(stmt) && stmt.importClause?.phaseModifier === ts.SyntaxKind.TypeKeyword) continue;
+      if (
+        ts.isImportDeclaration(stmt) &&
+        stmt.importClause?.phaseModifier === ts.SyntaxKind.TypeKeyword
+      )
+        continue;
       const moduleSpecifier = stmt.moduleSpecifier;
       if (moduleSpecifier === undefined || !ts.isStringLiteral(moduleSpecifier)) continue;
       const dep = resolveEdge(sf, moduleSpecifier.text);
@@ -3622,9 +3989,18 @@ function earlierLinkCrash(
       let reexport = 0;
       for (const stmt of sf.statements) {
         const exportClause = ts.isExportDeclaration(stmt) ? stmt.exportClause : undefined;
-        if (!ts.isExportDeclaration(stmt) || stmt.isTypeOnly || exportClause === undefined || !ts.isNamedExports(exportClause)) continue;
+        if (
+          !ts.isExportDeclaration(stmt) ||
+          stmt.isTypeOnly ||
+          exportClause === undefined ||
+          !ts.isNamedExports(exportClause)
+        )
+          continue;
         for (const element of exportClause.elements) {
-          if (!element.isTypeOnly && (element.propertyName ?? element.name).getStart(sf) === crash.loc.start) {
+          if (
+            !element.isTypeOnly &&
+            (element.propertyName ?? element.name).getStart(sf) === crash.loc.start
+          ) {
             return [1, reexport];
           }
           if (!element.isTypeOnly) reexport++;
@@ -3652,12 +4028,7 @@ const nodeBuiltinNames: ReadonlySet<string> = new Set(builtinModules);
  * established (the phase-2 port kept every spelling); the world-neutral
  * helpers re-export from their focused modules. */
 
-export {
-  ambientDtsPath,
-  fallbackDtsPath,
-  isNodeTypesPath,
-  overridesDtsPath,
-} from "./dts-paths.js";
+export { ambientDtsPath, fallbackDtsPath, isNodeTypesPath, overridesDtsPath } from "./dts-paths.js";
 
 export {
   builtinDefaultImportModule,
@@ -3665,10 +4036,7 @@ export {
   SUPPORTED_BUILTIN_MODULES,
 } from "./builtin-modules.js";
 
-export {
-  npmPackageNameOf,
-  workspacePackageOfPath,
-} from "./workspace-registry.js";
+export { npmPackageNameOf, workspacePackageOfPath } from "./workspace-registry.js";
 
 export {
   requireSpecOf7 as requireSpecOf,
@@ -3740,7 +4108,11 @@ export function orderedImportsOf(
   const out: { stmt: ts.Statement; dep: ts.SourceFile | null }[] = [];
   for (const stmt of sf.statements) {
     if (ts.isExportDeclaration(stmt) && isPrunedNpmReexport(program, stmt)) continue;
-    if (ts.isExportDeclaration(stmt) && (stmt.isTypeOnly || erasedTypeOnlyReexport(stmt) || !stmt.moduleSpecifier)) continue;
+    if (
+      ts.isExportDeclaration(stmt) &&
+      (stmt.isTypeOnly || erasedTypeOnlyReexport(stmt) || !stmt.moduleSpecifier)
+    )
+      continue;
     if (!ts.isImportDeclaration(stmt) && !ts.isExportDeclaration(stmt)) continue;
     if (ts.isImportDeclaration(stmt) && erasedTypeOnlyImport(stmt)) continue;
     if (!stmt.moduleSpecifier || !ts.isStringLiteral(stmt.moduleSpecifier)) continue;
@@ -3761,7 +4133,12 @@ export function orderedImportsOf(
  * as a module edge), else null. No offender reporting here — preflight
  * already classified the import; this is the lookup the module-order and
  * lowering paths share. */
-export function npmStaticDepSf7(program: ts.Program, sf: ts.SourceFile, spec: string, resolutionKind: "import" | "require" = "import"): ts.SourceFile | null {
+export function npmStaticDepSf7(
+  program: ts.Program,
+  sf: ts.SourceFile,
+  spec: string,
+  resolutionKind: "import" | "require" = "import",
+): ts.SourceFile | null {
   if (!npmStaticActive() || isRelativeSpecifier(spec)) return null;
   if (spec.startsWith("node:") || spec.startsWith("#")) return null;
   const npm = resolveNpmImport7(sf.fileName, spec, resolutionKind);
@@ -3788,7 +4165,9 @@ export function isModuleExportsAccess(expr: ts.Expression): expr is ts.PropertyA
  *   - member: `exports.f = <expr>` / `module.exports.f = <expr>`.
  * Null for everything else. Callers gate on top-level position in a JS
  * module file — these forms anywhere else keep their generic fences. */
-export function cjsExportAssignmentOf(stmt: ts.Statement):
+export function cjsExportAssignmentOf(
+  stmt: ts.Statement,
+):
   | { kind: "table"; obj: ts.ObjectLiteralExpression | null; expr: ts.BinaryExpression }
   | { kind: "member"; name: ts.MemberName; value: ts.Expression; expr: ts.BinaryExpression }
   | null {
@@ -3849,7 +4228,10 @@ export function cjsExportDiscardReason(stmt: ts.Statement): string | null {
  * program: every member access is statically resolved against the
  * target's own type); or an identifier naming a top-level const whose
  * initializer is the literal. Null for everything else. */
-export function cjsExportTargetLiteral(e: ts.Expression, sf: ts.SourceFile): ts.ObjectLiteralExpression | null {
+export function cjsExportTargetLiteral(
+  e: ts.Expression,
+  sf: ts.SourceFile,
+): ts.ObjectLiteralExpression | null {
   while (ts.isParenthesizedExpression(e)) e = e.expression;
   if (ts.isObjectLiteralExpression(e)) return e;
   if (
@@ -3865,7 +4247,12 @@ export function cjsExportTargetLiteral(e: ts.Expression, sf: ts.SourceFile): ts.
       if (!ts.isVariableStatement(stmt)) continue;
       if ((stmt.declarationList.flags & ts.NodeFlags.Const) === 0) continue;
       for (const d of stmt.declarationList.declarations) {
-        if (d.name !== undefined && ts.isIdentifier(d.name) && d.name.text === e.text && d.initializer) {
+        if (
+          d.name !== undefined &&
+          ts.isIdentifier(d.name) &&
+          d.name.text === e.text &&
+          d.initializer
+        ) {
           let init: ts.Expression = d.initializer;
           while (ts.isParenthesizedExpression(init)) init = init.expression;
           return ts.isObjectLiteralExpression(init) ? init : null;

@@ -10,7 +10,9 @@ test("entry allocations precede instructions and temporaries stay unique", () =>
   blocks.line(`${first} = fadd double 0.0, 1.0`);
   blocks.entryAllocas.push(`${second} = alloca double`);
   blocks.terminate("ret void");
-  expect(blocks.render()).toBe(`entry:\n  ${second} = alloca double\n  ${first} = fadd double 0.0, 1.0\n  ret void`);
+  expect(blocks.render()).toBe(
+    `entry:\n  ${second} = alloca double\n  ${first} = fadd double 0.0, 1.0\n  ret void`,
+  );
 });
 
 test("terminators suppress dead instructions and keep their first target", () => {
@@ -38,11 +40,14 @@ test("debug attachments precede instruction comments and skip comment-only lines
   blocks.line('; comment "quotes" ; remain text');
   blocks.line('call void @f(ptr @"name;part") ; instruction comment');
   blocks.terminate("ret void ; tail");
-  expect(blocks.render()).toBe([
-    "entry:", '  ; comment "quotes" ; remain text',
-    '  call void @f(ptr @"name;part"), !dbg !7 ; instruction comment',
-    "  ret void, !dbg !7 ; tail",
-  ].join("\n"));
+  expect(blocks.render()).toBe(
+    [
+      "entry:",
+      '  ; comment "quotes" ; remain text',
+      '  call void @f(ptr @"name;part"), !dbg !7 ; instruction comment',
+      "  ret void, !dbg !7 ; tail",
+    ].join("\n"),
+  );
 });
 
 test("changing a debug location affects only subsequent instructions", () => {
@@ -85,7 +90,13 @@ test("counted loops expose one increment path and preserve nested block endings"
 test("inclusive loops and nested loops keep labels separate", () => {
   const blocks = new BlockBuilder();
   blocks.countedLoop(f64Lit(2), (outer) => {
-    blocks.countedLoop(outer, (inner) => { blocks.line(`call void @consume(double ${inner})`); }, "ole");
+    blocks.countedLoop(
+      outer,
+      (inner) => {
+        blocks.line(`call void @consume(double ${inner})`);
+      },
+      "ole",
+    );
   });
   blocks.terminate("ret void");
   const text = blocks.render();

@@ -13,19 +13,35 @@ const runOptions = { cwd: root, timeout: 30_000, maxBuffer: 16 * 1024 * 1024 };
 
 for (const backend of ["llvm"] as const) {
   test(`self-hosting full validator: ${backend} matches Node on valid and invalid IR`, async () => {
-    const dir = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-native-validator-"));
+    const dir = mkdtempSync(
+      join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-native-validator-"),
+    );
     try {
       const built = await compile(entry, {
-        outDir: dir, outPath: join(dir, process.platform === "win32" ? "validator.exe" : "validator"),
-        backend, dynamic: false, optimization: "dev", sanitize: process.env["SCRIPTC_SAN"] === "1",
+        outDir: dir,
+        outPath: join(dir, process.platform === "win32" ? "validator.exe" : "validator"),
+        backend,
+        dynamic: false,
+        optimization: "dev",
+        sanitize: process.env["SCRIPTC_SAN"] === "1",
       });
-      if (!built.ok) throw new Error(built.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
+      if (!built.ok)
+        throw new Error(built.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
       expect(built.backend).toBe(backend);
-      const check = (name: string, input: string, diagnostic?: string, serialized = false): void => {
+      const check = (
+        name: string,
+        input: string,
+        diagnostic?: string,
+        serialized = false,
+      ): void => {
         const path = join(dir, "input.json");
         writeFileSync(path, input);
         const expected = validateModule(serialized ? deserializeModule(input) : JSON.parse(input));
-        if (diagnostic) expect(expected.some((d) => d.message.includes(diagnostic)), name).toBe(true);
+        if (diagnostic)
+          expect(
+            expected.some((d) => d.message.includes(diagnostic)),
+            name,
+          ).toBe(true);
         else expect(expected, name).toEqual([]);
         const args = [path, ...(serialized ? ["serialized"] : [])];
         const oracle = spawnSync(process.execPath, ["--import", "tsx", entry, ...args], runOptions);
@@ -39,7 +55,8 @@ for (const backend of ["llvm"] as const) {
         expect(native.stderr, name).toEqual(oracle.stderr);
         expect(JSON.parse(native.stdout.toString()), name).toEqual(expected);
       };
-      for (const item of validatorCases()) check(item.name, JSON.stringify(item.module), item.diagnostic);
+      for (const item of validatorCases())
+        check(item.name, JSON.stringify(item.module), item.diagnostic);
 
       // Exercise real emitted IR, including recursive type tables, lifted
       // closures, Error subclasses, dyn conversions and container helpers.
@@ -55,8 +72,14 @@ for (const backend of ["llvm"] as const) {
         "tests/corpus/nullish-long-chain.ts",
       ]) {
         const irPath = join(dir, "emitted.json");
-        const emitted = await compile(join(root, source), { outDir: dir, outPath: irPath, outputKind: "ir", dynamic: false });
-        if (!emitted.ok) throw new Error(emitted.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
+        const emitted = await compile(join(root, source), {
+          outDir: dir,
+          outPath: irPath,
+          outputKind: "ir",
+          dynamic: false,
+        });
+        if (!emitted.ok)
+          throw new Error(emitted.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
         check(source, readFileSync(irPath, "utf8"), undefined, true);
       }
     } finally {

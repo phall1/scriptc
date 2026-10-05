@@ -30,7 +30,9 @@ export function isSafeToDiscard(expr: IrExpr): boolean {
     case "logical":
       return isSafeToDiscard(expr.left) && isSafeToDiscard(expr.right);
     case "ternary":
-      return isSafeToDiscard(expr.cond) && isSafeToDiscard(expr.then) && isSafeToDiscard(expr.else_);
+      return (
+        isSafeToDiscard(expr.cond) && isSafeToDiscard(expr.then) && isSafeToDiscard(expr.else_)
+      );
     case "strConcat":
       return isSafeToDiscard(expr.left) && isSafeToDiscard(expr.right);
     case "toBool":
@@ -46,7 +48,10 @@ export function isSafeToDiscard(expr: IrExpr): boolean {
     case "recordLit":
       return expr.fields.every((field) => isSafeToDiscard(field.value));
     case "recordClone":
-      return isSafeToDiscard(expr.source) && expr.overrides.every((field) => isSafeToDiscard(field.value));
+      return (
+        isSafeToDiscard(expr.source) &&
+        expr.overrides.every((field) => isSafeToDiscard(field.value))
+      );
     case "closure":
       return true;
     default:

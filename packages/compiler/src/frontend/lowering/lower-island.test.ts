@@ -1,11 +1,24 @@
 import { expect, test, vi } from "vitest";
 import { F64, JSVAL, funcOf, type IrGlobal, type IrLocal } from "../../ir/ir.js";
-import { SyntaxKind, type Expression, type Identifier, type Program, type SourceFile, type Type } from "../ts7/adapter.js";
+import {
+  SyntaxKind,
+  type Expression,
+  type Identifier,
+  type Program,
+  type SourceFile,
+  type Type,
+} from "../ts7/adapter.js";
 import { isIslandExpr } from "./lower-island.js";
 import { Lowerer } from "./lowerer.js";
 
 const identifier = { kind: SyntaxKind.Identifier, text: "value" } as Identifier;
-const context = (dynamic: boolean) => new Lowerer({ getTypeChecker: () => ({}) } as Program, { fileName: "island.ts" } as SourceFile, [], dynamic);
+const context = (dynamic: boolean) =>
+  new Lowerer(
+    { getTypeChecker: () => ({}) } as Program,
+    { fileName: "island.ts" } as SourceFile,
+    [],
+    dynamic,
+  );
 
 test("static island probes do not query the checker or map receiver and callee types", () => {
   const lowerer = context(false);
@@ -13,7 +26,12 @@ test("static island probes do not query the checker or map receiver and callee t
   const mapTypeOf = vi.spyOn(lowerer, "mapTypeOf");
   const peekLocal = vi.spyOn(lowerer, "peekLocal");
   const globalOf = vi.spyOn(lowerer, "globalOf");
-  for (const kind of [SyntaxKind.Identifier, SyntaxKind.PropertyAccessExpression, SyntaxKind.ElementAccessExpression, SyntaxKind.CallExpression]) {
+  for (const kind of [
+    SyntaxKind.Identifier,
+    SyntaxKind.PropertyAccessExpression,
+    SyntaxKind.ElementAccessExpression,
+    SyntaxKind.CallExpression,
+  ]) {
     expect(isIslandExpr(lowerer, { kind } as Expression)).toBe(false);
   }
   expect(typeOf).not.toHaveBeenCalled();

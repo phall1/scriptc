@@ -72,9 +72,15 @@ function symbolOf(spelling: string): string | null {
   return match?.[1] ?? null;
 }
 
-function functionDefAt(lines: readonly string[], start: number): { def: FunctionDef; end: number } | null {
+function functionDefAt(
+  lines: readonly string[],
+  start: number,
+): { def: FunctionDef; end: number } | null {
   const header = lines[start]!;
-  const match = /^define\s+(internal\s+)?(.+?)\s+(@[-$._A-Za-z][-$.\w]*)\((.*)\)(.*)\{(?:\s*;.*)?$/.exec(header);
+  const match =
+    /^define\s+(internal\s+)?(.+?)\s+(@[-$._A-Za-z][-$.\w]*)\((.*)\)(.*)\{(?:\s*;.*)?$/.exec(
+      header,
+    );
   if (!match) return null;
   let end = start + 1;
   while (end < lines.length && lines[end] !== "}") end++;
@@ -83,7 +89,9 @@ function functionDefAt(lines: readonly string[], start: number): { def: Function
   if (symbol === null) return null;
   const promoted = match[1] !== undefined;
   const linkage = promoted ? "hidden " : "";
-  const definitionHeader = promoted ? header.replace(/^define internal /, "define hidden ") : header;
+  const definitionHeader = promoted
+    ? header.replace(/^define internal /, "define hidden ")
+    : header;
   const source = [definitionHeader, ...lines.slice(start + 1, end + 1)].join("\n");
   // Parameter names are legal on declarations. Preserve the emitted text so
   // attributes, zeroext, and varargs stay byte-exact.
@@ -95,7 +103,10 @@ function functionDefAt(lines: readonly string[], start: number): { def: Function
 }
 
 function globalDef(line: string): GlobalDef | null {
-  const match = /^(@[-$._A-Za-z][-$.\w]*)\s+=\s+(internal\s+)?(thread_local(?:\([^)]*\))?\s+)?(global|constant)\s+(.+)$/.exec(line);
+  const match =
+    /^(@[-$._A-Za-z][-$.\w]*)\s+=\s+(internal\s+)?(thread_local(?:\([^)]*\))?\s+)?(global|constant)\s+(.+)$/.exec(
+      line,
+    );
   if (!match) return null;
   const symbol = symbolOf(match[1]!);
   if (symbol === null) return null;
@@ -207,15 +218,19 @@ export function splitLlvmProgram(
     else if (!sawDefinition || line.trim() !== "") preamble.push(line);
   }
   if (functions.length < 2) return null;
-  const globalDecls = globals.flatMap((global) => global.declaration === null ? [] : [global.declaration]);
+  const globalDecls = globals.flatMap((global) =>
+    global.declaration === null ? [] : [global.declaration],
+  );
   // Every shard repeats declarations and metadata. Bound that shared text
   // before materializing sources: function size alone can otherwise turn a
   // large debug module into many times its original size. Coarsen stable
   // power-of-two buckets, retaining the canonical path when even two would
   // exceed the budget. Small modules allow one target-sized shared budget.
-  const sharedBytes = [...preamble, ...globalDecls, ...trailer].reduce(
-    (bytes, line) => bytes + Buffer.byteLength(line) + 1, 0,
-  ) + functions.reduce((bytes, fn) => bytes + Buffer.byteLength(fn.declaration) + 1, 0);
+  const sharedBytes =
+    [...preamble, ...globalDecls, ...trailer].reduce(
+      (bytes, line) => bytes + Buffer.byteLength(line) + 1,
+      0,
+    ) + functions.reduce((bytes, fn) => bytes + Buffer.byteLength(fn.declaration) + 1, 0);
   const bucketLimit = Math.floor(Math.max(sourceBytes, DEFAULT_TARGET_BYTES) / sharedBytes) - 1;
   if (bucketLimit < 2) return null;
   const chunks = chunksOf(functions, targetBytes, 2 ** Math.floor(Math.log2(bucketLimit)));
@@ -223,9 +238,7 @@ export function splitLlvmProgram(
   const tail = trailer.length === 0 ? "" : `\n${trailer.join("\n")}`;
   const functionShards = chunks.map(({ bucket, functions: chunk }) => {
     const owned = new Set(chunk);
-    const declarations = functions
-      .filter((fn) => !owned.has(fn))
-      .map((fn) => fn.declaration);
+    const declarations = functions.filter((fn) => !owned.has(fn)).map((fn) => fn.declaration);
     return {
       name: `program-f${bucket.toString().padStart(3, "0")}.ll`,
       source: [

@@ -10,10 +10,7 @@ export {
   targetPlatform,
 } from "./backend/external-c.js";
 export { prepareBuildCacheRoot, resolveBuildCacheRoot } from "./backend/build-cache.js";
-export {
-  executableLinkerEnvironmentFingerprint,
-  resolvePlatformLinker,
-} from "./backend/linker.js";
+export { executableLinkerEnvironmentFingerprint, resolvePlatformLinker } from "./backend/linker.js";
 import { nativeCodegenTarget, type NativeTargetSpec } from "./backend/targets.js";
 
 /** Whether an ordinary LLVM executable can take the helper/object plus

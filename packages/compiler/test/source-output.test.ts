@@ -31,10 +31,17 @@ test("serialized IR is the primary artifact and round-trips through validation",
 test("Windows subsystem selection refuses non-executable compiler output", async () => {
   const { entry, outDir } = await fixture();
   const outPath = join(outDir, "main.ir.json");
-  const result = await compile(entry, { outDir, outPath, outputKind: "ir", windowsSubsystem: "gui" });
+  const result = await compile(entry, {
+    outDir,
+    outPath,
+    outputKind: "ir",
+    windowsSubsystem: "gui",
+  });
   expect(result).toMatchObject({
     ok: false,
-    diagnostics: [{ code: "SC3002", message: expect.stringContaining("only supported for executable output") }],
+    diagnostics: [
+      { code: "SC3002", message: expect.stringContaining("only supported for executable output") },
+    ],
   });
   await expect(readFile(outPath)).rejects.toMatchObject({ code: "ENOENT" });
 });
@@ -109,16 +116,27 @@ test("an executable build never deletes same-stem assembly or object artifacts",
   }
 });
 
-test.each([{ backend: "c" }, { outputKind: "c" }])("removed C options reject before creating output: %s", async (removed) => {
-  const { entry, outDir } = await fixture();
-  // JavaScript callers may supply flags that are absent from the TypeScript API.
-  const result = await compile(entry, { outDir, ...removed } as never);
-  expect(result).toMatchObject({ ok: false, diagnostics: [{ code: "SC3002", message: expect.stringContaining("LLVM is the only backend") }] });
-  await expect(readdir(outDir)).rejects.toMatchObject({ code: "ENOENT" });
-});
+test.each([{ backend: "c" }, { outputKind: "c" }])(
+  "removed C options reject before creating output: %s",
+  async (removed) => {
+    const { entry, outDir } = await fixture();
+    // JavaScript callers may supply flags that are absent from the TypeScript API.
+    const result = await compile(entry, { outDir, ...removed } as never);
+    expect(result).toMatchObject({
+      ok: false,
+      diagnostics: [
+        { code: "SC3002", message: expect.stringContaining("LLVM is the only backend") },
+      ],
+    });
+    await expect(readdir(outDir)).rejects.toMatchObject({ code: "ENOENT" });
+  },
+);
 
 test("TLS callback programs emit LLVM without a secondary backend", async () => {
-  const entry = join(import.meta.dirname, "../../../tests/fixtures/server/cases/tls-connect-basic/main.ts");
+  const entry = join(
+    import.meta.dirname,
+    "../../../tests/fixtures/server/cases/tls-connect-basic/main.ts",
+  );
   const outDir = await mkdtemp(join(tmpdir(), "scriptc-source-tls-"));
   dirs.push(outDir);
   const outPath = join(outDir, "main.ll");
@@ -139,7 +157,7 @@ test("source outputs ignore invalid external compiler selection and create no ex
   try {
     for (const [kind, name] of [
       ["ir", "main.ir.json"],
-        ["llvm", "main.ll"],
+      ["llvm", "main.ll"],
     ] as const) {
       const result = await compile(entry, {
         outDir,

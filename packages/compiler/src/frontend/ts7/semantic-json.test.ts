@@ -2,7 +2,16 @@ import { expect, test } from "vitest";
 import { checkSemanticJsonStrings, parseSemanticJson } from "./semantic-json.js";
 
 test("semantic JSON preserves ordinary strings, escaped slashes, quotes, pairs and nulls", () => {
-  const values = ["", "\uFEFFhéllo 🌍", "\\ud800", 'quoted "\\ud800"', "\ud800\udc00", "\udbff\udfff", "\\", null];
+  const values = [
+    "",
+    "\uFEFFhéllo 🌍",
+    "\\ud800",
+    'quoted "\\ud800"',
+    "\ud800\udc00",
+    "\udbff\udfff",
+    "\\",
+    null,
+  ];
   for (const value of values) {
     const json = JSON.stringify({ value });
     expect(parseSemanticJson(json)).toEqual({ value });
@@ -20,7 +29,9 @@ test("all lone code units remain exact on Node and are refused at the native bou
     for (const value of [text, { [text]: "key", value: text }, [text, "after"]]) {
       const json = JSON.stringify(value);
       expect(parseSemanticJson(json)).toEqual(value);
-      expect(() => checkSemanticJsonStrings(json, false)).toThrow("cannot preserve lone UTF-16 surrogates");
+      expect(() => checkSemanticJsonStrings(json, false)).toThrow(
+        "cannot preserve lone UTF-16 surrogates",
+      );
     }
   }
 });
@@ -31,13 +42,18 @@ test("backslash parity and separated surrogate escapes cannot bypass the boundar
     if (count % 2 === 0) expect(() => checkSemanticJsonStrings(json, false)).not.toThrow();
     else expect(() => checkSemanticJsonStrings(json, false)).toThrow("cannot preserve");
   }
-  for (const json of ['"\\ud800x\\udc00"', '["\\ud800","\\udc00"]', '"\\ud800\\ud800"', '"\\udc00\\ud800"']) {
+  for (const json of [
+    '"\\ud800x\\udc00"',
+    '["\\ud800","\\udc00"]',
+    '"\\ud800\\ud800"',
+    '"\\udc00\\ud800"',
+  ]) {
     expect(() => checkSemanticJsonStrings(json, false)).toThrow("cannot preserve");
   }
 });
 
 test("malformed JSON remains a parse error rather than an accepted response", () => {
-  for (const json of ['"\\uZZZZ"', '"\\uD8"', '"unclosed', '{"value":}', 'undefined']) {
+  for (const json of ['"\\uZZZZ"', '"\\uD8"', '"unclosed', '{"value":}', "undefined"]) {
     expect(() => parseSemanticJson(json)).toThrow(SyntaxError);
   }
 });

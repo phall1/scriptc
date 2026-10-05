@@ -12,5 +12,9 @@ export function createNativeTs7Api(options: {
   collectTiming?: boolean;
 }): Ts7Api {
   const timing = options.collectTiming ?? false;
-  return new Ts7Api(new Ts7RpcClient(spawnNativeTs7Wire(options.executable, options.cwd, timing)), options.fs, timing);
+  return new Ts7Api(
+    new Ts7RpcClient(spawnNativeTs7Wire(options.executable, options.cwd, timing)),
+    options.fs,
+    timing,
+  );
 }

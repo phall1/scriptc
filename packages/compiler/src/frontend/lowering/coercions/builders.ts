@@ -1,5 +1,14 @@
 import { countedFor, varRef } from "../../../ir/build.js";
-import { F64, type IrExpr, type IrFunction, type IrLocal, type IrParam, type IrStmt, type IrType, type SrcLoc } from "../../../ir/ir.js";
+import {
+  F64,
+  type IrExpr,
+  type IrFunction,
+  type IrLocal,
+  type IrParam,
+  type IrStmt,
+  type IrType,
+  type SrcLoc,
+} from "../../../ir/ir.js";
 
 /** Convert a native array into a fresh result. The input length is captured
  * after result initialization and before any element conversion runs. */
@@ -24,12 +33,23 @@ export function buildArrayConversion(
     ],
     body: [
       { kind: "varDecl", localId: "out.0", init: initial, loc },
-      { kind: "varDecl", localId: "n.0", init: { kind: "arrIntrinsic", method: "length", receiver: input, args: [], type: F64, loc }, loc },
-      countedFor(loc, varRef("n.0", F64, loc), (index) => [{
-        kind: "exprStmt",
-        expr: append({ kind: "arrayGet", arr: input, index, type: source.elem, loc }, index, result),
+      {
+        kind: "varDecl",
+        localId: "n.0",
+        init: { kind: "arrIntrinsic", method: "length", receiver: input, args: [], type: F64, loc },
         loc,
-      }]),
+      },
+      countedFor(loc, varRef("n.0", F64, loc), (index) => [
+        {
+          kind: "exprStmt",
+          expr: append(
+            { kind: "arrayGet", arr: input, index, type: source.elem, loc },
+            index,
+            result,
+          ),
+          loc,
+        },
+      ]),
       { kind: "return", value: result, loc },
     ],
     loc,
@@ -48,24 +68,38 @@ export function buildFunctionAdapter(
   loc: SrcLoc,
 ): IrFunction[] {
   const implementation = `${name}.impl`;
-  return [{
-    name: implementation,
-    params,
-    returnType: target.ret,
-    captures: [{ localId: "f.0", name: "f", type: source }],
-    locals: [
-      { id: "f.0", name: "f", type: source, mutable: false, boxed: true },
-      ...params.map((param) => ({ id: param.localId, name: param.name, type: param.type, mutable: false })),
-      ...locals,
-    ],
-    body,
-    loc,
-  }, {
-    name,
-    params: [{ localId: "f.0", name: "f", type: source }],
-    returnType: target,
-    locals: [{ id: "f.0", name: "f", type: source, mutable: false, boxed: true }],
-    body: [{ kind: "return", value: { kind: "closure", fnName: implementation, captures: ["f.0"], type: target, loc }, loc }],
-    loc,
-  }];
+  return [
+    {
+      name: implementation,
+      params,
+      returnType: target.ret,
+      captures: [{ localId: "f.0", name: "f", type: source }],
+      locals: [
+        { id: "f.0", name: "f", type: source, mutable: false, boxed: true },
+        ...params.map((param) => ({
+          id: param.localId,
+          name: param.name,
+          type: param.type,
+          mutable: false,
+        })),
+        ...locals,
+      ],
+      body,
+      loc,
+    },
+    {
+      name,
+      params: [{ localId: "f.0", name: "f", type: source }],
+      returnType: target,
+      locals: [{ id: "f.0", name: "f", type: source, mutable: false, boxed: true }],
+      body: [
+        {
+          kind: "return",
+          value: { kind: "closure", fnName: implementation, captures: ["f.0"], type: target, loc },
+          loc,
+        },
+      ],
+      loc,
+    },
+  ];
 }

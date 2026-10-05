@@ -62,13 +62,18 @@ test("splits generated LLVM functions and promotes only private cross-shard defi
   expect(actual!.publicSymbols).toEqual(["public_value", "public_entry"]);
   expect(actual!.shards[0]!.name).toBe("program-globals.ll");
   expect(actual!.shards[0]!.source).toContain("@hidden_value = hidden global i64 7");
-  expect(actual!.shards.slice(1).every((shard) =>
-    shard.source.includes("@hidden_value = external hidden global i64")
-  )).toBe(true);
-  expect(actual!.shards.some((shard) =>
-    !shard.source.includes("define hidden i64 @right() #0") &&
-    shard.source.includes("declare hidden i64 @right() #0")
-  )).toBe(true);
+  expect(
+    actual!.shards
+      .slice(1)
+      .every((shard) => shard.source.includes("@hidden_value = external hidden global i64")),
+  ).toBe(true);
+  expect(
+    actual!.shards.some(
+      (shard) =>
+        !shard.source.includes("define hidden i64 @right() #0") &&
+        shard.source.includes("declare hidden i64 @right() #0"),
+    ),
+  ).toBe(true);
 });
 
 test("thread-local program state conservatively keeps the single-TU path", () => {
@@ -81,16 +86,21 @@ test("thread-local program state conservatively keeps the single-TU path", () =>
 
 test("shared metadata bounds shard growth while preserving every definition", () => {
   const names = Array.from({ length: 120 }, (_, i) => `metadata_pad_${i}`);
-  const body = names.map((name) =>
-    `define internal i64 @${name}() #0 {\nentry:\n  ; ${"x".repeat(32 * 1024)}\n  ret i64 1\n}\n`,
-  ).join("\n");
-  const source = SAMPLE.replace("define i64 @public_entry", `${body}\ndefine i64 @public_entry`) +
+  const body = names
+    .map(
+      (name) =>
+        `define internal i64 @${name}() #0 {\nentry:\n  ; ${"x".repeat(32 * 1024)}\n  ret i64 1\n}\n`,
+    )
+    .join("\n");
+  const source =
+    SAMPLE.replace("define i64 @public_entry", `${body}\ndefine i64 @public_entry`) +
     `!0 = !{!"${"x".repeat(256 * 1024)}"}\n`;
   const split = splitLlvmProgram(source, { minimumBytes: 0, targetBytes: 64 * 1024 });
   expect(split).not.toBeNull();
   expect(split!.shards.length).toBeGreaterThan(1);
-  expect(split!.shards.reduce((bytes, shard) => bytes + Buffer.byteLength(shard.source), 0))
-    .toBeLessThanOrEqual(2 * Buffer.byteLength(source));
+  expect(
+    split!.shards.reduce((bytes, shard) => bytes + Buffer.byteLength(shard.source), 0),
+  ).toBeLessThanOrEqual(2 * Buffer.byteLength(source));
   const definitions = split!.shards.flatMap((shard) =>
     [...shard.source.matchAll(/^define (?:hidden )?i64 @(\w+)\(/gm)].map((match) => match[1]),
   );
@@ -103,14 +113,22 @@ test("shared metadata bounds shard growth while preserving every definition", ()
 });
 
 test("debug metadata stays on definitions when splitting LLVM modules", async () => {
-  const debug = new LlvmDebugInfo("/source/main.ts", new Map([["/source/main.ts", "console.log(1);\n"]]));
+  const debug = new LlvmDebugInfo(
+    "/source/main.ts",
+    new Map([["/source/main.ts", "console.log(1);\n"]]),
+  );
   let source = SAMPLE;
   for (const name of ["left", "right", "public_entry"]) {
     const loc = { file: "/source/main.ts", start: 0, end: 1 };
     const scope = debug.function({ name, loc, params: [], locals: [], body: [], returnType: VOID });
     const location = debug.location(loc, scope);
-    source = source.replace(new RegExp(`(@${name}\\(\\) #0) \\{([\\s\\S]*?)\\n\\}`), (_, header: string, body: string) =>
-      `${header} !dbg ${scope} {${body.split("\n").map((line) => line.startsWith("  ") ? `${line}, !dbg ${location}` : line).join("\n")}\n}`,
+    source = source.replace(
+      new RegExp(`(@${name}\\(\\) #0) \\{([\\s\\S]*?)\\n\\}`),
+      (_, header: string, body: string) =>
+        `${header} !dbg ${scope} {${body
+          .split("\n")
+          .map((line) => (line.startsWith("  ") ? `${line}, !dbg ${location}` : line))
+          .join("\n")}\n}`,
     );
   }
   source += debug.render();
@@ -122,15 +140,19 @@ test("debug metadata stays on definitions when splitting LLVM modules", async ()
     expect(shard.source).not.toMatch(/^declare.*!dbg/m);
     const path = join(dir, shard.name);
     await writeFile(path, shard.source);
-    const result = spawnSync("clang", ["-Wno-override-module", "-c", path, "-o", `${path}.o`], { encoding: "utf8" });
+    const result = spawnSync("clang", ["-Wno-override-module", "-c", path, "-o", `${path}.o`], {
+      encoding: "utf8",
+    });
     expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toBe("");
   }
 });
 
 test("dev libraries split at the measured 2MB crossover while executables retain 4MB", () => {
-  const body = Array.from({ length: 700 }, (_, i) =>
-    `define internal i64 @library_pad_${i}() #0 {\nentry:\n  ; ${"x".repeat(3072)}\n  ret i64 ${i}\n}\n`,
+  const body = Array.from(
+    { length: 700 },
+    (_, i) =>
+      `define internal i64 @library_pad_${i}() #0 {\nentry:\n  ; ${"x".repeat(3072)}\n  ret i64 ${i}\n}\n`,
   ).join("\n");
   const source = SAMPLE.replace("define i64 @public_entry", `${body}\ndefine i64 @public_entry`);
   expect(Buffer.byteLength(source)).toBeGreaterThan(2 * 1024 * 1024);
@@ -143,8 +165,10 @@ test("dev libraries split at the measured 2MB crossover while executables retain
 });
 
 test("every shard compiles and its merged object exposes only canonical public definitions", async () => {
-  const body = Array.from({ length: 120 }, (_, i) =>
-    `define internal i64 @pad_${i}() #0 {\nentry:\n  ; ${"x".repeat(2048)}\n  ret i64 ${i}\n}\n`,
+  const body = Array.from(
+    { length: 120 },
+    (_, i) =>
+      `define internal i64 @pad_${i}() #0 {\nentry:\n  ; ${"x".repeat(2048)}\n  ret i64 ${i}\n}\n`,
   ).join("\n");
   const split = splitLlvmProgram(
     SAMPLE.replace("define i64 @public_entry", `${body}\ndefine i64 @public_entry`),

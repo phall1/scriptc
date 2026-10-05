@@ -36,6 +36,8 @@ export function emitStringParts(host: LlvmEmitterContext, parts: readonly IrExpr
   }
   host.declare(`declare ptr @scr_str_concat_parts(ptr, ${host.sizeType})`);
   const result = B.tmp();
-  B.line(`${result} = call ptr @scr_str_concat_parts(ptr ${storage}, ${host.sizeType} ${parts.length})`);
+  B.line(
+    `${result} = call ptr @scr_str_concat_parts(ptr ${storage}, ${host.sizeType} ${parts.length})`,
+  );
   return host.own({ name: result, type: parts[0]!.type });
 }

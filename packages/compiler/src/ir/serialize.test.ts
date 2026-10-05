@@ -5,16 +5,38 @@ import { IR_VERSION, deserializeModule, serializeModule } from "./serialize.js";
 function numbers(values: number[]): IrModule {
   const loc = { file: "numbers.ts", start: 0, end: 0 };
   return {
-    irVersion: IR_VERSION, sourceFile: loc.file, entry: "main",
-    functions: [{
-      name: "main", params: [], locals: [], returnType: VOID, loc,
-      body: values.map((value) => ({ kind: "exprStmt", expr: { kind: "numLit", value, type: F64, loc }, loc })),
-    }],
+    irVersion: IR_VERSION,
+    sourceFile: loc.file,
+    entry: "main",
+    functions: [
+      {
+        name: "main",
+        params: [],
+        locals: [],
+        returnType: VOID,
+        loc,
+        body: values.map((value) => ({
+          kind: "exprStmt",
+          expr: { kind: "numLit", value, type: F64, loc },
+          loc,
+        })),
+      },
+    ],
   };
 }
 
 test("IR numbers survive multiple serialized generations without losing their value", () => {
-  const values = [NaN, Infinity, -Infinity, -0, 0, Number.MIN_VALUE, Number.MAX_VALUE, -Number.MIN_VALUE, 0.1 + 0.2];
+  const values = [
+    NaN,
+    Infinity,
+    -Infinity,
+    -0,
+    0,
+    Number.MIN_VALUE,
+    Number.MAX_VALUE,
+    -Number.MIN_VALUE,
+    0.1 + 0.2,
+  ];
   let mod = numbers(values);
   const first = serializeModule(mod);
   expect(first).toContain('"$nonfinite": "nan"');
@@ -22,7 +44,8 @@ test("IR numbers survive multiple serialized generations without losing their va
   for (let generation = 0; generation < 3; generation++) {
     mod = deserializeModule(serializeModule(mod));
     const actual = mod.functions[0]!.body.map((stmt) => {
-      if (stmt.kind !== "exprStmt" || stmt.expr.kind !== "numLit") throw new Error("lost numeric literal");
+      if (stmt.kind !== "exprStmt" || stmt.expr.kind !== "numLit")
+        throw new Error("lost numeric literal");
       return stmt.expr.value;
     });
     expect(actual.every((value, index) => Object.is(value, values[index]))).toBe(true);
@@ -30,10 +53,13 @@ test("IR numbers survive multiple serialized generations without losing their va
   }
 });
 
-test.each(["", "NaN", "infinity", "future-format"])("unknown number sentinel %j is refused", (tag) => {
-  const json = serializeModule(numbers([NaN])).replace('"nan"', JSON.stringify(tag));
-  expect(() => deserializeModule(json)).toThrow("Invalid IR number sentinel");
-});
+test.each(["", "NaN", "infinity", "future-format"])(
+  "unknown number sentinel %j is refused",
+  (tag) => {
+    const json = serializeModule(numbers([NaN])).replace('"nan"', JSON.stringify(tag));
+    expect(() => deserializeModule(json)).toThrow("Invalid IR number sentinel");
+  },
+);
 
 test("ordinary strings resembling number sentinels remain strings", () => {
   const mod = numbers([0]);
@@ -56,22 +82,37 @@ test("compact artifacts preserve the full module and special numeric values", ()
 });
 
 test("the new number format rejects documents bearing an older version", () => {
-  const json = serializeModule(numbers([NaN])).replace(`"irVersion": ${IR_VERSION}`, `"irVersion": ${IR_VERSION - 1}`);
+  const json = serializeModule(numbers([NaN])).replace(
+    `"irVersion": ${IR_VERSION}`,
+    `"irVersion": ${IR_VERSION - 1}`,
+  );
   expect(() => deserializeModule(json)).toThrow("IR version mismatch");
 });
-
 
 test("compact artifacts preserve mixed ordinary functions and special numbers in metadata", () => {
   const ordinary = numbers([1, 2, 3]).functions[0]!;
   const special = numbers([NaN, -0, Infinity, -Infinity]).functions[0]!;
-  const metadata = { ...ordinary, name: "metadata", loc: { file: "metadata.ts", start: -0, end: Infinity } };
+  const metadata = {
+    ...ordinary,
+    name: "metadata",
+    loc: { file: "metadata.ts", start: -0, end: Infinity },
+  };
   const mod = numbers([]);
-  mod.functions = [ordinary, { ...special, name: "special" }, metadata, { ...ordinary, name: "shared" }];
+  mod.functions = [
+    ordinary,
+    { ...special, name: "special" },
+    metadata,
+    { ...ordinary, name: "shared" },
+  ];
   const expected = serializeModule(mod);
   expect(JSON.parse(serializeModule(mod, true))).toEqual(JSON.parse(expected));
   expect(deserializeModule(serializeModule(mod, true))).toEqual(mod);
   expect(serializeModule(mod)).toBe(expected);
-  special.body.push({ kind: "exprStmt", expr: { kind: "numLit", value: NaN, type: F64, loc: special.loc }, loc: special.loc });
+  special.body.push({
+    kind: "exprStmt",
+    expr: { kind: "numLit", value: NaN, type: F64, loc: special.loc },
+    loc: special.loc,
+  });
   expect(JSON.parse(serializeModule(mod, true))).toEqual(JSON.parse(serializeModule(mod)));
 });
 

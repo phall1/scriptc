@@ -144,12 +144,16 @@ function buildProbe(
     join(fixtureRoot, fixture, "probe.c"),
     archive,
     "-lm",
-    "-o", bin,
+    "-o",
+    bin,
   ]);
   return bin;
 }
 
-function runProbe(bin: string, args: string[] = []): { stdout: string; status: number | null; signal: string | null } {
+function runProbe(
+  bin: string,
+  args: string[] = [],
+): { stdout: string; status: number | null; signal: string | null } {
   const r = spawnSync(bin, args, { encoding: "utf8", timeout: 60_000 });
   return { stdout: r.stdout ?? "", status: r.status, signal: r.signal };
 }
@@ -186,8 +190,15 @@ plumb: 40000254995
 `;
 
 const SCALARS_SYMBOLS = [
-  "kt_add", "kt_passthrough", "kt_neg_zero", "kt_is_nan", "kt_invert", "kt_plumb",
-  "kt_init", "kt_set_panic_sink", "kt_collect",
+  "kt_add",
+  "kt_passthrough",
+  "kt_neg_zero",
+  "kt_is_nan",
+  "kt_invert",
+  "kt_plumb",
+  "kt_init",
+  "kt_set_panic_sink",
+  "kt_collect",
 ];
 
 describe.each(EMISSIONS)("library mode, %s emission", (emission) => {
@@ -219,7 +230,8 @@ describe.each(EMISSIONS)("library mode, %s emission", (emission) => {
     // scr_child.c never joined the link) and none is REFERENCED by a
     // linked unit (a missed inter-unit reference would surface here, the
     // backstop the design asks for instead of a hand-maintained map).
-    const loopish = /^scr_(loop|fiber|on_fiber|timer|set_timeout|set_interval|set_immediate|next_tick|child|spawn)/;
+    const loopish =
+      /^scr_(loop|fiber|on_fiber|timer|set_timeout|set_interval|set_immediate|next_tick|child|spawn)/;
     expect([...defined].filter((s) => loopish.test(s))).toEqual([]);
     expect([...undef].filter((s) => loopish.test(s))).toEqual([]);
   });
@@ -246,7 +258,11 @@ tail: c.txt (len 5)
     // definitions are exactly the declared set, no prefix undefineds.
     const { defined, undef } = nmSymbols(archive);
     expect([...defined].filter((s) => s.startsWith("kn_")).sort()).toEqual([
-      "kn_collect", "kn_init", "kn_scaled", "kn_set_panic_sink", "kn_tail",
+      "kn_collect",
+      "kn_init",
+      "kn_scaled",
+      "kn_set_panic_sink",
+      "kn_tail",
     ]);
     expect([...undef].filter((s) => s.startsWith("kn_"))).toEqual([]);
   });
@@ -272,7 +288,9 @@ wrap empty: len 2 bytes 60 62
   });
 
   test("K3: buffer lifetime, declared-reset posture (results accumulate)", async () => {
-    const { archive, outDir } = await buildLibrary("buffers", emission, { declaredReset: "kb_reset" });
+    const { archive, outDir } = await buildLibrary("buffers", emission, {
+      declaredReset: "kb_reset",
+    });
     const probe = buildProbe("buffers", archive, outDir, { defines: ["DECLARED_RESET"] });
     const run = runProbe(probe);
     expect(run.signal).toBeNull();
@@ -599,7 +617,10 @@ async function acceptance(
     }),
   );
   const result = await compileLibrary({ profilePath, outDir });
-  expect(result.ok, result.ok ? undefined : result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n")).toBe(true);
+  expect(
+    result.ok,
+    result.ok ? undefined : result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"),
+  ).toBe(true);
 }
 
 describe("K9: library-mode refusals", () => {
@@ -623,9 +644,12 @@ describe("K9: library-mode refusals", () => {
   });
 
   test("SC4003: arity mismatch between profile and signature", async () => {
-    const diags = await refusal(`export function two(a: number, b: number): number { return a + b; }\n`, {
-      exports: [{ export: "two", symbol: "kx_two", params: ["f64"], returns: "f64" }],
-    });
+    const diags = await refusal(
+      `export function two(a: number, b: number): number { return a + b; }\n`,
+      {
+        exports: [{ export: "two", symbol: "kx_two", params: ["f64"], returns: "f64" }],
+      },
+    );
     expect(diags[0]!.code).toBe("SC4003");
     expect(diags[0]!.message).toContain("2 parameter(s)");
   });
@@ -639,17 +663,24 @@ describe("K9: library-mode refusals", () => {
     expect(diags[0]!.hint).toContain("synchronous facade");
     // The teaching arrives as its own visibly-attributed note — the
     // tool's hint stays the tool's.
-    expect(diags[0]!.note).toBe("from the 'refusal-fixture' profile: use the host scheduler entry instead");
+    expect(diags[0]!.note).toBe(
+      "from the 'refusal-fixture' profile: use the host scheduler entry instead",
+    );
   });
 
   test("SC4005: a timer anywhere in the graph, teaching as the attributed note", async () => {
-    const diags = await refusal(`setTimeout(() => {}, 1);\nexport function f(): number { return 1; }\n`, {
-      exports: [{ export: "f", symbol: "kx_f", params: [], returns: "f64" }],
-      determinism: { teachings: { SC4005: "schedule through the embedder frame loop" } },
-    });
+    const diags = await refusal(
+      `setTimeout(() => {}, 1);\nexport function f(): number { return 1; }\n`,
+      {
+        exports: [{ export: "f", symbol: "kx_f", params: [], returns: "f64" }],
+        determinism: { teachings: { SC4005: "schedule through the embedder frame loop" } },
+      },
+    );
     expect(diags[0]!.code).toBe("SC4005");
     expect(diags[0]!.message).toContain("timers");
-    expect(diags[0]!.note).toBe("from the 'refusal-fixture' profile: schedule through the embedder frame loop");
+    expect(diags[0]!.note).toBe(
+      "from the 'refusal-fixture' profile: schedule through the embedder frame loop",
+    );
   });
 
   test("SC4007: a generic export", async () => {
@@ -706,7 +737,9 @@ async function npmRefusal(
 
 describe("K13: library-mode npm refusals (SC4020, static-or-refuse)", () => {
   test("build-transform markers refuse with the failed bar named", async () => {
-    const diags = await npmRefusal("lib-markers.ts", [{ export: "f", symbol: "kx_f", params: [], returns: "string" }]);
+    const diags = await npmRefusal("lib-markers.ts", [
+      { export: "f", symbol: "kx_f", params: [], returns: "string" },
+    ]);
     expect(diags.map((d) => d.code)).toEqual(["SC4020"]);
     expect(diags[0]!.message).toContain("'webbundle'");
     expect(diags[0]!.message).toContain("build-transform markers");
@@ -743,7 +776,9 @@ describe("K13: library-mode npm refusals (SC4020, static-or-refuse)", () => {
       { determinism: { teachings: { SC4020: "request the vendored copy from the embedder SDK" } } },
     );
     expect(diags[0]!.code).toBe("SC4020");
-    expect(diags[0]!.note).toBe("from the 'npm-refusal-fixture' profile: request the vendored copy from the embedder SDK");
+    expect(diags[0]!.note).toBe(
+      "from the 'npm-refusal-fixture' profile: request the vendored copy from the embedder SDK",
+    );
   });
 
   test("a builtin pulling the event loop keeps the SC4005 story, not a new fence", async () => {
@@ -767,16 +802,28 @@ describe("K13: library-mode npm refusals (SC4020, static-or-refuse)", () => {
  * the answer is emission-invariant. */
 
 const WORKED_FENCES = [
-  { id: "stdlib.math.random", teaching: "randomness is an effect: request it from the host and receive it as a Msg." },
-  { prefix: "node-builtin.fs.", teaching: "files are effects: declare reads and writes as commands the host executes." },
-  { prefix: "node-builtin.net.", teaching: "network is an effect: declare requests as commands; responses arrive as Msgs." },
+  {
+    id: "stdlib.math.random",
+    teaching: "randomness is an effect: request it from the host and receive it as a Msg.",
+  },
+  {
+    prefix: "node-builtin.fs.",
+    teaching: "files are effects: declare reads and writes as commands the host executes.",
+  },
+  {
+    prefix: "node-builtin.net.",
+    teaching: "network is an effect: declare requests as commands; responses arrive as Msgs.",
+  },
   { prefix: "node-builtin.os.", teaching: "machine identity is an effect: ask the host." },
   { prefix: "node-builtin.crypto.", teaching: "randomness and digests come from the host." },
   // The remaining ambient families the determinism attestation demotes on
   // — with these, the fence set covers every attestation-known surface
   // (the ask-5 §4 invariant's full-fence profile).
   { prefix: "stdlib.date.", teaching: "time is an effect: the host passes the clock in as a Msg." },
-  { prefix: "node-builtin.process.", teaching: "process ambient state and authority belong to the host." },
+  {
+    prefix: "node-builtin.process.",
+    teaching: "process ambient state and authority belong to the host.",
+  },
   { prefix: "node-builtin.perf_hooks.", teaching: "the monotonic clock is the host's." },
 ];
 
@@ -934,7 +981,8 @@ describe.each(EMISSIONS)("K14: determinism fences, %s emission", (emission) => {
         }),
       );
       const result = await compileLibrary({ profilePath, outDir });
-      if (!result.ok) throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
+      if (!result.ok)
+        throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
       emitted.push(readFileSync(result.llvmPath, "utf8"));
     }
     expect(emitted[1]).toBe(emitted[0]);
@@ -945,7 +993,9 @@ describe.each(EMISSIONS)("K14: determinism fences, %s emission", (emission) => {
       `export function f(): number { return (1234.5).toLocaleString().length; }\n`,
       {
         exports: [{ export: "f", symbol: "kx_f", params: [], returns: "f64" }],
-        determinism: { teachings: { SC2020: "locale comes from the host; never infer it in a core" } },
+        determinism: {
+          teachings: { SC2020: "locale comes from the host; never infer it in a core" },
+        },
       },
       emission,
     );
@@ -960,7 +1010,11 @@ describe.each(EMISSIONS)("K14: determinism fences, %s emission", (emission) => {
       `export function f(): number { return (1.234).toPrecision(2).length; }\n`,
       {
         exports: [{ export: "f", symbol: "kx_f", params: [], returns: "f64" }],
-        determinism: { teachings: { "stdlib.number.toPrecision": "formatting runs in the host; request it as an effect" } },
+        determinism: {
+          teachings: {
+            "stdlib.number.toPrecision": "formatting runs in the host; request it as an effect",
+          },
+        },
       },
       emission,
     );
@@ -968,7 +1022,9 @@ describe.each(EMISSIONS)("K14: determinism fences, %s emission", (emission) => {
     // to the refusal that already fires.
     expect(diags[0]!.code).toBe("SC2012");
     expect(diags[0]!.message).toContain(".toPrecision()");
-    expect(diags[0]!.note).toBe("from the 'refusal-fixture' profile: formatting runs in the host; request it as an effect");
+    expect(diags[0]!.note).toBe(
+      "from the 'refusal-fixture' profile: formatting runs in the host; request it as an effect",
+    );
   });
 
   test("fencing a surface the static tier refuses anyway changes only the message", async () => {
@@ -976,7 +1032,9 @@ describe.each(EMISSIONS)("K14: determinism fences, %s emission", (emission) => {
       `export function f(): number { return (1.234).toPrecision(2).length; }\n`,
       {
         exports: [{ export: "f", symbol: "kx_f", params: [], returns: "f64" }],
-        determinism: { fences: [{ id: "stdlib.number.toPrecision", teaching: "formatting is host work" }] },
+        determinism: {
+          fences: [{ id: "stdlib.number.toPrecision", teaching: "formatting is host work" }],
+        },
       },
       emission,
     );

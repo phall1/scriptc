@@ -22,18 +22,22 @@ function libCallModule(fn: IrLibFn, args: IrExpr[], type: IrType): IrModule {
     irVersion: 13,
     sourceFile: loc.file,
     entry: "__main",
-    functions: [{
-      name: "__main",
-      params: [],
-      returnType: VOID,
-      locals: [],
-      body: [{
-        kind: "exprStmt",
-        expr: { kind: "libCall", fn, args, type, loc },
+    functions: [
+      {
+        name: "__main",
+        params: [],
+        returnType: VOID,
+        locals: [],
+        body: [
+          {
+            kind: "exprStmt",
+            expr: { kind: "libCall", fn, args, type, loc },
+            loc,
+          },
+        ],
         loc,
-      }],
-      loc,
-    }],
+      },
+    ],
   };
 }
 

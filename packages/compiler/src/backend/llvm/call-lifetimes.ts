@@ -1,4 +1,10 @@
-import { isRefCounted, type IrExpr, type IrFunction, type IrLocal, type IrStmt } from "../../ir/ir.js";
+import {
+  isRefCounted,
+  type IrExpr,
+  type IrFunction,
+  type IrLocal,
+  type IrStmt,
+} from "../../ir/ir.js";
 import { everyExprChild, everyStmtChild } from "../../ir/traverse.js";
 import { borrowsStringInputs } from "./string-lifetimes.js";
 import { borrowsMapReadInputs } from "./map-read-lifetimes.js";
@@ -40,8 +46,15 @@ export interface CallLifetimes {
 function eligible(local: IrLocal, parameter = false): boolean {
   // Source parameters are writable bindings even when the body never
   // assigns them. Actual writes are rejected by collectUses below.
-  return (parameter || !local.mutable) && !local.boxed && !local.tdz &&
-    (local.type.kind === "union" || local.type.kind === "object" || local.type.kind === "record" || local.type.kind === "string");
+  return (
+    (parameter || !local.mutable) &&
+    !local.boxed &&
+    !local.tdz &&
+    (local.type.kind === "union" ||
+      local.type.kind === "object" ||
+      local.type.kind === "record" ||
+      local.type.kind === "string")
+  );
 }
 
 /** Read each function once. A whole-value use is unsafe unless it is an
@@ -53,25 +66,36 @@ function eligible(local: IrLocal, parameter = false): boolean {
  * payloads. The enclosing union box itself must never be retained, released,
  * stored, returned, captured, or passed to arbitrary runtime code. */
 function collectUses(fn: IrFunction): Uses {
-  const uses: Uses = { invalid: new Set(), written: new Set(), declarations: new Map(), forwards: new Map() };
+  const uses: Uses = {
+    invalid: new Set(),
+    written: new Set(),
+    declarations: new Map(),
+    forwards: new Map(),
+  };
   const stringInput = (value: IrExpr): boolean => {
     if (value.kind === "varRef" && value.type.kind === "string") return true;
     return expr(value);
   };
   function expr(node: IrExpr): boolean {
     switch (node.kind) {
-      case "strEq": case "strCmp": case "strConcat":
+      case "strEq":
+      case "strCmp":
+      case "strConcat":
         return stringInput(node.left) && stringInput(node.right);
       case "strIntrinsic":
-        if (borrowsStringInputs(node.method)) return stringInput(node.receiver) && node.args.every(stringInput);
+        if (borrowsStringInputs(node.method))
+          return stringInput(node.receiver) && node.args.every(stringInput);
         break;
-      case "mapIntrinsic": case "setIntrinsic":
+      case "mapIntrinsic":
+      case "setIntrinsic":
         if (borrowsMapReadInputs(node)) return expr(node.receiver) && node.args.every(stringInput);
         break;
-      case "unionNarrow": case "unionIsTag":
+      case "unionNarrow":
+      case "unionIsTag":
         if (node.value.kind === "varRef") return true;
         break;
-      case "fieldGet": case "recordGet":
+      case "fieldGet":
+      case "recordGet":
         if (node.obj.kind === "varRef") return true;
         break;
       case "call":
@@ -81,18 +105,20 @@ function collectUses(fn: IrFunction): Uses {
             return;
           }
           let forwards = uses.forwards.get(arg.localId);
-          if (!forwards) uses.forwards.set(arg.localId, forwards = []);
+          if (!forwards) uses.forwards.set(arg.localId, (forwards = []));
           forwards.push({ callee: node.callee, index });
         });
         return true;
-      case "assignExpr": case "incDec":
+      case "assignExpr":
+      case "incDec":
         uses.written.add(node.localId);
         uses.invalid.add(node.localId);
         break;
       case "varRef":
         uses.invalid.add(node.localId);
         break;
-      case "closure": case "classRef":
+      case "closure":
+      case "classRef":
         for (const id of node.captures ?? []) {
           uses.invalid.add(id);
           uses.written.add(id);
@@ -106,7 +132,9 @@ function collectUses(fn: IrFunction): Uses {
       case "varDecl":
         uses.declarations.set(node.localId, (uses.declarations.get(node.localId) ?? 0) + 1);
         break;
-      case "assign": case "forOf": case "rethrow":
+      case "assign":
+      case "forOf":
+      case "rethrow":
         uses.invalid.add(node.localId);
         uses.written.add(node.localId);
         break;
@@ -140,28 +168,49 @@ export function analyzeCallLifetimes(functions: ReadonlyMap<string, IrFunction>)
   const usesByFunction = new Map<string, Uses>();
   const nodes = new Map<string, Parameter[]>();
   const unsafe: Parameter[] = [];
-  const result: CallLifetimes = { parameters: new Map(), locals: new Map(), borrowed: new Map(), bindings: new Map() };
+  const result: CallLifetimes = {
+    parameters: new Map(),
+    locals: new Map(),
+    borrowed: new Map(),
+    bindings: new Map(),
+  };
   for (const fn of functions.values()) {
-    if (fn.async || fn.generator || fn.captures !== undefined || fn.classCaptures !== undefined) continue;
+    if (fn.async || fn.generator || fn.captures !== undefined || fn.classCaptures !== undefined)
+      continue;
     const uses = collectUses(fn);
     usesByFunction.set(fn.name, uses);
     const locals = new Map(fn.locals.map((local) => [local.id, local]));
     const borrowed = new Set<number>();
-    const stable = (local: IrLocal): boolean => !local.boxed && !local.tdz && !uses.written.has(local.id);
+    const stable = (local: IrLocal): boolean =>
+      !local.boxed && !local.tdz && !uses.written.has(local.id);
     fn.params.forEach((param, index) => {
       const local = locals.get(param.localId);
-      if (local && isRefCounted(param.type) && stable(local) && !uses.declarations.has(local.id)) borrowed.add(index);
+      if (local && isRefCounted(param.type) && stable(local) && !uses.declarations.has(local.id))
+        borrowed.add(index);
     });
     if (borrowed.size > 0) result.borrowed.set(fn.name, borrowed);
-    result.bindings.set(fn.name, new Set(fn.locals.filter((local) =>
-      stable(local) && uses.declarations.get(local.id) === 1).map((local) => local.id)));
-    nodes.set(fn.name, fn.params.map((param) => {
-      const local = locals.get(param.localId);
-      const safe = local !== undefined && eligible(local, true) && !uses.invalid.has(param.localId) && !uses.declarations.has(param.localId);
-      const node: Parameter = { safe, callers: new Set() };
-      if (!safe) unsafe.push(node);
-      return node;
-    }));
+    result.bindings.set(
+      fn.name,
+      new Set(
+        fn.locals
+          .filter((local) => stable(local) && uses.declarations.get(local.id) === 1)
+          .map((local) => local.id),
+      ),
+    );
+    nodes.set(
+      fn.name,
+      fn.params.map((param) => {
+        const local = locals.get(param.localId);
+        const safe =
+          local !== undefined &&
+          eligible(local, true) &&
+          !uses.invalid.has(param.localId) &&
+          !uses.declarations.has(param.localId);
+        const node: Parameter = { safe, callers: new Set() };
+        if (!safe) unsafe.push(node);
+        return node;
+      }),
+    );
   }
   for (const fn of functions.values()) {
     const params = nodes.get(fn.name);
@@ -190,7 +239,9 @@ export function analyzeCallLifetimes(functions: ReadonlyMap<string, IrFunction>)
   }
   for (const [name, params] of nodes) {
     const safe = new Set<number>();
-    params.forEach((param, index) => { if (param.safe) safe.add(index); });
+    params.forEach((param, index) => {
+      if (param.safe) safe.add(index);
+    });
     if (safe.size > 0) result.parameters.set(name, safe);
   }
   for (const fn of functions.values()) {
@@ -199,9 +250,16 @@ export function analyzeCallLifetimes(functions: ReadonlyMap<string, IrFunction>)
     const params = new Set(fn.params.map((param) => param.localId));
     const safe = new Set<string>();
     for (const local of fn.locals) {
-      if (params.has(local.id) || !eligible(local) || uses.invalid.has(local.id) || uses.declarations.get(local.id) !== 1) continue;
+      if (
+        params.has(local.id) ||
+        !eligible(local) ||
+        uses.invalid.has(local.id) ||
+        uses.declarations.get(local.id) !== 1
+      )
+        continue;
       const forwards = uses.forwards.get(local.id) ?? [];
-      if (forwards.every((use) => result.parameters.get(use.callee)?.has(use.index) === true)) safe.add(local.id);
+      if (forwards.every((use) => result.parameters.get(use.callee)?.has(use.index) === true))
+        safe.add(local.id);
     }
     result.locals.set(fn.name, safe);
   }

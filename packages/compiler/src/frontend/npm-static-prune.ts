@@ -21,7 +21,7 @@ function packageJson(path: string): Record<string, unknown> | null {
   try {
     const parsed: unknown = JSON.parse(source);
     return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
+      ? (parsed as Record<string, unknown>)
       : null;
   } catch {
     return null;
@@ -33,7 +33,7 @@ function packageJson(path: string): Record<string, unknown> | null {
 function sideEffectPattern(pattern: string): RegExp {
   // Unrecognized glob syntax must retain the module rather than silently
   // treating a possible side-effect match as a literal path.
-  if (/[\[\]\\!@+()]/.test(pattern)) throw new Error("unsupported sideEffects glob");
+  if (/[[\]\\!@+()]/.test(pattern)) throw new Error("unsupported sideEffects glob");
   pattern = pattern.replace(/^\.\//, "");
   if (!pattern.includes("/")) pattern = "**/" + pattern;
   let source = "^";
@@ -41,8 +41,10 @@ function sideEffectPattern(pattern: string): RegExp {
     const ch = pattern[i]!;
     if (ch === "*" && pattern[i + 1] === "*") {
       i++;
-      if (pattern[i + 1] === "/") { source += "(?:.*/)?"; i++; }
-      else source += ".*";
+      if (pattern[i + 1] === "/") {
+        source += "(?:.*/)?";
+        i++;
+      } else source += ".*";
     } else if (ch === "*") source += "[^/]*";
     else if (ch === "?") source += "[^/]";
     else if (ch === "{") source += "(?:";
@@ -75,7 +77,8 @@ function pureExternalPackage(path: string, visiting = new Set<string>()): boolea
   if (visiting.has(path)) return true;
   const json = packageJson(path);
   const value = json?.["sideEffects"];
-  if (json === null || !(value === false || Array.isArray(value) && value.length === 0)) return false;
+  if (json === null || !(value === false || (Array.isArray(value) && value.length === 0)))
+    return false;
   visiting.add(path);
   for (const field of ["dependencies", "optionalDependencies", "peerDependencies"]) {
     const dependencies = json[field];
@@ -99,7 +102,11 @@ export function planNpmStaticReexports(
   entry: ts.SourceFile,
   files: readonly ts.SourceFile[],
   extraRoots: readonly string[],
-  resolveEdge: (from: ts.SourceFile, spec: string, resolutionKind?: "import" | "require") => ts.SourceFile | null,
+  resolveEdge: (
+    from: ts.SourceFile,
+    spec: string,
+    resolutionKind?: "import" | "require",
+  ) => ts.SourceFile | null,
 ): ts.SourceFile[] {
   const available = new Set(files);
   const demanded = new Map<ts.SourceFile, Demand>();
@@ -134,10 +141,18 @@ export function planNpmStaticReexports(
     const json = path === null ? null : packageJson(path);
     const value = json?.["sideEffects"];
     if (value === false) return true;
-    if (!Array.isArray(value) || !value.every((pattern) => typeof pattern === "string") || path === null) return false;
+    if (
+      !Array.isArray(value) ||
+      !value.every((pattern) => typeof pattern === "string") ||
+      path === null
+    )
+      return false;
     const name = relative(dirname(path), sf.fileName).replaceAll("\\", "/");
-    try { return !value.some((pattern: string) => sideEffectPattern(pattern).test(name)); }
-    catch { return false; }
+    try {
+      return !value.some((pattern: string) => sideEffectPattern(pattern).test(name));
+    } catch {
+      return false;
+    }
   };
   // Check the actual imported closure: metadata for one file never vouches
   // for its side-effectful descendants, even across a package or a cycle.
@@ -151,22 +166,36 @@ export function planNpmStaticReexports(
       visited.add(sf);
       const edges: { spec: string; kind?: "import" | "require" }[] = [];
       for (const stmt of sf.statements) {
-        if (ts.isImportDeclaration(stmt) && stmt.importClause?.phaseModifier !== ts.SyntaxKind.TypeKeyword && ts.isStringLiteral(stmt.moduleSpecifier)) edges.push({ spec: stmt.moduleSpecifier.text });
-        else if (ts.isExportDeclaration(stmt) && !stmt.isTypeOnly && stmt.moduleSpecifier && ts.isStringLiteral(stmt.moduleSpecifier)) edges.push({ spec: stmt.moduleSpecifier.text });
+        if (
+          ts.isImportDeclaration(stmt) &&
+          stmt.importClause?.phaseModifier !== ts.SyntaxKind.TypeKeyword &&
+          ts.isStringLiteral(stmt.moduleSpecifier)
+        )
+          edges.push({ spec: stmt.moduleSpecifier.text });
+        else if (
+          ts.isExportDeclaration(stmt) &&
+          !stmt.isTypeOnly &&
+          stmt.moduleSpecifier &&
+          ts.isStringLiteral(stmt.moduleSpecifier)
+        )
+          edges.push({ spec: stmt.moduleSpecifier.text });
       }
       ts.walkPreorder(sf, (node) => {
         if (!ts.isCallExpression(node) || node.arguments.length !== 1) return;
         const arg = node.arguments[0];
         if (!arg || !ts.isStringLiteralLike(arg)) return;
-        if (node.expression.kind === ts.SyntaxKind.ImportKeyword) edges.push({ spec: arg.text, kind: "import" });
-        else if (ts.isIdentifier(node.expression) && node.expression.text === "require") edges.push({ spec: arg.text, kind: "require" });
+        if (node.expression.kind === ts.SyntaxKind.ImportKeyword)
+          edges.push({ spec: arg.text, kind: "import" });
+        else if (ts.isIdentifier(node.expression) && node.expression.text === "require")
+          edges.push({ spec: arg.text, kind: "require" });
       });
       return edges.every((edge) => {
         const dep = resolveEdge(sf, edge.spec, edge.kind);
         if (dep !== null) return visit(dep);
         const resolved = resolveBareModule(sf.fileName, edge.spec, "js-only");
         const pkg = resolved === null ? null : npmPackageNameOf(resolved.typesFile);
-        const root = pkg === null || resolved === null ? null : packageRootJsonPath(resolved.typesFile, pkg);
+        const root =
+          pkg === null || resolved === null ? null : packageRootJsonPath(resolved.typesFile, pkg);
         return root !== null && pureExternalPackage(root);
       });
     };
@@ -175,8 +204,13 @@ export function planNpmStaticReexports(
     else pureMemo.set(root, false);
     return pure;
   };
-  const canPrune = (sf: ts.SourceFile, stmt: ts.ExportDeclaration, dep: ts.SourceFile | null): boolean => {
-    if (dep === null || stmt.exportClause === undefined || !ts.isNamespaceExport(stmt.exportClause)) return false;
+  const canPrune = (
+    sf: ts.SourceFile,
+    stmt: ts.ExportDeclaration,
+    dep: ts.SourceFile | null,
+  ): boolean => {
+    if (dep === null || stmt.exportClause === undefined || !ts.isNamespaceExport(stmt.exportClause))
+      return false;
     const pkg = npmStaticPackageOfPath(sf.fileName);
     if (pkg === null || npmStaticPackageOfPath(dep.fileName) !== pkg) return false;
     if (nearestPackageType(sf.fileName) !== "module") return false;
@@ -195,10 +229,10 @@ export function planNpmStaticReexports(
         const dep = resolveEdge(sf, stmt.moduleSpecifier.text);
         if (
           clause === undefined ||
-          (clause.namedBindings !== undefined && (
-            ts.isNamespaceImport(clause.namedBindings) ||
-            ts.isNamedImports(clause.namedBindings) && clause.namedBindings.elements.length === 0
-          ))
+          (clause.namedBindings !== undefined &&
+            (ts.isNamespaceImport(clause.namedBindings) ||
+              (ts.isNamedImports(clause.namedBindings) &&
+                clause.namedBindings.elements.length === 0)))
         ) {
           request(dep, null);
         } else {
@@ -212,10 +246,14 @@ export function planNpmStaticReexports(
       } else if (ts.isExportDeclaration(stmt)) {
         if (
           stmt.isTypeOnly ||
-          (stmt.exportClause !== undefined && ts.isNamedExports(stmt.exportClause) &&
-            stmt.exportClause.elements.length > 0 && stmt.exportClause.elements.every((element) => element.isTypeOnly)) ||
-          stmt.moduleSpecifier === undefined || !ts.isStringLiteral(stmt.moduleSpecifier)
-        ) continue;
+          (stmt.exportClause !== undefined &&
+            ts.isNamedExports(stmt.exportClause) &&
+            stmt.exportClause.elements.length > 0 &&
+            stmt.exportClause.elements.every((element) => element.isTypeOnly)) ||
+          stmt.moduleSpecifier === undefined ||
+          !ts.isStringLiteral(stmt.moduleSpecifier)
+        )
+          continue;
         const dep = resolveEdge(sf, stmt.moduleSpecifier.text);
         if (canPrune(sf, stmt, dep)) continue;
         request(dep, null);
@@ -225,9 +263,18 @@ export function planNpmStaticReexports(
       if (!ts.isCallExpression(node) || node.arguments.length !== 1) return undefined;
       const arg = node.arguments[0];
       if (arg === undefined || !ts.isStringLiteralLike(arg)) return undefined;
-      if (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
-          ts.isIdentifier(node.expression) && node.expression.text === "require") {
-        request(resolveEdge(sf, arg.text, node.expression.kind === ts.SyntaxKind.ImportKeyword ? "import" : "require"), null);
+      if (
+        node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+        (ts.isIdentifier(node.expression) && node.expression.text === "require")
+      ) {
+        request(
+          resolveEdge(
+            sf,
+            arg.text,
+            node.expression.kind === ts.SyntaxKind.ImportKeyword ? "import" : "require",
+          ),
+          null,
+        );
       }
       return undefined;
     });
@@ -236,7 +283,12 @@ export function planNpmStaticReexports(
   const pruned = new Set<ts.ExportDeclaration>();
   for (const sf of demanded.keys()) {
     for (const stmt of sf.statements) {
-      if (!ts.isExportDeclaration(stmt) || stmt.moduleSpecifier === undefined || !ts.isStringLiteral(stmt.moduleSpecifier)) continue;
+      if (
+        !ts.isExportDeclaration(stmt) ||
+        stmt.moduleSpecifier === undefined ||
+        !ts.isStringLiteral(stmt.moduleSpecifier)
+      )
+        continue;
       if (canPrune(sf, stmt, resolveEdge(sf, stmt.moduleSpecifier.text))) pruned.add(stmt);
     }
   }

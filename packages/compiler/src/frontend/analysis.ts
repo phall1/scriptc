@@ -5,7 +5,12 @@ import type { FrontendFactory } from "./pipeline.js";
 
 /** Analysis without codegen: how much of the program compiles statically.
  * Unlike compile(), lowering diagnostics are data here, not failure. */
-export function analyzeWithFrontend(entryPath: string, opts: AnalyzeOptions, buildPlatform: string, createFrontend: FrontendFactory): AnalyzeResult {
+export function analyzeWithFrontend(
+  entryPath: string,
+  opts: AnalyzeOptions,
+  buildPlatform: string,
+  createFrontend: FrontendFactory,
+): AnalyzeResult {
   let ffi: FfiProfile | null = null;
   if (opts.ffiProfilePath !== undefined) {
     const loaded = loadFfiProfile(opts.ffiProfilePath);
@@ -14,7 +19,12 @@ export function analyzeWithFrontend(entryPath: string, opts: AnalyzeOptions, bui
         coverage: {
           file: entryPath,
           dynamic: opts.dynamic ?? false,
-          stats: { statementsTotal: 0, statementsFailed: 0, statementsIsland: 0, functionsSkipped: 0 },
+          stats: {
+            statementsTotal: 0,
+            statementsFailed: 0,
+            statementsIsland: 0,
+            functionsSkipped: 0,
+          },
           diagnostics: loaded.diagnostics,
           preflightFailed: true,
         },
@@ -25,7 +35,12 @@ export function analyzeWithFrontend(entryPath: string, opts: AnalyzeOptions, bui
   }
   const fe = createFrontend(entryPath, opts.npmStatic, opts.externalTypes);
   try {
-    const emptyStats = { statementsTotal: 0, statementsFailed: 0, statementsIsland: 0, functionsSkipped: 0 };
+    const emptyStats = {
+      statementsTotal: 0,
+      statementsFailed: 0,
+      statementsIsland: 0,
+      functionsSkipped: 0,
+    };
 
     const preflight = fe.preflight;
     // Import-FORM fences don't stop the analysis: the module graph is still

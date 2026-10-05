@@ -10,10 +10,17 @@ import { type IrModule } from "../src/ir/ir.js";
 async function lower(source: string): Promise<IrModule> {
   const dir = await mkdtemp(join(tmpdir(), "scriptc-input-lifetimes-"));
   try {
-    const entry = join(dir, "main.ts"), output = join(dir, "main.ir.json");
+    const entry = join(dir, "main.ts"),
+      output = join(dir, "main.ir.json");
     await writeFile(entry, source);
-    const result = await compile(entry, { outDir: dir, outPath: output, outputKind: "ir", dynamic: false });
-    if (!result.ok) throw new Error(result.diagnostics.map((item) => `${item.code}: ${item.message}`).join("\n"));
+    const result = await compile(entry, {
+      outDir: dir,
+      outPath: output,
+      outputKind: "ir",
+      dynamic: false,
+    });
+    if (!result.ok)
+      throw new Error(result.diagnostics.map((item) => `${item.code}: ${item.message}`).join("\n"));
     const module = deserializeModule(await readFile(output, "utf8"));
     expect(validateModule(module)).toEqual([]);
     return module;

@@ -1,11 +1,30 @@
-import { F64, isRefCounted, type IrExpr, type IrFunction, type IrLocal, type IrModule, type IrRecordShape, type IrStmt } from "./ir.js";
-import { everyExpr, everyExprChild, everyStmtChild, everyStmtList, transformStmtList } from "./traverse.js";
+import {
+  F64,
+  isRefCounted,
+  type IrExpr,
+  type IrFunction,
+  type IrLocal,
+  type IrModule,
+  type IrRecordShape,
+  type IrStmt,
+} from "./ir.js";
+import {
+  everyExpr,
+  everyExprChild,
+  everyStmtChild,
+  everyStmtList,
+  transformStmtList,
+} from "./traverse.js";
 
 const MAX_FIELDS = 4;
 const MAX_CALLEE_NODES = 256;
 const MAX_INLINE_NODES = 1024;
 
-interface Producer { fn: IrFunction; shape: IrRecordShape; size: number }
+interface Producer {
+  fn: IrFunction;
+  shape: IrRecordShape;
+  size: number;
+}
 
 /** Splitting an expression frame must not shorten a reference temporary's
  * lifetime across later arguments, fields, or the original call itself. */
@@ -14,22 +33,45 @@ function scalarTemporaries(value: IrExpr): boolean {
 }
 
 function producer(fn: IrFunction, shapes: ReadonlyMap<string, IrRecordShape>): Producer | null {
-  if (fn.async || fn.generator || fn.captures?.length || fn.classCaptures?.length || fn.returnType.kind !== "record") return null;
+  if (
+    fn.async ||
+    fn.generator ||
+    fn.captures?.length ||
+    fn.classCaptures?.length ||
+    fn.returnType.kind !== "record"
+  )
+    return null;
   const shape = shapes.get(fn.returnType.shapeId);
-  if (!shape || shape.tuple || shape.indexValue || shape.fields.length === 0 || shape.fields.length > MAX_FIELDS ||
-      shape.fields.some((f) => f.type.kind !== "f64")) return null;
+  if (
+    !shape ||
+    shape.tuple ||
+    shape.indexValue ||
+    shape.fields.length === 0 ||
+    shape.fields.length > MAX_FIELDS ||
+    shape.fields.some((f) => f.type.kind !== "f64")
+  )
+    return null;
   // Scalar parameters/locals need no ownership cleanup across the inlined
   // return. Closures, suspension and finally completions remain out of scope.
-  if (fn.locals.some((l) => l.boxed || l.tdz || (l.type.kind !== "f64" && l.type.kind !== "bool")) ||
-      fn.params.some((p) => p.type.kind !== "f64" && p.type.kind !== "bool")) return null;
+  if (
+    fn.locals.some((l) => l.boxed || l.tdz || (l.type.kind !== "f64" && l.type.kind !== "bool")) ||
+    fn.params.some((p) => p.type.kind !== "f64" && p.type.kind !== "bool")
+  )
+    return null;
   let size = 0;
   let returns = 0;
   const eligible = everyStmtList(fn.body, {
     expr: (expr) => {
       if (++size > MAX_CALLEE_NODES) return false;
       switch (expr.kind) {
-        case "closure": case "selfRef": case "awaitExpr": case "awaitUnionExpr": case "yieldExpr": return false;
-        default: return true;
+        case "closure":
+        case "selfRef":
+        case "awaitExpr":
+        case "awaitUnionExpr":
+        case "yieldExpr":
+          return false;
+        default:
+          return true;
       }
     },
     stmt: (stmt) => {
@@ -37,9 +79,20 @@ function producer(fn: IrFunction, shapes: ReadonlyMap<string, IrRecordShape>): P
       if (stmt.kind !== "return") return true;
       returns++;
       const value = stmt.value;
-      return value?.kind === "recordLit" && value.type.kind === "record" && value.type.shapeId === shape.id &&
-        value.fields.length === shape.fields.length && value.fields.every((f) =>
-          !f.drop && !f.overflow && f.value.type.kind === "f64" && scalarTemporaries(f.value) && shape.fields.some((sf) => sf.name === f.name));
+      return (
+        value?.kind === "recordLit" &&
+        value.type.kind === "record" &&
+        value.type.shapeId === shape.id &&
+        value.fields.length === shape.fields.length &&
+        value.fields.every(
+          (f) =>
+            !f.drop &&
+            !f.overflow &&
+            f.value.type.kind === "f64" &&
+            scalarTemporaries(f.value) &&
+            shape.fields.some((sf) => sf.name === f.name),
+        )
+      );
     },
   });
   return eligible && returns > 0 ? { fn, shape, size } : null;
@@ -52,13 +105,20 @@ function fieldOnlyUses(fn: IrFunction, localId: string, shape: IrRecordShape): b
   let declarations = 0;
   function expr(node: IrExpr): boolean {
     if (node.kind === "recordGet" && node.obj.kind === "varRef" && node.obj.localId === localId) {
-      return node.shapeId === shape.id && node.type.kind === "f64" && shape.fields.some((f) => f.name === node.field);
+      return (
+        node.shapeId === shape.id &&
+        node.type.kind === "f64" &&
+        shape.fields.some((f) => f.name === node.field)
+      );
     }
     switch (node.kind) {
-      case "varRef": case "incDec": case "assignExpr":
+      case "varRef":
+      case "incDec":
+      case "assignExpr":
         if (node.localId === localId) return false;
         break;
-      case "closure": case "classRef":
+      case "closure":
+      case "classRef":
         if (node.captures?.includes(localId)) return false;
         break;
     }
@@ -69,7 +129,9 @@ function fieldOnlyUses(fn: IrFunction, localId: string, shape: IrRecordShape): b
       case "varDecl":
         if (node.localId === localId && ++declarations !== 1) return false;
         break;
-      case "assign": case "forOf": case "rethrow":
+      case "assign":
+      case "forOf":
+      case "rethrow":
         if (node.localId === localId) return false;
         break;
     }
@@ -84,7 +146,12 @@ function collectLabels(body: IrStmt[], used: Set<string>): void {
     expr: () => true,
     stmt: (node) => {
       switch (node.kind) {
-        case "while": case "doWhile": case "for": case "forOf": case "switch": case "block":
+        case "while":
+        case "doWhile":
+        case "for":
+        case "forOf":
+        case "switch":
+        case "block":
           for (const label of node.labels ?? []) used.add(label);
           break;
       }
@@ -121,82 +188,158 @@ export function scalarizeNumericRecords(mod: IrModule): IrModule {
     // A header accepts one statement, not an inlined block. Local ids are
     // unique within a function and fieldOnlyUses proves one declaration.
     const loopHeaders = new Set<string>();
-    everyStmtList(fn.body, { expr: () => true, stmt: (node) => {
-      if (node.kind === "for") {
-        if (node.init?.kind === "varDecl") loopHeaders.add(node.init.localId);
-        if (node.update?.kind === "varDecl") loopHeaders.add(node.update.localId);
-      }
-      return true;
-    } });
+    everyStmtList(fn.body, {
+      expr: () => true,
+      stmt: (node) => {
+        if (node.kind === "for") {
+          if (node.init?.kind === "varDecl") loopHeaders.add(node.init.localId);
+          if (node.update?.kind === "varDecl") loopHeaders.add(node.update.localId);
+        }
+        return true;
+      },
+    });
     let next = 0;
     const fresh = (): string => {
       let id: string;
-      do { id = `%scalar.${next++}`; } while (used.has(id));
+      do {
+        id = `%scalar.${next++}`;
+      } while (used.has(id));
       used.add(id);
       return id;
     };
     const added: IrLocal[] = [];
     const replacements = new Map<string, Replacement>();
     let budget = MAX_INLINE_NODES;
-    everyStmtList(fn.body, { expr: () => true, stmt: (decl) => {
-      if (decl.kind !== "varDecl" || loopHeaders.has(decl.localId)) return true;
-      const local = locals.get(decl.localId);
-      const call = decl.init;
-      if (!local || local.mutable || local.boxed || local.tdz || local.type.kind !== "record" || call?.kind !== "call") return true;
-      const p = producers.get(call.callee);
-      if (!p || p.fn.name === fn.name || p.size > budget || p.shape.id !== local.type.shapeId ||
-          call.args.length !== p.fn.params.length || !call.args.every(scalarTemporaries) || !fieldOnlyUses(fn, local.id, p.shape)) return true;
-      budget -= p.size;
-      for (const l of p.fn.locals) used.add(l.id);
-      collectLabels(p.fn.body, used);
-      const fields = new Map(p.shape.fields.map((f) => [f.name, fresh()]));
-      const renamed = new Map(p.fn.locals.map((l) => [l.id, fresh()]));
-      const labels = new Map<string, string>();
-      const exit = fresh();
-      const label = (name: string): string => {
-        if (!labels.has(name)) labels.set(name, fresh());
-        return labels.get(name)!;
-      };
-      for (const f of p.shape.fields) added.push({ id: fields.get(f.name)!, name: `${local.name}.${f.name}`, type: F64, mutable: true });
-      for (const l of p.fn.locals) added.push({ ...l!, id: renamed.get(l.id)! });
-      const body = transformStmtList(p.fn.body, {
-        expr: (expr) => {
-          switch (expr.kind) {
-            case "varRef": return { ...expr, localId: renamed.get(expr.localId) ?? expr.localId };
-            case "incDec": return { ...expr, localId: renamed.get(expr.localId) ?? expr.localId };
-            case "assignExpr": return { ...expr, localId: renamed.get(expr.localId) ?? expr.localId };
-            default: return expr;
-          }
-        },
-        stmt: (stmt): IrStmt => {
-          switch (stmt.kind) {
-            case "return": {
-              const literal = stmt.value;
-              if (literal?.kind !== "recordLit") return stmt; // producer proved this shape
-              const assignments: IrStmt[] = literal.fields.map((f): IrStmt => ({ kind: "assign", localId: fields.get(f.name)!, value: f.value, loc: stmt.loc }));
-              return { kind: "block", body: [...assignments, { kind: "break", label: exit, loc: stmt.loc }], loc: stmt.loc };
+    everyStmtList(fn.body, {
+      expr: () => true,
+      stmt: (decl) => {
+        if (decl.kind !== "varDecl" || loopHeaders.has(decl.localId)) return true;
+        const local = locals.get(decl.localId);
+        const call = decl.init;
+        if (
+          !local ||
+          local.mutable ||
+          local.boxed ||
+          local.tdz ||
+          local.type.kind !== "record" ||
+          call?.kind !== "call"
+        )
+          return true;
+        const p = producers.get(call.callee);
+        if (
+          !p ||
+          p.fn.name === fn.name ||
+          p.size > budget ||
+          p.shape.id !== local.type.shapeId ||
+          call.args.length !== p.fn.params.length ||
+          !call.args.every(scalarTemporaries) ||
+          !fieldOnlyUses(fn, local.id, p.shape)
+        )
+          return true;
+        budget -= p.size;
+        for (const l of p.fn.locals) used.add(l.id);
+        collectLabels(p.fn.body, used);
+        const fields = new Map(p.shape.fields.map((f) => [f.name, fresh()]));
+        const renamed = new Map(p.fn.locals.map((l) => [l.id, fresh()]));
+        const labels = new Map<string, string>();
+        const exit = fresh();
+        const label = (name: string): string => {
+          if (!labels.has(name)) labels.set(name, fresh());
+          return labels.get(name)!;
+        };
+        for (const f of p.shape.fields)
+          added.push({
+            id: fields.get(f.name)!,
+            name: `${local.name}.${f.name}`,
+            type: F64,
+            mutable: true,
+          });
+        for (const l of p.fn.locals) added.push({ ...l!, id: renamed.get(l.id)! });
+        const body = transformStmtList(p.fn.body, {
+          expr: (expr) => {
+            switch (expr.kind) {
+              case "varRef":
+                return { ...expr, localId: renamed.get(expr.localId) ?? expr.localId };
+              case "incDec":
+                return { ...expr, localId: renamed.get(expr.localId) ?? expr.localId };
+              case "assignExpr":
+                return { ...expr, localId: renamed.get(expr.localId) ?? expr.localId };
+              default:
+                return expr;
             }
-            case "varDecl": return { ...stmt, localId: renamed.get(stmt.localId) ?? stmt.localId };
-            case "assign": return { ...stmt, localId: renamed.get(stmt.localId) ?? stmt.localId };
-            case "forOf": return stmt.labels
-              ? { ...stmt, localId: renamed.get(stmt.localId) ?? stmt.localId, labels: stmt.labels.map(label) }
-              : { ...stmt, localId: renamed.get(stmt.localId) ?? stmt.localId };
-            case "break": return stmt.label && stmt.label !== exit ? { ...stmt, label: label(stmt.label) } : stmt;
-            case "continue": return stmt.label ? { ...stmt, label: label(stmt.label) } : stmt;
-            case "while": return stmt.labels ? { ...stmt, labels: stmt.labels.map(label) } : stmt;
-            case "doWhile": return stmt.labels ? { ...stmt, labels: stmt.labels.map(label) } : stmt;
-            case "for": return stmt.labels ? { ...stmt, labels: stmt.labels.map(label) } : stmt;
-            case "switch": return stmt.labels ? { ...stmt, labels: stmt.labels.map(label) } : stmt;
-            case "block": return stmt.labels ? { ...stmt, labels: stmt.labels.map(label) } : stmt;
-            default: return stmt;
-          }
-        },
-      });
-      const parameters: IrStmt[] = p.fn.params.map((param, i): IrStmt => ({ kind: "varDecl", localId: renamed.get(param.localId)!, init: call.args[i]!, loc: decl.loc }));
-      const declarations: IrStmt[] = [...fields.values()].map((id): IrStmt => ({ kind: "varDecl", localId: id!, init: null, loc: decl.loc }));
-      replacements.set(local.id, { fields, body: [...declarations, { kind: "block", labels: [exit], body: [...parameters, ...body], loc: decl.loc }] });
-      return true;
-    } });
+          },
+          stmt: (stmt): IrStmt => {
+            switch (stmt.kind) {
+              case "return": {
+                const literal = stmt.value;
+                if (literal?.kind !== "recordLit") return stmt; // producer proved this shape
+                const assignments: IrStmt[] = literal.fields.map((f): IrStmt => ({
+                  kind: "assign",
+                  localId: fields.get(f.name)!,
+                  value: f.value,
+                  loc: stmt.loc,
+                }));
+                return {
+                  kind: "block",
+                  body: [...assignments, { kind: "break", label: exit, loc: stmt.loc }],
+                  loc: stmt.loc,
+                };
+              }
+              case "varDecl":
+                return { ...stmt, localId: renamed.get(stmt.localId) ?? stmt.localId };
+              case "assign":
+                return { ...stmt, localId: renamed.get(stmt.localId) ?? stmt.localId };
+              case "forOf":
+                return stmt.labels
+                  ? {
+                      ...stmt,
+                      localId: renamed.get(stmt.localId) ?? stmt.localId,
+                      labels: stmt.labels.map(label),
+                    }
+                  : { ...stmt, localId: renamed.get(stmt.localId) ?? stmt.localId };
+              case "break":
+                return stmt.label && stmt.label !== exit
+                  ? { ...stmt, label: label(stmt.label) }
+                  : stmt;
+              case "continue":
+                return stmt.label ? { ...stmt, label: label(stmt.label) } : stmt;
+              case "while":
+                return stmt.labels ? { ...stmt, labels: stmt.labels.map(label) } : stmt;
+              case "doWhile":
+                return stmt.labels ? { ...stmt, labels: stmt.labels.map(label) } : stmt;
+              case "for":
+                return stmt.labels ? { ...stmt, labels: stmt.labels.map(label) } : stmt;
+              case "switch":
+                return stmt.labels ? { ...stmt, labels: stmt.labels.map(label) } : stmt;
+              case "block":
+                return stmt.labels ? { ...stmt, labels: stmt.labels.map(label) } : stmt;
+              default:
+                return stmt;
+            }
+          },
+        });
+        const parameters: IrStmt[] = p.fn.params.map((param, i): IrStmt => ({
+          kind: "varDecl",
+          localId: renamed.get(param.localId)!,
+          init: call.args[i]!,
+          loc: decl.loc,
+        }));
+        const declarations: IrStmt[] = [...fields.values()].map((id): IrStmt => ({
+          kind: "varDecl",
+          localId: id!,
+          init: null,
+          loc: decl.loc,
+        }));
+        replacements.set(local.id, {
+          fields,
+          body: [
+            ...declarations,
+            { kind: "block", labels: [exit], body: [...parameters, ...body], loc: decl.loc },
+          ],
+        });
+        return true;
+      },
+    });
     if (replacements.size === 0) return fn;
     changed = true;
     const body = transformStmtList(fn.body, {
@@ -212,7 +355,11 @@ export function scalarizeNumericRecords(mod: IrModule): IrModule {
         return expr;
       },
     });
-    return { ...fn!, locals: [...fn.locals.filter((l) => !replacements.has(l.id)), ...added], body };
+    return {
+      ...fn!,
+      locals: [...fn.locals.filter((l) => !replacements.has(l.id)), ...added],
+      body,
+    };
   });
   return changed ? { ...mod, functions } : mod;
 }

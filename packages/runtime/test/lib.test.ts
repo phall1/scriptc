@@ -16,11 +16,17 @@ let scratch: string;
 beforeAll(async () => {
   await mkdir(join(testDir, "build"), { recursive: true });
   await execFileAsync("clang", [
-    "-std=c11", "-O1", "-Wall", "-Wextra",
-    "-fsanitize=address", "-DSCR_RC_AUDIT",
+    "-std=c11",
+    "-O1",
+    "-Wall",
+    "-Wextra",
+    "-fsanitize=address",
+    "-DSCR_RC_AUDIT",
     ...(process.platform === "linux" ? ["-D_GNU_SOURCE"] : []),
-    "-I", join(testDir, "../src"),
-    "-o", bin,
+    "-I",
+    join(testDir, "../src"),
+    "-o",
+    bin,
     join(testDir, "test_lib.c"),
     join(testDir, "../src/scr_lib.c"),
     join(testDir, "../src/scr_url.c"),

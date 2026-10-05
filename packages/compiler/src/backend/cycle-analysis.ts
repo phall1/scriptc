@@ -18,8 +18,12 @@ export function computeTraced(mod: IrModule): { shapes: Set<string>; unions: Set
       key: `object:${c.name}`,
       fields: [
         ...c.fields,
-        ...(c.name === RUNTIME_EMITTER_CLASS ? [{ name: "<listeners>", type: funcOf([], VOID) }] : []),
-        ...(c.localCaptures !== undefined ? [{ name: "<class>", type: { kind: "classval" as const, className: c.name } }] : []),
+        ...(c.name === RUNTIME_EMITTER_CLASS
+          ? [{ name: "<listeners>", type: funcOf([], VOID) }]
+          : []),
+        ...(c.localCaptures !== undefined
+          ? [{ name: "<class>", type: { kind: "classval" as const, className: c.name } }]
+          : []),
       ],
     })),
     ...(mod.records ?? []).map((r) => ({
@@ -53,12 +57,19 @@ export function computeTraced(mod: IrModule): { shapes: Set<string>; unions: Set
     dependents: Capability[];
     remaining: number;
   }
-  const capability = (): Capability => ({ intrinsic: false, dependencies: new Set(), dependents: [], remaining: 0 });
+  const capability = (): Capability => ({
+    intrinsic: false,
+    dependencies: new Set(),
+    dependents: [],
+    remaining: 0,
+  });
   const units = new Map<string, Capability>();
   const shapes = new Map<string, Capability>();
   const unions = new Map((mod.unions ?? []).map((u) => [u.id, capability()]));
   for (const s of shapeDefs) {
-    const key = s.key.startsWith("object:") ? `object:${rootOf(s.key.slice("object:".length))}` : s.key;
+    const key = s.key.startsWith("object:")
+      ? `object:${rootOf(s.key.slice("object:".length))}`
+      : s.key;
     let unit = units.get(key);
     if (!unit) units.set(key, (unit = capability()));
     shapes.set(s.key, unit);
@@ -79,8 +90,10 @@ export function computeTraced(mod: IrModule): { shapes: Set<string>; unions: Set
       case "object":
       case "record":
       case "union": {
-        const dependency = t.kind === "union" ? unions.get(t.unionId)
-          : shapes.get(t.kind === "object" ? `object:${t.className}` : `record:${t.shapeId}`);
+        const dependency =
+          t.kind === "union"
+            ? unions.get(t.unionId)
+            : shapes.get(t.kind === "object" ? `object:${t.className}` : `record:${t.shapeId}`);
         if (dependency) unit.dependencies.add(dependency);
         break;
       }
@@ -110,7 +123,9 @@ export function computeTraced(mod: IrModule): { shapes: Set<string>; unions: Set
     }
   }
   const retained = (unit: Capability): boolean => unit.intrinsic || unit.remaining > 0;
-  const tracedShapes = new Set([...shapes].filter(([, unit]) => retained(unit)).map(([key]) => key));
+  const tracedShapes = new Set(
+    [...shapes].filter(([, unit]) => retained(unit)).map(([key]) => key),
+  );
   const tracedUnions = new Set([...unions].filter(([, unit]) => retained(unit)).map(([id]) => id));
   return { shapes: tracedShapes, unions: tracedUnions };
 }

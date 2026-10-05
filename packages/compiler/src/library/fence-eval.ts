@@ -48,7 +48,11 @@
  * covering the refused surface. The text renders as the diagnostic's
  * `note`, always prefixed with the profile's name — the tool's message
  * stays the tool's. */
-import { generateSurfaceManifest, type SurfaceEntryKind, type SurfaceManifestEntry } from "../coverage/surface-manifest.js";
+import {
+  generateSurfaceManifest,
+  type SurfaceEntryKind,
+  type SurfaceManifestEntry,
+} from "../coverage/surface-manifest.js";
 import { libFenceDiag, type ScrDiagnostic } from "../diagnostics/diagnostic.js";
 import {
   AMBIENT_SURFACE_FNS,
@@ -167,8 +171,17 @@ function fenceTaxonomy(): FenceTaxonomy {
     for (const member of Object.keys(members!)) foldedIds.add(`${builtinRootId(mod)}.${member}`);
   }
   for (const member of Object.keys(STATIC_MATH_PROPS)) foldedIds.add(`stdlib.math.${member}`);
-  const ambientFns = new Map(AMBIENT_SURFACE_FNS.map((row) => [row.id, row.fns as readonly string[]]));
-  taxonomy = { byId, ids: manifest.entries.map((e) => e.id), builtinFns, builtinRoots, foldedIds, ambientFns };
+  const ambientFns = new Map(
+    AMBIENT_SURFACE_FNS.map((row) => [row.id, row.fns as readonly string[]]),
+  );
+  taxonomy = {
+    byId,
+    ids: manifest.entries.map((e) => e.id),
+    builtinFns,
+    builtinRoots,
+    foldedIds,
+    ambientFns,
+  };
   return taxonomy;
 }
 
@@ -240,11 +253,13 @@ function classifySurface(entry: SurfaceManifestEntry, tax: FenceTaxonomy): Surfa
       return { kind: "unfenceable", why: DESUGARED_WHY };
     }
     if (family === "map") {
-      if (MAP_DETECTABLE.has(member)) return { kind: "detector", detector: { mapMethods: [member] } };
+      if (MAP_DETECTABLE.has(member))
+        return { kind: "detector", detector: { mapMethods: [member] } };
       return { kind: "unfenceable", why: DESUGARED_WHY };
     }
     if (family === "set") {
-      if (SET_DETECTABLE.has(member)) return { kind: "detector", detector: { setMethods: [member] } };
+      if (SET_DETECTABLE.has(member))
+        return { kind: "detector", detector: { setMethods: [member] } };
       return { kind: "unfenceable", why: DESUGARED_WHY };
     }
   }
@@ -301,7 +316,10 @@ export function resolveLibraryFences(
       }
       const cls = classifySurface(entry, tax);
       if (cls.kind === "unfenceable") {
-        return { ok: false, detail: `'${d.path}.id' names '${d.id}', which cannot be fenced: ${cls.why}` };
+        return {
+          ok: false,
+          detail: `'${d.path}.id' names '${d.id}', which cannot be fenced: ${cls.why}`,
+        };
       }
       keep(entry, cls);
     } else {
@@ -319,7 +337,10 @@ export function resolveLibraryFences(
         const cls = classifySurface(entry, tax);
         if (cls.kind === "unfenceable") {
           if (tax.foldedIds.has(id)) continue; // the fold IS the exemption — see above
-          return { ok: false, detail: `'${d.path}.prefix' ('${d.prefix}') covers '${id}', which cannot be fenced: ${cls.why}` };
+          return {
+            ok: false,
+            detail: `'${d.path}.prefix' ('${d.prefix}') covers '${id}', which cannot be fenced: ${cls.why}`,
+          };
         }
         keep(entry, cls);
       }
@@ -382,8 +403,7 @@ function collectReachedSurfaces(mod: IrModule): ReachedSurfaces {
           const probe = call.args[1];
           if (probe?.kind === "strLit") note(reached.libFns, `${node.fn}.${probe.value}`, here);
         }
-      }
-      else if (typeof node.method === "string") {
+      } else if (typeof node.method === "string") {
         if (node.kind === "strIntrinsic") note(reached.strMethods, node.method, here);
         else if (node.kind === "arrIntrinsic") note(reached.arrMethods, node.method, here);
         else if (node.kind === "mapIntrinsic") note(reached.mapMethods, node.method, here);
@@ -453,7 +473,10 @@ function surfaceMatchesDiag(
   // A diagnostic-fence entry IS the code family. Method refusals use a
   // receiver description instead of the manifest's prototype spelling.
   if (surface.kind === "diagnostic-fence" || diag.message.includes(surface.name)) return true;
-  for (const [prefix, receiver] of [["number.prototype.", "numbers"], ["string.prototype.", "strings"]] as [string, string][]) {
+  for (const [prefix, receiver] of [
+    ["number.prototype.", "numbers"],
+    ["string.prototype.", "strings"],
+  ] as [string, string][]) {
     if (surface.name.startsWith(prefix)) {
       const method = surface.name.slice(prefix.length);
       return diag.message.includes(`'.${method}()' on ${receiver}`);
@@ -476,14 +499,19 @@ function teachingForRefusal(profile: FenceProfileView, diag: ScrDiagnostic): str
   for (const [key, text] of Object.entries(profile.teachings)) {
     if (!key.includes(".")) continue;
     const entry = fenceTaxonomy().byId.get(key);
-    if (entry !== undefined && surfaceMatchesDiag({ code: entry.code, name: entry.name, kind: entry.kind }, diag)) return text;
+    if (
+      entry !== undefined &&
+      surfaceMatchesDiag({ code: entry.code, name: entry.name, kind: entry.kind }, diag)
+    )
+      return text;
   }
   // 3. A fence covering the refused surface: the teaching rides the
   // surface's own refusal (the non-static half of fence coverage).
   for (const fence of profile.fences) {
     if (fence.teaching === undefined) continue;
     for (const s of fence.surfaces) {
-      if (surfaceMatchesDiag({ code: s.code, name: s.name, kind: s.kind }, diag)) return fence.teaching;
+      if (surfaceMatchesDiag({ code: s.code, name: s.name, kind: s.kind }, diag))
+        return fence.teaching;
     }
   }
   return undefined;
@@ -497,7 +525,8 @@ export function decorateLibraryRefusals(
   diagnostics: ScrDiagnostic[],
   profile: FenceProfileView,
 ): ScrDiagnostic[] {
-  if (Object.keys(profile.teachings).length === 0 && profile.fences.length === 0) return diagnostics;
+  if (Object.keys(profile.teachings).length === 0 && profile.fences.length === 0)
+    return diagnostics;
   return diagnostics.map((d) => {
     if (d.note !== undefined) return d;
     const teaching = teachingForRefusal(profile, d);

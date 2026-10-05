@@ -27,9 +27,21 @@
  * documented object key-order divergence, SEMANTICS 16/37). */
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, globSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  globSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { compile } from "@scriptc/compiler";
 
@@ -44,7 +56,8 @@ const executionTag = [
   .join("-")
   .replace(/[^a-zA-Z0-9_.-]+/g, "-");
 
-const prettierRoot = process.env["SCRIPTC_PRETTIER_ROOT"] ?? join(homedir(), "Developer/prettier-scratch");
+const prettierRoot =
+  process.env["SCRIPTC_PRETTIER_ROOT"] ?? join(homedir(), "Developer/prettier-scratch");
 const prettierPkg = join(prettierRoot, "node_modules/prettier");
 const cliEntry = join(prettierPkg, "internal/legacy-cli.mjs");
 const binEntry = join(prettierPkg, "bin/prettier.cjs");
@@ -93,11 +106,12 @@ const DRIVER_TSCONFIG = JSON.stringify(
 function hashInputs(): string {
   const hash = createHash("sha256");
   hash.update(DRIVER_ENTRY).update(DRIVER_AMBIENT).update(DRIVER_TSCONFIG);
-  const inputs = [
-    ...globSync(join(prettierPkg, "**/*.{js,cjs,mjs,json}")),
-  ].sort();
+  const inputs = [...globSync(join(prettierPkg, "**/*.{js,cjs,mjs,json}"))].sort();
   for (const f of inputs) hash.update(f).update(readFileSync(f));
-  return hash.update(sanitize ? "san" : "plain").digest("hex").slice(0, 16);
+  return hash
+    .update(sanitize ? "san" : "plain")
+    .digest("hex")
+    .slice(0, 16);
 }
 
 async function buildDriver(): Promise<string> {
@@ -109,7 +123,10 @@ async function buildDriver(): Promise<string> {
   writeFileSync(join(driverDir, "main.ts"), DRIVER_ENTRY);
   writeFileSync(join(driverDir, "prettier-cli.d.ts"), DRIVER_AMBIENT);
   writeFileSync(join(driverDir, "tsconfig.json"), DRIVER_TSCONFIG);
-  writeFileSync(join(driverDir, "package.json"), JSON.stringify({ name: "prettier-e2e-driver", type: "module" }));
+  writeFileSync(
+    join(driverDir, "package.json"),
+    JSON.stringify({ name: "prettier-e2e-driver", type: "module" }),
+  );
   // The bare "prettier/…" specifier resolves through the scratch install.
   symlinkSync(join(prettierRoot, "node_modules"), join(driverDir, "node_modules"));
   const key = hashInputs();
@@ -148,7 +165,12 @@ interface RunOptions {
   files?: Record<string, string>;
 }
 
-function runLane(cmd: string, cmdArgs: string[], args: string[], opts: RunOptions): Promise<LaneResult> {
+function runLane(
+  cmd: string,
+  cmdArgs: string[],
+  args: string[],
+  opts: RunOptions,
+): Promise<LaneResult> {
   const cwd = mkdtempSync(join(tmpdir(), "scr-prettier-e2e-"));
   const home = join(cwd, "scratch-home");
   mkdirSync(home);
@@ -213,7 +235,10 @@ function filesOf(cwd: string): Map<string, Buffer> {
   return map;
 }
 
-async function runBoth(args: string[], opts: RunOptions = {}): Promise<{ node: LaneResult; native: LaneResult }> {
+async function runBoth(
+  args: string[],
+  opts: RunOptions = {},
+): Promise<{ node: LaneResult; native: LaneResult }> {
   const [nodeRes, nativeRes] = await Promise.all([
     runLane(process.execPath, [binEntry], args, opts),
     runLane(driverBinary, [], args, opts),
@@ -251,7 +276,8 @@ async function runBoth(args: string[], opts: RunOptions = {}): Promise<{ node: L
 /* ── sample sources (deliberately unformatted) ───────────────────────── */
 
 const SAMPLE_JS = "const x={a:1,b:[1,2,3],c:'str'}\nfunction  f( a,b ){return a+ b}\n";
-const SAMPLE_TS = "interface X{a:number,b:string[]}\nconst   f=(x:X):string=>{return x.b.join(',')+String(x.a)}\nexport{f}\n";
+const SAMPLE_TS =
+  "interface X{a:number,b:string[]}\nconst   f=(x:X):string=>{return x.b.join(',')+String(x.a)}\nexport{f}\n";
 const SAMPLE_JSON = '{"b":2,"a":[1,2,   3],"c":{"d":null}}';
 const SAMPLE_MD = "# title\n\nsome  *text* and a [link](http://x.example)\n\n* a\n* b\n";
 const SAMPLE_CSS = ".cls{color:red;margin:0 0 0 0}\n#id  ,  .other{display:flex}\n";
@@ -261,67 +287,72 @@ const BROKEN_JS = "const = {;\n";
 
 /* ── the suite ───────────────────────────────────────────────────────── */
 
-describe.skipIf(!havePrettier)(`prettier e2e (real published CLI vs Node${sanitize ? ", sanitized" : ""})`, () => {
-  beforeAll(async () => {
-    driverBinary = await buildDriver();
-  }, 300_000);
+describe.skipIf(!havePrettier)(
+  `prettier e2e (real published CLI vs Node${sanitize ? ", sanitized" : ""})`,
+  () => {
+    beforeAll(async () => {
+      driverBinary = await buildDriver();
+    }, 300_000);
 
-  afterAll(() => {
-    rmSync(driverDir, { recursive: true, force: true });
-    rmSync(driverOutDir, { recursive: true, force: true });
-  });
-
-  test("version, help, and usage errors", async () => {
-    await runBoth(["--version"]);
-    await runBoth(["--help"]);
-    await runBoth(["--help", "write"]);
-    await runBoth(["--bogus-flag"]); // unknown option + no input: exit 2
-    await runBoth(["nonexistent.js"]); // no matching files: exit 2
-  });
-
-  test("formatting to stdout across parsers", async () => {
-    await runBoth(["--parser=babel", "sample.js"], { files: { "sample.js": SAMPLE_JS } });
-    await runBoth(["sample.ts"], { files: { "sample.ts": SAMPLE_TS } });
-    await runBoth(["sample.json"], { files: { "sample.json": SAMPLE_JSON } });
-    await runBoth(["sample.md"], { files: { "sample.md": SAMPLE_MD } });
-    await runBoth(["sample.css"], { files: { "sample.css": SAMPLE_CSS } });
-    await runBoth(["sample.yaml"], { files: { "sample.yaml": SAMPLE_YAML } });
-  });
-
-  test("check, list-different, and write", async () => {
-    await runBoth(["--check", "formatted.js"], { files: { "formatted.js": FORMATTED_JS } }); // exit 0
-    await runBoth(["--check", "sample.js"], { files: { "sample.js": SAMPLE_JS } }); // exit 1
-    await runBoth(["--list-different", "sample.js"], { files: { "sample.js": SAMPLE_JS } });
-    await runBoth(["--write", "sample.js"], { files: { "sample.js": SAMPLE_JS } }); // rewrites in place
-    await runBoth(["--write", "formatted.js"], { files: { "formatted.js": FORMATTED_JS } }); // "(unchanged)"
-  });
-
-  test("stdin formatting", async () => {
-    await runBoth(["--parser=babel"], { stdin: SAMPLE_JS });
-    await runBoth(["--stdin-filepath", "foo.ts"], { stdin: SAMPLE_TS });
-    await runBoth(["--parser=json"], { stdin: SAMPLE_JSON });
-    await runBoth(["--parser=babel"], { stdin: "" }); // empty stdin: empty doc out
-  });
-
-  test("options, config discovery, and file-info", async () => {
-    await runBoth(["--no-semi", "--single-quote", "sample.js"], { files: { "sample.js": SAMPLE_JS } });
-    await runBoth(["--tab-width", "7", "sample.js"], { files: { "sample.js": SAMPLE_JS } });
-    // .prettierrc in the lane cwd: the island's fs walks and finds it.
-    await runBoth(["sample.js"], {
-      files: { "sample.js": SAMPLE_JS, ".prettierrc": '{ "semi": false, "singleQuote": true }' },
+    afterAll(() => {
+      rmSync(driverDir, { recursive: true, force: true });
+      rmSync(driverOutDir, { recursive: true, force: true });
     });
-    await runBoth(["--no-config", "sample.js"], {
-      files: { "sample.js": SAMPLE_JS, ".prettierrc": '{ "semi": false }' },
-    });
-    await runBoth(["--find-config-path", "sample.js"], {
-      files: { "sample.js": SAMPLE_JS, ".prettierrc": "{}" },
-    });
-    await runBoth(["--file-info", "sample.js"], { files: { "sample.js": SAMPLE_JS } });
-  });
 
-  test("parse errors and exit codes", async () => {
-    await runBoth(["broken.js"], { files: { "broken.js": BROKEN_JS } }); // syntax error: exit 2
-    await runBoth(["--check", "broken.js"], { files: { "broken.js": BROKEN_JS } });
-    await runBoth(["--parser=babel"], { stdin: BROKEN_JS }); // stdin syntax error
-  });
-});
+    test("version, help, and usage errors", async () => {
+      await runBoth(["--version"]);
+      await runBoth(["--help"]);
+      await runBoth(["--help", "write"]);
+      await runBoth(["--bogus-flag"]); // unknown option + no input: exit 2
+      await runBoth(["nonexistent.js"]); // no matching files: exit 2
+    });
+
+    test("formatting to stdout across parsers", async () => {
+      await runBoth(["--parser=babel", "sample.js"], { files: { "sample.js": SAMPLE_JS } });
+      await runBoth(["sample.ts"], { files: { "sample.ts": SAMPLE_TS } });
+      await runBoth(["sample.json"], { files: { "sample.json": SAMPLE_JSON } });
+      await runBoth(["sample.md"], { files: { "sample.md": SAMPLE_MD } });
+      await runBoth(["sample.css"], { files: { "sample.css": SAMPLE_CSS } });
+      await runBoth(["sample.yaml"], { files: { "sample.yaml": SAMPLE_YAML } });
+    });
+
+    test("check, list-different, and write", async () => {
+      await runBoth(["--check", "formatted.js"], { files: { "formatted.js": FORMATTED_JS } }); // exit 0
+      await runBoth(["--check", "sample.js"], { files: { "sample.js": SAMPLE_JS } }); // exit 1
+      await runBoth(["--list-different", "sample.js"], { files: { "sample.js": SAMPLE_JS } });
+      await runBoth(["--write", "sample.js"], { files: { "sample.js": SAMPLE_JS } }); // rewrites in place
+      await runBoth(["--write", "formatted.js"], { files: { "formatted.js": FORMATTED_JS } }); // "(unchanged)"
+    });
+
+    test("stdin formatting", async () => {
+      await runBoth(["--parser=babel"], { stdin: SAMPLE_JS });
+      await runBoth(["--stdin-filepath", "foo.ts"], { stdin: SAMPLE_TS });
+      await runBoth(["--parser=json"], { stdin: SAMPLE_JSON });
+      await runBoth(["--parser=babel"], { stdin: "" }); // empty stdin: empty doc out
+    });
+
+    test("options, config discovery, and file-info", async () => {
+      await runBoth(["--no-semi", "--single-quote", "sample.js"], {
+        files: { "sample.js": SAMPLE_JS },
+      });
+      await runBoth(["--tab-width", "7", "sample.js"], { files: { "sample.js": SAMPLE_JS } });
+      // .prettierrc in the lane cwd: the island's fs walks and finds it.
+      await runBoth(["sample.js"], {
+        files: { "sample.js": SAMPLE_JS, ".prettierrc": '{ "semi": false, "singleQuote": true }' },
+      });
+      await runBoth(["--no-config", "sample.js"], {
+        files: { "sample.js": SAMPLE_JS, ".prettierrc": '{ "semi": false }' },
+      });
+      await runBoth(["--find-config-path", "sample.js"], {
+        files: { "sample.js": SAMPLE_JS, ".prettierrc": "{}" },
+      });
+      await runBoth(["--file-info", "sample.js"], { files: { "sample.js": SAMPLE_JS } });
+    });
+
+    test("parse errors and exit codes", async () => {
+      await runBoth(["broken.js"], { files: { "broken.js": BROKEN_JS } }); // syntax error: exit 2
+      await runBoth(["--check", "broken.js"], { files: { "broken.js": BROKEN_JS } });
+      await runBoth(["--parser=babel"], { stdin: BROKEN_JS }); // stdin syntax error
+    });
+  },
+);

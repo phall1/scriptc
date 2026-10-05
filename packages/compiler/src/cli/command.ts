@@ -32,7 +32,11 @@ function fail(msg: string): never {
  * Unparseable arguments are a USER error — an unknown flag or a missing
  * value used to reach the top level as an uncaught ERR_PARSE_ARGS_* and
  * print a Node stack trace over the user's terminal. */
-function parseCli(args: string[]): ReturnType<typeof parseArgs<{ options: typeof CLI_OPTIONS; allowPositionals: true; allowNegative: true }>> {
+function parseCli(
+  args: string[],
+): ReturnType<
+  typeof parseArgs<{ options: typeof CLI_OPTIONS; allowPositionals: true; allowNegative: true }>
+> {
   try {
     return parseArgs({ args, options: CLI_OPTIONS, allowPositionals: true, allowNegative: true });
   } catch (err) {
@@ -61,9 +65,28 @@ async function main(args: string[], host: CliHost): Promise<number> {
 
   const [command, inputArg] = positionals;
   if (command === "cache") {
-    if (inputArg !== "warm") fail(`unknown cache command "${inputArg ?? ""}" (supported: warm)\n\n${USAGE}`);
-    if (values.lib || values.dynamic || values.backend !== undefined || values.emit !== undefined || values.print !== undefined || values.ffi !== undefined || values.profile !== undefined || values.strip || values["windows-subsystem"] !== undefined || (values["npm-static"] ?? []).length > 0 || values["provenance-sources"] || externalTypeArgs.length > 0 || values.out !== undefined || values["emit-ir"] || !values["keep-llvm"]) {
-      fail(`scriptc cache warm takes only native optimization/sanitizer options and profile names\n\n${USAGE}`);
+    if (inputArg !== "warm")
+      fail(`unknown cache command "${inputArg ?? ""}" (supported: warm)\n\n${USAGE}`);
+    if (
+      values.lib ||
+      values.dynamic ||
+      values.backend !== undefined ||
+      values.emit !== undefined ||
+      values.print !== undefined ||
+      values.ffi !== undefined ||
+      values.profile !== undefined ||
+      values.strip ||
+      values["windows-subsystem"] !== undefined ||
+      (values["npm-static"] ?? []).length > 0 ||
+      values["provenance-sources"] ||
+      externalTypeArgs.length > 0 ||
+      values.out !== undefined ||
+      values["emit-ir"] ||
+      !values["keep-llvm"]
+    ) {
+      fail(
+        `scriptc cache warm takes only native optimization/sanitizer options and profile names\n\n${USAGE}`,
+      );
     }
     const optimization = values.optimization;
     if (optimization !== undefined && optimization !== "release" && optimization !== "dev") {
@@ -81,9 +104,7 @@ async function main(args: string[], host: CliHost): Promise<number> {
       result = await host.warmNativeCaches({
         ...(optimization === undefined ? {} : { optimization }),
         sanitize: values.sanitize,
-        ...(profileArgs.length === 0
-          ? {}
-          : { profiles: profileArgs as NativeCacheWarmProfile[] }),
+        ...(profileArgs.length === 0 ? {} : { profiles: profileArgs as NativeCacheWarmProfile[] }),
       });
     } catch (error) {
       fail(`scriptc: ${error instanceof Error ? error.message : String(error)}`);
@@ -104,19 +125,33 @@ async function main(args: string[], host: CliHost): Promise<number> {
     // concept — bare npm specifiers are static-or-refuse: the npm-static
     // eligibility bar runs automatically, eligible packages compile into
     // the graph, ineligible ones refuse with SC4013).
-    if (command !== "build") fail(`--lib is a build mode (scriptc build --lib --profile <p.json>)\n\n${USAGE}`);
+    if (command !== "build")
+      fail(`--lib is a build mode (scriptc build --lib --profile <p.json>)\n\n${USAGE}`);
     const profileArg = values.profile;
     if (!profileArg) fail(`scriptc build --lib needs --profile <profile.json>\n\n${USAGE}`);
     if (inputArg) {
       fail("scriptc build --lib takes no input positional: the profile names the entry module");
     }
-    if (values.dynamic || values.backend !== undefined || values.emit !== undefined || values.print !== undefined || values.optimization !== undefined || values.strip || values.ffi !== undefined || values["windows-subsystem"] !== undefined || (values["npm-static"] ?? []).length > 0 || externalTypeArgs.length > 0) {
+    if (
+      values.dynamic ||
+      values.backend !== undefined ||
+      values.emit !== undefined ||
+      values.print !== undefined ||
+      values.optimization !== undefined ||
+      values.strip ||
+      values.ffi !== undefined ||
+      values["windows-subsystem"] !== undefined ||
+      (values["npm-static"] ?? []).length > 0 ||
+      externalTypeArgs.length > 0
+    ) {
       fail(
         "scriptc build --lib takes no --dynamic/--backend/--emit/--print/--optimization/--strip/--windows-subsystem/--npm-static/--ffi/--external-types: the profile pins the emission and optimization, npm imports are judged automatically, outbound FFI belongs to executable builds, and external type mappings belong to coverage",
       );
     }
     const profilePath = resolve(profileArg);
-    const libOutDir = values.out ? dirname(resolve(values.out)) : join(dirname(profilePath), ".scriptc");
+    const libOutDir = values.out
+      ? dirname(resolve(values.out))
+      : join(dirname(profilePath), ".scriptc");
     const result = await host.compileLibrary({
       profilePath,
       outDir: libOutDir,
@@ -126,7 +161,9 @@ async function main(args: string[], host: CliHost): Promise<number> {
     });
     if (!result.ok) {
       const color = process.stderr.isTTY ?? false;
-      process.stderr.write(renderDiagnostics(result.diagnostics, result.sourceTexts, { color }) + "\n");
+      process.stderr.write(
+        renderDiagnostics(result.diagnostics, result.sourceTexts, { color }) + "\n",
+      );
       const n = result.diagnostics.length;
       process.stderr.write(`\n${n} error${n === 1 ? "" : "s"}.\n`);
       return 1;
@@ -139,7 +176,9 @@ async function main(args: string[], host: CliHost): Promise<number> {
     return 0;
   }
   if (values["emit-ir"] && (command === "build" || command === "run")) {
-    process.stderr.write("scriptc: warning: --emit-ir is deprecated; use --emit=ir for IR as the primary output\n");
+    process.stderr.write(
+      "scriptc: warning: --emit-ir is deprecated; use --emit=ir for IR as the primary output\n",
+    );
   }
   if (!inputArg) fail(`missing input file\n\n${USAGE}`);
   const input = resolve(inputArg);
@@ -166,15 +205,21 @@ async function main(args: string[], host: CliHost): Promise<number> {
   for (const mapping of externalTypeArgs) {
     const equals = mapping.indexOf("=");
     if (equals <= 0 || equals === mapping.length - 1) {
-      fail(`invalid --external-types mapping ${JSON.stringify(mapping)} (expected <specifier=file.d.ts>)`);
+      fail(
+        `invalid --external-types mapping ${JSON.stringify(mapping)} (expected <specifier=file.d.ts>)`,
+      );
     }
     const specifier = mapping.slice(0, equals).trim();
     const declarationArg = mapping.slice(equals + 1).trim();
     if (!isExactExternalTypeSpecifier(specifier)) {
-      fail(`invalid --external-types specifier ${JSON.stringify(specifier)} (expected an exact bare package specifier)`);
+      fail(
+        `invalid --external-types specifier ${JSON.stringify(specifier)} (expected an exact bare package specifier)`,
+      );
     }
     if (!/\.d\.(?:ts|mts|cts)$/.test(declarationArg)) {
-      fail(`invalid --external-types declaration ${JSON.stringify(declarationArg)} (expected a .d.ts, .d.mts, or .d.cts file)`);
+      fail(
+        `invalid --external-types declaration ${JSON.stringify(declarationArg)} (expected a .d.ts, .d.mts, or .d.cts file)`,
+      );
     }
     if (externalTypes[specifier] !== undefined) {
       fail(`duplicate --external-types mapping for ${JSON.stringify(specifier)}`);
@@ -196,37 +241,46 @@ async function main(args: string[], host: CliHost): Promise<number> {
     fail(`unknown optimization "${optimization}" (supported: release, dev)\n\n${USAGE}`);
   }
   const windowsSubsystem = values["windows-subsystem"];
-  if (windowsSubsystem !== undefined && windowsSubsystem !== "console" && windowsSubsystem !== "gui") {
+  if (
+    windowsSubsystem !== undefined &&
+    windowsSubsystem !== "console" &&
+    windowsSubsystem !== "gui"
+  ) {
     fail(`unknown Windows subsystem "${windowsSubsystem}" (supported: console, gui)\n\n${USAGE}`);
   }
   if (windowsSubsystem !== undefined && command === "coverage") {
     fail(`--windows-subsystem is only supported for executable builds\n\n${USAGE}`);
   }
-  const output = command === "coverage"
-    ? null
-    : resolveOutputOptions(command, {
-        ...(values.emit === undefined && !printNativeLinkInfo
-          ? {}
-          : { emit: values.emit ?? "obj" }),
-        emitIr: values["emit-ir"],
-        ...(values.backend === undefined ? {} : { backend: values.backend }),
-        keepLlvm: values["keep-llvm"],
-        sanitize: values.sanitize,
-        ...(values.optimization === undefined ? {} : { optimization: values.optimization }),
-        strip: values.strip,
-        ...(windowsSubsystem === undefined ? {} : { windowsSubsystem }),
-        ...(values.ffi === undefined ? {} : { ffi: values.ffi }),
-      });
+  const output =
+    command === "coverage"
+      ? null
+      : resolveOutputOptions(command, {
+          ...(values.emit === undefined && !printNativeLinkInfo
+            ? {}
+            : { emit: values.emit ?? "obj" }),
+          emitIr: values["emit-ir"],
+          ...(values.backend === undefined ? {} : { backend: values.backend }),
+          keepLlvm: values["keep-llvm"],
+          sanitize: values.sanitize,
+          ...(values.optimization === undefined ? {} : { optimization: values.optimization }),
+          strip: values.strip,
+          ...(windowsSubsystem === undefined ? {} : { windowsSubsystem }),
+          ...(values.ffi === undefined ? {} : { ffi: values.ffi }),
+        });
   if (output !== null && !output.ok) fail(`${output.message}\n\n${USAGE}`);
   const backend = output === null ? undefined : output.backend;
 
   // --npm-static: repeatable and comma-splittable; the literal "auto"
   // switches to eligibility-based detection (mixing "auto" with names
   // is rejected — the shapes answer different questions).
-  const npmStaticRaw = (values["npm-static"] ?? []).flatMap((v) => v.split(",")).map((v) => v.trim()).filter((v) => v !== "");
+  const npmStaticRaw = (values["npm-static"] ?? [])
+    .flatMap((v) => v.split(","))
+    .map((v) => v.trim())
+    .filter((v) => v !== "");
   let npmStatic: string[] | "auto" | undefined;
   if (npmStaticRaw.includes("auto")) {
-    if (npmStaticRaw.length > 1) fail(`--npm-static auto cannot be combined with package names\n\n${USAGE}`);
+    if (npmStaticRaw.length > 1)
+      fail(`--npm-static auto cannot be combined with package names\n\n${USAGE}`);
     npmStatic = "auto";
   } else if (npmStaticRaw.length > 0) {
     npmStatic = npmStaticRaw;
@@ -236,7 +290,9 @@ async function main(args: string[], host: CliHost): Promise<number> {
   // source "paths" at creation): attestations and source trees fetch (or
   // ride the content-addressed cache / the offline manifest), the registry
   // installs, and every fallback prints as a note — never a failure.
-  const provenance = values["provenance-sources"] ? await host.resolveProvenanceSources(input) : null;
+  const provenance = values["provenance-sources"]
+    ? await host.resolveProvenanceSources(input)
+    : null;
   if (provenance !== null) {
     setProvenanceSources(provenance);
     for (const pkg of provenance.packages) {
@@ -263,8 +319,12 @@ async function main(args: string[], host: CliHost): Promise<number> {
   if (windowsSubsystem !== undefined && host.sourceTargetPlatform() !== "win32") {
     fail(`--windows-subsystem requires a Windows executable target\n\n${USAGE}`);
   }
-  const { outDir, outPath } = selectOutputPaths(input, output.cliOutputKind, values.out,
-    output.cliOutputKind === "exe" ? host.sourceTargetPlatform() : undefined);
+  const { outDir, outPath } = selectOutputPaths(
+    input,
+    output.cliOutputKind,
+    values.out,
+    output.cliOutputKind === "exe" ? host.sourceTargetPlatform() : undefined,
+  );
 
   let nativeLinkInfo: object | undefined;
   const build = async (): Promise<string> => {
@@ -285,7 +345,9 @@ async function main(args: string[], host: CliHost): Promise<number> {
     });
     if (!result.ok) {
       const color = process.stderr.isTTY ?? false;
-      process.stderr.write(renderDiagnostics(result.diagnostics, result.sourceTexts, { color }) + "\n");
+      process.stderr.write(
+        renderDiagnostics(result.diagnostics, result.sourceTexts, { color }) + "\n",
+      );
       const n = result.diagnostics.length;
       process.stderr.write(`\n${n} error${n === 1 ? "" : "s"}.\n`);
       throw new CliExit(1);
@@ -317,8 +379,9 @@ async function main(args: string[], host: CliHost): Promise<number> {
 
 /** Both installed and seed commands use this argument and diagnostic contract. */
 export async function runCli(args: string[], host: CliHost): Promise<number> {
-  try { return await main(args, host); }
-  catch (err) {
+  try {
+    return await main(args, host);
+  } catch (err) {
     if (err instanceof Error && err.name === "CliExit") return Number(err.message.slice(5));
     throw err;
   }

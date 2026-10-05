@@ -64,26 +64,40 @@ const baseline = JSON.parse(readFileSync(baselinePath, "utf8")) as {
 /** Machine-independent spelling: absolute repo paths become "<repo>/…" in
  * file fields AND message text (cycle messages embed paths). */
 const rel = (s: string): string =>
-  s.replaceAll("\\", "/").split(repoRoot.replaceAll("\\", "/") + "/").join("<repo>/");
+  s
+    .replaceAll("\\", "/")
+    .split(repoRoot.replaceAll("\\", "/") + "/")
+    .join("<repo>/");
 
 const relativeName = (s: string): string => rel(s).replace(/^<repo>\//, "");
 
 const execFileAsync = promisify(execFile);
 
 async function nativeAnswers(entries: string[]): Promise<BaselineEntry[]> {
-  const frontend = pathToFileURL(join(repoRoot, "packages/compiler/src/frontend/program-node.ts")).href;
-  const adapter = pathToFileURL(join(repoRoot, "packages/compiler/src/frontend/ts7/program-adapter.ts")).href;
-  const { stdout } = await execFileAsync(process.execPath, [
-    "--import", "tsx", "--input-type=module", "--eval",
-    `import { checkPreflightTs7 } from ${JSON.stringify(frontend)};
+  const frontend = pathToFileURL(
+    join(repoRoot, "packages/compiler/src/frontend/program-node.ts"),
+  ).href;
+  const adapter = pathToFileURL(
+    join(repoRoot, "packages/compiler/src/frontend/ts7/program-adapter.ts"),
+  ).href;
+  const { stdout } = await execFileAsync(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "--eval",
+      `import { checkPreflightTs7 } from ${JSON.stringify(frontend)};
      import { Ts7Host } from ${JSON.stringify(adapter)};
      const host = new Ts7Host();
      try {
        const answers = process.argv.slice(1).map(entry => checkPreflightTs7(entry, host));
        console.log(JSON.stringify(answers));
      } finally { host.close(); }`,
-    ...entries,
-  ], { cwd: repoRoot, timeout: 240_000, maxBuffer: 32 * 1024 * 1024 });
+      ...entries,
+    ],
+    { cwd: repoRoot, timeout: 240_000, maxBuffer: 32 * 1024 * 1024 },
+  );
   const answers = JSON.parse(stdout) as ReturnType<typeof checkPreflightTs7>[];
   expect(answers).toHaveLength(entries.length);
   return answers.map((t7) => ({
@@ -186,7 +200,9 @@ test("a malformed tsconfig fails preflight (JSON.parse wording — the pinned 5.
   // Exactly one SC0001 anchored at the tsconfig. The TEXT is JSON.parse's
   // (program.ts's jsoncSyntaxError comment) — 5.9.3 said "'}' expected.";
   // no snapshot pins the wording.
-  expect(t7.diags.map((d) => [d.code, d.loc.file])).toEqual([["SC0001", join(dir, "tsconfig.json")]]);
+  expect(t7.diags.map((d) => [d.code, d.loc.file])).toEqual([
+    ["SC0001", join(dir, "tsconfig.json")],
+  ]);
 });
 
 test("harness sanity: the subset always covers the order-sensitive shapes", () => {

@@ -22,7 +22,11 @@ import {
 } from "./native-toolchain.js";
 import { RuntimePackError, stageRuntimePackArtifacts } from "./runtime-pack.js";
 import type { NativeLinkPlan } from "./link-plan.js";
-import { createDarwinDebugSymbols, installDarwinDebugSymbols, readDarwinDebugSymbols } from "./debug-symbols.js";
+import {
+  createDarwinDebugSymbols,
+  installDarwinDebugSymbols,
+  readDarwinDebugSymbols,
+} from "./debug-symbols.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -45,15 +49,16 @@ function platformLinkerIdentity(
   linker: string = resolvePlatformLinker(env),
 ): string {
   const hasSeparator = linker.includes("/") || linker.includes("\\");
-  const pathEntries = hasSeparator
-    ? [""]
-    : (env["PATH"] ?? "/usr/bin:/bin").split(delimiter);
-  const extensions = process.platform === "win32" && !/\.[^/\\]+$/.test(linker)
-    ? (env["PATHEXT"] ?? ".COM;.EXE;.BAT;.CMD").split(";")
-    : [""];
+  const pathEntries = hasSeparator ? [""] : (env["PATH"] ?? "/usr/bin:/bin").split(delimiter);
+  const extensions =
+    process.platform === "win32" && !/\.[^/\\]+$/.test(linker)
+      ? (env["PATHEXT"] ?? ".COM;.EXE;.BAT;.CMD").split(";")
+      : [""];
   for (const entry of pathEntries) {
     const base = hasSeparator
-      ? (isAbsolute(linker) ? linker : resolve(linker))
+      ? isAbsolute(linker)
+        ? linker
+        : resolve(linker)
       : join(entry === "" ? process.cwd() : entry, linker);
     for (const extension of extensions) {
       const candidate = `${base}${extension}`;
@@ -96,18 +101,26 @@ export async function executableLinkerEnvironmentFingerprint(
     // but the trusted default cannot safely address an existing early
     // executable entry. Explicit drivers never publish complete executables,
     // so their own file identity remains a sufficient stable partial-cache key.
-    effectiveDriverIdentity = env["SCRIPTC_LINKER"] === undefined
-      ? `<unavailable:${linker}:${randomUUID()}>`
-      : `<unavailable:${linker}>`;
+    effectiveDriverIdentity =
+      env["SCRIPTC_LINKER"] === undefined
+        ? `<unavailable:${linker}:${randomUUID()}>`
+        : `<unavailable:${linker}>`;
   }
   const hash = createHash("sha256")
     .update("executable-linker-environment-v2\0")
-    .update(toolchainEnvironmentFingerprint(env)).update("\0")
-    .update(linkerIdentity).update("\0")
-    .update(effectiveDriverIdentity).update("\0");
+    .update(toolchainEnvironmentFingerprint(env))
+    .update("\0")
+    .update(linkerIdentity)
+    .update("\0")
+    .update(effectiveDriverIdentity)
+    .update("\0");
   for (const name of ["PATH", "SCRIPTC_FETCH_CURL", "SCRIPTC_TEST_RUNTIME_SRC_DIR"] as const) {
     const value = env[name];
-    hash.update(name).update(value === undefined ? "\0unset\0" : "\0set\0").update(value ?? "").update("\0");
+    hash
+      .update(name)
+      .update(value === undefined ? "\0unset\0" : "\0set\0")
+      .update(value ?? "")
+      .update("\0");
   }
   return hash.digest("hex");
 }
@@ -123,37 +136,44 @@ export function platformLinkerSupportsPersistentCache(
   // The Apple system shim is a stable front door to the active SDK/linker;
   // linkNativeExecutable snapshots the selected transitive inputs before it
   // publishes the final cache entry. A PATH wrapper is intentionally opaque.
-  return env["SCRIPTC_LINKER"] === undefined &&
+  return (
+    env["SCRIPTC_LINKER"] === undefined &&
     toolchainEnvironmentCachePolicy(env).completeArtifacts &&
-    platformLinkerIdentity(env).startsWith("/usr/bin/clang\0");
+    platformLinkerIdentity(env).startsWith("/usr/bin/clang\0")
+  );
 }
 
 async function snapshotDependencies(paths: readonly string[]): Promise<NativeArtifactDependency[]> {
   const { lstat, realpath } = await import("node:fs/promises");
-  return Promise.all([...new Set(paths.map((path) => resolve(path)))].sort().map(async (path) => {
-    const info = await lstat(path);
-    const kind = info.isFile() ? "file" : info.isDirectory() ? "directory" : "symlink";
-    const dependency: NativeArtifactDependency = {
-      path,
-      kind,
-      dev: Number(info.dev), ino: Number(info.ino), size: Number(info.size),
-      mtimeMs: Number(info.mtimeMs), ctimeMs: Number(info.ctimeMs),
-    };
-    if (kind === "symlink") {
-      const targetPath = await realpath(path);
-      const target = await stat(path);
-      const targetKind = target.isFile() ? "file" : target.isDirectory() ? "directory" : null;
-      if (targetKind === null) throw new Error(`unsupported linker dependency: ${path}`);
-      dependency.targetPath = targetPath;
-      dependency.targetKind = targetKind;
-      dependency.targetDev = Number(target.dev);
-      dependency.targetIno = Number(target.ino);
-      dependency.targetSize = Number(target.size);
-      dependency.targetMtimeMs = Number(target.mtimeMs);
-      dependency.targetCtimeMs = Number(target.ctimeMs);
-    }
-    return dependency;
-  }));
+  return Promise.all(
+    [...new Set(paths.map((path) => resolve(path)))].sort().map(async (path) => {
+      const info = await lstat(path);
+      const kind = info.isFile() ? "file" : info.isDirectory() ? "directory" : "symlink";
+      const dependency: NativeArtifactDependency = {
+        path,
+        kind,
+        dev: Number(info.dev),
+        ino: Number(info.ino),
+        size: Number(info.size),
+        mtimeMs: Number(info.mtimeMs),
+        ctimeMs: Number(info.ctimeMs),
+      };
+      if (kind === "symlink") {
+        const targetPath = await realpath(path);
+        const target = await stat(path);
+        const targetKind = target.isFile() ? "file" : target.isDirectory() ? "directory" : null;
+        if (targetKind === null) throw new Error(`unsupported linker dependency: ${path}`);
+        dependency.targetPath = targetPath;
+        dependency.targetKind = targetKind;
+        dependency.targetDev = Number(target.dev);
+        dependency.targetIno = Number(target.ino);
+        dependency.targetSize = Number(target.size);
+        dependency.targetMtimeMs = Number(target.mtimeMs);
+        dependency.targetCtimeMs = Number(target.ctimeMs);
+      }
+      return dependency;
+    }),
+  );
 }
 
 /** Resolve platform SDK/CRT inputs from the actual object-only link line.
@@ -186,16 +206,19 @@ async function objectLinkerDependencyPaths(
     cwd,
     cwd,
     true,
-  )) paths.add(path);
-  for (const path of await parseLinkTraceFiles(
-    `${trace.stdout}\n${trace.stderr}`,
-    cwd,
-    cwd,
-  )) paths.add(path);
+  ))
+    paths.add(path);
+  for (const path of await parseLinkTraceFiles(`${trace.stdout}\n${trace.stderr}`, cwd, cwd))
+    paths.add(path);
   const normalizedRoots = excludedRoots.map((root) => resolve(root));
-  return [...paths].filter((path) => !normalizedRoots.some((root) =>
-    path === root || path.startsWith(`${root}/`) || path.startsWith(`${root}\\`)
-  )).sort();
+  return [...paths]
+    .filter(
+      (path) =>
+        !normalizedRoots.some(
+          (root) => path === root || path.startsWith(`${root}/`) || path.startsWith(`${root}\\`),
+        ),
+    )
+    .sort();
 }
 
 export async function linkNativeExecutable(
@@ -223,7 +246,8 @@ export async function linkNativeExecutable(
       ...plan.driverFlags,
       ...plan.inputs.map((input) => staged.replacements.get(input) ?? input),
       ...plan.systemLibraries.map((name) => `-l${name}`),
-      "-o", privateOut,
+      "-o",
+      privateOut,
     ];
     // The pack snapshots bracket both verification passes and private staging;
     // the program-object snapshot begins before helper emission. Snapshot the
@@ -239,19 +263,20 @@ export async function linkNativeExecutable(
     const additionalDependencyPaths = plan.dependencyPaths.filter(
       (path) => !inheritedDependencyPaths.has(resolve(path)),
     );
-    const preLinkDependencies = options.onArtifactReady === undefined ||
-        !(await nativeArtifactDependenciesStillMatch(inheritedDependencies).catch(() => false))
-      ? null
-      : await objectLinkerDependencyPaths(linker, args, privateOutRoot, [
-          privateOutRoot,
-          staged.root,
-          ...plan.inputs,
-        ])
-        .then(async (toolchain) => [
-          ...inheritedDependencies,
-          ...await snapshotDependencies([...toolchain, ...additionalDependencyPaths]),
-        ])
-        .catch(() => null);
+    const preLinkDependencies =
+      options.onArtifactReady === undefined ||
+      !(await nativeArtifactDependenciesStillMatch(inheritedDependencies).catch(() => false))
+        ? null
+        : await objectLinkerDependencyPaths(linker, args, privateOutRoot, [
+            privateOutRoot,
+            staged.root,
+            ...plan.inputs,
+          ])
+            .then(async (toolchain) => [
+              ...inheritedDependencies,
+              ...(await snapshotDependencies([...toolchain, ...additionalDependencyPaths])),
+            ])
+            .catch(() => null);
     await execFileAsync(linker, args);
     const output = await stat(privateOut);
     if (!output.isFile() || output.size === 0) throw new Error("linker produced no executable");
@@ -267,8 +292,9 @@ export async function linkNativeExecutable(
       await rm(`${plan.outputPath}.dSYM`, { recursive: true, force: true });
     }
     if (
-      options.onArtifactReady !== undefined && preLinkDependencies !== null &&
-      await nativeArtifactDependenciesStillMatch(preLinkDependencies).catch(() => false)
+      options.onArtifactReady !== undefined &&
+      preLinkDependencies !== null &&
+      (await nativeArtifactDependenciesStillMatch(preLinkDependencies).catch(() => false))
     ) {
       await options.onArtifactReady({ dependencies: preLinkDependencies }).catch(() => undefined);
     }

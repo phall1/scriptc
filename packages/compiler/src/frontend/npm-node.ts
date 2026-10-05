@@ -7,7 +7,9 @@ export * from "./npm.js";
 export { embeddedModulesUsingGlobalFetch } from "./npm-fetch-node.js";
 
 export class NpmGraphBuilder extends CoreGraphBuilder {
-  constructor(host?: NpmGraphHost) { super(nodeFrontendServices(), host); }
+  constructor(host?: NpmGraphHost) {
+    super(nodeFrontendServices(), host);
+  }
 }
 
 export function moduleSpecifiersOf(source: string, fileName: string): ModuleSpecifiers {

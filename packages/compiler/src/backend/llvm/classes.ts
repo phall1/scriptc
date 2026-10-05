@@ -4,7 +4,12 @@ import { InternalCompilerError } from "../../errors.js";
  * implementations directly. Runtime EventEmitter and stream subclasses embed
  * their runtime prefixes ahead of user fields. */
 import type { IrClassDef, IrFunction, IrModule, IrType, IrUnionDef } from "../../ir/ir.js";
-import { isRefCounted, RUNTIME_EMITTER_CLASS, RUNTIME_ERROR_CLASSES, RUNTIME_STREAM_CLASSES } from "../../ir/ir.js";
+import {
+  isRefCounted,
+  RUNTIME_EMITTER_CLASS,
+  RUNTIME_ERROR_CLASSES,
+  RUNTIME_STREAM_CLASSES,
+} from "../../ir/ir.js";
 import { streamRooted, undefinedArmTag } from "../../ir/analysis.js";
 import {
   mangleClassGcFree,
@@ -22,7 +27,15 @@ import {
   mangleVtStruct,
 } from "../mangle.js";
 import { llvmCommentText } from "./common.js";
-import { FN_ATTRS, llFieldType, releaseBody, releaseSym, retainBody, traceAdapter, type ShapeHost } from "./shapes.js";
+import {
+  FN_ATTRS,
+  llFieldType,
+  releaseBody,
+  releaseSym,
+  retainBody,
+  traceAdapter,
+  type ShapeHost,
+} from "./shapes.js";
 
 /** One virtual method slot of a hierarchy: the ROOT-MOST declaring class
  * owns the slot; its declaration's IrFunction fixes the slot's ABI (the
@@ -55,7 +68,10 @@ export class LlClassMeta {
  * slots — a class's method gets a slot iff no ancestor declares it AND some
  * strict descendant redeclares it (whole-program devirtualization).
  * The preorder intervals also identify runtime class membership. */
-export function buildClassGraph(mod: IrModule, fnByName: Map<string, IrFunction>): Map<string, LlClassMeta> {
+export function buildClassGraph(
+  mod: IrModule,
+  fnByName: Map<string, IrFunction>,
+): Map<string, LlClassMeta> {
   const metaMap = new Map<string, LlClassMeta>();
   for (const cls of mod.classes ?? []) {
     metaMap.set(cls.name, new LlClassMeta(cls));
@@ -63,7 +79,8 @@ export function buildClassGraph(mod: IrModule, fnByName: Map<string, IrFunction>
   for (const meta of metaMap.values()) {
     if (meta.def.base === undefined) continue;
     const base = metaMap.get(meta.def.base);
-    if (!base) throw new InternalCompilerError(`llvm emitter bug: undeclared base class ${meta.def.base}`);
+    if (!base)
+      throw new InternalCompilerError(`llvm emitter bug: undeclared base class ${meta.def.base}`);
     meta.base = base;
     base.children.push(meta);
   }
@@ -78,7 +95,8 @@ export function buildClassGraph(mod: IrModule, fnByName: Map<string, IrFunction>
     if (meta.base === null) number(meta, meta);
     meta.hierarchy = meta.base !== null || meta.children.length > 0;
   }
-  const declares = (m: LlClassMeta, method: string): boolean => m.def.methods?.includes(method) ?? false;
+  const declares = (m: LlClassMeta, method: string): boolean =>
+    m.def.methods?.includes(method) ?? false;
   const declaredBelow = (m: LlClassMeta, method: string): boolean =>
     m.children.some((c) => declares(c, method) || declaredBelow(c, method));
   const collectSlots = (m: LlClassMeta, root: LlClassMeta): void => {
@@ -93,9 +111,10 @@ export function buildClassGraph(mod: IrModule, fnByName: Map<string, IrFunction>
           // never dispatch (only abstract classes declare it) — skip.
           const findImpl = (c: LlClassMeta): IrFunction | undefined => {
             for (const child of c.children) {
-              const f = declares(child, method) && !child.def.abstractMethods?.includes(method)
-                ? fnByName.get(`%${child.def.name}.${method}`)
-                : undefined;
+              const f =
+                declares(child, method) && !child.def.abstractMethods?.includes(method)
+                  ? fnByName.get(`%${child.def.name}.${method}`)
+                  : undefined;
               const found = f ?? findImpl(child);
               if (found) return found;
             }
@@ -104,7 +123,10 @@ export function buildClassGraph(mod: IrModule, fnByName: Map<string, IrFunction>
           fn = findImpl(m);
           if (!fn) continue;
         }
-        if (!fn) throw new InternalCompilerError(`llvm emitter bug: missing method function %${m.def.name}.${method}`);
+        if (!fn)
+          throw new InternalCompilerError(
+            `llvm emitter bug: missing method function %${m.def.name}.${method}`,
+          );
         root.slots.push({ method, declarer: m, fn });
       }
     }
@@ -130,7 +152,9 @@ function vtEntriesFor(meta: LlClassMeta): { slot: LlVtSlot; impl: LlClassMeta | 
       }
     }
     if (meta.def.abstract === true) return { slot, impl: null };
-    throw new InternalCompilerError(`llvm emitter bug: no implementation of ${slot.method} for ${meta.def.name}`);
+    throw new InternalCompilerError(
+      `llvm emitter bug: no implementation of ${slot.method} for ${meta.def.name}`,
+    );
   });
 }
 
@@ -171,7 +195,10 @@ export function classEnvironmentIndex(meta: LlClassMeta): number {
  * at 1 on hierarchy members, then the flattened field list. */
 export function classFieldIndex(meta: LlClassMeta, field: string): { index: number; type: IrType } {
   const idx = meta.def.fields.findIndex((f) => f.name === field);
-  if (idx < 0) throw new InternalCompilerError(`llvm emitter bug: unknown field ${field} on class ${meta.def.name}`);
+  if (idx < 0)
+    throw new InternalCompilerError(
+      `llvm emitter bug: unknown field ${field} on class ${meta.def.name}`,
+    );
   return { index: fieldBase(meta) + idx, type: meta.def.fields[idx]!.type };
 }
 
@@ -243,9 +270,11 @@ export function emitClassShapes(
     // stream subclasses add the state pointer — upcasts to ScrEmitter* /
     // ScrStream* are the usual pointer reinterprets.
     const prefix = meta.hierarchy
-      ? streamRooted(meta) ? ["ptr", "ptr", "ptr", "ptr"]
-      : emitterRooted(meta) ? ["ptr", "ptr", "ptr"]
-      : ["ptr"]
+      ? streamRooted(meta)
+        ? ["ptr", "ptr", "ptr", "ptr"]
+        : emitterRooted(meta)
+          ? ["ptr", "ptr", "ptr"]
+          : ["ptr"]
       : [];
     const members = [...prefix, ...fieldTys];
     typeDefs.push(
@@ -301,13 +330,18 @@ export function emitClassShapes(
     const indexedFields = [
       ...cls.fields.map((f, i) => ({ name: f.name, type: f.type, index: fieldIndex(i) })),
     ];
-    const refFields = indexedFields
-      .filter((f) => isRefCounted(f.type));
+    const refFields = indexedFields.filter((f) => isRefCounted(f.type));
     const sizeOf = `ptrtoint (ptr getelementptr (%${struct}, ptr null, i32 1) to ${host.sizeType})`;
     // An embedded prefix slot (the emitter registry at 2, the stream
     // state at 4) handed to one of the runtime's prefix helpers —
     // teardown/trace/collector.
-    const prefixCall = (tag: string, slot: number, entry: string, tail: string, what: string): string[] => {
+    const prefixCall = (
+      tag: string,
+      slot: number,
+      entry: string,
+      tail: string,
+      what: string,
+    ): string[] => {
       host.declare(`declare void @${entry}(ptr${tail ? ", ptr, ptr" : ""})`);
       return [
         `  %${tag}p = getelementptr inbounds %${struct}, ptr %o, i64 0, i32 ${slot}`,
@@ -472,8 +506,10 @@ export function emitClassShapes(
         `define internal void @${mangleClassTrace(cls.name)}(ptr %o, ptr %visit, ptr %ctx) ${FN_ATTRS} { ; trace ${cls.name}`,
         `entry:`,
       ];
-      if (isEmitterRooted) tr.push(...regCall("tr", "scr_emitter_reg_trace", ", ptr %visit, ptr %ctx"));
-      if (isStreamRooted) tr.push(...stCall("trs", "scr_stream_st_trace", ", ptr %visit, ptr %ctx"));
+      if (isEmitterRooted)
+        tr.push(...regCall("tr", "scr_emitter_reg_trace", ", ptr %visit, ptr %ctx"));
+      if (isStreamRooted)
+        tr.push(...stCall("trs", "scr_stream_st_trace", ", ptr %visit, ptr %ctx"));
       tracedFields.forEach((f, i) => {
         tr.push(
           `  %f${i} = getelementptr inbounds %${struct}, ptr %o, i64 0, i32 ${f.index}`,
@@ -498,7 +534,13 @@ export function emitClassShapes(
         );
       });
       host.declare(`declare void @scr_cyc_free(ptr)`);
-      gf.push(`  call void @scr_obj_free_note()`, `  call void @scr_cyc_free(ptr %o)`, `  ret void`, `}`, ``);
+      gf.push(
+        `  call void @scr_obj_free_note()`,
+        `  call void @scr_cyc_free(ptr %o)`,
+        `  ret void`,
+        `}`,
+        ``,
+      );
       defs.push(...gf);
     }
   }
@@ -521,26 +563,38 @@ export function emitClassObjDefs(
   const out: string[] = [];
   for (const [className, { nameSym }] of classObjs) {
     const meta = metaMap.get(className);
-    if (!meta) throw new InternalCompilerError(`llvm emitter bug: class object for unknown class ${className}`);
+    if (!meta)
+      throw new InternalCompilerError(
+        `llvm emitter bug: class object for unknown class ${className}`,
+      );
     // A generic instantiation's class object carries its FAMILY's interval
     // (JS has ONE `Box` at runtime); construction still dispatches the
     // instantiation's own thunk.
     const intervalMeta = meta.def.genericOf !== undefined ? metaMap.get(meta.def.genericOf) : meta;
     if (!intervalMeta) {
-      throw new InternalCompilerError(`llvm emitter bug: class object for ${className} names unknown family ${meta.def.genericOf ?? ""}`);
+      throw new InternalCompilerError(
+        `llvm emitter bug: class object for ${className} names unknown family ${meta.def.genericOf ?? ""}`,
+      );
     }
     const ctor = fnByName.get(`%${className}.constructor`);
-    if (!ctor) throw new InternalCompilerError(`llvm emitter bug: class object for ${className} without a constructor`);
+    if (!ctor)
+      throw new InternalCompilerError(
+        `llvm emitter bug: class object for ${className} without a constructor`,
+      );
     const params = ctor.params.slice(1);
     const paramDecls = params.map((p, i) => `${llType(p.type)} %a${i}`).join(", ");
     const ctorArgs = params.map((p, i) => `${llType(p.type)} %a${i}`);
-    if (meta.def.localCaptures !== undefined) host.declare(`declare ptr @scr_classobj_retain_v(ptr)`);
+    if (meta.def.localCaptures !== undefined)
+      host.declare(`declare ptr @scr_classobj_retain_v(ptr)`);
     const localBaseInits: string[] = [];
     let localOwner = meta;
     let localValue = "%class";
     let localIndex = 0;
     while (localOwner.base) {
-      if (localOwner.def.localBaseCapture === undefined && localOwner.def.baseValueGlobal === undefined) {
+      if (
+        localOwner.def.localBaseCapture === undefined &&
+        localOwner.def.baseValueGlobal === undefined
+      ) {
         localOwner = localOwner.base;
         continue;
       }
@@ -553,16 +607,18 @@ export function emitClassObjDefs(
           `  %base.raw${id} = load ptr, ptr @${mangleGlobal(localOwner.def.baseValueGlobal)}`,
           `  %base.value${id} = call ptr @scr_classobj_retain_v(ptr %base.raw${id})`,
         );
-      } else localBaseInits.push(
-        `  %base.caps${id} = getelementptr inbounds %ScrClassObj, ptr ${localValue}, i64 1`,
-        `  %base.cap${id} = getelementptr inbounds ptr, ptr %base.caps${id}, ${host.sizeType} ${localOwner.def.localBaseCapture}`,
-        `  %base.box${id} = load ptr, ptr %base.cap${id}`,
-        `  %base.value${id} = call ptr @scr_box_get_ref(ptr %base.box${id})`,
-      );
-      if (base.def.localCaptures !== undefined) localBaseInits.push(
-        `  %base.slot${id} = getelementptr inbounds %${mangleClassStruct(base.def.name)}, ptr %o, i64 0, i32 ${classEnvironmentIndex(base)}`,
-        `  store ptr %base.value${id}, ptr %base.slot${id}`,
-      );
+      } else
+        localBaseInits.push(
+          `  %base.caps${id} = getelementptr inbounds %ScrClassObj, ptr ${localValue}, i64 1`,
+          `  %base.cap${id} = getelementptr inbounds ptr, ptr %base.caps${id}, ${host.sizeType} ${localOwner.def.localBaseCapture}`,
+          `  %base.box${id} = load ptr, ptr %base.cap${id}`,
+          `  %base.value${id} = call ptr @scr_box_get_ref(ptr %base.box${id})`,
+        );
+      if (base.def.localCaptures !== undefined)
+        localBaseInits.push(
+          `  %base.slot${id} = getelementptr inbounds %${mangleClassStruct(base.def.name)}, ptr %o, i64 0, i32 ${classEnvironmentIndex(base)}`,
+          `  store ptr %base.value${id}, ptr %base.slot${id}`,
+        );
       else {
         host.declare(`declare void @scr_classobj_release_v(ptr)`);
         localBaseInits.push(`  call void @scr_classobj_release_v(ptr %base.value${id})`);
@@ -574,11 +630,13 @@ export function emitClassObjDefs(
       `define internal ptr @${mangleCtorThunk(className)}(ptr %class${paramDecls ? ", " + paramDecls : ""}) ${FN_ATTRS} { ; construct thunk ${className}`,
       `entry:`,
       `  %o = call ptr @${mangleClassNew(className)}()`,
-      ...(meta.def.localCaptures !== undefined ? [
-        `  %class.owned = call ptr @scr_classobj_retain_v(ptr %class)`,
-        `  %class.slot = getelementptr inbounds %${mangleClassStruct(className)}, ptr %o, i64 0, i32 ${classEnvironmentIndex(meta)}`,
-        `  store ptr %class.owned, ptr %class.slot`,
-      ] : []),
+      ...(meta.def.localCaptures !== undefined
+        ? [
+            `  %class.owned = call ptr @scr_classobj_retain_v(ptr %class)`,
+            `  %class.slot = getelementptr inbounds %${mangleClassStruct(className)}, ptr %o, i64 0, i32 ${classEnvironmentIndex(meta)}`,
+            `  store ptr %class.owned, ptr %class.slot`,
+          ]
+        : []),
       ...localBaseInits,
       `  %r = call ptr @${mangleClassRetain(className)}(ptr %o)`,
       `  call void @${mangleFunction(`%${className}.constructor`)}(${[`ptr %r`, ...ctorArgs].join(", ")})`,

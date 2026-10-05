@@ -11,9 +11,15 @@ test("numeric byte pipelines retain checked fallbacks and use field widths on bo
     const entry = join(import.meta.dirname, "../../../tests/corpus/byte-number-pipeline.ts");
     const outPath = join(dir, "main.ir.json");
     const result = await compile(entry, { outDir: dir, outPath, outputKind: "ir" });
-    if (!result.ok) throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
+    if (!result.ok)
+      throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
     const mod = deserializeModule(await readFile(outPath, "utf8"));
-    const body = (ll: string, name: string): string => ll.match(new RegExp(`define internal [^\\n]+ @sc_(?:b)?f_${name}\\([^\\n]*\\) #0 \\{([\\s\\S]*?)\\n\\}`))![1]!;
+    const body = (ll: string, name: string): string =>
+      ll.match(
+        new RegExp(
+          `define internal [^\\n]+ @sc_(?:b)?f_${name}\\([^\\n]*\\) #0 \\{([\\s\\S]*?)\\n\\}`,
+        ),
+      )![1]!;
     for (const pointerBits of [32, 64] as const) {
       const ll = emitLlvmModule(mod, { pointerBits, wasi: pointerBits === 32 });
       for (const name of ["bufferRecords", "viewRecords", "backwards"]) {
@@ -30,7 +36,8 @@ test("numeric byte pipelines retain checked fallbacks and use field widths on bo
         expect(body(ll, name)).not.toContain("bytes.number.index");
         expect(body(ll, name)).not.toMatch(/icmp uge i(?:32|64)/);
       }
-      for (const name of ["shortTarget", "replacedBound"]) expect(body(ll, name)).toMatch(/icmp uge i(?:32|64)/);
+      for (const name of ["shortTarget", "replacedBound"])
+        expect(body(ll, name)).toMatch(/icmp uge i(?:32|64)/);
       const wide = body(ll, "wideFields");
       expect(wide).toMatch(/load i40, ptr %\w+, align 1/);
       expect(wide).toMatch(/load i48, ptr %\w+, align 1/);
@@ -42,7 +49,9 @@ test("numeric byte pipelines retain checked fallbacks and use field widths on bo
       expect(offsets).toContain("@scr_dataview_get");
       expect(offsets).toMatch(/icmp ule i(?:32|64)/);
     }
-  } finally { await rm(dir, { recursive: true, force: true }); }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("module-private numeric proofs retain global ownership and exclude shared bindings", async () => {
@@ -63,5 +72,7 @@ test("module-private numeric proofs retain global ownership and exclude shared b
       expect(ll).toMatch(/call void @scr_bytes_release\(ptr %g\d+\) ; source/);
       expect(ll).toContain("@scr_bytes_read_num");
     }
-  } finally { await rm(dir, { recursive: true, force: true }); }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

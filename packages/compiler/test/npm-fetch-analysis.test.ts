@@ -1,8 +1,6 @@
 import { npmFetchCases } from "./npm-fetch-cases.js";
 import { expect, test } from "vitest";
-import {
-  embeddedModulesUsingGlobalFetch,
-} from "../src/frontend/npm-fetch-node.js";
+import { embeddedModulesUsingGlobalFetch } from "../src/frontend/npm-fetch-node.js";
 import type { EmbeddedModule } from "../src/frontend/npm.js";
 
 function js(key: string, source: string): EmbeddedModule {
@@ -17,12 +15,27 @@ test("embedded fetch capability analysis ignores text and local bindings", () =>
     js("local", "const fetch = (x) => x; module.exports = fetch('local');"),
     js("parameter", "module.exports = function (fetch) { return fetch('local'); };"),
     js("import", "import fetch from 'a-local-package'; export default fetch('local');"),
-    js("named-import", "import { fetch as request } from 'pure-local'; export default request('local');"),
+    js(
+      "named-import",
+      "import { fetch as request } from 'pure-local'; export default request('local');",
+    ),
     js("named-reexport", "export { fetch as request } from 'pure-local';"),
-    js("shadow-global", "module.exports = function (globalThis) { return globalThis.fetch('local'); };"),
-    js("object-destructure", "const source = { fetch: 1 }; const { fetch: request } = source; module.exports = request;"),
-    js("local-alias", "const source = { fetch: 1 }; const root = source; module.exports = root.fetch;"),
-    js("shadowed-alias", "const root = globalThis; module.exports = function (root) { return root.fetch; };"),
+    js(
+      "shadow-global",
+      "module.exports = function (globalThis) { return globalThis.fetch('local'); };",
+    ),
+    js(
+      "object-destructure",
+      "const source = { fetch: 1 }; const { fetch: request } = source; module.exports = request;",
+    ),
+    js(
+      "local-alias",
+      "const source = { fetch: 1 }; const root = source; module.exports = root.fetch;",
+    ),
+    js(
+      "shadowed-alias",
+      "const root = globalThis; module.exports = function (root) { return root.fetch; };",
+    ),
     js("label", "fetch: for (;;) { break fetch; } module.exports = 1;"),
   ];
 
@@ -37,15 +50,30 @@ test("embedded fetch capability analysis finds global reads", () => {
     js("global", "module.exports = global['fetch']('https://example.com');"),
     js("destructure", "const { fetch } = globalThis; module.exports = fetch;"),
     js("destructure-alias", "const { fetch: request } = global; module.exports = request;"),
-    js("destructure-computed", "const { ['fetch']: request } = globalThis; module.exports = request;"),
-    js("destructure-assign", "let request; ({ fetch: request } = globalThis); module.exports = request;"),
+    js(
+      "destructure-computed",
+      "const { ['fetch']: request } = globalThis; module.exports = request;",
+    ),
+    js(
+      "destructure-assign",
+      "let request; ({ fetch: request } = globalThis); module.exports = request;",
+    ),
     js("global-alias", "const root = globalThis; module.exports = root.fetch;"),
     js("global-logical-alias", "const root = globalThis || global; module.exports = root.fetch;"),
     js("global-nullish-alias", "const root = globalThis ?? global; module.exports = root.fetch;"),
-    js("global-conditional-alias", "const root = typeof globalThis === 'undefined' ? global : globalThis; module.exports = root.fetch;"),
+    js(
+      "global-conditional-alias",
+      "const root = typeof globalThis === 'undefined' ? global : globalThis; module.exports = root.fetch;",
+    ),
     js("global-mutable-alias", "let root = globalThis; module.exports = root.fetch;"),
-    js("global-alias-chain", "const root = global; const platform = root; module.exports = platform['fetch'];"),
-    js("global-alias-destructure", "const root = globalThis; const { fetch: request } = root; module.exports = request;"),
+    js(
+      "global-alias-chain",
+      "const root = global; const platform = root; module.exports = platform['fetch'];",
+    ),
+    js(
+      "global-alias-destructure",
+      "const root = globalThis; const { fetch: request } = root; module.exports = request;",
+    ),
     {
       ...js("windows-path", "module.exports = fetch('https://example.com');"),
       key: "C:\\pkg\\index.js",
@@ -72,9 +100,13 @@ test("embedded fetch capability analysis finds global reads", () => {
   ]);
 });
 
-
 test("global fetch capability matrix keeps local names and global aliases distinct", () => {
-  const modules: EmbeddedModule[] = npmFetchCases.map((item, index) => ({ key: `${index}.js`, source: item.source, format: "cjs" }));
+  const modules: EmbeddedModule[] = npmFetchCases.map((item, index) => ({
+    key: `${index}.js`,
+    source: item.source,
+    format: "cjs",
+  }));
   const found = embeddedModulesUsingGlobalFetch(modules);
-  for (let i = 0; i < modules.length; i++) expect(found.has(modules[i]!.key), npmFetchCases[i]!.name).toBe(npmFetchCases[i]!.usesFetch);
+  for (let i = 0; i < modules.length; i++)
+    expect(found.has(modules[i]!.key), npmFetchCases[i]!.name).toBe(npmFetchCases[i]!.usesFetch);
 });

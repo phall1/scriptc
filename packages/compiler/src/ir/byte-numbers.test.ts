@@ -1,5 +1,13 @@
 import { expect, test } from "vitest";
-import { F64, STRING, VOID, bytesOf, type IrBytesIntrinsicMethod, type IrExpr, type IrFunction } from "./ir.js";
+import {
+  F64,
+  STRING,
+  VOID,
+  bytesOf,
+  type IrBytesIntrinsicMethod,
+  type IrExpr,
+  type IrFunction,
+} from "./ir.js";
 import { byteNumberAccess, byteNumberRange, validByteNumberToken } from "./byte-numbers.js";
 import { analyzeIntegerRanges } from "./integer-ranges.js";
 
@@ -8,7 +16,14 @@ const num = (value: number): IrExpr => ({ kind: "numLit", value, type: F64, loc 
 const token = (value: string): IrExpr => ({ kind: "strLit", value, type: STRING, loc });
 const receiver: IrExpr = { kind: "varRef", localId: "bytes", type: bytesOf("u8"), loc };
 function access(method: IrBytesIntrinsicMethod, args: IrExpr[]): IrExpr {
-  return { kind: "bytesIntrinsic", method, receiver, args, type: method.startsWith("dvSet") ? VOID : F64, loc };
+  return {
+    kind: "bytesIntrinsic",
+    method,
+    receiver,
+    args,
+    type: method.startsWith("dvSet") ? VOID : F64,
+    loc,
+  };
 }
 
 test("standard numeric reads carry exact integer ranges without classifying floats or rounded 64-bit reads", () => {
@@ -24,14 +39,21 @@ test("standard numeric reads carry exact integer ranges without classifying floa
     [access("readNum", [token("f64le"), num(0)]), null],
     [access("writeNum", [token("u32le"), num(1), num(0)]), null],
   ];
-  const fn: IrFunction = { name: "f", params: [], locals: [], returnType: VOID, loc,
-    body: cases.map(([expr]) => ({ kind: "exprStmt", expr, loc })) };
+  const fn: IrFunction = {
+    name: "f",
+    params: [],
+    locals: [],
+    returnType: VOID,
+    loc,
+    body: cases.map(([expr]) => ({ kind: "exprStmt", expr, loc })),
+  };
   const ranges = analyzeIntegerRanges(fn);
   for (const [expr, expected] of cases) expect(ranges.get(expr)).toEqual(expected);
 });
 
 test("variable widths require a valid literal and fixed tokens cannot inherit prototype entries", () => {
-  for (const width of [0, 7, 1.5, NaN, Infinity]) expect(byteNumberAccess(access("readNumVar", [token("ule"), num(0), num(width)]))).toBeNull();
+  for (const width of [0, 7, 1.5, NaN, Infinity])
+    expect(byteNumberAccess(access("readNumVar", [token("ule"), num(0), num(width)]))).toBeNull();
   for (const value of ["toString", "constructor", "__proto__", "u8le", "u64le", "f32", "u32xx"]) {
     expect(validByteNumberToken("readNum", value)).toBe(false);
     expect(byteNumberAccess(access("readNum", [token(value), num(0)]))).toBeNull();

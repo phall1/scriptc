@@ -1,8 +1,25 @@
 import { expect, test } from "vitest";
-import { BOOL, F64, VOID, UNDEFINED_T, arrayOf, funcOf, type IrExpr, type IrFunction, type IrModule, type IrStmt, type IrType } from "../../ir/ir.js";
+import {
+  BOOL,
+  F64,
+  VOID,
+  UNDEFINED_T,
+  arrayOf,
+  funcOf,
+  type IrExpr,
+  type IrFunction,
+  type IrModule,
+  type IrStmt,
+  type IrType,
+} from "../../ir/ir.js";
 import { validateModule } from "../../ir/validate.js";
 import { emitLlvmModule } from "./emitter.js";
-import { findArrayPreservingFunctions, findLocalArrayReads, findCallArrayReads, OptionalArrayReads } from "./local-array-reads.js";
+import {
+  findArrayPreservingFunctions,
+  findLocalArrayReads,
+  findCallArrayReads,
+  OptionalArrayReads,
+} from "./local-array-reads.js";
 import { analyzeCallLifetimes } from "./call-lifetimes.js";
 
 const loc = { file: "local-array.ts", start: 0, end: 0 };
@@ -11,38 +28,128 @@ const optional: IrType = { kind: "union", unionId: "optional" };
 const array = arrayOf(element);
 const ref = (localId: string, type: IrType): IrExpr => ({ kind: "varRef", localId, type, loc });
 const num = (value: number): IrExpr => ({ kind: "numLit", value, type: F64, loc });
-const params = [{ localId: "a", name: "a", type: array }, { localId: "i", name: "i", type: F64 }];
+const params = [
+  { localId: "a", name: "a", type: array },
+  { localId: "i", name: "i", type: F64 },
+];
 const unionValue = ref("value", optional);
-const narrow: IrExpr = { kind: "unionNarrow", unionId: "optional", tag: 0, value: unionValue, type: element, loc };
+const narrow: IrExpr = {
+  kind: "unionNarrow",
+  unionId: "optional",
+  tag: 0,
+  value: unionValue,
+  type: element,
+  loc,
+};
 
 function fixture(): IrModule {
   const producer: IrFunction = {
-    name: "read", params, returnType: optional, locals: params.map((p) => ({ id: p.localId, name: p.name, type: p.type, mutable: false })), loc,
-    body: [{ kind: "return", loc, value: {
-      kind: "ternary", type: optional, loc,
-      cond: { kind: "bin", op: "===", left: { kind: "arrayState", arr: ref("a", array), index: ref("i", F64), type: F64, loc }, right: num(1), type: BOOL, loc },
-      then: { kind: "unionWrap", unionId: "optional", tag: 0, value: { kind: "arrayGet", arr: ref("a", array), index: ref("i", F64), type: element, loc }, type: optional, loc },
-      else_: { kind: "unionWrap", unionId: "optional", tag: 1, value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc }, type: optional, loc },
-    } }],
-  };
-  const work: IrFunction = {
-    name: "work", params, returnType: F64, loc,
-    locals: [...producer.locals, { id: "value", name: "value", type: optional, mutable: false }],
+    name: "read",
+    params,
+    returnType: optional,
+    locals: params.map((p) => ({ id: p.localId, name: p.name, type: p.type, mutable: false })),
+    loc,
     body: [
-      { kind: "varDecl", localId: "value", init: { kind: "call", callee: "read", args: [ref("a", array), ref("i", F64)], type: optional, loc }, loc },
-      { kind: "return", value: { kind: "recordGet", obj: narrow, shapeId: "cell", field: "x", type: F64, loc }, loc },
+      {
+        kind: "return",
+        loc,
+        value: {
+          kind: "ternary",
+          type: optional,
+          loc,
+          cond: {
+            kind: "bin",
+            op: "===",
+            left: {
+              kind: "arrayState",
+              arr: ref("a", array),
+              index: ref("i", F64),
+              type: F64,
+              loc,
+            },
+            right: num(1),
+            type: BOOL,
+            loc,
+          },
+          then: {
+            kind: "unionWrap",
+            unionId: "optional",
+            tag: 0,
+            value: {
+              kind: "arrayGet",
+              arr: ref("a", array),
+              index: ref("i", F64),
+              type: element,
+              loc,
+            },
+            type: optional,
+            loc,
+          },
+          else_: {
+            kind: "unionWrap",
+            unionId: "optional",
+            tag: 1,
+            value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc },
+            type: optional,
+            loc,
+          },
+        },
+      },
     ],
   };
-  return { irVersion: 13, sourceFile: loc.file, entry: "main", records: [{ id: "cell", fields: [{ name: "x", type: F64 }] }], unions: [{ id: "optional", arms: [element, UNDEFINED_T] }],
-    functions: [{ name: "main", params: [], returnType: VOID, locals: [], body: [], loc }, producer, work] };
+  const work: IrFunction = {
+    name: "work",
+    params,
+    returnType: F64,
+    loc,
+    locals: [...producer.locals, { id: "value", name: "value", type: optional, mutable: false }],
+    body: [
+      {
+        kind: "varDecl",
+        localId: "value",
+        init: {
+          kind: "call",
+          callee: "read",
+          args: [ref("a", array), ref("i", F64)],
+          type: optional,
+          loc,
+        },
+        loc,
+      },
+      {
+        kind: "return",
+        value: { kind: "recordGet", obj: narrow, shapeId: "cell", field: "x", type: F64, loc },
+        loc,
+      },
+    ],
+  };
+  return {
+    irVersion: 13,
+    sourceFile: loc.file,
+    entry: "main",
+    records: [{ id: "cell", fields: [{ name: "x", type: F64 }] }],
+    unions: [{ id: "optional", arms: [element, UNDEFINED_T] }],
+    functions: [
+      { name: "main", params: [], returnType: VOID, locals: [], body: [], loc },
+      producer,
+      work,
+    ],
+  };
 }
 function candidates(mod: IrModule) {
   const functions = new Map(mod.functions.map((f) => [f.name, f]));
   const unions = new Map(mod.unions!.map((u) => [u.id, u]));
-  return findLocalArrayReads(mod.functions[2]!, functions, unions, findArrayPreservingFunctions(functions, unions));
+  return findLocalArrayReads(
+    mod.functions[2]!,
+    functions,
+    unions,
+    findArrayPreservingFunctions(functions, unions),
+  );
 }
 function workBody(mod: IrModule, pointerBits: 32 | 64 = 64) {
-  return /^define internal [^\n]*@sc_(?:b)?f_work\([^]*?^}/m.exec(emitLlvmModule(mod, { pointerBits }))![0];
+  return /^define internal [^\n]*@sc_(?:b)?f_work\([^]*?^}/m.exec(
+    emitLlvmModule(mod, { pointerBits }),
+  )![0];
 }
 
 test("private optional array results use local tags and borrowed payloads on both ABIs", () => {
@@ -62,7 +169,12 @@ test("private optional array results use local tags and borrowed payloads on bot
 
 test("array mutation preserves a separate payload owner and exceptional cleanup", () => {
   const mod = fixture();
-  mod.functions[2]!.body.splice(1, 0, { kind: "arraySetLength", arr: ref("a", array), length: num(0), loc });
+  mod.functions[2]!.body.splice(1, 0, {
+    kind: "arraySetLength",
+    arr: ref("a", array),
+    length: num(0),
+    loc,
+  });
   expect(validateModule(mod)).toEqual([]);
   expect(candidates(mod).get("value")?.borrow).not.toBe(true);
   const body = workBody(mod);
@@ -71,19 +183,36 @@ test("array mutation preserves a separate payload owner and exceptional cleanup"
   expect(body).not.toContain("@scr_union_release");
 });
 
-test.each(["alias", "capture", "assign", "boxed", "tdz", "mutable", "duplicate", "async", "effectful producer"])("keeps %s optional boxes on the general path", (reason) => {
+test.each([
+  "alias",
+  "capture",
+  "assign",
+  "boxed",
+  "tdz",
+  "mutable",
+  "duplicate",
+  "async",
+  "effectful producer",
+])("keeps %s optional boxes on the general path", (reason) => {
   const mod = fixture();
   const fn = mod.functions[2]!;
   const local = fn.locals[2]!;
   if (reason === "alias") fn.body.push({ kind: "return", value: unionValue, loc });
-  if (reason === "capture") fn.body.push({ kind: "exprStmt", expr: { kind: "closure", fnName: "capture", captures: ["value"], type: funcOf([], F64), loc }, loc });
-  if (reason === "assign") fn.body.push({ kind: "assign", localId: "value", value: unionValue, loc });
+  if (reason === "capture")
+    fn.body.push({
+      kind: "exprStmt",
+      expr: { kind: "closure", fnName: "capture", captures: ["value"], type: funcOf([], F64), loc },
+      loc,
+    });
+  if (reason === "assign")
+    fn.body.push({ kind: "assign", localId: "value", value: unionValue, loc });
   if (reason === "boxed") local.boxed = true;
   if (reason === "tdz") local.tdz = true;
   if (reason === "mutable") local.mutable = true;
   if (reason === "duplicate") fn.body.push(fn.body[0]!);
   if (reason === "async") fn.async = true;
-  if (reason === "effectful producer") mod.functions[1]!.body.unshift({ kind: "exprStmt", expr: num(1), loc });
+  if (reason === "effectful producer")
+    mod.functions[1]!.body.unshift({ kind: "exprStmt", expr: num(1), loc });
   expect(candidates(mod).size).toBe(0);
 });
 
@@ -102,16 +231,29 @@ test("unknown calls and reference stores disable array borrowing", () => {
 
 function scalarHelper(name: string, callee?: string): IrFunction {
   return {
-    name, params: [{ localId: "n", name: "n", type: F64 }], returnType: F64, loc,
+    name,
+    params: [{ localId: "n", name: "n", type: F64 }],
+    returnType: F64,
+    loc,
     locals: [{ id: "n", name: "n", type: F64, mutable: false }],
-    body: [{ kind: "return", loc, value: callee
-      ? { kind: "call", callee, args: [ref("n", F64)], type: F64, loc }
-      : { kind: "bin", op: "+", left: ref("n", F64), right: num(1), type: F64, loc } }],
+    body: [
+      {
+        kind: "return",
+        loc,
+        value: callee
+          ? { kind: "call", callee, args: [ref("n", F64)], type: F64, loc }
+          : { kind: "bin", op: "+", left: ref("n", F64), right: num(1), type: F64, loc },
+      },
+    ],
   };
 }
 
 function callHelper(mod: IrModule, callee: string, argument: IrExpr = num(2)): void {
-  mod.functions[2]!.body.splice(1, 0, { kind: "exprStmt", loc, expr: { kind: "call", callee, args: [argument], type: F64, loc } });
+  mod.functions[2]!.body.splice(1, 0, {
+    kind: "exprStmt",
+    loc,
+    expr: { kind: "call", callee, args: [argument], type: F64, loc },
+  });
 }
 
 test("borrows array payloads across direct and transitive scalar helpers", () => {
@@ -142,24 +284,49 @@ test("propagates reference mutation through a recursive call group", () => {
   expect(workBody(mod)).toContain("@sc_rretain_");
 });
 
-test.each(["unknown", "callback", "async", "capture", "reference store"])("rejects helpers with %s effects through callers", (effect) => {
-  const mod = fixture();
-  const inner = scalarHelper("inner");
-  mod.functions.push(scalarHelper("outer", "inner"), inner);
-  callHelper(mod, "outer");
-  if (effect === "unknown") inner.body[0] = { kind: "return", loc, value: { kind: "call", callee: "unavailable", args: [], type: F64, loc } };
-  if (effect === "callback") inner.body[0] = { kind: "return", loc, value: { kind: "callValue", callee: ref("callback", funcOf([], F64)), args: [], type: F64, loc } };
-  if (effect === "async") inner.async = true;
-  if (effect === "capture") inner.captures = [];
-  if (effect === "reference store") inner.body.unshift({ kind: "arraySetLength", arr: ref("items", array), length: num(0), loc });
-  expect(candidates(mod).get("value")?.borrow).not.toBe(true);
-});
+test.each(["unknown", "callback", "async", "capture", "reference store"])(
+  "rejects helpers with %s effects through callers",
+  (effect) => {
+    const mod = fixture();
+    const inner = scalarHelper("inner");
+    mod.functions.push(scalarHelper("outer", "inner"), inner);
+    callHelper(mod, "outer");
+    if (effect === "unknown")
+      inner.body[0] = {
+        kind: "return",
+        loc,
+        value: { kind: "call", callee: "unavailable", args: [], type: F64, loc },
+      };
+    if (effect === "callback")
+      inner.body[0] = {
+        kind: "return",
+        loc,
+        value: {
+          kind: "callValue",
+          callee: ref("callback", funcOf([], F64)),
+          args: [],
+          type: F64,
+          loc,
+        },
+      };
+    if (effect === "async") inner.async = true;
+    if (effect === "capture") inner.captures = [];
+    if (effect === "reference store")
+      inner.body.unshift({ kind: "arraySetLength", arr: ref("items", array), length: num(0), loc });
+    expect(candidates(mod).get("value")?.borrow).not.toBe(true);
+  },
+);
 
 test("checks side effects in arguments even when the callee preserves references", () => {
   const mod = fixture();
   mod.functions.push(scalarHelper("helper"));
-  callHelper(mod, "helper", { kind: "seqExpr", loc, type: F64,
-    stmts: [{ kind: "arraySetLength", arr: ref("a", array), length: num(0), loc }], result: num(0) });
+  callHelper(mod, "helper", {
+    kind: "seqExpr",
+    loc,
+    type: F64,
+    stmts: [{ kind: "arraySetLength", arr: ref("a", array), length: num(0), loc }],
+    result: num(0),
+  });
   expect(validateModule(mod)).toEqual([]);
   expect(candidates(mod).get("value")?.borrow).not.toBe(true);
   expect(workBody(mod)).toContain("@sc_rretain_");
@@ -175,17 +342,29 @@ test("iteratively propagates an unsafe leaf through a long call chain", () => {
 
 function projectionHelper(name: string, callee?: string): IrFunction {
   return {
-    name, params: [{ localId: "value", name: "value", type: optional }], returnType: F64, loc,
+    name,
+    params: [{ localId: "value", name: "value", type: optional }],
+    returnType: F64,
+    loc,
     locals: [{ id: "value", name: "value", type: optional, mutable: true }],
-    body: [{ kind: "return", loc, value: callee
-      ? { kind: "call", callee, args: [unionValue], type: F64, loc }
-      : { kind: "recordGet", obj: narrow, shapeId: "cell", field: "x", type: F64, loc } }],
+    body: [
+      {
+        kind: "return",
+        loc,
+        value: callee
+          ? { kind: "call", callee, args: [unionValue], type: F64, loc }
+          : { kind: "recordGet", obj: narrow, shapeId: "cell", field: "x", type: F64, loc },
+      },
+    ],
   };
 }
 
 function passOptional(mod: IrModule, callee: string): void {
-  mod.functions[2]!.body[1] = { kind: "return", loc,
-    value: { kind: "call", callee, args: [unionValue], type: F64, loc } };
+  mod.functions[2]!.body[1] = {
+    kind: "return",
+    loc,
+    value: { kind: "call", callee, args: [unionValue], type: F64, loc },
+  };
 }
 
 test("keeps optional array boxes local across transitive projection helpers", () => {
@@ -212,8 +391,11 @@ test("a mutating helper preserves the local box but requires its payload owner",
   helper.locals.push({ id: "items", name: "items", type: array, mutable: false });
   helper.body.unshift({ kind: "arraySetLength", arr: ref("items", array), length: num(0), loc });
   mod.functions.push(helper);
-  mod.functions[2]!.body[1] = { kind: "return", loc,
-    value: { kind: "call", callee: "helper", args: [unionValue, ref("a", array)], type: F64, loc } };
+  mod.functions[2]!.body[1] = {
+    kind: "return",
+    loc,
+    value: { kind: "call", callee: "helper", args: [unionValue, ref("a", array)], type: F64, loc },
+  };
   expect(validateModule(mod)).toEqual([]);
   expect(candidates(mod).get("value")?.borrow).not.toBe(true);
   const body = workBody(mod);
@@ -225,7 +407,8 @@ test("a mutating helper preserves the local box but requires its payload owner",
 
 test("an escaping leaf restores heap boxes throughout a recursive forwarding group", () => {
   const mod = fixture();
-  const outer = projectionHelper("outer", "inner"), inner = projectionHelper("inner", "outer");
+  const outer = projectionHelper("outer", "inner"),
+    inner = projectionHelper("inner", "outer");
   mod.functions.push(outer, inner);
   passOptional(mod, "outer");
   expect(candidates(mod).has("value")).toBe(true);
@@ -244,10 +427,18 @@ test("a later mutating argument snapshots the payload before entering the helper
   helper.params.push({ localId: "count", name: "count", type: F64 });
   helper.locals.push({ id: "count", name: "count", type: F64, mutable: true });
   mod.functions.push(helper);
-  const later: IrExpr = { kind: "seqExpr", loc, type: F64,
-    stmts: [{ kind: "arraySetLength", arr: ref("a", array), length: num(0), loc }], result: num(1) };
-  mod.functions[2]!.body[1] = { kind: "return", loc,
-    value: { kind: "call", callee: "helper", args: [unionValue, later], type: F64, loc } };
+  const later: IrExpr = {
+    kind: "seqExpr",
+    loc,
+    type: F64,
+    stmts: [{ kind: "arraySetLength", arr: ref("a", array), length: num(0), loc }],
+    result: num(1),
+  };
+  mod.functions[2]!.body[1] = {
+    kind: "return",
+    loc,
+    value: { kind: "call", callee: "helper", args: [unionValue, later], type: F64, loc },
+  };
   expect(validateModule(mod)).toEqual([]);
   expect(candidates(mod).get("value")?.borrow).not.toBe(true);
   const body = workBody(mod);
@@ -259,15 +450,42 @@ test("a later mutating argument snapshots the payload before entering the helper
 function immediateFixture(): IrModule {
   const module = fixture();
   const consume: IrFunction = {
-    name: "consume", loc, params: [{ localId: "value", name: "value", type: optional }],
-    locals: [{ id: "value", name: "value", type: optional, mutable: true }], returnType: F64,
-    body: [{ kind: "return", value: { kind: "recordGet", obj: narrow, shapeId: "cell", field: "x", type: F64, loc }, loc }],
+    name: "consume",
+    loc,
+    params: [{ localId: "value", name: "value", type: optional }],
+    locals: [{ id: "value", name: "value", type: optional, mutable: true }],
+    returnType: F64,
+    body: [
+      {
+        kind: "return",
+        value: { kind: "recordGet", obj: narrow, shapeId: "cell", field: "x", type: F64, loc },
+        loc,
+      },
+    ],
   };
   const work = module.functions[2]!;
   work.locals = work.locals.filter((local) => local.id !== "value");
-  work.body = [{ kind: "return", value: {
-    kind: "call", callee: "consume", args: [{ kind: "call", callee: "read", args: [ref("a", array), ref("i", F64)], type: optional, loc }], type: F64, loc,
-  }, loc }];
+  work.body = [
+    {
+      kind: "return",
+      value: {
+        kind: "call",
+        callee: "consume",
+        args: [
+          {
+            kind: "call",
+            callee: "read",
+            args: [ref("a", array), ref("i", F64)],
+            type: optional,
+            loc,
+          },
+        ],
+        type: F64,
+        loc,
+      },
+      loc,
+    },
+  ];
   module.functions.push(consume);
   return module;
 }
@@ -307,9 +525,13 @@ test("a later argument that removes an array edge keeps an independent payload o
   const consume = module.functions[3]!;
   consume.params.push({ localId: "other", name: "other", type: F64 });
   consume.locals.push({ id: "other", name: "other", type: F64, mutable: false });
-  immediateCall(module).args.push({ kind: "seqExpr", stmts: [
-    { kind: "arraySetLength", arr: ref("a", array), length: num(0), loc },
-  ], result: num(1), type: F64, loc });
+  immediateCall(module).args.push({
+    kind: "seqExpr",
+    stmts: [{ kind: "arraySetLength", arr: ref("a", array), length: num(0), loc }],
+    result: num(1),
+    type: F64,
+    loc,
+  });
   const read = immediateCall(module).args[0]!;
   expect(immediateFacts(module).get(read)?.borrow).not.toBe(true);
   expect(validateModule(module)).toEqual([]);
@@ -358,7 +580,12 @@ test("async and generator callers keep their established suspension representati
     const module = immediateFixture();
     const work = module.functions[2]!;
     if (suspend === "async") work.async = true;
-    else work.generator = { yieldT: F64, nextT: F64, resultType: { kind: "record", shapeId: "result" } };
+    else
+      work.generator = {
+        yieldT: F64,
+        nextT: F64,
+        resultType: { kind: "record", shapeId: "result" },
+      };
     expect(immediateFacts(module).size).toBe(0);
   }
 });
@@ -366,10 +593,25 @@ test("async and generator callers keep their established suspension representati
 test("indirect consumers do not receive immediate stack unions", () => {
   const module = immediateFixture();
   const call = immediateCall(module);
-  module.functions[2]!.body = [{ kind: "return", loc, value: {
-    kind: "callValue", callee: { kind: "closure", fnName: "consume", captures: [], type: funcOf([optional], F64), loc },
-    args: call.args, type: F64, loc,
-  } }];
+  module.functions[2]!.body = [
+    {
+      kind: "return",
+      loc,
+      value: {
+        kind: "callValue",
+        callee: {
+          kind: "closure",
+          fnName: "consume",
+          captures: [],
+          type: funcOf([optional], F64),
+          loc,
+        },
+        args: call.args,
+        type: F64,
+        loc,
+      },
+    },
+  ];
   expect(immediateFacts(module).size).toBe(0);
   expect(workBody(module)).toContain("@sc_bf_read");
 });
@@ -379,10 +621,26 @@ test("each immediate argument has separate tag and payload storage", () => {
   const consume = module.functions[3]!;
   consume.params.push({ localId: "second", name: "second", type: optional });
   consume.locals.push({ id: "second", name: "second", type: optional, mutable: false });
-  consume.body.unshift({ kind: "exprStmt", expr: {
-    kind: "unionIsTag", value: ref("second", optional), unionId: "optional", tag: 1, negated: false, type: BOOL, loc,
-  }, loc });
-  immediateCall(module).args.push({ kind: "call", callee: "read", args: [ref("a", array), num(1)], type: optional, loc });
+  consume.body.unshift({
+    kind: "exprStmt",
+    expr: {
+      kind: "unionIsTag",
+      value: ref("second", optional),
+      unionId: "optional",
+      tag: 1,
+      negated: false,
+      type: BOOL,
+      loc,
+    },
+    loc,
+  });
+  immediateCall(module).args.push({
+    kind: "call",
+    callee: "read",
+    args: [ref("a", array), num(1)],
+    type: optional,
+    loc,
+  });
   expect(immediateFacts(module).size).toBe(2);
   const ir = workBody(module);
   expect(ir.match(/alloca %ScrUnion/g)).toHaveLength(2);
@@ -396,7 +654,11 @@ test("throwing later arguments release a completed read snapshot", () => {
   consume.params.push({ localId: "other", name: "other", type: F64 });
   consume.locals.push({ id: "other", name: "other", type: F64, mutable: false });
   const failure: IrFunction = {
-    name: "failure", params: [], locals: [], returnType: F64, loc,
+    name: "failure",
+    params: [],
+    locals: [],
+    returnType: F64,
+    loc,
     body: [{ kind: "throw", value: num(7), loc }],
   };
   module.functions.push(failure);
@@ -429,7 +691,13 @@ test("helper recognition is reused by multiple sites and isolated to one finaliz
   const helper = module.functions[1]!;
   const original = helper.body;
   let bodyReads = 0;
-  Object.defineProperty(helper, "body", { configurable: true, get: () => { bodyReads++; return original; } });
+  Object.defineProperty(helper, "body", {
+    configurable: true,
+    get: () => {
+      bodyReads++;
+      return original;
+    },
+  });
   for (let i = 0; i < 100; i++) expect(index.get(read)?.presentTag).toBe(0);
   expect(bodyReads).toBe(0);
   Object.defineProperty(helper, "body", { configurable: true, writable: true, value: [] });

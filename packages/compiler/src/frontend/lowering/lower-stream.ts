@@ -37,14 +37,35 @@ import { newFnCtx, own } from "./lowerer.js";
 import { appendImplicitUndefinedReturn } from "./lower-calls.js";
 import { bufEncoding, knownBufEncoding } from "./containers/bytes.js";
 import { tryLowerExpression } from "./expressions/try-lower-expression.js";
-import { BOOL, DYN, F64, type IrExpr, type IrFunction, type IrLibFn, type IrStmt, type IrType, RUNTIME_STREAM_CLASSES, STRING, type SrcLoc, VOID, arrayOf, BYTES_U8, canBoxFuncIntoDyn, funcOf, typeEquals, typeKey } from "../../ir/ir.js";
-
+import {
+  BOOL,
+  DYN,
+  F64,
+  type IrExpr,
+  type IrFunction,
+  type IrLibFn,
+  type IrStmt,
+  type IrType,
+  RUNTIME_STREAM_CLASSES,
+  STRING,
+  type SrcLoc,
+  VOID,
+  arrayOf,
+  BYTES_U8,
+  canBoxFuncIntoDyn,
+  funcOf,
+  typeEquals,
+  typeKey,
+} from "../../ir/ir.js";
 
 const BYTES = BYTES_U8;
 
 /** The stream sides of a receiver class: the nearest stream-class
  * ancestor's, or null off the stream hierarchy. */
-export function streamSidesOf(lowerer: Lowerer, info: ClassInfo | undefined | null): "r" | "w" | "rw" | null {
+export function streamSidesOf(
+  lowerer: Lowerer,
+  info: ClassInfo | undefined | null,
+): "r" | "w" | "rw" | null {
   for (let c: ClassInfo | null = info ?? null; c; c = c.base) {
     if (c.builtinStream) return c.builtinStream;
   }
@@ -54,8 +75,20 @@ export function streamSidesOf(lowerer: Lowerer, info: ClassInfo | undefined | nu
 /** The instance members the stream spoke owns on stream-rooted
  * receivers (the emitter members ride the base chain as usual). */
 export const STREAM_API_MEMBERS: ReadonlySet<string> = new Set([
-  "push", "unshift", "read", "pause", "resume", "isPaused", "setEncoding",
-  "pipe", "unpipe", "destroy", "write", "end", "cork", "uncork",
+  "push",
+  "unshift",
+  "read",
+  "pause",
+  "resume",
+  "isPaused",
+  "setEncoding",
+  "pipe",
+  "unpipe",
+  "destroy",
+  "write",
+  "end",
+  "cork",
+  "uncork",
   "setDefaultEncoding",
 ]);
 
@@ -64,11 +97,24 @@ export const STREAM_API_MEMBERS: ReadonlySet<string> = new Set([
  * against the runtime state, so collection fences them (the
  * EMITTER_API_MEMBERS precedent). */
 export const STREAM_PROP_MEMBERS: ReadonlySet<string> = new Set([
-  "readable", "readableEnded", "readableFlowing", "readableLength",
-  "readableHighWaterMark", "readableObjectMode",
-  "writable", "writableEnded", "writableFinished", "writableNeedDrain",
-  "writableLength", "writableHighWaterMark", "writableCorked",
-  "writableObjectMode", "destroyed", "closed", "errored", "allowHalfOpen",
+  "readable",
+  "readableEnded",
+  "readableFlowing",
+  "readableLength",
+  "readableHighWaterMark",
+  "readableObjectMode",
+  "writable",
+  "writableEnded",
+  "writableFinished",
+  "writableNeedDrain",
+  "writableLength",
+  "writableHighWaterMark",
+  "writableCorked",
+  "writableObjectMode",
+  "destroyed",
+  "closed",
+  "errored",
+  "allowHalfOpen",
 ]);
 
 /** The underscore methods each runtime base consumes at construction
@@ -87,7 +133,11 @@ export const UNDERSCORE_METHODS: ReadonlyMap<string, string> = new Map([
 
 /** The accepted option-callback names (canonical flag order) and the
  * duplex-shaped-head answer for one runtime stream class. */
-export function streamCtorShape(cls: string): { fn: string; accepted: readonly string[]; duplexShape: boolean } {
+export function streamCtorShape(cls: string): {
+  fn: string;
+  accepted: readonly string[];
+  duplexShape: boolean;
+} {
   switch (cls) {
     case "%Readable":
       return { fn: "readable", accepted: ["read", "destroy"], duplexShape: false };
@@ -107,15 +157,28 @@ export function streamCtorShape(cls: string): { fn: string; accepted: readonly s
 /** Names emitted internally by stream runtimes. A computed EventEmitter
  * name must not match one, even through an EventEmitter-typed stream upcast. */
 export const STREAM_FORCED_EVENT_NAMES: ReadonlySet<string> = new Set([
-  "data", "end", "close", "readable", "pause", "resume",
-  "drain", "prefinish", "finish", "pipe", "unpipe",
+  "data",
+  "end",
+  "close",
+  "readable",
+  "pause",
+  "resume",
+  "drain",
+  "prefinish",
+  "finish",
+  "pipe",
+  "unpipe",
 ]);
 
 /** The per-base FORCED event tuples (runtime-emitted payloads): consulted
  * by the emitter spoke BEFORE the program-global table, so a stream's
  * 'data' never collides with a user event named 'data' on a plain
  * emitter. 'error' stays globally forced to the one-%Error tuple. */
-export function streamForcedTuple(lowerer: Lowerer, info: ClassInfo | undefined | null, name: string): IrType[] | null {
+export function streamForcedTuple(
+  lowerer: Lowerer,
+  info: ClassInfo | undefined | null,
+  name: string,
+): IrType[] | null {
   const sides = streamSidesOf(lowerer, info);
   if (!sides) return null;
   const readable: Record<string, IrType[]> = {
@@ -210,7 +273,13 @@ function lowerStreamCallback(
         body = [{ kind: "exprStmt", expr: lowerer.lowerExpr(bodyExpr), loc: locOf(node.body) }];
       } else {
         const value = lowerer.lowerExpr(bodyExpr);
-        body = [{ kind: "return", value: lowerer.coerceInto(bodyExpr, value, funcType.ret), loc: locOf(node.body) }];
+        body = [
+          {
+            kind: "return",
+            value: lowerer.coerceInto(bodyExpr, value, funcType.ret),
+            loc: locOf(node.body),
+          },
+        ];
       }
     } else {
       body = [];
@@ -322,10 +391,12 @@ function propMutatedSymbols(lowerer: Lowerer): Set<ts.Symbol> {
     if (sf.isDeclarationFile) continue;
     const walk = (node: ts.Node): void => {
       ts.forEachChild(node, walk);
-      if (ts.isBinaryExpression(node)
-        && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment
-        && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
-        && (ts.isPropertyAccessExpression(node.left) || ts.isElementAccessExpression(node.left))) {
+      if (
+        ts.isBinaryExpression(node) &&
+        node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+        node.operatorToken.kind <= ts.SyntaxKind.LastAssignment &&
+        (ts.isPropertyAccessExpression(node.left) || ts.isElementAccessExpression(node.left))
+      ) {
         noteBase(node.left);
       } else if (ts.isDeleteExpression(node)) {
         noteBase(node.expression);
@@ -348,7 +419,10 @@ function propMutatedSymbols(lowerer: Lowerer): Set<ts.Symbol> {
  * (propMutatedSymbols). Returns the argument unchanged when the chain
  * breaks; `undefined`/null arguments answer null (Node's `if (options)`
  * guard — all defaults). */
-function followOptionsArg(lowerer: Lowerer, arg: ts.Expression | undefined): ts.Expression | null | undefined {
+function followOptionsArg(
+  lowerer: Lowerer,
+  arg: ts.Expression | undefined,
+): ts.Expression | null | undefined {
   let node: ts.Expression | undefined = arg;
   for (let hops = 0; node !== undefined && hops < 16; hops++) {
     if (ts.isObjectLiteralExpression(node)) return node;
@@ -366,7 +440,8 @@ function followOptionsArg(lowerer: Lowerer, arg: ts.Expression | undefined): ts.
       return node;
     }
     const decl = sym ? lowerer.checker.valueDeclarationOf(sym) : undefined;
-    if (!sym || !decl || !ts.isVariableDeclaration(decl) || decl.initializer === undefined) return node;
+    if (!sym || !decl || !ts.isVariableDeclaration(decl) || decl.initializer === undefined)
+      return node;
     if ((ts.getCombinedNodeFlags(decl) & ts.NodeFlags.Const) === 0) return node;
     if (propMutatedSymbols(lowerer).has(sym)) return node;
     node = decl.initializer;
@@ -430,7 +505,10 @@ function lowerStreamCallbackValue(
       "the callback slot takes an inline function (fully static) or a function value that crosses the checked-dynamic boundary",
     );
   }
-  const adapterT = funcOf(Array.from({ length: fullLen }, () => DYN), VOID);
+  const adapterT = funcOf(
+    Array.from({ length: fullLen }, () => DYN),
+    VOID,
+  );
   return { kind: "dynCheck", value: cbDyn, type: adapterT, loc };
 }
 
@@ -441,7 +519,8 @@ function lowerStreamCallbackValue(
  * when the argument is not dyn-flavored (the static walk owns it). */
 function dynOptionsValue(lowerer: Lowerer, arg: ts.Expression): IrExpr | null {
   const followed = followOptionsArg(lowerer, arg);
-  if (followed === null || followed === undefined || ts.isObjectLiteralExpression(followed)) return null;
+  if (followed === null || followed === undefined || ts.isObjectLiteralExpression(followed))
+    return null;
   let t: IrType | null;
   try {
     const ct = lowerer.typeOf(followed);
@@ -531,7 +610,10 @@ function parseStreamOptions(
             "write the callback inline (method shorthand or an inline function/arrow), or pass a function value",
           );
         }
-        present.set(name, lowerStreamCallbackValue(lowerer, ctorName, name, valueNode, tuples[name]!.length));
+        present.set(
+          name,
+          lowerStreamCallbackValue(lowerer, ctorName, name, valueNode, tuples[name]!.length),
+        );
         continue;
       }
       const full = tuples[name]!.map((t) => (t === "fn" ? null : t));
@@ -555,7 +637,11 @@ function parseStreamOptions(
     }
     // Scalar options.
     if (!ts.isPropertyAssignment(prop)) {
-      lowerer.unsupported("SC1090", prop, `the ${ctorName} option '${name}' as a shorthand/method member`);
+      lowerer.unsupported(
+        "SC1090",
+        prop,
+        `the ${ctorName} option '${name}' as a shorthand/method member`,
+      );
     }
     const value = prop.initializer;
     switch (name) {
@@ -594,7 +680,11 @@ function parseStreamOptions(
       }
       case "decodeStrings": {
         if (value.kind === ts.SyntaxKind.TrueKeyword) break; // Node's default
-        lowerer.noLowering(`${ctorName} with decodeStrings: false`, prop, "chunks always decode to Buffers here (Node's default)");
+        lowerer.noLowering(
+          `${ctorName} with decodeStrings: false`,
+          prop,
+          "chunks always decode to Buffers here (Node's default)",
+        );
         break;
       }
       case "encoding": {
@@ -640,14 +730,22 @@ function parseStreamOptions(
         );
         break;
       case "signal":
-        lowerer.noLowering(`the ${ctorName} option 'signal'`, prop, "AbortSignal-driven destruction is not lowered yet");
+        lowerer.noLowering(
+          `the ${ctorName} option 'signal'`,
+          prop,
+          "AbortSignal-driven destruction is not lowered yet",
+        );
         break;
       case "captureRejections": {
         // `false` is the default — admit the literal; the rejection-
         // capturing mode has no lowering (async listeners' promises are
         // abandoned unobserved).
         if (value.kind === ts.SyntaxKind.FalseKeyword) break;
-        lowerer.noLowering(`the ${ctorName} option 'captureRejections'`, prop, "captureRejections has no lowering (listener rejections are not routed to 'error')");
+        lowerer.noLowering(
+          `the ${ctorName} option 'captureRejections'`,
+          prop,
+          "captureRejections has no lowering (listener rejections are not routed to 'error')",
+        );
         break;
       }
       case "readable":
@@ -663,7 +761,11 @@ function parseStreamOptions(
           else out.writableSide = false;
           break;
         }
-        lowerer.noLowering(`the Duplex option '${name}' with a non-literal value`, prop, "the side toggles must be compile-time booleans");
+        lowerer.noLowering(
+          `the Duplex option '${name}' with a non-literal value`,
+          prop,
+          "the side toggles must be compile-time booleans",
+        );
         break;
       }
       case "final": {
@@ -677,10 +779,18 @@ function parseStreamOptions(
         break;
       }
       case "construct":
-        lowerer.noLowering(`the ${ctorName} option 'construct'`, prop, "deferred construction (_construct) is not lowered yet");
+        lowerer.noLowering(
+          `the ${ctorName} option 'construct'`,
+          prop,
+          "deferred construction (_construct) is not lowered yet",
+        );
         break;
       case "writev":
-        lowerer.noLowering(`the ${ctorName} option 'writev'`, prop, "batched writes (_writev) are not lowered yet — writes deliver one chunk at a time");
+        lowerer.noLowering(
+          `the ${ctorName} option 'writev'`,
+          prop,
+          "batched writes (_writev) are not lowered yet — writes deliver one chunk at a time",
+        );
         break;
       default:
         lowerer.noLowering(`the ${ctorName} option '${name}'`, prop);
@@ -702,15 +812,47 @@ function parseStreamOptions(
 /** The head + flags argument list of a stream construction/initialization
  * (shared by `new Readable({...})` and a subclass's super(options)),
  * plus the parsed `encoding` option (applied as a follow-up setEncoding). */
-function streamCtorArgs(lowerer: Lowerer, cls: string, arg: ts.Expression | undefined,
-  thisType: IrType, loc: SrcLoc, fallbackCb?: (name: string) => IrExpr | null): { args: IrExpr[]; encoding: string | null; badEncoding: string | null; pushEncoding: string | null } {
+function streamCtorArgs(
+  lowerer: Lowerer,
+  cls: string,
+  arg: ts.Expression | undefined,
+  thisType: IrType,
+  loc: SrcLoc,
+  fallbackCb?: (name: string) => IrExpr | null,
+): {
+  args: IrExpr[];
+  encoding: string | null;
+  badEncoding: string | null;
+  pushEncoding: string | null;
+} {
   const shape = streamCtorShape(cls);
-  const o = parseStreamOptions(lowerer, cls.slice(1), arg, thisType, shape.accepted, loc, fallbackCb);
+  const o = parseStreamOptions(
+    lowerer,
+    cls.slice(1),
+    arg,
+    thisType,
+    shape.accepted,
+    loc,
+    fallbackCb,
+  );
   const head = shape.duplexShape
-    ? [o.hwmR, o.hwmW, o.autoDestroy, o.emitClose, o.allowHalfOpen,
-       boolLit(o.readableSide, loc), boolLit(o.writableSide, loc), numLit(o.flags, loc)]
+    ? [
+        o.hwmR,
+        o.hwmW,
+        o.autoDestroy,
+        o.emitClose,
+        o.allowHalfOpen,
+        boolLit(o.readableSide, loc),
+        boolLit(o.writableSide, loc),
+        numLit(o.flags, loc),
+      ]
     : [cls === "%Writable" ? o.hwmW : o.hwmR, o.autoDestroy, o.emitClose, numLit(o.flags, loc)];
-  return { args: [...head, ...o.cbs], encoding: o.encoding, badEncoding: o.badEncoding, pushEncoding: o.pushEncoding };
+  return {
+    args: [...head, ...o.cbs],
+    encoding: o.encoding,
+    badEncoding: o.badEncoding,
+    pushEncoding: o.pushEncoding,
+  };
 }
 
 /** `new Readable(opts?)` and friends — called from lowerNew once the
@@ -722,12 +864,22 @@ export function lowerStreamNew(lowerer: Lowerer, expr: ts.NewExpression, info: C
   const thisType: IrType = { kind: "object", className: cls };
   const args = expr.arguments ?? [];
   if (args.length > 1) {
-    lowerer.noLowering(`new ${info.def.name.slice(1)} with ${args.length} arguments`, expr, "the supported form takes one options object");
+    lowerer.noLowering(
+      `new ${info.def.name.slice(1)} with ${args.length} arguments`,
+      expr,
+      "the supported form takes one options object",
+    );
   }
   if (args[0] !== undefined) {
     const dynOpts = dynOptionsValue(lowerer, args[0]);
     if (dynOpts !== null) {
-      return { kind: "libCall", fn: `${streamCtorShape(cls).fn}.newDyn` as IrLibFn, args: [dynOpts], type: thisType, loc };
+      return {
+        kind: "libCall",
+        fn: `${streamCtorShape(cls).fn}.newDyn` as IrLibFn,
+        args: [dynOpts],
+        type: thisType,
+        loc,
+      };
     }
   }
   const fn = `${streamCtorShape(cls).fn}.new` as IrLibFn;
@@ -735,18 +887,36 @@ export function lowerStreamNew(lowerer: Lowerer, expr: ts.NewExpression, info: C
   if (parsed.badEncoding !== null) {
     // Node's state constructors validate encodings first: an unknown
     // spelling never constructs — the whole expression throws.
-    return nodeThrowExpr(1, "ERR_UNKNOWN_ENCODING", `Unknown encoding: ${parsed.badEncoding}`, thisType, loc);
+    return nodeThrowExpr(
+      1,
+      "ERR_UNKNOWN_ENCODING",
+      `Unknown encoding: ${parsed.badEncoding}`,
+      thisType,
+      loc,
+    );
   }
   let built: IrExpr = { kind: "libCall", fn, args: parsed.args, type: thisType, loc };
   if (parsed.pushEncoding !== null) {
     // { defaultEncoding }: chain the push-side decode default (the
     // setEncoding chaining shape — answers the receiver +1).
-    built = { kind: "libCall", fn: "readable.pushEncoding", args: [built, strLit(parsed.pushEncoding, loc)], type: thisType, loc };
+    built = {
+      kind: "libCall",
+      fn: "readable.pushEncoding",
+      args: [built, strLit(parsed.pushEncoding, loc)],
+      type: thisType,
+      loc,
+    };
   }
   if (parsed.encoding === null) return built;
   // { encoding }: chain a setEncoding over the fresh stream (the operand
   // temp releases with the frame; setEncoding answers the receiver +1).
-  return { kind: "libCall", fn: "readable.setEncoding", args: [built, strLit(parsed.encoding, loc)], type: thisType, loc };
+  return {
+    kind: "libCall",
+    fn: "readable.setEncoding",
+    args: [built, strLit(parsed.encoding, loc)],
+    type: thisType,
+    loc,
+  };
 }
 
 /* ── user subclasses (`extends Readable`, the underscore-override form) ── */
@@ -757,8 +927,15 @@ export function lowerStreamNew(lowerer: Lowerer, expr: ts.NewExpression, info: C
  * overrides it (the ordinary devirtualization rule), so an inherited
  * constructor still binds the DYNAMIC class's override. The method may
  * declare any PREFIX of its Node signature (the option-callback rule). */
-function streamMethodWrapper(lowerer: Lowerer, info: ClassInfo, which: string,
-  methodName: string, thisType: IrType, loc: SrcLoc, blame: ts.Node): IrExpr | null {
+function streamMethodWrapper(
+  lowerer: Lowerer,
+  info: ClassInfo,
+  which: string,
+  methodName: string,
+  thisType: IrType,
+  loc: SrcLoc,
+  blame: ts.Node,
+): IrExpr | null {
   const found = lowerer.findMethodOn(info, methodName);
   if (!found) {
     // A DESCENDANT-only declaration (the base chain never declares it):
@@ -843,7 +1020,14 @@ function streamMethodWrapper(lowerer: Lowerer, info: ClassInfo, which: string,
     let call: IrExpr;
     if (lowerer.overrideBelow(info, methodName)) {
       lowerer.noteVirtualEdge(info, methodName);
-      call = { kind: "virtualCall", className: info.def.name, method: methodName, args: [thisRef, ...argRefs], type: ret, loc };
+      call = {
+        kind: "virtualCall",
+        className: info.def.name,
+        method: methodName,
+        args: [thisRef, ...argRefs],
+        type: ret,
+        loc,
+      };
     } else {
       lowerer.noteEdge(`%${found.declarer.def.name}.${methodName}`);
       call = {
@@ -881,17 +1065,30 @@ function streamMethodWrapper(lowerer: Lowerer, info: ClassInfo, which: string,
  * display name; the runtime builds the state block). Options parse
  * exactly like the construction form; overridden underscore methods on
  * the class chain fill callbacks the options leave unset. */
-export function lowerStreamSuperCall(lowerer: Lowerer, info: ClassInfo, base: ClassInfo,
-  argNodes: readonly ts.Expression[], thisLocal: { id: string }, loc: SrcLoc, blame: ts.Node): IrStmt[] {
+export function lowerStreamSuperCall(
+  lowerer: Lowerer,
+  info: ClassInfo,
+  base: ClassInfo,
+  argNodes: readonly ts.Expression[],
+  thisLocal: { id: string },
+  loc: SrcLoc,
+  blame: ts.Node,
+): IrStmt[] {
   const cls = base.def.name;
   const thisType: IrType = { kind: "object", className: info.def.name };
   if (argNodes.length > 1) {
-    lowerer.noLowering(`super(...) with ${argNodes.length} arguments in a ${cls.slice(1)} subclass`, blame, "the supported form takes one inline options object (or none)");
+    lowerer.noLowering(
+      `super(...) with ${argNodes.length} arguments in a ${cls.slice(1)} subclass`,
+      blame,
+      "the supported form takes one inline options object (or none)",
+    );
   }
   const shape = streamCtorShape(cls);
   const fallback = (name: string): IrExpr | null => {
     const methodName = UNDERSCORE_METHODS.get(name);
-    return methodName ? streamMethodWrapper(lowerer, info, name, methodName, thisType, loc, blame) : null;
+    return methodName
+      ? streamMethodWrapper(lowerer, info, name, methodName, thisType, loc, blame)
+      : null;
   };
   const thisRef = (): IrExpr => ({ kind: "varRef", localId: thisLocal.id, type: thisType, loc });
   if (argNodes[0] !== undefined) {
@@ -909,45 +1106,75 @@ export function lowerStreamSuperCall(lowerer: Lowerer, info: ClassInfo, base: Cl
           cbs.push(cb);
         }
       }
-      return [{
-        kind: "exprStmt",
-        expr: {
-          kind: "libCall",
-          fn: `${shape.fn}.initDyn` as IrLibFn,
-          args: [thisRef(), dynOpts, numLit(flags, loc), ...cbs],
-          type: VOID,
+      return [
+        {
+          kind: "exprStmt",
+          expr: {
+            kind: "libCall",
+            fn: `${shape.fn}.initDyn` as IrLibFn,
+            args: [thisRef(), dynOpts, numLit(flags, loc), ...cbs],
+            type: VOID,
+            loc,
+          },
           loc,
         },
-        loc,
-      }];
+      ];
     }
   }
   const parsed = streamCtorArgs(lowerer, cls, argNodes[0], thisType, loc, fallback);
   if (parsed.badEncoding !== null) {
     // super(options) with an unknown literal encoding: the state ctor
     // rejects before any initialization, Node's ladder.
-    return [{
-      kind: "exprStmt",
-      expr: nodeThrowExpr(1, "ERR_UNKNOWN_ENCODING", `Unknown encoding: ${parsed.badEncoding}`, VOID, loc),
-      loc,
-    }];
+    return [
+      {
+        kind: "exprStmt",
+        expr: nodeThrowExpr(
+          1,
+          "ERR_UNKNOWN_ENCODING",
+          `Unknown encoding: ${parsed.badEncoding}`,
+          VOID,
+          loc,
+        ),
+        loc,
+      },
+    ];
   }
-  const out: IrStmt[] = [{
-    kind: "exprStmt",
-    expr: { kind: "libCall", fn: `${shape.fn}.init` as IrLibFn, args: [thisRef(), ...parsed.args], type: VOID, loc },
-    loc,
-  }];
+  const out: IrStmt[] = [
+    {
+      kind: "exprStmt",
+      expr: {
+        kind: "libCall",
+        fn: `${shape.fn}.init` as IrLibFn,
+        args: [thisRef(), ...parsed.args],
+        type: VOID,
+        loc,
+      },
+      loc,
+    },
+  ];
   if (parsed.pushEncoding !== null) {
     out.push({
       kind: "exprStmt",
-      expr: { kind: "libCall", fn: "readable.pushEncoding", args: [thisRef(), strLit(parsed.pushEncoding, loc)], type: thisType, loc },
+      expr: {
+        kind: "libCall",
+        fn: "readable.pushEncoding",
+        args: [thisRef(), strLit(parsed.pushEncoding, loc)],
+        type: thisType,
+        loc,
+      },
       loc,
     });
   }
   if (parsed.encoding !== null) {
     out.push({
       kind: "exprStmt",
-      expr: { kind: "libCall", fn: "readable.setEncoding", args: [thisRef(), strLit(parsed.encoding, loc)], type: thisType, loc },
+      expr: {
+        kind: "libCall",
+        fn: "readable.setEncoding",
+        args: [thisRef(), strLit(parsed.encoding, loc)],
+        type: thisType,
+        loc,
+      },
       loc,
     });
   }
@@ -969,13 +1196,17 @@ export function lowerStreamSuperCall(lowerer: Lowerer, info: ClassInfo, base: Cl
  * runtime-stream-rooted receiver (the caller's routes continue);
  * `_writev` and methods outside the receiver's base set keep pointed
  * fences (Node would consume them through unlowered machinery). */
-export function lowerStreamUnderscoreAssign(lowerer: Lowerer, expr: ts.BinaryExpression): IrStmt | null {
+export function lowerStreamUnderscoreAssign(
+  lowerer: Lowerer,
+  expr: ts.BinaryExpression,
+): IrStmt | null {
   if (!ts.isPropertyAccessExpression(expr.left) || expr.left.questionDotToken) return null;
   const methodName = expr.left.name.text;
   if (!methodName.startsWith("_")) return null;
   const optionByMethod = new Map<string, string>();
   for (const [option, method] of UNDERSCORE_METHODS) optionByMethod.set(method, option);
-  if (!optionByMethod.has(methodName) && methodName !== "_writev" && methodName !== "_construct") return null;
+  if (!optionByMethod.has(methodName) && methodName !== "_writev" && methodName !== "_construct")
+    return null;
   const recv = tryLowerExpression(lowerer, expr.left.expression);
   if (!recv || recv.type.kind !== "object") return null;
   const info = lowerer.classes.get(recv.type.className);
@@ -1053,17 +1284,24 @@ export function lowerStreamUnderscoreAssign(lowerer: Lowerer, expr: ts.BinaryExp
  * accounting; hwm 1), and a single string/Buffer argument is a
  * one-chunk stream (Node's special case). Called from the method-call
  * chain once the receiver resolved to a stream class value. */
-export function lowerStreamStaticCall(lowerer: Lowerer, call: ts.CallExpression,
-  access: ts.PropertyAccessExpression): IrExpr | null {
+export function lowerStreamStaticCall(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
+  access: ts.PropertyAccessExpression,
+): IrExpr | null {
   if (call.questionDotToken || access.questionDotToken) return null;
   let symbol: ts.Symbol | null | undefined = null;
   if (ts.isIdentifier(access.expression)) {
     symbol = lowerer.resolveValueSymbol(access.expression);
-  } else if (ts.isPropertyAccessExpression(access.expression) && ts.isIdentifier(access.expression.name)) {
+  } else if (
+    ts.isPropertyAccessExpression(access.expression) &&
+    ts.isIdentifier(access.expression.name)
+  ) {
     const memberSym = lowerer.checker.getSymbolAtLocation(access.expression.name);
-    symbol = memberSym && memberSym.flags & ts.SymbolFlags.Alias
-      ? lowerer.checker.getAliasedSymbol(memberSym)
-      : memberSym;
+    symbol =
+      memberSym && memberSym.flags & ts.SymbolFlags.Alias
+        ? lowerer.checker.getAliasedSymbol(memberSym)
+        : memberSym;
   }
   if (!symbol) return null;
   const info = lowerer.builtinStreamInfoOf(symbol);
@@ -1074,8 +1312,13 @@ export function lowerStreamStaticCall(lowerer: Lowerer, call: ts.CallExpression,
   // Readable.toWeb's type-option ladder (JS sources): a provably-invalid
   // `type` throws Node's ERR_INVALID_ARG_VALUE before any web stream
   // exists; valid shapes keep the fence — the web bridge has no lowering.
-  if (member === "toWeb" && cls === "%Readable" && call.arguments.length === 2 &&
-      isJsSourceFile(call.getSourceFile()) && ts.isObjectLiteralExpression(call.arguments[1]!)) {
+  if (
+    member === "toWeb" &&
+    cls === "%Readable" &&
+    call.arguments.length === 2 &&
+    isJsSourceFile(call.getSourceFile()) &&
+    ts.isObjectLiteralExpression(call.arguments[1]!)
+  ) {
     for (const p of call.arguments[1]!.properties) {
       if (ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === "type") {
         const t = lowerer.typeOf(p.initializer);
@@ -1100,21 +1343,40 @@ export function lowerStreamStaticCall(lowerer: Lowerer, call: ts.CallExpression,
   }
   const args = call.arguments;
   if (args.length !== 1) {
-    lowerer.noLowering(`Readable.from with ${args.length} arguments`, call, "the one-argument form (an array, string, or Buffer) is supported");
+    lowerer.noLowering(
+      `Readable.from with ${args.length} arguments`,
+      call,
+      "the one-argument form (an array, string, or Buffer) is supported",
+    );
   }
   const srcT = lowerer.mapTypeOf(lowerer.typeOf(args[0]!));
   const type: IrType = { kind: "object", className: "%Readable" };
-  if (srcT?.kind === "array" && (srcT.elem.kind === "string" || (srcT.elem.kind === "bytes" && srcT.elem.elem === "u8"))) {
+  if (
+    srcT?.kind === "array" &&
+    (srcT.elem.kind === "string" || (srcT.elem.kind === "bytes" && srcT.elem.elem === "u8"))
+  ) {
     const arr = lowerer.lowerExpr(args[0]!);
     const strings = srcT.elem.kind === "string";
-    return { kind: "libCall", fn: "readable.fromArr", args: [arr, boolLit(strings, loc)], type, loc };
+    return {
+      kind: "libCall",
+      fn: "readable.fromArr",
+      args: [arr, boolLit(strings, loc)],
+      type,
+      loc,
+    };
   }
   if (srcT?.kind === "string" || (srcT?.kind === "bytes" && srcT.elem === "u8")) {
     // Node special-cases a single string/Buffer: ONE whole chunk.
     const v = lowerer.lowerExpr(args[0]!);
     const strings = srcT.kind === "string";
     const arr: IrExpr = { kind: "arrayLit", elems: [v], type: arrayOf(v.type), loc };
-    return { kind: "libCall", fn: "readable.fromArr", args: [arr, boolLit(strings, loc)], type, loc };
+    return {
+      kind: "libCall",
+      fn: "readable.fromArr",
+      args: [arr, boolLit(strings, loc)],
+      type,
+      loc,
+    };
   }
   lowerer.noLowering(
     `Readable.from over a '${srcT ? lowerer.fmt(srcT) : "?"}' source`,
@@ -1129,7 +1391,11 @@ export function lowerStreamStaticCall(lowerer: Lowerer, call: ts.CallExpression,
  * alias following). Only the five stream class names count — value
  * members (stream.getDefaultHighWaterMark as a value, ...) keep their
  * per-site fences. */
-export function streamClassAliasDecl(lowerer: Lowerer, nameNode: ts.Node, init: ts.Expression | undefined): boolean {
+export function streamClassAliasDecl(
+  lowerer: Lowerer,
+  nameNode: ts.Node,
+  init: ts.Expression | undefined,
+): boolean {
   if (!ts.isIdentifier(nameNode) || !init) return false;
   if (!ts.isPropertyAccessExpression(init) || init.questionDotToken) return false;
   let isStreamClass = false;
@@ -1154,7 +1420,11 @@ const PIPELINE_STAGE_EXPECTED =
  * isNodeStream, while pipeline() accepts iterables (strings, arrays) and
  * { readable, writable } pairs — those shapes fence instead of throwing
  * a ladder Node never throws. */
-function lowerStreamArg(lowerer: Lowerer, node: ts.Expression, what: "finished" | "pipeline"): IrExpr {
+function lowerStreamArg(
+  lowerer: Lowerer,
+  node: ts.Expression,
+  what: "finished" | "pipeline",
+): IrExpr {
   const v = lowerer.lowerExpr(node);
   const info = v.type.kind === "object" ? lowerer.classes.get(v.type.className) : undefined;
   if (!streamSidesOf(lowerer, info)) {
@@ -1180,14 +1450,28 @@ function lowerStreamArg(lowerer: Lowerer, node: ts.Expression, what: "finished" 
         // Node — and a record carrying a readable/writable member may be
         // the duplex-pair form; none of those shapes has a lowering, so
         // they take the pointed fence below, never a throw.
-        const pairish = v.type.kind === "record" &&
-          (lowerer.shapes.get(v.type.shapeId)?.fields ?? []).some((f) => f.name === "readable" || f.name === "writable");
-        if ((v.type.kind === "record" && !pairish) || v.type.kind === "f64" ||
-            v.type.kind === "bool" || v.type.kind === "nullT") {
+        const pairish =
+          v.type.kind === "record" &&
+          (lowerer.shapes.get(v.type.shapeId)?.fields ?? []).some(
+            (f) => f.name === "readable" || f.name === "writable",
+          );
+        if (
+          (v.type.kind === "record" && !pairish) ||
+          v.type.kind === "f64" ||
+          v.type.kind === "bool" ||
+          v.type.kind === "nullT"
+        ) {
           argTypeThrow("body", PIPELINE_STAGE_EXPECTED);
         }
-      } else if ((ts.isObjectLiteralExpression(node) && node.properties.length === 0) || v.type.kind === "record" || v.type.kind === "string" || v.type.kind === "f64" ||
-                 v.type.kind === "bool" || v.type.kind === "array" || v.type.kind === "nullT") {
+      } else if (
+        (ts.isObjectLiteralExpression(node) && node.properties.length === 0) ||
+        v.type.kind === "record" ||
+        v.type.kind === "string" ||
+        v.type.kind === "f64" ||
+        v.type.kind === "bool" ||
+        v.type.kind === "array" ||
+        v.type.kind === "nullT"
+      ) {
         argTypeThrow("stream", "an instance of ReadableStream, WritableStream, or Stream");
       }
     }
@@ -1208,7 +1492,9 @@ function lowerStreamArg(lowerer: Lowerer, node: ts.Expression, what: "finished" 
  * registering anything, so the other arguments never evaluate their
  * effects; listener arguments are effect-free in practice). */
 class StreamArgTypeThrow extends Error {
-  constructor(readonly expr: IrExpr) { super("stream argument is not a stream"); }
+  constructor(readonly expr: IrExpr) {
+    super("stream argument is not a stream");
+  }
 }
 
 /** The finished/pipeline completion callback: an inline function lowers
@@ -1233,9 +1519,16 @@ function lowerEosCallback(
       const p0 = funcType.params[0];
       if (p0?.kind === "union") {
         const def = lowerer.unions.get(p0.unionId);
-        if (def && def.arms.some((a) => a.kind === "object" && a.className === "%Error") &&
-            def.arms.every((a) => a.kind === "nullT" || a.kind === "undefinedT" ||
-              (a.kind === "object" && a.className === "%Error"))) {
+        if (
+          def &&
+          def.arms.some((a) => a.kind === "object" && a.className === "%Error") &&
+          def.arms.every(
+            (a) =>
+              a.kind === "nullT" ||
+              a.kind === "undefinedT" ||
+              (a.kind === "object" && a.className === "%Error"),
+          )
+        ) {
           tuple = [p0];
         }
       }
@@ -1274,8 +1567,12 @@ function lowerEosCallback(
  * imported from node:stream (named imports, destructured requires, and
  * namespace-member calls all land here). Null for members this spoke
  * does not own — the caller's module-qualified fence speaks. */
-export function lowerStreamModuleCall(lowerer: Lowerer, call: ts.CallExpression,
-  bi: { module: string; member: string }, loc: SrcLoc): IrExpr | null {
+export function lowerStreamModuleCall(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
+  bi: { module: string; member: string },
+  loc: SrcLoc,
+): IrExpr | null {
   if (bi.module === "stream/promises") {
     const args = call.arguments;
     // finished(stream) → a pending void promise the terminal watcher
@@ -1287,7 +1584,9 @@ export function lowerStreamModuleCall(lowerer: Lowerer, call: ts.CallExpression,
         lowerer.noLowering(
           `stream/promises.finished with ${args.length} arguments`,
           call,
-          args.length === 2 ? "the options argument has no lowering yet — the one-argument form is supported" : "the supported form is finished(stream)",
+          args.length === 2
+            ? "the options argument has no lowering yet — the one-argument form is supported"
+            : "the supported form is finished(stream)",
         );
       }
       let recv: IrExpr;
@@ -1297,7 +1596,13 @@ export function lowerStreamModuleCall(lowerer: Lowerer, call: ts.CallExpression,
         if (e instanceof StreamArgTypeThrow) return e.expr;
         throw e;
       }
-      return { kind: "libCall", fn: "sp.finished", args: [recv], type: { kind: "promise", inner: VOID }, loc };
+      return {
+        kind: "libCall",
+        fn: "sp.finished",
+        args: [recv],
+        type: { kind: "promise", inner: VOID },
+        loc,
+      };
     }
     // pipeline(...streams) → the callback pipeline's chaining/destroyer
     // semantics with the settlement on a promise. Stream stages only
@@ -1305,7 +1610,11 @@ export function lowerStreamModuleCall(lowerer: Lowerer, call: ts.CallExpression,
     // stream destinations, so the result is a void promise.
     if (bi.member === "pipeline") {
       if (args.length < 2) {
-        lowerer.noLowering(`stream/promises.pipeline with ${args.length} arguments`, call, "the supported form is pipeline(source, ...streams)");
+        lowerer.noLowering(
+          `stream/promises.pipeline with ${args.length} arguments`,
+          call,
+          "the supported form is pipeline(source, ...streams)",
+        );
       }
       let streams: IrExpr[];
       try {
@@ -1349,8 +1658,13 @@ export function lowerStreamModuleCall(lowerer: Lowerer, call: ts.CallExpression,
       // sync throw here would be observably wrong timing, so the
       // provable case takes the named fence instead.
       const argV = lowerer.lowerExpr(args[0]!);
-      const argInfo = argV.type.kind === "object" ? lowerer.classes.get(argV.type.className) : undefined;
-      if (argV.type.kind !== "dyn" && argV.type.kind !== "jsval" && !streamSidesOf(lowerer, argInfo)) {
+      const argInfo =
+        argV.type.kind === "object" ? lowerer.classes.get(argV.type.className) : undefined;
+      if (
+        argV.type.kind !== "dyn" &&
+        argV.type.kind !== "jsval" &&
+        !streamSidesOf(lowerer, argInfo)
+      ) {
         lowerer.noLowering(
           `stream/consumers.${bi.member} over a value that is not a stream`,
           call,
@@ -1381,7 +1695,11 @@ export function lowerStreamModuleCall(lowerer: Lowerer, call: ts.CallExpression,
       return numLit(lowerer.targetPlatform === "win32" ? 16384 : 65536, loc);
     }
     if (args.length === 1 && args[0]!.kind === ts.SyntaxKind.TrueKeyword) return numLit(16, loc);
-    lowerer.noLowering("getDefaultHighWaterMark with a non-literal argument", call, "the objectMode flag must be a compile-time boolean");
+    lowerer.noLowering(
+      "getDefaultHighWaterMark with a non-literal argument",
+      call,
+      "the objectMode flag must be a compile-time boolean",
+    );
   }
 
   if (bi.member === "finished") {
@@ -1389,7 +1707,9 @@ export function lowerStreamModuleCall(lowerer: Lowerer, call: ts.CallExpression,
       lowerer.noLowering(
         `finished with ${args.length} arguments`,
         call,
-        args.length === 3 ? "the options argument has no lowering yet — the two-argument form is supported" : "the supported form is finished(stream, callback)",
+        args.length === 3
+          ? "the options argument has no lowering yet — the two-argument form is supported"
+          : "the supported form is finished(stream, callback)",
       );
     }
     let recv: IrExpr;
@@ -1411,7 +1731,11 @@ export function lowerStreamModuleCall(lowerer: Lowerer, call: ts.CallExpression,
 
   if (bi.member === "pipeline") {
     if (args.length < 3) {
-      lowerer.noLowering(`pipeline with ${args.length} arguments`, call, "the supported form is pipeline(source, ...streams, callback)");
+      lowerer.noLowering(
+        `pipeline with ${args.length} arguments`,
+        call,
+        "the supported form is pipeline(source, ...streams, callback)",
+      );
     }
     let streams: IrExpr[];
     try {
@@ -1451,8 +1775,12 @@ function checkUtf8Encoding(lowerer: Lowerer, member: string, arg: ts.Expression 
 
 /** `recv.<member>(...)` over a stream-rooted receiver. Returns null only
  * for members this spoke does not own. */
-export function lowerStreamMethodCall(lowerer: Lowerer, call: ts.CallExpression,
-  access: ts.PropertyAccessExpression, info: ClassInfo): IrExpr | null {
+export function lowerStreamMethodCall(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
+  access: ts.PropertyAccessExpression,
+  info: ClassInfo,
+): IrExpr | null {
   const member = access.name.text;
   if (!STREAM_API_MEMBERS.has(member)) return null;
   const sides = streamSidesOf(lowerer, info);
@@ -1465,7 +1793,10 @@ export function lowerStreamMethodCall(lowerer: Lowerer, call: ts.CallExpression,
 
   const requireSide = (need: boolean, what: string): void => {
     if (!need) {
-      lowerer.noLowering(`${what} on a ${cls} (the ${what.startsWith("write") || what === "end" || what === "cork" || what === "uncork" ? "writable" : "readable"} half is absent)`, call);
+      lowerer.noLowering(
+        `${what} on a ${cls} (the ${what.startsWith("write") || what === "end" || what === "cork" || what === "uncork" ? "writable" : "readable"} half is absent)`,
+        call,
+      );
     }
   };
 
@@ -1485,8 +1816,13 @@ export function lowerStreamMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     }
     if (t?.kind === "union") {
       const def = lowerer.unions.get(t.unionId);
-      if (def && def.arms.every((a) =>
-        (a.kind === "bytes" && a.elem === "u8") || a.kind === "string" || a.kind === "nullT")) {
+      if (
+        def &&
+        def.arms.every(
+          (a) =>
+            (a.kind === "bytes" && a.elem === "u8") || a.kind === "string" || a.kind === "nullT",
+        )
+      ) {
         return "union";
       }
     }
@@ -1510,7 +1846,11 @@ export function lowerStreamMethodCall(lowerer: Lowerer, call: ts.CallExpression,
   if (member === "push" || member === "unshift") {
     requireSide(readableSide, member);
     if (args.length === 0 || args.length > 2) {
-      lowerer.noLowering(`${member} with ${args.length} arguments`, call, "the supported forms are (chunk) and (chunk, \"utf8\")");
+      lowerer.noLowering(
+        `${member} with ${args.length} arguments`,
+        call,
+        'the supported forms are (chunk) and (chunk, "utf8")',
+      );
     }
     // push(chunk, enc) with a LITERAL encoding: the per-call decode
     // (Buffer.from(chunk, enc)) — an explicit encoding (utf8 included)
@@ -1522,7 +1862,13 @@ export function lowerStreamMethodCall(lowerer: Lowerer, call: ts.CallExpression,
       if (t.isStringLiteralType()) {
         const canonical = knownBufEncoding(t.value);
         if (canonical === undefined) {
-          return nodeThrowExpr(1, "ERR_UNKNOWN_ENCODING", `Unknown encoding: ${t.value}`, BOOL, loc);
+          return nodeThrowExpr(
+            1,
+            "ERR_UNKNOWN_ENCODING",
+            `Unknown encoding: ${t.value}`,
+            BOOL,
+            loc,
+          );
         }
         const receiver = lowerer.lowerExpr(access.expression);
         const chunk = lowerer.lowerExprExpecting(args[0]!, STRING);
@@ -1538,7 +1884,11 @@ export function lowerStreamMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     checkUtf8Encoding(lowerer, member, args[1]);
     const kind = chunkKind(args[0]!);
     if ((kind === "null" || kind === "union" || kind === "dyn") && member === "unshift") {
-      lowerer.noLowering(kind === "null" ? "unshift(null)" : "unshift with a nullable or dynamic chunk", call, "EOF signals through push(null)");
+      lowerer.noLowering(
+        kind === "null" ? "unshift(null)" : "unshift with a nullable or dynamic chunk",
+        call,
+        "EOF signals through push(null)",
+      );
     }
     const receiver = lowerer.lowerExpr(access.expression);
     if (kind === "null") {
@@ -1559,15 +1909,35 @@ export function lowerStreamMethodCall(lowerer: Lowerer, call: ts.CallExpression,
         return { kind: "libCall", fn: "readable.push", args: [receiver, chunk], type: BOOL, loc };
       }
       if (chunk.type.kind === "string") {
-        return { kind: "libCall", fn: "readable.pushStr", args: [receiver, chunk], type: BOOL, loc };
+        return {
+          kind: "libCall",
+          fn: "readable.pushStr",
+          args: [receiver, chunk],
+          type: BOOL,
+          loc,
+        };
       }
       return { kind: "libCall", fn: "readable.pushNull", args: [receiver], type: BOOL, loc };
     }
-    const chunk = kind === "bytes" ? lowerer.lowerExprExpecting(args[0]!, BYTES) : lowerer.lowerExprExpecting(args[0]!, STRING);
-    const fn = member === "push"
-      ? (kind === "bytes" ? "readable.push" : "readable.pushStr")
-      : (kind === "bytes" ? "readable.unshift" : "readable.unshiftStr");
-    return { kind: "libCall", fn, args: [receiver, chunk], type: member === "push" ? BOOL : VOID, loc };
+    const chunk =
+      kind === "bytes"
+        ? lowerer.lowerExprExpecting(args[0]!, BYTES)
+        : lowerer.lowerExprExpecting(args[0]!, STRING);
+    const fn =
+      member === "push"
+        ? kind === "bytes"
+          ? "readable.push"
+          : "readable.pushStr"
+        : kind === "bytes"
+          ? "readable.unshift"
+          : "readable.unshiftStr";
+    return {
+      kind: "libCall",
+      fn,
+      args: [receiver, chunk],
+      type: member === "push" ? BOOL : VOID,
+      loc,
+    };
   }
 
   if (member === "read") {
@@ -1576,7 +1946,13 @@ export function lowerStreamMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     const receiver = lowerer.lowerExpr(access.expression);
     const size = args[0] ? lowerer.lowerExprExpecting(args[0], F64) : numLit(-1, loc);
     const type: IrType = unionOf(lowerer, [BYTES, { kind: "nullT" }]);
-    const read: IrExpr = { kind: "libCall", fn: "readable.read", args: [receiver, size], type, loc };
+    const read: IrExpr = {
+      kind: "libCall",
+      fn: "readable.read",
+      args: [receiver, size],
+      type,
+      loc,
+    };
     return lowerer.maybeNarrow(read, call);
   }
 
@@ -1584,7 +1960,13 @@ export function lowerStreamMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     requireSide(readableSide, member);
     if (args.length !== 0) lowerer.noLowering(`${member} with arguments`, call);
     const receiver = lowerer.lowerExpr(access.expression);
-    return { kind: "libCall", fn: member === "pause" ? "readable.pause" : "readable.resume", args: [receiver], type: receiver.type, loc };
+    return {
+      kind: "libCall",
+      fn: member === "pause" ? "readable.pause" : "readable.resume",
+      args: [receiver],
+      type: receiver.type,
+      loc,
+    };
   }
 
   if (member === "isPaused") {
@@ -1597,10 +1979,15 @@ export function lowerStreamMethodCall(lowerer: Lowerer, call: ts.CallExpression,
   if (member === "pipe") {
     requireSide(readableSide, "pipe");
     if (args.length === 0 || args.length > 2) {
-      lowerer.noLowering(`pipe with ${args.length} arguments`, call, "the supported forms are (destination) and (destination, { end })");
+      lowerer.noLowering(
+        `pipe with ${args.length} arguments`,
+        call,
+        "the supported forms are (destination) and (destination, { end })",
+      );
     }
     const dst = lowerer.lowerExpr(args[0]!);
-    const dstInfo = dst.type.kind === "object" ? lowerer.classes.get(dst.type.className) : undefined;
+    const dstInfo =
+      dst.type.kind === "object" ? lowerer.classes.get(dst.type.className) : undefined;
     const dstSides = streamSidesOf(lowerer, dstInfo);
     if (dstSides !== "w" && dstSides !== "rw") {
       lowerer.noLowering(
@@ -1612,17 +1999,31 @@ export function lowerStreamMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     let end: IrExpr = boolLit(true, loc);
     if (args[1] !== undefined) {
       if (!ts.isObjectLiteralExpression(args[1])) {
-        lowerer.noLowering("pipe with a non-literal options argument", args[1], "{ end: <bool> } inline is the supported form");
+        lowerer.noLowering(
+          "pipe with a non-literal options argument",
+          args[1],
+          "{ end: <bool> } inline is the supported form",
+        );
       }
       for (const prop of args[1].properties) {
-        if (!ts.isPropertyAssignment(prop) || !ts.isIdentifier(prop.name) || prop.name.text !== "end") {
+        if (
+          !ts.isPropertyAssignment(prop) ||
+          !ts.isIdentifier(prop.name) ||
+          prop.name.text !== "end"
+        ) {
           lowerer.noLowering("a pipe option other than 'end'", prop);
         }
         end = lowerer.lowerExprExpecting(prop.initializer, BOOL);
       }
     }
     const receiver = lowerer.lowerExpr(access.expression);
-    return { kind: "libCall", fn: "readable.pipe", args: [receiver, dst, end], type: dst.type, loc };
+    return {
+      kind: "libCall",
+      fn: "readable.pipe",
+      args: [receiver, dst, end],
+      type: dst.type,
+      loc,
+    };
   }
 
   if (member === "unpipe") {
@@ -1631,12 +2032,19 @@ export function lowerStreamMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     const receiver = lowerer.lowerExpr(access.expression);
     if (args[0] !== undefined) {
       const dst = lowerer.lowerExpr(args[0]);
-      const dstInfo = dst.type.kind === "object" ? lowerer.classes.get(dst.type.className) : undefined;
+      const dstInfo =
+        dst.type.kind === "object" ? lowerer.classes.get(dst.type.className) : undefined;
       const dstSides = streamSidesOf(lowerer, dstInfo);
       if (dstSides !== "w" && dstSides !== "rw") {
         lowerer.noLowering(`unpipe of a '${lowerer.fmt(dst.type)}'`, args[0]);
       }
-      return { kind: "libCall", fn: "readable.unpipe", args: [receiver, dst], type: receiver.type, loc };
+      return {
+        kind: "libCall",
+        fn: "readable.unpipe",
+        args: [receiver, dst],
+        type: receiver.type,
+        loc,
+      };
     }
     return { kind: "libCall", fn: "readable.unpipe", args: [receiver], type: receiver.type, loc };
   }
@@ -1654,9 +2062,19 @@ export function lowerStreamMethodCall(lowerer: Lowerer, call: ts.CallExpression,
         return false;
       };
       if (!rootsAtError(err.type)) {
-        lowerer.noLowering(`destroy with a '${lowerer.fmt(err.type)}' argument`, args[0], "the supported argument is an Error-hierarchy instance");
+        lowerer.noLowering(
+          `destroy with a '${lowerer.fmt(err.type)}' argument`,
+          args[0],
+          "the supported argument is an Error-hierarchy instance",
+        );
       }
-      return { kind: "libCall", fn: "stream.destroyErr", args: [receiver, lowerer.upcastTo(err, "%Error")], type: receiver.type, loc };
+      return {
+        kind: "libCall",
+        fn: "stream.destroyErr",
+        args: [receiver, lowerer.upcastTo(err, "%Error")],
+        type: receiver.type,
+        loc,
+      };
     }
     return { kind: "libCall", fn: "stream.destroy", args: [receiver], type: receiver.type, loc };
   }
@@ -1669,7 +2087,8 @@ export function lowerStreamMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     const kind = chunkKind(args[0]!);
     if (kind === "null") lowerer.noLowering("write(null)", call, "end() finishes a writable");
     if (kind === "dyn") {
-      if (args.length > 1) lowerer.noLowering("write with a dynamic chunk and more arguments", call);
+      if (args.length > 1)
+        lowerer.noLowering("write with a dynamic chunk and more arguments", call);
       const receiver = lowerer.lowerExpr(access.expression);
       const chunk = lowerer.lowerExprExpecting(args[0]!, DYN);
       return { kind: "libCall", fn: "writable.writeDyn", args: [receiver, chunk], type: BOOL, loc };
@@ -1682,9 +2101,14 @@ export function lowerStreamMethodCall(lowerer: Lowerer, call: ts.CallExpression,
       if (args.length > 1) lowerer.noLowering("write with a union chunk and more arguments", call);
       const receiver = lowerer.lowerExpr(access.expression);
       const chunk = lowerer.lowerExpr(args[0]!);
-      const fn = chunk.type.kind === "union" ? "writable.writeU"
-        : chunk.type.kind === "string" ? "writable.writeStr" : "writable.write";
-      if (chunk.type.kind === "nullT") lowerer.noLowering("write(null)", call, "end() finishes a writable");
+      const fn =
+        chunk.type.kind === "union"
+          ? "writable.writeU"
+          : chunk.type.kind === "string"
+            ? "writable.writeStr"
+            : "writable.write";
+      if (chunk.type.kind === "nullT")
+        lowerer.noLowering("write(null)", call, "end() finishes a writable");
       return { kind: "libCall", fn, args: [receiver, chunk], type: BOOL, loc };
     }
     // Disambiguate (chunk, cb?) vs (chunk, encoding, cb?) by the second
@@ -1699,7 +2123,10 @@ export function lowerStreamMethodCall(lowerer: Lowerer, call: ts.CallExpression,
       cbArg = args[2];
     }
     const receiver = lowerer.lowerExpr(access.expression);
-    const chunk = kind === "bytes" ? lowerer.lowerExprExpecting(args[0]!, BYTES) : lowerer.lowerExprExpecting(args[0]!, STRING);
+    const chunk =
+      kind === "bytes"
+        ? lowerer.lowerExprExpecting(args[0]!, BYTES)
+        : lowerer.lowerExprExpecting(args[0]!, STRING);
     const fn = kind === "bytes" ? "writable.write" : "writable.writeStr";
     if (cbArg !== undefined) {
       const cb = lowerer.lowerExprExpecting(cbArg, funcOf([], VOID));
@@ -1743,37 +2170,65 @@ export function lowerStreamMethodCall(lowerer: Lowerer, call: ts.CallExpression,
       if (kind === "null" || kind === "union") lowerer.noLowering("end(null)", call);
       flags |= kind === "bytes" ? 1 : kind === "dyn" ? 8 : 2;
       tail.push(
-        kind === "bytes" ? lowerer.lowerExprExpecting(chunkNode, BYTES)
-        : kind === "dyn" ? lowerer.lowerExprExpecting(chunkNode, DYN)
-        : lowerer.lowerExprExpecting(chunkNode, STRING),
+        kind === "bytes"
+          ? lowerer.lowerExprExpecting(chunkNode, BYTES)
+          : kind === "dyn"
+            ? lowerer.lowerExprExpecting(chunkNode, DYN)
+            : lowerer.lowerExprExpecting(chunkNode, STRING),
       );
     }
     if (cbArg !== undefined) {
       const cb = lowerer.lowerExprExpecting(cbArg, funcOf([], VOID));
       if (cb.type.kind !== "func" || cb.type.params.length > 0) {
-        lowerer.noLowering("end callbacks with parameters", cbArg, "() => void callbacks are supported");
+        lowerer.noLowering(
+          "end callbacks with parameters",
+          cbArg,
+          "() => void callbacks are supported",
+        );
       }
       flags |= 4;
       tail.push(cb);
     }
-    return { kind: "libCall", fn: "writable.end", args: [receiver, numLit(flags, loc), ...tail], type: receiver.type, loc };
+    return {
+      kind: "libCall",
+      fn: "writable.end",
+      args: [receiver, numLit(flags, loc), ...tail],
+      type: receiver.type,
+      loc,
+    };
   }
 
   if (member === "cork" || member === "uncork") {
     requireSide(writableSide, member);
     if (args.length !== 0) lowerer.noLowering(`${member} with arguments`, call);
     const receiver = lowerer.lowerExpr(access.expression);
-    return { kind: "libCall", fn: member === "cork" ? "writable.cork" : "writable.uncork", args: [receiver], type: VOID, loc };
+    return {
+      kind: "libCall",
+      fn: member === "cork" ? "writable.cork" : "writable.uncork",
+      args: [receiver],
+      type: VOID,
+      loc,
+    };
   }
 
   if (member === "setEncoding") {
     requireSide(readableSide, "setEncoding");
     if (args.length !== 1) {
-      lowerer.noLowering(`setEncoding with ${args.length} arguments`, call, "one literal encoding is the supported form");
+      lowerer.noLowering(
+        `setEncoding with ${args.length} arguments`,
+        call,
+        "one literal encoding is the supported form",
+      );
     }
     const enc = bufEncoding(lowerer, "setEncoding", args[0]!);
     const receiver = lowerer.lowerExpr(access.expression);
-    return { kind: "libCall", fn: "readable.setEncoding", args: [receiver, strLit(enc, loc)], type: receiver.type, loc };
+    return {
+      kind: "libCall",
+      fn: "readable.setEncoding",
+      args: [receiver, strLit(enc, loc)],
+      type: receiver.type,
+      loc,
+    };
   }
 
   if (member === "setDefaultEncoding") {
@@ -1805,20 +2260,43 @@ export function lowerStreamMethodCall(lowerer: Lowerer, call: ts.CallExpression,
  * the per-side errored slots collapse onto the shared fields here
  * (SEMANTICS.md). */
 const RS_BOOL_PROPS: ReadonlySet<string> = new Set([
-  "ended", "endEmitted", "destroyed", "errorEmitted", "emittedReadable",
-  "needReadable", "reading", "readableListening", "resumeScheduled",
-  "objectMode", "constructed", "closed",
+  "ended",
+  "endEmitted",
+  "destroyed",
+  "errorEmitted",
+  "emittedReadable",
+  "needReadable",
+  "reading",
+  "readableListening",
+  "resumeScheduled",
+  "objectMode",
+  "constructed",
+  "closed",
 ]);
 const RS_NUM_PROPS: ReadonlySet<string> = new Set(["length", "highWaterMark"]);
 const WS_BOOL_PROPS: ReadonlySet<string> = new Set([
-  "ended", "ending", "finished", "destroyed", "errorEmitted", "needDrain",
-  "objectMode", "constructed", "closed", "prefinished",
+  "ended",
+  "ending",
+  "finished",
+  "destroyed",
+  "errorEmitted",
+  "needDrain",
+  "objectMode",
+  "constructed",
+  "closed",
+  "prefinished",
 ]);
 const WS_NUM_PROPS: ReadonlySet<string> = new Set([
-  "length", "highWaterMark", "corked", "bufferedRequestCount",
+  "length",
+  "highWaterMark",
+  "corked",
+  "bufferedRequestCount",
 ]);
 
-export function lowerStreamStateProperty(lowerer: Lowerer, expr: ts.PropertyAccessExpression): IrExpr | null {
+export function lowerStreamStateProperty(
+  lowerer: Lowerer,
+  expr: ts.PropertyAccessExpression,
+): IrExpr | null {
   if (expr.questionDotToken) return null;
   const inner = expr.expression;
   if (!ts.isPropertyAccessExpression(inner) || inner.questionDotToken) return null;
@@ -1848,7 +2326,10 @@ export function lowerStreamStateProperty(lowerer: Lowerer, expr: ts.PropertyAcce
     return lowerer.maybeNarrow(read, expr);
   }
   if (name === "errored") {
-    const type: IrType = unionOf(lowerer, [{ kind: "object", className: "%Error" }, { kind: "nullT" }]);
+    const type: IrType = unionOf(lowerer, [
+      { kind: "object", className: "%Error" },
+      { kind: "nullT" },
+    ]);
     const read: IrExpr = { kind: "libCall", fn: "stream.errored", args: [receiver()], type, loc };
     return lowerer.maybeNarrow(read, expr);
   }
@@ -1873,14 +2354,30 @@ export function lowerStreamStateProperty(lowerer: Lowerer, expr: ts.PropertyAcce
 /* ── the property surface ─────────────────────────────────────────────── */
 
 const READABLE_BOOL_PROPS: ReadonlySet<string> = new Set(["readable", "readableEnded"]);
-const WRITABLE_BOOL_PROPS: ReadonlySet<string> = new Set(["writable", "writableEnded", "writableFinished", "writableNeedDrain"]);
+const WRITABLE_BOOL_PROPS: ReadonlySet<string> = new Set([
+  "writable",
+  "writableEnded",
+  "writableFinished",
+  "writableNeedDrain",
+]);
 const SHARED_BOOL_PROPS: ReadonlySet<string> = new Set(["destroyed", "closed"]);
-const READABLE_NUM_PROPS: ReadonlySet<string> = new Set(["readableLength", "readableHighWaterMark"]);
-const WRITABLE_NUM_PROPS: ReadonlySet<string> = new Set(["writableLength", "writableHighWaterMark", "writableCorked"]);
+const READABLE_NUM_PROPS: ReadonlySet<string> = new Set([
+  "readableLength",
+  "readableHighWaterMark",
+]);
+const WRITABLE_NUM_PROPS: ReadonlySet<string> = new Set([
+  "writableLength",
+  "writableHighWaterMark",
+  "writableCorked",
+]);
 
 /** Property reads on stream-rooted receivers (`r.readableEnded`,
  * `w.destroyed`, ...). Null for names this spoke does not own. */
-export function lowerStreamProperty(lowerer: Lowerer, expr: ts.PropertyAccessExpression, info: ClassInfo): IrExpr | null {
+export function lowerStreamProperty(
+  lowerer: Lowerer,
+  expr: ts.PropertyAccessExpression,
+  info: ClassInfo,
+): IrExpr | null {
   const sides = streamSidesOf(lowerer, info);
   if (!sides) return null;
   const name = expr.name.text;
@@ -1896,20 +2393,42 @@ export function lowerStreamProperty(lowerer: Lowerer, expr: ts.PropertyAccessExp
     loc,
   });
 
-  if ((readableSide && READABLE_BOOL_PROPS.has(name)) || (writableSide && WRITABLE_BOOL_PROPS.has(name)) || SHARED_BOOL_PROPS.has(name)) {
+  if (
+    (readableSide && READABLE_BOOL_PROPS.has(name)) ||
+    (writableSide && WRITABLE_BOOL_PROPS.has(name)) ||
+    SHARED_BOOL_PROPS.has(name)
+  ) {
     return propCall(BOOL);
   }
-  if ((readableSide && READABLE_NUM_PROPS.has(name)) || (writableSide && WRITABLE_NUM_PROPS.has(name))) {
+  if (
+    (readableSide && READABLE_NUM_PROPS.has(name)) ||
+    (writableSide && WRITABLE_NUM_PROPS.has(name))
+  ) {
     return propCall(F64);
   }
   if (name === "readableFlowing" && readableSide) {
     const type: IrType = unionOf(lowerer, [BOOL, { kind: "nullT" }]);
-    const read: IrExpr = { kind: "libCall", fn: "readable.flowing", args: [lowerer.lowerExpr(expr.expression)], type, loc };
+    const read: IrExpr = {
+      kind: "libCall",
+      fn: "readable.flowing",
+      args: [lowerer.lowerExpr(expr.expression)],
+      type,
+      loc,
+    };
     return lowerer.maybeNarrow(read, expr);
   }
   if (name === "errored") {
-    const type: IrType = unionOf(lowerer, [{ kind: "object", className: "%Error" }, { kind: "nullT" }]);
-    const read: IrExpr = { kind: "libCall", fn: "stream.errored", args: [lowerer.lowerExpr(expr.expression)], type, loc };
+    const type: IrType = unionOf(lowerer, [
+      { kind: "object", className: "%Error" },
+      { kind: "nullT" },
+    ]);
+    const read: IrExpr = {
+      kind: "libCall",
+      fn: "stream.errored",
+      args: [lowerer.lowerExpr(expr.expression)],
+      type,
+      loc,
+    };
     return lowerer.maybeNarrow(read, expr);
   }
   if (name === "readableObjectMode" && readableSide) {

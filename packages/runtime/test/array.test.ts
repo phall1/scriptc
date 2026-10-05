@@ -14,9 +14,14 @@ const bin = join(testDir, "build", "test_array");
 beforeAll(async () => {
   await mkdir(join(testDir, "build"), { recursive: true });
   await execFileAsync("clang", [
-    "-std=c11", "-O1", "-Wall", "-Wextra",
-    "-fsanitize=address", "-DSCR_RC_AUDIT",
-    "-o", bin,
+    "-std=c11",
+    "-O1",
+    "-Wall",
+    "-Wextra",
+    "-fsanitize=address",
+    "-DSCR_RC_AUDIT",
+    "-o",
+    bin,
     join(testDir, "test_array.c"),
     join(testDir, "../src/scr_array.c"),
     // Checked-value collection equality shares the native JSON value runtime.

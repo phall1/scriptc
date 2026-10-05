@@ -1,22 +1,82 @@
 import { driverTraceCandidates, linkTraceCandidate } from "./link-trace.js";
-import { toolchainEnvironmentCachePolicy, toolchainEnvironmentFingerprint } from "./toolchain-environment.js";
-export { toolchainEnvironmentCachePolicy, toolchainEnvironmentFingerprint, type ToolchainEnvironmentCachePolicy } from "./toolchain-environment.js";
-import { IPHONEOS_MIN_VERSION, ANDROID_MIN_API, isIosTarget, isAndroidTarget, isMobileTarget, mobileLibraryTarget, mobileTargetRefusal, configuredTargetPlatform } from "./target-platform.js";
-export { IPHONEOS_MIN_VERSION, ANDROID_MIN_API, isIosTarget, isAndroidTarget, isMobileTarget, mobileLibraryTarget, mobileTargetRefusal, configuredTargetPlatform } from "./target-platform.js";
+import {
+  toolchainEnvironmentCachePolicy,
+  toolchainEnvironmentFingerprint,
+} from "./toolchain-environment.js";
+export {
+  toolchainEnvironmentCachePolicy,
+  toolchainEnvironmentFingerprint,
+  type ToolchainEnvironmentCachePolicy,
+} from "./toolchain-environment.js";
+import {
+  IPHONEOS_MIN_VERSION,
+  ANDROID_MIN_API,
+  isIosTarget,
+  isAndroidTarget,
+  isMobileTarget,
+  mobileLibraryTarget,
+  mobileTargetRefusal,
+  configuredTargetPlatform,
+} from "./target-platform.js";
+export {
+  IPHONEOS_MIN_VERSION,
+  ANDROID_MIN_API,
+  isIosTarget,
+  isAndroidTarget,
+  isMobileTarget,
+  mobileLibraryTarget,
+  mobileTargetRefusal,
+  configuredTargetPlatform,
+} from "./target-platform.js";
 import { InternalCompilerError } from "../errors.js";
 import { execFile, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, existsSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
-import { access, chmod, copyFile, link, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
+import {
+  access,
+  chmod,
+  copyFile,
+  link,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { availableParallelism, homedir, tmpdir } from "node:os";
-import { basename, delimiter, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
+import {
+  basename,
+  delimiter,
+  dirname,
+  extname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+} from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { localizeElfObject, mergeAndLocalizeCoffObjects } from "./object-localize.js";
-import { executableOptimizationLinkerArgs, executableStripLinkerArgs, windowsSubsystemLinkerArgs, type WindowsSubsystem } from "./targets.js";
-import { createDarwinDebugSymbols, installDarwinDebugSymbols, needsDarwinDebugSymbols, readDarwinDebugSymbols } from "./debug-symbols.js";
+import {
+  executableOptimizationLinkerArgs,
+  executableStripLinkerArgs,
+  windowsSubsystemLinkerArgs,
+  type WindowsSubsystem,
+} from "./targets.js";
+import {
+  createDarwinDebugSymbols,
+  installDarwinDebugSymbols,
+  needsDarwinDebugSymbols,
+  readDarwinDebugSymbols,
+} from "./debug-symbols.js";
 import {
   createVendorArchives,
   MBEDTLS_VERSION,
@@ -86,7 +146,33 @@ function stableTestMemo<T>(
   return pending;
 }
 
-export const EXECUTABLE_RUNTIME_SOURCES = ["scr_number.c", "scr_bigint.c", "scr_string.c", "scr_grapheme.c", "scr_array.c", "scr_bytes.c", "scr_bytes_io.c", "scr_map.c", "scr_closure.c", "scr_ffi.c", "scr_object.c", "scr_union.c", "scr_exception.c", "scr_error.c", "scr_console.c", "scr_lib.c", "scr_path.c", "scr_url.c", "scr_url_params.c", "scr_json.c", "scr_node_builtin.c", "scr_async.c", "scr_crypto_async.c", "scr_child.c", "scr_cycle.c"] as const;
+export const EXECUTABLE_RUNTIME_SOURCES = [
+  "scr_number.c",
+  "scr_bigint.c",
+  "scr_string.c",
+  "scr_grapheme.c",
+  "scr_array.c",
+  "scr_bytes.c",
+  "scr_bytes_io.c",
+  "scr_map.c",
+  "scr_closure.c",
+  "scr_ffi.c",
+  "scr_object.c",
+  "scr_union.c",
+  "scr_exception.c",
+  "scr_error.c",
+  "scr_console.c",
+  "scr_lib.c",
+  "scr_path.c",
+  "scr_url.c",
+  "scr_url_params.c",
+  "scr_json.c",
+  "scr_node_builtin.c",
+  "scr_async.c",
+  "scr_crypto_async.c",
+  "scr_child.c",
+  "scr_cycle.c",
+] as const;
 
 /**
  * Per-target section-elimination recipe. This belongs beside the native
@@ -147,11 +233,13 @@ export async function executableNativeEnvironmentFingerprint(
   }
   const hash = createHash("sha256")
     .update("executable-native-environment-v2\0")
-    .update(toolchainEnvironmentFingerprint(env)).update("\0")
+    .update(toolchainEnvironmentFingerprint(env))
+    .update("\0")
     // PATH text alone is not a resolution proof, and on Darwin /usr/bin/clang
     // is a stable shim whose selected Xcode compiler can change underneath it.
     // Re-resolve and trace the effective driver on every early lookup.
-    .update(compilerIdentity).update("\0");
+    .update(compilerIdentity)
+    .update("\0");
   for (const name of [
     "PATH",
     "SCRIPTC_FETCH_CURL",
@@ -160,7 +248,11 @@ export async function executableNativeEnvironmentFingerprint(
     "SCRIPTC_TEST_TRUST_COMPILER_WRAPPER",
   ]) {
     const value = env[name];
-    hash.update(name).update(value === undefined ? "\0unset\0" : "\0set\0").update(value ?? "").update("\0");
+    hash
+      .update(name)
+      .update(value === undefined ? "\0unset\0" : "\0set\0")
+      .update(value ?? "")
+      .update("\0");
   }
   return hash.digest("hex");
 }
@@ -415,7 +507,7 @@ export function subprocessFailureDetail(err: unknown): string {
     message?: string;
   };
   const output = (value: string | Buffer | undefined): string => {
-    const text = Buffer.isBuffer(value) ? value.toString("utf8") : value ?? "";
+    const text = Buffer.isBuffer(value) ? value.toString("utf8") : (value ?? "");
     return text.trim().length > 0 ? text.trimEnd() : "";
   };
   const stderr = output(failure.stderr);
@@ -589,8 +681,9 @@ function androidNdkSysroot(env: NodeJS.ProcessEnv): string {
   const memo = ndkSysrootMemos.get(key);
   if (memo !== undefined) return memo;
   const ndkRoots: string[] = [];
-  const explicit = [env["ANDROID_NDK_ROOT"], env["ANDROID_NDK_HOME"]]
-    .find((root): root is string => root !== undefined && root !== "");
+  const explicit = [env["ANDROID_NDK_ROOT"], env["ANDROID_NDK_HOME"]].find(
+    (root): root is string => root !== undefined && root !== "",
+  );
   if (explicit !== undefined) {
     ndkRoots.push(explicit);
   } else {
@@ -794,7 +887,8 @@ export function cacheTargetIdentity(
  * fiber/loop and child-process units, plus the library-mode TU. */
 const LIB_RUNTIME_SOURCES = [
   ...EXECUTABLE_RUNTIME_SOURCES.filter(
-    (f) => f !== "scr_async.c" && f !== "scr_crypto_async.c" && f !== "scr_child.c" && f !== "scr_ffi.c",
+    (f) =>
+      f !== "scr_async.c" && f !== "scr_crypto_async.c" && f !== "scr_child.c" && f !== "scr_ffi.c",
   ),
   "scr_library.c",
 ];
@@ -906,17 +1000,13 @@ async function resolveProgramShardMergeIdentity(driver: CcDriver): Promise<strin
     const ld = await resolvedTool("ld");
     return ld === null
       ? null
-      : rememberFingerprintDependencies(
-          `program-shard-merge-darwin-v1\0${ld.cacheIdentity}`,
-          [ld.canonicalPath],
-        );
+      : rememberFingerprintDependencies(`program-shard-merge-darwin-v1\0${ld.cacheIdentity}`, [
+          ld.canonicalPath,
+        ]);
   }
   if (platform === "linux") {
     if (driver.target === null) {
-      const [ld, objcopy] = await Promise.all([
-        resolvedTool("ld"),
-        resolvedTool("objcopy"),
-      ]);
+      const [ld, objcopy] = await Promise.all([resolvedTool("ld"), resolvedTool("objcopy")]);
       return ld === null || objcopy === null
         ? null
         : rememberFingerprintDependencies(
@@ -936,9 +1026,7 @@ async function resolveProgramShardMergeIdentity(driver: CcDriver): Promise<strin
   }
   if (platform === "win32") {
     const arch = driver.target?.split("-", 1)[0] ?? process.arch;
-    return arch === "x86_64" || arch === "x64"
-      ? `program-shard-merge-coff-v1\0${arch}`
-      : null;
+    return arch === "x86_64" || arch === "x64" ? `program-shard-merge-coff-v1\0${arch}` : null;
   }
   return null;
 }
@@ -948,23 +1036,27 @@ export async function compileLibArchive(opts: LibArchiveOptions): Promise<void> 
   const rtDir = runtimeSrcDir();
   const driver = resolveCc();
   const shardNames = new Set<string>();
-  const programShardsValid = opts.programShards?.every((shard) => {
-    if (
-      basename(shard.name) !== shard.name || !shard.name.endsWith(".ll") ||
-      shardNames.has(shard.name)
-    ) return false;
-    shardNames.add(shard.name);
-    return true;
-  }) === true;
+  const programShardsValid =
+    opts.programShards?.every((shard) => {
+      if (
+        basename(shard.name) !== shard.name ||
+        !shard.name.endsWith(".ll") ||
+        shardNames.has(shard.name)
+      )
+        return false;
+      shardNames.add(shard.name);
+      return true;
+    }) === true;
   const programShardsRequested =
     opts.cPath.endsWith(".ll") &&
-    programShardsValid && opts.programShards !== undefined && opts.programShards.length > 1 &&
+    programShardsValid &&
+    opts.programShards !== undefined &&
+    opts.programShards.length > 1 &&
     opts.programPublicSymbols !== undefined
       ? opts.programShards
       : null;
-  const programShardMergeIdentity = programShardsRequested === null
-    ? null
-    : await resolveProgramShardMergeIdentity(driver);
+  const programShardMergeIdentity =
+    programShardsRequested === null ? null : await resolveProgramShardMergeIdentity(driver);
   const programShards = programShardMergeIdentity === null ? null : programShardsRequested;
   const programPublicSymbols = programShards === null ? undefined : opts.programPublicSymbols;
   const sanitize = opts.sanitize ?? false;
@@ -1007,7 +1099,8 @@ export async function compileLibArchive(opts: LibArchiveOptions): Promise<void> 
     "-DSCR_LIB",
     ...(opts.threadInstances ? ["-DSCR_THREAD_INSTANCES"] : []),
     ...(opts.textDecoderLegacy ? ["-DSCR_TEXT_DECODER_LEGACY"] : []),
-    "-I", rtDir,
+    "-I",
+    rtDir,
     ...(regex ? ["-I", vendorEngineDir()] : []),
     ...(opts.zlib ? ["-I", vendorZlibDir()] : []),
   ];
@@ -1022,7 +1115,7 @@ export async function compileLibArchive(opts: LibArchiveOptions): Promise<void> 
   const persistentDriverCache =
     cachePolicy.runtimeObjects &&
     configuredCacheRoot !== null &&
-    await compilerDriverSupportsPersistentCache(driver, toolchainEnv);
+    (await compilerDriverSupportsPersistentCache(driver, toolchainEnv));
   // A library archive is compile-only from clang's perspective. Link-only
   // search variables cannot affect it, but any mutable compilation input or
   // opaque compiler wrapper makes every persistent tier unsafe to reuse. An
@@ -1064,14 +1157,15 @@ export async function compileLibArchive(opts: LibArchiveOptions): Promise<void> 
         toolchainEnv,
         cflags,
       );
-      programCompilerInvocation = programSourceExtension === ".ll"
-        ? await effectiveCompilerInvocationFingerprint(
-            driver,
-            toolchainEnv,
-            programCompilerArgs,
-            programSourceExtension,
-          )
-        : runtimeCompilerInvocation;
+      programCompilerInvocation =
+        programSourceExtension === ".ll"
+          ? await effectiveCompilerInvocationFingerprint(
+              driver,
+              toolchainEnv,
+              programCompilerArgs,
+              programSourceExtension,
+            )
+          : runtimeCompilerInvocation;
     } catch {
       // A wrapper that cannot expose its effective invocation can still build,
       // but its outputs cannot safely participate in a persistent cache.
@@ -1089,18 +1183,17 @@ export async function compileLibArchive(opts: LibArchiveOptions): Promise<void> 
   // consumes the same per-flavor objects).
   const cacheCompleteArchive =
     opts.localizeSymbols === undefined &&
-    persistentCache !== null && await archiverSupportsPersistentCache(arArgv, driver);
+    persistentCache !== null &&
+    (await archiverSupportsPersistentCache(arArgv, driver));
   let cachedArchive: string | null = null;
   let compilerVersion = "";
   let archiverVersion = "";
   let runtimeHash = "";
   let programDependencyHash = "";
-  let cachedProgramBytes = opts.programSource === undefined
-    ? null
-    : Buffer.from(opts.programSource, "utf8");
-  const identityBytes = opts.identityLlvmSource === undefined
-    ? null
-    : Buffer.from(opts.identityLlvmSource, "utf8");
+  let cachedProgramBytes =
+    opts.programSource === undefined ? null : Buffer.from(opts.programSource, "utf8");
+  const identityBytes =
+    opts.identityLlvmSource === undefined ? null : Buffer.from(opts.identityLlvmSource, "utf8");
   if (persistentCache !== null) {
     try {
       const [cv, fingerprint, programBytes] = await Promise.all([
@@ -1127,25 +1220,41 @@ export async function compileLibArchive(opts: LibArchiveOptions): Promise<void> 
           // bytes key the exact merged program object so ABI projections,
           // tool replacements, and single-/multi-TU producers never collide.
           .update("lib-v10\0")
-          .update(cacheTargetIdentity(driver)).update("\0")
-          .update(toolchainEnv).update("\0")
-          .update(implicitToolchain!).update("\0")
-          .update(runtimeCompilerInvocation!).update("\0")
-          .update(programCompilerInvocation!).update("\0")
-          .update(programDependencyHash).update("\0")
-          .update(persistentCache.identity).update("\0")
-          .update(driver.argv.join("\x1f")).update("\0")
-          .update(cv).update("\0")
-          .update(fingerprint).update("\0")
-          .update(arArgv.join("\x1f")).update("\0")
-          .update(av).update("\0")
-          .update(cflags.join("\x1f")).update("\0")
-          .update(sources.join("\x1f")).update("\0")
+          .update(cacheTargetIdentity(driver))
+          .update("\0")
+          .update(toolchainEnv)
+          .update("\0")
+          .update(implicitToolchain!)
+          .update("\0")
+          .update(runtimeCompilerInvocation!)
+          .update("\0")
+          .update(programCompilerInvocation!)
+          .update("\0")
+          .update(programDependencyHash)
+          .update("\0")
+          .update(persistentCache.identity)
+          .update("\0")
+          .update(driver.argv.join("\x1f"))
+          .update("\0")
+          .update(cv)
+          .update("\0")
+          .update(fingerprint)
+          .update("\0")
+          .update(arArgv.join("\x1f"))
+          .update("\0")
+          .update(av)
+          .update("\0")
+          .update(cflags.join("\x1f"))
+          .update("\0")
+          .update(sources.join("\x1f"))
+          .update("\0")
           // The compiler-visible spelling and resolved location are both inputs:
           // __FILE__ observes the former, while relative includes follow the
           // latter. Archive members also inherit the TU's basename.
-          .update(opts.cPath).update("\0")
-          .update(resolve(opts.cPath)).update("\0")
+          .update(opts.cPath)
+          .update("\0")
+          .update(resolve(opts.cPath))
+          .update("\0")
           .update(programBytes);
         updateProgramShardCacheIdentity(
           key,
@@ -1155,7 +1264,8 @@ export async function compileLibArchive(opts: LibArchiveOptions): Promise<void> 
         );
         const keyHex = key
           .update("\0identity\0")
-          .update(identityBytes === null ? "<none>" : "<generated>").update("\0")
+          .update(identityBytes === null ? "<none>" : "<generated>")
+          .update("\0")
           .update(identityBytes ?? Buffer.alloc(0))
           .digest("hex");
         cachedArchive = join(persistentCache.root, "lib", keyHex);
@@ -1182,12 +1292,10 @@ export async function compileLibArchive(opts: LibArchiveOptions): Promise<void> 
     }
   }
 
-  const transientVendorRoot = persistentCache !== null && implicitToolchain !== null
-    ? null
-    : join(
-        tmpdir(),
-        `scriptc-lib-vendor-${process.pid}-${Math.random().toString(36).slice(2)}`,
-      );
+  const transientVendorRoot =
+    persistentCache !== null && implicitToolchain !== null
+      ? null
+      : join(tmpdir(), `scriptc-lib-vendor-${process.pid}-${Math.random().toString(36).slice(2)}`);
   const vendorCacheRoot = transientVendorRoot ?? vendorBuildCacheRoot(persistentCache?.root);
   try {
     const buildDir = await mkdtemp(join(tmpdir(), "scriptc-lib-"));
@@ -1221,8 +1329,10 @@ export async function compileLibArchive(opts: LibArchiveOptions): Promise<void> 
               ]
             : []),
           ...(src.endsWith(".ll") ? ["-Wno-override-module"] : []),
-          "-c", src,
-          "-o", obj,
+          "-c",
+          src,
+          "-o",
+          obj,
         ];
         try {
           await execFileAsync(driver.argv[0] ?? "clang", args);
@@ -1245,23 +1355,38 @@ export async function compileLibArchive(opts: LibArchiveOptions): Promise<void> 
       }
       let cachedProgramObject: string | null = null;
       if (
-        persistentCache !== null && cachedProgramBytes !== null && compilerVersion !== "" &&
-        implicitToolchain !== null && programCompilerInvocation !== null
+        persistentCache !== null &&
+        cachedProgramBytes !== null &&
+        compilerVersion !== "" &&
+        implicitToolchain !== null &&
+        programCompilerInvocation !== null
       ) {
         const programKey = createHash("sha256")
           .update("lib-program-obj-v3\0")
-          .update(cacheTargetIdentity(driver)).update("\0")
-          .update(toolchainEnv).update("\0")
-          .update(implicitToolchain).update("\0")
-          .update(programCompilerInvocation).update("\0")
-          .update(persistentCache.identity).update("\0")
-          .update(driver.argv.join("\x1f")).update("\0")
-          .update(compilerVersion).update("\0")
-          .update(runtimeHash).update("\0")
-          .update(programDependencyHash).update("\0")
-          .update(programCompilerArgs.join("\x1f")).update("\0")
-          .update(opts.cPath).update("\0")
-          .update(resolve(opts.cPath)).update("\0")
+          .update(cacheTargetIdentity(driver))
+          .update("\0")
+          .update(toolchainEnv)
+          .update("\0")
+          .update(implicitToolchain)
+          .update("\0")
+          .update(programCompilerInvocation)
+          .update("\0")
+          .update(persistentCache.identity)
+          .update("\0")
+          .update(driver.argv.join("\x1f"))
+          .update("\0")
+          .update(compilerVersion)
+          .update("\0")
+          .update(runtimeHash)
+          .update("\0")
+          .update(programDependencyHash)
+          .update("\0")
+          .update(programCompilerArgs.join("\x1f"))
+          .update("\0")
+          .update(opts.cPath)
+          .update("\0")
+          .update(resolve(opts.cPath))
+          .update("\0")
           .update(cachedProgramBytes);
         updateProgramShardCacheIdentity(
           programKey,
@@ -1277,7 +1402,7 @@ export async function compileLibArchive(opts: LibArchiveOptions): Promise<void> 
       let programShardFallback = false;
       if (
         cachedProgramObject !== null &&
-        await copyValidCachedFile(cachedProgramObject, stagedProgramObject)
+        (await copyValidCachedFile(cachedProgramObject, stagedProgramObject))
       ) {
         programObject = stagedProgramObject;
       } else if (programShards !== null) {
@@ -1287,8 +1412,10 @@ export async function compileLibArchive(opts: LibArchiveOptions): Promise<void> 
             const staged = join(buildDir, `${stem}.program-${index.toString().padStart(3, "0")}.o`);
             let cachePath: string | null = null;
             if (
-              persistentCache !== null && compilerVersion !== "" &&
-              implicitCompileToolchain !== null && programCompilerInvocation !== null
+              persistentCache !== null &&
+              compilerVersion !== "" &&
+              implicitCompileToolchain !== null &&
+              programCompilerInvocation !== null
             ) {
               const key = createHash("sha256")
                 // v2 removes the broad implicit-toolchain fingerprint: it
@@ -1299,19 +1426,32 @@ export async function compileLibArchive(opts: LibArchiveOptions): Promise<void> 
                 // Merge-tool identity belongs only to the merged-object and
                 // completed-archive tiers.
                 .update("lib-program-shard-v2\0")
-                .update(cacheTargetIdentity(driver)).update("\0")
-                .update(toolchainEnv).update("\0")
-                .update(implicitCompileToolchain).update("\0")
-                .update(programCompilerInvocation).update("\0")
-                .update(persistentCache.identity).update("\0")
-                .update(driver.argv.join("\x1f")).update("\0")
-                .update(compilerVersion).update("\0")
-                .update(runtimeHash).update("\0")
-                .update(programDependencyHash).update("\0")
-                .update(programCompilerArgs.join("\x1f")).update("\0")
-                .update(opts.cPath).update("\0")
-                .update(resolve(opts.cPath)).update("\0")
-                .update(shard.name).update("\0")
+                .update(cacheTargetIdentity(driver))
+                .update("\0")
+                .update(toolchainEnv)
+                .update("\0")
+                .update(implicitCompileToolchain)
+                .update("\0")
+                .update(programCompilerInvocation)
+                .update("\0")
+                .update(persistentCache.identity)
+                .update("\0")
+                .update(driver.argv.join("\x1f"))
+                .update("\0")
+                .update(compilerVersion)
+                .update("\0")
+                .update(runtimeHash)
+                .update("\0")
+                .update(programDependencyHash)
+                .update("\0")
+                .update(programCompilerArgs.join("\x1f"))
+                .update("\0")
+                .update(opts.cPath)
+                .update("\0")
+                .update(resolve(opts.cPath))
+                .update("\0")
+                .update(shard.name)
+                .update("\0")
                 .update(shard.source)
                 .digest("hex");
               cachePath = join(persistentCache.root, "program-shard", key);
@@ -1320,15 +1460,18 @@ export async function compileLibArchive(opts: LibArchiveOptions): Promise<void> 
           });
           const shardWidth = Math.min(8, availableParallelism());
           for (let i = 0; i < shardEntries.length; i += shardWidth) {
-            await Promise.all(shardEntries.slice(i, i + shardWidth).map(async (entry) => {
-              await writeFile(entry.sourcePath, entry.source);
-              if (
-                entry.cachePath !== null &&
-                await copyValidCachedFile(entry.cachePath, entry.staged)
-              ) return;
-              entry.missed = true;
-              await compileOne(entry.sourcePath, basename(entry.staged), opts.cPath);
-            }));
+            await Promise.all(
+              shardEntries.slice(i, i + shardWidth).map(async (entry) => {
+                await writeFile(entry.sourcePath, entry.source);
+                if (
+                  entry.cachePath !== null &&
+                  (await copyValidCachedFile(entry.cachePath, entry.staged))
+                )
+                  return;
+                entry.missed = true;
+                await compileOne(entry.sourcePath, basename(entry.staged), opts.cPath);
+              }),
+            );
           }
           const publishable = shardEntries.filter(
             (entry) => entry.missed && entry.cachePath !== null,
@@ -1370,16 +1513,18 @@ export async function compileLibArchive(opts: LibArchiveOptions): Promise<void> 
               const shardInputsStillMatch =
                 currentRuntime === runtimeHash &&
                 currentInvocation === programCompilerInvocation &&
-                currentDependencies === programDependencyHash && currentCompiler === compilerVersion;
+                currentDependencies === programDependencyHash &&
+                currentCompiler === compilerVersion;
               const currentFingerprints = shardInputsStillMatch
                 ? await implicitToolchainFingerprints(driver, toolchainEnv)
                 : null;
               const compileInputsStillMatch =
-                shardInputsStillMatch &&
-                currentFingerprints?.compile === implicitCompileToolchain;
+                shardInputsStillMatch && currentFingerprints?.compile === implicitCompileToolchain;
               let mergedInputsStillMatch = false;
               if (compileInputsStillMatch && cachedProgramObject !== null) {
-                const currentMerge = await resolveProgramShardMergeIdentity(driver).catch(() => null);
+                const currentMerge = await resolveProgramShardMergeIdentity(driver).catch(
+                  () => null,
+                );
                 mergedInputsStillMatch =
                   currentFingerprints?.complete === implicitToolchain &&
                   currentMerge === programShardMergeIdentity;
@@ -1417,25 +1562,30 @@ export async function compileLibArchive(opts: LibArchiveOptions): Promise<void> 
         );
         if (cachedProgramObject !== null) {
           try {
-            const [currentRuntime, currentImplicit, currentInvocation, currentDependencies, currentCompiler] =
-              await Promise.all([
-                runtimeFingerprint(rtDir),
-                implicitToolchainFingerprint(driver, toolchainEnv),
-                effectiveCompilerInvocationFingerprint(
-                  driver,
-                  toolchainEnv,
-                  programCompilerArgs,
-                  programSourceExtension,
-                ),
-                translationUnitDependencyFingerprint(
-                  driver,
-                  cflags,
-                  opts.cPath,
-                  cachedProgramBytes!,
-                  toolchainEnv,
-                ),
-                ccVersion(driver.argv, toolchainEnv, true),
-              ]);
+            const [
+              currentRuntime,
+              currentImplicit,
+              currentInvocation,
+              currentDependencies,
+              currentCompiler,
+            ] = await Promise.all([
+              runtimeFingerprint(rtDir),
+              implicitToolchainFingerprint(driver, toolchainEnv),
+              effectiveCompilerInvocationFingerprint(
+                driver,
+                toolchainEnv,
+                programCompilerArgs,
+                programSourceExtension,
+              ),
+              translationUnitDependencyFingerprint(
+                driver,
+                cflags,
+                opts.cPath,
+                cachedProgramBytes!,
+                toolchainEnv,
+              ),
+              ccVersion(driver.argv, toolchainEnv, true),
+            ]);
             if (
               currentRuntime === runtimeHash &&
               currentImplicit === implicitToolchain &&
@@ -1450,13 +1600,14 @@ export async function compileLibArchive(opts: LibArchiveOptions): Promise<void> 
           }
         }
       }
-      const identityObject = identityBytes === null
-        ? null
-        : await (async () => {
-            const source = join(buildDir, "identity.ll");
-            await writeFile(source, identityBytes);
-            return compileOne(source, `${stem}.identity.o`);
-          })();
+      const identityObject =
+        identityBytes === null
+          ? null
+          : await (async () => {
+              const source = join(buildDir, "identity.ll");
+              await writeFile(source, identityBytes);
+              return compileOne(source, `${stem}.identity.o`);
+            })();
       let runtimeObjects: string[] | null = null;
       let cacheInputsStable = true;
       let objectImplicitVerification: Promise<boolean> | null = null;
@@ -1498,14 +1649,20 @@ export async function compileLibArchive(opts: LibArchiveOptions): Promise<void> 
         for (let i = 0; i < sources.length; i += width) {
           runtimeObjects.push(
             ...(await Promise.all(
-              sources.slice(i, i + width).map((f) =>
-                compileOne(join(rtDir, f), f.replace(/\.c$/, ".o")),
-              ),
+              sources
+                .slice(i, i + width)
+                .map((f) => compileOne(join(rtDir, f), f.replace(/\.c$/, ".o"))),
             )),
           );
         }
       }
-      const objects = [programObject, ...(identityObject === null ? [] : [identityObject]), ...runtimeObjects, ...lreObjects, ...zlibObjects];
+      const objects = [
+        programObject,
+        ...(identityObject === null ? [] : [identityObject]),
+        ...runtimeObjects,
+        ...lreObjects,
+        ...zlibObjects,
+      ];
       // Multi-instance library mode: the archive's one member becomes the
       // combined, symbol-localized object (cached vendor/runtime objects
       // are read-only inputs here — the combine step never mutates them).
@@ -1550,32 +1707,38 @@ export async function compileLibArchive(opts: LibArchiveOptions): Promise<void> 
         compilerVersion !== "" &&
         archiverVersion !== ""
       ) {
-        const [currentRuntime, currentImplicit, currentRuntimeInvocation, currentProgramInvocation, currentProgramDependencies, currentCompiler, currentArchiver, currentProgramShardMerge] =
-          await Promise.all([
-            runtimeFingerprint(rtDir).catch(() => null),
-            implicitToolchainFingerprint(driver, toolchainEnv).catch(() => null),
-            effectiveCompilerInvocationFingerprint(driver, toolchainEnv, cflags).catch(
-              () => null,
-            ),
-            effectiveCompilerInvocationFingerprint(
-              driver,
-              toolchainEnv,
-              programCompilerArgs,
-              programSourceExtension,
-            ).catch(() => null),
-            translationUnitDependencyFingerprint(
-              driver,
-              cflags,
-              opts.cPath,
-              cachedProgramBytes!,
-              toolchainEnv,
-            ).catch(() => null),
-            ccVersion(driver.argv, toolchainEnv, true).catch(() => null),
-            toolVersionOnce(arArgv, toolchainEnv, true).catch(() => null),
-            programShards === null
-              ? Promise.resolve(null)
-              : resolveProgramShardMergeIdentity(driver).catch(() => null),
-          ]);
+        const [
+          currentRuntime,
+          currentImplicit,
+          currentRuntimeInvocation,
+          currentProgramInvocation,
+          currentProgramDependencies,
+          currentCompiler,
+          currentArchiver,
+          currentProgramShardMerge,
+        ] = await Promise.all([
+          runtimeFingerprint(rtDir).catch(() => null),
+          implicitToolchainFingerprint(driver, toolchainEnv).catch(() => null),
+          effectiveCompilerInvocationFingerprint(driver, toolchainEnv, cflags).catch(() => null),
+          effectiveCompilerInvocationFingerprint(
+            driver,
+            toolchainEnv,
+            programCompilerArgs,
+            programSourceExtension,
+          ).catch(() => null),
+          translationUnitDependencyFingerprint(
+            driver,
+            cflags,
+            opts.cPath,
+            cachedProgramBytes!,
+            toolchainEnv,
+          ).catch(() => null),
+          ccVersion(driver.argv, toolchainEnv, true).catch(() => null),
+          toolVersionOnce(arArgv, toolchainEnv, true).catch(() => null),
+          programShards === null
+            ? Promise.resolve(null)
+            : resolveProgramShardMergeIdentity(driver).catch(() => null),
+        ]);
         runtimeStillMatchesKey =
           cacheInputsStable &&
           !programShardFallback &&
@@ -1714,10 +1877,27 @@ export async function localizeLibraryObjects(
   }
   if (platform === "darwin") {
     await writeFile(keepFile, keepSymbols.map((s) => `_${s}\n`).join(""));
-    await run(["ld", "-r", ...rootObjects, ...supportArgs, "-o", combined, "-exported_symbols_list", keepFile]);
+    await run([
+      "ld",
+      "-r",
+      ...rootObjects,
+      ...supportArgs,
+      "-o",
+      combined,
+      "-exported_symbols_list",
+      keepFile,
+    ]);
   } else if (platform === "linux" && driver.target === null) {
     await writeFile(keepFile, keepSymbols.map((s) => `${s}\n`).join(""));
-    await run(["ld", "-r", "--force-group-allocation", ...rootObjects, ...supportArgs, "-o", combined]);
+    await run([
+      "ld",
+      "-r",
+      "--force-group-allocation",
+      ...rootObjects,
+      ...supportArgs,
+      "-o",
+      combined,
+    ]);
     await run(["objcopy", `--keep-global-symbols=${keepFile}`, combined]);
   } else if (platform === "linux") {
     // Cross ELF: the cross driver's own lld performs the relocatable merge
@@ -1729,10 +1909,14 @@ export async function localizeLibraryObjects(
     await run([
       driver.argv[0] ?? "zig",
       ...driver.argv.slice(1),
-      "-target", driver.zigTarget ?? driver.target!,
+      "-target",
+      driver.zigTarget ?? driver.target!,
       "-nostdlib",
-      "-r", ...rootObjects, ...supportArgs,
-      "-o", combined,
+      "-r",
+      ...rootObjects,
+      ...supportArgs,
+      "-o",
+      combined,
     ]);
     try {
       await writeFile(combined, localizeElfObject(await readFile(combined), new Set(keepSymbols)));
@@ -1832,7 +2016,6 @@ export async function localizeLibraryObjects(
  * trouble is never a build failure — every cache error falls back to a real
  * compile. */
 
-
 const ccVersionMemos = new Map<string, Promise<string>>();
 
 interface ResolvedTool {
@@ -1878,14 +2061,17 @@ async function effectiveCompilerEnvironmentIdentity(
       const cc1 = tokens.indexOf("-cc1");
       if (cc1 > 0) effectiveSpellings.push(tokens[cc1 - 1]!);
     }
-    const effective = effectiveSpellings.length === 1
-      ? await resolvedTool(effectiveSpellings[0]!, env)
-      : null;
+    const effective =
+      effectiveSpellings.length === 1 ? await resolvedTool(effectiveSpellings[0]!, env) : null;
     return createHash("sha256")
       .update("effective-compiler-environment-v1\0")
-      .update(resolvedDriver.cacheIdentity).update("\0")
-      .update(normalizedProbeInvocation(trace, probeDir)).update("\0")
-      .update(effective?.cacheIdentity ?? `<unresolved-effective:${effectiveSpellings.join("\x1f")}>`)
+      .update(resolvedDriver.cacheIdentity)
+      .update("\0")
+      .update(normalizedProbeInvocation(trace, probeDir))
+      .update("\0")
+      .update(
+        effective?.cacheIdentity ?? `<unresolved-effective:${effectiveSpellings.join("\x1f")}>`,
+      )
       .digest("hex");
   } finally {
     await rm(probeDir, { recursive: true, force: true }).catch(() => undefined);
@@ -1902,8 +2088,9 @@ async function resolvedTool(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<ResolvedTool | null> {
   const hasSeparator = command.includes("/") || command.includes("\\");
-  const configuredPath = (env["PATH"] ?? (process.platform === "win32" ? "" : "/usr/bin:/bin"))
-    .split(delimiter);
+  const configuredPath = (
+    env["PATH"] ?? (process.platform === "win32" ? "" : "/usr/bin:/bin")
+  ).split(delimiter);
   const pathEntries = hasSeparator
     ? [""]
     : process.platform === "win32"
@@ -1916,7 +2103,9 @@ async function resolvedTool(
   for (const entry of pathEntries) {
     const directory = entry.startsWith('"') && entry.endsWith('"') ? entry.slice(1, -1) : entry;
     const base = hasSeparator
-      ? isAbsolute(command) ? command : resolve(command)
+      ? isAbsolute(command)
+        ? command
+        : resolve(command)
       : join(directory === "" ? process.cwd() : directory, command);
     for (const extension of windowsExtensions) {
       const candidate = `${base}${extension}`;
@@ -1972,13 +2161,12 @@ function compilerDriverProbeKey(
  * itself. The ordinary implicit-toolchain fingerprint below captures that
  * selected executable and its dependencies, so this trusted system handoff is
  * the one intentional exception to the same-executable rule. */
-function isAppleSystemClangHandoff(
-  driver: ResolvedTool,
-  effectiveCompiler: ResolvedTool,
-): boolean {
-  return process.platform === "darwin" &&
+function isAppleSystemClangHandoff(driver: ResolvedTool, effectiveCompiler: ResolvedTool): boolean {
+  return (
+    process.platform === "darwin" &&
     driver.canonicalPath === "/usr/bin/clang" &&
-    basename(effectiveCompiler.canonicalPath) === "clang";
+    basename(effectiveCompiler.canonicalPath) === "clang"
+  );
 }
 
 /** Persistent caches require an inspectable compiler driver. A general
@@ -2035,7 +2223,8 @@ export async function compilerDriverSupportsPersistentCache(
     }
     if (effectiveSpellings.length === 1) {
       const effectiveCompiler = await resolvedTool(effectiveSpellings[0]!);
-      direct = effectiveCompiler !== null &&
+      direct =
+        effectiveCompiler !== null &&
         (effectiveCompiler.fileIdentity === resolvedDriver.fileIdentity ||
           isAppleSystemClangHandoff(resolvedDriver, effectiveCompiler));
       if (direct) directCompilerSelections.set(driverKey, effectiveCompiler!);
@@ -2073,13 +2262,18 @@ async function archiverSupportsPersistentCache(
   if (archiver === null || !/(?:^|-)ar$/.test(basename(archiver.canonicalPath))) {
     return false;
   }
-  if (archiver.canonicalPath.startsWith("/usr/bin/") || archiver.canonicalPath.startsWith("/bin/")) {
+  if (
+    archiver.canonicalPath.startsWith("/usr/bin/") ||
+    archiver.canonicalPath.startsWith("/bin/")
+  ) {
     return true;
   }
-  return process.platform === "darwin" &&
+  return (
+    process.platform === "darwin" &&
     /^\/Applications\/Xcode[^/]*\.app\/Contents\/Developer\/Toolchains\/[^/]+\.xctoolchain\/usr\/bin\/[^/]*ar$/.test(
       archiver.canonicalPath,
-    );
+    )
+  );
 }
 
 export async function ccVersion(
@@ -2097,11 +2291,9 @@ export async function ccVersion(
     (async () => {
       const probeDir = await mkdtemp(join(tmpdir(), "scriptc-cc-version-"));
       try {
-        const r = await execFileAsync(
-          argv[0] ?? "clang",
-          [...argv.slice(1), "--version"],
-          { cwd: probeDir },
-        );
+        const r = await execFileAsync(argv[0] ?? "clang", [...argv.slice(1), "--version"], {
+          cwd: probeDir,
+        });
         return `${executableIdentity ?? "<unresolved>"}\0${`${r.stdout}\n${r.stderr}`.trim()}`;
       } finally {
         await rm(probeDir, { recursive: true, force: true }).catch(() => undefined);
@@ -2244,13 +2436,17 @@ function normalizedProbeInvocation(
   result: { stdout: string; stderr: string },
   probeDir: string,
 ): string {
-  return `${result.stdout}\n${result.stderr}`
-    // Probe-local paths vary on every invocation and carry no toolchain
-    // identity. Both ordinary and shell-escaped Windows spellings can appear
-    // in a driver's quoted trace.
-    .split(probeDir).join("<probe>")
-    .split(probeDir.replace(/\\/g, "\\\\")).join("<probe>")
-    .trim();
+  return (
+    `${result.stdout}\n${result.stderr}`
+      // Probe-local paths vary on every invocation and carry no toolchain
+      // identity. Both ordinary and shell-escaped Windows spellings can appear
+      // in a driver's quoted trace.
+      .split(probeDir)
+      .join("<probe>")
+      .split(probeDir.replace(/\\/g, "\\\\"))
+      .join("<probe>")
+      .trim()
+  );
 }
 
 interface EffectiveCompilerInvocationProbe {
@@ -2292,11 +2488,10 @@ async function effectiveCompilerInvocationFingerprintFresh(
       );
       const prefix = [...driver.argv.slice(1), ...compileArgs];
       const [invocation, dependencyResult] = await Promise.all([
-        execFileAsync(
-          compiler,
-          [...prefix, "-###", "-c", source, "-o", output],
-          { cwd: probeDir, maxBuffer: 16 * 1024 * 1024 },
-        ),
+        execFileAsync(compiler, [...prefix, "-###", "-c", source, "-o", output], {
+          cwd: probeDir,
+          maxBuffer: 16 * 1024 * 1024,
+        }),
         sourceExtension === ".c"
           ? execFileAsync(compiler, [...prefix, "-M", source], {
               cwd: probeDir,
@@ -2464,7 +2659,9 @@ async function fingerprintDependencyFiles(paths: readonly string[]): Promise<str
   return hash.digest("hex");
 }
 
-async function fingerprintDependenciesStillMatch(fingerprints: readonly string[]): Promise<boolean> {
+async function fingerprintDependenciesStillMatch(
+  fingerprints: readonly string[],
+): Promise<boolean> {
   const distinct = [...new Set(fingerprints)];
   const identities = distinct
     .map((fingerprint) => fingerprintDependencies.get(fingerprint))
@@ -2472,13 +2669,16 @@ async function fingerprintDependenciesStillMatch(fingerprints: readonly string[]
     // snapshot from the process that minted this fingerprint. Only identities
     // computed in this process have an additional content hash to recheck here.
     .filter((identity): identity is FingerprintDependencies => identity !== undefined);
-  return (await Promise.all(
-    identities.map(async (identity) =>
-      identity.contentFingerprint === null ||
-      await fingerprintDependencyFiles(identity.contentPaths).catch(() => null) ===
-        identity.contentFingerprint
-    ),
-  )).every(Boolean);
+  return (
+    await Promise.all(
+      identities.map(
+        async (identity) =>
+          identity.contentFingerprint === null ||
+          (await fingerprintDependencyFiles(identity.contentPaths).catch(() => null)) ===
+            identity.contentFingerprint,
+      ),
+    )
+  ).every(Boolean);
 }
 
 interface TranslationUnitDependencyProbe {
@@ -2644,12 +2844,18 @@ async function implicitToolchainFingerprintsFresh(
         "-std=c11",
         "-D_GNU_SOURCE",
         "-D_XOPEN_SOURCE=700",
-        "-I", runtimeSrcDir(),
-        "-I", vendorEngineDir(),
-        "-I", join(vendorTlsDir(), "include"),
-        "-I", join(vendorTlsDir(), "library"),
-        "-I", vendorZlibDir(),
-        "-I", join(vendorCurlDir(), "include"),
+        "-I",
+        runtimeSrcDir(),
+        "-I",
+        vendorEngineDir(),
+        "-I",
+        join(vendorTlsDir(), "include"),
+        "-I",
+        join(vendorTlsDir(), "library"),
+        "-I",
+        vendorZlibDir(),
+        "-I",
+        join(vendorCurlDir(), "include"),
         "-M",
       ];
       const [dependencyResults, linker, assembler, compilerInvocation] = await Promise.all([
@@ -2713,10 +2919,12 @@ async function implicitToolchainFingerprintsFresh(
     }
   }
 
-  const tools = await Promise.all(probe.tools.map(async (tool) => ({
-    ...tool,
-    currentIdentity: await resolvedToolIdentity(tool.spelling),
-  })));
+  const tools = await Promise.all(
+    probe.tools.map(async (tool) => ({
+      ...tool,
+      currentIdentity: await resolvedToolIdentity(tool.spelling),
+    })),
+  );
   const fingerprint = (
     domain: string,
     selectedTools: readonly (typeof tools)[number][],
@@ -2749,7 +2957,7 @@ async function implicitToolchainFingerprintsFresh(
       [
         ...probe.dependencies,
         ...probe.invocationPaths,
-        ...selectedTools.flatMap((tool) => tool.path === null ? [] : [tool.path]),
+        ...selectedTools.flatMap((tool) => (tool.path === null ? [] : [tool.path])),
       ],
       probe.dependencies,
       probe.dependencyFingerprint,
@@ -2806,7 +3014,7 @@ async function existingDriverTracePaths(
         (option) => token.startsWith(option) && token.length > option.length,
       );
       const equalsPathOption = ["--sysroot=", "-resource-dir="].find((option) =>
-        token.startsWith(option)
+        token.startsWith(option),
       );
       const separatePathOptions = [
         "-I",
@@ -2821,13 +3029,14 @@ async function existingDriverTracePaths(
         "-internal-externc-isystem",
         "-internal-iframework",
       ];
-      const optionPath = joinedPathOption !== undefined
-        ? token.slice(joinedPathOption.length)
-        : equalsPathOption !== undefined
-          ? token.slice(equalsPathOption.length)
-          : separatePathOptions.includes(token)
-            ? tokens[index + 1] ?? ""
-            : token;
+      const optionPath =
+        joinedPathOption !== undefined
+          ? token.slice(joinedPathOption.length)
+          : equalsPathOption !== undefined
+            ? token.slice(equalsPathOption.length)
+            : separatePathOptions.includes(token)
+              ? (tokens[index + 1] ?? "")
+              : token;
       if (!isAbsolute(optionPath)) continue;
       const path = resolve(cwd, optionPath);
       if (
@@ -2844,7 +3053,9 @@ async function existingDriverTracePaths(
     [...candidates].map(async (path) => [path, await lstat(path).catch(() => null)] as const),
   );
   return existing
-    .filter((entry): entry is readonly [string, NonNullable<(typeof entry)[1]>] => entry[1] !== null)
+    .filter(
+      (entry): entry is readonly [string, NonNullable<(typeof entry)[1]>] => entry[1] !== null,
+    )
     .map(([path]) => path)
     .sort();
 }
@@ -2860,7 +3071,11 @@ export async function parseLinkTraceFiles(
     const candidates = driverDryRun ? driverTraceCandidates(line) : linkTraceCandidate(line);
     for (const candidate of candidates) {
       const path = isAbsolute(candidate) ? candidate : resolve(cwd, candidate);
-      if (path === excludedRoot || path.startsWith(`${excludedRoot}/`) || path.startsWith(`${excludedRoot}\\`)) {
+      if (
+        path === excludedRoot ||
+        path.startsWith(`${excludedRoot}/`) ||
+        path.startsWith(`${excludedRoot}\\`)
+      ) {
         continue;
       }
       const info = await stat(path).catch(() => null);
@@ -2891,8 +3106,7 @@ async function implicitLinkerFingerprintFresh(
   effectiveInvocationArgs?: readonly string[],
   traceInvocationArgs?: readonly string[],
 ): Promise<string> {
-  const invocationArgs =
-    effectiveInvocationArgs ?? [...driver.targetArgs, ...linkArgs];
+  const invocationArgs = effectiveInvocationArgs ?? [...driver.targetArgs, ...linkArgs];
   const traceArgs = traceInvocationArgs ?? [...driver.targetArgs, ...linkArgs];
   const compiler = driver.argv[0] ?? "clang";
   const compilerIdentity = await resolvedToolIdentity(compiler);
@@ -2909,16 +3123,10 @@ async function implicitLinkerFingerprintFresh(
       await writeFile(source, "int main(void) { return 0; }\n");
       const prefix = [...driver.argv.slice(1), ...driver.targetArgs];
       const [, linker] = await Promise.all([
-        execFileAsync(
-          compiler,
-          [...prefix, "-std=c11", "-c", source, "-o", object],
-          { cwd: probeDir },
-        ),
-        execFileAsync(
-          compiler,
-          [...prefix, "-print-prog-name=ld"],
-          { cwd: probeDir },
-        ),
+        execFileAsync(compiler, [...prefix, "-std=c11", "-c", source, "-o", object], {
+          cwd: probeDir,
+        }),
+        execFileAsync(compiler, [...prefix, "-print-prog-name=ld"], { cwd: probeDir }),
       ]);
       // Unlike the compile-only toolchain trace, this exposes options a
       // compiler wrapper/config injects only for link invocations (rpaths,
@@ -2979,11 +3187,11 @@ async function implicitLinkerFingerprintFresh(
           identity:
             linkerSpelling === ""
               ? null
-              : (await resolvedTool(linkerSpelling))?.cacheIdentity ?? null,
+              : ((await resolvedTool(linkerSpelling))?.cacheIdentity ?? null),
           path:
             linkerSpelling === ""
               ? null
-              : (await resolvedTool(linkerSpelling))?.canonicalPath ?? null,
+              : ((await resolvedTool(linkerSpelling))?.canonicalPath ?? null),
         },
       };
     } finally {
@@ -2992,9 +3200,7 @@ async function implicitLinkerFingerprintFresh(
   }
 
   const linkerIdentity =
-    probe.linker.spelling === ""
-      ? null
-      : await resolvedToolIdentity(probe.linker.spelling);
+    probe.linker.spelling === "" ? null : await resolvedToolIdentity(probe.linker.spelling);
   const fingerprint = createHash("sha256")
     .update("implicit-linker-v3\0")
     .update(environmentFingerprint)
@@ -3107,14 +3313,24 @@ async function runtimeFingerprintFresh(rtDir: string): Promise<string> {
   const groups = await runtimeFingerprintInputGroups(rtDir);
   const h = createHash("sha256")
     .update("native-owned-inputs-v2\0")
-    .update(QJS_COMMIT).update(MBEDTLS_VERSION).update(ZLIB_VERSION)
+    .update(QJS_COMMIT)
+    .update(MBEDTLS_VERSION)
+    .update(ZLIB_VERSION)
     .update("\0backend-recipe\0");
   for (const path of NATIVE_RECIPE_IMPLEMENTATION_PATHS) {
-    h.update(basename(path)).update("\0").update(await readFile(path)).update("\0");
+    h.update(basename(path))
+      .update("\0")
+      .update(await readFile(path))
+      .update("\0");
   }
   for (const group of groups) {
     for (const n of group.names) {
-      h.update(group.label).update("/").update(n).update("\0").update(await readFile(join(group.dir, n))).update("\0");
+      h.update(group.label)
+        .update("/")
+        .update(n)
+        .update("\0")
+        .update(await readFile(join(group.dir, n)))
+        .update("\0");
     }
   }
   return h.digest("hex");
@@ -3143,7 +3359,7 @@ async function runtimeFingerprintInputGroups(
 async function runtimeFingerprintInputPaths(rtDir: string): Promise<string[]> {
   return [
     ...(await runtimeFingerprintInputGroups(rtDir)).flatMap((group) =>
-      group.names.map((name) => join(group.dir, name))
+      group.names.map((name) => join(group.dir, name)),
     ),
     ...NATIVE_RECIPE_IMPLEMENTATION_PATHS,
   ];
@@ -3195,7 +3411,6 @@ class CacheInputsChangedError extends Error {
   }
 }
 
-
 interface LocalArtifactStamp {
   version: 2;
   key: string;
@@ -3246,11 +3461,15 @@ async function directoryTreeDigest(
     for (const entry of entries) {
       const path = join(directory, entry.name);
       const absolute = resolve(path);
-      if (excluded.some((candidate) =>
-        absolute === candidate ||
-        absolute.startsWith(`${candidate}/`) ||
-        absolute.startsWith(`${candidate}\\`)
-      )) continue;
+      if (
+        excluded.some(
+          (candidate) =>
+            absolute === candidate ||
+            absolute.startsWith(`${candidate}/`) ||
+            absolute.startsWith(`${candidate}\\`),
+        )
+      )
+        continue;
       const child = relative === "" ? entry.name : `${relative}/${entry.name}`;
       const info = await lstat(path);
       const kind = info.isDirectory()
@@ -3320,7 +3539,9 @@ async function snapshotLocalArtifactDependency(
     dependency.targetMtimeMs = target.mtimeMs;
     dependency.targetCtimeMs = target.ctimeMs;
     if (targetKind === "directory" && treeExclusions !== null) {
-      dependency.treeExclusions = [...new Set(treeExclusions.map((entry) => resolve(entry)))].sort();
+      dependency.treeExclusions = [
+        ...new Set(treeExclusions.map((entry) => resolve(entry))),
+      ].sort();
       dependency.treeDigest = await directoryTreeDigest(path, dependency.treeExclusions);
     }
   }
@@ -3334,12 +3555,14 @@ async function snapshotLocalArtifactDependencies(
 ): Promise<NativeArtifactDependency[]> {
   const recursive = new Set(recursiveDirectories.map((path) => resolve(path)));
   return Promise.all(
-    [...new Set(dependencyPaths)].sort().map((path) =>
-      snapshotLocalArtifactDependency(
-        path,
-        recursive.has(resolve(path)) ? recursiveExclusions : null,
-      )
-    ),
+    [...new Set(dependencyPaths)]
+      .sort()
+      .map((path) =>
+        snapshotLocalArtifactDependency(
+          path,
+          recursive.has(resolve(path)) ? recursiveExclusions : null,
+        ),
+      ),
   );
 }
 
@@ -3355,35 +3578,46 @@ export async function snapshotNativeArtifactDependencies(
 export async function nativeArtifactDependenciesStillMatch(
   dependencies: readonly NativeArtifactDependency[],
 ): Promise<boolean> {
-  if (!dependencies.every((dependency) =>
-    dependency !== null && typeof dependency === "object" &&
-    typeof dependency.path === "string" &&
-    (dependency.kind === "file" || dependency.kind === "directory" || dependency.kind === "symlink") &&
-    typeof dependency.dev === "number" && typeof dependency.ino === "number" &&
-    typeof dependency.size === "number" && typeof dependency.mtimeMs === "number" &&
-    typeof dependency.ctimeMs === "number" &&
-    (dependency.treeDigest === undefined || typeof dependency.treeDigest === "string") &&
-    (dependency.treeExclusions === undefined || (
-      Array.isArray(dependency.treeExclusions) &&
-      dependency.treeExclusions.every((path) => typeof path === "string")
-    )) &&
-    (dependency.kind !== "symlink" || (
-      typeof dependency.targetPath === "string" &&
-      (dependency.targetKind === "file" || dependency.targetKind === "directory") &&
-      typeof dependency.targetDev === "number" && typeof dependency.targetIno === "number" &&
-      typeof dependency.targetSize === "number" && typeof dependency.targetMtimeMs === "number" &&
-      typeof dependency.targetCtimeMs === "number"
-    ))
-  )) return false;
-  return (await Promise.all(
-    dependencies.map(async (dependency) => {
-      const current = await snapshotLocalArtifactDependency(
-        dependency.path,
-        dependency.treeDigest === undefined ? null : dependency.treeExclusions ?? [],
-      ).catch(() => null);
-      return current !== null && JSON.stringify(current) === JSON.stringify(dependency);
-    }),
-  )).every(Boolean);
+  if (
+    !dependencies.every(
+      (dependency) =>
+        dependency !== null &&
+        typeof dependency === "object" &&
+        typeof dependency.path === "string" &&
+        (dependency.kind === "file" ||
+          dependency.kind === "directory" ||
+          dependency.kind === "symlink") &&
+        typeof dependency.dev === "number" &&
+        typeof dependency.ino === "number" &&
+        typeof dependency.size === "number" &&
+        typeof dependency.mtimeMs === "number" &&
+        typeof dependency.ctimeMs === "number" &&
+        (dependency.treeDigest === undefined || typeof dependency.treeDigest === "string") &&
+        (dependency.treeExclusions === undefined ||
+          (Array.isArray(dependency.treeExclusions) &&
+            dependency.treeExclusions.every((path) => typeof path === "string"))) &&
+        (dependency.kind !== "symlink" ||
+          (typeof dependency.targetPath === "string" &&
+            (dependency.targetKind === "file" || dependency.targetKind === "directory") &&
+            typeof dependency.targetDev === "number" &&
+            typeof dependency.targetIno === "number" &&
+            typeof dependency.targetSize === "number" &&
+            typeof dependency.targetMtimeMs === "number" &&
+            typeof dependency.targetCtimeMs === "number")),
+    )
+  )
+    return false;
+  return (
+    await Promise.all(
+      dependencies.map(async (dependency) => {
+        const current = await snapshotLocalArtifactDependency(
+          dependency.path,
+          dependency.treeDigest === undefined ? null : (dependency.treeExclusions ?? []),
+        ).catch(() => null);
+        return current !== null && JSON.stringify(current) === JSON.stringify(dependency);
+      }),
+    )
+  ).every(Boolean);
 }
 
 interface NativeMetadataStamp {
@@ -3466,10 +3700,7 @@ async function publishNativeMetadataStamp(
   return stamp;
 }
 
-function nativeMetadataKey(
-  kind: string,
-  parts: readonly (string | readonly string[])[],
-): string {
+function nativeMetadataKey(kind: string, parts: readonly (string | readonly string[])[]): string {
   const hash = createHash("sha256").update(`native-metadata-${kind}-v2\0`);
   for (const part of parts) {
     hash.update(typeof part === "string" ? part : part.join("\x1f")).update("\0");
@@ -3499,8 +3730,9 @@ function localArtifactIdentity(
       // Shard source can be tens of megabytes. Hash it incrementally below
       // instead of materializing a second giant JSON string solely for this
       // output-local fast-path identity.
-      .filter(([key, value]) =>
-        value !== undefined && key !== "programShards" && key !== "programPublicSymbols"
+      .filter(
+        ([key, value]) =>
+          value !== undefined && key !== "programShards" && key !== "programPublicSymbols",
       )
       .sort(([a], [b]) => a.localeCompare(b)),
   );
@@ -3511,21 +3743,32 @@ function localArtifactIdentity(
   );
   const hash = createHash("sha256")
     .update("local-artifact-v2\0")
-    .update(cacheTargetIdentity(driver)).update("\0")
-    .update(environmentFingerprint).update("\0")
-    .update(compilerIdentity).update("\0")
-    .update(runtimeHash).update("\0")
-    .update(driver.argv.join("\x1f")).update("\0")
-    .update(driver.targetArgs.join("\x1f")).update("\0")
-    .update(driver.linkArgs.join("\x1f")).update("\0")
-    .update(executableSectionFlags.compile.join("\x1f")).update("\0")
-    .update(executableSectionFlags.link.join("\x1f")).update("\0");
+    .update(cacheTargetIdentity(driver))
+    .update("\0")
+    .update(environmentFingerprint)
+    .update("\0")
+    .update(compilerIdentity)
+    .update("\0")
+    .update(runtimeHash)
+    .update("\0")
+    .update(driver.argv.join("\x1f"))
+    .update("\0")
+    .update(driver.targetArgs.join("\x1f"))
+    .update("\0")
+    .update(driver.linkArgs.join("\x1f"))
+    .update("\0")
+    .update(executableSectionFlags.compile.join("\x1f"))
+    .update("\0")
+    .update(executableSectionFlags.link.join("\x1f"))
+    .update("\0");
   // Only release WASI currently adds an optimization-specific link flag.
   // Salt that identity so a pre-fix DWARF-bearing output cannot hit, without
   // invalidating unchanged native and dev artifacts on upgrade.
   if (executableOptimizationFlags.length > 0) {
-    hash.update("optimization-linker-flags\0")
-      .update(executableOptimizationFlags.join("\x1f")).update("\0");
+    hash
+      .update("optimization-linker-flags\0")
+      .update(executableOptimizationFlags.join("\x1f"))
+      .update("\0");
   }
   if (opts.sanitize && opts.optimization === "dev") hash.update("sanitized-runtime-o1-v1\0");
   if (programShardMerge !== null) {
@@ -3537,10 +3780,14 @@ function localArtifactIdentity(
     );
   }
   return hash
-    .update(process.env["SCRIPTC_FETCH_CURL"] === "1" ? "fetch-curl" : "fetch-native").update("\0")
-    .update(JSON.stringify(normalizedOptions)).update("\0")
-    .update(resolve(opts.cPath)).update("\0")
-    .update(resolve(opts.outPath)).update("\0")
+    .update(process.env["SCRIPTC_FETCH_CURL"] === "1" ? "fetch-curl" : "fetch-native")
+    .update("\0")
+    .update(JSON.stringify(normalizedOptions))
+    .update("\0")
+    .update(resolve(opts.cPath))
+    .update("\0")
+    .update(resolve(opts.outPath))
+    .update("\0")
     .update(programBytes)
     .digest("hex");
 }
@@ -3551,7 +3798,10 @@ function localArtifactStampPath(root: string, outPath: string): string {
 }
 
 function localArtifactStampIntegrity(
-  stamp: Pick<LocalArtifactStamp, "version" | "key" | "digest" | "dependencies" | "debugSymbolsDigest">,
+  stamp: Pick<
+    LocalArtifactStamp,
+    "version" | "key" | "digest" | "dependencies" | "debugSymbolsDigest"
+  >,
 ): string {
   return createHash("sha256")
     .update("local-artifact-stamp-v2\0")
@@ -3573,8 +3823,9 @@ async function localArtifactHit(
       stamp.version !== 2 ||
       stamp.key !== key ||
       !/^[0-9a-f]{64}$/.test(stamp.digest ?? "") ||
-      (darwinDebugSymbols !== (stamp.debugSymbolsDigest !== undefined)) ||
-      (stamp.debugSymbolsDigest !== undefined && !/^[0-9a-f]{64}$/.test(stamp.debugSymbolsDigest)) ||
+      darwinDebugSymbols !== (stamp.debugSymbolsDigest !== undefined) ||
+      (stamp.debugSymbolsDigest !== undefined &&
+        !/^[0-9a-f]{64}$/.test(stamp.debugSymbolsDigest)) ||
       !Array.isArray(stamp.dependencies) ||
       !/^[0-9a-f]{64}$/.test(stamp.integrity ?? "") ||
       localArtifactStampIntegrity({
@@ -3582,36 +3833,41 @@ async function localArtifactHit(
         key: stamp.key,
         digest: stamp.digest!,
         dependencies: stamp.dependencies,
-        ...(stamp.debugSymbolsDigest === undefined ? {} : { debugSymbolsDigest: stamp.debugSymbolsDigest }),
+        ...(stamp.debugSymbolsDigest === undefined
+          ? {}
+          : { debugSymbolsDigest: stamp.debugSymbolsDigest }),
       }) !== stamp.integrity ||
       !output.isFile() ||
       (output.mode & 0o777) !== expectedMode ||
-      stamp.dependencies.some((dependency) =>
-        dependency === null ||
-        typeof dependency !== "object" ||
-        typeof dependency.path !== "string" ||
-        dependency.kind !== "file" &&
-          dependency.kind !== "directory" &&
-          dependency.kind !== "symlink" ||
-        typeof dependency.dev !== "number" ||
-        typeof dependency.ino !== "number" ||
-        typeof dependency.size !== "number" ||
-        typeof dependency.mtimeMs !== "number" ||
-        typeof dependency.ctimeMs !== "number" ||
-        dependency.treeDigest !== undefined && typeof dependency.treeDigest !== "string" ||
-        dependency.kind === "symlink" && (
-          typeof dependency.targetPath !== "string" ||
-          dependency.targetKind !== "file" && dependency.targetKind !== "directory" ||
-          typeof dependency.targetDev !== "number" ||
-          typeof dependency.targetIno !== "number" ||
-          typeof dependency.targetSize !== "number" ||
-          typeof dependency.targetMtimeMs !== "number" ||
-          typeof dependency.targetCtimeMs !== "number"
-        )
+      stamp.dependencies.some(
+        (dependency) =>
+          dependency === null ||
+          typeof dependency !== "object" ||
+          typeof dependency.path !== "string" ||
+          (dependency.kind !== "file" &&
+            dependency.kind !== "directory" &&
+            dependency.kind !== "symlink") ||
+          typeof dependency.dev !== "number" ||
+          typeof dependency.ino !== "number" ||
+          typeof dependency.size !== "number" ||
+          typeof dependency.mtimeMs !== "number" ||
+          typeof dependency.ctimeMs !== "number" ||
+          (dependency.treeDigest !== undefined && typeof dependency.treeDigest !== "string") ||
+          (dependency.kind === "symlink" &&
+            (typeof dependency.targetPath !== "string" ||
+              (dependency.targetKind !== "file" && dependency.targetKind !== "directory") ||
+              typeof dependency.targetDev !== "number" ||
+              typeof dependency.targetIno !== "number" ||
+              typeof dependency.targetSize !== "number" ||
+              typeof dependency.targetMtimeMs !== "number" ||
+              typeof dependency.targetCtimeMs !== "number")),
       ) ||
       !(await nativeArtifactDependenciesStillMatch(stamp.dependencies)) ||
-      await fileDigest(outPath) !== stamp.digest ||
-      darwinDebugSymbols && createHash("sha256").update(await readDarwinDebugSymbols(outPath)).digest("hex") !== stamp.debugSymbolsDigest
+      (await fileDigest(outPath)) !== stamp.digest ||
+      (darwinDebugSymbols &&
+        createHash("sha256")
+          .update(await readDarwinDebugSymbols(outPath))
+          .digest("hex") !== stamp.debugSymbolsDigest)
     ) {
       return null;
     }
@@ -3646,7 +3902,11 @@ async function publishLocalArtifactStamp(
       digest: await fileDigest(outPath),
       dependencies,
       ...(darwinDebugSymbols
-        ? { debugSymbolsDigest: createHash("sha256").update(await readDarwinDebugSymbols(outPath)).digest("hex") }
+        ? {
+            debugSymbolsDigest: createHash("sha256")
+              .update(await readDarwinDebugSymbols(outPath))
+              .digest("hex"),
+          }
         : {}),
     } as const;
     const stamp: LocalArtifactStamp = {
@@ -3710,23 +3970,34 @@ async function ensureRuntimeObjects(
         await Promise.all(
           missing.slice(i, i + width).map(async (src) => {
             const tmpObj = join(tmpDir, `${basename(src, ".c")}.o`);
-            const argv = [...(useCcache ? ["ccache"] : []), ...ccArgv, ...cflags, "-c", src, "-o", tmpObj];
-            await execFileAsync(argv[0] ?? "clang", argv.slice(1), useCcache
-              ? {
-                  // ccache direct mode remembers only the headers selected by
-                  // its previous manifest and can miss a newly created,
-                  // higher-priority header. The scriptc object-set key already
-                  // includes the recursive runtime namespace fingerprint, so
-                  // carry it into ccache's own keyspace as well.
-                  env: {
-                    ...process.env,
-                    CCACHE_NAMESPACE: [
-                      process.env["CCACHE_NAMESPACE"],
-                      `scriptc-${setKey}`,
-                    ].filter((value) => value !== undefined && value !== "").join(":"),
-                  },
-                }
-              : undefined);
+            const argv = [
+              ...(useCcache ? ["ccache"] : []),
+              ...ccArgv,
+              ...cflags,
+              "-c",
+              src,
+              "-o",
+              tmpObj,
+            ];
+            await execFileAsync(
+              argv[0] ?? "clang",
+              argv.slice(1),
+              useCcache
+                ? {
+                    // ccache direct mode remembers only the headers selected by
+                    // its previous manifest and can miss a newly created,
+                    // higher-priority header. The scriptc object-set key already
+                    // includes the recursive runtime namespace fingerprint, so
+                    // carry it into ccache's own keyspace as well.
+                    env: {
+                      ...process.env,
+                      CCACHE_NAMESPACE: [process.env["CCACHE_NAMESPACE"], `scriptc-${setKey}`]
+                        .filter((value) => value !== undefined && value !== "")
+                        .join(":"),
+                    },
+                  }
+                : undefined,
+            );
             compiled.set(src, tmpObj);
           }),
         );
@@ -3780,7 +4051,6 @@ export async function stageRuntimeObjects(
   return new Map(staged);
 }
 
-
 /** Compiles one C program together with the runtime sources.
  * With caching disabled, the runtime (a dozen small files) is recompiled on
  * every build — no cached-archive staleness bugs. Sanitized dev builds compile
@@ -3816,8 +4086,7 @@ async function compileCInternal(
   // The retired curl bridge has only a SCR_DYNAMIC implementation.
   // Static fetch always keeps the native runtime even when a developer
   // has the comparison switch exported in their shell.
-  const curlFetch =
-    dynamic && fetchOn && process.env["SCRIPTC_FETCH_CURL"] === "1";
+  const curlFetch = dynamic && fetchOn && process.env["SCRIPTC_FETCH_CURL"] === "1";
   const nativeFetch = fetchOn && !curlFetch;
   // The island's node:http/https client bridge: embedded graphs that
   // import those builtins get working clients over the same socket units
@@ -3828,30 +4097,43 @@ async function compileCInternal(
   const tls = (opts.tls ?? false) || nativeFetch || netIsland;
   const tlsCa = (opts.tlsCa ?? false) || tls;
   const driver = resolveCc();
-  const darwinDebugSymbols = needsDarwinDebugSymbols(targetPlatform(driver), optimization, opts.strip);
-  if (opts.frameworks?.length && targetPlatform(driver) !== "darwin") throw new Error("FFI frameworks require a Darwin target");
-  if (opts.frameworks?.some(name => !/^[A-Za-z][A-Za-z0-9_]*$/.test(name))) throw new Error("Invalid FFI framework name");
-  const debugFlags = optimization === "dev" && !opts.strip
-    ? ["-gline-tables-only", ...(opts.cPath.endsWith(".ll") ? [] : ["-gno-column-info"])]
-    : [];
+  const darwinDebugSymbols = needsDarwinDebugSymbols(
+    targetPlatform(driver),
+    optimization,
+    opts.strip,
+  );
+  if (opts.frameworks?.length && targetPlatform(driver) !== "darwin")
+    throw new Error("FFI frameworks require a Darwin target");
+  if (opts.frameworks?.some((name) => !/^[A-Za-z][A-Za-z0-9_]*$/.test(name)))
+    throw new Error("Invalid FFI framework name");
+  const debugFlags =
+    optimization === "dev" && !opts.strip
+      ? ["-gline-tables-only", ...(opts.cPath.endsWith(".ll") ? [] : ["-gno-column-info"])]
+      : [];
   const shardNames = new Set<string>();
-  const programShardsValid = opts.programShards?.every((shard) => {
-    if (
-      basename(shard.name) !== shard.name || !shard.name.endsWith(".ll") ||
-      shardNames.has(shard.name)
-    ) return false;
-    shardNames.add(shard.name);
-    return true;
-  }) === true;
+  const programShardsValid =
+    opts.programShards?.every((shard) => {
+      if (
+        basename(shard.name) !== shard.name ||
+        !shard.name.endsWith(".ll") ||
+        shardNames.has(shard.name)
+      )
+        return false;
+      shardNames.add(shard.name);
+      return true;
+    }) === true;
   const programShardsRequested =
-    optimization === "dev" && !sanitize && opts.cPath.endsWith(".ll") &&
-    programShardsValid && opts.programShards !== undefined && opts.programShards.length > 1 &&
+    optimization === "dev" &&
+    !sanitize &&
+    opts.cPath.endsWith(".ll") &&
+    programShardsValid &&
+    opts.programShards !== undefined &&
+    opts.programShards.length > 1 &&
     opts.programPublicSymbols !== undefined
       ? opts.programShards
       : null;
-  const programShardMergeIdentity = programShardsRequested === null
-    ? null
-    : await resolveProgramShardMergeIdentity(driver);
+  const programShardMergeIdentity =
+    programShardsRequested === null ? null : await resolveProgramShardMergeIdentity(driver);
   const programShards = programShardMergeIdentity === null ? null : programShardsRequested;
   const programPublicSymbols = programShards === null ? undefined : opts.programPublicSymbols;
   // Mobile triples produce library archives, never standalone executables:
@@ -3864,25 +4146,25 @@ async function compileCInternal(
         `compile with a library profile (SCRIPTC_CC=zigcc scriptc build --lib --profile <profile.json>) and link the archive from the app project.`,
     );
   }
-  const runtimeSources = targetPlatform(driver) === "wasi"
-    ? EXECUTABLE_RUNTIME_SOURCES.filter((source) => source !== "scr_child.c")
-    : EXECUTABLE_RUNTIME_SOURCES;
+  const runtimeSources =
+    targetPlatform(driver) === "wasi"
+      ? EXECUTABLE_RUNTIME_SOURCES.filter((source) => source !== "scr_child.c")
+      : EXECUTABLE_RUNTIME_SOURCES;
   const executableSectionFlags = executableSectionEliminationFlags(targetPlatform(driver));
-  const windowsSubsystemArgs = windowsSubsystemLinkerArgs(targetPlatform(driver), opts.windowsSubsystem);
+  const windowsSubsystemArgs = windowsSubsystemLinkerArgs(
+    targetPlatform(driver),
+    opts.windowsSubsystem,
+  );
   const executableLinkFlags = [
     ...executableSectionFlags.link,
-    ...executableOptimizationLinkerArgs(
-      targetPlatform(driver),
-      optimization,
-    ),
+    ...executableOptimizationLinkerArgs(targetPlatform(driver), optimization),
     ...executableStripLinkerArgs(targetPlatform(driver), opts.strip ?? false),
     ...windowsSubsystemArgs,
   ];
   // scr_async.c submits callback-style filesystem work to a native worker.
   // POSIX drivers need the thread compile/link mode; win32 uses CreateThread.
-  const threadArgs = targetPlatform(driver) === "win32" || targetPlatform(driver) === "wasi"
-    ? []
-    : ["-pthread"];
+  const threadArgs =
+    targetPlatform(driver) === "win32" || targetPlatform(driver) === "wasi" ? [] : ["-pthread"];
   if (driver.target !== null) {
     // See the resolveCc block: these inputs are built on and for the HOST
     // (vendored archives, system libs). Regex, zlib, and the engine archive
@@ -3925,7 +4207,7 @@ async function compileCInternal(
   const persistentDriverCache =
     cachePolicy.runtimeObjects &&
     configuredCacheRoot !== null &&
-    await compilerDriverSupportsPersistentCache(driver, toolchainEnv);
+    (await compilerDriverSupportsPersistentCache(driver, toolchainEnv));
   // Only compiler-generated TUs opt in. Arbitrary `compileC` inputs
   // inputs may include caller-owned headers whose contents are not otherwise
   // represented in this key, so they retain the fully uncached historical
@@ -3936,9 +4218,7 @@ async function compileCInternal(
       ? null
       : { root: configuredCacheRoot, identity: cacheIdentity };
   if (cacheWarmOnly && persistentCache === null) {
-    throw new Error(
-      "native cache warming requires a persistently cacheable compiler environment",
-    );
+    throw new Error("native cache warming requires a persistently cacheable compiler environment");
   }
   if (persistentCache !== null) {
     try {
@@ -3984,9 +4264,8 @@ async function compileCInternal(
         readFile(opts.cPath),
       ]);
       if (compiler !== null) {
-        const effectiveCompiler = directCompilerSelections.get(
-          compilerDriverProbeKey(driver, toolchainEnv),
-        ) ?? compiler;
+        const effectiveCompiler =
+          directCompilerSelections.get(compilerDriverProbeKey(driver, toolchainEnv)) ?? compiler;
         const key = localArtifactIdentity(
           opts,
           driver,
@@ -4019,27 +4298,25 @@ async function compileCInternal(
   let implicitToolchain: string | null = null;
   let implicitCompileToolchain: string | null = null;
   let toolchainMetadataStamp: NativeMetadataStamp | null = null;
-  const metadataCompiler = persistentCache === null
-    ? null
-    : await resolvedTool(driver.argv[0] ?? "clang");
-  const metadataEffectiveCompiler = directCompilerSelections.get(
-    compilerDriverProbeKey(driver, toolchainEnv),
-  ) ?? metadataCompiler;
+  const metadataCompiler =
+    persistentCache === null ? null : await resolvedTool(driver.argv[0] ?? "clang");
+  const metadataEffectiveCompiler =
+    directCompilerSelections.get(compilerDriverProbeKey(driver, toolchainEnv)) ?? metadataCompiler;
   const toolchainMetadataKey =
     persistentCache === null ||
-      metadataCompiler === null ||
-      metadataEffectiveCompiler === null ||
-      process.env["SCRIPTC_TEST_TRUST_COMPILER_WRAPPER"] === "1"
-    ? null
-    : nativeMetadataKey("toolchain", [
-        cacheTargetIdentity(driver),
-        toolchainEnv,
-        driver.argv,
-        driver.targetArgs,
-        metadataCompiler.cacheIdentity,
-        metadataEffectiveCompiler.cacheIdentity,
-        rtDir,
-      ]);
+    metadataCompiler === null ||
+    metadataEffectiveCompiler === null ||
+    process.env["SCRIPTC_TEST_TRUST_COMPILER_WRAPPER"] === "1"
+      ? null
+      : nativeMetadataKey("toolchain", [
+          cacheTargetIdentity(driver),
+          toolchainEnv,
+          driver.argv,
+          driver.targetArgs,
+          metadataCompiler.cacheIdentity,
+          metadataEffectiveCompiler.cacheIdentity,
+          rtDir,
+        ]);
   if (persistentDriverCache) {
     try {
       toolchainMetadataStamp =
@@ -4047,8 +4324,7 @@ async function compileCInternal(
           ? null
           : await readNativeMetadataStamp(persistentCache.root, toolchainMetadataKey);
       implicitToolchain = toolchainMetadataStamp?.values["implicitToolchain"] ?? null;
-      implicitCompileToolchain =
-        toolchainMetadataStamp?.values["implicitCompileToolchain"] ?? null;
+      implicitCompileToolchain = toolchainMetadataStamp?.values["implicitCompileToolchain"] ?? null;
       if (
         implicitToolchain === null ||
         (programShards !== null && implicitCompileToolchain === null)
@@ -4111,12 +4387,10 @@ async function compileCInternal(
   // must follow the same rule instead of silently surviving in the user cache.
   // A private root gives this invocation the usual vendor build recipe
   // without publishing or reusing those prerequisites.
-  const transientVendorRoot = persistentCache !== null && implicitToolchain !== null
-    ? null
-    : join(
-        tmpdir(),
-        `scriptc-vendor-${process.pid}-${Math.random().toString(36).slice(2)}`,
-      );
+  const transientVendorRoot =
+    persistentCache !== null && implicitToolchain !== null
+      ? null
+      : join(tmpdir(), `scriptc-vendor-${process.pid}-${Math.random().toString(36).slice(2)}`);
   const vendorCacheRoot = transientVendorRoot ?? vendorBuildCacheRoot(persistentCache?.root);
   // Every vendor output path is deterministic from pins, flags, driver, and
   // target. Build the command/key from those paths now, but do not materialize
@@ -4130,9 +4404,8 @@ async function compileCInternal(
   // --dynamic + regex shares the archive's libregexp (its host hooks and
   // ours would collide; see scr_regex.c) — the standalone objects are for
   // static builds only.
-  let lreObjects = regex && !dynamic
-    ? lreObjectPaths(sanitize, driver, vendorBuildIdentity, vendorCacheRoot)
-    : [];
+  let lreObjects =
+    regex && !dynamic ? lreObjectPaths(sanitize, driver, vendorBuildIdentity, vendorCacheRoot) : [];
   // Vendored zlib is the Zig story — default host-clang builds keep the exact
   // historical `-lz` system link (see CcOptions.zlib). The native fetch's
   // gzip decoder rides the same objects/link.
@@ -4164,9 +4437,10 @@ async function compileCInternal(
       const materialize = async (): Promise<string[]> => [
         await ensureEngineArchive(sanitize, driver, vendorBuildIdentity, materializeCacheRoot),
       ];
-      const paths = stageRoot === undefined
-        ? await materialize()
-        : await stageVendorInputs(materialize, join(stageRoot, "engine"));
+      const paths =
+        stageRoot === undefined
+          ? await materialize()
+          : await stageVendorInputs(materialize, join(stageRoot, "engine"));
       engineArchive = paths[0]!;
     }
     if (tls) {
@@ -4180,9 +4454,10 @@ async function compileCInternal(
       const materialize = async (): Promise<string[]> => [
         await ensureTlsArchive(sanitize, driver, vendorBuildIdentity, materializeCacheRoot),
       ];
-      const paths = stageRoot === undefined
-        ? await materialize()
-        : await stageVendorInputs(materialize, join(stageRoot, "tls"));
+      const paths =
+        stageRoot === undefined
+          ? await materialize()
+          : await stageVendorInputs(materialize, join(stageRoot, "tls"));
       tlsArchive = paths[0]!;
     }
     if (regex && !dynamic) {
@@ -4191,12 +4466,14 @@ async function compileCInternal(
         driver,
         vendorBuildIdentity,
         materializeCacheRoot,
-      )) protectCachedArtifact(cacheWarmPaths, object);
+      ))
+        protectCachedArtifact(cacheWarmPaths, object);
       const materialize = async (): Promise<string[]> =>
         await ensureLreObjects(sanitize, driver, vendorBuildIdentity, materializeCacheRoot);
-      lreObjects = stageRoot === undefined
-        ? await materialize()
-        : await stageVendorInputs(materialize, join(stageRoot, "lre"));
+      lreObjects =
+        stageRoot === undefined
+          ? await materialize()
+          : await stageVendorInputs(materialize, join(stageRoot, "lre"));
     }
     if (zlibObjects.length > 0) {
       for (const object of zlibObjectPaths(
@@ -4204,24 +4481,27 @@ async function compileCInternal(
         driver,
         vendorBuildIdentity,
         materializeCacheRoot,
-      )) protectCachedArtifact(cacheWarmPaths, object);
+      ))
+        protectCachedArtifact(cacheWarmPaths, object);
       const materialize = async (): Promise<string[]> =>
         await ensureZlibObjects(sanitize, driver, vendorBuildIdentity, materializeCacheRoot);
-      zlibObjects = stageRoot === undefined
-        ? await materialize()
-        : await stageVendorInputs(materialize, join(stageRoot, "zlib"));
+      zlibObjects =
+        stageRoot === undefined
+          ? await materialize()
+          : await stageVendorInputs(materialize, join(stageRoot, "zlib"));
     }
     if (curlStubDir !== null) {
-      protectCachedArtifact(cacheWarmPaths, join(
-        curlStubDirPath(driver, vendorBuildIdentity, materializeCacheRoot),
-        "libcurl.so",
-      ));
+      protectCachedArtifact(
+        cacheWarmPaths,
+        join(curlStubDirPath(driver, vendorBuildIdentity, materializeCacheRoot), "libcurl.so"),
+      );
       const materialize = async (): Promise<string[]> => [
         join(await ensureCurlStub(driver, vendorBuildIdentity, materializeCacheRoot), "libcurl.so"),
       ];
-      const paths = stageRoot === undefined
-        ? await materialize()
-        : await stageVendorInputs(materialize, join(stageRoot, "curl"));
+      const paths =
+        stageRoot === undefined
+          ? await materialize()
+          : await stageVendorInputs(materialize, join(stageRoot, "curl"));
       curlStubDir = dirname(paths[0]!);
     }
   };
@@ -4258,7 +4538,8 @@ async function compileCInternal(
     // sets must stay in lockstep.
     "-fno-strict-aliasing",
     "-Wno-deprecated-declarations", // ucontext fibers (scr_async.c)
-    "-I", rtDir,
+    "-I",
+    rtDir,
     ...runtimeSources.map((f) => rt(join(rtDir, f))),
     ...(opts.copying ? [rt(join(rtDir, "scr_copying.c"))] : []),
     ...(opts.fileHandle ? [rt(join(rtDir, "scr_file_handle.c"))] : []),
@@ -4275,14 +4556,16 @@ async function compileCInternal(
     // musl deliberately has no libc-identification predefine; resolveCc's
     // SCR_MUSL flag and this target-selected TU travel together.
     ...(isMuslTarget(driver) ? [rt(join(rtDir, "scr_musl.c"))] : []),
-    ...(regex
-      ? ["-I", vendorEngineDir(), rt(join(rtDir, "scr_regex.c")), ...lreObjects]
-      : []),
+    ...(regex ? ["-I", vendorEngineDir(), rt(join(rtDir, "scr_regex.c")), ...lreObjects] : []),
     ...(opts.assert || regex || opts.symbol ? [rt(join(rtDir, "scr_assert.c"))] : []),
-    ...(opts.inspect ? [rt(join(rtDir, "scr_inspect.c")), rt(join(rtDir, "scr_console_native.c"))] : []),
-    ...((opts.dynInvoke || nativeFetch) ? [rt(join(rtDir, "scr_dyn_invoke.c"))] : []),
+    ...(opts.inspect
+      ? [rt(join(rtDir, "scr_inspect.c")), rt(join(rtDir, "scr_console_native.c"))]
+      : []),
+    ...(opts.dynInvoke || nativeFetch ? [rt(join(rtDir, "scr_dyn_invoke.c"))] : []),
     ...(opts.dc ? [rt(join(rtDir, "scr_dc.c"))] : []),
-    ...(opts.dynAsync || opts.dynInvoke || opts.dc || opts.fileHandle || nativeFetch ? [rt(join(rtDir, "scr_async_dyn.c"))] : []),
+    ...(opts.dynAsync || opts.dynInvoke || opts.dc || opts.fileHandle || nativeFetch
+      ? [rt(join(rtDir, "scr_async_dyn.c"))]
+      : []),
     // The zlib UNIT (scr_zlib.c) gates on zlib.* IR use; the LINK (system
     // libz on the default host-clang build, vendored objects on Zig builds)
     // also serves the native fetch's gzip decoder — spread exactly once.
@@ -4294,7 +4577,7 @@ async function compileCInternal(
         ? isZigDriver(driver)
           ? ["-I", vendorZlibDir(), ...zlibObjects]
           : []
-      : []),
+        : []),
     // The zlib ↔ island bridge: only when BOTH halves are in the build
     // (the scr_inspect_island.c pattern) — the emitted main calls its
     // installer exactly then.
@@ -4311,7 +4594,9 @@ async function compileCInternal(
     ...(opts.qs ? [rt(join(rtDir, "scr_qs.c"))] : []),
     ...(opts.parseArgs ? [rt(join(rtDir, "scr_util.c"))] : []),
     ...(opts.parseArgs && opts.symbol ? [rt(join(rtDir, "scr_util_compare.c"))] : []),
-    ...(opts.parseArgs && opts.inspect && opts.dynAsync ? [rt(join(rtDir, "scr_util_style.c"))] : []),
+    ...(opts.parseArgs && opts.inspect && opts.dynAsync
+      ? [rt(join(rtDir, "scr_util_style.c"))]
+      : []),
     ...(opts.stream ? [rt(join(rtDir, "scr_stream.c"))] : []),
     // The readiness-poller backends (scr_platform.h): kqueue on macOS/BSD,
     // epoll on Linux, WSAPoll on Windows — each TU is empty off its
@@ -4327,7 +4612,7 @@ async function compileCInternal(
       : []),
     ...(net ? [rt(join(rtDir, "scr_net.c"))] : []),
     ...(http ? [rt(join(rtDir, "scr_http.c"))] : []),
-    ...(opts.http2 ?? false ? [rt(join(rtDir, "scr_http2.c"))] : []),
+    ...((opts.http2 ?? false) ? [rt(join(rtDir, "scr_http2.c"))] : []),
     ...(opts.dgram ? [rt(join(rtDir, "scr_dgram.c"))] : []),
     ...(opts.watch ? [rt(join(rtDir, "scr_watch.c"))] : []),
     ...(opts.foreignFfi ? [rt(join(rtDir, "scr_ffi_queue.c"))] : []),
@@ -4337,7 +4622,8 @@ async function compileCInternal(
     ...(tlsCa ? [rt(join(rtDir, "scr_tls_ca.c"))] : []),
     ...(tlsArchive
       ? [
-          "-I", join(vendorTlsDir(), "include"),
+          "-I",
+          join(vendorTlsDir(), "include"),
           rt(join(rtDir, "scr_tls.c")),
           tlsArchive,
           // mbedTLS's win32 entropy poll is BCryptGenRandom (bcrypt.h).
@@ -4346,7 +4632,7 @@ async function compileCInternal(
           // link line cannot change.
           ...(targetPlatform(driver) === "win32" ? ["-lbcrypt"] : []),
         ]
-        : []),
+      : []),
     // scr_tls_ca.c enumerates and PEM-encodes Windows system-store entries.
     // This is independent of the mbedTLS archive: getCACertificates-only
     // programs need crypt32 too, while TLS programs imply the CA unit.
@@ -4358,7 +4644,8 @@ async function compileCInternal(
     ...(engineArchive
       ? [
           "-DSCR_DYNAMIC",
-          "-I", vendorEngineDir(),
+          "-I",
+          vendorEngineDir(),
           rt(join(rtDir, "scr_island.c")),
           rt(join(rtDir, "scr_web.c")),
           // The one unit referencing BOTH the island and the inspect
@@ -4377,7 +4664,13 @@ async function compileCInternal(
           ...(netIsland ? [rt(join(rtDir, "scr_net_island.c"))] : []),
           ...(curlFetch
             ? curlStubDir !== null
-              ? ["-I", join(vendorCurlDir(), "include"), rt(join(rtDir, "scr_fetch_curl.c")), `-L${curlStubDir}`, "-lcurl"]
+              ? [
+                  "-I",
+                  join(vendorCurlDir(), "include"),
+                  rt(join(rtDir, "scr_fetch_curl.c")),
+                  `-L${curlStubDir}`,
+                  "-lcurl",
+                ]
               : [rt(join(rtDir, "scr_fetch_curl.c")), "-lcurl"]
             : []),
           engineArchive,
@@ -4411,20 +4704,19 @@ async function compileCInternal(
     build.programPath ?? opts.cPath,
     ...(opts.linkInputs ?? []),
     ...(opts.systemLibraries ?? []).map((name) => `-l${name}`),
-    ...(opts.frameworks ?? []).flatMap(name => ["-framework", name]),
+    ...(opts.frameworks ?? []).flatMap((name) => ["-framework", name]),
     // GNU ld resolves libraries from left to right and commonly enables
     // --as-needed: host-clang libz must follow scr_zlib.c/scr_fetch.c and every
     // generated/native input that references inflate symbols. Cross
     // and targetless Zig builds use vendored zlib objects in the input section above.
-    ...(((opts.zlib ?? false) || nativeFetch) && !isZigDriver(driver)
-      ? ["-lz"]
-      : []),
+    ...(((opts.zlib ?? false) || nativeFetch) && !isZigDriver(driver) ? ["-lz"] : []),
     // glibc keeps libm separate from libc. This must trail the generated
     // program and every native FFI input because GNU ld resolves archives
     // from left to right.
     ...driver.linkArgs,
     ...executableLinkFlags,
-    "-o", build.outPath ?? opts.outPath,
+    "-o",
+    build.outPath ?? opts.outPath,
   ];
   // Runtime-object flags. Program compilation and dependency discovery add
   // the dev sanitizer override below so both cache identities match reality.
@@ -4441,7 +4733,8 @@ async function compileCInternal(
     "-fno-math-errno",
     "-fno-strict-aliasing", // the emitted object model type-puns — see buildArgs
     "-Wno-deprecated-declarations",
-    "-I", rtDir,
+    "-I",
+    rtDir,
     ...(regex || dynamic ? ["-I", vendorEngineDir()] : []),
     ...(zlibObjects.length > 0 ? ["-I", vendorZlibDir()] : []),
     ...(curlStubDir !== null ? ["-I", join(vendorCurlDir(), "include")] : []),
@@ -4474,8 +4767,7 @@ async function compileCInternal(
       throw new CcCompileError(
         ccName,
         stderr,
-        `${ccName} failed compiling ${opts.cPath}.\n` +
-          `${guidance}\n\n${stderr}`,
+        `${ccName} failed compiling ${opts.cPath}.\n` + `${guidance}\n\n${stderr}`,
       );
     }
   };
@@ -4492,23 +4784,33 @@ async function compileCInternal(
       const object = join(stage, "program.o");
       await runClang([
         ...programCompilerArgs,
-        ...(build.compilerVisibleSource === undefined ? [] : [
-          `-ffile-prefix-map=${build.programPath}=${build.compilerVisibleSource}`,
-          "-iquote", dirname(resolve(build.compilerVisibleSource)),
-        ]),
-        "-c", build.programPath ?? opts.cPath, "-o", object,
+        ...(build.compilerVisibleSource === undefined
+          ? []
+          : [
+              `-ffile-prefix-map=${build.programPath}=${build.compilerVisibleSource}`,
+              "-iquote",
+              dirname(resolve(build.compilerVisibleSource)),
+            ]),
+        "-c",
+        build.programPath ?? opts.cPath,
+        "-o",
+        object,
       ]);
-      await runClang(buildArgs(runtimeInput, { programPath: object, outPath: build.outPath ?? opts.outPath }));
+      await runClang(
+        buildArgs(runtimeInput, { programPath: object, outPath: build.outPath ?? opts.outPath }),
+      );
       if (darwinDebugSymbols) await createDarwinDebugSymbols(build.outPath ?? opts.outPath);
     } finally {
       await rm(stage, { recursive: true, force: true });
     }
   };
   const runUncachedBuild = async (): Promise<void> => {
-    const privateVendorRoot = transientVendorRoot ?? join(
-      tmpdir(),
-      `scriptc-vendor-fallback-${process.pid}-${Math.random().toString(36).slice(2)}`,
-    );
+    const privateVendorRoot =
+      transientVendorRoot ??
+      join(
+        tmpdir(),
+        `scriptc-vendor-fallback-${process.pid}-${Math.random().toString(36).slice(2)}`,
+      );
     try {
       await materializeVendorPrerequisites(undefined, privateVendorRoot);
       await buildExecutable((p) => p);
@@ -4523,16 +4825,16 @@ async function compileCInternal(
   let compileMetadataStamp: NativeMetadataStamp | null = null;
   const compileMetadataKey =
     persistentCache === null || process.env["SCRIPTC_TEST_TRUST_COMPILER_WRAPPER"] === "1"
-    ? null
-    : nativeMetadataKey("compile", [
-        cacheTargetIdentity(driver),
-        toolchainEnv,
-        implicitToolchain ?? "<uncached>",
-        driver.argv,
-        cflags,
-        programCompilerArgs,
-        programSourceExtension,
-      ]);
+      ? null
+      : nativeMetadataKey("compile", [
+          cacheTargetIdentity(driver),
+          toolchainEnv,
+          implicitToolchain ?? "<uncached>",
+          driver.argv,
+          cflags,
+          programCompilerArgs,
+          programSourceExtension,
+        ]);
   if (persistentCache !== null) {
     try {
       // These probes inspect disjoint inputs. Start the payload reads here as
@@ -4546,13 +4848,12 @@ async function compileCInternal(
         localArtifact === null
           ? runtimeFingerprint(rtDir)
           : Promise.resolve(localArtifact.runtimeHash),
-        localArtifact === null
-          ? readFile(opts.cPath)
-          : Promise.resolve(localArtifact.programBytes),
+        localArtifact === null ? readFile(opts.cPath) : Promise.resolve(localArtifact.programBytes),
       ]);
-      compileMetadataStamp = compileMetadataKey === null
-        ? null
-        : await readNativeMetadataStamp(persistentCache.root, compileMetadataKey);
+      compileMetadataStamp =
+        compileMetadataKey === null
+          ? null
+          : await readNativeMetadataStamp(persistentCache.root, compileMetadataKey);
       if (compileMetadataStamp !== null) {
         runtimeCompilerInvocation = compileMetadataStamp.values["runtimeInvocation"] ?? null;
         programCompilerInvocation = compileMetadataStamp.values["programInvocation"] ?? null;
@@ -4612,11 +4913,12 @@ async function compileCInternal(
   let fingerprint: string;
   let cBytes: Buffer;
   try {
-    [cv, fingerprint, cBytes] = await (payloadMetadata ?? Promise.all([
-      ccVersion(driver.argv, toolchainEnv, true),
-      runtimeFingerprint(rtDir),
-      readFile(opts.cPath),
-    ]));
+    [cv, fingerprint, cBytes] = await (payloadMetadata ??
+      Promise.all([
+        ccVersion(driver.argv, toolchainEnv, true),
+        runtimeFingerprint(rtDir),
+        readFile(opts.cPath),
+      ]));
   } catch (error) {
     // A version/fingerprint probe is an optimization boundary. If the compiler
     // itself can still compile, preserve the pre-cache behavior instead of
@@ -4644,9 +4946,7 @@ async function compileCInternal(
   const linkProbeArgs = [
     ...(sanitize ? ["-fsanitize=address"] : []),
     ...threadArgs,
-    ...(targetPlatform(driver) === "win32"
-      ? ["-ladvapi32", "-liphlpapi", "-lws2_32"]
-      : []),
+    ...(targetPlatform(driver) === "win32" ? ["-ladvapi32", "-liphlpapi", "-lws2_32"] : []),
     ...(tls && targetPlatform(driver) === "win32" ? ["-lbcrypt"] : []),
     ...(tlsCa && targetPlatform(driver) === "win32" ? ["-lcrypt32"] : []),
     ...(curlFetch && driver.target === null ? ["-lcurl"] : []),
@@ -4660,17 +4960,13 @@ async function compileCInternal(
   // conditionally on optimization, sanitizer, dynamic, or platform switches.
   const effectiveLinkInvocationArgs = [
     ...(separateSanitizedProgram ? cflags : programCompilerArgs),
-    ...(targetPlatform(driver) === "win32"
-      ? ["-ladvapi32", "-liphlpapi", "-lws2_32"]
-      : []),
+    ...(targetPlatform(driver) === "win32" ? ["-ladvapi32", "-liphlpapi", "-lws2_32"] : []),
     ...(tls && targetPlatform(driver) === "win32" ? ["-lbcrypt"] : []),
     ...(tlsCa && targetPlatform(driver) === "win32" ? ["-lcrypt32"] : []),
     ...(curlStubDir !== null ? [`-L${curlStubDir}`] : []),
     ...(curlFetch && driver.target === null ? ["-lcurl"] : []),
     ...(dynamic && !driver.linkArgs.includes("-lm") ? ["-lm"] : []),
-    ...(dynamic && targetPlatform(driver) === "win32"
-      ? ["-Wl,--stack,8388608"]
-      : []),
+    ...(dynamic && targetPlatform(driver) === "win32" ? ["-Wl,--stack,8388608"] : []),
     ...(((opts.zlib ?? false) || nativeFetch) && !isZigDriver(driver) ? ["-lz"] : []),
     ...driver.linkArgs,
     ...executableLinkFlags,
@@ -4688,27 +4984,28 @@ async function compileCInternal(
   let linkMetadataStamp: NativeMetadataStamp | null = null;
   const linkMetadataKey =
     process.env["SCRIPTC_TEST_TRUST_COMPILER_WRAPPER"] === "1"
-    ? null
-    : nativeMetadataKey("link", [
-        cacheTargetIdentity(driver),
-        toolchainEnv,
-        implicitToolchain ?? "<uncached>",
-        runtimeCompilerInvocation ?? "<uncached>",
-        programCompilerInvocation ?? "<uncached>",
-        driver.argv,
-        linkProbeArgs,
-        effectiveLinkInvocationArgs,
-        linkTraceInvocationArgs,
-        ...(programShardMergeIdentity === null ? [] : [programShardMergeIdentity]),
-      ]);
+      ? null
+      : nativeMetadataKey("link", [
+          cacheTargetIdentity(driver),
+          toolchainEnv,
+          implicitToolchain ?? "<uncached>",
+          runtimeCompilerInvocation ?? "<uncached>",
+          programCompilerInvocation ?? "<uncached>",
+          driver.argv,
+          linkProbeArgs,
+          effectiveLinkInvocationArgs,
+          linkTraceInvocationArgs,
+          ...(programShardMergeIdentity === null ? [] : [programShardMergeIdentity]),
+        ]);
   if (cacheCompleteArtifact) {
     try {
       // Header discovery and linker tracing are independent subprocess trees.
       // Running them together removes one complete probe round-trip from both
       // cache hits and ordinary edit/build misses without changing either key.
-      linkMetadataStamp = linkMetadataKey === null
-        ? null
-        : await readNativeMetadataStamp(persistentCache.root, linkMetadataKey);
+      linkMetadataStamp =
+        linkMetadataKey === null
+          ? null
+          : await readNativeMetadataStamp(persistentCache.root, linkMetadataKey);
       if (linkMetadataStamp !== null) {
         implicitLinker = linkMetadataStamp.values["implicitLinker"] ?? null;
         if (implicitLinker === null) linkMetadataStamp = null;
@@ -4755,20 +5052,24 @@ async function compileCInternal(
       // Every content-bearing fingerprint was computed before this metadata
       // snapshot. Re-read those exact files now so the snapshot cannot certify
       // bytes that changed after hashing but before the final compile starts.
-      if (!(await fingerprintDependenciesStillMatch([
-        implicitToolchain!,
-        runtimeCompilerInvocation!,
-        programCompilerInvocation!,
-        implicitLinker!,
-        programDependencies,
-        ...(programShardMergeIdentity === null ? [] : [programShardMergeIdentity]),
-      ])) ||
-        await runtimeFingerprint(rtDir).catch(() => null) !== fingerprint ||
-        !(await Promise.all(
-          [toolchainMetadataStamp, compileMetadataStamp, linkMetadataStamp]
-            .filter((stamp): stamp is NativeMetadataStamp => stamp !== null)
-            .map((stamp) => nativeArtifactDependenciesStillMatch(stamp.dependencies)),
-        )).every(Boolean)) {
+      if (
+        !(await fingerprintDependenciesStillMatch([
+          implicitToolchain!,
+          runtimeCompilerInvocation!,
+          programCompilerInvocation!,
+          implicitLinker!,
+          programDependencies,
+          ...(programShardMergeIdentity === null ? [] : [programShardMergeIdentity]),
+        ])) ||
+        (await runtimeFingerprint(rtDir).catch(() => null)) !== fingerprint ||
+        !(
+          await Promise.all(
+            [toolchainMetadataStamp, compileMetadataStamp, linkMetadataStamp]
+              .filter((stamp): stamp is NativeMetadataStamp => stamp !== null)
+              .map((stamp) => nativeArtifactDependenciesStillMatch(stamp.dependencies)),
+          )
+        ).every(Boolean)
+      ) {
         throw new CacheInputsChangedError();
       }
       if (localArtifact !== null) {
@@ -4832,26 +5133,41 @@ async function compileCInternal(
       // builds retain v9 so adding the opt-in mode does not evict release
       // binaries compiled by an earlier scriptc.
       .update(programShards === null ? "bin-v9\0" : "bin-v10\0")
-      .update(cacheTargetIdentity(driver)).update("\0")
-      .update(toolchainEnv).update("\0")
-      .update(implicitToolchain!).update("\0")
-      .update(runtimeCompilerInvocation!).update("\0")
-      .update(programCompilerInvocation!).update("\0")
-      .update(implicitLinker!).update("\0")
-      .update(programDependencies!).update("\0")
-      .update(persistentCache.identity).update("\0")
+      .update(cacheTargetIdentity(driver))
+      .update("\0")
+      .update(toolchainEnv)
+      .update("\0")
+      .update(implicitToolchain!)
+      .update("\0")
+      .update(runtimeCompilerInvocation!)
+      .update("\0")
+      .update(programCompilerInvocation!)
+      .update("\0")
+      .update(implicitLinker!)
+      .update("\0")
+      .update(programDependencies!)
+      .update("\0")
+      .update(persistentCache.identity)
+      .update("\0")
       // Preserve both the spelling clang sees (__FILE__) and the location used
       // to resolve relative includes. The top-level bytes are not sufficient.
-      .update(opts.cPath).update("\0")
-      .update(resolve(opts.cPath)).update("\0")
-      .update(targetPlatform(driver) === "darwin" ? basename(opts.outPath) : "<out>").update("\0")
+      .update(opts.cPath)
+      .update("\0")
+      .update(resolve(opts.cPath))
+      .update("\0")
+      .update(targetPlatform(driver) === "darwin" ? basename(opts.outPath) : "<out>")
+      .update("\0")
       // The driver spelling joins the version string: `zig cc --version`
       // reports the clang underneath and could otherwise collide with a
       // same-version host clang.
-      .update(ccName).update("\0")
-      .update(cv).update("\0")
-      .update(fingerprint).update("\0")
-      .update(identityArgs.join("\x1f")).update("\0")
+      .update(ccName)
+      .update("\0")
+      .update(cv)
+      .update("\0")
+      .update(fingerprint)
+      .update("\0")
+      .update(identityArgs.join("\x1f"))
+      .update("\0")
       .update(cBytes);
     if (programShards !== null) {
       updateProgramShardCacheIdentity(
@@ -4876,11 +5192,13 @@ async function compileCInternal(
         const cachedSymbols = `${cachedBin}.dsym`;
         const symbolsCopy = privateSiblingPath(opts.outPath, "dsym-hit");
         try {
-          if (!(await copyValidCachedFile(cachedSymbols, symbolsCopy))) throw new Error("invalid cached dSYM");
+          if (!(await copyValidCachedFile(cachedSymbols, symbolsCopy)))
+            throw new Error("invalid cached dSYM");
           const bytes = await readFile(symbolsCopy);
           // A concurrent publisher may replace either payload. The sidecar
           // also names its binary digest so a mixed pair always misses.
-          if (bytes.subarray(0, 32).toString("hex") !== await fileDigest(tmpOut)) throw new Error("mismatched cached dSYM");
+          if (bytes.subarray(0, 32).toString("hex") !== (await fileDigest(tmpOut)))
+            throw new Error("mismatched cached dSYM");
           await installDarwinDebugSymbols(bytes.subarray(32), opts.outPath);
         } finally {
           await rm(symbolsCopy, { force: true });
@@ -4971,8 +5289,7 @@ async function compileCInternal(
         cflags,
         rtInputs,
         `obj-v5\0${cacheTargetIdentity(driver)}\0${toolchainEnv}\0${implicitToolchain}\0${runtimeCompilerInvocation}\0${ccName}\0${cv}\0${fingerprint}\0`,
-        async () =>
-          await objectImplicitToolchainStillMatches(),
+        async () => await objectImplicitToolchainStillMatches(),
         cacheWarmPaths,
       );
       objects = await stageRuntimeObjects(cached, join(buildDir, "runtime-objects"));
@@ -4988,40 +5305,54 @@ async function compileCInternal(
 
     const compileShardedProgram = async (): Promise<string | null> => {
       if (
-        programShards === null || programPublicSymbols === undefined ||
-        programCompilerInvocation === null || implicitCompileToolchain === null
-      ) return null;
+        programShards === null ||
+        programPublicSymbols === undefined ||
+        programCompilerInvocation === null ||
+        implicitCompileToolchain === null
+      )
+        return null;
       try {
-        const programDependencyHash = programDependencies ??
-          await translationUnitDependencyFingerprint(
+        const programDependencyHash =
+          programDependencies ??
+          (await translationUnitDependencyFingerprint(
             driver,
             programCompilerArgs,
             opts.cPath,
             cBytes,
             toolchainEnv,
-          );
+          ));
         const stem = basename(opts.cPath, ".ll");
         const entries = programShards.map((shard, index) => {
           const sourcePath = join(buildDir, shard.name);
-          const staged = join(
-            buildDir,
-            `${stem}.program-${index.toString().padStart(3, "0")}.o`,
-          );
+          const staged = join(buildDir, `${stem}.program-${index.toString().padStart(3, "0")}.o`);
           const key = createHash("sha256")
             .update("exe-program-shard-v1\0")
-            .update(cacheTargetIdentity(driver)).update("\0")
-            .update(toolchainEnv).update("\0")
-            .update(implicitCompileToolchain).update("\0")
-            .update(programCompilerInvocation).update("\0")
-            .update(persistentCache.identity).update("\0")
-            .update(driver.argv.join("\x1f")).update("\0")
-            .update(cv).update("\0")
-            .update(fingerprint).update("\0")
-            .update(programDependencyHash).update("\0")
-            .update(programCompilerArgs.join("\x1f")).update("\0")
-            .update(opts.cPath).update("\0")
-            .update(resolve(opts.cPath)).update("\0")
-            .update(shard.name).update("\0")
+            .update(cacheTargetIdentity(driver))
+            .update("\0")
+            .update(toolchainEnv)
+            .update("\0")
+            .update(implicitCompileToolchain)
+            .update("\0")
+            .update(programCompilerInvocation)
+            .update("\0")
+            .update(persistentCache.identity)
+            .update("\0")
+            .update(driver.argv.join("\x1f"))
+            .update("\0")
+            .update(cv)
+            .update("\0")
+            .update(fingerprint)
+            .update("\0")
+            .update(programDependencyHash)
+            .update("\0")
+            .update(programCompilerArgs.join("\x1f"))
+            .update("\0")
+            .update(opts.cPath)
+            .update("\0")
+            .update(resolve(opts.cPath))
+            .update("\0")
+            .update(shard.name)
+            .update("\0")
             .update(shard.source)
             .digest("hex");
           return {
@@ -5034,19 +5365,21 @@ async function compileCInternal(
         });
         const shardWidth = Math.min(8, availableParallelism());
         for (let i = 0; i < entries.length; i += shardWidth) {
-          await Promise.all(entries.slice(i, i + shardWidth).map(async (entry) => {
-            await writeFile(entry.sourcePath, entry.source);
-            if (await copyValidCachedFile(entry.cachePath, entry.staged)) return;
-            entry.missed = true;
-            await runClang([
-              ...programCompilerArgs,
-              `-ffile-prefix-map=${entry.sourcePath}=${opts.cPath}`,
-              "-c",
-              entry.sourcePath,
-              "-o",
-              entry.staged,
-            ]);
-          }));
+          await Promise.all(
+            entries.slice(i, i + shardWidth).map(async (entry) => {
+              await writeFile(entry.sourcePath, entry.source);
+              if (await copyValidCachedFile(entry.cachePath, entry.staged)) return;
+              entry.missed = true;
+              await runClang([
+                ...programCompilerArgs,
+                `-ffile-prefix-map=${entry.sourcePath}=${opts.cPath}`,
+                "-c",
+                entry.sourcePath,
+                "-o",
+                entry.staged,
+              ]);
+            }),
+          );
         }
         const arArgv = isZigDriver(driver) ? [driver.argv[0]!, "ar"] : ["ar"];
         const merged = await localizeLibraryObjects(
@@ -5061,26 +5394,32 @@ async function compileCInternal(
         const publishable = entries.filter((entry) => entry.missed);
         if (publishable.length > 0) {
           try {
-            const [currentRuntime, currentFingerprints, currentInvocation, currentDependencies, currentCompiler, currentMerge] =
-              await Promise.all([
-                runtimeFingerprint(rtDir),
-                implicitToolchainFingerprints(driver, toolchainEnv),
-                effectiveCompilerInvocationFingerprint(
-                  driver,
-                  toolchainEnv,
-                  programCompilerArgs,
-                  ".ll",
-                ),
-                translationUnitDependencyFingerprint(
-                  driver,
-                  programCompilerArgs,
-                  opts.cPath,
-                  cBytes,
-                  toolchainEnv,
-                ),
-                ccVersion(driver.argv, toolchainEnv, true),
-                resolveProgramShardMergeIdentity(driver),
-              ]);
+            const [
+              currentRuntime,
+              currentFingerprints,
+              currentInvocation,
+              currentDependencies,
+              currentCompiler,
+              currentMerge,
+            ] = await Promise.all([
+              runtimeFingerprint(rtDir),
+              implicitToolchainFingerprints(driver, toolchainEnv),
+              effectiveCompilerInvocationFingerprint(
+                driver,
+                toolchainEnv,
+                programCompilerArgs,
+                ".ll",
+              ),
+              translationUnitDependencyFingerprint(
+                driver,
+                programCompilerArgs,
+                opts.cPath,
+                cBytes,
+                toolchainEnv,
+              ),
+              ccVersion(driver.argv, toolchainEnv, true),
+              resolveProgramShardMergeIdentity(driver),
+            ]);
             if (
               currentRuntime === fingerprint &&
               currentFingerprints.compile === implicitCompileToolchain &&
@@ -5132,42 +5471,48 @@ async function compileCInternal(
       // the key. Recompute every content-bearing identity after the final link
       // so a header/SDK/compiler change in either pre-build gap cannot publish
       // new output under an old key.
-      const [currentRuntime, currentImplicit, currentRuntimeInvocation, currentProgramInvocation, currentProgramDependencies, currentLinker, currentCompiler, currentProgramShardMerge] =
-        await Promise.all([
-          runtimeFingerprint(rtDir).catch(() => null),
-          implicitToolchainFingerprint(driver, toolchainEnv).catch(() => null),
-          effectiveCompilerInvocationFingerprint(driver, toolchainEnv, cflags).catch(
-            () => null,
-          ),
-          effectiveCompilerInvocationFingerprint(
-            driver,
-            toolchainEnv,
-            programCompilerArgs,
-            programSourceExtension,
-          ).catch(() => null),
-          translationUnitDependencyFingerprint(
-            driver,
-            programCompilerArgs,
-            opts.cPath,
-            cBytes,
-            toolchainEnv,
-          ).catch(() => null),
-          implicitLinkerFingerprint(
-            driver,
-            toolchainEnv,
-            linkProbeArgs,
-            effectiveLinkInvocationArgs,
-            linkTraceInvocationArgs,
-          ).catch(() => null),
-          ccVersion(driver.argv, toolchainEnv, true).catch(() => null),
-          programShards === null
-            ? Promise.resolve(null)
-            : resolveProgramShardMergeIdentity(driver).catch(() => null),
-        ]);
+      const [
+        currentRuntime,
+        currentImplicit,
+        currentRuntimeInvocation,
+        currentProgramInvocation,
+        currentProgramDependencies,
+        currentLinker,
+        currentCompiler,
+        currentProgramShardMerge,
+      ] = await Promise.all([
+        runtimeFingerprint(rtDir).catch(() => null),
+        implicitToolchainFingerprint(driver, toolchainEnv).catch(() => null),
+        effectiveCompilerInvocationFingerprint(driver, toolchainEnv, cflags).catch(() => null),
+        effectiveCompilerInvocationFingerprint(
+          driver,
+          toolchainEnv,
+          programCompilerArgs,
+          programSourceExtension,
+        ).catch(() => null),
+        translationUnitDependencyFingerprint(
+          driver,
+          programCompilerArgs,
+          opts.cPath,
+          cBytes,
+          toolchainEnv,
+        ).catch(() => null),
+        implicitLinkerFingerprint(
+          driver,
+          toolchainEnv,
+          linkProbeArgs,
+          effectiveLinkInvocationArgs,
+          linkTraceInvocationArgs,
+        ).catch(() => null),
+        ccVersion(driver.argv, toolchainEnv, true).catch(() => null),
+        programShards === null
+          ? Promise.resolve(null)
+          : resolveProgramShardMergeIdentity(driver).catch(() => null),
+      ]);
       cacheInputsStable =
         cacheInputsStable &&
         preBuildDependencies !== null &&
-        await nativeArtifactDependenciesStillMatch(preBuildDependencies) &&
+        (await nativeArtifactDependenciesStillMatch(preBuildDependencies)) &&
         currentRuntime === fingerprint &&
         currentImplicit === implicitToolchain &&
         currentRuntimeInvocation === runtimeCompilerInvocation &&
@@ -5185,10 +5530,13 @@ async function compileCInternal(
         await publishCachedFile(privateOut, cachedBin);
         if (darwinDebugSymbols) {
           const symbols = privateSiblingPath(privateOut, "debug-symbols");
-          await writeFile(symbols, Buffer.concat([
-            Buffer.from(await fileDigest(privateOut), "hex"),
-            await readDarwinDebugSymbols(privateOut),
-          ]));
+          await writeFile(
+            symbols,
+            Buffer.concat([
+              Buffer.from(await fileDigest(privateOut), "hex"),
+              await readDarwinDebugSymbols(privateOut),
+            ]),
+          );
           await publishCachedFile(symbols, `${cachedBin}.dsym`);
         }
       } catch {
@@ -5225,7 +5573,10 @@ async function compileCInternal(
 export async function compileC(opts: CcOptions): Promise<void> {
   clearCcCaches();
   await compileCInternal(opts, false);
-  if (targetPlatform(resolveCc()) === "darwin" && !needsDarwinDebugSymbols("darwin", opts.optimization, opts.strip)) {
+  if (
+    targetPlatform(resolveCc()) === "darwin" &&
+    !needsDarwinDebugSymbols("darwin", opts.optimization, opts.strip)
+  ) {
     await rm(`${opts.outPath}.dSYM`, { recursive: true, force: true });
   }
 }
@@ -5268,10 +5619,7 @@ export async function warmNativeCaches(
       "the native build cache is disabled (unset SCRIPTC_NO_CACHE and use a non-empty SCRIPTC_CACHE_DIR)",
     );
   }
-  await ensurePrivateCacheRoot(
-    cacheRoot,
-    process.env["SCRIPTC_CACHE_DIR"] === undefined,
-  );
+  await ensurePrivateCacheRoot(cacheRoot, process.env["SCRIPTC_CACHE_DIR"] === undefined);
   const known = new Set<NativeCacheWarmProfile>(["runtime", "tls", "dynamic"]);
   for (const profile of options.profiles ?? []) {
     if (!known.has(profile)) throw new Error(`unknown native cache warm profile '${profile}'`);
@@ -5304,22 +5652,28 @@ export async function warmNativeCaches(
   await writeFile(cPath, "int main(void) { return 0; }\n");
   const protectedPaths = new Set<string>();
   try {
-    const results = await Promise.all(profiles.map(async (profile) => {
-      const started = performance.now();
-      await compileCInternal({
-        cPath,
-        outPath: join(workDir, process.platform === "win32" ? `${profile}.exe` : profile),
-        cacheIdentity: "scriptc-native-cache-warm-v1",
-        optimization: options.optimization ?? "release",
-        sanitize: options.sanitize ?? false,
-        ...(profile === "tls" ? { fetch: true } : {}),
-        ...(profile === "dynamic" ? { dynamic: true } : {}),
-      }, true, protectedPaths);
-      return {
-        profile,
-        elapsedMs: Math.round((performance.now() - started) * 10) / 10,
-      };
-    }));
+    const results = await Promise.all(
+      profiles.map(async (profile) => {
+        const started = performance.now();
+        await compileCInternal(
+          {
+            cPath,
+            outPath: join(workDir, process.platform === "win32" ? `${profile}.exe` : profile),
+            cacheIdentity: "scriptc-native-cache-warm-v1",
+            optimization: options.optimization ?? "release",
+            sanitize: options.sanitize ?? false,
+            ...(profile === "tls" ? { fetch: true } : {}),
+            ...(profile === "dynamic" ? { dynamic: true } : {}),
+          },
+          true,
+          protectedPaths,
+        );
+        return {
+          profile,
+          elapsedMs: Math.round((performance.now() - started) * 10) / 10,
+        };
+      }),
+    );
     await pruneCache(cacheRoot).catch(() => undefined);
     if (!(await Promise.all([...protectedPaths].map(fileExists))).every(Boolean)) {
       throw new Error(

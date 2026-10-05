@@ -13,7 +13,10 @@ export function checkSemanticJsonStrings(json: string, preservesSurrogates: bool
     if (unit < 0xd800 || unit > 0xdfff) continue;
     if (unit <= 0xdbff && json.charCodeAt(index + 1) === 92 && json.charCodeAt(index + 2) === 117) {
       const next = jsonHexUnit(json, index + 3);
-      if (next >= 0xdc00 && next <= 0xdfff) { index += 6; continue; }
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        index += 6;
+        continue;
+      }
     }
     throw new Error("TypeScript semantic response: runtime cannot preserve lone UTF-16 surrogates");
   }
@@ -24,7 +27,14 @@ function jsonHexUnit(json: string, offset: number): number {
   let value = 0;
   for (let index = offset; index < offset + 4; index++) {
     const code = json.charCodeAt(index);
-    const digit = code >= 48 && code <= 57 ? code - 48 : code >= 65 && code <= 70 ? code - 55 : code >= 97 && code <= 102 ? code - 87 : -1;
+    const digit =
+      code >= 48 && code <= 57
+        ? code - 48
+        : code >= 65 && code <= 70
+          ? code - 55
+          : code >= 97 && code <= 102
+            ? code - 87
+            : -1;
     if (digit < 0) return -1;
     value = value * 16 + digit;
   }

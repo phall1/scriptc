@@ -13,15 +13,47 @@ export function checkedPromiseAll(lowerer: Lowerer, source: IrExpr, loc: SrcLoc)
     lowerer.fnStack.push(context);
     try {
       const entries = checkedIterableSpread(lowerer, varRef("source", DYN, loc), "", loc);
-      lowerer.liftedFns.push({ name, params: [{ localId: "source", name: "source", type: DYN }], returnType: type,
-        locals: [{ id: "source", name: "source", type: DYN, mutable: false },
-          { id: "error", name: "error", type: CAUGHT, mutable: false }, ...context.locals],
-        body: [{ kind: "tryCatch", tryBody: [
-          { kind: "return", value: { kind: "libCall", fn: "dyn.promiseAll", args: [entries], type, loc }, loc },
-        ], catchLocalId: "error", catchBody: [
-          { kind: "return", value: { kind: "intrinsic", name: "promise.reject",
-            args: [{ kind: "caughtToDyn", value: varRef("error", CAUGHT, loc), type: DYN, loc }], type, loc }, loc },
-        ], finallyBody: null, loc }], loc });
+      lowerer.liftedFns.push({
+        name,
+        params: [{ localId: "source", name: "source", type: DYN }],
+        returnType: type,
+        locals: [
+          { id: "source", name: "source", type: DYN, mutable: false },
+          { id: "error", name: "error", type: CAUGHT, mutable: false },
+          ...context.locals,
+        ],
+        body: [
+          {
+            kind: "tryCatch",
+            tryBody: [
+              {
+                kind: "return",
+                value: { kind: "libCall", fn: "dyn.promiseAll", args: [entries], type, loc },
+                loc,
+              },
+            ],
+            catchLocalId: "error",
+            catchBody: [
+              {
+                kind: "return",
+                value: {
+                  kind: "intrinsic",
+                  name: "promise.reject",
+                  args: [
+                    { kind: "caughtToDyn", value: varRef("error", CAUGHT, loc), type: DYN, loc },
+                  ],
+                  type,
+                  loc,
+                },
+                loc,
+              },
+            ],
+            finallyBody: null,
+            loc,
+          },
+        ],
+        loc,
+      });
     } finally {
       lowerer.fnStack.pop();
     }

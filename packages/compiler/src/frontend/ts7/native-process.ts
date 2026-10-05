@@ -3,9 +3,24 @@ import { TS7_FILE_SYSTEM_CALLBACKS } from "./rpc-filesystem.js";
 
 // Bound by native/ts7-process.ffi.json. This module is a native entry point;
 // the Node host continues to use rpc-process.ts's public spawn boundary.
-declare function ts7NativeOpen(executable: string, cwd: string, callbacks: string, timing: boolean): number;
-declare function ts7NativeRead(handle: number, bytes: Uint8Array, offset: number, length: number): number;
-declare function ts7NativeWrite(handle: number, bytes: Uint8Array, offset: number, length: number): number;
+declare function ts7NativeOpen(
+  executable: string,
+  cwd: string,
+  callbacks: string,
+  timing: boolean,
+): number;
+declare function ts7NativeRead(
+  handle: number,
+  bytes: Uint8Array,
+  offset: number,
+  length: number,
+): number;
+declare function ts7NativeWrite(
+  handle: number,
+  bytes: Uint8Array,
+  offset: number,
+  length: number,
+): number;
 declare function ts7NativePid(handle: number): number;
 declare function ts7NativeClose(handle: number): void;
 declare function ts7NativeCloseAll(): void;
@@ -13,12 +28,16 @@ declare function ts7NativeError(bytes: Uint8Array): number;
 
 // process.exit skips C atexit handlers. Its ordinary exit listener closes
 // servers too, while the C atexit sweep covers normal native termination.
-process.on("exit", () => { ts7NativeCloseAll(); });
+process.on("exit", () => {
+  ts7NativeCloseAll();
+});
 
 function nativeError(operation: string): Error {
   const bytes = new Uint8Array(1024);
   const length = ts7NativeError(bytes);
-  return new Error(`TypeScript server ${operation}: ${Buffer.from(bytes.subarray(0, length)).toString("utf8")}`);
+  return new Error(
+    `TypeScript server ${operation}: ${Buffer.from(bytes.subarray(0, length)).toString("utf8")}`,
+  );
 }
 
 /** Own a native server and its synchronous standard-input/output channel.
@@ -36,8 +55,14 @@ export class NativeTs7Process implements Ts7WireIo {
 
   private validateRange(buffer: Uint8Array, offset: number, length: number): void {
     if (this.handle === 0) throw new Error("TypeScript server transport is closed");
-    if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) ||
-        offset < 0 || length < 0 || offset > buffer.length || length > buffer.length - offset) {
+    if (
+      !Number.isSafeInteger(offset) ||
+      !Number.isSafeInteger(length) ||
+      offset < 0 ||
+      length < 0 ||
+      offset > buffer.length ||
+      length > buffer.length - offset
+    ) {
       throw new RangeError("TypeScript server transfer is outside the buffer");
     }
   }
@@ -72,6 +97,10 @@ export class NativeTs7Process implements Ts7WireIo {
   };
 }
 
-export function spawnNativeTs7Wire(executable: string, cwd: string, collectTiming = false): Ts7Wire {
+export function spawnNativeTs7Wire(
+  executable: string,
+  cwd: string,
+  collectTiming = false,
+): Ts7Wire {
   return new Ts7Wire(new NativeTs7Process(executable, cwd, collectTiming));
 }

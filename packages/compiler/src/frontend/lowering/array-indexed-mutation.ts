@@ -1,15 +1,65 @@
-import { BOOL, DYN, F64, NULL_T, type IrExpr, type IrStmt, type IrType, type SrcLoc } from "../../ir/ir.js";
+import {
+  BOOL,
+  DYN,
+  F64,
+  NULL_T,
+  type IrExpr,
+  type IrStmt,
+  type IrType,
+  type SrcLoc,
+} from "../../ir/ir.js";
 import { numLit, varRef } from "../../ir/build.js";
 import { typeKey } from "../type-mapper.js";
 import type { Lowerer } from "./lowerer.js";
 import { arrayValueStore } from "./array-values.js";
 
-const add = (left: IrExpr, right: IrExpr, loc: SrcLoc): IrExpr => ({ kind: "bin", op: "+", left, right, type: F64, loc });
-const sub = (left: IrExpr, right: IrExpr, loc: SrcLoc): IrExpr => ({ kind: "bin", op: "-", left, right, type: F64, loc });
-const lt = (left: IrExpr, right: IrExpr, loc: SrcLoc): IrExpr => ({ kind: "bin", op: "<", left, right, type: BOOL, loc });
-const eq = (left: IrExpr, right: IrExpr, loc: SrcLoc): IrExpr => ({ kind: "bin", op: "===", left, right, type: BOOL, loc });
-const math = (fn: "min" | "max" | "trunc", args: IrExpr[], loc: SrcLoc): IrExpr => ({ kind: "libCall", fn: `math.${fn}`, args, type: F64, loc });
-const lengthOf = (arr: IrExpr, loc: SrcLoc): IrExpr => ({ kind: "arrIntrinsic", method: "length", receiver: arr, args: [], type: F64, loc });
+const add = (left: IrExpr, right: IrExpr, loc: SrcLoc): IrExpr => ({
+  kind: "bin",
+  op: "+",
+  left,
+  right,
+  type: F64,
+  loc,
+});
+const sub = (left: IrExpr, right: IrExpr, loc: SrcLoc): IrExpr => ({
+  kind: "bin",
+  op: "-",
+  left,
+  right,
+  type: F64,
+  loc,
+});
+const lt = (left: IrExpr, right: IrExpr, loc: SrcLoc): IrExpr => ({
+  kind: "bin",
+  op: "<",
+  left,
+  right,
+  type: BOOL,
+  loc,
+});
+const eq = (left: IrExpr, right: IrExpr, loc: SrcLoc): IrExpr => ({
+  kind: "bin",
+  op: "===",
+  left,
+  right,
+  type: BOOL,
+  loc,
+});
+const math = (fn: "min" | "max" | "trunc", args: IrExpr[], loc: SrcLoc): IrExpr => ({
+  kind: "libCall",
+  fn: `math.${fn}`,
+  args,
+  type: F64,
+  loc,
+});
+const lengthOf = (arr: IrExpr, loc: SrcLoc): IrExpr => ({
+  kind: "arrIntrinsic",
+  method: "length",
+  receiver: arr,
+  args: [],
+  type: F64,
+  loc,
+});
 
 function relativeIndex(position: IrExpr, length: IrExpr, loc: SrcLoc): IrExpr {
   const integer: IrExpr = {
@@ -45,7 +95,15 @@ export function lowerArrayFill(
   // synthesize the unit inside the helper's correctly tagged store.
   const discardValue = writeUndefined || writeNull;
   const valueType = discardValue ? F64 : value!.type;
-  const key = "indexed:fill:" + typeKey(arrType.elem) + ":" + typeKey(valueType) + ":" + writeUndefined + ":" + writeNull;
+  const key =
+    "indexed:fill:" +
+    typeKey(arrType.elem) +
+    ":" +
+    typeKey(valueType) +
+    ":" +
+    writeUndefined +
+    ":" +
+    writeNull;
   let name = lowerer.arrHofHelpers.get(key);
   if (!name) {
     name = "%arr.fill." + lowerer.arrHofHelpers.size;
@@ -55,7 +113,18 @@ export function lowerArrayFill(
     const i = varRef("i.0", F64, loc);
     const body: IrStmt[] = writeUndefined
       ? [{ kind: "arraySetUndefined", arr: a, index: i, loc }]
-      : [arrayValueStore(lowerer, a, i, writeNull ? { kind: "unitLit", unit: "null", type: NULL_T, loc } : varRef("v.0", valueType, loc), arrType.elem, loc)];
+      : [
+          arrayValueStore(
+            lowerer,
+            a,
+            i,
+            writeNull
+              ? { kind: "unitLit", unit: "null", type: NULL_T, loc }
+              : varRef("v.0", valueType, loc),
+            arrType.elem,
+            loc,
+          ),
+        ];
     lowerer.liftedFns.push({
       name,
       params: [
@@ -77,8 +146,18 @@ export function lowerArrayFill(
       ],
       body: [
         { kind: "varDecl", localId: "n.0", init: lengthOf(a, loc), loc },
-        { kind: "varDecl", localId: "from.0", init: relativeIndex(varRef("start.0", F64, loc), n, loc), loc },
-        { kind: "varDecl", localId: "until.0", init: relativeIndex(varRef("end.0", F64, loc), n, loc), loc },
+        {
+          kind: "varDecl",
+          localId: "from.0",
+          init: relativeIndex(varRef("start.0", F64, loc), n, loc),
+          loc,
+        },
+        {
+          kind: "varDecl",
+          localId: "until.0",
+          init: relativeIndex(varRef("end.0", F64, loc), n, loc),
+          loc,
+        },
         {
           kind: "for",
           init: { kind: "varDecl", localId: "i.0", init: varRef("from.0", F64, loc), loc },
@@ -93,9 +172,16 @@ export function lowerArrayFill(
     });
   }
   const valueArg: IrExpr = discardValue
-    ? value === null || value.kind === "unitLit" ? numLit(0, loc)
-      : { kind: "seqExpr", stmts: [{ kind: "exprStmt", expr: lowerer.coerceToExpected(value, DYN), loc }], result: numLit(0, loc), type: F64, loc }
-    : value ?? numLit(0, loc);
+    ? value === null || value.kind === "unitLit"
+      ? numLit(0, loc)
+      : {
+          kind: "seqExpr",
+          stmts: [{ kind: "exprStmt", expr: lowerer.coerceToExpected(value, DYN), loc }],
+          result: numLit(0, loc),
+          type: F64,
+          loc,
+        }
+    : (value ?? numLit(0, loc));
   return { kind: "call", callee: name, args: [receiver, valueArg, start, end], type: arrType, loc };
 }
 
@@ -124,12 +210,20 @@ export function lowerArrayCopyWithin(
     const to = varRef("to.0", F64, loc);
     const state = varRef("state.0", F64, loc);
     const backwards: IrExpr = {
-      kind: "logical", op: "&&", left: lt(src, dst, loc),
-      right: lt(dst, add(src, remaining, loc), loc), type: BOOL, loc,
+      kind: "logical",
+      op: "&&",
+      left: lt(src, dst, loc),
+      right: lt(dst, add(src, remaining, loc), loc),
+      type: BOOL,
+      loc,
     };
     const offset: IrExpr = {
-      kind: "ternary", cond: lt(step, numLit(0, loc), loc),
-      then: sub(remaining, numLit(1, loc), loc), else_: numLit(0, loc), type: F64, loc,
+      kind: "ternary",
+      cond: lt(step, numLit(0, loc), loc),
+      then: sub(remaining, numLit(1, loc), loc),
+      else_: numLit(0, loc),
+      type: F64,
+      loc,
     };
     lowerer.liftedFns.push({
       name,
@@ -158,40 +252,100 @@ export function lowerArrayCopyWithin(
       ],
       body: [
         { kind: "varDecl", localId: "n.0", init: lengthOf(a, loc), loc },
-        { kind: "varDecl", localId: "targetIndex.0", init: relativeIndex(varRef("target.0", F64, loc), n, loc), loc },
-        { kind: "varDecl", localId: "startIndex.0", init: relativeIndex(varRef("start.0", F64, loc), n, loc), loc },
-        { kind: "varDecl", localId: "endIndex.0", init: relativeIndex(varRef("end.0", F64, loc), n, loc), loc },
         {
-          kind: "varDecl", localId: "count.0",
-          init: {
-            kind: "ternary", cond: eq(src, dst, loc), then: numLit(0, loc),
-            else_: math("min", [math("max", [sub(last, src, loc), numLit(0, loc)], loc), sub(n, dst, loc)], loc),
-            type: F64, loc,
-          }, loc,
+          kind: "varDecl",
+          localId: "targetIndex.0",
+          init: relativeIndex(varRef("target.0", F64, loc), n, loc),
+          loc,
         },
-        { kind: "varDecl", localId: "direction.0", init: { kind: "ternary", cond: backwards, then: numLit(-1, loc), else_: numLit(1, loc), type: F64, loc }, loc },
+        {
+          kind: "varDecl",
+          localId: "startIndex.0",
+          init: relativeIndex(varRef("start.0", F64, loc), n, loc),
+          loc,
+        },
+        {
+          kind: "varDecl",
+          localId: "endIndex.0",
+          init: relativeIndex(varRef("end.0", F64, loc), n, loc),
+          loc,
+        },
+        {
+          kind: "varDecl",
+          localId: "count.0",
+          init: {
+            kind: "ternary",
+            cond: eq(src, dst, loc),
+            then: numLit(0, loc),
+            else_: math(
+              "min",
+              [math("max", [sub(last, src, loc), numLit(0, loc)], loc), sub(n, dst, loc)],
+              loc,
+            ),
+            type: F64,
+            loc,
+          },
+          loc,
+        },
+        {
+          kind: "varDecl",
+          localId: "direction.0",
+          init: {
+            kind: "ternary",
+            cond: backwards,
+            then: numLit(-1, loc),
+            else_: numLit(1, loc),
+            type: F64,
+            loc,
+          },
+          loc,
+        },
         { kind: "varDecl", localId: "from.0", init: add(src, offset, loc), loc },
         { kind: "varDecl", localId: "to.0", init: add(dst, offset, loc), loc },
         {
-          kind: "while", cond: lt(numLit(0, loc), remaining, loc),
+          kind: "while",
+          cond: lt(numLit(0, loc), remaining, loc),
           body: [
-            { kind: "varDecl", localId: "state.0", init: { kind: "arrayState", arr: a, index: from, type: F64, loc }, loc },
             {
-              kind: "if", cond: eq(state, numLit(0, loc), loc),
+              kind: "varDecl",
+              localId: "state.0",
+              init: { kind: "arrayState", arr: a, index: from, type: F64, loc },
+              loc,
+            },
+            {
+              kind: "if",
+              cond: eq(state, numLit(0, loc), loc),
               then: [{ kind: "arrayDelete", arr: a, index: to, loc }],
-              else_: [{
-                kind: "if", cond: eq(state, numLit(2, loc), loc),
-                then: [{ kind: "arraySetUndefined", arr: a, index: to, loc }],
-                else_: [
-                  { kind: "varDecl", localId: "value.0", init: { kind: "arrayGet", arr: a, index: from, type: arrType.elem, loc }, loc },
-                  { kind: "arraySet", arr: a, index: to, value: varRef("value.0", arrType.elem, loc), loc },
-                ], loc,
-              }], loc,
+              else_: [
+                {
+                  kind: "if",
+                  cond: eq(state, numLit(2, loc), loc),
+                  then: [{ kind: "arraySetUndefined", arr: a, index: to, loc }],
+                  else_: [
+                    {
+                      kind: "varDecl",
+                      localId: "value.0",
+                      init: { kind: "arrayGet", arr: a, index: from, type: arrType.elem, loc },
+                      loc,
+                    },
+                    {
+                      kind: "arraySet",
+                      arr: a,
+                      index: to,
+                      value: varRef("value.0", arrType.elem, loc),
+                      loc,
+                    },
+                  ],
+                  loc,
+                },
+              ],
+              loc,
             },
             { kind: "assign", localId: "from.0", value: add(from, step, loc), loc },
             { kind: "assign", localId: "to.0", value: add(to, step, loc), loc },
             { kind: "assign", localId: "count.0", value: sub(remaining, numLit(1, loc), loc), loc },
-          ], loc,
+          ],
+          loc,
         },
         { kind: "return", value: a, loc },
       ],

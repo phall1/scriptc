@@ -78,15 +78,68 @@ export function buildArraySortFn(
   const i = varRef("i.0", F64, loc);
   const j = varRef("j.0", F64, loc);
   const state = varRef("state.0", F64, loc);
-  const add = (left: IrExpr, right: IrExpr): IrExpr => ({ kind: "bin", op: "+", left, right, type: F64, loc });
-  const sub = (left: IrExpr, right: IrExpr): IrExpr => ({ kind: "bin", op: "-", left, right, type: F64, loc });
-  const mul = (left: IrExpr, right: IrExpr): IrExpr => ({ kind: "bin", op: "*", left, right, type: F64, loc });
-  const lt = (left: IrExpr, right: IrExpr): IrExpr => ({ kind: "bin", op: "<", left, right, type: BOOL, loc });
-  const eq = (left: IrExpr, right: IrExpr): IrExpr => ({ kind: "bin", op: "===", left, right, type: BOOL, loc });
-  const not = (value: IrExpr): IrExpr => ({ kind: "unary", op: "!", operand: value, type: BOOL, loc });
+  const add = (left: IrExpr, right: IrExpr): IrExpr => ({
+    kind: "bin",
+    op: "+",
+    left,
+    right,
+    type: F64,
+    loc,
+  });
+  const sub = (left: IrExpr, right: IrExpr): IrExpr => ({
+    kind: "bin",
+    op: "-",
+    left,
+    right,
+    type: F64,
+    loc,
+  });
+  const mul = (left: IrExpr, right: IrExpr): IrExpr => ({
+    kind: "bin",
+    op: "*",
+    left,
+    right,
+    type: F64,
+    loc,
+  });
+  const lt = (left: IrExpr, right: IrExpr): IrExpr => ({
+    kind: "bin",
+    op: "<",
+    left,
+    right,
+    type: BOOL,
+    loc,
+  });
+  const eq = (left: IrExpr, right: IrExpr): IrExpr => ({
+    kind: "bin",
+    op: "===",
+    left,
+    right,
+    type: BOOL,
+    loc,
+  });
+  const not = (value: IrExpr): IrExpr => ({
+    kind: "unary",
+    op: "!",
+    operand: value,
+    type: BOOL,
+    loc,
+  });
   const at = (index: IrExpr): IrExpr => ({ kind: "arrayGet", arr: src, index, type: elem, loc });
-  const snapshotAt = (index: IrExpr): IrExpr => ({ kind: "arrayGet", arr: snapshot, index, type: elem, loc });
-  const stateAt = (index: IrExpr): IrExpr => ({ kind: "arrayState", arr: snapshot, index, type: F64, loc });
+  const snapshotAt = (index: IrExpr): IrExpr => ({
+    kind: "arrayGet",
+    arr: snapshot,
+    index,
+    type: elem,
+    loc,
+  });
+  const stateAt = (index: IrExpr): IrExpr => ({
+    kind: "arrayState",
+    arr: snapshot,
+    index,
+    type: F64,
+    loc,
+  });
   const stateIs = (value: number): IrExpr => eq(state, numLit(value, loc));
   const isUndefined = (value: IrExpr): IrExpr | null => {
     if (elem.kind === "union" && undefinedTag !== null) {
@@ -104,10 +157,7 @@ export function buildArraySortFn(
       return {
         kind: "jsOp",
         op: "eq",
-        args: [
-          value,
-          { kind: "jsOp", op: "undefLit", args: [], type: JSVAL, loc },
-        ],
+        args: [value, { kind: "jsOp", op: "undefLit", args: [], type: JSVAL, loc }],
         type: BOOL,
         loc,
       };
@@ -290,7 +340,14 @@ export function buildArraySortFn(
           {
             kind: "if",
             cond: stateIs(2),
-            then: [{ kind: "assign", localId: "undefinedCount.0", value: add(undefinedCount, numLit(1, loc)), loc }],
+            then: [
+              {
+                kind: "assign",
+                localId: "undefinedCount.0",
+                value: add(undefinedCount, numLit(1, loc)),
+                loc,
+              },
+            ],
             else_: null,
             loc,
           },
@@ -329,27 +386,44 @@ export function buildArraySortFn(
   };
   const body: IrStmt[] = [
     ...(copyFirst
-      ? [{
-          kind: "assign" as const,
-          localId: "a.0",
-          value: {
-            kind: "arrIntrinsic" as const,
-            method: "slice" as const,
-            receiver: varRef("a.0", arrT, loc),
-            args: [],
-            type: arrT,
+      ? [
+          {
+            kind: "assign" as const,
+            localId: "a.0",
+            value: {
+              kind: "arrIntrinsic" as const,
+              method: "slice" as const,
+              receiver: varRef("a.0", arrT, loc),
+              args: [],
+              type: arrT,
+              loc,
+            },
             loc,
           },
-          loc,
-        }]
+        ]
       : []),
     readArrayLength(arrT, loc),
-    { kind: "varDecl", localId: "snapshot.0", init: { kind: "arrIntrinsic", method: "slice", receiver: a, args: [], type: arrT, loc }, loc },
-    { kind: "varDecl", localId: "src.0", init: { kind: "arrayLit", elems: [], type: arrT, loc }, loc },
+    {
+      kind: "varDecl",
+      localId: "snapshot.0",
+      init: { kind: "arrIntrinsic", method: "slice", receiver: a, args: [], type: arrT, loc },
+      loc,
+    },
+    {
+      kind: "varDecl",
+      localId: "src.0",
+      init: { kind: "arrayLit", elems: [], type: arrT, loc },
+      loc,
+    },
     { kind: "varDecl", localId: "valueCount.0", init: numLit(0, loc), loc },
     { kind: "varDecl", localId: "undefinedCount.0", init: numLit(0, loc), loc },
     collect,
-    { kind: "varDecl", localId: "dst.0", init: { kind: "arrayLit", elems: [], type: arrT, loc }, loc },
+    {
+      kind: "varDecl",
+      localId: "dst.0",
+      init: { kind: "arrayLit", elems: [], type: arrT, loc },
+      loc,
+    },
     { kind: "varDecl", localId: "width.0", init: numLit(1, loc), loc },
     {
       kind: "while",
@@ -425,10 +499,38 @@ export function buildBytesSortFn(
   const left = varRef("left.0", F64, loc);
   const r = varRef("r.0", F64, loc);
   const k = varRef("k.0", F64, loc);
-  const add = (left: IrExpr, right: IrExpr): IrExpr => ({ kind: "bin", op: "+", left, right, type: F64, loc });
-  const sub = (left: IrExpr, right: IrExpr): IrExpr => ({ kind: "bin", op: "-", left, right, type: F64, loc });
-  const mul = (left: IrExpr, right: IrExpr): IrExpr => ({ kind: "bin", op: "*", left, right, type: F64, loc });
-  const lt = (left: IrExpr, right: IrExpr): IrExpr => ({ kind: "bin", op: "<", left, right, type: BOOL, loc });
+  const add = (left: IrExpr, right: IrExpr): IrExpr => ({
+    kind: "bin",
+    op: "+",
+    left,
+    right,
+    type: F64,
+    loc,
+  });
+  const sub = (left: IrExpr, right: IrExpr): IrExpr => ({
+    kind: "bin",
+    op: "-",
+    left,
+    right,
+    type: F64,
+    loc,
+  });
+  const mul = (left: IrExpr, right: IrExpr): IrExpr => ({
+    kind: "bin",
+    op: "*",
+    left,
+    right,
+    type: F64,
+    loc,
+  });
+  const lt = (left: IrExpr, right: IrExpr): IrExpr => ({
+    kind: "bin",
+    op: "<",
+    left,
+    right,
+    type: BOOL,
+    loc,
+  });
   const at = (receiver: IrExpr, index: IrExpr): IrExpr => ({
     kind: "bytesIntrinsic",
     method: "get",
@@ -615,7 +717,12 @@ export function buildBytesSortFn(
   });
   const body: IrStmt[] = [
     { kind: "assign", localId: "a.0", value: slice(a), loc },
-    { kind: "varDecl", localId: "n.0", init: { kind: "bytesIntrinsic", method: "length", receiver: a, args: [], type: F64, loc }, loc },
+    {
+      kind: "varDecl",
+      localId: "n.0",
+      init: { kind: "bytesIntrinsic", method: "length", receiver: a, args: [], type: F64, loc },
+      loc,
+    },
     { kind: "varDecl", localId: "src.0", init: slice(a), loc },
     { kind: "varDecl", localId: "dst.0", init: slice(a), loc },
     { kind: "varDecl", localId: "width.0", init: numLit(1, loc), loc },
@@ -635,10 +742,21 @@ export function buildBytesSortFn(
       kind: "for",
       init: { kind: "varDecl", localId: "i.0", init: numLit(0, loc), loc },
       cond: lt(varRef("i.0", F64, loc), n),
-      update: { kind: "assign", localId: "i.0", value: add(varRef("i.0", F64, loc), numLit(1, loc)), loc },
+      update: {
+        kind: "assign",
+        localId: "i.0",
+        value: add(varRef("i.0", F64, loc), numLit(1, loc)),
+        loc,
+      },
       body: [
         { kind: "varDecl", localId: "v.0", init: at(src, varRef("i.0", F64, loc)), loc },
-        { kind: "bytesSet", arr: a, index: varRef("i.0", F64, loc), value: varRef("v.0", F64, loc), loc },
+        {
+          kind: "bytesSet",
+          arr: a,
+          index: varRef("i.0", F64, loc),
+          value: varRef("v.0", F64, loc),
+          loc,
+        },
       ],
       loc,
     },

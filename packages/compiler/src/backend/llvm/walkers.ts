@@ -50,7 +50,9 @@ export class LlWalkers {
 
   constructor(private readonly host: WalkerHost) {}
 
-  private get S(): "i32" | "i64" { return this.host.sizeType; }
+  private get S(): "i32" | "i64" {
+    return this.host.sizeType;
+  }
   private abiOffset(native64: number, wasm32: number): number {
     return this.S === "i32" ? wasm32 : native64;
   }
@@ -69,7 +71,9 @@ export class LlWalkers {
 
   private puts(B: BlockBuilder, buf: string, text: string): void {
     this.host.declare(`declare void @scr_jb_puts(ptr, ptr)`);
-    B.line(`call void @scr_jb_puts(ptr ${buf}, ptr ${this.host.cstr(text)}) ; ${JSON.stringify(text)}`);
+    B.line(
+      `call void @scr_jb_puts(ptr ${buf}, ptr ${this.host.cstr(text)}) ; ${JSON.stringify(text)}`,
+    );
   }
 
   /** Appends an ScrStr's bytes: for (j < s->len) putc(s->data[j]). */
@@ -132,7 +136,9 @@ export class LlWalkers {
   private jbEnter(B: BlockBuilder, isArray: boolean): void {
     this.host.declare(`declare zeroext i1 @scr_jb_enter(ptr, ptr, i1)`);
     const ok = B.tmp();
-    B.line(`${ok} = call zeroext i1 @scr_jb_enter(ptr %b, ptr %v, i1 ${isArray ? "true" : "false"})`);
+    B.line(
+      `${ok} = call zeroext i1 @scr_jb_enter(ptr %b, ptr %v, i1 ${isArray ? "true" : "false"})`,
+    );
     const go = B.newLabel("jw.go");
     const circ = B.newLabel("jw.circ");
     B.condBr(ok, go, circ);
@@ -148,7 +154,9 @@ export class LlWalkers {
 
   private jbEdgeProp(B: BlockBuilder, name: string): void {
     this.host.declare(`declare void @scr_jb_edge_prop(ptr, ptr)`);
-    B.line(`call void @scr_jb_edge_prop(ptr %b, ptr ${this.host.cstr(name)}) ; ${JSON.stringify(name)}`);
+    B.line(
+      `call void @scr_jb_edge_prop(ptr %b, ptr ${this.host.cstr(name)}) ; ${JSON.stringify(name)}`,
+    );
   }
 
   private jbEdgeIdx(B: BlockBuilder, idx: string): void {
@@ -168,12 +176,16 @@ export class LlWalkers {
     switch (t.kind) {
       case "f64":
         this.host.declare(`declare void @scr_jb_put_f64(ptr, double)`);
-        B.line(`call void @scr_jb_put_f64(ptr %b, double %v) ; NaN/Infinity -> null, -0 -> 0, like JS`);
+        B.line(
+          `call void @scr_jb_put_f64(ptr %b, double %v) ; NaN/Infinity -> null, -0 -> 0, like JS`,
+        );
         break;
       case "bool": {
         const s = B.tmp();
         this.host.declare(`declare void @scr_jb_puts(ptr, ptr)`);
-        B.line(`${s} = select i1 %v, ptr ${this.host.cstr("true")}, ptr ${this.host.cstr("false")}`);
+        B.line(
+          `${s} = select i1 %v, ptr ${this.host.cstr("true")}, ptr ${this.host.cstr("false")}`,
+        );
         B.line(`call void @scr_jb_puts(ptr %b, ptr ${s})`);
         break;
       }
@@ -212,9 +224,17 @@ export class LlWalkers {
   }
 
   /** Loads a record field slot (i8-stored bools trunc to i1). */
-  private loadField(B: BlockBuilder, recName: string, shapeId: string, index: number, t: IrType): string {
+  private loadField(
+    B: BlockBuilder,
+    recName: string,
+    shapeId: string,
+    index: number,
+    t: IrType,
+  ): string {
     const p = B.tmp();
-    B.line(`${p} = getelementptr inbounds %${mangleRecordStruct(shapeId)}, ptr ${recName}, i64 0, i32 ${index}`);
+    B.line(
+      `${p} = getelementptr inbounds %${mangleRecordStruct(shapeId)}, ptr ${recName}, i64 0, i32 ${index}`,
+    );
     const fieldTy = llFieldType(t);
     const raw = B.tmp();
     B.line(`${raw} = load ${fieldTy}, ptr ${p}`);
@@ -226,7 +246,10 @@ export class LlWalkers {
 
   private emitRecordWriter(B: BlockBuilder, shapeId: string): void {
     const shape = this.host.recordsById.get(shapeId);
-    if (!shape) throw new InternalCompilerError(`llvm emitter bug: jsonStringify of unknown shape ${shapeId}`);
+    if (!shape)
+      throw new InternalCompilerError(
+        `llvm emitter bug: jsonStringify of unknown shape ${shapeId}`,
+      );
     const fieldIndex = new Map(shape.fields.map((f, i) => [f.name, i + 1]));
     // CYCLE-CAPABLE shapes bracket the walk with the circular-detection
     // stack; edge labels stamp before members whose walk can re-enter —
@@ -243,7 +266,9 @@ export class LlWalkers {
         if (i > 0) this.putc(B, "%b", "44"); // ','
         if (edgeable(f.type)) this.jbEdgeIdx(B, String(i));
         const v = this.loadField(B, "%v", shapeId, fieldIndex.get(f.name)!, f.type);
-        B.line(`call void @${this.jsonWriteHelper(f.type)}(ptr %b, ${this.valTy(f.type)} ${v}) ; [${llvmCommentText(f.name)}]`);
+        B.line(
+          `call void @${this.jsonWriteHelper(f.type)}(ptr %b, ${this.valTy(f.type)} ${v}) ; [${llvmCommentText(f.name)}]`,
+        );
       });
       this.putc(B, "%b", "93"); // ']'
       if (cyclic) this.jbLeave(B);
@@ -255,19 +280,24 @@ export class LlWalkers {
     const order = shape.declaredOrder ?? shape.fields.map((f) => f.name);
     const inOrder = new Set(order);
     if (shape.fields.some((f) => !inOrder.has(f.name) && !f.name.startsWith("%"))) {
-      throw new InternalCompilerError(`llvm emitter bug: declaredOrder of shape ${shapeId} omits a non-internal field`);
+      throw new InternalCompilerError(
+        `llvm emitter bug: declaredOrder of shape ${shapeId} omits a non-internal field`,
+      );
     }
     const byName = new Map(shape.fields.map((f) => [f.name, f]));
     const emitFields = order.map((n) => byName.get(n)).filter((f) => f !== undefined);
     const droppable =
-      emitFields.some((f) => undefinedArmTag(f.type, this.host.unionsById) >= 0) || !!shape.indexValue;
+      emitFields.some((f) => undefinedArmTag(f.type, this.host.unionsById) >= 0) ||
+      !!shape.indexValue;
     this.putc(B, "%b", "123"); // '{'
     if (!droppable) {
       emitFields.forEach((f, i) => {
         this.puts(B, "%b", `${i > 0 ? "," : ""}${jsonObjectKeyLabel(f.name)}`);
         if (edgeable(f.type)) this.jbEdgeProp(B, f.name);
         const v = this.loadField(B, "%v", shapeId, fieldIndex.get(f.name)!, f.type);
-        B.line(`call void @${this.jsonWriteHelper(f.type)}(ptr %b, ${this.valTy(f.type)} ${v}) ; ${llvmCommentText(f.name)}`);
+        B.line(
+          `call void @${this.jsonWriteHelper(f.type)}(ptr %b, ${this.valTy(f.type)} ${v}) ; ${llvmCommentText(f.name)}`,
+        );
       });
     } else {
       const first = B.slot();
@@ -302,7 +332,9 @@ export class LlWalkers {
         comma();
         this.puts(B, "%b", jsonObjectKeyLabel(f.name));
         if (edgeable(f.type)) this.jbEdgeProp(B, f.name);
-        B.line(`call void @${this.jsonWriteHelper(f.type)}(ptr %b, ${this.valTy(f.type)} ${v}) ; ${llvmCommentText(f.name)}`);
+        B.line(
+          `call void @${this.jsonWriteHelper(f.type)}(ptr %b, ${this.valTy(f.type)} ${v}) ; ${llvmCommentText(f.name)}`,
+        );
         if (skip !== null) {
           B.br(skip);
           B.startBlock(skip);
@@ -317,12 +349,19 @@ export class LlWalkers {
   /** Overflow entries follow the declared fields, in JS OWN-KEY order
    * (scr_map_keys_js_order); keys escape like any JSON string;
    * undefined-valued entries drop (the optional-field rule). */
-  private emitOverflowEntries(B: BlockBuilder, shape: IrRecordShape, first: string, edgeKeys = false): void {
+  private emitOverflowEntries(
+    B: BlockBuilder,
+    shape: IrRecordShape,
+    first: string,
+    edgeKeys = false,
+  ): void {
     const iv = shape.indexValue!;
     const host = this.host;
     const ovfp = B.tmp();
     const ovf = B.tmp();
-    B.line(`${ovfp} = getelementptr inbounds %${mangleRecordStruct(shape.id)}, ptr %v, i64 0, i32 ${shape.fields.length + 1}`);
+    B.line(
+      `${ovfp} = getelementptr inbounds %${mangleRecordStruct(shape.id)}, ptr %v, i64 0, i32 ${shape.fields.length + 1}`,
+    );
     B.line(`${ovf} = load ptr, ptr ${ovfp} ; overflow map`);
     host.declare(`declare ptr @scr_map_keys_js_order(ptr)`);
     host.declare(`declare double @scr_arr_len(ptr)`);
@@ -342,9 +381,13 @@ export class LlWalkers {
         const outSlot = B.slot();
         B.entryAllocas.push(`${outSlot} = alloca ${outTy}`);
         B.line(`store ${outTy} ${iv.kind === "f64" ? f64Lit(0) : "0"}, ptr ${outSlot}`);
-        host.declare(`declare zeroext i1 @scr_map_get_str_${iv.kind === "f64" ? "f64" : "bool"}(ptr, ptr, ptr)`);
+        host.declare(
+          `declare zeroext i1 @scr_map_get_str_${iv.kind === "f64" ? "f64" : "bool"}(ptr, ptr, ptr)`,
+        );
         const found = B.tmp();
-        B.line(`${found} = call zeroext i1 @scr_map_get_str_${iv.kind === "f64" ? "f64" : "bool"}(ptr ${ovf}, ptr ${k}, ptr ${outSlot})`);
+        B.line(
+          `${found} = call zeroext i1 @scr_map_get_str_${iv.kind === "f64" ? "f64" : "bool"}(ptr ${ovf}, ptr ${k}, ptr ${outSlot})`,
+        );
         const raw = B.tmp();
         B.line(`${raw} = load ${outTy}, ptr ${outSlot}`);
         if (iv.kind === "bool") {
@@ -367,9 +410,13 @@ export class LlWalkers {
         const kp = B.tmp();
         const kd = B.tmp();
         const isu = B.tmp();
-        B.line(`${kp} = getelementptr inbounds i8, ptr ${val}, i64 ${this.abiOffset(8, 4)} ; ->kind`);
+        B.line(
+          `${kp} = getelementptr inbounds i8, ptr ${val}, i64 ${this.abiOffset(8, 4)} ; ->kind`,
+        );
         B.line(`${kd} = load i32, ptr ${kp}`);
-        B.line(`${isu} = icmp eq i32 ${kd}, 6 ; SCR_DYN_UNDEF (NULL is 0 — null members DO serialize)`);
+        B.line(
+          `${isu} = icmp eq i32 ${kd}, 6 ; SCR_DYN_UNDEF (NULL is 0 — null members DO serialize)`,
+        );
         skipUndef = isu;
       } else if (undefinedArmTag(iv, this.host.unionsById) >= 0) {
         const tag = this.unionTag(B, val);
@@ -457,7 +504,9 @@ export class LlWalkers {
       if (elem.kind === "f64" || elem.kind === "bool") {
         const acc = elem.kind;
         const accTy = elem.kind === "f64" ? "double" : "i1";
-        host.declare(`declare ${elem.kind === "bool" ? "zeroext i1" : accTy} @scr_arr_get_${acc}(ptr, double)`);
+        host.declare(
+          `declare ${elem.kind === "bool" ? "zeroext i1" : accTy} @scr_arr_get_${acc}(ptr, double)`,
+        );
         const v = B.tmp();
         B.line(`${v} = call ${accTy} @scr_arr_get_${acc}(ptr %v, double ${i})`);
         B.line(`call void @${w}(ptr %b, ${accTy} ${v})`);
@@ -478,7 +527,10 @@ export class LlWalkers {
 
   private emitUnionWriter(B: BlockBuilder, unionId: string): void {
     const def = this.host.unionsById.get(unionId);
-    if (!def) throw new InternalCompilerError(`llvm emitter bug: jsonStringify of unknown union ${unionId}`);
+    if (!def)
+      throw new InternalCompilerError(
+        `llvm emitter bug: jsonStringify of unknown union ${unionId}`,
+      );
     const tag = this.unionTag(B, "%v");
     const bad = B.newLabel("jwu.bad");
     const done = B.newLabel("jwu.d");
@@ -577,7 +629,11 @@ export class LlWalkers {
     const depth = "%depth";
     const instr = "%instr";
     const iSlot = "%i";
-    B.entryAllocas.push(`${depth} = alloca ${this.S}`, `${instr} = alloca i1`, `${iSlot} = alloca ${this.S}`);
+    B.entryAllocas.push(
+      `${depth} = alloca ${this.S}`,
+      `${instr} = alloca i1`,
+      `${iSlot} = alloca ${this.S}`,
+    );
     B.line(`call void @scr_jb_init(ptr ${buf})`);
     B.line(`store ${this.S} 0, ptr ${depth}`);
     B.line(`store i1 false, ptr ${instr}`);
@@ -587,7 +643,9 @@ export class LlWalkers {
     const data = B.tmp();
     B.line(`${np} = getelementptr inbounds %ScrStr, ptr %compact, i64 0, i32 1`);
     B.line(`${n} = load ${this.S}, ptr ${np}`);
-    B.line(`${data} = getelementptr inbounds i8, ptr %compact, i64 ${this.abiOffset(24, 12)} ; ->data`);
+    B.line(
+      `${data} = getelementptr inbounds i8, ptr %compact, i64 ${this.abiOffset(24, 12)} ; ->data`,
+    );
 
     const loop = B.newLabel("ji.c");
     const body = B.newLabel("ji.b");
@@ -757,7 +815,8 @@ export class LlWalkers {
     const existing = this.unionToStrFns.get(unionId);
     if (existing) return existing;
     const def = this.host.unionsById.get(unionId);
-    if (!def) throw new InternalCompilerError(`llvm emitter bug: ToString of unknown union ${unionId}`);
+    if (!def)
+      throw new InternalCompilerError(`llvm emitter bug: ToString of unknown union ${unionId}`);
     const name = `sc_us_${this.unionToStrFns.size}`;
     this.unionToStrFns.set(unionId, name);
     const host = this.host;
@@ -836,7 +895,9 @@ export class LlWalkers {
     const name = `sc_uj_${this.unionJoinFns.size}`;
     this.unionJoinFns.set(unionId, name);
     const toStr = this.unionToStrHelper(unionId);
-    const unitTags = def.arms.flatMap((a, i) => (a.kind === "undefinedT" || a.kind === "nullT" ? [i] : []));
+    const unitTags = def.arms.flatMap((a, i) =>
+      a.kind === "undefinedT" || a.kind === "nullT" ? [i] : [],
+    );
     const host = this.host;
     host.declare(`declare void @scr_jb_init(ptr)`);
     host.declare(`declare ptr @scr_jb_finish(ptr)`);

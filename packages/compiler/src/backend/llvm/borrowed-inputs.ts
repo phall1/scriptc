@@ -15,7 +15,11 @@ export function emitBorrowedInput(host: LlvmEmitterContext, value: IrExpr): LlVa
  * once, keeping left-to-right evaluation and the owning fallback for each
  * argument independently. The consumer must borrow all inputs and preserve
  * reference edges itself; mutating runtime operations use emitBorrowedInput. */
-export function borrowableInputs(host: LlvmEmitterContext, inputs: readonly IrExpr[], consumerPreserves = true): boolean[] {
+export function borrowableInputs(
+  host: LlvmEmitterContext,
+  inputs: readonly IrExpr[],
+  consumerPreserves = true,
+): boolean[] {
   const result: boolean[] = new Array(inputs.length);
   let preserves = consumerPreserves;
   for (let i = inputs.length - 1; i >= 0; i--) {
@@ -28,5 +32,7 @@ export function borrowableInputs(host: LlvmEmitterContext, inputs: readonly IrEx
 
 export function emitBorrowedInputs(host: LlvmEmitterContext, inputs: readonly IrExpr[]): LlValue[] {
   const borrowed = borrowableInputs(host, inputs);
-  return inputs.map((value, index) => borrowed[index] ? host.emitReadReceiver(value) : host.emitExpr(value));
+  return inputs.map((value, index) =>
+    borrowed[index] ? host.emitReadReceiver(value) : host.emitExpr(value),
+  );
 }

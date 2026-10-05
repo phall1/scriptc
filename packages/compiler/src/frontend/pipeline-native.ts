@@ -15,18 +15,33 @@ export function runNativeFrontend(
   evaluateComptime?: ComptimeEvaluator,
   libraryNpmStatic: readonly string[] = [],
 ): Frontend {
-  const services = new FrontendServices((options) => createNativeTs7Api({ ...options, executable }), process.cwd(), evaluateComptime,
-    undefined, (path, source, format) => emitRuntimeTypeScript(executable, path, source, format));
+  const services = new FrontendServices(
+    (options) => createNativeTs7Api({ ...options, executable }),
+    process.cwd(),
+    evaluateComptime,
+    undefined,
+    (path, source, format) => emitRuntimeTypeScript(executable, path, source, format),
+  );
   try {
-    const frontend = runFrontend(entryPath, (path, options) => loadProgram(path, services, {
-      npmStatic: options.npmStatic ?? [],
-      externalTypes: Object.entries(options.externalTypes ?? {}),
-    }), npmStatic, externalTypes, libraryNpmStatic);
+    const frontend = runFrontend(
+      entryPath,
+      (path, options) =>
+        loadProgram(path, services, {
+          npmStatic: options.npmStatic ?? [],
+          externalTypes: Object.entries(options.externalTypes ?? {}),
+        }),
+      npmStatic,
+      externalTypes,
+      libraryNpmStatic,
+    );
     return {
       ...frontend,
       dispose: () => {
-        try { frontend.dispose(); }
-        finally { services.close(); }
+        try {
+          frontend.dispose();
+        } finally {
+          services.close();
+        }
       },
     };
   } catch (error) {

@@ -30,18 +30,28 @@ export function normalizedEmbeddingLlvm(text: string, mod: IrModule): string {
     const match = declaration.exec(normalized);
     if (!match) throw new Error(`missing embedded declaration ${name}`);
     const encoded = literalBytes(match[2]!);
-    if (Number(match[1]) !== encoded.length + 1) throw new Error(`incorrect array length for ${name}`);
+    if (Number(match[1]) !== encoded.length + 1)
+      throw new Error(`incorrect array length for ${name}`);
     const metadata = new RegExp(`ptr @${name}, (i32|i64) (\\d+), (i32|i64) (\\d+)`);
     const lengths = metadata.exec(normalized);
     if (!lengths) throw new Error(`missing length metadata for ${name}`);
     if (lengths[1] !== lengths[3]) throw new Error(`inconsistent length types for ${name}`);
-    if (Number(lengths[2]) !== encoded.length) throw new Error(`incorrect encoded length for ${name}`);
+    if (Number(lengths[2]) !== encoded.length)
+      throw new Error(`incorrect encoded length for ${name}`);
     const rawLength = Number(lengths[4]);
     const decoded = rawLength === 0 ? encoded : inflateRawSync(encoded);
-    if (!decoded.equals(Buffer.from(source, "utf8"))) throw new Error(`embedded source differs for ${name}`);
-    if (rawLength !== 0 && rawLength !== decoded.length) throw new Error(`incorrect raw length for ${name}`);
-    normalized = normalized.replace(declaration, `@${name} = internal constant [decoded] c"${decoded.toString("base64")}"`);
-    normalized = normalized.replace(metadata, `ptr @${name}, ${lengths[1]} encoded, ${lengths[3]} ${rawLength}`);
+    if (!decoded.equals(Buffer.from(source, "utf8")))
+      throw new Error(`embedded source differs for ${name}`);
+    if (rawLength !== 0 && rawLength !== decoded.length)
+      throw new Error(`incorrect raw length for ${name}`);
+    normalized = normalized.replace(
+      declaration,
+      `@${name} = internal constant [decoded] c"${decoded.toString("base64")}"`,
+    );
+    normalized = normalized.replace(
+      metadata,
+      `ptr @${name}, ${lengths[1]} encoded, ${lengths[3]} ${rawLength}`,
+    );
   };
   for (const [index, module] of (mod.embedded?.modules ?? []).entries()) {
     check(`sc_npm_src_${index}`, module.source);

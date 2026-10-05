@@ -8,12 +8,14 @@ export function compilationTiming(): CompilationTiming {
   let previous = start;
   return (phase, detail = {}) => {
     const now = performance.now();
-    process.stderr.write(`scriptc timing ${JSON.stringify({
-      phase,
-      phase_ms: Math.round((now - previous) * 10) / 10,
-      total_ms: Math.round((now - start) * 10) / 10,
-      ...detail,
-    })}\n`);
+    process.stderr.write(
+      `scriptc timing ${JSON.stringify({
+        phase,
+        phase_ms: Math.round((now - previous) * 10) / 10,
+        total_ms: Math.round((now - start) * 10) / 10,
+        ...detail,
+      })}\n`,
+    );
     previous = now;
   };
 }

@@ -86,7 +86,10 @@ interface Blocker {
   count: number;
 }
 
-export function renderCoverage(input: CoverageInput, opts: { color?: boolean; sourceTexts?: Map<string, string> } = {}): string {
+export function renderCoverage(
+  input: CoverageInput,
+  opts: { color?: boolean; sourceTexts?: Map<string, string> } = {},
+): string {
   const c = (code: string, s: string) => (opts.color ? code + s + RESET : s);
   const out: string[] = [];
   out.push(`${c(BOLD, "scriptc coverage")} ${DIMPath(input.file, opts.color ?? false)}`);
@@ -133,7 +136,9 @@ export function renderCoverage(input: CoverageInput, opts: { color?: boolean; so
     }
     if (opts.sourceTexts) {
       out.push("");
-      out.push(renderDiagnostics(input.diagnostics, opts.sourceTexts, { color: opts.color ?? false }));
+      out.push(
+        renderDiagnostics(input.diagnostics, opts.sourceTexts, { color: opts.color ?? false }),
+      );
     }
     return out.join("\n");
   }
@@ -178,7 +183,8 @@ export function renderCoverage(input: CoverageInput, opts: { color?: boolean; so
       const status =
         s.status === "static"
           ? c(GREEN, "static")
-          : c(YELLOW, "island fallback") + (s.detail !== undefined ? ` ${c(DIM, `(${s.detail})`)}` : "");
+          : c(YELLOW, "island fallback") +
+            (s.detail !== undefined ? ` ${c(DIM, `(${s.detail})`)}` : "");
       out.push(`    ${s.package.padEnd(widestP)}  ${status}`);
     }
     out.push("");
@@ -190,21 +196,19 @@ export function renderCoverage(input: CoverageInput, opts: { color?: boolean; so
   // surface as SC2030 blockers below; "lazy trap" rows DON'T fail the
   // build — the binary embeds Node's call-time error and the call throws
   // at runtime, exactly where Node would have failed.
-  const builtins = input.dynamic ? input.npmBuiltins ?? [] : [];
-  const traps = input.dynamic ? input.npmLazyTraps ?? [] : [];
+  const builtins = input.dynamic ? (input.npmBuiltins ?? []) : [];
+  const traps = input.dynamic ? (input.npmLazyTraps ?? []) : [];
   if (builtins.length > 0 || traps.length > 0) {
     out.push(
       `  ${c(DIM, traps.length > 0 ? "embedded npm code imports Node builtins and unresolved specifiers:" : "embedded npm code imports Node builtins:")}`,
     );
-    const widestB = Math.max(...[
-      ...builtins.map((b) => b.builtin.length),
-      ...traps.map((t) => t.specifier.length),
-    ]);
+    const widestB = Math.max(
+      ...[...builtins.map((b) => b.builtin.length), ...traps.map((t) => t.specifier.length)],
+    );
     // Pad the plain words before coloring — escape codes have no width.
-    const widestS = Math.max(...[
-      ...builtins.map((b) => (b.shimmed ? 7 : b.lazy ? 23 : 11)),
-      ...traps.map(() => 24),
-    ]);
+    const widestS = Math.max(
+      ...[...builtins.map((b) => (b.shimmed ? 7 : b.lazy ? 23 : 11)), ...traps.map(() => 24)],
+    );
     for (const b of builtins) {
       const status = b.shimmed
         ? c(GREEN, "shimmed".padEnd(widestS))
@@ -241,29 +245,39 @@ export function renderCoverage(input: CoverageInput, opts: { color?: boolean; so
   // the provenance story is complete in one place.
   if (input.provenance !== undefined) {
     const prov = input.provenance;
-    out.push(`  ${c(BOLD, "provenance sources")}   ${c(DIM, "(attested source compiled as program modules)")}`);
+    out.push(
+      `  ${c(BOLD, "provenance sources")}   ${c(DIM, "(attested source compiled as program modules)")}`,
+    );
     for (const pkg of prov.packages) {
       let pTotal = 0;
       let pFailed = 0;
       let pIsland = 0;
       const dir = pkg.dir.endsWith("/") ? pkg.dir : `${pkg.dir}/`;
-      for (const [file, s] of input.statsByFile ?? new Map<string, { total: number; failed: number; island: number }>()) {
+      for (const [file, s] of input.statsByFile ??
+        new Map<string, { total: number; failed: number; island: number }>()) {
         if (!file.startsWith(dir)) continue;
         pTotal += s.total;
         pFailed += s.failed;
         pIsland += s.island;
       }
-      const elided = (input.provenanceElided ?? []).filter((d) => d.loc.file.startsWith(dir)).length;
+      const elided = (input.provenanceElided ?? []).filter((d) =>
+        d.loc.file.startsWith(dir),
+      ).length;
       const pOk = pTotal - pFailed - pIsland;
       const pPct = pTotal === 0 ? 100 : Math.floor((pOk / pTotal) * 100);
       const pColor = pPct === 100 ? GREEN : pPct >= 75 ? YELLOW : RED;
-      const shortRepo = pkg.repo.replace(/^git\+/, "").replace(/^https:\/\//, "").replace(/@refs\/.*$/, "");
+      const shortRepo = pkg.repo
+        .replace(/^git\+/, "")
+        .replace(/^https:\/\//, "")
+        .replace(/@refs\/.*$/, "");
       out.push(
         `    ${pkg.name}@${pkg.version}  ${c(DIM, `${shortRepo} @ ${pkg.commit.slice(0, 12)}`)}`,
       );
       out.push(
         `      ${pTotal} statements: ${pOk} static ${c(pColor, c(BOLD, `(${pPct}%)`))}, ${pIsland} island, ${pFailed} fenced` +
-          (elided > 0 ? ` ${c(DIM, `(${elided} fence${elided === 1 ? "" : "s"} elided as @__PURE__ dead consts — uses would fence per site)`)}` : ""),
+          (elided > 0
+            ? ` ${c(DIM, `(${elided} fence${elided === 1 ? "" : "s"} elided as @__PURE__ dead consts — uses would fence per site)`)}`
+            : ""),
       );
     }
     for (const note of prov.notes) out.push(`    ${c(YELLOW, "note")}  ${note}`);
@@ -333,7 +347,9 @@ export function renderCoverage(input: CoverageInput, opts: { color?: boolean; so
   // a build, so they cannot fail one — secondary by design.
   if (unreachedBlockers.length > 0) {
     if (rejected.length > 0) out.push("");
-    out.push(`  ${c(DIM, "in unreached code")}   ${c(DIM, "(never lowered — cannot fail a build)")}`);
+    out.push(
+      `  ${c(DIM, "in unreached code")}   ${c(DIM, "(never lowered — cannot fail a build)")}`,
+    );
     renderGroup(unreachedBlockers, true);
   }
   return out.join("\n");
@@ -356,8 +372,6 @@ function groupBlockers(diags: ScrDiagnostic[]): Blocker[] {
     m === undefined ? MILESTONE_ORDER.length : MILESTONE_ORDER.indexOf(m);
   return [...byCode.values()].sort(
     (a, b) =>
-      rank(a.milestone) - rank(b.milestone) ||
-      b.count - a.count ||
-      a.code.localeCompare(b.code),
+      rank(a.milestone) - rank(b.milestone) || b.count - a.count || a.code.localeCompare(b.code),
   );
 }

@@ -50,7 +50,11 @@ interface JSON {
   parse(text: string): unknown;
   parse(text: string, reviver: (this: unknown, key: string, value: unknown) => unknown): unknown;
   stringify(value: unknown): string;
-  stringify(value: unknown, replacer: (this: unknown, key: string, value: unknown) => unknown, space?: string | number): string | undefined;
+  stringify(
+    value: unknown,
+    replacer: (this: unknown, key: string, value: unknown) => unknown,
+    space?: string | number,
+  ): string | undefined;
 }
 
 /* The supported Promise construction shape: an executor whose resolve takes

@@ -61,10 +61,13 @@ const BASE: NativeLinkFeatures = {
 async function fixture(target: NativeTargetSpec = MACOS_ARM64_TARGET) {
   const root = await mkdtemp(join(tmpdir(), "scriptc-runtime-pack-unit-"));
   const packagePath = join(root, "package.json");
-  await writeFile(packagePath, JSON.stringify({
-    name: target.runtimePackPackage,
-    version: VERSION,
-  }));
+  await writeFile(
+    packagePath,
+    JSON.stringify({
+      name: target.runtimePackPackage,
+      version: VERSION,
+    }),
+  );
   const artifact = async (path: string, bytes: string) => {
     const output = join(root, path);
     await mkdir(dirname(output), { recursive: true });
@@ -81,15 +84,22 @@ async function fixture(target: NativeTargetSpec = MACOS_ARM64_TARGET) {
   const regex = await artifact("artifacts/regex.a", "regex");
   const quickjs = await artifact("artifacts/qjs.a", "qjs");
   await writeFile(join(root, "license.txt"), "license");
-  const units = [{
-    source: "scr_bytes.c",
-    predicate: true,
-    variants: [
-      { id: "default", when: {}, defines: [], ...base },
-      { id: "legacy", when: { textDecoderLegacy: true }, defines: ["SCR_TEXT_DECODER_LEGACY"], ...legacy },
-      { id: "dynamic", when: { dynamic: true }, defines: ["SCR_DYNAMIC"], ...dynamic },
-    ],
-  }];
+  const units = [
+    {
+      source: "scr_bytes.c",
+      predicate: true,
+      variants: [
+        { id: "default", when: {}, defines: [], ...base },
+        {
+          id: "legacy",
+          when: { textDecoderLegacy: true },
+          defines: ["SCR_TEXT_DECODER_LEGACY"],
+          ...legacy,
+        },
+        { id: "dynamic", when: { dynamic: true }, defines: ["SCR_DYNAMIC"], ...dynamic },
+      ],
+    },
+  ];
   const manifest: RuntimePackManifest = {
     schema: "scriptc.runtime-pack.v1",
     format: 1,
@@ -145,12 +155,15 @@ describe("runtime pack manifests", () => {
     await Promise.all([
       writeFile(selectedOne, "one"),
       writeFile(selectedTwo, "two"),
-      writeFile(linker, [
-        "#!/bin/sh",
-        'test "$1" = "-print-prog-name=clang" || exit 2',
-        'printf "%s\\n" "$SCRIPTC_TEST_SELECTED_CLANG"',
-        "",
-      ].join("\n")),
+      writeFile(
+        linker,
+        [
+          "#!/bin/sh",
+          'test "$1" = "-print-prog-name=clang" || exit 2',
+          'printf "%s\\n" "$SCRIPTC_TEST_SELECTED_CLANG"',
+          "",
+        ].join("\n"),
+      ),
     ]);
     await chmod(linker, 0o755);
 
@@ -239,12 +252,14 @@ describe("runtime pack manifests", () => {
     const { packagePath, manifest, root } = await fixture();
     expect(() => parseRuntimePackManifest({ ...manifest, format: 2 })).toThrow("malformed");
     await writeFile(join(root, "artifacts/base.o"), "damaged");
-    await expect(loadRuntimePack({
-      target: MACOS_ARM64_TARGET,
-      features: BASE,
-      optimization: "release",
-      resolver: () => packagePath,
-    })).rejects.toThrow("hash mismatch");
+    await expect(
+      loadRuntimePack({
+        target: MACOS_ARM64_TARGET,
+        features: BASE,
+        optimization: "release",
+        resolver: () => packagePath,
+      }),
+    ).rejects.toThrow("hash mismatch");
     expect(await readFile(packagePath, "utf8")).toContain("runtime-darwin-arm64");
   });
 
@@ -255,13 +270,16 @@ describe("runtime pack manifests", () => {
     const linker = join(root, "linker.mjs");
     await Promise.all([
       writeFile(programObject, "program object"),
-      writeFile(linker, [
-        "#!/usr/bin/env node",
-        'import { writeFileSync } from "node:fs";',
-        'const outputIndex = process.argv.indexOf("-o");',
-        'writeFileSync(process.argv[outputIndex + 1], "linked executable");',
-        "",
-      ].join("\n")),
+      writeFile(
+        linker,
+        [
+          "#!/usr/bin/env node",
+          'import { writeFileSync } from "node:fs";',
+          'const outputIndex = process.argv.indexOf("-o");',
+          'writeFileSync(process.argv[outputIndex + 1], "linked executable");',
+          "",
+        ].join("\n"),
+      ),
     ]);
     await chmod(linker, 0o755);
     const plan = await createNativeLinkPlan({
@@ -276,7 +294,12 @@ describe("runtime pack manifests", () => {
     await writeFile(join(root, "artifacts/base.o"), "tampered");
 
     await expect(linkNativeExecutable(plan, { linker })).rejects.toBeInstanceOf(RuntimePackError);
-    expect(await stat(output).then(() => true, () => false)).toBe(false);
+    expect(
+      await stat(output).then(
+        () => true,
+        () => false,
+      ),
+    ).toBe(false);
   });
 
   test("links a private verified copy when the installed artifact changes during linking", async () => {
@@ -287,17 +310,20 @@ describe("runtime pack manifests", () => {
     const linker = join(root, "linker.mjs");
     await Promise.all([
       writeFile(programObject, "program object"),
-      writeFile(linker, [
-        "#!/usr/bin/env node",
-        'import { readFileSync, writeFileSync } from "node:fs";',
-        `const installed = ${JSON.stringify(runtimeObject)};`,
-        'const outputIndex = process.argv.indexOf("-o");',
-        'const staged = process.argv.find((arg) => arg.endsWith("/artifacts/base.o"));',
-        'if (staged === undefined || staged === installed) process.exit(2);',
-        'writeFileSync(installed, "tampered");',
-        'writeFileSync(process.argv[outputIndex + 1], readFileSync(staged));',
-        "",
-      ].join("\n")),
+      writeFile(
+        linker,
+        [
+          "#!/usr/bin/env node",
+          'import { readFileSync, writeFileSync } from "node:fs";',
+          `const installed = ${JSON.stringify(runtimeObject)};`,
+          'const outputIndex = process.argv.indexOf("-o");',
+          'const staged = process.argv.find((arg) => arg.endsWith("/artifacts/base.o"));',
+          "if (staged === undefined || staged === installed) process.exit(2);",
+          'writeFileSync(installed, "tampered");',
+          "writeFileSync(process.argv[outputIndex + 1], readFileSync(staged));",
+          "",
+        ].join("\n"),
+      ),
     ]);
     await chmod(linker, 0o755);
     const plan = await createNativeLinkPlan({
@@ -323,14 +349,17 @@ describe("runtime pack manifests", () => {
     const linker = join(root, "linker.mjs");
     await Promise.all([
       writeFile(programObject, "program object"),
-      writeFile(linker, [
-        "#!/usr/bin/env node",
-        'import { writeFileSync } from "node:fs";',
-        'const outputIndex = process.argv.indexOf("-o");',
-        'const output = process.argv[outputIndex + 1];',
-        'writeFileSync(output, JSON.stringify(output));',
-        "",
-      ].join("\n")),
+      writeFile(
+        linker,
+        [
+          "#!/usr/bin/env node",
+          'import { writeFileSync } from "node:fs";',
+          'const outputIndex = process.argv.indexOf("-o");',
+          "const output = process.argv[outputIndex + 1];",
+          "writeFileSync(output, JSON.stringify(output));",
+          "",
+        ].join("\n"),
+      ),
     ]);
     await chmod(linker, 0o755);
     const plan = await createNativeLinkPlan({
@@ -360,13 +389,16 @@ describe("runtime pack manifests", () => {
     await Promise.all([
       writeFile(programObject, "program object"),
       writeFile(helper, "helper before emission"),
-      writeFile(linker, [
-        "#!/usr/bin/env node",
-        'import { writeFileSync } from "node:fs";',
-        'const outputIndex = process.argv.indexOf("-o");',
-        'writeFileSync(process.argv[outputIndex + 1], "linked executable");',
-        "",
-      ].join("\n")),
+      writeFile(
+        linker,
+        [
+          "#!/usr/bin/env node",
+          'import { writeFileSync } from "node:fs";',
+          'const outputIndex = process.argv.indexOf("-o");',
+          'writeFileSync(process.argv[outputIndex + 1], "linked executable");',
+          "",
+        ].join("\n"),
+      ),
     ]);
     await chmod(linker, 0o755);
     const helperDependencies = await snapshotNativeArtifactDependencies([helper]);
@@ -385,35 +417,37 @@ describe("runtime pack manifests", () => {
 
     await linkNativeExecutable(plan, {
       linker,
-      onArtifactReady: async () => { published = true; },
+      onArtifactReady: async () => {
+        published = true;
+      },
     });
 
     expect(await readFile(output, "utf8")).toBe("linked executable");
     expect(published).toBe(false);
   });
 
-  test(
-    "cache proofs follow the selected driver to its linker, SDK, and compiler runtime",
-    async () => {
-      const { root, packagePath } = await fixture();
-      const programObject = join(root, "program.o");
-      const output = join(root, "program");
-      const driver = join(root, "clang.mjs");
-      const platformLinker = join(root, "toolchain", "ld");
-      const sdkSettings = join(root, "driver-sdk", "SDKSettings.json");
-      const systemStub = join(root, "driver-sdk", "usr", "lib", "libSystem.tbd");
-      const compilerRuntime = join(root, "toolchain", "libclang_rt.osx.a");
-      await Promise.all([
-        mkdir(dirname(platformLinker), { recursive: true }),
-        mkdir(dirname(systemStub), { recursive: true }),
-        writeFile(programObject, "program object"),
-      ]);
-      await Promise.all([
-        writeFile(platformLinker, "selected platform linker"),
-        writeFile(sdkSettings, "selected SDK settings"),
-        writeFile(systemStub, "selected System stub"),
-        writeFile(compilerRuntime, "selected compiler runtime"),
-        writeFile(driver, [
+  test("cache proofs follow the selected driver to its linker, SDK, and compiler runtime", async () => {
+    const { root, packagePath } = await fixture();
+    const programObject = join(root, "program.o");
+    const output = join(root, "program");
+    const driver = join(root, "clang.mjs");
+    const platformLinker = join(root, "toolchain", "ld");
+    const sdkSettings = join(root, "driver-sdk", "SDKSettings.json");
+    const systemStub = join(root, "driver-sdk", "usr", "lib", "libSystem.tbd");
+    const compilerRuntime = join(root, "toolchain", "libclang_rt.osx.a");
+    await Promise.all([
+      mkdir(dirname(platformLinker), { recursive: true }),
+      mkdir(dirname(systemStub), { recursive: true }),
+      writeFile(programObject, "program object"),
+    ]);
+    await Promise.all([
+      writeFile(platformLinker, "selected platform linker"),
+      writeFile(sdkSettings, "selected SDK settings"),
+      writeFile(systemStub, "selected System stub"),
+      writeFile(compilerRuntime, "selected compiler runtime"),
+      writeFile(
+        driver,
+        [
           "#!/usr/bin/env node",
           'import { writeFileSync } from "node:fs";',
           `const dependencies = ${JSON.stringify([
@@ -422,7 +456,7 @@ describe("runtime pack manifests", () => {
             systemStub,
             compilerRuntime,
           ])};`,
-          'const args = process.argv.slice(2);',
+          "const args = process.argv.slice(2);",
           'const outputIndex = args.indexOf("-o");',
           'if (args.includes("-print-prog-name=ld")) {',
           `  process.stdout.write(${JSON.stringify(`${platformLinker}\n`)});`,
@@ -439,71 +473,68 @@ describe("runtime pack manifests", () => {
           "}",
           'writeFileSync(args[outputIndex + 1], args.includes("-c") ? "probe object" : "linked executable");',
           "",
-        ].join("\n")),
-      ]);
-      await chmod(driver, 0o755);
-      const plan = await createNativeLinkPlan({
-        target: MACOS_ARM64_TARGET,
-        programObject,
-        outPath: output,
-        features: BASE,
-        ffi: null,
-        optimization: "release",
-        resolver: () => packagePath,
-      });
-      let dependencyPaths: string[] = [];
+        ].join("\n"),
+      ),
+    ]);
+    await chmod(driver, 0o755);
+    const plan = await createNativeLinkPlan({
+      target: MACOS_ARM64_TARGET,
+      programObject,
+      outPath: output,
+      features: BASE,
+      ffi: null,
+      optimization: "release",
+      resolver: () => packagePath,
+    });
+    let dependencyPaths: string[] = [];
 
-      await linkNativeExecutable(plan, {
-        linker: driver,
-        onArtifactReady: async ({ dependencies }) => {
-          dependencyPaths = dependencies.map((dependency) => dependency.path);
-        },
-      });
+    await linkNativeExecutable(plan, {
+      linker: driver,
+      onArtifactReady: async ({ dependencies }) => {
+        dependencyPaths = dependencies.map((dependency) => dependency.path);
+      },
+    });
 
-      expect(await readFile(output, "utf8")).toBe("linked executable");
-      expect(dependencyPaths).toEqual(expect.arrayContaining([
-        platformLinker,
-        sdkSettings,
-        systemStub,
-        compilerRuntime,
-      ]));
-    },
-  );
+    expect(await readFile(output, "utf8")).toBe("linked executable");
+    expect(dependencyPaths).toEqual(
+      expect.arrayContaining([platformLinker, sdkSettings, systemStub, compilerRuntime]),
+    );
+  });
 
-  test(
-    "does not publish an executable cache proof when a dependency changes during linking",
-    async () => {
-      const { root, packagePath } = await fixture();
-      const programObject = join(root, "program.o");
-      const dependency = join(root, "link-dependency.a");
-      const output = join(root, "program");
-      const linker = join(root, "linker.mjs");
-      const platformLinker = join(root, "ld");
-      await Promise.all([
-        writeFile(programObject, "program object"),
-        writeFile(dependency, "before link"),
-        writeFile(platformLinker, "selected platform linker"),
-        writeFile(linker, [
+  test("does not publish an executable cache proof when a dependency changes during linking", async () => {
+    const { root, packagePath } = await fixture();
+    const programObject = join(root, "program.o");
+    const dependency = join(root, "link-dependency.a");
+    const output = join(root, "program");
+    const linker = join(root, "linker.mjs");
+    const platformLinker = join(root, "ld");
+    await Promise.all([
+      writeFile(programObject, "program object"),
+      writeFile(dependency, "before link"),
+      writeFile(platformLinker, "selected platform linker"),
+      writeFile(
+        linker,
+        [
           "#!/usr/bin/env node",
           'import { writeFileSync } from "node:fs";',
           `const dependency = ${JSON.stringify(dependency)};`,
           `const platformLinker = ${JSON.stringify(platformLinker)};`,
-          'const args = process.argv.slice(2);',
+          "const args = process.argv.slice(2);",
           'const outputIndex = args.indexOf("-o");',
           'if (args.includes("-print-prog-name=ld")) {',
-          '  process.stdout.write(`${platformLinker}\\n`);',
+          "  process.stdout.write(`${platformLinker}\\n`);",
           "  process.exit(0);",
           "}",
           'if (args.includes("-###")) {',
-          '  process.stderr.write(`${JSON.stringify(platformLinker)} ${JSON.stringify(dependency)}\\n`);',
+          "  process.stderr.write(`${JSON.stringify(platformLinker)} ${JSON.stringify(dependency)}\\n`);",
           "  process.exit(0);",
           "}",
           'if (args.includes("-Wl,-t")) {',
-          '  process.stdout.write(`${platformLinker}\\n${dependency}\\n`);',
+          "  process.stdout.write(`${platformLinker}\\n${dependency}\\n`);",
           '  writeFileSync(args[outputIndex + 1], "link trace output");',
           "  process.exit(0);",
           "}",
-          'if (outputIndex < 0) process.exit(2);',
+          "if (outputIndex < 0) process.exit(2);",
           'if (args.includes("-c")) {',
           '  writeFileSync(args[outputIndex + 1], "probe object");',
           "  process.exit(0);",
@@ -511,52 +542,70 @@ describe("runtime pack manifests", () => {
           'writeFileSync(dependency, "changed during link");',
           'writeFileSync(args[outputIndex + 1], "linked executable");',
           "",
-        ].join("\n")),
-      ]);
-      await chmod(linker, 0o755);
-      const plan = await createNativeLinkPlan({
-        target: MACOS_ARM64_TARGET,
-        programObject,
-        outPath: output,
-        features: BASE,
-        ffi: null,
-        optimization: "release",
-        programObjectDependencies: await snapshotNativeArtifactDependencies([dependency]),
-        resolver: () => packagePath,
-      });
-      let published = false;
+        ].join("\n"),
+      ),
+    ]);
+    await chmod(linker, 0o755);
+    const plan = await createNativeLinkPlan({
+      target: MACOS_ARM64_TARGET,
+      programObject,
+      outPath: output,
+      features: BASE,
+      ffi: null,
+      optimization: "release",
+      programObjectDependencies: await snapshotNativeArtifactDependencies([dependency]),
+      resolver: () => packagePath,
+    });
+    let published = false;
 
-      await linkNativeExecutable(plan, {
-        linker,
-        onArtifactReady: async () => { published = true; },
-      });
+    await linkNativeExecutable(plan, {
+      linker,
+      onArtifactReady: async () => {
+        published = true;
+      },
+    });
 
-      expect(await readFile(output, "utf8")).toBe("linked executable");
-      expect(published).toBe(false);
-    },
-  );
+    expect(await readFile(output, "utf8")).toBe("linked executable");
+    expect(published).toBe(false);
+  });
 });
 
 test("library runtime selection requires dedicated packs and never substitutes executable objects", async () => {
   const f = await fixture();
-  const options = { target: MACOS_ARM64_TARGET, features: BASE, optimization: "release" as const, resolver: () => f.packagePath };
-  await expect(loadRuntimePack({ ...options, mode: "library" })).rejects.toThrow("no library-release flavor");
-  await expect(loadRuntimePack({ ...options, mode: "library-thread" })).rejects.toThrow("no library-thread-release flavor");
+  const options = {
+    target: MACOS_ARM64_TARGET,
+    features: BASE,
+    optimization: "release" as const,
+    resolver: () => f.packagePath,
+  };
+  await expect(loadRuntimePack({ ...options, mode: "library" })).rejects.toThrow(
+    "no library-release flavor",
+  );
+  await expect(loadRuntimePack({ ...options, mode: "library-thread" })).rejects.toThrow(
+    "no library-thread-release flavor",
+  );
   const unit = f.manifest.flavors.release!.runtime_units[0]!;
   const variant = unit.variants[0]!;
   for (const [name, defines] of [
     ["library-release", ["SCR_LIB"]],
     ["library-thread-release", ["SCR_LIB", "SCR_THREAD_INSTANCES"]],
   ] as const) {
-    f.manifest.flavors[name] = { optimization: "-O2", runtime_units: [{ ...unit, variants: [{ ...variant, defines: [...defines] }] }] };
+    f.manifest.flavors[name] = {
+      optimization: "-O2",
+      runtime_units: [{ ...unit, variants: [{ ...variant, defines: [...defines] }] }],
+    };
   }
   await writeFile(join(f.root, "runtime-pack.json"), JSON.stringify(f.manifest));
   const threaded = await loadRuntimePack({ ...options, mode: "library-thread" });
   expect(threaded.runtimeObjects.map((path) => basename(path))).toEqual(["base.o"]);
-  await expect(loadRuntimePack({ ...options, features: { ...BASE, dynamic: true }, mode: "library" })).rejects.toThrow("do not support dynamic");
+  await expect(
+    loadRuntimePack({ ...options, features: { ...BASE, dynamic: true }, mode: "library" }),
+  ).rejects.toThrow("do not support dynamic");
   delete f.manifest.flavors.release;
   delete f.manifest.flavors.dev;
   await writeFile(join(f.root, "runtime-pack.json"), JSON.stringify(f.manifest));
-  await expect(loadRuntimePack({ ...options, mode: "library-thread" })).resolves.toMatchObject({ runtimeObjects: threaded.runtimeObjects });
+  await expect(loadRuntimePack({ ...options, mode: "library-thread" })).resolves.toMatchObject({
+    runtimeObjects: threaded.runtimeObjects,
+  });
   await expect(loadRuntimePack(options)).rejects.toThrow("no release flavor");
 });

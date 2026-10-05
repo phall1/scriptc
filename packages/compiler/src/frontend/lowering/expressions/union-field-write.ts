@@ -48,22 +48,57 @@ export function lowerUnionFieldWrite(
   let dispatch: IrStmt[] = [];
   for (let tag = fields.length - 1; tag >= 0; tag--) {
     const field = fields[tag];
-    const obj: IrExpr | null = field ? {
-      kind: "unionNarrow", unionId, tag, value: objectRef,
-      type: { kind: "record", shapeId: field.shapeId }, loc,
-    } : null;
-    const write: IrStmt = field && obj ? {
-      kind: "recordSet", obj, shapeId: field.shapeId, field: access.name.text,
-      value: varRef(stored.id, stored.type, loc), loc,
-    } : {
-      kind: "exprStmt",
-      expr: nodeThrowExpr(1, "", `Cannot set properties of ${arms[tag]!.kind === "nullT" ? "null" : "undefined"} (setting '${access.name.text}')`, VOID, loc), loc,
-    };
-    dispatch = tag === fields.length - 1 ? [write] : [{
-      kind: "if",
-      cond: { kind: "unionIsTag", unionId, tag, value: objectRef, negated: false, type: BOOL, loc },
-      then: [write], else_: dispatch, loc,
-    }];
+    const obj: IrExpr | null = field
+      ? {
+          kind: "unionNarrow",
+          unionId,
+          tag,
+          value: objectRef,
+          type: { kind: "record", shapeId: field.shapeId },
+          loc,
+        }
+      : null;
+    const write: IrStmt =
+      field && obj
+        ? {
+            kind: "recordSet",
+            obj,
+            shapeId: field.shapeId,
+            field: access.name.text,
+            value: varRef(stored.id, stored.type, loc),
+            loc,
+          }
+        : {
+            kind: "exprStmt",
+            expr: nodeThrowExpr(
+              1,
+              "",
+              `Cannot set properties of ${arms[tag]!.kind === "nullT" ? "null" : "undefined"} (setting '${access.name.text}')`,
+              VOID,
+              loc,
+            ),
+            loc,
+          };
+    dispatch =
+      tag === fields.length - 1
+        ? [write]
+        : [
+            {
+              kind: "if",
+              cond: {
+                kind: "unionIsTag",
+                unionId,
+                tag,
+                value: objectRef,
+                negated: false,
+                type: BOOL,
+                loc,
+              },
+              then: [write],
+              else_: dispatch,
+              loc,
+            },
+          ];
   }
   return { kind: "block", body: [...body, ...dispatch], loc };
 }

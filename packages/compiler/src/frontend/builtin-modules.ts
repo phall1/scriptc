@@ -1,5 +1,47 @@
 /** The node builtin modules with scriptc lowerings, by canonical bare name. */
-export const SUPPORTED_BUILTIN_MODULES = ["fs", "path", "path/posix", "path/win32", "os", "url", "fs/promises", "crypto", "zlib", "child_process", "net", "http", "tls", "https", "dgram", "dns", "util", "util/types", "string_decoder", "querystring", "readline", "http2", "assert", "assert/strict", "worker_threads", "buffer", "cluster", "tty", "async_hooks", "events", "stream", "stream/promises", "stream/consumers", "test", "timers", "timers/promises", "diagnostics_channel", "perf_hooks", "module", "console", "process"] as const;
+export const SUPPORTED_BUILTIN_MODULES = [
+  "fs",
+  "path",
+  "path/posix",
+  "path/win32",
+  "os",
+  "url",
+  "fs/promises",
+  "crypto",
+  "zlib",
+  "child_process",
+  "net",
+  "http",
+  "tls",
+  "https",
+  "dgram",
+  "dns",
+  "util",
+  "util/types",
+  "string_decoder",
+  "querystring",
+  "readline",
+  "http2",
+  "assert",
+  "assert/strict",
+  "worker_threads",
+  "buffer",
+  "cluster",
+  "tty",
+  "async_hooks",
+  "events",
+  "stream",
+  "stream/promises",
+  "stream/consumers",
+  "test",
+  "timers",
+  "timers/promises",
+  "diagnostics_channel",
+  "perf_hooks",
+  "module",
+  "console",
+  "process",
+] as const;
 
 /** Builtins Node itself serves ONLY under the node: prefix —
  * require("test") is MODULE_NOT_FOUND in Node, so the bare name stays a
@@ -62,10 +104,14 @@ const V8_REASON =
 
 const OUT_OF_SCOPE_BUILTIN_REASONS: Record<string, string | undefined> = {
   v8: V8_REASON,
-  inspector: "it drives the V8 inspector protocol — debugger, profiler, heap access — and a compiled binary embeds no V8 engine to inspect",
-  "inspector/promises": "it drives the V8 inspector protocol — debugger, profiler, heap access — and a compiled binary embeds no V8 engine to inspect",
-  sqlite: "it wraps the SQLite library bundled into the node executable, and scriptc binaries bundle no SQLite engine",
-  domain: "deprecated in Node and slated for removal; its implicit error interception hooks every async callback at engine level, which is not modeled",
+  inspector:
+    "it drives the V8 inspector protocol — debugger, profiler, heap access — and a compiled binary embeds no V8 engine to inspect",
+  "inspector/promises":
+    "it drives the V8 inspector protocol — debugger, profiler, heap access — and a compiled binary embeds no V8 engine to inspect",
+  sqlite:
+    "it wraps the SQLite library bundled into the node executable, and scriptc binaries bundle no SQLite engine",
+  domain:
+    "deprecated in Node and slated for removal; its implicit error interception hooks every async callback at engine level, which is not modeled",
   _http_agent: NODE_INTERNAL_REASON,
   _http_client: NODE_INTERNAL_REASON,
   _http_common: NODE_INTERNAL_REASON,
@@ -88,6 +134,8 @@ const OUT_OF_SCOPE_BUILTIN_REASONS: Record<string, string | undefined> = {
  * fence site words through this one helper. */
 export function unsupportedModuleFeatureOf(spec: string): string {
   const bare = spec.startsWith("node:") ? spec.slice(5) : spec;
-  const reason = Object.hasOwn(OUT_OF_SCOPE_BUILTIN_REASONS, bare) ? OUT_OF_SCOPE_BUILTIN_REASONS[bare] : undefined;
+  const reason = Object.hasOwn(OUT_OF_SCOPE_BUILTIN_REASONS, bare)
+    ? OUT_OF_SCOPE_BUILTIN_REASONS[bare]
+    : undefined;
   return reason === undefined ? `the '${spec}' module` : `the '${spec}' module (${reason})`;
 }

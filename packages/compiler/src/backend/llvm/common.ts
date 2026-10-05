@@ -1,6 +1,11 @@
 import { commentText, unsignedHex } from "../literals.js";
 import { InternalCompilerError } from "../../errors.js";
-import type { IrBytesElem, IrFfiCallbackParamClass, IrFfiReturnClass, IrFfiValueParamClass } from "../../ir/ir.js";
+import type {
+  IrBytesElem,
+  IrFfiCallbackParamClass,
+  IrFfiReturnClass,
+  IrFfiValueParamClass,
+} from "../../ir/ir.js";
 
 /** User-controlled text embedded after an LLVM `;` comment marker. Preserve
  * ordinary output byte-for-byte, but encode control and line-separator code
@@ -36,18 +41,26 @@ export function ffiNativeTypeLl(
     case "string":
     case "bytes":
     case "mutable-bytes":
-      throw new InternalCompilerError(`llvm emitter bug: span class '${cls}' has no scalar LLVM type`);
+      throw new InternalCompilerError(
+        `llvm emitter bug: span class '${cls}' has no scalar LLVM type`,
+      );
     case "void":
       return "void";
   }
 }
 
-export function ffiNativeParamLl(cls: Parameters<typeof ffiNativeTypeLl>[0], extend: boolean): string {
+export function ffiNativeParamLl(
+  cls: Parameters<typeof ffiNativeTypeLl>[0],
+  extend: boolean,
+): string {
   const attr = ffiExtensionLl(cls, extend);
   return `${ffiNativeTypeLl(cls)}${attr ? ` ${attr}` : ""}`;
 }
 
-export function ffiNativeReturnLl(cls: Parameters<typeof ffiNativeTypeLl>[0], extend: boolean): string {
+export function ffiNativeReturnLl(
+  cls: Parameters<typeof ffiNativeTypeLl>[0],
+  extend: boolean,
+): string {
   const attr = ffiExtensionLl(cls, extend);
   return `${attr ? `${attr} ` : ""}${ffiNativeTypeLl(cls)}`;
 }
@@ -62,7 +75,10 @@ function ffiExtensionLl(cls: Parameters<typeof ffiNativeTypeLl>[0], extend: bool
 export function f64Lit(n: number): string {
   const bytes = new Uint8Array(8);
   new DataView(bytes.buffer).setFloat64(0, n);
-  return `0x${[...bytes].map((b) => unsignedHex(b).padStart(2, "0")).join("").toUpperCase()}`;
+  return `0x${[...bytes]
+    .map((b) => unsignedHex(b).padStart(2, "0"))
+    .join("")
+    .toUpperCase()}`;
 }
 
 export const F64_INF = f64Lit(Infinity);

@@ -13,7 +13,10 @@ test("counted loops guard exact induction and preserve wide remainders on both p
     const result = await compile(entry, { outPath, outDir: dir, outputKind: "ir" });
     if (!result.ok) throw new Error(result.diagnostics.map((d) => d.message).join("\n"));
     const mod = deserializeModule(await readFile(outPath, "utf8"));
-    const body = (ll: string, name: string): string => ll.match(new RegExp(`define internal [^\\n]+ @sc_f_${name}\\([^\\n]*\\) #0 \\{([\\s\\S]*?)\\n\\}`))![1]!;
+    const body = (ll: string, name: string): string =>
+      ll.match(
+        new RegExp(`define internal [^\\n]+ @sc_f_${name}\\([^\\n]*\\) #0 \\{([\\s\\S]*?)\\n\\}`),
+      )![1]!;
     for (const pointerBits of [32, 64] as const) {
       const ll = emitLlvmModule(mod, { pointerBits, wasi: pointerBits === 32 });
       const exclusive = body(ll, "exclusive");
@@ -27,11 +30,16 @@ test("counted loops guard exact induction and preserve wide remainders on both p
       expect(body(ll, "inclusive")).toContain("fcmp ole double");
       expect(body(ll, "inclusive")).toContain("0x433FFFFFFFFFFFFF");
       expect(body(ll, "wide")).toMatch(/urem i64 %\w+, 4294967297/);
-      for (const name of ["changed", "captured"]) expect(body(ll, name)).not.toContain("counted.fast");
+      for (const name of ["changed", "captured"])
+        expect(body(ll, name)).not.toContain("counted.fast");
       expect(body(ll, "remainders")).toContain("frem double");
     }
-    const debug = emitLlvmModule(mod, { debugSources: new Map([[entry, await readFile(entry, "utf8")]]) });
+    const debug = emitLlvmModule(mod, {
+      debugSources: new Map([[entry, await readFile(entry, "utf8")]]),
+    });
     expect(debug).not.toContain("counted.fast");
     expect(debug).toContain("@llvm.dbg.declare");
-  } finally { await rm(dir, { recursive: true, force: true }); }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

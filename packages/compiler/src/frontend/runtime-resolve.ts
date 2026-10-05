@@ -65,8 +65,10 @@ export function resolveImportMetaRuntime(
 ): RuntimeResolveResult | null {
   const base = targetFileUrl(fromFile, targetPlatform);
   if (
-    specifier.startsWith("./") || specifier.startsWith("../") ||
-    isAbsolute(specifier) || urlLike(specifier)
+    specifier.startsWith("./") ||
+    specifier.startsWith("../") ||
+    isAbsolute(specifier) ||
+    urlLike(specifier)
   ) {
     try {
       return { ok: true, value: new URL(specifier, base).href };
@@ -79,7 +81,8 @@ export function resolveImportMetaRuntime(
   }
   if (specifier.startsWith("#")) return null;
 
-  if (services === undefined) throw new Error("package runtime resolution requires frontend services");
+  if (services === undefined)
+    throw new Error("package runtime resolution requires frontend services");
   const builder = new NpmGraphBuilder(services);
   const key = builder.resolveForIntrospection(fromFile, specifier, "import");
   if (key !== null) return { ok: true, value: targetFileUrl(key, targetPlatform) };
@@ -106,11 +109,17 @@ export function resolveRequireRuntime(
   markFrontendInputsUnstable();
   try {
     const resolver = services?.runtimeModuleResolver;
-    const result: RuntimeResolveResult = resolver === undefined
-      ? resolveCjsRuntime(fromFile, specifier, paths)
-      : { ok: true, value: resolver.resolve(fromFile, specifier, paths) };
+    const result: RuntimeResolveResult =
+      resolver === undefined
+        ? resolveCjsRuntime(fromFile, specifier, paths)
+        : { ok: true, value: resolver.resolve(fromFile, specifier, paths) };
     if (!result.ok) return result;
-    return { ok: true, value: isAbsolute(result.value) ? runtimePathForTarget(result.value, targetPlatform) : result.value };
+    return {
+      ok: true,
+      value: isAbsolute(result.value)
+        ? runtimePathForTarget(result.value, targetPlatform)
+        : result.value,
+    };
   } catch (error) {
     return { ok: false, error: errorShape(error) };
   }
@@ -126,7 +135,10 @@ export function requireResolvePathsRuntime(
   markFrontendInputsUnstable();
   try {
     const resolver = services?.runtimeModuleResolver;
-    const paths = resolver === undefined ? cjsResolvePaths(fromFile, specifier) : resolver.lookupPaths(fromFile, specifier);
+    const paths =
+      resolver === undefined
+        ? cjsResolvePaths(fromFile, specifier)
+        : resolver.lookupPaths(fromFile, specifier);
     return paths?.map((path) => runtimePathForTarget(path, targetPlatform)) ?? null;
   } catch (error) {
     return errorShape(error);

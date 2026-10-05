@@ -178,16 +178,56 @@ export function generateSurfaceManifest(compilerVersion: string): SurfaceManifes
     });
   }
   for (const [id, name, note] of [
-    ["bigint-literals", "bigint literals", "arbitrary-precision values in decimal, binary, octal, and hexadecimal spelling"],
-    ["async-generators", "typed async generator functions and methods", "lazy bodies with queued next/return/throw requests, await, direct yield, and Node-compatible completion promises"],
-    ["for-await-async-generators", "for await over typed async generators", "awaits each IteratorResult and closes the generator on early break"],
-    ["for-await-readable-streams", "for await over Node Readable and Web ReadableStream values", "closes on every abrupt completion, with destroyOnReturn and preventCancel literal options"],
-    ["for-await-class-async-iterators", "for await over statically represented class async iterators", "drives zero-parameter next methods returning Promise<{ value, done? }> and awaits an optional zero-parameter return method on abrupt completion"],
-    ["using-declarations", "block- and function-scoped using declarations", "LIFO disposal on normal and abrupt scope exit through [Symbol.dispose]"],
-    ["await-using-declarations", "block- and function-scoped await using declarations", "LIFO asynchronous disposal through [Symbol.asyncDispose], with synchronous fallback"],
-    ["for-using-of", "for (using ... of ...) over arrays", "each array element is disposed at the end of its iteration, including break and continue paths"],
-    ["finally-abrupt-completions", "abrupt completions through finally", "return, throw, break, continue, and labeled jumps run crossed finally blocks; a finally completion replaces the pending one"],
-    ["spread-arguments", "spread arguments", "non-empty fixed tuples flatten into fixed signatures with evaluate-once ordering; arrays, Sets, and statically represented class iterables spread into typed rest parameters"],
+    [
+      "bigint-literals",
+      "bigint literals",
+      "arbitrary-precision values in decimal, binary, octal, and hexadecimal spelling",
+    ],
+    [
+      "async-generators",
+      "typed async generator functions and methods",
+      "lazy bodies with queued next/return/throw requests, await, direct yield, and Node-compatible completion promises",
+    ],
+    [
+      "for-await-async-generators",
+      "for await over typed async generators",
+      "awaits each IteratorResult and closes the generator on early break",
+    ],
+    [
+      "for-await-readable-streams",
+      "for await over Node Readable and Web ReadableStream values",
+      "closes on every abrupt completion, with destroyOnReturn and preventCancel literal options",
+    ],
+    [
+      "for-await-class-async-iterators",
+      "for await over statically represented class async iterators",
+      "drives zero-parameter next methods returning Promise<{ value, done? }> and awaits an optional zero-parameter return method on abrupt completion",
+    ],
+    [
+      "using-declarations",
+      "block- and function-scoped using declarations",
+      "LIFO disposal on normal and abrupt scope exit through [Symbol.dispose]",
+    ],
+    [
+      "await-using-declarations",
+      "block- and function-scoped await using declarations",
+      "LIFO asynchronous disposal through [Symbol.asyncDispose], with synchronous fallback",
+    ],
+    [
+      "for-using-of",
+      "for (using ... of ...) over arrays",
+      "each array element is disposed at the end of its iteration, including break and continue paths",
+    ],
+    [
+      "finally-abrupt-completions",
+      "abrupt completions through finally",
+      "return, throw, break, continue, and labeled jumps run crossed finally blocks; a finally completion replaces the pending one",
+    ],
+    [
+      "spread-arguments",
+      "spread arguments",
+      "non-empty fixed tuples flatten into fixed signatures with evaluate-once ordering; arrays, Sets, and statically represented class iterables spread into typed rest parameters",
+    ],
   ] as [string, string, string][]) {
     add({ id: `syntax.${id}`, kind: "syntax", name, status: "static", note });
   }
@@ -203,21 +243,56 @@ export function generateSurfaceManifest(compilerVersion: string): SurfaceManifes
     });
   }
   for (const name of STRING_INDEX_METHODS) {
-    add({ id: `stdlib.string.${name}`, kind: "stdlib", name: `string.prototype.${name}`, status: "static", note: arityNote(0, 1) });
+    add({
+      id: `stdlib.string.${name}`,
+      kind: "stdlib",
+      name: `string.prototype.${name}`,
+      status: "static",
+      note: arityNote(0, 1),
+    });
   }
   for (const name of STRING_REPLACE_METHODS) {
-    add({ id: `stdlib.string.${name}`, kind: "stdlib", name: `string.prototype.${name}`, status: "static", note: "string patterns with primitive replacements or typed callbacks; regex forms have separate lowering" });
+    add({
+      id: `stdlib.string.${name}`,
+      kind: "stdlib",
+      name: `string.prototype.${name}`,
+      status: "static",
+      note: "string patterns with primitive replacements or typed callbacks; regex forms have separate lowering",
+    });
   }
   for (const name of [...ARRAY_METHODS]) {
-    add({ id: `stdlib.array.${name}`, kind: "stdlib", name: `Array.prototype.${name}`, status: "static" });
+    add({
+      id: `stdlib.array.${name}`,
+      kind: "stdlib",
+      name: `Array.prototype.${name}`,
+      status: "static",
+    });
   }
   for (const name of [...MAP_METHODS]) {
-    add({ id: `stdlib.map.${name}`, kind: "stdlib", name: `Map.prototype.${name}`, status: "static",
-      ...(COLLECTION_ITERATOR_METHODS.has(name) ? { note: "live native iterators support next(), for...of, and drains; iterator helper methods are refused" } : {}) });
+    add({
+      id: `stdlib.map.${name}`,
+      kind: "stdlib",
+      name: `Map.prototype.${name}`,
+      status: "static",
+      ...(COLLECTION_ITERATOR_METHODS.has(name)
+        ? {
+            note: "live native iterators support next(), for...of, and drains; iterator helper methods are refused",
+          }
+        : {}),
+    });
   }
   for (const name of [...SET_METHODS]) {
-    add({ id: `stdlib.set.${name}`, kind: "stdlib", name: `Set.prototype.${name}`, status: "static",
-      ...(COLLECTION_ITERATOR_METHODS.has(name) ? { note: "live native iterators support next(), for...of, and drains; iterator helper methods are refused" } : {}) });
+    add({
+      id: `stdlib.set.${name}`,
+      kind: "stdlib",
+      name: `Set.prototype.${name}`,
+      status: "static",
+      ...(COLLECTION_ITERATOR_METHODS.has(name)
+        ? {
+            note: "live native iterators support next(), for...of, and drains; iterator helper methods are refused",
+          }
+        : {}),
+    });
   }
   for (const name of [...SET_COMBINE_METHODS]) {
     add({
@@ -230,7 +305,10 @@ export function generateSurfaceManifest(compilerVersion: string): SurfaceManifes
   }
 
   // ── stdlib: the Math surface — static table first, island remainder ───
-  const mathNames = new Set([...Object.keys(STATIC_MATH_FNS), ...Object.keys(ISLAND_SURFACE.math.fns)]);
+  const mathNames = new Set([
+    ...Object.keys(STATIC_MATH_FNS),
+    ...Object.keys(ISLAND_SURFACE.math.fns),
+  ]);
   for (const name of mathNames) {
     const stat = STATIC_MATH_FNS[name];
     const island = ISLAND_SURFACE.math.fns[name];
@@ -244,19 +322,32 @@ export function generateSurfaceManifest(compilerVersion: string): SurfaceManifes
         // untabled arities go there. Elsewhere untabled shapes may have
         // their own special-cased lowerings (Math.min/max over one array
         // spread), so no claim is made about them.
-        note: name === "hypot"
-          ? "compiles statically at any arity, including number[] spreads"
-          : `compiles statically at arity ${stat.arity}` +
-            (island !== undefined
-              ? "; other declared call shapes run only in the embedded dynamic engine (SC2012 without --dynamic)"
-              : ""),
+        note:
+          name === "hypot"
+            ? "compiles statically at any arity, including number[] spreads"
+            : `compiles statically at arity ${stat.arity}` +
+              (island !== undefined
+                ? "; other declared call shapes run only in the embedded dynamic engine (SC2012 without --dynamic)"
+                : ""),
       });
     } else {
-      add({ id: `stdlib.math.${name}`, kind: "stdlib", name: `Math.${name}`, status: "dynamic-only", code: "SC2012" });
+      add({
+        id: `stdlib.math.${name}`,
+        kind: "stdlib",
+        name: `Math.${name}`,
+        status: "dynamic-only",
+        code: "SC2012",
+      });
     }
   }
   for (const name of Object.keys(ISLAND_SURFACE.math.props)) {
-    add({ id: `stdlib.math.${name}`, kind: "stdlib", name: `Math.${name}`, status: "dynamic-only", code: "SC2012" });
+    add({
+      id: `stdlib.math.${name}`,
+      kind: "stdlib",
+      name: `Math.${name}`,
+      status: "dynamic-only",
+      code: "SC2012",
+    });
   }
   for (const name of Object.keys(STATIC_MATH_PROPS)) {
     add({
@@ -363,9 +454,7 @@ export function generateSurfaceManifest(compilerVersion: string): SurfaceManifes
     `Undici ${NODE24_FETCH_COMPAT_PROFILE.target.undici}`;
   for (const operation of NODE24_FETCH_COMPAT_PROFILE.operations) {
     const evidence = operation.evidence.map((item) =>
-      item.generated !== undefined
-        ? `generated:${item.generated}`
-        : `fixture:${item.fixture!}`
+      item.generated !== undefined ? `generated:${item.generated}` : `fixture:${item.fixture!}`,
     );
     add({
       id: operation.id,
@@ -385,9 +474,7 @@ export function generateSurfaceManifest(compilerVersion: string): SurfaceManifes
   ]) {
     for (const option of options) {
       const evidence = option.evidence.map((item) =>
-        item.generated !== undefined
-          ? `generated:${item.generated}`
-          : `fixture:${item.fixture!}`
+        item.generated !== undefined ? `generated:${item.generated}` : `fixture:${item.fixture!}`,
       );
       add({
         id: option.id,
@@ -449,7 +536,10 @@ export function generateSurfaceManifest(compilerVersion: string): SurfaceManifes
     });
   }
   for (const [code, entry] of Object.entries(FENCE_CODES)) {
-    if (code in UNSUPPORTED) throw new InternalCompilerError(`diagnostic code ${code} is in both UNSUPPORTED and FENCE_CODES`);
+    if (code in UNSUPPORTED)
+      throw new InternalCompilerError(
+        `diagnostic code ${code} is in both UNSUPPORTED and FENCE_CODES`,
+      );
     add({
       id: `diagnostic.${code.toLowerCase()}`,
       kind: "diagnostic-fence",
@@ -465,7 +555,9 @@ export function generateSurfaceManifest(compilerVersion: string): SurfaceManifes
     if (seen.has(e.id)) throw new InternalCompilerError(`duplicate manifest id: ${e.id}`);
     seen.add(e.id);
     if (e.status !== "static" && e.code === undefined) {
-      throw new InternalCompilerError(`manifest entry ${e.id} has status ${e.status} but no diagnostic code`);
+      throw new InternalCompilerError(
+        `manifest entry ${e.id} has status ${e.status} but no diagnostic code`,
+      );
     }
     if (e.code !== undefined && !/^SC\d{4}$/.test(e.code)) {
       throw new InternalCompilerError(`manifest entry ${e.id} has a malformed code: ${e.code}`);

@@ -11,11 +11,31 @@ const any = (...features) => ({ any: features });
 const all = (...features) => ({ all: features });
 
 const BASE_RUNTIME_SOURCES = [
-  "scr_number.c", "scr_bigint.c", "scr_string.c", "scr_grapheme.c", "scr_array.c", "scr_bytes.c",
-  "scr_bytes_io.c", "scr_map.c", "scr_closure.c", "scr_ffi.c",
-  "scr_object.c", "scr_union.c", "scr_exception.c", "scr_error.c",
-  "scr_console.c", "scr_lib.c", "scr_path.c", "scr_url.c", "scr_url_params.c", "scr_json.c", "scr_node_builtin.c",
-  "scr_async.c", "scr_crypto_async.c", "scr_child.c", "scr_cycle.c",
+  "scr_number.c",
+  "scr_bigint.c",
+  "scr_string.c",
+  "scr_grapheme.c",
+  "scr_array.c",
+  "scr_bytes.c",
+  "scr_bytes_io.c",
+  "scr_map.c",
+  "scr_closure.c",
+  "scr_ffi.c",
+  "scr_object.c",
+  "scr_union.c",
+  "scr_exception.c",
+  "scr_error.c",
+  "scr_console.c",
+  "scr_lib.c",
+  "scr_path.c",
+  "scr_url.c",
+  "scr_url_params.c",
+  "scr_json.c",
+  "scr_node_builtin.c",
+  "scr_async.c",
+  "scr_crypto_async.c",
+  "scr_child.c",
+  "scr_cycle.c",
 ];
 
 // ld64 dead-strips Mach-O symbol subsections without an ELF-style compile
@@ -31,7 +51,8 @@ const optional = [
   ["scr_file_handle.c", "fileHandle"],
   ["scr_regex.c", "regex"],
   ["scr_assert.c", any("assert", "regex", "symbol")],
-  ["scr_inspect.c", "inspect"], ["scr_console_native.c", "inspect"],
+  ["scr_inspect.c", "inspect"],
+  ["scr_console_native.c", "inspect"],
   ["scr_dyn_invoke.c", any("dynInvoke", "nativeFetch")],
   ["scr_dc.c", "dc"],
   ["scr_async_dyn.c", any("dynAsync", "dynInvoke", "dc", "fileHandle", "nativeFetch")],
@@ -70,8 +91,11 @@ const optional = [
 
 function variantsFor(source) {
   const dynamicOnly = new Set([
-    "scr_zlib_island.c", "scr_island.c", "scr_web.c",
-    "scr_inspect_island.c", "scr_net_island.c",
+    "scr_zlib_island.c",
+    "scr_island.c",
+    "scr_web.c",
+    "scr_inspect_island.c",
+    "scr_net_island.c",
   ]);
   if (dynamicOnly.has(source)) {
     return [{ id: "dynamic", when: { dynamic: true }, defines: ["SCR_DYNAMIC"] }];
@@ -116,5 +140,8 @@ export const RUNTIME_PACK_MATRIX = withLibraryRuntimeFlavors({
     { id: "zlib", predicate: "zlibEffective" },
     { id: "mbedtls", predicate: "tlsEffective" },
   ],
-  system_libraries: [{ name: "System", predicate: true }, { name: "m", predicate: "dynamic" }],
+  system_libraries: [
+    { name: "System", predicate: true },
+    { name: "m", predicate: "dynamic" },
+  ],
 });

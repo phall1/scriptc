@@ -38,8 +38,12 @@ export function resolveOutputOptions(
   const backend = values.backend as "llvm" | undefined;
   const rawEmit = values.emit;
   if (
-    rawEmit !== undefined && rawEmit !== "ir" && rawEmit !== "llvm" &&
-    rawEmit !== "asm" && rawEmit !== "obj" && rawEmit !== "exe"
+    rawEmit !== undefined &&
+    rawEmit !== "ir" &&
+    rawEmit !== "llvm" &&
+    rawEmit !== "asm" &&
+    rawEmit !== "obj" &&
+    rawEmit !== "exe"
   ) {
     return {
       ok: false,
@@ -51,7 +55,10 @@ export function resolveOutputOptions(
     return { ok: false, message: `scriptc run requires --emit=exe` };
   }
   if (values.emitIr && rawEmit !== undefined && emit !== "ir" && emit !== "exe") {
-    return { ok: false, message: `--emit-ir cannot be combined with --emit=${emit}; use --emit=ir` };
+    return {
+      ok: false,
+      message: `--emit-ir cannot be combined with --emit=${emit}; use --emit=ir`,
+    };
   }
   if (values.emitIr && emit === "ir") {
     return { ok: false, message: `--emit-ir and --emit=ir select the same output; use --emit=ir` };
@@ -63,7 +70,10 @@ export function resolveOutputOptions(
     return { ok: false, message: `--strip is only supported with --emit=exe` };
   }
   if (emit === "ir" && backend !== undefined) {
-    return { ok: false, message: `--emit=ir cannot be combined with --backend; IR is emitted before backend selection` };
+    return {
+      ok: false,
+      message: `--emit=ir cannot be combined with --backend; IR is emitted before backend selection`,
+    };
   }
   if (SOURCE_KINDS.has(emit)) {
     if (!values.keepLlvm) {

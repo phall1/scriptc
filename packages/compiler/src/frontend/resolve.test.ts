@@ -3,7 +3,14 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
-import { clearResolveCaches, projectDtsRuntimeSibling, resolveProjectModule, resolveWorkspaceSourceModule, setProjectPathMappings, setProjectRealm } from "./resolve.js";
+import {
+  clearResolveCaches,
+  projectDtsRuntimeSibling,
+  resolveProjectModule,
+  resolveWorkspaceSourceModule,
+  setProjectPathMappings,
+  setProjectRealm,
+} from "./resolve.js";
 
 const fixturesRoot = join(import.meta.dirname, "../../../..", "tests/fixtures");
 

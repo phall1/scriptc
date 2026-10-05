@@ -182,7 +182,7 @@ export const UNSUPPORTED: Record<string, UnsupportedEntry> = {
   SC1012: {
     feature: "default exports/imports",
     milestone: "later",
-    hint: "use named exports: export function f() {} / import { f } from \"./m\"",
+    hint: 'use named exports: export function f() {} / import { f } from "./m"',
   },
   // Namespace imports of USER modules shipped (`import * as ns from
   // "./m"` and `export * as ns from "./m"`: ns.member resolves statically
@@ -307,28 +307,68 @@ export const UNSUPPORTED: Record<string, UnsupportedEntry> = {
  * backend/target refusals (SC3001/SC3002), and internal errors
  * (SC9001/SC9002) report problems or engine tiers, not language/stdlib
  * surface. */
-export const FENCE_CODES: Record<string, { name: string; status: "unsupported" | "dynamic-only" }> = {
-  // SC2001 is the residual type fence: the named type-shape families each
-  // carry their own code (SC2005 generic signatures, SC2006 index
-  // signatures, SC2007 overloads, SC2008 intersections, SC2009 component
-  // fences; standard-library types with no lowering report SC2020). What
-  // remains here is the remainder the name enumerates.
-  SC2001: { name: "values of types outside the compilable set (constructor objects and library-derived or unresolved generic shapes)", status: "unsupported" },
-  SC2002: { name: "record shape flows outside the width-copy rules (shapes must match exactly or width-coerce)", status: "unsupported" },
-  SC2003: { name: "union-to-union conversions outside the re-tagging rule", status: "unsupported" },
-  SC2004: { name: "uses of a binding whose declaration did not compile (cascade marker)", status: "unsupported" },
-  SC2005: { name: "values whose type keeps a generic call signature (a compiled function is one concrete signature)", status: "unsupported" },
-  SC2006: { name: "index-signature object types outside the supported shape", status: "unsupported" },
-  SC2007: { name: "values of overloaded function type (a compiled function value is one signature)", status: "unsupported" },
-  SC2008: { name: "intersection types with no resolved lowering", status: "unsupported" },
-  SC2009: { name: "supported container and function shapes over a component type outside its slot", status: "unsupported" },
-  SC2010: { name: "constructs that exist only in the embedded dynamic engine", status: "dynamic-only" },
-  SC2011: { name: "'any'-typed values and the operations on them", status: "dynamic-only" },
-  SC2012: { name: "standard-library surface that runs in the embedded dynamic engine", status: "dynamic-only" },
-  SC2013: { name: "npm package imports and values (the package's implementation runs in the embedded engine)", status: "dynamic-only" },
-  SC2020: { name: "standard-library or @types/node surface with no lowering", status: "unsupported" },
-  SC2030: { name: "npm package code that cannot be embedded for the dynamic engine", status: "unsupported" },
-};
+export const FENCE_CODES: Record<string, { name: string; status: "unsupported" | "dynamic-only" }> =
+  {
+    // SC2001 is the residual type fence: the named type-shape families each
+    // carry their own code (SC2005 generic signatures, SC2006 index
+    // signatures, SC2007 overloads, SC2008 intersections, SC2009 component
+    // fences; standard-library types with no lowering report SC2020). What
+    // remains here is the remainder the name enumerates.
+    SC2001: {
+      name: "values of types outside the compilable set (constructor objects and library-derived or unresolved generic shapes)",
+      status: "unsupported",
+    },
+    SC2002: {
+      name: "record shape flows outside the width-copy rules (shapes must match exactly or width-coerce)",
+      status: "unsupported",
+    },
+    SC2003: {
+      name: "union-to-union conversions outside the re-tagging rule",
+      status: "unsupported",
+    },
+    SC2004: {
+      name: "uses of a binding whose declaration did not compile (cascade marker)",
+      status: "unsupported",
+    },
+    SC2005: {
+      name: "values whose type keeps a generic call signature (a compiled function is one concrete signature)",
+      status: "unsupported",
+    },
+    SC2006: {
+      name: "index-signature object types outside the supported shape",
+      status: "unsupported",
+    },
+    SC2007: {
+      name: "values of overloaded function type (a compiled function value is one signature)",
+      status: "unsupported",
+    },
+    SC2008: { name: "intersection types with no resolved lowering", status: "unsupported" },
+    SC2009: {
+      name: "supported container and function shapes over a component type outside its slot",
+      status: "unsupported",
+    },
+    SC2010: {
+      name: "constructs that exist only in the embedded dynamic engine",
+      status: "dynamic-only",
+    },
+    SC2011: { name: "'any'-typed values and the operations on them", status: "dynamic-only" },
+    SC2012: {
+      name: "standard-library surface that runs in the embedded dynamic engine",
+      status: "dynamic-only",
+    },
+    SC2013: {
+      name: "npm package imports and values (the package's implementation runs in the embedded engine)",
+      status: "dynamic-only",
+    },
+    SC2020: {
+      name: "standard-library or @types/node surface with no lowering",
+      status: "unsupported",
+    },
+    SC2030: {
+      name: "npm package code that cannot be embedded for the dynamic engine",
+      status: "unsupported",
+    },
+  };
 
 export function unsupportedDiag(
   code: keyof typeof UNSUPPORTED & `SC${number}`,
@@ -351,7 +391,7 @@ export function unsupportedDiag(
 
 function plural(feature: string): boolean {
   const head = feature.split(" (")[0]!.trim();
-  return /s$/.test(head) && !/(?:ness|this|ss)$/.test(head);
+  return head.endsWith("s") && !/(?:ness|this|ss)$/.test(head);
 }
 
 export function tscPassthroughDiag(message: string, loc: SrcLoc): ScrDiagnostic {
@@ -365,10 +405,11 @@ export function tscPassthroughDiag(message: string, loc: SrcLoc): ScrDiagnostic 
 export function commonJsModuleSyntaxDiag(loc: SrcLoc): ScrDiagnostic {
   return {
     code: "SC1013",
-    message: "Node classifies this file as CommonJS, where this ES-module syntax marker is a SyntaxError",
+    message:
+      "Node classifies this file as CommonJS, where this ES-module syntax marker is a SyntaxError",
     loc,
     milestone: "later",
-    hint: "use a .mjs/.mts extension or set the nearest package.json's \"type\" to \"module\"",
+    hint: 'use a .mjs/.mts extension or set the nearest package.json\'s "type" to "module"',
   };
 }
 
@@ -424,7 +465,11 @@ export function checkerPanicDiag(detail: string, loc: SrcLoc): ScrDiagnostic {
  * the SC0001 passthrough never fires; Node itself refuses to import such a
  * module at runtime, and the honest answer is a source-anchored gate at the
  * import, never an uncaught parse throw. */
-export function invalidJsonModuleDiag(fileName: string, detail: string, loc: SrcLoc): ScrDiagnostic {
+export function invalidJsonModuleDiag(
+  fileName: string,
+  detail: string,
+  loc: SrcLoc,
+): ScrDiagnostic {
   return {
     code: "SC0003",
     message: `imported JSON module '${fileName}' is not valid JSON (${detail})`,
@@ -819,7 +864,11 @@ export function libProfileDiag(detail: string, profilePath: string): ScrDiagnost
 
 /** SC4002 — an export-map entry names something the entry module does not
  * export as a function value. */
-export function libExportUnresolvedDiag(exportName: string, detail: string, loc: SrcLoc): ScrDiagnostic {
+export function libExportUnresolvedDiag(
+  exportName: string,
+  detail: string,
+  loc: SrcLoc,
+): ScrDiagnostic {
   return {
     code: "SC4002",
     message: `library export '${exportName}' cannot be resolved: ${detail}`,
@@ -935,8 +984,8 @@ export function libSidecarDiag(detail: string, loc: SrcLoc, hint?: string): ScrD
     hint:
       hint ??
       "the sidecar's type table speaks a closed vocabulary (bool, number, string/Uint8Array, optional, arrays, " +
-      "named records, string-literal-union enums, and kind-tagged unions of object literals) read from the entry " +
-      "module's exported declarations in source order",
+        "named records, string-literal-union enums, and kind-tagged unions of object literals) read from the entry " +
+        "module's exported declarations in source order",
   };
 }
 
@@ -946,7 +995,11 @@ export function libSidecarDiag(detail: string, loc: SrcLoc, hint?: string): ScrD
  * order is a checker implementation detail no sidecar consumer can
  * reproduce from source, and declaration order IS the wire contract. The
  * teaching names every contributing site. */
-export function libSidecarMergedDiag(name: string, sites: readonly string[], loc: SrcLoc): ScrDiagnostic {
+export function libSidecarMergedDiag(
+  name: string,
+  sites: readonly string[],
+  loc: SrcLoc,
+): ScrDiagnostic {
   return {
     code: "SC4010",
     message: `contract sidecar: '${name}' gathers members from ${sites.length} declaration sites (${sites.join(", ")}) — a tabled type's order must derive from ONE declaration site`,
@@ -960,7 +1013,11 @@ export function libSidecarMergedDiag(name: string, sites: readonly string[], loc
 /** SC4011 — a conditional or mapped type produces a tabled or designated
  * type: type-level computation has no author-visible declaration order,
  * so its member order cannot be the wire contract. */
-export function libSidecarComputedDiag(name: string, which: "conditional" | "mapped", loc: SrcLoc): ScrDiagnostic {
+export function libSidecarComputedDiag(
+  name: string,
+  which: "conditional" | "mapped",
+  loc: SrcLoc,
+): ScrDiagnostic {
   return {
     code: "SC4011",
     message: `contract sidecar: '${name}' is produced by a ${which} type — a tabled or designated type needs literal, declaration-ordered members`,
@@ -1069,8 +1126,7 @@ export function libNpmIneligibleDiag(pkg: string, reason: string, loc: SrcLoc): 
     code: "SC4020",
     message: `library mode compiles npm packages statically or not at all, and '${pkg}' cannot compile statically: ${reason}`,
     loc,
-    hint:
-      "library artifacts have no island/dynamic tier to fall back to — vendor the code you need from the package as project modules, or drop the dependency",
+    hint: "library artifacts have no island/dynamic tier to fall back to — vendor the code you need from the package as project modules, or drop the dependency",
   };
 }
 
@@ -1091,7 +1147,8 @@ export function libIntBoundaryDiag(
   fix: string,
   loc: SrcLoc,
 ): ScrDiagnostic {
-  const code = obligation === "representability" ? "SC4021" : obligation === "wholeness" ? "SC4022" : "SC4023";
+  const code =
+    obligation === "representability" ? "SC4021" : obligation === "wholeness" ? "SC4022" : "SC4023";
   return {
     code,
     message: `integer slot '${path}' (${cls}) cannot be proven — ${obligation} failed: ${detail}`,

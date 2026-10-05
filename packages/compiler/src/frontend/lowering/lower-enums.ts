@@ -86,7 +86,9 @@ export function lowerEnumAccess(
   if (!ts.isIdentifier(recv)) return null;
   const recvSym = lowerer.resolveValueSymbol(recv);
   if (!recvSym || !(recvSym.flags & ts.SymbolFlags.Enum)) return null;
-  const decls = lowerer.checker.declarationsOf(recvSym).filter((d): d is ts.EnumDeclaration => ts.isEnumDeclaration(d));
+  const decls = lowerer.checker
+    .declarationsOf(recvSym)
+    .filter((d): d is ts.EnumDeclaration => ts.isEnumDeclaration(d));
   if (decls.length === 0) return null;
   let key = expr.argumentExpression;
   while (ts.isParenthesizedExpression(key)) key = key.expression;
@@ -167,7 +169,13 @@ function lowerEnumReverseRead(
   const enumName = recvSym.name;
   // Ambient: no object exists — the member-read stance.
   if (decls.every((d) => isAmbientEnumDecl(d))) {
-    if (decls.some((d) => lowerer.isStdlibFile(d.getSourceFile()) || (lowerer.dynamic && lowerer.isNpmFile(d.getSourceFile())))) {
+    if (
+      decls.some(
+        (d) =>
+          lowerer.isStdlibFile(d.getSourceFile()) ||
+          (lowerer.dynamic && lowerer.isNpmFile(d.getSourceFile())),
+      )
+    ) {
       return null;
     }
     return {

@@ -1,7 +1,16 @@
 import { buildArrayConversion } from "./builders.js";
 import { InternalCompilerError } from "../../../errors.js";
 import type { IrExpr, IrStmt, IrType, SrcLoc } from "../../../ir/ir.js";
-import { arrayOf, BOOL, F64, canMarshalTypedFuncIntoIsland, isUnitType, JSVAL, STRING, VOID } from "../../../ir/ir.js";
+import {
+  arrayOf,
+  BOOL,
+  F64,
+  canMarshalTypedFuncIntoIsland,
+  isUnitType,
+  JSVAL,
+  STRING,
+  VOID,
+} from "../../../ir/ir.js";
 import { typeKey } from "../../type-mapper.js";
 import { numLit, varRef } from "../../../ir/build.js";
 import type { Lowerer } from "../lowerer.js";
@@ -9,7 +18,11 @@ import type { Lowerer } from "../lowerer.js";
 /** Whether a static value can become one island value. JSON-safe values
  * use deep marshaling; composites containing island handles are constructed
  * field by field. Recursive shapes outside the JSON-safe path are refused. */
-export function jsvalLiftable(lowerer: Lowerer, t: IrType, visiting: Set<string> = new Set()): boolean {
+export function jsvalLiftable(
+  lowerer: Lowerer,
+  t: IrType,
+  visiting: Set<string> = new Set(),
+): boolean {
   if (t.kind === "jsval") return true;
   if (lowerer.boundarySafe(t)) return true;
   // Typed arrays and URLs marshal IN without joining the round-trip
@@ -23,7 +36,11 @@ export function jsvalLiftable(lowerer: Lowerer, t: IrType, visiting: Set<string>
   // Promise<any>, defaultFallback: (cfg) => any }`) lifts field by
   // field like any other.
   if (t.kind === "func") {
-    return canMarshalTypedFuncIntoIsland(t, (id) => lowerer.shapes.get(id), (id) => lowerer.unions.get(id));
+    return canMarshalTypedFuncIntoIsland(
+      t,
+      (id) => lowerer.shapes.get(id),
+      (id) => lowerer.unions.get(id),
+    );
   }
   if (t.kind === "record") {
     const shape = lowerer.shapes.get(t.shapeId);
@@ -39,7 +56,9 @@ export function jsvalLiftable(lowerer: Lowerer, t: IrType, visiting: Set<string>
     // An INDEX-SIGNATURE record lifts when its value slot does (dyn
     // included): declared fields write first, then the overflow keys.
     if (shape.indexValue && !lowerer.jsvalLiftable(shape.indexValue, visiting)) return false;
-    return shape.fields.every((f) => !f.name.startsWith("%") && lowerer.jsvalLiftable(f.type, visiting));
+    return shape.fields.every(
+      (f) => !f.name.startsWith("%") && lowerer.jsvalLiftable(f.type, visiting),
+    );
   }
   if (t.kind === "array") return lowerer.jsvalLiftable(t.elem, visiting);
   // A union crossing IN lifts arm by arm (a runtime tag switch — see
@@ -108,17 +127,39 @@ export function unionToJsvalHelper(lowerer: Lowerer, unionId: string, loc: SrcLo
   const u: IrExpr = { kind: "varRef", localId: "u.0", type: fromT, loc };
   const body: IrStmt[] = [];
   def.arms.forEach((arm, i) => {
-    const cond: IrExpr = { kind: "unionIsTag", unionId, tag: i, negated: false, value: u, type: BOOL, loc };
+    const cond: IrExpr = {
+      kind: "unionIsTag",
+      unionId,
+      tag: i,
+      negated: false,
+      value: u,
+      type: BOOL,
+      loc,
+    };
     const value: IrExpr = isUnitType(arm)
-      ? { kind: "jsOp", op: arm.kind === "undefinedT" ? "undefLit" : "nullLit", args: [], type: JSVAL, loc }
-      : lowerer.jsvalLiftExpr({ kind: "unionNarrow", unionId, tag: i, value: u, type: arm, loc }, loc);
+      ? {
+          kind: "jsOp",
+          op: arm.kind === "undefinedT" ? "undefLit" : "nullLit",
+          args: [],
+          type: JSVAL,
+          loc,
+        }
+      : lowerer.jsvalLiftExpr(
+          { kind: "unionNarrow", unionId, tag: i, value: u, type: arm, loc },
+          loc,
+        );
     body.push({ kind: "if", cond, then: [{ kind: "return", value, loc }], else_: null, loc });
   });
   // Unreachable when tags are exhaustive (they are, by construction);
   // satisfies the all-paths-return rule and keeps a corrupted tag loud.
   body.push({
     kind: "throw",
-    value: { kind: "strLit", value: "scriptc: internal error: invalid union tag", type: STRING, loc },
+    value: {
+      kind: "strLit",
+      value: "scriptc: internal error: invalid union tag",
+      type: STRING,
+      loc,
+    },
     loc,
   });
   lowerer.liftedFns.push({
@@ -142,7 +183,8 @@ export function recordToJsvalHelper(lowerer: Lowerer, shapeId: string, loc: SrcL
   const existing = lowerer.coercions.islandInputs.get(key);
   if (existing) return existing;
   const shape = lowerer.shapes.get(shapeId);
-  if (!shape) throw new InternalCompilerError(`lowerer bug: jsval lift of unknown shape ${shapeId}`);
+  if (!shape)
+    throw new InternalCompilerError(`lowerer bug: jsval lift of unknown shape ${shapeId}`);
   const name = `%jsin.rec.${lowerer.coercions.islandInputs.size}`;
   lowerer.coercions.islandInputs.set(key, name);
   const recT: IrType = { kind: "record", shapeId };
@@ -195,7 +237,12 @@ export function recordToJsvalHelper(lowerer: Lowerer, shapeId: string, loc: SrcL
     ],
     body: [
       { kind: "varDecl", localId: "out.0", init: lit, loc },
-      { kind: "varDecl", localId: "ks.0", init: { kind: "recordOvfKeys", obj: r, shapeId, type: ksT, loc }, loc },
+      {
+        kind: "varDecl",
+        localId: "ks.0",
+        init: { kind: "recordOvfKeys", obj: r, shapeId, type: ksT, loc },
+        loc,
+      },
       {
         kind: "for",
         init: { kind: "varDecl", localId: "i.0", init: numLit(0, loc), loc },
@@ -203,13 +250,43 @@ export function recordToJsvalHelper(lowerer: Lowerer, shapeId: string, loc: SrcL
           kind: "bin",
           op: "<",
           left: varRef("i.0", f64, loc),
-          right: { kind: "arrIntrinsic", method: "length", receiver: varRef("ks.0", ksT, loc), args: [], type: f64, loc },
+          right: {
+            kind: "arrIntrinsic",
+            method: "length",
+            receiver: varRef("ks.0", ksT, loc),
+            args: [],
+            type: f64,
+            loc,
+          },
           type: BOOL,
           loc,
         },
-        update: { kind: "assign", localId: "i.0", value: { kind: "bin", op: "+", left: varRef("i.0", f64, loc), right: numLit(1, loc), type: f64, loc }, loc },
+        update: {
+          kind: "assign",
+          localId: "i.0",
+          value: {
+            kind: "bin",
+            op: "+",
+            left: varRef("i.0", f64, loc),
+            right: numLit(1, loc),
+            type: f64,
+            loc,
+          },
+          loc,
+        },
         body: [
-          { kind: "varDecl", localId: "k.0", init: { kind: "arrayGet", arr: varRef("ks.0", ksT, loc), index: varRef("i.0", f64, loc), type: STRING, loc }, loc },
+          {
+            kind: "varDecl",
+            localId: "k.0",
+            init: {
+              kind: "arrayGet",
+              arr: varRef("ks.0", ksT, loc),
+              index: varRef("i.0", f64, loc),
+              type: STRING,
+              loc,
+            },
+            loc,
+          },
           {
             kind: "exprStmt",
             expr: {
@@ -218,7 +295,18 @@ export function recordToJsvalHelper(lowerer: Lowerer, shapeId: string, loc: SrcL
               args: [
                 varRef("out.0", JSVAL, loc),
                 { kind: "jsMarshal", value: kRef, type: JSVAL, loc },
-                lowerer.jsvalLiftExpr({ kind: "recordKeyGet", obj: r, shapeId, key: kRef, overflowOnly: true, type: iv, loc }, loc),
+                lowerer.jsvalLiftExpr(
+                  {
+                    kind: "recordKeyGet",
+                    obj: r,
+                    shapeId,
+                    key: kRef,
+                    overflowOnly: true,
+                    type: iv,
+                    loc,
+                  },
+                  loc,
+                ),
               ],
               type: VOID,
               loc,
@@ -247,13 +335,25 @@ export function arrayToJsvalHelper(lowerer: Lowerer, elem: IrType, loc: SrcLoc):
   lowerer.coercions.islandInputs.set(key, name);
   const arrT: IrType = { kind: "array", elem };
 
-  lowerer.liftedFns.push(buildArrayConversion(name, arrT,
-    { kind: "jsOp", op: "arrLit", args: [], type: JSVAL, loc },
-    (element, index, result) => ({
-      kind: "jsOp", op: "setIdx",
-      args: [result, { kind: "jsMarshal", value: index, type: JSVAL, loc }, lowerer.jsvalLiftExpr(element, loc)],
-      type: VOID, loc,
-    }), loc));
+  lowerer.liftedFns.push(
+    buildArrayConversion(
+      name,
+      arrT,
+      { kind: "jsOp", op: "arrLit", args: [], type: JSVAL, loc },
+      (element, index, result) => ({
+        kind: "jsOp",
+        op: "setIdx",
+        args: [
+          result,
+          { kind: "jsMarshal", value: index, type: JSVAL, loc },
+          lowerer.jsvalLiftExpr(element, loc),
+        ],
+        type: VOID,
+        loc,
+      }),
+      loc,
+    ),
+  );
   return name;
 }
 
@@ -261,7 +361,11 @@ export function arrayToJsvalHelper(lowerer: Lowerer, elem: IrType, loc: SrcLoc):
  * a native array whose elements lift: the `any[]`-slot coercion (each
  * element becomes one island value; the array stays static). Null when
  * the element doesn't lift. */
-export function arrayToJsvalArrayHelper(lowerer: Lowerer, fromElem: IrType, loc: SrcLoc): string | null {
+export function arrayToJsvalArrayHelper(
+  lowerer: Lowerer,
+  fromElem: IrType,
+  loc: SrcLoc,
+): string | null {
   if (fromElem.kind === "jsval" || !lowerer.jsvalLiftable(fromElem)) return null;
   const key = `elems:${typeKey(fromElem)}`;
   const existing = lowerer.coercions.islandInputs.get(key);
@@ -271,11 +375,21 @@ export function arrayToJsvalArrayHelper(lowerer: Lowerer, fromElem: IrType, loc:
   const arrT: IrType = { kind: "array", elem: fromElem };
   const outT: IrType = { kind: "array", elem: JSVAL };
 
-  lowerer.liftedFns.push(buildArrayConversion(name, arrT,
-    { kind: "arrayLit", elems: [], type: outT, loc },
-    (element, _index, result) => ({
-      kind: "arrIntrinsic", method: "push", receiver: result,
-      args: [lowerer.jsvalLiftExpr(element, loc)], type: F64, loc,
-    }), loc));
+  lowerer.liftedFns.push(
+    buildArrayConversion(
+      name,
+      arrT,
+      { kind: "arrayLit", elems: [], type: outT, loc },
+      (element, _index, result) => ({
+        kind: "arrIntrinsic",
+        method: "push",
+        receiver: result,
+        args: [lowerer.jsvalLiftExpr(element, loc)],
+        type: F64,
+        loc,
+      }),
+      loc,
+    ),
+  );
   return name;
 }

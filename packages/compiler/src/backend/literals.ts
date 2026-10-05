@@ -4,16 +4,19 @@ export { unsignedHex } from "../format-integer.js";
 /** Three octal digits prevent a following source digit extending an escape. */
 export function octalByte(value: number): string {
   const digits = "01234567";
-  return digits.charAt((value >>> 6) & 3) + digits.charAt((value >>> 3) & 7) + digits.charAt(value & 7);
+  return (
+    digits.charAt((value >>> 6) & 3) + digits.charAt((value >>> 3) & 7) + digits.charAt(value & 7)
+  );
 }
 
 /** LLVM byte-string contents, without quotes or the c prefix. */
 export function llvmBytes(bytes: Uint8Array, nulTerminated = true): string {
   let out = "";
   for (const byte of bytes) {
-    out += byte >= 0x20 && byte < 0x7f && byte !== 0x22 && byte !== 0x5c
-      ? String.fromCharCode(byte)
-      : "\\" + unsignedHex(byte).padStart(2, "0").toUpperCase();
+    out +=
+      byte >= 0x20 && byte < 0x7f && byte !== 0x22 && byte !== 0x5c
+        ? String.fromCharCode(byte)
+        : "\\" + unsignedHex(byte).padStart(2, "0").toUpperCase();
   }
   return nulTerminated ? out + "\\00" : out;
 }

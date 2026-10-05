@@ -19,8 +19,7 @@ import { locOf } from "../program.js";
 import { type IrExpr, type IrType, type SrcLoc, STRING, VOID, isUnitType } from "../../ir/ir.js";
 import { numLit, strLit } from "../../ir/build.js";
 
-const TEST_FN_HINT =
-  "test bodies take () or (t: TestContext) and return void or Promise<void>";
+const TEST_FN_HINT = "test bodies take () or (t: TestContext) and return void or Promise<void>";
 const TESTCTX_SURFACE_HINT =
   "t.test, t.skip, t.todo, t.diagnostic, t.name, and t.assert.* are the supported TestContext members";
 
@@ -40,9 +39,7 @@ function requireStatementPosition(lowerer: Lowerer, call: ts.CallExpression, wha
  * V8 frames point at the callee's NAME for member calls (`t.test(...)`
  * reports the `test` property's column), at the call for plain ones. */
 function atStringOf(expr: ts.CallExpression): string {
-  const target = ts.isPropertyAccessExpression(expr.expression)
-    ? expr.expression.name
-    : expr;
+  const target = ts.isPropertyAccessExpression(expr.expression) ? expr.expression.name : expr;
   const sf = expr.getSourceFile();
   const pos = sf.getLineAndCharacterOfPosition(target.getStart());
   return `${sf.fileName}:${pos.line + 1}:${pos.character + 1}`;
@@ -121,7 +118,12 @@ function lowerTestOptions(lowerer: Lowerer, node: ts.Expression, what: string): 
  * TestContext param, returning void (sync) or Promise<void> (async —
  * the runner awaits through the emitted spawn wrapper). Returns the
  * closure and its runtime flags (1 async | 2 takes-ctx). */
-function lowerBodyArg(lowerer: Lowerer, node: ts.Expression, what: string, allowCtx: boolean): { cb: IrExpr; flags: number } {
+function lowerBodyArg(
+  lowerer: Lowerer,
+  node: ts.Expression,
+  what: string,
+  allowCtx: boolean,
+): { cb: IrExpr; flags: number } {
   const cb = lowerer.lowerExpr(node);
   if (cb.type.kind !== "func") {
     lowerer.noLowering(`${what} whose body is not a function`, node, TEST_FN_HINT);
@@ -136,11 +138,7 @@ function lowerBodyArg(lowerer: Lowerer, node: ts.Expression, what: string, allow
   }
   if (cb.type.params.length === 1) {
     if (cb.type.params[0]!.kind !== "testCtx") {
-      lowerer.noLowering(
-        `${what} whose parameter is not the TestContext`,
-        node,
-        TEST_FN_HINT,
-      );
+      lowerer.noLowering(`${what} whose parameter is not the TestContext`, node, TEST_FN_HINT);
     }
     flags |= 2;
   }
@@ -197,15 +195,33 @@ function lowerRegistration(
     const emptyFlags = numLit(opts.only ? 4 : 0, loc);
     return sub
       ? { kind: "libCall", fn: "test.subEmpty", args: [sub, name, mode, msg, at], type: VOID, loc }
-      : { kind: "libCall", fn: "test.registerEmpty", args: [name, mode, msg, emptyFlags, at], type: VOID, loc };
+      : {
+          kind: "libCall",
+          fn: "test.registerEmpty",
+          args: [name, mode, msg, emptyFlags, at],
+          type: VOID,
+          loc,
+        };
   }
   const { cb, flags } = lowerBodyArg(lowerer, fnNode, what, true);
   const flagsLit = numLit(flags | (opts.only ? 4 : 0), loc);
   if (sub) {
     const promiseVoid: IrType = { kind: "promise", inner: VOID };
-    return { kind: "libCall", fn: "test.sub", args: [sub, name, mode, msg, cb, flagsLit, at], type: promiseVoid, loc };
+    return {
+      kind: "libCall",
+      fn: "test.sub",
+      args: [sub, name, mode, msg, cb, flagsLit, at],
+      type: promiseVoid,
+      loc,
+    };
   }
-  return { kind: "libCall", fn: "test.register", args: [name, mode, msg, cb, flagsLit, at], type: VOID, loc };
+  return {
+    kind: "libCall",
+    fn: "test.register",
+    args: [name, mode, msg, cb, flagsLit, at],
+    type: VOID,
+    loc,
+  };
 }
 
 /** describe/suite (and describe.skip/todo/only): the body is a SYNC
@@ -257,7 +273,13 @@ function lowerSuite(
 
 /** before/after/beforeEach/afterEach — hooks on the enclosing suite
  * (top-level hooks attach to the implicit root). */
-function lowerHook(lowerer: Lowerer, expr: ts.CallExpression, which: number, what: string, loc: SrcLoc): IrExpr {
+function lowerHook(
+  lowerer: Lowerer,
+  expr: ts.CallExpression,
+  which: number,
+  what: string,
+  loc: SrcLoc,
+): IrExpr {
   requireStatementPosition(lowerer, expr, what);
   const args = expr.arguments;
   if (args.length !== 1) {
@@ -269,13 +291,19 @@ function lowerHook(lowerer: Lowerer, expr: ts.CallExpression, which: number, wha
   }
   const { cb, flags } = lowerBodyArg(lowerer, args[0]!, what, false);
   return {
-    kind: "libCall", fn: "test.hook",
-    args: [numLit(which, loc), cb, numLit(flags, loc)], type: VOID, loc,
+    kind: "libCall",
+    fn: "test.hook",
+    args: [numLit(which, loc), cb, numLit(flags, loc)],
+    type: VOID,
+    loc,
   };
 }
 
 const HOOK_WHICH: Record<string, number | undefined> = {
-  before: 0, after: 1, beforeEach: 2, afterEach: 3,
+  before: 0,
+  after: 1,
+  beforeEach: 2,
+  afterEach: 3,
 };
 
 /** Module-function calls on node:test import bindings (named imports AND
@@ -299,8 +327,12 @@ export function lowerNodeTestModuleCall(
       // The default-import method twins (`test.skip(...)` where `test`
       // is the module object).
       return lowerRegistration(
-        lowerer, expr, `test.${bi.member}(...)`, loc,
-        bi.member === "skip" ? 1 : bi.member === "todo" ? 2 : 3, null,
+        lowerer,
+        expr,
+        `test.${bi.member}(...)`,
+        loc,
+        bi.member === "skip" ? 1 : bi.member === "todo" ? 2 : 3,
+        null,
       );
     case "describe":
     case "suite":
@@ -336,7 +368,11 @@ export function lowerNodeTestModuleCall(
  * "node:test"`) or the CJS `const test = require('node:test')` twin
  * (Node's module object is the test function itself). Null for other
  * callees. */
-export function lowerTestDirectCall(lowerer: Lowerer, expr: ts.CallExpression, loc: SrcLoc): IrExpr | null {
+export function lowerTestDirectCall(
+  lowerer: Lowerer,
+  expr: ts.CallExpression,
+  loc: SrcLoc,
+): IrExpr | null {
   const callee = expr.expression;
   if (!ts.isIdentifier(callee)) return null;
   if (lowerer.builtinNamespaceModuleOf(callee) !== "test") return null;
@@ -371,17 +407,38 @@ export function lowerTestMethodCall(
   if (ts.isIdentifier(access.expression)) {
     const bi = lowerer.builtinImportOf(access.expression);
     if (bi && bi.module === "test") {
-      if ((bi.member === "test" || bi.member === "it") && (member === "skip" || member === "todo" || member === "only")) {
+      if (
+        (bi.member === "test" || bi.member === "it") &&
+        (member === "skip" || member === "todo" || member === "only")
+      ) {
         return lowerRegistration(
-          lowerer, call, `${bi.member}.${member}(...)`, loc,
-          member === "skip" ? 1 : member === "todo" ? 2 : 3, null,
+          lowerer,
+          call,
+          `${bi.member}.${member}(...)`,
+          loc,
+          member === "skip" ? 1 : member === "todo" ? 2 : 3,
+          null,
         );
       }
-      if ((bi.member === "describe" || bi.member === "suite") && (member === "skip" || member === "todo" || member === "only")) {
-        return lowerSuite(lowerer, call, `${bi.member}.${member}(...)`, loc, member === "skip" ? 1 : member === "todo" ? 2 : 0);
+      if (
+        (bi.member === "describe" || bi.member === "suite") &&
+        (member === "skip" || member === "todo" || member === "only")
+      ) {
+        return lowerSuite(
+          lowerer,
+          call,
+          `${bi.member}.${member}(...)`,
+          loc,
+          member === "skip" ? 1 : member === "todo" ? 2 : 0,
+        );
       }
       if (bi.member === "mock") {
-        lowerer.noLowering("test.mock", call, "mocking has no lowering", lowerer.checker.getSymbolAtLocation(access.name));
+        lowerer.noLowering(
+          "test.mock",
+          call,
+          "mocking has no lowering",
+          lowerer.checker.getSymbolAtLocation(access.name),
+        );
       }
       lowerer.noLowering(
         `test.${bi.member}.${member}`,
@@ -422,19 +479,30 @@ export function lowerTestMethodCall(
   if (member === "skip" || member === "todo") {
     requireStatementPosition(lowerer, call, `t.${member}(...)`);
     if (args.length > 1) {
-      lowerer.noLowering(`t.${member} with ${args.length} arguments`, call, `the supported form is t.${member}([message])`);
+      lowerer.noLowering(
+        `t.${member} with ${args.length} arguments`,
+        call,
+        `the supported form is t.${member}([message])`,
+      );
     }
     const receiver = lowerer.lowerExpr(access.expression);
     const msg = args[0] ? lowerer.lowerExprExpecting(args[0], STRING) : strLit("", loc);
     return {
-      kind: "libCall", fn: member === "skip" ? "test.ctxSkip" : "test.ctxTodo",
-      args: [receiver, msg], type: VOID, loc,
+      kind: "libCall",
+      fn: member === "skip" ? "test.ctxSkip" : "test.ctxTodo",
+      args: [receiver, msg],
+      type: VOID,
+      loc,
     };
   }
   if (member === "diagnostic") {
     requireStatementPosition(lowerer, call, "t.diagnostic(...)");
     if (args.length !== 1) {
-      lowerer.noLowering(`t.diagnostic with ${args.length} arguments`, call, "the supported form is t.diagnostic(message)");
+      lowerer.noLowering(
+        `t.diagnostic with ${args.length} arguments`,
+        call,
+        "the supported form is t.diagnostic(message)",
+      );
     }
     const receiver = lowerer.lowerExpr(access.expression);
     const msg = lowerer.lowerExprExpecting(args[0]!, STRING);
@@ -451,7 +519,10 @@ export function lowerTestMethodCall(
 /** `t.name` as a VALUE — one entry in lower-exprs' property chain. Null
  * for other receivers/members (the chain keeps trying); unlowered
  * TestContext members fence member-qualified. */
-export function lowerTestCtxProperty(lowerer: Lowerer, expr: ts.PropertyAccessExpression): IrExpr | null {
+export function lowerTestCtxProperty(
+  lowerer: Lowerer,
+  expr: ts.PropertyAccessExpression,
+): IrExpr | null {
   if (expr.questionDotToken) return null;
   if (lowerer.mapTypeOf(lowerer.typeOf(expr.expression))?.kind !== "testCtx") return null;
   if (!lowerer.isStdlibMember(expr)) return null;

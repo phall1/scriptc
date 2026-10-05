@@ -65,33 +65,56 @@ export function dynDesc(
   unionsById: ReadonlyMap<string, IrUnionDef>,
 ): string {
   switch (t.kind) {
-    case "f64": return "number";
-    case "bigint": return "bigint";
-    case "symbol": return "symbol";
-    case "string": return "string";
-    case "bool": return "boolean";
-    case "record": return recordsById.get(t.shapeId)?.tuple ? "array" : "object";
-    case "array": return "array";
-    case "nullT": return "null";
-    case "undefinedT": return "undefined";
-    case "dyn": return "unknown";
-    case "promise": return "Promise";
-    case "procStream": return "ProcessStream";
-    case "bytes": return BYTES_ELEMENT_NAME[t.elem];
-    case "object": return t.className.replace(/^%/, "");
+    case "f64":
+      return "number";
+    case "bigint":
+      return "bigint";
+    case "symbol":
+      return "symbol";
+    case "string":
+      return "string";
+    case "bool":
+      return "boolean";
+    case "record":
+      return recordsById.get(t.shapeId)?.tuple ? "array" : "object";
+    case "array":
+      return "array";
+    case "nullT":
+      return "null";
+    case "undefinedT":
+      return "undefined";
+    case "dyn":
+      return "unknown";
+    case "promise":
+      return "Promise";
+    case "procStream":
+      return "ProcessStream";
+    case "bytes":
+      return BYTES_ELEMENT_NAME[t.elem];
+    case "object":
+      return t.className.replace(/^%/, "");
     case "union": {
       const def = unionsById.get(t.unionId);
-      if (!def) throw new InternalCompilerError(`IR analysis bug: dynDesc of unknown union ${t.unionId}`);
+      if (!def)
+        throw new InternalCompilerError(`IR analysis bug: dynDesc of unknown union ${t.unionId}`);
       return def.arms.map((arm) => dynDesc(arm, recordsById, unionsById)).join(" | ");
     }
-    case "func": return "function";
-    case "classval": return "class constructor";
-    case "generator": return t.async ? "AsyncGenerator" : "Generator";
-    case "map": return "Map";
-    case "set": return "Set";
-    case "regex": return "RegExp";
-    case "url": return "URL";
-    case "date": return "Date";
+    case "func":
+      return "function";
+    case "classval":
+      return "class constructor";
+    case "generator":
+      return t.async ? "AsyncGenerator" : "Generator";
+    case "map":
+      return "Map";
+    case "set":
+      return "Set";
+    case "regex":
+      return "RegExp";
+    case "url":
+      return "URL";
+    case "date":
+      return "Date";
     default: {
       const handle = DYN_HANDLE_KINDS.get(t.kind);
       if (handle) return handle.cls;
@@ -104,12 +127,39 @@ export function dynDesc(
 // suspend, or release an owner. Keep this explicit: array folds and future
 // Math operations must not inherit the guarantee from their name alone.
 const BORROW_SAFE_MATH = new Set<IrLibFn>([
-  "math.floor", "math.ceil", "math.trunc", "math.round", "math.abs",
-  "math.min", "math.max", "math.sqrt", "math.pow",
-  "math.sin", "math.sinh", "math.cos", "math.cosh", "math.tan", "math.tanh",
-  "math.asin", "math.asinh", "math.acos", "math.acosh", "math.atan", "math.atanh",
-  "math.atan2", "math.cbrt", "math.clz32", "math.sign", "math.exp", "math.expm1",
-  "math.fround", "math.log", "math.log1p", "math.log2", "math.log10", "math.imul",
+  "math.floor",
+  "math.ceil",
+  "math.trunc",
+  "math.round",
+  "math.abs",
+  "math.min",
+  "math.max",
+  "math.sqrt",
+  "math.pow",
+  "math.sin",
+  "math.sinh",
+  "math.cos",
+  "math.cosh",
+  "math.tan",
+  "math.tanh",
+  "math.asin",
+  "math.asinh",
+  "math.acos",
+  "math.acosh",
+  "math.atan",
+  "math.atanh",
+  "math.atan2",
+  "math.cbrt",
+  "math.clz32",
+  "math.sign",
+  "math.exp",
+  "math.expm1",
+  "math.fround",
+  "math.log",
+  "math.log1p",
+  "math.log2",
+  "math.log10",
+  "math.imul",
 ]);
 
 /** Whether an operand preserves a direct receiver binding until its last
@@ -128,32 +178,43 @@ export function isStableReceiverOperand(e: IrExpr, receiverLocalId: string): boo
       return e.localId !== receiverLocalId && isStableReceiverOperand(e.value, receiverLocalId);
     case "bin":
     case "logical":
-      return isStableReceiverOperand(e.left, receiverLocalId) &&
-        isStableReceiverOperand(e.right, receiverLocalId);
+      return (
+        isStableReceiverOperand(e.left, receiverLocalId) &&
+        isStableReceiverOperand(e.right, receiverLocalId)
+      );
     case "unary":
     case "toBool":
       return isStableReceiverOperand(e.operand, receiverLocalId);
     case "ternary":
-      return isStableReceiverOperand(e.cond, receiverLocalId) &&
+      return (
+        isStableReceiverOperand(e.cond, receiverLocalId) &&
         isStableReceiverOperand(e.then, receiverLocalId) &&
-        isStableReceiverOperand(e.else_, receiverLocalId);
+        isStableReceiverOperand(e.else_, receiverLocalId)
+      );
     case "bytesIntrinsic":
-      return (e.method === "get" || e.method === "length" || e.method === "byteLength" || byteNumberAccess(e) !== null) &&
+      return (
+        (e.method === "get" ||
+          e.method === "length" ||
+          e.method === "byteLength" ||
+          byteNumberAccess(e) !== null) &&
         e.receiver.kind === "varRef" &&
-        e.args.every((arg) => isStableReceiverOperand(arg, receiverLocalId));
+        e.args.every((arg) => isStableReceiverOperand(arg, receiverLocalId))
+      );
     case "libCall":
-      return BORROW_SAFE_MATH.has(e.fn) && e.type.kind === "f64" &&
-        e.args.every((arg) => arg.type.kind === "f64" && isStableReceiverOperand(arg, receiverLocalId));
+      return (
+        BORROW_SAFE_MATH.has(e.fn) &&
+        e.type.kind === "f64" &&
+        e.args.every(
+          (arg) => arg.type.kind === "f64" && isStableReceiverOperand(arg, receiverLocalId),
+        )
+      );
     default:
       return false;
   }
 }
 
 /** The undefined arm's tag of a union type, or -1. */
-export function undefinedArmTag(
-  t: IrType,
-  unionsById: ReadonlyMap<string, IrUnionDef>,
-): number {
+export function undefinedArmTag(t: IrType, unionsById: ReadonlyMap<string, IrUnionDef>): number {
   if (t.kind !== "union") return -1;
   return unionsById.get(t.unionId)?.arms.findIndex((arm) => arm.kind === "undefinedT") ?? -1;
 }
@@ -161,8 +222,14 @@ export function undefinedArmTag(
 /** True when a statement list ends in a control-flow jump. */
 export function endsWithJump(stmts: readonly IrStmt[]): boolean {
   const last = stmts[stmts.length - 1]?.kind;
-  return last === "return" || last === "break" || last === "continue" ||
-    last === "throw" || last === "rethrow" || last === "runtimeFence";
+  return (
+    last === "return" ||
+    last === "break" ||
+    last === "continue" ||
+    last === "throw" ||
+    last === "rethrow" ||
+    last === "runtimeFence"
+  );
 }
 
 /** True when class-value construction can enter a throwing constructor in
@@ -172,7 +239,8 @@ export function newValueMayThrow(
   meta: IrClassGraphNode | undefined,
   mayThrow: ReadonlySet<string>,
 ): boolean {
-  if (!meta) throw new InternalCompilerError(`IR analysis bug: newValue on unknown class ${className}`);
+  if (!meta)
+    throw new InternalCompilerError(`IR analysis bug: newValue on unknown class ${className}`);
   const any = (node: IrClassGraphNode): boolean =>
     mayThrow.has(`%${node.def.name}.constructor`) || node.children.some(any);
   return any(meta);

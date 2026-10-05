@@ -70,8 +70,16 @@ interface CProto {
 }
 
 const LL_I64_TYPES = new Set([
-  "size_t", "ssize_t", "int64_t", "uint64_t", "intptr_t", "uintptr_t",
-  "long", "long long", "unsigned long", "unsigned long long",
+  "size_t",
+  "ssize_t",
+  "int64_t",
+  "uint64_t",
+  "intptr_t",
+  "uintptr_t",
+  "long",
+  "long long",
+  "unsigned long",
+  "unsigned long long",
 ]);
 const LL_I32_TYPES = new Set(["int", "int32_t", "uint32_t", "unsigned", "unsigned int"]);
 
@@ -83,12 +91,22 @@ interface HeaderTypes {
 /** C type → the LLVM type the emitter must use for it. Throws on anything
  * unrecognized so header growth can never slip past the guard unmapped. */
 function cTypeToLl(raw: string, types: HeaderTypes): string {
-  const t = raw.replace(/\b(const|struct|restrict|volatile|extern|_Noreturn)\b/g, " ").replace(/\s+/g, " ").trim();
+  const t = raw
+    .replace(/\b(const|struct|restrict|volatile|extern|_Noreturn)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   if (t.includes("*")) return "ptr";
   if (t === "void") return "void";
   if (t === "double") return "double";
   if (t === "bool" || t === "_Bool") return "i1";
-  if (t === "char" || t === "signed char" || t === "unsigned char" || t === "int8_t" || t === "uint8_t") return "i8";
+  if (
+    t === "char" ||
+    t === "signed char" ||
+    t === "unsigned char" ||
+    t === "int8_t" ||
+    t === "uint8_t"
+  )
+    return "i8";
   if (t === "short" || t === "unsigned short" || t === "int16_t" || t === "uint16_t") return "i16";
   if (t === "va_list") return "ptr"; // decays to a pointer in a parameter list on our targets
   if (LL_I64_TYPES.has(t)) return "i64";
@@ -144,7 +162,9 @@ async function parseHeader(): Promise<{ protos: Map<string, CProto>; dataSyms: S
     .replace(/\/\/[^\n]*/g, " ")
     .replace(/^[ \t]*#[^\n]*$/gm, " ");
   const enums = new Set<string>();
-  for (const m of src.matchAll(/typedef\s+enum(?:\s+[A-Za-z_][A-Za-z0-9_]*)?\s*\{[^}]*\}\s*([A-Za-z_][A-Za-z0-9_]*)\s*;/g)) {
+  for (const m of src.matchAll(
+    /typedef\s+enum(?:\s+[A-Za-z_][A-Za-z0-9_]*)?\s*\{[^}]*\}\s*([A-Za-z_][A-Za-z0-9_]*)\s*;/g,
+  )) {
     enums.add(m[1]!);
   }
   const ptrTypedefs = new Set<string>();
@@ -172,11 +192,21 @@ async function parseHeader(): Promise<{ protos: Map<string, CProto>; dataSyms: S
     // the name; anything that doesn't look like one (a parameter list we
     // matched inside, a typedef) is skipped.
     const before = src.slice(0, m.index);
-    const boundary = Math.max(before.lastIndexOf(";"), before.lastIndexOf("}"), before.lastIndexOf("{"));
-    const retText = before.slice(boundary + 1).replace(/\s+/g, " ").trim();
+    const boundary = Math.max(
+      before.lastIndexOf(";"),
+      before.lastIndexOf("}"),
+      before.lastIndexOf("{"),
+    );
+    const retText = before
+      .slice(boundary + 1)
+      .replace(/\s+/g, " ")
+      .trim();
     if (retText === "" || !/^[A-Za-z_][A-Za-z0-9_ *]*[ *]$/.test(`${retText} `)) continue;
     if (/\btypedef\b/.test(retText)) continue;
-    const argsText = src.slice(m.index + m[0].length, end).replace(/\s+/g, " ").trim();
+    const argsText = src
+      .slice(m.index + m[0].length, end)
+      .replace(/\s+/g, " ")
+      .trim();
     const parts = argsText === "" || argsText === "void" ? [] : splitParams(argsText);
     const variadic = parts[parts.length - 1] === "...";
     const params = (variadic ? parts.slice(0, -1) : parts).map((p) => cParamToLl(p, types));
@@ -201,10 +231,19 @@ interface LlDeclare {
 function parseDeclare(text: string): LlDeclare | undefined {
   const m = /^declare\s+(.+?)\s*@([A-Za-z0-9_$.]+)\(([^()]*)\)(?:\s+.*)?$/.exec(text.trim());
   if (!m) return undefined;
-  const ret = m[1]!.replace(/\b(zeroext|signext|noalias|nonnull)\b/g, " ").replace(/\s+/g, " ").trim();
-  const parts = m[3]!.trim() === "" ? [] : m[3]!.split(",").map((p) =>
-    p.replace(/\b(zeroext|signext|noalias|nonnull)\b/g, " ").replace(/\s+/g, " ").trim(),
-  );
+  const ret = m[1]!
+    .replace(/\b(zeroext|signext|noalias|nonnull)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const parts =
+    m[3]!.trim() === ""
+      ? []
+      : m[3]!.split(",").map((p) =>
+          p
+            .replace(/\b(zeroext|signext|noalias|nonnull)\b/g, " ")
+            .replace(/\s+/g, " ")
+            .trim(),
+        );
   const variadic = parts[parts.length - 1] === "...";
   return { ret, name: m[2]!, params: variadic ? parts.slice(0, -1) : parts, variadic };
 }
@@ -218,7 +257,8 @@ function checkDeclare(d: LlDeclare, protos: Map<string, CProto>): string | undef
     issues.push(`${d.params.length} params vs C ${proto.params.length}`);
   } else {
     for (let i = 0; i < proto.params.length; i++) {
-      if (d.params[i] !== proto.params[i]) issues.push(`param ${i} is ${d.params[i]} vs C ${proto.params[i]}`);
+      if (d.params[i] !== proto.params[i])
+        issues.push(`param ${i} is ${d.params[i]} vs C ${proto.params[i]}`);
     }
   }
   if (d.variadic !== proto.variadic) issues.push(`variadic ${d.variadic} vs C ${proto.variadic}`);
@@ -228,8 +268,15 @@ function checkDeclare(d: LlDeclare, protos: Map<string, CProto>): string | undef
 
 describe("LLVM backend declares match scr_runtime.h prototypes", () => {
   test("function memory attributes do not change the declared ABI", async () => {
-    const declaration = parseDeclare("declare zeroext i1 @scr_dyn_typed_ref_is_key(ptr, ptr) memory(read)");
-    expect(declaration).toEqual({ ret: "i1", name: "scr_dyn_typed_ref_is_key", params: ["ptr", "ptr"], variadic: false });
+    const declaration = parseDeclare(
+      "declare zeroext i1 @scr_dyn_typed_ref_is_key(ptr, ptr) memory(read)",
+    );
+    expect(declaration).toEqual({
+      ret: "i1",
+      name: "scr_dyn_typed_ref_is_key",
+      params: ["ptr", "ptr"],
+      variadic: false,
+    });
     const { protos } = await parseHeader();
     expect(checkDeclare(declaration!, protos)).toBeUndefined();
   });
@@ -240,22 +287,25 @@ describe("LLVM backend declares match scr_runtime.h prototypes", () => {
       irVersion: 1,
       sourceFile: loc.file,
       entry: "%main",
-      functions: [{
-        id: "%main",
-        name: "main",
-        params: [],
-        locals: [],
-        returnType: { kind: "void" },
-        body: [{ kind: "return", value: null, loc }],
-        loc,
-      }],
+      functions: [
+        {
+          id: "%main",
+          name: "main",
+          params: [],
+          locals: [],
+          returnType: { kind: "void" },
+          body: [{ kind: "return", value: null, loc }],
+          loc,
+        },
+      ],
     };
     const llvm = emitLlvmModule(mod, { runtimeAbiMarker: true });
     expect(llvm).toContain(`declare void @${RUNTIME_ABI_MARKER}()`);
     expect(llvm).toContain(`call void @${RUNTIME_ABI_MARKER}()`);
     expect(await readFile(headerPath, "utf8")).toContain(`void ${RUNTIME_ABI_MARKER}(void);`);
-    expect(await readFile(join(repoRoot, "packages/runtime/src/scr_console.c"), "utf8"))
-      .toContain(`void ${RUNTIME_ABI_MARKER}(void) {}`);
+    expect(await readFile(join(repoRoot, "packages/runtime/src/scr_console.c"), "utf8")).toContain(
+      `void ${RUNTIME_ABI_MARKER}(void) {}`,
+    );
   });
   test("ScrBytes structural type matches the C runtime layout", async () => {
     const outDir = await mkdtemp(join(tmpdir(), "scriptc-llvm-layout-"));
@@ -344,7 +394,9 @@ _Static_assert(offsetof(ScrBytes, is_buffer) == 40, "LLVM ScrBytes.is_buffer off
     const failures: string[] = [];
     for (const [name, file] of names) {
       if (protos.has(name) || dataSyms.has(name)) continue;
-      failures.push(`${file}: ${name} — the backend can emit this symbol but scr_runtime.h declares no such prototype or extern data symbol`);
+      failures.push(
+        `${file}: ${name} — the backend can emit this symbol but scr_runtime.h declares no such prototype or extern data symbol`,
+      );
     }
     // Extractor guard: the tables alone carry hundreds of names — finding
     // few means the scan rotted, not that the backend went quiet.

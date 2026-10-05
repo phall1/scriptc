@@ -9,8 +9,22 @@ import type { CcDriver } from "./native-toolchain.js";
 
 const execFileAsync = promisify(execFile);
 
-import { QJS_COMMIT, MBEDTLS_VERSION, ZLIB_VERSION, QJS_ENGINE_SOURCES, LRE_SOURCES, ZLIB_SOURCES } from "./vendor-inputs.js";
-export { QJS_COMMIT, MBEDTLS_VERSION, ZLIB_VERSION, QJS_ENGINE_SOURCES, LRE_SOURCES, ZLIB_SOURCES } from "./vendor-inputs.js";
+import {
+  QJS_COMMIT,
+  MBEDTLS_VERSION,
+  ZLIB_VERSION,
+  QJS_ENGINE_SOURCES,
+  LRE_SOURCES,
+  ZLIB_SOURCES,
+} from "./vendor-inputs.js";
+export {
+  QJS_COMMIT,
+  MBEDTLS_VERSION,
+  ZLIB_VERSION,
+  QJS_ENGINE_SOURCES,
+  LRE_SOURCES,
+  ZLIB_SOURCES,
+} from "./vendor-inputs.js";
 
 export interface VendorArchiveContext {
   runtimeSrcDir(): string;
@@ -21,19 +35,14 @@ export interface VendorArchiveContext {
 }
 
 export function createVendorArchives(context: VendorArchiveContext) {
-  const {
-    runtimeSrcDir,
-    targetPlatform,
-    isZigDriver,
-    resolvedToolIdentity,
-    runtimeFingerprint,
-  } = context;
+  const { runtimeSrcDir, targetPlatform, isZigDriver, resolvedToolIdentity, runtimeFingerprint } =
+    context;
   const validVendorArtifact = validCachedFile;
 
   function vendorEngineDir(): string {
     return join(runtimeSrcDir(), "..", "vendor", "quickjs-ng");
   }
-  
+
   /** Vendor prerequisites follow the per-user build root when persistent cache
    * validation succeeds. Keeping generated objects out of node_modules makes
    * npm installations, read-only package stores, and explicit cache warming all
@@ -47,7 +56,7 @@ export function createVendorArchives(context: VendorArchiveContext) {
       ? join(runtimeSrcDir(), "..", "vendor", ".cache")
       : join(buildRoot, "vendor");
   }
-  
+
   /** Cross targets already carry their architecture in the explicit triple.
    * Host-native prerequisites need the same separation: a checkout/package can
    * be used by both arm64 Node and Rosetta/x64 Node on macOS. */
@@ -58,7 +67,7 @@ export function createVendorArchives(context: VendorArchiveContext) {
   ): string {
     return driver.target === null ? `native-${hostPlatform}-${hostArch}` : driver.target;
   }
-  
+
   /** Vendor prerequisites live outside the content-addressed build root, so
    * their directory name must carry the environment, resolved compiler, owned
    * source bytes, and build-recipe identity of the artifacts that consume them.
@@ -79,9 +88,9 @@ export function createVendorArchives(context: VendorArchiveContext) {
       .digest("hex")
       .slice(0, 20);
   }
-  
+
   const vendorCompilerIdentityFallbacks = new Map<string, string>();
-  
+
   async function currentVendorCacheBuildIdentity(
     driver: Pick<CcDriver, "argv" | "target">,
     environmentFingerprint: string,
@@ -109,7 +118,7 @@ export function createVendorArchives(context: VendorArchiveContext) {
       await runtimeFingerprint(runtimeSrcDir()),
     );
   }
-  
+
   function engineArchivePath(
     sanitize: boolean,
     driver: CcDriver,
@@ -119,8 +128,7 @@ export function createVendorArchives(context: VendorArchiveContext) {
     const flavor = `${sanitize ? "asan" : "plain"}-${vendorCacheTargetFlavor(driver)}-${buildIdentity}`;
     return join(cacheRoot, `${QJS_COMMIT.slice(0, 12)}-${flavor}`, "libqjs.a");
   }
-  
-  
+
   /** Publish one finished vendor prerequisite from disposable build scratch.
    * The shared data and digest use the ordinary atomic cache publisher.
    * Concurrent builders produce equivalent bytes; on platforms where rename
@@ -149,7 +157,7 @@ export function createVendorArchives(context: VendorArchiveContext) {
     }
     throw new Error(`vendor cache publication failed integrity validation: ${destination}`);
   }
-  
+
   /** Pin cache-backed vendor inputs under an invocation-private directory before
    * linking/archiving. The shared LRU may unlink their cache names at any time;
    * hard links (or copies where links are unavailable) keep active inputs alive.
@@ -165,26 +173,28 @@ export function createVendorArchives(context: VendorArchiveContext) {
       const sources = await materialize();
       try {
         const now = new Date();
-        return await Promise.all(sources.map(async (source) => {
-          const destination = join(stageDir, basename(source));
-          try {
-            await link(source, destination);
-          } catch {
-            await copyFile(source, destination);
-          }
-          // Vendor prerequisites share the cache root's mtime-based LRU. A
-          // successful stage is a cache read, so promote the shared source name
-          // best-effort (it may have raced an eviction after the hard link).
-          await utimes(source, now, now).catch(() => undefined);
-          return destination;
-        }));
+        return await Promise.all(
+          sources.map(async (source) => {
+            const destination = join(stageDir, basename(source));
+            try {
+              await link(source, destination);
+            } catch {
+              await copyFile(source, destination);
+            }
+            // Vendor prerequisites share the cache root's mtime-based LRU. A
+            // successful stage is a cache read, so promote the shared source name
+            // best-effort (it may have raced an eviction after the hard link).
+            await utimes(source, now, now).catch(() => undefined);
+            return destination;
+          }),
+        );
       } catch (error) {
         lastError = error;
       }
     }
     throw lastError;
   }
-  
+
   /** The engine archive for one flavor, built lazily on the first --dynamic
    * compile and cached under <build-cache>/vendor/<commit>-<flavor>-<target>-<toolchain>/ — unlike
    * the runtime's own sources (recompiled every build, ~100ms), the engine is
@@ -214,11 +224,11 @@ export function createVendorArchives(context: VendorArchiveContext) {
     if (await validVendorArtifact(archive)) return archive;
     return buildEngineArchiveDirect(sanitize, driver, cacheRoot, cacheDir);
   }
-  
+
   /** The qjs library target's source list (CMakeLists.txt `qjs_sources` with
    * QJS_BUILD_LIBC off — cutils is header-only): the cross-build recipe
    * compiles exactly these. */
-  
+
   /** The engine archive for one target, per-TU compiler invocations plus ar.
    * The flags mirror what the former CMake
    * configurations apply to the qjs library target: gnu11 (CMAKE_C_EXTENSIONS
@@ -228,7 +238,12 @@ export function createVendorArchives(context: VendorArchiveContext) {
    * (-O0 -ggdb -fno-omit-frame-pointer -fsanitize=address
    * -fno-sanitize-recover=all) for asan. Same atomic-rename publish as every
    * vendor cache. */
-  async function buildEngineArchiveDirect(sanitize: boolean, driver: CcDriver, cacheRoot: string, cacheDir: string): Promise<string> {
+  async function buildEngineArchiveDirect(
+    sanitize: boolean,
+    driver: CcDriver,
+    cacheRoot: string,
+    cacheDir: string,
+  ): Promise<string> {
     const vendor = vendorEngineDir();
     const archive = join(cacheDir, "libqjs.a");
     const compileArgv = isZigDriver(driver) ? driver.argv : ["clang"];
@@ -242,14 +257,26 @@ export function createVendorArchives(context: VendorArchiveContext) {
       "-D_GNU_SOURCE",
       // CMake's qjs_defines on WIN32 (quickjs.c's own _WIN32 arms cover the
       // rest — timezoneapi, intrin, cutils.h's _msize usable-size probe).
-      ...(targetPlatform(driver) === "win32" ? ["-DWIN32_LEAN_AND_MEAN", "-D_WIN32_WINNT=0x0601"] : []),
+      ...(targetPlatform(driver) === "win32"
+        ? ["-DWIN32_LEAN_AND_MEAN", "-D_WIN32_WINNT=0x0601"]
+        : []),
       ...(sanitize
-        ? ["-O0", "-ggdb", "-fno-omit-frame-pointer", "-fsanitize=address", "-fno-sanitize-recover=all", "-DQJS_ENABLE_ASAN"]
+        ? [
+            "-O0",
+            "-ggdb",
+            "-fno-omit-frame-pointer",
+            "-fsanitize=address",
+            "-fno-sanitize-recover=all",
+            "-DQJS_ENABLE_ASAN",
+          ]
         : ["-Os", "-DNDEBUG"]),
-      "-I", vendor,
+      "-I",
+      vendor,
     ];
     await mkdir(cacheRoot, { recursive: true });
-    const buildDir = await mkdtemp(join(tmpdir(), `scriptc-vendor-qjs-${driver.target ?? "host"}-`));
+    const buildDir = await mkdtemp(
+      join(tmpdir(), `scriptc-vendor-qjs-${driver.target ?? "host"}-`),
+    );
     try {
       const width = Math.min(QJS_ENGINE_SOURCES.length, availableParallelism());
       for (let i = 0; i < QJS_ENGINE_SOURCES.length; i += width) {
@@ -257,25 +284,37 @@ export function createVendorArchives(context: VendorArchiveContext) {
           QJS_ENGINE_SOURCES.slice(i, i + width).map((src) =>
             execFileAsync(
               compileArgv[0] ?? "clang",
-              [...compileArgv.slice(1), ...cflags, "-c", join(vendor, src), "-o", join(buildDir, `${basename(src, ".c")}.o`)],
+              [
+                ...compileArgv.slice(1),
+                ...cflags,
+                "-c",
+                join(vendor, src),
+                "-o",
+                join(buildDir, `${basename(src, ".c")}.o`),
+              ],
               { cwd: buildDir },
             ),
           ),
         );
       }
-      await execFileAsync(arArgv[0] ?? "ar", [...arArgv.slice(1), "rcs", join(buildDir, "libqjs.a"), ...QJS_ENGINE_SOURCES.map((s) => join(buildDir, `${basename(s, ".c")}.o`))]);
+      await execFileAsync(arArgv[0] ?? "ar", [
+        ...arArgv.slice(1),
+        "rcs",
+        join(buildDir, "libqjs.a"),
+        ...QJS_ENGINE_SOURCES.map((s) => join(buildDir, `${basename(s, ".c")}.o`)),
+      ]);
       await publishVendorArtifact(join(buildDir, "libqjs.a"), archive);
     } finally {
       await rm(buildDir, { recursive: true, force: true });
     }
     return archive;
   }
-  
+
   /** The vendor sources behind static-build regex support: quickjs-ng's
    * libregexp and its unicode tables (cutils is header-only). Deliberately
    * NOT the engine — a regex-using static binary links ~110KB of matcher,
    * never the ~620KB island. */
-  
+
   function lreObjectPaths(
     sanitize: boolean,
     driver: CcDriver,
@@ -289,7 +328,7 @@ export function createVendorArchives(context: VendorArchiveContext) {
     const cacheDir = join(cacheRoot, `${QJS_COMMIT.slice(0, 12)}-lre-${flavor}`);
     return LRE_SOURCES.map((f) => join(cacheDir, f.replace(/\.c$/, ".o")));
   }
-  
+
   /** The libregexp objects for one flavor, compiled lazily on the first
    * regex-using static build (~1s) and cached like the engine archive —
    * <build-cache>/vendor/<commit>-lre-<flavor>-<target>-<toolchain>/*.o — with the same atomic-rename
@@ -326,17 +365,17 @@ export function createVendorArchives(context: VendorArchiveContext) {
       objects: lreObjectPaths(sanitize, driver, buildIdentity, cacheRoot),
     });
   }
-  
+
   function vendorZlibDir(): string {
     return join(runtimeSrcDir(), "..", "vendor", "zlib");
   }
-  
+
   /** The vendored zlib TUs behind Zig zlib support: every root *.c
    * except the gzFile file-I/O units (gz*.c — nothing in scr_zlib.c
    * references the gzFile API, and those TUs alone want unistd/io headers).
    * The default host-clang build links the system libz; Zig builds use this
    * list so targetless and explicit-target Zig inputs stay on one toolchain. */
-  
+
   function zlibObjectPaths(
     sanitize: boolean,
     driver: CcDriver,
@@ -350,7 +389,7 @@ export function createVendorArchives(context: VendorArchiveContext) {
     const cacheDir = join(cacheRoot, `zlib-${ZLIB_VERSION}-${flavor}`);
     return ZLIB_SOURCES.map((f) => join(cacheDir, f.replace(/\.c$/, ".o")));
   }
-  
+
   /** The zlib objects for one flavor, compiled lazily on the first zlib-using
    * Zig build (~1s) and cached like the lre objects —
    * <build-cache>/vendor/zlib-<version>-<flavor>-<target>-<toolchain>/*.o — with the same atomic-rename
@@ -381,7 +420,7 @@ export function createVendorArchives(context: VendorArchiveContext) {
       objects: zlibObjectPaths(sanitize, driver, buildIdentity, cacheRoot),
     });
   }
-  
+
   /** Compile and atomically publish one cached set of vendored C objects. */
   async function ensureVendorObjects(options: {
     sanitize: boolean;
@@ -395,7 +434,7 @@ export function createVendorArchives(context: VendorArchiveContext) {
   }): Promise<string[]> {
     const { sanitize, driver, cacheRoot, flavor, name, vendor, sources, objects } = options;
     if ((await Promise.all(objects.map(validVendorArtifact))).every(Boolean)) return objects;
-  
+
     await mkdir(cacheRoot, { recursive: true });
     const buildDir = await mkdtemp(join(tmpdir(), `scriptc-vendor-${name}-${flavor}-`));
     try {
@@ -408,39 +447,59 @@ export function createVendorArchives(context: VendorArchiveContext) {
             "-std=c11",
             ...driver.targetArgs,
             ...(sanitize ? ["-O1", "-fsanitize=address"] : ["-Os"]),
-            "-I", vendor,
-            "-c", join(vendor, f),
-            "-o", join(buildDir, f.replace(/\.c$/, ".o")),
+            "-I",
+            vendor,
+            "-c",
+            join(vendor, f),
+            "-o",
+            join(buildDir, f.replace(/\.c$/, ".o")),
           ],
           { cwd: buildDir },
         );
       }
-      await Promise.all(objects.map((destination) =>
-        publishVendorArtifact(join(buildDir, basename(destination)), destination)
-      ));
+      await Promise.all(
+        objects.map((destination) =>
+          publishVendorArtifact(join(buildDir, basename(destination)), destination),
+        ),
+      );
     } finally {
       await rm(buildDir, { recursive: true, force: true });
     }
     return objects;
   }
-  
+
   function vendorCurlDir(): string {
     return join(runtimeSrcDir(), "..", "vendor", "curl");
   }
-  
+
   /** Every libcurl function scr_fetch_curl.c references — the generated import
    * stub defines exactly these. A new curl call in scr_fetch_curl.c that is
    * missing here fails the CROSS link immediately with the symbol's name
    * (host builds resolve it from the real system libcurl and never look). */
   const CURL_STUB_SYMBOLS = [
-    "curl_easy_cleanup", "curl_easy_getinfo", "curl_easy_init", "curl_easy_setopt", "curl_easy_strerror",
-    "curl_free", "curl_global_cleanup", "curl_global_init",
-    "curl_multi_add_handle", "curl_multi_cleanup", "curl_multi_info_read", "curl_multi_init",
-    "curl_multi_perform", "curl_multi_poll", "curl_multi_remove_handle",
-    "curl_slist_append", "curl_slist_free_all",
-    "curl_url", "curl_url_cleanup", "curl_url_get", "curl_url_set",
+    "curl_easy_cleanup",
+    "curl_easy_getinfo",
+    "curl_easy_init",
+    "curl_easy_setopt",
+    "curl_easy_strerror",
+    "curl_free",
+    "curl_global_cleanup",
+    "curl_global_init",
+    "curl_multi_add_handle",
+    "curl_multi_cleanup",
+    "curl_multi_info_read",
+    "curl_multi_init",
+    "curl_multi_perform",
+    "curl_multi_poll",
+    "curl_multi_remove_handle",
+    "curl_slist_append",
+    "curl_slist_free_all",
+    "curl_url",
+    "curl_url_cleanup",
+    "curl_url_get",
+    "curl_url_set",
   ];
-  
+
   function curlStubDirPath(
     driver: CcDriver,
     buildIdentity: string,
@@ -448,7 +507,7 @@ export function createVendorArchives(context: VendorArchiveContext) {
   ): string {
     return join(cacheRoot, `curl-stub-${driver.target}-${buildIdentity}`);
   }
-  
+
   /** The libcurl import stub for one CROSS target, generated lazily on the
    * first fetch-using cross build and cached like the zlib objects —
    * <build-cache>/vendor/curl-stub-<target>-<toolchain>/libcurl.so, atomic-rename publish. The
@@ -468,7 +527,7 @@ export function createVendorArchives(context: VendorArchiveContext) {
     const cacheDir = curlStubDirPath(driver, buildIdentity, cacheRoot);
     const lib = join(cacheDir, "libcurl.so");
     if (await validVendorArtifact(lib)) return cacheDir;
-  
+
     await mkdir(cacheRoot, { recursive: true });
     const buildDir = await mkdtemp(join(tmpdir(), "scriptc-vendor-curl-stub-"));
     try {
@@ -477,10 +536,12 @@ export function createVendorArchives(context: VendorArchiveContext) {
       await execFileAsync(driver.argv[0] ?? "clang", [
         ...driver.argv.slice(1),
         ...driver.targetArgs,
-        "-shared", "-fPIC",
+        "-shared",
+        "-fPIC",
         "-Wl,-soname,libcurl.so.4",
         src,
-        "-o", join(buildDir, "libcurl.so"),
+        "-o",
+        join(buildDir, "libcurl.so"),
       ]);
       await publishVendorArtifact(join(buildDir, "libcurl.so"), lib);
     } finally {
@@ -488,11 +549,11 @@ export function createVendorArchives(context: VendorArchiveContext) {
     }
     return cacheDir;
   }
-  
+
   function vendorTlsDir(): string {
     return join(runtimeSrcDir(), "..", "vendor", "mbedtls");
   }
-  
+
   function tlsArchivePath(
     sanitize: boolean,
     driver: CcDriver,
@@ -502,7 +563,7 @@ export function createVendorArchives(context: VendorArchiveContext) {
     const flavor = `${sanitize ? "asan" : "plain"}-${vendorCacheTargetFlavor(driver)}-${buildIdentity}`;
     return join(cacheRoot, `mbedtls-${MBEDTLS_VERSION}-${flavor}`, "libmbedtls.a");
   }
-  
+
   /** The mbedTLS archive for one flavor, compiled lazily on the first
    * TLS-using build (~15s over ~110 TUs, parallelized) and cached like the
    * engine archive — <build-cache>/vendor/mbedtls-<version>-<flavor>-<target>-<toolchain>/libmbedtls.a —
@@ -530,7 +591,7 @@ export function createVendorArchives(context: VendorArchiveContext) {
     const vendor = vendorTlsDir();
     const archive = tlsArchivePath(sanitize, driver, buildIdentity, cacheRoot);
     if (await validVendorArtifact(archive)) return archive;
-  
+
     await mkdir(cacheRoot, { recursive: true });
     const buildDir = await mkdtemp(join(tmpdir(), `scriptc-vendor-mbedtls-${flavor}-`));
     try {
@@ -541,28 +602,41 @@ export function createVendorArchives(context: VendorArchiveContext) {
         "-std=c11",
         ...driver.targetArgs,
         ...(sanitize ? ["-O1", "-fsanitize=address"] : ["-Os"]),
-        "-I", join(vendor, "include"),
-        "-I", join(vendor, "library"),
+        "-I",
+        join(vendor, "include"),
+        "-I",
+        join(vendor, "library"),
       ];
       const width = availableParallelism();
       for (let i = 0; i < sources.length; i += width) {
         await Promise.all(
-          sources.slice(i, i + width).map((src) =>
-            execFileAsync(
-              compileArgv[0] ?? "clang",
-              [...compileArgv.slice(1), ...cflags, "-c", join(vendor, "library", src), "-o", join(buildDir, `${basename(src, ".c")}.o`)],
+          sources
+            .slice(i, i + width)
+            .map((src) =>
+              execFileAsync(compileArgv[0] ?? "clang", [
+                ...compileArgv.slice(1),
+                ...cflags,
+                "-c",
+                join(vendor, "library", src),
+                "-o",
+                join(buildDir, `${basename(src, ".c")}.o`),
+              ]),
             ),
-          ),
         );
       }
-      await execFileAsync(arArgv[0] ?? "ar", [...arArgv.slice(1), "rcs", join(buildDir, "libmbedtls.a"), ...sources.map((s) => join(buildDir, `${basename(s, ".c")}.o`))]);
+      await execFileAsync(arArgv[0] ?? "ar", [
+        ...arArgv.slice(1),
+        "rcs",
+        join(buildDir, "libmbedtls.a"),
+        ...sources.map((s) => join(buildDir, `${basename(s, ".c")}.o`)),
+      ]);
       await publishVendorArtifact(join(buildDir, "libmbedtls.a"), archive);
     } finally {
       await rm(buildDir, { recursive: true, force: true });
     }
     return archive;
   }
-  
+
   return {
     vendorEngineDir,
     vendorTlsDir,

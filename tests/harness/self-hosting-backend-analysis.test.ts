@@ -5,9 +5,23 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { expect, test } from "vitest";
-import { compile, compileC, deserializeModule, emitLlvmModule, serializeModule, validateModule, type AnalyzeResult } from "@scriptc/compiler";
+import {
+  compile,
+  compileC,
+  deserializeModule,
+  emitLlvmModule,
+  serializeModule,
+  validateModule,
+  type AnalyzeResult,
+} from "@scriptc/compiler";
 import { everyStmtList } from "../../packages/compiler/src/ir/traverse.js";
-import { moduleUsesInspect, moduleUsesDynInvoke, moduleUsesRegex, moduleUsesCopying, type IrModule } from "../../packages/compiler/src/ir/ir.js";
+import {
+  moduleUsesInspect,
+  moduleUsesDynInvoke,
+  moduleUsesRegex,
+  moduleUsesCopying,
+  type IrModule,
+} from "../../packages/compiler/src/ir/ir.js";
 import { backendAnalysisCases } from "./self-hosting-backend-cases.js";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
@@ -27,11 +41,14 @@ function counts(mod: IrModule): { calls: number; reads: number; records: number 
   const out = { calls: 0, reads: 0, records: 0 };
   for (const fn of mod.functions) {
     for (const local of fn.locals) if (local.type.kind === "record") out.records++;
-    everyStmtList(fn.body, { stmt: () => true, expr: (expr) => {
-      if (expr.kind === "call" && expr.type.kind === "record") out.calls++;
-      if (expr.kind === "recordGet") out.reads++;
-      return true;
-    } });
+    everyStmtList(fn.body, {
+      stmt: () => true,
+      expr: (expr) => {
+        if (expr.kind === "call" && expr.type.kind === "record") out.calls++;
+        if (expr.kind === "recordGet") out.reads++;
+        return true;
+      },
+    });
   }
   return out;
 }
@@ -41,13 +58,20 @@ test("the production optimization and backend analysis pipeline lowers entirely 
   // status-RPC timeout. Keep its worker responsive while the child lowers
   // the same source API; compiler failures still fail the awaited process.
   const sourceApi = pathToFileURL(join(root, "packages/compiler/src/index.ts")).href;
-  const { stdout } = await execFileAsync(process.execPath, [
-    "--import", "tsx", "--input-type=module", "--eval",
-    `import { analyze } from ${JSON.stringify(sourceApi)};
+  const { stdout } = await execFileAsync(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "--eval",
+      `import { analyze } from ${JSON.stringify(sourceApi)};
      const { coverage } = analyze(process.argv[1], { dynamic: false });
      console.log(JSON.stringify({ preflightFailed: coverage.preflightFailed, diagnostics: coverage.diagnostics, stats: coverage.stats }));`,
-    entry,
-  ], { ...options, timeout: 180_000 });
+      entry,
+    ],
+    { ...options, timeout: 180_000 },
+  );
   const coverage = JSON.parse(stdout) as AnalyzeResult["coverage"];
   expect(coverage.preflightFailed).toBe(false);
   expect(coverage.diagnostics).toEqual([]);
@@ -59,14 +83,23 @@ test("the production optimization and backend analysis pipeline lowers entirely 
 
 for (const backend of ["llvm"] as const) {
   test(`self-hosting backend analysis and optimization (${backend})`, async () => {
-    const dir = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-native-analysis-"));
+    const dir = mkdtempSync(
+      join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-native-analysis-"),
+    );
     const sanitize = process.env["SCRIPTC_SAN"] === "1";
-    const executable = (name: string): string => join(dir, name + (process.platform === "win32" ? ".exe" : ""));
+    const executable = (name: string): string =>
+      join(dir, name + (process.platform === "win32" ? ".exe" : ""));
     try {
       const built = await compile(entry, {
-        outDir: dir, outPath: executable("stage"), backend, dynamic: false, optimization: "dev", sanitize,
+        outDir: dir,
+        outPath: executable("stage"),
+        backend,
+        dynamic: false,
+        optimization: "dev",
+        sanitize,
       });
-      if (!built.ok) throw new Error(built.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
+      if (!built.ok)
+        throw new Error(built.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
       expect(built.backend).toBe(backend);
       const run = (mod: IrModule, mode: string, name: string) => {
         const path = join(dir, "input.json");
@@ -89,8 +122,16 @@ for (const backend of ["llvm"] as const) {
         if (item.indirect !== undefined) expect(actual.indirect, item.name).toBe(item.indirect);
         if (item.shapes) expect(actual.tracedShapes, item.name).toEqual(item.shapes);
         if (item.unions) expect(actual.tracedUnions, item.name).toEqual(item.unions);
-        if (item.tables) expect(actual.tables.map((t) => t.id), item.name).toEqual(item.tables);
-        if (item.loops) expect(actual.loops.map((l) => l.localId), item.name).toEqual(item.loops);
+        if (item.tables)
+          expect(
+            actual.tables.map((t) => t.id),
+            item.name,
+          ).toEqual(item.tables);
+        if (item.loops)
+          expect(
+            actual.loops.map((l) => l.localId),
+            item.name,
+          ).toEqual(item.loops);
       }
       for (const source of [
         "3103-scalar-record-nested-control-flow.ts",
@@ -100,8 +141,14 @@ for (const backend of ["llvm"] as const) {
       ]) {
         const sourcePath = join(root, "tests/corpus", source);
         const irPath = join(dir, "frontend.json");
-        const emitted = await compile(sourcePath, { outDir: dir, outPath: irPath, outputKind: "ir", dynamic: false });
-        if (!emitted.ok) throw new Error(emitted.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
+        const emitted = await compile(sourcePath, {
+          outDir: dir,
+          outPath: irPath,
+          outputKind: "ir",
+          dynamic: false,
+        });
+        if (!emitted.ok)
+          throw new Error(emitted.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
         const original = deserializeModule(readFileSync(irPath, "utf8"));
         const summary = run(original, "analysis", source);
         const analysis = JSON.parse(summary.native) as Analysis;
@@ -127,9 +174,13 @@ for (const backend of ["llvm"] as const) {
         writeFileSync(path, emitLlvmModule(optimized));
         const outPath = executable("program");
         await compileC({
-          cPath: path, outPath, sanitize,
-          inspect: moduleUsesInspect(optimized), dynInvoke: moduleUsesDynInvoke(optimized),
-          regex: moduleUsesRegex(optimized), copying: moduleUsesCopying(optimized),
+          cPath: path,
+          outPath,
+          sanitize,
+          inspect: moduleUsesInspect(optimized),
+          dynInvoke: moduleUsesDynInvoke(optimized),
+          regex: moduleUsesRegex(optimized),
+          copying: moduleUsesCopying(optimized),
         });
         const oracle = spawnSync(process.execPath, [sourcePath], options);
         const program = spawnSync(outPath, [], options);

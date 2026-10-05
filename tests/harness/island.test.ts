@@ -98,7 +98,11 @@ async function compileAndRun(
   } catch (err) {
     const e = err as { code?: unknown; stdout?: string; stderr?: string };
     if (typeof e.code !== "number") throw err;
-    return { stdout: e.stdout ?? "", stderr: stripAsanFiberWarning(e.stderr ?? ""), exitCode: e.code };
+    return {
+      stdout: e.stdout ?? "",
+      stderr: stripAsanFiberWarning(e.stderr ?? ""),
+      exitCode: e.code,
+    };
   }
 }
 
@@ -352,33 +356,36 @@ console.log(greet("world"), 6 * 7);
     expect(body(dyn)).toBe(body(stat));
   });
 
-  platformTest("static hello-world stays in its size class; island use pays the engine", async () => {
-    // The engine must NEVER leak into static builds: a default-built
-    // hello-world stays in the platform's compact class, while entering an
-    // island carries the embedded engine. An island-FREE --dynamic binary
-    // stays small too because the linker dead-strips the unreferenced archive.
-    // Measured on plain (non-ASan) builds in both lanes.
-    const [stat, dyn] = await Promise.all([
-      build("size-static", `console.log("hello", "world");\n`, {
-        dynamic: false,
-        sanitize: false,
-      }),
-      build("size-dynamic", `console.log(__island_eval("'hello ' + 'world'"));\n`, {
-        dynamic: true,
-        sanitize: false,
-      }),
-    ]);
-    const staticSize = statSync(stat.binaryPath).size;
-    const dynamicSize = statSync(dyn.binaryPath).size;
-    // The class is toolchain-specific and page-granular. The canonical
-    // Ubuntu 24.04/clang Sandbox measures 423,488 bytes after the sparse
-    // UTF-16 string index added its always-linked cache/allocator path;
-    // current Mach-O toolchains measure about 434KB. Each bound leaves
-    // roughly one native page of growth while staying far below the >1MB
-    // jump measured when the engine is linked.
-    expect(staticSize).toBeLessThan(process.platform === "linux" ? 440_000 : 450_000);
-    expect(dynamicSize).toBeGreaterThan(500_000);
-  });
+  platformTest(
+    "static hello-world stays in its size class; island use pays the engine",
+    async () => {
+      // The engine must NEVER leak into static builds: a default-built
+      // hello-world stays in the platform's compact class, while entering an
+      // island carries the embedded engine. An island-FREE --dynamic binary
+      // stays small too because the linker dead-strips the unreferenced archive.
+      // Measured on plain (non-ASan) builds in both lanes.
+      const [stat, dyn] = await Promise.all([
+        build("size-static", `console.log("hello", "world");\n`, {
+          dynamic: false,
+          sanitize: false,
+        }),
+        build("size-dynamic", `console.log(__island_eval("'hello ' + 'world'"));\n`, {
+          dynamic: true,
+          sanitize: false,
+        }),
+      ]);
+      const staticSize = statSync(stat.binaryPath).size;
+      const dynamicSize = statSync(dyn.binaryPath).size;
+      // The class is toolchain-specific and page-granular. The canonical
+      // Ubuntu 24.04/clang Sandbox measures 423,488 bytes after the sparse
+      // UTF-16 string index added its always-linked cache/allocator path;
+      // current Mach-O toolchains measure about 434KB. Each bound leaves
+      // roughly one native page of growth while staying far below the >1MB
+      // jump measured when the engine is linked.
+      expect(staticSize).toBeLessThan(process.platform === "linux" ? 440_000 : 450_000);
+      expect(dynamicSize).toBeGreaterThan(500_000);
+    },
+  );
 
   /* ── the `any` boundary (validated exits) ─────────────────────────────
    * Node never checks an `as`, so LYING casts cannot be differential:

@@ -6,16 +6,27 @@ import { evaluateNodeComptime } from "./comptime-node.js";
 import { emitRuntimeTypeScript } from "../native/runtime-typescript.js";
 
 export function createNodeFrontendServices(): FrontendServices {
-  return new FrontendServices((options) => new Ts7Api(options), process.cwd(), evaluateNodeComptime, {
-    resolve: (fromFile, specifier, paths) => {
-      const require = createRequire(pathToFileURL(fromFile));
-      return paths === undefined ? require.resolve(specifier) : require.resolve(specifier, { paths: [...paths] });
+  return new FrontendServices(
+    (options) => new Ts7Api(options),
+    process.cwd(),
+    evaluateNodeComptime,
+    {
+      resolve: (fromFile, specifier, paths) => {
+        const require = createRequire(pathToFileURL(fromFile));
+        return paths === undefined
+          ? require.resolve(specifier)
+          : require.resolve(specifier, { paths: [...paths] });
+      },
+      lookupPaths: (fromFile, specifier) =>
+        createRequire(pathToFileURL(fromFile)).resolve.paths(specifier),
     },
-    lookupPaths: (fromFile, specifier) => createRequire(pathToFileURL(fromFile)).resolve.paths(specifier),
-  }, (path, source, format) => emitRuntimeTypeScript(ts7Executable(), path, source, format));
+    (path, source, format) => emitRuntimeTypeScript(ts7Executable(), path, source, format),
+  );
 }
 
 let shared: FrontendServices | undefined;
 /** Standalone Node utilities share a lazy parser whose transport closes at
  * process exit. Compilation loads create and dispose their own services. */
-export function nodeFrontendServices(): FrontendServices { return shared ??= createNodeFrontendServices(); }
+export function nodeFrontendServices(): FrontendServices {
+  return (shared ??= createNodeFrontendServices());
+}

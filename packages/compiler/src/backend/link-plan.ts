@@ -42,11 +42,16 @@ export async function createNativeLinkPlan(options: {
   env?: NodeJS.ProcessEnv;
   resolver?: (specifier: string) => string;
 }): Promise<NativeLinkPlan> {
-  if (options.ffi?.frameworks?.length && options.target.platform !== "darwin") throw new Error("FFI frameworks require a Darwin target");
+  if (options.ffi?.frameworks?.length && options.target.platform !== "darwin")
+    throw new Error("FFI frameworks require a Darwin target");
   const runtimePack = await loadRuntimePack(options);
   return {
     target: options.target,
-    darwinDebugSymbols: needsDarwinDebugSymbols(options.target.platform, options.optimization, options.strip),
+    darwinDebugSymbols: needsDarwinDebugSymbols(
+      options.target.platform,
+      options.optimization,
+      options.strip,
+    ),
     outputPath: options.outPath,
     ...executableLinkInputs({
       target: options.target,
@@ -59,12 +64,11 @@ export async function createNativeLinkPlan(options: {
       runtimeSystemLibraries: runtimePack.systemLibraries,
       optimization: options.optimization,
       ...(options.strip === undefined ? {} : { strip: options.strip }),
-      ...(options.windowsSubsystem === undefined ? {} : { windowsSubsystem: options.windowsSubsystem }),
+      ...(options.windowsSubsystem === undefined
+        ? {}
+        : { windowsSubsystem: options.windowsSubsystem }),
     }),
-    dependencyPaths: [
-      ...runtimePack.dependencyPaths,
-      ...(options.ffi?.libraries ?? []),
-    ],
+    dependencyPaths: [...runtimePack.dependencyPaths, ...(options.ffi?.libraries ?? [])],
     programObjectDependencies: [...(options.programObjectDependencies ?? [])],
     runtimePack,
   };

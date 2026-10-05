@@ -11,7 +11,9 @@ import { prepareNativeExecutable } from "./prepare.js";
 import type { NativeToolchain } from "./toolchain.js";
 
 const scratch: string[] = [];
-afterEach(() => { for (const path of scratch.splice(0)) rmSync(path, { recursive: true, force: true }); });
+afterEach(() => {
+  for (const path of scratch.splice(0)) rmSync(path, { recursive: true, force: true });
+});
 
 function fixture() {
   const temporary = mkdtempSync(join(tmpdir(), "scriptc-native-frontend-"));
@@ -22,15 +24,32 @@ function fixture() {
   const dependency = join(root, "value.ts");
   writeFileSync(entry, 'import { value } from "./value.js"; console.log(value);\n');
   writeFileSync(dependency, 'export const value = "first";\n');
-  writeFileSync(join(root, "tsconfig.json"), JSON.stringify({ compilerOptions: { strict: true, types: [], target: "esnext", module: "nodenext" } }));
+  writeFileSync(
+    join(root, "tsconfig.json"),
+    JSON.stringify({
+      compilerOptions: { strict: true, types: [], target: "esnext", module: "nodenext" },
+    }),
+  );
   writeFileSync(join(root, "package.json"), '{"type":"module"}');
   const target = nativeCodegenTarget()!;
   const toolchain: NativeToolchain = {
-    compilerVersion: "test", target, helper: target.helper, helperExecutable: "unused", helperPackageRoot: "unused",
-    runtimePackRoot: "unused", linker: "unused", linkerArgs: [], dsymutil: "unused", ts7Executable: ts7Executable(),
+    compilerVersion: "test",
+    target,
+    helper: target.helper,
+    helperExecutable: "unused",
+    helperPackageRoot: "unused",
+    runtimePackRoot: "unused",
+    linker: "unused",
+    linkerArgs: [],
+    dsymutil: "unused",
+    ts7Executable: ts7Executable(),
   };
   const cache = new NativeCache(join(temporary, "cache"));
-  const options = { outPath: join(root, ".scriptc", "main"), outDir: join(root, ".scriptc"), optimization: "release" as const };
+  const options = {
+    outPath: join(root, ".scriptc", "main"),
+    outDir: join(root, ".scriptc"),
+    optimization: "release" as const,
+  };
   let loads = 0;
   const frontend: FrontendFactory = (path, npmStatic, externalTypes) => {
     loads++;

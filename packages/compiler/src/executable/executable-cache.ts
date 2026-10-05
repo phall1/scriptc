@@ -1,13 +1,33 @@
 import { createHash } from "node:crypto";
-import { chmod, copyFile, mkdir, readFile, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  copyFile,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import type { FrontendInputSnapshot } from "../frontend/input-tracker.js";
 import { frontendInputsStillMatch, validFrontendInputSnapshot } from "../frontend/input-tracker.js";
 import { compilerReleaseVersion } from "../library/sidecar.js";
-import { nativeArtifactDependenciesStillMatch, type NativeArtifactDependency } from "../backend/native-toolchain.js";
+import {
+  nativeArtifactDependenciesStillMatch,
+  type NativeArtifactDependency,
+} from "../backend/native-toolchain.js";
 import type { CompilerImplementationDependency } from "../library/compiler-self-identity.js";
-import { installDarwinDebugSymbols, needsDarwinDebugSymbols, readDarwinDebugSymbols } from "../backend/debug-symbols.js";
-import { compilerImplementationDependenciesStillMatch, compilerImplementationRoot } from "../library/compiler-self-identity.js";
+import {
+  installDarwinDebugSymbols,
+  needsDarwinDebugSymbols,
+  readDarwinDebugSymbols,
+} from "../backend/debug-symbols.js";
+import {
+  compilerImplementationDependenciesStillMatch,
+  compilerImplementationRoot,
+} from "../library/compiler-self-identity.js";
 import {
   cacheKey as sharedCacheKey,
   digest,
@@ -176,15 +196,15 @@ function validNativeFeatures(value: unknown): value is EarlyExecutableNativeFeat
   return validSharedNativeFeatures<EarlyExecutableNativeFeatures>(
     value,
     BOOLEAN_NATIVE_KEYS,
-    (native) =>
-      (native.optimization === undefined || native.optimization === "dev"),
+    (native) => native.optimization === undefined || native.optimization === "dev",
   );
 }
 
 function cacheKey(options: EarlyExecutableCacheOptions): string {
-  const ffiParts: (string | Uint8Array)[] = options.ffiProfile === null
-    ? ["<ffi-off>"]
-    : [resolve(options.ffiProfile.path), options.ffiProfile.bytes];
+  const ffiParts: (string | Uint8Array)[] =
+    options.ffiProfile === null
+      ? ["<ffi-off>"]
+      : [resolve(options.ffiProfile.path), options.ffiProfile.bytes];
   return sharedCacheKey("early-executable-v1", [
     resolve(options.entryPath),
     resolve(options.outDir),
@@ -213,38 +233,54 @@ function cacheKey(options: EarlyExecutableCacheOptions): string {
 function routeKey(options: Omit<EarlyExecutableRouteOptions, "nativeEnvironment">): string {
   const hash = createHash("sha256")
     .update("early-executable-route-v2\0")
-    .update(compilerReleaseVersion()).update("\0")
-    .update(compilerImplementationRoot()).update("\0")
-    .update(resolve(options.entryPath)).update("\0")
-    .update(resolve(options.outDir)).update("\0")
-    .update(resolve(options.outPath)).update("\0")
-    .update(options.emitIr ? "emit-ir" : "no-ir").update("\0")
-    .update(options.sanitize ? "sanitize" : "plain").update("\0")
-    .update(options.dynamic ? "dynamic" : "static").update("\0")
-    .update(options.backend).update("\0");
+    .update(compilerReleaseVersion())
+    .update("\0")
+    .update(compilerImplementationRoot())
+    .update("\0")
+    .update(resolve(options.entryPath))
+    .update("\0")
+    .update(resolve(options.outDir))
+    .update("\0")
+    .update(resolve(options.outPath))
+    .update("\0")
+    .update(options.emitIr ? "emit-ir" : "no-ir")
+    .update("\0")
+    .update(options.sanitize ? "sanitize" : "plain")
+    .update("\0")
+    .update(options.dynamic ? "dynamic" : "static")
+    .update("\0")
+    .update(options.backend)
+    .update("\0");
   if (options.optimization === "dev") hash.update("optimization-dev\0");
   if (options.strip) hash.update("strip\0");
   if (options.windowsSubsystem === "gui") hash.update("windows-subsystem-gui\0");
   hash
-    .update(options.npmStatic === null
-      ? "<npm-static-off>"
-      : options.npmStatic === "auto"
-        ? "<npm-static-auto>"
-        : JSON.stringify(options.npmStatic)).update("\0")
-    .update(options.target).update("\0")
-    .update(options.compiler.join("\x1f")).update("\0")
-    .update(options.nodeVersion).update("\0");
+    .update(
+      options.npmStatic === null
+        ? "<npm-static-off>"
+        : options.npmStatic === "auto"
+          ? "<npm-static-auto>"
+          : JSON.stringify(options.npmStatic),
+    )
+    .update("\0")
+    .update(options.target)
+    .update("\0")
+    .update(options.compiler.join("\x1f"))
+    .update("\0")
+    .update(options.nodeVersion)
+    .update("\0");
   if (options.ffiProfile === null) {
     hash.update("<ffi-off>");
   } else {
-    hash
-      .update(resolve(options.ffiProfile.path)).update("\0")
-      .update(options.ffiProfile.bytes);
+    hash.update(resolve(options.ffiProfile.path)).update("\0").update(options.ffiProfile.bytes);
   }
   return hash.digest("hex");
 }
 
-function routePath(root: string, options: Omit<EarlyExecutableRouteOptions, "nativeEnvironment">): string {
+function routePath(
+  root: string,
+  options: Omit<EarlyExecutableRouteOptions, "nativeEnvironment">,
+): string {
   return join(root, "early-exe-route", routeKey(options));
 }
 
@@ -294,7 +330,10 @@ function executableFrontendOutputExclusions(
   options: EarlyExecutableCacheOptions,
   backend: "llvm",
 ): ReturnType<typeof frontendOutputExclusions> {
-  return frontendOutputExclusions(options, backend, "", [options.outPath, `${options.outPath}.dSYM`]);
+  return frontendOutputExclusions(options, backend, "", [
+    options.outPath,
+    `${options.outPath}.dSYM`,
+  ]);
 }
 
 /** Ordinary source/configuration edits are cheap misses before driver
@@ -303,8 +342,8 @@ function executableFrontendOutputExclusions(
 function routedFrontendCandidate(frontend: FrontendInputSnapshot): FrontendInputSnapshot {
   return {
     ...frontend,
-    probes: frontend.probes.filter((probe) =>
-      probe.op === "file" && !/\.d\.(?:ts|mts|cts)$/.test(probe.path),
+    probes: frontend.probes.filter(
+      (probe) => probe.op === "file" && !/\.d\.(?:ts|mts|cts)$/.test(probe.path),
     ),
   };
 }
@@ -358,25 +397,29 @@ async function readExecutableCache(
     const stamp = JSON.parse(await readFile(path, "utf8")) as EarlyExecutableCacheStamp;
     const { integrity, ...unsigned } = stamp;
     if (
-      stamp.version !== 1 || stamp.key !== cacheKey(options) ||
-      !validFrontendInputSnapshot(stamp.frontend) || !validNativeFeatures(stamp.native) ||
+      stamp.version !== 1 ||
+      stamp.key !== cacheKey(options) ||
+      !validFrontendInputSnapshot(stamp.frontend) ||
+      !validNativeFeatures(stamp.native) ||
       stamp.files?.translationUnit?.name !== "program.tu" ||
       !/^[0-9a-f]{64}$/.test(stamp.files.translationUnit.digest) ||
-      (stamp.files.ir !== null && (
-        stamp.files.ir?.name !== "program.ir.json" ||
-        !/^[0-9a-f]{64}$/.test(stamp.files.ir.digest)
-      )) ||
-      (stamp.files.executable !== null && (
-        stamp.files.executable?.name !== "program.bin" ||
-        !/^[0-9a-f]{64}$/.test(stamp.files.executable.digest)
-      )) ||
-      (stamp.files.debugSymbols !== undefined && (
-        stamp.files.executable === null || stamp.files.debugSymbols.name !== "program.dsym" ||
-        !/^[0-9a-f]{64}$/.test(stamp.files.debugSymbols.digest)
-      )) ||
+      (stamp.files.ir !== null &&
+        (stamp.files.ir?.name !== "program.ir.json" ||
+          !/^[0-9a-f]{64}$/.test(stamp.files.ir.digest))) ||
       (stamp.files.executable !== null &&
-        needsDarwinDebugSymbols(options.target.split(":")[1] ?? "", options.optimization, options.strip) !==
-        (stamp.files.debugSymbols !== undefined)) ||
+        (stamp.files.executable?.name !== "program.bin" ||
+          !/^[0-9a-f]{64}$/.test(stamp.files.executable.digest))) ||
+      (stamp.files.debugSymbols !== undefined &&
+        (stamp.files.executable === null ||
+          stamp.files.debugSymbols.name !== "program.dsym" ||
+          !/^[0-9a-f]{64}$/.test(stamp.files.debugSymbols.digest))) ||
+      (stamp.files.executable !== null &&
+        needsDarwinDebugSymbols(
+          options.target.split(":")[1] ?? "",
+          options.optimization,
+          options.strip,
+        ) !==
+          (stamp.files.debugSymbols !== undefined)) ||
       (stamp.files.executable === null) !== (stamp.nativeDependencies === null) ||
       (stamp.nativeDependencies !== null && !Array.isArray(stamp.nativeDependencies)) ||
       (stamp.files.ir !== null) !== options.emitIr ||
@@ -385,7 +428,8 @@ async function readExecutableCache(
         validateRoute === undefined ? stamp.frontend : routedFrontendCandidate(stamp.frontend),
         executableFrontendOutputExclusions(options, stamp.native.backend),
       )
-    ) return null;
+    )
+      return null;
 
     // Startup may defer driver discovery until the source/configuration proof
     // matches. A frontend-only entry cannot serve that route, so it should
@@ -408,42 +452,52 @@ async function readExecutableCache(
           ),
       stamp.files.debugSymbols === undefined
         ? Promise.resolve(null)
-        : readCachedFile(join(directory, stamp.files.debugSymbols.name), stamp.files.debugSymbols.digest),
+        : readCachedFile(
+            join(directory, stamp.files.debugSymbols.name),
+            stamp.files.debugSymbols.digest,
+          ),
     ]);
     if (
       translationUnit === null ||
-      stamp.files.ir !== null && ir === null ||
-      stamp.files.executable !== null && executable === null ||
-      stamp.files.debugSymbols !== undefined && debugSymbols === null
-    ) return null;
+      (stamp.files.ir !== null && ir === null) ||
+      (stamp.files.executable !== null && executable === null) ||
+      (stamp.files.debugSymbols !== undefined && debugSymbols === null)
+    )
+      return null;
 
     if (validateRoute !== undefined) {
       if (!(await validateRoute())) return null;
       // The compiler proof is checked AFTER deferred discovery by the routed
       // reader. Recheck source/configuration bytes here too before restoring.
-      if (!frontendInputsStillMatch(
-        stamp.frontend,
-        executableFrontendOutputExclusions(options, stamp.native.backend),
-      )) return null;
+      if (
+        !frontendInputsStillMatch(
+          stamp.frontend,
+          executableFrontendOutputExclusions(options, stamp.native.backend),
+        )
+      )
+        return null;
     }
     // Validate the native proof before restoring frontend artifacts: replacing
     // a TU can update its output directory metadata, which is itself part of
     // compileC's same-output dependency snapshot.
     let executableRestored =
-      executable !== null && stamp.nativeDependencies !== null &&
-      await nativeArtifactDependenciesStillMatch(stamp.nativeDependencies) &&
+      executable !== null &&
+      stamp.nativeDependencies !== null &&
+      (await nativeArtifactDependenciesStillMatch(stamp.nativeDependencies)) &&
       // Recheck after hashing every dependency: a concurrent tool/runtime
       // update must not win the window immediately before installation.
-      await nativeArtifactDependenciesStillMatch(stamp.nativeDependencies);
+      (await nativeArtifactDependenciesStillMatch(stamp.nativeDependencies));
     if (validateRoute !== undefined && !executableRestored) return null;
     const paths = outputPaths(options, stamp.native.backend);
     if (!(await fileMatches(paths.llvmPath, stamp.files.translationUnit.digest))) {
       await installBytes(translationUnit, paths.llvmPath);
     }
     if (
-      ir !== null && stamp.files.ir !== null &&
+      ir !== null &&
+      stamp.files.ir !== null &&
       !(await fileMatches(paths.irPath, stamp.files.ir.digest))
-    ) await installBytes(ir, paths.irPath);
+    )
+      await installBytes(ir, paths.irPath);
     if (executableRestored) {
       try {
         if (debugSymbols !== null) await installDarwinDebugSymbols(debugSymbols, options.outPath);
@@ -459,13 +513,17 @@ async function readExecutableCache(
       }
     }
     const now = new Date();
-    await Promise.all([
-      path,
-      join(directory, stamp.files.translationUnit.name),
-      ...(stamp.files.ir === null ? [] : [join(directory, stamp.files.ir.name)]),
-      ...(stamp.files.executable === null ? [] : [join(directory, stamp.files.executable.name)]),
-      ...(stamp.files.debugSymbols === undefined ? [] : [join(directory, stamp.files.debugSymbols.name)]),
-    ].map((cachePath) => utimes(cachePath, now, now).catch(() => undefined)));
+    await Promise.all(
+      [
+        path,
+        join(directory, stamp.files.translationUnit.name),
+        ...(stamp.files.ir === null ? [] : [join(directory, stamp.files.ir.name)]),
+        ...(stamp.files.executable === null ? [] : [join(directory, stamp.files.executable.name)]),
+        ...(stamp.files.debugSymbols === undefined
+          ? []
+          : [join(directory, stamp.files.debugSymbols.name)]),
+      ].map((cachePath) => utimes(cachePath, now, now).catch(() => undefined)),
+    );
     return {
       llvmPath: paths.llvmPath,
       native: stamp.native,
@@ -489,26 +547,30 @@ export async function readRoutedExecutableCache(
   if (root === null) return null;
   try {
     const routeFile = routePath(root, options);
-    const route = JSON.parse(
-      await readFile(routeFile, "utf8"),
-    ) as EarlyExecutableRouteStamp;
+    const route = JSON.parse(await readFile(routeFile, "utf8")) as EarlyExecutableRouteStamp;
     const { integrity, ...unsigned } = route;
     if (
       route.version !== 2 ||
       !/^[0-9a-f]{64}$/.test(route.key) ||
       !/^[0-9a-f]{64}$/.test(route.implementation) ||
       typeof route.nativeEnvironment !== "string" ||
-      (typeof options.nativeEnvironment === "string" && options.nativeEnvironment !== route.nativeEnvironment) ||
+      (typeof options.nativeEnvironment === "string" &&
+        options.nativeEnvironment !== route.nativeEnvironment) ||
       routeIntegrity(unsigned) !== integrity
-    ) return null;
+    )
+      return null;
     const proofFile = implementationProofPath(root, route.implementation);
-    const proof = JSON.parse(await readFile(proofFile, "utf8")) as EarlyExecutableImplementationProof;
+    const proof = JSON.parse(
+      await readFile(proofFile, "utf8"),
+    ) as EarlyExecutableImplementationProof;
     const { integrity: proofIntegrity, ...proofUnsigned } = proof;
     if (
-      proof.version !== 1 || proof.implementation !== route.implementation ||
+      proof.version !== 1 ||
+      proof.implementation !== route.implementation ||
       !Array.isArray(proof.dependencies) ||
       implementationProofIntegrity(proofUnsigned) !== proofIntegrity
-    ) return null;
+    )
+      return null;
     const complete: EarlyExecutableCacheOptions = {
       ...options,
       nativeEnvironment: route.nativeEnvironment,
@@ -516,23 +578,21 @@ export async function readRoutedExecutableCache(
       implementationDependencies: proof.dependencies,
     };
     if (cacheKey(complete) !== route.key) return null;
-    const hit = await readExecutableCache(
-      root,
-      complete,
-      async () => {
-        const environment = typeof options.nativeEnvironment === "function"
+    const hit = await readExecutableCache(root, complete, async () => {
+      const environment =
+        typeof options.nativeEnvironment === "function"
           ? await options.nativeEnvironment()
           : options.nativeEnvironment;
-        return environment === route.nativeEnvironment &&
-          await compilerImplementationDependenciesStillMatch(proof.dependencies);
-      },
-    );
+      return (
+        environment === route.nativeEnvironment &&
+        (await compilerImplementationDependenciesStillMatch(proof.dependencies))
+      );
+    });
     if (hit?.executableRestored !== true) return null;
     const now = new Date();
-    await Promise.all([
-      routeFile,
-      proofFile,
-    ].map((cachePath) => utimes(cachePath, now, now).catch(() => undefined)));
+    await Promise.all(
+      [routeFile, proofFile].map((cachePath) => utimes(cachePath, now, now).catch(() => undefined)),
+    );
     return hit;
   } catch {
     return null;
@@ -621,20 +681,35 @@ export async function publishEarlyExecutableCache(
       publishExecutable,
     ]);
     let debugSymbols: CachedExecutableFile | undefined;
-    if (executable !== null && needsDarwinDebugSymbols(options.target.split(":")[1] ?? "", options.optimization, options.strip)) {
+    if (
+      executable !== null &&
+      needsDarwinDebugSymbols(
+        options.target.split(":")[1] ?? "",
+        options.optimization,
+        options.strip,
+      )
+    ) {
       const bytes = await readDarwinDebugSymbols(options.outPath);
       await writeFile(join(stage, "program.dsym"), bytes, { mode: 0o600 });
       debugSymbols = { name: "program.dsym", digest: digest(bytes) };
     }
-    if (!frontendInputsStillMatch(
-      result.frontend,
-      executableFrontendOutputExclusions(options, result.native.backend),
-    )) return;
+    if (
+      !frontendInputsStillMatch(
+        result.frontend,
+        executableFrontendOutputExclusions(options, result.native.backend),
+      )
+    )
+      return;
     const unsigned: Omit<EarlyExecutableCacheStamp, "integrity"> = {
       version: 1,
       key: cacheKey(options),
       frontend: result.frontend,
-      files: { translationUnit, ir, executable, ...(debugSymbols === undefined ? {} : { debugSymbols }) },
+      files: {
+        translationUnit,
+        ir,
+        executable,
+        ...(debugSymbols === undefined ? {} : { debugSymbols }),
+      },
       nativeDependencies: executable === null ? null : result.nativeDependencies!,
       native: result.native,
     };

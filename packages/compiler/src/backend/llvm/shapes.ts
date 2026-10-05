@@ -3,7 +3,17 @@
  * their fields. Every allocation has a size_t reference count at offset zero
  * and participates in the runtime allocation audit. */
 import type { IrModule, IrRecordShape, IrType } from "../../ir/ir.js";
-import { isIdentityCollectionKey, isRefCounted, mapOf, POINTER_KINDS, runtimeRcStem, RUNTIME_EMITTER_CLASS, RUNTIME_ERROR_CLASSES, RUNTIME_STREAM_CLASSES, STRING } from "../../ir/ir.js";
+import {
+  isIdentityCollectionKey,
+  isRefCounted,
+  mapOf,
+  POINTER_KINDS,
+  runtimeRcStem,
+  RUNTIME_EMITTER_CLASS,
+  RUNTIME_ERROR_CLASSES,
+  RUNTIME_STREAM_CLASSES,
+  STRING,
+} from "../../ir/ir.js";
 import {
   mangleClassRelease,
   mangleClassRetain,
@@ -64,11 +74,17 @@ export function vAdapters(host: ShapeHost, t: IrType): { retain: string; release
   }
   switch (t.kind) {
     case "record":
-      return { retain: `@${mangleRecordRetain(t.shapeId)}`, release: `@${mangleRecordRelease(t.shapeId)}` };
+      return {
+        retain: `@${mangleRecordRetain(t.shapeId)}`,
+        release: `@${mangleRecordRelease(t.shapeId)}`,
+      };
     case "object":
       // Emitted per-class helpers are already `_v`-shaped (ptr → ptr /
       // ptr → void), so the same symbols serve as container entry points.
-      return { retain: `@${mangleClassRetain(t.className)}`, release: `@${mangleClassRelease(t.className)}` };
+      return {
+        retain: `@${mangleClassRetain(t.className)}`,
+        release: `@${mangleClassRelease(t.className)}`,
+      };
     default:
       throw new LlvmUnsupportedError(`rc:${t.kind}`);
   }
@@ -128,7 +144,9 @@ export function traceAdapter(host: ShapeHost, t: IrType): string | null {
       host.declare(`declare void @scr_union_trace_v(ptr, ptr, ptr)`);
       return "@scr_union_trace_v";
     case "record":
-      return host.tracedShapes.has(`record:${t.shapeId}`) ? `@${mangleRecordTrace(t.shapeId)}` : null;
+      return host.tracedShapes.has(`record:${t.shapeId}`)
+        ? `@${mangleRecordTrace(t.shapeId)}`
+        : null;
     case "object":
       if (!host.tracedShapes.has(`object:${t.className}`)) return null;
       if (RUNTIME_ERROR_CLASSES.has(t.className)) {
@@ -171,9 +189,21 @@ export function traceArg(host: ShapeHost, t: IrType): string {
 
 /** Keep native capsule edges visible when the referent is cycle-capable. */
 export function typedRefConstructor(host: ShapeHost, t: IrType): string {
-  const observed = t.kind === "record" || t.kind === "array" || t.kind === "map" || t.kind === "set" ||
-    t.kind === "object" && !RUNTIME_ERROR_CLASSES.has(t.className) && t.className !== RUNTIME_EMITTER_CLASS && !RUNTIME_STREAM_CLASSES.has(t.className);
-  const name = traceAdapter(host, t) !== null ? "scr_dyn_new_typed_ref_traced" : observed ? "scr_dyn_new_typed_ref_observed" : "scr_dyn_new_typed_ref";
+  const observed =
+    t.kind === "record" ||
+    t.kind === "array" ||
+    t.kind === "map" ||
+    t.kind === "set" ||
+    (t.kind === "object" &&
+      !RUNTIME_ERROR_CLASSES.has(t.className) &&
+      t.className !== RUNTIME_EMITTER_CLASS &&
+      !RUNTIME_STREAM_CLASSES.has(t.className));
+  const name =
+    traceAdapter(host, t) !== null
+      ? "scr_dyn_new_typed_ref_traced"
+      : observed
+        ? "scr_dyn_new_typed_ref_observed"
+        : "scr_dyn_new_typed_ref";
   host.declare(`declare ptr @${name}(ptr, ptr, ptr, ptr, ${host.sizeType}, ptr, ptr)`);
   return `@${name}`;
 }
@@ -211,8 +241,12 @@ function elemKindNum(elem: IrType): number {
  * points; every other element kind keeps the plain scr_arr_new call. */
 export function arrNewCall(host: ShapeHost, elem: IrType, capText: string): string {
   const useRef =
-    elem.kind === "record" || elem.kind === "object" || elem.kind === "union" || elem.kind === "func" ||
-    elem.kind === "map" || elem.kind === "set" || // scr_map_* adapters and typed key/value tracing
+    elem.kind === "record" ||
+    elem.kind === "object" ||
+    elem.kind === "union" ||
+    elem.kind === "func" ||
+    elem.kind === "map" ||
+    elem.kind === "set" || // scr_map_* adapters and typed key/value tracing
     elem.kind === "symbol" || // symbol identities: scr_sym_* adapters, no trace
     elem.kind === "bigint" || // immutable numeric values: scr_bigint_* adapters
     elem.kind === "classval" || // local class objects own traced capture boxes
@@ -239,7 +273,14 @@ export function arrNewCall(host: ShapeHost, elem: IrType, capText: string): stri
  * data) for per-shape payloads and cycle-capable arrays. SCR_BOX_* tags
  * from scr_runtime.h. */
 export function boxNewCall(host: ShapeHost, t: IrType): string {
-  const plain: Partial<Record<IrType["kind"], number>> = { f64: 0, date: 0, procStream: 0, bool: 1, string: 2, func: 4 };
+  const plain: Partial<Record<IrType["kind"], number>> = {
+    f64: 0,
+    date: 0,
+    procStream: 0,
+    bool: 1,
+    string: 2,
+    func: 4,
+  };
   const kind = plain[t.kind];
   if (kind !== undefined) {
     host.declare(`declare ptr @scr_box_new(i32)`);
@@ -259,7 +300,11 @@ export function boxNewCall(host: ShapeHost, t: IrType): string {
 
 /** Box accessor suffix (boxAccess): scalars unboxed, ref kinds pointers. */
 export function boxAccess(t: IrType): "f64" | "bool" | "ref" {
-  return t.kind === "f64" || t.kind === "date" || t.kind === "procStream" ? "f64" : t.kind === "bool" ? "bool" : "ref";
+  return t.kind === "f64" || t.kind === "date" || t.kind === "procStream"
+    ? "f64"
+    : t.kind === "bool"
+      ? "bool"
+      : "ref";
 }
 
 /* ── record shapes ────────────────────────────────────────────────────── */
@@ -290,7 +335,13 @@ export function mapKeyAccess(key: IrType): MapKeyAccess {
   if (key.kind === "f64") return "f64";
   if (key.kind === "bool") return "bool";
   if (key.kind === "string") return "str";
-  if (isIdentityCollectionKey(key) || key.kind === "bigint" || key.kind === "union" || key.kind === "dyn") return "ref";
+  if (
+    isIdentityCollectionKey(key) ||
+    key.kind === "bigint" ||
+    key.kind === "union" ||
+    key.kind === "dyn"
+  )
+    return "ref";
   throw new LlvmUnsupportedError(`mapKey:${key.kind}`);
 }
 
@@ -325,7 +376,13 @@ function rcMembers(shape: IrRecordShape): { index: number; type: IrType; name: s
   return [
     ...shape.fields.map((f, i) => ({ index: i + 1, type: f.type, name: f.name })),
     ...(shape.indexValue
-      ? [{ index: shape.fields.length + 1, type: mapOf(STRING, shape.indexValue), name: "[key: string] overflow" }]
+      ? [
+          {
+            index: shape.fields.length + 1,
+            type: mapOf(STRING, shape.indexValue),
+            name: "[key: string] overflow",
+          },
+        ]
       : []),
   ];
 }
@@ -335,7 +392,12 @@ function rcMembers(shape: IrRecordShape): { index: number; type: IrType; name: s
  * targets and obj-12 on wasm32,
  * so mark-live is one i32 store at obj-16 (scr_cyc_mark_live inlined —
  * the runtime's is a static inline with no external symbol). */
-export function retainBody(host: ShapeHost, fnName: string, traced: boolean, comment = ""): string[] {
+export function retainBody(
+  host: ShapeHost,
+  fnName: string,
+  traced: boolean,
+  comment = "",
+): string[] {
   const S = host.sizeType;
   return [
     `define internal ptr @${fnName}(ptr %o) ${FN_ATTRS} {${comment ? ` ; ${comment}` : ""}`,
@@ -350,7 +412,10 @@ export function retainBody(host: ShapeHost, fnName: string, traced: boolean, com
     `  %n = add ${S} %rc, 1`,
     `  store ${S} %n, ptr %o`,
     ...(traced
-      ? [`  %colorp = getelementptr i8, ptr %o, ${S} -${host.cycleColorOffset}`, `  store i32 0, ptr %colorp ; mark live`]
+      ? [
+          `  %colorp = getelementptr i8, ptr %o, ${S} -${host.cycleColorOffset}`,
+          `  store i32 0, ptr %colorp ; mark live`,
+        ]
       : []),
     `  br label %done`,
     `done:`,
@@ -406,7 +471,10 @@ export function releaseBody(
  * `{ i64 rc, fields..., [ptr overflow] }`; the retain/release signatures
  * are already `_v`-shaped, so the same symbols serve as container RC
  * entry points. */
-export function emitRecordShapes(host: ShapeHost, mod: IrModule): { typeDefs: string[]; defs: string[] } {
+export function emitRecordShapes(
+  host: ShapeHost,
+  mod: IrModule,
+): { typeDefs: string[]; defs: string[] } {
   const typeDefs: string[] = [];
   const defs: string[] = [];
   const records = mod.records ?? [];
@@ -520,9 +588,7 @@ export function emitRecordShapes(host: ShapeHost, mod: IrModule): { typeDefs: st
           `  %sp${i} = getelementptr inbounds %${struct}, ptr %src, i64 0, i32 ${index}`,
           `  %sv${i} = load ${fieldTy}, ptr %sp${i}`,
         );
-        const stored = isRefCounted(field.type)
-          ? `%sr${i}`
-          : `%sv${i}`;
+        const stored = isRefCounted(field.type) ? `%sr${i}` : `%sv${i}`;
         if (isRefCounted(field.type)) {
           clone.push(`  ${stored} = call ptr ${retainSym(host, field.type)}(ptr %sv${i})`);
         }
@@ -567,7 +633,13 @@ export function emitRecordShapes(host: ShapeHost, mod: IrModule): { typeDefs: st
           `  call void ${releaseSym(host, m.type)}(ptr %v${i}) ; ${llvmCommentText(m.name)} (acyclic)`,
         );
       });
-      gf.push(`  call void @scr_obj_free_note()`, `  call void @scr_cyc_free(ptr %o)`, `  ret void`, `}`, ``);
+      gf.push(
+        `  call void @scr_obj_free_note()`,
+        `  call void @scr_cyc_free(ptr %o)`,
+        `  ret void`,
+        `}`,
+        ``,
+      );
       defs.push(...gf);
     }
   }

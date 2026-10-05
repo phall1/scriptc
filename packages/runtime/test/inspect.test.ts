@@ -14,9 +14,14 @@ const bin = join(testDir, "build", "test_inspect");
 beforeAll(async () => {
   await mkdir(join(testDir, "build"), { recursive: true });
   await execFileAsync("clang", [
-    "-std=c11", "-O1", "-Wall", "-Wextra",
-    "-fsanitize=address", "-DSCR_RC_AUDIT",
-    "-o", bin,
+    "-std=c11",
+    "-O1",
+    "-Wall",
+    "-Wextra",
+    "-fsanitize=address",
+    "-DSCR_RC_AUDIT",
+    "-o",
+    bin,
     join(testDir, "test_inspect.c"),
     join(testDir, "../src/scr_inspect.c"),
     // scr_insp_dyn drives the layout engine through parsed JSON trees;

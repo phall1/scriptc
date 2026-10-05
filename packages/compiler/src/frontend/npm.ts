@@ -92,10 +92,19 @@ import type { FrontendServices } from "./services.js";
 import { moduleSpecifiersOfFile, type ModuleSpecifiers } from "./module-syntax.js";
 import { packageNameOfSpecifier as packageNameOf } from "./workspace-registry.js";
 import { cjsLexedExportsOfFile } from "./cjs-syntax.js";
-import { trackedDirectoryExists, trackedFileExists, trackedReadFile, trackedRealpath } from "./input-tracker.js";
+import {
+  trackedDirectoryExists,
+  trackedFileExists,
+  trackedReadFile,
+  trackedRealpath,
+} from "./input-tracker.js";
 import { resolveExports, resolvePackageImports } from "./resolve.js";
 
-const LAZY_CALL_FORMS: readonly ("require" | "import()" | "import")[] = ["require", "import()", "import"];
+const LAZY_CALL_FORMS: readonly ("require" | "import()" | "import")[] = [
+  "require",
+  "import()",
+  "import",
+];
 
 const NODE_IMPORT_CONDITIONS = new Set(["import", "node", "default"]);
 const NODE_REQUIRE_CONDITIONS = new Set(["require", "node", "default"]);
@@ -151,10 +160,7 @@ export interface EmbeddedModule {
  * temps. */
 function cjsEsmFacadeSource(key: string, names: readonly string[]): string {
   const uniq = [...new Set(names)].filter((n) => n !== "default" && n !== "module.exports");
-  const parts = [
-    `const m=globalThis.__scr_require(${JSON.stringify(key)});`,
-    `export default m;`,
-  ];
+  const parts = [`const m=globalThis.__scr_require(${JSON.stringify(key)});`, `export default m;`];
   if (uniq.length > 0) parts.push(`const H=Object.prototype.hasOwnProperty;`);
   const bound = uniq.map((n, i) => {
     const name = JSON.stringify(n);
@@ -261,28 +267,59 @@ export interface NpmRuntimeGraph {
  * resolve to the canonical "node:" key. Subpath forms ("fs/promises") are
  * NOT shimmed unless listed here explicitly. */
 const SHIMMED_BUILTINS = new Set([
-  "events", "path", "process", "fs", "child_process", "os",
-  "diagnostics_channel", "module", "url", "tty", "util", "util/types",
-  "buffer", "string_decoder", "crypto", "stream", "stream/promises",
-  "stream/consumers", "stream/web", "fs/promises", "async_hooks",
-  "readline", "path/posix", "path/win32", "assert", "assert/strict",
-  "punycode", "querystring", "constants", "console", "timers",
-  "timers/promises", "zlib",
+  "events",
+  "path",
+  "process",
+  "fs",
+  "child_process",
+  "os",
+  "diagnostics_channel",
+  "module",
+  "url",
+  "tty",
+  "util",
+  "util/types",
+  "buffer",
+  "string_decoder",
+  "crypto",
+  "stream",
+  "stream/promises",
+  "stream/consumers",
+  "stream/web",
+  "fs/promises",
+  "async_hooks",
+  "readline",
+  "path/posix",
+  "path/win32",
+  "assert",
+  "assert/strict",
+  "punycode",
+  "querystring",
+  "constants",
+  "console",
+  "timers",
+  "timers/promises",
+  "zlib",
   // The deprecated legacy module, kept loadable because @sentry/node (the
   // a crash reporter) requires it at load on every path while
   // only driving it on Node < 14.
   "domain",
   // DNS imports load before any lookup. The callback and promise APIs
   // fence network queries through their own error channels at the call.
-  "dns", "dns/promises",
+  "dns",
+  "dns/promises",
   // The main-thread worker_threads surface (real in-process MessageChannel
   // ports, Worker fences at construction) and perf_hooks' performance —
   // undici requires both UNGUARDED at load.
-  "worker_threads", "perf_hooks",
+  "worker_threads",
+  "perf_hooks",
   // The socket tier (scr_net_island.c + the bootstrap's shims): http/https
   // are working CLIENTS over the socket units; net/tls load and fence
   // their socket surfaces loudly at the call (isIP and friends are real).
-  "http", "https", "net", "tls",
+  "http",
+  "https",
+  "net",
+  "tls",
   // Loadable with Node's surface: startupSnapshot answers for real (never
   // a snapshot build; the mutators throw Node's ERR_NOT_BUILDING_SNAPSHOT),
   // heap statistics are inert-but-typed, and the V8 serialization format
@@ -297,12 +334,43 @@ const SHIMMED_BUILTINS = new Set([
  * an npm package.) */
 const KNOWN_BUILTINS = new Set([
   ...SHIMMED_BUILTINS,
-  "assert", "async_hooks", "buffer", "cluster", "console", "constants",
-  "crypto", "dgram", "diagnostics_channel", "dns", "domain", "http",
-  "https", "http2", "inspector", "module", "net", "os", "perf_hooks",
-  "punycode", "querystring", "readline", "repl", "stream",
-  "string_decoder", "sys", "timers", "tls", "trace_events", "tty", "url",
-  "util", "v8", "vm", "wasi", "worker_threads", "zlib",
+  "assert",
+  "async_hooks",
+  "buffer",
+  "cluster",
+  "console",
+  "constants",
+  "crypto",
+  "dgram",
+  "diagnostics_channel",
+  "dns",
+  "domain",
+  "http",
+  "https",
+  "http2",
+  "inspector",
+  "module",
+  "net",
+  "os",
+  "perf_hooks",
+  "punycode",
+  "querystring",
+  "readline",
+  "repl",
+  "stream",
+  "string_decoder",
+  "sys",
+  "timers",
+  "tls",
+  "trace_events",
+  "tty",
+  "url",
+  "util",
+  "v8",
+  "vm",
+  "wasi",
+  "worker_threads",
+  "zlib",
 ]);
 
 export type { SpecifierUse, ModuleSpecifiers } from "./module-syntax.js";
@@ -424,7 +492,7 @@ export function probeNodeImportRefusal(
   // Node's PACKAGE_SELF_RESOLVE first: the nearest package scope above the
   // importer whose "name" matches AND that carries "exports" answers —
   // finally (its refusals do NOT fall back to node_modules).
-  for (let dir = dirname(importer); ; ) {
+  for (let dir = dirname(importer); ;) {
     const pkg = pkgJsonAt(dir);
     if (pkg) {
       if (pkg.name === name && pkg.exports !== undefined) return withinScope(dir, pkg);
@@ -434,7 +502,7 @@ export function probeNodeImportRefusal(
     if (parent === dir) break;
     dir = parent;
   }
-  for (let dir = dirname(importer); ; ) {
+  for (let dir = dirname(importer); ;) {
     const linkDir = join(dir, "node_modules", name);
     if (host.isDirectory(linkDir)) {
       const pkgDir = host.realpath(linkDir);
@@ -470,16 +538,19 @@ export function probeNodeRequireRefusal(
   host: NpmGraphHost = realNpmGraphHost,
 ): { message: string } | null {
   if (
-    specifier.startsWith("./") || specifier.startsWith("../") ||
-    specifier === "." || specifier === ".." ||
-    specifier.startsWith("/") || specifier.startsWith("#") ||
+    specifier.startsWith("./") ||
+    specifier.startsWith("../") ||
+    specifier === "." ||
+    specifier === ".." ||
+    specifier.startsWith("/") ||
+    specifier.startsWith("#") ||
     specifier.startsWith("node:")
   ) {
     return null;
   }
   const name = packageNameOf(specifier);
   const importer = resolve(fromFile);
-  for (let dir = dirname(importer); ; ) {
+  for (let dir = dirname(importer); ;) {
     // A self-scope whose "name" matches: Node's require honors package
     // self-reference — conservative null (resolvable or its own story).
     const pkgText = host.readFile(join(dir, "package.json"));
@@ -531,7 +602,10 @@ export class NpmGraphBuilder {
    * preparation so its edges and embedded source always use the same JS. */
   private readonly sourceCache = new Map<string, { source: string } | { error: string }>();
 
-  constructor(private readonly services: FrontendServices, private readonly host: NpmGraphHost = realNpmGraphHost) {}
+  constructor(
+    private readonly services: FrontendServices,
+    private readonly host: NpmGraphHost = realNpmGraphHost,
+  ) {}
 
   /** Resolve one runtime module without embedding it. This is the package
    * half of import.meta.resolve/require.resolve: the answer is executable
@@ -907,7 +981,7 @@ export class NpmGraphBuilder {
     if (file.endsWith(".mjs")) return "esm";
     if (file.endsWith(".cjs")) return "cjs";
     if (file.endsWith(".json")) return "json";
-    for (let dir = dirname(file); ; ) {
+    for (let dir = dirname(file); ;) {
       const pkg = this.pkgJsonOf(dir);
       if (pkg) return pkg.type === "module" ? "esm" : "cjs";
       const parent = dirname(dir);
@@ -978,7 +1052,7 @@ export class NpmGraphBuilder {
     // modules import the package by its published name (benign self-
     // reference cycles); without this rule the up-walk only finds the
     // package when it happens to sit under a node_modules/<name> path.
-    for (let dir = fromDir; ; ) {
+    for (let dir = fromDir; ;) {
       const selfPkg = this.pkgJsonOf(dir);
       if (selfPkg) {
         if (selfPkg.name === name && selfPkg.exports !== undefined) {
@@ -1008,7 +1082,7 @@ export class NpmGraphBuilder {
       if (parent === dir) break;
       dir = parent;
     }
-    for (let dir = fromDir; ; ) {
+    for (let dir = fromDir; ;) {
       const linkDir = join(dir, "node_modules", name);
       const pkgDir = this.host.isDirectory(linkDir) ? this.host.realpath(linkDir) : null;
       const pkg = pkgDir !== null ? this.pkgJsonOf(pkgDir) : null;
@@ -1029,8 +1103,10 @@ export class NpmGraphBuilder {
         } else if (subpath !== ".") {
           target = subpath;
         } else if (
-          mode === "import" && ctx.preferModuleField !== false &&
-          typeof pkg.module === "string" && pkg.module !== ""
+          mode === "import" &&
+          ctx.preferModuleField !== false &&
+          typeof pkg.module === "string" &&
+          pkg.module !== ""
         ) {
           // No "exports": the "module" field names the ESM build (a
           // bundler convention Node itself ignores; embedding prefers the
@@ -1080,7 +1156,7 @@ export class NpmGraphBuilder {
   ): string | null {
     let pkgDir: string | null = null;
     let pkg: PkgJson | null = null;
-    for (let dir = fromDir; ; ) {
+    for (let dir = fromDir; ;) {
       const candidate = this.pkgJsonOf(dir);
       if (candidate !== null) {
         pkgDir = dir;
@@ -1130,8 +1206,11 @@ export class NpmGraphBuilder {
       return this.host.realpath(resolved);
     }
     if (
-      target.startsWith("#") || target.startsWith("../") || target.startsWith("/") ||
-      target === "." || target === ".."
+      target.startsWith("#") ||
+      target.startsWith("../") ||
+      target.startsWith("/") ||
+      target === "." ||
+      target === ".."
     ) {
       this.errors.push({
         message:
@@ -1211,9 +1290,17 @@ export class NpmGraphBuilder {
     } else if (/\.(?:[cm]?ts|tsx)$/.test(key)) {
       try {
         const format = this.formatOf(key);
-        result = { source: this.services.emitRuntimeTypeScript(key, source, format === "esm" ? "esm" : "cjs") };
+        result = {
+          source: this.services.emitRuntimeTypeScript(
+            key,
+            source,
+            format === "esm" ? "esm" : "cjs",
+          ),
+        };
       } catch (error) {
-        result = { error: `cannot emit TypeScript module '${key}': ${error instanceof Error ? error.message : String(error)}` };
+        result = {
+          error: `cannot emit TypeScript module '${key}': ${error instanceof Error ? error.message : String(error)}`,
+        };
       }
     } else {
       result = { source };
@@ -1292,7 +1379,8 @@ export class NpmGraphBuilder {
       const spec = use.specifier;
       const eager = !lazy && use.static;
       // CommonJS treats bare "." and ".." as directory-relative requires.
-      const requireDirectory = (spec === "." || spec === "..") && use.require && !use.static && !use.dynamicImport;
+      const requireDirectory =
+        (spec === "." || spec === "..") && use.require && !use.static && !use.dynamicImport;
       if (spec.startsWith("./") || spec.startsWith("../") || requireDirectory) {
         if (use.importMetaResolve && !use.static && !use.dynamicImport && !use.require) {
           continue;
@@ -1307,27 +1395,40 @@ export class NpmGraphBuilder {
           try {
             const url = new URL(spec, pathToFileURL(key));
             if (url.search || url.hash) {
-              this.errors.push({ message: `package '${pkgName}' cannot embed '${spec}' from ${key}: distinct URL query or fragment module instances are not supported` });
+              this.errors.push({
+                message: `package '${pkgName}' cannot embed '${spec}' from ${key}: distinct URL query or fragment module instances are not supported`,
+              });
               continue;
             }
             importPath = fileURLToPath(url);
+          } catch {
+            importPath = null;
           }
-          catch { importPath = null; }
         }
         if (use.require && importing && spec.includes("%")) {
-          requests.push({ kind: "require", path: resolve(dirname(key), spec) }, { kind: "import", path: importPath });
+          requests.push(
+            { kind: "require", path: resolve(dirname(key), spec) },
+            { kind: "import", path: importPath },
+          );
         } else {
           requests.push({ kind: "any", path: importPath });
         }
         for (const request of requests) {
           const importRequest = request.kind !== "require" && importing;
-          const requestVia = { require: request.kind !== "import" && use.require, dynamicImport: importRequest && use.dynamicImport, static: importRequest && use.static };
+          const requestVia = {
+            require: request.kind !== "import" && use.require,
+            dynamicImport: importRequest && use.dynamicImport,
+            static: importRequest && use.static,
+          };
           const file = request.path === null ? null : this.resolveFile(request.path);
           const to = file === null ? null : this.host.realpath(file);
           if (!to) {
             if (!lazy && requestVia.static) {
-              this.errors.push({ message: `package '${pkgName}' cannot resolve '${spec}' from ${key}` +
-                ` (dependency chain: ${NpmGraphBuilder.chainOf(chain)})` });
+              this.errors.push({
+                message:
+                  `package '${pkgName}' cannot resolve '${spec}' from ${key}` +
+                  ` (dependency chain: ${NpmGraphBuilder.chainOf(chain)})`,
+              });
             } else {
               this.noteLazyTrap(spec, requestVia, pkgName, lazy);
               if (requestVia.dynamicImport || (lazy && requestVia.static)) {
@@ -1343,7 +1444,10 @@ export class NpmGraphBuilder {
         continue;
       }
       if (
-        use.importMetaResolve && !use.static && !use.dynamicImport && !use.require &&
+        use.importMetaResolve &&
+        !use.static &&
+        !use.dynamicImport &&
+        !use.require &&
         (/^[A-Za-z][A-Za-z\d+.-]*:/.test(spec) || spec.startsWith("/"))
       ) {
         continue;

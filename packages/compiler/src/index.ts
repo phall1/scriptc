@@ -1,15 +1,52 @@
 import { compilationTiming, type CompilationTiming } from "./timing.js";
 import { prepareExecutableModule } from "./executable/prepare.js";
-import { prepareLibrary, libraryLocalizeSymbols, libraryWasmExports, libraryWasmRefusal } from "./library/prepare.js";
+import {
+  prepareLibrary,
+  libraryLocalizeSymbols,
+  libraryWasmExports,
+  libraryWasmRefusal,
+} from "./library/prepare.js";
 import { analyzeWithFrontend } from "./frontend/analysis.js";
 import { llvmRefusalDiag, targetRefusalDiag } from "./backend/target-diagnostics.js";
-import type { CompileOptions, CompileSourceOptions, CompileRequestOptions, CompileSourceResult, CompileResult, CompileExecutableResult, CompileRequestResult, CompileLibraryOptions, CompileLibraryResult, AnalyzeOptions, AnalyzeResult } from "./compile-types.js";
-export type { CompileOutputKind, CompileBaseOptions, CompileOptions, CompileSourceOptions, CompileRequestOptions, CompileArtifact, CompileFailure, CompileSourceResult, CompileResult, CompileExecutableResult, CompileRequestResult, CompileLibraryOptions, CompileLibraryResult, AnalyzeOptions, AnalyzeResult } from "./compile-types.js";
+import type {
+  CompileOptions,
+  CompileSourceOptions,
+  CompileRequestOptions,
+  CompileSourceResult,
+  CompileResult,
+  CompileExecutableResult,
+  CompileRequestResult,
+  CompileLibraryOptions,
+  CompileLibraryResult,
+  AnalyzeOptions,
+  AnalyzeResult,
+} from "./compile-types.js";
+export type {
+  CompileOutputKind,
+  CompileBaseOptions,
+  CompileOptions,
+  CompileSourceOptions,
+  CompileRequestOptions,
+  CompileArtifact,
+  CompileFailure,
+  CompileSourceResult,
+  CompileResult,
+  CompileExecutableResult,
+  CompileRequestResult,
+  CompileLibraryOptions,
+  CompileLibraryResult,
+  AnalyzeOptions,
+  AnalyzeResult,
+} from "./compile-types.js";
 import { compilePackedLibrary } from "./backend/library-pack.js";
 import { InternalCompilerError } from "./errors.js";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
-import { clearCcCaches, configuredTargetPlatform, type NativeArtifactDependency } from "./backend/native-toolchain.js";
+import {
+  clearCcCaches,
+  configuredTargetPlatform,
+  type NativeArtifactDependency,
+} from "./backend/native-toolchain.js";
 import { buildCacheRoot, prepareBuildCacheRoot, pruneBuildCache } from "./backend/build-cache.js";
 import {
   CcCompileError,
@@ -35,8 +72,17 @@ import {
   resolvePlatformLinker,
 } from "./backend/linker.js";
 import { splitLlvmLibraryProgram, splitLlvmProgram } from "./backend/llvm/split.js";
-import { emitLibraryIdentityLines, replaceLibraryIdentity, stripLibraryIdentity } from "./backend/library-identity-markers.js";
-import { ffiNativeBuildDiag, iceDiag, nativeCodegenDiag, type ScrDiagnostic } from "./diagnostics/diagnostic.js";
+import {
+  emitLibraryIdentityLines,
+  replaceLibraryIdentity,
+  stripLibraryIdentity,
+} from "./backend/library-identity-markers.js";
+import {
+  ffiNativeBuildDiag,
+  iceDiag,
+  nativeCodegenDiag,
+  type ScrDiagnostic,
+} from "./diagnostics/diagnostic.js";
 import { loadLibraryProfile, type LibraryProfile } from "./library/library-profile.js";
 import { clearFenceEvalCaches, decorateLibraryRefusals } from "./library/fence-eval.js";
 import {
@@ -56,8 +102,23 @@ import { clearResolveCaches } from "./frontend/resolve.js";
 import { loadFfiProfile, type FfiProfile } from "./ffi/ffi-manifest.js";
 import { executableLinkFeatures } from "./backend/executable-features.js";
 import { FrontendInputTracker, trackedReadFile } from "./frontend/input-tracker.js";
-import { libraryFrontendImplementationFingerprint, publishEarlyLibraryCache, readEarlyLibraryCache, readSemanticLibraryCache, type EarlyLibraryCacheOptions, type EarlyLibraryCachePublish, type EarlyLibraryNativeFeatures, type SemanticLibraryCacheHit } from "./library/library-cache.js";
-import { publishEarlyExecutableCache, publishEarlyExecutableRoute, readEarlyExecutableCache, type EarlyExecutableCacheOptions, type EarlyExecutableNativeFeatures } from "./executable/executable-cache.js";
+import {
+  libraryFrontendImplementationFingerprint,
+  publishEarlyLibraryCache,
+  readEarlyLibraryCache,
+  readSemanticLibraryCache,
+  type EarlyLibraryCacheOptions,
+  type EarlyLibraryCachePublish,
+  type EarlyLibraryNativeFeatures,
+  type SemanticLibraryCacheHit,
+} from "./library/library-cache.js";
+import {
+  publishEarlyExecutableCache,
+  publishEarlyExecutableRoute,
+  readEarlyExecutableCache,
+  type EarlyExecutableCacheOptions,
+  type EarlyExecutableNativeFeatures,
+} from "./executable/executable-cache.js";
 import { compilerImplementationIdentity } from "./library/compiler-self-identity.js";
 
 export const VERSION = "0.0.1";
@@ -81,7 +142,15 @@ export {
   type WarmNativeCachesResult,
 } from "./backend/external-c.js";
 export { warmNativeCaches } from "./backend/warm-cache.js";
-export { ANDROID_MIN_API, IPHONEOS_MIN_VERSION, isAndroidTarget, isIosTarget, isMobileTarget, mobileLibraryTarget, mobileTargetRefusal } from "./backend/external-c.js";
+export {
+  ANDROID_MIN_API,
+  IPHONEOS_MIN_VERSION,
+  isAndroidTarget,
+  isIosTarget,
+  isMobileTarget,
+  mobileLibraryTarget,
+  mobileTargetRefusal,
+} from "./backend/external-c.js";
 export { emitLlvmModule, type LlvmTargetOptions } from "./backend/llvm/emitter.js";
 export type { ScrDiagnostic } from "./diagnostics/diagnostic.js";
 export {
@@ -112,7 +181,11 @@ export {
 } from "./compat/fetch-profile.js";
 export { LIB_FN_SIGS, validateModule } from "./ir/validate.js";
 export { deserializeModule, IR_VERSION, serializeModule } from "./ir/serialize.js";
-export { resolveLibraryFences, type LibraryFenceDecl, type ResolvedLibraryFence } from "./library/fence-eval.js";
+export {
+  resolveLibraryFences,
+  type LibraryFenceDecl,
+  type ResolvedLibraryFence,
+} from "./library/fence-eval.js";
 export {
   loadLibraryProfile,
   profileTeaching,
@@ -159,9 +232,23 @@ export {
   type PayloadDescriptor,
 } from "./library/sidecar.js";
 export { validateSidecar } from "./library/sidecar-validate.js";
-export { BUILD_ID_SEED, SOURCE_HASH_SEED, hex16, lengthPrefixedStream, wyhash64 } from "./library/wyhash.js";
-export { ISLAND_SURFACE, STATIC_MATH_PROPS, type IslandFnEntry } from "./frontend/lowering/surfaces.js";
-export { ambientDtsPath, isExactExternalTypeSpecifier, overridesDtsPath } from "./frontend/program-node.js";
+export {
+  BUILD_ID_SEED,
+  SOURCE_HASH_SEED,
+  hex16,
+  lengthPrefixedStream,
+  wyhash64,
+} from "./library/wyhash.js";
+export {
+  ISLAND_SURFACE,
+  STATIC_MATH_PROPS,
+  type IslandFnEntry,
+} from "./frontend/lowering/surfaces.js";
+export {
+  ambientDtsPath,
+  isExactExternalTypeSpecifier,
+  overridesDtsPath,
+} from "./frontend/program-node.js";
 export { resolveProvenanceSources } from "./frontend/provenance.js";
 export { wasiGuestPath, type HostPathFlavor } from "./wasi-paths.js";
 export {
@@ -178,7 +265,9 @@ export * as ir from "./ir/ir.js";
 function ffiNativeBuildDetail(err: CcCompileError): string {
   const lines = err.stderr.trim().split(/\r?\n/);
   const linkerMarker = lines.findIndex((line) =>
-    /(?:Undefined symbols|undefined reference to|unresolved external symbol|duplicate symbol|library not found for|cannot find -l|unable to find library|file format not recognized|linker command failed|fatal error LNK|lld-link: error)/i.test(line)
+    /(?:Undefined symbols|undefined reference to|unresolved external symbol|duplicate symbol|library not found for|cannot find -l|unable to find library|file format not recognized|linker command failed|fatal error LNK|lld-link: error)/i.test(
+      line,
+    ),
   );
   const relevant = linkerMarker >= 0 ? lines.slice(linkerMarker) : lines.slice(-40);
   const output = relevant.join("\n").trim();
@@ -219,12 +308,15 @@ export function compile(
   entryPath: string,
   opts: CompileSourceOptions,
 ): Promise<CompileSourceResult>;
+export function compile(entryPath: string, opts: CompileOptions): Promise<CompileExecutableResult>;
 export function compile(
   entryPath: string,
-  opts: CompileOptions,
-): Promise<CompileExecutableResult>;
-export function compile(entryPath: string, opts: CompileRequestOptions): Promise<CompileRequestResult>;
-export async function compile(entryPath: string, opts: CompileRequestOptions): Promise<CompileRequestResult> {
+  opts: CompileRequestOptions,
+): Promise<CompileRequestResult>;
+export async function compile(
+  entryPath: string,
+  opts: CompileRequestOptions,
+): Promise<CompileRequestResult> {
   clearCompileSessionCaches();
   const frontendInputs = new FrontendInputTracker();
   return frontendInputs.run(() => compileTracked(entryPath, opts, frontendInputs));
@@ -279,9 +371,7 @@ async function compileExecutableNative(
   onArtifactReady?: NonNullable<Parameters<typeof compileExternalC>[0]["onArtifactReady"]>,
 ): Promise<void> {
   const programIsObject = /\.(?:o|obj)$/.test(llvmPath);
-  const runtimePackTarget = programIsObject && !sanitize
-    ? nativeCodegenTarget()
-    : null;
+  const runtimePackTarget = programIsObject && !sanitize ? nativeCodegenTarget() : null;
   if (runtimePackTarget !== null) {
     const plan = await createNativeLinkPlan({
       target: runtimePackTarget,
@@ -295,10 +385,9 @@ async function compileExecutableNative(
       programObjectDependencies,
     });
     const cacheableLinker =
-      onArtifactReady !== undefined && ffi === null && platformLinkerSupportsPersistentCache(
-        process.env,
-        runtimePackTarget,
-      );
+      onArtifactReady !== undefined &&
+      ffi === null &&
+      platformLinkerSupportsPersistentCache(process.env, runtimePackTarget);
     await linkNativeExecutable(plan, {
       // A caller-selected linker can be a mutable wrapper with hidden inputs,
       // and a PATH-selected `clang` can be one too. FFI profiles and mutable
@@ -314,54 +403,61 @@ async function compileExecutableNative(
     (!programIsObject && features.optimization === "dev" && features.backend === "llvm" && !sanitize
       ? splitLlvmProgram(await readFile(llvmPath, "utf8"))
       : null);
-  if (programIsObject) throw new InternalCompilerError("program objects must link against a precompiled runtime pack");
+  if (programIsObject)
+    throw new InternalCompilerError("program objects must link against a precompiled runtime pack");
   await compileExternalC({
-      cPath: llvmPath,
-      outPath,
-      cacheIdentity: "scriptc-generated-v1",
-      ...(features.optimization === "dev" ? { optimization: "dev" as const } : {}),
-      ...(strip ? { strip: true } : {}),
-      ...(windowsSubsystem === undefined ? {} : { windowsSubsystem }),
-      ...(effectiveProgramSplit === null
-        ? {}
-        : {
-            programShards: effectiveProgramSplit.shards,
-            programPublicSymbols: effectiveProgramSplit.publicSymbols,
-          }),
-      sanitize,
-      dynamic: features.dynamic,
-      regex: features.regex,
-      copying: features.copying,
-      textDecoderLegacy: features.textDecoderLegacy,
-      fileHandle: features.fileHandle,
-      fetch: features.fetch,
-      netIsland: features.netIsland,
-      zlib: features.zlib,
-      assert: features.assert,
-      inspect: features.inspect,
-      dynInvoke: features.dynInvoke,
-      dc: features.dc,
-      dynAsync: features.dynAsync,
-      events: features.events,
-      emitter: features.emitter,
-      symbol: features.symbol,
-      bigint: features.bigint,
-      searchParams: features.searchParams,
-      qs: features.qs,
-      parseArgs: features.parseArgs,
-      stream: features.stream,
-      net: features.net,
-      http: features.http,
-      http2: features.http2,
-      dgram: features.dgram,
-      watch: features.watch,
-      foreignFfi: features.foreignFfi,
-      nodeTest: features.nodeTest,
-      tls: features.tls,
-      tlsCa: features.tlsCa,
-      ...(onArtifactReady === undefined ? {} : { onArtifactReady }),
-      ...(ffi === null ? {} : { linkInputs: ffi.libraries, systemLibraries: ffi.systemLibraries, frameworks: ffi.frameworks }),
-    });
+    cPath: llvmPath,
+    outPath,
+    cacheIdentity: "scriptc-generated-v1",
+    ...(features.optimization === "dev" ? { optimization: "dev" as const } : {}),
+    ...(strip ? { strip: true } : {}),
+    ...(windowsSubsystem === undefined ? {} : { windowsSubsystem }),
+    ...(effectiveProgramSplit === null
+      ? {}
+      : {
+          programShards: effectiveProgramSplit.shards,
+          programPublicSymbols: effectiveProgramSplit.publicSymbols,
+        }),
+    sanitize,
+    dynamic: features.dynamic,
+    regex: features.regex,
+    copying: features.copying,
+    textDecoderLegacy: features.textDecoderLegacy,
+    fileHandle: features.fileHandle,
+    fetch: features.fetch,
+    netIsland: features.netIsland,
+    zlib: features.zlib,
+    assert: features.assert,
+    inspect: features.inspect,
+    dynInvoke: features.dynInvoke,
+    dc: features.dc,
+    dynAsync: features.dynAsync,
+    events: features.events,
+    emitter: features.emitter,
+    symbol: features.symbol,
+    bigint: features.bigint,
+    searchParams: features.searchParams,
+    qs: features.qs,
+    parseArgs: features.parseArgs,
+    stream: features.stream,
+    net: features.net,
+    http: features.http,
+    http2: features.http2,
+    dgram: features.dgram,
+    watch: features.watch,
+    foreignFfi: features.foreignFfi,
+    nodeTest: features.nodeTest,
+    tls: features.tls,
+    tlsCa: features.tlsCa,
+    ...(onArtifactReady === undefined ? {} : { onArtifactReady }),
+    ...(ffi === null
+      ? {}
+      : {
+          linkInputs: ffi.libraries,
+          systemLibraries: ffi.systemLibraries,
+          frameworks: ffi.frameworks,
+        }),
+  });
 }
 
 async function emitNativeProgramObject(
@@ -391,19 +487,18 @@ async function emitNativeProgramObject(
   }
 }
 
-function usesPrecompiledRuntimePack(
-  opts: CompileRequestOptions,
-  backend: "llvm",
-): boolean {
-  if (
-    backend !== "llvm" || opts.sanitize === true ||
-    process.env["SCRIPTC_FETCH_CURL"] === "1"
-  ) return false;
+function usesPrecompiledRuntimePack(opts: CompileRequestOptions, backend: "llvm"): boolean {
+  if (backend !== "llvm" || opts.sanitize === true || process.env["SCRIPTC_FETCH_CURL"] === "1")
+    return false;
   return nativeCodegenTarget() !== null;
 }
 
 function runtimePackDiagnostic(error: RuntimePackError, entryPath: string): ScrDiagnostic {
-  return nativeCodegenDiag(error.code === "unsupported" ? "SC3002" : "SC3003", error.message, entryPath);
+  return nativeCodegenDiag(
+    error.code === "unsupported" ? "SC3002" : "SC3003",
+    error.message,
+    entryPath,
+  );
 }
 
 interface PreparedExecutable {
@@ -418,11 +513,21 @@ interface PreparedExecutable {
 /** Finish frontend work in a separate scope so the AST, checker caches and
  * typed IR can be reclaimed before the native optimizer needs its heap. */
 async function prepareExecutableInput(
-  entryPath: string, opts: CompileRequestOptions, ffi: FfiProfile | null, buildPlatform: string,
+  entryPath: string,
+  opts: CompileRequestOptions,
+  ffi: FfiProfile | null,
+  buildPlatform: string,
   timing: CompilationTiming,
 ): Promise<PreparedExecutable | CompileRequestResult> {
   const outputKind = opts.outputKind ?? "exe";
-  const prepared = prepareExecutableModule(entryPath, opts, ffi, buildPlatform, nodeFrontend, timing);
+  const prepared = prepareExecutableModule(
+    entryPath,
+    opts,
+    ffi,
+    buildPlatform,
+    nodeFrontend,
+    timing,
+  );
   if (!prepared.ok) return prepared;
   const { mod, sourceTexts } = prepared;
 
@@ -431,9 +536,8 @@ async function prepareExecutableInput(
     ir: join(opts.outDir, `${stem}.ir.json`),
     llvm: join(opts.outDir, `${stem}.ll`),
   } as const;
-  const debugOptions = opts.optimization === "dev" && !opts.strip
-    ? { debugSources: sourceTexts }
-    : {};
+  const debugOptions =
+    opts.optimization === "dev" && !opts.strip ? { debugSources: sourceTexts } : {};
 
   if (outputKind === "ir") {
     await mkdir(dirname(opts.outPath), { recursive: true });
@@ -508,7 +612,8 @@ async function prepareExecutableInput(
   await mkdir(opts.outDir, { recursive: true });
   const llvmPath = defaultSourcePaths.llvm;
   const backend = "llvm" as const;
-  const useRuntimePack = opts.nativeProgramObject === true || usesPrecompiledRuntimePack(opts, backend);
+  const useRuntimePack =
+    opts.nativeProgramObject === true || usesPrecompiledRuntimePack(opts, backend);
   let llvmSource: string | readonly string[];
   try {
     llvmSource = emitLlvmModuleSource(mod, {
@@ -539,8 +644,11 @@ async function prepareExecutableInput(
   );
   timing("link-features");
   const programSplit =
-    !useRuntimePack && backend === "llvm" && (opts.optimization ?? "release") === "dev" &&
-      !(opts.sanitize ?? false) && typeof llvmSource === "string"
+    !useRuntimePack &&
+    backend === "llvm" &&
+    (opts.optimization ?? "release") === "dev" &&
+    !(opts.sanitize ?? false) &&
+    typeof llvmSource === "string"
       ? splitLlvmProgram(llvmSource)
       : null;
   timing("llvm-split");
@@ -555,44 +663,67 @@ async function compileTracked(
   const timing = compilationTiming();
   entryPath = resolve(entryPath);
   const outputKind = opts.outputKind ?? "exe";
-  if ((opts.backend !== undefined && opts.backend !== "llvm") ||
-      !["ir", "llvm", "asm", "obj", "exe"].includes(outputKind)) {
-    return { ok: false, diagnostics: [nativeCodegenDiag("SC3002", "LLVM is the only backend; supported outputs are ir, llvm, asm, obj, and exe", entryPath)], sourceTexts: new Map() };
+  if (
+    (opts.backend !== undefined && opts.backend !== "llvm") ||
+    !["ir", "llvm", "asm", "obj", "exe"].includes(outputKind)
+  ) {
+    return {
+      ok: false,
+      diagnostics: [
+        nativeCodegenDiag(
+          "SC3002",
+          "LLVM is the only backend; supported outputs are ir, llvm, asm, obj, and exe",
+          entryPath,
+        ),
+      ],
+      sourceTexts: new Map(),
+    };
   }
   if (opts.windowsSubsystem !== undefined && outputKind !== "exe") {
     return {
       ok: false,
-      diagnostics: [nativeCodegenDiag("SC3002", "--windows-subsystem is only supported for executable output", entryPath)],
+      diagnostics: [
+        nativeCodegenDiag(
+          "SC3002",
+          "--windows-subsystem is only supported for executable output",
+          entryPath,
+        ),
+      ],
       sourceTexts: new Map(),
     };
   }
   if (opts.strip === true && outputKind !== "exe") {
     return {
       ok: false,
-      diagnostics: [nativeCodegenDiag("SC3002", "--strip is only supported for executable output", entryPath)],
+      diagnostics: [
+        nativeCodegenDiag("SC3002", "--strip is only supported for executable output", entryPath),
+      ],
       sourceTexts: new Map(),
     };
   }
   if (opts.nativeLinkInfo === true && outputKind !== "obj") {
     return {
       ok: false,
-      diagnostics: [nativeCodegenDiag(
-        "SC3002",
-        "native link info is available only for object output",
-        entryPath,
-      )],
+      diagnostics: [
+        nativeCodegenDiag(
+          "SC3002",
+          "native link info is available only for object output",
+          entryPath,
+        ),
+      ],
       sourceTexts: new Map(),
     };
   }
-  if (opts.nativeProgramObject === true &&
-      (outputKind !== "exe" || opts.backend !== "llvm")) {
+  if (opts.nativeProgramObject === true && (outputKind !== "exe" || opts.backend !== "llvm")) {
     return {
       ok: false,
-      diagnostics: [nativeCodegenDiag(
-        "SC3002",
-        "native program-object validation requires an executable build with backend explicitly set to llvm",
-        entryPath,
-      )],
+      diagnostics: [
+        nativeCodegenDiag(
+          "SC3002",
+          "native program-object validation requires an executable build with backend explicitly set to llvm",
+          entryPath,
+        ),
+      ],
       sourceTexts: new Map(),
     };
   }
@@ -628,7 +759,12 @@ async function compileTracked(
   }
   if (outputKind === "exe" && opts.sanitize !== true && process.env["SCRIPTC_FETCH_CURL"] !== "1") {
     const refusal = nativeCodegenTargetRefusal();
-    if (refusal !== null) return { ok: false, diagnostics: [nativeCodegenDiag("SC3002", refusal, entryPath)], sourceTexts: new Map() };
+    if (refusal !== null)
+      return {
+        ok: false,
+        diagnostics: [nativeCodegenDiag("SC3002", refusal, entryPath)],
+        sourceTexts: new Map(),
+      };
   }
   let ffi: FfiProfile | null = null;
   let ffiProfileBytes: Uint8Array | null = null;
@@ -651,11 +787,13 @@ async function compileTracked(
     } catch (err) {
       return {
         ok: false,
-        diagnostics: [{
-          code: "SC3002",
-          message: err instanceof Error ? err.message : String(err),
-          loc: { file: entryPath, start: 0, end: 0 },
-        }],
+        diagnostics: [
+          {
+            code: "SC3002",
+            message: err instanceof Error ? err.message : String(err),
+            loc: { file: entryPath, start: 0, end: 0 },
+          },
+        ],
         sourceTexts: new Map(),
       };
     }
@@ -665,11 +803,13 @@ async function compileTracked(
     } catch (err) {
       return {
         ok: false,
-        diagnostics: [{
-          code: "SC3002",
-          message: err instanceof Error ? err.message : String(err),
-          loc: { file: entryPath, start: 0, end: 0 },
-        }],
+        diagnostics: [
+          {
+            code: "SC3002",
+            message: err instanceof Error ? err.message : String(err),
+            loc: { file: entryPath, start: 0, end: 0 },
+          },
+        ],
         sourceTexts: new Map(),
       };
     }
@@ -685,11 +825,13 @@ async function compileTracked(
       if (opts.sanitize === true) {
         return {
           ok: false,
-          diagnostics: [nativeCodegenDiag(
-            "SC3002",
-            `--sanitize is not supported with --emit=${outputKind}; AddressSanitizer instrumentation parity is not available in the LLVM native helper yet`,
-            entryPath,
-          )],
+          diagnostics: [
+            nativeCodegenDiag(
+              "SC3002",
+              `--sanitize is not supported with --emit=${outputKind}; AddressSanitizer instrumentation parity is not available in the LLVM native helper yet`,
+              entryPath,
+            ),
+          ],
           sourceTexts: new Map(),
         };
       }
@@ -700,27 +842,27 @@ async function compileTracked(
   } catch (err) {
     return {
       ok: false,
-      diagnostics: [nativeCodegenDiag("SC3002", err instanceof Error ? err.message : String(err), entryPath)],
+      diagnostics: [
+        nativeCodegenDiag("SC3002", err instanceof Error ? err.message : String(err), entryPath),
+      ],
       sourceTexts: new Map(),
     };
   }
-  const cacheRoot = outputKind === "exe" && provenanceSources() === null
-    ? await prepareBuildCacheRoot(buildCacheRoot())
-    : null;
+  const cacheRoot =
+    outputKind === "exe" && provenanceSources() === null
+      ? await prepareBuildCacheRoot(buildCacheRoot())
+      : null;
   let earlyCacheOptions: EarlyExecutableCacheOptions | null = null;
   if (outputKind === "exe") {
-    const helperObjectRoute = opts.nativeProgramObject === true ||
-      (usesPrecompiledRuntimePack(opts, "llvm"));
+    const helperObjectRoute =
+      opts.nativeProgramObject === true || usesPrecompiledRuntimePack(opts, "llvm");
     // Package content and native driver discovery are independent inputs to
     // the same cache key. Start both before waiting so edits do not pay their
     // filesystem and subprocess latency serially.
     const [implementation, nativeEnvironment] = await Promise.all([
       compilerImplementationIdentity(),
       helperObjectRoute
-        ? executableLinkerEnvironmentFingerprint(
-          process.env,
-          nativeCodegenTarget()?.defaultLinker,
-        )
+        ? executableLinkerEnvironmentFingerprint(process.env, nativeCodegenTarget()?.defaultLinker)
         : executableNativeEnvironmentFingerprint(),
     ]);
     earlyCacheOptions = {
@@ -742,9 +884,11 @@ async function compileTracked(
       target: `${process.env["SCRIPTC_TARGET"] ?? "native"}:${buildPlatform}:${process.arch}:${
         opts.nativeProgramObject === true
           ? "helper-object"
-          : helperObjectRoute ? "runtime-pack" : "driver-tu"
+          : helperObjectRoute
+            ? "runtime-pack"
+            : "driver-tu"
       }`,
-    compiler: [
+      compiler: [
         helperObjectRoute
           ? resolvePlatformLinker(process.env, nativeCodegenTarget()?.defaultLinker)
           : (process.env["SCRIPTC_CC"] ?? "clang"),
@@ -755,9 +899,10 @@ async function compileTracked(
       implementationDependencies: implementation.dependencies,
     };
   }
-  const earlyHit = earlyCacheOptions === null
-    ? null
-    : await readEarlyExecutableCache(cacheRoot, earlyCacheOptions);
+  const earlyHit =
+    earlyCacheOptions === null
+      ? null
+      : await readEarlyExecutableCache(cacheRoot, earlyCacheOptions);
   if (earlyHit !== null) {
     timing("executable-cache-hit");
     if (earlyCacheOptions === null) {
@@ -791,7 +936,8 @@ async function compileTracked(
       artifactPath: string;
       dependencies: NativeArtifactDependency[];
     } | null = null;
-    const useRuntimePack = opts.nativeProgramObject === true ||
+    const useRuntimePack =
+      opts.nativeProgramObject === true ||
       usesPrecompiledRuntimePack(opts, earlyHit.native.backend);
     if (useRuntimePack) {
       if (earlyHit.native.backend !== "llvm") {
@@ -826,29 +972,34 @@ async function compileTracked(
         opts.strip,
         null,
         nativeProgramObject?.dependencies,
-        opts.nativeProgramObject === true ? undefined : async ({ dependencies }) => {
-          await publishEarlyExecutableCache(cacheRoot, executableCacheOptions, {
-            ...earlyHit,
-            executableRestored: true,
-            nativeDependencies: dependencies,
-            frontend: earlyHit.frontend,
-          });
-        },
+        opts.nativeProgramObject === true
+          ? undefined
+          : async ({ dependencies }) => {
+              await publishEarlyExecutableCache(cacheRoot, executableCacheOptions, {
+                ...earlyHit,
+                executableRestored: true,
+                nativeDependencies: dependencies,
+                frontend: earlyHit.frontend,
+              });
+            },
       );
       if (nativeProgramObject !== null && opts.nativeProgramObject === true) {
         await rename(nativeProgramObject.linkPath, nativeProgramObject.artifactPath);
       }
     } catch (err) {
       if (err instanceof RuntimePackError) {
-        return { ok: false, diagnostics: [runtimePackDiagnostic(err, entryPath)], sourceTexts: new Map() };
+        return {
+          ok: false,
+          diagnostics: [runtimePackDiagnostic(err, entryPath)],
+          sourceTexts: new Map(),
+        };
       }
       if (ffi !== null && err instanceof CcCompileError) {
         return {
           ok: false,
-          diagnostics: [ffiNativeBuildDiag(
-            ffiNativeBuildDetail(err),
-            opts.ffiProfilePath ?? entryPath,
-          )],
+          diagnostics: [
+            ffiNativeBuildDiag(ffiNativeBuildDetail(err), opts.ffiProfilePath ?? entryPath),
+          ],
           sourceTexts: new Map(),
         };
       }
@@ -890,11 +1041,13 @@ async function compileTracked(
     dependencies: NativeArtifactDependency[];
   } | null = null;
   try {
-    const useRuntimePack = opts.nativeProgramObject === true ||
-      usesPrecompiledRuntimePack(opts, backend);
+    const useRuntimePack =
+      opts.nativeProgramObject === true || usesPrecompiledRuntimePack(opts, backend);
     if (useRuntimePack) {
       if (backend !== "llvm" || llvmSource === null) {
-        throw new InternalCompilerError("native program-object validation requires the LLVM backend");
+        throw new InternalCompilerError(
+          "native program-object validation requires the LLVM backend",
+        );
       }
       try {
         nativeProgramObject = await emitNativeProgramObject(entryPath, opts, llvmSource);
@@ -918,17 +1071,19 @@ async function compileTracked(
       opts.strip,
       programSplit,
       nativeProgramObject?.dependencies,
-      opts.nativeProgramObject === true ? undefined : async ({ dependencies }) => {
-        await publishEarlyExecutableCache(cacheRoot, executableCacheOptions, {
-          llvmPath,
-          native: nativeFeatures,
-          executableRestored: true,
-          nativeDependencies: dependencies,
-          frontend: frontendInputs.snapshot(),
-          ...(irPath === undefined ? {} : { irPath }),
-        });
-        publishedExecutable = true;
-      },
+      opts.nativeProgramObject === true
+        ? undefined
+        : async ({ dependencies }) => {
+            await publishEarlyExecutableCache(cacheRoot, executableCacheOptions, {
+              llvmPath,
+              native: nativeFeatures,
+              executableRestored: true,
+              nativeDependencies: dependencies,
+              frontend: frontendInputs.snapshot(),
+              ...(irPath === undefined ? {} : { irPath }),
+            });
+            publishedExecutable = true;
+          },
     );
     timing("native-link");
     if (nativeProgramObject !== null && opts.nativeProgramObject === true) {
@@ -942,10 +1097,7 @@ async function compileTracked(
       return {
         ok: false,
         diagnostics: [
-          ffiNativeBuildDiag(
-            ffiNativeBuildDetail(err),
-            opts.ffiProfilePath ?? entryPath,
-          ),
+          ffiNativeBuildDiag(ffiNativeBuildDetail(err), opts.ffiProfilePath ?? entryPath),
         ],
         sourceTexts,
       };
@@ -990,10 +1142,7 @@ async function compileTracked(
  * emission; there is no fallback concept on this path (an out-of-tier
  * program under emission "llvm" is SC3001, fail-loudly). */
 
-function libraryNativeFeatures(
-  mod: IrModule,
-  backend: "llvm",
-): EarlyLibraryNativeFeatures {
+function libraryNativeFeatures(mod: IrModule, backend: "llvm"): EarlyLibraryNativeFeatures {
   const features = moduleRuntimeFeatures(mod);
   return {
     backend,
@@ -1021,9 +1170,16 @@ async function compileLibraryNative(
 ): Promise<void> {
   const wasmTarget = nativeCodegenTarget();
   if (wasmTarget?.platform === "wasi") {
-    await compilePackedLibrary({
-      cPath: llvmPath, outPath: archivePath, optimization: profile.optimization, ...features,
-    }, wasmTarget, libraryWasmExports(profile));
+    await compilePackedLibrary(
+      {
+        cPath: llvmPath,
+        outPath: archivePath,
+        optimization: profile.optimization,
+        ...features,
+      },
+      wasmTarget,
+      libraryWasmExports(profile),
+    );
     return;
   }
   const localizeSymbols = libraryLocalizeSymbols(profile);
@@ -1037,25 +1193,36 @@ async function compileLibraryNative(
     programSource = publicSource;
   }
   if (profile.sidecar !== null) {
-    if (features.buildId === undefined) throw new InternalCompilerError("library identity TU has no build id");
+    if (features.buildId === undefined)
+      throw new InternalCompilerError("library identity TU has no build id");
     const withoutIdentity = stripLibraryIdentity(programSource!);
     if (withoutIdentity === programSource) {
       throw new InternalCompilerError("generated public library TU has no identity region");
     }
     programSource = withoutIdentity;
-    identityLlvmSource = emitLibraryIdentityLines({
-      buildIdSymbol: profile.sidecar.buildIdSymbol,
-      abiVersionSymbol: profile.sidecar.abiVersionSymbol,
-      buildId: features.buildId,
-      abiVersion: profile.sidecar.abiVersion,
-    }, "").join("\n");
+    identityLlvmSource = emitLibraryIdentityLines(
+      {
+        buildIdSymbol: profile.sidecar.buildIdSymbol,
+        abiVersionSymbol: profile.sidecar.abiVersionSymbol,
+        buildId: features.buildId,
+        abiVersion: profile.sidecar.abiVersion,
+      },
+      "",
+    ).join("\n");
   }
   const llvmSplit =
-    profile.emission === "llvm" && profile.optimization === "dev" && !sanitize && programSource !== undefined
+    profile.emission === "llvm" &&
+    profile.optimization === "dev" &&
+    !sanitize &&
+    programSource !== undefined
       ? splitLlvmLibraryProgram(programSource)
       : null;
   const packTarget = !sanitize ? nativeCodegenTarget() : null;
-  if (!sanitize && packTarget === null) throw new NativeCodegenError("SC3002", nativeCodegenTargetRefusal() ?? "unsupported library target");
+  if (!sanitize && packTarget === null)
+    throw new NativeCodegenError(
+      "SC3002",
+      nativeCodegenTargetRefusal() ?? "unsupported library target",
+    );
   const archiveOptions: Parameters<typeof compileExternalCLibrary>[0] = {
     cPath: llvmPath,
     ...(programSource !== undefined ? { programSource } : {}),
@@ -1136,19 +1303,14 @@ async function emitSemanticLibraryHit(
     irPath = join(opts.outDir, `${stem}.lib.ir.json`);
     await writeFile(irPath, serializeModule(mod, true));
   }
-  await compileLibraryNative(
-    profile,
-    llvmPath,
-    archivePath,
-    opts.sanitize ?? false,
-    hit.native,
-  );
+  await compileLibraryNative(profile, llvmPath, archivePath, opts.sanitize ?? false, hit.native);
   timing("native-archive");
   let sidecarPath: string | undefined;
   if (sidecarJson !== null) {
-    sidecarPath = profile.sidecar!.path !== null
-      ? resolve(dirname(archivePath), profile.sidecar!.path)
-      : `${archivePath}.contract.json`;
+    sidecarPath =
+      profile.sidecar!.path !== null
+        ? resolve(dirname(archivePath), profile.sidecar!.path)
+        : `${archivePath}.contract.json`;
     await writeFile(sidecarPath, sidecarJson);
   }
   await publishEarlyLibraryCache(cacheRoot, cacheOptions, {
@@ -1178,8 +1340,18 @@ export async function compileLibrary(opts: CompileLibraryOptions): Promise<Compi
   try {
     return await frontendInputs.run(() => compileLibraryTracked(opts, frontendInputs));
   } catch (error) {
-    if (error instanceof RuntimePackError) return { ok: false, diagnostics: [runtimePackDiagnostic(error, opts.profilePath)], sourceTexts: new Map() };
-    if (error instanceof NativeCodegenError) return { ok: false, diagnostics: [nativeCodegenDiag(error.diagnosticCode, error.message, opts.profilePath)], sourceTexts: new Map() };
+    if (error instanceof RuntimePackError)
+      return {
+        ok: false,
+        diagnostics: [runtimePackDiagnostic(error, opts.profilePath)],
+        sourceTexts: new Map(),
+      };
+    if (error instanceof NativeCodegenError)
+      return {
+        ok: false,
+        diagnostics: [nativeCodegenDiag(error.diagnosticCode, error.message, opts.profilePath)],
+        sourceTexts: new Map(),
+      };
     throw error;
   }
 }
@@ -1246,10 +1418,12 @@ async function compileLibraryTracked(
   }
 
   const buildPlatform = buildTargetPlatform();
-  const archivePath = opts.outPath ?? join(
-    opts.outDir,
-    `${basename(entryPath).replace(/\.(ts|mts|cts|js|mjs|cjs)$/, "")}${buildPlatform === "wasi" ? ".wasm" : ".lib.a"}`,
-  );
+  const archivePath =
+    opts.outPath ??
+    join(
+      opts.outDir,
+      `${basename(entryPath).replace(/\.(ts|mts|cts|js|mjs|cjs)$/, "")}${buildPlatform === "wasi" ? ".wasm" : ".lib.a"}`,
+    );
   if (buildPlatform === "wasi") {
     const refusal = libraryWasmRefusal(profile, opts.sanitize ?? false);
     if (refusal !== null) return { ok: false, diagnostics: [refusal], sourceTexts: new Map() };
@@ -1266,9 +1440,11 @@ async function compileLibraryTracked(
   // each WebAssembly.Instance already owns its runtime state.
   if (profile.localizeRuntime && buildPlatform !== "wasi") {
     const packTarget = nativeCodegenTarget();
-    const driver = opts.sanitize ? resolveCc() : {
-      target: packTarget?.llvmTriple ?? process.env["SCRIPTC_TARGET"] ?? null,
-    };
+    const driver = opts.sanitize
+      ? resolveCc()
+      : {
+          target: packTarget?.llvmTriple ?? process.env["SCRIPTC_TARGET"] ?? null,
+        };
     const platform = buildPlatform;
     const targetArch = driver.target?.split("-", 1)[0] ?? null;
     // Native Linux retains its host-binutils implementation. Cross ELF is
@@ -1293,21 +1469,23 @@ async function compileLibraryTracked(
               : "runtime-localized (multi-instance) library archives";
       return {
         ok: false,
-        diagnostics: decorateLibraryRefusals([
-          targetRefusalDiag(
-            process.env["SCRIPTC_TARGET"] || driver.target || platform,
-            subject,
-            { file: entryPath, start: 0, end: 0 },
-          ),
-        ], profile),
+        diagnostics: decorateLibraryRefusals(
+          [
+            targetRefusalDiag(process.env["SCRIPTC_TARGET"] || driver.target || platform, subject, {
+              file: entryPath,
+              start: 0,
+              end: 0,
+            }),
+          ],
+          profile,
+        ),
         sourceTexts: new Map(),
       };
     }
   }
 
-  const cacheRoot = provenanceSources() === null
-    ? await prepareBuildCacheRoot(buildCacheRoot())
-    : null;
+  const cacheRoot =
+    provenanceSources() === null ? await prepareBuildCacheRoot(buildCacheRoot()) : null;
   const earlyCacheOptions: EarlyLibraryCacheOptions = {
     profilePath: opts.profilePath,
     profileBytes: profile.profileBytes,
@@ -1366,11 +1544,20 @@ async function compileLibraryTracked(
   }
   timing("semantic-cache-miss");
 
-  const prepared = prepareLibrary(profile, opts.profilePath, compilerReleaseVersion(), buildPlatform, nodeFrontend, timing);
+  const prepared = prepareLibrary(
+    profile,
+    opts.profilePath,
+    compilerReleaseVersion(),
+    buildPlatform,
+    nodeFrontend,
+    timing,
+  );
   if (!prepared.ok) return prepared;
   const { mod, sourceTexts, sidecarJson } = prepared;
   const fail = (diagnostics: ScrDiagnostic[]): CompileLibraryResult => ({
-    ok: false, diagnostics: decorateLibraryRefusals(diagnostics, profile), sourceTexts,
+    ok: false,
+    diagnostics: decorateLibraryRefusals(diagnostics, profile),
+    sourceTexts,
   });
 
   await mkdir(opts.outDir, { recursive: true });
@@ -1382,7 +1569,12 @@ async function compileLibraryTracked(
       pointerBits: buildPlatform === "wasi" ? 32 : 64,
       wasi: buildPlatform === "wasi",
     });
-    timing("llvm-emit", { output_bytes: typeof ll === "string" ? Buffer.byteLength(ll) : ll.reduce((bytes, part) => bytes + Buffer.byteLength(part), 0) });
+    timing("llvm-emit", {
+      output_bytes:
+        typeof ll === "string"
+          ? Buffer.byteLength(ll)
+          : ll.reduce((bytes, part) => bytes + Buffer.byteLength(part), 0),
+    });
     await writeFile(llvmPath, ll);
     timing("llvm-write");
   } catch (err) {
