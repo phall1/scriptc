@@ -14144,6 +14144,36 @@
     "<repo>/tests/corpus/integer-view-storage.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/counted-loop-numbers.ts": {
+   "order": [
+    "<repo>/tests/corpus/counted-loop-numbers.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/counted-loop-storage.ts": {
+   "order": [
+    "<repo>/tests/corpus/counted-loop-storage.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/byte-loop-bounds.ts": {
+   "order": [
+    "<repo>/tests/corpus/byte-loop-bounds.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/integer-flow-arithmetic.ts": {
+   "order": [
+    "<repo>/tests/corpus/integer-flow-arithmetic.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/integer-loop-forms.ts": {
+   "order": [
+    "<repo>/tests/corpus/integer-loop-forms.ts"
+   ],
+   "diags": []
   }
  }
 }

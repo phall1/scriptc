@@ -37,7 +37,9 @@ import type {
   SrcLoc,
 } from "../../ir/ir.js";
 import { CAUGHT, ffiCallbackType, isDynTypedRefType, isFfiContextParam, isRefCounted, isUnitType, moduleRuntimeFeatures, moduleEmbedsBuiltin, moduleEmbedsCompressedNpm, NPM_COMPRESS_MIN, POINTER_KINDS, RUNTIME_EMITTER_CLASS, RUNTIME_ERROR_CLASSES, RUNTIME_STREAM_CLASSES, typeKey, VOID } from "../../ir/ir.js";
-import { matchIntegerArrayForLoop, matchIntegerBytesForLoop } from "../../ir/integer-loops.js";
+import { matchIntegerArrayForLoop, matchIntegerBytesForLoop, matchIntegerCountedForLoop } from "../../ir/integer-loops.js";
+import { emitCountedLoopLimit } from "./counted-loops.js";
+import { findBytesBounds } from "./bytes-bounds.js";
 import { scalarizeNumericRecords } from "../../ir/scalar-records.js";
 import { everyStmtList } from "../../ir/traverse.js";
 import { analyzeIntegerRanges, type IntegerRanges } from "../../ir/integer-ranges.js";
@@ -365,9 +367,11 @@ export class LlEmitter {
   }[] = [];
   private currentLocals = new Map<string, IrLocal>();
   private captureIds = new Set<string>();
-  /** Active canonical byte-loop induction bindings: local id → size_t slot. */
-  integerLoopBindings = new Map<string, string>();
+  /** Active induction bindings retain their width independently of size_t. */
+  integerLoopBindings = new Map<string, { slot: string; type: "i32" | "i64"; signed?: boolean; range?: { min: number; max: number } }>();
+  private countedLoopsEnabled = false;
   integerRanges: IntegerRanges = new Map();
+  bytesBounds: ReadonlySet<IrExpr | IrStmt> = new Set();
   integerViews = new Map<string, string>();
   /** Enclosing try-with-FINALLY regions, innermost last: a `return`
    * inside one runs every crossed finally (innermost first) before the
@@ -3325,6 +3329,7 @@ export class LlEmitter {
     }
     this.captureIds = new Set([...(fn.captures ?? []), ...(fn.classCaptures ?? [])].map((c) => c.localId));
     this.integerLoopBindings.clear();
+    this.countedLoopsEnabled = this.debug === null && !fn.async && !fn.generator;
     this.integerViews.clear();
     this.fieldPointerTags.clear();
     this.integerArrayBindings.clear();
@@ -3333,6 +3338,7 @@ export class LlEmitter {
     this.mapReadLifetimes = findMapReadLifetimes(fn, this.unionsById, this.callLifetimes);
     this.localStackUnions = findLocalStackUnions(fn, this.callLifetimes, this.unionsById);
     this.integerRanges = analyzeIntegerRanges(fn);
+    this.bytesBounds = findBytesBounds(fn, this.integerRanges);
     this.chainSlots.clear();
     this.finallyStack = [];
     this.tryStack = [];
@@ -3738,11 +3744,10 @@ export class LlEmitter {
         // IrBytesElem is static, so never rediscover it through the
         // generic runtime switch in a hot loop.
         const arr = this.emitStableReceiver(s.arr, [s.index, s.value]);
-        const integerIndex = this.emitIntegerLoopIndex(s.index);
-        const idx = integerIndex ?? this.emitExpr(s.index).name;
+        const idx = this.emitExpr(s.index);
         const v = this.emitExpr(s.value);
         if (s.arr.type.kind !== "bytes") throw new InternalCompilerError("llvm emitter bug: bytesSet on non-bytes");
-        this.emitBytesSet(s.arr.type.elem, arr.name, idx, v, integerIndex !== null, s.value);
+        this.emitBytesSet(s.arr.type.elem, arr.name, idx, v, s.index, s.value, this.bytesBounds.has(s));
         break;
       }
       case "fieldSet":
@@ -4009,8 +4014,26 @@ export class LlEmitter {
         // release it — scopeDepth captured after the push, C parity).
         const integerArrayLoop = this.debug === null ? matchIntegerArrayForLoop(s, this.currentLocals, this.integerArrayBindings) : null;
         const integerLoop = integerArrayLoop ?? (this.debug === null ? matchIntegerBytesForLoop(s, this.currentLocals) : null);
+        const countedLoop = !integerLoop && this.countedLoopsEnabled ? matchIntegerCountedForLoop(s, this.currentLocals, this.integerRanges) : null;
+        let countedJoin: string | null = null;
+        if (countedLoop?.guarded) {
+          const bound = this.emitExpr(countedLoop.limit);
+          const safe = B.tmp();
+          const fast = B.newLabel("counted.fast");
+          const slow = B.newLabel("counted.slow");
+          countedJoin = B.newLabel("counted.done");
+          B.line(`${safe} = fcmp ${countedLoop.step > 0 ? "ole" : "oge"} double ${bound.name}, ${f64Lit(countedLoop.guardLimit)}`);
+          B.condBr(safe, fast, slow);
+          B.startBlock(slow);
+          this.countedLoopsEnabled = false;
+          this.emitStmt(s);
+          this.countedLoopsEnabled = true;
+          B.br(countedJoin);
+          B.startBlock(fast);
+        }
         this.scopes.push([]);
         let integerSlot: string | null = null;
+        let countedLimit: string | null = null;
         if (integerLoop) {
           integerSlot = B.slot();
           B.entryAllocas.push(`${integerSlot} = alloca ${this.sizeType} ; integer induction ${this.currentLocals.get(integerLoop.localId)!.name}`);
@@ -4022,7 +4045,17 @@ export class LlEmitter {
             this.integerArrayBindings.add(integerLoop.localId);
           }
           B.line(`store ${this.sizeType} ${start}, ptr ${integerSlot}`);
-          this.integerLoopBindings.set(integerLoop.localId, integerSlot);
+          this.integerLoopBindings.set(integerLoop.localId, { slot: integerSlot, type: this.sizeType,
+            range: { min: 0, max: integerArrayLoop ? 4294967294 : Number.MAX_SAFE_INTEGER - 1 } });
+        } else if (countedLoop) {
+          integerSlot = B.slot();
+          B.entryAllocas.push(`${integerSlot} = alloca i64 ; integer induction ${this.currentLocals.get(countedLoop.localId)!.name}`);
+          const startNumber = this.emitExpr(countedLoop.start);
+          const start = B.tmp();
+          B.line(`${start} = fptosi double ${startNumber.name} to i64`);
+          B.line(`store i64 ${start}, ptr ${integerSlot}`);
+          this.integerLoopBindings.set(countedLoop.localId, { slot: integerSlot, type: "i64", signed: true, range: countedLoop.range });
+          countedLimit = emitCountedLoopLimit(this, countedLoop);
         } else if (s.init) {
           // A multi-declarator head shares the loop's scope. Emitting its
           // IR block as an ordinary block would release captured/ref locals
@@ -4073,6 +4106,12 @@ export class LlEmitter {
           B.line(`${index} = load ${this.sizeType}, ptr ${integerSlot}`);
           B.line(`${inBounds} = icmp ult ${this.sizeType} ${index}, ${len}`);
           B.condBr(inBounds, lb, le);
+        } else if (countedLoop && integerSlot && countedLimit) {
+          const index = B.tmp();
+          const inBounds = B.tmp();
+          B.line(`${index} = load i64, ptr ${integerSlot}`);
+          B.line(`${inBounds} = icmp ${countedLoop.step > 0 ? "slt" : "sgt"} i64 ${index}, ${countedLimit}`);
+          B.condBr(inBounds, lb, le);
         } else if (s.cond) B.condBr(this.emitCondition(s.cond), lb, le);
         else B.br(lb);
         B.startBlock(lb);
@@ -4097,13 +4136,24 @@ export class LlEmitter {
             B.line(`${old} = load ${this.sizeType}, ptr ${integerSlot}`);
             B.line(`${next} = add nuw ${this.sizeType} ${old}, 1`);
             B.line(`store ${this.sizeType} ${next}, ptr ${integerSlot}`);
+          } else if (countedLoop && integerSlot) {
+            const old = B.tmp();
+            const next = B.tmp();
+            B.line(`${old} = load i64, ptr ${integerSlot}`);
+            B.line(`${next} = add nsw i64 ${old}, ${countedLoop.step}`);
+            B.line(`store i64 ${next}, ptr ${integerSlot}`);
           } else if (s.update) this.emitStmt(s.update);
           B.br(lc);
         }
         B.startBlock(le);
         this.releaseScope(this.scopes.pop()!);
         if (integerLoop) this.integerLoopBindings.delete(integerLoop.localId);
+        if (countedLoop) this.integerLoopBindings.delete(countedLoop.localId);
         if (integerArrayLoop) this.integerArrayBindings.delete(integerArrayLoop.localId);
+        if (countedJoin) {
+          B.br(countedJoin);
+          B.startBlock(countedJoin);
+        }
         break;
       }
       case "forOf": {
@@ -4910,8 +4960,8 @@ export class LlEmitter {
     return emitIntegerLoopIndex(this, expr);
   }
 
-  emitBytesIndex(receiver: string, index: string, integerIndex = false): string {
-    return emitBytesIndex(this, receiver, index, integerIndex);
+  emitBytesIndex(receiver: string, index: LlValue, expr?: IrExpr, inBounds = false): string {
+    return emitBytesIndex(this, receiver, index, expr, undefined, inBounds);
   }
 
   emitBytesData(receiver: string): string {
@@ -4922,8 +4972,8 @@ export class LlEmitter {
     return emitBytesLength(this, elem, receiver, bytes);
   }
 
-  emitBytesGet(elem: IrBytesElem, receiver: string, index: string, integerIndex = false): LlValue {
-    return emitBytesGet(this, elem, receiver, index, integerIndex);
+  emitBytesGet(elem: IrBytesElem, receiver: string, index: LlValue, expr?: IrExpr, inBounds = false): LlValue {
+    return emitBytesGet(this, elem, receiver, index, expr, inBounds);
   }
 
   emitToUint32(value: string, expr?: IrExpr, uint32?: string): string {
@@ -4937,8 +4987,8 @@ export class LlEmitter {
     this.B.line(`store i32 ${integer}, ptr ${slot}`);
   }
 
-  private emitBytesSet(elem: IrBytesElem, receiver: string, index: string, value: LlValue, integerIndex = false, expr?: IrExpr): void {
-    return emitBytesSet(this, elem, receiver, index, value, integerIndex, expr);
+  private emitBytesSet(elem: IrBytesElem, receiver: string, index: LlValue, value: LlValue, indexExpr?: IrExpr, expr?: IrExpr, inBounds = false): void {
+    return emitBytesSet(this, elem, receiver, index, value, indexExpr, expr, inBounds);
   }
 
   emitBytesIntrinsic(e: IrExpr & { kind: "bytesIntrinsic" }): LlValue {

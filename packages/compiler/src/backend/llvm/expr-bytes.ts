@@ -3,6 +3,7 @@ import { InternalCompilerError } from "../../errors.js";
 import { BYTES_ELEMENT_SIZE, F64, type IrBytesElem, type IrExpr } from "../../ir/ir.js";
 import type { LlvmEmitterContext, LlValue } from "./expr-context.js";
 import { F64_INF, f64Lit } from "./common.js";
+import { exactInteger, widenInteger } from "./integer-values.js";
 
 const BYTES_NUM_KIND: Record<string, { kind: number; le: boolean } | undefined> = {
   u8: { kind: 0, le: false },
@@ -55,35 +56,52 @@ const DV_SET_KIND: Record<string, number> = {
 export function emitIntegerLoopIndex(host: LlvmEmitterContext, expr: IrExpr): string | null {
     if (expr.kind !== "varRef") return null;
     const slot = host.integerLoopBindings.get(expr.localId);
-    if (slot === undefined) return null;
+    // A wide counter must not wrap into an in-bounds index on a 32-bit
+    // target. Use the ordinary checked double path when widths differ.
+    if (slot === undefined || slot.type !== host.sizeType || slot.signed && (!slot.range || slot.range.min < 0)) return null;
     const index = host.B.tmp();
-    host.B.line(`${index} = load ${host.sizeType}, ptr ${slot}`);
+    host.B.line(`${index} = load ${host.sizeType}, ptr ${slot.slot}`);
     return index;
   }
 
-export function emitBytesIndex(host: LlvmEmitterContext, receiver: string, index: string, integerIndex = false, skipInvalid?: string): string {
+export function emitBytesIndex(host: LlvmEmitterContext, receiver: string, value: LlValue, expr?: IrExpr, skipInvalid?: string, inBounds = false): string {
     const B = host.B;
+    const index = value.name;
+    const integer = exactInteger(host, value, expr);
+    if (inBounds && integer) {
+      const wide = widenInteger(host, integer);
+      if (host.sizeType === "i64") return wide;
+      const narrow = B.tmp();
+      B.line(`${narrow} = trunc i64 ${wide} to ${host.sizeType}`);
+      return narrow;
+    }
     const lenPtr = B.tmp();
     const len = B.tmp();
     B.line(`${lenPtr} = getelementptr inbounds %ScrBytes, ptr ${receiver}, i64 0, i32 1`);
     B.line(`${len} = load ${host.sizeType}, ptr ${lenPtr}`);
-    if (integerIndex) {
+    if (integer) {
+      const wideIndex = widenInteger(host, integer);
+      const wideLength = host.sizeType === "i64" ? len : B.tmp();
+      if (host.sizeType !== "i64") B.line(`${wideLength} = zext ${host.sizeType} ${len} to i64`);
       const inRange = B.tmp();
-      B.line(`${inRange} = icmp ult ${host.sizeType} ${index}, ${len}`);
+      // Negative signed values compare above any length as unsigned. Keep
+      // the full index until after this guard on 32-bit targets as well.
+      B.line(`${inRange} = icmp ult i64 ${wideIndex}, ${wideLength}`);
       const invalid = B.newLabel("bytes.index.invalid");
       const valid = B.newLabel("bytes.index.valid");
       B.condBr(inRange, valid, invalid);
       B.startBlock(invalid);
       if (skipInvalid) B.br(skipInvalid);
       else {
-        const indexF64 = B.tmp();
-        B.line(`${indexF64} = uitofp ${host.sizeType} ${index} to double`);
         host.declare(`declare double @scr_bytes_get(ptr, double)`);
-        B.line(`call double @scr_bytes_get(ptr ${receiver}, double ${indexF64})`);
+        B.line(`call double @scr_bytes_get(ptr ${receiver}, double ${index})`);
         B.terminate("unreachable");
       }
       B.startBlock(valid);
-      return index;
+      if (host.sizeType === "i64") return wideIndex;
+      const narrow = B.tmp();
+      B.line(`${narrow} = trunc i64 ${wideIndex} to ${host.sizeType}`);
+      return narrow;
     }
     const lenF64 = B.tmp();
     const nonnegative = B.tmp();
@@ -142,9 +160,9 @@ export function emitBytesLength(host: LlvmEmitterContext, elem: IrBytesElem, rec
     return { name: out, type: F64 };
   }
 
-export function emitBytesGet(host: LlvmEmitterContext, elem: IrBytesElem, receiver: string, index: string, integerIndex = false): LlValue {
+export function emitBytesGet(host: LlvmEmitterContext, elem: IrBytesElem, receiver: string, index: LlValue, expr?: IrExpr, inBounds = false): LlValue {
     const B = host.B;
-    const idx = host.emitBytesIndex(receiver, index, integerIndex);
+    const idx = host.emitBytesIndex(receiver, index, expr, inBounds);
     const data = host.emitBytesData(receiver);
     const p = B.tmp();
     if (BYTES_ELEMENT_SIZE[elem] < 4) {
@@ -256,11 +274,11 @@ export function emitToUint32(host: LlvmEmitterContext, value: string, expr?: IrE
     return out;
   }
 
-export function emitBytesSet(host: LlvmEmitterContext, elem: IrBytesElem, receiver: string, index: string, value: LlValue, integerIndex = false, expr?: IrExpr): void {
+export function emitBytesSet(host: LlvmEmitterContext, elem: IrBytesElem, receiver: string, index: LlValue, value: LlValue, indexExpr?: IrExpr, expr?: IrExpr, inBounds = false): void {
     const B = host.B;
     // Invalid integer-indexed writes are ignored after evaluating the RHS.
     const done = B.newLabel("bytes.store.done");
-    const idx = emitBytesIndex(host, receiver, index, integerIndex, done);
+    const idx = emitBytesIndex(host, receiver, index, indexExpr, done, inBounds);
     let stored: string | null;
     if (elem === "u8c") {
       host.declare(`declare double @scr_bytes_to_u8_clamp(double)`);
@@ -338,8 +356,7 @@ export function emitBytesIntrinsic(host: LlvmEmitterContext, e: IrExpr & { kind:
     const r = directElementAccess
       ? host.emitStableReceiver(e.receiver, e.args)
       : host.emitExpr(e.receiver);
-    const integerIndex = method === "get" ? host.emitIntegerLoopIndex(e.args[0]!) : null;
-    const args = integerIndex === null ? e.args.map((a) => host.emitExpr(a)) : [];
+    const args = e.args.map((a) => host.emitExpr(a));
     const NAN = f64Lit(NaN);
     switch (method) {
       case "length":
@@ -360,8 +377,9 @@ export function emitBytesIntrinsic(host: LlvmEmitterContext, e: IrExpr & { kind:
         return host.emitBytesGet(
           e.receiver.type.elem,
           r.name,
-          integerIndex ?? args[0]!.name,
-          integerIndex !== null,
+          args[0]!,
+          e.args[0],
+          host.bytesBounds.has(e),
         );
       case "slice":
         return call(

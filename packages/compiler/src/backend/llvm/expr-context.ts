@@ -3,6 +3,7 @@
  * class to a record of closures. Layout stages use explicit callback hosts. */
 import type { IrExpr, IrLibFn, IrType } from "../../ir/ir.js";
 import type { LlEmitter } from "./emitter.js";
+import type { IntegerRange } from "../../ir/integer-ranges.js";
 
 export type LlvmEmitterContext = LlEmitter;
 
@@ -11,6 +12,9 @@ export interface LlValue {
   type: IrType;
   /** An i32 SSA value equal to ToUint32 of this snapshotted number. */
   uint32?: string;
+  /** An exact integer snapshot, excluding negative zero, with no discarded
+   * high bits and the proven range of its original value. */
+  integer?: { name: string; type: "i32" | "i64"; signed: boolean; range: IntegerRange };
   slot?: boolean;
   /** A sequence local held in a capture box; release the box itself. */
   boxed?: boolean;

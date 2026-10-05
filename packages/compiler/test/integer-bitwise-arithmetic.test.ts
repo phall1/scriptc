@@ -27,7 +27,7 @@ console.log(safe(17), unknown(1.5), 1 / negativeZero());
 
     const ll = emitLlvmModule(mod);
     const llBody = (name: string): string => ll.match(new RegExp(`define internal [^\\n]+ @sc_f_${name}\\([^\\n]*\\) #0 \\{([\\s\\S]*?)\\n\\}`))![1]!;
-    expect(llBody("safe")).toContain(" = add nsw i54 ");
+    expect(llBody("safe")).toContain(" = add nsw i64 ");
     // Only the arbitrary input's slow ToUint32 path still adds doubles.
     expect(llBody("safe").match(/ = fadd double /g)).toHaveLength(1);
     expect(llBody("unknown")).toContain("uint32.coerce.slow");

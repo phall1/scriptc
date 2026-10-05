@@ -9,6 +9,8 @@ import type { LlvmEmitterContext, ExprOf, LlValue } from "./expr-context.js";
 
 import { BYTES_ELEM_NUM, f64Lit } from "./common.js";
 import { emitStringInputs } from "./string-lifetimes.js";
+import { exactInteger, widenInteger, integerNumber } from "./integer-values.js";
+import { integerArithmeticRange } from "../../ir/integer-ranges.js";
 
 export function emitLiteralExpr(host: LlvmEmitterContext, e: ExprOf<"numLit" | "boolLit" | "strLit" | "moduleNsRef" | "unitLit" | "varRef">): LlValue {
     const B = host.B;
@@ -34,11 +36,14 @@ export function emitLiteralExpr(host: LlvmEmitterContext, e: ExprOf<"numLit" | "
         if (integerSlot !== undefined) {
           const integer = B.tmp();
           const number = B.tmp();
-          B.line(`${integer} = load ${host.sizeType}, ptr ${integerSlot}`);
-          B.line(`${number} = uitofp ${host.sizeType} ${integer} to double`);
-          const uint32 = host.sizeType === "i32" ? integer : B.tmp();
-          if (host.sizeType !== "i32") B.line(`${uint32} = trunc ${host.sizeType} ${integer} to i32`);
-          return { name: number, type: e.type, uint32 };
+          B.line(`${integer} = load ${integerSlot.type}, ptr ${integerSlot.slot}`);
+          B.line(`${number} = ${integerSlot.signed ? "sitofp" : "uitofp"} ${integerSlot.type} ${integer} to double`);
+          const uint32 = integerSlot.type === "i32" ? integer : B.tmp();
+          if (integerSlot.type !== "i32") B.line(`${uint32} = trunc ${integerSlot.type} ${integer} to i32`);
+          return { name: number, type: e.type, uint32, integer: {
+            name: integer, type: integerSlot.type, signed: integerSlot.signed === true,
+            range: integerSlot.range ?? { min: 0, max: Number.MAX_SAFE_INTEGER },
+          } };
         }
         const b = host.binding(e.localId);
         if (b.kind === "global") host.checkGlobalTdz(e.localId);
@@ -115,18 +120,27 @@ export function emitOperatorExpr(host: LlvmEmitterContext, e: ExprOf<"bin" | "un
           B.line(`${t} = icmp ${e.op === "===" ? "eq" : "ne"} ptr ${l.name}, ${r.name}`);
         } else if (arith[e.op] !== undefined || cmp[e.op] !== undefined) {
           if (e.left.type.kind !== "f64") throw new LlvmUnsupportedError(`bin:${e.op}:${e.left.type.kind}`, e.loc);
-          if ((e.op === "+" || e.op === "-") && host.integerRanges.get(e)) {
-            const left = B.tmp();
-            const right = B.tmp();
-            const result = B.tmp();
-            // Every signed i54 value is exactly representable as a double.
-            // Exposing that width lets LLVM cancel later number/integer
-            // round trips. The proven safe result cannot overflow i54.
-            B.line(`${left} = fptosi double ${l.name} to i54`);
-            B.line(`${right} = fptosi double ${r.name} to i54`);
-            B.line(`${result} = ${e.op === "+" ? "add" : "sub"} nsw i54 ${left}, ${right}`);
-            B.line(`${t} = sitofp i54 ${result} to double`);
-          } else if (arith[e.op] !== undefined) B.line(`${t} = ${arith[e.op]} double ${l.name}, ${r.name}`);
+          const li = exactInteger(host, l, e.left), ri = exactInteger(host, r, e.right);
+          if (li && ri) {
+            const left = widenInteger(host, li), right = widenInteger(host, ri);
+            const range = e.op === "%" ? null : integerArithmeticRange(e.op, li.range, ri.range);
+            if (range) {
+              const result = B.tmp();
+              B.line(`${result} = ${e.op === "+" ? "add" : e.op === "-" ? "sub" : "mul"} nsw i64 ${left}, ${right}`);
+              return integerNumber(host, result, range, e.type);
+            }
+            if (e.op === "%" && li.range.min >= 0 && ri.range.min > 0) {
+              const result = B.tmp();
+              B.line(`${result} = urem i64 ${left}, ${right}`);
+              return integerNumber(host, result, { min: 0, max: Math.min(li.range.max, ri.range.max - 1) }, e.type);
+            }
+            if (cmp[e.op] !== undefined) {
+              const integerCmp: Record<string, string> = { "<": "slt", "<=": "sle", ">": "sgt", ">=": "sge", "===": "eq", "!==": "ne" };
+              B.line(`${t} = icmp ${integerCmp[e.op]} i64 ${left}, ${right}`);
+              return { name: t, type: e.type };
+            }
+          }
+          if (arith[e.op] !== undefined) B.line(`${t} = ${arith[e.op]} double ${l.name}, ${r.name}`);
           else B.line(`${t} = fcmp ${cmp[e.op]} double ${l.name}, ${r.name}`);
         } else if (bit[e.op] !== undefined) {
           if (e.left.type.kind !== "f64" || e.right.type.kind !== "f64") {

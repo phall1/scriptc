@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { analyzeIntegerRanges } from "./integer-ranges.js";
-import { F64, type IrExpr, type IrFunction, type IrStmt } from "./ir.js";
+import { BOOL, F64, type IrExpr, type IrFunction, type IrStmt } from "./ir.js";
 
 const loc = { file: "test.ts", start: 0, end: 0 };
 const num = (value: number): IrExpr => ({ loc, kind: "numLit", value, type: F64 });
@@ -29,7 +29,7 @@ test("rejects negative zero, fractions, nonfinite values and imprecise sums", ()
   expect(ranges.get(rounded)).toBeNull();
 });
 
-test("forgets facts across opaque expressions, control flow and boxed locals", () => {
+test("preserves uncaptured slots across calls and invalidates writes and boxed locals", () => {
   const sum = (): IrExpr => bin("+", ref(), num(1));
   const call: IrExpr = { loc, kind: "call", callee: "unknown", args: [], type: F64 };
   const afterCall = sum();
@@ -39,7 +39,7 @@ test("forgets facts across opaque expressions, control flow and boxed locals", (
     assign(num(1)), { loc, kind: "exprStmt", expr: call }, assign(afterCall),
     assign(num(1)), { loc, kind: "block", body: [assign(num(Infinity))] }, { loc, kind: "return", value: afterBlock },
   ]));
-  expect(ranges.get(afterCall)).toBeNull();
+  expect(ranges.get(afterCall)).toEqual({ min: 2, max: 2 });
   expect(ranges.get(afterBlock)).toBeNull();
   expect(analyzeIntegerRanges(fn([assign(num(1)), { loc, kind: "return", value: boxed }], true)).get(boxed)).toBeNull();
 });
@@ -65,4 +65,61 @@ test("shared expression objects never inherit a proof from another occurrence", 
     { loc, kind: "return", value: { loc, kind: "call", callee: "unknown", args: [shared], type: F64 } },
   ]));
   expect(ranges.get(shared)).toBeNull();
+});
+
+const condition = (op: Extract<IrExpr, { kind: "bin" }>["op"], left: IrExpr, right: IrExpr): IrExpr => ({ loc, kind: "bin", op, left, right, type: BOOL });
+const observe = (value: IrExpr): IrStmt => ({ loc, kind: "exprStmt", expr: value });
+
+test("joins branch assignments and refines signed masks on guarded paths", () => {
+  const inside = ref(), joined = ref();
+  const ranges = analyzeIntegerRanges(fn([
+    assign(bin("|", ref("unknown"), num(0))),
+    { loc, kind: "if", cond: condition(">=", ref(), num(0)), then: [observe(inside), assign(bin("&", ref(), num(255)))], else_: [assign(num(7))] },
+    observe(joined),
+  ]));
+  expect(ranges.get(inside)).toEqual({ min: 0, max: 2147483647 });
+  expect(ranges.get(joined)).toEqual({ min: 0, max: 255 });
+});
+
+test("assignment snapshots and lazy joins do not overwrite earlier operands", () => {
+  const before = ref(), after = ref(), last = ref();
+  const write: IrExpr = { loc, kind: "assignExpr", localId: "x", value: num(3), type: F64 };
+  const ternary: IrExpr = { loc, kind: "ternary", cond: condition("===", ref("flag"), num(0)), then: write, else_: num(5), type: F64 };
+  const ranges = analyzeIntegerRanges(fn([assign(num(1)), observe(bin("+", before, ternary)), observe(after),
+    observe({ loc, kind: "logical", op: "&&", left: ref("flag"), right: { ...write, value: num(9) }, type: F64 }), observe(last)]));
+  expect(ranges.get(before)).toEqual({ min: 1, max: 1 });
+  expect(ranges.get(after)).toEqual({ min: 1, max: 3 });
+  expect(ranges.get(last)).toEqual({ min: 1, max: 9 });
+});
+
+test("guards that mutate a compared binding cannot refine its later value", () => {
+  const current = ref();
+  const writes: IrExpr = { loc, kind: "seqExpr", stmts: [assign(bin(">>>", ref("unknown"), num(0)))], result: num(100), type: F64 };
+  const ranges = analyzeIntegerRanges(fn([assign(num(1)), { loc, kind: "if", cond: condition("<", ref(), writes), then: [observe(current)], else_: null }]));
+  expect(ranges.get(current)).toEqual({ min: 0, max: 4294967295 });
+});
+
+test("labeled exits and do-while conditions cannot lend facts to skipped paths", () => {
+  const afterBlock = ref(), firstBody = ref();
+  const ranges = analyzeIntegerRanges(fn([
+    assign(num(100)), { loc, kind: "block", labels: ["done"], body: [
+      { loc, kind: "if", cond: condition("===", ref("flag"), num(0)), then: [{ loc, kind: "break", label: "done" }], else_: null }, assign(num(1)),
+    ] }, observe(afterBlock),
+    { loc, kind: "doWhile", cond: condition("<", { loc, kind: "assignExpr", localId: "x", value: num(0), type: F64 }, num(-1)), body: [observe(firstBody)] },
+  ]));
+  expect(ranges.get(afterBlock)).toBeNull();
+  expect(ranges.get(firstBody)).toBeNull();
+});
+
+test("unit induction is exact but loop-carried assignments remain unknown", () => {
+  const counter = ref(), carried = ref("state"), after = ref();
+  const f = fn([{ loc, kind: "for", init: { loc, kind: "varDecl", localId: "x", init: num(0) },
+    cond: condition("<", ref(), num(10)), update: assign(bin("+", ref(), num(1))), body: [observe(counter), observe(carried),
+      { loc, kind: "assign", localId: "state", value: num(3) }],
+  }, observe(after)]);
+  f.locals.push({ id: "state", name: "state", type: F64, mutable: true });
+  const ranges = analyzeIntegerRanges(f);
+  expect(ranges.get(counter)).toEqual({ min: 0, max: 9 });
+  expect(ranges.get(carried)).toBeNull();
+  expect(ranges.get(after)).toBeNull();
 });
