@@ -9,7 +9,7 @@
  *   markGray     trial-delete: decrement rc once per internal edge;
  *   scan         nodes still rc > 0 are externally referenced — re-blacken
  *                their subgraph and restore the trial decrements;
- *   collectWhite everything left white is a dead cycle: free it, releasing
+ *   gather       filter the scanned white set, then free it, releasing
  *                only edges that LEAVE the white set (each member's
  *                teardown releases its untraced children; traced edges were
  *                already accounted by markGray).
@@ -26,9 +26,10 @@
  *   count was already given up (which would over-decrement and free live
  *   data).
  *
- * Recursion depth equals the traced structure's depth — same property as
- * the existing recursive releases (deep lists recurse deeply; acceptable
- * for now, revisit with an explicit stack if it ever traps).
+ * The main graph phases keep a bounded depth-first walk and defer deeper
+ * traces to reusable worklists. Ordinary RC destruction and cross-generation
+ * releases are separate paths. White candidates are recorded during scan
+ * and filtered after outside roots settle, avoiding a separate gather walk.
  *
  * ── generations ──────────────────────────────────────────────────────
  * A pass costs O(objects reachable from its candidates), and a candidate
@@ -153,6 +154,12 @@ static SCR_TL ScrVec scr_cands;
 
 /* Nursery survivors awaiting promotion (see scr_scan_black). */
 static SCR_TL ScrVec scr_promote;
+
+/* Deferred traces cap recursive traversal without changing the common
+ * depth-first walk. Restore can run inside scan, so it has its own stack. */
+static SCR_TL ScrVec scr_pending;
+static SCR_TL ScrVec scr_restore_pending;
+#define SCR_CYC_WALK_DEPTH 64
 
 /* The gathered white set (freed after the walk completes). */
 static SCR_TL ScrVec scr_white;
@@ -281,14 +288,15 @@ void scr_cyc_on_dead(void *obj) {
 void scr_cyc_on_release(void *obj) {
   ScrCycHdr *h = scr_cyc_hdr(obj);
   h->color = SCR_CYC_PURPLE;
-  if (!h->buffered) {
-    ScrVec *b = &scr_roots[h->gen];
-    if (b->n == b->cap) scr_cyc_grow(b);
-    h->buffered = 1;
-    h->buf_index = b->n;
-    b->v[b->n++] = obj;
-    scr_cyc_nbuffered++;
-  }
+  /* Releasing an existing candidate cannot advance the trigger. A pass
+   * always re-arms after its teardowns, including any candidates they add. */
+  if (h->buffered) return;
+  ScrVec *b = &scr_roots[h->gen];
+  if (b->n == b->cap) scr_cyc_grow(b);
+  h->buffered = 1;
+  h->buf_index = b->n;
+  b->v[b->n++] = obj;
+  scr_cyc_nbuffered++;
   /* Never re-entered: a teardown's releases of untraced children can buffer
    * new candidates mid-collection, but they only wait for the next pass. */
   if (!scr_collecting && scr_cyc_nbuffered >= scr_cyc_trigger)
@@ -306,69 +314,68 @@ void scr_cyc_on_release(void *obj) {
   ((child) == NULL || SCR_RC(child) == SIZE_MAX \
    || scr_cyc_hdr(child)->gen > scr_gen_limit)
 
-static void scr_mark_gray(void *obj);
+/* Trace callbacks forward an integer depth through their opaque context;
+ * it is never dereferenced. The ABI already carries it through every edge. */
+static void scr_mark_gray(void *obj, uintptr_t depth);
 static void scr_mg_visit(void *child, void *ctx) {
-  (void)ctx;
   if (SCR_CYC_SKIP(child)) return;
-  SCR_RC(child) -= 1; /* trial-delete this internal edge */
-  scr_mark_gray(child);
+  SCR_RC(child) -= 1;
+  scr_mark_gray(child, (uintptr_t)ctx);
 }
-static void scr_mark_gray(void *obj) {
+static void scr_mark_gray(void *obj, uintptr_t depth) {
   ScrCycHdr *h = scr_cyc_hdr(obj);
   if (h->color == SCR_CYC_GRAY) return;
   h->color = SCR_CYC_GRAY;
-  h->trace(obj, scr_mg_visit, NULL);
+  if (depth == SCR_CYC_WALK_DEPTH) {
+    scr_cyc_push(&scr_pending, obj);
+    return;
+  }
+  h->trace(obj, scr_mg_visit, (void *)(depth + 1));
 }
 
-static void scr_scan_black(void *obj);
+static void scr_scan_black(void *obj, uintptr_t depth);
 static void scr_sb_visit(void *child, void *ctx) {
-  (void)ctx;
   if (SCR_CYC_SKIP(child)) return;
-  SCR_RC(child) += 1; /* restore the trial decrement */
-  if (scr_cyc_hdr(child)->color != SCR_CYC_BLACK) scr_scan_black(child);
+  SCR_RC(child) += 1;
+  if (scr_cyc_hdr(child)->color != SCR_CYC_BLACK)
+    scr_scan_black(child, (uintptr_t)ctx);
 }
-static void scr_scan_black(void *obj) {
+static void scr_scan_black(void *obj, uintptr_t depth) {
   ScrCycHdr *h = scr_cyc_hdr(obj);
   h->color = SCR_CYC_BLACK;
-  /* Blackening is what proves a walked object survives, so this is where
-   * promotion is decided — but it is only RECORDED here. Raising `gen` now
-   * would hide the object from SCR_CYC_SKIP partway through the pass, and
-   * this phase has trial decrements left to restore. */
-  if (h->gen < SCR_CYC_MATURE)
-    scr_cyc_push(&scr_promote, obj);
-  h->trace(obj, scr_sb_visit, NULL);
+  if (h->gen < SCR_CYC_MATURE) scr_cyc_push(&scr_promote, obj);
+  if (depth == SCR_CYC_WALK_DEPTH) {
+    scr_cyc_push(&scr_restore_pending, obj);
+    return;
+  }
+  h->trace(obj, scr_sb_visit, (void *)(depth + 1));
 }
 
-static void scr_scan(void *obj);
+static void scr_scan(void *obj, uintptr_t depth);
 static void scr_scan_visit(void *child, void *ctx) {
-  (void)ctx;
   if (SCR_CYC_SKIP(child)) return;
-  scr_scan(child);
+  scr_scan(child, (uintptr_t)ctx);
 }
-static void scr_scan(void *obj) {
+static void scr_scan(void *obj, uintptr_t depth) {
   ScrCycHdr *h = scr_cyc_hdr(obj);
   if (h->color != SCR_CYC_GRAY) return;
   if (SCR_RC(obj) > 0) {
-    /* Externally referenced: this whole subgraph stays. */
-    scr_scan_black(obj);
+    scr_scan_black(obj, 0);
+    while (scr_restore_pending.n) {
+      void *next = scr_restore_pending.v[--scr_restore_pending.n];
+      scr_cyc_hdr(next)->trace(next, scr_sb_visit, NULL);
+    }
     return;
   }
   h->color = SCR_CYC_WHITE;
-  h->trace(obj, scr_scan_visit, NULL);
-}
-
-static void scr_collect_white(void *obj);
-static void scr_cw_visit(void *child, void *ctx) {
-  (void)ctx;
-  if (SCR_CYC_SKIP(child)) return;
-  scr_collect_white(child);
-}
-static void scr_collect_white(void *obj) {
-  ScrCycHdr *h = scr_cyc_hdr(obj);
-  if (h->color != SCR_CYC_WHITE || h->buffered) return;
-  h->color = SCR_CYC_DOOMED; /* gathered — don't gather twice */
-  h->trace(obj, scr_cw_visit, NULL);
+  /* Record each whitened object once. A later outside root can restore it;
+   * filter the list only after every scan finishes. No gather trace needed. */
   scr_cyc_push(&scr_white, obj);
+  if (depth == SCR_CYC_WALK_DEPTH) {
+    scr_cyc_push(&scr_pending, obj);
+    return;
+  }
+  h->trace(obj, scr_scan_visit, (void *)(depth + 1));
 }
 
 /* ── cross-generation edges ───────────────────────────────────────────── */
@@ -443,12 +450,10 @@ static size_t scr_cyc_pass(unsigned gen_limit) {
   scr_gen_limit = gen_limit;
 
   /* markRoots: keep live candidates (still purple), drop the rest — an
-   * object re-retained since buffering is black; one grayed by an earlier
-   * candidate's walk is already covered by that candidate's subgraph. The
-   * buffers are drained up front (markGray only touches counts directly,
-   * so nothing can re-buffer underneath us) which leaves collectWhite free
-   * to gather members of an earlier root's cycle. Candidates ABOVE the
-   * limit keep their buffer slots and wait for a full pass. */
+   * object re-retained since buffering is black. Drain the buffers before
+   * walking: tracing only adjusts counts and worklists, so nothing can
+   * re-buffer underneath us. Candidates ABOVE the limit keep their slots
+   * and wait for a full pass. */
   scr_cands.n = 0;
   for (unsigned g = 0; g <= gen_limit; g++) {
     for (size_t i = 0; i < scr_roots[g].n; i++) {
@@ -460,12 +465,31 @@ static size_t scr_cyc_pass(unsigned gen_limit) {
     }
     scr_roots[g].n = 0;
   }
-  for (size_t i = 0; i < scr_cands.n; i++) scr_mark_gray(scr_cands.v[i]);
-
-  for (size_t i = 0; i < scr_cands.n; i++) scr_scan(scr_cands.v[i]);
+  for (size_t i = 0; i < scr_cands.n; i++) scr_mark_gray(scr_cands.v[i], 0);
+  while (scr_pending.n) {
+    void *obj = scr_pending.v[--scr_pending.n];
+    scr_cyc_hdr(obj)->trace(obj, scr_mg_visit, NULL);
+  }
 
   scr_white.n = 0;
-  for (size_t i = 0; i < scr_cands.n; i++) scr_collect_white(scr_cands.v[i]);
+  for (size_t i = 0; i < scr_cands.n; i++) scr_scan(scr_cands.v[i], 0);
+  while (scr_pending.n) {
+    void *obj = scr_pending.v[--scr_pending.n];
+    /* A later outside root may have restored this deferred white node and
+     * its descendants already. Never scan a black node's edges again. */
+    if (scr_cyc_hdr(obj)->color == SCR_CYC_WHITE)
+      scr_cyc_hdr(obj)->trace(obj, scr_scan_visit, NULL);
+  }
+
+  size_t dead = 0;
+  for (size_t i = 0; i < scr_white.n; i++) {
+    void *obj = scr_white.v[i];
+    ScrCycHdr *h = scr_cyc_hdr(obj);
+    if (h->color != SCR_CYC_WHITE) continue;
+    h->color = SCR_CYC_DOOMED;
+    scr_white.v[dead++] = obj;
+  }
+  scr_white.n = dead;
 
   /* Pin the cross-generation targets of everything about to be freed, while
    * `gen` still holds the values the walk filtered on (promotion below is

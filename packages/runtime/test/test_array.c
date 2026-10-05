@@ -476,6 +476,37 @@ static void test_ref_truncate_cycle(void) {
 #endif
 }
 
+static void test_ref_trace_storage_boundaries(void) {
+  long before = mock_live;
+  ScrArr *arr = scr_arr_new_ref(&mock_cyc_retain, &mock_cyc_release, &mock_trace, 4096);
+  MockRec *dense = mock_cyc_new(1);
+  MockRec *sparse = mock_cyc_new(2);
+  MockRec *property = mock_cyc_new(3);
+  dense->owner = scr_arr_retain(arr);
+  sparse->owner = scr_arr_retain(arr);
+  property->owner = scr_arr_retain(arr);
+  scr_arr_set_ref(arr, 0, dense);
+  scr_arr_set_ref(arr, 3, mock_cyc_retain(dense));
+  scr_arr_set_undefined(arr, 2);
+  scr_arr_set_ref(arr, 4294967294.0, sparse);
+  scr_arr_set_ref(arr, -1, property);
+  scr_collect_cycles();
+  check(mock_live == before + 3, "trace preserves dense, sparse and property edges");
+  check(dense->rc == 2, "trace restores duplicate dense edges exactly");
+
+  scr_arr_set_len(arr, 1);
+  scr_collect_cycles();
+  check(mock_live == before + 2, "truncation releases sparse and duplicate edges");
+  check(dense->rc == 1 && property->rc == 1,
+        "short array preserves its element and named property");
+  scr_arr_set_len(arr, 0);
+  scr_collect_cycles();
+  check(mock_live == before + 1, "zero length keeps the named property");
+  scr_arr_release(arr);
+  scr_collect_cycles();
+  check(mock_live == before, "empty reserved storage and property cycle collected");
+}
+
 static void test_join(void) {
 #ifdef SCR_RC_AUDIT
   long strings0 = scr_str_live_count();
@@ -688,6 +719,7 @@ int main(int argc, char **argv) {
   test_ref_elements();
   test_ref_cycle();
   test_ref_truncate_cycle();
+  test_ref_trace_storage_boundaries();
   test_join();
   test_sparse_holes();
 

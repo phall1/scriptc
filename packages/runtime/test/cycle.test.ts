@@ -7,7 +7,7 @@ import { expect, test } from "vitest";
 const execFileAsync = promisify(execFile);
 const testDir = import.meta.dirname;
 
-test("cycle collection scheduling honors configured thresholds", async () => {
+test("cycle traversal preserves counts, deep graphs and configured thresholds", async () => {
   const buildDir = join(testDir, "build");
   await mkdir(buildDir, { recursive: true });
   const bin = join(buildDir, "test_cycle");

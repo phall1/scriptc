@@ -297,7 +297,7 @@ void scr_library_bytes_out(ScrBytes *b, const uint8_t **out, size_t *out_len);
  * The collector is synchronous Bacon–Rajan trial deletion: a release that
  * leaves a candidate's rc above zero buffers it as a possible cycle root;
  * collection walks the buffer (markGray: trial-decrement internal edges;
- * scan: restore externally-referenced subgraphs; collectWhite: free the
+ * scan: restore externally-referenced subgraphs; gather: free the
  * dead cycle members, releasing only edges that LEAVE the white set).
  * It is GENERATIONAL: each header carries a generation, a pass names the
  * oldest one it will walk, and objects that survive a pass are promoted out
@@ -322,9 +322,9 @@ typedef void (*ScrTraceVisit)(void *child, void *ctx);
 typedef void (*ScrTraceFn)(void *obj, ScrTraceVisit visit, void *ctx);
 typedef void (*ScrCycFreeFn)(void *obj);
 
-/* DOOMED is WHITE that collectWhite has already gathered: it stops the
- * gather recursing twice, and distinguishes "about to be freed" from a
- * survivor for the re-buffering step (see scr_cycle.c). */
+/* DOOMED identifies the gathered dead set during re-buffering and weak
+ * observer teardown. WHITE candidates may still become black when a later
+ * outside root restores them; only the settled white set becomes DOOMED. */
 enum {
   SCR_CYC_BLACK = 0, SCR_CYC_PURPLE = 1, SCR_CYC_GRAY = 2, SCR_CYC_WHITE = 3,
   SCR_CYC_DOOMED = 4

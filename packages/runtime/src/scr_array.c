@@ -434,8 +434,10 @@ ScrArr *scr_arr_new(ScrElemKind elem, size_t initial_cap) {
  * below releases none — the complement contract in scr_runtime.h. */
 void scr_arr_trace_v(void *a0, ScrTraceVisit visit, void *ctx) {
   ScrArr *a = (ScrArr *)a0;
-  visit(a->metadata, ctx);
-  for (size_t i = 0; i < a->cap; i++) {
+  if (a->metadata) visit(a->metadata, ctx);
+  /* Growth and truncation leave spare capacity empty. Sparse slots and
+   * named properties are separate edges, independent of dense length. */
+  for (size_t i = 0, end = a->len < a->cap ? a->len : a->cap; i < end; i++) {
     if (a->present[i] == SCR_ARR_VALUE) visit(scr_slot_to_ptr(a->data[i]), ctx);
   }
   for (size_t i = 0; i < a->sparse_len; i++) {
@@ -503,7 +505,7 @@ void scr_arr_release(ScrArr *a) {
     scr_dyn_release(a->metadata);
     a->metadata = NULL;
     if (scr_elem_is_ref(a->elem)) {
-      for (size_t i = 0; i < a->cap; i++) {
+      for (size_t i = 0, end = a->len < a->cap ? a->len : a->cap; i < end; i++) {
         if (a->present[i] != SCR_ARR_HOLE) {
           uint64_t old = a->data[i];
           uint8_t state = a->present[i];

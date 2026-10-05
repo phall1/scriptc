@@ -7,6 +7,8 @@ typedef struct Node Node;
 struct Node {
   size_t rc;
   Node *next;
+  Node *other;
+  Node *untraced;
 };
 
 static size_t freed;
@@ -30,9 +32,15 @@ _Noreturn void scr_trap(const char *msg) {
 
 static void node_trace(void *obj, ScrTraceVisit visit, void *ctx) {
   visit(((Node *)obj)->next, ctx);
+  visit(((Node *)obj)->other, ctx);
 }
 
 static void node_free(void *obj) {
+  Node *untraced = ((Node *)obj)->untraced;
+  if (untraced) {
+    untraced->rc--;
+    scr_cyc_on_release(untraced);
+  }
   freed++;
   scr_cyc_free(obj);
 }
@@ -157,11 +165,165 @@ static void check_dead_backlog_rearms_release_trigger(void) {
         "directly dead backlog delayed the next release-triggered pass");
 }
 
+static void check_deep_ring(void) {
+  enum { DEPTH = 100000 };
+  size_t before = freed;
+  Node *root = make_ring(DEPTH);
+  root->rc++;
+  release_live(root);
+  scr_collect_cycles();
+  check(freed == before, "deep live ring was reclaimed");
+  Node *node = root;
+  for (size_t i = 0; i < DEPTH; i++) {
+    check(node->rc == (i == 0 ? 2u : 1u), "deep ring count not restored");
+    node = node->next;
+  }
+  release_live(root);
+  scr_collect_cycles();
+  check(freed == before + DEPTH, "deep dead ring not reclaimed exactly");
+}
+
+static void check_shared_edges_and_outside_owner(void) {
+  size_t before = freed;
+  Node *root = make_ring(3);
+  Node *shared = root->next;
+  root->other = shared;
+  shared->rc++; /* duplicate edge */
+  shared->rc++; /* independent external owner */
+  release_live(root);
+  scr_collect_cycles();
+  check(freed == before, "shared subgraph lost its outside owner");
+  check(root->rc == 1 && shared->rc == 3 && shared->next->rc == 1,
+        "duplicate edges were not restored once each");
+  /* Several candidates overlap the same graph. */
+  root->rc++;
+  release_live(root);
+  release_live(shared);
+  scr_collect_cycles();
+  check(freed == before + 3, "overlapping candidates were not reclaimed once");
+}
+
+static void check_repeated_buffered_release(void) {
+  size_t before = freed;
+  Node *root = make_ring(3);
+  root->rc++;
+  release_live(root);
+  scr_collect_cycles();
+  for (size_t i = 0; i < 1000; i++) {
+    root->rc++;
+    scr_cyc_mark_live(root);
+    release_live(root);
+  }
+  check(freed == before && root->rc == 2,
+        "repeated buffered releases changed live references");
+  release_live(root);
+  for (size_t i = 0; i < configured_nursery_threshold(); i++)
+    scr_cyc_collect_scheduled();
+  check(freed == before + 3, "buffered live-to-dead transition lost its root");
+}
+
+static void check_disconnected_survivors(void) {
+  size_t before = freed;
+  Node *first = make_ring(2);
+  Node *second = make_ring(3);
+  Node *dead = make_ring(4);
+  scr_collect_cycles(); /* arm the trigger before buffering separate graphs */
+  first->rc++;
+  release_live(first);
+  second->rc++;
+  release_live(second);
+  release_live(dead);
+  scr_collect_cycles();
+  check(freed == before + 4, "mixed live/dead components were misclassified");
+  check(first->rc == 2 && first->next->rc == 1 &&
+        second->rc == 2 && second->next->rc == 1,
+        "a later outside root replayed earlier restored edges");
+  release_live(first);
+  release_live(second);
+  scr_collect_cycles();
+  check(freed == before + 9, "disconnected survivors were not later reclaimed");
+}
+
+static void check_cross_generation_edges(void) {
+  size_t before = freed;
+  Node *older = make_ring(2);
+  older->rc++;
+  release_live(older);
+  scr_collect_cycles();
+  Node *younger = make_ring(2);
+  younger->other = older; /* transfer the older external owner */
+  release_live(younger);
+  scr_cyc_collect_scheduled();
+  check(freed >= before + 2, "nursery cycle was not reclaimed");
+  scr_collect_cycles();
+  check(freed == before + 4, "cross-generation edge was not paid off");
+
+  before = freed;
+  older = make_ring(2);
+  older->rc++;
+  release_live(older);
+  scr_collect_cycles();
+  younger = make_ring(2);
+  older->other = younger; /* transfer the younger external owner */
+  younger->other = older;
+  older->rc++;
+  /* The nursery candidate is kept alive by an edge the restricted pass
+   * cannot subtract. It must remain discoverable for the later full pass. */
+  younger->rc++;
+  release_live(younger);
+  scr_cyc_collect_scheduled();
+  check(freed == before, "cross-generation live cycle was reclaimed");
+  release_live(older);
+  scr_collect_cycles();
+  check(freed == before + 4, "cross-generation cycle lost its candidate");
+}
+
+static void check_teardown_rebuffers_and_immortals(void) {
+  size_t before = freed;
+  static Node immortal = { .rc = SIZE_MAX };
+  Node *first = make_ring(2);
+  Node *second = make_ring(2);
+  first->other = &immortal;
+  first->untraced = second; /* a plain-RC owner released by the teardown */
+  release_live(first);
+  scr_collect_cycles();
+  check(freed == before + 4, "teardown candidate did not reach the fixpoint");
+  check(immortal.rc == SIZE_MAX, "immortal edge was trial-deleted");
+}
+
+static void check_deferred_white_restoration(void) {
+  enum { DEPTH = 4096 };
+  size_t before = freed;
+  Node *root = make_ring(DEPTH);
+  Node *outside = root;
+  for (size_t i = 0; i < DEPTH / 2; i++) outside = outside->next;
+  outside->rc++;
+  release_live(root);
+  scr_collect_cycles();
+  check(freed == before, "deferred white nodes lost an outside owner");
+  Node *node = root;
+  for (size_t i = 0; i < DEPTH; i++) {
+    check(node->rc == (node == outside ? 2u : 1u),
+          "deferred white restoration changed edge counts");
+    node = node->next;
+  }
+  release_live(outside);
+  scr_collect_cycles();
+  check(freed == before + DEPTH, "restored deferred nodes leaked");
+}
+
 int main(void) {
   check_sparse_mature_backlog(1);
   check_sparse_mature_backlog(2);
   check_age_reset_when_last_mature_root_dies();
   check_dead_backlog_rearms_release_trigger();
+  check_deep_ring();
+  check_shared_edges_and_outside_owner();
+  check_repeated_buffered_release();
+  check_disconnected_survivors();
+  check_deferred_white_restoration();
+  check_cross_generation_edges();
+  check_teardown_rebuffers_and_immortals();
   printf("cycle collection checks passed: threshold=%zu\n",
          configured_nursery_threshold());
   return 0;
