@@ -34,11 +34,12 @@ export function integerRangeCases(): RangeCase[] {
   }
   for (const op of ["|", "&", "^", "<<", ">>", ">>>"] as const) {
     const value = binary(op, reference(), number(0));
-    add(`bitwise ${op}`, [statement(value)], [proof(value, op === ">>>" ? 0 : -2147483648, op === ">>>" ? 4294967295 : 2147483647)]);
+    add(`bitwise ${op}`, [statement(value)], [proof(value, op === "&" || op === ">>>" ? 0 : -2147483648, op === "&" ? 0 : op === ">>>" ? 4294967295 : 2147483647)]);
   }
   for (const op of ["+", "-", "*", "/", "%"] as const) {
     const value = binary(op, reference(), number(3));
-    add(`arithmetic ${op}`, [assign(number(9)), statement(value)], [proof(value, op === "+" ? 12 : op === "-" ? 6 : null)]);
+    const min = op === "+" ? 12 : op === "-" ? 6 : op === "*" ? 27 : op === "%" ? 0 : null;
+    add(`arithmetic ${op}`, [assign(number(9)), statement(value)], [proof(value, min, op === "%" ? 2 : min)]);
   }
   const overflow = binary("+", number(Number.MAX_SAFE_INTEGER), number(1));
   add("inexact sum", [statement(overflow)], [proof(overflow, null)]);
@@ -82,9 +83,9 @@ export function integerRangeCases(): RangeCase[] {
       case "switch": control = { kind: "switch", disc: before, cases: [{ test: number(1), body }, { test: null, body: [] }], loc: loc() }; break;
       case "tryCatch": control = { kind: "tryCatch", tryBody: body, catchBody: [statement(before)], catchLocalId: null, finallyBody: [], loc: loc() }; break;
     }
-    const expected = [proof(inside, 11), proof(after, null)];
-    if (region !== "block") expected.push(proof(before, null));
-    add(`${region} regions start independent environments`, [assign(number(3)), control, statement(after)], expected);
+    const expected = [proof(inside, 11), proof(after, region === "block" ? 11 : region === "if" ? 3 : null, region === "block" || region === "if" ? 11 : null)];
+    if (region !== "block") expected.push(proof(before, region === "if" || region === "for" || region === "forOf" ? 3 : null));
+    add(`${region} regions retain only valid entry and exit facts`, [assign(number(3)), control, statement(after)], expected);
   }
   const thenRead = reference();
   const elseRead = reference();
@@ -96,16 +97,16 @@ export function integerRangeCases(): RangeCase[] {
   const children: IrExpr[] = [number(2), reference(), number(6)];
   const opaque: IrExpr = { kind: "seqExpr", stmts: [assign(children[0]!), statement(children[1]!)], result: children[2]!, type: F64, loc: loc() };
   const afterOpaque = reference();
-  add("opaque expression traverses nested statements without deriving facts", [assign(number(1)), statement(opaque), statement(afterOpaque)], [...children.map((expr) => proof(expr, null)), proof(opaque, null), proof(afterOpaque, null)]);
+  add("sequence expressions preserve evaluated writes and result facts", [assign(number(1)), statement(opaque), statement(afterOpaque)], [proof(children[0]!, 2), proof(children[1]!, 2), proof(children[2]!, 6), proof(opaque, 6), proof(afterOpaque, 2)]);
   const left = reference();
   const hidden = reference();
   const right: IrExpr = { kind: "call", callee: "unknown", args: [hidden], type: F64, loc: loc() };
   const afterward = reference();
-  add("opaque right operand preserves the already read left operand", [assign(number(5)), statement(binary("|", left, right)), statement(afterward)], [proof(left, 5), proof(hidden, null), proof(afterward, null)]);
+  add("calls preserve uncaptured slots and already read operands", [assign(number(5)), statement(binary("|", left, right)), statement(afterward)], [proof(left, 5), proof(hidden, 5), proof(afterward, 5)]);
   const stored = reference();
   const arr: IrExpr = { kind: "arrayLit", elems: [], type: arrayOf(F64), loc: loc() };
   const afterStore = reference();
-  add("stores invalidate facts and visit all operands", [assign(number(3)), { kind: "arraySet", arr, index: number(0), value: stored, loc: loc() }, statement(afterStore)], [proof(stored, null), proof(afterStore, null)]);
+  add("stores preserve unwritten slots and visit all operands", [assign(number(3)), { kind: "arraySet", arr, index: number(0), value: stored, loc: loc() }, statement(afterStore)], [proof(stored, 3), proof(afterStore, 3)]);
   const declared = reference();
   const uninitialized = reference();
   add("declaration reset", [{ kind: "varDecl", localId: "x", init: number(6), loc: loc() }, statement(declared), { kind: "varDecl", localId: "x", init: null, loc: loc() }, statement(uninitialized)], [proof(declared, 6), proof(uninitialized, null)]);

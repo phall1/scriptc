@@ -262,11 +262,21 @@ export function analyzeIntegerRanges(fn: IrFunction): IntegerRanges {
           const loop = new Map(facts); invalidate(loop, [s]);
           body(s.body, loop); invalidate(facts, [s]); break;
         }
-        case "tryCatch": case "switch":
+        case "tryCatch":
           // Catch/finally, fallthrough and nonlocal exits need their own
           // control-flow joins. Analyze each region from invariant facts.
           invalidate(facts, [s]);
-          everyStmtChild(s, (child) => { expr(child, new Map(facts)); return true; }, (child) => { body([child], new Map(facts)); return true; });
+          body(s.tryBody, new Map(facts));
+          if (s.catchBody) body(s.catchBody, new Map(facts));
+          if (s.finallyBody) body(s.finallyBody, new Map(facts));
+          break;
+        case "switch":
+          invalidate(facts, [s]);
+          expr(s.disc, new Map(facts));
+          for (const region of s.cases) {
+            if (region.test) expr(region.test, new Map(facts));
+            body(region.body, new Map(facts));
+          }
           break;
         case "break": case "continue":
           // An outer labeled jump can bypass following assignments. Clearing
