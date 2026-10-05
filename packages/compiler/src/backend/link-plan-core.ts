@@ -1,7 +1,10 @@
 /** Ordered link inputs shared by synchronous native and asynchronous Node hosts. */
 import {
-  executableOptimizationLinkerArgs, executableStripLinkerArgs, windowsSubsystemLinkerArgs,
-  type NativeTargetSpec, type WindowsSubsystem,
+  executableOptimizationLinkerArgs,
+  executableStripLinkerArgs,
+  windowsSubsystemLinkerArgs,
+  type NativeTargetSpec,
+  type WindowsSubsystem,
 } from "./targets.js";
 
 export interface ExecutableLinkInputs {
@@ -23,14 +26,22 @@ export function executableLinkInputs(options: {
   strip?: boolean;
   windowsSubsystem?: WindowsSubsystem;
 }): ExecutableLinkInputs {
-  if (options.ffiFrameworks.length !== 0 && options.target.platform !== "darwin") throw new Error("FFI frameworks require a Darwin target");
+  if (options.ffiFrameworks.length !== 0 && options.target.platform !== "darwin")
+    throw new Error("FFI frameworks require a Darwin target");
   return {
-    inputs: [options.programObject, ...options.ffiLibraries, ...options.runtimeObjects, ...options.runtimeArchives],
-    systemLibraries: [...new Set([...options.ffiSystemLibraries, ...options.runtimeSystemLibraries])],
+    inputs: [
+      options.programObject,
+      ...options.ffiLibraries,
+      ...options.runtimeObjects,
+      ...options.runtimeArchives,
+    ],
+    systemLibraries: [
+      ...new Set([...options.ffiSystemLibraries, ...options.runtimeSystemLibraries]),
+    ],
     driverFlags: [
       ...options.ffiFrameworks.flatMap((name) => ["-framework", name]),
       ...options.target.executableLinkerArgs.map((arg, index, args) =>
-        index > 0 && args[index - 1] === "-target" ? options.target.linkerTargetTriple : arg
+        index > 0 && args[index - 1] === "-target" ? options.target.linkerTargetTriple : arg,
       ),
       ...executableOptimizationLinkerArgs(options.target.platform, options.optimization),
       ...executableStripLinkerArgs(options.target.platform, options.strip ?? false),

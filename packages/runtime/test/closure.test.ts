@@ -13,9 +13,14 @@ test("closure/box runtime: RC cascades clean under ASan + audit", async () => {
   await mkdir(buildDir, { recursive: true });
   const bin = join(buildDir, "test_closure");
   await execFileAsync("clang", [
-    "-std=c11", "-O1", "-Wall", "-Wextra",
-    "-fsanitize=address", "-DSCR_RC_AUDIT",
-    "-o", bin,
+    "-std=c11",
+    "-O1",
+    "-Wall",
+    "-Wextra",
+    "-fsanitize=address",
+    "-DSCR_RC_AUDIT",
+    "-o",
+    bin,
     join(testDir, "test_closure.c"),
     join(srcDir, "scr_closure.c"),
     join(srcDir, "scr_string.c"),

@@ -1,5 +1,14 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { resolveBuildCacheRoot } from "../backend/cache-root.js";
 
@@ -26,7 +35,9 @@ export class NativeCache {
       const bytes = readFileSync(path);
       if (contentDigest(bytes) !== readFileSync(path + ".sha256", "utf8").trim()) return null;
       return bytes;
-    } catch { return null; }
+    } catch {
+      return null;
+    }
   }
 
   write(family: string, key: string, bytes: string | Uint8Array): void {
@@ -42,22 +53,32 @@ export class NativeCache {
       // a reader between the two renames simply treats it as a miss.
       renameSync(join(stage, "payload"), path);
       renameSync(join(stage, "digest"), path + ".sha256");
-    } catch { /* Cache failures never change a build's result. */ }
-    finally {
-      try { if (stage !== null) rmSync(stage, { recursive: true, force: true }); } catch { /* Cleanup is best effort too. */ }
+    } catch {
+      /* Cache failures never change a build's result. */
+    } finally {
+      try {
+        if (stage !== null) rmSync(stage, { recursive: true, force: true });
+      } catch {
+        /* Cleanup is best effort too. */
+      }
     }
   }
 
   prune(): void {
     try {
       const configured = Number(process.env["SCRIPTC_CACHE_MAX_MB"] ?? "4096");
-      const limit = (Number.isFinite(configured) && configured >= 0 ? configured : 4096) * 1024 * 1024;
+      const limit =
+        (Number.isFinite(configured) && configured >= 0 ? configured : 4096) * 1024 * 1024;
       const files: { path: string; size: number; time: number }[] = [];
       let total = 0;
       for (const family of ["frontend", "object", "sanitizer", "executable", "binary", "dsym"]) {
         const directory = join(this.root, family);
         let names: string[];
-        try { names = readdirSync(directory); } catch { continue; }
+        try {
+          names = readdirSync(directory);
+        } catch {
+          continue;
+        }
         for (const name of names) {
           if (!/^[0-9a-f]{64}$/.test(name)) continue;
           const path = join(directory, name);
@@ -75,11 +96,15 @@ export class NativeCache {
         rmSync(file.path + ".sha256", { force: true });
         total -= file.size;
       }
-    } catch { /* Eviction is best effort. */ }
+    } catch {
+      /* Eviction is best effort. */
+    }
   }
 }
 
-export function openNativeCache(isPrivate: (path: string, harden: boolean) => boolean): NativeCache | null {
+export function openNativeCache(
+  isPrivate: (path: string, harden: boolean) => boolean,
+): NativeCache | null {
   const root = resolveBuildCacheRoot();
   if (root === null) return null;
   try {
@@ -88,5 +113,7 @@ export function openNativeCache(isPrivate: (path: string, harden: boolean) => bo
     const cache = new NativeCache(root);
     if (!isPrivate(cache.root, false)) return null;
     return cache;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }

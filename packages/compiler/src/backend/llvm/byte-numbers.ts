@@ -8,7 +8,8 @@ import { exactInteger, widenInteger } from "./integer-values.js";
  * 1: Buffer fields and DataView windows can start at arbitrary byte offsets. */
 function endianBits(host: LlvmEmitterContext, raw: string, width: number, little: string): string {
   if (width === 1 || little === "true") return raw;
-  const B = host.B, bits = width * 8;
+  const B = host.B,
+    bits = width * 8;
   const swapBits = bits <= 16 ? 16 : bits <= 32 ? 32 : 64;
   let operand = raw;
   if (bits !== swapBits) {
@@ -19,7 +20,8 @@ function endianBits(host: LlvmEmitterContext, raw: string, width: number, little
   let swapped = B.tmp();
   B.line(`${swapped} = call i${swapBits} @llvm.bswap.i${swapBits}(i${swapBits} ${operand})`);
   if (bits !== swapBits) {
-    const shifted = B.tmp(), narrowed = B.tmp();
+    const shifted = B.tmp(),
+      narrowed = B.tmp();
     B.line(`${shifted} = lshr i${swapBits} ${swapped}, ${swapBits - bits}`);
     B.line(`${narrowed} = trunc i${swapBits} ${shifted} to i${bits}`);
     swapped = narrowed;
@@ -44,20 +46,27 @@ export function emitByteNumber(
   little: string,
   fallback: () => LlValue,
 ): LlValue {
-  const B = host.B, size = host.sizeType;
-  const slow = B.newLabel("bytes.number.slow"), access = B.newLabel("bytes.number.access");
-  const fastDone = B.newLabel("bytes.number.fast.done"), slowDone = B.newLabel("bytes.number.slow.done");
+  const B = host.B,
+    size = host.sizeType;
+  const slow = B.newLabel("bytes.number.slow"),
+    access = B.newLabel("bytes.number.access");
+  const fastDone = B.newLabel("bytes.number.fast.done"),
+    slowDone = B.newLabel("bytes.number.slow.done");
   const done = B.newLabel("bytes.number.done");
   const bits = spec.width * 8;
   const integer = exactInteger(host, offset, e.args[spec.offsetArg]);
-  let index: string, fits: string, room = "true";
+  let index: string,
+    fits: string,
+    room = "true";
   if (integer && host.bytesBounds.has(e)) {
     const wide = widenInteger(host, integer);
     index = size === "i64" ? wide : B.tmp();
     if (size !== "i64") B.line(`${index} = trunc i64 ${wide} to ${size}`);
     fits = "true";
   } else {
-    const lengthPtr = B.tmp(), length = B.tmp(), capacity = B.tmp();
+    const lengthPtr = B.tmp(),
+      length = B.tmp(),
+      capacity = B.tmp();
     room = B.tmp();
     B.line(`${lengthPtr} = getelementptr inbounds %ScrBytes, ptr ${receiver.name}, i64 0, i32 1`);
     B.line(`${length} = load ${size}, ptr ${lengthPtr}`);
@@ -70,7 +79,8 @@ export function emitByteNumber(
       fits = B.tmp();
       B.line(`${fits} = icmp ule i64 ${wide}, ${cap}`);
       if (spec.dataView && integer.range.max > Number.MAX_SAFE_INTEGER) {
-        const safe = B.tmp(), both = B.tmp();
+        const safe = B.tmp(),
+          both = B.tmp();
         B.line(`${safe} = icmp ule i64 ${wide}, ${Number.MAX_SAFE_INTEGER}`);
         B.line(`${both} = and i1 ${fits}, ${safe}`);
         fits = both;
@@ -80,21 +90,30 @@ export function emitByteNumber(
     } else {
       let normalized = offset.name;
       if (spec.dataView) {
-        const nan = B.tmp(), finiteOrZero = B.tmp();
+        const nan = B.tmp(),
+          finiteOrZero = B.tmp();
         normalized = B.tmp();
         B.line(`${nan} = fcmp uno double ${offset.name}, ${offset.name}`);
         B.line(`${finiteOrZero} = select i1 ${nan}, double ${f64Lit(0)}, double ${offset.name}`);
         host.declare("declare double @llvm.trunc.f64(double)");
         B.line(`${normalized} = call double @llvm.trunc.f64(double ${finiteOrZero})`);
       }
-      const cap = B.tmp(), positive = B.tmp(), bounded = B.tmp(), representable = B.tmp(), range = B.tmp();
-      const addressRange = B.tmp(), initial = B.tmp(), convert = B.newLabel("bytes.number.index");
+      const cap = B.tmp(),
+        positive = B.tmp(),
+        bounded = B.tmp(),
+        representable = B.tmp(),
+        range = B.tmp();
+      const addressRange = B.tmp(),
+        initial = B.tmp(),
+        convert = B.newLabel("bytes.number.index");
       B.line(`${cap} = uitofp ${size} ${capacity} to double`);
       B.line(`${positive} = fcmp oge double ${normalized}, ${f64Lit(0)}`);
       B.line(`${bounded} = fcmp ole double ${normalized}, ${cap}`);
       // The separate address limit makes fptoui safe even if converting a
       // maximum size_t length to double rounds upward on a 64-bit target.
-      B.line(`${representable} = fcmp olt double ${normalized}, ${f64Lit(size === "i64" ? 2 ** 64 : 2 ** 32)}`);
+      B.line(
+        `${representable} = fcmp olt double ${normalized}, ${f64Lit(size === "i64" ? 2 ** 64 : 2 ** 32)}`,
+      );
       B.line(`${range} = and i1 ${positive}, ${bounded}`);
       B.line(`${addressRange} = and i1 ${range}, ${representable}`);
       B.line(`${initial} = and i1 ${room}, ${addressRange}`);
@@ -106,12 +125,14 @@ export function emitByteNumber(
       const roundTrip = B.tmp();
       B.line(`${roundTrip} = uitofp ${size} ${index} to double`);
       B.line(`${fits} = fcmp oeq double ${roundTrip}, ${normalized}`);
-      const withinCapacity = B.tmp(), exactBounds = B.tmp();
+      const withinCapacity = B.tmp(),
+        exactBounds = B.tmp();
       B.line(`${withinCapacity} = icmp ule ${size} ${index}, ${capacity}`);
       B.line(`${exactBounds} = and i1 ${fits}, ${withinCapacity}`);
       fits = exactBounds;
       if (spec.dataView) {
-        const safe = B.tmp(), both = B.tmp();
+        const safe = B.tmp(),
+          both = B.tmp();
         B.line(`${safe} = fcmp ole double ${normalized}, ${f64Lit(Number.MAX_SAFE_INTEGER)}`);
         B.line(`${both} = and i1 ${fits}, ${safe}`);
         fits = both;
@@ -124,7 +145,10 @@ export function emitByteNumber(
     const range = byteNumberRange(spec)!;
     const known = host.integerRanges.get(e.args[spec.valueArg]!);
     if (!known || known.min < range.min || known.max > range.max) {
-      const above = B.tmp(), below = B.tmp(), valueFits = B.tmp(), both = B.tmp();
+      const above = B.tmp(),
+        below = B.tmp(),
+        valueFits = B.tmp(),
+        both = B.tmp();
       // Buffer integer writes accept NaN (stored as zero) and fractions
       // within the declared range. Unordered comparisons preserve that.
       B.line(`${above} = fcmp uge double ${value!.name}, ${f64Lit(range.min)}`);
@@ -136,9 +160,11 @@ export function emitByteNumber(
   }
   B.condBr(valid, access, slow);
   B.startBlock(access);
-  const data = host.emitBytesData(receiver.name), pointer = B.tmp();
+  const data = host.emitBytesData(receiver.name),
+    pointer = B.tmp();
   B.line(`${pointer} = getelementptr inbounds i8, ptr ${data}, ${size} ${index}`);
-  let fastResult = "", fastInteger = "";
+  let fastResult = "",
+    fastInteger = "";
   const readRange = !spec.write ? byteNumberRange(spec) : null;
   const integerType = bits <= 32 ? "i32" : "i64";
   if (spec.write) {
@@ -167,7 +193,9 @@ export function emitByteNumber(
           B.line(`${raw} = trunc ${integerValue.type} ${integerValue.name} to i${bits}`);
         }
       } else {
-        const nan = B.tmp(), normalized = B.tmp(), whole = B.tmp();
+        const nan = B.tmp(),
+          normalized = B.tmp(),
+          whole = B.tmp();
         B.line(`${nan} = fcmp uno double ${value!.name}, ${value!.name}`);
         B.line(`${normalized} = select i1 ${nan}, double ${f64Lit(0)}, double ${value!.name}`);
         B.line(`${whole} = fptosi double ${normalized} to i64`);
@@ -198,7 +226,9 @@ export function emitByteNumber(
         fastInteger = raw;
         if (`i${bits}` !== integerType) {
           fastInteger = B.tmp();
-          B.line(`${fastInteger} = ${spec.signed ? "sext" : "zext"} i${bits} ${raw} to ${integerType}`);
+          B.line(
+            `${fastInteger} = ${spec.signed ? "sext" : "zext"} i${bits} ${raw} to ${integerType}`,
+          );
         }
       }
     }
@@ -211,7 +241,9 @@ export function emitByteNumber(
   let slowInteger = "";
   if (readRange) {
     slowInteger = B.tmp();
-    B.line(`${slowInteger} = ${spec.signed ? "fptosi" : "fptoui"} double ${failure.name} to ${integerType}`);
+    B.line(
+      `${slowInteger} = ${spec.signed ? "fptosi" : "fptoui"} double ${failure.name} to ${integerType}`,
+    );
   }
   B.br(slowDone);
   B.startBlock(slowDone);
@@ -219,13 +251,22 @@ export function emitByteNumber(
   B.startBlock(done);
   if (e.type.kind === "void") return { name: "", type: e.type };
   const result = B.tmp();
-  B.line(`${result} = phi double [ ${fastResult}, %${fastDone} ], [ ${failure.name}, %${slowDone} ]`);
+  B.line(
+    `${result} = phi double [ ${fastResult}, %${fastDone} ], [ ${failure.name}, %${slowDone} ]`,
+  );
   if (readRange) {
     const integer = B.tmp();
-    B.line(`${integer} = phi ${integerType} [ ${fastInteger}, %${fastDone} ], [ ${slowInteger}, %${slowDone} ]`);
+    B.line(
+      `${integer} = phi ${integerType} [ ${fastInteger}, %${fastDone} ], [ ${slowInteger}, %${slowDone} ]`,
+    );
     const uint32 = integerType === "i32" ? integer : B.tmp();
     if (integerType !== "i32") B.line(`${uint32} = trunc i64 ${integer} to i32`);
-    return { name: result, type: e.type, uint32, integer: { name: integer, type: integerType, signed: spec.signed, range: readRange } };
+    return {
+      name: result,
+      type: e.type,
+      uint32,
+      integer: { name: integer, type: integerType, signed: spec.signed, range: readRange },
+    };
   }
   return { name: result, type: e.type };
 }

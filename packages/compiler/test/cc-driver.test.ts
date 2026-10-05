@@ -57,29 +57,43 @@ test("default driver keeps bare clang while selecting host platform flags", () =
 });
 
 test("SCRIPTC_TARGET without zigcc is an error, never a silent clang cross build", () => {
-  expect(() => resolveCc({ SCRIPTC_TARGET: "aarch64-linux-gnu" })).toThrow(/requires SCRIPTC_CC=zigcc/);
-  expect(() => resolveCc({ SCRIPTC_CC: "clang", SCRIPTC_TARGET: "aarch64-linux-gnu" })).toThrow(/requires SCRIPTC_CC=zigcc/);
+  expect(() => resolveCc({ SCRIPTC_TARGET: "aarch64-linux-gnu" })).toThrow(
+    /requires SCRIPTC_CC=zigcc/,
+  );
+  expect(() => resolveCc({ SCRIPTC_CC: "clang", SCRIPTC_TARGET: "aarch64-linux-gnu" })).toThrow(
+    /requires SCRIPTC_CC=zigcc/,
+  );
 });
 
 test("unknown SCRIPTC_CC values are rejected", () => {
   expect(() => resolveCc({ SCRIPTC_CC: "gcc" })).toThrow(/unknown SCRIPTC_CC/);
-  expect(() => resolveCc({ SCRIPTC_CC: "zigcc", SCRIPTC_TARGET: "wasm64-wasi" })).toThrow(/supported: wasm32-wasi/);
+  expect(() => resolveCc({ SCRIPTC_CC: "zigcc", SCRIPTC_TARGET: "wasm64-wasi" })).toThrow(
+    /supported: wasm32-wasi/,
+  );
 });
 
 test("pure target classification validates spellings without compiler discovery", () => {
-  expect(configuredTargetPlatform({ SCRIPTC_TARGET: "wasm32-wasi", SCRIPTC_CC: "missing" })).toBe("wasi");
-  expect(configuredTargetPlatform({ SCRIPTC_TARGET: "aarch64-linux-gnu.2.36", SCRIPTC_CC: "missing" })).toBe("linux");
-  expect(() => configuredTargetPlatform({ SCRIPTC_TARGET: "wasm64-wasi", SCRIPTC_CC: "missing" }))
-    .toThrow(/supported: wasm32-wasi/);
-  expect(() => configuredTargetPlatform({ SCRIPTC_TARGET: "totally-invalid", SCRIPTC_CC: "missing" }))
-    .toThrow(/unsupported target/);
+  expect(configuredTargetPlatform({ SCRIPTC_TARGET: "wasm32-wasi", SCRIPTC_CC: "missing" })).toBe(
+    "wasi",
+  );
+  expect(
+    configuredTargetPlatform({ SCRIPTC_TARGET: "aarch64-linux-gnu.2.36", SCRIPTC_CC: "missing" }),
+  ).toBe("linux");
+  expect(() =>
+    configuredTargetPlatform({ SCRIPTC_TARGET: "wasm64-wasi", SCRIPTC_CC: "missing" }),
+  ).toThrow(/supported: wasm32-wasi/);
+  expect(() =>
+    configuredTargetPlatform({ SCRIPTC_TARGET: "totally-invalid", SCRIPTC_CC: "missing" }),
+  ).toThrow(/unsupported target/);
 });
 
 test("subprocess failures retain diagnostics when stderr is empty", () => {
-  expect(subprocessFailureDetail({
-    stderr: "",
-    stdout: "zig: actual failure\n",
-  })).toBe("compiler stdout:\nzig: actual failure");
+  expect(
+    subprocessFailureDetail({
+      stderr: "",
+      stdout: "zig: actual failure\n",
+    }),
+  ).toBe("compiler stdout:\nzig: actual failure");
 
   const noOutput = Object.assign(new Error("zig cc exited with code 1"), {
     stderr: "",
@@ -103,25 +117,31 @@ test("an empty ANDROID_NDK_ROOT does not mask ANDROID_NDK_HOME", async () => {
   expect(driver.targetArgs).toContain(join(sysroot, "usr", "include"));
 });
 
-test.skipIf(process.platform === "win32")("iOS SDK discovery uses the resolver's explicit environment", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "scr-ios-sdk-env-"));
-  const bin = join(dir, "bin");
-  const sdk = join(dir, "Custom.sdk");
-  await mkdir(bin);
-  await mkdir(join(sdk, "usr", "include"), { recursive: true });
-  const xcrun = join(bin, "xcrun");
-  await writeFile(xcrun, '#!/bin/sh\nprintf "%s\\n" "$SCRIPTC_TEST_SDK_PATH"\n');
-  await chmod(xcrun, 0o755);
+test.skipIf(process.platform === "win32")(
+  "iOS SDK discovery uses the resolver's explicit environment",
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), "scr-ios-sdk-env-"));
+    const bin = join(dir, "bin");
+    const sdk = join(dir, "Custom.sdk");
+    await mkdir(bin);
+    await mkdir(join(sdk, "usr", "include"), { recursive: true });
+    const xcrun = join(bin, "xcrun");
+    await writeFile(xcrun, '#!/bin/sh\nprintf "%s\\n" "$SCRIPTC_TEST_SDK_PATH"\n');
+    await chmod(xcrun, 0o755);
 
-  const driver = resolveCc({
-    PATH: bin,
-    SCRIPTC_CC: "zigcc",
-    SCRIPTC_TARGET: "aarch64-apple-ios",
-    DEVELOPER_DIR: join(dir, "CustomXcode.app", "Contents", "Developer"),
-    SCRIPTC_TEST_SDK_PATH: sdk,
-  }, "darwin");
-  expect(driver.targetArgs).toContain(sdk);
-});
+    const driver = resolveCc(
+      {
+        PATH: bin,
+        SCRIPTC_CC: "zigcc",
+        SCRIPTC_TARGET: "aarch64-apple-ios",
+        DEVELOPER_DIR: join(dir, "CustomXcode.app", "Contents", "Developer"),
+        SCRIPTC_TEST_SDK_PATH: sdk,
+      },
+      "darwin",
+    );
+    expect(driver.targetArgs).toContain(sdk);
+  },
+);
 
 test("zigcc resolves to `zig cc`; linux triples add their libc target flags", () => {
   const native = resolveCc({ SCRIPTC_CC: "zigcc" }, "darwin");
@@ -140,12 +160,7 @@ test("zigcc resolves to `zig cc`; linux triples add their libc target flags", ()
   expect(cross.linkArgs).toEqual(["-lm"]);
 
   const musl = resolveCc({ SCRIPTC_CC: "zigcc", SCRIPTC_TARGET: "x86_64-linux-musl" });
-  expect(musl.targetArgs).toEqual([
-    "-target",
-    "x86_64-linux-musl",
-    "-D_GNU_SOURCE",
-    "-DSCR_MUSL",
-  ]);
+  expect(musl.targetArgs).toEqual(["-target", "x86_64-linux-musl", "-D_GNU_SOURCE", "-DSCR_MUSL"]);
   expect(musl.linkArgs).toEqual(["-lm"]);
 
   const armMusl = resolveCc({ SCRIPTC_CC: "zigcc", SCRIPTC_TARGET: "aarch64-linux-musl" });
@@ -171,17 +186,22 @@ test("zigcc resolves to `zig cc`; linux triples add their libc target flags", ()
   // and process-clock surface retained by the portable runtime.
   const wasi = resolveCc({ SCRIPTC_CC: "zigcc", SCRIPTC_TARGET: "wasm32-wasi" });
   expect(wasi.targetArgs).toEqual([
-    "-target", "wasm32-wasi", "-D_GNU_SOURCE",
-    "-D_WASI_EMULATED_SIGNAL", "-D_WASI_EMULATED_PROCESS_CLOCKS",
+    "-target",
+    "wasm32-wasi",
+    "-D_GNU_SOURCE",
+    "-D_WASI_EMULATED_SIGNAL",
+    "-D_WASI_EMULATED_PROCESS_CLOCKS",
   ]);
-  expect(wasi.linkArgs).toEqual([
-    "-lwasi-emulated-signal", "-lwasi-emulated-process-clocks",
-  ]);
+  expect(wasi.linkArgs).toEqual(["-lwasi-emulated-signal", "-lwasi-emulated-process-clocks"]);
   expect(isZigDriver(resolveCc({}, "linux"))).toBe(false);
 });
 
 /** Runs body with SCRIPTC_CC/SCRIPTC_TARGET set, restoring the previous values. */
-async function withCcEnv(cc: string | undefined, target: string | undefined, body: () => Promise<void>): Promise<void> {
+async function withCcEnv(
+  cc: string | undefined,
+  target: string | undefined,
+  body: () => Promise<void>,
+): Promise<void> {
   const prevCc = process.env["SCRIPTC_CC"];
   const prevTarget = process.env["SCRIPTC_TARGET"];
   if (cc === undefined) delete process.env["SCRIPTC_CC"];
@@ -198,7 +218,8 @@ async function withCcEnv(cc: string | undefined, target: string | undefined, bod
   }
 }
 
-const HOST_CLANG_C = '#include <stdio.h>\nint main(void) { printf("clang says hi\\n"); return 0; }\n';
+const HOST_CLANG_C =
+  '#include <stdio.h>\nint main(void) { printf("clang says hi\\n"); return 0; }\n';
 
 test("host-native clang static build compiles the runtime and runs", async () => {
   const dir = await mkdtemp(join(tmpdir(), "scr-host-clang-"));
@@ -224,38 +245,59 @@ test("host-native clang static build links native fetch after zlib inputs", asyn
   const outPath = join(dir, "program");
   // Ubuntu's GNU ld defaults to left-to-right/as-needed resolution. This
   // link fails when -lz precedes scr_fetch.c even though ld64 accepts it.
-  await withCcEnv(undefined, undefined, () =>
-    compileC({ cPath, outPath, fetch: true }),
-  );
+  await withCcEnv(undefined, undefined, () => compileC({ cPath, outPath, fetch: true }));
   await execFileAsync(outPath);
 }, 600_000);
 
 const HELLO_C = '#include <stdio.h>\nint main(void) { printf("zigcc says hi\\n"); return 0; }\n';
 
-test.skipIf(!zigOnPath())("Windows utility source builds link only their required runtime families", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "scr-util-coff-"));
-  const cases = [
-    { name: "parse", options: { parseArgs: true }, call: "scr_dyn_release(scr_util_parse_args(scr_dyn_undefined()))" },
-    { name: "parse-inspect", options: { parseArgs: true, inspect: true }, call: "scr_dyn_release(scr_util_parse_args(scr_dyn_undefined()))" },
-    { name: "compare", options: { parseArgs: true, symbol: true }, call: "scr_util_is_deep_strict_equal(scr_dyn_undefined(), scr_dyn_undefined(), scr_dyn_undefined())" },
-    { name: "style", options: { parseArgs: true, inspect: true, dynAsync: true, events: true }, call: "scr_str_release(scr_util_style_text(scr_dyn_undefined(), scr_dyn_undefined(), scr_dyn_undefined()))" },
-  ];
-  try {
-    await withCcEnv("zigcc", "x86_64-windows-gnu", async () => {
-      for (const item of cases) {
-        const cPath = join(dir, `${item.name}.c`);
-        await writeFile(cPath, `#include "scr_runtime.h"\nint main(void) { ${item.call}; return 0; }\n`);
-        for (const optimization of ["release", "dev"] as const) {
-          const outPath = join(dir, `${item.name}-${optimization}.exe`);
-          await compileC({ cPath, outPath, optimization, ...item.options });
-          expect((await readFile(outPath)).subarray(0, 2).toString()).toBe("MZ");
+test.skipIf(!zigOnPath())(
+  "Windows utility source builds link only their required runtime families",
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), "scr-util-coff-"));
+    const cases = [
+      {
+        name: "parse",
+        options: { parseArgs: true },
+        call: "scr_dyn_release(scr_util_parse_args(scr_dyn_undefined()))",
+      },
+      {
+        name: "parse-inspect",
+        options: { parseArgs: true, inspect: true },
+        call: "scr_dyn_release(scr_util_parse_args(scr_dyn_undefined()))",
+      },
+      {
+        name: "compare",
+        options: { parseArgs: true, symbol: true },
+        call: "scr_util_is_deep_strict_equal(scr_dyn_undefined(), scr_dyn_undefined(), scr_dyn_undefined())",
+      },
+      {
+        name: "style",
+        options: { parseArgs: true, inspect: true, dynAsync: true, events: true },
+        call: "scr_str_release(scr_util_style_text(scr_dyn_undefined(), scr_dyn_undefined(), scr_dyn_undefined()))",
+      },
+    ];
+    try {
+      await withCcEnv("zigcc", "x86_64-windows-gnu", async () => {
+        for (const item of cases) {
+          const cPath = join(dir, `${item.name}.c`);
+          await writeFile(
+            cPath,
+            `#include "scr_runtime.h"\nint main(void) { ${item.call}; return 0; }\n`,
+          );
+          for (const optimization of ["release", "dev"] as const) {
+            const outPath = join(dir, `${item.name}-${optimization}.exe`);
+            await compileC({ cPath, outPath, optimization, ...item.options });
+            expect((await readFile(outPath)).subarray(0, 2).toString()).toBe("MZ");
+          }
         }
-      }
-    });
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-}, 600_000);
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+  600_000,
+);
 
 const MUSL_RUNTIME_C = `
 #include <stddef.h>
@@ -468,14 +510,18 @@ exit 99
     const rtDir = runtimeSrcDir();
     await execFileAsync("zig", [
       "cc",
-      "-target", "x86_64-linux-musl",
+      "-target",
+      "x86_64-linux-musl",
       "-std=c11",
       "-D_GNU_SOURCE",
       "-DSCR_MUSL",
       "-DSCR_LIB",
-      "-I", rtDir,
-      "-c", join(rtDir, "scr_musl.c"),
-      "-o", object,
+      "-I",
+      rtDir,
+      "-c",
+      join(rtDir, "scr_musl.c"),
+      "-o",
+      object,
     ]);
     const undefinedSymbols = execFileSync("nm", ["-u", object], { encoding: "utf8" });
     expect(undefinedSymbols).toMatch(/\b_?scr_trap\b/);
@@ -488,7 +534,10 @@ exit 99
     // Reference the fetch unit the way every emitted fetch program does
     // (emitter.ts emits the scr_fetch_install call): an unreferenced unit
     // would let the linker drop the dependency chain and prove nothing.
-    await writeFile(cPath, 'void scr_fetch_install(void);\nint main(void) {\n  scr_fetch_install();\n  return 0;\n}\n');
+    await writeFile(
+      cPath,
+      "void scr_fetch_install(void);\nint main(void) {\n  scr_fetch_install();\n  return 0;\n}\n",
+    );
     const outPath = join(dir, "program");
     await withCcEnv("zigcc", "aarch64-linux-gnu.2.36", async () => {
       // The NATIVE fetch rides the socket units (scr_net/scr_http/scr_tls
@@ -541,7 +590,17 @@ exit 99
       // its entropy poll and -lcrypt32 for the ROOT certificate store),
       // watch (ReadDirectoryChangesW), zlib
       // (per-target vendored objects).
-      await compileC({ cPath, outPath, events: true, net: true, http: true, dgram: true, watch: true, zlib: true, tls: true });
+      await compileC({
+        cPath,
+        outPath,
+        events: true,
+        net: true,
+        http: true,
+        dgram: true,
+        watch: true,
+        zlib: true,
+        tls: true,
+      });
       const tlsPe = await readFile(outPath);
       const magic2 = tlsPe.subarray(0, 2);
       expect([...magic2]).toEqual([0x4d, 0x5a]);
@@ -562,7 +621,9 @@ exit 99
       expect([...magic4]).toEqual([0x4d, 0x5a]);
       process.env["SCRIPTC_FETCH_CURL"] = "1";
       try {
-        await expect(compileC({ cPath, outPath, dynamic: true, fetch: true })).rejects.toThrow(/fetch.*not supported under a cross target/s);
+        await expect(compileC({ cPath, outPath, dynamic: true, fetch: true })).rejects.toThrow(
+          /fetch.*not supported under a cross target/s,
+        );
       } finally {
         delete process.env["SCRIPTC_FETCH_CURL"];
       }
@@ -579,10 +640,7 @@ exit 99
       await withCcEnv("zigcc", "x86_64-windows-gnu", () =>
         compileC({ cPath, outPath, tlsCa: true }),
       );
-      const caPath = join(
-        import.meta.dirname,
-        "../../../tests/fixtures/server/certs/ca.pem",
-      );
+      const caPath = join(import.meta.dirname, "../../../tests/fixtures/server/certs/ca.pem");
       const { stdout } = await execFileAsync(outPath, [caPath]);
       expect(stdout).toBe(`windows EKU policy ok${EOL}`);
     },
@@ -611,7 +669,18 @@ exit 99
     await writeFile(cPath, HELLO_C);
     const outPath = join(dir, "program");
     await withCcEnv("zigcc", "aarch64-linux-gnu.2.36", () =>
-      compileC({ cPath, outPath, net: true, http: true, dgram: true, watch: true, events: true, regex: true, zlib: true, tls: true }),
+      compileC({
+        cPath,
+        outPath,
+        net: true,
+        http: true,
+        dgram: true,
+        watch: true,
+        events: true,
+        regex: true,
+        zlib: true,
+        tls: true,
+      }),
     );
     const magic = (await readFile(outPath)).subarray(0, 4);
     expect([...magic]).toEqual([0x7f, 0x45, 0x4c, 0x46]); // \x7fELF
@@ -622,7 +691,9 @@ exit 99
     const cPath = join(dir, "program.c");
     await writeFile(cPath, HELLO_C);
     const outPath = join(dir, "program");
-    await withCcEnv("zigcc", "aarch64-linux-gnu.2.36", () => compileC({ cPath, outPath, dynamic: true }));
+    await withCcEnv("zigcc", "aarch64-linux-gnu.2.36", () =>
+      compileC({ cPath, outPath, dynamic: true }),
+    );
     const magic = (await readFile(outPath)).subarray(0, 4);
     expect([...magic]).toEqual([0x7f, 0x45, 0x4c, 0x46]); // \x7fELF
   }, 600_000);

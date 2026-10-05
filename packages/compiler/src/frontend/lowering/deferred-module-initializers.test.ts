@@ -5,23 +5,49 @@ import { DeferredModuleInitializers } from "./deferred-module-initializers.js";
 import type { Lowerer } from "./lowerer.js";
 
 const loc: SrcLoc = { file: "registry.ts", start: 0, end: 1 };
-const block = (where: SrcLoc): Extract<IrStmt, { kind: "block" }> => ({ kind: "block", body: [], loc: where });
-const read = (id: string): IrStmt => ({ kind: "exprStmt", expr: { kind: "varRef", localId: id, type: F64, loc }, loc });
-const value = (n: number): IrStmt => ({ kind: "exprStmt", expr: { kind: "numLit", value: n, type: F64, loc }, loc });
-const fn = (name: string, body: IrStmt[]): IrFunction => ({ name, body, params: [], locals: [], returnType: VOID, loc });
+const block = (where: SrcLoc): Extract<IrStmt, { kind: "block" }> => ({
+  kind: "block",
+  body: [],
+  loc: where,
+});
+const read = (id: string): IrStmt => ({
+  kind: "exprStmt",
+  expr: { kind: "varRef", localId: id, type: F64, loc },
+  loc,
+});
+const value = (n: number): IrStmt => ({
+  kind: "exprStmt",
+  expr: { kind: "numLit", value: n, type: F64, loc },
+  loc,
+});
+const fn = (name: string, body: IrStmt[]): IrFunction => ({
+  name,
+  body,
+  params: [],
+  locals: [],
+  returnType: VOID,
+  loc,
+});
 
 function fixture() {
   const initializers = new DeferredModuleInitializers();
   // Queue IR actions directly: syntax classification has separate corpus
   // coverage, while these cases exercise live worklist mutations.
-  const pending = (initializers as unknown as { pending: Map<string, { loc: SrcLoc; lower: () => IrStmt[] }[]> }).pending;
-  const lowerer = { classes: new Map(), shapes: { get: () => undefined }, unions: { get: () => undefined } } as unknown as Lowerer;
+  const pending = (
+    initializers as unknown as { pending: Map<string, { loc: SrcLoc; lower: () => IrStmt[] }[]> }
+  ).pending;
+  const lowerer = {
+    classes: new Map(),
+    shapes: { get: () => undefined },
+    unions: { get: () => undefined },
+  } as unknown as Lowerer;
   return { initializers, pending, lowerer };
 }
 
 test("materializes many demanded registries without a whole-program scan per action", () => {
   const { initializers, pending, lowerer } = fixture();
-  const placeholders: IrStmt[] = [], reads: IrStmt[] = [];
+  const placeholders: IrStmt[] = [],
+    reads: IrStmt[] = [];
   for (let i = 0; i < 64; i++) {
     const where = { ...loc, start: i * 2, end: i * 2 + 1 };
     placeholders.push(block(where));
@@ -33,12 +59,20 @@ test("materializes many demanded registries without a whole-program scan per act
   try {
     expect(initializers.process(lowerer, functions)).toBe(true);
     expect(pending.size).toBe(0);
-    for (let i = 0; i < 64; i++) expect(placeholders[i]).toEqual({ kind: "block", body: [value(i)], loc: { ...loc, start: i * 2, end: i * 2 + 1 } });
-    for (const f of functions) expect(walk.mock.calls.filter(([body]) => body === f.body).length).toBeLessThanOrEqual(2);
+    for (let i = 0; i < 64; i++)
+      expect(placeholders[i]).toEqual({
+        kind: "block",
+        body: [value(i)],
+        loc: { ...loc, start: i * 2, end: i * 2 + 1 },
+      });
+    for (const f of functions)
+      expect(walk.mock.calls.filter(([body]) => body === f.body).length).toBeLessThanOrEqual(2);
     walk.mockClear();
     expect(initializers.process(lowerer, functions)).toBe(false);
     expect(walk).not.toHaveBeenCalled();
-  } finally { walk.mockRestore(); }
+  } finally {
+    walk.mockRestore();
+  }
 });
 
 test("finds replaced blocks and references appended to an existing body in a later wave", () => {
@@ -47,7 +81,10 @@ test("finds replaced blocks and references appended to an existing body in a lat
   const functions = [fn("init", [original]), fn("use", [])];
   pending.set("registry", [{ loc, lower: () => [value(7)] }]);
   expect(initializers.process(lowerer, functions)).toBe(false);
-  functions[0]!.body = traversal.transformStmtList(functions[0]!.body, { stmt: (s) => s, expr: (e) => e });
+  functions[0]!.body = traversal.transformStmtList(functions[0]!.body, {
+    stmt: (s) => s,
+    expr: (e) => e,
+  });
   functions[1]!.body.push(read("registry"));
   expect(initializers.process(lowerer, functions)).toBe(true);
   expect(original.body).toEqual([]);
@@ -57,7 +94,9 @@ test("finds replaced blocks and references appended to an existing body in a lat
 test("indexes new subtrees for other demanded initializers in the same pass", () => {
   const { initializers, pending, lowerer } = fixture();
   const nestedLoc = { ...loc, start: 10, end: 11 };
-  const first = block(loc), second = block(nestedLoc), nested = block(nestedLoc);
+  const first = block(loc),
+    second = block(nestedLoc),
+    nested = block(nestedLoc);
   const functions = [fn("init", [first, second]), fn("use", [read("first"), read("second")])];
   pending.set("first", [{ loc, lower: () => [nested] }]);
   pending.set("second", [{ loc: nestedLoc, lower: () => [value(9)] }]);
@@ -69,7 +108,8 @@ test("indexes new subtrees for other demanded initializers in the same pass", ()
 test("does not index a materialized subtree with no live insertion point", () => {
   const { initializers, pending, lowerer } = fixture();
   const nestedLoc = { ...loc, start: 10, end: 11 };
-  const live = block(nestedLoc), detached = block(nestedLoc);
+  const live = block(nestedLoc),
+    detached = block(nestedLoc);
   const functions = [fn("init", [live]), fn("use", [read("first"), read("second")])];
   pending.set("first", [{ loc, lower: () => [detached] }]);
   pending.set("second", [{ loc: nestedLoc, lower: () => [value(9)] }]);
@@ -80,10 +120,17 @@ test("does not index a materialized subtree with no live insertion point", () =>
 
 test("fills every empty copy with the exact file and span while preserving populated blocks", () => {
   const { initializers, pending, lowerer } = fixture();
-  const a = block(loc), b = block(loc), populated = block(loc);
+  const a = block(loc),
+    b = block(loc),
+    populated = block(loc);
   populated.body.push(value(1));
-  const otherFile = block({ ...loc, file: "other.ts" }), otherStart = block({ ...loc, start: 2 }), otherEnd = block({ ...loc, end: 2 });
-  const functions = [fn("init", [a, b, populated, otherFile, otherStart, otherEnd]), fn("use", [read("registry")])];
+  const otherFile = block({ ...loc, file: "other.ts" }),
+    otherStart = block({ ...loc, start: 2 }),
+    otherEnd = block({ ...loc, end: 2 });
+  const functions = [
+    fn("init", [a, b, populated, otherFile, otherStart, otherEnd]),
+    fn("use", [read("registry")]),
+  ];
   pending.set("registry", [{ loc, lower: () => [value(8)] }]);
   expect(initializers.process(lowerer, functions)).toBe(true);
   expect(a.body).toEqual([value(8)]);

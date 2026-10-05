@@ -16,9 +16,20 @@
  * and these tables are wrong — that is what the suite is for. */
 
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { isNpmStaticPackage, npmStaticPackageOfPath, npmStaticTransformPkgJson } from "./npm-static.js";
+import {
+  isNpmStaticPackage,
+  npmStaticPackageOfPath,
+  npmStaticTransformPkgJson,
+} from "./npm-static.js";
 import { provenanceEntryFor } from "./provenance-registry.js";
-import { trackedAccessibleEntries, trackedDirectoryExists, trackedExists, trackedFileExists, trackedReadFile, trackedRealpath } from "./input-tracker.js";
+import {
+  trackedAccessibleEntries,
+  trackedDirectoryExists,
+  trackedExists,
+  trackedFileExists,
+  trackedReadFile,
+  trackedRealpath,
+} from "./input-tracker.js";
 import { isRelativeSpecifier, packageNameOfSpecifier } from "./workspace-registry.js";
 
 function isFile(path: string): boolean {
@@ -159,7 +170,7 @@ function workspaceMembersOf(root: string, patterns: string[]): Map<string, strin
  * don't nest; a root whose globs don't name the package answers null).
  * Realpath'd like the symlink classification stamps. */
 function workspaceMemberDirOf(fromDir: string, packageName: string): string | null {
-  for (let dir = fromDir; ; ) {
+  for (let dir = fromDir; ;) {
     const patterns = workspacePatternsOf(pkgJsonOf(dir));
     if (patterns !== null) {
       const member = workspaceMembersOf(dir, patterns).get(packageName);
@@ -298,7 +309,8 @@ export function setProjectPathMappings(
 
 function resolveViaProjectPaths(specifier: string): string | null {
   if (projectPathMappings === null) return null;
-  let match: { key: string; targets: readonly string[]; prefix: string; suffix: string } | null = null;
+  let match: { key: string; targets: readonly string[]; prefix: string; suffix: string } | null =
+    null;
   for (const [key, targets] of Object.entries(projectPathMappings)) {
     const star = key.indexOf("*");
     if (star < 0) {
@@ -325,7 +337,8 @@ function resolveViaProjectPaths(specifier: string): string | null {
     : "";
   for (const target of match.targets) {
     const candidate = target.includes("*") ? target.split("*").join(wildcard) : target;
-    const answer = loadAsFile(candidate) ?? loadAsDirectory(candidate) ?? (isFile(candidate) ? candidate : null);
+    const answer =
+      loadAsFile(candidate) ?? loadAsDirectory(candidate) ?? (isFile(candidate) ? candidate : null);
     if (answer !== null) return projectDtsRuntimeSibling(answer) ?? answer;
   }
   return null;
@@ -632,9 +645,11 @@ export function resolveProjectModule(fromFile: string, specifier: string): strin
     return resolveRelativeModule(fromFile, specifier);
   }
   if (specifier.startsWith("node:")) return null;
-  return resolveProjectImport(fromFile, specifier) ??
+  return (
+    resolveProjectImport(fromFile, specifier) ??
     resolveWorkspaceSourceModule(fromFile, specifier)?.typesFile ??
-    null;
+    null
+  );
 }
 
 /* 5.9.3 with allowJs resolves node_modules in TWO FULL PASSES (probed): the
@@ -649,25 +664,37 @@ type ResolutionPass = "types" | "source" | "js";
 function extensionsFor(pass: ResolutionPass, flavor: "plain" | "x" | "m" | "c"): string[] {
   if (pass === "types") {
     switch (flavor) {
-      case "m": return [".mts", ".d.mts"];
-      case "c": return [".cts", ".d.cts"];
-      case "x": return [".tsx", ".ts", ".d.ts"];
-      default: return [".ts", ".tsx", ".d.ts"];
+      case "m":
+        return [".mts", ".d.mts"];
+      case "c":
+        return [".cts", ".d.cts"];
+      case "x":
+        return [".tsx", ".ts", ".d.ts"];
+      default:
+        return [".ts", ".tsx", ".d.ts"];
     }
   }
   if (pass === "source") {
     switch (flavor) {
-      case "m": return [".mts"];
-      case "c": return [".cts"];
-      case "x": return [".tsx", ".ts"];
-      default: return [".ts", ".tsx"];
+      case "m":
+        return [".mts"];
+      case "c":
+        return [".cts"];
+      case "x":
+        return [".tsx", ".ts"];
+      default:
+        return [".ts", ".tsx"];
     }
   }
   switch (flavor) {
-    case "m": return [".mjs"];
-    case "c": return [".cjs"];
-    case "x": return [".jsx", ".js"];
-    default: return [".js", ".jsx"];
+    case "m":
+      return [".mjs"];
+    case "c":
+      return [".cjs"];
+    case "x":
+      return [".jsx", ".js"];
+    default:
+      return [".js", ".jsx"];
   }
 }
 
@@ -684,7 +711,8 @@ function loadTargetInPass(
   if (pass === "types") {
     if (/\.(d\.ts|d\.mts|d\.cts|ts|tsx|mts|cts)$/.test(path) && isFile(path)) return path;
   } else if (pass === "source") {
-    if (/\.(ts|tsx|mts|cts)$/.test(path) && !/\.d\.(ts|mts|cts)$/.test(path) && isFile(path)) return path;
+    if (/\.(ts|tsx|mts|cts)$/.test(path) && !/\.d\.(ts|mts|cts)$/.test(path) && isFile(path))
+      return path;
   } else if (/\.(js|jsx|mjs|cjs)$/.test(path) && isFile(path)) {
     return path;
   }
@@ -820,15 +848,22 @@ export function resolveBareModule(
   // pass only, the "types" export condition dropped, the @types mangling
   // never consulted — mirroring the shadowed world the tsgo host serves.
   const runtimeImport = mode === "runtime-js" || mode === "runtime-source";
-  const npmStatic = mode === "js-only" || (!runtimeImport && mode !== "types-only" && isNpmStaticPackage(pkgName));
+  const npmStatic =
+    mode === "js-only" || (!runtimeImport && mode !== "types-only" && isNpmStaticPackage(pkgName));
   const conditions = runtimeImport
     ? RUNTIME_IMPORT_CONDITIONS
     : npmStatic
-      ? resolutionKind === "require" ? JS_REQUIRE_CONDITIONS : JS_ONLY_CONDITIONS
+      ? resolutionKind === "require"
+        ? JS_REQUIRE_CONDITIONS
+        : JS_ONLY_CONDITIONS
       : EXPORT_CONDITIONS;
   const runtimeOnly = runtimeImport || npmStatic;
 
-  const inPackage = (nmPkgDir: string, name: string, pass: ResolutionPass): BareResolution | null => {
+  const inPackage = (
+    nmPkgDir: string,
+    name: string,
+    pass: ResolutionPass,
+  ): BareResolution | null => {
     // A workspace link: the answer's realpath escaped node_modules, so the
     // package directory is a symlink into the project. Stamp the realpath'd
     // package root so callers can classify (and register) the package.
@@ -878,12 +913,13 @@ export function resolveBareModule(
     // @restart/hooks/useMergedRefs shape): 5.9.3 forms the packageId from
     // THAT package.json — its (usually absent) version, not the root's.
     const subDir = subpath === "." ? null : join(nmPkgDir, rest);
-    const answerDir = subDir !== null && isDirectory(subDir) && pkgJsonOf(subDir) ? subDir : nmPkgDir;
+    const answerDir =
+      subDir !== null && isDirectory(subDir) && pkgJsonOf(subDir) ? subDir : nmPkgDir;
     return withWorkspace(packageAnswer(answerDir, name, file));
   };
 
   const passOnce = (pass: ResolutionPass): BareResolution | null => {
-    for (let dir = dirname(resolve(fromFile)); ; ) {
+    for (let dir = dirname(resolve(fromFile)); ;) {
       const nm = join(dir, "node_modules");
       if (isDirectory(nm)) {
         // 1. The package directory.
@@ -947,9 +983,7 @@ export function resolveWorkspaceSourceModule(
   ) {
     return null;
   }
-  return resolveBareModule(fromFile, specifier, "runtime-js") === null
-    ? source
-    : null;
+  return resolveBareModule(fromFile, specifier, "runtime-js") === null ? source : null;
 }
 
 /** Resolves a `/// <reference types="name" />`-style TYPE DIRECTIVE the way
@@ -971,7 +1005,7 @@ export function resolveTypeDirective(name: string, fromFile: string): string | n
     const idx = join(base, "index.d.ts");
     return isFile(idx) ? idx : null;
   };
-  for (let dir = dirname(resolve(fromFile)); ; ) {
+  for (let dir = dirname(resolve(fromFile)); ;) {
     const nm = join(dir, "node_modules");
     if (isDirectory(nm)) {
       const viaSelf = tryPkg(join(nm, name));

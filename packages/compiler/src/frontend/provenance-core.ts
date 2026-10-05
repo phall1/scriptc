@@ -29,7 +29,16 @@
  * this); unlisted packages still take the live pipeline. */
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { builtinModules } from "node:module";
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -80,7 +89,11 @@ function readJson(path: string): Record<string, unknown> | null {
  * collection shapes npm.ts scans embedded modules with, over the shared
  * native TypeScript syntax service. */
 
-function moduleSpecifiersLite(source: string, fileName: string, parseSourceFile: ProvenanceParser): { spec: string; typeOnly: boolean }[] {
+function moduleSpecifiersLite(
+  source: string,
+  fileName: string,
+  parseSourceFile: ProvenanceParser,
+): { spec: string; typeOnly: boolean }[] {
   return sourceImportsOfFile(parseSourceFile(fileName, source, "ts"));
 }
 
@@ -131,7 +144,7 @@ interface InstalledPackage {
 /** node_modules/<name> walking up from `fromDir`, realpath-free (the
  * published package.json is all this needs). */
 function findInstalled(fromDir: string, name: string): InstalledPackage | null {
-  for (let dir = fromDir; ; ) {
+  for (let dir = fromDir; ;) {
     const candidate = join(dir, "node_modules", name);
     const pkgJson = readJson(join(candidate, "package.json"));
     if (pkgJson !== null && typeof pkgJson["version"] === "string") {
@@ -163,13 +176,19 @@ async function fetchAttestation(name: string, version: string): Promise<Attested
   const res = await fetch(url, { signal: AbortSignal.timeout(30_000) });
   if (res.status === 404) throw new Error("no provenance attestation published");
   if (!res.ok) throw new Error(`attestation fetch failed (HTTP ${res.status})`);
-  const body = (await res.json()) as { attestations?: { predicateType?: string; bundle?: { dsseEnvelope?: { payload?: string } } }[] };
+  const body = (await res.json()) as {
+    attestations?: { predicateType?: string; bundle?: { dsseEnvelope?: { payload?: string } } }[];
+  };
   for (const att of body.attestations ?? []) {
     if (!att.predicateType?.startsWith("https://slsa.dev/provenance")) continue;
     const payload = att.bundle?.dsseEnvelope?.payload;
     if (payload === undefined) continue;
     const stmt = JSON.parse(Buffer.from(payload, "base64").toString("utf8")) as {
-      predicate?: { buildDefinition?: { resolvedDependencies?: { uri?: string; digest?: { gitCommit?: string } }[] } };
+      predicate?: {
+        buildDefinition?: {
+          resolvedDependencies?: { uri?: string; digest?: { gitCommit?: string } }[];
+        };
+      };
     };
     for (const dep of stmt.predicate?.buildDefinition?.resolvedDependencies ?? []) {
       const commit = dep.digest?.gitCommit;
@@ -184,7 +203,9 @@ async function fetchAttestation(name: string, version: string): Promise<Attested
 /* ── source fetch (content-addressed by the attested commit) ──────────── */
 
 function cacheRoot(): string {
-  return process.env["SCRIPTC_PROVENANCE_CACHE"] ?? join(homedir(), ".cache", "scriptc", "provenance");
+  return (
+    process.env["SCRIPTC_PROVENANCE_CACHE"] ?? join(homedir(), ".cache", "scriptc", "provenance")
+  );
 }
 
 /** The cached source tree for an attested commit, fetching it once from
@@ -246,7 +267,9 @@ function locatePackageDir(tree: string, name: string): string | null {
     if (depth >= 3) continue;
     let entries: string[];
     try {
-      entries = readdirSync(dir).filter((entry) => isDirectory(join(dir, entry))).sort();
+      entries = readdirSync(dir)
+        .filter((entry) => isDirectory(join(dir, entry)))
+        .sort();
     } catch {
       continue;
     }
@@ -343,7 +366,10 @@ function readManifest(): Map<string, ManifestEntry> {
  * imports (one transitive round per newly-mapped tree: source imports of
  * OTHER packages try the pipeline too). Never throws for a package
  * failure — those become notes and the package keeps its island path. */
-export async function resolveProvenanceSourcesWithParser(entryPath: string, parseSourceFile: ProvenanceParser): Promise<ProvenanceSources> {
+export async function resolveProvenanceSourcesWithParser(
+  entryPath: string,
+  parseSourceFile: ProvenanceParser,
+): Promise<ProvenanceSources> {
   const entry = resolve(entryPath);
   const manifest = readManifest();
   const packages: ProvenancePackageSource[] = [];
@@ -371,7 +397,9 @@ export async function resolveProvenanceSourcesWithParser(entryPath: string, pars
     if (processed.has(name)) return;
     if (processed.size >= MAX_PACKAGES) {
       processed.set(name, null);
-      notes.push(`${name}: skipped — provenance package limit (${MAX_PACKAGES}) reached; island path used`);
+      notes.push(
+        `${name}: skipped — provenance package limit (${MAX_PACKAGES}) reached; island path used`,
+      );
       return;
     }
     processed.set(name, null); // claimed; overwritten on success
@@ -422,7 +450,9 @@ export async function resolveProvenanceSourcesWithParser(entryPath: string, pars
       const pkg: ProvenancePackageSource = {
         name: installed.name,
         version: installed.version,
-        ...(sourceVersion !== undefined && sourceVersion !== installed.version ? { sourceVersion } : {}),
+        ...(sourceVersion !== undefined && sourceVersion !== installed.version
+          ? { sourceVersion }
+          : {}),
         repo,
         commit,
         dir,
@@ -441,7 +471,9 @@ export async function resolveProvenanceSourcesWithParser(entryPath: string, pars
       const inner = enqueue(bareImportsOf(Object.values(entries), parseSourceFile));
       for (const n of inner) await mapOne(n);
     } catch (e) {
-      notes.push(`${name}@${installed.version}: ${e instanceof Error ? e.message : String(e)}; island path used`);
+      notes.push(
+        `${name}@${installed.version}: ${e instanceof Error ? e.message : String(e)}; island path used`,
+      );
     }
   };
 

@@ -1,5 +1,16 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
@@ -7,7 +18,8 @@ import { contentDigest, NativeCache } from "./cache.js";
 import { NativeExecutableCache } from "./executable-cache.js";
 
 vi.mock("node:child_process", async (original) => ({
-  ...await original<typeof import("node:child_process")>(), spawnSync: vi.fn(),
+  ...(await original<typeof import("node:child_process")>()),
+  spawnSync: vi.fn(),
 }));
 
 const directories: string[] = [];
@@ -31,7 +43,14 @@ function fixture(debug = false) {
   const cache = new NativeCache(join(root, "cache"));
   const key = contentDigest("llvm and options");
   const open = () => new NativeExecutableCache(cache, key, "clang", debug, [runtime]);
-  vi.mocked(spawnSync).mockReturnValue({ pid: 1, status: 0, signal: null, output: [], stdout: library + "\n", stderr: "" });
+  vi.mocked(spawnSync).mockReturnValue({
+    pid: 1,
+    status: 0,
+    signal: null,
+    output: [],
+    stdout: library + "\n",
+    stderr: "",
+  });
   const output = join(stage, "program");
   writeFileSync(output, Buffer.from([0, 128, 255, 10]));
   if (debug) {
@@ -45,32 +64,55 @@ function fixture(debug = false) {
     expect(entry.trace(["-o", output], stage)).toBe(true);
     entry.publish(output);
   };
-  return { root, inputs, sdk, stage, output, destination: join(restored, "program"), runtime, library, cache, key, open, publish };
+  return {
+    root,
+    inputs,
+    sdk,
+    stage,
+    output,
+    destination: join(restored, "program"),
+    runtime,
+    library,
+    cache,
+    key,
+    open,
+    publish,
+  };
 }
 
-test.each([false, true])("restores a complete executable and its debug information (%s)", (debug) => {
-  const f = fixture(debug);
-  f.publish();
-  vi.mocked(spawnSync).mockClear();
-  expect(f.open().restore(f.destination)).toBe(true);
-  expect(readFileSync(f.destination)).toEqual(readFileSync(f.output));
-  if (process.platform !== "win32") expect(statSync(f.destination).mode & 0o111).toBe(0o111);
-  expect(spawnSync).not.toHaveBeenCalled();
-  if (debug) {
-    expect(readFileSync(join(f.destination + ".dSYM/Contents/Resources/DWARF/program"), "utf8")).toBe("debug information");
-    expect(readFileSync(join(f.destination + ".dSYM/Contents/Info.plist"), "utf8")).toBe("property list");
-  }
-});
+test.each([false, true])(
+  "restores a complete executable and its debug information (%s)",
+  (debug) => {
+    const f = fixture(debug);
+    f.publish();
+    vi.mocked(spawnSync).mockClear();
+    expect(f.open().restore(f.destination)).toBe(true);
+    expect(readFileSync(f.destination)).toEqual(readFileSync(f.output));
+    if (process.platform !== "win32") expect(statSync(f.destination).mode & 0o111).toBe(0o111);
+    expect(spawnSync).not.toHaveBeenCalled();
+    if (debug) {
+      expect(
+        readFileSync(join(f.destination + ".dSYM/Contents/Resources/DWARF/program"), "utf8"),
+      ).toBe("debug information");
+      expect(readFileSync(join(f.destination + ".dSYM/Contents/Info.plist"), "utf8")).toBe(
+        "property list",
+      );
+    }
+  },
+);
 
-test.each(["runtime", "library"] as const)("invalidates %s replacement even with restored size and mtime", (input) => {
-  const f = fixture();
-  f.publish();
-  const before = statSync(f[input]);
-  writeFileSync(f[input] + ".new", "x".repeat(before.size));
-  utimesSync(f[input] + ".new", before.atime, before.mtime);
-  renameSync(f[input] + ".new", f[input]);
-  expect(f.open().restore(f.destination)).toBe(false);
-});
+test.each(["runtime", "library"] as const)(
+  "invalidates %s replacement even with restored size and mtime",
+  (input) => {
+    const f = fixture();
+    f.publish();
+    const before = statSync(f[input]);
+    writeFileSync(f[input] + ".new", "x".repeat(before.size));
+    utimesSync(f[input] + ".new", before.atime, before.mtime);
+    renameSync(f[input] + ".new", f[input]);
+    expect(f.open().restore(f.destination)).toBe(false);
+  },
+);
 
 test("adding a new SDK library search candidate invalidates the previous link", () => {
   const f = fixture();
@@ -82,7 +124,8 @@ test("adding a new SDK library search candidate invalidates the previous link", 
 test("a library search change during tracing prevents publication", () => {
   const f = fixture();
   vi.mocked(spawnSync).mockImplementation(() => {
-    if (vi.mocked(spawnSync).mock.calls.length === 2) writeFileSync(join(f.sdk, "new-library.tbd"), "library");
+    if (vi.mocked(spawnSync).mock.calls.length === 2)
+      writeFileSync(join(f.sdk, "new-library.tbd"), "library");
     return { pid: 1, status: 0, signal: null, output: [], stdout: f.library + "\n", stderr: "" };
   });
   const entry = f.open();
@@ -91,21 +134,24 @@ test("a library search change during tracing prevents publication", () => {
   expect(f.open().restore(f.destination)).toBe(false);
 });
 
-test.skipIf(process.platform === "win32")("retargeting an input symlink invalidates the previous link", () => {
-  const f = fixture();
-  const link = join(f.inputs, "current.o");
-  symlinkSync(f.runtime, link);
-  const open = () => new NativeExecutableCache(f.cache, f.key, "clang", false, [link]);
-  const entry = open();
-  expect(entry.trace([], f.stage)).toBe(true);
-  entry.publish(f.output);
-  expect(open().restore(f.destination)).toBe(true);
-  const replacement = join(f.inputs, "replacement.o");
-  writeFileSync(replacement, "runtime");
-  rmSync(link);
-  symlinkSync(replacement, link);
-  expect(open().restore(f.destination)).toBe(false);
-});
+test.skipIf(process.platform === "win32")(
+  "retargeting an input symlink invalidates the previous link",
+  () => {
+    const f = fixture();
+    const link = join(f.inputs, "current.o");
+    symlinkSync(f.runtime, link);
+    const open = () => new NativeExecutableCache(f.cache, f.key, "clang", false, [link]);
+    const entry = open();
+    expect(entry.trace([], f.stage)).toBe(true);
+    entry.publish(f.output);
+    expect(open().restore(f.destination)).toBe(true);
+    const replacement = join(f.inputs, "replacement.o");
+    writeFileSync(replacement, "runtime");
+    rmSync(link);
+    symlinkSync(replacement, link);
+    expect(open().restore(f.destination)).toBe(false);
+  },
+);
 
 test.each(["executable", "binary", "dsym"])("corrupt %s payloads are misses", (family) => {
   const f = fixture(true);
@@ -150,10 +196,24 @@ test("a failed or empty link trace cannot publish a completed executable", () =>
   const entry = f.open();
   entry.publish(f.output);
   expect(f.open().restore(f.destination)).toBe(false);
-  vi.mocked(spawnSync).mockReturnValue({ pid: 1, status: 0, signal: null, output: [], stdout: "", stderr: "" });
+  vi.mocked(spawnSync).mockReturnValue({
+    pid: 1,
+    status: 0,
+    signal: null,
+    output: [],
+    stdout: "",
+    stderr: "",
+  });
   expect(entry.trace([], f.stage)).toBe(false);
   entry.publish(f.output);
   expect(f.open().restore(f.destination)).toBe(false);
-  vi.mocked(spawnSync).mockReturnValue({ pid: 1, status: 1, signal: null, output: [], stdout: "", stderr: "failed" });
+  vi.mocked(spawnSync).mockReturnValue({
+    pid: 1,
+    status: 1,
+    signal: null,
+    output: [],
+    stdout: "",
+    stderr: "failed",
+  });
   expect(entry.trace([], f.stage)).toBe(false);
 });

@@ -117,7 +117,10 @@ export function declareContextThis(ctx: FnCtx, type: IrType): IrLocal {
 }
 
 /** Look up a binding without allocating captures or boxing its source. */
-export function bindingInContext(ctx: FnCtx, symbol: ts.Symbol | "arguments" | undefined): IrLocal | null {
+export function bindingInContext(
+  ctx: FnCtx,
+  symbol: ts.Symbol | "arguments" | undefined,
+): IrLocal | null {
   if (symbol === undefined) return ctx.thisLocal;
   if (symbol === "arguments") return ctx.argumentsLocal ?? null;
   for (let i = ctx.scopes.length - 1; i >= 0; i--) {
@@ -147,7 +150,8 @@ export function captureContextBinding(
   onCapture: (parent: IrLocal, child: IrLocal) => void,
 ): ContextBindingResult {
   const current = stack[stack.length - 1];
-  if (current === undefined) throw new InternalCompilerError("lowerer bug: no active function context");
+  if (current === undefined)
+    throw new InternalCompilerError("lowerer bug: no active function context");
   const direct = bindingInContext(current, symbol);
   if (direct !== null) return { local: direct, origin: direct, error: null };
   for (let depth = stack.length - 2; depth >= 0; depth--) {
@@ -159,10 +163,22 @@ export function captureContextBinding(
     let parentEntry = origin;
     for (let j = depth + 1; j < stack.length; j++) {
       const ctx = stack[j]!;
-      let entry = symbol === undefined ? ctx.thisLocal : symbol === "arguments" ? ctx.argumentsLocal : ctx.captureBySymbol.get(symbol);
+      let entry =
+        symbol === undefined
+          ? ctx.thisLocal
+          : symbol === "arguments"
+            ? ctx.argumentsLocal
+            : ctx.captureBySymbol.get(symbol);
       if (!entry) {
         if (ctx.captures === null) return { local: null, origin, error: "plain" };
-        entry = declareContextLocal(ctx, origin.name, origin.type, origin.mutable, undefined, origin.source);
+        entry = declareContextLocal(
+          ctx,
+          origin.name,
+          origin.type,
+          origin.mutable,
+          undefined,
+          origin.source,
+        );
         entry.boxed = true;
         if (origin.tdz) entry.tdz = true;
         if (symbol === undefined) ctx.thisLocal = entry;

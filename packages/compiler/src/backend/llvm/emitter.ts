@@ -36,8 +36,29 @@ import type {
   IrUnionDef,
   SrcLoc,
 } from "../../ir/ir.js";
-import { CAUGHT, ffiCallbackType, isDynTypedRefType, isFfiContextParam, isRefCounted, isUnitType, moduleRuntimeFeatures, moduleEmbedsBuiltin, moduleEmbedsCompressedNpm, NPM_COMPRESS_MIN, POINTER_KINDS, RUNTIME_EMITTER_CLASS, RUNTIME_ERROR_CLASSES, RUNTIME_STREAM_CLASSES, typeKey, VOID } from "../../ir/ir.js";
-import { matchIntegerArrayForLoop, matchIntegerBytesForLoop, matchIntegerCountedForLoop } from "../../ir/integer-loops.js";
+import {
+  CAUGHT,
+  ffiCallbackType,
+  isDynTypedRefType,
+  isFfiContextParam,
+  isRefCounted,
+  isUnitType,
+  moduleRuntimeFeatures,
+  moduleEmbedsBuiltin,
+  moduleEmbedsCompressedNpm,
+  NPM_COMPRESS_MIN,
+  POINTER_KINDS,
+  RUNTIME_EMITTER_CLASS,
+  RUNTIME_ERROR_CLASSES,
+  RUNTIME_STREAM_CLASSES,
+  typeKey,
+  VOID,
+} from "../../ir/ir.js";
+import {
+  matchIntegerArrayForLoop,
+  matchIntegerBytesForLoop,
+  matchIntegerCountedForLoop,
+} from "../../ir/integer-loops.js";
 import { emitCountedLoopLimit } from "./counted-loops.js";
 import { findBytesBounds } from "./bytes-bounds.js";
 import { scalarizeNumericRecords } from "../../ir/scalar-records.js";
@@ -46,39 +67,155 @@ import { analyzeIntegerRanges, type IntegerRanges } from "../../ir/integer-range
 import { findIntegerViews } from "./integer-views.js";
 import { findInitializerBindings, withInitializerBindings } from "../../ir/initializer-bindings.js";
 import { findConstantNumericTables, type ConstantNumericTable } from "../../ir/constant-tables.js";
-import { allocateFfiCallbackAdapters, hasForeignFfiCallback, hasRetainedFfiCallback, type FfiCallbackAdapter } from "../ffi-callbacks.js";
+import {
+  allocateFfiCallbackAdapters,
+  hasForeignFfiCallback,
+  hasRetainedFfiCallback,
+  type FfiCallbackAdapter,
+} from "../ffi-callbacks.js";
 import { RUNTIME_ABI_MARKER } from "../runtime-abi.js";
 import { computeMayThrow } from "../may-throw.js";
-import { mangleArgPack, mangleAsyncSpawn, mangleBorrowedFunction, mangleClassObj, mangleClassStruct, mangleFnClosure, mangleFunction, mangleGenDrop, mangleGenSpawn, mangleGlobal, mangleLocal, mangleRecordStruct, mangleTrampoline, mangleWrapper, mangleVtInstance } from "../mangle.js";
+import {
+  mangleArgPack,
+  mangleAsyncSpawn,
+  mangleBorrowedFunction,
+  mangleClassObj,
+  mangleClassStruct,
+  mangleFnClosure,
+  mangleFunction,
+  mangleGenDrop,
+  mangleGenSpawn,
+  mangleGlobal,
+  mangleLocal,
+  mangleRecordStruct,
+  mangleTrampoline,
+  mangleWrapper,
+  mangleVtInstance,
+} from "../mangle.js";
 import { analyzeCallLifetimes, type CallLifetimes } from "./call-lifetimes.js";
 import { emitStackUnion, findLocalStackUnions } from "./stack-unions.js";
 import { BlockBuilder } from "./blocks.js";
-import { emitLocalArrayRead, findLocalArrayReads, findCallArrayReads, OptionalArrayReads, type LocalArrayRead } from "./local-array-reads.js";
-import { emitStackMapRead, findMapReadLifetimes, type MapReadLifetimes } from "./map-read-lifetimes.js";
+import {
+  emitLocalArrayRead,
+  findLocalArrayReads,
+  findCallArrayReads,
+  OptionalArrayReads,
+  type LocalArrayRead,
+} from "./local-array-reads.js";
+import {
+  emitStackMapRead,
+  findMapReadLifetimes,
+  type MapReadLifetimes,
+} from "./map-read-lifetimes.js";
 import { emitBorrowedFieldSequence } from "./borrowed-receivers.js";
 import { emitBorrowedInput } from "./borrowed-inputs.js";
 import { ReferenceEffects } from "./reference-effects.js";
 import { LlvmDebugInfo } from "./debug-info.js";
-import { f64Lit, ffiNativeTypeLl, ffiNativeParamLl, ffiNativeReturnLl, llvmCommentText } from "./common.js";
+import {
+  f64Lit,
+  ffiNativeTypeLl,
+  ffiNativeParamLl,
+  ffiNativeReturnLl,
+  llvmCommentText,
+} from "./common.js";
 import { ffiExtendsNarrowIntegers } from "../targets.js";
-import { emitLiteralExpr, emitOperatorExpr, emitStringExpr, emitContainerExpr, emitRecordExpr } from "./expr-primitives.js";
+import {
+  emitLiteralExpr,
+  emitOperatorExpr,
+  emitStringExpr,
+  emitContainerExpr,
+  emitRecordExpr,
+} from "./expr-primitives.js";
 import { emitControlExpr } from "./expr-control.js";
 import { emitCallExpr } from "./expr-calls.js";
 import { emitDynamicExpr } from "./expr-dynamic.js";
 import { emitIntrinsicExpr, emitSerializationExpr, emitAsyncExpr } from "./expr-async.js";
 import { emitJsInteropExpr, emitExpr } from "./expr-dispatch.js";
-import { emitJsMarshal, emitJsOp, emitJsExit, islandAdapter, islandTypedAdapter } from "./expr-island.js";
-import { dynKind, raceAdapterFor, genResultThunkFor, childExitThunkFor, childExitSignalThunkFor, childDataThunkFor, execFileThunkFor, ipcMessageThunkFor, ipcSendThunkFor, emitterFixedAdapter, wrapEmitterListener, unwrapNullableClosure, closeBindThunkFor, closeOverrideWrapFor } from "./expr-callbacks.js";
-import { streamDataAdapter, streamDoneFnFor, cryptoBytesThunkFor, fsRenameThunkFor, streamCbThunkFor, zlibBytesThunkFor } from "./expr-stream-callbacks.js";
-import { emitStableReceiver, resolveThunkFor, tagInSet, arrPush, emitArrayCopyLoop, emitStrIntrinsic, emitArrIntrinsic, wrapNullable, emitMapNew, mapSet, emitMapLikeIntrinsic, emitSetNew } from "./expr-containers.js";
-import { emitIntegerLoopIndex, emitBytesIndex, emitBytesData, emitBytesLength, emitBytesGet, emitToUint32, emitBytesSet, emitBytesIntrinsic } from "./expr-bytes.js";
+import {
+  emitJsMarshal,
+  emitJsOp,
+  emitJsExit,
+  islandAdapter,
+  islandTypedAdapter,
+} from "./expr-island.js";
+import {
+  dynKind,
+  raceAdapterFor,
+  genResultThunkFor,
+  childExitThunkFor,
+  childExitSignalThunkFor,
+  childDataThunkFor,
+  execFileThunkFor,
+  ipcMessageThunkFor,
+  ipcSendThunkFor,
+  emitterFixedAdapter,
+  wrapEmitterListener,
+  unwrapNullableClosure,
+  closeBindThunkFor,
+  closeOverrideWrapFor,
+} from "./expr-callbacks.js";
+import {
+  streamDataAdapter,
+  streamDoneFnFor,
+  cryptoBytesThunkFor,
+  fsRenameThunkFor,
+  streamCbThunkFor,
+  zlibBytesThunkFor,
+} from "./expr-stream-callbacks.js";
+import {
+  emitStableReceiver,
+  resolveThunkFor,
+  tagInSet,
+  arrPush,
+  emitArrayCopyLoop,
+  emitStrIntrinsic,
+  emitArrIntrinsic,
+  wrapNullable,
+  emitMapNew,
+  mapSet,
+  emitMapLikeIntrinsic,
+  emitSetNew,
+} from "./expr-containers.js";
+import {
+  emitIntegerLoopIndex,
+  emitBytesIndex,
+  emitBytesData,
+  emitBytesLength,
+  emitBytesGet,
+  emitToUint32,
+  emitBytesSet,
+  emitBytesIntrinsic,
+} from "./expr-bytes.js";
 import { emitRegexIntrinsic, emitRecordKeyGet, keyedRecordReadInto } from "./expr-records.js";
-import { dynPromiseAdapter, streamTypedRefCommitAdapter, liveDynUnionRefAdapter, streamTypedRefBoxValue, streamTypedRefMaterializeAdapter, streamFromArrayAdapter } from "./expr-stream-bridges.js";
-import { emitWebLibCall, emitDynamicLibCall, emitFilesystemLibCall, emitPathUrlLibCall, emitPrimitiveLibCall } from "./lib-filesystem.js";
-import { emitChildProcessLibCall, emitAsyncContextLibCall, emitProcessLibCall, emitErrorsEventsLibCall } from "./lib-process.js";
+import {
+  dynPromiseAdapter,
+  streamTypedRefCommitAdapter,
+  liveDynUnionRefAdapter,
+  streamTypedRefBoxValue,
+  streamTypedRefMaterializeAdapter,
+  streamFromArrayAdapter,
+} from "./expr-stream-bridges.js";
+import {
+  emitWebLibCall,
+  emitDynamicLibCall,
+  emitFilesystemLibCall,
+  emitPathUrlLibCall,
+  emitPrimitiveLibCall,
+} from "./lib-filesystem.js";
+import {
+  emitChildProcessLibCall,
+  emitAsyncContextLibCall,
+  emitProcessLibCall,
+  emitErrorsEventsLibCall,
+} from "./lib-process.js";
 import { emitStreamLibCall } from "./lib-stream.js";
 import { emitNetworkHttpLibCall } from "./lib-network.js";
-import { emitAssertInspectLibCall, emitIoLibCall, emitGenericLibCall, emitLibCall } from "./lib-dispatch.js";
+import {
+  emitAssertInspectLibCall,
+  emitIoLibCall,
+  emitGenericLibCall,
+  emitLibCall,
+} from "./lib-dispatch.js";
 import {
   buildClassGraph,
   classEnvironmentIndex,
@@ -170,15 +307,24 @@ export interface LlvmTargetOptions {
 
 export function emitLlvmModule(mod: IrModule, options: LlvmTargetOptions = {}): string {
   // Keep source storage intact for debugger inspection in dev builds.
-  return new LlEmitter(options.debugSources === undefined ? scalarizeNumericRecords(mod) : mod, options).emit();
+  return new LlEmitter(
+    options.debugSources === undefined ? scalarizeNumericRecords(mod) : mod,
+    options,
+  ).emit();
 }
 
 /** Keep large translation units below the host's single-string limit. */
-export function emitLlvmModuleSource(mod: IrModule, options: LlvmTargetOptions = {}): string | readonly string[] {
-  const parts = new LlEmitter(options.debugSources === undefined ? scalarizeNumericRecords(mod) : mod, options).emitParts();
+export function emitLlvmModuleSource(
+  mod: IrModule,
+  options: LlvmTargetOptions = {},
+): string | readonly string[] {
+  const parts = new LlEmitter(
+    options.debugSources === undefined ? scalarizeNumericRecords(mod) : mod,
+    options,
+  ).emitParts();
   const length = parts.reduce((total, part) => total + part.length, Math.max(0, parts.length - 1));
   if (length <= 256 * 1024 * 1024) return parts.join("\n");
-  return parts.flatMap((part, index) => index === 0 ? [part] : ["\n", part]);
+  return parts.flatMap((part, index) => (index === 0 ? [part] : ["\n", part]));
 }
 
 function llStrBytes(text: string): string {
@@ -219,7 +365,10 @@ export class LlEmitter {
     if (this.fieldAliasTags.size === 0) return [];
     const lines = ['!0 = !{!"scriptc native fields"}'];
     for (const tag of this.fieldAliasTags.values()) {
-      lines.push(`!${tag - 1} = !{!"field.${tag}", !0, i64 0}`, `!${tag} = !{!${tag - 1}, !${tag - 1}, i64 0}`);
+      lines.push(
+        `!${tag - 1} = !{!"field.${tag}", !0, i64 0}`,
+        `!${tag} = !{!${tag - 1}, !${tag - 1}, i64 0}`,
+      );
     }
     return lines;
   }
@@ -313,10 +462,7 @@ export class LlEmitter {
   readonly streamFromArrayAdapters = new Map<string, string>();
   /** Identity-preserving static→dyn capsules for program classes and Web
    * APIs whose values remain directly observable. */
-  readonly liveDynRefAdapters = new Map<
-    string,
-    LlStreamTypedRefAdapter
-  >();
+  readonly liveDynRefAdapters = new Map<string, LlStreamTypedRefAdapter>();
   /** Runtime-arm dispatchers for live union values. */
   readonly liveDynUnionRefAdapters = new Map<string, string>();
   readonly dynPromiseAdapters = new Map<string, string>();
@@ -354,7 +500,10 @@ export class LlEmitter {
   /** Scope slots dominate every throw site. Share their exceptional cleanup
    * for identical live bindings and handlers; statement temporaries stay at
    * their own throw sites because their SSA values are path-dependent. */
-  private readonly unwindCleanups = new Map<string, { label: string; entries: LlScopeEntry[]; terminator: string }>();
+  private readonly unwindCleanups = new Map<
+    string,
+    { label: string; entries: LlScopeEntry[]; terminator: string }
+  >();
   /** Enclosing break/continue targets. `kind` separates loops from
    * switches and labeled blocks: an unlabeled break binds to the innermost
    * NON-BLOCK entry (loop or switch — blocks only enter the stack when
@@ -376,7 +525,10 @@ export class LlEmitter {
   private numericLocals = new Map<string, IrLocal>();
   private captureIds = new Set<string>();
   /** Active induction bindings retain their width independently of size_t. */
-  integerLoopBindings = new Map<string, { slot: string; type: "i32" | "i64"; signed?: boolean; range?: { min: number; max: number } }>();
+  integerLoopBindings = new Map<
+    string,
+    { slot: string; type: "i32" | "i64"; signed?: boolean; range?: { min: number; max: number } }
+  >();
   private countedLoopsEnabled = false;
   integerRanges: IntegerRanges = new Map();
   bytesBounds: ReadonlySet<IrExpr | IrStmt> = new Set();
@@ -390,7 +542,12 @@ export class LlEmitter {
    * (past its own catch), so the copies emit under the truncated stack.
    * break/continue use the same region snapshots through
    * emitFinallysForJump. */
-  private finallyStack: { frameDepth: number; scopeDepth: number; tryDepth: number; body: IrStmt[] }[] = [];
+  private finallyStack: {
+    frameDepth: number;
+    scopeDepth: number;
+    tryDepth: number;
+    body: IrStmt[];
+  }[] = [];
   /** Enclosing try contexts, innermost last — the compile-time unwind
    * targets: a pending check or `throw` inside a try
    * releases frames/scopes down to the recorded depths and branches to
@@ -420,15 +577,26 @@ export class LlEmitter {
   logArgSlots = 0;
   private readonly stackTraces: boolean;
 
-  constructor(readonly mod: IrModule, options: LlvmTargetOptions) {
-    this.stackTraces = mod.functions.some((fn) => !everyStmtList(fn.body, {
-      stmt: () => true, expr: (expr) => !(expr.kind === "libCall" && expr.fn === "error.stack"),
-    }));
-    this.debug = options.debugSources === undefined ? null : new LlvmDebugInfo(mod.sourceFile, options.debugSources, options.pointerBits, mod.unions);
+  constructor(
+    readonly mod: IrModule,
+    options: LlvmTargetOptions,
+  ) {
+    this.stackTraces = mod.functions.some(
+      (fn) =>
+        !everyStmtList(fn.body, {
+          stmt: () => true,
+          expr: (expr) => !(expr.kind === "libCall" && expr.fn === "error.stack"),
+        }),
+    );
+    this.debug =
+      options.debugSources === undefined
+        ? null
+        : new LlvmDebugInfo(mod.sourceFile, options.debugSources, options.pointerBits, mod.unions);
     this.constantNumericTables = findConstantNumericTables(mod);
     this.initializerBindings = findInitializerBindings(mod);
     this.sizeType = options.pointerBits === 32 ? "i32" : "i64";
-    this.ffiExtendNarrowIntegers = options.wasi === true || ffiExtendsNarrowIntegers(options.targetTriple);
+    this.ffiExtendNarrowIntegers =
+      options.wasi === true || ffiExtendsNarrowIntegers(options.targetTriple);
     this.wasi = options.wasi === true;
     this.emitLibraryIdentity = options.emitLibraryIdentity !== false;
     this.runtimeAbiMarker = options.runtimeAbiMarker === true;
@@ -453,7 +621,10 @@ export class LlEmitter {
     }
     for (const u of mod.unions ?? []) this.unionsById.set(u.id, u);
     this.optionalArrayReads = new OptionalArrayReads(this.fnByName, this.unionsById);
-    this.referenceEffects = new ReferenceEffects(this.fnByName, (call) => this.optionalArrayReads.get(call) !== null);
+    this.referenceEffects = new ReferenceEffects(
+      this.fnByName,
+      (call) => this.optionalArrayReads.get(call) !== null,
+    );
     this.callLifetimes = analyzeCallLifetimes(this.fnByName);
     for (const r of mod.records ?? []) this.recordsById.set(r.id, r);
     const traced = computeTraced(mod);
@@ -479,8 +650,9 @@ export class LlEmitter {
       isErrorClass: (name) => this.classMeta.get(name)?.root.def.name === "%Error",
       classSubtypes: (name) => {
         const target = this.classMetaOf(name);
-        return [...this.classMeta.values()].filter((meta) =>
-          target.pre <= meta.pre && meta.pre <= target.post).map((meta) => meta.def.name);
+        return [...this.classMeta.values()]
+          .filter((meta) => target.pre <= meta.pre && meta.pre <= target.post)
+          .map((meta) => meta.def.name);
       },
     };
     this.walkers = new LlWalkers(this.shapeHost);
@@ -494,7 +666,8 @@ export class LlEmitter {
       try {
         this.llType(g.type); // refuses out-of-tier kinds
       } catch (err) {
-        if (err instanceof LlvmUnsupportedError) throw new LlvmUnsupportedError(`global:${g.type.kind}`);
+        if (err instanceof LlvmUnsupportedError)
+          throw new LlvmUnsupportedError(`global:${g.type.kind}`);
         throw err;
       }
       this.globalTypes.set(g.id, g.type);
@@ -565,7 +738,8 @@ export class LlEmitter {
 
   ffiCallbackAdapter(binding: string, id: string): FfiCallbackAdapter {
     const adapter = this.ffiCallbackAdapters.get(`${binding}:${id}`);
-    if (!adapter) throw new InternalCompilerError(`llvm emitter bug: no callback adapter for ${binding}:${id}`);
+    if (!adapter)
+      throw new InternalCompilerError(`llvm emitter bug: no callback adapter for ${binding}:${id}`);
     return adapter;
   }
 
@@ -579,12 +753,16 @@ export class LlEmitter {
     if (this.ffiCallbackAdapters.size === 0) return { globals, defs };
     this.declare(`declare zeroext i1 @scr_exc_pending()`);
     this.declare(`declare void @scr_trap(ptr)`);
-    const expired = this.cstr("scriptc: native callback invoked outside its call-scoped lifetime\n");
+    const expired = this.cstr(
+      "scriptc: native callback invoked outside its call-scoped lifetime\n",
+    );
     const released = this.cstr("scriptc: native callback invoked outside its retained lifetime\n");
     for (const adapter of this.ffiCallbackAdapters.values()) {
       const cb = adapter.callback;
-      if (adapter.tls !== null) globals.push(`@${adapter.tls} = internal thread_local global ptr null`);
-      if (adapter.global !== null) globals.push(`@${adapter.global} = internal thread_local global ptr null`);
+      if (adapter.tls !== null)
+        globals.push(`@${adapter.tls} = internal thread_local global ptr null`);
+      if (adapter.global !== null)
+        globals.push(`@${adapter.global} = internal thread_local global ptr null`);
       if (adapter.table !== null) {
         globals.push(`@${adapter.table} = internal global %ScrFfiTable zeroinitializer`);
       }
@@ -596,9 +774,15 @@ export class LlEmitter {
         return [`${ffiNativeParamLl(param, this.ffiExtendNarrowIntegers)} %a${i}`];
       });
       if (cb.invoke === "foreign") {
-        if (adapter.table === null || !cb.params.some(isFfiContextParam) || cb.returns !== "void" ||
-            cb.params.some(param => param === "i64" || param === "u64" || param === "pointer")) {
-          throw new InternalCompilerError("llvm emitter bug: invalid foreign FFI callback descriptor");
+        if (
+          adapter.table === null ||
+          !cb.params.some(isFfiContextParam) ||
+          cb.returns !== "void" ||
+          cb.params.some((param) => param === "i64" || param === "u64" || param === "pointer")
+        ) {
+          throw new InternalCompilerError(
+            "llvm emitter bug: invalid foreign FFI callback descriptor",
+          );
         }
         const dispatch = `${adapter.symbol}_dispatch`;
         const scriptArgs: string[] = [];
@@ -618,19 +802,25 @@ export class LlEmitter {
             case "u16":
             case "i16":
               this.declare(`declare double @scr_ffi_call_get_f64(ptr, ${this.sizeType})`);
-              dispatchBody.push(`  %s${i} = call double @scr_ffi_call_get_f64(ptr %call, ${this.sizeType} ${i})`);
+              dispatchBody.push(
+                `  %s${i} = call double @scr_ffi_call_get_f64(ptr %call, ${this.sizeType} ${i})`,
+              );
               scriptArgs.push(`double %s${i}`);
               break;
             case "bool":
               this.declare(`declare zeroext i1 @scr_ffi_call_get_bool(ptr, ${this.sizeType})`);
-              dispatchBody.push(`  %s${i} = call zeroext i1 @scr_ffi_call_get_bool(ptr %call, ${this.sizeType} ${i})`);
+              dispatchBody.push(
+                `  %s${i} = call zeroext i1 @scr_ffi_call_get_bool(ptr %call, ${this.sizeType} ${i})`,
+              );
               scriptArgs.push(`i1 %s${i}`);
               break;
             case "u8":
             case "u32":
             case "i32":
               this.declare(`declare double @scr_ffi_call_get_${param}(ptr, ${this.sizeType})`);
-              dispatchBody.push(`  %s${i} = call double @scr_ffi_call_get_${param}(ptr %call, ${this.sizeType} ${i})`);
+              dispatchBody.push(
+                `  %s${i} = call double @scr_ffi_call_get_${param}(ptr %call, ${this.sizeType} ${i})`,
+              );
               scriptArgs.push(`double %s${i}`);
               break;
             case "cstring":
@@ -644,10 +834,14 @@ export class LlEmitter {
               );
               if (param === "bytes") {
                 this.declare(`declare ptr @scr_bytes_from_data(ptr, ${this.sizeType})`);
-                dispatchBody.push(`  %s${i} = call ptr @scr_bytes_from_data(ptr %data${i}, ${this.sizeType} %len${i})`);
+                dispatchBody.push(
+                  `  %s${i} = call ptr @scr_bytes_from_data(ptr %data${i}, ${this.sizeType} %len${i})`,
+                );
               } else {
                 this.declare(`declare ptr @scr_str_from_utf8_lossy(ptr, ${this.sizeType})`);
-                dispatchBody.push(`  %s${i} = call ptr @scr_str_from_utf8_lossy(ptr %data${i}, ${this.sizeType} %len${i})`);
+                dispatchBody.push(
+                  `  %s${i} = call ptr @scr_str_from_utf8_lossy(ptr %data${i}, ${this.sizeType} %len${i})`,
+                );
               }
               scriptArgs.push(`ptr %s${i}`);
               break;
@@ -675,10 +869,16 @@ export class LlEmitter {
           if (isFfiContextParam(param)) continue;
           if (param === "cstring") {
             this.declare(`declare void @scr_ffi_call_copy_cstring(ptr, ${this.sizeType}, ptr)`);
-            defs.push(`  call void @scr_ffi_call_copy_cstring(ptr %call, ${this.sizeType} ${i}, ptr %a${i})`);
+            defs.push(
+              `  call void @scr_ffi_call_copy_cstring(ptr %call, ${this.sizeType} ${i}, ptr %a${i})`,
+            );
           } else if (param === "string" || param === "bytes") {
-            this.declare(`declare void @scr_ffi_call_copy_${param}(ptr, ${this.sizeType}, ptr, ${this.sizeType})`);
-            defs.push(`  call void @scr_ffi_call_copy_${param}(ptr %call, ${this.sizeType} ${i}, ptr %a${i}, ${this.sizeType} %a${i}_len)`);
+            this.declare(
+              `declare void @scr_ffi_call_copy_${param}(ptr, ${this.sizeType}, ptr, ${this.sizeType})`,
+            );
+            defs.push(
+              `  call void @scr_ffi_call_copy_${param}(ptr %call, ${this.sizeType} ${i}, ptr %a${i}, ${this.sizeType} %a${i}_len)`,
+            );
           } else if (param === "f32" || param === "i8" || param === "u16" || param === "i16") {
             const nativeTy = ffiNativeTypeLl(param);
             const op = param === "f32" ? "fpext" : param === "u16" ? "uitofp" : "sitofp";
@@ -689,8 +889,12 @@ export class LlEmitter {
             );
           } else {
             const nativeTy = ffiNativeTypeLl(param);
-            this.declare(`declare void @scr_ffi_call_set_${param}(ptr, ${this.sizeType}, ${nativeTy})`);
-            defs.push(`  call void @scr_ffi_call_set_${param}(ptr %call, ${this.sizeType} ${i}, ${nativeTy} %a${i})`);
+            this.declare(
+              `declare void @scr_ffi_call_set_${param}(ptr, ${this.sizeType}, ${nativeTy})`,
+            );
+            defs.push(
+              `  call void @scr_ffi_call_set_${param}(ptr %call, ${this.sizeType} ${i}, ${nativeTy} %a${i})`,
+            );
           }
         }
         defs.push(`  call void @scr_ffi_post(ptr %call)`, `  ret void`, `}`, ``);
@@ -731,9 +935,10 @@ export class LlEmitter {
             `  ${invalid} = and i1 %null${i}, %nonempty${i}`,
           );
         }
-        const message = param === "cstring"
-          ? "scriptc: native callback passed a NULL cstring\n"
-          : `scriptc: native callback passed a NULL ${param} span with nonzero length\n`;
+        const message =
+          param === "cstring"
+            ? "scriptc: native callback passed a NULL cstring\n"
+            : `scriptc: native callback passed a NULL ${param} span with nonzero length\n`;
         defs.push(
           `  br i1 ${invalid}, label %invalid_param${i}, label %param_ok${i}`,
           `invalid_param${i}:`,
@@ -825,7 +1030,9 @@ export class LlEmitter {
       if (cb.returns === "void") {
         defs.push(
           `  call void %fn(${callArgs})`,
-          ...(cb.lifetime === "retained" ? [`  call void @scr_closure_release_v(ptr %invoke_pin)`] : []),
+          ...(cb.lifetime === "retained"
+            ? [`  call void @scr_closure_release_v(ptr %invoke_pin)`]
+            : []),
           `  ret void`,
           `}`,
           ``,
@@ -843,8 +1050,11 @@ export class LlEmitter {
           const ty = ffiNativeTypeLl(cb.returns);
           this.declare(`declare ${ty} @scr_bigint_to_${cb.returns}(ptr)`);
           this.declare(`declare void @scr_bigint_release(ptr)`);
-          defs.push(`  %out = call ${ty} @scr_bigint_to_${cb.returns}(ptr %result)`,
-            `  call void @scr_bigint_release(ptr %result)`, `  ret ${ty} %out`);
+          defs.push(
+            `  %out = call ${ty} @scr_bigint_to_${cb.returns}(ptr %result)`,
+            `  call void @scr_bigint_release(ptr %result)`,
+            `  ret ${ty} %out`,
+          );
           break;
         }
         case "f64":
@@ -897,10 +1107,13 @@ export class LlEmitter {
     const fnDefs: string[] = [];
     for (const fn of this.mod.functions) fnDefs.push(this.emitFunction(fn));
     const errorViews: string[] = [];
-    for (const property of ["name", "message"]) if (this.mod.functions.some((fn) => fn.name === `%error.${property}.read`)) {
-      this.declare(`declare void @scr_error_install_${property}_reader(ptr)`);
-      errorViews.push(`  call void @scr_error_install_${property}_reader(ptr @${mangleFunction(`%error.${property}.read`)})`);
-    }
+    for (const property of ["name", "message"])
+      if (this.mod.functions.some((fn) => fn.name === `%error.${property}.read`)) {
+        this.declare(`declare void @scr_error_install_${property}_reader(ptr)`);
+        errorViews.push(
+          `  call void @scr_error_install_${property}_reader(ptr @${mangleFunction(`%error.${property}.read`)})`,
+        );
+      }
     for (const meta of this.classMeta.values()) {
       if (meta.def.runtime || meta.root.def.name !== "%Error") continue;
       const type: IrType = { kind: "object", className: meta.def.name };
@@ -908,13 +1121,27 @@ export class LlEmitter {
       const rc = vAdapters(this.shapeHost, type);
       const key = typeKey(type);
       const name = `sc_error_view_${errorViews.length}`;
-      this.resolveThunkDefs.push(`define internal ptr @${name}(ptr %v) ${FN_ATTRS} {`, `entry:`,
+      this.resolveThunkDefs.push(
+        `define internal ptr @${name}(ptr %v) ${FN_ATTRS} {`,
+        `entry:`,
         `  %d = call ptr ${typedRefConstructor(this.shapeHost, type)}(ptr %v, ptr ${rc.retain}, ptr ${rc.release}, ptr ${this.cstr(key)}, ${this.sizeType} ${Buffer.byteLength(key, "utf8")}, ptr @${adapter.snapshot}, ptr ${adapter.commit})`,
-        `  ret ptr %d`, `}`, ``);
+        `  ret ptr %d`,
+        `}`,
+        ``,
+      );
       this.declare(`declare void @scr_error_register_dyn(ptr, ptr)`);
-      errorViews.push(`  call void @scr_error_register_dyn(ptr @${mangleVtInstance(meta.def.name)}, ptr @${name})`);
+      errorViews.push(
+        `  call void @scr_error_register_dyn(ptr @${mangleVtInstance(meta.def.name)}, ptr @${name})`,
+      );
     }
-    const layouts = emitLlvmLayouts(this.shapeHost, this.mod, this.classMeta, this.classObjs, this.fnByName, (t) => this.llType(t));
+    const layouts = emitLlvmLayouts(
+      this.shapeHost,
+      this.mod,
+      this.classMeta,
+      this.classObjs,
+      this.fnByName,
+      (t) => this.llType(t),
+    );
     const shapes = layouts.records;
     const classShapes = layouts.classes;
     const classObjDefs = layouts.classObjects;
@@ -984,7 +1211,8 @@ export class LlEmitter {
           `  store ptr null, ptr getelementptr inbounds (%ScrClosure, ptr @${mangleFnClosure(name)}, i64 0, i32 3)`,
         );
       });
-      for (const name of this.classObjs.keys()) lines.push(`  call void @scr_classobj_clear_properties(ptr @${mangleClassObj(name)})`);
+      for (const name of this.classObjs.keys())
+        lines.push(`  call void @scr_classobj_clear_properties(ptr @${mangleClassObj(name)})`);
       return lines;
     };
     // Exit listeners can read MODULE GLOBALS directly, so they must run
@@ -1017,7 +1245,8 @@ export class LlEmitter {
       moduleEmbedsBuiltin(this.mod, "node:net") ||
       moduleEmbedsBuiltin(this.mod, "node:tls");
     const snapshotsTlsCa =
-      runtimeFeatures.tls || runtimeFeatures.tlsCa ||
+      runtimeFeatures.tls ||
+      runtimeFeatures.tlsCa ||
       moduleEmbedsBuiltin(this.mod, "node:https") ||
       moduleEmbedsBuiltin(this.mod, "node:tls");
     // The process verdict has the same precedence as the C reference
@@ -1028,13 +1257,20 @@ export class LlEmitter {
     // Declared NOW — the extern block flushes before main assembles.
     if (usesEvents) this.declare(`declare void @scr_events_install()`);
     if (usesChildProcess) this.declare(`declare void @scr_child_dyn_install()`);
-    const childStreamBoxes = usesChildProcess && usesStream &&
-      this.classMeta.has("%Readable") && this.classMeta.has("%Writable")
-      ? [this.dyn.toDynHelper({ kind: "object", className: "%Readable" }),
-         this.dyn.toDynHelper({ kind: "object", className: "%Writable" })]
-      : null;
+    const childStreamBoxes =
+      usesChildProcess &&
+      usesStream &&
+      this.classMeta.has("%Readable") &&
+      this.classMeta.has("%Writable")
+        ? [
+            this.dyn.toDynHelper({ kind: "object", className: "%Readable" }),
+            this.dyn.toDynHelper({ kind: "object", className: "%Writable" }),
+          ]
+        : null;
     if (childStreamBoxes) {
-      this.declare(`@scr_stream_child_ops = external constant { ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr }`);
+      this.declare(
+        `@scr_stream_child_ops = external constant { ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr }`,
+      );
       this.declare(`declare void @scr_child_dyn_streams_install(ptr, ptr, ptr)`);
     }
     if (usesFsWatch) this.declare(`declare void @scr_watch_install()`);
@@ -1051,12 +1287,16 @@ export class LlEmitter {
     if (embedsZlib) this.declare(`declare void @scr_zlib_island_install()`);
     if (embedsNet) this.declare(`declare void @scr_net_island_install()`);
     if (usesIsland) {
-      this.declare(`declare void @scr_island_modules(ptr, ${this.sizeType}, ptr, ${this.sizeType})`);
+      this.declare(
+        `declare void @scr_island_modules(ptr, ${this.sizeType}, ptr, ${this.sizeType})`,
+      );
       this.declare(`declare void @scr_island_entry_module(ptr)`);
       this.declare(`declare i32 @scr_island_exit_code()`);
       if (moduleEmbedsCompressedNpm(this.mod)) {
         this.declare(`declare void @scr_island_set_inflate(ptr)`);
-        this.declare(`declare zeroext i1 @scr_zlib_inflate_exact(ptr, ${this.sizeType}, ptr, ${this.sizeType})`);
+        this.declare(
+          `declare zeroext i1 @scr_zlib_inflate_exact(ptr, ${this.sizeType}, ptr, ${this.sizeType})`,
+        );
       }
     }
     if (usesNodeTest) this.declare(`declare i32 @scr_test_exit_code()`);
@@ -1210,7 +1450,8 @@ export class LlEmitter {
     // Helpers assemble BEFORE the declaration table flushes (they add
     // write/abort declarations).
     const helpers = this.helperDefs();
-    if (this.constantNumericTables.size > 0) this.declare(`declare double @scr_arr_get_number(ptr, double)`);
+    if (this.constantNumericTables.size > 0)
+      this.declare(`declare double @scr_arr_get_number(ptr, double)`);
 
     const out: string[] = [
       `; Generated by scriptc (LLVM backend) from ${this.mod.sourceFile}. Do not edit.`,
@@ -1312,7 +1553,8 @@ export class LlEmitter {
         `fallback:`,
         `  %generic = call double @scr_arr_get_number(ptr %a, double %i)`,
         `  ret double %generic`,
-        `}`, ``,
+        `}`,
+        ``,
       );
     }
     for (const [text, lit] of this.literals) {
@@ -1350,9 +1592,8 @@ export class LlEmitter {
       // entry points). Every dense slot is present; reads retain immortal
       // strings — a no-op.
       const n = inst.slots.length;
-      const present = n === 0
-        ? "zeroinitializer"
-        : `[ ${inst.slots.map(() => "i8 1").join(", ")} ]`;
+      const present =
+        n === 0 ? "zeroinitializer" : `[ ${inst.slots.map(() => "i8 1").join(", ")} ]`;
       out.push(
         `@${inst.sym}_data = internal constant [${n} x ptr] [ ${inst.slots.map((s) => `ptr ${s}`).join(", ")} ]`,
         `@${inst.sym}_present = internal constant [${n} x i8] ${present}`,
@@ -1363,9 +1604,7 @@ export class LlEmitter {
     const islandEntryPath = usesIsland ? this.cstr(this.mod.sourceFile) : null;
     for (const [text, c] of this.cstrs) {
       // NUL-terminated byte-array constants for scr_jb_puts and indentation.
-      out.push(
-        `@${c.sym} = internal constant [${c.len + 1} x i8] c"${llStrBytes(text)}"`,
-      );
+      out.push(`@${c.sym} = internal constant [${c.len + 1} x i8] c"${llStrBytes(text)}"`);
     }
     if (this.cstrs.size > 0) out.push(``);
     if (usesIsland) {
@@ -1386,29 +1625,41 @@ export class LlEmitter {
       });
       const moduleRows = embedded.modules.map((m, i) => {
         const stored = npmStored[i]!;
-        const esm = stored.esm === null
-          ? `ptr null, ${this.sizeType} 0, ${this.sizeType} 0`
-          : `ptr @sc_npm_esm_${i}, ${this.sizeType} ${stored.esm.bytes.length}, ${this.sizeType} ${stored.esm.raw}`;
-        return `%ScrIslandModule { ptr @sc_npm_key_${i}, ptr @sc_npm_src_${i}, ` +
+        const esm =
+          stored.esm === null
+            ? `ptr null, ${this.sizeType} 0, ${this.sizeType} 0`
+            : `ptr @sc_npm_esm_${i}, ${this.sizeType} ${stored.esm.bytes.length}, ${this.sizeType} ${stored.esm.raw}`;
+        return (
+          `%ScrIslandModule { ptr @sc_npm_key_${i}, ptr @sc_npm_src_${i}, ` +
           `${this.sizeType} ${stored.src.bytes.length}, ${this.sizeType} ${stored.src.raw}, ` +
-          `i32 ${fmt[m.format]}, ${esm} }`;
+          `i32 ${fmt[m.format]}, ${esm} }`
+        );
       });
       out.push(
         `@sc_npm_modules = internal constant [${moduleRows.length} x %ScrIslandModule] [ ${moduleRows.join(", ")} ]`,
       );
       embedded.edges.forEach((edge, i) => {
-        const parts: [string, string][] = [["from", edge.from], ["spec", edge.specifier], ["to", edge.to]];
+        const parts: [string, string][] = [
+          ["from", edge.from],
+          ["spec", edge.specifier],
+          ["to", edge.to],
+        ];
         for (const [part, text] of parts) {
           const bytes = Buffer.from(text, "utf8");
-          out.push(`@sc_npm_edge_${i}_${part} = internal constant [${bytes.length + 1} x i8] c"${llBytes(bytes)}"`);
+          out.push(
+            `@sc_npm_edge_${i}_${part} = internal constant [${bytes.length + 1} x i8] c"${llBytes(bytes)}"`,
+          );
         }
       });
       if (embedded.edges.length > 0) {
-        const edgeRows = embedded.edges.map((edge, i) =>
-          `%ScrIslandEdge { ptr @sc_npm_edge_${i}_from, ptr @sc_npm_edge_${i}_spec, ` +
-          `ptr @sc_npm_edge_${i}_to, i32 ${edgeKind[edge.kind]} }`,
+        const edgeRows = embedded.edges.map(
+          (edge, i) =>
+            `%ScrIslandEdge { ptr @sc_npm_edge_${i}_from, ptr @sc_npm_edge_${i}_spec, ` +
+            `ptr @sc_npm_edge_${i}_to, i32 ${edgeKind[edge.kind]} }`,
         );
-        out.push(`@sc_npm_edges = internal constant [${edgeRows.length} x %ScrIslandEdge] [ ${edgeRows.join(", ")} ]`);
+        out.push(
+          `@sc_npm_edges = internal constant [${edgeRows.length} x %ScrIslandEdge] [ ${edgeRows.join(", ")} ]`,
+        );
       }
       out.push(``);
     }
@@ -1418,7 +1669,9 @@ export class LlEmitter {
       const ty = this.llType(g.type);
       const zero = ty === "double" ? f64Lit(0) : ty === "ptr" ? "null" : "false";
       const debug = this.debug?.global(g);
-      out.push(`@${mangleGlobal(g.id)} = internal ${tl}global ${ty} ${zero}${debug ? `, !dbg ${debug}` : ""} ; ${g.name}`);
+      out.push(
+        `@${mangleGlobal(g.id)} = internal ${tl}global ${ty} ${zero}${debug ? `, !dbg ${debug}` : ""} ; ${g.name}`,
+      );
     }
     if (globals.length > 0) out.push(``);
     for (const line of helpers) out.push(line);
@@ -1441,7 +1694,10 @@ export class LlEmitter {
     // The exception epilogue is emitted when the entry may throw.
     const stamps: string[] = [...errorViews];
     for (const iv of this.errorIntervals) {
-      const fields: [number, number][] = [[0, iv.pre], [1, iv.post]];
+      const fields: [number, number][] = [
+        [0, iv.pre],
+        [1, iv.post],
+      ];
       for (const [field, value] of fields) {
         stamps.push(
           `  store ${this.sizeType} ${value}, ptr getelementptr inbounds ([${RUNTIME_ERROR_CLASSES.size} x %ScrVt], ptr @scr_error_vts, i64 0, i64 ${iv.kind}, i32 ${field})${field === 1 ? ` ; ${iv.lib}` : ""}`,
@@ -1483,7 +1739,11 @@ export class LlEmitter {
       // order-free — the scr_error_set_traced precedent). Only the
       // printer emits here (nothing else declares it); scr_exc_pending
       // and the loop entry points rode the Set before the flush.
-      out.push(`declare void @scr_exc_print_uncaught()`, `declare zeroext i1 @scr_exc_handle_uncaught(i1 zeroext)`, ``);
+      out.push(
+        `declare void @scr_exc_print_uncaught()`,
+        `declare zeroext i1 @scr_exc_handle_uncaught(i1 zeroext)`,
+        ``,
+      );
     }
     if (this.mod.lib !== undefined) {
       // LIBRARY mode: no @main — the profile-declared external
@@ -1508,7 +1768,11 @@ export class LlEmitter {
       // this line is emitted (native-toolchain.ts gates on the same predicate).
       ...(usesEvents ? [`  call void @scr_events_install()`] : []),
       ...(usesChildProcess ? [`  call void @scr_child_dyn_install()`] : []),
-      ...(childStreamBoxes ? [`  call void @scr_child_dyn_streams_install(ptr @scr_stream_child_ops, ptr @${childStreamBoxes[0]}, ptr @${childStreamBoxes[1]})`] : []),
+      ...(childStreamBoxes
+        ? [
+            `  call void @scr_child_dyn_streams_install(ptr @scr_stream_child_ops, ptr @${childStreamBoxes[0]}, ptr @${childStreamBoxes[1]})`,
+          ]
+        : []),
       // fs.watch programs fill the loop's watch hooks the same way —
       // scr_watch.c links only when this line is emitted.
       ...(usesFsWatch ? [`  call void @scr_watch_install()`] : []),
@@ -1623,8 +1887,8 @@ export class LlEmitter {
       ...(usesNodeTest
         ? [`  %test_exit = call i32 @scr_test_exit_code()`, `  ret i32 %test_exit`]
         : usesIsland
-        ? [`  %island_exit = call i32 @scr_island_exit_code()`, `  ret i32 %island_exit`]
-        : [`  %native_exit = call i32 @scr_exit_code_hint_get()`, `  ret i32 %native_exit`]),
+          ? [`  %island_exit = call i32 @scr_island_exit_code()`, `  ret i32 %island_exit`]
+          : [`  %native_exit = call i32 @scr_exit_code_hint_get()`, `  ret i32 %native_exit`]),
       `}`,
       ``,
       // sanitize_address is inert under the plain pipeline; the sanitized
@@ -1660,11 +1924,14 @@ export class LlEmitter {
     // live as internal constants, one per entry.
     const symConst = (sym: string): string => `@sc_lib_sym_${sym}`;
     const emitSymConst = (sym: string): void => {
-      out.push(`${symConst(sym)} = internal constant [${Buffer.byteLength(sym, "utf8") + 1} x i8] c"${llStrBytes(sym)}"`);
+      out.push(
+        `${symConst(sym)} = internal constant [${Buffer.byteLength(sym, "utf8") + 1} x i8] c"${llStrBytes(sym)}"`,
+      );
     };
     emitSymConst(lib.initSymbol);
     emitSymConst(lib.sinkRegisterSymbol);
-    if (lib.callbackRegisterSymbol !== null && lib.callbackRegisterSymbol !== undefined) emitSymConst(lib.callbackRegisterSymbol);
+    if (lib.callbackRegisterSymbol !== null && lib.callbackRegisterSymbol !== undefined)
+      emitSymConst(lib.callbackRegisterSymbol);
     if (lib.resultResetSymbol !== null) emitSymConst(lib.resultResetSymbol);
     if (lib.collectSymbol !== null) emitSymConst(lib.collectSymbol);
     for (const e of lib.exports) emitSymConst(e.symbol);
@@ -1677,13 +1944,15 @@ export class LlEmitter {
         `  call void @scr_library_entry(i1 zeroext false, ptr ${symConst("scriptc_alloc")})`,
         `  %p = call ptr @malloc(i32 %size)`,
         `  ret ptr %p`,
-        `}`, ``,
+        `}`,
+        ``,
         `define void @scriptc_free(ptr %p) ${FN_ATTRS} {`,
         `entry:`,
         `  call void @scr_library_entry(i1 zeroext false, ptr ${symConst("scriptc_free")})`,
         `  call void @free(ptr %p)`,
         `  ret void`,
-        `}`, ``,
+        `}`,
+        ``,
       );
     }
     // The runtime detected-trap overlay table (scr_runtime.h declares it,
@@ -1699,7 +1968,9 @@ export class LlEmitter {
           return;
         }
         const sym = `@sc_lib_ovl_${i}_${name}`;
-        out.push(`${sym} = internal constant [${Buffer.byteLength(text, "utf8") + 1} x i8] c"${llStrBytes(text)}"`);
+        out.push(
+          `${sym} = internal constant [${Buffer.byteLength(text, "utf8") + 1} x i8] c"${llStrBytes(text)}"`,
+        );
         ovlCells.push(`ptr ${sym}`);
       };
       cell("code", o.code);
@@ -1812,14 +2083,19 @@ export class LlEmitter {
     }
     for (const e of lib.exports) {
       const params: string[] = [];
-      const body: string[] = [`  call void @scr_library_entry(i1 zeroext ${autoReset ? "true" : "false"}, ptr ${symConst(e.symbol)})`];
+      const body: string[] = [
+        `  call void @scr_library_entry(i1 zeroext ${autoReset ? "true" : "false"}, ptr ${symConst(e.symbol)})`,
+      ];
       const args: string[] = [];
       if (e.inboundBytesTrap !== undefined) {
         // The bytes-in helper's trap message: the compiler-assembled
         // structured trap-teaching form (0x01 text 0x1F SC4012 0x1F symbol
         // [0x1F remediation]) consumed by the runtime sink.
         const trapBytes = Buffer.byteLength(e.inboundBytesTrap, "utf8");
-        out.push(`@sc_lib_bytes_trap_${e.symbol} = internal constant [${trapBytes + 1} x i8] c"${llStrBytes(e.inboundBytesTrap)}"`, ``);
+        out.push(
+          `@sc_lib_bytes_trap_${e.symbol} = internal constant [${trapBytes + 1} x i8] c"${llStrBytes(e.inboundBytesTrap)}"`,
+          ``,
+        );
       }
       if (e.inboundIntTrap !== undefined) {
         // The i64/u64-in helpers' host-contract trap message (ask 4): an
@@ -1827,7 +2103,10 @@ export class LlEmitter {
         // assembled structured form, same SC4012 code, same
         // emission-invariance argument as the bytes trap.
         const trapBytes = Buffer.byteLength(e.inboundIntTrap, "utf8");
-        out.push(`@sc_lib_int_trap_${e.symbol} = internal constant [${trapBytes + 1} x i8] c"${llStrBytes(e.inboundIntTrap)}"`, ``);
+        out.push(
+          `@sc_lib_int_trap_${e.symbol} = internal constant [${trapBytes + 1} x i8] c"${llStrBytes(e.inboundIntTrap)}"`,
+          ``,
+        );
       }
       e.params.forEach((cls, i) => {
         switch (cls) {
@@ -1860,22 +2139,30 @@ export class LlEmitter {
             // exactly or delivers the host-contract trap (past ±(2^53−1)
             // the value cannot ride f64 without silent rounding).
             params.push(`i64 %a${i}`);
-            body.push(`  %c${i} = call double @scr_library_i64_in(i64 %a${i}, ptr @sc_lib_int_trap_${e.symbol})`);
+            body.push(
+              `  %c${i} = call double @scr_library_i64_in(i64 %a${i}, ptr @sc_lib_int_trap_${e.symbol})`,
+            );
             args.push(`double %c${i}`);
             break;
           case "u64":
             params.push(`i64 %a${i}`);
-            body.push(`  %c${i} = call double @scr_library_u64_in(i64 %a${i}, ptr @sc_lib_int_trap_${e.symbol})`);
+            body.push(
+              `  %c${i} = call double @scr_library_u64_in(i64 %a${i}, ptr @sc_lib_int_trap_${e.symbol})`,
+            );
             args.push(`double %c${i}`);
             break;
           case "string":
             params.push(`ptr %a${i}_ptr`, `${this.sizeType} %a${i}_len`);
-            body.push(`  %c${i} = call ptr @scr_library_str_in(ptr %a${i}_ptr, ${this.sizeType} %a${i}_len)`);
+            body.push(
+              `  %c${i} = call ptr @scr_library_str_in(ptr %a${i}_ptr, ${this.sizeType} %a${i}_len)`,
+            );
             args.push(`ptr %c${i}`);
             break;
           case "bytes":
             params.push(`ptr %a${i}_ptr`, `${this.sizeType} %a${i}_len`);
-            body.push(`  %c${i} = call ptr @scr_library_bytes_in(ptr %a${i}_ptr, ${this.sizeType} %a${i}_len, ptr @sc_lib_bytes_trap_${e.symbol})`);
+            body.push(
+              `  %c${i} = call ptr @scr_library_bytes_in(ptr %a${i}_ptr, ${this.sizeType} %a${i}_len, ptr @sc_lib_bytes_trap_${e.symbol})`,
+            );
             args.push(`ptr %c${i}`);
             break;
         }
@@ -1888,7 +2175,11 @@ export class LlEmitter {
       let retType = "void";
       switch (e.returns) {
         case "void":
-          body.push(`  call void ${target}(${callArgs})`, `  call void @scr_library_check_exc()`, `  ret void`);
+          body.push(
+            `  call void ${target}(${callArgs})`,
+            `  call void @scr_library_check_exc()`,
+            `  ret void`,
+          );
           break;
         case "f64":
           retType = "double";
@@ -2026,7 +2317,8 @@ export class LlEmitter {
       // Async/generator functions as values enter through their spawn
       // wrapper: the call answers the promise / generator object (+1),
       // never the inner return type.
-      const ret = fn.async === true || fn.generator !== undefined ? "ptr" : this.llType(fn.returnType);
+      const ret =
+        fn.async === true || fn.generator !== undefined ? "ptr" : this.llType(fn.returnType);
       const call = `call ${ret} @${this.callTarget(name)}(${args})`;
       out.push(
         `define internal ${ret} @${mangleWrapper(name)}(ptr %env${params.length ? ", " + params.join(", ") : ""}) ${FN_ATTRS} { ; ${name} as a value`,
@@ -2273,16 +2565,8 @@ export class LlEmitter {
     const out: string[] = [];
     for (const fn of this.mod.functions) {
       if (fn.generator === undefined) continue;
-      const {
-        definitions,
-        pack,
-        lifted,
-        fieldTys,
-        ret,
-        tr,
-        spawnParams,
-        argPackLines,
-      } = this.emitArgPackAndTrampolinePrologue(fn);
+      const { definitions, pack, lifted, fieldTys, ret, tr, spawnParams, argPackLines } =
+        this.emitArgPackAndTrampolinePrologue(fn);
       for (const line of definitions) out.push(line);
       this.declare(`declare zeroext i1 @scr_exc_genret_pending()`);
       this.declare(`declare void @scr_exc_clear()`);
@@ -2300,45 +2584,50 @@ export class LlEmitter {
       if (this.wasi) {
         tr.push(`  ret void`, `}`, ``);
       } else {
-      tr.push(
-        `  %g = call ptr @scr_gen_of_fiber(ptr %self)`,
-        `  %pend = call zeroext i1 @scr_exc_pending()`,
-        `  br i1 %pend, label %thrown, label %clean`,
-        `clean:`,
-      );
-      switch (ret.kind) {
-        case "void":
-          tr.push(`  br label %done ; void body: the done value is undefined (NONE)`);
-          break;
-        case "f64":
-        case "date":
-          this.declare(`declare void @scr_gen_out_f64(ptr, double)`);
-          tr.push(`  call void @scr_gen_out_f64(ptr %g, double %r)`, `  br label %done`);
-          break;
-        case "bool":
-          this.declare(`declare void @scr_gen_out_bool(ptr, i1 zeroext)`);
-          tr.push(`  call void @scr_gen_out_bool(ptr %g, i1 %r)`, `  br label %done`);
-          break;
-        default: {
-          const v = vAdapters(this.shapeHost, ret);
-          this.declare(`declare void @scr_gen_out_ref(ptr, ptr, ptr)`);
-          tr.push(`  call void @scr_gen_out_ref(ptr %g, ptr %r, ptr ${v.release})`, `  br label %done`);
+        tr.push(
+          `  %g = call ptr @scr_gen_of_fiber(ptr %self)`,
+          `  %pend = call zeroext i1 @scr_exc_pending()`,
+          `  br i1 %pend, label %thrown, label %clean`,
+          `clean:`,
+        );
+        switch (ret.kind) {
+          case "void":
+            tr.push(`  br label %done ; void body: the done value is undefined (NONE)`);
+            break;
+          case "f64":
+          case "date":
+            this.declare(`declare void @scr_gen_out_f64(ptr, double)`);
+            tr.push(`  call void @scr_gen_out_f64(ptr %g, double %r)`, `  br label %done`);
+            break;
+          case "bool":
+            this.declare(`declare void @scr_gen_out_bool(ptr, i1 zeroext)`);
+            tr.push(`  call void @scr_gen_out_bool(ptr %g, i1 %r)`, `  br label %done`);
+            break;
+          default: {
+            const v = vAdapters(this.shapeHost, ret);
+            this.declare(`declare void @scr_gen_out_ref(ptr, ptr, ptr)`);
+            tr.push(
+              `  call void @scr_gen_out_ref(ptr %g, ptr %r, ptr ${v.release})`,
+              `  br label %done`,
+            );
+          }
         }
-      }
-      tr.push(
-        `thrown:`,
-        `  %genret = call zeroext i1 @scr_exc_genret_pending()`,
-        `  br i1 %genret, label %promote, label %dropdummy`,
-        `promote:`,
-        `  call void @scr_exc_clear()`,
-        `  call void @scr_gen_ret_to_out(ptr %g)`,
-        `  br label %dropdummy`,
-        `dropdummy:`,
-      );
-      if (ret.kind !== "void" && isRefCounted(ret)) {
-        tr.push(`  call void ${releaseSym(this.shapeHost, ret)}(ptr %r) ; unwound: the never-read dummy`);
-      }
-      tr.push(`  br label %done`, `done:`, `  ret void`, `}`, ``);
+        tr.push(
+          `thrown:`,
+          `  %genret = call zeroext i1 @scr_exc_genret_pending()`,
+          `  br i1 %genret, label %promote, label %dropdummy`,
+          `promote:`,
+          `  call void @scr_exc_clear()`,
+          `  call void @scr_gen_ret_to_out(ptr %g)`,
+          `  br label %dropdummy`,
+          `dropdummy:`,
+        );
+        if (ret.kind !== "void" && isRefCounted(ret)) {
+          tr.push(
+            `  call void ${releaseSym(this.shapeHost, ret)}(ptr %r) ; unwound: the never-read dummy`,
+          );
+        }
+        tr.push(`  br label %done`, `done:`, `  ret void`, `}`, ``);
       }
       for (const line of tr) out.push(line);
 
@@ -2453,7 +2742,9 @@ export class LlEmitter {
   unitInstanceRef(unionId: string, tag: number): string {
     const arm = this.unionsById.get(unionId)?.arms[tag];
     if (!arm || !isUnitType(arm)) {
-      throw new InternalCompilerError(`llvm emitter bug: unit instance for non-unit arm ${tag} of ${unionId}`);
+      throw new InternalCompilerError(
+        `llvm emitter bug: unit instance for non-unit arm ${tag} of ${unionId}`,
+      );
     }
     const key = `${unionId}:${tag}`;
     let sym = this.unitInstances.get(key);
@@ -2502,7 +2793,9 @@ export class LlEmitter {
         return;
       }
     }
-    throw new InternalCompilerError(`llvm emitter bug: moved temp ${v.name} not found in any frame`);
+    throw new InternalCompilerError(
+      `llvm emitter bug: moved temp ${v.name} not found in any frame`,
+    );
   }
 
   /** The retained (+1) read of a refcounted value — type-directed through
@@ -2607,9 +2900,14 @@ export class LlEmitter {
       terminator = `br label %${this.currentWasiCoro.finalLabel}`;
     } else {
       const t = this.currentReturnType;
-      terminator = t.kind === "void" ? "ret void"
-        : t.kind === "f64" || t.kind === "date" ? `ret double ${f64Lit(0)}`
-        : t.kind === "bool" ? "ret i1 false" : "ret ptr null";
+      terminator =
+        t.kind === "void"
+          ? "ret void"
+          : t.kind === "f64" || t.kind === "date"
+            ? `ret double ${f64Lit(0)}`
+            : t.kind === "bool"
+              ? "ret i1 false"
+              : "ret ptr null";
     }
     // Copy the entries now: later declarations extend these lexical scopes.
     // Release order and the handler are part of the shared block's identity.
@@ -2675,11 +2973,20 @@ export class LlEmitter {
       // printer's "name: message" for Error instances).
       const rc = vAdapters(this.shapeHost, t);
       this.declare(`declare void @scr_throw_obj(ptr, ptr, ptr, ptr)`);
-      B.line(`call void @scr_throw_obj(ptr ${v.name}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${traceArg(this.shapeHost, t)})`);
-    } else if (t.kind === "symbol" || t.kind === "bigint" || t.kind === "func" || t.kind === "classval") {
+      B.line(
+        `call void @scr_throw_obj(ptr ${v.name}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${traceArg(this.shapeHost, t)})`,
+      );
+    } else if (
+      t.kind === "symbol" ||
+      t.kind === "bigint" ||
+      t.kind === "func" ||
+      t.kind === "classval"
+    ) {
       const rc = vAdapters(this.shapeHost, t);
       this.declare(`declare void @scr_throw_primitive_ref(ptr, ptr, ptr, ptr)`);
-      B.line(`call void @scr_throw_primitive_ref(ptr ${v.name}, ptr ${rc.retain}, ptr ${rc.release}, ptr null)`);
+      B.line(
+        `call void @scr_throw_primitive_ref(ptr ${v.name}, ptr ${rc.retain}, ptr ${rc.release}, ptr null)`,
+      );
     } else if (t.kind === "dyn") {
       this.declare(`declare void @scr_dyn_throw(ptr)`);
       B.line(`call void @scr_dyn_throw(ptr ${v.name})`);
@@ -2690,11 +2997,15 @@ export class LlEmitter {
       this.declare(`declare void @scr_throw_ref_classified(ptr, ptr, ptr, ptr, i1 zeroext)`);
       const object = B.tmp();
       B.line(`${object} = call zeroext i1 @${test}(ptr ${v.name})`);
-      B.line(`call void @scr_throw_ref_classified(ptr ${v.name}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${traceArg(this.shapeHost, t)}, i1 zeroext ${object})`);
+      B.line(
+        `call void @scr_throw_ref_classified(ptr ${v.name}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${traceArg(this.shapeHost, t)}, i1 zeroext ${object})`,
+      );
     } else {
       const rc = vAdapters(this.shapeHost, t);
       this.declare(`declare void @scr_throw_ref(ptr, ptr, ptr, ptr)`);
-      B.line(`call void @scr_throw_ref(ptr ${v.name}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${traceArg(this.shapeHost, t)})`);
+      B.line(
+        `call void @scr_throw_ref(ptr ${v.name}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${traceArg(this.shapeHost, t)})`,
+      );
     }
   }
 
@@ -2708,7 +3019,10 @@ export class LlEmitter {
       // The ARM value's ToBoolean: an inline tag switch (the runtime ABI’s
       // per-union interned helper, emitted at the use site instead).
       const def = this.unionsById.get(v.type.unionId);
-      if (!def) throw new InternalCompilerError(`llvm emitter bug: truthiness of unknown union ${v.type.unionId}`);
+      if (!def)
+        throw new InternalCompilerError(
+          `llvm emitter bug: truthiness of unknown union ${v.type.unionId}`,
+        );
       const slot = B.slot();
       B.entryAllocas.push(`${slot} = alloca i1`);
       const join = B.newLabel("ut.j");
@@ -2774,14 +3088,39 @@ export class LlEmitter {
       // for stdin. They remain JavaScript objects in boolean contexts.
       case "procStream":
         return "true";
-      case "array": case "record": case "object": case "classval": case "func":
-      case "map": case "set": case "symbol": case "regex": case "promise": case "bytes":
-      case "url": case "searchParams": case "stats": case "fileHandle": case "spawnRes":
-      case "child": case "childStream": case "childWriter": case "generator": case "fsWatcher":
-      case "cryptoHash": case "cryptoHmac":
-      case "netSocket": case "netServer": case "httpReq": case "httpRes":
-      case "httpClientReq": case "http2Session": case "http2Stream":
-      case "dgramSocket": case "secureCtx": case "testCtx": {
+      case "array":
+      case "record":
+      case "object":
+      case "classval":
+      case "func":
+      case "map":
+      case "set":
+      case "symbol":
+      case "regex":
+      case "promise":
+      case "bytes":
+      case "url":
+      case "searchParams":
+      case "stats":
+      case "fileHandle":
+      case "spawnRes":
+      case "child":
+      case "childStream":
+      case "childWriter":
+      case "generator":
+      case "fsWatcher":
+      case "cryptoHash":
+      case "cryptoHmac":
+      case "netSocket":
+      case "netServer":
+      case "httpReq":
+      case "httpRes":
+      case "httpClientReq":
+      case "http2Session":
+      case "http2Stream":
+      case "dgramSocket":
+      case "secureCtx":
+      case "testCtx": {
         if (unionArm) return "true";
         const truthy = B.tmp();
         B.line(`${truthy} = icmp ne ptr ${valueName}, null`);
@@ -2831,7 +3170,12 @@ export class LlEmitter {
    * body must TERMINATE its block (the callers branch to a join). The
    * default block is the runtime ABI’s invalid-tag abort. Shared field
    * reads can group equivalent storage prefixes and emit one representative. */
-  unionTagSwitch(uName: string, def: IrUnionDef, arm: (armType: IrType, tag: number) => void, fieldGroups?: number[][]): void {
+  unionTagSwitch(
+    uName: string,
+    def: IrUnionDef,
+    arm: (armType: IrType, tag: number) => void,
+    fieldGroups?: number[][],
+  ): void {
     const B = this.B;
     const tag = this.unionTag(uName);
     const bad = B.newLabel("u.bad");
@@ -2840,7 +3184,8 @@ export class LlEmitter {
       for (const group of fieldGroups) {
         const label = B.newLabel("u.a");
         for (const member of group) {
-          if (member === undefined) throw new InternalCompilerError("llvm emitter bug: missing union field tag");
+          if (member === undefined)
+            throw new InternalCompilerError("llvm emitter bug: missing union field tag");
           labels[member] = label;
         }
       }
@@ -2949,7 +3294,9 @@ export class LlEmitter {
     const vt = B.tmp();
     const prep = B.tmp();
     const pre = B.tmp();
-    B.line(`${vtp} = getelementptr inbounds %${classStructSym(staticClassName)}, ptr ${objName}, i64 0, i32 1`);
+    B.line(
+      `${vtp} = getelementptr inbounds %${classStructSym(staticClassName)}, ptr ${objName}, i64 0, i32 1`,
+    );
     B.line(`${vt} = load ptr, ptr ${vtp}`);
     B.line(`${prep} = getelementptr inbounds %ScrVt, ptr ${vt}, i64 0, i32 0`);
     B.line(`${pre} = load ${this.sizeType}, ptr ${prep}`);
@@ -2971,7 +3318,8 @@ export class LlEmitter {
 
   recordShape(shapeId: string): IrRecordShape {
     const shape = this.recordsById.get(shapeId);
-    if (!shape) throw new InternalCompilerError(`llvm emitter bug: unknown record shape ${shapeId}`);
+    if (!shape)
+      throw new InternalCompilerError(`llvm emitter bug: unknown record shape ${shapeId}`);
     return shape;
   }
 
@@ -2989,7 +3337,8 @@ export class LlEmitter {
       if (arm.kind === "record") {
         const shape = this.recordShape(arm.shapeId);
         const index = shape.fields.findIndex((entry) => entry.name === field);
-        if (index < 0) throw new InternalCompilerError(`llvm emitter bug: missing union field ${field}`);
+        if (index < 0)
+          throw new InternalCompilerError(`llvm emitter bug: missing union field ${field}`);
         layout = "record:";
         for (let i = 0; i <= index; i++) layout += `${llFieldType(shape.fields[i]!.type)};`;
       }
@@ -3006,7 +3355,10 @@ export class LlEmitter {
   recordFieldPtr(objName: string, shapeId: string, field: string): { ptr: string; type: IrType } {
     const shape = this.recordShape(shapeId);
     const idx = shape.fields.findIndex((f) => f.name === field);
-    if (idx < 0) throw new InternalCompilerError(`llvm emitter bug: unknown field ${field} on shape ${shapeId}`);
+    if (idx < 0)
+      throw new InternalCompilerError(
+        `llvm emitter bug: unknown field ${field} on shape ${shapeId}`,
+      );
     const p = this.B.tmp();
     this.B.line(
       `${p} = getelementptr inbounds %${mangleRecordStruct(shapeId)}, ptr ${objName}, i64 0, i32 ${idx + 1}`,
@@ -3017,7 +3369,8 @@ export class LlEmitter {
   /** The overflow map's slot pointer on an index-signature shape. */
   recordOvfPtr(objName: string, shapeId: string): string {
     const shape = this.recordShape(shapeId);
-    if (!shape.indexValue) throw new InternalCompilerError(`llvm emitter bug: shape ${shapeId} has no overflow map`);
+    if (!shape.indexValue)
+      throw new InternalCompilerError(`llvm emitter bug: shape ${shapeId} has no overflow map`);
     const p = this.B.tmp();
     const v = this.B.tmp();
     this.B.line(
@@ -3056,7 +3409,12 @@ export class LlEmitter {
 
   /** A binding's storage: a module global, a plain local slot, or a boxed
    * local (the slot holds the capture BOX; access goes through it). */
-  binding(id: string): { kind: "global" | "local" | "boxed"; slot: string; type: IrType; local?: IrLocal } {
+  binding(id: string): {
+    kind: "global" | "local" | "boxed";
+    slot: string;
+    type: IrType;
+    local?: IrLocal;
+  } {
     const local = this.currentLocals.get(id);
     if (local) {
       return {
@@ -3075,7 +3433,9 @@ export class LlEmitter {
     const debug = this.debug?.local(local, this.debugScope, arg, captured);
     if (!debug) return;
     this.declare("declare void @llvm.dbg.declare(metadata, metadata, metadata)");
-    this.B.entryAllocas.push(`call void @llvm.dbg.declare(metadata ptr ${slot}, metadata ${debug.variable}, metadata ${debug.expression}), !dbg ${debug.location}`);
+    this.B.entryAllocas.push(
+      `call void @llvm.dbg.declare(metadata ptr ${slot}, metadata ${debug.variable}, metadata ${debug.expression}), !dbg ${debug.location}`,
+    );
   }
 
   /** Loads a boxed binding's box pointer out of its slot. */
@@ -3191,7 +3551,9 @@ export class LlEmitter {
     const cell = B.tmp();
     B.line(`${cell} = inttoptr i64 ${slotv} to ptr`);
     const accTy = acc === "bool" ? "i1" : "double";
-    this.declare(`declare ${acc === "bool" ? "zeroext i1" : accTy} @scr_arr_get_${acc}(ptr, double)`);
+    this.declare(
+      `declare ${acc === "bool" ? "zeroext i1" : accTy} @scr_arr_get_${acc}(ptr, double)`,
+    );
     const v = B.tmp();
     B.line(`${v} = call ${accTy} @scr_arr_get_${acc}(ptr ${cell}, double ${f64Lit(0)})`);
     return v;
@@ -3199,7 +3561,13 @@ export class LlEmitter {
 
   /** Declaration stores initialize an empty TDZ box. Later stores check
    * it after the RHS and update scalar cells in place. References move in. */
-  writeBindingBox(box: string, local: IrLocal, value: string, initializes = false, borrowed = false): void {
+  writeBindingBox(
+    box: string,
+    local: IrLocal,
+    value: string,
+    initializes = false,
+    borrowed = false,
+  ): void {
     if (local.tdz) {
       const first = initializes || !local.mutable;
       const slotv = first ? null : this.checkTdz(box, local.name);
@@ -3210,13 +3578,21 @@ export class LlEmitter {
           const cell = this.B.tmp();
           this.B.line(`${cell} = inttoptr i64 ${slotv!} to ptr`);
           const ty = acc === "bool" ? "i1" : "double";
-          this.declare(`declare void @scr_arr_set_${acc}(ptr, double, ${acc === "bool" ? "i1 zeroext" : ty})`);
-          this.B.line(`call void @scr_arr_set_${acc}(ptr ${cell}, double ${f64Lit(0)}, ${ty} ${value})`);
+          this.declare(
+            `declare void @scr_arr_set_${acc}(ptr, double, ${acc === "bool" ? "i1 zeroext" : ty})`,
+          );
+          this.B.line(
+            `call void @scr_arr_set_${acc}(ptr ${cell}, double ${f64Lit(0)}, ${ty} ${value})`,
+          );
         }
         return;
       }
     }
-    this.boxSet(box, local.type, borrowed && isRefCounted(local.type) ? this.retainValue(value, local.type) : value);
+    this.boxSet(
+      box,
+      local.type,
+      borrowed && isRefCounted(local.type) ? this.retainValue(value, local.type) : value,
+    );
   }
 
   // ── functions ───────────────────────────────────────────────────────────
@@ -3238,7 +3614,8 @@ export class LlEmitter {
    * LLVM keeps all live locals in the coroutine frame. */
   emitWasiSuspend(promise: string | null): void {
     const coro = this.currentWasiCoro;
-    if (coro === null) throw new InternalCompilerError("llvm emitter bug: wasm suspension outside async body");
+    if (coro === null)
+      throw new InternalCompilerError("llvm emitter bug: wasm suspension outside async body");
     if (promise === null) {
       this.declare(`declare void @scr_wasi_await_hop_prepare(ptr)`);
       this.B.line(`call void @scr_wasi_await_hop_prepare(ptr ${coro.self})`);
@@ -3253,7 +3630,8 @@ export class LlEmitter {
    * continuation (used by module awaits, which skip the hop when settled). */
   emitWasiSuspendPrepared(): void {
     const coro = this.currentWasiCoro;
-    if (coro === null) throw new InternalCompilerError("llvm emitter bug: wasm suspension outside async body");
+    if (coro === null)
+      throw new InternalCompilerError("llvm emitter bug: wasm suspension outside async body");
     const save = this.B.tmp();
     const state = this.B.tmp();
     const resume = this.B.newLabel("coro.resume");
@@ -3268,7 +3646,8 @@ export class LlEmitter {
   /** Move a clean async return value into the current fiber's promise. */
   private emitWasiFulfill(v: LlValue | null): void {
     const coro = this.currentWasiCoro;
-    if (coro === null) throw new InternalCompilerError("llvm emitter bug: wasm fulfillment outside async body");
+    if (coro === null)
+      throw new InternalCompilerError("llvm emitter bug: wasm fulfillment outside async body");
     const ret = this.currentReturnType;
     if (coro.kind === "generator") {
       this.declare(`declare ptr @scr_gen_of_fiber(ptr)`);
@@ -3288,7 +3667,9 @@ export class LlEmitter {
           return;
         default:
           this.declare(`declare void @scr_gen_out_ref(ptr, ptr, ptr)`);
-          this.B.line(`call void @scr_gen_out_ref(ptr ${gen}, ptr ${v!.name}, ptr ${vAdapters(this.shapeHost, ret).release})`);
+          this.B.line(
+            `call void @scr_gen_out_ref(ptr ${gen}, ptr ${v!.name}, ptr ${vAdapters(this.shapeHost, ret).release})`,
+          );
           return;
       }
     }
@@ -3344,16 +3725,31 @@ export class LlEmitter {
     this.stableCallBindings = this.callLifetimes.bindings.get(fn.name) ?? new Set();
     const borrowedParameterIndexes = this.callLifetimes.borrowed.get(fn.name);
     if (borrowedParameterIndexes) {
-      for (const index of borrowedParameterIndexes) this.borrowedParameters.add(fn.params[index]!.localId);
+      for (const index of borrowedParameterIndexes)
+        this.borrowedParameters.add(fn.params[index]!.localId);
     }
-    this.captureIds = new Set([...(fn.captures ?? []), ...(fn.classCaptures ?? [])].map((c) => c.localId));
+    this.captureIds = new Set(
+      [...(fn.captures ?? []), ...(fn.classCaptures ?? [])].map((c) => c.localId),
+    );
     this.integerLoopBindings.clear();
     this.countedLoopsEnabled = this.debug === null && !fn.async && !fn.generator;
     this.integerViews.clear();
     this.fieldPointerTags.clear();
     this.integerArrayBindings.clear();
-    this.localArrayReads = findLocalArrayReads(fn, this.fnByName, this.unionsById, this.referenceEffects.functions, this.callLifetimes, this.optionalArrayReads);
-    this.callArrayReads = findCallArrayReads(fn, this.optionalArrayReads, this.referenceEffects.functions, this.callLifetimes);
+    this.localArrayReads = findLocalArrayReads(
+      fn,
+      this.fnByName,
+      this.unionsById,
+      this.referenceEffects.functions,
+      this.callLifetimes,
+      this.optionalArrayReads,
+    );
+    this.callArrayReads = findCallArrayReads(
+      fn,
+      this.optionalArrayReads,
+      this.referenceEffects.functions,
+      this.callLifetimes,
+    );
     this.mapReadLifetimes = findMapReadLifetimes(fn, this.unionsById, this.callLifetimes);
     this.localStackUnions = findLocalStackUnions(fn, this.callLifetimes, this.unionsById);
     this.integerRanges = analyzeIntegerRanges(numericFn);
@@ -3404,7 +3800,9 @@ export class LlEmitter {
     if (this.debug === null) {
       for (const id of findIntegerViews(numericFn)) {
         const slot = B.slot();
-        B.entryAllocas.push(`${slot} = alloca i32 ; integer view ${this.numericLocals.get(id)!.name}`);
+        B.entryAllocas.push(
+          `${slot} = alloca i32 ; integer view ${this.numericLocals.get(id)!.name}`,
+        );
         this.integerViews.set(id, slot);
       }
     }
@@ -3424,7 +3822,12 @@ export class LlEmitter {
           ? "ptr"
           : this.llType(local.type);
       B.entryAllocas.push(`%${mangleLocal(local.id)} = alloca ${slotTy} ; ${local.name}`);
-      this.emitDebugLocal(local, `%${mangleLocal(local.id)}`, fn.params.findIndex((p) => p.localId === local.id) + 1, this.captureIds.has(local.id));
+      this.emitDebugLocal(
+        local,
+        `%${mangleLocal(local.id)}`,
+        fn.params.findIndex((p) => p.localId === local.id) + 1,
+        this.captureIds.has(local.id),
+      );
       // Refcounted/boxed locals start NULL (the C prologue's `= NULL`):
       // scope-exit releases run whether or not an assign ever did.
       if (paramIds.has(local.id) || this.captureIds.has(local.id)) continue;
@@ -3445,13 +3848,16 @@ export class LlEmitter {
     });
     (fn.classCaptures ?? []).forEach((c) => {
       const self = fn.params[0]!;
-      if (self.type.kind !== "object") throw new InternalCompilerError("class captures require an instance receiver");
+      if (self.type.kind !== "object")
+        throw new InternalCompilerError("class captures require an instance receiver");
       const classSlot = B.tmp();
       const classValue = B.tmp();
       const caps = B.tmp();
       const slot = B.tmp();
       const box = B.tmp();
-      B.line(`${classSlot} = getelementptr inbounds %${mangleClassStruct(self.type.className)}, ptr %p_${mangleLocal(self.localId)}, i64 0, i32 ${classEnvironmentIndex(this.classMeta.get(self.type.className)!)}`);
+      B.line(
+        `${classSlot} = getelementptr inbounds %${mangleClassStruct(self.type.className)}, ptr %p_${mangleLocal(self.localId)}, i64 0, i32 ${classEnvironmentIndex(this.classMeta.get(self.type.className)!)}`,
+      );
       B.line(`${classValue} = load ptr, ptr ${classSlot}`);
       B.line(`${caps} = getelementptr inbounds %ScrClassObj, ptr ${classValue}, i64 1`);
       B.line(`${slot} = getelementptr inbounds ptr, ptr ${caps}, ${this.sizeType} ${c.slot}`);
@@ -3584,8 +3990,15 @@ export class LlEmitter {
     if (value.kind === "strLit") return true;
     if (value.kind !== "varRef") return false;
     const binding = this.binding(value.localId);
-    return binding.kind === "local" && binding.local !== undefined &&
-      (!binding.local.mutable || this.stableCallBindings.has(value.localId) || this.borrowedParameters.has(value.localId)) && !binding.local.boxed && !binding.local.tdz;
+    return (
+      binding.kind === "local" &&
+      binding.local !== undefined &&
+      (!binding.local.mutable ||
+        this.stableCallBindings.has(value.localId) ||
+        this.borrowedParameters.has(value.localId)) &&
+      !binding.local.boxed &&
+      !binding.local.tdz
+    );
   }
 
   // ── statements ──────────────────────────────────────────────────────────
@@ -3637,7 +4050,10 @@ export class LlEmitter {
           B.line(`store ptr ${union.value.name}, ptr ${b.slot}`);
           if (union.payload) {
             this.moveTemp(union.payload);
-            this.scopes[this.scopes.length - 1]!.push({ slot: union.payloadSlot, type: union.payload.type });
+            this.scopes[this.scopes.length - 1]!.push({
+              slot: union.payloadSlot,
+              type: union.payload.type,
+            });
           }
           break;
         }
@@ -3693,8 +4109,14 @@ export class LlEmitter {
         // Whole-value uses still retain their own copies, so returning or
         // storing the alias preserves the ordinary heap representation.
         // Boxed captures, reassigned sources and projections need ownership.
-        if (b.kind === "local" && b.local && !b.local.mutable && isRefCounted(b.type) &&
-            this.stableCallBindings.has(s.localId) && this.canBorrowCallArgument(s.init)) {
+        if (
+          b.kind === "local" &&
+          b.local &&
+          !b.local.mutable &&
+          isRefCounted(b.type) &&
+          this.stableCallBindings.has(s.localId) &&
+          this.canBorrowCallArgument(s.init)
+        ) {
           const v = this.emitReadReceiver(s.init);
           B.line(`store ptr ${v.name}, ptr ${b.slot}`);
           break;
@@ -3744,18 +4166,24 @@ export class LlEmitter {
         const arr = emitBorrowedInput(this, s.arr);
         const idx = this.emitExpr(s.index);
         const v = this.emitExpr(s.value);
-        if (s.arr.type.kind !== "array") throw new InternalCompilerError("llvm emitter bug: arraySet on non-array");
+        if (s.arr.type.kind !== "array")
+          throw new InternalCompilerError("llvm emitter bug: arraySet on non-array");
         const acc = elemAccess(s.arr.type.elem);
         if (acc === "ref") this.moveTemp(v);
         const argTy = acc === "f64" ? "double" : acc === "bool" ? "i1" : "ptr";
-        this.declare(`declare void @scr_arr_set_${acc}(ptr, double, ${argTy === "i1" ? "i1 zeroext" : argTy})`);
-        B.line(`call void @scr_arr_set_${acc}(ptr ${arr.name}, double ${idx.name}, ${argTy} ${v.name})`);
+        this.declare(
+          `declare void @scr_arr_set_${acc}(ptr, double, ${argTy === "i1" ? "i1 zeroext" : argTy})`,
+        );
+        B.line(
+          `call void @scr_arr_set_${acc}(ptr ${arr.name}, double ${idx.name}, ${argTy} ${v.name})`,
+        );
         break;
       }
       case "arraySetLength": {
         const arr = emitBorrowedInput(this, s.arr);
         const length = this.emitExpr(s.length);
-        if (s.arr.type.kind !== "array") throw new InternalCompilerError("llvm emitter bug: arraySetLength on non-array");
+        if (s.arr.type.kind !== "array")
+          throw new InternalCompilerError("llvm emitter bug: arraySetLength on non-array");
         this.declare(`declare void @scr_arr_set_len(ptr, double)`);
         B.line(`call void @scr_arr_set_len(ptr ${arr.name}, double ${length.name})`);
         this.emitPendingCheck();
@@ -3765,10 +4193,14 @@ export class LlEmitter {
       case "arrayDelete": {
         const arr = emitBorrowedInput(this, s.arr);
         const idx = this.emitExpr(s.index);
-        if (s.arr.type.kind !== "array") throw new InternalCompilerError(`llvm emitter bug: ${s.kind} on non-array`);
+        if (s.arr.type.kind !== "array")
+          throw new InternalCompilerError(`llvm emitter bug: ${s.kind} on non-array`);
         const fn = s.kind === "arraySetUndefined" ? "scr_arr_set_undefined" : "scr_arr_delete";
-        this.declare(`declare ${s.kind === "arrayDelete" ? "zeroext i1" : "void"} @${fn}(ptr, double)`);
-        if (s.kind === "arrayDelete") B.line(`call zeroext i1 @${fn}(ptr ${arr.name}, double ${idx.name})`);
+        this.declare(
+          `declare ${s.kind === "arrayDelete" ? "zeroext i1" : "void"} @${fn}(ptr, double)`,
+        );
+        if (s.kind === "arrayDelete")
+          B.line(`call zeroext i1 @${fn}(ptr ${arr.name}, double ${idx.name})`);
         else B.line(`call void @${fn}(ptr ${arr.name}, double ${idx.name})`);
         break;
       }
@@ -3781,8 +4213,17 @@ export class LlEmitter {
         const arr = this.emitStableReceiver(s.arr, [s.index, s.value]);
         const idx = this.emitExpr(s.index);
         const v = this.emitExpr(s.value);
-        if (s.arr.type.kind !== "bytes") throw new InternalCompilerError("llvm emitter bug: bytesSet on non-bytes");
-        this.emitBytesSet(s.arr.type.elem, arr.name, idx, v, s.index, s.value, this.bytesBounds.has(s));
+        if (s.arr.type.kind !== "bytes")
+          throw new InternalCompilerError("llvm emitter bug: bytesSet on non-bytes");
+        this.emitBytesSet(
+          s.arr.type.elem,
+          arr.name,
+          idx,
+          v,
+          s.index,
+          s.value,
+          this.bytesBounds.has(s),
+        );
         break;
       }
       case "fieldSet":
@@ -3792,7 +4233,9 @@ export class LlEmitter {
         // release — a release can trigger a cycle collection, which must
         // never see a heap edge whose count was already given up).
         // Classes and records share the struct layout, so one emission.
-        const obj = isRefCounted(s.value.type) ? this.emitExpr(s.obj) : this.emitStableReceiver(s.obj, [s.value]);
+        const obj = isRefCounted(s.value.type)
+          ? this.emitExpr(s.obj)
+          : this.emitStableReceiver(s.obj, [s.value]);
         const v = this.emitExpr(s.value);
         const { ptr, type } =
           s.kind === "fieldSet"
@@ -3807,10 +4250,17 @@ export class LlEmitter {
         } else {
           this.storeField(ptr, type, v.name);
         }
-        if (s.kind === "fieldSet" && s.field === "name" && this.classMeta.get(s.className)?.root.def.name === "%Error") {
+        if (
+          s.kind === "fieldSet" &&
+          s.field === "name" &&
+          this.classMeta.get(s.className)?.root.def.name === "%Error"
+        ) {
           const present = this.classFieldPtr(obj.name, s.className, "%namePresent").ptr;
           const enumerable = this.classFieldPtr(obj.name, s.className, "%nameEnumerable").ptr;
-          const wasPresent = B.tmp(), wasEnumerable = B.tmp(), isPresent = B.tmp(), nextEnumerable = B.tmp();
+          const wasPresent = B.tmp(),
+            wasEnumerable = B.tmp(),
+            isPresent = B.tmp(),
+            nextEnumerable = B.tmp();
           B.line(`${wasPresent} = load i8, ptr ${present}`);
           B.line(`${wasEnumerable} = load i8, ptr ${enumerable}`);
           B.line(`${isPresent} = icmp ne i8 ${wasPresent}, 0`);
@@ -3847,7 +4297,10 @@ export class LlEmitter {
         // the property, which a monomorphic struct cannot); overflow
         // shapes keep the map insert tail.
         const iv = shape.indexValue ?? shape.fields[0]?.type;
-        if (!iv) throw new InternalCompilerError(`llvm emitter bug: keyed write on field-free non-overflow shape ${s.shapeId}`);
+        if (!iv)
+          throw new InternalCompilerError(
+            `llvm emitter bug: keyed write on field-free non-overflow shape ${s.shapeId}`,
+          );
         const vAcc = iv.kind === "f64" ? "f64" : iv.kind === "bool" ? "bool" : "ref";
         if (s.overflowOnly === true) {
           // A LITERAL key naming no declared field: a plain overflow
@@ -3869,7 +4322,9 @@ export class LlEmitter {
           for (const f of shape.fields) {
             const lit = this.internLiteral(f.name);
             const hit = B.tmp();
-            B.line(`${hit} = call zeroext i1 @scr_str_eq(ptr ${key.name}, ptr ${lit}) ; ${llvmCommentText(f.name)}`);
+            B.line(
+              `${hit} = call zeroext i1 @scr_str_eq(ptr ${key.name}, ptr ${lit}) ; ${llvmCommentText(f.name)}`,
+            );
             const lh = B.newLabel("rks.h");
             const ln = B.newLabel("rks.n");
             B.condBr(hit, lh, ln);
@@ -3888,7 +4343,9 @@ export class LlEmitter {
             const helper = this.dyn.dynCheckHelper(f.type);
             const fty = this.llType(f.type);
             const nv = B.tmp();
-            B.line(`${nv} = call ${fty === "i1" ? "zeroext i1" : fty} @${helper}(ptr ${v.name}, ptr ${pathSlot})`);
+            B.line(
+              `${nv} = call ${fty === "i1" ? "zeroext i1" : fty} @${helper}(ptr ${v.name}, ptr ${pathSlot})`,
+            );
             B.line(`call void @scr_dyn_release(ptr ${v.name})`);
             // Mismatched write: TypeError pending, field untouched — the
             // statement-level check below unwinds.
@@ -3923,7 +4380,9 @@ export class LlEmitter {
           // typeEquals(f.type, iv) — the frontend fences everything else.
           const lit = this.internLiteral(f.name);
           const hit = B.tmp();
-          B.line(`${hit} = call zeroext i1 @scr_str_eq(ptr ${key.name}, ptr ${lit}) ; ${llvmCommentText(f.name)}`);
+          B.line(
+            `${hit} = call zeroext i1 @scr_str_eq(ptr ${key.name}, ptr ${lit}) ; ${llvmCommentText(f.name)}`,
+          );
           const lh = B.newLabel("rks.h");
           const ln = B.newLabel("rks.n");
           B.condBr(hit, lh, ln);
@@ -4047,9 +4506,17 @@ export class LlEmitter {
       case "for": {
         // The init's scope wraps the whole loop (break/continue must NOT
         // release it — scopeDepth captured after the push, C parity).
-        const integerArrayLoop = this.debug === null ? matchIntegerArrayForLoop(s, this.currentLocals, this.integerArrayBindings) : null;
-        const integerLoop = integerArrayLoop ?? (this.debug === null ? matchIntegerBytesForLoop(s, this.numericLocals) : null);
-        const countedLoop = !integerLoop && this.countedLoopsEnabled ? matchIntegerCountedForLoop(s, this.numericLocals, this.integerRanges) : null;
+        const integerArrayLoop =
+          this.debug === null
+            ? matchIntegerArrayForLoop(s, this.currentLocals, this.integerArrayBindings)
+            : null;
+        const integerLoop =
+          integerArrayLoop ??
+          (this.debug === null ? matchIntegerBytesForLoop(s, this.numericLocals) : null);
+        const countedLoop =
+          !integerLoop && this.countedLoopsEnabled
+            ? matchIntegerCountedForLoop(s, this.numericLocals, this.integerRanges)
+            : null;
         let countedJoin: string | null = null;
         if (countedLoop?.guarded) {
           const bound = this.emitExpr(countedLoop.limit);
@@ -4057,7 +4524,9 @@ export class LlEmitter {
           const fast = B.newLabel("counted.fast");
           const slow = B.newLabel("counted.slow");
           countedJoin = B.newLabel("counted.done");
-          B.line(`${safe} = fcmp ${countedLoop.step > 0 ? "ole" : "oge"} double ${bound.name}, ${f64Lit(countedLoop.guardLimit)}`);
+          B.line(
+            `${safe} = fcmp ${countedLoop.step > 0 ? "ole" : "oge"} double ${bound.name}, ${f64Lit(countedLoop.guardLimit)}`,
+          );
           B.condBr(safe, fast, slow);
           B.startBlock(slow);
           this.countedLoopsEnabled = false;
@@ -4071,7 +4540,9 @@ export class LlEmitter {
         let countedLimit: string | null = null;
         if (integerLoop) {
           integerSlot = B.slot();
-          B.entryAllocas.push(`${integerSlot} = alloca ${this.sizeType} ; integer induction ${this.currentLocals.get(integerLoop.localId)!.name}`);
+          B.entryAllocas.push(
+            `${integerSlot} = alloca ${this.sizeType} ; integer induction ${this.currentLocals.get(integerLoop.localId)!.name}`,
+          );
           let start = "0";
           if (integerArrayLoop && s.init?.kind === "varDecl" && s.init.init) {
             const value = this.emitExpr(s.init.init);
@@ -4080,16 +4551,26 @@ export class LlEmitter {
             this.integerArrayBindings.add(integerLoop.localId);
           }
           B.line(`store ${this.sizeType} ${start}, ptr ${integerSlot}`);
-          this.integerLoopBindings.set(integerLoop.localId, { slot: integerSlot, type: this.sizeType,
-            range: { min: 0, max: integerArrayLoop ? 4294967294 : Number.MAX_SAFE_INTEGER - 1 } });
+          this.integerLoopBindings.set(integerLoop.localId, {
+            slot: integerSlot,
+            type: this.sizeType,
+            range: { min: 0, max: integerArrayLoop ? 4294967294 : Number.MAX_SAFE_INTEGER - 1 },
+          });
         } else if (countedLoop) {
           integerSlot = B.slot();
-          B.entryAllocas.push(`${integerSlot} = alloca i64 ; integer induction ${this.currentLocals.get(countedLoop.localId)!.name}`);
+          B.entryAllocas.push(
+            `${integerSlot} = alloca i64 ; integer induction ${this.currentLocals.get(countedLoop.localId)!.name}`,
+          );
           const startNumber = this.emitExpr(countedLoop.start);
           const start = B.tmp();
           B.line(`${start} = fptosi double ${startNumber.name} to i64`);
           B.line(`store i64 ${start}, ptr ${integerSlot}`);
-          this.integerLoopBindings.set(countedLoop.localId, { slot: integerSlot, type: "i64", signed: true, range: countedLoop.range });
+          this.integerLoopBindings.set(countedLoop.localId, {
+            slot: integerSlot,
+            type: "i64",
+            signed: true,
+            range: countedLoop.range,
+          });
           countedLimit = emitCountedLoopLimit(this, countedLoop);
         } else if (s.init) {
           // A multi-declarator head shares the loop's scope. Emitting its
@@ -4116,7 +4597,9 @@ export class LlEmitter {
             const slot = `%${mangleLocal(local.id)}`;
             const fresh = B.tmp();
             const old = B.tmp();
-            B.line(`${fresh} = ${boxNewCall(this.shapeHost, local.type)} ; per-iteration ${local.name}`);
+            B.line(
+              `${fresh} = ${boxNewCall(this.shapeHost, local.type)} ; per-iteration ${local.name}`,
+            );
             B.line(`${old} = load ptr, ptr ${slot}`);
             const val = this.boxGet(old, local.type);
             this.boxSet(fresh, local.type, val);
@@ -4135,9 +4618,13 @@ export class LlEmitter {
           const len = B.tmp();
           const index = B.tmp();
           const inBounds = B.tmp();
-          B.line(`${lenPtr} = getelementptr inbounds %${integerArrayLoop ? "ScrArr" : "ScrBytes"}, ptr ${receiver.name}, i64 0, i32 1`);
+          B.line(
+            `${lenPtr} = getelementptr inbounds %${integerArrayLoop ? "ScrArr" : "ScrBytes"}, ptr ${receiver.name}, i64 0, i32 1`,
+          );
           if (integerArrayLoop) this.markMemoryPointer(lenPtr, "array:header");
-          B.line(`${len} = load ${this.sizeType}, ptr ${lenPtr}${this.fieldAliasAttachment(lenPtr)}`);
+          B.line(
+            `${len} = load ${this.sizeType}, ptr ${lenPtr}${this.fieldAliasAttachment(lenPtr)}`,
+          );
           B.line(`${index} = load ${this.sizeType}, ptr ${integerSlot}`);
           B.line(`${inBounds} = icmp ult ${this.sizeType} ${index}, ${len}`);
           B.condBr(inBounds, lb, le);
@@ -4145,7 +4632,9 @@ export class LlEmitter {
           const index = B.tmp();
           const inBounds = B.tmp();
           B.line(`${index} = load i64, ptr ${integerSlot}`);
-          B.line(`${inBounds} = icmp ${countedLoop.step > 0 ? "slt" : "sgt"} i64 ${index}, ${countedLimit}`);
+          B.line(
+            `${inBounds} = icmp ${countedLoop.step > 0 ? "slt" : "sgt"} i64 ${index}, ${countedLimit}`,
+          );
           B.condBr(inBounds, lb, le);
         } else if (s.cond) B.condBr(this.emitCondition(s.cond), lb, le);
         else B.br(lb);
@@ -4196,7 +4685,8 @@ export class LlEmitter {
         // (JS-exact — pushes inside the body extend the iteration). The
         // iterable temp lives in this statement's frame, so it is released
         // when the whole loop ends (and by `return`'s frame sweep).
-        if (s.iterable.type.kind !== "array") throw new LlvmUnsupportedError(`forOf:${s.iterable.type.kind}`, s.loc);
+        if (s.iterable.type.kind !== "array")
+          throw new LlvmUnsupportedError(`forOf:${s.iterable.type.kind}`, s.loc);
         const elem = s.iterable.type.elem;
         const arr = this.emitExpr(s.iterable);
         const idxSlot = B.slot();
@@ -4298,7 +4788,8 @@ export class LlEmitter {
             break;
           }
         }
-        if (!target || target.contLabel === null) throw new InternalCompilerError("llvm emitter bug: continue target not found");
+        if (!target || target.contLabel === null)
+          throw new InternalCompilerError("llvm emitter bug: continue target not found");
         this.emitFinallysForJump(target.finallyDepth, target.frameDepth, target.scopeDepth);
         if (!B.isTerminated()) B.terminate(`br label %${target.contLabel}`);
         break;
@@ -4401,7 +4892,12 @@ export class LlEmitter {
     const frame = this.frames.pop()!;
     // return/throw already released their frames on the jump path; the
     // fall-through releases after them would be dead double-release code.
-    if (s.kind !== "return" && s.kind !== "throw" && s.kind !== "rethrow" && s.kind !== "runtimeFence") {
+    if (
+      s.kind !== "return" &&
+      s.kind !== "throw" &&
+      s.kind !== "rethrow" &&
+      s.kind !== "runtimeFence"
+    ) {
       this.releaseFrame(frame);
     }
   }
@@ -4664,18 +5160,23 @@ export class LlEmitter {
     const v = this.emitExpr(expr);
     this.moveTemp(v);
     this.B.line(`store ${this.llType(expr.type)} ${v.name}, ptr ${slot}`);
-    if (integerSlot !== undefined && v.uint32 !== undefined) this.B.line(`store i32 ${v.uint32}, ptr ${integerSlot}`);
+    if (integerSlot !== undefined && v.uint32 !== undefined)
+      this.B.line(`store i32 ${v.uint32}, ptr ${integerSlot}`);
     this.releaseFrame(this.frames.pop()!);
     return v.uint32 !== undefined;
   }
 
   // ── expressions ─────────────────────────────────────────────────────────
 
-  emitLiteralExpr(e: ExprOf<"numLit" | "boolLit" | "strLit" | "moduleNsRef" | "unitLit" | "varRef">): LlValue {
+  emitLiteralExpr(
+    e: ExprOf<"numLit" | "boolLit" | "strLit" | "moduleNsRef" | "unitLit" | "varRef">,
+  ): LlValue {
     return emitLiteralExpr(this, e);
   }
 
-  emitOperatorExpr(e: ExprOf<"bin" | "unary" | "incDec" | "fieldIncDec" | "assignExpr" | "seqExpr">): LlValue {
+  emitOperatorExpr(
+    e: ExprOf<"bin" | "unary" | "incDec" | "fieldIncDec" | "assignExpr" | "seqExpr">,
+  ): LlValue {
     if (e.kind === "seqExpr") {
       // Saved operands can feed later call arguments. Transfer ownership
       // to this expression's frame so they survive those reads and still
@@ -4683,18 +5184,46 @@ export class LlEmitter {
       this.scopes.push([]);
       const result = emitBorrowedFieldSequence(this, e) ?? emitOperatorExpr(this, e);
       for (const local of this.scopes.pop()!) {
-        this.currentFrame().push({ name: local.slot, type: local.type, slot: true, ...(local.boxed ? { boxed: true } : {}) });
+        this.currentFrame().push({
+          name: local.slot,
+          type: local.type,
+          slot: true,
+          ...(local.boxed ? { boxed: true } : {}),
+        });
       }
       return result;
     }
     return emitOperatorExpr(this, e);
   }
 
-  emitControlExpr(e: ExprOf<"dynDestrCheck" | "dynIterN" | "toBool" | "logical" | "ternary" | "optChain" | "chainRecv" | "orDefault" | "nullish">): LlValue {
+  emitControlExpr(
+    e: ExprOf<
+      | "dynDestrCheck"
+      | "dynIterN"
+      | "toBool"
+      | "logical"
+      | "ternary"
+      | "optChain"
+      | "chainRecv"
+      | "orDefault"
+      | "nullish"
+    >,
+  ): LlValue {
     return emitControlExpr(this, e);
   }
 
-  emitStringExpr(e: ExprOf<"strConcat" | "strEq" | "strCmp" | "toString" | "strIntrinsic" | "regexLit" | "templateStrings" | "regexIntrinsic">): LlValue {
+  emitStringExpr(
+    e: ExprOf<
+      | "strConcat"
+      | "strEq"
+      | "strCmp"
+      | "toString"
+      | "strIntrinsic"
+      | "regexLit"
+      | "templateStrings"
+      | "regexIntrinsic"
+    >,
+  ): LlValue {
     return emitStringExpr(this, e);
   }
 
@@ -4739,19 +5268,85 @@ export class LlEmitter {
     return result;
   }
 
-  emitContainerExpr(e: ExprOf<"arrayLit" | "arrayNewLen" | "arrayGet" | "arrayHas" | "arrayState" | "arrIntrinsic" | "bytesNew" | "bytesIntrinsic" | "mapNew" | "mapIntrinsic" | "setIntrinsic" | "setNew">): LlValue {
+  emitContainerExpr(
+    e: ExprOf<
+      | "arrayLit"
+      | "arrayNewLen"
+      | "arrayGet"
+      | "arrayHas"
+      | "arrayState"
+      | "arrIntrinsic"
+      | "bytesNew"
+      | "bytesIntrinsic"
+      | "mapNew"
+      | "mapIntrinsic"
+      | "setIntrinsic"
+      | "setNew"
+    >,
+  ): LlValue {
     return emitContainerExpr(this, e);
   }
 
-  emitCallExpr(e: ExprOf<"call" | "ffiCall" | "closure" | "callValue" | "selfRef" | "new" | "classRef" | "newValue" | "instanceOfValue" | "promiseVoidWiden" | "upcast" | "downcast" | "instanceOf" | "virtualCall">): LlValue {
+  emitCallExpr(
+    e: ExprOf<
+      | "call"
+      | "ffiCall"
+      | "closure"
+      | "callValue"
+      | "selfRef"
+      | "new"
+      | "classRef"
+      | "newValue"
+      | "instanceOfValue"
+      | "promiseVoidWiden"
+      | "upcast"
+      | "downcast"
+      | "instanceOf"
+      | "virtualCall"
+    >,
+  ): LlValue {
     return emitCallExpr(this, e);
   }
 
-  emitRecordExpr(e: ExprOf<"fieldGet" | "recordGet" | "recordLit" | "recordClone" | "recordKeyGet" | "recordOvfKeys" | "recordOvfHas">): LlValue {
+  emitRecordExpr(
+    e: ExprOf<
+      | "fieldGet"
+      | "recordGet"
+      | "recordLit"
+      | "recordClone"
+      | "recordKeyGet"
+      | "recordOvfKeys"
+      | "recordOvfHas"
+    >,
+  ): LlValue {
     return emitRecordExpr(this, e);
   }
 
-  emitDynamicExpr(e: ExprOf<"dynFrom" | "dynFromJsval" | "dynCall" | "dynInvoke" | "dynArrLit" | "dynObjLit" | "unionWrap" | "unionNarrow" | "unionDisc" | "unionKeyGet" | "unionIsTag" | "dynKeyGet" | "dynHasKey" | "dynScalarEq" | "dynTest" | "unionEq" | "unionFuncEq" | "caughtTest" | "caughtCheck" | "caughtNarrow" | "caughtToDyn">): LlValue {
+  emitDynamicExpr(
+    e: ExprOf<
+      | "dynFrom"
+      | "dynFromJsval"
+      | "dynCall"
+      | "dynInvoke"
+      | "dynArrLit"
+      | "dynObjLit"
+      | "unionWrap"
+      | "unionNarrow"
+      | "unionDisc"
+      | "unionKeyGet"
+      | "unionIsTag"
+      | "dynKeyGet"
+      | "dynHasKey"
+      | "dynScalarEq"
+      | "dynTest"
+      | "unionEq"
+      | "unionFuncEq"
+      | "caughtTest"
+      | "caughtCheck"
+      | "caughtNarrow"
+      | "caughtToDyn"
+    >,
+  ): LlValue {
     return emitDynamicExpr(this, e);
   }
 
@@ -4763,7 +5358,16 @@ export class LlEmitter {
     return emitSerializationExpr(this, e);
   }
 
-  emitAsyncExpr(e: ExprOf<"yieldExpr" | "genResume" | "awaitExpr" | "awaitUnionExpr" | "newPromise" | "promiseWithResolvers">): LlValue {
+  emitAsyncExpr(
+    e: ExprOf<
+      | "yieldExpr"
+      | "genResume"
+      | "awaitExpr"
+      | "awaitUnionExpr"
+      | "newPromise"
+      | "promiseWithResolvers"
+    >,
+  ): LlValue {
     return emitAsyncExpr(this, e);
   }
 
@@ -4794,9 +5398,10 @@ export class LlEmitter {
     }
     if (e.kind === "recordGet" || e.kind === "fieldGet") {
       const receiver = this.emitReadReceiver(e.obj);
-      const { ptr, type } = e.kind === "recordGet"
-        ? this.recordFieldPtr(receiver.name, e.shapeId, e.field)
-        : this.classFieldPtr(receiver.name, e.className, e.field);
+      const { ptr, type } =
+        e.kind === "recordGet"
+          ? this.recordFieldPtr(receiver.name, e.shapeId, e.field)
+          : this.classFieldPtr(receiver.name, e.className, e.field);
       return { name: this.loadField(ptr, type), type: e.type };
     }
     if (e.kind === "ternary" && this.canBorrowReceiver(e.then) && this.canBorrowReceiver(e.else_)) {
@@ -4806,9 +5411,14 @@ export class LlEmitter {
       const cond = this.emitExpr(e.cond);
       const slot = B.slot();
       B.entryAllocas.push(`${slot} = alloca ptr`);
-      const yes = B.newLabel("read.then"), no = B.newLabel("read.else"), join = B.newLabel("read.join");
+      const yes = B.newLabel("read.then"),
+        no = B.newLabel("read.else"),
+        join = B.newLabel("read.join");
       B.condBr(cond.name, yes, no);
-      for (const [label, value] of [[yes, e.then], [no, e.else_]] as const) {
+      for (const [label, value] of [
+        [yes, e.then],
+        [no, e.else_],
+      ] as const) {
         B.startBlock(label);
         this.frames.push([]);
         const result = this.emitReadReceiver(value);
@@ -4826,14 +5436,21 @@ export class LlEmitter {
 
   canBorrowReceiver(e: IrExpr): boolean {
     switch (e.kind) {
-      case "varRef": return this.binding(e.localId).kind !== "boxed";
-      case "unionNarrow": return this.canBorrowReceiver(e.value);
-      case "fieldGet": case "recordGet": return this.canBorrowReceiver(e.obj);
-      case "ternary": return this.canBorrowReceiver(e.then) && this.canBorrowReceiver(e.else_);
+      case "varRef":
+        return this.binding(e.localId).kind !== "boxed";
+      case "unionNarrow":
+        return this.canBorrowReceiver(e.value);
+      case "fieldGet":
+      case "recordGet":
+        return this.canBorrowReceiver(e.obj);
+      case "ternary":
+        return this.canBorrowReceiver(e.then) && this.canBorrowReceiver(e.else_);
       // The runtime always sets a pending exception; its unreachable
       // typed dummy is null and owns no receiver.
-      case "libCall": return e.fn === "error.nodeThrow";
-      default: return false;
+      case "libCall":
+        return e.fn === "error.nodeThrow";
+      default:
+        return false;
     }
   }
 
@@ -4869,7 +5486,10 @@ export class LlEmitter {
     return raceAdapterFor(this, from, to);
   }
 
-  genResultThunkFor(genT: IrType & { kind: "generator" }, recT: IrType & { kind: "record" }): string {
+  genResultThunkFor(
+    genT: IrType & { kind: "generator" },
+    recT: IrType & { kind: "record" },
+  ): string {
     return genResultThunkFor(this, genT, recT);
   }
 
@@ -4965,7 +5585,14 @@ export class LlEmitter {
     return emitArrIntrinsic(this, e);
   }
 
-  wrapNullable(raw: string, present: string, valueType: IrType, valueTag: number, resultType: IrType & { kind: "union" }, absentTag: number): LlValue {
+  wrapNullable(
+    raw: string,
+    present: string,
+    valueType: IrType,
+    valueTag: number,
+    resultType: IrType & { kind: "union" },
+    absentTag: number,
+  ): LlValue {
     return wrapNullable(this, raw, present, valueType, valueTag, resultType, absentTag);
   }
 
@@ -4973,13 +5600,17 @@ export class LlEmitter {
     return emitMapNew(this, e);
   }
 
-  mapSet(m: string, kAcc: MapKeyAccess, vAcc: "f64" | "bool" | "ref", key: string, value: string): void {
+  mapSet(
+    m: string,
+    kAcc: MapKeyAccess,
+    vAcc: "f64" | "bool" | "ref",
+    key: string,
+    value: string,
+  ): void {
     return mapSet(this, m, kAcc, vAcc, key, value);
   }
 
-  emitMapLikeIntrinsic(
-    e: Extract<IrExpr, { kind: "mapIntrinsic" | "setIntrinsic" }>,
-  ): LlValue {
+  emitMapLikeIntrinsic(e: Extract<IrExpr, { kind: "mapIntrinsic" | "setIntrinsic" }>): LlValue {
     return emitMapLikeIntrinsic(this, e);
   }
 
@@ -5007,7 +5638,13 @@ export class LlEmitter {
     return emitBytesLength(this, elem, receiver, bytes);
   }
 
-  emitBytesGet(elem: IrBytesElem, receiver: string, index: LlValue, expr?: IrExpr, inBounds = false): LlValue {
+  emitBytesGet(
+    elem: IrBytesElem,
+    receiver: string,
+    index: LlValue,
+    expr?: IrExpr,
+    inBounds = false,
+  ): LlValue {
     return emitBytesGet(this, elem, receiver, index, expr, inBounds);
   }
 
@@ -5022,7 +5659,15 @@ export class LlEmitter {
     this.B.line(`store i32 ${integer}, ptr ${slot}`);
   }
 
-  private emitBytesSet(elem: IrBytesElem, receiver: string, index: LlValue, value: LlValue, indexExpr?: IrExpr, expr?: IrExpr, inBounds = false): void {
+  private emitBytesSet(
+    elem: IrBytesElem,
+    receiver: string,
+    index: LlValue,
+    value: LlValue,
+    indexExpr?: IrExpr,
+    expr?: IrExpr,
+    inBounds = false,
+  ): void {
     return emitBytesSet(this, elem, receiver, index, value, indexExpr, expr, inBounds);
   }
 
@@ -5048,17 +5693,24 @@ export class LlEmitter {
     overflowOnly: boolean,
     loc?: SrcLoc,
   ): void {
-    return keyedRecordReadInto(this, slot, join, objName, keyName, shapeId, resultType, overflowOnly, loc);
+    return keyedRecordReadInto(
+      this,
+      slot,
+      join,
+      objName,
+      keyName,
+      shapeId,
+      resultType,
+      overflowOnly,
+      loc,
+    );
   }
 
   dynPromiseAdapter(inner: IrType): string {
     return dynPromiseAdapter(this, inner);
   }
 
-  streamTypedRefCommitAdapter(
-    t: IrType,
-    snapshot: string,
-  ): string {
+  streamTypedRefCommitAdapter(t: IrType, snapshot: string): string {
     return streamTypedRefCommitAdapter(this, t, snapshot);
   }
 
@@ -5069,23 +5721,15 @@ export class LlEmitter {
     return streamTypedRefMaterializeAdapter(this, t);
   }
 
-  liveDynUnionRefAdapter(
-    t: IrType & { kind: "union" },
-  ): string {
+  liveDynUnionRefAdapter(t: IrType & { kind: "union" }): string {
     return liveDynUnionRefAdapter(this, t);
   }
 
-  streamTypedRefBoxValue(
-    B: BlockBuilder,
-    t: IrType,
-    value: string,
-  ): string {
+  streamTypedRefBoxValue(B: BlockBuilder, t: IrType, value: string): string {
     return streamTypedRefBoxValue(this, B, t, value);
   }
 
-  streamFromArrayAdapter(
-    t: IrType & { kind: "array" },
-  ): string {
+  streamFromArrayAdapter(t: IrType & { kind: "array" }): string {
     return streamFromArrayAdapter(this, t);
   }
 

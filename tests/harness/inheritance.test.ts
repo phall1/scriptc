@@ -32,7 +32,13 @@ async function emittedLlvm(name: string, source: string, ext = "ts"): Promise<st
   const file = join(outDir, `${name}.${ext}`);
   writeFileSync(file, source);
   // Inspect LLVM directly so the cost model is independent of optimization.
-  const result = await compile(file, { outPath: join(outDir, name), outDir, sanitize, backend: "llvm", outputKind: "llvm" });
+  const result = await compile(file, {
+    outPath: join(outDir, name),
+    outDir,
+    sanitize,
+    backend: "llvm",
+    outputKind: "llvm",
+  });
   if (!result.ok) {
     throw new Error(
       "inheritance program failed to compile:\n" +
@@ -93,7 +99,9 @@ console.log(a.id(), a.speak());
     // base-typed call site dispatches through it.
     expect(llvm).toMatch(/%sc_vtt_Animal = type \{ %ScrVt, ptr \}/);
     expect(llvm).toMatch(/@sc_vtable_Dog = [^\n]*ptr @sc_f__x25_Dog_speak/);
-    expect(llvm).toMatch(/getelementptr inbounds %sc_vtt_Animal, ptr %\w+, i64 0, i32 1[\s\S]*call ptr %\w+\(ptr /);
+    expect(llvm).toMatch(
+      /getelementptr inbounds %sc_vtt_Animal, ptr %\w+, i64 0, i32 1[\s\S]*call ptr %\w+\(ptr /,
+    );
   });
 
   test("accessors on standalone classes stay zero-cost direct calls", async () => {
@@ -156,7 +164,9 @@ console.log(c.v, c.label);
     // The overridden getter dispatches through its slot...
     expect(llvm).toMatch(/%sc_vtt_Cell = type \{ %ScrVt, ptr \}/);
     expect(llvm).toMatch(/@sc_vtable_LoudCell = [^\n]*ptr @sc_f__x25_LoudCell_get_x3a_label/);
-    expect(llvm).toMatch(/getelementptr inbounds %sc_vtt_Cell, ptr %\w+, i64 0, i32 1[\s\S]*call ptr %\w+\(ptr /);
+    expect(llvm).toMatch(
+      /getelementptr inbounds %sc_vtt_Cell, ptr %\w+, i64 0, i32 1[\s\S]*call ptr %\w+\(ptr /,
+    );
     // ...while the never-overridden pair keeps direct calls and no slots.
     expect(llvm).toMatch(/sc_f__x25_Cell_get_x3a_v\(/);
     expect(llvm).toMatch(/sc_f__x25_Cell_set_x3a_v\(/);
@@ -181,7 +191,9 @@ r.on("data", (b: Buffer) => console.log(b.toString()));
     // display name, state pointer) ahead of user fields...
     expect(llvm).toContain("%sc_o_Counter = type { i64, ptr, ptr, ptr, ptr, double }");
     // ...its teardown delegates the state block to the runtime...
-    expect(llvm).toMatch(/getelementptr inbounds %sc_o_Counter, ptr %o, i64 0, i32 4[\s\S]*call void @scr_stream_st_release\(ptr /);
+    expect(llvm).toMatch(
+      /getelementptr inbounds %sc_o_Counter, ptr %o, i64 0, i32 4[\s\S]*call void @scr_stream_st_release\(ptr /,
+    );
     // ...and super() initializes the state over the allocated struct.
     expect(llvm).toContain("call void @scr_stream_init_readable(ptr ");
   });
@@ -248,7 +260,9 @@ console.log(b.v);
     // set slot (a base-typed write must throw like Node), so BOTH halves
     // dispatch dynamically here.
     expect(llvm).toMatch(/%sc_vtt_Box = type \{ %ScrVt, ptr, ptr \}/);
-    expect(llvm).toMatch(/@sc_vtable_SealedBox = [^\n]*ptr @sc_f__x25_SealedBox_get_x3a_v, ptr @sc_f__x25_SealedBox_set_x3a_v/);
+    expect(llvm).toMatch(
+      /@sc_vtable_SealedBox = [^\n]*ptr @sc_f__x25_SealedBox_get_x3a_v, ptr @sc_f__x25_SealedBox_set_x3a_v/,
+    );
     expect(llvm).toMatch(/getelementptr inbounds %sc_vtt_Box, ptr %\w+, i64 0, i32 2/);
     expect(llvm).toMatch(/sc_f__x25_SealedBox_set_x3a_v/);
   });

@@ -12,29 +12,43 @@ const portable = (path: string): string => path.replaceAll("\\", "/");
 
 test("ESM percent escapes preserve module paths and distinct CommonJS filename rules", () => {
   const builder = new NpmGraphBuilder();
-  builder.addImport(fixture("cases", "node24-esm-metadata", "main.ts"), "node24-esm-metadata-fixture");
+  builder.addImport(
+    fixture("cases", "node24-esm-metadata", "main.ts"),
+    "node24-esm-metadata-fixture",
+  );
   const graph = builder.finish();
   expect(graph.errors).toEqual([]);
-  const encodedChild = graph.edges.find(edge => edge.specifier === "./child%20%25%20%23%20%C3%BC.js");
+  const encodedChild = graph.edges.find(
+    (edge) => edge.specifier === "./child%20%25%20%23%20%C3%BC.js",
+  );
   expect(encodedChild?.to).toMatch(/child % # ü\.js$/);
-  const pair = graph.edges.filter(edge => edge.specifier === "./pair%20file.cjs");
+  const pair = graph.edges.filter((edge) => edge.specifier === "./pair%20file.cjs");
   expect(pair).toHaveLength(2);
-  expect(pair.find(edge => edge.kind === "import")?.to).toMatch(/pair file\.cjs$/);
-  expect(pair.find(edge => edge.kind === "require")?.to).toMatch(/pair%20file\.cjs$/);
+  expect(pair.find((edge) => edge.kind === "import")?.to).toMatch(/pair file\.cjs$/);
+  expect(pair.find((edge) => edge.kind === "require")?.to).toMatch(/pair%20file\.cjs$/);
 });
 
-test.each(["?version=1", "#fragment"])("escaped ESM module identity %s stays explicitly refused", (suffix) => {
-  const dir = mkdtempSync(join(tmpdir(), "scriptc-esm-identity-"));
-  try {
-    writeFileSync(join(dir, "index.mjs"), `import './child%20file.mjs${suffix}';`);
-    writeFileSync(join(dir, "child file.mjs"), "export const value = 1;");
-    const builder = new NpmGraphBuilder();
-    builder.addFileImport(join(dir, "main.mjs"), "./index.mjs");
-    expect(builder.finish().errors).toEqual([{
-      message: expect.stringContaining("distinct URL query or fragment module instances are not supported"),
-    }]);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
-});
+test.each(["?version=1", "#fragment"])(
+  "escaped ESM module identity %s stays explicitly refused",
+  (suffix) => {
+    const dir = mkdtempSync(join(tmpdir(), "scriptc-esm-identity-"));
+    try {
+      writeFileSync(join(dir, "index.mjs"), `import './child%20file.mjs${suffix}';`);
+      writeFileSync(join(dir, "child file.mjs"), "export const value = 1;");
+      const builder = new NpmGraphBuilder();
+      builder.addFileImport(join(dir, "main.mjs"), "./index.mjs");
+      expect(builder.finish().errors).toEqual([
+        {
+          message: expect.stringContaining(
+            "distinct URL query or fragment module instances are not supported",
+          ),
+        },
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
 
 test("TypeScript runtime entries embed emitted JS and only its runtime dependencies", () => {
   const entry = fixture("typescript", "main.ts");
@@ -45,7 +59,12 @@ test("TypeScript runtime entries embed emitted JS and only its runtime dependenc
   expect(graph.errors).toEqual([]);
   const modules = graph.modules.map((module) => ({ ...module, key: portable(module.key) }));
   expect(modules.map((module) => module.key.split("/").at(-1)).sort()).toEqual([
-    "common.cts", "export-side.ts", "index.ts", "side.ts", "unused.ts", "value.mts",
+    "common.cts",
+    "export-side.ts",
+    "index.ts",
+    "side.ts",
+    "unused.ts",
+    "value.mts",
   ]);
   const root = modules.find((module) => module.key.endsWith("/tsruntime/index.ts"));
   expect(root).toBeDefined();
@@ -56,7 +75,12 @@ test("TypeScript runtime entries embed emitted JS and only its runtime dependenc
   expect(root.source).not.toContain(": number");
   expect(root.source).not.toContain("./types.ts");
   const edges = graph.edges.filter((edge) => portable(edge.from) === root.key);
-  expect(edges.map((edge) => edge.specifier).sort()).toEqual(["./export-side.ts", "./side.ts", "./unused.ts", "./value.mts"]);
+  expect(edges.map((edge) => edge.specifier).sort()).toEqual([
+    "./export-side.ts",
+    "./side.ts",
+    "./unused.ts",
+    "./value.mts",
+  ]);
   expect(edges.every((edge) => portable(edge.to).endsWith(edge.specifier.slice(2)))).toBe(true);
   expect(modules.find((module) => module.key.endsWith("/value.mts"))?.format).toBe("esm");
   const common = modules.find((module) => module.key.endsWith("/common.cts"));
@@ -73,25 +97,33 @@ test.for([
   ["index.d.mts", "export declare const value: number;", "declaration files"],
   ["index.d.cts", "export declare const value: number;", "declaration files"],
   ["index.tsx", "export const value = <div />;", "TSX runtime modules"],
-] as const)("invalid runtime source %s produces an attributed graph error", ([name, source, message]) => {
-  const dir = mkdtempSync(join(tmpdir(), "scriptc-npm-typescript-"));
-  try {
-    const pkg = join(dir, "node_modules", "invalid-typescript");
-    mkdirSync(pkg, { recursive: true });
-    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "invalid-typescript", type: "module", main: name }));
-    writeFileSync(join(pkg, name), source);
-    const builder = new NpmGraphBuilder();
-    builder.addImport(join(dir, "main.ts"), "invalid-typescript");
-    const graph = builder.finish();
-    expect(graph.modules).toEqual([]);
-    expect(graph.errors).toHaveLength(1);
-    const diagnostic = graph.errors[0]?.message;
-    expect(diagnostic).toContain(name);
-    expect(diagnostic).toContain(message);
-    expect(diagnostic).toContain("dependency chain: invalid-typescript");
-    expect(diagnostic).not.toContain("scriptc-typescript-");
-  } finally { rmSync(dir, { recursive: true, force: true }); }
-});
+] as const)(
+  "invalid runtime source %s produces an attributed graph error",
+  ([name, source, message]) => {
+    const dir = mkdtempSync(join(tmpdir(), "scriptc-npm-typescript-"));
+    try {
+      const pkg = join(dir, "node_modules", "invalid-typescript");
+      mkdirSync(pkg, { recursive: true });
+      writeFileSync(
+        join(pkg, "package.json"),
+        JSON.stringify({ name: "invalid-typescript", type: "module", main: name }),
+      );
+      writeFileSync(join(pkg, name), source);
+      const builder = new NpmGraphBuilder();
+      builder.addImport(join(dir, "main.ts"), "invalid-typescript");
+      const graph = builder.finish();
+      expect(graph.modules).toEqual([]);
+      expect(graph.errors).toHaveLength(1);
+      const diagnostic = graph.errors[0]?.message;
+      expect(diagnostic).toContain(name);
+      expect(diagnostic).toContain(message);
+      expect(diagnostic).toContain("dependency chain: invalid-typescript");
+      expect(diagnostic).not.toContain("scriptc-typescript-");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
 
 test("collects import.meta.resolve literals as resolution-only edges", () => {
   const result = moduleSpecifiersOf(
@@ -129,7 +161,11 @@ test("emits an import-condition edge for an embedded bare import.meta.resolve", 
   const dual = graph.modules.find((module) => portable(module.key).endsWith("/dual/index.mjs"));
   expect(dual).toBeDefined();
   if (dual === undefined) return;
-  const edges = graph.edges.map((edge) => ({ ...edge, from: portable(edge.from), to: portable(edge.to) }));
+  const edges = graph.edges.map((edge) => ({
+    ...edge,
+    from: portable(edge.from),
+    to: portable(edge.to),
+  }));
   expect(edges).toContainEqual({
     from: portable(dual.key),
     specifier: "cjszoo",
@@ -144,8 +180,14 @@ test("embeds dependencies reached only through CommonJS module.require", () => {
   builder.addImport(entry, "node24-commonjs-fixture");
   const graph = builder.finish();
   expect(graph.errors).toEqual([]);
-  expect(graph.modules.some((module) => portable(module.key).endsWith("/node24-commonjs-fixture/method-only.cjs"))).toBe(true);
-  expect(graph.edges.map((edge) => ({ ...edge, from: portable(edge.from), to: portable(edge.to) }))).toContainEqual({
+  expect(
+    graph.modules.some((module) =>
+      portable(module.key).endsWith("/node24-commonjs-fixture/method-only.cjs"),
+    ),
+  ).toBe(true);
+  expect(
+    graph.edges.map((edge) => ({ ...edge, from: portable(edge.from), to: portable(edge.to) })),
+  ).toContainEqual({
     from: expect.stringMatching(/\/node24-commonjs-fixture\/index\.cjs$/),
     specifier: "./method-only.cjs",
     to: expect.stringMatching(/\/node24-commonjs-fixture\/method-only\.cjs$/),
@@ -170,8 +212,14 @@ test("embedded package imports resolve with edge-specific conditions", () => {
   const builder = new NpmGraphBuilder();
   builder.addImport(entry, "importmapped");
   const graph = builder.finish();
-  const packageEntry = graph.modules.find((module) => portable(module.key).endsWith("/importmapped/index.js"));
-  const edges = graph.edges.map((edge) => ({ ...edge, from: portable(edge.from), to: portable(edge.to) }));
+  const packageEntry = graph.modules.find((module) =>
+    portable(module.key).endsWith("/importmapped/index.js"),
+  );
+  const edges = graph.edges.map((edge) => ({
+    ...edge,
+    from: portable(edge.from),
+    to: portable(edge.to),
+  }));
   expect(graph.errors).toEqual([]);
   expect(packageEntry).toBeDefined();
   if (packageEntry === undefined) return;

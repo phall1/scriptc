@@ -9,10 +9,21 @@ import type { Lowerer } from "./lowerer.js";
  * capabilities answer undefined. The checker supplies names, never values. */
 export function lowerGlobalValue(lowerer: Lowerer, expr: ts.Expression): IrExpr {
   const loc = locOf(expr);
-  const names = lowerer.checker.getPropertiesOfType(lowerer.typeOf(expr)).map((property) => property.name);
+  const names = lowerer.checker
+    .getPropertiesOfType(lowerer.typeOf(expr))
+    .map((property) => property.name);
   return {
-    kind: "libCall", fn: "global.native", args: [{
-      kind: "arrayLit", elems: names.map((name) => strLit(name, loc)), type: arrayOf(STRING), loc,
-    }], type: DYN, loc,
+    kind: "libCall",
+    fn: "global.native",
+    args: [
+      {
+        kind: "arrayLit",
+        elems: names.map((name) => strLit(name, loc)),
+        type: arrayOf(STRING),
+        loc,
+      },
+    ],
+    type: DYN,
+    loc,
   };
 }

@@ -14,9 +14,7 @@ function report(path: string, opts: { dynamic?: boolean } = {}): string {
 }
 
 test("mixed program: percentage and grouped blockers", async () => {
-  await expect(report(fixture("mixed.ts"))).toMatchFileSnapshot(
-    "__snapshots__/coverage-mixed.txt",
-  );
+  await expect(report(fixture("mixed.ts"))).toMatchFileSnapshot("__snapshots__/coverage-mixed.txt");
 });
 
 test("dynamic-capable blockers split from static rejections", async () => {
@@ -58,18 +56,18 @@ test("fully static JavaScript program reports 100%", () => {
   expect(out).toContain("fully static");
 });
 
-test.each([
-  "3062-runtime-optional-record-guards.ts",
-  "3063-runtime-optional-class-guards.ts",
-])("runtime-optional guard receivers stay static: %s", (name) => {
-  for (const dynamic of [false, true]) {
-    const { coverage } = analyze(join(repoRoot, "tests/corpus", name), { dynamic });
-    expect(coverage.preflightFailed).toBe(false);
-    expect(coverage.diagnostics).toEqual([]);
-    expect(coverage.stats.statementsFailed).toBe(0);
-    expect(coverage.stats.statementsIsland).toBe(0);
-  }
-});
+test.each(["3062-runtime-optional-record-guards.ts", "3063-runtime-optional-class-guards.ts"])(
+  "runtime-optional guard receivers stay static: %s",
+  (name) => {
+    for (const dynamic of [false, true]) {
+      const { coverage } = analyze(join(repoRoot, "tests/corpus", name), { dynamic });
+      expect(coverage.preflightFailed).toBe(false);
+      expect(coverage.diagnostics).toEqual([]);
+      expect(coverage.stats.statementsFailed).toBe(0);
+      expect(coverage.stats.statementsIsland).toBe(0);
+    }
+  },
+);
 
 test("coverage preserves function-local class capture environments", () => {
   const { coverage } = analyze(join(repoRoot, "tests/corpus/local-class-unknown.ts"));
@@ -89,7 +87,10 @@ test("module stream aliases remain static in separately declared functions", () 
 
 test("runtime-optional refined unions report blockers without crashing", () => {
   for (const dynamic of [false, true]) {
-    const { coverage } = analyze(join(repoRoot, "tests/diagnostics/runtime-optional-refined-union.ts"), { dynamic });
+    const { coverage } = analyze(
+      join(repoRoot, "tests/diagnostics/runtime-optional-refined-union.ts"),
+      { dynamic },
+    );
     expect(coverage.preflightFailed).toBe(false);
     expect(coverage.diagnostics.map((d) => d.code)).toEqual(["SC1090", "SC1090"]);
     expect(coverage.stats.statementsFailed).toBe(2);
@@ -182,7 +183,9 @@ test("external host declarations unblock application coverage without inventing 
 
   const unmapped = analyze(entry).coverage;
   expect(unmapped.preflightFailed).toBe(true);
-  expect(unmapped.diagnostics.some((d) => d.code === "SC0001" && d.message.includes("@native-sdk/core"))).toBe(true);
+  expect(
+    unmapped.diagnostics.some((d) => d.code === "SC0001" && d.message.includes("@native-sdk/core")),
+  ).toBe(true);
 
   const { coverage } = analyze(entry, { externalTypes });
   expect(coverage.preflightFailed).toBe(false);
@@ -190,10 +193,16 @@ test("external host declarations unblock application coverage without inventing 
   expect(coverage.diagnostics.some((d) => d.code === "SC0001")).toBe(false);
   expect(
     coverage.diagnostics.some(
-      (d) => d.code === "SC1010" && d.message.includes("external host module") && d.message.includes("--external-types"),
+      (d) =>
+        d.code === "SC1010" &&
+        d.message.includes("external host module") &&
+        d.message.includes("--external-types"),
     ),
   ).toBe(true);
-  const out = renderCoverage({ ...coverage, file: "tests/coverage-fixtures/external-types/main.ts" });
+  const out = renderCoverage({
+    ...coverage,
+    file: "tests/coverage-fixtures/external-types/main.ts",
+  });
   expect(out).toContain("statements analyzed");
   expect(out).toContain("@native-sdk/core");
 });
@@ -219,7 +228,10 @@ test("external host mappings fence dynamic imports even with the island enabled"
   expect(coverage.stats.statementsIsland).toBe(0);
   expect(
     coverage.diagnostics.some(
-      (d) => d.code === "SC1010" && d.message.includes("@native-sdk/core") && d.message.includes("--external-types"),
+      (d) =>
+        d.code === "SC1010" &&
+        d.message.includes("@native-sdk/core") &&
+        d.message.includes("--external-types"),
     ),
   ).toBe(true);
 });
@@ -234,7 +246,10 @@ test("external host mappings fence side-effect CommonJS requires", () => {
   const blockers = [...coverage.diagnostics, ...(coverage.runtimeFences ?? [])];
   expect(
     blockers.some(
-      (d) => d.code === "SC1010" && d.message.includes("@native-sdk/core") && d.message.includes("external host module"),
+      (d) =>
+        d.code === "SC1010" &&
+        d.message.includes("@native-sdk/core") &&
+        d.message.includes("external host module"),
     ),
   ).toBe(true);
 });
@@ -266,10 +281,13 @@ test("external star facades do not claim local exports", () => {
   expect(coverage.stats.statementsFailed).toBe(0);
   expect(
     coverage.diagnostics.some(
-      (d) => d.code === "SC1010" && d.message.includes("the '@native-sdk/core' external host module"),
+      (d) =>
+        d.code === "SC1010" && d.message.includes("the '@native-sdk/core' external host module"),
     ),
   ).toBe(true);
-  expect(coverage.diagnostics.some((d) => d.code === "SC1010" && d.message.startsWith("values from"))).toBe(false);
+  expect(
+    coverage.diagnostics.some((d) => d.code === "SC1010" && d.message.startsWith("values from")),
+  ).toBe(false);
 });
 
 test("external host mappings take precedence over overlapping npm-static packages", () => {
@@ -288,7 +306,9 @@ test("external host mappings take precedence over overlapping npm-static package
     },
   ]);
   expect(coverage.diagnostics.some((d) => d.code === "SC2013")).toBe(false);
-  expect(coverage.diagnostics.some((d) => d.code === "SC1010" && d.message.includes("'slash'"))).toBe(true);
+  expect(
+    coverage.diagnostics.some((d) => d.code === "SC1010" && d.message.includes("'slash'")),
+  ).toBe(true);
 });
 
 test("CLI accepts repeatable --external-types mappings for coverage", () => {
@@ -343,12 +363,12 @@ test("external type mappings reject TypeScript paths patterns", () => {
 test("external type mappings reject non-declaration and unreadable API paths", () => {
   const root = fixture("external-types");
   const entry = join(root, "type-only.ts");
-  expect(() => analyze(entry, { externalTypes: { "@native-sdk/core": join(root, "main.ts") } })).toThrow(
-    "expected a .d.ts, .d.mts, or .d.cts file",
-  );
-  expect(() => analyze(entry, { externalTypes: { "@native-sdk/core": join(root, "missing.d.ts") } })).toThrow(
-    "does not name a readable file",
-  );
+  expect(() =>
+    analyze(entry, { externalTypes: { "@native-sdk/core": join(root, "main.ts") } }),
+  ).toThrow("expected a .d.ts, .d.mts, or .d.cts file");
+  expect(() =>
+    analyze(entry, { externalTypes: { "@native-sdk/core": join(root, "missing.d.ts") } }),
+  ).toThrow("does not name a readable file");
 });
 
 test("type errors block analysis", () => {
@@ -396,9 +416,9 @@ test(`every corpus program is 100% static (corpus and coverage agree${shardSuffi
   // default per-test timeout is far too small for a whole-corpus analysis.
   let n = 0;
   const flatEntries = shardSelect(
-    ["ts", "js", "mjs", "cjs"].flatMap((ext) =>
-      globSync(join(repoRoot, `tests/corpus/*.${ext}`)),
-    ).sort(),
+    ["ts", "js", "mjs", "cjs"]
+      .flatMap((ext) => globSync(join(repoRoot, `tests/corpus/*.${ext}`)))
+      .sort(),
     (file) => file.slice(repoRoot.length + 1),
   );
   for (const file of flatEntries) {

@@ -20,32 +20,50 @@ const protocolPath = (path: string) => path.replaceAll("\\", "/");
 
 function connect(files: Record<string, string>) {
   const dir = mkdtempSync(join(tempRoot, "scriptc-checker-lifetime-"));
-  const paths = new Map(Object.entries(files).map(([name, text]) => [protocolPath(join(dir, name)), text]));
-  const rpc = new Ts7RpcClient(spawnTs7Wire(ts7Executable(), ["--api", "--cwd", dir, `--callbacks=${TS7_FILE_SYSTEM_CALLBACKS}`]));
+  const paths = new Map(
+    Object.entries(files).map(([name, text]) => [protocolPath(join(dir, name)), text]),
+  );
+  const rpc = new Ts7RpcClient(
+    spawnTs7Wire(ts7Executable(), [
+      "--api",
+      "--cwd",
+      dir,
+      `--callbacks=${TS7_FILE_SYSTEM_CALLBACKS}`,
+    ]),
+  );
   registerTs7FileSystem(rpc, {
     readFile: (path) => paths.get(path),
-    fileExists: (path) => paths.has(path) ? true : undefined,
+    fileExists: (path) => (paths.has(path) ? true : undefined),
     directoryExists: () => undefined,
     realpath: () => undefined,
     getAccessibleEntries: () => undefined,
   });
   const session = new Ts7Session(rpc);
   return {
-    session, rpc, paths,
+    session,
+    rpc,
+    paths,
     path: (name: string) => protocolPath(join(dir, name)),
-    close: () => { session.close(); rmSync(dir, { recursive: true, force: true }); },
+    close: () => {
+      session.close();
+      rmSync(dir, { recursive: true, force: true });
+    },
   };
 }
 
 function declaration(root: SourceFile, name: string): AstNode {
   for (const statement of root.statements) {
     if (statement.name?.text === name) return statement;
-    for (const node of statement.declarationList?.declarations ?? []) if (node.name?.text === name) return node;
+    for (const node of statement.declarationList?.declarations ?? [])
+      if (node.name?.text === name) return node;
   }
   throw new Error(`Missing declaration ${name}`);
 }
 
-const config = JSON.stringify({ compilerOptions: { strict: true, target: "esnext", types: [] }, files: ["main.ts"] });
+const config = JSON.stringify({
+  compilerOptions: { strict: true, target: "esnext", types: [] },
+  files: ["main.ts"],
+});
 
 test("unchanged AST identities receive independent semantic answers after a dependency update", () => {
   const h = connect({
@@ -65,7 +83,9 @@ test("unchanged AST identities receive independent semantic answers after a depe
     expect(old.valueDeclarationOf(oldSymbol)).toBe(declaration(root, "result"));
 
     h.paths.set(h.path("dependency.ts"), 'export const value: string = "changed";');
-    const second = h.session.updateSnapshot({ fileChanges: { changed: [h.path("dependency.ts")] } });
+    const second = h.session.updateSnapshot({
+      fileChanges: { changed: [h.path("dependency.ts")] },
+    });
     const newProject = second.getProjects()[0]!;
     const nextRoot = newProject.program.getSourceFile(h.path("main.ts"))!;
     expect(nextRoot).toBe(root);
@@ -82,13 +102,21 @@ test("unchanged AST identities receive independent semantic answers after a depe
     expect(next.typeToString(newType)).toBe("string");
     second.dispose();
     expect(() => next.getTypeAtLocation(name)).toThrow("disposed");
-  } finally { h.close(); }
+  } finally {
+    h.close();
+  }
 });
 
 test("project-local type handles never alias across simultaneous checker caches", () => {
-  const h = connect({ "first.json": config, "second.json": config, "main.ts": 'export type Choice = string | number; export const value = 42;' });
+  const h = connect({
+    "first.json": config,
+    "second.json": config,
+    "main.ts": "export type Choice = string | number; export const value = 42;",
+  });
   try {
-    const snapshot = h.session.updateSnapshot({ openProjects: [h.path("first.json"), h.path("second.json")] });
+    const snapshot = h.session.updateSnapshot({
+      openProjects: [h.path("first.json"), h.path("second.json")],
+    });
     const first = snapshot.getProject(h.path("first.json"))!;
     const second = snapshot.getProject(h.path("second.json"))!;
     const root = first.program.getSourceFile(h.path("main.ts"))!;
@@ -105,16 +133,23 @@ test("project-local type handles never alias across simultaneous checker caches"
     const firstArms = constituentTypes(a.getTypeFromTypeNode(alias));
     const secondArms = constituentTypes(b.getTypeFromTypeNode(alias));
     expect(firstArms).not.toBe(secondArms);
-    expect(firstArms.map((arm) => a.typeToString(arm))).toEqual(secondArms.map((arm) => b.typeToString(arm)));
+    expect(firstArms.map((arm) => a.typeToString(arm))).toEqual(
+      secondArms.map((arm) => b.typeToString(arm)),
+    );
     first.checker.project.dispose();
     expect(() => a.getTypeAtLocation(name)).toThrow("disposed");
     expect(b.getTypeAtLocation(name)).toBe(secondType);
     expect(b.getTypeFromTypeNode(alias).getTypes()).toBe(secondArms);
-  } finally { h.close(); }
+  } finally {
+    h.close();
+  }
 });
 
 test("all public query and prefetch entry points reject a disposed facade before returning cached or local answers", () => {
-  const h = connect({ "tsconfig.json": config, "main.ts": 'export const value = 42; export function fn(v: number): number { return v; }' });
+  const h = connect({
+    "tsconfig.json": config,
+    "main.ts": "export const value = 42; export function fn(v: number): number { return v; }",
+  });
   try {
     const snapshot = h.session.updateSnapshot({ openProjects: [h.path("tsconfig.json")] });
     const project = snapshot.getProjects()[0]!;
@@ -178,14 +213,17 @@ test("all public query and prefetch entry points reject a disposed facade before
     const before = h.rpc.timing().requests;
     facade.dispose();
     facade.dispose();
-    for (const [name, call] of Object.entries(calls)) expect(call, name).toThrow("checker facade is disposed");
+    for (const [name, call] of Object.entries(calls))
+      expect(call, name).toThrow("checker facade is disposed");
     expect(h.rpc.timing().requests).toBe(before);
     expect(project.checker.typeToString(type)).toBe("42");
-  } finally { h.close(); }
+  } finally {
+    h.close();
+  }
 });
 
 test("session shutdown invalidates every retained facade without explicit program disposal", () => {
-  const h = connect({ "tsconfig.json": config, "main.ts": 'export const value = 1;' });
+  const h = connect({ "tsconfig.json": config, "main.ts": "export const value = 1;" });
   try {
     const snapshot = h.session.updateSnapshot({ openProjects: [h.path("tsconfig.json")] });
     const project = snapshot.getProjects()[0]!;
@@ -197,7 +235,9 @@ test("session shutdown invalidates every retained facade without explicit progra
     expect(() => facade.getTypeAtLocation(name)).toThrow("disposed");
     expect(() => facade.getNumberType()).toThrow("disposed");
     expect(() => new CheckerFacade(project.checker)).toThrow("disposed");
-  } finally { h.close(); }
+  } finally {
+    h.close();
+  }
 });
 
 test("program disposal and host close seal cached source and checker access", () => {
@@ -224,7 +264,10 @@ test("program disposal and host close seal cached source and checker access", ()
     expect(() => next.getSourceFiles()).toThrow("closed");
     expect(() => next.getTypeChecker()).toThrow("closed");
     expect(() => nextChecker.getNumberType()).toThrow("disposed");
-  } finally { host.close(); rmSync(dir, { recursive: true, force: true }); }
+  } finally {
+    host.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("negative assignability answers remain independent in both directions", () => {
@@ -236,7 +279,9 @@ test("negative assignability answers remain independent in both directions", () 
       requests.push(query);
       return JSON.stringify(query.source === 1 && query.target === 2);
     },
-    binary: () => { throw new Error("unexpected binary request"); },
+    binary: () => {
+      throw new Error("unexpected binary request");
+    },
   });
   const project = snapshot.addProject("project", () => undefined);
   const facade = new CheckerFacade(new SemanticChecker(project));
@@ -262,12 +307,22 @@ test("property lookup caches hits and misses by type and name within each projec
       expect(method).toBe("getPropertyOfType");
       const query = JSON.parse(payload) as { project: string; type: number; name: string };
       requests.push(`${query.project}:${query.type}:${query.name}`);
-      if (query.name === "retry" && fail) { fail = false; throw new Error("transient failure"); }
+      if (query.name === "retry" && fail) {
+        fail = false;
+        throw new Error("transient failure");
+      }
       if (query.name === "missing") return "null";
-      return JSON.stringify({ id: query.type * 10 + (query.project === "first" ? 1 : 2), project: query.project,
-        name: query.name, flags: 4, checkFlags: 0 });
+      return JSON.stringify({
+        id: query.type * 10 + (query.project === "first" ? 1 : 2),
+        project: query.project,
+        name: query.name,
+        flags: 4,
+        checkFlags: 0,
+      });
     },
-    binary: () => { throw new Error("unexpected binary request"); },
+    binary: () => {
+      throw new Error("unexpected binary request");
+    },
   });
   const first = snapshot.addProject("first", () => undefined);
   const second = snapshot.addProject("second", () => undefined);
@@ -296,9 +351,11 @@ test("property lookup caches hits and misses by type and name within each projec
 });
 
 test("dependency edits invalidate positive and negative property answers", () => {
-  const h = connect({ "tsconfig.json": config,
+  const h = connect({
+    "tsconfig.json": config,
     "main.ts": 'import { value } from "./dependency.js"; export const result = value;',
-    "dependency.ts": "export const value = { before: 1 };" });
+    "dependency.ts": "export const value = { before: 1 };",
+  });
   try {
     const first = h.session.updateSnapshot({ openProjects: [h.path("tsconfig.json")] });
     const project = first.getProjects()[0]!;
@@ -308,7 +365,9 @@ test("dependency edits invalidate positive and negative property answers", () =>
     expect(old.getPropertyOfType(type, "before")).toBeDefined();
     expect(old.getPropertyOfType(type, "after")).toBeUndefined();
     h.paths.set(h.path("dependency.ts"), "export const value = { after: 2 };");
-    const second = h.session.updateSnapshot({ fileChanges: { changed: [h.path("dependency.ts")] } });
+    const second = h.session.updateSnapshot({
+      fileChanges: { changed: [h.path("dependency.ts")] },
+    });
     const nextProject = second.getProjects()[0]!;
     const nextRoot = nextProject.program.getSourceFile(h.path("main.ts"))!;
     expect(nextRoot).toBe(root);
@@ -318,5 +377,7 @@ test("dependency edits invalidate positive and negative property answers", () =>
     expect(next.getPropertyOfType(nextType, "after")).toBeDefined();
     expect(old.getPropertyOfType(type, "before")).toBeDefined();
     expect(old.getPropertyOfType(type, "after")).toBeUndefined();
-  } finally { h.close(); }
+  } finally {
+    h.close();
+  }
 });

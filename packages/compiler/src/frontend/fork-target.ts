@@ -32,7 +32,10 @@ export function isBuiltinMemberImport(
     const importDecl = decl.parent?.parent?.parent;
     if (ts.isImportDeclaration(importDecl) && ts.isStringLiteral(importDecl.moduleSpecifier)) {
       const member = decl.propertyName?.text ?? decl.name.text;
-      if (canonicalBuiltinModule(importDecl.moduleSpecifier.text) === moduleName && member === memberName) {
+      if (
+        canonicalBuiltinModule(importDecl.moduleSpecifier.text) === moduleName &&
+        member === memberName
+      ) {
         return true;
       }
     }
@@ -41,9 +44,15 @@ export function isBuiltinMemberImport(
     const target = checker.getAliasedSymbol(symbol);
     const targetDecl = checker.declarationsOf(target)[0];
     if (targetDecl !== undefined && targetDecl.getSourceFile().isDeclarationFile) {
-      for (let parent: ts.Node | undefined = targetDecl.parent; parent !== undefined && !ts.isSourceFile(parent); parent = parent.parent) {
+      for (
+        let parent: ts.Node | undefined = targetDecl.parent;
+        parent !== undefined && !ts.isSourceFile(parent);
+        parent = parent.parent
+      ) {
         if (ts.isModuleDeclaration(parent) && ts.isStringLiteral(parent.name)) {
-          return canonicalBuiltinModule(parent.name.text) === moduleName && target.name === memberName;
+          return (
+            canonicalBuiltinModule(parent.name.text) === moduleName && target.name === memberName
+          );
         }
       }
     }
@@ -69,9 +78,11 @@ function isBuiltinNamespaceImport(
   } else if (decl !== undefined && ts.isImportClause(decl) && decl.name !== undefined) {
     if (ts.isImportDeclaration(decl.parent)) importDecl = decl.parent;
   }
-  return importDecl !== undefined &&
+  return (
+    importDecl !== undefined &&
     ts.isStringLiteral(importDecl.moduleSpecifier) &&
-    canonicalBuiltinModule(importDecl.moduleSpecifier.text) === moduleName;
+    canonicalBuiltinModule(importDecl.moduleSpecifier.text) === moduleName
+  );
 }
 
 function constInitializer(program: ts.Program, expr: ts.Expression): ts.Expression | null {
@@ -79,7 +90,12 @@ function constInitializer(program: ts.Program, expr: ts.Expression): ts.Expressi
   if (!ts.isIdentifier(current)) return null;
   const symbol = program.getTypeChecker().getSymbolAtLocation(current);
   const decl = symbol
-    ? program.getTypeChecker().declarationsOf(symbol).find((candidate): candidate is ts.VariableDeclaration => ts.isVariableDeclaration(candidate))
+    ? program
+        .getTypeChecker()
+        .declarationsOf(symbol)
+        .find((candidate): candidate is ts.VariableDeclaration =>
+          ts.isVariableDeclaration(candidate),
+        )
     : undefined;
   if (
     decl === undefined ||
@@ -197,7 +213,11 @@ function staticString(
       return null;
     }
   }
-  if (ts.isNewExpression(current) && ts.isIdentifier(current.expression) && current.expression.text === "URL") {
+  if (
+    ts.isNewExpression(current) &&
+    ts.isIdentifier(current.expression) &&
+    current.expression.text === "URL"
+  ) {
     const args = current.arguments ?? [];
     if (args.length < 1 || args.length > 2) return null;
     const input = staticString(program, args[0]!, seen);
@@ -225,7 +245,9 @@ export function staticForkModulePath(program: ts.Program, expr: ts.Expression): 
       current.arguments.length === 1 &&
       ts.isIdentifier(current.expression) &&
       isBuiltinMemberImport(program, current.expression, "url", "fileURLToPath")) ||
-    (ts.isNewExpression(current) && ts.isIdentifier(current.expression) && current.expression.text === "URL");
+    (ts.isNewExpression(current) &&
+      ts.isIdentifier(current.expression) &&
+      current.expression.text === "URL");
   if (!supported) return null;
   const value = staticString(program, current, new Set());
   if (value === null) return null;
@@ -240,18 +262,13 @@ export function staticForkModulePath(program: ts.Program, expr: ts.Expression): 
 export function forkCallModulePath(program: ts.Program, call: ts.CallExpression): string | null {
   const callee = strip(call.expression);
   const isFork =
-    (ts.isIdentifier(callee) &&
-      isBuiltinMemberImport(program, callee, "child_process", "fork")) ||
+    (ts.isIdentifier(callee) && isBuiltinMemberImport(program, callee, "child_process", "fork")) ||
     (ts.isPropertyAccessExpression(callee) &&
       !callee.questionDotToken &&
       callee.name.text === "fork" &&
       ts.isIdentifier(callee.expression) &&
       isBuiltinNamespaceImport(program, callee.expression, "child_process"));
-  if (
-    call.questionDotToken ||
-    call.arguments[0] === undefined ||
-    !isFork
-  ) {
+  if (call.questionDotToken || call.arguments[0] === undefined || !isFork) {
     return null;
   }
   return staticForkModulePath(program, call.arguments[0]);

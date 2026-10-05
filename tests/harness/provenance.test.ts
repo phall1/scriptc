@@ -81,7 +81,9 @@ describe("provenance sources", () => {
     const node = await execFileAsync("node", [subpathEntry], { encoding: "utf8" });
     process.env["SCRIPTC_PROVENANCE_MANIFEST"] = join(fixtureDir, "manifest.json");
     const sources = await resolveProvenanceSources(subpathEntry);
-    expect(sources.packages[0]?.entries["greeter/echo"]).toMatch(/attested-src\/greeter\/src\/echo\.ts$/);
+    expect(sources.packages[0]?.entries["greeter/echo"]).toMatch(
+      /attested-src\/greeter\/src\/echo\.ts$/,
+    );
     setProvenanceSources(sources);
     expect(await buildAndRun("echo-static", false, subpathEntry)).toBe(node.stdout);
   });
@@ -97,7 +99,9 @@ describe("provenance sources", () => {
     expect(coverage.provenanceElided![0]!.message).toContain("'Legacy'");
     // Attribution: every counted statement of the greeter source is
     // static (the elided declaration never counts — it lowers to nothing).
-    const srcStats = [...(coverage.statsByFile ?? [])].filter(([f]) => f.includes("attested-src/greeter/"));
+    const srcStats = [...(coverage.statsByFile ?? [])].filter(([f]) =>
+      f.includes("attested-src/greeter/"),
+    );
     expect(srcStats.length).toBeGreaterThan(0);
     for (const [, s] of srcStats) {
       expect(s.failed).toBe(0);

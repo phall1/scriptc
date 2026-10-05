@@ -53,7 +53,8 @@ export function widthCoerce(lowerer: Lowerer, expr: IrExpr, expected: IrType): I
   }
   if (expected.kind === "array" && expr.type.kind === "array" && expected.elem.kind !== "jsval") {
     const helper = lowerer.arrayWidthHelper(expr.type, expected, expr.loc);
-    if (helper) return { kind: "call", callee: helper, args: [expr], type: expected, loc: expr.loc };
+    if (helper)
+      return { kind: "call", callee: helper, args: [expr], type: expected, loc: expr.loc };
     // The EMPTY-array lift (widthLiftPlan's emptyArr rule), top-level:
     // `cmd.aliases` typed `(null | undefined)[]` (an `aliases: []`
     // table) flowing into a `string[]` slot.
@@ -90,91 +91,131 @@ export function widthCoerce(lowerer: Lowerer, expr: IrExpr, expected: IrType): I
  * `dst` under a plan the caller validated. Interns whatever helpers the
  * lift needs (planned first, so the interns cannot fail — a failure here
  * is a lowerer bug, not a user diagnostic). */
-export function applyWidthLift(lowerer: Lowerer, lift: WidthLift, value: IrExpr, dst: IrType, loc: SrcLoc): IrExpr {
+export function applyWidthLift(
+  lowerer: Lowerer,
+  lift: WidthLift,
+  value: IrExpr,
+  dst: IrType,
+  loc: SrcLoc,
+): IrExpr {
   switch (lift.how) {
     case "copy":
       return value;
     case "wrap": {
-      if (dst.kind !== "union") throw new InternalCompilerError("lowerer bug: wrap lift against a non-union");
+      if (dst.kind !== "union")
+        throw new InternalCompilerError("lowerer bug: wrap lift against a non-union");
       return { kind: "unionWrap", unionId: dst.unionId, tag: lift.tag, value, type: dst, loc };
     }
     case "discriminantWrap": {
-      if (dst.kind !== "union" || value.type.kind !== "record") throw new InternalCompilerError("lowerer bug: record discriminator lift shape");
+      if (dst.kind !== "union" || value.type.kind !== "record")
+        throw new InternalCompilerError("lowerer bug: record discriminator lift shape");
       const helper = lowerer.recordUnionWrapHelper(value.type, dst.unionId, loc);
-      if (!helper) throw new InternalCompilerError("lowerer bug: planned record discriminator lift failed to intern");
+      if (!helper)
+        throw new InternalCompilerError(
+          "lowerer bug: planned record discriminator lift failed to intern",
+        );
       return { kind: "call", callee: helper, args: [value], type: dst, loc };
     }
     case "retag": {
-      if (dst.kind !== "union" || value.type.kind !== "union") throw new InternalCompilerError("lowerer bug: retag lift shape");
+      if (dst.kind !== "union" || value.type.kind !== "union")
+        throw new InternalCompilerError("lowerer bug: retag lift shape");
       const retag = lowerer.unionRetagHelper(value.type.unionId, dst.unionId, loc);
-      if (!retag) throw new InternalCompilerError("lowerer bug: planned retag lift failed to intern");
+      if (!retag)
+        throw new InternalCompilerError("lowerer bug: planned retag lift failed to intern");
       return { kind: "call", callee: retag, args: [value], type: dst, loc };
     }
     case "liftWrap": {
-      if (dst.kind !== "union") throw new InternalCompilerError("lowerer bug: liftWrap lift against a non-union");
+      if (dst.kind !== "union")
+        throw new InternalCompilerError("lowerer bug: liftWrap lift against a non-union");
       const inner = lowerer.widthLiftPlan(value.type, lift.arm);
-      if (!inner) throw new InternalCompilerError("lowerer bug: planned liftWrap arm stopped lifting");
+      if (!inner)
+        throw new InternalCompilerError("lowerer bug: planned liftWrap arm stopped lifting");
       const lifted = lowerer.applyWidthLift(inner, value, lift.arm, loc);
-      return { kind: "unionWrap", unionId: dst.unionId, tag: lift.tag, value: lifted, type: dst, loc };
+      return {
+        kind: "unionWrap",
+        unionId: dst.unionId,
+        tag: lift.tag,
+        value: lifted,
+        type: dst,
+        loc,
+      };
     }
     case "width": {
-      if (dst.kind !== "record" || value.type.kind !== "record") throw new InternalCompilerError("lowerer bug: width lift shape");
+      if (dst.kind !== "record" || value.type.kind !== "record")
+        throw new InternalCompilerError("lowerer bug: width lift shape");
       const helper = lowerer.recordWidthHelper(value.type.shapeId, dst.shapeId, loc);
-      if (!helper) throw new InternalCompilerError("lowerer bug: planned width lift failed to intern");
+      if (!helper)
+        throw new InternalCompilerError("lowerer bug: planned width lift failed to intern");
       return { kind: "call", callee: helper, args: [value], type: dst, loc };
     }
     case "unionWidth": {
-      if (dst.kind !== "record" || value.type.kind !== "union") throw new InternalCompilerError("lowerer bug: union width lift shape");
+      if (dst.kind !== "record" || value.type.kind !== "union")
+        throw new InternalCompilerError("lowerer bug: union width lift shape");
       const helper = lowerer.unionRecordWidthHelper(value.type.unionId, dst, loc);
       return { kind: "call", callee: helper, args: [value], type: dst, loc };
     }
     case "arr": {
-      if (dst.kind !== "array" || value.type.kind !== "array") throw new InternalCompilerError("lowerer bug: arr lift shape");
+      if (dst.kind !== "array" || value.type.kind !== "array")
+        throw new InternalCompilerError("lowerer bug: arr lift shape");
       const helper = lowerer.arrayWidthHelper(value.type, dst, loc);
-      if (!helper) throw new InternalCompilerError("lowerer bug: planned arr lift failed to intern");
+      if (!helper)
+        throw new InternalCompilerError("lowerer bug: planned arr lift failed to intern");
       return { kind: "call", callee: helper, args: [value], type: dst, loc };
     }
     case "tupleArr": {
-      if (dst.kind !== "array" || value.type.kind !== "record") throw new InternalCompilerError("lowerer bug: tupleArr lift shape");
+      if (dst.kind !== "array" || value.type.kind !== "record")
+        throw new InternalCompilerError("lowerer bug: tupleArr lift shape");
       const helper = lowerer.tupleArrayWidthHelper(value.type.shapeId, dst, loc);
-      if (!helper) throw new InternalCompilerError("lowerer bug: planned tupleArr lift failed to intern");
+      if (!helper)
+        throw new InternalCompilerError("lowerer bug: planned tupleArr lift failed to intern");
       return { kind: "call", callee: helper, args: [value], type: dst, loc };
     }
     case "emptyArr": {
-      if (dst.kind !== "array" || value.type.kind !== "array") throw new InternalCompilerError("lowerer bug: emptyArr lift shape");
+      if (dst.kind !== "array" || value.type.kind !== "array")
+        throw new InternalCompilerError("lowerer bug: emptyArr lift shape");
       const helper = lowerer.emptyArrayLiftHelper(value.type, dst, loc);
       return { kind: "call", callee: helper, args: [value], type: dst, loc };
     }
     case "objWidth": {
-      if (dst.kind !== "record" || value.type.kind !== "object") throw new InternalCompilerError("lowerer bug: objWidth lift shape");
+      if (dst.kind !== "record" || value.type.kind !== "object")
+        throw new InternalCompilerError("lowerer bug: objWidth lift shape");
       const helper = lowerer.objRecordWidthHelper(value.type.className, dst.shapeId, loc);
-      if (!helper) throw new InternalCompilerError("lowerer bug: planned objWidth lift failed to intern");
+      if (!helper)
+        throw new InternalCompilerError("lowerer bug: planned objWidth lift failed to intern");
       return { kind: "call", callee: helper, args: [value], type: dst, loc };
     }
     case "clsWidth": {
-      if (dst.kind !== "object" || value.type.kind !== "record") throw new InternalCompilerError("lowerer bug: clsWidth lift shape");
+      if (dst.kind !== "object" || value.type.kind !== "record")
+        throw new InternalCompilerError("lowerer bug: clsWidth lift shape");
       const helper = lowerer.recordClassWidthHelper(value.type.shapeId, dst.className, loc);
-      if (!helper) throw new InternalCompilerError("lowerer bug: planned clsWidth lift failed to intern");
+      if (!helper)
+        throw new InternalCompilerError("lowerer bug: planned clsWidth lift failed to intern");
       return { kind: "call", callee: helper, args: [value], type: dst, loc };
     }
     case "narrow": {
-      if (value.type.kind !== "union") throw new InternalCompilerError("lowerer bug: narrow lift on a non-union");
+      if (value.type.kind !== "union")
+        throw new InternalCompilerError("lowerer bug: narrow lift on a non-union");
       const helper = lowerer.narrowedArmHelper(value.type.unionId, dst, loc);
-      if (!helper) throw new InternalCompilerError("lowerer bug: planned narrow lift failed to intern");
+      if (!helper)
+        throw new InternalCompilerError("lowerer bug: planned narrow lift failed to intern");
       return { kind: "call", callee: helper, args: [value], type: dst, loc };
     }
     case "dynIn": {
-      if (dst.kind !== "dyn") throw new InternalCompilerError("lowerer bug: dynIn lift against a non-dyn slot");
+      if (dst.kind !== "dyn")
+        throw new InternalCompilerError("lowerer bug: dynIn lift against a non-dyn slot");
       return { kind: "dynFrom", value, type: DYN, loc };
     }
     case "upcast": {
-      if (dst.kind !== "object" || value.type.kind !== "object") throw new InternalCompilerError("lowerer bug: upcast lift shape");
+      if (dst.kind !== "object" || value.type.kind !== "object")
+        throw new InternalCompilerError("lowerer bug: upcast lift shape");
       return lowerer.upcastTo(value, dst.className);
     }
     case "funcAdapt": {
-      if (dst.kind !== "func" || value.type.kind !== "func") throw new InternalCompilerError("lowerer bug: funcAdapt lift shape");
+      if (dst.kind !== "func" || value.type.kind !== "func")
+        throw new InternalCompilerError("lowerer bug: funcAdapt lift shape");
       const adapter = lowerer.funcCoerceAdapter(value.type, dst, loc);
-      if (!adapter) throw new InternalCompilerError("lowerer bug: planned funcAdapt lift failed to intern");
+      if (!adapter)
+        throw new InternalCompilerError("lowerer bug: planned funcAdapt lift failed to intern");
       return { kind: "call", callee: adapter, args: [value], type: dst, loc };
     }
     default: {
@@ -189,7 +230,12 @@ export function applyWidthLift(lowerer: Lowerer, lift: WidthLift, value: IrExpr,
  * payload has its own field offsets and optional-field completions;
  * interpreting all arms as the destination layout would corrupt memory.
  * Intern before descending so recursive record unions can reuse it. */
-export function unionRecordWidthHelper(lowerer: Lowerer, fromId: string, target: IrType & { kind: "record" }, loc: SrcLoc): string {
+export function unionRecordWidthHelper(
+  lowerer: Lowerer,
+  fromId: string,
+  target: IrType & { kind: "record" },
+  loc: SrcLoc,
+): string {
   const key = `unionWidth:${fromId}:${target.shapeId}`;
   const existing = lowerer.valueHelpers.get(key);
   if (existing) return existing;
@@ -202,32 +248,45 @@ export function unionRecordWidthHelper(lowerer: Lowerer, fromId: string, target:
   const body: IrStmt[] = [];
   from.arms.forEach((arm, tag) => {
     const lift = lowerer.widthLiftPlan(arm, target);
-    if (!lift || arm.kind !== "record") throw new InternalCompilerError("lowerer bug: invalid union record plan");
+    if (!lift || arm.kind !== "record")
+      throw new InternalCompilerError("lowerer bug: invalid union record plan");
     const narrowed: IrExpr = { kind: "unionNarrow", unionId: fromId, tag, value, type: arm, loc };
     body.push({
       kind: "if",
       cond: { kind: "unionIsTag", unionId: fromId, tag, negated: false, value, type: BOOL, loc },
       then: [{ kind: "return", value: lowerer.applyWidthLift(lift, narrowed, target, loc), loc }],
-      else_: null, loc,
+      else_: null,
+      loc,
     });
   });
   body.push({
     kind: "throw",
     value: {
-      kind: "libCall", fn: "error.new",
+      kind: "libCall",
+      fn: "error.new",
       args: [{ kind: "strLit", value: "invalid record union tag", type: STRING, loc }],
-      type: { kind: "object", className: "%TypeError" }, loc,
+      type: { kind: "object", className: "%TypeError" },
+      loc,
     },
     loc,
   });
   lowerer.liftedFns.push({
-    name, params: [{ localId: "value.0", name: "value", type }], returnType: target,
-    locals: [{ id: "value.0", name: "value", type, mutable: false }], body, loc,
+    name,
+    params: [{ localId: "value.0", name: "value", type }],
+    returnType: target,
+    locals: [{ id: "value.0", name: "value", type, mutable: false }],
+    body,
+    loc,
   });
   return name;
 }
 
-export function recordWidthHelper(lowerer: Lowerer, fromId: string, toId: string, loc: SrcLoc): string | null {
+export function recordWidthHelper(
+  lowerer: Lowerer,
+  fromId: string,
+  toId: string,
+  loc: SrcLoc,
+): string | null {
   const from = lowerer.shapes.get(fromId);
   const to = lowerer.shapes.get(toId);
   if (!from || !to) return null;
@@ -250,7 +309,12 @@ export function recordWidthHelper(lowerer: Lowerer, fromId: string, toId: string
 
 /** Rebuild a tuple as an array in numeric field order, applying a validated
  * conversion at each position. Named records do not convert to arrays. */
-export function tupleArrayWidthHelper(lowerer: Lowerer, fromId: string, toT: IrType & { kind: "array" }, loc: SrcLoc): string | null {
+export function tupleArrayWidthHelper(
+  lowerer: Lowerer,
+  fromId: string,
+  toT: IrType & { kind: "array" },
+  loc: SrcLoc,
+): string | null {
   const from = lowerer.shapes.get(fromId);
   if (!from || !from.tuple) return null;
   const fields = [...from.fields].sort((a, b) => Number(a.name) - Number(b.name));
@@ -301,7 +365,12 @@ export function tupleArrayWidthHelper(lowerer: Lowerer, fromId: string, toT: IrT
  * answering a FRESH empty array, after a runtime non-empty trap (a
  * genuinely inhabited `(null | undefined)[]` cannot reshape — the
  * catchable-TypeError stance every checked extraction takes). */
-export function emptyArrayLiftHelper(lowerer: Lowerer, fromT: IrType & { kind: "array" }, toT: IrType & { kind: "array" }, loc: SrcLoc): string {
+export function emptyArrayLiftHelper(
+  lowerer: Lowerer,
+  fromT: IrType & { kind: "array" },
+  toT: IrType & { kind: "array" },
+  loc: SrcLoc,
+): string {
   const key = `emptyarr:${typeKey(fromT.elem)}:${typeKey(toT.elem)}`;
   const existing = lowerer.valueHelpers.get(key);
   if (existing) return existing;
@@ -330,7 +399,14 @@ export function emptyArrayLiftHelper(lowerer: Lowerer, fromT: IrType & { kind: "
             value: {
               kind: "libCall",
               fn: "error.new",
-              args: [{ kind: "strLit", value: `expected ${lowerer.fmt(toT)} (a non-empty ${lowerer.fmt(fromT)} has no elements the target can hold)`, type: STRING, loc }],
+              args: [
+                {
+                  kind: "strLit",
+                  value: `expected ${lowerer.fmt(toT)} (a non-empty ${lowerer.fmt(fromT)} has no elements the target can hold)`,
+                  type: STRING,
+                  loc,
+                },
+              ],
               type: { kind: "object", className: "%TypeError" },
               loc,
             },
@@ -349,7 +425,12 @@ export function emptyArrayLiftHelper(lowerer: Lowerer, fromT: IrType & { kind: "
 
 /** Copy an array through its validated element conversion. Intern before
  * building the body so recursive element conversions can reuse this helper. */
-export function arrayWidthHelper(lowerer: Lowerer, fromT: IrType & { kind: "array" }, toT: IrType & { kind: "array" }, loc: SrcLoc,): string | null {
+export function arrayWidthHelper(
+  lowerer: Lowerer,
+  fromT: IrType & { kind: "array" },
+  toT: IrType & { kind: "array" },
+  loc: SrcLoc,
+): string | null {
   const fromElem = fromT.elem;
   const toElem = toT.elem;
   const elemLift = lowerer.widthLiftPlan(fromElem, toElem);
@@ -361,12 +442,22 @@ export function arrayWidthHelper(lowerer: Lowerer, fromT: IrType & { kind: "arra
   lowerer.valueHelpers.set(key, name);
   const arrT: IrType = { kind: "array", elem: fromElem };
   const outT: IrType = { kind: "array", elem: toElem };
-  lowerer.liftedFns.push(buildArrayConversion(name, arrT,
-    { kind: "arrayLit", elems: [], type: outT, loc },
-    (element, _index, result) => ({
-      kind: "arrIntrinsic", method: "push", receiver: result,
-      args: [lowerer.applyWidthLift(elemLift, element, toElem, loc)], type: F64, loc,
-    }), loc));
+  lowerer.liftedFns.push(
+    buildArrayConversion(
+      name,
+      arrT,
+      { kind: "arrayLit", elems: [], type: outT, loc },
+      (element, _index, result) => ({
+        kind: "arrIntrinsic",
+        method: "push",
+        receiver: result,
+        args: [lowerer.applyWidthLift(elemLift, element, toElem, loc)],
+        type: F64,
+        loc,
+      }),
+      loc,
+    ),
+  );
   return name;
 }
 
@@ -374,7 +465,12 @@ export function arrayWidthHelper(lowerer: Lowerer, fromT: IrType & { kind: "arra
  * instance's fields under objToRecordPlan: the width-copy stance
  * (divergence 305 — a fresh record, mutations don't alias, extra class
  * members drop). */
-export function objRecordWidthHelper(lowerer: Lowerer, className: string, toId: string, loc: SrcLoc): string | null {
+export function objRecordWidthHelper(
+  lowerer: Lowerer,
+  className: string,
+  toId: string,
+  loc: SrcLoc,
+): string | null {
   const to = lowerer.shapes.get(toId);
   if (!to) return null;
   const plan = lowerer.objToRecordPlan(className, toId);
@@ -394,7 +490,12 @@ export function objRecordWidthHelper(lowerer: Lowerer, className: string, toId: 
  * constructor's arguments (divergence 305's copy stance — a fresh
  * instance, mutations don't alias, and `instanceof C` answers true
  * where Node's plain object answers false). */
-export function recordClassWidthHelper(lowerer: Lowerer, fromId: string, className: string, loc: SrcLoc): string | null {
+export function recordClassWidthHelper(
+  lowerer: Lowerer,
+  fromId: string,
+  className: string,
+  loc: SrcLoc,
+): string | null {
   const info = lowerer.classes.get(className);
   if (!info) return null;
   const plan = lowerer.recordToClassPlan(fromId, className);
@@ -412,10 +513,20 @@ export function recordClassWidthHelper(lowerer: Lowerer, fromId: string, classNa
     const shape = info.ctorParams[i]!;
     if ("absent" in entry) {
       const u = lowerer.wrappedUndefined(shape.type, loc);
-      if (!u) throw new InternalCompilerError("lowerer bug: planned absent ctor arg has no undefined arm");
+      if (!u)
+        throw new InternalCompilerError(
+          "lowerer bug: planned absent ctor arg has no undefined arm",
+        );
       return u;
     }
-    const get: IrExpr = { kind: "recordGet", obj: r, shapeId: fromId, field: entry.field, type: entry.src, loc };
+    const get: IrExpr = {
+      kind: "recordGet",
+      obj: r,
+      shapeId: fromId,
+      field: entry.field,
+      type: entry.src,
+      loc,
+    };
     return lowerer.applyWidthLift(entry.lift, get, shape.type, loc);
   });
   lowerer.liftedFns.push({
@@ -423,9 +534,7 @@ export function recordClassWidthHelper(lowerer: Lowerer, fromId: string, classNa
     params: [{ localId: "r.0", name: "r", type: fromT }],
     returnType: toT,
     locals: [{ id: "r.0", name: "r", type: fromT, mutable: true }],
-    body: [
-      { kind: "return", value: { kind: "new", className, args, type: toT, loc }, loc },
-    ],
+    body: [{ kind: "return", value: { kind: "new", className, args, type: toT, loc }, loc }],
     loc,
   });
   return name;
@@ -440,7 +549,12 @@ export function recordClassWidthHelper(lowerer: Lowerer, fromId: string, classNa
  * later writes to a writable static field don't flow into the record
  * (Node aliases the one class object). Null when any target field has
  * no projectable static. */
-export function classStaticsProjection(lowerer: Lowerer, className: string, toId: string, loc: SrcLoc): IrExpr | null {
+export function classStaticsProjection(
+  lowerer: Lowerer,
+  className: string,
+  toId: string,
+  loc: SrcLoc,
+): IrExpr | null {
   const info = lowerer.classes.get(className);
   const to = lowerer.shapes.get(toId);
   if (!info || !to || to.indexValue || to.tuple) return null;
@@ -458,7 +572,12 @@ export function classStaticsProjection(lowerer: Lowerer, className: string, toId
       continue;
     }
     if (found.field !== undefined) {
-      const read: IrExpr = { kind: "varRef", localId: found.field.globalId, type: found.field.type, loc };
+      const read: IrExpr = {
+        kind: "varRef",
+        localId: found.field.globalId,
+        type: found.field.type,
+        loc,
+      };
       const lift = lowerer.widthLiftPlan(found.field.type, tf.type);
       if (!lift) return null;
       fields.push({ name: tf.name, value: lowerer.applyWidthLift(lift, read, tf.type, loc) });
@@ -499,29 +618,59 @@ function buildRecordProjection(
     params: [{ localId, name: parameter, type: source }],
     returnType: result,
     locals: [{ id: localId, name: parameter, type: source, mutable: true }],
-    body: [{
-      kind: "return",
-      value: {
-        kind: "recordLit",
-        fields: target.fields.map((field) => {
-          const conversion = plan.get(field.name)!;
-          if ("absentDyn" in conversion) return { name: field.name, value: dynUndefinedExpr(loc) };
-          if ("absent" in conversion) {
-            if (field.type.kind !== "union") throw new InternalCompilerError("lowerer bug: absent lift against a non-union field");
-            const value: IrExpr = {
-              kind: "unionWrap", unionId: field.type.unionId, tag: conversion.utag,
-              value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc }, type: field.type, loc,
+    body: [
+      {
+        kind: "return",
+        value: {
+          kind: "recordLit",
+          fields: target.fields.map((field) => {
+            const conversion = plan.get(field.name)!;
+            if ("absentDyn" in conversion)
+              return { name: field.name, value: dynUndefinedExpr(loc) };
+            if ("absent" in conversion) {
+              if (field.type.kind !== "union")
+                throw new InternalCompilerError(
+                  "lowerer bug: absent lift against a non-union field",
+                );
+              const value: IrExpr = {
+                kind: "unionWrap",
+                unionId: field.type.unionId,
+                tag: conversion.utag,
+                value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc },
+                type: field.type,
+                loc,
+              };
+              return { name: field.name, value };
+            }
+            const read: IrExpr =
+              source.kind === "record"
+                ? {
+                    kind: "recordGet",
+                    obj: receiver,
+                    shapeId: source.shapeId,
+                    field: field.name,
+                    type: conversion.src,
+                    loc,
+                  }
+                : {
+                    kind: "fieldGet",
+                    obj: receiver,
+                    className: source.className,
+                    field: field.name,
+                    type: conversion.src,
+                    loc,
+                  };
+            return {
+              name: field.name,
+              value: lowerer.applyWidthLift(conversion.lift, read, field.type, loc),
             };
-            return { name: field.name, value };
-          }
-          const read: IrExpr = source.kind === "record"
-            ? { kind: "recordGet", obj: receiver, shapeId: source.shapeId, field: field.name, type: conversion.src, loc }
-            : { kind: "fieldGet", obj: receiver, className: source.className, field: field.name, type: conversion.src, loc };
-          return { name: field.name, value: lowerer.applyWidthLift(conversion.lift, read, field.type, loc) };
-        }),
-        type: result, loc,
-      }, loc,
-    }],
+          }),
+          type: result,
+          loc,
+        },
+        loc,
+      },
+    ],
     loc,
   };
 }

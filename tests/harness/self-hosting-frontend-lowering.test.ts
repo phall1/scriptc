@@ -15,9 +15,14 @@ test("the complete production frontend lowers with zero rejected statements", as
   const frontend = pathToFileURL(join(root, "packages/compiler/src/frontend/")).href;
   const validator = pathToFileURL(join(root, "packages/compiler/src/ir/validate.ts")).href;
   const ffi = pathToFileURL(join(root, "packages/compiler/src/ffi/ffi-manifest.ts")).href;
-  const { stdout, stderr } = await promisify(execFile)(process.execPath, [
-    "--import", "tsx", "--input-type=module", "--eval",
-    `import { loadProgram, checkPreflight } from ${JSON.stringify(frontend + "program-node.ts")};
+  const { stdout, stderr } = await promisify(execFile)(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "--eval",
+      `import { loadProgram, checkPreflight } from ${JSON.stringify(frontend + "program-node.ts")};
      import { lowerToIr } from ${JSON.stringify(frontend + "lowering/lowerer.ts")};
      import { validateModule } from ${JSON.stringify(validator)};
      import { loadFfiProfile } from ${JSON.stringify(ffi)};
@@ -35,11 +40,16 @@ test("the complete production frontend lowers with zero rejected statements", as
          functions: result.module?.functions.length ?? 0,
          validation: result.module ? validateModule(result.module) : null }));
      } finally { load.dispose(); }`,
-    join(root, "tests/fixtures/self-hosting/frontend-lowering.ts"),
-    join(root, "packages/compiler/native/ts7-process.ffi.json"),
-  ], { cwd: root, timeout: 900_000, maxBuffer: 8 * 1024 * 1024 });
+      join(root, "tests/fixtures/self-hosting/frontend-lowering.ts"),
+      join(root, "packages/compiler/native/ts7-process.ffi.json"),
+    ],
+    { cwd: root, timeout: 900_000, maxBuffer: 8 * 1024 * 1024 },
+  );
   expect(stderr).toBe("");
-  const result = JSON.parse(stdout) as Pick<LowerResult, "stats" | "diagnostics" | "runtimeFences"> & { functions: number; validation: unknown[] | null };
+  const result = JSON.parse(stdout) as Pick<
+    LowerResult,
+    "stats" | "diagnostics" | "runtimeFences"
+  > & { functions: number; validation: unknown[] | null };
   expect(result.diagnostics).toEqual([]);
   expect(result.runtimeFences).toEqual([]);
   expect(result.stats.statementsTotal).toBeGreaterThan(50_000);

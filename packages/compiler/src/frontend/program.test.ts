@@ -2,7 +2,13 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test, vi } from "vitest";
-import { checkPreflight, isNodeEsmFile, loadProgram, makeCycleAdmission, type CycleEdge } from "./program-node.js";
+import {
+  checkPreflight,
+  isNodeEsmFile,
+  loadProgram,
+  makeCycleAdmission,
+  type CycleEdge,
+} from "./program-node.js";
 import * as ts from "./ts7/ast.js";
 import { AstNode } from "./ts7/ast-node.js";
 import { SemanticChecker } from "./ts7/semantic-checker.js";
@@ -11,7 +17,10 @@ test("program-root discovery does not fetch types for unrelated string calls", (
   const dir = mkdtempSync(join(tmpdir(), "scriptc-root-queries-"));
   const entry = join(dir, "main.ts");
   writeFileSync(join(dir, "package.json"), '{"type":"module"}');
-  writeFileSync(entry, 'function label(text: string) { return text; } console.log(label("ready"));\n');
+  writeFileSync(
+    entry,
+    'function label(text: string) { return text; } console.log(label("ready"));\n',
+  );
   const types = vi.spyOn(SemanticChecker.prototype, "getTypeOfSymbol");
   const load = loadProgram(entry);
   try {
@@ -25,7 +34,9 @@ test("program-root discovery does not fetch types for unrelated string calls", (
 });
 
 test("ambiguous module classification bounds ancestor work on deep expressions", () => {
-  const directory = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-module-depth-"));
+  const directory = mkdtempSync(
+    join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-module-depth-"),
+  );
   const entry = join(directory, "main.js");
   const depth = 1_000;
   writeFileSync(join(directory, "package.json"), "{}");
@@ -36,7 +47,9 @@ test("ambiguous module classification bounds ancestor work on deep expressions",
     try {
       expect(isNodeEsmFile(load.entry)).toBe(false);
       expect(parents.mock.calls.length).toBeLessThan(depth * 4);
-    } finally { parents.mockRestore(); }
+    } finally {
+      parents.mockRestore();
+    }
   } finally {
     load.dispose();
     rmSync(directory, { recursive: true, force: true });
@@ -57,33 +70,36 @@ function requireOrderDiagnostics(source: string, dependency = "exports.value = '
   }
 }
 
-test.for([
-  "exports.read = read;",
-  "module.exports.renamed = read;",
-  "module.exports = read;",
-])("a hoisted function export before require is safe: %s", (publish) => {
-  expect(requireOrderDiagnostics(`
+test.for(["exports.read = read;", "module.exports.renamed = read;", "module.exports = read;"])(
+  "a hoisted function export before require is safe: %s",
+  (publish) => {
+    expect(
+      requireOrderDiagnostics(`
 'use strict';
 Object.defineProperty(exports, '__esModule', { value: true });
 ${publish}
 const dep = require('./dep.cjs');
 function read() { return helper(); }
 function helper() { return dep.value; }
-`)).toEqual([]);
-});
+`),
+    ).toEqual([]);
+  },
+);
 
 test.for([
   "exports.a = exports.b = void 0;",
   "exports.a = undefined; exports.b = 'literal'; exports.c = 1;",
   "exports.first = exports.second = read;",
 ])("literal and chained export prologues do not invoke functions: %s", (prefix) => {
-  expect(requireOrderDiagnostics(`
+  expect(
+    requireOrderDiagnostics(`
 Object.defineProperty(exports, '__esModule', { value: true });
 ${prefix}
 exports.read = read;
 const dep = require('./dep.cjs');
 function read() { return dep.value; }
-`)).toEqual([]);
+`),
+  ).toEqual([]);
 });
 
 test.for([
@@ -95,10 +111,16 @@ test.for([
   ["computed export name", "exports[read()] = read;"],
   ["export initializer call", "exports.value = read();"],
   ["class static initializer", "class Early { static value = read(); }"],
-  ["extra descriptor effect", "Object.defineProperty(exports, '__esModule', { value: true, enumerable: read() });"],
+  [
+    "extra descriptor effect",
+    "Object.defineProperty(exports, '__esModule', { value: true, enumerable: read() });",
+  ],
   ["void initializer call", "exports.value = void read();"],
   ["prototype mutation", "exports.__proto__ = read;"],
-  ["read-only marker", "Object.defineProperty(exports, '__esModule', { value: true }); exports.__esModule = read;"],
+  [
+    "read-only marker",
+    "Object.defineProperty(exports, '__esModule', { value: true }); exports.__esModule = read;",
+  ],
   ["replacement export property", "module.exports = read; module.exports.name = read;"],
   ["non-export assignment chain", "const box = {}; exports.alias = box.read = read;"],
 ])("require still refuses an early read through %s", ([, early]) => {
@@ -108,8 +130,9 @@ ${early}
 const dep = require('./dep.cjs');
 function read() { return dep.value; }
 `);
-  expect(diagnostics.some((diag) => diag.code === "SC1013" && diag.message.includes("binding 'dep'")))
-    .toBe(true);
+  expect(
+    diagnostics.some((diag) => diag.code === "SC1013" && diag.message.includes("binding 'dep'")),
+  ).toBe(true);
 });
 
 test("publishing a require binding itself still reads it before initialization", () => {
@@ -117,8 +140,9 @@ test("publishing a require binding itself still reads it before initialization",
 exports.read = read;
 const { read } = require('./dep.cjs');
 `);
-  expect(diagnostics.some((diag) => diag.code === "SC1013" && diag.message.includes("binding 'read'")))
-    .toBe(true);
+  expect(
+    diagnostics.some((diag) => diag.code === "SC1013" && diag.message.includes("binding 'read'")),
+  ).toBe(true);
 });
 
 test.for([
@@ -131,8 +155,9 @@ ${prefix}
 const dep = require('./dep.cjs');
 function read() { return dep.value; }
 `);
-  expect(diagnostics.some((diag) => diag.code === "SC1013" && diag.message.includes("binding 'dep'")))
-    .toBe(true);
+  expect(
+    diagnostics.some((diag) => diag.code === "SC1013" && diag.message.includes("binding 'dep'")),
+  ).toBe(true);
 });
 
 test("an earlier declarator can call an export before the require initializes", () => {
@@ -141,40 +166,54 @@ exports.read = read;
 const before = read(), dep = require('./dep.cjs');
 function read() { return dep.value; }
 `);
-  expect(diagnostics.some((diag) => diag.code === "SC1013" && diag.message.includes("binding 'dep'")))
-    .toBe(true);
+  expect(
+    diagnostics.some((diag) => diag.code === "SC1013" && diag.message.includes("binding 'dep'")),
+  ).toBe(true);
 });
 
 test("a later declarator can call an export after the require initializes", () => {
-  expect(requireOrderDiagnostics(`
+  expect(
+    requireOrderDiagnostics(`
 exports.read = read;
 const dep = require('./dep.cjs'), after = read();
 function read() { return dep.value; }
-`)).toEqual([]);
+`),
+  ).toEqual([]);
 });
 
 test("function publication does not admit CommonJS cycles", () => {
-  const diagnostics = requireOrderDiagnostics(`
+  const diagnostics = requireOrderDiagnostics(
+    `
 exports.read = read;
 const dep = require('./dep.cjs');
 function read() { return dep.value; }
-`, "const main = require('./main.cjs'); exports.value = main.read();\n");
+`,
+    "const main = require('./main.cjs'); exports.value = main.read();\n",
+  );
   expect(diagnostics.some((diag) => diag.code === "SC1016")).toBe(true);
 });
 
 test.for([
-  ['export function read() { return first + alias; }', null],
-  ['export { first, alias }; export function read() { return 1; }', null],
-  ['type Value = typeof alias; export function read(first: number = 1) { return first; }', null],
-  ['class Box { value = alias; } export function read(value = first) { return value; }', null],
-  ['const value = alias; export function read() { return value; }', "alias"],
-  ['class Box { static value = first; } export function read() { return 1; }', "first"],
-  ['class Box { [alias] = 1; } export function read() { return 1; }', "alias"],
+  ["export function read() { return first + alias; }", null],
+  ["export { first, alias }; export function read() { return 1; }", null],
+  ["type Value = typeof alias; export function read(first: number = 1) { return first; }", null],
+  ["class Box { value = alias; } export function read(value = first) { return value; }", null],
+  ["const value = alias; export function read() { return value; }", "alias"],
+  ["class Box { static value = first; } export function read() { return 1; }", "first"],
+  ["class Box { [alias] = 1; } export function read() { return 1; }", "alias"],
 ])("cycle binding indexes preserve initialization safety: %s", ([body, refused]) => {
-  const directory = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-cycle-bindings-"));
+  const directory = mkdtempSync(
+    join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-cycle-bindings-"),
+  );
   const entry = join(directory, "main.ts");
-  writeFileSync(entry, 'import { read } from "./peer.ts"; export const first = 1; export const second = 2; export function run() { return read(); }');
-  writeFileSync(join(directory, "peer.ts"), 'import { first, second as alias } from "./main.ts";\n' + body);
+  writeFileSync(
+    entry,
+    'import { read } from "./peer.ts"; export const first = 1; export const second = 2; export function run() { return read(); }',
+  );
+  writeFileSync(
+    join(directory, "peer.ts"),
+    'import { first, second as alias } from "./main.ts";\n' + body,
+  );
   const load = loadProgram(entry);
   try {
     const cycles = checkPreflight(load).filter((diagnostic) => diagnostic.code === "SC1016");
@@ -190,10 +229,18 @@ test.for([
 });
 
 test("repeated cycle edges reuse a file's binding index", () => {
-  const directory = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-cycle-index-"));
+  const directory = mkdtempSync(
+    join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-cycle-index-"),
+  );
   const entry = join(directory, "main.ts");
-  writeFileSync(entry, 'import { read } from "./peer.ts"; export const first = 1; export const second = 2; export function run() { return read(); }');
-  writeFileSync(join(directory, "peer.ts"), 'import { first } from "./main.ts"; import { second } from "./main.ts"; export function read() { return first + second; }');
+  writeFileSync(
+    entry,
+    'import { read } from "./peer.ts"; export const first = 1; export const second = 2; export function run() { return read(); }',
+  );
+  writeFileSync(
+    join(directory, "peer.ts"),
+    'import { first } from "./main.ts"; import { second } from "./main.ts"; export function read() { return first + second; }',
+  );
   const load = loadProgram(entry);
   try {
     const main = load.entry;
@@ -212,7 +259,9 @@ test("repeated cycle edges reuse a file's binding index", () => {
     try {
       expect(admit(peer, edges.get(peer)![1]!)).toBeNull();
       expect(walk).not.toHaveBeenCalled();
-    } finally { walk.mockRestore(); }
+    } finally {
+      walk.mockRestore();
+    }
   } finally {
     load.dispose();
     rmSync(directory, { recursive: true, force: true });

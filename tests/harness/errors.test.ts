@@ -65,7 +65,13 @@ async function compileAndRun(
   // for runtime-fence shapes only mixed dynamic graphs can spell (the
   // diagnostics suite's directive, applied to the run-and-observe lane).
   const dynamic = /^\/\/ @dynamic\s*$/.test(source.split("\n", 1)[0] ?? "");
-  const result = await compile(file, { outPath: join(outDir, name), outDir, sanitize, backend: "llvm", dynamic });
+  const result = await compile(file, {
+    outPath: join(outDir, name),
+    outDir,
+    sanitize,
+    backend: "llvm",
+    dynamic,
+  });
   if (!result.ok) {
     throw new Error(
       "errors program failed to compile:\n" +
@@ -78,7 +84,11 @@ async function compileAndRun(
   } catch (err) {
     const e = err as { code?: unknown; stdout?: string; stderr?: string };
     if (typeof e.code !== "number") throw err;
-    return { stdout: e.stdout ?? "", stderr: stripAsanFiberWarning(e.stderr ?? ""), exitCode: e.code };
+    return {
+      stdout: e.stdout ?? "",
+      stderr: stripAsanFiberWarning(e.stderr ?? ""),
+      exitCode: e.code,
+    };
   }
 }
 
@@ -88,7 +98,10 @@ async function compileAndRun(
  * diagnostic noise, never program output — dropped before any stderr
  * expectation, the RC-audit-skip-notice pattern from differential.test.ts. */
 function stripAsanFiberWarning(s: string): string {
-  return s.replace(/^==\d+==WARNING: ASan doesn't fully support makecontext\/swapcontext.*\n/gm, "");
+  return s.replace(
+    /^==\d+==WARNING: ASan doesn't fully support makecontext\/swapcontext.*\n/gm,
+    "",
+  );
 }
 
 describe(`uncaught error objects (scriptc-only${sanitize ? ", sanitized" : ""})`, () => {
@@ -218,15 +231,29 @@ console.log(two(1, 2, loud()));
   });
 
   test.each([
-    { label: "Array.from", name: "array-from-length-elements", source: `const arr = Array.from({ length: 2 }, () => new Date(0));` },
-    { label: "flatMap", name: "flatmap-elements", source: `const arr = [1].flatMap(() => new Date(0));` },
-    { label: "tuple map", name: "tuple-map-elements", source: `/** @type {[number]} */
+    {
+      label: "Array.from",
+      name: "array-from-length-elements",
+      source: `const arr = Array.from({ length: 2 }, () => new Date(0));`,
+    },
+    {
+      label: "flatMap",
+      name: "flatmap-elements",
+      source: `const arr = [1].flatMap(() => new Date(0));`,
+    },
+    {
+      label: "tuple map",
+      name: "tuple-map-elements",
+      source: `/** @type {[number]} */
 const tuple = [1];
-const arr = tuple.map(() => new Date(0));` },
+const arr = tuple.map(() => new Date(0));`,
+    },
   ])("$label preserves checked callback results (JS lane)", async ({ name, source }) => {
     const program = source + "\nconsole.log(arr.length, arr[0].getTime());\n";
     const r = await compileAndRun(name, program, "js");
-    const reference = await execFileAsync(process.execPath, ["--eval", program], { encoding: "utf8" });
+    const reference = await execFileAsync(process.execPath, ["--eval", program], {
+      encoding: "utf8",
+    });
     expect(r).toEqual({ stdout: reference.stdout, stderr: reference.stderr, exitCode: 0 });
   });
 
@@ -270,7 +297,9 @@ console.log(new exports.O().a());
     );
     expect(r.exitCode).toBe(1);
     expect(r.stdout).toBe("");
-    expect(r.stderr).toMatch(/^Uncaught Error: .* \[SC1090 at .*extends-reassigned-property\.cjs:\d+\]\n$/);
+    expect(r.stderr).toMatch(
+      /^Uncaught Error: .* \[SC1090 at .*extends-reassigned-property\.cjs:\d+\]\n$/,
+    );
   });
 
   test("a non-callable constructor field shadows its method and throws at the call (JS lane)", async () => {
@@ -359,9 +388,7 @@ subtle.digest('SHA-256');
     );
     expect(r.exitCode).toBe(1);
     expect(r.stdout).toBe("bound true\n");
-    expect(r.stderr).toMatch(
-      /^Uncaught TypeError: subtle\.digest is not a function\n$/,
-    );
+    expect(r.stderr).toMatch(/^Uncaught TypeError: subtle\.digest is not a function\n$/);
   });
 
   test("a 7000-level expression is a named deferred fence, not a stack overflow (JS lane)", async () => {

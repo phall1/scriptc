@@ -7,23 +7,45 @@ import { stringParts } from "./string-construction.js";
 const loc = { file: "construction.ts", start: 0, end: 1 };
 const text = (value: string): IrExpr => ({ kind: "strLit", value, type: STRING, loc });
 const ref = (localId: string): IrExpr => ({ kind: "varRef", localId, type: STRING, loc });
-const concat = (left: IrExpr, right: IrExpr): IrExpr => ({ kind: "strConcat", left, right, type: STRING, loc });
+const concat = (left: IrExpr, right: IrExpr): IrExpr => ({
+  kind: "strConcat",
+  left,
+  right,
+  type: STRING,
+  loc,
+});
 
 function module(value: IrExpr): IrModule {
-  return { irVersion: 13, sourceFile: loc.file, entry: "main", functions: [
-    { name: "main", loc, params: [], locals: [], returnType: VOID, body: [] },
-    { name: "assemble", loc, params: [{ name: "value", localId: "value", type: STRING }],
-      locals: [{ id: "value", name: "value", type: STRING, mutable: true }],
-      returnType: STRING, body: [{ kind: "return", value, loc }] },
-  ] };
+  return {
+    irVersion: 13,
+    sourceFile: loc.file,
+    entry: "main",
+    functions: [
+      { name: "main", loc, params: [], locals: [], returnType: VOID, body: [] },
+      {
+        name: "assemble",
+        loc,
+        params: [{ name: "value", localId: "value", type: STRING }],
+        locals: [{ id: "value", name: "value", type: STRING, mutable: true }],
+        returnType: STRING,
+        body: [{ kind: "return", value, loc }],
+      },
+    ],
+  };
 }
 
 test("concat grouping bounds each stack vector and preserves leaf order", () => {
   const leaves = Array.from({ length: 100 }, (_, i) => text(String(i)));
-  for (const tree of [leaves.reduce(concat), leaves.reduceRight((right, left) => concat(left, right))]) {
+  for (const tree of [
+    leaves.reduce(concat),
+    leaves.reduceRight((right, left) => concat(left, right)),
+  ]) {
     const seen: IrExpr[] = [];
     const walk = (value: IrExpr): void => {
-      if (value.kind !== "strConcat") { seen.push(value); return; }
+      if (value.kind !== "strConcat") {
+        seen.push(value);
+        return;
+      }
       const parts = stringParts(value);
       expect(parts.length).toBeGreaterThanOrEqual(2);
       expect(parts.length).toBeLessThanOrEqual(16);
@@ -46,7 +68,13 @@ test.each([32, 64] as const)("concat uses a borrowed stack vector with %i-bit si
 });
 
 test("later writes preserve an owned snapshot of earlier string parts", () => {
-  const changed: IrExpr = { kind: "assignExpr", localId: "value", value: text("new"), type: STRING, loc };
+  const changed: IrExpr = {
+    kind: "assignExpr",
+    localId: "value",
+    value: text("new"),
+    type: STRING,
+    loc,
+  };
   const mod = module(concat(concat(ref("value"), changed), ref("value")));
   expect(validateModule(mod)).toEqual([]);
   const body = /^define internal [^\n]*@sc_f_assemble\([^]*?^}/m.exec(emitLlvmModule(mod))![0];

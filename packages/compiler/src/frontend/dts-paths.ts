@@ -9,14 +9,20 @@ const require = createRequire(import.meta.url);
 let installedDeclarationRoot: string | null = null;
 
 /** A native distribution supplies its relocatable declaration directory. */
-export function setDeclarationRoot(root: string): void { installedDeclarationRoot = root; }
+export function setDeclarationRoot(root: string): void {
+  installedDeclarationRoot = root;
+}
 
 function declarationPath(name: string): string {
-  return tsgoPath(installedDeclarationRoot === null
-    ? name === "scriptc.d.ts" ? require.resolve("@scriptc/compiler/scriptc.d.ts")
-      : name === "scriptc-overrides.d.ts" ? require.resolve("@scriptc/compiler/scriptc-overrides.d.ts")
-      : require.resolve("@scriptc/compiler/scriptc-node-fallback.d.ts")
-    : join(installedDeclarationRoot, name));
+  return tsgoPath(
+    installedDeclarationRoot === null
+      ? name === "scriptc.d.ts"
+        ? require.resolve("@scriptc/compiler/scriptc.d.ts")
+        : name === "scriptc-overrides.d.ts"
+          ? require.resolve("@scriptc/compiler/scriptc-overrides.d.ts")
+          : require.resolve("@scriptc/compiler/scriptc-node-fallback.d.ts")
+      : join(installedDeclarationRoot, name),
+  );
 }
 
 /** Path of the shipped ambient declarations — the always-shipped CORE

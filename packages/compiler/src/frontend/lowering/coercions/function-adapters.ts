@@ -2,14 +2,29 @@ import { dynUndefinedExpr } from "../../../ir/build.js";
 import { buildFunctionAdapter } from "./builders.js";
 import { InternalCompilerError } from "../../../errors.js";
 import type { IrExpr, IrParam, IrStmt, IrType, SrcLoc } from "../../../ir/ir.js";
-import { canAdaptDynFuncTo, canMarshalTypedFuncIntoIsland, DYN, F64, isUnitType, JSVAL, STRING, typeEquals, UNDEFINED_T } from "../../../ir/ir.js";
+import {
+  canAdaptDynFuncTo,
+  canMarshalTypedFuncIntoIsland,
+  DYN,
+  F64,
+  isUnitType,
+  JSVAL,
+  STRING,
+  typeEquals,
+  UNDEFINED_T,
+} from "../../../ir/ir.js";
 import { typeKey } from "../../type-mapper.js";
 import type { Lowerer } from "../lowerer.js";
 
 /** Wrap a zero-argument function whose array result needs an element
  * conversion. Each invocation creates a fresh converted array; the factory
  * creates a fresh closure capturing the original function. */
-export function funcReturnWidthAdapter(lowerer: Lowerer, fromT: IrType & { kind: "func" }, toT: IrType & { kind: "func" }, loc: SrcLoc,): string | null {
+export function funcReturnWidthAdapter(
+  lowerer: Lowerer,
+  fromT: IrType & { kind: "func" },
+  toT: IrType & { kind: "func" },
+  loc: SrcLoc,
+): string | null {
   if (fromT.params.length !== 0 || toT.params.length !== 0) return null;
   if (fromT.ret.kind !== "array" || toT.ret.kind !== "array") return null;
   const mapper = lowerer.arrayWidthHelper(fromT.ret, toT.ret, loc);
@@ -21,28 +36,38 @@ export function funcReturnWidthAdapter(lowerer: Lowerer, fromT: IrType & { kind:
   lowerer.valueHelpers.set(key, name);
   lowerer.freshClosureAdapters.add(name);
   // The returned closure's body: call the captured original, width-map.
-  lowerer.liftedFns.push(...buildFunctionAdapter(name, fromT, toT, [], [], [
-    {
-      kind: "return",
-      value: {
-        kind: "call",
-        callee: mapper,
-        args: [
-          {
-            kind: "callValue",
-            callee: { kind: "varRef", localId: "f.0", type: fromT, loc },
-            receiver: { kind: "libCall", fn: "dyn.this", args: [], type: DYN, loc },
-            args: [],
-            type: fromT.ret,
+  lowerer.liftedFns.push(
+    ...buildFunctionAdapter(
+      name,
+      fromT,
+      toT,
+      [],
+      [],
+      [
+        {
+          kind: "return",
+          value: {
+            kind: "call",
+            callee: mapper,
+            args: [
+              {
+                kind: "callValue",
+                callee: { kind: "varRef", localId: "f.0", type: fromT, loc },
+                receiver: { kind: "libCall", fn: "dyn.this", args: [], type: DYN, loc },
+                args: [],
+                type: fromT.ret,
+                loc,
+              },
+            ],
+            type: toT.ret,
             loc,
           },
-        ],
-        type: toT.ret,
-        loc,
-      },
+          loc,
+        },
+      ],
       loc,
-    },
-  ], loc));
+    ),
+  );
   return name;
 }
 
@@ -65,7 +90,11 @@ export function coercibleValue(lowerer: Lowerer, src: IrType, dst: IrType): bool
         lowerer.boundarySafe(src) ||
         lowerer.jsvalLiftable(src) ||
         (src.kind === "func" &&
-          canMarshalTypedFuncIntoIsland(src, (id) => lowerer.shapes.get(id), (id) => lowerer.unions.get(id))))
+          canMarshalTypedFuncIntoIsland(
+            src,
+            (id) => lowerer.shapes.get(id),
+            (id) => lowerer.unions.get(id),
+          )))
     );
   }
   if (src.kind === "jsval") return lowerer.boundaryExitSafe(dst);
@@ -77,7 +106,12 @@ export function coercibleValue(lowerer: Lowerer, src: IrType, dst: IrType): bool
     // — the production/development function-choice ternary shape).
     return (
       lowerer.jsonSafe(dst) ||
-      (dst.kind === "func" && canAdaptDynFuncTo(dst, (id) => lowerer.shapes.get(id), (id) => lowerer.unions.get(id)))
+      (dst.kind === "func" &&
+        canAdaptDynFuncTo(
+          dst,
+          (id) => lowerer.shapes.get(id),
+          (id) => lowerer.unions.get(id),
+        ))
     );
   }
   if (dst.kind === "union") {
@@ -93,7 +127,11 @@ export function coercibleValue(lowerer: Lowerer, src: IrType, dst: IrType): bool
 
 /** Whether all parameters and the result adapt without a trap-only path.
  * Rest signatures are excluded; extra destination parameters are ignored. */
-export function cleanFuncAdaptable(lowerer: Lowerer, src: IrType & { kind: "func" }, dst: IrType & { kind: "func" }): boolean {
+export function cleanFuncAdaptable(
+  lowerer: Lowerer,
+  src: IrType & { kind: "func" },
+  dst: IrType & { kind: "func" },
+): boolean {
   if (src.rest === true || dst.rest === true) return false;
   if (src.params.length > dst.params.length) return false;
   for (let i = 0; i < src.params.length; i++) {
@@ -107,7 +145,12 @@ export function cleanFuncAdaptable(lowerer: Lowerer, src: IrType & { kind: "func
 /** Adapt a function value to a destination signature, forwarding and
  * converting its arguments and result. Unsupported parameter/result pairs
  * produce checked traps when called; rest signatures remain refused. */
-export function funcCoerceAdapter(lowerer: Lowerer, fromT: IrType & { kind: "func" }, toT: IrType & { kind: "func" }, loc: SrcLoc): string | null {
+export function funcCoerceAdapter(
+  lowerer: Lowerer,
+  fromT: IrType & { kind: "func" },
+  toT: IrType & { kind: "func" },
+  loc: SrcLoc,
+): string | null {
   if (fromT.rest === true || toT.rest === true) return null;
   if (fromT.params.length > toT.params.length) return null;
   // Piece dispositions beyond coercibleValue, all CHECKER-APPROVED
@@ -131,9 +174,13 @@ export function funcCoerceAdapter(lowerer: Lowerer, fromT: IrType & { kind: "fun
     const expected = fromT.params[i]!;
     if (lowerer.coercibleValue(actual, expected)) continue;
     if (actual.kind === "union" && expected.kind === "dyn") {
-      const arms = lowerer.unions.get(actual.unionId)?.arms.filter((arm) => lowerer.dynConvertible(arm)) ?? [];
+      const arms =
+        lowerer.unions.get(actual.unionId)?.arms.filter((arm) => lowerer.dynConvertible(arm)) ?? [];
       if (arms.length > 0) {
-        partialDynParams.set(i, arms.length === 1 ? arms[0]! : { kind: "union", unionId: lowerer.unions.intern(arms) });
+        partialDynParams.set(
+          i,
+          arms.length === 1 ? arms[0]! : { kind: "union", unionId: lowerer.unions.intern(arms) },
+        );
         continue;
       }
     }
@@ -144,8 +191,19 @@ export function funcCoerceAdapter(lowerer: Lowerer, fromT: IrType & { kind: "fun
     if (actual.kind === "union" && expected.kind === "union") {
       const source = lowerer.unions.get(actual.unionId);
       const target = lowerer.unions.get(expected.unionId);
-      if (source && target && target.arms.every((arm) => lowerer.armTag(actual.unionId, arm) >= 0)) {
-        narrowedParams.set(i, new Set(source.arms.flatMap((arm, tag) => lowerer.armTag(expected.unionId, arm) < 0 ? [tag] : [])));
+      if (
+        source &&
+        target &&
+        target.arms.every((arm) => lowerer.armTag(actual.unionId, arm) >= 0)
+      ) {
+        narrowedParams.set(
+          i,
+          new Set(
+            source.arms.flatMap((arm, tag) =>
+              lowerer.armTag(expected.unionId, arm) < 0 ? [tag] : [],
+            ),
+          ),
+        );
         continue;
       }
     }
@@ -172,7 +230,11 @@ export function funcCoerceAdapter(lowerer: Lowerer, fromT: IrType & { kind: "fun
   const name = `%fn.adapt.${lowerer.coercions.retags.size}`;
   lowerer.coercions.retags.set(key, name);
   lowerer.freshClosureAdapters.add(name);
-  const params: IrParam[] = toT.params.map((t, i) => ({ localId: `a.${i}`, name: `a${i}`, type: t }));
+  const params: IrParam[] = toT.params.map((t, i) => ({
+    localId: `a.${i}`,
+    name: `a${i}`,
+    type: t,
+  }));
   const strandThrow = (why: string): IrStmt => ({
     kind: "throw",
     value: {
@@ -197,22 +259,36 @@ export function funcCoerceAdapter(lowerer: Lowerer, fromT: IrType & { kind: "fun
       const partial = partialDynParams.get(i);
       if (partial && aRef.type.kind === "union") {
         const source = lowerer.unions.get(aRef.type.unionId)!;
-        const supported = partial.kind === "union" ? lowerer.unions.get(partial.unionId)!.arms : [partial];
-        const rejected = new Set(source.arms.flatMap((arm, tag) => supported.some((accepted) => typeEquals(accepted, arm)) ? [] : [tag]));
-        const narrow = partial.kind === "union"
-          ? lowerer.unionRetagHelper(aRef.type.unionId, partial.unionId, loc, rejected)
-          : lowerer.narrowedArmHelper(aRef.type.unionId, partial, loc);
-        if (!narrow) throw new InternalCompilerError("lowerer bug: partial callable parameter stopped narrowing");
-        return lowerer.coerceToExpected({ kind: "call", callee: narrow, args: [aRef], type: partial, loc }, pt);
+        const supported =
+          partial.kind === "union" ? lowerer.unions.get(partial.unionId)!.arms : [partial];
+        const rejected = new Set(
+          source.arms.flatMap((arm, tag) =>
+            supported.some((accepted) => typeEquals(accepted, arm)) ? [] : [tag],
+          ),
+        );
+        const narrow =
+          partial.kind === "union"
+            ? lowerer.unionRetagHelper(aRef.type.unionId, partial.unionId, loc, rejected)
+            : lowerer.narrowedArmHelper(aRef.type.unionId, partial, loc);
+        if (!narrow)
+          throw new InternalCompilerError(
+            "lowerer bug: partial callable parameter stopped narrowing",
+          );
+        return lowerer.coerceToExpected(
+          { kind: "call", callee: narrow, args: [aRef], type: partial, loc },
+          pt,
+        );
       }
       const narrowed = narrowedParams.get(i);
-      const helper = narrowed && aRef.type.kind === "union" && pt.kind === "union"
-        ? lowerer.unionRetagHelper(aRef.type.unionId, pt.unionId, loc, narrowed)
-        : null;
+      const helper =
+        narrowed && aRef.type.kind === "union" && pt.kind === "union"
+          ? lowerer.unionRetagHelper(aRef.type.unionId, pt.unionId, loc, narrowed)
+          : null;
       const converted: IrExpr = helper
         ? { kind: "call", callee: helper, args: [aRef], type: pt, loc }
         : lowerer.coerceToExpected(aRef, pt);
-      if (!typeEquals(converted.type, pt)) throw new InternalCompilerError("lowerer bug: probed fn-adapter param stopped coercing");
+      if (!typeEquals(converted.type, pt))
+        throw new InternalCompilerError("lowerer bug: probed fn-adapter param stopped coercing");
       return converted;
     });
     const call: IrExpr = {
@@ -236,7 +312,11 @@ export function funcCoerceAdapter(lowerer: Lowerer, fromT: IrType & { kind: "fun
     } else if (voidRet === "jsval") {
       body = [
         { kind: "exprStmt", expr: call, loc },
-        { kind: "return", value: { kind: "jsOp", op: "undefLit", args: [], type: JSVAL, loc }, loc },
+        {
+          kind: "return",
+          value: { kind: "jsOp", op: "undefLit", args: [], type: JSVAL, loc },
+          loc,
+        },
       ];
     } else if (voidRet === "strand") {
       body = [
@@ -254,7 +334,8 @@ export function funcCoerceAdapter(lowerer: Lowerer, fromT: IrType & { kind: "fun
       ];
     } else {
       const result = lowerer.coerceToExpected(call, toT.ret);
-      if (!typeEquals(result.type, toT.ret)) throw new InternalCompilerError("lowerer bug: probed fn-adapter return stopped coercing");
+      if (!typeEquals(result.type, toT.ret))
+        throw new InternalCompilerError("lowerer bug: probed fn-adapter return stopped coercing");
       body = [{ kind: "return", value: result, loc }];
     }
   }
@@ -271,23 +352,45 @@ export function funcCoerceAdapter(lowerer: Lowerer, fromT: IrType & { kind: "fun
  * stderr, error) at its exact lowered type — string fields optionally
  * undefined-armed. Null when the pair isn't this shape. Pure: callers
  * probe before interning. */
-export function spawnResFnAdapterPlan(lowerer: Lowerer, fromT: IrType & { kind: "func" }, toT: IrType & { kind: "func" },): { field: string; build: (r: IrExpr, loc: SrcLoc) => IrExpr }[] | null {
+export function spawnResFnAdapterPlan(
+  lowerer: Lowerer,
+  fromT: IrType & { kind: "func" },
+  toT: IrType & { kind: "func" },
+): { field: string; build: (r: IrExpr, loc: SrcLoc) => IrExpr }[] | null {
   if (!Array.isArray(fromT.params) || !Array.isArray(toT.params)) return null; // defensive: degenerate func types
   if (fromT.params.length !== toT.params.length) return null;
   if (!fromT.params.every((p, i) => typeEquals(p, toT.params[i]!))) return null;
   if (fromT.ret.kind !== "spawnRes" || toT.ret.kind !== "record") return null;
   const shape = lowerer.shapes.get(toT.ret.shapeId);
   if (!shape || shape.tuple || shape.indexValue) return null;
-  const statusT: IrType = { kind: "union", unionId: lowerer.unions.intern([F64, { kind: "nullT" }]) };
-  const errorT: IrType = { kind: "union", unionId: lowerer.unions.intern([{ kind: "object", className: "%Error" }, UNDEFINED_T]) };
+  const statusT: IrType = {
+    kind: "union",
+    unionId: lowerer.unions.intern([F64, { kind: "nullT" }]),
+  };
+  const errorT: IrType = {
+    kind: "union",
+    unionId: lowerer.unions.intern([{ kind: "object", className: "%Error" }, UNDEFINED_T]),
+  };
   const strOptT: IrType = { kind: "union", unionId: lowerer.unions.intern([STRING, UNDEFINED_T]) };
   const plan: { field: string; build: (r: IrExpr, loc: SrcLoc) => IrExpr }[] = [];
   for (const f of shape.fields) {
     if (f.name === "status" && typeEquals(f.type, statusT)) {
-      plan.push({ field: f.name, build: (r, loc) => ({ kind: "libCall", fn: "spawnRes.status", args: [r], type: statusT, loc }) });
+      plan.push({
+        field: f.name,
+        build: (r, loc) => ({
+          kind: "libCall",
+          fn: "spawnRes.status",
+          args: [r],
+          type: statusT,
+          loc,
+        }),
+      });
       continue;
     }
-    if ((f.name === "stdout" || f.name === "stderr") && (typeEquals(f.type, strOptT) || f.type.kind === "string")) {
+    if (
+      (f.name === "stdout" || f.name === "stderr") &&
+      (typeEquals(f.type, strOptT) || f.type.kind === "string")
+    ) {
       const fn = f.name === "stdout" ? ("spawnRes.stdout" as const) : ("spawnRes.stderr" as const);
       const strTag = lowerer.armTag(strOptT.kind === "union" ? strOptT.unionId : "", STRING);
       plan.push({
@@ -296,13 +399,29 @@ export function spawnResFnAdapterPlan(lowerer: Lowerer, fromT: IrType & { kind: 
           const read: IrExpr = { kind: "libCall", fn, args: [r], type: STRING, loc };
           return f.type.kind === "string"
             ? read
-            : { kind: "unionWrap", unionId: (f.type as IrType & { kind: "union" }).unionId, tag: strTag, value: read, type: f.type, loc };
+            : {
+                kind: "unionWrap",
+                unionId: (f.type as IrType & { kind: "union" }).unionId,
+                tag: strTag,
+                value: read,
+                type: f.type,
+                loc,
+              };
         },
       });
       continue;
     }
     if (f.name === "error" && typeEquals(f.type, errorT)) {
-      plan.push({ field: f.name, build: (r, loc) => ({ kind: "libCall", fn: "spawnRes.error", args: [r], type: errorT, loc }) });
+      plan.push({
+        field: f.name,
+        build: (r, loc) => ({
+          kind: "libCall",
+          fn: "spawnRes.error",
+          args: [r],
+          type: errorT,
+          loc,
+        }),
+      });
       continue;
     }
     return null;
@@ -317,7 +436,12 @@ export function spawnResFnAdapterPlan(lowerer: Lowerer, fromT: IrType & { kind: 
  * spawnResFnAdapterPlan's set). Divergence caveat: stdout/stderr read
  * as the captured text ("" when nothing was captured, e.g. stdio
  * "inherit") where Node stores null. */
-export function spawnResFnAdapter(lowerer: Lowerer, fromT: IrType & { kind: "func" }, toT: IrType & { kind: "func" }, loc: SrcLoc,): string | null {
+export function spawnResFnAdapter(
+  lowerer: Lowerer,
+  fromT: IrType & { kind: "func" },
+  toT: IrType & { kind: "func" },
+  loc: SrcLoc,
+): string | null {
   const plan = lowerer.spawnResFnAdapterPlan(fromT, toT);
   if (!plan) return null;
   if (toT.ret.kind !== "record") return null;
@@ -327,32 +451,51 @@ export function spawnResFnAdapter(lowerer: Lowerer, fromT: IrType & { kind: "fun
   const name = `%fnval.spawnres.${lowerer.valueHelpers.size}`;
   lowerer.valueHelpers.set(key, name);
   lowerer.freshClosureAdapters.add(name);
-  const params: IrParam[] = toT.params.map((p, i) => ({ localId: `p${i}.0`, name: `p${i}`, type: p }));
+  const params: IrParam[] = toT.params.map((p, i) => ({
+    localId: `p${i}.0`,
+    name: `p${i}`,
+    type: p,
+  }));
   const rRef: IrExpr = { kind: "varRef", localId: "r.0", type: fromT.ret, loc };
-  lowerer.liftedFns.push(...buildFunctionAdapter(name, fromT, toT, params, [{ id: "r.0", name: "r", type: fromT.ret, mutable: false }], [
-    {
-      kind: "varDecl",
-      localId: "r.0",
-      init: {
-        kind: "callValue",
-        callee: { kind: "varRef", localId: "f.0", type: fromT, loc },
-        receiver: { kind: "libCall", fn: "dyn.this", args: [], type: DYN, loc },
-        args: params.map((p): IrExpr => ({ kind: "varRef", localId: p.localId, type: p.type, loc })),
-        type: fromT.ret,
-        loc,
-      },
+  lowerer.liftedFns.push(
+    ...buildFunctionAdapter(
+      name,
+      fromT,
+      toT,
+      params,
+      [{ id: "r.0", name: "r", type: fromT.ret, mutable: false }],
+      [
+        {
+          kind: "varDecl",
+          localId: "r.0",
+          init: {
+            kind: "callValue",
+            callee: { kind: "varRef", localId: "f.0", type: fromT, loc },
+            receiver: { kind: "libCall", fn: "dyn.this", args: [], type: DYN, loc },
+            args: params.map((p): IrExpr => ({
+              kind: "varRef",
+              localId: p.localId,
+              type: p.type,
+              loc,
+            })),
+            type: fromT.ret,
+            loc,
+          },
+          loc,
+        },
+        {
+          kind: "return",
+          value: {
+            kind: "recordLit",
+            fields: plan.map((entry) => ({ name: entry.field, value: entry.build(rRef, loc) })),
+            type: toT.ret,
+            loc,
+          },
+          loc,
+        },
+      ],
       loc,
-    },
-    {
-      kind: "return",
-      value: {
-        kind: "recordLit",
-        fields: plan.map((entry) => ({ name: entry.field, value: entry.build(rRef, loc) })),
-        type: toT.ret,
-        loc,
-      },
-      loc,
-    },
-  ], loc));
+    ),
+  );
   return name;
 }

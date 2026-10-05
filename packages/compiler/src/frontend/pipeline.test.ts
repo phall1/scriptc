@@ -5,7 +5,10 @@ import type { ScrDiagnostic } from "../diagnostics/diagnostic.js";
 
 const opened: ReturnType<ProgramLoader>[] = [];
 const preflight = vi.spyOn(program, "checkPreflight");
-afterEach(() => { opened.length = 0; preflight.mockReset(); });
+afterEach(() => {
+  opened.length = 0;
+  preflight.mockReset();
+});
 
 const loader: ProgramLoader = () => {
   // Resource-ownership tests inject only the load fields the orchestration
@@ -19,7 +22,8 @@ const loader: ProgramLoader = () => {
   return load;
 };
 const typeError: ScrDiagnostic = {
-  code: "SC0001", message: "the program does not typecheck",
+  code: "SC0001",
+  message: "the program does not typecheck",
   loc: { file: "/main.ts", start: 0, end: 1 },
 };
 
@@ -33,15 +37,22 @@ test("transfers ownership of a reused scout to the returned frontend", () => {
   expect(opened[0]!.dispose).toHaveBeenCalledTimes(1);
 });
 
-test.each([undefined, "auto", "lib"] as const)("closes a load when preflight throws (%s)", (mode) => {
-  preflight.mockImplementation(() => { throw new Error("preflight failed"); });
-  expect(() => runFrontend("/main.ts", loader, mode)).toThrow("preflight failed");
-  expect(opened).toHaveLength(1);
-  expect(opened[0]!.dispose).toHaveBeenCalledTimes(1);
-});
+test.each([undefined, "auto", "lib"] as const)(
+  "closes a load when preflight throws (%s)",
+  (mode) => {
+    preflight.mockImplementation(() => {
+      throw new Error("preflight failed");
+    });
+    expect(() => runFrontend("/main.ts", loader, mode)).toThrow("preflight failed");
+    expect(opened).toHaveLength(1);
+    expect(opened[0]!.dispose).toHaveBeenCalledTimes(1);
+  },
+);
 
 test("closes the current program and an interrupted per-package probe", () => {
-  preflight.mockReturnValueOnce([typeError]).mockImplementationOnce(() => { throw new Error("probe failed"); });
+  preflight.mockReturnValueOnce([typeError]).mockImplementationOnce(() => {
+    throw new Error("probe failed");
+  });
   expect(() => runFrontend("/main.ts", loader, ["fixture"])).toThrow("probe failed");
   expect(opened).toHaveLength(2);
   for (const load of opened) expect(load.dispose).toHaveBeenCalledTimes(1);
@@ -71,10 +82,16 @@ test("does not retain or close disposed fallback loads twice", () => {
 });
 
 test("preserves the original failure and continues cleanup when a disposer throws", () => {
-  preflight.mockImplementationOnce(() => {
-    vi.mocked(opened[0]!.dispose).mockImplementation(() => { throw new Error("close failed"); });
-    return [typeError];
-  }).mockImplementationOnce(() => { throw new Error("probe failed"); });
+  preflight
+    .mockImplementationOnce(() => {
+      vi.mocked(opened[0]!.dispose).mockImplementation(() => {
+        throw new Error("close failed");
+      });
+      return [typeError];
+    })
+    .mockImplementationOnce(() => {
+      throw new Error("probe failed");
+    });
   expect(() => runFrontend("/main.ts", loader, ["fixture"])).toThrow("probe failed");
   expect(opened).toHaveLength(2);
   for (const load of opened) expect(load.dispose).toHaveBeenCalledTimes(1);

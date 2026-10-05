@@ -16,7 +16,10 @@ export interface FetchAnalysisModule {
 export class NpmFetchAnalyzer {
   private closed = false;
 
-  constructor(private readonly createApi: Ts7SourceApiFactory, private readonly cwd = process.cwd()) {}
+  constructor(
+    private readonly createApi: Ts7SourceApiFactory,
+    private readonly cwd = process.cwd(),
+  ) {}
 
   analyze(modules: readonly FetchAnalysisModule[]): ReadonlySet<string> {
     if (this.closed) throw new Error("npm fetch analyzer is closed");
@@ -29,7 +32,8 @@ export class NpmFetchAnalyzer {
       // Their source is JavaScript regardless of the loader's key spelling.
       const path = paths.canonical(/\.[cm]?js$/.test(mod.key) ? mod.key : mod.key + ".js");
       const existing = keys.get(path);
-      if (existing !== undefined && existing !== mod.key) throw new Error(`npm module keys share a TypeScript path: ${existing}, ${mod.key}`);
+      if (existing !== undefined && existing !== mod.key)
+        throw new Error(`npm module keys share a TypeScript path: ${existing}, ${mod.key}`);
       files.set(path, mod.source);
       keys.set(path, mod.key);
     }
@@ -37,13 +41,23 @@ export class NpmFetchAnalyzer {
     const roots = [...files.keys()];
     let config = paths.canonical("__scriptc-fetch.tsconfig.json");
     while (files.has(config)) config += ".json";
-    files.set(config, JSON.stringify({
-      compilerOptions: {
-        allowJs: true, checkJs: false, noLib: true, types: [], noEmit: true,
-        target: "esnext", module: "esnext", moduleDetection: "force",
-      },
-      files: roots, include: [],
-    }));
+    files.set(
+      config,
+      JSON.stringify({
+        compilerOptions: {
+          allowJs: true,
+          checkJs: false,
+          noLib: true,
+          types: [],
+          noEmit: true,
+          target: "esnext",
+          module: "esnext",
+          moduleDetection: "force",
+        },
+        files: roots,
+        include: [],
+      }),
+    );
     let api: Ts7Api | undefined;
     try {
       api = this.createApi({
@@ -76,12 +90,19 @@ export class NpmFetchAnalyzer {
           if (key !== undefined) found.add(key);
         }
         return found;
-      } finally { snapshot.dispose(); }
+      } finally {
+        snapshot.dispose();
+      }
     } finally {
-      try { api?.close(); }
-      finally { files.clear(); }
+      try {
+        api?.close();
+      } finally {
+        files.clear();
+      }
     }
   }
 
-  close(): void { this.closed = true; }
+  close(): void {
+    this.closed = true;
+  }
 }

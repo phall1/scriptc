@@ -51,11 +51,7 @@ export interface FetchCompatOption {
   evidence: readonly FetchCompatEvidence[];
 }
 
-export type FetchCompatInventoryStatus =
-  | "static"
-  | "dynamic-only"
-  | "unsupported"
-  | "out-of-scope";
+export type FetchCompatInventoryStatus = "static" | "dynamic-only" | "unsupported" | "out-of-scope";
 
 export type FetchCompatInventoryPlacement =
   | "global"
@@ -170,8 +166,7 @@ const outOfScopeEntry = (
   reason,
 });
 
-const widerMemberFence =
-  "the member is outside the native static handle projection";
+const widerMemberFence = "the member is outside the native static handle projection";
 const typedInterfaceUnsupported =
   "typed source has no compiler bridge for this interface in either tier";
 const metadataExclusion =
@@ -270,19 +265,41 @@ export const NODE24_FETCH_COMPAT_PROFILE = {
       name: "Request constructor",
       kind: "constructor",
       facets: ["webidl-conversion", "body-consumption", "error-shape"],
-      scope: "Absolute URLs with method, headers, body, duplex, redirect, and signal; other RequestInit members retain explicit fences",
+      scope:
+        "Absolute URLs with method, headers, body, duplex, redirect, and signal; other RequestInit members retain explicit fences",
       evidence: [fixture("static-request")],
     },
     ...[
-      "method", "url", "headers", "destination", "referrer", "referrerPolicy", "mode", "credentials", "cache", "redirect", "integrity", "keepalive", "isReloadNavigation", "isHistoryNavigation", "signal", "body", "bodyUsed", "duplex",
+      "method",
+      "url",
+      "headers",
+      "destination",
+      "referrer",
+      "referrerPolicy",
+      "mode",
+      "credentials",
+      "cache",
+      "redirect",
+      "integrity",
+      "keepalive",
+      "isReloadNavigation",
+      "isHistoryNavigation",
+      "signal",
+      "body",
+      "bodyUsed",
+      "duplex",
     ].map((member): FetchCompatOperation => ({
-      id: `stdlib.request.${member}`, name: `Request.${member}`, kind: "property",
+      id: `stdlib.request.${member}`,
+      name: `Request.${member}`,
+      kind: "property",
       facets: ["property-read", "state-machine"],
       scope: "Reads on native Requests within the constructor's supported RequestInit subset",
       evidence: [fixture("static-request")],
     })),
     ...["arrayBuffer", "text", "json", "bytes"].map((member): FetchCompatOperation => ({
-      id: `stdlib.request.${member}`, name: `Request.${member}`, kind: "method",
+      id: `stdlib.request.${member}`,
+      name: `Request.${member}`,
+      kind: "method",
       facets: ["body-consumption", "promise-settlement", "state-machine", "error-shape"],
       evidence: [fixture("static-request")],
     })),
@@ -384,7 +401,11 @@ export const NODE24_FETCH_COMPAT_PROFILE = {
       name: "AbortSignal.addEventListener",
       kind: "method",
       facets: ["webidl-conversion", "identity", "callback-order", "callback-this"],
-      evidence: [generated("abort-events"), fixture("static-listener-this"), fixture("static-listener-noncallable")],
+      evidence: [
+        generated("abort-events"),
+        fixture("static-listener-this"),
+        fixture("static-listener-noncallable"),
+      ],
     },
     {
       id: "stdlib.abort-signal.remove-event-listener",
@@ -491,48 +512,38 @@ export const NODE24_FETCH_COMPAT_PROFILE = {
       facets: ["identity", "promise-settlement", "state-machine"],
       evidence: [generated("stream-traces"), fixture("static-stream")],
     },
-    ...[
-      "append",
-      "delete",
-      "get",
-      "getSetCookie",
-      "has",
-      "set",
-      "forEach",
-    ].map((member): FetchCompatOperation => ({
-      id: `stdlib.headers.${member}`,
-      name: `Headers.${member}`,
-      kind: "method",
-      facets:
-        member === "forEach"
-          ? ["callback-order", "callback-this", "mutation"]
-          : member === "get" || member === "has"
-            ? ["webidl-conversion", "missing-arguments", "property-read"]
-            : ["webidl-conversion", "mutation", "error-shape"],
-      evidence: [fixture("static"), fixture("static-coercion")],
-    })),
-    ...[
-      "ok",
-      "status",
-      "statusText",
-      "url",
-      "redirected",
-      "headers",
-      "body",
-      "bodyUsed",
-    ].map((member): FetchCompatOperation => ({
-      id: `stdlib.response.${member}`,
-      name: `Response.${member}`,
-      kind: "property",
-      facets: ["property-read"],
-      evidence: [fixture("static")],
-    })),
+    ...["append", "delete", "get", "getSetCookie", "has", "set", "forEach"].map(
+      (member): FetchCompatOperation => ({
+        id: `stdlib.headers.${member}`,
+        name: `Headers.${member}`,
+        kind: "method",
+        facets:
+          member === "forEach"
+            ? ["callback-order", "callback-this", "mutation"]
+            : member === "get" || member === "has"
+              ? ["webidl-conversion", "missing-arguments", "property-read"]
+              : ["webidl-conversion", "mutation", "error-shape"],
+        evidence: [fixture("static"), fixture("static-coercion")],
+      }),
+    ),
+    ...["ok", "status", "statusText", "url", "redirected", "headers", "body", "bodyUsed"].map(
+      (member): FetchCompatOperation => ({
+        id: `stdlib.response.${member}`,
+        name: `Response.${member}`,
+        kind: "property",
+        facets: ["property-read"],
+        evidence: [fixture("static")],
+      }),
+    ),
     ...["json", "text", "bytes", "arrayBuffer"].map((member): FetchCompatOperation => ({
       id: `stdlib.response.${member}`,
       name: `Response.${member}`,
       kind: "method",
       facets: ["body-consumption", "promise-settlement", "state-machine", "error-shape"],
-      evidence: member === "arrayBuffer" ? [fixture("static")] : [fixture("static"), fixture("static-stream")],
+      evidence:
+        member === "arrayBuffer"
+          ? [fixture("static")]
+          : [fixture("static"), fixture("static-stream")],
     })),
   ],
   inventory: {
@@ -555,18 +566,8 @@ export const NODE24_FETCH_COMPAT_PROFILE = {
         "constructor",
         "constructor",
       ),
-      staticEntry(
-        "stdlib.abort-controller.signal",
-        "AbortController",
-        "signal",
-        "prototype",
-      ),
-      staticEntry(
-        "stdlib.abort-controller.abort",
-        "AbortController",
-        "abort",
-        "prototype",
-      ),
+      staticEntry("stdlib.abort-controller.signal", "AbortController", "signal", "prototype"),
+      staticEntry("stdlib.abort-controller.abort", "AbortController", "abort", "prototype"),
       outOfScopeEntry(
         "stdlib.abort-controller.symbol.toStringTag",
         "AbortController",
@@ -621,15 +622,8 @@ export const NODE24_FETCH_COMPAT_PROFILE = {
       ),
 
       staticEntry("stdlib.headers.constructor", "Headers", "constructor", "constructor"),
-      ...[
-        "append",
-        "delete",
-        "get",
-        "has",
-        "set",
-        "getSetCookie",
-      ].map((member) =>
-        staticEntry(`stdlib.headers.${member}`, "Headers", member, "prototype")
+      ...["append", "delete", "get", "has", "set", "getSetCookie"].map((member) =>
+        staticEntry(`stdlib.headers.${member}`, "Headers", member, "prototype"),
       ),
       ...["keys", "values", "entries"].map((member) =>
         dynamicEntry(
@@ -638,7 +632,7 @@ export const NODE24_FETCH_COMPAT_PROFILE = {
           member,
           "prototype",
           "native Headers iteration does not yet expose a static iterator handle",
-        )
+        ),
       ),
       staticEntry("stdlib.headers.forEach", "Headers", "forEach", "prototype"),
       dynamicEntry(
@@ -686,8 +680,14 @@ export const NODE24_FETCH_COMPAT_PROFILE = {
         "attribute",
       ].map((member) =>
         ["clone", "blob", "formData", "attribute"].includes(member)
-          ? unsupportedEntry(`stdlib.request.${member}`, "Request", member, "prototype", typedInterfaceUnsupported)
-          : staticEntry(`stdlib.request.${member}`, "Request", member, "prototype")
+          ? unsupportedEntry(
+              `stdlib.request.${member}`,
+              "Request",
+              member,
+              "prototype",
+              typedInterfaceUnsupported,
+            )
+          : staticEntry(`stdlib.request.${member}`, "Request", member, "prototype"),
       ),
       outOfScopeEntry(
         "stdlib.request.symbol.toStringTag",
@@ -697,12 +697,7 @@ export const NODE24_FETCH_COMPAT_PROFILE = {
         metadataExclusion,
       ),
 
-      staticEntry(
-        "stdlib.response.constructor",
-        "Response",
-        "constructor",
-        "constructor",
-      ),
+      staticEntry("stdlib.response.constructor", "Response", "constructor", "constructor"),
       ...["error", "json", "redirect"].map((member) =>
         unsupportedEntry(
           `stdlib.response.static.${member}`,
@@ -710,15 +705,9 @@ export const NODE24_FETCH_COMPAT_PROFILE = {
           member,
           "static",
           "Response static constructor-object operations have no compiler lowering in either tier",
-        )
+        ),
       ),
-      dynamicEntry(
-        "stdlib.response.type",
-        "Response",
-        "type",
-        "prototype",
-        widerMemberFence,
-      ),
+      dynamicEntry("stdlib.response.type", "Response", "type", "prototype", widerMemberFence),
       ...["url", "redirected", "status", "ok", "statusText", "headers", "body", "bodyUsed"].map(
         (member) => staticEntry(`stdlib.response.${member}`, "Response", member, "prototype"),
       ),
@@ -730,10 +719,10 @@ export const NODE24_FETCH_COMPAT_PROFILE = {
           member,
           "prototype",
           "the dynamic fetch bridge does not implement this Response operation",
-        )
+        ),
       ),
       ...["text", "json"].map((member) =>
-        staticEntry(`stdlib.response.${member}`, "Response", member, "prototype")
+        staticEntry(`stdlib.response.${member}`, "Response", member, "prototype"),
       ),
       staticEntry("stdlib.response.bytes", "Response", "bytes", "prototype"),
       outOfScopeEntry(
@@ -753,12 +742,7 @@ export const NODE24_FETCH_COMPAT_PROFILE = {
       staticEntry("stdlib.readable-stream.from", "ReadableStream", "from", "static"),
       staticEntry("stdlib.readable-stream.locked", "ReadableStream", "locked", "prototype"),
       staticEntry("stdlib.readable-stream.cancel", "ReadableStream", "cancel", "prototype"),
-      staticEntry(
-        "stdlib.readable-stream.get-reader",
-        "ReadableStream",
-        "getReader",
-        "prototype",
-      ),
+      staticEntry("stdlib.readable-stream.get-reader", "ReadableStream", "getReader", "prototype"),
       ...["pipeThrough", "values"].map((member) =>
         dynamicEntry(
           `stdlib.readable-stream.${member}`,
@@ -768,7 +752,7 @@ export const NODE24_FETCH_COMPAT_PROFILE = {
           member === "values"
             ? "direct for-await consumption compiles statically; storing or driving the first-class iterator handle requires --dynamic"
             : "the wider Web Streams graph is outside the native readable-stream slice",
-        )
+        ),
       ),
       ...["pipeTo", "tee"].map((member) =>
         unsupportedEntry(
@@ -777,7 +761,7 @@ export const NODE24_FETCH_COMPAT_PROFILE = {
           member,
           "prototype",
           "the dynamic Web Streams bridge exposes only an explicit unsupported stub for this operation",
-        )
+        ),
       ),
       unsupportedEntry(
         "stdlib.readable-stream.symbol.asyncIterator",
@@ -902,21 +886,16 @@ export const NODE24_FETCH_COMPAT_PROFILE = {
                 "dictionary",
                 "the dynamic tier recognizes Vercel CLI's EnvProxyDispatcher and applies equivalent native environment-proxy routing",
               )
-          : unsupportedEntry(
-              id,
-              "RequestInit",
-              member,
-              "dictionary",
-              "neither compiler tier preserves this RequestInit member's conversion or transport behavior",
-            );
+            : unsupportedEntry(
+                id,
+                "RequestInit",
+                member,
+                "dictionary",
+                "neither compiler tier preserves this RequestInit member's conversion or transport behavior",
+              );
       }),
       ...["headers", "status", "statusText"].map((member) =>
-        staticEntry(
-          `stdlib.response-init.${member}`,
-          "ResponseInit",
-          member,
-          "dictionary",
-        )
+        staticEntry(`stdlib.response-init.${member}`, "ResponseInit", member, "dictionary"),
       ),
     ],
     excludedInterfaces: [
@@ -926,11 +905,13 @@ export const NODE24_FETCH_COMPAT_PROFILE = {
       },
       {
         name: "WritableStream/TransformStream",
-        reason: "the static tier currently targets readable fetch bodies, not general Web Streams graphs",
+        reason:
+          "the static tier currently targets readable fetch bodies, not general Web Streams graphs",
       },
       {
         name: "Readable byte/BYOB streams",
-        reason: "the native stream projection currently supports default readers and controllers only",
+        reason:
+          "the native stream projection currently supports default readers and controllers only",
       },
       {
         name: "EventSource/WebSocket",
@@ -940,20 +921,15 @@ export const NODE24_FETCH_COMPAT_PROFILE = {
   },
 } satisfies FetchCompatProfile;
 
-export const STATIC_RESPONSE_READS = new Set(
-  NODE24_FETCH_COMPAT_PROFILE.members.responseReads,
-);
+export const STATIC_RESPONSE_READS = new Set(NODE24_FETCH_COMPAT_PROFILE.members.responseReads);
 
-export const STATIC_RESPONSE_CALLS = new Set(
-  NODE24_FETCH_COMPAT_PROFILE.members.responseCalls,
-);
+export const STATIC_RESPONSE_CALLS = new Set(NODE24_FETCH_COMPAT_PROFILE.members.responseCalls);
 
 export const STATIC_HEADERS_CALLS = new Set(
   NODE24_FETCH_COMPAT_PROFILE.inventory.entries
-    .filter((entry) =>
-      entry.owner === "Headers" &&
-      entry.placement === "prototype" &&
-      entry.status === "static"
+    .filter(
+      (entry) =>
+        entry.owner === "Headers" && entry.placement === "prototype" && entry.status === "static",
     )
     .map((entry) => entry.member),
 );

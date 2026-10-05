@@ -1,6 +1,16 @@
 import { expect, test } from "vitest";
 import { emitLlvmModule } from "../src/backend/llvm/emitter.js";
-import { BOOL, F64, VOID, bytesOf, type IrBytesElem, type IrExpr, type IrLocal, type IrModule, type IrStmt } from "../src/ir/ir.js";
+import {
+  BOOL,
+  F64,
+  VOID,
+  bytesOf,
+  type IrBytesElem,
+  type IrExpr,
+  type IrLocal,
+  type IrModule,
+  type IrStmt,
+} from "../src/ir/ir.js";
 import { validateModule } from "../src/ir/validate.js";
 
 const loc = { file: "bytes-hot-loop.ts", start: 0, end: 0 };
@@ -152,18 +162,20 @@ function sideEffectFixture(): IrModule {
     body: [{ kind: "return", value: { kind: "numLit", value: 0, type: F64, loc }, loc }],
     loc,
   });
-  mod.functions.find((fn) => fn.name === "__main")!.body.push({
-    kind: "exprStmt",
-    expr: {
-      kind: "bytesIntrinsic",
-      method: "get",
-      receiver: { kind: "varRef", localId: "b.0", type: bytesOf("u8"), loc },
-      args: [{ kind: "call", callee: "sideIndex", args: [], type: F64, loc }],
-      type: F64,
+  mod.functions
+    .find((fn) => fn.name === "__main")!
+    .body.push({
+      kind: "exprStmt",
+      expr: {
+        kind: "bytesIntrinsic",
+        method: "get",
+        receiver: { kind: "varRef", localId: "b.0", type: bytesOf("u8"), loc },
+        args: [{ kind: "call", callee: "sideIndex", args: [], type: F64, loc }],
+        type: F64,
+        loc,
+      },
       loc,
-    },
-    loc,
-  });
+    });
   return mod;
 }
 
@@ -203,41 +215,55 @@ function integerLoopFixture(mutatesIndex = false): IrModule {
     irVersion: 13,
     sourceFile: loc.file,
     entry: "__main",
-    functions: [{
-      name: "__main",
-      params: [],
-      returnType: VOID,
-      locals: [
-        { id: "bytes", name: "bytes", type: bytes, mutable: false },
-        { id: "sum", name: "sum", type: F64, mutable: true },
-        { id: "index", name: "index", type: F64, mutable: true },
-      ],
-      body: [
-        { kind: "varDecl", localId: "bytes", init: { kind: "bytesNew", source: num(4), type: bytes, loc }, loc },
-        { kind: "varDecl", localId: "sum", init: num(0), loc },
-        {
-          kind: "for",
-          init: { kind: "varDecl", localId: "index", init: num(0), loc },
-          cond: {
-            kind: "bin",
-            op: "<",
-            left: indexRef(),
-            right: { kind: "bytesIntrinsic", method: "length", receiver: bytesRef(), args: [], type: F64, loc },
-            type: BOOL,
+    functions: [
+      {
+        name: "__main",
+        params: [],
+        returnType: VOID,
+        locals: [
+          { id: "bytes", name: "bytes", type: bytes, mutable: false },
+          { id: "sum", name: "sum", type: F64, mutable: true },
+          { id: "index", name: "index", type: F64, mutable: true },
+        ],
+        body: [
+          {
+            kind: "varDecl",
+            localId: "bytes",
+            init: { kind: "bytesNew", source: num(4), type: bytes, loc },
             loc,
           },
-          update: {
-            kind: "assign",
-            localId: "index",
-            value: { kind: "bin", op: "+", left: indexRef(), right: num(1), type: F64, loc },
+          { kind: "varDecl", localId: "sum", init: num(0), loc },
+          {
+            kind: "for",
+            init: { kind: "varDecl", localId: "index", init: num(0), loc },
+            cond: {
+              kind: "bin",
+              op: "<",
+              left: indexRef(),
+              right: {
+                kind: "bytesIntrinsic",
+                method: "length",
+                receiver: bytesRef(),
+                args: [],
+                type: F64,
+                loc,
+              },
+              type: BOOL,
+              loc,
+            },
+            update: {
+              kind: "assign",
+              localId: "index",
+              value: { kind: "bin", op: "+", left: indexRef(), right: num(1), type: F64, loc },
+              loc,
+            },
+            body: loopBody,
             loc,
           },
-          body: loopBody,
-          loc,
-        },
-      ],
-      loc,
-    }],
+        ],
+        loc,
+      },
+    ],
   };
 }
 
@@ -311,24 +337,28 @@ test("large record clones stay outlined while small clones remain inlineable", (
       sourceFile: "record-clone.ts",
       entry: "__main",
       records: [{ id, fields }],
-      functions: [{
-        name: "__main",
-        params: [],
-        returnType: VOID,
-        locals: [{ id: "source", name: "source", type, mutable: false }],
-        body: [{
-          kind: "exprStmt",
-          expr: {
-            kind: "recordClone",
-            source: { kind: "varRef", localId: "source", type, loc },
-            overrides: [{ name: "f0", value: { kind: "numLit", value: 1, type: F64, loc } }],
-            type,
-            loc,
-          },
+      functions: [
+        {
+          name: "__main",
+          params: [],
+          returnType: VOID,
+          locals: [{ id: "source", name: "source", type, mutable: false }],
+          body: [
+            {
+              kind: "exprStmt",
+              expr: {
+                kind: "recordClone",
+                source: { kind: "varRef", localId: "source", type, loc },
+                overrides: [{ name: "f0", value: { kind: "numLit", value: 1, type: F64, loc } }],
+                type,
+                loc,
+              },
+              loc,
+            },
+          ],
           loc,
-        }],
-        loc,
-      }],
+        },
+      ],
     };
   };
   const small = emitLlvmModule(record("small", 2));

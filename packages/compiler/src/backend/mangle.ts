@@ -18,9 +18,15 @@ function sanitize(name: string, property = false): string {
   for (let i = 0; i < name.length; i++) {
     const code = name.charCodeAt(i);
     const ch = name.charAt(i);
-    result += code === 46 && !property ? "_"
-      : (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || (code >= 48 && code <= 57) || (code === 95 && !property)
-        ? ch : `_x${unsignedHex(code)}_`;
+    result +=
+      code === 46 && !property
+        ? "_"
+        : (code >= 65 && code <= 90) ||
+            (code >= 97 && code <= 122) ||
+            (code >= 48 && code <= 57) ||
+            (code === 95 && !property)
+          ? ch
+          : `_x${unsignedHex(code)}_`;
   }
   return result;
 }

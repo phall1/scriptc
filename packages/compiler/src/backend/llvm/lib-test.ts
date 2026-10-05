@@ -4,14 +4,19 @@ import { abiValue, callRuntime, finishRuntimeCall, ptr } from "./lib-abi.js";
 import { f64Lit } from "./common.js";
 
 export function emitTestLibCall(host: LlvmEmitterContext, e: LibCallExpr): LlValue {
-  const args = e.args.map((arg) => host.emitExpr(arg)), a = args.map((arg) => abiValue(host, arg));
+  const args = e.args.map((arg) => host.emitExpr(arg)),
+    a = args.map((arg) => abiValue(host, arg));
   host.usesTimers = true;
   switch (e.fn) {
     case "test.register":
       host.moveTemp(args[3]!);
       return finishRuntimeCall(host, e, "scr_test_register", a);
     case "test.registerEmpty":
-      return finishRuntimeCall(host, e, "scr_test_register", [...a.slice(0, 3), ptr(), ...a.slice(3)]);
+      return finishRuntimeCall(host, e, "scr_test_register", [
+        ...a.slice(0, 3),
+        ptr(),
+        ...a.slice(3),
+      ]);
     case "test.suite":
       host.moveTemp(args[3]!);
       return finishRuntimeCall(host, e, "scr_test_suite", a);
@@ -22,14 +27,24 @@ export function emitTestLibCall(host: LlvmEmitterContext, e: LibCallExpr): LlVal
       host.moveTemp(args[4]!);
       return finishRuntimeCall(host, e, "scr_test_sub", a);
     case "test.subEmpty": {
-      const promise = callRuntime(host, "scr_test_sub", "ptr", [...a.slice(0, 4), ptr(), { type: "double", name: f64Lit(0) }, a[4]!]);
+      const promise = callRuntime(host, "scr_test_sub", "ptr", [
+        ...a.slice(0, 4),
+        ptr(),
+        { type: "double", name: f64Lit(0) },
+        a[4]!,
+      ]);
       callRuntime(host, "scr_promise_release", "void", [ptr(promise)]);
       return { name: "", type: e.type };
     }
-    case "test.ctxSkip": return finishRuntimeCall(host, e, "scr_test_ctx_skip", a);
-    case "test.ctxTodo": return finishRuntimeCall(host, e, "scr_test_ctx_todo", a);
-    case "test.ctxDiagnostic": return finishRuntimeCall(host, e, "scr_test_ctx_diagnostic", a);
-    case "test.ctxName": return finishRuntimeCall(host, e, "scr_test_ctx_name", a);
-    default: throw new InternalCompilerError(`unhandled test call ${e.fn}`);
+    case "test.ctxSkip":
+      return finishRuntimeCall(host, e, "scr_test_ctx_skip", a);
+    case "test.ctxTodo":
+      return finishRuntimeCall(host, e, "scr_test_ctx_todo", a);
+    case "test.ctxDiagnostic":
+      return finishRuntimeCall(host, e, "scr_test_ctx_diagnostic", a);
+    case "test.ctxName":
+      return finishRuntimeCall(host, e, "scr_test_ctx_name", a);
+    default:
+      throw new InternalCompilerError(`unhandled test call ${e.fn}`);
   }
 }

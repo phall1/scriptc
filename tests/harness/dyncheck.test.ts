@@ -38,7 +38,12 @@ interface RunResult {
 /** Compiles an inline program and runs the binary, tolerating nonzero exit.
  * `ext` selects the source lane: "cjs" for the JS lane's per-site checked
  * lowerings (dyn member dispatch exists only there). */
-async function compileAndRun(name: string, source: string, ext: "ts" | "cjs" = "ts", dynamic = false): Promise<RunResult> {
+async function compileAndRun(
+  name: string,
+  source: string,
+  ext: "ts" | "cjs" = "ts",
+  dynamic = false,
+): Promise<RunResult> {
   const key = createHash("sha256")
     .update(source)
     .update(sanitize ? "san" : "plain")
@@ -52,7 +57,13 @@ async function compileAndRun(name: string, source: string, ext: "ts" | "cjs" = "
   // Pinned: the exact TypeError text and path rendering of failed checked
   // casts are C-reference pins; lane identity stays fixed so a diff means
   // the dyn boundary changed, never that the default backend moved.
-  const result = await compile(file, { outPath: join(outDir, name), outDir, sanitize, backend: "llvm", dynamic });
+  const result = await compile(file, {
+    outPath: join(outDir, name),
+    outDir,
+    sanitize,
+    backend: "llvm",
+    dynamic,
+  });
   if (!result.ok) {
     throw new Error(
       "dyncheck program failed to compile:\n" +
@@ -71,7 +82,9 @@ async function compileAndRun(name: string, source: string, ext: "ts" | "cjs" = "
 
 describe(`dynamic-boundary checks (scriptc-only${sanitize ? ", sanitized" : ""})`, () => {
   test("promise and codec checked casts reject unrelated values", async () => {
-    const r = await compileAndRun("promise-codec-casts", `
+    const r = await compileAndRun(
+      "promise-codec-casts",
+      `
       const value: unknown = {};
       try { const promise = value as Promise<unknown>; console.log(typeof promise); }
       catch (error) { console.log(error instanceof TypeError); }
@@ -79,14 +92,17 @@ describe(`dynamic-boundary checks (scriptc-only${sanitize ? ", sanitized" : ""})
       catch (error) { console.log(error instanceof TypeError); }
       try { const decoder = value as TextDecoder; console.log(decoder.decode()); }
       catch (error) { console.log(error instanceof TypeError); }
-    `);
+    `,
+    );
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toBe("true\ntrue\ntrue\n");
     expect(r.stderr).toBe("");
   });
 
   test("typed Promise exits validate fulfillment and preserve rejection", async () => {
-    const result = await compileAndRun("promise-exit-payload", `
+    const result = await compileAndRun(
+      "promise-exit-payload",
+      `
       async function main() {
         const value: unknown = Promise.resolve("wrong");
         try { await (value as Promise<number>); }
@@ -96,12 +112,20 @@ describe(`dynamic-boundary checks (scriptc-only${sanitize ? ", sanitized" : ""})
         catch (error) { console.log((error as Error).message); }
       }
       main();
-    `);
+    `,
+    );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe("true expected number at $, got string\noriginal\n");
-    expect(result.stderr.split("\n").filter((line) =>
-      !sanitize || !/^==\d+==WARNING: ASan doesn't fully support makecontext\/swapcontext/.test(line),
-    ).join("\n")).toBe("");
+    expect(
+      result.stderr
+        .split("\n")
+        .filter(
+          (line) =>
+            !sanitize ||
+            !/^==\d+==WARNING: ASan doesn't fully support makecontext\/swapcontext/.test(line),
+        )
+        .join("\n"),
+    ).toBe("");
   });
 
   test("wrong-typed field throws with the path", async () => {
@@ -695,7 +719,8 @@ server.listen(0, '127.0.0.1', wrap(function() {
         `server.on('request', wrap(function(req, res) {
   res.writeContinue();
 }));
-` + listenAndHit,
+` +
+        listenAndHit,
       "cjs",
     );
     expect(r.exitCode).toBe(1);
@@ -711,11 +736,14 @@ server.listen(0, '127.0.0.1', wrap(function() {
         `server.on('request', wrap(function(req, res) {
   req.custom = 1;
 }));
-` + listenAndHit,
+` +
+        listenAndHit,
       "cjs",
     );
     expect(r.exitCode).toBe(1);
-    expect(r.stderr).toContain("setting 'custom' on a dynamic IncomingMessage is not supported yet");
+    expect(r.stderr).toContain(
+      "setting 'custom' on a dynamic IncomingMessage is not supported yet",
+    );
   });
 
   test("an unmodeled event registration on a dyn handle throws the loud ladder", async () => {
@@ -725,7 +753,8 @@ server.listen(0, '127.0.0.1', wrap(function() {
         `server.on('request', wrap(function(req, res) {
   req.on('nonsense', wrap(function() {}));
 }));
-` + listenAndHit,
+` +
+        listenAndHit,
       "cjs",
     );
     expect(r.exitCode).toBe(1);
@@ -760,7 +789,8 @@ console.log("unreachable", req.url);
   res.end('done');
   server.close();
 }));
-` + listenAndHit,
+` +
+        listenAndHit,
       "cjs",
     );
     expect(r.exitCode).toBe(0);
@@ -850,7 +880,8 @@ console.log(\`\${walk(eng).length}\`);
   test("JSON.stringify of an island-held unknown is the engine's own stringify", async () => {
     const r = await compileAndRun(
       "jsval-stringify",
-      wrapPreamble + `console.log(JSON.stringify(u));
+      wrapPreamble +
+        `console.log(JSON.stringify(u));
 `,
       "ts",
       true,
@@ -862,7 +893,8 @@ console.log(\`\${walk(eng).length}\`);
   test("structuredClone of an island-held unknown fences loudly", async () => {
     const r = await compileAndRun(
       "jsval-clone",
-      wrapPreamble + `const c = structuredClone(u);
+      wrapPreamble +
+        `const c = structuredClone(u);
 console.log("unreachable", typeof c);
 `,
       "ts",
@@ -918,7 +950,8 @@ console.log("unreachable");
   test("util.inspect (console.log) of an island-held unknown fences with the engine typeof", async () => {
     const r = await compileAndRun(
       "jsval-inspect",
-      wrapPreamble + `console.log(u);
+      wrapPreamble +
+        `console.log(u);
 `,
       "ts",
       true,

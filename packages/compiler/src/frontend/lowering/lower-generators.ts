@@ -10,7 +10,17 @@ import { InternalCompilerError } from "../../errors.js";
  * g.next()` binds and reads flow. */
 import * as ts from "../ts7/adapter.js";
 import type { Lowerer } from "./lowerer.js";
-import { BOOL, DYN, type IrExpr, type IrStmt, type IrType, type SrcLoc, VOID, isUnitType, typeEquals } from "../../ir/ir.js";
+import {
+  BOOL,
+  DYN,
+  type IrExpr,
+  type IrStmt,
+  type IrType,
+  type SrcLoc,
+  VOID,
+  isUnitType,
+  typeEquals,
+} from "../../ir/ir.js";
 import { locOf } from "../program.js";
 import { genResultRecord } from "../type-mapper.js";
 import { forOfVarTarget, lowerDestructuringAssign } from "./lower-stmts.js";
@@ -22,7 +32,8 @@ export type GenType = IrType & { kind: "generator" };
  * a MAPPED generator — mapType required it to intern). */
 function resultRecordOf(lowerer: Lowerer, genT: GenType): IrType & { kind: "record" } {
   const rec = genResultRecord(genT.yieldT, genT.retT, lowerer.shapes, lowerer.unions);
-  if (!rec) throw new InternalCompilerError("lowerer bug: mapped generator without a result record");
+  if (!rec)
+    throw new InternalCompilerError("lowerer bug: mapped generator without a result record");
   return rec;
 }
 
@@ -55,7 +66,12 @@ export function lowerYield(lowerer: Lowerer, expr: ts.YieldExpression): IrExpr {
   if (expr.expression) {
     const raw = lowerer.lowerExpr(expr.expression);
     if (lowerer.ctx.isAsync && raw.type.kind === "promise") {
-      const awaitedValue: IrExpr = { kind: "awaitExpr", value: raw, type: raw.type.inner, loc: raw.loc };
+      const awaitedValue: IrExpr = {
+        kind: "awaitExpr",
+        value: raw,
+        type: raw.type.inner,
+        loc: raw.loc,
+      };
       value = lowerer.coerceInto(expr.expression, awaitedValue, gen.yieldT);
       // AsyncGeneratorYield itself awaits its operand. The explicit IR
       // await above performs that one required hop; the runtime must settle
@@ -158,11 +174,7 @@ export function lowerGenMethodCall(
         ".throw() with a Date value (the exception channel cannot preserve Date's object kind; throw an Error or primitive instead)",
       );
     }
-    if (
-      arg.type.kind === "void" ||
-      arg.type.kind === "caught" ||
-      isUnitType(arg.type)
-    ) {
+    if (arg.type.kind === "void" || arg.type.kind === "caught" || isUnitType(arg.type)) {
       lowerer.unsupported(
         "SC1090",
         argNode,
@@ -221,12 +233,14 @@ function generatorLoopBinding(
     if (ts.isIdentifier(target)) {
       const writable = lowerer.resolveWritable(target);
       if (!writable) lowerer.rejectUnresolved(target, "assignment to an unresolved loop binding");
-      return [{
-        kind: "assign",
-        localId: writable.id,
-        value: lowerer.coerceInto(target, value, writable.type),
-        loc,
-      }];
+      return [
+        {
+          kind: "assign",
+          localId: writable.id,
+          value: lowerer.coerceInto(target, value, writable.type),
+          loc,
+        },
+      ];
     }
     if (ts.isArrayLiteralExpression(target) || ts.isObjectLiteralExpression(target)) {
       const temp = lowerer.declareHiddenLocal("%genValue", valueType);
@@ -244,7 +258,10 @@ function generatorLoopBinding(
   // The iterator result uses checked storage when its return channel is
   // unknown. After the done test, restore the declared yield shape for
   // destructuring without exposing the unrelated return value.
-  if (valueType.kind === "dyn" && (ts.isArrayBindingPattern(decl.name) || ts.isObjectBindingPattern(decl.name))) {
+  if (
+    valueType.kind === "dyn" &&
+    (ts.isArrayBindingPattern(decl.name) || ts.isObjectBindingPattern(decl.name))
+  ) {
     const declared = lowerer.mapTypeOf(lowerer.typeOf(decl.name));
     if (declared?.kind === "record" || declared?.kind === "array") {
       const converted = lowerer.coerceToExpected(value, declared);
@@ -262,7 +279,11 @@ function generatorLoopBinding(
       out.push({
         kind: "assign",
         localId: varTarget.id,
-        value: lowerer.coerceInto(decl.name, { kind: "varRef", localId: bound.id, type: valueType, loc }, varTarget.type),
+        value: lowerer.coerceInto(
+          decl.name,
+          { kind: "varRef", localId: bound.id, type: valueType, loc },
+          varTarget.type,
+        ),
         loc,
       });
     }
@@ -308,10 +329,21 @@ export function lowerForOfGenerator(
   labels?: string[],
 ): IrStmt {
   if (iterable.type.async) {
-    lowerer.unsupported("SC1070", stmt.expression, "synchronous for-of over an async generator (use 'for await')");
+    lowerer.unsupported(
+      "SC1070",
+      stmt.expression,
+      "synchronous for-of over an async generator (use 'for await')",
+    );
   }
-  if (ts.isVariableDeclarationList(stmt.initializer) && (stmt.initializer.flags & ts.NodeFlags.Using) !== 0) {
-    lowerer.unsupported("SC1090", stmt.initializer, "'using' declarations (dispose-at-scope-exit semantics)");
+  if (
+    ts.isVariableDeclarationList(stmt.initializer) &&
+    (stmt.initializer.flags & ts.NodeFlags.Using) !== 0
+  ) {
+    lowerer.unsupported(
+      "SC1090",
+      stmt.initializer,
+      "'using' declarations (dispose-at-scope-exit semantics)",
+    );
   }
   const genT = iterable.type;
   if (genT.yieldT.kind === "void") {
@@ -340,7 +372,14 @@ export function lowerForOfGenerator(
     const r = lowerer.declareHiddenLocal("%gres", recT);
     const gRef = (): IrExpr => ({ kind: "varRef", localId: g.id, type: genT, loc });
     const rRef = (): IrExpr => ({ kind: "varRef", localId: r.id, type: recT, loc });
-    const valueRead: IrExpr = { kind: "recordGet", obj: rRef(), shapeId: recT.shapeId, field: "value", type: valueT, loc };
+    const valueRead: IrExpr = {
+      kind: "recordGet",
+      obj: rRef(),
+      shapeId: recT.shapeId,
+      field: "value",
+      type: valueT,
+      loc,
+    };
     const extracted = extractIteratorValue(lowerer, genT.yieldT, valueT, valueRead, loc);
     if (!extracted) {
       lowerer.unsupported(
@@ -367,7 +406,12 @@ export function lowerForOfGenerator(
           loc,
         },
         then: [
-          { kind: "assign", localId: done.id, value: { kind: "boolLit", value: true, type: BOOL, loc }, loc },
+          {
+            kind: "assign",
+            localId: done.id,
+            value: { kind: "boolLit", value: true, type: BOOL, loc },
+            loc,
+          },
           { kind: "break", loc },
         ],
         else_: null,
@@ -380,7 +424,12 @@ export function lowerForOfGenerator(
       kind: "block",
       body: [
         { kind: "varDecl", localId: g.id, init: iterable, loc },
-        { kind: "varDecl", localId: done.id, init: { kind: "boolLit", value: false, type: BOOL, loc }, loc },
+        {
+          kind: "varDecl",
+          localId: done.id,
+          init: { kind: "boolLit", value: false, type: BOOL, loc },
+          loc,
+        },
         {
           kind: "while",
           cond: { kind: "boolLit", value: true, type: BOOL, loc },
@@ -433,12 +482,23 @@ export function lowerForAwaitGenerator(
   if (!lowerer.ctx.isAsync) {
     lowerer.unsupported("SC1090", stmt, "top-level 'for await' (await outside async functions)");
   }
-  if (ts.isVariableDeclarationList(stmt.initializer) && (stmt.initializer.flags & ts.NodeFlags.Using) !== 0) {
-    lowerer.unsupported("SC1090", stmt.initializer, "'await using' loop bindings over async generators");
+  if (
+    ts.isVariableDeclarationList(stmt.initializer) &&
+    (stmt.initializer.flags & ts.NodeFlags.Using) !== 0
+  ) {
+    lowerer.unsupported(
+      "SC1090",
+      stmt.initializer,
+      "'await using' loop bindings over async generators",
+    );
   }
   const genT = iterable.type;
   if (genT.yieldT.kind === "void") {
-    lowerer.unsupported("SC1090", stmt.expression, "for-await over an async generator that never yields");
+    lowerer.unsupported(
+      "SC1090",
+      stmt.expression,
+      "for-await over an async generator that never yields",
+    );
   }
   if (genT.nextT.kind !== "undefinedT" && genT.nextT.kind !== "dyn") {
     lowerer.unsupported(
@@ -461,7 +521,14 @@ export function lowerForAwaitGenerator(
     const r = lowerer.declareHiddenLocal("%fagresult", recT);
     const gRef = (): IrExpr => ({ kind: "varRef", localId: g.id, type: genT, loc });
     const rRef = (): IrExpr => ({ kind: "varRef", localId: r.id, type: recT, loc });
-    const valueRead: IrExpr = { kind: "recordGet", obj: rRef(), shapeId: recT.shapeId, field: "value", type: valueT, loc };
+    const valueRead: IrExpr = {
+      kind: "recordGet",
+      obj: rRef(),
+      shapeId: recT.shapeId,
+      field: "value",
+      type: valueT,
+      loc,
+    };
     const extracted = extractIteratorValue(lowerer, genT.yieldT, valueT, valueRead, loc);
     if (!extracted) {
       lowerer.unsupported(
@@ -490,9 +557,21 @@ export function lowerForAwaitGenerator(
       },
       {
         kind: "if",
-        cond: { kind: "recordGet", obj: rRef(), shapeId: recT.shapeId, field: "done", type: BOOL, loc },
+        cond: {
+          kind: "recordGet",
+          obj: rRef(),
+          shapeId: recT.shapeId,
+          field: "done",
+          type: BOOL,
+          loc,
+        },
         then: [
-          { kind: "assign", localId: done.id, value: { kind: "boolLit", value: true, type: BOOL, loc }, loc },
+          {
+            kind: "assign",
+            localId: done.id,
+            value: { kind: "boolLit", value: true, type: BOOL, loc },
+            loc,
+          },
           { kind: "break", loc },
         ],
         else_: null,
@@ -501,12 +580,24 @@ export function lowerForAwaitGenerator(
       ...generatorLoopBinding(lowerer, stmt, extracted, genT.yieldT),
     ];
     const body = lowerer.inCtl("loop", () => lowerer.lowerScopedBlock(stmt.statement), labels);
-    const closePromise: IrExpr = { kind: "genResume", mode: "return", gen: gRef(), arg: null, type: promiseT, loc };
+    const closePromise: IrExpr = {
+      kind: "genResume",
+      mode: "return",
+      gen: gRef(),
+      arg: null,
+      type: promiseT,
+      loc,
+    };
     return {
       kind: "block",
       body: [
         { kind: "varDecl", localId: g.id, init: iterable, loc },
-        { kind: "varDecl", localId: done.id, init: { kind: "boolLit", value: false, type: BOOL, loc }, loc },
+        {
+          kind: "varDecl",
+          localId: done.id,
+          init: { kind: "boolLit", value: false, type: BOOL, loc },
+          loc,
+        },
         {
           kind: "while",
           cond: { kind: "boolLit", value: true, type: BOOL, loc },
@@ -516,7 +607,13 @@ export function lowerForAwaitGenerator(
         },
         {
           kind: "if",
-          cond: { kind: "unary", op: "!", operand: { kind: "varRef", localId: done.id, type: BOOL, loc }, type: BOOL, loc },
+          cond: {
+            kind: "unary",
+            op: "!",
+            operand: { kind: "varRef", localId: done.id, type: BOOL, loc },
+            type: BOOL,
+            loc,
+          },
           then: [
             {
               kind: "exprStmt",
@@ -564,11 +661,22 @@ function lowerYieldStar(lowerer: Lowerer, expr: ts.YieldExpression): IrExpr {
   if (!expr.expression) lowerer.unsupported("SC1071", expr, "'yield*' with no operand");
   const loc = locOf(expr);
   const lowered = lowerer.lowerExpr(expr.expression);
-  const delegate = lowered.kind === "dynCheck" && lowered.value.type.kind === "dyn" ? lowered.value : lowered;
-  if ((delegate.type.kind === "record" || delegate.type.kind === "func" || delegate.type.kind === "union") && lowerer.dynConvertible(delegate.type)) {
+  const delegate =
+    lowered.kind === "dynCheck" && lowered.value.type.kind === "dyn" ? lowered.value : lowered;
+  if (
+    (delegate.type.kind === "record" ||
+      delegate.type.kind === "func" ||
+      delegate.type.kind === "union") &&
+    lowerer.dynConvertible(delegate.type)
+  ) {
     return lowerCheckedDelegation(lowerer, expr, lowerer.coerceToExpected(delegate, DYN));
   }
-  if (delegate.type.kind === "dyn" || delegate.type.kind === "object" || delegate.type.kind === "classval") return lowerCheckedDelegation(lowerer, expr, delegate);
+  if (
+    delegate.type.kind === "dyn" ||
+    delegate.type.kind === "object" ||
+    delegate.type.kind === "classval"
+  )
+    return lowerCheckedDelegation(lowerer, expr, delegate);
   if (delegate.type.kind !== "generator") {
     lowerer.unsupported(
       "SC1071",
@@ -577,7 +685,11 @@ function lowerYieldStar(lowerer: Lowerer, expr: ts.YieldExpression): IrExpr {
     );
   }
   const dT = delegate.type;
-  if (dT.nextT.kind !== "undefinedT" && dT.nextT.kind !== "dyn" && !typeEquals(dT.nextT, gen.nextT)) {
+  if (
+    dT.nextT.kind !== "undefinedT" &&
+    dT.nextT.kind !== "dyn" &&
+    !typeEquals(dT.nextT, gen.nextT)
+  ) {
     lowerer.unsupported(
       "SC1071",
       expr,
@@ -594,7 +706,14 @@ function lowerYieldStar(lowerer: Lowerer, expr: ts.YieldExpression): IrExpr {
     r.mutable = true;
     const dRef = (): IrExpr => ({ kind: "varRef", localId: d.id, type: dT, loc });
     const rRef = (): IrExpr => ({ kind: "varRef", localId: r.id, type: recT, loc });
-    const valueRead: IrExpr = { kind: "recordGet", obj: rRef(), shapeId: recT.shapeId, field: "value", type: valueT, loc };
+    const valueRead: IrExpr = {
+      kind: "recordGet",
+      obj: rRef(),
+      shapeId: recT.shapeId,
+      field: "value",
+      type: valueT,
+      loc,
+    };
     const inner = extractIteratorValue(lowerer, dT.yieldT, valueT, valueRead, loc);
     if (!inner) {
       lowerer.unsupported(
@@ -608,9 +727,10 @@ function lowerYieldStar(lowerer: Lowerer, expr: ts.YieldExpression): IrExpr {
     // delegate's next slot (or drops on an undefined channel).
     const reYield: IrExpr = {
       kind: "yieldExpr",
-      value: typeEquals(dT.yieldT, gen.yieldT) && typeEquals(inner.type, gen.yieldT)
-        ? inner
-        : lowerer.coerceInto(expr.expression!, inner, gen.yieldT),
+      value:
+        typeEquals(dT.yieldT, gen.yieldT) && typeEquals(inner.type, gen.yieldT)
+          ? inner
+          : lowerer.coerceInto(expr.expression!, inner, gen.yieldT),
       type: gen.nextT.kind === "undefinedT" ? VOID : gen.nextT,
       loc,
     };
@@ -643,17 +763,30 @@ function lowerYieldStar(lowerer: Lowerer, expr: ts.YieldExpression): IrExpr {
             {
               kind: "assign",
               localId: r.id,
-              value: { kind: "genResume", mode: "next", gen: dRef(), arg: resumeArg, type: recT, loc },
+              value: {
+                kind: "genResume",
+                mode: "next",
+                gen: dRef(),
+                arg: resumeArg,
+                type: recT,
+                loc,
+              },
               loc,
             },
           ];
-    const completed = dT.retT.kind === "void"
-      ? channelUndefined(lowerer, DYN, loc)!
-      : extractIteratorValue(lowerer, dT.retT, valueT, valueRead, loc);
-    if (!completed) lowerer.unsupported("SC1071", expr, "a delegate whose return channel has no extraction");
-    const result = dT.retT.kind === "void" ? completed : lowerer.coerceInto(expr, completed, dT.retT);
+    const completed =
+      dT.retT.kind === "void"
+        ? channelUndefined(lowerer, DYN, loc)!
+        : extractIteratorValue(lowerer, dT.retT, valueT, valueRead, loc);
+    if (!completed)
+      lowerer.unsupported("SC1071", expr, "a delegate whose return channel has no extraction");
+    const result =
+      dT.retT.kind === "void" ? completed : lowerer.coerceInto(expr, completed, dT.retT);
     return {
-      kind: "seqExpr", result, type: result.type, loc,
+      kind: "seqExpr",
+      result,
+      type: result.type,
+      loc,
       stmts: [
         { kind: "varDecl", localId: d.id, init: delegate, loc },
         {
@@ -667,7 +800,14 @@ function lowerYieldStar(lowerer: Lowerer, expr: ts.YieldExpression): IrExpr {
           cond: {
             kind: "unary",
             op: "!",
-            operand: { kind: "recordGet", obj: rRef(), shapeId: recT.shapeId, field: "done", type: BOOL, loc },
+            operand: {
+              kind: "recordGet",
+              obj: rRef(),
+              shapeId: recT.shapeId,
+              field: "done",
+              type: BOOL,
+              loc,
+            },
             type: BOOL,
             loc,
           },

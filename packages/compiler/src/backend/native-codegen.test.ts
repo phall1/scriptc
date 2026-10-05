@@ -2,7 +2,11 @@ import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/pr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
-import { emitNativeArtifact, NativeCodegenError, validateNativeCodegenVersion } from "./native-codegen.js";
+import {
+  emitNativeArtifact,
+  NativeCodegenError,
+  validateNativeCodegenVersion,
+} from "./native-codegen.js";
 import { nativeArtifactDependenciesStillMatch } from "./native-toolchain.js";
 import { LINUX_X64_GNU_TARGET, MACOS_ARM64_TARGET, WASM32_WASI_TARGET } from "./targets.js";
 import { compilerReleaseVersion } from "../library/sidecar.js";
@@ -12,14 +16,16 @@ afterEach(async () => {
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
-async function fakePackage(options: {
-  protocol?: string;
-  packageVersion?: string;
-  emitFailure?: boolean;
-  emptyOutput?: boolean;
-  missingOutput?: boolean;
-  changePackageDuringEmit?: boolean;
-} = {}) {
+async function fakePackage(
+  options: {
+    protocol?: string;
+    packageVersion?: string;
+    emitFailure?: boolean;
+    emptyOutput?: boolean;
+    missingOutput?: boolean;
+    changePackageDuringEmit?: boolean;
+  } = {},
+) {
   const root = await mkdtemp(join(tmpdir(), "scriptc-native-helper-test-"));
   dirs.push(root);
   const packageJson = join(root, "package.json");
@@ -38,7 +44,9 @@ async function fakePackage(options: {
     default_target: MACOS_ARM64_TARGET.llvmTriple,
     data_layout: MACOS_ARM64_TARGET.dataLayout,
   });
-  await writeFile(bin, `#!/bin/sh
+  await writeFile(
+    bin,
+    `#!/bin/sh
 if [ "$1" = version ]; then
   printf '%s\\n' '${version}'
   exit 0
@@ -52,19 +60,27 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 ${options.changePackageDuringEmit === true ? `printf '\\n' >> '${packageJson}'` : ""}
-${options.emitFailure === true
-    ? "printf '%s\\n' '{\"ok\":false,\"code\":\"verification_failed\",\"message\":\"bad module\"}' >&2; exit 1"
+${
+  options.emitFailure === true
+    ? 'printf \'%s\\n\' \'{"ok":false,"code":"verification_failed","message":"bad module"}\' >&2; exit 1'
     : options.emptyOutput === true
       ? ': > "$output"'
       : options.missingOutput === true
         ? ":"
-        : 'cp "$input" "$output"'}
-`);
+        : 'cp "$input" "$output"'
+}
+`,
+  );
   await chmod(bin, 0o755);
   return { packageJson, bin, log, root };
 }
 
-function request(root: string, packageJson: string, output = join(root, "program.o"), target = MACOS_ARM64_TARGET) {
+function request(
+  root: string,
+  packageJson: string,
+  output = join(root, "program.o"),
+  target = MACOS_ARM64_TARGET,
+) {
   return {
     outputPath: output,
     llvm: "define i32 @answer() { ret i32 42 }\n",
@@ -81,11 +97,17 @@ test("resolves the build host's platform helper", async () => {
   const pkg = await fakePackage();
   const output = join(pkg.root, "linux.o");
   await writeFile(pkg.packageJson, JSON.stringify({ name: LINUX_X64_GNU_TARGET.helperPackage }));
-  await writeFile(pkg.bin, (await readFile(pkg.bin, "utf8"))
-    .replaceAll(MACOS_ARM64_TARGET.llvmTriple, LINUX_X64_GNU_TARGET.helper.defaultTarget)
-    .replaceAll(MACOS_ARM64_TARGET.dataLayout, LINUX_X64_GNU_TARGET.helper.defaultDataLayout)
-    .replaceAll('"targets":["AArch64"]', '"targets":["X86"]')
-    .replaceAll(`"supported_targets":["${MACOS_ARM64_TARGET.llvmTriple}"]`, `"supported_targets":["${LINUX_X64_GNU_TARGET.llvmTriple}"]`));
+  await writeFile(
+    pkg.bin,
+    (await readFile(pkg.bin, "utf8"))
+      .replaceAll(MACOS_ARM64_TARGET.llvmTriple, LINUX_X64_GNU_TARGET.helper.defaultTarget)
+      .replaceAll(MACOS_ARM64_TARGET.dataLayout, LINUX_X64_GNU_TARGET.helper.defaultDataLayout)
+      .replaceAll('"targets":["AArch64"]', '"targets":["X86"]')
+      .replaceAll(
+        `"supported_targets":["${MACOS_ARM64_TARGET.llvmTriple}"]`,
+        `"supported_targets":["${LINUX_X64_GNU_TARGET.llvmTriple}"]`,
+      ),
+  );
   await emitNativeArtifact({
     ...request(pkg.root, pkg.packageJson, output, LINUX_X64_GNU_TARGET),
     helperHost: { platform: "linux", arch: "x64", linuxLibc: "gnu" },
@@ -95,26 +117,34 @@ test("resolves the build host's platform helper", async () => {
 
 test("requires a portable target backend in addition to the host helper backend", async () => {
   const pkg = await fakePackage();
-  await expect(emitNativeArtifact({
-    ...request(pkg.root, pkg.packageJson, join(pkg.root, "program.wasm"), WASM32_WASI_TARGET),
-    helperHost: { platform: "darwin", arch: "arm64" },
-  })).rejects.toMatchObject({ diagnosticCode: "SC3003", detailCode: "version_mismatch" });
+  await expect(
+    emitNativeArtifact({
+      ...request(pkg.root, pkg.packageJson, join(pkg.root, "program.wasm"), WASM32_WASI_TARGET),
+      helperHost: { platform: "darwin", arch: "arm64" },
+    }),
+  ).rejects.toMatchObject({ diagnosticCode: "SC3003", detailCode: "version_mismatch" });
 });
 
 test("accepts a WASI-capable helper whose default host target differs", () => {
   const helper = WASM32_WASI_TARGET.hostHelpers?.["darwin-arm64"];
   if (!helper) throw new Error("missing darwin-arm64 WASI helper fixture");
-  expect(validateNativeCodegenVersion({
-    ok: true,
-    protocol_version: "1",
-    scriptc_package_version: compilerReleaseVersion(),
-    llvm_version: "22.1.8",
-    host_triple: "arm64-apple-darwin25.0.0",
-    targets: ["AArch64", "WebAssembly"],
-    supported_targets: [helper.defaultTarget, WASM32_WASI_TARGET.llvmTriple],
-    default_target: helper.defaultTarget,
-    data_layout: helper.defaultDataLayout,
-  }, WASM32_WASI_TARGET, helper).targets).toContain("WebAssembly");
+  expect(
+    validateNativeCodegenVersion(
+      {
+        ok: true,
+        protocol_version: "1",
+        scriptc_package_version: compilerReleaseVersion(),
+        llvm_version: "22.1.8",
+        host_triple: "arm64-apple-darwin25.0.0",
+        targets: ["AArch64", "WebAssembly"],
+        supported_targets: [helper.defaultTarget, WASM32_WASI_TARGET.llvmTriple],
+        default_target: helper.defaultTarget,
+        data_layout: helper.defaultDataLayout,
+      },
+      WASM32_WASI_TARGET,
+      helper,
+    ).targets,
+  ).toContain("WebAssembly");
 });
 
 test("resolves a package helper, emits atomically, and caches by all native inputs", async () => {
@@ -129,10 +159,9 @@ test("resolves a package helper, emits atomically, and caches by all native inpu
   expect((await stat(first)).mode & 0o777).toBe(expectedMode);
   expect((await stat(second)).mode & 0o777).toBe(expectedMode);
   expect((await readFile(pkg.log, "utf8")).trim().split("\n")).toHaveLength(1);
-  expect(firstArtifact.dependencies.map((dependency) => dependency.path)).toEqual([
-    pkg.bin,
-    pkg.packageJson,
-  ].sort());
+  expect(firstArtifact.dependencies.map((dependency) => dependency.path)).toEqual(
+    [pkg.bin, pkg.packageJson].sort(),
+  );
   expect(secondArtifact.dependencies).toEqual(firstArtifact.dependencies);
 });
 
@@ -155,10 +184,12 @@ test("returns the pre-emission helper snapshot when its package changes during e
 
   expect(await readFile(join(pkg.root, "program.o"), "utf8")).toContain("define i32 @answer");
   expect(await nativeArtifactDependenciesStillMatch(artifact.dependencies)).toBe(false);
-  expect(await stat(join(pkg.root, "cache", "native-codegen-v1")).then(
-    () => true,
-    () => false,
-  )).toBe(false);
+  expect(
+    await stat(join(pkg.root, "cache", "native-codegen-v1")).then(
+      () => true,
+      () => false,
+    ),
+  ).toBe(false);
 });
 
 test("cache publication failures do not discard a valid requested artifact", async () => {
@@ -181,10 +212,14 @@ test("cache publication failures do not discard a valid requested artifact", asy
 test("reports a missing platform package as an actionable installation diagnostic", async () => {
   const root = await mkdtemp(join(tmpdir(), "scriptc-native-missing-test-"));
   dirs.push(root);
-  await expect(emitNativeArtifact({
-    ...request(root, join(root, "missing.json")),
-    resolvePackageJson: () => { throw new Error("missing"); },
-  })).rejects.toMatchObject({
+  await expect(
+    emitNativeArtifact({
+      ...request(root, join(root, "missing.json")),
+      resolvePackageJson: () => {
+        throw new Error("missing");
+      },
+    }),
+  ).rejects.toMatchObject({
     diagnosticCode: "SC3003",
     detailCode: "missing_package",
     message: expect.stringContaining("optional dependencies"),
@@ -234,7 +269,9 @@ test("translates structured helper failures and preserves an existing output", a
   const pkg = await fakePackage({ emitFailure: true });
   const output = join(pkg.root, "existing.o");
   await writeFile(output, "caller artifact\n");
-  await expect(emitNativeArtifact(request(pkg.root, pkg.packageJson, output))).rejects.toMatchObject({
+  await expect(
+    emitNativeArtifact(request(pkg.root, pkg.packageJson, output)),
+  ).rejects.toMatchObject({
     diagnosticCode: "SC3004",
     detailCode: "verification_failed",
     message: expect.stringContaining("bad module"),
@@ -262,14 +299,22 @@ test("rejects a successful helper that creates no staged output", async () => {
 test("sanitized native artifacts fail before helper resolution", async () => {
   const root = await mkdtemp(join(tmpdir(), "scriptc-native-sanitize-test-"));
   dirs.push(root);
-  await expect(emitNativeArtifact({
-    ...request(root, join(root, "unused.json")),
-    sanitize: true,
-    resolvePackageJson: () => { throw new Error("must not resolve"); },
-  })).rejects.toBeInstanceOf(NativeCodegenError);
-  await expect(emitNativeArtifact({
-    ...request(root, join(root, "unused.json")),
-    sanitize: true,
-    resolvePackageJson: () => { throw new Error("must not resolve"); },
-  })).rejects.toMatchObject({ diagnosticCode: "SC3002", detailCode: "sanitize_unsupported" });
+  await expect(
+    emitNativeArtifact({
+      ...request(root, join(root, "unused.json")),
+      sanitize: true,
+      resolvePackageJson: () => {
+        throw new Error("must not resolve");
+      },
+    }),
+  ).rejects.toBeInstanceOf(NativeCodegenError);
+  await expect(
+    emitNativeArtifact({
+      ...request(root, join(root, "unused.json")),
+      sanitize: true,
+      resolvePackageJson: () => {
+        throw new Error("must not resolve");
+      },
+    }),
+  ).rejects.toMatchObject({ diagnosticCode: "SC3002", detailCode: "sanitize_unsupported" });
 });

@@ -4,20 +4,58 @@ import type { IrExpr, IrModule, IrStmt, IrType, SrcLoc } from "./ir.js";
  * Module traversal visits each shape definition separately. */
 export function everyTypeChild(node: IrType, visit: (node: IrType) => boolean): boolean {
   switch (node.kind) {
-    case "array": case "set": return visit(node.elem);
-    case "map": return visit(node.key) && visit(node.value);
-    case "func": return node.params.every(visit) && visit(node.ret);
-    case "promise": return visit(node.inner);
-    case "generator": return visit(node.yieldT) && visit(node.retT) && visit(node.nextT);
-    case "f64": case "bigint": case "date": case "string": case "bool":
-    case "regex": case "bytes": case "url": case "searchParams": case "symbol":
-    case "stats": case "fileHandle": case "spawnRes": case "child":
-    case "netServer": case "netSocket": case "http2Session": case "http2Stream":
-    case "dgramSocket": case "testCtx": case "httpReq": case "httpRes":
-    case "httpClientReq": case "childStream": case "childWriter": case "procStream":
-    case "fsWatcher": case "secureCtx": case "cryptoHash": case "cryptoHmac":
-    case "object": case "classval": case "moduleNs": case "record": case "union":
-    case "dyn": case "jsval": case "caught": case "undefinedT": case "nullT": case "void":
+    case "array":
+    case "set":
+      return visit(node.elem);
+    case "map":
+      return visit(node.key) && visit(node.value);
+    case "func":
+      return node.params.every(visit) && visit(node.ret);
+    case "promise":
+      return visit(node.inner);
+    case "generator":
+      return visit(node.yieldT) && visit(node.retT) && visit(node.nextT);
+    case "f64":
+    case "bigint":
+    case "date":
+    case "string":
+    case "bool":
+    case "regex":
+    case "bytes":
+    case "url":
+    case "searchParams":
+    case "symbol":
+    case "stats":
+    case "fileHandle":
+    case "spawnRes":
+    case "child":
+    case "netServer":
+    case "netSocket":
+    case "http2Session":
+    case "http2Stream":
+    case "dgramSocket":
+    case "testCtx":
+    case "httpReq":
+    case "httpRes":
+    case "httpClientReq":
+    case "childStream":
+    case "childWriter":
+    case "procStream":
+    case "fsWatcher":
+    case "secureCtx":
+    case "cryptoHash":
+    case "cryptoHmac":
+    case "object":
+    case "classval":
+    case "moduleNs":
+    case "record":
+    case "union":
+    case "dyn":
+    case "jsval":
+    case "caught":
+    case "undefinedT":
+    case "nullT":
+    case "void":
       return true;
   }
   node satisfies never;
@@ -44,20 +82,27 @@ export function everyModuleNode(mod: IrModule, visitor: IrModuleVisitor): boolea
     for (const local of fn.locals) if (!type(local.type, local.source?.loc ?? fn.loc)) return false;
     for (const capture of fn.captures ?? []) if (!type(capture.type, fn.loc)) return false;
     for (const capture of fn.classCaptures ?? []) if (!type(capture.type, fn.loc)) return false;
-    if (fn.generator !== undefined && (!type(fn.generator.yieldT, fn.loc) ||
-        !type(fn.generator.nextT, fn.loc) || !type(fn.generator.resultType, fn.loc))) return false;
+    if (
+      fn.generator !== undefined &&
+      (!type(fn.generator.yieldT, fn.loc) ||
+        !type(fn.generator.nextT, fn.loc) ||
+        !type(fn.generator.resultType, fn.loc))
+    )
+      return false;
     for (const node of fn.body) if (!stmt(node)) return false;
   }
   for (const cls of mod.classes ?? []) {
     for (const capture of cls.localCaptures ?? []) if (!type(capture.type, cls.loc)) return false;
     for (const field of cls.fields) if (!type(field.type, cls.loc)) return false;
   }
-  for (const global of mod.globals ?? []) if (!type(global.type, global.source?.loc ?? entryLoc)) return false;
+  for (const global of mod.globals ?? [])
+    if (!type(global.type, global.source?.loc ?? entryLoc)) return false;
   for (const record of mod.records ?? []) {
     for (const field of record.fields) if (!type(field.type, entryLoc)) return false;
     if (record.indexValue !== undefined && !type(record.indexValue, entryLoc)) return false;
   }
-  for (const union of mod.unions ?? []) for (const arm of union.arms) if (!type(arm, entryLoc)) return false;
+  for (const union of mod.unions ?? [])
+    for (const arm of union.arms) if (!type(arm, entryLoc)) return false;
   return true;
 }
 
@@ -77,7 +122,11 @@ export interface IrTransform {
 }
 
 /** Visit immediate children, stopping on the first false result. */
-export function everyExprChild(node: IrExpr, expr: (expr: IrExpr) => boolean, stmt: (stmt: IrStmt) => boolean): boolean {
+export function everyExprChild(
+  node: IrExpr,
+  expr: (expr: IrExpr) => boolean,
+  stmt: (stmt: IrStmt) => boolean,
+): boolean {
   switch (node.kind) {
     case "numLit":
       return true;
@@ -144,15 +193,17 @@ export function everyExprChild(node: IrExpr, expr: (expr: IrExpr) => boolean, st
     case "arrIntrinsic":
       return expr(node.receiver) && node.args.every((child) => expr(child));
     case "bytesNew":
-      return (node.source === null || expr(node.source));
+      return node.source === null || expr(node.source);
     case "bytesIntrinsic":
       return expr(node.receiver) && node.args.every((child) => expr(child));
     case "mapNew":
-      return (node.seed === undefined || node.seed.every((child) => (expr(child.key) && expr(child.value))));
+      return (
+        node.seed === undefined || node.seed.every((child) => expr(child.key) && expr(child.value))
+      );
     case "mapIntrinsic":
       return expr(node.receiver) && node.args.every((child) => expr(child));
     case "setNew":
-      return (node.seed === undefined || expr(node.seed));
+      return node.seed === undefined || expr(node.seed);
     case "setIntrinsic":
       return expr(node.receiver) && node.args.every((child) => expr(child));
     case "call":
@@ -162,11 +213,15 @@ export function everyExprChild(node: IrExpr, expr: (expr: IrExpr) => boolean, st
     case "closure":
       return true;
     case "callValue":
-      return expr(node.callee) && (node.receiver === undefined || expr(node.receiver)) && node.args.every((child) => expr(child));
+      return (
+        expr(node.callee) &&
+        (node.receiver === undefined || expr(node.receiver)) &&
+        node.args.every((child) => expr(child))
+      );
     case "selfRef":
       return true;
     case "yieldExpr":
-      return (node.value === null || expr(node.value));
+      return node.value === null || expr(node.value);
     case "genResume":
       return expr(node.gen) && (node.arg === null || expr(node.arg));
     case "awaitExpr":
@@ -198,9 +253,9 @@ export function everyExprChild(node: IrExpr, expr: (expr: IrExpr) => boolean, st
     case "fieldGet":
       return expr(node.obj);
     case "recordLit":
-      return node.fields.every((child) => (expr(child.value)));
+      return node.fields.every((child) => expr(child.value));
     case "recordClone":
-      return expr(node.source) && node.overrides.every((child) => (expr(child.value)));
+      return expr(node.source) && node.overrides.every((child) => expr(child.value));
     case "recordGet":
       return expr(node.obj);
     case "recordKeyGet":
@@ -210,13 +265,25 @@ export function everyExprChild(node: IrExpr, expr: (expr: IrExpr) => boolean, st
     case "dynFromJsval":
       return expr(node.value);
     case "dynCall":
-      return expr(node.callee) && (node.receiver === undefined || expr(node.receiver)) && (node.calleeNameValue === undefined || expr(node.calleeNameValue)) && node.args.every((child) => expr(child));
+      return (
+        expr(node.callee) &&
+        (node.receiver === undefined || expr(node.receiver)) &&
+        (node.calleeNameValue === undefined || expr(node.calleeNameValue)) &&
+        node.args.every((child) => expr(child))
+      );
     case "dynInvoke":
-      return expr(node.recv) && (node.calleeNameValue === undefined || expr(node.calleeNameValue)) && node.args.every((child) => expr(child));
+      return (
+        expr(node.recv) &&
+        (node.calleeNameValue === undefined || expr(node.calleeNameValue)) &&
+        node.args.every((child) => expr(child))
+      );
     case "dynArrLit":
       return node.elems.every((child) => expr(child));
     case "dynObjLit":
-      return (node.fields === undefined || node.fields.every((child) => (expr(child.key) && expr(child.value))));
+      return (
+        node.fields === undefined ||
+        node.fields.every((child) => expr(child.key) && expr(child.value))
+      );
     case "dynTest":
       return expr(node.value);
     case "dynKeyGet":
@@ -279,24 +346,43 @@ export function everyExprChild(node: IrExpr, expr: (expr: IrExpr) => boolean, st
 }
 
 /** Visit immediate children, stopping on the first false result. */
-export function everyStmtChild(node: IrStmt, expr: (expr: IrExpr) => boolean, stmt: (stmt: IrStmt) => boolean): boolean {
+export function everyStmtChild(
+  node: IrStmt,
+  expr: (expr: IrExpr) => boolean,
+  stmt: (stmt: IrStmt) => boolean,
+): boolean {
   switch (node.kind) {
     case "varDecl":
-      return (node.init === null || expr(node.init));
+      return node.init === null || expr(node.init);
     case "assign":
       return expr(node.value);
     case "exprStmt":
       return expr(node.expr);
     case "if":
-      return expr(node.cond) && node.then.every((child) => stmt(child)) && (node.else_ === null || node.else_.every((child) => stmt(child)));
+      return (
+        expr(node.cond) &&
+        node.then.every((child) => stmt(child)) &&
+        (node.else_ === null || node.else_.every((child) => stmt(child)))
+      );
     case "while":
       return expr(node.cond) && node.body.every((child) => stmt(child));
     case "doWhile":
       return node.body.every((child) => stmt(child)) && expr(node.cond);
     case "switch":
-      return expr(node.disc) && node.cases.every((child) => ((child.test === null || expr(child.test)) && child.body.every((child) => stmt(child))));
+      return (
+        expr(node.disc) &&
+        node.cases.every(
+          (child) =>
+            (child.test === null || expr(child.test)) && child.body.every((child) => stmt(child)),
+        )
+      );
     case "for":
-      return (node.init === null || stmt(node.init)) && (node.cond === null || expr(node.cond)) && (node.update === null || stmt(node.update)) && node.body.every((child) => stmt(child));
+      return (
+        (node.init === null || stmt(node.init)) &&
+        (node.cond === null || expr(node.cond)) &&
+        (node.update === null || stmt(node.update)) &&
+        node.body.every((child) => stmt(child))
+      );
     case "arraySet":
       return expr(node.arr) && expr(node.index) && expr(node.value);
     case "arraySetLength":
@@ -310,7 +396,7 @@ export function everyStmtChild(node: IrStmt, expr: (expr: IrExpr) => boolean, st
     case "forOf":
       return expr(node.iterable) && node.body.every((child) => stmt(child));
     case "return":
-      return (node.value === null || expr(node.value));
+      return node.value === null || expr(node.value);
     case "fieldSet":
       return expr(node.obj) && expr(node.value);
     case "recordSet":
@@ -332,14 +418,22 @@ export function everyStmtChild(node: IrStmt, expr: (expr: IrExpr) => boolean, st
     case "rethrow":
       return true;
     case "tryCatch":
-      return node.tryBody.every((child) => stmt(child)) && (node.catchBody === null || node.catchBody.every((child) => stmt(child))) && (node.finallyBody === null || node.finallyBody.every((child) => stmt(child)));
+      return (
+        node.tryBody.every((child) => stmt(child)) &&
+        (node.catchBody === null || node.catchBody.every((child) => stmt(child))) &&
+        (node.finallyBody === null || node.finallyBody.every((child) => stmt(child)))
+      );
   }
   node satisfies never;
   throw new Error("unhandled IR node");
 }
 
 /** Copy a node with transformed immediate children; preserve all metadata. */
-export function mapExprChildren(node: IrExpr, expr: (expr: IrExpr) => IrExpr, stmt: (stmt: IrStmt) => IrStmt): IrExpr {
+export function mapExprChildren(
+  node: IrExpr,
+  expr: (expr: IrExpr) => IrExpr,
+  stmt: (stmt: IrStmt) => IrStmt,
+): IrExpr {
   switch (node.kind) {
     case "numLit":
       return node;
@@ -386,13 +480,21 @@ export function mapExprChildren(node: IrExpr, expr: (expr: IrExpr) => IrExpr, st
     case "chainRecv":
       return node;
     case "strIntrinsic":
-      return { ...node, receiver: expr(node.receiver), args: node.args.map((child) => expr(child)) };
+      return {
+        ...node,
+        receiver: expr(node.receiver),
+        args: node.args.map((child) => expr(child)),
+      };
     case "regexLit":
       return node;
     case "templateStrings":
       return node;
     case "regexIntrinsic":
-      return { ...node, receiver: expr(node.receiver), args: node.args.map((child) => expr(child)) };
+      return {
+        ...node,
+        receiver: expr(node.receiver),
+        args: node.args.map((child) => expr(child)),
+      };
     case "arrayLit":
       return { ...node, elems: node.elems.map((child) => expr(child)) };
     case "arrayNewLen":
@@ -404,19 +506,44 @@ export function mapExprChildren(node: IrExpr, expr: (expr: IrExpr) => IrExpr, st
     case "arrayState":
       return { ...node, arr: expr(node.arr), index: expr(node.index) };
     case "arrIntrinsic":
-      return { ...node, receiver: expr(node.receiver), args: node.args.map((child) => expr(child)) };
+      return {
+        ...node,
+        receiver: expr(node.receiver),
+        args: node.args.map((child) => expr(child)),
+      };
     case "bytesNew":
       return { ...node, source: node.source === null ? null : expr(node.source) };
     case "bytesIntrinsic":
-      return { ...node, receiver: expr(node.receiver), args: node.args.map((child) => expr(child)) };
+      return {
+        ...node,
+        receiver: expr(node.receiver),
+        args: node.args.map((child) => expr(child)),
+      };
     case "mapNew":
-      return node.seed === undefined ? node : { ...node, seed: node.seed.map((child) => ({ ...child, key: expr(child.key), value: expr(child.value) })) };
+      return node.seed === undefined
+        ? node
+        : {
+            ...node,
+            seed: node.seed.map((child) => ({
+              ...child,
+              key: expr(child.key),
+              value: expr(child.value),
+            })),
+          };
     case "mapIntrinsic":
-      return { ...node, receiver: expr(node.receiver), args: node.args.map((child) => expr(child)) };
+      return {
+        ...node,
+        receiver: expr(node.receiver),
+        args: node.args.map((child) => expr(child)),
+      };
     case "setNew":
       return node.seed === undefined ? node : { ...node, seed: expr(node.seed) };
     case "setIntrinsic":
-      return { ...node, receiver: expr(node.receiver), args: node.args.map((child) => expr(child)) };
+      return {
+        ...node,
+        receiver: expr(node.receiver),
+        args: node.args.map((child) => expr(child)),
+      };
     case "call":
       return { ...node, args: node.args.map((child) => expr(child)) };
     case "ffiCall":
@@ -425,8 +552,14 @@ export function mapExprChildren(node: IrExpr, expr: (expr: IrExpr) => IrExpr, st
       return node;
     case "callValue": {
       const callee = expr(node.callee);
-      if (node.receiver === undefined) return { ...node, callee, args: node.args.map((child) => expr(child)) };
-      return { ...node, callee, receiver: expr(node.receiver), args: node.args.map((child) => expr(child)) };
+      if (node.receiver === undefined)
+        return { ...node, callee, args: node.args.map((child) => expr(child)) };
+      return {
+        ...node,
+        callee,
+        receiver: expr(node.receiver),
+        args: node.args.map((child) => expr(child)),
+      };
     }
     case "selfRef":
       return node;
@@ -463,9 +596,16 @@ export function mapExprChildren(node: IrExpr, expr: (expr: IrExpr) => IrExpr, st
     case "fieldGet":
       return { ...node, obj: expr(node.obj) };
     case "recordLit":
-      return { ...node, fields: node.fields.map((child) => ({ ...child!, value: expr(child.value) })) };
+      return {
+        ...node,
+        fields: node.fields.map((child) => ({ ...child!, value: expr(child.value) })),
+      };
     case "recordClone":
-      return { ...node, source: expr(node.source), overrides: node.overrides.map((child) => ({ ...child!, value: expr(child.value) })) };
+      return {
+        ...node,
+        source: expr(node.source),
+        overrides: node.overrides.map((child) => ({ ...child!, value: expr(child.value) })),
+      };
     case "recordGet":
       return { ...node, obj: expr(node.obj) };
     case "recordKeyGet":
@@ -490,7 +630,16 @@ export function mapExprChildren(node: IrExpr, expr: (expr: IrExpr) => IrExpr, st
     case "dynArrLit":
       return { ...node, elems: node.elems.map((child) => expr(child)) };
     case "dynObjLit":
-      return node.fields === undefined ? node : { ...node, fields: node.fields.map((child) => ({ ...child, key: expr(child.key), value: expr(child.value) })) };
+      return node.fields === undefined
+        ? node
+        : {
+            ...node,
+            fields: node.fields.map((child) => ({
+              ...child,
+              key: expr(child.key),
+              value: expr(child.value),
+            })),
+          };
     case "dynTest":
       return { ...node, value: expr(node.value) };
     case "dynKeyGet":
@@ -553,7 +702,11 @@ export function mapExprChildren(node: IrExpr, expr: (expr: IrExpr) => IrExpr, st
 }
 
 /** Copy a node with transformed immediate children; preserve all metadata. */
-export function mapStmtChildren(node: IrStmt, expr: (expr: IrExpr) => IrExpr, stmt: (stmt: IrStmt) => IrStmt): IrStmt {
+export function mapStmtChildren(
+  node: IrStmt,
+  expr: (expr: IrExpr) => IrExpr,
+  stmt: (stmt: IrStmt) => IrStmt,
+): IrStmt {
   switch (node.kind) {
     case "varDecl":
       return { ...node, init: node.init === null ? null : expr(node.init) };
@@ -562,15 +715,34 @@ export function mapStmtChildren(node: IrStmt, expr: (expr: IrExpr) => IrExpr, st
     case "exprStmt":
       return { ...node, expr: expr(node.expr) };
     case "if":
-      return { ...node, cond: expr(node.cond), then: node.then.map((child) => stmt(child)), else_: node.else_ === null ? null : node.else_.map((child) => stmt(child)) };
+      return {
+        ...node,
+        cond: expr(node.cond),
+        then: node.then.map((child) => stmt(child)),
+        else_: node.else_ === null ? null : node.else_.map((child) => stmt(child)),
+      };
     case "while":
       return { ...node, cond: expr(node.cond), body: node.body.map((child) => stmt(child)) };
     case "doWhile":
       return { ...node, body: node.body.map((child) => stmt(child)), cond: expr(node.cond) };
     case "switch":
-      return { ...node, disc: expr(node.disc), cases: node.cases.map((child) => ({ ...child, test: child.test === null ? null : expr(child.test), body: child.body.map((child) => stmt(child)) })) };
+      return {
+        ...node,
+        disc: expr(node.disc),
+        cases: node.cases.map((child) => ({
+          ...child,
+          test: child.test === null ? null : expr(child.test),
+          body: child.body.map((child) => stmt(child)),
+        })),
+      };
     case "for":
-      return { ...node, init: node.init === null ? null : stmt(node.init), cond: node.cond === null ? null : expr(node.cond), update: node.update === null ? null : stmt(node.update), body: node.body.map((child) => stmt(child)) };
+      return {
+        ...node,
+        init: node.init === null ? null : stmt(node.init),
+        cond: node.cond === null ? null : expr(node.cond),
+        update: node.update === null ? null : stmt(node.update),
+        body: node.body.map((child) => stmt(child)),
+      };
     case "arraySet":
       return { ...node, arr: expr(node.arr), index: expr(node.index), value: expr(node.value) };
     case "arraySetLength":
@@ -582,7 +754,11 @@ export function mapStmtChildren(node: IrStmt, expr: (expr: IrExpr) => IrExpr, st
     case "bytesSet":
       return { ...node, arr: expr(node.arr), index: expr(node.index), value: expr(node.value) };
     case "forOf":
-      return { ...node, iterable: expr(node.iterable), body: node.body.map((child) => stmt(child)) };
+      return {
+        ...node,
+        iterable: expr(node.iterable),
+        body: node.body.map((child) => stmt(child)),
+      };
     case "return":
       return { ...node, value: node.value === null ? null : expr(node.value) };
     case "fieldSet":
@@ -606,7 +782,13 @@ export function mapStmtChildren(node: IrStmt, expr: (expr: IrExpr) => IrExpr, st
     case "rethrow":
       return node;
     case "tryCatch":
-      return { ...node, tryBody: node.tryBody.map((child) => stmt(child)), catchBody: node.catchBody === null ? null : node.catchBody.map((child) => stmt(child)), finallyBody: node.finallyBody === null ? null : node.finallyBody.map((child) => stmt(child)) };
+      return {
+        ...node,
+        tryBody: node.tryBody.map((child) => stmt(child)),
+        catchBody: node.catchBody === null ? null : node.catchBody.map((child) => stmt(child)),
+        finallyBody:
+          node.finallyBody === null ? null : node.finallyBody.map((child) => stmt(child)),
+      };
   }
   node satisfies never;
   throw new Error("unhandled IR node");
@@ -622,9 +804,13 @@ function traversal(visitor: IrVisitor): IrVisitor {
   return { expr, stmt };
 }
 
-export function everyExpr(node: IrExpr, visitor: IrVisitor): boolean { return traversal(visitor).expr(node); }
+export function everyExpr(node: IrExpr, visitor: IrVisitor): boolean {
+  return traversal(visitor).expr(node);
+}
 
-export function everyStmt(node: IrStmt, visitor: IrVisitor): boolean { return traversal(visitor).stmt(node); }
+export function everyStmt(node: IrStmt, visitor: IrVisitor): boolean {
+  return traversal(visitor).stmt(node);
+}
 
 export function everyStmtList(body: IrStmt[], visitor: IrVisitor): boolean {
   return body.every(traversal(visitor).stmt);
@@ -638,9 +824,13 @@ function transformation(transform: IrTransform): IrTransform {
   return { expr, stmt };
 }
 
-export function transformExpr(node: IrExpr, transform: IrTransform): IrExpr { return transformation(transform).expr(node); }
+export function transformExpr(node: IrExpr, transform: IrTransform): IrExpr {
+  return transformation(transform).expr(node);
+}
 
-export function transformStmt(node: IrStmt, transform: IrTransform): IrStmt { return transformation(transform).stmt(node); }
+export function transformStmt(node: IrStmt, transform: IrTransform): IrStmt {
+  return transformation(transform).stmt(node);
+}
 
 export function transformStmtList(body: IrStmt[], transform: IrTransform): IrStmt[] {
   return body.map(transformation(transform).stmt);

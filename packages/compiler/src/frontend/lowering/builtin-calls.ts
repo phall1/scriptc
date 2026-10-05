@@ -50,8 +50,11 @@ export function lowerBuiltinCall(
       `${bi.module}.${bi.member}`,
       expr,
       builtinFenceHintOf(bi.module, bi.member),
-      namespaceMember ? lowerer.checker.getSymbolAtLocation(namespaceMember)
-        : ts.isIdentifier(expr.expression) ? lowerer.resolveValueSymbol(expr.expression) : undefined,
+      namespaceMember
+        ? lowerer.checker.getSymbolAtLocation(namespaceMember)
+        : ts.isIdentifier(expr.expression)
+          ? lowerer.resolveValueSymbol(expr.expression)
+          : undefined,
     );
   }
   return lowerer.lowerBuiltinModuleCall(expr, bi, builtinFn, loc);

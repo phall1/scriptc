@@ -11,41 +11,91 @@ const locals = new Map<string, IrLocal>([
 ]);
 function loop(start = number(0)): IrStmt & { kind: "for" } {
   return {
-    kind: "for", loc, init: { kind: "varDecl", localId: "i", init: start, loc },
-    cond: { kind: "bin", op: "<", left: ref("i"), right: {
-      kind: "arrIntrinsic", method: "length", receiver: { kind: "varRef", localId: "a", type: arrayOf(F64), loc }, args: [], type: F64, loc,
-    }, type: BOOL, loc },
-    update: { kind: "assign", localId: "i", value: { kind: "bin", op: "+", left: ref("i"), right: number(1), type: F64, loc }, loc }, body: [],
+    kind: "for",
+    loc,
+    init: { kind: "varDecl", localId: "i", init: start, loc },
+    cond: {
+      kind: "bin",
+      op: "<",
+      left: ref("i"),
+      right: {
+        kind: "arrIntrinsic",
+        method: "length",
+        receiver: { kind: "varRef", localId: "a", type: arrayOf(F64), loc },
+        args: [],
+        type: F64,
+        loc,
+      },
+      type: BOOL,
+      loc,
+    },
+    update: {
+      kind: "assign",
+      localId: "i",
+      value: { kind: "bin", op: "+", left: ref("i"), right: number(1), type: F64, loc },
+      loc,
+    },
+    body: [],
   };
 }
 
 test("array length loops and active outer-array induction have exact integer bounds", () => {
   expect(matchIntegerArrayForLoop(loop(), locals, new Set())?.localId).toBe("i");
-  const nested = loop({ kind: "bin", op: "+", left: ref("outer"), right: number(1), type: F64, loc });
+  const nested = loop({
+    kind: "bin",
+    op: "+",
+    left: ref("outer"),
+    right: number(1),
+    type: F64,
+    loc,
+  });
   expect(matchIntegerArrayForLoop(nested, locals, new Set(["outer"]))?.localId).toBe("i");
   expect(matchIntegerArrayForLoop(nested, locals, new Set())).toBeNull();
 });
 
 test("negative zero, unknown starts, captured counters and body writes stay floating point", () => {
-  for (const start of [number(-0), number(0.5), number(-1), ref("unknown")]) expect(matchIntegerArrayForLoop(loop(start), locals, new Set())).toBeNull();
+  for (const start of [number(-0), number(0.5), number(-1), ref("unknown")])
+    expect(matchIntegerArrayForLoop(loop(start), locals, new Set())).toBeNull();
   const captured = new Map(locals);
   captured.set("i", { ...locals.get("i")!, boxed: true });
   expect(matchIntegerArrayForLoop(loop(), captured, new Set())).toBeNull();
   const changed = loop();
-  changed.body.push({ kind: "exprStmt", expr: { kind: "assignExpr", localId: "i", value: number(0.5), type: F64, loc }, loc });
+  changed.body.push({
+    kind: "exprStmt",
+    expr: { kind: "assignExpr", localId: "i", value: number(0.5), type: F64, loc },
+    loc,
+  });
   expect(matchIntegerArrayForLoop(changed, locals, new Set())).toBeNull();
 });
 
 test("changing the array length does not invalidate integer induction", () => {
   const changed = loop();
-  changed.body.push({ kind: "arraySetLength", arr: { kind: "varRef", localId: "a", type: arrayOf(F64), loc }, length: number(0), loc });
+  changed.body.push({
+    kind: "arraySetLength",
+    arr: { kind: "varRef", localId: "a", type: arrayOf(F64), loc },
+    length: number(0),
+    loc,
+  });
   expect(matchIntegerArrayForLoop(changed, locals, new Set())?.localId).toBe("i");
 });
 
 function counted(limit: IrExpr = number(4), inclusive = false): IrStmt & { kind: "for" } {
   const s = loop();
-  s.cond = { kind: "bin", op: inclusive ? "<=" : "<", left: ref("i"), right: limit, type: BOOL, loc };
-  s.body = [{ kind: "exprStmt", expr: { kind: "bin", op: "%", left: ref("i"), right: number(3), type: F64, loc }, loc }];
+  s.cond = {
+    kind: "bin",
+    op: inclusive ? "<=" : "<",
+    left: ref("i"),
+    right: limit,
+    type: BOOL,
+    loc,
+  };
+  s.body = [
+    {
+      kind: "exprStmt",
+      expr: { kind: "bin", op: "%", left: ref("i"), right: number(3), type: F64, loc },
+      loc,
+    },
+  ];
   return s;
 }
 
@@ -55,8 +105,13 @@ test("counted loops normalize finite literal limits and guard stable numeric loc
   }
   const withLimit = new Map(locals);
   withLimit.set("limit", { id: "limit", name: "limit", type: F64, mutable: true });
-  expect(matchIntegerCountedForLoop(counted(ref("limit"), true), withLimit)).toMatchObject({ localId: "i", guarded: true, inclusive: true });
-  for (const value of [NaN, Infinity, 2 ** 53 + 2]) expect(matchIntegerCountedForLoop(counted(number(value)), locals)).toBeNull();
+  expect(matchIntegerCountedForLoop(counted(ref("limit"), true), withLimit)).toMatchObject({
+    localId: "i",
+    guarded: true,
+    inclusive: true,
+  });
+  for (const value of [NaN, Infinity, 2 ** 53 + 2])
+    expect(matchIntegerCountedForLoop(counted(number(value)), locals)).toBeNull();
   expect(matchIntegerCountedForLoop(counted(number(2 ** 53), true), locals)).toBeNull();
 });
 
@@ -65,7 +120,11 @@ test("counted loop proofs reject writes, captures, effectful bounds and signed-z
   withLimit.set("limit", { id: "limit", name: "limit", type: F64, mutable: true });
   for (const id of ["i", "limit"]) {
     const s = counted(ref("limit"));
-    s.body.push({ kind: "exprStmt", expr: { kind: "assignExpr", localId: id, value: number(2), type: F64, loc }, loc });
+    s.body.push({
+      kind: "exprStmt",
+      expr: { kind: "assignExpr", localId: id, value: number(2), type: F64, loc },
+      loc,
+    });
     expect(matchIntegerCountedForLoop(s, withLimit)).toBeNull();
     const captured = new Map(withLimit);
     captured.set(id, { ...captured.get(id)!, boxed: true });
@@ -76,13 +135,24 @@ test("counted loop proofs reject writes, captures, effectful bounds and signed-z
     s.init = { kind: "varDecl", localId: "i", init: number(value), loc };
     expect(matchIntegerCountedForLoop(s, locals)).toBeNull();
   }
-  expect(matchIntegerCountedForLoop(counted({ kind: "incDec", localId: "limit", op: "+", prefix: false, type: F64, loc }), withLimit)).toBeNull();
+  expect(
+    matchIntegerCountedForLoop(
+      counted({ kind: "incDec", localId: "limit", op: "+", prefix: false, type: F64, loc }),
+      withLimit,
+    ),
+  ).toBeNull();
   expect(matchIntegerCountedForLoop(counted(ref("missing")), withLimit)).toBeNull();
 });
 
 test("versioning is bounded and requires an integer consumer", () => {
   const floating = counted();
-  floating.body = [{ kind: "exprStmt", expr: { kind: "bin", op: "+", left: ref("i"), right: number(0.5), type: F64, loc }, loc }];
+  floating.body = [
+    {
+      kind: "exprStmt",
+      expr: { kind: "bin", op: "+", left: ref("i"), right: number(0.5), type: F64, loc },
+      loc,
+    },
+  ];
   expect(matchIntegerCountedForLoop(floating, locals)).toBeNull();
   const withLimit = new Map(locals);
   withLimit.set("limit", { id: "limit", name: "limit", type: F64, mutable: true });

@@ -80,7 +80,10 @@ function expectedExitCode(file: string): number {
 async function build(entry: string): Promise<string> {
   const hash = createHash("sha256");
   hash.update(entry).update(readFileSync(entry));
-  const key = hash.update(sanitize ? "san" : "plain").digest("hex").slice(0, 16);
+  const key = hash
+    .update(sanitize ? "san" : "plain")
+    .digest("hex")
+    .slice(0, 16);
   const outDir = join(cacheDir, `node-test-${key}`);
   mkdirSync(outDir, { recursive: true });
   const result = await compile(entry, {
@@ -106,15 +109,19 @@ const cases = globSync(join(fixturesRoot, "cases/*.ts"))
   .map((entry) => ({ name: entry.split("/").at(-1)!.replace(/\.ts$/, ""), entry }));
 
 describe(`node:test differential (${cases.length} programs${sanitize ? ", sanitized" : ""})`, () => {
-  test.for(cases.map((c) => [c.name, c] as const))("%s", async ([, c]) => {
-    const binary = await build(c.entry);
-    const [nodeRes, nativeRes] = await Promise.all([
-      runLane("node", [c.entry]),
-      runLane(binary, []),
-    ]);
-    expect(normalize(nativeRes.stdout)).toBe(normalize(nodeRes.stdout));
-    const wanted = expectedExitCode(c.entry);
-    expect(nodeRes.exitCode).toBe(wanted); // keeps `// @exit:` honest
-    expect(nativeRes.exitCode).toBe(wanted);
-  }, 120_000);
+  test.for(cases.map((c) => [c.name, c] as const))(
+    "%s",
+    async ([, c]) => {
+      const binary = await build(c.entry);
+      const [nodeRes, nativeRes] = await Promise.all([
+        runLane("node", [c.entry]),
+        runLane(binary, []),
+      ]);
+      expect(normalize(nativeRes.stdout)).toBe(normalize(nodeRes.stdout));
+      const wanted = expectedExitCode(c.entry);
+      expect(nodeRes.exitCode).toBe(wanted); // keeps `// @exit:` honest
+      expect(nativeRes.exitCode).toBe(wanted);
+    },
+    120_000,
+  );
 });

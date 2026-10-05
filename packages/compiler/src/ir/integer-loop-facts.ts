@@ -3,8 +3,15 @@ import type { IrExpr, IrLocal, IrStmt } from "./ir.js";
 import { everyExprChild, everyStmtChild } from "./traverse.js";
 
 function increment(id: string, value: IrExpr): number | null {
-  if (value.kind !== "bin" || value.left.kind !== "varRef" || value.left.localId !== id ||
-      value.right.kind !== "numLit" || !Number.isSafeInteger(value.right.value) || Object.is(value.right.value, -0)) return null;
+  if (
+    value.kind !== "bin" ||
+    value.left.kind !== "varRef" ||
+    value.left.localId !== id ||
+    value.right.kind !== "numLit" ||
+    !Number.isSafeInteger(value.right.value) ||
+    Object.is(value.right.value, -0)
+  )
+    return null;
   return value.op === "+" ? value.right.value : value.op === "-" ? -value.right.value : null;
 }
 
@@ -13,25 +20,43 @@ function increment(id: string, value: IrExpr): number | null {
  * filtering, breaks and continues can only reduce the budget. A nested
  * loop or opaque control region invalidates the bindings it writes. */
 export function boundedIntegerLoopFacts(
-  loop: IrStmt & { kind: "for" }, locals: ReadonlyMap<string, IrLocal>, initial: ReadonlyMap<string, IntegerRange>,
+  loop: IrStmt & { kind: "for" },
+  locals: ReadonlyMap<string, IrLocal>,
+  initial: ReadonlyMap<string, IntegerRange>,
 ): ReadonlyMap<string, IntegerRange> {
   const result = new Map<string, IntegerRange>();
-  if (loop.init?.kind !== "varDecl" || loop.update?.kind !== "assign" || loop.cond?.kind !== "bin") return result;
-  const counter = loop.init.localId, start = initial.get(counter);
+  if (loop.init?.kind !== "varDecl" || loop.update?.kind !== "assign" || loop.cond?.kind !== "bin")
+    return result;
+  const counter = loop.init.localId,
+    start = initial.get(counter);
   const step = loop.update.localId === counter ? increment(counter, loop.update.value) : null;
-  if (!start || start.min < 0 || step === null || step <= 0 || step > 2147483647 ||
-      loop.cond.left.kind !== "varRef" || loop.cond.left.localId !== counter ||
-      (loop.cond.op !== "<" && loop.cond.op !== "<=")) return result;
-  const written = new Set<string>(), refused = new Set<string>();
-  const lower = new Map<string, number>(), upper = new Map<string, number>();
+  if (
+    !start ||
+    start.min < 0 ||
+    step === null ||
+    step <= 0 ||
+    step > 2147483647 ||
+    loop.cond.left.kind !== "varRef" ||
+    loop.cond.left.localId !== counter ||
+    (loop.cond.op !== "<" && loop.cond.op !== "<=")
+  )
+    return result;
+  const written = new Set<string>(),
+    refused = new Set<string>();
+  const lower = new Map<string, number>(),
+    upper = new Map<string, number>();
   let opaque = 0;
   const write = (id: string, delta: number | null): void => {
     written.add(id);
-    if (opaque || delta === null) { refused.add(id); return; }
+    if (opaque || delta === null) {
+      refused.add(id);
+      return;
+    }
     const lo = (lower.get(id) ?? 0) + Math.min(0, delta);
     const hi = (upper.get(id) ?? 0) + Math.max(0, delta);
     if (!Number.isSafeInteger(lo) || !Number.isSafeInteger(hi)) refused.add(id);
-    lower.set(id, lo); upper.set(id, hi);
+    lower.set(id, lo);
+    upper.set(id, hi);
   };
   const expr = (e: IrExpr): boolean => {
     if (e.kind === "assignExpr") write(e.localId, increment(e.localId, e.value));
@@ -39,8 +64,13 @@ export function boundedIntegerLoopFacts(
     return everyExprChild(e, expr, stmt);
   };
   const stmt = (s: IrStmt): boolean => {
-    const region = s.kind === "for" || s.kind === "while" || s.kind === "doWhile" ||
-      s.kind === "forOf" || s.kind === "tryCatch" || s.kind === "switch";
+    const region =
+      s.kind === "for" ||
+      s.kind === "while" ||
+      s.kind === "doWhile" ||
+      s.kind === "forOf" ||
+      s.kind === "tryCatch" ||
+      s.kind === "switch";
     if (region) opaque++;
     if (s.kind === "assign") write(s.localId, increment(s.localId, s.value));
     if (s.kind === "varDecl" || s.kind === "forOf") write(s.localId, null);
@@ -55,10 +85,16 @@ export function boundedIntegerLoopFacts(
     return local !== undefined && !local.boxed && !local.tdz && !written.has(id) && id !== counter;
   };
   function bound(e: IrExpr): IntegerRange | null {
-    if (e.kind === "numLit" && Number.isSafeInteger(e.value) && !Object.is(e.value, -0)) return { min: e.value, max: e.value };
+    if (e.kind === "numLit" && Number.isSafeInteger(e.value) && !Object.is(e.value, -0))
+      return { min: e.value, max: e.value };
     if (e.kind === "varRef" && stable(e.localId)) return initial.get(e.localId) ?? null;
-    if (e.kind === "bytesIntrinsic" && (e.method === "length" || e.method === "byteLength") &&
-        e.receiver.kind === "varRef" && stable(e.receiver.localId)) return { min: 0, max: Number.MAX_SAFE_INTEGER };
+    if (
+      e.kind === "bytesIntrinsic" &&
+      (e.method === "length" || e.method === "byteLength") &&
+      e.receiver.kind === "varRef" &&
+      stable(e.receiver.localId)
+    )
+      return { min: 0, max: Number.MAX_SAFE_INTEGER };
     return null;
   }
   const limit = bound(loop.cond.right);
@@ -86,9 +122,23 @@ export function boundedIntegerLoopFacts(
  * Labeled blocks, loops, switch and exception regions retain the join. */
 export function integerPathFallsThrough(body: readonly IrStmt[]): boolean {
   for (const stmt of body) {
-    if (stmt.kind === "return" || stmt.kind === "throw" || stmt.kind === "rethrow" || stmt.kind === "break" || stmt.kind === "continue") return false;
-    if (stmt.kind === "block" && !stmt.labels?.length && !integerPathFallsThrough(stmt.body)) return false;
-    if (stmt.kind === "if" && stmt.else_ && !integerPathFallsThrough(stmt.then) && !integerPathFallsThrough(stmt.else_)) return false;
+    if (
+      stmt.kind === "return" ||
+      stmt.kind === "throw" ||
+      stmt.kind === "rethrow" ||
+      stmt.kind === "break" ||
+      stmt.kind === "continue"
+    )
+      return false;
+    if (stmt.kind === "block" && !stmt.labels?.length && !integerPathFallsThrough(stmt.body))
+      return false;
+    if (
+      stmt.kind === "if" &&
+      stmt.else_ &&
+      !integerPathFallsThrough(stmt.then) &&
+      !integerPathFallsThrough(stmt.else_)
+    )
+      return false;
   }
   return true;
 }

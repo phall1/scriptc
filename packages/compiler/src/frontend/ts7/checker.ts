@@ -210,7 +210,9 @@ export class CheckerFacade {
   /** Eagerly release memoized answers when a facade is no longer needed.
    * The semantic project also owns this cleanup, covering session close
    * and snapshot disposal even when callers retain the facade. */
-  dispose(): void { this.cache.dispose(); }
+  dispose(): void {
+    this.cache.dispose();
+  }
 
   /* ── the symbol-declaration surface (phase 3) ─────────────────────────
    * 7's Symbol carries declarations as NodeHandles (server references),
@@ -222,7 +224,10 @@ export class CheckerFacade {
 
   private requireProject(): Project {
     const project = this.options.project;
-    if (!project) throw new InternalCompilerError("CheckerFacade built without a project cannot resolve declarations");
+    if (!project)
+      throw new InternalCompilerError(
+        "CheckerFacade built without a project cannot resolve declarations",
+      );
     return project;
   }
 
@@ -377,10 +382,7 @@ export class CheckerFacade {
    * prefetch intentionally covers neither uncommon RHS kinds nor symbols
    * on non-identifiers. Descendants of symbol roots join because computed
    * `this[key]` declarations resolve the key identifier too. */
-  prefetchClassCollection(
-    typeNodes: readonly Node[],
-    symbolRoots: readonly Node[],
-  ): void {
+  prefetchClassCollection(typeNodes: readonly Node[], symbolRoots: readonly Node[]): void {
     this.ensureActive();
     this.markManaged([...typeNodes, ...symbolRoots]);
     this.prefetchExactTypeNodes(typeNodes);
@@ -441,8 +443,8 @@ export class CheckerFacade {
   ): void {
     const symbolNodes = allNodes.filter(
       (n) =>
-        (n.kind === SyntaxKind.Identifier ||
-          (includePropertyAccess && n.kind === SyntaxKind.PropertyAccessExpression)),
+        n.kind === SyntaxKind.Identifier ||
+        (includePropertyAccess && n.kind === SyntaxKind.PropertyAccessExpression),
     );
     const nodes = symbolNodes.filter((n) => !this.cache.symbolAtLocation.has(n));
     // The same bisecting panic fence as the type sweep: tsgo panics on
@@ -484,9 +486,11 @@ export class CheckerFacade {
 
   getTypeAtLocation(node: Node): Type {
     this.ensureActive();
-    if (this.cache.typeAtLocation.has(node)) return this.cache.typeAtLocation.get(node) ?? this.anyType();
+    if (this.cache.typeAtLocation.has(node))
+      return this.cache.typeAtLocation.get(node) ?? this.anyType();
     this.autoPrefetch(node, "types");
-    if (this.cache.typeAtLocation.has(node)) return this.cache.typeAtLocation.get(node) ?? this.anyType();
+    if (this.cache.typeAtLocation.has(node))
+      return this.cache.typeAtLocation.get(node) ?? this.anyType();
     const type = this.raw.getTypeAtLocation(node);
     this.cache.typeAtLocation.set(node, type);
     return type ?? this.anyType();
@@ -504,7 +508,8 @@ export class CheckerFacade {
 
   getTypeOfSymbol(symbol: Ts7Symbol): Type {
     this.ensureActive();
-    if (this.cache.typeOfSymbol.has(symbol)) return this.cache.typeOfSymbol.get(symbol) ?? this.anyType();
+    if (this.cache.typeOfSymbol.has(symbol))
+      return this.cache.typeOfSymbol.get(symbol) ?? this.anyType();
     // The direct (memo-miss) path wears the same panic fence as the
     // prefetch sweep: symbols the sweep never saw (members resolved from
     // other files' d.ts) can hit the identical server panics (observed:
@@ -546,7 +551,8 @@ export class CheckerFacade {
 
   getTypeFromTypeNode(node: Node): Type {
     this.ensureActive();
-    if (this.cache.typeFromTypeNode.has(node)) return this.cache.typeFromTypeNode.get(node) ?? this.anyType();
+    if (this.cache.typeFromTypeNode.has(node))
+      return this.cache.typeFromTypeNode.get(node) ?? this.anyType();
     const type = this.raw.getTypeFromTypeNode(node as never);
     this.cache.typeFromTypeNode.set(node, type);
     return type ?? this.anyType();
@@ -570,7 +576,8 @@ export class CheckerFacade {
 
   getSignatureFromDeclaration(node: Node): Signature | undefined {
     this.ensureActive();
-    if (this.cache.signatureFromDeclaration.has(node)) return this.cache.signatureFromDeclaration.get(node);
+    if (this.cache.signatureFromDeclaration.has(node))
+      return this.cache.signatureFromDeclaration.get(node);
     const signature = this.raw.getSignatureFromDeclaration(node);
     this.cache.signatureFromDeclaration.set(node, signature);
     return signature;
@@ -578,7 +585,8 @@ export class CheckerFacade {
 
   getReturnTypeOfSignature(signature: Signature): Type {
     this.ensureActive();
-    if (this.cache.returnTypeOf.has(signature)) return this.cache.returnTypeOf.get(signature) ?? this.anyType();
+    if (this.cache.returnTypeOf.has(signature))
+      return this.cache.returnTypeOf.get(signature) ?? this.anyType();
     const type = this.raw.getReturnTypeOfSignature(signature);
     this.cache.returnTypeOf.set(signature, type);
     return type ?? this.anyType();
@@ -835,7 +843,10 @@ export class CheckerFacade {
       const distinct: Type[] = [];
       const seen = new Set<Type>();
       for (const arm of awaited) {
-        if (arm !== undefined && !seen.has(arm)) { seen.add(arm); distinct.push(arm); }
+        if (arm !== undefined && !seen.has(arm)) {
+          seen.add(arm);
+          distinct.push(arm);
+        }
       }
       return distinct.length === 1 ? distinct[0] : undefined;
     }

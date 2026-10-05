@@ -1,9 +1,18 @@
 import type { CompileFailure, CompileRequestOptions } from "../compile-types.js";
 import type { FfiProfile } from "../ffi/ffi-manifest.js";
-import { checkerPanicDiag, iceDiag, isCheckerPanic, type ScrDiagnostic } from "../diagnostics/diagnostic.js";
+import {
+  checkerPanicDiag,
+  iceDiag,
+  isCheckerPanic,
+  type ScrDiagnostic,
+} from "../diagnostics/diagnostic.js";
 import type { IrModule, SrcLoc } from "../ir/ir.js";
 import { validateModule } from "../ir/validate.js";
-import { fenceSpeculativeWasiFunctions, moduleWasiUnavailableSurface, targetRefusalDiag } from "../backend/target-diagnostics.js";
+import {
+  fenceSpeculativeWasiFunctions,
+  moduleWasiUnavailableSurface,
+  targetRefusalDiag,
+} from "../backend/target-diagnostics.js";
 import type { LowerResult, LowerStats } from "../frontend/lowering/lowerer.js";
 import type { FrontendFactory } from "../frontend/pipeline.js";
 import type { CompilationTiming } from "../timing.js";

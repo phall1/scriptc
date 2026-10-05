@@ -45,10 +45,15 @@ function programStderr(stderr: Buffer): Buffer {
   if (!sanitize) return stderr;
   // Linux ASan emits this instrumentation warning at the first fiber swap.
   // Latin-1 preserves every other byte, including non-UTF-8 program output.
-  return Buffer.from(stderr.toString("latin1").replace(
-    /^==\d+==WARNING: ASan doesn't fully support makecontext\/swapcontext functions and may produce false positives in some cases!\n/gm,
-    "",
-  ), "latin1");
+  return Buffer.from(
+    stderr
+      .toString("latin1")
+      .replace(
+        /^==\d+==WARNING: ASan doesn't fully support makecontext\/swapcontext functions and may produce false positives in some cases!\n/gm,
+        "",
+      ),
+    "latin1",
+  );
 }
 
 async function runBinary(cmd: string, args: string[]): Promise<RunResult> {
@@ -62,7 +67,8 @@ async function runBinary(cmd: string, args: string[]): Promise<RunResult> {
     return { stdout, stderr, exitCode: 0 };
   } catch (err) {
     const e = err as { code?: unknown; stdout?: Buffer; stderr?: Buffer };
-    if (typeof e.code !== "number" || !Buffer.isBuffer(e.stdout) || !Buffer.isBuffer(e.stderr)) throw err;
+    if (typeof e.code !== "number" || !Buffer.isBuffer(e.stdout) || !Buffer.isBuffer(e.stderr))
+      throw err;
     return { stdout: e.stdout, stderr: e.stderr, exitCode: e.code };
   }
 }
@@ -76,7 +82,10 @@ async function build(entry: string): Promise<string> {
     ...globSync(join(fixturesRoot, "**/node_modules/**/*.{js,mjs,cjs,json,d.ts,node}")).sort(),
   ];
   for (const f of inputs) hash.update(f).update(readFileSync(f));
-  const key = hash.update(sanitize ? "san" : "plain").digest("hex").slice(0, 16);
+  const key = hash
+    .update(sanitize ? "san" : "plain")
+    .digest("hex")
+    .slice(0, 16);
   const outDir = join(cacheDir, `npm-${key}`);
   mkdirSync(outDir, { recursive: true });
   // Deliberately NO backend pin: this suite rides the release default.
@@ -182,20 +191,24 @@ describe(`typed-callback boundary (scriptc-only${sanitize ? ", sanitized" : ""})
 });
 
 describe(`npm differential (${cases.length} programs${sanitize ? ", sanitized" : ""}${shardSuffix()})`, () => {
-  test.for(cases.map((c) => [c.name, c] as const))("%s", async ([, c]) => {
-    const binary = await build(c.entry);
-    for (const argv of c.argvs ?? [[]]) {
-      const [nodeRes, nativeRes] = await Promise.all([
-        runBinary("node", [c.entry, ...argv]),
-        runBinary(binary, argv),
-      ]);
-      const label = argv.join(" ");
-      if (!nodeRes.stdout.equals(nativeRes.stdout)) {
-        expect(nativeRes.stdout.toString("utf8"), label).toBe(nodeRes.stdout.toString("utf8"));
-        expect.unreachable("stdout differed at byte level but not after utf8 decode");
+  test.for(cases.map((c) => [c.name, c] as const))(
+    "%s",
+    async ([, c]) => {
+      const binary = await build(c.entry);
+      for (const argv of c.argvs ?? [[]]) {
+        const [nodeRes, nativeRes] = await Promise.all([
+          runBinary("node", [c.entry, ...argv]),
+          runBinary(binary, argv),
+        ]);
+        const label = argv.join(" ");
+        if (!nodeRes.stdout.equals(nativeRes.stdout)) {
+          expect(nativeRes.stdout.toString("utf8"), label).toBe(nodeRes.stdout.toString("utf8"));
+          expect.unreachable("stdout differed at byte level but not after utf8 decode");
+        }
+        expect(nativeRes.exitCode, label).toBe(nodeRes.exitCode);
+        if (c.compareStderr) expect(programStderr(nativeRes.stderr), label).toEqual(nodeRes.stderr);
       }
-      expect(nativeRes.exitCode, label).toBe(nodeRes.exitCode);
-      if (c.compareStderr) expect(programStderr(nativeRes.stderr), label).toEqual(nodeRes.stderr);
-    }
-  }, 120_000);
+    },
+    120_000,
+  );
 });

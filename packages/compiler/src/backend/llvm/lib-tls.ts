@@ -1,6 +1,16 @@
 import { InternalCompilerError } from "../../errors.js";
 import type { LibCallExpr, LlValue, LlvmEmitterContext } from "./expr-context.js";
-import { abiValue, callRuntime, callbackAdapter, callbackType, finishRuntimeCall, nullableReference, ptr, rawBytes, requestHandler } from "./lib-abi.js";
+import {
+  abiValue,
+  callRuntime,
+  callbackAdapter,
+  callbackType,
+  finishRuntimeCall,
+  nullableReference,
+  ptr,
+  rawBytes,
+  requestHandler,
+} from "./lib-abi.js";
 import { emitAlwaysThrowLibCall } from "./lib-shared.js";
 
 export function emitTlsLibCall(host: LlvmEmitterContext, e: LibCallExpr): LlValue {
@@ -13,26 +23,65 @@ export function emitTlsLibCall(host: LlvmEmitterContext, e: LibCallExpr): LlValu
     case "tls.createServerCb":
     case "https.createServer": {
       const cb = args[2];
-      const handler = cb === undefined ? [ptr(), ptr()] : e.fn === "https.createServer" ? requestHandler(host, cb)
-        : callbackAdapter(host, cb, callbackType(cb).params.length === 0 ? "scr_net_conn_thunk0" : "scr_net_conn_thunk_sock", ["ptr", "ptr"]);
-      return finishRuntimeCall(host, e, e.fn === "https.createServer" ? "scr_https_create_server" : "scr_tls_create_server", [
-        ...rawBytes(host, args[0]!), ...rawBytes(host, args[1]!), ...handler,
-      ]);
+      const handler =
+        cb === undefined
+          ? [ptr(), ptr()]
+          : e.fn === "https.createServer"
+            ? requestHandler(host, cb)
+            : callbackAdapter(
+                host,
+                cb,
+                callbackType(cb).params.length === 0
+                  ? "scr_net_conn_thunk0"
+                  : "scr_net_conn_thunk_sock",
+                ["ptr", "ptr"],
+              );
+      return finishRuntimeCall(
+        host,
+        e,
+        e.fn === "https.createServer" ? "scr_https_create_server" : "scr_tls_create_server",
+        [...rawBytes(host, args[0]!), ...rawBytes(host, args[1]!), ...handler],
+      );
     }
     case "tls.createServerDyn":
     case "tls.createServerDynCb":
     case "https.createServerDyn":
     case "https.createServerDynCb": {
       const cb = args[1];
-      const handler = cb === undefined ? [ptr(), ptr()] : e.fn.startsWith("https.") ? requestHandler(host, cb)
-        : callbackAdapter(host, cb, callbackType(cb).params.length === 0 ? "scr_net_conn_thunk0" : "scr_net_conn_thunk_sock", ["ptr", "ptr"]);
-      return finishRuntimeCall(host, e, e.fn.startsWith("https.") ? "scr_https_create_server_dyn" : "scr_tls_create_server_dyn", [a[0]!, ...handler]);
+      const handler =
+        cb === undefined
+          ? [ptr(), ptr()]
+          : e.fn.startsWith("https.")
+            ? requestHandler(host, cb)
+            : callbackAdapter(
+                host,
+                cb,
+                callbackType(cb).params.length === 0
+                  ? "scr_net_conn_thunk0"
+                  : "scr_net_conn_thunk_sock",
+                ["ptr", "ptr"],
+              );
+      return finishRuntimeCall(
+        host,
+        e,
+        e.fn.startsWith("https.") ? "scr_https_create_server_dyn" : "scr_tls_create_server_dyn",
+        [a[0]!, ...handler],
+      );
     }
     case "tls.createSecureContext":
-      return finishRuntimeCall(host, e, "scr_tls_create_secure_context", [...rawBytes(host, args[0]!), ...rawBytes(host, args[1]!)]);
-    case "tls.createSecureContextDyn": return finishRuntimeCall(host, e, "scr_tls_create_secure_context_dyn", a);
-    case "tls.pemDyn": return finishRuntimeCall(host, e, "scr_tls_pem_from_dyn", [a[0]!, rawBytes(host, args[1]!)[0]!]);
-    case "tls.sockAuthorized": return finishRuntimeCall(host, e, "scr_tls_sock_authorized", a);
+      return finishRuntimeCall(host, e, "scr_tls_create_secure_context", [
+        ...rawBytes(host, args[0]!),
+        ...rawBytes(host, args[1]!),
+      ]);
+    case "tls.createSecureContextDyn":
+      return finishRuntimeCall(host, e, "scr_tls_create_secure_context_dyn", a);
+    case "tls.pemDyn":
+      return finishRuntimeCall(host, e, "scr_tls_pem_from_dyn", [
+        a[0]!,
+        rawBytes(host, args[1]!)[0]!,
+      ]);
+    case "tls.sockAuthorized":
+      return finishRuntimeCall(host, e, "scr_tls_sock_authorized", a);
     case "tls.sockAuthError": {
       const result = callRuntime(host, "scr_tls_sock_auth_error", "ptr", a);
       return nullableReference(host, e.type, result, "string", "nullT");
@@ -45,31 +94,77 @@ export function emitTlsLibCall(host: LlvmEmitterContext, e: LibCallExpr): LlValu
       host.moveTemp(args[1]!);
       return finishRuntimeCall(host, e, "scr_tls_sock_on_secure_connect", a);
     case "tls.sockOnSession": {
-      const cb = args[1]!, type = callbackType(cb);
-      const adapter = type.params.length === 0 ? "scr_net_data_thunk0" : type.params[0]!.kind === "dyn" ? "scr_net_data_thunk_dyn" : "scr_net_data_thunk_bytes";
-      return finishRuntimeCall(host, e, "scr_tls_sock_on_session", [a[0]!, ...callbackAdapter(host, cb, adapter, ["ptr", "ptr", "ptr"]), a[2]!]);
+      const cb = args[1]!,
+        type = callbackType(cb);
+      const adapter =
+        type.params.length === 0
+          ? "scr_net_data_thunk0"
+          : type.params[0]!.kind === "dyn"
+            ? "scr_net_data_thunk_dyn"
+            : "scr_net_data_thunk_bytes";
+      return finishRuntimeCall(host, e, "scr_tls_sock_on_session", [
+        a[0]!,
+        ...callbackAdapter(host, cb, adapter, ["ptr", "ptr", "ptr"]),
+        a[2]!,
+      ]);
     }
     case "https.requestAgent":
     case "https.requestAgentCb": {
       const cb = args[10];
-      const handler = cb === undefined ? [ptr(), ptr()] : callbackAdapter(host, cb,
-        callbackType(cb).params.length === 0 ? "scr_http_resp_thunk0" : "scr_http_resp_thunk_res", ["ptr", "ptr"]);
-      return finishRuntimeCall(host, e, "scr_https_request_agent", [...a.slice(0, 8), ...rawBytes(host, args[8]!), a[9]!, ...handler]);
+      const handler =
+        cb === undefined
+          ? [ptr(), ptr()]
+          : callbackAdapter(
+              host,
+              cb,
+              callbackType(cb).params.length === 0
+                ? "scr_http_resp_thunk0"
+                : "scr_http_resp_thunk_res",
+              ["ptr", "ptr"],
+            );
+      return finishRuntimeCall(host, e, "scr_https_request_agent", [
+        ...a.slice(0, 8),
+        ...rawBytes(host, args[8]!),
+        a[9]!,
+        ...handler,
+      ]);
     }
     case "https.requestFn":
     case "https.requestFnCb": {
       const cb = args[10];
-      const handler = cb === undefined ? [ptr(), ptr()] : callbackAdapter(host, cb,
-        callbackType(cb).params.length === 0 ? "scr_http_resp_thunk0" : "scr_http_resp_thunk_res", ["ptr", "ptr"]);
+      const handler =
+        cb === undefined
+          ? [ptr(), ptr()]
+          : callbackAdapter(
+              host,
+              cb,
+              callbackType(cb).params.length === 0
+                ? "scr_http_resp_thunk0"
+                : "scr_http_resp_thunk_res",
+              ["ptr", "ptr"],
+            );
       // Evaluate arguments once before selecting which transport consumes the callback.
       const pem = rawBytes(host, args[9]!);
-      const B = host.B, tls = B.newLabel("request.tls"), plain = B.newLabel("request.plain"), done = B.newLabel("request.join");
+      const B = host.B,
+        tls = B.newLabel("request.tls"),
+        plain = B.newLabel("request.plain"),
+        done = B.newLabel("request.join");
       B.condBr(args[0]!.name, tls, plain);
       B.startBlock(tls);
-      const secure = callRuntime(host, "scr_https_request", "ptr", [...a.slice(1, 9), ...pem, ...handler]);
+      const secure = callRuntime(host, "scr_https_request", "ptr", [
+        ...a.slice(1, 9),
+        ...pem,
+        ...handler,
+      ]);
       B.br(done);
       B.startBlock(plain);
-      const insecure = callRuntime(host, "scr_http_request_ex", "ptr", [...a.slice(1, 8), ...handler, { type: "i32", name: "80" }, ptr(), ptr()]);
+      const insecure = callRuntime(host, "scr_http_request_ex", "ptr", [
+        ...a.slice(1, 8),
+        ...handler,
+        { type: "i32", name: "80" },
+        ptr(),
+        ptr(),
+      ]);
       B.br(done);
       B.startBlock(done);
       const result = B.tmp();
@@ -78,6 +173,7 @@ export function emitTlsLibCall(host: LlvmEmitterContext, e: LibCallExpr): LlValu
       host.emitPendingCheck();
       return out;
     }
-    default: throw new InternalCompilerError(`unhandled TLS runtime call ${e.fn}`);
+    default:
+      throw new InternalCompilerError(`unhandled TLS runtime call ${e.fn}`);
   }
 }

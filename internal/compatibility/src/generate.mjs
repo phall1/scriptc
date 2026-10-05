@@ -61,11 +61,17 @@ function sha(value) {
 
 function normalizeSymbol(value) {
   if (!value) return "";
-  let out = value.replaceAll("`", "").replace(/^new\s+/, "").trim();
+  let out = value
+    .replaceAll("`", "")
+    .replace(/^new\s+/, "")
+    .trim();
   out = out.replace(/\s+Type:\s*.*$/, "").replace(/\s*\{[^}]*\}\s*$/, "");
   const call = out.indexOf("(");
   if (call >= 0) out = out.slice(0, call);
-  out = out.replace(/\[.*$/, "").replace(/\s*=.*$/, "").replace(/^Class:\s*/, "");
+  out = out
+    .replace(/\[.*$/, "")
+    .replace(/\s*=.*$/, "")
+    .replace(/^Class:\s*/, "");
   out = out.replace(/^Event:\s*/, "").replace(/^Static method:\s*/, "");
   return out.trim();
 }
@@ -187,10 +193,12 @@ function featureEntries(compat) {
 }
 
 function featureOf(row, entries, parentSignature) {
-  return entries.find((entry) =>
-    entry.chapter === row.chapter &&
-    (entry.parent === undefined || entry.parent === parentSignature) &&
-    ((entry.symbols ?? []).includes(row.apiSymbol) || (entry.signatures ?? []).includes(row.signature))
+  return entries.find(
+    (entry) =>
+      entry.chapter === row.chapter &&
+      (entry.parent === undefined || entry.parent === parentSignature) &&
+      ((entry.symbols ?? []).includes(row.apiSymbol) ||
+        (entry.signatures ?? []).includes(row.signature)),
   );
 }
 
@@ -204,7 +212,8 @@ function symbolCandidates(row) {
     ["streamConsumers.", "stream/consumers."],
   ];
   for (const value of [...result]) {
-    for (const [from, to] of aliases) if (value.startsWith(from)) result.add(to + value.slice(from.length));
+    for (const [from, to] of aliases)
+      if (value.startsWith(from)) result.add(to + value.slice(from.length));
   }
   return [...result].filter(Boolean);
 }
@@ -243,15 +252,14 @@ function directExportName(row, module) {
     }
   }
   if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(symbol)) return symbol;
-  if (row.depth === 1 && ["class", "method", "property", "global"].includes(row.kind)) return row.name;
+  if (row.depth === 1 && ["class", "method", "property", "global"].includes(row.kind))
+    return row.name;
   return null;
 }
 
 function manifestSymbolCandidates(row) {
   const modules = pin.chapterModules[row.chapter] ?? [];
-  const result = new Set(
-    symbolCandidates(row).filter((candidate) => candidate.includes(".")),
-  );
+  const result = new Set(symbolCandidates(row).filter((candidate) => candidate.includes(".")));
   for (const module of modules) {
     const direct = directExportName(row, module);
     if (!direct) continue;
@@ -275,11 +283,14 @@ function scopeOf(row) {
     row.chapter === "cli" ||
     row.apiSymbol.startsWith("-") ||
     /\bcommand-line option\b/i.test(row.signature) ||
-    row.chapter === "environment_variables" && row.apiSymbol === "export"
-  ) return "configuration";
+    (row.chapter === "environment_variables" && row.apiSymbol === "export")
+  )
+    return "configuration";
   if (row.chapter === "deprecations") return "metadata";
   if (row.chapter === "intl" && row.kind === "module") return "metadata";
-  return row.depth > 0 && (row.kind === "module" || row.kind === "misc") && !row.signature.includes("`")
+  return row.depth > 0 &&
+    (row.kind === "module" || row.kind === "misc") &&
+    !row.signature.includes("`")
     ? "documentation"
     : "api";
 }
@@ -296,21 +307,27 @@ function classificationContext() {
   for (const [module, entry] of Object.entries(island.modules)) {
     const exports = new Set(entry.exports);
     for (const name of entry.refused ?? []) {
-      if (!exports.has(name)) throw new Error(`island module '${module}' marks non-export '${name}' refused`);
+      if (!exports.has(name))
+        throw new Error(`island module '${module}' marks non-export '${name}' refused`);
     }
     const members = new Set(entry.members ?? []);
     for (const name of entry.refusedMembers ?? []) {
-      if (members.has(name)) throw new Error(`island module '${module}' marks member '${name}' both supported and refused`);
+      if (members.has(name))
+        throw new Error(
+          `island module '${module}' marks member '${name}' both supported and refused`,
+        );
     }
     validateEvidence(entry.evidence, `island module '${module}'`);
   }
   const supportedGlobals = new Set(island.globals.supported);
   const npmSupportedGlobals = new Set(island.globals.npmSupported ?? []);
   for (const name of npmSupportedGlobals) {
-    if (supportedGlobals.has(name)) throw new Error(`island global '${name}' is both always-supported and npm-supported`);
+    if (supportedGlobals.has(name))
+      throw new Error(`island global '${name}' is both always-supported and npm-supported`);
   }
   for (const name of island.globals.absent) {
-    if (supportedGlobals.has(name) || npmSupportedGlobals.has(name)) throw new Error(`island global '${name}' is both supported and absent`);
+    if (supportedGlobals.has(name) || npmSupportedGlobals.has(name))
+      throw new Error(`island global '${name}' is both supported and absent`);
   }
   validateEvidence(island.globals.evidence, "island globals");
   return {
@@ -325,15 +342,24 @@ function classificationContext() {
 
 function classifyStatic(row, chapter, ctx, parentSignature) {
   if (row.depth === 0) return tier("unreviewed", "", { source: "chapter-summary" });
-  if (row.scope === "documentation" || row.scope === "configuration") return tier("not-applicable", "", { source: row.scope });
+  if (row.scope === "documentation" || row.scope === "configuration")
+    return tier("not-applicable", "", { source: row.scope });
   const feature = featureOf(row, ctx.staticFeatures, parentSignature);
-  if (feature) return tier(feature.status, "", { source: `compiler-feature:${row.chapter}.${row.apiSymbol}`, tests: feature.evidence });
+  if (feature)
+    return tier(feature.status, "", {
+      source: `compiler-feature:${row.chapter}.${row.apiSymbol}`,
+      tests: feature.evidence,
+    });
   for (const candidate of symbolCandidates(row)) {
     // Dedicated lowering paths are authoritative when an older generic
     // fence row shares the same API name (the surface manifest documents
     // its omissions explicitly; this overlay closes them with evidence).
     const dedicated = ctx.dedicated.get(candidate);
-    if (dedicated) return tier(dedicated.status, "", { source: `compiler-dedicated:${candidate}`, tests: dedicated.evidence });
+    if (dedicated)
+      return tier(dedicated.status, "", {
+        source: `compiler-dedicated:${candidate}`,
+        tests: dedicated.evidence,
+      });
   }
   for (const candidate of manifestSymbolCandidates(row)) {
     const item = ctx.manifest.get(candidate);
@@ -351,7 +377,11 @@ function classifyStatic(row, chapter, ctx, parentSignature) {
   if (policy && policy !== "unreviewed") {
     return tier(policy, "", { source: `compiler-chapter-policy:${row.chapter}` });
   }
-  if ((pin.chapterModules[row.chapter] ?? []).length > 0 || row.chapter === "globals" || row.chapter === "errors") {
+  if (
+    (pin.chapterModules[row.chapter] ?? []).length > 0 ||
+    row.chapter === "globals" ||
+    row.chapter === "errors"
+  ) {
     return tier("not-implemented", "", { source: `compiler-unmatched:${row.chapter}` });
   }
   return tier("unreviewed", "");
@@ -359,19 +389,33 @@ function classifyStatic(row, chapter, ctx, parentSignature) {
 
 function classifyDynamic(row, chapter, ctx, parentSignature) {
   if (row.depth === 0) return tier("unreviewed", "", { source: "chapter-summary" });
-  if (row.scope === "documentation" || row.scope === "configuration") return tier("not-applicable", "", { source: row.scope });
+  if (row.scope === "documentation" || row.scope === "configuration")
+    return tier("not-applicable", "", { source: row.scope });
   const feature = featureOf(row, ctx.dynamicFeatures, parentSignature);
-  if (feature) return tier(feature.status, "", { source: `island-feature:${row.chapter}.${row.apiSymbol}`, tests: feature.evidence });
+  if (feature)
+    return tier(feature.status, "", {
+      source: `island-feature:${row.chapter}.${row.apiSymbol}`,
+      tests: feature.evidence,
+    });
 
   if (row.chapter === "globals") {
     if (ctx.island.globals.supported.includes(row.name)) {
-      return tier("partial", "", { source: `island-global:${row.name}`, tests: ctx.island.globals.evidence });
+      return tier("partial", "", {
+        source: `island-global:${row.name}`,
+        tests: ctx.island.globals.evidence,
+      });
     }
     if (ctx.island.globals.npmSupported?.includes(row.name)) {
-      return tier("partial", "", { source: `island-npm-global:${row.name}`, tests: ctx.island.globals.evidence });
+      return tier("partial", "", {
+        source: `island-npm-global:${row.name}`,
+        tests: ctx.island.globals.evidence,
+      });
     }
     if (ctx.island.globals.absent.includes(row.name)) {
-      return tier("not-implemented", "", { source: `island-global-absent:${row.name}`, tests: ctx.island.globals.evidence });
+      return tier("not-implemented", "", {
+        source: `island-global-absent:${row.name}`,
+        tests: ctx.island.globals.evidence,
+      });
     }
   }
 
@@ -384,13 +428,19 @@ function classifyDynamic(row, chapter, ctx, parentSignature) {
       return tier("refused", "", { source: `island-member-stub:node:${module}.${row.apiSymbol}` });
     }
     if (moduleEntry.members?.includes(row.apiSymbol)) {
-      return tier("partial", "", { source: `island-member:node:${module}.${row.apiSymbol}`, tests: moduleEntry.evidence });
+      return tier("partial", "", {
+        source: `island-member:node:${module}.${row.apiSymbol}`,
+        tests: moduleEntry.evidence,
+      });
     }
     if (direct && moduleEntry.refused?.includes(direct)) {
       return tier("refused", "", { source: `island-stub:node:${module}.${direct}` });
     }
     if (direct && moduleEntry.exports.includes(direct)) {
-      return tier("partial", "", { source: `island-export:node:${module}.${direct}`, tests: moduleEntry.evidence });
+      return tier("partial", "", {
+        source: `island-export:node:${module}.${direct}`,
+        tests: moduleEntry.evidence,
+      });
     }
   }
 
@@ -399,7 +449,9 @@ function classifyDynamic(row, chapter, ctx, parentSignature) {
     return tier(policy, "", { source: `island-chapter-policy:${row.chapter}` });
   }
   if (modules.length > 0 && modules.every((module) => ctx.island.modules[module] === undefined)) {
-    return tier("not-implemented", "", { source: `unshimmed:${modules.map((module) => `node:${module}`).join(",")}` });
+    return tier("not-implemented", "", {
+      source: `unshimmed:${modules.map((module) => `node:${module}`).join(",")}`,
+    });
   }
   if (modules.length > 0 || row.chapter === "globals" || row.chapter === "errors") {
     return tier("not-implemented", "", { source: `island-unmatched:${row.chapter}` });
@@ -461,24 +513,34 @@ function flattenChapter(rootNode, chapter, ctx) {
 }
 
 function apiChapterLinks(indexMarkdown) {
-  const links = [...indexMarkdown.matchAll(/^\* \[(.+?)\]\(([^)]+\.md)\)$/gm)]
-    .map((match) => ({ title: match[1].replaceAll("`", ""), file: match[2], slug: match[2].slice(0, -3) }));
+  const links = [...indexMarkdown.matchAll(/^\* \[(.+?)\]\(([^)]+\.md)\)$/gm)].map((match) => ({
+    title: match[1].replaceAll("`", ""),
+    file: match[2],
+    slug: match[2].slice(0, -3),
+  }));
   return links.filter((link) => !NON_FUNCTIONAL_CHAPTERS.has(link.slug));
 }
 
 function summarizeTier(rows, key, chapterPolicy) {
-  const descendants = rows.slice(1).filter((row) => row.scope === "api").map((row) => row[key]);
+  const descendants = rows
+    .slice(1)
+    .filter((row) => row.scope === "api")
+    .map((row) => row[key]);
   const statuses = new Set(descendants.map((tier) => tier.status));
   const tests = [...new Set(descendants.flatMap((tier) => tier.tests ?? []))].sort();
   if (statuses.size === 0 && chapterPolicy) {
-    return tier(chapterPolicy, "", { source: `${key === "static" ? "compiler" : "island"}-chapter-policy:${rows[0].chapter}` });
+    return tier(chapterPolicy, "", {
+      source: `${key === "static" ? "compiler" : "island"}-chapter-policy:${rows[0].chapter}`,
+    });
   }
-  if (statuses.size === 1) return tier([...statuses][0], "", { source: "derived:descendants", tests });
+  if (statuses.size === 1)
+    return tier([...statuses][0], "", { source: "derived:descendants", tests });
   if (statuses.has("supported") || statuses.has("partial")) {
     return tier("partial", "", { source: "derived:descendants", tests });
   }
   if (statuses.has("unreviewed")) return tier("unreviewed", "", { source: "derived:descendants" });
-  if (statuses.has("not-implemented")) return tier("not-implemented", "", { source: "derived:descendants" });
+  if (statuses.has("not-implemented"))
+    return tier("not-implemented", "", { source: "derived:descendants" });
   if (statuses.has("refused")) return tier("refused", "", { source: "derived:descendants" });
   if (statuses.has("by-design")) return tier("by-design", "", { source: "derived:descendants" });
   return tier("unreviewed", "", { source: "derived:descendants" });
@@ -492,8 +554,7 @@ function statusCounts(rows, key) {
 
 function verifiedAnchorIds(html) {
   return new Set(
-    [...html.matchAll(/<a class="mark" href="#[^"]+" id="([^"]+)">#/g)]
-      .map((match) => match[1]),
+    [...html.matchAll(/<a class="mark" href="#[^"]+" id="([^"]+)">#/g)].map((match) => match[1]),
   );
 }
 
@@ -515,7 +576,9 @@ function verifyAnchors(snapshot, htmlByChapter) {
       verified += 1;
       row.anchorSource = "exact";
     } else {
-      const ancestor = [...ancestors].reverse().find((candidate) => candidate?.anchorSource === "exact" && candidate.anchor !== "");
+      const ancestor = [...ancestors]
+        .reverse()
+        .find((candidate) => candidate?.anchorSource === "exact" && candidate.anchor !== "");
       if (ancestor) {
         row.anchor = ancestor.anchor;
         row.anchorSource = "ancestor";
@@ -539,16 +602,27 @@ function buildSnapshot({ allJson, indexMarkdown, allSha256, indexSha256 }) {
   const chapters = [];
   const rows = [];
 
-  if (chapterLinks.length === 0) throw new Error("the pinned Node index contains no functional API chapters");
+  if (chapterLinks.length === 0)
+    throw new Error("the pinned Node index contains no functional API chapters");
 
   for (const link of chapterLinks) {
     const source = `doc/api/${link.file}`;
-    const candidates = top.filter((node) => node.source === source).sort((a, b) => treeSize(b) - treeSize(a));
+    const candidates = top
+      .filter((node) => node.source === source)
+      .sort((a, b) => treeSize(b) - treeSize(a));
     if (candidates.length === 0) throw new Error(`all.json has no root for ${source}`);
     const chapter = { slug: link.slug, title: link.title };
     const chapterRows = flattenChapter(candidates[0], chapter, ctx);
-    chapterRows[0].static = summarizeTier(chapterRows, "static", ctx.compilerCompat.chapterPolicies[link.slug]);
-    chapterRows[0].dynamic = summarizeTier(chapterRows, "dynamic", ctx.island.chapterPolicies[link.slug]);
+    chapterRows[0].static = summarizeTier(
+      chapterRows,
+      "static",
+      ctx.compilerCompat.chapterPolicies[link.slug],
+    );
+    chapterRows[0].dynamic = summarizeTier(
+      chapterRows,
+      "dynamic",
+      ctx.island.chapterPolicies[link.slug],
+    );
     chapters.push({
       slug: link.slug,
       title: link.title,
@@ -593,16 +667,23 @@ function publicDetail(tier) {
   const source = tier.evidence ?? "";
   if (source === "derived:descendants") return "Derived from the exact API rows in this chapter.";
   if (tier.status === "unreviewed") return "Not yet classified; tracked as open parity work.";
-  if (source.startsWith("surface-manifest:unsupported:")) return "Explicitly rejected by a named compiler diagnostic.";
-  if (source.startsWith("surface-manifest:dynamic-only:")) return "Explicitly refused in static code; this form requires the dynamic island.";
-  if (/^surface-manifest:node-builtin\.fs\.(?:statfsSync|promises\.statfs)$/.test(source) || source === "compiler-feature:fs.fs.statfs") {
+  if (source.startsWith("surface-manifest:unsupported:"))
+    return "Explicitly rejected by a named compiler diagnostic.";
+  if (source.startsWith("surface-manifest:dynamic-only:"))
+    return "Explicitly refused in static code; this form requires the dynamic island.";
+  if (
+    /^surface-manifest:node-builtin\.fs\.(?:statfsSync|promises\.statfs)$/.test(source) ||
+    source === "compiler-feature:fs.fs.statfs"
+  ) {
     return "Reads filesystem capacity using string, Buffer, or file URL paths with number or BigInt fields and deferred callbacks; StatFs prototype behavior and complete filesystem error metadata remain unsupported.";
   }
-  if (source.startsWith("surface-manifest:")) return "Implemented for the call shapes accepted by the compiler lowering.";
+  if (source.startsWith("surface-manifest:"))
+    return "Implemented for the call shapes accepted by the compiler lowering.";
   if (/^compiler-dedicated:assert\.doesNot(?:Throw|Reject)$/.test(source)) {
     return "Supports callbacks or native promises with messages, Error classes, regular expressions, and validators accepting unknown values; object expectations and complete AssertionError metadata remain unsupported.";
   }
-  if (source.startsWith("compiler-dedicated:")) return "Implemented by a dedicated static compiler/runtime path.";
+  if (source.startsWith("compiler-dedicated:"))
+    return "Implemented by a dedicated static compiler/runtime path.";
   if (source.startsWith("compiler-feature:")) {
     if (source === "compiler-feature:fs.fs.StatFs") {
       return "Capacity snapshots expose seven mutable number or BigInt fields; StatFs prototype reflection and constructor behavior remain unsupported.";
@@ -613,7 +694,9 @@ function publicDetail(tier) {
     if (/^compiler-feature:fs\.fs\.(?:link|symlink|readlink)$/.test(source)) {
       return "Creates hard or symbolic links and reads link targets using string, Buffer, or file URL paths, with encoded results and deferred error-first callbacks; complete filesystem error metadata remains unsupported.";
     }
-    if (/^compiler-feature:fs\.(?:fs\.(?:utimes|futimes|lutimes)|filehandle\.utimes)$/.test(source)) {
+    if (
+      /^compiler-feature:fs\.(?:fs\.(?:utimes|futimes|lutimes)|filehandle\.utimes)$/.test(source)
+    ) {
       return "Changes timestamps using numeric seconds, numeric strings, and Dates with tested argument validation; link variants update the symlink itself.";
     }
     if (/^compiler-feature:buffer\.buffer\.(?:isAscii|isUtf8)$/.test(source)) {
@@ -670,72 +753,118 @@ function publicDetail(tier) {
     if (/^compiler-feature:url\.url\.(?:fileURLToPath|pathToFileURL)$/.test(source)) {
       return "Supports file-path conversion with POSIX or Windows options for the tested string and URL forms; internationalized hostnames remain unsupported.";
     }
-    if (/^compiler-feature:(?:globals\.Text(?:Encoder|Decoder)|util\.(?:util\.Text(?:Encoder|Decoder)|text(?:Encoder\.encode|Decoder\.decode)))$/.test(source)) {
+    if (
+      /^compiler-feature:(?:globals\.Text(?:Encoder|Decoder)|util\.(?:util\.Text(?:Encoder|Decoder)|text(?:Encoder\.encode|Decoder\.decode)))$/.test(
+        source,
+      )
+    ) {
       return "Native codec values support UTF-8 encoding and whole-buffer decoding with recognized literal labels and default options.";
     }
-    if (tier.status === "not-applicable") return "Node configuration or documentation that does not map to a compiled program API.";
-    if (tier.status === "not-implemented") return "Not implemented in scriptc's static module-loader subset yet.";
-    if (source.startsWith("compiler-feature:stream.") || source.startsWith("compiler-feature:webstreams.")) {
+    if (tier.status === "not-applicable")
+      return "Node configuration or documentation that does not map to a compiled program API.";
+    if (tier.status === "not-implemented")
+      return "Not implemented in scriptc's static module-loader subset yet.";
+    if (
+      source.startsWith("compiler-feature:stream.") ||
+      source.startsWith("compiler-feature:webstreams.")
+    ) {
       return "Implemented for the documented static async-iteration subset.";
     }
     if (source.startsWith("compiler-feature:http.http.validateHeader")) {
       return "Static header validation is implemented for the tested call shapes.";
     }
-    if (source.startsWith("compiler-feature:http.request.getHeader") ||
-        source.startsWith("compiler-feature:http.request.getRawHeaderNames") ||
-        source.startsWith("compiler-feature:http.request.hasHeader") ||
-        source.startsWith("compiler-feature:http.request.removeHeader") ||
-        source.startsWith("compiler-feature:http.request.setHeader") ||
-        source.startsWith("compiler-feature:http.response.getHeader")) {
+    if (
+      source.startsWith("compiler-feature:http.request.getHeader") ||
+      source.startsWith("compiler-feature:http.request.getRawHeaderNames") ||
+      source.startsWith("compiler-feature:http.request.hasHeader") ||
+      source.startsWith("compiler-feature:http.request.removeHeader") ||
+      source.startsWith("compiler-feature:http.request.setHeader") ||
+      source.startsWith("compiler-feature:http.response.getHeader")
+    ) {
       return "Static outgoing header reads and mutations support the tested string-value shapes.";
     }
-    if (/^compiler-feature:http\.(?:path|method|host|protocol|listening|headersSent|writableEnded|complete|httpVersion|url|statusCode)$/.test(source)) {
+    if (
+      /^compiler-feature:http\.(?:path|method|host|protocol|listening|headersSent|writableEnded|complete|httpVersion|url|statusCode)$/.test(
+        source,
+      )
+    ) {
       return "Static HTTP request metadata and message state support the tested lifecycle.";
     }
     if (/^compiler-feature:http\.response\.write(?:Continue|Processing|EarlyHints)$/.test(source)) {
       return "Static HTTP/1.1 informational responses support the tested no-callback forms; Early Hints accepts string-valued fields.";
     }
-    if (/^compiler-feature:http\.(?:response\.setTimeout|connection|req|sendDate|socket|statusMessage|strictContentLength|writableFinished)$/.test(source)) {
+    if (
+      /^compiler-feature:http\.(?:response\.setTimeout|connection|req|sendDate|socket|statusMessage|strictContentLength|writableFinished)$/.test(
+        source,
+      )
+    ) {
       return "Static ServerResponse state, socket access, timeouts, and strict body length checks support the tested HTTP/1.1 forms.";
     }
-    if (/^compiler-feature:http\.(?:headersDistinct|rawHeaders|rawTrailers|trailers|trailersDistinct)$/.test(source)) {
+    if (
+      /^compiler-feature:http\.(?:headersDistinct|rawHeaders|rawTrailers|trailers|trailersDistinct)$/.test(
+        source,
+      )
+    ) {
       return "Static IncomingMessage header and trailer reads support the tested HTTP/1.1 forms.";
     }
     return "Implemented for the documented scriptc module-loader subset.";
   }
   if (source.startsWith("compiler-chapter-policy:")) {
-    if (tier.status === "by-design") return "Intentionally outside the static native execution model.";
-    if (tier.status === "not-applicable") return "This Node executable or embedding feature does not map to static native code.";
+    if (tier.status === "by-design")
+      return "Intentionally outside the static native execution model.";
+    if (tier.status === "not-applicable")
+      return "This Node executable or embedding feature does not map to static native code.";
     return "No static implementation exists for this Node API family yet.";
   }
-  if (source.startsWith("compiler-unmatched:")) return "No static compiler lowering is registered for this API yet.";
-  if (source.startsWith("island-export:")) return "Available through the embedded Node compatibility shim; exact member and overload coverage may be narrower.";
-  if (source.startsWith("island-member:")) return "Implemented by the embedded Node compatibility shim.";
-  if (source.startsWith("island-member-stub:")) return "Exposed only as an explicit throwing or rejecting compatibility stub.";
-  if (source.startsWith("island-stub:")) return "Exposed only as an explicit throwing or rejecting compatibility stub.";
-  if (source.startsWith("island-global:")) return "Provided by the embedded engine's web/global compatibility layer.";
-  if (source.startsWith("island-npm-global:")) return "Provided when the embedded npm module bootstrap runs; absent from standalone dynamic islands.";
-  if (source.startsWith("island-global-absent:")) return "Verified absent from the embedded engine's web/global compatibility layer.";
-  if (source.startsWith("unshimmed:")) return "No dynamic-island shim exists for this Node module yet.";
+  if (source.startsWith("compiler-unmatched:"))
+    return "No static compiler lowering is registered for this API yet.";
+  if (source.startsWith("island-export:"))
+    return "Available through the embedded Node compatibility shim; exact member and overload coverage may be narrower.";
+  if (source.startsWith("island-member:"))
+    return "Implemented by the embedded Node compatibility shim.";
+  if (source.startsWith("island-member-stub:"))
+    return "Exposed only as an explicit throwing or rejecting compatibility stub.";
+  if (source.startsWith("island-stub:"))
+    return "Exposed only as an explicit throwing or rejecting compatibility stub.";
+  if (source.startsWith("island-global:"))
+    return "Provided by the embedded engine's web/global compatibility layer.";
+  if (source.startsWith("island-npm-global:"))
+    return "Provided when the embedded npm module bootstrap runs; absent from standalone dynamic islands.";
+  if (source.startsWith("island-global-absent:"))
+    return "Verified absent from the embedded engine's web/global compatibility layer.";
+  if (source.startsWith("unshimmed:"))
+    return "No dynamic-island shim exists for this Node module yet.";
   if (source.startsWith("island-chapter-policy:")) {
-    if (tier.status === "by-design") return "Intentionally outside the dynamic-island execution model.";
-    if (tier.status === "not-applicable") return "This Node executable or embedding feature does not map to dynamic-island code.";
+    if (tier.status === "by-design")
+      return "Intentionally outside the dynamic-island execution model.";
+    if (tier.status === "not-applicable")
+      return "This Node executable or embedding feature does not map to dynamic-island code.";
     return "No dynamic-island implementation exists for this Node API family yet.";
   }
   if (source.startsWith("island-feature:")) {
     if (/^island-feature:assert\.assert\.doesNot(?:Throw|Reject)$/.test(source)) {
       return "Supports no-error assertions over callbacks, promises, and promise-like objects, with Error classes, regular expressions, validation functions, and Node-compatible failure metadata for the tested forms.";
     }
-    if (source.startsWith("island-feature:util.util.types.")) return "Checks embedded engine brands without invoking getters or proxy traps, including spoofed tags and prototypes, subclasses, generators, iterators, and revoked proxies.";
-    if (source === "island-feature:util.util.styleText") return "Applies standard styles and aliases with nested ANSI resets, stream validation, color environment settings, and tested option and conversion hooks; terminal metadata and warnings follow the embedded runtime.";
-    if (source === "island-feature:util.util.stripVTControlCharacters") return "Removes ANSI control sequences with the Node matcher and validates non-string arguments.";
-    if (source === "island-feature:util.util.toUSVString") return "Replaces unpaired surrogate code units and preserves Node string coercion, custom conversion hooks, and conversion errors.";
-    if (source.startsWith("island-feature:diagnostics_channel.")) return "Publishes synchronous, promise, and callback tracing lifecycle events with result/error identity, subscriber management, and store bindings. Bound stores follow the embedded engine's synchronous AsyncLocalStorage model and do not propagate across awaits.";
-    if (source.startsWith("island-feature:timers.timersPromises.")) return "Provides cancellable promise timers, buffered interval iteration, scheduler waits and yields, and ref options over the native event loop; delay warnings remain outside this subset.";
-    if (source.startsWith("island-feature:timers.")) return "Provides timer and immediate handles with reference control, refresh, cancellation, and disposal over the native event loop.";
-    if (source === "island-feature:events.events.once") return "Waits for EventEmitter or EventTarget events with AbortSignal cancellation, Node abort errors, and listener cleanup.";
-    if (source === "island-feature:events.events.on") return "Iterates EventEmitter or EventTarget events with buffered delivery, close events, cancellation, watermark backpressure, and listener cleanup.";
-    if (source === "island-feature:events.events.addAbortListener") return "Registers disposable abort listeners that run even when ordinary propagation is stopped; already-aborted signals schedule the callback in a microtask.";
+    if (source.startsWith("island-feature:util.util.types."))
+      return "Checks embedded engine brands without invoking getters or proxy traps, including spoofed tags and prototypes, subclasses, generators, iterators, and revoked proxies.";
+    if (source === "island-feature:util.util.styleText")
+      return "Applies standard styles and aliases with nested ANSI resets, stream validation, color environment settings, and tested option and conversion hooks; terminal metadata and warnings follow the embedded runtime.";
+    if (source === "island-feature:util.util.stripVTControlCharacters")
+      return "Removes ANSI control sequences with the Node matcher and validates non-string arguments.";
+    if (source === "island-feature:util.util.toUSVString")
+      return "Replaces unpaired surrogate code units and preserves Node string coercion, custom conversion hooks, and conversion errors.";
+    if (source.startsWith("island-feature:diagnostics_channel."))
+      return "Publishes synchronous, promise, and callback tracing lifecycle events with result/error identity, subscriber management, and store bindings. Bound stores follow the embedded engine's synchronous AsyncLocalStorage model and do not propagate across awaits.";
+    if (source.startsWith("island-feature:timers.timersPromises."))
+      return "Provides cancellable promise timers, buffered interval iteration, scheduler waits and yields, and ref options over the native event loop; delay warnings remain outside this subset.";
+    if (source.startsWith("island-feature:timers."))
+      return "Provides timer and immediate handles with reference control, refresh, cancellation, and disposal over the native event loop.";
+    if (source === "island-feature:events.events.once")
+      return "Waits for EventEmitter or EventTarget events with AbortSignal cancellation, Node abort errors, and listener cleanup.";
+    if (source === "island-feature:events.events.on")
+      return "Iterates EventEmitter or EventTarget events with buffered delivery, close events, cancellation, watermark backpressure, and listener cleanup.";
+    if (source === "island-feature:events.events.addAbortListener")
+      return "Registers disposable abort listeners that run even when ordinary propagation is stopped; already-aborted signals schedule the callback in a microtask.";
     if (source.startsWith("island-feature:events.")) {
       return "Implements EventEmitter listener lifecycle, symbol event names, filtered listener counts, and error monitoring; rejection capture and listener warnings remain outside this subset.";
     }
@@ -772,24 +901,32 @@ function publicDetail(tier) {
     if (/^island-feature:util\.(?:encoding|fatal|ignoreBOM)$/.test(source)) {
       return "Codec properties expose UTF-8 and decoder flags; other decoder encodings remain unsupported in the island.";
     }
-    if (tier.status === "not-applicable") return "Node configuration or documentation that does not map to an island runtime API.";
-    if (tier.status === "not-implemented") return "Not implemented in the embedded module-loader subset yet.";
+    if (tier.status === "not-applicable")
+      return "Node configuration or documentation that does not map to an island runtime API.";
+    if (tier.status === "not-implemented")
+      return "Not implemented in the embedded module-loader subset yet.";
     return "Implemented for the documented embedded module-loader subset.";
   }
-  if (source.startsWith("island-unmatched:")) return "This API is not implemented by the dynamic-island shim.";
+  if (source.startsWith("island-unmatched:"))
+    return "This API is not implemented by the dynamic-island shim.";
   if (source === "documentation") return "Documentation section; not a runtime API.";
-  if (source === "configuration") return "Node command-line or configuration entry; not a runtime API.";
-  if (tier.status === "not-applicable") return "This Node executable or embedding feature does not map to this scriptc tier.";
+  if (source === "configuration")
+    return "Node command-line or configuration entry; not a runtime API.";
+  if (tier.status === "not-applicable")
+    return "This Node executable or embedding feature does not map to this scriptc tier.";
   if (tier.status === "refused") return "Explicitly rejected by this scriptc tier.";
-  if (tier.status === "not-implemented") return "No implementation is registered for this scriptc tier yet.";
-  if (tier.status === "by-design") return "Intentionally outside this scriptc tier's execution model.";
+  if (tier.status === "not-implemented")
+    return "No implementation is registered for this scriptc tier yet.";
+  if (tier.status === "by-design")
+    return "Intentionally outside this scriptc tier's execution model.";
   return "Implemented for a documented subset of this API.";
 }
 
 const PUBLIC_VERIFICATION = {
   "test-backed": {
     label: "Test-backed mapping",
-    detail: "Mapped to implementation and relevant repository tests; evidence may cover an API family rather than every documented overload.",
+    detail:
+      "Mapped to implementation and relevant repository tests; evidence may cover an API family rather than every documented overload.",
   },
   "explicit-refusal": {
     label: "Explicit refusal",
@@ -801,15 +938,18 @@ const PUBLIC_VERIFICATION = {
   },
   "declared-gap": {
     label: "Declared gap",
-    detail: "The implementation-owned compatibility manifest explicitly records this API family or feature as not implemented.",
+    detail:
+      "The implementation-owned compatibility manifest explicitly records this API family or feature as not implemented.",
   },
   "registry-gap": {
     label: "Registry gap",
-    detail: "No implementation registry entry matched this Node API; verify the gap before starting implementation.",
+    detail:
+      "No implementation registry entry matched this Node API; verify the gap before starting implementation.",
   },
   "architectural-policy": {
     label: "Architectural policy",
-    detail: "An implementation-owned policy intentionally excludes this API from the execution tier.",
+    detail:
+      "An implementation-owned policy intentionally excludes this API from the execution tier.",
   },
   unreviewed: {
     label: "Unreviewed",
@@ -817,7 +957,8 @@ const PUBLIC_VERIFICATION = {
   },
   "not-applicable": {
     label: "Not applicable",
-    detail: "This entry is documentation, configuration, or an execution model that does not map to the tier.",
+    detail:
+      "This entry is documentation, configuration, or an execution model that does not map to the tier.",
   },
   derived: {
     label: "Derived summary",
@@ -841,15 +982,22 @@ function verificationBasis(tier) {
       source.startsWith("compiler-feature:") ||
       source.startsWith("island-chapter-policy:") ||
       source.startsWith("island-feature:"))
-  ) basis = "declared-gap";
+  )
+    basis = "declared-gap";
   else if (tier.status === "not-implemented") basis = "registry-gap";
-  else throw new Error(`cannot determine verification basis for ${tier.status}/${source || "no-source"}`);
+  else
+    throw new Error(
+      `cannot determine verification basis for ${tier.status}/${source || "no-source"}`,
+    );
   if (!VERIFICATION_BASES.has(basis)) throw new Error(`unknown verification basis '${basis}'`);
   return basis;
 }
 
 function classificationConfidence(basis) {
-  if (["test-backed", "explicit-refusal", "verified-absence", "architectural-policy"].includes(basis)) return "high";
+  if (
+    ["test-backed", "explicit-refusal", "verified-absence", "architectural-policy"].includes(basis)
+  )
+    return "high";
   if (["declared-gap", "not-applicable"].includes(basis)) return "medium";
   if (["registry-gap", "unreviewed"].includes(basis)) return "low";
   return "derived";
@@ -857,7 +1005,12 @@ function classificationConfidence(basis) {
 
 function nodePriority(stability) {
   if (stability?.index === "2") return "high";
-  if (stability?.index === "0" || stability?.index === "3" || stability?.level === 1 && stability?.index !== "1.2") return "low";
+  if (
+    stability?.index === "0" ||
+    stability?.index === "3" ||
+    (stability?.level === 1 && stability?.index !== "1.2")
+  )
+    return "low";
   return "normal";
 }
 
@@ -912,7 +1065,8 @@ function buildBacklog(snapshot) {
     nodeCommit: snapshot.nodeCommit,
     summary: {
       taskCount: tasks.length,
-      tierItemCount: Object.values(tierItems.static).reduce((sum, count) => sum + count, 0) +
+      tierItemCount:
+        Object.values(tierItems.static).reduce((sum, count) => sum + count, 0) +
         Object.values(tierItems.dynamic).reduce((sum, count) => sum + count, 0),
       tiers: tierItems,
       priorities,
@@ -926,14 +1080,22 @@ function publicExclusion(row) {
   if (row.scope === "metadata") return "metadata";
   if (row.scope === "configuration") return "configuration";
   if (row.scope !== "api") return "non-api";
-  if (row.static.status === "not-applicable" && row.dynamic.status === "not-applicable") return "not-applicable";
+  if (row.static.status === "not-applicable" && row.dynamic.status === "not-applicable")
+    return "not-applicable";
   return null;
 }
 
 function projectPublicMatrix(snapshot) {
   const chapters = [];
   const rows = [];
-  const excluded = { documentation: 0, metadata: 0, configuration: 0, "non-api": 0, "not-applicable": 0, chapters: 0 };
+  const excluded = {
+    documentation: 0,
+    metadata: 0,
+    configuration: 0,
+    "non-api": 0,
+    "not-applicable": 0,
+    chapters: 0,
+  };
   for (const chapter of snapshot.chapters) {
     const sourceRows = snapshot.rows.filter((row) => row.chapter === chapter.slug);
     const root = { ...sourceRows[0], depth: 0 };
@@ -1003,8 +1165,16 @@ function publicSnapshot(snapshot) {
       scope: row.scope,
       anchor: row.anchor,
       nodeStability: row.nodeStability,
-      static: { status: row.static.status, detail: publicDetail(row.static), verification: verificationBasis(row.static) },
-      dynamic: { status: row.dynamic.status, detail: publicDetail(row.dynamic), verification: verificationBasis(row.dynamic) },
+      static: {
+        status: row.static.status,
+        detail: publicDetail(row.static),
+        verification: verificationBasis(row.static),
+      },
+      dynamic: {
+        status: row.dynamic.status,
+        detail: publicDetail(row.dynamic),
+        verification: verificationBasis(row.dynamic),
+      },
     })),
   };
 }
@@ -1023,10 +1193,13 @@ function publicMetadata(publicRendered, snapshot) {
 function checkLocal() {
   const snapshot = JSON.parse(readFileSync(internalOutputPath, "utf8"));
   if (snapshot.nodeVersion !== pin.version || snapshot.nodeCommit !== pin.commit) {
-    throw new Error(`snapshot targets Node ${snapshot.nodeVersion}/${snapshot.nodeCommit}, pin targets ${pin.version}/${pin.commit}`);
+    throw new Error(
+      `snapshot targets Node ${snapshot.nodeVersion}/${snapshot.nodeCommit}, pin targets ${pin.version}/${pin.commit}`,
+    );
   }
   const ctx = classificationContext();
-  if (snapshot.chapters.length !== 62) throw new Error(`expected 62 pinned Node API chapters, found ${snapshot.chapters.length}`);
+  if (snapshot.chapters.length !== 62)
+    throw new Error(`expected 62 pinned Node API chapters, found ${snapshot.chapters.length}`);
   const ancestors = [];
   for (const row of snapshot.rows) {
     if (row.depth === 0) {
@@ -1039,12 +1212,22 @@ function checkLocal() {
     const expectedStatic = classifyStatic(row, chapter, ctx, parentSignature);
     const expectedDynamic = classifyDynamic(row, chapter, ctx, parentSignature);
     ancestors[row.depth] = row;
-    if (JSON.stringify(row.static) !== JSON.stringify(expectedStatic) || JSON.stringify(row.dynamic) !== JSON.stringify(expectedDynamic)) {
-      throw new Error(`generated classification is stale at ${row.id} (${row.signature}); run 'pnpm node-compat'`);
+    if (
+      JSON.stringify(row.static) !== JSON.stringify(expectedStatic) ||
+      JSON.stringify(row.dynamic) !== JSON.stringify(expectedDynamic)
+    ) {
+      throw new Error(
+        `generated classification is stale at ${row.id} (${row.signature}); run 'pnpm node-compat'`,
+      );
     }
   }
   for (const row of snapshot.rows) {
-    if (row.depth > 0 && row.anchor !== "" && row.anchorSource !== "exact" && row.anchorSource !== "ancestor") {
+    if (
+      row.depth > 0 &&
+      row.anchor !== "" &&
+      row.anchorSource !== "exact" &&
+      row.anchorSource !== "ancestor"
+    ) {
       throw new Error(`${row.id} publishes an unverified Node HTML anchor`);
     }
   }
@@ -1053,8 +1236,13 @@ function checkLocal() {
   }
   const publicRows = publicSnapshot(snapshot).rows;
   for (const row of publicRows) {
-    if (row.depth > 0 && row.scope !== "api") throw new Error(`${row.id} exposes a non-API row in the public matrix`);
-    if (row.depth > 0 && row.static.status === "not-applicable" && row.dynamic.status === "not-applicable") {
+    if (row.depth > 0 && row.scope !== "api")
+      throw new Error(`${row.id} exposes a non-API row in the public matrix`);
+    if (
+      row.depth > 0 &&
+      row.static.status === "not-applicable" &&
+      row.dynamic.status === "not-applicable"
+    ) {
       throw new Error(`${row.id} exposes a row that is not applicable to either compiler tier`);
     }
   }
@@ -1062,19 +1250,26 @@ function checkLocal() {
     throw new Error("the Node compatibility backlog is stale; run 'pnpm node-compat'");
   }
   const publicRendered = render(publicSnapshot(snapshot));
-  if (readFileSync(publicMetaOutputPath, "utf8") !== render(publicMetadata(publicRendered, snapshot))) {
+  if (
+    readFileSync(publicMetaOutputPath, "utf8") !== render(publicMetadata(publicRendered, snapshot))
+  ) {
     throw new Error("the docs compatibility metadata is stale; run 'pnpm node-compat'");
   }
   for (const row of snapshot.rows) {
     for (const key of ["static", "dynamic"]) {
-      if ((row[key].status === "supported" || row[key].status === "partial") && (row[key].tests?.length ?? 0) === 0) {
+      if (
+        (row[key].status === "supported" || row[key].status === "partial") &&
+        (row[key].tests?.length ?? 0) === 0
+      ) {
         throw new Error(`${row.id} claims ${key} ${row[key].status} without test evidence`);
       }
       if (row[key].status === "refused") {
         const source = row[key].evidence ?? "";
-        const explicit = key === "static"
-          ? source.startsWith("surface-manifest:unsupported:") || source.startsWith("surface-manifest:dynamic-only:")
-          : source.startsWith("island-stub:") || source.startsWith("island-member-stub:");
+        const explicit =
+          key === "static"
+            ? source.startsWith("surface-manifest:unsupported:") ||
+              source.startsWith("surface-manifest:dynamic-only:")
+            : source.startsWith("island-stub:") || source.startsWith("island-member-stub:");
         if (!explicit && source !== "derived:descendants") {
           throw new Error(`${row.id} claims ${key} refused without an explicit refusal source`);
         }
@@ -1089,11 +1284,15 @@ function checkLocal() {
     }
   }
   const matrix = projectPublicMatrix(snapshot);
-  console.log(`Node compatibility snapshot is locally current (${snapshot.rows.length} source rows, ${matrix.rows.length} public matrix rows, Node ${snapshot.nodeVersion})`);
+  console.log(
+    `Node compatibility snapshot is locally current (${snapshot.rows.length} source rows, ${matrix.rows.length} public matrix rows, Node ${snapshot.nodeVersion})`,
+  );
 }
 
 async function fetchText(url) {
-  const response = await fetch(url, { headers: { accept: "application/json,text/markdown,text/html" } });
+  const response = await fetch(url, {
+    headers: { accept: "application/json,text/markdown,text/html" },
+  });
   if (!response.ok) throw new Error(`fetch ${url}: ${response.status} ${response.statusText}`);
   return response.text();
 }
@@ -1113,10 +1312,12 @@ async function main() {
     indexSha256: sha(indexMarkdown),
   });
   const htmlByChapter = new Map(
-    await Promise.all(snapshot.chapters.map(async (chapter) => [
-      chapter.slug,
-      verifiedAnchorIds(await fetchText(`${NODE_BASE}${chapter.slug}.html`)),
-    ])),
+    await Promise.all(
+      snapshot.chapters.map(async (chapter) => [
+        chapter.slug,
+        verifiedAnchorIds(await fetchText(`${NODE_BASE}${chapter.slug}.html`)),
+      ]),
+    ),
   );
   verifyAnchors(snapshot, htmlByChapter);
   const internalRendered = render(snapshot);
@@ -1125,18 +1326,26 @@ async function main() {
   const publicMetaRendered = render(publicMetadata(publicRendered, snapshot));
 
   if (args.has("--check")) {
-    if (readFileSync(internalOutputPath, "utf8") !== internalRendered) throw new Error("internal Node compatibility snapshot is stale; run 'pnpm node-compat'");
-    if (readFileSync(backlogOutputPath, "utf8") !== backlogRendered) throw new Error("Node compatibility backlog is stale; run 'pnpm node-compat'");
-    if (readFileSync(publicOutputPath, "utf8") !== publicRendered) throw new Error("public Node compatibility snapshot is stale; run 'pnpm node-compat'");
-    if (readFileSync(publicMetaOutputPath, "utf8") !== publicMetaRendered) throw new Error("public Node compatibility metadata is stale; run 'pnpm node-compat'");
-    console.log(`Node compatibility snapshot matches ${pin.tag} (${snapshot.rows.length} API rows, commit ${pin.commit.slice(0, 12)})`);
+    if (readFileSync(internalOutputPath, "utf8") !== internalRendered)
+      throw new Error("internal Node compatibility snapshot is stale; run 'pnpm node-compat'");
+    if (readFileSync(backlogOutputPath, "utf8") !== backlogRendered)
+      throw new Error("Node compatibility backlog is stale; run 'pnpm node-compat'");
+    if (readFileSync(publicOutputPath, "utf8") !== publicRendered)
+      throw new Error("public Node compatibility snapshot is stale; run 'pnpm node-compat'");
+    if (readFileSync(publicMetaOutputPath, "utf8") !== publicMetaRendered)
+      throw new Error("public Node compatibility metadata is stale; run 'pnpm node-compat'");
+    console.log(
+      `Node compatibility snapshot matches ${pin.tag} (${snapshot.rows.length} API rows, commit ${pin.commit.slice(0, 12)})`,
+    );
     return;
   }
   writeFileSync(internalOutputPath, internalRendered);
   writeFileSync(backlogOutputPath, backlogRendered);
   writeFileSync(publicOutputPath, publicRendered);
   writeFileSync(publicMetaOutputPath, publicMetaRendered);
-  console.log(`wrote compatibility ledger, backlog, and public artifact (${snapshot.rows.length} source rows, ${projectPublicMatrix(snapshot).rows.length} public matrix rows, ${pin.tag})`);
+  console.log(
+    `wrote compatibility ledger, backlog, and public artifact (${snapshot.rows.length} source rows, ${projectPublicMatrix(snapshot).rows.length} public matrix rows, ${pin.tag})`,
+  );
 }
 
 await main();

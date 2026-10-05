@@ -1,4 +1,11 @@
-import { isRefCounted, typeEquals, type IrExpr, type IrFunction, type IrType, type IrUnionDef } from "../../ir/ir.js";
+import {
+  isRefCounted,
+  typeEquals,
+  type IrExpr,
+  type IrFunction,
+  type IrType,
+  type IrUnionDef,
+} from "../../ir/ir.js";
 import { everyStmtList } from "../../ir/traverse.js";
 import type { CallLifetimes } from "./call-lifetimes.js";
 import type { LlValue, LlvmEmitterContext } from "./expr-context.js";
@@ -16,9 +23,16 @@ export function borrowsMapReadInputs(expr: IrExpr): boolean {
     if (receiver.elem.kind === "dyn") return false;
   } else return false;
   switch (expr.method) {
-    case "get": case "has": case "size": case "iterCount":
-    case "iterLive": case "iterKey": case "iterValue": return true;
-    default: return false;
+    case "get":
+    case "has":
+    case "size":
+    case "iterCount":
+    case "iterLive":
+    case "iterKey":
+    case "iterValue":
+      return true;
+    default:
+      return false;
   }
 }
 
@@ -32,18 +46,36 @@ export interface LocalMapRead {
 }
 
 function mapRead(expr: IrExpr, unions: ReadonlyMap<string, IrUnionDef>): LocalMapRead | null {
-  if (expr.kind !== "mapIntrinsic" || expr.method !== "get" || expr.args.length !== 1 ||
-      expr.receiver.type.kind !== "map" || expr.type.kind !== "union" || !borrowsMapReadInputs(expr)) return null;
+  if (
+    expr.kind !== "mapIntrinsic" ||
+    expr.method !== "get" ||
+    expr.args.length !== 1 ||
+    expr.receiver.type.kind !== "map" ||
+    expr.type.kind !== "union" ||
+    !borrowsMapReadInputs(expr)
+  )
+    return null;
   const value = expr.receiver.type.value;
   // An already-boxed union is the stored value itself. Its identity and
   // ownership stay on the existing path instead of constructing a new box.
-  if (value.kind === "union" || (!isRefCounted(value) && value.kind !== "f64" && value.kind !== "bool")) return null;
+  if (
+    value.kind === "union" ||
+    (!isRefCounted(value) && value.kind !== "f64" && value.kind !== "bool")
+  )
+    return null;
   const arms = unions.get(expr.type.unionId)?.arms;
   if (!arms || arms.length !== 2) return null;
   const presentTag = arms.findIndex((arm) => typeEquals(arm, value));
   const missingTag = arms.findIndex((arm) => arm.kind === "undefinedT");
   if (presentTag < 0 || missingTag < 0) return null;
-  return { type: expr.type, receiver: expr.receiver, key: expr.args[0]!, value, presentTag, missingTag };
+  return {
+    type: expr.type,
+    receiver: expr.receiver,
+    key: expr.args[0]!,
+    value,
+    presentTag,
+    missingTag,
+  };
 }
 
 export interface MapReadLifetimes {
@@ -55,7 +87,11 @@ export interface MapReadLifetimes {
  * Each read owns an independent payload snapshot: changing or clearing the
  * map later cannot invalidate an earlier result. No map purity assumption
  * is needed, including for reference-valued entries. */
-export function findMapReadLifetimes(fn: IrFunction, unions: ReadonlyMap<string, IrUnionDef>, lifetimes: CallLifetimes): MapReadLifetimes {
+export function findMapReadLifetimes(
+  fn: IrFunction,
+  unions: ReadonlyMap<string, IrUnionDef>,
+  lifetimes: CallLifetimes,
+): MapReadLifetimes {
   const result: MapReadLifetimes = { locals: new Map(), arguments: new Map() };
   if (fn.async || fn.generator) return result;
   const locals = lifetimes.locals.get(fn.name);
@@ -70,11 +106,12 @@ export function findMapReadLifetimes(fn: IrFunction, unions: ReadonlyMap<string,
     expr: (expr) => {
       if (expr.kind !== "call") return true;
       const parameters = lifetimes.parameters.get(expr.callee);
-      if (parameters) expr.args.forEach((arg, index) => {
-        if (!parameters.has(index)) return;
-        const read = mapRead(arg, unions);
-        if (read) result.arguments.set(arg, read);
-      });
+      if (parameters)
+        expr.args.forEach((arg, index) => {
+          if (!parameters.has(index)) return;
+          const read = mapRead(arg, unions);
+          if (read) result.arguments.set(arg, read);
+        });
       return true;
     },
   });
@@ -96,7 +133,9 @@ export function emitStackMapRead(host: LlvmEmitterContext, read: LocalMapRead): 
   const key = host.emitReadReceiver(read.key);
   const access = mapKeyAccess(read.key.type);
   const keyType = mapKeyParamType(access);
-  const box = B.slot(), payload = B.slot(), tag = B.slot();
+  const box = B.slot(),
+    payload = B.slot(),
+    tag = B.slot();
   B.entryAllocas.push(`${box} = alloca %ScrUnion`);
   B.entryAllocas.push(`${payload} = getelementptr inbounds %ScrUnion, ptr ${box}, i32 0, i32 5`);
   B.entryAllocas.push(`${tag} = getelementptr inbounds %ScrUnion, ptr ${box}, i32 0, i32 1`);
@@ -105,7 +144,9 @@ export function emitStackMapRead(host: LlvmEmitterContext, read: LocalMapRead): 
   if (isRefCounted(read.value)) {
     const raw = B.tmp();
     host.declare(`declare ptr @scr_map_get_${access}_ref(ptr, ${keyType})`);
-    B.line(`${raw} = call ptr @scr_map_get_${access}_ref(ptr ${receiver.name}, ${keyType} ${key.name})`);
+    B.line(
+      `${raw} = call ptr @scr_map_get_${access}_ref(ptr ${receiver.name}, ${keyType} ${key.name})`,
+    );
     B.line(`${found} = icmp ne ptr ${raw}, null`);
     B.line(`store ptr ${raw}, ptr ${payload}`);
     owner = { slot: payload, type: read.value };
@@ -113,11 +154,14 @@ export function emitStackMapRead(host: LlvmEmitterContext, read: LocalMapRead): 
     const scalar = read.value.kind === "f64" ? "f64" : "bool";
     B.line(`store i64 0, ptr ${payload}`);
     host.declare(`declare zeroext i1 @scr_map_get_${access}_${scalar}(ptr, ${keyType}, ptr)`);
-    B.line(`${found} = call zeroext i1 @scr_map_get_${access}_${scalar}(ptr ${receiver.name}, ${keyType} ${key.name}, ptr ${payload})`);
+    B.line(
+      `${found} = call zeroext i1 @scr_map_get_${access}_${scalar}(ptr ${receiver.name}, ${keyType} ${key.name}, ptr ${payload})`,
+    );
     if (read.value.kind === "bool") {
       // The runtime writes a byte; union projections read an i64. Widen
       // explicitly rather than depending on the target's byte order.
-      const byte = B.tmp(), bits = B.tmp();
+      const byte = B.tmp(),
+        bits = B.tmp();
       B.line(`${byte} = load i8, ptr ${payload}`);
       B.line(`${bits} = zext i8 ${byte} to i64`);
       B.line(`store i64 ${bits}, ptr ${payload}`);

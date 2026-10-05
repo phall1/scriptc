@@ -12,7 +12,11 @@ import type { SourceFile } from "./ts7/ast-types.js";
 export type ComptimeEvaluator = (source: string, timeoutMs: number) => unknown;
 
 /** Emit an isolated package source without resolving or executing its imports. */
-export type RuntimeTypeScriptEmitter = (path: string, source: string, format: "esm" | "cjs") => string;
+export type RuntimeTypeScriptEmitter = (
+  path: string,
+  source: string,
+  format: "esm" | "cjs",
+) => string;
 
 /** A Node host keeps its process-specific resolver settings and hooks. Native
  * clients use the filesystem resolver when no host adapter is supplied. */
@@ -37,23 +41,35 @@ export class FrontendServices {
     readonly runtimeModuleResolver: RuntimeModuleResolver | undefined = undefined,
     private readonly runtimeTypeScriptEmitter: RuntimeTypeScriptEmitter | undefined = undefined,
   ) {
-    this.fetchAnalyzer = new NpmFetchAnalyzer((options) => createApi({ ...options, collectTiming: false }), cwd);
+    this.fetchAnalyzer = new NpmFetchAnalyzer(
+      (options) => createApi({ ...options, collectTiming: false }),
+      cwd,
+    );
   }
 
-  private ensureOpen(): void { if (this.closed) throw new Error("frontend services are closed"); }
+  private ensureOpen(): void {
+    if (this.closed) throw new Error("frontend services are closed");
+  }
   private sourceParser(): Ts7SourceParser {
     this.ensureOpen();
-    return this.parser ??= new Ts7SourceParser((options) => this.createApi({ ...options, collectTiming: false }), this.cwd);
+    return (this.parser ??= new Ts7SourceParser(
+      (options) => this.createApi({ ...options, collectTiming: false }),
+      this.cwd,
+    ));
   }
-  parse(path: string, source: string, kind: Ts7SourceKind): SourceFile { return this.sourceParser().parse(path, source, kind); }
+  parse(path: string, source: string, kind: Ts7SourceKind): SourceFile {
+    return this.sourceParser().parse(path, source, kind);
+  }
   emitRuntimeTypeScript(path: string, source: string, format: "esm" | "cjs"): string {
     this.ensureOpen();
-    if (this.runtimeTypeScriptEmitter === undefined) throw new Error("this compiler host does not provide TypeScript package emission");
+    if (this.runtimeTypeScriptEmitter === undefined)
+      throw new Error("this compiler host does not provide TypeScript package emission");
     return this.runtimeTypeScriptEmitter(path, source, format);
   }
   evaluateComptime(source: string, timeoutMs: number): unknown {
     this.ensureOpen();
-    if (this.comptimeEvaluator === undefined) throw new Error("this compiler host does not provide compile-time evaluation");
+    if (this.comptimeEvaluator === undefined)
+      throw new Error("this compiler host does not provide compile-time evaluation");
     return this.comptimeEvaluator(source, timeoutMs);
   }
   createProgramHost(options?: Ts7HostOptions): Ts7Host {
@@ -79,22 +95,41 @@ export class FrontendServices {
   findReturnWidening(path: string, source: string): syntax.NpmStaticOverloadRewrite | null {
     return syntax.applyNpmStaticFindReturnWidening(this.parse(path, source, "js"), source);
   }
-  declarationProperties(path: string, source: string, declarations: syntax.NpmStaticDeclarationProperties): syntax.NpmStaticOverloadRewrite | null {
+  declarationProperties(
+    path: string,
+    source: string,
+    declarations: syntax.NpmStaticDeclarationProperties,
+  ): syntax.NpmStaticOverloadRewrite | null {
     this.ensureOpen();
     if (declarations.size === 0) return null;
-    return syntax.applyNpmStaticDeclarationProperties(this.parse(path, source, "js"), source, declarations);
+    return syntax.applyNpmStaticDeclarationProperties(
+      this.parse(path, source, "js"),
+      source,
+      declarations,
+    );
   }
-  declarationOverloads(path: string, source: string, declarations: syntax.NpmStaticDeclarationOverloads): syntax.NpmStaticOverloadRewrite | null {
+  declarationOverloads(
+    path: string,
+    source: string,
+    declarations: syntax.NpmStaticDeclarationOverloads,
+  ): syntax.NpmStaticOverloadRewrite | null {
     this.ensureOpen();
     if (declarations.size === 0) return null;
-    return syntax.applyNpmStaticDeclarationOverloads(this.parse(path, source, "js"), source, declarations);
+    return syntax.applyNpmStaticDeclarationOverloads(
+      this.parse(path, source, "js"),
+      source,
+      declarations,
+    );
   }
   close(): void {
     if (this.closed) return;
     this.closed = true;
     const parser = this.parser;
     this.parser = undefined;
-    try { this.fetchAnalyzer.close(); }
-    finally { parser?.close(); }
+    try {
+      this.fetchAnalyzer.close();
+    } finally {
+      parser?.close();
+    }
   }
 }

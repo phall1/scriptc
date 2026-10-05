@@ -45,7 +45,23 @@ interface TextDecoder {
   readonly encoding: string;
   readonly fatal: boolean;
   readonly ignoreBOM: boolean;
-  decode(input?: ArrayBuffer | DataView | Int8Array | Uint8Array | Uint8ClampedArray | Int16Array | Uint16Array | Int32Array | Uint32Array | Float32Array | Float64Array | BigInt64Array | BigUint64Array, options?: { stream?: boolean }): string;
+  decode(
+    input?:
+      | ArrayBuffer
+      | DataView
+      | Int8Array
+      | Uint8Array
+      | Uint8ClampedArray
+      | Int16Array
+      | Uint16Array
+      | Int32Array
+      | Uint32Array
+      | Float32Array
+      | Float64Array
+      | BigInt64Array
+      | BigUint64Array,
+    options?: { stream?: boolean },
+  ): string;
 }
 
 /* The timer handle — setTimeout's return, mapped to the numeric timer id.
@@ -76,7 +92,11 @@ declare function setTimeout(callback: (value?: unknown) => void, ms?: number): T
  * any function shape (never[] rest — parameter-contravariance's bottom);
  * the delivered call rides the checked-dynamic boundary, so each argument
  * is validated against the callback's real signature at fire time. */
-declare function setTimeout(callback: (...args: never[]) => void, ms?: number, ...args: unknown[]): Timeout;
+declare function setTimeout(
+  callback: (...args: never[]) => void,
+  ms?: number,
+  ...args: unknown[]
+): Timeout;
 declare function clearTimeout(handle?: Timeout | number | null | undefined): void;
 
 /* Compile-time evaluation. The callback must be an inline arrow/function

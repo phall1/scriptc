@@ -13,12 +13,15 @@ const parsers: Ts7SourceParser[] = [];
 const directories: string[] = [];
 afterEach(() => {
   for (const parser of parsers.splice(0)) parser.close();
-  for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
+  for (const directory of directories.splice(0))
+    rmSync(directory, { recursive: true, force: true });
   closeSourceParser();
 });
 
 function create() {
-  const directory = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-source-parser-"));
+  const directory = mkdtempSync(
+    join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-source-parser-"),
+  );
   directories.push(directory);
   let filesystem!: Ts7FileSystem;
   const parser = new Ts7SourceParser((options) => {
@@ -51,7 +54,10 @@ test("each parse owns its text and nodes across same-path edits, deletion and cl
 
 test("the syntax filesystem hides project configuration, dependencies and libraries", () => {
   const { parser, directory, fs } = create();
-  writeFileSync(join(directory, "tsconfig.json"), '{"extends":"./missing.json","compilerOptions":{"jsx":"react"}}');
+  writeFileSync(
+    join(directory, "tsconfig.json"),
+    '{"extends":"./missing.json","compilerOptions":{"jsx":"react"}}',
+  );
   writeFileSync(join(directory, "dependency.ts"), "export const fromDisk = 42;");
   const source = 'import { fromDisk } from "./dependency.js"; export const result = fromDisk;';
   const file = parser.parse("input.ts", source, "ts");
@@ -71,11 +77,23 @@ test("the syntax filesystem hides project configuration, dependencies and librar
 const syntaxCases: { name: string; kind: Ts7SourceKind; source: string }[] = [
   { name: "empty.ts", kind: "ts", source: "" },
   { name: "bom.ts", kind: "ts", source: "\ufeffexport const value = 1;\r\n" },
-  { name: "comments.js", kind: "js", source: "#!/usr/bin/env node\n// leading\n/** detail */\nexport class A { value = 1; }\n" },
+  {
+    name: "comments.js",
+    kind: "js",
+    source: "#!/usr/bin/env node\n// leading\n/** detail */\nexport class A { value = 1; }\n",
+  },
   { name: "unicode.ts", kind: "ts", source: 'const 工作 = "😀";\r\nexport { 工作 };\n' },
-  { name: "types.d.mts", kind: "ts", source: "export declare class A { optional?: A | null; definite!: number; method?(): string; }" },
+  {
+    name: "types.d.mts",
+    kind: "ts",
+    source: "export declare class A { optional?: A | null; definite!: number; method?(): string; }",
+  },
   { name: "broken.ts", kind: "ts", source: "export const incomplete = ;\nfunction broken( {\n" },
-  { name: "component.tsx", kind: "tsx", source: 'export const element = <main title="x">Hello {value}<span /></main>;' },
+  {
+    name: "component.tsx",
+    kind: "tsx",
+    source: 'export const element = <main title="x">Hello {value}<span /></main>;',
+  },
   { name: "component.jsx", kind: "jsx", source: "export default <><span /> text</>;" },
 ];
 
@@ -83,15 +101,34 @@ for (const { name, kind, source } of syntaxCases) {
   test(`standalone syntax preserves TypeScript source spans: ${name}`, () => {
     const { parser } = create();
     const file = parser.parse(name, source, kind);
-    const grammar = kind === "ts" ? ts5.ScriptKind.TS : kind === "js" ? ts5.ScriptKind.JS
-      : kind === "tsx" ? ts5.ScriptKind.TSX : ts5.ScriptKind.JSX;
+    const grammar =
+      kind === "ts"
+        ? ts5.ScriptKind.TS
+        : kind === "js"
+          ? ts5.ScriptKind.JS
+          : kind === "tsx"
+            ? ts5.ScriptKind.TSX
+            : ts5.ScriptKind.JSX;
     const oracle = ts5.createSourceFile(name, source, ts5.ScriptTarget.Latest, true, grammar);
     expect(file.text).toBe(source);
     expect(file.isDeclarationFile).toBe(oracle.isDeclarationFile);
-    expect(file.statements.map((statement) => ({ start: statement.getStart(), end: statement.end, text: statement.getText() })))
-      .toEqual(oracle.statements.map((statement) => ({ start: statement.getStart(), end: statement.end, text: statement.getText() })));
+    expect(
+      file.statements.map((statement) => ({
+        start: statement.getStart(),
+        end: statement.end,
+        text: statement.getText(),
+      })),
+    ).toEqual(
+      oracle.statements.map((statement) => ({
+        start: statement.getStart(),
+        end: statement.end,
+        text: statement.getText(),
+      })),
+    );
     for (let position = 0; position <= source.length; position++) {
-      expect(file.getLineAndCharacterOfPosition(position)).toEqual(oracle.getLineAndCharacterOfPosition(position));
+      expect(file.getLineAndCharacterOfPosition(position)).toEqual(
+        oracle.getLineAndCharacterOfPosition(position),
+      );
     }
   });
 }
@@ -110,7 +147,11 @@ test("explicit grammar keeps declaration suffixes and separates same-name inputs
 
 test("optional declarations expose question tokens without confusing definite assignment", () => {
   const { parser } = create();
-  const file = parser.parse("input.ts", "class A { optional?: number; definite!: number; method?(): void; } type M<T> = { [K in keyof T]-?: T[K] };", "ts");
+  const file = parser.parse(
+    "input.ts",
+    "class A { optional?: number; definite!: number; method?(): void; } type M<T> = { [K in keyof T]-?: T[K] };",
+    "ts",
+  );
   const declaration = file.statements[0]!;
   if (!ts.isClassDeclaration(declaration)) throw new Error("expected class");
   expect(declaration.members[0]!.questionToken?.kind).toBe(ts.SyntaxKind.QuestionToken);
@@ -119,7 +160,8 @@ test("optional declarations expose question tokens without confusing definite as
   expect(declaration.members[1]!.postfixToken?.kind).toBe(ts.SyntaxKind.ExclamationToken);
   expect(declaration.members[2]!.questionToken?.kind).toBe(ts.SyntaxKind.QuestionToken);
   const alias = file.statements[1]!;
-  if (!ts.isTypeAliasDeclaration(alias) || !ts.isMappedTypeNode(alias.type)) throw new Error("expected mapped type");
+  if (!ts.isTypeAliasDeclaration(alias) || !ts.isMappedTypeNode(alias.type))
+    throw new Error("expected mapped type");
   expect(alias.type.questionToken?.kind).toBe(ts.SyntaxKind.MinusToken);
 });
 
@@ -143,12 +185,22 @@ test("JSDoc callable types cannot replace method body views", () => {
     ordinary() { return true; }
   }`;
   const file = parser.parse("methods.js", source, "js");
-  const oracle = ts5.createSourceFile("methods.js", source, ts5.ScriptTarget.Latest, true, ts5.ScriptKind.JS);
+  const oracle = ts5.createSourceFile(
+    "methods.js",
+    source,
+    ts5.ScriptTarget.Latest,
+    true,
+    ts5.ScriptKind.JS,
+  );
   const native = file.statements[0]!;
   const expected = oracle.statements[0]!;
-  if (!ts.isClassDeclaration(native) || !ts5.isClassDeclaration(expected)) throw new Error("expected class");
-  expect(native.members.map((member) => member.body?.getText()))
-    .toEqual(expected.members.map((member) => ts5.isMethodDeclaration(member) ? member.body?.getText() : undefined));
+  if (!ts.isClassDeclaration(native) || !ts5.isClassDeclaration(expected))
+    throw new Error("expected class");
+  expect(native.members.map((member) => member.body?.getText())).toEqual(
+    expected.members.map((member) =>
+      ts5.isMethodDeclaration(member) ? member.body?.getText() : undefined,
+    ),
+  );
   for (const member of native.members) {
     expect(member.body?.kind).toBe(ts.SyntaxKind.Block);
     expect(member.body?.parent).toBe(member);

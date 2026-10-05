@@ -18,18 +18,36 @@ export function lowerOptionalStringIndex(
   const text = varRef(textLocal.id, STRING, loc);
   const key = varRef(indexLocal.id, F64, loc);
   const inBounds: IrExpr = {
-    kind: "logical", op: "&&",
+    kind: "logical",
+    op: "&&",
     left: { kind: "bin", op: ">=", left: key, right: numLit(0, loc), type: BOOL, loc },
-    right: { kind: "bin", op: "<", left: key,
-      right: { kind: "strIntrinsic", method: "length", receiver: text, args: [], type: F64, loc }, type: BOOL, loc },
-    type: BOOL, loc,
+    right: {
+      kind: "bin",
+      op: "<",
+      left: key,
+      right: { kind: "strIntrinsic", method: "length", receiver: text, args: [], type: F64, loc },
+      type: BOOL,
+      loc,
+    },
+    type: BOOL,
+    loc,
   };
   const integral: IrExpr = {
-    kind: "bin", op: "===", left: key,
+    kind: "bin",
+    op: "===",
+    left: key,
     right: { kind: "libCall", fn: "math.floor", args: [key], type: F64, loc },
-    type: BOOL, loc,
+    type: BOOL,
+    loc,
   };
-  const read: IrExpr = { kind: "strIntrinsic", method: "charAt", receiver: text, args: [key], type: STRING, loc };
+  const read: IrExpr = {
+    kind: "strIntrinsic",
+    method: "charAt",
+    receiver: text,
+    args: [key],
+    type: STRING,
+    loc,
+  };
   return {
     kind: "seqExpr",
     stmts: [
@@ -37,10 +55,14 @@ export function lowerOptionalStringIndex(
       { kind: "varDecl", localId: indexLocal.id, init: index, loc },
     ],
     result: {
-      kind: "ternary", cond: { kind: "logical", op: "&&", left: inBounds, right: integral, type: BOOL, loc },
+      kind: "ternary",
+      cond: { kind: "logical", op: "&&", left: inBounds, right: integral, type: BOOL, loc },
       then: lowerer.coerceToExpected(read, type),
-      else_: lowerer.wrappedUndefined(type, loc)!, type, loc,
+      else_: lowerer.wrappedUndefined(type, loc)!,
+      type,
+      loc,
     },
-    type, loc,
+    type,
+    loc,
   };
 }

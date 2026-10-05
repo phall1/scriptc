@@ -7,7 +7,10 @@ import { newFnCtx, type Lowerer } from "./lowerer.js";
 /** Computed namespace reads select live exports instead of copying a
  * namespace into a registry snapshot. Constructor registries may contain
  * unrelated classes with different native signatures. */
-export function lowerModuleNamespaceElement(lowerer: Lowerer, expr: ts.ElementAccessExpression): IrExpr | null {
+export function lowerModuleNamespaceElement(
+  lowerer: Lowerer,
+  expr: ts.ElementAccessExpression,
+): IrExpr | null {
   const type = lowerer.mapTypeOf(lowerer.typeOf(expr.expression));
   if (type?.kind !== "moduleNs") return null;
   const source = lowerer.sourceFileOfModuleNamespace(type);
@@ -23,7 +26,10 @@ export function lowerModuleNamespaceElement(lowerer: Lowerer, expr: ts.ElementAc
       const body: IrStmt[] = [];
       const symbol = lowerer.checker.getSymbolAtLocation(source);
       symbol?.getExports().forEach((exported, key) => {
-        const target = exported.flags & ts.SymbolFlags.Alias ? lowerer.checker.getAliasedSymbol(exported) : exported;
+        const target =
+          exported.flags & ts.SymbolFlags.Alias
+            ? lowerer.checker.getAliasedSymbol(exported)
+            : exported;
         if (!(target.flags & ts.SymbolFlags.Value)) return;
         const declaration = lowerer.checker.valueDeclarationOf(target);
         const identifier = declaration?.name as ts.Node | undefined;
@@ -31,12 +37,37 @@ export function lowerModuleNamespaceElement(lowerer: Lowerer, expr: ts.ElementAc
           lowerer.unsupported("SC1090", expr, "computed namespace reads of unnamed exports");
         }
         const value = lowerer.lowerExprExpecting(identifier, DYN);
-        body.push({ kind: "if", cond: { kind: "strEq", negated: false, left: varRef("key", STRING, loc), right: strLit(String(key), loc), type: { kind: "bool" }, loc },
-          then: [{ kind: "return", value, loc }], else_: null, loc });
+        body.push({
+          kind: "if",
+          cond: {
+            kind: "strEq",
+            negated: false,
+            left: varRef("key", STRING, loc),
+            right: strLit(String(key), loc),
+            type: { kind: "bool" },
+            loc,
+          },
+          then: [{ kind: "return", value, loc }],
+          else_: null,
+          loc,
+        });
       });
       body.push({ kind: "return", value: dynUndefinedExpr(loc), loc });
-      const fn: IrFunction = { name, params: [{ localId: "namespace", name: "namespace", type }, { localId: "key", name: "key", type: STRING }],
-        returnType: DYN, locals: [{ id: "namespace", name: "namespace", type, mutable: false }, { id: "key", name: "key", type: STRING, mutable: false }, ...context.locals], body, loc };
+      const fn: IrFunction = {
+        name,
+        params: [
+          { localId: "namespace", name: "namespace", type },
+          { localId: "key", name: "key", type: STRING },
+        ],
+        returnType: DYN,
+        locals: [
+          { id: "namespace", name: "namespace", type, mutable: false },
+          { id: "key", name: "key", type: STRING, mutable: false },
+          ...context.locals,
+        ],
+        body,
+        loc,
+      };
       lowerer.liftedFns.push(fn);
     } finally {
       lowerer.fnStack.pop();
@@ -45,6 +76,15 @@ export function lowerModuleNamespaceElement(lowerer: Lowerer, expr: ts.ElementAc
   }
   const receiver = lowerer.lowerExpr(expr.expression);
   const key = lowerer.lowerExpr(expr.argumentExpression);
-  const text: IrExpr = key.type.kind === "string" ? key : { kind: "libCall", fn: "dyn.toStringCoerce", args: [lowerer.coerceInto(expr.argumentExpression, key, DYN)], type: STRING, loc };
+  const text: IrExpr =
+    key.type.kind === "string"
+      ? key
+      : {
+          kind: "libCall",
+          fn: "dyn.toStringCoerce",
+          args: [lowerer.coerceInto(expr.argumentExpression, key, DYN)],
+          type: STRING,
+          loc,
+        };
   return { kind: "call", callee: name, args: [receiver, text], type: DYN, loc };
 }

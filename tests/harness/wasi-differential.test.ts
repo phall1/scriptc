@@ -58,14 +58,18 @@ function wasmCustomSectionNames(bytes: Uint8Array): string[] {
 const WASI_RUNNER = [
   'const fs=require("node:fs")',
   'const {WASI}=require("node:wasi")',
-  'const p=process.argv[1]',
+  "const p=process.argv[1]",
   'const wasi=new WASI({version:"preview1",args:[p],env:{...process.env,PWD:"/",HOME:"/",TMPDIR:"/tmp"},preopens:{"/":process.cwd(),"/tmp":"/tmp"},returnOnExit:true})',
-  'const mod=new WebAssembly.Module(fs.readFileSync(p))',
-  'const instance=new WebAssembly.Instance(mod,wasi.getImportObject())',
-  'process.exitCode=wasi.start(instance)',
+  "const mod=new WebAssembly.Module(fs.readFileSync(p))",
+  "const instance=new WebAssembly.Instance(mod,wasi.getImportObject())",
+  "process.exitCode=wasi.start(instance)",
 ].join(";");
 
-async function run(cmd: string, args: string[], input = ""): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+async function run(
+  cmd: string,
+  args: string[],
+  input = "",
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return await new Promise((resolve, reject) => {
     const child = execFile(cmd, args, { encoding: "utf8" }, (error, stdout, stderr) => {
       if (error === null) {
@@ -191,16 +195,20 @@ describe.skipIf(!zigOnPath())("wasm32-wasi differential", () => {
     const outDir = await mkdtemp("/tmp/scriptc-wasi-");
     const outPath = join(outDir, "program.wasm");
     const result = await compile(entry, { outDir, outPath });
-    if (!result.ok) throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
+    if (!result.ok)
+      throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
     expect(result.backend).toBe("llvm");
     expect(result.llvmPath.endsWith(".ll")).toBe(true);
     expect([...(await readFile(outPath)).subarray(0, 4)]).toEqual([0x00, 0x61, 0x73, 0x6d]);
 
     const node = await run(process.execPath, ["--no-warnings", entry]);
-    const wasm = await run(
-      process.execPath,
-      ["--no-warnings", "--experimental-wasi-unstable-preview1", "-e", WASI_RUNNER, outPath],
-    );
+    const wasm = await run(process.execPath, [
+      "--no-warnings",
+      "--experimental-wasi-unstable-preview1",
+      "-e",
+      WASI_RUNNER,
+      outPath,
+    ]);
     expect(wasm.stdout).toBe(node.stdout);
     expect(wasm.exitCode).toBe(expectedExitCode(entry));
     expect(node.exitCode).toBe(expectedExitCode(entry));
@@ -228,7 +236,8 @@ describe.skipIf(!zigOnPath())("wasm32-wasi differential", () => {
     const outDir = await mkdtemp("/tmp/scriptc-wasi-library-");
     const result = await compileLibrary({
       profilePath: join(repoRoot, "tests/library-mode/scalars/profile.json"),
-      outDir, sanitize: true,
+      outDir,
+      sanitize: true,
     });
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -292,14 +301,18 @@ describe.skipIf(!zigOnPath())("wasm32-wasi differential", () => {
     const outDir = await mkdtemp("/tmp/scriptc-wasi-dynamic-");
     const outPath = join(outDir, "program.wasm");
     const result = await compile(entry, { outDir, outPath, dynamic: true });
-    if (!result.ok) throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
+    if (!result.ok)
+      throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
     expect(result.backend).toBe("llvm");
 
     const node = await run(process.execPath, ["--import", islandShim, entry]);
-    const wasm = await run(
-      process.execPath,
-      ["--no-warnings", "--experimental-wasi-unstable-preview1", "-e", WASI_RUNNER, outPath],
-    );
+    const wasm = await run(process.execPath, [
+      "--no-warnings",
+      "--experimental-wasi-unstable-preview1",
+      "-e",
+      WASI_RUNNER,
+      outPath,
+    ]);
     expect(wasm).toEqual(node);
   });
 
@@ -308,14 +321,18 @@ describe.skipIf(!zigOnPath())("wasm32-wasi differential", () => {
     const outDir = await mkdtemp("/tmp/scriptc-wasi-dynamic-promise-");
     const outPath = join(outDir, "program.wasm");
     const result = await compile(entry, { outDir, outPath, dynamic: true });
-    if (!result.ok) throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
+    if (!result.ok)
+      throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
     expect(result.backend).toBe("llvm");
 
     const node = await run(process.execPath, ["--import", islandShim, entry]);
-    const wasm = await run(
-      process.execPath,
-      ["--no-warnings", "--experimental-wasi-unstable-preview1", "-e", WASI_RUNNER, outPath],
-    );
+    const wasm = await run(process.execPath, [
+      "--no-warnings",
+      "--experimental-wasi-unstable-preview1",
+      "-e",
+      WASI_RUNNER,
+      outPath,
+    ]);
     expect(wasm).toEqual(node);
   });
 
@@ -324,49 +341,61 @@ describe.skipIf(!zigOnPath())("wasm32-wasi differential", () => {
     const outDir = await mkdtemp("/tmp/scriptc-wasi-npm-");
     const outPath = join(outDir, "program.wasm");
     const result = await compile(entry, { outDir, outPath, dynamic: true });
-    if (!result.ok) throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
+    if (!result.ok)
+      throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
     expect(result.backend).toBe("llvm");
 
     const node = await run(process.execPath, ["--no-warnings", entry]);
-    const wasm = await run(
-      process.execPath,
-      ["--no-warnings", "--experimental-wasi-unstable-preview1", "-e", WASI_RUNNER, outPath],
-    );
+    const wasm = await run(process.execPath, [
+      "--no-warnings",
+      "--experimental-wasi-unstable-preview1",
+      "-e",
+      WASI_RUNNER,
+      outPath,
+    ]);
     expect(wasm).toEqual(node);
   });
 
-  test.each([
-    "top-level-await-pending-exit-code",
-    "top-level-await-pending-exit-listener",
-  ])("embedded npm preserves pending-module exit precedence for %s", async (fixture) => {
-    const entry = join(repoRoot, "tests/fixtures/npm/cases", fixture, "main.ts");
-    const outDir = await mkdtemp("/tmp/scriptc-wasi-npm-pending-");
-    const outPath = join(outDir, "program.wasm");
-    const result = await compile(entry, { outDir, outPath, dynamic: true });
-    if (!result.ok) throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
-    expect(result.backend).toBe("llvm");
+  test.each(["top-level-await-pending-exit-code", "top-level-await-pending-exit-listener"])(
+    "embedded npm preserves pending-module exit precedence for %s",
+    async (fixture) => {
+      const entry = join(repoRoot, "tests/fixtures/npm/cases", fixture, "main.ts");
+      const outDir = await mkdtemp("/tmp/scriptc-wasi-npm-pending-");
+      const outPath = join(outDir, "program.wasm");
+      const result = await compile(entry, { outDir, outPath, dynamic: true });
+      if (!result.ok)
+        throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
+      expect(result.backend).toBe("llvm");
 
-    const node = await run(process.execPath, ["--no-warnings", entry]);
-    const wasm = await run(
-      process.execPath,
-      ["--no-warnings", "--experimental-wasi-unstable-preview1", "-e", WASI_RUNNER, outPath],
-    );
-    expect(wasm).toEqual(node);
-  });
+      const node = await run(process.execPath, ["--no-warnings", entry]);
+      const wasm = await run(process.execPath, [
+        "--no-warnings",
+        "--experimental-wasi-unstable-preview1",
+        "-e",
+        WASI_RUNNER,
+        outPath,
+      ]);
+      expect(wasm).toEqual(node);
+    },
+  );
 
   test("the LLVM target embeds compressed npm sources and builtin shims", async () => {
     const entry = join(repoRoot, "tests/fixtures/npm/cases/zlib-shims/main.ts");
     const outDir = await mkdtemp("/tmp/scriptc-wasi-npm-zlib-");
     const outPath = join(outDir, "program.wasm");
     const result = await compile(entry, { outDir, outPath, dynamic: true });
-    if (!result.ok) throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
+    if (!result.ok)
+      throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
     expect(result.backend).toBe("llvm");
 
     const node = await run(process.execPath, ["--no-warnings", entry]);
-    const wasm = await run(
-      process.execPath,
-      ["--no-warnings", "--experimental-wasi-unstable-preview1", "-e", WASI_RUNNER, outPath],
-    );
+    const wasm = await run(process.execPath, [
+      "--no-warnings",
+      "--experimental-wasi-unstable-preview1",
+      "-e",
+      WASI_RUNNER,
+      outPath,
+    ]);
     expect(wasm).toEqual(node);
   });
 
@@ -375,11 +404,14 @@ describe.skipIf(!zigOnPath())("wasm32-wasi differential", () => {
     const outDir = await mkdtemp("/tmp/scriptc-wasi-cli-");
     const loader = join(dirname(require.resolve("tsx/package.json")), "dist/loader.mjs");
     const result = await execFileAsync(process.execPath, [
-      "--import", loader,
+      "--import",
+      loader,
       join(repoRoot, "packages/cli/src/main.ts"),
-      "run", entry,
+      "run",
+      entry,
       "--no-keep-llvm",
-      "-o", join(outDir, "program.wasm"),
+      "-o",
+      join(outDir, "program.wasm"),
     ]);
     const node = await execFileAsync(process.execPath, [entry]);
     expect(result.stdout).toBe(node.stdout);

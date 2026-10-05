@@ -228,14 +228,21 @@ test("synchronous tracking restores parents after throws and propagates unstable
   const parent = new FrontendInputTracker();
   const child = new FrontendInputTracker();
   parent.runSynchronous(() => {
-    expect(() => child.runSynchronous(() => {
-      trackedReadFile(first);
-      markFrontendInputsUnstable();
-      throw new Error("interrupted");
-    })).toThrow("interrupted");
+    expect(() =>
+      child.runSynchronous(() => {
+        trackedReadFile(first);
+        markFrontendInputsUnstable();
+        throw new Error("interrupted");
+      }),
+    ).toThrow("interrupted");
     trackedReadFile(second);
   });
-  expect(parent.snapshot().probes.filter((probe) => probe.op === "file").map((probe) => probe.path)).toEqual([first, second]);
+  expect(
+    parent
+      .snapshot()
+      .probes.filter((probe) => probe.op === "file")
+      .map((probe) => probe.path),
+  ).toEqual([first, second]);
   expect(parent.snapshot().stable).toBe(false);
   const before = parent.snapshot();
   trackedFileExists(join(dir, "outside.ts"));

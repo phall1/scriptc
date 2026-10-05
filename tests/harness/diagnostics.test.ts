@@ -25,13 +25,14 @@ describe(`diagnostics corpus (${files.length} programs)`, () => {
       // Flavor-split scratch: some entries reach the backend and emit
       // artifacts (.ll etc.) before failing, and the other flavor's
       // concurrent suite writes the same names — never share the dir.
-      const outDir = join(tmpdir(), `scriptc-diag-${process.env["SCRIPTC_SAN"] === "1" ? "san" : "plain"}`);
+      const outDir = join(
+        tmpdir(),
+        `scriptc-diag-${process.env["SCRIPTC_SAN"] === "1" ? "san" : "plain"}`,
+      );
       // `// @dynamic` on the entry's FIRST line: compile with the island
       // engine embedded — for diagnostics only --dynamic builds can reach
       // (dynamic-import resolution failures, island-only fences).
-      const dynamic = /^\/\/ @dynamic\s*$/.test(
-        readFileSync(file, "utf8").split("\n", 1)[0] ?? "",
-      );
+      const dynamic = /^\/\/ @dynamic\s*$/.test(readFileSync(file, "utf8").split("\n", 1)[0] ?? "");
       // Deliberately NO backend pin: every program here must fail before
       // any backend runs (that is the suite's contract), so the default
       // lane is irrelevant by construction — and riding it proves the

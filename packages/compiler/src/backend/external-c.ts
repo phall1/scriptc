@@ -37,10 +37,7 @@ export {
   warmNativeCaches,
 } from "./native-toolchain.js";
 
-export {
-  ANDROID_MIN_API,
-  IPHONEOS_MIN_VERSION,
-} from "./native-toolchain.js";
+export { ANDROID_MIN_API, IPHONEOS_MIN_VERSION } from "./native-toolchain.js";
 
 /** Compile a caller-provided C or LLVM source file through an external C
  * toolchain.  Runtime development and native embedding tests also use this utility. */

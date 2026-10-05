@@ -22,10 +22,15 @@ test("scr_string_to_number matches Node Number(s) on committed oracle cases", as
   await mkdir(buildDir, { recursive: true });
   const bin = join(buildDir, "test_tonumber");
   await execFileAsync("clang", [
-    "-std=c11", "-O1", "-Wall", "-Wextra",
-    "-fsanitize=address", "-DSCR_RC_AUDIT",
+    "-std=c11",
+    "-O1",
+    "-Wall",
+    "-Wextra",
+    "-fsanitize=address",
+    "-DSCR_RC_AUDIT",
     ...(process.platform === "linux" ? ["-D_GNU_SOURCE"] : []),
-    "-o", bin,
+    "-o",
+    bin,
     join(testDir, "test_tonumber.c"),
     join(testDir, "../src/scr_string.c"),
     join(testDir, "../src/scr_number.c"),

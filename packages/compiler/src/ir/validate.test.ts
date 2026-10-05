@@ -1,5 +1,22 @@
 import { expect, test } from "vitest";
-import { BOOL, DYN, DYN_CLASS_PROPERTIES, F64, NULL_T, STRING, SYMBOL_T, UNDEFINED_T, VOID, arrayOf, mapOf, setOf, type IrExpr, type IrModule, type IrType, type IrUnionDef } from "./ir.js";
+import {
+  BOOL,
+  DYN,
+  DYN_CLASS_PROPERTIES,
+  F64,
+  NULL_T,
+  STRING,
+  SYMBOL_T,
+  UNDEFINED_T,
+  VOID,
+  arrayOf,
+  mapOf,
+  setOf,
+  type IrExpr,
+  type IrModule,
+  type IrType,
+  type IrUnionDef,
+} from "./ir.js";
 import { deserializeModule, serializeModule } from "./serialize.js";
 import { validateModule } from "./validate.js";
 
@@ -8,8 +25,33 @@ const loc = { file: "numeric-read.ts", start: 0, end: 0 };
 test("static callback operations validate their complete ABI after serialization", () => {
   const mod = expressionModule({ kind: "numLit", value: 0, type: F64, loc }, []);
   mod.ffiImports = [
-    { name: "register", symbol: "register", library: "native", callbackOperation: "register", params: [{ callback: { id: "callback", params: ["pointer"], returns: "void", lifetime: "retained", invoke: "script-thread" } }], returns: "pointer" },
-    { name: "release", symbol: "release", library: "native", callbackOperation: "release", callbackTarget: "register", params: [], returns: "void" },
+    {
+      name: "register",
+      symbol: "register",
+      library: "native",
+      callbackOperation: "register",
+      params: [
+        {
+          callback: {
+            id: "callback",
+            params: ["pointer"],
+            returns: "void",
+            lifetime: "retained",
+            invoke: "script-thread",
+          },
+        },
+      ],
+      returns: "pointer",
+    },
+    {
+      name: "release",
+      symbol: "release",
+      library: "native",
+      callbackOperation: "release",
+      callbackTarget: "register",
+      params: [],
+      returns: "void",
+    },
   ];
   expect(validateModule(deserializeModule(serializeModule(mod)))).toEqual([]);
   for (const variant of ["target", "library", "return", "params", "callback-id"]) {
@@ -20,28 +62,63 @@ test("static callback operations validate their complete ABI after serialization
     if (variant === "library") release.library = "different";
     if (variant === "return") registration.returns = "void";
     if (variant === "params") release.params = ["pointer"];
-    if (variant === "callback-id") (registration.params[0] as { callback: { id: string } }).callback.id = "wrong";
-    expect(validateModule(bad).some(error => error.message.includes("FFI callback operation"))).toBe(true);
+    if (variant === "callback-id")
+      (registration.params[0] as { callback: { id: string } }).callback.id = "wrong";
+    expect(
+      validateModule(bad).some((error) => error.message.includes("FFI callback operation")),
+    ).toBe(true);
   }
 });
 
 function localClassModule(): IrModule {
   const self: IrType = { kind: "object", className: "Local" };
-  const mod = expressionModule({ kind: "classRef", className: "Local", captures: ["outer"], type: { kind: "classval", className: "Local" }, loc }, []);
-  mod.classes = [{ name: "Local", jsName: "Local", fields: [{ name: "%classEnvironment:Local", type: { kind: "classval", className: "Local" } }], localCaptures: [{ localId: "shared", name: "value", type: F64 }], loc }];
-  mod.functions[0]!.locals = [{ id: "outer", name: "value", type: F64, mutable: true, boxed: true }];
+  const mod = expressionModule(
+    {
+      kind: "classRef",
+      className: "Local",
+      captures: ["outer"],
+      type: { kind: "classval", className: "Local" },
+      loc,
+    },
+    [],
+  );
+  mod.classes = [
+    {
+      name: "Local",
+      jsName: "Local",
+      fields: [{ name: "%classEnvironment:Local", type: { kind: "classval", className: "Local" } }],
+      localCaptures: [{ localId: "shared", name: "value", type: F64 }],
+      loc,
+    },
+  ];
+  mod.functions[0]!.locals = [
+    { id: "outer", name: "value", type: F64, mutable: true, boxed: true },
+  ];
   mod.functions.push({
-    name: "%Local.constructor", params: [{ localId: "self", name: "this", type: self }],
-    locals: [{ id: "self", name: "this", type: self, mutable: false }, { id: "capture", name: "value", type: F64, mutable: true, boxed: true }],
+    name: "%Local.constructor",
+    params: [{ localId: "self", name: "this", type: self }],
+    locals: [
+      { id: "self", name: "this", type: self, mutable: false },
+      { id: "capture", name: "value", type: F64, mutable: true, boxed: true },
+    ],
     classCaptures: [{ localId: "capture", name: "value", type: F64, slot: 0 }],
-    returnType: VOID, body: [], loc,
+    returnType: VOID,
+    body: [],
+    loc,
   });
   return mod;
 }
 
 test("serialized field presence tracking requires native property storage", () => {
   const mod = expressionModule({ kind: "numLit", value: 0, type: F64, loc }, []);
-  mod.classes = [{ name: "Value", fields: [{ name: DYN_CLASS_PROPERTIES, type: DYN }], tracksOwnFields: true, loc }];
+  mod.classes = [
+    {
+      name: "Value",
+      fields: [{ name: DYN_CLASS_PROPERTIES, type: DYN }],
+      tracksOwnFields: true,
+      loc,
+    },
+  ];
   expect(validateModule(deserializeModule(serializeModule(mod)))).toEqual([]);
   for (const variant of ["missing", "type", "runtime"]) {
     const bad = structuredClone(mod);
@@ -49,15 +126,23 @@ test("serialized field presence tracking requires native property storage", () =
     if (variant === "missing") cls.fields = [];
     if (variant === "type") cls.fields[0]!.type = F64;
     if (variant === "runtime") cls.runtime = true;
-    expect(validateModule(bad).some((error) => error.message.includes("field presence tracking"))).toBe(true);
+    expect(
+      validateModule(bad).some((error) => error.message.includes("field presence tracking")),
+    ).toBe(true);
   }
 });
 
 test("class prototype data helpers retain their ABI after serialization", () => {
   const mod = expressionModule({ kind: "numLit", value: 0, type: F64, loc }, []);
   mod.classes = [{ name: "Vector", fields: [], prototypeDataHelper: "%prototype.Vector", loc }];
-  mod.functions.push({ name: "%prototype.Vector", params: [], locals: [], returnType: DYN,
-    body: [{ kind: "return", value: { kind: "dynObjLit", fields: [], type: DYN, loc }, loc }], loc });
+  mod.functions.push({
+    name: "%prototype.Vector",
+    params: [],
+    locals: [],
+    returnType: DYN,
+    body: [{ kind: "return", value: { kind: "dynObjLit", fields: [], type: DYN, loc }, loc }],
+    loc,
+  });
   expect(validateModule(deserializeModule(serializeModule(mod)))).toEqual([]);
   for (const variant of ["missing", "params", "return", "captures"]) {
     const bad = structuredClone(mod);
@@ -66,7 +151,9 @@ test("class prototype data helpers retain their ABI after serialization", () => 
     if (variant === "params") helper.params.push({ localId: "p", name: "p", type: DYN });
     if (variant === "return") helper.returnType = F64;
     if (variant === "captures") helper.captures = [];
-    expect(validateModule(bad).some((error) => error.message.includes("prototype data helper"))).toBe(true);
+    expect(
+      validateModule(bad).some((error) => error.message.includes("prototype data helper")),
+    ).toBe(true);
   }
 });
 
@@ -80,9 +167,14 @@ test("instance prototype helpers require the class receiver ABI", () => {
   const mod = localClassModule();
   mod.classes![0]!.instancePrototypeHelper = "%Local.prototype";
   const receiver: IrType = { kind: "object", className: "Local" };
-  mod.functions.push({ name: "%Local.prototype", params: [{ localId: "this", name: "this", type: receiver }],
-    locals: [{ id: "this", name: "this", type: receiver, mutable: false }], returnType: DYN,
-    body: [{ kind: "return", value: { kind: "dynObjLit", fields: [], type: DYN, loc }, loc }], loc });
+  mod.functions.push({
+    name: "%Local.prototype",
+    params: [{ localId: "this", name: "this", type: receiver }],
+    locals: [{ id: "this", name: "this", type: receiver, mutable: false }],
+    returnType: DYN,
+    body: [{ kind: "return", value: { kind: "dynObjLit", fields: [], type: DYN, loc }, loc }],
+    loc,
+  });
   expect(validateModule(deserializeModule(serializeModule(mod)))).toEqual([]);
   for (const variant of ["missing", "params", "receiver", "return", "captures"]) {
     const bad = structuredClone(mod);
@@ -92,14 +184,26 @@ test("instance prototype helpers require the class receiver ABI", () => {
     if (variant === "receiver") helper.params[0]!.type = DYN;
     if (variant === "return") helper.returnType = F64;
     if (variant === "captures") helper.captures = [];
-    expect(validateModule(bad).some((error) => error.message.includes("instance prototype helper"))).toBe(true);
+    expect(
+      validateModule(bad).some((error) => error.message.includes("instance prototype helper")),
+    ).toBe(true);
   }
 });
 
 test("computed bases retain their constructor globals after serialization", () => {
   const mod = expressionModule({ kind: "numLit", value: 0, type: F64, loc }, []);
-  mod.classes = [{ name: "Base", fields: [], loc }, { name: "Child", base: "Base", fields: [], baseValueGlobal: "%g.computed", loc }];
-  mod.globals = [{ id: "%g.computed", name: "computed", type: { kind: "classval", className: "Base" }, mutable: false }];
+  mod.classes = [
+    { name: "Base", fields: [], loc },
+    { name: "Child", base: "Base", fields: [], baseValueGlobal: "%g.computed", loc },
+  ];
+  mod.globals = [
+    {
+      id: "%g.computed",
+      name: "computed",
+      type: { kind: "classval", className: "Base" },
+      mutable: false,
+    },
+  ];
   expect(deserializeModule(serializeModule(mod))).toEqual(mod);
   expect(validateModule(deserializeModule(serializeModule(mod)))).toEqual([]);
   for (const variant of ["missing", "type", "class", "capture"]) {
@@ -108,13 +212,22 @@ test("computed bases retain their constructor globals after serialization", () =
     if (variant === "type") bad.globals![0]!.type = DYN;
     if (variant === "class") bad.globals![0]!.type = { kind: "classval", className: "Child" };
     if (variant === "capture") bad.classes![1]!.localBaseCapture = 0;
-    expect(validateModule(bad).some((error) => error.message.includes("computed base global"))).toBe(true);
+    expect(
+      validateModule(bad).some((error) => error.message.includes("computed base global")),
+    ).toBe(true);
   }
 });
 
 test("class symbol fields preserve their identity metadata after serialization", () => {
   const mod = expressionModule({ kind: "numLit", value: 0, type: F64, loc }, []);
-  mod.classes = [{ name: "Item", fields: [{ name: "sym:key", type: STRING }], symbolFields: [{ field: "sym:key", globalId: "%g.key" }], loc }];
+  mod.classes = [
+    {
+      name: "Item",
+      fields: [{ name: "sym:key", type: STRING }],
+      symbolFields: [{ field: "sym:key", globalId: "%g.key" }],
+      loc,
+    },
+  ];
   mod.globals = [{ id: "%g.key", name: "key", type: SYMBOL_T, mutable: false }];
   expect(deserializeModule(serializeModule(mod))).toEqual(mod);
   expect(validateModule(deserializeModule(serializeModule(mod)))).toEqual([]);
@@ -123,71 +236,137 @@ test("class symbol fields preserve their identity metadata after serialization",
     if (variant === "global") bad.globals = [];
     if (variant === "type") bad.globals![0]!.type = STRING;
     if (variant === "field") bad.classes![0]!.fields = [];
-    expect(validateModule(bad).some((error) => error.message.includes("symbol field metadata"))).toBe(true);
+    expect(
+      validateModule(bad).some((error) => error.message.includes("symbol field metadata")),
+    ).toBe(true);
   }
 });
 
-test.each(["missing", "unboxed", "type", "slot", "receiver", "closure", "layout", "direct-new"])("local classes reject an invalid %s environment", (variant) => {
-  const mod = localClassModule();
-  const ctor = mod.functions[1]!;
-  if (variant === "missing") mod.functions[0]!.locals = [];
-  if (variant === "unboxed") delete mod.functions[0]!.locals[0]!.boxed;
-  if (variant === "type") ctor.locals[1]!.type = STRING;
-  if (variant === "slot") ctor.classCaptures![0]!.slot = 1;
-  if (variant === "receiver") ctor.params[0]!.type = F64;
-  if (variant === "closure") ctor.captures = [];
-  if (variant === "layout") mod.classes![0]!.runtime = true;
-  if (variant === "direct-new") mod.functions[0]!.body = [{ kind: "exprStmt", expr: { kind: "new", className: "Local", args: [], type: { kind: "object", className: "Local" }, loc }, loc }];
-  expect(validateModule(mod).length).toBeGreaterThan(0);
-});
+test.each(["missing", "unboxed", "type", "slot", "receiver", "closure", "layout", "direct-new"])(
+  "local classes reject an invalid %s environment",
+  (variant) => {
+    const mod = localClassModule();
+    const ctor = mod.functions[1]!;
+    if (variant === "missing") mod.functions[0]!.locals = [];
+    if (variant === "unboxed") delete mod.functions[0]!.locals[0]!.boxed;
+    if (variant === "type") ctor.locals[1]!.type = STRING;
+    if (variant === "slot") ctor.classCaptures![0]!.slot = 1;
+    if (variant === "receiver") ctor.params[0]!.type = F64;
+    if (variant === "closure") ctor.captures = [];
+    if (variant === "layout") mod.classes![0]!.runtime = true;
+    if (variant === "direct-new")
+      mod.functions[0]!.body = [
+        {
+          kind: "exprStmt",
+          expr: {
+            kind: "new",
+            className: "Local",
+            args: [],
+            type: { kind: "object", className: "Local" },
+            loc,
+          },
+          loc,
+        },
+      ];
+    expect(validateModule(mod).length).toBeGreaterThan(0);
+  },
+);
 
-test.each([mapOf(STRING, F64), setOf(STRING), { kind: "promise", inner: F64 } as IrType])("nullable %j payloads preserve an explicit absence tag", (type) => {
-  const mod = expressionModule({ kind: "numLit", value: 0, type: F64, loc }, [
-    { id: "nullable", arms: [type, NULL_T, UNDEFINED_T] },
-  ]);
-  expect(validateModule(mod)).toEqual([]);
-  expect(deserializeModule(serializeModule(mod))).toEqual(mod);
-});
+test.each([mapOf(STRING, F64), setOf(STRING), { kind: "promise", inner: F64 } as IrType])(
+  "nullable %j payloads preserve an explicit absence tag",
+  (type) => {
+    const mod = expressionModule({ kind: "numLit", value: 0, type: F64, loc }, [
+      { id: "nullable", arms: [type, NULL_T, UNDEFINED_T] },
+    ]);
+    expect(validateModule(mod)).toEqual([]);
+    expect(deserializeModule(serializeModule(mod))).toEqual(mod);
+  },
+);
 
-test.each([mapOf(STRING, F64), setOf(STRING), { kind: "promise", inner: F64 } as IrType])("%j payloads still refuse unrelated data siblings", (type) => {
-  const mod = expressionModule({ kind: "numLit", value: 0, type: F64, loc }, [
-    { id: "mixed", arms: [type, STRING, UNDEFINED_T] },
-  ]);
-  expect(validateModule(mod).map((error) => error.message)).toContain(`union mixed: ${type.kind} arm 0 beside non-unit arms`);
-});
+test.each([mapOf(STRING, F64), setOf(STRING), { kind: "promise", inner: F64 } as IrType])(
+  "%j payloads still refuse unrelated data siblings",
+  (type) => {
+    const mod = expressionModule({ kind: "numLit", value: 0, type: F64, loc }, [
+      { id: "mixed", arms: [type, STRING, UNDEFINED_T] },
+    ]);
+    expect(validateModule(mod).map((error) => error.message)).toContain(
+      `union mixed: ${type.kind} arm 0 beside non-unit arms`,
+    );
+  },
+);
 
 test("two differently typed Map payloads cannot silently share one tag test", () => {
   const mod = expressionModule({ kind: "numLit", value: 0, type: F64, loc }, [
     { id: "maps", arms: [mapOf(STRING, F64), mapOf(STRING, STRING), UNDEFINED_T] },
   ]);
-  expect(validateModule(mod).filter((error) => error.message.includes("beside non-unit arms"))).toHaveLength(2);
+  expect(
+    validateModule(mod).filter((error) => error.message.includes("beside non-unit arms")),
+  ).toHaveLength(2);
 });
 
 function numericReadModule(overrides: Partial<IrExpr & { kind: "arrIntrinsic" }> = {}): IrModule {
   const read: IrExpr = {
-    kind: "arrIntrinsic", method: "getNumber",
+    kind: "arrIntrinsic",
+    method: "getNumber",
     receiver: { kind: "arrayLit", elems: [], type: arrayOf(F64), loc },
     args: [{ kind: "numLit", value: 0, type: F64, loc }],
-    type: F64, loc, ...overrides,
+    type: F64,
+    loc,
+    ...overrides,
   };
   return {
-    irVersion: 13, sourceFile: loc.file, entry: "main",
-    functions: [{ name: "main", params: [], locals: [], returnType: VOID, body: [{ kind: "exprStmt", expr: read, loc }], loc }],
+    irVersion: 13,
+    sourceFile: loc.file,
+    entry: "main",
+    functions: [
+      {
+        name: "main",
+        params: [],
+        locals: [],
+        returnType: VOID,
+        body: [{ kind: "exprStmt", expr: read, loc }],
+        loc,
+      },
+    ],
   };
 }
 
 function expressionModule(expr: IrExpr, unions: IrUnionDef[]): IrModule {
   return {
-    irVersion: 13, sourceFile: loc.file, entry: "main", unions,
-    functions: [{ name: "main", params: [], locals: [], returnType: VOID, body: [{ kind: "exprStmt", expr, loc }], loc }],
+    irVersion: 13,
+    sourceFile: loc.file,
+    entry: "main",
+    unions,
+    functions: [
+      {
+        name: "main",
+        params: [],
+        locals: [],
+        returnType: VOID,
+        body: [{ kind: "exprStmt", expr, loc }],
+        loc,
+      },
+    ],
   };
 }
 
 test("numeric byte tokens and DataView stores validate their storage before emission", () => {
-  const bytes: IrExpr = { kind: "varRef", localId: "bytes", type: { kind: "bytes", elem: "u8" }, loc };
+  const bytes: IrExpr = {
+    kind: "varRef",
+    localId: "bytes",
+    type: { kind: "bytes", elem: "u8" },
+    loc,
+  };
   const number: IrExpr = { kind: "numLit", value: 0, type: F64, loc };
   const kind: IrExpr = { kind: "strLit", value: "u32le", type: STRING, loc };
-  const read: IrExpr = { kind: "bytesIntrinsic", method: "readNum", receiver: bytes, args: [kind, number], type: F64, loc };
+  const read: IrExpr = {
+    kind: "bytesIntrinsic",
+    method: "readNum",
+    receiver: bytes,
+    args: [kind, number],
+    type: F64,
+    loc,
+  };
   const mod = expressionModule(read, []);
   mod.functions[0]!.locals.push({ id: "bytes", name: "bytes", type: bytes.type, mutable: false });
   expect(validateModule(deserializeModule(serializeModule(mod)))).toEqual([]);
@@ -196,7 +375,14 @@ test("numeric byte tokens and DataView stores validate their storage before emis
     expect(validateModule(mod).some((e) => e.message.includes("invalid kind token"))).toBe(true);
   }
   kind.value = "u32le";
-  const store: IrExpr = { kind: "bytesIntrinsic", method: "dvSetUint32", receiver: bytes, args: [number, number], type: VOID, loc };
+  const store: IrExpr = {
+    kind: "bytesIntrinsic",
+    method: "dvSetUint32",
+    receiver: bytes,
+    args: [number, number],
+    type: VOID,
+    loc,
+  };
   mod.functions[0]!.body = [{ kind: "exprStmt", expr: store, loc }];
   expect(validateModule(mod)).toEqual([]);
   bytes.type = { kind: "bytes", elem: "u32" };
@@ -223,13 +409,35 @@ test("record declarations accept forward, mutual, and self references and refres
 function recordValidationModule(): IrModule {
   const type: IrType = { kind: "record", shapeId: "row" };
   const source: IrExpr = { kind: "varRef", localId: "row", type, loc };
-  const mod = expressionModule({ kind: "recordGet", obj: source, shapeId: "row", field: "value", type: STRING, loc }, []);
+  const mod = expressionModule(
+    { kind: "recordGet", obj: source, shapeId: "row", field: "value", type: STRING, loc },
+    [],
+  );
   mod.records = [{ id: "row", fields: [{ name: "value", type: STRING }] }];
   mod.functions[0]!.locals = [{ id: "row", name: "row", type, mutable: false }];
   mod.functions[0]!.params = [{ localId: "row", name: "row", type }];
   mod.functions[0]!.body.push(
-    { kind: "recordSet", obj: source, shapeId: "row", field: "value", value: { kind: "strLit", value: "write", type: STRING, loc }, loc },
-    { kind: "exprStmt", expr: { kind: "recordClone", source, overrides: [{ name: "value", value: { kind: "strLit", value: "clone", type: STRING, loc } }], type, loc }, loc },
+    {
+      kind: "recordSet",
+      obj: source,
+      shapeId: "row",
+      field: "value",
+      value: { kind: "strLit", value: "write", type: STRING, loc },
+      loc,
+    },
+    {
+      kind: "exprStmt",
+      expr: {
+        kind: "recordClone",
+        source,
+        overrides: [
+          { name: "value", value: { kind: "strLit", value: "clone", type: STRING, loc } },
+        ],
+        type,
+        loc,
+      },
+      loc,
+    },
   );
   return mod;
 }
@@ -240,11 +448,22 @@ test("record validation preserves first-field reads and writes and last-field in
   mod.records!.unshift({ id: "row", fields: [{ name: "value", type: BOOL }] });
   mod.records![1]!.fields.push({ name: "value", type: F64 });
   const statement = mod.functions[0]!.body[2]!;
-  if (statement.kind !== "exprStmt" || statement.expr.kind !== "recordClone") throw new Error("fixture");
+  if (statement.kind !== "exprStmt" || statement.expr.kind !== "recordClone")
+    throw new Error("fixture");
   statement.expr.overrides[0]!.value = { kind: "numLit", value: 1, type: F64, loc };
-  mod.functions[0]!.body.push({ kind: "exprStmt", expr: { kind: "recordLit", type: statement.expr.type, loc,
-    fields: [1, 2].map((value) => ({ name: "value", value: { kind: "numLit", value, type: F64, loc } })),
-  }, loc });
+  mod.functions[0]!.body.push({
+    kind: "exprStmt",
+    expr: {
+      kind: "recordLit",
+      type: statement.expr.type,
+      loc,
+      fields: [1, 2].map((value) => ({
+        name: "value",
+        value: { kind: "numLit", value, type: F64, loc },
+      })),
+    },
+    loc,
+  });
   expect(validateModule(deserializeModule(serializeModule(mod)))).toEqual([
     { message: 'duplicate record shape "row"', loc },
     { message: 'record row: duplicate field "value"', loc },
@@ -272,7 +491,8 @@ test("record validation refreshes field types and missing members between invoca
 test("record clone validation refreshes accessor boundaries and preserves call-site locations across functions", () => {
   const mod = recordValidationModule();
   const statement = mod.functions[0]!.body[2]!;
-  if (statement.kind !== "exprStmt" || statement.expr.kind !== "recordClone") throw new Error("fixture");
+  if (statement.kind !== "exprStmt" || statement.expr.kind !== "recordClone")
+    throw new Error("fixture");
   mod.functions[0]!.body = [statement];
   mod.functions.push({ ...structuredClone(mod.functions[0]!), name: "other" });
   const other = mod.functions[1]!.body[0]!;
@@ -282,7 +502,10 @@ test("record clone validation refreshes accessor boundaries and preserves call-s
   mod.records![0]!.fields.unshift({ name: "%get:value", type: F64 });
   expect(validateModule(mod)).toEqual([
     { message: "in main: recordClone requires a plain declared-field shape, got row", loc },
-    { message: "in other: recordClone requires a plain declared-field shape, got row", loc: other.expr.loc },
+    {
+      message: "in other: recordClone requires a plain declared-field shape, got row",
+      loc: other.expr.loc,
+    },
   ]);
 });
 
@@ -290,18 +513,80 @@ function classFieldModule(): IrModule {
   const type: IrType = { kind: "object", className: "Value" };
   const source: IrExpr = { kind: "varRef", localId: "object", type, loc };
   const union: IrType = { kind: "union", unionId: "variants" };
-  const mod = expressionModule({ kind: "fieldGet", obj: source, className: "Value", field: "score", type: F64, loc }, [
-    { id: "variants", arms: [type, { kind: "record", shapeId: "row" }] },
-  ]);
-  mod.classes = [{ name: "Value", fields: [{ name: "score", type: F64 }, { name: "dynamic", type: DYN }], loc }];
+  const mod = expressionModule(
+    { kind: "fieldGet", obj: source, className: "Value", field: "score", type: F64, loc },
+    [{ id: "variants", arms: [type, { kind: "record", shapeId: "row" }] }],
+  );
+  mod.classes = [
+    {
+      name: "Value",
+      fields: [
+        { name: "score", type: F64 },
+        { name: "dynamic", type: DYN },
+      ],
+      loc,
+    },
+  ];
   mod.records = [{ id: "row", fields: [{ name: "score", type: F64 }] }];
-  mod.functions[0]!.params = [{ localId: "object", name: "object", type }, { localId: "variant", name: "variant", type: union }];
-  mod.functions[0]!.locals = [{ id: "object", name: "object", type, mutable: false }, { id: "variant", name: "variant", type: union, mutable: false }];
+  mod.functions[0]!.params = [
+    { localId: "object", name: "object", type },
+    { localId: "variant", name: "variant", type: union },
+  ];
+  mod.functions[0]!.locals = [
+    { id: "object", name: "object", type, mutable: false },
+    { id: "variant", name: "variant", type: union, mutable: false },
+  ];
   mod.functions[0]!.body.push(
-    { kind: "fieldSet", obj: source, className: "Value", field: "score", value: { kind: "numLit", value: 1, type: F64, loc }, loc },
-    { kind: "exprStmt", expr: { kind: "fieldIncDec", obj: source, className: "Value", field: "score", fieldDyn: false, op: "+", prefix: true, type: F64, loc }, loc },
-    { kind: "exprStmt", expr: { kind: "fieldIncDec", obj: source, className: "Value", field: "dynamic", fieldDyn: true, op: "-", prefix: false, type: F64, loc }, loc },
-    { kind: "exprStmt", expr: { kind: "unionDisc", value: { kind: "varRef", localId: "variant", type: union, loc }, unionId: "variants", field: "score", type: F64, loc }, loc },
+    {
+      kind: "fieldSet",
+      obj: source,
+      className: "Value",
+      field: "score",
+      value: { kind: "numLit", value: 1, type: F64, loc },
+      loc,
+    },
+    {
+      kind: "exprStmt",
+      expr: {
+        kind: "fieldIncDec",
+        obj: source,
+        className: "Value",
+        field: "score",
+        fieldDyn: false,
+        op: "+",
+        prefix: true,
+        type: F64,
+        loc,
+      },
+      loc,
+    },
+    {
+      kind: "exprStmt",
+      expr: {
+        kind: "fieldIncDec",
+        obj: source,
+        className: "Value",
+        field: "dynamic",
+        fieldDyn: true,
+        op: "-",
+        prefix: false,
+        type: F64,
+        loc,
+      },
+      loc,
+    },
+    {
+      kind: "exprStmt",
+      expr: {
+        kind: "unionDisc",
+        value: { kind: "varRef", localId: "variant", type: union, loc },
+        unionId: "variants",
+        field: "score",
+        type: F64,
+        loc,
+      },
+      loc,
+    },
   );
   return mod;
 }
@@ -309,7 +594,14 @@ function classFieldModule(): IrModule {
 test("class field validation preserves last-class and first-field lookup on duplicate declarations", () => {
   const mod = classFieldModule();
   expect(validateModule(deserializeModule(serializeModule(mod)))).toEqual([]);
-  mod.classes!.unshift({ name: "Value", fields: [{ name: "score", type: STRING }, { name: "dynamic", type: F64 }], loc });
+  mod.classes!.unshift({
+    name: "Value",
+    fields: [
+      { name: "score", type: STRING },
+      { name: "dynamic", type: F64 },
+    ],
+    loc,
+  });
   mod.classes![1]!.fields.push({ name: "score", type: STRING }, { name: "dynamic", type: F64 });
   expect(validateModule(deserializeModule(serializeModule(mod)))).toEqual([
     { message: 'duplicate class "Value"', loc },
@@ -358,7 +650,8 @@ test("class field validation shares inherited layouts across functions and prese
   mod.functions.push(other);
   expect(validateModule(deserializeModule(serializeModule(mod)))).toEqual([]);
   const statement = other.body[0]!;
-  if (statement.kind !== "exprStmt" || statement.expr.kind !== "fieldGet") throw new Error("fixture");
+  if (statement.kind !== "exprStmt" || statement.expr.kind !== "fieldGet")
+    throw new Error("fixture");
   statement.expr.loc = { ...loc, start: 10, end: 20 };
   statement.expr.type = STRING;
   statement.expr.obj = { kind: "numLit", value: 0, type: F64, loc };
@@ -378,16 +671,38 @@ function virtualCallModule(): IrModule {
     { name: "Second", base: "Base", fields: [], methods: ["run"], loc },
   ];
   for (const name of ["Unrelated", "First", "Second"]) {
-    mod.functions.push({ name: `%${name}.run`, params: [{ localId: "self", name: "self", type: receiver }],
-      locals: [{ id: "self", name: "self", type: receiver, mutable: false }], returnType: F64,
-      body: [{ kind: "return", value: { kind: "numLit", value: 1, type: F64, loc }, loc }], loc });
+    mod.functions.push({
+      name: `%${name}.run`,
+      params: [{ localId: "self", name: "self", type: receiver }],
+      locals: [{ id: "self", name: "self", type: receiver, mutable: false }],
+      returnType: F64,
+      body: [{ kind: "return", value: { kind: "numLit", value: 1, type: F64, loc }, loc }],
+      loc,
+    });
   }
   for (let i = 0; i < 2; i++) {
     const at = { ...loc, start: i + 1 };
-    mod.functions.push({ name: `caller${i}`, params: [{ localId: "self", name: "self", type: receiver }],
-      locals: [{ id: "self", name: "self", type: receiver, mutable: false }], returnType: VOID,
-      body: [{ kind: "exprStmt", expr: { kind: "virtualCall", className: "Base", method: "run",
-        args: [{ kind: "varRef", localId: "self", type: receiver, loc: at }], type: F64, loc: at }, loc: at }], loc: at });
+    mod.functions.push({
+      name: `caller${i}`,
+      params: [{ localId: "self", name: "self", type: receiver }],
+      locals: [{ id: "self", name: "self", type: receiver, mutable: false }],
+      returnType: VOID,
+      body: [
+        {
+          kind: "exprStmt",
+          expr: {
+            kind: "virtualCall",
+            className: "Base",
+            method: "run",
+            args: [{ kind: "varRef", localId: "self", type: receiver, loc: at }],
+            type: F64,
+            loc: at,
+          },
+          loc: at,
+        },
+      ],
+      loc: at,
+    });
   }
   return mod;
 }
@@ -408,7 +723,9 @@ test("virtual-call validation resolves an abstract slot in class-table order and
   const mod = virtualCallModule();
   const second = mod.functions.find((fn) => fn.name === "%Second.run")!;
   second.returnType = STRING;
-  second.body = [{ kind: "return", value: { kind: "strLit", value: "second", type: STRING, loc }, loc }];
+  second.body = [
+    { kind: "return", value: { kind: "strLit", value: "second", type: STRING, loc }, loc },
+  ];
   expect(validateModule(mod)).toEqual([]);
   mod.classes!.reverse();
   expect(validateModule(mod).map((error) => error.message)).toEqual([
@@ -418,7 +735,8 @@ test("virtual-call validation resolves an abstract slot in class-table order and
   mod.classes!.reverse();
   const caller = mod.functions.find((fn) => fn.name === "caller1")!;
   const statement = caller.body[0]!;
-  if (statement.kind !== "exprStmt" || statement.expr.kind !== "virtualCall") throw new Error("fixture");
+  if (statement.kind !== "exprStmt" || statement.expr.kind !== "virtualCall")
+    throw new Error("fixture");
   statement.expr.args.push({ kind: "boolLit", value: true, type: BOOL, loc });
   expect(validateModule(mod).map((error) => error.message)).toEqual([
     "in caller1: virtualCall Base.run: 2 args, method expects 1",
@@ -436,9 +754,16 @@ test("virtual-call validation uses the nearest concrete ancestor instead of an o
   const mod = virtualCallModule();
   mod.classes!.unshift({ name: "Root", fields: [], methods: ["run"], loc });
   mod.classes!.find((cls) => cls.name === "Base")!.base = "Root";
-  mod.functions.push({ name: "%Root.run", params: [{ localId: "self", name: "self", type: { kind: "object", className: "Base" } }],
-    locals: [{ id: "self", name: "self", type: { kind: "object", className: "Base" }, mutable: false }], returnType: STRING,
-    body: [{ kind: "return", value: { kind: "strLit", value: "root", type: STRING, loc }, loc }], loc });
+  mod.functions.push({
+    name: "%Root.run",
+    params: [{ localId: "self", name: "self", type: { kind: "object", className: "Base" } }],
+    locals: [
+      { id: "self", name: "self", type: { kind: "object", className: "Base" }, mutable: false },
+    ],
+    returnType: STRING,
+    body: [{ kind: "return", value: { kind: "strLit", value: "root", type: STRING, loc }, loc }],
+    loc,
+  });
   expect(validateModule(mod).map((error) => error.message)).toEqual([
     "in caller0: virtualCall Base.run result type mismatch",
     "in caller1: virtualCall Base.run result type mismatch",
@@ -449,7 +774,10 @@ test("virtual-call validation uses the nearest concrete ancestor instead of an o
 
 test("library callbacks retain child, specialized, and generic result diagnostics", () => {
   const expr: IrExpr = {
-    kind: "libCall", fn: "cp.execFile", type: F64, loc,
+    kind: "libCall",
+    fn: "cp.execFile",
+    type: F64,
+    loc,
     args: [
       { kind: "strLit", value: "tool", type: STRING, loc },
       { kind: "arrayLit", elems: [], type: arrayOf(STRING), loc },
@@ -466,15 +794,21 @@ test("library callbacks retain child, specialized, and generic result diagnostic
 test("nullish chains retain child-before-parent diagnostic order", () => {
   const at = (start: number) => ({ ...loc, start });
   const expr: IrExpr = {
-    kind: "nullish", type: F64, loc: at(4),
+    kind: "nullish",
+    type: F64,
+    loc: at(4),
     left: {
-      kind: "nullish", type: STRING, loc: at(2),
+      kind: "nullish",
+      type: STRING,
+      loc: at(2),
       left: { kind: "numLit", value: 0, type: STRING, loc: at(0) },
       right: { kind: "boolLit", value: true, type: F64, loc: at(1) },
     },
     right: { kind: "strLit", value: "wrong", type: F64, loc: at(3) },
   };
-  expect(validateModule(expressionModule(expr, [])).map((error) => [error.loc.start, error.message])).toEqual([
+  expect(
+    validateModule(expressionModule(expr, [])).map((error) => [error.loc.start, error.message]),
+  ).toEqual([
     [0, "in main: numLit must be f64"],
     [1, "in main: boolLit must be bool"],
     [1, "in main: nullish right operand: expected string, got f64"],
@@ -487,15 +821,23 @@ test("nullish chains retain child-before-parent diagnostic order", () => {
 test("logical trees retain left/right/parent diagnostic order", () => {
   const at = (start: number) => ({ ...loc, start });
   const expr: IrExpr = {
-    kind: "logical", op: "&&", type: BOOL, loc: at(4),
+    kind: "logical",
+    op: "&&",
+    type: BOOL,
+    loc: at(4),
     left: {
-      kind: "logical", op: "||", type: STRING, loc: at(2),
+      kind: "logical",
+      op: "||",
+      type: STRING,
+      loc: at(2),
       left: { kind: "numLit", value: 0, type: STRING, loc: at(0) },
       right: { kind: "boolLit", value: true, type: F64, loc: at(1) },
     },
     right: { kind: "strLit", value: "wrong", type: BOOL, loc: at(3) },
   };
-  expect(validateModule(expressionModule(expr, [])).map((error) => [error.loc.start, error.message])).toEqual([
+  expect(
+    validateModule(expressionModule(expr, [])).map((error) => [error.loc.start, error.message]),
+  ).toEqual([
     [0, "in main: numLit must be f64"],
     [1, "in main: boolLit must be bool"],
     [1, "in main: logical || right: expected string, got f64"],
@@ -507,12 +849,16 @@ test("logical trees retain left/right/parent diagnostic order", () => {
 test("conditional trees retain condition/then/else/parent diagnostic order", () => {
   const at = (start: number) => ({ ...loc, start });
   const expr: IrExpr = {
-    kind: "ternary", type: STRING, loc: at(3),
+    kind: "ternary",
+    type: STRING,
+    loc: at(3),
     cond: { kind: "numLit", value: 0, type: BOOL, loc: at(0) },
     then: { kind: "boolLit", value: true, type: F64, loc: at(1) },
     else_: { kind: "strLit", value: "wrong", type: BOOL, loc: at(2) },
   };
-  expect(validateModule(expressionModule(expr, [])).map((error) => [error.loc.start, error.message])).toEqual([
+  expect(
+    validateModule(expressionModule(expr, [])).map((error) => [error.loc.start, error.message]),
+  ).toEqual([
     [0, "in main: numLit must be f64"],
     [1, "in main: boolLit must be bool"],
     [2, "in main: strLit must be string"],
@@ -521,35 +867,83 @@ test("conditional trees retain condition/then/else/parent diagnostic order", () 
   ]);
 });
 
-test.each(["callValue", "dynCall"] as const)("%s requires a checked-value receiver and preserves it in serialization", (kind) => {
-  const funcType: IrType = { kind: "func", params: [], ret: DYN };
-  const closure: IrExpr = { kind: "closure", fnName: "callback", captures: [], type: funcType, loc };
-  const receiver: IrExpr = { kind: "dynFrom", value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc }, type: DYN, loc };
-  const call: IrExpr = kind === "callValue"
-    ? { kind, callee: closure, receiver, args: [], type: DYN, loc }
-    : { kind, callee: { kind: "dynFrom", value: closure, type: DYN, loc }, receiver, calleeName: "callback", args: [], type: DYN, loc };
-  const mod = expressionModule(call, []);
-  mod.functions.push({ name: "callback", params: [], locals: [], returnType: DYN, body: [{ kind: "return", value: receiver, loc }], loc });
-  expect(validateModule(mod)).toEqual([]);
-  expect(deserializeModule(serializeModule(mod))).toEqual(mod);
-  call.receiver = { kind: "numLit", value: 1, type: F64, loc };
-  expect(validateModule(mod).some((error) => error.message.includes(`${kind} receiver`))).toBe(true);
-  call.receiver = { kind: "varRef", localId: "missing", type: DYN, loc };
-  expect(validateModule(mod).some((error) => error.message.includes("missing"))).toBe(true);
-});
+test.each(["callValue", "dynCall"] as const)(
+  "%s requires a checked-value receiver and preserves it in serialization",
+  (kind) => {
+    const funcType: IrType = { kind: "func", params: [], ret: DYN };
+    const closure: IrExpr = {
+      kind: "closure",
+      fnName: "callback",
+      captures: [],
+      type: funcType,
+      loc,
+    };
+    const receiver: IrExpr = {
+      kind: "dynFrom",
+      value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc },
+      type: DYN,
+      loc,
+    };
+    const call: IrExpr =
+      kind === "callValue"
+        ? { kind, callee: closure, receiver, args: [], type: DYN, loc }
+        : {
+            kind,
+            callee: { kind: "dynFrom", value: closure, type: DYN, loc },
+            receiver,
+            calleeName: "callback",
+            args: [],
+            type: DYN,
+            loc,
+          };
+    const mod = expressionModule(call, []);
+    mod.functions.push({
+      name: "callback",
+      params: [],
+      locals: [],
+      returnType: DYN,
+      body: [{ kind: "return", value: receiver, loc }],
+      loc,
+    });
+    expect(validateModule(mod)).toEqual([]);
+    expect(deserializeModule(serializeModule(mod))).toEqual(mod);
+    call.receiver = { kind: "numLit", value: 1, type: F64, loc };
+    expect(validateModule(mod).some((error) => error.message.includes(`${kind} receiver`))).toBe(
+      true,
+    );
+    call.receiver = { kind: "varRef", localId: "missing", type: DYN, loc };
+    expect(validateModule(mod).some((error) => error.message.includes("missing"))).toBe(true);
+  },
+);
 
 function optionalUnionModule(arms: IrType[] = [BOOL, F64, UNDEFINED_T]): IrModule {
   const type: IrType = { kind: "union", unionId: "receiver" };
   const tag = arms.findIndex((arm) => arm.kind === "f64");
-  const receiver: IrExpr = tag >= 0
-    ? { kind: "unionWrap", unionId: "receiver", tag, value: { kind: "numLit", value: 7, type: F64, loc }, type, loc }
-    : {
-      kind: "unionWrap", unionId: "receiver", tag: arms.findIndex((arm) => arm.kind === "undefinedT"),
-      value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc }, type, loc,
-    };
+  const receiver: IrExpr =
+    tag >= 0
+      ? {
+          kind: "unionWrap",
+          unionId: "receiver",
+          tag,
+          value: { kind: "numLit", value: 7, type: F64, loc },
+          type,
+          loc,
+        }
+      : {
+          kind: "unionWrap",
+          unionId: "receiver",
+          tag: arms.findIndex((arm) => arm.kind === "undefinedT"),
+          value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc },
+          type,
+          loc,
+        };
   const chain: IrExpr = {
-    kind: "optChain", id: "test", receiver,
-    body: { kind: "chainRecv", id: "test", type, loc }, type, loc,
+    kind: "optChain",
+    id: "test",
+    receiver,
+    body: { kind: "chainRecv", id: "test", type, loc },
+    type,
+    loc,
   };
   return expressionModule(chain, [{ id: "receiver", arms }]);
 }
@@ -563,29 +957,40 @@ test("optional chains over several value arms bind the tagged receiver", () => {
 test("optional chains reject bindings that discard a surviving variant", () => {
   const mod = optionalUnionModule();
   const statement = mod.functions[0]!.body[0]!;
-  if (statement.kind !== "exprStmt" || statement.expr.kind !== "optChain") throw new Error("fixture");
+  if (statement.kind !== "exprStmt" || statement.expr.kind !== "optChain")
+    throw new Error("fixture");
   statement.expr.body = { kind: "chainRecv", id: "test", type: F64, loc };
-  expect(validateModule(mod).some((error) => error.message.includes("chainRecv: expected"))).toBe(true);
+  expect(validateModule(mod).some((error) => error.message.includes("chainRecv: expected"))).toBe(
+    true,
+  );
 });
 
 test.each([
   [BOOL, F64],
   [NULL_T, UNDEFINED_T],
 ])("optional chains need both a present and an absent path %#", (...arms) => {
-  expect(validateModule(optionalUnionModule(arms)).some((error) =>
-    error.message.includes("must have unit arms and at least one non-unit arm"),
-  )).toBe(true);
+  expect(
+    validateModule(optionalUnionModule(arms)).some((error) =>
+      error.message.includes("must have unit arms and at least one non-unit arm"),
+    ),
+  ).toBe(true);
 });
 
 test("a single present arm still binds its payload", () => {
   const mod = optionalUnionModule([F64, UNDEFINED_T]);
-  expect(validateModule(mod).some((error) => error.message.includes("chainRecv: expected"))).toBe(true);
+  expect(validateModule(mod).some((error) => error.message.includes("chainRecv: expected"))).toBe(
+    true,
+  );
   const statement = mod.functions[0]!.body[0]!;
-  if (statement.kind !== "exprStmt" || statement.expr.kind !== "optChain") throw new Error("fixture");
+  if (statement.kind !== "exprStmt" || statement.expr.kind !== "optChain")
+    throw new Error("fixture");
   statement.expr.body = {
-    kind: "unionWrap", unionId: "receiver", tag: 0,
+    kind: "unionWrap",
+    unionId: "receiver",
+    tag: 0,
     value: { kind: "chainRecv", id: "test", type: F64, loc },
-    type: { kind: "union", unionId: "receiver" }, loc,
+    type: { kind: "union", unionId: "receiver" },
+    loc,
   };
   expect(validateModule(mod)).toEqual([]);
 });
@@ -595,50 +1000,85 @@ function keyedUnionModule(resultArms: IrType[], overflowOnly = false): IrModule 
   const result: IrType = { kind: "union", unionId: "result" };
   const record: IrType = { kind: "record", shapeId: "row" };
   const obj: IrExpr = {
-    kind: "recordLit", type: record, loc,
-    fields: [{ name: "value", value: {
-      kind: "unionWrap", unionId: "stored", tag: 0,
-      value: { kind: "numLit", value: 9, type: F64, loc }, type: stored, loc,
-    } }],
+    kind: "recordLit",
+    type: record,
+    loc,
+    fields: [
+      {
+        name: "value",
+        value: {
+          kind: "unionWrap",
+          unionId: "stored",
+          tag: 0,
+          value: { kind: "numLit", value: 9, type: F64, loc },
+          type: stored,
+          loc,
+        },
+      },
+    ],
   };
   const read: IrExpr = {
-    kind: "recordKeyGet", obj, shapeId: "row",
+    kind: "recordKeyGet",
+    obj,
+    shapeId: "row",
     key: { kind: "strLit", value: overflowOnly ? "extra" : "value", type: STRING, loc },
-    type: result, loc, ...(overflowOnly ? { overflowOnly: true as const } : {}),
+    type: result,
+    loc,
+    ...(overflowOnly ? { overflowOnly: true as const } : {}),
   };
   const mod = expressionModule(read, [
-    { id: "stored", arms: [F64, NULL_T] }, { id: "result", arms: resultArms },
+    { id: "stored", arms: [F64, NULL_T] },
+    { id: "result", arms: resultArms },
   ]);
   mod.records = [{ id: "row", fields: [{ name: "value", type: stored }], indexValue: stored }];
   return mod;
 }
 
-test.each([false, true])("keyed union reads validate a payload-preserving widening (overflow=%s)", (overflow) => {
-  const mod = keyedUnionModule([BOOL, F64, NULL_T, UNDEFINED_T], overflow);
-  expect(validateModule(mod)).toEqual([]);
-  expect(deserializeModule(serializeModule(mod))).toEqual(mod);
-});
+test.each([false, true])(
+  "keyed union reads validate a payload-preserving widening (overflow=%s)",
+  (overflow) => {
+    const mod = keyedUnionModule([BOOL, F64, NULL_T, UNDEFINED_T], overflow);
+    expect(validateModule(mod)).toEqual([]);
+    expect(deserializeModule(serializeModule(mod))).toEqual(mod);
+  },
+);
 
-test.each([false, true])("keyed union reads refuse to discard a stored arm (overflow=%s)", (overflow) => {
-  const errors = validateModule(keyedUnionModule([F64, STRING, UNDEFINED_T], overflow));
-  expect(errors.some((error) => error.message.includes("cannot surface as the result type"))).toBe(true);
-});
+test.each([false, true])(
+  "keyed union reads refuse to discard a stored arm (overflow=%s)",
+  (overflow) => {
+    const errors = validateModule(keyedUnionModule([F64, STRING, UNDEFINED_T], overflow));
+    expect(
+      errors.some((error) => error.message.includes("cannot surface as the result type")),
+    ).toBe(true);
+  },
+);
 
 test("union array reads validate every element layout against the joined result", () => {
   const stored: IrType = { kind: "union", unionId: "stored" };
   const receiver: IrType = { kind: "union", unionId: "arrays" };
   const result: IrType = { kind: "union", unionId: "result" };
   const array: IrExpr = {
-    kind: "arrayLit", elems: [{
-      kind: "unionWrap", unionId: "stored", tag: 1,
-      value: { kind: "unitLit", unit: "null", type: NULL_T, loc }, type: stored, loc,
-    }],
-    type: arrayOf(stored), loc,
+    kind: "arrayLit",
+    elems: [
+      {
+        kind: "unionWrap",
+        unionId: "stored",
+        tag: 1,
+        value: { kind: "unitLit", unit: "null", type: NULL_T, loc },
+        type: stored,
+        loc,
+      },
+    ],
+    type: arrayOf(stored),
+    loc,
   };
   const read: IrExpr = {
-    kind: "unionKeyGet", unionId: "arrays",
+    kind: "unionKeyGet",
+    unionId: "arrays",
     value: { kind: "unionWrap", unionId: "arrays", tag: 0, value: array, type: receiver, loc },
-    key: { kind: "numLit", value: 0, type: F64, loc }, type: result, loc,
+    key: { kind: "numLit", value: 0, type: F64, loc },
+    type: result,
+    loc,
   };
   const mod = expressionModule(read, [
     { id: "stored", arms: [F64, NULL_T] },
@@ -648,7 +1088,9 @@ test("union array reads validate every element layout against the joined result"
   expect(validateModule(mod)).toEqual([]);
   expect(deserializeModule(serializeModule(mod))).toEqual(mod);
   mod.unions![2]!.arms = [F64, STRING, UNDEFINED_T];
-  expect(validateModule(mod).some((error) => error.message.includes("element union cannot surface"))).toBe(true);
+  expect(
+    validateModule(mod).some((error) => error.message.includes("element union cannot surface")),
+  ).toBe(true);
 });
 
 test("numeric array-read intrinsic validates and round-trips", () => {
@@ -667,50 +1109,77 @@ test("indexed equality validates primitive kinds, arguments, and result", () => 
   expect(validateModule(mod)).toEqual([]);
   expect(deserializeModule(serializeModule(mod))).toEqual(mod);
   for (const override of [
-    { args: [] }, { type: F64 },
+    { args: [] },
+    { type: F64 },
     { args: [args[0]!, { kind: "arrayLit", elems: [], type: arrayOf(STRING), loc }, args[2]!] },
     { receiver: { kind: "arrayLit", elems: [], type: arrayOf(arrayOf(F64)), loc } },
   ] satisfies Partial<IrExpr & { kind: "arrIntrinsic" }>[]) {
-    expect(validateModule(numericReadModule({ method: "indexEq", args, type: BOOL, ...override }))).not.toEqual([]);
+    expect(
+      validateModule(numericReadModule({ method: "indexEq", args, type: BOOL, ...override })),
+    ).not.toEqual([]);
   }
 });
 
 test.each([
-  [{ receiver: { kind: "arrayLit", elems: [], type: arrayOf(STRING), loc } }, "requires f64 elements"],
+  [
+    { receiver: { kind: "arrayLit", elems: [], type: arrayOf(STRING), loc } },
+    "requires f64 elements",
+  ],
   [{ args: [] }, "0 args, expected 1"],
   [{ args: [{ kind: "strLit", value: "0", type: STRING, loc }] }, "arg 0: expected f64"],
   [{ type: BOOL }, "must be f64"],
-] satisfies [Partial<IrExpr & { kind: "arrIntrinsic" }>, string][])("numeric array-read intrinsic rejects malformed IR %#", (overrides, message) => {
-  expect(validateModule(numericReadModule(overrides)).some((error) => error.message.includes(message))).toBe(true);
-});
+] satisfies [Partial<IrExpr & { kind: "arrIntrinsic" }>, string][])(
+  "numeric array-read intrinsic rejects malformed IR %#",
+  (overrides, message) => {
+    expect(
+      validateModule(numericReadModule(overrides)).some((error) => error.message.includes(message)),
+    ).toBe(true);
+  },
+);
 
 function tdzModule(mutable = true): IrModule {
   const value: IrExpr = { kind: "numLit", value: 0, type: F64, loc };
   return {
-    irVersion: 13, sourceFile: loc.file, entry: "main",
-    functions: [{
-      name: "main", params: [], returnType: VOID, loc,
-      locals: [{ id: "value", name: "value", type: F64, mutable, boxed: true, tdz: true }],
-      body: [
-        { kind: "varDecl", localId: "value", init: null, loc },
-        { kind: "assign", localId: "value", value, initializes: true, loc },
-      ],
-    }],
+    irVersion: 13,
+    sourceFile: loc.file,
+    entry: "main",
+    functions: [
+      {
+        name: "main",
+        params: [],
+        returnType: VOID,
+        loc,
+        locals: [{ id: "value", name: "value", type: F64, mutable, boxed: true, tdz: true }],
+        body: [
+          { kind: "varDecl", localId: "value", init: null, loc },
+          { kind: "assign", localId: "value", value, initializes: true, loc },
+        ],
+      },
+    ],
   };
 }
 
-test.each([true, false])("TDZ declarations round-trip their initialization marker (mutable=%s)", (mutable) => {
-  const mod = tdzModule(mutable);
-  expect(validateModule(mod)).toEqual([]);
-  expect(deserializeModule(serializeModule(mod))).toEqual(mod);
-});
+test.each([true, false])(
+  "TDZ declarations round-trip their initialization marker (mutable=%s)",
+  (mutable) => {
+    const mod = tdzModule(mutable);
+    expect(validateModule(mod)).toEqual([]);
+    expect(deserializeModule(serializeModule(mod))).toEqual(mod);
+  },
+);
 
 test("an initialization marker cannot bypass an ordinary immutable binding", () => {
   const mod = tdzModule(false);
   delete mod.functions[0]!.locals[0]!.tdz;
   const messages = validateModule(mod).map((error) => error.message);
-  expect(messages.some((message) => message.includes('initializing assign requires a TDZ binding "value"'))).toBe(true);
-  expect(messages.some((message) => message.includes('assign to immutable local "value"'))).toBe(true);
+  expect(
+    messages.some((message) =>
+      message.includes('initializing assign requires a TDZ binding "value"'),
+    ),
+  ).toBe(true);
+  expect(messages.some((message) => message.includes('assign to immutable local "value"'))).toBe(
+    true,
+  );
 });
 
 test("global assignments cannot masquerade as lexical initialization", () => {
@@ -718,7 +1187,11 @@ test("global assignments cannot masquerade as lexical initialization", () => {
   mod.globals = [{ id: "value", name: "value", type: F64, mutable: true }];
   mod.functions[0]!.locals = [];
   mod.functions[0]!.body.shift();
-  expect(validateModule(mod).some((error) => error.message.includes("initializing assign requires a TDZ binding"))).toBe(true);
+  expect(
+    validateModule(mod).some((error) =>
+      error.message.includes("initializing assign requires a TDZ binding"),
+    ),
+  ).toBe(true);
 });
 
 test("TDZ globals require guarded pointer storage and round-trip initialization", () => {
@@ -727,14 +1200,30 @@ test("TDZ globals require guarded pointer storage and round-trip initialization"
   mod.records = [{ id: "codec", fields: [{ name: "%TextEncoder", type: F64 }], declaredOrder: [] }];
   mod.globals = [{ id: "%g.value", name: "value", type, mutable: false, tdz: true }];
   mod.functions[0]!.locals = [];
-  mod.functions[0]!.body = [{
-    kind: "assign", localId: "%g.value", initializes: true, loc,
-    value: { kind: "recordLit", fields: [{ name: "%TextEncoder", value: { kind: "numLit", value: -1, type: F64, loc } }], type, loc },
-  }];
+  mod.functions[0]!.body = [
+    {
+      kind: "assign",
+      localId: "%g.value",
+      initializes: true,
+      loc,
+      value: {
+        kind: "recordLit",
+        fields: [{ name: "%TextEncoder", value: { kind: "numLit", value: -1, type: F64, loc } }],
+        type,
+        loc,
+      },
+    },
+  ];
   expect(validateModule(mod)).toEqual([]);
   expect(deserializeModule(serializeModule(mod))).toEqual(mod);
   mod.globals[0]!.type = F64;
-  expect(validateModule(mod).some((error) => error.message.includes('TDZ global "value" must have record, function, or checked-value storage'))).toBe(true);
+  expect(
+    validateModule(mod).some((error) =>
+      error.message.includes(
+        'TDZ global "value" must have record, function, or checked-value storage',
+      ),
+    ),
+  ).toBe(true);
 });
 
 test("legacy const TDZ declarations remain readable", () => {
@@ -756,9 +1245,12 @@ test("TDZ initialization still checks the payload representation", () => {
 function overflowPresenceModule(): IrModule {
   const record: IrType = { kind: "record", shapeId: "dictionary" };
   const check: IrExpr = {
-    kind: "recordOvfHas", shapeId: "dictionary",
+    kind: "recordOvfHas",
+    shapeId: "dictionary",
     obj: { kind: "recordLit", fields: [], type: record, loc },
-    key: { kind: "strLit", value: "key", type: STRING, loc }, type: BOOL, loc,
+    key: { kind: "strLit", value: "key", type: STRING, loc },
+    type: BOOL,
+    loc,
   };
   const mod = expressionModule(check, []);
   mod.records = [{ id: "dictionary", fields: [], indexValue: F64 }];
@@ -774,46 +1266,80 @@ test("overflow presence checks validate and serialize", () => {
 test("overflow presence requires a map-bearing shape", () => {
   const mod = overflowPresenceModule();
   delete mod.records![0]!.indexValue;
-  expect(validateModule(mod).some((error) => error.message.includes("requires an index-signature record"))).toBe(true);
+  expect(
+    validateModule(mod).some((error) =>
+      error.message.includes("requires an index-signature record"),
+    ),
+  ).toBe(true);
 });
 
 test("overflow presence rejects an undeclared shape", () => {
   const mod = overflowPresenceModule();
   mod.records = [];
-  expect(validateModule(mod).some((error) => error.message.includes("recordOvfHas on undeclared shape"))).toBe(true);
+  expect(
+    validateModule(mod).some((error) => error.message.includes("recordOvfHas on undeclared shape")),
+  ).toBe(true);
 });
 
-test.each(["receiver", "key", "result"] as const)("overflow presence checks its %s type", (slot) => {
-  const mod = overflowPresenceModule();
-  const statement = mod.functions[0]!.body[0]!;
-  if (statement.kind !== "exprStmt" || statement.expr.kind !== "recordOvfHas") throw new Error("fixture");
-  const check = statement.expr;
-  const wrong: IrExpr = { kind: "numLit", value: 1, type: F64, loc };
-  if (slot === "receiver") check.obj = wrong;
-  else if (slot === "key") check.key = wrong;
-  else check.type = F64;
-  const message = slot === "result" ? "recordOvfHas must be bool" : `recordOvfHas ${slot}`;
-  expect(validateModule(mod).some((error) => error.message.includes(message))).toBe(true);
-});
+test.each(["receiver", "key", "result"] as const)(
+  "overflow presence checks its %s type",
+  (slot) => {
+    const mod = overflowPresenceModule();
+    const statement = mod.functions[0]!.body[0]!;
+    if (statement.kind !== "exprStmt" || statement.expr.kind !== "recordOvfHas")
+      throw new Error("fixture");
+    const check = statement.expr;
+    const wrong: IrExpr = { kind: "numLit", value: 1, type: F64, loc };
+    if (slot === "receiver") check.obj = wrong;
+    else if (slot === "key") check.key = wrong;
+    else check.type = F64;
+    const message = slot === "result" ? "recordOvfHas must be bool" : `recordOvfHas ${slot}`;
+    expect(validateModule(mod).some((error) => error.message.includes(message))).toBe(true);
+  },
+);
 
 test("TDZ locals require a shared box", () => {
   const mod = tdzModule();
   delete mod.functions[0]!.locals[0]!.boxed;
-  expect(validateModule(mod).some((error) => error.message.includes('TDZ local "value" must be boxed'))).toBe(true);
+  expect(
+    validateModule(mod).some((error) => error.message.includes('TDZ local "value" must be boxed')),
+  ).toBe(true);
 });
 
 function discriminatedModule(): IrModule {
   return {
-    irVersion: 13, sourceFile: loc.file, entry: "main",
+    irVersion: 13,
+    sourceFile: loc.file,
+    entry: "main",
     functions: [{ name: "main", params: [], locals: [], returnType: VOID, body: [], loc }],
     records: [
       { id: "empty", fields: [{ name: "kind", type: STRING }] },
-      { id: "value", fields: [{ name: "kind", type: STRING }, { name: "value", type: F64 }] },
+      {
+        id: "value",
+        fields: [
+          { name: "kind", type: STRING },
+          { name: "value", type: F64 },
+        ],
+      },
     ],
-    unions: [{
-      id: "variants", arms: [NULL_T, { kind: "record", shapeId: "empty" }, { kind: "record", shapeId: "value" }, UNDEFINED_T],
-      discriminant: { field: "kind", cases: [{ tag: 1, values: ["empty"] }, { tag: 2, values: ["number", "value"] }] },
-    }],
+    unions: [
+      {
+        id: "variants",
+        arms: [
+          NULL_T,
+          { kind: "record", shapeId: "empty" },
+          { kind: "record", shapeId: "value" },
+          UNDEFINED_T,
+        ],
+        discriminant: {
+          field: "kind",
+          cases: [
+            { tag: 1, values: ["empty"] },
+            { tag: 2, values: ["number", "value"] },
+          ],
+        },
+      },
+    ],
   };
 }
 
@@ -824,16 +1350,76 @@ test("discriminator metadata validates and survives serialization", () => {
 });
 
 test.each([
-  ["missing arm", (m: IrModule) => { m.unions![0]!.discriminant!.cases.pop(); }, "missing discriminant"],
-  ["unit arm", (m: IrModule) => { m.unions![0]!.discriminant!.cases[0]!.tag = 0; }, "invalid discriminant tag"],
-  ["negative tag", (m: IrModule) => { m.unions![0]!.discriminant!.cases[0]!.tag = -1; }, "invalid discriminant tag"],
-  ["fractional tag", (m: IrModule) => { m.unions![0]!.discriminant!.cases[0]!.tag = 1.5; }, "invalid discriminant tag"],
-  ["missing field", (m: IrModule) => { m.unions![0]!.discriminant!.field = "absent"; }, "invalid discriminant tag"],
-  ["duplicate tag", (m: IrModule) => { m.unions![0]!.discriminant!.cases.push({ tag: 1, values: ["other"] }); }, "invalid discriminant tag"],
-  ["empty values", (m: IrModule) => { m.unions![0]!.discriminant!.cases[0]!.values = []; }, "empty discriminant values"],
-  ["wrong primitive", (m: IrModule) => { m.unions![0]!.discriminant!.cases[0]!.values = [false]; }, "invalid or repeated"],
-  ["shared literal", (m: IrModule) => { m.unions![0]!.discriminant!.cases[1]!.values = ["empty"]; }, "invalid or repeated"],
-  ["duplicate literal", (m: IrModule) => { m.unions![0]!.discriminant!.cases[0]!.values = ["empty", "empty"]; }, "invalid or repeated"],
+  [
+    "missing arm",
+    (m: IrModule) => {
+      m.unions![0]!.discriminant!.cases.pop();
+    },
+    "missing discriminant",
+  ],
+  [
+    "unit arm",
+    (m: IrModule) => {
+      m.unions![0]!.discriminant!.cases[0]!.tag = 0;
+    },
+    "invalid discriminant tag",
+  ],
+  [
+    "negative tag",
+    (m: IrModule) => {
+      m.unions![0]!.discriminant!.cases[0]!.tag = -1;
+    },
+    "invalid discriminant tag",
+  ],
+  [
+    "fractional tag",
+    (m: IrModule) => {
+      m.unions![0]!.discriminant!.cases[0]!.tag = 1.5;
+    },
+    "invalid discriminant tag",
+  ],
+  [
+    "missing field",
+    (m: IrModule) => {
+      m.unions![0]!.discriminant!.field = "absent";
+    },
+    "invalid discriminant tag",
+  ],
+  [
+    "duplicate tag",
+    (m: IrModule) => {
+      m.unions![0]!.discriminant!.cases.push({ tag: 1, values: ["other"] });
+    },
+    "invalid discriminant tag",
+  ],
+  [
+    "empty values",
+    (m: IrModule) => {
+      m.unions![0]!.discriminant!.cases[0]!.values = [];
+    },
+    "empty discriminant values",
+  ],
+  [
+    "wrong primitive",
+    (m: IrModule) => {
+      m.unions![0]!.discriminant!.cases[0]!.values = [false];
+    },
+    "invalid or repeated",
+  ],
+  [
+    "shared literal",
+    (m: IrModule) => {
+      m.unions![0]!.discriminant!.cases[1]!.values = ["empty"];
+    },
+    "invalid or repeated",
+  ],
+  [
+    "duplicate literal",
+    (m: IrModule) => {
+      m.unions![0]!.discriminant!.cases[0]!.values = ["empty", "empty"];
+    },
+    "invalid or repeated",
+  ],
 ] as const)("discriminator metadata rejects %s", (_name, mutate, message) => {
   const mod = discriminatedModule();
   mutate(mod);
@@ -849,7 +1435,9 @@ test("numeric discriminators reject non-finite values", () => {
   expect(validateModule(mod)).toEqual([]);
   for (const invalid of [NaN, Infinity, -Infinity]) {
     guard.cases[1]!.values = [invalid];
-    expect(validateModule(mod).some((error) => error.message.includes("invalid or repeated"))).toBe(true);
+    expect(validateModule(mod).some((error) => error.message.includes("invalid or repeated"))).toBe(
+      true,
+    );
   }
 });
 
@@ -860,15 +1448,25 @@ test("mixed literal discriminators resolve field unions declared later", () => {
   mod.unions!.push({ id: "literal", arms: [F64, STRING] });
   expect(validateModule(mod)).toEqual([]);
   mod.unions![0]!.discriminant!.cases[1]!.values.push(false);
-  expect(validateModule(mod).some((error) => error.message.includes("invalid or repeated"))).toBe(true);
+  expect(validateModule(mod).some((error) => error.message.includes("invalid or repeated"))).toBe(
+    true,
+  );
 });
 
-
 test("typed-array brand tests serialize their element kind and reject misplaced brands", () => {
-  const expr: IrExpr = { kind: "dynTest", test: "bytes", bytesElem: "u16", value: { kind: "dynObjLit", type: DYN, loc }, type: BOOL, loc };
+  const expr: IrExpr = {
+    kind: "dynTest",
+    test: "bytes",
+    bytesElem: "u16",
+    value: { kind: "dynObjLit", type: DYN, loc },
+    type: BOOL,
+    loc,
+  };
   const mod = expressionModule(expr, []);
   expect(validateModule(mod)).toEqual([]);
   expect(deserializeModule(serializeModule(mod))).toEqual(mod);
   expr.test = "array";
-  expect(validateModule(mod).map((d) => d.message)).toContain("in main: dynTest bytesElem requires a valid bytes test");
+  expect(validateModule(mod).map((d) => d.message)).toContain(
+    "in main: dynTest bytesElem requires a valid bytes test",
+  );
 });

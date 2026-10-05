@@ -1,5 +1,10 @@
 import { buildUnionNarrow } from "../union-narrow.js";
-import { planUnionRetag, buildUnionRetag, planRecordUnionWrap, buildRecordUnionWrap } from "../union-retag.js";
+import {
+  planUnionRetag,
+  buildUnionRetag,
+  planRecordUnionWrap,
+  buildRecordUnionWrap,
+} from "../union-retag.js";
 import { InternalCompilerError } from "../../../errors.js";
 import * as ts from "../../ts7/adapter.js";
 import type { IrExpr, IrType, SrcLoc } from "../../../ir/ir.js";
@@ -18,8 +23,14 @@ export function unionRetagMappable(lowerer: Lowerer, fromId: string, toId: strin
   if (lowerer.coercions.planning.has(key)) return true;
   lowerer.coercions.planning.add(key);
   try {
-    return planUnionRetag(from, to, (id) => lowerer.shapes.get(id),
-      (src, dst) => lowerer.widthLiftPlan(src, dst)) !== null;
+    return (
+      planUnionRetag(
+        from,
+        to,
+        (id) => lowerer.shapes.get(id),
+        (src, dst) => lowerer.widthLiftPlan(src, dst),
+      ) !== null
+    );
   } finally {
     lowerer.coercions.planning.delete(key);
   }
@@ -37,7 +48,13 @@ export function unionRetagMappable(lowerer: Lowerer, fromId: string, toId: strin
  * TypeError instead of smuggling an unrepresentable arm. Null when the
  * site type isn't a genuine sub-union of the source (the SC2003 fence
  * stays). */
-export function narrowedRetagHelper(lowerer: Lowerer, node: ts.Node, fromId: string, toId: string, loc: SrcLoc): string | null {
+export function narrowedRetagHelper(
+  lowerer: Lowerer,
+  node: ts.Node,
+  fromId: string,
+  toId: string,
+  loc: SrcLoc,
+): string | null {
   const from = lowerer.unions.get(fromId);
   if (!from || !lowerer.unions.get(toId)) return null;
   const siteT = lowerer.mapTypeOf(lowerer.typeOf(node));
@@ -66,11 +83,19 @@ export function narrowedRetagHelper(lowerer: Lowerer, node: ts.Node, fromId: str
  * (divergence 38's stance: Node lets the impossible value ride until it
  * is used; the trap surfaces at the assignment instead). Unit sources
  * only — they are pure, so the nullary helper evaluates nothing. */
-export function strandedUnitTrap(lowerer: Lowerer, expr: IrExpr, expected: IrType, loc: SrcLoc): IrExpr | null {
+export function strandedUnitTrap(
+  lowerer: Lowerer,
+  expr: IrExpr,
+  expected: IrType,
+  loc: SrcLoc,
+): IrExpr | null {
   if (!isUnitType(expr.type)) return null;
   if (
-    expected.kind === "union" || expected.kind === "void" || expected.kind === "dyn" ||
-    expected.kind === "jsval" || isUnitType(expected)
+    expected.kind === "union" ||
+    expected.kind === "void" ||
+    expected.kind === "dyn" ||
+    expected.kind === "jsval" ||
+    isUnitType(expected)
   ) {
     return null;
   }
@@ -121,7 +146,12 @@ export function strandedUnitTrap(lowerer: Lowerer, expr: IrExpr, expected: IrTyp
  * helper evaluates the operand (JS evaluates it too) and throws the
  * stranded-arm TypeError verbatim. Null when the shape doesn't prove
  * the lie. */
-export function strandedCoercionTrap(lowerer: Lowerer, expr: IrExpr, expected: IrType & { kind: "union" }, loc: SrcLoc): IrExpr | null {
+export function strandedCoercionTrap(
+  lowerer: Lowerer,
+  expr: IrExpr,
+  expected: IrType & { kind: "union" },
+  loc: SrcLoc,
+): IrExpr | null {
   const def = lowerer.unions.get(expected.unionId);
   if (!def) return null;
   const src = expr.type;
@@ -137,7 +167,8 @@ export function strandedCoercionTrap(lowerer: Lowerer, expr: IrExpr, expected: I
     // Zero width-lift candidates proves no honest mapping was missed.
     const candidates = def.arms.filter(
       (arm) =>
-        ((src.kind === "record" && arm.kind === "record") || (src.kind === "array" && arm.kind === "array")) &&
+        ((src.kind === "record" && arm.kind === "record") ||
+          (src.kind === "array" && arm.kind === "array")) &&
         lowerer.widthLiftPlan(src, arm) !== null,
     );
     if (candidates.length !== 0) return null;
@@ -186,7 +217,12 @@ export function strandedCoercionTrap(lowerer: Lowerer, expr: IrExpr, expected: I
   return { kind: "call", callee: name, args: isUnitType(src) ? [] : [expr], type: expected, loc };
 }
 
-export function recordUnionWrapHelper(lowerer: Lowerer, source: IrType & { kind: "record" }, toId: string, loc: SrcLoc): string | null {
+export function recordUnionWrapHelper(
+  lowerer: Lowerer,
+  source: IrType & { kind: "record" },
+  toId: string,
+  loc: SrcLoc,
+): string | null {
   const shape = lowerer.shapes.get(source.shapeId);
   const to = lowerer.unions.get(toId);
   if (!shape || !to) return null;
@@ -197,39 +233,80 @@ export function recordUnionWrapHelper(lowerer: Lowerer, source: IrType & { kind:
   if (existing) return existing;
   const name = `%record.wrap.${lowerer.coercions.retags.size}`;
   lowerer.coercions.retags.set(key, name);
-  lowerer.liftedFns.push(buildRecordUnionWrap(name, source, to, plan, loc,
-    (lift, value, dst) => lowerer.applyWidthLift(lift, value, dst, loc)));
+  lowerer.liftedFns.push(
+    buildRecordUnionWrap(name, source, to, plan, loc, (lift, value, dst) =>
+      lowerer.applyWidthLift(lift, value, dst, loc),
+    ),
+  );
   return name;
 }
 
-export function unionRetagHelper(lowerer: Lowerer, fromId: string, toId: string, loc: SrcLoc, trappable?: ReadonlySet<number>): string | null {
+export function unionRetagHelper(
+  lowerer: Lowerer,
+  fromId: string,
+  toId: string,
+  loc: SrcLoc,
+  trappable?: ReadonlySet<number>,
+): string | null {
   const from = lowerer.unions.get(fromId);
   const to = lowerer.unions.get(toId);
   if (!from || !to) return null;
   const request = `${fromId}:${toId}:${trappable === undefined ? "" : [...trappable].sort((a, b) => a - b).join(".")}`;
   const cached = lowerer.coercions.copyRetags.get(request);
-  if (cached && cached.shapes === lowerer.shapes.revision && cached.unions === lowerer.unions.revision) return cached.name;
-  const plan = planUnionRetag(from, to, (id) => lowerer.shapes.get(id),
-    (src, dst) => lowerer.widthLiftPlan(src, dst), trappable);
+  if (
+    cached &&
+    cached.shapes === lowerer.shapes.revision &&
+    cached.unions === lowerer.unions.revision
+  )
+    return cached.name;
+  const plan = planUnionRetag(
+    from,
+    to,
+    (id) => lowerer.shapes.get(id),
+    (src, dst) => lowerer.widthLiftPlan(src, dst),
+    trappable,
+  );
   if (plan === null) return null;
   // The registry pair determines every route; only checker-proven
   // stranded arms vary by site. Publish the name before building widths
   // so recursive records and arrays can call this same helper.
   const stranded: number[] = [];
-  plan.forEach((arm, tag) => { if (arm.kind === "trap") stranded.push(tag); });
+  plan.forEach((arm, tag) => {
+    if (arm.kind === "trap") stranded.push(tag);
+  });
   const key = `${fromId}:${toId}:${stranded.join(".")}`;
   const existing = lowerer.coercions.retags.get(key);
   const name = existing ?? `%union.retag.${lowerer.coercions.retags.size}`;
   if (!existing) {
     lowerer.coercions.retags.set(key, name);
-    lowerer.liftedFns.push(buildUnionRetag(name, from, to, plan, loc,
-      (lift, value, dst) => lowerer.applyWidthLift(lift, value, dst, loc), (type) => lowerer.fmt(type)));
+    lowerer.liftedFns.push(
+      buildUnionRetag(
+        name,
+        from,
+        to,
+        plan,
+        loc,
+        (lift, value, dst) => lowerer.applyWidthLift(lift, value, dst, loc),
+        (type) => lowerer.fmt(type),
+      ),
+    );
   }
   // Width routes still revalidate on every request. Only a complete plan
   // of exact payload copies and site-proven traps can bypass planning.
-  if (plan.every((arm) => arm.kind === "trap" || (arm.kind === "direct"
-    ? arm.route.lift.how === "copy" : arm.routes.every((route) => route.lift.how === "copy")))) {
-    lowerer.coercions.copyRetags.set(request, { name, shapes: lowerer.shapes.revision, unions: lowerer.unions.revision });
+  if (
+    plan.every(
+      (arm) =>
+        arm.kind === "trap" ||
+        (arm.kind === "direct"
+          ? arm.route.lift.how === "copy"
+          : arm.routes.every((route) => route.lift.how === "copy")),
+    )
+  ) {
+    lowerer.coercions.copyRetags.set(request, {
+      name,
+      shapes: lowerer.shapes.revision,
+      unions: lowerer.unions.revision,
+    });
   }
   return name;
 }
@@ -241,7 +318,12 @@ export function unionRetagHelper(lowerer: Lowerer, fromId: string, toId: string,
  * unchecked unionNarrow would misread the payload where JS lets the
  * impossible value flow on). Null when the target isn't a non-unit arm
  * of the union — those uses keep their erasure/fences. */
-export function narrowedArmHelper(lowerer: Lowerer, fromId: string, target: IrType, loc: SrcLoc): string | null {
+export function narrowedArmHelper(
+  lowerer: Lowerer,
+  fromId: string,
+  target: IrType,
+  loc: SrcLoc,
+): string | null {
   const from = lowerer.unions.get(fromId);
   if (!from || isUnitType(target)) return null;
   const tag = lowerer.armTag(fromId, target);
@@ -271,7 +353,12 @@ export function narrowedArmHelper(lowerer: Lowerer, fromId: string, target: IrTy
  * the checked-extraction TRAP: JS itself TypeErrors the first member
  * use of such an undefined, so the catchable TypeError at the read is
  * the same failure, named earlier (SEMANTICS.md). */
-export function deferredReadHelper(lowerer: Lowerer, fromId: string, target: IrType, loc: SrcLoc): string | null {
+export function deferredReadHelper(
+  lowerer: Lowerer,
+  fromId: string,
+  target: IrType,
+  loc: SrcLoc,
+): string | null {
   if (target.kind !== "bool" && target.kind !== "f64") {
     return lowerer.narrowedArmHelper(fromId, target, loc);
   }
@@ -284,9 +371,10 @@ export function deferredReadHelper(lowerer: Lowerer, fromId: string, target: IrT
   if (existing) return existing;
   const name = `%deferred.read.${lowerer.coercions.narrows.size}`;
   lowerer.coercions.narrows.set(key, name);
-  const dflt: IrExpr = target.kind === "bool"
-    ? { kind: "boolLit", value: false, type: BOOL, loc }
-    : { kind: "numLit", value: NaN, type: F64, loc };
+  const dflt: IrExpr =
+    target.kind === "bool"
+      ? { kind: "boolLit", value: false, type: BOOL, loc }
+      : { kind: "numLit", value: NaN, type: F64, loc };
   const fn = buildUnionNarrow(name, from, target, loc, (type) => lowerer.fmt(type), dflt);
   if (!fn) throw new InternalCompilerError("lowerer bug: invalid deferred union extraction");
   lowerer.liftedFns.push(fn);

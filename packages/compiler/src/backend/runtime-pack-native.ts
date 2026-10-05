@@ -2,13 +2,27 @@
  * selected artifact is hashed and copied from the same read into private
  * storage. This host has no persistent cache or mutable installed link inputs. */
 import { createHash } from "node:crypto";
-import { closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, writeSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  writeSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import type { NativeLinkFeatures } from "./native-link-info.js";
 import type { NativeTargetSpec } from "./targets.js";
 import {
-  RuntimePackError, parseRuntimePackManifest, selectRuntimePackArtifacts, validateRuntimePackIdentity,
-  type RuntimePackArtifact, type RuntimePackArtifacts, type RuntimePackManifest, type RuntimePackMode,
+  RuntimePackError,
+  parseRuntimePackManifest,
+  selectRuntimePackArtifacts,
+  validateRuntimePackIdentity,
+  type RuntimePackArtifact,
+  type RuntimePackArtifacts,
+  type RuntimePackManifest,
+  type RuntimePackMode,
 } from "./runtime-pack-core.js";
 
 export interface NativeRuntimePack {
@@ -27,11 +41,18 @@ export interface NativeRuntimeSelection {
 }
 
 export function selectNativeRuntimePack(
-  root: string, target: NativeTargetSpec, compilerVersion: string,
-  features: NativeLinkFeatures, flavor: "release" | "dev", mode: RuntimePackMode = "executable",
+  root: string,
+  target: NativeTargetSpec,
+  compilerVersion: string,
+  features: NativeLinkFeatures,
+  flavor: "release" | "dev",
+  mode: RuntimePackMode = "executable",
 ): NativeRuntimeSelection {
   if (!existsSync(join(root, "package.json"))) {
-    throw new RuntimePackError(`runtime pack for ${target.name} is not installed; install ${target.runtimePackPackage}@${compilerVersion} in your project or set SCRIPTC_RUNTIME_PACK to its directory`, "missing");
+    throw new RuntimePackError(
+      `runtime pack for ${target.name} is not installed; install ${target.runtimePackPackage}@${compilerVersion} in your project or set SCRIPTC_RUNTIME_PACK to its directory`,
+      "missing",
+    );
   }
   const packageText = readFileSync(join(root, "package.json"), "utf8");
   const manifestText = readFileSync(join(root, "runtime-pack.json"), "utf8");
@@ -46,21 +67,37 @@ function stageArtifact(root: string, stage: string, artifact: RuntimePackArtifac
   const source = join(root, artifact.path);
   const destination = join(stage, artifact.path);
   let bytes: Buffer;
-  try { bytes = readFileSync(source); }
-  catch { throw new RuntimePackError(`runtime pack artifact is missing: ${artifact.path}`, "invalid"); }
-  if (bytes.length !== artifact.size || createHash("sha256").update(bytes).digest("hex") !== artifact.sha256) {
+  try {
+    bytes = readFileSync(source);
+  } catch {
+    throw new RuntimePackError(`runtime pack artifact is missing: ${artifact.path}`, "invalid");
+  }
+  if (
+    bytes.length !== artifact.size ||
+    createHash("sha256").update(bytes).digest("hex") !== artifact.sha256
+  ) {
     throw new RuntimePackError(`runtime pack artifact hash mismatch: ${artifact.path}`, "invalid");
   }
   mkdirSync(dirname(destination), { recursive: true });
-  const fd = openSync(destination, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o400);
+  const fd = openSync(
+    destination,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL,
+    0o400,
+  );
   try {
     let offset = 0;
     while (offset < bytes.length) {
       const written = writeSync(fd, bytes, offset, bytes.length - offset);
-      if (written === 0) throw new RuntimePackError(`could not stage runtime pack artifact: ${artifact.path}`, "invalid");
+      if (written === 0)
+        throw new RuntimePackError(
+          `could not stage runtime pack artifact: ${artifact.path}`,
+          "invalid",
+        );
       offset += written;
     }
-  } finally { closeSync(fd); }
+  } finally {
+    closeSync(fd);
+  }
   return destination;
 }
 
@@ -75,20 +112,34 @@ export function stageNativeRuntimePack(
   flavor: "release" | "dev",
   mode: RuntimePackMode = "executable",
 ): NativeRuntimePack {
-  return stageNativeRuntimeSelection(selectNativeRuntimePack(root, target, compilerVersion, features, flavor, mode), stageRoot);
+  return stageNativeRuntimeSelection(
+    selectNativeRuntimePack(root, target, compilerVersion, features, flavor, mode),
+    stageRoot,
+  );
 }
 
-export function stageNativeRuntimeSelection(selection: NativeRuntimeSelection, stageRoot: string): NativeRuntimePack {
+export function stageNativeRuntimeSelection(
+  selection: NativeRuntimeSelection,
+  stageRoot: string,
+): NativeRuntimePack {
   const { root, manifest, selected, packageText, manifestText } = selection;
   const packagePath = join(root, "package.json");
   const manifestPath = join(root, "runtime-pack.json");
-  const runtimeObjects = selected.runtime.map((artifact) => stageArtifact(root, stageRoot, artifact));
+  const runtimeObjects = selected.runtime.map((artifact) =>
+    stageArtifact(root, stageRoot, artifact),
+  );
   const archives = selected.archives.map((artifact) => stageArtifact(root, stageRoot, artifact));
   for (const license of manifest.licenses) {
-    try { readFileSync(join(root, license.path)); }
-    catch { throw new RuntimePackError("runtime pack license payload is incomplete", "invalid"); }
+    try {
+      readFileSync(join(root, license.path));
+    } catch {
+      throw new RuntimePackError("runtime pack license payload is incomplete", "invalid");
+    }
   }
-  if (readFileSync(packagePath, "utf8") !== packageText || readFileSync(manifestPath, "utf8") !== manifestText) {
+  if (
+    readFileSync(packagePath, "utf8") !== packageText ||
+    readFileSync(manifestPath, "utf8") !== manifestText
+  ) {
     throw new RuntimePackError("runtime pack changed while staging verified artifacts", "invalid");
   }
   return { runtimeObjects, archives, systemLibraries: selected.systemLibraries };

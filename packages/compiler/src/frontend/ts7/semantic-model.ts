@@ -1,9 +1,17 @@
-import type { SemanticSignatureData as SignatureResponse, SemanticSymbolData as SymbolResponse, SemanticTypeData as TypeResponse } from "./semantic-schema.generated.js";
+import type {
+  SemanticSignatureData as SignatureResponse,
+  SemanticSymbolData as SymbolResponse,
+  SemanticTypeData as TypeResponse,
+} from "./semantic-schema.generated.js";
 import { AstNode } from "./ast-node.js";
 import { parseAstNodeHandle } from "./ast-wire.js";
 import type { SemanticChecker, SemanticJsDocTag } from "./semantic-checker.js";
 import { parseSemanticJson } from "./semantic-json.js";
-import { SemanticObjectFlags as ObjectFlags, SemanticSignatureFlags as SignatureFlags, SemanticTypeFlags as TypeFlags } from "./semantic-schema.generated.js";
+import {
+  SemanticObjectFlags as ObjectFlags,
+  SemanticSignatureFlags as SignatureFlags,
+  SemanticTypeFlags as TypeFlags,
+} from "./semantic-schema.generated.js";
 
 /** JSON and binary operations stay at the transport boundary. The concrete
  * semantic objects below need neither the SDK nor a JavaScript engine. */
@@ -45,7 +53,9 @@ export interface SemanticQuery {
 
 export class SemanticProgram {
   constructor(private readonly sourceFile: (path: string) => AstNode | undefined) {}
-  getSourceFile(path: string): AstNode | undefined { return this.sourceFile(path); }
+  getSourceFile(path: string): AstNode | undefined {
+    return this.sourceFile(path);
+  }
 }
 
 /** Symbols are snapshot-wide; TypeScript type and signature handles are
@@ -55,7 +65,10 @@ export class SemanticSnapshot {
   private readonly symbols = new Map<number, SemanticSymbol>();
   private disposed = false;
 
-  constructor(readonly id: number, readonly transport: SemanticTransport) {}
+  constructor(
+    readonly id: number,
+    readonly transport: SemanticTransport,
+  ) {}
 
   addProject(id: string, sourceFile: (path: string) => AstNode | undefined): SemanticProject {
     this.ensureActive();
@@ -107,7 +120,11 @@ export class SemanticProject {
   private readonly cleanups: (() => void)[] = [];
   private disposed = false;
 
-  constructor(readonly id: string, readonly snapshot: SemanticSnapshot, readonly program: SemanticProgram) {}
+  constructor(
+    readonly id: string,
+    readonly snapshot: SemanticSnapshot,
+    readonly program: SemanticProgram,
+  ) {}
 
   ensureActive(): void {
     this.snapshot.ensureActive();
@@ -160,7 +177,11 @@ export class SemanticProject {
     return this.snapshot.symbol(data);
   }
 
-  fetchType(source: number, method: string, handle: number | undefined | false): SemanticType | undefined {
+  fetchType(
+    source: number,
+    method: string,
+    handle: number | undefined | false,
+  ): SemanticType | undefined {
     this.ensureActive();
     if (handle !== false) {
       if (handle === undefined || handle === 0) return undefined;
@@ -172,7 +193,11 @@ export class SemanticProject {
     return this.type(data);
   }
 
-  fetchSymbol(source: number, method: string, handle: number | undefined): SemanticSymbol | undefined {
+  fetchSymbol(
+    source: number,
+    method: string,
+    handle: number | undefined,
+  ): SemanticSymbol | undefined {
     this.ensureActive();
     if (handle === undefined || handle === 0) return undefined;
     const cached = this.snapshot.cachedSymbol(handle);
@@ -182,7 +207,11 @@ export class SemanticProject {
     return this.symbol(data);
   }
 
-  fetchSignature(source: number, method: string, handle: number | undefined): SemanticSignature | undefined {
+  fetchSignature(
+    source: number,
+    method: string,
+    handle: number | undefined,
+  ): SemanticSignature | undefined {
     this.ensureActive();
     if (handle === undefined || handle === 0) return undefined;
     const cached = this.signatures.get(handle);
@@ -242,7 +271,10 @@ export class SemanticNodeHandle {
   readonly kind: number;
   readonly path: string;
 
-  constructor(readonly handle: string, readonly canonicalProject: SemanticProject) {
+  constructor(
+    readonly handle: string,
+    readonly canonicalProject: SemanticProject,
+  ) {
     const parsed = parseAstNodeHandle(handle);
     this.index = parsed.index;
     this.kind = parsed.kind;
@@ -269,14 +301,21 @@ export class SemanticSymbol {
   private membersCache: Map<string, SemanticSymbol> | undefined;
   private exportsCache: Map<string, SemanticSymbol> | undefined;
 
-  constructor(data: SymbolResponse, readonly canonicalProject: SemanticProject) {
+  constructor(
+    data: SymbolResponse,
+    readonly canonicalProject: SemanticProject,
+  ) {
     this.id = data.id;
     this.escapedName = data.name;
     this.name = data.name.startsWith("___") ? data.name.slice(1) : data.name;
     this.flags = data.flags;
     this.checkFlags = data.checkFlags;
-    this.declarations = (data.declarations ?? []).map((handle) => new SemanticNodeHandle(handle, canonicalProject));
-    this.valueDeclaration = data.valueDeclaration ? new SemanticNodeHandle(data.valueDeclaration, canonicalProject) : undefined;
+    this.declarations = (data.declarations ?? []).map(
+      (handle) => new SemanticNodeHandle(handle, canonicalProject),
+    );
+    this.valueDeclaration = data.valueDeclaration
+      ? new SemanticNodeHandle(data.valueDeclaration, canonicalProject)
+      : undefined;
     this.parent = data.parent;
     this.exportSymbol = data.exportSymbol;
   }
@@ -287,13 +326,18 @@ export class SemanticSymbol {
   getExportSymbol(): SemanticSymbol {
     this.canonicalProject.ensureActive();
     if (this.exportSymbol === undefined || this.exportSymbol === 0) return this;
-    const result = this.canonicalProject.fetchSymbol(this.id, "getExportSymbolOfSymbol", this.exportSymbol);
+    const result = this.canonicalProject.fetchSymbol(
+      this.id,
+      "getExportSymbolOfSymbol",
+      this.exportSymbol,
+    );
     if (result === undefined) throw new Error(`Missing export symbol for ${this.id}`);
     return result;
   }
   private table(method: string): Map<string, SemanticSymbol> {
     const table = new Map<string, SemanticSymbol>();
-    for (const symbol of this.canonicalProject.fetchSymbols(this.id, method)) table.set(symbol.escapedName, symbol);
+    for (const symbol of this.canonicalProject.fetchSymbols(this.id, method))
+      table.set(symbol.escapedName, symbol);
     return table;
   }
   getMembers(): Map<string, SemanticSymbol> {
@@ -312,19 +356,37 @@ export class SemanticSymbol {
     this.membersCache = undefined;
     this.exportsCache = undefined;
   }
-  getJsDocTags(checker: SemanticChecker): SemanticJsDocTag[] { return checker.getJsDocTagsOfSymbol(this); }
-  getDocumentationComment(checker: SemanticChecker): string { return checker.getDocumentationCommentOfSymbol(this); }
+  getJsDocTags(checker: SemanticChecker): SemanticJsDocTag[] {
+    return checker.getJsDocTagsOfSymbol(this);
+  }
+  getDocumentationComment(checker: SemanticChecker): string {
+    return checker.getDocumentationCommentOfSymbol(this);
+  }
 }
 
 /** Type refinements keep the same native object, including its project and
  * lazy handle caches. Narrowed fields are read from their original storage. */
-export interface SemanticObjectType extends SemanticType { readonly objectFlags: number; }
-export interface SemanticIntrinsicType extends SemanticType { readonly intrinsicName: string; }
-export interface SemanticLiteralType extends SemanticType { readonly value: string | number | boolean | bigint; }
-export interface SemanticStringLiteralType extends SemanticLiteralType { readonly value: string; }
-export interface SemanticNumberLiteralType extends SemanticLiteralType { readonly value: number; }
-export interface SemanticBigIntLiteralType extends SemanticLiteralType { readonly value: bigint; }
-export interface SemanticBooleanLiteralType extends SemanticLiteralType { readonly value: boolean; }
+export interface SemanticObjectType extends SemanticType {
+  readonly objectFlags: number;
+}
+export interface SemanticIntrinsicType extends SemanticType {
+  readonly intrinsicName: string;
+}
+export interface SemanticLiteralType extends SemanticType {
+  readonly value: string | number | boolean | bigint;
+}
+export interface SemanticStringLiteralType extends SemanticLiteralType {
+  readonly value: string;
+}
+export interface SemanticNumberLiteralType extends SemanticLiteralType {
+  readonly value: number;
+}
+export interface SemanticBigIntLiteralType extends SemanticLiteralType {
+  readonly value: bigint;
+}
+export interface SemanticBooleanLiteralType extends SemanticLiteralType {
+  readonly value: boolean;
+}
 export interface SemanticTupleType extends SemanticObjectType {
   readonly elementFlags: number[];
   readonly fixedLength: number;
@@ -347,13 +409,17 @@ export class SemanticType {
   private falseType: number | false = false;
   private constituents: SemanticType[] | undefined;
 
-  constructor(private readonly data: TypeResponse, readonly project: SemanticProject) {
+  constructor(
+    private readonly data: TypeResponse,
+    readonly project: SemanticProject,
+  ) {
     this.id = data.id;
     this.flags = data.flags;
     this.objectFlags = data.objectFlags;
     const value = data.value;
     if ((data.flags & TypeFlags.BigIntLiteral) !== 0 && value != null) {
-      if (typeof value !== "string") throw new Error("TypeScript bigint literal is not a decimal string");
+      if (typeof value !== "string")
+        throw new Error("TypeScript bigint literal is not a decimal string");
       this.value = BigInt(value);
     } else {
       this.value = value ?? undefined;
@@ -366,28 +432,78 @@ export class SemanticType {
     this.texts = data.texts;
   }
 
-  getSymbol(): SemanticSymbol | undefined { return this.project.fetchSymbol(this.id, "getSymbolOfType", this.data.symbol); }
-  getAliasSymbol(): SemanticSymbol | undefined { return this.project.fetchSymbol(this.id, "getAliasSymbolOfType", this.data.aliasSymbol); }
-  getTarget(): SemanticType | undefined { return this.project.fetchType(this.id, "getTargetOfType", this.data.target); }
-  getFreshType(): SemanticType | undefined { return this.project.fetchType(this.id, "getFreshTypeOfType", this.data.freshType); }
-  getRegularType(): SemanticType | undefined { return this.project.fetchType(this.id, "getRegularTypeOfType", this.data.regularType); }
-  getObjectType(): SemanticType | undefined { return this.project.fetchType(this.id, "getObjectTypeOfType", this.data.objectType); }
-  getIndexType(): SemanticType | undefined { return this.project.fetchType(this.id, "getIndexTypeOfType", this.data.indexType); }
-  getCheckType(): SemanticType | undefined { return this.project.fetchType(this.id, "getCheckTypeOfType", this.data.checkType); }
-  getExtendsType(): SemanticType | undefined { return this.project.fetchType(this.id, "getExtendsTypeOfType", this.data.extendsType); }
-  getBaseType(): SemanticType | undefined { return this.project.fetchType(this.id, "getBaseTypeOfType", this.data.baseType); }
-  getConstraint(): SemanticType | undefined { return this.project.fetchType(this.id, "getConstraintOfType", this.data.substConstraint); }
-  getTypeParameters(): SemanticType[] { return this.project.fetchTypes(this.id, "getTypeParametersOfType", this.data.typeParameters ?? []); }
-  getOuterTypeParameters(): SemanticType[] { return this.project.fetchTypes(this.id, "getOuterTypeParametersOfType", this.data.outerTypeParameters ?? []); }
-  getLocalTypeParameters(): SemanticType[] { return this.project.fetchTypes(this.id, "getLocalTypeParametersOfType", this.data.localTypeParameters ?? []); }
-  getAliasTypeArguments(): SemanticType[] { return this.project.fetchTypes(this.id, "getAliasTypeArgumentsOfType", this.data.aliasTypeArguments ?? []); }
+  getSymbol(): SemanticSymbol | undefined {
+    return this.project.fetchSymbol(this.id, "getSymbolOfType", this.data.symbol);
+  }
+  getAliasSymbol(): SemanticSymbol | undefined {
+    return this.project.fetchSymbol(this.id, "getAliasSymbolOfType", this.data.aliasSymbol);
+  }
+  getTarget(): SemanticType | undefined {
+    return this.project.fetchType(this.id, "getTargetOfType", this.data.target);
+  }
+  getFreshType(): SemanticType | undefined {
+    return this.project.fetchType(this.id, "getFreshTypeOfType", this.data.freshType);
+  }
+  getRegularType(): SemanticType | undefined {
+    return this.project.fetchType(this.id, "getRegularTypeOfType", this.data.regularType);
+  }
+  getObjectType(): SemanticType | undefined {
+    return this.project.fetchType(this.id, "getObjectTypeOfType", this.data.objectType);
+  }
+  getIndexType(): SemanticType | undefined {
+    return this.project.fetchType(this.id, "getIndexTypeOfType", this.data.indexType);
+  }
+  getCheckType(): SemanticType | undefined {
+    return this.project.fetchType(this.id, "getCheckTypeOfType", this.data.checkType);
+  }
+  getExtendsType(): SemanticType | undefined {
+    return this.project.fetchType(this.id, "getExtendsTypeOfType", this.data.extendsType);
+  }
+  getBaseType(): SemanticType | undefined {
+    return this.project.fetchType(this.id, "getBaseTypeOfType", this.data.baseType);
+  }
+  getConstraint(): SemanticType | undefined {
+    return this.project.fetchType(this.id, "getConstraintOfType", this.data.substConstraint);
+  }
+  getTypeParameters(): SemanticType[] {
+    return this.project.fetchTypes(
+      this.id,
+      "getTypeParametersOfType",
+      this.data.typeParameters ?? [],
+    );
+  }
+  getOuterTypeParameters(): SemanticType[] {
+    return this.project.fetchTypes(
+      this.id,
+      "getOuterTypeParametersOfType",
+      this.data.outerTypeParameters ?? [],
+    );
+  }
+  getLocalTypeParameters(): SemanticType[] {
+    return this.project.fetchTypes(
+      this.id,
+      "getLocalTypeParametersOfType",
+      this.data.localTypeParameters ?? [],
+    );
+  }
+  getAliasTypeArguments(): SemanticType[] {
+    return this.project.fetchTypes(
+      this.id,
+      "getAliasTypeArgumentsOfType",
+      this.data.aliasTypeArguments ?? [],
+    );
+  }
   getTypes(): SemanticType[] | undefined {
     this.project.ensureActive();
-    if ((this.flags & (TypeFlags.UnionOrIntersection | TypeFlags.TemplateLiteral)) === 0) return undefined;
-    if (this.constituents === undefined) this.constituents = this.project.fetchTypes(this.id, "getTypesOfType");
+    if ((this.flags & (TypeFlags.UnionOrIntersection | TypeFlags.TemplateLiteral)) === 0)
+      return undefined;
+    if (this.constituents === undefined)
+      this.constituents = this.project.fetchTypes(this.id, "getTypesOfType");
     return this.constituents;
   }
-  dispose(): void { this.constituents = undefined; }
+  dispose(): void {
+    this.constituents = undefined;
+  }
   getBaseTypes(): SemanticType[] | undefined {
     this.project.ensureActive();
     if (!this.isClassOrInterface()) return undefined;
@@ -406,26 +522,66 @@ export class SemanticType {
     this.falseType = result.id;
     return result;
   }
-  isClassOrInterface(): boolean { return this.isObjectType() && ((this.objectFlags ?? 0) & ObjectFlags.ClassOrInterface) !== 0; }
-  isUnionType(): boolean { return (this.flags & TypeFlags.Union) !== 0; }
-  isIntersectionType(): boolean { return (this.flags & TypeFlags.Intersection) !== 0; }
-  isObjectType(): this is SemanticObjectType { return (this.flags & TypeFlags.Object) !== 0; }
-  isIntrinsicType(): this is SemanticIntrinsicType { return (this.flags & TypeFlags.Intrinsic) !== 0; }
-  isErrorType(): boolean { return this.isIntrinsicType() && this.intrinsicName === "error"; }
-  isLiteralType(): this is SemanticLiteralType { return (this.flags & TypeFlags.Literal) !== 0; }
-  isStringLiteralType(): this is SemanticStringLiteralType { return (this.flags & TypeFlags.StringLiteral) !== 0; }
-  isNumberLiteralType(): this is SemanticNumberLiteralType { return (this.flags & TypeFlags.NumberLiteral) !== 0; }
-  isBigIntLiteralType(): this is SemanticBigIntLiteralType { return (this.flags & TypeFlags.BigIntLiteral) !== 0; }
-  isBooleanLiteralType(): this is SemanticBooleanLiteralType { return (this.flags & TypeFlags.BooleanLiteral) !== 0; }
-  isTypeReference(): boolean { return this.isObjectType() && ((this.objectFlags ?? 0) & ObjectFlags.Reference) !== 0; }
-  isTupleType(): boolean { return this.isObjectType() && ((this.objectFlags ?? 0) & ObjectFlags.Tuple) !== 0; }
-  isIndexType(): boolean { return (this.flags & TypeFlags.Index) !== 0; }
-  isIndexedAccessType(): boolean { return (this.flags & TypeFlags.IndexedAccess) !== 0; }
-  isConditionalType(): boolean { return (this.flags & TypeFlags.Conditional) !== 0; }
-  isSubstitutionType(): boolean { return (this.flags & TypeFlags.Substitution) !== 0; }
-  isTemplateLiteralType(): boolean { return (this.flags & TypeFlags.TemplateLiteral) !== 0; }
-  isStringMappingType(): boolean { return (this.flags & TypeFlags.StringMapping) !== 0; }
-  isTypeParameter(): boolean { return (this.flags & TypeFlags.TypeParameter) !== 0; }
+  isClassOrInterface(): boolean {
+    return this.isObjectType() && ((this.objectFlags ?? 0) & ObjectFlags.ClassOrInterface) !== 0;
+  }
+  isUnionType(): boolean {
+    return (this.flags & TypeFlags.Union) !== 0;
+  }
+  isIntersectionType(): boolean {
+    return (this.flags & TypeFlags.Intersection) !== 0;
+  }
+  isObjectType(): this is SemanticObjectType {
+    return (this.flags & TypeFlags.Object) !== 0;
+  }
+  isIntrinsicType(): this is SemanticIntrinsicType {
+    return (this.flags & TypeFlags.Intrinsic) !== 0;
+  }
+  isErrorType(): boolean {
+    return this.isIntrinsicType() && this.intrinsicName === "error";
+  }
+  isLiteralType(): this is SemanticLiteralType {
+    return (this.flags & TypeFlags.Literal) !== 0;
+  }
+  isStringLiteralType(): this is SemanticStringLiteralType {
+    return (this.flags & TypeFlags.StringLiteral) !== 0;
+  }
+  isNumberLiteralType(): this is SemanticNumberLiteralType {
+    return (this.flags & TypeFlags.NumberLiteral) !== 0;
+  }
+  isBigIntLiteralType(): this is SemanticBigIntLiteralType {
+    return (this.flags & TypeFlags.BigIntLiteral) !== 0;
+  }
+  isBooleanLiteralType(): this is SemanticBooleanLiteralType {
+    return (this.flags & TypeFlags.BooleanLiteral) !== 0;
+  }
+  isTypeReference(): boolean {
+    return this.isObjectType() && ((this.objectFlags ?? 0) & ObjectFlags.Reference) !== 0;
+  }
+  isTupleType(): boolean {
+    return this.isObjectType() && ((this.objectFlags ?? 0) & ObjectFlags.Tuple) !== 0;
+  }
+  isIndexType(): boolean {
+    return (this.flags & TypeFlags.Index) !== 0;
+  }
+  isIndexedAccessType(): boolean {
+    return (this.flags & TypeFlags.IndexedAccess) !== 0;
+  }
+  isConditionalType(): boolean {
+    return (this.flags & TypeFlags.Conditional) !== 0;
+  }
+  isSubstitutionType(): boolean {
+    return (this.flags & TypeFlags.Substitution) !== 0;
+  }
+  isTemplateLiteralType(): boolean {
+    return (this.flags & TypeFlags.TemplateLiteral) !== 0;
+  }
+  isStringMappingType(): boolean {
+    return (this.flags & TypeFlags.StringMapping) !== 0;
+  }
+  isTypeParameter(): boolean {
+    return (this.flags & TypeFlags.TypeParameter) !== 0;
+  }
 }
 
 export class SemanticSignature {
@@ -433,17 +589,48 @@ export class SemanticSignature {
   readonly flags: number;
   readonly declaration: SemanticNodeHandle | undefined;
 
-  constructor(private readonly data: SignatureResponse, readonly project: SemanticProject) {
+  constructor(
+    private readonly data: SignatureResponse,
+    readonly project: SemanticProject,
+  ) {
     this.id = data.id;
     this.flags = data.flags;
-    this.declaration = data.declaration ? new SemanticNodeHandle(data.declaration, project) : undefined;
+    this.declaration = data.declaration
+      ? new SemanticNodeHandle(data.declaration, project)
+      : undefined;
   }
 
-  getTypeParameters(): SemanticType[] { return this.project.fetchTypes(this.id, "getTypeParametersOfSignature", this.data.typeParameters ?? []); }
-  getParameters(): SemanticSymbol[] { return this.project.fetchSymbols(this.id, "getParametersOfSignature", this.data.parameters ?? []); }
-  getThisParameter(): SemanticSymbol | undefined { return this.project.fetchSymbol(this.id, "getThisParameterOfSignature", this.data.thisParameter); }
-  getTarget(): SemanticSignature | undefined { return this.project.fetchSignature(this.id, "getTargetOfSignature", this.data.target); }
-  get hasRestParameter(): boolean { return (this.flags & SignatureFlags.HasRestParameter) !== 0; }
-  get isConstruct(): boolean { return (this.flags & SignatureFlags.Construct) !== 0; }
-  get isAbstract(): boolean { return (this.flags & SignatureFlags.Abstract) !== 0; }
+  getTypeParameters(): SemanticType[] {
+    return this.project.fetchTypes(
+      this.id,
+      "getTypeParametersOfSignature",
+      this.data.typeParameters ?? [],
+    );
+  }
+  getParameters(): SemanticSymbol[] {
+    return this.project.fetchSymbols(
+      this.id,
+      "getParametersOfSignature",
+      this.data.parameters ?? [],
+    );
+  }
+  getThisParameter(): SemanticSymbol | undefined {
+    return this.project.fetchSymbol(
+      this.id,
+      "getThisParameterOfSignature",
+      this.data.thisParameter,
+    );
+  }
+  getTarget(): SemanticSignature | undefined {
+    return this.project.fetchSignature(this.id, "getTargetOfSignature", this.data.target);
+  }
+  get hasRestParameter(): boolean {
+    return (this.flags & SignatureFlags.HasRestParameter) !== 0;
+  }
+  get isConstruct(): boolean {
+    return (this.flags & SignatureFlags.Construct) !== 0;
+  }
+  get isAbstract(): boolean {
+    return (this.flags & SignatureFlags.Abstract) !== 0;
+  }
 }

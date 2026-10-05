@@ -19,27 +19,59 @@ function isObjectFactoryNew(lowerer: Lowerer, expr: ts.NewExpression): boolean {
     lowerer.collecting = wasCollecting;
   }
   if (!symbol) return false;
-  const owner = lowerer.checker.declarationsOf(symbol).find((node) =>
-    ts.isFunctionDeclaration(node) && node.body !== undefined ||
-    ts.isVariableDeclaration(node) && node.initializer && ts.isFunctionExpression(node.initializer),
-  );
-  const declaration = owner && ts.isVariableDeclaration(owner) && owner.initializer && ts.isFunctionExpression(owner.initializer)
-    ? owner.initializer : owner && ts.isFunctionDeclaration(owner) ? owner : null;
-  if (!owner || !declaration?.body || !bindingNeverReassigned(lowerer, symbol, owner) || !isJsSourceFile(declaration.getSourceFile()) || declaration.asteriskToken ||
-      declaration.modifiers?.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword)) return false;
-  const objectReturn = (expression: ts.Expression): boolean => ts.isObjectLiteralExpression(expression) ||
-    ts.isArrayLiteralExpression(expression) || ts.isArrowFunction(expression) || ts.isFunctionExpression(expression) || ts.isNewExpression(expression);
+  const owner = lowerer.checker
+    .declarationsOf(symbol)
+    .find(
+      (node) =>
+        (ts.isFunctionDeclaration(node) && node.body !== undefined) ||
+        (ts.isVariableDeclaration(node) &&
+          node.initializer &&
+          ts.isFunctionExpression(node.initializer)),
+    );
+  const declaration =
+    owner &&
+    ts.isVariableDeclaration(owner) &&
+    owner.initializer &&
+    ts.isFunctionExpression(owner.initializer)
+      ? owner.initializer
+      : owner && ts.isFunctionDeclaration(owner)
+        ? owner
+        : null;
+  if (
+    !owner ||
+    !declaration?.body ||
+    !bindingNeverReassigned(lowerer, symbol, owner) ||
+    !isJsSourceFile(declaration.getSourceFile()) ||
+    declaration.asteriskToken ||
+    declaration.modifiers?.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword)
+  )
+    return false;
+  const objectReturn = (expression: ts.Expression): boolean =>
+    ts.isObjectLiteralExpression(expression) ||
+    ts.isArrayLiteralExpression(expression) ||
+    ts.isArrowFunction(expression) ||
+    ts.isFunctionExpression(expression) ||
+    ts.isNewExpression(expression);
   const last = declaration.body.statements.at(-1);
-  if (!last || !ts.isReturnStatement(last) || !last.expression || !objectReturn(last.expression)) return false;
+  if (!last || !ts.isReturnStatement(last) || !last.expression || !objectReturn(last.expression))
+    return false;
   let safe = true;
   const visit = (node: ts.Node, nestedArrow = false): void => {
-    if (ts.isClassDeclaration(node) || ts.isClassExpression(node)) { safe = false; return; }
+    if (ts.isClassDeclaration(node) || ts.isClassExpression(node)) {
+      safe = false;
+      return;
+    }
     if (ts.isFunctionLike(node)) {
       if (!ts.isArrowFunction(node)) return;
       nestedArrow = true;
     }
     if (node.kind === ts.SyntaxKind.ThisKeyword || ts.isMetaProperty(node)) safe = false;
-    if (!nestedArrow && ts.isReturnStatement(node) && (!node.expression || !objectReturn(node.expression))) safe = false;
+    if (
+      !nestedArrow &&
+      ts.isReturnStatement(node) &&
+      (!node.expression || !objectReturn(node.expression))
+    )
+      safe = false;
     ts.forEachChild(node, (child) => visit(child, nestedArrow));
   };
   for (const parameter of declaration.parameters) visit(parameter);
@@ -56,7 +88,9 @@ export function objectFactoryGlobalType(lowerer: Lowerer, expr: ts.NewExpression
 export function objectFactorySignature(lowerer: Lowerer, expr: ts.NewExpression): FnSig | null {
   if (!ts.isIdentifier(expr.expression) || !isObjectFactoryNew(lowerer, expr)) return null;
   const generic = lowerer.genericFnOf(expr.expression);
-  const signature = generic?.implicitParams ? implicitDefaultInstance(lowerer, expr, generic) : lowerer.fnSigOf(expr.expression);
+  const signature = generic?.implicitParams
+    ? implicitDefaultInstance(lowerer, expr, generic)
+    : lowerer.fnSigOf(expr.expression);
   return signature && signature.returnType.kind !== "void" ? signature : null;
 }
 
@@ -66,8 +100,10 @@ export function lowerObjectFactoryNew(lowerer: Lowerer, expr: ts.NewExpression):
   const loc = locOf(expr);
   lowerer.noteEdge(signature.name);
   return {
-    kind: "call", callee: signature.name,
+    kind: "call",
+    callee: signature.name,
     args: lowerer.completeArgs(expr.arguments ?? [], signature.params, loc, expr),
-    type: signature.returnType, loc,
+    type: signature.returnType,
+    loc,
   };
 }

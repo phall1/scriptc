@@ -1,8 +1,16 @@
 import { join } from "node:path";
 import type { FfiProfile } from "../ffi/ffi-manifest.js";
-import { EXTERNAL_OBJECT_ABI_STABILITY, RUNTIME_ABI_MARKER, RUNTIME_ABI_VERSION } from "./runtime-abi.js";
+import {
+  EXTERNAL_OBJECT_ABI_STABILITY,
+  RUNTIME_ABI_MARKER,
+  RUNTIME_ABI_VERSION,
+} from "./runtime-abi.js";
 import { executableLinkInputs } from "./link-plan-core.js";
-import type { RuntimePackArtifact, RuntimePackArtifacts, RuntimePackManifest } from "./runtime-pack-core.js";
+import type {
+  RuntimePackArtifact,
+  RuntimePackArtifacts,
+  RuntimePackManifest,
+} from "./runtime-pack-core.js";
 import type { NativeTargetSpec } from "./targets.js";
 
 export interface NativeLinkFeatures {
@@ -87,22 +95,30 @@ export interface NativeLinkInfo {
 }
 
 /** Format the same external-link contract after either host verifies a pack. */
-export function formatNativeLinkInfo(options: {
-  programObject: string;
-  target: NativeTargetSpec;
-  ffi: FfiProfile | null;
-}, compilerVersion: string, pack: {
-  root: string;
-  manifest: RuntimePackManifest;
-  selected: RuntimePackArtifacts;
-  flavor: "release" | "dev";
-}): NativeLinkInfo {
+export function formatNativeLinkInfo(
+  options: {
+    programObject: string;
+    target: NativeTargetSpec;
+    ffi: FfiProfile | null;
+  },
+  compilerVersion: string,
+  pack: {
+    root: string;
+    manifest: RuntimePackManifest;
+    selected: RuntimePackArtifacts;
+    flavor: "release" | "dev";
+  },
+): NativeLinkInfo {
   const ffiLibraries = options.ffi?.libraries ?? [];
   const plan = executableLinkInputs({
-    target: options.target, programObject: options.programObject,
-    ffiLibraries, ffiSystemLibraries: options.ffi?.systemLibraries ?? [],
-    ffiFrameworks: options.ffi?.frameworks ?? [], runtimeObjects: pack.selected.runtime.map((artifact) => join(pack.root, artifact.path)),
-    runtimeArchives: pack.selected.archives.map((artifact) => join(pack.root, artifact.path)), runtimeSystemLibraries: pack.selected.systemLibraries,
+    target: options.target,
+    programObject: options.programObject,
+    ffiLibraries,
+    ffiSystemLibraries: options.ffi?.systemLibraries ?? [],
+    ffiFrameworks: options.ffi?.frameworks ?? [],
+    runtimeObjects: pack.selected.runtime.map((artifact) => join(pack.root, artifact.path)),
+    runtimeArchives: pack.selected.archives.map((artifact) => join(pack.root, artifact.path)),
+    runtimeSystemLibraries: pack.selected.systemLibraries,
     optimization: pack.flavor,
   });
   return {
@@ -142,7 +158,8 @@ export function formatNativeLinkInfo(options: {
     },
     ffi: {
       format: options.ffi?.ffiFormat ?? null,
-      symbols: options.ffi?.functions.filter((fn) => !fn.callbackOperation).map((fn) => fn.symbol) ?? [],
+      symbols:
+        options.ffi?.functions.filter((fn) => !fn.callbackOperation).map((fn) => fn.symbol) ?? [],
       libraries: [...ffiLibraries],
     },
     link: {

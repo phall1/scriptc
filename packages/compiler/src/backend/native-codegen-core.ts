@@ -61,7 +61,10 @@ export function validateNativeCodegenVersion(
   if (!Array.isArray(value["targets"]) || !value["targets"].includes(target.llvmBackend)) {
     mismatch("targets", `an array containing ${target.llvmBackend}`);
   }
-  if (!Array.isArray(value["supported_targets"]) || !value["supported_targets"].includes(target.llvmTriple)) {
+  if (
+    !Array.isArray(value["supported_targets"]) ||
+    !value["supported_targets"].includes(target.llvmTriple)
+  ) {
     mismatch("supported_targets", `an array containing ${target.llvmTriple}`);
   }
   if (typeof value["host_triple"] !== "string") mismatch("host_triple", "a string");

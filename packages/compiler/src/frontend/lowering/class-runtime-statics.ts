@@ -22,12 +22,17 @@ export function initializeRuntimeStatics(lowerer: Lowerer, info: ClassInfo, valu
   const local = lowerer.declareHiddenLocal("%staticClass", value.type);
   const receiver = varRef(local.id, value.type, loc);
   const boxed = lowerer.coerceToExpected(receiver, DYN);
-  const base = !info.localClass && info.base && !info.def.baseValueGlobal
-    ? lowerer.coerceToExpected(classValueRef(lowerer, info.base, info.decl!), DYN)
-    : dynUndefinedExpr(loc);
+  const base =
+    !info.localClass && info.base && !info.def.baseValueGlobal
+      ? lowerer.coerceToExpected(classValueRef(lowerer, info.base, info.decl!), DYN)
+      : dynUndefinedExpr(loc);
   const statements: IrStmt[] = [
     { kind: "varDecl", localId: local.id, init: value, loc },
-    { kind: "exprStmt", expr: { kind: "libCall", fn: "dyn.classInherit", args: [boxed, base], type: DYN, loc }, loc },
+    {
+      kind: "exprStmt",
+      expr: { kind: "libCall", fn: "dyn.classInherit", args: [boxed, base], type: DYN, loc },
+      loc,
+    },
   ];
   const previousThis = lowerer.ctx.thisLocal;
   try {
@@ -36,14 +41,28 @@ export function initializeRuntimeStatics(lowerer: Lowerer, info: ClassInfo, valu
     for (const member of members) {
       if (!member.name || !ts.isComputedPropertyName(member.name)) continue;
       const key = lowerer.declareHiddenLocal("%staticKey", DYN);
-      statements.push({ kind: "varDecl", localId: key.id, init: { kind: "libCall", fn: "dyn.propertyKey",
-        args: [lowerer.lowerExprExpecting(member.name.expression, DYN)], type: DYN, loc: locOf(member.name) }, loc: locOf(member.name) });
+      statements.push({
+        kind: "varDecl",
+        localId: key.id,
+        init: {
+          kind: "libCall",
+          fn: "dyn.propertyKey",
+          args: [lowerer.lowerExprExpecting(member.name.expression, DYN)],
+          type: DYN,
+          loc: locOf(member.name),
+        },
+        loc: locOf(member.name),
+      });
       computedKeys.set(member, varRef(key.id, DYN, locOf(member.name)));
     }
     lowerer.ctx.thisLocal = local;
     // Methods and accessors exist before any static initializer executes.
-    const definitions = members.filter((member) => ts.isMethodDeclaration(member) || ts.isAccessor(member));
-    const initializers = members.filter((member) => !ts.isMethodDeclaration(member) && !ts.isAccessor(member));
+    const definitions = members.filter(
+      (member) => ts.isMethodDeclaration(member) || ts.isAccessor(member),
+    );
+    const initializers = members.filter(
+      (member) => !ts.isMethodDeclaration(member) && !ts.isAccessor(member),
+    );
     for (const member of [...definitions, ...initializers]) {
       if (ts.isClassStaticBlockDeclaration(member)) {
         statements.push(...lowerer.lowerStmts(member.body.statements));
@@ -53,24 +72,86 @@ export function initializeRuntimeStatics(lowerer: Lowerer, info: ClassInfo, valu
       const memberLoc = locOf(member);
       const key: IrExpr = ts.isComputedPropertyName(member.name)
         ? computedKeys.get(member)!
-        : lowerer.coerceToExpected({ kind: "strLit", value: ts.isNumericLiteral(member.name)
-          ? String(Number(member.name.text)) : member.name.text!, type: STRING, loc: memberLoc }, DYN);
+        : lowerer.coerceToExpected(
+            {
+              kind: "strLit",
+              value: ts.isNumericLiteral(member.name)
+                ? String(Number(member.name.text))
+                : member.name.text!,
+              type: STRING,
+              loc: memberLoc,
+            },
+            DYN,
+          );
       const fields: { key: string; value: IrExpr }[] = [
-        { key: "configurable", value: lowerer.coerceToExpected({ kind: "boolLit", value: true, type: BOOL, loc: memberLoc }, DYN) },
-        { key: "enumerable", value: lowerer.coerceToExpected({ kind: "boolLit", value: ts.isPropertyDeclaration(member), type: BOOL, loc: memberLoc }, DYN) },
+        {
+          key: "configurable",
+          value: lowerer.coerceToExpected(
+            { kind: "boolLit", value: true, type: BOOL, loc: memberLoc },
+            DYN,
+          ),
+        },
+        {
+          key: "enumerable",
+          value: lowerer.coerceToExpected(
+            {
+              kind: "boolLit",
+              value: ts.isPropertyDeclaration(member),
+              type: BOOL,
+              loc: memberLoc,
+            },
+            DYN,
+          ),
+        },
       ];
       if (ts.isGetAccessorDeclaration(member) || ts.isSetAccessorDeclaration(member)) {
-        fields.push({ key: ts.isGetAccessorDeclaration(member) ? "get" : "set", value: lowerer.coerceToExpected(lowerer.lowerLambda(member), DYN) });
+        fields.push({
+          key: ts.isGetAccessorDeclaration(member) ? "get" : "set",
+          value: lowerer.coerceToExpected(lowerer.lowerLambda(member), DYN),
+        });
       } else if (ts.isMethodDeclaration(member) || ts.isPropertyDeclaration(member)) {
-        fields.push({ key: "writable", value: lowerer.coerceToExpected({ kind: "boolLit", value: true, type: BOOL, loc: memberLoc }, DYN) });
-        fields.push({ key: "value", value: ts.isMethodDeclaration(member)
-          ? lowerer.coerceToExpected(lowerer.lowerLambda(member), DYN)
-          : member.initializer ? lowerer.lowerExprExpecting(member.initializer, DYN) : dynUndefinedExpr(memberLoc) });
+        fields.push({
+          key: "writable",
+          value: lowerer.coerceToExpected(
+            { kind: "boolLit", value: true, type: BOOL, loc: memberLoc },
+            DYN,
+          ),
+        });
+        fields.push({
+          key: "value",
+          value: ts.isMethodDeclaration(member)
+            ? lowerer.coerceToExpected(lowerer.lowerLambda(member), DYN)
+            : member.initializer
+              ? lowerer.lowerExprExpecting(member.initializer, DYN)
+              : dynUndefinedExpr(memberLoc),
+        });
       }
-      const target = info.runtimePrototypeMembers?.includes(member) ? classPrototypeData(lowerer, info, memberLoc, receiver)! : boxed;
-      statements.push({ kind: "exprStmt", expr: { kind: "libCall", fn: "dyn.defineProperty", args: [target, key,
-        { kind: "dynObjLit", fields: fields.map((field) => ({ key: { kind: "strLit", value: field.key, type: STRING, loc: memberLoc }, value: field.value })), type: DYN, loc: memberLoc },
-      ], type: DYN, loc: memberLoc }, loc: memberLoc });
+      const target = info.runtimePrototypeMembers?.includes(member)
+        ? classPrototypeData(lowerer, info, memberLoc, receiver)!
+        : boxed;
+      statements.push({
+        kind: "exprStmt",
+        expr: {
+          kind: "libCall",
+          fn: "dyn.defineProperty",
+          args: [
+            target,
+            key,
+            {
+              kind: "dynObjLit",
+              fields: fields.map((field) => ({
+                key: { kind: "strLit", value: field.key, type: STRING, loc: memberLoc },
+                value: field.value,
+              })),
+              type: DYN,
+              loc: memberLoc,
+            },
+          ],
+          type: DYN,
+          loc: memberLoc,
+        },
+        loc: memberLoc,
+      });
     }
   } finally {
     lowerer.ctx.thisLocal = previousThis;

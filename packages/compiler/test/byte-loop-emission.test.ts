@@ -15,7 +15,12 @@ test("byte loops remove proved bounds while preserving receiver identity and wid
     const mod = deserializeModule(await readFile(outPath, "utf8"));
     for (const pointerBits of [32, 64] as const) {
       const ll = emitLlvmModule(mod, { pointerBits, wasi: pointerBits === 32 });
-      const body = (name: string): string => ll.match(new RegExp(`define internal [^\\n]+ @sc_(?:b)?f_${name}\\([^\\n]*\\) #0 \\{([\\s\\S]*?)\\n\\}`))![1]!;
+      const body = (name: string): string =>
+        ll.match(
+          new RegExp(
+            `define internal [^\\n]+ @sc_(?:b)?f_${name}\\([^\\n]*\\) #0 \\{([\\s\\S]*?)\\n\\}`,
+          ),
+        )![1]!;
       for (const name of ["neighbors", "backwards", "strided"]) {
         expect(body(name)).toContain("integer induction i");
         expect(body(name)).not.toContain("bytes.index.invalid");
@@ -29,8 +34,12 @@ test("byte loops remove proved bounds while preserving receiver identity and wid
       const wide = body("wideIndex");
       expect(wide).toContain("icmp ult i64");
       if (pointerBits === 32) {
-        expect(wide).toMatch(/icmp ult i64 (%\w+), %\w+[\s\S]*?bytes\.index\.valid[^:]*:\n\s+%\w+ = trunc i64 \1 to i32/);
+        expect(wide).toMatch(
+          /icmp ult i64 (%\w+), %\w+[\s\S]*?bytes\.index\.valid[^:]*:\n\s+%\w+ = trunc i64 \1 to i32/,
+        );
       }
     }
-  } finally { await rm(dir, { recursive: true, force: true }); }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

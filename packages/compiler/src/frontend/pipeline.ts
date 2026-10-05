@@ -5,8 +5,20 @@ import type { SrcLoc } from "../ir/ir.js";
 import type { NpmStaticStatus } from "../coverage/report.js";
 import { entryFunctionExports, type EntryExportInfo } from "./lib-exports.js";
 import { entryContractFacts, type ContractFacts } from "./lib-contract.js";
-import { canonicalBuiltinModule, checkPreflight, isNodeTypesPath, locOf, requiresOf, resolveNpmImport, type LoadResult } from "./program.js";
-import { npmStaticIneligibleReason, npmStaticOffenders, npmStaticPackageOfPath } from "./npm-static.js";
+import {
+  canonicalBuiltinModule,
+  checkPreflight,
+  isNodeTypesPath,
+  locOf,
+  requiresOf,
+  resolveNpmImport,
+  type LoadResult,
+} from "./program.js";
+import {
+  npmStaticIneligibleReason,
+  npmStaticOffenders,
+  npmStaticPackageOfPath,
+} from "./npm-static.js";
 import { clearResolveCaches, resolveBareModule } from "./resolve.js";
 import { isJsSourceFileName } from "./tsc-codes.js";
 import { isRelativeSpecifier, packageNameOfSpecifier } from "./workspace-registry.js";
@@ -21,7 +33,10 @@ export interface ProgramLoadOptions {
 
 /** A load owns its program resources until LoadResult.dispose(). Host
  * transports may own additional resources around the whole frontend. */
-export type ProgramLoader = (entryPath: string, options: ProgramLoadOptions) => LoadResult & {
+export type ProgramLoader = (
+  entryPath: string,
+  options: ProgramLoadOptions,
+) => LoadResult & {
   services: FrontendServices;
   dispose: () => void;
 };
@@ -104,7 +119,8 @@ function detectAutoPackages(
     for (const stmt of sf.statements) {
       if (
         (isImportDeclaration(stmt) || isExportDeclaration(stmt)) &&
-        stmt.moduleSpecifier && isStringLiteral(stmt.moduleSpecifier)
+        stmt.moduleSpecifier &&
+        isStringLiteral(stmt.moduleSpecifier)
       ) {
         edges.push({ spec: stmt.moduleSpecifier.text, loc: locOf(stmt) });
       } else if (mode === "lib") {
@@ -131,7 +147,11 @@ function detectAutoPackages(
         if (js === null || judged!.has(js.packageName)) continue;
         judged!.add(js.packageName);
         sites!.set(js.packageName, loc);
-        statuses.push({ package: js.packageName, status: "fallback", detail: "it ships no own .d.ts declaration surface" });
+        statuses.push({
+          package: js.packageName,
+          status: "fallback",
+          detail: "it ships no own .d.ts declaration surface",
+        });
         continue;
       }
       if (judged?.has(npm.packageName)) continue;
@@ -151,7 +171,12 @@ function detectAutoPackages(
       jsEntry !== null && isJsSourceFileName(jsEntry.typesFile) ? jsEntry.typesFile : null,
     );
     if (reason === null) chosen.push(pkg);
-    else statuses.push({ package: pkg, status: "fallback", detail: mode === "lib" ? reason : `auto: ${reason}` });
+    else
+      statuses.push({
+        package: pkg,
+        status: "fallback",
+        detail: mode === "lib" ? reason : `auto: ${reason}`,
+      });
   }
   return chosen;
 }
@@ -210,7 +235,11 @@ export function runFrontend(
   } catch (error) {
     for (const load of active) {
       // Preserve the original failure and attempt every remaining cleanup.
-      try { load.dispose(); } catch { /* best effort after a failed load */ }
+      try {
+        load.dispose();
+      } catch {
+        /* best effort after a failed load */
+      }
     }
     throw error;
   }
@@ -425,7 +454,9 @@ function loadFrontend(
     entryContract: () =>
       entryContractFacts(
         finalLoad.entry,
-        finalLoad.program.getSourceFiles().filter((sf) => !sf.isDeclarationFile && npmStaticPackageOfPath(sf.fileName) === null),
+        finalLoad.program
+          .getSourceFiles()
+          .filter((sf) => !sf.isDeclarationFile && npmStaticPackageOfPath(sf.fileName) === null),
       ),
     // Runtime evaluation order first, then any type-only program modules
     // (no runtime edge, so absent from moduleOrder — but they are contract
@@ -436,17 +467,20 @@ function loadFrontend(
     // identity, whatever directory it came from.
     sourceTexts: () =>
       new Map<string, string>(
-        [finalLoad.entry, ...finalLoad.moduleOrder, ...finalLoad.program.getSourceFiles().filter((sf) => !sf.isDeclarationFile)].map(
-          (sf) => [sf.fileName, sf.text],
-        ),
+        [
+          finalLoad.entry,
+          ...finalLoad.moduleOrder,
+          ...finalLoad.program.getSourceFiles().filter((sf) => !sf.isDeclarationFile),
+        ].map((sf) => [sf.fileName, sf.text]),
       ),
-    lower: (opts) => lowerToIr(finalLoad.program, finalLoad.entry, finalLoad.moduleOrder, {
-      ...opts,
-      frontendServices: finalLoad.services,
-      startupCrash: finalLoad.startupCrash ?? null,
-      externalTypes: finalLoad.externalTypes,
-      externalTypeSpecifiersByFile: finalLoad.externalTypeSpecifiersByFile,
-    }),
+    lower: (opts) =>
+      lowerToIr(finalLoad.program, finalLoad.entry, finalLoad.moduleOrder, {
+        ...opts,
+        frontendServices: finalLoad.services,
+        startupCrash: finalLoad.startupCrash ?? null,
+        externalTypes: finalLoad.externalTypes,
+        externalTypeSpecifiersByFile: finalLoad.externalTypeSpecifiersByFile,
+      }),
     npmStatic: statuses,
     npmImportSites: npmSites,
     dispose: finalLoad.dispose,

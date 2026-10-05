@@ -20,20 +20,38 @@ test("embedded TypeScript packages match Node type stripping outside node_module
     // bytes into a regular module scope for its built-in stripping oracle.
     cpSync(join(fixtures, "node_modules/tsruntime"), join(dir, "runtime"), { recursive: true });
     const reference = join(dir, "reference.ts");
-    writeFileSync(reference, readFileSync(entry, "utf8")
-      .replace('"tsruntime"', '"./runtime/index.ts"')
-      .replace('"tsruntime/common"', '"./runtime/common.cts"'));
-    const built = await compile(entry, { outDir: dir, outPath: join(dir, "program"), dynamic: true, sanitize });
-    if (!built.ok) throw new Error(built.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
+    writeFileSync(
+      reference,
+      readFileSync(entry, "utf8")
+        .replace('"tsruntime"', '"./runtime/index.ts"')
+        .replace('"tsruntime/common"', '"./runtime/common.cts"'),
+    );
+    const built = await compile(entry, {
+      outDir: dir,
+      outPath: join(dir, "program"),
+      dynamic: true,
+      sanitize,
+    });
+    if (!built.ok)
+      throw new Error(built.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
     const [node, native] = await Promise.all([
       execFileAsync(process.execPath, [reference], { encoding: "utf8" }),
       execFileAsync(built.binaryPath, [], { encoding: "utf8" }),
     ]);
     expect(native.stdout).toBe(node.stdout);
-    expect(native.stdout).toBe("type-specifier-side-effect\nunused-import-side-effect\ntype-export-side-effect\n42:42:7\n");
+    expect(native.stdout).toBe(
+      "type-specifier-side-effect\nunused-import-side-effect\ntype-export-side-effect\n42:42:7\n",
+    );
     expect(node.stderr).toBe("");
-    expect(sanitize ? native.stderr.replace(
-      /^==\d+==WARNING: ASan doesn't fully support makecontext\/swapcontext functions and may produce false positives in some cases!\n/gm, "",
-    ) : native.stderr).toBe("");
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+    expect(
+      sanitize
+        ? native.stderr.replace(
+            /^==\d+==WARNING: ASan doesn't fully support makecontext\/swapcontext functions and may produce false positives in some cases!\n/gm,
+            "",
+          )
+        : native.stderr,
+    ).toBe("");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }, 120_000);

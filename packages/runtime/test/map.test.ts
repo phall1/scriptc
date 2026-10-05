@@ -15,9 +15,14 @@ const bin = join(testDir, "build", "test_map");
 beforeAll(async () => {
   await mkdir(join(testDir, "build"), { recursive: true });
   await execFileAsync("clang", [
-    "-std=c11", "-O1", "-Wall", "-Wextra",
-    "-fsanitize=address", "-DSCR_RC_AUDIT",
-    "-o", bin,
+    "-std=c11",
+    "-O1",
+    "-Wall",
+    "-Wextra",
+    "-fsanitize=address",
+    "-DSCR_RC_AUDIT",
+    "-o",
+    bin,
     join(testDir, "test_map.c"),
     join(testDir, "../src/scr_map.c"),
     join(testDir, "../src/scr_string.c"),

@@ -1,11 +1,35 @@
-import { AstDecodeError, AstMsgpackReader, astBounds, astU32, decodeAstString } from "./ast-bytes.js";
 import {
-  AstKind, HEADER_OFFSET_EXTENDED_DATA, HEADER_OFFSET_HASH_HI0, HEADER_OFFSET_HASH_HI1,
-  HEADER_OFFSET_HASH_LO0, HEADER_OFFSET_HASH_LO1, HEADER_OFFSET_METADATA, HEADER_OFFSET_NODES,
-  HEADER_OFFSET_PARSE_OPTIONS, HEADER_OFFSET_STRING_TABLE, HEADER_OFFSET_STRING_TABLE_OFFSETS,
-  HEADER_OFFSET_STRUCTURED_DATA, HEADER_SIZE, KIND_NODE_LIST, NODE_LEN, NODE_OFFSET_DATA,
-  NODE_OFFSET_END, NODE_OFFSET_FLAGS, NODE_OFFSET_KIND, NODE_OFFSET_NEXT, NODE_OFFSET_PARENT,
-  NODE_OFFSET_POS, PROTOCOL_VERSION, astChildOrder,
+  AstDecodeError,
+  AstMsgpackReader,
+  astBounds,
+  astU32,
+  decodeAstString,
+} from "./ast-bytes.js";
+import {
+  AstKind,
+  HEADER_OFFSET_EXTENDED_DATA,
+  HEADER_OFFSET_HASH_HI0,
+  HEADER_OFFSET_HASH_HI1,
+  HEADER_OFFSET_HASH_LO0,
+  HEADER_OFFSET_HASH_LO1,
+  HEADER_OFFSET_METADATA,
+  HEADER_OFFSET_NODES,
+  HEADER_OFFSET_PARSE_OPTIONS,
+  HEADER_OFFSET_STRING_TABLE,
+  HEADER_OFFSET_STRING_TABLE_OFFSETS,
+  HEADER_OFFSET_STRUCTURED_DATA,
+  HEADER_SIZE,
+  KIND_NODE_LIST,
+  NODE_LEN,
+  NODE_OFFSET_DATA,
+  NODE_OFFSET_END,
+  NODE_OFFSET_FLAGS,
+  NODE_OFFSET_KIND,
+  NODE_OFFSET_NEXT,
+  NODE_OFFSET_PARENT,
+  NODE_OFFSET_POS,
+  PROTOCOL_VERSION,
+  astChildOrder,
 } from "./ast-schema.generated.js";
 
 export interface AstFileReference {
@@ -37,10 +61,15 @@ function handleNumber(text: string): number {
 export function parseAstNodeHandle(handle: string): AstNodeHandle {
   const first = handle.indexOf(".");
   const second = first < 0 ? -1 : handle.indexOf(".", first + 1);
-  if (first < 0 || second < 0 || second === handle.length - 1) throw new AstDecodeError("invalid node handle");
+  if (first < 0 || second < 0 || second === handle.length - 1)
+    throw new AstDecodeError("invalid node handle");
   const index = handleNumber(handle.slice(0, first));
   if (index === 0) throw new AstDecodeError("node handle refers to the nil sentinel");
-  return { index, kind: handleNumber(handle.slice(first + 1, second)), path: handle.slice(second + 1) };
+  return {
+    index,
+    kind: handleNumber(handle.slice(first + 1, second)),
+    path: handle.slice(second + 1),
+  };
 }
 
 function hexWord(value: number): string {
@@ -71,25 +100,36 @@ export class AstWireFile {
     astBounds(bytes, 0, HEADER_SIZE);
     this.view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const metadata = astU32(bytes, HEADER_OFFSET_METADATA);
-    if ((metadata >>> 24) !== PROTOCOL_VERSION) throw new AstDecodeError(`unsupported protocol version ${metadata >>> 24}`);
+    if (metadata >>> 24 !== PROTOCOL_VERSION)
+      throw new AstDecodeError(`unsupported protocol version ${metadata >>> 24}`);
     this.stringOffsets = astU32(bytes, HEADER_OFFSET_STRING_TABLE_OFFSETS);
     this.strings = astU32(bytes, HEADER_OFFSET_STRING_TABLE);
     this.extended = astU32(bytes, HEADER_OFFSET_EXTENDED_DATA);
     this.structured = astU32(bytes, HEADER_OFFSET_STRUCTURED_DATA);
     this.nodes = astU32(bytes, HEADER_OFFSET_NODES);
-    if (this.stringOffsets < HEADER_SIZE || this.strings < this.stringOffsets ||
-        this.extended < this.strings || this.structured < this.extended ||
-        this.nodes < this.structured || this.nodes > bytes.length ||
-        (this.strings - this.stringOffsets) % 8 !== 0 ||
-        (this.structured - this.extended) % 4 !== 0 || (bytes.length - this.nodes) % NODE_LEN !== 0) {
+    if (
+      this.stringOffsets < HEADER_SIZE ||
+      this.strings < this.stringOffsets ||
+      this.extended < this.strings ||
+      this.structured < this.extended ||
+      this.nodes < this.structured ||
+      this.nodes > bytes.length ||
+      (this.strings - this.stringOffsets) % 8 !== 0 ||
+      (this.structured - this.extended) % 4 !== 0 ||
+      (bytes.length - this.nodes) % NODE_LEN !== 0
+    ) {
       throw new AstDecodeError("invalid section layout");
     }
     this.nodeCount = (bytes.length - this.nodes) / NODE_LEN;
     this.stringCount = (this.strings - this.stringOffsets) / 8;
     if (this.nodeCount < 2) throw new AstDecodeError("missing root");
-    if (this.kind(1) === KIND_NODE_LIST || this.parent(1) > 1) throw new AstDecodeError("invalid root node");
-    this.contentHash = hexWord(astU32(bytes, HEADER_OFFSET_HASH_HI1)) + hexWord(astU32(bytes, HEADER_OFFSET_HASH_HI0)) +
-      hexWord(astU32(bytes, HEADER_OFFSET_HASH_LO1)) + hexWord(astU32(bytes, HEADER_OFFSET_HASH_LO0));
+    if (this.kind(1) === KIND_NODE_LIST || this.parent(1) > 1)
+      throw new AstDecodeError("invalid root node");
+    this.contentHash =
+      hexWord(astU32(bytes, HEADER_OFFSET_HASH_HI1)) +
+      hexWord(astU32(bytes, HEADER_OFFSET_HASH_HI0)) +
+      hexWord(astU32(bytes, HEADER_OFFSET_HASH_LO1)) +
+      hexWord(astU32(bytes, HEADER_OFFSET_HASH_LO0));
     this.parseOptionsKey = String(astU32(bytes, HEADER_OFFSET_PARSE_OPTIONS));
     // Each string has a start/end pair; identifiers can reuse slices of
     // source text, so pairs overlap and are not globally monotone. Handles
@@ -97,33 +137,47 @@ export class AstWireFile {
     for (let i = 0; i < this.stringCount; i++) {
       const start = astU32(bytes, this.stringOffsets + i * 8);
       const end = astU32(bytes, this.stringOffsets + i * 8 + 4);
-      if (end < start || end > this.extended - this.strings) throw new AstDecodeError("invalid string table offset");
+      if (end < start || end > this.extended - this.strings)
+        throw new AstDecodeError("invalid string table offset");
     }
   }
 
   private nodeOffset(index: number): number {
-    if (!Number.isInteger(index) || index < 0 || index >= this.nodeCount) throw new AstDecodeError(`invalid node index ${index}`);
+    if (!Number.isInteger(index) || index < 0 || index >= this.nodeCount)
+      throw new AstDecodeError(`invalid node index ${index}`);
     return this.nodes + index * NODE_LEN;
   }
 
   // The constructor validates the complete fixed-width node table, and
   // nodeOffset validates its index. Read each word in one operation while
   // preserving little-endian decoding even in an unaligned byte view.
-  kind(index: number): number { return this.view.getUint32(this.nodeOffset(index) + NODE_OFFSET_KIND, true); }
-  pos(index: number): number { return this.view.getInt32(this.nodeOffset(index) + NODE_OFFSET_POS, true); }
-  end(index: number): number { return this.view.getInt32(this.nodeOffset(index) + NODE_OFFSET_END, true); }
-  flags(index: number): number { return this.view.getUint32(this.nodeOffset(index) + NODE_OFFSET_FLAGS, true); }
-  data(index: number): number { return this.view.getUint32(this.nodeOffset(index) + NODE_OFFSET_DATA, true); }
+  kind(index: number): number {
+    return this.view.getUint32(this.nodeOffset(index) + NODE_OFFSET_KIND, true);
+  }
+  pos(index: number): number {
+    return this.view.getInt32(this.nodeOffset(index) + NODE_OFFSET_POS, true);
+  }
+  end(index: number): number {
+    return this.view.getInt32(this.nodeOffset(index) + NODE_OFFSET_END, true);
+  }
+  flags(index: number): number {
+    return this.view.getUint32(this.nodeOffset(index) + NODE_OFFSET_FLAGS, true);
+  }
+  data(index: number): number {
+    return this.view.getUint32(this.nodeOffset(index) + NODE_OFFSET_DATA, true);
+  }
 
   next(index: number): number {
     const next = this.view.getUint32(this.nodeOffset(index) + NODE_OFFSET_NEXT, true);
-    if (next !== 0 && (next <= index || next >= this.nodeCount)) throw new AstDecodeError("invalid sibling link");
+    if (next !== 0 && (next <= index || next >= this.nodeCount))
+      throw new AstDecodeError("invalid sibling link");
     return next;
   }
 
   parent(index: number): number {
     const parent = this.view.getUint32(this.nodeOffset(index) + NODE_OFFSET_PARENT, true);
-    if (parent >= this.nodeCount || (index <= 1 ? parent > index : parent >= index)) throw new AstDecodeError("invalid parent link");
+    if (parent >= this.nodeCount || (index <= 1 ? parent > index : parent >= index))
+      throw new AstDecodeError("invalid parent link");
     return parent;
   }
 
@@ -134,7 +188,8 @@ export class AstWireFile {
   }
 
   string(index: number): string {
-    if (!Number.isInteger(index) || index < 0 || index % 2 !== 0 || index >= this.stringCount * 2) throw new AstDecodeError(`invalid string index ${index}`);
+    if (!Number.isInteger(index) || index < 0 || index % 2 !== 0 || index >= this.stringCount * 2)
+      throw new AstDecodeError(`invalid string index ${index}`);
     const cached = this.stringCache.get(index);
     if (cached !== undefined) return cached;
     const start = astU32(this.bytes, this.stringOffsets + index * 4);
@@ -146,9 +201,14 @@ export class AstWireFile {
 
   extendedWord(index: number, offset: number): number {
     const data = this.data(index);
-    if ((data >>> 30) !== 2) throw new AstDecodeError("node does not have extended data");
+    if (data >>> 30 !== 2) throw new AstDecodeError("node does not have extended data");
     const start = (data & 0x00ffffff) + offset;
-    if (!Number.isInteger(offset) || offset < 0 || offset % 4 !== 0 || start > this.structured - this.extended - 4) {
+    if (
+      !Number.isInteger(offset) ||
+      offset < 0 ||
+      offset % 4 !== 0 ||
+      start > this.structured - this.extended - 4
+    ) {
       throw new AstDecodeError("extended data exceeds its section");
     }
     return astU32(this.bytes, this.extended + start);
@@ -182,8 +242,11 @@ export class AstWireFile {
 
   rawText(index: number): string | undefined {
     const kind = this.kind(index);
-    return kind === AstKind.TemplateHead || kind === AstKind.TemplateMiddle || kind === AstKind.TemplateTail
-      ? this.string(this.extendedWord(index, 4)) : undefined;
+    return kind === AstKind.TemplateHead ||
+      kind === AstKind.TemplateMiddle ||
+      kind === AstKind.TemplateTail
+      ? this.string(this.extendedWord(index, 4))
+      : undefined;
   }
 
   firstChild(index: number): number {
@@ -197,7 +260,8 @@ export class AstWireFile {
   children(index: number): number[] {
     const result: number[] = [];
     for (let child = this.firstChild(index); child !== 0; child = this.next(child)) {
-      if (this.parent(child) !== index) throw new AstDecodeError("sibling belongs to another parent");
+      if (this.parent(child) !== index)
+        throw new AstDecodeError("sibling belongs to another parent");
       result.push(child);
     }
     return result;
@@ -206,9 +270,11 @@ export class AstWireFile {
   list(index: number): number[] {
     if (this.kind(index) !== KIND_NODE_LIST) throw new AstDecodeError("expected a node list");
     const count = this.data(index);
-    if (count > this.nodeCount - index - 1) throw new AstDecodeError("node list length exceeds the response");
+    if (count > this.nodeCount - index - 1)
+      throw new AstDecodeError("node list length exceeds the response");
     const children = this.children(index);
-    if (children.length !== count) throw new AstDecodeError("node list length does not match its links");
+    if (children.length !== count)
+      throw new AstDecodeError("node list length does not match its links");
     return children;
   }
 
@@ -219,7 +285,7 @@ export class AstWireFile {
 
   private childAtOrder(index: number, order: number): number {
     const data = this.data(index);
-    const mask = (data >>> 30) === 0 ? data & 0xff : 0xff;
+    const mask = data >>> 30 === 0 ? data & 0xff : 0xff;
     if ((mask & (1 << order)) === 0) return 0;
     let skip = 0;
     for (let bit = 0; bit < order; bit++) if ((mask & (1 << bit)) !== 0) skip++;
@@ -229,12 +295,14 @@ export class AstWireFile {
       skip--;
     }
     if (child === 0) throw new AstDecodeError("missing named child");
-    if (this.parent(child) !== index) throw new AstDecodeError("named child belongs to another parent");
+    if (this.parent(child) !== index)
+      throw new AstDecodeError("named child belongs to another parent");
     return child;
   }
 
   structuredReader(offset: number): AstMsgpackReader {
-    if (!Number.isInteger(offset) || offset < 0 || offset >= this.nodes - this.structured) throw new AstDecodeError("invalid structured data offset");
+    if (!Number.isInteger(offset) || offset < 0 || offset >= this.nodes - this.structured)
+      throw new AstDecodeError("invalid structured data offset");
     return new AstMsgpackReader(this.bytes, this.structured + offset, this.nodes);
   }
 
@@ -245,7 +313,13 @@ export class AstWireFile {
     const result: AstFileReference[] = [];
     for (let i = 0; i < count; i++) {
       if (reader.arrayLength() !== 5) throw new AstDecodeError("invalid file reference tuple");
-      result.push({ pos: reader.uint(), end: reader.uint(), fileName: reader.string(), resolutionMode: reader.uint(), preserve: reader.bool() });
+      result.push({
+        pos: reader.uint(),
+        end: reader.uint(),
+        fileName: reader.string(),
+        resolutionMode: reader.uint(),
+        preserve: reader.bool(),
+      });
     }
     return result;
   }
@@ -258,7 +332,8 @@ export class AstWireFile {
     for (let i = 0; i < count; i++) {
       const index = reader.uint();
       this.nodeOffset(index);
-      if (index === 0 || this.kind(index) === KIND_NODE_LIST) throw new AstDecodeError("structured reference is not a node");
+      if (index === 0 || this.kind(index) === KIND_NODE_LIST)
+        throw new AstDecodeError("structured reference is not a node");
       result.push(index);
     }
     return result;

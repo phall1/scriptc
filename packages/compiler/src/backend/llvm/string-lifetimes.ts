@@ -9,13 +9,31 @@ import { borrowableInputs } from "./borrowed-inputs.js";
  * their ownership contract has been checked. */
 export function borrowsStringInputs(method: IrStrIntrinsicMethod): boolean {
   switch (method) {
-    case "length": case "charCodeAt": case "charAt": case "indexOf":
-    case "includes": case "startsWith": case "endsWith": case "slice":
-    case "substring": case "repeat": case "trim": case "trimStart":
-    case "trimEnd": case "split": case "padStart": case "padEnd":
-    case "toLowerCase": case "toUpperCase": case "normalize":
-    case "isWellFormed": case "toWellFormed": case "cpAt": return true;
-    default: return false;
+    case "length":
+    case "charCodeAt":
+    case "charAt":
+    case "indexOf":
+    case "includes":
+    case "startsWith":
+    case "endsWith":
+    case "slice":
+    case "substring":
+    case "repeat":
+    case "trim":
+    case "trimStart":
+    case "trimEnd":
+    case "split":
+    case "padStart":
+    case "padEnd":
+    case "toLowerCase":
+    case "toUpperCase":
+    case "normalize":
+    case "isWellFormed":
+    case "toWellFormed":
+    case "cpAt":
+      return true;
+    default:
+      return false;
   }
 }
 
@@ -26,13 +44,22 @@ export function borrowsStringInputs(method: IrStrIntrinsicMethod): boolean {
 function preservesStringInputs(value: IrExpr, localId: string): boolean {
   if (isStableReceiverOperand(value, localId)) return true;
   switch (value.kind) {
-    case "strLit": return true;
-    case "strEq": case "strCmp": case "strConcat":
-      return preservesStringInputs(value.left, localId) && preservesStringInputs(value.right, localId);
+    case "strLit":
+      return true;
+    case "strEq":
+    case "strCmp":
+    case "strConcat":
+      return (
+        preservesStringInputs(value.left, localId) && preservesStringInputs(value.right, localId)
+      );
     case "strIntrinsic":
-      return borrowsStringInputs(value.method) && preservesStringInputs(value.receiver, localId) &&
-        value.args.every((arg) => preservesStringInputs(arg, localId));
-    default: return false;
+      return (
+        borrowsStringInputs(value.method) &&
+        preservesStringInputs(value.receiver, localId) &&
+        value.args.every((arg) => preservesStringInputs(arg, localId))
+      );
+    default:
+      return false;
   }
 }
 
@@ -46,7 +73,10 @@ export function emitStringInputs(host: LlvmEmitterContext, inputs: readonly IrEx
     if (value.type.kind !== "string") return host.emitExpr(value);
     if (value.kind === "strLit") return { name: host.internLiteral(value.value), type: value.type };
     if (borrowed[index]) return host.emitReadReceiver(value);
-    if (value.kind === "varRef" && inputs.slice(index + 1).every((next) => preservesStringInputs(next, value.localId))) {
+    if (
+      value.kind === "varRef" &&
+      inputs.slice(index + 1).every((next) => preservesStringInputs(next, value.localId))
+    ) {
       return host.emitReadReceiver(value);
     }
     return host.emitExpr(value);

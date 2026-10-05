@@ -17,5 +17,11 @@ export type {
   SemanticSignature as Signature,
   SemanticSymbol as Symbol,
 } from "./semantic-model.js";
-export type { SemanticIndexInfo as IndexInfo, SemanticTypePredicate as TypePredicate } from "./semantic-checker.js";
-export type { Ts7CompilerOptionsData as CompilerOptions, Ts7DiagnosticData as Diagnostic } from "./session-schema.generated.js";
+export type {
+  SemanticIndexInfo as IndexInfo,
+  SemanticTypePredicate as TypePredicate,
+} from "./semantic-checker.js";
+export type {
+  Ts7CompilerOptionsData as CompilerOptions,
+  Ts7DiagnosticData as Diagnostic,
+} from "./session-schema.generated.js";

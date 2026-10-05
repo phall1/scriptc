@@ -1,21 +1,64 @@
 import { expect, test } from "vitest";
-import { BOOL, F64, UNDEFINED_T, funcOf, type IrExpr, type IrFunction, type IrLocal, type IrStmt, type IrType } from "../../ir/ir.js";
+import {
+  BOOL,
+  F64,
+  UNDEFINED_T,
+  funcOf,
+  type IrExpr,
+  type IrFunction,
+  type IrLocal,
+  type IrStmt,
+  type IrType,
+} from "../../ir/ir.js";
 import { analyzeCallLifetimes } from "./call-lifetimes.js";
 
 const loc = { file: "lifetimes.ts", start: 0, end: 0 };
 const record: IrType = { kind: "record", shapeId: "cell" };
 const optional: IrType = { kind: "union", unionId: "optional" };
-const ref = (localId: string, type: IrType = optional): IrExpr => ({ kind: "varRef", localId, type, loc });
+const ref = (localId: string, type: IrType = optional): IrExpr => ({
+  kind: "varRef",
+  localId,
+  type,
+  loc,
+});
 const num = (value = 1): IrExpr => ({ kind: "numLit", value, type: F64, loc });
 const ret = (value: IrExpr): IrStmt => ({ kind: "return", value, loc });
-const local = (id: string, type: IrType = optional): IrLocal => ({ id, name: id, type, mutable: false });
-const tag = (id: string): IrExpr => ({ kind: "unionIsTag", value: ref(id), unionId: "optional", tag: 0, negated: false, type: BOOL, loc });
-const narrow = (id: string): IrExpr => ({ kind: "unionNarrow", value: ref(id), unionId: "optional", tag: 0, type: record, loc });
-const call = (callee: string, args: IrExpr[]): IrExpr => ({ kind: "call", callee, args, type: F64, loc });
+const local = (id: string, type: IrType = optional): IrLocal => ({
+  id,
+  name: id,
+  type,
+  mutable: false,
+});
+const tag = (id: string): IrExpr => ({
+  kind: "unionIsTag",
+  value: ref(id),
+  unionId: "optional",
+  tag: 0,
+  negated: false,
+  type: BOOL,
+  loc,
+});
+const narrow = (id: string): IrExpr => ({
+  kind: "unionNarrow",
+  value: ref(id),
+  unionId: "optional",
+  tag: 0,
+  type: record,
+  loc,
+});
+const call = (callee: string, args: IrExpr[]): IrExpr => ({
+  kind: "call",
+  callee,
+  args,
+  type: F64,
+  loc,
+});
 
 function helper(name: string, ids = ["value"]): IrFunction {
   return {
-    name, loc, returnType: F64,
+    name,
+    loc,
+    returnType: F64,
     params: ids.map((id) => ({ localId: id, name: id, type: optional })),
     locals: ids.map((id) => local(id)),
     body: ids.map((id) => ({ kind: "exprStmt", expr: tag(id), loc })),
@@ -41,10 +84,30 @@ test("class and record field reads borrow their root", () => {
   const fn = helper("read", ["left", "right"]);
   fn.params[0]!.type = fn.locals[0]!.type = record;
   fn.params[1]!.type = fn.locals[1]!.type = cls;
-  fn.body = [ret({ kind: "bin", op: "+", type: F64, loc,
-    left: { kind: "recordGet", obj: ref("left", record), shapeId: "cell", field: "x", type: F64, loc },
-    right: { kind: "fieldGet", obj: ref("right", cls), className: "Cell", field: "x", type: F64, loc },
-  })];
+  fn.body = [
+    ret({
+      kind: "bin",
+      op: "+",
+      type: F64,
+      loc,
+      left: {
+        kind: "recordGet",
+        obj: ref("left", record),
+        shapeId: "cell",
+        field: "x",
+        type: F64,
+        loc,
+      },
+      right: {
+        kind: "fieldGet",
+        obj: ref("right", cls),
+        className: "Cell",
+        field: "x",
+        type: F64,
+        loc,
+      },
+    }),
+  ];
   expect(analyze(fn).parameters.get(fn.name)).toEqual(new Set([0, 1]));
 });
 
@@ -70,7 +133,8 @@ test("joins every use of a parameter, including repeated call arguments", () => 
 });
 
 test("solves safe recursive groups and propagates a single escape around a cycle", () => {
-  const left = helper("left"), right = helper("right");
+  const left = helper("left"),
+    right = helper("right");
   left.body.push(ret(call("right", [ref("value")])));
   right.body.push(ret(call("left", [ref("value")])));
   expect(analyze(left, right).parameters.size).toBe(2);
@@ -79,34 +143,55 @@ test("solves safe recursive groups and propagates a single escape around a cycle
 });
 
 test("does not confuse the same local id in unrelated functions", () => {
-  const safe = helper("safe"), unsafe = helper("unsafe");
+  const safe = helper("safe"),
+    unsafe = helper("unsafe");
   unsafe.body.push(ret(ref("value")));
   expect(analyze(safe, unsafe).parameters.get("safe")).toEqual(new Set([0]));
   expect(analyze(safe, unsafe).parameters.has("unsafe")).toBe(false);
 });
 
-test.each(["absent", "missing parameter", "async", "generator", "capture", "class capture"])("refuses forwarding to a %s target", (reason) => {
-  const outer = helper("outer"), leaf = helper("leaf");
-  outer.body = [ret(call("leaf", [ref("value")]))];
-  if (reason === "missing parameter") leaf.params = [];
-  if (reason === "async") leaf.async = true;
-  if (reason === "generator") leaf.generator = { yieldT: F64, nextT: F64, resultType: { kind: "record", shapeId: "result" } };
-  if (reason === "capture") leaf.captures = [];
-  if (reason === "class capture") leaf.classCaptures = [];
-  const result = reason === "absent" ? analyze(outer) : analyze(outer, leaf);
-  expect(result.parameters.has("outer")).toBe(false);
-});
+test.each(["absent", "missing parameter", "async", "generator", "capture", "class capture"])(
+  "refuses forwarding to a %s target",
+  (reason) => {
+    const outer = helper("outer"),
+      leaf = helper("leaf");
+    outer.body = [ret(call("leaf", [ref("value")]))];
+    if (reason === "missing parameter") leaf.params = [];
+    if (reason === "async") leaf.async = true;
+    if (reason === "generator")
+      leaf.generator = {
+        yieldT: F64,
+        nextT: F64,
+        resultType: { kind: "record", shapeId: "result" },
+      };
+    if (reason === "capture") leaf.captures = [];
+    if (reason === "class capture") leaf.classCaptures = [];
+    const result = reason === "absent" ? analyze(outer) : analyze(outer, leaf);
+    expect(result.parameters.has("outer")).toBe(false);
+  },
+);
 
-test.each(["boxed", "tdz", "redeclared", "assign", "assign expression", "increment"])("rejects a %s binding even when reads are projections", (reason) => {
-  const fn = helper("read");
-  if (reason === "boxed") fn.locals[0]!.boxed = true;
-  if (reason === "tdz") fn.locals[0]!.tdz = true;
-  if (reason === "redeclared") fn.body.push({ kind: "varDecl", localId: "value", init: null, loc });
-  if (reason === "assign") fn.body.push({ kind: "assign", localId: "value", value: ref("value"), loc });
-  if (reason === "assign expression") fn.body.push(ret({ kind: "assignExpr", localId: "value", value: ref("value"), type: optional, loc }));
-  if (reason === "increment") fn.body.push(ret({ kind: "incDec", localId: "value", op: "+", prefix: true, type: F64, loc }));
-  expect(analyze(fn).parameters.size).toBe(0);
-});
+test.each(["boxed", "tdz", "redeclared", "assign", "assign expression", "increment"])(
+  "rejects a %s binding even when reads are projections",
+  (reason) => {
+    const fn = helper("read");
+    if (reason === "boxed") fn.locals[0]!.boxed = true;
+    if (reason === "tdz") fn.locals[0]!.tdz = true;
+    if (reason === "redeclared")
+      fn.body.push({ kind: "varDecl", localId: "value", init: null, loc });
+    if (reason === "assign")
+      fn.body.push({ kind: "assign", localId: "value", value: ref("value"), loc });
+    if (reason === "assign expression")
+      fn.body.push(
+        ret({ kind: "assignExpr", localId: "value", value: ref("value"), type: optional, loc }),
+      );
+    if (reason === "increment")
+      fn.body.push(
+        ret({ kind: "incDec", localId: "value", op: "+", prefix: true, type: F64, loc }),
+      );
+    expect(analyze(fn).parameters.size).toBe(0);
+  },
+);
 
 test("proves unassigned source parameters despite their writable declaration", () => {
   const fn = helper("read");
@@ -119,9 +204,16 @@ test("proves unassigned source parameters despite their writable declaration", (
 test("rejects metadata captures that are not expression children", () => {
   for (const kind of ["closure", "classRef"] as const) {
     const fn = helper("read");
-    const expr: IrExpr = kind === "closure"
-      ? { kind, fnName: "captured", captures: ["value"], type: funcOf([], F64), loc }
-      : { kind, className: "Captured", captures: ["value"], type: { kind: "classval", className: "Captured" }, loc };
+    const expr: IrExpr =
+      kind === "closure"
+        ? { kind, fnName: "captured", captures: ["value"], type: funcOf([], F64), loc }
+        : {
+            kind,
+            className: "Captured",
+            captures: ["value"],
+            type: { kind: "classval", className: "Captured" },
+            loc,
+          };
     fn.body.push({ kind: "exprStmt", expr, loc });
     expect(analyze(fn).parameters.size).toBe(0);
   }
@@ -129,9 +221,20 @@ test("rejects metadata captures that are not expression children", () => {
 
 test("unknown indirect and runtime consumers cannot receive stack boxes", () => {
   const consumers: IrExpr[] = [
-    { kind: "callValue", callee: ref("cb", funcOf([optional], F64)), args: [ref("value")], type: F64, loc },
+    {
+      kind: "callValue",
+      callee: ref("cb", funcOf([optional], F64)),
+      args: [ref("value")],
+      type: F64,
+      loc,
+    },
     { kind: "unionWrap", value: ref("value"), unionId: "nested", tag: 0, type: optional, loc },
-    { kind: "recordLit", fields: [{ name: "value", value: ref("value") }], type: { kind: "record", shapeId: "holder" }, loc },
+    {
+      kind: "recordLit",
+      fields: [{ name: "value", value: ref("value") }],
+      type: { kind: "record", shapeId: "holder" },
+      loc,
+    },
   ];
   for (const expr of consumers) {
     const fn = helper("read");
@@ -150,10 +253,17 @@ test("a local alias is an owned use, while scalar control flow does not escape",
 });
 
 test("records safe local consumers without accepting duplicate or absent declarations", () => {
-  const fn = helper("work", []), leaf = helper("leaf");
+  const fn = helper("work", []),
+    leaf = helper("leaf");
   fn.locals.push(local("item"));
-  const init: IrExpr = { kind: "unionWrap", unionId: "optional", tag: 1,
-    value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc }, type: optional, loc };
+  const init: IrExpr = {
+    kind: "unionWrap",
+    unionId: "optional",
+    tag: 1,
+    value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc },
+    type: optional,
+    loc,
+  };
   const declaration: IrStmt = { kind: "varDecl", localId: "item", init, loc };
   fn.body = [declaration, ret(call("leaf", [ref("item")]))];
   expect(analyze(fn, leaf).locals.get("work")).toEqual(new Set(["item"]));
@@ -164,8 +274,15 @@ test("records safe local consumers without accepting duplicate or absent declara
 });
 
 test("visits nested argument effects even when the outer helper is safe", () => {
-  const fn = helper("work"), leaf = helper("leaf");
-  const nested: IrExpr = { kind: "seqExpr", stmts: [ret(ref("value"))], result: num(), type: F64, loc };
+  const fn = helper("work"),
+    leaf = helper("leaf");
+  const nested: IrExpr = {
+    kind: "seqExpr",
+    stmts: [ret(ref("value"))],
+    result: num(),
+    type: F64,
+    loc,
+  };
   fn.body.push(ret(call("leaf", [nested])));
   expect(analyze(fn, leaf).parameters.has("work")).toBe(false);
 });
@@ -223,8 +340,11 @@ test("heap inputs may escape while projection-only facts remain restrictive", ()
 
 test("borrows unchanged collection and callback parameters without a callee effect proof", () => {
   const types: IrType[] = [
-    { kind: "array", elem: record }, { kind: "map", key: F64, value: record },
-    { kind: "set", elem: record }, { kind: "bytes", elem: "u8" }, funcOf([record], record),
+    { kind: "array", elem: record },
+    { kind: "map", key: F64, value: record },
+    { kind: "set", elem: record },
+    { kind: "bytes", elem: "u8" },
+    funcOf([record], record),
   ];
   for (const type of types) {
     const fn = helper("forward");
@@ -236,19 +356,63 @@ test("borrows unchanged collection and callback parameters without a callee effe
   }
 });
 
-test.each(["boxed", "tdz", "capture", "class capture", "assign", "assign expression", "redeclare", "catch", "loop binding"])("heap borrowing excludes a %s parameter", (reason) => {
+test.each([
+  "boxed",
+  "tdz",
+  "capture",
+  "class capture",
+  "assign",
+  "assign expression",
+  "redeclare",
+  "catch",
+  "loop binding",
+])("heap borrowing excludes a %s parameter", (reason) => {
   const fn = helper("identity");
   fn.body = [ret(ref("value"))];
   if (reason === "boxed") fn.locals[0]!.boxed = true;
   if (reason === "tdz") fn.locals[0]!.tdz = true;
-  if (reason === "capture" || reason === "class capture") fn.body.unshift({ kind: "exprStmt", loc, expr: reason === "capture"
-    ? { kind: "closure", fnName: "callback", captures: ["value"], type: funcOf([], F64), loc }
-    : { kind: "classRef", className: "Local", captures: ["value"], type: { kind: "classval", className: "Local" }, loc } });
-  if (reason === "assign") fn.body.unshift({ kind: "assign", localId: "value", value: ref("value"), loc });
-  if (reason === "assign expression") fn.body.unshift({ kind: "exprStmt", loc, expr: { kind: "assignExpr", localId: "value", value: ref("value"), type: optional, loc } });
-  if (reason === "redeclare") fn.body.unshift({ kind: "varDecl", localId: "value", init: ref("value"), loc });
-  if (reason === "catch") fn.body.unshift({ kind: "tryCatch", tryBody: [], catchLocalId: "value", catchBody: [], finallyBody: [], loc });
-  if (reason === "loop binding") fn.body.unshift({ kind: "forOf", localId: "value", iterable: ref("items", { kind: "array", elem: optional }), body: [], loc });
+  if (reason === "capture" || reason === "class capture")
+    fn.body.unshift({
+      kind: "exprStmt",
+      loc,
+      expr:
+        reason === "capture"
+          ? { kind: "closure", fnName: "callback", captures: ["value"], type: funcOf([], F64), loc }
+          : {
+              kind: "classRef",
+              className: "Local",
+              captures: ["value"],
+              type: { kind: "classval", className: "Local" },
+              loc,
+            },
+    });
+  if (reason === "assign")
+    fn.body.unshift({ kind: "assign", localId: "value", value: ref("value"), loc });
+  if (reason === "assign expression")
+    fn.body.unshift({
+      kind: "exprStmt",
+      loc,
+      expr: { kind: "assignExpr", localId: "value", value: ref("value"), type: optional, loc },
+    });
+  if (reason === "redeclare")
+    fn.body.unshift({ kind: "varDecl", localId: "value", init: ref("value"), loc });
+  if (reason === "catch")
+    fn.body.unshift({
+      kind: "tryCatch",
+      tryBody: [],
+      catchLocalId: "value",
+      catchBody: [],
+      finallyBody: [],
+      loc,
+    });
+  if (reason === "loop binding")
+    fn.body.unshift({
+      kind: "forOf",
+      localId: "value",
+      iterable: ref("items", { kind: "array", elem: optional }),
+      body: [],
+      loc,
+    });
   expect(analyze(fn).borrowed.size).toBe(0);
 });
 
@@ -257,7 +421,12 @@ test("unchanged let bindings can own call inputs but subsequent writes and captu
   fn.locals = [{ ...local("value"), mutable: true }];
   fn.body = [{ kind: "varDecl", localId: "value", init: ref("outside"), loc }, ret(ref("value"))];
   expect(analyze(fn).bindings.get(fn.name)).toEqual(new Set(["value"]));
-  fn.body.unshift({ kind: "if", cond: { kind: "boolLit", value: false, type: BOOL, loc },
-    then: [{ kind: "assign", localId: "value", value: ref("outside"), loc }], else_: [], loc });
+  fn.body.unshift({
+    kind: "if",
+    cond: { kind: "boolLit", value: false, type: BOOL, loc },
+    then: [{ kind: "assign", localId: "value", value: ref("outside"), loc }],
+    else_: [],
+    loc,
+  });
   expect(analyze(fn).bindings.get(fn.name)?.size).toBe(0);
 });

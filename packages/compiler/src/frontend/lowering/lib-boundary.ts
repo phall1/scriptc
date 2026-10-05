@@ -36,10 +36,29 @@
  * The pass never rewrites a well-typed argument: typeEquals matches are
  * untouched, so byte-stability holds for every program that lowered
  * cleanly before. The validator stays the backstop for anything else. */
-import { everyExprChild, everyStmtChild, mapExprChildren, mapStmtChildren } from "../../ir/traverse.js";
+import {
+  everyExprChild,
+  everyStmtChild,
+  mapExprChildren,
+  mapStmtChildren,
+} from "../../ir/traverse.js";
 import type { Lowerer } from "./lowerer.js";
 import { PoisonError } from "./lowerer.js";
-import { canAdaptDynFuncTo, canMarshalTypedFuncIntoIsland, DYN, DYN_HANDLE_KINDS, type IrExpr, type IrStmt, type IrType, JSVAL, type SrcLoc, STRING, isDynTypedRefType, isUnitType, typeEquals } from "../../ir/ir.js";
+import {
+  canAdaptDynFuncTo,
+  canMarshalTypedFuncIntoIsland,
+  DYN,
+  DYN_HANDLE_KINDS,
+  type IrExpr,
+  type IrStmt,
+  type IrType,
+  JSVAL,
+  type SrcLoc,
+  STRING,
+  isDynTypedRefType,
+  isUnitType,
+  typeEquals,
+} from "../../ir/ir.js";
 import { LIB_FN_SIGS, REGEX_INTRINSIC_SIGS, STR_INTRINSIC_SIGS } from "../../ir/validate.js";
 import { unionMismatchDiag, unsupportedDiag } from "../../diagnostics/diagnostic.js";
 
@@ -54,16 +73,23 @@ function dynCheckable(lowerer: Lowerer, want: IrType): boolean {
   if (want.kind === "object" && want.className === "%Error") return true;
   if (isDynTypedRefType(want) || DYN_HANDLE_KINDS.has(want.kind)) return true;
   if (want.kind === "func") {
-    return canAdaptDynFuncTo(want, (id) => lowerer.shapes.get(id), (id) => lowerer.unions.get(id));
+    return canAdaptDynFuncTo(
+      want,
+      (id) => lowerer.shapes.get(id),
+      (id) => lowerer.unions.get(id),
+    );
   }
   if (want.kind === "union") {
     const def = lowerer.unions.get(want.unionId);
-    return !!def && def.arms.every(
-      (a) =>
-        a.kind === "undefinedT" ||
-        lowerer.jsonSafe(a) ||
-        isDynTypedRefType(a) ||
-        DYN_HANDLE_KINDS.has(a.kind),
+    return (
+      !!def &&
+      def.arms.every(
+        (a) =>
+          a.kind === "undefinedT" ||
+          lowerer.jsonSafe(a) ||
+          isDynTypedRefType(a) ||
+          DYN_HANDLE_KINDS.has(a.kind),
+      )
     );
   }
   return false;
@@ -90,16 +116,31 @@ function coerceSlot(lowerer: Lowerer, arg: IrExpr, want: IrType, what: string): 
     if (lowerer.boundaryExitSafe(want)) {
       return { kind: "jsExit", value: arg, type: want, loc: arg.loc };
     }
-    fence(lowerer, "SC1100", arg.loc, `passing 'any'-typed values where '${lowerer.fmt(want)}' is expected (${what})`);
+    fence(
+      lowerer,
+      "SC1100",
+      arg.loc,
+      `passing 'any'-typed values where '${lowerer.fmt(want)}' is expected (${what})`,
+    );
   }
   if (arg.type.kind === "dyn" && want.kind !== "dyn") {
     if (dynCheckable(lowerer, want)) {
       return { kind: "dynCheck", value: arg, type: want, loc: arg.loc };
     }
-    fence(lowerer, "SC1100", arg.loc, `passing 'unknown' values where '${lowerer.fmt(want)}' is expected (${what})`);
+    fence(
+      lowerer,
+      "SC1100",
+      arg.loc,
+      `passing 'unknown' values where '${lowerer.fmt(want)}' is expected (${what})`,
+    );
   }
   if (isUnitType(arg.type) && want.kind !== "union" && !isUnitType(want)) {
-    fence(lowerer, "SC1090", arg.loc, `'${arg.type.kind === "undefinedT" ? "undefined" : "null"}' values where '${lowerer.fmt(want)}' is expected (${what})`);
+    fence(
+      lowerer,
+      "SC1090",
+      arg.loc,
+      `'${arg.type.kind === "undefinedT" ? "undefined" : "null"}' values where '${lowerer.fmt(want)}' is expected (${what})`,
+    );
   }
   if (arg.type.kind === "union" && want.kind !== "union" && !containsDynOrUnit(want)) {
     lowerer.pushDiag(unionMismatchDiag(lowerer.fmt(want), lowerer.fmt(arg.type), arg.loc));
@@ -131,7 +172,10 @@ export function enforceLibBoundary(lowerer: Lowerer, node: IrStmt | IrStmt[]): v
     enforceExprBoundary(lowerer, value);
     return true;
   };
-  if (Array.isArray(node)) node.forEach((value) => { stmt(value); });
+  if (Array.isArray(node))
+    node.forEach((value) => {
+      stmt(value);
+    });
   else stmt(node);
 }
 
@@ -171,7 +215,11 @@ function enforceExprBoundary(lowerer: Lowerer, node: IrExpr): void {
   }
   if (kind === "arrIntrinsic") {
     const e = node;
-    if (e.receiver.type.kind === "dyn" || e.receiver.type.kind === "jsval" || isUnitType(e.receiver.type)) {
+    if (
+      e.receiver.type.kind === "dyn" ||
+      e.receiver.type.kind === "jsval" ||
+      isUnitType(e.receiver.type)
+    ) {
       // No element type exists to validate a dyn receiver against — the
       // honest answer is the operations-on-unknown fence. An island
       // (jsval) receiver fences too: the exit would COPY the engine
@@ -180,13 +228,22 @@ function enforceExprBoundary(lowerer: Lowerer, node: IrExpr): void {
       // own methods instead. Other non-array receivers stay the
       // validator's ICE (frontend breakage, not a checked-dynamic
       // escape).
-      fence(lowerer, "SC1100", e.receiver.loc, `'.${e.method}()' on '${lowerer.fmt(e.receiver.type)}' array receivers`);
+      fence(
+        lowerer,
+        "SC1100",
+        e.receiver.loc,
+        `'.${e.method}()' on '${lowerer.fmt(e.receiver.type)}' array receivers`,
+      );
     }
     return;
   }
   if (kind === "callValue") {
     const e = node;
-    if (e.callee.type.kind === "dyn" || e.callee.type.kind === "jsval" || isUnitType(e.callee.type)) {
+    if (
+      e.callee.type.kind === "dyn" ||
+      e.callee.type.kind === "jsval" ||
+      isUnitType(e.callee.type)
+    ) {
       fence(lowerer, "SC1100", e.loc, `calling '${lowerer.fmt(e.callee.type)}' values`);
     }
     if (e.callee.type.kind !== "func") return; // validator's ICE otherwise
@@ -217,20 +274,41 @@ function enforceExprBoundary(lowerer: Lowerer, node: IrExpr): void {
     e.args.forEach((a, i) => {
       if (a.type.kind === "jsval") return;
       if (isUnitType(a.type)) {
-        e.args[i] = { kind: "jsOp", op: a.type.kind === "undefinedT" ? "undefLit" : "nullLit", args: [], type: JSVAL, loc: a.loc };
+        e.args[i] = {
+          kind: "jsOp",
+          op: a.type.kind === "undefinedT" ? "undefLit" : "nullLit",
+          args: [],
+          type: JSVAL,
+          loc: a.loc,
+        };
         return;
       }
       if (a.type.kind === "dyn") {
-        fence(lowerer, "SC1100", a.loc, "passing 'unknown' values into dynamically-executed ('any'-typed) code (validate with 'as <type>' first)");
+        fence(
+          lowerer,
+          "SC1100",
+          a.loc,
+          "passing 'unknown' values into dynamically-executed ('any'-typed) code (validate with 'as <type>' first)",
+        );
       }
       if (
         lowerer.boundarySafe(a.type) ||
-        (a.type.kind === "func" && canMarshalTypedFuncIntoIsland(a.type, (id) => lowerer.shapes.get(id), (id) => lowerer.unions.get(id)))
+        (a.type.kind === "func" &&
+          canMarshalTypedFuncIntoIsland(
+            a.type,
+            (id) => lowerer.shapes.get(id),
+            (id) => lowerer.unions.get(id),
+          ))
       ) {
         e.args[i] = { kind: "jsMarshal", value: a, type: JSVAL, loc: a.loc };
         return;
       }
-      fence(lowerer, "SC1090", a.loc, `'${lowerer.fmt(a.type)}' values crossing into dynamically-executed ('any'-typed) code`);
+      fence(
+        lowerer,
+        "SC1090",
+        a.loc,
+        `'${lowerer.fmt(a.type)}' values crossing into dynamically-executed ('any'-typed) code`,
+      );
     });
     return;
   }
@@ -243,7 +321,12 @@ function enforceExprBoundary(lowerer: Lowerer, node: IrExpr): void {
     if (kind === "dynInvoke") {
       const inv = e as Extract<IrExpr, { kind: "dynInvoke" }>;
       if (inv.recv.type.kind !== "dyn") {
-        fence(lowerer, "SC1100", inv.recv.loc, `'.${inv.method}()' calls through '${lowerer.fmt(inv.recv.type)}' receivers in checked-dynamic positions`);
+        fence(
+          lowerer,
+          "SC1100",
+          inv.recv.loc,
+          `'.${inv.method}()' calls through '${lowerer.fmt(inv.recv.type)}' receivers in checked-dynamic positions`,
+        );
       }
     }
     e.args.forEach((a, i) => {
@@ -259,7 +342,12 @@ function enforceExprBoundary(lowerer: Lowerer, node: IrExpr): void {
         e.args[i] = { kind: "dynFrom", value: a, type: DYN, loc: a.loc };
         return;
       }
-      fence(lowerer, "SC1100", a.loc, `passing '${lowerer.fmt(a.type)}' values into calls through 'unknown' values`);
+      fence(
+        lowerer,
+        "SC1100",
+        a.loc,
+        `passing '${lowerer.fmt(a.type)}' values into calls through 'unknown' values`,
+      );
     });
     return;
   }
@@ -273,16 +361,22 @@ export function lowerSurplusCalls(lowerer: Lowerer, body: IrStmt[]): IrStmt[] {
     let needed = false;
     const inspectStmt = (node: IrStmt): boolean => everyStmtChild(node, inspectExpr, inspectStmt);
     const inspectExpr = (node: IrExpr): boolean => {
-      if (node.kind === "callValue" && node.callee.type.kind === "func" &&
-          node.args.length > node.callee.type.params.length && /\.(?:[cm]?js)$/.test(node.loc.file)) needed = true;
+      if (
+        node.kind === "callValue" &&
+        node.callee.type.kind === "func" &&
+        node.args.length > node.callee.type.params.length &&
+        /\.(?:[cm]?js)$/.test(node.loc.file)
+      )
+        needed = true;
       return everyExprChild(node, inspectExpr, inspectStmt);
     };
     inspectStmt(value);
     if (!needed) return value;
     const next = mapStmtChildren(value, expr, stmt);
-    if (next.kind === "return") for (const entry of lowerer.ctx.inferReturn?.entries ?? []) {
-      if (entry.stmt === value) entry.stmt = next;
-    }
+    if (next.kind === "return")
+      for (const entry of lowerer.ctx.inferReturn?.entries ?? []) {
+        if (entry.stmt === value) entry.stmt = next;
+      }
     return next;
   };
   const expr = (value: IrExpr): IrExpr => {
@@ -303,9 +397,15 @@ export function lowerSurplusCalls(lowerer: Lowerer, body: IrStmt[]): IrStmt[] {
         stmts.push({ kind: "varDecl", localId: local.id, init: value, loc: value.loc });
         return { kind: "varRef" as const, localId: local.id, type: local.type, loc: value.loc };
       });
-      const result: IrExpr = { ...e, callee: { kind: "varRef", localId: callee.id, type: e.callee.type, loc: e.loc }, args: args.slice(0, params.length) };
+      const result: IrExpr = {
+        ...e,
+        callee: { kind: "varRef", localId: callee.id, type: e.callee.type, loc: e.loc },
+        args: args.slice(0, params.length),
+      };
       if (receiver) result.receiver = receiver;
-      result.args.forEach((value, i) => { result.args[i] = coerceSlot(lowerer, value, params[i]!, `argument ${i + 1} of the call`); });
+      result.args.forEach((value, i) => {
+        result.args[i] = coerceSlot(lowerer, value, params[i]!, `argument ${i + 1} of the call`);
+      });
       return { kind: "seqExpr", stmts, result, type: e.type, loc: e.loc };
     }
     return e;

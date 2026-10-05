@@ -12,9 +12,13 @@ test("cycle traversal preserves counts, deep graphs and configured thresholds", 
   await mkdir(buildDir, { recursive: true });
   const bin = join(buildDir, "test_cycle");
   await execFileAsync("clang", [
-    "-std=c11", "-O1", "-Wall", "-Wextra",
+    "-std=c11",
+    "-O1",
+    "-Wall",
+    "-Wextra",
     "-fsanitize=address,undefined",
-    "-o", bin,
+    "-o",
+    bin,
     join(testDir, "test_cycle.c"),
     join(testDir, "../src/scr_cycle.c"),
   ]);
@@ -34,8 +38,6 @@ test("cycle traversal preserves counts, deep graphs and configured thresholds", 
     const env = { ...baseEnv };
     if (configured !== undefined) env.SCR_CYCLE_THRESHOLD = configured;
     const run = await execFileAsync(bin, [], { env });
-    expect(run.stdout).toBe(
-      `cycle collection checks passed: threshold=${expected}\n`,
-    );
+    expect(run.stdout).toBe(`cycle collection checks passed: threshold=${expected}\n`);
   }
 });

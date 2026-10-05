@@ -38,7 +38,15 @@
  * windows-dev). */
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, globSync, mkdirSync, readFileSync, renameSync, rmdirSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  globSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmdirSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
@@ -63,10 +71,14 @@ const laneDirScp = `C:/Users/rdp/work/${laneNameId}`; // scp destinations
  * OS tmpdir and dies with the run (ControlPersist=yes + explicit -O exit). */
 const controlPath = join(tmpdir(), `scriptc-win-lane-${process.pid}.sock`);
 const sshOpts = [
-  "-o", "ControlMaster=auto",
-  "-o", `ControlPath=${controlPath}`,
-  "-o", "ControlPersist=yes",
-  "-o", "ConnectTimeout=15",
+  "-o",
+  "ControlMaster=auto",
+  "-o",
+  `ControlPath=${controlPath}`,
+  "-o",
+  "ControlPersist=yes",
+  "-o",
+  "ConnectTimeout=15",
 ];
 
 /* Programs whose Node-on-Windows behavior the runtime deliberately does
@@ -86,35 +98,61 @@ const WINDOWS_SKIPS: Record<string, string> = {
   // stdout/stderr read "" here where Node types them null (the
   // documented spawnSync stance) — invisible on POSIX lanes where these
   // spawns succeed, exposed here where every one fails.
-  "process-named-signals.cjs": "POSIX signal delivery: Windows Node cannot send SIGWINCH or register SIGSTOP",
-  "1360-spawn-sync.ts": "posix-shaped: every spawn is ENOENT on Windows Node too, exposing the documented spawn-failure \"\"-vs-null stdout stance (1644 covers spawnSync here)",
-  "1361-spawn-events.ts": "posix-shaped: the unlistened /bin/sh spawn failure crashes both sides, rendered differently (1646 covers spawn events here)",
-  "1362-spawn-timers.ts": "posix-shaped: the unlistened /bin/sh spawn failure crashes both sides, rendered differently",
-  "1462-exec-sync.ts": "posix-shaped: the uncaught printf ENOENT throw crashes both sides, rendered differently (1645 covers exec here)",
-  "1466-child-containers.ts": "posix-shaped: `true` is ENOENT on Windows Node too; the paths after the failed spawn diverge in rendering",
-  "1470-child-lifecycle.ts": "posix-shaped: kill() on the spawn-failed child crashes Windows Node (unhandled 'error'); the runtime answers false",
-  "1471-child-unref.ts": "posix-shaped: the unlistened sh spawn failure crashes both sides, rendered differently",
-  "1473-promisify-execfile.ts": "posix-shaped: the unhandled spawn-ENOENT rejection crashes both sides, rendered differently",
-  "1482-spawnsync-error.ts": "posix-shaped: /bin/sh fails ENOENT on Windows Node too — its null stdout .trim() crashes the oracle where the documented \"\" stance carries on",
-  "1522-spawnsync-options.ts": "posix-shaped: the sh capture case exposes the documented spawn-failure \"\"-vs-null stance (every other line agrees; 1644 covers the options here)",
-  "1523-spawn-options.ts": "posix-shaped: the unlistened sh spawn failure crashes both sides, rendered differently",
-  "1525-child-exit-signal.ts": "posix-shaped: the unlistened sh spawn failure crashes both sides, rendered differently (1646 covers kill/exit signals here)",
-  "1535-spawn-fd-stdio.ts": "posix-shaped: the unlistened sh spawn failure crashes both sides, rendered differently",
-  "1537-os-release-spawnsync-stdio.ts": "posix-shaped: the failed spawns expose the documented spawn-failure \"\"-vs-null stance",
-  "1552-exec-options-record.ts": "posix-shaped: the uncaught /bin/echo ENOENT throw crashes both sides, rendered differently",
-  "1562-spawn-conditional-spread.ts": "posix-shaped: the unlistened sh spawn failure crashes both sides, rendered differently",
-  "1565-spawn-pipe-streams.ts": "posix-shaped: the unlistened /bin/sh spawn failure crashes both sides, rendered differently (1646 covers pipe streams here)",
-  "1566-child-duck-interface.ts": "posix-shaped: the unlistened sh spawn failure crashes both sides, rendered differently",
-  "1570-child-unref-kill-reffed.ts": "posix-shaped: the unlistened sleep spawn failure crashes both sides, rendered differently",
-  "1573-promisify-execfile-env-spread.ts": "posix-shaped: the unhandled spawn-ENOENT rejection crashes both sides, rendered differently",
-  "1578-exec-input-optional.ts": "posix-shaped: the uncaught cat ENOENT throw crashes both sides, rendered differently (1645 covers input here)",
-  "1580-exec-env-conditional-spread.ts": "posix-shaped: the uncaught sh ENOENT throw crashes both sides, rendered differently (1645 covers env here)",
-  "1464-env-writes.ts": "posix-shaped: the observing child is ENOENT on Windows, exposing the documented spawn-failure \"\"-vs-null stance",
+  "process-named-signals.cjs":
+    "POSIX signal delivery: Windows Node cannot send SIGWINCH or register SIGSTOP",
+  "1360-spawn-sync.ts":
+    'posix-shaped: every spawn is ENOENT on Windows Node too, exposing the documented spawn-failure ""-vs-null stdout stance (1644 covers spawnSync here)',
+  "1361-spawn-events.ts":
+    "posix-shaped: the unlistened /bin/sh spawn failure crashes both sides, rendered differently (1646 covers spawn events here)",
+  "1362-spawn-timers.ts":
+    "posix-shaped: the unlistened /bin/sh spawn failure crashes both sides, rendered differently",
+  "1462-exec-sync.ts":
+    "posix-shaped: the uncaught printf ENOENT throw crashes both sides, rendered differently (1645 covers exec here)",
+  "1466-child-containers.ts":
+    "posix-shaped: `true` is ENOENT on Windows Node too; the paths after the failed spawn diverge in rendering",
+  "1470-child-lifecycle.ts":
+    "posix-shaped: kill() on the spawn-failed child crashes Windows Node (unhandled 'error'); the runtime answers false",
+  "1471-child-unref.ts":
+    "posix-shaped: the unlistened sh spawn failure crashes both sides, rendered differently",
+  "1473-promisify-execfile.ts":
+    "posix-shaped: the unhandled spawn-ENOENT rejection crashes both sides, rendered differently",
+  "1482-spawnsync-error.ts":
+    'posix-shaped: /bin/sh fails ENOENT on Windows Node too — its null stdout .trim() crashes the oracle where the documented "" stance carries on',
+  "1522-spawnsync-options.ts":
+    'posix-shaped: the sh capture case exposes the documented spawn-failure ""-vs-null stance (every other line agrees; 1644 covers the options here)',
+  "1523-spawn-options.ts":
+    "posix-shaped: the unlistened sh spawn failure crashes both sides, rendered differently",
+  "1525-child-exit-signal.ts":
+    "posix-shaped: the unlistened sh spawn failure crashes both sides, rendered differently (1646 covers kill/exit signals here)",
+  "1535-spawn-fd-stdio.ts":
+    "posix-shaped: the unlistened sh spawn failure crashes both sides, rendered differently",
+  "1537-os-release-spawnsync-stdio.ts":
+    'posix-shaped: the failed spawns expose the documented spawn-failure ""-vs-null stance',
+  "1552-exec-options-record.ts":
+    "posix-shaped: the uncaught /bin/echo ENOENT throw crashes both sides, rendered differently",
+  "1562-spawn-conditional-spread.ts":
+    "posix-shaped: the unlistened sh spawn failure crashes both sides, rendered differently",
+  "1565-spawn-pipe-streams.ts":
+    "posix-shaped: the unlistened /bin/sh spawn failure crashes both sides, rendered differently (1646 covers pipe streams here)",
+  "1566-child-duck-interface.ts":
+    "posix-shaped: the unlistened sh spawn failure crashes both sides, rendered differently",
+  "1570-child-unref-kill-reffed.ts":
+    "posix-shaped: the unlistened sleep spawn failure crashes both sides, rendered differently",
+  "1573-promisify-execfile-env-spread.ts":
+    "posix-shaped: the unhandled spawn-ENOENT rejection crashes both sides, rendered differently",
+  "1578-exec-input-optional.ts":
+    "posix-shaped: the uncaught cat ENOENT throw crashes both sides, rendered differently (1645 covers input here)",
+  "1580-exec-env-conditional-spread.ts":
+    "posix-shaped: the uncaught sh ENOENT throw crashes both sides, rendered differently (1645 covers env here)",
+  "1464-env-writes.ts":
+    'posix-shaped: the observing child is ENOENT on Windows, exposing the documented spawn-failure ""-vs-null stance',
   // Two programs the events unit's win32 arm surfaced (they compiled for
   // the first time once the events gate lifted): both drive their signal
   // listeners through a /bin/sh child, ENOENT on Windows Node too.
-  "1443-signal-handlers.ts": "posix-shaped: the /bin/sh signal driver is ENOENT on Windows Node too — no portable way to deliver a real SIGINT to both sides here",
-  "1469-remove-listener.ts": "posix-shaped: the unlistened sh spawn failure crashes both sides, rendered differently",
+  "1443-signal-handlers.ts":
+    "posix-shaped: the /bin/sh signal driver is ENOENT on Windows Node too — no portable way to deliver a real SIGINT to both sides here",
+  "1469-remove-listener.ts":
+    "posix-shaped: the unlistened sh spawn failure crashes both sides, rendered differently",
   // Not child_process: a posix-shaped fs program from another lane.
   // (The former POSIX-path-semantics skips are gone: a win32 target now
   // binds path/path.sep/path.delimiter/os.EOL and the file-URL bridge to
@@ -127,14 +165,18 @@ const WINDOWS_SKIPS: Record<string, string> = {
   // errors where the runtime prints one line, and @exit can't say "0 on
   // posix, 1 on win32". 1611-url-file-bridge-neutral.ts covers the
   // bridge on this lane.
-  "1356-url-file-bridge.ts": "posix-shaped: file:///tmp URLs crash Windows Node too (1611 covers the bridge here)",
-  "1612-cjs-module-globals.cjs": "__dirname/__filename are baked at compile time, so a cross-compiled binary carries build-host paths while the box's Node reports its staged directory; same-host lanes (macOS, the Linux mount) see identical paths on both sides",
+  "1356-url-file-bridge.ts":
+    "posix-shaped: file:///tmp URLs crash Windows Node too (1611 covers the bridge here)",
+  "1612-cjs-module-globals.cjs":
+    "__dirname/__filename are baked at compile time, so a cross-compiled binary carries build-host paths while the box's Node reports its staged directory; same-host lanes (macOS, the Linux mount) see identical paths on both sides",
   // uid/gid surfaces: no Windows arm exists in Node either (the members
   // are absent there); the runtime throws the same TypeError, but the
   // ORACLE differs per box user anyway.
   "1461-process-pid-getuid-kill.ts": "process.getuid absent on Windows (Node too)",
-  "1531-process-arch-versions.ts": "process.getuid/getgid absent on Windows Node (typed present here)",
-  "1571-optional-call-tostring-tail.ts": "process.getuid?.() short-circuits on Windows Node (member exists here)",
+  "1531-process-arch-versions.ts":
+    "process.getuid/getgid absent on Windows Node (typed present here)",
+  "1571-optional-call-tostring-tail.ts":
+    "process.getuid?.() short-circuits on Windows Node (member exists here)",
   // The errno-spelling gap 1520 used to name is FIXED (scr_fs_throw
   // translates the CRT's EACCES to EPERM on win32 — libuv's
   // ERROR_ACCESS_DENIED map; the program's caught branches print
@@ -144,7 +186,8 @@ const WINDOWS_SKIPS: Record<string, string> = {
   // next unguarded accessSync(W_OK) crashes BOTH sides identically at
   // the same line, rendered differently (stack vs one line), where
   // @exit says 0.
-  "1520-fs-wider-surface.ts": "posix-shaped: writeFileSync {mode} re-applies readonly on Windows (Node too) — the unguarded accessSync crashes both sides, rendered differently",
+  "1520-fs-wider-surface.ts":
+    "posix-shaped: writeFileSync {mode} re-applies readonly on Windows (Node too) — the unguarded accessSync crashes both sides, rendered differently",
   // (1480 left this list: GetAdaptersAddresses walks libuv's exact rows.)
   // os.userInfo: shell is null on Windows Node; the scriptc surface types
   // it string ("" here) — and username/homedir differ per box anyway.
@@ -199,7 +242,12 @@ function decOraclePath(file: string): string {
     compilerOptions: { target: ts5.ScriptTarget.ES2022, module: ts5.ModuleKind.ESNext },
     fileName: file,
   }).outputText;
-  const key = createHash("sha256").update(ts5.version).update("\0").update(src).digest("hex").slice(0, 16);
+  const key = createHash("sha256")
+    .update(ts5.version)
+    .update("\0")
+    .update(src)
+    .digest("hex")
+    .slice(0, 16);
   const dir = join(cacheDir, "win-dec-oracle", key);
   mkdirSync(dir, { recursive: true });
   const path = join(dir, decOracleName(file));
@@ -310,10 +358,9 @@ async function runWindowsNode(file: string): Promise<RunResult> {
     ? "--no-deprecation "
     : "";
   const shims = directiveHead(file).includes("// @no-node-shims")
-    ? "" : "--import ./comptime-shim.mjs --import ./island-shim.mjs ";
-  return runOnBox(
-    `node ${transform}${nodep}${shims}${entry}`,
-  );
+    ? ""
+    : "--import ./comptime-shim.mjs --import ./island-shim.mjs ";
+  return runOnBox(`node ${transform}${nodep}${shims}${entry}`);
 }
 
 function programInputs(file: string): string[] {
@@ -332,7 +379,12 @@ async function crossCompile(file: string): Promise<string> {
   const outDir = join(cacheDir, key);
   mkdirSync(outDir, { recursive: true });
   const outPath = join(outDir, `${laneName(file)}.exe`);
-  const result = await compile(file, { outPath, outDir, dynamic: wantsDynamic(file), backend: "llvm" });
+  const result = await compile(file, {
+    outPath,
+    outDir,
+    dynamic: wantsDynamic(file),
+    backend: "llvm",
+  });
   if (!result.ok) {
     throw new Error(
       "corpus program failed to cross-compile:\n" +
@@ -421,7 +473,13 @@ function runBoxFixtureLane(remoteCmd: string, driver: string | null): Promise<Fi
       // node leg gets no such sweep: node.exe is not ours to blanket-kill
       // on a shared box.
       const exe = /^(\S+\.exe)$/.exec(remoteCmd)?.[1];
-      const reaped = exe !== undefined ? runOnBox(`taskkill /F /IM ${exe}`).then(() => undefined, () => undefined) : Promise.resolve();
+      const reaped =
+        exe !== undefined
+          ? runOnBox(`taskkill /F /IM ${exe}`).then(
+              () => undefined,
+              () => undefined,
+            )
+          : Promise.resolve();
       void reaped.finally(() =>
         reject(new Error(`fixture timed out on the box\nstderr so far:\n${errText}`)),
       );
@@ -469,7 +527,11 @@ async function shipFixture(c: { name: string; entry: string }): Promise<void> {
   const key = hash.update("windows\0").update(target).digest("hex").slice(0, 16);
   const outDir = join(cacheDir, key);
   mkdirSync(outDir, { recursive: true });
-  const result = await compile(c.entry, { outPath: join(outDir, `${c.name}.exe`), outDir, backend: "llvm" });
+  const result = await compile(c.entry, {
+    outPath: join(outDir, `${c.name}.exe`),
+    outDir,
+    backend: "llvm",
+  });
   if (!result.ok) {
     throw new Error(
       "fixture failed to cross-compile:\n" +
@@ -505,7 +567,9 @@ describe.skipIf(!enabled)(`windows differential (${target})`, () => {
   beforeAll(async () => {
     // Fail loudly, not skip: SCRIPTC_WIN=1 promises a Windows verdict.
     await execFileAsync("zig", ["version"]).catch(() => {
-      throw new Error("SCRIPTC_WIN=1 needs zig on PATH (zigup) — the lane cross-compiles with `zig cc`.");
+      throw new Error(
+        "SCRIPTC_WIN=1 needs zig on PATH (zigup) — the lane cross-compiles with `zig cc`.",
+      );
     });
     await acquireLaneLock();
     try {
@@ -513,7 +577,9 @@ describe.skipIf(!enabled)(`windows differential (${target})`, () => {
       try {
         nodeV = (await execFileAsync("ssh", [...sshOpts, host, "node --version"])).stdout.trim();
       } catch (err) {
-        throw new Error(`SCRIPTC_WIN=1 needs ssh access to '${host}' (see ~/.ssh/config): ${String(err)}`);
+        throw new Error(
+          `SCRIPTC_WIN=1 needs ssh access to '${host}' (see ~/.ssh/config): ${String(err)}`,
+        );
       }
       const pinned = readFileSync(join(repoRoot, ".node-version"), "utf8").trim();
       if (nodeV !== `v${pinned}`) {
@@ -522,7 +588,11 @@ describe.skipIf(!enabled)(`windows differential (${target})`, () => {
         );
       }
       // Fresh lane dir per run, then the shims the oracle imports.
-      await execFileAsync("ssh", [...sshOpts, host, `cmd /c if exist ${laneDirWin} rmdir /S /Q ${laneDirWin}`]);
+      await execFileAsync("ssh", [
+        ...sshOpts,
+        host,
+        `cmd /c if exist ${laneDirWin} rmdir /S /Q ${laneDirWin}`,
+      ]);
       await execFileAsync("ssh", [...sshOpts, host, `cmd /c mkdir ${laneDirWin}`]);
       await scpToLane([
         join(repoRoot, "tests/harness/comptime-shim.mjs"),
@@ -549,8 +619,18 @@ describe.skipIf(!enabled)(`windows differential (${target})`, () => {
         ...(fetchCases.length > 0 ? [join(repoRoot, "tests/fixtures/fetch")] : []),
       ];
       if (trees.length > 0) {
-        await execFileAsync("ssh", [...sshOpts, host, `cmd /c mkdir ${laneDirWin}\\tests\\fixtures`]);
-        await execFileAsync("scp", ["-q", "-r", ...sshOpts, ...trees, `${host}:${laneDirScp}/tests/fixtures/`]);
+        await execFileAsync("ssh", [
+          ...sshOpts,
+          host,
+          `cmd /c mkdir ${laneDirWin}\\tests\\fixtures`,
+        ]);
+        await execFileAsync("scp", [
+          "-q",
+          "-r",
+          ...sshOpts,
+          ...trees,
+          `${host}:${laneDirScp}/tests/fixtures/`,
+        ]);
       }
     } catch (err) {
       rmdirSync(laneLockDir);
@@ -563,7 +643,9 @@ describe.skipIf(!enabled)(`windows differential (${target})`, () => {
     // started is a console child of an ssh session and dies with it — the
     // lane never launches anything detached), close the ssh master,
     // release the lane lock.
-    await execFileAsync("ssh", [...sshOpts, host, `cmd /c rmdir /S /Q ${laneDirWin}`]).catch(() => undefined);
+    await execFileAsync("ssh", [...sshOpts, host, `cmd /c rmdir /S /Q ${laneDirWin}`]).catch(
+      () => undefined,
+    );
     await execFileAsync("ssh", [...sshOpts, "-O", "exit", host]).catch(() => undefined);
     try {
       rmdirSync(laneLockDir);
@@ -590,7 +672,9 @@ describe.skipIf(!enabled)(`windows differential (${target})`, () => {
           // stays for whatever gates next): they are later-phase scope,
           // not Windows failures. Everything else is a real failure.
           if (err instanceof Error && err.message.includes("not supported under a cross target")) {
-            ctx.skip(err.message.split("\n").find((l) => l.includes("not supported")) ?? err.message);
+            ctx.skip(
+              err.message.split("\n").find((l) => l.includes("not supported")) ?? err.message,
+            );
           }
           throw err;
         }
@@ -621,7 +705,9 @@ describe.skipIf(!enabled)(`windows differential (${target})`, () => {
         for (const marker of ["console.log", "console.error", "stdout.write", "stderr.write"]) {
           expect(rendered).toContain(`${marker} ─ · › αβγ 你好 🎉`);
         }
-        const codePages = [...rendered.matchAll(/Active code page: (\d+)/g)].map((match) => match[1]);
+        const codePages = [...rendered.matchAll(/Active code page: (\d+)/g)].map(
+          (match) => match[1],
+        );
         expect(codePages).toHaveLength(2);
         expect(codePages[1]).toBe(codePages[0]);
       },
@@ -642,8 +728,13 @@ describe.skipIf(!enabled)(`windows differential (${target})`, () => {
           } catch (err) {
             // A case needing a still-gated feature skips with the gate's
             // reason (nothing in these fixture sets does today).
-            if (err instanceof Error && err.message.includes("not supported under a cross target")) {
-              ctx.skip(err.message.split("\n").find((l) => l.includes("not supported")) ?? err.message);
+            if (
+              err instanceof Error &&
+              err.message.includes("not supported under a cross target")
+            ) {
+              ctx.skip(
+                err.message.split("\n").find((l) => l.includes("not supported")) ?? err.message,
+              );
             }
             throw err;
           }
@@ -737,13 +828,20 @@ describe.skipIf(!enabled)(`windows differential (${target})`, () => {
       const hash = createHash("sha256");
       const inputs = [
         c.entry,
-        ...globSync(join(repoRoot, "tests/fixtures/fetch/node_modules/**/*.{js,mjs,cjs,json,d.ts}")).sort(),
+        ...globSync(
+          join(repoRoot, "tests/fixtures/fetch/node_modules/**/*.{js,mjs,cjs,json,d.ts}"),
+        ).sort(),
       ];
       for (const f of inputs) hash.update(f).update(readFileSync(f));
       const key = hash.update("windows-fetch\0").update(target).digest("hex").slice(0, 16);
       const outDir = join(cacheDir, key);
       mkdirSync(outDir, { recursive: true });
-      const result = await compile(c.entry, { outPath: join(outDir, `${c.name}.exe`), outDir, dynamic: true, backend: "llvm" });
+      const result = await compile(c.entry, {
+        outPath: join(outDir, `${c.name}.exe`),
+        outDir,
+        dynamic: true,
+        backend: "llvm",
+      });
       if (!result.ok) {
         throw new Error(
           "fetch fixture failed to cross-compile:\n" +
@@ -764,26 +862,21 @@ describe.skipIf(!enabled)(`windows differential (${target})`, () => {
 
     /** One case, both lanes on the box, byte-compared. Sequential, not
      * parallel: both lanes drive real sockets against the same servers. */
-    async function runFetchCase(c: { name: string; entry: string }, env: Record<string, string>): Promise<void> {
+    async function runFetchCase(
+      c: { name: string; entry: string },
+      env: Record<string, string>,
+    ): Promise<void> {
       await shipFetchFixture(c);
       const argv = [base, refused];
       // The fragment redirect route remembers a caller-provided key. Node
       // and native must use distinct keys so the second lane also observes
       // the redirect instead of inheriting the first lane's server state.
-      const nodeArgv = c.name === "redirect-resolution"
-        ? [...argv, "redirect-resolution-node"]
-        : argv;
-      const nativeArgv = c.name === "redirect-resolution"
-        ? [...argv, "redirect-resolution-native"]
-        : argv;
-      const nodeRes = await runOnBox(
-        `node ${boxRel(c.entry)} ${nodeArgv.join(" ")}`,
-        env,
-      );
-      const nativeRes = await runOnBox(
-        `${c.name}.exe ${nativeArgv.join(" ")}`,
-        env,
-      );
+      const nodeArgv =
+        c.name === "redirect-resolution" ? [...argv, "redirect-resolution-node"] : argv;
+      const nativeArgv =
+        c.name === "redirect-resolution" ? [...argv, "redirect-resolution-native"] : argv;
+      const nodeRes = await runOnBox(`node ${boxRel(c.entry)} ${nodeArgv.join(" ")}`, env);
+      const nativeRes = await runOnBox(`${c.name}.exe ${nativeArgv.join(" ")}`, env);
       if (!nodeRes.stdout.equals(nativeRes.stdout)) {
         expect(nativeRes.stdout.toString("utf8")).toBe(nodeRes.stdout.toString("utf8"));
         expect.unreachable("stdout differed at byte level but not after utf8 decode");

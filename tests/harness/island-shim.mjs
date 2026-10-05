@@ -6,4 +6,5 @@
  * engine error-message text is never compared (the scriptc-only island
  * tests own that). Loaded via `--import` for every corpus run; inert for
  * programs that never mention the island. */
+// oxlint-disable-next-line no-eval -- Match the native island’s global-scope evaluation in the Node oracle.
 globalThis.__island_eval = (code) => String((0, eval)(code));

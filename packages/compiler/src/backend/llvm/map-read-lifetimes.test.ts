@@ -1,5 +1,16 @@
 import { expect, test } from "vitest";
-import { BOOL, DYN, F64, STRING, UNDEFINED_T, VOID, type IrExpr, type IrFunction, type IrModule, type IrType } from "../../ir/ir.js";
+import {
+  BOOL,
+  DYN,
+  F64,
+  STRING,
+  UNDEFINED_T,
+  VOID,
+  type IrExpr,
+  type IrFunction,
+  type IrModule,
+  type IrType,
+} from "../../ir/ir.js";
 import { validateModule } from "../../ir/validate.js";
 import { analyzeCallLifetimes } from "./call-lifetimes.js";
 import { emitLlvmModule } from "./emitter.js";
@@ -12,25 +23,65 @@ const ref = (localId: string, type: IrType): IrExpr => ({ kind: "varRef", localI
 
 function fixture(value: IrType = record, key: IrType = F64): IrModule {
   const map: IrType = { kind: "map", key, value };
-  const params = [{ localId: "map", name: "map", type: map }, { localId: "key", name: "key", type: key }];
+  const params = [
+    { localId: "map", name: "map", type: map },
+    { localId: "key", name: "key", type: key },
+  ];
   const work: IrFunction = {
-    name: "work", params, returnType: BOOL, loc,
-    locals: [...params.map((p) => ({ id: p.localId, name: p.name, type: p.type, mutable: true })),
-      { id: "value", name: "value", type: optional, mutable: false }],
+    name: "work",
+    params,
+    returnType: BOOL,
+    loc,
+    locals: [
+      ...params.map((p) => ({ id: p.localId, name: p.name, type: p.type, mutable: true })),
+      { id: "value", name: "value", type: optional, mutable: false },
+    ],
     body: [
-      { kind: "varDecl", localId: "value", loc, init: { kind: "mapIntrinsic", method: "get", receiver: ref("map", map), args: [ref("key", key)], type: optional, loc } },
-      { kind: "return", loc, value: { kind: "unionIsTag", value: ref("value", optional), unionId: "optional", tag: 0, negated: false, type: BOOL, loc } },
+      {
+        kind: "varDecl",
+        localId: "value",
+        loc,
+        init: {
+          kind: "mapIntrinsic",
+          method: "get",
+          receiver: ref("map", map),
+          args: [ref("key", key)],
+          type: optional,
+          loc,
+        },
+      },
+      {
+        kind: "return",
+        loc,
+        value: {
+          kind: "unionIsTag",
+          value: ref("value", optional),
+          unionId: "optional",
+          tag: 0,
+          negated: false,
+          type: BOOL,
+          loc,
+        },
+      },
     ],
   };
-  return { irVersion: 13, sourceFile: loc.file, entry: "main", records: [{ id: "cell", fields: [{ name: "x", type: F64 }] }],
-    unions: [{ id: "optional", arms: [value, UNDEFINED_T] }], functions: [
-      { name: "main", params: [], locals: [], returnType: VOID, body: [], loc }, work,
-    ] };
+  return {
+    irVersion: 13,
+    sourceFile: loc.file,
+    entry: "main",
+    records: [{ id: "cell", fields: [{ name: "x", type: F64 }] }],
+    unions: [{ id: "optional", arms: [value, UNDEFINED_T] }],
+    functions: [{ name: "main", params: [], locals: [], returnType: VOID, body: [], loc }, work],
+  };
 }
 
 function facts(mod: IrModule) {
   const lifetimes = analyzeCallLifetimes(new Map(mod.functions.map((fn) => [fn.name, fn])));
-  return findMapReadLifetimes(mod.functions[1]!, new Map(mod.unions!.map((union) => [union.id, union])), lifetimes);
+  return findMapReadLifetimes(
+    mod.functions[1]!,
+    new Map(mod.unions!.map((union) => [union.id, union])),
+    lifetimes,
+  );
 }
 
 function body(mod: IrModule, bits: 32 | 64 = 64): string {
@@ -61,12 +112,41 @@ test("direct helper arguments have independent stack boxes and call-scoped paylo
   const fn = mod.functions[1]!;
   const init = fn.body[0]!;
   if (init.kind !== "varDecl" || !init.init) throw new Error("missing lookup");
-  const helper: IrFunction = { name: "inspect", loc, returnType: BOOL,
+  const helper: IrFunction = {
+    name: "inspect",
+    loc,
+    returnType: BOOL,
     params: ["left", "right"].map((id) => ({ localId: id, name: id, type: optional })),
     locals: ["left", "right"].map((id) => ({ id, name: id, type: optional, mutable: false })),
-    body: [{ kind: "return", loc, value: { kind: "unionIsTag", value: ref("left", optional), unionId: "optional", tag: 0, negated: false, type: BOOL, loc } }],
+    body: [
+      {
+        kind: "return",
+        loc,
+        value: {
+          kind: "unionIsTag",
+          value: ref("left", optional),
+          unionId: "optional",
+          tag: 0,
+          negated: false,
+          type: BOOL,
+          loc,
+        },
+      },
+    ],
   };
-  fn.body = [{ kind: "return", loc, value: { kind: "call", callee: helper.name, args: [init.init, { ...init.init }], type: BOOL, loc } }];
+  fn.body = [
+    {
+      kind: "return",
+      loc,
+      value: {
+        kind: "call",
+        callee: helper.name,
+        args: [init.init, { ...init.init }],
+        type: BOOL,
+        loc,
+      },
+    },
+  ];
   mod.functions.push(helper);
   expect(facts(mod).arguments.size).toBe(2);
   const ir = body(mod);
@@ -100,8 +180,10 @@ test("typed read helpers borrow string keys while mutations retain the owned con
   const mod = fixture(record, STRING);
   const fn = mod.functions[1]!;
   const init = fn.body[0]!;
-  if (init.kind !== "varDecl" || init.init?.kind !== "mapIntrinsic") throw new Error("missing lookup");
-  const keyFacts = () => analyzeCallLifetimes(new Map(mod.functions.map((f) => [f.name, f]))).parameters.get(fn.name);
+  if (init.kind !== "varDecl" || init.init?.kind !== "mapIntrinsic")
+    throw new Error("missing lookup");
+  const keyFacts = () =>
+    analyzeCallLifetimes(new Map(mod.functions.map((f) => [f.name, f]))).parameters.get(fn.name);
   expect(keyFacts()).toEqual(new Set([1]));
   const ir = body(mod);
   expect(ir).not.toContain("@scr_map_retain");
@@ -117,9 +199,17 @@ test("effectful keys borrow unchanged bindings and snapshot reassigned receivers
   const mod = fixture();
   const fn = mod.functions[1]!;
   const init = fn.body[0]!;
-  if (init.kind !== "varDecl" || init.init?.kind !== "mapIntrinsic") throw new Error("missing lookup");
+  if (init.kind !== "varDecl" || init.init?.kind !== "mapIntrinsic")
+    throw new Error("missing lookup");
   init.init.args[0] = { kind: "call", callee: "key", args: [], type: F64, loc };
-  mod.functions.push({ name: "key", params: [], locals: [], body: [{ kind: "return", value: { kind: "numLit", value: 0, type: F64, loc }, loc }], returnType: F64, loc });
+  mod.functions.push({
+    name: "key",
+    params: [],
+    locals: [],
+    body: [{ kind: "return", value: { kind: "numLit", value: 0, type: F64, loc }, loc }],
+    returnType: F64,
+    loc,
+  });
   expect(body(mod)).not.toContain("@scr_map_retain_v");
   const work = mod.functions[1]!;
   const type = work.params[0]!.type;

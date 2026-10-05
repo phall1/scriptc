@@ -68,14 +68,17 @@ export function balancedShardSelect<T>(
 ): T[] {
   if (spec === undefined || spec.count === 1) return [...items];
   const keys = new Set<string>();
-  const ranked = items.map((item, index) => {
-    const key = keyOf(item);
-    const weight = weightOf(item);
-    if (keys.has(key)) throw new Error(`duplicate balanced shard key: ${key}`);
-    if (!Number.isFinite(weight) || weight <= 0) throw new Error(`invalid balanced shard weight for ${key}: ${weight}`);
-    keys.add(key);
-    return { index, key, weight };
-  }).sort((a, b) => b.weight - a.weight || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  const ranked = items
+    .map((item, index) => {
+      const key = keyOf(item);
+      const weight = weightOf(item);
+      if (keys.has(key)) throw new Error(`duplicate balanced shard key: ${key}`);
+      if (!Number.isFinite(weight) || weight <= 0)
+        throw new Error(`invalid balanced shard weight for ${key}: ${weight}`);
+      keys.add(key);
+      return { index, key, weight };
+    })
+    .sort((a, b) => b.weight - a.weight || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
   const loads = Array<number>(spec.count).fill(0);
   const owners = Array<number>(items.length);
   for (const item of ranked) {

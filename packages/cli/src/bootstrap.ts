@@ -22,7 +22,10 @@ try {
 function packageVersion(): string {
   const here = dirname(fileURLToPath(import.meta.url));
   try {
-    return (JSON.parse(requireText(join(here, "..", "package.json"))) as { version?: string }).version ?? "unknown";
+    return (
+      (JSON.parse(requireText(join(here, "..", "package.json"))) as { version?: string }).version ??
+      "unknown"
+    );
   } catch {
     return "unknown";
   }
@@ -36,7 +39,9 @@ function requireText(path: string): string {
 }
 
 async function tryFastPath(): Promise<number | null> {
-  let parsed: ReturnType<typeof parseArgs<{ options: typeof CLI_OPTIONS; allowPositionals: true; allowNegative: true }>>;
+  let parsed: ReturnType<
+    typeof parseArgs<{ options: typeof CLI_OPTIONS; allowPositionals: true; allowNegative: true }>
+  >;
   try {
     parsed = parseArgs({ options: CLI_OPTIONS, allowPositionals: true, allowNegative: true });
   } catch {
@@ -53,17 +58,21 @@ async function tryFastPath(): Promise<number | null> {
   }
   const [command, inputArg] = positionals;
   if (
-    (command !== "build" && command !== "run") || inputArg === undefined ||
+    (command !== "build" && command !== "run") ||
+    inputArg === undefined ||
     (values.emit !== undefined && values.emit !== "exe") ||
     values.print !== undefined ||
     values["emit-ir"] ||
-    values.lib || values["provenance-sources"] ||
+    values.lib ||
+    values["provenance-sources"] ||
     (values["external-types"] ?? []).length > 0
-  ) return null;
+  )
+    return null;
   const backend = values.backend;
   if (backend !== undefined && backend !== "llvm") return null;
   const optimization = values.optimization;
-  if (optimization !== undefined && optimization !== "release" && optimization !== "dev") return null;
+  if (optimization !== undefined && optimization !== "release" && optimization !== "dev")
+    return null;
   const npmRaw = (values["npm-static"] ?? [])
     .flatMap((value) => value.split(","))
     .map((value) => value.trim())
@@ -88,11 +97,8 @@ async function tryFastPath(): Promise<number | null> {
   const input = resolve(inputArg);
   const outDir = values.out ? dirname(resolve(values.out)) : join(dirname(input), ".scriptc");
   const stem = basename(input).replace(/\.(ts|mts|cts|js|mjs|cjs|c|ll)$/, "");
-  const defaultName = buildPlatform === "win32"
-    ? `${stem}.exe`
-    : buildPlatform === "wasi"
-      ? `${stem}.wasm`
-      : stem;
+  const defaultName =
+    buildPlatform === "win32" ? `${stem}.exe` : buildPlatform === "wasi" ? `${stem}.wasm` : stem;
   const outPath = values.out ? resolve(values.out) : join(outDir, defaultName);
   const ffiPath = values.ffi === undefined ? null : resolve(values.ffi);
   const ffiBytes = ffiPath === null ? null : await readFile(ffiPath).catch(() => null);
@@ -102,9 +108,7 @@ async function tryFastPath(): Promise<number | null> {
   // full compiler. Otherwise a valid helper/runtime-pack cache entry has a
   // different target/compiler identity and bootstrap must unnecessarily load
   // the whole compiler graph to rediscover it.
-  const helperRuntimePackTarget = !values.sanitize
-    ? startup.precompiledRuntimePackTarget()
-    : null;
+  const helperRuntimePackTarget = !values.sanitize ? startup.precompiledRuntimePackTarget() : null;
   const helperObjectRoute = helperRuntimePackTarget !== null;
   const hit = await startup.readRoutedExecutableCache(root, {
     entryPath: input,
@@ -121,15 +125,18 @@ async function tryFastPath(): Promise<number | null> {
     target: `${process.env["SCRIPTC_TARGET"] ?? "native"}:${buildPlatform}:${process.arch}:${
       helperObjectRoute ? "runtime-pack" : "driver-tu"
     }`,
-    compiler: [helperObjectRoute
-      ? startup.resolvePlatformLinker(process.env, helperRuntimePackTarget.defaultLinker)
-      : (process.env["SCRIPTC_CC"] ?? "clang")],
-    nativeEnvironment: () => helperObjectRoute
-      ? startup.executableLinkerEnvironmentFingerprint(
-        process.env,
-        helperRuntimePackTarget.defaultLinker,
-      )
-      : startup.executableNativeEnvironmentFingerprint(),
+    compiler: [
+      helperObjectRoute
+        ? startup.resolvePlatformLinker(process.env, helperRuntimePackTarget.defaultLinker)
+        : (process.env["SCRIPTC_CC"] ?? "clang"),
+    ],
+    nativeEnvironment: () =>
+      helperObjectRoute
+        ? startup.executableLinkerEnvironmentFingerprint(
+            process.env,
+            helperRuntimePackTarget.defaultLinker,
+          )
+        : startup.executableNativeEnvironmentFingerprint(),
     nodeVersion: process.version,
   });
   if (hit === null) return null;

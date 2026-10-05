@@ -1,8 +1,34 @@
 import { describe, expect, test } from "vitest";
 import type { SymbolResponse, TypeResponse } from "typescript/unstable/proto";
-import { isBigIntLiteralType, isBooleanLiteralType, isClassOrInterfaceType, isConditionalType, isErrorType, isIndexType, isIndexedAccessType, isIntersectionType, isIntrinsicType, isLiteralType, isNumberLiteralType, isObjectType, isStringLiteralType, isStringMappingType, isSubstitutionType, isTemplateLiteralType, isTupleType, isTypeParameter, isTypeReference, isUnionType, type Type } from "typescript/unstable/sync";
+import {
+  isBigIntLiteralType,
+  isBooleanLiteralType,
+  isClassOrInterfaceType,
+  isConditionalType,
+  isErrorType,
+  isIndexType,
+  isIndexedAccessType,
+  isIntersectionType,
+  isIntrinsicType,
+  isLiteralType,
+  isNumberLiteralType,
+  isObjectType,
+  isStringLiteralType,
+  isStringMappingType,
+  isSubstitutionType,
+  isTemplateLiteralType,
+  isTupleType,
+  isTypeParameter,
+  isTypeReference,
+  isUnionType,
+  type Type,
+} from "typescript/unstable/sync";
 import { SemanticNodeHandle, SemanticSnapshot, SemanticType } from "./semantic-model.js";
-import { SemanticObjectFlags as ObjectFlags, SemanticSignatureFlags as SignatureFlags, SemanticTypeFlags as TypeFlags } from "./semantic-schema.generated.js";
+import {
+  SemanticObjectFlags as ObjectFlags,
+  SemanticSignatureFlags as SignatureFlags,
+  SemanticTypeFlags as TypeFlags,
+} from "./semantic-schema.generated.js";
 
 function harness() {
   const requests: { method: string; query: Record<string, unknown> }[] = [];
@@ -13,13 +39,21 @@ function harness() {
       if (!answers.has(method)) throw new Error(`Unexpected request ${method}`);
       return JSON.stringify(answers.get(method));
     },
-    binary() { throw new Error("Unexpected binary request"); },
+    binary() {
+      throw new Error("Unexpected binary request");
+    },
   });
   const first = snapshot.addProject("/first.json", () => undefined);
   const second = snapshot.addProject("/second.json", () => undefined);
-  const symbol = (id: number, extra: Partial<SymbolResponse> = {}): SymbolResponse => ({
-    id, flags: 2, checkFlags: 0, name: `name${id}`, project: first.id, ...extra,
-  } as SymbolResponse);
+  const symbol = (id: number, extra: Partial<SymbolResponse> = {}): SymbolResponse =>
+    ({
+      id,
+      flags: 2,
+      checkFlags: 0,
+      name: `name${id}`,
+      project: first.id,
+      ...extra,
+    }) as SymbolResponse;
   return { snapshot, first, second, requests, answers, symbol };
 }
 
@@ -44,7 +78,9 @@ test("canonical projects must exist before a symbol is registered", () => {
   expect(() => first.symbol(missing)).toThrow("Unknown TypeScript canonical project");
   const later = snapshot.addProject("/later.json", () => undefined);
   expect(first.symbol(missing).canonicalProject).toBe(later);
-  expect(() => snapshot.addProject(later.id, () => undefined)).toThrow("Duplicate TypeScript project");
+  expect(() => snapshot.addProject(later.id, () => undefined)).toThrow(
+    "Duplicate TypeScript project",
+  );
 });
 
 test("absent handles and empty known lists do not issue requests", () => {
@@ -101,8 +137,12 @@ describe("lazy type handles", () => {
       const type = first.type({ id: 1, flags: 0, [field]: 2 });
       const result = type[accessor]();
       expect(type[accessor]()).toBe(result);
-      expect(requests).toEqual([{ method, query: { snapshot: 17, project: first.id, objectId: 1 } }]);
-      expect(result).toBe(isSymbol ? second.symbol(data as SymbolResponse) : first.type(data as TypeResponse));
+      expect(requests).toEqual([
+        { method, query: { snapshot: 17, project: first.id, objectId: 1 } },
+      ]);
+      expect(result).toBe(
+        isSymbol ? second.symbol(data as SymbolResponse) : first.type(data as TypeResponse),
+      );
       if (!isSymbol) expect(second.type(data as TypeResponse)).not.toBe(result);
     });
   }
@@ -133,7 +173,11 @@ test("unknown constituent lists fetch while non-constituent types stay local", (
 
 test("constituent caches preserve order, duplicates, empty results and project-local identity", () => {
   const { first, second, answers, requests } = harness();
-  const data = [{ id: 2, flags: TypeFlags.Number }, { id: 3, flags: TypeFlags.String }, { id: 2, flags: TypeFlags.Number }];
+  const data = [
+    { id: 2, flags: TypeFlags.Number },
+    { id: 3, flags: TypeFlags.String },
+    { id: 2, flags: TypeFlags.Number },
+  ];
   answers.set("getTypesOfType", data);
   for (const flags of [TypeFlags.Union, TypeFlags.Intersection, TypeFlags.TemplateLiteral]) {
     const a = first.type({ id: flags, flags });
@@ -145,7 +189,11 @@ test("constituent caches preserve order, duplicates, empty results and project-l
     expect(items[0]).toBe(items[2]);
     expect(others[0]).toBe(others[2]);
     expect(items[0]).not.toBe(others[0]);
-    expect(items.map((type) => type.flags)).toEqual([TypeFlags.Number, TypeFlags.String, TypeFlags.Number]);
+    expect(items.map((type) => type.flags)).toEqual([
+      TypeFlags.Number,
+      TypeFlags.String,
+      TypeFlags.Number,
+    ]);
   }
   expect(requests).toHaveLength(6);
   answers.set("getTypesOfType", []);
@@ -230,7 +278,11 @@ test("conditional branches have independent lazy state, including a retry after 
   expect(yes).not.toBe(no);
   expect(type.getTrueType()).toBe(yes);
   expect(type.getFalseType()).toBe(no);
-  expect(requests.map((request) => request.method)).toEqual(["getTrueTypeOfConditionalType", "getTrueTypeOfConditionalType", "getFalseTypeOfConditionalType"]);
+  expect(requests.map((request) => request.method)).toEqual([
+    "getTrueTypeOfConditionalType",
+    "getTrueTypeOfConditionalType",
+    "getFalseTypeOfConditionalType",
+  ]);
 });
 
 test("base types use the checker type field, not an objectId request", () => {
@@ -238,7 +290,9 @@ test("base types use the checker type field, not an objectId request", () => {
   const type = first.type({ id: 1, flags: TypeFlags.Object, objectFlags: ObjectFlags.Interface });
   answers.set("getBaseTypes", [{ id: 2, flags: TypeFlags.Object, objectFlags: ObjectFlags.Class }]);
   expect(type.getBaseTypes()?.[0]?.isClassOrInterface()).toBe(true);
-  expect(requests).toEqual([{ method: "getBaseTypes", query: { snapshot: 17, project: first.id, type: 1 } }]);
+  expect(requests).toEqual([
+    { method: "getBaseTypes", query: { snapshot: 17, project: first.id, type: 1 } },
+  ]);
 });
 
 test("symbol tables keep escaped keys, display names, canonical context and cache identity", () => {
@@ -262,7 +316,14 @@ test("symbol tables keep escaped keys, display names, canonical context and cach
 
 test("signature handles use type, symbol and signature registries independently", () => {
   const { first, answers, requests, symbol } = harness();
-  const signature = first.signature({ id: 1, flags: SignatureFlags.HasRestParameter | SignatureFlags.Construct | SignatureFlags.Abstract, typeParameters: [2], parameters: [2, 3], thisParameter: 3, target: 2 });
+  const signature = first.signature({
+    id: 1,
+    flags: SignatureFlags.HasRestParameter | SignatureFlags.Construct | SignatureFlags.Abstract,
+    typeParameters: [2],
+    parameters: [2, 3],
+    thisParameter: 3,
+    target: 2,
+  });
   answers.set("getTypeParametersOfSignature", [{ id: 2, flags: TypeFlags.TypeParameter }]);
   answers.set("getParametersOfSignature", [symbol(2), symbol(3)]);
   answers.set("getTargetOfSignature", { id: 2, flags: 0 });
@@ -270,7 +331,9 @@ test("signature handles use type, symbol and signature registries independently"
   const parameters = signature.getParameters();
   expect(signature.getThisParameter()).toBe(parameters[1]);
   expect(signature.getParameters()).toEqual(parameters);
-  expect(signature.getTypeParameters()[0]).toBe(first.type({ id: 2, flags: TypeFlags.TypeParameter }));
+  expect(signature.getTypeParameters()[0]).toBe(
+    first.type({ id: 2, flags: TypeFlags.TypeParameter }),
+  );
   expect(signature.getTarget()).toBe(first.signature({ id: 2, flags: 0 }));
   expect(signature.getTarget()).not.toBe(signature);
   expect(signature.hasRestParameter && signature.isConstruct && signature.isAbstract).toBe(true);
@@ -283,7 +346,11 @@ test("literal metadata preserves zero, false, empty strings and arbitrary precis
     { flags: TypeFlags.StringLiteral, input: "", expected: "" },
     { flags: TypeFlags.NumberLiteral, input: 0, expected: 0 },
     { flags: TypeFlags.BooleanLiteral, input: false, expected: false },
-    { flags: TypeFlags.BigIntLiteral, input: "-123456789012345678901234567890", expected: -123456789012345678901234567890n },
+    {
+      flags: TypeFlags.BigIntLiteral,
+      input: "-123456789012345678901234567890",
+      expected: -123456789012345678901234567890n,
+    },
   ];
   for (const [index, { flags, input, expected }] of values.entries()) {
     expect(first.type({ id: index + 1, flags, value: input }).value).toBe(expected);
@@ -294,19 +361,42 @@ test("literal metadata preserves zero, false, empty strings and arbitrary precis
 test("native semantic predicates match all pinned TypeScript flag classifications", () => {
   const { first } = harness();
   const predicates = [
-    ["isUnionType", isUnionType], ["isIntersectionType", isIntersectionType], ["isObjectType", isObjectType],
-    ["isClassOrInterface", isClassOrInterfaceType], ["isIntrinsicType", isIntrinsicType], ["isErrorType", isErrorType],
-    ["isLiteralType", isLiteralType], ["isStringLiteralType", isStringLiteralType], ["isNumberLiteralType", isNumberLiteralType],
-    ["isBigIntLiteralType", isBigIntLiteralType], ["isBooleanLiteralType", isBooleanLiteralType],
-    ["isTypeReference", isTypeReference], ["isTupleType", isTupleType], ["isIndexType", isIndexType],
-    ["isIndexedAccessType", isIndexedAccessType], ["isConditionalType", isConditionalType], ["isSubstitutionType", isSubstitutionType],
-    ["isTemplateLiteralType", isTemplateLiteralType], ["isStringMappingType", isStringMappingType], ["isTypeParameter", isTypeParameter],
+    ["isUnionType", isUnionType],
+    ["isIntersectionType", isIntersectionType],
+    ["isObjectType", isObjectType],
+    ["isClassOrInterface", isClassOrInterfaceType],
+    ["isIntrinsicType", isIntrinsicType],
+    ["isErrorType", isErrorType],
+    ["isLiteralType", isLiteralType],
+    ["isStringLiteralType", isStringLiteralType],
+    ["isNumberLiteralType", isNumberLiteralType],
+    ["isBigIntLiteralType", isBigIntLiteralType],
+    ["isBooleanLiteralType", isBooleanLiteralType],
+    ["isTypeReference", isTypeReference],
+    ["isTupleType", isTupleType],
+    ["isIndexType", isIndexType],
+    ["isIndexedAccessType", isIndexedAccessType],
+    ["isConditionalType", isConditionalType],
+    ["isSubstitutionType", isSubstitutionType],
+    ["isTemplateLiteralType", isTemplateLiteralType],
+    ["isStringMappingType", isStringMappingType],
+    ["isTypeParameter", isTypeParameter],
   ] as const;
   let id = 0;
-  for (const flags of Object.values(TypeFlags)) for (const objectFlags of [0, ObjectFlags.Class, ObjectFlags.Interface, ObjectFlags.Reference, ObjectFlags.Tuple]) {
-    const type = first.type({ id: ++id, flags, objectFlags, intrinsicName: "error" });
-    for (const [name, oracle] of predicates) expect(type[name](), `${name} flags=${flags} objectFlags=${objectFlags}`).toBe(oracle(type as unknown as Type));
-  }
+  for (const flags of Object.values(TypeFlags))
+    for (const objectFlags of [
+      0,
+      ObjectFlags.Class,
+      ObjectFlags.Interface,
+      ObjectFlags.Reference,
+      ObjectFlags.Tuple,
+    ]) {
+      const type = first.type({ id: ++id, flags, objectFlags, intrinsicName: "error" });
+      for (const [name, oracle] of predicates)
+        expect(type[name](), `${name} flags=${flags} objectFlags=${objectFlags}`).toBe(
+          oracle(type as unknown as Type),
+        );
+    }
 });
 
 test("project disposal cannot poison another project, and snapshot disposal seals every cache", () => {

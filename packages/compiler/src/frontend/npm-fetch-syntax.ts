@@ -4,7 +4,10 @@
 import * as ts from "./ts7/syntax.js";
 import { SemanticChecker } from "./ts7/semantic-checker.js";
 import { SemanticSymbol } from "./ts7/semantic-model.js";
-export function sourceFilesUsingGlobalFetch(files: readonly ts.SourceFile[], checker: SemanticChecker): Set<string> {
+export function sourceFilesUsingGlobalFetch(
+  files: readonly ts.SourceFile[],
+  checker: SemanticChecker,
+): Set<string> {
   const found = new Set<string>();
   const unwrapParentheses = (node: ts.Expression): ts.Expression => {
     let current = node;
@@ -14,10 +17,7 @@ export function sourceFilesUsingGlobalFetch(files: readonly ts.SourceFile[], che
 
   const unboundGlobalObject = (candidate: ts.Expression): boolean => {
     const node = unwrapParentheses(candidate);
-    if (
-      !ts.isIdentifier(node) ||
-      (node.text !== "globalThis" && node.text !== "global")
-    ) {
+    if (!ts.isIdentifier(node) || (node.text !== "globalThis" && node.text !== "global")) {
       return false;
     }
     const symbol = checker.getSymbolAtLocation(node);
@@ -25,9 +25,7 @@ export function sourceFilesUsingGlobalFetch(files: readonly ts.SourceFile[], che
     // no-lib program. A source shadow (parameter/local/import) always carries
     // at least one declaration; the Node `global` alias remains unresolved.
     return (
-      symbol === undefined ||
-      symbol.declarations === undefined ||
-      symbol.declarations.length === 0
+      symbol === undefined || symbol.declarations === undefined || symbol.declarations.length === 0
     );
   };
 
@@ -42,8 +40,7 @@ export function sourceFilesUsingGlobalFetch(files: readonly ts.SourceFile[], che
       if (symbol === undefined) return false;
       if (aliases.has(symbol)) return true;
       return (
-        (symbol.flags & ts.SymbolFlags.Alias) !== 0 &&
-        aliases.has(checker.getAliasedSymbol(symbol))
+        (symbol.flags & ts.SymbolFlags.Alias) !== 0 && aliases.has(checker.getAliasedSymbol(symbol))
       );
     }
     if (ts.isConditionalExpression(node)) {
@@ -73,10 +70,7 @@ export function sourceFilesUsingGlobalFetch(files: readonly ts.SourceFile[], che
 
   const staticPropertyName = (name: ts.PropertyName | ts.BindingName): string | null => {
     if (ts.isIdentifier(name) || ts.isStringLiteralLike(name)) return name.text;
-    if (
-      ts.isComputedPropertyName(name) &&
-      ts.isStringLiteralLike(name.expression)
-    ) {
+    if (ts.isComputedPropertyName(name) && ts.isStringLiteralLike(name.expression)) {
       return name.expression.text;
     }
     return null;
@@ -130,7 +124,8 @@ export function sourceFilesUsingGlobalFetch(files: readonly ts.SourceFile[], che
     const parent = node.parent;
     // Binding-element names and aliases are declarations/property keys; the
     // global-object destructuring case is handled explicitly above.
-    if (ts.isBindingElement(parent) && (parent.name === node || parent.propertyName === node)) return false;
+    if (ts.isBindingElement(parent) && (parent.name === node || parent.propertyName === node))
+      return false;
     if (
       (ts.isLabeledStatement(parent) ||
         ts.isBreakStatement(parent) ||

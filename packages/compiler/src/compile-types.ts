@@ -82,7 +82,6 @@ export type CompileArtifact =
       path: string;
       translationUnitPath: string;
       backend: "llvm";
-
     };
 
 export type CompileFailure = {
@@ -103,7 +102,6 @@ export type CompileResult =
       llvmPath: string;
       irPath?: string;
       backend: "llvm";
-
     }
   | CompileFailure;
 
@@ -131,7 +129,14 @@ export type CompileLibraryResult =
   /** `sidecarPath` is present exactly when the profile declares a
    * `sidecar` section: the contract JSON written beside the archive by
    * the same invocation (ask 2). */
-  | { ok: true; archivePath: string; llvmPath: string; backend: "llvm"; irPath?: string; sidecarPath?: string }
+  | {
+      ok: true;
+      archivePath: string;
+      llvmPath: string;
+      backend: "llvm";
+      irPath?: string;
+      sidecarPath?: string;
+    }
   | { ok: false; diagnostics: ScrDiagnostic[]; sourceTexts: Map<string, string> };
 
 export interface AnalyzeOptions {

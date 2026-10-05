@@ -29,12 +29,17 @@ import {
 import { compilerReleaseVersion } from "../library/sidecar.js";
 
 import {
-  NativeCodegenError, validateNativeCodegenVersion as validateHelperVersion,
-  type NativeCodegenVersion, type NativeCodegenOutputKind,
+  NativeCodegenError,
+  validateNativeCodegenVersion as validateHelperVersion,
+  type NativeCodegenVersion,
+  type NativeCodegenOutputKind,
 } from "./native-codegen-core.js";
 export {
-  NATIVE_CODEGEN_PROTOCOL_VERSION, NATIVE_CODEGEN_LLVM_VERSION, NativeCodegenError,
-  type NativeCodegenVersion, type NativeCodegenOutputKind,
+  NATIVE_CODEGEN_PROTOCOL_VERSION,
+  NATIVE_CODEGEN_LLVM_VERSION,
+  NativeCodegenError,
+  type NativeCodegenVersion,
+  type NativeCodegenOutputKind,
 } from "./native-codegen-core.js";
 
 const execFileAsync = promisify(execFile);
@@ -79,14 +84,17 @@ function parseJsonObject(text: string): Record<string, unknown> | null {
   try {
     const parsed: unknown = JSON.parse(text);
     return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
+      ? (parsed as Record<string, unknown>)
       : null;
   } catch {
     return null;
   }
 }
 
-function helperFailureMessage(stderr: string, fallback: string): { code?: string; message: string } {
+function helperFailureMessage(
+  stderr: string,
+  fallback: string,
+): { code?: string; message: string } {
   const parsed = parseJsonObject(stderr.trim());
   return {
     ...(typeof parsed?.["code"] === "string" ? { code: parsed["code"] } : {}),
@@ -94,7 +102,10 @@ function helperFailureMessage(stderr: string, fallback: string): { code?: string
   };
 }
 
-async function invoke(binaryPath: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+async function invoke(
+  binaryPath: string,
+  args: string[],
+): Promise<{ stdout: string; stderr: string }> {
   try {
     return await execFileAsync(binaryPath, args, {
       encoding: "utf8",
@@ -114,7 +125,9 @@ async function invoke(binaryPath: string, args: string[]): Promise<{ stdout: str
 }
 
 export function validateNativeCodegenVersion(
-  value: Record<string, unknown>, target: NativeTargetSpec, helper: NativeHelperSpec,
+  value: Record<string, unknown>,
+  target: NativeTargetSpec,
+  helper: NativeHelperSpec,
 ): NativeCodegenVersion {
   return validateHelperVersion(value, target, helper, compilerReleaseVersion());
 }
@@ -124,12 +137,7 @@ async function resolveHelper(
   resolver?: (specifier: string) => string,
   host?: { platform: NodeJS.Platform; arch: string; linuxLibc?: "gnu" | "musl" },
 ): Promise<ResolvedHelper> {
-  const helper = nativeHelperForTarget(
-    target,
-    host?.platform,
-    host?.arch,
-    host?.linuxLibc,
-  );
+  const helper = nativeHelperForTarget(target, host?.platform, host?.arch, host?.linuxLibc);
   if (helper === null) {
     throw new NativeCodegenError(
       "SC3002",
@@ -137,8 +145,8 @@ async function resolveHelper(
       "unsupported_helper_host",
     );
   }
-  const resolvePackageJson = resolver ?? ((specifier: string) =>
-    createRequire(import.meta.url).resolve(specifier));
+  const resolvePackageJson =
+    resolver ?? ((specifier: string) => createRequire(import.meta.url).resolve(specifier));
   let packageJsonPath: string;
   try {
     packageJsonPath = resolvePackageJson(`${helper.packageName}/package.json`);
@@ -169,7 +177,8 @@ async function resolveHelper(
     if (
       process.platform !== "win32" &&
       ((binaryStat.mode & 0o444) === 0 || (binaryStat.mode & 0o111) === 0)
-    ) throw new Error("missing read or execute mode bits");
+    )
+      throw new Error("missing read or execute mode bits");
     await access(binaryPath, constants.R_OK | constants.X_OK);
   } catch {
     throw new NativeCodegenError(
@@ -245,9 +254,14 @@ async function resolveHelper(
   return pending;
 }
 
-function cacheKey(options: NativeCodegenOptions, target: NativeTargetSpec, helper: HelperIdentity): string {
+function cacheKey(
+  options: NativeCodegenOptions,
+  target: NativeTargetSpec,
+  helper: HelperIdentity,
+): string {
   const hash = createHash("sha256").update("scriptc-native-codegen-v1\0");
-  for (const part of typeof options.llvm === "string" ? [options.llvm] : options.llvm) hash.update(part);
+  for (const part of typeof options.llvm === "string" ? [options.llvm] : options.llvm)
+    hash.update(part);
   return hash
     .update("\0")
     .update(JSON.stringify(target))
@@ -282,12 +296,15 @@ async function installVerifiedCache(source: string, destination: string): Promis
   }
 }
 
-export async function emitNativeArtifact(options: NativeCodegenOptions): Promise<NativeCodegenArtifact> {
+export async function emitNativeArtifact(
+  options: NativeCodegenOptions,
+): Promise<NativeCodegenArtifact> {
   const target = options.target ?? nativeCodegenTarget();
   if (target === null) {
     throw new NativeCodegenError(
       "SC3002",
-      nativeCodegenTargetRefusal() ?? "native assembly/object emission is unsupported for this target",
+      nativeCodegenTargetRefusal() ??
+        "native assembly/object emission is unsupported for this target",
       "unsupported_target",
     );
   }
@@ -310,15 +327,25 @@ export async function emitNativeArtifact(options: NativeCodegenOptions): Promise
     options.cacheRoot === undefined ? buildCacheRoot() : options.cacheRoot,
   );
   const key = cacheKey(options, target, helper.identity);
-  const cached = root === null
-    ? null
-    : join(root, "native-codegen-v1", key.slice(0, 2), `${key}.${options.outputKind === "obj" ? "o" : "s"}`);
+  const cached =
+    root === null
+      ? null
+      : join(
+          root,
+          "native-codegen-v1",
+          key.slice(0, 2),
+          `${key}.${options.outputKind === "obj" ? "o" : "s"}`,
+        );
   await mkdir(dirname(options.outputPath), { recursive: true });
   const artifact = {
     dependencies: helper.dependencies,
   } satisfies NativeCodegenArtifact;
-  if (cached !== null && await validCachedFile(cached) &&
-      await installVerifiedCache(cached, options.outputPath)) return artifact;
+  if (
+    cached !== null &&
+    (await validCachedFile(cached)) &&
+    (await installVerifiedCache(cached, options.outputPath))
+  )
+    return artifact;
 
   const stage = privateSiblingPath(options.outputPath, `native-${options.outputKind}`);
   const input = privateSiblingPath(options.outputPath, "native-input");
@@ -326,14 +353,22 @@ export async function emitNativeArtifact(options: NativeCodegenOptions): Promise
     await writeFile(input, options.llvm, { mode: 0o600 });
     await invoke(helper.binaryPath, [
       "emit",
-      "--input", input,
-      "--output", stage,
-      "--filetype", options.outputKind,
-      "--target", target.llvmTriple,
-      "--opt-level", options.optimization ?? "2",
-      "--relocation-model", target.relocationModel,
-      "--diagnostic-format", "json",
-      "--source-path", options.sourcePath,
+      "--input",
+      input,
+      "--output",
+      stage,
+      "--filetype",
+      options.outputKind,
+      "--target",
+      target.llvmTriple,
+      "--opt-level",
+      options.optimization ?? "2",
+      "--relocation-model",
+      target.relocationModel,
+      "--diagnostic-format",
+      "json",
+      "--source-path",
+      options.sourcePath,
     ]);
     const emitted = await stat(stage).catch(() => null);
     if (emitted === null || !emitted.isFile() || emitted.size === 0) {
@@ -349,8 +384,9 @@ export async function emitNativeArtifact(options: NativeCodegenOptions): Promise
     // discard it or turn an otherwise successful build into an exception.
     if (
       cached !== null &&
-      await nativeArtifactDependenciesStillMatch(helper.dependencies).catch(() => false)
-    ) await publishCachedFile(stage, cached).catch(() => undefined);
+      (await nativeArtifactDependenciesStillMatch(helper.dependencies).catch(() => false))
+    )
+      await publishCachedFile(stage, cached).catch(() => undefined);
     await rename(stage, options.outputPath);
     await pruneBuildCache(root);
     return artifact;

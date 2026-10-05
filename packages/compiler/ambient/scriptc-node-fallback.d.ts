@@ -252,12 +252,20 @@ declare var process: {
    * completion callback overloads match Node's WritableStream surface. */
   stdout: {
     write(data: string | Uint8Array, callback?: (error?: Error | null) => void): boolean;
-    write(data: string | Uint8Array, encoding: BufferEncoding, callback?: (error?: Error | null) => void): boolean;
+    write(
+      data: string | Uint8Array,
+      encoding: BufferEncoding,
+      callback?: (error?: Error | null) => void,
+    ): boolean;
     readonly isTTY: boolean;
   };
   stderr: {
     write(data: string | Uint8Array, callback?: (error?: Error | null) => void): boolean;
-    write(data: string | Uint8Array, encoding: BufferEncoding, callback?: (error?: Error | null) => void): boolean;
+    write(
+      data: string | Uint8Array,
+      encoding: BufferEncoding,
+      callback?: (error?: Error | null) => void,
+    ): boolean;
     readonly isTTY: boolean;
   };
   /* The stdin stream, the piped-input slice: the TTY probe, the
@@ -318,7 +326,10 @@ declare var process: {
   removeListener(event: "SIGINT" | "SIGTERM", listener: () => void): void;
   removeListener(event: "exit", listener: (code: number) => void): void;
   removeListener(event: "warning", listener: (warning: Error & { code?: string }) => void): void;
-  removeListener(event: "unhandledRejection", listener: (reason: unknown, promise: unknown) => void): void;
+  removeListener(
+    event: "unhandledRejection",
+    listener: (reason: unknown, promise: unknown) => void,
+  ): void;
   removeListener(event: "rejectionHandled", listener: (promise: unknown) => void): void;
   /* emitWarning — Node's full grammar (string or Error warning; type/
    * ctor/options second; code/ctor third). */
@@ -490,19 +501,49 @@ type BufferEncoding =
   | "utf-16le"
   | "ucs2"
   | "ucs-2";
-interface Buffer<TArrayBuffer extends ArrayBufferLike = ArrayBufferLike> extends Uint8Array<TArrayBuffer> {
+interface Buffer<
+  TArrayBuffer extends ArrayBufferLike = ArrayBufferLike,
+> extends Uint8Array<TArrayBuffer> {
   toString(encoding?: BufferEncoding, start?: number, end?: number): string;
   equals(otherBuffer: Uint8Array): boolean;
-  compare(target: Uint8Array, targetStart?: number, targetEnd?: number, sourceStart?: number, sourceEnd?: number): number;
-  indexOf(value: string | number | Uint8Array, byteOffset?: number | BufferEncoding, encoding?: BufferEncoding): number;
-  lastIndexOf(value: string | number | Uint8Array, byteOffset?: number | BufferEncoding, encoding?: BufferEncoding): number;
-  includes(value: string | number | Buffer, byteOffset?: number | BufferEncoding, encoding?: BufferEncoding): boolean;
-  fill(value: string | number | Uint8Array, offset?: number | BufferEncoding, end?: number | BufferEncoding, encoding?: BufferEncoding): this;
+  compare(
+    target: Uint8Array,
+    targetStart?: number,
+    targetEnd?: number,
+    sourceStart?: number,
+    sourceEnd?: number,
+  ): number;
+  indexOf(
+    value: string | number | Uint8Array,
+    byteOffset?: number | BufferEncoding,
+    encoding?: BufferEncoding,
+  ): number;
+  lastIndexOf(
+    value: string | number | Uint8Array,
+    byteOffset?: number | BufferEncoding,
+    encoding?: BufferEncoding,
+  ): number;
+  includes(
+    value: string | number | Buffer,
+    byteOffset?: number | BufferEncoding,
+    encoding?: BufferEncoding,
+  ): boolean;
+  fill(
+    value: string | number | Uint8Array,
+    offset?: number | BufferEncoding,
+    end?: number | BufferEncoding,
+    encoding?: BufferEncoding,
+  ): this;
   copy(target: Uint8Array, targetStart?: number, sourceStart?: number, sourceEnd?: number): number;
   swap16(): Buffer;
   swap32(): Buffer;
   swap64(): Buffer;
-  write(string: string, offset?: number | BufferEncoding, length?: number | BufferEncoding, encoding?: BufferEncoding): number;
+  write(
+    string: string,
+    offset?: number | BufferEncoding,
+    length?: number | BufferEncoding,
+    encoding?: BufferEncoding,
+  ): number;
   subarray(start?: number, end?: number): Buffer<TArrayBuffer>;
   /* @types/node's spelling — the ArrayBuffer instantiation keeps the
    * override compatible with the lib's Uint8Array.slice. */
@@ -577,7 +618,9 @@ declare var Buffer: BufferConstructor;
 /* The WHATWG codec constructors. Instance types live in scriptc.d.ts so
  * programs with @types/node have the same global type names. */
 declare var TextEncoder: { new (): TextEncoder };
-declare var TextDecoder: { new (label?: string, options?: { fatal?: boolean; ignoreBOM?: boolean }): TextDecoder };
+declare var TextDecoder: {
+  new (label?: string, options?: { fatal?: boolean; ignoreBOM?: boolean }): TextDecoder;
+};
 
 /* The WHATWG event surface (Node globals since v15): declared so the
  * suite's event-plumbing tests typecheck and fence per SITE with the
@@ -605,7 +648,10 @@ interface Event {
   composedPath(): unknown[];
 }
 declare var Event: {
-  new (type: string, eventInitDict?: { bubbles?: boolean; cancelable?: boolean; composed?: boolean }): Event;
+  new (
+    type: string,
+    eventInitDict?: { bubbles?: boolean; cancelable?: boolean; composed?: boolean },
+  ): Event;
   readonly prototype: Event;
   readonly NONE: 0;
   readonly CAPTURING_PHASE: 1;
@@ -616,7 +662,10 @@ interface CustomEvent<T = unknown> extends Event {
   readonly detail: T;
 }
 declare var CustomEvent: {
-  new <T = unknown>(type: string, eventInitDict?: { detail?: T; bubbles?: boolean; cancelable?: boolean; composed?: boolean }): CustomEvent<T>;
+  new <T = unknown>(
+    type: string,
+    eventInitDict?: { detail?: T; bubbles?: boolean; cancelable?: boolean; composed?: boolean },
+  ): CustomEvent<T>;
   readonly prototype: CustomEvent;
 };
 interface MessageEvent<T = unknown> extends Event {
@@ -626,7 +675,10 @@ interface MessageEvent<T = unknown> extends Event {
   readonly ports: readonly MessagePort[];
 }
 declare var MessageEvent: {
-  new <T = unknown>(type: string, eventInitDict?: { data?: T; origin?: string; lastEventId?: string }): MessageEvent<T>;
+  new <T = unknown>(
+    type: string,
+    eventInitDict?: { data?: T; origin?: string; lastEventId?: string },
+  ): MessageEvent<T>;
   readonly prototype: MessageEvent;
 };
 interface AddEventListenerOptions {
@@ -789,10 +841,7 @@ interface Response {
   bytes(): Promise<Uint8Array>;
 }
 interface ResponseInit {
-  headers?:
-    | Headers
-    | Record<string, string>
-    | readonly (readonly [string, string])[];
+  headers?: Headers | Record<string, string> | readonly (readonly [string, string])[];
   status?: number;
   statusText?: string;
 }
@@ -832,10 +881,7 @@ interface Request {
 }
 interface RequestInit {
   method?: string;
-  headers?:
-    | Headers
-    | Record<string, string>
-    | readonly (readonly [string, string])[];
+  headers?: Headers | Record<string, string> | readonly (readonly [string, string])[];
   body?: string | Uint8Array | ReadableStream<Uint8Array> | null;
   duplex?: "half";
   redirect?: "follow" | "error" | "manual";
@@ -856,7 +902,11 @@ declare function fetch(input: string | URL, init?: RequestInit): Promise<Respons
  * tolerance. */
 declare function setInterval(callback: () => void, ms?: number): Timeout;
 /* The trailing-argument form — setTimeout's exact story, every tick. */
-declare function setInterval(callback: (...args: never[]) => void, ms?: number, ...args: unknown[]): Timeout;
+declare function setInterval(
+  callback: (...args: never[]) => void,
+  ms?: number,
+  ...args: unknown[]
+): Timeout;
 declare function clearInterval(handle?: Timeout | number | null | undefined): void;
 
 /* node:timers — the module twins of the timer globals (Node's timers
@@ -866,10 +916,18 @@ declare function clearInterval(handle?: Timeout | number | null | undefined): vo
  * (enroll/unenroll, promises) fences per member. */
 declare module "node:timers" {
   export function setTimeout(callback: () => void, ms?: number): Timeout;
-  export function setTimeout(callback: (...args: never[]) => void, ms?: number, ...args: unknown[]): Timeout;
+  export function setTimeout(
+    callback: (...args: never[]) => void,
+    ms?: number,
+    ...args: unknown[]
+  ): Timeout;
   export function clearTimeout(handle?: Timeout | number | null | undefined): void;
   export function setInterval(callback: () => void, ms?: number): Timeout;
-  export function setInterval(callback: (...args: never[]) => void, ms?: number, ...args: unknown[]): Timeout;
+  export function setInterval(
+    callback: (...args: never[]) => void,
+    ms?: number,
+    ...args: unknown[]
+  ): Timeout;
   export function clearInterval(handle?: Timeout | number | null | undefined): void;
   export function setImmediate(callback: () => void): Immediate;
   export function setImmediate(callback: (...args: never[]) => void, ...args: unknown[]): Immediate;
@@ -888,7 +946,11 @@ declare module "timers" {
 declare module "node:timers/promises" {
   export function setTimeout(delay?: number): Promise<void>;
   export function setImmediate(): Promise<void>;
-  export function setInterval<T = unknown>(delay?: number, value?: T, options?: unknown): AsyncGenerator<T, void, undefined>;
+  export function setInterval<T = unknown>(
+    delay?: number,
+    value?: T,
+    options?: unknown,
+  ): AsyncGenerator<T, void, undefined>;
   export const scheduler: {
     wait(delay?: number): Promise<void>;
     yield(): Promise<void>;
@@ -921,7 +983,10 @@ declare module "node:diagnostics_channel" {
     publish(message: unknown): void;
     subscribe(onMessage: ChannelListener): void;
     unsubscribe(onMessage: ChannelListener): boolean;
-    bindStore(store: import("async_hooks").AsyncLocalStorage<any>, transform?: (context: any) => any): void;
+    bindStore(
+      store: import("async_hooks").AsyncLocalStorage<any>,
+      transform?: (context: any) => any,
+    ): void;
     unbindStore(store: import("async_hooks").AsyncLocalStorage<any>): boolean;
     runStores(context: unknown, fn: (...args: any[]) => any, thisArg?: any, ...args: any[]): any;
   }
@@ -1086,7 +1151,12 @@ declare module "node:fs" {
     data: string,
     /* The options-record stance (see http.RequestOptions): flag fences
      * by name at the call site; undocumented keys drop like Node. */
-    options?: { mode?: number; encoding?: "utf8" | "utf-8"; flag?: string; [option: string]: unknown },
+    options?: {
+      mode?: number;
+      encoding?: "utf8" | "utf-8";
+      flag?: string;
+      [option: string]: unknown;
+    },
   ): void;
   /* The bare-encoding spelling — the options record's encoding key alone. */
   export function writeFileSync(path: string, data: string, encoding: "utf8" | "utf-8"): void;
@@ -1099,29 +1169,80 @@ declare module "node:fs" {
   export function chmodSync(path: string, mode: number): void;
   export function fchmodSync(fd: number, mode: number): void;
   export function fsyncSync(fd: number): void;
-  export function linkSync(existingPath: string | Uint8Array | URL, newPath: string | Uint8Array | URL): void;
-  export function symlinkSync(target: string | Uint8Array | URL, path: string | Uint8Array | URL, type?: string | null): void;
-  export function symlink(target: string | Uint8Array | URL, path: string | Uint8Array | URL, callback: (err: NodeJS.ErrnoException | null) => void): void;
-  export function symlink(target: string | Uint8Array | URL, path: string | Uint8Array | URL, type: string | null | undefined, callback: (err: NodeJS.ErrnoException | null) => void): void;
-  export function link(existingPath: string | Uint8Array | URL, newPath: string | Uint8Array | URL, callback: (err: NodeJS.ErrnoException | null) => void): void;
-  export function readlink(path: string | Uint8Array | URL, callback: (err: NodeJS.ErrnoException | null, target: string) => void): void;
-  export function readlink(path: string | Uint8Array | URL, options: "buffer" | { encoding: "buffer" }, callback: (err: NodeJS.ErrnoException | null, target: Buffer) => void): void;
-  export function readlink(path: string | Uint8Array | URL, options: BufferEncoding | { encoding?: BufferEncoding | null } | null, callback: (err: NodeJS.ErrnoException | null, target: string) => void): void;
-  export function readlink(path: string | Uint8Array | URL, options: string | { encoding?: string | null } | null, callback: (err: NodeJS.ErrnoException | null, target: string | Buffer) => void): void;
-  export function readlinkSync(path: string | Uint8Array | URL, options: "buffer" | { encoding: "buffer" }): Buffer;
-  export function readlinkSync(path: string | Uint8Array | URL, options?: BufferEncoding | { encoding?: BufferEncoding | null } | null): string;
-  export function readlinkSync(path: string | Uint8Array | URL, options: string | { encoding?: string | null } | null): string | Buffer;
+  export function linkSync(
+    existingPath: string | Uint8Array | URL,
+    newPath: string | Uint8Array | URL,
+  ): void;
+  export function symlinkSync(
+    target: string | Uint8Array | URL,
+    path: string | Uint8Array | URL,
+    type?: string | null,
+  ): void;
+  export function symlink(
+    target: string | Uint8Array | URL,
+    path: string | Uint8Array | URL,
+    callback: (err: NodeJS.ErrnoException | null) => void,
+  ): void;
+  export function symlink(
+    target: string | Uint8Array | URL,
+    path: string | Uint8Array | URL,
+    type: string | null | undefined,
+    callback: (err: NodeJS.ErrnoException | null) => void,
+  ): void;
+  export function link(
+    existingPath: string | Uint8Array | URL,
+    newPath: string | Uint8Array | URL,
+    callback: (err: NodeJS.ErrnoException | null) => void,
+  ): void;
+  export function readlink(
+    path: string | Uint8Array | URL,
+    callback: (err: NodeJS.ErrnoException | null, target: string) => void,
+  ): void;
+  export function readlink(
+    path: string | Uint8Array | URL,
+    options: "buffer" | { encoding: "buffer" },
+    callback: (err: NodeJS.ErrnoException | null, target: Buffer) => void,
+  ): void;
+  export function readlink(
+    path: string | Uint8Array | URL,
+    options: BufferEncoding | { encoding?: BufferEncoding | null } | null,
+    callback: (err: NodeJS.ErrnoException | null, target: string) => void,
+  ): void;
+  export function readlink(
+    path: string | Uint8Array | URL,
+    options: string | { encoding?: string | null } | null,
+    callback: (err: NodeJS.ErrnoException | null, target: string | Buffer) => void,
+  ): void;
+  export function readlinkSync(
+    path: string | Uint8Array | URL,
+    options: "buffer" | { encoding: "buffer" },
+  ): Buffer;
+  export function readlinkSync(
+    path: string | Uint8Array | URL,
+    options?: BufferEncoding | { encoding?: BufferEncoding | null } | null,
+  ): string;
+  export function readlinkSync(
+    path: string | Uint8Array | URL,
+    options: string | { encoding?: string | null } | null,
+  ): string | Buffer;
   export function chownSync(path: string, uid: number, gid: number): void;
   /* The 2-argument form only (Node's mode flags have no lowering). The
    * destination is created or truncated carrying the SOURCE's mode. */
   export function copyFileSync(src: string, dest: string): void;
-  export function rename(oldPath: string, newPath: string, callback: (err: NodeJS.ErrnoException | null) => void): void;
+  export function rename(
+    oldPath: string,
+    newPath: string,
+    callback: (err: NodeJS.ErrnoException | null) => void,
+  ): void;
   export function renameSync(oldPath: string, newPath: string): void;
   export function rmSync(path: string): void;
   /* maxRetries/retryDelay are accepted no-ops (Node retries around
    * EBUSY-class races; the synchronous lowering has no re-entrancy that
    * needs them). */
-  export function rmSync(path: string, options: { recursive?: boolean; force?: boolean; maxRetries?: number; retryDelay?: number }): void;
+  export function rmSync(
+    path: string,
+    options: { recursive?: boolean; force?: boolean; maxRetries?: number; retryDelay?: number },
+  ): void;
   export function rmdirSync(path: string): void;
   export function readdirSync(path: string): string[];
   /* The withFileTypes form: Dirent rows (name + parentPath + the type
@@ -1186,12 +1307,39 @@ declare module "node:fs" {
   export function closeSync(fd: number): void;
   export function fdatasyncSync(fd: number): void;
   export function ftruncateSync(fd: number, len?: number): void;
-  export function utimesSync(path: string | Uint8Array | URL, atime: number | string | Date, mtime: number | string | Date): void;
-  export function futimesSync(fd: number, atime: number | string | Date, mtime: number | string | Date): void;
-  export function lutimesSync(path: string | Uint8Array | URL, atime: number | string | Date, mtime: number | string | Date): void;
-  export function utimes(path: string | Uint8Array | URL, atime: number | string | Date, mtime: number | string | Date, callback: (err: NodeJS.ErrnoException | null) => void): void;
-  export function futimes(fd: number, atime: number | string | Date, mtime: number | string | Date, callback: (err: NodeJS.ErrnoException | null) => void): void;
-  export function lutimes(path: string | Uint8Array | URL, atime: number | string | Date, mtime: number | string | Date, callback: (err: NodeJS.ErrnoException | null) => void): void;
+  export function utimesSync(
+    path: string | Uint8Array | URL,
+    atime: number | string | Date,
+    mtime: number | string | Date,
+  ): void;
+  export function futimesSync(
+    fd: number,
+    atime: number | string | Date,
+    mtime: number | string | Date,
+  ): void;
+  export function lutimesSync(
+    path: string | Uint8Array | URL,
+    atime: number | string | Date,
+    mtime: number | string | Date,
+  ): void;
+  export function utimes(
+    path: string | Uint8Array | URL,
+    atime: number | string | Date,
+    mtime: number | string | Date,
+    callback: (err: NodeJS.ErrnoException | null) => void,
+  ): void;
+  export function futimes(
+    fd: number,
+    atime: number | string | Date,
+    mtime: number | string | Date,
+    callback: (err: NodeJS.ErrnoException | null) => void,
+  ): void;
+  export function lutimes(
+    path: string | Uint8Array | URL,
+    atime: number | string | Date,
+    mtime: number | string | Date,
+    callback: (err: NodeJS.ErrnoException | null) => void,
+  ): void;
   export function readvSync(fd: number, buffers: Uint8Array[], position?: number | null): number;
   export function writevSync(fd: number, buffers: Uint8Array[], position?: number | null): number;
   /* Read into a caller buffer from the fd's current position when position
@@ -1203,7 +1351,13 @@ declare module "node:fs" {
     position?: number | null;
   }
   export function readSync(fd: number, buffer: Uint8Array, options?: ReadSyncOptions): number;
-  export function readSync(fd: number, buffer: Uint8Array, offset: number, length: number, position?: number | null): number;
+  export function readSync(
+    fd: number,
+    buffer: Uint8Array,
+    offset: number,
+    length: number,
+    position?: number | null,
+  ): number;
   /* Write a caller-buffer window, or a utf8 string, at the fd's current
    * position when position is omitted/null (advancing it), or at a numeric
    * byte position without advancing it. Answers the byte count. */
@@ -1213,8 +1367,19 @@ declare module "node:fs" {
     position?: number | null;
   }
   export function writeSync(fd: number, buffer: Uint8Array, options: WriteSyncOptions): number;
-  export function writeSync(fd: number, buffer: Uint8Array, offset?: number, length?: number, position?: number | null): number;
-  export function writeSync(fd: number, string: string, position?: number | null, encoding?: "utf8" | "utf-8"): number;
+  export function writeSync(
+    fd: number,
+    buffer: Uint8Array,
+    offset?: number,
+    length?: number,
+    position?: number | null,
+  ): number;
+  export function writeSync(
+    fd: number,
+    string: string,
+    position?: number | null,
+    encoding?: "utf8" | "utf-8",
+  ): number;
   /* statSync over an open fd — the same Stats snapshot. */
   export function fstatSync(fd: number): Stats;
   /* realpath(3) — resolves symlinks, `.`/`..`, throwing Node's fs error
@@ -1236,14 +1401,40 @@ declare module "node:fs" {
   }
   export interface StatsFs extends StatsFsBase<number> {}
   export interface BigIntStatsFs extends StatsFsBase<bigint> {}
-  export interface StatFsOptions { bigint?: boolean; }
-  export function statfsSync(path: string | Uint8Array | URL, options?: StatFsOptions & { bigint?: false }): StatsFs;
-  export function statfsSync(path: string | Uint8Array | URL, options: StatFsOptions & { bigint: true }): BigIntStatsFs;
-  export function statfsSync(path: string | Uint8Array | URL, options?: StatFsOptions): StatsFs | BigIntStatsFs;
-  export function statfs(path: string | Uint8Array | URL, callback: (err: NodeJS.ErrnoException | null, stats: StatsFs) => void): void;
-  export function statfs(path: string | Uint8Array | URL, options: (StatFsOptions & { bigint?: false }) | undefined, callback: (err: NodeJS.ErrnoException | null, stats: StatsFs) => void): void;
-  export function statfs(path: string | Uint8Array | URL, options: StatFsOptions & { bigint: true }, callback: (err: NodeJS.ErrnoException | null, stats: BigIntStatsFs) => void): void;
-  export function statfs(path: string | Uint8Array | URL, options: StatFsOptions | undefined, callback: (err: NodeJS.ErrnoException | null, stats: StatsFs | BigIntStatsFs) => void): void;
+  export interface StatFsOptions {
+    bigint?: boolean;
+  }
+  export function statfsSync(
+    path: string | Uint8Array | URL,
+    options?: StatFsOptions & { bigint?: false },
+  ): StatsFs;
+  export function statfsSync(
+    path: string | Uint8Array | URL,
+    options: StatFsOptions & { bigint: true },
+  ): BigIntStatsFs;
+  export function statfsSync(
+    path: string | Uint8Array | URL,
+    options?: StatFsOptions,
+  ): StatsFs | BigIntStatsFs;
+  export function statfs(
+    path: string | Uint8Array | URL,
+    callback: (err: NodeJS.ErrnoException | null, stats: StatsFs) => void,
+  ): void;
+  export function statfs(
+    path: string | Uint8Array | URL,
+    options: (StatFsOptions & { bigint?: false }) | undefined,
+    callback: (err: NodeJS.ErrnoException | null, stats: StatsFs) => void,
+  ): void;
+  export function statfs(
+    path: string | Uint8Array | URL,
+    options: StatFsOptions & { bigint: true },
+    callback: (err: NodeJS.ErrnoException | null, stats: BigIntStatsFs) => void,
+  ): void;
+  export function statfs(
+    path: string | Uint8Array | URL,
+    options: StatFsOptions | undefined,
+    callback: (err: NodeJS.ErrnoException | null, stats: StatsFs | BigIntStatsFs) => void,
+  ): void;
   /* fs.watch — the file-watching slice (scr_watch.c, kqueue EVFILT_VNODE):
    * "rename"/"change" events on ONE path, watcher.close() to stop. The
    * listener takes zero parameters or the eventType string (the filename
@@ -1318,10 +1509,21 @@ declare module "fs/promises" {
     truncate(len?: number): Promise<void>;
     chmod(mode: number): Promise<void>;
     utimes(atime: number | string | Date, mtime: number | string | Date): Promise<void>;
-    readv<T extends Uint8Array[]>(buffers: T, position?: number | null): Promise<FileReadvResult<T>>;
-    writev<T extends Uint8Array[]>(buffers: T, position?: number | null): Promise<FileWritevResult<T>>;
-    read<T extends Uint8Array = Buffer>(options?: FileReadOptions<T> | null): Promise<FileReadResult<T>>;
-    read<T extends Uint8Array>(buffer: T, options: Omit<FileReadOptions<T>, "buffer">): Promise<FileReadResult<T>>;
+    readv<T extends Uint8Array[]>(
+      buffers: T,
+      position?: number | null,
+    ): Promise<FileReadvResult<T>>;
+    writev<T extends Uint8Array[]>(
+      buffers: T,
+      position?: number | null,
+    ): Promise<FileWritevResult<T>>;
+    read<T extends Uint8Array = Buffer>(
+      options?: FileReadOptions<T> | null,
+    ): Promise<FileReadResult<T>>;
+    read<T extends Uint8Array>(
+      buffer: T,
+      options: Omit<FileReadOptions<T>, "buffer">,
+    ): Promise<FileReadResult<T>>;
     read<T extends Uint8Array>(
       buffer: T,
       offset?: number | null,
@@ -1334,8 +1536,15 @@ declare module "fs/promises" {
       length?: number | null,
       position?: number | null,
     ): Promise<FileWriteResult<T>>;
-    write<T extends Uint8Array>(buffer: T, options: Omit<FileReadOptions<T>, "buffer">): Promise<FileWriteResult<T>>;
-    write(data: string, position?: number | null, encoding?: "utf8" | "utf-8" | null): Promise<FileWriteResult<string>>;
+    write<T extends Uint8Array>(
+      buffer: T,
+      options: Omit<FileReadOptions<T>, "buffer">,
+    ): Promise<FileWriteResult<T>>;
+    write(
+      data: string,
+      position?: number | null,
+      encoding?: "utf8" | "utf-8" | null,
+    ): Promise<FileWriteResult<string>>;
     readFile(options?: null): Promise<Buffer>;
     readFile(encoding: "utf8" | "utf-8"): Promise<string>;
     writeFile(data: string | Uint8Array, encoding?: "utf8" | "utf-8" | null): Promise<void>;
@@ -1344,22 +1553,54 @@ declare module "fs/promises" {
     [Symbol.asyncDispose](): Promise<void>;
   }
   export function open(path: string, flags?: string, mode?: number): Promise<FileHandle>;
-  export function link(existingPath: string | Uint8Array | URL, newPath: string | Uint8Array | URL): Promise<void>;
-  export function symlink(target: string | Uint8Array | URL, path: string | Uint8Array | URL, type?: string | null): Promise<void>;
-  export function readlink(path: string | Uint8Array | URL, options: "buffer" | { encoding: "buffer" }): Promise<Buffer>;
-  export function readlink(path: string | Uint8Array | URL, options?: BufferEncoding | { encoding?: BufferEncoding | null } | null): Promise<string>;
-  export function readlink(path: string | Uint8Array | URL, options: string | { encoding?: string | null } | null): Promise<string | Buffer>;
-  export function utimes(path: string | Uint8Array | URL, atime: number | string | Date, mtime: number | string | Date): Promise<void>;
-  export function lutimes(path: string | Uint8Array | URL, atime: number | string | Date, mtime: number | string | Date): Promise<void>;
+  export function link(
+    existingPath: string | Uint8Array | URL,
+    newPath: string | Uint8Array | URL,
+  ): Promise<void>;
+  export function symlink(
+    target: string | Uint8Array | URL,
+    path: string | Uint8Array | URL,
+    type?: string | null,
+  ): Promise<void>;
+  export function readlink(
+    path: string | Uint8Array | URL,
+    options: "buffer" | { encoding: "buffer" },
+  ): Promise<Buffer>;
+  export function readlink(
+    path: string | Uint8Array | URL,
+    options?: BufferEncoding | { encoding?: BufferEncoding | null } | null,
+  ): Promise<string>;
+  export function readlink(
+    path: string | Uint8Array | URL,
+    options: string | { encoding?: string | null } | null,
+  ): Promise<string | Buffer>;
+  export function utimes(
+    path: string | Uint8Array | URL,
+    atime: number | string | Date,
+    mtime: number | string | Date,
+  ): Promise<void>;
+  export function lutimes(
+    path: string | Uint8Array | URL,
+    atime: number | string | Date,
+    mtime: number | string | Date,
+  ): Promise<void>;
   export function readFile(path: string, encoding: "utf8" | "utf-8"): Promise<string>;
   export function readFile(path: string): Promise<Buffer>;
   export function writeFile(
     path: string,
     data: string,
-    options?: { mode?: number; encoding?: "utf8" | "utf-8"; flag?: string; [option: string]: unknown },
+    options?: {
+      mode?: number;
+      encoding?: "utf8" | "utf-8";
+      flag?: string;
+      [option: string]: unknown;
+    },
   ): Promise<void>;
   export function writeFile(path: string, data: string, encoding: "utf8" | "utf-8"): Promise<void>;
-  export function mkdir(path: string, options?: { recursive?: boolean; mode?: number }): Promise<void>;
+  export function mkdir(
+    path: string,
+    options?: { recursive?: boolean; mode?: number },
+  ): Promise<void>;
   export function readdir(path: string): Promise<string[]>;
   export function readdir(
     path: string,
@@ -1372,9 +1613,18 @@ declare module "fs/promises" {
   ): Promise<import("node:fs").Dirent[]>;
   export function rm(path: string): Promise<void>;
   export function stat(path: string): Promise<import("node:fs").Stats>;
-  export function statfs(path: string | Uint8Array | URL, options?: import("node:fs").StatFsOptions & { bigint?: false }): Promise<import("node:fs").StatsFs>;
-  export function statfs(path: string | Uint8Array | URL, options: import("node:fs").StatFsOptions & { bigint: true }): Promise<import("node:fs").BigIntStatsFs>;
-  export function statfs(path: string | Uint8Array | URL, options?: import("node:fs").StatFsOptions): Promise<import("node:fs").StatsFs | import("node:fs").BigIntStatsFs>;
+  export function statfs(
+    path: string | Uint8Array | URL,
+    options?: import("node:fs").StatFsOptions & { bigint?: false },
+  ): Promise<import("node:fs").StatsFs>;
+  export function statfs(
+    path: string | Uint8Array | URL,
+    options: import("node:fs").StatFsOptions & { bigint: true },
+  ): Promise<import("node:fs").BigIntStatsFs>;
+  export function statfs(
+    path: string | Uint8Array | URL,
+    options?: import("node:fs").StatFsOptions,
+  ): Promise<import("node:fs").StatsFs | import("node:fs").BigIntStatsFs>;
   export function realpath(path: string): Promise<string>;
   export function lstat(path: string): Promise<import("node:fs").Stats>;
   export function unlink(path: string): Promise<void>;
@@ -1597,14 +1847,38 @@ declare module "crypto" {
   }
   export function createHash(algorithm: string): Hash;
   export function createHmac(algorithm: string, key: string | Uint8Array): Hmac;
-  export function hash(algorithm: string, data: string | Uint8Array, outputEncoding?: "hex" | "base64"): string;
+  export function hash(
+    algorithm: string,
+    data: string | Uint8Array,
+    outputEncoding?: "hex" | "base64",
+  ): string;
   export function timingSafeEqual(a: Uint8Array, b: Uint8Array): boolean;
-  export function randomFillSync<T extends Uint8Array>(buffer: T, offset?: number, size?: number): T;
+  export function randomFillSync<T extends Uint8Array>(
+    buffer: T,
+    offset?: number,
+    size?: number,
+  ): T;
   export function randomInt(max: number): number;
   export function randomInt(min: number, max: number): number;
-  export function pbkdf2Sync(password: string | Uint8Array, salt: string | Uint8Array, iterations: number, keylen: number, digest: string): Buffer;
-  export function pbkdf2(password: string | Uint8Array, salt: string | Uint8Array, iterations: number, keylen: number, digest: string, callback: (error: Error | null, derivedKey: Buffer) => void): void;
-  export function randomBytes(size: number, callback: (error: Error | null, buffer: Buffer) => void): void;
+  export function pbkdf2Sync(
+    password: string | Uint8Array,
+    salt: string | Uint8Array,
+    iterations: number,
+    keylen: number,
+    digest: string,
+  ): Buffer;
+  export function pbkdf2(
+    password: string | Uint8Array,
+    salt: string | Uint8Array,
+    iterations: number,
+    keylen: number,
+    digest: string,
+    callback: (error: Error | null, derivedKey: Buffer) => void,
+  ): void;
+  export function randomBytes(
+    size: number,
+    callback: (error: Error | null, buffer: Buffer) => void,
+  ): void;
   export type BinaryLike = string | ArrayBuffer | ArrayBufferView;
   export interface ScryptOptions {
     N?: number;
@@ -1615,11 +1889,40 @@ declare module "crypto" {
     parallelization?: number;
     maxmem?: number;
   }
-  export function scryptSync(password: BinaryLike, salt: BinaryLike, keylen: number, options?: ScryptOptions): Buffer;
-  export function scrypt(password: BinaryLike, salt: BinaryLike, keylen: number, callback: (error: Error | null, derivedKey: Buffer) => void): void;
-  export function scrypt(password: BinaryLike, salt: BinaryLike, keylen: number, options: ScryptOptions, callback: (error: Error | null, derivedKey: Buffer) => void): void;
-  export function hkdfSync(digest: string, ikm: BinaryLike, salt: BinaryLike, info: BinaryLike, keylen: number): ArrayBuffer;
-  export function hkdf(digest: string, ikm: BinaryLike, salt: BinaryLike, info: BinaryLike, keylen: number, callback: (error: Error | null, derivedKey: ArrayBuffer) => void): void;
+  export function scryptSync(
+    password: BinaryLike,
+    salt: BinaryLike,
+    keylen: number,
+    options?: ScryptOptions,
+  ): Buffer;
+  export function scrypt(
+    password: BinaryLike,
+    salt: BinaryLike,
+    keylen: number,
+    callback: (error: Error | null, derivedKey: Buffer) => void,
+  ): void;
+  export function scrypt(
+    password: BinaryLike,
+    salt: BinaryLike,
+    keylen: number,
+    options: ScryptOptions,
+    callback: (error: Error | null, derivedKey: Buffer) => void,
+  ): void;
+  export function hkdfSync(
+    digest: string,
+    ikm: BinaryLike,
+    salt: BinaryLike,
+    info: BinaryLike,
+    keylen: number,
+  ): ArrayBuffer;
+  export function hkdf(
+    digest: string,
+    ikm: BinaryLike,
+    salt: BinaryLike,
+    info: BinaryLike,
+    keylen: number,
+    callback: (error: Error | null, derivedKey: ArrayBuffer) => void,
+  ): void;
   /* The lowered X509Certificate surface is the data-record slice:
    * fingerprint (the SHA-1 of the DER, uppercase colon-separated) and
    * the validFrom/validTo validity window (Node's ASN1_TIME_print
@@ -1817,21 +2120,21 @@ declare module "child_process" {
     readonly stderr: NodeJS.ReadableStream | null;
   }
   export interface SpawnOptions {
-      /* The 3-tuple form admits number fds in the stdout/stderr slots —
-       * openSync results dup2'd into the child (the daemon-log idiom
-       * ["ignore", logFd, logFd]) — and "pipe" there too (child.stdout/
-       * child.stderr streams); "pipe" in the stdin slot exposes
-       * child.stdin. */
-      stdio?: "ignore" | "inherit" | "pipe" | ("ignore" | "inherit" | "pipe" | number)[];
-      /* detached gives the child its own session and process group
-       * (POSIX_SPAWN_SETSID); env REPLACES the child environment; cwd
-       * sets its working directory; windowsHide is a POSIX no-op; shell
-       * runs the complete command string through /bin/sh or cmd.exe. */
-      detached?: boolean;
-      env?: { [k: string]: string | undefined };
-      cwd?: string;
-      windowsHide?: boolean;
-      shell?: boolean;
+    /* The 3-tuple form admits number fds in the stdout/stderr slots —
+     * openSync results dup2'd into the child (the daemon-log idiom
+     * ["ignore", logFd, logFd]) — and "pipe" there too (child.stdout/
+     * child.stderr streams); "pipe" in the stdin slot exposes
+     * child.stdin. */
+    stdio?: "ignore" | "inherit" | "pipe" | ("ignore" | "inherit" | "pipe" | number)[];
+    /* detached gives the child its own session and process group
+     * (POSIX_SPAWN_SETSID); env REPLACES the child environment; cwd
+     * sets its working directory; windowsHide is a POSIX no-op; shell
+     * runs the complete command string through /bin/sh or cmd.exe. */
+    detached?: boolean;
+    env?: { [k: string]: string | undefined };
+    cwd?: string;
+    windowsHide?: boolean;
+    shell?: boolean;
   }
   export function spawn(command: string, args?: string[], options?: SpawnOptions): ChildProcess;
   export function spawn(command: string, options?: SpawnOptions): ChildProcess;
@@ -1896,8 +2199,17 @@ declare module "child_process" {
    * stdout/stderr. The no-callback overload remains for util.promisify's
    * static target recognition; reached no-callback calls still fence. */
   export function execFile(file: string, callback: ExecFileCallback): ChildProcess;
-  export function execFile(file: string, args: string[] | null, callback: ExecFileCallback): ChildProcess;
-  export function execFile(file: string, args: string[] | null, options: ExecSyncOptions, callback: ExecFileCallback): ChildProcess;
+  export function execFile(
+    file: string,
+    args: string[] | null,
+    callback: ExecFileCallback,
+  ): ChildProcess;
+  export function execFile(
+    file: string,
+    args: string[] | null,
+    options: ExecSyncOptions,
+    callback: ExecFileCallback,
+  ): ChildProcess;
   export function execFile(
     file: string,
     args?: string[] | null,
@@ -1928,7 +2240,11 @@ declare module "util" {
   export function stripVTControlCharacters(str: string): string;
   export function toUSVString(string: string): string;
   export function isDeepStrictEqual(val1: unknown, val2: unknown, skipPrototype?: boolean): boolean;
-  export function styleText(format: string | readonly string[], text: string, options?: { validateStream?: boolean; stream?: unknown }): string;
+  export function styleText(
+    format: string | readonly string[],
+    text: string,
+    options?: { validateStream?: boolean; stream?: unknown },
+  ): string;
   export function parseEnv(content: string): { [key: string]: string | undefined };
   export type TextEncoder = globalThis.TextEncoder;
   export type TextDecoder = globalThis.TextDecoder;
@@ -1956,7 +2272,10 @@ declare module "util" {
    * story: guarded/diagnostic-path code must TYPECHECK; a reached use
    * without a lowering fences at its site). inspect's options carry the
    * documented knobs through an index signature. */
-  export function inspect(object: unknown, options?: { depth?: number | null; colors?: boolean; [k: string]: unknown }): string;
+  export function inspect(
+    object: unknown,
+    options?: { depth?: number | null; colors?: boolean; [k: string]: unknown },
+  ): string;
   export function format(format?: unknown, ...args: unknown[]): string;
   export function formatWithOptions(
     inspectOptions: { depth?: number | null; colors?: boolean; [k: string]: unknown },
@@ -2141,8 +2460,20 @@ declare module "node:test" {
   function run(options?: unknown): unknown;
   function snapshot(...args: unknown[]): unknown;
   export {
-    test, it, describe, suite, before, after, beforeEach, afterEach,
-    mock, assert, run, snapshot, TestContext, TestOptions,
+    test,
+    it,
+    describe,
+    suite,
+    before,
+    after,
+    beforeEach,
+    afterEach,
+    mock,
+    assert,
+    run,
+    snapshot,
+    TestContext,
+    TestOptions,
   };
   export default test;
 }
@@ -2162,8 +2493,16 @@ declare module "assert" {
     function fail(message?: string): never;
     function throws(fn: () => unknown, expected?: unknown, message?: string): void;
     function doesNotThrow(fn: () => unknown, expected?: unknown, message?: string): void;
-    function rejects(fn: (() => Promise<unknown>) | Promise<unknown>, expected?: unknown, message?: string): Promise<void>;
-    function doesNotReject(fn: (() => Promise<unknown>) | Promise<unknown>, expected?: unknown, message?: string): Promise<void>;
+    function rejects(
+      fn: (() => Promise<unknown>) | Promise<unknown>,
+      expected?: unknown,
+      message?: string,
+    ): Promise<void>;
+    function doesNotReject(
+      fn: (() => Promise<unknown>) | Promise<unknown>,
+      expected?: unknown,
+      message?: string,
+    ): Promise<void>;
     function match(value: string, regExp: RegExp, message?: string): void;
     function doesNotMatch(value: string, regExp: RegExp, message?: string): void;
     function ifError(value: unknown): void;
@@ -2193,8 +2532,16 @@ declare module "assert/strict" {
     function fail(message?: string): never;
     function throws(fn: () => unknown, expected?: unknown, message?: string): void;
     function doesNotThrow(fn: () => unknown, expected?: unknown, message?: string): void;
-    function rejects(fn: (() => Promise<unknown>) | Promise<unknown>, expected?: unknown, message?: string): Promise<void>;
-    function doesNotReject(fn: (() => Promise<unknown>) | Promise<unknown>, expected?: unknown, message?: string): Promise<void>;
+    function rejects(
+      fn: (() => Promise<unknown>) | Promise<unknown>,
+      expected?: unknown,
+      message?: string,
+    ): Promise<void>;
+    function doesNotReject(
+      fn: (() => Promise<unknown>) | Promise<unknown>,
+      expected?: unknown,
+      message?: string,
+    ): Promise<void>;
     function match(value: string, regExp: RegExp, message?: string): void;
     function doesNotMatch(value: string, regExp: RegExp, message?: string): void;
     function ifError(value: unknown): void;
@@ -2260,8 +2607,18 @@ declare module "querystring" {
       | null
       | undefined;
   }
-  export function parse(str: string, sep?: string | null, eq?: string | null, options?: ParseOptions): ParsedUrlQuery;
-  export function stringify(obj?: ParsedUrlQueryInput, sep?: string | null, eq?: string | null, options?: StringifyOptions): string;
+  export function parse(
+    str: string,
+    sep?: string | null,
+    eq?: string | null,
+    options?: ParseOptions,
+  ): ParsedUrlQuery;
+  export function stringify(
+    obj?: ParsedUrlQueryInput,
+    sep?: string | null,
+    eq?: string | null,
+    options?: StringifyOptions,
+  ): string;
   export const decode: typeof parse;
   export const encode: typeof stringify;
   export function escape(str: string): string;
@@ -2308,28 +2665,58 @@ declare module "node:readline" {
  * declared so reached uses receive a named SC2020 refusal; Brotli,
  * streaming, and Zstd remain outside the lowered surface. */
 declare module "zlib" {
-  export interface ZlibOptions { [option: string]: unknown }
+  export interface ZlibOptions {
+    [option: string]: unknown;
+  }
   export type ZlibCallback = (error: NodeJS.ErrnoException | null, result: Buffer) => void;
   export function deflate(data: string | Uint8Array, callback: ZlibCallback): void;
-  export function deflate(data: string | Uint8Array, options: ZlibOptions, callback: ZlibCallback): void;
+  export function deflate(
+    data: string | Uint8Array,
+    options: ZlibOptions,
+    callback: ZlibCallback,
+  ): void;
   export function deflateSync(data: string | Uint8Array, options?: ZlibOptions): Buffer;
   export function inflate(data: string | Uint8Array, callback: ZlibCallback): void;
-  export function inflate(data: string | Uint8Array, options: ZlibOptions, callback: ZlibCallback): void;
+  export function inflate(
+    data: string | Uint8Array,
+    options: ZlibOptions,
+    callback: ZlibCallback,
+  ): void;
   export function inflateSync(data: string | Uint8Array, options?: ZlibOptions): Buffer;
   export function deflateRaw(data: string | Uint8Array, callback: ZlibCallback): void;
-  export function deflateRaw(data: string | Uint8Array, options: ZlibOptions, callback: ZlibCallback): void;
+  export function deflateRaw(
+    data: string | Uint8Array,
+    options: ZlibOptions,
+    callback: ZlibCallback,
+  ): void;
   export function deflateRawSync(data: string | Uint8Array, options?: ZlibOptions): Buffer;
   export function inflateRaw(data: string | Uint8Array, callback: ZlibCallback): void;
-  export function inflateRaw(data: string | Uint8Array, options: ZlibOptions, callback: ZlibCallback): void;
+  export function inflateRaw(
+    data: string | Uint8Array,
+    options: ZlibOptions,
+    callback: ZlibCallback,
+  ): void;
   export function inflateRawSync(data: string | Uint8Array, options?: ZlibOptions): Buffer;
   export function gzip(data: string | Uint8Array, callback: ZlibCallback): void;
-  export function gzip(data: string | Uint8Array, options: ZlibOptions, callback: ZlibCallback): void;
+  export function gzip(
+    data: string | Uint8Array,
+    options: ZlibOptions,
+    callback: ZlibCallback,
+  ): void;
   export function gzipSync(data: string | Uint8Array, options?: ZlibOptions): Buffer;
   export function gunzip(data: string | Uint8Array, callback: ZlibCallback): void;
-  export function gunzip(data: string | Uint8Array, options: ZlibOptions, callback: ZlibCallback): void;
+  export function gunzip(
+    data: string | Uint8Array,
+    options: ZlibOptions,
+    callback: ZlibCallback,
+  ): void;
   export function gunzipSync(data: string | Uint8Array, options?: ZlibOptions): Buffer;
   export function unzip(data: string | Uint8Array, callback: ZlibCallback): void;
-  export function unzip(data: string | Uint8Array, options: ZlibOptions, callback: ZlibCallback): void;
+  export function unzip(
+    data: string | Uint8Array,
+    options: ZlibOptions,
+    callback: ZlibCallback,
+  ): void;
   export function unzipSync(data: string | Uint8Array, options?: ZlibOptions): Buffer;
   export function crc32(data: string | Uint8Array, value?: number): number;
   export function brotliCompressSync(data: string | Uint8Array): Buffer;
@@ -2381,7 +2768,9 @@ declare module "net" {
     setEncoding(encoding: string): void;
     /* socket→socket, and socket→response (the extended-CONNECT bridge
      * leg: raw chunks become response body writes; EOF ends it). */
-    pipe(destination: Socket | import("http").ServerResponse | import("http2").Http2ServerResponse): void;
+    pipe(
+      destination: Socket | import("http").ServerResponse | import("http2").Http2ServerResponse,
+    ): void;
     setTimeout(ms: number): void;
     /* The paused-mode demux surface: once('readable') + read(1) +
      * unshift — read answers exactly n buffered bytes or null. */
@@ -2393,16 +2782,25 @@ declare module "net" {
      * registration never fires — Node's exact split. 'session' fires
      * once with the serialized session (the received-ticket event). */
     on(event: "data", listener: (chunk: Buffer) => void): void;
-    on(event: "end" | "close" | "connect" | "timeout" | "readable" | "finish" | "secureConnect", listener: () => void): void;
+    on(
+      event: "end" | "close" | "connect" | "timeout" | "readable" | "finish" | "secureConnect",
+      listener: () => void,
+    ): void;
     on(event: "error", listener: (err: Error) => void): void;
     on(event: "session", listener: (session: Buffer) => void): void;
     /* addListener IS on (Node aliases them) — the suite spells both. */
     addListener(event: "data", listener: (chunk: Buffer) => void): void;
-    addListener(event: "end" | "close" | "connect" | "timeout" | "readable" | "finish" | "secureConnect", listener: () => void): void;
+    addListener(
+      event: "end" | "close" | "connect" | "timeout" | "readable" | "finish" | "secureConnect",
+      listener: () => void,
+    ): void;
     addListener(event: "error", listener: (err: Error) => void): void;
     addListener(event: "session", listener: (session: Buffer) => void): void;
     once(event: "data", listener: (chunk: Buffer) => void): void;
-    once(event: "end" | "close" | "connect" | "timeout" | "readable" | "finish" | "secureConnect", listener: () => void): void;
+    once(
+      event: "end" | "close" | "connect" | "timeout" | "readable" | "finish" | "secureConnect",
+      listener: () => void,
+    ): void;
     once(event: "error", listener: (err: Error) => void): void;
     once(event: "session", listener: (session: Buffer) => void): void;
   }
@@ -2416,7 +2814,10 @@ declare module "net" {
     /* The explicit-interface bind: host is an IP literal (absent = the
      * host-less dual-stack any); ipv6Only sets IPV6_V6ONLY and reusePort
      * requests kernel connection distribution where Node supports it. */
-    listen(options: { port: number; host?: string; ipv6Only?: boolean; reusePort?: boolean }, callback?: () => void): Server;
+    listen(
+      options: { port: number; host?: string; ipv6Only?: boolean; reusePort?: boolean },
+      callback?: () => void,
+    ): Server;
     close(callback?: () => void): void;
     /* The bound AddressInfo (Node answers null before listen — this
      * surface answers the record with port 0 there, the serverPort
@@ -2430,23 +2831,41 @@ declare module "net" {
     on(event: "error", listener: (err: Error) => void): void;
     /* The WebSocket handover: fires INSTEAD of 'request' for
      * Connection: upgrade requests, with the raw socket + head bytes. */
-    on(event: "upgrade", listener: (req: import("http").IncomingMessage, socket: Socket, head: Buffer) => void): void;
+    on(
+      event: "upgrade",
+      listener: (req: import("http").IncomingMessage, socket: Socket, head: Buffer) => void,
+    ): void;
     /* http.createServer(handler)'s event twin (a no-parser net server
      * never fires it, like Node). */
-    on(event: "request", listener: (req: import("http").IncomingMessage, res: import("http").ServerResponse) => void): void;
+    on(
+      event: "request",
+      listener: (req: import("http").IncomingMessage, res: import("http").ServerResponse) => void,
+    ): void;
     /* addListener IS on (Node aliases them) — the suite spells both. */
     addListener(event: "connection" | "secureConnection", listener: (socket: Socket) => void): void;
     addListener(event: "close" | "listening", listener: () => void): void;
     addListener(event: "timeout", listener: (socket: Socket) => void): void;
     addListener(event: "error", listener: (err: Error) => void): void;
-    addListener(event: "upgrade", listener: (req: import("http").IncomingMessage, socket: Socket, head: Buffer) => void): void;
-    addListener(event: "request", listener: (req: import("http").IncomingMessage, res: import("http").ServerResponse) => void): void;
+    addListener(
+      event: "upgrade",
+      listener: (req: import("http").IncomingMessage, socket: Socket, head: Buffer) => void,
+    ): void;
+    addListener(
+      event: "request",
+      listener: (req: import("http").IncomingMessage, res: import("http").ServerResponse) => void,
+    ): void;
     once(event: "connection" | "secureConnection", listener: (socket: Socket) => void): void;
     once(event: "close" | "listening", listener: () => void): void;
     once(event: "timeout", listener: (socket: Socket) => void): void;
     once(event: "error", listener: (err: Error) => void): void;
-    once(event: "upgrade", listener: (req: import("http").IncomingMessage, socket: Socket, head: Buffer) => void): void;
-    once(event: "request", listener: (req: import("http").IncomingMessage, res: import("http").ServerResponse) => void): void;
+    once(
+      event: "upgrade",
+      listener: (req: import("http").IncomingMessage, socket: Socket, head: Buffer) => void,
+    ): void;
+    once(
+      event: "request",
+      listener: (req: import("http").IncomingMessage, res: import("http").ServerResponse) => void,
+    ): void;
   }
   /* The Socket VALUE — the `x instanceof net.Socket` narrowing target
    * (the h2 compat 'connect' listener's test). Constructing bare sockets
@@ -2454,27 +2873,40 @@ declare module "net" {
   export const Socket: abstract new () => Socket;
   export function createServer(connectionListener?: (socket: Socket) => void): Server;
   export function connect(port: number, host?: string, connectListener?: () => void): Socket;
-  export function createConnection(port: number, host?: string, connectListener?: () => void): Socket;
+  export function createConnection(
+    port: number,
+    host?: string,
+    connectListener?: () => void,
+  ): Socket;
   /* The caller-resolver dial (@types/node's net.LookupFunction, narrowed
    * to the lowered shape): the runtime invokes it as Node does and dials
    * the answered addresses in order under autoSelectFamily: true. */
   export type LookupFunction = (
     hostname: string,
     options: unknown,
-    callback: (err: NodeJS.ErrnoException | null, addresses: { address: string; family: number }[]) => void,
+    callback: (
+      err: NodeJS.ErrnoException | null,
+      addresses: { address: string; family: number }[],
+    ) => void,
   ) => void;
-  export function connect(options: {
-    port: number;
-    host?: string;
-    autoSelectFamily?: boolean;
-    lookup?: LookupFunction;
-  }, connectListener?: () => void): Socket;
-  export function createConnection(options: {
-    port: number;
-    host?: string;
-    autoSelectFamily?: boolean;
-    lookup?: LookupFunction;
-  }, connectListener?: () => void): Socket;
+  export function connect(
+    options: {
+      port: number;
+      host?: string;
+      autoSelectFamily?: boolean;
+      lookup?: LookupFunction;
+    },
+    connectListener?: () => void,
+  ): Socket;
+  export function createConnection(
+    options: {
+      port: number;
+      host?: string;
+      autoSelectFamily?: boolean;
+      lookup?: LookupFunction;
+    },
+    connectListener?: () => void,
+  ): Socket;
   /* The happy-eyeballs attempt budget (Node's process-wide knob; the
    * autoSelectFamily dial consults it): one runtime int, default 250ms
    * like Node's. */
@@ -2513,16 +2945,21 @@ declare module "http" {
     headersTimeout: number;
     requestTimeout: number;
   }
-  export type RequestListener =
-    (req: IncomingMessage, res: ServerResponse) => void;
+  export type RequestListener = (req: IncomingMessage, res: ServerResponse) => void;
   /* The Server VALUE — Node's constructor works with and without `new`
    * (test/parallel's http.Server(fn) spelling); both route to the
    * createServer lowering. */
   export const Server: {
     new (requestListener?: (req: IncomingMessage, res: ServerResponse) => void): Server;
-    new (options: ServerOptions, requestListener?: (req: IncomingMessage, res: ServerResponse) => void): Server;
+    new (
+      options: ServerOptions,
+      requestListener?: (req: IncomingMessage, res: ServerResponse) => void,
+    ): Server;
     (requestListener?: (req: IncomingMessage, res: ServerResponse) => void): Server;
-    (options: ServerOptions, requestListener?: (req: IncomingMessage, res: ServerResponse) => void): Server;
+    (
+      options: ServerOptions,
+      requestListener?: (req: IncomingMessage, res: ServerResponse) => void,
+    ): Server;
   };
   /* The options-record stance (the RequestOptions precedent): every
    * documented key typechecks; the lowering's option walk decides per
@@ -2566,7 +3003,9 @@ declare module "http" {
     setEncoding(encoding: string): void;
     /* The proxy legs: the body streams into a ServerResponse, a
      * ClientRequest, or a raw Socket; natural end ends the destination. */
-    pipe(destination: ServerResponse | import("http2").Http2ServerResponse | ClientRequest | Socket): void;
+    pipe(
+      destination: ServerResponse | import("http2").Http2ServerResponse | ClientRequest | Socket,
+    ): void;
     on(event: "data", listener: (chunk: any) => void): void;
     on(event: "end" | "close" | "aborted", listener: () => void): void;
     on(event: "error", listener: (err: Error) => void): void;
@@ -2602,7 +3041,11 @@ declare module "http" {
     /* Both overloads answer the response (`return this` chaining); the
      * headers argument also takes Node's flat [name, value, ...] array. */
     writeHead(statusCode: number, headers?: OutgoingHttpHeaders | string[]): ServerResponse;
-    writeHead(statusCode: number, statusMessage: string, headers?: OutgoingHttpHeaders | string[]): ServerResponse;
+    writeHead(
+      statusCode: number,
+      statusMessage: string,
+      headers?: OutgoingHttpHeaders | string[],
+    ): ServerResponse;
     writeContinue(callback?: () => void): void;
     writeProcessing(callback?: () => void): void;
     writeEarlyHints(hints: Record<string, string | string[]>, callback?: () => void): void;
@@ -2670,7 +3113,14 @@ declare module "http" {
     constructor(options?: AgentOptions);
     destroy(): void;
     /* Node's exact key shape: host:port:localAddress[:family][:socketPath]. */
-    getName(options?: { host?: string; port?: number; localAddress?: string; family?: number; socketPath?: string; [option: string]: unknown }): string;
+    getName(options?: {
+      host?: string;
+      port?: number;
+      localAddress?: string;
+      family?: number;
+      socketPath?: string;
+      [option: string]: unknown;
+    }): string;
     maxSockets: number;
     maxFreeSockets: number;
     keepAliveMsecs: number;
@@ -2720,18 +3170,27 @@ declare module "http" {
     abort(): void;
     on(event: "response", listener: (res: IncomingMessage) => void): void;
     on(event: "socket", listener: (socket: Socket) => void): void;
-    on(event: "upgrade", listener: (res: IncomingMessage, socket: Socket, head: Buffer) => void): void;
+    on(
+      event: "upgrade",
+      listener: (res: IncomingMessage, socket: Socket, head: Buffer) => void,
+    ): void;
     on(event: "timeout" | "close" | "finish" | "abort", listener: () => void): void;
     on(event: "error", listener: (err: Error) => void): void;
     /* addListener IS on (Node aliases them) — the suite spells both. */
     addListener(event: "response", listener: (res: IncomingMessage) => void): void;
     addListener(event: "socket", listener: (socket: Socket) => void): void;
-    addListener(event: "upgrade", listener: (res: IncomingMessage, socket: Socket, head: Buffer) => void): void;
+    addListener(
+      event: "upgrade",
+      listener: (res: IncomingMessage, socket: Socket, head: Buffer) => void,
+    ): void;
     addListener(event: "timeout" | "close" | "finish" | "abort", listener: () => void): void;
     addListener(event: "error", listener: (err: Error) => void): void;
     once(event: "response", listener: (res: IncomingMessage) => void): void;
     once(event: "socket", listener: (socket: Socket) => void): void;
-    once(event: "upgrade", listener: (res: IncomingMessage, socket: Socket, head: Buffer) => void): void;
+    once(
+      event: "upgrade",
+      listener: (res: IncomingMessage, socket: Socket, head: Buffer) => void,
+    ): void;
     once(event: "timeout" | "close" | "finish" | "abort", listener: () => void): void;
     once(event: "error", listener: (err: Error) => void): void;
   }
@@ -2818,9 +3277,21 @@ declare module "tls" {
     servername?: string;
     [option: string]: unknown;
   }
-  export function connect(options: ConnectionOptions, secureConnectListener?: () => void): TLSSocket;
-  export function connect(port: number, options?: ConnectionOptions, secureConnectListener?: () => void): TLSSocket;
-  export function connect(port: number, host?: string, options?: ConnectionOptions, secureConnectListener?: () => void): TLSSocket;
+  export function connect(
+    options: ConnectionOptions,
+    secureConnectListener?: () => void,
+  ): TLSSocket;
+  export function connect(
+    port: number,
+    options?: ConnectionOptions,
+    secureConnectListener?: () => void,
+  ): TLSSocket;
+  export function connect(
+    port: number,
+    host?: string,
+    options?: ConnectionOptions,
+    secureConnectListener?: () => void,
+  ): TLSSocket;
   /** An opaque parsed cert/key pair — what an SNI callback answers with
    * (the value is a runtime handle; the members are runtime-internal). */
   export interface SecureContext {}
@@ -2951,15 +3422,24 @@ declare module "http2" {
     getHeaders(): import("http").OutgoingHttpHeaders;
     hasHeader(name: string): boolean;
     removeHeader(name: string): void;
-    writeHead(statusCode: number, headers?: import("http").OutgoingHttpHeaders | string[]): Http2ServerResponse;
-    writeHead(statusCode: number, statusMessage: string, headers?: import("http").OutgoingHttpHeaders | string[]): Http2ServerResponse;
+    writeHead(
+      statusCode: number,
+      headers?: import("http").OutgoingHttpHeaders | string[],
+    ): Http2ServerResponse;
+    writeHead(
+      statusCode: number,
+      statusMessage: string,
+      headers?: import("http").OutgoingHttpHeaders | string[],
+    ): Http2ServerResponse;
     writeContinue(): void;
     writeEarlyHints(hints: Record<string, string | string[]>): void;
     write(data: string | Uint8Array): void;
     flushHeaders(): void;
     cork(): void;
     uncork(): void;
-    addTrailers(headers: import("http").OutgoingHttpHeaders | ReadonlyArray<[string, string]>): void;
+    addTrailers(
+      headers: import("http").OutgoingHttpHeaders | ReadonlyArray<[string, string]>,
+    ): void;
     end(data?: string | Uint8Array, callback?: () => void): void;
     end(callback: () => void): void;
     destroy(): void;
@@ -2979,23 +3459,41 @@ declare module "http2" {
     address(): import("node:dgram").AddressInfo;
     emit(event: "connection", socket: Socket): void;
     on(event: "connection", listener: (socket: Socket) => void): void;
-    on(event: "request", listener: (req: Http2ServerRequest, res: Http2ServerResponse) => void): void;
+    on(
+      event: "request",
+      listener: (req: Http2ServerRequest, res: Http2ServerResponse) => void,
+    ): void;
     on(event: "error", listener: (err: Error) => void): void;
     on(event: "close", listener: () => void): void;
     on(event: "sessionError", listener: (err: Error, session: ServerHttp2Session) => void): void;
     /* The ALPN=h2 server's surface (createSecureServer WITHOUT
      * allowHTTP1 — the real h2-over-TLS stack): per-stream and
      * per-session listeners, exactly the h2c server's. */
-    on(event: "stream", listener: (stream: ServerHttp2Stream, headers: IncomingHttpHeaders, flags: number) => void): void;
+    on(
+      event: "stream",
+      listener: (stream: ServerHttp2Stream, headers: IncomingHttpHeaders, flags: number) => void,
+    ): void;
     on(event: "session", listener: (session: ServerHttp2Session) => void): void;
-    once(event: "stream", listener: (stream: ServerHttp2Stream, headers: IncomingHttpHeaders, flags: number) => void): void;
+    once(
+      event: "stream",
+      listener: (stream: ServerHttp2Stream, headers: IncomingHttpHeaders, flags: number) => void,
+    ): void;
     once(event: "session", listener: (session: ServerHttp2Session) => void): void;
     /* HTTP CONNECT (and, in Node, the h2 extended CONNECT — which the
      * allowHTTP1 lowering never sees): the second argument is the raw
      * socket on HTTP/1.1 connections; narrow with instanceof. */
-    on(event: "connect", listener: (req: Http2ServerRequest | import("http").IncomingMessage, resOrSocket: Http2ServerResponse | Socket) => void): void;
+    on(
+      event: "connect",
+      listener: (
+        req: Http2ServerRequest | import("http").IncomingMessage,
+        resOrSocket: Http2ServerResponse | Socket,
+      ) => void,
+    ): void;
     once(event: "connection", listener: (socket: Socket) => void): void;
-    once(event: "request", listener: (req: Http2ServerRequest, res: Http2ServerResponse) => void): void;
+    once(
+      event: "request",
+      listener: (req: Http2ServerRequest, res: Http2ServerResponse) => void,
+    ): void;
     once(event: "error", listener: (err: Error) => void): void;
     once(event: "close", listener: () => void): void;
   }
@@ -3265,7 +3763,10 @@ declare module "http2" {
    * the ALPN=h2 server's compat handles over streams). */
   export function createSecureServer(
     options: SecureServerOptions,
-    onRequestHandler?: (req: import("http").IncomingMessage, res: import("http").ServerResponse) => void,
+    onRequestHandler?: (
+      req: import("http").IncomingMessage,
+      res: import("http").ServerResponse,
+    ) => void,
   ): Http2SecureServer;
 
   /* ── the REAL h2c surface (scr_http2.c: frame codec + HPACK over the
@@ -3306,22 +3807,49 @@ declare module "http2" {
     goaway(code?: number, lastStreamID?: number, opaqueData?: Uint8Array): void;
     on(event: "close" | "timeout", listener: () => void): void;
     on(event: "error", listener: (err: Error) => void): void;
-    on(event: "connect", listener: (session: Http2Session, socket: import("net").Socket) => void): void;
-    on(event: "stream", listener: (stream: ServerHttp2Stream, headers: IncomingHttpHeaders, flags: number) => void): void;
-    on(event: "goaway", listener: (errorCode: number, lastStreamID: number, opaqueData?: Uint8Array) => void): void;
+    on(
+      event: "connect",
+      listener: (session: Http2Session, socket: import("net").Socket) => void,
+    ): void;
+    on(
+      event: "stream",
+      listener: (stream: ServerHttp2Stream, headers: IncomingHttpHeaders, flags: number) => void,
+    ): void;
+    on(
+      event: "goaway",
+      listener: (errorCode: number, lastStreamID: number, opaqueData?: Uint8Array) => void,
+    ): void;
     on(event: "localSettings" | "remoteSettings", listener: (settings: any) => void): void;
     on(event: "frameError", listener: (type: number, code: number, id: number) => void): void;
     on(event: "ping", listener: (payload: Uint8Array) => void): void;
     once(event: "close" | "timeout", listener: () => void): void;
     once(event: "error", listener: (err: Error) => void): void;
-    once(event: "connect", listener: (session: Http2Session, socket: import("net").Socket) => void): void;
-    once(event: "stream", listener: (stream: ServerHttp2Stream, headers: IncomingHttpHeaders, flags: number) => void): void;
-    once(event: "goaway", listener: (errorCode: number, lastStreamID: number, opaqueData?: Uint8Array) => void): void;
+    once(
+      event: "connect",
+      listener: (session: Http2Session, socket: import("net").Socket) => void,
+    ): void;
+    once(
+      event: "stream",
+      listener: (stream: ServerHttp2Stream, headers: IncomingHttpHeaders, flags: number) => void,
+    ): void;
+    once(
+      event: "goaway",
+      listener: (errorCode: number, lastStreamID: number, opaqueData?: Uint8Array) => void,
+    ): void;
     once(event: "localSettings" | "remoteSettings", listener: (settings: any) => void): void;
   }
 
   export interface ClientHttp2Session extends Http2Session {
-    request(headers?: OutgoingHttpHeaders, options?: { endStream?: boolean; exclusive?: boolean; parent?: number; weight?: number; waitForTrailers?: boolean }): ClientHttp2Stream;
+    request(
+      headers?: OutgoingHttpHeaders,
+      options?: {
+        endStream?: boolean;
+        exclusive?: boolean;
+        parent?: number;
+        weight?: number;
+        waitForTrailers?: boolean;
+      },
+    ): ClientHttp2Stream;
   }
 
   export interface ServerHttp2Session extends Http2Session {
@@ -3357,18 +3885,58 @@ declare module "http2" {
 
   export interface ServerHttp2Stream extends Http2StreamCore {
     on(event: "data", listener: (chunk: any) => void): void;
-    on(event: "end" | "close" | "aborted" | "ready" | "timeout" | "drain" | "finish" | "wantTrailers", listener: () => void): void;
+    on(
+      event:
+        | "end"
+        | "close"
+        | "aborted"
+        | "ready"
+        | "timeout"
+        | "drain"
+        | "finish"
+        | "wantTrailers",
+      listener: () => void,
+    ): void;
     on(event: "error", listener: (err: Error) => void): void;
     on(event: "frameError", listener: (type: number, code: number, id: number) => void): void;
     on(event: "trailers", listener: (trailers: IncomingHttpHeaders, flags: number) => void): void;
     once(event: "data", listener: (chunk: any) => void): void;
-    once(event: "end" | "close" | "aborted" | "ready" | "timeout" | "drain" | "finish" | "wantTrailers", listener: () => void): void;
+    once(
+      event:
+        | "end"
+        | "close"
+        | "aborted"
+        | "ready"
+        | "timeout"
+        | "drain"
+        | "finish"
+        | "wantTrailers",
+      listener: () => void,
+    ): void;
     once(event: "error", listener: (err: Error) => void): void;
     once(event: "trailers", listener: (trailers: IncomingHttpHeaders, flags: number) => void): void;
-    respond(headers?: OutgoingHttpHeaders, options?: { endStream?: boolean; waitForTrailers?: boolean }): void;
-    respondWithFile(path: string, headers?: OutgoingHttpHeaders, options?: Record<string, unknown>): void;
-    respondWithFD(fd: number, headers?: OutgoingHttpHeaders, options?: Record<string, unknown>): void;
-    pushStream(headers: OutgoingHttpHeaders, callback: (err: Error | null, pushStream: ServerHttp2Stream, headers: OutgoingHttpHeaders) => void): void;
+    respond(
+      headers?: OutgoingHttpHeaders,
+      options?: { endStream?: boolean; waitForTrailers?: boolean },
+    ): void;
+    respondWithFile(
+      path: string,
+      headers?: OutgoingHttpHeaders,
+      options?: Record<string, unknown>,
+    ): void;
+    respondWithFD(
+      fd: number,
+      headers?: OutgoingHttpHeaders,
+      options?: Record<string, unknown>,
+    ): void;
+    pushStream(
+      headers: OutgoingHttpHeaders,
+      callback: (
+        err: Error | null,
+        pushStream: ServerHttp2Stream,
+        headers: OutgoingHttpHeaders,
+      ) => void,
+    ): void;
     readonly headersSent: boolean;
     readonly pushAllowed: boolean;
     additionalHeaders(headers: OutgoingHttpHeaders): void;
@@ -3379,14 +3947,36 @@ declare module "http2" {
     on(event: "push", listener: (headers: IncomingHttpHeaders, flags: number) => void): void;
     on(event: "headers", listener: (headers: IncomingHttpHeaders, flags: number) => void): void;
     on(event: "data", listener: (chunk: any) => void): void;
-    on(event: "end" | "close" | "aborted" | "ready" | "timeout" | "drain" | "finish" | "wantTrailers", listener: () => void): void;
+    on(
+      event:
+        | "end"
+        | "close"
+        | "aborted"
+        | "ready"
+        | "timeout"
+        | "drain"
+        | "finish"
+        | "wantTrailers",
+      listener: () => void,
+    ): void;
     on(event: "error", listener: (err: Error) => void): void;
     on(event: "frameError", listener: (type: number, code: number, id: number) => void): void;
     on(event: "trailers", listener: (trailers: IncomingHttpHeaders, flags: number) => void): void;
     once(event: "response", listener: (headers: IncomingHttpHeaders, flags: number) => void): void;
     once(event: "push", listener: (headers: IncomingHttpHeaders, flags: number) => void): void;
     once(event: "data", listener: (chunk: any) => void): void;
-    once(event: "end" | "close" | "aborted" | "ready" | "timeout" | "drain" | "finish" | "wantTrailers", listener: () => void): void;
+    once(
+      event:
+        | "end"
+        | "close"
+        | "aborted"
+        | "ready"
+        | "timeout"
+        | "drain"
+        | "finish"
+        | "wantTrailers",
+      listener: () => void,
+    ): void;
     once(event: "error", listener: (err: Error) => void): void;
   }
 
@@ -3398,16 +3988,28 @@ declare module "http2" {
     setTimeout(msecs?: number, callback?: () => void): void;
     ref(): void;
     unref(): void;
-    on(event: "stream", listener: (stream: ServerHttp2Stream, headers: IncomingHttpHeaders, flags: number) => void): void;
+    on(
+      event: "stream",
+      listener: (stream: ServerHttp2Stream, headers: IncomingHttpHeaders, flags: number) => void,
+    ): void;
     on(event: "session", listener: (session: ServerHttp2Session) => void): void;
-    on(event: "request", listener: (req: Http2ServerRequest, res: Http2ServerResponse) => void): void;
+    on(
+      event: "request",
+      listener: (req: Http2ServerRequest, res: Http2ServerResponse) => void,
+    ): void;
     on(event: "error", listener: (err: Error) => void): void;
     on(event: "close" | "listening" | "timeout", listener: () => void): void;
     on(event: "connection", listener: (socket: import("net").Socket) => void): void;
     on(event: "sessionError", listener: (err: Error, session: ServerHttp2Session) => void): void;
-    once(event: "stream", listener: (stream: ServerHttp2Stream, headers: IncomingHttpHeaders, flags: number) => void): void;
+    once(
+      event: "stream",
+      listener: (stream: ServerHttp2Stream, headers: IncomingHttpHeaders, flags: number) => void,
+    ): void;
     once(event: "session", listener: (session: ServerHttp2Session) => void): void;
-    once(event: "request", listener: (req: Http2ServerRequest, res: Http2ServerResponse) => void): void;
+    once(
+      event: "request",
+      listener: (req: Http2ServerRequest, res: Http2ServerResponse) => void,
+    ): void;
     once(event: "error", listener: (err: Error) => void): void;
     once(event: "close" | "listening" | "timeout", listener: () => void): void;
   }
@@ -3416,11 +4018,23 @@ declare module "http2" {
     [option: string]: unknown;
   }
 
-  export function createServer(onRequestHandler?: (req: Http2ServerRequest, res: Http2ServerResponse) => void): Http2Server;
-  export function createServer(options: ServerOptions, onRequestHandler?: (req: Http2ServerRequest, res: Http2ServerResponse) => void): Http2Server;
+  export function createServer(
+    onRequestHandler?: (req: Http2ServerRequest, res: Http2ServerResponse) => void,
+  ): Http2Server;
+  export function createServer(
+    options: ServerOptions,
+    onRequestHandler?: (req: Http2ServerRequest, res: Http2ServerResponse) => void,
+  ): Http2Server;
 
-  export function connect(authority: string, listener?: (session: ClientHttp2Session, socket: import("net").Socket) => void): ClientHttp2Session;
-  export function connect(authority: string, options: Record<string, unknown>, listener?: (session: ClientHttp2Session, socket: import("net").Socket) => void): ClientHttp2Session;
+  export function connect(
+    authority: string,
+    listener?: (session: ClientHttp2Session, socket: import("net").Socket) => void,
+  ): ClientHttp2Session;
+  export function connect(
+    authority: string,
+    options: Record<string, unknown>,
+    listener?: (session: ClientHttp2Session, socket: import("net").Socket) => void,
+  ): ClientHttp2Session;
 
   export function getDefaultSettings(): any;
   export function getPackedSettings(settings: Record<string, number | boolean>): Uint8Array;
@@ -3556,7 +4170,11 @@ declare module "node:cluster" {
 declare module "tty" {
   export interface WriteStream {
     write(data: string | Uint8Array, callback?: (error?: Error | null) => void): boolean;
-    write(data: string | Uint8Array, encoding: BufferEncoding, callback?: (error?: Error | null) => void): boolean;
+    write(
+      data: string | Uint8Array,
+      encoding: BufferEncoding,
+      callback?: (error?: Error | null) => void,
+    ): boolean;
     readonly isTTY: boolean;
   }
   export function isatty(fd: number): boolean;
@@ -3676,7 +4294,12 @@ declare module "stream" {
     decodeStrings?: boolean;
     defaultEncoding?: string;
     objectMode?: boolean;
-    write?(this: Writable, chunk: Buffer, encoding: string, callback: (error?: Error | null) => void): void;
+    write?(
+      this: Writable,
+      chunk: Buffer,
+      encoding: string,
+      callback: (error?: Error | null) => void,
+    ): void;
     writev?(this: Writable, chunks: unknown[], callback: (error?: Error | null) => void): void;
     final?(this: Writable, callback: (error?: Error | null) => void): void;
     destroy?(this: Writable, error: Error | null, callback: (error?: Error | null) => void): void;
@@ -3697,7 +4320,12 @@ declare module "stream" {
     writableObjectMode?: boolean;
     allowHalfOpen?: boolean;
     read?(this: Duplex, size: number): void;
-    write?(this: Duplex, chunk: Buffer, encoding: string, callback: (error?: Error | null) => void): void;
+    write?(
+      this: Duplex,
+      chunk: Buffer,
+      encoding: string,
+      callback: (error?: Error | null) => void,
+    ): void;
     final?(this: Duplex, callback: (error?: Error | null) => void): void;
     destroy?(this: Duplex, error: Error | null, callback: (error?: Error | null) => void): void;
     construct?(this: Duplex, callback: (error?: Error | null) => void): void;
@@ -3720,12 +4348,22 @@ declare module "stream" {
     readableObjectMode?: boolean;
     writableObjectMode?: boolean;
     allowHalfOpen?: boolean;
-    transform?(this: Transform, chunk: Buffer, encoding: string, callback: (error?: Error | null, data?: Buffer | string) => void): void;
+    transform?(
+      this: Transform,
+      chunk: Buffer,
+      encoding: string,
+      callback: (error?: Error | null, data?: Buffer | string) => void,
+    ): void;
     flush?(this: Transform, callback: (error?: Error | null, data?: Buffer | string) => void): void;
     destroy?(this: Transform, error: Error | null, callback: (error?: Error | null) => void): void;
     construct?(this: Transform, callback: (error?: Error | null) => void): void;
     read?(this: Transform, size: number): void;
-    write?(this: Transform, chunk: Buffer, encoding: string, callback: (error?: Error | null) => void): void;
+    write?(
+      this: Transform,
+      chunk: Buffer,
+      encoding: string,
+      callback: (error?: Error | null) => void,
+    ): void;
     final?(this: Transform, callback: (error?: Error | null) => void): void;
     writev?(this: Transform, chunks: unknown[], callback: (error?: Error | null) => void): void;
     autoDestroy?: boolean;
@@ -3776,15 +4414,24 @@ declare module "stream" {
     once(event: "error", listener: (err: Error) => void): this;
     once(event: string, listener: (...args: any[]) => void): this;
     addListener(event: "data", listener: (chunk: any) => void): this;
-    addListener(event: "end" | "close" | "readable" | "pause" | "resume", listener: () => void): this;
+    addListener(
+      event: "end" | "close" | "readable" | "pause" | "resume",
+      listener: () => void,
+    ): this;
     addListener(event: "error", listener: (err: Error) => void): this;
     addListener(event: string, listener: (...args: any[]) => void): this;
     prependListener(event: "data", listener: (chunk: any) => void): this;
-    prependListener(event: "end" | "close" | "readable" | "pause" | "resume", listener: () => void): this;
+    prependListener(
+      event: "end" | "close" | "readable" | "pause" | "resume",
+      listener: () => void,
+    ): this;
     prependListener(event: "error", listener: (err: Error) => void): this;
     prependListener(event: string, listener: (...args: any[]) => void): this;
     prependOnceListener(event: "data", listener: (chunk: any) => void): this;
-    prependOnceListener(event: "end" | "close" | "readable" | "pause" | "resume", listener: () => void): this;
+    prependOnceListener(
+      event: "end" | "close" | "readable" | "pause" | "resume",
+      listener: () => void,
+    ): this;
     prependOnceListener(event: "error", listener: (err: Error) => void): this;
     prependOnceListener(event: string, listener: (...args: any[]) => void): this;
     off(event: "data", listener: (chunk: any) => void): this;
@@ -3792,7 +4439,10 @@ declare module "stream" {
     off(event: "error", listener: (err: Error) => void): this;
     off(event: string, listener: (...args: any[]) => void): this;
     removeListener(event: "data", listener: (chunk: any) => void): this;
-    removeListener(event: "end" | "close" | "readable" | "pause" | "resume", listener: () => void): this;
+    removeListener(
+      event: "end" | "close" | "readable" | "pause" | "resume",
+      listener: () => void,
+    ): this;
     removeListener(event: "error", listener: (err: Error) => void): this;
     removeListener(event: string, listener: (...args: any[]) => void): this;
   }
@@ -3801,11 +4451,18 @@ declare module "stream" {
     constructor(opts?: WritableOptions);
     /* The underscore-method surface (see Readable). */
     _write(chunk: any, encoding: string, callback: (error?: Error | null) => void): void;
-    _writev(chunks: Array<{ chunk: any; encoding: string }>, callback: (error?: Error | null) => void): void;
+    _writev(
+      chunks: Array<{ chunk: any; encoding: string }>,
+      callback: (error?: Error | null) => void,
+    ): void;
     _final(callback: (error?: Error | null) => void): void;
     _destroy(error: Error | null, callback: (error?: Error | null) => void): void;
     write(chunk: Buffer | string, callback?: (error?: Error | null) => void): boolean;
-    write(chunk: Buffer | string, encoding: string, callback?: (error?: Error | null) => void): boolean;
+    write(
+      chunk: Buffer | string,
+      encoding: string,
+      callback?: (error?: Error | null) => void,
+    ): boolean;
     end(callback?: () => void): this;
     end(chunk: Buffer | string, callback?: () => void): this;
     end(chunk: Buffer | string, encoding: string, callback?: () => void): this;
@@ -3861,10 +4518,17 @@ declare module "stream" {
     constructor(opts?: DuplexOptions);
     /* The underscore-method surface (see Readable). */
     _write(chunk: any, encoding: string, callback: (error?: Error | null) => void): void;
-    _writev(chunks: Array<{ chunk: any; encoding: string }>, callback: (error?: Error | null) => void): void;
+    _writev(
+      chunks: Array<{ chunk: any; encoding: string }>,
+      callback: (error?: Error | null) => void,
+    ): void;
     _final(callback: (error?: Error | null) => void): void;
     write(chunk: Buffer | string, callback?: (error?: Error | null) => void): boolean;
-    write(chunk: Buffer | string, encoding: string, callback?: (error?: Error | null) => void): boolean;
+    write(
+      chunk: Buffer | string,
+      encoding: string,
+      callback?: (error?: Error | null) => void,
+    ): boolean;
     end(callback?: () => void): this;
     end(chunk: Buffer | string, callback?: () => void): this;
     end(chunk: Buffer | string, encoding: string, callback?: () => void): this;
@@ -3881,37 +4545,58 @@ declare module "stream" {
     readonly writableCorked: number;
     readonly allowHalfOpen: boolean;
     on(event: "data", listener: (chunk: any) => void): this;
-    on(event: "end" | "close" | "readable" | "pause" | "resume" | "drain" | "finish", listener: () => void): this;
+    on(
+      event: "end" | "close" | "readable" | "pause" | "resume" | "drain" | "finish",
+      listener: () => void,
+    ): this;
     on(event: "error", listener: (err: Error) => void): this;
     on(event: "pipe" | "unpipe", listener: (src: Readable) => void): this;
     on(event: string, listener: (...args: any[]) => void): this;
     once(event: "data", listener: (chunk: any) => void): this;
-    once(event: "end" | "close" | "readable" | "pause" | "resume" | "drain" | "finish", listener: () => void): this;
+    once(
+      event: "end" | "close" | "readable" | "pause" | "resume" | "drain" | "finish",
+      listener: () => void,
+    ): this;
     once(event: "error", listener: (err: Error) => void): this;
     once(event: "pipe" | "unpipe", listener: (src: Readable) => void): this;
     once(event: string, listener: (...args: any[]) => void): this;
     addListener(event: "data", listener: (chunk: any) => void): this;
-    addListener(event: "end" | "close" | "readable" | "pause" | "resume" | "drain" | "finish", listener: () => void): this;
+    addListener(
+      event: "end" | "close" | "readable" | "pause" | "resume" | "drain" | "finish",
+      listener: () => void,
+    ): this;
     addListener(event: "error", listener: (err: Error) => void): this;
     addListener(event: "pipe" | "unpipe", listener: (src: Readable) => void): this;
     addListener(event: string, listener: (...args: any[]) => void): this;
     prependListener(event: "data", listener: (chunk: any) => void): this;
-    prependListener(event: "end" | "close" | "readable" | "pause" | "resume" | "drain" | "finish", listener: () => void): this;
+    prependListener(
+      event: "end" | "close" | "readable" | "pause" | "resume" | "drain" | "finish",
+      listener: () => void,
+    ): this;
     prependListener(event: "error", listener: (err: Error) => void): this;
     prependListener(event: "pipe" | "unpipe", listener: (src: Readable) => void): this;
     prependListener(event: string, listener: (...args: any[]) => void): this;
     prependOnceListener(event: "data", listener: (chunk: any) => void): this;
-    prependOnceListener(event: "end" | "close" | "readable" | "pause" | "resume" | "drain" | "finish", listener: () => void): this;
+    prependOnceListener(
+      event: "end" | "close" | "readable" | "pause" | "resume" | "drain" | "finish",
+      listener: () => void,
+    ): this;
     prependOnceListener(event: "error", listener: (err: Error) => void): this;
     prependOnceListener(event: "pipe" | "unpipe", listener: (src: Readable) => void): this;
     prependOnceListener(event: string, listener: (...args: any[]) => void): this;
     off(event: "data", listener: (chunk: any) => void): this;
-    off(event: "end" | "close" | "readable" | "pause" | "resume" | "drain" | "finish", listener: () => void): this;
+    off(
+      event: "end" | "close" | "readable" | "pause" | "resume" | "drain" | "finish",
+      listener: () => void,
+    ): this;
     off(event: "error", listener: (err: Error) => void): this;
     off(event: "pipe" | "unpipe", listener: (src: Readable) => void): this;
     off(event: string, listener: (...args: any[]) => void): this;
     removeListener(event: "data", listener: (chunk: any) => void): this;
-    removeListener(event: "end" | "close" | "readable" | "pause" | "resume" | "drain" | "finish", listener: () => void): this;
+    removeListener(
+      event: "end" | "close" | "readable" | "pause" | "resume" | "drain" | "finish",
+      listener: () => void,
+    ): this;
     removeListener(event: "error", listener: (err: Error) => void): this;
     removeListener(event: "pipe" | "unpipe", listener: (src: Readable) => void): this;
     removeListener(event: string, listener: (...args: any[]) => void): this;
@@ -3920,7 +4605,11 @@ declare module "stream" {
   class Transform extends Duplex {
     constructor(opts?: TransformOptions);
     /* The underscore-method surface (see Readable). */
-    _transform(chunk: any, encoding: string, callback: (error?: Error | null, data?: Buffer | string) => void): void;
+    _transform(
+      chunk: any,
+      encoding: string,
+      callback: (error?: Error | null, data?: Buffer | string) => void,
+    ): void;
     _flush(callback: (error?: Error | null, data?: Buffer | string) => void): void;
   }
   class PassThrough extends Transform {
@@ -3939,7 +4628,18 @@ declare module "stream" {
   }
   class Stream extends EventEmitter {}
 
-  export { Readable, Writable, Duplex, Transform, PassThrough, Stream, pipeline, finished, getDefaultHighWaterMark, promises };
+  export {
+    Readable,
+    Writable,
+    Duplex,
+    Transform,
+    PassThrough,
+    Stream,
+    pipeline,
+    finished,
+    getDefaultHighWaterMark,
+    promises,
+  };
   export type { ReadableOptions, WritableOptions, DuplexOptions, TransformOptions };
 }
 declare module "node:stream" {

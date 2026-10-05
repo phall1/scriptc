@@ -9,7 +9,8 @@ function isArgumentsRead(id: ts.Identifier): boolean {
   if ((parent as ts.Node & { name?: ts.Node }).name === id) return false;
   if (ts.isBindingElement(parent) && parent.propertyName === id) return false;
   if (ts.isLabeledStatement(parent) && parent.label === id) return false;
-  if ((ts.isBreakStatement(parent) || ts.isContinueStatement(parent)) && parent.label === id) return false;
+  if ((ts.isBreakStatement(parent) || ts.isContinueStatement(parent)) && parent.label === id)
+    return false;
   return true;
 }
 

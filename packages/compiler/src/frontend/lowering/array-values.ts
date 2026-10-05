@@ -1,7 +1,18 @@
 import { dynUndefinedExpr, varRef } from "../../ir/build.js";
-import { BOOL, F64, type IrExpr, type IrStmt, type IrType, JSVAL, type SrcLoc, UNDEFINED_T, typeEquals, typeKey, unionContainerArmsOk } from "../../ir/ir.js";
+import {
+  BOOL,
+  F64,
+  type IrExpr,
+  type IrStmt,
+  type IrType,
+  JSVAL,
+  type SrcLoc,
+  UNDEFINED_T,
+  typeEquals,
+  typeKey,
+  unionContainerArmsOk,
+} from "../../ir/ir.js";
 import type { Lowerer } from "./lowerer.js";
-
 
 /** Test whether one array index contains a value rather than a hole. */
 export function arrayIndexPresent(arr: IrExpr, index: IrExpr, loc: SrcLoc): IrExpr {
@@ -16,26 +27,33 @@ export function arrayIndexPresent(arr: IrExpr, index: IrExpr, loc: SrcLoc): IrEx
 
 /** Test the conventional `a.0[i.0]` slot used by synthesized array loops. */
 export function currentArrayIndexPresent(arrType: IrType, loc: SrcLoc): IrExpr {
-  return arrayIndexPresent(
-    varRef("a.0", arrType, loc),
-    varRef("i.0", F64, loc),
-    loc,
-  );
+  return arrayIndexPresent(varRef("a.0", arrType, loc), varRef("i.0", F64, loc), loc);
 }
 
 /** The value yielded by a JavaScript array read, independent of its slot's storage type. */
 export function arrayValueType(lowerer: Lowerer, elem: IrType): IrType {
   if (elem.kind === "jsval" || elem.kind === "dyn") return elem;
-  return elem.kind === "union" ? lowerer.withUndefinedArmOf(elem) ?? elem : lowerer.withUndefinedArm(elem);
+  return elem.kind === "union"
+    ? (lowerer.withUndefinedArmOf(elem) ?? elem)
+    : lowerer.withUndefinedArm(elem);
 }
 
 /** Read one stabilized receiver/index pair. Both a hole and present undefined yield undefined. */
-export function arrayValueRead(lowerer: Lowerer, arr: IrExpr, index: IrExpr, elem: IrType, loc: SrcLoc): IrExpr {
+export function arrayValueRead(
+  lowerer: Lowerer,
+  arr: IrExpr,
+  index: IrExpr,
+  elem: IrType,
+  loc: SrcLoc,
+): IrExpr {
   const type = arrayValueType(lowerer, elem);
   const read: IrExpr = { kind: "arrayGet", arr, index, type: elem, loc };
-  const missing: IrExpr = type.kind === "jsval"
-    ? { kind: "jsOp", op: "undefLit", args: [], type: JSVAL, loc }
-    : type.kind === "dyn" ? dynUndefinedExpr(loc) : lowerer.wrappedUndefined(type, loc)!;
+  const missing: IrExpr =
+    type.kind === "jsval"
+      ? { kind: "jsOp", op: "undefLit", args: [], type: JSVAL, loc }
+      : type.kind === "dyn"
+        ? dynUndefinedExpr(loc)
+        : lowerer.wrappedUndefined(type, loc)!;
   return {
     kind: "ternary",
     cond: {
@@ -48,13 +66,19 @@ export function arrayValueRead(lowerer: Lowerer, arr: IrExpr, index: IrExpr, ele
     },
     then: typeEquals(elem, type) ? read : lowerer.coerceToExpected(read, type),
     else_: missing,
-    type, loc,
+    type,
+    loc,
   };
 }
 
 /** Read a stabilized union of native arrays without copying either the
  * receiver or its elements. Every arm contributes its missing-value case. */
-export function unionArrayValueRead(lowerer: Lowerer, value: IrExpr, index: IrExpr, loc: SrcLoc): IrExpr | null {
+export function unionArrayValueRead(
+  lowerer: Lowerer,
+  value: IrExpr,
+  index: IrExpr,
+  loc: SrcLoc,
+): IrExpr | null {
   if (value.type.kind !== "union") return null;
   const unionId = value.type.unionId;
   const arms = lowerer.unions.get(unionId)?.arms;
@@ -69,26 +93,54 @@ export function unionArrayValueRead(lowerer: Lowerer, value: IrExpr, index: IrEx
     const parts = answer.kind === "union" ? lowerer.unions.get(answer.unionId)!.arms : [answer];
     for (const part of parts) answers.set(typeKey(part), part);
   }
-  const joined = [...answers.values()].sort((a, b) => typeKey(a) < typeKey(b) ? -1 : 1);
-  if (joined.length > 1 && (!unionContainerArmsOk(joined) ||
-      joined.some((arm) => arm.kind === "dyn" || arm.kind === "jsval" || arm.kind === "generator" || arm.kind === "caught"))) return null;
-  const type: IrType = joined.length === 1 ? joined[0]! : { kind: "union", unionId: lowerer.unions.intern(joined) };
+  const joined = [...answers.values()].sort((a, b) => (typeKey(a) < typeKey(b) ? -1 : 1));
+  if (
+    joined.length > 1 &&
+    (!unionContainerArmsOk(joined) ||
+      joined.some(
+        (arm) =>
+          arm.kind === "dyn" ||
+          arm.kind === "jsval" ||
+          arm.kind === "generator" ||
+          arm.kind === "caught",
+      ))
+  )
+    return null;
+  const type: IrType =
+    joined.length === 1 ? joined[0]! : { kind: "union", unionId: lowerer.unions.intern(joined) };
   let result: IrExpr | null = null;
   for (let tag = arms.length - 1; tag >= 0; tag--) {
     const arm = arms[tag]!;
     if (arm.kind !== "array") return null;
     const receiver: IrExpr = { kind: "unionNarrow", unionId, tag, value, type: arm, loc };
-    const read = lowerer.coerceToExpected(arrayValueRead(lowerer, receiver, index, arm.elem, loc), type);
-    result = result === null ? read : {
-      kind: "ternary", cond: { kind: "unionIsTag", unionId, tag, value, negated: false, type: BOOL, loc },
-      then: read, else_: result, type, loc,
-    };
+    const read = lowerer.coerceToExpected(
+      arrayValueRead(lowerer, receiver, index, arm.elem, loc),
+      type,
+    );
+    result =
+      result === null
+        ? read
+        : {
+            kind: "ternary",
+            cond: { kind: "unionIsTag", unionId, tag, value, negated: false, type: BOOL, loc },
+            then: read,
+            else_: result,
+            type,
+            loc,
+          };
   }
   return result;
 }
 
 /** Store a stabilized value without changing the array's element ABI. */
-export function arrayValueStore(lowerer: Lowerer, arr: IrExpr, index: IrExpr, value: IrExpr, elem: IrType, loc: SrcLoc): IrStmt {
+export function arrayValueStore(
+  lowerer: Lowerer,
+  arr: IrExpr,
+  index: IrExpr,
+  value: IrExpr,
+  elem: IrType,
+  loc: SrcLoc,
+): IrStmt {
   if (typeEquals(value.type, elem)) return { kind: "arraySet", arr, index, value, loc };
   if (value.type.kind === "union" && lowerer.armTag(value.type.unionId, UNDEFINED_T) >= 0) {
     // The tag test and the VALUE arm extraction both consume the value. Keep
@@ -105,7 +157,15 @@ export function arrayValueStore(lowerer: Lowerer, arr: IrExpr, index: IrExpr, va
     }
     const write: IrStmt = {
       kind: "if",
-      cond: { kind: "unionIsTag", unionId, tag: lowerer.armTag(unionId, UNDEFINED_T), negated: false, value: stable, type: BOOL, loc },
+      cond: {
+        kind: "unionIsTag",
+        unionId,
+        tag: lowerer.armTag(unionId, UNDEFINED_T),
+        negated: false,
+        value: stable,
+        type: BOOL,
+        loc,
+      },
       then: [{ kind: "arraySetUndefined", arr, index, loc }],
       else_: [{ kind: "arraySet", arr, index, value: lowerer.coerceToExpected(stable, elem), loc }],
       loc,

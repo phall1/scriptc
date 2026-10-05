@@ -6,7 +6,10 @@ import { Ts7Host } from "../../src/frontend/ts7/program-adapter.js";
 
 import { afterAll, expect, test, vi } from "vitest";
 import { lowerToIr } from "../../src/frontend/lowering/lowerer.js";
-import { clearWorkspacePackages, registerWorkspacePackage } from "../../src/frontend/workspace-registry.js";
+import {
+  clearWorkspacePackages,
+  registerWorkspacePackage,
+} from "../../src/frontend/workspace-registry.js";
 import { CheckerFacade } from "../../src/frontend/ts7/checker.js";
 import type { SemanticChecker as Checker } from "../../src/frontend/ts7/semantic-checker.js";
 import type { Node } from "../../src/frontend/ts7/ast-types.js";
@@ -65,12 +68,17 @@ function collectNodes(w: TwoWorlds): Node[] {
 }
 
 test("interface base queries preserve generic parameters and memoize raw answers", () => {
-  const w = buildTwoWorlds({ "main.ts": `
+  const w = buildTwoWorlds(
+    {
+      "main.ts": `
     interface Values<T> extends ReadonlySet<T> {}
     interface Nested<T> extends Values<T> {}
     const numbers: Nested<number> = new Set<number>();
     const strings: Nested<string> = new Set<string>();
-  ` }, host);
+  `,
+    },
+    host,
+  );
   worlds.push(w);
   const { proxy, counts } = countingChecker(w.p7.project.checker);
   const facade = new CheckerFacade(proxy);
@@ -94,20 +102,26 @@ test("interface base queries preserve generic parameters and memoize raw answers
 });
 
 test("semantic never detection drops impossible distributed intersections and caches the answer", () => {
-  const w = buildTwoWorlds({ "main.ts": `
+  const w = buildTwoWorlds(
+    {
+      "main.ts": `
     type Node = { kind: "leaf"; text: string } | { kind: "branch"; children: Node[] };
     type Branch = Node & { kind: "branch" };
     type Impossible = { kind: "left" } & { kind: "right" };
     type Empty = {};
     type NeverField = { value: never };
     type PlainNever = never;
-  ` }, host);
+  `,
+    },
+    host,
+  );
   worlds.push(w);
   const { proxy, counts } = countingChecker(w.p7.project.checker);
   const facade = new CheckerFacade(proxy);
   const aliases = new Map<string, ad.Type>();
   for (const node of collectNodes(w)) {
-    if (ad.isTypeAliasDeclaration(node)) aliases.set(node.name.text, facade.getTypeFromTypeNode(node.type));
+    if (ad.isTypeAliasDeclaration(node))
+      aliases.set(node.name.text, facade.getTypeFromTypeNode(node.type));
   }
   const branch = aliases.get("Branch")!;
   const arms = ad.constituentTypes(branch);
@@ -128,29 +142,40 @@ test("semantic never detection drops impossible distributed intersections and ca
 });
 
 test("semantic assignability distinguishes recursive variants and memoizes both directions", () => {
-  const w = buildTwoWorlds({ "main.ts": `
+  const w = buildTwoWorlds(
+    {
+      "main.ts": `
     type Tree = { kind: "leaf"; text: string } | { kind: "branch"; children: Tree[] };
     type Branch = Tree & { kind: "branch" };
     type Fresh = { kind: "branch"; children: never[] };
     type Wrong = { kind: "branch"; children: number[] };
-  ` }, host);
+  `,
+    },
+    host,
+  );
   worlds.push(w);
   const { proxy, counts } = countingChecker(w.p7.project.checker);
   const facade = new CheckerFacade(proxy);
   const aliases = new Map<string, ad.Type>();
   for (const node of collectNodes(w)) {
-    if (ad.isTypeAliasDeclaration(node)) aliases.set(node.name.text, facade.getTypeFromTypeNode(node.type));
+    if (ad.isTypeAliasDeclaration(node))
+      aliases.set(node.name.text, facade.getTypeFromTypeNode(node.type));
   }
   const pairs = [
-    ["Fresh", "Branch", true], ["Fresh", "Tree", true],
-    ["Branch", "Fresh", false], ["Wrong", "Tree", false],
-    ["Branch", "Tree", true], ["Tree", "Branch", false],
+    ["Fresh", "Branch", true],
+    ["Fresh", "Tree", true],
+    ["Branch", "Fresh", false],
+    ["Wrong", "Tree", false],
+    ["Branch", "Tree", true],
+    ["Tree", "Branch", false],
   ] as const;
   for (const [from, to, expected] of pairs) {
     const source = aliases.get(from)!;
     const target = aliases.get(to)!;
     expect(facade.isTypeAssignableTo(source, target), `${from} to ${to}`).toBe(expected);
-    expect(facade.isTypeAssignableTo(source, target)).toBe(w.p7.project.checker.isTypeAssignableTo(source, target));
+    expect(facade.isTypeAssignableTo(source, target)).toBe(
+      w.p7.project.checker.isTypeAssignableTo(source, target),
+    );
   }
   expect(counts["isTypeAssignableTo"]).toBe(pairs.length);
   for (const [from, to] of pairs) facade.isTypeAssignableTo(aliases.get(from)!, aliases.get(to)!);
@@ -222,8 +247,10 @@ test("getBaseTypeOfLiteralType answers literals client-side and agrees with the 
   // types round-trip, plus one call per intrinsic singleton.
   const rawCalls = counts["getBaseTypeOfLiteralType"] ?? 0;
   const intrinsicFetches =
-    (counts["getStringType"] ?? 0) + (counts["getNumberType"] ?? 0) +
-    (counts["getBigIntType"] ?? 0) + (counts["getBooleanType"] ?? 0);
+    (counts["getStringType"] ?? 0) +
+    (counts["getNumberType"] ?? 0) +
+    (counts["getBigIntType"] ?? 0) +
+    (counts["getBooleanType"] ?? 0);
   expect(intrinsicFetches).toBeLessThanOrEqual(4);
   expect(rawCalls).toBeLessThan(types.size / 2);
 });
@@ -294,7 +321,9 @@ test("union and intersection constituents are fetched once per immutable type", 
       const first = ad.constituentTypes(type);
       expect(ad.constituentTypes(type)).toBe(first);
       expect(type.getTypes()).toBe(first);
-      expect(fetch.mock.calls.filter(([id, method]) => id === type.id && method === "getTypesOfType")).toHaveLength(1);
+      expect(
+        fetch.mock.calls.filter(([id, method]) => id === type.id && method === "getTypesOfType"),
+      ).toHaveLength(1);
     }
   } finally {
     fetch.mockRestore();
@@ -322,8 +351,9 @@ test("explicit prefetchSourceFile primes hot kinds and direct fallbacks memoize"
 });
 
 test("managed structure and body waves batch across roots without touching deferred code", () => {
-  const w = buildTwoWorlds({
-    "waves.ts": `
+  const w = buildTwoWorlds(
+    {
+      "waves.ts": `
 export function reached(input: number = Math.random()): number {
   const reachedLocal = { value: input };
   return reachedLocal.value;
@@ -344,7 +374,9 @@ export function withClass(): number {
 const top = reached(1);
 void top;
 `,
-  }, host);
+    },
+    host,
+  );
   worlds.push(w);
   const { proxy, counts, calls } = countingChecker(w.p7.project.checker);
   const facade = new CheckerFacade(proxy);
@@ -368,7 +400,9 @@ void top;
   expect(headerSymbolNodes.length).toBeGreaterThan(0);
   const deferred = [reachedBody, deadBody, defaultValue, fieldValue];
   expect(headerTypeNodes.every((node) => deferred.every((root) => !inside(node, root)))).toBe(true);
-  expect(headerSymbolNodes.every((node) => deferred.every((root) => !inside(node, root)))).toBe(true);
+  expect(headerSymbolNodes.every((node) => deferred.every((root) => !inside(node, root)))).toBe(
+    true,
+  );
 
   const beforeBodies = { ...counts };
   facade.prefetchRoots([reachedBody, deadBody, defaultValue, fieldValue]);
@@ -393,15 +427,18 @@ void top;
 });
 
 test("managed misses stay direct instead of falling back to whole-file prefetch", () => {
-  const w = buildTwoWorlds({
-    "managed.ts": `
+  const w = buildTwoWorlds(
+    {
+      "managed.ts": `
 export function dead(input: number): number {
   const first = input + 1;
   const second = first + 1;
   return second;
 }
 `,
-  }, host);
+    },
+    host,
+  );
   worlds.push(w);
   const { proxy, counts, calls } = countingChecker(w.p7.project.checker);
   const facade = new CheckerFacade(proxy);
@@ -425,14 +462,17 @@ test("reachable waves batch symbol types after symbol-only analysis", () => {
     { length: 24 },
     (_, index) => `  const local${index} = input + ${index};`,
   ).join("\n");
-  const w = buildTwoWorlds({
-    "symbol-type-handoff.ts": `
+  const w = buildTwoWorlds(
+    {
+      "symbol-type-handoff.ts": `
 export function reached(input: number): number {
 ${locals}
   return local23;
 }
 `,
-  }, host);
+    },
+    host,
+  );
   worlds.push(w);
   const { proxy, counts, calls } = countingChecker(w.p7.project.checker);
   const facade = new CheckerFacade(proxy);
@@ -465,8 +505,9 @@ test("JavaScript class-shape collection batches constructor field queries", () =
     { length: 24 },
     (_, index) => `    this.value${index} = { nested: input };`,
   ).join("\n");
-  const w = buildTwoWorlds({
-    "dead-class.js": `
+  const w = buildTwoWorlds(
+    {
+      "dead-class.js": `
 class Dead {
   constructor(input) {
 ${fields}
@@ -477,7 +518,9 @@ ${fields}
 }
 console.log("ok");
 `,
-  }, host);
+    },
+    host,
+  );
   worlds.push(w);
   const { proxy, calls } = countingChecker(w.p7.project.checker);
   const facade = new CheckerFacade(proxy, { project: w.p7.project.checker.project });
@@ -492,12 +535,12 @@ console.log("ok");
 
   for (const name of ["getTypeAtLocation", "getSymbolAtLocation"]) {
     const checkerCalls = calls[name] ?? [];
-    expect(checkerCalls.some(([arg]) =>
-      Array.isArray(arg) && (arg as Node[]).some(insideCtor),
-    )).toBe(true);
-    expect(checkerCalls.some(([arg]) =>
-      !Array.isArray(arg) && insideCtor(arg as Node),
-    )).toBe(false);
+    expect(
+      checkerCalls.some(([arg]) => Array.isArray(arg) && (arg as Node[]).some(insideCtor)),
+    ).toBe(true);
+    expect(checkerCalls.some(([arg]) => !Array.isArray(arg) && insideCtor(arg as Node))).toBe(
+      false,
+    );
   }
 });
 
@@ -520,23 +563,29 @@ test("signature collection batches exact types of deferred function defaults", (
   lowerToIr(w.p7, sf, [sf]);
 
   const typeCalls = calls["getTypeAtLocation"] ?? [];
-  expect(typeCalls.some(([arg]) =>
-    Array.isArray(arg) && initializers.every((initializer) => (arg as Node[]).includes(initializer)),
-  )).toBe(true);
-  expect(typeCalls.some(([arg]) =>
-    !Array.isArray(arg) && initializers.includes(arg as never),
-  )).toBe(false);
+  expect(
+    typeCalls.some(
+      ([arg]) =>
+        Array.isArray(arg) &&
+        initializers.every((initializer) => (arg as Node[]).includes(initializer)),
+    ),
+  ).toBe(true);
+  expect(
+    typeCalls.some(([arg]) => !Array.isArray(arg) && initializers.includes(arg as never)),
+  ).toBe(false);
 });
 
 test("class-shape collection batches deferred method default types", () => {
   const methods = Array.from(
     { length: 24 },
-    (_, index) =>
-      `  dead${index}(value = process.env.VALUE): string | undefined { return value; }`,
+    (_, index) => `  dead${index}(value = process.env.VALUE): string | undefined { return value; }`,
   ).join("\n");
-  const w = buildTwoWorlds({
-    "class-defaults.ts": `class Dead {\n${methods}\n}\nconsole.log("ok");\n`,
-  }, host);
+  const w = buildTwoWorlds(
+    {
+      "class-defaults.ts": `class Dead {\n${methods}\n}\nconsole.log("ok");\n`,
+    },
+    host,
+  );
   worlds.push(w);
   const { proxy, calls } = countingChecker(w.p7.project.checker);
   const facade = new CheckerFacade(proxy, { project: w.p7.project.checker.project });
@@ -550,24 +599,31 @@ test("class-shape collection batches deferred method default types", () => {
   lowerToIr(w.p7, sf, [sf]);
 
   const typeCalls = calls["getTypeAtLocation"] ?? [];
-  expect(typeCalls.some(([arg]) =>
-    Array.isArray(arg) && initializers.every((initializer) => (arg as Node[]).includes(initializer)),
-  )).toBe(true);
-  expect(typeCalls.some(([arg]) =>
-    !Array.isArray(arg) && initializers.includes(arg as never),
-  )).toBe(false);
+  expect(
+    typeCalls.some(
+      ([arg]) =>
+        Array.isArray(arg) &&
+        initializers.every((initializer) => (arg as Node[]).includes(initializer)),
+    ),
+  ).toBe(true);
+  expect(
+    typeCalls.some(([arg]) => !Array.isArray(arg) && initializers.includes(arg as never)),
+  ).toBe(false);
 });
 
 test("eager npm-static implicit instances batch their committed body", () => {
-  const w = buildTwoWorlds({
-    "eager-implicit.js": `
+  const w = buildTwoWorlds(
+    {
+      "eager-implicit.js": `
 function pick(value) {
   const row = { value };
   return row.value;
 }
 console.log(pick(42));
 `,
-  }, host);
+    },
+    host,
+  );
   worlds.push(w);
   const { proxy, calls } = countingChecker(w.p7.project.checker);
   const facade = new CheckerFacade(proxy, { project: w.p7.project.checker.project });
@@ -587,17 +643,16 @@ console.log(pick(42));
   }
 
   const typeCalls = calls["getTypeAtLocation"] ?? [];
-  expect(typeCalls.some(([arg]) =>
-    Array.isArray(arg) && (arg as Node[]).some(insideBody),
-  )).toBe(true);
-  expect(typeCalls.some(([arg]) =>
-    !Array.isArray(arg) && insideBody(arg as Node),
-  )).toBe(false);
+  expect(typeCalls.some(([arg]) => Array.isArray(arg) && (arg as Node[]).some(insideBody))).toBe(
+    true,
+  );
+  expect(typeCalls.some(([arg]) => !Array.isArray(arg) && insideBody(arg as Node))).toBe(false);
 });
 
 test("coverage remainder batches checker queries for unreachable bodies", () => {
-  const w = buildTwoWorlds({
-    "coverage-remainder.ts": `
+  const w = buildTwoWorlds(
+    {
+      "coverage-remainder.ts": `
 function reached(input: number): number {
   return input + 1;
 }
@@ -608,7 +663,9 @@ function dead(input: number): number {
 }
 console.log(reached(1));
 `,
-  }, host);
+    },
+    host,
+  );
   worlds.push(w);
   const { proxy, calls } = countingChecker(w.p7.project.checker);
   const facade = new CheckerFacade(proxy, { project: w.p7.project.checker.project });
@@ -632,32 +689,40 @@ console.log(reached(1));
     ad.SyntaxKind.ConditionalExpression,
   ]);
   const typeBodyCalls = calls["getTypeAtLocation"] ?? [];
-  expect(typeBodyCalls.some(([arg]) =>
-    Array.isArray(arg) && (arg as Node[]).some(insideDeadBody),
-  )).toBe(true);
-  expect(typeBodyCalls.some(([arg]) =>
-    !Array.isArray(arg) && insideDeadBody(arg as Node) && hotTypeKinds.has((arg as Node).kind),
-  )).toBe(false);
+  expect(
+    typeBodyCalls.some(([arg]) => Array.isArray(arg) && (arg as Node[]).some(insideDeadBody)),
+  ).toBe(true);
+  expect(
+    typeBodyCalls.some(
+      ([arg]) =>
+        !Array.isArray(arg) && insideDeadBody(arg as Node) && hotTypeKinds.has((arg as Node).kind),
+    ),
+  ).toBe(false);
 
   const symbolBodyCalls = calls["getSymbolAtLocation"] ?? [];
-  expect(symbolBodyCalls.some(([arg]) =>
-    Array.isArray(arg) && (arg as Node[]).some(insideDeadBody),
-  )).toBe(true);
-  expect(symbolBodyCalls.some(([arg]) =>
-    !Array.isArray(arg) && insideDeadBody(arg as Node) && ad.isIdentifier(arg as Node),
-  )).toBe(false);
+  expect(
+    symbolBodyCalls.some(([arg]) => Array.isArray(arg) && (arg as Node[]).some(insideDeadBody)),
+  ).toBe(true);
+  expect(
+    symbolBodyCalls.some(
+      ([arg]) => !Array.isArray(arg) && insideDeadBody(arg as Node) && ad.isIdentifier(arg as Node),
+    ),
+  ).toBe(false);
 });
 
 test("root prefetch panic-fences bad nodes and keeps healthy answers warm", () => {
-  const w = buildTwoWorlds({
-    "panic.ts": `
+  const w = buildTwoWorlds(
+    {
+      "panic.ts": `
 export function f(input: number): number {
   const healthy = input + 1;
   const poison = healthy + 1;
   return poison;
 }
 `,
-  }, host);
+    },
+    host,
+  );
   worlds.push(w);
   const sf = w.p7.getSourceFile(w.files[0]!)!;
   const body = sf.statements.find(ad.isFunctionDeclaration)!.body!;

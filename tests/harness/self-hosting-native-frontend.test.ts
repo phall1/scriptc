@@ -10,8 +10,14 @@ import type { compile } from "@scriptc/compiler";
 import type { IrModule } from "../../packages/compiler/src/ir/ir.js";
 import { ts7Executable } from "../../packages/compiler/src/frontend/ts7/rpc-api.js";
 import {
-  moduleUsesAssert, moduleUsesBigInt, moduleUsesCopying, moduleUsesDynInvoke,
-  moduleUsesInspect, moduleUsesRegex, moduleUsesSymbol, moduleUsesZlib,
+  moduleUsesAssert,
+  moduleUsesBigInt,
+  moduleUsesCopying,
+  moduleUsesDynInvoke,
+  moduleUsesInspect,
+  moduleUsesRegex,
+  moduleUsesSymbol,
+  moduleUsesZlib,
 } from "../../packages/compiler/src/ir/ir.js";
 
 const root = join(import.meta.dirname, "../..");
@@ -19,11 +25,19 @@ const entry = join(root, "tests/fixtures/self-hosting/frontend-pipeline.ts");
 const oracle = join(root, "tests/fixtures/self-hosting/frontend-pipeline-node.ts");
 const execFileAsync = promisify(execFile);
 const sanitize = process.env["SCRIPTC_SAN"] === "1";
-const runOptions = { cwd: root, timeout: 120_000, maxBuffer: 16 * 1024 * 1024, encoding: "utf8" as const };
+const runOptions = {
+  cwd: root,
+  timeout: 120_000,
+  maxBuffer: 16 * 1024 * 1024,
+  encoding: "utf8" as const,
+};
 
 function comparableStderr(text: string): string {
   return sanitize
-    ? text.replace(/^==\d+==WARNING: ASan doesn't fully support makecontext\/swapcontext functions and may produce false positives in some cases!\n/gm, "")
+    ? text.replace(
+        /^==\d+==WARNING: ASan doesn't fully support makecontext\/swapcontext functions and may produce false positives in some cases!\n/gm,
+        "",
+      )
     : text;
 }
 
@@ -49,51 +63,92 @@ const programs = [
 
 for (const backend of ["llvm"] as const) {
   test(`the complete frontend produces executable IR without Node (${backend})`, async () => {
-    const directory = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-native-frontend-"));
-    const executable = (name: string) => join(directory, name + (process.platform === "win32" ? ".exe" : ""));
+    const directory = mkdtempSync(
+      join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-native-frontend-"),
+    );
+    const executable = (name: string) =>
+      join(directory, name + (process.platform === "win32" ? ".exe" : ""));
     try {
       const nativeSources = join(root, "packages/compiler/native");
       const object = join(directory, "ts7-process.o");
-      execFileSync("clang", ["-std=c11", "-Wall", "-Wextra", "-Werror", ...(sanitize ? ["-fsanitize=address"] : []),
-        "-c", join(nativeSources, "ts7-process.c"), "-o", object]);
+      execFileSync("clang", [
+        "-std=c11",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        ...(sanitize ? ["-fsanitize=address"] : []),
+        "-c",
+        join(nativeSources, "ts7-process.c"),
+        "-o",
+        object,
+      ]);
       const profile = join(directory, "ffi.json");
-      writeFileSync(profile, JSON.stringify({
-        ...JSON.parse(readFileSync(join(nativeSources, "ts7-process.ffi.json"), "utf8")), libraries: [object],
-      }));
+      writeFileSync(
+        profile,
+        JSON.stringify({
+          ...JSON.parse(readFileSync(join(nativeSources, "ts7-process.ffi.json"), "utf8")),
+          libraries: [object],
+        }),
+      );
       // Production lowering can monopolize a worker's synchronous RPC loop.
       // Build the actual entry in a child while keeping Vitest responsive.
       const api = pathToFileURL(join(root, "packages/compiler/src/index.ts")).href;
-      const { stdout, stderr } = await execFileAsync(process.execPath, [
-        "--max-old-space-size=8192", "--import", "tsx", "--input-type=module", "--eval",
-        `import { compile } from ${JSON.stringify(api)};
+      const { stdout, stderr } = await execFileAsync(
+        process.execPath,
+        [
+          "--max-old-space-size=8192",
+          "--import",
+          "tsx",
+          "--input-type=module",
+          "--eval",
+          `import { compile } from ${JSON.stringify(api)};
          const result = await compile(process.argv[1], {
            outDir: process.argv[2], outPath: process.argv[3], backend: process.argv[4],
            dynamic: false, optimization: 'dev', sanitize: process.argv[5] === '1',
            ffiProfilePath: process.argv[6],
          });
          console.log(JSON.stringify({ ...result, sourceTexts: undefined }));`,
-        entry, directory, executable("frontend"), backend, sanitize ? "1" : "0", profile,
-      ], { cwd: root, timeout: 900_000, maxBuffer: 16 * 1024 * 1024 });
+          entry,
+          directory,
+          executable("frontend"),
+          backend,
+          sanitize ? "1" : "0",
+          profile,
+        ],
+        { cwd: root, timeout: 900_000, maxBuffer: 16 * 1024 * 1024 },
+      );
       expect(stderr).toBe("");
       const built = JSON.parse(stdout) as Awaited<ReturnType<typeof compile>>;
-      if (!built.ok) throw new Error(built.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
+      if (!built.ok)
+        throw new Error(built.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
       if (!("binaryPath" in built)) throw new Error("expected a native frontend executable");
       expect(built.backend).toBe(backend);
 
-      const lowerRequest = (file: string, request: {
-        entry: string; npmStatic?: string[] | "auto" | "lib"; externalTypes?: Record<string, string>;
-        ffiProfile?: string; contract?: boolean;
-      }): { module: IrModule | null; report: unknown[] } => {
+      const lowerRequest = (
+        file: string,
+        request: {
+          entry: string;
+          npmStatic?: string[] | "auto" | "lib";
+          externalTypes?: Record<string, string>;
+          ffiProfile?: string;
+          contract?: boolean;
+        },
+      ): { module: IrModule | null; report: unknown[] } => {
         const requestPath = join(directory, "request.json");
         writeFileSync(requestPath, JSON.stringify(request));
         const expectedPath = join(directory, "node.json");
         const actualPath = join(directory, "native.json");
         for (const output of [expectedPath, actualPath]) rmSync(output, { force: true });
-        const expected = spawnSync(process.execPath, ["--import", "tsx", oracle, ts7Executable(), requestPath, expectedPath], runOptions);
+        const expected = spawnSync(
+          process.execPath,
+          ["--import", "tsx", oracle, ts7Executable(), requestPath, expectedPath],
+          runOptions,
+        );
         // The native client launches the selected TS7 executable directly.
         // Removing PATH makes an accidental Node subprocess dependency fail.
         const actual = spawnSync(built.binaryPath, [ts7Executable(), requestPath, actualPath], {
-          ...runOptions, env: { ...process.env, PATH: "" },
+          ...runOptions,
+          env: { ...process.env, PATH: "" },
         });
         for (const result of [expected, actual]) {
           expect(result.error, file + "\n" + result.stderr).toBeUndefined();
@@ -101,8 +156,14 @@ for (const backend of ["llvm"] as const) {
           expect(result.status, file + "\n" + result.stderr).toBe(0);
           expect(comparableStderr(result.stderr), file).toBe("");
         }
-        const expectedReport = expected.stdout.trim().split("\n").map((line) => JSON.parse(line));
-        const actualReport = actual.stdout.trim().split("\n").map((line) => JSON.parse(line));
+        const expectedReport = expected.stdout
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        const actualReport = actual.stdout
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
         expect(actualReport, file).toEqual(expectedReport);
         expect(existsSync(actualPath), file).toBe(existsSync(expectedPath));
         if (!existsSync(actualPath)) return { module: null, report: actualReport };
@@ -118,17 +179,25 @@ for (const backend of ["llvm"] as const) {
         const { module, report } = lowerRequest(file, { entry: source });
         expect(report[0], file).toEqual({ preflight: [], npmStatic: [] });
         expect(report[1], file).toMatchObject({
-          stats: { statementsFailed: 0, statementsIsland: 0, functionsSkipped: 0 }, diagnostics: [], validation: [],
+          stats: { statementsFailed: 0, statementsIsland: 0, functionsSkipped: 0 },
+          diagnostics: [],
+          validation: [],
         });
         if (!module) throw new Error(file + ": missing native IR");
         const cPath = join(directory, "program.ll");
         writeFileSync(cPath, emitLlvmModule(module));
         await compileC({
-          cPath, outPath: executable("program"), sanitize,
-          regex: moduleUsesRegex(module), copying: moduleUsesCopying(module),
-          inspect: moduleUsesInspect(module), dynInvoke: moduleUsesDynInvoke(module),
-          symbol: moduleUsesSymbol(module), bigint: moduleUsesBigInt(module),
-          zlib: moduleUsesZlib(module), assert: moduleUsesAssert(module),
+          cPath,
+          outPath: executable("program"),
+          sanitize,
+          regex: moduleUsesRegex(module),
+          copying: moduleUsesCopying(module),
+          inspect: moduleUsesInspect(module),
+          dynInvoke: moduleUsesDynInvoke(module),
+          symbol: moduleUsesSymbol(module),
+          bigint: moduleUsesBigInt(module),
+          zlib: moduleUsesZlib(module),
+          assert: moduleUsesAssert(module),
         });
         const node = spawnSync(process.execPath, [source], runOptions);
         const native = spawnSync(executable("program"), [], runOptions);
@@ -152,38 +221,65 @@ for (const backend of ["llvm"] as const) {
           entry: join(root, "tests/fixtures/npm-static", file),
           npmStatic: typeof npmStatic === "string" ? npmStatic : [...npmStatic],
         });
-        expect(result.report[0], file).toEqual({ preflight: [], npmStatic: packages.map((name) => ({ package: name, status: "static" })) });
-        expect(result.report[1], file).toMatchObject({ stats: { statementsFailed: 0 }, diagnostics: [], validation: [] });
+        expect(result.report[0], file).toEqual({
+          preflight: [],
+          npmStatic: packages.map((name) => ({ package: name, status: "static" })),
+        });
+        expect(result.report[1], file).toMatchObject({
+          stats: { statementsFailed: 0 },
+          diagnostics: [],
+          validation: [],
+        });
         expect(result.module, file).not.toBeNull();
       }
       const fallback = lowerRequest("package fallback", {
-        entry: join(root, "tests/fixtures/npm/cases/2557-toesm-drift/main.ts"), npmStatic: "auto",
+        entry: join(root, "tests/fixtures/npm/cases/2557-toesm-drift/main.ts"),
+        npmStatic: "auto",
       });
       expect(fallback.report[0]).toMatchObject({
-        npmStatic: [{ package: "gtdrift", status: "fallback", detail: expect.stringContaining("__toESM") }],
+        npmStatic: [
+          { package: "gtdrift", status: "fallback", detail: expect.stringContaining("__toESM") },
+        ],
       });
 
       const source = join(directory, "main.ts");
       writeFileSync(join(directory, "package.json"), JSON.stringify({ type: "module" }));
-      writeFileSync(join(directory, "tsconfig.json"), JSON.stringify({ compilerOptions: {
-        target: "ES2023", module: "NodeNext", strict: true, noEmit: true,
-      } }));
-      writeFileSync(source, 'const value: string = 1; console.log(value);\n');
+      writeFileSync(
+        join(directory, "tsconfig.json"),
+        JSON.stringify({
+          compilerOptions: {
+            target: "ES2023",
+            module: "NodeNext",
+            strict: true,
+            noEmit: true,
+          },
+        }),
+      );
+      writeFileSync(source, "const value: string = 1; console.log(value);\n");
       const badType = lowerRequest("type error", { entry: source });
       expect(badType.module).toBeNull();
-      expect(badType.report[0]).toMatchObject({ preflight: [expect.objectContaining({ code: "SC0001" })] });
-      writeFileSync(source, `
+      expect(badType.report[0]).toMatchObject({
+        preflight: [expect.objectContaining({ code: "SC0001" })],
+      });
+      writeFileSync(
+        source,
+        `
         const values: (string | number)[] = ["wrong"];
         console.log(values.find((value): value is number => true));
-      `);
+      `,
+      );
       const refusal = lowerRequest("static refusal", { entry: source });
       expect(refusal.module).toBeNull();
-      expect(refusal.report[1]).toMatchObject({ diagnostics: [expect.objectContaining({ code: "SC1090" })] });
+      expect(refusal.report[1]).toMatchObject({
+        diagnostics: [expect.objectContaining({ code: "SC1090" })],
+      });
 
       // The same production pipeline supplies the library's syntax contract.
       // Local type names and convention constants exercise its scoped cache
       // and the heterogeneous destination fields used by the projection.
-      writeFileSync(source, `
+      writeFileSync(
+        source,
+        `
         export interface Model { zebra: string; alpha: readonly number[]; }
         export type Msg = { kind: "paint"; payload: string } | { kind: "data"; payload: Uint8Array };
         export type ReadonlyArray<T> = { item: T };
@@ -194,21 +290,42 @@ for (const backend of ["llvm"] as const) {
         export const chromeMsg = "paint";
         export const envMsgs = [{ env: "DATA", msg: "data" }] as const;
         export function count(value: Model): number { return value.alpha.length; }
-      `);
-      const contract = lowerRequest("library contract", { entry: source, npmStatic: "lib", contract: true });
+      `,
+      );
+      const contract = lowerRequest("library contract", {
+        entry: source,
+        npmStatic: "lib",
+        contract: true,
+      });
       expect(contract.report[0]).toEqual({ preflight: [], npmStatic: [] });
       expect(contract.report[1]).toMatchObject({
-        modelUnbound: { value: ["zebra"] }, msgUnbound: { value: ["paint"] },
-        appearanceMsg: { value: "paint" }, chromeMsg: { value: "paint" },
+        modelUnbound: { value: ["zebra"] },
+        msgUnbound: { value: ["paint"] },
+        appearanceMsg: { value: "paint" },
+        chromeMsg: { value: "paint" },
         envMsgs: { value: [{ env: "DATA", msg: "data" }] },
-        types: expect.arrayContaining([expect.objectContaining({ name: "Local", shape: { k: "unsupported", text: "ReadonlyArray<string>" } })]),
+        types: expect.arrayContaining([
+          expect.objectContaining({
+            name: "Local",
+            shape: { k: "unsupported", text: "ReadonlyArray<string>" },
+          }),
+        ]),
       });
 
-      writeFileSync(source, 'declare function nativeAdd(a: number, b: number): number; console.log(nativeAdd(20, 22));\n');
+      writeFileSync(
+        source,
+        "declare function nativeAdd(a: number, b: number): number; console.log(nativeAdd(20, 22));\n",
+      );
       const inputFfi = join(directory, "input-ffi.json");
-      writeFileSync(inputFfi, JSON.stringify({ ffi_format: 1, functions: [
-        { name: "nativeAdd", symbol: "native_add", params: ["f64", "f64"], returns: "f64" },
-      ] }));
+      writeFileSync(
+        inputFfi,
+        JSON.stringify({
+          ffi_format: 1,
+          functions: [
+            { name: "nativeAdd", symbol: "native_add", params: ["f64", "f64"], returns: "f64" },
+          ],
+        }),
+      );
       const ffiResult = lowerRequest("native bindings", { entry: source, ffiProfile: inputFfi });
       expect(ffiResult.report[1]).toMatchObject({ diagnostics: [], validation: [] });
       if (!ffiResult.module) throw new Error("missing FFI IR");
@@ -218,12 +335,20 @@ for (const backend of ["llvm"] as const) {
       execFileSync("clang", ["-c", helper, "-o", helperObject]);
       const ffiC = join(directory, "ffi.ll");
       writeFileSync(ffiC, emitLlvmModule(ffiResult.module));
-      await compileC({ cPath: ffiC, outPath: executable("ffi"), sanitize, inspect: true, linkInputs: [helperObject] });
+      await compileC({
+        cPath: ffiC,
+        outPath: executable("ffi"),
+        sanitize,
+        inspect: true,
+        linkInputs: [helperObject],
+      });
       const ffiRun = spawnSync(executable("ffi"), [], runOptions);
       expect(ffiRun.error).toBeUndefined();
       expect(ffiRun.status, ffiRun.stderr).toBe(0);
       expect(ffiRun.stdout).toBe("42\n");
       expect(comparableStderr(ffiRun.stderr)).toBe("");
-    } finally { rmSync(directory, { recursive: true, force: true }); }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   }, 1_200_000);
 }

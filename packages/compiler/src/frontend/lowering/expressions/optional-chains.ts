@@ -125,7 +125,10 @@ export function hasOptionalChainGuard(expr: ts.Expression): boolean {
   }
 }
 
-export function lowerOptionalChain(lowerer: Lowerer, expr: ts.CallExpression | ts.PropertyAccessExpression | ts.ElementAccessExpression,): IrExpr {
+export function lowerOptionalChain(
+  lowerer: Lowerer,
+  expr: ts.CallExpression | ts.PropertyAccessExpression | ts.ElementAccessExpression,
+): IrExpr {
   const loc = locOf(expr);
   // The node CARRYING the ?. token and the receiver expression it guards.
   let dotNode: ts.Node;
@@ -135,14 +138,17 @@ export function lowerOptionalChain(lowerer: Lowerer, expr: ts.CallExpression | t
     recvNode = expr.expression;
   } else if (
     ts.isCallExpression(expr) &&
-    (ts.isPropertyAccessExpression(expr.expression) || ts.isElementAccessExpression(expr.expression)) &&
-    expr.expression.questionDotToken && !lowerer.chainHandled.has(expr.expression)
+    (ts.isPropertyAccessExpression(expr.expression) ||
+      ts.isElementAccessExpression(expr.expression)) &&
+    expr.expression.questionDotToken &&
+    !lowerer.chainHandled.has(expr.expression)
   ) {
     dotNode = expr.expression; // a?.m()
     recvNode = expr.expression.expression;
   } else if (
     (ts.isPropertyAccessExpression(expr) || ts.isElementAccessExpression(expr)) &&
-    expr.questionDotToken && !lowerer.chainHandled.has(expr)
+    expr.questionDotToken &&
+    !lowerer.chainHandled.has(expr)
   ) {
     dotNode = expr; // a?.b / a?.[i]
     recvNode = expr.expression;
@@ -184,8 +190,9 @@ export function lowerOptionalChain(lowerer: Lowerer, expr: ts.CallExpression | t
         thisValue = lowerer.coerceInto(recvNode.expression, reference, DYN);
         const previous = lowerer.chainRecvByNode.get(recvNode.expression);
         lowerer.chainRecvByNode.set(recvNode.expression, reference);
-        try { guarded = lowerer.lowerExpr(recvNode); }
-        finally {
+        try {
+          guarded = lowerer.lowerExpr(recvNode);
+        } finally {
           if (previous) lowerer.chainRecvByNode.set(recvNode.expression, previous);
           else lowerer.chainRecvByNode.delete(recvNode.expression);
         }
@@ -196,8 +203,16 @@ export function lowerOptionalChain(lowerer: Lowerer, expr: ts.CallExpression | t
         spreads.push({ arg: index, what: arg.expression.getText() });
         return lowerer.lowerExprExpecting(arg.expression, DYN);
       });
-      const body: IrExpr = { kind: "dynCall", callee, ...(thisValue ? { receiver: thisValue } : {}),
-        calleeName: recvNode.getText(), args, ...(spreads.length ? { spreads } : {}), type: DYN, loc };
+      const body: IrExpr = {
+        kind: "dynCall",
+        callee,
+        ...(thisValue ? { receiver: thisValue } : {}),
+        calleeName: recvNode.getText(),
+        args,
+        ...(spreads.length ? { spreads } : {}),
+        type: DYN,
+        loc,
+      };
       const result: IrExpr = { kind: "optChain", id, receiver: guarded, body, type: DYN, loc };
       return stmts.length ? { kind: "seqExpr", stmts, result, type: DYN, loc } : result;
     }
@@ -206,8 +221,16 @@ export function lowerOptionalChain(lowerer: Lowerer, expr: ts.CallExpression | t
     // read with the optional (unit-answers-undefined) policy — no
     // optChain wrapper needed; nested steps compose the same way.
     if (dotNode === expr && ts.isPropertyAccessExpression(expr)) {
-      const key: IrExpr = { kind: "strLit", value: expr.name.text, type: STRING, loc: locOf(expr.name) };
-      return lowerer.maybeNarrow({ kind: "dynKeyGet", key, optional: true, value: receiver, type: DYN, loc }, expr);
+      const key: IrExpr = {
+        kind: "strLit",
+        value: expr.name.text,
+        type: STRING,
+        loc: locOf(expr.name),
+      };
+      return lowerer.maybeNarrow(
+        { kind: "dynKeyGet", key, optional: true, value: receiver, type: DYN, loc },
+        expr,
+      );
     }
     if (dotNode === expr && ts.isElementAccessExpression(expr)) {
       const id = `chain.${lowerer.chainCounter++}`;
@@ -216,7 +239,14 @@ export function lowerOptionalChain(lowerer: Lowerer, expr: ts.CallExpression | t
       lowerer.chainHandled.add(dotNode);
       try {
         const body = lowerer.lowerExpr(expr);
-        return { kind: "optChain", id, receiver, body: lowerer.coerceToExpected(body, DYN), type: DYN, loc };
+        return {
+          kind: "optChain",
+          id,
+          receiver,
+          body: lowerer.coerceToExpected(body, DYN),
+          type: DYN,
+          loc,
+        };
       } finally {
         lowerer.chainRecvByNode.delete(recvNode);
         lowerer.chainHandled.delete(dotNode);
@@ -269,8 +299,16 @@ export function lowerOptionalChain(lowerer: Lowerer, expr: ts.CallExpression | t
     lowerer.chainHandled.add(dotNode);
     try {
       const body = lowerer.lowerExpr(expr);
-      if (body.type.kind === "void") return { kind: "optChain", id, receiver, body, type: VOID, loc };
-      return { kind: "optChain", id, receiver, body: lowerer.coerceToExpected(body, DYN), type: DYN, loc };
+      if (body.type.kind === "void")
+        return { kind: "optChain", id, receiver, body, type: VOID, loc };
+      return {
+        kind: "optChain",
+        id,
+        receiver,
+        body: lowerer.coerceToExpected(body, DYN),
+        type: DYN,
+        loc,
+      };
     } finally {
       lowerer.chainRecvByNode.delete(recvNode);
       lowerer.chainHandled.delete(dotNode);
@@ -292,14 +330,19 @@ export function lowerOptionalChain(lowerer: Lowerer, expr: ts.CallExpression | t
       // once through the chain; a nullish `a` itself short-circuits
       // earlier like any optional chain). Computed members keep a fence.
       if (ts.isPropertyAccessExpression(recvNode) || ts.isElementAccessExpression(recvNode)) {
-        if (
-          ts.isPropertyAccessExpression(recvNode) &&
-          !recvNode.questionDotToken
-        ) {
+        if (ts.isPropertyAccessExpression(recvNode) && !recvNode.questionDotToken) {
           const obj = lowerer.lowerExpr(recvNode.expression);
-          if (obj.type.kind !== "jsval") lowerer.badType(recvNode.expression, lowerer.typeOf(recvNode.expression));
+          if (obj.type.kind !== "jsval")
+            lowerer.badType(recvNode.expression, lowerer.typeOf(recvNode.expression));
           const args = expr.arguments.map((a) => lowerer.jsvalIn(lowerer.lowerExpr(a), a));
-          return { kind: "jsOp", op: "optCallMethod", name: recvNode.name.text, args: [obj, ...args], type: JSVAL, loc };
+          return {
+            kind: "jsOp",
+            op: "optCallMethod",
+            name: recvNode.name.text,
+            args: [obj, ...args],
+            type: JSVAL,
+            loc,
+          };
         }
         lowerer.unsupported(
           "SC1090",
@@ -308,7 +351,13 @@ export function lowerOptionalChain(lowerer: Lowerer, expr: ts.CallExpression | t
         );
       }
       const args = expr.arguments.map((a) => lowerer.jsvalIn(lowerer.lowerExpr(a), a));
-      const body: IrExpr = { kind: "jsOp", op: "callFn", args: [recvRef, ...args], type: JSVAL, loc };
+      const body: IrExpr = {
+        kind: "jsOp",
+        op: "callFn",
+        args: [recvRef, ...args],
+        type: JSVAL,
+        loc,
+      };
       return { kind: "optChain", id, receiver, body, type: JSVAL, loc };
     }
     // Member forms (`x?.y`, `x?.y(...)`, `x?.[i]`): re-dispatch the plain
@@ -325,7 +374,8 @@ export function lowerOptionalChain(lowerer: Lowerer, expr: ts.CallExpression | t
     if (body.type.kind !== "jsval") lowerer.badType(expr, lowerer.typeOf(expr));
     return { kind: "optChain", id, receiver, body, type: JSVAL, loc };
   }
-  const def = receiver.type.kind === "union" ? lowerer.unions.get(receiver.type.unionId) : undefined;
+  const def =
+    receiver.type.kind === "union" ? lowerer.unions.get(receiver.type.unionId) : undefined;
   if (!def || !def.arms.some(isUnitType)) {
     // Never nullish: `?.` IS `.` — re-dispatch the plain lowering. The
     // receiver subtree above is discarded (lowering is pure IR
@@ -352,17 +402,25 @@ export function lowerOptionalChain(lowerer: Lowerer, expr: ts.CallExpression | t
   const rest = def.arms.filter((a) => !isUnitType(a));
   if (rest.length === 0) {
     const result = dynUndefinedExpr(loc);
-    return { kind: "seqExpr", stmts: [{ kind: "exprStmt", expr: receiver, loc }], result, type: DYN, loc };
+    return {
+      kind: "seqExpr",
+      stmts: [{ kind: "exprStmt", expr: receiver, loc }],
+      result,
+      type: DYN,
+      loc,
+    };
   }
-  const narrowed = rest.length === 1
-    ? rest[0]!
-    : { kind: "union" as const, unionId: lowerer.unions.transform(def, rest) };
+  const narrowed =
+    rest.length === 1
+      ? rest[0]!
+      : { kind: "union" as const, unionId: lowerer.unions.transform(def, rest) };
   const id = `chain.${lowerer.chainCounter++}`;
   // A single present arm binds its payload. Multiple present arms bind
   // the original tagged value, then retag inside the guarded body. The
   // nullish arms never enter that body, and each record keeps its identity.
   let recvRef: IrExpr = {
-    kind: "chainRecv", id,
+    kind: "chainRecv",
+    id,
     type: rest.length === 1 ? narrowed : receiver.type,
     loc: locOf(recvNode),
   };
@@ -382,7 +440,9 @@ export function lowerOptionalChain(lowerer: Lowerer, expr: ts.CallExpression | t
 
   // Member forms: re-dispatch the normal lowering with the receiver node
   // bound to the chain (reads as chainRecv, types as non-nullish).
-  const narrowedTs = lowerer.checker.getNonNullableType(lowerer.checker.getTypeAtLocation(recvNode));
+  const narrowedTs = lowerer.checker.getNonNullableType(
+    lowerer.checker.getTypeAtLocation(recvNode),
+  );
   lowerer.chainRecvByNode.set(recvNode, recvRef);
   lowerer.chainNarrowedType.set(recvNode, narrowedTs);
   lowerer.chainHandled.add(dotNode);
@@ -393,7 +453,7 @@ export function lowerOptionalChain(lowerer: Lowerer, expr: ts.CallExpression | t
   // real receiver kind. Only nodes this chain registers are cleaned up.
   const tailSteps: ts.Expression[] = [];
   if (dotNode !== expr && !(ts.isCallExpression(expr) && expr.expression === dotNode)) {
-    for (let cur: ts.Expression = expr; cur !== dotNode; ) {
+    for (let cur: ts.Expression = expr; cur !== dotNode;) {
       const next: ts.Expression = ts.isCallExpression(cur)
         ? cur.expression
         : (cur as ts.PropertyAccessExpression | ts.ElementAccessExpression).expression;
@@ -431,11 +491,14 @@ export function lowerOptionalChain(lowerer: Lowerer, expr: ts.CallExpression | t
  * statement form (`cb?.();` — the checker's `void | undefined` result IS
  * void here); value bodies wrap into the checker's undefined-armed
  * result union. */
-export function finishOptionalChain(lowerer: Lowerer, expr: ts.Expression,
+export function finishOptionalChain(
+  lowerer: Lowerer,
+  expr: ts.Expression,
   id: string,
   receiver: IrExpr,
   body: IrExpr,
-  loc: SrcLoc,): IrExpr {
+  loc: SrcLoc,
+): IrExpr {
   if (body.type.kind === "void") {
     return { kind: "optChain", id, receiver, body, type: VOID, loc };
   }
@@ -448,8 +511,10 @@ export function finishOptionalChain(lowerer: Lowerer, expr: ts.Expression,
   let type = lowerer.irTypeOf(expr);
   const hiddenOptionalResult =
     (type.kind !== "union" || lowerer.armTag(type.unionId, UNDEFINED_T) < 0) &&
-    receiver.type.kind === "union" && lowerer.armTag(receiver.type.unionId, UNDEFINED_T) >= 0 &&
-    body.type.kind !== "generator" && body.type.kind !== "jsval"
+    receiver.type.kind === "union" &&
+    lowerer.armTag(receiver.type.unionId, UNDEFINED_T) >= 0 &&
+    body.type.kind !== "generator" &&
+    body.type.kind !== "jsval"
       ? lowerer.withUndefinedArmOf(body.type)
       : null;
   if (hiddenOptionalResult) type = hiddenOptionalResult;

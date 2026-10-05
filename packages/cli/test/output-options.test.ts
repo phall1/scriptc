@@ -65,14 +65,19 @@ describe("output option compatibility", () => {
     });
   });
 
-  test.each(["asm", "obj"])("native outputs accept optimization and sanitizer for compiler-level validation", (emit) => {
-    expect(resolveOutputOptions("build", {
-      ...BASE,
-      emit,
-      optimization: "dev",
-      sanitize: true,
-    })).toMatchObject({ ok: true, outputKind: emit, backend: "llvm" });
-  });
+  test.each(["asm", "obj"])(
+    "native outputs accept optimization and sanitizer for compiler-level validation",
+    (emit) => {
+      expect(
+        resolveOutputOptions("build", {
+          ...BASE,
+          emit,
+          optimization: "dev",
+          sanitize: true,
+        }),
+      ).toMatchObject({ ok: true, outputKind: emit, backend: "llvm" });
+    },
+  );
 
   test("the deprecated alias remains additive for executable builds", () => {
     expect(resolveOutputOptions("build", { ...BASE, emitIr: true })).toMatchObject({
@@ -84,7 +89,9 @@ describe("output option compatibility", () => {
   });
 
   test("source outputs retain frontend-affecting FFI manifests", () => {
-    expect(resolveOutputOptions("build", { ...BASE, emit: "llvm", ffi: "native.json" })).toMatchObject({
+    expect(
+      resolveOutputOptions("build", { ...BASE, emit: "llvm", ffi: "native.json" }),
+    ).toMatchObject({
       ok: true,
       outputKind: "llvm",
     });

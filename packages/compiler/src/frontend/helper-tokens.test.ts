@@ -32,8 +32,24 @@ test.each([
 });
 
 test.each([
-  "/* unfinished", '"unfinished', '"line\nbreak"', "'\\xzz'", "'\\u0'", "'\\u{}'", "'\\u{110000}'",
-  "'\\01'", "'\\1'", "'\\8'", "`template`", "/regexp/", "0", "0x10", "a / b", "\\u0061", "café", "#name",
+  "/* unfinished",
+  '"unfinished',
+  '"line\nbreak"',
+  "'\\xzz'",
+  "'\\u0'",
+  "'\\u{}'",
+  "'\\u{110000}'",
+  "'\\01'",
+  "'\\1'",
+  "'\\8'",
+  "`template`",
+  "/regexp/",
+  "0",
+  "0x10",
+  "a / b",
+  "\\u0061",
+  "café",
+  "#name",
 ])("refuses unsupported or malformed helper tokens: %s", (source) => {
   expect(helperTokens(source)).toBeNull();
 });

@@ -1,6 +1,12 @@
 import {
-  TS7_CALLBACK, TS7_CALLBACK_ERROR, TS7_CALLBACK_RESPONSE, TS7_ERROR,
-  TS7_REQUEST, TS7_RESPONSE, Ts7ProtocolError, Ts7Wire,
+  TS7_CALLBACK,
+  TS7_CALLBACK_ERROR,
+  TS7_CALLBACK_RESPONSE,
+  TS7_ERROR,
+  TS7_REQUEST,
+  TS7_RESPONSE,
+  Ts7ProtocolError,
+  Ts7Wire,
 } from "./rpc-wire.js";
 
 export interface Ts7RpcTiming {
@@ -35,7 +41,12 @@ export class Ts7RpcClient {
   }
 
   timing(): Ts7RpcTiming {
-    return { requests: this.requests, bytesSent: this.bytesSent, bytesReceived: this.bytesReceived, callbacks: this.callbackCount };
+    return {
+      requests: this.requests,
+      bytesSent: this.bytesSent,
+      bytesReceived: this.bytesReceived,
+      callbacks: this.callbackCount,
+    };
   }
 
   close(): void {
@@ -82,7 +93,9 @@ export class Ts7RpcClient {
           throw new Ts7ProtocolError(`unexpected server message ${message.kind}`);
         }
         if (message.method !== method) {
-          throw new Ts7ProtocolError(`response method mismatch: expected ${method}, received ${message.method}`);
+          throw new Ts7ProtocolError(
+            `response method mismatch: expected ${method}, received ${message.method}`,
+          );
         }
         this.bytesReceived += message.payload.length;
         if (message.kind === TS7_ERROR) {
@@ -95,7 +108,11 @@ export class Ts7RpcClient {
       }
     } catch (error) {
       if (this.requesting) {
-        try { this.close(); } catch { /* preserve the request failure */ }
+        try {
+          this.close();
+        } catch {
+          /* preserve the request failure */
+        }
       }
       throw error;
     } finally {

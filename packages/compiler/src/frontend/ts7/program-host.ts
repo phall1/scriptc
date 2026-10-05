@@ -21,16 +21,25 @@ import { dirname, join, resolve } from "node:path";
 import { Ts7Api } from "./api.js";
 import type { Ts7TimingInfo } from "./session-timing.js";
 import type { Ts7FileSystem } from "./rpc-filesystem.js";
-import type {
-  CompilerOptions,
-  Diagnostic,
-} from "./semantic-types.js";
+import type { CompilerOptions, Diagnostic } from "./semantic-types.js";
 import type { SourceFile } from "./ast-types.js";
 import type { Ts7SessionProject as Project, Ts7SessionSnapshot as Snapshot } from "./session.js";
 import { CheckerFacade } from "./checker.js";
-import { moduleDetectionKindName, moduleKindName, moduleResolutionKindName, scriptTargetName, ScriptTarget } from "./enums.js";
+import {
+  moduleDetectionKindName,
+  moduleKindName,
+  moduleResolutionKindName,
+  scriptTargetName,
+  ScriptTarget,
+} from "./enums.js";
 import { tsgoPath } from "./session-path.js";
-import { trackedAccessibleEntries, trackedDirectoryExists, trackedFileExists, trackedReadFile, trackedRealpath } from "../input-tracker.js";
+import {
+  trackedAccessibleEntries,
+  trackedDirectoryExists,
+  trackedFileExists,
+  trackedReadFile,
+  trackedRealpath,
+} from "../input-tracker.js";
 
 /** The compiler options our createProgram accepts: TS7's CompilerOptions
  * shape (numeric enums for target/module/moduleResolution — the enums module
@@ -75,7 +84,9 @@ function serializeOptions(options: Ts7CompilerOptions): Record<string, unknown> 
         break;
       default: {
         if (typeof value === "number" && key !== "maxNodeModuleJsDepth") {
-          throw new InternalCompilerError(`ts7 createProgram: unhandled enum-valued compiler option '${key}'`);
+          throw new InternalCompilerError(
+            `ts7 createProgram: unhandled enum-valued compiler option '${key}'`,
+          );
         }
         out[key] = value;
       }
@@ -154,7 +165,8 @@ export class Ts7Host {
         directoryExists: (path) => trackedDirectoryExists(path),
         realpath: (path) =>
           virtualFiles.has(tsgoPath(path)) ? path : (trackedRealpath(path) ?? path),
-        getAccessibleEntries: (path) => trackedAccessibleEntries(path) ?? { files: [], directories: [] },
+        getAccessibleEntries: (path) =>
+          trackedAccessibleEntries(path) ?? { files: [], directories: [] },
       },
     });
   }
@@ -164,7 +176,8 @@ export class Ts7Host {
     this.ensureOpen();
     const key = tsgoPath(path);
     if (this.virtualFiles.get(key) === content) return;
-    if (!this.virtualChanges.has(key)) this.virtualChanges.set(key, this.virtualFiles.has(key) ? "changed" : "created");
+    if (!this.virtualChanges.has(key))
+      this.virtualChanges.set(key, this.virtualFiles.has(key) ? "changed" : "created");
     this.virtualFiles.set(key, content);
   }
 
@@ -201,7 +214,8 @@ export class Ts7Host {
     }
     try {
       const snapshot = this.api.updateSnapshot({
-        openProjects: [configPath], closeProjects,
+        openProjects: [configPath],
+        closeProjects,
         fileChanges: { created, changed },
       });
       this.closingProjects.clear();
@@ -238,8 +252,9 @@ export class Ts7Host {
   close(): void {
     if (this.closed) return;
     this.closed = true;
-    try { this.api.close(); }
-    finally {
+    try {
+      this.api.close();
+    } finally {
       this.virtualFiles.clear();
       this.virtualChanges.clear();
       this.closingProjects.clear();
@@ -296,7 +311,10 @@ export class Ts7Program {
 
   getTypeChecker(): CheckerFacade {
     this.snapshot.ensureActive();
-    if (this.checkerFacade === null) this.checkerFacade = new CheckerFacade(this.project.checker, { project: this.project.checker.project });
+    if (this.checkerFacade === null)
+      this.checkerFacade = new CheckerFacade(this.project.checker, {
+        project: this.project.checker.project,
+      });
     return this.checkerFacade;
   }
 
@@ -335,8 +353,9 @@ export class Ts7Program {
     this.checkerFacade?.dispose();
     this.checkerFacade = null;
     this.sourceFilesCache = null;
-    try { this.snapshot.dispose(); }
-    finally {
+    try {
+      this.snapshot.dispose();
+    } finally {
       this.host.releaseProgram(this.configPath);
       if (!this.sharedHost) this.host.close();
     }

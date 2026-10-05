@@ -26,9 +26,9 @@ function render() {
   ];
   for (const [module, entry] of Object.entries(manifest.modules)) {
     const chunks = wrap(entry.exports.join(","));
-    lines.push(`    {\"node:${module}\",`);
+    lines.push(`    {"node:${module}",`);
     for (let i = 0; i < chunks.length; i++) {
-      lines.push(`     \"${chunks[i]}\"${i === chunks.length - 1 ? "}," : ""}`);
+      lines.push(`     "${chunks[i]}"${i === chunks.length - 1 ? "}," : ""}`);
     }
   }
   lines.push("};", "");
@@ -43,5 +43,7 @@ if (process.argv.includes("--check")) {
   console.log(`island manifest is current (${Object.keys(manifest.modules).length} modules)`);
 } else {
   writeFileSync(headerPath, rendered);
-  console.log(`wrote packages/runtime/src/scr_island_manifest.h (${Object.keys(manifest.modules).length} modules)`);
+  console.log(
+    `wrote packages/runtime/src/scr_island_manifest.h (${Object.keys(manifest.modules).length} modules)`,
+  );
 }

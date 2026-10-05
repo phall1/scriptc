@@ -4,7 +4,12 @@ import type { IrFunction, IrStmt, IrType } from "../../ir/ir.js";
 import { locOf } from "../program.js";
 import { npmStaticPackageOfPath } from "../npm-static.js";
 import type { Lowerer } from "./lowerer.js";
-import { exactClassOfReceiver, findMethodOn, findGenericMethodOn, type ClassInfo } from "./lower-classes.js";
+import {
+  exactClassOfReceiver,
+  findMethodOn,
+  findGenericMethodOn,
+  type ClassInfo,
+} from "./lower-classes.js";
 import { classPrototypeData } from "./class-prototypes.js";
 import { bindingNeverReassigned } from "./lower-calls.js";
 
@@ -27,12 +32,23 @@ export class DeferredModuleInitializers {
         return null;
       }
       key = global.id;
-      if (ts.isObjectLiteralExpression(declaration.initializer) && declaration.initializer.properties.every((property) =>
-          ts.isPropertyAssignment(property) && !ts.isComputedPropertyName(property.name) && propertyName(property.name) !== "__proto__" ||
-          ts.isShorthandPropertyAssignment(property))) this.registryGlobals.add(key);
-    } else if (ts.isExpressionStatement(statement) && ts.isBinaryExpression(statement.expression) &&
-        statement.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
-        ts.isPropertyAccessExpression(statement.expression.left)) {
+      if (
+        ts.isObjectLiteralExpression(declaration.initializer) &&
+        declaration.initializer.properties.every(
+          (property) =>
+            (ts.isPropertyAssignment(property) &&
+              !ts.isComputedPropertyName(property.name) &&
+              propertyName(property.name) !== "__proto__") ||
+            ts.isShorthandPropertyAssignment(property),
+        )
+      )
+        this.registryGlobals.add(key);
+    } else if (
+      ts.isExpressionStatement(statement) &&
+      ts.isBinaryExpression(statement.expression) &&
+      statement.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      ts.isPropertyAccessExpression(statement.expression.left)
+    ) {
       const { left, right } = statement.expression;
       if (!registryInitializer(lowerer, right, statement)) {
         return null;
@@ -41,12 +57,24 @@ export class DeferredModuleInitializers {
       const prototype = ts.isPropertyAccessExpression(owner) && owner.name.text === "prototype";
       if (prototype) owner = (owner as ts.PropertyAccessExpression).expression;
       const info = exactClassOfReceiver(lowerer, owner);
-      if (info && info.decl?.getSourceFile() === statement.getSourceFile() &&
-          info.decl.getStart() < statement.getStart() && !info.localClass && !info.classDecorators &&
-          !info.generic && !info.callableBase && !info.mixinInstance && !info.def.runtime) {
+      if (
+        info &&
+        info.decl?.getSourceFile() === statement.getSourceFile() &&
+        info.decl.getStart() < statement.getStart() &&
+        !info.localClass &&
+        !info.classDecorators &&
+        !info.generic &&
+        !info.callableBase &&
+        !info.mixinInstance &&
+        !info.def.runtime
+      ) {
         if (!classWriteIsUnobserved(lowerer, info, statement)) return null;
         for (let current: ClassInfo | null = info; current; current = current.base) {
-          if (current.methods.has(`set:${left.name.text}`) || current.staticMethods?.has(`set:${left.name.text}`)) return null;
+          if (
+            current.methods.has(`set:${left.name.text}`) ||
+            current.staticMethods?.has(`set:${left.name.text}`)
+          )
+            return null;
         }
         key = `${prototype ? "prototype" : "class"}:${info.def.name}`;
         if (prototype) classPrototypeData(lowerer, info, locOf(left), undefined, true);
@@ -54,25 +82,40 @@ export class DeferredModuleInitializers {
         if (!ts.isIdentifier(owner)) return null;
         const symbol = lowerer.resolveValueSymbol(owner);
         const global = symbol && lowerer.globalsBySymbol.get(symbol);
-        if (!global || !this.registryGlobals.has(global.id) || !symbol || !registryOwnerIsData(lowerer, symbol, statement)) return null;
+        if (
+          !global ||
+          !this.registryGlobals.has(global.id) ||
+          !symbol ||
+          !registryOwnerIsData(lowerer, symbol, statement)
+        )
+          return null;
         key = global.id;
       }
     } else return null;
-    const block: Extract<IrStmt, { kind: "block" }> = { kind: "block", body: [], loc: locOf(statement) };
+    const block: Extract<IrStmt, { kind: "block" }> = {
+      kind: "block",
+      body: [],
+      loc: locOf(statement),
+    };
     const context = lowerer.ctx;
     const moduleIndex = [...lowerer.initNameOf.keys()].indexOf(statement.getSourceFile());
     const initializers = this.pending.get(key) ?? [];
-    initializers.push({ loc: block.loc, lower: () => {
-      const previousClass = lowerer.currentClass;
-      lowerer.currentClass = null;
-      lowerer.fnStack.push(context);
-      try {
-        return lowerer.shapes.withDeclaredOrderPriority([2, moduleIndex], () => lowerer.lowerStmts([statement]));
-      } finally {
-        lowerer.fnStack.pop();
-        lowerer.currentClass = previousClass;
-      }
-    } });
+    initializers.push({
+      loc: block.loc,
+      lower: () => {
+        const previousClass = lowerer.currentClass;
+        lowerer.currentClass = null;
+        lowerer.fnStack.push(context);
+        try {
+          return lowerer.shapes.withDeclaredOrderPriority([2, moduleIndex], () =>
+            lowerer.lowerStmts([statement]),
+          );
+        } finally {
+          lowerer.fnStack.pop();
+          lowerer.currentClass = previousClass;
+        }
+      },
+    });
     this.pending.set(key, initializers);
     return block;
   }
@@ -83,7 +126,8 @@ export class DeferredModuleInitializers {
     const classHelpers = new Map<string, string>();
     for (const info of lowerer.classes.values()) {
       if (info.staticDataHelper) classHelpers.set(info.staticDataHelper, `class:${info.def.name}`);
-      if (info.def.prototypeDataHelper) classHelpers.set(info.def.prototypeDataHelper, `prototype:${info.def.name}`);
+      if (info.def.prototypeDataHelper)
+        classHelpers.set(info.def.prototypeDataHelper, `prototype:${info.def.name}`);
     }
     const seen = new Set<IrType>();
     const byName = new Map(functions.map((fn) => [fn.name, fn]));
@@ -105,8 +149,10 @@ export class DeferredModuleInitializers {
         const shape = lowerer.shapes.get(type.shapeId);
         shape?.fields.forEach((field) => demandType(field.type));
         if (shape?.indexValue) demandType(shape.indexValue);
-      } else if (type.kind === "func") { type.params.forEach(demandType); demandType(type.ret); }
-      else if (type.kind === "promise") demandType(type.inner);
+      } else if (type.kind === "func") {
+        type.params.forEach(demandType);
+        demandType(type.ret);
+      } else if (type.kind === "promise") demandType(type.inner);
     };
     for (const fn of functions) {
       // Prototype helpers are allocated eagerly while collecting metadata.
@@ -114,18 +160,21 @@ export class DeferredModuleInitializers {
       if (classHelpers.has(fn.name)) continue;
       fn.params.forEach((param) => demandType(param.type));
       demandType(fn.returnType);
-      everyStmtList(fn.body, { stmt: () => true, expr: (expr) => {
-        demandType(expr.type);
-        if (expr.kind === "varRef" && this.pending.has(expr.localId)) demanded.add(expr.localId);
-        if (expr.kind === "call") {
-          const owner = classHelpers.get(expr.callee);
-          if (owner) {
-            if (this.pending.has(owner)) demanded.add(owner);
-            usedHelpers.push(expr.callee);
+      everyStmtList(fn.body, {
+        stmt: () => true,
+        expr: (expr) => {
+          demandType(expr.type);
+          if (expr.kind === "varRef" && this.pending.has(expr.localId)) demanded.add(expr.localId);
+          if (expr.kind === "call") {
+            const owner = classHelpers.get(expr.callee);
+            if (owner) {
+              if (this.pending.has(owner)) demanded.add(owner);
+              usedHelpers.push(expr.callee);
+            }
           }
-        }
-        return true;
-      } });
+          return true;
+        },
+      });
     }
     while (usedHelpers.length) {
       const name = usedHelpers.pop()!;
@@ -133,35 +182,42 @@ export class DeferredModuleInitializers {
       inspectedHelpers.add(name);
       const fn = byName.get(name);
       if (!fn) continue;
-      everyStmtList(fn.body, { stmt: () => true, expr: (expr) => {
-        demandType(expr.type);
-        if (expr.kind === "varRef" && this.pending.has(expr.localId)) demanded.add(expr.localId);
-        if (expr.kind === "call") {
-          const owner = classHelpers.get(expr.callee);
-          if (owner) {
-            if (this.pending.has(owner)) demanded.add(owner);
-            usedHelpers.push(expr.callee);
+      everyStmtList(fn.body, {
+        stmt: () => true,
+        expr: (expr) => {
+          demandType(expr.type);
+          if (expr.kind === "varRef" && this.pending.has(expr.localId)) demanded.add(expr.localId);
+          if (expr.kind === "call") {
+            const owner = classHelpers.get(expr.callee);
+            if (owner) {
+              if (this.pending.has(owner)) demanded.add(owner);
+              usedHelpers.push(expr.callee);
+            }
           }
-        }
-        return true;
-      } });
+          return true;
+        },
+      });
     }
     if (demanded.size === 0) return false;
     // Transforms replace blocks between waves, so index the live placeholders
     // anew in each pass. Searching every body again for each initializer makes
     // materializing large module registries quadratic in the program size.
     const placeholders = new Map<string, Extract<IrStmt, { kind: "block" }>[]>();
-    const locationKey = (loc: IrStmt["loc"]): string => JSON.stringify([loc.file, loc.start, loc.end]);
+    const locationKey = (loc: IrStmt["loc"]): string =>
+      JSON.stringify([loc.file, loc.start, loc.end]);
     const indexPlaceholders = (body: IrStmt[]): void => {
-      everyStmtList(body, { stmt: (statement) => {
-        if (statement.kind === "block" && statement.body.length === 0) {
-          const key = locationKey(statement.loc);
-          const blocks = placeholders.get(key) ?? [];
-          blocks.push(statement);
-          placeholders.set(key, blocks);
-        }
-        return true;
-      }, expr: () => true });
+      everyStmtList(body, {
+        stmt: (statement) => {
+          if (statement.kind === "block" && statement.body.length === 0) {
+            const key = locationKey(statement.loc);
+            const blocks = placeholders.get(key) ?? [];
+            blocks.push(statement);
+            placeholders.set(key, blocks);
+          }
+          return true;
+        },
+        expr: () => true,
+      });
     };
     for (const fn of functions) indexPlaceholders(fn.body);
     for (const id of demanded) {
@@ -185,40 +241,75 @@ export class DeferredModuleInitializers {
   }
 }
 
-function registryInitializer(lowerer: Lowerer, expression: ts.Expression, statement: ts.Statement): boolean {
-  if (ts.isCallExpression(expression) && ts.isPropertyAccessExpression(expression.expression) &&
-      lowerer.stdlibGlobalMember(expression.expression, "Object") === "freeze") {
-    if (!ts.isPropertyAccessExpression(expression.expression) ||
-        lowerer.stdlibGlobalMember(expression.expression, "Object") !== "freeze" ||
-        expression.arguments.length !== 1 || !ts.isObjectLiteralExpression(expression.arguments[0]!)) return false;
+function registryInitializer(
+  lowerer: Lowerer,
+  expression: ts.Expression,
+  statement: ts.Statement,
+): boolean {
+  if (
+    ts.isCallExpression(expression) &&
+    ts.isPropertyAccessExpression(expression.expression) &&
+    lowerer.stdlibGlobalMember(expression.expression, "Object") === "freeze"
+  ) {
+    if (
+      !ts.isPropertyAccessExpression(expression.expression) ||
+      lowerer.stdlibGlobalMember(expression.expression, "Object") !== "freeze" ||
+      expression.arguments.length !== 1 ||
+      !ts.isObjectLiteralExpression(expression.arguments[0]!)
+    )
+      return false;
     expression = expression.arguments[0]!;
   }
   const packageSource = npmStaticPackageOfPath(statement.getSourceFile().fileName) !== null;
   const initialized = (declaration: ts.Node): boolean => {
     const source = declaration.getSourceFile();
-    return source === statement.getSourceFile() ? declaration.getStart() < statement.getStart()
+    return source === statement.getSourceFile()
+      ? declaration.getStart() < statement.getStart()
       : [...lowerer.initNameOf.keys()].indexOf(source) >= 0 &&
-        [...lowerer.initNameOf.keys()].indexOf(source) < [...lowerer.initNameOf.keys()].indexOf(statement.getSourceFile());
+          [...lowerer.initNameOf.keys()].indexOf(source) <
+            [...lowerer.initNameOf.keys()].indexOf(statement.getSourceFile());
   };
   const callable = (callee: ts.Expression): boolean => {
     if (!ts.isIdentifier(callee)) return false;
-    if (["Array", "Float32Array", "Float64Array"].includes(callee.text) && lowerer.isStdlibGlobal(callee, callee.text)) return true;
+    if (
+      ["Array", "Float32Array", "Float64Array"].includes(callee.text) &&
+      lowerer.isStdlibGlobal(callee, callee.text)
+    )
+      return true;
     const symbol = lowerer.resolveValueSymbol(callee);
     const declaration = symbol && lowerer.checker.valueDeclarationOf(symbol);
-    if (!symbol || !declaration || !bindingNeverReassigned(lowerer, symbol, declaration)) return false;
+    if (!symbol || !declaration || !bindingNeverReassigned(lowerer, symbol, declaration))
+      return false;
     if (ts.isFunctionDeclaration(declaration)) return true;
     if (ts.isClassDeclaration(declaration)) return initialized(declaration);
-    return ts.isVariableDeclaration(declaration) && initialized(declaration) && !!declaration.initializer &&
-      (ts.isArrowFunction(declaration.initializer) || ts.isFunctionExpression(declaration.initializer));
+    return (
+      ts.isVariableDeclaration(declaration) &&
+      initialized(declaration) &&
+      !!declaration.initializer &&
+      (ts.isArrowFunction(declaration.initializer) ||
+        ts.isFunctionExpression(declaration.initializer))
+    );
   };
   const value = (node: ts.Expression, depth = 0): boolean => {
     // Let ordinary expression lowering report its named depth limit.
     // Registry discovery must not overflow before that check runs.
     if (depth > 200) return false;
     if (ts.isParenthesizedExpression(node)) return value(node.expression, depth + 1);
-    if (ts.isPrefixUnaryExpression(node) && (node.operator === ts.SyntaxKind.MinusToken || node.operator === ts.SyntaxKind.PlusToken) && ts.isNumericLiteral(node.operand)) return true;
-    if (ts.isNumericLiteral(node) || ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) ||
-        node.kind === ts.SyntaxKind.TrueKeyword || node.kind === ts.SyntaxKind.FalseKeyword || node.kind === ts.SyntaxKind.NullKeyword) return true;
+    if (
+      ts.isPrefixUnaryExpression(node) &&
+      (node.operator === ts.SyntaxKind.MinusToken || node.operator === ts.SyntaxKind.PlusToken) &&
+      ts.isNumericLiteral(node.operand)
+    )
+      return true;
+    if (
+      ts.isNumericLiteral(node) ||
+      ts.isStringLiteral(node) ||
+      ts.isNoSubstitutionTemplateLiteral(node) ||
+      node.kind === ts.SyntaxKind.TrueKeyword ||
+      node.kind === ts.SyntaxKind.FalseKeyword ||
+      node.kind === ts.SyntaxKind.NullKeyword
+    )
+      return true;
     if (ts.isFunctionExpression(node) || ts.isArrowFunction(node)) return true;
     // Opted-in npm source retains the same PURE call contract as published
     // bundlers. Arguments still need to be safe to omit: an annotation
@@ -229,90 +320,189 @@ function registryInitializer(lowerer: Lowerer, expression: ts.Expression, statem
       if (!callable(node.expression)) return false;
       return (node.arguments ?? []).every((argument) => value(argument, depth + 1));
     }
-    if (ts.isPropertyAccessExpression(node) && ts.isPropertyAccessExpression(node.expression) &&
-        node.expression.name.text === "prototype") {
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === "prototype"
+    ) {
       const info = exactClassOfReceiver(lowerer, node.expression.expression);
-      return !!info?.decl && info.decl.getSourceFile() === statement.getSourceFile() &&
+      return (
+        !!info?.decl &&
+        info.decl.getSourceFile() === statement.getSourceFile() &&
         info.decl.getStart() < statement.getStart() &&
         classWriteIsUnobserved(lowerer, info, statement) &&
-        (findMethodOn(lowerer, info, node.name.text) !== null || findGenericMethodOn(lowerer, info, node.name.text) !== null);
+        (findMethodOn(lowerer, info, node.name.text) !== null ||
+          findGenericMethodOn(lowerer, info, node.name.text) !== null)
+      );
     }
     if (packageSource && ts.isPropertyAccessExpression(node)) {
       const symbol = lowerer.checker.getSymbolAtLocation(node.name);
       const declaration = symbol && lowerer.checker.valueDeclarationOf(symbol);
-      const owner = ts.isIdentifier(node.expression) ? lowerer.resolveValueSymbol(node.expression) : undefined;
-      return !!declaration && ts.isPropertyAssignment(declaration) &&
-        !ts.isComputedPropertyName(declaration.name) && propertyName(declaration.name) !== "__proto__" &&
-        !!owner && registryOwnerIsData(lowerer, owner, statement) && value(node.expression, depth + 1);
+      const owner = ts.isIdentifier(node.expression)
+        ? lowerer.resolveValueSymbol(node.expression)
+        : undefined;
+      return (
+        !!declaration &&
+        ts.isPropertyAssignment(declaration) &&
+        !ts.isComputedPropertyName(declaration.name) &&
+        propertyName(declaration.name) !== "__proto__" &&
+        !!owner &&
+        registryOwnerIsData(lowerer, owner, statement) &&
+        value(node.expression, depth + 1)
+      );
     }
-    if (ts.isArrayLiteralExpression(node)) return node.elements.every((element) => !ts.isSpreadElement(element) && value(element, depth + 1));
-    if (ts.isObjectLiteralExpression(node)) return node.properties.every((property) => {
-      if (ts.isMethodDeclaration(property) || ts.isGetAccessorDeclaration(property) || ts.isSetAccessorDeclaration(property)) return !!property.name && !ts.isComputedPropertyName(property.name);
-      if (ts.isShorthandPropertyAssignment(property)) return !property.objectAssignmentInitializer && ts.isIdentifier(property.name) && value(property.name, depth + 1);
-      return ts.isPropertyAssignment(property) && !ts.isComputedPropertyName(property.name) &&
-        (propertyName(property.name) !== "__proto__" || property.initializer.kind === ts.SyntaxKind.NullKeyword) && value(property.initializer, depth + 1);
-    });
+    if (ts.isArrayLiteralExpression(node))
+      return node.elements.every(
+        (element) => !ts.isSpreadElement(element) && value(element, depth + 1),
+      );
+    if (ts.isObjectLiteralExpression(node))
+      return node.properties.every((property) => {
+        if (
+          ts.isMethodDeclaration(property) ||
+          ts.isGetAccessorDeclaration(property) ||
+          ts.isSetAccessorDeclaration(property)
+        )
+          return !!property.name && !ts.isComputedPropertyName(property.name);
+        if (ts.isShorthandPropertyAssignment(property))
+          return (
+            !property.objectAssignmentInitializer &&
+            ts.isIdentifier(property.name) &&
+            value(property.name, depth + 1)
+          );
+        return (
+          ts.isPropertyAssignment(property) &&
+          !ts.isComputedPropertyName(property.name) &&
+          (propertyName(property.name) !== "__proto__" ||
+            property.initializer.kind === ts.SyntaxKind.NullKeyword) &&
+          value(property.initializer, depth + 1)
+        );
+      });
     if (!ts.isIdentifier(node)) return false;
     if (node.text === "undefined" && lowerer.isStdlibGlobal(node, "undefined")) return true;
-    if (["Array", "Float32Array", "Float64Array"].includes(node.text) && lowerer.isStdlibGlobal(node, node.text)) return true;
+    if (
+      ["Array", "Float32Array", "Float64Array"].includes(node.text) &&
+      lowerer.isStdlibGlobal(node, node.text)
+    )
+      return true;
     const symbol = lowerer.resolveValueSymbol(node);
     const functionDeclaration = symbol && lowerer.checker.valueDeclarationOf(symbol);
-    if (functionDeclaration && ts.isFunctionDeclaration(functionDeclaration) &&
-        functionDeclaration.getSourceFile() === statement.getSourceFile()) return true;
+    if (
+      functionDeclaration &&
+      ts.isFunctionDeclaration(functionDeclaration) &&
+      functionDeclaration.getSourceFile() === statement.getSourceFile()
+    )
+      return true;
     // Reading an earlier initialized binding executes none of its
     // initializer. A deferred dependency is demanded by the emitted
     // varRef when this initializer becomes reachable.
-    if (packageSource && symbol && functionDeclaration && ts.isVariableDeclaration(functionDeclaration) &&
-        functionDeclaration.initializer && functionDeclaration.getSourceFile() === statement.getSourceFile() &&
-        functionDeclaration.getStart() < statement.getStart()) return true;
+    if (
+      packageSource &&
+      symbol &&
+      functionDeclaration &&
+      ts.isVariableDeclaration(functionDeclaration) &&
+      functionDeclaration.initializer &&
+      functionDeclaration.getSourceFile() === statement.getSourceFile() &&
+      functionDeclaration.getStart() < statement.getStart()
+    )
+      return true;
     const info = symbol && lowerer.classBySymbol.get(symbol);
     const declaration = info?.decl;
     // Reading a class before its declaration can throw. Restrict this
     // optimization to earlier declarations in the same module; imports,
     // decorated classes and local factories keep ordinary initialization.
-    return !!declaration && declaration.getSourceFile() === statement.getSourceFile() &&
-      declaration.getStart() < statement.getStart() && ts.isClassDeclaration(declaration) &&
-      !info!.classDecorators && !info!.generic && !info!.localClass && !info!.builtinError && !info!.builtinEmitter && !info!.builtinStream;
+    return (
+      !!declaration &&
+      declaration.getSourceFile() === statement.getSourceFile() &&
+      declaration.getStart() < statement.getStart() &&
+      ts.isClassDeclaration(declaration) &&
+      !info!.classDecorators &&
+      !info!.generic &&
+      !info!.localClass &&
+      !info!.builtinError &&
+      !info!.builtinEmitter &&
+      !info!.builtinStream
+    );
   };
   return value(expression);
 }
 
 function propertyName(name: ts.PropertyName): string | null {
-  return ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name) ? name.text : null;
+  return ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)
+    ? name.text
+    : null;
 }
 
 /** A const binding alone does not make its properties pure: aliases,
  * descriptors and earlier writes can install a getter. Require an own
  * literal data property and no earlier mutation or escape of its owner. */
-function registryOwnerIsData(lowerer: Lowerer, symbol: ts.Symbol, statement: ts.Statement): boolean {
+function registryOwnerIsData(
+  lowerer: Lowerer,
+  symbol: ts.Symbol,
+  statement: ts.Statement,
+): boolean {
   const declaration = lowerer.checker.valueDeclarationOf(symbol);
-  if (!declaration || !ts.isVariableDeclaration(declaration) || !declaration.initializer ||
-      !bindingNeverReassigned(lowerer, symbol, declaration)) return false;
+  if (
+    !declaration ||
+    !ts.isVariableDeclaration(declaration) ||
+    !declaration.initializer ||
+    !bindingNeverReassigned(lowerer, symbol, declaration)
+  )
+    return false;
   let initializer = declaration.initializer;
-  const frozen = ts.isCallExpression(initializer) && ts.isPropertyAccessExpression(initializer.expression) &&
-    lowerer.stdlibGlobalMember(initializer.expression, "Object") === "freeze" && initializer.arguments.length === 1;
+  const frozen =
+    ts.isCallExpression(initializer) &&
+    ts.isPropertyAccessExpression(initializer.expression) &&
+    lowerer.stdlibGlobalMember(initializer.expression, "Object") === "freeze" &&
+    initializer.arguments.length === 1;
   if (frozen) initializer = (initializer as ts.CallExpression).arguments[0]!;
-  if (!ts.isObjectLiteralExpression(initializer) || !initializer.properties.every((property) =>
-      ts.isShorthandPropertyAssignment(property) || ts.isPropertyAssignment(property) && !ts.isComputedPropertyName(property.name) &&
-      (propertyName(property.name) !== "__proto__" || property.initializer.kind === ts.SyntaxKind.NullKeyword))) return false;
+  if (
+    !ts.isObjectLiteralExpression(initializer) ||
+    !initializer.properties.every(
+      (property) =>
+        ts.isShorthandPropertyAssignment(property) ||
+        (ts.isPropertyAssignment(property) &&
+          !ts.isComputedPropertyName(property.name) &&
+          (propertyName(property.name) !== "__proto__" ||
+            property.initializer.kind === ts.SyntaxKind.NullKeyword)),
+    )
+  )
+    return false;
   if (declaration.getSourceFile() !== statement.getSourceFile()) {
     const modules = [...lowerer.initNameOf.keys()];
-    return !!frozen && modules.indexOf(declaration.getSourceFile()) >= 0 &&
-      modules.indexOf(declaration.getSourceFile()) < modules.indexOf(statement.getSourceFile());
+    return (
+      !!frozen &&
+      modules.indexOf(declaration.getSourceFile()) >= 0 &&
+      modules.indexOf(declaration.getSourceFile()) < modules.indexOf(statement.getSourceFile())
+    );
   }
   if (declaration.getStart() >= statement.getStart()) return false;
   if (frozen) return true;
   let safe = true;
   const visit = (node: ts.Node): void => {
     if (!safe || node.getStart() >= statement.getStart()) return;
-    if (ts.isIdentifier(node) && node !== declaration.name && lowerer.resolveValueSymbol(node) === symbol) {
+    if (
+      ts.isIdentifier(node) &&
+      node !== declaration.name &&
+      lowerer.resolveValueSymbol(node) === symbol
+    ) {
       let access: ts.Node = node;
-      while (ts.isPropertyAccessExpression(access.parent) && access.parent.expression === access) access = access.parent;
+      while (ts.isPropertyAccessExpression(access.parent) && access.parent.expression === access)
+        access = access.parent;
       const parent = access.parent;
-      if (!parent || access === node || ts.isBinaryExpression(parent) && parent.left === access &&
-          parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment ||
-          parent && (ts.isPrefixUnaryExpression(parent) || ts.isPostfixUnaryExpression(parent) || ts.isDeleteExpression(parent) ||
-          ts.isCallExpression(parent) && parent.expression === access)) safe = false;
+      if (
+        !parent ||
+        access === node ||
+        (ts.isBinaryExpression(parent) &&
+          parent.left === access &&
+          parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+          parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment) ||
+        (parent &&
+          (ts.isPrefixUnaryExpression(parent) ||
+            ts.isPostfixUnaryExpression(parent) ||
+            ts.isDeleteExpression(parent) ||
+            (ts.isCallExpression(parent) && parent.expression === access)))
+      )
+        safe = false;
     }
     ts.forEachChild(node, visit);
   };
@@ -323,23 +513,56 @@ function registryOwnerIsData(lowerer: Lowerer, symbol: ts.Symbol, statement: ts.
 /** Before a class registry write, arbitrary module effects can change its
  * static/prototype descriptors. Only adjacent declarations and pure
  * registry setup preserve the known setter-free target. */
-function classWriteIsUnobserved(lowerer: Lowerer, info: ClassInfo, statement: ts.Statement): boolean {
+function classWriteIsUnobserved(
+  lowerer: Lowerer,
+  info: ClassInfo,
+  statement: ts.Statement,
+): boolean {
   const source = statement.getSourceFile();
   const declaration = info.decl!;
-  if (declaration.members.some((member) => ts.isClassStaticBlockDeclaration(member) ||
-      ts.isPropertyDeclaration(member) && member.initializer &&
-      ts.getModifiers(member)?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword) &&
-      !registryInitializer(lowerer, member.initializer, declaration as ts.Statement))) return false;
+  if (
+    declaration.members.some(
+      (member) =>
+        ts.isClassStaticBlockDeclaration(member) ||
+        (ts.isPropertyDeclaration(member) &&
+          member.initializer &&
+          ts
+            .getModifiers(member)
+            ?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword) &&
+          !registryInitializer(lowerer, member.initializer, declaration as ts.Statement)),
+    )
+  )
+    return false;
   for (const earlier of source.statements) {
-    if (earlier.getStart() <= declaration.getStart() || earlier.getStart() >= statement.getStart()) continue;
-    if (ts.isFunctionDeclaration(earlier) || ts.isInterfaceDeclaration(earlier) || ts.isTypeAliasDeclaration(earlier) || ts.isEmptyStatement(earlier)) continue;
-    if (ts.isVariableStatement(earlier) && earlier.declarationList.declarations.every((binding) =>
-        !binding.initializer || registryInitializer(lowerer, binding.initializer, earlier))) continue;
-    if (ts.isExpressionStatement(earlier) && ts.isBinaryExpression(earlier.expression) &&
-        earlier.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
-        ts.isPropertyAccessExpression(earlier.expression.left) && registryInitializer(lowerer, earlier.expression.right, earlier)) {
+    if (earlier.getStart() <= declaration.getStart() || earlier.getStart() >= statement.getStart())
+      continue;
+    if (
+      ts.isFunctionDeclaration(earlier) ||
+      ts.isInterfaceDeclaration(earlier) ||
+      ts.isTypeAliasDeclaration(earlier) ||
+      ts.isEmptyStatement(earlier)
+    )
+      continue;
+    if (
+      ts.isVariableStatement(earlier) &&
+      earlier.declarationList.declarations.every(
+        (binding) =>
+          !binding.initializer || registryInitializer(lowerer, binding.initializer, earlier),
+      )
+    )
+      continue;
+    if (
+      ts.isExpressionStatement(earlier) &&
+      ts.isBinaryExpression(earlier.expression) &&
+      earlier.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      ts.isPropertyAccessExpression(earlier.expression.left) &&
+      registryInitializer(lowerer, earlier.expression.right, earlier)
+    ) {
       const target = earlier.expression.left.expression;
-      const owner = ts.isPropertyAccessExpression(target) && target.name.text === "prototype" ? target.expression : target;
+      const owner =
+        ts.isPropertyAccessExpression(target) && target.name.text === "prototype"
+          ? target.expression
+          : target;
       if (exactClassOfReceiver(lowerer, owner) === info) continue;
     }
     return false;

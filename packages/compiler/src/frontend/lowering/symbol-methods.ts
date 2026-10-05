@@ -8,9 +8,13 @@ import { classSymbolKeyOf } from "./symbol-fields.js";
 /** A stable symbol method uses the same completed arguments and virtual
  * dispatch as a string-named class method. Runtime-selected keys stay on
  * the checked-property path. */
-export function lowerClassSymbolMethodCall(lowerer: Lowerer, call: ts.CallExpression): IrExpr | null {
+export function lowerClassSymbolMethodCall(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
+): IrExpr | null {
   const access = call.expression;
-  if (!ts.isElementAccessExpression(access) || access.questionDotToken || call.questionDotToken) return null;
+  if (!ts.isElementAccessExpression(access) || access.questionDotToken || call.questionDotToken)
+    return null;
   const key = classSymbolKeyOf(lowerer, access.argumentExpression);
   if (!key) return null;
   const type = lowerer.mapTypeOf(lowerer.typeOf(access.expression));

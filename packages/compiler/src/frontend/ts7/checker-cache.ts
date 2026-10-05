@@ -1,5 +1,12 @@
 import type { Node, SourceFile } from "./ast-types.js";
-import type { IndexInfo, InterfaceType, Signature, Symbol as Ts7Symbol, Type, TypePredicate } from "./semantic-types.js";
+import type {
+  IndexInfo,
+  InterfaceType,
+  Signature,
+  Symbol as Ts7Symbol,
+  Type,
+  TypePredicate,
+} from "./semantic-types.js";
 
 /** One facade's answers for one immutable semantic project. Strong keys
  * are safe only within this lifetime: project disposal clears every map,

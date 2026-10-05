@@ -61,7 +61,16 @@
  * Date formatting is a real divergence. */
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, globSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  globSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer, type Server } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { basename, join, relative } from "node:path";
@@ -69,7 +78,11 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { compile } from "@scriptc/compiler";
 import { shardSelect } from "./shard.js";
 import { jailEnv, refusedLoopbackUrl } from "./net-jail.js";
-import { MOCK_PROJECT_LINK, startMockVercelApi, type RecordedRequest } from "../fixtures/vercel-e2e/mock-vercel-api.js";
+import {
+  MOCK_PROJECT_LINK,
+  startMockVercelApi,
+  type RecordedRequest,
+} from "../fixtures/vercel-e2e/mock-vercel-api.js";
 
 const repoRoot = join(import.meta.dirname, "../..");
 const cacheDir = join(repoRoot, "node_modules/.cache/scriptc-tests");
@@ -82,7 +95,8 @@ const executionTag = [
   .join("-")
   .replace(/[^a-zA-Z0-9_.-]+/g, "-");
 
-const vercelRoot = process.env["SCRIPTC_VERCEL_ROOT"] ?? join(homedir(), "Developer/vercel-scratch");
+const vercelRoot =
+  process.env["SCRIPTC_VERCEL_ROOT"] ?? join(homedir(), "Developer/vercel-scratch");
 const vercelEntry = join(vercelRoot, "node_modules/vercel/dist/index.js");
 const haveVercel = existsSync(vercelEntry);
 
@@ -131,7 +145,10 @@ function hashInputs(entryText: string): string {
     join(vercelRoot, "node_modules/vercel/package.json"),
   ].sort();
   for (const f of inputs) hash.update(f).update(readFileSync(f));
-  return hash.update(sanitize ? "san" : "plain").digest("hex").slice(0, 16);
+  return hash
+    .update(sanitize ? "san" : "plain")
+    .digest("hex")
+    .slice(0, 16);
 }
 
 async function buildDriver(name: string, entrySource: (rel: string) => string): Promise<string> {
@@ -184,7 +201,12 @@ interface RunOptions {
   linked?: boolean;
 }
 
-function runLane(cmd: string, cmdArgs: string[], args: string[], opts: RunOptions = {}): Promise<LaneResult> {
+function runLane(
+  cmd: string,
+  cmdArgs: string[],
+  args: string[],
+  opts: RunOptions = {},
+): Promise<LaneResult> {
   const cwd = mkdtempSync(join(tmpdir(), "scr-vc-e2e-"));
   const home = join(cwd, "scratch-home");
   mkdirSync(home);
@@ -208,7 +230,14 @@ function runLane(cmd: string, cmdArgs: string[], args: string[], opts: RunOption
     VERCEL_TOKEN: token,
     ...jailEnv(refusedUrl),
   };
-  const argv = [...cmdArgs, ...args, "--api", opts.apiUrl ?? mockUrl, "--global-config", join(cwd, "vercel-global")];
+  const argv = [
+    ...cmdArgs,
+    ...args,
+    "--api",
+    opts.apiUrl ?? mockUrl,
+    "--global-config",
+    join(cwd, "vercel-global"),
+  ];
   return new Promise((resolve, reject) => {
     const p = spawn(cmd, argv, { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
     const out: Buffer[] = [];
@@ -245,12 +274,15 @@ function normalize(buf: Buffer, cwd: string): string {
   }
   // Relative ages change table column widths as the fixed mock dates recede.
   // Preserve cell boundaries and contents while discarding alignment padding.
-  text = text.split("\n").map((line) => {
-    const unpadded = line.trimEnd();
-    return /^ +\S.* {2,}\S/.test(unpadded)
-      ? `  ${unpadded.trimStart().replace(/ {2,}/g, "  ")}`
-      : unpadded;
-  }).join("\n");
+  text = text
+    .split("\n")
+    .map((line) => {
+      const unpadded = line.trimEnd();
+      return /^ +\S.* {2,}\S/.test(unpadded)
+        ? `  ${unpadded.trimStart().replace(/ {2,}/g, "  ")}`
+        : unpadded;
+    })
+    .join("\n");
   return text;
 }
 
@@ -280,13 +312,21 @@ async function runCase(args: string[], opts: RunOptions = {}): Promise<void> {
     compiledLegLoads() ? runNativeLane(args, opts) : Promise.resolve(undefined),
   ]);
   try {
-    expect(normalize(node.stdout, node.cwd), `node stdout of: ${label}`).toMatchSnapshot(`${label} stdout`);
-    expect(normalize(node.stderr, node.cwd), `node stderr of: ${label}`).toMatchSnapshot(`${label} stderr`);
+    expect(normalize(node.stdout, node.cwd), `node stdout of: ${label}`).toMatchSnapshot(
+      `${label} stdout`,
+    );
+    expect(normalize(node.stderr, node.cwd), `node stderr of: ${label}`).toMatchSnapshot(
+      `${label} stderr`,
+    );
     expect(node.code, `node exit code of: ${label}`).toMatchSnapshot(`${label} exit`);
     expect(requestsOf(node.token), `endpoints of: ${label}`).toMatchSnapshot(`${label} endpoints`);
     if (native !== undefined) {
-      expect(normalize(native.stdout, native.cwd), `stdout of: ${label}`).toBe(normalize(node.stdout, node.cwd));
-      expect(normalize(native.stderr, native.cwd), `stderr of: ${label}`).toBe(normalize(node.stderr, node.cwd));
+      expect(normalize(native.stdout, native.cwd), `stdout of: ${label}`).toBe(
+        normalize(node.stdout, node.cwd),
+      );
+      expect(normalize(native.stderr, native.cwd), `stderr of: ${label}`).toBe(
+        normalize(node.stderr, node.cwd),
+      );
       expect(native.code, `exit code of: ${label}`).toBe(node.code);
       expect(native.signal, `signal of: ${label}`).toBe(node.signal);
       expect(requestsOf(native.token), `endpoints of: ${label}`).toEqual(requestsOf(node.token));
@@ -377,7 +417,12 @@ const selectedCliCases = new Set(
 // entries (and `--update` under one flavor would delete the other's).
 describe.skipIf(!haveVercel)("vercel e2e (real CLI vs Node against the mock api)", () => {
   beforeAll(async () => {
-    ({ server: mockServer, baseUrl: mockUrl, requests: mockRequests, unexpected: mockUnexpected } = await startMockVercelApi());
+    ({
+      server: mockServer,
+      baseUrl: mockUrl,
+      requests: mockRequests,
+      unexpected: mockUnexpected,
+    } = await startMockVercelApi());
 
     refusedUrl = await refusedLoopbackUrl();
 
@@ -387,7 +432,13 @@ describe.skipIf(!haveVercel)("vercel e2e (real CLI vs Node against the mock api)
     // HERE as a CONNECT — proving the CLI's fetch consults the env proxy.
     // Nothing is forwarded; the child is killed on capture.
     jailCapture = await new Promise<string>((resolve, reject) => {
-      const guard = setTimeout(() => reject(new Error("jail verification timed out: no proxy traffic from the CLI within 60s")), 60_000);
+      const guard = setTimeout(
+        () =>
+          reject(
+            new Error("jail verification timed out: no proxy traffic from the CLI within 60s"),
+          ),
+        60_000,
+      );
       const trap: Server = createServer((socket) => {
         clearTimeout(guard);
         socket.once("data", (d: Buffer) => {
@@ -398,7 +449,8 @@ describe.skipIf(!haveVercel)("vercel e2e (real CLI vs Node against the mock api)
       });
       trap.listen(0, "127.0.0.1", () => {
         const taddr = trap.address();
-        if (taddr === null || typeof taddr !== "object") return reject(new Error("no trap address"));
+        if (taddr === null || typeof taddr !== "object")
+          return reject(new Error("no trap address"));
         const trapUrl = `http://127.0.0.1:${taddr.port}`;
         const cwd = mkdtempSync(join(tmpdir(), "scr-vc-jail-"));
         const home = join(cwd, "scratch-home");
@@ -432,7 +484,9 @@ describe.skipIf(!haveVercel)("vercel e2e (real CLI vs Node against the mock api)
       });
     });
     if (!jailCapture.startsWith("CONNECT api.vercel.com:443")) {
-      throw new Error(`jail not verified: expected a CONNECT for api.vercel.com at the proxy, saw ${JSON.stringify(jailCapture)}`);
+      throw new Error(
+        `jail not verified: expected a CONNECT for api.vercel.com at the proxy, saw ${JSON.stringify(jailCapture)}`,
+      );
     }
 
     // The differential driver (the real CLI graph) and the load probe
@@ -465,7 +519,8 @@ void go();
 
   afterAll(async () => {
     try {
-      if (mockServer !== undefined) await new Promise<void>((resolve) => mockServer.close(() => resolve()));
+      if (mockServer !== undefined)
+        await new Promise<void>((resolve) => mockServer.close(() => resolve()));
       // The endpoint-drift tripwire: every request any lane made resolved to
       // a recorded route — a CLI/API drift 404s AND lands here, so it can
       // never render as a silently-empty table (dns ls does exactly that).
@@ -501,8 +556,12 @@ void go();
     // are intentional; filtering the definitions entirely makes every
     // partial run report the other shard's snapshots as obsolete.
     const shardTest = selectedCliCases.has(name) ? test : test.skip;
-    shardTest(name, async () => {
-      await runCase(args, opts);
-    }, 240_000);
+    shardTest(
+      name,
+      async () => {
+        await runCase(args, opts);
+      },
+      240_000,
+    );
   }
 });

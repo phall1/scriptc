@@ -5,7 +5,9 @@ import { releaseSym, type ShapeHost, vAdapters } from "./shapes.js";
 function declarationHost(): { host: ShapeHost; declarations: string[] } {
   const declarations: string[] = [];
   const host: ShapeHost = {
-    declare(decl) { declarations.push(decl); },
+    declare(decl) {
+      declarations.push(decl);
+    },
     needOom() {},
     sizeType: "i64",
     cycleColorOffset: 0,
@@ -33,7 +35,9 @@ describe("LLVM runtime RC symbols", () => {
   test("uses typed releases and preserves ABI exceptions", () => {
     const { host, declarations } = declarationHost();
     expect(releaseSym(host, { kind: "url" })).toBe("@scr_url_release");
-    expect(releaseSym(host, { kind: "classval", className: "Widget" })).toBe("@scr_classobj_release_v");
+    expect(releaseSym(host, { kind: "classval", className: "Widget" })).toBe(
+      "@scr_classobj_release_v",
+    );
     expect(vAdapters(host, { kind: "caught" })).toEqual({
       retain: "@scr_caught_retain",
       release: "@scr_caught_release",

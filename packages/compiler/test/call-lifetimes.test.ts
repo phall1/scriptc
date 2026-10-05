@@ -10,10 +10,12 @@ import { type IrModule, type IrFunction } from "../src/ir/ir.js";
 async function lower(source: string): Promise<IrModule> {
   const dir = await mkdtemp(join(tmpdir(), "scriptc-call-lifetimes-"));
   try {
-    const entry = join(dir, "main.ts"), outPath = join(dir, "main.ir.json");
+    const entry = join(dir, "main.ts"),
+      outPath = join(dir, "main.ir.json");
     await writeFile(entry, source);
     const result = await compile(entry, { outDir: dir, outPath, outputKind: "ir", dynamic: false });
-    if (!result.ok) throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
+    if (!result.ok)
+      throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
     const mod = deserializeModule(await readFile(outPath, "utf8"));
     expect(validateModule(mod)).toEqual([]);
     return mod;
@@ -120,7 +122,8 @@ class Second extends Base { read(left: Item, right: Item): number { return left.
 function invoke(reader: Base, items: Item[]): number { const item = items[0]; return reader.read(item, new Item()); }
 console.log(invoke(new First(), [new Item()]), invoke(new Second(), [new Item()]));
 `);
-  const first = fn(mod, "%First.read"), second = fn(mod, "%Second.read");
+  const first = fn(mod, "%First.read"),
+    second = fn(mod, "%Second.read");
   expect(first.params[1]!.type.kind).toBe("union");
   expect(second.params[1]!.type).toEqual(first.params[1]!.type);
   expect(first.params[2]!.type.kind).toBe("object");

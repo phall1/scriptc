@@ -82,10 +82,30 @@ for (const s of strings) {
   const L = s.length;
   const idxs = [
     ...new Set([
-      NaN, -Infinity, Infinity,
-      -L - 5, -L - 1, -L, -L + 1, -3, -2, -1, -0.5,
-      0, 0.5, 1, 1.5, 2, 3,
-      Math.floor(L / 2), L - 2, L - 1, L - 0.5, L, L + 1, L + 5,
+      NaN,
+      -Infinity,
+      Infinity,
+      -L - 5,
+      -L - 1,
+      -L,
+      -L + 1,
+      -3,
+      -2,
+      -1,
+      -0.5,
+      0,
+      0.5,
+      1,
+      1.5,
+      2,
+      3,
+      Math.floor(L / 2),
+      L - 2,
+      L - 1,
+      L - 0.5,
+      L,
+      L + 1,
+      L + 5,
     ]),
   ];
 
@@ -98,7 +118,19 @@ for (const s of strings) {
   // empty results ([] vs [""]) stay distinguishable; \x01 appears in no
   // corpus string. Lone-surrogate pieces (empty separator over astral
   // chars) hex through Buffer.from as U+FFFD — exactly the divergence.
-  for (const sep of new Set(["", ",", "a", "X", " ", "é", "世", "\u{1F600}", s.slice(0, 1), s.slice(1, 3), s])) {
+  for (const sep of new Set([
+    "",
+    ",",
+    "a",
+    "X",
+    " ",
+    "é",
+    "世",
+    "\u{1F600}",
+    s.slice(0, 1),
+    s.slice(1, 3),
+    s,
+  ])) {
     if (!sep.isWellFormed()) continue;
     const pieces = s.split(sep);
     emit("split", s, hex(sep), hex(`${pieces.length}:${pieces.join("\x01")}`));
@@ -119,24 +151,50 @@ for (const s of strings) {
   }
 
   for (const a of idxs)
-    for (const b of idxs)
-      emit("slice", s, `${num(a)},${num(b)}`, hex(s.slice(a, b)));
+    for (const b of idxs) emit("slice", s, `${num(a)},${num(b)}`, hex(s.slice(a, b)));
 
   // needles: derived substrings (only well-formed ones — a needle with a
   // lone surrogate cannot exist as a scriptc string) plus fixed probes
   const needles = [
     ...new Set(
       [
-        "", "a", "b", "X", "z!", s, s + " ", s.slice(0, 1), s.slice(0, 2),
-        s.slice(1, 3), s.slice(-1), s.slice(-2), s.slice(2, -1),
-        "\u{1F600}", "世", "é", "é", "́", " ",
+        "",
+        "a",
+        "b",
+        "X",
+        "z!",
+        s,
+        s + " ",
+        s.slice(0, 1),
+        s.slice(0, 2),
+        s.slice(1, 3),
+        s.slice(-1),
+        s.slice(-2),
+        s.slice(2, -1),
+        "\u{1F600}",
+        "世",
+        "é",
+        "é",
+        "́",
+        " ",
       ].filter((n) => n.isWellFormed()),
     ),
   ];
   const fromIdxs = [
     ...new Set([
-      NaN, -Infinity, Infinity, -5, -1, 0, 1, 1.5, 2,
-      Math.floor(L / 2), L - 1, L, L + 5,
+      NaN,
+      -Infinity,
+      Infinity,
+      -5,
+      -1,
+      0,
+      1,
+      1.5,
+      2,
+      Math.floor(L / 2),
+      L - 1,
+      L,
+      L + 5,
     ]),
   ];
   for (const n of needles) {
@@ -150,8 +208,7 @@ for (const s of strings) {
 
   // valid repeat counts only; count < 0 / Infinity -> RangeError -> abort,
   // covered by the crash test in string.test.ts
-  for (const c of [0, 1, 2, 3, 7, 2.9, 0.5, -0.5, NaN])
-    emit("repeat", s, num(c), hex(s.repeat(c)));
+  for (const c of [0, 1, 2, 3, 7, 2.9, 0.5, -0.5, NaN]) emit("repeat", s, num(c), hex(s.repeat(c)));
 }
 
 // parseInt(s, radix): args = String(radix) (strtod-parseable), expected =
@@ -160,18 +217,74 @@ for (const s of strings) {
 // compare exactly. String(-0) is "0" on both sides; the -0 SIGN is pinned
 // by the differential corpus instead.
 const parseIntInputs = [
-  "", " ", "0", "-0", "+0", "42", "  42  ", "\t\n-17", "+99", "3.9", "1e3",
-  "0x1F", "0X1f", "-0x20", "  +0xAb", "0x", "0xG", "08", "079", "ff", "FF",
-  "zz", "z!", "101", "777", "12abc", "abc12", "-", "+", " - 1", "١٢٣",
-  "Infinity", "NaN", "9007199254740993", "18446744073709551617",
-  "123456789012345678901234567890", "9".repeat(40), "1" + "0".repeat(308),
-  "1" + "0".repeat(309), "-1" + "0".repeat(400), "0".repeat(50) + "7",
-  "deadbeefdeadbeefdeadbeefdeadbeef", "7".repeat(30), "1".repeat(80),
-  "  1 ", "　42", "42\0", "1_000",
+  "",
+  " ",
+  "0",
+  "-0",
+  "+0",
+  "42",
+  "  42  ",
+  "\t\n-17",
+  "+99",
+  "3.9",
+  "1e3",
+  "0x1F",
+  "0X1f",
+  "-0x20",
+  "  +0xAb",
+  "0x",
+  "0xG",
+  "08",
+  "079",
+  "ff",
+  "FF",
+  "zz",
+  "z!",
+  "101",
+  "777",
+  "12abc",
+  "abc12",
+  "-",
+  "+",
+  " - 1",
+  "١٢٣",
+  "Infinity",
+  "NaN",
+  "9007199254740993",
+  "18446744073709551617",
+  "123456789012345678901234567890",
+  "9".repeat(40),
+  "1" + "0".repeat(308),
+  "1" + "0".repeat(309),
+  "-1" + "0".repeat(400),
+  "0".repeat(50) + "7",
+  "deadbeefdeadbeefdeadbeefdeadbeef",
+  "7".repeat(30),
+  "1".repeat(80),
+  "  1 ",
+  "　42",
+  "42\0",
+  "1_000",
 ];
 const radices = [
-  undefined, 0, 2, 8, 10, 16, 36, 1, 37, -1, 16.9, NaN, Infinity, -Infinity,
-  2.5, 4294967312, -4294967280, 35,
+  undefined,
+  0,
+  2,
+  8,
+  10,
+  16,
+  36,
+  1,
+  37,
+  -1,
+  16.9,
+  NaN,
+  Infinity,
+  -Infinity,
+  2.5,
+  4294967312,
+  -4294967280,
+  35,
 ];
 for (const s of parseIntInputs)
   for (const r of radices)

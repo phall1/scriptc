@@ -18,7 +18,8 @@ export function findInitializerBindings(mod: IrModule): ReadonlyMap<string, IrGl
     for (const capture of cls.localCaptures ?? []) excluded.add(capture.localId);
   }
   for (const fn of mod.functions) {
-    for (const capture of [...(fn.captures ?? []), ...(fn.classCaptures ?? [])]) excluded.add(capture.localId);
+    for (const capture of [...(fn.captures ?? []), ...(fn.classCaptures ?? [])])
+      excluded.add(capture.localId);
     const use = (id: string, write: boolean): void => {
       if (!globals.has(id)) return;
       const owner = owners.get(id);
@@ -42,20 +43,42 @@ export function findInitializerBindings(mod: IrModule): ReadonlyMap<string, IrGl
   const guarded = new Set<string>();
   for (const fn of mod.functions) {
     if (fn.async || fn.generator) continue;
-    const check = fn.body[0], set = fn.body[1];
-    if (check?.kind !== "if" || check.cond.kind !== "varRef" || check.else_ !== null ||
-        check.then.length !== 1 || check.then[0]?.kind !== "return" || check.then[0].value !== null ||
-        set?.kind !== "assign" || set.localId !== check.cond.localId ||
-        set.value.kind !== "boolLit" || !set.value.value) continue;
+    const check = fn.body[0],
+      set = fn.body[1];
+    if (
+      check?.kind !== "if" ||
+      check.cond.kind !== "varRef" ||
+      check.else_ !== null ||
+      check.then.length !== 1 ||
+      check.then[0]?.kind !== "return" ||
+      check.then[0].value !== null ||
+      set?.kind !== "assign" ||
+      set.localId !== check.cond.localId ||
+      set.value.kind !== "boolLit" ||
+      !set.value.value
+    )
+      continue;
     const guard = globals.get(set.localId);
-    if (guard?.type.kind !== "bool" || guard.tdz || excluded.has(guard.id) ||
-        owners.get(guard.id) !== fn.name || writes.get(guard.id) !== 1) continue;
+    if (
+      guard?.type.kind !== "bool" ||
+      guard.tdz ||
+      excluded.has(guard.id) ||
+      owners.get(guard.id) !== fn.name ||
+      writes.get(guard.id) !== 1
+    )
+      continue;
     guarded.add(fn.name);
   }
   for (const global of mod.globals) {
     const owner = owners.get(global.id);
-    if (!owner || !guarded.has(owner) || excluded.has(global.id) || global.tdz ||
-        (global.type.kind !== "f64" && global.type.kind !== "bytes")) continue;
+    if (
+      !owner ||
+      !guarded.has(owner) ||
+      excluded.has(global.id) ||
+      global.tdz ||
+      (global.type.kind !== "f64" && global.type.kind !== "bytes")
+    )
+      continue;
     const bindings = result.get(owner);
     if (bindings) bindings.push(global);
     else result.set(owner, [global]);

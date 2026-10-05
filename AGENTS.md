@@ -8,6 +8,8 @@ Write prose paragraphs and list items as single source lines and let editors and
 
 ## Build and test
 
+Use `pnpm lint` and `pnpm format:check` for owned JS/TS; apply formatting with `pnpm format` and review any `pnpm lint:fix` changes. Preserve the exclusions in `.oxlintrc.jsonc` and `.oxfmtrc.jsonc`: program fixtures and deliberately invalid or formatting-sensitive inputs, generated outputs, vendor sources, and the standalone docs workspace are not part of the root tooling scope. Do not reformat embedded source strings or sort imports. Keep lint exceptions narrowly scoped and explain their semantic purpose. Compiler frontend/backend imports and the explicit TypeScript parser islands are enforced by oxlint.
+
 ```bash
 pnpm install && pnpm -r build   # build the workspace
 pnpm test:sandbox              # full gate: ~4m custom image, ~9m cold managed fallback

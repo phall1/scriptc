@@ -6,4 +6,16 @@ export const ZLIB_VERSION = "1.3.1";
  * source-pack recipes. */
 export const QJS_ENGINE_SOURCES = ["dtoa.c", "libregexp.c", "libunicode.c", "quickjs.c"] as const;
 export const LRE_SOURCES = ["libregexp.c", "libunicode.c"] as const;
-export const ZLIB_SOURCES = ["adler32.c", "compress.c", "crc32.c", "deflate.c", "infback.c", "inffast.c", "inflate.c", "inftrees.c", "trees.c", "uncompr.c", "zutil.c"] as const;
+export const ZLIB_SOURCES = [
+  "adler32.c",
+  "compress.c",
+  "crc32.c",
+  "deflate.c",
+  "infback.c",
+  "inffast.c",
+  "inflate.c",
+  "inftrees.c",
+  "trees.c",
+  "uncompr.c",
+  "zutil.c",
+] as const;

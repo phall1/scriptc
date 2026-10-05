@@ -62,8 +62,15 @@
 
 import { dirname } from "node:path";
 import type { FrontendServices } from "./services.js";
-import type { NpmStaticDeclarationOverloads, NpmStaticDeclarationProperties } from "./npm-static-declaration-syntax.js";
-import { npmPackageNameOf, registerWorkspacePackage, workspacePackageOfPath } from "./workspace-registry.js";
+import type {
+  NpmStaticDeclarationOverloads,
+  NpmStaticDeclarationProperties,
+} from "./npm-static-declaration-syntax.js";
+import {
+  npmPackageNameOf,
+  registerWorkspacePackage,
+  workspacePackageOfPath,
+} from "./workspace-registry.js";
 import { trackedExists, trackedReadFile, trackedRealpath } from "./input-tracker.js";
 
 let activePackages: ReadonlySet<string> = new Set();
@@ -305,9 +312,12 @@ function packageIsUntyped(path: string): boolean {
   if (untyped) {
     // the @types twin, hoisted anywhere up the realm chain
     const mangled = mangledTypesName(dirName);
-    for (let dir = dirname(pkgDir); ; ) {
+    for (let dir = dirname(pkgDir); ;) {
       const parent = dirname(dir);
-      if (trackedExists(`${dir}/node_modules/@types/${mangled}/package.json`) || trackedExists(`${dir}/@types/${mangled}/package.json`)) {
+      if (
+        trackedExists(`${dir}/node_modules/@types/${mangled}/package.json`) ||
+        trackedExists(`${dir}/@types/${mangled}/package.json`)
+      ) {
         untyped = false;
         break;
       }
@@ -395,11 +405,24 @@ export function npmStaticFsShadow(services: FrontendServices): NpmStaticFsShadow
               propertyProjected?.text ?? findWidened?.text ?? classFields?.text ?? source,
               declarationOverloads.get(path.split("\\").join("/")) ?? new Map(),
             );
-            const answer = services.rewriteCjs(projected?.text ?? propertyProjected?.text ?? findWidened?.text ?? classFields?.text ?? source, path);
+            const answer = services.rewriteCjs(
+              projected?.text ??
+                propertyProjected?.text ??
+                findWidened?.text ??
+                classFields?.text ??
+                source,
+              path,
+            );
             if (answer !== null && typeof answer === "object") {
               reportNpmStaticOffender(target.pkg, answer.degrade);
             } else {
-              rewritten = answer ?? projected?.text ?? propertyProjected?.text ?? findWidened?.text ?? classFields?.text ?? namepaths;
+              rewritten =
+                answer ??
+                projected?.text ??
+                propertyProjected?.text ??
+                findWidened?.text ??
+                classFields?.text ??
+                namepaths;
             }
           }
         } catch {

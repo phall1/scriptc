@@ -4,16 +4,49 @@
  * canonical helpers. Every accepted token is represented in the result;
  * comments and whitespace alone may disappear. */
 const operators = [
-  ">>>=", "===", "!==", ">>>", "**=", "&&=", "||=", "??=", "<<=", ">>=", "...",
-  "=>", "==", "!=", "<=", ">=", "++", "--", "&&", "||", "??", "**", "<<", ">>",
-  "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "?.",
+  ">>>=",
+  "===",
+  "!==",
+  ">>>",
+  "**=",
+  "&&=",
+  "||=",
+  "??=",
+  "<<=",
+  ">>=",
+  "...",
+  "=>",
+  "==",
+  "!=",
+  "<=",
+  ">=",
+  "++",
+  "--",
+  "&&",
+  "||",
+  "??",
+  "**",
+  "<<",
+  ">>",
+  "+=",
+  "-=",
+  "*=",
+  "/=",
+  "%=",
+  "&=",
+  "|=",
+  "^=",
+  "?.",
 ];
 
 function hex(text: string): number {
   return /^[0-9a-fA-F]+$/.test(text) ? parseInt(text, 16) : -1;
 }
 
-interface QuotedToken { end: number; value: string }
+interface QuotedToken {
+  end: number;
+  value: string;
+}
 
 /** Decode string literals without evaluating source. Invalid, unterminated,
  * and legacy octal escapes refuse the match. Line continuations and Unicode
@@ -25,10 +58,16 @@ function quoted(text: string, start: number): QuotedToken | null {
     const ch = text.charAt(i++);
     if (ch === quote) return { end: i, value };
     if (ch === "\n" || ch === "\r") return null;
-    if (ch !== "\\") { value += ch; continue; }
+    if (ch !== "\\") {
+      value += ch;
+      continue;
+    }
     if (i === text.length) return null;
     const escape = text.charAt(i++);
-    if (escape === "\r") { if (text.charAt(i) === "\n") i++; continue; }
+    if (escape === "\r") {
+      if (text.charAt(i) === "\n") i++;
+      continue;
+    }
     if (escape === "\n" || escape === "\u2028" || escape === "\u2029") continue;
     if (escape === "x" || escape === "u") {
       let code: number;
@@ -51,8 +90,20 @@ function quoted(text: string, start: number): QuotedToken | null {
     } else if (/[1-9]/.test(escape)) {
       return null;
     } else {
-      value += escape === "n" ? "\n" : escape === "r" ? "\r" : escape === "t" ? "\t"
-        : escape === "b" ? "\b" : escape === "f" ? "\f" : escape === "v" ? "\v" : escape;
+      value +=
+        escape === "n"
+          ? "\n"
+          : escape === "r"
+            ? "\r"
+            : escape === "t"
+              ? "\t"
+              : escape === "b"
+                ? "\b"
+                : escape === "f"
+                  ? "\f"
+                  : escape === "v"
+                    ? "\v"
+                    : escape;
     }
   }
   return null;
@@ -89,7 +140,14 @@ export function helperTokens(text: string): string | null {
     }
     // A return followed by a line terminator returns undefined. Ignoring
     // that trivia would recognize a different program as a trusted helper.
-    if (lineBreak && (previous === "return" || previous === "throw" || previous === "yield" || previous === "async" || text.startsWith("=>", i))) {
+    if (
+      lineBreak &&
+      (previous === "return" ||
+        previous === "throw" ||
+        previous === "yield" ||
+        previous === "async" ||
+        text.startsWith("=>", i))
+    ) {
       result += "linebreak;";
     }
     lineBreak = false;
@@ -107,7 +165,10 @@ export function helperTokens(text: string): string | null {
     } else {
       let token = "";
       for (const operator of operators) {
-        if (text.startsWith(operator, i)) { token = operator; break; }
+        if (text.startsWith(operator, i)) {
+          token = operator;
+          break;
+        }
       }
       if (token === "" && "{}()[];,.?:=+-*%!~&|^<>".includes(ch)) token = ch;
       if (token === "") return null;

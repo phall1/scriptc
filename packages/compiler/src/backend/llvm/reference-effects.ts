@@ -13,42 +13,106 @@ type Call = IrExpr & { kind: "call" };
  * their payloads independently. Callback replacement uses a different IR. */
 export function preservesRegexInputs(method: string): boolean {
   switch (method) {
-    case "test": case "exec": case "match": case "search": case "matchAll":
-    case "replace": case "replaceAll": case "split": case "source":
-    case "flags": case "lastIndex": case "toString": return true;
-    default: return false;
+    case "test":
+    case "exec":
+    case "match":
+    case "search":
+    case "matchAll":
+    case "replace":
+    case "replaceAll":
+    case "split":
+    case "source":
+    case "flags":
+    case "lastIndex":
+    case "toString":
+      return true;
+    default:
+      return false;
   }
 }
 
 function expressionPreservesEdges(e: IrExpr, call: (value: Call) => boolean): boolean {
   switch (e.kind) {
-    case "numLit": case "boolLit": case "strLit": case "unitLit": case "varRef":
-    case "bin": case "unary": case "incDec": case "toBool": case "logical":
-    case "ternary": case "seqExpr": case "fieldGet": case "recordGet":
-    case "unionNarrow": case "unionIsTag": case "unionWrap": case "strConcat":
-    case "strEq": case "strCmp": case "arrayGet": case "arrayHas": case "arrayState":
-    case "unionEq": case "unionFuncEq": case "dynScalarEq":
-    case "caughtTest": case "caughtNarrow": case "caughtCheck": return true;
-    case "dynTest": return preservesDynTest(e.test);
-    case "assignExpr": return !isRefCounted(e.type);
-    case "strIntrinsic": return borrowsStringInputs(e.method);
-    case "regexIntrinsic": return preservesRegexInputs(e.method);
-    case "mapIntrinsic": case "setIntrinsic": return borrowsMapReadInputs(e);
-    case "libCall": return e.fn === "error.nodeThrow" || isStableReceiverOperand(e, "");
-    case "call": return call(e);
-    case "arrIntrinsic": return e.method === "length";
-    case "bytesIntrinsic": return e.method === "get" || e.method === "length" || e.method === "byteLength" ||
-      e.method === "byteOffset" || byteNumberAccess(e) !== null;
-    default: return false;
+    case "numLit":
+    case "boolLit":
+    case "strLit":
+    case "unitLit":
+    case "varRef":
+    case "bin":
+    case "unary":
+    case "incDec":
+    case "toBool":
+    case "logical":
+    case "ternary":
+    case "seqExpr":
+    case "fieldGet":
+    case "recordGet":
+    case "unionNarrow":
+    case "unionIsTag":
+    case "unionWrap":
+    case "strConcat":
+    case "strEq":
+    case "strCmp":
+    case "arrayGet":
+    case "arrayHas":
+    case "arrayState":
+    case "unionEq":
+    case "unionFuncEq":
+    case "dynScalarEq":
+    case "caughtTest":
+    case "caughtNarrow":
+    case "caughtCheck":
+      return true;
+    case "dynTest":
+      return preservesDynTest(e.test);
+    case "assignExpr":
+      return !isRefCounted(e.type);
+    case "strIntrinsic":
+      return borrowsStringInputs(e.method);
+    case "regexIntrinsic":
+      return preservesRegexInputs(e.method);
+    case "mapIntrinsic":
+    case "setIntrinsic":
+      return borrowsMapReadInputs(e);
+    case "libCall":
+      return e.fn === "error.nodeThrow" || isStableReceiverOperand(e, "");
+    case "call":
+      return call(e);
+    case "arrIntrinsic":
+      return e.method === "length";
+    case "bytesIntrinsic":
+      return (
+        e.method === "get" ||
+        e.method === "length" ||
+        e.method === "byteLength" ||
+        e.method === "byteOffset" ||
+        byteNumberAccess(e) !== null
+      );
+    default:
+      return false;
   }
 }
 
 function statementPreservesEdges(s: IrStmt): boolean {
   switch (s.kind) {
-    case "varDecl": case "exprStmt": case "return": case "if": case "for":
-    case "while": case "doWhile": case "block": case "break": case "continue": case "bytesSet": return true;
-    case "assign": case "fieldSet": case "recordSet": return !isRefCounted(s.value.type);
-    default: return false;
+    case "varDecl":
+    case "exprStmt":
+    case "return":
+    case "if":
+    case "for":
+    case "while":
+    case "doWhile":
+    case "block":
+    case "break":
+    case "continue":
+    case "bytesSet":
+      return true;
+    case "assign":
+    case "fieldSet":
+    case "recordSet":
+      return !isRefCounted(s.value.type);
+    default:
+      return false;
   }
 }
 
@@ -62,21 +126,30 @@ export class ReferenceEffects {
   readonly functions = new Set<string>();
   private readonly expressions = new Map<IrExpr, boolean>();
 
-  constructor(functions: ReadonlyMap<string, IrFunction>, private readonly intrinsicCall: (call: Call) => boolean) {
+  constructor(
+    functions: ReadonlyMap<string, IrFunction>,
+    private readonly intrinsicCall: (call: Call) => boolean,
+  ) {
     const callers = new Map<string, Set<string>>();
     const unsafe: string[] = [];
     for (const fn of functions.values()) {
-      const safe = !fn.async && !fn.generator && !fn.captures && !fn.classCaptures && everyStmtList(fn.body, {
-        stmt: statementPreservesEdges,
-        expr: (e) => expressionPreservesEdges(e, (call) => {
-          if (intrinsicCall(call)) return true;
-          if (!functions.has(call.callee)) return false;
-          let incoming = callers.get(call.callee);
-          if (!incoming) callers.set(call.callee, incoming = new Set());
-          incoming.add(fn.name);
-          return true;
-        }),
-      });
+      const safe =
+        !fn.async &&
+        !fn.generator &&
+        !fn.captures &&
+        !fn.classCaptures &&
+        everyStmtList(fn.body, {
+          stmt: statementPreservesEdges,
+          expr: (e) =>
+            expressionPreservesEdges(e, (call) => {
+              if (intrinsicCall(call)) return true;
+              if (!functions.has(call.callee)) return false;
+              let incoming = callers.get(call.callee);
+              if (!incoming) callers.set(call.callee, (incoming = new Set()));
+              incoming.add(fn.name);
+              return true;
+            }),
+        });
       if (safe) this.functions.add(fn.name);
       else unsafe.push(fn.name);
     }
@@ -93,9 +166,13 @@ export class ReferenceEffects {
     const known = this.expressions.get(value);
     if (known !== undefined) return known;
     const expr = (node: IrExpr): boolean => this.preserves(node);
-    const stmt = (node: IrStmt): boolean => statementPreservesEdges(node) && everyStmtChild(node, expr, stmt);
-    const result = expressionPreservesEdges(value, (call) => this.intrinsicCall(call) || this.functions.has(call.callee)) &&
-      everyExprChild(value, expr, stmt);
+    const stmt = (node: IrStmt): boolean =>
+      statementPreservesEdges(node) && everyStmtChild(node, expr, stmt);
+    const result =
+      expressionPreservesEdges(
+        value,
+        (call) => this.intrinsicCall(call) || this.functions.has(call.callee),
+      ) && everyExprChild(value, expr, stmt);
     this.expressions.set(value, result);
     return result;
   }

@@ -1,4 +1,14 @@
-import { BOOL, DYN, F64, UNDEFINED_T, type IrExpr, type IrStmt, type IrType, STRING, type SrcLoc } from "./ir.js";
+import {
+  BOOL,
+  DYN,
+  F64,
+  UNDEFINED_T,
+  type IrExpr,
+  type IrStmt,
+  type IrType,
+  STRING,
+  type SrcLoc,
+} from "./ir.js";
 
 export function varRef(localId: string, type: IrType, loc: SrcLoc): IrExpr {
   return { kind: "varRef", localId, type, loc };
@@ -19,11 +29,7 @@ export function boolLit(value: boolean, loc: SrcLoc): IrExpr {
 /** `for (i.0 = 0; i.0 < bound; i.0++)` over the conventional synthetic
  * index local. The bound expression remains in the condition and is
  * therefore evaluated once per iteration, matching the expanded IR. */
-export function countedFor(
-  loc: SrcLoc,
-  bound: IrExpr,
-  body: (index: IrExpr) => IrStmt[],
-): IrStmt {
+export function countedFor(loc: SrcLoc, bound: IrExpr, body: (index: IrExpr) => IrStmt[]): IrStmt {
   const index = varRef("i.0", F64, loc);
   return {
     kind: "for",
@@ -54,7 +60,13 @@ export function dynUndefinedExpr(loc: SrcLoc): IrExpr {
 /** An always-throwing Node error with the replaced expression's type.
  * Kinds: 0 Error, 1 TypeError, 2 RangeError, 5 ReferenceError. An empty
  * code omits the error code property. */
-export function nodeThrowExpr(kind: 0 | 1 | 2 | 5, code: string, message: string, type: IrType, loc: SrcLoc): IrExpr {
+export function nodeThrowExpr(
+  kind: 0 | 1 | 2 | 5,
+  code: string,
+  message: string,
+  type: IrType,
+  loc: SrcLoc,
+): IrExpr {
   return {
     kind: "libCall",
     fn: "error.nodeThrow",

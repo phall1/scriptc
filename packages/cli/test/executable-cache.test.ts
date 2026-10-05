@@ -14,7 +14,8 @@ const repoRoot = join(import.meta.dirname, "../../..");
 const cliEntry = join(repoRoot, "packages/cli/src/main.ts");
 const tsxLoader = join(dirname(require.resolve("tsx/package.json")), "dist/loader.mjs");
 const helperTarget = precompiledRuntimePackTarget();
-const persistentExecutable = helperTarget === null || platformLinkerSupportsPersistentCache(process.env, helperTarget);
+const persistentExecutable =
+  helperTarget === null || platformLinkerSupportsPersistentCache(process.env, helperTarget);
 
 test("exact executable repeats skip lowering while edits and damaged outputs stay correct", async () => {
   const dir = await mkdtemp(join(tmpdir(), "scriptc-cli-executable-cache-"));

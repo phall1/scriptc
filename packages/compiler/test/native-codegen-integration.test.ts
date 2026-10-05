@@ -10,16 +10,14 @@ import { MACOS_ARM64_TARGET } from "../src/backend/targets.js";
 import * as llvmSplit from "../src/backend/llvm/split.js";
 
 const execFileAsync = promisify(execFile);
-const supported = process.platform === "darwin" && process.arch === "arm64" &&
+const supported =
+  process.platform === "darwin" &&
+  process.arch === "arm64" &&
   Number.parseInt(osRelease().split(".", 1)[0] ?? "", 10) >= 24;
 const repoRoot = join(import.meta.dirname, "../../..");
 const require = createRequire(import.meta.url);
-const helperPackage = supported
-  ? require.resolve("@scriptc/llvm-darwin-arm64/package.json")
-  : "";
-const helper = supported
-  ? join(dirname(helperPackage), "bin", "scriptc-llvm-codegen")
-  : "";
+const helperPackage = supported ? require.resolve("@scriptc/llvm-darwin-arm64/package.json") : "";
+const helper = supported ? join(dirname(helperPackage), "bin", "scriptc-llvm-codegen") : "";
 const dirs: string[] = [];
 
 afterEach(async () => {
@@ -28,10 +26,23 @@ afterEach(async () => {
 
 function helperArgs(input: string, output: string, target = MACOS_ARM64_TARGET.llvmTriple) {
   return [
-    "emit", "--input", input, "--output", output,
-    "--filetype", "obj", "--target", target,
-    "--opt-level", "2", "--relocation-model", "pic",
-    "--diagnostic-format", "json", "--source-path", "/src/original.ts",
+    "emit",
+    "--input",
+    input,
+    "--output",
+    output,
+    "--filetype",
+    "obj",
+    "--target",
+    target,
+    "--opt-level",
+    "2",
+    "--relocation-model",
+    "pic",
+    "--diagnostic-format",
+    "json",
+    "--source-path",
+    "/src/original.ts",
   ];
 }
 
@@ -56,13 +67,18 @@ describe.runIf(supported)("LLVM native helper integration", () => {
     const split = vi.spyOn(llvmSplit, "splitLlvmProgram");
     try {
       const result = await compile(join(repoRoot, "tests/corpus/001-hello.ts"), {
-        outDir: dir, outPath: join(dir, "program"), backend: "llvm",
-        optimization: "dev", nativeProgramObject: true,
+        outDir: dir,
+        outPath: join(dir, "program"),
+        backend: "llvm",
+        optimization: "dev",
+        nativeProgramObject: true,
       });
       if (!result.ok) throw new Error(result.diagnostics.map((d) => d.message).join("\n"));
       expect(split).not.toHaveBeenCalled();
       expect(await run(result.binaryPath, [])).toEqual({
-        stdout: Buffer.from("hello world\n"), stderr: Buffer.alloc(0), exitCode: 0,
+        stdout: Buffer.from("hello world\n"),
+        stderr: Buffer.alloc(0),
+        exitCode: 0,
       });
     } finally {
       split.mockRestore();
@@ -74,7 +90,9 @@ describe.runIf(supported)("LLVM native helper integration", () => {
     dirs.push(dir);
     const input = join(dir, "pairs.ll");
     const output = join(dir, "pairs.s");
-    await writeFile(input, `
+    await writeFile(
+      input,
+      `
 define void @pairs(ptr noalias %out, ptr %a, ptr %b) {
   %a1 = getelementptr double, ptr %a, i64 1
   %b1 = getelementptr double, ptr %b, i64 1
@@ -91,7 +109,8 @@ define void @pairs(ptr noalias %out, ptr %a, ptr %b) {
   store double %r1, ptr %out1
   ret void
 }
-`);
+`,
+    );
     const args = helperArgs(input, output);
     args[args.indexOf("--filetype") + 1] = "asm";
     const result = await run(helper, args);
@@ -177,26 +196,36 @@ define void @pairs(ptr noalias %out, ptr %a, ptr %b) {
     const helperObject = join(dir, "001-hello.helper.o");
     const clangObject = join(dir, "001-hello.clang.o");
     await execFileAsync("clang", [
-      "-O2", "-Wno-override-module", "-target", MACOS_ARM64_TARGET.llvmTriple,
-      "-c", llvm, "-o", clangObject,
+      "-O2",
+      "-Wno-override-module",
+      "-target",
+      MACOS_ARM64_TARGET.llvmTriple,
+      "-c",
+      llvm,
+      "-o",
+      clangObject,
     ]);
 
     for (const object of [helperObject, clangObject]) {
-      await expect(execFileAsync("file", [object], { encoding: "utf8" }))
-        .resolves.toMatchObject({ stdout: expect.stringContaining("Mach-O 64-bit object arm64") });
-      const loadCommands = (await execFileAsync("otool", ["-l", object], { encoding: "utf8" })).stdout;
+      await expect(execFileAsync("file", [object], { encoding: "utf8" })).resolves.toMatchObject({
+        stdout: expect.stringContaining("Mach-O 64-bit object arm64"),
+      });
+      const loadCommands = (await execFileAsync("otool", ["-l", object], { encoding: "utf8" }))
+        .stdout;
       expect(loadCommands).toMatch(/LC_BUILD_VERSION[\s\S]*minos 14\.0/);
     }
     const sections = async (object: string) =>
-      [...(await execFileAsync("otool", ["-l", object], { encoding: "utf8" })).stdout
-        .matchAll(/sectname (\S+)[\s\S]*?segname (\S+)/g)]
-        .map((match) => `${match[2]},${match[1]}`).sort();
+      [
+        ...(await execFileAsync("otool", ["-l", object], { encoding: "utf8" })).stdout.matchAll(
+          /sectname (\S+)[\s\S]*?segname (\S+)/g,
+        ),
+      ]
+        .map((match) => `${match[2]},${match[1]}`)
+        .sort();
     for (const object of [helperObject, clangObject]) {
-      expect(await sections(object)).toEqual(expect.arrayContaining([
-        "__TEXT,__text",
-        "__TEXT,__eh_frame",
-        "__LD,__compact_unwind",
-      ]));
+      expect(await sections(object)).toEqual(
+        expect.arrayContaining(["__TEXT,__text", "__TEXT,__eh_frame", "__LD,__compact_unwind"]),
+      );
     }
     const relocations = async (object: string) =>
       (await execFileAsync("otool", ["-rv", object], { encoding: "utf8" })).stdout
@@ -205,19 +234,23 @@ define void @pairs(ptr noalias %out, ptr %a, ptr %b) {
         .map((line) => line.replace(/^\S+\s+/, "").trim())
         .sort();
     const [helperRelocations, clangRelocations] = await Promise.all([
-      relocations(helperObject), relocations(clangObject),
+      relocations(helperObject),
+      relocations(clangObject),
     ]);
     for (const kind of ["BR26", "PAGE21", "PAGOF12", "GOTLDP", "GOTLDPOF", "SUB", "UNSIGND"]) {
-      expect(helperRelocations.some((line) => line.includes(kind)), `helper lacks ${kind}`)
-        .toBe(clangRelocations.some((line) => line.includes(kind)));
+      expect(
+        helperRelocations.some((line) => line.includes(kind)),
+        `helper lacks ${kind}`,
+      ).toBe(clangRelocations.some((line) => line.includes(kind)));
     }
     const symbols = async (object: string, args: string[]) =>
       (await execFileAsync("nm", [...args, object], { encoding: "utf8" })).stdout
-        .trim().split("\n").filter(Boolean).sort();
-    expect(await symbols(helperObject, ["-u"]))
-      .toEqual(await symbols(clangObject, ["-u"]));
-    expect(await symbols(helperObject, ["-gU"]))
-      .toEqual(await symbols(clangObject, ["-gU"]));
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .sort();
+    expect(await symbols(helperObject, ["-u"])).toEqual(await symbols(clangObject, ["-u"]));
+    expect(await symbols(helperObject, ["-gU"])).toEqual(await symbols(clangObject, ["-gU"]));
     expect(await symbols(helperObject, ["-gU"])).toEqual(["0000000000000000 T _main"]);
     expect(await symbols(helperObject, ["-u"])).toContain("_scr_runtime_abi_v6");
 
@@ -244,12 +277,13 @@ define void @pairs(ptr noalias %out, ptr %a, ptr %b) {
       writeFile(firstEntry, 'console.log("first concurrent helper");\n'),
       writeFile(secondEntry, 'console.log("second concurrent helper");\n'),
     ]);
-    const build = (entry: string, output: string) => compile(entry, {
-      outDir: dir,
-      outPath: output,
-      backend: "llvm",
-      nativeProgramObject: true,
-    });
+    const build = (entry: string, output: string) =>
+      compile(entry, {
+        outDir: dir,
+        outPath: output,
+        backend: "llvm",
+        nativeProgramObject: true,
+      });
     const firstExe = join(dir, "first-program");
     const secondExe = join(dir, "second-program");
     const [first, second] = await Promise.all([
@@ -257,12 +291,15 @@ define void @pairs(ptr noalias %out, ptr %a, ptr %b) {
       build(secondEntry, secondExe),
     ]);
     if (!first.ok || !second.ok) throw new Error("concurrent helper builds failed");
-    const [firstRun, secondRun] = await Promise.all([
-      run(firstExe, []),
-      run(secondExe, []),
-    ]);
-    expect(firstRun).toMatchObject({ stdout: Buffer.from("first concurrent helper\n"), exitCode: 0 });
-    expect(secondRun).toMatchObject({ stdout: Buffer.from("second concurrent helper\n"), exitCode: 0 });
+    const [firstRun, secondRun] = await Promise.all([run(firstExe, []), run(secondExe, [])]);
+    expect(firstRun).toMatchObject({
+      stdout: Buffer.from("first concurrent helper\n"),
+      exitCode: 0,
+    });
+    expect(secondRun).toMatchObject({
+      stdout: Buffer.from("second concurrent helper\n"),
+      exitCode: 0,
+    });
   });
 
   test("partial executable-cache hits still emit the program object through the helper", async () => {
@@ -345,8 +382,9 @@ define void @pairs(ptr noalias %out, ptr %a, ptr %b) {
       });
       if (!result.ok) throw new Error(result.diagnostics.map((d) => d.message).join("\n"));
 
-      const stampName = (await readdir(join(cache, "early-exe"), { recursive: true }))
-        .find((path) => path.endsWith("stamp.json"));
+      const stampName = (await readdir(join(cache, "early-exe"), { recursive: true })).find(
+        (path) => path.endsWith("stamp.json"),
+      );
       expect(stampName).toBeDefined();
       const stamp = JSON.parse(await readFile(join(cache, "early-exe", stampName!), "utf8")) as {
         nativeDependencies: { path: string }[];
@@ -381,26 +419,35 @@ define void @pairs(ptr noalias %out, ptr %a, ptr %b) {
       await execFileAsync("ar", ["rcs", library, object]);
     };
     try {
-      await writeFile(entry, [
-        "declare function nativeValue(): number;",
-        "console.log(nativeValue());",
-        "",
-      ].join("\n"));
-      await writeFile(profile, JSON.stringify({
-        ffi_format: 1,
-        functions: [{
-          name: "nativeValue",
-          symbol: "scriptc_cache_probe",
-          params: [],
-          returns: "f64",
-        }],
-        libraries: [],
-        system_libraries: ["scriptc_cache_probe"],
-      }));
+      await writeFile(
+        entry,
+        ["declare function nativeValue(): number;", "console.log(nativeValue());", ""].join("\n"),
+      );
+      await writeFile(
+        profile,
+        JSON.stringify({
+          ffi_format: 1,
+          functions: [
+            {
+              name: "nativeValue",
+              symbol: "scriptc_cache_probe",
+              params: [],
+              returns: "f64",
+            },
+          ],
+          libraries: [],
+          system_libraries: ["scriptc_cache_probe"],
+        }),
+      );
       process.env["SCRIPTC_CACHE_DIR"] = cache;
       delete process.env["SCRIPTC_NO_CACHE"];
       process.env["LIBRARY_PATH"] = dir;
-      const options = { outDir: dir, outPath: output, backend: "llvm" as const, ffiProfilePath: profile };
+      const options = {
+        outDir: dir,
+        outPath: output,
+        backend: "llvm" as const,
+        ffiProfilePath: profile,
+      };
 
       await rebuildLibrary(1);
       const first = await compile(entry, options);
@@ -439,37 +486,56 @@ define void @pairs(ptr noalias %out, ptr %a, ptr %b) {
     try {
       await Promise.all([
         writeFile(entry, 'console.log("program");\n'),
-        writeFile(firstSource, [
-          "#include <unistd.h>",
-          '__attribute__((constructor)) static void marker(void) { write(1, "first\\n", 6); }',
-          "",
-        ].join("\n")),
-        writeFile(secondSource, [
-          "#include <unistd.h>",
-          '__attribute__((constructor)) static void marker(void) { write(1, "second\\n", 7); }',
-          "",
-        ].join("\n")),
-        writeFile(wrapper, [
-          "#!/bin/sh",
-          'for arg in "$@"; do',
-          '  if [ "$arg" = "-c" ]; then exec /usr/bin/clang "$@"; fi',
-          "done",
-          'has_output=""',
-          'for arg in "$@"; do [ "$arg" = "-o" ] && has_output=1; done',
-          'if [ -n "$has_output" ] && [ -n "$SCRIPTC_TEST_LINK_INPUT" ]; then',
-          '  exec /usr/bin/clang "$@" "$SCRIPTC_TEST_LINK_INPUT"',
-          "fi",
-          'exec /usr/bin/clang "$@"',
-          "",
-        ].join("\n")),
+        writeFile(
+          firstSource,
+          [
+            "#include <unistd.h>",
+            '__attribute__((constructor)) static void marker(void) { write(1, "first\\n", 6); }',
+            "",
+          ].join("\n"),
+        ),
+        writeFile(
+          secondSource,
+          [
+            "#include <unistd.h>",
+            '__attribute__((constructor)) static void marker(void) { write(1, "second\\n", 7); }',
+            "",
+          ].join("\n"),
+        ),
+        writeFile(
+          wrapper,
+          [
+            "#!/bin/sh",
+            'for arg in "$@"; do',
+            '  if [ "$arg" = "-c" ]; then exec /usr/bin/clang "$@"; fi',
+            "done",
+            'has_output=""',
+            'for arg in "$@"; do [ "$arg" = "-o" ] && has_output=1; done',
+            'if [ -n "$has_output" ] && [ -n "$SCRIPTC_TEST_LINK_INPUT" ]; then',
+            '  exec /usr/bin/clang "$@" "$SCRIPTC_TEST_LINK_INPUT"',
+            "fi",
+            'exec /usr/bin/clang "$@"',
+            "",
+          ].join("\n"),
+        ),
       ]);
       await chmod(wrapper, 0o755);
       await Promise.all([
         execFileAsync("/usr/bin/clang", [
-          "-target", MACOS_ARM64_TARGET.llvmTriple, "-c", firstSource, "-o", firstObject,
+          "-target",
+          MACOS_ARM64_TARGET.llvmTriple,
+          "-c",
+          firstSource,
+          "-o",
+          firstObject,
         ]),
         execFileAsync("/usr/bin/clang", [
-          "-target", MACOS_ARM64_TARGET.llvmTriple, "-c", secondSource, "-o", secondObject,
+          "-target",
+          MACOS_ARM64_TARGET.llvmTriple,
+          "-c",
+          secondSource,
+          "-o",
+          secondObject,
         ]),
       ]);
       process.env["PATH"] = `${dir}:${oldPath ?? "/usr/bin:/bin"}`;
@@ -480,12 +546,16 @@ define void @pairs(ptr noalias %out, ptr %a, ptr %b) {
       process.env["SCRIPTC_TEST_LINK_INPUT"] = firstObject;
       const first = await compile(entry, options);
       if (!first.ok) throw new Error(first.diagnostics.map((d) => d.message).join("\n"));
-      expect((await execFileAsync(output, [], { encoding: "utf8" })).stdout).toBe("first\nprogram\n");
+      expect((await execFileAsync(output, [], { encoding: "utf8" })).stdout).toBe(
+        "first\nprogram\n",
+      );
 
       process.env["SCRIPTC_TEST_LINK_INPUT"] = secondObject;
       const second = await compile(entry, options);
       if (!second.ok) throw new Error(second.diagnostics.map((d) => d.message).join("\n"));
-      expect((await execFileAsync(output, [], { encoding: "utf8" })).stdout).toBe("second\nprogram\n");
+      expect((await execFileAsync(output, [], { encoding: "utf8" })).stdout).toBe(
+        "second\nprogram\n",
+      );
     } finally {
       if (oldPath === undefined) delete process.env["PATH"];
       else process.env["PATH"] = oldPath;
@@ -509,8 +579,11 @@ define void @pairs(ptr noalias %out, ptr %a, ptr %b) {
       ffiProfilePath: join(repoRoot, "tests/ffi/profile.json"),
     });
     if (!result.ok) throw new Error(result.diagnostics.map((d) => d.message).join("\n"));
-    const undefinedSymbols = (await execFileAsync("nm", ["-u", object], { encoding: "utf8" }))
-      .stdout.trim().split("\n");
+    const undefinedSymbols = (
+      await execFileAsync("nm", ["-u", object], { encoding: "utf8" })
+    ).stdout
+      .trim()
+      .split("\n");
     expect(undefinedSymbols).toContain("_sf_scale");
     expect(undefinedSymbols).toContain("_sf_callback_mix");
     expect(undefinedSymbols).toContain("_scr_runtime_abi_v6");
@@ -521,22 +594,30 @@ define void @pairs(ptr noalias %out, ptr %a, ptr %b) {
     dirs.push(dir);
     const entry = join(dir, "main.ts");
     const profile = join(dir, "ffi.json");
-    await writeFile(entry, [
-      "declare function nativeMix(value: number, text: string, bytes: Uint8Array): number;",
-      "console.log(nativeMix(2, 'ok', new Uint8Array([1, 2])));",
-      "",
-    ].join("\n"));
-    await writeFile(profile, JSON.stringify({
-      ffi_format: 1,
-      functions: [{
-        name: "nativeMix",
-        symbol: "native_mix",
-        params: ["f64", "string", "bytes"],
-        returns: "f64",
-      }],
-      libraries: [],
-      system_libraries: [],
-    }));
+    await writeFile(
+      entry,
+      [
+        "declare function nativeMix(value: number, text: string, bytes: Uint8Array): number;",
+        "console.log(nativeMix(2, 'ok', new Uint8Array([1, 2])));",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(
+      profile,
+      JSON.stringify({
+        ffi_format: 1,
+        functions: [
+          {
+            name: "nativeMix",
+            symbol: "native_mix",
+            params: ["f64", "string", "bytes"],
+            returns: "f64",
+          },
+        ],
+        libraries: [],
+        system_libraries: [],
+      }),
+    );
     const object = join(dir, "helper.o");
     const result = await compile(entry, {
       outDir: dir,
@@ -552,17 +633,26 @@ define void @pairs(ptr noalias %out, ptr %a, ptr %b) {
       outputKind: "llvm",
       ffiProfilePath: profile,
     });
-    if (!sourceResult.ok) throw new Error(sourceResult.diagnostics.map((d) => d.message).join("\n"));
+    if (!sourceResult.ok)
+      throw new Error(sourceResult.diagnostics.map((d) => d.message).join("\n"));
     const clangObject = join(dir, "clang.o");
     await execFileAsync("clang", [
-      "-O2", "-Wno-override-module", "-target", MACOS_ARM64_TARGET.llvmTriple,
-      "-c", llvm, "-o", clangObject,
+      "-O2",
+      "-Wno-override-module",
+      "-target",
+      MACOS_ARM64_TARGET.llvmTriple,
+      "-c",
+      llvm,
+      "-o",
+      clangObject,
     ]);
     const nativeMixSignature = (await readFile(llvm, "utf8"))
-      .split("\n").find((line) => line.includes("@native_mix("));
+      .split("\n")
+      .find((line) => line.includes("@native_mix("));
     expect(nativeMixSignature).toBe("declare double @native_mix(double, ptr, i64, ptr, i64)");
     for (const candidate of [object, clangObject]) {
-      const undefinedSymbols = (await execFileAsync("nm", ["-u", candidate], { encoding: "utf8" })).stdout;
+      const undefinedSymbols = (await execFileAsync("nm", ["-u", candidate], { encoding: "utf8" }))
+        .stdout;
       expect(undefinedSymbols).toContain("_native_mix");
     }
   });

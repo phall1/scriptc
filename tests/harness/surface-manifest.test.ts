@@ -103,10 +103,16 @@ describe("surface manifest generation", () => {
     // Every kind and every status class is populated — an empty class
     // means a projection source silently dropped out.
     for (const kind of ["syntax", "stdlib", "node-builtin", "diagnostic-fence"]) {
-      expect(manifest.entries.some((e) => e.kind === kind), `no ${kind} entries`).toBe(true);
+      expect(
+        manifest.entries.some((e) => e.kind === kind),
+        `no ${kind} entries`,
+      ).toBe(true);
     }
     for (const status of ["static", "dynamic-only", "unsupported"]) {
-      expect(manifest.entries.some((e) => e.status === status), `no ${status} entries`).toBe(true);
+      expect(
+        manifest.entries.some((e) => e.status === status),
+        `no ${status} entries`,
+      ).toBe(true);
     }
   });
 });
@@ -123,14 +129,27 @@ interface Probe {
 
 const PROBES: Probe[] = [
   // status static — these must compile to a binary
-  { id: "syntax.compound-assignment.plus", source: 'let x = 1;\nx += 2;\nconsole.log(x);\n' },
-  { id: "syntax.spread-arguments", source: 'function add(a: number, b: number): number { return a + b; }\nconst args: [number, number] = [1, 2];\nconsole.log(add(...args));\n' },
+  { id: "syntax.compound-assignment.plus", source: "let x = 1;\nx += 2;\nconsole.log(x);\n" },
+  {
+    id: "syntax.spread-arguments",
+    source:
+      "function add(a: number, b: number): number { return a + b; }\nconst args: [number, number] = [1, 2];\nconsole.log(add(...args));\n",
+  },
   { id: "stdlib.string.charCodeAt", source: 'console.log("abc".charCodeAt(0));\n' },
   { id: "stdlib.string.replace", source: 'console.log("aa".replace("a", "b"));\n' },
   { id: "stdlib.string.replaceAll", source: 'console.log("aa".replaceAll("a", "b"));\n' },
-  { id: "stdlib.array.push", source: "const xs: number[] = [1];\nxs.push(2);\nconsole.log(xs.length);\n" },
-  { id: "stdlib.array.unshift", source: "const xs: number[] = [2];\nconsole.log(xs.unshift(1), xs[0]);\n" },
-  { id: "stdlib.array.reverse", source: "const xs: number[] = [1, 2];\nconsole.log(xs.reverse()[0]);\n" },
+  {
+    id: "stdlib.array.push",
+    source: "const xs: number[] = [1];\nxs.push(2);\nconsole.log(xs.length);\n",
+  },
+  {
+    id: "stdlib.array.unshift",
+    source: "const xs: number[] = [2];\nconsole.log(xs.unshift(1), xs[0]);\n",
+  },
+  {
+    id: "stdlib.array.reverse",
+    source: "const xs: number[] = [1, 2];\nconsole.log(xs.reverse()[0]);\n",
+  },
   { id: "stdlib.math.floor", source: "console.log(Math.floor(1.5));\n" },
   { id: "stdlib.math.sqrt", source: "console.log(Math.sqrt(4));\n" },
   { id: "stdlib.math.tan", source: "console.log(Math.tan(2));\n" },
@@ -139,14 +158,21 @@ const PROBES: Probe[] = [
   { id: "stdlib.math.log1p", source: "console.log(Math.log1p(0.5));\n" },
   { id: "stdlib.math.imul", source: "console.log(Math.imul(-1, 3));\n" },
   { id: "stdlib.math.fround", source: "console.log(Math.fround(1.5));\n" },
-  { id: "stdlib.map.has", source: 'const m = new Map<string, number>();\nm.set("a", 1);\nconsole.log(m.has("a"));\n' },
+  {
+    id: "stdlib.map.has",
+    source: 'const m = new Map<string, number>();\nm.set("a", 1);\nconsole.log(m.has("a"));\n',
+  },
   { id: "stdlib.date.now", source: "console.log(Date.now() > 0);\n" },
   { id: "stdlib.date.parse", source: 'console.log(Date.parse("2026-07-17T00:00:00Z"));\n' },
   { id: "stdlib.number.toFixed", source: "const n = 1.2345;\nconsole.log(n.toFixed(2));\n" },
-  { id: "stdlib.abort-signal.timeout", source: "const signal = AbortSignal.timeout(1000);\nconsole.log(signal.aborted);\n" },
+  {
+    id: "stdlib.abort-signal.timeout",
+    source: "const signal = AbortSignal.timeout(1000);\nconsole.log(signal.aborted);\n",
+  },
   {
     id: "stdlib.abort-controller.constructor",
-    source: "const controller = new AbortController();\ncontroller.abort();\nconsole.log(controller.signal.aborted);\n",
+    source:
+      "const controller = new AbortController();\ncontroller.abort();\nconsole.log(controller.signal.aborted);\n",
   },
   {
     id: "stdlib.readable-stream.constructor",
@@ -161,9 +187,18 @@ const PROBES: Probe[] = [
     source: '/// <reference types="node" />\nvoid new Response("ok");\n',
   },
   { id: "node-builtin.process.pid", source: "console.log(process.pid > 0);\n" },
-  { id: "node-builtin.perf_hooks.performance.now", source: "console.log(performance.now() >= 0);\n" },
-  { id: "node-builtin.path.join", source: 'import { join } from "node:path";\nconsole.log(join("a", "b"));\n' },
-  { id: "node-builtin.os.EOL", source: 'import { EOL } from "node:os";\nconsole.log(EOL.length);\n' },
+  {
+    id: "node-builtin.perf_hooks.performance.now",
+    source: "console.log(performance.now() >= 0);\n",
+  },
+  {
+    id: "node-builtin.path.join",
+    source: 'import { join } from "node:path";\nconsole.log(join("a", "b"));\n',
+  },
+  {
+    id: "node-builtin.os.EOL",
+    source: 'import { EOL } from "node:os";\nconsole.log(EOL.length);\n',
+  },
   { id: "stdlib.math.PI", source: "console.log(Math.PI);\n" },
   { id: "stdlib.math.E", source: "console.log(Math.E);\n" },
   { id: "stdlib.math.SQRT2", source: "console.log(Math.SQRT2);\n" },
@@ -171,7 +206,8 @@ const PROBES: Probe[] = [
   // analyzed clean under --dynamic
   {
     id: "stdlib.headers.entries",
-    source: '/// <reference types="node" />\nasync function f(): Promise<void> {\n  const r = await fetch("http://127.0.0.1");\n  void r.headers.entries();\n}\nvoid f();\n',
+    source:
+      '/// <reference types="node" />\nasync function f(): Promise<void> {\n  const r = await fetch("http://127.0.0.1");\n  void r.headers.entries();\n}\nvoid f();\n',
   },
   {
     id: "stdlib.request.constructor",
@@ -179,7 +215,8 @@ const PROBES: Probe[] = [
   },
   {
     id: "stdlib.headers.symbol.iterator",
-    source: '/// <reference types="node" />\nfunction f([first]: Headers): void {\n  void first;\n}\nvoid f;\n',
+    source:
+      '/// <reference types="node" />\nfunction f([first]: Headers): void {\n  void first;\n}\nvoid f;\n',
   },
   { id: "diagnostic.sc2011", source: "const y: any = 1;\nconst { z } = y;\nconsole.log(0);\n" },
   // status unsupported — refused with the entry's code
@@ -197,23 +234,28 @@ const PROBES: Probe[] = [
   },
   {
     id: "stdlib.response.clone",
-    source: '/// <reference types="node" />\nasync function f(): Promise<void> {\n  const r = await fetch("http://127.0.0.1");\n  void r.clone();\n}\nvoid f();\n',
+    source:
+      '/// <reference types="node" />\nasync function f(): Promise<void> {\n  const r = await fetch("http://127.0.0.1");\n  void r.clone();\n}\nvoid f();\n',
   },
   {
     id: "stdlib.readable-stream.tee",
-    source: '/// <reference types="node" />\ntype BodyStream = ReadableStream<Uint8Array>;\nfunction f(s: BodyStream): void {\n  void s.tee();\n}\nconsole.log(typeof f);\n',
+    source:
+      '/// <reference types="node" />\ntype BodyStream = ReadableStream<Uint8Array>;\nfunction f(s: BodyStream): void {\n  void s.tee();\n}\nconsole.log(typeof f);\n',
   },
   {
     id: "stdlib.fetch.request-init.cache",
-    source: '/// <reference types="node" />\nconst init: RequestInit = { cache: "no-store" };\nvoid fetch("http://127.0.0.1", init);\nvoid fetch("http://127.0.0.1", { ...({ cache: "no-store" } as const) });\n',
+    source:
+      '/// <reference types="node" />\nconst init: RequestInit = { cache: "no-store" };\nvoid fetch("http://127.0.0.1", init);\nvoid fetch("http://127.0.0.1", { ...({ cache: "no-store" } as const) });\n',
   },
   {
     id: "stdlib.fetch.request-init.dispatcher",
-    source: '/// <reference types="node" />\nvoid fetch("http://127.0.0.1", { dispatcher: JSON.parse("{}") });\n',
+    source:
+      '/// <reference types="node" />\nvoid fetch("http://127.0.0.1", { dispatcher: JSON.parse("{}") });\n',
   },
   {
     id: "stdlib.readable-stream.symbol.asyncIterator",
-    source: '/// <reference types="node" />\nfunction f(s: ReadableStream<Uint8Array>): void {\n  void s[Symbol.asyncIterator]();\n}\nvoid f;\n',
+    source:
+      '/// <reference types="node" />\nfunction f(s: ReadableStream<Uint8Array>): void {\n  void s[Symbol.asyncIterator]();\n}\nvoid f;\n',
   },
   { id: "syntax.debugger-statements", source: "debugger;\nconsole.log(0);\n" },
   {
@@ -223,10 +265,15 @@ const PROBES: Probe[] = [
   },
   // Class-instance field/getter destructures graduated (corpus 2429); the
   // METHOD-extraction refusal carries the sample now.
-  { id: "diagnostic.sc1031", source: "class C {\n  f = 1;\n  m(): number {\n    return this.f;\n  }\n}\nconst { m } = new C();\nconsole.log(m());\n" },
+  {
+    id: "diagnostic.sc1031",
+    source:
+      "class C {\n  f = 1;\n  m(): number {\n    return this.f;\n  }\n}\nconst { m } = new C();\nconsole.log(m());\n",
+  },
   {
     id: "node-builtin.zlib.brotliCompressSync",
-    source: 'import { brotliCompressSync } from "node:zlib";\nbrotliCompressSync(Buffer.from("data"));\nconsole.log(0);\n',
+    source:
+      'import { brotliCompressSync } from "node:zlib";\nbrotliCompressSync(Buffer.from("data"));\nconsole.log(0);\n',
   },
 ];
 
@@ -331,10 +378,7 @@ test("unsupported RequestInit keys remain fenced through imported const aliases"
     join(root, "tsconfig.json"),
     `${JSON.stringify({ compilerOptions: { strict: true, skipLibCheck: true } }, null, 2)}\n`,
   );
-  writeFileSync(
-    initFile,
-    'export const init = { method: "GET", cache: "no-store" } as const;\n',
-  );
+  writeFileSync(initFile, 'export const init = { method: "GET", cache: "no-store" } as const;\n');
   writeFileSync(
     mainFile,
     'import { init } from "./init.js";\nvoid fetch("http://127.0.0.1", init);\n',
@@ -359,10 +403,10 @@ test("RequestInit fences statically traceable property and conditional values", 
       '/// <reference types="node" />\n' +
       'const options = { init: { cache: "no-store" } } as const;\n' +
       'void fetch("http://127.0.0.1", options.init);\n' +
-      'const enabled = true;\n' +
+      "const enabled = true;\n" +
       'const init: RequestInit = enabled ? { cache: "no-store" } : { method: "GET" };\n' +
       'void fetch("http://127.0.0.1", init);\n' +
-      'const disabled = false;\n' +
+      "const disabled = false;\n" +
       'const safe: RequestInit = disabled ? { cache: "no-store" } : { method: "GET" };\n' +
       'void fetch("http://127.0.0.1", safe);\n',
   });
@@ -438,7 +482,7 @@ test("RequestInit tracing stops at property-mutated const objects", () => {
     source:
       '/// <reference types="node" />\n' +
       'const init: RequestInit = { cache: "no-store" };\n' +
-      'init.cache = undefined;\n' +
+      "init.cache = undefined;\n" +
       'void fetch("http://127.0.0.1", init);\n',
   });
   for (const dynamic of [false, true]) {
@@ -455,10 +499,10 @@ test("RequestInit traces const object and tuple binding aliases", () => {
     source:
       '/// <reference types="node" />\n' +
       'const options = { wrapper: { init: { cache: "no-store" } } } as const;\n' +
-      'const { wrapper: { init } } = options;\n' +
+      "const { wrapper: { init } } = options;\n" +
       'void fetch("http://127.0.0.1", init);\n' +
       'const tuple = [{ cache: "no-store" }] as const;\n' +
-      'const [tupleInit] = tuple;\n' +
+      "const [tupleInit] = tuple;\n" +
       'void fetch("http://127.0.0.1", tupleInit);\n',
   });
   const entry = entryById.get("stdlib.fetch.request-init.cache");
@@ -492,12 +536,12 @@ test("finite unions of dynamic-only Headers members retain the static fence", ()
     id: "stdlib.headers.dynamic-member-union",
     source:
       '/// <reference types="node" />\n' +
-      'async function f(select: boolean): Promise<void> {\n' +
+      "async function f(select: boolean): Promise<void> {\n" +
       '  const response = await fetch("http://127.0.0.1");\n' +
       '  const member: "keys" | "values" = select ? "keys" : "values";\n' +
-      '  void response.headers[member]();\n' +
-      '}\n' +
-      'void f;\n',
+      "  void response.headers[member]();\n" +
+      "}\n" +
+      "void f;\n",
   });
   const entry = entryById.get("stdlib.headers.keys");
   expect(entry).toBeDefined();
@@ -515,15 +559,15 @@ test("fetch handle method calls retain their receiver through bracket spellings"
     id: "stdlib.fetch.bracket-method-calls",
     source:
       '/// <reference types="node" />\n' +
-      'async function f(): Promise<void> {\n' +
+      "async function f(): Promise<void> {\n" +
       '  const response = await fetch("http://127.0.0.1");\n' +
       '  const header: string | null = response.headers["get"]("x-kind");\n' +
       '  const text: string = await response["text"]();\n' +
       '  const member: "get" | "has" = header === null ? "get" : "has";\n' +
       '  const selected: string | boolean | null = response.headers[member]("x-kind");\n' +
-      '  void text; void selected;\n' +
-      '}\n' +
-      'void f;\n',
+      "  void text; void selected;\n" +
+      "}\n" +
+      "void f;\n",
   });
   for (const dynamic of [false, true]) {
     const coverage = analyze(file, { dynamic }).coverage;
@@ -538,13 +582,13 @@ test("static Response method unions retain their declared promise result", () =>
     id: "stdlib.response.computed-body-method-union",
     source:
       '/// <reference types="node" />\n' +
-      'async function f(select: boolean): Promise<void> {\n' +
+      "async function f(select: boolean): Promise<void> {\n" +
       '  const response = await fetch("http://127.0.0.1");\n' +
       '  const member: "text" | "bytes" = select ? "text" : "bytes";\n' +
-      '  const body: string | Uint8Array = await response[member]();\n' +
-      '  void body;\n' +
-      '}\n' +
-      'void f;\n',
+      "  const body: string | Uint8Array = await response[member]();\n" +
+      "  void body;\n" +
+      "}\n" +
+      "void f;\n",
   });
   const coverage = analyze(file).coverage;
   expect(coverage.preflightFailed).toBe(false);
@@ -558,11 +602,11 @@ test("fetch companion surplus arguments remain supported under --dynamic", () =>
   const file = join(dir, "main.js");
   writeFileSync(
     file,
-    'const side = () => 1;\n' +
-      'void AbortSignal.abort(undefined, side());\n' +
-      'void AbortSignal.timeout(1, side());\n' +
-      'void AbortSignal.any([], side());\n' +
-      'void ReadableStream.from([], side());\n',
+    "const side = () => 1;\n" +
+      "void AbortSignal.abort(undefined, side());\n" +
+      "void AbortSignal.timeout(1, side());\n" +
+      "void AbortSignal.any([], side());\n" +
+      "void ReadableStream.from([], side());\n",
   );
   for (const dynamic of [false, true]) {
     const coverage = analyze(file, { dynamic }).coverage;
@@ -577,11 +621,11 @@ test("fetch interface object bindings retain the inventory fence code", () => {
     id: "stdlib.fetch.object-binding-fences",
     source:
       '/// <reference types="node" />\n' +
-      'function headers(value: Headers): void { const { entries } = value; }\n' +
-      'function response(value: Response): void { const { clone } = value; }\n' +
-      'function stream(value: ReadableStream<Uint8Array>): void { const { tee } = value; }\n' +
-      'function assign(value: Headers, entries: unknown): void { ({ entries } = value); }\n' +
-      'void headers; void response; void stream; void assign;\n',
+      "function headers(value: Headers): void { const { entries } = value; }\n" +
+      "function response(value: Response): void { const { clone } = value; }\n" +
+      "function stream(value: ReadableStream<Uint8Array>): void { const { tee } = value; }\n" +
+      "function assign(value: Headers, entries: unknown): void { ({ entries } = value); }\n" +
+      "void headers; void response; void stream; void assign;\n",
   });
   const { coverage } = analyze(file);
   expect(coverage.preflightFailed).toBe(false);
@@ -597,10 +641,10 @@ test("static AbortController method reads fence instead of yielding undefined", 
     id: "stdlib.abort-controller.method-read-fence",
     source:
       '/// <reference types="node" />\n' +
-      'const controller = new AbortController();\n' +
-      'void controller.abort;\n' +
+      "const controller = new AbortController();\n" +
+      "void controller.abort;\n" +
       'void controller["abort"];\n' +
-      'void controller.signal;\n',
+      "void controller.signal;\n",
   });
   const { coverage } = analyze(file);
   expect(coverage.preflightFailed).toBe(false);
@@ -608,9 +652,7 @@ test("static AbortController method reads fence instead of yielding undefined", 
   expect(coverage.diagnostics).toHaveLength(2);
   expect(
     coverage.diagnostics.every((d) =>
-      d.message.includes(
-        "AbortController.abort through method extraction in a static build",
-      )
+      d.message.includes("AbortController.abort through method extraction in a static build"),
     ),
   ).toBe(true);
 
@@ -625,12 +667,12 @@ test("static fetch data properties remain destructurable in JavaScript", () => {
   const file = join(dir, "main.js");
   writeFileSync(
     file,
-      '/** @param {Response} response */\n' +
-      'function readResponse(response) {\n' +
-      '  const { status, ok } = response;\n' +
-      '  console.log(status, ok);\n' +
-      '}\n' +
-      'void readResponse;\n',
+    "/** @param {Response} response */\n" +
+      "function readResponse(response) {\n" +
+      "  const { status, ok } = response;\n" +
+      "  console.log(status, ok);\n" +
+      "}\n" +
+      "void readResponse;\n",
   );
   for (const dynamic of [false, true]) {
     const coverage = analyze(file, { dynamic }).coverage;
@@ -645,13 +687,13 @@ test("unimplemented Response and ReadableStream calls stay fenced under --dynami
     id: "stdlib.fetch.unimplemented-dynamic-methods",
     source:
       '/// <reference types="node" />\n' +
-      'function response(value: Response): void {\n' +
-      '  void value.clone(); void value.blob(); void value.formData();\n' +
-      '}\n' +
-      'function stream(value: ReadableStream<Uint8Array>): void {\n' +
-      '  void value.tee(); void value.pipeTo(null as never);\n' +
-      '}\n' +
-      'void response; void stream;\n',
+      "function response(value: Response): void {\n" +
+      "  void value.clone(); void value.blob(); void value.formData();\n" +
+      "}\n" +
+      "function stream(value: ReadableStream<Uint8Array>): void {\n" +
+      "  void value.tee(); void value.pipeTo(null as never);\n" +
+      "}\n" +
+      "void response; void stream;\n",
   });
   for (const dynamic of [false, true]) {
     const coverage = analyze(file, { dynamic }).coverage;
@@ -666,10 +708,10 @@ test("unsupported symbol object bindings remain fenced under --dynamic", () => {
     id: "stdlib.fetch.object-binding-unsupported-symbol",
     source:
       '/// <reference types="node" />\n' +
-      'function stream(value: ReadableStream<Uint8Array>): void {\n' +
-      '  const { [Symbol.asyncIterator]: iterator } = value;\n' +
-      '}\n' +
-      'void stream;\n',
+      "function stream(value: ReadableStream<Uint8Array>): void {\n" +
+      "  const { [Symbol.asyncIterator]: iterator } = value;\n" +
+      "}\n" +
+      "void stream;\n",
   });
   for (const dynamic of [false, true]) {
     const coverage = analyze(file, { dynamic }).coverage;
@@ -685,8 +727,8 @@ test("constructing a spread RequestInit does not apply fetch conversion fences",
     file,
     'interface RequestInit { cache?: "no-store"; }\n' +
       'const base = { cache: "no-store" } as const;\n' +
-      'const init: RequestInit = { ...base };\n' +
-      'void init;\n',
+      "const init: RequestInit = { ...base };\n" +
+      "void init;\n",
   );
   const { coverage } = analyze(file);
   expect(coverage.preflightFailed).toBe(false);

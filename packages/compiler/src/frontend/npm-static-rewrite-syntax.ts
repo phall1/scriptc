@@ -73,7 +73,12 @@
  * offender attribution degrades the PACKAGE to the island with a note. */
 
 import * as ts from "./ts7/syntax.js";
-import { bareRequireSpecOf, cjsLexedExportsOfFile, isExportsIdent, isModuleExports } from "./cjs-syntax.js";
+import {
+  bareRequireSpecOf,
+  cjsLexedExportsOfFile,
+  isExportsIdent,
+  isModuleExports,
+} from "./cjs-syntax.js";
 import { rewriteBundledFunctionImports } from "./npm-static-bundled-cjs.js";
 
 /** Resolution stays with the compilation host. Syntax never reads disk or
@@ -84,9 +89,13 @@ export interface CjsRewriteHost {
 }
 
 export function isBundlerCjsCandidate(source: string): boolean {
-  return source.includes("__toCommonJS") || source.includes("__toESM")
-    || source.includes("__exportStar") || source.includes("__reExport")
-    || (source.includes("Object.defineProperty(exports") && source.includes("get"));
+  return (
+    source.includes("__toCommonJS") ||
+    source.includes("__toESM") ||
+    source.includes("__exportStar") ||
+    source.includes("__reExport") ||
+    (source.includes("Object.defineProperty(exports") && source.includes("get"))
+  );
 }
 
 /** The last NAME of a callee: bare identifier or any member chain's final
@@ -94,7 +103,8 @@ export function isBundlerCjsCandidate(source: string): boolean {
 function calleeNameOf(call: ts.CallExpression): string | null {
   const callee = call.expression;
   if (ts.isIdentifier(callee)) return callee.text;
-  if (ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.name)) return callee.name.text;
+  if (ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.name))
+    return callee.name.text;
   return null;
 }
 
@@ -130,8 +140,12 @@ function chaseValue(e: ts.Expression): { kind: "ident" | "hoist"; text: string }
   // free reads the tail const can evaluate once.
   let walk: ts.Expression = cur;
   while (
-    (ts.isPropertyAccessExpression(walk) && walk.questionDotToken === undefined && ts.isIdentifier(walk.name)) ||
-    (ts.isElementAccessExpression(walk) && walk.questionDotToken === undefined && ts.isStringLiteral(walk.argumentExpression))
+    (ts.isPropertyAccessExpression(walk) &&
+      walk.questionDotToken === undefined &&
+      ts.isIdentifier(walk.name)) ||
+    (ts.isElementAccessExpression(walk) &&
+      walk.questionDotToken === undefined &&
+      ts.isStringLiteral(walk.argumentExpression))
   ) {
     walk = walk.expression;
   }
@@ -146,7 +160,8 @@ function getterReturnOf(fn: ts.Node): ts.Expression | null {
   let body: ts.ConciseBody | undefined;
   if (ts.isArrowFunction(fn) && fn.parameters.length === 0) body = fn.body;
   else if (ts.isFunctionExpression(fn) && fn.parameters.length === 0) body = fn.body;
-  else if (ts.isMethodDeclaration(fn) && fn.parameters.length === 0 && fn.body !== undefined) body = fn.body;
+  else if (ts.isMethodDeclaration(fn) && fn.parameters.length === 0 && fn.body !== undefined)
+    body = fn.body;
   else return null;
   if (body === undefined) return null;
   if (!ts.isBlock(body)) return body; // expression-bodied arrow
@@ -158,7 +173,9 @@ function getterReturnOf(fn: ts.Node): ts.Expression | null {
 /** The `__export(IDENT, { name: () => value, ... })` call's parts, or null.
  * Every property must be a `name: <function>` assignment (identifier or
  * string-literal name) — anything else is not the esbuild table. */
-function exportCallOf(call: ts.CallExpression): { target: string; entries: [string, ts.Expression | null][] } | null {
+function exportCallOf(
+  call: ts.CallExpression,
+): { target: string; entries: [string, ts.Expression | null][] } | null {
   if (calleeNameOf(call) !== "__export") return null;
   if (call.arguments.length !== 2) return null;
   const [target, table] = call.arguments as unknown as [ts.Expression, ts.Expression];
@@ -193,7 +210,11 @@ function definePropertyExportOf(
     return null;
   }
   if (call.arguments.length !== 3) return null;
-  const [recv, nameArg, desc] = call.arguments as unknown as [ts.Expression, ts.Expression, ts.Expression];
+  const [recv, nameArg, desc] = call.arguments as unknown as [
+    ts.Expression,
+    ts.Expression,
+    ts.Expression,
+  ];
   if (!isExportsIdent(recv) && !isModuleExports(recv)) return null;
   if (!ts.isStringLiteral(nameArg) || !ts.isObjectLiteralExpression(desc)) return null;
   const name = nameArg.text;
@@ -275,7 +296,8 @@ function recognizedToEsmDecl(stmt: ts.Statement): boolean {
   const decls = stmt.declarationList.declarations;
   if (decls.length !== 1) return false;
   const d = decls[0]!;
-  if (!ts.isIdentifier(d.name) || d.name.text !== "__toESM" || d.initializer === undefined) return false;
+  if (!ts.isIdentifier(d.name) || d.name.text !== "__toESM" || d.initializer === undefined)
+    return false;
   let init: ts.Expression = d.initializer;
   while (ts.isParenthesizedExpression(init)) init = init.expression;
   if (!ts.isArrowFunction(init)) return false;
@@ -293,7 +315,12 @@ function recognizedToEsmDecl(stmt: ts.Statement): boolean {
     expr = expr.right;
   }
   while (ts.isParenthesizedExpression(expr)) expr = expr.expression;
-  if (!ts.isCallExpression(expr) || !ts.isIdentifier(expr.expression) || expr.expression.text !== "__copyProps") return false;
+  if (
+    !ts.isCallExpression(expr) ||
+    !ts.isIdentifier(expr.expression) ||
+    expr.expression.text !== "__copyProps"
+  )
+    return false;
   if (expr.arguments.length < 2) return false;
   const from = expr.arguments[1]!;
   if (!ts.isIdentifier(from) || from.text !== mod) return false;
@@ -304,7 +331,12 @@ function recognizedToEsmDecl(stmt: ts.Statement): boolean {
   if (!condText.includes(isNodeMode) || !condText.includes("__esModule")) return false;
   let stamp: ts.Expression = to.whenTrue;
   while (ts.isParenthesizedExpression(stamp)) stamp = stamp.expression;
-  if (!ts.isCallExpression(stamp) || !ts.isIdentifier(stamp.expression) || stamp.expression.text !== "__defProp") return false;
+  if (
+    !ts.isCallExpression(stamp) ||
+    !ts.isIdentifier(stamp.expression) ||
+    stamp.expression.text !== "__defProp"
+  )
+    return false;
   if (stamp.arguments.length !== 3) return false;
   const nameArg = stamp.arguments[1]!;
   if (!ts.isStringLiteral(nameArg) || nameArg.text !== "default") return false;
@@ -339,7 +371,11 @@ function planToEsmInterop(sf: ts.SourceFile, filePath: string, host: CjsRewriteH
   const pads: { start: number; end: number }[] = [];
   const moduleBindings = new Set<string>();
   const plan: ToEsmPlan = { pads, moduleBindings, degrade: null };
-  const fail = (reason: string): ToEsmPlan => ({ pads: [], moduleBindings: new Set(), degrade: reason });
+  const fail = (reason: string): ToEsmPlan => ({
+    pads: [],
+    moduleBindings: new Set(),
+    degrade: reason,
+  });
 
   const declStmts = sf.statements.filter(
     (s) =>
@@ -352,7 +388,8 @@ function planToEsmInterop(sf: ts.SourceFile, filePath: string, host: CjsRewriteH
   const calls: ts.CallExpression[] = [];
   const collect = (n: ts.Node): void => {
     if (ts.isIdentifier(n) && n.text === "__toESM") refs.push(n);
-    if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === "__toESM") calls.push(n);
+    if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === "__toESM")
+      calls.push(n);
   };
   ts.walkPreorder(sf, collect);
   if (calls.length === 0 && refs.length === 0) return plan;
@@ -367,7 +404,8 @@ function planToEsmInterop(sf: ts.SourceFile, filePath: string, host: CjsRewriteH
   }
   if (refs.some((r) => !callees.has(r) && !declNames.has(r))) return fail(TO_ESM_ESCAPE_DEGRADE);
   if (calls.length === 0) return plan; // declared but never called — dead helper
-  if (declStmts.length !== 1 || !recognizedToEsmDecl(declStmts[0]!)) return fail(TO_ESM_SHAPE_DEGRADE);
+  if (declStmts.length !== 1 || !recognizedToEsmDecl(declStmts[0]!))
+    return fail(TO_ESM_SHAPE_DEGRADE);
 
   /** Module-scope interop bindings: name → whether `.default` IS the
    * module (pad the access) rather than a member read of its `default`. */
@@ -393,11 +431,19 @@ function planToEsmInterop(sf: ts.SourceFile, filePath: string, host: CjsRewriteH
       child = parent;
       parent = parent.parent;
     }
-    if (ts.isVariableDeclaration(parent) && parent.initializer === child && ts.isIdentifier(parent.name)) {
+    if (
+      ts.isVariableDeclaration(parent) &&
+      parent.initializer === child &&
+      ts.isIdentifier(parent.name)
+    ) {
       if (bindings.has(parent.name.text)) return fail(TO_ESM_ESCAPE_DEGRADE);
       bindings.set(parent.name.text, defaultIsModule);
       if (defaultIsModule) moduleBindings.add(parent.name.text);
-    } else if (ts.isPropertyAccessExpression(parent) && parent.expression === child && ts.isIdentifier(parent.name)) {
+    } else if (
+      ts.isPropertyAccessExpression(parent) &&
+      parent.expression === child &&
+      ts.isIdentifier(parent.name)
+    ) {
       if (parent.name.text === "default" && defaultIsModule) {
         if (!readOnlyAccess(parent)) return fail(TO_ESM_ESCAPE_DEGRADE);
         pads.push({ start: child.getEnd(), end: parent.getEnd() });
@@ -429,7 +475,10 @@ function planToEsmInterop(sf: ts.SourceFile, filePath: string, host: CjsRewriteH
         ts.isIdentifier(n.name)
       ) {
         bump(n.name.text);
-      } else if ((ts.isFunctionDeclaration(n) || ts.isClassDeclaration(n)) && n.name !== undefined) {
+      } else if (
+        (ts.isFunctionDeclaration(n) || ts.isClassDeclaration(n)) &&
+        n.name !== undefined
+      ) {
         bump(n.name.text);
       } else if (
         ts.isBinaryExpression(n) &&
@@ -441,7 +490,8 @@ function planToEsmInterop(sf: ts.SourceFile, filePath: string, host: CjsRewriteH
         violated = true;
       } else if (
         (ts.isPrefixUnaryExpression(n) || ts.isPostfixUnaryExpression(n)) &&
-        (n.operator === ts.SyntaxKind.PlusPlusToken || n.operator === ts.SyntaxKind.MinusMinusToken) &&
+        (n.operator === ts.SyntaxKind.PlusPlusToken ||
+          n.operator === ts.SyntaxKind.MinusMinusToken) &&
         ts.isIdentifier(n.operand) &&
         bindings.has(n.operand.text)
       ) {
@@ -519,12 +569,12 @@ export function rewriteBundlerCjsSyntax(
     const bundled = rewriteBundledFunctionImports(source, sf);
     if (bundled !== null) return bundled;
     return source.includes("__toESM(")
-        ? {
-            degrade:
-              "its ES-module dist routes an external dependency through the __toESM " +
-              "bundler-interop helper, which has no static story in ESM output — the " +
-              "package serves from the island instead",
-          }
+      ? {
+          degrade:
+            "its ES-module dist routes an external dependency through the __toESM " +
+            "bundler-interop helper, which has no static story in ESM output — the " +
+            "package serves from the island instead",
+        }
       : null;
   }
 
@@ -564,9 +614,18 @@ export function rewriteBundlerCjsSyntax(
     if (!ts.isExpressionStatement(stmt)) continue;
     const e = stmt.expression;
     // `module.exports = <rhs>`
-    if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.EqualsToken && isModuleExports(e.left)) {
+    if (
+      ts.isBinaryExpression(e) &&
+      e.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      isModuleExports(e.left)
+    ) {
       const rhs = e.right;
-      if (ts.isCallExpression(rhs) && calleeNameOf(rhs) === "__toCommonJS" && rhs.arguments.length === 1 && ts.isIdentifier(rhs.arguments[0]!)) {
+      if (
+        ts.isCallExpression(rhs) &&
+        calleeNameOf(rhs) === "__toCommonJS" &&
+        rhs.arguments.length === 1 &&
+        ts.isIdentifier(rhs.arguments[0]!)
+      ) {
         esbuildMainTarget = (rhs.arguments[0] as ts.Identifier).text;
         tablePos = stmt.getStart(sf);
         neutralize.push({ start: stmt.getStart(sf), end: stmt.getEnd() });
@@ -744,7 +803,9 @@ export function rewriteBundlerCjsSyntax(
     for (const m of memberStmts) {
       let cur: ts.Expression = m.finalRhs;
       while (ts.isParenthesizedExpression(cur)) cur = cur.expression;
-      const isVoidInit = cur.kind === ts.SyntaxKind.VoidExpression || (ts.isIdentifier(cur) && cur.text === "undefined");
+      const isVoidInit =
+        cur.kind === ts.SyntaxKind.VoidExpression ||
+        (ts.isIdentifier(cur) && cur.text === "undefined");
       const discarded = tablePos !== null && (m.pos < tablePos || m.viaBareExports);
       if (!isVoidInit) {
         // Only side-effect-free RHS shapes may be neutralized (identifiers,
@@ -772,9 +833,14 @@ export function rewriteBundlerCjsSyntax(
      * const. */
     const immutableTopLevel = new Set<string>();
     for (const stmt of sf.statements) {
-      if (ts.isFunctionDeclaration(stmt) && stmt.name !== undefined) immutableTopLevel.add(stmt.name.text);
-      else if (ts.isClassDeclaration(stmt) && stmt.name !== undefined) immutableTopLevel.add(stmt.name.text);
-      else if (ts.isVariableStatement(stmt) && (stmt.declarationList.flags & ts.NodeFlags.Const) !== 0) {
+      if (ts.isFunctionDeclaration(stmt) && stmt.name !== undefined)
+        immutableTopLevel.add(stmt.name.text);
+      else if (ts.isClassDeclaration(stmt) && stmt.name !== undefined)
+        immutableTopLevel.add(stmt.name.text);
+      else if (
+        ts.isVariableStatement(stmt) &&
+        (stmt.declarationList.flags & ts.NodeFlags.Const) !== 0
+      ) {
         for (const d of stmt.declarationList.declarations) {
           if (ts.isIdentifier(d.name)) immutableTopLevel.add(d.name.text);
         }
@@ -789,7 +855,8 @@ export function rewriteBundlerCjsSyntax(
       const names = host.starTargetNames(filePath, spec);
       let refVar: string | null = null;
       for (const n of names) {
-        if (n === "default" || n === "__esModule" || entries.has(n) || RESERVED_KEYS.has(n)) continue;
+        if (n === "default" || n === "__esModule" || entries.has(n) || RESERVED_KEYS.has(n))
+          continue;
         if (starMembers.some((m) => m.name === n)) continue; // earlier spec wins
         if (refVar === null) {
           refVar = `__scriptc_r${i}`;
@@ -831,10 +898,26 @@ export function rewriteBundlerCjsSyntax(
    * function values whose bodies defer per the JS function-poison rule. */
   {
     const HELPER_NAMES = new Set([
-      "__create", "__defProp", "__defProps", "__getOwnPropDesc", "__getOwnPropDescs",
-      "__getOwnPropNames", "__getOwnPropSymbols", "__getProtoOf", "__hasOwnProp",
-      "__propIsEnum", "__export", "__copyProps", "__reExport", "__toESM", "__toCommonJS",
-      "__exportStar", "__createBinding", "__setModuleDefault", "__importStar", "__importDefault",
+      "__create",
+      "__defProp",
+      "__defProps",
+      "__getOwnPropDesc",
+      "__getOwnPropDescs",
+      "__getOwnPropNames",
+      "__getOwnPropSymbols",
+      "__getProtoOf",
+      "__hasOwnProp",
+      "__propIsEnum",
+      "__export",
+      "__copyProps",
+      "__reExport",
+      "__toESM",
+      "__toCommonJS",
+      "__exportStar",
+      "__createBinding",
+      "__setModuleDefault",
+      "__importStar",
+      "__importDefault",
     ]);
     const helperDecls = new Map<string, { start: number; end: number }>();
     for (const stmt of sf.statements) {
@@ -852,7 +935,8 @@ export function rewriteBundlerCjsSyntax(
     const record = (node: ts.Node): void => {
       if (ts.isIdentifier(node) && helperDecls.has(node.text)) {
         const parent = node.parent;
-        if (parent !== undefined && ts.isVariableDeclaration(parent) && parent.name === node) return;
+        if (parent !== undefined && ts.isVariableDeclaration(parent) && parent.name === node)
+          return;
         const list = refs.get(node.text);
         if (list === undefined) refs.set(node.text, [node.getStart(sf)]);
         else list.push(node.getStart(sf));
@@ -862,7 +946,7 @@ export function rewriteBundlerCjsSyntax(
     const dead = [...neutralize];
     const inDead = (pos: number): boolean => dead.some((s) => pos >= s.start && pos < s.end);
     const removed = new Set<string>();
-    for (let changed = true; changed; ) {
+    for (let changed = true; changed;) {
       changed = false;
       for (const [name, span] of helperDecls) {
         if (removed.has(name)) continue;
@@ -940,8 +1024,11 @@ export function rewriteBundlerCjsSyntax(
   const spreadParts = [...starSpecs].reverse().map((s) => `...require(${JSON.stringify(s)}),`);
   const esModulePart = lexed.exports.has("__esModule") ? "__esModule: true," : "";
   const memberParts = starMembers.map(
-    (m) => `${keyOf(m.name)}: ${m.ref}${isPlainName(m.name) ? `.${m.name}` : `[${JSON.stringify(m.name)}]`},`,
+    (m) =>
+      `${keyOf(m.name)}: ${m.ref}${isPlainName(m.name) ? `.${m.name}` : `[${JSON.stringify(m.name)}]`},`,
   );
-  lines.push(`module.exports = {${spreadParts.join("")}${plainParts.join("")}${esModulePart}${memberParts.join("")}};`);
+  lines.push(
+    `module.exports = {${spreadParts.join("")}${plainParts.join("")}${esModulePart}${memberParts.join("")}};`,
+  );
   return text + lines.join("\n") + "\n";
 }

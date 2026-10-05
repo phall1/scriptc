@@ -33,7 +33,8 @@ export function widthLiftPlan(lowerer: Lowerer, src: IrType, dst: IrType): Width
     if (!def) return null;
     if (tag >= 0) {
       const shape = src.kind === "record" ? lowerer.shapes.get(src.shapeId) : undefined;
-      if (shape && planRecordUnionWrap(shape, def, (id) => lowerer.shapes.get(id))) return { how: "discriminantWrap" };
+      if (shape && planRecordUnionWrap(shape, def, (id) => lowerer.shapes.get(id)))
+        return { how: "discriminantWrap" };
       return { how: "wrap", tag };
     }
     const candidates: { tag: number; arm: IrType }[] = [];
@@ -46,7 +47,9 @@ export function widthLiftPlan(lowerer: Lowerer, src: IrType, dst: IrType): Width
         (src.kind === "object" && arm.kind === "object") ||
         // Tuples already lift into ordinary array slots. Consider that
         // same conversion when the array is an arm of a union too.
-        (src.kind === "record" && lowerer.shapes.get(src.shapeId)?.tuple === true && arm.kind === "array") ||
+        (src.kind === "record" &&
+          lowerer.shapes.get(src.shapeId)?.tuple === true &&
+          arm.kind === "array") ||
         (src.kind === "object" && arm.kind === "record") ||
         (src.kind === "record" && arm.kind === "object");
       if (sameFamily && lowerer.widthLiftPlan(src, arm) !== null) candidates.push({ tag: i, arm });
@@ -61,11 +64,17 @@ export function widthLiftPlan(lowerer: Lowerer, src: IrType, dst: IrType): Width
       const absentOnly = selected.filter(({ arm }) => {
         if (!source || arm.kind !== "record") return false;
         const target = lowerer.shapes.get(arm.shapeId);
-        return target !== undefined && target.fields.every((field) => {
-          if (source.fields.some((present) => present.name === field.name)) return true;
-          return isUnitType(field.type) || field.type.kind === "union" &&
-            lowerer.unions.get(field.type.unionId)?.arms.every(isUnitType) === true;
-        });
+        return (
+          target !== undefined &&
+          target.fields.every((field) => {
+            if (source.fields.some((present) => present.name === field.name)) return true;
+            return (
+              isUnitType(field.type) ||
+              (field.type.kind === "union" &&
+                lowerer.unions.get(field.type.unionId)?.arms.every(isUnitType) === true)
+            );
+          })
+        );
       });
       if (absentOnly.length === 1) selected = absentOnly;
     }
@@ -78,7 +87,12 @@ export function widthLiftPlan(lowerer: Lowerer, src: IrType, dst: IrType): Width
   // checker approved): the CHECKED extraction — narrowedArmHelper,
   // exactly `x!`'s machinery — the proven arm's payload comes out, any
   // other arm throws the catchable TypeError (divergence 38's stance).
-  if (src.kind === "union" && !isUnitType(dst) && dst.kind !== "void" && lowerer.armTag(src.unionId, dst) >= 0) {
+  if (
+    src.kind === "union" &&
+    !isUnitType(dst) &&
+    dst.kind !== "void" &&
+    lowerer.armTag(src.unionId, dst) >= 0
+  ) {
     return { how: "narrow" };
   }
   // A DERIVED instance into a BASE-typed slot (`{ p: Q }` copying into
@@ -109,21 +123,28 @@ export function widthLiftPlan(lowerer: Lowerer, src: IrType, dst: IrType): Width
     // destination fields need the ordinary optional-field completion,
     // and a required field missing from any arm still rejects the pair.
     const from = lowerer.unions.get(src.unionId);
-    if (!from || from.arms.length === 0 || !from.arms.every((arm) => arm.kind === "record")) return null;
+    if (!from || from.arms.length === 0 || !from.arms.every((arm) => arm.kind === "record"))
+      return null;
     const key = `unionWidth:${src.unionId}:${dst.shapeId}`;
     if (lowerer.coercions.planning.has(key)) return { how: "unionWidth" };
     lowerer.coercions.planning.add(key);
     try {
-      return from.arms.every((arm) => lowerer.widthLiftPlan(arm, dst) !== null) ? { how: "unionWidth" } : null;
+      return from.arms.every((arm) => lowerer.widthLiftPlan(arm, dst) !== null)
+        ? { how: "unionWidth" }
+        : null;
     } finally {
       lowerer.coercions.planning.delete(key);
     }
   }
   if (dst.kind === "record" && src.kind === "object") {
-    return lowerer.objToRecordPlan(src.className, dst.shapeId) !== null ? { how: "objWidth" } : null;
+    return lowerer.objToRecordPlan(src.className, dst.shapeId) !== null
+      ? { how: "objWidth" }
+      : null;
   }
   if (dst.kind === "object" && src.kind === "record") {
-    return lowerer.recordToClassPlan(src.shapeId, dst.className) !== null ? { how: "clsWidth" } : null;
+    return lowerer.recordToClassPlan(src.shapeId, dst.className) !== null
+      ? { how: "clsWidth" }
+      : null;
   }
   if (dst.kind === "array" && src.kind === "array") {
     if (lowerer.widthLiftPlan(src.elem, dst.elem) !== null) return { how: "arr" };
@@ -133,7 +154,11 @@ export function widthLiftPlan(lowerer: Lowerer, src: IrType, dst: IrType): Width
     // such a slot honestly holds in the width family is EMPTY, so the
     // lift is a fresh empty array of the target type, guarded by a
     // runtime non-empty trap (the checked-extraction stance).
-    if (lowerer.unitOnlyElem(src.elem) && dst.elem.kind !== "jsval" && !lowerer.unitOnlyElem(dst.elem)) {
+    if (
+      lowerer.unitOnlyElem(src.elem) &&
+      dst.elem.kind !== "jsval" &&
+      !lowerer.unitOnlyElem(dst.elem)
+    ) {
       return { how: "emptyArr" };
     }
     return null;
@@ -162,7 +187,11 @@ export function unitOnlyElem(lowerer: Lowerer, t: IrType): boolean {
 /** Plan each destination field before interning a record projection.
  * Missing optional fields complete to undefined; tuples require equal arity.
  * Index-signature destinations use the separate overflow-capture path. */
-export function recordWidthPlan(lowerer: Lowerer, fromId: string, toId: string): Map<string, FieldLift> | null {
+export function recordWidthPlan(
+  lowerer: Lowerer,
+  fromId: string,
+  toId: string,
+): Map<string, FieldLift> | null {
   const from = lowerer.shapes.get(fromId);
   const to = lowerer.shapes.get(toId);
   // INDEX-SIGNATURE sources narrow like any wider record — the target
@@ -221,7 +250,11 @@ export function recordWidthPlan(lowerer: Lowerer, fromId: string, toId: string):
 
 /** Explain the first blocked field conversion after SC2002 rejects a pair.
  * This describes the planning rules without changing which pairs convert. */
-export function describeRecordWidthBlocker(lowerer: Lowerer, fromId: string, toId: string): string | null {
+export function describeRecordWidthBlocker(
+  lowerer: Lowerer,
+  fromId: string,
+  toId: string,
+): string | null {
   const from = lowerer.shapes.get(fromId);
   const to = lowerer.shapes.get(toId);
   if (!from || !to) return null;
@@ -302,7 +335,11 @@ export function describeRecordWidthBlocker(lowerer: Lowerer, fromId: string, toI
 /** Plan a record projection from plain class fields, including inherited
  * fields and absent optional fields. Methods, accessors, reserved slots and
  * builtin runtime layouts cannot be read as ordinary emitted storage. */
-export function objToRecordPlan(lowerer: Lowerer, className: string, toId: string): Map<string, FieldLift> | null {
+export function objToRecordPlan(
+  lowerer: Lowerer,
+  className: string,
+  toId: string,
+): Map<string, FieldLift> | null {
   const info = lowerer.classes.get(className);
   const to = lowerer.shapes.get(toId);
   if (!info || !to || to.indexValue || to.tuple) return null;
@@ -310,7 +347,8 @@ export function objToRecordPlan(lowerer: Lowerer, className: string, toId: strin
   // not projectable storage.
   if (to.fields.some((f) => f.name.startsWith("%"))) return null;
   for (let c: ClassInfo | null = info; c; c = c.base) {
-    if (c.builtinError || c.builtinEmitter || c.builtinStream !== undefined || c.def.runtime) return null;
+    if (c.builtinError || c.builtinEmitter || c.builtinStream !== undefined || c.def.runtime)
+      return null;
   }
   const key = `obj:${className}:${toId}`;
   if (lowerer.coercions.planning.has(key)) return new Map();
@@ -349,7 +387,11 @@ export function objToRecordPlan(lowerer: Lowerer, className: string, toId: strin
 /** Plan construction of a data class from record fields. The class must
  * have only parameter properties and a trivial constructor, with no methods,
  * accessors, decorations or runtime layout. Entries follow parameter order. */
-export function recordToClassPlan(lowerer: Lowerer, fromId: string, className: string): ({ field: string; src: IrType; lift: WidthLift } | { absent: true })[] | null {
+export function recordToClassPlan(
+  lowerer: Lowerer,
+  fromId: string,
+  className: string,
+): ({ field: string; src: IrType; lift: WidthLift } | { absent: true })[] | null {
   const from = lowerer.shapes.get(fromId);
   const info = lowerer.classes.get(className);
   if (!from || !info || from.indexValue || from.tuple) return null;
@@ -369,7 +411,8 @@ export function recordToClassPlan(lowerer: Lowerer, fromId: string, className: s
       return null;
     }
   }
-  if (!info.ctor || info.ctor.body === undefined || info.ctor.body.statements.length > 0) return null;
+  if (!info.ctor || info.ctor.body === undefined || info.ctor.body.statements.length > 0)
+    return null;
   const props = info.paramProps ?? [];
   if (props.length !== info.ctorParams.length) return null;
   // Every layout field must come from a parameter property (no declared

@@ -5,7 +5,9 @@ import { expect, test } from "vitest";
 import { analyze } from "../src/index.js";
 
 function diagnostics(source: string) {
-  const dir = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-native-lowering-"));
+  const dir = mkdtempSync(
+    join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-native-lowering-"),
+  );
   try {
     const entry = join(dir, "main.ts");
     writeFileSync(entry, source);

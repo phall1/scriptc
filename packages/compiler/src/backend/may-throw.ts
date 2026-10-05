@@ -1,7 +1,12 @@
 /* Cheap whole-module may-throw analysis (see computeMayThrow). Pure function
  * of the IR module; the emitter consults the result to place unwind checks. */
 import type { IrExpr, IrStmt, IrModule } from "../ir/ir.js";
-import { isFfiCallbackParam, MAY_THROW_ARR_METHODS, MAY_THROW_BYTES_METHODS, MAY_THROW_LIB_FNS } from "../ir/ir.js";
+import {
+  isFfiCallbackParam,
+  MAY_THROW_ARR_METHODS,
+  MAY_THROW_BYTES_METHODS,
+  MAY_THROW_LIB_FNS,
+} from "../ir/ir.js";
 import { everyStmtList } from "../ir/traverse.js";
 import { hasRetainedFfiCallback } from "./ffi-callbacks.js";
 
@@ -56,7 +61,10 @@ export function computeMayThrow(mod: IrModule): { fns: Set<string>; indirect: bo
     // TDZ reads and non-initializing writes can throw ReferenceError.
     // Capture locals carry the same flag as the declaring binding.
     const tdzIds = new Set([...tdzGlobals, ...fn.locals.filter((l) => l.tdz).map((l) => l.id)]);
-    const mutableTdzIds = new Set([...tdzGlobals, ...fn.locals.filter((l) => l.tdz && l.mutable).map((l) => l.id)]);
+    const mutableTdzIds = new Set([
+      ...tdzGlobals,
+      ...fn.locals.filter((l) => l.tdz && l.mutable).map((l) => l.id),
+    ]);
     // Traverse typed executable nodes without copying the IR into unknown.
     const visit = (rec: IrExpr | IrStmt): boolean => {
       switch (rec.kind) {
@@ -93,9 +101,12 @@ export function computeMayThrow(mod: IrModule): { fns: Set<string>; indirect: bo
         case "mapIntrinsic":
         case "setIntrinsic": {
           const receiver = rec.receiver.type;
-          const generic = receiver.kind === "map" ? receiver.key.kind === "dyn" && receiver.value.kind === "dyn"
-            : receiver.kind === "set" && receiver.elem.kind === "dyn";
-          if (generic && ["get", "set", "add", "has", "delete"].includes(rec.method)) f.throws = true;
+          const generic =
+            receiver.kind === "map"
+              ? receiver.key.kind === "dyn" && receiver.value.kind === "dyn"
+              : receiver.kind === "set" && receiver.elem.kind === "dyn";
+          if (generic && ["get", "set", "add", "has", "delete"].includes(rec.method))
+            f.throws = true;
           break;
         }
         case "fieldIncDec":
@@ -156,7 +167,8 @@ export function computeMayThrow(mod: IrModule): { fns: Set<string>; indirect: bo
           const shape = (mod.records ?? []).find((r) => r.id === rec.shapeId);
           if (
             rec.overflowOnly !== true &&
-            shape && (!shape.indexValue || (shape.indexValue.kind === "dyn" && shape.fields.length > 0))
+            shape &&
+            (!shape.indexValue || (shape.indexValue.kind === "dyn" && shape.fields.length > 0))
           ) {
             f.throws = true;
           }
@@ -174,7 +186,12 @@ export function computeMayThrow(mod: IrModule): { fns: Set<string>; indirect: bo
           break;
         }
         case "toString":
-          if (rec.operand.type.kind === "dyn" || rec.operand.type.kind === "union" || rec.operand.type.kind === "caught") f.throws = true;
+          if (
+            rec.operand.type.kind === "dyn" ||
+            rec.operand.type.kind === "union" ||
+            rec.operand.type.kind === "caught"
+          )
+            f.throws = true;
           break;
         case "jsOp":
         case "jsExit":
@@ -194,17 +211,15 @@ export function computeMayThrow(mod: IrModule): { fns: Set<string>; indirect: bo
           // A native callback may run arbitrary scriptc code. With retained
           // descriptors any manifest binding may pump a previously stored
           // callback, so every FFI call is conservatively a checkpoint.
-          if (
-            callbackFfiImports.has(rec.import) ||
-            manifestHasRetainedCallback
-          ) f.throws = true;
+          if (callbackFfiImports.has(rec.import) || manifestHasRetainedCallback) f.throws = true;
           break;
         case "bytesNew": {
           // The size form (`new Uint8Array(n)`) throws Node's "Invalid
           // typed array length" RangeError on a bad length. Checked
           // inputs can also throw during element conversion.
           const source = rec.source;
-          if (source && (source.type?.kind === "f64" || source.type?.kind === "dyn")) f.throws = true;
+          if (source && (source.type?.kind === "f64" || source.type?.kind === "dyn"))
+            f.throws = true;
           break;
         }
         case "bytesIntrinsic":
@@ -229,7 +244,12 @@ export function computeMayThrow(mod: IrModule): { fns: Set<string>; indirect: bo
         case "regexIntrinsic":
           // Keep the conservative exception check for these operations;
           // replaceAll and matchAll without /g throw Node's TypeError.
-          if (rec.method === "replaceAll" || rec.method === "split" || rec.method === "matchAll" || rec.method === "matchAllInto") {
+          if (
+            rec.method === "replaceAll" ||
+            rec.method === "split" ||
+            rec.method === "matchAll" ||
+            rec.method === "matchAllInto"
+          ) {
             f.throws = true;
           }
           break;

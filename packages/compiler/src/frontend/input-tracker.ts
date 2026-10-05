@@ -52,11 +52,7 @@ function frontendSourceDigest(text: string): string {
 function pathKind(path: string): Extract<FrontendInputProbe, { op: "kind" }>["kind"] {
   try {
     const info = statSync(path);
-    return info.isFile()
-      ? "file"
-      : info.isDirectory()
-        ? "directory"
-        : "other";
+    return info.isFile() ? "file" : info.isDirectory() ? "directory" : "other";
   } catch {
     return "missing";
   }
@@ -96,8 +92,9 @@ export class FrontendInputTracker {
     // Install the active tracker so filesystem callbacks can record probes.
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     synchronousTracker = this;
-    try { return fn(); }
-    finally {
+    try {
+      return fn();
+    } finally {
       synchronousTracker = parent;
       if (parent !== undefined && parent !== this) {
         for (const probe of this.probes.values()) parent.record(probe);
@@ -150,7 +147,7 @@ export class FrontendInputTracker {
     return {
       version: 1,
       probes: [...this.probes.values()].sort((a, b) =>
-        a.path === b.path ? a.op.localeCompare(b.op) : a.path.localeCompare(b.path)
+        a.path === b.path ? a.op.localeCompare(b.op) : a.path.localeCompare(b.path),
       ),
       stable: this.stable,
     };
@@ -344,10 +341,12 @@ export function frontendInputsStillMatch(
           }
           files.sort();
           directories.sort();
-          return JSON.stringify(files.filter((name) => !ignored.has(name))) ===
+          return (
+            JSON.stringify(files.filter((name) => !ignored.has(name))) ===
               JSON.stringify(probe.files.filter((name) => !ignored.has(name))) &&
             JSON.stringify(directories.filter((name) => !ignored.has(name))) ===
-              JSON.stringify(probe.directories.filter((name) => !ignored.has(name)));
+              JSON.stringify(probe.directories.filter((name) => !ignored.has(name)))
+          );
         } catch {
           return false;
         }
@@ -430,7 +429,8 @@ export function frontendInputsSemanticallyMatch(
 export function validFrontendInputSnapshot(snapshot: unknown): snapshot is FrontendInputSnapshot {
   if (snapshot === null || typeof snapshot !== "object") return false;
   const candidate = snapshot as { version?: unknown; stable?: unknown; probes?: unknown };
-  if (candidate.version !== 1 || candidate.stable !== true || !Array.isArray(candidate.probes)) return false;
+  if (candidate.version !== 1 || candidate.stable !== true || !Array.isArray(candidate.probes))
+    return false;
   return candidate.probes.every((probe) => {
     if (probe === null || typeof probe !== "object") return false;
     const value = probe as Record<string, unknown>;
@@ -441,11 +441,19 @@ export function validFrontendInputSnapshot(snapshot: unknown): snapshot is Front
       case "read-error":
         return true;
       case "kind":
-        return value.kind === "file" || value.kind === "directory" || value.kind === "other" ||
-          value.kind === "missing";
+        return (
+          value.kind === "file" ||
+          value.kind === "directory" ||
+          value.kind === "other" ||
+          value.kind === "missing"
+        );
       case "entries":
-        return Array.isArray(value.files) && value.files.every((entry) => typeof entry === "string") &&
-          Array.isArray(value.directories) && value.directories.every((entry) => typeof entry === "string");
+        return (
+          Array.isArray(value.files) &&
+          value.files.every((entry) => typeof entry === "string") &&
+          Array.isArray(value.directories) &&
+          value.directories.every((entry) => typeof entry === "string")
+        );
       case "entries-error":
         return true;
       case "realpath":

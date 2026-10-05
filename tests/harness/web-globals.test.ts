@@ -145,7 +145,9 @@ describe(`island web globals (scriptc-only${sanitize ? ", sanitized" : ""})`, ()
       "web-writable-presence",
       `[typeof WritableStream, typeof WritableStreamDefaultWriter, typeof WritableStreamDefaultController, typeof CountQueuingStrategy, typeof ByteLengthQueuingStrategy, typeof TransformStreamDefaultController, typeof TextEncoderStream, typeof ReadableStreamDefaultReader, typeof ReadableStreamDefaultController].join(' ')`,
     );
-    expect(out).toBe("function function function function function function function function function");
+    expect(out).toBe(
+      "function function function function function function function function function",
+    );
   });
 
   test("structuredClone clones deep (cycles included) and validates options like Node", async () => {

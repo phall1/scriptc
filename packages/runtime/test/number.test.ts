@@ -15,9 +15,13 @@ test("scr_f64_to_str matches Node String(x) on committed oracle cases", async ()
   await mkdir(buildDir, { recursive: true });
   const bin = join(buildDir, "test_number");
   await execFileAsync("clang", [
-    "-std=c11", "-O2", "-Wall", "-Wextra",
+    "-std=c11",
+    "-O2",
+    "-Wall",
+    "-Wextra",
     ...(process.platform === "linux" ? ["-D_GNU_SOURCE"] : []),
-    "-o", bin,
+    "-o",
+    bin,
     join(testDir, "test_number.c"),
     join(testDir, "../src/scr_number.c"),
     ...(process.platform === "linux" ? ["-lm"] : []),

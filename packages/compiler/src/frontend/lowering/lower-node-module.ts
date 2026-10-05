@@ -10,11 +10,30 @@ import type { Lowerer } from "./lowerer.js";
 import type { FileParts } from "./lower-modules.js";
 import { isNodeEsmFile, locOf } from "../program.js";
 import { runtimePathForTarget } from "../runtime-resolve.js";
-import { BOOL, F64, type IrExpr, type IrStmt, type IrType, NULL_T, STRING, UNDEFINED_T, VOID, arrayOf } from "../../ir/ir.js";
+import {
+  BOOL,
+  F64,
+  type IrExpr,
+  type IrStmt,
+  type IrType,
+  NULL_T,
+  STRING,
+  UNDEFINED_T,
+  VOID,
+  arrayOf,
+} from "../../ir/ir.js";
 import { boolLit, numLit, strLit, varRef } from "../../ir/build.js";
 
 const MODULE_FIELDS = new Set([
-  "children", "filename", "id", "isPreloading", "loaded", "parent", "path", "paths", "require",
+  "children",
+  "filename",
+  "id",
+  "isPreloading",
+  "loaded",
+  "parent",
+  "path",
+  "paths",
+  "require",
 ]);
 
 function cjsGlobal(lowerer: Lowerer, node: ts.Expression, name: "module" | "require"): boolean {
@@ -22,11 +41,17 @@ function cjsGlobal(lowerer: Lowerer, node: ts.Expression, name: "module" | "requ
   if (lowerer.isStdlibGlobal(node, name)) return true;
   const symbol = lowerer.checker.getSymbolAtLocation(node);
   const decls = symbol ? lowerer.checker.declarationsOf(symbol) : [];
-  const sourceShadow = decls.some((decl) =>
-    !decl.getSourceFile().isDeclarationFile &&
-    (ts.isVariableDeclaration(decl) || ts.isParameter(decl) || ts.isBindingElement(decl) ||
-      ts.isFunctionDeclaration(decl) || ts.isClassDeclaration(decl) ||
-      ts.isImportSpecifier(decl) || ts.isNamespaceImport(decl) || ts.isImportEqualsDeclaration(decl)),
+  const sourceShadow = decls.some(
+    (decl) =>
+      !decl.getSourceFile().isDeclarationFile &&
+      (ts.isVariableDeclaration(decl) ||
+        ts.isParameter(decl) ||
+        ts.isBindingElement(decl) ||
+        ts.isFunctionDeclaration(decl) ||
+        ts.isClassDeclaration(decl) ||
+        ts.isImportSpecifier(decl) ||
+        ts.isNamespaceImport(decl) ||
+        ts.isImportEqualsDeclaration(decl)),
   );
   return !sourceShadow && !isNodeEsmFile(node.getSourceFile(), lowerer.program);
 }
@@ -35,7 +60,10 @@ function graphSyntax(lowerer: Lowerer, sf: ts.SourceFile): boolean {
   let found = false;
   ts.walkPreorder(sf, (node) => {
     if (ts.isPropertyAccessExpression(node)) {
-      if (cjsGlobal(lowerer, node.expression, "require") && (node.name.text === "main" || node.name.text === "cache")) {
+      if (
+        cjsGlobal(lowerer, node.expression, "require") &&
+        (node.name.text === "main" || node.name.text === "cache")
+      ) {
         found = true;
         return "stop";
       }
@@ -47,7 +75,8 @@ function graphSyntax(lowerer: Lowerer, sf: ts.SourceFile): boolean {
     if (ts.isIdentifier(node) && cjsGlobal(lowerer, node, "module")) {
       const parent = node.parent;
       if (
-        !ts.isPropertyAccessExpression(parent) || parent.expression !== node ||
+        !ts.isPropertyAccessExpression(parent) ||
+        parent.expression !== node ||
         (parent.name.text !== "exports" && MODULE_FIELDS.has(parent.name.text))
       ) {
         found = true;
@@ -63,7 +92,8 @@ export function prepareCjsModuleGraph(lowerer: Lowerer, parts: readonly FilePart
   lowerer.cjsModuleGraphEnabled = parts.some(({ sf }) => graphSyntax(lowerer, sf));
   if (!lowerer.cjsModuleGraphEnabled) return;
   for (const { sf } of parts) {
-    if (sf.isDeclarationFile || sf.fileName.endsWith(".json") || isNodeEsmFile(sf, lowerer.program)) continue;
+    if (sf.isDeclarationFile || sf.fileName.endsWith(".json") || isNodeEsmFile(sf, lowerer.program))
+      continue;
     // Zero stays reserved so every module handle is truthy like the object
     // it represents, even when a value reaches a generic boolean context.
     const id = lowerer.cjsModuleFiles.length + 1;
@@ -94,16 +124,25 @@ function nodeModulePaths(fileName: string, targetPlatform: string): string[] {
 
 export function cjsModuleRegistryPrelude(lowerer: Lowerer, loc: IrExpr["loc"]): IrStmt[] {
   if (!lowerer.cjsModuleGraphEnabled) return [];
-  const body: IrStmt[] = [{
-    kind: "exprStmt",
-    expr: { kind: "libCall", fn: "module.registryInit", args: [numLit(lowerer.cjsModuleFiles.length + 1, loc)], type: VOID, loc },
-    loc,
-  }];
+  const body: IrStmt[] = [
+    {
+      kind: "exprStmt",
+      expr: {
+        kind: "libCall",
+        fn: "module.registryInit",
+        args: [numLit(lowerer.cjsModuleFiles.length + 1, loc)],
+        type: VOID,
+        loc,
+      },
+      loc,
+    },
+  ];
   for (const [index, sf] of lowerer.cjsModuleFiles.entries()) {
     const moduleId = index + 1;
     const filename = moduleFileName(lowerer, sf);
     const isMain = sf === lowerer.entry && !isNodeEsmFile(lowerer.entry, lowerer.program);
-    const path = lowerer.targetPlatform === "win32" ? win32.dirname(filename) : posix.dirname(filename);
+    const path =
+      lowerer.targetPlatform === "win32" ? win32.dirname(filename) : posix.dirname(filename);
     const paths: IrExpr = {
       kind: "arrayLit",
       elems: nodeModulePaths(filename, lowerer.targetPlatform).map((value) => strLit(value, loc)),
@@ -115,7 +154,14 @@ export function cjsModuleRegistryPrelude(lowerer: Lowerer, loc: IrExpr["loc"]): 
       expr: {
         kind: "libCall",
         fn: "module.define",
-        args: [numLit(moduleId, loc), strLit(filename, loc), strLit(isMain ? "." : filename, loc), strLit(path, loc), paths, boolLit(isMain, loc)],
+        args: [
+          numLit(moduleId, loc),
+          strLit(filename, loc),
+          strLit(isMain ? "." : filename, loc),
+          strLit(path, loc),
+          paths,
+          boolLit(isMain, loc),
+        ],
         type: VOID,
         loc,
       },
@@ -148,24 +194,30 @@ function nodeModuleType(lowerer: Lowerer, node: ts.Expression): boolean {
   const mapped = lowerer.mapTypeOf(type);
   const symbol = type.getSymbol();
   if (
-    symbol && (symbol.name === "Module" || symbol.name === "ScriptcModule") &&
-    lowerer.checker.declarationsOf(symbol).some((decl) => lowerer.isStdlibFile(decl.getSourceFile()))
+    symbol &&
+    (symbol.name === "Module" || symbol.name === "ScriptcModule") &&
+    lowerer.checker
+      .declarationsOf(symbol)
+      .some((decl) => lowerer.isStdlibFile(decl.getSourceFile()))
   ) {
     return true;
   }
   const property = lowerer.checker.getPropertyOfType(type, "filename");
-  const declaredByModule = property && lowerer.checker.declarationsOf(property).some((decl) => {
-    for (let parent: ts.Node | undefined = decl.parent; parent; parent = parent.parent) {
-      if (
-        (ts.isInterfaceDeclaration(parent) || ts.isClassDeclaration(parent)) &&
-        parent.name && (parent.name.text === "ScriptcModule" || parent.name.text === "Module") &&
-        lowerer.isStdlibFile(parent.getSourceFile())
-      ) {
-        return true;
+  const declaredByModule =
+    property &&
+    lowerer.checker.declarationsOf(property).some((decl) => {
+      for (let parent: ts.Node | undefined = decl.parent; parent; parent = parent.parent) {
+        if (
+          (ts.isInterfaceDeclaration(parent) || ts.isClassDeclaration(parent)) &&
+          parent.name &&
+          (parent.name.text === "ScriptcModule" || parent.name.text === "Module") &&
+          lowerer.isStdlibFile(parent.getSourceFile())
+        ) {
+          return true;
+        }
       }
-    }
-    return false;
-  });
+      return false;
+    });
   if (declaredByModule) return true;
   if (mapped?.kind !== "f64") return false;
   const rendered = lowerer.checker.typeToString(type);
@@ -189,16 +241,28 @@ function optionalModule(
     { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc },
     target,
   );
-  const missing = absent === "undefined"
-    ? undefinedValue
-    : {
-        kind: "ternary" as const,
-        cond: { kind: "bin" as const, op: "===" as const, left: ref(), right: numLit(-1, loc), type: BOOL, loc },
-        then: lowerer.coerceInto(node, { kind: "unitLit", unit: "null", type: NULL_T, loc }, target),
-        else_: undefinedValue,
-        type: target,
-        loc,
-      };
+  const missing =
+    absent === "undefined"
+      ? undefinedValue
+      : {
+          kind: "ternary" as const,
+          cond: {
+            kind: "bin" as const,
+            op: "===" as const,
+            left: ref(),
+            right: numLit(-1, loc),
+            type: BOOL,
+            loc,
+          },
+          then: lowerer.coerceInto(
+            node,
+            { kind: "unitLit", unit: "null", type: NULL_T, loc },
+            target,
+          ),
+          else_: undefinedValue,
+          type: target,
+          loc,
+        };
   return {
     kind: "seqExpr",
     stmts: [{ kind: "varDecl", localId: slot.id, init: raw, loc }],
@@ -215,8 +279,16 @@ function optionalModule(
   };
 }
 
-export function lowerRequireMainProperty(lowerer: Lowerer, expr: ts.PropertyAccessExpression): IrExpr | null {
-  if (expr.questionDotToken || expr.name.text !== "main" || !cjsGlobal(lowerer, expr.expression, "require")) return null;
+export function lowerRequireMainProperty(
+  lowerer: Lowerer,
+  expr: ts.PropertyAccessExpression,
+): IrExpr | null {
+  if (
+    expr.questionDotToken ||
+    expr.name.text !== "main" ||
+    !cjsGlobal(lowerer, expr.expression, "require")
+  )
+    return null;
   const entryId = lowerer.cjsModuleIdOf.get(lowerer.entry);
   const raw = entryId === undefined ? numLit(-1, locOf(expr)) : numLit(entryId, locOf(expr));
   return lowerer.maybeNarrow(optionalModule(lowerer, expr, raw, "undefined"), expr);
@@ -229,26 +301,47 @@ export function lowerNodeModuleIdentifier(lowerer: Lowerer, expr: ts.Identifier)
   lowerer.unsupported("SC1090", expr, "the CommonJS 'module' object in an ES module");
 }
 
-export function lowerNodeModuleProperty(lowerer: Lowerer, expr: ts.PropertyAccessExpression): IrExpr | null {
+export function lowerNodeModuleProperty(
+  lowerer: Lowerer,
+  expr: ts.PropertyAccessExpression,
+): IrExpr | null {
   const direct = isCjsModuleGlobal(lowerer, expr.expression);
   if (!direct && !nodeModuleType(lowerer, expr.expression)) return null;
   if (expr.questionDotToken) return null;
   const member = expr.name.text;
   if (member === "exports" || member === "require") return null;
-  let moduleRef = direct ? cjsModuleRef(lowerer, expr.expression) : lowerer.lowerExpr(expr.expression);
+  let moduleRef = direct
+    ? cjsModuleRef(lowerer, expr.expression)
+    : lowerer.lowerExpr(expr.expression);
   if (moduleRef?.type.kind === "union") {
     const present = lowerer.stripUndefinedArm(moduleRef.type);
-    const helper = present.kind === "f64"
-      ? lowerer.narrowedArmHelper(moduleRef.type.unionId, present, locOf(expr.expression))
-      : null;
+    const helper =
+      present.kind === "f64"
+        ? lowerer.narrowedArmHelper(moduleRef.type.unionId, present, locOf(expr.expression))
+        : null;
     if (helper) {
-      moduleRef = { kind: "call", callee: helper, args: [moduleRef], type: F64, loc: locOf(expr.expression) };
+      moduleRef = {
+        kind: "call",
+        callee: helper,
+        args: [moduleRef],
+        type: F64,
+        loc: locOf(expr.expression),
+      };
     }
   }
   if (!moduleRef || moduleRef.type.kind !== "f64") return null;
   const loc = locOf(expr);
-  const call = (fn: "module.filename" | "module.id" | "module.path" | "module.paths" | "module.children" | "module.parent" | "module.loaded", type: IrType): IrExpr =>
-    ({ kind: "libCall", fn, args: [moduleRef], type, loc });
+  const call = (
+    fn:
+      | "module.filename"
+      | "module.id"
+      | "module.path"
+      | "module.paths"
+      | "module.children"
+      | "module.parent"
+      | "module.loaded",
+    type: IrType,
+  ): IrExpr => ({ kind: "libCall", fn, args: [moduleRef], type, loc });
   switch (member) {
     case "filename":
       return call("module.filename", STRING);
@@ -265,7 +358,10 @@ export function lowerNodeModuleProperty(lowerer: Lowerer, expr: ts.PropertyAcces
     case "isPreloading":
       return boolLit(false, loc);
     case "parent":
-      return lowerer.maybeNarrow(optionalModule(lowerer, expr, call("module.parent", F64), "parent"), expr);
+      return lowerer.maybeNarrow(
+        optionalModule(lowerer, expr, call("module.parent", F64), "parent"),
+        expr,
+      );
     default:
       lowerer.noLowering(
         `module.${member}`,
@@ -275,27 +371,57 @@ export function lowerNodeModuleProperty(lowerer: Lowerer, expr: ts.PropertyAcces
   }
 }
 
-export function lowerRequireCacheElement(lowerer: Lowerer, expr: ts.ElementAccessExpression): IrExpr | null {
+export function lowerRequireCacheElement(
+  lowerer: Lowerer,
+  expr: ts.ElementAccessExpression,
+): IrExpr | null {
   if (expr.questionDotToken || !isRequireCacheExpr(lowerer, expr.expression)) return null;
   const key = lowerer.lowerExpr(expr.argumentExpression);
   if (key.type.kind !== "string") {
     lowerer.noLowering("require.cache lookup with a non-string key", expr.argumentExpression);
   }
-  const raw: IrExpr = { kind: "libCall", fn: "module.cacheGet", args: [key], type: F64, loc: locOf(expr) };
+  const raw: IrExpr = {
+    kind: "libCall",
+    fn: "module.cacheGet",
+    args: [key],
+    type: F64,
+    loc: locOf(expr),
+  };
   return lowerer.maybeNarrow(optionalModule(lowerer, expr, raw, "undefined"), expr);
 }
 
 export function lowerRequireCacheHas(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr | null {
-  if (expr.operatorToken.kind !== ts.SyntaxKind.InKeyword || !isRequireCacheExpr(lowerer, expr.right)) return null;
+  if (
+    expr.operatorToken.kind !== ts.SyntaxKind.InKeyword ||
+    !isRequireCacheExpr(lowerer, expr.right)
+  )
+    return null;
   const key = lowerer.lowerExpr(expr.left);
-  if (key.type.kind !== "string") lowerer.noLowering("require.cache membership with a non-string key", expr.left);
+  if (key.type.kind !== "string")
+    lowerer.noLowering("require.cache membership with a non-string key", expr.left);
   return { kind: "libCall", fn: "module.cacheHas", args: [key], type: BOOL, loc: locOf(expr) };
 }
 
-export function lowerRequireCacheKeys(lowerer: Lowerer, call: ts.CallExpression, member: string): IrExpr | null {
+export function lowerRequireCacheKeys(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
+  member: string,
+): IrExpr | null {
   const argument = call.arguments[0];
-  if (member !== "keys" || call.arguments.length !== 1 || argument === undefined || !isRequireCacheExpr(lowerer, argument)) return null;
-  return { kind: "libCall", fn: "module.cacheKeys", args: [], type: arrayOf(STRING), loc: locOf(call) };
+  if (
+    member !== "keys" ||
+    call.arguments.length !== 1 ||
+    argument === undefined ||
+    !isRequireCacheExpr(lowerer, argument)
+  )
+    return null;
+  return {
+    kind: "libCall",
+    fn: "module.cacheKeys",
+    args: [],
+    type: arrayOf(STRING),
+    loc: locOf(call),
+  };
 }
 
 function modulePropertyReceiver(lowerer: Lowerer, node: ts.Expression): boolean {
@@ -315,7 +441,8 @@ export function fenceNodeModuleMutation(
     );
   }
   if (
-    ts.isPropertyAccessExpression(target) && target.name.text !== "exports" &&
+    ts.isPropertyAccessExpression(target) &&
+    target.name.text !== "exports" &&
     modulePropertyReceiver(lowerer, target.expression)
   ) {
     lowerer.noLowering(
@@ -325,8 +452,10 @@ export function fenceNodeModuleMutation(
     );
   }
   if (
-    ts.isElementAccessExpression(target) && ts.isPropertyAccessExpression(target.expression) &&
-    target.expression.name.text === "paths" && modulePropertyReceiver(lowerer, target.expression.expression)
+    ts.isElementAccessExpression(target) &&
+    ts.isPropertyAccessExpression(target.expression) &&
+    target.expression.name.text === "paths" &&
+    modulePropertyReceiver(lowerer, target.expression.expression)
   ) {
     lowerer.noLowering(
       `${action} through module.paths`,
@@ -343,8 +472,19 @@ export function fenceNodeModuleMutationCall(
 ): IrExpr | null {
   if (!ts.isPropertyAccessExpression(access.expression)) return null;
   const paths = access.expression;
-  if (paths.name.text !== "paths" || !modulePropertyReceiver(lowerer, paths.expression)) return null;
-  const mutators = new Set(["copyWithin", "fill", "pop", "push", "reverse", "shift", "sort", "splice", "unshift"]);
+  if (paths.name.text !== "paths" || !modulePropertyReceiver(lowerer, paths.expression))
+    return null;
+  const mutators = new Set([
+    "copyWithin",
+    "fill",
+    "pop",
+    "push",
+    "reverse",
+    "shift",
+    "sort",
+    "splice",
+    "unshift",
+  ]);
   if (!mutators.has(access.name.text)) return null;
   lowerer.noLowering(
     `module.paths.${access.name.text}()`,
