@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { NATIVE_TARGETS, selectNativeTarget, type NativeTargetSpec, type NativeHelperSpec } from "../backend/targets.js";
 
@@ -66,7 +66,10 @@ function installedRuntimePack(start: string, packageName: string): string | unde
 }
 
 export function loadNativeToolchain(path: string, env: NodeJS.ProcessEnv = {}, cwd: string = process.cwd()): NativeToolchain {
-  const raw: unknown = JSON.parse(readFileSync(path, "utf8"));
+  // Package managers can launch the compiler through a directory junction.
+  // Installed asset paths are relative to the physical manifest location.
+  const manifestPath = realpathSync(path);
+  const raw: unknown = JSON.parse(readFileSync(manifestPath, "utf8"));
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new Error("invalid native toolchain manifest");
   const value = raw as Record<string, unknown>;
   if (value.schema !== "scriptc.native-toolchain.v1") throw new Error("unsupported native toolchain manifest schema");
@@ -99,7 +102,7 @@ export function loadNativeToolchain(path: string, env: NodeJS.ProcessEnv = {}, c
   if (host === undefined || host.platform === "wasi") throw new Error(`unsupported native compiler target: ${manifest.target}`);
   const target = selectNativeTarget(env["SCRIPTC_TARGET"] ?? "", host, host.platform);
   if (target === null) throw new Error(`unsupported native compiler target: ${env["SCRIPTC_TARGET"]}`);
-  const root = dirname(resolve(path));
+  const root = dirname(manifestPath);
   const helperPackageRoot = pathFrom(root, env["SCRIPTC_LLVM_PACKAGE"] ?? manifest.llvm_package);
   let runtimePath = manifest.runtime_packs?.find((pack) => pack.target === target.name)?.path
     ?? (target.name === host.name ? manifest.runtime_pack : join(dirname(manifest.runtime_pack), target.runtimePackPackage.replace("@scriptc/", "")));

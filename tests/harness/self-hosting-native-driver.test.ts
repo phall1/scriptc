@@ -131,6 +131,16 @@ test(`the production CLI passes ${phase} bootstrap contracts with Node unavailab
       const probe = seed;
       expect(await invoke(probe, ["--help"])).toContain("scriptc build");
       expect((await invoke(probe, ["--version"])).trim()).toBe(manifest.compiler_version);
+      const linked = join(directory, "package link");
+      symlinkSync(relocated, linked, process.platform === "win32" ? "junction" : "dir");
+      const linkedSeed = join(linked, "bin", "scriptc" + (process.platform === "win32" ? ".exe" : ""));
+      const hello = join(root, "tests/corpus/001-hello.ts");
+      const oracle = await exec(process.execPath, [hello], options);
+      const throughLink = await exec(linkedSeed, ["run", hello, "-o", executable("linked-hello"), "--optimization=dev", "--strip"], {
+        ...nativeOptions, env: { ...nativeOptions.env, SCRIPTC_TOOLCHAIN: undefined },
+      });
+      expect(throughLink.stdout).toBe(oracle.stdout);
+      expect(comparableStderr(throughLink.stderr)).toBe(oracle.stderr);
       await checkProgram(probe, sample);
       await checkProgram(probe, unionSample);
       await checkProgram(probe, receiverSample);
