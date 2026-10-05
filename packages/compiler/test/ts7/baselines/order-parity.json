@@ -14234,6 +14234,18 @@
     "<repo>/tests/corpus/byte-number-pipeline.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/module-byte-loops.ts": {
+   "order": [
+    "<repo>/tests/corpus/module-byte-loops.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/file-read-storage.ts": {
+   "order": [
+    "<repo>/tests/corpus/file-read-storage.ts"
+   ],
+   "diags": []
   }
  }
 }

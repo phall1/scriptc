@@ -165,6 +165,7 @@ describe.skipIf(!zigOnPath())("wasm32-wasi differential", () => {
     "1660-buffer-read-write-num.ts",
     "byte-number-pipeline.ts",
     "counted-loop-numbers.ts",
+    "module-byte-loops.ts",
     "1551-dyn-receiver-methods.ts",
     "1558-any-joins-and-dyn-validation.ts",
     "1634-inspect-classes.ts",

@@ -113,5 +113,17 @@ export function integerRangeCases(): RangeCase[] {
   const returned = reference();
   const unreachable = reference();
   add("return ends straight-line facts", [assign(number(4)), { kind: "return", value: returned, loc: loc() }, statement(unreachable)], [proof(returned, 4), proof(unreachable, null)]);
+  const cursor = reference("cursor"), decoded = reference("decoded"), head = reference();
+  add("filtered strides bound output cursors and preserve decoded integers", [assign(number(0), "cursor"), {
+    kind: "for", init: { kind: "varDecl", localId: "x", init: number(0), loc: loc() },
+    cond: { kind: "bin", op: "<", left: head, right: number(100), type: BOOL, loc: loc() },
+    update: assign(binary("+", reference(), number(24))), loc: loc(), body: [
+      { kind: "varDecl", localId: "decoded", init: binary(">>>", reference("input"), number(0)), loc: loc() },
+      { kind: "if", cond: bool(), then: [{ kind: "continue", loc: loc() }], else_: null, loc: loc() },
+      statement(cursor), statement(decoded), assign(binary("+", reference("cursor"), number(16)), "cursor"),
+    ],
+  }], [proof(cursor, 0, 80), proof(decoded, 0, 4294967295), proof(head, 0, 124)], (func) => {
+    for (const id of ["cursor", "decoded"]) func.locals.push({ id, name: id, type: F64, mutable: true });
+  });
   return cases;
 }

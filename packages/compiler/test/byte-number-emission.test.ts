@@ -44,3 +44,24 @@ test("numeric byte pipelines retain checked fallbacks and use field widths on bo
     }
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+test("module-private numeric proofs retain global ownership and exclude shared bindings", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "scriptc-module-bytes-"));
+  try {
+    const entry = join(import.meta.dirname, "../../../tests/corpus/module-byte-loops.ts");
+    const outPath = join(dir, "main.ir.json");
+    const result = await compile(entry, { outDir: dir, outPath, outputKind: "ir" });
+    if (!result.ok) throw new Error(result.diagnostics.map((d) => d.message).join("\n"));
+    const mod = deserializeModule(await readFile(outPath, "utf8"));
+    for (const pointerBits of [32, 64] as const) {
+      const ll = emitLlvmModule(mod, { pointerBits, wasi: pointerBits === 32 });
+      expect(ll).toContain("integer view checksum");
+      expect(ll).toContain("integer view state");
+      expect(ll).toContain("integer induction offset");
+      expect(ll).not.toContain("integer view sharedNumber");
+      expect(ll).toMatch(/@sc_g_\w+_source = internal global ptr null/);
+      expect(ll).toMatch(/call void @scr_bytes_release\(ptr %g\d+\) ; source/);
+      expect(ll).toContain("@scr_bytes_read_num");
+    }
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});

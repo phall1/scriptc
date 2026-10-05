@@ -123,3 +123,48 @@ test("unit induction is exact but loop-carried assignments remain unknown", () =
   expect(ranges.get(carried)).toBeNull();
   expect(ranges.get(after)).toBeNull();
 });
+
+test("filtered strided loops retain decoded values and bound secondary cursors", () => {
+  const cursor = ref("position"), decoded = ref("decoded"), conditionRead = ref("x");
+  const loop: IrStmt & { kind: "for" } = { loc, kind: "for",
+    init: { loc, kind: "varDecl", localId: "x", init: num(0) },
+    cond: condition("<", conditionRead, num(100)), update: assign(bin("+", ref(), num(24))), body: [
+      { loc, kind: "varDecl", localId: "decoded", init: bin(">>>", ref("input"), num(0)) },
+      { loc, kind: "if", cond: condition("===", ref("flag"), num(0)), then: [{ loc, kind: "continue" }], else_: null },
+      observe(decoded), observe(cursor),
+      { loc, kind: "assign", localId: "position", value: bin("+", ref("position"), num(16)) },
+    ],
+  };
+  const f = fn([{ loc, kind: "varDecl", localId: "position", init: num(0) }, loop]);
+  f.locals.push(...["position", "decoded"].map((id) => ({ id, name: id, type: F64, mutable: true })));
+  const ranges = analyzeIntegerRanges(f);
+  expect(ranges.get(cursor)).toEqual({ min: 0, max: 80 });
+  expect(ranges.get(decoded)).toEqual({ min: 0, max: 4294967295 });
+  expect(ranges.get(conditionRead)).toEqual({ min: 0, max: 124 });
+  for (const mutation of ["fraction", "repeat", "overflow", "counter"] as const) {
+    const changed = structuredClone(f);
+    const body = (changed.body[1] as IrStmt & { kind: "for" }).body;
+    const update = body[4] as IrStmt & { kind: "assign" };
+    if (mutation === "fraction") update.value = bin("+", ref("position"), num(0.5));
+    if (mutation === "repeat") body[4] = { loc, kind: "while", cond: condition("<", ref("unknown"), num(1)), body: [update] };
+    if (mutation === "overflow") (changed.body[0] as IrStmt & { kind: "varDecl" }).init = num(Number.MAX_SAFE_INTEGER);
+    if (mutation === "counter") body.push(assign(num(0)));
+    const observation = body[3] as IrStmt & { kind: "exprStmt" };
+    expect(analyzeIntegerRanges(changed).get(observation.expr), mutation).toBeNull();
+  }
+});
+
+test("an exit branch does not discard the surviving facts or escape its own label", () => {
+  const afterReturn = ref(), afterLabel = ref();
+  const ranges = analyzeIntegerRanges(fn([
+    assign(num(3)),
+    { loc, kind: "if", cond: condition("===", ref("flag"), num(0)), then: [{ loc, kind: "return", value: num(1) }], else_: null },
+    observe(afterReturn),
+    { loc, kind: "if", cond: condition("===", ref("flag"), num(1)), then: [
+      { loc, kind: "block", labels: ["done"], body: [assign(num(0.5)), { loc, kind: "break", label: "done" }] },
+    ], else_: null },
+    observe(afterLabel),
+  ]));
+  expect(ranges.get(afterReturn)).toEqual({ min: 3, max: 3 });
+  expect(ranges.get(afterLabel)).toBeNull();
+});

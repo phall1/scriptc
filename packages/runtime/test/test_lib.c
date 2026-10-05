@@ -17,6 +17,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
+#ifndef _WIN32
+#include <sys/wait.h>
+#endif
 
 static int checks = 0;
 static int failures = 0;
@@ -58,6 +62,75 @@ static void test_large_set_materialization(void) {
   scr_arr_release(values);
 }
 
+static void test_read_storage(void) {
+  uint8_t *owned = malloc(3);
+  memcpy(owned, "abc", 3);
+  ScrBytes *bytes = scr_bytes_take_data(owned, 3);
+  check(bytes->data == owned && bytes->backing == NULL && !bytes->external,
+    "adopted bytes keep their owned allocation");
+  ScrBytes *view = scr_bytes_subarray(bytes, 1, 3);
+  scr_bytes_release(bytes);
+  check(view->len == 2 && memcmp(view->data, "bc", 2) == 0, "view retains adopted storage");
+  scr_bytes_release(view);
+  bytes = scr_bytes_take_data(NULL, 0);
+  view = scr_bytes_subarray(bytes, 0, 0);
+  check(bytes->data != NULL && view->len == 0, "empty owned bytes support views");
+  scr_bytes_release(bytes);
+  scr_bytes_release(view);
+
+#ifndef _WIN32
+  /* A pipe has no useful size hint and short reads need not mean EOF.
+   * The producer exceeds pipe capacity, exercising repeated growth. */
+  for (int text = 0; text < 2; text++) {
+    int fds[2];
+    if (pipe(fds) != 0) { check(false, "pipe setup"); return; }
+    pid_t child = fork();
+    if (child == 0) {
+      close(fds[0]);
+      char chunk[997];
+      memset(chunk, 'x', sizeof chunk);
+      size_t sent = 0;
+      while (sent < 70001) {
+        size_t count = 70001 - sent;
+        if (count > sizeof chunk) count = sizeof chunk;
+        ssize_t written = write(fds[1], chunk, count);
+        if (written <= 0) _exit(2);
+        sent += (size_t)written;
+      }
+      close(fds[1]);
+      _exit(0);
+    }
+    close(fds[1]);
+    if (child < 0) { close(fds[0]); check(false, "pipe producer"); return; }
+    size_t len;
+    const uint8_t *data;
+    ScrStr *string = NULL;
+    bytes = NULL;
+    if (text) {
+      string = scr_fs_read_fd((double)fds[0]);
+      len = string ? string->len : 0;
+      data = string ? (uint8_t *)string->data : NULL;
+      check(string && string->data[string->len] == '\0', "pipe string terminates");
+    } else {
+      bytes = scr_fs_read_fd_bytes((double)fds[0]);
+      len = bytes ? bytes->len : 0;
+      data = bytes ? bytes->data : NULL;
+    }
+    bool matches = len == 70001;
+    for (size_t i = 0; i < len; i++) if (data[i] != 'x') matches = false;
+    check(matches && !scr_exc_pending(), "pipe reads all chunks into final storage");
+    char extra;
+    check(read(fds[0], &extra, 1) == 0, "caller still owns pipe descriptor");
+    close(fds[0]);
+    int status = 0;
+    check(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0,
+      "pipe producer completed");
+    scr_str_release(string);
+    scr_bytes_release(bytes);
+  }
+#endif
+}
+
 int main(int argc, char **argv) {
   scr_init();
   scr_lib_init(argc, argv);
@@ -78,6 +151,7 @@ int main(int argc, char **argv) {
     return 2;
   }
   test_large_set_materialization();
+  test_read_storage();
   const char *dir = argv[1];
   char pb[4096];
   ScrStr *p; /* current path operand */
