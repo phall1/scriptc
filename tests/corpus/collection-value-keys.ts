@@ -8,6 +8,15 @@ flags.delete(false);
 flags.set(false, "again");
 console.log("flag values", [...flags.values()].join(","));
 
+function ownKeys(value: object): Set<string | symbol> {
+  return new Set(Reflect.ownKeys(value));
+}
+const propertyKeys = ownKeys({ name: 1 });
+const propertySymbol = Symbol("key");
+propertyKeys.add(propertySymbol);
+propertyKeys.add(Reflect.ownKeys({ other: true })[0]);
+console.log("property keys", propertyKeys.size, propertyKeys.has("name"), propertyKeys.has("other"), propertyKeys.has(propertySymbol));
+
 const large = 1n << 160n;
 const integers = new Map<bigint, number>([[large, 1], [-large, 2], [0n, 3]]);
 integers.set(BigInt(large.toString()), 4);

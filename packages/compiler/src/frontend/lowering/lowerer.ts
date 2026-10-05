@@ -73,7 +73,7 @@ import type {
   IrUnionDef,
   SrcLoc,
 } from "../../ir/ir.js";
-import { arrayOf, BOOL, canAdaptDynFuncTo, canDynCheckTo, canConvertToDyn, canCrossIslandBoundary, canExitIslandToType, canMarshalTypedFuncIntoIsland, DYN, DYN_HANDLE_KINDS, F64, isDynTypedRefType, isJsonSafeType, isJsonStringifySafeType, isSupportedMapKey, isSupportedMapValue, isUndefinedArmedUnion, isUnitType, JSVAL, NULL_T, RUNTIME_ERROR_CLASSES, STRING, typeEquals, UNDEFINED_T, VOID } from "../../ir/ir.js";
+import { arrayOf, BOOL, canAdaptDynFuncTo, canDynCheckTo, canConvertToDyn, canCrossIslandBoundary, canExitIslandToType, canMarshalTypedFuncIntoIsland, DYN, DYN_HANDLE_KINDS, F64, isDynTypedRefType, isJsonSafeType, isJsonStringifySafeType, isPrimitiveCollectionKey, isSupportedMapKey, isSupportedMapValue, isUndefinedArmedUnion, isUnitType, JSVAL, NULL_T, RUNTIME_ERROR_CLASSES, STRING, typeEquals, UNDEFINED_T, VOID } from "../../ir/ir.js";
 import { type DynamicImportResolution, type NpmBuiltinUse, type NpmLazyTrap } from "../npm.js";
 import { provenanceActive } from "../provenance-registry.js";
 import {
@@ -8297,15 +8297,14 @@ export class Lowerer {
     // Fresh literals have no previous outer identity to preserve. Build them
     // for their storage layout, just as ordinary contextual literals do.
     if (ts.isObjectLiteralExpression(literal) || ts.isArrayLiteralExpression(literal) ||
-        expected.kind === "f64" || expected.kind === "string" || expected.kind === "bool" || expected.kind === "bigint") {
+        isPrimitiveCollectionKey(expected, expected.kind === "union" ? this.unions.get(expected.unionId)?.arms : undefined)) {
       return this.lowerExprExpecting(node, expected);
     }
     const value = this.lowerExpr(node);
     const valueArms = value.type.kind === "union" ? this.unions.get(value.type.unionId)?.arms ?? [] : [value.type];
     // Primitive checks and reboxing preserve values, including tag-only
     // null/undefined keys. Identity restrictions apply only to references.
-    if (valueArms.length > 0 && valueArms.every((arm) => arm.kind === "f64" || arm.kind === "string" ||
-        arm.kind === "bool" || arm.kind === "bigint" || isUnitType(arm))) {
+    if (valueArms.length > 0 && valueArms.every((arm) => isPrimitiveCollectionKey(arm))) {
       return this.coerceInto(node, value, expected);
     }
     // Assertions can perform their own conversion before slot coercion.

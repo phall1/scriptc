@@ -43,6 +43,21 @@ static void expect_pending(const char *name) {
   if (scr_exc_pending()) scr_exc_print_uncaught();
 }
 
+static void test_large_set_materialization(void) {
+  const size_t count = ((size_t)1 << 20) + 3;
+  ScrMap *set = scr_map_new(SCR_MAP_KEY_F64, SCR_MAP_VAL_F64, NULL, NULL, NULL);
+  for (size_t i = 0; i < count; i++) scr_map_set_f64_f64(set, (double)i, 0);
+  scr_map_delete_f64(set, 1);
+  ScrArr *values = scr_set_to_arr_f64(set);
+  check(values->len == count - 1 && values->cap < values->len, "large Set uses sparse array tail");
+  check(scr_arr_get_f64(values, 0) == 0 && scr_arr_get_f64(values, 1) == 2,
+    "large Set materialization skips tombstones in order");
+  check(scr_arr_get_f64(values, (double)count - 2) == (double)count - 1,
+    "large Set preserves its final element");
+  scr_map_release(set);
+  scr_arr_release(values);
+}
+
 int main(int argc, char **argv) {
   scr_init();
   scr_lib_init(argc, argv);
@@ -62,6 +77,7 @@ int main(int argc, char **argv) {
     fputs("usage: test_lib <scratch-dir>\n", stderr);
     return 2;
   }
+  test_large_set_materialization();
   const char *dir = argv[1];
   char pb[4096];
   ScrStr *p; /* current path operand */

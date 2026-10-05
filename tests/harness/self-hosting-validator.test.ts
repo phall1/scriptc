@@ -21,14 +21,15 @@ for (const backend of ["llvm"] as const) {
       });
       if (!built.ok) throw new Error(built.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
       expect(built.backend).toBe(backend);
-      const check = (name: string, input: string, diagnostic?: string): void => {
+      const check = (name: string, input: string, diagnostic?: string, serialized = false): void => {
         const path = join(dir, "input.json");
         writeFileSync(path, input);
-        const expected = validateModule(JSON.parse(input));
+        const expected = validateModule(serialized ? deserializeModule(input) : JSON.parse(input));
         if (diagnostic) expect(expected.some((d) => d.message.includes(diagnostic)), name).toBe(true);
         else expect(expected, name).toEqual([]);
-        const oracle = spawnSync(process.execPath, ["--import", "tsx", entry, path], runOptions);
-        const native = spawnSync(built.binaryPath, [path], runOptions);
+        const args = [path, ...(serialized ? ["serialized"] : [])];
+        const oracle = spawnSync(process.execPath, ["--import", "tsx", entry, ...args], runOptions);
+        const native = spawnSync(built.binaryPath, args, runOptions);
         for (const result of [oracle, native]) {
           expect(result.error, name).toBeUndefined();
           expect(result.signal, `${name}: ${result.stderr}`).toBeNull();
@@ -48,13 +49,14 @@ for (const backend of ["llvm"] as const) {
         "tests/corpus/3089-array-find-narrowing.ts",
         "tests/corpus/3091-json-recursive-discriminants.ts",
         "tests/corpus/3109-identity-union-collections.ts",
+        "tests/corpus/collection-value-keys.ts",
+        "tests/corpus/collection-storage-copies.ts",
         "tests/corpus/nullish-long-chain.ts",
       ]) {
         const irPath = join(dir, "emitted.json");
         const emitted = await compile(join(root, source), { outDir: dir, outPath: irPath, outputKind: "ir", dynamic: false });
         if (!emitted.ok) throw new Error(emitted.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
-        const module = deserializeModule(readFileSync(irPath, "utf8"));
-        check(source, JSON.stringify(module));
+        check(source, readFileSync(irPath, "utf8"), undefined, true);
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });

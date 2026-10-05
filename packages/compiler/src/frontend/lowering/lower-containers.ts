@@ -6,7 +6,7 @@ import { InternalCompilerError } from "../../errors.js";
  * record operations. */
 import * as ts from "../ts7/adapter.js";
 import type { Lowerer } from "./lowerer.js";
-import { BOOL, CAUGHT, DYN, F64, type IrExpr, type IrFunction, type IrLocal, type IrMapIntrinsicMethod, type IrParam, type IrRecordShape, type IrSetIntrinsicMethod, type IrStmt, type IrType, JSVAL, STRING, type SrcLoc, UNDEFINED_T, VOID, arrayOf, funcOf, isRefCounted, isSupportedArrayElem, isSupportedIndexValue, isUnitType, typeEquals } from "../../ir/ir.js";
+import { BOOL, CAUGHT, DYN, F64, type IrExpr, type IrFunction, type IrLocal, type IrMapIntrinsicMethod, type IrParam, type IrRecordShape, type IrSetIntrinsicMethod, type IrStmt, type IrType, JSVAL, STRING, type SrcLoc, UNDEFINED_T, VOID, arrayOf, funcOf, isPrimitiveCollectionKey, isRefCounted, isSupportedArrayElem, isSupportedIndexValue, isUnitType, typeEquals } from "../../ir/ir.js";
 import { ARRAY_METHODS, COLLECTION_ITERATOR_METHODS, MAP_METHODS, SET_COMBINE_METHODS, SET_METHODS } from "./surfaces.js";
 import { tryLowerExpression } from "./expressions/try-lower-expression.js";
 import { forOfVarTarget, lowerDestructuringAssign } from "./lower-stmts.js";
@@ -5812,7 +5812,7 @@ export function lowerSetSeedNew(lowerer: Lowerer, node: ts.Expression, setT: IrT
   }
   const seedType = lowerer.typeOf(node);
   const declared = lowerer.mapTypeOf(seedType);
-  const scalar = setT.elem.kind === "f64" || setT.elem.kind === "string";
+  const scalar = isPrimitiveCollectionKey(setT.elem, setT.elem.kind === "union" ? lowerer.unions.get(setT.elem.unionId)?.arms : undefined);
   let source = !scalar && (declared?.kind === "array" || declared?.kind === "record")
     ? lowerer.lowerCollectionKey(node, declared)
     : lowerer.lowerExpr(node);

@@ -602,6 +602,12 @@ export function isIdentityCollectionKey(t: IrType): boolean {
 /** Primitive keys compare by value and reference keys by identity. Union
  * wrappers carry either domain without becoming observable key identities;
  * null and undefined are distinct tag-only keys inside a union. */
+export function isPrimitiveCollectionKey(t: IrType, unionArms?: IrType[]): boolean {
+  if (t.kind === "union") return !!unionArms?.length && unionArms.every((arm) => isPrimitiveCollectionKey(arm));
+  return t.kind === "f64" || t.kind === "string" || t.kind === "bigint" || t.kind === "bool" ||
+    t.kind === "symbol" || isUnitType(t);
+}
+
 export function isSupportedMapKey(t: IrType, unionArms?: IrType[]): boolean {
   return isCollectionValueKey(t) || t.kind === "dyn" ||
     (t.kind === "union" && unionArms !== undefined && unionArms.length > 0 &&
