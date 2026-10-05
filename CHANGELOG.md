@@ -6,6 +6,27 @@ All notable changes to scriptc will be documented in this file.
 
 <!-- release:start -->
 
+## 0.2.3
+
+### Features
+
+- **Node 24 filesystem and URL coverage expands.** Filesystem support adds capacity queries, link handling, timestamps, and file URL byte conversion with platform options; URL handling adds authority, protocol, and mutation behavior.
+- **Web Streams support covers more workflows.** Writable and readable streams add controller and reader operations, `tee`, pipelines, and streaming encoding.
+- **Embedded Node compatibility adds module and utility APIs.** CommonJS and ESM metadata, diagnostics channels, deep equality, `util.types`, `util.styleText`, text and system error utilities, MIME utilities, and no-error assertions gain support.
+- **Native Set construction accepts supported collection iterators.**
+
+### Performance
+
+- **Compiler analysis avoids repeated metadata and tree work.** AST child lookups, class and record metadata, graph propagation, and exception analysis are reused or streamlined.
+- **Native array iteration does less work.** Optimized loops preserve live tuple iteration behavior.
+
+### Fixes
+
+- **Native values keep valid lifetimes across helper and collection operations.** Array borrowing, map reads, string concatenation, and helper calls preserve values for their full use.
+- **TypeScript runtime package sources emit consistently.**
+
+<!-- release:end -->
+
 ## 0.2.2
 
 ### Features
@@ -26,8 +47,6 @@ All notable changes to scriptc will be documented in this file.
 - **Static JavaScript workflows preserve more class and callable behavior.** Inferred class fields, inherited members, method dispatch, callable identity, collections, and async values retain their supported state across compiled package boundaries.
 - **Integer-boundary inference accounts for both zero signs.** Division and powers involving zero no longer produce unsafe integer proofs for negative-zero inputs; safely clamped results retain their supported proofs.
 - **Embedded Node utilities preserve more input and lifecycle behavior.** Argument parsing and callback/promise adapters handle more Node 24 validation, metadata, and error cases. EventEmitter preserves once-listener reentrancy, symbol names, and error-monitor ordering, while StringDecoder handles more input views and split encoding boundaries.
-
-<!-- release:end -->
 
 ## 0.2.1
 
