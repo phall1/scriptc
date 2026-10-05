@@ -14228,6 +14228,12 @@
     "<repo>/tests/corpus/collection-storage-copies.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/byte-number-pipeline.ts": {
+   "order": [
+    "<repo>/tests/corpus/byte-number-pipeline.ts"
+   ],
+   "diags": []
   }
  }
 }

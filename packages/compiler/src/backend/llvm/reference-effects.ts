@@ -4,6 +4,7 @@ import { isRefCounted, type IrExpr, type IrFunction, type IrStmt } from "../../i
 import { everyExprChild, everyStmtChild, everyStmtList } from "../../ir/traverse.js";
 import { borrowsStringInputs } from "./string-lifetimes.js";
 import { borrowsMapReadInputs } from "./map-read-lifetimes.js";
+import { byteNumberAccess } from "../../ir/byte-numbers.js";
 
 type Call = IrExpr & { kind: "call" };
 
@@ -36,6 +37,8 @@ function expressionPreservesEdges(e: IrExpr, call: (value: Call) => boolean): bo
     case "libCall": return e.fn === "error.nodeThrow" || isStableReceiverOperand(e, "");
     case "call": return call(e);
     case "arrIntrinsic": return e.method === "length";
+    case "bytesIntrinsic": return e.method === "get" || e.method === "length" || e.method === "byteLength" ||
+      e.method === "byteOffset" || byteNumberAccess(e) !== null;
     default: return false;
   }
 }
@@ -43,7 +46,7 @@ function expressionPreservesEdges(e: IrExpr, call: (value: Call) => boolean): bo
 function statementPreservesEdges(s: IrStmt): boolean {
   switch (s.kind) {
     case "varDecl": case "exprStmt": case "return": case "if": case "for":
-    case "while": case "doWhile": case "block": case "break": case "continue": return true;
+    case "while": case "doWhile": case "block": case "break": case "continue": case "bytesSet": return true;
     case "assign": case "fieldSet": case "recordSet": return !isRefCounted(s.value.type);
     default: return false;
   }

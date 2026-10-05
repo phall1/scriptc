@@ -59,7 +59,7 @@ for (const backend of ["llvm"] as const) {
 
       // Real frontend IR exercises the exact representation the two emitters
       // supply to analyzeIntegerRanges, including lowered helper functions.
-      for (const source of ["1409-typedarray-integer-loops.ts", "3103-scalar-record-nested-control-flow.ts", "3109-identity-union-collections.ts"]) {
+      for (const source of ["1409-typedarray-integer-loops.ts", "3103-scalar-record-nested-control-flow.ts", "3109-identity-union-collections.ts", "byte-number-pipeline.ts"]) {
         const path = join(dir, "frontend.json");
         const result = await compile(join(root, "tests/corpus", source), { outDir: dir, outPath: path, outputKind: "ir", dynamic: false });
         if (!result.ok) throw new Error(result.diagnostics.map((d) => d.message).join("\n"));

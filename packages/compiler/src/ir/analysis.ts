@@ -1,4 +1,5 @@
 import { InternalCompilerError } from "../errors.js";
+import { byteNumberAccess } from "./byte-numbers.js";
 import {
   BYTES_ELEMENT_NAME,
   DYN_HANDLE_KINDS,
@@ -119,6 +120,7 @@ export function isStableReceiverOperand(e: IrExpr, receiverLocalId: string): boo
   switch (e.kind) {
     case "numLit":
     case "boolLit":
+    case "strLit":
     case "varRef":
     case "incDec":
       return true;
@@ -136,7 +138,7 @@ export function isStableReceiverOperand(e: IrExpr, receiverLocalId: string): boo
         isStableReceiverOperand(e.then, receiverLocalId) &&
         isStableReceiverOperand(e.else_, receiverLocalId);
     case "bytesIntrinsic":
-      return (e.method === "get" || e.method === "length" || e.method === "byteLength") &&
+      return (e.method === "get" || e.method === "length" || e.method === "byteLength" || byteNumberAccess(e) !== null) &&
         e.receiver.kind === "varRef" &&
         e.args.every((arg) => isStableReceiverOperand(arg, receiverLocalId));
     case "libCall":

@@ -183,6 +183,27 @@ function expressionModule(expr: IrExpr, unions: IrUnionDef[]): IrModule {
   };
 }
 
+test("numeric byte tokens and DataView stores validate their storage before emission", () => {
+  const bytes: IrExpr = { kind: "varRef", localId: "bytes", type: { kind: "bytes", elem: "u8" }, loc };
+  const number: IrExpr = { kind: "numLit", value: 0, type: F64, loc };
+  const kind: IrExpr = { kind: "strLit", value: "u32le", type: STRING, loc };
+  const read: IrExpr = { kind: "bytesIntrinsic", method: "readNum", receiver: bytes, args: [kind, number], type: F64, loc };
+  const mod = expressionModule(read, []);
+  mod.functions[0]!.locals.push({ id: "bytes", name: "bytes", type: bytes.type, mutable: false });
+  expect(validateModule(deserializeModule(serializeModule(mod)))).toEqual([]);
+  for (const value of ["toString", "u64le", "u8be"]) {
+    kind.value = value;
+    expect(validateModule(mod).some((e) => e.message.includes("invalid kind token"))).toBe(true);
+  }
+  kind.value = "u32le";
+  const store: IrExpr = { kind: "bytesIntrinsic", method: "dvSetUint32", receiver: bytes, args: [number, number], type: VOID, loc };
+  mod.functions[0]!.body = [{ kind: "exprStmt", expr: store, loc }];
+  expect(validateModule(mod)).toEqual([]);
+  bytes.type = { kind: "bytes", elem: "u32" };
+  mod.functions[0]!.locals[0]!.type = bytes.type;
+  expect(validateModule(mod).some((e) => e.message.includes("u8 only"))).toBe(true);
+});
+
 test("record declarations accept forward, mutual, and self references and refresh missing IDs", () => {
   const mod = expressionModule({ kind: "numLit", value: 0, type: F64, loc }, []);
   mod.records = [

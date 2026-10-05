@@ -1,5 +1,6 @@
 import type { IrExpr, IrFunction, IrStmt } from "../../ir/ir.js";
 import { everyExprChild, everyStmtChild } from "../../ir/traverse.js";
+import { byteNumberAccess } from "../../ir/byte-numbers.js";
 
 /** Keep a computed ToUint32 view beside an ordinary number when integer
  * consumers in loops can reuse it. The number remains authoritative for floating
@@ -23,6 +24,9 @@ export function findIntegerViews(fn: IrFunction): Set<string> {
     } else if (node.kind === "unary" && node.op === "~") operand(node.operand);
     else if (node.kind === "libCall" && (node.fn === "math.imul" || node.fn === "math.clz32")) {
       for (const arg of node.args) operand(arg);
+    } else if (node.kind === "bytesIntrinsic") {
+      const numeric = byteNumberAccess(node);
+      if (numeric?.write && !numeric.floating && numeric.width <= 4) operand(node.args[numeric.valueArg]!);
     }
     return everyExprChild(node, expr, stmt);
   };
