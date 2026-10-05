@@ -4,6 +4,7 @@ import { typeKey } from "../type-mapper.js";
 import { boolLit, countedFor, numLit, strLit, varRef } from "../../ir/build.js";
 import { BOOL, CAUGHT, DYN, F64, VOID, typeEquals, type IrExpr, type IrLocal, type IrStmt, type IrType, type SrcLoc } from "../../ir/ir.js";
 import { arrayValueStore } from "./array-values.js";
+import { iteratorCanStep, iteratorValue } from "./iterator-consumption.js";
 import { newFnCtx, type Lowerer } from "./lowerer.js";
 
 type Collection = IrType & { kind: "map" | "set" };
@@ -188,7 +189,7 @@ function cursorConsumption(lowerer: Lowerer, source: IrExpr, element: IrType,
   append: (value: IrExpr) => IrStmt[], requireIterable: boolean, loc: SrcLoc): IrStmt[] {
   const iterator = lowerer.declareHiddenLocal("%iterator", DYN);
   const next = lowerer.declareHiddenLocal("%next", DYN);
-  const step = lowerer.declareHiddenLocal("%step", DYN);
+  const fast = lowerer.declareHiddenLocal("%nativeIterator", BOOL);
   const raw = lowerer.declareHiddenLocal("%iteratorValue", DYN);
   const done = lowerer.declareHiddenLocal("%done", BOOL); done.mutable = true;
   const get = (value: IrExpr, key: string): IrExpr => ({ kind: "dynKeyGet", value, key: strLit(key, loc), type: DYN, loc });
@@ -213,12 +214,12 @@ function cursorConsumption(lowerer: Lowerer, source: IrExpr, element: IrType,
     { kind: "varDecl", localId: iterator.id, init: { kind: "libCall", fn: "dyn.iteratorResult", args: [{ kind: "libCall",
       fn: requireIterable ? "dyn.iterator" : "dyn.arrayFromIterator", args: requireIterable ? [source, strLit("Value is not iterable", loc)] : [source], type: DYN, loc }], type: DYN, loc }, loc },
     { kind: "varDecl", localId: next.id, init: get(cursor, "next"), loc },
+    { kind: "varDecl", localId: fast.id, init: iteratorCanStep(cursor, varRef(next.id, DYN, loc), loc), loc },
     { kind: "varDecl", localId: done.id, init: boolLit(false, loc), loc },
     { kind: "while", cond: { kind: "unary", op: "!", operand: varRef(done.id, BOOL, loc), type: BOOL, loc }, body: [
-      { kind: "varDecl", localId: step.id, init: { kind: "libCall", fn: "dyn.iteratorResult", args: [{ kind: "dynCall", callee: varRef(next.id, DYN, loc), receiver: cursor, calleeName: "iterator.next", args: [], type: DYN, loc }], type: DYN, loc }, loc },
-      { kind: "assign", localId: done.id, value: { kind: "dynTest", test: "truthy", value: get(varRef(step.id, DYN, loc), "done"), type: BOOL, loc }, loc },
+      { kind: "varDecl", localId: raw.id, init: iteratorValue(lowerer, cursor, varRef(next.id, DYN, loc), varRef(fast.id, BOOL, loc), done, loc, "iterator.next"), loc },
       { kind: "if", cond: { kind: "unary", op: "!", operand: varRef(done.id, BOOL, loc), type: BOOL, loc }, then: [
-        { kind: "varDecl", localId: raw.id, init: get(varRef(step.id, DYN, loc), "value"), loc }, ...body,
+        ...body,
       ], else_: null, loc },
     ], loc },
   ];

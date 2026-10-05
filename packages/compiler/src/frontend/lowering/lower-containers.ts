@@ -16,6 +16,7 @@ import { buildArraySortFn } from "./lower-array-sort.js";
 import { arrayIndexPresent, arrayValueRead, arrayValueStore, arrayValueType, currentArrayIndexPresent } from "./array-values.js";
 import { typeKey } from "../type-mapper.js";
 import { type WidthLift, dynUndefinedExpr, newFnCtx, nodeThrowExpr } from "./lowerer.js";
+import { iteratorCanStep, iteratorValue } from "./iterator-consumption.js";
 import { boolLit, countedFor, numLit, strLit, varRef } from "../../ir/build.js";
 import { defaultAfterUndefined, lowerPositionArgument, lowerStaticallyUndefinedArgument, positionNumber } from "./optional-arguments.js";
 import { lowerArrayCopyWithin, lowerArrayFill } from "./array-indexed-mutation.js";
@@ -3144,14 +3145,15 @@ export function lowerArrayOfCall(lowerer: Lowerer, call: ts.CallExpression,
 export function lowerCheckedArrayFrom(lowerer: Lowerer, source: IrExpr, loc: SrcLoc, mapper?: IrExpr, receiver?: IrExpr, numeric = false, iterable?: IrExpr): Extract<IrExpr, { kind: "seqExpr" }> {
   const iterator = lowerer.declareHiddenLocal("%fromIterator", DYN);
   const next = lowerer.declareHiddenLocal("%fromNext", DYN);
-  const step = lowerer.declareHiddenLocal("%fromStep", DYN);
+  const value = lowerer.declareHiddenLocal("%fromValue", DYN);
+  const fast = lowerer.declareHiddenLocal("%fromNative", BOOL);
   const out = lowerer.declareHiddenLocal("%fromArray", DYN);
   const done = lowerer.declareHiddenLocal("%fromDone", BOOL);
   done.mutable = true;
   const index = mapper ? lowerer.declareHiddenLocal("%fromIndex", F64) : null;
   if (index) index.mutable = true;
   const get = (value: IrExpr, key: string): IrExpr => ({ kind: "dynKeyGet", value, key: strLit(key, loc), type: DYN, loc });
-  const item = get(varRef(step.id, DYN, loc), "value");
+  const item = varRef(value.id, DYN, loc);
   const mapped: IrExpr = mapper && index ? { kind: "ternary", cond: { kind: "dynTest", test: "undefined", value: mapper, type: BOOL, loc },
     then: item, else_: { kind: "dynCall", callee: mapper, ...(receiver ? { receiver } : {}), calleeName: "Array.from mapper", args: [item, lowerer.coerceToExpected(varRef(index.id, F64, loc), DYN)], type: DYN, loc }, type: DYN, loc } : item;
   const element = numeric ? lowerer.coerceToExpected({ kind: "libCall", fn: "dyn.toNumberCoerce", args: [mapped], type: F64, loc }, DYN) : mapped;
@@ -3177,14 +3179,12 @@ export function lowerCheckedArrayFrom(lowerer: Lowerer, source: IrExpr, loc: Src
     ], loc }] : []),
     { kind: "varDecl", localId: iterator.id, init: { kind: "libCall", fn: "dyn.iteratorResult", args: [{ kind: "libCall", fn: iterable ? "dyn.iterator" : "dyn.arrayFromIterator", args: iterable ? [source, iterable] : [source], type: DYN, loc }], type: DYN, loc }, loc },
     { kind: "varDecl", localId: next.id, init: get(varRef(iterator.id, DYN, loc), "next"), loc },
+    { kind: "varDecl", localId: fast.id, init: iteratorCanStep(varRef(iterator.id, DYN, loc), varRef(next.id, DYN, loc), loc), loc },
     { kind: "varDecl", localId: out.id, init: { kind: "dynArrLit", elems: [], type: DYN, loc }, loc },
     { kind: "varDecl", localId: done.id, init: boolLit(false, loc), loc },
     ...(index ? [{ kind: "varDecl" as const, localId: index.id, init: numLit(0, loc), loc }] : []),
     { kind: "while", cond: { kind: "unary", op: "!", operand: varRef(done.id, BOOL, loc), type: BOOL, loc }, body: [
-      { kind: "varDecl", localId: step.id, init: { kind: "libCall", fn: "dyn.iteratorResult", args: [{
-        kind: "dynCall", callee: varRef(next.id, DYN, loc), receiver: varRef(iterator.id, DYN, loc), calleeName: "iterator.next", args: [], type: DYN, loc,
-      }], type: DYN, loc }, loc },
-      { kind: "assign", localId: done.id, value: { kind: "dynTest", test: "truthy", value: get(varRef(step.id, DYN, loc), "done"), type: BOOL, loc }, loc },
+      { kind: "varDecl", localId: value.id, init: iteratorValue(lowerer, varRef(iterator.id, DYN, loc), varRef(next.id, DYN, loc), varRef(fast.id, BOOL, loc), done, loc, "iterator.next"), loc },
       { kind: "if", cond: { kind: "unary", op: "!", operand: varRef(done.id, BOOL, loc), type: BOOL, loc }, then: [
         append,
         ...(index ? [{ kind: "assign" as const, localId: index.id, value: { kind: "bin" as const, op: "+" as const, left: varRef(index.id, F64, loc), right: numLit(1, loc), type: F64, loc }, loc }] : []),

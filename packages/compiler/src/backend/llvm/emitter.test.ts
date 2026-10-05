@@ -139,6 +139,17 @@ test("capture boxes keep their ordinary owned-read contract", () => {
   expect(llvm.match(/call ptr @scr_str_retain_v/g)).toHaveLength(1);
 });
 
+test("native iterator steps borrow stable owners but snapshot captured state", () => {
+  const dyn: IrType = { kind: "dyn" };
+  const step: IrExpr = { kind: "libCall", fn: "dyn.iteratorStep", args: [ref(dyn)], type: dyn, loc: receiverLoc };
+  const stable = work(step, dyn);
+  expect(stable).toContain("call ptr @scr_dyn_iterator_step(");
+  expect(stable).not.toContain("call ptr @scr_dyn_retain_v(");
+  const captured = work(step, dyn, true);
+  expect(captured).toContain("call ptr @scr_box_get_ref");
+  expect(captured).toContain("call void @scr_dyn_release");
+});
+
 test("checked field receivers borrow only the successful projection", () => {
   const checked: IrExpr = {
     kind: "ternary", type: root, loc: receiverLoc,

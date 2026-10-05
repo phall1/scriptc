@@ -1213,6 +1213,18 @@ ScrStr *scr_str_trim_end(ScrStr *s) {
 static const struct { size_t rc; size_t len; size_t cap; char data[4]; }
     scr_lit_fffd = {SIZE_MAX, 3, 3, "\xEF\xBF\xBD"};
 
+/* Split owns a fresh array and appends only present string values. Fill an
+ * available dense slot directly; ordinary push handles growth and the sparse
+ * boundary. The array remains valid after every append, including RC audit. */
+static void scr_str_split_append(ScrArr *out, ScrStr *value) {
+  if (out->len < out->cap) {
+    out->data[out->len] = (uint64_t)(uintptr_t)value;
+    out->present[out->len++] = SCR_ARR_VALUE;
+  } else {
+    scr_arr_push_ref(out, value);
+  }
+}
+
 /* split(separator, limit) with a STRING separator (ECMA-262 22.1.3.23):
  * limit is ToUint32'd; zero returns [] and reaching the limit stops before
  * any later separator probes. The no-limit wrapper supplies 2^32-1.
@@ -1235,11 +1247,11 @@ ScrArr *scr_str_split_limit(ScrStr *s, ScrStr *sep, double limit_num) {
       size_t adv;
       uint32_t cp = scr_utf8_decode(s->data + i, &adv);
       if (cp >= 0x10000) { /* two units in JS: both halves become U+FFFD */
-        scr_arr_push_ref(out, scr_str_retain((ScrStr *)&scr_lit_fffd));
+        scr_str_split_append(out, scr_str_retain((ScrStr *)&scr_lit_fffd));
         if (out->len == limit) return out;
-        scr_arr_push_ref(out, scr_str_retain((ScrStr *)&scr_lit_fffd));
+        scr_str_split_append(out, scr_str_retain((ScrStr *)&scr_lit_fffd));
       } else {
-        scr_arr_push_ref(out, scr_str_from_span(s->data + i, adv));
+        scr_str_split_append(out, scr_str_from_span(s->data + i, adv));
       }
       if (out->len == limit) return out;
       i += adv;
@@ -1252,11 +1264,11 @@ ScrArr *scr_str_split_limit(ScrStr *s, ScrStr *sep, double limit_num) {
                                        sep->data, sep->len);
     if (!found) break;
     size_t at = (size_t)(found - s->data);
-    scr_arr_push_ref(out, scr_str_from_span(s->data + start, at - start));
+    scr_str_split_append(out, scr_str_from_span(s->data + start, at - start));
     if (out->len == limit) return out;
     start = at + sep->len;
   }
-  scr_arr_push_ref(out, scr_str_from_span(s->data + start, s->len - start));
+  scr_str_split_append(out, scr_str_from_span(s->data + start, s->len - start));
   return out;
 }
 

@@ -14246,6 +14246,18 @@
     "<repo>/tests/corpus/file-read-storage.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/checked-iterator-consumption.js": {
+   "order": [
+    "<repo>/tests/corpus/checked-iterator-consumption.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/structured-text-storage.ts": {
+   "order": [
+    "<repo>/tests/corpus/structured-text-storage.ts"
+   ],
+   "diags": []
   }
  }
 }

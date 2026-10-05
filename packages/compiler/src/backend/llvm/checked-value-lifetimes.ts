@@ -21,3 +21,10 @@ export function borrowsJsonInputs(fn: string): boolean {
     default: return false;
   }
 }
+
+/** A consumer owns its iterator and captured next method for the whole
+ * loop. Runtime steps borrow that state but may invoke indexed getters, so
+ * this permits stable-local borrowing without preserving reference edges. */
+export function borrowsIteratorInputs(fn: string): boolean {
+  return fn === "dyn.iteratorCanStep" || fn === "dyn.iteratorStep" || fn === "dyn.iteratorStepDone";
+}

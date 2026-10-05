@@ -2173,6 +2173,9 @@ export type IrLibFn =
   | "dyn.arrayFromIterator"
   | "dyn.iterator"
   | "dyn.iteratorResult"
+  | "dyn.iteratorCanStep"
+  | "dyn.iteratorStep"
+  | "dyn.iteratorStepDone"
   | "dyn.mapSeedEntries"
   | "dyn.mapSeedEntry"
   /** The for-of-over-dyn pack accessors — the emitted index loop drives
@@ -7911,6 +7914,7 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "dyn.arrayFromIterator",
   "dyn.iterator",
   "dyn.iteratorResult",
+  "dyn.iteratorStep",
   "dyn.mapSeedEntries",
   "dyn.mapSeedEntry",
   "dyn.freeze",

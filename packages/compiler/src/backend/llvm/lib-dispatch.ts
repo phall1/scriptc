@@ -1,5 +1,5 @@
 import { emitBorrowedInput } from "./borrowed-inputs.js";
-import { borrowsJsonInputs } from "./checked-value-lifetimes.js";
+import { borrowsIteratorInputs, borrowsJsonInputs } from "./checked-value-lifetimes.js";
 import { emitTlsLibCall } from "./lib-tls.js";
 import { emitHttp2LibCall } from "./lib-http2.js";
 import { emitDatagramLibCall } from "./lib-datagram.js";
@@ -235,7 +235,7 @@ export function emitGenericLibCall(host: LlvmEmitterContext, e: LibCallExpr): Ll
     }
     const sym = LIB_FN_SYMS[e.fn];
     if (sym === undefined) throw new LlvmUnsupportedError(`libCall:${e.fn}`, e.loc);
-    const args = e.args.map((a) => borrowsJsonInputs(e.fn) ? emitBorrowedInput(host, a) : host.emitExpr(a));
+    const args = e.args.map((a) => borrowsJsonInputs(e.fn) || borrowsIteratorInputs(e.fn) ? emitBorrowedInput(host, a) : host.emitExpr(a));
     const argDecls = args.map((a) => {
       const ty = host.llType(a.type);
       return ty === "i1" ? "i1 zeroext" : ty;
