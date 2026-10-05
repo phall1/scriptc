@@ -651,7 +651,9 @@ function loadProgram7(
   if (provenance !== null || externalTypes.size > 0) {
     const paths: Record<string, string[]> = {
       ...(configuredPaths as Record<string, string[]> | undefined),
-      ...provenance,
+      // Keep an index-signature source for native lowering when provenance is absent.
+      // oxlint-disable-next-line unicorn/no-useless-fallback-in-spread
+      ...(provenance ?? {}),
     };
     for (const [specifier, declarationPath] of externalTypes) {
       paths[specifier] = [declarationPath];

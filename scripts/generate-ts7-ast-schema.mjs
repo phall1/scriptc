@@ -285,7 +285,7 @@ const getters = names
         : type.includes("AstNode[]")
           ? "childList"
           : "childNode";
-    return `  get ${name}(): ${type} { return this.${method}(${JSON.stringify(name)}); }`;
+    return `  get ${name}(): ${type} {\n    return this.${method}(${JSON.stringify(name)});\n  }`;
   });
 const nodeTarget = join(root, "packages/compiler/src/frontend/ts7/ast-node.ts");
 const before = readFileSync(nodeTarget, "utf8");
