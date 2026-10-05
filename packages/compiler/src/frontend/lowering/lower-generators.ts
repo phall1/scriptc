@@ -1,3 +1,4 @@
+import { dynUndefinedExpr } from "../../ir/build.js";
 import { InternalCompilerError } from "../../errors.js";
 /* Generator lowering: yield / yield* expressions, the consumer surface
  * (.next/.return/.throw → genResume), and the for-of-over-generator
@@ -9,7 +10,7 @@ import { InternalCompilerError } from "../../errors.js";
  * g.next()` binds and reads flow. */
 import * as ts from "../ts7/adapter.js";
 import type { Lowerer } from "./lowerer.js";
-import { BOOL, DYN, type IrExpr, type IrStmt, type IrType, type SrcLoc, UNDEFINED_T, VOID, isUnitType, typeEquals } from "../../ir/ir.js";
+import { BOOL, DYN, type IrExpr, type IrStmt, type IrType, type SrcLoc, VOID, isUnitType, typeEquals } from "../../ir/ir.js";
 import { locOf } from "../program.js";
 import { genResultRecord } from "../type-mapper.js";
 import { forOfVarTarget, lowerDestructuringAssign } from "./lower-stmts.js";
@@ -30,12 +31,7 @@ function resultRecordOf(lowerer: Lowerer, genT: GenType): IrType & { kind: "reco
  * channel cannot hold undefined. */
 function channelUndefined(lowerer: Lowerer, channel: IrType, loc: SrcLoc): IrExpr | null {
   if (channel.kind === "dyn") {
-    return {
-      kind: "dynFrom",
-      value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc },
-      type: DYN,
-      loc,
-    };
+    return dynUndefinedExpr(loc);
   }
   if (channel.kind === "union") return lowerer.wrappedUndefined(channel, loc);
   return null;

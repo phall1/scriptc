@@ -1,8 +1,8 @@
+import { dynUndefinedExpr, varRef } from "../../ir/build.js";
 import { BOOL, DYN, STRING, canConvertToDyn, funcOf, typeEquals, typeKey, type IrExpr, type IrFunction, type IrStmt, type IrType } from "../../ir/ir.js";
-import { varRef } from "../../ir/build.js";
 import { everyStmtList, transformStmtList } from "../../ir/traverse.js";
 import { genResultRecord } from "../type-mapper.js";
-import { dynUndefinedExpr, type Lowerer } from "./lowerer.js";
+import type { Lowerer } from "./lowerer.js";
 
 type GeneratorType = Extract<IrType, { kind: "generator" }>;
 type Invoke = Extract<IrExpr, { kind: "dynInvoke" }>;

@@ -1,3 +1,4 @@
+import { dynUndefinedExpr, nodeThrowExpr, boolLit, countedFor, numLit, strLit, varRef } from "../../ir/build.js";
 import { objectEnumerationReceiver } from "./object-enumeration-receiver.js";
 import { InternalCompilerError } from "../../errors.js";
 /* Container-surface call lowering: array methods (including the HOF family
@@ -15,9 +16,8 @@ import { islandPrimitiveExit, lowerDynDispatchMethodCall } from "./lower-calls.j
 import { buildArraySortFn } from "./lower-array-sort.js";
 import { arrayIndexPresent, arrayValueRead, arrayValueStore, arrayValueType, currentArrayIndexPresent } from "./array-values.js";
 import { typeKey } from "../type-mapper.js";
-import { type WidthLift, dynUndefinedExpr, newFnCtx, nodeThrowExpr } from "./lowerer.js";
+import { type WidthLift, newFnCtx } from "./lowerer.js";
 import { iteratorCanStep, iteratorValue } from "./iterator-consumption.js";
-import { boolLit, countedFor, numLit, strLit, varRef } from "../../ir/build.js";
 import { defaultAfterUndefined, lowerPositionArgument, lowerStaticallyUndefinedArgument, positionNumber } from "./optional-arguments.js";
 import { lowerArrayCopyWithin, lowerArrayFill } from "./array-indexed-mutation.js";
 import { collectionInput, collectionDestinationMatches, ingestCollection, lowerCollectionInput } from "./collection-ingestion.js";
@@ -3526,12 +3526,7 @@ function buildArrayFromArrayFn(lowerer: Lowerer, name: string, elem: IrType,
     const outT = arrayOf(fnRet);
     const fnT = funcOf([DYN, F64].slice(0, arity), fnRet);
 
-    const undef: IrExpr = {
-      kind: "dynFrom",
-      value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc },
-      type: DYN,
-      loc,
-    };
+    const undef: IrExpr = dynUndefinedExpr(loc);
     const body: IrStmt[] = [
       { kind: "varDecl", localId: "out.0", init: { kind: "arrayLit", elems: [], type: outT, loc }, loc },
       countedFor(
@@ -6657,10 +6652,10 @@ export function mapFromSeedValue(lowerer: Lowerer, seed: IrExpr, mapT: IrType & 
       }
     }
     const key = `ovf:${fromId}:${toId}`;
-    const existing = lowerer.widthHelpers.get(key);
+    const existing = lowerer.valueHelpers.get(key);
     if (existing) return existing;
-    const name = `%rec.capture.${lowerer.widthHelpers.size}`;
-    lowerer.widthHelpers.set(key, name);
+    const name = `%rec.capture.${lowerer.valueHelpers.size}`;
+    lowerer.valueHelpers.set(key, name);
     const fromT: IrType = { kind: "record", shapeId: fromId };
     const toT: IrType = { kind: "record", shapeId: toId };
 
@@ -6859,10 +6854,10 @@ export function mapFromSeedValue(lowerer: Lowerer, seed: IrExpr, mapT: IrType & 
     }
     const helperFor = (plan: SourcePlan): string => {
       const key = `assign:${targetIr.shapeId}:${plan.fromId}`;
-      const existing = lowerer.widthHelpers.get(key);
+      const existing = lowerer.valueHelpers.get(key);
       if (existing) return existing;
-      const name = `%obj.assign.${lowerer.widthHelpers.size}`;
-      lowerer.widthHelpers.set(key, name);
+      const name = `%obj.assign.${lowerer.valueHelpers.size}`;
+      lowerer.valueHelpers.set(key, name);
       const toT: IrType = { kind: "record", shapeId: targetIr.shapeId };
       const fromT: IrType = { kind: "record", shapeId: plan.fromId };
 
@@ -7059,10 +7054,10 @@ export type IndexMergeContributor =
       contributors
         .map((c) => (c.kind === "spread" ? `s${c.shapeId}` : c.kind === "condField" ? `c${c.name}` : c.kind === "keyedField" ? "k" : `f${c.name}`))
         .join(",");
-    const existing = lowerer.widthHelpers.get(key);
+    const existing = lowerer.valueHelpers.get(key);
     if (existing) return existing;
-    const name = `%rec.merge.${lowerer.widthHelpers.size}`;
-    lowerer.widthHelpers.set(key, name);
+    const name = `%rec.merge.${lowerer.valueHelpers.size}`;
+    lowerer.valueHelpers.set(key, name);
     const toT: IrType = { kind: "record", shapeId: toId };
     const ksT = arrayOf(STRING);
 
@@ -7281,10 +7276,10 @@ export type IndexMergeContributor =
     }
     if (shape.indexValue && !slotOk(shape.indexValue)) return null;
     const key = `env.pairs:${shapeId}`;
-    const existing = lowerer.widthHelpers.get(key);
+    const existing = lowerer.valueHelpers.get(key);
     if (existing) return existing;
-    const name = `%env.pairs.${lowerer.widthHelpers.size}`;
-    lowerer.widthHelpers.set(key, name);
+    const name = `%env.pairs.${lowerer.valueHelpers.size}`;
+    lowerer.valueHelpers.set(key, name);
     const recT: IrType = { kind: "record", shapeId };
     const arrT = arrayOf(STRING);
 

@@ -1,3 +1,4 @@
+import { dynUndefinedExpr } from "../../ir/build.js";
 import { dirname } from "node:path";
 import * as posix from "node:path/posix";
 import { pathToFileURL } from "node:url";
@@ -5,7 +6,7 @@ import { BOOL, STRING, type IrExpr } from "../../ir/ir.js";
 import { wasiGuestPath } from "../../wasi-paths.js";
 import { locOf } from "../program.js";
 import * as ts from "../ts7/adapter.js";
-import { dynUndefinedExpr, type Lowerer } from "./lowerer.js";
+import type { Lowerer } from "./lowerer.js";
 
 export function isImportMeta(expr: ts.Expression): boolean {
   while (ts.isParenthesizedExpression(expr)) expr = expr.expression;

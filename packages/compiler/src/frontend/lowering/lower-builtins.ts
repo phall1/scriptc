@@ -1,3 +1,5 @@
+import { dynUndefinedExpr, nodeThrowExpr, boolLit, countedFor, numLit, strLit, varRef } from "../../ir/build.js";
+import { timerStyleCallback } from "./lower-timers.js";
 import { staticTextDecoderEncoding } from "./text-decoder-encoding.js";
 import { checkedPromiseAll } from "./checked-promise-all.js";
 import { InternalCompilerError } from "../../errors.js";
@@ -10,7 +12,7 @@ import { dirname, isAbsolute, resolve } from "node:path";
 import * as ts from "../ts7/adapter.js";
 import type { Lowerer } from "./lowerer.js";
 import { lowerCheckedPredicateValue } from "./lower-builtin-values.js";
-import { PoisonError, dynUndefinedExpr, ladderFenceExpr, nodeThrowExpr, own } from "./lowerer.js";
+import { PoisonError, ladderFenceExpr, own } from "./lowerer.js";
 import { canonicalBuiltinModule, isCreateRequireBinding7, isJsSourceFile, isNodeEsmFile, locOf, npmStaticDepSf7, requireSpecOf, resolveImport } from "../program.js";
 import { isRelativeSpecifier } from "../workspace-registry.js";
 import { probeNodeRequireRefusal } from "../npm.js";
@@ -39,13 +41,12 @@ import { tryLowerExpression } from "./expressions/try-lower-expression.js";
 import { defaultAfterUndefined, lowerOptionalArgument, lowerStaticallyUndefinedArgument, lowerStringSearchArgument } from "./optional-arguments.js";
 import { HTTP2_CONSTANTS } from "./http2-constants.js";
 import { CRYPTO_CIPHERS, CRYPTO_CONSTANTS, CRYPTO_CURVES, CRYPTO_HASHES } from "./crypto-tables.js";
-import { generatorMeta, timerStyleCallback, type ParamShape } from "./lower-calls.js";
+import { generatorMeta, type ParamShape } from "./lower-calls.js";
 import { registerHttpClientFnBinding, voidizedCallback } from "./lower-server.js";
 import { pairsSnapshotHelper } from "./pairs-snapshot.js";
 import { isJsonStringifyDynamicType } from "../../ir/ir.js";
 import { bufEncoding } from "./containers/bytes.js";
 import { BOOL, BYTES_U8, CHILD_T, CHILDSTREAM_T, CHILDWRITER_T, CRYPTOHASH_T, CRYPTOHMAC_T, DYN, F64, FILEHANDLE_T, FSWATCHER_T, PROCSTREAM_T, type IrExpr, type IrFunction, type IrLibFn, type IrLocal, type IrStmt, type IrType, JSVAL, NULL_T, SEARCH_PARAMS_T, SPAWNRES_T, STRING, type SrcLoc, UNDEFINED_T, VOID, arrayOf, canBoxFuncIntoDyn, canConvertToDyn, funcOf, isUnitType, typeEquals, typeKey } from "../../ir/ir.js";
-import { boolLit, countedFor, numLit, strLit, varRef } from "../../ir/build.js";
 import { staticForkModulePath } from "../fork-target.js";
 import { tsgoPath } from "../dts-paths.js";
 import { lowerFfiMemoryModule } from "./native-ffi.js";
@@ -224,10 +225,10 @@ function lowerOptionalNumberPredicate(
   const numberTag = widened.kind === "union" ? lowerer.armTag(widened.unionId, F64) : -1;
   if (widened.kind === "union" && numberTag < 0) return null;
   const key = `number.optionalPredicate:${fn}:${typeKey(widened)}`;
-  let helper = lowerer.widthHelpers.get(key);
+  let helper = lowerer.valueHelpers.get(key);
   if (!helper) {
-    helper = `%number.optionalPredicate.${lowerer.widthHelpers.size}`;
-    lowerer.widthHelpers.set(key, helper);
+    helper = `%number.optionalPredicate.${lowerer.valueHelpers.size}`;
+    lowerer.valueHelpers.set(key, helper);
     const input = varRef("value.0", widened, loc);
     lowerer.liftedFns.push({
       name: helper,
@@ -4264,10 +4265,10 @@ export function lowerForkCall(lowerer: Lowerer, expr: ts.CallExpression, loc: Sr
       { name: "pairs", type: arrayOf(STRING) },
     ]);
     const key = "execFileAsync";
-    const existing = lowerer.widthHelpers.get(key);
+    const existing = lowerer.valueHelpers.get(key);
     if (existing) return { name: existing, shapeId, envShapeId };
-    const name = `%execFileAsync.${lowerer.widthHelpers.size}`;
-    lowerer.widthHelpers.set(key, name);
+    const name = `%execFileAsync.${lowerer.valueHelpers.size}`;
+    lowerer.valueHelpers.set(key, name);
     const recT: IrType = { kind: "record", shapeId };
     const envRecT: IrType = { kind: "record", shapeId: envShapeId };
     const strArrT = arrayOf(STRING);
@@ -4909,10 +4910,10 @@ export function lowerForkCall(lowerer: Lowerer, expr: ts.CallExpression, loc: Sr
    * the pure strdec.* libCalls. */
   export function strdecHelper(lowerer: Lowerer, op: "write" | "end" | "endChunk" | "endString" | "writeString", shapeId: string, loc: SrcLoc): string {
     const key = `strdec.${op}`;
-    const existing = lowerer.widthHelpers.get(key);
+    const existing = lowerer.valueHelpers.get(key);
     if (existing) return existing;
-    const name = `%strdec.${op}.${lowerer.widthHelpers.size}`;
-    lowerer.widthHelpers.set(key, name);
+    const name = `%strdec.${op}.${lowerer.valueHelpers.size}`;
+    lowerer.valueHelpers.set(key, name);
     const recT: IrType = { kind: "record", shapeId };
 
     const pendingRead = (): IrExpr => ({
@@ -5164,10 +5165,10 @@ function lowerStringOrBytesWrite(lowerer: Lowerer, call: ts.CallExpression,
   dataType: Extract<IrType, { kind: "union" }>, arms: readonly IrType[], append: boolean): IrExpr {
   const loc = locOf(call);
   const key = `fs.${append ? "append" : "write"}:${dataType.unionId}`;
-  let helper = lowerer.widthHelpers.get(key);
+  let helper = lowerer.valueHelpers.get(key);
   if (!helper) {
-    helper = `%fs.writeData.${lowerer.widthHelpers.size}`;
-    lowerer.widthHelpers.set(key, helper);
+    helper = `%fs.writeData.${lowerer.valueHelpers.size}`;
+    lowerer.valueHelpers.set(key, helper);
     const body: IrStmt[] = [];
     for (let tag = 0; tag < arms.length; tag++) {
       const arm = arms[tag]!;
@@ -5200,10 +5201,10 @@ function lowerOptionalStringifyRoot(lowerer: Lowerer, value: IrExpr, indent: str
   if (!tags || value.type.kind !== "union") return null;
   const resultT = lowerer.withUndefinedArm(STRING);
   const key = `json.optionalString:${value.type.unionId}:${JSON.stringify(indent)}`;
-  let helper = lowerer.widthHelpers.get(key);
+  let helper = lowerer.valueHelpers.get(key);
   if (!helper) {
-    helper = `%json.optionalString.${lowerer.widthHelpers.size}`;
-    lowerer.widthHelpers.set(key, helper);
+    helper = `%json.optionalString.${lowerer.valueHelpers.size}`;
+    lowerer.valueHelpers.set(key, helper);
     const input = varRef("value.0", value.type, loc);
     const serialized: IrExpr = {
       kind: "jsonStringify",
@@ -5778,10 +5779,10 @@ function lowerOptionalStringSearchParams(lowerer: Lowerer, init: IrExpr, loc: Sr
   const tags = optionalStringTags(lowerer, init.type);
   if (!tags || init.type.kind !== "union") return null;
   const key = `sp.optionalString:${init.type.unionId}`;
-  let helper = lowerer.widthHelpers.get(key);
+  let helper = lowerer.valueHelpers.get(key);
   if (!helper) {
-    helper = `%sp.optionalString.${lowerer.widthHelpers.size}`;
-    lowerer.widthHelpers.set(key, helper);
+    helper = `%sp.optionalString.${lowerer.valueHelpers.size}`;
+    lowerer.valueHelpers.set(key, helper);
     const value = varRef("init.0", init.type, loc);
     lowerer.liftedFns.push({
       name: helper,
@@ -8178,11 +8179,11 @@ function lowerProcessIpcSend(lowerer: Lowerer, call: ts.CallExpression): IrExpr 
     }
     const loc = locOf(call);
     const path: IrExpr = call.arguments[0] ? lowerer.lowerExprExpecting(call.arguments[0], DYN)
-      : { kind: "dynFrom", value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc }, type: DYN, loc };
+      : dynUndefinedExpr(loc);
     const load: IrExpr = { kind: "libCall", fn: "process.loadEnvFile", args: [path], type: VOID, loc };
     if (ts.isExpressionStatement(call.parent)) return load;
     return { kind: "seqExpr", stmts: [{ kind: "exprStmt", expr: load, loc }],
-      result: { kind: "dynFrom", value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc }, type: DYN, loc }, type: DYN, loc };
+      result: dynUndefinedExpr(loc), type: DYN, loc };
   }
 
 /** `process.exit(code)` / `process.cwd()` → libCall. The fallback
@@ -8212,7 +8213,7 @@ function lowerProcessIpcSend(lowerer: Lowerer, call: ts.CallExpression): IrExpr 
       if (call.arguments.some(ts.isSpreadElement)) lowerer.noLowering("process.getBuiltinModule with spread arguments", call);
       const loc = locOf(call);
       const id = call.arguments[0] ? lowerer.lowerExprExpecting(call.arguments[0], DYN)
-        : { kind: "dynFrom", value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc }, type: DYN, loc } satisfies IrExpr;
+        : dynUndefinedExpr(loc) satisfies IrExpr;
       const binding = lowerer.declareHiddenLocal("%builtinId", DYN);
       return { kind: "seqExpr", stmts: [
         { kind: "varDecl", localId: binding.id, init: id, loc },
@@ -8800,10 +8801,10 @@ function lowerProcessIpcSend(lowerer: Lowerer, call: ts.CallExpression): IrExpr 
       }
       const prevT = prev.type;
       const key = `${prefix}usage.diff:${prevT.shapeId}:${t.shapeId}`;
-      let helper = lowerer.widthHelpers.get(key);
+      let helper = lowerer.valueHelpers.get(key);
       if (!helper) {
-        helper = `%${prefix}usage.diff.${lowerer.widthHelpers.size}`;
-        lowerer.widthHelpers.set(key, helper);
+        helper = `%${prefix}usage.diff.${lowerer.valueHelpers.size}`;
+        lowerer.valueHelpers.set(key, helper);
         const pRef: IrExpr = { kind: "varRef", localId: "p.0", type: prevT, loc };
         const fieldOf = (name: string): IrExpr => ({
           kind: "recordGet", obj: pRef, shapeId: prevT.shapeId, field: name, type: F64, loc,
@@ -9237,10 +9238,10 @@ function lowerStoredTextCodecCall(lowerer: Lowerer, call: ts.CallExpression, acc
       "Uint8Array/Buffer input decodes (ArrayBuffer values have no representation)");
   }
   const key = `textCodec.${cls}.${receiver.type.shapeId}`;
-  let name = lowerer.widthHelpers.get(key);
+  let name = lowerer.valueHelpers.get(key);
   if (!name) {
     name = `%${key}`;
-    lowerer.widthHelpers.set(key, name);
+    lowerer.valueHelpers.set(key, name);
     const recT = receiver.type;
     const input = varRef("input.0", arg.type, loc);
     const result: IrExpr = cls === "TextEncoder"

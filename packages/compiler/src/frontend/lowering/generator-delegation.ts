@@ -1,8 +1,8 @@
+import { dynUndefinedExpr, varRef } from "../../ir/build.js";
 import * as ts from "../ts7/adapter.js";
 import { BOOL, DYN, F64, STRING, canConvertToDyn, type IrExpr, type IrStmt } from "../../ir/ir.js";
-import { varRef } from "../../ir/build.js";
 import { locOf } from "../program.js";
-import { dynUndefinedExpr, type Lowerer } from "./lowerer.js";
+import type { Lowerer } from "./lowerer.js";
 
 /** The synchronous IteratorRecord protocol, including completion forwarding.
  * Native class methods enter through the checked-value dispatcher; every

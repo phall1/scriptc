@@ -1,8 +1,8 @@
+import { dynUndefinedExpr, strLit, varRef } from "../../ir/build.js";
 import * as ts from "../ts7/adapter.js";
 import { DYN, STRING, type IrExpr, type IrFunction, type IrStmt } from "../../ir/ir.js";
-import { strLit, varRef } from "../../ir/build.js";
 import { locOf } from "../program.js";
-import { dynUndefinedExpr, newFnCtx, type Lowerer } from "./lowerer.js";
+import { newFnCtx, type Lowerer } from "./lowerer.js";
 
 /** Computed namespace reads select live exports instead of copying a
  * namespace into a registry snapshot. Constructor registries may contain

@@ -1,9 +1,9 @@
+import { nodeThrowExpr, numLit, strLit, varRef } from "../../../ir/build.js";
 import * as ts from "../../ts7/adapter.js";
 import { BOOL, DYN, F64, type IrExpr, type IrFunction, type IrStmt, type IrType, STRING, type SrcLoc, UNDEFINED_T, arrayOf, isUnitType, typeEquals, typeKey } from "../../../ir/ir.js";
-import { numLit, strLit, varRef } from "../../../ir/build.js";
 import { locOf } from "../../program.js";
 import type { Lowerer } from "../lowerer.js";
-import { nodeThrowExpr, own } from "../lowerer.js";
+import { own } from "../lowerer.js";
 import { isRequireMainFilename } from "../expressions/optional-chains.js";
 import { STRING_INDEX_METHODS, STRING_REPLACE_METHODS, STR_METHODS } from "../surfaces.js";
 import { lowerStringReplacement } from "./string-replacement.js";
@@ -73,9 +73,9 @@ export function lowerStringSplitCall(
     return { kind: "strIntrinsic", method: "split", receiver, args: [separator, limit], type: resultType, loc };
   }
   const key = `str.split:${receiver.type.kind === "union" ? typeKey(receiver.type) : receiver.type.kind}:${typeKey(separator.type)}:${typeKey(limit.type)}:${absent}`;
-  let helper = lowerer.widthHelpers.get(key);
+  let helper = lowerer.valueHelpers.get(key);
   if (!helper) {
-    helper = `%str.split.${lowerer.widthHelpers.size}`;
+    helper = `%str.split.${lowerer.valueHelpers.size}`;
     const values = [receiver, separator, limit];
     const params = values.map((value, index) => ({ localId: `arg.${index}`, name: `arg${index}`, type: value.type }));
     const rawReceiver = varRef("arg.0", receiver.type, loc);
@@ -110,7 +110,7 @@ export function lowerStringSplitCall(
       },
       type: resultType, loc,
     };
-    lowerer.widthHelpers.set(key, helper);
+    lowerer.valueHelpers.set(key, helper);
     lowerer.liftedFns.push({
       name: helper, params, returnType: resultType,
       locals: [
@@ -182,10 +182,10 @@ export function lowerStringIndexCall(
   const undefinedTag = lowerer.armTag(resultType.unionId, UNDEFINED_T);
   const valueTag = lowerer.armTag(resultType.unionId, valueType);
   const key = `str.index:${method}:${typeKey(receiver.type)}:${typeKey(index.type)}`;
-  let helper = lowerer.widthHelpers.get(key);
+  let helper = lowerer.valueHelpers.get(key);
   if (!helper) {
-    helper = `%str.index.${lowerer.widthHelpers.size}`;
-    lowerer.widthHelpers.set(key, helper);
+    helper = `%str.index.${lowerer.valueHelpers.size}`;
+    lowerer.valueHelpers.set(key, helper);
     const rawReceiver = varRef("arg.0", receiver.type, loc);
     const rawIndex = varRef("arg.1", index.type, loc);
     const stringReceiver = varRef("receiver.0", STRING, loc);
@@ -311,9 +311,9 @@ export function lowerStringPaddingCall(
       ? lowerer.coerceToExpected(rawFill, DYN) : rawFill;
   const values = [receiver, maxLength, fill];
   const key = `str.pad:${method}:${values.map(value => typeKey(value.type)).join(":")}`;
-  let helper = lowerer.widthHelpers.get(key);
+  let helper = lowerer.valueHelpers.get(key);
   if (!helper) {
-    helper = `%str.pad.${lowerer.widthHelpers.size}`;
+    helper = `%str.pad.${lowerer.valueHelpers.size}`;
     const params = values.map((value, index) => ({ localId: `arg.${index}`, name: `arg${index}`, type: value.type }));
     const rawReceiver = varRef("arg.0", receiver.type, loc);
     const convertedReceiver: IrExpr = receiver.type.kind === "dyn" ? {
@@ -348,7 +348,7 @@ export function lowerStringPaddingCall(
       { kind: "varDecl", localId: "length.0", init: positionNumber(lowerer, varRef("arg.1", maxLength.type, loc), numLit(0, loc), argumentNodes[0] ?? call, "string padding length"), loc },
       { kind: "return", value: result, loc },
     ];
-    lowerer.widthHelpers.set(key, helper);
+    lowerer.valueHelpers.set(key, helper);
     lowerer.liftedFns.push({
       name: helper, params, returnType: STRING,
       locals: [
@@ -615,9 +615,9 @@ export function lowerStringMethodCall(lowerer: Lowerer, call: ts.CallExpression,
       return { kind: "strIntrinsic", method: entry.method, receiver, args: [needle, position], type: entry.result, loc };
     }
     const key = `str.positions:${entry.method}:${typeKey(needle.type)}:${typeKey(position.type)}`;
-    let helper = lowerer.widthHelpers.get(key);
+    let helper = lowerer.valueHelpers.get(key);
     if (!helper) {
-      helper = `%str.positions.${lowerer.widthHelpers.size}`;
+      helper = `%str.positions.${lowerer.valueHelpers.size}`;
       const params = [receiver, needle, position].map((arg, index) => ({ localId: `arg.${index}`, name: `arg${index}`, type: arg.type }));
       const coerceNeedle = needle.type.kind !== "string";
       const search: IrExpr = coerceNeedle ? varRef("search.0", STRING, loc) : varRef("arg.1", STRING, loc);
@@ -640,7 +640,7 @@ export function lowerStringMethodCall(lowerer: Lowerer, call: ts.CallExpression,
         body.push({ kind: "varDecl", localId: "search.0", init, loc });
       }
       body.push({ kind: "return", value: result, loc });
-      lowerer.widthHelpers.set(key, helper);
+      lowerer.valueHelpers.set(key, helper);
       lowerer.liftedFns.push({
         name: helper, params, returnType: entry.result,
         locals, body, loc,
@@ -664,16 +664,16 @@ export function lowerStringMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     // throw. Its parameters also give owned strings/unions a per-call lifetime
     // when the call occurs in a loop condition or short-circuit expression.
     const key = `str.positions:${entry.method}:${args.map(arg => typeKey(arg.type)).join(":")}`;
-    let helper = lowerer.widthHelpers.get(key);
+    let helper = lowerer.valueHelpers.get(key);
     if (!helper) {
-      helper = `%str.positions.${lowerer.widthHelpers.size}`;
+      helper = `%str.positions.${lowerer.valueHelpers.size}`;
       const params = [receiver, ...args].map((arg, index) => ({ localId: `arg.${index}`, name: `arg${index}`, type: arg.type }));
       const result: IrExpr = {
         kind: "strIntrinsic", method: entry.method, receiver: varRef("arg.0", STRING, loc),
         args: args.map((arg, index) => positionNumber(lowerer, varRef(`arg.${index + 1}`, arg.type, loc), defaults[index]!, argumentNodes[index] ?? call, subject)),
         type: entry.result, loc,
       };
-      lowerer.widthHelpers.set(key, helper);
+      lowerer.valueHelpers.set(key, helper);
       lowerer.liftedFns.push({
         name: helper, params, returnType: entry.result,
         locals: params.map(param => ({ id: param.localId, name: param.name, type: param.type, mutable: false })),

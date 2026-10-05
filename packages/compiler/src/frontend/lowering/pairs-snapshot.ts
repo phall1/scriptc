@@ -30,10 +30,10 @@ export function pairsSnapshotHelper(
     if (arrayValue.kind !== "union" || indexValue.unionId !== arrayValue.unionId) return null;
   } else if (stringTag < 0) return null;
   const key = `${options.keyPrefix}.snapshot:${shapeId}`;
-  const existing = lowerer.widthHelpers.get(key);
+  const existing = lowerer.valueHelpers.get(key);
   if (existing) return existing;
-  const name = `%${options.keyPrefix}.snapshot.${lowerer.widthHelpers.size}`;
-  lowerer.widthHelpers.set(key, name);
+  const name = `%${options.keyPrefix}.snapshot.${lowerer.valueHelpers.size}`;
+  lowerer.valueHelpers.set(key, name);
   const recordType: IrType = { kind: "record", shapeId };
   const pairsType = arrayOf(STRING);
   const pairAt = (offset: number): IrExpr => ({

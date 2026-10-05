@@ -1,8 +1,8 @@
+import { dynUndefinedExpr, varRef } from "../../ir/build.js";
 import { BOOL, DYN, F64, DYN_CLASS_PROPERTIES as PROPERTY_BAG, STRING, VOID, canConvertToDyn, canDynCheckTo, isClassOwnEnumerableFieldName, isDynTypedRefType, isUnitType, typeEquals, typeKey, type IrExpr, type IrFunction, type IrStmt, type IrType, type SrcLoc } from "../../ir/ir.js";
 import { streamTypedRefEligible } from "../../ir/analysis.js";
-import { varRef } from "../../ir/build.js";
 import { everyStmtList, transformExpr, transformStmtList } from "../../ir/traverse.js";
-import { dynUndefinedExpr, PoisonError, type Lowerer } from "./lowerer.js";
+import { PoisonError, type Lowerer } from "./lowerer.js";
 import { implicitDefaultInstance, type ParamShape } from "./lower-calls.js";
 import { accessorCall, classValueRef, findGenericMethodOn, findGenericStaticOn, findMethodOn, findStaticOn, genericOverrideBelow, upcastTo, type ClassInfo } from "./lower-classes.js";
 import { classPrototypeData, hasClassPrototypeData, reflectClassPrototype } from "./class-prototypes.js";

@@ -1,7 +1,6 @@
+import { nodeThrowExpr, varRef } from "../../ir/build.js";
 import { BOOL, DYN, STRING, VOID, type IrExpr, type IrFunction, type IrStmt, type IrType } from "../../ir/ir.js";
-import { varRef } from "../../ir/build.js";
 import type { Lowerer } from "./lowerer.js";
-import { nodeThrowExpr } from "./lowerer.js";
 import { classPrototypeData, hasClassPrototypeData } from "./class-prototypes.js";
 import { classMethodValue } from "./class-method-values.js";
 import { accessorCall, findMethodOn } from "./lower-classes.js";

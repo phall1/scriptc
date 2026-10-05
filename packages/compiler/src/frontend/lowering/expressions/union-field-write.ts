@@ -1,8 +1,7 @@
+import { nodeThrowExpr, varRef } from "../../../ir/build.js";
 import * as ts from "../../ts7/adapter.js";
 import type { Lowerer } from "../lowerer.js";
-import { nodeThrowExpr } from "../lowerer.js";
 import { BOOL, VOID, type IrExpr, type IrStmt, type IrType, typeEquals } from "../../../ir/ir.js";
-import { varRef } from "../../../ir/build.js";
 import { locOf } from "../../program.js";
 
 /** Assign a common data field without projecting the union's records into

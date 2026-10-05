@@ -1,3 +1,4 @@
+import { dynUndefinedExpr } from "../../ir/build.js";
 /* Static async-iterator consumers shared by Node Readable and Web
  * ReadableStream. Both lower through one completion discipline: an
  * `active` flag is set only while user loop-body code owns a yielded value,
@@ -8,7 +9,6 @@ import { InternalCompilerError } from "../../errors.js";
 import type { Lowerer } from "./lowerer.js";
 import { BOOL, DYN, type IrExpr, type IrStmt, type IrType, VOID } from "../../ir/ir.js";
 import { locOf } from "../program.js";
-import { dynUndefinedExpr } from "./lowerer.js";
 import { extractIteratorValue } from "./lower-generators.js";
 import { streamSidesOf } from "./lower-stream.js";
 import { staticReadableStreamElementType } from "./lower-island.js";

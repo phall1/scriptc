@@ -1,7 +1,7 @@
+import { nodeThrowExpr, strLit, varRef } from "../../ir/build.js";
 import * as ts from "../ts7/adapter.js";
-import { nodeThrowExpr, type Lowerer } from "./lowerer.js";
+import type { Lowerer } from "./lowerer.js";
 import { BOOL, DYN, STRING, UNDEFINED_T, URL_T, isUnitType, type IrExpr, type IrLibFn, type IrStmt } from "../../ir/ir.js";
-import { strLit, varRef } from "../../ir/build.js";
 import { locOf } from "../program.js";
 import { staticForkString } from "../fork-target.js";
 import { lowerStaticallyUndefinedArgument } from "./optional-arguments.js";

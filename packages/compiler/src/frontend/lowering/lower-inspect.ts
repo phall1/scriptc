@@ -1,3 +1,4 @@
+import { dynUndefinedExpr, boolLit, numLit, strLit, varRef } from "../../ir/build.js";
 import { InternalCompilerError } from "../../errors.js";
 /* The node:util inspect/format lowering (a spoke module like
  * lower-assert.ts): STATIC util.inspect — one synthesized traversal
@@ -41,7 +42,6 @@ import { isJsSourceFile } from "../program.js";
 import { BOOL, DYN, F64, type IrExpr, type IrStmt, type IrType, RUNTIME_ERROR_CLASSES, STRING, UNDEFINED_T, type SrcLoc, canConvertToDyn, canDynCheckTo, recordTextCodecClass, shapeHasAccessorSlots, typeKey } from "../../ir/ir.js";
 import type { ClassInfo } from "./lower-classes.js";
 import { isSafeToRepeat } from "./expressions/evaluation-safety.js";
-import { boolLit, numLit, strLit, varRef } from "../../ir/build.js";
 import { symbolFieldDisplayName } from "./symbol-fields.js";
 import { lowerSystemErrorMap } from "./lower-system-errors.js";
 
@@ -1392,7 +1392,7 @@ export function lowerUtilModuleCall(
       // read mutable objects or throw, so it must happen after every argument.
       for (let i = 0; i < 3; i++) {
         const input: IrExpr = expr.arguments[i] ? lowerer.lowerExprExpecting(expr.arguments[i]!, DYN)
-          : { kind: "dynFrom", value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc }, type: DYN, loc };
+          : dynUndefinedExpr(loc);
         const saved = lowerer.declareHiddenLocal("%utilInput", DYN);
         stmts.push({ kind: "varDecl", localId: saved.id, init: input, loc });
         args.push(varRef(saved.id, DYN, loc));
@@ -1433,7 +1433,7 @@ export function lowerUtilModuleCall(
         lowerer.noLowering("util.parseEnv with spread or extra arguments", expr);
       }
       const input: IrExpr = expr.arguments[0] ? lowerer.lowerExprExpecting(expr.arguments[0], DYN)
-        : { kind: "dynFrom", value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc }, type: DYN, loc };
+        : dynUndefinedExpr(loc);
       const parsed: IrExpr = { kind: "libCall", fn: "util.parseEnv", args: [input], type: DYN, loc };
       const result = lowerer.mapTypeOf(lowerer.typeOf(expr));
       if (result && result.kind !== "dyn" && result.kind !== "jsval" &&

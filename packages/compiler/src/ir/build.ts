@@ -1,4 +1,4 @@
-import { BOOL, F64, type IrExpr, type IrStmt, type IrType, STRING, type SrcLoc } from "./ir.js";
+import { BOOL, DYN, F64, UNDEFINED_T, type IrExpr, type IrStmt, type IrType, STRING, type SrcLoc } from "./ir.js";
 
 export function varRef(localId: string, type: IrType, loc: SrcLoc): IrExpr {
   return { kind: "varRef", localId, type, loc };
@@ -36,6 +36,34 @@ export function countedFor(
       loc,
     },
     body: body(index),
+    loc,
+  };
+}
+
+/** A readable checked-dynamic binding starts with this undefined value.
+ * A null dyn slot is an uninitialized trap, not JavaScript undefined. */
+export function dynUndefinedExpr(loc: SrcLoc): IrExpr {
+  return {
+    kind: "dynFrom",
+    value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc },
+    type: DYN,
+    loc,
+  };
+}
+
+/** An always-throwing Node error with the replaced expression's type.
+ * Kinds: 0 Error, 1 TypeError, 2 RangeError, 5 ReferenceError. An empty
+ * code omits the error code property. */
+export function nodeThrowExpr(kind: 0 | 1 | 2 | 5, code: string, message: string, type: IrType, loc: SrcLoc): IrExpr {
+  return {
+    kind: "libCall",
+    fn: "error.nodeThrow",
+    args: [
+      { kind: "numLit", value: kind, type: F64, loc },
+      { kind: "strLit", value: code, type: STRING, loc },
+      { kind: "strLit", value: message, type: STRING, loc },
+    ],
+    type,
     loc,
   };
 }

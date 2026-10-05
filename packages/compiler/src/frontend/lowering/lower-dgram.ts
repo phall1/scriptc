@@ -1,3 +1,4 @@
+import { dynUndefinedExpr, boolLit } from "../../ir/build.js";
 /* The dgram/dns-surface lowering (node:dgram + node:dns — a spoke module
  * like lower-server.ts): module-function calls (dgram createSocket, dns
  * lookup), method calls on dgramSocket receivers (bind/connect/send/
@@ -11,9 +12,8 @@ import * as ts from "../ts7/adapter.js";
 import type { Lowerer } from "./lowerer.js";
 import { ladderFenceExpr } from "./lowerer.js";
 import { isJsSourceFile, locOf } from "../program.js";
-import { BOOL, canBoxFuncIntoDyn, DGRAMSOCK_T, DYN, F64, type IrExpr, type IrLibFn, type IrType, type SrcLoc, STRING, UNDEFINED_T, VOID } from "../../ir/ir.js";
+import { BOOL, canBoxFuncIntoDyn, DGRAMSOCK_T, DYN, F64, type IrExpr, type IrLibFn, type IrType, type SrcLoc, STRING, VOID } from "../../ir/ir.js";
 import { DNS_LOOKUP_DOCUMENTED_OPTIONS, fenceOrDropOptionKey } from "./surfaces.js";
-import { boolLit } from "../../ir/build.js";
 import { resultIsDiscarded } from "./call-position.js";
 import { lowerCallbackArg as lowerCallbackArgShared } from "./callback-arg.js";
 
@@ -368,12 +368,7 @@ export function lowerDgramMethodCall(lowerer: Lowerer, call: ts.CallExpression,
       for (let i = 0; i < 5; i++) {
         const n = args[i];
         if (!n) {
-          slots.push({
-            kind: "dynFrom",
-            value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc },
-            type: DYN,
-            loc,
-          });
+          slots.push(dynUndefinedExpr(loc));
           continue;
         }
         const raw = lowerer.lowerExpr(n);
