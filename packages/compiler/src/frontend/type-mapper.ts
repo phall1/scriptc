@@ -4374,13 +4374,13 @@ export function describeComponentBlocker(widened: ts.Type, ctx: TypeMapperCtx): 
         return `the ${container} shape is supported, but its ${role} type '${text(arg)}' does not compile`;
       }
       if ((container === "Map" || container === "ReadonlyMap") && i === 0 && !isSupportedMapKey(mapped, mapped.kind === "union" ? ctx.unions.get(mapped.unionId)?.arms : undefined)) {
-        return `the ${container} shape is supported, but '${text(arg)}' is outside its supported key domain (numbers, strings, identity references, or unions of identity references)`;
+        return `the ${container} shape is supported, but '${text(arg)}' is outside its supported key domain (numbers, strings, booleans, bigints, identity references, or supported unions)`;
       }
       if ((container === "Map" || container === "ReadonlyMap") && i === 1 && !isSupportedMapValue(mapped)) {
         return `the ${container} shape is supported, but '${text(arg)}' values have no Map slot yet`;
       }
       if ((container === "Set" || container === "ReadonlySet") && !isSupportedSetElem(mapped, mapped.kind === "union" ? ctx.unions.get(mapped.unionId)?.arms : undefined)) {
-        return `the ${container} shape is supported, but '${text(arg)}' is outside its supported element domain (numbers, strings, identity references, or unions of identity references)`;
+        return `the ${container} shape is supported, but '${text(arg)}' is outside its supported element domain (numbers, strings, booleans, bigints, identity references, or supported unions)`;
       }
     }
     // Every argument passed the per-slot checks and the type still failed:

@@ -132,6 +132,21 @@ static int bi_cmp(const ScrBigInt *a, const ScrBigInt *b) {
 }
 
 bool scr_bigint_eq(ScrBigInt *a, ScrBigInt *b) { return bi_cmp(a, b) == 0; }
+
+uint64_t scr_bigint_hash(const ScrBigInt *value) {
+  /* BigInts are immutable and normalized. Ignore capacity and ownership;
+   * equal values made by parsing, arithmetic or conversion hash alike. */
+  uint64_t hash = UINT64_C(0xcbf29ce484222325) ^ (uint64_t)(value->sign + 1);
+  for (size_t i = 0; i < value->len; i++) {
+    hash ^= value->limb[i];
+    hash *= UINT64_C(0x100000001b3);
+  }
+  hash ^= hash >> 30;
+  hash *= UINT64_C(0xbf58476d1ce4e5b9);
+  hash ^= hash >> 27;
+  hash *= UINT64_C(0x94d049bb133111eb);
+  return hash ^ (hash >> 31);
+}
 double scr_bigint_cmp_f64(ScrBigInt *a, ScrBigInt *b) { return (double)bi_cmp(a, b); }
 bool scr_bigint_truthy(ScrBigInt *v) { return v->sign != 0; }
 

@@ -1323,10 +1323,10 @@ ScrArr *scr_regex_match_all_into(ScrStr *s, ScrRegex *re, ScrArr *indices);
  * are visited (they append), deleted entries are skipped (tombstones), and
  * a delete + re-add moves the key to the end (Node-verified).
  *
- * Keys are identity references, string (content), or number with SameValueZero: NaN equals NaN
- * (canonicalized before hashing) and -0 is normalized to +0 at insertion,
- * exactly like JS (a stored -0 key reads back as +0). Hash is FNV-1a over
- * the reference address, string bytes, or canonicalized f64 bit pattern.
+ * Primitive keys compare by value and reference keys by identity. Numbers
+ * use SameValueZero: NaN equals NaN and -0 is stored as +0. Union wrappers
+ * are representations, never identities; their arm descriptors select
+ * the primitive or reference comparison, including null and undefined.
  *
  * Values are one uniform kind per map (like ScrArr elements): f64, bool, or
  * a refcounted pointer whose RC entry points arrive as function pointers at
@@ -1353,13 +1353,17 @@ ScrArr *scr_regex_match_all_into(ScrStr *s, ScrRegex *re, ScrArr *indices);
  * DYN owns a checked-value box and compares its JavaScript value using
  * SameValueZero, including reference identity for object payloads.
  * These key kinds serve both Maps and Sets. */
-typedef enum { SCR_MAP_KEY_F64, SCR_MAP_KEY_STR, SCR_MAP_KEY_REF, SCR_MAP_KEY_UNION_REF, SCR_MAP_KEY_DYN } ScrMapKeyKind;
+typedef enum {
+  SCR_MAP_KEY_F64, SCR_MAP_KEY_STR, SCR_MAP_KEY_REF, SCR_MAP_KEY_UNION_REF, SCR_MAP_KEY_DYN,
+  SCR_MAP_KEY_BIGINT, SCR_MAP_KEY_BOOL, SCR_MAP_KEY_UNION_VALUE,
+  SCR_MAP_KEY_NULL, SCR_MAP_KEY_UNDEFINED /* tag-only union arms */
+} ScrMapKeyKind;
 typedef enum { SCR_MAP_VAL_F64, SCR_MAP_VAL_BOOL, SCR_MAP_VAL_REF } ScrMapValKind;
 
 typedef struct {
   uint64_t key; /* double bits (normalized), ScrStr* (owned), or ref ptr (owned) */
   uint64_t val; /* double bits, bool, or owned pointer */
-  bool live;    /* false = tombstone (key/val already released) */
+  uint64_t hash; /* nonzero cached hash; zero = tombstone (key/val released) */
 } ScrMapEntry;
 
 /* Checked views use the original storage. Slot converters borrow on reads
@@ -1382,7 +1386,7 @@ typedef struct ScrMap {
   void *(*val_retain)(void *);
   void (*val_release)(void *);
   ScrTraceFn val_trace;
-  /* SCR_MAP_KEY_REF, SCR_MAP_KEY_UNION_REF and SCR_MAP_KEY_DYN only. */
+  /* Reference-represented keys, including bigint and union values. */
   void *(*key_retain)(void *);
   void (*key_release)(void *);
   ScrTraceFn key_trace;
@@ -1394,7 +1398,16 @@ typedef struct ScrMap {
   size_t *buckets;  /* entry indices; SIZE_MAX = empty */
   size_t iter_depth; /* > 0: an iteration is active — no compaction */
   const ScrMapDynOps *dyn_ops;
+  const uint8_t *union_keys; /* immutable key-kind table indexed by union tag */
 } ScrMap;
+
+/* Called once on a fresh UNION_VALUE collection, before its first insert. */
+void scr_map_union_keys(ScrMap *map, const uint8_t *kinds);
+/* Fresh shallow copies with compact storage and independent mutation.
+ * keys_only selects a Set; checked views materialize their boxed values. */
+ScrMap *scr_map_clone(const ScrMap *source, bool keys_only);
+ScrMap *scr_map_clone_dyn(const ScrMap *source, bool keys_only);
+void scr_map_values_into(ScrMap *set, const ScrMap *source, bool checked);
 
 void scr_map_dyn_attach(ScrMap *map, const ScrMapDynOps *ops);
 struct ScrDyn *scr_map_dyn_key(const ScrMap *map, double index);
@@ -1428,9 +1441,11 @@ double scr_map_size(const ScrMap *m); /* live entries (Map.size) */
 void scr_map_clear(ScrMap *m);
 
 bool scr_map_has_f64(const ScrMap *m, double key);
+bool scr_map_has_bool(const ScrMap *m, bool key);
 bool scr_map_has_str(const ScrMap *m, const ScrStr *key);
 bool scr_map_has_ref(const ScrMap *m, const void *key);
 bool scr_map_delete_f64(ScrMap *m, double key);
+bool scr_map_delete_bool(ScrMap *m, bool key);
 bool scr_map_delete_str(ScrMap *m, const ScrStr *key);
 bool scr_map_delete_ref(ScrMap *m, const void *key);
 
@@ -1440,6 +1455,9 @@ bool scr_map_delete_ref(ScrMap *m, const void *key);
 void scr_map_set_f64_f64(ScrMap *m, double key, double v);
 void scr_map_set_f64_bool(ScrMap *m, double key, bool v);
 void scr_map_set_f64_ref(ScrMap *m, double key, void *v);
+void scr_map_set_bool_f64(ScrMap *m, bool key, double v);
+void scr_map_set_bool_bool(ScrMap *m, bool key, bool v);
+void scr_map_set_bool_ref(ScrMap *m, bool key, void *v);
 void scr_map_set_str_f64(ScrMap *m, ScrStr *key, double v);
 void scr_map_set_str_bool(ScrMap *m, ScrStr *key, bool v);
 void scr_map_set_str_ref(ScrMap *m, ScrStr *key, void *v);
@@ -1454,6 +1472,9 @@ void scr_map_set_ref_ref(ScrMap *m, void *key, void *v);
 bool scr_map_get_f64_f64(const ScrMap *m, double key, double *out);
 bool scr_map_get_f64_bool(const ScrMap *m, double key, bool *out);
 void *scr_map_get_f64_ref(const ScrMap *m, double key);
+bool scr_map_get_bool_f64(const ScrMap *m, bool key, double *out);
+bool scr_map_get_bool_bool(const ScrMap *m, bool key, bool *out);
+void *scr_map_get_bool_ref(const ScrMap *m, bool key);
 bool scr_map_get_str_f64(const ScrMap *m, const ScrStr *key, double *out);
 bool scr_map_get_str_bool(const ScrMap *m, const ScrStr *key, bool *out);
 void *scr_map_get_str_ref(const ScrMap *m, const ScrStr *key);
@@ -1469,6 +1490,7 @@ void *scr_map_get_ref_ref(const ScrMap *m, const void *key);
 double scr_map_iter_count(const ScrMap *m); /* entries incl. tombstones */
 bool scr_map_iter_live(const ScrMap *m, double i);
 double scr_map_iter_key_f64(const ScrMap *m, double i);
+bool scr_map_iter_key_bool(const ScrMap *m, double i);
 ScrStr *scr_map_iter_key_str(const ScrMap *m, double i); /* +1 */
 void *scr_map_iter_key_ref(const ScrMap *m, double i);     /* +1 */
 double scr_map_iter_val_f64(const ScrMap *m, double i);
@@ -1486,6 +1508,7 @@ void scr_set_add_all(ScrMap *set, ScrArr *values);
 /* `[...set]` (scr_lib.c): the live entries drained into a fresh +1 elem[]
  * in insertion order. Borrows the set; string elements retained in. */
 ScrArr *scr_set_to_arr_f64(const ScrMap *s);
+ScrArr *scr_set_to_arr_bool(const ScrMap *s);
 ScrArr *scr_set_to_arr_str(const ScrMap *s);
 ScrArr *scr_set_to_arr_ref(const ScrMap *s);
 ScrArr *scr_set_to_arr_dyn(const ScrMap *s);
@@ -3399,6 +3422,7 @@ ScrBigInt *scr_bigint_xor(ScrBigInt *a, ScrBigInt *b);
 ScrBigInt *scr_bigint_shl(ScrBigInt *a, ScrBigInt *count);
 ScrBigInt *scr_bigint_shr(ScrBigInt *a, ScrBigInt *count);
 bool scr_bigint_eq(ScrBigInt *a, ScrBigInt *b);
+uint64_t scr_bigint_hash(const ScrBigInt *value); /* normalized value, no allocation */
 bool scr_bigint_eq_string(ScrBigInt *a, ScrStr *b); /* StringToBigInt failure is false */
 double scr_bigint_cmp_string(ScrBigInt *a, ScrStr *b); /* 2 = invalid StringToBigInt */
 double scr_bigint_cmp_f64(ScrBigInt *a, ScrBigInt *b); /* -1, 0, 1 */

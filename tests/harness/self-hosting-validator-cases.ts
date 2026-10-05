@@ -119,18 +119,25 @@ export function validatorCases(): ValidatorCase[] {
     m.functions[0]!.body = [expression({ kind: "arrayLit", elems: [strLit("wrong", loc)], type: arrayOf(F64), loc })];
   }, "expected f64");
   for (const collection of ["map", "set"] as const) {
-    for (const mixed of [false, true]) {
-      add(`${collection} ${mixed ? "mixed" : "identity"} key union`, (m) => {
+    for (const domain of ["identity", "mixed", "unsupported"]) {
+      add(`${collection} ${domain} key union`, (m) => {
         const reference: IrType = { kind: "record", shapeId: "key" };
         const key: IrType = { kind: "union", unionId: "keys" };
         m.records = [{ id: "key", fields: [{ name: "id", type: F64 }] }];
-        m.unions = [{ id: "keys", arms: [reference, mixed ? STRING : arrayOf(F64)] }];
+        const other = domain === "identity" ? arrayOf(F64) : domain === "mixed" ? STRING : mapOf(STRING, F64);
+        m.unions = [{ id: "keys", arms: [reference, other] }];
         const expr: IrExpr = collection === "map"
           ? { kind: "mapNew", type: mapOf(key, F64), loc }
           : { kind: "setNew", type: setOf(key), loc };
         m.functions[0]!.body = [expression(expr)];
-      }, mixed ? (collection === "map" ? "mapNew key kind union" : "setNew element kind union") : undefined);
+      }, domain === "unsupported" ? (collection === "map" ? "mapNew key kind union" : "setNew element kind union") : undefined);
     }
+  }
+  for (const value of [F64, mapOf(STRING, F64)]) {
+    add(`map valueSet ${value.kind}`, (m) => {
+      const receiver: IrExpr = { kind: "mapNew", type: mapOf(STRING, value), loc };
+      m.functions[0]!.body = [expression({ kind: "mapIntrinsic", method: "valueSet", receiver, args: [], type: setOf(value), loc })];
+    }, value.kind === "f64" ? undefined : "mapIntrinsic valueSet element kind map");
   }
   add("library signature", (m) => {
     m.functions[0]!.body = [expression({ kind: "libCall", fn: "number.isFinite", args: [strLit("wrong", loc)], type: BOOL, loc })];

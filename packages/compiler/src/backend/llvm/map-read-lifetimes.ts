@@ -2,7 +2,7 @@ import { isRefCounted, typeEquals, type IrExpr, type IrFunction, type IrType, ty
 import { everyStmtList } from "../../ir/traverse.js";
 import type { CallLifetimes } from "./call-lifetimes.js";
 import type { LlValue, LlvmEmitterContext } from "./expr-context.js";
-import { mapKeyAccess } from "./shapes.js";
+import { mapKeyAccess, mapKeyParamType } from "./shapes.js";
 
 /** Typed reads neither invoke callbacks nor consume their inputs. Reference
  * results carry their own owner. Generic views keep the adapter path, and
@@ -95,7 +95,7 @@ export function emitStackMapRead(host: LlvmEmitterContext, read: LocalMapRead): 
   const receiver = host.emitStableReceiver(read.receiver, [read.key]);
   const key = host.emitReadReceiver(read.key);
   const access = mapKeyAccess(read.key.type);
-  const keyType = access === "f64" ? "double" : "ptr";
+  const keyType = mapKeyParamType(access);
   const box = B.slot(), payload = B.slot(), tag = B.slot();
   B.entryAllocas.push(`${box} = alloca %ScrUnion`);
   B.entryAllocas.push(`${payload} = getelementptr inbounds %ScrUnion, ptr ${box}, i32 0, i32 5`);

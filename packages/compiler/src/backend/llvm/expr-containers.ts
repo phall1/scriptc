@@ -3,7 +3,7 @@ import { InternalCompilerError } from "../../errors.js";
 import { isStableReceiverOperand, undefinedArmTag } from "../../ir/analysis.js";
 import { type IrExpr, type IrType, isRefCounted, typeEquals, typeKey } from "../../ir/ir.js";
 import { mangleResolveThunk } from "../mangle.js";
-import { elemAccess, FN_ATTRS, mapKeyAccess, mapKeyKindNum, mapValKindNum, traceArg, vAdapters } from "./shapes.js";
+import { elemAccess, FN_ATTRS, mapKeyAccess, type MapKeyAccess, mapKeyKindNum, mapKeyParamType, mapValKindNum, traceArg, vAdapters } from "./shapes.js";
 import type { LlvmEmitterContext, LlValue } from "./expr-context.js";
 import { F64_INF, f64Lit } from "./common.js";
 import { borrowsStringInputs, emitStringInputs } from "./string-lifetimes.js";
@@ -521,24 +521,37 @@ export function wrapNullable(host: LlvmEmitterContext, raw: string, present: str
     return host.own({ name: t, type: resultType });
   }
 
-export function emitMapNew(host: LlvmEmitterContext, e: IrExpr & { kind: "mapNew" }): LlValue {
-    // Empty map: the runtime stores the value kind's RC entry points as
-    // function pointers (scalar values pass nulls); the trace argument
-    // doubles as the cycle-capability flag — exactly the C mapNew.
-    if (e.type.kind !== "map") throw new InternalCompilerError("llvm emitter bug: mapNew of non-map type");
+/** Construct matching key/value storage once for Maps and Sets. Union arm
+ * descriptors are immutable module data; all-reference unions keep their
+ * existing identity-only representation. */
+function newCollection(host: LlvmEmitterContext, key: IrType, value: IrType): string {
     const B = host.B;
-    const value = e.type.value;
     const rc = isRefCounted(value) ? vAdapters(host.shapeHost, value) : { retain: "null", release: "null" };
+    const arms = key.kind === "union" ? host.unionsById.get(key.unionId)?.arms : undefined;
+    const kind = mapKeyKindNum(key, arms);
     const m = B.tmp();
-    const kAcc = mapKeyAccess(e.type.key);
-    if (kAcc === "ref") {
-      const keyRc = vAdapters(host.shapeHost, e.type.key);
+    if (mapKeyAccess(key) === "ref") {
+      const keyRc = vAdapters(host.shapeHost, key);
       host.declare(`declare ptr @scr_map_new_typed(i32, i32, ptr, ptr, ptr, ptr, ptr, ptr)`);
-      B.line(`${m} = call ptr @scr_map_new_typed(i32 ${mapKeyKindNum(e.type.key)}, i32 ${mapValKindNum(value)}, ptr ${keyRc.retain}, ptr ${keyRc.release}, ptr ${traceArg(host.shapeHost, e.type.key)}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${traceArg(host.shapeHost, value)})`);
+      B.line(`${m} = call ptr @scr_map_new_typed(i32 ${kind}, i32 ${mapValKindNum(value)}, ptr ${keyRc.retain}, ptr ${keyRc.release}, ptr ${traceArg(host.shapeHost, key)}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${traceArg(host.shapeHost, value)})`);
     } else {
       host.declare(`declare ptr @scr_map_new(i32, i32, ptr, ptr, ptr)`);
-      B.line(`${m} = call ptr @scr_map_new(i32 ${mapKeyKindNum(e.type.key)}, i32 ${mapValKindNum(value)}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${traceArg(host.shapeHost, value)})`);
+      B.line(`${m} = call ptr @scr_map_new(i32 ${kind}, i32 ${mapValKindNum(value)}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${traceArg(host.shapeHost, value)})`);
     }
+    if (kind === 7) {
+      if (!arms) throw new InternalCompilerError("llvm emitter bug: collection key union missing");
+      const kinds = arms.map((arm) => String.fromCharCode(mapKeyKindNum(arm))).join("");
+      host.declare(`declare void @scr_map_union_keys(ptr, ptr)`);
+      B.line(`call void @scr_map_union_keys(ptr ${m}, ptr ${host.cstr(kinds)})`);
+    }
+    return m;
+}
+
+export function emitMapNew(host: LlvmEmitterContext, e: IrExpr & { kind: "mapNew" }): LlValue {
+    if (e.type.kind !== "map") throw new InternalCompilerError("llvm emitter bug: mapNew of non-map type");
+    const value = e.type.value;
+    const kAcc = mapKeyAccess(e.type.key);
+    const m = newCollection(host, e.type.key, value);
     const out = host.own({ name: m, type: e.type });
     // Seeded construction: set() each pair in source order — a repeated
     // key overwrites (the runtime releases the old value).
@@ -552,8 +565,8 @@ export function emitMapNew(host: LlvmEmitterContext, e: IrExpr & { kind: "mapNew
     return out;
   }
 
-export function mapSet(host: LlvmEmitterContext, m: string, kAcc: "f64" | "str" | "ref", vAcc: "f64" | "bool" | "ref", key: string, value: string): void {
-    const kTy = kAcc === "f64" ? "double" : "ptr";
+export function mapSet(host: LlvmEmitterContext, m: string, kAcc: MapKeyAccess, vAcc: "f64" | "bool" | "ref", key: string, value: string): void {
+    const kTy = mapKeyParamType(kAcc);
     const vTy = vAcc === "f64" ? "double" : vAcc === "bool" ? "i1" : "ptr";
     host.declare(`declare void @scr_map_set_${kAcc}_${vAcc}(ptr, ${kTy}, ${vTy === "i1" ? "i1 zeroext" : vTy})`);
     host.B.line(`call void @scr_map_set_${kAcc}_${vAcc}(ptr ${m}, ${kTy} ${key}, ${vTy} ${value})`);
@@ -577,8 +590,25 @@ export function emitMapLikeIntrinsic(host: LlvmEmitterContext,
     }
     const key = receiverType.kind === "map" ? receiverType.key : receiverType.elem;
     const kAcc = mapKeyAccess(key);
-    const kTy = kAcc === "f64" ? "double" : "ptr";
+    const kTy = mapKeyParamType(kAcc);
     const method = e.method;
+    if (method === "clone" || method === "keySet") {
+      const keysOnly = method === "keySet" || receiverType.kind === "set";
+      const checked = key.kind === "dyn" && (keysOnly || receiverType.kind === "map" && receiverType.value.kind === "dyn");
+      const helper = checked ? "scr_map_clone_dyn" : "scr_map_clone";
+      host.declare(`declare ptr @${helper}(ptr, i1 zeroext)`);
+      const result = B.tmp();
+      B.line(`${result} = call ptr @${helper}(ptr ${r.name}, i1 ${keysOnly})`);
+      return host.own({ name: result, type: e.type });
+    }
+    if (method === "valueSet") {
+      if (receiverType.kind !== "map") throw new InternalCompilerError("llvm emitter bug: values from non-map");
+      const result = newCollection(host, receiverType.value, { kind: "f64" });
+      const out = host.own({ name: result, type: e.type });
+      host.declare(`declare void @scr_map_values_into(ptr, ptr, i1 zeroext)`);
+      B.line(`call void @scr_map_values_into(ptr ${result}, ptr ${r.name}, i1 ${receiverType.value.kind === "dyn"})`);
+      return out;
+    }
     // A generic Map/Set view may share typed native storage. These accessors
     // consult its boxing adapters instead of reinterpreting scalar slots.
     if (key.kind === "dyn" && (receiverType.kind === "set" || receiverType.value.kind === "dyn")) {
@@ -765,7 +795,7 @@ export function emitMapLikeIntrinsic(host: LlvmEmitterContext,
       case "iterKey": {
         // String/ref keys come back +1 (own registers the owned temp).
         const i = host.emitExpr(e.args[0]!);
-        const retTy = kAcc === "f64" ? "double" : "ptr";
+        const retTy = kAcc === "f64" ? "double" : kAcc === "bool" ? "zeroext i1" : "ptr";
         host.declare(`declare ${retTy} @scr_map_iter_key_${kAcc}(ptr, double)`);
         const t = B.tmp();
         B.line(`${t} = call ${retTy} @scr_map_iter_key_${kAcc}(ptr ${r.name}, double ${i.name})`);
@@ -806,21 +836,9 @@ export function emitMapLikeIntrinsic(host: LlvmEmitterContext,
   }
 
 export function emitSetNew(host: LlvmEmitterContext, e: IrExpr & { kind: "setNew" }): LlValue {
-    // Empty set: the map runtime with the element as the KEY and the
-    // value slot pinned to the scalar kind. Handle-kind elements (symbol
-    // identity hashing) carry their RC adapters at construction.
     if (e.type.kind !== "set") throw new InternalCompilerError("llvm emitter bug: setNew of non-set type");
     const B = host.B;
-    const kAcc = mapKeyAccess(e.type.elem);
-    const s = B.tmp();
-    if (kAcc === "ref") {
-      const rc = vAdapters(host.shapeHost, e.type.elem);
-      host.declare(`declare ptr @scr_map_new_typed(i32, i32, ptr, ptr, ptr, ptr, ptr, ptr)`);
-      B.line(`${s} = call ptr @scr_map_new_typed(i32 ${mapKeyKindNum(e.type.elem)}, i32 0, ptr ${rc.retain}, ptr ${rc.release}, ptr ${traceArg(host.shapeHost, e.type.elem)}, ptr null, ptr null, ptr null)`);
-    } else {
-      host.declare(`declare ptr @scr_map_new(i32, i32, ptr, ptr, ptr)`);
-      B.line(`${s} = call ptr @scr_map_new(i32 ${mapKeyKindNum(e.type.elem)}, i32 0, ptr null, ptr null, ptr null)`);
-    }
+    const s = newCollection(host, e.type.elem, { kind: "f64" });
     const out = host.own({ name: s, type: e.type });
     if (e.seed) {
       // Seeded construction (`new Set(values)`): one borrowed T[] whose

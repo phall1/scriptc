@@ -3614,8 +3614,15 @@ function validateFunction(
           }
           break;
         }
+        if (e.method === "valueSet" && !isSupportedSetElem(value, value.kind === "union" ? unions.get(value.unionId)?.arms : undefined)) {
+          err(`mapIntrinsic valueSet element kind ${value.kind} (frontend must fence)`, e.loc);
+        }
         const sig =
-          e.method === "set"
+          e.method === "clone"
+            ? { argTypes: [], result: e.receiver.type }
+            : e.method === "keySet" || e.method === "valueSet"
+              ? { argTypes: [], result: { kind: "set", elem: e.method === "keySet" ? key : value } as IrType }
+            : e.method === "set"
             ? { argTypes: [key, value], result: VOID }
             : e.method === "has" || e.method === "delete"
               ? { argTypes: [key], result: BOOL }
@@ -3664,7 +3671,9 @@ function validateFunction(
         }
         const { elem } = e.receiver.type;
         const sig =
-          e.method === "add"
+          e.method === "clone"
+            ? { argTypes: [], result: e.receiver.type }
+            : e.method === "add"
             ? { argTypes: [elem], result: VOID }
             : e.method === "has" || e.method === "delete"
               ? { argTypes: [elem], result: BOOL }

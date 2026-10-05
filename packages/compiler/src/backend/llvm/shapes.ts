@@ -282,20 +282,36 @@ export function llFieldType(t: IrType): "double" | "i8" | "ptr" {
 
 /* ── maps and sets ────────────────────────────────────────────────────── */
 
-/** Runtime suffix for a map's KEY kind (mapKeyAccess's table): f64 with
- * SameValueZero, string content, or handle-identity REF (symbols). */
-export function mapKeyAccess(key: IrType): "f64" | "str" | "ref" {
+export type MapKeyAccess = "f64" | "bool" | "str" | "ref";
+
+/** The key's calling convention is independent of equality: bigint and
+ * union payloads travel by reference but compare by JavaScript value. */
+export function mapKeyAccess(key: IrType): MapKeyAccess {
   if (key.kind === "f64") return "f64";
+  if (key.kind === "bool") return "bool";
   if (key.kind === "string") return "str";
-  if (isIdentityCollectionKey(key) || key.kind === "union" || key.kind === "dyn") return "ref";
+  if (isIdentityCollectionKey(key) || key.kind === "bigint" || key.kind === "union" || key.kind === "dyn") return "ref";
   throw new LlvmUnsupportedError(`mapKey:${key.kind}`);
 }
 
+export function mapKeyLlType(access: MapKeyAccess): "double" | "i1" | "ptr" {
+  return access === "f64" ? "double" : access === "bool" ? "i1" : "ptr";
+}
+
+export function mapKeyParamType(access: MapKeyAccess): string {
+  return access === "bool" ? "i1 zeroext" : mapKeyLlType(access);
+}
+
 /** The ScrMapKeyKind / ScrMapValKind constants for scr_map_new. */
-export function mapKeyKindNum(key: IrType): number {
+export function mapKeyKindNum(key: IrType, unionArms?: IrType[]): number {
   if (key.kind === "dyn") return 4;
+  if (key.kind === "bigint") return 5;
+  if (key.kind === "bool") return 6;
+  if (key.kind === "nullT") return 8;
+  if (key.kind === "undefinedT") return 9;
+  if (key.kind === "union") return unionArms?.every(isIdentityCollectionKey) ? 3 : 7;
   const acc = mapKeyAccess(key);
-  return key.kind === "union" ? 3 : acc === "f64" ? 0 : acc === "str" ? 1 : 2;
+  return acc === "f64" ? 0 : acc === "str" ? 1 : 2;
 }
 
 export function mapValKindNum(value: IrType): number {

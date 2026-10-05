@@ -1,6 +1,6 @@
-bigint-fences.ts:10:29 - error SC0001: Expected 1 arguments, but got 2.
+bigint-fences.ts:11:29 - error SC0001: Expected 1 arguments, but got 2.
 
-   9 | import { statSync } from "node:fs";
-  10 | const stats = statSync(".", { bigint: true });
+  10 | import { statSync } from "node:fs";
+  11 | const stats = statSync(".", { bigint: true });
      |                             ^~~~~~~~~~~~~~~~
-  11 | console.log(stats.size);
+  12 | console.log(stats.size);
