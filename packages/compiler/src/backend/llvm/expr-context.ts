@@ -9,6 +9,8 @@ export type LlvmEmitterContext = LlEmitter;
 export interface LlValue {
   name: string;
   type: IrType;
+  /** An i32 SSA value equal to ToUint32 of this snapshotted number. */
+  uint32?: string;
   slot?: boolean;
   /** A sequence local held in a capture box; release the box itself. */
   boxed?: boolean;

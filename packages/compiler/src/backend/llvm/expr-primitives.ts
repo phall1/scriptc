@@ -14,7 +14,7 @@ export function emitLiteralExpr(host: LlvmEmitterContext, e: ExprOf<"numLit" | "
     const B = host.B;
     switch (e.kind) {
       case "numLit":
-        return { name: f64Lit(e.value), type: e.type };
+        return { name: f64Lit(e.value), type: e.type, uint32: String(e.value >>> 0) };
       case "boolLit":
         return { name: e.value ? "true" : "false", type: e.type };
       case "strLit": {
@@ -36,7 +36,9 @@ export function emitLiteralExpr(host: LlvmEmitterContext, e: ExprOf<"numLit" | "
           const number = B.tmp();
           B.line(`${integer} = load ${host.sizeType}, ptr ${integerSlot}`);
           B.line(`${number} = uitofp ${host.sizeType} ${integer} to double`);
-          return { name: number, type: e.type };
+          const uint32 = host.sizeType === "i32" ? integer : B.tmp();
+          if (host.sizeType !== "i32") B.line(`${uint32} = trunc ${host.sizeType} ${integer} to i32`);
+          return { name: number, type: e.type, uint32 };
         }
         const b = host.binding(e.localId);
         if (b.kind === "global") host.checkGlobalTdz(e.localId);
@@ -55,6 +57,14 @@ export function emitLiteralExpr(host: LlvmEmitterContext, e: ExprOf<"numLit" | "
         }
         const t = B.tmp();
         B.line(`${t} = load ${host.llType(b.type)}, ptr ${b.slot}`);
+        const integerView = host.integerViews.get(e.localId);
+        if (integerView !== undefined) {
+          // Snapshot both representations before later operands can write
+          // the binding. Consumers must not reload its current view.
+          const uint32 = B.tmp();
+          B.line(`${uint32} = load i32, ptr ${integerView}`);
+          return { name: t, type: e.type, uint32 };
+        }
         if (isRefCounted(e.type)) return host.own({ name: host.retainValue(t, e.type), type: e.type });
         return { name: t, type: e.type };
       }
@@ -122,8 +132,8 @@ export function emitOperatorExpr(host: LlvmEmitterContext, e: ExprOf<"bin" | "un
           if (e.left.type.kind !== "f64" || e.right.type.kind !== "f64") {
             throw new LlvmUnsupportedError(`bin:${e.op}:${e.left.type.kind}:${e.right.type.kind}`, e.loc);
           }
-          const left = host.emitToUint32(l.name, e.left);
-          let right = host.emitToUint32(r.name, e.right);
+          const left = host.emitToUint32(l.name, e.left, l.uint32);
+          let right = host.emitToUint32(r.name, e.right, r.uint32);
           if (e.op === "<<" || e.op === ">>" || e.op === ">>>") {
             const shift = B.tmp();
             B.line(`${shift} = and i32 ${right}, 31`);
@@ -132,6 +142,7 @@ export function emitOperatorExpr(host: LlvmEmitterContext, e: ExprOf<"bin" | "un
           const result = B.tmp();
           B.line(`${result} = ${bit[e.op]} i32 ${left}, ${right}`);
           B.line(`${t} = ${e.op === ">>>" ? "uitofp" : "sitofp"} i32 ${result} to double`);
+          return { name: t, type: e.type, uint32: result };
         } else {
           const fn = libm[e.op];
           if (fn === undefined) throw new LlvmUnsupportedError(`bin:${e.op}`, e.loc);
@@ -146,10 +157,11 @@ export function emitOperatorExpr(host: LlvmEmitterContext, e: ExprOf<"bin" | "un
         if (e.op === "-") B.line(`${t} = fneg double ${v.name}`);
         else if (e.op === "!") B.line(`${t} = xor i1 ${v.name}, true`);
         else {
-          const value = host.emitToUint32(v.name, e.operand);
+          const value = host.emitToUint32(v.name, e.operand, v.uint32);
           const result = B.tmp();
           B.line(`${result} = xor i32 ${value}, -1`);
           B.line(`${t} = sitofp i32 ${result} to double`);
+          return { name: t, type: e.type, uint32: result };
         }
         return { name: t, type: e.type };
       }
@@ -171,6 +183,7 @@ export function emitOperatorExpr(host: LlvmEmitterContext, e: ExprOf<"bin" | "un
         B.line(`${old} = load double, ptr ${b.slot}`);
         B.line(`${next} = ${e.op === "+" ? "fadd" : "fsub"} double ${old}, ${f64Lit(1)}`);
         B.line(`store double ${next}, ptr ${b.slot}`);
+        host.storeIntegerView(e.localId, { name: next, type: e.type });
         return { name: e.prefix ? next : old, type: e.type };
       }
       case "fieldIncDec": {
@@ -231,6 +244,7 @@ export function emitOperatorExpr(host: LlvmEmitterContext, e: ExprOf<"bin" | "un
           B.line(`store ptr ${host.retainValue(v.name, v.type)}, ptr ${b.slot}`);
         } else {
           B.line(`store ${host.llType(b.type)} ${v.name}, ptr ${b.slot}`);
+          host.storeIntegerView(e.localId, v, e.value);
         }
         return v;
       }

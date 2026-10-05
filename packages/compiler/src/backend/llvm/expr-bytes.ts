@@ -157,7 +157,7 @@ export function emitBytesGet(host: LlvmEmitterContext, elem: IrBytesElem, receiv
       B.line(`${raw} = load i${bits}, ptr ${p}, align 1`);
       B.line(`${wide} = ${signed ? "sext" : "zext"} i${bits} ${raw} to i32`);
       B.line(`${out} = ${signed ? "sitofp" : "uitofp"} i32 ${wide} to double`);
-      return { name: out, type: F64 };
+      return { name: out, type: F64, uint32: wide };
     }
     if (elem === "f32") {
       const raw = B.tmp();
@@ -178,10 +178,11 @@ export function emitBytesGet(host: LlvmEmitterContext, elem: IrBytesElem, receiv
     B.line(`${p} = getelementptr inbounds i32, ptr ${data}, ${host.sizeType} ${idx}`);
     B.line(`${raw} = load i32, ptr ${p}, align 1`);
     B.line(`${out} = ${elem === "i32" ? "sitofp" : "uitofp"} i32 ${raw} to double`);
-    return { name: out, type: F64 };
+    return { name: out, type: F64, uint32: raw };
   }
 
-export function emitToUint32(host: LlvmEmitterContext, value: string, expr?: IrExpr): string {
+export function emitToUint32(host: LlvmEmitterContext, value: string, expr?: IrExpr, uint32?: string): string {
+    if (uint32 !== undefined) return uint32;
     const B = host.B;
     if (expr && host.integerRanges.get(expr)) {
       const integer = B.tmp();
@@ -255,7 +256,7 @@ export function emitToUint32(host: LlvmEmitterContext, value: string, expr?: IrE
     return out;
   }
 
-export function emitBytesSet(host: LlvmEmitterContext, elem: IrBytesElem, receiver: string, index: string, value: string, integerIndex = false): void {
+export function emitBytesSet(host: LlvmEmitterContext, elem: IrBytesElem, receiver: string, index: string, value: LlValue, integerIndex = false, expr?: IrExpr): void {
     const B = host.B;
     // Invalid integer-indexed writes are ignored after evaluating the RHS.
     const done = B.newLabel("bytes.store.done");
@@ -265,9 +266,9 @@ export function emitBytesSet(host: LlvmEmitterContext, elem: IrBytesElem, receiv
       host.declare(`declare double @scr_bytes_to_u8_clamp(double)`);
       const clamped = B.tmp();
       stored = B.tmp();
-      B.line(`${clamped} = call double @scr_bytes_to_u8_clamp(double ${value})`);
+      B.line(`${clamped} = call double @scr_bytes_to_u8_clamp(double ${value.name})`);
       B.line(`${stored} = fptoui double ${clamped} to i32`);
-    } else stored = elem === "f32" || elem === "f64" ? null : host.emitToUint32(value);
+    } else stored = elem === "f32" || elem === "f64" ? null : host.emitToUint32(value.name, expr, value.uint32);
     const data = host.emitBytesData(receiver);
     const p = B.tmp();
     if (BYTES_ELEMENT_SIZE[elem] < 4) {
@@ -278,12 +279,12 @@ export function emitBytesSet(host: LlvmEmitterContext, elem: IrBytesElem, receiv
       B.line(`store i${bits} ${byte}, ptr ${p}, align 1`);
     } else if (elem === "f32") {
       const narrowed = B.tmp();
-      B.line(`${narrowed} = fptrunc double ${value} to float`);
+      B.line(`${narrowed} = fptrunc double ${value.name} to float`);
       B.line(`${p} = getelementptr inbounds float, ptr ${data}, ${host.sizeType} ${idx}`);
       B.line(`store float ${narrowed}, ptr ${p}, align 1`);
     } else if (elem === "f64") {
       B.line(`${p} = getelementptr inbounds double, ptr ${data}, ${host.sizeType} ${idx}`);
-      B.line(`store double ${value}, ptr ${p}, align 1`);
+      B.line(`store double ${value.name}, ptr ${p}, align 1`);
     } else {
       B.line(`${p} = getelementptr inbounds i32, ptr ${data}, ${host.sizeType} ${idx}`);
       B.line(`store i32 ${stored!}, ptr ${p}, align 1`);

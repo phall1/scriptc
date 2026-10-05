@@ -643,24 +643,24 @@ export function emitPrimitiveLibCall(host: LlvmEmitterContext, e: LibCallExpr): 
     }
     if (e.fn === "math.clz32") {
       const v = host.emitExpr(e.args[0]!);
-      const bits = host.emitToUint32(v.name, e.args[0]!);
+      const bits = host.emitToUint32(v.name, e.args[0]!, v.uint32);
       host.declare(`declare i32 @llvm.ctlz.i32(i32, i1)`);
       const count = B.tmp();
       const t = B.tmp();
       B.line(`${count} = call i32 @llvm.ctlz.i32(i32 ${bits}, i1 false)`);
       B.line(`${t} = uitofp i32 ${count} to double`);
-      return { name: t, type: e.type };
+      return { name: t, type: e.type, uint32: count };
     }
     if (e.fn === "math.imul") {
       const a = host.emitExpr(e.args[0]!);
       const b = host.emitExpr(e.args[1]!);
-      const lhs = host.emitToUint32(a.name, e.args[0]!);
-      const rhs = host.emitToUint32(b.name, e.args[1]!);
+      const lhs = host.emitToUint32(a.name, e.args[0]!, a.uint32);
+      const rhs = host.emitToUint32(b.name, e.args[1]!, b.uint32);
       const product = B.tmp();
       const t = B.tmp();
       B.line(`${product} = mul i32 ${lhs}, ${rhs}`);
       B.line(`${t} = sitofp i32 ${product} to double`);
-      return { name: t, type: e.type };
+      return { name: t, type: e.type, uint32: product };
     }
     if (e.fn === "math.fround") {
       const v = host.emitExpr(e.args[0]!);

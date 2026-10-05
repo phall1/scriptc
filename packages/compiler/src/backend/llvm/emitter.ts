@@ -41,6 +41,7 @@ import { matchIntegerArrayForLoop, matchIntegerBytesForLoop } from "../../ir/int
 import { scalarizeNumericRecords } from "../../ir/scalar-records.js";
 import { everyStmtList } from "../../ir/traverse.js";
 import { analyzeIntegerRanges, type IntegerRanges } from "../../ir/integer-ranges.js";
+import { findIntegerViews } from "./integer-views.js";
 import { findConstantNumericTables, type ConstantNumericTable } from "../../ir/constant-tables.js";
 import { allocateFfiCallbackAdapters, hasForeignFfiCallback, hasRetainedFfiCallback, type FfiCallbackAdapter } from "../ffi-callbacks.js";
 import { RUNTIME_ABI_MARKER } from "../runtime-abi.js";
@@ -367,6 +368,7 @@ export class LlEmitter {
   /** Active canonical byte-loop induction bindings: local id → size_t slot. */
   integerLoopBindings = new Map<string, string>();
   integerRanges: IntegerRanges = new Map();
+  integerViews = new Map<string, string>();
   /** Enclosing try-with-FINALLY regions, innermost last: a `return`
    * inside one runs every crossed finally (innermost first) before the
    * actual ret — the runtime ABI’s pending-return path, with the finally
@@ -3323,6 +3325,7 @@ export class LlEmitter {
     }
     this.captureIds = new Set([...(fn.captures ?? []), ...(fn.classCaptures ?? [])].map((c) => c.localId));
     this.integerLoopBindings.clear();
+    this.integerViews.clear();
     this.fieldPointerTags.clear();
     this.integerArrayBindings.clear();
     this.localArrayReads = findLocalArrayReads(fn, this.fnByName, this.unionsById, this.arrayPreservingFunctions, this.callLifetimes, this.optionalArrayReads);
@@ -3373,6 +3376,13 @@ export class LlEmitter {
     }
 
     const paramIds = new Set(fn.params.map((p) => p.localId));
+    if (this.debug === null) {
+      for (const id of findIntegerViews(fn)) {
+        const slot = B.slot();
+        B.entryAllocas.push(`${slot} = alloca i32 ; integer view ${this.currentLocals.get(id)!.name}`);
+        this.integerViews.set(id, slot);
+      }
+    }
     for (const local of fn.locals) {
       // Boxed locals' slots hold their capture BOX (a ptr); captured
       // (env-borrowed) locals bind the incoming box below. A caught-typed
@@ -3434,6 +3444,7 @@ export class LlEmitter {
         continue;
       }
       B.line(`store ${this.llType(p.type)} %p_${mangleLocal(p.localId)}, ptr ${slot}`);
+      this.storeIntegerView(p.localId, { name: `%p_${mangleLocal(p.localId)}`, type: p.type });
       if (isRefCounted(p.type) && !borrowed?.has(index)) fnScope.push({ slot, type: p.type });
     }
     this.scopes.push(fnScope);
@@ -3650,6 +3661,7 @@ export class LlEmitter {
         const v = this.emitExpr(s.init);
         this.moveTemp(v);
         B.line(`store ${this.llType(b.type)} ${v.name}, ptr ${b.slot}`);
+        this.storeIntegerView(s.localId, v, s.init);
         if (isRefCounted(b.type)) {
           this.scopes[this.scopes.length - 1]!.push({ slot: b.slot, type: b.type });
         }
@@ -3678,6 +3690,7 @@ export class LlEmitter {
           this.releaseValue(old, b.type);
         }
         B.line(`store ${this.llType(b.type)} ${v.name}, ptr ${b.slot}`);
+        this.storeIntegerView(s.localId, v, s.value);
         break;
       }
       case "exprStmt":
@@ -3729,7 +3742,7 @@ export class LlEmitter {
         const idx = integerIndex ?? this.emitExpr(s.index).name;
         const v = this.emitExpr(s.value);
         if (s.arr.type.kind !== "bytes") throw new InternalCompilerError("llvm emitter bug: bytesSet on non-bytes");
-        this.emitBytesSet(s.arr.type.elem, arr.name, idx, v.name, integerIndex !== null);
+        this.emitBytesSet(s.arr.type.elem, arr.name, idx, v, integerIndex !== null, s.value);
         break;
       }
       case "fieldSet":
@@ -4561,12 +4574,14 @@ export class LlEmitter {
    * branch and moves the result into `slot`: the chosen value's ownership
    * transfers, every other temp the arm allocated releases inside the
    * branch. The shared core of ternary/logical. */
-  emitBranchInto(slot: string, expr: IrExpr): void {
+  emitBranchInto(slot: string, expr: IrExpr, integerSlot?: string): boolean {
     this.frames.push([]);
     const v = this.emitExpr(expr);
     this.moveTemp(v);
     this.B.line(`store ${this.llType(expr.type)} ${v.name}, ptr ${slot}`);
+    if (integerSlot !== undefined && v.uint32 !== undefined) this.B.line(`store i32 ${v.uint32}, ptr ${integerSlot}`);
     this.releaseFrame(this.frames.pop()!);
+    return v.uint32 !== undefined;
   }
 
   // ── expressions ─────────────────────────────────────────────────────────
@@ -4911,12 +4926,19 @@ export class LlEmitter {
     return emitBytesGet(this, elem, receiver, index, integerIndex);
   }
 
-  emitToUint32(value: string, expr?: IrExpr): string {
-    return emitToUint32(this, value, expr);
+  emitToUint32(value: string, expr?: IrExpr, uint32?: string): string {
+    return emitToUint32(this, value, expr, uint32);
   }
 
-  private emitBytesSet(elem: IrBytesElem, receiver: string, index: string, value: string, integerIndex = false): void {
-    return emitBytesSet(this, elem, receiver, index, value, integerIndex);
+  storeIntegerView(localId: string, value: LlValue, expr?: IrExpr): void {
+    const slot = this.integerViews.get(localId);
+    if (slot === undefined) return;
+    const integer = this.emitToUint32(value.name, expr, value.uint32);
+    this.B.line(`store i32 ${integer}, ptr ${slot}`);
+  }
+
+  private emitBytesSet(elem: IrBytesElem, receiver: string, index: string, value: LlValue, integerIndex = false, expr?: IrExpr): void {
+    return emitBytesSet(this, elem, receiver, index, value, integerIndex, expr);
   }
 
   emitBytesIntrinsic(e: IrExpr & { kind: "bytesIntrinsic" }): LlValue {

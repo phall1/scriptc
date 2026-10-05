@@ -64,6 +64,11 @@ export function emitControlExpr(host: LlvmEmitterContext, e: ExprOf<"dynDestrChe
         const slot = B.slot();
         B.entryAllocas.push(`${slot} = alloca ${ty}`);
         B.line(`store ${ty} ${l.name}, ptr ${slot}`);
+        const integerSlot = e.type.kind === "f64" && l.uint32 !== undefined ? B.slot() : undefined;
+        if (integerSlot !== undefined) {
+          B.entryAllocas.push(`${integerSlot} = alloca i32`);
+          B.line(`store i32 ${l.uint32!}, ptr ${integerSlot}`);
+        }
         const truthy = host.truthy(l);
         const rightLabel = B.newLabel("log.r");
         const joinLabel = B.newLabel("log.j");
@@ -71,11 +76,16 @@ export function emitControlExpr(host: LlvmEmitterContext, e: ExprOf<"dynDestrChe
         else B.condBr(truthy, joinLabel, rightLabel);
         B.startBlock(rightLabel);
         if (isRefCounted(e.type)) host.releaseValue(l.name, e.type);
-        host.emitBranchInto(slot, e.right);
+        const rightInteger = host.emitBranchInto(slot, e.right, integerSlot);
         B.br(joinLabel);
         B.startBlock(joinLabel);
         const t = B.tmp();
         B.line(`${t} = load ${ty}, ptr ${slot}`);
+        if (integerSlot !== undefined && rightInteger) {
+          const uint32 = B.tmp();
+          B.line(`${uint32} = load i32, ptr ${integerSlot}`);
+          return { name: t, type: e.type, uint32 };
+        }
         return host.own({ name: t, type: e.type });
       }
       case "ternary": {
@@ -85,19 +95,28 @@ export function emitControlExpr(host: LlvmEmitterContext, e: ExprOf<"dynDestrChe
         const c = host.emitExpr(e.cond);
         const slot = B.slot();
         B.entryAllocas.push(`${slot} = alloca ${ty}`);
+        const integerSlot = e.type.kind === "f64" ? B.slot() : undefined;
+        if (integerSlot !== undefined) B.entryAllocas.push(`${integerSlot} = alloca i32`);
         const lt = B.newLabel("tern.t");
         const lf = B.newLabel("tern.f");
         const lj = B.newLabel("tern.j");
         B.condBr(c.name, lt, lf);
         B.startBlock(lt);
-        host.emitBranchInto(slot, e.then);
+        const thenInteger = host.emitBranchInto(slot, e.then, integerSlot);
         B.br(lj);
         B.startBlock(lf);
-        host.emitBranchInto(slot, e.else_);
+        const elseInteger = host.emitBranchInto(slot, e.else_, integerSlot);
         B.br(lj);
         B.startBlock(lj);
         const t = B.tmp();
         B.line(`${t} = load ${ty}, ptr ${slot}`);
+        // A view is available only when every incoming branch wrote it.
+        // Incomplete views are unused and disappear during promotion.
+        if (integerSlot !== undefined && thenInteger && elseInteger) {
+          const uint32 = B.tmp();
+          B.line(`${uint32} = load i32, ptr ${integerSlot}`);
+          return { name: t, type: e.type, uint32 };
+        }
         return host.own({ name: t, type: e.type });
       }
       case "optChain": {
