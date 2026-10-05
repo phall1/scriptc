@@ -7164,9 +7164,9 @@ export function moduleUsesQs(mod: IrModule): boolean {
   return scanRuntimeFeatures(mod, "qs").qs;
 }
 
-/** True when the module uses native util.parseArgs or isDeepStrictEqual — the link switch for
- * scr_util.c. The implementation is a pure checked-dynamic data transform,
- * cross-platform and independent of the island's node:util shim. */
+/** True when the module uses native util parsing, comparison, or styling.
+ * The utility units also follow their required symbol, inspection, and
+ * warning features, independently of the island's node:util shim. */
 export function moduleUsesParseArgs(mod: IrModule): boolean {
   return scanRuntimeFeatures(mod, "parseArgs").parseArgs;
 }

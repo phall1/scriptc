@@ -486,6 +486,8 @@ jobs:
         env:
           SCRIPTC_NO_CACHE: "0"
         run: pnpm exec vitest run packages/cli/test/windows-subsystem.test.ts
+      - name: Windows utility runtime linking
+        run: pnpm exec vitest run packages/compiler/test/util-runtime-linking.test.ts
       - name: Windows filesystem links differential
         run: >-
           pnpm exec vitest run tests/harness/differential.test.ts tests/harness/project-config.test.ts

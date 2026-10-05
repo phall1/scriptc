@@ -321,8 +321,8 @@ export interface CcOptions {
    * line (escape-only programs ride the always-linked component encoder
    * and never flip this). */
   qs?: boolean;
-  /** The program uses static util.parseArgs (index.ts detects its libCall):
-   * compiles scr_util.c, a pure checked-dynamic data transform. */
+  /** The program uses native util parsing, comparison, or styling. Optional
+   * utility units also require their symbol, inspection, and warning features. */
   parseArgs?: boolean;
   /** The program uses the node:stream class surface (moduleUsesStream on
    * the IR): compiles scr_stream.c into the binary — always alongside
@@ -4310,6 +4310,8 @@ async function compileCInternal(
     ...(opts.assert && opts.bigint ? [rt(join(rtDir, "scr_bigint_assert.c"))] : []),
     ...(opts.qs ? [rt(join(rtDir, "scr_qs.c"))] : []),
     ...(opts.parseArgs ? [rt(join(rtDir, "scr_util.c"))] : []),
+    ...(opts.parseArgs && opts.symbol ? [rt(join(rtDir, "scr_util_compare.c"))] : []),
+    ...(opts.parseArgs && opts.inspect && opts.dynAsync ? [rt(join(rtDir, "scr_util_style.c"))] : []),
     ...(opts.stream ? [rt(join(rtDir, "scr_stream.c"))] : []),
     // The readiness-poller backends (scr_platform.h): kqueue on macOS/BSD,
     // epoll on Linux, WSAPoll on Windows — each TU is empty off its

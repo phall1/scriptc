@@ -26,7 +26,11 @@ const OPTIONAL = [
   ["scr_events_emitter.c", "emitter"], ["scr_dyn_handle.c", any("emitter", "netEffective")],
   ["scr_symbol.c", "symbol"],
   ["scr_bigint_assert.c", all("assert", "bigint")],
-  ["scr_qs.c", "qs"], ["scr_util.c", "parseArgs"], ["scr_stream.c", "stream"],
+  ["scr_qs.c", "qs"], ["scr_util.c", "parseArgs"],
+  // Utility objects must only reference runtime families selected with them.
+  ["scr_util_compare.c", all("parseArgs", "symbol")],
+  ["scr_util_style.c", all("parseArgs", "inspect", "dynAsync")],
+  ["scr_stream.c", "stream"],
   ["scr_loop_kqueue.c", any("netEffective", "dgram")],
   ["scr_loop_epoll.c", any("netEffective", "dgram")],
   ["scr_loop_wsapoll.c", any("netEffective", "dgram")],

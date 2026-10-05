@@ -15,7 +15,7 @@
  * PATH — the driver pins above run everywhere.
  */
 import { execFile, execFileSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { EOL, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { promisify } from "node:util";
@@ -231,6 +231,32 @@ test("host-native clang static build links native fetch after zlib inputs", asyn
 }, 600_000);
 
 const HELLO_C = '#include <stdio.h>\nint main(void) { printf("zigcc says hi\\n"); return 0; }\n';
+
+test.skipIf(!zigOnPath())("Windows utility source builds link only their required runtime families", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "scr-util-coff-"));
+  const cases = [
+    { name: "parse", options: { parseArgs: true }, call: "scr_dyn_release(scr_util_parse_args(scr_dyn_undefined()))" },
+    { name: "parse-inspect", options: { parseArgs: true, inspect: true }, call: "scr_dyn_release(scr_util_parse_args(scr_dyn_undefined()))" },
+    { name: "compare", options: { parseArgs: true, symbol: true }, call: "scr_util_is_deep_strict_equal(scr_dyn_undefined(), scr_dyn_undefined(), scr_dyn_undefined())" },
+    { name: "style", options: { parseArgs: true, inspect: true, dynAsync: true, events: true }, call: "scr_str_release(scr_util_style_text(scr_dyn_undefined(), scr_dyn_undefined(), scr_dyn_undefined()))" },
+  ];
+  try {
+    await withCcEnv("zigcc", "x86_64-windows-gnu", async () => {
+      for (const item of cases) {
+        const cPath = join(dir, `${item.name}.c`);
+        await writeFile(cPath, `#include "scr_runtime.h"\nint main(void) { ${item.call}; return 0; }\n`);
+        for (const optimization of ["release", "dev"] as const) {
+          const outPath = join(dir, `${item.name}-${optimization}.exe`);
+          await compileC({ cPath, outPath, optimization, ...item.options });
+          expect((await readFile(outPath)).subarray(0, 2).toString()).toBe("MZ");
+        }
+      }
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 600_000);
+
 const MUSL_RUNTIME_C = `
 #include <stddef.h>
 #include <ucontext.h>
