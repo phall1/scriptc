@@ -5819,6 +5819,7 @@ ScrBytes *scr_array_buffer_view_dv(ScrDyn *, ScrDyn *, ScrDyn *);
 /* Native callback boundary: exact owned u8 copy. NULL with len == 0 is an
  * empty span. */
 ScrBytes *scr_bytes_from_data(const uint8_t *data, size_t len); /* +1 */
+ScrBytes *scr_bytes_take_data(uint8_t *data, size_t len); /* +1, consumes malloc storage */
 
 /* `new Uint8Array(src)` / Buffer.from(u8): a same-elem-kind copy (the
  * compiler fences cross-kind construction). Borrows src. Never throws. */

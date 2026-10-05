@@ -2299,34 +2299,125 @@ static FILE *scr_fs_fopen(const ScrStr *path, const char *mode) {
 #endif
 }
 
+/* File sizes are hints, never EOF. Pseudo-files, pipes and concurrently
+ * changing files still read to EOF; descriptor reads keep their position
+ * and ownership. Limit individual reads for the CRT and small ssize_t. */
+typedef struct {
+  ScrStr *text;
+  uint8_t *bytes;
+  size_t len, cap;
+} ScrFileRead;
+
+static size_t scr_file_read_hint(FILE *stream, int fd) {
+  if (stream) fd = fileno(stream);
+#ifdef _WIN32
+  struct _stat64 st;
+  if (_fstat64(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size <= 0) return 4096;
+  int64_t position = stream ? 0 : _lseeki64(fd, 0, SEEK_CUR);
+#else
+  struct stat st;
+  if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size <= 0) return 4096;
+  off_t position = stream ? 0 : lseek(fd, 0, SEEK_CUR);
+#endif
+  if (position < 0 || position >= st.st_size) return 4096;
+  uintmax_t remaining = (uintmax_t)st.st_size - (uintmax_t)position;
+  /* A bounded initial allocation also tolerates sparse files that shrink
+   * between metadata and the first read without reserving their full size. */
+  size_t limit = 64 * 1024 * 1024;
+  return remaining > limit ? limit : (size_t)remaining;
+}
+
+static uint8_t *scr_file_read_data(ScrFileRead *out) {
+  return out->text ? (uint8_t *)out->text->data : out->bytes;
+}
+
+static void scr_file_read_grow(ScrFileRead *out) {
+  size_t limit = SIZE_MAX - sizeof(ScrStr) - 1;
+  if (out->cap >= limit) scr_trap("scriptc: file too large\n");
+  size_t cap = out->cap > limit / 2 ? limit : out->cap * 2;
+  if (out->text) {
+    out->text->len = out->len;
+    out->text = scr_str_regrow(out->text, cap);
+  } else {
+    uint8_t *grown = realloc(out->bytes, cap);
+    if (!grown) scr_trap("scriptc: out of memory\n");
+    out->bytes = grown;
+  }
+  out->cap = cap;
+}
+
+/* Fill the final allocation. At a full capacity, probe one byte before
+ * growing so an exact-size regular file never doubles its retained space. */
+static int scr_file_read_all(FILE *stream, int fd, bool text, ScrFileRead *out) {
+  *out = (ScrFileRead){0};
+  out->cap = scr_file_read_hint(stream, fd);
+  if (text) {
+    out->text = scr_str_alloc_raw(0, out->cap);
+    out->cap = out->text->cap;
+    out->text->data[0] = '\0';
+  } else {
+    out->bytes = malloc(out->cap);
+    if (!out->bytes) scr_trap("scriptc: out of memory\n");
+  }
+  for (;;) {
+    uint8_t extra;
+    bool full = out->len == out->cap;
+    size_t room = full ? 1 : out->cap - out->len;
+    if (room > 512 * 1024) room = 512 * 1024;
+    uint8_t *dest = full ? &extra : scr_file_read_data(out) + out->len;
+    size_t count;
+    int error = 0;
+    if (stream) {
+      count = fread(dest, 1, room, stream);
+      if (ferror(stream)) error = errno ? errno : EIO;
+    } else {
+      ssize_t n = read(fd, dest, room);
+      if (n < 0) { count = 0; error = errno; }
+      else count = (size_t)n;
+    }
+    if (count) {
+      if (full) {
+        scr_file_read_grow(out);
+        scr_file_read_data(out)[out->len] = extra;
+      }
+      out->len += count;
+    }
+    if (error == EINTR) {
+      if (stream) clearerr(stream);
+      continue;
+    }
+    if (error) {
+      /* Raw strings must be safe for the normal cache-aware destructor. */
+      if (out->text) { out->text->len = out->len; out->text->data[out->len] = '\0'; }
+      scr_str_release(out->text);
+      free(out->bytes);
+      *out = (ScrFileRead){0};
+      return error;
+    }
+    if (!count) break;
+  }
+  if (out->text) { out->text->len = out->len; out->text->data[out->len] = '\0'; }
+  // Do not retain a large hint after truncation or a tiny pipe result.
+  if (out->cap > 256 && out->len < out->cap / 2) {
+    if (out->text) out->text = scr_str_regrow(out->text, out->len);
+    else {
+      uint8_t *trimmed = realloc(out->bytes, out->len ? out->len : 1);
+      if (trimmed) out->bytes = trimmed;
+    }
+  }
+  return 0;
+}
+
 static ScrStr *scr_fs_read_file_core(ScrStr *path, bool env_file) {
   FILE *f = scr_fs_fopen(path, "rb");
   if (!f) {
     scr_fs_throw(errno, "open", path);
     return NULL;
   }
-  size_t cap = 4096, len = 0;
-  char *buf = malloc(cap);
-  if (!buf) {
-    scr_trap("scriptc: out of memory\n");
-  }
-  for (;;) {
-    if (cap - len < 2048) {
-      cap *= 2;
-      char *grown = realloc(buf, cap);
-      if (!grown) {
-        scr_trap("scriptc: out of memory\n");
-      }
-      buf = grown;
-    }
-    size_t n = fread(buf + len, 1, cap - len, f);
-    len += n;
-    if (n == 0) break;
-  }
-  if (ferror(f)) {
-    int e = errno;
-    fclose(f);
-    free(buf);
+  ScrFileRead out;
+  int error = scr_file_read_all(f, -1, true, &out);
+  fclose(f);
+  if (error) {
     if (env_file) {
       ScrJsonBuf b;
       scr_jb_init(&b);
@@ -2336,13 +2427,20 @@ static ScrStr *scr_fs_read_file_core(ScrStr *path, bool env_file) {
       ScrStr *message = scr_jb_finish(&b);
       scr_throw_error_msg_code(SCR_ERR_TYPE, message->data, message->len, "ERR_INVALID_ARG_TYPE");
       scr_str_release(message);
-    } else scr_fs_throw(e, "read", path);
+    } else scr_fs_throw(error, "read", path);
     return NULL;
   }
+  return out.text;
+}
+
+ScrBytes *scr_fs_read_file_bytes(ScrStr *path) {
+  FILE *f = scr_fs_fopen(path, "rb");
+  if (!f) { scr_fs_throw(errno, "open", path); return NULL; }
+  ScrFileRead out;
+  int error = scr_file_read_all(f, -1, false, &out);
   fclose(f);
-  ScrStr *s = scr_str_new(buf, len);
-  free(buf);
-  return s;
+  if (error) { scr_fs_throw(error, "read", path); return NULL; }
+  return scr_bytes_take_data(out.bytes, out.len);
 }
 
 ScrStr *scr_fs_read_file(ScrStr *path) {
@@ -3799,57 +3897,18 @@ static void scr_fs_throw_nopath(int e, const char *op) {
   scr_throw_error_msg_code(SCR_ERR_ERROR, msg, (size_t)len, name);
 }
 
-/* read(2) loop to EOF from the CURRENT position — Node's
- * readFileSync(fd) semantics for pipes and files alike (the stdin
- * pattern: readFileSync(0, "utf8")). Returns the malloc'd buffer and
- * its length, or NULL with the exception pending. */
-static char *scr_read_fd_all(double fd, size_t *out_len) {
-  size_t cap = 4096, len = 0;
-  char *buf = malloc(cap);
-  if (!buf) {
-    scr_trap("scriptc: out of memory\n");
-  }
-  for (;;) {
-    if (cap - len < 2048) {
-      cap *= 2;
-      char *grown = realloc(buf, cap);
-      if (!grown) {
-        scr_trap("scriptc: out of memory\n");
-      }
-      buf = grown;
-    }
-    ssize_t n = read((int)fd, buf + len, cap - len);
-    if (n < 0) {
-      if (errno == EINTR) continue;
-      int e = errno;
-      free(buf);
-      scr_fs_throw_nopath(e, "read");
-      return NULL;
-    }
-    if (n == 0) break;
-    len += (size_t)n;
-  }
-  *out_len = len;
-  return buf;
-}
-
 ScrStr *scr_fs_read_fd(double fd) {
-  size_t len;
-  char *buf = scr_read_fd_all(fd, &len);
-  if (!buf) return NULL;
-  ScrStr *s = scr_str_new(buf, len);
-  free(buf);
-  return s;
+  ScrFileRead out;
+  int error = scr_file_read_all(NULL, (int)fd, true, &out);
+  if (error) { scr_fs_throw_nopath(error, "read"); return NULL; }
+  return out.text;
 }
 
 ScrBytes *scr_fs_read_fd_bytes(double fd) {
-  size_t len;
-  char *buf = scr_read_fd_all(fd, &len);
-  if (!buf) return NULL;
-  ScrBytes *b = scr_bytes_new(SCR_BYTES_U8, (double)len);
-  if (len > 0) memcpy(b->data, buf, len);
-  free(buf);
-  return b;
+  ScrFileRead out;
+  int error = scr_file_read_all(NULL, (int)fd, false, &out);
+  if (error) { scr_fs_throw_nopath(error, "read"); return NULL; }
+  return scr_bytes_take_data(out.bytes, out.len);
 }
 
 /* ── Atomics.wait: the synchronous-sleep idiom ───────────────────────

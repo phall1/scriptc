@@ -37,40 +37,6 @@ static void scr_bytes_io_oom(void) {
 
 /* ── fs (the Buffer forms of scr_lib.c's utf8 pair) ────────────────────── */
 
-ScrBytes *scr_fs_read_file_bytes(ScrStr *path) {
-  FILE *f = fopen(path->data, "rb");
-  if (!f) {
-    scr_fs_throw(errno, "open", path);
-    return NULL;
-  }
-  size_t cap = 4096, len = 0;
-  uint8_t *buf = malloc(cap);
-  if (!buf) scr_bytes_io_oom();
-  for (;;) {
-    if (cap - len < 2048) {
-      cap *= 2;
-      uint8_t *grown = realloc(buf, cap);
-      if (!grown) scr_bytes_io_oom();
-      buf = grown;
-    }
-    size_t n = fread(buf + len, 1, cap - len, f);
-    len += n;
-    if (n == 0) break;
-  }
-  if (ferror(f)) {
-    int e = errno;
-    fclose(f);
-    free(buf);
-    scr_fs_throw(e, "read", path);
-    return NULL;
-  }
-  fclose(f);
-  ScrBytes *b = scr_bytes_new(SCR_BYTES_U8, (double)len);
-  memcpy(b->data, buf, len);
-  free(buf);
-  return b;
-}
-
 /* readFileSync's runtime-encoding form (a JS helper's untyped `enc`
  * parameter — test/common fixtures.js): undefined/null answer a Buffer,
  * utf8 answers a string, Node's other real encodings meet the loud

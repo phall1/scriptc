@@ -116,13 +116,16 @@ double scr_bytes_to_u8_clamp(double value) {
 
 /* ── lifecycle ─────────────────────────────────────────────────────────── */
 
-static ScrBytes *scr_bytes_alloc(ScrBytesElem elem, size_t len) {
+/* Adopt private malloc storage without clearing or copying its contents. The
+ * caller transfers ownership; views keep it alive through the usual owner. */
+ScrBytes *scr_bytes_take_data(uint8_t *data, size_t len) {
+  if (!data && len) scr_trap("scriptc: NULL owned byte storage\n");
   ScrBytes *b = malloc(sizeof(ScrBytes));
   if (!b) scr_bytes_oom();
   b->rc = 1;
   b->len = len;
-  b->elem = elem;
-  b->data = calloc(len ? len : 1, scr_bytes_elem_size(elem));
+  b->elem = SCR_BYTES_U8;
+  b->data = data ? data : malloc(1);
   if (!b->data) scr_bytes_oom();
   b->backing = NULL;
   b->is_buffer = false;
@@ -131,6 +134,16 @@ static ScrBytes *scr_bytes_alloc(ScrBytesElem elem, size_t len) {
 #ifdef SCR_RC_AUDIT
   scr_live_bytes++;
 #endif
+  return b;
+}
+
+static ScrBytes *scr_bytes_alloc(ScrBytesElem elem, size_t len) {
+  size_t width = scr_bytes_elem_size(elem);
+  if (len > SIZE_MAX / width) scr_bytes_oom();
+  uint8_t *data = calloc(len ? len : 1, width);
+  if (!data) scr_bytes_oom();
+  ScrBytes *b = scr_bytes_take_data(data, len);
+  b->elem = elem;
   return b;
 }
 

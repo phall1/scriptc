@@ -44,6 +44,7 @@ import { scalarizeNumericRecords } from "../../ir/scalar-records.js";
 import { everyStmtList } from "../../ir/traverse.js";
 import { analyzeIntegerRanges, type IntegerRanges } from "../../ir/integer-ranges.js";
 import { findIntegerViews } from "./integer-views.js";
+import { findInitializerBindings, withInitializerBindings } from "../../ir/initializer-bindings.js";
 import { findConstantNumericTables, type ConstantNumericTable } from "../../ir/constant-tables.js";
 import { allocateFfiCallbackAdapters, hasForeignFfiCallback, hasRetainedFfiCallback, type FfiCallbackAdapter } from "../ffi-callbacks.js";
 import { RUNTIME_ABI_MARKER } from "../runtime-abi.js";
@@ -371,6 +372,8 @@ export class LlEmitter {
     finallyDepth: number;
   }[] = [];
   private currentLocals = new Map<string, IrLocal>();
+  private readonly initializerBindings: ReturnType<typeof findInitializerBindings>;
+  private numericLocals = new Map<string, IrLocal>();
   private captureIds = new Set<string>();
   /** Active induction bindings retain their width independently of size_t. */
   integerLoopBindings = new Map<string, { slot: string; type: "i32" | "i64"; signed?: boolean; range?: { min: number; max: number } }>();
@@ -423,6 +426,7 @@ export class LlEmitter {
     }));
     this.debug = options.debugSources === undefined ? null : new LlvmDebugInfo(mod.sourceFile, options.debugSources, options.pointerBits, mod.unions);
     this.constantNumericTables = findConstantNumericTables(mod);
+    this.initializerBindings = findInitializerBindings(mod);
     this.sizeType = options.pointerBits === 32 ? "i32" : "i64";
     this.ffiExtendNarrowIntegers = options.wasi === true || ffiExtendsNarrowIntegers(options.targetTriple);
     this.wasi = options.wasi === true;
@@ -3333,6 +3337,9 @@ export class LlEmitter {
     this.unwindCleanups.clear();
     this.jumpTargets = [];
     this.currentLocals = new Map(fn.locals.map((l) => [l.id, l]));
+    const initializerBindings = this.initializerBindings.get(fn.name) ?? [];
+    const numericFn = withInitializerBindings(fn, initializerBindings);
+    this.numericLocals = new Map(numericFn.locals.map((l) => [l.id, l]));
     this.borrowedParameters.clear();
     this.stableCallBindings = this.callLifetimes.bindings.get(fn.name) ?? new Set();
     const borrowedParameterIndexes = this.callLifetimes.borrowed.get(fn.name);
@@ -3349,8 +3356,8 @@ export class LlEmitter {
     this.callArrayReads = findCallArrayReads(fn, this.optionalArrayReads, this.referenceEffects.functions, this.callLifetimes);
     this.mapReadLifetimes = findMapReadLifetimes(fn, this.unionsById, this.callLifetimes);
     this.localStackUnions = findLocalStackUnions(fn, this.callLifetimes, this.unionsById);
-    this.integerRanges = analyzeIntegerRanges(fn);
-    this.bytesBounds = findBytesBounds(fn, this.integerRanges);
+    this.integerRanges = analyzeIntegerRanges(numericFn);
+    this.bytesBounds = findBytesBounds(numericFn, this.integerRanges);
     this.chainSlots.clear();
     this.finallyStack = [];
     this.tryStack = [];
@@ -3395,11 +3402,17 @@ export class LlEmitter {
 
     const paramIds = new Set(fn.params.map((p) => p.localId));
     if (this.debug === null) {
-      for (const id of findIntegerViews(fn)) {
+      for (const id of findIntegerViews(numericFn)) {
         const slot = B.slot();
-        B.entryAllocas.push(`${slot} = alloca i32 ; integer view ${this.currentLocals.get(id)!.name}`);
+        B.entryAllocas.push(`${slot} = alloca i32 ; integer view ${this.numericLocals.get(id)!.name}`);
         this.integerViews.set(id, slot);
       }
+    }
+    for (const global of initializerBindings) {
+      if (!this.integerViews.has(global.id)) continue;
+      const value = B.tmp();
+      B.line(`${value} = load double, ptr @${mangleGlobal(global.id)}`);
+      this.storeIntegerView(global.id, { name: value, type: global.type });
     }
     for (const local of fn.locals) {
       // Boxed locals' slots hold their capture BOX (a ptr); captured
@@ -4035,8 +4048,8 @@ export class LlEmitter {
         // The init's scope wraps the whole loop (break/continue must NOT
         // release it — scopeDepth captured after the push, C parity).
         const integerArrayLoop = this.debug === null ? matchIntegerArrayForLoop(s, this.currentLocals, this.integerArrayBindings) : null;
-        const integerLoop = integerArrayLoop ?? (this.debug === null ? matchIntegerBytesForLoop(s, this.currentLocals) : null);
-        const countedLoop = !integerLoop && this.countedLoopsEnabled ? matchIntegerCountedForLoop(s, this.currentLocals, this.integerRanges) : null;
+        const integerLoop = integerArrayLoop ?? (this.debug === null ? matchIntegerBytesForLoop(s, this.numericLocals) : null);
+        const countedLoop = !integerLoop && this.countedLoopsEnabled ? matchIntegerCountedForLoop(s, this.numericLocals, this.integerRanges) : null;
         let countedJoin: string | null = null;
         if (countedLoop?.guarded) {
           const bound = this.emitExpr(countedLoop.limit);

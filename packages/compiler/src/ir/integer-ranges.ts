@@ -1,6 +1,7 @@
 import type { IrExpr, IrFunction, IrStmt } from "./ir.js";
 import { everyExprChild, everyStmtChild, everyStmtList } from "./traverse.js";
 import { byteNumberAccess, byteNumberRange } from "./byte-numbers.js";
+import { boundedIntegerLoopFacts, integerPathFallsThrough } from "./integer-loop-facts.js";
 
 /** Exactly representable integers, excluding negative zero. Facts describe
  * the evaluated value, never a later read of the same local binding. */
@@ -47,6 +48,7 @@ export function analyzeIntegerRanges(fn: IrFunction): IntegerRanges {
   if (fn.async || fn.generator) return ranges;
   const captures = new Set([...(fn.captures ?? []), ...(fn.classCaptures ?? [])].map((c) => c.localId));
   const eligible = new Set(fn.locals.filter((l) => l.type.kind === "f64" && !l.boxed && !l.tdz && !captures.has(l.id)).map((l) => l.id));
+  const loopLocals = new Map(fn.locals.filter((l) => !captures.has(l.id)).map((l) => [l.id, l]));
 
   function remember(e: IrExpr, range: IntegerRange | null): IntegerRange | null {
     // Shared IR objects have to satisfy the proof at every occurrence.
@@ -236,14 +238,21 @@ export function analyzeIntegerRanges(fn: IrFunction): IntegerRanges {
           const yes = new Map(facts), no = new Map(facts);
           refine(s.cond, true, yes); refine(s.cond, false, no);
           body(s.then, yes); if (s.else_) body(s.else_, no);
-          merge(facts, yes, no); break;
+          if (!integerPathFallsThrough(s.then)) {
+            facts.clear(); for (const [id, range] of no) facts.set(id, range);
+          } else if (s.else_ && !integerPathFallsThrough(s.else_)) {
+            facts.clear(); for (const [id, range] of yes) facts.set(id, range);
+          } else merge(facts, yes, no);
+          break;
         }
         case "for": {
           if (s.init) body([s.init], facts);
           const counter = induction(s, facts);
+          const bounded = boundedIntegerLoopFacts(s, loopLocals, facts);
           const loop = new Map(facts);
           invalidate(loop, [...s.body, ...(s.cond ? [s.cond] : []), ...(s.update ? [s.update] : [])]);
           if (counter) loop.set(counter.id, counter.range);
+          for (const [id, range] of bounded) loop.set(id, range);
           if (s.cond) expr(s.cond, loop);
           const inside = new Map(loop);
           if (s.cond) refine(s.cond, true, inside);
