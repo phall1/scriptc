@@ -6,6 +6,23 @@ All notable changes to scriptc will be documented in this file.
 
 <!-- release:start -->
 
+## 0.2.4
+
+### Features
+
+- **Native Maps and Sets accept boolean, bigint, and mixed-value keys.** Collection construction and storage preserve identity, insertion order, and iteration behavior.
+
+### Performance
+
+- **Numeric loops and byte access need less runtime work.** Integer facts flow through loops and typed-array access, while Buffer and DataView numeric operations avoid redundant conversions and proven bounds checks.
+- **Native text, collection, and checked-value paths reduce ownership and allocation overhead.** String construction writes directly to final storage, and safe input borrowing, value reuse, and cycle cleanup reduce intermediate work.
+
+### Fixes
+
+- **Windows toolchain assets resolve through linked packages.** Native launches locate installed assets from the physical package manifest path.
+
+<!-- release:end -->
+
 ## 0.2.3
 
 ### Features
