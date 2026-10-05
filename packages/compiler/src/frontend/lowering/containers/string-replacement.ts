@@ -79,10 +79,10 @@ function lowerStringReplacementValues(
       "use a callback returning string with a prefix of (match: string, offset: number, subject: string)");
   }
   const key = `str.${method}:${typeKey(replacement.type)}`;
-  let helper = lowerer.widthHelpers.get(key);
+  let helper = lowerer.valueHelpers.get(key);
   if (!helper) {
-    helper = `%str.${method}.${lowerer.widthHelpers.size}`;
-    lowerer.widthHelpers.set(key, helper);
+    helper = `%str.${method}.${lowerer.valueHelpers.size}`;
+    lowerer.valueHelpers.set(key, helper);
     const subject = varRef("s.0", STRING, loc);
     const needle = varRef("search.0", STRING, loc);
     const replace = varRef("replace.0", replacement.type, loc);
@@ -145,10 +145,10 @@ function lowerStringReplacementValues(
  * than individual subject characters so ordinary Unicode text is intact. */
 function replacementTemplateHelper(lowerer: Lowerer, loc: SrcLoc): string {
   const key = "str.replacementTemplate";
-  const previous = lowerer.widthHelpers.get(key);
+  const previous = lowerer.valueHelpers.get(key);
   if (previous) return previous;
-  const name = `%str.template.${lowerer.widthHelpers.size}`;
-  lowerer.widthHelpers.set(key, name);
+  const name = `%str.template.${lowerer.valueHelpers.size}`;
+  lowerer.valueHelpers.set(key, name);
   const subject = varRef("s.0", STRING, loc);
   const needle = varRef("search.0", STRING, loc);
   const template = varRef("template.0", STRING, loc);

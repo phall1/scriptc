@@ -1,14 +1,19 @@
+import { dynUndefinedExpr, nodeThrowExpr, numLit, varRef } from "../../ir/build.js";
+import type { FieldLift } from "./coercions/structural-plans.js";
+import { lowerBuiltinCall } from "./builtin-calls.js";
+import { CoercionState } from "./coercions/state.js";
+import { widthLiftPlan, unitOnlyElem, recordWidthPlan, describeRecordWidthBlocker, objToRecordPlan, recordToClassPlan } from "./coercions/structural-plans.js";
+import { widthCoerce, applyWidthLift, unionRecordWidthHelper, recordWidthHelper, tupleArrayWidthHelper, emptyArrayLiftHelper, arrayWidthHelper, objRecordWidthHelper, recordClassWidthHelper, classStaticsProjection } from "./coercions/structural.js";
+import { funcReturnWidthAdapter, coercibleValue, cleanFuncAdaptable, funcCoerceAdapter, spawnResFnAdapterPlan, spawnResFnAdapter } from "./coercions/function-adapters.js";
+import { unionRetagMappable, narrowedRetagHelper, strandedUnitTrap, strandedCoercionTrap, recordUnionWrapHelper, unionRetagHelper, narrowedArmHelper, deferredReadHelper } from "./coercions/unions.js";
+import { jsvalLiftable, jsvalLiftExpr, unionToJsvalHelper, recordToJsvalHelper, arrayToJsvalHelper, arrayToJsvalArrayHelper } from "./coercions/island.js";
 import { lowerUtilTypeValue, pathModuleValue, utilTypesModuleValue } from "./lower-builtin-values.js";
 import { everyExprChild, everyStmtChild, transformStmtList } from "../../ir/traverse.js";
 import { RuntimeOptionalLocals } from "./runtime-optional-locals.js";
 import { sanitizeUnregisteredClassTypes } from "./sanitize-class-types.js";
 import { UnregisteredClassTypes } from "./unregistered-class-types.js";
-import { buildUnionNarrow } from "./union-narrow.js";
-import { planUnionRetag, buildUnionRetag, planRecordUnionWrap, buildRecordUnionWrap } from "./union-retag.js";
 import type { WidthLift } from "./width-lift.js";
-export type { WidthLift } from "./width-lift.js";
 import { bindingInContext, captureContextBinding, declareContextLocal, declareContextThis, type FnCtx } from "./function-context.js";
-export { newFnCtx, type FnCtx } from "./function-context.js";
 import type { FrontendServices } from "../services.js";
 import { InternalCompilerError } from "../../errors.js";
 import { defaultAfterUndefined, lowerStaticallyUndefinedArgument } from "./optional-arguments.js";
@@ -17,6 +22,8 @@ import { DeferredModuleInitializers } from "./deferred-module-initializers.js";
 import { finalizeClassMethodValues } from "./class-method-values.js";
 import type { ClassSymbolKey } from "./symbol-fields.js";
 import type { HttpClientFnBinding } from "./lower-server.js";
+export type { WidthLift } from "./width-lift.js";
+export { newFnCtx, type FnCtx } from "./function-context.js";
 /* AST + checker → IR.
  *
  * Invariants:
@@ -74,7 +81,7 @@ import type {
   SrcLoc,
 } from "../../ir/ir.js";
 import { arrayOf, BOOL, canAdaptDynFuncTo, canDynCheckTo, canConvertToDyn, canCrossIslandBoundary, canExitIslandToType, canMarshalTypedFuncIntoIsland, DYN, DYN_HANDLE_KINDS, F64, isDynTypedRefType, isJsonSafeType, isJsonStringifySafeType, isPrimitiveCollectionKey, isSupportedMapKey, isSupportedMapValue, isUndefinedArmedUnion, isUnitType, JSVAL, NULL_T, RUNTIME_ERROR_CLASSES, STRING, typeEquals, UNDEFINED_T, VOID } from "../../ir/ir.js";
-import { type DynamicImportResolution, type NpmBuiltinUse, type NpmLazyTrap } from "../npm.js";
+import type { DynamicImportResolution, NpmBuiltinUse, NpmLazyTrap } from "../npm.js";
 import { provenanceActive } from "../provenance-registry.js";
 import {
   ambientDtsPath,
@@ -116,17 +123,16 @@ import {
 import { type CompoundOp, type IslandFnEntry, boundaryIntoIslandMsg, boundaryOutOfIslandMsg, type BuiltinModuleFn, builtinConstLit, builtinModuleConstOf, builtinModulesArrayLit, builtinFenceHintOf, builtinModuleFnOf, stdlibMemberFence, isStdlibMember, isStdlibSymbol, isStdlibGlobal, stdlibGlobalNameOf, stdlibGlobalMember, nodeTypesOnlySymbol } from "./surfaces.js";
 import { type FileParts, splitFiles, collectProgram, collectNpmImports, collectJsonImports, moduleArtifacts, collectGlobals, declSymbolOf, defaultExportSymbolOf, lowerFileInit, lowerDefaultExport, buildMain, appendDynamicImportModules, appendForkModules } from "./lower-modules.js";
 import { prepareCjsModuleGraph } from "./lower-node-module.js";
-import { type ClassInfo, type ClassMethodSignature, type ClassIteratorInfo, type GenericClassInfo, registerBuiltinErrorClasses, registerBuiltinEmitterClass, registerBuiltinStreamClasses, builtinErrorInfoOf, builtinEmitterInfoOf, builtinStreamInfoOf, analyzeClassDecoration, classIteratorDrainCall, classIteratorNextCall, classIteratorOf, classIteratorOpenCall, classIteratorRestDrainCall, classMemberNameOf, classValueRef, collectClassShape, exactClassOfReceiver, collectClassShapeInner, ctorAbiEquals, findMethodOn, findStaticOn, findGenericMethodOn, findGenericStaticOn, genericClassInstanceType, isSubclassOf, inHierarchy, overrideBelow, staticShadowBelow, upcastTo, lowerClassMembers, lowerClassCtor, lowerClassExpression, lowerClassExpressionInfo, lowerClassMethodMember, lowerClassValueProperty, lowerStaticMethod, throwingSetterFn, fieldInitStmts, lowerStaticFieldInits, lowerStaticFieldRead, lowerDerivedCtorBody, superCallStmt, lowerSuperMethodCall, superThisRef, lowerSuperAccessorRead, lowerSuperAccessorWrite, inheritsBuiltinErrorCtor, inheritsBuiltinEmitterCtor, errorConstructorArgs, lowerNew, accessorCall } from "./lower-classes.js";
+import { type ClassInfo, type ClassMethodSignature, type ClassIteratorInfo, type GenericClassInfo, registerBuiltinErrorClasses, registerBuiltinEmitterClass, registerBuiltinStreamClasses, builtinErrorInfoOf, builtinEmitterInfoOf, builtinStreamInfoOf, analyzeClassDecoration, classIteratorDrainCall, classIteratorNextCall, classIteratorOf, classIteratorOpenCall, classIteratorRestDrainCall, classMemberNameOf, classValueRef, collectClassShape, exactClassOfReceiver, collectClassShapeInner, ctorAbiEquals, findMethodOn, findStaticOn, genericClassInstanceType, isSubclassOf, inHierarchy, overrideBelow, staticShadowBelow, upcastTo, lowerClassMembers, lowerClassCtor, lowerClassExpression, lowerClassExpressionInfo, lowerClassMethodMember, lowerClassValueProperty, lowerStaticMethod, throwingSetterFn, fieldInitStmts, lowerStaticFieldInits, lowerStaticFieldRead, lowerDerivedCtorBody, superCallStmt, lowerSuperMethodCall, superThisRef, lowerSuperAccessorRead, lowerSuperAccessorWrite, inheritsBuiltinErrorCtor, inheritsBuiltinEmitterCtor, errorConstructorArgs, lowerNew, accessorCall } from "./lower-classes.js";
 import { type MixinFnShape, mixinCallClassInfoOf, mixinIntersectionInstanceType } from "./lower-mixins.js";
 import { implicitAnyParamSymbolsOf } from "./lower-calls.js";
 import { tryLowerExpression } from "./expressions/try-lower-expression.js";
-import { type ParamShape, type FnSig, type GenericFnInfo, type GenericInstance, bindingNeverReassigned, bodyReadsArguments, funcTypeFromParamShapes, implicitMonoFile, isThisParameter, paramShape, paramShapes, checkDefaultParamBodyType, completeArgs, wrappedUndefined, undefinedArgFor, requireExactArityValue, bodyReturnType, declaredReturnType, collectSignature, collectSignatureInner, collectGenericSignature, genericFnOf, lowerGenericCall, lowerGenericFnValue, inferTypeParamBindings, lowerGenericInstance, lowerCall, lowerFfiCall, lowerTimersMemberCall, lowerPromiseMethodCall, lowerFilterNarrowCall, isTopLevelFnSymbol, lowerNestedFunctionDecl, lambdaSignature, lowerLambda, lowerFunction, validateFfiImports } from "./lower-calls.js";
-import { lowerArrayMethodCall, lowerMapMethodCall, lowerMapForEachCall, buildMapForEachFn, lowerRecordOvfCaptureHelper, lowerEnvToPairsHelper, lowerSetMethodCall, lowerSetForEachCall, buildSetForEachFn } from "./lower-containers.js";
+import { type ParamShape, type FnSig, type GenericFnInfo, type GenericInstance, bindingNeverReassigned, bodyReadsArguments, funcTypeFromParamShapes, implicitMonoFile, isThisParameter, paramShape, paramShapes, checkDefaultParamBodyType, completeArgs, wrappedUndefined, undefinedArgFor, requireExactArityValue, bodyReturnType, declaredReturnType, collectSignature, collectSignatureInner, collectGenericSignature, genericFnOf, lowerGenericCall, lowerGenericFnValue, inferTypeParamBindings, lowerGenericInstance, lowerCall, lowerFfiCall, lowerPromiseMethodCall, lowerFilterNarrowCall, isTopLevelFnSymbol, lowerNestedFunctionDecl, lambdaSignature, lowerLambda, lowerFunction, validateFfiImports } from "./lower-calls.js";
+import { lowerArrayMethodCall, lowerMapMethodCall, lowerMapForEachCall, buildMapForEachFn, lowerEnvToPairsHelper, lowerSetMethodCall, lowerSetForEachCall, buildSetForEachFn } from "./lower-containers.js";
 import { lowerBufferStaticCall, lowerBytesMethodCall, lowerBytesNew } from "./containers/bytes.js";
 import { lowerRegexMethodCall, lowerStringMethodCall } from "./containers/string-and-regexp.js";
-import { lowerStreamModuleCall } from "./lower-stream.js";
 import { lowerEmitOverrideSpec, type ComputedEventPattern, type EmitSpecCtx, type EmitSpecRequest, type EventSig } from "./lower-event-emitter.js";
-import { builtinImportOf, createRequireBindingDecl, createRequireNamespaceDecl, createRequireProgramModuleOf, createRequireSpecOf, stripTypeCasts, lowerBuiltinModuleCall, lowerNodeModuleCall, lowerTimersPromisesSetInterval, lowerFsToUnixTimestampCall, lowerFsLadderCall, lowerChildArgsArg, lowerSpawnSyncCall, lowerSpawnCall, lowerExecFileCall, lowerExecSyncCall, recordToEnvPairs, lowerJsonMethodCall, fencedBuiltinImportOf, lowerCryptoComposedCall, lowerUrlMethodCall, lowerSearchParamsMethodCall, lowerStatsMethodCall, lowerChildMethodCall, lowerAtomicsCall, lowerBuiltinExtraProperty, registerPromisifiedBuiltinDecl, lowerExecFileAsyncCall, execFileAsyncHelper, lowerStringDecoderMethodCall, strdecHelper, lowerReadlineMethodCall, lowerDcChannelMethodCall, lowerDcChannelProperty, lowerAlsMethodCall, lowerDcTracingChannelMethodCall, lowerDcTracingChannelProperty, lowerJsonProperty, lowerErrorCodeProperty, lowerProcessProperty, isProcessEnv, envValueType, lowerProcessEnvGet, lowerProcessMethodCall, lowerProcessOptionalMethodCall, lowerTimeoutMethodCall, envSnapshotHelper, isConsoleLog, consoleCallMember, lowerNumberStaticCall, lowerNumberStaticProperty, lowerDateCall, lowerTextCodecCall, lowerCryptoModuleCall, lowerFsConstantsProperty, lowerBuiltinConstantsProperty, builtinConstantBindingOf, builtinConstantsDestructureDecl, lowerProcessStreamProperty, lowerStringStaticCall, lowerStringLastIndexOfCall, lowerPromiseStaticCall } from "./lower-builtins.js";
+import { builtinImportOf, createRequireBindingDecl, createRequireNamespaceDecl, createRequireProgramModuleOf, createRequireSpecOf, stripTypeCasts, lowerBuiltinModuleCall, lowerTimersPromisesSetInterval, lowerFsToUnixTimestampCall, lowerFsLadderCall, lowerChildArgsArg, lowerSpawnSyncCall, lowerSpawnCall, lowerExecFileCall, lowerExecSyncCall, recordToEnvPairs, lowerJsonMethodCall, fencedBuiltinImportOf, lowerCryptoComposedCall, lowerUrlMethodCall, lowerSearchParamsMethodCall, lowerStatsMethodCall, lowerChildMethodCall, lowerAtomicsCall, lowerBuiltinExtraProperty, registerPromisifiedBuiltinDecl, lowerExecFileAsyncCall, execFileAsyncHelper, lowerStringDecoderMethodCall, strdecHelper, lowerReadlineMethodCall, lowerDcChannelMethodCall, lowerDcChannelProperty, lowerAlsMethodCall, lowerDcTracingChannelMethodCall, lowerDcTracingChannelProperty, lowerJsonProperty, lowerErrorCodeProperty, lowerProcessProperty, isProcessEnv, envValueType, lowerProcessEnvGet, lowerProcessMethodCall, lowerProcessOptionalMethodCall, lowerTimeoutMethodCall, envSnapshotHelper, isConsoleLog, consoleCallMember, lowerNumberStaticCall, lowerNumberStaticProperty, lowerDateCall, lowerTextCodecCall, lowerCryptoModuleCall, lowerFsConstantsProperty, lowerBuiltinConstantsProperty, builtinConstantBindingOf, builtinConstantsDestructureDecl, lowerProcessStreamProperty, lowerStringStaticCall, lowerStringLastIndexOfCall, lowerPromiseStaticCall } from "./lower-builtins.js";
 import { fenceFetchObjectAssignment, fenceFetchObjectBinding, fenceStaticAbortControllerMemberRead, fenceStaticHeadersIteration, fenceStaticHeadersMember, fenceStaticReadableStreamMember, fenceStaticResponseMember, fenceUnsupportedFetchConstructorMember, isIslandExpr, islandFuncValueFence, islandRegexpOf, jsvalIn, requireDynamicApi, islandGlobalFnOf, lowerAbortControllerNew, lowerDynamicHeadersIteratorCall, lowerDynamicHeadersSpread, lowerDynamicImportCall, lowerFetchCall, lowerFetchElementMethodCall, lowerResponseNew, lowerFetchWebNew, lowerStaticFetchCompanionCall, lowerStaticAbortControllerCall, lowerStaticAbortSignalListenerCall, lowerStaticReadableStreamCancelCall, lowerStaticReadableStreamControllerCall, lowerStaticReadableStreamNew, lowerStaticReadableStreamReaderCall, lowerStaticResponseCall, lowerIslandMethodCall, lowerMathProperty, npmPackageOf, npmMemberFence, npmPackageOfSymbol } from "./lower-island.js";
 import { lowerHttpHeadersElement, lowerNetModuleCall, lowerServerMethodCall, lowerServerProperty, lowerTlsRootCertificates } from "./lower-server.js";
 import { lowerDgramDnsModuleCall, lowerDgramMethodCall } from "./lower-dgram.js";
@@ -142,7 +148,6 @@ import { foldedStringKeyOf, lowerDynObjectLiteral, lowerObjectLiteral, lowerShor
 import type { ExpandoMembers } from "./lower-expando.js";
 import { lowerRecordFieldCall, lowerObjectMethodCall } from "./lower-calls.js";
 import { fenceCrossBlockNsRef, nsPathPrefix } from "./lower-namespaces.js";
-import { numLit, varRef } from "../../ir/build.js";
 import { isSafeToRepeat } from "./expressions/evaluation-safety.js";
 import { lowerTernary } from "./lower-exprs.js";
 
@@ -684,42 +689,6 @@ export function neverTaintedJsType(lowerer: Lowerer, node: ts.Node, t: ts.Type):
     return false;
   };
   return walk(t, 4);
-}
-
-/** The dyn undefined value — what an uninitialized checked-dynamic
- * binding holds (JS: declared bindings read `undefined` before any
- * assignment). A NULL dyn slot is a trap, never a value, so every dyn
- * binding that is READABLE before its first assignment must start here:
- * `let x;` declarations, hoisted `var`s (function and module scope,
- * forward captures included), and the implicit-return completion
- * (lower-calls' own copy of this pattern predates the helper). */
-export function dynUndefinedExpr(loc: SrcLoc): IrExpr {
-  return {
-    kind: "dynFrom",
-    value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc },
-    type: DYN,
-    loc,
-  };
-}
-
-/** An always-throwing Node-parity error expression (the error.nodeThrow
- * libCall — the lowered form of arms Node rejects unconditionally:
- * ERR_INVALID_THIS receivers, ERR_MISSING_ARGS arity ladders, the
- * symbol-to-string TypeError). kind 0 Error / 1 TypeError / 2 RangeError;
- * an empty code means no code slot. `type` is the replaced expression's
- * own (never materialized — the global.undefRead pattern). */
-export function nodeThrowExpr(kind: 0 | 1 | 2 | 5, code: string, message: string, type: IrType, loc: SrcLoc): IrExpr {
-  return {
-    kind: "libCall",
-    fn: "error.nodeThrow",
-    args: [
-      { kind: "numLit", value: kind, type: F64, loc },
-      { kind: "strLit", value: code, type: STRING, loc },
-      { kind: "strLit", value: message, type: STRING, loc },
-    ],
-    type,
-    loc,
-  };
 }
 
 /** The post-validation fence STRING a validation-ladder Chk libCall
@@ -1405,7 +1374,7 @@ export class Lowerer {
     let source = value;
     if (
       value.kind === "call" &&
-      this.checkedNarrowHelpers.has(value.callee) &&
+      this.coercions.checkedNarrows.has(value.callee) &&
       value.args.length === 1 &&
       value.args[0]?.type.kind === "union"
     ) {
@@ -1592,32 +1561,18 @@ export class Lowerer {
   readonly emitSpecDone = new Set<string>();
   readonly emitSpecQueue: EmitSpecRequest[] = [];
   emitSpecCtx: EmitSpecCtx | null = null;
-  /** Width-coercion helpers (%rec.width.N / %arr.width.N), interned per
-   * (from, to) shape pair — see widthCoerce. */
-  readonly widthHelpers = new Map<string, string>();
-  /** (fromShape, toShape) pairs whose width plan is being computed — the
-   * cycle guard for RECURSIVE shapes (a self-referential record narrowing
-   * into a self-referential subset). Re-entering an in-progress pair
-   * answers "assume coercible" (the greatest fixed point: every OTHER
-   * constraint of the cycle is still checked by the outer call, and the
-   * built helper terminates because recordWidthHelper interns its name
-   * before building the body, so the recursive reference resolves to the
-   * helper itself). */
-  private readonly widthPlanning = new Set<string>();
+  readonly coercions = new CoercionState();
+  /** Generated value helpers, keyed by operation and type. Callers own
+   * their key prefixes; this includes more than structural conversions. */
+  readonly valueHelpers = new Map<string, string>();
 
   /** Interned node:assert helpers (deep-equality comparisons keyed by
    * typeKey, throws wrappers keyed by callback type + expected class) —
-   * the widthHelpers pattern with its own namespace. */
+   * the valueHelpers pattern with its own namespace. */
   readonly assertHelpers = new Map<string, string>();
   /** util.inspect's per-type traversal helpers (%util.insp.N), interned
    * by typeKey — the assertHelpers pattern with its own namespace. */
   readonly inspectHelpers = new Map<string, string>();
-  /** Union re-tag helpers (%union.retag.N), interned per (from, to)
-   * unionId pair — see unionRetagHelper. */
-  readonly retagHelpers = new Map<string, string>();
-  /** Copy-only routes depend on the two union contracts and discriminator
-   * layouts, without recursive width assumptions or evolving class members. */
-  private readonly copyRetagHelpers = new Map<string, { name: string; shapes: number; unions: number }>();
   private readonly unionLiteralOwners = new Map<string, { owners: Map<string, number> | null; shapes: number; unions: number }>();
   private readonly strippedUndefinedArms = new Map<string, { type: IrType; unions: number }>();
   private readonly addedUndefinedArms = new Map<string, { type: IrType | null; unions: number }>();
@@ -1645,18 +1600,10 @@ export class Lowerer {
    * lifted lazily as module-level functions and interned per accessor
    * declaration: member reads call the getter (lower-exprs). */
   readonly cjsAccessorFns = new Map<ts.Node, { fnName: string; type: IrType & { kind: "func" } }>();
-  readonly narrowHelpers = new Map<string, string>();
-  /** Exact members of narrowHelpers produced by narrowedArmHelper. This
-   * lets property consumers recognize an earlier checked extraction by
-   * provenance instead of relying on its generated-name prefix. */
-  private readonly checkedNarrowHelpers = new Set<string>();
   /** Interned `%iter.drain.<n>` helpers (classIteratorDrainCall): one per
    * receiver class — the eager drain of a class iterable's protocol into
    * a fresh element array, behind array/call spreads. */
   readonly iterDrainHelpers = new Map<string, string>();
-  /** Island-lift builder helpers (%jsin.rec.N / %jsin.arr.N /
-   * %jsin.elems.N), interned per source type — see jsvalLiftExpr. */
-  readonly jsinHelpers = new Map<string, string>();
   /** Synthetic Map.forEach loop functions, interned per key/value type +
    * callback arity: key → fn name (see lowerMapForEachCall). */
   readonly mapHofHelpers = new Map<string, string>();
@@ -5870,2195 +5817,148 @@ export class Lowerer {
     return { kind: "unionWrap", unionId: expected.unionId, tag, value: expr, type: expected, loc: expr.loc };
   }
 
-  /** Copy-based structural WIDTH coercion — a `Full` record flowing into a
-   * narrower `{ id }` slot, or `Full[]` into `{ id }[]` (the Pick-typed
-   * display-table pattern): TS's width subtyping is free on erased types,
-   * but monomorphic structs must RESHAPE, so the value is rebuilt with the
-   * subset of fields copied — per element, via an interned helper, for
-   * arrays. A deliberate divergence from JS's aliasing (SEMANTICS.md 35,
-   * next to the marshal-copy stance): mutations through the narrowed value
-   * don't reach the original and vice versa. Exactly two flows coerce —
-   * record→record and record-array→record-array, each target field copied
-   * from a same-named source field whose type matches exactly or LIFTS
-   * into the target field's union (see recordWidthHelper); anything
-   * deeper keeps the exactness fences. Null when the pair isn't
-   * width-coercible. */
   widthCoerce(expr: IrExpr, expected: IrType): IrExpr | null {
-    if (expected.kind === "record" && expr.type.kind === "record") {
-      // Index-signature pairs reshape through the overflow CAPTURE helper
-      // (the `Object.fromEntries(e) as ModelPricing` pattern — declared
-      // collisions validate at runtime); plain shapes keep the field-copy
-      // width helper. Each declines the other's shapes.
-      const helper =
-        this.recordWidthHelper(expr.type.shapeId, expected.shapeId, expr.loc) ??
-        lowerRecordOvfCaptureHelper(this, expr.type.shapeId, expected.shapeId, expr.loc);
-      if (!helper) return null;
-      return { kind: "call", callee: helper, args: [expr], type: expected, loc: expr.loc };
-    }
-    // A CLASS INSTANCE flowing into a record slot (`new Point(0, 0)` into
-    // `{ x: number; y: number }` — tsc's structural view of classes): the
-    // same field-projecting copy, each target field read off the instance.
-    if (expected.kind === "record" && expr.type.kind === "object") {
-      const helper = this.objRecordWidthHelper(expr.type.className, expected.shapeId, expr.loc);
-      if (!helper) return null;
-      return { kind: "call", callee: helper, args: [expr], type: expected, loc: expr.loc };
-    }
-    // A RECORD flowing into a class-instance slot (`{x: 0, y: 0}` into
-    // `A.Point` — the parameter-property data-class pattern): construction
-    // IS the projection when the constructor is nothing but parameter
-    // properties (recordToClassPlan's gates).
-    if (expected.kind === "object" && expr.type.kind === "record") {
-      const helper = this.recordClassWidthHelper(expr.type.shapeId, expected.className, expr.loc);
-      if (!helper) return null;
-      return { kind: "call", callee: helper, args: [expr], type: expected, loc: expr.loc };
-    }
-    // A CLASS VALUE flowing into a record slot (`var f: ShapeFactory =
-    // Shape` — an interface matched by the class's STATIC side): the
-    // record captures the statics — fields as copies, methods as the
-    // zero-capture closures `const f = C.m` builds. Direct classRef
-    // sources only: the projection reads no runtime value, so an effectful
-    // source expression would lose its evaluation.
-    if (expected.kind === "record" && expr.type.kind === "classval" && expr.kind === "classRef") {
-      return this.classStaticsProjection(expr.type.className, expected.shapeId, expr.loc);
-    }
-    if (expected.kind === "array" && expr.type.kind === "array" && expected.elem.kind !== "jsval") {
-      const helper = this.arrayWidthHelper(expr.type, expected, expr.loc);
-      if (helper) return { kind: "call", callee: helper, args: [expr], type: expected, loc: expr.loc };
-      // The EMPTY-array lift (widthLiftPlan's emptyArr rule), top-level:
-      // `cmd.aliases` typed `(null | undefined)[]` (an `aliases: []`
-      // table) flowing into a `string[]` slot.
-      const lift = this.widthLiftPlan(expr.type, expected);
-      if (lift?.how !== "emptyArr") return null;
-      return this.applyWidthLift(lift, expr, expected, expr.loc);
-    }
-    // A TUPLE flowing into an array slot (`const NAMES = [...] as const`
-    // assigned to a `readonly T[]` — the const-table pattern): TS erases
-    // the arity for free; the monomorphic tuple REBUILDS as a fresh array,
-    // each position's value lifted into the element type (the same copy
-    // stance as every width coercion — later mutations don't alias).
-    if (expected.kind === "array" && expr.type.kind === "record" && expected.elem.kind !== "jsval") {
-      const helper = this.tupleArrayWidthHelper(expr.type.shapeId, expected, expr.loc);
-      if (!helper) return null;
-      return { kind: "call", callee: helper, args: [expr], type: expected, loc: expr.loc };
-    }
-    // An `any[]` slot: any liftable element becomes one island handle per
-    // element (the messages-array pattern — records holding `any` content).
-    if (
-      expected.kind === "array" &&
-      expected.elem.kind === "jsval" &&
-      expr.type.kind === "array" &&
-      expr.type.elem.kind !== "jsval"
-    ) {
-      const helper = this.arrayToJsvalArrayHelper(expr.type.elem, expr.loc);
-      if (!helper) return null;
-      return { kind: "call", callee: helper, args: [expr], type: expected, loc: expr.loc };
-    }
-    return null;
+    return widthCoerce(this, expr, expected);
   }
 
-  /** One step of the recursive width-lift relation: how a `src`-typed
-   * value enters a `dst`-typed slot under the copy-reshape family. The
-   * pure planning side — nothing interns here, so whole plans validate
-   * before any helper exists. The cases, in order:
-   *   copy      — exact same type (typeEquals), the field/element moves as is
-   *   retag     — union into union, every arm mapped (unionRetagMappable —
-   *               identity arms and compatible payload conversions; a shared
-   *               discriminant may select different record destinations)
-   *   wrap      — a non-unit arm value into a union that contains it
-   *   discriminantWrap — identical recursive layouts distinguished by
-   *               their literal field value rather than their storage id
-   *   liftWrap  — a record/array value into a union with NO identical arm
-   *               but exactly ONE arm it width-lifts into (the findRoute
-   *               rule applied at every level; several candidates are
-   *               ambiguous and decline)
-   *   width     — record into a strict-subset record (recordWidthPlan,
-   *               recursively — NESTED width)
-   *   arr       — array into array whose element pair lifts (per-element
-   *               copy loop, arrayWidthHelper)
-   *   dynIn     — a typed value into an 'unknown' (dyn) slot — the same
-   *               static→dyn deep copy coerceToExpected applies top-level
-   *   upcast    — a derived class instance into a base-typed slot (the
-   *               prefix-layout pointer reinterpret, no copy)
-   *   funcAdapt — a function into a slot whose signature differs only by
-   *               CLEAN mechanical conversions (cleanFuncAdaptable); the
-   *               stranded (trap-only) dispositions stay out of the plan
-   * Null when the pair isn't in the relation — callers keep their fences. */
   widthLiftPlan(src: IrType, dst: IrType): WidthLift | null {
-    if (typeEquals(src, dst)) return { how: "copy" };
-    // An 'unknown' (dyn) DESTINATION slot: the static→dyn conversion —
-    // dynFrom, a DEEP COPY (`{ v: 5 }` into `{ v: unknown }`, `number[]`
-    // into `unknown[]` — tsc's top type over the width family's copies).
-    if (dst.kind === "dyn" && src.kind !== "dyn" && this.dynConvertible(src)) {
-      return { how: "dynIn" };
-    }
-    if (dst.kind === "union") {
-      if (src.kind === "union") {
-        return this.unionRetagMappable(src.unionId, dst.unionId) ? { how: "retag" } : null;
-      }
-      // A unit-typed source can't wrap here (unionWrap requires the
-      // LITERAL unit — and no lowered shape carries a bare unit field).
-      if (isUnitType(src)) return null;
-      const tag = this.armTag(dst.unionId, src);
-      const def = this.unions.get(dst.unionId);
-      if (!def) return null;
-      if (tag >= 0) {
-        const shape = src.kind === "record" ? this.shapes.get(src.shapeId) : undefined;
-        if (shape && planRecordUnionWrap(shape, def, (id) => this.shapes.get(id))) return { how: "discriminantWrap" };
-        return { how: "wrap", tag };
-      }
-      const candidates: { tag: number; arm: IrType }[] = [];
-      def.arms.forEach((arm, i) => {
-        if (isUnitType(arm)) return;
-        const sameFamily =
-          (src.kind === "record" && arm.kind === "record") ||
-          (src.kind === "array" && arm.kind === "array") ||
-          (src.kind === "func" && arm.kind === "func") ||
-          (src.kind === "object" && arm.kind === "object") ||
-          // Tuples already lift into ordinary array slots. Consider that
-          // same conversion when the array is an arm of a union too.
-          (src.kind === "record" && this.shapes.get(src.shapeId)?.tuple === true && arm.kind === "array") ||
-          (src.kind === "object" && arm.kind === "record") ||
-          (src.kind === "record" && arm.kind === "object");
-        if (sameFamily && this.widthLiftPlan(src, arm) !== null) candidates.push({ tag: i, arm });
-      });
-      let selected = candidates;
-      if (selected.length > 1 && src.kind === "record") {
-        const source = this.shapes.get(src.shapeId);
-        // An inferred JS union may widen its tag while retaining variants
-        // with and without a value. Prefer the unique layout whose omitted
-        // fields are explicitly undefined, rather than filling an optional
-        // unknown slot and making both variants look equally compatible.
-        const absentOnly = selected.filter(({ arm }) => {
-          if (!source || arm.kind !== "record") return false;
-          const target = this.shapes.get(arm.shapeId);
-          return target !== undefined && target.fields.every((field) => {
-            if (source.fields.some((present) => present.name === field.name)) return true;
-            return isUnitType(field.type) || field.type.kind === "union" &&
-              this.unions.get(field.type.unionId)?.arms.every(isUnitType) === true;
-          });
-        });
-        if (absentOnly.length === 1) selected = absentOnly;
-      }
-      if (selected.length !== 1) return null;
-      return { how: "liftWrap", tag: selected[0]!.tag, arm: selected[0]!.arm };
-    }
-    // A UNION source into a slot that is ONE of its arms (a width copy
-    // whose target field narrowed — the option-table choices shape:
-    // `value: boolean | string` copying into a `value: string` slot the
-    // checker approved): the CHECKED extraction — narrowedArmHelper,
-    // exactly `x!`'s machinery — the proven arm's payload comes out, any
-    // other arm throws the catchable TypeError (divergence 38's stance).
-    if (src.kind === "union" && !isUnitType(dst) && dst.kind !== "void" && this.armTag(src.unionId, dst) >= 0) {
-      return { how: "narrow" };
-    }
-    // A DERIVED instance into a BASE-typed slot (`{ p: Q }` copying into
-    // `{ p: P }`): the same implicit upcast coerceToExpected performs at
-    // top level — prefix layout, a pointer reinterpret, no copy.
-    if (
-      dst.kind === "object" &&
-      src.kind === "object" &&
-      this.isSubclassOf(src.className, dst.className)
-    ) {
-      return { how: "upcast" };
-    }
-    // A FUNCTION into a slot whose signature differs only by CLEAN
-    // mechanical conversions (fewer params — JS ignores extras — and
-    // coercibleValue pieces): the general function-value adapter, plan-
-    // gated to the clean subset. The stranded (trap-only) dispositions
-    // funcCoerceAdapter also builds stay TOP-LEVEL only: a width plan
-    // never promises a bridge that can only throw.
-    if (dst.kind === "func" && src.kind === "func" && this.cleanFuncAdaptable(src, dst)) {
-      return { how: "funcAdapt" };
-    }
-    if (dst.kind === "record" && src.kind === "record") {
-      return this.recordWidthPlan(src.shapeId, dst.shapeId) !== null ? { how: "width" } : null;
-    }
-    if (dst.kind === "record" && src.kind === "union") {
-      // A union of records can share a structural destination without
-      // choosing one payload layout in advance. Plan every arm: omitted
-      // destination fields need the ordinary optional-field completion,
-      // and a required field missing from any arm still rejects the pair.
-      const from = this.unions.get(src.unionId);
-      if (!from || from.arms.length === 0 || !from.arms.every((arm) => arm.kind === "record")) return null;
-      const key = `unionWidth:${src.unionId}:${dst.shapeId}`;
-      if (this.widthPlanning.has(key)) return { how: "unionWidth" };
-      this.widthPlanning.add(key);
-      try {
-        return from.arms.every((arm) => this.widthLiftPlan(arm, dst) !== null) ? { how: "unionWidth" } : null;
-      } finally {
-        this.widthPlanning.delete(key);
-      }
-    }
-    if (dst.kind === "record" && src.kind === "object") {
-      return this.objToRecordPlan(src.className, dst.shapeId) !== null ? { how: "objWidth" } : null;
-    }
-    if (dst.kind === "object" && src.kind === "record") {
-      return this.recordToClassPlan(src.shapeId, dst.className) !== null ? { how: "clsWidth" } : null;
-    }
-    if (dst.kind === "array" && src.kind === "array") {
-      if (this.widthLiftPlan(src.elem, dst.elem) !== null) return { how: "arr" };
-      // The EMPTY-array lift: a unit-only element type (`readonly []`
-      // mapped as the unit-element array, `(null | undefined)[]`) has no
-      // per-element conversion into a data element — but the only value
-      // such a slot honestly holds in the width family is EMPTY, so the
-      // lift is a fresh empty array of the target type, guarded by a
-      // runtime non-empty trap (the checked-extraction stance).
-      if (this.unitOnlyElem(src.elem) && dst.elem.kind !== "jsval" && !this.unitOnlyElem(dst.elem)) {
-        return { how: "emptyArr" };
-      }
-      return null;
-    }
-    // A TUPLE flowing into an array FIELD/ELEMENT (`aliases: ["ls"]` into
-    // an `aliases: string[]` slot): per-position lifts, the top-level
-    // tuple-into-array coercion applied recursively.
-    if (dst.kind === "array" && src.kind === "record" && dst.elem.kind !== "jsval") {
-      const from = this.shapes.get(src.shapeId);
-      if (from?.tuple && from.fields.every((f) => this.widthLiftPlan(f.type, dst.elem) !== null)) {
-        return { how: "tupleArr" };
-      }
-      return null;
-    }
-    return null;
+    return widthLiftPlan(this, src, dst);
   }
 
-  /** True for the unit-only element types (`(null | undefined)[]`, the
-   * `readonly []` mapping): a union whose every arm is a unit. */
   unitOnlyElem(t: IrType): boolean {
-    if (t.kind !== "union") return false;
-    const def = this.unions.get(t.unionId);
-    return def !== undefined && def.arms.every((a) => isUnitType(a));
+    return unitOnlyElem(this, t);
   }
 
-  /** The build side of widthLiftPlan: the IrExpr converting `value` into
-   * `dst` under a plan the caller validated. Interns whatever helpers the
-   * lift needs (planned first, so the interns cannot fail — a failure here
-   * is a lowerer bug, not a user diagnostic). */
   applyWidthLift(lift: WidthLift, value: IrExpr, dst: IrType, loc: SrcLoc): IrExpr {
-    switch (lift.how) {
-      case "copy":
-        return value;
-      case "wrap": {
-        if (dst.kind !== "union") throw new InternalCompilerError("lowerer bug: wrap lift against a non-union");
-        return { kind: "unionWrap", unionId: dst.unionId, tag: lift.tag, value, type: dst, loc };
-      }
-      case "discriminantWrap": {
-        if (dst.kind !== "union" || value.type.kind !== "record") throw new InternalCompilerError("lowerer bug: record discriminator lift shape");
-        const helper = this.recordUnionWrapHelper(value.type, dst.unionId, loc);
-        if (!helper) throw new InternalCompilerError("lowerer bug: planned record discriminator lift failed to intern");
-        return { kind: "call", callee: helper, args: [value], type: dst, loc };
-      }
-      case "retag": {
-        if (dst.kind !== "union" || value.type.kind !== "union") throw new InternalCompilerError("lowerer bug: retag lift shape");
-        const retag = this.unionRetagHelper(value.type.unionId, dst.unionId, loc);
-        if (!retag) throw new InternalCompilerError("lowerer bug: planned retag lift failed to intern");
-        return { kind: "call", callee: retag, args: [value], type: dst, loc };
-      }
-      case "liftWrap": {
-        if (dst.kind !== "union") throw new InternalCompilerError("lowerer bug: liftWrap lift against a non-union");
-        const inner = this.widthLiftPlan(value.type, lift.arm);
-        if (!inner) throw new InternalCompilerError("lowerer bug: planned liftWrap arm stopped lifting");
-        const lifted = this.applyWidthLift(inner, value, lift.arm, loc);
-        return { kind: "unionWrap", unionId: dst.unionId, tag: lift.tag, value: lifted, type: dst, loc };
-      }
-      case "width": {
-        if (dst.kind !== "record" || value.type.kind !== "record") throw new InternalCompilerError("lowerer bug: width lift shape");
-        const helper = this.recordWidthHelper(value.type.shapeId, dst.shapeId, loc);
-        if (!helper) throw new InternalCompilerError("lowerer bug: planned width lift failed to intern");
-        return { kind: "call", callee: helper, args: [value], type: dst, loc };
-      }
-      case "unionWidth": {
-        if (dst.kind !== "record" || value.type.kind !== "union") throw new InternalCompilerError("lowerer bug: union width lift shape");
-        const helper = this.unionRecordWidthHelper(value.type.unionId, dst, loc);
-        return { kind: "call", callee: helper, args: [value], type: dst, loc };
-      }
-      case "arr": {
-        if (dst.kind !== "array" || value.type.kind !== "array") throw new InternalCompilerError("lowerer bug: arr lift shape");
-        const helper = this.arrayWidthHelper(value.type, dst, loc);
-        if (!helper) throw new InternalCompilerError("lowerer bug: planned arr lift failed to intern");
-        return { kind: "call", callee: helper, args: [value], type: dst, loc };
-      }
-      case "tupleArr": {
-        if (dst.kind !== "array" || value.type.kind !== "record") throw new InternalCompilerError("lowerer bug: tupleArr lift shape");
-        const helper = this.tupleArrayWidthHelper(value.type.shapeId, dst, loc);
-        if (!helper) throw new InternalCompilerError("lowerer bug: planned tupleArr lift failed to intern");
-        return { kind: "call", callee: helper, args: [value], type: dst, loc };
-      }
-      case "emptyArr": {
-        if (dst.kind !== "array" || value.type.kind !== "array") throw new InternalCompilerError("lowerer bug: emptyArr lift shape");
-        const helper = this.emptyArrayLiftHelper(value.type, dst, loc);
-        return { kind: "call", callee: helper, args: [value], type: dst, loc };
-      }
-      case "objWidth": {
-        if (dst.kind !== "record" || value.type.kind !== "object") throw new InternalCompilerError("lowerer bug: objWidth lift shape");
-        const helper = this.objRecordWidthHelper(value.type.className, dst.shapeId, loc);
-        if (!helper) throw new InternalCompilerError("lowerer bug: planned objWidth lift failed to intern");
-        return { kind: "call", callee: helper, args: [value], type: dst, loc };
-      }
-      case "clsWidth": {
-        if (dst.kind !== "object" || value.type.kind !== "record") throw new InternalCompilerError("lowerer bug: clsWidth lift shape");
-        const helper = this.recordClassWidthHelper(value.type.shapeId, dst.className, loc);
-        if (!helper) throw new InternalCompilerError("lowerer bug: planned clsWidth lift failed to intern");
-        return { kind: "call", callee: helper, args: [value], type: dst, loc };
-      }
-      case "narrow": {
-        if (value.type.kind !== "union") throw new InternalCompilerError("lowerer bug: narrow lift on a non-union");
-        const helper = this.narrowedArmHelper(value.type.unionId, dst, loc);
-        if (!helper) throw new InternalCompilerError("lowerer bug: planned narrow lift failed to intern");
-        return { kind: "call", callee: helper, args: [value], type: dst, loc };
-      }
-      case "dynIn": {
-        if (dst.kind !== "dyn") throw new InternalCompilerError("lowerer bug: dynIn lift against a non-dyn slot");
-        return { kind: "dynFrom", value, type: DYN, loc };
-      }
-      case "upcast": {
-        if (dst.kind !== "object" || value.type.kind !== "object") throw new InternalCompilerError("lowerer bug: upcast lift shape");
-        return this.upcastTo(value, dst.className);
-      }
-      case "funcAdapt": {
-        if (dst.kind !== "func" || value.type.kind !== "func") throw new InternalCompilerError("lowerer bug: funcAdapt lift shape");
-        const adapter = this.funcCoerceAdapter(value.type, dst, loc);
-        if (!adapter) throw new InternalCompilerError("lowerer bug: planned funcAdapt lift failed to intern");
-        return { kind: "call", callee: adapter, args: [value], type: dst, loc };
-      }
-      default: {
-        const _exhaustive: never = lift;
-        void _exhaustive;
-        throw new InternalCompilerError("unreachable");
-      }
-    }
+    return applyWidthLift(this, lift, value, dst, loc);
   }
 
-  /** Dispatch a structural copy from its runtime union tag. Each record
-   * payload has its own field offsets and optional-field completions;
-   * interpreting all arms as the destination layout would corrupt memory.
-   * Intern before descending so recursive record unions can reuse it. */
   unionRecordWidthHelper(fromId: string, target: IrType & { kind: "record" }, loc: SrcLoc): string {
-    const key = `unionWidth:${fromId}:${target.shapeId}`;
-    const existing = this.widthHelpers.get(key);
-    if (existing) return existing;
-    const name = `%union.record.${this.widthHelpers.size}`;
-    this.widthHelpers.set(key, name);
-    const type: IrType = { kind: "union", unionId: fromId };
-    const value = varRef("value.0", type, loc);
-    const from = this.unions.get(fromId);
-    if (!from) throw new InternalCompilerError("lowerer bug: missing record union");
-    const body: IrStmt[] = [];
-    from.arms.forEach((arm, tag) => {
-      const lift = this.widthLiftPlan(arm, target);
-      if (!lift || arm.kind !== "record") throw new InternalCompilerError("lowerer bug: invalid union record plan");
-      const narrowed: IrExpr = { kind: "unionNarrow", unionId: fromId, tag, value, type: arm, loc };
-      body.push({
-        kind: "if",
-        cond: { kind: "unionIsTag", unionId: fromId, tag, negated: false, value, type: BOOL, loc },
-        then: [{ kind: "return", value: this.applyWidthLift(lift, narrowed, target, loc), loc }],
-        else_: null, loc,
-      });
-    });
-    body.push({
-      kind: "throw",
-      value: {
-        kind: "libCall", fn: "error.new",
-        args: [{ kind: "strLit", value: "invalid record union tag", type: STRING, loc }],
-        type: { kind: "object", className: "%TypeError" }, loc,
-      },
-      loc,
-    });
-    this.liftedFns.push({
-      name, params: [{ localId: "value.0", name: "value", type }], returnType: target,
-      locals: [{ id: "value.0", name: "value", type, mutable: false }], body, loc,
-    });
-    return name;
+    return unionRecordWidthHelper(this, fromId, target, loc);
   }
 
-  /** Interned `%rec.width.<n>(r)` — builds the target shape from a source
-   * record by copying fields: every target field must exist on the source
-   * with the EXACT same type, or with a type that LIFTS under
-   * widthLiftPlan — an arm value wraps (`text: string` into
-   * `text?: string`), a whole union re-tags (unionRetagMappable), a field
-   * whose own record/array type needs narrowing reshapes RECURSIVELY
-   * (nested width — the copy stance applies per level), and a MISSING
-   * optional-flavored field completes to its undefined arm (the
-   * literal-completion rule). TUPLES width-coerce too, arity-exact (TS
-   * permits no other tuple width): per-position lifts, never completion.
-   * Index-signature SOURCES narrow here like any wider record — declared
-   * fields copy, the overflow drops with the width (missing target
-   * fields decline: the overflow could hold them). Index-signature
-   * TARGETS keep the overflow CAPTURE helper (widthCoerce's other arm).
-   * Null when the shapes don't relate that way. */
-  /** The pure planning half of recordWidthHelper — every target field's
-   * lift, or null when the pair isn't width-coercible. Callers that must
-   * validate a WHOLE plan before interning anything (the retag helper's
-   * per-arm width lifts) probe with this. */
-  recordWidthPlan(fromId: string, toId: string): Map<string, { src: IrType; lift: WidthLift } | { absent: true; utag: number } | { absentDyn: true }> | null {
-    const from = this.shapes.get(fromId);
-    const to = this.shapes.get(toId);
-    // INDEX-SIGNATURE sources narrow like any wider record — the target
-    // fields copy off the declared struct slots and the overflow drops
-    // with the rest of the width (divergence 36's stance; the absent-
-    // completion rule below is the one extra fence). Index-signature
-    // TARGETS keep the overflow CAPTURE helper (widthCoerce's other arm):
-    // a fresh hybrid needs keyed writes, not a field-list literal.
-    if (!from || !to || to.indexValue) return null;
-    // Tuple↔record pairs never relate; tuple↔tuple only arity-exact.
-    if (!!from.tuple !== !!to.tuple) return null;
-    if (from.tuple && from.fields.length !== to.fields.length) return null;
-    const key = `${fromId}:${toId}`;
-    // Recursive shapes: an in-progress pair re-entered through its own
-    // fields answers "assume coercible" — see widthPlanning.
-    if (this.widthPlanning.has(key)) return new Map();
-    this.widthPlanning.add(key);
-    try {
-      type FieldLift = { src: IrType; lift: WidthLift } | { absent: true; utag: number } | { absentDyn: true };
-      const plan = new Map<string, FieldLift>();
-      for (const tf of to.fields) {
-        const ff = from.fields.find((f) => f.name === tf.name);
-        if (!ff) {
-          // A target field MISSING on the source: legal exactly when it is
-          // optional-flavored (an undefined-armed union) — the unset field
-          // IS the undefined arm, the same rule literal completion applies
-          // — or 'unknown' (a dyn slot holds the dyn undefined, exactly
-          // the absent-property read: the options-record call shape
-          // against `{ plugins: unknown, ... }`). Never for tuples: a
-          // completed position would change .length and JSON where Node
-          // keeps the source arity. Never for INDEX-SIGNATURE sources:
-          // the overflow may hold this very key at runtime (tsc lets the
-          // signature satisfy optional target members), so completing to
-          // undefined would drop a value Node keeps — the pair stays
-          // fenced.
-          if (from.tuple || from.indexValue) return null;
-          if (tf.type.kind === "dyn") {
-            plan.set(tf.name, { absentDyn: true });
-            continue;
-          }
-          if (tf.type.kind !== "union") return null;
-          const def = this.unions.get(tf.type.unionId);
-          const utag = def ? def.arms.findIndex((a) => a.kind === "undefinedT") : -1;
-          if (utag < 0) return null;
-          plan.set(tf.name, { absent: true, utag });
-          continue;
-        }
-        const lift = this.widthLiftPlan(ff.type, tf.type);
-        if (!lift) return null;
-        plan.set(tf.name, { src: ff.type, lift });
-      }
-      return plan;
-    } finally {
-      this.widthPlanning.delete(key);
-    }
+  recordWidthPlan(fromId: string, toId: string): Map<string, FieldLift> | null {
+    return recordWidthPlan(this, fromId, toId);
   }
 
-  /** Post-hoc classifier for SC2002's record→record residue: WHY the
-   * width family (recordWidthPlan and the overflow capture — widthCoerce's
-   * two record arms) declined this pair — the FIRST blocking rule, named.
-   * Pure description on the failure path (the site already carries the
-   * rejection): mirrors the planners' gates, never changes what coerces,
-   * and answers null when no pointed story applies (the generic message
-   * stands). */
   describeRecordWidthBlocker(fromId: string, toId: string): string | null {
-    const from = this.shapes.get(fromId);
-    const to = this.shapes.get(toId);
-    if (!from || !to) return null;
-    if (to.indexValue) {
-      // The overflow CAPTURE's gates (lowerRecordOvfCaptureHelper).
-      if (from.tuple || to.tuple) return "a tuple cannot reshape into an index-signature record";
-      const tIv = to.indexValue;
-      const slotOk = (t: IrType): boolean =>
-        typeEquals(t, tIv) ||
-        (tIv.kind === "dyn" && (t.kind === "dyn" || this.dynConvertible(t))) ||
-        this.widthLiftPlan(t, tIv) !== null;
-      const consumed = new Set<string>();
-      for (const tf of to.fields) {
-        const sf = from.fields.find((f) => f.name === tf.name);
-        if (sf) {
-          if (this.widthLiftPlan(sf.type, tf.type) !== null) {
-            consumed.add(tf.name);
-            continue;
-          }
-          return `field '${tf.name}': '${this.fmt(sf.type)}' does not lift into '${this.fmt(tf.type)}'`;
-        }
-        if (tf.type.kind !== "union" || this.armTag(tf.type.unionId, UNDEFINED_T) < 0) {
-          return `the expected field '${tf.name}' is required and the source has no field to copy into it`;
-        }
-        if (tIv.kind === "dyn" ? !this.dynConvertible(tf.type) : !typeEquals(tf.type, tIv)) {
-          return `the expected field '${tf.name}' ('${this.fmt(tf.type)}') cannot take a runtime key collision from the '${this.fmt(tIv)}' signature slot`;
-        }
-      }
-      for (const ff of from.fields) {
-        if (consumed.has(ff.name)) continue;
-        if (!slotOk(ff.type)) {
-          return `the source field '${ff.name}' ('${this.fmt(ff.type)}') cannot enter the expected '[key: string]: ${this.fmt(tIv)}' slot`;
-        }
-      }
-      if (from.indexValue && !slotOk(from.indexValue)) {
-        return `the source's '[key: string]: ${this.fmt(from.indexValue)}' slot cannot enter the expected '[key: string]: ${this.fmt(tIv)}' slot`;
-      }
-      // The dispatch-writes gate: runtime-keyed writes can collide with a
-      // declared field whose type is not the slot's.
-      const dispatchWrites =
-        from.indexValue !== undefined ||
-        from.fields.some((ff) => !consumed.has(ff.name) && to.fields.some((f) => f.name === ff.name));
-      if (dispatchWrites) {
-        const bad = to.fields.find((f) =>
-          tIv.kind === "dyn" ? !this.dynConvertible(f.type) : !typeEquals(f.type, tIv),
-        );
-        if (bad) {
-          return `runtime-keyed writes can collide with the expected field '${bad.name}' ('${this.fmt(bad.type)}'), which cannot take a '${this.fmt(tIv)}' slot value`;
-        }
-      }
-      return null;
-    }
-    // The field-copy plan's gates (recordWidthPlan).
-    if (!!from.tuple !== !!to.tuple) return null;
-    if (from.tuple && from.fields.length !== to.fields.length) {
-      return `tuple arities differ (${from.fields.length} vs ${to.fields.length}; TS permits no tuple width)`;
-    }
-    for (const tf of to.fields) {
-      const ff = from.fields.find((f) => f.name === tf.name);
-      if (!ff) {
-        if (from.tuple) return null;
-        if (from.indexValue) {
-          return `'${tf.name}' is not a declared field of the source, and the source's index signature could hold it at runtime (a completed undefined would drop that value)`;
-        }
-        if (tf.type.kind === "dyn") continue;
-        if (tf.type.kind !== "union" || this.armTag(tf.type.unionId, UNDEFINED_T) < 0) {
-          return `the expected field '${tf.name}' is missing on the source and is not optional`;
-        }
-        continue;
-      }
-      if (this.widthLiftPlan(ff.type, tf.type) === null) {
-        return `field '${tf.name}': '${this.fmt(ff.type)}' does not lift into '${this.fmt(tf.type)}'`;
-      }
-    }
-    return null;
+    return describeRecordWidthBlocker(this, fromId, toId);
   }
 
   recordWidthHelper(fromId: string, toId: string, loc: SrcLoc): string | null {
-    const from = this.shapes.get(fromId);
-    const to = this.shapes.get(toId);
-    if (!from || !to) return null;
-    // Plan every target field BEFORE interning anything (interned helpers
-    // are part of the emitted program; a later field's failure must not
-    // orphan one).
-    const plan = this.recordWidthPlan(fromId, toId);
-    if (!plan) return null;
-    const key = `rec:${fromId}:${toId}`;
-    const existing = this.widthHelpers.get(key);
-    if (existing) return existing;
-    const name = `%rec.width.${this.widthHelpers.size}`;
-    // Interned BEFORE the body builds: a recursive nested-width field
-    // (self-referential shapes) resolves to this helper itself.
-    this.widthHelpers.set(key, name);
-    const fromT: IrType = { kind: "record", shapeId: fromId };
-    const toT: IrType = { kind: "record", shapeId: toId };
-    const r: IrExpr = { kind: "varRef", localId: "r.0", type: fromT, loc };
-    this.liftedFns.push({
-      name,
-      params: [{ localId: "r.0", name: "r", type: fromT }],
-      returnType: toT,
-      locals: [{ id: "r.0", name: "r", type: fromT, mutable: true }],
-      body: [
-        {
-          kind: "return",
-          value: {
-            kind: "recordLit",
-            fields: to.fields.map((f) => {
-              const lift = plan.get(f.name)!;
-              if ("absentDyn" in lift) {
-                // The unset 'unknown' field: the dyn undefined — exactly
-                // the absent-property read's answer.
-                return { name: f.name, value: dynUndefinedExpr(loc) };
-              }
-              if ("absent" in lift) {
-                if (f.type.kind !== "union") throw new InternalCompilerError("lowerer bug: absent lift against a non-union field");
-                // The unset optional field: build the undefined arm.
-                return {
-                  name: f.name,
-                  value: {
-                    kind: "unionWrap",
-                    unionId: f.type.unionId,
-                    tag: lift.utag,
-                    value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc },
-                    type: f.type,
-                    loc,
-                  } satisfies IrExpr,
-                };
-              }
-              const get: IrExpr = { kind: "recordGet", obj: r, shapeId: fromId, field: f.name, type: lift.src, loc };
-              return { name: f.name, value: this.applyWidthLift(lift.lift, get, f.type, loc) };
-            }),
-            type: toT,
-            loc,
-          },
-          loc,
-        },
-      ],
-      loc,
-    });
-    return name;
+    return recordWidthHelper(this, fromId, toId, loc);
   }
 
-  /** Interned `%arr.width.<n>(a)` — the per-element copy loop over
-   * widthLiftPlan's element lift: out = []; n = a.length; for (...)
-   * out.push(lift(a[i])); return out. Record elements reshape
-   * (recordWidthHelper), union elements wrap or re-tag (`number[]` into
-   * `(number | undefined)[]`), nested arrays recurse. Null when the
-   * element pair isn't width-liftable. */
-  /** Interned `%tup.arr.<n>(t)` — rebuilds a TUPLE as an ARRAY: positions
-   * read in order, each lifted into the element type under widthLiftPlan.
-   * Null unless the source shape really is a tuple whose every position
-   * lifts (records with named fields never relate to arrays). */
   tupleArrayWidthHelper(fromId: string, toT: IrType & { kind: "array" }, loc: SrcLoc): string | null {
-    const from = this.shapes.get(fromId);
-    if (!from || !from.tuple) return null;
-    const fields = [...from.fields].sort((a, b) => Number(a.name) - Number(b.name));
-    const lifts: WidthLift[] = [];
-    for (const f of fields) {
-      const lift = this.widthLiftPlan(f.type, toT.elem);
-      if (!lift) return null;
-      lifts.push(lift);
-    }
-    const key = `tuparr:${fromId}:${typeKey(toT.elem)}`;
-    const existing = this.widthHelpers.get(key);
-    if (existing) return existing;
-    const name = `%tup.arr.${this.widthHelpers.size}`;
-    this.widthHelpers.set(key, name);
-    const fromT: IrType = { kind: "record", shapeId: fromId };
-    const t: IrExpr = { kind: "varRef", localId: "t.0", type: fromT, loc };
-    this.liftedFns.push({
-      name,
-      params: [{ localId: "t.0", name: "t", type: fromT }],
-      returnType: toT,
-      locals: [{ id: "t.0", name: "t", type: fromT, mutable: true }],
-      body: [
-        {
-          kind: "return",
-          value: {
-            kind: "arrayLit",
-            elems: fields.map((f, i) =>
-              this.applyWidthLift(
-                lifts[i]!,
-                { kind: "recordGet", obj: t, shapeId: fromId, field: f.name, type: f.type, loc },
-                toT.elem,
-                loc,
-              ),
-            ),
-            type: toT,
-            loc,
-          },
-          loc,
-        },
-      ],
-      loc,
-    });
-    return name;
+    return tupleArrayWidthHelper(this, fromId, toT, loc);
   }
 
-  /** Interned `%arr.empty.<n>(a)` — the EMPTY-array lift's build side: a
-   * unit-only-element array reshapes into any data-element array by
-   * answering a FRESH empty array, after a runtime non-empty trap (a
-   * genuinely inhabited `(null | undefined)[]` cannot reshape — the
-   * catchable-TypeError stance every checked extraction takes). */
   emptyArrayLiftHelper(fromT: IrType & { kind: "array" }, toT: IrType & { kind: "array" }, loc: SrcLoc): string {
-    const key = `emptyarr:${typeKey(fromT.elem)}:${typeKey(toT.elem)}`;
-    const existing = this.widthHelpers.get(key);
-    if (existing) return existing;
-    const name = `%arr.empty.${this.widthHelpers.size}`;
-    this.widthHelpers.set(key, name);
-    const a: IrExpr = { kind: "varRef", localId: "a.0", type: fromT, loc };
-    this.liftedFns.push({
-      name,
-      params: [{ localId: "a.0", name: "a", type: fromT }],
-      returnType: toT,
-      locals: [{ id: "a.0", name: "a", type: fromT, mutable: true }],
-      body: [
-        {
-          kind: "if",
-          cond: {
-            kind: "bin",
-            op: "!==",
-            left: { kind: "arrIntrinsic", method: "length", receiver: a, args: [], type: F64, loc },
-            right: { kind: "numLit", value: 0, type: F64, loc },
-            type: BOOL,
-            loc,
-          },
-          then: [
-            {
-              kind: "throw",
-              value: {
-                kind: "libCall",
-                fn: "error.new",
-                args: [{ kind: "strLit", value: `expected ${this.fmt(toT)} (a non-empty ${this.fmt(fromT)} has no elements the target can hold)`, type: STRING, loc }],
-                type: { kind: "object", className: "%TypeError" },
-                loc,
-              },
-              loc,
-            },
-          ],
-          else_: [],
-          loc,
-        },
-        { kind: "return", value: { kind: "arrayLit", elems: [], type: toT, loc }, loc },
-      ],
-      loc,
-    });
-    return name;
+    return emptyArrayLiftHelper(this, fromT, toT, loc);
   }
 
   arrayWidthHelper(fromT: IrType & { kind: "array" }, toT: IrType & { kind: "array" }, loc: SrcLoc,): string | null {
-    const fromElem = fromT.elem;
-    const toElem = toT.elem;
-    const elemLift = this.widthLiftPlan(fromElem, toElem);
-    if (!elemLift || elemLift.how === "copy") return null;
-    const key = `arr:${typeKey(fromElem)}:${typeKey(toElem)}`;
-    const existing = this.widthHelpers.get(key);
-    if (existing) return existing;
-    const name = `%arr.width.${this.widthHelpers.size}`;
-    this.widthHelpers.set(key, name);
-    const arrT: IrType = { kind: "array", elem: fromElem };
-    const outT: IrType = { kind: "array", elem: toElem };
-
-    const f64: IrType = { kind: "f64" };
-    this.liftedFns.push({
-      name,
-      params: [{ localId: "a.0", name: "a", type: arrT }],
-      returnType: outT,
-      locals: [
-        { id: "a.0", name: "a", type: arrT, mutable: true },
-        { id: "out.0", name: "out", type: outT, mutable: false },
-        { id: "n.0", name: "n", type: f64, mutable: false },
-        { id: "i.0", name: "i", type: f64, mutable: true },
-      ],
-      body: [
-        { kind: "varDecl", localId: "out.0", init: { kind: "arrayLit", elems: [], type: outT, loc }, loc },
-        {
-          kind: "varDecl",
-          localId: "n.0",
-          init: { kind: "arrIntrinsic", method: "length", receiver: varRef("a.0", arrT, loc), args: [], type: f64, loc },
-          loc,
-        },
-        {
-          kind: "for",
-          init: { kind: "varDecl", localId: "i.0", init: numLit(0, loc), loc },
-          cond: { kind: "bin", op: "<", left: varRef("i.0", f64, loc), right: varRef("n.0", f64, loc), type: BOOL, loc },
-          update: {
-            kind: "assign",
-            localId: "i.0",
-            value: { kind: "bin", op: "+", left: varRef("i.0", f64, loc), right: numLit(1, loc), type: f64, loc },
-            loc,
-          },
-          body: [
-            {
-              kind: "exprStmt",
-              expr: {
-                kind: "arrIntrinsic",
-                method: "push",
-                receiver: varRef("out.0", outT, loc),
-                args: [
-                  this.applyWidthLift(
-                    elemLift,
-                    { kind: "arrayGet", arr: varRef("a.0", arrT, loc), index: varRef("i.0", f64, loc), type: fromElem, loc },
-                    toElem,
-                    loc,
-                  ),
-                ],
-                type: f64,
-                loc,
-              },
-              loc,
-            },
-          ],
-          loc,
-        },
-        { kind: "return", value: varRef("out.0", outT, loc), loc },
-      ],
-      loc,
-    });
-    return name;
+    return arrayWidthHelper(this, fromT, toT, loc);
   }
 
-  /** The planning half of objRecordWidthHelper — how a CLASS INSTANCE
-   * projects into a record shape (tsc's structural view of classes makes
-   * `new Point(0,0)` flow into `{x: number; y: number}` slots). Every
-   * target field must be a plain instance FIELD on the class (inherited
-   * included) whose type lifts, or a missing optional-flavored field
-   * completing to its undefined arm — but never a field the class
-   * satisfies through a METHOD or accessor (bound method references have
-   * no lowering; the plan declines instead of projecting a lie). Builtin
-   * runtime layouts (the Error/EventEmitter/stream chains) decline: their
-   * fields aren't plain emitted storage. */
-  objToRecordPlan(className: string, toId: string): Map<string, { src: IrType; lift: WidthLift } | { absent: true; utag: number }> | null {
-    const info = this.classes.get(className);
-    const to = this.shapes.get(toId);
-    if (!info || !to || to.indexValue || to.tuple) return null;
-    // Reserved slots (%call hybrids, %get:/%set: accessor closures) are
-    // not projectable storage.
-    if (to.fields.some((f) => f.name.startsWith("%"))) return null;
-    for (let c: ClassInfo | null = info; c; c = c.base) {
-      if (c.builtinError || c.builtinEmitter || c.builtinStream !== undefined || c.def.runtime) return null;
-    }
-    const key = `obj:${className}:${toId}`;
-    if (this.widthPlanning.has(key)) return new Map();
-    this.widthPlanning.add(key);
-    try {
-      const plan = new Map<string, { src: IrType; lift: WidthLift } | { absent: true; utag: number }>();
-      for (const tf of to.fields) {
-        // A method/accessor satisfying the checker has no projectable
-        // value — decline the whole plan, field or not.
-        if (
-          findMethodOn(this, info, tf.name) ||
-          findMethodOn(this, info, `get:${tf.name}`) ||
-          findGenericMethodOn(this, info, tf.name)
-        ) {
-          return null;
-        }
-        const ft = info.fields.get(tf.name);
-        if (ft === undefined) {
-          if (tf.type.kind !== "union") return null;
-          const def = this.unions.get(tf.type.unionId);
-          const utag = def ? def.arms.findIndex((a) => a.kind === "undefinedT") : -1;
-          if (utag < 0) return null;
-          plan.set(tf.name, { absent: true, utag });
-          continue;
-        }
-        const lift = this.widthLiftPlan(ft, tf.type);
-        if (!lift) return null;
-        plan.set(tf.name, { src: ft, lift });
-      }
-      return plan;
-    } finally {
-      this.widthPlanning.delete(key);
-    }
+  objToRecordPlan(className: string, toId: string): Map<string, FieldLift> | null {
+    return objToRecordPlan(this, className, toId);
   }
 
-  /** Interned `%obj.width.<n>(o)` — builds a record from a class
-   * instance's fields under objToRecordPlan: the width-copy stance
-   * (divergence 305 — a fresh record, mutations don't alias, extra class
-   * members drop). */
   objRecordWidthHelper(className: string, toId: string, loc: SrcLoc): string | null {
-    const to = this.shapes.get(toId);
-    if (!to) return null;
-    const plan = this.objToRecordPlan(className, toId);
-    if (!plan) return null;
-    const key = `obj:${className}:${toId}`;
-    const existing = this.widthHelpers.get(key);
-    if (existing) return existing;
-    const name = `%obj.width.${this.widthHelpers.size}`;
-    this.widthHelpers.set(key, name);
-    const fromT: IrType = { kind: "object", className };
-    const toT: IrType = { kind: "record", shapeId: toId };
-    const o: IrExpr = { kind: "varRef", localId: "o.0", type: fromT, loc };
-    this.liftedFns.push({
-      name,
-      params: [{ localId: "o.0", name: "o", type: fromT }],
-      returnType: toT,
-      locals: [{ id: "o.0", name: "o", type: fromT, mutable: true }],
-      body: [
-        {
-          kind: "return",
-          value: {
-            kind: "recordLit",
-            fields: to.fields.map((f) => {
-              const lift = plan.get(f.name)!;
-              if ("absent" in lift) {
-                if (f.type.kind !== "union") throw new InternalCompilerError("lowerer bug: absent lift against a non-union field");
-                return {
-                  name: f.name,
-                  value: {
-                    kind: "unionWrap",
-                    unionId: f.type.unionId,
-                    tag: lift.utag,
-                    value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc },
-                    type: f.type,
-                    loc,
-                  } satisfies IrExpr,
-                };
-              }
-              const get: IrExpr = { kind: "fieldGet", obj: o, className, field: f.name, type: lift.src, loc };
-              return { name: f.name, value: this.applyWidthLift(lift.lift, get, f.type, loc) };
-            }),
-            type: toT,
-            loc,
-          },
-          loc,
-        },
-      ],
-      loc,
-    });
-    return name;
+    return objRecordWidthHelper(this, className, toId, loc);
   }
 
-  /** The planning half of recordClassWidthHelper — how a RECORD enters a
-   * class-instance slot. Construction IS the projection, so the class
-   * must be a pure parameter-property data class: its own trivial
-   * constructor (every parameter a parameter property, empty body), no
-   * other fields, no methods/accessors anywhere in the chain (a
-   * fabricated instance must carry no behavior the record lacks), no
-   * decoration, no base beyond a generic FAMILY ancestor (fieldless and
-   * methodless by construction). Each constructor parameter takes the
-   * same-named source field under widthLiftPlan, or — omittable params —
-   * the absent undefined arm. One entry per constructor parameter, in
-   * parameter order. */
   recordToClassPlan(fromId: string, className: string): ({ field: string; src: IrType; lift: WidthLift } | { absent: true })[] | null {
-    const from = this.shapes.get(fromId);
-    const info = this.classes.get(className);
-    if (!from || !info || from.indexValue || from.tuple) return null;
-    if (from.fields.some((f) => f.name.startsWith("%"))) return null;
-    if (!info.decl || info.def.abstract || info.def.runtime || info.generic) return null;
-    if (info.builtinError || info.builtinEmitter || info.builtinStream !== undefined) return null;
-    if (info.classDecorators) return null;
-    if (info.base && !(info.base.generic && !info.base.base)) return null;
-    for (let c: ClassInfo | null = info; c; c = c.base) {
-      if (
-        c.methods.size > 0 ||
-        (c.genericMethods?.size ?? 0) > 0 ||
-        (c.symbolFields?.size ?? 0) > 0 ||
-        c.throwingSetters.length > 0 ||
-        (c.def.abstractMethods?.length ?? 0) > 0
-      ) {
-        return null;
-      }
-    }
-    if (!info.ctor || info.ctor.body === undefined || info.ctor.body.statements.length > 0) return null;
-    const props = info.paramProps ?? [];
-    if (props.length !== info.ctorParams.length) return null;
-    // Every layout field must come from a parameter property (no declared
-    // fields with initializers the projection would silently prefer).
-    if (info.def.fields.length !== props.length) return null;
-    const key = `cls:${fromId}:${className}`;
-    if (this.widthPlanning.has(key)) return [];
-    this.widthPlanning.add(key);
-    try {
-      const plan: ({ field: string; src: IrType; lift: WidthLift } | { absent: true })[] = [];
-      for (let i = 0; i < props.length; i++) {
-        const shape = info.ctorParams[i];
-        if (!shape || (shape.mode !== "required" && shape.mode !== "omittable")) return null;
-        const name = props[i]!.name;
-        const ff = from.fields.find((f) => f.name === name);
-        if (!ff) {
-          if (shape.mode !== "omittable" || shape.type.kind !== "union") return null;
-          const def = this.unions.get(shape.type.unionId);
-          if (!def || !def.arms.some((a) => a.kind === "undefinedT")) return null;
-          plan.push({ absent: true });
-          continue;
-        }
-        const lift = this.widthLiftPlan(ff.type, shape.type);
-        if (!lift) return null;
-        plan.push({ field: name, src: ff.type, lift });
-      }
-      return plan;
-    } finally {
-      this.widthPlanning.delete(key);
-    }
+    return recordToClassPlan(this, fromId, className);
   }
 
-  /** Interned `%cls.width.<n>(r)` — `new C(r.p1, ..., r.pn)` under
-   * recordToClassPlan: the record's fields become the trivial
-   * constructor's arguments (divergence 305's copy stance — a fresh
-   * instance, mutations don't alias, and `instanceof C` answers true
-   * where Node's plain object answers false). */
   recordClassWidthHelper(fromId: string, className: string, loc: SrcLoc): string | null {
-    const info = this.classes.get(className);
-    if (!info) return null;
-    const plan = this.recordToClassPlan(fromId, className);
-    if (!plan) return null;
-    const key = `cls:${fromId}:${className}`;
-    const existing = this.widthHelpers.get(key);
-    if (existing) return existing;
-    const name = `%cls.width.${this.widthHelpers.size}`;
-    this.widthHelpers.set(key, name);
-    this.noteEdge(`%${className}.constructor`);
-    const fromT: IrType = { kind: "record", shapeId: fromId };
-    const toT: IrType = { kind: "object", className };
-    const r: IrExpr = { kind: "varRef", localId: "r.0", type: fromT, loc };
-    const args = plan.map((entry, i): IrExpr => {
-      const shape = info.ctorParams[i]!;
-      if ("absent" in entry) {
-        const u = this.wrappedUndefined(shape.type, loc);
-        if (!u) throw new InternalCompilerError("lowerer bug: planned absent ctor arg has no undefined arm");
-        return u;
-      }
-      const get: IrExpr = { kind: "recordGet", obj: r, shapeId: fromId, field: entry.field, type: entry.src, loc };
-      return this.applyWidthLift(entry.lift, get, shape.type, loc);
-    });
-    this.liftedFns.push({
-      name,
-      params: [{ localId: "r.0", name: "r", type: fromT }],
-      returnType: toT,
-      locals: [{ id: "r.0", name: "r", type: fromT, mutable: true }],
-      body: [
-        { kind: "return", value: { kind: "new", className, args, type: toT, loc }, loc },
-      ],
-      loc,
-    });
-    return name;
+    return recordClassWidthHelper(this, fromId, className, loc);
   }
 
-  /** A CLASS VALUE's statics projected into a record shape (`var f:
-   * ShapeFactory = Shape`): the record literal capturing static FIELDS as
-   * copies of their globals and static METHODS as the zero-capture
-   * closures `const f = C.m` builds (params all required — value-form
-   * completion rules stay out of coercions). Inherited statics resolve
-   * like JS's class-object prototype walk. Divergence 305's copy stance:
-   * later writes to a writable static field don't flow into the record
-   * (Node aliases the one class object). Null when any target field has
-   * no projectable static. */
   classStaticsProjection(className: string, toId: string, loc: SrcLoc): IrExpr | null {
-    const info = this.classes.get(className);
-    const to = this.shapes.get(toId);
-    if (!info || !to || to.indexValue || to.tuple) return null;
-    if (to.fields.some((f) => f.name.startsWith("%"))) return null;
-    if (info.generic || !info.decl) return null;
-    const fields: { name: string; value: IrExpr }[] = [];
-    for (const tf of to.fields) {
-      if (findGenericStaticOn(this, info, tf.name)) return null;
-      const found = findStaticOn(this, info, tf.name);
-      if (!found) {
-        if (tf.type.kind !== "union") return null;
-        const u = this.wrappedUndefined(tf.type, loc);
-        if (!u) return null;
-        fields.push({ name: tf.name, value: u });
-        continue;
-      }
-      if (found.field !== undefined) {
-        const read: IrExpr = { kind: "varRef", localId: found.field.globalId, type: found.field.type, loc };
-        const lift = this.widthLiftPlan(found.field.type, tf.type);
-        if (!lift) return null;
-        fields.push({ name: tf.name, value: this.applyWidthLift(lift, read, tf.type, loc) });
-        continue;
-      }
-      if (found.method.params.some((p) => p.mode !== "required")) return null;
-      const funcType: IrType = {
-        kind: "func",
-        params: found.method.params.map((p) => p.type),
-        ret: found.method.ret,
-      };
-      const lift = this.widthLiftPlan(funcType, tf.type);
-      if (!lift) return null;
-      const fnName = `%${found.declarer.def.name}.static:${tf.name}`;
-      this.noteEdge(fnName);
-      const closure: IrExpr = { kind: "closure", fnName, captures: [], type: funcType, loc };
-      fields.push({ name: tf.name, value: this.applyWidthLift(lift, closure, tf.type, loc) });
-    }
-    return { kind: "recordLit", fields, type: { kind: "record", shapeId: toId }, loc };
+    return classStaticsProjection(this, className, toId, loc);
   }
 
-  /** Interned `%fn.width.<n>(f)` — the function-RETURN width adapter: a
-   * zero-param `() => Wide[]` value flowing into a `() => Narrow[]` slot
-   * (the createProxyServer getRoutes shape) wraps in a fresh closure that
-   * calls the original and maps the result through the per-element record
-   * width copy (%arr.width). The adapter is a factory lifted function
-   * whose param the returned closure captures; each invocation of the
-   * adapted value builds a FRESH array of narrowed records (the width
-   * machinery's copy stance — callers see the values, not the identity).
-   * Null when the return shapes aren't width-coercible; bounded to
-   * zero-param signatures (the one observed site — widening needs a
-   * param-forwarding story nothing drives yet). */
   funcReturnWidthAdapter(fromT: IrType & { kind: "func" }, toT: IrType & { kind: "func" }, loc: SrcLoc,): string | null {
-    if (fromT.params.length !== 0 || toT.params.length !== 0) return null;
-    if (fromT.ret.kind !== "array" || toT.ret.kind !== "array") return null;
-    const mapper = this.arrayWidthHelper(fromT.ret, toT.ret, loc);
-    if (!mapper) return null;
-    const key = `fn:${typeKey(fromT.ret.elem)}:${typeKey(toT.ret.elem)}`;
-    const existing = this.widthHelpers.get(key);
-    if (existing) return existing;
-    const name = `%fn.width.${this.widthHelpers.size}`;
-    this.widthHelpers.set(key, name);
-    this.freshClosureAdapters.add(name); // wraps `f` in a new closure per call
-
-    const impl = `${name}.impl`;
-    // The returned closure's body: call the captured original, width-map.
-    this.liftedFns.push({
-      name: impl,
-      params: [],
-      returnType: toT.ret,
-      captures: [{ localId: "f.0", name: "f", type: fromT }],
-      locals: [{ id: "f.0", name: "f", type: fromT, mutable: false, boxed: true }],
-      body: [
-        {
-          kind: "return",
-          value: {
-            kind: "call",
-            callee: mapper,
-            args: [
-              {
-                kind: "callValue",
-                callee: { kind: "varRef", localId: "f.0", type: fromT, loc },
-                receiver: { kind: "libCall", fn: "dyn.this", args: [], type: DYN, loc },
-                args: [],
-                type: fromT.ret,
-                loc,
-              },
-            ],
-            type: toT.ret,
-            loc,
-          },
-          loc,
-        },
-      ],
-      loc,
-    });
-    // The factory: box the incoming function value, mint the closure.
-    this.liftedFns.push({
-      name,
-      params: [{ localId: "f.0", name: "f", type: fromT }],
-      returnType: toT,
-      locals: [{ id: "f.0", name: "f", type: fromT, mutable: false, boxed: true }],
-      body: [
-        {
-          kind: "return",
-          value: { kind: "closure", fnName: impl, captures: ["f.0"], type: toT, loc },
-          loc,
-        },
-      ],
-      loc,
-    });
-    return name;
+    return funcReturnWidthAdapter(this, fromT, toT, loc);
   }
 
-  /** Whether a `src`-typed VALUE converts into a `dst` slot through the
-   * coercions coerceToExpected applies mechanically — the PURE probe
-   * behind funcCoerceAdapter (nothing interns): exact types, arm wraps
-   * into unions, whole-union re-tags (unionRetagMappable), checked
-   * single-arm narrows, void into an undefined-armed union, and the dyn
-   * boundary in both directions (dynFrom / dynCheck's JSON-safe domain).
-   * Deliberately EXCLUDES the trap-only stranded conversions — an adapter
-   * that could only ever throw is a fence, not a bridge. */
   coercibleValue(src: IrType, dst: IrType): boolean {
-    if (typeEquals(src, dst)) return true;
-    // The island boundary joins the mechanical set: values that MARSHAL
-    // in (units, the checked-dynamic deep copy, JSON-safe data, liftable
-    // composites, marshalable closures — coerceToExpected's jsval-IN
-    // block) and island handles whose exits VALIDATE (boundaryExitSafe) —
-    // the `defaultFallback(cfg) { return { login, id, scopes } }` shape,
-    // whose slot returns a package ('any') type.
-    if (dst.kind === "jsval") {
-      return (
-        src.kind !== "jsval" &&
-        (isUnitType(src) ||
-          src.kind === "dyn" ||
-          this.boundarySafe(src) ||
-          this.jsvalLiftable(src) ||
-          (src.kind === "func" &&
-            canMarshalTypedFuncIntoIsland(src, (id) => this.shapes.get(id), (id) => this.unions.get(id))))
-      );
-    }
-    if (src.kind === "jsval") return this.boundaryExitSafe(dst);
-    if (dst.kind === "dyn") return src.kind !== "dyn" && this.dynConvertible(src);
-    if (src.kind === "dyn") {
-      // The checked-dynamic function boundary's OUT direction joins the
-      // mechanical set: a dyn result landing in an adaptable func slot
-      // takes dynCheck's per-target shim (coerceToExpected's funcOk rule
-      // — the production/development function-choice ternary shape).
-      return (
-        this.jsonSafe(dst) ||
-        (dst.kind === "func" && canAdaptDynFuncTo(dst, (id) => this.shapes.get(id), (id) => this.unions.get(id)))
-      );
-    }
-    if (dst.kind === "union") {
-      if (src.kind === "union") return this.unionRetagMappable(src.unionId, dst.unionId);
-      if (src.kind === "void") return this.armTag(dst.unionId, UNDEFINED_T) >= 0;
-      return !isUnitType(src) && this.armTag(dst.unionId, src) >= 0;
-    }
-    if (src.kind === "union") {
-      return !isUnitType(dst) && dst.kind !== "void" && this.armTag(src.unionId, dst) >= 0;
-    }
-    return false;
+    return coercibleValue(this, src, dst);
   }
 
-  /** True when a `src` function value enters a `dst` slot through
-   * funcCoerceAdapter with NO stranded (trap-only) piece: no rest packs,
-   * no surplus source params, every slot parameter converts into the
-   * wrapped function's own type, and the result converts back (a void
-   * slot drops it; a void result answers the exact JS undefined for
-   * dyn/jsval slots). The width family's func gate — widthLiftPlan
-   * bridges only signatures whose every call succeeds by construction. */
   cleanFuncAdaptable(src: IrType & { kind: "func" }, dst: IrType & { kind: "func" }): boolean {
-    if (src.rest === true || dst.rest === true) return false;
-    if (src.params.length > dst.params.length) return false;
-    for (let i = 0; i < src.params.length; i++) {
-      if (!this.coercibleValue(dst.params[i]!, src.params[i]!)) return false;
-    }
-    if (dst.ret.kind === "void") return src.ret.kind !== "jsval";
-    if (this.coercibleValue(src.ret, dst.ret)) return true;
-    return src.ret.kind === "void" && (dst.ret.kind === "dyn" || dst.ret.kind === "jsval");
+    return cleanFuncAdaptable(this, src, dst);
   }
 
-  /** Interned `%fn.adapt.<n>(f)` — the GENERAL function-value adapter: a
-   * `fromT` function value flowing into a `toT` slot whose pieces differ
-   * only by coercibleValue conversions. The slot's callers pass toT's
-   * parameters: the wrapper takes them, converts the first
-   * fromT.params.length into the wrapped function's own types (surplus
-   * slot parameters are DROPPED — JS's extra-argument rule), calls it,
-   * and converts the result back (a void slot drops the result; a void
-   * result wraps as the slot union's undefined arm). Rest signatures on
-   * either side decline (the pack shapes don't line up mechanically).
-   * Null when any piece is outside coercibleValue — the exactness fences
-   * stay. */
   funcCoerceAdapter(fromT: IrType & { kind: "func" }, toT: IrType & { kind: "func" }, loc: SrcLoc): string | null {
-    if (fromT.rest === true || toT.rest === true) return null;
-    if (fromT.params.length > toT.params.length) return null;
-    // Piece dispositions beyond coercibleValue, all CHECKER-APPROVED
-    // function compatibilities (bivariant method params under the suite's
-    // non-strict settings, `() => never` throwers displayed as void by
-    // the type mapping, void functions into unknown/any-returning slots):
-    // - strandParams: some parameter cannot convert — the assignment
-    //   compiles, INVOKING the slot throws the stranded TypeError (a
-    //   never-called mismatched callback is exact; divergence 38's stance
-    //   extended to calls).
-    // - voidRet "dyn"/"jsval": calling yields JS's undefined — the exact
-    //   undefined dyn/engine value after the call's effects.
-    // - voidRet "strand": a void result where the slot promises a typed
-    //   value — the call runs (a `never` thrower never comes back, so the
-    //   trap is unreachable there), then the stranded TypeError.
-    let strandParams = false;
-    const narrowedParams = new Map<number, ReadonlySet<number>>();
-    const partialDynParams = new Map<number, IrType>();
-    for (let i = 0; i < fromT.params.length; i++) {
-      const actual = toT.params[i]!;
-      const expected = fromT.params[i]!;
-      if (this.coercibleValue(actual, expected)) continue;
-      if (actual.kind === "union" && expected.kind === "dyn") {
-        const arms = this.unions.get(actual.unionId)?.arms.filter((arm) => this.dynConvertible(arm)) ?? [];
-        if (arms.length > 0) {
-          partialDynParams.set(i, arms.length === 1 ? arms[0]! : { kind: "union", unionId: this.unions.intern(arms) });
-          continue;
-        }
-      }
-      // A stored native builtin can have a narrower supported overload
-      // than its public declaration. Preserve every supported union arm
-      // and reject only an invocation carrying an unsupported arm. This
-      // is the union counterpart of the checked single-arm extraction.
-      if (actual.kind === "union" && expected.kind === "union") {
-        const source = this.unions.get(actual.unionId);
-        const target = this.unions.get(expected.unionId);
-        if (source && target && target.arms.every((arm) => this.armTag(actual.unionId, arm) >= 0)) {
-          narrowedParams.set(i, new Set(source.arms.flatMap((arm, tag) => this.armTag(expected.unionId, arm) < 0 ? [tag] : [])));
-          continue;
-        }
-      }
-      strandParams = true;
-    }
-    let voidRet: "dyn" | "jsval" | "strand" | null = null;
-    let strandRet = false;
-    if (toT.ret.kind !== "void" && !this.coercibleValue(fromT.ret, toT.ret)) {
-      if (fromT.ret.kind !== "void") {
-        // A RESULT that cannot convert — the strandParams stance, result
-        // side (the production/development function-choice ternary: the
-        // untaken arm's result shape never lands in the slot's): the
-        // assignment compiles, INVOKING the slot runs the function and
-        // throws the stranded TypeError where its result would convert.
-        strandRet = true;
-      } else {
-        voidRet = toT.ret.kind === "dyn" ? "dyn" : toT.ret.kind === "jsval" ? "jsval" : "strand";
-      }
-    }
-    if (toT.ret.kind === "void" && fromT.ret.kind === "jsval") return null;
-    const key = `fnadapt:${typeKey(fromT)}:${typeKey(toT)}`;
-    const existing = this.retagHelpers.get(key);
-    if (existing) return existing;
-    const name = `%fn.adapt.${this.retagHelpers.size}`;
-    this.retagHelpers.set(key, name);
-    this.freshClosureAdapters.add(name); // wraps `f` in a new closure per call
-
-    const impl = `${name}.impl`;
-    const params: IrParam[] = toT.params.map((t, i) => ({ localId: `a.${i}`, name: `a${i}`, type: t }));
-    const strandThrow = (why: string): IrStmt => ({
-      kind: "throw",
-      value: {
-        kind: "libCall",
-        fn: "error.new",
-        args: [{ kind: "strLit", value: why, type: STRING, loc }],
-        type: { kind: "object", className: "%TypeError" },
-        loc,
-      },
-      loc,
-    });
-    let body: IrStmt[];
-    if (strandParams) {
-      body = [
-        strandThrow(
-          `a '${this.fmt(fromT)}' function invoked through a '${this.fmt(toT)}' slot (the parameter types cannot convert — the checker's loose function compatibility admitted the assignment, but the call has no exact lowering)`,
-        ),
-      ];
-    } else {
-      const args = fromT.params.map((pt, i) => {
-        const aRef: IrExpr = { kind: "varRef", localId: `a.${i}`, type: toT.params[i]!, loc };
-        const partial = partialDynParams.get(i);
-        if (partial && aRef.type.kind === "union") {
-          const source = this.unions.get(aRef.type.unionId)!;
-          const supported = partial.kind === "union" ? this.unions.get(partial.unionId)!.arms : [partial];
-          const rejected = new Set(source.arms.flatMap((arm, tag) => supported.some((accepted) => typeEquals(accepted, arm)) ? [] : [tag]));
-          const narrow = partial.kind === "union"
-            ? this.unionRetagHelper(aRef.type.unionId, partial.unionId, loc, rejected)
-            : this.narrowedArmHelper(aRef.type.unionId, partial, loc);
-          if (!narrow) throw new InternalCompilerError("lowerer bug: partial callable parameter stopped narrowing");
-          return this.coerceToExpected({ kind: "call", callee: narrow, args: [aRef], type: partial, loc }, pt);
-        }
-        const narrowed = narrowedParams.get(i);
-        const helper = narrowed && aRef.type.kind === "union" && pt.kind === "union"
-          ? this.unionRetagHelper(aRef.type.unionId, pt.unionId, loc, narrowed)
-          : null;
-        const converted: IrExpr = helper
-          ? { kind: "call", callee: helper, args: [aRef], type: pt, loc }
-          : this.coerceToExpected(aRef, pt);
-        if (!typeEquals(converted.type, pt)) throw new InternalCompilerError("lowerer bug: probed fn-adapter param stopped coercing");
-        return converted;
-      });
-      const call: IrExpr = {
-        kind: "callValue",
-        callee: { kind: "varRef", localId: "f.0", type: fromT, loc },
-        receiver: { kind: "libCall", fn: "dyn.this", args: [], type: DYN, loc },
-        args,
-        type: fromT.ret,
-        loc,
-      };
-      if (toT.ret.kind === "void") {
-        body = [
-          { kind: "exprStmt", expr: call, loc },
-          { kind: "return", value: null, loc },
-        ];
-      } else if (voidRet === "dyn") {
-        body = [
-          { kind: "exprStmt", expr: call, loc },
-          { kind: "return", value: dynUndefinedExpr(loc), loc },
-        ];
-      } else if (voidRet === "jsval") {
-        body = [
-          { kind: "exprStmt", expr: call, loc },
-          { kind: "return", value: { kind: "jsOp", op: "undefLit", args: [], type: JSVAL, loc }, loc },
-        ];
-      } else if (voidRet === "strand") {
-        body = [
-          { kind: "exprStmt", expr: call, loc },
-          strandThrow(
-            `a void result where the '${this.fmt(toT)}' slot promises '${this.fmt(toT.ret)}' (a thrower typed 'never' never reaches this; a genuinely void function has no result to hand over)`,
-          ),
-        ];
-      } else if (strandRet) {
-        body = [
-          { kind: "exprStmt", expr: call, loc },
-          strandThrow(
-            `a '${this.fmt(fromT)}' function invoked through a '${this.fmt(toT)}' slot (the result cannot convert to '${this.fmt(toT.ret)}' — the checker's loose function compatibility admitted the assignment, but the call has no exact lowering)`,
-          ),
-        ];
-      } else {
-        const result = this.coerceToExpected(call, toT.ret);
-        if (!typeEquals(result.type, toT.ret)) throw new InternalCompilerError("lowerer bug: probed fn-adapter return stopped coercing");
-        body = [{ kind: "return", value: result, loc }];
-      }
-    }
-    this.liftedFns.push({
-      name: impl,
-      params,
-      returnType: toT.ret,
-      captures: [{ localId: "f.0", name: "f", type: fromT }],
-      locals: [
-        { id: "f.0", name: "f", type: fromT, mutable: false, boxed: true },
-        ...toT.params.map((t, i) => ({ id: `a.${i}`, name: `a${i}`, type: t, mutable: false })),
-      ],
-      body,
-      loc,
-    });
-    this.liftedFns.push({
-      name,
-      params: [{ localId: "f.0", name: "f", type: fromT }],
-      returnType: toT,
-      locals: [{ id: "f.0", name: "f", type: fromT, mutable: false, boxed: true }],
-      body: [
-        {
-          kind: "return",
-          value: { kind: "closure", fnName: impl, captures: ["f.0"], type: toT, loc },
-          loc,
-        },
-      ],
-      loc,
-    });
-    return name;
+    return funcCoerceAdapter(this, fromT, toT, loc);
   }
 
-  /** The spawnSync-runner VALUE adapter's plan — a function returning the
-   * opaque spawnRes flowing into a slot whose signature returns the
-   * STRUCTURAL result record tsc accepted (`defaultRunner` into a
-   * `CommandRunner` param: `{ status: number | null; stdout?: string;
-   * stderr?: string; error?: Error }`). Parameters must agree pairwise;
-   * each target field must be one of the spawnRes reads (status, stdout,
-   * stderr, error) at its exact lowered type — string fields optionally
-   * undefined-armed. Null when the pair isn't this shape. Pure: callers
-   * probe before interning. */
   spawnResFnAdapterPlan(fromT: IrType & { kind: "func" }, toT: IrType & { kind: "func" },): { field: string; build: (r: IrExpr, loc: SrcLoc) => IrExpr }[] | null {
-    if (!Array.isArray(fromT.params) || !Array.isArray(toT.params)) return null; // defensive: degenerate func types
-    if (fromT.params.length !== toT.params.length) return null;
-    if (!fromT.params.every((p, i) => typeEquals(p, toT.params[i]!))) return null;
-    if (fromT.ret.kind !== "spawnRes" || toT.ret.kind !== "record") return null;
-    const shape = this.shapes.get(toT.ret.shapeId);
-    if (!shape || shape.tuple || shape.indexValue) return null;
-    const statusT: IrType = { kind: "union", unionId: this.unions.intern([F64, { kind: "nullT" }]) };
-    const errorT: IrType = { kind: "union", unionId: this.unions.intern([{ kind: "object", className: "%Error" }, UNDEFINED_T]) };
-    const strOptT: IrType = { kind: "union", unionId: this.unions.intern([STRING, UNDEFINED_T]) };
-    const plan: { field: string; build: (r: IrExpr, loc: SrcLoc) => IrExpr }[] = [];
-    for (const f of shape.fields) {
-      if (f.name === "status" && typeEquals(f.type, statusT)) {
-        plan.push({ field: f.name, build: (r, loc) => ({ kind: "libCall", fn: "spawnRes.status", args: [r], type: statusT, loc }) });
-        continue;
-      }
-      if ((f.name === "stdout" || f.name === "stderr") && (typeEquals(f.type, strOptT) || f.type.kind === "string")) {
-        const fn = f.name === "stdout" ? ("spawnRes.stdout" as const) : ("spawnRes.stderr" as const);
-        const strTag = this.armTag(strOptT.kind === "union" ? strOptT.unionId : "", STRING);
-        plan.push({
-          field: f.name,
-          build: (r, loc) => {
-            const read: IrExpr = { kind: "libCall", fn, args: [r], type: STRING, loc };
-            return f.type.kind === "string"
-              ? read
-              : { kind: "unionWrap", unionId: (f.type as IrType & { kind: "union" }).unionId, tag: strTag, value: read, type: f.type, loc };
-          },
-        });
-        continue;
-      }
-      if (f.name === "error" && typeEquals(f.type, errorT)) {
-        plan.push({ field: f.name, build: (r, loc) => ({ kind: "libCall", fn: "spawnRes.error", args: [r], type: errorT, loc }) });
-        continue;
-      }
-      return null;
-    }
-    return plan;
+    return spawnResFnAdapterPlan(this, fromT, toT);
   }
 
-  /** Interned `%fnval.spawnres.<n>(f)` — the runner-value adapter: a
-   * fresh closure of the TARGET signature forwarding its arguments to the
-   * captured function and converting the opaque spawnRes result into the
-   * target's structural record (one eager read per declared field —
-   * spawnResFnAdapterPlan's set). Divergence caveat: stdout/stderr read
-   * as the captured text ("" when nothing was captured, e.g. stdio
-   * "inherit") where Node stores null. */
   spawnResFnAdapter(fromT: IrType & { kind: "func" }, toT: IrType & { kind: "func" }, loc: SrcLoc,): string | null {
-    const plan = this.spawnResFnAdapterPlan(fromT, toT);
-    if (!plan) return null;
-    if (toT.ret.kind !== "record") return null;
-    const key = `fnspawn:${typeKey(fromT)}:${typeKey(toT)}`;
-    const existing = this.widthHelpers.get(key);
-    if (existing) return existing;
-    const name = `%fnval.spawnres.${this.widthHelpers.size}`;
-    this.widthHelpers.set(key, name);
-    this.freshClosureAdapters.add(name); // wraps `f` in a new closure per call
-
-    const impl = `${name}.impl`;
-    const params: IrParam[] = toT.params.map((p, i) => ({ localId: `p${i}.0`, name: `p${i}`, type: p }));
-    const rRef: IrExpr = { kind: "varRef", localId: "r.0", type: fromT.ret, loc };
-    this.liftedFns.push({
-      name: impl,
-      params,
-      returnType: toT.ret,
-      captures: [{ localId: "f.0", name: "f", type: fromT }],
-      locals: [
-        { id: "f.0", name: "f", type: fromT, mutable: false, boxed: true },
-        ...params.map((p) => ({ id: p.localId, name: p.name, type: p.type, mutable: false })),
-        { id: "r.0", name: "r", type: fromT.ret, mutable: false },
-      ],
-      body: [
-        {
-          kind: "varDecl",
-          localId: "r.0",
-          init: {
-            kind: "callValue",
-            callee: { kind: "varRef", localId: "f.0", type: fromT, loc },
-            receiver: { kind: "libCall", fn: "dyn.this", args: [], type: DYN, loc },
-            args: params.map((p): IrExpr => ({ kind: "varRef", localId: p.localId, type: p.type, loc })),
-            type: fromT.ret,
-            loc,
-          },
-          loc,
-        },
-        {
-          kind: "return",
-          value: {
-            kind: "recordLit",
-            fields: plan.map((entry) => ({ name: entry.field, value: entry.build(rRef, loc) })),
-            type: toT.ret,
-            loc,
-          },
-          loc,
-        },
-      ],
-      loc,
-    });
-    this.liftedFns.push({
-      name,
-      params: [{ localId: "f.0", name: "f", type: fromT }],
-      returnType: toT,
-      locals: [{ id: "f.0", name: "f", type: fromT, mutable: false, boxed: true }],
-      body: [
-        {
-          kind: "return",
-          value: { kind: "closure", fnName: impl, captures: ["f.0"], type: toT, loc },
-          loc,
-        },
-      ],
-      loc,
-    });
-    return name;
+    return spawnResFnAdapter(this, fromT, toT, loc);
   }
 
-  /** Validate the complete union conversion before interning helpers.
-   * Recursive width plans close through the same in-progress pair guard;
-   * no optimistic result is memoized after that planning stack unwinds. */
   unionRetagMappable(fromId: string, toId: string): boolean {
-    const from = this.unions.get(fromId);
-    const to = this.unions.get(toId);
-    if (!from || !to) return false;
-    const key = `u:${fromId}:${toId}`;
-    if (this.widthPlanning.has(key)) return true;
-    this.widthPlanning.add(key);
-    try {
-      return planUnionRetag(from, to, (id) => this.shapes.get(id),
-        (src, dst) => this.widthLiftPlan(src, dst)) !== null;
-    } finally {
-      this.widthPlanning.delete(key);
-    }
+    return unionRetagMappable(this, fromId, toId);
   }
 
-  /** A checker-NARROWED union flowing into a different union: `typeof r
-   * === "string" || Buffer.isBuffer(r)` proves the record arm of r away,
-   * then `{ data: r }` needs `Buffer | string | Rec` in a `Buffer | string`
-   * slot. Control-flow narrowing to a sub-union erases at lowering, so the
-   * IR value still carries the wide union — but the SITE's checker type
-   * names exactly the arms still possible, and every one of those must
-   * exist in both unions. The stranded arms compile to trap cases exactly
-   * like stranded units (divergence 38's trust-the-checker stance): sound
-   * narrowing never reaches them, a lying cast throws a catchable
-   * TypeError instead of smuggling an unrepresentable arm. Null when the
-   * site type isn't a genuine sub-union of the source (the SC2003 fence
-   * stays). */
   narrowedRetagHelper(node: ts.Node, fromId: string, toId: string, loc: SrcLoc): string | null {
-    const from = this.unions.get(fromId);
-    if (!from || !this.unions.get(toId)) return null;
-    const siteT = this.mapTypeOf(this.typeOf(node));
-    if (!siteT) return null;
-    const siteArms = siteT.kind === "union" ? this.unions.get(siteT.unionId)?.arms : [siteT];
-    if (!siteArms || siteArms.length === 0) return null;
-    const allowed = new Set<number>();
-    for (const a of siteArms) {
-      const fi = this.armTag(fromId, a);
-      if (fi < 0) return null; // not a narrowing of the source union
-      allowed.add(fi);
-    }
-    const trappable = new Set<number>();
-    from.arms.forEach((_, i) => {
-      if (!allowed.has(i)) trappable.add(i);
-    });
-    if (trappable.size === 0) return null; // nothing stranded: the plain re-tag already declined
-    return this.unionRetagHelper(fromId, toId, loc, trappable);
+    return narrowedRetagHelper(this, node, fromId, toId, loc);
   }
 
-  /** The stranded-UNIT trap for PLAIN (non-union) slots: a null/undefined
-   * value flowing into a non-nullable typed slot the checker approved —
-   * `null!` and `null as any as T` casts, and the non-strict world's
-   * legal `let s: string = null`. The compiled representation has no null
-   * to carry, so the FLOW throws the catchable stranded TypeError
-   * (divergence 38's stance: Node lets the impossible value ride until it
-   * is used; the trap surfaces at the assignment instead). Unit sources
-   * only — they are pure, so the nullary helper evaluates nothing. */
   strandedUnitTrap(expr: IrExpr, expected: IrType, loc: SrcLoc): IrExpr | null {
-    if (!isUnitType(expr.type)) return null;
-    if (
-      expected.kind === "union" || expected.kind === "void" || expected.kind === "dyn" ||
-      expected.kind === "jsval" || isUnitType(expected)
-    ) {
-      return null;
-    }
-    const what = expr.type.kind === "undefinedT" ? "undefined" : "null";
-    const key = `strandunit:${typeKey(expected)}:${expr.type.kind}`;
-    let name = this.retagHelpers.get(key);
-    if (!name) {
-      name = `%unit.strand.${this.retagHelpers.size}`;
-      this.retagHelpers.set(key, name);
-      this.liftedFns.push({
-        name,
-        params: [],
-        returnType: expected,
-        locals: [],
-        body: [
-          {
-            kind: "throw",
-            value: {
-              kind: "libCall",
-              fn: "error.new",
-              args: [
-                {
-                  kind: "strLit",
-                  value: `${what} is not representable in a '${this.fmt(expected)}' slot (a value narrowed or asserted past the type still held it)`,
-                  type: STRING,
-                  loc,
-                },
-              ],
-              type: { kind: "object", className: "%TypeError" },
-              loc,
-            },
-            loc,
-          },
-        ],
-        loc,
-      });
-    }
-    return { kind: "call", callee: name, args: [], type: expected, loc };
+    return strandedUnitTrap(this, expr, expected, loc);
   }
 
-  /** The STRANDED-SOURCE trap: a checker-approved value flowing into a
-   * union that cannot represent it (armTag < 0, no class widening, no
-   * width lift). Only shapes that PROVE a lying assertion trap: unit
-   * sources (null/undefined literals smuggled through `null!` / `as any`
-   * casts), and record/array sources with ZERO same-family width-lift
-   * candidates among the arms — an AMBIGUOUS lift (several candidates)
-   * stays a compile fence, because honest code lands there. The interned
-   * helper evaluates the operand (JS evaluates it too) and throws the
-   * stranded-arm TypeError verbatim. Null when the shape doesn't prove
-   * the lie. */
   strandedCoercionTrap(expr: IrExpr, expected: IrType & { kind: "union" }, loc: SrcLoc): IrExpr | null {
-    const def = this.unions.get(expected.unionId);
-    if (!def) return null;
-    const src = expr.type;
-    let what: string;
-    if (isUnitType(src)) {
-      what = src.kind === "undefinedT" ? "undefined" : "null";
-    } else if (src.kind === "f64" || src.kind === "bool" || src.kind === "string") {
-      // A SCALAR the union has no arm for (`4 as any as X`, a generic
-      // dummy for an unmappable instantiation): no widening exists at
-      // all, so the mismatch proves the lie the same way a unit does.
-      what = `a '${this.fmt(src)}' value`;
-    } else if (src.kind === "record" || src.kind === "array") {
-      // Zero width-lift candidates proves no honest mapping was missed.
-      const candidates = def.arms.filter(
-        (arm) =>
-          ((src.kind === "record" && arm.kind === "record") || (src.kind === "array" && arm.kind === "array")) &&
-          this.widthLiftPlan(src, arm) !== null,
-      );
-      if (candidates.length !== 0) return null;
-      what = `a '${this.fmt(src)}' value`;
-    } else {
-      return null;
-    }
-    // Unit sources have no runtime payload and are pure — the helper is
-    // nullary (unit-typed ABI params have no representation); ref sources
-    // pass through so the operand still evaluates, exactly JS.
-    const takesOperand = !isUnitType(src);
-    const key = `strand:${expected.unionId}:${typeKey(src)}`;
-    let name = this.retagHelpers.get(key);
-    if (!name) {
-      name = `%union.strand.${this.retagHelpers.size}`;
-      this.retagHelpers.set(key, name);
-      const toT: IrType = { kind: "union", unionId: expected.unionId };
-      this.liftedFns.push({
-        name,
-        params: takesOperand ? [{ localId: "v.0", name: "v", type: src }] : [],
-        returnType: toT,
-        locals: takesOperand ? [{ id: "v.0", name: "v", type: src, mutable: false }] : [],
-        body: [
-          {
-            kind: "throw",
-            value: {
-              kind: "libCall",
-              fn: "error.new",
-              args: [
-                {
-                  kind: "strLit",
-                  value: `${what} is not representable in the target union (a value narrowed or asserted past it still held it)`,
-                  type: STRING,
-                  loc,
-                },
-              ],
-              type: { kind: "object", className: "%TypeError" },
-              loc,
-            },
-            loc,
-          },
-        ],
-        loc,
-      });
-    }
-    return { kind: "call", callee: name, args: isUnitType(src) ? [] : [expr], type: expected, loc };
+    return strandedCoercionTrap(this, expr, expected, loc);
   }
 
   recordUnionWrapHelper(source: IrType & { kind: "record" }, toId: string, loc: SrcLoc): string | null {
-    const shape = this.shapes.get(source.shapeId);
-    const to = this.unions.get(toId);
-    if (!shape || !to) return null;
-    const plan = planRecordUnionWrap(shape, to, (id) => this.shapes.get(id));
-    if (!plan) return null;
-    const key = `recordWrap:${source.shapeId}:${toId}`;
-    const existing = this.retagHelpers.get(key);
-    if (existing) return existing;
-    const name = `%record.wrap.${this.retagHelpers.size}`;
-    this.retagHelpers.set(key, name);
-    this.liftedFns.push(buildRecordUnionWrap(name, source, to, plan, loc,
-      (lift, value, dst) => this.applyWidthLift(lift, value, dst, loc)));
-    return name;
+    return recordUnionWrapHelper(this, source, toId, loc);
   }
 
   unionRetagHelper(fromId: string, toId: string, loc: SrcLoc, trappable?: ReadonlySet<number>): string | null {
-    const from = this.unions.get(fromId);
-    const to = this.unions.get(toId);
-    if (!from || !to) return null;
-    const request = `${fromId}:${toId}:${trappable === undefined ? "" : [...trappable].sort((a, b) => a - b).join(".")}`;
-    const cached = this.copyRetagHelpers.get(request);
-    if (cached && cached.shapes === this.shapes.revision && cached.unions === this.unions.revision) return cached.name;
-    const plan = planUnionRetag(from, to, (id) => this.shapes.get(id),
-      (src, dst) => this.widthLiftPlan(src, dst), trappable);
-    if (plan === null) return null;
-    // The registry pair determines every route; only checker-proven
-    // stranded arms vary by site. Publish the name before building widths
-    // so recursive records and arrays can call this same helper.
-    const stranded: number[] = [];
-    plan.forEach((arm, tag) => { if (arm.kind === "trap") stranded.push(tag); });
-    const key = `${fromId}:${toId}:${stranded.join(".")}`;
-    const existing = this.retagHelpers.get(key);
-    const name = existing ?? `%union.retag.${this.retagHelpers.size}`;
-    if (!existing) {
-      this.retagHelpers.set(key, name);
-      this.liftedFns.push(buildUnionRetag(name, from, to, plan, loc,
-        (lift, value, dst) => this.applyWidthLift(lift, value, dst, loc), (type) => this.fmt(type)));
-    }
-    // Width routes still revalidate on every request. Only a complete plan
-    // of exact payload copies and site-proven traps can bypass planning.
-    if (plan.every((arm) => arm.kind === "trap" || (arm.kind === "direct"
-      ? arm.route.lift.how === "copy" : arm.routes.every((route) => route.lift.how === "copy")))) {
-      this.copyRetagHelpers.set(request, { name, shapes: this.shapes.revision, unions: this.unions.revision });
-    }
-    return name;
+    return unionRetagHelper(this, fromId, toId, loc, trappable);
   }
 
-  /** Interned `%union.narrow.<n>(u)` — the CHECKED single-arm extraction
-   * behind `x!` on union values: the asserted arm's payload comes out
-   * (+1 for ref arms, like any unionNarrow), and every OTHER arm throws
-   * the catchable TypeError — divergence 38's lying-assertion stance (an
-   * unchecked unionNarrow would misread the payload where JS lets the
-   * impossible value flow on). Null when the target isn't a non-unit arm
-   * of the union — those uses keep their erasure/fences. */
   narrowedArmHelper(fromId: string, target: IrType, loc: SrcLoc): string | null {
-    const from = this.unions.get(fromId);
-    if (!from || isUnitType(target)) return null;
-    const tag = this.armTag(fromId, target);
-    if (tag < 0) return null;
-    const key = `${fromId}:${tag}`;
-    const existing = this.narrowHelpers.get(key);
-    if (existing) {
-      this.checkedNarrowHelpers.add(existing);
-      return existing;
-    }
-    const name = `%union.narrow.${this.narrowHelpers.size}`;
-    this.narrowHelpers.set(key, name);
-    this.checkedNarrowHelpers.add(name);
-    const fn = buildUnionNarrow(name, from, target, loc, (type) => this.fmt(type));
-    if (!fn) throw new InternalCompilerError("lowerer bug: invalid checked union extraction");
-    this.liftedFns.push(fn);
-    return name;
+    return narrowedArmHelper(this, fromId, target, loc);
   }
 
-  /** The DEFERRED-INIT field read (`stream!: T` assigned past the
-   * constructor's top level — the slot is `T | undefined`): interned
-   * `%deferred.read.<n>(u)` extracting the declared type. SCALAR arms
-   * whose JS-undefined behavior a unit default reproduces read that
-   * default — bool false (conditions are exact: undefined and false are
-   * both falsy; only printing/strict-equality could tell) and f64 NaN
-   * (arithmetic and conditions exact) — while string and REF arms keep
-   * the checked-extraction TRAP: JS itself TypeErrors the first member
-   * use of such an undefined, so the catchable TypeError at the read is
-   * the same failure, named earlier (SEMANTICS.md). */
   deferredReadHelper(fromId: string, target: IrType, loc: SrcLoc): string | null {
-    if (target.kind !== "bool" && target.kind !== "f64") {
-      return this.narrowedArmHelper(fromId, target, loc);
-    }
-    const from = this.unions.get(fromId);
-    const tag = this.armTag(fromId, target);
-    const utag = from ? from.arms.findIndex((a) => a.kind === "undefinedT") : -1;
-    if (!from || tag < 0 || utag < 0) return null;
-    const key = `deferred:${fromId}:${tag}`;
-    const existing = this.narrowHelpers.get(key);
-    if (existing) return existing;
-    const name = `%deferred.read.${this.narrowHelpers.size}`;
-    this.narrowHelpers.set(key, name);
-    const dflt: IrExpr = target.kind === "bool"
-      ? { kind: "boolLit", value: false, type: BOOL, loc }
-      : { kind: "numLit", value: NaN, type: F64, loc };
-    const fn = buildUnionNarrow(name, from, target, loc, (type) => this.fmt(type), dflt);
-    if (!fn) throw new InternalCompilerError("lowerer bug: invalid deferred union extraction");
-    this.liftedFns.push(fn);
-    return name;
+    return deferredReadHelper(this, fromId, target, loc);
   }
 
-  /** True when a static value can become ONE island value: jsval itself,
-   * anything boundary-safe (the deep JSON marshal), a record whose fields
-   * all can (built as an island OBJECT literal, field by field), or an
-   * array of such (built as an island ARRAY, element by element). The
-   * lift beyond boundarySafe exists for jsval-BEARING composites —
-   * `{ role: string; content: any[] }[]` flowing into an `any[]` slot —
-   * which have no JSON serialization (a handle isn't JSON) but an honest
-   * per-field construction. Recursion terminates: recursive shapes are
-   * rejected at mapping time. */
   jsvalLiftable(t: IrType, visiting: Set<string> = new Set()): boolean {
-    if (t.kind === "jsval") return true;
-    if (this.boundarySafe(t)) return true;
-    // Typed arrays and URLs marshal IN without joining the round-trip
-    // (JSON) set: an engine typed-array copy / an engine URL from href.
-    if (t.kind === "bytes" || t.kind === "url") return true;
-    // Checked-dynamic values deep-copy in (scr_jsval_from_dyn — data
-    // kinds; a boxed function/handle/promise throws at runtime).
-    if (t.kind === "dyn") return true;
-    // Marshalable CLOSURES cross as host functions — a record carrying
-    // methods (the service-registry entry: `{ label, load: () =>
-    // Promise<any>, defaultFallback: (cfg) => any }`) lifts field by
-    // field like any other.
-    if (t.kind === "func") {
-      return canMarshalTypedFuncIntoIsland(t, (id) => this.shapes.get(id), (id) => this.unions.get(id));
-    }
-    if (t.kind === "record") {
-      const shape = this.shapes.get(t.shapeId);
-      if (!shape || shape.tuple) return false;
-      // Recursive shapes reaching here answer FALSE: this branch is the
-      // per-field island lift (jsval/bytes-bearing composites — the
-      // JSON-safe ones already answered true through boundarySafe, where
-      // a cyclic value throws the circular TypeError at the marshal), and
-      // the lift helpers walk values with no circular guard — fencing the
-      // TYPE is the honest answer.
-      if (visiting.has(t.shapeId)) return false;
-      visiting.add(t.shapeId);
-      // An INDEX-SIGNATURE record lifts when its value slot does (dyn
-      // included): declared fields write first, then the overflow keys.
-      if (shape.indexValue && !this.jsvalLiftable(shape.indexValue, visiting)) return false;
-      return shape.fields.every((f) => !f.name.startsWith("%") && this.jsvalLiftable(f.type, visiting));
-    }
-    if (t.kind === "array") return this.jsvalLiftable(t.elem, visiting);
-    // A union crossing IN lifts arm by arm (a runtime tag switch — see
-    // unionToJsvalHelper) when every arm does: unit arms become the
-    // engine's own undefined/null (which is why bare undefined-armed
-    // unions lift here despite being JSON-unsafe), the rest lift as
-    // themselves. Arms never nest unions, so this terminates (recursive
-    // knots pass through records, guarded above).
-    if (t.kind === "union") {
-      const def = this.unions.get(t.unionId);
-      return !!def && def.arms.every((a) => isUnitType(a) || this.jsvalLiftable(a, visiting));
-    }
-    return false;
+    return jsvalLiftable(this, t, visiting);
   }
 
-  /** A jsval-typed expression carrying `e`'s value into the island —
-   * jsvalLiftable's constructive side. Primitives and JSON-safe composites
-   * keep the jsMarshal deep copy; jsval-bearing records and arrays go
-   * through interned per-type builder helpers (%jsin.*), so the operand is
-   * always evaluated exactly once (as the helper's argument). */
   jsvalLiftExpr(e: IrExpr, loc: SrcLoc): IrExpr {
-    if (e.type.kind === "jsval") return e;
-    if (this.boundarySafe(e.type)) {
-      return { kind: "jsMarshal", value: e, type: JSVAL, loc };
-    }
-    if (e.type.kind === "bytes" || e.type.kind === "url") {
-      return { kind: "jsMarshal", value: e, type: JSVAL, loc };
-    }
-    if (e.type.kind === "record") {
-      const helper = this.recordToJsvalHelper(e.type.shapeId, loc);
-      return { kind: "call", callee: helper, args: [e], type: JSVAL, loc };
-    }
-    if (e.type.kind === "array") {
-      const helper = this.arrayToJsvalHelper(e.type.elem, loc);
-      return { kind: "call", callee: helper, args: [e], type: JSVAL, loc };
-    }
-    if (e.type.kind === "union") {
-      const helper = this.unionToJsvalHelper(e.type.unionId, loc);
-      return { kind: "call", callee: helper, args: [e], type: JSVAL, loc };
-    }
-    // Checked-dynamic values and marshalable closures ride jsMarshal
-    // directly (the checked-dynamic tree deep copy / the host-function wrap).
-    if (e.type.kind === "dyn" || e.type.kind === "func") {
-      return { kind: "jsMarshal", value: e, type: JSVAL, loc };
-    }
-    throw new InternalCompilerError(`lowerer bug: jsvalLiftExpr of unliftable ${e.type.kind}`);
+    return jsvalLiftExpr(this, e, loc);
   }
 
-  /** Interned `%jsin.union.<n>(u)` — the runtime tag switch marshaling a
-   * union value INTO the island: unit arms become the engine's own
-   * undefined/null (JS-exact — `{ instructions: undefined }` crossing in
-   * has the property present and undefined, exactly what the source
-   * spells), every other arm narrows and lifts as itself (strings by
-   * value, JSON-safe composites as deep copies, typed arrays as engine
-   * typed-array copies, URLs as engine URL instances). Caller must have
-   * checked jsvalLiftable. */
   unionToJsvalHelper(unionId: string, loc: SrcLoc): string {
-    const key = `union:${unionId}`;
-    const existing = this.jsinHelpers.get(key);
-    if (existing) return existing;
-    const def = this.unions.get(unionId);
-    if (!def) throw new InternalCompilerError(`lowerer bug: jsval lift of unknown union ${unionId}`);
-    const name = `%jsin.union.${this.jsinHelpers.size}`;
-    this.jsinHelpers.set(key, name);
-    const fromT: IrType = { kind: "union", unionId };
-    const u: IrExpr = { kind: "varRef", localId: "u.0", type: fromT, loc };
-    const body: IrStmt[] = [];
-    def.arms.forEach((arm, i) => {
-      const cond: IrExpr = { kind: "unionIsTag", unionId, tag: i, negated: false, value: u, type: BOOL, loc };
-      const value: IrExpr = isUnitType(arm)
-        ? { kind: "jsOp", op: arm.kind === "undefinedT" ? "undefLit" : "nullLit", args: [], type: JSVAL, loc }
-        : this.jsvalLiftExpr({ kind: "unionNarrow", unionId, tag: i, value: u, type: arm, loc }, loc);
-      body.push({ kind: "if", cond, then: [{ kind: "return", value, loc }], else_: null, loc });
-    });
-    // Unreachable when tags are exhaustive (they are, by construction);
-    // satisfies the all-paths-return rule and keeps a corrupted tag loud.
-    body.push({
-      kind: "throw",
-      value: { kind: "strLit", value: "scriptc: internal error: invalid union tag", type: STRING, loc },
-      loc,
-    });
-    this.liftedFns.push({
-      name,
-      params: [{ localId: "u.0", name: "u", type: fromT }],
-      returnType: JSVAL,
-      locals: [{ id: "u.0", name: "u", type: fromT, mutable: true }],
-      body,
-      loc,
-    });
-    return name;
+    return unionToJsvalHelper(this, unionId, loc);
   }
 
-  /** Interned `%jsin.rec.<n>(r)` — builds an island OBJECT from a
-   * jsval-bearing record: marshaled key strings, each field lifted through
-   * jsvalLiftExpr (jsval fields pass as handles, JSON-safe fields deep-copy,
-   * nested composites recurse through their own helpers). Caller must have
-   * checked jsvalLiftable. */
   recordToJsvalHelper(shapeId: string, loc: SrcLoc): string {
-    const key = `rec:${shapeId}`;
-    const existing = this.jsinHelpers.get(key);
-    if (existing) return existing;
-    const shape = this.shapes.get(shapeId);
-    if (!shape) throw new InternalCompilerError(`lowerer bug: jsval lift of unknown shape ${shapeId}`);
-    const name = `%jsin.rec.${this.jsinHelpers.size}`;
-    this.jsinHelpers.set(key, name);
-    const recT: IrType = { kind: "record", shapeId };
-    const r: IrExpr = { kind: "varRef", localId: "r.0", type: recT, loc };
-    const args: IrExpr[] = [];
-    for (const f of shape.fields) {
-      args.push({
-        kind: "jsMarshal",
-        value: { kind: "strLit", value: f.name, type: STRING, loc },
-        type: JSVAL,
-        loc,
-      });
-      args.push(
-        this.jsvalLiftExpr(
-          { kind: "recordGet", obj: r, shapeId, field: f.name, type: f.type, loc },
-          loc,
-        ),
-      );
-    }
-    const lit: IrExpr = { kind: "jsOp", op: "objLit", args, type: JSVAL, loc };
-    if (!shape.indexValue) {
-      this.liftedFns.push({
-        name,
-        params: [{ localId: "r.0", name: "r", type: recT }],
-        returnType: JSVAL,
-        locals: [{ id: "r.0", name: "r", type: recT, mutable: true }],
-        body: [{ kind: "return", value: lit, loc }],
-        loc,
-      });
-      return name;
-    }
-    // An INDEX-SIGNATURE shape: the declared pairs build the object, then
-    // the overflow map's live keys append in JS own-key order (setIdx —
-    // runtime keys have no property-name literal).
-    const iv = shape.indexValue;
-    const f64: IrType = { kind: "f64" };
-    const ksT = arrayOf(STRING);
-
-    const kRef = varRef("k.0", STRING, loc);
-    this.liftedFns.push({
-      name,
-      params: [{ localId: "r.0", name: "r", type: recT }],
-      returnType: JSVAL,
-      locals: [
-        { id: "r.0", name: "r", type: recT, mutable: true },
-        { id: "out.0", name: "out", type: JSVAL, mutable: false },
-        { id: "ks.0", name: "ks", type: ksT, mutable: false },
-        { id: "i.0", name: "i", type: f64, mutable: true },
-        { id: "k.0", name: "k", type: STRING, mutable: false },
-      ],
-      body: [
-        { kind: "varDecl", localId: "out.0", init: lit, loc },
-        { kind: "varDecl", localId: "ks.0", init: { kind: "recordOvfKeys", obj: r, shapeId, type: ksT, loc }, loc },
-        {
-          kind: "for",
-          init: { kind: "varDecl", localId: "i.0", init: numLit(0, loc), loc },
-          cond: {
-            kind: "bin",
-            op: "<",
-            left: varRef("i.0", f64, loc),
-            right: { kind: "arrIntrinsic", method: "length", receiver: varRef("ks.0", ksT, loc), args: [], type: f64, loc },
-            type: BOOL,
-            loc,
-          },
-          update: { kind: "assign", localId: "i.0", value: { kind: "bin", op: "+", left: varRef("i.0", f64, loc), right: numLit(1, loc), type: f64, loc }, loc },
-          body: [
-            { kind: "varDecl", localId: "k.0", init: { kind: "arrayGet", arr: varRef("ks.0", ksT, loc), index: varRef("i.0", f64, loc), type: STRING, loc }, loc },
-            {
-              kind: "exprStmt",
-              expr: {
-                kind: "jsOp",
-                op: "setIdx",
-                args: [
-                  varRef("out.0", JSVAL, loc),
-                  { kind: "jsMarshal", value: kRef, type: JSVAL, loc },
-                  this.jsvalLiftExpr({ kind: "recordKeyGet", obj: r, shapeId, key: kRef, overflowOnly: true, type: iv, loc }, loc),
-                ],
-                type: VOID,
-                loc,
-              },
-              loc,
-            },
-          ],
-          loc,
-        },
-        { kind: "return", value: varRef("out.0", JSVAL, loc), loc },
-      ],
-      loc,
-    });
-    return name;
+    return recordToJsvalHelper(this, shapeId, loc);
   }
 
-  /** Interned `%jsin.arr.<n>(a)` — builds ONE island ARRAY from a native
-   * array whose elements lift: out = []; for (...) out[i] = lift(a[i]);
-   * return out. The index marshals by value like any number. Caller must
-   * have checked jsvalLiftable of the element. */
   arrayToJsvalHelper(elem: IrType, loc: SrcLoc): string {
-    const key = `arr:${typeKey(elem)}`;
-    const existing = this.jsinHelpers.get(key);
-    if (existing) return existing;
-    const name = `%jsin.arr.${this.jsinHelpers.size}`;
-    this.jsinHelpers.set(key, name);
-    const arrT: IrType = { kind: "array", elem };
-    const f64: IrType = { kind: "f64" };
-
-    this.liftedFns.push({
-      name,
-      params: [{ localId: "a.0", name: "a", type: arrT }],
-      returnType: JSVAL,
-      locals: [
-        { id: "a.0", name: "a", type: arrT, mutable: true },
-        { id: "out.0", name: "out", type: JSVAL, mutable: false },
-        { id: "n.0", name: "n", type: f64, mutable: false },
-        { id: "i.0", name: "i", type: f64, mutable: true },
-      ],
-      body: [
-        { kind: "varDecl", localId: "out.0", init: { kind: "jsOp", op: "arrLit", args: [], type: JSVAL, loc }, loc },
-        {
-          kind: "varDecl",
-          localId: "n.0",
-          init: { kind: "arrIntrinsic", method: "length", receiver: varRef("a.0", arrT, loc), args: [], type: f64, loc },
-          loc,
-        },
-        {
-          kind: "for",
-          init: { kind: "varDecl", localId: "i.0", init: numLit(0, loc), loc },
-          cond: { kind: "bin", op: "<", left: varRef("i.0", f64, loc), right: varRef("n.0", f64, loc), type: BOOL, loc },
-          update: {
-            kind: "assign",
-            localId: "i.0",
-            value: { kind: "bin", op: "+", left: varRef("i.0", f64, loc), right: numLit(1, loc), type: f64, loc },
-            loc,
-          },
-          body: [
-            {
-              kind: "exprStmt",
-              expr: {
-                kind: "jsOp",
-                op: "setIdx",
-                args: [
-                  varRef("out.0", JSVAL, loc),
-                  { kind: "jsMarshal", value: varRef("i.0", f64, loc), type: JSVAL, loc },
-                  this.jsvalLiftExpr(
-                    { kind: "arrayGet", arr: varRef("a.0", arrT, loc), index: varRef("i.0", f64, loc), type: elem, loc },
-                    loc,
-                  ),
-                ],
-                type: { kind: "void" },
-                loc,
-              },
-              loc,
-            },
-          ],
-          loc,
-        },
-        { kind: "return", value: varRef("out.0", JSVAL, loc), loc },
-      ],
-      loc,
-    });
-    return name;
+    return arrayToJsvalHelper(this, elem, loc);
   }
 
-  /** Interned `%jsin.elems.<n>(a)` — a NATIVE array of island handles from
-   * a native array whose elements lift: the `any[]`-slot coercion (each
-   * element becomes one island value; the array stays static). Null when
-   * the element doesn't lift. */
   arrayToJsvalArrayHelper(fromElem: IrType, loc: SrcLoc): string | null {
-    if (fromElem.kind === "jsval" || !this.jsvalLiftable(fromElem)) return null;
-    const key = `elems:${typeKey(fromElem)}`;
-    const existing = this.jsinHelpers.get(key);
-    if (existing) return existing;
-    const name = `%jsin.elems.${this.jsinHelpers.size}`;
-    this.jsinHelpers.set(key, name);
-    const arrT: IrType = { kind: "array", elem: fromElem };
-    const outT: IrType = { kind: "array", elem: JSVAL };
-    const f64: IrType = { kind: "f64" };
-
-    this.liftedFns.push({
-      name,
-      params: [{ localId: "a.0", name: "a", type: arrT }],
-      returnType: outT,
-      locals: [
-        { id: "a.0", name: "a", type: arrT, mutable: true },
-        { id: "out.0", name: "out", type: outT, mutable: false },
-        { id: "n.0", name: "n", type: f64, mutable: false },
-        { id: "i.0", name: "i", type: f64, mutable: true },
-      ],
-      body: [
-        { kind: "varDecl", localId: "out.0", init: { kind: "arrayLit", elems: [], type: outT, loc }, loc },
-        {
-          kind: "varDecl",
-          localId: "n.0",
-          init: { kind: "arrIntrinsic", method: "length", receiver: varRef("a.0", arrT, loc), args: [], type: f64, loc },
-          loc,
-        },
-        {
-          kind: "for",
-          init: { kind: "varDecl", localId: "i.0", init: numLit(0, loc), loc },
-          cond: { kind: "bin", op: "<", left: varRef("i.0", f64, loc), right: varRef("n.0", f64, loc), type: BOOL, loc },
-          update: {
-            kind: "assign",
-            localId: "i.0",
-            value: { kind: "bin", op: "+", left: varRef("i.0", f64, loc), right: numLit(1, loc), type: f64, loc },
-            loc,
-          },
-          body: [
-            {
-              kind: "exprStmt",
-              expr: {
-                kind: "arrIntrinsic",
-                method: "push",
-                receiver: varRef("out.0", outT, loc),
-                args: [
-                  this.jsvalLiftExpr(
-                    { kind: "arrayGet", arr: varRef("a.0", arrT, loc), index: varRef("i.0", f64, loc), type: fromElem, loc },
-                    loc,
-                  ),
-                ],
-                type: f64,
-                loc,
-              },
-              loc,
-            },
-          ],
-          loc,
-        },
-        { kind: "return", value: varRef("out.0", outT, loc), loc },
-      ],
-      loc,
-    });
-    return name;
+    return arrayToJsvalArrayHelper(this, fromElem, loc);
   }
 
   jsvalIn(e: IrExpr, node: ts.Node): IrExpr {
@@ -10575,72 +8475,8 @@ export class Lowerer {
    * qualified per-member fence for the rest. Null for non-namespace
    * callees (the call chain keeps trying). */
   lowerNamespaceBuiltinCall(call: ts.CallExpression, access: ts.PropertyAccessExpression): IrExpr | null {
-    const bi = this.builtinMemberOf(access);
-    if (!bi) return null;
-    // child_process.execFile's callback forms are special-cased rather
-    // than table-backed, but namespace imports share the named-import
-    // implementation and runtime callback adapter.
-    if (bi.module === "child_process" && bi.member === "execFile") {
-      return this.lowerExecFileCall(call, locOf(access));
-    }
-    // The timers spoke: `timers.setTimeout(...)` through a namespace or
-    // require binding IS the global (Node's timers module re-exports
-    // them) — the shared member lowering serves both spellings.
-    if (bi.module === "timers") {
-      const timersServed = lowerTimersMemberCall(this, call, bi.member, locOf(access));
-      if (timersServed) return timersServed;
-    }
-    // The assert spoke owns node:assert wholesale (every call shape is
-    // special-cased — optional messages, per-type comparisons, synthesized
-    // deep-equality helpers).
-    const assertServed = this.lowerAssertModuleCall(call, bi, locOf(access));
-    if (assertServed) return assertServed;
-    // The node:test spoke owns its module the same way (`test.skip(...)`
-    // through the default import is a namespace-member call here).
-    const testServed = this.lowerNodeTestModuleCall(call, bi, locOf(access));
-    if (testServed) return testServed;
-    // The util spoke owns inspect/format the same way (per-type
-    // synthesized traversal helpers, compile-time format strings).
-    const utilServed = this.lowerUtilModuleCall(call, bi, locOf(access));
-    if (utilServed) return utilServed;
-    // The dgram/dns spoke owns those modules for namespace imports too
-    // (`import * as dns from "node:dns"` — portless's form): every call
-    // shape is special-cased there, so it never rides the param tables.
-    const dgramServed = this.lowerDgramDnsModuleCall(call, bi, locOf(access));
-    if (dgramServed) return dgramServed;
-    // The server-surface spoke owns net and http wholesale — the same
-    // dispatch the named-import path takes (`net.createServer(...)` via
-    // `import * as net` is portless's own spelling).
-    const served = this.lowerNetModuleCall(call, bi, locOf(access));
-    if (served) return served;
-    // The stream spoke owns finished/pipeline the same way.
-    const streamServed = lowerStreamModuleCall(this, call, bi, locOf(access));
-    if (streamServed) return streamServed;
-    // fs._toUnixTimestamp — off the param tables (an underscore-stable
-    // internal), served by its own spoke before the table fence.
-    const fsTs = this.lowerFsToUnixTimestampCall(call, bi, locOf(access));
-    if (fsTs) return fsTs;
-    // The fs validation-ladder spoke (checked-dynamic lane): misuse of
-    // implemented-namespace members throws Node's typed errors instead
-    // of meeting the table fence.
-    const fsLadder = this.lowerFsLadderCall(call, bi, locOf(access));
-    if (fsLadder) return fsLadder;
-    // The crypto introspection statics (getFips and the name lists) bake
-    // at the call site — no runtime entry exists to table.
-    const cryptoServed = this.lowerCryptoModuleCall(call, bi, locOf(access));
-    if (cryptoServed) return cryptoServed;
-    const nodeModuleServed = lowerNodeModuleCall(this, call, bi, locOf(access));
-    if (nodeModuleServed) return nodeModuleServed;
-    const builtinFn = builtinModuleFnOf(this, bi.module, bi.member);
-    if (!builtinFn) {
-      this.noLowering(
-        `${bi.module}.${bi.member}`,
-        call,
-        builtinFenceHintOf(bi.module, bi.member),
-        this.checker.getSymbolAtLocation(access.name),
-      );
-    }
-    return this.lowerBuiltinModuleCall(call, bi, builtinFn, locOf(access));
+    const builtin = this.builtinMemberOf(access);
+    return builtin ? lowerBuiltinCall(this, call, builtin, locOf(access), access.name) : null;
   }
 
   /** `ns.member` on a builtin namespace import as a VALUE: constants

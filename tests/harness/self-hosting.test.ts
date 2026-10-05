@@ -60,7 +60,7 @@ for (const component of ["source-locations", "ir-collections", "ir-types", "ir-c
 // actual IR builder, analysis functions and validator, writes IR, and that
 // IR must produce a working executable. Comparing its serialized IR
 // to Node also pins construction order and every recursive payload.
-for (const [fixture, backend] of ["ir-build", "contextual-ir"].flatMap((fixture) =>
+for (const [fixture, backend] of ["ir-build", "contextual-ir", "coercion-builders"].flatMap((fixture) =>
   (["llvm"] as const).map((backend) => [fixture, backend] as const))) {
   test(`self-hosting IR generation ${fixture}: ${backend} builds and validates an executable program`, async () => {
     const entry = join(root, "tests/fixtures/self-hosting", `${fixture}.ts`);
@@ -81,7 +81,13 @@ for (const [fixture, backend] of ["ir-build", "contextual-ir"].flatMap((fixture)
           expect(result.signal).toBeNull();
           expect(result.status, result.stderr.toString()).toBe(0);
         }
-        expect(native.stdout).toEqual(oracle.stdout);
+        if (fixture === "coercion-builders") {
+          // Captured functions use the native record's declaration order.
+          // JSON member order is not part of the IR format.
+          expect(deserializeModule(native.stdout.toString())).toEqual(deserializeModule(oracle.stdout.toString()));
+        } else {
+          expect(native.stdout).toEqual(oracle.stdout);
+        }
         expect(native.stderr).toEqual(oracle.stderr);
         const mod = deserializeModule(native.stdout.toString());
         expect(validateModule(mod)).toEqual([]);
@@ -93,9 +99,13 @@ for (const [fixture, backend] of ["ir-build", "contextual-ir"].flatMap((fixture)
         expect(program.error).toBeUndefined();
         expect(program.signal).toBeNull();
         expect(program.status, program.stderr.toString()).toBe(0);
-        const label = fixture === "ir-build" ? "built" : "context";
-        const suffix = fixture === "ir-build" ? " true" : "";
-        expect(program.stdout.toString()).toBe(`${label}${"!".repeat(bound)} ${bound * (bound - 1) / 2}${suffix}\n`);
+        if (fixture === "coercion-builders") {
+          expect(program.stdout.toString()).toBe(`${Array.from({ length: bound }, (_, i) => i * 2).join(",")} ${bound * 2} ${bound * 2}\n`);
+        } else {
+          const label = fixture === "ir-build" ? "built" : "context";
+          const suffix = fixture === "ir-build" ? " true" : "";
+          expect(program.stdout.toString()).toBe(`${label}${"!".repeat(bound)} ${bound * (bound - 1) / 2}${suffix}\n`);
+        }
         expect(program.stderr.toString()).toBe("");
       }
     } finally {

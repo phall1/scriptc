@@ -1,3 +1,5 @@
+import { dynUndefinedExpr, nodeThrowExpr, boolLit, numLit, strLit, varRef } from "../../ir/build.js";
+
 /* The server-surface lowering (node:net + node:http — the spoke-module
  * pattern, like lower-island.ts): module-function calls (net
  * createServer/connect/createConnection, http createServer/request/get —
@@ -10,7 +12,7 @@
  * rejection, never silence. */
 import * as ts from "../ts7/adapter.js";
 import type { Lowerer } from "./lowerer.js";
-import { ladderFenceExpr, nodeThrowExpr } from "./lowerer.js";
+import { ladderFenceExpr } from "./lowerer.js";
 import { isJsSourceFile, locOf } from "../program.js";
 import { arrayOf, BOOL, BYTES_U8, canBoxFuncIntoDyn, canConvertToDyn, DYN, DYN_HANDLE_KINDS, F64, funcOf, HTTP2SESSION_T, HTTP2STREAM_T, HTTPCLIENTREQ_T, HTTPREQ_T, HTTPRES_T, type IrExpr, type IrLibFn, type IrStmt, type IrType, NETSERVER_T, NETSOCKET_T, NULL_T, SECURECTX_T, STRING, UNDEFINED_T, type SrcLoc, typeKey, VOID } from "../../ir/ir.js";
 import {
@@ -26,7 +28,6 @@ import {
   TLS_SERVER_DOCUMENTED_OPTIONS,
 } from "./surfaces.js";
 import { conditionalSpreadOf } from "./expressions/object-literals.js";
-import { boolLit, numLit, strLit, varRef } from "../../ir/build.js";
 import { resultIsDiscarded } from "./call-position.js";
 import { lowerCallbackArg as lowerCallbackArgShared } from "./callback-arg.js";
 import { pairsSnapshotHelper } from "./pairs-snapshot.js";
@@ -3059,12 +3060,7 @@ function lowerTlsConnectCall(lowerer: Lowerer, expr: ts.CallExpression, loc: Src
     }
     // No options: Node's defaults (rejectUnauthorized: true) — the
     // runtime walk reads an absent record (the dyn undefined).
-    opts = {
-      kind: "dynFrom",
-      value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc },
-      type: DYN,
-      loc,
-    };
+    opts = dynUndefinedExpr(loc);
   }
   let cb: IrExpr | null = null;
   if (i < args.length) {

@@ -1,8 +1,8 @@
+import { dynUndefinedExpr, varRef } from "../../ir/build.js";
 import * as ts from "../ts7/adapter.js";
 import { BOOL, DYN, STRING, type IrExpr, type IrStmt } from "../../ir/ir.js";
-import { varRef } from "../../ir/build.js";
 import { locOf } from "../program.js";
-import { dynUndefinedExpr, type Lowerer } from "./lowerer.js";
+import type { Lowerer } from "./lowerer.js";
 import { classValueRef, type ClassInfo } from "./lower-classes.js";
 import { classPrototypeData } from "./class-prototypes.js";
 

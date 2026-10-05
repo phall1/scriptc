@@ -1,6 +1,6 @@
-import { varRef } from "../../ir/build.js";
+import { dynUndefinedExpr, varRef } from "../../ir/build.js";
 import { BOOL, DYN, STRING, type IrExpr, type IrLocal, type SrcLoc } from "../../ir/ir.js";
-import { dynUndefinedExpr, type Lowerer } from "./lowerer.js";
+import type { Lowerer } from "./lowerer.js";
 
 /** The iterator and captured next method stay fixed for this consumption.
  * Custom methods keep emitted dispatch, including native class accessors. */

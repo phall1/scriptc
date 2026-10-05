@@ -1,10 +1,10 @@
+import { dynUndefinedExpr, varRef } from "../../ir/build.js";
 import * as ts from "../ts7/adapter.js";
 import { BOOL, DYN, STRING, SYMBOL_T, isUnitType, type IrExpr, type IrFunction, type IrStmt, type SrcLoc } from "../../ir/ir.js";
-import { varRef } from "../../ir/build.js";
 import { locOf } from "../program.js";
 import { classMemberNameOf, classValueRef, exactClassOfReceiver, storedClassValueType, findGenericMethodOn, findMethodOn, type ClassInfo } from "./lower-classes.js";
 import type { Lowerer } from "./lowerer.js";
-import { dynUndefinedExpr, newFnCtx } from "./lowerer.js";
+import { newFnCtx } from "./lowerer.js";
 import { classMethodValue } from "./class-method-values.js";
 
 /** Data added to a top-level class prototype has shared identity and remains

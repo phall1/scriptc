@@ -1,3 +1,4 @@
+import { dynUndefinedExpr, nodeThrowExpr, countedFor, numLit, strLit, varRef } from "../../ir/build.js";
 import { InternalCompilerError } from "../../errors.js";
 import { SYMBOL_T } from "../../ir/ir.js";
 import { literalValues } from "../literal-values.js";
@@ -19,7 +20,7 @@ import { BIGINT_T, BYTES_ELEMENT_NAME, BOOL, CAUGHT, DYN, DYN_HANDLE_KINDS, F64,
 import { cjsClassExprWholeExportOf, cjsExportAssignmentOf, cjsExportDiscardReason, isCjsExportTableLiteral, isCjsJsFile, isJsSourceFile, isModuleExportsAccess, isNodeEsmFile, locOf } from "../program.js";
 import { ARRAY_METHODS, builtinConstLit, builtinFenceHintOf, builtinModuleConstOf, builtinModulesArrayLit, builtinModuleFnOf, COMPOUND_ASSIGN_OPS, type CompoundOp, ISLAND_SURFACE, isChildSurfaceMember, MAP_METHODS, NARROW_FIRST, SET_METHODS, STRING_INDEX_METHODS, STR_METHODS, UNSUPPORTED_EXPR, sideEffectFreeOptionValue, stdlibGlobalNameOf } from "./surfaces.js";
 import { UNSUPPORTED, blockedBindingUseDiag, requiresDynamicPackageDiag, unsupportedDiag } from "../../diagnostics/diagnostic.js";
-import { PoisonError, dynFallbackType, dynUndefinedExpr, jsFuncNameOf, neverTaintedJsType, nodeThrowExpr, own } from "./lowerer.js";
+import { PoisonError, dynFallbackType, jsFuncNameOf, neverTaintedJsType, own } from "./lowerer.js";
 import { lowerCollectionSpread, lowerNpmStaticSafeIndexRead, lowerSafeIndexRead, strCharsCall, tryLowerNumericIndexRead } from "./lower-containers.js";
 import { arrayValueRead, arrayValueStore, arrayValueType } from "./array-values.js";
 import { lowerOptionalStringIndex } from "./string-index.js";
@@ -38,7 +39,6 @@ import { isConstAssertionTypeNode, isGenericCallableMemberType, isParseArgsDynTy
 import { lowerYield } from "./lower-generators.js";
 import { errorPropertyRead, errorPropertyWrite, errorToStringCall } from "./error-methods.js";
 import { lowerStreamProperty, lowerStreamStateProperty, streamSidesOf } from "./lower-stream.js";
-import { countedFor, numLit, strLit, varRef } from "../../ir/build.js";
 import { unionWideningTags } from "../../ir/analysis.js";
 import { isSafeToDiscard, isSafeToMoveConditionEarlier, isSafeToRepeat } from "./expressions/evaluation-safety.js";
 import { globalSymbolKey } from "./expressions/global-symbols.js";
@@ -1650,7 +1650,7 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
       // undefined value so stored probes compose with optional calls.
       if (!lowerer.dynamic && stdlibGlobalNameOf(lowerer, expr.expression) === "globalThis" &&
           !lowerer.checker.getPropertyOfType(lowerer.typeOf(expr.expression), expr.name.text)) {
-        return { kind: "dynFrom", value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc }, type: DYN, loc };
+        return dynUndefinedExpr(loc);
       }
       if (expr.questionDotToken && expr.name.text === "electron") {
         const processProperty = lowerer.lowerProcessProperty(expr);
@@ -8992,10 +8992,10 @@ function lowerLogicalPair(lowerer: Lowerer, expr: ts.BinaryExpression, left: IrE
         arm.kind === "f64" || arm.kind === "string" || arm.kind === "bool" ||
         arm.kind === "bigint" || arm.kind === "symbol" || isUnitType(arm))) {
         const key = `instanceof.union:${unionId}:${target.def.name}`;
-        let helper = lowerer.widthHelpers.get(key);
+        let helper = lowerer.valueHelpers.get(key);
         if (!helper) {
-          helper = `%instanceof.union.${lowerer.widthHelpers.size}`;
-          lowerer.widthHelpers.set(key, helper);
+          helper = `%instanceof.union.${lowerer.valueHelpers.size}`;
+          lowerer.valueHelpers.set(key, helper);
           const value: IrExpr = { kind: "varRef", localId: "value.0", type: left.type, loc };
           const body: IrStmt[] = [];
           arms.forEach((arm, tag) => {
@@ -9499,10 +9499,10 @@ function lowerLogicalPair(lowerer: Lowerer, expr: ts.BinaryExpression, left: IrE
     const keyIr = lowerer.lowerExprExpecting(expr.left, STRING);
     const recv = lowerer.lowerExprExpecting(expr.right, recvT);
     const hkey = `haskey:${recvT.shapeId}`;
-    let helper = lowerer.widthHelpers.get(hkey);
+    let helper = lowerer.valueHelpers.get(hkey);
     if (!helper) {
-      helper = `%rec.haskey.${lowerer.widthHelpers.size}`;
-      lowerer.widthHelpers.set(hkey, helper);
+      helper = `%rec.haskey.${lowerer.valueHelpers.size}`;
+      lowerer.valueHelpers.set(hkey, helper);
       const recT: IrType = { kind: "record", shapeId: recvT.shapeId };
 
       const k = varRef("k.0", STRING, loc);
@@ -9947,10 +9947,10 @@ function lowerLogicalPair(lowerer: Lowerer, expr: ts.BinaryExpression, left: IrE
     const recordT: IrType = { kind: "record", shapeId };
     const recvKey = recv.type.kind === "union" ? recv.type.unionId : "arr";
     const key = `regexgroups:${shapeId}:${groups.map((g) => `${g.name}=${g.index}`).join(",")}:${recvKey}`;
-    let helper = lowerer.widthHelpers.get(key);
+    let helper = lowerer.valueHelpers.get(key);
     if (!helper) {
-      helper = `%regex.groups.${lowerer.widthHelpers.size}`;
-      lowerer.widthHelpers.set(key, helper);
+      helper = `%regex.groups.${lowerer.valueHelpers.size}`;
+      lowerer.valueHelpers.set(key, helper);
       const body: IrStmt[] = [];
       const locals: IrLocal[] = [{ id: "m.0", name: "m", type: recv.type, mutable: true }];
       let mRef: IrExpr = { kind: "varRef", localId: "m.0", type: recv.type, loc };

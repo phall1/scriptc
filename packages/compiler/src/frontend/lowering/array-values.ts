@@ -1,7 +1,7 @@
+import { dynUndefinedExpr, varRef } from "../../ir/build.js";
 import { BOOL, F64, type IrExpr, type IrStmt, type IrType, JSVAL, type SrcLoc, UNDEFINED_T, typeEquals, typeKey, unionContainerArmsOk } from "../../ir/ir.js";
-import { varRef } from "../../ir/build.js";
 import type { Lowerer } from "./lowerer.js";
-import { dynUndefinedExpr } from "./lowerer.js";
+
 
 /** Test whether one array index contains a value rather than a hole. */
 export function arrayIndexPresent(arr: IrExpr, index: IrExpr, loc: SrcLoc): IrExpr {

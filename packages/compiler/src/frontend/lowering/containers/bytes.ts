@@ -1,15 +1,16 @@
+import { dynUndefinedExpr, varRef } from "../../../ir/build.js";
 import { BUF_NUM_METHODS } from "./buffer-numeric-methods.js";
 import * as ts from "../../ts7/adapter.js";
 import { BYTES_ELEMENT_SIZE, BIGINT_T, BOOL, BYTES_U8, DYN, F64, type IrBytesElem, type IrBytesIntrinsicMethod, type IrExpr, type IrType, STRING, type SrcLoc, UNDEFINED_T, VOID, arrayOf, bytesOf, typeEquals } from "../../../ir/ir.js";
 import { isJsSourceFile, locOf } from "../../program.js";
 import type { Lowerer } from "../lowerer.js";
-import { dynUndefinedExpr, newFnCtx, own } from "../lowerer.js";
+import { newFnCtx, own } from "../lowerer.js";
 import { buildBytesSortFn } from "../lower-array-sort.js";
 import { isSafeToDiscard } from "../expressions/evaluation-safety.js";
 import { lowerDynObjectLiteral } from "../expressions/object-literals.js";
 import { defaultAfterUndefined, lowerOptionalArgument, lowerStaticallyUndefinedArgument } from "../optional-arguments.js";
 import { lowerCheckedArrayFrom } from "../lower-containers.js";
-import { varRef } from "../../../ir/build.js";
+
 
 /** Uint8Array.prototype.toSorted. The receiver/comparator expressions are
  * evaluated before entering the helper; the helper snapshots with

@@ -1,3 +1,4 @@
+import { dynUndefinedExpr, numLit, strLit, varRef } from "../../../ir/build.js";
 import { pathModuleValue } from "../lower-builtin-values.js";
 import { InternalCompilerError } from "../../../errors.js";
 import * as ts from "../../ts7/adapter.js";
@@ -19,12 +20,11 @@ import type { IrExpr, IrLocal, IrRecordShape, IrStmt, IrType, SrcLoc } from "../
 import { isCjsExportTableLiteral, isJsSourceFile, locOf } from "../../program.js";
 import { NARROW_FIRST } from "../surfaces.js";
 import { recordShapeMismatchDiag } from "../../../diagnostics/diagnostic.js";
-import { PoisonError, dynUndefinedExpr, neverTaintedJsType } from "../lowerer.js";
+import { PoisonError, neverTaintedJsType } from "../lowerer.js";
 import type { Lowerer } from "../lowerer.js";
 import { lowerIndexMergeHelper } from "../lower-containers.js";
 import type { IndexMergeContributor } from "../lower-containers.js";
 import { isGenericCallableMemberType, jsOpenObjectType } from "../../type-mapper.js";
-import { numLit, strLit, varRef } from "../../../ir/build.js";
 import { isSafeToRepeat } from "./evaluation-safety.js";
 import { tryLowerExpression } from "./try-lower-expression.js";
 import { fenceSymbolFieldCopy } from "../symbol-fields.js";
@@ -2117,9 +2117,9 @@ function lowerDeclaredSpreadMerge(lowerer: Lowerer, expr: ts.ObjectLiteralExpres
   }];
   for (const source of srcs) {
     const key = `declmerge-source:${type.shapeId}:${source.shapeId}`;
-    let helper = lowerer.widthHelpers.get(key);
+    let helper = lowerer.valueHelpers.get(key);
     if (!helper) {
-      helper = `%rec.declmerge.${lowerer.widthHelpers.size}`;
+      helper = `%rec.declmerge.${lowerer.valueHelpers.size}`;
       const sourceType = source.value.type;
       const destination = varRef("out.0", type, loc);
       const receiver = varRef("source.0", sourceType, loc);
@@ -2209,7 +2209,7 @@ function lowerDeclaredSpreadMerge(lowerer: Lowerer, expr: ts.ObjectLiteralExpres
       });
       // Publish only a fully checked helper: rejected conversions must not
       // leave an entry that a later literal could reuse without a body.
-      lowerer.widthHelpers.set(key, helper);
+      lowerer.valueHelpers.set(key, helper);
     }
     stmts.push({ kind: "exprStmt", expr: { kind: "call", callee: helper, args: [outRef, source.value], type, loc }, loc });
   }

@@ -1,3 +1,4 @@
+import { dynUndefinedExpr, nodeThrowExpr } from "../../ir/build.js";
 import { InternalCompilerError } from "../../errors.js";
 /* Island-boundary lowering: jsval marshaling into the island (jsvalIn and
  * its boundary fences), island-expression detection, the island method-call
@@ -11,7 +12,7 @@ import { requiresDynamicApiDiag, requiresDynamicPackageDiag } from "../../diagno
 import { esmNamedImportLinkCrash, isCjsJsFile, isJsSourceFile, locOf, npmPackageNameOf } from "../program.js";
 import { foldedStringKeyOf, lowerDynObjectLiteral } from "./expressions/object-literals.js";
 import { isSafeToRepeat } from "./expressions/evaluation-safety.js";
-import { PoisonError, dynUndefinedExpr, newFnCtx, nodeThrowExpr, own } from "./lowerer.js";
+import { PoisonError, newFnCtx, own } from "./lowerer.js";
 import {
   NODE24_FETCH_COMPAT_PROFILE,
   STATIC_HEADERS_CALLS,

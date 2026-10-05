@@ -1,3 +1,4 @@
+import { dynUndefinedExpr, nodeThrowExpr } from "../../ir/build.js";
 import { InternalCompilerError } from "../../errors.js";
 /* Class lowering: shape collection over the single-inheritance graph
  * (fields, methods, accessors, overrides), constructor/member lowering with
@@ -10,7 +11,7 @@ import { BOOL, DATE_T, DYN, F64, bytesOf, type IrClassDef, type IrExpr, type IrF
 import { MAX_GENERIC_INSTANCES, appendImplicitUndefinedReturn, bodyReadsArguments, generatorMeta, genericCallInstance, hasExplicitJsDocReturn, implicitAnyParamSymbolsOf, implicitCallInstance, implicitMonoFile, omittedArgFor, type GenericFnInfo, type ParamShape } from "./lower-calls.js";
 import { isGenericCallableMemberType, jsOpenObjectType, typeKey, withUnitArm } from "../type-mapper.js";
 import { cjsClassExprWholeExportOf, isCjsJsFile, isJsSourceFile, isModuleExportsAccess, isNodeTypesPath, locOf } from "../program.js";
-import { PoisonError, dynFallbackType, dynUndefinedExpr, newFnCtx, nodeThrowExpr, own } from "./lowerer.js";
+import { PoisonError, dynFallbackType, newFnCtx, own } from "./lowerer.js";
 import { lowerArrayConstructor, lowerMapSeedNew, lowerObjectConstructor, lowerSetSeedNew } from "./lower-containers.js";
 import { bufEncoding } from "./containers/bytes.js";
 import { isSafeToRepeat } from "./expressions/evaluation-safety.js";
@@ -6403,7 +6404,7 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
         if (values.some((value) => value.type.kind === "dyn" || value.type.kind === "regex")) {
           const checked = [0, 1].map((index): IrExpr => values[index]
             ? lowerer.coerceInto(args[index]!, values[index]!, DYN)
-            : { kind: "dynFrom", value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc }, type: DYN, loc });
+            : dynUndefinedExpr(loc));
           return { kind: "libCall", fn: "regex.newChecked", args: checked, type: { kind: "regex" }, loc };
         }
         const strArg = (a: ts.Expression | undefined, what: string): IrExpr => {
@@ -6890,10 +6891,10 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
         const t = lowerer.mapTypeOf(lowerer.typeOf(expr));
         if (t?.kind !== "record") lowerer.badType(expr, lowerer.typeOf(expr));
         const key = `x509.record:${isBytes ? "bytes" : "str"}`;
-        let helper = lowerer.widthHelpers.get(key);
+        let helper = lowerer.valueHelpers.get(key);
         if (!helper) {
-          helper = `%x509.record.${lowerer.widthHelpers.size}`;
-          lowerer.widthHelpers.set(key, helper);
+          helper = `%x509.record.${lowerer.valueHelpers.size}`;
+          lowerer.valueHelpers.set(key, helper);
           const dataT = data.type;
           const dRef: IrExpr = { kind: "varRef", localId: "d.0", type: dataT, loc };
           const field = (

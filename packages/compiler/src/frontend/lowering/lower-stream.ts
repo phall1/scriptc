@@ -1,3 +1,4 @@
+import { nodeThrowExpr, boolLit, numLit, strLit } from "../../ir/build.js";
 import { InternalCompilerError } from "../../errors.js";
 /* The node:stream lowering (the spoke-module pattern, like
  * lower-event-emitter.ts): construction of the five runtime stream classes
@@ -29,7 +30,7 @@ import { InternalCompilerError } from "../../errors.js";
  * its Node signature (the emitter listener rule). */
 import * as ts from "../ts7/adapter.js";
 import type { Lowerer } from "./lowerer.js";
-import { dynFallbackType, nodeThrowExpr } from "./lowerer.js";
+import { dynFallbackType } from "./lowerer.js";
 import type { ClassInfo } from "./lower-classes.js";
 import { isJsSourceFile, locOf } from "../program.js";
 import { newFnCtx, own } from "./lowerer.js";
@@ -37,7 +38,7 @@ import { appendImplicitUndefinedReturn } from "./lower-calls.js";
 import { bufEncoding, knownBufEncoding } from "./containers/bytes.js";
 import { tryLowerExpression } from "./expressions/try-lower-expression.js";
 import { BOOL, DYN, F64, type IrExpr, type IrFunction, type IrLibFn, type IrStmt, type IrType, RUNTIME_STREAM_CLASSES, STRING, type SrcLoc, VOID, arrayOf, BYTES_U8, canBoxFuncIntoDyn, funcOf, typeEquals, typeKey } from "../../ir/ir.js";
-import { boolLit, numLit, strLit } from "../../ir/build.js";
+
 
 const BYTES = BYTES_U8;
 
