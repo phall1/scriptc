@@ -12,7 +12,7 @@
  * This pass runs once per lowered statement (lowerStmts calls it inside the
  * per-statement poison window) and re-checks every libCall / strIntrinsic /
  * regexIntrinsic / arrIntrinsic / callValue argument against the SAME
- * signature tables the validator enforces (exported from ir/validate.ts —
+ * signature tables the validator enforces (owned by the IR contract —
  * one table, two consumers, no drift):
  *
  *   - a dyn argument whose slot dynCheck can validate (JSON-safe types,
@@ -59,7 +59,8 @@ import {
   isUnitType,
   typeEquals,
 } from "../../ir/ir.js";
-import { LIB_FN_SIGS, REGEX_INTRINSIC_SIGS, STR_INTRINSIC_SIGS } from "../../ir/validate.js";
+import { LIB_FN_SIGS } from "../../ir/builtin-signatures.js";
+import { REGEX_INTRINSIC_SIGS, STR_INTRINSIC_SIGS } from "../../ir/intrinsic-signatures.js";
 import { unionMismatchDiag, unsupportedDiag } from "../../diagnostics/diagnostic.js";
 
 /** What a dynCheck can validate — coerceToExpected's dyn→typed domain,

@@ -1,7 +1,8 @@
 import { everyModuleNode, everyStmtList, transformStmtList } from "../ir/traverse.js";
 import type { LlvmUnsupportedError } from "./llvm/emitter.js";
 import type { ScrDiagnostic } from "../diagnostics/diagnostic.js";
-import { moduleUsesFetch, moduleEmbedsBuiltin, type IrModule, type SrcLoc } from "../ir/ir.js";
+import { type IrModule, type SrcLoc } from "../ir/ir.js";
+import { moduleUsesFetch, moduleEmbedsBuiltin } from "../ir/runtime-features.js";
 
 /** Reflection tables expose methods that the program never calls. On WASI,
  * keep their host-only implementations as explicit runtime refusals. Typed

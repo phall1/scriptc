@@ -47,14 +47,13 @@ import type { ContractFacts } from "../frontend/lib-contract.js";
 import type { LowerResult } from "../frontend/lowering/lowerer.js";
 import type { FrontendFactory } from "../frontend/pipeline.js";
 import {
-  moduleLibAsyncSurface,
-  moduleLibNondeterministicSurface,
   type IrFfiImport,
   type IrLibSection,
   type IrModule,
   type IrRecordShape,
   type IrType,
 } from "../ir/ir.js";
+import { moduleLibAsyncSurface, moduleLibNondeterministicSurface } from "./ir-policy.js";
 import { validateModule } from "../ir/validate.js";
 
 /** The marshalling-class fit over IR types (design §4.2 + the ratified

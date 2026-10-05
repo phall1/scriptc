@@ -8,13 +8,13 @@ import { analyze, compile, compileC, deserializeModule, serializeModule } from "
 import { emitLlvmModule } from "../../packages/compiler/src/backend/llvm/emitter.js";
 import { scalarizeNumericRecords } from "../../packages/compiler/src/ir/scalar-records.js";
 import { everyStmtList } from "../../packages/compiler/src/ir/traverse.js";
+import { type IrModule } from "../../packages/compiler/src/ir/ir.js";
 import {
   moduleUsesCopying,
   moduleUsesDynInvoke,
   moduleUsesInspect,
   moduleUsesRegex,
-  type IrModule,
-} from "../../packages/compiler/src/ir/ir.js";
+} from "../../packages/compiler/src/ir/runtime-features.js";
 import {
   emissionCases,
   emissionModule,

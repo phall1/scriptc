@@ -1735,7 +1735,7 @@ export const BUILTIN_MODULE_FN_ALIASES: Record<
 /** Ambient surfaces lowered through DEDICATED code paths (no lowering-table
  * row): the Date compositions, perf_hooks' performance.now, and the process
  * global's ambient reads and authority calls. These are the determinism
- * attestation's ground (ir/ir.ts's LIB_NONDETERMINISTIC_PREFIXES), so
+ * attestation's ground (library/ir-policy.ts's LIB_NONDETERMINISTIC_PREFIXES), so
  * each row projects one surface-manifest entry — a permanent, fenceable id
  * — and carries the libCall spellings that witness the surface's reach in
  * a compiled graph (the fence detector and the attestation must agree; the

@@ -43,10 +43,6 @@ import {
   isFfiContextParam,
   isRefCounted,
   isUnitType,
-  moduleRuntimeFeatures,
-  moduleEmbedsBuiltin,
-  moduleEmbedsCompressedNpm,
-  NPM_COMPRESS_MIN,
   POINTER_KINDS,
   RUNTIME_EMITTER_CLASS,
   RUNTIME_ERROR_CLASSES,
@@ -54,6 +50,12 @@ import {
   typeKey,
   VOID,
 } from "../../ir/ir.js";
+import {
+  moduleRuntimeFeatures,
+  moduleEmbedsBuiltin,
+  moduleEmbedsCompressedNpm,
+  NPM_COMPRESS_MIN,
+} from "../../ir/runtime-features.js";
 import {
   matchIntegerArrayForLoop,
   matchIntegerBytesForLoop,

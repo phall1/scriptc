@@ -45,7 +45,7 @@ import { InternalCompilerError } from "../errors.js";
  * reach that slot proved whole-in-range. Undeclared numeric slots keep
  * spelling `f64` and the empty list stays a valid attestation that no
  * slot was integer-classed. `deterministic` is computed from the module
- * graph (ir/ir.ts's conservative ambient-surface scan), never
+ * graph (ir-policy.ts's conservative ambient-surface scan), never
  * defaulted. */
 import { Buffer } from "node:buffer";
 import { readFileSync } from "node:fs";

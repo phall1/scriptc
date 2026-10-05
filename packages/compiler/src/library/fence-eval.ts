@@ -17,7 +17,7 @@
  *   - a fenced STATIC entry is policed against the COMPILED module graph:
  *     the emit pass lowers only reachability-discovered bodies, so the
  *     module IR *is* the reached graph — the same ground the sidecar's
- *     `deterministic` attestation stands on (ir/ir.ts's
+ *     `deterministic` attestation stands on (library/ir-policy.ts's
  *     moduleLibNondeterministicSurface). Fence evaluation reuses that
  *     posture with one generic walk collecting the reached surface facts
  *     (libCall spellings, str/arr/map/set intrinsic methods); each fenced

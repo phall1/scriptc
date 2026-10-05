@@ -738,7 +738,7 @@ test("constructing a spread RequestInit does not apply fetch conversion fences",
 
 /* ── attestation ↔ fence parity: the ask-5 §4 invariant's ground ─────────
  * The library sidecar's `deterministic` attestation demotes on libCall
- * spellings by prefix (ir/ir.ts's LIB_NONDETERMINISTIC_PREFIXES); the
+ * spellings by prefix (library/ir-policy.ts's LIB_NONDETERMINISTIC_PREFIXES); the
  * profile's determinism fences deny surfaces by manifest id. The §4
  * invariant — a program that compiles under full fences attests
  * deterministic: true — holds only if every spelling the attestation

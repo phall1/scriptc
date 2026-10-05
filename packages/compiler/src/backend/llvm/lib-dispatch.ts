@@ -6,7 +6,8 @@ import { emitDatagramLibCall } from "./lib-datagram.js";
 import { emitTestLibCall } from "./lib-test.js";
 /* Focused LLVM library-call emission extracted from emitter.ts. */
 import { InternalCompilerError } from "../../errors.js";
-import { MAY_THROW_LIB_FNS } from "../../ir/ir.js";
+
+import { MAY_THROW_LIB_FNS } from "../../ir/builtin-effects.js";
 import { LlvmUnsupportedError } from "./unsupported.js";
 import type { LlvmEmitterContext, LibCallExpr, LibCallPrefix, LlValue } from "./expr-context.js";
 import { LIB_FN_SYMS, USES_TIMERS_LIB_FNS } from "./lib-shared.js";

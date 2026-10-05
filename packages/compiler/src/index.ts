@@ -92,7 +92,8 @@ import {
   libraryIdentityHashes,
   updateSidecarIdentity,
 } from "./library/sidecar.js";
-import { moduleRuntimeFeatures, type IrModule, type SrcLoc } from "./ir/ir.js";
+import { type IrModule, type SrcLoc } from "./ir/ir.js";
+import { moduleRuntimeFeatures } from "./ir/runtime-features.js";
 import { serializeModule } from "./ir/serialize.js";
 import { validateModule } from "./ir/validate.js";
 import { loadProgram } from "./frontend/program-node.js";
@@ -179,7 +180,8 @@ export {
   type FetchCompatOption,
   type FetchCompatProfile,
 } from "./compat/fetch-profile.js";
-export { LIB_FN_SIGS, validateModule } from "./ir/validate.js";
+export { LIB_FN_SIGS } from "./ir/builtin-signatures.js";
+export { validateModule } from "./ir/validate.js";
 export { deserializeModule, IR_VERSION, serializeModule } from "./ir/serialize.js";
 export {
   resolveLibraryFences,
@@ -256,7 +258,7 @@ export {
   type ProvenancePackageSource,
   type ProvenanceSources,
 } from "./frontend/provenance-registry.js";
-export * as ir from "./ir/ir.js";
+export * as ir from "./ir/api.js";
 
 /** Clang may print every warning from the generated/runtime translation
  * units before the actionable linker failure. Keep the source diagnostic

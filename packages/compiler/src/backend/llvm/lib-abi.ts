@@ -1,6 +1,7 @@
 /** Argument marshalling at the runtime C ABI boundary. */
 import { InternalCompilerError } from "../../errors.js";
-import { MAY_THROW_LIB_FNS, type IrType } from "../../ir/ir.js";
+import { type IrType } from "../../ir/ir.js";
+import { MAY_THROW_LIB_FNS } from "../../ir/builtin-effects.js";
 import type { LibCallExpr, LlValue, LlvmEmitterContext } from "./expr-context.js";
 import { vAdapters } from "./shapes.js";
 
