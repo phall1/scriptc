@@ -420,18 +420,48 @@ void scr_regex_reset_last_index(ScrRegex *re, double index) {
   re->last_index = index;
 }
 
-bool scr_regex_test(ScrRegex *re, ScrStr *s) {
-  ScrArr *result = scr_regex_exec(s, re);
-  bool matched = result != NULL;
-  scr_arr_release(result);
-  return matched;
-}
-
 static int scr_regex_start(ScrRegex *re, int len) {
   double index = re->last_index;
   if (isnan(index) || index <= 0) return 0;
   if (index > len) return -1;
   return (int)floor(index);
+}
+
+/* A predicate needs only the match boundary, not the captured strings or
+ * result metadata. Short ASCII subjects already have the engine's one-byte
+ * representation. Bound that scan so a long mixed-text subject does not
+ * traverse an ASCII prefix twice before matching. Other subjects use exec's
+ * UTF-16 conversion. Register storage is bounded by alloc_count, not captures. */
+bool scr_regex_test(ScrRegex *re, ScrStr *s) {
+  uint8_t *bc = scr_regex_bc(re);
+  bool ascii = s->len <= 256;
+  size_t i = 0;
+  for (; ascii && s->len - i >= sizeof(uint64_t); i += sizeof(uint64_t)) {
+    uint64_t word;
+    memcpy(&word, s->data + i, sizeof word);
+    if (word & UINT64_C(0x8080808080808080)) ascii = false;
+  }
+  for (; ascii && i < s->len; i++) {
+    if ((unsigned char)s->data[i] >= 0x80) ascii = false;
+  }
+  int len;
+  uint16_t *converted = ascii ? NULL : scr_to_utf16(s, &len);
+  const uint8_t *subject = ascii ? (const uint8_t *)s->data : (const uint8_t *)converted;
+  if (ascii) len = (int)s->len;
+  uint8_t *registers[32];
+  uint8_t **capture = lre_get_alloc_count(bc) <= 32 ? registers : scr_capture_alloc(bc);
+  bool stateful = (lre_get_flags(bc) & (LRE_FLAG_GLOBAL | LRE_FLAG_STICKY)) != 0;
+  int pos = stateful ? scr_regex_start(re, len) : 0;
+  int rc = pos < 0 ? 0 : lre_exec(capture, bc, subject, pos, len, ascii ? 0 : 1, lre_opaque());
+  if (rc < 0) {
+    fflush(stdout);
+    scr_trap("scriptc: regular expression execution failed\n");
+  }
+  if (stateful) re->last_index = rc == 1
+    ? (double)((capture[1] - subject) >> (ascii ? 0 : 1)) : 0;
+  if (capture != registers) free(capture);
+  free(converted);
+  return rc == 1;
 }
 
 /* ── match ────────────────────────────────────────────────────────────── */
@@ -1170,7 +1200,16 @@ ScrRegex *scr_regex_new(ScrStr *pattern, ScrStr *flags) {
   }
   re->rc = 1;
   re->source = pattern->len > 0 ? scr_str_retain(pattern) : scr_str_new("(?:)", 4);
-  re->flags = scr_str_retain(flags);
+  /* Public flags use getter order, independently of constructor spelling.
+   * Validate first so duplicates and invalid flags retain their errors. */
+  char canonical[6];
+  size_t flag_count = 0;
+  const char *order = "gimsuy";
+  for (unsigned i = 0; i < 6; i++) {
+    if (seen_flags & (1u << i)) canonical[flag_count++] = order[i];
+  }
+  re->flags = flag_count == flags->len && memcmp(canonical, flags->data, flag_count) == 0
+    ? scr_str_retain(flags) : scr_str_new(canonical, flag_count);
   /* Eager compile — the literal path stays lazy (its failure is an
    * abort; tsc already parsed those patterns). */
   int lre_flags = scr_lre_flags(re->flags);

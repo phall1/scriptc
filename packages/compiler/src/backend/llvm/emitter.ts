@@ -52,10 +52,11 @@ import { mangleArgPack, mangleAsyncSpawn, mangleBorrowedFunction, mangleClassObj
 import { analyzeCallLifetimes, type CallLifetimes } from "./call-lifetimes.js";
 import { emitStackUnion, findLocalStackUnions } from "./stack-unions.js";
 import { BlockBuilder } from "./blocks.js";
-import { emitLocalArrayRead, findArrayPreservingFunctions, findLocalArrayReads, findCallArrayReads, OptionalArrayReads, type LocalArrayRead } from "./local-array-reads.js";
+import { emitLocalArrayRead, findLocalArrayReads, findCallArrayReads, OptionalArrayReads, type LocalArrayRead } from "./local-array-reads.js";
 import { emitStackMapRead, findMapReadLifetimes, type MapReadLifetimes } from "./map-read-lifetimes.js";
 import { emitBorrowedFieldSequence } from "./borrowed-receivers.js";
 import { emitBorrowedInput } from "./borrowed-inputs.js";
+import { ReferenceEffects } from "./reference-effects.js";
 import { LlvmDebugInfo } from "./debug-info.js";
 import { f64Lit, ffiNativeTypeLl, ffiNativeParamLl, ffiNativeReturnLl, llvmCommentText } from "./common.js";
 import { ffiExtendsNarrowIntegers } from "../targets.js";
@@ -235,6 +236,7 @@ export class LlEmitter {
    * immortal (rc == SIZE_MAX) static per (union, unit tag).
    * RC entry points and the collector skip immortals. */
   private readonly unitInstances = new Map<string, string>();
+  private readonly immortalValues = new Set<string>();
   /** Regex literal templates: "<flags>/<pattern>" → { symbol, interned
    * source/flags literal refs } — one immortal ScrRegex template per distinct
    * (pattern, flags) pair; the bytecode slot starts null and the runtime
@@ -269,7 +271,7 @@ export class LlEmitter {
   private needsRetainBox = false;
 
   readonly fnByName = new Map<string, IrFunction>();
-  private readonly arrayPreservingFunctions: ReadonlySet<string>;
+  readonly referenceEffects: ReferenceEffects;
   private readonly optionalArrayReads: OptionalArrayReads;
   callArrayReads = new Map<IrExpr, LocalArrayRead>();
   mapReadLifetimes: MapReadLifetimes = { locals: new Map(), arguments: new Map() };
@@ -446,7 +448,7 @@ export class LlEmitter {
     }
     for (const u of mod.unions ?? []) this.unionsById.set(u.id, u);
     this.optionalArrayReads = new OptionalArrayReads(this.fnByName, this.unionsById);
-    this.arrayPreservingFunctions = findArrayPreservingFunctions(this.fnByName, this.unionsById, this.optionalArrayReads);
+    this.referenceEffects = new ReferenceEffects(this.fnByName, (call) => this.optionalArrayReads.get(call) !== null);
     this.callLifetimes = analyzeCallLifetimes(this.fnByName);
     for (const r of mod.records ?? []) this.recordsById.set(r.id, r);
     const traced = computeTraced(mod);
@@ -2419,7 +2421,9 @@ export class LlEmitter {
       lit = { sym: `sc_lit_${this.literals.size}`, len: Buffer.byteLength(text, "utf8") };
       this.literals.set(text, lit);
     }
-    return `@${lit.sym}`;
+    const name = `@${lit.sym}`;
+    this.immortalValues.add(name);
+    return name;
   }
 
   /** Interned NUL-terminated C-string constant (the scr_jb_puts /
@@ -2452,7 +2456,9 @@ export class LlEmitter {
       sym = `sc_unit_${this.unitInstances.size}`;
       this.unitInstances.set(key, sym);
     }
-    return `@${sym}`;
+    const name = `@${sym}`;
+    this.immortalValues.add(name);
+    return name;
   }
 
   declare(decl: string): void {
@@ -2471,7 +2477,7 @@ export class LlEmitter {
 
   /** Registers an owned refcounted value on the current statement frame. */
   own(v: LlValue): LlValue {
-    if (isRefCounted(v.type)) this.currentFrame().push(v);
+    if (isRefCounted(v.type) && !this.immortalValues.has(v.name)) this.currentFrame().push(v);
     return v;
   }
 
@@ -2483,7 +2489,7 @@ export class LlEmitter {
 
   /** Strike a refcounted temp from its frame: ownership is being moved. */
   moveTemp(v: LlValue): void {
-    if (!isRefCounted(v.type)) return;
+    if (!isRefCounted(v.type) || this.immortalValues.has(v.name)) return;
     for (let i = this.frames.length - 1; i >= 0; i--) {
       const idx = this.frames[i]!.findIndex((e) => e.name === v.name);
       if (idx >= 0) {
@@ -2497,6 +2503,7 @@ export class LlEmitter {
   /** The retained (+1) read of a refcounted value — type-directed through
    * the `_v` table (immortals skip, exactly the C retain calls). */
   retainValue(name: string, type: IrType): string {
+    if (this.immortalValues.has(name)) return name;
     const t = this.B.tmp();
     this.B.line(`${t} = call ptr ${retainSym(this.shapeHost, type)}(ptr ${name})`);
     return t;
@@ -2505,6 +2512,7 @@ export class LlEmitter {
   /** The release call for one owned refcounted value — type-directed like
    * releaseCallC (all runtime releases are NULL-tolerant). */
   releaseValue(name: string, type: IrType): void {
+    if (this.immortalValues.has(name)) return;
     this.B.line(`call void ${releaseSym(this.shapeHost, type)}(ptr ${name})`);
   }
 
@@ -3336,8 +3344,8 @@ export class LlEmitter {
     this.integerViews.clear();
     this.fieldPointerTags.clear();
     this.integerArrayBindings.clear();
-    this.localArrayReads = findLocalArrayReads(fn, this.fnByName, this.unionsById, this.arrayPreservingFunctions, this.callLifetimes, this.optionalArrayReads);
-    this.callArrayReads = findCallArrayReads(fn, this.optionalArrayReads, this.arrayPreservingFunctions, this.callLifetimes);
+    this.localArrayReads = findLocalArrayReads(fn, this.fnByName, this.unionsById, this.referenceEffects.functions, this.callLifetimes, this.optionalArrayReads);
+    this.callArrayReads = findCallArrayReads(fn, this.optionalArrayReads, this.referenceEffects.functions, this.callLifetimes);
     this.mapReadLifetimes = findMapReadLifetimes(fn, this.unionsById, this.callLifetimes);
     this.localStackUnions = findLocalStackUnions(fn, this.callLifetimes, this.unionsById);
     this.integerRanges = analyzeIntegerRanges(fn);

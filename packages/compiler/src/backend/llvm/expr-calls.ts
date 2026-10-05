@@ -11,6 +11,7 @@ import { f64Lit, ffiNativeTypeLl, ffiNativeParamLl, ffiNativeReturnLl } from "./
 import { canStackUnion, emitStackUnion } from "./stack-unions.js";
 import { emitCallArrayRead } from "./local-array-reads.js";
 import { emitStackMapRead } from "./map-read-lifetimes.js";
+import { borrowableInputs } from "./borrowed-inputs.js";
 
 export function emitCallExpr(host: LlvmEmitterContext, e: ExprOf<"call" | "ffiCall" | "closure" | "callValue" | "selfRef" | "new" | "classRef" | "newValue" | "instanceOfValue" | "promiseVoidWiden" | "upcast" | "downcast" | "instanceOf" | "virtualCall">): LlValue {
     const B = host.B;
@@ -21,6 +22,7 @@ export function emitCallExpr(host: LlvmEmitterContext, e: ExprOf<"call" | "ffiCa
         if (callee.captures !== undefined) throw new InternalCompilerError(`llvm emitter bug: direct call to lifted function ${e.callee}`);
         const borrowed = host.callLifetimes.borrowed.get(e.callee);
         const projected = host.callLifetimes.parameters.get(e.callee);
+        const inputs = borrowed ? borrowableInputs(host, e.args, host.referenceEffects.functions.has(e.callee)) : [];
         // Borrowed snapshots live through this call, not through the whole
         // enclosing expression. Otherwise a large initializer accumulates
         // owners and repeats their cleanup at every later throwing call.
@@ -41,7 +43,7 @@ export function emitCallExpr(host: LlvmEmitterContext, e: ExprOf<"call" | "ffiCa
               }
               if (canStackUnion(a, host.unionsById)) return emitStackUnion(host, a).value;
             }
-            if (host.canBorrowCallArgument(a)) return host.emitReadReceiver(a);
+            if (inputs[index]) return host.emitReadReceiver(a);
           }
           return host.emitExpr(a);
         });

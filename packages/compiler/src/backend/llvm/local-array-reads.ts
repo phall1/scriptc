@@ -2,8 +2,7 @@ import { isRefCounted, typeEquals, type IrExpr, type IrFunction, type IrType, ty
 import { everyStmtList } from "../../ir/traverse.js";
 import { analyzeCallLifetimes, type CallLifetimes } from "./call-lifetimes.js";
 import type { LlValue, LlvmEmitterContext } from "./expr-context.js";
-import { isStableReceiverOperand } from "../../ir/analysis.js";
-import { borrowsStringInputs } from "./string-lifetimes.js";
+import { ReferenceEffects } from "./reference-effects.js";
 
 export interface LocalArrayRead {
   type: IrType;
@@ -15,64 +14,10 @@ export interface LocalArrayRead {
   borrow?: boolean;
 }
 
-/** With no reference writes, callbacks or suspension, an unboxed array
- * parameter owns all its elements throughout the function. Scalar field
- * writes are allowed: they cannot remove an array edge. A direct call's
- * arguments are visited too, independently of the callee's guarantee. */
-function preservesArrayElements(fn: IrFunction, preservesCall: (call: IrExpr & { kind: "call" }) => boolean): boolean {
-  if (fn.async || fn.generator || fn.captures || fn.classCaptures) return false;
-  return everyStmtList(fn.body, {
-    expr: (e) => {
-      switch (e.kind) {
-        case "numLit": case "boolLit": case "strLit": case "varRef": case "bin": case "unary": case "incDec":
-        case "toBool": case "logical": case "ternary": case "seqExpr": case "fieldGet": case "recordGet":
-        case "unionNarrow": case "unionIsTag": case "strConcat": case "strEq": case "strCmp": return true;
-        case "strIntrinsic": return borrowsStringInputs(e.method);
-        case "libCall": return e.fn === "error.nodeThrow" || isStableReceiverOperand(e, "");
-        case "call": return preservesCall(e);
-        case "arrIntrinsic": return e.method === "length";
-        default: return false;
-      }
-    },
-    stmt: (s) => {
-      switch (s.kind) {
-        case "varDecl": case "exprStmt": case "return": case "if": case "for": case "while": case "doWhile":
-        case "block": case "break": case "continue": return true;
-        case "assign": case "fieldSet": case "recordSet": return !isRefCounted(s.value.type);
-        default: return false;
-      }
-    },
-  });
-}
-
-/** This proves only that existing reference edges survive a synchronous
- * call, not purity or absence of exceptions. Unknown effects remain unsafe.
- * Scan each body once, then propagate unsafe callees through reverse edges.
- * Each function is removed at most once, including recursive call groups. */
+/** Kept as the array-analysis entry point; the same edge-preservation
+ * proof also governs projections passed to borrowing consumers. */
 export function findArrayPreservingFunctions(functions: ReadonlyMap<string, IrFunction>, unions: ReadonlyMap<string, IrUnionDef>, reads = new OptionalArrayReads(functions, unions)): Set<string> {
-  const safe = new Set<string>();
-  const callers = new Map<string, Set<string>>();
-  const unsafe: string[] = [];
-  for (const fn of functions.values()) {
-    const preserves = preservesArrayElements(fn, (call) => {
-      if (reads.get(call)) return true;
-      if (!functions.has(call.callee)) return false;
-      let incoming = callers.get(call.callee);
-      if (!incoming) callers.set(call.callee, incoming = new Set());
-      incoming.add(fn.name);
-      return true;
-    });
-    if (preserves) safe.add(fn.name);
-    else unsafe.push(fn.name);
-  }
-  for (let i = 0; i < unsafe.length; i++) {
-    const incoming = callers.get(unsafe[i]!);
-    if (!incoming) continue;
-    for (const caller of incoming) {
-      if (safe.delete(caller)) unsafe.push(caller);
-    }
-  }
-  return safe;
+  return new ReferenceEffects(functions, (call) => reads.get(call) !== null).functions;
 }
 
 interface ArrayReadShape {

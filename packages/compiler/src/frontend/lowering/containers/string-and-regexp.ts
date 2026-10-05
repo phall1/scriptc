@@ -387,6 +387,12 @@ export function lowerRegexMethodCall(lowerer: Lowerer, call: ts.CallExpression,
     return lowerer.lowerExpr(access.expression);
   };
   const loc = locOf(call);
+  if (receiverKind === "regex" && name === "toString") {
+    if (call.arguments.length !== 0) {
+      lowerer.noLowering("RegExp.prototype.toString with arguments", call);
+    }
+    return { kind: "regexIntrinsic", method: "toString", receiver: lowerReceiver(), args: [], type: STRING, loc };
+  }
   if (receiverKind === "regex" && name === "test") {
     if (call.arguments.length > 1 || call.arguments.some(ts.isSpreadElement)) {
       lowerer.noLowering("RegExp.prototype.test with surplus or spread arguments", call);

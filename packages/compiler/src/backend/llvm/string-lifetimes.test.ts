@@ -97,6 +97,8 @@ test("string operands preserve their left-to-right snapshot when a later assignm
 
 test("an effectful later operand keeps mutable string arguments owned", () => {
   const source = fn("source", [], str("next"));
+  source.locals.push({ id: "changed", name: "changed", type: STRING, mutable: true });
+  source.body.unshift({ kind: "assign", localId: "changed", value: str("effect"), loc });
   const compare = fn("compare", ["text"], equal(ref("text"), call("source", [], STRING)));
   // A later write anywhere in this function rules out parameter borrowing.
   compare.body.unshift({ kind: "assign", localId: "text", value: str("first"), loc });
@@ -118,7 +120,7 @@ test("immutable lexical owners survive arbitrary later operands", () => {
   expect(ir).toContain("@scr_str_release");
 });
 
-test("reference fields borrow only at their immediate consuming operation", () => {
+test("reference fields borrow across preserving calls but snapshot across writes", () => {
   const record: IrType = { kind: "record", shapeId: "text" };
   const projection: IrExpr = { kind: "recordGet", obj: ref("holder", record), shapeId: "text", field: "value", type: STRING, loc };
   const source = fn("source", [], str("other"));
@@ -128,7 +130,10 @@ test("reference fields borrow only at their immediate consuming operation", () =
   const module = mod(source, f);
   module.records = [{ id: "text", fields: [{ name: "value", type: STRING }] }];
   const ir = body(module, "sc_bf_compare");
-  expect(ir.slice(0, ir.indexOf("@sc_f_source"))).toContain("@scr_str_retain_v");
+  expect(ir.slice(0, ir.indexOf("@sc_f_source"))).not.toContain("@scr_str_retain_v");
+  source.locals.push({ id: "changed", name: "changed", type: STRING, mutable: true });
+  source.body.unshift({ kind: "assign", localId: "changed", value: str("effect"), loc });
+  expect(body(module, "sc_bf_compare")).toContain("@scr_str_retain_v");
   f.body = [ret(equal(str("constant"), projection))];
   expect(body(module, "sc_bf_compare")).not.toContain("@scr_str_retain_v");
 });
@@ -163,7 +168,7 @@ test("indirect calls keep the ordinary ABI even for a borrowing body", () => {
   const llvm = emitLlvmModule(mod(inspect, caller));
   expect(llvm).toContain("@sc_f_inspect");
   expect(body(mod(inspect, caller), "sc_f_inspect")).toContain("@scr_str_release");
-  expect(body(mod(inspect, caller), "sc_f_caller")).toContain("@scr_str_retain_v");
+  expect(body(mod(inspect, caller), "sc_f_caller")).not.toContain("@scr_str_retain_v");
 });
 
 test("string method admission is explicit and unknown methods stay conservative", () => {
@@ -208,6 +213,8 @@ test.each(methodCases)("$method passes borrowed string inputs through its runtim
 
 test("string search snapshots both receiver and needle before an effectful numeric argument", () => {
   const position = fn("position", [], num(0));
+  position.locals.push({ id: "changed", name: "changed", type: STRING, mutable: true });
+  position.body.unshift({ kind: "assign", localId: "changed", value: str("effect"), loc });
   const search = fn("search", ["text", "needle"], intrinsic(ref("text"), "indexOf", [ref("needle"), call("position", [], F64)], F64));
   search.body.unshift(
     { kind: "assign", localId: "text", value: str("abc"), loc },
@@ -218,13 +225,14 @@ test("string search snapshots both receiver and needle before an effectful numer
   const searchCall = ir.indexOf("@scr_str_index_of");
   expect(start).toBeGreaterThan(0);
   expect(searchCall).toBeGreaterThan(start);
-  // Initializers own their literals and both reads take independent snapshots.
-  expect(ir.slice(0, start).match(/@scr_str_retain_v/g)).toHaveLength(4);
+  // Literals need no owner, but both reads take independent snapshots.
+  expect(ir.slice(0, start).match(/@scr_str_retain_v/g)).toHaveLength(2);
   expect(ir.slice(searchCall)).toContain("@scr_str_release");
 });
 
 test("global string ownership cannot be inferred from an immutable-looking reference", () => {
   const replacement = fn("replacement", [], str("later"));
+  replacement.body.unshift({ kind: "assign", localId: "%g.global", value: str("replaced"), loc });
   const inspect = fn("inspect", [], equal(ref("%g.global"), call("replacement", [], STRING)));
   const module = mod(replacement, inspect);
   module.globals = [{ id: "%g.global", name: "global", type: STRING, mutable: true }];

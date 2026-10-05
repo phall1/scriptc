@@ -5,6 +5,8 @@ import { type IrExpr, type IrType, isRefCounted, type SrcLoc, typeEquals } from 
 import { LlvmUnsupportedError } from "./unsupported.js";
 import type { LlvmEmitterContext, LlValue } from "./expr-context.js";
 import { f64Lit, llvmCommentText } from "./common.js";
+import { emitBorrowedInputs, emitBorrowedInput } from "./borrowed-inputs.js";
+import { preservesRegexInputs } from "./reference-effects.js";
 
 /** Widen one tagged read. The source is borrowed unless the overflow map
  * supplied an owned value. Each selected reference payload is retained
@@ -45,8 +47,12 @@ export function emitUnionWiden(
 export function emitRegexIntrinsic(host: LlvmEmitterContext, e: IrExpr & { kind: "regexIntrinsic" }): LlValue {
     const B = host.B;
     const method = e.method;
-    const r = host.emitExpr(e.receiver);
-    const args = e.args.map((a) => host.emitExpr(a));
+    const inputs = [e.receiver, ...e.args];
+    const values = preservesRegexInputs(method) ? emitBorrowedInputs(host, inputs)
+      : method === "matchAllInto" ? inputs.map((a) => emitBorrowedInput(host, a))
+      : inputs.map((a) => host.emitExpr(a));
+    const r = values[0]!;
+    const args = values.slice(1);
     const fallible = (sym: string, argText: string): LlValue => {
       host.declare(`declare ptr @${sym}(${argText.split(", ").map(() => "ptr").join(", ")})`);
       const t = B.tmp();

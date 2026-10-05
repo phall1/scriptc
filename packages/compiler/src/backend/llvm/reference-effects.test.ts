@@ -1,0 +1,51 @@
+import { expect, test } from "vitest";
+import { F64, STRING, VOID, type IrExpr, type IrFunction, type IrStmt } from "../../ir/ir.js";
+import { ReferenceEffects, preservesRegexInputs } from "./reference-effects.js";
+
+const loc = { file: "effects.ts", start: 0, end: 0 };
+const number: IrExpr = { kind: "numLit", value: 1, type: F64, loc };
+const text: IrExpr = { kind: "strLit", value: "text", type: STRING, loc };
+const call = (callee: string, args: IrExpr[] = []): IrExpr => ({ kind: "call", callee, args, type: F64, loc });
+function fn(name: string, expressions: IrExpr[] = []): IrFunction {
+  return { name, params: [], locals: [], body: expressions.map((expr) => ({ kind: "exprStmt", expr, loc })), returnType: VOID, loc };
+}
+function effects(functions: IrFunction[]): ReferenceEffects {
+  return new ReferenceEffects(new Map(functions.map((f) => [f.name, f])), () => false);
+}
+
+test("reference preservation allows recursive scalar work but propagates a reference write", () => {
+  const first = fn("first", [call("second")]), second = fn("second", [call("first")]);
+  second.body.push({ kind: "assign", localId: "scalar", value: number, loc });
+  const safe = effects([first, second]);
+  expect(safe.functions).toEqual(new Set(["first", "second"]));
+  expect(safe.preserves(call("first"))).toBe(true);
+  second.body.push({ kind: "assign", localId: "owner", value: text, loc });
+  expect(effects([first, second]).functions.size).toBe(0);
+});
+
+test("later argument statements and indirect calls remain part of the lifetime proof", () => {
+  const summary = effects([fn("read")]);
+  const assignment: IrExpr = { kind: "assignExpr", localId: "owner", value: text, type: STRING, loc };
+  const sequence: IrExpr = { kind: "seqExpr", stmts: [{ kind: "assign", localId: "owner", value: text, loc }], result: number, type: F64, loc };
+  expect(summary.preserves(call("read", [assignment]))).toBe(false);
+  expect(summary.preserves(call("read", [sequence]))).toBe(false);
+  expect(summary.preserves(call("unknown"))).toBe(false);
+  expect(summary.preserves(call("read", [number]))).toBe(true);
+});
+
+test("suspending bodies and environments cannot inherit synchronous guarantees", () => {
+  const async = fn("async"); async.async = true;
+  const capture = fn("capture"); capture.captures = [];
+  const callers = [fn("a", [call("async")]), fn("b", [call("capture")])];
+  expect(effects([async, capture, ...callers]).functions.size).toBe(0);
+  expect(preservesRegexInputs("futureMethod")).toBe(false);
+  expect(preservesRegexInputs("matchAllInto")).toBe(false);
+});
+
+test("long call graphs use a worklist and facts are rebuilt for changed bodies", () => {
+  const functions = Array.from({ length: 2000 }, (_, i) => fn(`f${i}`, i === 1999 ? [] : [call(`f${i + 1}`)]));
+  expect(effects(functions).functions.size).toBe(functions.length);
+  const write: IrStmt = { kind: "assign", localId: "owner", value: text, loc };
+  functions[1999]!.body.push(write);
+  expect(effects(functions).functions.size).toBe(0);
+});

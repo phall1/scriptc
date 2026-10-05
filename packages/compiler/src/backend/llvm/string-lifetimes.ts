@@ -1,6 +1,7 @@
 import { isStableReceiverOperand } from "../../ir/analysis.js";
 import type { IrExpr, IrStrIntrinsicMethod } from "../../ir/ir.js";
 import type { LlValue, LlvmEmitterContext } from "./expr-context.js";
+import { borrowableInputs } from "./borrowed-inputs.js";
 
 /** These methods consume string pointers only for the duration of their
  * runtime call. Reference results carry their own owner, even when the
@@ -37,13 +38,14 @@ function preservesStringInputs(value: IrExpr, localId: string): boolean {
 
 /** Evaluate left to right. An immutable local or immortal literal owns its
  * value across later operands. A writable binding needs a snapshot unless
- * the remaining expressions preserve it. Projections can be borrowed only
- * at their immediate use; arbitrary expressions keep ordinary ownership. */
+ * the remaining expressions preserve it. Projections also require those
+ * expressions to preserve every reference edge; other values keep ownership. */
 export function emitStringInputs(host: LlvmEmitterContext, inputs: readonly IrExpr[]): LlValue[] {
+  const borrowed = borrowableInputs(host, inputs);
   return inputs.map((value, index) => {
     if (value.type.kind !== "string") return host.emitExpr(value);
     if (value.kind === "strLit") return { name: host.internLiteral(value.value), type: value.type };
-    if (host.canBorrowCallArgument(value) || index === inputs.length - 1) return host.emitReadReceiver(value);
+    if (borrowed[index]) return host.emitReadReceiver(value);
     if (value.kind === "varRef" && inputs.slice(index + 1).every((next) => preservesStringInputs(next, value.localId))) {
       return host.emitReadReceiver(value);
     }

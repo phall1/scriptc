@@ -179,10 +179,13 @@ test("mutable caller bindings take owned snapshots before later arguments", () =
   expect(main.lastIndexOf("@scr_union_release")).toBeGreaterThan(main.indexOf("@sc_bf_read"));
 });
 
-test("globals take snapshots even when declared constant", () => {
+test("globals borrow across preserving calls and snapshot across mutations", () => {
   const mod = fixture();
   mod.globals = [{ id: "%g.item", name: "item", type: optional, mutable: false }];
   mod.functions[0]!.body.push(effect(call("read", [ref("%g.item")], record)));
+  expect(body(emit(mod), "sc_f_main")).not.toContain("@scr_union_retain_v");
+  mod.globals![0]!.mutable = true;
+  mod.functions[1]!.body.unshift({ kind: "assign", localId: "%g.item", value: wrap(fresh()), loc });
   const main = body(emit(mod), "sc_f_main");
   expect(main).toContain("@scr_union_retain_v");
   expect(main).toContain("@scr_union_release");
@@ -249,6 +252,7 @@ test("adjacent throwing calls release argument snapshots before the next call", 
   reader.body.unshift(effect({ kind: "libCall", fn: "error.nodeThrow", type: record, loc, args: [num(),
     { kind: "strLit", value: "", type: STRING, loc }, { kind: "strLit", value: "failure", type: STRING, loc }] }));
   mod.globals = [{ id: "%g.item", name: "item", type: optional, mutable: true }];
+  reader.body.unshift({ kind: "assign", localId: "%g.item", value: wrap(fresh()), loc });
   const calls = Array.from({ length: 80 }, () => call("read", [ref("%g.item")], F64));
   mod.functions[0]!.body = [effect({ kind: "arrayLit", elems: calls, type: { kind: "array", elem: F64 }, loc })];
   const main = body(emit(mod), "sc_f_main");
@@ -262,6 +266,7 @@ test("adjacent throwing calls release argument snapshots before the next call", 
 
 test("a borrowed call returns a new owner before releasing argument snapshots", () => {
   const mod = fixture();
+  mod.functions[1]!.body.unshift({ kind: "assign", localId: "%g.item", value: wrap(fresh()), loc });
   mod.globals = [{ id: "%g.item", name: "item", type: optional, mutable: true }];
   mod.functions[0]!.body.push(effect(call("read", [ref("%g.item")], record)));
   const main = body(emit(mod), "sc_f_main");

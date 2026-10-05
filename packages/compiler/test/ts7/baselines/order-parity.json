@@ -14186,6 +14186,18 @@
     "<repo>/tests/corpus/heap-input-collections.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/input-lifetime-intervals.ts": {
+   "order": [
+    "<repo>/tests/corpus/input-lifetime-intervals.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/regex-input-lifetimes.ts": {
+   "order": [
+    "<repo>/tests/corpus/regex-input-lifetimes.ts"
+   ],
+   "diags": []
   }
  }
 }

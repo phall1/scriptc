@@ -100,7 +100,7 @@ test("LLVM hands off canonical string self-concats after suffix evaluation", () 
   const suffixBody = llvm.match(/define internal void @sc_f_suffixReassign\([^]*?\n\}/)?.[0];
   expect(suffixBody).toBeDefined();
   expectInOrder(suffixBody!, [
-    "call ptr @scr_str_retain_v", "store ptr %", "ptr %sc_l_acc",
+    "call ptr @scr_str_retain_v", "store ptr @sc_lit_", "ptr %sc_l_acc",
     "load ptr, ptr %sc_l_acc", "store ptr null, ptr %sc_l_acc",
     "call void @scr_str_release", "call ptr @scr_str_concat",
   ]);
@@ -110,7 +110,7 @@ test("LLVM hands off canonical string self-concats after suffix evaluation", () 
   expect(negative).toBeDefined();
   expect(negative).toContain("call ptr @scr_str_concat");
   const concat = negative!.indexOf("call ptr @scr_str_concat");
-  const initialized = negative!.match(/store ptr %\w+, ptr %sc_l_acc/);
+  const initialized = negative!.match(/store ptr (?:%\w+|@sc_lit_\d+), ptr %sc_l_acc/);
   expect(initialized).not.toBeNull();
   expect(negative!.slice(initialized!.index!, concat)).not.toContain("store ptr null, ptr %sc_l_acc");
 });
