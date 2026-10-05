@@ -73,7 +73,7 @@ import {
 } from "./optional-arguments.js";
 import { HTTP2_CONSTANTS } from "./http2-constants.js";
 import { CRYPTO_CIPHERS, CRYPTO_CONSTANTS, CRYPTO_CURVES, CRYPTO_HASHES } from "./crypto-tables.js";
-import { generatorMeta, type ParamShape } from "./lower-calls.js";
+import { generatorMeta, type ParamShape } from "./call-signatures.js";
 import { registerHttpClientFnBinding, voidizedCallback } from "./lower-server.js";
 import { pairsSnapshotHelper } from "./pairs-snapshot.js";
 import { isJsonStringifyDynamicType } from "../../ir/ir.js";

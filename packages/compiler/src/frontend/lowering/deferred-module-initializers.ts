@@ -11,7 +11,7 @@ import {
   type ClassInfo,
 } from "./lower-classes.js";
 import { classPrototypeData } from "./class-prototypes.js";
-import { bindingNeverReassigned } from "./lower-calls.js";
+import { bindingNeverReassigned } from "./binding-analysis.js";
 
 /** A registry of existing class/function values allocates data, but does
  * not execute those bodies. Keep its initializer at its source position

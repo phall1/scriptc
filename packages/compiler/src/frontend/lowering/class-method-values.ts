@@ -23,11 +23,8 @@ import {
   genericOverrideBelow,
   type ClassInfo,
 } from "./lower-classes.js";
-import {
-  funcTypeFromParamShapes,
-  implicitDefaultInstance,
-  type ParamShape,
-} from "./lower-calls.js";
+import { funcTypeFromParamShapes, type ParamShape } from "./call-signatures.js";
+import { implicitDefaultInstance } from "./generic-functions.js";
 import { errorToStringMethod } from "./error-methods.js";
 import { classCallbackValue, isClassCallback } from "./class-callbacks.js";
 

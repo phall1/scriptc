@@ -34,7 +34,7 @@ import { dynFallbackType } from "./lowerer.js";
 import type { ClassInfo } from "./lower-classes.js";
 import { isJsSourceFile, locOf } from "../program.js";
 import { newFnCtx, own } from "./lowerer.js";
-import { appendImplicitUndefinedReturn } from "./lower-calls.js";
+import { appendImplicitUndefinedReturn } from "./function-returns.js";
 import { bufEncoding, knownBufEncoding } from "./containers/bytes.js";
 import { tryLowerExpression } from "./expressions/try-lower-expression.js";
 import {

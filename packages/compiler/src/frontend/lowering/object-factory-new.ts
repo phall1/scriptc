@@ -2,7 +2,9 @@ import * as ts from "../ts7/adapter.js";
 import { DYN, type IrExpr, type IrType } from "../../ir/ir.js";
 import { isJsSourceFile, locOf } from "../program.js";
 import type { Lowerer } from "./lowerer.js";
-import { bindingNeverReassigned, implicitDefaultInstance, type FnSig } from "./lower-calls.js";
+import { bindingNeverReassigned } from "./binding-analysis.js";
+import { implicitDefaultInstance } from "./generic-functions.js";
+import { type FnSig } from "./call-signatures.js";
 
 /** An ordinary constructor's explicit object return replaces its receiver.
  * Without observing this or new.target, it can use the function's call ABI. */

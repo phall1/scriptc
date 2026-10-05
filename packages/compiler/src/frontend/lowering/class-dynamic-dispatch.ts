@@ -22,7 +22,8 @@ import {
 import { streamTypedRefEligible } from "../../ir/analysis.js";
 import { everyStmtList, transformExpr, transformStmtList } from "../../ir/traverse.js";
 import { PoisonError, type Lowerer } from "./lowerer.js";
-import { implicitDefaultInstance, type ParamShape } from "./lower-calls.js";
+import { implicitDefaultInstance } from "./generic-functions.js";
+import { type ParamShape } from "./call-signatures.js";
 import {
   accessorCall,
   classValueRef,

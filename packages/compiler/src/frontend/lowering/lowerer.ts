@@ -293,46 +293,44 @@ import {
   mixinCallClassInfoOf,
   mixinIntersectionInstanceType,
 } from "./lower-mixins.js";
-import { implicitAnyParamSymbolsOf } from "./lower-calls.js";
 import { tryLowerExpression } from "./expressions/try-lower-expression.js";
 import {
   type ParamShape,
   type FnSig,
-  type GenericFnInfo,
-  type GenericInstance,
-  bindingNeverReassigned,
-  bodyReadsArguments,
   funcTypeFromParamShapes,
-  implicitMonoFile,
   isThisParameter,
   paramShape,
   paramShapes,
   checkDefaultParamBodyType,
-  completeArgs,
-  wrappedUndefined,
-  undefinedArgFor,
   requireExactArityValue,
-  bodyReturnType,
-  declaredReturnType,
   collectSignature,
   collectSignatureInner,
+  lambdaSignature,
+} from "./call-signatures.js";
+import {
+  implicitAnyParamSymbolsOf,
+  type GenericFnInfo,
+  type GenericInstance,
+  implicitMonoFile,
   collectGenericSignature,
   genericFnOf,
   lowerGenericCall,
   lowerGenericFnValue,
   inferTypeParamBindings,
   lowerGenericInstance,
-  lowerCall,
-  lowerFfiCall,
-  lowerPromiseMethodCall,
-  lowerFilterNarrowCall,
+} from "./generic-functions.js";
+import { bindingNeverReassigned } from "./binding-analysis.js";
+import { bodyReadsArguments } from "../arguments-usage.js";
+import { completeArgs, wrappedUndefined, undefinedArgFor } from "./call-arguments.js";
+import { bodyReturnType, declaredReturnType } from "./function-returns.js";
+import { lowerCall, lowerPromiseMethodCall, lowerFilterNarrowCall } from "./lower-calls.js";
+import { lowerFfiCall, validateFfiImports } from "./native-ffi.js";
+import {
   isTopLevelFnSymbol,
   lowerNestedFunctionDecl,
-  lambdaSignature,
   lowerLambda,
   lowerFunction,
-  validateFfiImports,
-} from "./lower-calls.js";
+} from "./lower-functions.js";
 import {
   lowerArrayMethodCall,
   lowerMapMethodCall,
@@ -1749,8 +1747,8 @@ export class Lowerer {
    * the body needs — indexed accesses (`T[K]` needs K's literal key) and
    * keyed record reads (`o[k]` where k's type is a literal-bound K). */
   typeParamTsBindings: Map<ts.Symbol, ts.Type> | null = null;
-  /** Non-null while an IMPLICIT-ANY instance body lowers (npm-static JS —
-   * lower-calls' implicit-monomorphization section): bound param symbol →
+  /** Non-null while an IMPLICIT-ANY instance body lowers (npm-static JS;
+   * see generic-functions.ts): bound param symbol →
    * the call site's checker type, consulted by typeOf for identifier
    * references the checker still types `any`. The implicit twin of
    * typeParamBindings — the checker has no `T` to substitute, so the

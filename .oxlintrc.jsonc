@@ -114,6 +114,43 @@
       },
     },
     {
+      // Call contracts and function construction must not depend on dispatch.
+      "files": [
+        "packages/compiler/src/frontend/lowering/call-signatures.ts",
+        "packages/compiler/src/frontend/lowering/call-arguments.ts",
+        "packages/compiler/src/frontend/lowering/function-returns.ts",
+        "packages/compiler/src/frontend/lowering/generic-functions.ts",
+        "packages/compiler/src/frontend/lowering/binding-analysis.ts",
+        "packages/compiler/src/frontend/lowering/native-ffi.ts",
+        "packages/compiler/src/frontend/lowering/lower-functions.ts",
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**/lower-calls", "**/lower-calls.*"],
+                "message": "call contracts and function construction must not import call dispatch; import the implementation owner.",
+              },
+              {
+                "group": ["**/backend/*", "**/backend/**"],
+                "message": "frontend must not import backend; use the IR interface.",
+              },
+              {
+                "group": ["**/ir/validate", "**/ir/validate.*"],
+                "message": "frontend must not import IR validation; use the shared builtin and intrinsic signatures.",
+              },
+              {
+                "group": ["typescript5", "typescript5/**"],
+                "message": "typescript5 is restricted to the explicit parser islands; TypeScript AST worlds must not mix.",
+              },
+            ],
+          },
+        ],
+      },
+    },
+    {
       // Only strings and offsets cross these TypeScript 5 parser islands.
       "files": [
         "packages/compiler/src/frontend/npm.ts",

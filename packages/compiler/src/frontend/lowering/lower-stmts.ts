@@ -103,17 +103,19 @@ import {
   bindingGenericFnAliasInfoOf,
   bindingGenericFnInfoOf,
   bindingGenericFnNodeOf,
-  bindingNeverReassigned,
-  deadUnmappableBinding,
-  hasExplicitJsDocReturn,
   implicitLocalFnInfoOf,
   implicitLocalFnNodeOf,
   implicitMethodCallInfersReturn,
+} from "./generic-functions.js";
+import {
+  bindingNeverReassigned,
+  deadUnmappableBinding,
   nullishExprUnitOf,
   nullishGenericBindingUnitOf,
-  recordKeysArrayCall,
-  registerOverloadedCallableAlias,
-} from "./lower-calls.js";
+} from "./binding-analysis.js";
+import { hasExplicitJsDocReturn } from "./function-returns.js";
+import { recordKeysArrayCall } from "./lower-calls.js";
+import { registerOverloadedCallableAlias } from "./call-signatures.js";
 import { isMixinFnBinding, mixinResultBindingClassOf } from "./lower-mixins.js";
 import type { ClassInfo, ClassIteratorInfo } from "./lower-classes.js";
 import { isCompiledPrototypeMember } from "./class-prototypes.js";
@@ -1302,7 +1304,7 @@ export function lowerStmt(lowerer: Lowerer, stmt: ts.Statement): IrStmt | IrStmt
   if (ts.isForOfStatement(stmt)) return lowerer.lowerForOf(stmt);
   if (ts.isLabeledStatement(stmt)) return lowerLabeled(lowerer, stmt);
   if (ts.isReturnStatement(stmt)) {
-    // Implicit-any instance RETURN INFERENCE (lower-calls'
+    // Implicit-any instance RETURN INFERENCE (function-returns.ts
     // resolveInferredReturn): the value lowers BARE and the statement
     // records itself — the post-pass settles the instance's return type
     // over every recorded return and wraps them in place. A VOID-typed
