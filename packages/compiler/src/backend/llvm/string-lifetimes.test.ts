@@ -49,12 +49,13 @@ test("string comparisons borrow parameters while owned entry adapters release th
   }
 });
 
-test("returning the input retains the owned calling convention", () => {
+test("returning a borrowed input acquires a result owner", () => {
   const identity = fn("identity", ["text"], ref("text"));
   expect(facts(identity).parameters.size).toBe(0);
-  const ir = body(mod(identity), "sc_f_identity");
+  const ir = body(mod(identity), "sc_bf_identity");
   expect(ir).toContain("@scr_str_retain_v");
-  expect(ir).toContain("@scr_str_release");
+  expect(ir).not.toContain("@scr_str_release");
+  expect(body(mod(identity), "sc_f_identity")).toContain("@scr_str_release");
 });
 
 test("literal arguments remain immortal while the called body borrows them", () => {
@@ -112,8 +113,8 @@ test("immutable lexical owners survive arbitrary later operands", () => {
   f.body.unshift({ kind: "varDecl", localId: "text", init: str("first"), loc });
   const ir = body(mod(source, f), "sc_f_compare");
   const sourceCall = ir.indexOf("@sc_f_source");
-  // Only the initializer takes a reference; the comparison borrows it.
-  expect(ir.slice(0, sourceCall).match(/@scr_str_retain_v/g)).toHaveLength(1);
+  // The literal is immortal, so its lexical alias and comparison borrow it.
+  expect(ir.slice(0, sourceCall)).not.toContain("@scr_str_retain_v");
   expect(ir).toContain("@scr_str_release");
 });
 

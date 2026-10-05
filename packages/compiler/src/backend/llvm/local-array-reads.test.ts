@@ -42,7 +42,7 @@ function candidates(mod: IrModule) {
   return findLocalArrayReads(mod.functions[2]!, functions, unions, findArrayPreservingFunctions(functions, unions));
 }
 function workBody(mod: IrModule, pointerBits: 32 | 64 = 64) {
-  return /^define internal [^\n]*@sc_f_work\([^]*?^}/m.exec(emitLlvmModule(mod, { pointerBits }))![0];
+  return /^define internal [^\n]*@sc_(?:b)?f_work\([^]*?^}/m.exec(emitLlvmModule(mod, { pointerBits }))![0];
 }
 
 test("private optional array results use local tags and borrowed payloads on both ABIs", () => {
@@ -53,7 +53,7 @@ test("private optional array results use local tags and borrowed payloads on bot
     const body = workBody(mod, pointerBits);
     expect(body).toContain("alloca %ScrUnion");
     expect(body).toContain("@scr_arr_peek_ref");
-    expect(body).not.toContain("@sc_f_read(");
+    expect(body).not.toContain("@sc_bf_read(");
     expect(body).not.toContain("@scr_union_release");
     expect(body).not.toContain("@sc_rretain_");
     expect(body).not.toContain("@sc_rrelease_");
@@ -198,7 +198,7 @@ test("keeps optional array boxes local across transitive projection helpers", ()
     const body = workBody(mod, width);
     expect(body).toContain("alloca %ScrUnion");
     expect(body).toContain("@sc_bf_outer");
-    expect(body).not.toContain("@sc_f_read(");
+    expect(body).not.toContain("@sc_bf_read(");
     expect(body).not.toMatch(/@scr_union_(?:new|retain|release)/);
     expect(body).not.toContain("@sc_rretain_");
     expect(body).not.toContain("@sc_rrelease_");
@@ -234,7 +234,7 @@ test("an escaping leaf restores heap boxes throughout a recursive forwarding gro
   expect(validateModule(mod)).toEqual([]);
   expect(candidates(mod).has("value")).toBe(false);
   const body = workBody(mod);
-  expect(body).toContain("@sc_f_read(");
+  expect(body).toContain("@sc_bf_read(");
   expect(body).toContain("@scr_union_release");
 });
 
@@ -294,7 +294,7 @@ test("immediate optional reads borrow preserved parameter edges on both pointer 
     expect(ir).toContain("alloca %ScrUnion");
     expect(ir).toContain("@sc_bf_consume");
     expect(ir).toContain("local.array.dense");
-    expect(ir).not.toContain("@sc_f_read");
+    expect(ir).not.toContain("@sc_bf_read");
     expect(ir).not.toContain("@scr_union_new_ref");
     expect(ir).not.toContain("@scr_union_release");
     expect(ir).not.toContain("@sc_rretain_");
@@ -339,7 +339,7 @@ test("mutation inside the consuming helper also snapshots an immediate payload",
   expect(ir).toContain("@sc_rrelease_");
 });
 
-test("escaping consumers keep the heap union and ordinary call", () => {
+test("escaping consumers keep a heap union across a borrowed call", () => {
   const module = immediateFixture();
   const consume = module.functions[3]!;
   consume.returnType = optional;
@@ -348,8 +348,8 @@ test("escaping consumers keep the heap union and ordinary call", () => {
   immediateCall(module).type = optional;
   expect(immediateFacts(module).size).toBe(0);
   const ir = workBody(module);
-  expect(ir).toContain("@sc_f_read");
-  expect(ir).toContain("@sc_f_consume");
+  expect(ir).toContain("@sc_bf_read");
+  expect(ir).toContain("@sc_bf_consume");
   expect(ir).not.toContain("alloca %ScrUnion");
 });
 
@@ -371,7 +371,7 @@ test("indirect consumers do not receive immediate stack unions", () => {
     args: call.args, type: F64, loc,
   } }];
   expect(immediateFacts(module).size).toBe(0);
-  expect(workBody(module)).toContain("@sc_f_read");
+  expect(workBody(module)).toContain("@sc_bf_read");
 });
 
 test("each immediate argument has separate tag and payload storage", () => {
@@ -387,7 +387,7 @@ test("each immediate argument has separate tag and payload storage", () => {
   const ir = workBody(module);
   expect(ir.match(/alloca %ScrUnion/g)).toHaveLength(2);
   expect(ir.match(/@scr_arr_peek_ref/g)).toHaveLength(2);
-  expect(ir).not.toContain("@sc_f_read");
+  expect(ir).not.toContain("@sc_bf_read");
 });
 
 test("throwing later arguments release a completed read snapshot", () => {
@@ -417,7 +417,7 @@ test("a temporary array receiver lives through its indexed lookup", () => {
   const ir = workBody(module);
   expect(ir.indexOf("@scr_arr_new")).toBeLessThan(ir.indexOf("@scr_arr_peek_ref"));
   expect(ir).toContain("@scr_arr_release");
-  expect(ir).not.toContain("@sc_f_read");
+  expect(ir).not.toContain("@sc_bf_read");
 });
 
 test("helper recognition is reused by multiple sites and isolated to one finalized module", () => {

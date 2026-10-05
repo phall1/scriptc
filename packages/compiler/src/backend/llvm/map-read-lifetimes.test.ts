@@ -113,13 +113,17 @@ test("typed read helpers borrow string keys while mutations retain the owned con
   expect(keyFacts()).toBeUndefined();
 });
 
-test("an effectful key keeps the receiver snapshot alive before evaluating the key", () => {
+test("effectful keys borrow unchanged bindings and snapshot reassigned receivers", () => {
   const mod = fixture();
   const fn = mod.functions[1]!;
   const init = fn.body[0]!;
   if (init.kind !== "varDecl" || init.init?.kind !== "mapIntrinsic") throw new Error("missing lookup");
   init.init.args[0] = { kind: "call", callee: "key", args: [], type: F64, loc };
   mod.functions.push({ name: "key", params: [], locals: [], body: [{ kind: "return", value: { kind: "numLit", value: 0, type: F64, loc }, loc }], returnType: F64, loc });
+  expect(body(mod)).not.toContain("@scr_map_retain_v");
+  const work = mod.functions[1]!;
+  const type = work.params[0]!.type;
+  work.body.splice(1, 0, { kind: "assign", localId: "map", value: ref("map", type), loc });
   const ir = body(mod);
   expect(ir.indexOf("@scr_map_retain_v")).toBeGreaterThan(0);
   expect(ir.indexOf("@scr_map_retain_v")).toBeLessThan(ir.indexOf("@sc_f_key"));

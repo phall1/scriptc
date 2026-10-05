@@ -1,4 +1,4 @@
-import { type IrExpr, type IrFunction, type IrLocal, type IrStmt } from "../../ir/ir.js";
+import { isRefCounted, type IrExpr, type IrFunction, type IrLocal, type IrStmt } from "../../ir/ir.js";
 import { everyExprChild, everyStmtChild } from "../../ir/traverse.js";
 import { borrowsStringInputs } from "./string-lifetimes.js";
 import { borrowsMapReadInputs } from "./map-read-lifetimes.js";
@@ -10,6 +10,7 @@ interface ForwardedUse {
 
 interface Uses {
   invalid: Set<string>;
+  written: Set<string>;
   declarations: Map<string, number>;
   forwards: Map<string, ForwardedUse[]>;
 }
@@ -20,6 +21,13 @@ interface Parameter {
 }
 
 export interface CallLifetimes {
+  /** Unchanged heap bindings can borrow the caller's owner. Copies that
+   * escape through returns, stores or other calls still acquire ownership.
+   * This does not permit passing a stack box to the parameter. */
+  borrowed: Map<string, Set<number>>;
+  /** Locals initialized once and never assigned or captured. A source let
+   * binding may be stable too; source mutability alone is not a write. */
+  bindings: Map<string, Set<string>>;
   /** Parameters consumed only by projections, borrowing string operations,
    * or other proven parameters.
    * This is a lifetime fact, not a purity or nonthrowing guarantee. */
@@ -45,7 +53,7 @@ function eligible(local: IrLocal, parameter = false): boolean {
  * payloads. The enclosing union box itself must never be retained, released,
  * stored, returned, captured, or passed to arbitrary runtime code. */
 function collectUses(fn: IrFunction): Uses {
-  const uses: Uses = { invalid: new Set(), declarations: new Map(), forwards: new Map() };
+  const uses: Uses = { invalid: new Set(), written: new Set(), declarations: new Map(), forwards: new Map() };
   const stringInput = (value: IrExpr): boolean => {
     if (value.kind === "varRef" && value.type.kind === "string") return true;
     return expr(value);
@@ -77,11 +85,18 @@ function collectUses(fn: IrFunction): Uses {
           forwards.push({ callee: node.callee, index });
         });
         return true;
-      case "varRef": case "assignExpr": case "incDec":
+      case "assignExpr": case "incDec":
+        uses.written.add(node.localId);
+        uses.invalid.add(node.localId);
+        break;
+      case "varRef":
         uses.invalid.add(node.localId);
         break;
       case "closure": case "classRef":
-        for (const id of node.captures ?? []) uses.invalid.add(id);
+        for (const id of node.captures ?? []) {
+          uses.invalid.add(id);
+          uses.written.add(id);
+        }
         break;
     }
     return everyExprChild(node, expr, stmt);
@@ -93,15 +108,22 @@ function collectUses(fn: IrFunction): Uses {
         break;
       case "assign": case "forOf": case "rethrow":
         uses.invalid.add(node.localId);
+        uses.written.add(node.localId);
         break;
       case "tryCatch":
-        if (node.catchLocalId !== null) uses.invalid.add(node.catchLocalId);
+        if (node.catchLocalId !== null) {
+          uses.invalid.add(node.catchLocalId);
+          uses.written.add(node.catchLocalId);
+        }
         break;
     }
     return everyStmtChild(node, expr, stmt);
   }
   fn.body.forEach(stmt);
-  for (const capture of [...(fn.captures ?? []), ...(fn.classCaptures ?? [])]) uses.invalid.add(capture.localId);
+  for (const capture of [...(fn.captures ?? []), ...(fn.classCaptures ?? [])]) {
+    uses.invalid.add(capture.localId);
+    uses.written.add(capture.localId);
+  }
   return uses;
 }
 
@@ -118,12 +140,21 @@ export function analyzeCallLifetimes(functions: ReadonlyMap<string, IrFunction>)
   const usesByFunction = new Map<string, Uses>();
   const nodes = new Map<string, Parameter[]>();
   const unsafe: Parameter[] = [];
-  const result: CallLifetimes = { parameters: new Map(), locals: new Map() };
+  const result: CallLifetimes = { parameters: new Map(), locals: new Map(), borrowed: new Map(), bindings: new Map() };
   for (const fn of functions.values()) {
     if (fn.async || fn.generator || fn.captures !== undefined || fn.classCaptures !== undefined) continue;
     const uses = collectUses(fn);
     usesByFunction.set(fn.name, uses);
     const locals = new Map(fn.locals.map((local) => [local.id, local]));
+    const borrowed = new Set<number>();
+    const stable = (local: IrLocal): boolean => !local.boxed && !local.tdz && !uses.written.has(local.id);
+    fn.params.forEach((param, index) => {
+      const local = locals.get(param.localId);
+      if (local && isRefCounted(param.type) && stable(local) && !uses.declarations.has(local.id)) borrowed.add(index);
+    });
+    if (borrowed.size > 0) result.borrowed.set(fn.name, borrowed);
+    result.bindings.set(fn.name, new Set(fn.locals.filter((local) =>
+      stable(local) && uses.declarations.get(local.id) === 1).map((local) => local.id)));
     nodes.set(fn.name, fn.params.map((param) => {
       const local = locals.get(param.localId);
       const safe = local !== undefined && eligible(local, true) && !uses.invalid.has(param.localId) && !uses.declarations.has(param.localId);

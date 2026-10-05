@@ -3636,6 +3636,13 @@ function buildArrayFromArrayFn(lowerer: Lowerer, name: string, elem: IrType,
       const v = receiverIr.value.kind === "dyn"
         ? lowerer.lowerCollectionKey(call.arguments[1]!, receiverIr.value)
         : lowerer.lowerExprExpecting(call.arguments[1]!, receiverIr.value);
+      // A discarded set result needs no second receiver read or identity
+      // owner. Keep the ordinary operand order: receiver, key, then value.
+      let parent: ts.Node | undefined = call.parent;
+      while (ts.isParenthesizedExpression(parent)) parent = parent.parent;
+      if (ts.isExpressionStatement(parent)) {
+        return { kind: "mapIntrinsic", method: "set", receiver, args: [k, v], type: VOID, loc };
+      }
       const slot = lowerer.declareHiddenLocal("%mapSetReceiver", receiver.type);
       const ref = varRef(slot.id, receiver.type, loc);
       return { kind: "seqExpr", stmts: [

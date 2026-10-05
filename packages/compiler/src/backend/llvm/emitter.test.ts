@@ -179,7 +179,7 @@ function sharedFieldModule(prefixes: IrType[][], fieldType: IrType): IrModule {
 test("wide unions share field reads with identical storage prefixes", () => {
   for (const pointerBits of [32, 64] as const) {
     const llvm = emitLlvmModule(sharedFieldModule(Array.from({ length: 128 }, () => [BOOL, STRING]), STRING), { pointerBits });
-    const body = /^define internal [^\n]*@sc_f_read\([^]*?^}/m.exec(llvm)![0];
+    const body = /^define internal [^\n]*@sc_bf_read\([^]*?^}/m.exec(llvm)![0];
     expect(body).not.toContain("switch i32");
     expect(body).toMatch(/icmp ult i32 %\w+, 128/);
     expect(body).toContain("call void @sc_bad_tag()");
@@ -190,7 +190,7 @@ test("wide unions share field reads with identical storage prefixes", () => {
 test("different union field offsets retain per-variant dispatch", () => {
   for (const prefixes of [[[], [BOOL]], [[BOOL], [F64]], [[STRING], [BOOL]]]) {
     const llvm = emitLlvmModule(sharedFieldModule(prefixes, STRING));
-    const body = /^define internal [^\n]*@sc_f_read\([^]*?^}/m.exec(llvm)![0];
+    const body = /^define internal [^\n]*@sc_bf_read\([^]*?^}/m.exec(llvm)![0];
     expect(body).toContain("switch i32");
     expect(body.match(/call ptr @scr_str_retain_v/g)).toHaveLength(2);
   }
@@ -198,7 +198,7 @@ test("different union field offsets retain per-variant dispatch", () => {
 
 test("partially shared union layouts emit one read per storage prefix", () => {
   const llvm = emitLlvmModule(sharedFieldModule(Array.from({ length: 128 }, (_, index) => index % 2 ? [BOOL] : []), STRING));
-  const body = /^define internal [^\n]*@sc_f_read\([^]*?^}/m.exec(llvm)![0];
+  const body = /^define internal [^\n]*@sc_bf_read\([^]*?^}/m.exec(llvm)![0];
   expect(body).toContain("switch i32");
   expect(body.match(/call ptr @scr_str_retain_v/g)).toHaveLength(2);
   const destinations = [...body.matchAll(/i32 \d+, label %(u\.a\d+)/g)].map(match => match[1]);
@@ -208,7 +208,7 @@ test("partially shared union layouts emit one read per storage prefix", () => {
 
 test("shared boolean union fields keep their byte storage and scalar result", () => {
   const llvm = emitLlvmModule(sharedFieldModule([[], []], BOOL));
-  const body = /^define internal [^\n]*@sc_f_read\([^]*?^}/m.exec(llvm)![0];
+  const body = /^define internal [^\n]*@sc_bf_read\([^]*?^}/m.exec(llvm)![0];
   expect(body).not.toContain("switch i32");
   expect(body.match(/load i8, ptr/g)).toHaveLength(1);
   expect(body).toMatch(/trunc i8 %\w+ to i1/);

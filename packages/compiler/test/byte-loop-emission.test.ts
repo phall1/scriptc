@@ -15,7 +15,7 @@ test("byte loops remove proved bounds while preserving receiver identity and wid
     const mod = deserializeModule(await readFile(outPath, "utf8"));
     for (const pointerBits of [32, 64] as const) {
       const ll = emitLlvmModule(mod, { pointerBits, wasi: pointerBits === 32 });
-      const body = (name: string): string => ll.match(new RegExp(`define internal [^\\n]+ @sc_f_${name}\\([^\\n]*\\) #0 \\{([\\s\\S]*?)\\n\\}`))![1]!;
+      const body = (name: string): string => ll.match(new RegExp(`define internal [^\\n]+ @sc_(?:b)?f_${name}\\([^\\n]*\\) #0 \\{([\\s\\S]*?)\\n\\}`))![1]!;
       for (const name of ["neighbors", "backwards", "strided"]) {
         expect(body(name)).toContain("integer induction i");
         expect(body(name)).not.toContain("bytes.index.invalid");

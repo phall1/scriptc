@@ -9,6 +9,7 @@ import type { LlvmEmitterContext, ExprOf, LlValue } from "./expr-context.js";
 
 import { BYTES_ELEM_NUM, f64Lit } from "./common.js";
 import { emitStringInputs } from "./string-lifetimes.js";
+import { emitBorrowedInput } from "./borrowed-inputs.js";
 import { exactInteger, widenInteger, integerNumber } from "./integer-values.js";
 import { integerArithmeticRange } from "../../ir/integer-ranges.js";
 
@@ -520,7 +521,7 @@ export function emitContainerExpr(host: LlvmEmitterContext, e: ExprOf<"arrayLit"
         return out;
       }
       case "arrayGet": {
-        const arr = host.emitExpr(e.arr);
+        const arr = emitBorrowedInput(host, e.arr);
         const idx = host.emitExpr(e.index);
         if (e.arr.type.kind !== "array") throw new InternalCompilerError("llvm emitter bug: arrayGet on non-array");
         // Ref-element reads return +1 (the runtime retains); own registers
@@ -533,7 +534,7 @@ export function emitContainerExpr(host: LlvmEmitterContext, e: ExprOf<"arrayLit"
         return host.own({ name: t, type: e.type });
       }
       case "arrayHas": {
-        const arr = host.emitExpr(e.arr);
+        const arr = emitBorrowedInput(host, e.arr);
         const idx = host.emitExpr(e.index);
         if (e.arr.type.kind !== "array") throw new InternalCompilerError("llvm emitter bug: arrayHas on non-array");
         host.declare(`declare zeroext i1 @scr_arr_has(ptr, double)`);
@@ -542,7 +543,7 @@ export function emitContainerExpr(host: LlvmEmitterContext, e: ExprOf<"arrayLit"
         return { name: t, type: e.type };
       }
       case "arrayState": {
-        const arr = host.emitExpr(e.arr);
+        const arr = emitBorrowedInput(host, e.arr);
         const idx = host.emitExpr(e.index);
         if (e.arr.type.kind !== "array") throw new InternalCompilerError("llvm emitter bug: arrayState on non-array");
         host.declare(`declare double @scr_arr_state(ptr, double)`);

@@ -72,6 +72,8 @@ const programs = [
   "3120-ir-nonfinite-numbers.ts",
   "4031-event-emitter-long-tuples.ts",
   "text-codec-values/main.ts",
+  "heap-input-aliases.ts",
+  "heap-input-collections.ts",
 ];
 
 for (const backend of ["llvm"] as const) {

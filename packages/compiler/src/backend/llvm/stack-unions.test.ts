@@ -136,7 +136,8 @@ test("mixed signatures transfer owned arguments and retain only borrowed snapsho
   fn.params.push({ localId: "saved", name: "saved", type: optional });
   fn.locals.push({ id: "saved", name: "saved", type: optional, mutable: true });
   fn.returnType = optional;
-  fn.body = [effect(narrow(ref("value"), record)), ret(ref("saved"))];
+  fn.body = [effect(narrow(ref("value"), record)),
+    { kind: "assign", localId: "saved", value: wrap(fresh()), loc }, ret(ref("saved"))];
   mod.functions[0]!.body.push(effect(call("read", [wrap(fresh()), wrap(fresh())], optional)));
   const ir = emit(mod), main = body(ir, "sc_f_main"), adapter = body(ir, "sc_f_read");
   expect(main.match(/call ptr @scr_union_new_ref/g)).toHaveLength(1);
@@ -144,6 +145,22 @@ test("mixed signatures transfer owned arguments and retain only borrowed snapsho
   expect(adapter).toContain("@scr_union_release(ptr %p0)");
   expect(adapter).not.toContain("@scr_union_release(ptr %p1)");
   expect(body(ir, "sc_bf_read")).toContain("@scr_union_release");
+});
+
+test("a shared argument expression gets a stack box only at a projection-only position", () => {
+  const mod = fixture(), fn = mod.functions[1]!;
+  fn.params.push({ localId: "saved", name: "saved", type: optional });
+  fn.locals.push({ id: "saved", name: "saved", type: optional, mutable: true });
+  fn.returnType = optional;
+  fn.body = [effect(narrow(ref("value"), record)), ret(ref("saved"))];
+  const argument = wrap(fresh());
+  mod.functions[0]!.body.push(effect(call("read", [argument, argument], optional)));
+  const ir = emit(mod), main = body(ir, "sc_f_main");
+  expect(main.match(/call ptr @scr_union_new_ref/g)).toHaveLength(1);
+  expect(main.match(/alloca %ScrUnion/g)).toHaveLength(1);
+  expect(body(ir, "sc_bf_read")).toContain("@scr_union_retain_v");
+  expect(body(ir, "sc_bf_read")).not.toContain("@scr_union_release");
+  expect(body(ir, "sc_f_read")).toContain("@scr_union_release(ptr %p1)");
 });
 
 test("mutable caller bindings take owned snapshots before later arguments", () => {

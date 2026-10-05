@@ -56,7 +56,7 @@ console.log(work([new Item(7)], 0));
   const value = module.functions.find((fn) => fn.name === "value")!;
   expect(value.params[0]!.type.kind).toBe("union");
   const llvm = emitLlvmModule(module);
-  const work = body(llvm, "sc_f_work");
+  const work = body(llvm, "sc_bf_work");
   expect(work).toContain("alloca %ScrUnion");
   expect(work).toContain("@sc_bf_value");
   expect(work).not.toContain("@scr_union_new_ref");
@@ -74,11 +74,11 @@ function work(items: Item[]): number { return value(items[0], clear(items)); }
 console.log(work([new Item(7)]));
 `);
   const llvm = emitLlvmModule(module);
-  const work = body(llvm, "sc_f_work");
+  const work = body(llvm, "sc_bf_work");
   expect(work).toContain("alloca %ScrUnion");
   expect(work).toContain("@sc_retain_Item");
   expect(work).toContain("@sc_release_Item");
-  expect(work.indexOf("@sc_retain_Item")).toBeLessThan(work.indexOf("@sc_f_clear"));
+  expect(work.indexOf("@sc_retain_Item")).toBeLessThan(work.indexOf("@sc_bf_clear"));
   expect(work).not.toContain("@scr_union_release");
 });
 
@@ -91,7 +91,7 @@ console.log(work([new Item()]).value);
 `);
   const facts = analyzeCallLifetimes(new Map(module.functions.map((fn) => [fn.name, fn])));
   expect(facts.parameters.has("identity")).toBe(false);
-  expect(body(emitLlvmModule(module), "sc_f_work")).not.toContain("alloca %ScrUnion");
+  expect(body(emitLlvmModule(module), "sc_bf_work")).not.toContain("alloca %ScrUnion");
 });
 
 test("a helper's string projection retains an escaping result independently of the array", async () => {
@@ -102,7 +102,7 @@ function work(items: Item[]): string { return label(items[0]); }
 console.log(work([new Item("kept")]));
 `);
   const llvm = emitLlvmModule(module);
-  expect(body(llvm, "sc_f_work")).toContain("alloca %ScrUnion");
+  expect(body(llvm, "sc_bf_work")).toContain("alloca %ScrUnion");
   expect(body(llvm, "sc_bf_label")).toContain("@scr_str_retain_v");
   expect(body(llvm, "sc_bf_label")).not.toContain("@scr_union_retain_v");
 });
@@ -116,7 +116,7 @@ console.log(invoke(size, "indirect"));
   const llvm = emitLlvmModule(module);
   expect(body(llvm, "sc_bf_size")).not.toContain("@scr_str_release");
   expect(body(llvm, "sc_f_size")).toContain("@scr_str_release");
-  expect(body(llvm, "sc_f_invoke")).toContain("@scr_str_retain_v");
+  expect(body(llvm, "sc_bf_invoke")).toContain("@scr_str_retain_v");
 });
 
 test("many source call sites share one helper recognition without sharing stack storage", async () => {
@@ -126,7 +126,7 @@ function pair(left: Item, right: Item): number { return left.value + right.value
 function work(items: Item[]): number { return pair(items[0], items[1]) + pair(items[1], items[0]); }
 console.log(work([new Item(), new Item()]));
 `);
-  const work = body(emitLlvmModule(module), "sc_f_work");
+  const work = body(emitLlvmModule(module), "sc_bf_work");
   expect(work.match(/alloca %ScrUnion/g)).toHaveLength(4);
   expect(work.match(/@sc_bf_pair/g)).toHaveLength(2);
   expect(work).not.toContain("@scr_union_new_ref");
@@ -141,7 +141,7 @@ function fail(): number { throw new Error("failed"); }
 function work(items: Item[]): number { return read(items[0], fail()); }
 try { console.log(work([new Item()])); } catch {}
 `);
-  const work = body(emitLlvmModule(module), "sc_f_work");
+  const work = body(emitLlvmModule(module), "sc_bf_work");
   const failure = work.indexOf("@sc_f_fail");
   expect(failure).toBeGreaterThan(0);
   expect(work.slice(failure)).toContain("@scr_exc_pending");
@@ -155,7 +155,7 @@ function size(text: string): number { return text.length + text.charCodeAt(0); }
 function work(words: string[], index: number): number { return size(words[index]); }
 console.log(work(["first"], 0));
 `);
-  const work = body(emitLlvmModule(module), "sc_f_work");
+  const work = body(emitLlvmModule(module), "sc_bf_work");
   expect(work).toContain("alloca %ScrUnion");
   expect(work).toContain("@sc_bf_size");
   expect(work).not.toContain("@scr_str_retain_v");
@@ -170,7 +170,7 @@ function work(words: string[]): string { return trim(words[0]); }
 console.log(work([" first "]));
 `);
   const llvm = emitLlvmModule(module);
-  const work = body(llvm, "sc_f_work");
+  const work = body(llvm, "sc_bf_work");
   expect(work).toContain("alloca %ScrUnion");
   expect(work).not.toContain("@scr_str_retain_v");
   expect(body(llvm, "sc_bf_trim")).toContain("@scr_str_trim");
@@ -184,7 +184,7 @@ function clear(words: string[]): string { words.length = 0; return "f"; }
 function work(words: string[]): boolean { return prefix(words[0], clear(words)); }
 console.log(work(["first"]));
 `);
-  const work = body(emitLlvmModule(module), "sc_f_work");
+  const work = body(emitLlvmModule(module), "sc_bf_work");
   expect(work).toContain("alloca %ScrUnion");
   expect(work).toContain("@scr_str_retain_v");
   expect(work).toContain("@scr_str_release");
@@ -199,7 +199,7 @@ console.log(work([""], 0));
 `);
   const facts = analyzeCallLifetimes(new Map(module.functions.map((fn) => [fn.name, fn])));
   expect(facts.parameters.has("size")).toBe(false);
-  const work = body(emitLlvmModule(module), "sc_f_work");
+  const work = body(emitLlvmModule(module), "sc_bf_work");
   expect(work).not.toContain("alloca %ScrUnion");
-  expect(work).toContain("@sc_f_size");
+  expect(work).toContain("@sc_bf_size");
 });

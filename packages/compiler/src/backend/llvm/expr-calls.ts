@@ -19,23 +19,29 @@ export function emitCallExpr(host: LlvmEmitterContext, e: ExprOf<"call" | "ffiCa
         const callee = host.fnByName.get(e.callee);
         if (!callee) throw new InternalCompilerError(`llvm emitter bug: unknown callee ${e.callee}`);
         if (callee.captures !== undefined) throw new InternalCompilerError(`llvm emitter bug: direct call to lifted function ${e.callee}`);
-        const borrowed = host.callLifetimes.parameters.get(e.callee);
+        const borrowed = host.callLifetimes.borrowed.get(e.callee);
+        const projected = host.callLifetimes.parameters.get(e.callee);
         // Borrowed snapshots live through this call, not through the whole
         // enclosing expression. Otherwise a large initializer accumulates
         // owners and repeats their cleanup at every later throwing call.
         if (borrowed) host.frames.push([]);
         const args = e.args.map((a, index) => {
           if (borrowed?.has(index)) {
-            const read = host.callArrayReads.get(a);
-            if (read) return emitCallArrayRead(host, read);
-            const mapRead = host.mapReadLifetimes.arguments.get(a);
-            if (mapRead) {
-              const result = emitStackMapRead(host, mapRead);
-              if (result.owner) host.ownSlot(result.owner.slot, result.owner.type);
-              return result.value;
+            // A heap-borrowing helper may retain or return its argument.
+            // Only projection-only parameters may see an unowned stack box,
+            // including when one IR expression is shared by two positions.
+            if (projected?.has(index)) {
+              const read = host.callArrayReads.get(a);
+              if (read) return emitCallArrayRead(host, read);
+              const mapRead = host.mapReadLifetimes.arguments.get(a);
+              if (mapRead) {
+                const result = emitStackMapRead(host, mapRead);
+                if (result.owner) host.ownSlot(result.owner.slot, result.owner.type);
+                return result.value;
+              }
+              if (canStackUnion(a, host.unionsById)) return emitStackUnion(host, a).value;
             }
             if (host.canBorrowCallArgument(a)) return host.emitReadReceiver(a);
-            if (canStackUnion(a, host.unionsById)) return emitStackUnion(host, a).value;
           }
           return host.emitExpr(a);
         });

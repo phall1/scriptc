@@ -211,3 +211,53 @@ test("analysis does not mutate IR or carry stale facts across emissions", () => 
   expect(analyze(fn).parameters.size).toBe(0);
   expect(first.parameters.get("work")).toEqual(new Set([0]));
 });
+
+test("heap inputs may escape while projection-only facts remain restrictive", () => {
+  const fn = helper("identity");
+  fn.returnType = optional;
+  fn.body = [ret(ref("value"))];
+  const facts = analyze(fn);
+  expect(facts.borrowed.get(fn.name)).toEqual(new Set([0]));
+  expect(facts.parameters.has(fn.name)).toBe(false);
+});
+
+test("borrows unchanged collection and callback parameters without a callee effect proof", () => {
+  const types: IrType[] = [
+    { kind: "array", elem: record }, { kind: "map", key: F64, value: record },
+    { kind: "set", elem: record }, { kind: "bytes", elem: "u8" }, funcOf([record], record),
+  ];
+  for (const type of types) {
+    const fn = helper("forward");
+    fn.params[0]!.type = fn.locals[0]!.type = type;
+    fn.returnType = type;
+    fn.body = [ret({ kind: "call", callee: "unknown", args: [ref("value", type)], type, loc })];
+    expect(analyze(fn).borrowed.get(fn.name)).toEqual(new Set([0]));
+    expect(analyze(fn).parameters.has(fn.name)).toBe(false);
+  }
+});
+
+test.each(["boxed", "tdz", "capture", "class capture", "assign", "assign expression", "redeclare", "catch", "loop binding"])("heap borrowing excludes a %s parameter", (reason) => {
+  const fn = helper("identity");
+  fn.body = [ret(ref("value"))];
+  if (reason === "boxed") fn.locals[0]!.boxed = true;
+  if (reason === "tdz") fn.locals[0]!.tdz = true;
+  if (reason === "capture" || reason === "class capture") fn.body.unshift({ kind: "exprStmt", loc, expr: reason === "capture"
+    ? { kind: "closure", fnName: "callback", captures: ["value"], type: funcOf([], F64), loc }
+    : { kind: "classRef", className: "Local", captures: ["value"], type: { kind: "classval", className: "Local" }, loc } });
+  if (reason === "assign") fn.body.unshift({ kind: "assign", localId: "value", value: ref("value"), loc });
+  if (reason === "assign expression") fn.body.unshift({ kind: "exprStmt", loc, expr: { kind: "assignExpr", localId: "value", value: ref("value"), type: optional, loc } });
+  if (reason === "redeclare") fn.body.unshift({ kind: "varDecl", localId: "value", init: ref("value"), loc });
+  if (reason === "catch") fn.body.unshift({ kind: "tryCatch", tryBody: [], catchLocalId: "value", catchBody: [], finallyBody: [], loc });
+  if (reason === "loop binding") fn.body.unshift({ kind: "forOf", localId: "value", iterable: ref("items", { kind: "array", elem: optional }), body: [], loc });
+  expect(analyze(fn).borrowed.size).toBe(0);
+});
+
+test("unchanged let bindings can own call inputs but subsequent writes and captures invalidate them", () => {
+  const fn = helper("work", []);
+  fn.locals = [{ ...local("value"), mutable: true }];
+  fn.body = [{ kind: "varDecl", localId: "value", init: ref("outside"), loc }, ret(ref("value"))];
+  expect(analyze(fn).bindings.get(fn.name)).toEqual(new Set(["value"]));
+  fn.body.unshift({ kind: "if", cond: { kind: "boolLit", value: false, type: BOOL, loc },
+    then: [{ kind: "assign", localId: "value", value: ref("outside"), loc }], else_: [], loc });
+  expect(analyze(fn).bindings.get(fn.name)?.size).toBe(0);
+});

@@ -14174,6 +14174,18 @@
     "<repo>/tests/corpus/integer-loop-forms.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/heap-input-aliases.ts": {
+   "order": [
+    "<repo>/tests/corpus/heap-input-aliases.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/heap-input-collections.ts": {
+   "order": [
+    "<repo>/tests/corpus/heap-input-collections.ts"
+   ],
+   "diags": []
   }
  }
 }

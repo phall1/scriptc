@@ -8,6 +8,7 @@ import type { LlvmEmitterContext, LlValue } from "./expr-context.js";
 import { F64_INF, f64Lit } from "./common.js";
 import { borrowsStringInputs, emitStringInputs } from "./string-lifetimes.js";
 import { borrowsMapReadInputs } from "./map-read-lifetimes.js";
+import { emitBorrowedInput } from "./borrowed-inputs.js";
 
 export function resolveThunkFor(host: LlvmEmitterContext, inner: IrType): string {
     const key = typeKey(inner);
@@ -195,6 +196,7 @@ export function emitStrIntrinsic(host: LlvmEmitterContext, e: IrExpr & { kind: "
   }
 
 export function emitStableReceiver(host: LlvmEmitterContext, receiver: IrExpr, following: IrExpr[]): LlValue {
+    if (host.canBorrowCallArgument(receiver)) return host.emitReadReceiver(receiver);
     if (
       receiver.kind === "varRef" &&
       following.every((operand) => isStableReceiverOperand(operand, receiver.localId))
@@ -212,11 +214,12 @@ export function emitStableReceiver(host: LlvmEmitterContext, receiver: IrExpr, f
 
 export function emitArrIntrinsic(host: LlvmEmitterContext, e: IrExpr & { kind: "arrIntrinsic" }): LlValue {
     const B = host.B;
-    // Scalar reads do not invoke user code. A stable
-    // binding can own its receiver until that lookup finishes.
+    // Every array intrinsic borrows its receiver, including mutation and
+    // retained-identity results. Scalar reads also admit the narrower proof
+    // that a mutable binding survives the remaining operand evaluations.
     const r = e.method === "getNumber" || e.method === "indexEq" || e.method === "length"
       ? host.emitStableReceiver(e.receiver, e.args)
-      : host.emitExpr(e.receiver);
+      : emitBorrowedInput(host, e.receiver);
     if (e.receiver.type.kind !== "array") throw new InternalCompilerError("llvm emitter bug: arrIntrinsic on non-array");
     const elem = e.receiver.type.elem;
     const acc = elemAccess(elem);
@@ -275,7 +278,7 @@ export function emitArrIntrinsic(host: LlvmEmitterContext, e: IrExpr & { kind: "
       case "pushSpread": {
         // `a.push(...src)`: append src's elements in order (borrowed src,
         // count snapshotted). Result: the new length.
-        const src = host.emitExpr(e.args[0]!);
+        const src = emitBorrowedInput(host, e.args[0]!);
         host.emitArrayCopyLoop(r.name, src.name, acc);
         host.declare(`declare double @scr_arr_len(ptr)`);
         const t = B.tmp();
@@ -283,7 +286,7 @@ export function emitArrIntrinsic(host: LlvmEmitterContext, e: IrExpr & { kind: "
         return { name: t, type: e.type };
       }
       case "concatSpread": {
-        const src = host.emitExpr(e.args[0]!);
+        const src = emitBorrowedInput(host, e.args[0]!);
         host.declare(`declare double @scr_arr_concat_copy(ptr, ptr)`);
         const t = B.tmp();
         B.line(`${t} = call double @scr_arr_concat_copy(ptr ${r.name}, ptr ${src.name})`);
@@ -312,7 +315,7 @@ export function emitArrIntrinsic(host: LlvmEmitterContext, e: IrExpr & { kind: "
       }
       case "unshiftSpread": {
         // The runtime snapshots the borrowed source and handles self-spread.
-        const src = host.emitExpr(e.args[0]!);
+        const src = emitBorrowedInput(host, e.args[0]!);
         host.declare(`declare double @scr_arr_unshift_spread(ptr, ptr)`);
         const t = B.tmp();
         B.line(`${t} = call double @scr_arr_unshift_spread(ptr ${r.name}, ptr ${src.name})`);
@@ -387,7 +390,7 @@ export function emitArrIntrinsic(host: LlvmEmitterContext, e: IrExpr & { kind: "
         // elements ride the per-union join walker (nullish arms print
         // empty, everything else through the union ToString) — the C
         // emitter's sc_uj_*, ported in walkers.ts.
-        const sep = host.emitExpr(e.args[0]!);
+        const sep = emitBorrowedInput(host, e.args[0]!);
         if (elem.kind === "union") {
           const helper = host.walkers.unionJoinHelper(elem.unionId);
           const t = B.tmp();
@@ -425,7 +428,7 @@ export function emitArrIntrinsic(host: LlvmEmitterContext, e: IrExpr & { kind: "
       case "toSpliced": {
         const start = host.emitExpr(e.args[0]!);
         const count = host.emitExpr(e.args[1]!);
-        const items = host.emitExpr(e.args[2]!);
+        const items = emitBorrowedInput(host, e.args[2]!);
         host.declare(`declare ptr @scr_arr_to_spliced(ptr, double, double, ptr)`);
         const t = B.tmp();
         B.line(
@@ -436,7 +439,7 @@ export function emitArrIntrinsic(host: LlvmEmitterContext, e: IrExpr & { kind: "
       }
       case "with": {
         const index = host.emitExpr(e.args[0]!);
-        const value = host.emitExpr(e.args[1]!);
+        const value = emitBorrowedInput(host, e.args[1]!);
         host.declare(
           `declare ptr @scr_arr_with_${acc}(ptr, double, ${accArg})`,
         );
@@ -474,7 +477,7 @@ export function emitArrIntrinsic(host: LlvmEmitterContext, e: IrExpr & { kind: "
       case "spliceInsert": {
         const start = host.emitExpr(e.args[0]!);
         const count = host.emitExpr(e.args[1]!);
-        const items = host.emitExpr(e.args[2]!);
+        const items = emitBorrowedInput(host, e.args[2]!);
         host.declare(`declare ptr @scr_arr_splice_insert(ptr, double, double, ptr)`);
         const t = B.tmp();
         B.line(`${t} = call ptr @scr_arr_splice_insert(ptr ${r.name}, double ${start.name}, double ${count.name}, ptr ${items.name})`);
@@ -482,7 +485,7 @@ export function emitArrIntrinsic(host: LlvmEmitterContext, e: IrExpr & { kind: "
       }
       case "flatCopy":
       case "flatOne": {
-        const out = host.emitExpr(e.args[0]!);
+        const out = emitBorrowedInput(host, e.args[0]!);
         host.declare(`declare ptr @scr_arr_flat_copy(ptr, ptr, i1)`);
         const t = B.tmp();
         B.line(`${t} = call ptr @scr_arr_flat_copy(ptr ${r.name}, ptr ${out.name}, i1 ${method === "flatOne" ? 1 : 0})`);
@@ -541,7 +544,7 @@ export function emitMapNew(host: LlvmEmitterContext, e: IrExpr & { kind: "mapNew
     // key overwrites (the runtime releases the old value).
     const vAcc = elemAccess(value);
     for (const pair of e.seed ?? []) {
-      const k = host.emitExpr(pair.key);
+      const k = emitBorrowedInput(host, pair.key);
       const v = host.emitExpr(pair.value);
       if (vAcc === "ref") host.moveTemp(v); // the value MOVES in
       host.mapSet(m, kAcc, vAcc, k.name, v.name);
@@ -561,7 +564,7 @@ export function emitMapLikeIntrinsic(host: LlvmEmitterContext,
   ): LlValue {
     const B = host.B;
     const borrowInputs = borrowsMapReadInputs(e);
-    const r = borrowInputs ? host.emitStableReceiver(e.receiver, e.args) : host.emitExpr(e.receiver);
+    const r = borrowInputs ? host.emitStableReceiver(e.receiver, e.args) : emitBorrowedInput(host, e.receiver);
     const receiverType = e.receiver.type;
     if (e.kind === "mapIntrinsic" && receiverType.kind !== "map") {
       throw new InternalCompilerError("llvm emitter bug: mapIntrinsic on non-map");
@@ -707,7 +710,7 @@ export function emitMapLikeIntrinsic(host: LlvmEmitterContext,
         if (receiverType.kind !== "map") throw new InternalCompilerError("unreachable");
         // Key borrowed (the runtime retains stored string keys); the
         // value MOVES in (replacement releases the old value inside).
-        const k = host.emitExpr(e.args[0]!);
+        const k = emitBorrowedInput(host, e.args[0]!);
         const v = host.emitExpr(e.args[1]!);
         const vAcc = elemAccess(receiverType.value);
         if (vAcc === "ref") host.moveTemp(v);
@@ -718,7 +721,7 @@ export function emitMapLikeIntrinsic(host: LlvmEmitterContext,
         if (receiverType.kind !== "set") throw new InternalCompilerError("unreachable");
         // Element borrowed (the runtime retains stored strings); the unit
         // value is 0. Re-adding overwrites in place, preserving insertion.
-        const k = host.emitExpr(e.args[0]!);
+        const k = emitBorrowedInput(host, e.args[0]!);
         host.mapSet(r.name, kAcc, "f64", k.name, f64Lit(0));
         return { name: "", type: e.type };
       }
@@ -730,7 +733,7 @@ export function emitMapLikeIntrinsic(host: LlvmEmitterContext,
         return { name: t, type: e.type };
       }
       case "delete": {
-        const k = host.emitExpr(e.args[0]!);
+        const k = emitBorrowedInput(host, e.args[0]!);
         host.declare(`declare zeroext i1 @scr_map_delete_${kAcc}(ptr, ${kTy})`);
         const t = B.tmp();
         B.line(`${t} = call zeroext i1 @scr_map_delete_${kAcc}(ptr ${r.name}, ${kTy} ${k.name})`);

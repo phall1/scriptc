@@ -52,7 +52,7 @@ console.log(work([new Item(7)]));
   expect(facts.parameters.get("read")).toEqual(new Set([0]));
   expect(facts.parameters.get("relay")).toEqual(new Set([0]));
   const llvm = emitLlvmModule(mod);
-  const work = body(llvm, "sc_f_work");
+  const work = body(llvm, "sc_bf_work");
   expect(work).toContain("alloca %ScrUnion");
   expect(work).toContain("@sc_bf_relay");
   expect(work).not.toContain("@scr_union_release");
@@ -71,7 +71,7 @@ console.log(work([new Item(7)]));
 `);
   const facts = analyzeCallLifetimes(new Map(mod.functions.map((item) => [item.name, item])));
   expect(facts.parameters.has("read")).toBe(false);
-  expect(body(emitLlvmModule(mod), "sc_f_work")).not.toContain("alloca %ScrUnion");
+  expect(body(emitLlvmModule(mod), "sc_bf_work")).not.toContain("alloca %ScrUnion");
 });
 
 test("virtual families share promoted parameter representations without affecting unrelated methods", async () => {
@@ -125,4 +125,69 @@ console.log(invoke(new First(), [new Item()]), invoke(new Second(), [new Item()]
   expect(second.params[1]!.type).toEqual(first.params[1]!.type);
   expect(first.params[2]!.type.kind).toBe("object");
   expect(second.params[2]!.type).toEqual(first.params[2]!.type);
+});
+
+test("heap borrowing preserves owned returns and independently retained stored values", async () => {
+  const mod = await lower(`
+class Item { value = 13; }
+function keep(item: Item, items: Item[]): Item { items.push(item); return item; }
+function relay(item: Item, items: Item[]): Item { return keep(item, items); }
+function work(): number { let item = new Item(); let items: Item[] = []; const result = relay(item, items); return result.value + items.length; }
+console.log(work());
+`);
+  const facts = analyzeCallLifetimes(new Map(mod.functions.map((item) => [item.name, item])));
+  expect(facts.borrowed.get("keep")).toEqual(new Set([0, 1]));
+  expect(facts.borrowed.get("relay")).toEqual(new Set([0, 1]));
+  expect(facts.parameters.has("keep")).toBe(false);
+  const llvm = emitLlvmModule(mod);
+  const keep = body(llvm, "sc_bf_keep");
+  expect(keep.match(/@sc_retain_Item/g)).toHaveLength(2);
+  expect(keep).not.toContain("@scr_arr_retain_v");
+  expect(keep).not.toContain("@scr_arr_release");
+  const relay = body(llvm, "sc_bf_relay");
+  expect(relay).toContain("@sc_bf_keep");
+  expect(relay).not.toContain("@sc_retain_Item");
+  expect(relay).not.toContain("@scr_arr_retain_v");
+  const owned = body(llvm, "sc_f_keep");
+  expect(owned).toContain("@sc_release_Item");
+  expect(owned).toContain("@scr_arr_release");
+});
+
+test("stable collection operands borrow roots while insertion still transfers payload owners", async () => {
+  const mod = await lower(`
+class Item { value = 3; }
+function work(items: Item[], map: Map<string, Item>, keys: Set<string>, bytes: Uint8Array, item: Item, key: string): number {
+  items.push(item);
+  items[0] = item;
+  map.set(key, item);
+  keys.add(key);
+  bytes.fill(7);
+  const copied = bytes.subarray(0, 1);
+  return items.length + map.size + keys.size + copied[0];
+}
+console.log(work([], new Map<string, Item>(), new Set<string>(), new Uint8Array(2), new Item(), "one"));
+`);
+  for (const pointerBits of [32, 64] as const) {
+    const ir = body(emitLlvmModule(mod, { pointerBits }), "sc_bf_work");
+    expect(ir).not.toMatch(/@scr_(arr|map|bytes|str)_retain_v/);
+    expect(ir.match(/@sc_retain_Item/g)).toHaveLength(3);
+    expect(ir).toContain("@scr_bytes_subarray");
+    expect(ir).toContain("@scr_bytes_release");
+  }
+});
+
+test("lexical aliases borrow stable owners while returned aliases retain independently", async () => {
+  const mod = await lower(`
+class Item { value = 5; }
+function alias(item: Item): Item { const first = item; const second = first; return second; }
+function snapshot(item: Item): Item { const saved = item; item = new Item(); return saved; }
+console.log(alias(new Item()).value, snapshot(new Item()).value);
+`);
+  const llvm = emitLlvmModule(mod);
+  const alias = body(llvm, "sc_bf_alias");
+  expect(alias.match(/@sc_retain_Item/g)).toHaveLength(1);
+  expect(alias).not.toContain("@sc_release_Item");
+  const snapshot = body(llvm, "sc_f_snapshot");
+  expect(snapshot.match(/@sc_retain_Item/g)).toHaveLength(3);
+  expect(snapshot).toContain("@sc_release_Item");
 });

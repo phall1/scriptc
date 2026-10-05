@@ -1,5 +1,6 @@
 /* Focused LLVM expression emission extracted from emitter.ts. */
 import { InternalCompilerError } from "../../errors.js";
+import { emitBorrowedInput } from "./borrowed-inputs.js";
 import { BYTES_ELEMENT_SIZE, F64, type IrBytesElem, type IrExpr } from "../../ir/ir.js";
 import type { LlvmEmitterContext, LlValue } from "./expr-context.js";
 import { F64_INF, f64Lit } from "./common.js";
@@ -332,7 +333,7 @@ export function emitBytesIntrinsic(host: LlvmEmitterContext, e: IrExpr & { kind:
     if (e.method === "readNum" || e.method === "writeNum" || e.method === "readNumVar" || e.method === "writeNumVar") {
       const tok = e.args[0]!;
       if (tok.kind !== "strLit") throw new InternalCompilerError(`llvm emitter bug: bytesIntrinsic ${e.method} kind must be a strLit`);
-      const r0 = host.emitExpr(e.receiver);
+      const r0 = emitBorrowedInput(host, e.receiver);
       const rest = e.args.slice(1).map((a) => host.emitExpr(a));
       if (e.method === "readNum" || e.method === "writeNum") {
         const spec = BYTES_NUM_KIND[tok.value];
@@ -355,8 +356,10 @@ export function emitBytesIntrinsic(host: LlvmEmitterContext, e: IrExpr & { kind:
     const directElementAccess = method === "length" || method === "byteLength" || method === "get";
     const r = directElementAccess
       ? host.emitStableReceiver(e.receiver, e.args)
-      : host.emitExpr(e.receiver);
-    const args = e.args.map((a) => host.emitExpr(a));
+      : emitBorrowedInput(host, e.receiver);
+    // Byte operations borrow every input; views and identity results return
+    // independent owners, while writes retain no operand beyond the call.
+    const args = e.args.map((a) => emitBorrowedInput(host, a));
     const NAN = f64Lit(NaN);
     switch (method) {
       case "length":

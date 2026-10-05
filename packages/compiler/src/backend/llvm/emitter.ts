@@ -55,6 +55,7 @@ import { BlockBuilder } from "./blocks.js";
 import { emitLocalArrayRead, findArrayPreservingFunctions, findLocalArrayReads, findCallArrayReads, OptionalArrayReads, type LocalArrayRead } from "./local-array-reads.js";
 import { emitStackMapRead, findMapReadLifetimes, type MapReadLifetimes } from "./map-read-lifetimes.js";
 import { emitBorrowedFieldSequence } from "./borrowed-receivers.js";
+import { emitBorrowedInput } from "./borrowed-inputs.js";
 import { LlvmDebugInfo } from "./debug-info.js";
 import { f64Lit, ffiNativeTypeLl, ffiNativeParamLl, ffiNativeReturnLl, llvmCommentText } from "./common.js";
 import { ffiExtendsNarrowIntegers } from "../targets.js";
@@ -274,6 +275,7 @@ export class LlEmitter {
   mapReadLifetimes: MapReadLifetimes = { locals: new Map(), arguments: new Map() };
   readonly callLifetimes: CallLifetimes;
   private borrowedParameters = new Set<string>();
+  private stableCallBindings: ReadonlySet<string> = new Set();
   /** Manifest-bound native imports, used by ffiCall emission. */
   readonly ffiByName = new Map<string, IrFfiImport>();
   /** C-ABI callback trampolines and (for raw/no-userdata callbacks) their
@@ -3323,7 +3325,8 @@ export class LlEmitter {
     this.jumpTargets = [];
     this.currentLocals = new Map(fn.locals.map((l) => [l.id, l]));
     this.borrowedParameters.clear();
-    const borrowedParameterIndexes = this.callLifetimes.parameters.get(fn.name);
+    this.stableCallBindings = this.callLifetimes.bindings.get(fn.name) ?? new Set();
+    const borrowedParameterIndexes = this.callLifetimes.borrowed.get(fn.name);
     if (borrowedParameterIndexes) {
       for (const index of borrowedParameterIndexes) this.borrowedParameters.add(fn.params[index]!.localId);
     }
@@ -3437,7 +3440,7 @@ export class LlEmitter {
     // params (callees own their params — callers passed +1). Boxed params
     // allocate the shared binding and move the raw value in.
     const fnScope: LlScopeEntry[] = [];
-    const borrowed = this.callLifetimes.parameters.get(fn.name);
+    const borrowed = this.callLifetimes.borrowed.get(fn.name);
     for (const [index, p] of fn.params.entries()) {
       const local = this.currentLocals.get(p.localId)!;
       const slot = `%${mangleLocal(p.localId)}`;
@@ -3552,7 +3555,7 @@ export class LlEmitter {
     return `define internal ${ret} @${mangleFunction(fn.name)}(${params.join(", ")}) ${FN_ATTRS} {\n${B.render()}\n}`;
   }
 
-  /** A local immutable binding keeps its value alive while later arguments
+  /** A local stable binding keeps its value alive while later arguments
    * and the callee execute. Global, captured, TDZ and mutable bindings need
    * an owned snapshot, even when the callee only inspects the value. */
   canBorrowCallArgument(value: IrExpr): boolean {
@@ -3560,7 +3563,7 @@ export class LlEmitter {
     if (value.kind !== "varRef") return false;
     const binding = this.binding(value.localId);
     return binding.kind === "local" && binding.local !== undefined &&
-      (!binding.local.mutable || this.borrowedParameters.has(value.localId)) && !binding.local.boxed && !binding.local.tdz;
+      (!binding.local.mutable || this.stableCallBindings.has(value.localId) || this.borrowedParameters.has(value.localId)) && !binding.local.boxed && !binding.local.tdz;
   }
 
   // ── statements ──────────────────────────────────────────────────────────
@@ -3664,6 +3667,16 @@ export class LlEmitter {
           }
           break;
         }
+        // A lexical const alias cannot outlive its unchanged local owner.
+        // Whole-value uses still retain their own copies, so returning or
+        // storing the alias preserves the ordinary heap representation.
+        // Boxed captures, reassigned sources and projections need ownership.
+        if (b.kind === "local" && b.local && !b.local.mutable && isRefCounted(b.type) &&
+            this.stableCallBindings.has(s.localId) && this.canBorrowCallArgument(s.init)) {
+          const v = this.emitReadReceiver(s.init);
+          B.line(`store ptr ${v.name}, ptr ${b.slot}`);
+          break;
+        }
         const v = this.emitExpr(s.init);
         this.moveTemp(v);
         B.line(`store ${this.llType(b.type)} ${v.name}, ptr ${b.slot}`);
@@ -3706,7 +3719,7 @@ export class LlEmitter {
         // Evaluation order matches JS: array, index, then value. Ownership
         // of a refcounted value moves into the array (the runtime releases
         // the replaced element itself).
-        const arr = this.emitExpr(s.arr);
+        const arr = emitBorrowedInput(this, s.arr);
         const idx = this.emitExpr(s.index);
         const v = this.emitExpr(s.value);
         if (s.arr.type.kind !== "array") throw new InternalCompilerError("llvm emitter bug: arraySet on non-array");
@@ -3718,7 +3731,7 @@ export class LlEmitter {
         break;
       }
       case "arraySetLength": {
-        const arr = this.emitExpr(s.arr);
+        const arr = emitBorrowedInput(this, s.arr);
         const length = this.emitExpr(s.length);
         if (s.arr.type.kind !== "array") throw new InternalCompilerError("llvm emitter bug: arraySetLength on non-array");
         this.declare(`declare void @scr_arr_set_len(ptr, double)`);
@@ -3728,7 +3741,7 @@ export class LlEmitter {
       }
       case "arraySetUndefined":
       case "arrayDelete": {
-        const arr = this.emitExpr(s.arr);
+        const arr = emitBorrowedInput(this, s.arr);
         const idx = this.emitExpr(s.index);
         if (s.arr.type.kind !== "array") throw new InternalCompilerError(`llvm emitter bug: ${s.kind} on non-array`);
         const fn = s.kind === "arraySetUndefined" ? "scr_arr_set_undefined" : "scr_arr_delete";
