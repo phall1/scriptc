@@ -256,13 +256,15 @@ test("LLVM emission performs typed-array element access directly on the valid pa
   expect(ll).not.toContain("@scr_bytes_retain_v");
 });
 
-test("side-effecting indices retain the receiver snapshot", () => {
+test("stable receivers borrow across index calls", () => {
   const mod = sideEffectFixture();
   expect(validateModule(mod)).toEqual([]);
 
   const ll = emitLlvmModule(mod);
 
-  expect(ll).toContain("call ptr @scr_bytes_retain_v");
+  // The call cannot replace this uncaptured local's owning binding.
+  expect(ll).not.toContain("call ptr @scr_bytes_retain_v");
+  expect(ll).toContain("call double @sc_f_sideIndex(");
 
   expect(ll).toContain("call double @scr_bytes_get");
 });
