@@ -96,6 +96,7 @@ import {
   elemAccess,
   FN_ATTRS,
   llFieldType,
+  type MapKeyAccess,
   releaseSym,
   retainSym,
   traceArg,
@@ -4959,7 +4960,7 @@ export class LlEmitter {
     return emitMapNew(this, e);
   }
 
-  mapSet(m: string, kAcc: "f64" | "str" | "ref", vAcc: "f64" | "bool" | "ref", key: string, value: string): void {
+  mapSet(m: string, kAcc: MapKeyAccess, vAcc: "f64" | "bool" | "ref", key: string, value: string): void {
     return mapSet(this, m, kAcc, vAcc, key, value);
   }
 

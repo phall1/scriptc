@@ -6628,7 +6628,7 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
             "SC1090",
             expr,
             `Map keys of type '${lowerer.checker.typeToString(targs[0])}' ` +
-              `(Map keys must be numbers, strings, identity references, or unions of identity references)`,
+              `(Map keys must be numbers, strings, booleans, bigints, identity references, or supported unions)`,
           );
         }
         if (targs[1]) {
@@ -6703,7 +6703,7 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
             "new Set(values)",
             expr,
             "construct the Set empty and add() each value — only nullish values or a matching Set, collection iterator, string, array, or fixed tuple of " +
-              "already-legal elements (numbers, strings, or identity references) seeds a Set",
+              "supported key values seeds a Set",
           );
         }
         if (mapped?.kind === "set") return { kind: "setNew", type: mapped, loc };
@@ -6713,7 +6713,7 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
             "SC1090",
             expr,
             `Set elements of type '${lowerer.checker.typeToString(targs[0])}' ` +
-              `(Set elements must be numbers, strings, identity references, or unions of identity references)`,
+              `(Set elements must be numbers, strings, booleans, bigints, identity references, or supported unions)`,
           );
         }
         lowerer.badType(expr, tsType);

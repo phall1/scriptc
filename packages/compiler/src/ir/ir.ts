@@ -599,12 +599,18 @@ export function isIdentityCollectionKey(t: IrType): boolean {
     t.kind === "netServer" || t.kind === "symbol";
 }
 
-/** Numbers use SameValueZero, strings use content, and reference keys use
- * identity. A union of identity arms hashes its payload, never its temporary
- * wrapper. Mixed scalar/reference unions remain outside this contract. */
+/** Primitive keys compare by value and reference keys by identity. Union
+ * wrappers carry either domain without becoming observable key identities;
+ * null and undefined are distinct tag-only keys inside a union. */
 export function isSupportedMapKey(t: IrType, unionArms?: IrType[]): boolean {
-  return t.kind === "f64" || t.kind === "string" || t.kind === "dyn" || isIdentityCollectionKey(t) ||
-    (t.kind === "union" && unionArms !== undefined && unionArms.length > 0 && unionArms.every(isIdentityCollectionKey));
+  return isCollectionValueKey(t) || t.kind === "dyn" ||
+    (t.kind === "union" && unionArms !== undefined && unionArms.length > 0 &&
+      unionArms.every((arm) => isCollectionValueKey(arm) || isUnitType(arm)));
+}
+
+function isCollectionValueKey(t: IrType): boolean {
+  return t.kind === "f64" || t.kind === "string" || t.kind === "bigint" || t.kind === "bool" ||
+    isIdentityCollectionKey(t);
 }
 
 /** Set elements and Map keys share storage, equality and ownership rules. */
@@ -1713,6 +1719,10 @@ export const MAY_THROW_ARR_METHODS: ReadonlySet<IrArrIntrinsicMethod> = new Set(
  * `iterEnter`/`iterExit` — live-iteration semantics, Node-exact). The iter*
  * members are compiler-internal: no ambient declaration reaches them. */
 export type IrMapIntrinsicMethod =
+  /** Internal shallow-copy constructors over builtin collection storage. */
+  | "clone"
+  | "keySet"
+  | "valueSet"
   | "get"
   | "set"
   | "has"
@@ -1732,6 +1742,7 @@ export type IrMapIntrinsicMethod =
  * iterKey doubles as the element read (JS's Set forEach passes the element
  * as both `value` and `key`). */
 export type IrSetIntrinsicMethod =
+  | "clone"
   | "add"
   | "has"
   | "delete"

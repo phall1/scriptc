@@ -268,6 +268,57 @@ static void test_reboxed_keys_and_rehash(void) {
   scr_map_release(m);
 }
 
+static void test_value_keys_and_copies(void) {
+  static const uint8_t kinds[] = { SCR_MAP_KEY_F64, SCR_MAP_KEY_BOOL, SCR_MAP_KEY_REF, SCR_MAP_KEY_REF };
+  ScrMap *m = scr_map_new_typed(SCR_MAP_KEY_UNION_VALUE, SCR_MAP_VAL_F64,
+    scr_union_retain_v, scr_union_release_v, NULL, NULL, NULL, NULL);
+  scr_map_union_keys(m, kinds);
+  ScrUnion *negative_zero = scr_union_new_f64(0, -0.0);
+  ScrUnion *zero = scr_union_new_f64(0, 0.0);
+  ScrUnion *flag = scr_union_new_bool(1, false);
+  scr_map_set_ref_f64(m, negative_zero, 10);
+  scr_map_set_ref_f64(m, flag, 20);
+  check(m->entries[0].hash == 1 && m->entries[1].hash == 1, "zero hashes remap without conflating key kinds");
+  check(signbit(scr_union_get_f64(negative_zero)), "normalization leaves caller's union unchanged");
+  ScrUnion *stored = scr_map_iter_key_ref(m, 0);
+  check(!signbit(scr_union_get_f64(stored)), "stored numeric union has positive zero");
+  scr_union_release(stored);
+  double out = 0;
+  check(scr_map_get_ref_f64(m, zero, &out) && out == 10, "value-equal union probe finds zero");
+  check(scr_map_get_ref_f64(m, flag, &out) && out == 20, "same full hash still checks primitive kind");
+  ScrArr *key = scr_arr_new(SCR_ELEM_F64, 0);
+  ScrUnion *left = wrap_key(2, key, NULL), *right = wrap_key(3, key, NULL);
+  scr_map_set_ref_f64(m, left, 30);
+  check(scr_map_has_ref(m, right), "reference identity survives different union arm tags");
+  scr_map_delete_ref(m, flag);
+  ScrMap *copy = scr_map_clone(m, false);
+  ScrMap *keys = scr_map_clone(m, true);
+  check(copy->nentries == 2 && copy->nlive == 2 && copy->ecap == 2, "copy allocates only live entries");
+  check(keys->nentries == 2 && keys->val_kind == SCR_MAP_VAL_F64, "key copy keeps compact Set storage");
+  scr_map_clear(m);
+  check(scr_map_get_ref_f64(copy, right, &out) && out == 30, "copy owns the original reference key");
+  scr_map_set_ref_f64(copy, flag, 40);
+  check(!scr_map_has_ref(keys, flag), "copy insertion leaves its sibling independent");
+  scr_union_release(negative_zero); scr_union_release(zero); scr_union_release(flag);
+  scr_union_release(left); scr_union_release(right);
+  scr_map_release(m); scr_map_release(copy); scr_map_release(keys);
+  check(key->rc == 1, "all copied union key owners released");
+  scr_arr_release(key);
+
+  ScrStr *decimal = S("18446744073709551616"), *hex = S("0x10000000000000000");
+  ScrBigInt *a = scr_bigint_parse(decimal), *b = scr_bigint_parse(hex);
+  scr_str_release(decimal); scr_str_release(hex);
+  check(scr_bigint_eq(a, b) && scr_bigint_hash(a) == scr_bigint_hash(b), "equal parsed bigint values hash alike");
+  ScrMap *big = scr_map_new_typed(SCR_MAP_KEY_BIGINT, SCR_MAP_VAL_F64,
+    scr_bigint_retain_v, scr_bigint_release_v, NULL, NULL, NULL, NULL);
+  scr_map_set_ref_f64(big, a, 1);
+  scr_map_set_ref_f64(big, b, 2);
+  scr_bigint_release(a);
+  check(big->nlive == 1 && scr_map_get_ref_f64(big, b, &out) && out == 2, "bigint keys compare values across owners");
+  scr_bigint_release(b);
+  scr_map_release(big);
+}
+
 #ifdef SCR_RC_AUDIT
 static void test_identity_cycles(void) {
   scr_collect_cycles();
@@ -275,18 +326,20 @@ static void test_identity_cycles(void) {
   long arrays = scr_arr_live_count();
   long strings = scr_str_live_count();
   long unions = scr_union_live_count();
-  for (int mode = 0; mode < 4; mode++) {
+  for (int mode = 0; mode < 5; mode++) {
     for (int i = 0; i < 100; i++) {
       ScrArr *key = scr_arr_new_ref(scr_map_retain_v, scr_map_release_v, scr_map_trace_v, 0);
-      bool wrapped = mode == 3;
+      bool wrapped = mode >= 3;
       ScrMapValKind value_kind = mode == 0 ? SCR_MAP_VAL_F64 : SCR_MAP_VAL_REF;
       ScrTraceFn value_trace = mode == 2 ? scr_arr_trace_v : NULL;
-      ScrMap *m = scr_map_new_typed(wrapped ? SCR_MAP_KEY_UNION_REF : SCR_MAP_KEY_REF, value_kind,
+      ScrMap *m = scr_map_new_typed(mode == 4 ? SCR_MAP_KEY_UNION_VALUE : wrapped ? SCR_MAP_KEY_UNION_REF : SCR_MAP_KEY_REF, value_kind,
           wrapped ? scr_union_retain_v : scr_arr_retain_v,
           wrapped ? scr_union_release_v : scr_arr_release_v,
           wrapped ? scr_union_trace_v : scr_arr_trace_v,
           mode == 2 ? scr_arr_retain_v : scr_str_retain_v,
           mode == 2 ? scr_arr_release_v : scr_str_release_v, value_trace);
+      static const uint8_t union_kinds[] = { SCR_MAP_KEY_REF };
+      if (mode == 4) scr_map_union_keys(m, union_kinds);
       ScrUnion *box = wrapped ? wrap_key(0, key, scr_arr_trace_v) : NULL;
       void *stored_key = wrapped ? (void *)box : (void *)key;
       if (mode == 0) scr_map_set_ref_f64(m, stored_key, i);
@@ -317,6 +370,7 @@ int main(void) {
   test_identity_key_ownership();
   test_identity_scalar_values();
   test_reboxed_keys_and_rehash();
+  test_value_keys_and_copies();
 #ifdef SCR_RC_AUDIT
   test_identity_cycles();
   scr_collect_cycles();

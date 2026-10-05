@@ -7346,32 +7346,43 @@ void *scr_caught_check_obj(const ScrCaught *c, size_t pre, size_t post,
  * live-iteration rules are moot). Borrows the set; the array is +1,
  * string elements retained into it by the iter_key read. */
 ScrArr *scr_set_to_arr_f64(const ScrMap *s) {
-  size_t n = (size_t)scr_map_iter_count(s);
-  ScrArr *out = scr_arr_new(SCR_ELEM_F64, (size_t)scr_map_size(s));
-  for (size_t i = 0; i < n; i++) {
-    if (!scr_map_iter_live(s, (double)i)) continue;
-    scr_arr_push_f64(out, scr_map_iter_key_f64(s, (double)i));
+  ScrArr *out = scr_arr_new(SCR_ELEM_F64, s->nlive);
+  for (size_t i = 0; i < s->nentries; i++) {
+    if (!s->entries[i].hash) continue;
+    out->data[out->len] = s->entries[i].key;
+    out->present[out->len++] = SCR_ARR_VALUE;
+  }
+  return out;
+}
+
+ScrArr *scr_set_to_arr_bool(const ScrMap *s) {
+  ScrArr *out = scr_arr_new(SCR_ELEM_BOOL, s->nlive);
+  for (size_t i = 0; i < s->nentries; i++) {
+    if (!s->entries[i].hash) continue;
+    out->data[out->len] = s->entries[i].key;
+    out->present[out->len++] = SCR_ARR_VALUE;
   }
   return out;
 }
 
 ScrArr *scr_set_to_arr_str(const ScrMap *s) {
-  size_t n = (size_t)scr_map_iter_count(s);
-  ScrArr *out = scr_arr_new(SCR_ELEM_STR, (size_t)scr_map_size(s));
-  for (size_t i = 0; i < n; i++) {
-    if (!scr_map_iter_live(s, (double)i)) continue;
-    scr_arr_push_ref(out, scr_map_iter_key_str(s, (double)i));
+  ScrArr *out = scr_arr_new(SCR_ELEM_STR, s->nlive);
+  for (size_t i = 0; i < s->nentries; i++) {
+    if (!s->entries[i].hash) continue;
+    scr_str_retain((ScrStr *)(uintptr_t)s->entries[i].key);
+    out->data[out->len] = s->entries[i].key;
+    out->present[out->len++] = SCR_ARR_VALUE;
   }
   return out;
 }
 
 ScrArr *scr_set_to_arr_ref(const ScrMap *s) {
-  size_t n = (size_t)scr_map_iter_count(s);
-  /* The drained array inherits the elements' ownership and cycle edges. */
-  ScrArr *out = scr_arr_new_ref(s->key_retain, s->key_release, s->key_trace, (size_t)scr_map_size(s));
-  for (size_t i = 0; i < n; i++) {
-    if (!scr_map_iter_live(s, (double)i)) continue;
-    scr_arr_push_ref(out, scr_map_iter_key_ref(s, (double)i));
+  ScrArr *out = scr_arr_new_ref(s->key_retain, s->key_release, s->key_trace, s->nlive);
+  for (size_t i = 0; i < s->nentries; i++) {
+    if (!s->entries[i].hash) continue;
+    s->key_retain((void *)(uintptr_t)s->entries[i].key);
+    out->data[out->len] = s->entries[i].key;
+    out->present[out->len++] = SCR_ARR_VALUE;
   }
   return out;
 }

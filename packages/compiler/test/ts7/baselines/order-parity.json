@@ -11522,8 +11522,8 @@
      "message": "Expected 1 arguments, but got 2.",
      "loc": {
       "file": "<repo>/tests/diagnostics/bigint-fences.ts",
-      "start": 368,
-      "end": 384
+      "start": 439,
+      "end": 455
      }
     }
    ]
@@ -14214,6 +14214,18 @@
   "<repo>/tests/corpus/string-construction-order.ts": {
    "order": [
     "<repo>/tests/corpus/string-construction-order.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/collection-value-keys.ts": {
+   "order": [
+    "<repo>/tests/corpus/collection-value-keys.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/collection-storage-copies.ts": {
+   "order": [
+    "<repo>/tests/corpus/collection-storage-copies.ts"
    ],
    "diags": []
   }

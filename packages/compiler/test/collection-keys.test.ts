@@ -52,24 +52,43 @@ test("boxed reference keys select payload identity, not wrapper identity", () =>
   expect(isSupportedMapKey(union, references)).toBe(true);
   expect(isSupportedSetElem(union, references)).toBe(true);
   expect(mapKeyAccess(union)).toBe("ref");
-  expect(mapKeyKindNum(union)).toBe(3);
+  expect(mapKeyKindNum(union, references)).toBe(3);
 });
 
-test("unresolved, empty and mixed-value unions cannot enter the identity ABI", () => {
+test("mixed-value unions select value equality while unsupported arms remain fenced", () => {
   expect(isSupportedMapKey(union)).toBe(false);
   expect(isSupportedMapKey(union, [])).toBe(false);
   for (const scalar of [F64, STRING, BOOL, UNDEFINED_T]) {
-    expect(isSupportedMapKey(union, [reference, scalar])).toBe(false);
-    expect(isSupportedSetElem(union, [reference, scalar])).toBe(false);
+    expect(isSupportedMapKey(union, [reference, scalar])).toBe(true);
+    expect(mapKeyKindNum(union, [reference, scalar])).toBe(7);
+    expect(isSupportedSetElem(union, [reference, scalar])).toBe(true);
   }
-  for (const unsupported of [BOOL, { kind: "date" } as IrType, mapOf(STRING, F64), setOf(STRING)]) {
+  for (const unsupported of [{ kind: "date" } as IrType, mapOf(STRING, F64), setOf(STRING)]) {
     expect(isSupportedMapKey(unsupported)).toBe(false);
+  }
+});
+
+test("Map value materialization validates the destination key domain", () => {
+  const loc = { file: "keys.ts", start: 0, end: 1 };
+  for (const value of [F64, mapOf(STRING, F64)]) {
+    const receiver: IrExpr = { kind: "mapNew", type: mapOf(STRING, value), loc };
+    const expr: IrExpr = { kind: "mapIntrinsic", method: "valueSet", receiver, args: [], type: setOf(value), loc };
+    const mod: IrModule = {
+      irVersion: IR_VERSION, sourceFile: loc.file, entry: "main",
+      functions: [{ name: "main", params: [], locals: [], returnType: VOID, body: [{ kind: "exprStmt", expr, loc }], loc }],
+    };
+    const errors = validateModule(mod);
+    if (value.kind === "f64") expect(errors).toEqual([]);
+    else expect(errors.map(error => error.message)).toEqual(["in main: mapIntrinsic valueSet element kind map (frontend must fence)"]);
   }
 });
 
 test("primitive key ABI constants remain stable", () => {
   expect([mapKeyKindNum(F64), mapKeyAccess(F64)]).toEqual([0, "f64"]);
   expect([mapKeyKindNum(STRING), mapKeyAccess(STRING)]).toEqual([1, "str"]);
+  expect([mapKeyKindNum(BOOL), mapKeyAccess(BOOL)]).toEqual([6, "bool"]);
+  const bigint: IrType = { kind: "bigint" };
+  expect([mapKeyKindNum(bigint), mapKeyAccess(bigint)]).toEqual([5, "ref"]);
 });
 
 test("unknown keys select value equality separately from reference identity", () => {
@@ -92,5 +111,7 @@ test.each(["map", "set"] as const)("validator checks the arms behind a %s key un
   };
   expect(validateModule(mod)).toEqual([]);
   mod.unions![0]!.arms = [reference, F64];
+  expect(validateModule(mod)).toEqual([]);
+  mod.unions![0]!.arms = [reference, { kind: "date" }];
   expect(validateModule(mod).some((error) => error.message.includes(kind === "map" ? "mapNew key kind union" : "setNew element kind union"))).toBe(true);
 });

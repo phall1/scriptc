@@ -8296,8 +8296,17 @@ export class Lowerer {
     while (ts.isParenthesizedExpression(literal)) literal = literal.expression;
     // Fresh literals have no previous outer identity to preserve. Build them
     // for their storage layout, just as ordinary contextual literals do.
-    if (ts.isObjectLiteralExpression(literal) || ts.isArrayLiteralExpression(literal) || expected.kind === "f64" || expected.kind === "string") {
+    if (ts.isObjectLiteralExpression(literal) || ts.isArrayLiteralExpression(literal) ||
+        expected.kind === "f64" || expected.kind === "string" || expected.kind === "bool" || expected.kind === "bigint") {
       return this.lowerExprExpecting(node, expected);
+    }
+    const value = this.lowerExpr(node);
+    const valueArms = value.type.kind === "union" ? this.unions.get(value.type.unionId)?.arms ?? [] : [value.type];
+    // Primitive checks and reboxing preserve values, including tag-only
+    // null/undefined keys. Identity restrictions apply only to references.
+    if (valueArms.length > 0 && valueArms.every((arm) => arm.kind === "f64" || arm.kind === "string" ||
+        arm.kind === "bool" || arm.kind === "bigint" || isUnitType(arm))) {
+      return this.coerceInto(node, value, expected);
     }
     // Assertions can perform their own conversion before slot coercion.
     // Inspect the assertion chain so a width copy cannot hide behind its
@@ -8314,7 +8323,6 @@ export class Lowerer {
       }
       asserted = asserted.expression;
     }
-    const value = this.lowerExpr(node);
     const source = (value.type.kind === "union" ? this.unions.get(value.type.unionId)?.arms ?? [] : [value.type]).filter((type) => !isUnitType(type));
     const target = expected.kind === "union" ? this.unions.get(expected.unionId)?.arms ?? [] : [expected];
     const preservesIdentity = source.length > 0 && source.every((from) => target.some((to) =>

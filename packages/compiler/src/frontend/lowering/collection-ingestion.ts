@@ -73,6 +73,15 @@ export function lowerCollectionInput(lowerer: Lowerer, input: CollectionInput): 
  * Both paths retain element identity and clean up on callback exceptions. */
 export function ingestCollection(lowerer: Lowerer, input: CollectionInput, source: IrExpr,
   destination: Destination, loc: SrcLoc, mapper?: IrExpr & { type: IrType & { kind: "func" } }): IrExpr {
+  if (!mapper && input.collection && destination.kind === "map" &&
+      input.selection === "entries" && typeEquals(input.collection, destination)) {
+    return { kind: "mapIntrinsic", method: "clone", receiver: source, args: [], type: destination, loc };
+  }
+  if (!mapper && input.collection && destination.kind === "set" && input.selection !== "entries") {
+    return input.collection.kind === "set"
+      ? { kind: "setIntrinsic", method: "clone", receiver: source, args: [], type: destination, loc }
+      : { kind: "mapIntrinsic", method: input.selection === "keys" ? "keySet" : "valueSet", receiver: source, args: [], type: destination, loc };
+  }
   if (!mapper && destination.kind === "array" && input.collection?.kind === "set" && input.selection !== "entries") {
     return { kind: "setIntrinsic", method: "toArray", receiver: source, args: [], type: destination, loc };
   }

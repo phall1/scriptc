@@ -5873,7 +5873,7 @@ function setFromSeedValue(
   }
   let seed: IrExpr;
   if (source.type.kind === "set" && typeEquals(source.type, setT)) {
-    seed = { kind: "setIntrinsic", method: "toArray", receiver: source, args: [], type: arrayOf(setT.elem), loc };
+    return { kind: "setIntrinsic", method: "clone", receiver: source, args: [], type: setT, loc };
   } else if (source.type.kind === "string" && setT.elem.kind === "string") {
     seed = strCharsCall(lowerer, source, loc);
   } else if (source.type.kind === "array" && typeEquals(source.type.elem, setT.elem)) {
@@ -5979,38 +5979,9 @@ export function mapFromSeedValue(lowerer: Lowerer, seed: IrExpr, mapT: IrType & 
     }
     if (seed.type.kind === "map") {
       if (!typeEquals(seed.type, mapT)) return null;
-      const key = `copy:${typeKey(mapT)}`;
-      let name = lowerer.mapHofHelpers.get(key);
-      if (!name) {
-        name = `%map.copy.${lowerer.mapHofHelpers.size}`;
-        lowerer.mapHofHelpers.set(key, name);
-        const source = varRef("source.0", mapT, loc);
-        const target = varRef("target.0", mapT, loc);
-        const index = varRef("i.0", F64, loc);
-        const read = (method: "iterCount" | "iterLive" | "iterKey" | "iterValue", type: IrType): IrExpr => ({
-          kind: "mapIntrinsic", method, receiver: source, args: method === "iterCount" ? [] : [index], type, loc,
-        });
-        lowerer.liftedFns.push({
-          name, params: [{ localId: "source.0", name: "source", type: mapT }], returnType: mapT,
-          locals: [
-            { id: "source.0", name: "source", type: mapT, mutable: false },
-            { id: "target.0", name: "target", type: mapT, mutable: false },
-            { id: "i.0", name: "i", type: F64, mutable: true },
-          ],
-          body: [
-            { kind: "varDecl", localId: "target.0", init: { kind: "mapNew", type: mapT, loc }, loc },
-            countedFor(loc, read("iterCount", F64), () => [{
-              kind: "if", cond: read("iterLive", BOOL), then: [{ kind: "exprStmt", expr: {
-                kind: "mapIntrinsic", method: "set", receiver: target,
-                args: [read("iterKey", mapT.key), read("iterValue", mapT.value)], type: VOID, loc,
-              }, loc }], else_: null, loc,
-            }]),
-            { kind: "return", value: target, loc },
-          ], loc,
-        });
-      }
-      return { kind: "call", callee: name, args: [seed], type: mapT, loc };
+      return { kind: "mapIntrinsic", method: "clone", receiver: seed, args: [], type: mapT, loc };
     }
+
     if (seed.type.kind === "dyn" || seed.type.kind === "array" &&
         !(seed.type.elem.kind === "record" && lowerer.shapes.get(seed.type.elem.shapeId)?.tuple)) {
       const key = `checked-seed:${typeKey(mapT)}`;
