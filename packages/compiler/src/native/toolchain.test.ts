@@ -1,11 +1,11 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { expect, test } from "vitest";
 import { loadNativeToolchain, type NativeToolchainManifest } from "./toolchain.js";
 
 test("native toolchain installation paths relocate with the manifest", () => {
-  const root = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-native-tools-"));
+  const root = realpathSync(mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-native-tools-")));
   const path = join(root, "toolchain.json");
   const manifest: NativeToolchainManifest = {
     schema: "scriptc.native-toolchain.v1", compiler_version: "1.2.3", target: "macos-arm64",
@@ -30,8 +30,44 @@ test("native toolchain installation paths relocate with the manifest", () => {
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("native toolchain assets resolve from the physical manifest through package links", () => {
+  const root = realpathSync(mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-linked-tools-")));
+  const store = join(root, "node_modules", ".pnpm");
+  const installation = join(store, "scriptc@1.2.3", "node_modules", "scriptc");
+  const bin = join(installation, "bin");
+  const assets = join(store, "@scriptc+cli-win32-x64-msvc@1.2.3", "node_modules", "@scriptc", "cli-win32-x64-msvc", "dist", "lib");
+  const asset = (path: string) => relative(bin, join(assets, path));
+  const manifest: NativeToolchainManifest = {
+    schema: "scriptc.native-toolchain.v1", compiler_version: "1.2.3", target: "windows-x64-msvc",
+    ts7: asset("typescript/lib/tsc.exe"), llvm_package: asset("llvm"), runtime_pack: asset("runtime"),
+    runtime_packs: [{ target: "windows-x64-msvc", path: asset("runtime") }],
+    runtime_sources: asset("runtime-sources"), declarations: asset("declarations"), comptime: asset("comptime.exe"),
+    wasi_node_runner: asset("wasi/cli/wasi-runner.js"), linker: asset("tools/linker.exe"), linker_args: ["cc"],
+    dsymutil: asset("tools/dsymutil.exe"), archiver: asset("tools/archiver.exe"), relocatable_linker: asset("tools/ld.exe"),
+  };
+  try {
+    mkdirSync(bin, { recursive: true });
+    const path = join(bin, "scriptc.exe.json");
+    writeFileSync(path, JSON.stringify(manifest));
+    const linked = join(root, "node_modules", "scriptc");
+    symlinkSync(installation, linked, process.platform === "win32" ? "junction" : "dir");
+    const direct = loadNativeToolchain(path);
+    const viaLink = loadNativeToolchain(join(linked, "bin", "scriptc.exe.json"));
+    expect(viaLink).toEqual(direct);
+    expect(viaLink.ts7Executable).toBe(join(assets, "typescript/lib/tsc.exe"));
+    expect(viaLink.helperExecutable).toBe(join(assets, "llvm/bin/scriptc-llvm-codegen.exe"));
+    expect(loadNativeToolchain(join(linked, "bin", "scriptc.exe.json"), { SCRIPTC_RUNTIME_PACK: "../explicit" }).runtimePackRoot)
+      .toBe(join(installation, "explicit"));
+    if (process.platform !== "win32") {
+      const linkedManifest = join(root, "toolchain.json");
+      symlinkSync(path, linkedManifest, "file");
+      expect(loadNativeToolchain(linkedManifest)).toEqual(direct);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("cross-target packs can be added to a project after the compiler is installed", () => {
-  const root = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-project-pack-"));
+  const root = realpathSync(mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-project-pack-")));
   const installation = join(root, "compiler", "bin");
   const project = join(root, "project");
   const nested = join(project, "src", "nested");
@@ -63,7 +99,7 @@ test("cross-target packs can be added to a project after the compiler is install
 });
 
 test("versioned GNU targets select Zig while ordinary host builds keep the installed linker", () => {
-  const root = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-gnu-linker-"));
+  const root = realpathSync(mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-gnu-linker-")));
   const path = join(root, "scriptc.json");
   writeFileSync(path, JSON.stringify({
     schema: "scriptc.native-toolchain.v1", compiler_version: "1.2.3", target: "linux-x64-gnu",
