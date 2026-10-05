@@ -14126,6 +14126,24 @@
     "<repo>/tests/corpus/collection-ingestion-protocol/main.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/integer-view-control.ts": {
+   "order": [
+    "<repo>/tests/corpus/integer-view-control.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/integer-view-numbers.ts": {
+   "order": [
+    "<repo>/tests/corpus/integer-view-numbers.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/integer-view-storage.ts": {
+   "order": [
+    "<repo>/tests/corpus/integer-view-storage.ts"
+   ],
+   "diags": []
   }
  }
 }
