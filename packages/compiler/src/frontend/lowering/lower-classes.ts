@@ -6592,7 +6592,7 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
             "new Map(entries)",
             expr,
             "supported seeds: an array literal of [key, value] pair literals, or a " +
-              "[K, V][]-typed tuple-array value, a matching Map, or null/undefined",
+              "[K, V][]-typed tuple-array value, a matching collection or collection iterator, or null/undefined",
           );
         }
         if (mapped?.kind === "map") {

@@ -14101,6 +14101,31 @@
     "<repo>/tests/corpus/string-lifetimes-operations.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/collection-ingestion.ts": {
+   "order": [
+    "<repo>/tests/corpus/collection-ingestion.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/collection-ingestion-mappers.ts": {
+   "order": [
+    "<repo>/tests/corpus/collection-ingestion-mappers.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/collection-ingestion-references.ts": {
+   "order": [
+    "<repo>/tests/corpus/collection-ingestion-references.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/collection-ingestion-protocol/main.ts": {
+   "order": [
+    "<repo>/tests/corpus/collection-ingestion-protocol/source.js",
+    "<repo>/tests/corpus/collection-ingestion-protocol/main.ts"
+   ],
+   "diags": []
   }
  }
 }

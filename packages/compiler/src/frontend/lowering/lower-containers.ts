@@ -19,6 +19,7 @@ import { type WidthLift, dynUndefinedExpr, newFnCtx, nodeThrowExpr } from "./low
 import { boolLit, countedFor, numLit, strLit, varRef } from "../../ir/build.js";
 import { defaultAfterUndefined, lowerPositionArgument, lowerStaticallyUndefinedArgument, positionNumber } from "./optional-arguments.js";
 import { lowerArrayCopyWithin, lowerArrayFill } from "./array-indexed-mutation.js";
+import { collectionInput, collectionDestinationMatches, ingestCollection, lowerCollectionInput } from "./collection-ingestion.js";
 
 /** Object() and new Object() preserve known object inputs. Primitive
  * boxing and unproven checked-dynamic values retain their refusal. */
@@ -3225,7 +3226,8 @@ export function lowerArrayFromValue(lowerer: Lowerer, loc: SrcLoc): IrExpr {
    * terminate (fractional lengths truncate, negative/NaN produce an empty
    * array — Node-exact). Array inputs copy through the iterator's indexed
    * values, including holes as present undefined, and may map each value.
-   * Set inputs copy their values; strings iterate by code point and may map.
+   * Map and Set inputs consume live values or entries and may map them.
+   * Strings iterate by code point and may map.
    * Other iterable shapes keep the fence. Null when the callee isn't an
    * Array-static access. */
   export function lowerArrayFromCall(lowerer: Lowerer, call: ts.CallExpression,
@@ -3253,6 +3255,24 @@ export function lowerArrayFromValue(lowerer: Lowerer, loc: SrcLoc): IrExpr {
       }
       return { kind: "call", callee: name, args: [0, 1, 2].map((i) => args[i]
         ? lowerer.lowerExprExpecting(args[i]!, DYN) : dynUndefinedExpr(loc)), type: DYN, loc };
+    }
+    if ((args.length === 1 || args.length === 2) && !args.some(ts.isSpreadElement)) {
+      const input = collectionInput(lowerer, args[0]!);
+      if (input) {
+        const source = lowerCollectionInput(lowerer, input);
+        if (source) {
+          if (args.length === 1) {
+            fenceProducedArrayElem(lowerer, call, "'Array.from(collection)'", input.element);
+            return ingestCollection(lowerer, input, source, { kind: "array", elem: input.element }, loc);
+          }
+          const callback = hofCallbackArg(lowerer, args[1]!, [input.element], arrayOf(input.element));
+          if (callback.arity > 2) lowerer.noLowering("Array.from mapper with an array parameter", args[1]!);
+          if (callback.fnArg.type.ret.kind === "void" || callback.fnArg.type.ret.kind === "func") lowerer.badType(call, lowerer.typeOf(call));
+          const element = callbackArrayElem(lowerer, call, callback.fnArg.type.ret);
+          fenceProducedArrayElem(lowerer, call, "'Array.from(collection, mapper)'", element);
+          return ingestCollection(lowerer, input, source, { kind: "array", elem: element }, loc, callback.fnArg);
+        }
+      }
     }
     // MAPPER-LESS `Array.from({ length: n })` (usually with an explicit
     // type argument — the pMap results-array idiom): a length-n array of
@@ -5778,6 +5798,11 @@ export function lowerSetSeedNew(lowerer: Lowerer, node: ts.Expression, setT: IrT
     const elems = node.elements.map((element) => lowerer.lowerCollectionKey(element, setT.elem));
     return { kind: "setNew", seed: { kind: "arrayLit", elems, type: arrayOf(setT.elem), loc }, type: setT, loc };
   }
+  const input = collectionInput(lowerer, node);
+  if (input && collectionDestinationMatches(lowerer, input, setT)) {
+    const source = lowerCollectionInput(lowerer, input);
+    if (source) return ingestCollection(lowerer, input, source, setT, loc);
+  }
   const seedType = lowerer.typeOf(node);
   const declared = lowerer.mapTypeOf(seedType);
   const scalar = setT.elem.kind === "f64" || setT.elem.kind === "string";
@@ -5787,21 +5812,6 @@ export function lowerSetSeedNew(lowerer: Lowerer, node: ts.Expression, setT: IrT
   if (declared?.kind === "string" && setT.elem.kind === "string" &&
       (source.type.kind === "dyn" || source.type.kind === "jsval")) {
     source = lowerer.coerceInto(node, source, STRING);
-  }
-  const seedSymbol = seedType.getSymbol();
-  if (source.type.kind === "dyn" && seedSymbol &&
-      (seedSymbol.name === "MapIterator" || seedSymbol.name === "SetIterator") &&
-      lowerer.isStdlibSymbol(seedSymbol)) {
-    const element = lowerer.checker.getTypeArguments(seedType as ts.TypeReference)[0];
-    const mappedElement = element ? lowerer.mapTypeOf(element) : null;
-    // Exact element layouts let checked references unbox without copying
-    // identity keys. Drain the existing cursor so aliases observe exhaustion.
-    if (!mappedElement || !typeEquals(mappedElement, setT.elem)) return null;
-    const seed: IrExpr = {
-      kind: "dynCheck", value: lowerCheckedArrayFrom(lowerer, source, loc),
-      preserveRefs: true, type: arrayOf(setT.elem), loc,
-    };
-    return { kind: "setNew", seed, type: setT, loc };
   }
   if (setT.elem.kind === "dyn" && lowerer.dynConvertible(source.type)) {
     return { kind: "dynCheck", value: { kind: "libCall", fn: "dyn.nativeSetNew", args: [lowerer.coerceInto(node, source, DYN)], type: DYN, loc }, type: setT, loc };
@@ -5925,6 +5935,12 @@ function setFromSeedValue(
         { name: "0", type: mapT.key }, { name: "1", type: mapT.value },
       ], true) };
       return mapFromSeedValue(lowerer, lowerer.lowerArrayLiteral(argNode, { kind: "array", elem: tuple }), mapT);
+    }
+    const input = collectionInput(lowerer, argNode);
+    if (input) {
+      if (!collectionDestinationMatches(lowerer, input, mapT)) return null;
+      const source = lowerCollectionInput(lowerer, input);
+      if (source) return ingestCollection(lowerer, input, source, mapT, locOf(argNode));
     }
     const seed = lowerer.lowerExpr(argNode);
     return mapFromSeedValue(lowerer, seed, mapT);
