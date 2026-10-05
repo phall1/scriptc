@@ -14198,6 +14198,18 @@
     "<repo>/tests/corpus/regex-input-lifetimes.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/checked-value-input-lifetimes.ts": {
+   "order": [
+    "<repo>/tests/corpus/checked-value-input-lifetimes.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/checked-dispatch-input-lifetimes.js": {
+   "order": [
+    "<repo>/tests/corpus/checked-dispatch-input-lifetimes.js"
+   ],
+   "diags": []
   }
  }
 }

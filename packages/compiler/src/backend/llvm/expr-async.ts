@@ -1,3 +1,4 @@
+import { emitBorrowedInput } from "./borrowed-inputs.js";
 /* Focused LLVM expression emission extracted from emitter.ts. */
 import { InternalCompilerError } from "../../errors.js";
 import { type IrType, isRefCounted, isUnitType, typeEquals } from "../../ir/ir.js";
@@ -198,7 +199,7 @@ export function emitSerializationExpr(host: LlvmEmitterContext, e: ExprOf<"jsonS
         // The value temp is BORROWED (released with this statement's
         // frame); the result string is owned (+1). Never throws — except
         // the dyn root below.
-        const v = host.emitExpr(e.value);
+        const v = emitBorrowedInput(host, e.value);
         let compact: { name: string; type: IrType };
         if (e.value.type.kind === "dyn") {
           // A dyn root: the runtime's dyn walker (scr_dyn_format_j): number/string/bool/null/array/
@@ -250,7 +251,7 @@ export function emitSerializationExpr(host: LlvmEmitterContext, e: ExprOf<"jsonS
         // path-annotated TypeError. The dyn temp is BORROWED; the result
         // joins the frame BEFORE the pending check so an unwind releases
         // the dummy harmlessly.
-        const dynV = host.emitExpr(e.value);
+        const dynV = emitBorrowedInput(host, e.value);
         const helper = host.dyn.dynCheckHelper(e.type, e.preserveRefs);
         const ty = host.llType(e.type);
         const t = B.tmp();

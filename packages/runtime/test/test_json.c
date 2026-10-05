@@ -365,9 +365,34 @@ static void test_class_values(void) {
   scr_str_release(name);
 }
 
+static void test_primitive_owners(void) {
+  ScrDyn *values[] = {scr_dyn_new_null(), scr_dyn_new_bool(false), scr_dyn_new_bool(true)};
+  const char *texts[] = {"null", "false", "true"};
+  for (size_t i = 0; i < 3; i++) {
+    ScrDyn *parsed = parse_ok(texts[i], "primitive parses");
+    check(parsed == values[i] && parsed->rc == SIZE_MAX, "primitive parser shares immortal owner");
+    ScrDyn *array = scr_dyn_new_arr();
+    scr_dyn_arr_push(array, parsed);
+    scr_dyn_arr_push(array, scr_dyn_retain(values[i]));
+    /* The cycle tracer must skip immortal children before reading a header. */
+    scr_dyn_arr_push(array, scr_dyn_retain(array));
+    scr_dyn_release(array);
+    scr_collect_cycles();
+    check(scr_dyn_retain(values[i]) == values[i], "primitive survives container collection");
+    scr_dyn_release(values[i]);
+    check(values[i]->rc == SIZE_MAX, "primitive ownership transfers preserve immortality");
+    scr_dyn_release(scr_dyn_prevent_extensions(values[i]));
+    scr_dyn_release(scr_dyn_seal(values[i]));
+    check(!values[i]->non_extensible && !values[i]->prototype && !values[i]->symbol_properties,
+          "primitive reflection leaves shared nodes unchanged");
+  }
+  check(!scr_dyn_strict_eq(values[1], values[2]), "boolean singleton values remain distinct");
+}
+
 int main(void) {
   test_class_values();
   scr_init();
+  test_primitive_owners();
 
   /* ── primitives ─────────────────────────────────────────────────── */
   ScrDyn *d = parse_ok("null", "parse null");

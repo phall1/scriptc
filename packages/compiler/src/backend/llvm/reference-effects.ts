@@ -1,3 +1,4 @@
+import { preservesDynTest } from "./checked-value-lifetimes.js";
 import { isStableReceiverOperand } from "../../ir/analysis.js";
 import { isRefCounted, type IrExpr, type IrFunction, type IrStmt } from "../../ir/ir.js";
 import { everyExprChild, everyStmtChild, everyStmtList } from "../../ir/traverse.js";
@@ -24,7 +25,10 @@ function expressionPreservesEdges(e: IrExpr, call: (value: Call) => boolean): bo
     case "bin": case "unary": case "incDec": case "toBool": case "logical":
     case "ternary": case "seqExpr": case "fieldGet": case "recordGet":
     case "unionNarrow": case "unionIsTag": case "unionWrap": case "strConcat":
-    case "strEq": case "strCmp": case "arrayGet": case "arrayHas": case "arrayState": return true;
+    case "strEq": case "strCmp": case "arrayGet": case "arrayHas": case "arrayState":
+    case "unionEq": case "unionFuncEq": case "dynScalarEq":
+    case "caughtTest": case "caughtNarrow": case "caughtCheck": return true;
+    case "dynTest": return preservesDynTest(e.test);
     case "assignExpr": return !isRefCounted(e.type);
     case "strIntrinsic": return borrowsStringInputs(e.method);
     case "regexIntrinsic": return preservesRegexInputs(e.method);

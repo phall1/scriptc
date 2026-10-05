@@ -1,3 +1,4 @@
+import { emitBorrowedInput } from "./borrowed-inputs.js";
 /* Focused LLVM expression emission extracted from emitter.ts. */
 import { InternalCompilerError } from "../../errors.js";
 import { undefinedArmTag } from "../../ir/analysis.js";
@@ -35,7 +36,7 @@ export function emitControlExpr(host: LlvmEmitterContext, e: ExprOf<"dynDestrChe
         // not-iterable TypeError on non-iterables): the dyn helper for
         // dyn operands, the engine's real iterator protocol for island
         // ones.
-        const v = host.emitExpr(e.value);
+        const v = emitBorrowedInput(host, e.value);
         if (e.value.type.kind === "jsval") {
           host.declare(`declare ptr @scr_jsval_iter_n(ptr, double)`);
           const t = B.tmp();
@@ -52,7 +53,7 @@ export function emitControlExpr(host: LlvmEmitterContext, e: ExprOf<"dynDestrChe
         return out;
       }
       case "toBool":
-        return { name: host.truthy(host.emitExpr(e.operand)), type: e.type };
+        return { name: host.truthy(host.emitReadReceiver(e.operand)), type: e.type };
       case "logical": {
         // JS value semantics: the result is the deciding operand itself.
         // Left evaluates once, ownership moves into the result slot; when

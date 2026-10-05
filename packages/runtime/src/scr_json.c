@@ -1039,12 +1039,20 @@ ScrDyn *scr_dyn_undefined(void) {
   return &undef;
 }
 
-ScrDyn *scr_dyn_new_null(void) { return scr_dyn_alloc(SCR_DYN_NULL); }
+/* Primitive nodes have no mutable properties or observable box identity.
+ * As with undefined, SIZE_MAX keeps them out of RC and cycle bookkeeping;
+ * callers retain the ordinary owned-result and ownership-transfer contracts. */
+ScrDyn *scr_dyn_new_null(void) {
+  static ScrDyn value = { .rc = SIZE_MAX, .kind = SCR_DYN_NULL };
+  return &value;
+}
 
 ScrDyn *scr_dyn_new_bool(bool b) {
-  ScrDyn *d = scr_dyn_alloc(SCR_DYN_BOOL);
-  d->v.b = b;
-  return d;
+  static ScrDyn values[2] = {
+    { .rc = SIZE_MAX, .kind = SCR_DYN_BOOL, .v.b = false },
+    { .rc = SIZE_MAX, .kind = SCR_DYN_BOOL, .v.b = true },
+  };
+  return &values[b ? 1 : 0];
 }
 
 ScrDyn *scr_dyn_new_bigint(ScrBigInt *value) {
@@ -6013,19 +6021,15 @@ static ScrDyn *scr_json_value(ScrJsonP *p) {
   }
   if (c == 't') {
     if (!scr_json_lit(p, "true", 4)) return NULL;
-    ScrDyn *d = scr_dyn_alloc(SCR_DYN_BOOL);
-    d->v.b = true;
-    return d;
+    return scr_dyn_new_bool(true);
   }
   if (c == 'f') {
     if (!scr_json_lit(p, "false", 5)) return NULL;
-    ScrDyn *d = scr_dyn_alloc(SCR_DYN_BOOL);
-    d->v.b = false;
-    return d;
+    return scr_dyn_new_bool(false);
   }
   if (c == 'n') {
     if (!scr_json_lit(p, "null", 4)) return NULL;
-    return scr_dyn_alloc(SCR_DYN_NULL);
+    return scr_dyn_new_null();
   }
   if (c == '-' || (c >= '0' && c <= '9')) return scr_json_number(p);
   scr_json_throw_token(p);

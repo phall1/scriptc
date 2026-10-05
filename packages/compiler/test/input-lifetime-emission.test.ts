@@ -65,3 +65,37 @@ console.log(value(), values().join("|"), choose(false));
   }
   expect(body(llvm, "values")).toContain("@sc_lit_");
 });
+
+test("checked scalar and union comparisons borrow projections but snapshot later writes", async () => {
+  const llvm = await emit(`
+type Holder = { value: unknown; choice: string | number };
+function scalar(holder: Holder): boolean { return holder.value === "first"; }
+function truth(holder: Holder): boolean { return !!holder.value; }
+function union(holder: Holder): boolean { return holder.choice === holder.choice; }
+function replace(holder: Holder): unknown { holder.value = "second"; return holder.value; }
+function snapshot(holder: Holder): boolean { return holder.value === replace(holder); }
+const holder: Holder = { value: "first", choice: "first" }; console.log(scalar(holder), truth(holder), union(holder), snapshot(holder));
+`);
+  for (const name of ["scalar", "truth"]) {
+    expect(body(llvm, name)).not.toContain("@scr_dyn_retain_v");
+    expect(body(llvm, name)).not.toContain("@scr_dyn_release");
+  }
+  expect(body(llvm, "union")).not.toContain("@scr_union_retain_v");
+  expect(body(llvm, "snapshot")).toContain("@scr_dyn_retain_v");
+  expect(body(llvm, "snapshot")).toContain("@scr_dyn_release");
+});
+
+test("checked conversion and serialization borrow stable inputs and own their results", async () => {
+  const llvm = await emit(`
+function box(value: string): unknown { return value; }
+function check(value: unknown): string { return value as string; }
+function render(value: unknown): string { return JSON.stringify(value); }
+console.log(check(box("text")), render(box("text")));
+`);
+  expect(body(llvm, "box")).not.toContain("@scr_str_retain_v");
+  for (const name of ["check", "render"]) {
+    expect(body(llvm, name)).not.toMatch(/load ptr[^\n]*\n[^\n]*call ptr @scr_dyn_retain_v/);
+    expect(body(llvm, name)).toContain("ret ptr");
+  }
+  expect(body(llvm, "render")).toContain("@scr_json_stringify_replacer");
+});

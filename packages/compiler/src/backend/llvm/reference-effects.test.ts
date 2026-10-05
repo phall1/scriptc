@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { F64, STRING, VOID, type IrExpr, type IrFunction, type IrStmt } from "../../ir/ir.js";
+import { BOOL, DYN, F64, STRING, VOID, type IrExpr, type IrFunction, type IrStmt } from "../../ir/ir.js";
 import { ReferenceEffects, preservesRegexInputs } from "./reference-effects.js";
 
 const loc = { file: "effects.ts", start: 0, end: 0 };
@@ -48,4 +48,20 @@ test("long call graphs use a worklist and facts are rebuilt for changed bodies",
   const write: IrStmt = { kind: "assign", localId: "owner", value: text, loc };
   functions[1999]!.body.push(write);
   expect(effects(functions).functions.size).toBe(0);
+});
+
+
+test("checked scalar tests preserve owners while materializing reads stay conservative", () => {
+  const value: IrExpr = { kind: "varRef", localId: "value", type: DYN, loc };
+  const summary = effects([]);
+  for (const test of ["truthy", "nullish", "string", "bytes", "buffer", "promise"] as const) {
+    expect(summary.preserves({ kind: "dynTest", value, test, type: BOOL, loc }), test).toBe(true);
+  }
+  for (const test of ["object", "array", "function", "error"] as const) {
+    expect(summary.preserves({ kind: "dynTest", value, test, type: BOOL, loc }), test).toBe(false);
+  }
+  expect(summary.preserves({ kind: "dynScalarEq", left: value, right: text, type: BOOL, loc })).toBe(true);
+  expect(summary.preserves({ kind: "dynKeyGet", value, key: text, type: DYN, loc })).toBe(false);
+  const replace: IrExpr = { kind: "assignExpr", localId: "value", value, type: DYN, loc };
+  expect(summary.preserves({ kind: "dynScalarEq", left: value, right: replace, type: BOOL, loc })).toBe(false);
 });

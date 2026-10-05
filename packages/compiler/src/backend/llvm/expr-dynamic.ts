@@ -1,3 +1,5 @@
+import { emitBorrowedInput, emitBorrowedInputs } from "./borrowed-inputs.js";
+import { preservesDynTest } from "./checked-value-lifetimes.js";
 import { typedRefConstructor } from "./shapes.js";
 /* Focused LLVM expression emission extracted from emitter.ts. */
 import { InternalCompilerError } from "../../errors.js";
@@ -32,7 +34,7 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
           }
           return host.own({ name: t, type: e.type });
         }
-        const v = host.emitExpr(e.value);
+        const v = emitBorrowedInput(host, e.value);
         const identityRef =
           isDynTypedRefType(v.type) ||
           (v.type.kind === "union" &&
@@ -81,7 +83,7 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
         // Island value → dyn: the by-reference wrap (scr_dyn_from_jsval
         // retains the cell in; engine scalars normalize to native dyn
         // kinds at wrap time). Operand borrowed, result +1, never throws.
-        const v = host.emitExpr(e.value);
+        const v = emitBorrowedInput(host, e.value);
         host.declare(`declare ptr @scr_dyn_from_jsval(ptr)`);
         const t = B.tmp();
         B.line(`${t} = call ptr @scr_dyn_from_jsval(ptr ${v.name})`);
@@ -92,11 +94,11 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
         // converted them); everything is BORROWED by scr_dyn_call — the
         // boxed thunk builds its own typed copies. The callee's source
         // spelling rides along for Node's "<name> is not a function".
-        const callee = host.emitExpr(e.callee);
-        const receiver = e.receiver === undefined ? null : host.emitExpr(e.receiver);
+        const callee = emitBorrowedInput(host, e.callee);
+        const receiver = e.receiver === undefined ? null : emitBorrowedInput(host, e.receiver);
         const calleeName = (): string => {
           if (e.calleeNameValue === undefined) return host.cstr(e.calleeName);
-          const name = host.emitExpr(e.calleeNameValue);
+          const name = emitBorrowedInput(host, e.calleeNameValue);
           const data = B.tmp();
           B.line(`${data} = getelementptr inbounds %ScrStr, ptr ${name.name}, i32 1`);
           return data;
@@ -120,8 +122,8 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
           B.line(`${pack} = call ptr @scr_dyn_new_arr()`);
           host.own({ name: pack, type: DYN });
           e.args.forEach((a, i) => {
-            const v = host.emitExpr(a);
             const spreadWhat = spreadAt.get(i);
+            const v = spreadWhat === undefined ? host.emitExpr(a) : emitBorrowedInput(host, a);
             if (spreadWhat !== undefined) {
               B.line(`call void @scr_dyn_arr_push_spread(ptr ${pack}, ptr ${v.name}, ptr ${host.cstr(spreadWhat)})`);
               host.emitPendingCheck();
@@ -139,7 +141,7 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
           host.emitPendingCheck();
           return out;
         }
-        const args = e.args.map((a) => host.emitExpr(a));
+        const args = e.args.map((a) => emitBorrowedInput(host, a));
         let argsPtr = "null";
         if (args.length > 0) {
           const arr = B.slot();
@@ -165,13 +167,13 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
         // Prototype-method dispatch on a dyn receiver: everything is
         // BORROWED by scr_dyn_invoke; the result is owned and may ride a
         // pending exception.
-        const recv = host.emitExpr(e.recv);
+        const recv = emitBorrowedInput(host, e.recv);
         host.declare(`declare ptr @scr_dyn_prepare_method(ptr, ptr)`);
         const prepared = B.tmp();
         B.line(`${prepared} = call ptr @scr_dyn_prepare_method(ptr ${recv.name}, ptr ${host.cstr(e.method)})`);
         host.own({ name: prepared, type: { kind: "dyn" } });
         host.emitPendingCheck();
-        const args = e.args.map((a) => host.emitExpr(a));
+        const args = e.args.map((a) => emitBorrowedInput(host, a));
         let argsPtr = "null";
         if (args.length > 0) {
           const arr = B.slot();
@@ -186,7 +188,7 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
         host.declare(`declare ptr @scr_dyn_invoke_prepared(ptr, ptr, ptr, ptr, ${host.sizeType}, ptr)`);
         let name = host.cstr(e.calleeName);
         if (e.calleeNameValue !== undefined) {
-          const value = host.emitExpr(e.calleeNameValue);
+          const value = emitBorrowedInput(host, e.calleeNameValue);
           name = B.tmp();
           B.line(`${name} = getelementptr inbounds %ScrStr, ptr ${value.name}, i32 1`);
         }
@@ -225,8 +227,8 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
         B.line(`${obj} = call ptr @scr_dyn_new_obj()`);
         const out = host.own({ name: obj, type: e.type });
         for (const f of e.fields ?? []) {
-          const k = host.emitExpr(f.key);
-          const v = host.emitExpr(f.value);
+          const k = emitBorrowedInput(host, f.key);
+          const v = emitBorrowedInput(host, f.value);
           B.line(`call void @${f.key.type.kind === "dyn" ? "scr_dyn_key_set_computed" : "scr_dyn_key_set"}(ptr ${obj}, ptr ${k.name}, ptr ${v.name})`);
           host.emitPendingCheck();
         }
@@ -299,8 +301,8 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
         // arm rides the shared keyed-read chain (owned result, missing-key
         // policy included), and a unit arm answers the interned undefined
         // arm (the optional-chain tail's short-circuit value).
-        const u = host.emitExpr(e.value);
-        const k = host.emitExpr(e.key);
+        const u = emitBorrowedInput(host, e.value);
+        const k = emitBorrowedInput(host, e.key);
         const def = host.unionsById.get(e.unionId);
         if (!def) throw new InternalCompilerError(`llvm emitter bug: unionKeyGet of unknown union ${e.unionId}`);
         const resultDef = e.type.kind === "union" ? host.unionsById.get(e.type.unionId) : undefined;
@@ -426,8 +428,8 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
         // non-optional form throws JS's TypeError on an undefined/null
         // receiver, and HANDLE receivers can throw the loud unmodeled-
         // property ladder on EITHER form; the result is owned (+1).
-        const d = host.emitExpr(e.value);
-        const k = host.emitExpr(e.key);
+        const d = emitBorrowedInput(host, e.value);
+        const k = emitBorrowedInput(host, e.key);
         const helper = e.key.type.kind === "dyn" ? host.dyn.dynComputedKeyGetHelper() : host.dyn.dynKeyGetHelper();
         const t = B.tmp();
         B.line(`${t} = call ptr @${helper}(ptr ${d.name}, ptr ${k.name}, i1 ${e.optional ? "true" : "false"})`);
@@ -436,7 +438,7 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
         return out;
       }
       case "dynHasKey": {
-        const value = host.emitExpr(e.value);
+        const value = emitBorrowedInput(host, e.value);
         const key = host.emitExpr({ kind: "strLit", value: e.key, type: { kind: "string" }, loc: e.loc });
         host.declare(`declare zeroext i1 @scr_dyn_has_key(ptr, ptr)`);
         const raw = B.tmp();
@@ -451,8 +453,8 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
         // dyn vs scalar strict equality: kind test + payload compare.
         // Operands emit in SOURCE order; the dyn side is found by type.
         // Both borrowed, no allocation.
-        const l = host.emitExpr(e.left);
-        const r = host.emitExpr(e.right);
+        const inputs = emitBorrowedInputs(host, [e.left, e.right]);
+        const l = inputs[0]!, r = inputs[1]!;
         const [d, s, st] = e.left.type.kind === "dyn" ? [l, r, e.right.type] : [r, l, e.left.type];
         let test: string;
         if (st.kind === "dyn") {
@@ -505,9 +507,9 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
         return { name: neg, type: e.type };
       }
       case "dynTest": {
-        // A pure kind compare on the dyn node — borrowed; only the truthy
-        // form also reads a scalar payload (the runtime's ToBoolean).
-        const d = host.emitExpr(e.value);
+        // Scalar tests preserve existing owners. Brand tests may materialize
+        // a native view, so only independently owned locals borrow there.
+        const d = preservesDynTest(e.test) ? host.emitReadReceiver(e.value) : emitBorrowedInput(host, e.value);
         let test: string;
         if (e.test === "bytes") {
           host.declare(`declare zeroext i1 @scr_dyn_typed_array_is(ptr, i32)`);
@@ -630,8 +632,8 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
       case "unionEq": {
         // Strict equality of the ARM values (tag compare + per-arm payload
         // compare — the C per-union helper, inlined). Both boxes borrowed.
-        const l = host.emitExpr(e.left);
-        const r = host.emitExpr(e.right);
+        const inputs = emitBorrowedInputs(host, [e.left, e.right]);
+        const l = inputs[0]!, r = inputs[1]!;
         const def = host.unionsById.get(e.unionId);
         if (!def) throw new InternalCompilerError(`llvm emitter bug: equality of unknown union ${e.unionId}`);
         const slot = B.slot();
@@ -719,8 +721,8 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
         return { name: t, type: e.type };
       }
       case "unionFuncEq": {
-        const u = host.emitExpr(e.union);
-        const f = host.emitExpr(e.func);
+        const inputs = emitBorrowedInputs(host, [e.union, e.func]);
+        const u = inputs[0]!, f = inputs[1]!;
         const tag = host.unionTag(u.name);
         const tagMatch = B.tmp();
         B.line(`${tagMatch} = icmp eq i32 ${tag}, ${e.tag}`);
@@ -739,7 +741,7 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
         // an OBJ payload's vtable preorder against the class's compile-
         // time interval (false for every other payload kind). Box
         // borrowed. SCR_EXC_STR = 3, SCR_EXC_F64 = 1, SCR_EXC_BOOL = 2.
-        const c = host.emitExpr(e.value);
+        const c = host.emitReadReceiver(e.value);
         if (e.test === "instanceof") {
           const target = host.classMetaOf(e.className!);
           host.declare(`declare zeroext i1 @scr_caught_instanceof(ptr, ${host.sizeType}, ${host.sizeType})`);
@@ -773,7 +775,7 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
         // +1, anything else throws the catchable TypeError — the result
         // joins the frame BEFORE the pending check so an unwind releases
         // the NULL dummy harmlessly. Box borrowed.
-        const c = host.emitExpr(e.value);
+        const c = host.emitReadReceiver(e.value);
         const target = host.classMetaOf(e.className);
         const display = e.className.startsWith("%") ? e.className.slice(1) : e.className;
         host.declare(`declare ptr @scr_caught_check_obj(ptr, ${host.sizeType}, ${host.sizeType}, ptr)`);
@@ -789,7 +791,7 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
         // Checker-trusted extraction (the matching caughtTest was proven
         // by tsc's narrowing): scalars read the snapshot's slots,
         // refcounted payloads come out retained (+1). Box borrowed.
-        const c = host.emitExpr(e.value);
+        const c = host.emitReadReceiver(e.value);
         if (e.type.kind === "f64") {
           const p = B.tmp();
           const v = B.tmp();
@@ -830,7 +832,7 @@ export function emitDynamicExpr(host: LlvmEmitterContext, e: ExprOf<"dynFrom" | 
         // A catch binding flowing into an `unknown` slot: the snapshot's
         // runtime kind converts through the interned helper (+1 fresh
         // tree; never throws). Box borrowed.
-        const c = host.emitExpr(e.value);
+        const c = emitBorrowedInput(host, e.value);
         const helper = host.dyn.caughtToDynHelper();
         const t = B.tmp();
         B.line(`${t} = call ptr @${helper}(ptr ${c.name})`);
