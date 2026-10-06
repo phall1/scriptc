@@ -72,6 +72,7 @@ typedef struct ScrSidx {
   const ScrStr *s;       /* NULL = empty slot */
   size_t u16len;         /* SCR_U16_UNKNOWN until the whole current string */
   size_t cu, cb;         /* hot cursor: cb starts the char at unit cu */
+  size_t ascii_cu, ascii_cb, ascii_end; /* bounded, proven identity span */
   ScrSidxPoint *points;  /* sparse, ordered code-point-boundary anchors */
   size_t npoints, cap;   /* owned points length/capacity */
   size_t indexed_cu;     /* exact contiguous prefix indexed from byte zero */
@@ -112,8 +113,13 @@ static void scr_sidx_register_cleanup(void) {
 
 #ifdef SCR_SIDX_TEST
 static SCR_TL size_t scr_sidx_walk_steps;
-void scr_sidx_test_reset_steps(void) { scr_sidx_walk_steps = 0; }
+static SCR_TL size_t scr_sidx_searches;
+void scr_sidx_test_reset_steps(void) {
+  scr_sidx_walk_steps = 0;
+  scr_sidx_searches = 0;
+}
 size_t scr_sidx_test_walk_steps(void) { return scr_sidx_walk_steps; }
+size_t scr_sidx_test_searches(void) { return scr_sidx_searches; }
 void scr_sidx_test_reset_cache(void) { scr_sidx_reset_all(); }
 size_t scr_sidx_test_entries(void) {
   size_t n = 0;
@@ -128,8 +134,10 @@ size_t scr_sidx_test_points(void) {
   return n;
 }
 #define SCR_SIDX_STEP() (scr_sidx_walk_steps++)
+#define SCR_SIDX_SEARCH() (scr_sidx_searches++)
 #else
 #define SCR_SIDX_STEP() ((void)0)
+#define SCR_SIDX_SEARCH() ((void)0)
 #endif
 
 static void scr_sidx_purge(const ScrStr *s) {
@@ -779,9 +787,14 @@ static size_t scr_sidx_abs_diff(size_t a, size_t b) {
  * sufficient; the hot cursor retains sequential-access locality. */
 static ScrSidxPoint scr_sidx_near_u16(const ScrStr *s, const ScrSidx *e,
                                       size_t u16) {
+  /* A nearby cursor already bounds the walk. Searching the complete index
+   * first would make each sequential read depend on the receiver's size. */
+  if (e->cb <= s->len && scr_sidx_abs_diff(e->cu, u16) <= 16)
+    return (ScrSidxPoint){e->cu, e->cb};
   ScrSidxPoint best = {0, 0};
   size_t best_dist = u16;
   if (e->npoints != 0) {
+    SCR_SIDX_SEARCH();
     size_t lo = 0, hi = e->npoints;
     while (lo < hi) {
       size_t m = lo + (hi - lo) / 2;
@@ -812,9 +825,12 @@ static ScrSidxPoint scr_sidx_near_u16(const ScrStr *s, const ScrSidx *e,
 
 static ScrSidxPoint scr_sidx_near_byte(const ScrStr *s, const ScrSidx *e,
                                        size_t byte_off) {
+  if (e->cb <= s->len && scr_sidx_abs_diff(e->cb, byte_off) <= 16)
+    return (ScrSidxPoint){e->cu, e->cb};
   ScrSidxPoint best = {0, 0};
   size_t best_dist = byte_off;
   if (e->npoints != 0) {
+    SCR_SIDX_SEARCH();
     size_t lo = 0, hi = e->npoints;
     while (lo < hi) {
       size_t m = lo + (hi - lo) / 2;
@@ -843,6 +859,36 @@ static ScrSidxPoint scr_sidx_near_byte(const ScrStr *s, const ScrSidx *e,
   return best;
 }
 
+/* Cache only a bounded ASCII run at a resolved boundary. Local scans then
+ * use arithmetic even inside a mixed string. The bytes are immutable except
+ * for append, which preserves this prefix; eviction/reallocation clears the
+ * whole entry. No scan reads outside the receiver or allocates metadata. */
+static void scr_sidx_ascii_run(const ScrStr *s, ScrSidx *e) {
+  size_t start = e->cb, end = start;
+  /* Center the window on the access so reverse scans reuse it too. A
+   * forward-only window would rescan its full width on every backward read. */
+  size_t lower = start < 128 ? 0 : start - 128;
+  while (start - lower >= 8) {
+    uint64_t word;
+    memcpy(&word, s->data + start - 8, 8);
+    if (word & UINT64_C(0x8080808080808080)) break;
+    start -= 8;
+  }
+  while (start > lower && (unsigned char)s->data[start - 1] < 0x80) start--;
+  size_t remaining = s->len - end;
+  size_t limit = end + (remaining < 128 ? remaining : 128);
+  while (limit - end >= 8) {
+    uint64_t word;
+    memcpy(&word, s->data + end, 8);
+    if (word & UINT64_C(0x8080808080808080)) break;
+    end += 8;
+  }
+  while (end < limit && (unsigned char)s->data[end] < 0x80) end++;
+  e->ascii_cu = e->cu - (e->cb - start);
+  e->ascii_cb = start;
+  e->ascii_end = end;
+}
+
 /* Convert a UTF-16 index to a byte offset from the closest sparse anchor or
  * hot cursor. If u16 addresses the second (low-surrogate) unit of
  * an astral char, *mid is set and the returned offset is the START of that
@@ -854,6 +900,12 @@ static size_t scr_u16_to_byte_c(const ScrStr *s, ScrSidx *e, size_t u16,
     *mid = false;
     return u16 < s->len ? u16 : s->len;
   }
+  if (u16 >= e->ascii_cu && u16 - e->ascii_cu < e->ascii_end - e->ascii_cb) {
+    e->cb = e->ascii_cb + (u16 - e->ascii_cu);
+    e->cu = u16;
+    *mid = false;
+    return e->cb;
+  }
   scr_sidx_extend_to_u16(s, e, u16);
   /* Extending a far-end lookup can just have proved identity. Do not
    * materialize an index that the identity fast path will never consult. */
@@ -864,9 +916,31 @@ static size_t scr_u16_to_byte_c(const ScrStr *s, ScrSidx *e, size_t u16,
   scr_sidx_materialize_identity_prefix(s, e);
   ScrSidxPoint near = scr_sidx_near_u16(s, e, u16);
   size_t cu = near.cu, cb = near.cb;
-  while (cu > u16) scr_sidx_back(s, &cu, &cb);
+  while (cu > u16) {
+    /* Eight bytes starting inside a sequence can reach back at most three
+     * more bytes to its lead. Such a span contains at most nine UTF-16
+     * units (seven ASCII bytes plus an astral pair), so it cannot overshoot
+     * a target at least nine units away. */
+    if (cu - u16 >= 9 && cb >= 8) {
+      size_t start = cb - 8;
+      while (start > 0 && ((unsigned char)s->data[start] & 0xC0) == 0x80)
+        start--;
+      cu -= scr_utf16_units_span(s->data + start, cb - start, NULL);
+      cb = start;
+    } else {
+      scr_sidx_back(s, &cu, &cb);
+    }
+  }
   bool m = false;
   while (cu < u16 && cb < s->len) {
+    if (u16 - cu >= 9 && s->len - cb >= 8) {
+      size_t end = cb + 8;
+      while (end < s->len && ((unsigned char)s->data[end] & 0xC0) == 0x80)
+        end++;
+      cu += scr_utf16_units_span(s->data + cb, end - cb, NULL);
+      cb = end;
+      continue;
+    }
     SCR_SIDX_STEP();
     size_t seq = scr_utf8_seq_len((unsigned char)s->data[cb]);
     size_t w = seq == 4 ? 2 : 1;
@@ -879,6 +953,8 @@ static size_t scr_u16_to_byte_c(const ScrStr *s, ScrSidx *e, size_t u16,
   }
   e->cu = cu;
   e->cb = cb;
+  if (cb < s->len && (unsigned char)s->data[cb] < 0x80)
+    scr_sidx_ascii_run(s, e);
   *mid = m;
   return cb;
 }
@@ -888,6 +964,11 @@ static size_t scr_u16_to_byte_c(const ScrStr *s, ScrSidx *e, size_t u16,
 static size_t scr_byte_to_u16_c(const ScrStr *s, ScrSidx *e,
                                  size_t byte_off) {
   if (e->u16len == s->len) return byte_off; /* all ASCII */
+  if (byte_off >= e->ascii_cb && byte_off < e->ascii_end) {
+    e->cu = e->ascii_cu + (byte_off - e->ascii_cb);
+    e->cb = byte_off;
+    return e->cu;
+  }
   /* A byte search result may be far beyond the existing prefix. Build the
    * same sparse intervals first, then choose the closest boundary anchor. */
   if (byte_off > e->indexed_cb) {
@@ -900,15 +981,17 @@ static size_t scr_byte_to_u16_c(const ScrStr *s, ScrSidx *e,
   scr_sidx_materialize_identity_prefix(s, e);
   ScrSidxPoint near = scr_sidx_near_byte(s, e, byte_off);
   size_t cu = near.cu, cb = near.cb;
-  while (cb > byte_off) scr_sidx_back(s, &cu, &cb);
-  while (cb < byte_off) {
-    SCR_SIDX_STEP();
-    size_t seq = scr_utf8_seq_len((unsigned char)s->data[cb]);
-    cu += seq == 4 ? 2 : 1;
-    cb += seq;
-  }
+  /* Unlike unit-to-byte conversion, both endpoints are already exact byte
+   * boundaries. Count the whole span with the shared word-wise classifier. */
+  if (cb > byte_off)
+    cu -= scr_utf16_units_span(s->data + byte_off, cb - byte_off, NULL);
+  else
+    cu += scr_utf16_units_span(s->data + cb, byte_off - cb, NULL);
+  cb = byte_off;
   e->cu = cu;
   e->cb = cb;
+  if (cb < s->len && (unsigned char)s->data[cb] < 0x80)
+    scr_sidx_ascii_run(s, e);
   return cu;
 }
 
@@ -986,14 +1069,18 @@ double scr_str_char_code_at(ScrStr *s, double i) {
 
 double scr_str_index_of(ScrStr *s, ScrStr *needle, double fromIndex) {
   double pos = scr_to_integer_or_infinity(fromIndex);
+  if (needle->len > s->len) return -1.0;
   ScrSidx *e = scr_sidx(s);
-  size_t len16 = scr_sidx_len(s, e);
-  size_t start16 = pos <= 0             ? 0
-                   : pos >= (double)len16 ? len16
-                                          : (size_t)pos;
   /* Per spec, the empty needle is found at the clamped fromIndex itself —
    * even when that index is between the halves of an astral pair. */
-  if (needle->len == 0) return (double)start16;
+  if (needle->len == 0) {
+    size_t len16 = scr_sidx_len(s, e);
+    return pos <= 0 ? 0 : pos >= (double)len16 ? (double)len16 : pos;
+  }
+  /* Byte length bounds UTF-16 length and fences the cast. Let the mapper
+   * extend only as far as needed instead of indexing an unsearched suffix. */
+  if (pos >= (double)s->len) return -1.0;
+  size_t start16 = pos <= 0 ? 0 : (size_t)pos;
   bool mid;
   size_t start_b = scr_u16_to_byte_c(s, e, start16, &mid);
   /* A match can't begin on a low-surrogate half (needles are well-formed),
@@ -1006,11 +1093,11 @@ double scr_str_index_of(ScrStr *s, ScrStr *needle, double fromIndex) {
   return (double)scr_byte_to_u16_c(s, e, (size_t)(found - s->data));
 }
 
-/* substring: slice's clamp-and-swap sibling — ToIntegerOrInfinity both
- * boundaries (NaN → 0), clamp each to [0, len16] (negatives clamp to 0,
- * NOT relative like slice's), swap when start > end, then extract exactly
- * like slice (whose relative/negative handling is inert on the
- * already-clamped values — delegation is exact). */
+static ScrStr *scr_str_slice_units(ScrStr *s, ScrSidx *e,
+                                    size_t from, size_t to);
+
+/* Normalize once, then share slice's extraction without another cache
+ * lookup, length query or floating-point boundary conversion. */
 ScrStr *scr_str_substring(ScrStr *s, double start, double end) {
   ScrSidx *e = scr_sidx(s);
   double len16 = (double)scr_sidx_len(s, e);
@@ -1018,7 +1105,8 @@ ScrStr *scr_str_substring(ScrStr *s, double start, double end) {
   double b = scr_to_integer_or_infinity(end);
   double fa = a < 0 ? 0 : a > len16 ? len16 : a;
   double fb = b < 0 ? 0 : b > len16 ? len16 : b;
-  return fa < fb ? scr_str_slice(s, fa, fb) : scr_str_slice(s, fb, fa);
+  return fa < fb ? scr_str_slice_units(s, e, (size_t)fa, (size_t)fb)
+                 : scr_str_slice_units(s, e, (size_t)fb, (size_t)fa);
 }
 
 bool scr_str_includes(ScrStr *s, ScrStr *needle) {
@@ -1042,22 +1130,27 @@ static size_t scr_str_clamp_u16_position(double position, size_t len16) {
 }
 
 bool scr_str_starts_with_from(ScrStr *s, ScrStr *needle, double position) {
-  ScrSidx *e = scr_sidx(s);
-  size_t len16 = scr_sidx_len(s, e);
-  size_t start16 = scr_str_clamp_u16_position(position, len16);
   if (needle->len == 0) return true;
+  double pos = scr_to_integer_or_infinity(position);
+  if (pos <= 0) return scr_str_starts_with(s, needle);
+  if (pos >= (double)s->len || needle->len > s->len) return false;
+  ScrSidx *e = scr_sidx(s);
   bool mid;
-  size_t start_byte = scr_u16_to_byte_c(s, e, start16, &mid);
+  size_t start_byte = scr_u16_to_byte_c(s, e, (size_t)pos, &mid);
   return !mid && needle->len <= s->len - start_byte &&
          memcmp(s->data + start_byte, needle->data, needle->len) == 0;
 }
 
 bool scr_str_ends_with_from(ScrStr *s, ScrStr *needle, double end_position) {
+  if (needle->len == 0) return true;
+  if (needle->len > s->len) return false;
+  if (end_position >= (double)s->len) return scr_str_ends_with(s, needle);
+  /* A second receiver lookup can evict the first receiver's entry. Resolve
+   * the needle before borrowing the haystack entry for both conversions. */
+  size_t needle16 = scr_sidx_len(needle, scr_sidx(needle));
   ScrSidx *e = scr_sidx(s);
   size_t len16 = scr_sidx_len(s, e);
   size_t end16 = scr_str_clamp_u16_position(end_position, len16);
-  size_t needle16 = scr_sidx_len(needle, scr_sidx(needle));
-  if (needle16 == 0) return true;
   if (needle16 > end16) return false;
   bool start_mid, end_mid;
   size_t start_byte = scr_u16_to_byte_c(s, e, end16 - needle16, &start_mid);
@@ -1082,6 +1175,11 @@ ScrStr *scr_str_slice(ScrStr *s, double start, double end) {
   size_t len16 = scr_sidx_len(s, e);
   size_t from = scr_slice_boundary(scr_to_integer_or_infinity(start), len16);
   size_t to = scr_slice_boundary(scr_to_integer_or_infinity(end), len16);
+  return scr_str_slice_units(s, e, from, to);
+}
+
+static ScrStr *scr_str_slice_units(ScrStr *s, ScrSidx *e,
+                                    size_t from, size_t to) {
   if (from >= to) return scr_str_empty();
 
   bool from_mid, to_mid;
@@ -1098,18 +1196,16 @@ ScrStr *scr_str_slice(ScrStr *s, double start, double end) {
   /* Divergence: JS would emit the lone surrogate half; we emit U+FFFD. */
   size_t total = content_len + (from_mid ? SCR_REPLACEMENT_LEN : 0) +
                  (to_mid ? SCR_REPLACEMENT_LEN : 0);
-  char *tmp = malloc(total);
-  if (!tmp) scr_oom();
+  ScrStr *r = scr_str_alloc(total, total);
   size_t o = 0;
   if (from_mid) {
-    memcpy(tmp + o, SCR_REPLACEMENT, SCR_REPLACEMENT_LEN);
+    memcpy(r->data + o, SCR_REPLACEMENT, SCR_REPLACEMENT_LEN);
     o += SCR_REPLACEMENT_LEN;
   }
-  memcpy(tmp + o, s->data + content_b, content_len);
+  memcpy(r->data + o, s->data + content_b, content_len);
   o += content_len;
-  if (to_mid) memcpy(tmp + o, SCR_REPLACEMENT, SCR_REPLACEMENT_LEN);
-  ScrStr *r = scr_str_new(tmp, total);
-  free(tmp);
+  if (to_mid) memcpy(r->data + o, SCR_REPLACEMENT, SCR_REPLACEMENT_LEN);
+  r->data[total] = '\0';
   return r;
 }
 
