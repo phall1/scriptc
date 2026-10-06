@@ -1,6 +1,6 @@
 import type { Lowerer } from "./lowerer.js";
 import { DYN, F64, STRING, type IrExpr, type IrType, type SrcLoc } from "../../ir/ir.js";
-import { mapFromSeedValue } from "./lower-containers.js";
+import { mapFromSeedValue } from "./containers/collection-methods.js";
 import { InternalCompilerError } from "../../errors.js";
 
 /** Build the native Map through the same checked entry conversion as

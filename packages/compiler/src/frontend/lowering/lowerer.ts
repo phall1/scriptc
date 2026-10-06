@@ -331,16 +331,14 @@ import {
   lowerLambda,
   lowerFunction,
 } from "./lower-functions.js";
+import { lowerArrayMethodCall } from "./containers/array-methods.js";
 import {
-  lowerArrayMethodCall,
   lowerMapMethodCall,
   lowerMapForEachCall,
-  buildMapForEachFn,
-  lowerEnvToPairsHelper,
   lowerSetMethodCall,
   lowerSetForEachCall,
-  buildSetForEachFn,
-} from "./lower-containers.js";
+} from "./containers/collection-methods.js";
+import { lowerEnvToPairsHelper } from "./containers/indexed-objects.js";
 import { lowerBufferStaticCall, lowerBytesMethodCall, lowerBytesNew } from "./containers/bytes.js";
 import { lowerRegexMethodCall, lowerStringMethodCall } from "./containers/string-and-regexp.js";
 import {
@@ -9694,16 +9692,6 @@ export class Lowerer {
     return lowerMapForEachCall(this, call, receiver, mapT);
   }
 
-  buildMapForEachFn(
-    name: string,
-    mapT: IrType & { kind: "map" },
-    arity: number,
-    fnRet: IrType,
-    loc: SrcLoc,
-  ): IrFunction {
-    return buildMapForEachFn(this, name, mapT, arity, fnRet, loc);
-  }
-
   lowerSetMethodCall(call: ts.CallExpression, access: ts.PropertyAccessExpression): IrExpr | null {
     return lowerSetMethodCall(this, call, access);
   }
@@ -9714,16 +9702,6 @@ export class Lowerer {
     setT: IrType & { kind: "set" },
   ): IrExpr {
     return lowerSetForEachCall(this, call, receiver, setT);
-  }
-
-  buildSetForEachFn(
-    name: string,
-    setT: IrType & { kind: "set" },
-    arity: number,
-    fnRet: IrType,
-    loc: SrcLoc,
-  ): IrFunction {
-    return buildSetForEachFn(this, name, setT, arity, fnRet, loc);
   }
 
   lowerRegexLiteral(expr: ts.RegularExpressionLiteral): IrExpr {

@@ -151,6 +151,35 @@
       },
     },
     {
+      // Container implementations import semantic owners rather than array dispatch.
+      "files": ["packages/compiler/src/frontend/lowering/containers/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**/array-methods", "**/array-methods.*"],
+                "message": "container implementations must not import array dispatch; import the callback, construction or iteration owner.",
+              },
+              {
+                "group": ["**/backend/*", "**/backend/**"],
+                "message": "frontend must not import backend; use the IR interface.",
+              },
+              {
+                "group": ["**/ir/validate", "**/ir/validate.*"],
+                "message": "frontend must not import IR validation; use the shared builtin and intrinsic signatures.",
+              },
+              {
+                "group": ["typescript5", "typescript5/**"],
+                "message": "typescript5 is restricted to the explicit parser islands; TypeScript AST worlds must not mix.",
+              },
+            ],
+          },
+        ],
+      },
+    },
+    {
       // Only strings and offsets cross these TypeScript 5 parser islands.
       "files": [
         "packages/compiler/src/frontend/npm.ts",

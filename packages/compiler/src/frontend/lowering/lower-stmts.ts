@@ -94,10 +94,10 @@ import {
   lowerForOfMap,
   lowerForOfSearchParams,
   lowerForOfSet,
-  lowerSafeIndexRead,
-  objectIterOverIndexShape,
-  strCharsCall,
-} from "./lower-containers.js";
+} from "./containers/for-of.js";
+import { lowerSafeIndexRead } from "./containers/array-methods.js";
+import { objectIterOverIndexShape } from "./containers/indexed-objects.js";
+import { strCharsCall } from "./containers/array-construction.js";
 import {
   bindingContextualGenericFnNodeOf,
   bindingGenericFnAliasInfoOf,
@@ -8692,7 +8692,7 @@ export function lowerForOf(lowerer: Lowerer, stmt: ts.ForOfStatement): IrStmt {
         );
       }
       // ARRAY keys()/entries() projections: the live index walk yielding
-      // the index or the [index, element] pair (lower-containers).
+      // the index or the [index, element] pair.
       // `values` falls through to the receiver unwrap below.
       if (recv?.kind === "array" && (proj === "keys" || proj === "entries")) {
         const container = lowerer.lowerExpr(src.expression.expression);
@@ -8829,7 +8829,7 @@ export function lowerForOf(lowerer: Lowerer, stmt: ts.ForOfStatement): IrStmt {
     }
     if (iterable.type.kind === "map") {
       // Maps iterate [key, value] entries with the forEach desugar's
-      // live-iteration contract (lower-containers).
+      // live-iteration contract.
       return lowerForOfMap(lowerer, stmt, iterable, iterable.type);
     }
     if (iterable.type.kind === "set") {
@@ -8837,7 +8837,7 @@ export function lowerForOf(lowerer: Lowerer, stmt: ts.ForOfStatement): IrStmt {
     }
     if (iterable.type.kind === "searchParams") {
       // URLSearchParams iterates [name, value] pairs with the live
-      // index walk (lower-containers).
+      // index walk.
       return lowerForOfSearchParams(lowerer, stmt, iterable);
     }
     if (iterable.type.kind === "generator") {

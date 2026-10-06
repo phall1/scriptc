@@ -1,7 +1,7 @@
 import { BOOL, DYN, STRING, type IrExpr, type SrcLoc } from "../../ir/ir.js";
 import { varRef } from "../../ir/build.js";
 import { newFnCtx, type Lowerer } from "./lowerer.js";
-import { lowerCheckedArrayFrom } from "./lower-containers.js";
+import { lowerCheckedArrayFrom } from "./containers/array-construction.js";
 
 /** Spread consumes the iterator protocol, including native class methods. */
 export function checkedIterableSpread(
