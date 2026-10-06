@@ -7,6 +7,7 @@
  * encoding conversions (utf8 with WHATWG replacement, hex, base64) match
  * Node byte-for-byte — the differential corpus holds them to it. */
 #include "scr_runtime.h"
+#include "scr_numeric.h"
 #include "scr_text_decoder_labels.h"
 #ifdef SCR_TEXT_DECODER_LEGACY
 #include "scr_text_decoder_data.h"
@@ -137,6 +138,17 @@ ScrBytes *scr_bytes_take_data(uint8_t *data, size_t len) {
   return b;
 }
 
+/* Only complete, non-observable initialization may use private storage. */
+static ScrBytes *scr_bytes_alloc_private(ScrBytesElem elem, size_t len) {
+  size_t width = scr_bytes_elem_size(elem);
+  if (len > SIZE_MAX / width) scr_bytes_oom();
+  uint8_t *data = malloc(len ? len * width : 1);
+  if (!data) scr_bytes_oom();
+  ScrBytes *b = scr_bytes_take_data(data, len);
+  b->elem = elem;
+  return b;
+}
+
 static ScrBytes *scr_bytes_alloc(ScrBytesElem elem, size_t len) {
   size_t width = scr_bytes_elem_size(elem);
   if (len > SIZE_MAX / width) scr_bytes_oom();
@@ -181,13 +193,13 @@ ScrBytes *scr_bytes_from_data(const uint8_t *data, size_t len) {
   if (data == NULL && len != 0) {
     scr_trap("scriptc: native callback passed a NULL span with nonzero length\n");
   }
-  ScrBytes *b = scr_bytes_alloc(SCR_BYTES_U8, len);
+  ScrBytes *b = scr_bytes_alloc_private(SCR_BYTES_U8, len);
   if (len != 0) memcpy(b->data, data, len);
   return b;
 }
 
 ScrBytes *scr_bytes_copy(const ScrBytes *src) {
-  ScrBytes *b = scr_bytes_alloc(src->elem, src->len);
+  ScrBytes *b = scr_bytes_alloc_private(src->elem, src->len);
   memcpy(b->data, src->data, src->len * scr_bytes_elem_size(src->elem));
   return b;
 }
@@ -201,13 +213,6 @@ ScrBytes *scr_bytes_as_buffer(ScrBytes *bytes) {
   bytes->is_buffer = true;
   bytes->is_data_view = false;
   return scr_bytes_retain(bytes);
-}
-
-ScrBytes *scr_bytes_convert(ScrBytesElem elem, const ScrBytes *src) {
-  if (elem == src->elem) return scr_bytes_copy(src);
-  ScrBytes *out = scr_bytes_alloc(elem, src->len);
-  for (size_t i = 0; i < src->len; i++) scr_bytes_set(out, (double)i, scr_bytes_get(src, (double)i));
-  return out;
 }
 
 void scr_bytes_release(ScrBytes *b) {
@@ -259,11 +264,7 @@ static size_t scr_bytes_check_index(const ScrBytes *b, double i) {
 /* ToUint32: NaN/±Infinity → 0, truncate toward zero, wrap mod 2^32.
  * ToUint8 is its low byte (2^8 divides 2^32, so the residues agree). */
 static uint32_t scr_bytes_to_u32(double v) {
-  if (v != v || isinf(v)) return 0;
-  double t = trunc(v);
-  t = fmod(t, 4294967296.0);
-  if (t < 0) t += 4294967296.0;
-  return (uint32_t)t;
+  return scr_numeric_to_u32(v);
 }
 
 double scr_bytes_get(const ScrBytes *b, double i) {
@@ -349,6 +350,86 @@ void scr_bytes_set(ScrBytes *b, double i, double v) {
   }
 }
 
+/* Dispatch once per bounded block, not once per element. Loads and stores
+ * use memcpy so views and external storage need no stronger alignment or
+ * aliasing promise. A bounded scratch block avoids a kind-pair code matrix. */
+static void scr_bytes_read_numbers(double *out, const uint8_t *src, ScrBytesElem elem, size_t count) {
+#define SCR_READ_NUMBERS(kind, type) \
+  case kind: \
+    for (size_t i = 0; i < count; i++) { \
+      type value; \
+      memcpy(&value, src + i * sizeof value, sizeof value); \
+      out[i] = (double)value; \
+    } \
+    return
+  switch (elem) {
+    case SCR_BYTES_U8C:
+    SCR_READ_NUMBERS(SCR_BYTES_U8, uint8_t);
+    SCR_READ_NUMBERS(SCR_BYTES_I8, int8_t);
+    SCR_READ_NUMBERS(SCR_BYTES_U16, uint16_t);
+    SCR_READ_NUMBERS(SCR_BYTES_I16, int16_t);
+    SCR_READ_NUMBERS(SCR_BYTES_U32, uint32_t);
+    SCR_READ_NUMBERS(SCR_BYTES_I32, int32_t);
+    SCR_READ_NUMBERS(SCR_BYTES_F32, float);
+    SCR_READ_NUMBERS(SCR_BYTES_F64, double);
+  }
+#undef SCR_READ_NUMBERS
+}
+
+static void scr_bytes_write_numbers(uint8_t *dst, ScrBytesElem elem, const double *src, size_t count) {
+#define SCR_WRITE_NUMBERS(type, expression) \
+  for (size_t i = 0; i < count; i++) { \
+    type value = (expression); \
+    memcpy(dst + i * sizeof value, &value, sizeof value); \
+  } \
+  return
+  switch (elem) {
+    case SCR_BYTES_U8: case SCR_BYTES_I8: {
+      SCR_WRITE_NUMBERS(uint8_t, (uint8_t)scr_numeric_to_u32(src[i]));
+    }
+    case SCR_BYTES_U8C: {
+      SCR_WRITE_NUMBERS(uint8_t, (uint8_t)scr_bytes_to_u8_clamp(src[i]));
+    }
+    case SCR_BYTES_U16: case SCR_BYTES_I16: {
+      SCR_WRITE_NUMBERS(uint16_t, (uint16_t)scr_numeric_to_u32(src[i]));
+    }
+    case SCR_BYTES_U32: case SCR_BYTES_I32: {
+      SCR_WRITE_NUMBERS(uint32_t, scr_numeric_to_u32(src[i]));
+    }
+    case SCR_BYTES_F32: {
+      SCR_WRITE_NUMBERS(float, (float)src[i]);
+    }
+    case SCR_BYTES_F64: {
+      memcpy(dst, src, count * sizeof(double));
+      return;
+    }
+  }
+#undef SCR_WRITE_NUMBERS
+}
+
+/* Caller guarantees disjoint spans, or snapshots the source before entry. */
+static void scr_bytes_convert_span(uint8_t *dst, ScrBytesElem dest_elem,
+                                    const uint8_t *src, ScrBytesElem src_elem, size_t count) {
+  size_t source_width = scr_bytes_elem_size(src_elem);
+  size_t dest_width = scr_bytes_elem_size(dest_elem);
+  double values[128];
+  while (count) {
+    size_t block = count < 128 ? count : 128;
+    scr_bytes_read_numbers(values, src, src_elem, block);
+    scr_bytes_write_numbers(dst, dest_elem, values, block);
+    src += block * source_width;
+    dst += block * dest_width;
+    count -= block;
+  }
+}
+
+ScrBytes *scr_bytes_convert(ScrBytesElem elem, const ScrBytes *src) {
+  if (elem == src->elem) return scr_bytes_copy(src);
+  ScrBytes *out = scr_bytes_alloc_private(elem, src->len);
+  scr_bytes_convert_span(out->data, elem, src->data, src->elem, src->len);
+  return out;
+}
+
 /* ── slice (copy) / subarray (view) ────────────────────────────────────── */
 
 /* Relative index: ToIntegerOrInfinity, negatives from the end, clamped. */
@@ -366,7 +447,7 @@ ScrBytes *scr_bytes_slice(const ScrBytes *b, double start, double end) {
   size_t e = scr_bytes_rel_index(end, b->len);
   size_t count = e > s ? e - s : 0;
   size_t esize = scr_bytes_elem_size(b->elem);
-  ScrBytes *out = scr_bytes_alloc(b->elem, count);
+  ScrBytes *out = scr_bytes_alloc_private(b->elem, count);
   memcpy(out->data, b->data + s * esize, count * esize);
   return out;
 }
@@ -389,7 +470,23 @@ ScrBytes *scr_bytes_copy_within(ScrBytes *b, double target, double start, double
 ScrBytes *scr_bytes_fill_elem(ScrBytes *b, double v, double start, double end) {
   size_t s = scr_bytes_rel_index(start, b->len);
   size_t e = scr_bytes_rel_index(end, b->len);
-  for (size_t i = s; i < e; i++) scr_bytes_set(b, (double)i, v);
+  if (e > s) {
+    size_t width = scr_bytes_elem_size(b->elem);
+    uint8_t pattern[8];
+    scr_bytes_write_numbers(pattern, b->elem, &v, 1);
+    uint8_t *dst = b->data + s * width;
+    size_t bytes = (e - s) * width;
+    if (width == 1) memset(dst, pattern[0], bytes);
+    else {
+      memcpy(dst, pattern, width);
+      size_t filled = width;
+      while (filled < bytes) {
+        size_t copy = filled < bytes - filled ? filled : bytes - filled;
+        memcpy(dst + filled, dst, copy);
+        filled += copy;
+      }
+    }
+  }
   return scr_bytes_retain(b);
 }
 
@@ -427,16 +524,27 @@ void scr_bytes_set_from(ScrBytes *dst, const ScrBytes *src, double offset) {
     scr_throw_error_msg(SCR_ERR_RANGE, msg, sizeof msg - 1);
     return;
   }
-  if (dst->elem != src->elem) {
-    // Snapshot before writing: views can overlap even with distinct kinds.
-    ScrBytes *copy = scr_bytes_convert(dst->elem, src);
-    memcpy(dst->data + (size_t)t * scr_bytes_elem_size(dst->elem), copy->data,
-           copy->len * scr_bytes_elem_size(copy->elem));
-    scr_bytes_release(copy);
+  size_t width = scr_bytes_elem_size(dst->elem);
+  uint8_t *target = dst->data + (size_t)t * width;
+  if (dst->elem == src->elem) {
+    memmove(target, src->data, src->len * width);
     return;
   }
-  size_t esize = scr_bytes_elem_size(dst->elem);
-  memmove(dst->data + (size_t)t * esize, src->data, src->len * esize);
+  size_t source_bytes = src->len * scr_bytes_elem_size(src->elem);
+  size_t dest_bytes = src->len * width;
+  uintptr_t to = (uintptr_t)target, from = (uintptr_t)src->data;
+  bool overlap = to <= from ? from - to < dest_bytes : to - from < source_bytes;
+  if (overlap) {
+    /* Snapshot raw source bytes before cross-kind writes. Distinct external
+     * wrappers can alias even without a shared backing identity. */
+    uint8_t *copy = malloc(source_bytes ? source_bytes : 1);
+    if (!copy) scr_bytes_oom();
+    memcpy(copy, src->data, source_bytes);
+    scr_bytes_convert_span(target, dst->elem, copy, src->elem, src->len);
+    free(copy);
+  } else {
+    scr_bytes_convert_span(target, dst->elem, src->data, src->elem, src->len);
+  }
 }
 
 /* Checked-native array-like sources. Runtime objects with an unsupported
@@ -2329,11 +2437,23 @@ ScrBytes *scr_bytes_from_str_checked(const ScrStr *s, const ScrStr *enc) {
 }
 
 ScrBytes *scr_bytes_from_arr(ScrBytesElem elem, const ScrArr *arr) {
-  ScrBytes *b = scr_bytes_alloc(elem, arr->len);
-  for (size_t i = 0; i < arr->len; i++) {
-    // Iteration reads holes as undefined: floating arrays store NaN and
-    // integer arrays store zero through their normal element conversion.
-    scr_bytes_set(b, (double)i, scr_arr_get_number(arr, (double)i));
+  ScrBytes *b = scr_bytes_alloc_private(elem, arr->len);
+  size_t width = scr_bytes_elem_size(elem);
+  double values[128];
+  for (size_t start = 0; start < arr->len;) {
+    size_t count = arr->len - start < 128 ? arr->len - start : 128;
+    for (size_t i = 0; i < count; i++) {
+      size_t index = start + i;
+      /* Sparse tails and explicit undefined retain ordinary iteration
+       * semantics. Numeric array slots own no conversion callbacks. */
+      if (index < arr->cap) {
+        if (arr->present[index] == SCR_ARR_VALUE)
+          memcpy(&values[i], &arr->data[index], sizeof(double));
+        else values[i] = NAN;
+      } else values[i] = scr_arr_get_number(arr, (double)index);
+    }
+    scr_bytes_write_numbers(b->data + start * width, elem, values, count);
+    start += count;
   }
   return b;
 }

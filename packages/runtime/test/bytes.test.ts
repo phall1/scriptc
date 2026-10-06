@@ -23,13 +23,14 @@ beforeAll(async () => {
     "-O1",
     "-Wall",
     "-Wextra",
-    "-fsanitize=address",
+    "-fsanitize=address,undefined",
     "-DSCR_RC_AUDIT",
     "-I",
     join(testDir, "../src"),
     "-o",
     bin,
     join(testDir, "test_bytes.c"),
+    join(testDir, "../src/scr_bytes.test.c"),
     join(testDir, "../src/scr_bytes.c"),
     join(testDir, "../src/scr_bytes_io.c"),
     join(testDir, "../src/scr_zlib.c"),
@@ -65,7 +66,9 @@ afterAll(async () => {
 });
 
 test("bytes runtime: coercions, encodings, zlib, fs, RC", async () => {
-  const { stderr } = await execFileAsync(bin, [scratch]);
+  const { stderr } = await execFileAsync(bin, [scratch], {
+    env: { ...process.env, UBSAN_OPTIONS: "halt_on_error=1" },
+  });
   expect(stderr.trim().split("\n").pop()).toMatch(/^(\d+)\/\1 cases passed$/);
 });
 

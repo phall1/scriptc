@@ -5850,8 +5850,8 @@ ScrBytes *scr_array_buffer_view_dv(ScrDyn *, ScrDyn *, ScrDyn *);
 ScrBytes *scr_bytes_from_data(const uint8_t *data, size_t len); /* +1 */
 ScrBytes *scr_bytes_take_data(uint8_t *data, size_t len); /* +1, consumes malloc storage */
 
-/* `new Uint8Array(src)` / Buffer.from(u8): a same-elem-kind copy (the
- * compiler fences cross-kind construction). Borrows src. Never throws. */
+/* Same-element-kind copy, preserving the raw representation. Cross-kind
+ * construction uses scr_bytes_convert. Borrows src. Never throws. */
 ScrBytes *scr_bytes_copy(const ScrBytes *src); /* +1 */
 
 /* `new Uint8Array([1, 2, 3])` / Buffer.from(number[]): each f64 element
