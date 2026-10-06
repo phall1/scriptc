@@ -607,6 +607,29 @@ bool scr_arr_has(const ScrArr *a, double i) {
   return scr_arr_slot_at(a, idx, NULL);
 }
 
+static bool scr_arr_string_index(const ScrStr *key, size_t *out) {
+  if (key->len == 0 || key->len > 10) return false;
+  if (key->len > 1 && key->data[0] == '0') return false;
+  size_t index = 0;
+  for (size_t i = 0; i < key->len; i++) {
+    char digit = key->data[i];
+    if (digit < '0' || digit > '9') return false;
+    if (index > (SCR_ARR_MAX_INDEX - (size_t)(digit - '0')) / 10) return false;
+    index = index * 10 + (size_t)(digit - '0');
+  }
+  *out = index;
+  return true;
+}
+
+bool scr_arr_has_key(const ScrArr *a, const ScrStr *key) {
+  if (key->len == 6 && memcmp(key->data, "length", 6) == 0) return true;
+  size_t index;
+  if (scr_arr_string_index(key, &index) && scr_arr_has(a, (double)index)) return true;
+  if (scr_arr_prop_index(a, key->data, key->len) != SIZE_MAX) return true;
+  if (a->metadata && scr_dyn_has_own(a->metadata, key)) return true;
+  return scr_dyn_array_prototype_has_key(key);
+}
+
 double scr_arr_state(const ScrArr *a, double i) {
   size_t idx;
   if (!scr_arr_valid_index(i, &idx)) {

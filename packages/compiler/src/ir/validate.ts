@@ -880,10 +880,11 @@ export function validateModule(mod: IrModule): IrValidationError[] {
         return null;
     }
   };
+  const tdzPointerKinds = new Set<IrType["kind"]>(["record", "func", "string", "dyn"]);
   for (const g of mod.globals ?? []) {
-    if (g.tdz && g.type.kind !== "record" && g.type.kind !== "func" && g.type.kind !== "dyn") {
+    if (g.tdz && !tdzPointerKinds.has(g.type.kind)) {
       errors.push({
-        message: `TDZ global "${g.name}" must have record, function, or checked-value storage`,
+        message: `TDZ global "${g.name}" must have record, function, string, or checked-value storage`,
         loc: noLoc,
       });
     }
@@ -2011,7 +2012,8 @@ function validateFunction(
       case "arrayHas": {
         checkExpr(e.arr);
         checkExpr(e.index);
-        expectType(e.index, F64, "arrayHas index");
+        if (e.index.type.kind !== "f64" && e.index.type.kind !== "string")
+          err(`arrayHas key ${e.index.type.kind} != f64 or string`, e.loc);
         if (!typeEquals(e.type, BOOL)) err(`arrayHas result ${e.type.kind} != bool`, e.loc);
         if (e.arr.type.kind !== "array") {
           err(`arrayHas on non-array ${e.arr.type.kind}`, e.loc);

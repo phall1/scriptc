@@ -5,6 +5,7 @@ import {
   F64,
   STRING,
   VOID,
+  arrayOf,
   type IrExpr,
   type IrFunction,
   type IrStmt,
@@ -34,6 +35,19 @@ function fn(name: string, expressions: IrExpr[] = []): IrFunction {
 function effects(functions: IrFunction[]): ReferenceEffects {
   return new ReferenceEffects(new Map(functions.map((f) => [f.name, f])), () => false);
 }
+
+test("array string-key presence does not borrow owners across prototype callbacks", () => {
+  const query: IrExpr = {
+    kind: "arrayHas",
+    arr: { kind: "varRef", localId: "array", type: arrayOf(F64), loc },
+    index: text,
+    type: BOOL,
+    loc,
+  };
+  const summary = effects([]);
+  expect(summary.preserves(query)).toBe(false);
+  expect(summary.preserves({ ...query, index: number })).toBe(true);
+});
 
 test("reference preservation allows recursive scalar work but propagates a reference write", () => {
   const first = fn("first", [call("second")]),

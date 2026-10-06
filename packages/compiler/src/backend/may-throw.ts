@@ -94,6 +94,10 @@ export function computeMayThrow(mod: IrModule): { fns: Set<string>; indirect: bo
             sawDynFuncAdapter = true;
           }
           break;
+        case "arrayHas":
+          // String-key membership may walk a user-supplied prototype Proxy.
+          if (rec.index.type.kind === "string") f.throws = true;
+          break;
         case "mapIntrinsic":
         case "setIntrinsic": {
           const receiver = rec.receiver.type;

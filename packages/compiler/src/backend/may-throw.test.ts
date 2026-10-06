@@ -2,6 +2,9 @@ import { expect, test } from "vitest";
 import {
   DYN,
   F64,
+  BOOL,
+  STRING,
+  arrayOf,
   VOID,
   funcOf,
   type IrExpr,
@@ -61,6 +64,23 @@ test.each([
   const answer = computeMayThrow(moduleWith(caller, middle, target));
   expect([...answer.fns].sort()).toEqual(["caller", "middle", "target"]);
   expect(answer.indirect).toBe(false);
+});
+
+test.each([F64, STRING])("$kind array presence tracks prototype exception edges", (type) => {
+  const key: IrExpr =
+    type.kind === "string"
+      ? { kind: "strLit", value: "name", type, loc }
+      : { kind: "numLit", value: 0, type, loc };
+  const query: IrExpr = {
+    kind: "arrayHas",
+    arr: { kind: "arrayLit", elems: [], type: arrayOf(F64), loc },
+    index: key,
+    type: BOOL,
+    loc,
+  };
+  expect(computeMayThrow(moduleWith(fn("caller", [exprStmt(query)], []))).fns.has("caller")).toBe(
+    type.kind === "string",
+  );
 });
 
 test("TDZ stores seed indirect-call propagation", () => {
