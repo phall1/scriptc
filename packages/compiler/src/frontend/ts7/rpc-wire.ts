@@ -56,6 +56,7 @@ function writeBinHeader(buffer: Uint8Array, offset: number, length: number): num
  * would let one request consume another request's response. */
 export class Ts7Wire {
   private readonly input = new Uint8Array(65536);
+  private readonly output = new Uint8Array(4096);
   private inputOffset = 0;
   private inputLength = 0;
   private closed = false;
@@ -156,11 +157,11 @@ export class Ts7Wire {
     return result;
   }
 
-  private writeBytes(bytes: Uint8Array): void {
+  private writeBytes(bytes: Uint8Array, length: number): void {
     let offset = 0;
-    while (offset < bytes.length) {
-      const count = this.io.write(bytes, offset, bytes.length - offset);
-      if (!Number.isSafeInteger(count) || count <= 0 || count > bytes.length - offset)
+    while (offset < length) {
+      const count = this.io.write(bytes, offset, length - offset);
+      if (!Number.isSafeInteger(count) || count <= 0 || count > length - offset)
         this.fail("invalid write count");
       offset += count;
     }
@@ -176,7 +177,11 @@ export class Ts7Wire {
       if (kind < TS7_REQUEST || kind > TS7_CALLBACK) this.fail(`invalid message kind ${kind}`);
       const name = this.readBytes(this.readLength(this.maxMethodBytes, "method"));
       const payload = this.readBytes(this.readLength(this.maxPayloadBytes, "payload"));
-      return { kind, method: Buffer.from(name).toString("utf8"), payload };
+      return {
+        kind,
+        method: Buffer.from(name.buffer, name.byteOffset, name.byteLength).toString("utf8"),
+        payload,
+      };
     } catch (error) {
       try {
         this.close();
@@ -194,18 +199,23 @@ export class Ts7Wire {
     const name = Buffer.from(method, "utf8");
     if (name.length > this.maxMethodBytes || payload.length > this.maxPayloadBytes)
       throw new Ts7ProtocolError("outgoing frame exceeds channel limits");
-    const header = new Uint8Array(
-      2 + binHeaderSize(name.length) + name.length + binHeaderSize(payload.length),
-    );
+    const headerLength =
+      2 + binHeaderSize(name.length) + name.length + binHeaderSize(payload.length);
+    const length = headerLength + payload.length;
+    // Small synchronous requests need one transfer and reuse bounded
+    // framing storage. Large payloads keep the direct, uncopied write path.
+    const combined = length <= this.output.length;
+    const header = combined ? this.output : new Uint8Array(headerLength);
     header[0] = 0x93;
     header[1] = kind;
     let offset = writeBinHeader(header, 2, name.length);
     header.set(name, offset);
     offset += name.length;
     writeBinHeader(header, offset, payload.length);
+    if (combined) header.set(payload, headerLength);
     try {
-      this.writeBytes(header);
-      this.writeBytes(payload);
+      this.writeBytes(header, combined ? length : headerLength);
+      if (!combined) this.writeBytes(payload, payload.length);
     } catch (error) {
       try {
         this.close();

@@ -241,6 +241,11 @@ export function runTs7Client(client: Ts7RpcClient, directory: string, report: st
     check(session.parseConfigFile(configPath).options["strict"] === true, "raw config option decoding");
     const uri = "file:///" + file.replace(/^\//, "");
     check(project.program.getSourceFile({uri}) === root, "document URI cache identity");
+    check(project.program.getSourceFile(hidden) === undefined, "missing source response");
+    const sourceRequests = client.timing().requests;
+    check(project.program.getSourceFile(file) === root, "snapshot source lookup");
+    check(project.program.getSourceFile(hidden) === undefined, "snapshot missing lookup");
+    check(client.timing().requests === sourceRequests, "source hits and misses do not repeat requests");
     check(project.program.getSourceFileMetadata(file)!.isDefaultLibrary === false, "source metadata");
     check(!project.program.isSourceFileFromExternalLibrary(root) && !project.program.isSourceFileDefaultLibrary(root), "source library flags");
     checkAst(tree, content);

@@ -7,7 +7,12 @@ import {
   astChildOrder,
 } from "./ast-schema.generated.js";
 import { astLineOfPosition, astLineStarts, astSkipTrivia } from "./ast-text.js";
-import { AstWireFile, parseAstNodeHandle, type AstFileReference } from "./ast-wire.js";
+import {
+  AstWireFile,
+  parseAstNodeHandle,
+  type AstFileReference,
+  type AstNodeHandle,
+} from "./ast-wire.js";
 import type { SourceFile } from "./ast-types.js";
 import { SyntaxKind, NodeFlags } from "./enums.js";
 
@@ -93,7 +98,10 @@ export class AstFile {
   }
 
   resolve(handle: string): AstNode {
-    const parsed = parseAstNodeHandle(handle);
+    return this.resolveHandle(parseAstNodeHandle(handle));
+  }
+
+  resolveHandle(parsed: AstNodeHandle): AstNode {
     if (parsed.path !== this.root.path)
       throw new AstDecodeError("node handle belongs to another source file");
     const node = this.node(parsed.index);

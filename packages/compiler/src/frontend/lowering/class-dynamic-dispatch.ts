@@ -249,8 +249,8 @@ export function classInstanceOf(
   };
 }
 
-export function classPropertiesHelper(lowerer: Lowerer, loc: SrcLoc): IrFunction {
-  const name = "%dyn.class.properties";
+export function classPropertiesHelper(lowerer: Lowerer, loc: SrcLoc, readOnly = false): IrFunction {
+  const name = readOnly ? "%dyn.class.readProperties" : "%dyn.class.properties";
   const existing = lowerer.liftedFns.find((fn) => fn.name === name);
   if (existing) return existing;
   const helper: IrFunction = {
@@ -258,7 +258,21 @@ export function classPropertiesHelper(lowerer: Lowerer, loc: SrcLoc): IrFunction
     params: [{ localId: "p.0", name: "value", type: DYN }],
     returnType: DYN,
     locals: [{ id: "p.0", name: "value", type: DYN, mutable: false }],
-    body: [{ kind: "return", value: varRef("p.0", DYN, loc), loc }],
+    body: [
+      {
+        kind: "return",
+        value: readOnly
+          ? {
+              kind: "call",
+              callee: classPropertiesHelper(lowerer, loc).name,
+              args: [varRef("p.0", DYN, loc)],
+              type: DYN,
+              loc,
+            }
+          : varRef("p.0", DYN, loc),
+        loc,
+      },
+    ],
     loc,
   };
   lowerer.liftedFns.push(helper);
@@ -510,6 +524,10 @@ export class ClassDynamicDispatch {
   private readonly bagClasses = new Set<string>();
   private readonly bagInitializers = new Map<string, Extract<IrStmt, { kind: "fieldSet" }>[]>();
   private readonly typedPropertyBags = new Map<string, IrFunction>();
+  private readonly readPropertyBags: {
+    helper: IrFunction;
+    initialize: Extract<IrStmt, { kind: "fieldSet" }>;
+  }[] = [];
   private readonly generated = new Set<IrFunction>();
   private constructDispatch: IrFunction | null = null;
   private readonly constructors = new Map<string, ClassInfo>();
@@ -596,7 +614,8 @@ export class ClassDynamicDispatch {
               break;
             case "call":
               if (
-                expr.callee === "%dyn.class.properties" &&
+                (expr.callee === "%dyn.class.properties" ||
+                  expr.callee === "%dyn.class.readProperties") &&
                 expr.args[0]?.kind === "dynFrom" &&
                 isDynTypedRefType(expr.args[0].value.type)
               )
@@ -1225,10 +1244,18 @@ export class ClassDynamicDispatch {
               loc: expr.loc,
             };
           }
-          if (expr.kind === "call" && expr.callee === this.propertyBag!.name) {
+          if (
+            expr.kind === "call" &&
+            (expr.callee === this.propertyBag!.name || expr.callee === "%dyn.class.readProperties")
+          ) {
             const boxed = expr.args[0];
             if (boxed?.kind === "dynFrom" && isDynTypedRefType(boxed.value.type)) {
-              const helper = this.typedPropertyBag(lowerer, boxed.value.type, expr.loc);
+              const helper = this.typedPropertyBag(
+                lowerer,
+                boxed.value.type,
+                expr.loc,
+                expr.callee === "%dyn.class.readProperties",
+              );
               if (helper) {
                 changed = true;
                 return { ...expr, callee: helper.name, args: [boxed.value] };
@@ -2760,11 +2787,13 @@ export class ClassDynamicDispatch {
     lowerer: Lowerer,
     type: Extract<IrType, { kind: "object" }>,
     loc: SrcLoc,
+    readOnly: boolean,
   ): IrFunction | null {
     // A superclass constructor can be the first code to access this bag.
     // Its receiver still needs the actual subclass's prototype.
     if (lowerer.classes.get(type.className)?.subclasses.length) return null;
-    const existing = this.typedPropertyBags.get(type.className);
+    const key = `${type.className}:${readOnly}`;
+    const existing = this.typedPropertyBags.get(key);
     if (existing) return existing;
     const initializers = this.bagInitializers.get(type.className);
     if (!initializers) return null;
@@ -2790,7 +2819,7 @@ export class ClassDynamicDispatch {
       loc,
     };
     const helper: IrFunction = {
-      name: `%class.properties:${type.className}`,
+      name: `%class.${readOnly ? "readProperties" : "properties"}:${type.className}`,
       params: [{ localId: "p.0", name: "value", type }],
       returnType: DYN,
       locals: [{ id: "p.0", name: "value", type, mutable: false }],
@@ -2807,10 +2836,21 @@ export class ClassDynamicDispatch {
       ],
     };
     initializers.push(initialize);
-    this.typedPropertyBags.set(type.className, helper);
+    this.typedPropertyBags.set(key, helper);
+    if (readOnly) this.readPropertyBags.push({ helper, initialize });
     this.generated.add(helper);
     lowerer.liftedFns.push(helper);
     return helper;
+  }
+
+  /** Prototype state may appear in a later reachable body. Only after the
+   * dispatch worklist closes can an empty bag initializer be omitted; a
+   * prototype-backed bag must still be initialized before inherited reads. */
+  finalize(): void {
+    for (const { helper, initialize } of this.readPropertyBags) {
+      if (initialize.value.kind === "dynObjLit" && initialize.value.fields?.length === 0)
+        helper.body.shift();
+    }
   }
 
   private normalizedDispatches(): IrFunction[] {

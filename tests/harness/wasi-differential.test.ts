@@ -141,6 +141,7 @@ describe.skipIf(!zigOnPath())("wasm32-wasi differential", () => {
     "4031-event-emitter-long-tuples.ts",
     "2700-wasi-core.ts",
     "local-union-storage.ts",
+    "class-callback-storage.ts",
     "1612-cjs-module-globals.cjs",
     "992-fs-roundtrip.ts",
     "751-cycle-records-mutual.ts",

@@ -20,6 +20,10 @@ interface Ts7Callback {
   invoke: (payload: string) => string;
 }
 
+function responseText(bytes: Uint8Array): string {
+  return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("utf8");
+}
+
 /** The wire protocol is strictly synchronous and has no request ids. A
  * callback must answer the current request; starting a nested request on
  * that channel would consume the outer response under the wrong call. */
@@ -66,7 +70,7 @@ export class Ts7RpcClient {
     this.callbackCount++;
     let response: string;
     try {
-      response = callback.invoke(Buffer.from(payload).toString("utf8"));
+      response = callback.invoke(responseText(payload));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.wire.write(TS7_CALLBACK_ERROR, method, Buffer.from(message, "utf8"));
@@ -102,7 +106,7 @@ export class Ts7RpcClient {
           // A server error is a complete response. Keep this channel usable
           // for panic-fenced checker batches and subsequent valid requests.
           this.requesting = false;
-          throw new Error(Buffer.from(message.payload).toString("utf8"));
+          throw new Error(responseText(message.payload));
         }
         return message.payload;
       }
@@ -121,6 +125,6 @@ export class Ts7RpcClient {
   }
 
   requestText(method: string, payload: string): string {
-    return Buffer.from(this.requestBytes(method, Buffer.from(payload, "utf8"))).toString("utf8");
+    return responseText(this.requestBytes(method, Buffer.from(payload, "utf8")));
   }
 }

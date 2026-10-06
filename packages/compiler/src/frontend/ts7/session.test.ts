@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { expect, test } from "vitest";
 import { API } from "typescript/unstable/sync";
 import { Ts7RpcClient } from "./rpc-client.js";
@@ -84,6 +85,13 @@ test("owned snapshots preserve SDK options, diagnostics, metadata and default-pr
     expect(project.program.getSourceFileMetadata(file)).toBe(metadata);
     const missing = protocolPath(join(dir, "missing.ts"));
     expect(project.program.getSourceFile(missing)).toBeUndefined();
+    const sourceRequests = session.getTimingInfo().totals.requestCount;
+    expect(project.program.getSourceFile(file)).toBe(source);
+    expect(project.program.getSourceFile({ uri: pathToFileURL(join(dir, "main.ts")).href })).toBe(
+      source,
+    );
+    expect(project.program.getSourceFile(missing)).toBeUndefined();
+    expect(session.getTimingInfo().totals.requestCount).toBe(sourceRequests);
     expect(project.program.getSourceFileMetadata(missing)).toBeUndefined();
     const before = session.getTimingInfo().totals.requestCount;
     expect(project.program.getSourceFileMetadata(missing)).toBeUndefined();

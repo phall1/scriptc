@@ -57,6 +57,23 @@ describe("TypeScript MessagePack wire framing", () => {
     expect(io.closes()).toBe(1);
   });
 
+  test("coalesces small frames and keeps large payloads on the direct path", () => {
+    const channel = memory();
+    const transfer = channel.io.write;
+    const lengths: number[] = [];
+    channel.io.write = (buffer, offset, length) => {
+      lengths.push(length);
+      return transfer(buffer, offset, length);
+    };
+    const wire = new Ts7Wire(channel.io);
+    const payloads = [new Uint8Array([7, 8]), new Uint8Array(5000).fill(9), new Uint8Array([10])];
+    for (const payload of payloads) wire.write(4, "echo", payload);
+    expect(lengths).toEqual([12, 11, 5000, 11]);
+    const reader = new Ts7Wire(memory(Uint8Array.from(channel.output)).io);
+    for (const payload of payloads)
+      expect(reader.read()).toEqual({ kind: 4, method: "echo", payload });
+  });
+
   test("accepts uint8 message kind encoding and an empty method/payload", () => {
     const io = memory(Uint8Array.from([0x93, 0xcc, 6, 0xc4, 0, 0xc4, 0]));
     expect(new Ts7Wire(io.io).read()).toEqual({ kind: 6, method: "", payload: new Uint8Array() });

@@ -35,6 +35,7 @@ function context() {
     diags: [],
     prototypeMethodAccesses: new Map(),
     classMethodValueSelections: new Map(),
+    isSubclassOf: () => false,
   } as unknown as Lowerer;
   const boxed = fn("box", [
     statement({
@@ -301,6 +302,55 @@ test("unknown receivers keep checked class property dispatch", () => {
   const body = target.body;
   new ClassDynamicDispatch().process(lowerer, [boxed, target]);
   expect(target.body).toBe(body);
+});
+
+test("read-only class bags stay absent unless the settled prototype requires storage", () => {
+  for (const prototype of [false, true]) {
+    const { lowerer, liftedFns } = context();
+    const type = { kind: "object" as const, className: "Widget" };
+    const info = {
+      def: { name: "Widget", fields: [] },
+      fields: new Map(),
+      methods: new Map(),
+      subclasses: [],
+      base: null,
+    } as unknown as ClassInfo;
+    lowerer.classes.set("Widget", info);
+    const target = fn("target", [
+      statement({
+        kind: "call",
+        callee: "%dyn.class.readProperties",
+        args: [
+          {
+            kind: "dynFrom",
+            value: { kind: "varRef", localId: "instance", type, loc },
+            type: DYN,
+            loc,
+          },
+        ],
+        type: DYN,
+        loc,
+      }),
+    ]);
+    const dispatch = new ClassDynamicDispatch();
+    expect(dispatch.process(lowerer, [target])).toBe(true);
+    const helper = liftedFns.find((item) => item.name === "%class.readProperties:Widget")!;
+    expect(helper).toBeDefined();
+    if (prototype) {
+      info.def.prototypeDataHelper = "%prototype.Widget";
+      expect(dispatch.process(lowerer, [target, ...liftedFns])).toBe(true);
+    }
+    dispatch.finalize();
+    if (prototype)
+      expect(helper.body[0]).toMatchObject({
+        kind: "if",
+        then: [{ value: { kind: "libCall", fn: "dyn.objCreate" } }],
+      });
+    else
+      expect(helper.body).toMatchObject([
+        { kind: "return", value: { kind: "fieldGet", className: "Widget" } },
+      ]);
+  }
 });
 
 test("normalizes base capsules before dispatching each derived member once", () => {

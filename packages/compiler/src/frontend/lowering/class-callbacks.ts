@@ -39,15 +39,34 @@ export function isClassCallback(lowerer: Lowerer, info: ClassInfo, name: string)
   );
 }
 
-function callbackBag(lowerer: Lowerer, receiver: IrExpr, loc: SrcLoc, name: string): IrExpr {
+function callbackBag(
+  lowerer: Lowerer,
+  receiver: IrExpr,
+  loc: SrcLoc,
+  name: string,
+  readOnly = false,
+): IrExpr {
   const info =
     receiver.type.kind === "object" ? lowerer.classes.get(receiver.type.className) : null;
   if (info && lowerer.prototypeMethodAccesses.has(name)) classPrototypeData(lowerer, info, loc);
   return {
     kind: "call",
-    callee: classPropertiesHelper(lowerer, loc).name,
+    callee: classPropertiesHelper(lowerer, loc, readOnly).name,
     args: [lowerer.coerceToExpected(receiver, DYN)],
     type: DYN,
+    loc,
+  };
+}
+
+/** A read-only bag may still be absent. Reads must not create own storage
+ * merely to select an unchanged method, nor read a key from undefined. */
+function callbackPresent(value: IrExpr, key: IrExpr, loc: SrcLoc): IrExpr {
+  return {
+    kind: "ternary",
+    cond: { kind: "dynTest", test: "undefined", value, type: BOOL, loc },
+    then: { kind: "boolLit", value: false, type: BOOL, loc },
+    else_: { kind: "libCall", fn: "dyn.hasKey", args: [value, key], type: BOOL, loc },
+    type: BOOL,
     loc,
   };
 }
@@ -97,7 +116,7 @@ export function classCallbackValue(
     ? { kind: "dynKeyGet", value, key, type: DYN, loc }
     : {
         kind: "ternary",
-        cond: { kind: "libCall", fn: "dyn.hasKey", args: [value, key], type: BOOL, loc },
+        cond: callbackPresent(value, key, loc),
         then: { kind: "dynKeyGet", value, key, type: DYN, loc },
         else_: lowerer.coerceToExpected(fallback, DYN),
         type: DYN,
@@ -106,7 +125,12 @@ export function classCallbackValue(
   return {
     kind: "seqExpr",
     stmts: [
-      { kind: "varDecl", localId: bag.id, init: callbackBag(lowerer, receiver, loc, name), loc },
+      {
+        kind: "varDecl",
+        localId: bag.id,
+        init: callbackBag(lowerer, receiver, loc, name, true),
+        loc,
+      },
     ],
     result,
     type: DYN,
@@ -161,19 +185,31 @@ export function classCallbackCall(
   return {
     kind: "seqExpr",
     stmts: [
-      { kind: "varDecl", localId: bag.id, init: callbackBag(lowerer, receiver, loc, name), loc },
+      {
+        kind: "varDecl",
+        localId: bag.id,
+        init: callbackBag(lowerer, receiver, loc, name, true),
+        loc,
+      },
       {
         kind: "varDecl",
         localId: present.id,
         init: lowerer.prototypeMethodAccesses.has(name)
           ? { kind: "boolLit", value: true, type: BOOL, loc }
-          : { kind: "libCall", fn: "dyn.hasKey", args: [value, key], type: BOOL, loc },
+          : callbackPresent(value, key, loc),
         loc,
       },
       {
         kind: "varDecl",
         localId: callback.id,
-        init: { kind: "dynKeyGet", value, key, type: DYN, loc },
+        init: {
+          kind: "ternary",
+          cond: { kind: "dynTest", test: "undefined", value, type: BOOL, loc },
+          then: dynUndefinedExpr(loc),
+          else_: { kind: "dynKeyGet", value, key, type: DYN, loc },
+          type: DYN,
+          loc,
+        },
         loc,
       },
     ],

@@ -4730,6 +4730,7 @@ export class Lowerer {
           !this.remainder &&
           classDispatch.process(this, [...functions, ...this.liftedFns, ...this.implicitFns]);
       }
+      classDispatch.finalize();
     }
     // Lambdas lifted while lowering any of the above (plus synthetic
     // array-HOF loop functions, which ride the same list), and the
@@ -5345,6 +5346,7 @@ export class Lowerer {
       this.restoreGenericInstanceOrder(instLowered);
       this.restoreGenericClassInstanceOrder(clsInstLowered);
     }
+    classDispatch.finalize();
     const orderedUnits = [...loweredUnits]
       .sort(([left], [right]) => units.get(left)!.order - units.get(right)!.order)
       .map(([, fn]) => fn);
