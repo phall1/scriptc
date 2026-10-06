@@ -207,7 +207,8 @@ import {
   lowerStringCodesValue,
 } from "./lower-builtin-values.js";
 import { lowerArrayFromValue } from "./containers/array-construction.js";
-import { lowerPerfHooksTypeof, lowerUrlAssignment } from "./lower-builtins.js";
+import { lowerPerfHooksTypeof } from "./builtins/performance.js";
+import { lowerUrlAssignment } from "./builtins/url.js";
 import { jsBindingHasOpenWrites } from "./lower-stmts.js";
 import { checkedClassInstanceOf } from "./class-construction.js";
 import { lowerModuleNamespaceElement } from "./module-namespace-elements.js";
@@ -2476,10 +2477,10 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
       lowerer.lowerServerProperty(expr) ??
       // diagnostics_channel Channel receivers — name/hasSubscribers
       // over the f64 channel handle.
-      lowerer.lowerDcChannelProperty(expr) ??
+      lowerer.lowerDiagnosticsChannelProperty(expr) ??
       // TracingChannel receivers — the five event channels and
       // hasSubscribers over the f64 tracing handle.
-      lowerer.lowerDcTracingChannelProperty(expr) ??
+      lowerer.lowerTracingChannelProperty(expr) ??
       lowerer.lowerTestCtxProperty(expr) ??
       lowerer.lowerProcessProperty(expr) ??
       lowerer.lowerProcessStreamProperty(expr) ??

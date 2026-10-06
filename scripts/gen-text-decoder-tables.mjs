@@ -18,7 +18,7 @@ if (process.versions.node !== pinnedNodeVersion) {
 }
 
 // Keep this order synchronized with TEXT_DECODER_SINGLE_BYTE_NAMES in
-// lower-builtins.ts. ISO-8859-8-I intentionally shares ISO-8859-8's table.
+// builtins/text-codecs.ts. ISO-8859-8-I intentionally shares ISO-8859-8's table.
 const singleByteNames = [
   "ibm866",
   "iso-8859-2",

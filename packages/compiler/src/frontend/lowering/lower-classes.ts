@@ -67,7 +67,8 @@ import { lowerMapSeedNew, lowerSetSeedNew } from "./containers/collection-method
 import { lowerObjectConstructor } from "./containers/indexed-objects.js";
 import { bufEncoding } from "./containers/bytes.js";
 import { isSafeToRepeat } from "./expressions/evaluation-safety.js";
-import { lowerSearchParamsNew, lowerTextCodecNew } from "./lower-builtins.js";
+import { lowerSearchParamsNew } from "./builtins/url.js";
+import { lowerTextCodecNew } from "./builtins/text-codecs.js";
 import {
   requiresDynamicPackageDiag,
   unsupportedDiag,

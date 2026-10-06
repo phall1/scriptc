@@ -1249,7 +1249,7 @@ declare module "node:fs" {
    * probes — the honest subset of Node's Dirent surface). The type is
    * interned explicitly in type-mapper.ts (the record's hidden %dtype field
    * carries the entry kind; isFile/isDirectory/isSymbolicLink lower as
-   * reads of it in lower-builtins.ts). */
+   * reads of it in builtins/process.ts). */
   export interface Dirent {
     name: string;
     parentPath: string;

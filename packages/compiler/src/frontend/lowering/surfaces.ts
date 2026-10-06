@@ -1624,7 +1624,7 @@ export const BUILTIN_MODULE_FNS: Record<
   // handle (type-mapper.ts maps Channel to F64); the subscriber arguments box
   // into the checked-dynamic tree (special-cased in lowerBuiltinModuleCall — the entries
   // carry canonical shapes and route the dispatch). The Channel method
-  // surface lowers through lowerDcChannelMethodCall/lowerDcChannelProperty.
+  // surface lowers through lowerDiagnosticsChannelMethodCall/lowerDiagnosticsChannelProperty.
   diagnostics_channel: {
     channel: { fn: "dc.channel", params: [STRING], result: F64 },
     subscribe: { fn: "dc.subscribe", params: [STRING, DYN], result: VOID },

@@ -78,10 +78,9 @@ import {
   createRequireNamespaceDecl,
   createRequireProgramModuleDecl,
   createRequireSpecOf,
-  isPromisifyCall,
-  registerBuiltinCallableAlias,
-  stripTypeCasts,
-} from "./lower-builtins.js";
+} from "./builtins/module-bindings.js";
+import { isPromisifyCall, registerBuiltinCallableAlias } from "./builtins/callable-aliases.js";
+import { stripTypeCasts } from "./builtins/arguments.js";
 import {
   bindingContextualGenericFnNodeOf,
   bindingGenericFnAliasInfoOf,

@@ -130,8 +130,8 @@ import {
   lowerHttpServerTimeoutAssignment,
   lowerServerCloseOverrideAssignment,
 } from "./lower-server.js";
+import { lowerUrlAssignment } from "./builtins/url.js";
 import {
-  lowerUrlAssignment,
   isNativeFfiRequire,
   builtinMemberRequireDecl,
   builtinNamespaceDestructureModuleOf,
@@ -140,9 +140,9 @@ import {
   createRequireNamespaceDecl,
   createRequireProgramModuleDecl,
   createRequireProgramModuleOf,
-  lowerNodeModuleCall,
-  registerBuiltinCallableAlias,
-} from "./lower-builtins.js";
+} from "./builtins/module-bindings.js";
+import { lowerNodeModuleCall } from "./builtins/module-resolution.js";
+import { registerBuiltinCallableAlias } from "./builtins/callable-aliases.js";
 import { lowerEnumDeclaration } from "./lower-enums.js";
 import {
   abstractPropertyDeclOf,

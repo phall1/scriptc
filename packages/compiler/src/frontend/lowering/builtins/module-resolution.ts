@@ -1,0 +1,475 @@
+import { nodeThrowExpr, boolLit, strLit, varRef } from "../../../ir/build.js";
+import { dirname, isAbsolute, resolve } from "node:path";
+import * as ts from "../../ts7/adapter.js";
+import { type Lowerer, PoisonError } from "../lowerer.js";
+import { canonicalBuiltinModule, isNodeEsmFile, locOf } from "../../program.js";
+import { isRelativeSpecifier } from "../../workspace-registry.js";
+import { probeNodeRequireRefusal } from "../../npm.js";
+import { isNpmStaticPackage } from "../../npm-static.js";
+import { trackedReadFile } from "../../input-tracker.js";
+import {
+  requireResolvePathsRuntime,
+  resolveImportMetaRuntime,
+  resolveRequireRuntime,
+  type RuntimeResolveError,
+  type RuntimeResolveResult,
+} from "../../runtime-resolve.js";
+import {
+  invalidJsonModuleDiag,
+  nativeAddonDiag,
+  requiresDynamicImportDiag,
+} from "../../../diagnostics/diagnostic.js";
+import { NODE_BUILTIN_MODULES_V24 } from "../surfaces.js";
+import {
+  BOOL,
+  DYN,
+  type IrExpr,
+  type IrType,
+  JSVAL,
+  NULL_T,
+  STRING,
+  type SrcLoc,
+  UNDEFINED_T,
+  arrayOf,
+} from "../../../ir/ir.js";
+import { lowerFfiMemoryModule } from "../native-ffi.js";
+import {
+  createRequireSpecOf,
+  createRequireProgramModuleOf,
+  createRequireCalleeFileOf,
+} from "./module-bindings.js";
+import { stripTypeCasts } from "./arguments.js";
+
+/** node:module's two compiler-only calls. isBuiltin compares one evaluated
+ * string against the pinned Node 24 list (bare builtins also accept their
+ * node: spelling; prefix-only entries do not gain a bare alias).
+ * syncBuiltinESMExports is observably a no-op inside the static surface:
+ * builtin exports cannot be mutated, so its only supported behavior is
+ * evaluating no arguments and returning undefined. */
+export function lowerNodeModuleCall(
+  lowerer: Lowerer,
+  expr: ts.CallExpression,
+  bi: { module: string; member: string },
+  loc: SrcLoc,
+): IrExpr | null {
+  if (bi.module !== "module") return null;
+  if (bi.member === "syncBuiltinESMExports") {
+    if (expr.arguments.length !== 0 || expr.arguments.some(ts.isSpreadElement)) {
+      lowerer.noLowering(
+        `module.syncBuiltinESMExports with ${expr.arguments.length} arguments`,
+        expr,
+        "syncBuiltinESMExports() takes no arguments",
+      );
+    }
+    if (!ts.isExpressionStatement(expr.parent)) {
+      lowerer.noLowering(
+        "module.syncBuiltinESMExports used as a value",
+        expr,
+        "call syncBuiltinESMExports() as its own statement; the supported static effect is a no-op",
+      );
+    }
+    return { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc };
+  }
+  if (bi.member !== "isBuiltin") return null;
+  if (expr.arguments.length !== 1 || expr.arguments.some(ts.isSpreadElement)) {
+    lowerer.noLowering(
+      `module.isBuiltin with ${expr.arguments.length} arguments`,
+      expr,
+      "isBuiltin(moduleName) takes one string",
+    );
+  }
+  const argumentNode = expr.arguments[0]!;
+  const argument = lowerer.lowerExpr(argumentNode);
+  if (argument.type.kind !== "string") {
+    if (
+      argument.type.kind === "dyn" ||
+      argument.type.kind === "jsval" ||
+      argument.type.kind === "union"
+    ) {
+      lowerer.noLowering(
+        "module.isBuiltin with a runtime-polymorphic argument",
+        argumentNode,
+        "narrow the module name to a string first; statically non-string values return false",
+      );
+    }
+    return {
+      kind: "seqExpr",
+      stmts: [{ kind: "exprStmt", expr: argument, loc: locOf(argumentNode) }],
+      result: boolLit(false, loc),
+      type: BOOL,
+      loc,
+    };
+  }
+  const slot = lowerer.declareHiddenLocal("%builtinName", STRING);
+  const ref = (): IrExpr => varRef(slot.id, STRING, loc);
+  const accepted = NODE_BUILTIN_MODULES_V24.flatMap((name) =>
+    name.startsWith("node:") ? [name] : [name, `node:${name}`],
+  );
+  let staticArgument: ts.Expression = argumentNode;
+  while (
+    ts.isParenthesizedExpression(staticArgument) ||
+    ts.isAsExpression(staticArgument) ||
+    ts.isTypeAssertion(staticArgument) ||
+    ts.isNonNullExpression(staticArgument)
+  ) {
+    staticArgument = staticArgument.expression;
+  }
+  if (ts.isStringLiteralLike(staticArgument)) {
+    return boolLit(accepted.includes(staticArgument.text), loc);
+  }
+  let result: IrExpr = boolLit(false, loc);
+  for (let i = accepted.length - 1; i >= 0; i--) {
+    const equal: IrExpr = {
+      kind: "strEq",
+      negated: false,
+      left: ref(),
+      right: strLit(accepted[i]!, loc),
+      type: BOOL,
+      loc,
+    };
+    result = { kind: "logical", op: "||", left: equal, right: result, type: BOOL, loc };
+  }
+  return {
+    kind: "seqExpr",
+    stmts: [{ kind: "varDecl", localId: slot.id, init: argument, loc }],
+    result,
+    type: BOOL,
+    loc,
+  };
+}
+
+/** `require("spec")` through a createRequire binding — the erasure per
+ * target. Builtins are reached here only OUTSIDE the const-namespace-
+ * binding shape (that declaration erases; member uses resolve through
+ * the namespace tables) and fence toward it. A relative .json document
+ * bakes: the file's text validates as JSON at compile time and the
+ * call lowers to json.parse over the baked literal — JSON.parse's
+ * checked-dynamic `unknown` stance, and exactly Node's value (require
+ * of JSON IS JSON.parse of the file; the per-call re-parse forgoes
+ * Node's module-cache identity, unobservable without mutation). A bare
+ * specifier NOTHING installed resolves compiles to Node's catchable
+ * MODULE_NOT_FOUND throw (the optional-dependency try/require
+ * pattern); an installed package loads through the island's
+ * require-condition entry under --dynamic (collectCreateRequires
+ * embedded it) and reports the requires-dynamic diagnostic in a static
+ * build. Null when the callee is not a createRequire require. */
+export function lowerCreateRequireCall(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
+  loc: SrcLoc,
+): IrExpr | null {
+  const cr = createRequireSpecOf(lowerer, call);
+  if (cr === null) return null;
+  if (cr.spec === null) {
+    lowerer.noLowering(
+      "createRequire's require with this argument shape",
+      call,
+      'the compiled module graph is fixed at build time — the one lowered form is require("<static string literal>")',
+    );
+  }
+  const spec = cr.spec;
+  if (spec === "node:ffi") {
+    return lowerFfiMemoryModule(lowerer, loc);
+  }
+  if (canonicalBuiltinModule(spec) !== null) {
+    lowerer.unsupported(
+      "SC1090",
+      call,
+      `module namespace objects as values (bind it first: const m = require("${spec}"), then access members through the binding)`,
+    );
+  }
+  const programModule = createRequireProgramModuleOf(lowerer, call);
+  if (programModule !== null) {
+    lowerer.noLowering(
+      `createRequire's module namespace value for '${spec}'`,
+      call,
+      `bind it once (const m = require(${JSON.stringify(spec)})) and access statically-known members through that binding`,
+    );
+  }
+  if (spec.startsWith("#")) {
+    lowerer.noLowering(
+      `createRequire's require of the '${spec}' project import`,
+      call,
+      "imports-field specifiers have no require lowering yet — import the target statically",
+    );
+  }
+  if (isRelativeSpecifier(spec) || isAbsolute(spec)) {
+    if (!spec.endsWith(".json")) {
+      // Only refine the existing refusal path: Node resolution detects
+      // extensionless addons and directory entries without executing
+      // them, and avoids mistaking a .node-named JS directory for one.
+      // This probe marks frontend inputs unstable, but every branch
+      // here refuses compilation, so successful-build caches keep their
+      // existing dependency proofs.
+      const resolved = resolveRequireRuntime(
+        cr.baseFile.fileName,
+        spec,
+        lowerer.targetPlatform,
+        undefined,
+        lowerer.frontendServices,
+      );
+      if (resolved.ok && resolved.value.endsWith(".node")) {
+        lowerer.pushDiag(nativeAddonDiag(spec, loc));
+        throw new PoisonError();
+      }
+      lowerer.noLowering(
+        `createRequire's require of '${spec}'`,
+        call,
+        "relative program modules lower when they resolve into the compiled graph; relative .json documents bake at build time",
+      );
+    }
+    const abs = isAbsolute(spec) ? spec : resolve(dirname(cr.baseFile.fileName), spec);
+    const text = trackedReadFile(abs);
+    if (text === null) {
+      lowerer.noLowering(
+        `createRequire's require of '${spec}' (no file at ${abs})`,
+        call,
+        "the required document resolves at build time — check the path against the requiring file",
+      );
+    }
+    try {
+      JSON.parse(text);
+    } catch (e) {
+      lowerer.pushDiag(invalidJsonModuleDiag(abs, e instanceof Error ? e.message : String(e), loc));
+      throw new PoisonError();
+    }
+    return {
+      kind: "libCall",
+      fn: "json.parse",
+      args: [{ kind: "strLit", value: text, type: STRING, loc }],
+      type: DYN,
+      loc,
+    };
+  }
+  // Bare package specifiers. --npm-static opt-ins are program modules —
+  // their exports bind through static imports, not a require value.
+  const pkgName = spec.startsWith("@")
+    ? spec.split("/").slice(0, 2).join("/")
+    : spec.split("/")[0]!;
+  if (isNpmStaticPackage(pkgName)) {
+    lowerer.noLowering(
+      `createRequire's require of the --npm-static package '${pkgName}'`,
+      call,
+      "the opted-in package compiles as program modules — import it statically",
+    );
+  }
+  const refusal = probeNodeRequireRefusal(cr.baseFile.fileName, spec);
+  if (refusal !== null) {
+    // Node's require-site MODULE_NOT_FOUND, catchable — the compiled
+    // expression IS that throw (the typed dummy is abandoned by the
+    // pending check's unwind).
+    return nodeThrowExpr(0, "MODULE_NOT_FOUND", refusal.message, DYN, loc);
+  }
+  if (!lowerer.dynamic) {
+    lowerer.pushDiag(requiresDynamicImportDiag(pkgName, loc));
+    throw new PoisonError();
+  }
+  const res = lowerer.createRequireImports.get(`${cr.baseFile.fileName}\u0000${spec}`);
+  if (res === undefined) {
+    // Collection never saw the site (a shape this walk and that walk
+    // disagree on) — fence rather than mis-embed.
+    lowerer.noLowering(`createRequire's require of '${spec}'`, call, undefined);
+  }
+  if (res === "") throw new PoisonError(); // reported at collection
+  // A CJS facade's default IS module.exports (Node's require answer);
+  // an ESM-resolved entry answers its namespace (Node's require(esm)).
+  const exportName = res.format === "esm" ? "*" : "default";
+  return {
+    kind: "libCall",
+    fn: "island.import",
+    args: [
+      { kind: "strLit", value: res.entryKey, type: STRING, loc },
+      { kind: "strLit", value: exportName, type: STRING, loc },
+      { kind: "strLit", value: spec, type: STRING, loc },
+    ],
+    type: JSVAL,
+    loc,
+  };
+}
+
+function staticString(node: ts.Expression | undefined): string | null {
+  if (node === undefined) return null;
+  const value = stripTypeCasts(node);
+  return ts.isStringLiteralLike(value) ? value.text : null;
+}
+
+function runtimeResolveThrow(error: RuntimeResolveError, type: IrType, loc: SrcLoc): IrExpr {
+  return nodeThrowExpr(error.name === "TypeError" ? 1 : 0, error.code, error.message, type, loc);
+}
+
+/** import.meta.resolve("literal") folds through the runtime-module
+ * resolver, never TypeScript's declaration-file resolver. Relative and
+ * URL-like names remain valid even when no file exists; bare packages use
+ * Node's import-condition exports path. */
+export function lowerImportMetaResolveCall(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
+): IrExpr | null {
+  const callee = call.expression;
+  if (
+    !ts.isPropertyAccessExpression(callee) ||
+    callee.questionDotToken !== undefined ||
+    callee.name.text !== "resolve" ||
+    !ts.isMetaProperty(callee.expression) ||
+    callee.expression.keywordToken !== ts.SyntaxKind.ImportKeyword ||
+    callee.expression.name.text !== "meta"
+  ) {
+    return null;
+  }
+  if (call.questionDotToken !== undefined || call.arguments.length !== 1) {
+    lowerer.noLowering(
+      "import.meta.resolve with this argument shape",
+      call,
+      'the lowered form is import.meta.resolve("<static specifier>") using the containing module as its parent',
+    );
+  }
+  const specifier = staticString(call.arguments[0]);
+  if (specifier === null) {
+    lowerer.noLowering(
+      "import.meta.resolve with a runtime-computed specifier",
+      call.arguments[0]!,
+      "a compiled binary has a fixed module graph — pass a string literal",
+    );
+  }
+  const result = resolveImportMetaRuntime(
+    call.getSourceFile().fileName,
+    specifier,
+    lowerer.targetPlatform,
+    lowerer.frontendServices,
+  );
+  if (result === null) {
+    lowerer.noLowering(
+      `import.meta.resolve of '${specifier}'`,
+      call,
+      "relative paths, URL-like names, builtins, and installed package names are supported; package-import aliases remain unsupported",
+    );
+  }
+  const loc = locOf(call);
+  return result.ok
+    ? { kind: "strLit", value: result.value, type: STRING, loc }
+    : runtimeResolveThrow(result.error, STRING, loc);
+}
+
+function requireResolverBaseFile(lowerer: Lowerer, receiver: ts.Expression): ts.SourceFile | null {
+  const created = createRequireCalleeFileOf(lowerer, receiver);
+  if (created !== null) return created;
+  return lowerer.isStdlibGlobal(receiver, "require") &&
+    !isNodeEsmFile(receiver.getSourceFile(), lowerer.program)
+    ? receiver.getSourceFile()
+    : null;
+}
+
+function staticResolveOptionPaths(
+  node: ts.Expression | undefined,
+): readonly string[] | undefined | null {
+  if (node === undefined) return undefined;
+  const value = stripTypeCasts(node);
+  if (ts.isIdentifier(value) && value.text === "undefined") return undefined;
+  if (!ts.isObjectLiteralExpression(value)) return null;
+  let paths: readonly string[] | undefined;
+  for (const prop of value.properties) {
+    if (!ts.isPropertyAssignment(prop)) return null;
+    const name =
+      ts.isIdentifier(prop.name) || ts.isStringLiteralLike(prop.name) ? prop.name.text : null;
+    if (name !== "paths" || paths !== undefined) return null;
+    const init = stripTypeCasts(prop.initializer);
+    if (!ts.isArrayLiteralExpression(init)) return null;
+    const entries: string[] = [];
+    for (const item of init.elements) {
+      if (!ts.isStringLiteralLike(item)) return null;
+      entries.push(item.text);
+    }
+    paths = entries;
+  }
+  return paths;
+}
+
+/** CommonJS require.resolve and require.resolve.paths for the ambient
+ * wrapper or a supported createRequire binding. Results are build-time
+ * constants; failures lower to Node's catchable error object. */
+export function lowerRequireResolveCall(lowerer: Lowerer, call: ts.CallExpression): IrExpr | null {
+  const callee = call.expression;
+  if (!ts.isPropertyAccessExpression(callee) || callee.questionDotToken !== undefined) return null;
+  let receiver: ts.Expression;
+  let pathsCall = false;
+  if (callee.name.text === "resolve") {
+    receiver = callee.expression;
+  } else if (
+    callee.name.text === "paths" &&
+    ts.isPropertyAccessExpression(callee.expression) &&
+    callee.expression.questionDotToken === undefined &&
+    callee.expression.name.text === "resolve"
+  ) {
+    receiver = callee.expression.expression;
+    pathsCall = true;
+  } else {
+    return null;
+  }
+  const baseFile = requireResolverBaseFile(lowerer, receiver);
+  if (baseFile === null) return null;
+  if (
+    call.questionDotToken !== undefined ||
+    call.arguments.length < 1 ||
+    call.arguments.length > (pathsCall ? 1 : 2)
+  ) {
+    lowerer.noLowering(
+      pathsCall
+        ? "require.resolve.paths with this argument shape"
+        : "require.resolve with this argument shape",
+      call,
+    );
+  }
+  const specifier = staticString(call.arguments[0]);
+  if (specifier === null) {
+    lowerer.noLowering(
+      `${pathsCall ? "require.resolve.paths" : "require.resolve"} with a runtime-computed request`,
+      call.arguments[0]!,
+      "a compiled binary has a fixed module graph — pass a string literal",
+    );
+  }
+  const loc = locOf(call);
+  if (pathsCall) {
+    const result = requireResolvePathsRuntime(
+      baseFile.fileName,
+      specifier,
+      lowerer.targetPlatform,
+      lowerer.frontendServices,
+    );
+    if (result !== null && !Array.isArray(result)) {
+      return runtimeResolveThrow(result as RuntimeResolveError, lowerer.irTypeOf(call), loc);
+    }
+    const raw: IrExpr =
+      result === null
+        ? { kind: "unitLit", unit: "null", type: NULL_T, loc }
+        : {
+            kind: "arrayLit",
+            elems: (result as readonly string[]).map((value): IrExpr => ({
+              kind: "strLit",
+              value,
+              type: STRING,
+              loc,
+            })),
+            type: arrayOf(STRING),
+            loc,
+          };
+    return lowerer.coerceInto(call, raw, lowerer.irTypeOf(call));
+  }
+  const paths = staticResolveOptionPaths(call.arguments[1]);
+  if (paths === null) {
+    lowerer.noLowering(
+      "require.resolve with runtime-computed options",
+      call.arguments[1]!,
+      'omit options or pass { paths: ["<static directory>", ...] }',
+    );
+  }
+  const result: RuntimeResolveResult = resolveRequireRuntime(
+    baseFile.fileName,
+    specifier,
+    lowerer.targetPlatform,
+    paths,
+    lowerer.frontendServices,
+  );
+  return result.ok
+    ? { kind: "strLit", value: result.value, type: STRING, loc }
+    : runtimeResolveThrow(result.error, STRING, loc);
+}

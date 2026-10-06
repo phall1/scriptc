@@ -69,6 +69,10 @@ test("compiler import fences reject cross-layer and cross-parser imports", () =>
       "../../../backend/targets.js",
     ],
     ["packages/compiler/src/frontend/lowering/containers/for-of.ts", "typescript5"],
+    ["packages/compiler/src/frontend/lowering/builtins/filesystem.ts", "./module-calls.js"],
+    ["packages/compiler/src/frontend/lowering/builtins/arguments.ts", "../../../ir/validate.js"],
+    ["packages/compiler/src/frontend/lowering/builtins/crypto.ts", "../../../backend/targets.js"],
+    ["packages/compiler/src/frontend/lowering/builtins/module-bindings.ts", "typescript5"],
   ] as const;
   for (const [name, specifier] of cases)
     source(work, name, `export { value } from "${specifier}";\n`);
@@ -100,6 +104,11 @@ test("IR imports and the explicit parser islands remain usable", () => {
     work,
     "packages/compiler/src/frontend/lowering/containers/array-construction.ts",
     'export { lowerArrayCallback } from "./callback-arguments.js";\n',
+  );
+  source(
+    work,
+    "packages/compiler/src/frontend/lowering/builtins/crypto.ts",
+    'export { lowerBuiltinByteInput } from "./arguments.js";\n',
   );
   for (const name of [
     "frontend/npm.ts",
