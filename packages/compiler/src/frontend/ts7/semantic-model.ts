@@ -284,7 +284,7 @@ export class SemanticNodeHandle {
   resolve(project: SemanticProject = this.canonicalProject): AstNode | undefined {
     this.canonicalProject.ensureActive();
     const file = project.program.getSourceFile(this.path);
-    return file?.file.resolve(this.handle);
+    return file?.file.resolveHandle(this);
   }
 }
 

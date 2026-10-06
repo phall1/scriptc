@@ -14324,6 +14324,12 @@
     "<repo>/tests/corpus/local-union-storage.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/class-callback-storage.ts": {
+   "order": [
+    "<repo>/tests/corpus/class-callback-storage.ts"
+   ],
+   "diags": []
   }
  }
 }

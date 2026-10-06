@@ -79,7 +79,9 @@ export class Ts7Session {
 
   text(method: string, json: string): string {
     const bytes = this.binary(method, json);
-    return bytes.length === 0 ? "null" : Buffer.from(bytes).toString("utf8");
+    return bytes.length === 0
+      ? "null"
+      : Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("utf8");
   }
 
   request<T>(method: string, query: ProgramQuery): T {
@@ -237,6 +239,7 @@ export class Ts7SessionProject {
 }
 
 export class Ts7SessionProgram {
+  private readonly sources = new Map<string, SourceFile | undefined>();
   private readonly metadata = new Map<string, Ts7SourceMetadata | undefined>();
   private disposed = false;
 
@@ -264,16 +267,32 @@ export class Ts7SessionProgram {
   }
   getSourceFile(file: SemanticDocument): SourceFile | undefined {
     this.ensureActive();
-    const path = this.snapshot.paths.canonical(ts7DocumentFile(file));
+    const requested = ts7DocumentFile(file);
+    if (this.sources.has(requested)) return this.sources.get(requested);
+    const path = this.snapshot.paths.canonical(requested);
+    if (this.sources.has(path)) {
+      const source = this.sources.get(path);
+      this.sources.set(requested, source);
+      return source;
+    }
     const retained = this.session.cache.get(path, this.snapshot.id, this.project.id);
-    if (retained !== undefined) return retained;
-    const bytes = this.session.binary("getSourceFile", JSON.stringify(this.query(file)));
-    if (bytes.length === 0) return undefined;
-    const ast = new AstFile(bytes, this.session.listMetadata, () => {
-      this.session.timing.materialized();
-    });
-    this.session.timing.fetched(Math.max(0, ast.wire.nodeCount - 2));
-    return this.session.cache.set(path, ast.sourceFile, this.snapshot.id, this.project.id);
+    let source = retained;
+    if (source === undefined) {
+      const bytes = this.session.binary("getSourceFile", JSON.stringify(this.query(file)));
+      if (bytes.length !== 0) {
+        const ast = new AstFile(bytes, this.session.listMetadata, () => {
+          this.session.timing.materialized();
+        });
+        this.session.timing.fetched(Math.max(0, ast.wire.nodeCount - 2));
+        source = this.session.cache.set(path, ast.sourceFile, this.snapshot.id, this.project.id);
+      }
+    }
+    // Both successful and missing answers belong to this immutable project
+    // snapshot. Later snapshots receive separate maps and shared ASTs only
+    // through the content/parse-options retention cache.
+    this.sources.set(path, source);
+    this.sources.set(requested, source);
+    return source;
   }
   getSourceFileNames(): string[] {
     return this.session.request<string[] | null>("getSourceFileNames", this.query()) ?? [];
@@ -325,6 +344,7 @@ export class Ts7SessionProgram {
   }
   dispose(): void {
     this.disposed = true;
+    this.sources.clear();
     this.metadata.clear();
   }
 }

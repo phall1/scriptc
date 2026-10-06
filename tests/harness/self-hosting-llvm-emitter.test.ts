@@ -109,6 +109,7 @@ const programs = [
   "checked-dispatch-input-lifetimes.js",
   "literal-switch-dispatch.ts",
   "local-union-storage.ts",
+  "class-callback-storage.ts",
 ];
 
 for (const backend of ["llvm"] as const) {
