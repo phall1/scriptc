@@ -6014,6 +6014,7 @@ ScrStr *scr_text_decode_legacy(const ScrBytes *b, double encoding);
  * "utf16le" writes LE code units, surrogate pairs included. Borrows
  * both; +1 u8 result. Never throws. */
 ScrBytes *scr_bytes_from_str(const ScrStr *s, const ScrStr *enc);
+ScrBytes *scr_bytes_from_str_checked(const ScrStr *s, const ScrStr *enc);
 
 /* Buffer.byteLength(string, enc) — enc NORMALIZED like from_str — and
  * Buffer.isEncoding(name) (case-insensitive over Node's alias set).

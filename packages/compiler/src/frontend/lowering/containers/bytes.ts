@@ -11,6 +11,7 @@ import {
   type IrBytesElem,
   type IrBytesIntrinsicMethod,
   type IrExpr,
+  type IrLibFn,
   type IrType,
   STRING,
   type SrcLoc,
@@ -641,7 +642,12 @@ export function lowerBytesMethodCall(
       const encName = encType.isStringLiteralType() ? knownBufEncoding(encType.value) : undefined;
       if (encName !== undefined) {
         // Keep literals on the canonical, non-throwing fast path.
-        enc = { kind: "strLit", value: encName, type: STRING, loc };
+        enc = defaultAfterUndefined(lowerer.lowerExpr(encNode), {
+          kind: "strLit",
+          value: encName,
+          type: STRING,
+          loc,
+        });
       } else {
         const undefinedArg = lowerStaticallyUndefinedArgument(lowerer, encNode);
         if (undefinedArg) {
@@ -1352,11 +1358,33 @@ function lowerBufferStaticValue(
           return { kind: "libCall", fn: "buffer.fromDyn", args: [value, enc], type: BYTES_U8, loc };
         }
         if (srcIr?.kind === "string") {
-          const encNode = args[1];
-          const encName = encNode ? bufEncoding(lowerer, "Buffer.from", encNode) : "utf8";
           const s = lowerer.coerceInto(argNode, value, STRING);
-          const enc: IrExpr = { kind: "strLit", value: encName, type: STRING, loc };
-          return { kind: "libCall", fn: "buffer.fromStr", args: [s, enc], type: BYTES_U8, loc };
+          const encNode = args[1];
+          let enc: IrExpr = { kind: "strLit", value: "utf8", type: STRING, loc };
+          let fn: IrLibFn = "buffer.fromStr";
+          if (encNode) {
+            const encType = lowerer.typeOf(encNode);
+            const encName = encType.isStringLiteralType()
+              ? knownBufEncoding(encType.value)
+              : undefined;
+            if (encName !== undefined) {
+              enc = defaultAfterUndefined(lowerer.lowerExpr(encNode), {
+                kind: "strLit",
+                value: encName,
+                type: STRING,
+                loc,
+              });
+            } else {
+              const undefinedArg = lowerStaticallyUndefinedArgument(lowerer, encNode);
+              if (undefinedArg) {
+                enc = defaultAfterUndefined(undefinedArg, enc);
+              } else {
+                enc = lowerOptionalArgument(lowerer, encNode, STRING, enc);
+                fn = "buffer.fromStrChecked";
+              }
+            }
+          }
+          return { kind: "libCall", fn, args: [s, enc], type: BYTES_U8, loc };
         }
         if (args.length === 1 && srcIr?.kind === "bytes" && srcIr.elem === "u8") {
           return { kind: "bytesNew", source: value, type: BYTES_U8, loc };
@@ -1369,7 +1397,7 @@ function lowerBufferStaticValue(
     lowerer.noLowering(
       "Buffer.from with this argument shape",
       call,
-      "supported: Buffer.from(string, encoding?) with a literal encoding, Buffer.from(u8Array) — a copy — " +
+      "supported: Buffer.from(string, encoding?), Buffer.from(u8Array) — a copy — " +
         "Buffer.from(number[]), or Buffer.from(arrayBuffer, byteOffset?, length?) — a view sharing " +
         "the buffer's storage; narrow unions first",
     );
