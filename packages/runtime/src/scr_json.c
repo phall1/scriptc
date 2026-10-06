@@ -187,6 +187,7 @@ void scr_jb_putc(ScrJsonBuf *b, char c) {
 }
 
 static void scr_jb_write(ScrJsonBuf *b, const char *s, size_t n) {
+  if (n == 0) return;
   scr_jb_grow(b, n);
   memcpy(b->data + b->len, s, n);
   b->len += n;
@@ -215,18 +216,45 @@ void scr_jb_put_f64(ScrJsonBuf *b, double v) {
   scr_jb_write(b, buf, n);
 }
 
-void scr_jb_put_json_str(ScrJsonBuf *b, const ScrStr *s) {
+/* Find the next quote, backslash or control byte. memcpy keeps the word
+ * loads unaligned-safe, and the length guard never reads past the input.
+ * The masks only decide whether to inspect a word byte by byte: borrow
+ * propagation may mark extra lanes, so it must not determine a byte index.
+ * High UTF-8 bytes are ordinary data, independent of host byte order. */
+static size_t scr_json_plain_bytes(const char *data, size_t len) {
+  const uint64_t ones = UINT64_C(0x0101010101010101);
+  const uint64_t high = UINT64_C(0x8080808080808080);
+  size_t i = 0;
+  while (len - i >= sizeof(uint64_t)) {
+    uint64_t word;
+    memcpy(&word, data + i, sizeof word);
+    uint64_t quotes = word ^ (ones * '"');
+    uint64_t slashes = word ^ (ones * '\\');
+    uint64_t special = ((quotes - ones) & ~quotes) |
+                       ((slashes - ones) & ~slashes) |
+                       ((word - ones * 0x20) & ~word);
+    if (special & high) break;
+    i += sizeof word;
+  }
+  while (i < len) {
+    unsigned char c = (unsigned char)data[i];
+    if (c < 0x20 || c == '"' || c == '\\') break;
+    i++;
+  }
+  return i;
+}
+
+static void scr_jb_put_json_span(ScrJsonBuf *b, const char *data, size_t len) {
   scr_jb_putc(b, '"');
   /* Bulk-copy runs of unescaped bytes (UTF-8 passes through verbatim,
    * like JS); escapes interrupt the run. */
-  size_t i = 0, run = 0;
-  while (i + run < s->len) {
-    unsigned char c = (unsigned char)s->data[i + run];
-    if (c != '"' && c != '\\' && c >= 0x20) {
-      run++;
-      continue;
-    }
-    scr_jb_write(b, s->data + i, run);
+  size_t i = 0;
+  while (i < len) {
+    size_t run = scr_json_plain_bytes(data + i, len - i);
+    scr_jb_write(b, data + i, run);
+    i += run;
+    if (i == len) break;
+    unsigned char c = (unsigned char)data[i++];
     switch (c) {
     case '"': scr_jb_puts(b, "\\\""); break;
     case '\\': scr_jb_puts(b, "\\\\"); break;
@@ -241,11 +269,12 @@ void scr_jb_put_json_str(ScrJsonBuf *b, const ScrStr *s) {
       scr_jb_puts(b, esc);
     }
     }
-    i += run + 1;
-    run = 0;
   }
-  scr_jb_write(b, s->data + i, run);
   scr_jb_putc(b, '"');
+}
+
+void scr_jb_put_json_str(ScrJsonBuf *b, const ScrStr *s) {
+  scr_jb_put_json_span(b, s->data, s->len);
 }
 
 ScrStr *scr_jb_finish(ScrJsonBuf *b) {
@@ -5662,10 +5691,7 @@ void scr_jb_put_dyn(ScrJsonBuf *b, const ScrDyn *d) {
       if (e->value->kind == SCR_DYN_JSVAL && scr_dyn_isl_typeof_is(e->value, "function")) continue; /* engine functions drop too */
       if (!first) scr_jb_putc(b, ',');
       first = false;
-      /* Keys escape exactly like string values (put_json_str quotes). */
-      ScrStr *k = scr_str_new(e->key, e->key_len);
-      scr_jb_put_json_str(b, k);
-      scr_str_release(k);
+      scr_jb_put_json_span(b, e->key, e->key_len);
       scr_jb_putc(b, ':');
       scr_jb_put_dyn(b, e->value);
     }
@@ -5826,8 +5852,10 @@ static int32_t scr_json_hex4(ScrJsonP *p) {
  * slow path would produce) and returns -1. */
 static int scr_json_string_span(ScrJsonP *p, const char **span,
                                  size_t *span_len) {
-  size_t i = p->pos + 1;
-  while (i < p->len) {
+  *span = p->s + p->pos + 1;
+  *span_len = scr_json_plain_bytes(*span, p->len - p->pos - 1);
+  size_t i = p->pos + 1 + *span_len;
+  if (i < p->len) {
     unsigned char c = (unsigned char)p->s[i];
     if (c == '"') {
       *span = p->s + p->pos + 1;
@@ -5840,7 +5868,6 @@ static int scr_json_string_span(ScrJsonP *p, const char **span,
       scr_json_throw_pos("Bad control character in string literal", i);
       return -1;
     }
-    i++;
   }
   scr_json_throw_pos("Unterminated string", p->pos);
   return -1;
@@ -5848,11 +5875,13 @@ static int scr_json_string_span(ScrJsonP *p, const char **span,
 
 /* Slow path: parses the string literal at p->pos (the opening quote),
  * decoding escapes, into a +1 ScrStr. NULL on error (thrown). */
-static ScrStr *scr_json_string_slow(ScrJsonP *p) {
+static ScrStr *scr_json_string_slow(ScrJsonP *p, size_t prefix) {
   size_t open = p->pos;
   p->pos++; /* opening quote */
   ScrJsonBuf b;
   scr_jb_init(&b);
+  scr_jb_write(&b, p->s + p->pos, prefix);
+  p->pos += prefix;
   for (;;) {
     if (p->pos >= p->len) {
       scr_jb_dispose(&b);
@@ -5870,8 +5899,9 @@ static ScrStr *scr_json_string_slow(ScrJsonP *p) {
       return NULL;
     }
     if (c != '\\') {
-      scr_jb_putc(&b, (char)c); /* raw UTF-8 passes through */
-      p->pos++;
+      size_t run = scr_json_plain_bytes(p->s + p->pos, p->len - p->pos);
+      scr_jb_write(&b, p->s + p->pos, run);
+      p->pos += run;
       continue;
     }
     p->pos++; /* backslash */
@@ -5946,7 +5976,7 @@ static ScrStr *scr_json_string_scr(ScrJsonP *p) {
   int r = scr_json_string_span(p, &span, &span_len);
   if (r < 0) return NULL;
   if (r > 0) return scr_str_new(span, span_len);
-  return scr_json_string_slow(p);
+  return scr_json_string_slow(p, span_len);
 }
 
 static ScrDyn *scr_json_value(ScrJsonP *p);
@@ -6120,7 +6150,7 @@ static ScrDyn *scr_json_object(ScrJsonP *p) {
         key = span;
         key_len = span_len;
       } else {
-        decoded_key = scr_json_string_slow(p);
+        decoded_key = scr_json_string_slow(p, span_len);
         if (!decoded_key) {
           scr_dyn_release(obj);
           return NULL;
@@ -6504,12 +6534,76 @@ static void scr_json_gap(ScrJsonBuf *buffer, const ScrStr *gap, size_t depth) {
   for (size_t i = 0; i < depth; i++) scr_jb_write(buffer, gap->data, gap->len);
 }
 
+/* These primitive values cannot invoke toJSON or mutate a containing frame.
+ * BigInts, functions and every reference kind keep the protocol walk. */
+static bool scr_json_plain_value(const ScrDyn *value) {
+  switch (value->kind) {
+  case SCR_DYN_NULL: case SCR_DYN_UNDEF: case SCR_DYN_SYMBOL:
+  case SCR_DYN_BOOL: case SCR_DYN_NUM: case SCR_DYN_STR: return true;
+  default: return false;
+  }
+}
+
+/* Prove the whole immediate container before writing any of it. Without a
+ * replacer or executable children, entries cannot change and borrowed names
+ * need neither a key snapshot nor repeated lookups. Numeric property names
+ * keep the ordinary sorted-key walk; sparse/accessor arrays keep Get. This
+ * proof is repeated per call, so later mutations never leave a stale fact. */
+static bool scr_json_plain_container(const ScrDyn *value) {
+  if (value->kind == SCR_DYN_ARR) {
+    if (value->v.arr.presence || value->v.arr.properties) return false;
+    for (size_t i = 0; i < value->v.arr.len; i++)
+      if (!scr_json_plain_value(value->v.arr.items[i])) return false;
+    return true;
+  }
+  if (value->kind != SCR_DYN_OBJ) return false;
+  for (size_t i = 0; i < value->v.obj.len; i++) {
+    const ScrDynEntry *entry = &value->v.obj.entries[i];
+    if (!entry->enumerable) continue;
+    double index;
+    if (entry->accessor || !scr_json_plain_value(entry->value) ||
+        scr_dyn_key_is_index(entry->key, entry->key_len, &index)) return false;
+  }
+  return true;
+}
+
+static bool scr_json_plain_write(ScrJsonBuf *buffer, const ScrDyn *value,
+                                 const ScrStr *gap, size_t depth) {
+  bool array = value->kind == SCR_DYN_ARR;
+  size_t length = array ? value->v.arr.len : value->v.obj.len;
+  scr_jb_putc(buffer, array ? '[' : '{');
+  bool first = true;
+  for (size_t i = 0; i < length; i++) {
+    const ScrDynEntry *entry = array ? NULL : &value->v.obj.entries[i];
+    if (entry && !entry->enumerable) continue;
+    const ScrDyn *child = array ? value->v.arr.items[i] : entry->value;
+    bool omitted = scr_json_omitted(child);
+    if (!array && omitted) continue;
+    if (!omitted && !scr_json_callback_depth(depth + 1)) return false;
+    if (!first) scr_jb_putc(buffer, ',');
+    first = false;
+    scr_json_gap(buffer, gap, depth + 1);
+    if (entry) {
+      scr_jb_put_json_span(buffer, entry->key, entry->key_len);
+      scr_jb_putc(buffer, ':');
+      if (gap->len) scr_jb_putc(buffer, ' ');
+    }
+    if (omitted) scr_jb_puts(buffer, "null");
+    else scr_dyn_json_write(buffer, child);
+  }
+  if (!first) scr_json_gap(buffer, gap, depth);
+  scr_jb_putc(buffer, array ? ']' : '}');
+  return true;
+}
+
 static bool scr_json_replaced_write(ScrJsonBuf *buffer, const ScrDyn *value,
                                    const ScrDyn *replacer, const ScrStr *gap, size_t depth) {
   if (!scr_json_callback_depth(depth)) return false;
   ScrDyn *view = value->kind == SCR_DYN_TYPED_REF ? scr_dyn_typed_ref_materialize(value) : NULL;
   const ScrDyn *observed = view ? view : value;
   if (scr_exc_pending()) { scr_dyn_release(view); return false; }
+  if (!view && replacer->kind == SCR_DYN_UNDEF && scr_json_plain_container(value))
+    return scr_json_plain_write(buffer, value, gap, depth);
   if (observed->kind != SCR_DYN_OBJ && observed->kind != SCR_DYN_ARR && observed->kind != SCR_DYN_BYTES) {
     /* Engine objects need an engine callback bridge, not an opaque JSON
      * splice: that would silently skip all their children. */

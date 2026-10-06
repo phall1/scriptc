@@ -14276,6 +14276,12 @@
     "<repo>/tests/corpus/checked-storage-transitions.js"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/structured-text-boundaries.js": {
+   "order": [
+    "<repo>/tests/corpus/structured-text-boundaries.js"
+   ],
+   "diags": []
   }
  }
 }

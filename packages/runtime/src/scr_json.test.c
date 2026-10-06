@@ -27,6 +27,57 @@ static ScrDyn *nothing(ScrClosure *closure, ScrDyn *const *args, size_t argc) {
   return scr_dyn_retain(scr_dyn_undefined());
 }
 
+static void json_string_boundaries(void) {
+  /* Every escape/control at every word alignment, followed by raw UTF-8.
+   * ASan also checks short tails that cannot supply a complete word. */
+  const char suffix[] = "tail\xF0\x9F\x99\x82\xE9\x9B\xAA";
+  for (size_t prefix = 0; prefix < 64; prefix++) {
+    for (unsigned special = 0; special < 34; special++) {
+      char bytes[96];
+      memset(bytes, 'a', prefix);
+      bytes[prefix] = special < 32 ? (char)special : special == 32 ? '"' : '\\';
+      memcpy(bytes + prefix + 1, suffix, sizeof suffix - 1);
+      size_t length = prefix + sizeof suffix;
+      ScrStr *original = scr_str_new(bytes, length);
+      ScrJsonBuf buffer;
+      scr_jb_init(&buffer);
+      scr_jb_put_json_str(&buffer, original);
+      ScrStr *encoded = scr_jb_finish(&buffer);
+      ScrDyn *parsed = scr_json_parse(encoded);
+      assert(parsed && parsed->kind == SCR_DYN_STR && !scr_exc_pending());
+      assert(scr_str_eq(original, parsed->v.str));
+      scr_dyn_release(parsed);
+      scr_str_release(encoded);
+      scr_str_release(original);
+
+      if (special < 32) {
+        char invalid[68];
+        invalid[0] = '"';
+        memset(invalid + 1, 'a', prefix);
+        invalid[prefix + 1] = (char)special;
+        invalid[prefix + 2] = '"';
+        ScrStr *input = scr_str_new(invalid, prefix + 3);
+        assert(!scr_json_parse(input) && scr_exc_pending());
+        scr_exc_clear();
+        scr_str_release(input);
+      }
+    }
+    char plain[68];
+    plain[0] = '"';
+    memset(plain + 1, 'z', prefix);
+    plain[prefix + 1] = '"';
+    ScrStr *input = scr_str_new(plain, prefix + 2);
+    ScrDyn *parsed = scr_json_parse(input);
+    assert(parsed && parsed->v.str->len == prefix && !scr_exc_pending());
+    scr_dyn_release(parsed);
+    scr_str_release(input);
+    input = scr_str_new(plain, prefix + 1);
+    assert(!scr_json_parse(input) && scr_exc_pending());
+    scr_exc_clear();
+    scr_str_release(input);
+  }
+}
+
 static void checked_storage(void) {
   /* Reuse after deletion, changing field order, embedded NUL and escaped
    * duplicate names must leave independently owned keys and values. */
@@ -252,6 +303,7 @@ static void checked_number_storage(void) {
 }
 
 int main(void) {
+  json_string_boundaries();
   scr_init();
   checked_storage();
   shared_property_keys();
