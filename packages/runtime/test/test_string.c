@@ -32,6 +32,7 @@ long scr_str_live_count(void); /* provided by scr_string.c */
  * runtime ABI. The walker count is code-point steps after a cache prime. */
 void scr_sidx_test_reset_steps(void);
 size_t scr_sidx_test_walk_steps(void);
+size_t scr_sidx_test_searches(void);
 void scr_sidx_test_reset_cache(void);
 size_t scr_sidx_test_entries(void);
 size_t scr_sidx_test_points(void);
@@ -633,6 +634,96 @@ static void sparse_append_threshold_asserts(void) {
   scr_str_release(eacute);
   scr_sidx_test_reset_cache();
 }
+
+/* Sequential, nearby and distant reads share one mixed receiver. The ASCII
+ * span ends at different word alignments, followed by two surrogate pairs
+ * and BMP characters; every code unit has an independent expected value. */
+static void local_navigation_asserts(void) {
+  enum { ASCII = 263, UNITS = ASCII + 7, REPS = 700 };
+  static const char tail[] = "\xC3\xA9\xF0\x9F\x98\x80"
+                             "\xE4\xB8\xAD\xF0\x9F\xA7\xAD\0";
+  static const double codes[] = {233, 0xD83D, 0xDE00, 0x4E2D,
+                                 0xD83E, 0xDDED, 0};
+  char piece[ASCII + sizeof(tail) - 1];
+  for (size_t i = 0; i < ASCII; i++) piece[i] = (char)('a' + i % 26);
+  memcpy(piece + ASCII, tail, sizeof(tail) - 1);
+  ScrStr *unit = scr_str_new(piece, sizeof(piece));
+  ScrStr *s = scr_str_repeat(unit, REPS);
+  scr_str_release(unit);
+  scr_sidx_test_reset_cache();
+  ScrStr *prefix = scr_str_new("abc", 3);
+  if (scr_str_index_of(s, prefix, 0) != 0 ||
+      !scr_str_starts_with_from(s, prefix, 0))
+    sidx_fail("cold prefix search");
+  if (scr_sidx_test_points() != 0)
+    sidx_fail("prefix search indexed unrelated suffix");
+  scr_str_release(prefix);
+  if (scr_str_utf16_len(s) != UNITS * REPS) sidx_fail("local length");
+  scr_sidx_test_reset_steps();
+  for (size_t direction = 0; direction < 2; direction++) {
+    for (size_t i = 0; i < UNITS * REPS; i++) {
+      size_t at = direction ? UNITS * REPS - i - 1 : i;
+      size_t offset = at % UNITS;
+      double expected = offset < ASCII ? (double)('a' + offset % 26)
+                                        : codes[offset - ASCII];
+      if (scr_str_char_code_at(s, (double)at) != expected) {
+        sidx_fail("local code unit");
+        break;
+      }
+    }
+  }
+  if (scr_sidx_test_searches() > 2)
+    sidx_fail("sequential reads repeatedly searched sparse index");
+  for (size_t i = 0; i < 1024; i++) {
+    size_t at = (i * 7919) % (UNITS * REPS);
+    size_t offset = at % UNITS;
+    double expected = offset < ASCII ? (double)('a' + offset % 26)
+                                      : codes[offset - ASCII];
+    if (scr_str_char_code_at(s, (double)at) != expected)
+      sidx_fail("distant code unit");
+    size_t start = at - offset;
+    ScrStr *part = scr_str_substring(s, (double)(start + ASCII),
+                                       (double)(start + UNITS));
+    if (part->len != sizeof(tail) - 1 ||
+        memcmp(part->data, tail, sizeof(tail) - 1) != 0)
+      sidx_fail("distant substring");
+    scr_str_release(part);
+  }
+  s = scr_str_regrow(s, s->len + 64);
+  (void)scr_str_char_code_at(s, UNITS * (REPS - 1) + 17);
+  ScrStr *suffix = scr_str_new("next", 4);
+  handoff_append(&s, suffix);
+  scr_str_release(suffix);
+  if (scr_str_char_code_at(s, UNITS * (REPS - 1) + 18) != 's' ||
+      scr_str_char_code_at(s, UNITS * REPS) != 'n' ||
+      scr_str_utf16_len(s) != UNITS * REPS + 4)
+    sidx_fail("local window across append");
+  scr_str_release(s);
+  scr_sidx_test_reset_cache();
+}
+
+/* An entry borrowed for a receiver must remain its entry when a second
+ * string needs indexing. Fill the cursor tier so the needle would evict
+ * precisely the receiver under a receiver-first lookup order. */
+static void positioned_suffix_eviction_asserts(void) {
+  scr_sidx_test_reset_cache();
+  ScrStr *s = scr_str_new("\xC3\xA9" "abcdef", 8);
+  ScrStr *others[3];
+  (void)scr_str_utf16_len(s);
+  for (size_t i = 0; i < 3; i++) {
+    others[i] = scr_str_new("\xE4\xB8\xAD", 3);
+    (void)scr_str_utf16_len(others[i]);
+  }
+  ScrStr *needle = scr_str_new("cd", 2);
+  if (!scr_str_ends_with_from(s, needle, 5))
+    sidx_fail("positioned suffix after receiver eviction");
+  if (scr_str_ends_with_from(s, needle, 4))
+    sidx_fail("positioned suffix mismatched boundary");
+  scr_str_release(needle);
+  for (size_t i = 0; i < 3; i++) scr_str_release(others[i]);
+  scr_str_release(s);
+  scr_sidx_test_reset_cache();
+}
 #endif
 
 int main(int argc, char **argv) {
@@ -805,6 +896,8 @@ int main(int argc, char **argv) {
   sparse_ascii_prefix_asserts();
   sparse_all_ascii_end_asserts();
   sparse_append_threshold_asserts();
+  local_navigation_asserts();
+  positioned_suffix_eviction_asserts();
 #endif
 
 #ifdef SCR_RC_AUDIT
