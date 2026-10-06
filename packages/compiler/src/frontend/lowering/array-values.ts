@@ -27,6 +27,13 @@ export function arrayIndexPresent(arr: IrExpr, index: IrExpr, loc: SrcLoc): IrEx
   };
 }
 
+/** Optional array reads still denote the original array when their value is present. */
+export function hasArrayReference(lowerer: Lowerer, type: IrType): boolean {
+  if (type.kind === "array") return true;
+  if (type.kind !== "union") return false;
+  return lowerer.unions.get(type.unionId)?.arms.some((arm) => arm.kind === "array") ?? false;
+}
+
 /** Test the conventional `a.0[i.0]` slot used by synthesized array loops. */
 export function currentArrayIndexPresent(arrType: IrType, loc: SrcLoc): IrExpr {
   return arrayIndexPresent(varRef("a.0", arrType, loc), varRef("i.0", F64, loc), loc);
