@@ -142,6 +142,8 @@ describe.skipIf(!zigOnPath())("wasm32-wasi differential", () => {
     "2700-wasi-core.ts",
     "local-union-storage.ts",
     "class-callback-storage.ts",
+    "array-sort-runs.ts",
+    "uint8array-sort-domains.ts",
     "1612-cjs-module-globals.cjs",
     "992-fs-roundtrip.ts",
     "751-cycle-records-mutual.ts",
