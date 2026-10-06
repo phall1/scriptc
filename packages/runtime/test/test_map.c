@@ -165,6 +165,43 @@ static void test_live_iteration_indices(void) {
   scr_map_release(m);
 }
 
+static void test_small_storage_transitions(void) {
+  ScrMap *m = scr_map_new(SCR_MAP_KEY_F64, SCR_MAP_VAL_F64, NULL, NULL, NULL);
+  for (int i = 0; i < 4; i++) scr_map_set_f64_f64(m, i, i + 10);
+  check(m->nbuckets == 0 && m->buckets == NULL, "small map has no bucket allocation");
+  for (int i = 0; i < 100; i++) {
+    scr_map_delete_f64(m, 3);
+    scr_map_set_f64_f64(m, 3, i);
+  }
+  check(m->nbuckets == 0 && m->nentries == 4, "small churn compacts without buckets");
+  ScrMap *copy = scr_map_clone(m, false);
+  check(copy->nbuckets == 0, "small clone preserves compact storage");
+  scr_map_iter_enter(m);
+  scr_map_delete_f64(m, 1);
+  scr_map_set_f64_f64(m, 4, 14);
+  check(m->nbuckets > 0, "live iteration promotes without moving entry indices");
+  check(!scr_map_iter_live(m, 1) && scr_map_iter_key_f64(m, 4) == 4,
+        "promotion preserves tombstones and append position");
+  for (int i = 5; i < 64; i++) scr_map_set_f64_f64(m, i, i + 10);
+  double out = 0;
+  check(scr_map_get_f64_f64(m, 0, &out) && out == 10, "original key survives promotion and growth");
+  check(!scr_map_has_f64(m, 1), "deleted small key stays absent after rehash");
+  scr_map_iter_exit(m);
+  check(scr_map_has_f64(copy, 1) && !scr_map_has_f64(copy, 4), "small clone remains independent");
+  scr_map_clear(copy);
+  scr_map_iter_enter(copy);
+  for (int i = 0; i < 6; i++) {
+    scr_map_clear(copy);
+    scr_map_set_f64_f64(copy, i, i);
+  }
+  check(copy->nbuckets > 0 && copy->nentries == 6 && copy->nlive == 1,
+        "clear and append preserve active small iterator positions");
+  scr_map_iter_exit(copy);
+  check(scr_map_has_f64(copy, 5), "post-clear entry survives iterator compaction");
+  scr_map_release(copy);
+  scr_map_release(m);
+}
+
 static void test_identity_key_ownership(void) {
   ScrArr *a = scr_arr_new(SCR_ELEM_F64, 0);
   ScrArr *b = scr_arr_new(SCR_ELEM_F64, 0);
@@ -367,6 +404,7 @@ int main(void) {
 #endif
   test_churn_stays_bounded();
   test_live_iteration_indices();
+  test_small_storage_transitions();
   test_identity_key_ownership();
   test_identity_scalar_values();
   test_reboxed_keys_and_rehash();

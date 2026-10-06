@@ -34,6 +34,55 @@ function body(llvm: string, symbol: string): string {
   return found![0];
 }
 
+test("projected collection receivers borrow across local helper work and typed mutation", async () => {
+  const module = await lower(`
+class Box {
+  items = new Map<string, number>();
+  keys = new Set<number>();
+}
+function key(input: string): string {
+  let selected = input;
+  if (selected.length === 0) selected = "fallback";
+  return selected;
+}
+function read(box: Box, input: string): number { return box.items.get(key(input)) ?? 0; }
+function write(box: Box, input: string, value: number): number {
+  box.items.set(key(input), value);
+  box.keys.add(value);
+  return box.items.size + box.keys.size;
+}
+const box = new Box();
+console.log(write(box, "entry", 7), read(box, "entry"));
+`);
+  for (const pointerBits of [32, 64] as const) {
+    const llvm = emitLlvmModule(deserializeModule(serializeModule(module)), { pointerBits });
+    for (const name of ["read", "write"]) {
+      const work = body(llvm, `sc_bf_${name}`);
+      expect(work).not.toContain("@scr_map_retain_v");
+      expect(work).not.toContain("@scr_map_release");
+    }
+    expect(body(llvm, "sc_bf_write")).toContain("@scr_map_set_str_f64");
+  }
+});
+
+test("projected collection receivers keep snapshots across an owner replacement", async () => {
+  const module = await lower(`
+class Box { items = new Map<string, number>(); }
+let root = new Box();
+function replace(): string { root = new Box(); return "entry"; }
+function read(): number { return root.items.get(replace()) ?? 0; }
+console.log(read());
+`);
+  for (const pointerBits of [32, 64] as const) {
+    const work = body(emitLlvmModule(module, { pointerBits }), "sc_f_read");
+    const retain = work.indexOf("@scr_map_retain_v");
+    const replace = work.indexOf("@sc_f_replace");
+    expect(retain).toBeGreaterThan(0);
+    expect(replace).toBeGreaterThan(retain);
+    expect(work.slice(replace)).toContain("@scr_map_release");
+  }
+});
+
 test("source string helpers preserve borrowing after the serialized IR boundary", async () => {
   const module = await lower(`
 function score(text: string, prefix: string): number {

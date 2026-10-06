@@ -209,8 +209,19 @@ static size_t scr_map_probe(const ScrMap *m, uint64_t hash, uint64_t key) {
   }
 }
 
+#define SCR_MAP_LINEAR_LIMIT 4
+
+/* Small collections keep only their ordered entries. Cached hashes make
+ * the bounded scan cheap without allocating a separate bucket table. */
 static size_t scr_map_find(const ScrMap *m, uint64_t hash, uint64_t key) {
-  size_t slot = scr_map_probe(m, hash ? hash : 1, key);
+  hash = hash ? hash : 1;
+  if (m->nbuckets == 0) {
+    for (size_t e = 0; e < m->nentries; e++) {
+      if (m->entries[e].hash == hash && scr_map_key_eq(m, m->entries[e].key, key)) return e;
+    }
+    return SCR_MAP_EMPTY;
+  }
+  size_t slot = scr_map_probe(m, hash, key);
   return slot == SCR_MAP_EMPTY ? SCR_MAP_EMPTY : m->buckets[slot];
 }
 
@@ -248,12 +259,15 @@ static void scr_map_compact(ScrMap *m) {
  * reuse their storage) and grows otherwise; while an iteration is active it
  * ONLY grows — indices must stay stable under callback mutation. */
 static void scr_map_reserve_append(ScrMap *m) {
-  if (m->nentries < m->ecap && m->nbuckets >= 2 * (m->nentries + 1)) return;
-  if (m->iter_depth == 0 && m->nlive <= m->nentries / 2 && m->nentries > 0) {
+  if (m->nentries < m->ecap &&
+      ((m->nbuckets == 0 && m->nentries < SCR_MAP_LINEAR_LIMIT) ||
+       m->nbuckets >= 2 * (m->nentries + 1))) return;
+  if (m->iter_depth == 0 && m->nentries > 0 &&
+      (m->nbuckets == 0 ? m->nlive < m->nentries : m->nlive <= m->nentries / 2)) {
     scr_map_compact(m);
   }
   if (m->nentries == m->ecap) {
-    size_t cap = m->ecap ? m->ecap : 8;
+    size_t cap = m->ecap ? m->ecap : 4;
     while (cap < m->nentries + 1) {
       if (cap > SIZE_MAX / 2 / sizeof(ScrMapEntry)) scr_map_oom();
       cap *= 2;
@@ -263,6 +277,7 @@ static void scr_map_reserve_append(ScrMap *m) {
     m->entries = entries;
     m->ecap = cap;
   }
+  if (m->nbuckets == 0 && m->nentries < SCR_MAP_LINEAR_LIMIT) return;
   if (m->nbuckets < 2 * (m->nentries + 1)) {
     size_t nbuckets = m->nbuckets ? m->nbuckets : 16;
     while (nbuckets < 2 * (m->nentries + 1)) {
@@ -469,7 +484,7 @@ bool scr_map_delete_ref(ScrMap *m, const void *key) {
 static void scr_map_set(ScrMap *m, uint64_t hash, uint64_t key, uint64_t val) {
   hash = hash ? hash : 1;
   size_t slot = scr_map_probe(m, hash, key);
-  size_t e = slot == SCR_MAP_EMPTY ? SCR_MAP_EMPTY : m->buckets[slot];
+  size_t e = m->nbuckets == 0 ? scr_map_find(m, hash, key) : m->buckets[slot];
   if (e != SCR_MAP_EMPTY) {
     uint64_t old = m->entries[e].val;
     m->entries[e].val = val; /* unlink before releasing (cycle collector) */
@@ -480,7 +495,7 @@ static void scr_map_set(ScrMap *m, uint64_t hash, uint64_t key, uint64_t val) {
   scr_map_reserve_append(m);
   /* Growth or compaction can move the insertion bucket. Otherwise keep the
    * empty slot from the first probe instead of walking the chain twice. */
-  if (m->nentries != old_entries || m->nbuckets != old_buckets) {
+  if (m->nbuckets && (m->nentries != old_entries || m->nbuckets != old_buckets)) {
     size_t mask = m->nbuckets - 1;
     slot = hash & mask;
     while (m->buckets[slot] != SCR_MAP_EMPTY) slot = (slot + 1) & mask;
@@ -510,7 +525,7 @@ static void scr_map_set(ScrMap *m, uint64_t hash, uint64_t key, uint64_t val) {
   } else if (scr_map_ref_key(m->key_kind)) {
     m->key_retain(scr_map_slot_to_ptr(key)); /* key is borrowed */
   }
-  m->buckets[slot] = idx;
+  if (m->nbuckets) m->buckets[slot] = idx;
 }
 
 static void scr_map_set_f64_key(ScrMap *m, double key, uint64_t val) {
@@ -792,6 +807,7 @@ ScrMap *scr_map_clone(const ScrMap *source, bool keys_only) {
     else if (out->val_kind == SCR_MAP_VAL_REF) out->val_retain(scr_map_slot_to_ptr(copy->val));
   }
   out->nlive = count;
+  if (count <= SCR_MAP_LINEAR_LIMIT) return out;
   size_t buckets = 16;
   while (buckets < 2 * count) {
     if (buckets > SIZE_MAX / 2 / sizeof(size_t)) scr_map_oom();

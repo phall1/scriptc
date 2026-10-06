@@ -195,7 +195,7 @@ test("typed read helpers borrow string keys while mutations retain the owned con
   expect(keyFacts()).toBeUndefined();
 });
 
-test("effectful keys borrow unchanged bindings and snapshot reassigned receivers", () => {
+test("reference-preserving keys borrow receivers across unrelated later assignments", () => {
   const mod = fixture();
   const fn = mod.functions[1]!;
   const init = fn.body[0]!;
@@ -216,5 +216,5 @@ test("effectful keys borrow unchanged bindings and snapshot reassigned receivers
   work.body.splice(1, 0, { kind: "assign", localId: "map", value: ref("map", type), loc });
   const ir = body(mod);
   expect(ir.indexOf("@scr_map_retain_v")).toBeGreaterThan(0);
-  expect(ir.indexOf("@scr_map_retain_v")).toBeLessThan(ir.indexOf("@sc_f_key"));
+  expect(ir.indexOf("@scr_map_retain_v")).toBeGreaterThan(ir.indexOf("@sc_f_key"));
 });

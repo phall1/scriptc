@@ -17,7 +17,7 @@ import {
 import type { LlvmEmitterContext, LlValue } from "./expr-context.js";
 import { F64_INF, f64Lit } from "./common.js";
 import { borrowsStringInputs, emitStringInputs } from "./string-lifetimes.js";
-import { borrowsMapReadInputs } from "./map-read-lifetimes.js";
+import { borrowsMapReadInputs, borrowsMapMutationReceiver } from "./map-read-lifetimes.js";
 import { emitBorrowedInput } from "./borrowed-inputs.js";
 
 export function resolveThunkFor(host: LlvmEmitterContext, inner: IrType): string {
@@ -294,6 +294,15 @@ export function emitStableReceiver(
   following: IrExpr[],
 ): LlValue {
   if (host.canBorrowCallArgument(receiver)) return host.emitReadReceiver(receiver);
+  // A projection stays rooted while later operands preserve existing
+  // reference edges. Checked narrowing may throw; the caller still owns
+  // the projection's root while that statement unwinds.
+  if (
+    host.canBorrowReceiver(receiver) &&
+    following.every((operand) => host.referenceEffects.preserves(operand))
+  ) {
+    return host.emitReadReceiver(receiver);
+  }
   if (
     receiver.kind === "varRef" &&
     following.every((operand) => isStableReceiverOperand(operand, receiver.localId))
@@ -717,9 +726,10 @@ export function emitMapLikeIntrinsic(
 ): LlValue {
   const B = host.B;
   const borrowInputs = borrowsMapReadInputs(e);
-  const r = borrowInputs
-    ? host.emitStableReceiver(e.receiver, e.args)
-    : emitBorrowedInput(host, e.receiver);
+  const r =
+    borrowInputs || borrowsMapMutationReceiver(e)
+      ? host.emitStableReceiver(e.receiver, e.args)
+      : emitBorrowedInput(host, e.receiver);
   const receiverType = e.receiver.type;
   if (e.kind === "mapIntrinsic" && receiverType.kind !== "map") {
     throw new InternalCompilerError("llvm emitter bug: mapIntrinsic on non-map");
