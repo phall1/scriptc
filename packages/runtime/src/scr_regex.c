@@ -13,10 +13,9 @@
  *   lre_compile rejects aborts with a clear
  *   message (Node throws SyntaxError at parse time — documented divergence;
  *   rare, since tsc's parser has already syntax-checked the literal).
- * - Subjects are matched as UTF-16: lre_exec runs over a per-call
- *   conversion of the UTF-8 subject (cbuf_type 1), so every index libregexp
- *   reports is a UTF-16 code-unit index — .length/slice/charCodeAt exact,
- *   like Node. Correctness-first: the conversion is O(n) per call.
+ * - ASCII subjects borrow their existing bytes; other subjects use a
+ *   per-call UTF-16 conversion. Both engine representations report UTF-16
+ *   code-unit indices, matching .length/slice/charCodeAt.
  * - Match loops mirror quickjs.c's own (JS_RegExpDelete /
  *   js_regexp_Symbol_replace): capture buffers are sized by
  *   lre_get_alloc_count (NOT capture_count*2 — the executor writes
@@ -304,6 +303,8 @@ ScrStr *scr_regex_to_string(ScrRegex *re) {
 /* Subject as freshly-malloc'd UTF-16 code units (strings are well-formed
  * UTF-8, so no validation). Unit count ≤ byte count. */
 static uint16_t *scr_to_utf16(const ScrStr *s, int *plen) {
+  if (s->len > (size_t)INT32_MAX - 1 || s->len > SIZE_MAX / sizeof(uint16_t))
+    scr_regex_oom();
   uint16_t *u = malloc((s->len ? s->len : 1) * sizeof(uint16_t));
   if (!u) scr_regex_oom();
   int n = 0;
@@ -339,53 +340,98 @@ static uint16_t *scr_to_utf16(const ScrStr *s, int *plen) {
   return u;
 }
 
-/* Append u[start..end) as UTF-8. A lone surrogate (a non-/u match boundary
- * split an astral pair) becomes U+FFFD — the house rule for JS results that
- * are not well-formed UTF-16 (same divergence class as charAt/slice,
- * SEMANTICS.md). */
-static void scr_jb_put_utf16(ScrJsonBuf *b, const uint16_t *u, int start, int end) {
-  for (int i = start; i < end; i++) {
-    uint32_t cp = u[i];
-    if (cp >= 0xD800 && cp < 0xDC00 && i + 1 < end && u[i + 1] >= 0xDC00 &&
-        u[i + 1] < 0xE000) {
-      cp = 0x10000 + ((cp - 0xD800) << 10) + (u[i + 1] - 0xDC00);
-      i++;
-    } else if (cp >= 0xD800 && cp < 0xE000) {
-      cp = 0xFFFD;
-    }
-    if (cp < 0x80) {
-      scr_jb_putc(b, (char)cp);
-    } else if (cp < 0x800) {
-      scr_jb_putc(b, (char)(0xC0 | (cp >> 6)));
-      scr_jb_putc(b, (char)(0x80 | (cp & 0x3F)));
-    } else if (cp < 0x10000) {
-      scr_jb_putc(b, (char)(0xE0 | (cp >> 12)));
-      scr_jb_putc(b, (char)(0x80 | ((cp >> 6) & 0x3F)));
-      scr_jb_putc(b, (char)(0x80 | (cp & 0x3F)));
-    } else {
-      scr_jb_putc(b, (char)(0xF0 | (cp >> 18)));
-      scr_jb_putc(b, (char)(0x80 | ((cp >> 12) & 0x3F)));
-      scr_jb_putc(b, (char)(0x80 | ((cp >> 6) & 0x3F)));
-      scr_jb_putc(b, (char)(0x80 | (cp & 0x3F)));
-    }
+/* Decode one UTF-16 code point. A boundary that splits a surrogate pair
+ * produces U+FFFD, as in the runtime's string slicing contract. */
+static uint32_t scr_regex_codepoint(const uint16_t *units, int *index, int end) {
+  uint32_t cp = units[(*index)++];
+  if (cp >= 0xD800 && cp < 0xDC00 && *index < end &&
+      units[*index] >= 0xDC00 && units[*index] < 0xE000)
+    return 0x10000 + ((cp - 0xD800) << 10) + (units[(*index)++] - 0xDC00);
+  return cp >= 0xD800 && cp < 0xE000 ? 0xFFFD : cp;
+}
+
+static size_t scr_regex_encode(char *out, uint32_t cp) {
+  if (cp < 0x80) {
+    out[0] = (char)cp;
+    return 1;
   }
+  if (cp < 0x800) {
+    out[0] = (char)(0xC0 | (cp >> 6));
+    out[1] = (char)(0x80 | (cp & 0x3F));
+    return 2;
+  }
+  if (cp < 0x10000) {
+    out[0] = (char)(0xE0 | (cp >> 12));
+    out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+    out[2] = (char)(0x80 | (cp & 0x3F));
+    return 3;
+  }
+  out[0] = (char)(0xF0 | (cp >> 18));
+  out[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+  out[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+  out[3] = (char)(0x80 | (cp & 0x3F));
+  return 4;
 }
 
-static ScrStr *scr_str_from_utf16(const uint16_t *u, int start, int end) {
-  ScrJsonBuf b;
-  scr_jb_init(&b);
-  scr_jb_put_utf16(&b, u, start, end);
-  return scr_jb_finish(&b);
+static void scr_jb_put_utf16(ScrJsonBuf *b, const uint16_t *u, int start, int end) {
+  char bytes[256];
+  size_t used = 0;
+  for (int i = start; i < end;) {
+    if (used > sizeof bytes - 4) {
+      scr_jb_write(b, bytes, used);
+      used = 0;
+    }
+    used += scr_regex_encode(bytes + used, scr_regex_codepoint(u, &i, end));
+  }
+  scr_jb_write(b, bytes, used);
 }
 
-/* ── exec plumbing ────────────────────────────────────────────────────── */
+/* Matching owns only the converted subject and oversized register buffer.
+ * The caller keeps the original immutable string alive. ASCII bytes are
+ * already the engine's one-byte representation, even under /u or /i. */
+typedef struct ScrRegexInput {
+  const uint8_t *data;
+  uint16_t *utf16;
+  int len;
+  int wide;
+  uint8_t **capture;
+  uint8_t *registers[32];
+} ScrRegexInput;
 
-/* One lre_exec over the UTF-16 subject. Returns 1 (match), 0 (no match);
- * engine-level failures (OOM, corrupt bytecode — no timeout handler is
- * installed) abort like every runtime OOM. */
-static int scr_exec(uint8_t **capture, const uint8_t *bc, const uint16_t *u,
-                     int index, int len) {
-  int rc = lre_exec(capture, bc, (const uint8_t *)u, index, len, 1, lre_opaque());
+static bool scr_text_ascii(const ScrStr *s) {
+  size_t i = 0;
+  for (; s->len - i >= sizeof(uint64_t); i += sizeof(uint64_t)) {
+    uint64_t word;
+    memcpy(&word, s->data + i, sizeof word);
+    if (word & UINT64_C(0x8080808080808080)) return false;
+  }
+  for (; i < s->len; i++) {
+    if ((unsigned char)s->data[i] >= 0x80) return false;
+  }
+  return true;
+}
+
+static void scr_regex_input_init(ScrRegexInput *input, const uint8_t *bc,
+                                  const ScrStr *s) {
+  if (s->len > (size_t)INT32_MAX - 1) scr_regex_oom();
+  input->wide = !scr_text_ascii(s);
+  input->utf16 = input->wide ? scr_to_utf16(s, &input->len) : NULL;
+  input->data = input->wide ? (const uint8_t *)input->utf16 : (const uint8_t *)s->data;
+  if (!input->wide) input->len = (int)s->len;
+  /* The executor writes temporary registers beyond the capture pairs. */
+  int count = lre_get_alloc_count(bc);
+  input->capture = count <= 32 ? input->registers : malloc((size_t)count * sizeof(uint8_t *));
+  if (!input->capture) scr_regex_oom();
+}
+
+static void scr_regex_input_dispose(ScrRegexInput *input) {
+  if (input->capture != input->registers) free(input->capture);
+  free(input->utf16);
+}
+
+static int scr_exec(ScrRegexInput *input, const uint8_t *bc, int index) {
+  int rc = lre_exec(input->capture, bc, input->data, index, input->len,
+                    input->wide, lre_opaque());
   if (rc < 0) {
     fflush(stdout);
     scr_trap("scriptc: regular expression execution failed\n");
@@ -393,24 +439,43 @@ static int scr_exec(uint8_t **capture, const uint8_t *bc, const uint16_t *u,
   return rc;
 }
 
-/* Capture buffer sized by lre_get_alloc_count: the register-based executor
- * writes temporary registers past the capture pairs (quickjs.c documents
- * sizing by capture_count*2 as a silent heap overflow). */
-static uint8_t **scr_capture_alloc(const uint8_t *bc) {
-  int n = lre_get_alloc_count(bc);
-  uint8_t **cap = malloc((n > 0 ? (size_t)n : 1) * sizeof *cap);
-  if (!cap) scr_regex_oom();
-  return cap;
+static int scr_capture_index(const ScrRegexInput *input, const uint8_t *capture) {
+  return (int)((capture - input->data) >> input->wide);
+}
+
+static void scr_regex_put_span(ScrJsonBuf *b, const ScrRegexInput *input,
+                                int start, int end) {
+  if (input->wide) scr_jb_put_utf16(b, input->utf16, start, end);
+  else scr_jb_write(b, (const char *)input->data + start, (size_t)(end - start));
+}
+
+static ScrStr *scr_regex_span(const ScrRegexInput *input, int start, int end) {
+  if (!input->wide)
+    return scr_str_new((const char *)input->data + start, (size_t)(end - start));
+  /* Captures have a known span: allocate its exact UTF-8 length instead
+   * of inheriting a general builder's size hint from an earlier document. */
+  size_t bytes = 0;
+  for (int i = start; i < end;) {
+    uint32_t cp = scr_regex_codepoint(input->utf16, &i, end);
+    size_t width = cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+    if (width > SIZE_MAX - sizeof(ScrStr) - 1 - bytes) scr_regex_oom();
+    bytes += width;
+  }
+  ScrStr *out = scr_str_alloc_raw(bytes, bytes);
+  size_t offset = 0;
+  for (int i = start; i < end;)
+    offset += scr_regex_encode(out->data + offset, scr_regex_codepoint(input->utf16, &i, end));
+  out->data[bytes] = '\0';
+  return out;
 }
 
 /* ECMA-262 AdvanceStringIndex: past a whole surrogate pair under /u, one
- * code unit otherwise — the rule that keeps zero-length matches from
- * looping forever. */
-static int scr_advance(const uint16_t *u, int len, int i, bool unicode) {
-  if (unicode && i + 1 < len && u[i] >= 0xD800 && u[i] < 0xDC00 &&
-      u[i + 1] >= 0xDC00 && u[i + 1] < 0xE000) {
+ * code unit otherwise. ASCII cannot contain a surrogate pair. */
+static int scr_advance(const ScrRegexInput *input, int i, bool unicode) {
+  const uint16_t *u = input->utf16;
+  if (unicode && input->wide && i + 1 < input->len &&
+      u[i] >= 0xD800 && u[i] < 0xDC00 && u[i + 1] >= 0xDC00 && u[i + 1] < 0xE000)
     return i + 2;
-  }
   return i + 1;
 }
 
@@ -427,40 +492,17 @@ static int scr_regex_start(ScrRegex *re, int len) {
   return (int)floor(index);
 }
 
-/* A predicate needs only the match boundary, not the captured strings or
- * result metadata. Short ASCII subjects already have the engine's one-byte
- * representation. Bound that scan so a long mixed-text subject does not
- * traverse an ASCII prefix twice before matching. Other subjects use exec's
- * UTF-16 conversion. Register storage is bounded by alloc_count, not captures. */
+/* A predicate needs only boundaries; it never materializes result strings. */
 bool scr_regex_test(ScrRegex *re, ScrStr *s) {
   uint8_t *bc = scr_regex_bc(re);
-  bool ascii = s->len <= 256;
-  size_t i = 0;
-  for (; ascii && s->len - i >= sizeof(uint64_t); i += sizeof(uint64_t)) {
-    uint64_t word;
-    memcpy(&word, s->data + i, sizeof word);
-    if (word & UINT64_C(0x8080808080808080)) ascii = false;
-  }
-  for (; ascii && i < s->len; i++) {
-    if ((unsigned char)s->data[i] >= 0x80) ascii = false;
-  }
-  int len;
-  uint16_t *converted = ascii ? NULL : scr_to_utf16(s, &len);
-  const uint8_t *subject = ascii ? (const uint8_t *)s->data : (const uint8_t *)converted;
-  if (ascii) len = (int)s->len;
-  uint8_t *registers[32];
-  uint8_t **capture = lre_get_alloc_count(bc) <= 32 ? registers : scr_capture_alloc(bc);
+  ScrRegexInput input;
+  scr_regex_input_init(&input, bc, s);
   bool stateful = (lre_get_flags(bc) & (LRE_FLAG_GLOBAL | LRE_FLAG_STICKY)) != 0;
-  int pos = stateful ? scr_regex_start(re, len) : 0;
-  int rc = pos < 0 ? 0 : lre_exec(capture, bc, subject, pos, len, ascii ? 0 : 1, lre_opaque());
-  if (rc < 0) {
-    fflush(stdout);
-    scr_trap("scriptc: regular expression execution failed\n");
-  }
+  int pos = stateful ? scr_regex_start(re, input.len) : 0;
+  int rc = pos < 0 ? 0 : scr_exec(&input, bc, pos);
   if (stateful) re->last_index = rc == 1
-    ? (double)((capture[1] - subject) >> (ascii ? 0 : 1)) : 0;
-  if (capture != registers) free(capture);
-  free(converted);
+    ? (double)scr_capture_index(&input, input.capture[1]) : 0;
+  scr_regex_input_dispose(&input);
   return rc == 1;
 }
 
@@ -474,20 +516,20 @@ bool scr_regex_test(ScrRegex *re, ScrStr *s) {
 ScrArr *scr_regex_exec(ScrStr *s, ScrRegex *re) {
   uint8_t *bc = scr_regex_bc(re);
   bool stateful = (lre_get_flags(bc) & (LRE_FLAG_GLOBAL | LRE_FLAG_STICKY)) != 0;
-  int len;
-  uint16_t *u = scr_to_utf16(s, &len);
-  uint8_t **capture = scr_capture_alloc(bc);
+  ScrRegexInput input;
+  scr_regex_input_init(&input, bc, s);
+  int len = input.len;
+  uint8_t **capture = input.capture;
   int pos = stateful ? scr_regex_start(re, len) : 0;
-  int rc = pos < 0 ? 0 : scr_exec(capture, bc, u, pos, len);
+  int rc = pos < 0 ? 0 : scr_exec(&input, bc, pos);
   if (stateful) re->last_index = rc == 1
-    ? (double)((capture[1] - (const uint8_t *)u) >> 1) : 0;
+    ? (double)scr_capture_index(&input, capture[1]) : 0;
   ScrArr *out = NULL;
   if (rc == 1) {
-    const uint8_t *ubase = (const uint8_t *)u;
     int count = lre_get_capture_count(bc);
     out = scr_arr_new(SCR_ELEM_STR, (size_t)count);
     out->metadata = scr_dyn_new_obj();
-    scr_dyn_obj_set(out->metadata, "index", 5, scr_dyn_new_num((double)((capture[0] - ubase) >> 1)));
+    scr_dyn_obj_set(out->metadata, "index", 5, scr_dyn_new_num((double)scr_capture_index(&input, capture[0])));
     scr_dyn_obj_set(out->metadata, "input", 5, scr_dyn_new_str(s));
     for (int k = 0; k < count; k++) {
       const uint8_t *cs = capture[2 * k], *ce = capture[2 * k + 1];
@@ -495,12 +537,11 @@ ScrArr *scr_regex_exec(ScrStr *s, ScrRegex *re) {
         scr_arr_set_undefined(out, (double)out->len);
       } else {
         scr_arr_push_ref(
-            out, scr_str_from_utf16(u, (int)((cs - ubase) >> 1), (int)((ce - ubase) >> 1)));
+            out, scr_regex_span(&input, scr_capture_index(&input, cs), scr_capture_index(&input, ce)));
       }
     }
   }
-  free(capture);
-  free(u);
+  scr_regex_input_dispose(&input);
   return out; /* +1, or NULL (no match) */
 }
 
@@ -515,22 +556,21 @@ ScrArr *scr_regex_match(ScrStr *s, ScrRegex *re) {
   if (!(flags & LRE_FLAG_GLOBAL)) return scr_regex_exec(s, re);
   re->last_index = 0;
   bool unicode = (flags & (LRE_FLAG_UNICODE | LRE_FLAG_UNICODE_SETS)) != 0;
-  int len;
-  uint16_t *u = scr_to_utf16(s, &len);
-  uint8_t **capture = scr_capture_alloc(bc);
-  const uint8_t *ubase = (const uint8_t *)u;
+  ScrRegexInput input;
+  scr_regex_input_init(&input, bc, s);
+  int len = input.len;
+  uint8_t **capture = input.capture;
   ScrArr *out = NULL;
   int pos = scr_regex_start(re, len);
   if (pos < 0) pos = len + 1;
-  while (pos <= len && scr_exec(capture, bc, u, pos, len) == 1) {
-    int start = (int)((capture[0] - ubase) >> 1);
-    int end = (int)((capture[1] - ubase) >> 1);
+  while (pos <= len && scr_exec(&input, bc, pos) == 1) {
+    int start = scr_capture_index(&input, capture[0]);
+    int end = scr_capture_index(&input, capture[1]);
     if (!out) out = scr_arr_new(SCR_ELEM_STR, 4);
-    scr_arr_push_ref(out, scr_str_from_utf16(u, start, end));
-    pos = start == end ? scr_advance(u, len, end, unicode) : end;
+    scr_arr_push_ref(out, scr_regex_span(&input, start, end));
+    pos = start == end ? scr_advance(&input, end, unicode) : end;
   }
-  free(capture);
-  free(u);
+  scr_regex_input_dispose(&input);
   return out;
 }
 
@@ -543,14 +583,13 @@ ScrArr *scr_regex_match(ScrStr *s, ScrRegex *re) {
  * bytecode omits the implicit forward scan) — exactly Node. */
 double scr_regex_search(ScrStr *s, ScrRegex *re) {
   uint8_t *bc = scr_regex_bc(re);
-  int len;
-  uint16_t *u = scr_to_utf16(s, &len);
-  uint8_t **capture = scr_capture_alloc(bc);
-  int rc = scr_exec(capture, bc, u, 0, len);
+  ScrRegexInput input;
+  scr_regex_input_init(&input, bc, s);
+  uint8_t **capture = input.capture;
+  int rc = scr_exec(&input, bc, 0);
   double out = -1;
-  if (rc == 1) out = (double)((capture[0] - (const uint8_t *)u) >> 1);
-  free(capture);
-  free(u);
+  if (rc == 1) out = (double)scr_capture_index(&input, capture[0]);
+  scr_regex_input_dispose(&input);
   return out;
 }
 
@@ -574,17 +613,17 @@ static ScrArr *scr_regex_match_all_core(ScrStr *s, ScrRegex *re, ScrArr *indices
   }
   bool unicode = (re_flags & (LRE_FLAG_UNICODE | LRE_FLAG_UNICODE_SETS)) != 0;
   int capture_count = lre_get_capture_count(bc);
-  int len;
-  uint16_t *u = scr_to_utf16(s, &len);
-  uint8_t **capture = scr_capture_alloc(bc);
-  const uint8_t *ubase = (const uint8_t *)u;
+  ScrRegexInput input;
+  scr_regex_input_init(&input, bc, s);
+  int len = input.len;
+  uint8_t **capture = input.capture;
   ScrArr *out = scr_arr_new(SCR_ELEM_ARR, 4);
   int pos = scr_regex_start(re, len);
   if (pos < 0) pos = len + 1;
   while (pos <= len) {
-    if (scr_exec(capture, bc, u, pos, len) != 1) break;
-    int start = (int)((capture[0] - ubase) >> 1);
-    int end = (int)((capture[1] - ubase) >> 1);
+    if (scr_exec(&input, bc, pos) != 1) break;
+    int start = scr_capture_index(&input, capture[0]);
+    int end = scr_capture_index(&input, capture[1]);
     ScrArr *row = scr_arr_new(SCR_ELEM_STR, (size_t)capture_count);
     for (int k = 0; k < capture_count; k++) {
       const uint8_t *cs = capture[2 * k], *ce = capture[2 * k + 1];
@@ -592,15 +631,14 @@ static ScrArr *scr_regex_match_all_core(ScrStr *s, ScrRegex *re, ScrArr *indices
         scr_arr_set_undefined(row, (double)row->len);
       } else {
         scr_arr_push_ref(
-            row, scr_str_from_utf16(u, (int)((cs - ubase) >> 1), (int)((ce - ubase) >> 1)));
+            row, scr_regex_span(&input, scr_capture_index(&input, cs), scr_capture_index(&input, ce)));
       }
     }
     scr_arr_push_ref(out, row);
     if (indices != NULL) scr_arr_push_f64(indices, (double)start);
-    pos = end == start ? scr_advance(u, len, end, unicode) : end;
+    pos = end == start ? scr_advance(&input, end, unicode) : end;
   }
-  free(capture);
-  free(u);
+  scr_regex_input_dispose(&input);
   return out; /* +1 (possibly empty — Node's no-match drain is []) */
 }
 
@@ -628,17 +666,18 @@ ScrArr *scr_regex_match_all_into(ScrStr *s, ScrRegex *re, ScrArr *indices) {
  * — also Node's unterminated-'$<name' answer either way. The template is
  * scanned byte-wise: every '$' directive is ASCII, and UTF-8 continuation
  * bytes can never alias it. */
-static void scr_put_substitution(ScrJsonBuf *b, const uint16_t *u, int len,
+static void scr_put_substitution(ScrJsonBuf *b, const ScrRegexInput *input,
                                   int start, int end, uint8_t **capture,
                                   int capture_count, const char *groupnames,
                                   const ScrStr *rep) {
-  const uint8_t *ubase = (const uint8_t *)u;
   size_t i = 0;
   while (i < rep->len) {
     char c = rep->data[i];
     if (c != '$' || i + 1 >= rep->len) {
-      scr_jb_putc(b, c);
-      i++;
+      const char *next = memchr(rep->data + i + 1, '$', rep->len - i - 1);
+      size_t end = next ? (size_t)(next - rep->data) : rep->len;
+      scr_jb_write(b, rep->data + i, end - i);
+      i = end;
       continue;
     }
     char c1 = rep->data[i + 1];
@@ -646,13 +685,13 @@ static void scr_put_substitution(ScrJsonBuf *b, const uint16_t *u, int len,
       scr_jb_putc(b, '$');
       i += 2;
     } else if (c1 == '&') {
-      scr_jb_put_utf16(b, u, start, end);
+      scr_regex_put_span(b, input, start, end);
       i += 2;
     } else if (c1 == '`') {
-      scr_jb_put_utf16(b, u, 0, start);
+      scr_regex_put_span(b, input, 0, start);
       i += 2;
     } else if (c1 == '\'') {
-      scr_jb_put_utf16(b, u, end, len);
+      scr_regex_put_span(b, input, end, input->len);
       i += 2;
     } else if (c1 >= '0' && c1 <= '9') {
       int k = c1 - '0';
@@ -667,7 +706,7 @@ static void scr_put_substitution(ScrJsonBuf *b, const uint16_t *u, int len,
       if (k >= 1 && k < capture_count) {
         const uint8_t *cs = capture[2 * k], *ce = capture[2 * k + 1];
         if (cs && ce) {
-          scr_jb_put_utf16(b, u, (int)((cs - ubase) >> 1), (int)((ce - ubase) >> 1));
+          scr_regex_put_span(b, input, scr_capture_index(input, cs), scr_capture_index(input, ce));
         }
         i += adv;
       } else {
@@ -693,7 +732,7 @@ static void scr_put_substitution(ScrJsonBuf *b, const uint16_t *u, int len,
         if (glen == name_len && memcmp(p, name, name_len) == 0) {
           const uint8_t *cs = capture[2 * k], *ce = capture[2 * k + 1];
           if (cs && ce) {
-            scr_jb_put_utf16(b, u, (int)((cs - ubase) >> 1), (int)((ce - ubase) >> 1));
+            scr_regex_put_span(b, input, scr_capture_index(input, cs), scr_capture_index(input, ce));
             break; /* at most one duplicate participates */
           }
         }
@@ -718,31 +757,34 @@ static ScrStr *scr_replace_impl(ScrStr *s, ScrRegex *re, ScrStr *rep) {
   bool unicode = (re_flags & (LRE_FLAG_UNICODE | LRE_FLAG_UNICODE_SETS)) != 0;
   int capture_count = lre_get_capture_count(bc);
   const char *groupnames = lre_get_groupnames(bc);
-  int len;
-  uint16_t *u = scr_to_utf16(s, &len);
-  uint8_t **capture = scr_capture_alloc(bc);
-  const uint8_t *ubase = (const uint8_t *)u;
+  ScrRegexInput input;
+  scr_regex_input_init(&input, bc, s);
+  int len = input.len;
+  uint8_t **capture = input.capture;
   ScrJsonBuf b;
   scr_jb_init(&b);
   if (global) re->last_index = 0;
   int next = 0, pos = sticky ? scr_regex_start(re, len) : 0;
   if (pos < 0) pos = len + 1;
   if (sticky && !global) re->last_index = 0;
+  bool matched = false;
+  bool literal = memchr(rep->data, '$', rep->len) == NULL;
   while (pos <= len) {
-    if (scr_exec(capture, bc, u, pos, len) != 1) break;
-    int start = (int)((capture[0] - ubase) >> 1);
-    int end = (int)((capture[1] - ubase) >> 1);
+    if (scr_exec(&input, bc, pos) != 1) break;
+    matched = true;
+    int start = scr_capture_index(&input, capture[0]);
+    int end = scr_capture_index(&input, capture[1]);
     if (sticky && !global) re->last_index = end;
-    scr_jb_put_utf16(&b, u, next, start);
-    scr_put_substitution(&b, u, len, start, end, capture, capture_count, groupnames, rep);
+    scr_regex_put_span(&b, &input, next, start);
+    if (literal) scr_jb_put_str(&b, rep);
+    else scr_put_substitution(&b, &input, start, end, capture, capture_count, groupnames, rep);
     next = end;
     if (!global) break;
-    pos = end == start ? scr_advance(u, len, end, unicode) : end;
+    pos = end == start ? scr_advance(&input, end, unicode) : end;
   }
-  scr_jb_put_utf16(&b, u, next, len);
-  free(capture);
-  free(u);
-  return scr_jb_finish(&b);
+  if (matched) scr_regex_put_span(&b, &input, next, len);
+  scr_regex_input_dispose(&input);
+  return matched ? scr_jb_finish(&b) : scr_str_retain(s);
 }
 
 ScrStr *scr_regex_replace(ScrStr *s, ScrRegex *re, ScrStr *rep) {
@@ -825,10 +867,10 @@ ScrArr *scr_regex_split_limit(ScrStr *s, ScrRegex *re, double limit_num) {
   int re_flags = lre_get_flags(bc);
   bool unicode = (re_flags & (LRE_FLAG_UNICODE | LRE_FLAG_UNICODE_SETS)) != 0;
   bool sticky = (re_flags & LRE_FLAG_STICKY) != 0;
-  int len;
-  uint16_t *u = scr_to_utf16(s, &len);
-  uint8_t **capture = scr_capture_alloc(bc);
-  const uint8_t *ubase = (const uint8_t *)u;
+  ScrRegexInput input;
+  scr_regex_input_init(&input, bc, s);
+  int len = input.len;
+  uint8_t **capture = input.capture;
   ScrArr *out = scr_arr_new(SCR_ELEM_STR, 0);
 
   /* ECMA-262 22.2.6.14 (Symbol.split). The spec probes every
@@ -838,31 +880,30 @@ ScrArr *scr_regex_split_limit(ScrStr *s, ScrRegex *re, double limit_num) {
    * loop. A genuinely sticky pattern keeps the spec's probe-and-advance. */
   if (len == 0) {
     /* Empty subject: one probe — a match yields [], no match yields [""]. */
-    if (scr_exec(capture, bc, u, 0, len) != 1) {
+    if (scr_exec(&input, bc, 0) != 1) {
       scr_arr_push_ref(out, scr_str_new("", 0));
     }
-    free(capture);
-    free(u);
+    scr_regex_input_dispose(&input);
     return out;
   }
   int p = 0, q = 0;
   while (q < len) {
-    if (scr_exec(capture, bc, u, q, len) != 1) {
+    if (scr_exec(&input, bc, q) != 1) {
       if (!sticky) break; /* no match anywhere right of q */
-      q = scr_advance(u, len, q, unicode);
+      q = scr_advance(&input, q, unicode);
       continue;
     }
-    int start = (int)((capture[0] - ubase) >> 1);
-    int end = (int)((capture[1] - ubase) >> 1);
+    int start = scr_capture_index(&input, capture[0]);
+    int end = scr_capture_index(&input, capture[1]);
     /* The sticky algorithm never probes the position after the subject.
      * A forward search can find a zero-width match there; exclude it. */
     if (start == len) break;
     if (end == p) {
       /* Zero-length match adjacent to the previous split point: advance
        * (start == q == p here — the search cannot skip a match). */
-      q = scr_advance(u, len, start, unicode);
+      q = scr_advance(&input, start, unicode);
     } else {
-      scr_arr_push_ref(out, scr_str_from_utf16(u, p, start));
+      scr_arr_push_ref(out, scr_regex_span(&input, p, start));
       if (out->len == limit) goto done;
       for (int group = 1; group < capture_count; group++) {
         const uint8_t *from = capture[2 * group];
@@ -872,8 +913,8 @@ ScrArr *scr_regex_split_limit(ScrStr *s, ScrRegex *re, double limit_num) {
           // distinct from both empty strings and holes.
           scr_arr_set_undefined(out, (double)out->len);
         } else {
-          scr_arr_push_ref(out, scr_str_from_utf16(u,
-              (int)((from - ubase) >> 1), (int)((to - ubase) >> 1)));
+          scr_arr_push_ref(out, scr_regex_span(&input,
+              scr_capture_index(&input, from), scr_capture_index(&input, to)));
         }
         if (out->len == limit) goto done;
       }
@@ -881,10 +922,9 @@ ScrArr *scr_regex_split_limit(ScrStr *s, ScrRegex *re, double limit_num) {
       q = p;
     }
   }
-  scr_arr_push_ref(out, scr_str_from_utf16(u, p, len));
+  scr_arr_push_ref(out, scr_regex_span(&input, p, len));
 done:
-  free(capture);
-  free(u);
+  scr_regex_input_dispose(&input);
   return out;
 }
 
@@ -985,10 +1025,38 @@ static void scr_case_put_cp(ScrJsonBuf *b, uint32_t cp) {
 }
 
 static ScrStr *scr_str_case_conv(const ScrStr *s, int to_lower) {
+  unsigned char first = to_lower ? 'A' : 'a';
+  unsigned char last = to_lower ? 'Z' : 'z';
+  if (scr_text_ascii(s)) {
+    size_t changed = 0;
+    while (changed < s->len &&
+           ((unsigned char)s->data[changed] < first || (unsigned char)s->data[changed] > last))
+      changed++;
+    if (changed == s->len) return scr_str_retain((ScrStr *)s);
+    ScrStr *out = scr_str_alloc_raw(s->len, s->len);
+    memcpy(out->data, s->data, changed);
+    for (size_t i = changed; i < s->len; i++) {
+      unsigned char c = (unsigned char)s->data[i];
+      out->data[i] = (char)(c >= first && c <= last ? c ^ 0x20 : c);
+    }
+    out->data[s->len] = '\0';
+    return out;
+  }
   ScrJsonBuf b;
   scr_jb_init(&b);
   uint32_t res[LRE_CC_RES_LEN_MAX];
   for (size_t i = 0; i < s->len;) {
+    if ((unsigned char)s->data[i] < 0x80) {
+      size_t start = i;
+      while (i < s->len && (unsigned char)s->data[i] < 0x80) i++;
+      size_t output = b.len;
+      scr_jb_write(&b, s->data + start, i - start);
+      for (size_t j = output; j < b.len; j++) {
+        unsigned char c = (unsigned char)b.data[j];
+        if (c >= first && c <= last) b.data[j] = (char)(c ^ 0x20);
+      }
+      continue;
+    }
     size_t adv;
     uint32_t c = scr_case_decode(s->data + i, &adv);
     int l;
@@ -1024,6 +1092,9 @@ ScrStr *scr_str_normalize(const ScrStr *s, const ScrStr *form) {
     scr_throw_error(SCR_ERR_RANGE, scr_str_new(message, sizeof message - 1));
     return NULL;
   }
+  /* Every ASCII string is already normalized in all four forms. Validate
+   * the form first: even an empty subject must reject an invalid form. */
+  if (scr_text_ascii(s)) return scr_str_retain((ScrStr *)s);
   if (s->len > INT32_MAX / sizeof(uint32_t)) scr_regex_oom();
   uint32_t *input = malloc((s->len + 1) * sizeof(uint32_t));
   if (!input) scr_regex_oom();

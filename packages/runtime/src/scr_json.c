@@ -159,7 +159,9 @@ void scr_jb_init(ScrJsonBuf *b) {
 }
 
 static void scr_jb_grow(ScrJsonBuf *b, size_t need) {
-  if (b->len + need <= b->cap) return;
+  if (need > SIZE_MAX - sizeof(ScrStr) - 1 - b->len) scr_json_oom();
+  size_t required = b->len + need;
+  if (required <= b->cap) return;
   if (!b->data) { /* first allocation: len == 0 */
     size_t cap = scr_jb_hint >= need ? scr_jb_hint : need;
     ScrStr *s = scr_str_alloc_raw(0, cap);
@@ -168,7 +170,13 @@ static void scr_jb_grow(ScrJsonBuf *b, size_t need) {
     return;
   }
   size_t cap = b->cap;
-  while (cap < b->len + need) cap *= 2;
+  while (cap < required) {
+    if (cap > (SIZE_MAX - sizeof(ScrStr) - 1) / 2) {
+      cap = required;
+      break;
+    }
+    cap *= 2;
+  }
   ScrStr *s = scr_str_regrow(SCR_JB_STR(b), cap);
   b->data = s->data;
   b->cap = cap;
@@ -186,7 +194,7 @@ void scr_jb_putc(ScrJsonBuf *b, char c) {
   b->data[b->len++] = c;
 }
 
-static void scr_jb_write(ScrJsonBuf *b, const char *s, size_t n) {
+void scr_jb_write(ScrJsonBuf *b, const char *s, size_t n) {
   if (n == 0) return;
   scr_jb_grow(b, n);
   memcpy(b->data + b->len, s, n);

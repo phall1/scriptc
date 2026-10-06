@@ -14294,6 +14294,18 @@
     "<repo>/tests/corpus/typed-array-reversed-storage.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/regex-text-paths.ts": {
+   "order": [
+    "<repo>/tests/corpus/regex-text-paths.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/unicode-case-paths.ts": {
+   "order": [
+    "<repo>/tests/corpus/unicode-case-paths.ts"
+   ],
+   "diags": []
   }
  }
 }
