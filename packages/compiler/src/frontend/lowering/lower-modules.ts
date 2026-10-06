@@ -87,14 +87,15 @@ import {
   bindingGenericFnAliasInfoOf,
   bindingGenericFnInfoOf,
   bindingGenericFnNodeOf,
-  bindingNeverReassigned,
-  deadUnmappableBinding,
-  funcTypeFromParamShapes,
   implicitLocalFnInfoOf,
   implicitLocalFnNodeOf,
+} from "./generic-functions.js";
+import {
+  bindingNeverReassigned,
+  deadUnmappableBinding,
   nullishGenericBindingUnitOf,
-  registerOverloadedCallableAlias,
-} from "./lower-calls.js";
+} from "./binding-analysis.js";
+import { funcTypeFromParamShapes, registerOverloadedCallableAlias } from "./call-signatures.js";
 import {
   jsBindingHasOpenWrites,
   hasJsTypeAnnotation,

@@ -37,18 +37,16 @@ import {
 } from "../../ir/ir.js";
 import {
   MAX_GENERIC_INSTANCES,
-  appendImplicitUndefinedReturn,
-  bodyReadsArguments,
-  generatorMeta,
   genericCallInstance,
-  hasExplicitJsDocReturn,
   implicitAnyParamSymbolsOf,
   implicitCallInstance,
   implicitMonoFile,
-  omittedArgFor,
   type GenericFnInfo,
-  type ParamShape,
-} from "./lower-calls.js";
+} from "./generic-functions.js";
+import { appendImplicitUndefinedReturn, hasExplicitJsDocReturn } from "./function-returns.js";
+import { bodyReadsArguments } from "../arguments-usage.js";
+import { generatorMeta, type ParamShape } from "./call-signatures.js";
+import { omittedArgFor } from "./call-arguments.js";
 import {
   isGenericCallableMemberType,
   jsOpenObjectType,
@@ -2920,7 +2918,7 @@ export function collectClassShapeInner(
         // signature carries bindable untyped params collects like a
         // GENERIC method — into genericMethods, no vtable slot, one
         // instance per call-site type tuple (the untyped params ARE the
-        // type parameters; see lower-calls' implicit section). DECLINES
+        // type parameters; see generic-functions.ts). DECLINES
         // (falls through to the normal all-dyn ABI) wherever the two
         // dispatch worlds could meet: an inherited declaration of the
         // name (the override stays on the vtable), a shadowed field, or

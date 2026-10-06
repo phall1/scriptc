@@ -136,16 +136,15 @@ import {
   storedClassValueType,
 } from "./lower-classes.js";
 import { hasRuntimeStatics } from "./class-runtime-statics.js";
+import { bindingNeverReassigned, nullishGenericBindingUnitOf } from "./binding-analysis.js";
+import { funcTypeFromParamShapes } from "./call-signatures.js";
 import {
-  bindingNeverReassigned,
-  funcTypeFromParamShapes,
   implicitMonoFile,
-  lowerTaggedTemplate,
-  nullishGenericBindingUnitOf,
   objLitGenericFnInfoOf,
   objLitGenericFnNodeOf,
   requireObjLitGenericReceiver,
-} from "./lower-calls.js";
+} from "./generic-functions.js";
+import { lowerTaggedTemplate } from "./lower-calls.js";
 import { mixinFnOfCallee } from "./lower-mixins.js";
 import {
   isConstAssertionTypeNode,

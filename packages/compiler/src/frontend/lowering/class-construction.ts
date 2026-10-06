@@ -14,7 +14,7 @@ import {
 } from "../../ir/ir.js";
 import { everyStmtList, transformExpr, transformStmtList } from "../../ir/traverse.js";
 import type { Lowerer } from "./lowerer.js";
-import type { ParamShape } from "./lower-calls.js";
+import type { ParamShape } from "./call-signatures.js";
 import { classPrototypeData } from "./class-prototypes.js";
 import { classInstanceOf } from "./class-dynamic-dispatch.js";
 
