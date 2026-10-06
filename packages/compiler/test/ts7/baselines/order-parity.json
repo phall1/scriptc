@@ -14270,6 +14270,12 @@
     "<repo>/tests/corpus/small-collection-transitions.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/checked-storage-transitions.js": {
+   "order": [
+    "<repo>/tests/corpus/checked-storage-transitions.js"
+   ],
+   "diags": []
   }
  }
 }

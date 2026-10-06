@@ -48,15 +48,18 @@ test.each([false, true])(
         ].map((file) => join(src, file)),
         ...(process.platform === "linux" ? ["-D_GNU_SOURCE", "-lm"] : []),
       ]);
-      const result = await exec(binary, [], {
-        env: {
-          ...process.env,
-          ASAN_OPTIONS: "detect_leaks=0:halt_on_error=1",
-          UBSAN_OPTIONS: "halt_on_error=1",
-        },
-      });
-      expect(result.stdout).toBe("checked storage and weak metadata lifetime checks passed\n");
-      expect(result.stderr).toBe("");
+      for (const threshold of ["1", "7", "256"]) {
+        const result = await exec(binary, [], {
+          env: {
+            ...process.env,
+            SCR_CYCLE_THRESHOLD: threshold,
+            ASAN_OPTIONS: "detect_leaks=0:halt_on_error=1",
+            UBSAN_OPTIONS: "halt_on_error=1",
+          },
+        });
+        expect(result.stdout).toBe("checked storage and weak metadata lifetime checks passed\n");
+        expect(result.stderr).toBe("");
+      }
     } finally {
       await rm(scratch, { recursive: true, force: true });
     }

@@ -3681,7 +3681,7 @@ typedef struct ScrJsval ScrJsval; /* opaque island cell (C11 repeat; the
  * result as an owned (+1) dyn value. `args` entries are BORROWED. */
 typedef ScrDyn *(*ScrDynThunk)(ScrClosure *clo, ScrDyn *const *args, size_t argc);
 
-/* Object member. Keys are malloc'd UTF-8 bytes (NUL-terminated for
+/* Object member. Keys own shared immutable UTF-8 bytes (NUL-terminated for
  * convenience; key_len excludes the NUL) — duplicate keys were already
  * collapsed at parse time (later wins, like JS JSON.parse). */
 typedef struct {
@@ -3690,12 +3690,21 @@ typedef struct {
   ScrDyn *value; /* owned */
   ScrDyn *getter; /* owned when this is an accessor property */
   ScrDyn *setter; /* owned when this is an accessor property */
-  bool accessor;
+  bool accessor : 1;
+  /* Snapshot written by trace before visiting children. Collected teardown
+   * must not inspect the value: an earlier cycle member may already be freed.
+   * Ordinary mutations need not maintain this collector-only decision. */
+  bool value_traced : 1;
   /* Ordinary object insertion sets all three attributes true. */
   bool writable;
   bool enumerable;
   bool configurable;
 } ScrDynEntry;
+
+_Static_assert(sizeof(ScrDynEntry) == (sizeof(void *) == 8 ? 48 : 24),
+               "LLVM checked-object readers use the target entry stride");
+_Static_assert(offsetof(ScrDynEntry, value) == 2 * sizeof(void *),
+               "LLVM checked-object readers use the third pointer-sized field");
 
 struct ScrDyn {
   size_t rc; /* SIZE_MAX = immortal (unused for dyn; kept per convention) */
