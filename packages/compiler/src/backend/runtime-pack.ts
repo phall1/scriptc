@@ -5,10 +5,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { compilerReleaseVersion } from "../library/sidecar.js";
 import type { NativeLinkFeatures } from "./native-link-info.js";
-import {
-  nativeArtifactDependenciesStillMatch,
-  type NativeArtifactDependency,
-} from "./native-toolchain.js";
+import { nativeArtifactDependenciesStillMatch } from "./native/artifact-stamps.js";
+import { type NativeArtifactDependency } from "./native/contracts.js";
 import type { NativeTargetSpec } from "./targets.js";
 
 import {

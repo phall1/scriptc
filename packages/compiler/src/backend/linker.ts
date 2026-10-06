@@ -11,15 +11,14 @@ import { mkdtemp, rename, rm, stat } from "node:fs/promises";
 import { delimiter } from "node:path";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
+import { CcCompileError, subprocessFailureDetail } from "./native/process.js";
+import { nativeArtifactDependenciesStillMatch } from "./native/artifact-stamps.js";
+import { parseLinkTraceFiles } from "./native/linker-fingerprint.js";
 import {
-  CcCompileError,
-  nativeArtifactDependenciesStillMatch,
-  parseLinkTraceFiles,
-  subprocessFailureDetail,
   toolchainEnvironmentCachePolicy,
   toolchainEnvironmentFingerprint,
-  type NativeArtifactDependency,
-} from "./native-toolchain.js";
+} from "./toolchain-environment.js";
+import { type NativeArtifactDependency } from "./native/contracts.js";
 import { RuntimePackError, stageRuntimePackArtifacts } from "./runtime-pack.js";
 import type { NativeLinkPlan } from "./link-plan.js";
 import {
@@ -178,7 +177,7 @@ async function snapshotDependencies(paths: readonly string[]): Promise<NativeArt
 
 /** Resolve platform SDK/CRT inputs from the actual object-only link line.
  *
- * This intentionally avoids native-toolchain's C-driver probe: the program
+ * This intentionally avoids native compiler's C-driver probe: the program
  * object and staged runtime pack already give the linker everything it needs
  * for a faithful dry/trace link.  Besides keeping the Phase 5 boundary
  * honest, this observes driver options injected only at link time. */

@@ -14,10 +14,8 @@ import { basename, dirname, join, resolve } from "node:path";
 import type { FrontendInputSnapshot } from "../frontend/input-tracker.js";
 import { frontendInputsStillMatch, validFrontendInputSnapshot } from "../frontend/input-tracker.js";
 import { compilerReleaseVersion } from "../library/sidecar.js";
-import {
-  nativeArtifactDependenciesStillMatch,
-  type NativeArtifactDependency,
-} from "../backend/native-toolchain.js";
+import { nativeArtifactDependenciesStillMatch } from "../backend/native/artifact-stamps.js";
+import { type NativeArtifactDependency } from "../backend/native/contracts.js";
 import type { CompilerImplementationDependency } from "../library/compiler-self-identity.js";
 import {
   installDarwinDebugSymbols,

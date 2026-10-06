@@ -46,6 +46,9 @@ test("compiler import fences reject cross-layer and cross-parser imports", () =>
   const work = workspace();
   const cases = [
     ["packages/compiler/src/backend/probe.ts", "../frontend/program.js"],
+    ["packages/compiler/src/backend/native/driver.ts", "../native-toolchain.js"],
+    ["packages/compiler/src/backend/native/contracts.ts", "../../frontend/program.js"],
+    ["packages/compiler/src/backend/native/tool-identity.ts", "typescript5"],
     ["packages/compiler/src/frontend/probe.ts", "../backend/llvm/emitter.js"],
     ["packages/compiler/src/frontend/lowering/probe.ts", "../../ir/validate.js"],
     ["packages/compiler/src/frontend/cjs-lexer.ts", "../ir/validate.js"],

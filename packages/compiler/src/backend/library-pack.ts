@@ -7,12 +7,9 @@ import { installBytes } from "../library/cache-primitives.js";
 import { emitNativeArtifact } from "./native-codegen.js";
 import { linkNativeExecutable } from "./linker.js";
 import type { NativeLinkFeatures } from "./native-link-info.js";
-import {
-  isZigDriver,
-  localizeLibraryObjects,
-  type CcDriver,
-  type LibArchiveOptions,
-} from "./native-toolchain.js";
+import { isZigDriver, type CcDriver } from "./native/driver.js";
+import { localizeLibraryObjects } from "./native/object-merge.js";
+import { type LibArchiveOptions } from "./native/contracts.js";
 import { loadRuntimePack, RuntimePackError, stageRuntimePackArtifacts } from "./runtime-pack.js";
 import { executableOptimizationLinkerArgs, type NativeTargetSpec } from "./targets.js";
 

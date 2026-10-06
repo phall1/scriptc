@@ -17,8 +17,8 @@ import {
 import {
   nativeArtifactDependenciesStillMatch,
   snapshotNativeArtifactDependencies,
-  type NativeArtifactDependency,
-} from "./native-toolchain.js";
+} from "./native/artifact-stamps.js";
+import { type NativeArtifactDependency } from "./native/contracts.js";
 import {
   nativeCodegenTarget,
   nativeCodegenTargetRefusal,
