@@ -11,10 +11,9 @@ import type { CallLifetimes } from "./call-lifetimes.js";
 import type { LlValue, LlvmEmitterContext } from "./expr-context.js";
 import { mapKeyAccess, mapKeyParamType } from "./shapes.js";
 
-/** Typed reads neither invoke callbacks nor consume their inputs. Reference
- * results carry their own owner. Generic views keep the adapter path, and
- * mutations retain their ordinary operand snapshots. */
-export function borrowsMapReadInputs(expr: IrExpr): boolean {
+function hasTypedCollectionReceiver(
+  expr: IrExpr,
+): expr is Extract<IrExpr, { kind: "mapIntrinsic" | "setIntrinsic" }> {
   if (expr.kind !== "mapIntrinsic" && expr.kind !== "setIntrinsic") return false;
   const receiver = expr.receiver.type;
   if (receiver.kind === "map") {
@@ -22,6 +21,13 @@ export function borrowsMapReadInputs(expr: IrExpr): boolean {
   } else if (receiver.kind === "set") {
     if (receiver.elem.kind === "dyn") return false;
   } else return false;
+  return true;
+}
+
+/** Typed reads neither invoke callbacks nor consume their inputs. Reference
+ * results carry their own owner. Generic views keep the adapter path. */
+export function borrowsMapReadInputs(expr: IrExpr): boolean {
+  if (!hasTypedCollectionReceiver(expr)) return false;
   switch (expr.method) {
     case "get":
     case "has":
@@ -34,6 +40,19 @@ export function borrowsMapReadInputs(expr: IrExpr): boolean {
     default:
       return false;
   }
+}
+
+/** Native typed mutations borrow their receiver and invoke no user code.
+ * Stored arguments still acquire ownership, and the mutation itself must
+ * never be classified as preserving the collection's reference edges. */
+export function borrowsMapMutationReceiver(expr: IrExpr): boolean {
+  if (!hasTypedCollectionReceiver(expr)) return false;
+  return (
+    expr.method === "set" ||
+    expr.method === "add" ||
+    expr.method === "delete" ||
+    expr.method === "clear"
+  );
 }
 
 export interface LocalMapRead {

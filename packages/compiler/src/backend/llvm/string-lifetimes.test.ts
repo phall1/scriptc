@@ -158,14 +158,15 @@ test("string operands preserve their left-to-right snapshot when a later assignm
   expect(facts(f).parameters.has("replace")).toBe(false);
 });
 
-test("an effectful later operand keeps mutable string arguments owned", () => {
+test("a later global write keeps mutable string arguments owned", () => {
   const source = fn("source", [], str("next"));
-  source.locals.push({ id: "changed", name: "changed", type: STRING, mutable: true });
-  source.body.unshift({ kind: "assign", localId: "changed", value: str("effect"), loc });
+  source.body.unshift({ kind: "assign", localId: "%g.changed", value: str("effect"), loc });
   const compare = fn("compare", ["text"], equal(ref("text"), call("source", [], STRING)));
   // A later write anywhere in this function rules out parameter borrowing.
   compare.body.unshift({ kind: "assign", localId: "text", value: str("first"), loc });
-  const ir = body(mod(source, compare), "sc_f_compare");
+  const module = mod(source, compare);
+  module.globals = [{ id: "%g.changed", name: "changed", type: STRING, mutable: true }];
+  const ir = body(module, "sc_f_compare");
   const sourceCall = ir.indexOf("@sc_f_source");
   expect(sourceCall).toBeGreaterThan(0);
   expect(ir.slice(0, sourceCall)).toContain("@scr_str_retain_v");
@@ -203,6 +204,9 @@ test("reference fields borrow across preserving calls but snapshot across writes
   expect(ir.slice(0, ir.indexOf("@sc_f_source"))).not.toContain("@scr_str_retain_v");
   source.locals.push({ id: "changed", name: "changed", type: STRING, mutable: true });
   source.body.unshift({ kind: "assign", localId: "changed", value: str("effect"), loc });
+  expect(body(module, "sc_bf_compare")).not.toContain("@scr_str_retain_v");
+  source.body.unshift({ kind: "assign", localId: "%g.changed", value: str("effect"), loc });
+  module.globals = [{ id: "%g.changed", name: "changed", type: STRING, mutable: true }];
   expect(body(module, "sc_bf_compare")).toContain("@scr_str_retain_v");
   f.body = [ret(equal(str("constant"), projection))];
   expect(body(module, "sc_bf_compare")).not.toContain("@scr_str_retain_v");
@@ -325,10 +329,9 @@ test.each(methodCases)(
   },
 );
 
-test("string search snapshots both receiver and needle before an effectful numeric argument", () => {
+test("string search snapshots both receiver and needle before a numeric argument writes globally", () => {
   const position = fn("position", [], num(0));
-  position.locals.push({ id: "changed", name: "changed", type: STRING, mutable: true });
-  position.body.unshift({ kind: "assign", localId: "changed", value: str("effect"), loc });
+  position.body.unshift({ kind: "assign", localId: "%g.changed", value: str("effect"), loc });
   const search = fn(
     "search",
     ["text", "needle"],
@@ -338,7 +341,9 @@ test("string search snapshots both receiver and needle before an effectful numer
     { kind: "assign", localId: "text", value: str("abc"), loc },
     { kind: "assign", localId: "needle", value: str("b"), loc },
   );
-  const ir = body(mod(position, search), "sc_f_search");
+  const module = mod(position, search);
+  module.globals = [{ id: "%g.changed", name: "changed", type: STRING, mutable: true }];
+  const ir = body(module, "sc_f_search");
   const start = ir.indexOf("@sc_f_position");
   const searchCall = ir.indexOf("@scr_str_index_of");
   expect(start).toBeGreaterThan(0);

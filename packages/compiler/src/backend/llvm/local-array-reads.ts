@@ -113,6 +113,16 @@ export class OptionalArrayReads {
   }
 }
 
+/** A body can preserve caller-owned edges while rebinding its own locals.
+ * Borrowing an array element for the whole frame additionally requires
+ * that the parameter holding the array is never replaced or captured. */
+function stableArrayParameters(fn: IrFunction, lifetimes: CallLifetimes): Set<string> {
+  const borrowed = lifetimes.borrowed.get(fn.name);
+  return new Set(
+    fn.params.filter((_, index) => borrowed?.has(index)).map((param) => param.localId),
+  );
+}
+
 export function findLocalArrayReads(
   fn: IrFunction,
   functions: ReadonlyMap<string, IrFunction>,
@@ -128,6 +138,7 @@ export function findLocalArrayReads(
     [...(fn.captures ?? []), ...(fn.classCaptures ?? [])].map((c) => c.localId),
   );
   const params = new Set(fn.params.map((p) => p.localId));
+  const stableParams = stableArrayParameters(fn, lifetimes);
   const borrow = arrayPreservingFunctions.has(fn.name);
   everyStmtList(fn.body, {
     expr: () => true,
@@ -148,7 +159,7 @@ export function findLocalArrayReads(
         if (
           borrow &&
           read.array.kind === "varRef" &&
-          params.has(read.array.localId) &&
+          stableParams.has(read.array.localId) &&
           !locals.get(read.array.localId)?.boxed
         )
           read.borrow = true;
@@ -173,7 +184,7 @@ export function findCallArrayReads(
 ): Map<IrExpr, LocalArrayRead> {
   const result = new Map<IrExpr, LocalArrayRead>();
   if (fn.async || fn.generator) return result;
-  const params = new Set(fn.params.map((param) => param.localId));
+  const stableParams = stableArrayParameters(fn, lifetimes);
   const locals = new Map(fn.locals.map((local) => [local.id, local]));
   const borrow = arrayPreservingFunctions.has(fn.name);
   everyStmtList(fn.body, {
@@ -189,7 +200,7 @@ export function findCallArrayReads(
         if (
           borrow &&
           read.array.kind === "varRef" &&
-          params.has(read.array.localId) &&
+          stableParams.has(read.array.localId) &&
           !locals.get(read.array.localId)?.boxed
         )
           read.borrow = true;

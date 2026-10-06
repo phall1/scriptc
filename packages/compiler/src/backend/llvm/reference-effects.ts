@@ -31,7 +31,11 @@ export function preservesRegexInputs(method: string): boolean {
   }
 }
 
-function expressionPreservesEdges(e: IrExpr, call: (value: Call) => boolean): boolean {
+function expressionPreservesEdges(
+  e: IrExpr,
+  call: (value: Call) => boolean,
+  privateLocals?: ReadonlySet<string>,
+): boolean {
   switch (e.kind) {
     case "numLit":
     case "boolLit":
@@ -66,7 +70,7 @@ function expressionPreservesEdges(e: IrExpr, call: (value: Call) => boolean): bo
     case "dynTest":
       return preservesDynTest(e.test);
     case "assignExpr":
-      return !isRefCounted(e.type);
+      return !isRefCounted(e.type) || privateLocals?.has(e.localId) === true;
     case "strIntrinsic":
       return borrowsStringInputs(e.method);
     case "regexIntrinsic":
@@ -75,7 +79,9 @@ function expressionPreservesEdges(e: IrExpr, call: (value: Call) => boolean): bo
     case "setIntrinsic":
       return borrowsMapReadInputs(e);
     case "libCall":
-      return e.fn === "error.nodeThrow" || isStableReceiverOperand(e, "");
+      // The typed-message constructor only allocates an error and retains
+      // its message. The checked options constructor may invoke user code.
+      return e.fn === "error.new" || e.fn === "error.nodeThrow" || isStableReceiverOperand(e, "");
     case "call":
       return call(e);
     case "arrIntrinsic":
@@ -93,11 +99,12 @@ function expressionPreservesEdges(e: IrExpr, call: (value: Call) => boolean): bo
   }
 }
 
-function statementPreservesEdges(s: IrStmt): boolean {
+function statementPreservesEdges(s: IrStmt, privateLocals?: ReadonlySet<string>): boolean {
   switch (s.kind) {
     case "varDecl":
     case "exprStmt":
     case "return":
+    case "throw":
     case "if":
     case "for":
     case "while":
@@ -108,6 +115,7 @@ function statementPreservesEdges(s: IrStmt): boolean {
     case "bytesSet":
       return true;
     case "assign":
+      return !isRefCounted(s.value.type) || privateLocals?.has(s.localId) === true;
     case "fieldSet":
     case "recordSet":
       return !isRefCounted(s.value.type);
@@ -117,8 +125,9 @@ function statementPreservesEdges(s: IrStmt): boolean {
 }
 
 /** Reference preservation is weaker than purity: scalar writes, allocation
- * and throwing are allowed. Existing owners and their reference edges must
- * survive until the consuming operation. Unknown calls, reference writes,
+ * and throwing are allowed. Caller owners and their reference edges must
+ * survive until the consuming operation; callee-local rebinding is private.
+ * Unknown calls, externally visible reference writes,
  * callbacks and suspension stay conservative, including inside recursion.
  * Facts belong to one finalized module, never serialized or reused after a
  * transform. Scan bodies once and propagate rejections through reverse edges. */
@@ -133,22 +142,32 @@ export class ReferenceEffects {
     const callers = new Map<string, Set<string>>();
     const unsafe: string[] = [];
     for (const fn of functions.values()) {
+      // Rebinding a callee's unboxed local cannot replace the caller's
+      // owner. The same write in a later caller operand still must reject
+      // borrowing, so these facts apply only while summarizing this body.
+      const privateLocals = new Set(
+        fn.locals.filter((local) => !local.boxed).map((local) => local.id),
+      );
       const safe =
         !fn.async &&
         !fn.generator &&
         !fn.captures &&
         !fn.classCaptures &&
         everyStmtList(fn.body, {
-          stmt: statementPreservesEdges,
+          stmt: (stmt) => statementPreservesEdges(stmt, privateLocals),
           expr: (e) =>
-            expressionPreservesEdges(e, (call) => {
-              if (intrinsicCall(call)) return true;
-              if (!functions.has(call.callee)) return false;
-              let incoming = callers.get(call.callee);
-              if (!incoming) callers.set(call.callee, (incoming = new Set()));
-              incoming.add(fn.name);
-              return true;
-            }),
+            expressionPreservesEdges(
+              e,
+              (call) => {
+                if (intrinsicCall(call)) return true;
+                if (!functions.has(call.callee)) return false;
+                let incoming = callers.get(call.callee);
+                if (!incoming) callers.set(call.callee, (incoming = new Set()));
+                incoming.add(fn.name);
+                return true;
+              },
+              privateLocals,
+            ),
         });
       if (safe) this.functions.add(fn.name);
       else unsafe.push(fn.name);

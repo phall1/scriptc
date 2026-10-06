@@ -183,6 +183,26 @@ test("array mutation preserves a separate payload owner and exceptional cleanup"
   expect(body).not.toContain("@scr_union_release");
 });
 
+test("replacing an array parameter keeps the earlier element independently owned", () => {
+  const mod = fixture();
+  const work = mod.functions[2]!;
+  work.locals[0] = { ...work.locals[0]!, mutable: true };
+  work.params = [...work.params, { localId: "replacement", name: "replacement", type: array }];
+  work.locals.push({ id: "replacement", name: "replacement", type: array, mutable: false });
+  work.body.splice(1, 0, { kind: "assign", localId: "a", value: ref("replacement", array), loc });
+  expect(validateModule(mod)).toEqual([]);
+  const functions = new Map(mod.functions.map((f) => [f.name, f]));
+  expect(
+    findArrayPreservingFunctions(functions, new Map(mod.unions!.map((u) => [u.id, u]))).has("work"),
+  ).toBe(true);
+  expect(candidates(mod).get("value")?.borrow).not.toBe(true);
+  for (const bits of [32, 64] as const) {
+    const body = workBody(mod, bits);
+    expect(body).toContain("@sc_rretain_");
+    expect(body).toContain("@sc_rrelease_");
+  }
+});
+
 test.each([
   "alias",
   "capture",
@@ -280,6 +300,8 @@ test("propagates reference mutation through a recursive call group", () => {
   expect(candidates(mod).get("value")?.borrow).toBe(true);
   inner.locals.push({ id: "owned", name: "owned", type: array, mutable: true });
   inner.body.unshift({ kind: "assign", localId: "owned", value: ref("owned", array), loc });
+  expect(candidates(mod).get("value")?.borrow).toBe(true);
+  inner.body.unshift({ kind: "arraySetLength", arr: ref("owned", array), length: num(0), loc });
   expect(candidates(mod).get("value")?.borrow).not.toBe(true);
   expect(workBody(mod)).toContain("@sc_rretain_");
 });
@@ -648,7 +670,7 @@ test("each immediate argument has separate tag and payload storage", () => {
   expect(ir).not.toContain("@sc_bf_read");
 });
 
-test("throwing later arguments release a completed read snapshot", () => {
+test("throwing later arguments borrow preserved payloads and release mutable snapshots", () => {
   const module = immediateFixture();
   const consume = module.functions[3]!;
   consume.params.push({ localId: "other", name: "other", type: F64 });
@@ -667,7 +689,22 @@ test("throwing later arguments release a completed read snapshot", () => {
   const later = ir.indexOf("@sc_f_failure");
   expect(later).toBeGreaterThan(0);
   expect(ir.slice(later)).toContain("@scr_exc_pending");
-  expect(ir.slice(later)).toContain("@sc_rrelease_");
+  expect(ir.slice(later)).not.toContain("@sc_rrelease_");
+  failure.params.push({ localId: "items", name: "items", type: array });
+  failure.locals.push({ id: "items", name: "items", type: array, mutable: false });
+  failure.body.unshift({ kind: "arraySetLength", arr: ref("items", array), length: num(0), loc });
+  immediateCall(module).args[1] = {
+    kind: "call",
+    callee: "failure",
+    args: [ref("a", array)],
+    type: F64,
+    loc,
+  };
+  const owned = workBody(module);
+  const mutation = owned.indexOf("@sc_bf_failure");
+  expect(mutation).toBeGreaterThan(0);
+  expect(owned.slice(mutation)).toContain("@scr_exc_pending");
+  expect(owned.slice(mutation)).toContain("@sc_rrelease_");
 });
 
 test("a temporary array receiver lives through its indexed lookup", () => {

@@ -126,6 +126,41 @@ test("long call graphs use a worklist and facts are rebuilt for changed bodies",
   expect(effects(functions).functions.size).toBe(0);
 });
 
+test("callee-local rebinding preserves caller owners while captures and operand writes do not", () => {
+  const helper = fn("select");
+  helper.locals.push({ id: "local", name: "local", type: STRING, mutable: true });
+  const replace: IrExpr = { kind: "assignExpr", localId: "local", value: text, type: STRING, loc };
+  helper.body = [
+    { kind: "varDecl", localId: "local", init: text, loc },
+    { kind: "assign", localId: "local", value: text, loc },
+    { kind: "exprStmt", expr: replace, loc },
+  ];
+  const caller = fn("caller", [call("select")]);
+  const summary = effects([helper, caller]);
+  expect(summary.functions).toEqual(new Set(["select", "caller"]));
+  expect(summary.preserves(call("select", [replace]))).toBe(false);
+  helper.locals[0]!.boxed = true;
+  expect(effects([helper, caller]).functions.size).toBe(0);
+});
+
+test("checked error paths preserve owners but message coercion and mutation remain barriers", () => {
+  const guarded = fn("guarded");
+  const error: IrExpr = {
+    kind: "libCall",
+    fn: "error.new",
+    args: [text],
+    type: { kind: "object", className: "%TypeError" },
+    loc,
+  };
+  guarded.body = [{ kind: "throw", value: error, loc }];
+  expect(effects([guarded]).preserves(call("guarded"))).toBe(true);
+  error.fn = "error.newOptions";
+  expect(effects([guarded]).preserves(call("guarded"))).toBe(false);
+  error.fn = "error.new";
+  error.args = [{ kind: "assignExpr", localId: "global", value: text, type: STRING, loc }];
+  expect(effects([guarded]).preserves(call("guarded"))).toBe(false);
+});
+
 test("checked scalar tests preserve owners while materializing reads stay conservative", () => {
   const value: IrExpr = { kind: "varRef", localId: "value", type: DYN, loc };
   const summary = effects([]);

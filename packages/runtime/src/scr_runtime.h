@@ -1394,7 +1394,7 @@ typedef struct ScrMap {
   size_t nlive;    /* live entries (Map.size) */
   size_t ecap;     /* entries capacity */
   ScrMapEntry *entries;
-  size_t nbuckets;  /* power of two; >= 2 * ecap so probes terminate */
+  size_t nbuckets;  /* zero for small linear maps; otherwise power of two >= 2 * nentries */
   size_t *buckets;  /* entry indices; SIZE_MAX = empty */
   size_t iter_depth; /* > 0: an iteration is active — no compaction */
   const ScrMapDynOps *dyn_ops;

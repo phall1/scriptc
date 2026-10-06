@@ -14258,6 +14258,18 @@
     "<repo>/tests/corpus/structured-text-storage.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/projected-collection-lifetimes.ts": {
+   "order": [
+    "<repo>/tests/corpus/projected-collection-lifetimes.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/small-collection-transitions.ts": {
+   "order": [
+    "<repo>/tests/corpus/small-collection-transitions.ts"
+   ],
+   "diags": []
   }
  }
 }
