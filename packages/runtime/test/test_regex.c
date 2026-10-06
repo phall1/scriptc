@@ -268,6 +268,62 @@ static void test_split(void) {
   scr_str_release(s);
 }
 
+static void test_borrowed_results(void) {
+  ScrStr *s = scr_str_new("unchanged\0tail", 14);
+  ScrStr *rep = S("replacement");
+  re_b_y.last_index = 500;
+  ScrStr *result = scr_regex_replace(s, &re_b_y, rep);
+  check(result == s && s->rc == 2 && re_b_y.last_index == 0,
+        "unmatched sticky replacement reuses an owned subject and resets state");
+  scr_str_release(s);
+  check(result->len == 14 && memcmp(result->data, "unchanged\0tail", 14) == 0,
+        "unmatched result survives its original owner, including NUL bytes");
+  scr_str_release(result);
+  scr_str_release(rep);
+
+  s = scr_str_new("lower\0tail", 10);
+  result = scr_str_to_lower(s);
+  check(result == s && s->rc == 2, "unchanged ASCII case conversion retains its subject");
+  scr_str_release(result);
+  result = scr_str_to_upper(s);
+  check(result->len == 10 && memcmp(result->data, "LOWER\0TAIL", 10) == 0,
+        "ASCII case conversion preserves embedded NUL bytes");
+  scr_str_release(result);
+  ScrStr *form = S("NFC");
+  result = scr_str_normalize(s, form);
+  check(result == s && s->rc == 2, "ASCII normalization retains its subject");
+  scr_str_release(result);
+  scr_str_release(form);
+  form = S("invalid");
+  result = scr_str_normalize(s, form);
+  check(result == NULL && scr_exc_pending(), "ASCII normalization still validates the form");
+  scr_exc_clear();
+  scr_str_release(form);
+  scr_str_release(s);
+}
+
+static void test_capture_capacity(void) {
+  // A large prior serialization must not size every later capture.
+  ScrJsonBuf buffer;
+  scr_jb_init(&buffer);
+  for (size_t i = 0; i < 65536; i++) scr_jb_putc(&buffer, 'x');
+  scr_str_release(scr_jb_finish(&buffer));
+  ScrStr *s = S("\xC3\xA9\xF0\x9F\x98\x80" "b");
+  ScrArr *matches = scr_regex_exec(s, &re_group);
+  ScrStr *capture = scr_arr_get_ref(matches, 1);
+  check(str_is(capture, "b") && capture->cap <= 4,
+        "small Unicode-subject capture has capacity proportional to its value");
+  scr_str_release(capture);
+  scr_arr_release(matches);
+  matches = scr_regex_match(s, &re_astral_u);
+  capture = scr_arr_get_ref(matches, 0);
+  check(capture->len == 4 && capture->cap <= 16,
+        "astral capture preserves the pair without inheriting a large capacity");
+  scr_arr_release(matches);
+  scr_str_release(s);
+  expect_str(capture, "\xF0\x9F\x98\x80", "capture owns its bytes after subject release");
+}
+
 int main(int argc, char **argv) {
   (void)argc;
   (void)argv;
@@ -283,6 +339,8 @@ int main(int argc, char **argv) {
   test_replace_all();
   test_named_groups();
   test_split();
+  test_borrowed_results();
+  test_capture_capacity();
 
 #ifdef SCR_RC_AUDIT
   check(scr_str_live_count() == 0, "no live heap strings at exit (RC audit)");

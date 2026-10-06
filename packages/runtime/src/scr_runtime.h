@@ -4550,6 +4550,8 @@ typedef struct {
 } ScrJsonBuf;
 
 void scr_jb_init(ScrJsonBuf *b);
+/* Append a borrowed byte span verbatim, including embedded NUL bytes. */
+void scr_jb_write(ScrJsonBuf *b, const char *s, size_t n);
 /* Append one borrowed runtime string verbatim (no JSON quoting). */
 void scr_jb_put_str(ScrJsonBuf *b, const ScrStr *s);
 /* Push a container onto the circular-detection stack before serializing
