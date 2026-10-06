@@ -905,11 +905,13 @@ export function validateModule(mod: IrModule): IrValidationError[] {
         return null;
     }
   };
-  const tdzPointerKinds = new Set<IrType["kind"]>(["record", "func", "string", "dyn"]);
+  // Inferred string globals can widen to boxed unions during initialization.
+  // Even undefined/null arms use non-null interned boxes, preserving the TDZ sentinel.
+  const tdzPointerKinds = new Set<IrType["kind"]>(["record", "func", "string", "union", "dyn"]);
   for (const g of mod.globals ?? []) {
     if (g.tdz && !tdzPointerKinds.has(g.type.kind)) {
       errors.push({
-        message: `TDZ global "${g.name}" must have record, function, string, or checked-value storage`,
+        message: `TDZ global "${g.name}" must have record, function, string, union, or checked-value storage`,
         loc: noLoc,
       });
     }
