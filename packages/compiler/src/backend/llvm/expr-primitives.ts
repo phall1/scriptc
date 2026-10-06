@@ -421,7 +421,10 @@ export function emitStringExpr(
       return { name: t, type: e.type };
     }
     case "toString": {
-      const v = host.emitExpr(e.operand);
+      const v =
+        e.operand.type.kind === "union"
+          ? host.emitReadReceiver(e.operand)
+          : host.emitExpr(e.operand);
       if (v.type.kind === "union") {
         // The ARM value's ToString: an inline tag switch (unit arms are
         // interned literals, string arms retain the payload, f64/bool

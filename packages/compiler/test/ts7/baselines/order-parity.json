@@ -14318,6 +14318,12 @@
     "<repo>/tests/corpus/literal-switch-dispatch.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/local-union-storage.ts": {
+   "order": [
+    "<repo>/tests/corpus/local-union-storage.ts"
+   ],
+   "diags": []
   }
  }
 }

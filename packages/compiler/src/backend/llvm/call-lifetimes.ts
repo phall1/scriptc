@@ -41,6 +41,9 @@ export interface CallLifetimes {
   /** Immutable locals with the same use restriction. Their initialization
    * and ownership still need a separate representation proof. */
   locals: Map<string, Set<string>>;
+  /** Projection-only local uses, allowing statement assignments. Each
+   * initializer and assignment still needs a separate storage proof. */
+  projectedLocals: Map<string, Set<string>>;
 }
 
 function eligible(local: IrLocal, parameter = false): boolean {
@@ -78,6 +81,10 @@ function collectUses(fn: IrFunction): Uses {
   };
   function expr(node: IrExpr): boolean {
     switch (node.kind) {
+      case "toBool":
+      case "toString":
+        if (node.operand.kind === "varRef" && node.operand.type.kind === "union") return true;
+        break;
       case "strEq":
       case "strCmp":
       case "strConcat":
@@ -133,6 +140,8 @@ function collectUses(fn: IrFunction): Uses {
         uses.declarations.set(node.localId, (uses.declarations.get(node.localId) ?? 0) + 1);
         break;
       case "assign":
+        uses.written.add(node.localId);
+        break;
       case "forOf":
       case "rethrow":
         uses.invalid.add(node.localId);
@@ -173,6 +182,7 @@ export function analyzeCallLifetimes(functions: ReadonlyMap<string, IrFunction>)
     locals: new Map(),
     borrowed: new Map(),
     bindings: new Map(),
+    projectedLocals: new Map(),
   };
   for (const fn of functions.values()) {
     if (fn.async || fn.generator || fn.captures !== undefined || fn.classCaptures !== undefined)
@@ -204,6 +214,7 @@ export function analyzeCallLifetimes(functions: ReadonlyMap<string, IrFunction>)
         const safe =
           local !== undefined &&
           eligible(local, true) &&
+          !uses.written.has(param.localId) &&
           !uses.invalid.has(param.localId) &&
           !uses.declarations.has(param.localId);
         const node: Parameter = { safe, callers: new Set() };
@@ -249,19 +260,23 @@ export function analyzeCallLifetimes(functions: ReadonlyMap<string, IrFunction>)
     if (!uses) continue;
     const params = new Set(fn.params.map((param) => param.localId));
     const safe = new Set<string>();
+    const projected = new Set<string>();
     for (const local of fn.locals) {
       if (
         params.has(local.id) ||
-        !eligible(local) ||
+        !eligible(local, true) ||
         uses.invalid.has(local.id) ||
         uses.declarations.get(local.id) !== 1
       )
         continue;
       const forwards = uses.forwards.get(local.id) ?? [];
-      if (forwards.every((use) => result.parameters.get(use.callee)?.has(use.index) === true))
-        safe.add(local.id);
+      if (forwards.every((use) => result.parameters.get(use.callee)?.has(use.index) === true)) {
+        projected.add(local.id);
+        if (eligible(local) && !uses.written.has(local.id)) safe.add(local.id);
+      }
     }
     result.locals.set(fn.name, safe);
+    result.projectedLocals.set(fn.name, projected);
   }
   return result;
 }

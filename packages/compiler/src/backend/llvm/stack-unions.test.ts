@@ -149,7 +149,7 @@ test("local construction releases its payload at lexical exit without freeing th
   expect(main).toContain("@sc_rrelease_");
 });
 
-test.each(["return", "alias", "capture", "store", "mutable"])(
+test.each(["return", "alias", "capture", "store"])(
   "keeps a %s consumer on the ordinary heap path",
   (reason) => {
     const mod = fixture();
@@ -196,7 +196,6 @@ test.each(["return", "alias", "capture", "store", "mutable"])(
       mod.globals = [{ id: "%g.saved", name: "saved", type: optional, mutable: true }];
       work.body.push({ kind: "assign", localId: "%g.saved", value: ref("item"), loc });
     }
-    if (reason === "mutable") work.locals[0]!.mutable = true;
     expect(body(emit(mod), "sc_f_work")).toContain("@scr_union_new_ref");
   },
 );
