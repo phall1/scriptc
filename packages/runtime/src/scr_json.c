@@ -413,6 +413,68 @@ void scr_dyn_from_leave(void) {
  * strict alloc/free balance.
  */
 static SCR_TL ScrDyn *scr_builtin_array_prototype;
+
+/* Property names are immutable and often repeated across simultaneously live
+ * objects. Entries own references to their bytes; this fixed weak table owns
+ * none. Collisions only reduce sharing, and the final release removes a weak
+ * entry before freeing storage. Long keys bypass lookup entirely. */
+#define SCR_DYN_KEY_SHARE_SLOTS 256
+#define SCR_DYN_KEY_SHARE_LENGTH 64
+typedef struct {
+  size_t rc;
+  char bytes[];
+} ScrDynKey;
+typedef struct {
+  ScrDynKey *key;
+  size_t length;
+} ScrDynKeySlot;
+static SCR_TL ScrDynKeySlot scr_dyn_keys[SCR_DYN_KEY_SHARE_SLOTS];
+#ifdef SCR_RC_AUDIT
+static SCR_TL long scr_live_dyn_keys;
+long scr_dyn_key_live_count(void) { return scr_live_dyn_keys; }
+#endif
+
+static size_t scr_dyn_key_slot(const char *key, size_t length) {
+  size_t hash = length;
+  for (size_t i = 0; i < length; i++) hash = hash * 31 + (unsigned char)key[i];
+  return hash % SCR_DYN_KEY_SHARE_SLOTS;
+}
+
+static char *scr_dyn_key_copy(const char *key, size_t length) {
+  ScrDynKeySlot *slot = length <= SCR_DYN_KEY_SHARE_LENGTH
+    ? &scr_dyn_keys[scr_dyn_key_slot(key, length)] : NULL;
+  if (slot && slot->key && slot->length == length &&
+      !memcmp(slot->key->bytes, key, length)) {
+    slot->key->rc++;
+    return slot->key->bytes;
+  }
+  if (length > SIZE_MAX - sizeof(ScrDynKey) - 1) scr_json_oom();
+  ScrDynKey *owned = malloc(sizeof *owned + length + 1);
+  if (!owned) scr_json_oom();
+#ifdef SCR_RC_AUDIT
+  scr_live_dyn_keys++;
+#endif
+  owned->rc = 1;
+  memcpy(owned->bytes, key, length);
+  owned->bytes[length] = '\0';
+  if (slot) *slot = (ScrDynKeySlot){owned, length};
+  return owned->bytes;
+}
+
+static void scr_dyn_key_release(char *key, size_t length) {
+  if (!key) return;
+  ScrDynKey *owned = (ScrDynKey *)(key - offsetof(ScrDynKey, bytes));
+  if (--owned->rc) return;
+  if (length <= SCR_DYN_KEY_SHARE_LENGTH) {
+    ScrDynKeySlot *slot = &scr_dyn_keys[scr_dyn_key_slot(key, length)];
+    if (slot->key == owned) slot->key = NULL;
+  }
+#ifdef SCR_RC_AUDIT
+  scr_live_dyn_keys--;
+#endif
+  free(owned);
+}
+
 #ifndef SCR_RC_AUDIT
 static SCR_TL ScrDyn *scr_dyn_free_arr, *scr_dyn_free_obj, *scr_dyn_free_misc;
 static SCR_TL size_t scr_dyn_free_count;
@@ -432,17 +494,28 @@ static void scr_dyn_obj_drop_keys(ScrDyn *d, bool cache) {
 #ifndef SCR_RC_AUDIT
     if (cache && d->v.obj.cap <= SCR_DYN_KEY_CACHE_SLOTS &&
         entry->key_len <= SCR_DYN_KEY_CACHE_LENGTH &&
-        entry->key_len + 1 <= SCR_DYN_KEY_CACHE_MAX - scr_dyn_cached_key_bytes) {
-      scr_dyn_cached_key_bytes += entry->key_len + 1;
+        sizeof(ScrDynKey) + entry->key_len + 1 <= SCR_DYN_KEY_CACHE_MAX - scr_dyn_cached_key_bytes) {
+      scr_dyn_cached_key_bytes += sizeof(ScrDynKey) + entry->key_len + 1;
       continue;
     }
 #else
     (void)cache;
 #endif
-    free(entry->key);
+    scr_dyn_key_release(entry->key, entry->key_len);
     entry->key = NULL;
     entry->key_len = 0;
   }
+}
+
+/* Primitive kinds cannot acquire properties or change kind while live, so
+ * an object property edge to one cannot participate in a cycle. Keep its RC edge
+ * out of trial deletion and release it in collected teardown instead. Other
+ * owners may still trace the same primitive through the uniform header ABI;
+ * our untraced reference keeps it alive until that teardown releases it.
+ * Entry metadata snapshots this decision during trace, before any white node
+ * can be freed. Teardown must never inspect the child's kind again. */
+static bool scr_dyn_member_is_traced(const ScrDyn *value) {
+  return value && value->kind > SCR_DYN_STR && value->kind != SCR_DYN_UNDEF;
 }
 
 /* Checked objects and functions can close over one another. All heap dyn
@@ -451,19 +524,21 @@ static void scr_dyn_obj_drop_keys(ScrDyn *d, bool cache) {
  * capsules keep their conservative ownership edges. */
 void scr_dyn_trace_v(void *ptr, ScrTraceVisit visit, void *ctx) {
   ScrDyn *d = ptr;
-  visit(d->prototype, ctx);
-  visit(d->symbol_properties, ctx);
-  visit(d->symbol_keys, ctx);
+  if (d->prototype) visit(d->prototype, ctx);
+  if (d->symbol_properties) visit(d->symbol_properties, ctx);
+  if (d->symbol_keys) visit(d->symbol_keys, ctx);
   switch (d->kind) {
   case SCR_DYN_ARR:
     for (size_t i = 0; i < d->v.arr.len; i++) visit(d->v.arr.items[i], ctx);
-    visit(d->v.arr.properties, ctx);
+    if (d->v.arr.properties) visit(d->v.arr.properties, ctx);
     break;
   case SCR_DYN_OBJ:
     for (size_t i = 0; i < d->v.obj.len; i++) {
-      visit(d->v.obj.entries[i].value, ctx);
-      visit(d->v.obj.entries[i].getter, ctx);
-      visit(d->v.obj.entries[i].setter, ctx);
+      ScrDynEntry *entry = &d->v.obj.entries[i];
+      entry->value_traced = scr_dyn_member_is_traced(entry->value);
+      if (entry->value_traced) visit(entry->value, ctx);
+      if (entry->getter) visit(entry->getter, ctx);
+      if (entry->setter) visit(entry->setter, ctx);
     }
     break;
   case SCR_DYN_FUNC: visit(d->v.fn.clo, ctx); break;
@@ -568,7 +643,7 @@ static ScrDyn *scr_dyn_alloc(ScrDynKind kind) {
       if (d->v.obj.cap <= SCR_DYN_KEY_CACHE_SLOTS) {
         for (size_t i = 0; i < d->v.obj.cap; i++) {
           ScrDynEntry *entry = &d->v.obj.entries[i];
-          if (entry->key) scr_dyn_cached_key_bytes -= entry->key_len + 1;
+          if (entry->key) scr_dyn_cached_key_bytes -= sizeof(ScrDynKey) + entry->key_len + 1;
         }
       }
       d->v.obj.source_identity = NULL;
@@ -624,8 +699,9 @@ static void scr_dyn_dispose(ScrDyn *d, bool collected) {
     break;
   case SCR_DYN_OBJ:
     for (size_t i = 0; i < d->v.obj.len; i++) {
+      ScrDyn *value = d->v.obj.entries[i].value;
+      if (!collected || !d->v.obj.entries[i].value_traced) scr_dyn_release(value);
       if (!collected) {
-        scr_dyn_release(d->v.obj.entries[i].value);
         scr_dyn_release(d->v.obj.entries[i].getter);
         scr_dyn_release(d->v.obj.entries[i].setter);
       }
@@ -716,25 +792,43 @@ void scr_dyn_release(ScrDyn *d) {
   scr_dyn_dispose(d, false);
 }
 
+/* A checked hint avoids repeating a linear walk for recurring property
+ * names. Slots store indices only, never object/key pointers. Every hit
+ * checks the current entry, so different shapes, deletion and reordering
+ * need no invalidation and collisions fall back to the ordinary search. */
+#define SCR_DYN_PROPERTY_HINTS 64
+static SCR_TL size_t scr_dyn_property_hints[SCR_DYN_PROPERTY_HINTS];
+
+static ScrDynEntry *scr_dyn_find_entry(const ScrDyn *object, const char *key, size_t length) {
+  if (object->kind != SCR_DYN_OBJ) return NULL;
+  size_t slot = (length + (length ? (unsigned char)key[0] * 7u : 0)) % SCR_DYN_PROPERTY_HINTS;
+  size_t hint = scr_dyn_property_hints[slot];
+  if (hint < object->v.obj.len) {
+    ScrDynEntry *entry = &object->v.obj.entries[hint];
+    if (entry->key_len == length && !memcmp(entry->key, key, length)) return entry;
+  }
+  for (size_t i = 0; i < object->v.obj.len; i++) {
+    ScrDynEntry *entry = &object->v.obj.entries[i];
+    if (entry->key_len == length && !memcmp(entry->key, key, length)) {
+      scr_dyn_property_hints[slot] = i;
+      return entry;
+    }
+  }
+  return NULL;
+}
+
 ScrDyn *scr_dyn_obj_get(const ScrDyn *d, const char *key, size_t key_len) {
   if (d->kind == SCR_DYN_PROXY) {
     scr_dyn_proxy_unsupported("raw object inspection");
     return NULL;
   }
-  if (d->kind != SCR_DYN_OBJ) return NULL;
-  for (size_t i = 0; i < d->v.obj.len; i++) {
-    const ScrDynEntry *e = &d->v.obj.entries[i];
-    if (e->key_len == key_len && memcmp(e->key, key, key_len) == 0) return e->value;
-  }
-  return NULL;
+  ScrDynEntry *entry = scr_dyn_find_entry(d, key, key_len);
+  return entry ? entry->value : NULL;
 }
 
 bool scr_dyn_obj_enumerable(const ScrDyn *d, const char *key, size_t key_len) {
-  for (size_t i = 0; i < d->v.obj.len; i++) {
-    const ScrDynEntry *e = &d->v.obj.entries[i];
-    if (e->key_len == key_len && memcmp(e->key, key, key_len) == 0) return e->enumerable;
-  }
-  return false;
+  ScrDynEntry *entry = scr_dyn_find_entry(d, key, key_len);
+  return entry && entry->enumerable;
 }
 
 static const ScrDyn *scr_dyn_property_owner(const ScrDyn *object, const char *key, size_t length);
@@ -1056,11 +1150,9 @@ static void scr_dyn_obj_put(ScrDyn *obj, const char *key, size_t key_len, ScrDyn
   }
   ScrDynEntry *e = &obj->v.obj.entries[obj->v.obj.len++];
   if (!e->key || e->key_len != key_len || memcmp(e->key, key, key_len)) {
-    free(e->key);
-    e->key = malloc(key_len + 1);
-    if (!e->key) scr_json_oom();
-    memcpy(e->key, key, key_len);
-    e->key[key_len] = '\0';
+    char *owned = scr_dyn_key_copy(key, key_len);
+    scr_dyn_key_release(e->key, e->key_len);
+    e->key = owned;
   }
   e->key_len = key_len;
   e->value = value;
@@ -1130,6 +1222,22 @@ ScrDyn *scr_dyn_symbol_get(const ScrDyn *value, const ScrStr *key) {
 }
 
 ScrDyn *scr_dyn_new_num(double n) {
+  /* Small integers are immutable primitives, just like the boolean and null
+   * singletons. Initialize only touched slots; the table neither grows nor
+   * owns heap references. Preserve negative zero as a distinct payload. */
+  if (n >= -128 && n <= 255) {
+    int value = (int)n;
+    if ((double)value == n && (value != 0 || !signbit(n))) {
+      static SCR_TL ScrDyn values[384];
+      ScrDyn *cached = &values[value + 128];
+      if (cached->rc == 0) {
+        cached->rc = SIZE_MAX;
+        cached->kind = SCR_DYN_NUM;
+        cached->v.num = n;
+      }
+      return cached;
+    }
+  }
   ScrDyn *d = scr_dyn_alloc(SCR_DYN_NUM);
   d->v.num = n;
   return d;
@@ -2880,12 +2988,7 @@ static ScrStr *scr_dyn_property_key(const ScrDyn *key) {
 }
 
 static ScrDynEntry *scr_dyn_entry(ScrDyn *obj, const ScrStr *key) {
-  if (obj->kind != SCR_DYN_OBJ) return NULL;
-  for (size_t i = 0; i < obj->v.obj.len; i++) {
-    ScrDynEntry *entry = &obj->v.obj.entries[i];
-    if (entry->key_len == key->len && memcmp(entry->key, key->data, key->len) == 0) return entry;
-  }
-  return NULL;
+  return scr_dyn_find_entry(obj, key->data, key->len);
 }
 
 static bool scr_dyn_property_same_value(const ScrDyn *a, const ScrDyn *b) {
@@ -5922,20 +6025,17 @@ static ScrDyn *scr_json_number(ScrJsonP *p) {
     }
     exp10 += eneg ? -ev : ev;
   }
-  ScrDyn *d = scr_dyn_alloc(SCR_DYN_NUM);
   if (precise && exp10 >= -22 && exp10 <= 22) {
     double v = (double)mant; /* exact: mant < 10^15 < 2^53 */
     if (exp10 > 0) v *= scr_json_pow10[exp10];
     else if (exp10 < 0) v /= scr_json_pow10[-exp10];
-    d->v.num = neg ? -v : v;
-    return d;
+    return scr_dyn_new_num(neg ? -v : v);
   }
   /* The validated span re-parses with strtod (correctly rounded, and the
    * grammar above is a strict subset of what strtod accepts). The ScrStr
    * data is NUL-terminated, and strtod stops at the first non-number char,
    * so parsing from `start` reads exactly the validated token. */
-  d->v.num = strtod(p->s + start, NULL);
-  return d;
+  return scr_dyn_new_num(strtod(p->s + start, NULL));
 }
 
 static bool scr_json_lit(ScrJsonP *p, const char *word, size_t n) {
@@ -6197,7 +6297,7 @@ static void scr_json_delete_member(ScrDyn *object, const ScrStr *key) {
     /* The moved tail aliases a live entry; spare slots own only their own
      * retained key bytes, never a second pointer to a surviving property. */
     memset(&object->v.obj.entries[object->v.obj.len], 0, sizeof *entry);
-    free(removed.key);
+    scr_dyn_key_release(removed.key, removed.key_len);
     scr_dyn_release(removed.value);
     scr_dyn_release(removed.getter);
     scr_dyn_release(removed.setter);
@@ -6900,9 +7000,8 @@ static ScrDyn *scr_dyn_obj_read_receiver(const ScrDyn *d, const char *key, size_
       continue;
     }
     if (current->kind != SCR_DYN_OBJ) continue;
-    for (size_t i = 0; i < current->v.obj.len; i++) {
-      ScrDynEntry *entry = &current->v.obj.entries[i];
-      if (entry->key_len != key_len || memcmp(entry->key, key, key_len) != 0) continue;
+    ScrDynEntry *entry = scr_dyn_find_entry(current, key, key_len);
+    if (entry) {
       if (!entry->accessor) return scr_dyn_retain(entry->value);
       if (!entry->getter) return scr_dyn_retain(scr_dyn_undefined());
       ScrDyn *getter = scr_dyn_retain(entry->getter);

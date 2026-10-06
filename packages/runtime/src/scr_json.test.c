@@ -1,7 +1,13 @@
 #include "scr_runtime.h"
 #include <assert.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
+
+#ifdef SCR_RC_AUDIT
+long scr_str_live_count(void);
+long scr_dyn_key_live_count(void);
+#endif
 
 static void put(ScrDyn *map, ScrDyn *key, ScrDyn *value) {
   ScrDyn *args[] = {key, value};
@@ -91,9 +97,166 @@ static void checked_storage(void) {
   assert(!scr_exc_pending());
 }
 
+static void shared_property_keys(void) {
+#ifdef SCR_RC_AUDIT
+  long before = scr_dyn_key_live_count();
+#endif
+  /* Distinct objects share bytes, not values or property attributes. Key
+   * deletion, a collected owner and a caller-owned input cannot invalidate
+   * the surviving entry. */
+  ScrDyn *first = scr_dyn_new_obj(), *second = scr_dyn_new_obj();
+  char key[] = "shared\0name";
+  scr_dyn_obj_set(first, key, sizeof key - 1, scr_dyn_new_num(1));
+  scr_dyn_obj_set(second, key, sizeof key - 1, scr_dyn_new_num(2));
+  assert(first->v.obj.entries[0].key == second->v.obj.entries[0].key);
+  key[0] = 'x';
+  ScrStr *name = scr_str_new("shared\0name", sizeof key - 1);
+  scr_dyn_key_delete(first, name, true);
+  scr_str_release(name);
+  assert(scr_dyn_obj_get(second, "shared\0name", sizeof key - 1)->v.num == 2);
+  scr_dyn_obj_set(first, "shared\0name", sizeof key - 1, scr_dyn_new_num(3));
+  scr_dyn_obj_set(first, "self", 4, scr_dyn_retain(first));
+  scr_dyn_release(first);
+  scr_collect_cycles();
+  assert(scr_dyn_obj_get(second, "shared\0name", sizeof key - 1)->v.num == 2);
+  scr_dyn_release(second);
+
+  /* More distinct live names than weak slots force collisions. Releasing
+   * an evicted owner must not clear or free the replacement's storage. */
+  ScrDyn *objects[600];
+  for (int round = 0; round < 2; round++) {
+    for (int i = 0; i < 600; i++) {
+      char bytes[32];
+      int length = snprintf(bytes, sizeof bytes, "field-%d", i);
+      objects[i] = scr_dyn_new_obj();
+      scr_dyn_obj_set(objects[i], bytes, (size_t)length, scr_dyn_new_num(i));
+    }
+    for (int i = 0; i < 600; i++) {
+      char bytes[32];
+      int length = snprintf(bytes, sizeof bytes, "field-%d", i);
+      assert(scr_dyn_obj_get(objects[i], bytes, (size_t)length)->v.num == i);
+      scr_dyn_release(objects[i]);
+    }
+  }
+#ifdef SCR_RC_AUDIT
+  assert(scr_dyn_key_live_count() == before);
+#endif
+}
+
+static void checked_leaf_cycles(void) {
+  /* Object properties omit primitives from trial deletion, while arrays and
+   * captured unknown values still trace them. Exercise shared leaves through
+   * both edge kinds, with and without an external owner, in either generation. */
+  for (int old = 0; old < 2; old++) {
+    for (int external = 0; external < 2; external++) {
+#ifdef SCR_RC_AUDIT
+      long before_dyns = scr_dyn_live_count();
+      long before_strings = scr_str_live_count();
+#endif
+      ScrStr *text = scr_str_new("survives either edge", 20);
+      ScrDyn *leaf = scr_dyn_new_str(text);
+      scr_str_release(text);
+      if (old) scr_cyc_hdr(leaf)->gen = SCR_CYC_MATURE;
+      ScrDyn *first = scr_dyn_new_obj(), *second = scr_dyn_new_obj();
+      ScrDyn *array = scr_dyn_new_arr();
+      ScrClosure *closure = scr_closure_new(NULL, 1);
+      closure->caps[0] = scr_box_new_obj(scr_dyn_retain_v, scr_dyn_release_v, scr_dyn_trace_v);
+      scr_box_set_ref(closure->caps[0], scr_dyn_retain(leaf));
+      scr_dyn_obj_set(first, "callback", 8, scr_dyn_new_func(closure, nothing, 0, "func()=>dyn", "leaf"));
+      scr_dyn_obj_set(first, "leaf", 4, scr_dyn_retain(leaf));
+      scr_dyn_obj_set(second, "leaf", 4, scr_dyn_retain(leaf));
+      scr_dyn_obj_set(second, "number", 6, scr_dyn_new_num(42));
+      scr_dyn_obj_set(second, "empty", 5, scr_dyn_new_null());
+      scr_dyn_obj_set(second, "missing", 7, scr_dyn_retain(scr_dyn_undefined()));
+      scr_dyn_arr_push(array, scr_dyn_retain(leaf));
+      scr_dyn_arr_push(array, scr_dyn_retain(first));
+      scr_dyn_obj_set(first, "next", 4, scr_dyn_retain(second));
+      scr_dyn_obj_set(second, "back", 4, scr_dyn_retain(first));
+      scr_dyn_obj_set(second, "array", 5, array);
+      if (!external) scr_dyn_release(leaf);
+      scr_dyn_release(first);
+      scr_dyn_release(second);
+      scr_cyc_collect_scheduled();
+      scr_collect_cycles();
+      if (external) {
+        assert(leaf->rc == 1 && leaf->v.str->len == 20);
+        scr_dyn_release(leaf);
+      }
+#ifdef SCR_RC_AUDIT
+      assert(scr_dyn_live_count() == before_dyns);
+      assert(scr_str_live_count() == before_strings);
+#endif
+    }
+  }
+
+  /* A previous trace snapshot must not survive a property mutation: the
+   * next collection must trace a new object edge or release a new leaf. */
+  for (int leaf_after = 0; leaf_after < 2; leaf_after++) {
+#ifdef SCR_RC_AUDIT
+    long before = scr_dyn_live_count();
+#endif
+    ScrDyn *object = scr_dyn_new_obj(), *child = scr_dyn_new_obj();
+    scr_dyn_obj_set(object, "self", 4, scr_dyn_retain(object));
+    scr_dyn_obj_set(object, "value", 5, leaf_after ? scr_dyn_retain(child) : scr_dyn_new_num(1));
+    scr_dyn_release(scr_dyn_retain(object));
+    scr_collect_cycles();
+    scr_dyn_obj_set(object, "value", 5, leaf_after ? scr_dyn_new_num(2) : scr_dyn_retain(child));
+    scr_dyn_obj_set(child, "parent", 6, scr_dyn_retain(object));
+    scr_dyn_release(child);
+    scr_dyn_release(object);
+    scr_collect_cycles();
+#ifdef SCR_RC_AUDIT
+    assert(scr_dyn_live_count() == before);
+#endif
+  }
+}
+
+static void checked_number_storage(void) {
+#ifdef SCR_RC_AUDIT
+  long before = scr_dyn_live_count();
+#endif
+  for (int value = -130; value < 258; value++) {
+    ScrDyn *first = scr_dyn_new_num(value), *second = scr_dyn_new_num(value);
+    assert(first->kind == SCR_DYN_NUM && first->v.num == value);
+    assert(scr_dyn_strict_eq(first, second));
+    if (value >= -128 && value <= 255) assert(first == second && first->rc == SIZE_MAX);
+    ScrDyn *array = scr_dyn_new_arr();
+    scr_dyn_arr_push(array, first);
+    scr_dyn_arr_push(array, second);
+    scr_dyn_arr_push(array, scr_dyn_retain(array));
+    scr_dyn_release(array);
+    scr_collect_cycles();
+  }
+  const double special[] = {-0.0, 0.5, -0.5, NAN, INFINITY, -INFINITY, 9007199254740991.0};
+  for (size_t i = 0; i < sizeof special / sizeof special[0]; i++) {
+    ScrDyn *value = scr_dyn_new_num(special[i]);
+    assert(value->rc != SIZE_MAX);
+    assert(isnan(special[i]) ? isnan(value->v.num) : value->v.num == special[i]);
+    if (special[i] == 0) assert(signbit(value->v.num));
+    scr_dyn_release(value);
+  }
+  const char raw[] = "[-0,0,1.0,1e2,-128,255,256,1e400]";
+  ScrStr *input = scr_str_new(raw, sizeof raw - 1);
+  ScrDyn *parsed = scr_json_parse(input);
+  assert(parsed && parsed->v.arr.len == 8);
+  assert(signbit(parsed->v.arr.items[0]->v.num));
+  assert(!signbit(parsed->v.arr.items[1]->v.num));
+  assert(parsed->v.arr.items[2] == scr_dyn_new_num(1));
+  assert(parsed->v.arr.items[3] == scr_dyn_new_num(100));
+  assert(isinf(parsed->v.arr.items[7]->v.num));
+  scr_dyn_release(parsed);
+  scr_str_release(input);
+#ifdef SCR_RC_AUDIT
+  assert(scr_dyn_live_count() == before);
+#endif
+}
+
 int main(void) {
   scr_init();
   checked_storage();
+  shared_property_keys();
+  checked_leaf_cycles();
+  checked_number_storage();
   /* Native Set boxes may own headerless scalar/string maps. Collecting an
    * enclosing cycle must neither trace those leaves nor skip their release. */
   for (int i = 0; i < 2000; i++) {
