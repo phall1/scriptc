@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import {
   chmod,
   copyFile,
+  link,
   mkdir,
   readdir,
   readFile,
@@ -26,6 +27,22 @@ export async function fileExists(path: string): Promise<boolean> {
 export function protectCachedArtifact(paths: Set<string> | undefined, path: string): void {
   paths?.add(path);
   paths?.add(cacheDigestPath(path));
+}
+
+/** Pin a cache input for an active build and promote its shared name in the
+ * LRU. Copies cover filesystem boundaries; eviction after a successful link
+ * may remove the shared name without invalidating the staged input. */
+export async function stageCachedFile(
+  source: string,
+  destination: string,
+  accessedAt: Date,
+): Promise<void> {
+  try {
+    await link(source, destination);
+  } catch {
+    await copyFile(source, destination);
+  }
+  await utimes(source, accessedAt, accessedAt).catch(() => undefined);
 }
 
 export function privateSiblingPath(destination: string, label: string): string {

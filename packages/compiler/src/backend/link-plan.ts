@@ -8,7 +8,7 @@
  */
 import type { FfiProfile } from "../ffi/ffi-manifest.js";
 import type { NativeLinkFeatures } from "./native-link-info.js";
-import type { NativeArtifactDependency } from "./native-toolchain.js";
+import type { NativeArtifactDependency } from "./native/contracts.js";
 import { needsDarwinDebugSymbols } from "./debug-symbols.js";
 import { loadRuntimePack, type RuntimePackSelection } from "./runtime-pack.js";
 import { executableLinkInputs } from "./link-plan-core.js";

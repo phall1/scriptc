@@ -1226,18 +1226,18 @@ export class LlEmitter {
     // Stream-surface programs fill the loop's stream hook (the deferred
     // next-tick emissions) and the emitter's post-registration flow kick
     // before %main — scr_stream.c links only when the line is emitted
-    // (native-toolchain.ts gates on the same predicate).
+    // (native/executable.ts gates on the same predicate).
     const usesStream = runtimeFeatures.stream;
     // Net-surface programs fill the loop's net hooks (and the netSocket
     // handle-dispatch ops for the checked-dynamic boundary); http-surface
     // programs additionally stamp the httpReq/httpRes ops — the C main's
-    // install lines, gated on the same predicates native-toolchain.ts links by.
+    // install lines, gated on the same predicates native/executable.ts links by.
     const usesNet = runtimeFeatures.net;
     const usesDgram = runtimeFeatures.dgram;
     const usesHttp2 = runtimeFeatures.http2;
     const usesHttp = runtimeFeatures.http;
     // Fetch-referencing programs register the native fetch bridge before
-    // any island entry (the engine's lazy boot consults it) — native-toolchain.ts
+    // any island entry (the engine's lazy boot consults it) — native/executable.ts
     // compiles scr_fetch.c on the same predicate.
     const usesFetch = runtimeFeatures.fetch;
     const embedsZlib = moduleEmbedsBuiltin(this.mod, "node:zlib");
@@ -1767,7 +1767,7 @@ export class LlEmitter {
       ...stamps,
       // Event-surface programs (signal/exit listeners) fill the loop's
       // nullable event hooks before %main — scr_events.c links only when
-      // this line is emitted (native-toolchain.ts gates on the same predicate).
+      // this line is emitted (native/executable.ts gates on the same predicate).
       ...(usesEvents ? [`  call void @scr_events_install()`] : []),
       ...(usesChildProcess ? [`  call void @scr_child_dyn_install()`] : []),
       ...(childStreamBoxes

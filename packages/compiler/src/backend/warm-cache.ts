@@ -6,7 +6,7 @@ import {
   type NativeCacheWarmProfile,
   type WarmNativeCachesOptions,
   type WarmNativeCachesResult,
-} from "./native-toolchain.js";
+} from "./native/cache-warm.js";
 
 /** Verify and read the installed runtime families before the first build. */
 export async function warmNativeCaches(

@@ -114,6 +114,31 @@
       },
     },
     {
+      // Native recipe owners must not depend on the public driver facade.
+      "files": ["packages/compiler/src/backend/native/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**/native-toolchain", "**/native-toolchain.*"],
+                "message": "native recipe owners must not import the facade; import the driver, identity, artifact or build owner.",
+              },
+              {
+                "group": ["**/frontend/*", "**/frontend/**"],
+                "message": "backend must not import frontend; use the IR interface.",
+              },
+              {
+                "group": ["typescript5", "typescript5/**"],
+                "message": "typescript5 is restricted to the explicit parser islands; TypeScript AST worlds must not mix.",
+              },
+            ],
+          },
+        ],
+      },
+    },
+    {
       // Call contracts and function construction must not depend on dispatch.
       "files": [
         "packages/compiler/src/frontend/lowering/call-signatures.ts",
