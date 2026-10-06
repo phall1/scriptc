@@ -14330,6 +14330,18 @@
     "<repo>/tests/corpus/class-callback-storage.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/array-sort-runs.ts": {
+   "order": [
+    "<repo>/tests/corpus/array-sort-runs.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/uint8array-sort-domains.ts": {
+   "order": [
+    "<repo>/tests/corpus/uint8array-sort-domains.ts"
+   ],
+   "diags": []
   }
  }
 }

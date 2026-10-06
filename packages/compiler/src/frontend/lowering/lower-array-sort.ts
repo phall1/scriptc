@@ -5,7 +5,6 @@ import {
   type IrExpr,
   type IrFunction,
   type IrLocal,
-  type IrParam,
   type IrStmt,
   type IrType,
   JSVAL,
@@ -13,43 +12,268 @@ import {
   arrayOf,
   funcOf,
 } from "../../ir/ir.js";
-import { numLit, varRef } from "../../ir/build.js";
+import { numLit } from "../../ir/build.js";
 
-function readArrayLength(arrT: IrType, loc: SrcLoc): IrStmt {
-  return {
-    kind: "varDecl",
-    localId: "n.0",
-    init: {
-      kind: "arrIntrinsic",
-      method: "length",
-      receiver: { kind: "varRef", localId: "a.0", type: arrT, loc },
-      args: [],
-      type: F64,
-      loc,
-    },
-    loc,
-  };
+type SortLocal = IrExpr & { kind: "varRef" };
+type Greater = (left: IrExpr, right: IrExpr) => IrExpr;
+
+/** Small IR vocabulary shared by the array and byte sort helpers. */
+class SortIr {
+  readonly locals: IrLocal[] = [];
+  constructor(readonly loc: SrcLoc) {}
+
+  local(name: string, type: IrType = F64): SortLocal {
+    const id = name + ".0";
+    this.locals.push({ id, name, type, mutable: true });
+    return { kind: "varRef", localId: id, type, loc: this.loc };
+  }
+  num(value: number): IrExpr {
+    return numLit(value, this.loc);
+  }
+  bind(local: SortLocal, init: IrExpr): IrStmt {
+    return { kind: "varDecl", localId: local.localId, init, loc: this.loc };
+  }
+  assign(local: SortLocal, value: IrExpr): IrStmt {
+    return { kind: "assign", localId: local.localId, value, loc: this.loc };
+  }
+  add(left: IrExpr, right: IrExpr): IrExpr {
+    return { kind: "bin", op: "+", left, right, type: F64, loc: this.loc };
+  }
+  sub(left: IrExpr, right: IrExpr): IrExpr {
+    return { kind: "bin", op: "-", left, right, type: F64, loc: this.loc };
+  }
+  lt(left: IrExpr, right: IrExpr): IrExpr {
+    return { kind: "bin", op: "<", left, right, type: BOOL, loc: this.loc };
+  }
+  eq(left: IrExpr, right: IrExpr): IrExpr {
+    return { kind: "bin", op: "===", left, right, type: BOOL, loc: this.loc };
+  }
+  not(operand: IrExpr): IrExpr {
+    return { kind: "unary", op: "!", operand, type: BOOL, loc: this.loc };
+  }
+  choose(cond: IrExpr, then: IrExpr, else_: IrExpr): IrExpr {
+    return { kind: "ternary", cond, then, else_, type: then.type, loc: this.loc };
+  }
+  branch(cond: IrExpr, then: IrStmt[], else_: IrStmt[] | null = null): IrStmt {
+    return { kind: "if", cond, then, else_, loc: this.loc };
+  }
+  while(cond: IrExpr, body: IrStmt[]): IrStmt {
+    return { kind: "while", cond, body, loc: this.loc };
+  }
+  step(local: SortLocal, amount = 1): IrStmt {
+    return this.assign(local, this.add(local, this.num(amount)));
+  }
+  loop(index: SortLocal, start: IrExpr, end: IrExpr, body: IrStmt[]): IrStmt {
+    return {
+      kind: "for",
+      init: this.bind(index, start),
+      cond: this.lt(index, end),
+      update: this.step(index),
+      body,
+      loc: this.loc,
+    };
+  }
+  length(receiver: IrExpr): IrExpr {
+    return receiver.type.kind === "bytes"
+      ? { kind: "bytesIntrinsic", method: "length", receiver, args: [], type: F64, loc: this.loc }
+      : { kind: "arrIntrinsic", method: "length", receiver, args: [], type: F64, loc: this.loc };
+  }
+  at(arr: IrExpr, index: IrExpr): IrExpr {
+    return arr.type.kind === "bytes"
+      ? {
+          kind: "bytesIntrinsic",
+          method: "get",
+          receiver: arr,
+          args: [index],
+          type: F64,
+          loc: this.loc,
+        }
+      : {
+          kind: "arrayGet",
+          arr,
+          index,
+          type: arr.type.kind === "array" ? arr.type.elem : F64,
+          loc: this.loc,
+        };
+  }
+  set(arr: IrExpr, index: IrExpr, value: IrExpr): IrStmt {
+    return {
+      kind: arr.type.kind === "bytes" ? "bytesSet" : "arraySet",
+      arr,
+      index,
+      value,
+      loc: this.loc,
+    };
+  }
+  allocate(type: IrType, length: IrExpr): IrExpr {
+    return type.kind === "bytes"
+      ? { kind: "bytesNew", source: length, type, loc: this.loc }
+      : { kind: "arrayLit", elems: [], type, loc: this.loc };
+  }
 }
 
-/** A stable bottom-up merge sort built from existing IR nodes.
- *
- * The first implementation used insertion sort because it was compact and
- * made the stable tie rule obvious. Its worst case was quadratic, though,
- * which made an ordinary descending input unusable. This implementation
- * snapshots the receiver, merges runs between two buffers, and copies the
- * final snapshot back into the receiver. The boundary check skips a merge
- * when adjacent runs are already ordered, so naturally ordered inputs use
- * only a linear number of comparator calls; the buffer copies still do
- * O(n log n) data movement. Arbitrary inputs have an O(n log n) bound.
- *
- * The snapshot is also important for sort mutation behavior: comparator
- * calls see the values captured before sorting starts, while the final copy
- * preserves Array.sort receiver identity. toSorted starts by copying the
- * receiver and therefore leaves that receiver untouched. The merge schedule
- * intentionally differs from V8 TimSort, so exact comparator call order and
- * count parity is not claimed; stable results, comparator exceptions, and
- * mutations of referenced values still follow the normal IR call/ownership
- * rules. */
+/** Stable natural merge sort over an owned snapshot. Strict descending runs
+ * can be reversed without reversing ties. Short runs use bounded binary
+ * insertion; merge passes then consume pairs of complete runs. The boundary
+ * table compacts in place, and a single run needs no scratch buffer at all.
+ * Comparator scheduling is intentionally unspecified, as for the previous
+ * bottom-up sorter. Every callback still uses ordinary IR exception/ownership
+ * handling; the caller's array is only written after sorting succeeds. */
+function stableSort(b: SortIr, src: SortLocal, n: IrExpr, greater: Greater): IrStmt[] {
+  const elem = src.type.kind === "array" ? src.type.elem : F64;
+  const dst = b.local("dst", src.type);
+  const tmp = b.local("tmp", src.type);
+  const runs = b.local("runs", arrayOf(F64));
+  const runCount = b.local("runCount");
+  const start = b.local("start");
+  const end = b.local("end");
+  const descending = b.local("descending", BOOL);
+  const left = b.local("left");
+  const right = b.local("right");
+  const pivot = b.local("pivot", elem);
+  const low = b.local("low");
+  const high = b.local("high");
+  const center = b.local("center");
+  const limit = b.local("limit");
+  const i = b.local("i");
+  const j = b.local("j");
+  const k = b.local("k");
+  const mid = b.local("mid");
+  const run = b.local("run");
+  const nextRun = b.local("nextRun");
+  const vLeft = b.local("vLeft", elem);
+  const vRight = b.local("vRight", elem);
+  const boundaryLeft = b.local("boundaryLeft", elem);
+  const boundaryRight = b.local("boundaryRight", elem);
+  const zero = b.num(0),
+    one = b.num(1),
+    two = b.num(2);
+  const at = (index: IrExpr): IrExpr => b.at(src, index);
+  const copy = (index: SortLocal, stop: IrExpr): IrStmt =>
+    b.while(b.lt(index, stop), [b.set(dst, k, at(index)), b.step(index), b.step(k)]);
+  const merge: IrStmt[] = [
+    b.bind(vLeft, at(i)),
+    b.bind(vRight, at(j)),
+    b.while(
+      {
+        kind: "logical",
+        op: "&&",
+        left: b.lt(i, mid),
+        right: b.lt(j, right),
+        type: BOOL,
+        loc: b.loc,
+      },
+      [
+        b.branch(
+          greater(vLeft, vRight),
+          [b.set(dst, k, vRight), b.step(j), b.branch(b.lt(j, right), [b.assign(vRight, at(j))])],
+          [b.set(dst, k, vLeft), b.step(i), b.branch(b.lt(i, mid), [b.assign(vLeft, at(i))])],
+        ),
+        b.step(k),
+      ],
+    ),
+    copy(i, mid),
+    copy(j, right),
+  ];
+  return [
+    b.bind(runs, { kind: "arrayLit", elems: [zero], type: runs.type, loc: b.loc }),
+    b.bind(runCount, one),
+    b.bind(start, zero),
+    b.while(b.lt(start, n), [
+      b.bind(end, b.add(start, one)),
+      b.branch(b.lt(end, n), [
+        b.bind(descending, greater(at(start), at(end))),
+        b.step(end),
+        b.while(b.lt(end, n), [
+          b.branch(
+            b.choose(
+              descending,
+              greater(at(b.sub(end, one)), at(end)),
+              b.not(greater(at(b.sub(end, one)), at(end))),
+            ),
+            [b.step(end)],
+            [{ kind: "break", loc: b.loc }],
+          ),
+        ]),
+        b.branch(descending, [
+          b.bind(left, start),
+          b.bind(right, b.sub(end, one)),
+          b.while(b.lt(left, right), [
+            b.bind(vLeft, at(left)),
+            b.bind(vRight, at(right)),
+            b.set(src, left, vRight),
+            b.set(src, right, vLeft),
+            b.step(left),
+            b.step(right, -1),
+          ]),
+        ]),
+      ]),
+      // Bound insertion movement while avoiding tiny merge runs.
+      b.bind(limit, b.choose(b.lt(b.add(start, b.num(16)), n), b.add(start, b.num(16)), n)),
+      b.while(b.lt(end, limit), [
+        b.bind(pivot, at(end)),
+        b.bind(low, start),
+        b.bind(high, end),
+        b.while(b.lt(low, high), [
+          b.bind(center, {
+            kind: "libCall",
+            fn: "math.floor",
+            args: [
+              { kind: "bin", op: "/", left: b.add(low, high), right: two, type: F64, loc: b.loc },
+            ],
+            type: F64,
+            loc: b.loc,
+          }),
+          // Insert after equal values to preserve their original order.
+          b.branch(
+            greater(at(center), pivot),
+            [b.assign(high, center)],
+            [b.assign(low, b.add(center, one))],
+          ),
+        ]),
+        b.bind(i, end),
+        b.while(b.lt(low, i), [b.set(src, i, at(b.sub(i, one))), b.step(i, -1)]),
+        b.set(src, low, pivot),
+        b.step(end),
+      ]),
+      b.set(runs, runCount, end),
+      b.step(runCount),
+      b.assign(start, end),
+    ]),
+    b.branch(b.lt(two, runCount), [
+      b.bind(dst, b.allocate(src.type, n)),
+      b.while(b.lt(two, runCount), [
+        b.bind(run, zero),
+        b.bind(nextRun, one),
+        b.while(b.lt(b.add(run, one), runCount), [
+          b.bind(start, b.at(runs, run)),
+          b.bind(mid, b.at(runs, b.add(run, one))),
+          b.bind(right, b.choose(b.lt(b.add(run, two), runCount), b.at(runs, b.add(run, two)), n)),
+          b.bind(i, start),
+          b.bind(j, mid),
+          b.bind(k, start),
+          b.branch(
+            b.lt(mid, right),
+            [
+              b.bind(boundaryLeft, at(b.sub(mid, one))),
+              b.bind(boundaryRight, at(mid)),
+              b.branch(greater(boundaryLeft, boundaryRight), merge, [copy(i, right)]),
+            ],
+            [copy(i, right)],
+          ),
+          b.set(runs, nextRun, right),
+          b.step(nextRun),
+          b.step(run, 2),
+        ]),
+        b.assign(runCount, nextRun),
+        b.bind(tmp, src),
+        b.assign(src, dst),
+        b.assign(dst, tmp),
+      ]),
+    ]),
+  ];
+}
+
 export function buildArraySortFn(
   name: string,
   elem: IrType,
@@ -58,89 +282,17 @@ export function buildArraySortFn(
   undefinedTag: number | null,
   loc: SrcLoc,
 ): IrFunction {
-  const arrT = arrayOf(elem);
-  const fnT = funcOf([elem, elem].slice(0, arity), F64);
-
-  const a = varRef("a.0", arrT, loc);
-  const snapshot = varRef("snapshot.0", arrT, loc);
-  const src = varRef("src.0", arrT, loc);
-  const dst = varRef("dst.0", arrT, loc);
-  const n = varRef("n.0", F64, loc);
-  const valueCount = varRef("valueCount.0", F64, loc);
-  const undefinedCount = varRef("undefinedCount.0", F64, loc);
-  const width = varRef("width.0", F64, loc);
-  const start = varRef("start.0", F64, loc);
-  const mid = varRef("mid.0", F64, loc);
-  const right = varRef("right.0", F64, loc);
-  const left = varRef("left.0", F64, loc);
-  const r = varRef("r.0", F64, loc);
-  const k = varRef("k.0", F64, loc);
-  const i = varRef("i.0", F64, loc);
-  const j = varRef("j.0", F64, loc);
-  const state = varRef("state.0", F64, loc);
-  const add = (left: IrExpr, right: IrExpr): IrExpr => ({
-    kind: "bin",
-    op: "+",
-    left,
-    right,
-    type: F64,
-    loc,
-  });
-  const sub = (left: IrExpr, right: IrExpr): IrExpr => ({
-    kind: "bin",
-    op: "-",
-    left,
-    right,
-    type: F64,
-    loc,
-  });
-  const mul = (left: IrExpr, right: IrExpr): IrExpr => ({
-    kind: "bin",
-    op: "*",
-    left,
-    right,
-    type: F64,
-    loc,
-  });
-  const lt = (left: IrExpr, right: IrExpr): IrExpr => ({
-    kind: "bin",
-    op: "<",
-    left,
-    right,
-    type: BOOL,
-    loc,
-  });
-  const eq = (left: IrExpr, right: IrExpr): IrExpr => ({
-    kind: "bin",
-    op: "===",
-    left,
-    right,
-    type: BOOL,
-    loc,
-  });
-  const not = (value: IrExpr): IrExpr => ({
-    kind: "unary",
-    op: "!",
-    operand: value,
-    type: BOOL,
-    loc,
-  });
-  const at = (index: IrExpr): IrExpr => ({ kind: "arrayGet", arr: src, index, type: elem, loc });
-  const snapshotAt = (index: IrExpr): IrExpr => ({
-    kind: "arrayGet",
-    arr: snapshot,
-    index,
-    type: elem,
-    loc,
-  });
-  const stateAt = (index: IrExpr): IrExpr => ({
-    kind: "arrayState",
-    arr: snapshot,
-    index,
-    type: F64,
-    loc,
-  });
-  const stateIs = (value: number): IrExpr => eq(state, numLit(value, loc));
+  const b = new SortIr(loc);
+  const arrT = arrayOf(elem),
+    fnT = funcOf([elem, elem].slice(0, arity), F64);
+  const a = b.local("a", arrT),
+    f = b.local("f", fnT);
+  const src = b.local("src", arrT);
+  const n = b.local("n"),
+    valueCount = b.local("valueCount"),
+    undefinedCount = b.local("undefinedCount");
+  const index = b.local("index"),
+    state = b.local("state");
   const isUndefined = (value: IrExpr): IrExpr | null => {
     if (elem.kind === "union" && undefinedTag !== null) {
       return {
@@ -164,320 +316,98 @@ export function buildArraySortFn(
     }
     return null;
   };
-  const shouldTakeRight = (leftValue: IrExpr, rightValue: IrExpr): IrExpr => {
-    const compareGreater: IrExpr = {
+  const greater: Greater = (left, right) => {
+    const compare: IrExpr = {
       kind: "bin",
       op: ">",
-      left: {
-        kind: "callValue",
-        callee: varRef("f.0", fnT, loc),
-        args: [leftValue, rightValue].slice(0, arity),
-        type: F64,
-        loc,
-      },
-      right: numLit(0, loc),
+      left: { kind: "callValue", callee: f, args: [left, right].slice(0, arity), type: F64, loc },
+      right: b.num(0),
       type: BOOL,
       loc,
     };
-    const leftUndefined = isUndefined(leftValue);
-    const rightUndefined = isUndefined(rightValue);
+    const leftUndefined = isUndefined(left),
+      rightUndefined = isUndefined(right);
     return leftUndefined !== null && rightUndefined !== null
-      ? {
-          kind: "ternary",
-          cond: leftUndefined,
-          then: not(rightUndefined),
-          else_: {
-            kind: "ternary",
-            cond: rightUndefined,
-            then: { kind: "boolLit", value: false, type: BOOL, loc },
-            else_: compareGreater,
-            type: BOOL,
-            loc,
-          },
-          type: BOOL,
-          loc,
-        }
-      : compareGreater;
+      ? b.choose(
+          leftUndefined,
+          b.not(rightUndefined),
+          b.choose(rightUndefined, { kind: "boolLit", value: false, type: BOOL, loc }, compare),
+        )
+      : compare;
   };
-  const copyRange: IrStmt = {
-    kind: "while",
-    cond: lt(k, right),
-    body: [
-      { kind: "varDecl", localId: "v.0", init: at(k), loc },
-      { kind: "arraySet", arr: dst, index: k, value: varRef("v.0", elem, loc), loc },
-      { kind: "assign", localId: "k.0", value: add(k, numLit(1, loc)), loc },
-    ],
-    loc,
-  };
-  const mergeBody: IrStmt[] = [
-    {
-      kind: "while",
-      cond: {
-        kind: "logical",
-        op: "&&",
-        left: lt(left, mid),
-        right: lt(r, right),
-        type: BOOL,
-        loc,
-      },
-      body: [
-        { kind: "varDecl", localId: "vL.0", init: at(left), loc },
-        { kind: "varDecl", localId: "vR.0", init: at(r), loc },
-        {
-          kind: "if",
-          cond: shouldTakeRight(varRef("vL.0", elem, loc), varRef("vR.0", elem, loc)),
-          then: [
-            { kind: "arraySet", arr: dst, index: k, value: varRef("vR.0", elem, loc), loc },
-            { kind: "assign", localId: "r.0", value: add(r, numLit(1, loc)), loc },
-          ],
-          else_: [
-            { kind: "arraySet", arr: dst, index: k, value: varRef("vL.0", elem, loc), loc },
-            { kind: "assign", localId: "left.0", value: add(left, numLit(1, loc)), loc },
-          ],
-          loc,
-        },
-        { kind: "assign", localId: "k.0", value: add(k, numLit(1, loc)), loc },
-      ],
-      loc,
-    },
-    {
-      kind: "while",
-      cond: lt(left, mid),
-      body: [
-        { kind: "varDecl", localId: "v.0", init: at(left), loc },
-        { kind: "arraySet", arr: dst, index: k, value: varRef("v.0", elem, loc), loc },
-        { kind: "assign", localId: "left.0", value: add(left, numLit(1, loc)), loc },
-        { kind: "assign", localId: "k.0", value: add(k, numLit(1, loc)), loc },
-      ],
-      loc,
-    },
-    {
-      kind: "while",
-      cond: lt(r, right),
-      body: [
-        { kind: "varDecl", localId: "v.0", init: at(r), loc },
-        { kind: "arraySet", arr: dst, index: k, value: varRef("v.0", elem, loc), loc },
-        { kind: "assign", localId: "r.0", value: add(r, numLit(1, loc)), loc },
-        { kind: "assign", localId: "k.0", value: add(k, numLit(1, loc)), loc },
-      ],
-      loc,
-    },
-  ];
-  const boundaryLeft = varRef("boundaryL.0", elem, loc);
-  const boundaryRight = varRef("boundaryR.0", elem, loc);
-  const mergeOrCopy: IrStmt = {
-    kind: "if",
-    cond: lt(mid, right),
-    then: [
-      { kind: "varDecl", localId: "boundaryL.0", init: at(sub(mid, numLit(1, loc))), loc },
-      { kind: "varDecl", localId: "boundaryR.0", init: at(mid), loc },
-      {
-        kind: "if",
-        cond: shouldTakeRight(boundaryLeft, boundaryRight),
-        then: mergeBody,
-        else_: [copyRange],
-        loc,
-      },
-    ],
-    else_: [copyRange],
-    loc,
-  };
-  const mergePass: IrStmt = {
-    kind: "for",
-    init: { kind: "varDecl", localId: "start.0", init: numLit(0, loc), loc },
-    cond: lt(start, valueCount),
-    update: { kind: "assign", localId: "start.0", value: add(start, add(width, width)), loc },
-    body: [
-      {
-        kind: "varDecl",
-        localId: "mid.0",
-        init: {
-          kind: "ternary",
-          cond: lt(add(start, width), valueCount),
-          then: add(start, width),
-          else_: valueCount,
-          type: F64,
-          loc,
-        },
-        loc,
-      },
-      {
-        kind: "varDecl",
-        localId: "right.0",
-        init: {
-          kind: "ternary",
-          cond: lt(add(add(start, width), width), valueCount),
-          then: add(add(start, width), width),
-          else_: valueCount,
-          type: F64,
-          loc,
-        },
-        loc,
-      },
-      { kind: "varDecl", localId: "left.0", init: start, loc },
-      { kind: "varDecl", localId: "r.0", init: mid, loc },
-      { kind: "varDecl", localId: "k.0", init: start, loc },
-      mergeOrCopy,
-    ],
-    loc,
-  };
-  const collect: IrStmt = {
-    kind: "for",
-    init: { kind: "varDecl", localId: "i.0", init: numLit(0, loc), loc },
-    cond: lt(i, n),
-    update: { kind: "assign", localId: "i.0", value: add(i, numLit(1, loc)), loc },
-    body: [
-      { kind: "varDecl", localId: "state.0", init: stateAt(i), loc },
-      {
-        kind: "if",
-        cond: stateIs(1),
-        then: [
-          { kind: "varDecl", localId: "v.0", init: snapshotAt(i), loc },
-          { kind: "arraySet", arr: src, index: valueCount, value: varRef("v.0", elem, loc), loc },
-          { kind: "assign", localId: "valueCount.0", value: add(valueCount, numLit(1, loc)), loc },
-        ],
-        else_: [
-          {
-            kind: "if",
-            cond: stateIs(2),
-            then: [
-              {
-                kind: "assign",
-                localId: "undefinedCount.0",
-                value: add(undefinedCount, numLit(1, loc)),
-                loc,
-              },
-            ],
-            else_: null,
-            loc,
-          },
-        ],
-        loc,
-      },
-    ],
-    loc,
-  };
-  const writeValues: IrStmt = {
-    kind: "for",
-    init: { kind: "varDecl", localId: "i.0", init: numLit(0, loc), loc },
-    cond: lt(i, valueCount),
-    update: { kind: "assign", localId: "i.0", value: add(i, numLit(1, loc)), loc },
-    body: [
-      { kind: "varDecl", localId: "v.0", init: at(i), loc },
-      { kind: "arraySet", arr: a, index: i, value: varRef("v.0", elem, loc), loc },
-    ],
-    loc,
-  };
-  const writeUndefined: IrStmt = {
-    kind: "for",
-    init: { kind: "varDecl", localId: "j.0", init: valueCount, loc },
-    cond: lt(j, copyFirst ? n : add(valueCount, undefinedCount)),
-    update: { kind: "assign", localId: "j.0", value: add(j, numLit(1, loc)), loc },
-    body: [{ kind: "arraySetUndefined", arr: a, index: j, loc }],
-    loc,
-  };
-  const deleteRemaining: IrStmt = {
-    kind: "for",
-    init: { kind: "varDecl", localId: "j.0", init: add(valueCount, undefinedCount), loc },
-    cond: lt(j, n),
-    update: { kind: "assign", localId: "j.0", value: add(j, numLit(1, loc)), loc },
-    body: [{ kind: "arrayDelete", arr: a, index: j, loc }],
-    loc,
-  };
+  const result = copyFirst ? src : a;
   const body: IrStmt[] = [
+    b.bind(n, b.length(a)),
+    b.bind(src, { kind: "arrIntrinsic", method: "slice", receiver: a, args: [], type: arrT, loc }),
+    b.bind(valueCount, b.num(0)),
+    b.bind(undefinedCount, b.num(0)),
+    // Compact the owned snapshot before callbacks. Dense values stay in
+    // place; only values following holes or storage-level undefined move.
+    b.loop(index, b.num(0), n, [
+      b.bind(state, { kind: "arrayState", arr: src, index, type: F64, loc }),
+      b.branch(
+        b.eq(state, b.num(1)),
+        [
+          b.branch(b.lt(valueCount, index), [b.set(src, valueCount, b.at(src, index))]),
+          b.step(valueCount),
+        ],
+        [b.branch(b.eq(state, b.num(2)), [b.step(undefinedCount)])],
+      ),
+    ]),
+    // Sort only the compacted prefix. The tail is overwritten with undefined
+    // for toSorted, or released with this private snapshot for sort.
+    ...stableSort(b, src, valueCount, greater),
     ...(copyFirst
-      ? [
-          {
-            kind: "assign" as const,
-            localId: "a.0",
-            value: {
-              kind: "arrIntrinsic" as const,
-              method: "slice" as const,
-              receiver: varRef("a.0", arrT, loc),
-              args: [],
-              type: arrT,
-              loc,
-            },
-            loc,
-          },
-        ]
-      : []),
-    readArrayLength(arrT, loc),
-    {
-      kind: "varDecl",
-      localId: "snapshot.0",
-      init: { kind: "arrIntrinsic", method: "slice", receiver: a, args: [], type: arrT, loc },
-      loc,
-    },
-    {
-      kind: "varDecl",
-      localId: "src.0",
-      init: { kind: "arrayLit", elems: [], type: arrT, loc },
-      loc,
-    },
-    { kind: "varDecl", localId: "valueCount.0", init: numLit(0, loc), loc },
-    { kind: "varDecl", localId: "undefinedCount.0", init: numLit(0, loc), loc },
-    collect,
-    {
-      kind: "varDecl",
-      localId: "dst.0",
-      init: { kind: "arrayLit", elems: [], type: arrT, loc },
-      loc,
-    },
-    { kind: "varDecl", localId: "width.0", init: numLit(1, loc), loc },
-    {
-      kind: "while",
-      cond: lt(width, valueCount),
-      body: [
-        mergePass,
-        { kind: "varDecl", localId: "tmp.0", init: src, loc },
-        { kind: "assign", localId: "src.0", value: dst, loc },
-        { kind: "assign", localId: "dst.0", value: varRef("tmp.0", arrT, loc), loc },
-        { kind: "assign", localId: "width.0", value: mul(width, numLit(2, loc)), loc },
-      ],
-      loc,
-    },
-    writeValues,
-    writeUndefined,
-    ...(copyFirst ? [] : [deleteRemaining]),
-    { kind: "return", value: a, loc },
+      ? []
+      : [b.loop(index, b.num(0), valueCount, [b.set(a, index, b.at(src, index))])]),
+    b.loop(index, valueCount, copyFirst ? n : b.add(valueCount, undefinedCount), [
+      { kind: "arraySetUndefined", arr: result, index, loc },
+    ]),
+    ...(copyFirst
+      ? []
+      : [
+          b.loop(index, b.add(valueCount, undefinedCount), n, [
+            { kind: "arrayDelete", arr: a, index, loc },
+          ]),
+        ]),
+    { kind: "return", value: result, loc },
   ];
   return {
     name,
     params: [
-      { localId: "a.0", name: "a", type: arrT },
-      { localId: "f.0", name: "f", type: fnT },
+      { localId: a.localId, name: "a", type: arrT },
+      { localId: f.localId, name: "f", type: fnT },
     ],
     returnType: arrT,
-    locals: [
-      { id: "a.0", name: "a", type: arrT, mutable: true },
-      { id: "f.0", name: "f", type: fnT, mutable: true },
-      { id: "n.0", name: "n", type: F64, mutable: false },
-      { id: "snapshot.0", name: "snapshot", type: arrT, mutable: false },
-      { id: "src.0", name: "src", type: arrT, mutable: true },
-      { id: "dst.0", name: "dst", type: arrT, mutable: true },
-      { id: "valueCount.0", name: "valueCount", type: F64, mutable: true },
-      { id: "undefinedCount.0", name: "undefinedCount", type: F64, mutable: true },
-      { id: "state.0", name: "state", type: F64, mutable: false },
-      { id: "width.0", name: "width", type: F64, mutable: true },
-      { id: "start.0", name: "start", type: F64, mutable: true },
-      { id: "mid.0", name: "mid", type: F64, mutable: true },
-      { id: "right.0", name: "right", type: F64, mutable: true },
-      { id: "left.0", name: "left", type: F64, mutable: true },
-      { id: "r.0", name: "r", type: F64, mutable: true },
-      { id: "k.0", name: "k", type: F64, mutable: true },
-      { id: "i.0", name: "i", type: F64, mutable: true },
-      { id: "j.0", name: "j", type: F64, mutable: true },
-      { id: "tmp.0", name: "tmp", type: arrT, mutable: true },
-      { id: "v.0", name: "v", type: elem, mutable: false },
-      { id: "vL.0", name: "vL", type: elem, mutable: false },
-      { id: "vR.0", name: "vR", type: elem, mutable: false },
-      { id: "boundaryL.0", name: "boundaryL", type: elem, mutable: false },
-      { id: "boundaryR.0", name: "boundaryR", type: elem, mutable: false },
-    ],
+    locals: b.locals,
     body,
     loc,
   };
+}
+
+/** A byte's complete value domain is small enough for stable default ordering
+ * without comparisons. Counts use numbers so large inputs cannot wrap. */
+function countBytes(b: SortIr, a: SortLocal, src: SortLocal, n: SortLocal): IrStmt[] {
+  const counts = b.local("counts", arrayOf(F64));
+  const value = b.local("value"),
+    index = b.local("index"),
+    end = b.local("end");
+  const zero = b.num(0),
+    one = b.num(1);
+  return [
+    b.bind(src, b.allocate(BYTES_U8, n)),
+    b.bind(counts, b.allocate(counts.type, b.num(256))),
+    b.loop(value, zero, b.num(256), [b.set(counts, value, zero)]),
+    b.loop(index, zero, n, [
+      b.bind(value, b.at(a, index)),
+      b.set(counts, value, b.add(b.at(counts, value), one)),
+    ]),
+    b.bind(index, zero),
+    b.loop(value, zero, b.num(256), [
+      b.bind(end, b.add(index, b.at(counts, value))),
+      b.while(b.lt(index, end), [b.set(src, index, value), b.step(index)]),
+    ]),
+  ];
 }
 
 export function buildBytesSortFn(
@@ -486,281 +416,47 @@ export function buildBytesSortFn(
   hasComparator: boolean,
   loc: SrcLoc,
 ): IrFunction {
-  const bytesT = BYTES_U8;
+  const b = new SortIr(loc);
+  const a = b.local("a", BYTES_U8),
+    src = b.local("src", BYTES_U8),
+    n = b.local("n");
   const fnT = funcOf([F64, F64].slice(0, arity), F64);
-  const a = varRef("a.0", bytesT, loc);
-  const src = varRef("src.0", bytesT, loc);
-  const dst = varRef("dst.0", bytesT, loc);
-  const n = varRef("n.0", F64, loc);
-  const width = varRef("width.0", F64, loc);
-  const start = varRef("start.0", F64, loc);
-  const mid = varRef("mid.0", F64, loc);
-  const right = varRef("right.0", F64, loc);
-  const left = varRef("left.0", F64, loc);
-  const r = varRef("r.0", F64, loc);
-  const k = varRef("k.0", F64, loc);
-  const add = (left: IrExpr, right: IrExpr): IrExpr => ({
-    kind: "bin",
-    op: "+",
-    left,
-    right,
-    type: F64,
-    loc,
-  });
-  const sub = (left: IrExpr, right: IrExpr): IrExpr => ({
-    kind: "bin",
-    op: "-",
-    left,
-    right,
-    type: F64,
-    loc,
-  });
-  const mul = (left: IrExpr, right: IrExpr): IrExpr => ({
-    kind: "bin",
-    op: "*",
-    left,
-    right,
-    type: F64,
-    loc,
-  });
-  const lt = (left: IrExpr, right: IrExpr): IrExpr => ({
-    kind: "bin",
-    op: "<",
-    left,
-    right,
-    type: BOOL,
-    loc,
-  });
-  const at = (receiver: IrExpr, index: IrExpr): IrExpr => ({
-    kind: "bytesIntrinsic",
-    method: "get",
-    receiver,
-    args: [index],
-    type: F64,
-    loc,
-  });
-  const shouldTakeRight = (leftValue: IrExpr, rightValue: IrExpr): IrExpr => ({
-    kind: "bin",
-    op: ">",
-    left: hasComparator
-      ? {
-          kind: "callValue",
-          callee: varRef("f.0", fnT, loc),
-          args: [leftValue, rightValue].slice(0, arity),
-          type: F64,
-          loc,
-        }
-      : {
-          kind: "bin",
-          op: "-",
-          left: leftValue,
-          right: rightValue,
-          type: F64,
-          loc,
-        },
-    right: numLit(0, loc),
-    type: BOOL,
-    loc,
-  });
-  const copyRange: IrStmt = {
-    kind: "while",
-    cond: lt(k, right),
-    body: [
-      { kind: "varDecl", localId: "v.0", init: at(src, k), loc },
-      { kind: "bytesSet", arr: dst, index: k, value: varRef("v.0", F64, loc), loc },
-      { kind: "assign", localId: "k.0", value: add(k, numLit(1, loc)), loc },
-    ],
-    loc,
-  };
-  const mergeBody: IrStmt[] = [
-    {
-      kind: "while",
-      cond: {
-        kind: "logical",
-        op: "&&",
-        left: lt(left, mid),
-        right: lt(r, right),
+  const f = hasComparator ? b.local("f", fnT) : null;
+  const body: IrStmt[] = [b.bind(n, b.length(a))];
+  if (f !== null) {
+    body.push(
+      b.bind(src, {
+        kind: "bytesIntrinsic",
+        method: "slice",
+        receiver: a,
+        args: [],
+        type: BYTES_U8,
+        loc,
+      }),
+    );
+    body.push(
+      ...stableSort(b, src, n, (left, right) => ({
+        kind: "bin",
+        op: ">",
+        left: { kind: "callValue", callee: f, args: [left, right].slice(0, arity), type: F64, loc },
+        right: b.num(0),
         type: BOOL,
         loc,
-      },
-      body: [
-        { kind: "varDecl", localId: "vL.0", init: at(src, left), loc },
-        { kind: "varDecl", localId: "vR.0", init: at(src, r), loc },
-        {
-          kind: "if",
-          cond: shouldTakeRight(varRef("vL.0", F64, loc), varRef("vR.0", F64, loc)),
-          then: [
-            { kind: "bytesSet", arr: dst, index: k, value: varRef("vR.0", F64, loc), loc },
-            { kind: "assign", localId: "r.0", value: add(r, numLit(1, loc)), loc },
-          ],
-          else_: [
-            { kind: "bytesSet", arr: dst, index: k, value: varRef("vL.0", F64, loc), loc },
-            { kind: "assign", localId: "left.0", value: add(left, numLit(1, loc)), loc },
-          ],
-          loc,
-        },
-        { kind: "assign", localId: "k.0", value: add(k, numLit(1, loc)), loc },
-      ],
-      loc,
-    },
-    {
-      kind: "while",
-      cond: lt(left, mid),
-      body: [
-        { kind: "varDecl", localId: "v.0", init: at(src, left), loc },
-        { kind: "bytesSet", arr: dst, index: k, value: varRef("v.0", F64, loc), loc },
-        { kind: "assign", localId: "left.0", value: add(left, numLit(1, loc)), loc },
-        { kind: "assign", localId: "k.0", value: add(k, numLit(1, loc)), loc },
-      ],
-      loc,
-    },
-    {
-      kind: "while",
-      cond: lt(r, right),
-      body: [
-        { kind: "varDecl", localId: "v.0", init: at(src, r), loc },
-        { kind: "bytesSet", arr: dst, index: k, value: varRef("v.0", F64, loc), loc },
-        { kind: "assign", localId: "r.0", value: add(r, numLit(1, loc)), loc },
-        { kind: "assign", localId: "k.0", value: add(k, numLit(1, loc)), loc },
-      ],
-      loc,
-    },
-  ];
-  const mergeOrCopy: IrStmt = {
-    kind: "if",
-    cond: lt(mid, right),
-    then: [
-      { kind: "varDecl", localId: "boundaryL.0", init: at(src, sub(mid, numLit(1, loc))), loc },
-      { kind: "varDecl", localId: "boundaryR.0", init: at(src, mid), loc },
-      {
-        kind: "if",
-        cond: shouldTakeRight(varRef("boundaryL.0", F64, loc), varRef("boundaryR.0", F64, loc)),
-        then: mergeBody,
-        else_: [copyRange],
-        loc,
-      },
+      })),
+    );
+  } else {
+    body.push(...countBytes(b, a, src, n));
+  }
+  body.push({ kind: "return", value: src, loc });
+  return {
+    name,
+    params: [
+      { localId: a.localId, name: "a", type: BYTES_U8 },
+      ...(f === null ? [] : [{ localId: f.localId, name: "f", type: fnT }]),
     ],
-    else_: [copyRange],
+    returnType: BYTES_U8,
+    locals: b.locals,
+    body,
     loc,
   };
-  const mergePass: IrStmt = {
-    kind: "for",
-    init: { kind: "varDecl", localId: "start.0", init: numLit(0, loc), loc },
-    cond: lt(start, n),
-    update: { kind: "assign", localId: "start.0", value: add(start, add(width, width)), loc },
-    body: [
-      {
-        kind: "varDecl",
-        localId: "mid.0",
-        init: {
-          kind: "ternary",
-          cond: lt(add(start, width), n),
-          then: add(start, width),
-          else_: n,
-          type: F64,
-          loc,
-        },
-        loc,
-      },
-      {
-        kind: "varDecl",
-        localId: "right.0",
-        init: {
-          kind: "ternary",
-          cond: lt(add(add(start, width), width), n),
-          then: add(add(start, width), width),
-          else_: n,
-          type: F64,
-          loc,
-        },
-        loc,
-      },
-      { kind: "varDecl", localId: "left.0", init: start, loc },
-      { kind: "varDecl", localId: "r.0", init: mid, loc },
-      { kind: "varDecl", localId: "k.0", init: start, loc },
-      mergeOrCopy,
-    ],
-    loc,
-  };
-  const params: IrParam[] = [
-    { localId: "a.0", name: "a", type: bytesT },
-    ...(hasComparator ? [{ localId: "f.0", name: "f", type: fnT }] : []),
-  ];
-  const locals: IrLocal[] = [
-    { id: "a.0", name: "a", type: bytesT, mutable: true },
-    ...(hasComparator ? [{ id: "f.0", name: "f", type: fnT, mutable: true }] : []),
-    { id: "n.0", name: "n", type: F64, mutable: false },
-    { id: "src.0", name: "src", type: bytesT, mutable: true },
-    { id: "dst.0", name: "dst", type: bytesT, mutable: true },
-    { id: "width.0", name: "width", type: F64, mutable: true },
-    { id: "start.0", name: "start", type: F64, mutable: true },
-    { id: "mid.0", name: "mid", type: F64, mutable: true },
-    { id: "right.0", name: "right", type: F64, mutable: true },
-    { id: "left.0", name: "left", type: F64, mutable: true },
-    { id: "r.0", name: "r", type: F64, mutable: true },
-    { id: "k.0", name: "k", type: F64, mutable: true },
-    { id: "i.0", name: "i", type: F64, mutable: true },
-    { id: "tmp.0", name: "tmp", type: bytesT, mutable: true },
-    { id: "v.0", name: "v", type: F64, mutable: false },
-    { id: "vL.0", name: "vL", type: F64, mutable: false },
-    { id: "vR.0", name: "vR", type: F64, mutable: false },
-    { id: "boundaryL.0", name: "boundaryL", type: F64, mutable: false },
-    { id: "boundaryR.0", name: "boundaryR", type: F64, mutable: false },
-  ];
-  const slice = (receiver: IrExpr): IrExpr => ({
-    kind: "bytesIntrinsic",
-    method: "slice",
-    receiver,
-    args: [],
-    type: bytesT,
-    loc,
-  });
-  const body: IrStmt[] = [
-    { kind: "assign", localId: "a.0", value: slice(a), loc },
-    {
-      kind: "varDecl",
-      localId: "n.0",
-      init: { kind: "bytesIntrinsic", method: "length", receiver: a, args: [], type: F64, loc },
-      loc,
-    },
-    { kind: "varDecl", localId: "src.0", init: slice(a), loc },
-    { kind: "varDecl", localId: "dst.0", init: slice(a), loc },
-    { kind: "varDecl", localId: "width.0", init: numLit(1, loc), loc },
-    {
-      kind: "while",
-      cond: lt(width, n),
-      body: [
-        mergePass,
-        { kind: "varDecl", localId: "tmp.0", init: src, loc },
-        { kind: "assign", localId: "src.0", value: dst, loc },
-        { kind: "assign", localId: "dst.0", value: varRef("tmp.0", bytesT, loc), loc },
-        { kind: "assign", localId: "width.0", value: mul(width, numLit(2, loc)), loc },
-      ],
-      loc,
-    },
-    {
-      kind: "for",
-      init: { kind: "varDecl", localId: "i.0", init: numLit(0, loc), loc },
-      cond: lt(varRef("i.0", F64, loc), n),
-      update: {
-        kind: "assign",
-        localId: "i.0",
-        value: add(varRef("i.0", F64, loc), numLit(1, loc)),
-        loc,
-      },
-      body: [
-        { kind: "varDecl", localId: "v.0", init: at(src, varRef("i.0", F64, loc)), loc },
-        {
-          kind: "bytesSet",
-          arr: a,
-          index: varRef("i.0", F64, loc),
-          value: varRef("v.0", F64, loc),
-          loc,
-        },
-      ],
-      loc,
-    },
-    { kind: "return", value: a, loc },
-  ];
-  return { name, params, returnType: bytesT, locals, body, loc };
 }
