@@ -354,63 +354,54 @@ import {
   createRequireNamespaceDecl,
   createRequireProgramModuleOf,
   createRequireSpecOf,
-  stripTypeCasts,
-  lowerBuiltinModuleCall,
-  lowerTimersPromisesSetInterval,
+  fencedBuiltinImportOf,
+} from "./builtins/module-bindings.js";
+import { stripTypeCasts } from "./builtins/arguments.js";
+import { lowerBuiltinModuleCall } from "./builtins/module-calls.js";
+import { lowerTimersPromisesSetInterval, lowerTimeoutMethodCall } from "./builtins/timers.js";
+import {
   lowerFsToUnixTimestampCall,
   lowerFsLadderCall,
-  lowerChildArgsArg,
-  lowerSpawnSyncCall,
-  lowerSpawnCall,
-  lowerExecFileCall,
-  lowerExecSyncCall,
-  recordToEnvPairs,
-  lowerJsonMethodCall,
-  fencedBuiltinImportOf,
-  lowerCryptoComposedCall,
-  lowerUrlMethodCall,
-  lowerSearchParamsMethodCall,
   lowerStatsMethodCall,
-  lowerChildMethodCall,
-  lowerAtomicsCall,
-  lowerBuiltinExtraProperty,
-  registerPromisifiedBuiltinDecl,
-  lowerExecFileAsyncCall,
-  execFileAsyncHelper,
-  lowerStringDecoderMethodCall,
-  strdecHelper,
-  lowerReadlineMethodCall,
-  lowerDcChannelMethodCall,
-  lowerDcChannelProperty,
-  lowerAlsMethodCall,
-  lowerDcTracingChannelMethodCall,
-  lowerDcTracingChannelProperty,
-  lowerJsonProperty,
-  lowerErrorCodeProperty,
+} from "./builtins/filesystem.js";
+import { lowerSpawnSyncCall, lowerSpawnCall, lowerExecFileCall } from "./builtins/child-process.js";
+import { lowerExecSyncCall } from "./builtins/child-process-sync.js";
+import { isProcessEnv, envValueType, lowerProcessEnvGet } from "./builtins/environment.js";
+import { lowerJsonMethodCall, lowerJsonProperty } from "./builtins/json.js";
+import { lowerCryptoComposedCall, lowerCryptoModuleCall } from "./builtins/crypto.js";
+import { lowerUrlMethodCall, lowerSearchParamsMethodCall } from "./builtins/url.js";
+import { lowerChildMethodCall } from "./builtins/child-process-methods.js";
+import { lowerAtomicsCall } from "./builtins/atomics.js";
+import { lowerBuiltinExtraProperty } from "./builtins/properties.js";
+import { registerPromisifiedBuiltinDecl } from "./builtins/callable-aliases.js";
+import { lowerExecFileAsyncCall } from "./builtins/child-process-async.js";
+import { lowerStringDecoderMethodCall, lowerTextCodecCall } from "./builtins/text-codecs.js";
+import { lowerReadlineMethodCall } from "./builtins/readline.js";
+import {
+  lowerDiagnosticsChannelMethodCall,
+  lowerDiagnosticsChannelProperty,
+  lowerAsyncLocalStorageMethodCall,
+  lowerTracingChannelMethodCall,
+  lowerTracingChannelProperty,
+} from "./builtins/async-context.js";
+import { lowerErrorCodeProperty } from "./builtins/errors.js";
+import {
   lowerProcessProperty,
-  isProcessEnv,
-  envValueType,
-  lowerProcessEnvGet,
   lowerProcessMethodCall,
   lowerProcessOptionalMethodCall,
-  lowerTimeoutMethodCall,
-  envSnapshotHelper,
-  isConsoleLog,
-  consoleCallMember,
-  lowerNumberStaticCall,
-  lowerNumberStaticProperty,
-  lowerDateCall,
-  lowerTextCodecCall,
-  lowerCryptoModuleCall,
+  lowerProcessStreamProperty,
+} from "./builtins/process.js";
+import { isConsoleLog, consoleCallMember } from "./builtins/console.js";
+import { lowerNumberStaticCall, lowerNumberStaticProperty } from "./builtins/numbers.js";
+import { lowerDateCall } from "./builtins/dates.js";
+import {
   lowerFsConstantsProperty,
   lowerBuiltinConstantsProperty,
   builtinConstantBindingOf,
   builtinConstantsDestructureDecl,
-  lowerProcessStreamProperty,
-  lowerStringStaticCall,
-  lowerStringLastIndexOfCall,
-  lowerPromiseStaticCall,
-} from "./lower-builtins.js";
+} from "./builtins/constants.js";
+import { lowerStringStaticCall, lowerStringLastIndexOfCall } from "./builtins/strings.js";
+import { lowerPromiseStaticCall } from "./builtins/promises.js";
 import {
   fenceFetchObjectAssignment,
   fenceFetchObjectBinding,
@@ -10369,10 +10360,6 @@ export class Lowerer {
     return lowerFsLadderCall(this, expr, bi, loc);
   }
 
-  lowerChildArgsArg(node: ts.Expression | undefined, loc: SrcLoc): IrExpr {
-    return lowerChildArgsArg(this, node, loc);
-  }
-
   lowerSpawnSyncCall(expr: ts.CallExpression, loc: SrcLoc): IrExpr {
     return lowerSpawnSyncCall(this, expr, loc);
   }
@@ -10387,10 +10374,6 @@ export class Lowerer {
 
   lowerExecSyncCall(expr: ts.CallExpression, shell: boolean, loc: SrcLoc): IrExpr {
     return lowerExecSyncCall(this, expr, shell, loc);
-  }
-
-  recordToEnvPairs(node: ts.Expression): IrExpr {
-    return recordToEnvPairs(this, node);
   }
 
   envToPairsHelper(shapeId: string, loc: SrcLoc): string | null {
@@ -10548,38 +10531,33 @@ export class Lowerer {
     return lowerReadlineMethodCall(this, call, access);
   }
 
-  lowerDcChannelMethodCall(
+  lowerDiagnosticsChannelMethodCall(
     call: ts.CallExpression,
     access: ts.PropertyAccessExpression,
   ): IrExpr | null {
-    return lowerDcChannelMethodCall(this, call, access);
+    return lowerDiagnosticsChannelMethodCall(this, call, access);
   }
 
-  lowerAlsMethodCall(call: ts.CallExpression, access: ts.PropertyAccessExpression): IrExpr | null {
-    return lowerAlsMethodCall(this, call, access);
-  }
-
-  lowerDcChannelProperty(access: ts.PropertyAccessExpression): IrExpr | null {
-    return lowerDcChannelProperty(this, access);
-  }
-
-  lowerDcTracingChannelMethodCall(
+  lowerAsyncLocalStorageMethodCall(
     call: ts.CallExpression,
     access: ts.PropertyAccessExpression,
   ): IrExpr | null {
-    return lowerDcTracingChannelMethodCall(this, call, access);
+    return lowerAsyncLocalStorageMethodCall(this, call, access);
   }
 
-  lowerDcTracingChannelProperty(access: ts.PropertyAccessExpression): IrExpr | null {
-    return lowerDcTracingChannelProperty(this, access);
+  lowerDiagnosticsChannelProperty(access: ts.PropertyAccessExpression): IrExpr | null {
+    return lowerDiagnosticsChannelProperty(this, access);
   }
 
-  strdecHelper(
-    op: "write" | "end" | "endChunk" | "endString" | "writeString",
-    shapeId: string,
-    loc: SrcLoc,
-  ): string {
-    return strdecHelper(this, op, shapeId, loc);
+  lowerTracingChannelMethodCall(
+    call: ts.CallExpression,
+    access: ts.PropertyAccessExpression,
+  ): IrExpr | null {
+    return lowerTracingChannelMethodCall(this, call, access);
+  }
+
+  lowerTracingChannelProperty(access: ts.PropertyAccessExpression): IrExpr | null {
+    return lowerTracingChannelProperty(this, access);
   }
 
   lowerProcessProperty(expr: ts.PropertyAccessExpression): IrExpr | null {
@@ -10650,14 +10628,6 @@ export class Lowerer {
 
   lowerExecFileAsyncCall(expr: ts.CallExpression, loc: SrcLoc): IrExpr {
     return lowerExecFileAsyncCall(this, expr, loc);
-  }
-
-  execFileAsyncHelper(loc: SrcLoc): { name: string; shapeId: string } {
-    return execFileAsyncHelper(this, loc);
-  }
-
-  envSnapshotHelper(shapeId: string, loc: SrcLoc): string | null {
-    return envSnapshotHelper(this, shapeId, loc);
   }
 
   lowerNumberStaticCall(

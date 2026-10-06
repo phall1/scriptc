@@ -3,7 +3,7 @@ import type { IrExpr, SrcLoc } from "../../ir/ir.js";
 import type { Lowerer } from "./lowerer.js";
 import { lowerTimersMemberCall } from "./lower-timers.js";
 import { lowerStreamModuleCall } from "./lower-stream.js";
-import { lowerNodeModuleCall } from "./lower-builtins.js";
+import { lowerNodeModuleCall } from "./builtins/module-resolution.js";
 import { builtinModuleFnOf, builtinFenceHintOf } from "./surfaces.js";
 
 /** Named imports, namespace members and callable aliases share validation

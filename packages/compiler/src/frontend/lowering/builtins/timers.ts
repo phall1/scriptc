@@ -1,0 +1,224 @@
+import * as ts from "../../ts7/adapter.js";
+import { type Lowerer } from "../lowerer.js";
+import { locOf } from "../../program.js";
+import { generatorMeta } from "../call-signatures.js";
+import {
+  BOOL,
+  F64,
+  type IrExpr,
+  type IrFunction,
+  type IrLocal,
+  type IrType,
+  type SrcLoc,
+  VOID,
+} from "../../../ir/ir.js";
+
+/** timers/promises.setInterval(delay, value), the first Node API built on
+ * the generic async-generator protocol. The supported form has an explicit
+ * value and no AbortSignal options. It lowers to a generated typed async
+ * generator whose loop awaits the existing promise timeout then yields the
+ * retained value; creating the iterator remains lazy. */
+export function lowerTimersPromisesSetInterval(
+  lowerer: Lowerer,
+  expr: ts.CallExpression,
+  bi: { module: string; member: string },
+  loc: SrcLoc,
+): IrExpr | null {
+  if (bi.module !== "timers/promises" || bi.member !== "setInterval") return null;
+  if (expr.arguments.some(ts.isSpreadElement)) {
+    lowerer.unsupported("SC1090", expr, "spread arguments");
+  }
+  if (expr.arguments.length !== 2) {
+    lowerer.noLowering(
+      `timers/promises.setInterval with ${expr.arguments.length} arguments`,
+      expr,
+      "the lowered form is setInterval(delay, value) with an explicit yielded value; AbortSignal options are not supported yet",
+    );
+  }
+  const delayNode = expr.arguments[0]!;
+  const valueNode = expr.arguments[1]!;
+  const delay = lowerer.lowerExpr(delayNode);
+  const ms =
+    delay.kind === "unitLit"
+      ? ({ kind: "numLit", value: 1, type: F64, loc } satisfies IrExpr)
+      : lowerer.coerceInto(delayNode, delay, F64);
+  const value = lowerer.lowerExpr(valueNode);
+  const callType = lowerer.mapTypeOf(lowerer.typeOf(expr));
+  if (callType?.kind !== "generator" || !callType.async) {
+    lowerer.badType(expr, lowerer.typeOf(expr));
+  }
+  const genT = callType;
+  const yielded = lowerer.coerceInto(valueNode, value, genT.yieldT);
+  const fnName = `%fn${lowerer.lambdaCounter++}_tpInterval`;
+  const msParam: IrLocal = { id: "%tp.ms", name: "delay", type: F64, mutable: false };
+  const valueParam: IrLocal = { id: "%tp.value", name: "value", type: genT.yieldT, mutable: false };
+  const promiseVoid: IrType = { kind: "promise", inner: VOID };
+  const msRef = (): IrExpr => ({ kind: "varRef", localId: msParam.id, type: F64, loc });
+  const valueRef = (): IrExpr => ({
+    kind: "varRef",
+    localId: valueParam.id,
+    type: genT.yieldT,
+    loc,
+  });
+  const fn: IrFunction = {
+    name: fnName,
+    params: [
+      { localId: msParam.id, name: msParam.name, type: msParam.type },
+      { localId: valueParam.id, name: valueParam.name, type: valueParam.type },
+    ],
+    returnType: VOID,
+    locals: [msParam, valueParam],
+    async: true,
+    generator: generatorMeta(lowerer, genT),
+    body: [
+      {
+        kind: "while",
+        cond: { kind: "boolLit", value: true, type: BOOL, loc },
+        body: [
+          {
+            kind: "exprStmt",
+            expr: {
+              kind: "awaitExpr",
+              value: {
+                kind: "libCall",
+                fn: "tp.setTimeout",
+                args: [msRef()],
+                type: promiseVoid,
+                loc,
+              },
+              type: VOID,
+              loc,
+            },
+            loc,
+          },
+          {
+            kind: "exprStmt",
+            expr: { kind: "yieldExpr", value: valueRef(), type: VOID, loc },
+            loc,
+          },
+        ],
+        loc,
+      },
+    ],
+    loc,
+  };
+  lowerer.liftedFns.push(fn);
+  return { kind: "call", callee: fnName, args: [ms, yielded], type: genT, loc };
+}
+
+/** True when `node`'s checker type is the timer `Timeout` handle (the
+ * fallback's `Timeout` or @types/node's `NodeJS.Timeout`) — provenance,
+ * not name, so a user's own `Timeout` never matches. The handle maps to
+ * f64, so the method calls below can't tell it from a plain number by IR
+ * type alone; this is the discriminator. */
+function isTimerHandleTyped(
+  lowerer: Lowerer,
+  node: ts.Expression,
+  name: "Timeout" | "Immediate",
+): boolean {
+  const t = lowerer.checker.getTypeAtLocation(node);
+  const sym = t.getAliasSymbol() ?? t.getSymbol();
+  if (sym?.name !== name) return false;
+  return lowerer.checker
+    .declarationsOf(sym)
+    .some((d) => ts.isInterfaceDeclaration(d) && lowerer.isStdlibFile(d.getSourceFile()));
+}
+function isTimeoutTyped(lowerer: Lowerer, node: ts.Expression): boolean {
+  return isTimerHandleTyped(lowerer, node, "Timeout");
+}
+
+/** `t.unref()` / `t.ref()` / `t.hasRef()` on a Timeout handle — loop-
+ * liveness bookkeeping over the numeric timer id (the handle is f64).
+ * unref/ref return the handle for chaining (Node); hasRef returns a
+ * bool. `refresh` and the rest of @types/node's Timeout surface fence.
+ * Null when the receiver isn't a Timeout handle. */
+export function lowerTimeoutMethodCall(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
+  access: ts.PropertyAccessExpression,
+): IrExpr | null {
+  // `t.unref?.()` (the defensive optional CALL — mdns's timer.unref?.())
+  // is the plain call: the method always exists on a Timeout handle. A
+  // `t?.unref()` receiver guard is real narrowing and stays with the
+  // chain machinery.
+  if (access.questionDotToken) return null;
+  const isTimeout = isTimeoutTyped(lowerer, access.expression);
+  const isImmediate = !isTimeout && isTimerHandleTyped(lowerer, access.expression, "Immediate");
+  if (!isTimeout && !isImmediate) return null;
+  if (!lowerer.isStdlibMember(access)) return null;
+  const name = access.name.text;
+  const loc = locOf(call);
+  if ((name === "unref" || name === "ref") && call.arguments.length === 0) {
+    const handle = lowerer.lowerExprExpecting(access.expression, F64);
+    const fn = isImmediate
+      ? name === "unref"
+        ? "timers.immediateUnref"
+        : "timers.immediateRef"
+      : name === "unref"
+        ? "timers.unref"
+        : "timers.ref";
+    // Returns the handle for chaining (`setTimeout(...).unref()` — Node
+    // returns the Timeout/Immediate); the libCall yields the f64 back.
+    return { kind: "libCall", fn, args: [handle], type: F64, loc };
+  }
+  if (name === "hasRef" && call.arguments.length === 0) {
+    const handle = lowerer.lowerExprExpecting(access.expression, F64);
+    const fn = isImmediate ? "timers.immediateHasRef" : "timers.hasRef";
+    return { kind: "libCall", fn, args: [handle], type: BOOL, loc };
+  }
+  if (name === "refresh" && call.arguments.length === 0 && !isImmediate) {
+    // Re-arms to now + the original delay; yields the handle back for
+    // chaining, like unref/ref.
+    const handle = lowerer.lowerExprExpecting(access.expression, F64);
+    return { kind: "libCall", fn: "timers.refresh", args: [handle], type: F64, loc };
+  }
+  lowerer.noLowering(
+    `${isImmediate ? "Immediate" : "Timeout"}.${name}`,
+    call,
+    isImmediate
+      ? "unref(), ref(), and hasRef() are the supported Immediate methods"
+      : "unref(), ref(), hasRef(), and refresh() are the supported Timeout methods",
+    lowerer.checker.getSymbolAtLocation(access.name),
+  );
+}
+
+// node:timers/promises — setTimeout([delay]) and setImmediate(): void
+// promises the shared timer heap settles. The omitted delay completes
+// to Node's 1ms floor (scr_timer_coerce_ms clamps anyway; the literal
+// keeps the emitted call self-describing); the resolve-value and
+// options (AbortSignal) forms fence per shape — a promise that
+// ignored its cancellation signal would hold the loop open where
+// Node exits.
+export function lowerTimersPromisesCall(
+  lowerer: Lowerer,
+  expr: ts.CallExpression,
+  bi: { module: string; member: string },
+  loc: SrcLoc,
+): IrExpr | null {
+  const promiseVoid: IrType = { kind: "promise", inner: VOID };
+  if (bi.member === "setTimeout") {
+    if (expr.arguments.length > 1) {
+      lowerer.noLowering(
+        "timers/promises setTimeout with a resolve value or options",
+        expr.arguments[1]!,
+        "the lowered form is setTimeout(delay?) resolving undefined — resolve values and AbortSignal cancellation have no lowering",
+      );
+    }
+    const ms: IrExpr = expr.arguments[0]
+      ? lowerer.lowerExprExpecting(expr.arguments[0], F64)
+      : { kind: "numLit", value: 1, type: F64, loc };
+    return { kind: "libCall", fn: "tp.setTimeout", args: [ms], type: promiseVoid, loc };
+  }
+  if (bi.member === "setImmediate") {
+    if (expr.arguments.length > 0) {
+      lowerer.noLowering(
+        "timers/promises setImmediate with a resolve value",
+        expr.arguments[0]!,
+        "the lowered form is setImmediate() resolving undefined",
+      );
+    }
+    return { kind: "libCall", fn: "tp.setImmediate", args: [], type: promiseVoid, loc };
+  }
+
+  return null;
+}

@@ -1,0 +1,299 @@
+import { recordToEnvPairs } from "./environment.js";
+import { lowerChildArgsArg } from "./child-process.js";
+import { boolLit, numLit, varRef } from "../../../ir/build.js";
+import * as ts from "../../ts7/adapter.js";
+import { type Lowerer } from "../lowerer.js";
+import { conditionalSpreadOf } from "../expressions/object-literals.js";
+import {
+  BOOL,
+  F64,
+  type IrExpr,
+  type IrStmt,
+  type IrType,
+  SPAWNRES_T,
+  STRING,
+  type SrcLoc,
+  arrayOf,
+} from "../../../ir/ir.js";
+import { optionMember } from "./arguments.js";
+
+/** A call THROUGH a promisified-execFile binding:
+ * `execFileAsync(file, args?, options?)` → one call of the interned
+ * %execFileAsync helper — an ASYNC IR function (throw-becomes-rejection
+ * for free) that runs the exec core synchronously and returns
+ * `{ stdout, stderr }`, exactly Node's promisified execFile behind an
+ * already-settled promise (the fs/promises stance, divergence 23).
+ * Options are the exec-sync slice minus stdio (the async form always
+ * captures both streams, no echo): encoding must spell utf8, cwd/env/
+ * timeout lower, maxBuffer/windowsHide are accepted no-ops, killSignal
+ * only as its SIGTERM default. Rejections carry Node's async messages
+ * ("Command failed: <cmd>\n<stderr>" — the trailing newline is Node's —
+ * and "spawn <file> ENOENT" with .code); Node's numeric `.code` on a
+ * Command-failed rejection (the exit status) is NOT carried —
+ * SEMANTICS.md divergence 50's stance. */
+export function lowerExecFileAsyncCall(
+  lowerer: Lowerer,
+  expr: ts.CallExpression,
+  loc: SrcLoc,
+): IrExpr {
+  if (
+    expr.arguments.length < 1 ||
+    expr.arguments.length > 3 ||
+    expr.arguments.some(ts.isSpreadElement)
+  ) {
+    lowerer.noLowering(
+      "the promisified execFile with this argument shape",
+      expr,
+      "the supported form is execFileAsync(file, args?, options?)",
+    );
+  }
+  const cmd = lowerer.lowerExprExpecting(expr.arguments[0]!, STRING);
+  const argv = lowerChildArgsArg(lowerer, expr.arguments[1], loc);
+  const optsNode = expr.arguments[2];
+
+  const emptyStr: IrExpr = { kind: "strLit", value: "", type: STRING, loc };
+  const helper = execFileAsyncHelper(lowerer, loc);
+  const envRecT: IrType = { kind: "record", shapeId: helper.envShapeId };
+  const envRec = (has: boolean, pairs: IrExpr): IrExpr => ({
+    kind: "recordLit",
+    fields: [
+      { name: "has", value: boolLit(has, loc) },
+      { name: "pairs", value: pairs },
+    ],
+    type: envRecT,
+    loc,
+  });
+  const emptyPairs = (): IrExpr => ({ kind: "arrayLit", elems: [], type: arrayOf(STRING), loc });
+  let cwd: IrExpr = emptyStr;
+  let env: IrExpr = envRec(false, emptyPairs());
+  let timeout: IrExpr = numLit(0, loc);
+  if (optsNode) {
+    if (!ts.isObjectLiteralExpression(optsNode)) {
+      lowerer.noLowering(
+        "the promisified execFile with a non-literal options argument",
+        optsNode,
+        "pass the options inline so each member can be checked",
+      );
+    }
+    for (const p of optsNode.properties) {
+      // The conditional-spread idiom carrying `env` — the portless
+      // opensslAsync shape: `...(c ? { env: { ...process.env, ...extra
+      // } } : {})` (either orientation). The condition evaluates ONCE
+      // and picks between the has-env record (whose pairs build lazily
+      // in that arm — tsc's narrowing of the condition holds there) and
+      // the inherit-parent default, exactly the spread's semantics.
+      if (ts.isSpreadAssignment(p)) {
+        const cs = conditionalSpreadOf(p.expression);
+        if (
+          cs !== null &&
+          cs !== "unsupported" &&
+          cs.props.length === 1 &&
+          cs.props[0]!.name.text === "env" &&
+          ts.isPropertyAssignment(cs.props[0]!)
+        ) {
+          const cond = lowerer.lowerCondition(cs.cond);
+          const carried = envRec(
+            true,
+            recordToEnvPairs(lowerer, (cs.props[0] as ts.PropertyAssignment).initializer),
+          );
+          const absent = envRec(false, emptyPairs());
+          env = {
+            kind: "ternary",
+            cond,
+            then: cs.whenTrue ? carried : absent,
+            else_: cs.whenTrue ? absent : carried,
+            type: envRecT,
+            loc,
+          };
+          continue;
+        }
+        lowerer.noLowering(
+          "the promisified execFile with this options spread",
+          p,
+          "the one supported spread is the conditional `...(c ? { env: ... } : {})` (either orientation) — write other members inline",
+        );
+      }
+      const m = optionMember(p);
+      if (!m) {
+        lowerer.noLowering(
+          "the promisified execFile with this options shape",
+          p,
+          "spreads and computed keys have no lowering — write each member inline",
+        );
+      }
+      switch (m.name) {
+        case "encoding": {
+          const t = lowerer.typeOf(m.value);
+          if (!t.isStringLiteralType() || (t.value !== "utf8" && t.value !== "utf-8")) {
+            lowerer.noLowering(
+              "the promisified execFile with a non-utf8 encoding",
+              m.value,
+              'outputs are captured as utf8 — pass { encoding: "utf8" } (Node\'s own default here)',
+            );
+          }
+          break;
+        }
+        case "cwd":
+          cwd = lowerer.lowerExprExpecting(m.value, STRING);
+          break;
+        case "env":
+          env = envRec(true, recordToEnvPairs(lowerer, m.value));
+          break;
+        case "timeout":
+          timeout = lowerer.lowerExprExpecting(m.value, F64);
+          break;
+        case "maxBuffer":
+          lowerer.lowerExpr(m.value); // accepted, not enforced (divergence 50)
+          break;
+        case "windowsHide":
+          lowerer.lowerExpr(m.value); // Node no-op on POSIX
+          break;
+        case "killSignal": {
+          const t = lowerer.typeOf(m.value);
+          if (!t.isStringLiteralType() || t.value !== "SIGTERM") {
+            lowerer.noLowering(
+              "the promisified execFile with a non-default killSignal",
+              m.value,
+              "only the SIGTERM default is implemented for the timeout kill",
+            );
+          }
+          break;
+        }
+        default:
+          lowerer.noLowering(
+            `the promisified execFile option '${m.name}'`,
+            p,
+            "encoding, cwd, env, timeout, and maxBuffer are the supported options",
+          );
+      }
+    }
+  }
+  return {
+    kind: "call",
+    callee: helper.name,
+    args: [cmd, argv, cwd, env, timeout],
+    type: { kind: "promise", inner: { kind: "record", shapeId: helper.shapeId } },
+    loc,
+  };
+}
+
+/** The interned `%execFileAsync` helper behind promisified-execFile
+ * calls: an ASYNC IR function (params: cmd, argv, cwd, hasEnv, envPairs,
+ * timeoutMs) whose body runs the may-throw cp.execCapture libCall — the
+ * async machinery turns a throw into the rejection, Node's promisified
+ * behavior — and returns the `{ stdout, stderr }` record built from the
+ * capture. One helper per program (the shape is fixed). */
+function execFileAsyncHelper(
+  lowerer: Lowerer,
+  loc: SrcLoc,
+): { name: string; shapeId: string; envShapeId: string } {
+  const shapeId = lowerer.shapes.intern([
+    { name: "stderr", type: STRING },
+    { name: "stdout", type: STRING },
+  ]);
+  // The env choice travels as ONE {has, pairs} record so a conditional
+  // env spread's condition evaluates exactly once at the call site (has
+  // and pairs both derive from it).
+  const envShapeId = lowerer.shapes.intern([
+    { name: "has", type: BOOL },
+    { name: "pairs", type: arrayOf(STRING) },
+  ]);
+  const key = "execFileAsync";
+  const existing = lowerer.valueHelpers.get(key);
+  if (existing) return { name: existing, shapeId, envShapeId };
+  const name = `%execFileAsync.${lowerer.valueHelpers.size}`;
+  lowerer.valueHelpers.set(key, name);
+  const recT: IrType = { kind: "record", shapeId };
+  const envRecT: IrType = { kind: "record", shapeId: envShapeId };
+  const strArrT = arrayOf(STRING);
+
+  const body: IrStmt[] = [
+    {
+      kind: "varDecl",
+      localId: "r.0",
+      init: {
+        kind: "libCall",
+        fn: "cp.execCapture",
+        args: [
+          varRef("cmd.0", STRING, loc),
+          varRef("argv.0", strArrT, loc),
+          varRef("cwd.0", STRING, loc),
+          {
+            kind: "recordGet",
+            obj: varRef("env.0", envRecT, loc),
+            shapeId: envShapeId,
+            field: "has",
+            type: BOOL,
+            loc,
+          },
+          {
+            kind: "recordGet",
+            obj: varRef("env.0", envRecT, loc),
+            shapeId: envShapeId,
+            field: "pairs",
+            type: strArrT,
+            loc,
+          },
+          varRef("timeout.0", F64, loc),
+        ],
+        type: SPAWNRES_T,
+        loc,
+      },
+      loc,
+    },
+    {
+      kind: "return",
+      value: {
+        kind: "recordLit",
+        fields: [
+          {
+            name: "stderr",
+            value: {
+              kind: "libCall",
+              fn: "spawnRes.stderr",
+              args: [varRef("r.0", SPAWNRES_T, loc)],
+              type: STRING,
+              loc,
+            },
+          },
+          {
+            name: "stdout",
+            value: {
+              kind: "libCall",
+              fn: "spawnRes.stdout",
+              args: [varRef("r.0", SPAWNRES_T, loc)],
+              type: STRING,
+              loc,
+            },
+          },
+        ],
+        type: recT,
+        loc,
+      },
+      loc,
+    },
+  ];
+  lowerer.liftedFns.push({
+    name,
+    params: [
+      { localId: "cmd.0", name: "cmd", type: STRING },
+      { localId: "argv.0", name: "argv", type: strArrT },
+      { localId: "cwd.0", name: "cwd", type: STRING },
+      { localId: "env.0", name: "env", type: envRecT },
+      { localId: "timeout.0", name: "timeout", type: F64 },
+    ],
+    returnType: recT,
+    async: true,
+    locals: [
+      { id: "cmd.0", name: "cmd", type: STRING, mutable: false },
+      { id: "argv.0", name: "argv", type: strArrT, mutable: false },
+      { id: "cwd.0", name: "cwd", type: STRING, mutable: false },
+      { id: "env.0", name: "env", type: envRecT, mutable: false },
+      { id: "timeout.0", name: "timeout", type: F64, mutable: false },
+      { id: "r.0", name: "r", type: SPAWNRES_T, mutable: false },
+    ],
+    body,
+    loc,
+  });
+  return { name, shapeId, envShapeId };
+}

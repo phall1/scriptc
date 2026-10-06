@@ -205,6 +205,35 @@
       },
     },
     {
+      // Builtin implementations must not depend on module call dispatch.
+      "files": ["packages/compiler/src/frontend/lowering/builtins/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**/module-calls", "**/module-calls.*"],
+                "message": "builtin implementations must not import module dispatch; import the API or argument owner.",
+              },
+              {
+                "group": ["**/backend/*", "**/backend/**"],
+                "message": "frontend must not import backend; use the IR interface.",
+              },
+              {
+                "group": ["**/ir/validate", "**/ir/validate.*"],
+                "message": "frontend must not import IR validation; use the shared builtin and intrinsic signatures.",
+              },
+              {
+                "group": ["typescript5", "typescript5/**"],
+                "message": "typescript5 is restricted to the explicit parser islands; TypeScript AST worlds must not mix.",
+              },
+            ],
+          },
+        ],
+      },
+    },
+    {
       // Only strings and offsets cross these TypeScript 5 parser islands.
       "files": [
         "packages/compiler/src/frontend/npm.ts",

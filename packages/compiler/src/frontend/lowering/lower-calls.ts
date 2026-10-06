@@ -82,21 +82,25 @@ import {
   lowerStringPaddingCall,
   lowerStringSplitCall,
 } from "./containers/string-and-regexp.js";
+import { createRequireSpecOf } from "./builtins/module-bindings.js";
 import {
-  createRequireSpecOf,
   lowerChildStreamMethodCall,
   lowerChildWriterMethodCall,
+} from "./builtins/child-process-methods.js";
+import {
   lowerCreateRequireCall,
-  lowerCryptoHashMethodCall,
+  lowerImportMetaResolveCall,
+  lowerRequireResolveCall,
+} from "./builtins/module-resolution.js";
+import { lowerCryptoHashMethodCall } from "./builtins/crypto.js";
+import {
   lowerDirentMethodCall,
   lowerFileHandleMethodCall,
-  lowerImportMetaResolveCall,
-  lowerPerfHooksCall,
-  lowerProcStreamMethodCall,
-  lowerReflectCall,
-  lowerRequireResolveCall,
   lowerWatcherMethodCall,
-} from "./lower-builtins.js";
+} from "./builtins/filesystem.js";
+import { lowerPerfHooksCall } from "./builtins/performance.js";
+import { lowerProcStreamMethodCall } from "./builtins/process.js";
+import { lowerReflectCall } from "./builtins/reflection.js";
 import {
   lowerAbsenceProbe,
   lowerPromiseAllTupleCall,
@@ -1645,13 +1649,13 @@ export function lowerCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr {
       lowerer.lowerReadlineMethodCall(expr, expr.expression) ??
       // diagnostics_channel Channel receivers — the same f64-handle
       // story (publish/subscribe/unsubscribe).
-      lowerer.lowerDcChannelMethodCall(expr, expr.expression) ??
+      lowerer.lowerDiagnosticsChannelMethodCall(expr, expr.expression) ??
       // AsyncLocalStorage receivers — run/getStore/exit/enterWith over
       // the f64 store handle.
-      lowerer.lowerAlsMethodCall(expr, expr.expression) ??
+      lowerer.lowerAsyncLocalStorageMethodCall(expr, expr.expression) ??
       // TracingChannel receivers — subscribe/unsubscribe/traceSync/
       // traceCallback over the f64 tracing handle.
-      lowerer.lowerDcTracingChannelMethodCall(expr, expr.expression) ??
+      lowerer.lowerTracingChannelMethodCall(expr, expr.expression) ??
       lowerer.lowerServerMethodCall(expr, expr.expression) ??
       lowerer.lowerDgramMethodCall(expr, expr.expression) ??
       // node:test — skip/todo/only twins on named import bindings, the
