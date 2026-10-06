@@ -919,16 +919,21 @@ static double scr_to_integer_or_infinity(double x) {
   return trunc(x);
 }
 
-/* Naive byte substring search (needle and hay are both well-formed UTF-8,
+/* Byte substring search (needle and hay are both well-formed UTF-8,
  * so any byte-level match starts on a char boundary — UTF-8 is
  * self-synchronizing). Empty needle matches at hay. */
 static const char *scr_byte_find(const char *hay, size_t hay_len,
                                   const char *nee, size_t nee_len) {
   if (nee_len == 0) return hay;
   if (nee_len > hay_len) return NULL;
-  for (size_t i = 0; i + nee_len <= hay_len; i++) {
-    if (hay[i] == nee[0] && memcmp(hay + i, nee, nee_len) == 0)
-      return hay + i;
+  if (nee_len == 1) return memchr(hay, (unsigned char)nee[0], hay_len);
+  size_t remaining = hay_len - nee_len + 1;
+  while (remaining) {
+    const char *found = memchr(hay, (unsigned char)nee[0], remaining);
+    if (!found) return NULL;
+    if (memcmp(found + 1, nee + 1, nee_len - 1) == 0) return found;
+    remaining -= (size_t)(found - hay) + 1;
+    hay = found + 1;
   }
   return NULL;
 }
