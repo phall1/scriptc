@@ -15,6 +15,7 @@
  * keep the lean 1-word header and never touch the collector.
  */
 #include "scr_runtime.h"
+#include "scr_key.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -46,27 +47,14 @@ static uint64_t scr_map_f64_bits(double k) {
   return bits;
 }
 
-static uint64_t scr_map_fnv1a(const unsigned char *bytes, size_t n) {
-  uint64_t h = UINT64_C(0xcbf29ce484222325);
-  for (size_t i = 0; i < n; i++) {
-    h ^= bytes[i];
-    h *= UINT64_C(0x100000001b3);
-  }
-  return h;
-}
-
 static uint64_t scr_map_hash_str(const ScrStr *k) {
-  return scr_map_fnv1a((const unsigned char *)k->data, k->len);
+  return scr_key_hash(k->data, k->len);
 }
 
 /* Mix the complete normalized number or identity word. Float exponents
  * and aligned pointers need high bits to reach the low bucket-index bits. */
 static uint64_t scr_map_hash_word(uint64_t value) {
-  value ^= value >> 30;
-  value *= UINT64_C(0xbf58476d1ce4e5b9);
-  value ^= value >> 27;
-  value *= UINT64_C(0x94d049bb133111eb);
-  return value ^ (value >> 31);
+  return scr_key_mix(value);
 }
 
 /* ── slot packing (8-byte slots, like ScrArr) ──────────────────────────── */
@@ -906,59 +894,39 @@ void scr_set_add_all(ScrMap *set, ScrArr *values) {
 /* Canonical array index test: "0".."4294967294" — digits only, no leading
  * zero (except "0" itself), value <= 2^32 - 2. JS orders these OWN keys
  * first, ascending numerically, before every other string key. */
-static bool scr_map_key_array_index(const ScrStr *k, uint32_t *out) {
-  size_t n = k->len;
-  if (n == 0 || n > 10) return false;
-  const char *s = k->data;
-  if (s[0] == '0' && n > 1) return false;
-  uint64_t v = 0;
-  for (size_t i = 0; i < n; i++) {
-    if (s[i] < '0' || s[i] > '9') return false;
-    v = v * 10 + (uint64_t)(s[i] - '0');
-  }
-  if (v > UINT64_C(4294967294)) return false;
-  *out = (uint32_t)v;
-  return true;
+static bool scr_map_key_array_index(const ScrStr *key, uint32_t *out) {
+  return scr_key_array_index(key->data, key->len, out);
 }
 
-/* The live STRING keys of `m` in JS OWN-KEY ORDER (Object.keys over the
- * index-signature overflow): integer-like keys (canonical array indices)
- * first in ascending numeric order, then the rest in insertion order.
- * Returns a fresh ScrStr* array (+1); the map is borrowed. Insertion sort
- * over the integer-like subset — overflow maps are small, and ties are
- * impossible (keys are unique). */
+/* Enumerate numeric keys in ascending order, then other keys in insertion
+ * order. Scratch entries refer to stable map indices, not copied strings. */
 ScrArr *scr_map_keys_js_order(const ScrMap *m) {
-  size_t n = m->nentries;
   ScrArr *out = scr_arr_new(SCR_ELEM_STR, m->nlive);
-  size_t nidx = 0;
-  struct { uint32_t v; ScrStr *k; } *idx = NULL;
-  for (size_t i = 0; i < n; i++) {
+  if (m->nlive > SIZE_MAX / sizeof(ScrKeyIndex)) scr_map_oom();
+  ScrKeyIndex *indices = NULL;
+  size_t count = 0;
+  for (size_t i = 0; i < m->nentries; i++) {
     if (!m->entries[i].hash) continue;
-    ScrStr *k = (ScrStr *)scr_map_slot_to_ptr(m->entries[i].key);
-    uint32_t v;
-    if (!scr_map_key_array_index(k, &v)) continue;
-    if (nidx % 16 == 0) {
-      idx = realloc(idx, (nidx + 16) * sizeof *idx);
-      if (!idx) scr_map_oom();
+    ScrStr *key = scr_map_slot_to_ptr(m->entries[i].key);
+    uint32_t index;
+    if (!scr_map_key_array_index(key, &index)) continue;
+    if (!indices) {
+      indices = malloc(m->nlive * sizeof *indices);
+      if (!indices) scr_map_oom();
     }
-    size_t j = nidx++;
-    while (j > 0 && idx[j - 1].v > v) {
-      idx[j] = idx[j - 1];
-      j--;
-    }
-    idx[j].v = v;
-    idx[j].k = k;
+    indices[count++] = (ScrKeyIndex){index, i};
   }
-  for (size_t i = 0; i < nidx; i++) {
-    scr_arr_push_ref(out, scr_str_retain(idx[i].k));
+  scr_key_index_sort(indices, count);
+  for (size_t i = 0; i < count; i++) {
+    ScrStr *key = scr_map_slot_to_ptr(m->entries[indices[i].entry].key);
+    scr_arr_push_ref(out, scr_str_retain(key));
   }
-  free(idx);
-  for (size_t i = 0; i < n; i++) {
+  free(indices);
+  for (size_t i = 0; i < m->nentries; i++) {
     if (!m->entries[i].hash) continue;
-    ScrStr *k = (ScrStr *)scr_map_slot_to_ptr(m->entries[i].key);
-    uint32_t v;
-    if (scr_map_key_array_index(k, &v)) continue;
-    scr_arr_push_ref(out, scr_str_retain(k));
+    ScrStr *key = scr_map_slot_to_ptr(m->entries[i].key);
+    uint32_t index;
+    if (!scr_map_key_array_index(key, &index)) scr_arr_push_ref(out, scr_str_retain(key));
   }
   return out;
 }

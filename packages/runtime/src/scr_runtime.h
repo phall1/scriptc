@@ -3759,6 +3759,7 @@ struct ScrDyn {
        * interfaces may request a fresh snapshot with the true arm. */
       void *source_identity;
       ScrDyn *(*source_access)(void *, bool materialize);
+      struct ScrDynObjectIndex *index; /* optional wide-object lookup; owns no values */
     } obj; /* owned */
     /* SCR_DYN_FUNC: the boxed closure (owned) + its call descriptor. `sig`
      * and `name` are static compiler-emitted literals (never freed); name

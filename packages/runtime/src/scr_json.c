@@ -22,6 +22,7 @@
  *   serializers (and the error messages here).
  */
 #include "scr_runtime.h"
+#include "scr_key.h"
 
 static SCR_TL ScrDyn *scr_builtin_object_prototype;
 
@@ -709,6 +710,10 @@ static void scr_dyn_handle_release(void *h, ScrDynHandleTag tag);
 static bool scr_dyn_to_primitive_result_is_object(const ScrDyn *d);
 
 static void scr_dyn_dispose(ScrDyn *d, bool collected) {
+  if (d->kind == SCR_DYN_OBJ) {
+    free(d->v.obj.index);
+    d->v.obj.index = NULL;
+  }
   if (!collected) scr_dyn_release(d->prototype);
   if (!collected) scr_dyn_release(d->symbol_properties);
   if (!collected) scr_dyn_release(d->symbol_keys);
@@ -829,6 +834,42 @@ void scr_dyn_release(ScrDyn *d) {
   scr_dyn_dispose(d, false);
 }
 
+/* Small objects retain their compact linear representation. A wide object
+ * owns a bucket index of entry positions; entries remain insertion ordered.
+ * No key/value ownership lives here, and callbacks never retain its slots. */
+#define SCR_DYN_OBJECT_INDEX_MIN 32
+typedef struct ScrDynObjectIndex {
+  size_t buckets;
+  size_t slots[]; /* zero is empty; occupied slots store entry + 1 */
+} ScrDynObjectIndex;
+
+static void scr_dyn_index_insert(ScrDynObjectIndex *index, const ScrDynEntry *entry, size_t position) {
+  size_t slot = scr_key_hash(entry->key, entry->key_len) & (index->buckets - 1);
+  while (index->slots[slot]) slot = (slot + 1) & (index->buckets - 1);
+  index->slots[slot] = position + 1;
+}
+
+/* Keep index allocation/probing outside compact object insertion and reads. */
+static __attribute__((noinline)) void scr_dyn_index_append(ScrDyn *object) {
+  size_t count = object->v.obj.len;
+  ScrDynObjectIndex *index = object->v.obj.index;
+  if (!index || count > index->buckets / 2) {
+    size_t buckets = index ? index->buckets : 64;
+    while (count > buckets / 2) {
+      if (buckets > (SIZE_MAX - sizeof *index) / sizeof(size_t) / 2) scr_json_oom();
+      buckets *= 2;
+    }
+    free(index);
+    index = calloc(1, sizeof *index + buckets * sizeof(size_t));
+    if (!index) scr_json_oom();
+    index->buckets = buckets;
+    object->v.obj.index = index;
+    for (size_t i = 0; i < count; i++) scr_dyn_index_insert(index, &object->v.obj.entries[i], i);
+  } else {
+    scr_dyn_index_insert(index, &object->v.obj.entries[count - 1], count - 1);
+  }
+}
+
 /* A checked hint avoids repeating a linear walk for recurring property
  * names. Slots store indices only, never object/key pointers. Every hit
  * checks the current entry, so different shapes, deletion and reordering
@@ -836,22 +877,38 @@ void scr_dyn_release(ScrDyn *d) {
 #define SCR_DYN_PROPERTY_HINTS 64
 static SCR_TL size_t scr_dyn_property_hints[SCR_DYN_PROPERTY_HINTS];
 
+static ScrDynEntry *scr_dyn_find_linear_entry(const ScrDyn *object, const char *key, size_t length) {
+  for (size_t i = 0; i < object->v.obj.len; i++) {
+    ScrDynEntry *entry = &object->v.obj.entries[i];
+    if (entry->key_len == length && !memcmp(entry->key, key, length)) return entry;
+  }
+  return NULL;
+}
+
+static __attribute__((noinline)) ScrDynEntry *scr_dyn_find_indexed_entry(
+    const ScrDyn *object, const char *key, size_t length) {
+  const ScrDynObjectIndex *index = object->v.obj.index;
+  size_t slot = scr_key_hash(key, length) & (index->buckets - 1);
+  while (index->slots[slot]) {
+    ScrDynEntry *entry = &object->v.obj.entries[index->slots[slot] - 1];
+    if (entry->key_len == length && !memcmp(entry->key, key, length)) return entry;
+    slot = (slot + 1) & (index->buckets - 1);
+  }
+  return NULL;
+}
+
 static ScrDynEntry *scr_dyn_find_entry(const ScrDyn *object, const char *key, size_t length) {
   if (object->kind != SCR_DYN_OBJ) return NULL;
+  if (object->v.obj.index) return scr_dyn_find_indexed_entry(object, key, length);
   size_t slot = (length + (length ? (unsigned char)key[0] * 7u : 0)) % SCR_DYN_PROPERTY_HINTS;
   size_t hint = scr_dyn_property_hints[slot];
   if (hint < object->v.obj.len) {
     ScrDynEntry *entry = &object->v.obj.entries[hint];
     if (entry->key_len == length && !memcmp(entry->key, key, length)) return entry;
   }
-  for (size_t i = 0; i < object->v.obj.len; i++) {
-    ScrDynEntry *entry = &object->v.obj.entries[i];
-    if (entry->key_len == length && !memcmp(entry->key, key, length)) {
-      scr_dyn_property_hints[slot] = i;
-      return entry;
-    }
-  }
-  return NULL;
+  ScrDynEntry *entry = scr_dyn_find_linear_entry(object, key, length);
+  if (entry) scr_dyn_property_hints[slot] = (size_t)(entry - object->v.obj.entries);
+  return entry;
 }
 
 ScrDyn *scr_dyn_obj_get(const ScrDyn *d, const char *key, size_t key_len) {
@@ -1156,20 +1213,21 @@ ScrDyn *scr_dyn_arr_named_get(const ScrDyn *d, const ScrStr *key) {
  * original spelling/storage and insertion position; the later value wins.
  * A recycled entry can reuse equal key bytes without a malloc/free pair. */
 static void scr_dyn_obj_put(ScrDyn *obj, const char *key, size_t key_len, ScrDyn *value) {
-  for (size_t i = 0; i < obj->v.obj.len; i++) {
-    ScrDynEntry *e = &obj->v.obj.entries[i];
-    if (e->key_len == key_len && memcmp(e->key, key, key_len) == 0) {
-      if (e->accessor || !e->writable) {
-        scr_dyn_release(value);
-        static const char message[] = "Cannot assign to read only property";
-        scr_throw_error_msg(SCR_ERR_TYPE, message, sizeof message - 1);
-        return;
-      }
-      ScrDyn *old = e->value;
-      e->value = value;
-      scr_dyn_release(old);
+  /* Construction usually appends an absent name. Avoid a read hint that
+   * repeats comparisons on compact objects; wide objects use their index. */
+  ScrDynEntry *existing = obj->v.obj.index ? scr_dyn_find_entry(obj, key, key_len)
+                                          : scr_dyn_find_linear_entry(obj, key, key_len);
+  if (existing) {
+    if (existing->accessor || !existing->writable) {
+      scr_dyn_release(value);
+      static const char message[] = "Cannot assign to read only property";
+      scr_throw_error_msg(SCR_ERR_TYPE, message, sizeof message - 1);
       return;
     }
+    ScrDyn *old = existing->value;
+    existing->value = value;
+    scr_dyn_release(old);
+    return;
   }
   if (obj->non_extensible) {
     scr_dyn_release(value);
@@ -1199,6 +1257,7 @@ static void scr_dyn_obj_put(ScrDyn *obj, const char *key, size_t key_len, ScrDyn
   e->writable = true;
   e->enumerable = true;
   e->configurable = true;
+  if (obj->v.obj.len >= SCR_DYN_OBJECT_INDEX_MIN) scr_dyn_index_append(obj);
 }
 
 /* ── dyn construction (compiler-emitted converters & overflow reads) ───── */
@@ -6332,6 +6391,8 @@ static void scr_json_delete_member(ScrDyn *object, const ScrStr *key) {
     ScrDynEntry removed = *entry;
     memmove(entry, entry + 1, (object->v.obj.len - i - 1) * sizeof *entry);
     object->v.obj.len--;
+    free(object->v.obj.index);
+    object->v.obj.index = NULL;
     /* The moved tail aliases a live entry; spare slots own only their own
      * retained key bytes, never a second pointer to a surviving property. */
     memset(&object->v.obj.entries[object->v.obj.len], 0, sizeof *entry);
@@ -7371,15 +7432,9 @@ bool scr_dyn_reflect_set(ScrDyn *target, ScrDyn *raw_key, ScrDyn *value, ScrDyn 
 
 /* The array-index test (ECMA: a canonical numeric string < 2^32-1). */
 static bool scr_dyn_key_is_index(const char *key, size_t len, double *out) {
-  if (len == 0 || len > 10) return false;
-  if (key[0] == '0' && len > 1) return false;
-  double v = 0;
-  for (size_t i = 0; i < len; i++) {
-    if (key[i] < '0' || key[i] > '9') return false;
-    v = v * 10 + (key[i] - '0');
-  }
-  if (v > 4294967294.0) return false;
-  *out = v;
+  uint32_t index;
+  if (!scr_key_array_index(key, len, &index)) return false;
+  *out = index;
   return true;
 }
 
@@ -7397,34 +7452,31 @@ static ScrDyn *scr_dyn_objwalk_key(const char *key, size_t key_len) {
 ScrDyn *scr_dyn_obj_own_keys(const ScrDyn *v) {
   size_t n = v->v.obj.len;
   ScrDyn *keys = scr_dyn_new_arr();
-  bool *is_index = malloc(n ? n * sizeof *is_index : 1);
-  double *idx = malloc(n ? n * sizeof *idx : 1);
-  if (!is_index || !idx) scr_trap("scriptc: out of memory\n");
-  size_t index_count = 0;
+  ScrKeyIndex *indices = NULL;
+  size_t count = 0;
   for (size_t i = 0; i < n; i++) {
-    const ScrDynEntry *e = &v->v.obj.entries[i];
-    is_index[i] = scr_dyn_key_is_index(e->key, e->key_len, &idx[i]);
-    if (is_index[i]) index_count++;
-  }
-  double last = -1;
-  for (size_t done = 0; done < index_count; done++) {
-    size_t best = (size_t)-1;
-    for (size_t i = 0; i < n; i++) {
-      if (!is_index[i] || idx[i] <= last) continue;
-      if (best == (size_t)-1 || idx[i] < idx[best]) best = i;
+    const ScrDynEntry *entry = &v->v.obj.entries[i];
+    uint32_t index;
+    if (!scr_key_array_index(entry->key, entry->key_len, &index)) continue;
+    if (!indices) {
+      if (n > SIZE_MAX / sizeof *indices) scr_json_oom();
+      indices = malloc(n * sizeof *indices);
+      if (!indices) scr_json_oom();
     }
-    if (best == (size_t)-1) break;
-    last = idx[best];
-    scr_dyn_arr_push(keys, scr_dyn_objwalk_key(v->v.obj.entries[best].key,
-                                                v->v.obj.entries[best].key_len));
+    indices[count++] = (ScrKeyIndex){index, i};
   }
+  scr_key_index_sort(indices, count);
+  for (size_t i = 0; i < count; i++) {
+    const ScrDynEntry *entry = &v->v.obj.entries[indices[i].entry];
+    scr_dyn_arr_push(keys, scr_dyn_objwalk_key(entry->key, entry->key_len));
+  }
+  free(indices);
   for (size_t i = 0; i < n; i++) {
-    if (is_index[i]) continue;
-    scr_dyn_arr_push(keys, scr_dyn_objwalk_key(v->v.obj.entries[i].key,
-                                                v->v.obj.entries[i].key_len));
+    const ScrDynEntry *entry = &v->v.obj.entries[i];
+    uint32_t index;
+    if (!scr_key_array_index(entry->key, entry->key_len, &index))
+      scr_dyn_arr_push(keys, scr_dyn_objwalk_key(entry->key, entry->key_len));
   }
-  free(is_index);
-  free(idx);
   return keys;
 }
 

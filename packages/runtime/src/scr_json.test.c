@@ -114,6 +114,41 @@ static void checked_storage(void) {
     }
     scr_dyn_release(object);
   }
+  /* Cross index growth boundaries, invalidate moved entry positions, then
+   * recreate the index from survivors. Repeat after pool reuse. */
+  for (int round = 0; round < 4; round++) {
+    ScrDyn *object = scr_dyn_new_obj();
+    assert(!object->v.obj.index);
+    for (int i = 0; i < 129; i++) {
+      char key[16];
+      int length = snprintf(key, sizeof key, "key-%d", i);
+      scr_dyn_obj_set(object, key, (size_t)length, scr_dyn_new_num(i));
+      assert((object->v.obj.index != NULL) == (i >= 31));
+    }
+    for (int i = 0; i < 129; i++) {
+      char key[16];
+      int length = snprintf(key, sizeof key, "key-%d", i);
+      assert(scr_dyn_obj_get(object, key, (size_t)length)->v.num == i);
+      if (i % 3 == 0) {
+        ScrStr *name = scr_str_new(key, (size_t)length);
+        scr_dyn_key_delete(object, name, true);
+        scr_str_release(name);
+        assert(!scr_dyn_obj_get(object, key, (size_t)length));
+      }
+    }
+    scr_dyn_obj_set(object, "last", 4, scr_dyn_new_num(129));
+    assert(object->v.obj.index);
+    for (int i = 0; i < 129; i++) {
+      char key[16];
+      int length = snprintf(key, sizeof key, "key-%d", i);
+      ScrDyn *value = scr_dyn_obj_get(object, key, (size_t)length);
+      assert(i % 3 == 0 ? value == NULL : value && value->v.num == i);
+    }
+    scr_dyn_obj_set(object, "key-128", 7, scr_dyn_new_num(900));
+    assert(object->v.obj.len == 87);
+    assert(scr_dyn_obj_get(object, "key-128", 7)->v.num == 900);
+    scr_dyn_release(object);
+  }
   /* A direct step is authorized only by the captured builtin method. */
   ScrDyn *source = scr_dyn_new_arr();
   scr_dyn_arr_push(source, scr_dyn_new_num(7));

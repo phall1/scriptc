@@ -146,6 +146,8 @@ describe.skipIf(!zigOnPath())("wasm32-wasi differential", () => {
     "uint8array-sort-domains.ts",
     "buffer-codec-boundaries.ts",
     "text-encode-into-boundaries.ts",
+    "object-key-indexes.js",
+    "record-key-order.ts",
     "1612-cjs-module-globals.cjs",
     "992-fs-roundtrip.ts",
     "751-cycle-records-mutual.ts",
