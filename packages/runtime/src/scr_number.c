@@ -14,6 +14,7 @@
  * and the 1M-double fuzz gate (packages/runtime/test/gen-number-cases.mjs).
  */
 #include "scr_runtime.h"
+#include "scr_numeric.h"
 
 #include <math.h>
 #include <stdint.h>
@@ -27,10 +28,7 @@
 /* ECMA ToUint32, shared by bitwise operators and split's limit: non-finite
  * values become zero, finite values truncate toward zero and wrap mod 2^32. */
 uint32_t scr_to_uint32(double d) {
-  if (!isfinite(d)) return 0;
-  double t = fmod(trunc(d), 4294967296.0);
-  if (t < 0) t += 4294967296.0;
-  return (uint32_t)t;
+  return scr_numeric_to_u32(d);
 }
 
 /* ── bitwise operators ─────────────────────────────────────────────────

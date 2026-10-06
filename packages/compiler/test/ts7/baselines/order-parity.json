@@ -14366,6 +14366,18 @@
     "<repo>/tests/corpus/record-key-order.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/typed-array-bulk-conversion.mjs": {
+   "order": [
+    "<repo>/tests/corpus/typed-array-bulk-conversion.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/typed-array-numeric-import.ts": {
+   "order": [
+    "<repo>/tests/corpus/typed-array-numeric-import.ts"
+   ],
+   "diags": []
   }
  }
 }
