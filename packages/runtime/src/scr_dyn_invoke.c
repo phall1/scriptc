@@ -8,6 +8,7 @@
  * scr_json.c; this unit uses only its public surface plus ScrJsonBuf.
  */
 #include "scr_runtime.h"
+#include "scr_array_methods.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -1746,25 +1747,17 @@ ScrDyn *scr_dyn_array_prototype(void) {
   ScrDyn *prototype = scr_dyn_array_prototype_base();
   if (initialized) return prototype;
   initialized = true;
-  static const struct { const char *name; size_t arity; } methods[] = {
-    {"at", 1}, {"concat", 1}, {"copyWithin", 2}, {"fill", 1}, {"find", 1}, {"findIndex", 1},
-    {"findLast", 1}, {"findLastIndex", 1}, {"lastIndexOf", 1}, {"pop", 0}, {"push", 1},
-    {"reverse", 0}, {"shift", 0}, {"unshift", 1}, {"slice", 2}, {"sort", 1}, {"splice", 2},
-    {"includes", 1}, {"indexOf", 1}, {"join", 1}, {"keys", 0}, {"entries", 0}, {"values", 0},
-    {"forEach", 1}, {"filter", 1}, {"flat", 0}, {"flatMap", 1}, {"map", 1}, {"every", 1},
-    {"some", 1}, {"reduce", 1}, {"reduceRight", 1}, {"toReversed", 0}, {"toSorted", 1},
-    {"toSpliced", 2}, {"with", 2}, {"toLocaleString", 0}, {"toString", 0},
-  };
-  for (size_t i = 0; i < sizeof methods / sizeof methods[0]; i++) {
-    ScrStr *name = scr_str_new(methods[i].name, strlen(methods[i].name));
+  for (size_t i = 0; i < sizeof scr_array_prototype_methods / sizeof scr_array_prototype_methods[0]; i++) {
+    ScrStr *name = scr_str_new(scr_array_prototype_methods[i].name, strlen(scr_array_prototype_methods[i].name));
     ScrDyn *method;
-    if (!strcmp(methods[i].name, "values")) method = scr_dyn_array_values_function();
+    if (!strcmp(scr_array_prototype_methods[i].name, "constructor")) method = scr_dyn_array_constructor();
+    else if (!strcmp(scr_array_prototype_methods[i].name, "values")) method = scr_dyn_array_values_function();
     else {
       ScrClosure *closure = scr_closure_new(NULL, 1);
       closure->caps[0] = scr_box_new(SCR_BOX_STR);
       scr_box_set_ref(closure->caps[0], scr_str_retain(name));
-      method = scr_dyn_new_func(closure, dyn_array_method_value_call, methods[i].arity,
-        "native:Array.prototype", methods[i].name);
+      method = scr_dyn_new_func(closure, dyn_array_method_value_call, scr_array_prototype_methods[i].arity,
+        "native:Array.prototype", scr_array_prototype_methods[i].name);
     }
     ScrDyn *descriptor = scr_dyn_new_obj();
     scr_dyn_obj_set(descriptor, "value", 5, method);
@@ -1777,7 +1770,22 @@ ScrDyn *scr_dyn_array_prototype(void) {
     scr_dyn_release(descriptor);
     scr_str_release(name);
   }
+  scr_dyn_array_prototype_mark_ready();
   return prototype;
+}
+
+/* A prototype exposed to JavaScript must contain its builtin properties
+ * before user mutation. Keep the JSON-only internal query independent of
+ * method adapters; this boundary is linked with the dynInvoke runtime unit. */
+ScrDyn *scr_dyn_get_prototype_exposed(ScrDyn *object) {
+  ScrDyn *prototype = scr_dyn_get_prototype(object);
+  if (!prototype) return NULL;
+  ScrDyn *array_prototype = scr_dyn_array_prototype_base();
+  bool array = prototype == array_prototype;
+  scr_dyn_release(array_prototype);
+  if (!array) return prototype;
+  scr_dyn_release(prototype);
+  return scr_dyn_array_prototype();
 }
 
 /* Object.defineProperties over dyn values (see scr_runtime.h). */

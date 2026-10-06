@@ -36,6 +36,8 @@ function context() {
     prototypeMethodAccesses: new Map(),
     classMethodValueSelections: new Map(),
     isSubclassOf: () => false,
+    coerceToExpected: (value: IrExpr, type: IrExpr["type"]): IrExpr =>
+      value.type.kind === type.kind ? value : { kind: "dynFrom", value, type, loc },
   } as unknown as Lowerer;
   const boxed = fn("box", [
     statement({
@@ -105,6 +107,30 @@ test.each([
   const transformed = target.body;
   expect(dispatch.process(lowerer, [boxed, target, ...liftedFns])).toBe(false);
   expect(target.body).toBe(transformed);
+});
+
+test("boxes optional computed read keys before entering dynamic class dispatch", () => {
+  const { lowerer, boxed, liftedFns } = context();
+  const key: IrExpr = {
+    kind: "varRef",
+    localId: "optionalKey",
+    type: { kind: "union", unionId: "key" },
+    loc,
+  };
+  const target = fn("read", [
+    statement({ kind: "dynKeyGet", value: variable("receiver"), key, type: DYN, loc }),
+  ]);
+  const dispatch = new ClassDynamicDispatch();
+  expect(dispatch.process(lowerer, [boxed, target])).toBe(true);
+  expect(target.body[0]).toMatchObject({
+    kind: "exprStmt",
+    expr: {
+      kind: "call",
+      args: [variable("receiver"), { kind: "dynFrom", value: key, type: DYN }],
+    },
+  });
+  const helper = liftedFns.find((item) => item.name.startsWith("%dyn.class.computed."))!;
+  expect(helper.params[1]!.type).toEqual(DYN);
 });
 
 test("discovers dispatch sites added during a later reachability pass", () => {
