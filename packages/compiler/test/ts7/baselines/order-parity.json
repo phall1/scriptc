@@ -14637,6 +14637,42 @@
     "<repo>/tests/corpus/native-worker-terminate-wait.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/array-key-presence.ts": {
+   "order": [
+    "<repo>/tests/corpus/array-key-presence.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/array-key-tdz-union.ts": {
+   "order": [
+    "<repo>/tests/corpus/array-key-tdz-union.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/array-key-tdz.ts": {
+   "order": [
+    "<repo>/tests/corpus/array-key-tdz.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/array-lazy-prototype-delete.ts": {
+   "order": [
+    "<repo>/tests/corpus/array-lazy-prototype-delete.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/array-primitive-key-order.js": {
+   "order": [
+    "<repo>/tests/corpus/array-primitive-key-order.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/array-prototype-constructor.ts": {
+   "order": [
+    "<repo>/tests/corpus/array-prototype-constructor.ts"
+   ],
+   "diags": []
   }
  }
 }
