@@ -1393,10 +1393,39 @@ test("TDZ globals require guarded pointer storage and round-trip initialization"
   expect(
     validateModule(mod).some((error) =>
       error.message.includes(
-        'TDZ global "value" must have record, function, string, or checked-value storage',
+        'TDZ global "value" must have record, function, string, union, or checked-value storage',
       ),
     ),
   ).toBe(true);
+});
+
+test.each([0, 1])("TDZ boxed union arm %s survives validation and serialization", (tag) => {
+  const mod = tdzModule();
+  const type: IrType = { kind: "union", unionId: "optionalString" };
+  mod.unions = [{ id: "optionalString", arms: [STRING, UNDEFINED_T] }];
+  mod.globals = [{ id: "%g.value", name: "value", type, mutable: false, tdz: true }];
+  mod.functions[0]!.locals = [];
+  mod.functions[0]!.body = [
+    {
+      kind: "assign",
+      localId: "%g.value",
+      initializes: true,
+      loc,
+      value: {
+        kind: "unionWrap",
+        unionId: "optionalString",
+        tag,
+        value:
+          tag === 0
+            ? { kind: "strLit", value: "ready", type: STRING, loc }
+            : { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc },
+        type,
+        loc,
+      },
+    },
+  ];
+  expect(validateModule(mod)).toEqual([]);
+  expect(deserializeModule(serializeModule(mod))).toEqual(mod);
 });
 
 test("legacy const TDZ declarations remain readable", () => {

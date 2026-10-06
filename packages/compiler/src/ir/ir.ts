@@ -1556,7 +1556,7 @@ export interface IrGlobal {
   name: string;
   type: IrType;
   mutable: boolean;
-  /** Lexical record/function/string/checked-value bindings use their initially-null
+  /** Lexical record/function/string/boxed-union/checked-value bindings use their initially-null
    * pointer as a TDZ sentinel. Reads and later writes throw until initializing assign. */
   tdz?: true;
   /** An import-cycle binding whose initialization state lives in this BOOL
