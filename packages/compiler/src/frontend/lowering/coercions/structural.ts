@@ -7,7 +7,7 @@ import type { IrExpr, IrFunction, IrRecordShape, IrStmt, IrType, SrcLoc } from "
 import { BOOL, DYN, F64, STRING, UNDEFINED_T } from "../../../ir/ir.js";
 import { typeKey } from "../../type-mapper.js";
 import { findStaticOn, findGenericStaticOn } from "../lower-classes.js";
-import { lowerRecordOvfCaptureHelper } from "../lower-containers.js";
+import { lowerRecordOvfCaptureHelper } from "../containers/indexed-objects.js";
 import type { Lowerer } from "../lowerer.js";
 
 /** Convert structural values by copying their supported fields or elements.

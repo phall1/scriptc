@@ -58,21 +58,22 @@ import {
 } from "./lowerer.js";
 import { NARROW_FIRST, STRING_INDEX_METHODS, STR_METHODS, stdlibGlobalNameOf } from "./surfaces.js";
 import { requiresDynamicDiag } from "../../diagnostics/diagnostic.js";
+import { dynStringReceiver } from "./containers/dynamic-receivers.js";
 import {
-  dynStringReceiver,
   lowerArrayConstructor,
   lowerArrayFromCall,
   lowerArrayOfCall,
-  lowerDynArrayFilterCall,
-  lowerDynArrayFlatMapCall,
-  lowerGroupByStaticCall,
-  lowerIteratorHelperCall,
+} from "./containers/array-construction.js";
+import { lowerDynArrayFilterCall, lowerDynArrayFlatMapCall } from "./containers/array-callbacks.js";
+import { lowerGroupByStaticCall } from "./containers/collection-grouping.js";
+import { lowerIteratorHelperCall } from "./containers/iterator-helpers.js";
+import {
   lowerObjectAssignIndexShape,
   lowerObjectConstructor,
   lowerObjectFromEntriesCall,
   lowerObjectIterOverIndexShape,
-  lowerTupleReadMethodCall,
-} from "./lower-containers.js";
+} from "./containers/indexed-objects.js";
+import { lowerTupleReadMethodCall } from "./containers/array-methods.js";
 import { lowerBytesStaticCall } from "./containers/bytes.js";
 import {
   lowerRegexMethodCall,
@@ -7378,7 +7379,7 @@ function lowerObjectStaticCall(
     }
     // `Object.assign(target, ...sources)` into an INDEX-SIGNATURE record
     // (the init-config merge pattern): the keyed-write walk over each
-    // source, returning the target — lower-containers owns the matrix.
+    // source, returning the target — indexed-objects owns the matrix.
     const merged = lowerObjectAssignIndexShape(lowerer, call);
     if (merged) return merged;
     // `Object.assign(target, source)` over signature-free RECORDS whose
@@ -7993,7 +7994,7 @@ function lowerObjectStaticCall(
   if (shape.indexValue) {
     // Index-signature (overflow-carrying) shapes: the runtime walk —
     // declared fields first, then the overflow in JS own-key order
-    // (lowerObjectIterOverIndexShape in lower-containers).
+    // (lowerObjectIterOverIndexShape in indexed-objects).
     return lowerObjectIterOverIndexShape(lowerer, call, member, argIr, shape);
   }
   const loc = locOf(call);

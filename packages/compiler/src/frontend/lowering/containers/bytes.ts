@@ -31,7 +31,7 @@ import {
   lowerOptionalArgument,
   lowerStaticallyUndefinedArgument,
 } from "../optional-arguments.js";
-import { lowerCheckedArrayFrom } from "../lower-containers.js";
+import { lowerCheckedArrayFrom } from "./array-construction.js";
 
 /** Uint8Array.prototype.toSorted. The receiver/comparator expressions are
  * evaluated before entering the helper; the helper snapshots with

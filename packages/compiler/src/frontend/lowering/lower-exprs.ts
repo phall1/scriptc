@@ -101,13 +101,13 @@ import {
   unsupportedDiag,
 } from "../../diagnostics/diagnostic.js";
 import { PoisonError, dynFallbackType, jsFuncNameOf, neverTaintedJsType, own } from "./lowerer.js";
+import { lowerCollectionSpread } from "./containers/collection-methods.js";
 import {
-  lowerCollectionSpread,
   lowerNpmStaticSafeIndexRead,
   lowerSafeIndexRead,
-  strCharsCall,
   tryLowerNumericIndexRead,
-} from "./lower-containers.js";
+} from "./containers/array-methods.js";
+import { strCharsCall } from "./containers/array-construction.js";
 import { arrayValueRead, arrayValueStore, arrayValueType } from "./array-values.js";
 import { lowerOptionalStringIndex } from "./string-index.js";
 import { tryLowerIndexedComparison } from "./indexed-comparison.js";
@@ -206,7 +206,7 @@ import {
   lowerObjectAssignValue,
   lowerStringCodesValue,
 } from "./lower-builtin-values.js";
-import { lowerArrayFromValue } from "./lower-containers.js";
+import { lowerArrayFromValue } from "./containers/array-construction.js";
 import { lowerPerfHooksTypeof, lowerUrlAssignment } from "./lower-builtins.js";
 import { jsBindingHasOpenWrites } from "./lower-stmts.js";
 import { checkedClassInstanceOf } from "./class-construction.js";
@@ -12905,7 +12905,7 @@ function matchProducerRegexOf(lowerer: Lowerer, e: ts.Expression): ts.Expression
   }
   // The direct producers: re.exec(s) / s.match(re) — the receiver's
   // mapped type pins the STDLIB operation (a regex for exec, a string
-  // or its nullable spelling for match — the claim lower-containers
+  // or its nullable spelling for match — the claim string-and-regexp
   // makes), so a user method that happens to be named `match` with a
   // regex argument never traces.
   if (ts.isCallExpression(expr) && ts.isPropertyAccessExpression(expr.expression)) {

@@ -62,12 +62,9 @@ import {
   locOf,
 } from "../program.js";
 import { PoisonError, dynFallbackType, newFnCtx, own } from "./lowerer.js";
-import {
-  lowerArrayConstructor,
-  lowerMapSeedNew,
-  lowerObjectConstructor,
-  lowerSetSeedNew,
-} from "./lower-containers.js";
+import { lowerArrayConstructor } from "./containers/array-construction.js";
+import { lowerMapSeedNew, lowerSetSeedNew } from "./containers/collection-methods.js";
+import { lowerObjectConstructor } from "./containers/indexed-objects.js";
 import { bufEncoding } from "./containers/bytes.js";
 import { isSafeToRepeat } from "./expressions/evaluation-safety.js";
 import { lowerSearchParamsNew, lowerTextCodecNew } from "./lower-builtins.js";

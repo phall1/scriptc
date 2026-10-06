@@ -56,6 +56,16 @@ test("compiler import fences reject cross-layer and cross-parser imports", () =>
     ["packages/compiler/src/frontend/lowering/call-signatures.ts", "../../ir/validate.js"],
     ["packages/compiler/src/frontend/lowering/generic-functions.ts", "../../backend/targets.js"],
     ["packages/compiler/src/frontend/lowering/native-ffi.ts", "typescript5"],
+    ["packages/compiler/src/frontend/lowering/containers/array-callbacks.ts", "./array-methods.js"],
+    [
+      "packages/compiler/src/frontend/lowering/containers/callback-arguments.ts",
+      "../../../ir/validate.js",
+    ],
+    [
+      "packages/compiler/src/frontend/lowering/containers/indexed-objects.ts",
+      "../../../backend/targets.js",
+    ],
+    ["packages/compiler/src/frontend/lowering/containers/for-of.ts", "typescript5"],
   ] as const;
   for (const [name, specifier] of cases)
     source(work, name, `export { value } from "${specifier}";\n`);
@@ -82,6 +92,11 @@ test("IR imports and the explicit parser islands remain usable", () => {
     work,
     "packages/compiler/src/frontend/lowering/call-arguments.ts",
     'export { funcTypeFromParamShapes } from "./call-signatures.js";\n',
+  );
+  source(
+    work,
+    "packages/compiler/src/frontend/lowering/containers/array-construction.ts",
+    'export { lowerArrayCallback } from "./callback-arguments.js";\n',
   );
   for (const name of [
     "frontend/npm.ts",
