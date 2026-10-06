@@ -37,7 +37,7 @@ console.log(lookup(1), mutated[0] * 1);
     expect(llvm).toContain("br i1 %integer, label %read, label %fallback");
     expect(llvm).toMatch(/call double @sc_const_numbers_0_get\(/);
     expect(llvm).toContain("call double @scr_arr_get_number(ptr %a, double %i)");
-    expect(llvm).toContain("call double @scr_arr_push_f64(");
+    expect(llvm).toMatch(/call double @scr_arr_push_many\(ptr [^,]+, i64 3, ptr /);
     const wasm = emitLlvmModule(mod, { pointerBits: 32, wasi: true });
     expect(wasm).toContain("%index = fptoui double %i to i32");
     expect(wasm).toContain("ptr @sc_const_numbers_0, i32 0, i32 %index");
