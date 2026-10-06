@@ -715,6 +715,36 @@ static void test_borrowed_ref_read(void) {
   scr_arr_release(a);
 }
 
+static void test_bulk_reference_ownership(void) {
+  long strings0 = scr_str_live_count(), arrays0 = scr_arr_live_count();
+  ScrArr *a = scr_arr_new(SCR_ELEM_STR, 0);
+  uint64_t slots[3];
+  for (size_t i = 0; i < 3; i++) {
+    char text[] = {(char)('a' + i)};
+    slots[i] = (uint64_t)(uintptr_t)scr_str_from_utf8_lossy((const uint8_t *)text, 1);
+  }
+  check_f64(scr_arr_push_many(a, 3, slots), 3, "batch append takes all owned slots");
+  for (size_t i = 0; i < 3; i++) slots[i] = (uint64_t)(uintptr_t)scr_arr_get_ref(a, i);
+  check_f64(scr_arr_unshift_many(a, 3, slots), 6, "batch prepend preserves retained aliases");
+  ScrArr *removed = scr_arr_splice_insert(a, 1, 2, a);
+  check_f64(scr_arr_len(a), 10, "self insertion snapshots the source before mutation");
+  check_f64(scr_arr_len(removed), 2, "self insertion transfers removed ownership");
+  scr_arr_release(removed);
+  ScrStr *value = scr_arr_get_ref(a, 0);
+  ScrArr *same = scr_arr_fill_ref(a, value, 1, INFINITY);
+  check(same == a, "reference fill returns a retained receiver");
+  scr_arr_release(same);
+  scr_str_release(value);
+  scr_arr_release(scr_arr_copy_within(a, 1, 0, INFINITY));
+  scr_arr_release(scr_arr_copy_within(a, 0, 1, INFINITY));
+  check(scr_str_live_count() == strings0 + 1, "overlapping copy retains exactly the remaining value");
+  scr_arr_release(scr_arr_fill_undefined(a, -4, INFINITY));
+  check(scr_arr_state(a, 6) == SCR_ARR_UNDEFINED, "reference fill publishes explicit undefined");
+  scr_arr_release(a);
+  check(scr_str_live_count() == strings0, "bulk reference operations release every element");
+  check(scr_arr_live_count() == arrays0, "bulk reference operations release every array");
+}
+
 int main(int argc, char **argv) {
   if (argc > 1) {
     ScrArr *a = scr_arr_new(SCR_ELEM_F64, 0);
@@ -752,6 +782,7 @@ int main(int argc, char **argv) {
   test_ref_trace_storage_boundaries();
   test_join();
   test_sparse_holes();
+  test_bulk_reference_ownership();
 
   fprintf(stderr, "%ld/%ld cases passed\n", total - failed, total);
   return failed == 0 ? 0 : 1;

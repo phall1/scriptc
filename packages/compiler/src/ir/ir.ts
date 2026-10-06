@@ -1822,6 +1822,10 @@ export type IrArrIntrinsicMethod =
   /** Mutating splice with evaluated insertion items; returns removed slots. */
   | "spliceInsert"
   | "reverse"
+  /** Evaluated numeric bounds; same-type fill values stay borrowed. */
+  | "copyWithin"
+  | "fill"
+  | "fillUndefined"
   /** ES2023 copying methods. `toSpliced` receives [start, deleteCount,
    * itemsArray], with omitted arguments completed by the frontend;
    * `with` receives [index, value] and throws Node's catchable RangeError

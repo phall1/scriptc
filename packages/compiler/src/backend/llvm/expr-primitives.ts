@@ -13,6 +13,7 @@ import { emitStringParts, stringParts } from "./string-construction.js";
 import { emitBorrowedInput } from "./borrowed-inputs.js";
 import { exactInteger, widenInteger, integerNumber } from "./integer-values.js";
 import { integerArithmeticRange } from "../../ir/integer-ranges.js";
+import { emitArrayValues } from "./expr-containers.js";
 
 export function emitLiteralExpr(
   host: LlvmEmitterContext,
@@ -600,11 +601,9 @@ export function emitContainerExpr(
   const B = host.B;
   switch (e.kind) {
     case "arrayLit": {
-      // Allocate, then push each element in order. Ownership of refcounted
-      // plain elements moves into the array; SPREAD positions hold a
-      // same-typed source array (borrowed): its elements copy in —
-      // _get_ref returns +1 and _push_ref takes ownership, RC-balanced;
-      // the length is snapshotted before the loop.
+      // Batch adjacent plain elements. Spread boundaries flush the batch
+      // so every source is copied before later expressions can mutate it.
+      // The fresh array and pending values stay owned across evaluation.
       if (e.type.kind !== "array")
         throw new InternalCompilerError("llvm emitter bug: arrayLit of non-array type");
       const elem = e.type.elem;
@@ -613,15 +612,27 @@ export function emitContainerExpr(
       const out = host.own({ name: arr, type: e.type });
       const acc = elemAccess(elem);
       const spreadSet = new Set(e.spreads ?? []);
+      let pending: LlValue[] = [];
+      let buffer: string | undefined;
+      const flush = (): void => {
+        if (pending.length > 1 && buffer === undefined) {
+          buffer = B.tmp();
+          B.entryAllocas.push(`${buffer} = alloca [${Math.min(e.elems.length, 64)} x i64]`);
+        }
+        if (pending.length > 0) emitArrayValues(host, arr, acc, pending, false, buffer);
+        pending = [];
+      };
       e.elems.forEach((el, i) => {
-        const v = host.emitExpr(el);
         if (spreadSet.has(i)) {
+          flush();
+          const v = host.emitExpr(el);
           host.emitArrayCopyLoop(arr, v.name, acc);
           return;
         }
-        if (acc === "ref") host.moveTemp(v);
-        host.arrPush(arr, acc, v.name);
+        pending.push(host.emitExpr(el));
+        if (pending.length === 64) flush();
       });
+      flush();
       return out;
     }
     case "arrayNewLen": {

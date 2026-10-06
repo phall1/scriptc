@@ -418,7 +418,7 @@ function lowerDataViewNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
 }
 
 /** Method calls on typed-array/Buffer receivers: slice (copy), subarray
- * (shared view), copyWithin, set(src,
+ * (shared view), toReversed, copyWithin, set(src,
  * offset?), and the u8-only Buffer surface: toString(enc?) plus the
  * whole numeric read/write family (fixed widths BE/LE and the
  * variable-width read/writeUIntLE quartet — BUF_NUM_METHODS). Everything
@@ -460,9 +460,9 @@ export function lowerBytesMethodCall(
   if (receiverIr.elem === "u8" && name === "toSorted") {
     return lowerBytesToSortedCall(lowerer, call, access, receiverIr);
   }
-  if (receiverIr.elem === "u8" && name === "toReversed") {
+  if (name === "toReversed") {
     if (nArgs !== 0) {
-      lowerer.noLowering(`.toReversed with ${nArgs} arguments on Uint8Array`, call);
+      lowerer.noLowering(`.toReversed with ${nArgs} arguments on typed arrays`, call);
     }
     return {
       kind: "bytesIntrinsic",
