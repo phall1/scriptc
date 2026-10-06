@@ -14354,6 +14354,18 @@
     "<repo>/tests/corpus/text-encode-into-boundaries.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/object-key-indexes.js": {
+   "order": [
+    "<repo>/tests/corpus/object-key-indexes.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/record-key-order.ts": {
+   "order": [
+    "<repo>/tests/corpus/record-key-order.ts"
+   ],
+   "diags": []
   }
  }
 }
