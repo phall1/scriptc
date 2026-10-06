@@ -275,6 +275,8 @@ test("mutable caller bindings take owned snapshots before later arguments", () =
   mod.functions[0]!.body.push(effect(call("read", [ref("item"), second], record)));
   const main = body(emit(mod), "sc_f_main");
   expect(main).toContain("@scr_union_retain_v");
+  expect(main).toContain("@scr_union_new_ref");
+  expect(main).not.toContain("alloca %ScrUnion");
   expect(main.indexOf("@scr_union_retain_v")).toBeLessThan(main.indexOf("@sc_bf_read"));
   expect(main.lastIndexOf("@scr_union_release")).toBeGreaterThan(main.indexOf("@sc_bf_read"));
 });

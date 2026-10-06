@@ -93,3 +93,26 @@ function nested(choose: boolean): string {
   return output.join(":");
 }
 console.log(nested(true), nested(false));
+
+function readAndClear(value: Cell | undefined, cells: Map<number, Cell>): string {
+  cells.clear();
+  return read(value);
+}
+function clearCells(cells: Map<number, Cell>): number {
+  cells.clear();
+  return cells.size;
+}
+function readWithCount(value: Cell | undefined, count: number): string {
+  return read(value) + ":" + count;
+}
+function callSnapshots(): string {
+  const cells = new Map<number, Cell>();
+  cells.set(1, new Cell("snapshot"));
+  let current = cells.get(1);
+  const output = readWithCount(current, clearCells(cells));
+  current = new Cell("replacement");
+  const next = readAndClear(current, cells);
+  current = undefined;
+  return output + ":" + next + ":" + readAndClear(current, cells);
+}
+console.log(callSnapshots());

@@ -123,6 +123,55 @@ test("conditional immutable locals share the projection-only storage path", () =
   expect(body(mod, 64)).not.toMatch(/@scr_union_(?:new|retain|release)/);
 });
 
+test("projection-only calls borrow reassigned local boxes across unrelated mutations", () => {
+  const mod = fixture();
+  mod.functions.push({
+    name: "observe",
+    loc,
+    returnType: STRING,
+    params: [
+      { localId: "value", name: "value", type: optional },
+      { localId: "map", name: "map", type: map },
+    ],
+    locals: [
+      { id: "value", name: "value", type: optional, mutable: true },
+      { id: "map", name: "map", type: map, mutable: true },
+    ],
+    body: [
+      {
+        kind: "exprStmt",
+        loc,
+        expr: {
+          kind: "mapIntrinsic",
+          method: "clear",
+          receiver: ref("map", map),
+          args: [],
+          type: VOID,
+          loc,
+        },
+      },
+      {
+        kind: "return",
+        loc,
+        value: { kind: "toString", operand: ref("value"), type: STRING, loc },
+      },
+    ],
+  });
+  mod.functions[1]!.body[2] = {
+    kind: "return",
+    loc,
+    value: {
+      kind: "call",
+      callee: "observe",
+      args: [ref("item"), ref("map", map)],
+      type: STRING,
+      loc,
+    },
+  };
+  expect(facts(mod).has("item")).toBe(true);
+  expect(body(mod, 64)).not.toMatch(/@scr_union_(?:new|retain|release)/);
+});
+
 test.each([
   "escape",
   "assignment expression",

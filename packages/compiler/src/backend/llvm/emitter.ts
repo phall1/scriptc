@@ -3999,8 +3999,9 @@ export class LlEmitter {
   }
 
   /** A local stable binding keeps its value alive while later arguments
-   * and the callee execute. Global, captured, TDZ and mutable bindings need
-   * an owned snapshot, even when the callee only inspects the value. */
+   * and the callee execute. A proven local union box cannot escape or be
+   * rebound during a call; its independent payload owner keeps it alive.
+   * Other writable bindings need an owned snapshot. */
   canBorrowCallArgument(value: IrExpr): boolean {
     if (value.kind === "strLit") return true;
     if (value.kind !== "varRef") return false;
@@ -4010,7 +4011,8 @@ export class LlEmitter {
       binding.local !== undefined &&
       (!binding.local.mutable ||
         this.stableCallBindings.has(value.localId) ||
-        this.borrowedParameters.has(value.localId)) &&
+        this.borrowedParameters.has(value.localId) ||
+        this.localUnionStorage.has(value.localId)) &&
       !binding.local.boxed &&
       !binding.local.tdz
     );

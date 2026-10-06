@@ -132,15 +132,18 @@ function collectUses(fn: IrFunction): Uses {
         }
         break;
     }
-    return everyExprChild(node, expr, stmt);
+    return everyExprChild(node, expr, (node) => stmt(node, true));
   }
-  function stmt(node: IrStmt): boolean {
+  function stmt(node: IrStmt, inExpression: boolean): boolean {
     switch (node.kind) {
       case "varDecl":
         uses.declarations.set(node.localId, (uses.declarations.get(node.localId) ?? 0) + 1);
         break;
       case "assign":
         uses.written.add(node.localId);
+        // Sequence expressions can rebind a previous call argument before
+        // its consumer runs. Those locals need an owned heap snapshot.
+        if (inExpression) uses.invalid.add(node.localId);
         break;
       case "forOf":
       case "rethrow":
@@ -154,9 +157,9 @@ function collectUses(fn: IrFunction): Uses {
         }
         break;
     }
-    return everyStmtChild(node, expr, stmt);
+    return everyStmtChild(node, expr, (node) => stmt(node, inExpression));
   }
-  fn.body.forEach(stmt);
+  fn.body.forEach((node) => stmt(node, false));
   for (const capture of [...(fn.captures ?? []), ...(fn.classCaptures ?? [])]) {
     uses.invalid.add(capture.localId);
     uses.written.add(capture.localId);
