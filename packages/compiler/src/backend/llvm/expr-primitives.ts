@@ -738,6 +738,15 @@ export function emitContainerExpr(
       const idx = host.emitExpr(e.index);
       if (e.arr.type.kind !== "array")
         throw new InternalCompilerError("llvm emitter bug: arrayHas on non-array");
+      // String keys (Effect Hash, prototype names) ask the property table.
+      // Numeric keys keep the dense slot fast path.
+      if (e.index.type.kind === "string") {
+        host.declare(`declare zeroext i1 @scr_arr_has_key(ptr, ptr)`);
+        const key = B.tmp();
+        B.line(`${key} = call zeroext i1 @scr_arr_has_key(ptr ${arr.name}, ptr ${idx.name})`);
+        host.emitPendingCheck();
+        return { name: key, type: e.type };
+      }
       const t = emitDenseArrayState(host, arr.name, idx, e.index, "has");
       return { name: t, type: e.type };
     }

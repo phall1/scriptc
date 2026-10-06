@@ -1556,7 +1556,7 @@ export interface IrGlobal {
   name: string;
   type: IrType;
   mutable: boolean;
-  /** Lexical record/function/checked-value bindings use their initially-null
+  /** Lexical record/function/string/checked-value bindings use their initially-null
    * pointer as a TDZ sentinel. Reads and later writes throw until initializing assign. */
   tdz?: true;
   /** An import-cycle binding whose initialization state lives in this BOOL
@@ -2455,6 +2455,7 @@ export type IrExpr =
    * answer false without reading the slot; present undefined answers true.
    * The ordinary-read lowering must use arrayState before selecting its
    * undefined arm. */
+  /** Presence query with a numeric or string property key (not a value read). */
   | { kind: "arrayHas"; arr: IrExpr; index: IrExpr; type: IrType; loc: SrcLoc }
   /** Array slot state as f64: HOLE=0, VALUE=1, UNDEFINED=2. */
   | { kind: "arrayState"; arr: IrExpr; index: IrExpr; type: IrType; loc: SrcLoc }

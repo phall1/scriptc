@@ -70,7 +70,6 @@ function expressionPreservesEdges(
     case "strEq":
     case "strCmp":
     case "arrayGet":
-    case "arrayHas":
     case "arrayState":
     case "unionEq":
     case "unionFuncEq":
@@ -90,6 +89,9 @@ function expressionPreservesEdges(
       );
     case "virtualCall":
       return virtualCall?.(e) ?? false;
+    case "arrayHas":
+      // A prototype Proxy's has trap can mutate references during string-key queries.
+      return e.index.type.kind !== "string";
     case "dynTest":
       return preservesDynTest(e.test);
     case "assignExpr":

@@ -1384,6 +1384,12 @@ function jsDynHoldableInitializer(lowerer: Lowerer, init: ts.Expression | undefi
   return false;
 }
 
+function lexicalPointerTdz(codec: boolean, type: IrType, decl: ts.VariableDeclaration): boolean {
+  if (isVarDeclared(decl)) return false;
+  if (codec || type.kind === "func") return true;
+  return type.kind === "string" && decl.initializer !== undefined;
+}
+
 export function collectGlobals(
   lowerer: Lowerer,
   sf: ts.SourceFile,
@@ -2639,12 +2645,9 @@ export function collectGlobals(
             type,
             mutable: isLet,
             source: bindingSource(nameNode),
-            // A function pointer must not be dereferenced before a lexical
-            // declaration assigns it. The shared pointer TDZ guard handles
-            // these bindings like stored codec records.
-            ...((codec || type.kind === "func") && !isVarDeclared(decl)
-              ? { tdz: true as const }
-              : {}),
+            // String and function pointers must not be dereferenced before
+            // initialization. Reuse the stored-codec pointer TDZ guard.
+            ...(lexicalPointerTdz(codec, type, decl) ? { tdz: true as const } : {}),
           };
           lowerer.globalsBySymbol.set(symbol, g);
           lowerer.globalsList.push(g);

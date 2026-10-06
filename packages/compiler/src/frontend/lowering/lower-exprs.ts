@@ -23,6 +23,7 @@ import { checkedClassAssertion, checkedClassUnionAssertion } from "./class-asser
 import { narrowClassUnion, narrowStoredClassValue } from "./class-unions.js";
 import { lowerUnionFieldWrite } from "./expressions/union-field-write.js";
 import { captureContextArguments } from "./function-context.js";
+import { lowerArrayMembership } from "./array-membership.js";
 import { OBJECT_CALLABLE_VALUES } from "./surfaces.js";
 import { wasiGuestPath } from "../../wasi-paths.js";
 import {
@@ -12864,6 +12865,11 @@ function lowerInExpression(lowerer: Lowerer, expr: ts.BinaryExpression, loc: Src
       };
     }
   }
+  // String and other stringifiable keys (Effect Hash, prototype names)
+  // use the same native presence query. Runtime keys evaluate before the
+  // receiver, without copying the array's elements.
+  const arrayMembership = lowerArrayMembership(lowerer, expr, loc);
+  if (arrayMembership) return arrayMembership;
   const key = foldedStringKeyOf(lowerer, expr.left);
   if (key === null) {
     // A RUNTIME string key over an INDEX-SIGNATURE record receiver (the

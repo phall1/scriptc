@@ -17,6 +17,12 @@ describe("runtime feature snapshots", () => {
     expr: { kind: "libCall" as const, fn, args: [], type: VOID, loc },
   });
 
+  test("prototype exposure links lazy Array.prototype construction", () => {
+    const mod = module();
+    mod.functions[0]!.body.push(call("dyn.getPrototype"));
+    expect(moduleRuntimeFeatures(mod).dynInvoke).toBe(true);
+  });
+
   test("updates link requirements after an IR edit without changing earlier snapshots", () => {
     const mod = module();
     const first = moduleRuntimeFeatures(mod);

@@ -149,6 +149,7 @@ function scanRuntimeFeatures(mod: IrModule, stopAt?: keyof RuntimeFeatures): Run
         fn === "dyn.objCreateWithProperties" ||
         fn === "dyn.arrayProtoCall" ||
         fn === "dyn.arrayPrototype" ||
+        fn === "dyn.getPrototype" ||
         fn === "dyn.functionApply" ||
         fn === "dyn.builtinMethod"
       )

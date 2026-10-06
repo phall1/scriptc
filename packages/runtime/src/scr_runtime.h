@@ -1585,6 +1585,8 @@ double scr_arr_len(ScrArr *a);
  * keys and indices >= length answer false without trapping; callers that need
  * a value must still use the proven-presence get accessors below. */
 bool scr_arr_has(const ScrArr *a, double i);
+/* String-key membership includes holes, ordinary properties and Array.prototype. */
+bool scr_arr_has_key(const ScrArr *a, const ScrStr *key);
 double scr_arr_state(const ScrArr *a, double i);
 double scr_arr_next_present(const ScrArr *a, double start);
 /* Set Array.prototype.length semantics for the supported native array
@@ -4606,6 +4608,7 @@ ScrDyn *scr_dyn_new_obj_null_proto(void);
 ScrDyn *scr_dyn_obj_create(ScrDyn *prototype);
 ScrDyn *scr_dyn_obj_create_with_properties(ScrDyn *prototype, ScrDyn *descriptors);
 ScrDyn *scr_dyn_get_prototype(ScrDyn *object);
+ScrDyn *scr_dyn_get_prototype_exposed(ScrDyn *object); /* +1, constructs exposed builtin methods */
 ScrDyn *scr_dyn_get_own_property_descriptors(ScrDyn *object);
 ScrDyn *scr_dyn_set_prototype(ScrDyn *object, ScrDyn *prototype);
 ScrDyn *scr_dyn_prevent_extensions(ScrDyn *object);
@@ -4731,6 +4734,10 @@ void scr_dyn_global_symbol_delete(ScrSym *key);
 /* `key in v` with a runtime key (OBJ own members, ARR length/valid indices,
  * Proxy has traps). Traps and unsupported representations may throw. */
 bool scr_dyn_has_key(const ScrDyn *v, const ScrStr *key);
+/* Shared default-array prototype presence, including live mutations after
+ * callable methods have been initialized in the optional dispatch unit. */
+bool scr_dyn_array_prototype_has_key(const ScrStr *key);
+void scr_dyn_array_prototype_mark_ready(void);
 /* Bare `typeof v` on a dyn value: the dyn kind's JS answer (+1 string;
  * null answers "object"). Never throws. */
 ScrStr *scr_dyn_typeof(const ScrDyn *d);

@@ -23,6 +23,27 @@ import { validateModule } from "./validate.js";
 
 const loc = { file: "numeric-read.ts", start: 0, end: 0 };
 
+test.each([F64, STRING])("$kind array presence keys survive IR serialization", (type) => {
+  const index: IrExpr =
+    type.kind === "string"
+      ? { kind: "strLit", value: "map", type, loc }
+      : { kind: "numLit", value: 0, type, loc };
+  const query: IrExpr = {
+    kind: "arrayHas",
+    arr: { kind: "arrayLit", elems: [], type: arrayOf(F64), loc },
+    index,
+    type: BOOL,
+    loc,
+  };
+  const mod = expressionModule(query, []);
+  expect(validateModule(deserializeModule(serializeModule(mod)))).toEqual([]);
+  const bad = expressionModule(
+    { ...query, index: { kind: "boolLit", value: true, type: BOOL, loc } },
+    [],
+  );
+  expect(validateModule(bad).some((error) => error.message.includes("arrayHas key"))).toBe(true);
+});
+
 test("static callback operations validate their complete ABI after serialization", () => {
   const mod = expressionModule({ kind: "numLit", value: 0, type: F64, loc }, []);
   mod.ffiImports = [
@@ -1362,11 +1383,17 @@ test("TDZ globals require guarded pointer storage and round-trip initialization"
   ];
   expect(validateModule(mod)).toEqual([]);
   expect(deserializeModule(serializeModule(mod))).toEqual(mod);
+  mod.globals[0]!.type = STRING;
+  const initialization = mod.functions[0]!.body[0]!;
+  if (initialization.kind !== "assign") throw new Error("missing initializing assign");
+  initialization.value = { kind: "strLit", value: "ready", type: STRING, loc };
+  expect(validateModule(mod)).toEqual([]);
+  expect(deserializeModule(serializeModule(mod))).toEqual(mod);
   mod.globals[0]!.type = F64;
   expect(
     validateModule(mod).some((error) =>
       error.message.includes(
-        'TDZ global "value" must have record, function, or checked-value storage',
+        'TDZ global "value" must have record, function, string, or checked-value storage',
       ),
     ),
   ).toBe(true);
