@@ -283,7 +283,9 @@ export class AstWireFile {
     return order < 0 ? 0 : this.childAtOrder(index, order);
   }
 
-  private childAtOrder(index: number, order: number): number {
+  childAtOrder(index: number, order: number): number {
+    if (!Number.isInteger(order) || order < 0 || order >= 8)
+      throw new AstDecodeError("invalid child slot");
     const data = this.data(index);
     const mask = data >>> 30 === 0 ? data & 0xff : 0xff;
     if ((mask & (1 << order)) === 0) return 0;

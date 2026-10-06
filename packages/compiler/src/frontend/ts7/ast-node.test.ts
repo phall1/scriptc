@@ -463,4 +463,7 @@ test("child traversal still rejects a sibling belonging to another parent", () =
   expect(() => new AstFile(broken).node(parent).forEachChild(() => undefined)).toThrow(
     "sibling belongs to another parent",
   );
+  expect(() => walkPreorder(new AstFile(broken).node(parent), () => undefined)).toThrow(
+    "sibling belongs to another parent",
+  );
 });

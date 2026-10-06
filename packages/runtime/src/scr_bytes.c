@@ -779,79 +779,78 @@ static void scr_td_invalid(const char *encoding) {
   scr_throw_error_msg_code(SCR_ERR_TYPE, message, (size_t)n, "ERR_ENCODING_INVALID_ENCODED_DATA");
 }
 
+/* Length of the well-formed prefix. On failure, next skips exactly the
+ * maximal invalid subpart; an offending continuation is reprocessed. */
+static size_t scr_bytes_utf8_prefix(const uint8_t *data, size_t len, size_t *next) {
+  size_t i = 0;
+  while (i < len) {
+    /* Unaligned word loads admit ASCII spans without reading past the input. */
+    while (len - i >= sizeof(uint64_t)) {
+      uint64_t word;
+      memcpy(&word, data + i, sizeof word);
+      if (word & UINT64_C(0x8080808080808080)) break;
+      i += sizeof word;
+    }
+    if (i == len) break;
+    size_t start = i;
+    unsigned byte = data[i++], count;
+    unsigned low = 0x80, high = 0xbf;
+    if (byte < 0x80) continue;
+    if (byte >= 0xc2 && byte <= 0xdf) count = 1;
+    else if (byte >= 0xe0 && byte <= 0xef) {
+      count = 2;
+      if (byte == 0xe0) low = 0xa0;
+      if (byte == 0xed) high = 0x9f;
+    } else if (byte >= 0xf0 && byte <= 0xf4) {
+      count = 3;
+      if (byte == 0xf0) low = 0x90;
+      if (byte == 0xf4) high = 0x8f;
+    } else { *next = i; return start; }
+    for (unsigned j = 0; j < count; j++) {
+      if (i == len || data[i] < low || data[i] > high) {
+        *next = i;
+        return start;
+      }
+      i++;
+      low = 0x80;
+      high = 0xbf;
+    }
+  }
+  *next = len;
+  return len;
+}
+
+/* Measure first, then write into final string storage. Invalid input can
+ * expand, but neither valid prefixes nor retained output need a 3x buffer. */
+static size_t scr_bytes_utf8_repair(const uint8_t *in, size_t n,
+                                  size_t prefix, size_t next, char *out) {
+  size_t written = 0, offset = 0;
+  for (;;) {
+    if (prefix > SIZE_MAX - written) scr_bytes_oom();
+    if (out && prefix) memcpy(out + written, in + offset, prefix);
+    written += prefix;
+    if (prefix == n - offset) return written;
+    if (written > SIZE_MAX - 3) scr_bytes_oom();
+    if (out) memcpy(out + written, "\xef\xbf\xbd", 3);
+    written += 3;
+    offset += next;
+    prefix = scr_bytes_utf8_prefix(in + offset, n - offset, &next);
+  }
+}
+
 static ScrStr *scr_bytes_decode_utf8_options(const uint8_t *in, size_t n, bool fatal) {
   if (in == NULL && n != 0) {
     scr_trap("scriptc: native callback passed a NULL span with nonzero length\n");
   }
-  if (n > (SIZE_MAX - 1) / 3) scr_bytes_oom();
-  char *out = malloc(n * 3 + 1);
-  if (!out) scr_bytes_oom();
-  size_t o = 0;
-  uint32_t cp = 0;
-  int needed = 0;
-  uint8_t lower = 0x80, upper = 0xbf;
-  for (size_t i = 0; i <= n; i++) {
-    if (i == n) {
-      if (needed > 0) { /* EOF inside a sequence: one replacement */
-        if (fatal) { free(out); scr_td_invalid("utf-8"); return NULL; }
-        memcpy(out + o, "\xef\xbf\xbd", 3);
-        o += 3;
-      }
-      break;
-    }
-    uint8_t byte = in[i];
-    if (needed == 0) {
-      if (byte <= 0x7f) {
-        out[o++] = (char)byte;
-      } else if (byte >= 0xc2 && byte <= 0xdf) {
-        needed = 1; cp = byte & 0x1f;
-      } else if (byte >= 0xe0 && byte <= 0xef) {
-        if (byte == 0xe0) lower = 0xa0;
-        if (byte == 0xed) upper = 0x9f;
-        needed = 2; cp = byte & 0xf;
-      } else if (byte >= 0xf0 && byte <= 0xf4) {
-        if (byte == 0xf0) lower = 0x90;
-        if (byte == 0xf4) upper = 0x8f;
-        needed = 3; cp = byte & 0x7;
-      } else {
-        if (fatal) { free(out); scr_td_invalid("utf-8"); return NULL; }
-        memcpy(out + o, "\xef\xbf\xbd", 3);
-        o += 3;
-      }
-      continue;
-    }
-    if (byte < lower || byte > upper) {
-      /* Invalid continuation: replace the subpart, REPROCESS this byte. */
-      if (fatal) { free(out); scr_td_invalid("utf-8"); return NULL; }
-      memcpy(out + o, "\xef\xbf\xbd", 3);
-      o += 3;
-      needed = 0; lower = 0x80; upper = 0xbf;
-      i--;
-      continue;
-    }
-    lower = 0x80; upper = 0xbf;
-    cp = (cp << 6) | (byte & 0x3f);
-    if (--needed == 0) {
-      /* Re-encode the (valid, non-surrogate, <= 10FFFF) code point. */
-      if (cp <= 0x7f) {
-        out[o++] = (char)cp;
-      } else if (cp <= 0x7ff) {
-        out[o++] = (char)(0xc0 | (cp >> 6));
-        out[o++] = (char)(0x80 | (cp & 0x3f));
-      } else if (cp <= 0xffff) {
-        out[o++] = (char)(0xe0 | (cp >> 12));
-        out[o++] = (char)(0x80 | ((cp >> 6) & 0x3f));
-        out[o++] = (char)(0x80 | (cp & 0x3f));
-      } else {
-        out[o++] = (char)(0xf0 | (cp >> 18));
-        out[o++] = (char)(0x80 | ((cp >> 12) & 0x3f));
-        out[o++] = (char)(0x80 | ((cp >> 6) & 0x3f));
-        out[o++] = (char)(0x80 | (cp & 0x3f));
-      }
-    }
-  }
-  ScrStr *s = scr_str_new(out, o);
-  free(out);
+  if (n == 0) return scr_str_new("", 0);
+  size_t next;
+  size_t prefix = scr_bytes_utf8_prefix(in, n, &next);
+  if (prefix == n) return scr_str_new((const char *)in, n);
+  if (fatal) { scr_td_invalid("utf-8"); return NULL; }
+  size_t length = scr_bytes_utf8_repair(in, n, prefix, next, NULL);
+  ScrStr *s = scr_str_alloc_raw(length, length);
+  scr_bytes_utf8_repair(in, n, prefix, next, s->data);
+  s->data[length] = '\0';
   return s;
 }
 
@@ -1853,26 +1852,8 @@ static ScrBytes *scr_buffer_validation_input(const ScrDyn *input) {
 }
 
 static bool scr_buffer_utf8_valid(const uint8_t *data, size_t len) {
-  size_t i = 0;
-  while (i < len) {
-    unsigned byte = data[i++], count;
-    unsigned low = 0x80, high = 0xbf;
-    if (byte < 0x80) continue;
-    if (byte >= 0xc2 && byte <= 0xdf) count = 1;
-    else if (byte >= 0xe0 && byte <= 0xef) {
-      count = 2;
-      if (byte == 0xe0) low = 0xa0;
-      if (byte == 0xed) high = 0x9f;
-    } else if (byte >= 0xf0 && byte <= 0xf4) {
-      count = 3;
-      if (byte == 0xf0) low = 0x90;
-      if (byte == 0xf4) high = 0x8f;
-    } else return false;
-    if (count > len - i || data[i] < low || data[i] > high) return false;
-    i++;
-    for (unsigned j = 1; j < count; j++, i++) if (data[i] < 0x80 || data[i] > 0xbf) return false;
-  }
-  return true;
+  size_t next;
+  return scr_bytes_utf8_prefix(data, len, &next) == len;
 }
 
 bool scr_buffer_is_ascii(const ScrDyn *input) {
