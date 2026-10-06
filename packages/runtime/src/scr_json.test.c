@@ -352,6 +352,118 @@ static void checked_number_storage(void) {
 #endif
 }
 
+static bool native_array_key(const ScrArr *array, const char *name) {
+  ScrStr *key = scr_str_new(name, strlen(name));
+  bool present = scr_arr_has_key(array, key);
+  scr_str_release(key);
+  return present;
+}
+
+static bool checked_array_key(const ScrDyn *array, const char *name) {
+  ScrStr *key = scr_str_new(name, strlen(name));
+  bool present = scr_dyn_has_key(array, key);
+  scr_str_release(key);
+  return present;
+}
+
+static void *array_source_retain(void *source) { return scr_arr_retain(source); }
+static void array_source_release(void *source) { scr_arr_release(source); }
+static ScrDyn *array_source_snapshot(void *source) {
+  ScrDyn *view = scr_dyn_new_arr();
+  scr_arr_copy_metadata(source, view);
+  return view;
+}
+
+static void native_array_prototype_refusal(void) {
+  ScrArr *native = scr_arr_new(SCR_ELEM_F64, 0);
+  ScrDyn *capsule = scr_dyn_new_typed_ref(native, array_source_retain,
+    array_source_release, "array:f64", 9, array_source_snapshot, NULL);
+  ScrDyn *prototype = scr_dyn_new_null();
+  assert(scr_dyn_set_prototype(capsule, prototype) == NULL);
+  assert(scr_exc_pending());
+  ScrCaught *caught = scr_exc_take();
+  ScrStr *message = scr_caught_to_string(caught);
+  assert(strstr(message->data, "Native array prototype mutation has no lowering"));
+  scr_str_release(message);
+  scr_caught_release(caught);
+  ScrDyn *view = scr_dyn_typed_ref_materialize(capsule);
+  assert(!view->null_proto && !view->prototype);
+  assert(native_array_key(native, "map"));
+  scr_dyn_release(view);
+  scr_dyn_release(prototype);
+  scr_dyn_release(capsule);
+  scr_arr_release(native);
+  assert(!scr_exc_pending());
+}
+
+static void array_key_presence(void) {
+  ScrArr *native = scr_arr_new(SCR_ELEM_F64, 0);
+  scr_arr_push_f64(native, 1);
+  scr_arr_set_len(native, 3);
+  scr_arr_set_undefined(native, 2);
+  scr_arr_set_f64(native, -1, 7);
+  scr_arr_set_undefined(native, 1.5);
+  scr_arr_set_f64(native, 4294967295.0, 9);
+  const char *present[] = {"0", "2", "length", "map", "constructor", "hasOwnProperty", "-1", "1.5", "4294967295"};
+  for (size_t i = 0; i < sizeof present / sizeof present[0]; i++) assert(native_array_key(native, present[i]));
+  const char *absent[] = {"1", "3", "01", "-0", "", "~effect/Hash", "4294967296", "999999999999999999999"};
+  for (size_t i = 0; i < sizeof absent / sizeof absent[0]; i++) assert(!native_array_key(native, absent[i]));
+  ScrStr *nul = scr_str_new("map\0", 4);
+  assert(!scr_arr_has_key(native, nul));
+  scr_str_release(nul);
+  native->metadata = scr_dyn_new_obj();
+  scr_dyn_obj_set(native->metadata, "named", 5, scr_dyn_retain(scr_dyn_undefined()));
+  assert(native_array_key(native, "named"));
+
+  ScrDyn *checked = scr_dyn_new_arr();
+  scr_dyn_arr_push(checked, scr_dyn_new_num(1));
+  scr_dyn_arr_push_hole(checked);
+  scr_dyn_arr_push(checked, scr_dyn_retain(scr_dyn_undefined()));
+  assert(checked_array_key(checked, "0"));
+  assert(!checked_array_key(checked, "1"));
+  assert(checked_array_key(checked, "2"));
+  assert(checked_array_key(checked, "map"));
+  assert(checked_array_key(checked, "hasOwnProperty"));
+  assert(!checked_array_key(checked, "~effect/Hash"));
+  ScrDyn *null_base = scr_dyn_new_null();
+  scr_dyn_release(scr_dyn_set_prototype(checked, null_base));
+  ScrDyn *actual_base = scr_dyn_get_prototype(checked);
+  assert(actual_base->kind == SCR_DYN_NULL);
+  assert(!checked_array_key(checked, "map") && checked_array_key(checked, "0"));
+  scr_dyn_release(actual_base);
+  scr_dyn_release(null_base);
+  ScrDyn *default_base = scr_dyn_array_prototype_base();
+  scr_dyn_release(scr_dyn_set_prototype(checked, default_base));
+  scr_dyn_release(default_base);
+  assert(checked_array_key(checked, "map"));
+
+  /* Once prototype methods are constructed, live deletions win over the
+   * lazy method inventory. Queries do not invoke or read property values. */
+  ScrDyn *prototype = scr_dyn_array_prototype_base();
+  ScrStr *key = scr_str_new("map", 3);
+  scr_dyn_key_set(prototype, key, scr_dyn_undefined());
+  ScrStr *constructor_key = scr_str_new("constructor", 11);
+  ScrDyn *constructor = scr_dyn_array_constructor();
+  scr_dyn_key_set(prototype, constructor_key, constructor);
+  scr_dyn_release(constructor);
+  scr_str_release(constructor_key);
+  scr_dyn_array_prototype_mark_ready();
+  assert(native_array_key(native, "map") && checked_array_key(checked, "map"));
+  scr_dyn_key_delete(prototype, key, true);
+  assert(!native_array_key(native, "map") && !checked_array_key(checked, "map"));
+  ScrDyn *null_prototype = scr_dyn_new_null();
+  ScrDyn *detached = scr_dyn_set_prototype(prototype, null_prototype);
+  scr_dyn_release(detached);
+  scr_dyn_release(null_prototype);
+  assert(native_array_key(native, "constructor") && checked_array_key(checked, "constructor"));
+  assert(!native_array_key(native, "hasOwnProperty"));
+  scr_str_release(key);
+  scr_dyn_release(prototype);
+  scr_dyn_release(checked);
+  scr_arr_release(native);
+  assert(!scr_exc_pending());
+}
+
 int main(void) {
   json_string_boundaries();
   json_indent_ownership();
@@ -515,6 +627,8 @@ int main(void) {
   scr_dyn_release(key);
   scr_dyn_release(first);
   assert(!scr_exc_pending());
+  native_array_prototype_refusal();
+  array_key_presence();
   puts("checked storage and weak metadata lifetime checks passed");
   return 0;
 }

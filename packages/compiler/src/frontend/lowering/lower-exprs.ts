@@ -23,6 +23,7 @@ import * as posix from "node:path/posix";
 import type { Lowerer } from "./lowerer.js";
 import { checkedClassAssertion } from "./class-assertions.js";
 import { captureContextArguments } from "./function-context.js";
+import { lowerArrayMembership } from "./array-membership.js";
 import { OBJECT_CALLABLE_VALUES } from "./surfaces.js";
 import { wasiGuestPath } from "../../wasi-paths.js";
 import {
@@ -12223,30 +12224,11 @@ function lowerInExpression(lowerer: Lowerer, expr: ts.BinaryExpression, loc: Src
   // Compile-time-known STRING keys fold — literals, and the same
   // const/enum-literal and template folding computed property keys get
   // (foldedStringKeyOf); runtime-valued keys keep the fence.
-  // NUMERIC literal keys answer on ARRAY receivers through the shared
-  // presence query. Arrays retain holes independently from length, and
-  // noncanonical numeric keys live in their ordinary-property table, so
-  // a length comparison is not an honest `in` answer.
-  {
-    let kNode = expr.left;
-    while (ts.isParenthesizedExpression(kNode)) kNode = kNode.expression;
-    if (
-      ts.isNumericLiteral(kNode) &&
-      lowerer.mapTypeOf(lowerer.typeOf(expr.right))?.kind === "array"
-    ) {
-      const recvArr = lowerer.lowerExpr(expr.right);
-      if (recvArr.type.kind === "array") {
-        const n = Number(kNode.text);
-        return {
-          kind: "arrayHas",
-          arr: recvArr,
-          index: { kind: "numLit", value: n, type: F64, loc },
-          type: BOOL,
-          loc,
-        };
-      }
-    }
-  }
+  // Arrays retain holes and ordinary properties independently from length.
+  // Both string and numeric keys use the native presence query; runtime keys
+  // evaluate before the receiver, without copying the array's elements.
+  const arrayMembership = lowerArrayMembership(lowerer, expr, loc);
+  if (arrayMembership) return arrayMembership;
   const key = foldedStringKeyOf(lowerer, expr.left);
   if (key === null) {
     // A RUNTIME string key over an INDEX-SIGNATURE record receiver (the

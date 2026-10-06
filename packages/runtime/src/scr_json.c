@@ -22,6 +22,7 @@
  *   serializers (and the error messages here).
  */
 #include "scr_runtime.h"
+#include "scr_array_methods.h"
 #include "scr_key.h"
 
 static SCR_TL ScrDyn *scr_builtin_object_prototype;
@@ -544,6 +545,7 @@ void scr_dyn_from_leave(void) {
  * strict alloc/free balance.
  */
 static SCR_TL ScrDyn *scr_builtin_array_prototype;
+static SCR_TL bool scr_builtin_array_prototype_ready;
 
 /* Property names are immutable and often repeated across simultaneously live
  * objects. Entries own references to their bytes; this fixed weak table owns
@@ -1443,6 +1445,7 @@ ScrDyn *scr_dyn_new_str(ScrStr *s) {
 static void scr_builtin_array_prototype_cleanup(void) {
   ScrDyn *prototype = scr_builtin_array_prototype;
   scr_builtin_array_prototype = NULL;
+  scr_builtin_array_prototype_ready = false;
   scr_dyn_release(prototype);
 }
 
@@ -1528,16 +1531,17 @@ ScrDyn *scr_dyn_get_prototype(ScrDyn *object) {
     scr_dyn_release(table);
     if (result) return result;
   }
-  if (object->kind == SCR_DYN_ARR && object != scr_builtin_array_prototype) {
+  if (object->kind == SCR_DYN_ARR) {
     if (object->prototype) return scr_dyn_retain(object->prototype);
-    return scr_dyn_array_prototype_base();
+    if (object->null_proto) return scr_dyn_new_null();
+    return object == scr_builtin_array_prototype
+      ? scr_dyn_object_prototype() : scr_dyn_array_prototype_base();
   }
   if (object->kind == SCR_DYN_OBJ) {
     if (object->prototype) return scr_dyn_retain(object->prototype);
     if (object->null_proto) return scr_dyn_new_null();
     return scr_dyn_object_prototype();
   }
-  if (object == scr_builtin_array_prototype) return scr_dyn_object_prototype();
   if (object->kind == SCR_DYN_NULL || object->kind == SCR_DYN_UNDEF) {
     static const char message[] = "Cannot convert undefined or null to object";
     scr_throw_error_msg(SCR_ERR_TYPE, message, sizeof message - 1);
@@ -1548,17 +1552,28 @@ ScrDyn *scr_dyn_get_prototype(ScrDyn *object) {
   return NULL;
 }
 
+static ScrDyn *scr_dyn_typed_ref_set_prototype(ScrDyn *object, ScrDyn *prototype) {
+  ScrDyn *view = scr_dyn_typed_ref_materialize(object);
+  if (scr_exc_pending()) { scr_dyn_release(view); return NULL; }
+  /* A checked snapshot cannot change the native array's prototype. Refuse
+   * before mutation rather than leave native aliases observing another chain. */
+  if (view->kind == SCR_DYN_ARR) {
+    scr_dyn_release(view);
+    static const char message[] = "Native array prototype mutation has no lowering [SC1090]";
+    scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC1090");
+    return NULL;
+  }
+  ScrDyn *result = scr_dyn_set_prototype(view, prototype);
+  scr_dyn_release(view);
+  if (!result) return NULL;
+  scr_dyn_release(result);
+  return scr_dyn_retain(object);
+}
+
 ScrDyn *scr_dyn_set_prototype(ScrDyn *object, ScrDyn *prototype) {
   if (scr_dyn_class_reflection_fence(object) || scr_dyn_class_reflection_fence(prototype)) return NULL;
-  if (object->kind == SCR_DYN_TYPED_REF) {
-    ScrDyn *view = scr_dyn_typed_ref_materialize(object);
-    if (scr_exc_pending()) { scr_dyn_release(view); return NULL; }
-    ScrDyn *result = scr_dyn_set_prototype(view, prototype);
-    scr_dyn_release(view);
-    if (!result) return NULL;
-    scr_dyn_release(result);
-    return scr_dyn_retain(object);
-  }
+  if (object->kind == SCR_DYN_TYPED_REF)
+    return scr_dyn_typed_ref_set_prototype(object, prototype);
   if (object->kind == SCR_DYN_FUNC) {
     if (prototype->kind == SCR_DYN_FUNC && object->v.fn.clo == prototype->v.fn.clo) {
       static const char message[] = "Cyclic __proto__ value";
@@ -1751,8 +1766,7 @@ static ScrDyn *scr_dyn_proxy_call(const ScrDyn *proxy, ScrDyn *trap, ScrDyn *con
   return result;
 }
 
-static bool scr_dyn_object_proto_key(const ScrDyn *target, const ScrStr *key) {
-  if (target->null_proto) return false;
+static bool scr_dyn_object_builtin_key(const ScrStr *key) {
   static const char *const names[] = {
     "constructor", "__defineGetter__", "__defineSetter__", "hasOwnProperty",
     "__lookupGetter__", "__lookupSetter__", "isPrototypeOf", "propertyIsEnumerable",
@@ -1762,6 +1776,31 @@ static bool scr_dyn_object_proto_key(const ScrDyn *target, const ScrStr *key) {
     if (key->len == strlen(names[i]) && memcmp(key->data, names[i], key->len) == 0) return true;
   }
   return false;
+}
+
+static bool scr_dyn_object_proto_key(const ScrDyn *target, const ScrStr *key) {
+  return !target->null_proto && scr_dyn_object_builtin_key(key);
+}
+
+void scr_dyn_array_prototype_mark_ready(void) {
+  scr_builtin_array_prototype_ready = true;
+}
+
+/* Query the default Array.prototype without eagerly constructing its callable
+ * methods (dispatch-free native programs do not link scr_dyn_invoke.c). Once
+ * constructed, its live property table is authoritative, including deletion. */
+static bool scr_dyn_array_lazy_method_key(const ScrStr *key) {
+  if (scr_builtin_array_prototype_ready) return false;
+  for (size_t i = 0; i < sizeof scr_array_prototype_methods / sizeof scr_array_prototype_methods[0]; i++) {
+    const char *name = scr_array_prototype_methods[i].name;
+    if (key->len == strlen(name) && memcmp(key->data, name, key->len) == 0) return true;
+  }
+  return false;
+}
+
+bool scr_dyn_array_prototype_has_key(const ScrStr *key) {
+  if (scr_builtin_array_prototype) return scr_dyn_has_key(scr_builtin_array_prototype, key);
+  return scr_dyn_array_lazy_method_key(key) || scr_dyn_object_builtin_key(key);
 }
 
 static ScrDyn *scr_dyn_proxy_get_receiver(const ScrDyn *proxy, const ScrStr *key, const ScrDyn *receiver) {
@@ -5470,10 +5509,18 @@ ScrDyn *scr_dyn_bitwise(const ScrDyn *left, const ScrDyn *right, const ScrStr *o
  * ignore silently — the loud choice, SEMANTICS.md). Receiver, key, and
  * value are all BORROWED (the member retains the value in). */
 static const char *scr_dyn_kind_name(const ScrDyn *d);
+static bool scr_dyn_array_has_key(const ScrDyn *value, const ScrStr *key) {
+  if (scr_dyn_has_own(value, key)) return true;
+  if (value == scr_builtin_array_prototype && scr_dyn_array_lazy_method_key(key)) return true;
+  if (value->prototype) return scr_dyn_has_key(value->prototype, key);
+  if (value->null_proto) return false;
+  if (value == scr_builtin_array_prototype) return scr_dyn_object_builtin_key(key);
+  return scr_dyn_array_prototype_has_key(key);
+}
+
 /* `key in v` with a RUNTIME key (the compile-time dynHasKey fold, per
- * value): OBJ answers own-member presence, ARR answers 'length' or a
- * valid dense index, every other kind false (tsc admits `in` only on
- * object-typed operands). Proxy traps may throw. Borrows both. */
+ * value): ARR checks holes, ordinary properties and the prototype chain.
+ * Proxy traps may throw. Borrows both operands. */
 bool scr_dyn_has_key(const ScrDyn *v, const ScrStr *key) {
   if (scr_dyn_generator(v)) {
     static const char *const inherited[] = { "next", "return", "throw", "constructor", "toString", "valueOf", "hasOwnProperty", "propertyIsEnumerable", "isPrototypeOf", "toLocaleString", "__proto__" };
@@ -5510,22 +5557,7 @@ bool scr_dyn_has_key(const ScrDyn *v, const ScrStr *key) {
     }
     return present;
   }
-  if (v->kind == SCR_DYN_ARR) {
-    if (key->len == 6 && memcmp(key->data, "length", 6) == 0) return true;
-    if (v->v.arr.properties && scr_dyn_obj_get(v->v.arr.properties, key->data, key->len)) return true;
-    const ScrDyn *prototype = v->prototype ? v->prototype : !v->null_proto && v != scr_builtin_array_prototype ? scr_builtin_array_prototype : NULL;
-    if (prototype && scr_dyn_has_key(prototype, key)) return true;
-    if (key->len == 0 || key->len > 10) return false;
-    size_t idx = 0;
-    for (size_t i = 0; i < key->len; i++) {
-      char c = key->data[i];
-      if (c < '0' || c > '9') return false;
-      if (i > 0 && idx == 0) return false; /* a leading zero is no canonical index */
-      if (idx > (4294967294ULL - (size_t)(c - '0')) / 10) return false;
-      idx = idx * 10 + (size_t)(c - '0');
-    }
-    return scr_dyn_arr_has_index(v, idx);
-  }
+  if (v->kind == SCR_DYN_ARR) return scr_dyn_array_has_key(v, key);
   if (v->kind == SCR_DYN_STR)
     return scr_dyn_canonical_own_index(key, (size_t)scr_str_utf16_len(v->v.str));
   return false;

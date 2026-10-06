@@ -689,9 +689,13 @@ export function emitContainerExpr(
       const idx = host.emitExpr(e.index);
       if (e.arr.type.kind !== "array")
         throw new InternalCompilerError("llvm emitter bug: arrayHas on non-array");
-      host.declare(`declare zeroext i1 @scr_arr_has(ptr, double)`);
+      const stringKey = e.index.type.kind === "string";
+      const fn = stringKey ? "scr_arr_has_key" : "scr_arr_has";
+      const keyType = stringKey ? "ptr" : "double";
+      host.declare(`declare zeroext i1 @${fn}(ptr, ${keyType})`);
       const t = B.tmp();
-      B.line(`${t} = call zeroext i1 @scr_arr_has(ptr ${arr.name}, double ${idx.name})`);
+      B.line(`${t} = call zeroext i1 @${fn}(ptr ${arr.name}, ${keyType} ${idx.name})`);
+      if (stringKey) host.emitPendingCheck();
       return { name: t, type: e.type };
     }
     case "arrayState": {

@@ -1439,7 +1439,7 @@ export class ClassDynamicDispatch {
               reflect ||
               !!computedProbe ||
               computedWrite?.fn === "dyn.keySetComputed" ||
-              computedRead?.key.type.kind === "dyn";
+              (computedRead !== null && computedRead.key.type.kind !== "string");
             const sourceKey = keyValue(
               computedRead?.key ?? (computedWrite ?? computedProbe)!.args[1]!,
             );
@@ -1681,7 +1681,12 @@ export class ClassDynamicDispatch {
               args: reflect
                 ? (reflectRead ?? reflectWrite)!.args
                 : computedRead
-                  ? [computedRead.value, computedRead.key]
+                  ? [
+                      computedRead.value,
+                      dynamicKey
+                        ? lowerer.coerceToExpected(computedRead.key, DYN)
+                        : computedRead.key,
+                    ]
                   : (computedWrite ?? computedProbe)!.args,
               type: dispatch.fn.returnType,
               loc: expr.loc,

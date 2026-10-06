@@ -1,5 +1,6 @@
 import { lowerWorkerMetadata } from "./builtins/workers.js";
 import { dynUndefinedExpr, nodeThrowExpr, numLit, varRef } from "../../ir/build.js";
+import { hasArrayReference } from "./array-values.js";
 import type { FieldLift } from "./coercions/structural-plans.js";
 import { lowerBuiltinCall } from "./builtin-calls.js";
 import { CoercionState } from "./coercions/state.js";
@@ -7230,7 +7231,7 @@ export class Lowerer {
       isJsSourceFile(node.getSourceFile()) &&
       !ts.isArrayLiteralExpression(literal) &&
       e.kind === "dynFrom" &&
-      e.value.type.kind === "array"
+      hasArrayReference(this, e.value.type)
     ) {
       e = { ...e, liveRef: true };
     }
