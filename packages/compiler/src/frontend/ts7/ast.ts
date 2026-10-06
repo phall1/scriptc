@@ -114,26 +114,25 @@ export function walkPreorder(
   root: Node,
   cb: (node: Node, depth: number) => void | "skip" | "stop",
 ): void {
-  const stack: Node[] = [root];
+  const file = root.file;
+  const stack: number[] = [root.index];
   const depths: number[] = [0];
-  const children: Node[] = [];
-  // The buffer belongs to this walk. Reuse its visitor too: constructing a
-  // closure per node adds allocation and cycle-collection work natively.
-  const appendChild = (child: Node): void => {
-    children.push(child);
-  };
   while (stack.length > 0) {
-    const n = stack.pop()!;
+    const n = file.node(stack.pop()!);
     const depth = depths.pop()!;
     const verdict = cb(n, depth);
     if (verdict === "stop") return;
     if (verdict === "skip") continue;
-    children.length = 0;
-    n.forEachChild(appendChild);
-    for (let i = children.length - 1; i >= 0; i--) {
-      stack.push(children[i]!);
-      depths.push(depth + 1);
+    const first = stack.length;
+    n.appendChildIndices(stack);
+    // The wire visits siblings in source order. Reverse only this new
+    // segment so the stack visits the first child before later siblings.
+    for (let left = first, right = stack.length - 1; left < right; left++, right--) {
+      const index = stack[left]!;
+      stack[left] = stack[right]!;
+      stack[right] = index;
     }
+    for (let i = first; i < stack.length; i++) depths.push(depth + 1);
   }
 }
 

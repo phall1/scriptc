@@ -14306,6 +14306,18 @@
     "<repo>/tests/corpus/unicode-case-paths.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/utf8-span-decoding.ts": {
+   "order": [
+    "<repo>/tests/corpus/utf8-span-decoding.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/literal-switch-dispatch.ts": {
+   "order": [
+    "<repo>/tests/corpus/literal-switch-dispatch.ts"
+   ],
+   "diags": []
   }
  }
 }

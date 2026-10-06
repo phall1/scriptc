@@ -62,6 +62,7 @@ import {
   matchIntegerCountedForLoop,
 } from "../../ir/integer-loops.js";
 import { emitCountedLoopLimit } from "./counted-loops.js";
+import { emitLiteralSwitch } from "./switch-dispatch.js";
 import { findBytesBounds } from "./bytes-bounds.js";
 import { scalarizeNumericRecords } from "../../ir/scalar-records.js";
 import { everyStmtList } from "../../ir/traverse.js";
@@ -5063,7 +5064,8 @@ export class LlEmitter {
 
   /** JS-exact switch: lazily evaluated, arbitrary-expression case tests in
    * source order, bodies falling through in source order until a break —
-   * A chain of conditional branches. All case bodies
+   * Literal-only tests can use native dispatch; other tests keep a chain
+   * of conditional branches. All case bodies
    * share ONE scope; because dispatch can jump PAST a varDecl into a later
    * case, refcounted/boxed case-body locals are NULL-reset up front and
    * the scope-exit releases rely on NULL tolerance. */
@@ -5089,31 +5091,31 @@ export class LlEmitter {
     }
     const end = B.newLabel("sw.e");
     const caseLabels = s.cases.map(() => B.newLabel("sw.c"));
-    let defaultIdx = -1;
-    s.cases.forEach((c, i) => {
-      if (c.test === null) {
-        defaultIdx = i;
-        return;
-      }
-      // Lazy source-order test evaluation (a test after the match never
-      // runs). Each test's temps release right after its comparison.
-      this.frames.push([]);
-      const t = this.emitExpr(c.test);
-      const hit = B.tmp();
-      if (c.test.type.kind === "string") {
-        this.declare(`declare zeroext i1 @scr_str_eq(ptr, ptr)`);
-        B.line(`${hit} = call zeroext i1 @scr_str_eq(ptr ${disc.name}, ptr ${t.name})`);
-      } else if (c.test.type.kind === "bool") {
-        B.line(`${hit} = icmp eq i1 ${disc.name}, ${t.name}`);
-      } else {
-        B.line(`${hit} = fcmp oeq double ${disc.name}, ${t.name}`);
-      }
-      this.releaseFrame(this.frames.pop()!);
-      const next = B.newLabel("sw.t");
-      B.condBr(hit, caseLabels[i]!, next);
-      B.startBlock(next);
-    });
-    B.br(defaultIdx >= 0 ? caseLabels[defaultIdx]! : end);
+    const defaultIdx = s.cases.findIndex((c) => c.test === null);
+    const fallback = defaultIdx >= 0 ? caseLabels[defaultIdx]! : end;
+    if (!emitLiteralSwitch(this, disc, s.cases, caseLabels, fallback)) {
+      s.cases.forEach((c, i) => {
+        if (c.test === null) return;
+        // Lazy source-order test evaluation (a test after the match never
+        // runs). Each test's temps release right after its comparison.
+        this.frames.push([]);
+        const t = this.emitExpr(c.test);
+        const hit = B.tmp();
+        if (c.test.type.kind === "string") {
+          this.declare(`declare zeroext i1 @scr_str_eq(ptr, ptr)`);
+          B.line(`${hit} = call zeroext i1 @scr_str_eq(ptr ${disc.name}, ptr ${t.name})`);
+        } else if (c.test.type.kind === "bool") {
+          B.line(`${hit} = icmp eq i1 ${disc.name}, ${t.name}`);
+        } else {
+          B.line(`${hit} = fcmp oeq double ${disc.name}, ${t.name}`);
+        }
+        this.releaseFrame(this.frames.pop()!);
+        const next = B.newLabel("sw.t");
+        B.condBr(hit, caseLabels[i]!, next);
+        B.startBlock(next);
+      });
+      B.br(fallback);
+    }
 
     this.jumpTargets.push({
       kind: "switch",

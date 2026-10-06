@@ -82,7 +82,7 @@ export class AstFile {
       const cached = indices[slot]!;
       if (cached !== 0) return cached;
     }
-    const index = this.wire.namedChild(node.index, name);
+    const index = this.wire.childAtOrder(node.index, order);
     // The pinned wire has at most eight named children per node. One packed
     // table avoids per-node arrays; allocate it only after successful access
     // so malformed siblings still fail lazily in the checked wire decoder.
@@ -194,6 +194,24 @@ export class AstNode {
     return this.file.wire.kind(index) === KIND_NODE_LIST
       ? this.file.list(index)
       : this.file.node(index);
+  }
+
+  /** Append semantic child handles without giving a traversal worklist an
+   * owning reference to every pending node. Lists still pass through the
+   * checked, identity-preserving cache used by forEachChild. */
+  appendChildIndices(indices: number[]): void {
+    const file = this.file;
+    const wire = file.wire;
+    for (let index = wire.firstChild(this.index); index !== 0; index = wire.next(index)) {
+      if (wire.parent(index) !== this.index)
+        throw new AstDecodeError("sibling belongs to another parent");
+      const kind = wire.kind(index);
+      if (kind === KIND_NODE_LIST) {
+        for (const node of file.list(index)) indices.push(node.index);
+      } else if (kind !== AstKind.JSDoc) {
+        indices.push(index);
+      }
+    }
   }
 
   forEachChild<T>(

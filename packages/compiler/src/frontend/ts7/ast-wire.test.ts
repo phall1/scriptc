@@ -55,6 +55,9 @@ test("overlapping string slices and list parents preserve wire identities", () =
   expect(file.list(2)).toEqual([3, 4]);
   expect(file.semanticParent(3)).toBe(1);
   expect(file.namedChild(1, "statements")).toBe(2);
+  expect(file.childAtOrder(1, 0)).toBe(2);
+  for (const order of [-1, 0.5, 8, NaN, Infinity])
+    expect(() => file.childAtOrder(1, order)).toThrow("invalid child slot");
   expect(file.namedChild(3, "name")).toBe(0);
   expect(file.fileReferences(0xffffffff)).toEqual([]);
   expect(file.fileReferences(0)).toEqual([]);

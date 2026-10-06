@@ -155,6 +155,7 @@ static void test_slice_set_copy(void) {
 }
 
 static void test_encodings(void) {
+  check_str(scr_str_from_utf8_lossy(NULL, 0), "", "empty native UTF-8 span");
   /* utf8 round-trip, astral included (U+1F4A9 + U+00E9). */
   ScrStr *utf8 = S("utf8");
   ScrStr *hex = S("hex");

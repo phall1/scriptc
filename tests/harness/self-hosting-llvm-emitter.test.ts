@@ -107,6 +107,7 @@ const programs = [
   "regex-input-lifetimes.ts",
   "checked-value-input-lifetimes.ts",
   "checked-dispatch-input-lifetimes.js",
+  "literal-switch-dispatch.ts",
 ];
 
 for (const backend of ["llvm"] as const) {
