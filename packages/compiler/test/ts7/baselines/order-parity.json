@@ -14342,6 +14342,18 @@
     "<repo>/tests/corpus/uint8array-sort-domains.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/buffer-codec-boundaries.ts": {
+   "order": [
+    "<repo>/tests/corpus/buffer-codec-boundaries.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/text-encode-into-boundaries.ts": {
+   "order": [
+    "<repo>/tests/corpus/text-encode-into-boundaries.ts"
+   ],
+   "diags": []
   }
  }
 }

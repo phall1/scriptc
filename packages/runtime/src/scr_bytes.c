@@ -779,18 +779,25 @@ static void scr_td_invalid(const char *encoding) {
   scr_throw_error_msg_code(SCR_ERR_TYPE, message, (size_t)n, "ERR_ENCODING_INVALID_ENCODED_DATA");
 }
 
+/* Stop before the first non-ASCII byte; every word load stays in the span. */
+static size_t scr_bytes_ascii_prefix(const uint8_t *data, size_t len) {
+  size_t i = 0;
+  while (len - i >= sizeof(uint64_t)) {
+    uint64_t word;
+    memcpy(&word, data + i, sizeof word);
+    if (word & UINT64_C(0x8080808080808080)) break;
+    i += sizeof word;
+  }
+  while (i < len && data[i] < 0x80) i++;
+  return i;
+}
+
 /* Length of the well-formed prefix. On failure, next skips exactly the
  * maximal invalid subpart; an offending continuation is reprocessed. */
 static size_t scr_bytes_utf8_prefix(const uint8_t *data, size_t len, size_t *next) {
   size_t i = 0;
   while (i < len) {
-    /* Unaligned word loads admit ASCII spans without reading past the input. */
-    while (len - i >= sizeof(uint64_t)) {
-      uint64_t word;
-      memcpy(&word, data + i, sizeof word);
-      if (word & UINT64_C(0x8080808080808080)) break;
-      i += sizeof word;
-    }
+    i += scr_bytes_ascii_prefix(data + i, len - i);
     if (i == len) break;
     size_t start = i;
     unsigned byte = data[i++], count;
@@ -1121,23 +1128,30 @@ static ScrStr *scr_bytes_encode_b64(const uint8_t *in, size_t n, bool url) {
   static const char url_abc[] =
       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
   const char *abc = url ? url_abc : std_abc;
-  size_t outlen = (n + 2) / 3 * 4;
-  char *out = malloc(outlen + 1);
-  if (!out) scr_bytes_oom();
-  size_t o = 0;
-  for (size_t i = 0; i < n; i += 3) {
-    unsigned v = (unsigned)in[i] << 16;
-    if (i + 1 < n) v |= (unsigned)in[i + 1] << 8;
-    if (i + 2 < n) v |= (unsigned)in[i + 2];
-    out[o++] = abc[(v >> 18) & 63];
+  size_t groups = n / 3, tail = n % 3;
+  size_t suffix = tail ? (url ? tail + 1 : 4) : 0;
+  if (groups > (SIZE_MAX - suffix) / 4) scr_bytes_oom();
+  size_t outlen = groups * 4 + suffix;
+  ScrStr *s = scr_str_alloc_raw(outlen, outlen);
+  char *out = s->data;
+  size_t i = 0, o = 0;
+  for (; i < groups * 3; i += 3) {
+    unsigned v = ((unsigned)in[i] << 16) | ((unsigned)in[i + 1] << 8) | in[i + 2];
+    out[o++] = abc[v >> 18];
     out[o++] = abc[(v >> 12) & 63];
-    if (i + 1 < n) out[o++] = abc[(v >> 6) & 63];
-    else if (!url) out[o++] = '=';
-    if (i + 2 < n) out[o++] = abc[v & 63];
-    else if (!url) out[o++] = '=';
+    out[o++] = abc[(v >> 6) & 63];
+    out[o++] = abc[v & 63];
   }
-  ScrStr *s = scr_str_new(out, o);
-  free(out);
+  if (tail) {
+    unsigned v = (unsigned)in[i] << 16;
+    if (tail == 2) v |= (unsigned)in[i + 1] << 8;
+    out[o++] = abc[v >> 18];
+    out[o++] = abc[(v >> 12) & 63];
+    if (tail == 2) out[o++] = abc[(v >> 6) & 63];
+    else if (!url) out[o++] = '=';
+    if (!url) out[o++] = '=';
+  }
+  out[outlen] = '\0';
   return s;
 }
 
@@ -1829,7 +1843,12 @@ ScrDyn *scr_text_encode_into(const ScrDyn *source, const ScrDyn *destination) {
   const ScrStr *text = source->v.str;
   ScrBytes *dest = destination->v.bytes;
   size_t read = 0, written = 0;
-  while (written < text->len) {
+  size_t limit = text->len < dest->len ? text->len : dest->len;
+  while (written < limit) {
+    size_t ascii = scr_bytes_ascii_prefix((const uint8_t *)text->data + written, limit - written);
+    written += ascii;
+    read += ascii;
+    if (written == limit) break;
     size_t end = written;
     uint32_t cp = scr_bytes_next_cp((const uint8_t *)text->data, &end);
     if (end > dest->len) break;
@@ -1859,8 +1878,7 @@ static bool scr_buffer_utf8_valid(const uint8_t *data, size_t len) {
 bool scr_buffer_is_ascii(const ScrDyn *input) {
   ScrBytes *bytes = scr_buffer_validation_input(input);
   if (!bytes) return false;
-  bool result = true;
-  for (size_t i = 0; i < bytes->len; i++) if (bytes->data[i] > 0x7f) { result = false; break; }
+  bool result = scr_bytes_ascii_prefix(bytes->data, bytes->len) == bytes->len;
   scr_bytes_release(bytes);
   return result;
 }
@@ -2015,25 +2033,28 @@ static bool scr_enc_is(const ScrStr *enc, const char *name) {
  * surrogate becomes U+FFFD — Node keeps it as a lone UTF-16 unit, which
  * UTF-8 string storage cannot hold (SEMANTICS.md divergence; stdout
  * agrees byte-for-byte because Node's own write replaces it there too). */
+/* Consume one scalar, replacing an unpaired surrogate at the storage boundary. */
+static uint32_t scr_bytes_utf16le_cp(const uint8_t *in, size_t units, size_t *u) {
+  uint32_t cu = (uint32_t)in[*u * 2] | ((uint32_t)in[*u * 2 + 1] << 8);
+  (*u)++;
+  if (cu >= 0xd800 && cu <= 0xdbff && *u < units) {
+    uint32_t lo = (uint32_t)in[*u * 2] | ((uint32_t)in[*u * 2 + 1] << 8);
+    if (lo >= 0xdc00 && lo <= 0xdfff) {
+      (*u)++;
+      return 0x10000 + ((cu - 0xd800) << 10) + (lo - 0xdc00);
+    }
+  }
+  return cu >= 0xd800 && cu <= 0xdfff ? 0xfffd : cu;
+}
+
 static ScrStr *scr_bytes_decode_utf16le(const uint8_t *in, size_t n) {
   size_t units = n / 2;
-  char *out = malloc(units * 3 + 2);
-  if (!out) scr_bytes_oom();
+  if (units > SIZE_MAX / 3) scr_bytes_oom();
+  ScrStr *s = scr_str_alloc_raw(0, units * 3);
   size_t o = 0;
-  for (size_t u = 0; u < units; u++) {
-    uint32_t cu = (uint32_t)in[u * 2] | ((uint32_t)in[u * 2 + 1] << 8);
-    if (cu >= 0xd800 && cu <= 0xdbff && u + 1 < units) {
-      uint32_t lo = (uint32_t)in[(u + 1) * 2] | ((uint32_t)in[(u + 1) * 2 + 1] << 8);
-      if (lo >= 0xdc00 && lo <= 0xdfff) {
-        o = scr_bytes_put_cp(out, o, 0x10000 + ((cu - 0xd800) << 10) + (lo - 0xdc00));
-        u++;
-        continue;
-      }
-    }
-    o = scr_bytes_put_cp(out, o, cu >= 0xd800 && cu <= 0xdfff ? 0xfffd : cu);
-  }
-  ScrStr *s = scr_str_new(out, o);
-  free(out);
+  for (size_t u = 0; u < units;) o = scr_bytes_put_cp(s->data, o, scr_bytes_utf16le_cp(in, units, &u));
+  s->len = o;
+  s->data[o] = '\0';
   return s;
 }
 
@@ -2043,35 +2064,34 @@ ScrStr *scr_bytes_to_str(const ScrBytes *b, const ScrStr *enc) {
   /* Implicit native string/number coercions have no encoding argument. */
   if (!enc) return scr_bytes_decode_utf8(in, n);
   if (scr_enc_is(enc, "hex")) {
-    char *out = malloc(n * 2 + 1);
-    if (!out) scr_bytes_oom();
+    if (n > SIZE_MAX / 2) scr_bytes_oom();
+    ScrStr *s = scr_str_alloc_raw(n * 2, n * 2);
+    char *out = s->data;
     for (size_t i = 0; i < n; i++) {
       out[i * 2] = scr_hex_digits[in[i] >> 4];
       out[i * 2 + 1] = scr_hex_digits[in[i] & 0xf];
     }
-    ScrStr *s = scr_str_new(out, n * 2);
-    free(out);
+    out[n * 2] = '\0';
     return s;
   }
   if (scr_enc_is(enc, "base64")) return scr_bytes_encode_b64(in, n, false);
   if (scr_enc_is(enc, "base64url")) return scr_bytes_encode_b64(in, n, true);
   if (scr_enc_is(enc, "latin1")) {
     /* Each byte is U+00XX ("binary" normalizes here upstream). */
-    char *out = malloc(n * 2 + 1);
-    if (!out) scr_bytes_oom();
+    size_t high = 0;
+    for (size_t i = 0; i < n; i++) high += in[i] >> 7;
+    if (n > SIZE_MAX - high) scr_bytes_oom();
+    ScrStr *s = scr_str_alloc_raw(n + high, n + high);
     size_t o = 0;
-    for (size_t i = 0; i < n; i++) o = scr_bytes_put_cp(out, o, in[i]);
-    ScrStr *s = scr_str_new(out, o);
-    free(out);
+    for (size_t i = 0; i < n; i++) o = scr_bytes_put_cp(s->data, o, in[i]);
+    s->data[o] = '\0';
     return s;
   }
   if (scr_enc_is(enc, "ascii")) {
     /* Node's ascii decode masks the high bit: byte & 0x7f. */
-    char *out = malloc(n + 1);
-    if (!out) scr_bytes_oom();
-    for (size_t i = 0; i < n; i++) out[i] = (char)(in[i] & 0x7f);
-    ScrStr *s = scr_str_new(out, n);
-    free(out);
+    ScrStr *s = scr_str_alloc_raw(n, n);
+    for (size_t i = 0; i < n; i++) s->data[i] = (char)(in[i] & 0x7f);
+    s->data[n] = '\0';
     return s;
   }
   if (scr_enc_is(enc, "utf16le")) return scr_bytes_decode_utf16le(in, n);
@@ -2152,13 +2172,72 @@ static int scr_hex_val(uint8_t c) {
   return -1;
 }
 
-static int scr_b64_val(uint8_t c) {
-  if (c >= 'A' && c <= 'Z') return c - 'A';
-  if (c >= 'a' && c <= 'z') return c - 'a' + 26;
-  if (c >= '0' && c <= '9') return c - '0' + 52;
-  if (c == '+' || c == '-') return 62; /* '-': base64url, accepted like Node */
-  if (c == '/' || c == '_') return 63; /* '_': base64url */
-  return -1;
+/* Both alphabets are accepted by both Buffer base64 encoding names. */
+static const int8_t scr_b64_values[256] = {
+  -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+  -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+  -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 62, -1, 62, -1, 63,
+  52, 53, 54, 55, 56, 57, 58, 59, 60, 61, -1, -1, -1, -1, -1, -1,
+  -1,  0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14,
+  15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, -1, -1, -1, -1, 63,
+  -1, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
+  41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, -1, -1, -1, -1, -1,
+  -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+  -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+  -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+  -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+  -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+  -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+  -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+  -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+};
+
+/* Conversion destinations are private until their initialized length is set.
+ * General typed-array allocation must remain zero-filled. */
+static ScrBytes *scr_bytes_conversion_storage(size_t capacity) {
+  uint8_t *data = malloc(capacity ? capacity : 1);
+  if (!data) scr_bytes_oom();
+  return scr_bytes_take_data(data, 0);
+}
+
+static ScrBytes *scr_bytes_decode_b64(const uint8_t *in, size_t n) {
+  ScrBytes *b = scr_bytes_conversion_storage(n / 4 * 3 + 2);
+  size_t i = 0, o = 0;
+  unsigned acc = 0, have = 0;
+  while (i < n) {
+    /* Common complete groups need neither per-character branches nor state. */
+    if (have == 0 && n - i >= 4) {
+      int a = scr_b64_values[in[i]], c = scr_b64_values[in[i + 1]];
+      int d = scr_b64_values[in[i + 2]], e = scr_b64_values[in[i + 3]];
+      if ((a | c | d | e) >= 0) {
+        unsigned v = ((unsigned)a << 18) | ((unsigned)c << 12) | ((unsigned)d << 6) | (unsigned)e;
+        b->data[o++] = (uint8_t)(v >> 16);
+        b->data[o++] = (uint8_t)(v >> 8);
+        b->data[o++] = (uint8_t)v;
+        i += 4;
+        continue;
+      }
+    }
+    uint8_t byte = in[i++];
+    if (byte == '=') break;
+    int v = scr_b64_values[byte];
+    if (v < 0) continue;
+    acc = (acc << 6) | (unsigned)v;
+    if (++have == 4) {
+      b->data[o++] = (uint8_t)(acc >> 16);
+      b->data[o++] = (uint8_t)(acc >> 8);
+      b->data[o++] = (uint8_t)acc;
+      acc = 0;
+      have = 0;
+    }
+  }
+  if (have == 2) b->data[o++] = (uint8_t)(acc >> 4);
+  else if (have == 3) {
+    b->data[o++] = (uint8_t)(acc >> 10);
+    b->data[o++] = (uint8_t)(acc >> 2);
+  }
+  b->len = o;
+  return b;
 }
 
 ScrBytes *scr_bytes_from_str(const ScrStr *s, const ScrStr *enc) {
@@ -2167,7 +2246,7 @@ ScrBytes *scr_bytes_from_str(const ScrStr *s, const ScrStr *enc) {
   if (scr_enc_is(enc, "latin1") || scr_enc_is(enc, "ascii")) {
     /* Node writes charCodeAt(i) & 0xFF for BOTH spellings — an astral
      * code point contributes its two surrogates' low bytes. */
-    ScrBytes *b = scr_bytes_alloc(SCR_BYTES_U8, n);
+    ScrBytes *b = scr_bytes_conversion_storage(n);
     size_t o = 0, i = 0;
     while (i < n) {
       uint32_t cp = scr_bytes_next_cp(in, &i);
@@ -2183,7 +2262,8 @@ ScrBytes *scr_bytes_from_str(const ScrStr *s, const ScrStr *enc) {
     return b;
   }
   if (scr_enc_is(enc, "utf16le")) {
-    ScrBytes *b = scr_bytes_alloc(SCR_BYTES_U8, n * 2);
+    if (n > SIZE_MAX / 2) scr_bytes_oom();
+    ScrBytes *b = scr_bytes_conversion_storage(n * 2);
     size_t o = 0, i = 0;
     while (i < n) {
       uint32_t cp = scr_bytes_next_cp(in, &i);
@@ -2202,53 +2282,50 @@ ScrBytes *scr_bytes_from_str(const ScrStr *s, const ScrStr *enc) {
     b->len = o;
     return b;
   }
-  if (enc->len == 3 && memcmp(enc->data, "hex", 3) == 0) {
-    /* Node-lenient: parse pairs, stop at the first invalid pair or the
-     * odd tail (Buffer.from("a1g2", "hex") is <Buffer a1>). */
-    ScrBytes *b = scr_bytes_alloc(SCR_BYTES_U8, n / 2);
-    size_t o = 0;
-    for (size_t i = 0; i + 1 < n; i += 2) {
-      int hi = scr_hex_val(in[i]);
-      int lo = scr_hex_val(in[i + 1]);
-      if (hi < 0 || lo < 0) break;
-      b->data[o++] = (uint8_t)((hi << 4) | lo);
+  bool hex = scr_enc_is(enc, "hex");
+  if (hex || scr_enc_is(enc, "base64") || scr_enc_is(enc, "base64url")) {
+    /* Node interprets encoded text as the low byte of each UTF-16 unit.
+     * ASCII can borrow storage; non-ASCII must preserve that truncation. */
+    ScrBytes *narrowed = NULL;
+    if (scr_bytes_ascii_prefix(in, n) != n) {
+      ScrStr *latin1 = scr_str_new("latin1", 6);
+      narrowed = scr_bytes_from_str(s, latin1);
+      scr_str_release(latin1);
+      in = narrowed->data;
+      n = narrowed->len;
     }
-    b->len = o; /* never grows: shrinking the count is safe */
-    return b;
-  }
-  if (scr_enc_is(enc, "base64") || scr_enc_is(enc, "base64url")) {
-    /* Node-lenient: skip bytes outside the (standard + url-safe)
-     * alphabets — whitespace, '=', stray punctuation; decode 4-char
-     * groups, and a 2/3-char tail into 1/2 bytes. Both spellings share
-     * the decoder (Node accepts either alphabet under either name). */
-    ScrBytes *b = scr_bytes_alloc(SCR_BYTES_U8, n / 4 * 3 + 2);
-    size_t o = 0;
-    unsigned acc = 0;
-    int have = 0;
-    for (size_t i = 0; i < n; i++) {
-      int v = scr_b64_val(in[i]);
-      if (v < 0) continue;
-      acc = (acc << 6) | (unsigned)v;
-      if (++have == 4) {
-        b->data[o++] = (uint8_t)(acc >> 16);
-        b->data[o++] = (uint8_t)(acc >> 8);
-        b->data[o++] = (uint8_t)acc;
-        acc = 0;
-        have = 0;
+    ScrBytes *b;
+    if (hex) {
+      /* Stop at the first invalid pair, discarding an odd tail. */
+      b = scr_bytes_conversion_storage(n / 2);
+      size_t o = 0;
+      for (size_t i = 0; i + 1 < n; i += 2) {
+        int hi = scr_hex_val(in[i]), lo = scr_hex_val(in[i + 1]);
+        if (hi < 0 || lo < 0) break;
+        b->data[o++] = (uint8_t)((hi << 4) | lo);
       }
+      b->len = o;
+    } else {
+      b = scr_bytes_decode_b64(in, n);
     }
-    if (have == 2) b->data[o++] = (uint8_t)(acc >> 4);
-    else if (have == 3) {
-      b->data[o++] = (uint8_t)(acc >> 10);
-      b->data[o++] = (uint8_t)(acc >> 2);
-    }
-    b->len = o;
+    scr_bytes_release(narrowed);
     return b;
   }
   /* utf8: ScrStr storage IS the bytes */
-  ScrBytes *b = scr_bytes_alloc(SCR_BYTES_U8, n);
+  ScrBytes *b = scr_bytes_conversion_storage(n);
   memcpy(b->data, in, n);
+  b->len = n;
   return b;
+}
+
+/* Runtime encoding variables share the output conversion alias/error table.
+ * Buffer.from treats an empty encoding as utf8, even for an empty source. */
+ScrBytes *scr_bytes_from_str_checked(const ScrStr *s, const ScrStr *enc) {
+  ScrStr *normalized = enc->len ? scr_bytes_normalize_encoding(enc) : scr_str_new("utf8", 4);
+  if (!normalized) return NULL;
+  ScrBytes *out = scr_bytes_from_str(s, normalized);
+  scr_str_release(normalized);
+  return out;
 }
 
 ScrBytes *scr_bytes_from_arr(ScrBytesElem elem, const ScrArr *arr) {
@@ -2480,6 +2557,36 @@ double scr_bytes_write_str(ScrBytes *b, const ScrStr *s, const ScrStr *enc,
     budget = (size_t)len > remaining ? remaining : (size_t)len;
   } else {
     budget = remaining;
+  }
+  /* UTF-8 already has its final representation. Copy only the requested
+   * prefix, backing off when the destination ends inside a scalar. */
+  if (scr_enc_is(enc, "utf8")) {
+    size_t k = s->len < budget ? s->len : budget;
+    if (k < s->len) {
+      while (k > 0 && ((uint8_t)s->data[k] & 0xc0) == 0x80) k--;
+    }
+    if (k) memcpy(b->data + o, s->data, k);
+    return (double)k;
+  }
+  bool utf16 = scr_enc_is(enc, "utf16le");
+  if (utf16 || scr_enc_is(enc, "latin1") || scr_enc_is(enc, "ascii")) {
+    size_t i = 0, written = 0, width = utf16 ? 2 : 1;
+    while (i < s->len && budget - written >= width) {
+      uint32_t cp = scr_bytes_next_cp((const uint8_t *)s->data, &i);
+      uint32_t first = cp, second = 0;
+      if (cp > 0xffff) {
+        cp -= 0x10000;
+        first = 0xd800 + (cp >> 10);
+        second = 0xdc00 + (cp & 0x3ff);
+      }
+      b->data[o + written++] = (uint8_t)first;
+      if (utf16) b->data[o + written++] = (uint8_t)(first >> 8);
+      if (second && budget - written >= width) {
+        b->data[o + written++] = (uint8_t)second;
+        if (utf16) b->data[o + written++] = (uint8_t)(second >> 8);
+      }
+    }
+    return (double)written;
   }
   ScrBytes *encd = scr_bytes_from_str(s, enc);
   size_t k = encd->len < budget ? encd->len : budget;

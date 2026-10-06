@@ -2159,6 +2159,7 @@ export const LIB_FN_SIGS = defineLibFnSignatures({
    * bytes<u8>[] arg (the list) and returns a fresh copy. `Buffer.from(u8)`
    * and `Buffer.alloc(n)` need no libFn — they lower to bytesNew. */
   "buffer.fromStr": { argTypes: [STRING, STRING], result: BYTES_U8 },
+  "buffer.fromStrChecked": { argTypes: [STRING, STRING], result: BYTES_U8 },
   "buffer.brand": { argTypes: [BYTES_U8], result: BYTES_U8 },
   /** Buffer.from on checked-native strings, bytes, arrays and data-only
    * array-like/Buffer-JSON objects. The encoding is a normalized literal;
