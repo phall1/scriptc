@@ -14282,6 +14282,18 @@
     "<repo>/tests/corpus/structured-text-boundaries.js"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/array-storage-transitions.ts": {
+   "order": [
+    "<repo>/tests/corpus/array-storage-transitions.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/typed-array-reversed-storage.ts": {
+   "order": [
+    "<repo>/tests/corpus/typed-array-reversed-storage.ts"
+   ],
+   "diags": []
   }
  }
 }

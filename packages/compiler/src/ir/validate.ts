@@ -2216,51 +2216,57 @@ function validateFunction(
         }
         const elem = e.receiver.type.elem;
         const sig =
-          e.method === "push" || e.method === "unshift"
-            ? { argTypes: e.args.map(() => elem), result: F64 }
-            : e.method === "pushSpread" ||
-                e.method === "concatSpread" ||
-                e.method === "unshiftSpread"
-              ? { argTypes: [e.receiver.type], result: F64 }
-              : e.method === "nextPresent" || e.method === "getNumber"
-                ? { argTypes: [F64], result: F64 }
-                : e.method === "indexEq"
-                  ? { argTypes: [F64, e.receiver.type, F64], result: BOOL }
-                  : e.method === "pop"
-                    ? { argTypes: [], result: e.type } // union-checked below
-                    : e.method === "indexOf"
-                      ? { argTypes: [elem], result: F64 }
-                      : e.method === "includes"
-                        ? { argTypes: [elem], result: BOOL }
-                        : e.method === "join"
-                          ? { argTypes: [STRING], result: STRING }
-                          : e.method === "slice"
-                            ? { argTypes: [F64, F64], result: e.receiver.type }
-                            : e.method === "toReversed"
-                              ? { argTypes: [], result: e.receiver.type }
-                              : e.method === "reverse"
-                                ? { argTypes: [], result: e.receiver.type }
-                                : e.method === "toSpliced"
-                                  ? {
-                                      argTypes: [F64, F64, e.receiver.type],
-                                      result: e.receiver.type,
-                                    }
-                                  : e.method === "with"
-                                    ? { argTypes: [F64, elem], result: e.receiver.type }
-                                    : e.method === "withUndefined"
-                                      ? { argTypes: [F64], result: e.receiver.type }
-                                      : e.method === "splice"
-                                        ? { argTypes: [F64, F64], result: e.receiver.type }
-                                        : e.method === "spliceInsert"
-                                          ? {
-                                              argTypes: [F64, F64, e.receiver.type],
-                                              result: e.receiver.type,
-                                            }
-                                          : e.method === "flatCopy" || e.method === "flatOne"
-                                            ? { argTypes: [e.type], result: e.type }
-                                            : e.method === "shift"
-                                              ? { argTypes: [], result: e.type } // union-checked below
-                                              : { argTypes: [], result: F64 }; // length
+          e.method === "copyWithin"
+            ? { argTypes: [F64, F64, F64], result: e.receiver.type }
+            : e.method === "fill"
+              ? { argTypes: [elem, F64, F64], result: e.receiver.type }
+              : e.method === "fillUndefined"
+                ? { argTypes: [F64, F64], result: e.receiver.type }
+                : e.method === "push" || e.method === "unshift"
+                  ? { argTypes: e.args.map(() => elem), result: F64 }
+                  : e.method === "pushSpread" ||
+                      e.method === "concatSpread" ||
+                      e.method === "unshiftSpread"
+                    ? { argTypes: [e.receiver.type], result: F64 }
+                    : e.method === "nextPresent" || e.method === "getNumber"
+                      ? { argTypes: [F64], result: F64 }
+                      : e.method === "indexEq"
+                        ? { argTypes: [F64, e.receiver.type, F64], result: BOOL }
+                        : e.method === "pop"
+                          ? { argTypes: [], result: e.type } // union-checked below
+                          : e.method === "indexOf"
+                            ? { argTypes: [elem], result: F64 }
+                            : e.method === "includes"
+                              ? { argTypes: [elem], result: BOOL }
+                              : e.method === "join"
+                                ? { argTypes: [STRING], result: STRING }
+                                : e.method === "slice"
+                                  ? { argTypes: [F64, F64], result: e.receiver.type }
+                                  : e.method === "toReversed"
+                                    ? { argTypes: [], result: e.receiver.type }
+                                    : e.method === "reverse"
+                                      ? { argTypes: [], result: e.receiver.type }
+                                      : e.method === "toSpliced"
+                                        ? {
+                                            argTypes: [F64, F64, e.receiver.type],
+                                            result: e.receiver.type,
+                                          }
+                                        : e.method === "with"
+                                          ? { argTypes: [F64, elem], result: e.receiver.type }
+                                          : e.method === "withUndefined"
+                                            ? { argTypes: [F64], result: e.receiver.type }
+                                            : e.method === "splice"
+                                              ? { argTypes: [F64, F64], result: e.receiver.type }
+                                              : e.method === "spliceInsert"
+                                                ? {
+                                                    argTypes: [F64, F64, e.receiver.type],
+                                                    result: e.receiver.type,
+                                                  }
+                                                : e.method === "flatCopy" || e.method === "flatOne"
+                                                  ? { argTypes: [e.type], result: e.type }
+                                                  : e.method === "shift"
+                                                    ? { argTypes: [], result: e.type } // union-checked below
+                                                    : { argTypes: [], result: F64 }; // length
         if (e.method === "getNumber" && elem.kind !== "f64") {
           err(`arrIntrinsic getNumber requires f64 elements, got ${elem.kind}`, e.loc);
         }

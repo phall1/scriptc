@@ -147,10 +147,14 @@ static void scr_arr_grow_dense(ScrArr *a, size_t need) {
     cap *= 2;
   }
   if (cap > SCR_ARR_DENSE_LIMIT) cap = SCR_ARR_DENSE_LIMIT;
-  uint64_t *data = realloc(a->data, cap * sizeof(uint64_t));
+  /* Values and states share one allocation. Move the old states before
+   * publishing the larger capacity: their previous location is now part
+   * of the value area. Existing data and state pointers keep their ABI. */
+  if (cap > SIZE_MAX / (sizeof(uint64_t) + sizeof(uint8_t))) scr_arr_oom();
+  uint64_t *data = realloc(a->data, cap * (sizeof(uint64_t) + sizeof(uint8_t)));
   if (!data) scr_arr_oom();
-  uint8_t *present = realloc(a->present, cap);
-  if (!present) scr_arr_oom();
+  uint8_t *present = (uint8_t *)(data + cap);
+  if (a->cap) memmove(present, (uint8_t *)(data + a->cap), a->cap);
   memset(present + a->cap, 0, cap - a->cap);
   a->data = data;
   a->present = present;
@@ -397,9 +401,56 @@ static ScrArrStorage scr_arr_take_storage(ScrArr *a) {
 
 static void scr_arr_free_storage(ScrArrStorage *s) {
   free(s->data);
-  free(s->present);
   free(s->sparse);
   memset(s, 0, sizeof(*s));
+}
+
+/* Dense storage may still contain holes and explicit undefined. These
+ * operations move ownership with the slots and move the states alongside
+ * them; they never inspect an uninitialized hole payload. */
+static bool scr_arr_is_dense(const ScrArr *a) {
+  return a->len <= a->cap && a->sparse_len == 0;
+}
+
+static void scr_arr_move_dense(ScrArr *a, size_t to, size_t from, size_t count) {
+  if (count == 0) return;
+  memmove(a->data + to, a->data + from, count * sizeof(*a->data));
+  memmove(a->present + to, a->present + from, count);
+}
+
+static void scr_arr_clear_dense(ScrArr *a, size_t from, size_t count) {
+  if (count == 0) return;
+  memset(a->present + from, SCR_ARR_HOLE, count);
+  memset(a->data + from, 0, count * sizeof(*a->data));
+}
+
+/* The destination owns no values in this range. Only retain adapters run
+ * while copying references: no release can collect an intermediate copy.
+ * Self-appends use disjoint ranges after reserving capacity. */
+static void scr_arr_copy_dense(ScrArr *dst, size_t to, const ScrArr *src,
+                                size_t from, size_t count, bool reverse,
+                                bool materialize_holes) {
+  if (count == 0) return;
+  if (!reverse) {
+    memcpy(dst->data + to, src->data + from, count * sizeof(*dst->data));
+    memcpy(dst->present + to, src->present + from, count);
+  } else {
+    for (size_t i = 0; i < count; i++) {
+      size_t source = from + count - i - 1;
+      memcpy(dst->data + to + i, src->data + source, sizeof(*dst->data));
+      dst->present[to + i] = src->present[source];
+    }
+  }
+  bool refs = scr_elem_is_ref(src->elem);
+  if (!refs && !materialize_holes) return;
+  for (size_t i = to; i < to + count; i++) {
+    if (dst->present[i] == SCR_ARR_VALUE) {
+      if (refs) dst->data[i] = scr_elem_retain_slot(src, dst->data[i]);
+    } else if (materialize_holes && dst->present[i] == SCR_ARR_HOLE) {
+      dst->data[i] = 0;
+      dst->present[i] = SCR_ARR_UNDEFINED;
+    }
+  }
 }
 
 ScrArr *scr_arr_new(ScrElemKind elem, size_t initial_cap) {
@@ -455,7 +506,6 @@ void scr_arr_trace_v(void *a0, ScrTraceVisit visit, void *ctx) {
 static void scr_arr_gc_free(void *a0) {
   ScrArr *a = (ScrArr *)a0;
   free(a->data);
-  free(a->present);
   free(a->sparse);
   for (size_t i = 0; i < a->prop_len; i++) free(a->props[i].key);
   free(a->props);
@@ -534,7 +584,6 @@ void scr_arr_release(ScrArr *a) {
       scr_arr_gc_free(a);
     } else {
       free(a->data);
-      free(a->present);
       free(a->sparse);
       for (size_t i = 0; i < a->prop_len; i++) free(a->props[i].key);
       free(a->props);
@@ -649,6 +698,16 @@ void scr_arr_copy_range_ex(ScrArr *dst, size_t dst_start, const ScrArr *src,
                            size_t src_start, size_t count, bool reverse,
                            bool materialize_holes) {
   if (count == 0) return;
+  if (src != dst && src_start <= src->cap && count <= src->cap - src_start &&
+      dst_start <= dst->cap && count <= dst->cap - dst_start) {
+    size_t empty = 0;
+    while (empty < count && dst->present[dst_start + empty] == SCR_ARR_HOLE) empty++;
+    if (empty == count) {
+      scr_arr_copy_dense(dst, dst_start, src, src_start, count, reverse,
+                         materialize_holes);
+      return;
+    }
+  }
   size_t end = src_start + count;
   size_t dense_start = src_start < src->cap ? src_start : src->cap;
   size_t dense_end = end < src->cap ? end : src->cap;
@@ -676,6 +735,76 @@ void scr_arr_copy_range_ex(ScrArr *dst, size_t dst_start, const ScrArr *src,
       }
     }
   }
+}
+
+static size_t scr_arr_relative_index(double value, size_t length) {
+  double integer = isnan(value) ? 0 : trunc(value);
+  if (integer < 0) integer += (double)length;
+  return integer <= 0 ? 0 : integer >= (double)length ? length : (size_t)integer;
+}
+
+ScrArr *scr_arr_copy_within(ScrArr *a, double target, double start, double end) {
+  size_t to = scr_arr_relative_index(target, a->len);
+  size_t from = scr_arr_relative_index(start, a->len);
+  size_t last = scr_arr_relative_index(end, a->len);
+  size_t count = last > from ? last - from : 0;
+  if (count > a->len - to) count = a->len - to;
+  if (count == 0 || from == to) return scr_arr_retain(a);
+  if (!scr_elem_is_ref(a->elem) && from < a->cap && count <= a->cap - from &&
+      to < a->cap && count <= a->cap - to) {
+    scr_arr_move_dense(a, to, from, count);
+    return scr_arr_retain(a);
+  }
+  bool backwards = from < to && to - from < count;
+  for (size_t i = 0; i < count; i++) {
+    size_t offset = backwards ? count - i - 1 : i;
+    uint64_t slot = 0;
+    uint8_t state = scr_arr_state_at(a, from + offset, &slot);
+    if (state == SCR_ARR_HOLE) {
+      scr_arr_delete(a, (double)(to + offset));
+    } else {
+      if (state == SCR_ARR_VALUE) slot = scr_elem_retain_slot(a, slot);
+      /* Each replacement publishes its edge before releasing the previous
+       * owner; cycle collection can run between successive positions. */
+      scr_arr_replace_state_owned(a, to + offset, slot, state);
+    }
+  }
+  return scr_arr_retain(a);
+}
+
+static ScrArr *scr_arr_fill_slot(ScrArr *a, uint64_t slot, uint8_t state,
+                                  double start, double end) {
+  size_t from = scr_arr_relative_index(start, a->len);
+  size_t until = scr_arr_relative_index(end, a->len);
+  if (from >= until) return scr_arr_retain(a);
+  bool refs = scr_elem_is_ref(a->elem);
+  if (!refs && until <= SCR_ARR_DENSE_LIMIT) {
+    scr_arr_grow_dense(a, until);
+    for (size_t i = from; i < until; i++) a->data[i] = slot;
+    memset(a->present + from, state, until - from);
+  } else {
+    for (size_t i = from; i < until; i++) {
+      uint64_t value = refs && state == SCR_ARR_VALUE ? scr_elem_retain_slot(a, slot) : slot;
+      scr_arr_replace_state_owned(a, i, value, state);
+    }
+  }
+  return scr_arr_retain(a);
+}
+
+ScrArr *scr_arr_fill_f64(ScrArr *a, double value, double start, double end) {
+  return scr_arr_fill_slot(a, scr_slot_from_f64(value), SCR_ARR_VALUE, start, end);
+}
+
+ScrArr *scr_arr_fill_bool(ScrArr *a, bool value, double start, double end) {
+  return scr_arr_fill_slot(a, value ? 1 : 0, SCR_ARR_VALUE, start, end);
+}
+
+ScrArr *scr_arr_fill_ref(ScrArr *a, void *value, double start, double end) {
+  return scr_arr_fill_slot(a, scr_slot_from_ptr(value), SCR_ARR_VALUE, start, end);
+}
+
+ScrArr *scr_arr_fill_undefined(ScrArr *a, double start, double end) {
+  return scr_arr_fill_slot(a, 0, SCR_ARR_UNDEFINED, start, end);
 }
 
 /* ── Math.max/min over one spread number[] ─────────────────────────────
@@ -924,10 +1053,33 @@ double scr_arr_push_ref(ScrArr *a, void *v) {
   return scr_arr_push_slot(a, scr_slot_from_ptr(v));
 }
 
+double scr_arr_push_many(ScrArr *a, size_t count, const uint64_t *slots) {
+  if (count > SCR_ARR_MAX_LENGTH - a->len) scr_arr_oom();
+  size_t from = a->len, next = from + count;
+  if (next <= SCR_ARR_DENSE_LIMIT) {
+    scr_arr_grow_dense(a, next);
+    if (count) {
+      memcpy(a->data + from, slots, count * sizeof(*slots));
+      memset(a->present + from, SCR_ARR_VALUE, count);
+    }
+  } else {
+    for (size_t i = 0; i < count; i++) scr_arr_store_owned(a, from + i, slots[i]);
+  }
+  a->len = next;
+  return (double)next;
+}
+
 double scr_arr_push_spread(ScrArr *a, const ScrArr *src) {
   size_t old_len = a->len;
   size_t add = src->len;
   if (add > SCR_ARR_MAX_LENGTH - old_len) scr_arr_oom();
+  if (scr_arr_is_dense(a) && scr_arr_is_dense(src) &&
+      old_len + add <= SCR_ARR_DENSE_LIMIT) {
+    scr_arr_grow_dense(a, old_len + add);
+    scr_arr_copy_dense(a, old_len, src, 0, add, false, true);
+    a->len += add;
+    return (double)a->len;
+  }
   if (src == a) {
     ScrArrStorage old = scr_arr_take_storage(a);
     a->len = 0;
@@ -962,6 +1114,13 @@ double scr_arr_concat_copy(ScrArr *a, const ScrArr *src) {
   size_t old_len = a->len;
   size_t add = src->len;
   if (add > SCR_ARR_MAX_LENGTH - old_len) scr_arr_oom();
+  if (scr_arr_is_dense(a) && scr_arr_is_dense(src) &&
+      old_len + add <= SCR_ARR_DENSE_LIMIT) {
+    scr_arr_grow_dense(a, old_len + add);
+    scr_arr_copy_dense(a, old_len, src, 0, add, false, false);
+    a->len += add;
+    return (double)a->len;
+  }
   if (src == a) {
     ScrArrStorage old = scr_arr_take_storage(a);
     a->len = 0;
@@ -1003,6 +1162,14 @@ static double scr_arr_unshift_slot(ScrArr *a, uint64_t slot) {
     scr_arr_trap_oob((double)a->len, a->len);
   }
   size_t old_len = a->len;
+  if (scr_arr_is_dense(a) && old_len < SCR_ARR_DENSE_LIMIT) {
+    scr_arr_grow_dense(a, old_len + 1);
+    scr_arr_move_dense(a, 1, 0, old_len);
+    a->data[0] = slot;
+    a->present[0] = SCR_ARR_VALUE;
+    a->len++;
+    return (double)a->len;
+  }
   ScrArrStorage old = scr_arr_take_storage(a);
   a->len = 0;
   scr_arr_store_owned(a, 0, slot);
@@ -1030,11 +1197,46 @@ double scr_arr_unshift_ref(ScrArr *a, void *v) {
   return scr_arr_unshift_slot(a, scr_slot_from_ptr(v));
 }
 
+double scr_arr_unshift_many(ScrArr *a, size_t count, const uint64_t *slots) {
+  size_t old_len = a->len;
+  if (count == 0) return (double)old_len;
+  if (count > SCR_ARR_MAX_LENGTH - old_len) scr_arr_oom();
+  if (scr_arr_is_dense(a) && old_len + count <= SCR_ARR_DENSE_LIMIT) {
+    scr_arr_grow_dense(a, old_len + count);
+    scr_arr_move_dense(a, count, 0, old_len);
+    memcpy(a->data, slots, count * sizeof(*slots));
+    memset(a->present, SCR_ARR_VALUE, count);
+  } else {
+    ScrArrStorage old = scr_arr_take_storage(a);
+    for (size_t i = 0; i < count; i++) scr_arr_store_owned(a, i, slots[i]);
+    for (size_t i = 0; i < old.cap; i++) {
+      if (old.present[i] != SCR_ARR_HOLE)
+        scr_arr_store_state_owned(a, i + count, old.data[i], old.present[i]);
+    }
+    for (size_t i = 0; i < old.sparse_len; i++) {
+      scr_arr_store_state_owned(a, old.sparse[i].index + count,
+                                old.sparse[i].slot, old.sparse[i].state);
+    }
+    scr_arr_free_storage(&old);
+  }
+  a->len = old_len + count;
+  return (double)a->len;
+}
+
 double scr_arr_unshift_spread(ScrArr *a, const ScrArr *src) {
   size_t old_len = a->len;
   size_t add = src->len;
   if (add == 0) return (double)old_len;
   if (add > SCR_ARR_MAX_LENGTH - old_len) scr_arr_oom();
+  if (scr_arr_is_dense(a) && scr_arr_is_dense(src) &&
+      old_len + add <= SCR_ARR_DENSE_LIMIT) {
+    scr_arr_grow_dense(a, old_len + add);
+    scr_arr_move_dense(a, add, 0, old_len);
+    /* A self-spread reads the original values at their moved location. */
+    scr_arr_copy_dense(a, 0, src, src == a ? add : 0, add, false, true);
+    a->len += add;
+    return (double)a->len;
+  }
   ScrArrStorage old = scr_arr_take_storage(a);
   a->len = 0;
   for (size_t i = 0; i < add; i++) {
@@ -1064,6 +1266,19 @@ double scr_arr_unshift_spread(ScrArr *a, const ScrArr *src) {
 
 ScrArr *scr_arr_reverse(ScrArr *a) {
   size_t len = a->len;
+  if (scr_arr_is_dense(a)) {
+    for (size_t i = 0; i < len / 2; i++) {
+      size_t j = len - i - 1;
+      uint64_t slot;
+      memcpy(&slot, a->data + i, sizeof slot);
+      memcpy(a->data + i, a->data + j, sizeof slot);
+      memcpy(a->data + j, &slot, sizeof slot);
+      uint8_t state = a->present[i];
+      a->present[i] = a->present[j];
+      a->present[j] = state;
+    }
+    return scr_arr_retain(a);
+  }
   ScrArrStorage old = scr_arr_take_storage(a);
   a->len = len;
   for (size_t i = 0; i < old.cap; i++) {
@@ -1113,6 +1328,14 @@ uint8_t scr_arr_shift_state(ScrArr *a, uint64_t *slot_out) {
   if (slot_out) *slot_out = 0;
   if (a->len == 0) return SCR_ARR_HOLE;
   size_t old_len = a->len;
+  if (scr_arr_is_dense(a)) {
+    uint8_t state = a->present[0];
+    if (slot_out && state == SCR_ARR_VALUE) *slot_out = a->data[0];
+    scr_arr_move_dense(a, 0, 1, old_len - 1);
+    scr_arr_clear_dense(a, old_len - 1, 1);
+    a->len--;
+    return state;
+  }
   ScrArrStorage old = scr_arr_take_storage(a);
   uint64_t s = 0;
   uint8_t state = scr_arr_state_at_storage(&old, 0, &s);
@@ -1169,6 +1392,16 @@ ScrArr *scr_arr_splice(ScrArr *a, double start, double deleteCount) {
           : scr_arr_new(a->elem, n ? n : 1);
   out->len = n;
   size_t old_len = a->len;
+  if (scr_arr_is_dense(a)) {
+    if (n) {
+      memcpy(out->data, a->data + from, n * sizeof(*a->data));
+      memcpy(out->present, a->present + from, n);
+    }
+    scr_arr_move_dense(a, from, from + n, old_len - from - n);
+    scr_arr_clear_dense(a, old_len - n, n);
+    a->len -= n;
+    return out;
+  }
   ScrArrStorage old = scr_arr_take_storage(a);
   a->len = 0;
   for (size_t i = 0; i < old.cap; i++) {
@@ -1215,6 +1448,30 @@ ScrArr *scr_arr_splice_insert(ScrArr *a, double start, double deleteCount,
   double d0 = isnan(deleteCount) ? 0 : trunc(deleteCount);
   size_t n = d0 <= 0 ? 0 : d0 >= avail ? (size_t)avail : (size_t)d0;
   if (items->len > SCR_ARR_MAX_LENGTH - (a->len - n)) scr_arr_oom();
+  size_t add = items->len, next_len = a->len - n + add;
+  if (scr_arr_is_dense(a) && scr_arr_is_dense(items) &&
+      next_len <= SCR_ARR_DENSE_LIMIT) {
+    /* Snapshot an aliased argument before changing the receiver. Ordinary
+     * callers have already materialized variadic arguments, so this copy
+     * is needed only by direct self-spread runtime callers. */
+    ScrArr *snapshot = items == a ? scr_arr_slice(a, 0, INFINITY) : NULL;
+    if (snapshot) items = snapshot;
+    ScrArr *removed = a->elem == SCR_ELEM_REF
+        ? scr_arr_new_ref(a->elem_retain, a->elem_release, a->elem_trace, n)
+        : scr_arr_new(a->elem, n);
+    if (n) {
+      memcpy(removed->data, a->data + from, n * sizeof(*a->data));
+      memcpy(removed->present, a->present + from, n);
+    }
+    removed->len = n;
+    scr_arr_grow_dense(a, next_len);
+    scr_arr_move_dense(a, from + add, from + n, a->len - from - n);
+    scr_arr_copy_dense(a, from, items, 0, add, false, true);
+    if (next_len < a->len) scr_arr_clear_dense(a, next_len, a->len - next_len);
+    a->len = next_len;
+    scr_arr_release(snapshot);
+    return removed;
+  }
   ScrArr *removed = scr_arr_splice(a, start, deleteCount);
   ScrArr *tail = scr_arr_splice(a, (double)from, INFINITY);
   scr_arr_push_spread(a, items);
@@ -1377,6 +1634,10 @@ ScrArr *scr_arr_slice(ScrArr *a, double start, double end) {
           ? scr_arr_new_ref(a->elem_retain, a->elem_release, a->elem_trace, n ? n : 1)
           : scr_arr_new(a->elem, n ? n : 1);
   out->len = n;
+  if (to <= a->cap) {
+    scr_arr_copy_dense(out, 0, a, from, n, false, false);
+    return out;
+  }
   for (size_t i = 0; i < a->cap && i < to; i++) {
     if (i < from || a->present[i] == SCR_ARR_HOLE) continue;
     uint8_t state = a->present[i];

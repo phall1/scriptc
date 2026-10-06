@@ -73,6 +73,66 @@ export function arrPush(
   return t;
 }
 
+/** Move evaluated values through one bounded slot buffer per call site. */
+export function emitArrayValues(
+  host: LlvmEmitterContext,
+  arr: string,
+  acc: "f64" | "bool" | "ref",
+  values: LlValue[],
+  prepend = false,
+  sharedBuffer?: string,
+): string {
+  const B = host.B;
+  if (acc === "ref") values.forEach((value) => host.moveTemp(value));
+  if (values.length === 0) {
+    host.declare("declare double @scr_arr_len(ptr)");
+    const result = B.tmp();
+    B.line(`${result} = call double @scr_arr_len(ptr ${arr})`);
+    return result;
+  }
+  if (values.length === 1) {
+    if (!prepend) return arrPush(host, arr, acc, values[0]!.name);
+    const ty = acc === "f64" ? "double" : acc === "bool" ? "i1" : "ptr";
+    host.declare(
+      `declare double @scr_arr_unshift_${acc}(ptr, ${ty}${acc === "bool" ? " zeroext" : ""})`,
+    );
+    const result = B.tmp();
+    B.line(`${result} = call double @scr_arr_unshift_${acc}(ptr ${arr}, ${ty} ${values[0]!.name})`);
+    return result;
+  }
+  const capacity = Math.min(values.length, 64);
+  const buffer = sharedBuffer ?? B.tmp();
+  if (sharedBuffer === undefined) B.entryAllocas.push(`${buffer} = alloca [${capacity} x i64]`);
+  const helper = prepend ? "scr_arr_unshift_many" : "scr_arr_push_many";
+  host.declare(`declare double @${helper}(ptr, ${host.sizeType}, ptr)`);
+  let result = "";
+  for (let processed = 0; processed < values.length; processed += capacity) {
+    const count = Math.min(capacity, values.length - processed);
+    // Prepending consumes chunks from the end, preserving source order
+    // both within each chunk and across the completed operation.
+    const start = prepend ? values.length - processed - count : processed;
+    for (let i = 0; i < count; i++) {
+      const slot = B.tmp(),
+        pointer = B.tmp();
+      const value = values[start + i]!.name;
+      const pack =
+        acc === "f64"
+          ? `bitcast double ${value} to i64`
+          : acc === "bool"
+            ? `zext i1 ${value} to i64`
+            : `ptrtoint ptr ${value} to i64`;
+      B.line(`${slot} = ${pack}`);
+      B.line(`${pointer} = getelementptr inbounds i64, ptr ${buffer}, ${host.sizeType} ${i}`);
+      B.line(`store i64 ${slot}, ptr ${pointer}`);
+    }
+    result = B.tmp();
+    B.line(
+      `${result} = call double @${helper}(ptr ${arr}, ${host.sizeType} ${count}, ptr ${buffer})`,
+    );
+  }
+  return result;
+}
+
 export function emitArrayCopyLoop(
   host: LlvmEmitterContext,
   dst: string,
@@ -386,14 +446,7 @@ export function emitArrIntrinsic(
       // the last push's return, or the unchanged length for Node's
       // no-op zero-argument call.
       const vs = e.args.map((a) => host.emitExpr(a));
-      if (acc === "ref") vs.forEach((v) => host.moveTemp(v));
-      let last = "";
-      for (const v of vs) last = host.arrPush(r.name, acc, v.name);
-      if (last !== "") return { name: last, type: e.type };
-      host.declare(`declare double @scr_arr_len(ptr)`);
-      const t = B.tmp();
-      B.line(`${t} = call double @scr_arr_len(ptr ${r.name})`);
-      return { name: t, type: e.type };
+      return { name: emitArrayValues(host, r.name, acc, vs), type: e.type };
     }
     case "pushSpread": {
       // `a.push(...src)`: append src's elements in order (borrowed src,
@@ -416,20 +469,7 @@ export function emitArrIntrinsic(
       // Evaluate every argument before the first mutation, then insert
       // from right to left so the final front order is source order.
       const vs = e.args.map((a) => host.emitExpr(a));
-      if (acc === "ref") vs.forEach((v) => host.moveTemp(v));
-      host.declare(`declare double @scr_arr_unshift_${acc}(ptr, ${accArg})`);
-      let last = "";
-      for (let i = vs.length - 1; i >= 0; i--) {
-        last = B.tmp();
-        B.line(
-          `${last} = call double @scr_arr_unshift_${acc}(ptr ${r.name}, ${accTy} ${vs[i]!.name})`,
-        );
-      }
-      if (last !== "") return { name: last, type: e.type };
-      host.declare(`declare double @scr_arr_len(ptr)`);
-      const t = B.tmp();
-      B.line(`${t} = call double @scr_arr_len(ptr ${r.name})`);
-      return { name: t, type: e.type };
+      return { name: emitArrayValues(host, r.name, acc, vs, true), type: e.type };
     }
     case "unshiftSpread": {
       // The runtime snapshots the borrowed source and handles self-spread.
@@ -546,6 +586,25 @@ export function emitArrIntrinsic(
       const t = B.tmp();
       B.line(`${t} = call ptr @scr_arr_reverse(ptr ${r.name})`);
       return host.own({ name: t, type: e.type });
+    }
+    case "copyWithin":
+    case "fill":
+    case "fillUndefined": {
+      const args = e.args.map((arg) => host.emitExpr(arg));
+      const helper =
+        e.method === "copyWithin"
+          ? "scr_arr_copy_within"
+          : e.method === "fillUndefined"
+            ? "scr_arr_fill_undefined"
+            : `scr_arr_fill_${acc}`;
+      const types = e.method === "fill" ? [accTy, "double", "double"] : args.map(() => "double");
+      const signature = e.method === "fill" ? [accArg, "double", "double"] : types;
+      host.declare(`declare ptr @${helper}(ptr, ${signature.join(", ")})`);
+      const result = B.tmp();
+      B.line(
+        `${result} = call ptr @${helper}(ptr ${r.name}, ${args.map((arg, i) => `${types[i]} ${arg.name}`).join(", ")})`,
+      );
+      return host.own({ name: result, type: e.type });
     }
     case "toSpliced": {
       const start = host.emitExpr(e.args[0]!);

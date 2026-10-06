@@ -1032,7 +1032,7 @@ typedef struct ScrArr {
   void (*elem_release)(void *);
   ScrTraceFn elem_trace;
   uint64_t *data;
-  uint8_t *present; /* one ScrArrState per dense slot */
+  uint8_t *present; /* one state per dense slot; heap arrays share data allocation */
   struct ScrArrSparseSlot *sparse;
   size_t sparse_len;
   size_t sparse_cap;
@@ -1111,6 +1111,13 @@ void scr_arr_copy_range(ScrArr *dst, size_t dst_start, const ScrArr *src,
 void scr_arr_copy_range_ex(ScrArr *dst, size_t dst_start, const ScrArr *src,
                            size_t src_start, size_t count, bool reverse,
                            bool materialize_holes);
+/* Mutating indexed operations borrow the receiver and value, preserve
+ * sparse presence, and return the receiver retained. */
+ScrArr *scr_arr_copy_within(ScrArr *a, double target, double start, double end);
+ScrArr *scr_arr_fill_f64(ScrArr *a, double value, double start, double end);
+ScrArr *scr_arr_fill_bool(ScrArr *a, bool value, double start, double end);
+ScrArr *scr_arr_fill_ref(ScrArr *a, void *value, double start, double end);
+ScrArr *scr_arr_fill_undefined(ScrArr *a, double start, double end);
 /* Math.max(...xs) / Math.min(...xs) over an f64-element array: the JS
  * fold (NaN poisons, ±0 by the JS preferences, empty → ∓Infinity). */
 double scr_math_max_arr(ScrArr *a);
@@ -1170,6 +1177,10 @@ ScrArr *scr_arr_with_undefined(ScrArr *a, double index);
 double scr_arr_push_f64(ScrArr *a, double v);
 double scr_arr_push_bool(ScrArr *a, bool v);
 double scr_arr_push_ref(ScrArr *a, void *v);
+/* Compiler-built slot buffers do not alias array storage. Both operations
+ * move ownership of every slot and preserve the evaluated argument order. */
+double scr_arr_push_many(ScrArr *a, size_t count, const uint64_t *slots);
+double scr_arr_unshift_many(ScrArr *a, size_t count, const uint64_t *slots);
 /* Append a same-element-kind array through the JS iterator contract: holes
  * become present undefined states. The source is borrowed and self-spread
  * duplicates the original indexed state. */

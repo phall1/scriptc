@@ -125,9 +125,19 @@ ScrArr *scr_arr_with_undefined(ScrArr *a, double index) {
 
 ScrBytes *scr_bytes_to_reversed(const ScrBytes *b) {
   ScrBytes *out = scr_bytes_new(b->elem, (double)b->len);
+  size_t width = scr_bytes_elem_size(b->elem);
+  /* Copy the stored representation without numeric conversion. Views may
+   * be unaligned, so fixed-width memcpy preserves both alignment safety
+   * and floating-point payload bits. The width is invariant for the loop. */
   for (size_t i = 0; i < b->len; i++) {
-    scr_bytes_set(out, (double)i,
-                  scr_bytes_get(b, (double)(b->len - i - 1)));
+    const uint8_t *source = b->data + (b->len - i - 1) * width;
+    uint8_t *target = out->data + i * width;
+    switch (width) {
+    case 1: *target = *source; break;
+    case 2: memcpy(target, source, 2); break;
+    case 4: memcpy(target, source, 4); break;
+    case 8: memcpy(target, source, 8); break;
+    }
   }
   return out;
 }

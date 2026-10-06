@@ -323,7 +323,8 @@ export function lowerArrayMethodCall(
         call.arguments[0]!,
       );
     }
-    const writeUndefined = value === null || value.type.kind === "undefinedT";
+    const writeUndefined =
+      value === null || value.type.kind === "undefinedT" || value.type.kind === "void";
     return lowerArrayFill(
       lowerer,
       lowerer.lowerExpr(access.expression),
@@ -340,7 +341,6 @@ export function lowerArrayMethodCall(
       lowerer.noLowering(`.copyWithin with ${call.arguments.length} arguments`, call);
     }
     return lowerArrayCopyWithin(
-      lowerer,
       lowerer.lowerExpr(access.expression),
       lowerArrayPosition(lowerer, call.arguments[0], numLit(0, loc), "array copyWithin target"),
       lowerArrayPosition(lowerer, call.arguments[1], numLit(0, loc), "array copyWithin start"),

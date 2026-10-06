@@ -331,6 +331,40 @@ function numericReadModule(overrides: Partial<IrExpr & { kind: "arrIntrinsic" }>
   };
 }
 
+test.each(["copyWithin", "fill", "fillUndefined"] as const)(
+  "indexed array mutation %s validates its serialized argument and result contract",
+  (method) => {
+    const number: IrExpr = { kind: "numLit", value: 1, type: F64, loc };
+    const value: IrExpr = { kind: "strLit", value: "entry", type: STRING, loc };
+    const type = arrayOf(STRING);
+    const expr: IrExpr & { kind: "arrIntrinsic" } = {
+      kind: "arrIntrinsic",
+      method,
+      receiver: { kind: "arrayLit", elems: [], type, loc },
+      args:
+        method === "fill"
+          ? [value, number, number]
+          : method === "copyWithin"
+            ? [number, number, number]
+            : [number, number],
+      type,
+      loc,
+    };
+    const mod = expressionModule(expr, []);
+    expect(validateModule(mod)).toEqual([]);
+    expect(deserializeModule(serializeModule(mod))).toEqual(mod);
+    for (const change of [
+      { args: expr.args.slice(1) },
+      { args: [...expr.args.slice(0, -1), value] },
+      { args: [method === "fill" ? number : value, ...expr.args.slice(1)] },
+      { type: arrayOf(F64) },
+    ]) {
+      const invalid = expressionModule({ ...expr, ...change }, []);
+      expect(validateModule(deserializeModule(serializeModule(invalid))).length).toBeGreaterThan(0);
+    }
+  },
+);
+
 function expressionModule(expr: IrExpr, unions: IrUnionDef[]): IrModule {
   return {
     irVersion: 13,
