@@ -38,13 +38,59 @@ interface ArrayReadShape {
   missingTag: number;
 }
 
+/** Recognize the state-test/read pair shared by helpers and lowered loops.
+ * Repeated operands must be plain bindings or numeric literals: folding an
+ * effectful index or receiver would change evaluation count and ordering. */
+function inlineArrayRead(
+  value: IrExpr,
+  unions: ReadonlyMap<string, IrUnionDef>,
+): LocalArrayRead | null {
+  if (value.kind !== "ternary" || value.type.kind !== "union") return null;
+  const { cond, then, else_: missing } = value;
+  if (
+    cond.kind !== "bin" ||
+    cond.op !== "===" ||
+    cond.left.kind !== "arrayState" ||
+    cond.right.kind !== "numLit" ||
+    cond.right.value !== 1 ||
+    then.kind !== "unionWrap" ||
+    then.unionId !== value.type.unionId ||
+    then.value.kind !== "arrayGet" ||
+    missing.kind !== "unionWrap" ||
+    missing.unionId !== value.type.unionId ||
+    missing.value.kind !== "unitLit" ||
+    missing.value.unit !== "undefined"
+  )
+    return null;
+  const sameOperand = (left: IrExpr, right: IrExpr): boolean =>
+    (left.kind === "varRef" && right.kind === "varRef" && left.localId === right.localId) ||
+    (left.kind === "numLit" && right.kind === "numLit" && Object.is(left.value, right.value));
+  const array = cond.left.arr,
+    index = cond.left.index;
+  if (
+    array.kind !== "varRef" ||
+    array.type.kind !== "array" ||
+    index.type.kind !== "f64" ||
+    !sameOperand(array, then.value.arr) ||
+    !sameOperand(index, then.value.index)
+  )
+    return null;
+  const element = array.type.elem;
+  const arms = unions.get(value.type.unionId)?.arms;
+  if (!isRefCounted(element) || element.kind === "union" || !arms || arms.length !== 2) return null;
+  const presentTag = arms.findIndex((arm) => typeEquals(arm, element));
+  const missingTag = arms.findIndex((arm) => arm.kind === "undefinedT");
+  if (presentTag < 0 || missingTag < 0 || then.tag !== presentTag || missing.tag !== missingTag)
+    return null;
+  return { type: value.type, element, presentTag, missingTag, array, index };
+}
+
 /** Recognize the complete optional-array-read body, not the helper's name. */
 function arrayReadShape(
   fn: IrFunction,
   unions: ReadonlyMap<string, IrUnionDef>,
 ): ArrayReadShape | null {
   if (
-    fn.returnType.kind !== "union" ||
     fn.async ||
     fn.generator ||
     fn.captures ||
@@ -52,44 +98,27 @@ function arrayReadShape(
     fn.params.length !== 2 ||
     fn.body.length !== 1 ||
     fn.locals.length !== 2 ||
-    fn.locals.some((l) => l.boxed || l.tdz)
+    fn.locals.some((local) => local.boxed || local.tdz)
   )
     return null;
-  const [array, index] = fn.params;
-  if (array!.type.kind !== "array" || index!.type.kind !== "f64") return null;
-  const element = array!.type.elem;
-  const arms = unions.get(fn.returnType.unionId)?.arms;
-  if (!isRefCounted(element) || element.kind === "union" || !arms || arms.length !== 2) return null;
-  const presentTag = arms.findIndex((a) => typeEquals(a, element));
-  const missingTag = arms.findIndex((a) => a.kind === "undefinedT");
-  if (presentTag < 0 || missingTag < 0) return null;
   const ret = fn.body[0]!;
-  if (ret.kind !== "return" || ret.value?.kind !== "ternary") return null;
-  const { cond, then, else_: missing } = ret.value;
-  const operand = (value: IrExpr, id: string): boolean =>
-    value.kind === "varRef" && value.localId === id;
+  if (ret.kind !== "return" || !ret.value) return null;
+  const read = inlineArrayRead(ret.value, unions);
   if (
-    cond.kind !== "bin" ||
-    cond.op !== "===" ||
-    cond.left.kind !== "arrayState" ||
-    !operand(cond.left.arr, array!.localId) ||
-    !operand(cond.left.index, index!.localId) ||
-    cond.right.kind !== "numLit" ||
-    cond.right.value !== 1 ||
-    then.kind !== "unionWrap" ||
-    then.unionId !== fn.returnType.unionId ||
-    then.tag !== presentTag ||
-    then.value.kind !== "arrayGet" ||
-    !operand(then.value.arr, array!.localId) ||
-    !operand(then.value.index, index!.localId) ||
-    missing.kind !== "unionWrap" ||
-    missing.unionId !== fn.returnType.unionId ||
-    missing.tag !== missingTag ||
-    missing.value.kind !== "unitLit" ||
-    missing.value.unit !== "undefined"
+    !read ||
+    !typeEquals(read.type, fn.returnType) ||
+    read.array.kind !== "varRef" ||
+    read.array.localId !== fn.params[0]!.localId ||
+    read.index.kind !== "varRef" ||
+    read.index.localId !== fn.params[1]!.localId
   )
     return null;
-  return { type: fn.returnType, element, presentTag, missingTag };
+  return {
+    type: read.type,
+    element: read.element,
+    presentTag: read.presentTag,
+    missingTag: read.missingTag,
+  };
 }
 
 /** One index for finalized IR, shared by effect and lifetime consumers.
@@ -98,7 +127,10 @@ function arrayReadShape(
 export class OptionalArrayReads {
   private readonly shapes = new Map<string, ArrayReadShape>();
 
-  constructor(functions: ReadonlyMap<string, IrFunction>, unions: ReadonlyMap<string, IrUnionDef>) {
+  constructor(
+    functions: ReadonlyMap<string, IrFunction>,
+    private readonly unions: ReadonlyMap<string, IrUnionDef>,
+  ) {
     for (const fn of functions.values()) {
       const shape = arrayReadShape(fn, unions);
       if (shape) this.shapes.set(fn.name, shape);
@@ -106,6 +138,7 @@ export class OptionalArrayReads {
   }
 
   get(call: IrExpr): LocalArrayRead | null {
+    if (call.kind === "ternary") return inlineArrayRead(call, this.unions);
     if (call.kind !== "call" || call.args.length !== 2) return null;
     const shape = this.shapes.get(call.callee);
     if (!shape || !typeEquals(shape.type, call.type)) return null;

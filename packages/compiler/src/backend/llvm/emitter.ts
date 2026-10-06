@@ -96,7 +96,14 @@ import {
   mangleVtInstance,
 } from "../mangle.js";
 import { analyzeCallLifetimes, type CallLifetimes } from "./call-lifetimes.js";
-import { emitStackUnion, findLocalStackUnions } from "./stack-unions.js";
+import { canStackUnion, emitStackUnion, findLocalStackUnions } from "./stack-unions.js";
+import {
+  allocateLocalUnion,
+  findLocalUnionStorage,
+  storeLocalUnion,
+  type LocalUnionStorageProof,
+  type LocalUnionStorage,
+} from "./local-union-storage.js";
 import { BlockBuilder } from "./blocks.js";
 import {
   emitLocalArrayRead,
@@ -108,6 +115,7 @@ import {
 import {
   emitStackMapRead,
   findMapReadLifetimes,
+  matchMapRead,
   type MapReadLifetimes,
 } from "./map-read-lifetimes.js";
 import { emitBorrowedFieldSequence } from "./borrowed-receivers.js";
@@ -337,6 +345,8 @@ function llStrBytes(text: string): string {
 export class LlEmitter {
   localArrayReads = new Map<string, LocalArrayRead>();
   private localStackUnions = new Map<string, IrExpr & { kind: "unionWrap" }>();
+  private localUnionStorageProofs = new Map<string, LocalUnionStorageProof>();
+  private localUnionStorage = new Map<string, LocalUnionStorage>();
   integerArrayBindings = new Set<string>();
   private readonly fieldAliasTags = new Map<string, number>();
   private readonly fieldPointerTags = new Map<string, number>();
@@ -3755,6 +3765,8 @@ export class LlEmitter {
     );
     this.mapReadLifetimes = findMapReadLifetimes(fn, this.unionsById, this.callLifetimes);
     this.localStackUnions = findLocalStackUnions(fn, this.callLifetimes, this.unionsById);
+    this.localUnionStorageProofs = findLocalUnionStorage(fn, this.callLifetimes, this.unionsById);
+    this.localUnionStorage = new Map();
     this.integerRanges = analyzeIntegerRanges(numericFn);
     this.bytesBounds = findBytesBounds(numericFn, this.integerRanges);
     this.chainSlots.clear();
@@ -3987,8 +3999,9 @@ export class LlEmitter {
   }
 
   /** A local stable binding keeps its value alive while later arguments
-   * and the callee execute. Global, captured, TDZ and mutable bindings need
-   * an owned snapshot, even when the callee only inspects the value. */
+   * and the callee execute. A proven local union box cannot escape or be
+   * rebound during a call; its independent payload owner keeps it alive.
+   * Other writable bindings need an owned snapshot. */
   canBorrowCallArgument(value: IrExpr): boolean {
     if (value.kind === "strLit") return true;
     if (value.kind !== "varRef") return false;
@@ -3998,7 +4011,8 @@ export class LlEmitter {
       binding.local !== undefined &&
       (!binding.local.mutable ||
         this.stableCallBindings.has(value.localId) ||
-        this.borrowedParameters.has(value.localId)) &&
+        this.borrowedParameters.has(value.localId) ||
+        this.localUnionStorage.has(value.localId)) &&
       !binding.local.boxed &&
       !binding.local.tdz
     );
@@ -4073,6 +4087,19 @@ export class LlEmitter {
           if (result.owner) this.scopes[this.scopes.length - 1]!.push(result.owner);
           break;
         }
+        const localStorage = this.localUnionStorageProofs.get(s.localId);
+        if (localStorage && s.init) {
+          const storage = allocateLocalUnion(this, localStorage);
+          this.localUnionStorage.set(s.localId, storage);
+          storeLocalUnion(this, storage, s.init);
+          B.line(`store ptr ${storage.box}, ptr ${b.slot}`);
+          if (storage.owner && storage.ownerType)
+            this.scopes[this.scopes.length - 1]!.push({
+              slot: storage.owner,
+              type: storage.ownerType,
+            });
+          break;
+        }
         if (b.kind === "boxed") {
           // Box FIRST, then evaluate the initializer: a named function
           // expression's closure captures this box during init evaluation.
@@ -4134,6 +4161,11 @@ export class LlEmitter {
         break;
       }
       case "assign": {
+        const localStorage = this.localUnionStorage.get(s.localId);
+        if (localStorage) {
+          storeLocalUnion(this, localStorage, s.value);
+          break;
+        }
         const concat = s.value;
         const suffix = matchStringSelfConcat(s.localId, concat);
         if (suffix && concat.kind === "strConcat") {
@@ -5396,6 +5428,13 @@ export class LlEmitter {
       this.B.line(`${value} = load ptr, ptr ${binding.slot}`);
       return { name: value, type: e.type };
     }
+    const read = matchMapRead(e, this.unionsById);
+    if (read) {
+      const result = emitStackMapRead(this, read);
+      if (result.owner) this.ownSlot(result.owner.slot, result.owner.type);
+      return result.value;
+    }
+    if (canStackUnion(e, this.unionsById)) return emitStackUnion(this, e).value;
     if (e.kind === "unionNarrow") {
       const union = this.emitReadReceiver(e.value);
       return { name: this.unionPeek(union.name), type: e.type };

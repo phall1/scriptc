@@ -149,7 +149,7 @@ test("local construction releases its payload at lexical exit without freeing th
   expect(main).toContain("@sc_rrelease_");
 });
 
-test.each(["return", "alias", "capture", "store", "mutable"])(
+test.each(["return", "alias", "capture", "store"])(
   "keeps a %s consumer on the ordinary heap path",
   (reason) => {
     const mod = fixture();
@@ -196,7 +196,6 @@ test.each(["return", "alias", "capture", "store", "mutable"])(
       mod.globals = [{ id: "%g.saved", name: "saved", type: optional, mutable: true }];
       work.body.push({ kind: "assign", localId: "%g.saved", value: ref("item"), loc });
     }
-    if (reason === "mutable") work.locals[0]!.mutable = true;
     expect(body(emit(mod), "sc_f_work")).toContain("@scr_union_new_ref");
   },
 );
@@ -276,6 +275,8 @@ test("mutable caller bindings take owned snapshots before later arguments", () =
   mod.functions[0]!.body.push(effect(call("read", [ref("item"), second], record)));
   const main = body(emit(mod), "sc_f_main");
   expect(main).toContain("@scr_union_retain_v");
+  expect(main).toContain("@scr_union_new_ref");
+  expect(main).not.toContain("alloca %ScrUnion");
   expect(main.indexOf("@scr_union_retain_v")).toBeLessThan(main.indexOf("@sc_bf_read"));
   expect(main.lastIndexOf("@scr_union_release")).toBeGreaterThan(main.indexOf("@sc_bf_read"));
 });

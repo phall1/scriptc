@@ -64,7 +64,10 @@ export interface LocalMapRead {
   missingTag: number;
 }
 
-function mapRead(expr: IrExpr, unions: ReadonlyMap<string, IrUnionDef>): LocalMapRead | null {
+export function matchMapRead(
+  expr: IrExpr,
+  unions: ReadonlyMap<string, IrUnionDef>,
+): LocalMapRead | null {
   if (
     expr.kind !== "mapIntrinsic" ||
     expr.method !== "get" ||
@@ -117,7 +120,7 @@ export function findMapReadLifetimes(
   everyStmtList(fn.body, {
     stmt: (stmt) => {
       if (stmt.kind === "varDecl" && stmt.init && locals?.has(stmt.localId)) {
-        const read = mapRead(stmt.init, unions);
+        const read = matchMapRead(stmt.init, unions);
         if (read) result.locals.set(stmt.localId, read);
       }
       return true;
@@ -128,7 +131,7 @@ export function findMapReadLifetimes(
       if (parameters)
         expr.args.forEach((arg, index) => {
           if (!parameters.has(index)) return;
-          const read = mapRead(arg, unions);
+          const read = matchMapRead(arg, unions);
           if (read) result.arguments.set(arg, read);
         });
       return true;
@@ -167,6 +170,7 @@ export function emitStackMapRead(host: LlvmEmitterContext, read: LocalMapRead): 
       `${raw} = call ptr @scr_map_get_${access}_ref(ptr ${receiver.name}, ${keyType} ${key.name})`,
     );
     B.line(`${found} = icmp ne ptr ${raw}, null`);
+    B.line(`store i64 0, ptr ${payload}`);
     B.line(`store ptr ${raw}, ptr ${payload}`);
     owner = { slot: payload, type: read.value };
   } else {

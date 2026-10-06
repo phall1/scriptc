@@ -85,6 +85,7 @@ export function emitStackUnion(host: LlvmEmitterContext, expr: UnionWrap): Stack
     // the ordinary statement frame; a partial local never gains ownership.
     const value = host.emitExpr(expr.value);
     if (isRefCounted(type)) {
+      B.line(`store i64 0, ptr ${slot}`);
       B.line(`store ptr ${value.name}, ptr ${slot}`);
       payload = value;
     } else if (type.kind === "bool") {

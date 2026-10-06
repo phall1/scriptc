@@ -760,3 +760,47 @@ test("recognition checks the helper result representation as well as its body", 
   const unions = new Map(module.unions!.map((union) => [union.id, union]));
   expect(new OptionalArrayReads(functions, unions).get(immediateCall(module).args[0]!)).toBeNull();
 });
+
+test("lowered inline reads share the sparse-aware optional lookup", () => {
+  const mod = fixture();
+  const source = mod.functions[1]!.body[0]!;
+  const local = mod.functions[2]!.body[0]!;
+  if (source.kind !== "return" || !source.value || local.kind !== "varDecl")
+    throw new Error("missing optional read");
+  local.init = structuredClone(source.value);
+  expect(candidates(mod).get("value")?.borrow).toBe(true);
+  for (const bits of [32, 64] as const) {
+    const ir = workBody(mod, bits);
+    expect(ir).toContain("local.array.dense");
+    expect(ir).toContain("@scr_arr_peek_ref");
+    expect(ir).not.toContain("@scr_arr_get_ref");
+    expect(ir).not.toContain("@scr_union_new_ref");
+  }
+});
+
+test.each(["different index", "different array", "effectful operand", "different state"])(
+  "inline lookup refuses a %s",
+  (reason) => {
+    const mod = fixture();
+    const ret = mod.functions[1]!.body[0]!;
+    if (ret.kind !== "return" || ret.value?.kind !== "ternary") throw new Error("missing read");
+    const value = ret.value;
+    if (
+      value.cond.kind !== "bin" ||
+      value.cond.left.kind !== "arrayState" ||
+      value.then.kind !== "unionWrap" ||
+      value.then.value.kind !== "arrayGet"
+    )
+      throw new Error("missing shape");
+    if (reason === "different index") value.then.value.index = num(2);
+    else if (reason === "different array") value.then.value.arr = ref("other", array);
+    else if (reason === "different state") value.cond.right = num(2);
+    else {
+      const next: IrExpr = { kind: "incDec", localId: "i", op: "+", prefix: false, type: F64, loc };
+      value.cond.left.index = next;
+      value.then.value.index = next;
+    }
+    const reads = new OptionalArrayReads(new Map(), new Map(mod.unions!.map((u) => [u.id, u])));
+    expect(reads.get(value)).toBeNull();
+  },
+);
