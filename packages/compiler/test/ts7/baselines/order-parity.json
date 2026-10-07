@@ -12704,12 +12704,6 @@
    ],
    "diags": []
   },
-  "<repo>/tests/diagnostics/regex-checker.ts": {
-   "order": [
-    "<repo>/tests/diagnostics/regex-checker.ts"
-   ],
-   "diags": []
-  },
   "<repo>/tests/diagnostics/regex.ts": {
    "order": [
     "<repo>/tests/diagnostics/regex.ts"
@@ -14461,6 +14455,30 @@
   "<repo>/tests/corpus/runtime-optional-string-flows.ts": {
    "order": [
     "<repo>/tests/corpus/runtime-optional-string-flows.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/class-interface-protocols.ts": {
+   "order": [
+    "<repo>/tests/corpus/class-interface-protocols.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/fs-read-encodings.ts": {
+   "order": [
+    "<repo>/tests/corpus/fs-read-encodings.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/regex-callback-replacements.ts": {
+   "order": [
+    "<repo>/tests/corpus/regex-callback-replacements.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/regex-callback-values.js": {
+   "order": [
+    "<repo>/tests/corpus/regex-callback-values.js"
    ],
    "diags": []
   }
