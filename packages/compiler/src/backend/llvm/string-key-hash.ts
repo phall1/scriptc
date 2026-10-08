@@ -9,9 +9,9 @@ const MASK64 = (1n << 64n) - 1n;
 
 function mix(input: bigint): bigint {
   let value = input;
-  value ^= value >> 30n;
+  value = value ^ (value >> 30n);
   value = (value * 0xbf58476d1ce4e5b9n) & MASK64;
-  value ^= value >> 27n;
+  value = value ^ (value >> 27n);
   value = (value * 0x94d049bb133111ebn) & MASK64;
   return value ^ (value >> 31n);
 }
