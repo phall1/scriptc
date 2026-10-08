@@ -2602,7 +2602,9 @@ export class LlEmitter {
       }
     }
     while (work.length > 0) {
-      for (const caller of mentionedBy.get(work.pop()!) ?? []) {
+      const callers = mentionedBy.get(work.pop()!);
+      if (callers === undefined) continue;
+      for (const caller of callers) {
         if (parks.has(caller)) continue;
         parks.add(caller);
         work.push(caller);
