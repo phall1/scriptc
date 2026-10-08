@@ -10,9 +10,10 @@ for (let i = 1; i < 30000; i++) {
 }
 // Clear two of every three; clearing twice is a no-op.
 for (let i = 0; i < handles.length; i++) {
-  if (i % 3 !== 0) {
-    clearTimeout(handles[i]!);
-    if (i % 5 === 0) clearTimeout(handles[i]!);
+  const handle = handles[i];
+  if (i % 3 !== 0 && handle !== undefined) {
+    clearTimeout(handle);
+    if (i % 5 === 0) clearTimeout(handle);
   }
 }
 
@@ -56,5 +57,6 @@ setTimeout(() => {
   let wrong = 0;
   for (const i of fired) if (i % 3 !== 0) wrong++;
   console.log(fired.length, wrong, ordered, ticksA, ticksB > 0, refreshedAt >= 0, siblingRan);
-  clearTimeout(handles[0]!); // already fired: no-op
+  const first = handles[0];
+  if (first !== undefined) clearTimeout(first); // already fired: no-op
 }, 60);
