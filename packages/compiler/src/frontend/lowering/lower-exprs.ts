@@ -116,7 +116,7 @@ import {
 } from "./containers/array-methods.js";
 import { strCharsCall } from "./containers/array-construction.js";
 import { arrayValueRead, arrayValueStore, arrayValueType } from "./array-values.js";
-import { lowerOptionalStringIndex } from "./string-index.js";
+import { lowerOptionalStringIndex, lowerUnmappedStringIndex } from "./string-index.js";
 import { tryLowerIndexedComparison } from "./indexed-comparison.js";
 import { npmStaticPackageOfPath } from "../npm-static.js";
 import { unsupportedModuleFeatureOf } from "../builtin-modules.js";
@@ -6738,6 +6738,8 @@ export function lowerElementAccess(lowerer: Lowerer, expr: ts.ElementAccessExpre
           }
         }
       }
+      const unmapped = lowerUnmappedStringIndex(lowerer, recv, index, resultType, locOf(expr));
+      if (unmapped) return unmapped;
       lowerer.unsupported(
         "SC1090",
         expr,
