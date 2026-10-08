@@ -51,6 +51,8 @@ import {
   recordUnionWrapHelper,
   unionRetagHelper,
   narrowedArmHelper,
+  checkedNarrowCall,
+  checkedNarrowOperand,
   deferredReadHelper,
 } from "./coercions/unions.js";
 import {
@@ -2039,14 +2041,8 @@ export class Lowerer {
       return value.value;
 
     let source = value;
-    if (
-      value.kind === "call" &&
-      this.coercions.checkedNarrows.has(value.callee) &&
-      value.args.length === 1 &&
-      value.args[0]?.type.kind === "union"
-    ) {
-      source = value.args[0];
-    }
+    const narrowed = checkedNarrowOperand(this, value);
+    if (narrowed?.type.kind === "union") source = narrowed;
     return source.type.kind === "union" && this.armTag(source.type.unionId, UNDEFINED_T) >= 0
       ? source
       : null;
@@ -7733,7 +7729,7 @@ export class Lowerer {
       ) {
         const helper = this.narrowedArmHelper(expr.type.unionId, expected, expr.loc);
         if (helper) {
-          return { kind: "call", callee: helper, args: [expr], type: expected, loc: expr.loc };
+          return this.checkedNarrowCall(helper, expr, expected, expr.loc);
         }
       }
       if (!typeEquals(expr.type, expected)) {
@@ -8050,6 +8046,10 @@ export class Lowerer {
 
   narrowedArmHelper(fromId: string, target: IrType, loc: SrcLoc): string | null {
     return narrowedArmHelper(this, fromId, target, loc);
+  }
+
+  checkedNarrowCall(helper: string, value: IrExpr, type: IrType, loc: SrcLoc): IrExpr {
+    return checkedNarrowCall(this, helper, value, type, loc);
   }
 
   deferredReadHelper(fromId: string, target: IrType, loc: SrcLoc): string | null {
@@ -10284,13 +10284,7 @@ export class Lowerer {
     if (!helper) return lowerForOf(this, stmt);
     return this.withExpressionOverride(
       stmt.expression,
-      {
-        kind: "call",
-        callee: helper,
-        args: [optional.value],
-        type: optional.present,
-        loc: locOf(stmt.expression),
-      },
+      this.checkedNarrowCall(helper, optional.value, optional.present, locOf(stmt.expression)),
       () => lowerForOf(this, stmt),
     );
   }
@@ -10600,13 +10594,12 @@ export class Lowerer {
         locOf(expr.right),
       );
       if (!helper) return lower();
-      right = {
-        kind: "call",
-        callee: helper,
-        args: [optionalRight.value],
-        type: optionalRight.present,
-        loc: locOf(expr.right),
-      };
+      right = this.checkedNarrowCall(
+        helper,
+        optionalRight.value,
+        optionalRight.present,
+        locOf(expr.right),
+      );
     } else {
       right = this.lowerExpr(expr.right);
     }
@@ -10661,13 +10654,7 @@ export class Lowerer {
     if (!helper) return lower();
     return this.withExpressionOverride(
       node,
-      {
-        kind: "call",
-        callee: helper,
-        args: [optional.value],
-        type: optional.present,
-        loc: locOf(node),
-      },
+      this.checkedNarrowCall(helper, optional.value, optional.present, locOf(node)),
       lower,
     );
   }
