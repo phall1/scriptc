@@ -24,7 +24,7 @@ import {
 } from "./map-read-lifetimes.js";
 import { emitBorrowedInput } from "./borrowed-inputs.js";
 import { emitStringSliceRead } from "./string-slices.js";
-import { emitDenseArrayNumber } from "./dense-array-access.js";
+import { emitDenseArrayNumber, emitDenseArrayPush } from "./dense-array-access.js";
 
 export function resolveThunkFor(host: LlvmEmitterContext, inner: IrType): string {
   const key = typeKey(inner);
@@ -70,13 +70,7 @@ export function arrPush(
   acc: "f64" | "bool" | "ref",
   value: string,
 ): string {
-  const argTy = acc === "f64" ? "double" : acc === "bool" ? "i1" : "ptr";
-  host.declare(
-    `declare double @scr_arr_push_${acc}(ptr, ${argTy === "i1" ? "i1 zeroext" : argTy})`,
-  );
-  const t = host.B.tmp();
-  host.B.line(`${t} = call double @scr_arr_push_${acc}(ptr ${arr}, ${argTy} ${value})`);
-  return t;
+  return emitDenseArrayPush(host, arr, acc, value);
 }
 
 /** Move evaluated values through one bounded slot buffer per call site. */

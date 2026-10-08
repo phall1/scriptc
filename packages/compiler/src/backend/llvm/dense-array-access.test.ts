@@ -111,6 +111,37 @@ test("element writes store inline, extend the length, and release replaced refer
   }
 });
 
+test.each([32, 64] as const)(
+  "push appends inline below the capacity and keeps a cold runtime append (%i-bit)",
+  (bits) => {
+    const push = (receiver: IrExpr, value: IrExpr): IrStmt => ({
+      kind: "exprStmt",
+      expr: { kind: "arrIntrinsic", method: "push", receiver, args: [value], type: F64, loc },
+      loc,
+    });
+    const llvm = emitLlvmModule(
+      module("append", VOID, [
+        push(ref("a", nums), { kind: "numLit", value: 2.5, type: F64, loc }),
+        push(ref("b", flags), { kind: "boolLit", value: true, type: BOOL, loc }),
+        push(ref("s", words), { kind: "strLit", value: "x", type: STRING, loc }),
+      ]),
+      { pointerBits: bits },
+    );
+    const fn = body(llvm, "append");
+    const size = bits === 32 ? "i32" : "i64";
+    expect(fn.match(new RegExp(`icmp ult ${size} `, "g"))).toHaveLength(3);
+    expect(fn).toMatch(/store double 0x4004000000000000, ptr /);
+    expect(fn).toMatch(/zext i1 .* to i64/);
+    expect(fn.match(/store i8 1, ptr /g)).toHaveLength(3);
+    expect(fn.match(new RegExp(`add nuw ${size} .*, 1$`, "gm"))).toHaveLength(3);
+    // Appends never release: the slot past the length holds no value.
+    expect(fn).not.toContain("_release(");
+    for (const acc of ["f64", "bool", "ref"]) {
+      expect(fn).toMatch(new RegExp(`call double @scr_arr_push_${acc}\\(.*\\) cold$`, "m"));
+    }
+  },
+);
+
 test("state and presence queries answer dense slots inline", () => {
   const state: IrExpr = { kind: "arrayState", arr: ref("b", flags), index, type: F64, loc };
   const has: IrExpr = { kind: "arrayHas", arr: ref("s", words), index, type: BOOL, loc };

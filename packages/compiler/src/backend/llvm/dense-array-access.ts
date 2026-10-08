@@ -352,3 +352,73 @@ export function emitDenseArraySet(
   B.br(join);
   B.startBlock(join);
 }
+
+/** `scr_arr_push_*` (the array takes the value's reference) returning the
+ * new length as a double. When `len < cap` the runtime's append is exactly
+ * a dense store at `len` plus `len + 1`: no sparse entry can exist past the
+ * length, nothing is released, and the dense capacity never exceeds the
+ * maximum index. A full array takes the unchanged (cold) runtime call,
+ * which grows storage. */
+export function emitDenseArrayPush(
+  host: LlvmEmitterContext,
+  array: string,
+  acc: ArrayAccess,
+  value: string,
+): string {
+  const B = host.B;
+  const size = host.sizeType;
+  const ty = acc === "f64" ? "double" : acc === "bool" ? "i1" : "ptr";
+  const pusher = `scr_arr_push_${acc}`;
+  host.declare(`declare double @${pusher}(ptr, ${acc === "bool" ? "i1 zeroext" : ty})`);
+  const header = (field: number): string => {
+    const ptr = B.tmp();
+    B.line(`${ptr} = getelementptr inbounds %ScrArr, ptr ${array}, i32 0, i32 ${field}`);
+    host.markMemoryPointer(ptr, "array:header");
+    return ptr;
+  };
+  const lenPtr = header(1),
+    len = B.tmp(),
+    cap = B.tmp(),
+    room = B.tmp();
+  B.line(`${len} = load ${size}, ptr ${lenPtr}${host.fieldAliasAttachment(lenPtr)}`);
+  const capPtr = header(2);
+  B.line(`${cap} = load ${size}, ptr ${capPtr}${host.fieldAliasAttachment(capPtr)}`);
+  B.line(`${room} = icmp ult ${size} ${len}, ${cap}`);
+  const fast = B.newLabel("arr.push.dense"),
+    slow = B.newLabel("arr.push.slow"),
+    join = B.newLabel("arr.push.join");
+  B.condBr(room, fast, slow);
+  B.startBlock(fast);
+  const dataPtr = header(7),
+    data = B.tmp(),
+    statesPtr = header(8),
+    states = B.tmp();
+  B.line(`${data} = load ptr, ptr ${dataPtr}${host.fieldAliasAttachment(dataPtr)}`);
+  B.line(`${states} = load ptr, ptr ${statesPtr}${host.fieldAliasAttachment(statesPtr)}`);
+  const statePtr = statePointer(host, { offset: len, len, data, states });
+  const valuePtr = valuePointer(host, { offset: len, len, data, states });
+  if (acc === "f64") {
+    B.line(`store double ${value}, ptr ${valuePtr}${host.fieldAliasAttachment(valuePtr)}`);
+  } else if (acc === "bool") {
+    const bits = B.tmp();
+    B.line(`${bits} = zext i1 ${value} to i64`);
+    B.line(`store i64 ${bits}, ptr ${valuePtr}${host.fieldAliasAttachment(valuePtr)}`);
+  } else {
+    B.line(`store ptr ${value}, ptr ${valuePtr}${host.fieldAliasAttachment(valuePtr)}`);
+  }
+  B.line(`store i8 ${SCR_ARR_VALUE}, ptr ${statePtr}${host.fieldAliasAttachment(statePtr)}`);
+  const next = B.tmp(),
+    fastValue = B.tmp();
+  B.line(`${next} = add nuw ${size} ${len}, 1`);
+  B.line(`store ${size} ${next}, ptr ${lenPtr}${host.fieldAliasAttachment(lenPtr)}`);
+  B.line(`${fastValue} = uitofp ${size} ${next} to double`);
+  B.br(join);
+  B.startBlock(slow);
+  const slowValue = B.tmp();
+  B.line(`${slowValue} = call double @${pusher}(ptr ${array}, ${ty} ${value}) cold`);
+  B.br(join);
+  B.startBlock(join);
+  const result = B.tmp();
+  B.line(`${result} = phi double [ ${fastValue}, %${fast} ], [ ${slowValue}, %${slow} ]`);
+  return result;
+}
