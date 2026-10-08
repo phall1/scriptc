@@ -244,9 +244,18 @@ function rcHelperDecls(family: string, op: RcOp): string[] {
 }
 
 /** The runtime declarations the requested helpers call (deduplicated). */
+/** The inline retain/release helper keys ("family:op") the program used, in
+ * insertion order; empty when inline RC is off. Copied into a plain array so
+ * callers stay inside the self-hosted subset (no `Set | []` unions). */
+function rcHelperKeys(host: ShapeHost): string[] {
+  const keys: string[] = [];
+  if (host.rcHelpers) for (const key of host.rcHelpers) keys.push(key);
+  return keys;
+}
+
 export function inlineRcDecls(host: ShapeHost): string[] {
   const decls = new Set<string>();
-  for (const key of host.rcHelpers ?? []) {
+  for (const key of rcHelperKeys(host)) {
     const [family, op] = key.split(":") as [string, RcOp];
     for (const decl of rcHelperDecls(family, op)) decls.add(decl);
   }
@@ -383,7 +392,7 @@ function releaseHelper(host: ShapeHost, family: string, row: InlineRcFamily): st
  * the trace-slot offsets. */
 export function emitInlineRcHelpers(host: ShapeHost): string[] {
   const out: string[] = [];
-  for (const key of [...(host.rcHelpers ?? [])].sort()) {
+  for (const key of rcHelperKeys(host).sort()) {
     const [family, op] = key.split(":") as [string, RcOp];
     const row = INLINE_RC_FAMILIES[family]!;
     out.push(
