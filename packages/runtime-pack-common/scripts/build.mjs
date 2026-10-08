@@ -159,7 +159,16 @@ async function build() {
       process.stdout.write(`building ${packageManifest.name} ${flavor} runtime\n`);
       // Zig emits DWARF by default, including descriptions of functions
       // removed by section GC. Release packs must opt out explicitly.
-      const debugFlags = flavor.endsWith("release") ? ["-g0", ...runtimeAlignment] : [];
+      // Zig keeps frame pointers by default; Linux release units drop them
+      // (unwinding still uses .eh_frame), which measurably speeds the small
+      // hot runtime leaves. Dev flavors keep them.
+      const debugFlags = flavor.endsWith("release")
+        ? [
+            "-g0",
+            ...runtimeAlignment,
+            ...(config.platform === "linux" ? ["-fomit-frame-pointer"] : []),
+          ]
+        : [];
       const units = await parallel(
         flavorSpec.runtime_units ?? matrix.runtime_units,
         async (unit) => {
