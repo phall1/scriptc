@@ -27,6 +27,7 @@ const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const suiteRoot = join(repoRoot, "benchmarks/runtime");
 
 const { values } = parseArgs({
+  allowNegative: true,
   options: {
     candidate: { type: "string", default: repoRoot },
     baseline: { type: "string" },
@@ -36,16 +37,18 @@ const { values } = parseArgs({
     timeout: { type: "string", default: "120" },
     json: { type: "string" },
     "no-lock": { type: "boolean", default: false },
+    node: { type: "boolean", default: true },
     "keep": { type: "boolean", default: false },
     help: { type: "boolean", default: false },
   },
 });
 if (values.help) {
   console.log(`Usage: node scripts/bench-runtime.mjs [--candidate=<checkout>] [--baseline=<checkout>]
-       [--workloads=a,b] [--runs=11] [--warmup=2] [--timeout=120] [--json=<file>] [--no-lock] [--keep]
+       [--workloads=a,b] [--runs=15] [--warmup=2] [--timeout=120] [--json=<file>] [--no-lock] [--no-node] [--keep]
 
 Each checkout must have a built CLI (packages/cli/dist/bootstrap.js) and native
-artifacts for this host. Without --baseline, reports absolute times only.`);
+artifacts for this host. Without --baseline, reports absolute times only. Node is
+timed in the same interleaved loop as the reference to beat (--no-node skips it).`);
   process.exit(0);
 }
 const runs = Number(values.runs);
@@ -299,6 +302,11 @@ try {
       result.samples = [];
     }
     entry.node_ms = Math.round(oracle.ms);
+    entry.nodeCommand = [
+      "--disable-warning=MODULE_TYPELESS_PACKAGE_JSON",
+      join(suiteRoot, w.entry),
+      ...args,
+    ];
     prepared.push(entry);
     process.stderr.write(`prepared ${w.name}\n`);
   }
@@ -310,6 +318,10 @@ try {
       if (live.length === 0) continue;
       for (const c of live)
         for (let i = 0; i < warmup; i++) run(entry.results[c.label].binary, entry.args);
+      // Node is the reference the project aims to beat, so it is timed in the
+      // same interleaved loop (whole-process wall time, startup included).
+      const nodeSamples = [];
+      if (values.node) run(process.execPath, entry.nodeCommand);
       const random = makeRandom(entry.name.length * 7919);
       for (let r = 0; r < runs; r++) {
         const order = [...live];
@@ -323,7 +335,12 @@ try {
           }
           result.samples.push(Math.round(sample.ms * 100) / 100);
         }
+        if (values.node) nodeSamples.push(run(process.execPath, entry.nodeCommand).ms);
       }
+      if (nodeSamples.length > 0) entry.node_ms = Math.round(median(nodeSamples) * 100) / 100;
+      const reference = entry.results.candidate;
+      if (reference?.status === "ok" && reference.samples.length > 0 && nodeSamples.length > 0)
+        entry.vs_node = Math.round((median(reference.samples) / entry.node_ms) * 1000) / 1000;
       for (const c of live) {
         const result = entry.results[c.label];
         if (result.status !== "ok") continue;
@@ -346,8 +363,14 @@ try {
   }
   for (const entry of prepared) {
     for (const result of Object.values(entry.results)) delete result.binary;
+    delete entry.nodeCommand;
     report.workloads.push(entry);
   }
+  const vsNode = report.workloads.filter((w) => w.vs_node !== undefined).map((w) => w.vs_node);
+  if (vsNode.length > 0)
+    report.geomean_vs_node =
+      Math.round(Math.exp(vsNode.reduce((s, r) => s + Math.log(r), 0) / vsNode.length) * 1000) /
+      1000;
   const ratios = report.workloads.filter((w) => w.ratio !== undefined).map((w) => w.ratio);
   if (ratios.length > 0)
     report.geomean_ratio =
@@ -362,14 +385,15 @@ if (values.json) writeFileSync(values.json, JSON.stringify(report, null, 2) + "\
 /* ── summary table ─────────────────────────────────────────────────────── */
 const pct = (r) => `${r < 1 ? "" : "+"}${((r - 1) * 100).toFixed(1)}%`;
 const lines = [];
+const xNode = (w) => (w.vs_node === undefined ? "-" : `${w.vs_node.toFixed(2)}x`);
 if (values.baseline) {
   lines.push(
-    "| workload | baseline ms | candidate ms | change | 95% CI | verdict | size | node ms |",
+    "| workload | baseline ms | candidate ms | change | 95% CI | verdict | size | node ms | candidate/node |",
   );
-  lines.push("| --- | ---: | ---: | ---: | --- | --- | ---: | ---: |");
+  lines.push("| --- | ---: | ---: | ---: | --- | --- | ---: | ---: | ---: |");
 } else {
-  lines.push("| workload | median ms | status | bytes | peak RSS MiB | node ms |");
-  lines.push("| --- | ---: | --- | ---: | ---: | ---: |");
+  lines.push("| workload | median ms | status | bytes | peak RSS MiB | node ms | scriptc/node |");
+  lines.push("| --- | ---: | --- | ---: | ---: | ---: | ---: |");
 }
 for (const w of report.workloads) {
   const b = w.results.baseline;
@@ -379,16 +403,20 @@ for (const w of report.workloads) {
   } else if (values.baseline) {
     const show = (r) => (r?.status === "ok" ? r.median_ms.toFixed(1) : (r?.status ?? "-"));
     lines.push(
-      `| ${w.name} | ${show(b)} | ${show(c)} | ${w.ratio ? pct(w.ratio) : "-"} | ${w.ci95 ? `${pct(w.ci95[0])} .. ${pct(w.ci95[1])}` : "-"} | ${w.verdict ?? "-"} | ${w.size_ratio ? pct(w.size_ratio) : "-"} | ${w.node_ms} |`,
+      `| ${w.name} | ${show(b)} | ${show(c)} | ${w.ratio ? pct(w.ratio) : "-"} | ${w.ci95 ? `${pct(w.ci95[0])} .. ${pct(w.ci95[1])}` : "-"} | ${w.verdict ?? "-"} | ${w.size_ratio ? pct(w.size_ratio) : "-"} | ${w.node_ms} | ${xNode(w)} |`,
     );
   } else {
     lines.push(
-      `| ${w.name} | ${c?.median_ms?.toFixed(1) ?? "-"} | ${c?.status ?? "-"} | ${c?.bytes ?? "-"} | ${c?.peak_rss_bytes ? (c.peak_rss_bytes / 1048576).toFixed(1) : "-"} | ${w.node_ms} |`,
+      `| ${w.name} | ${c?.median_ms?.toFixed(1) ?? "-"} | ${c?.status ?? "-"} | ${c?.bytes ?? "-"} | ${c?.peak_rss_bytes ? (c.peak_rss_bytes / 1048576).toFixed(1) : "-"} | ${w.node_ms} | ${xNode(w)} |`,
     );
   }
 }
 if (report.geomean_ratio !== undefined)
   lines.push("", `geomean change: ${pct(report.geomean_ratio)}`);
+if (report.geomean_vs_node !== undefined)
+  lines.push(
+    `geomean candidate/node: ${report.geomean_vs_node.toFixed(3)}x (lower is better; goal: well below 1)`,
+  );
 console.log(lines.join("\n"));
 const broken = report.workloads.some(
   (w) => w.error || Object.values(w.results).some((r) => r.status !== "ok"),
