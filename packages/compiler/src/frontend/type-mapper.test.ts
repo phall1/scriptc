@@ -1,4 +1,8 @@
 import { describe, expect, test } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { loadProgram } from "./program-node.js";
+import * as ts from "./ts7/adapter.js";
 import {
   F64,
   NULL_T,
@@ -13,11 +17,66 @@ import {
 import {
   formatIrType,
   genResultRecord,
+  mapType,
+  type TypeMapperCtx,
   ShapeRegistry,
   UnionRegistry,
   withUndefinedArm,
 } from "./type-mapper.js";
 import type { Type } from "./ts7/adapter.js";
+
+test("Node URL constructor static sides never map to native instance storage", () => {
+  const directory = mkdtempSync(join(import.meta.dirname, ".ctor-mapper-"));
+  const entry = join(directory, "input.ts");
+  writeFileSync(
+    entry,
+    `
+    import { URL as NodeURL, URLSearchParams as NodeParams } from "node:url";
+    export type UrlInstance = NodeURL;
+    export type UrlConstructor = typeof NodeURL;
+    export type ParamsInstance = NodeParams;
+    export type ParamsConstructor = typeof NodeParams;
+    export type GlobalUrlConstructor = typeof globalThis.URL;
+    class URL { own = 1; }
+    export type OwnURL = URL;
+  `,
+  );
+  const loaded = loadProgram(entry);
+  try {
+    const checker = loaded.program.getTypeChecker();
+    const aliases = new Map<string, ts.Type>();
+    ts.walkPreorder(loaded.entry, (node) => {
+      if (ts.isTypeAliasDeclaration(node))
+        aliases.set(node.name.text, checker.getTypeAtLocation(node.type));
+    });
+    const context: TypeMapperCtx = {
+      checker,
+      shapes: new ShapeRegistry(),
+      unions: new UnionRegistry(),
+      classNamer: (decl) => decl.name?.text ?? "anonymous",
+      dynamic: false,
+      typeMemo: new Map(),
+      isStdlibFile: (sf) =>
+        loaded.program.isSourceFileDefaultLibrary(sf) ||
+        sf.fileName.includes("/node_modules/@types/node/"),
+      isNpmFile: () => false,
+      isExternalTypeFile: () => false,
+      isProgramFile: (sf) => loaded.moduleOrder.includes(sf),
+    };
+    const mapped = (name: string) => mapType(aliases.get(name)!, context);
+    expect(mapped("UrlInstance")).toEqual({ kind: "url" });
+    expect(mapped("ParamsInstance")).toEqual({ kind: "searchParams" });
+    for (const name of ["UrlConstructor", "ParamsConstructor", "GlobalUrlConstructor"]) {
+      expect(checker.getConstructSignatures(aliases.get(name)!).length).toBeGreaterThan(0);
+      expect(mapped(name)?.kind).not.toBe("url");
+      expect(mapped(name)?.kind).not.toBe("searchParams");
+    }
+    expect(mapped("OwnURL")?.kind).not.toBe("url");
+  } finally {
+    loaded.dispose();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 describe("union arm lookup", () => {
   test("indexes large unions while preserving exact equality for colliding function keys", () => {

@@ -3,6 +3,10 @@ import { lowerUnionEquality, tagEqualityMayMissAlias } from "./strict-equality.j
 import { isOptionalProcessStreamProperty } from "./builtins/process.js";
 import { lowerWorkerMetadata } from "./builtins/workers.js";
 import { threadsImportOf } from "../threads-import.js";
+import {
+  lowerBuiltinConstructorInstanceOf,
+  lowerBuiltinConstructorValue,
+} from "./builtin-constructor-identity.js";
 import { dynUndefinedExpr, nodeThrowExpr, numLit, strLit, varRef } from "../../ir/build.js";
 import { InternalCompilerError } from "../../errors.js";
 import { SYMBOL_T } from "../../ir/ir.js";
@@ -389,6 +393,8 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
   if (externalTypeSpecifier !== null) {
     lowerer.externalHostFence(externalTypeSpecifier, expr);
   }
+  const nativeConstructor = lowerBuiltinConstructorValue(lowerer, expr, loc);
+  if (nativeConstructor) return nativeConstructor;
 
   if (ts.isNumericLiteral(expr)) {
     const value = Number(expr.text.replace(/_/g, ""));
@@ -12060,6 +12066,8 @@ export function caughtLocalOf(lowerer: Lowerer, node: ts.Expression): IrLocal | 
  * Folding is limited to side-effect-free operands — dropping a computed
  * operand would skip its effects, so those are rejected instead. */
 export function lowerInstanceOf(lowerer: Lowerer, expr: ts.BinaryExpression, loc: SrcLoc): IrExpr {
+  const builtinConstructor = lowerBuiltinConstructorInstanceOf(lowerer, expr, loc);
+  if (builtinConstructor) return builtinConstructor;
   // `x instanceof net.Socket` over a union with a netSocket arm — the
   // h2 compat 'connect' narrowing (lower-server.ts): a union tag test.
   const sockTest = lowerSocketInstanceOf(lowerer, expr, loc);

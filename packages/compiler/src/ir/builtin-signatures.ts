@@ -185,6 +185,10 @@ export const LIB_FN_SIGS = defineLibFnSignatures({
   "dyn.nativeSetIs": { argTypes: [DYN], result: BOOL },
   "dyn.nativeMapIs": { argTypes: [DYN], result: BOOL },
   "dyn.nativeUrlIs": { argTypes: [DYN], result: BOOL },
+  "dyn.nativeSearchParamsIs": { argTypes: [DYN], result: BOOL },
+  /** A tag-only brand test cannot implement Proxy getPrototypeOf traps. */
+  "dyn.nativeInstanceOfOperand": { argTypes: [DYN], result: VOID },
+  "dyn.nativeConstructor": { argTypes: [STRING], result: DYN },
   "dyn.nativeDateIs": { argTypes: [DYN], result: BOOL },
   "date.nativeNew": { argTypes: [DYN], result: DYN },
   "date.checkedValue": { argTypes: [DYN], result: DATE_T },

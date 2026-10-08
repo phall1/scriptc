@@ -606,10 +606,31 @@ static void array_key_presence(void) {
   assert(!scr_exc_pending());
 }
 
+static void native_constructor_values(void) {
+  const char *names[] = { "URL", "URLSearchParams", "RegExp" };
+  const double lengths[] = { 1, 0, 2 };
+  for (size_t i = 0; i < 3; i++) {
+    ScrStr *name = scr_str_new(names[i], strlen(names[i]));
+    ScrDyn *first = scr_dyn_native_constructor(name);
+    ScrDyn *again = scr_dyn_native_constructor(name);
+    assert(first->kind == SCR_DYN_FUNC && first == again);
+    ScrDyn *metadata_name = scr_dyn_fn_get(first, "name", 4);
+    ScrDyn *metadata_length = scr_dyn_fn_get(first, "length", 6);
+    assert(metadata_name->kind == SCR_DYN_STR && scr_str_eq(metadata_name->v.str, name));
+    assert(metadata_length->kind == SCR_DYN_NUM && metadata_length->v.num == lengths[i]);
+    scr_dyn_release(metadata_length);
+    scr_dyn_release(metadata_name);
+    scr_dyn_release(again);
+    scr_dyn_release(first);
+    scr_str_release(name);
+  }
+}
+
 int main(void) {
   json_string_boundaries();
   json_indent_ownership();
   scr_init();
+  native_constructor_values();
   checked_storage();
   shared_property_keys();
   checked_leaf_cycles();
