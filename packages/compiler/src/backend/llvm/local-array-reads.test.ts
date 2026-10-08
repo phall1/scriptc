@@ -858,17 +858,32 @@ function scalarFixture(elem: IrType, consumer: "truthy" | "nullish" | "local"): 
   work.returnType = elem;
   if (consumer === "truthy") {
     work.returnType = BOOL;
-    work.body = [{ kind: "return", value: { kind: "toBool", operand: read, type: BOOL, loc }, loc }];
+    work.body = [
+      { kind: "return", value: { kind: "toBool", operand: read, type: BOOL, loc }, loc },
+    ];
   } else if (consumer === "nullish") {
     const fallback: IrExpr =
       elem.kind === "bool" ? { kind: "boolLit", value: true, type: BOOL, loc } : num(-1);
-    work.body = [{ kind: "return", value: { kind: "nullish", left: read, right: fallback, type: elem, loc }, loc }];
+    work.body = [
+      {
+        kind: "return",
+        value: { kind: "nullish", left: read, right: fallback, type: elem, loc },
+        loc,
+      },
+    ];
   } else {
     work.body = [
       { kind: "varDecl", localId: "value", init: read, loc },
       {
         kind: "return",
-        value: { kind: "unionNarrow", unionId: "optional", tag: 0, value: unionValue, type: elem, loc },
+        value: {
+          kind: "unionNarrow",
+          unionId: "optional",
+          tag: 0,
+          value: unionValue,
+          type: elem,
+          loc,
+        },
         loc,
       },
     ];

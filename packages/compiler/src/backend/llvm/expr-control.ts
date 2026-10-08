@@ -483,12 +483,14 @@ export function emitControlExpr(
         throw new InternalCompilerError("llvm emitter bug: nullish union lacks unit arms");
       if (
         !typeEquals(e.type, e.left.type) &&
-        (host.isStackUnionSource(e.left) ||
-          (e.left.kind === "varRef" && host.isStackUnionLocal(e.left.localId)))
+        (e.left.kind === "varRef" || host.isStackUnionSource(e.left))
       ) {
-        // Narrowed shape over a stack box (`arr[i] ?? d`, `map.get(k) ?? d`):
-        // test the tag and extract the payload (+1); the box is never
-        // retained or released, and its payload owner is independent.
+        // Narrowed shape over a binding or a stack box (`arr[i] ?? d`,
+        // `map.get(k) ?? d`): test the tag and extract the payload (+1).
+        // The box is never retained or released. A binding is borrowed:
+        // no code runs between its read and the extraction, and the
+        // default never touches it. Bindings proven projection-only may
+        // hold stack boxes, which must never reach RC entry points.
         const l = host.emitReadReceiver(e.left);
         const ty = host.llType(e.type);
         const slot = B.slot();

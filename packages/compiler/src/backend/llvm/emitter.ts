@@ -506,6 +506,8 @@ export class LlEmitter {
   readonly stackCallbacks: StackCallbacks;
   private readonly stackCaptures: StackCaptures;
   private borrowedParameters = new Set<string>();
+  /** Parameters proven projection-only: callers may pass stack boxes. */
+  private projectedParameters = new Set<string>();
   private stableCallBindings: ReadonlySet<string> = new Set();
   /** Manifest-bound native imports, used by ffiCall emission. */
   readonly ffiByName = new Map<string, IrFfiImport>();
@@ -4220,6 +4222,9 @@ export class LlEmitter {
     const numericFn = withInitializerBindings(fn, initializerBindings);
     this.numericLocals = new Map(numericFn.locals.map((l) => [l.id, l]));
     this.borrowedParameters.clear();
+    this.projectedParameters.clear();
+    for (const index of this.callLifetimes.parameters.get(fn.name) ?? [])
+      this.projectedParameters.add(fn.params[index]!.localId);
     this.stableCallBindings = this.callLifetimes.bindings.get(fn.name) ?? new Set();
     const borrowedParameterIndexes = this.callLifetimes.borrowed.get(fn.name);
     if (borrowedParameterIndexes) {
@@ -6127,10 +6132,12 @@ export class LlEmitter {
     );
   }
 
-  /** A union local whose binding slot holds a private stack box. Such a
+  /** A union binding whose slot may hold a private stack box: stack locals
+   * and projection-only parameters (callers may pass stack boxes). Such a
    * box must only be projected: never retained, released, or stored. */
   isStackUnionLocal(localId: string): boolean {
     return (
+      this.projectedParameters.has(localId) ||
       this.localStackUnions.has(localId) ||
       this.localUnionStorage.has(localId) ||
       this.localArrayReads.has(localId) ||

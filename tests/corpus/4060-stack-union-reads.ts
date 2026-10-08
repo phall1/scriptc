@@ -123,3 +123,13 @@ const counts = new Map<string, number>([
 const names = new Map<number, string>([[1, "one"]]);
 console.log("map", counts.get("a") ?? -1, counts.get("z") ?? -1, counts.get("b") === 2, names.get(1) === "one");
 console.log("map2", names.get(2) === undefined, names.get(2) ?? "none", counts.get("a") ? "t" : "f");
+
+// Projection-only union parameters may receive stack boxes from callers:
+// `??` and `===` inside the callee must borrow them, never retain them.
+function joinOr(next: string | null, prev: string | undefined, d: string): string {
+  const tail = next === "stop" ? "!" : "";
+  return `${next ?? d}|${prev ?? d}${tail}|${prev === next}`;
+}
+console.log("params", joinOr("a", undefined, "-"), joinOr(null, "z", "-"), joinOr("stop", "stop", "-"));
+const seen = ["q"];
+console.log("params2", joinOr(seen[0] ?? null, seen[1], "_"), joinOr(null, seen[0], "_"));

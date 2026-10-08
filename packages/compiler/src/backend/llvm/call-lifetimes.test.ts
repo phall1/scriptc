@@ -309,7 +309,9 @@ test("strict union equality and narrowed nullish reads are projections", () => {
   expect(analyze(fn).parameters.get("compare")).toEqual(new Set([0]));
   // The pass-through shape returns the box itself.
   fn.returnType = optional;
-  fn.body = [ret({ kind: "nullish", left: ref("value"), right: ref("value"), type: optional, loc })];
+  fn.body = [
+    ret({ kind: "nullish", left: ref("value"), right: ref("value"), type: optional, loc }),
+  ];
   expect(analyze(fn).parameters.has("compare")).toBe(false);
 });
 
