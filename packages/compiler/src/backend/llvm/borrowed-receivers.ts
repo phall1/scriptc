@@ -7,6 +7,8 @@ function stableProjection(host: LlvmEmitterContext, e: IrExpr): boolean {
     case "varRef":
       return host.canBorrowReceiver(e);
     case "unionNarrow":
+    case "downcast":
+    case "upcast":
       return stableProjection(host, e.value);
     case "fieldGet":
     case "recordGet":

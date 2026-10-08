@@ -9,6 +9,7 @@ import {
   typeEquals,
   typeKey,
 } from "../../ir/ir.js";
+import { isSafeToRepeat } from "./expressions/evaluation-safety.js";
 import type { Lowerer } from "./lowerer.js";
 
 /** Whether any stored payload can supply a checked view of this class. */
@@ -65,6 +66,58 @@ export function checkedClassAssertion(
     if (!compatible(source.type)) return null;
     if (typeEquals(source.type, target)) return source;
     if (lowerer.isSubclassOf(source.type.className, target.className)) return convert(source);
+  }
+  // A plain read can be tested where it is used: the class-id range test
+  // runs inline and successful projections borrow the operand, while the
+  // mismatch arm throws the helper's exact TypeError. Other operands keep
+  // the helper so they are evaluated exactly once.
+  if (isSafeToRepeat(source)) {
+    if (!union) return convert(source);
+    let checked = failure();
+    for (let tag = union.arms.length - 1; tag >= 0; tag--) {
+      const arm = union.arms[tag]!;
+      if (!compatible(arm)) continue;
+      const isTag: IrExpr = {
+        kind: "unionIsTag",
+        unionId: union.id,
+        tag,
+        negated: false,
+        value: source,
+        type: BOOL,
+        loc,
+      };
+      const payload: IrExpr = {
+        kind: "unionNarrow",
+        unionId: union.id,
+        tag,
+        value: source,
+        type: arm,
+        loc,
+      };
+      let cond: IrExpr = isTag;
+      let then: IrExpr = payload;
+      if (lowerer.isSubclassOf(arm.className, target.className) && !typeEquals(arm, target)) {
+        then = { kind: "upcast", value: payload, type: target, loc };
+      } else if (!typeEquals(arm, target)) {
+        cond = {
+          kind: "logical",
+          op: "&&",
+          left: isTag,
+          right: {
+            kind: "instanceOf",
+            value: payload,
+            className: target.className,
+            type: BOOL,
+            loc,
+          },
+          type: BOOL,
+          loc,
+        };
+        then = { kind: "downcast", value: payload, type: target, loc };
+      }
+      checked = { kind: "ternary", cond, then, else_: checked, type: target, loc };
+    }
+    return checked;
   }
   const key = `classassert:${typeKey(source.type)}:${typeKey(target)}`;
   let name = lowerer.coercions.retags.get(key);

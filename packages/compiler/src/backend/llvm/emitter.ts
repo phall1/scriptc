@@ -6422,6 +6422,10 @@ export class LlEmitter {
       const union = this.emitUnionProjection(e.value);
       return { name: this.unionPeek(union.name, e.unionId), type: e.type };
     }
+    if ((e.kind === "downcast" || e.kind === "upcast") && e.value.type.kind === "object") {
+      // Prefix layouts: a class cast reads the operand's own pointer.
+      return { name: this.emitReadReceiver(e.value).name, type: e.type };
+    }
     // A nullable-pointer field has no box to borrow. Projections use
     // emitUnionProjection; other borrowers get an owned heap box.
     if (this.nullableFieldGet(e)) return this.emitExpr(e);
@@ -6648,6 +6652,9 @@ export class LlEmitter {
         );
       }
       case "unionNarrow":
+      // Class casts reinterpret the same pointer (prefix layouts).
+      case "downcast":
+      case "upcast":
         return this.canBorrowReceiver(e.value);
       case "fieldGet":
       case "recordGet":

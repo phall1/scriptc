@@ -15085,6 +15085,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/4432-checked-downcast-failures.ts": {
+   "order": [
+    "<repo>/tests/corpus/4432-checked-downcast-failures.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/array-sort-runtime-comparator.ts": {
    "order": [
     "<repo>/tests/corpus/array-sort-runtime-comparator.ts"
