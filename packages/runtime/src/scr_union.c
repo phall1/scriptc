@@ -6,7 +6,8 @@
  * Every union carries a cycle header: an arm can hold a class/record/
  * promise payload that points back (the compiler passes arm_trace for
  * exactly those arm types), and instances of one union type must be
- * uniform, scalar-armed values included. */
+ * uniform, scalar-armed values included. Only boxes with an arm_trace can
+ * be cycle roots, so only those are buffered as collector candidates. */
 #include "scr_runtime.h"
 
 #include <stdio.h>
@@ -99,10 +100,17 @@ static void scr_union_destroy(void *object) {
 void scr_union_release(ScrUnion *u) {
   if (!u || u->rc == SIZE_MAX) return; /* NULL: an uninitialized `let` local */
   if (--u->rc == 0) {
-    scr_cyc_on_dead(u);
+    /* Check the header inline: most boxes were never buffered. A box can
+     * have been buffered under an earlier arm (typed-ref cache commits swap
+     * arm contents between boxes of one union type), so this reads the
+     * header rather than arm_trace. */
+    if (scr_cyc_hdr(u)->buffered) scr_cyc_on_dead(u);
     scr_rc_destroy(u, scr_union_destroy);
-  } else {
-    scr_cyc_on_release(u); /* possible cycle root; may collect — u is done */
+  } else if (u->arm_trace) {
+    /* Possible cycle root; may collect — u is done. A box whose trace
+     * visits nothing (scalar arms, and ref arms the compiler proved
+     * acyclic) cannot be on a collectable cycle, so it is never a root. */
+    scr_cyc_on_release(u);
   }
 }
 

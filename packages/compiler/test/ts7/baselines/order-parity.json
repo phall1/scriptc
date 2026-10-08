@@ -14843,6 +14843,30 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/4290-acyclic-immutable-trees.ts": {
+   "order": [
+    "<repo>/tests/corpus/4290-acyclic-immutable-trees.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4291-acyclic-constructor-escapes.ts": {
+   "order": [
+    "<repo>/tests/corpus/4291-acyclic-constructor-escapes.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4292-acyclic-readonly-bypass.ts": {
+   "order": [
+    "<repo>/tests/corpus/4292-acyclic-readonly-bypass.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4293-acyclic-dynamic-writes.ts": {
+   "order": [
+    "<repo>/tests/corpus/4293-acyclic-dynamic-writes.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/fiber-switch-stress.ts": {
    "order": [
     "<repo>/tests/corpus/fiber-switch-stress.ts"
