@@ -1444,7 +1444,12 @@ void scr_assert_shape_re(int key, ScrRegex *re) {
  * `literal`. Entries are never evicted, because live instances borrow
  * them; past the entry budget, or for long sources, constructions compile
  * privately as before. Invalid patterns are never cached, so each one
- * still throws its SyntaxError. */
+ * still throws its SyntaxError.
+ *
+ * Worker executables (SCR_WORKERS) leave the cache empty: their templates
+ * would be thread-local, and a worker's context teardown has no point at
+ * which the never-evicted templates could be released after every borrowing
+ * instance. Constructions there compile privately. */
 enum { SCR_REGEX_CTOR_CAP = 512, SCR_REGEX_CTOR_MAX = 256, SCR_REGEX_CTOR_SOURCE_MAX = 1024 };
 typedef struct {
   ScrRegex *shared; /* NULL = empty slot */
@@ -1452,8 +1457,8 @@ typedef struct {
   char *key; /* flags, NUL, source */
   size_t key_len;
 } ScrRegexCtorEntry;
-static ScrRegexCtorEntry *scr_regex_ctor_table;
-static size_t scr_regex_ctor_count;
+static SCR_TL ScrRegexCtorEntry *scr_regex_ctor_table;
+static SCR_TL size_t scr_regex_ctor_count;
 
 static uint64_t scr_regex_ctor_hash(const ScrStr *source, const ScrStr *flags) {
   uint64_t h = UINT64_C(1469598103934665603);
@@ -1484,6 +1489,9 @@ static ScrRegex *scr_regex_ctor_lookup(const ScrStr *source, const ScrStr *flags
 /* Move a freshly compiled constructor regex's bytecode into a shared
  * template when the cache has room; the instance then borrows it. */
 static void scr_regex_ctor_remember(ScrRegex *re) {
+#ifdef SCR_WORKERS
+  (void)re;
+#else
   if (re->source->len > SCR_REGEX_CTOR_SOURCE_MAX || scr_regex_ctor_count >= SCR_REGEX_CTOR_MAX)
     return;
   if (!scr_regex_ctor_table) {
@@ -1511,6 +1519,7 @@ static void scr_regex_ctor_remember(ScrRegex *re) {
   scr_regex_ctor_table[i] = (ScrRegexCtorEntry){shared, hash, key, key_len};
   scr_regex_ctor_count++;
   re->literal = shared;
+#endif
 }
 
 ScrRegex *scr_regex_new(ScrStr *pattern, ScrStr *flags) {

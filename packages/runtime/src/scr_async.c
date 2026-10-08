@@ -700,8 +700,8 @@ typedef struct {
   unsigned long id; /* 0 = empty */
   size_t slot;
 } ScrTimerSlot;
-static ScrTimerSlot *scr_timer_slots = NULL;
-static size_t scr_timer_slots_cap = 0, scr_timer_slots_len = 0;
+static SCR_TL ScrTimerSlot *scr_timer_slots = NULL;
+static SCR_TL size_t scr_timer_slots_cap = 0, scr_timer_slots_len = 0;
 
 static size_t scr_timer_slot_home(unsigned long id) {
   uint64_t h = (uint64_t)id * UINT64_C(0x9E3779B97F4A7C15);
