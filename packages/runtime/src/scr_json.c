@@ -10311,24 +10311,77 @@ ScrDyn *scr_dyn_freeze(ScrDyn *value) {
   return NULL;
 }
 
+static bool scr_dyn_object_properties_frozen(const ScrDyn *value) {
+  if (!value->non_extensible) return false;
+  for (size_t i = 0; i < value->v.obj.len; i++) {
+    const ScrDynEntry *entry = &value->v.obj.entries[i];
+    if (entry->configurable || (!entry->accessor && entry->writable)) return false;
+  }
+  return true;
+}
+
+static bool scr_dyn_array_is_frozen(const ScrDyn *value) {
+  return scr_dyn_is_sealed(value) && (value->v.arr.len == 0 || value->v.arr.frozen) &&
+    (!value->v.arr.properties || scr_dyn_is_frozen(value->v.arr.properties));
+}
+
+/* 1: frozen primitive. 0: modeled object that is not frozen. -1: unknown. */
+static int scr_dyn_is_frozen_kind(ScrDynKind kind) {
+  switch (kind) {
+  case SCR_DYN_NULL:
+  case SCR_DYN_UNDEF:
+  case SCR_DYN_NUM:
+  case SCR_DYN_BOOL:
+  case SCR_DYN_STR:
+  case SCR_DYN_BIGINT:
+  case SCR_DYN_SYMBOL:
+    return 1;
+  case SCR_DYN_BYTES:
+  case SCR_DYN_FUNC:
+    return 0;
+  default:
+    return -1;
+  }
+}
+
+static bool scr_dyn_typed_ref_is_frozen(const ScrDyn *value) {
+  ScrDyn *view = scr_dyn_typed_ref_materialize(value);
+  if (!view || scr_exc_pending()) {
+    scr_dyn_release(view);
+    return false;
+  }
+  bool frozen = scr_dyn_is_frozen(view);
+  scr_dyn_release(view);
+  return frozen;
+}
+
+static void scr_dyn_is_frozen_unsupported(const ScrDyn *value) {
+  const char *label = "value";
+  if (value->kind == SCR_DYN_HANDLE) label = "handle";
+  else if (value->kind == SCR_DYN_PROMISE) label = "promise";
+  else if (value->kind == SCR_DYN_JSVAL) label = "jsval";
+  char message[96];
+  int length = snprintf(message, sizeof message, "Object.isFrozen of this native %s has no lowering", label);
+  if (length < 0) length = 0;
+  scr_throw_error_msg_code(SCR_ERR_ERROR, message, (size_t)length, "SC2020");
+}
+
 bool scr_dyn_is_frozen(const ScrDyn *value) {
   if (scr_dyn_class_reflection_fence(value)) return false;
-  if (value->symbol_properties && !scr_dyn_is_frozen(value->symbol_properties)) return false;
-  if (value->kind == SCR_DYN_ARR)
-    return scr_dyn_is_sealed(value) && (value->v.arr.len == 0 || value->v.arr.frozen) &&
-      (!value->v.arr.properties || scr_dyn_is_frozen(value->v.arr.properties));
-  if (value->kind == SCR_DYN_OBJ && !value->copied_from_native) {
-    if (!value->non_extensible) return false;
-    for (size_t i = 0; i < value->v.obj.len; i++) {
-      const ScrDynEntry *entry = &value->v.obj.entries[i];
-      if (entry->configurable || (!entry->accessor && entry->writable)) return false;
-    }
-    return true;
+  if (value->kind == SCR_DYN_PROXY) {
+    scr_dyn_proxy_unsupported("Object.isFrozen");
+    return false;
   }
-  if (value->kind == SCR_DYN_NULL || value->kind == SCR_DYN_UNDEF || value->kind == SCR_DYN_NUM ||
-      value->kind == SCR_DYN_BOOL || value->kind == SCR_DYN_STR || value->kind == SCR_DYN_BIGINT || value->kind == SCR_DYN_SYMBOL) return true;
-  static const char message[] = "Object.isFrozen of this native value has no lowering";
-  scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
+  if (value->kind == SCR_DYN_TYPED_REF) return scr_dyn_typed_ref_is_frozen(value);
+  if (value->symbol_properties && !scr_dyn_is_frozen(value->symbol_properties)) return false;
+  if (value->kind == SCR_DYN_ARR) return scr_dyn_array_is_frozen(value);
+  /* A typed-to-dyn snapshot is the object this caller can see. Its own
+   * extensibility and property attributes are the answer; copied_from_native
+   * only refuses weak identity for that copy. */
+  if (value->kind == SCR_DYN_OBJ) return scr_dyn_object_properties_frozen(value);
+  int direct = scr_dyn_is_frozen_kind(value->kind);
+  if (direct >= 0) return direct == 1;
+  scr_dyn_is_frozen_unsupported(value);
   return false;
 }
 

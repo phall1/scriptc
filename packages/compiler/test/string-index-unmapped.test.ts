@@ -9,6 +9,8 @@ test("unmapped JavaScript string indexes lower instead of fencing", async () => 
   const cases = [
     "/Users/phall/workspace/effect-scriptc-compat/cases/documented-schemaissue.ts",
     "/Users/phall/workspace/effect-scriptc-compat/cases/namespace-net.ts",
+    "/Users/phall/workspace/effect-scriptc-compat/cases/namespace-encoding-base64.ts",
+    "/Users/phall/workspace/effect-scriptc-compat/cases/namespace-encoding-base64url.ts",
   ];
   try {
     for (const entry of cases) {
@@ -22,6 +24,7 @@ test("unmapped JavaScript string indexes lower instead of fencing", async () => 
       expect(result.ok, result.ok ? "" : JSON.stringify(result.diagnostics)).toBe(true);
       const ir = readFileSync(outPath, "utf8");
       expect(ir.includes("string indexing with this index/result shape")).toBe(false);
+      expect(ir.includes("element access on non-array values")).toBe(false);
     }
   } finally {
     rmSync(directory, { recursive: true, force: true });
