@@ -13,6 +13,7 @@ import { lowerWorkerMetadata } from "./builtins/workers.js";
 import { dynUndefinedExpr, nodeThrowExpr, numLit, varRef } from "../../ir/build.js";
 import { iteratorSlotAdapter } from "./iterator-adapters.js";
 import { hasArrayReference } from "./array-values.js";
+import type { BuiltinConstructorIdentity } from "./builtin-constructor-identity.js";
 import type { FieldLift } from "./coercions/structural-plans.js";
 import { lowerBuiltinCall } from "./builtin-calls.js";
 import { CoercionState } from "./coercions/state.js";
@@ -1851,6 +1852,8 @@ export class Lowerer {
    * typeParamBindings — the checker has no `T` to substitute, so the
    * binding rides the node-type accessor instead of mapType. */
   implicitParamTypes: Map<ts.Symbol, ts.Type> | null = null;
+  /** Immutable constructor provenance scoped to the currently lowered specialization. */
+  implicitBuiltinConstructors: Map<ts.Symbol, BuiltinConstructorIdentity> | null = null;
   /** IMPLICIT-ANY instances lowered EAGERLY at first demand (their return
    * types are inferred from the body — the call site needs them settled),
    * collected here for run()'s function list (the liftedFns discipline). */

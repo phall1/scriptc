@@ -26,10 +26,16 @@
 #include "scr_key.h"
 
 static SCR_TL ScrDyn *scr_builtin_object_prototype;
+static bool scr_dyn_native_constructor_is(const ScrDyn *value);
 
 /* Constructor capsules expose identity and name/length, but do not model
  * per-class static property tables yet. Never report a fabricated empty view. */
 static bool scr_dyn_class_reflection_fence(const ScrDyn *value) {
+  if (scr_dyn_native_constructor_is(value)) {
+    static const char message[] = "Native constructor property reflection or mutation has no lowering [SC1090]";
+    scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC1090");
+    return true;
+  }
   if (value && value == scr_builtin_object_prototype) {
     static const char message[] = "scriptc: Object.prototype reflection and mutation are not supported yet";
     scr_throw_error_msg(SCR_ERR_TYPE, message, sizeof message - 1);
@@ -1701,6 +1707,12 @@ void scr_dyn_proxy_unsupported(const char *operation) {
   scr_throw_error(SCR_ERR_ERROR, scr_jb_finish(&msg));
 }
 
+void scr_dyn_native_instanceof_operand(const ScrDyn *value) {
+  if (!value || value->kind != SCR_DYN_PROXY) return;
+  static const char message[] = "Native builtin instanceof on a Proxy has no lowering [SC1090]";
+  scr_throw_error_msg(SCR_ERR_ERROR, message, sizeof message - 1);
+}
+
 static ScrDynEntry *scr_dyn_entry(ScrDyn *obj, const ScrStr *key);
 static bool scr_dyn_property_same_value(const ScrDyn *a, const ScrDyn *b);
 
@@ -1713,6 +1725,13 @@ ScrDyn *scr_dyn_proxy_new(const ScrDyn *target, const ScrDyn *handler) {
   if (!scr_dyn_to_primitive_result_is_object(target) || !scr_dyn_to_primitive_result_is_object(handler)) {
     static const char msg[] = "Cannot create proxy with a non-object as target or handler";
     scr_throw_error_msg(SCR_ERR_TYPE, msg, sizeof msg - 1);
+    return NULL;
+  }
+  // Opaque native constructors do not expose the own descriptors required
+  // to enforce Proxy trap invariants, regardless of which trap is installed.
+  if (scr_dyn_native_constructor_is(target)) {
+    static const char message[] = "Proxy of a native constructor has no lowering [SC1090]";
+    scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC1090");
     return NULL;
   }
   bool native_record = target->kind == SCR_DYN_TYPED_REF &&
@@ -2468,6 +2487,55 @@ ScrDyn *scr_array_buffer_constructor(void) {
   return scr_dyn_retain(scr_array_buffer_ctor);
 }
 
+static SCR_TL ScrDyn *scr_native_constructors[3];
+static const char *const scr_native_constructor_names[] = { "URL", "URLSearchParams", "RegExp" };
+static const uint32_t scr_native_constructor_arities[] = { 1, 0, 2 };
+
+static bool scr_dyn_native_constructor_is(const ScrDyn *value) {
+  if (!value || value->kind != SCR_DYN_FUNC) return false;
+  for (size_t i = 0; i < 3; i++) {
+    if (scr_native_constructors[i] && value->v.fn.clo == scr_native_constructors[i]->v.fn.clo) return true;
+  }
+  return false;
+}
+
+static bool scr_native_constructor_unmodeled_key(const ScrDyn *value, const char *key, size_t length) {
+  if (!scr_dyn_native_constructor_is(value)) return false;
+  if (length == 4 && memcmp(key, "name", 4) == 0) return false;
+  if (length == 6 && memcmp(key, "length", 6) == 0) return false;
+  return true;
+}
+
+static void scr_native_constructors_cleanup(void) {
+  for (size_t i = 0; i < 3; i++) {
+    scr_dyn_release(scr_native_constructors[i]);
+    scr_native_constructors[i] = NULL;
+  }
+}
+
+static ScrDyn *scr_native_constructor_call(ScrClosure *closure, ScrDyn *const *args, size_t argc) {
+  (void)closure; (void)args; (void)argc;
+  static const char message[] = "Indirect native constructor invocation has no lowering [SC1090]";
+  scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC1090");
+  return NULL;
+}
+
+ScrDyn *scr_dyn_native_constructor(const ScrStr *name) {
+  for (size_t i = 0; i < 3; i++) {
+    const char *candidate = scr_native_constructor_names[i];
+    if (strlen(candidate) != name->len || memcmp(candidate, name->data, name->len) != 0) continue;
+    if (!scr_native_constructors[i]) {
+      scr_native_constructors[i] = scr_dyn_new_func(scr_closure_new(NULL, 0),
+          scr_native_constructor_call, scr_native_constructor_arities[i], "native:constructor", candidate);
+      scr_atexit(scr_native_constructors_cleanup);
+    }
+    return scr_dyn_retain(scr_native_constructors[i]);
+  }
+  static const char message[] = "Unknown native constructor identity";
+  scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC1090");
+  return NULL;
+}
+
 bool scr_bytes_instanceof(const ScrDyn *value, const ScrDyn *callee) {
   if (!callee || callee->kind != SCR_DYN_FUNC) {
     static const char message[] = "Right-hand side of 'instanceof' is not callable";
@@ -2489,6 +2557,11 @@ ScrDyn *scr_bytes_construct(const ScrDyn *callee, const ScrDyn *args, const ScrS
     return scr_array_ctor_call(callee->v.fn.clo, args->v.arr.items, args->v.arr.len);
   if (callee->kind == SCR_DYN_FUNC && scr_array_buffer_ctor && callee->v.fn.clo == scr_array_buffer_ctor->v.fn.clo)
     return scr_array_buffer_new(args->v.arr.len ? args->v.arr.items[0] : scr_dyn_undefined());
+  if (scr_dyn_native_constructor_is(callee)) {
+    static const char message[] = "Indirect native constructor invocation has no lowering [SC1090]";
+    scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC1090");
+    return NULL;
+  }
   for (size_t i = 0; i < 9; i++) {
     if (callee->kind != SCR_DYN_FUNC || !scr_bytes_ctors[i] || callee->v.fn.clo != scr_bytes_ctors[i]->v.fn.clo) continue;
     const ScrDyn *input = args->v.arr.len > 0 ? args->v.arr.items[0] : scr_dyn_undefined();
@@ -3379,6 +3452,10 @@ static ScrStr *scr_dyn_symbol_storage_key(const ScrDyn *key) {
 }
 
 static ScrDyn *scr_dyn_symbol_receiver(const ScrDyn *value) {
+  if (scr_dyn_native_constructor_is(value)) {
+    scr_dyn_class_reflection_fence(value);
+    return NULL;
+  }
   if (value->kind == SCR_DYN_TYPED_REF) return scr_dyn_typed_ref_materialize(value);
   if (value->kind == SCR_DYN_FUNC) return scr_dyn_fn_properties(value);
   if (value->kind == SCR_DYN_OBJ || value->kind == SCR_DYN_ARR || value->kind == SCR_DYN_HANDLE)
@@ -3885,6 +3962,10 @@ void scr_dyn_symbol_key_placeholder(ScrDyn *value, ScrDyn *key) {
 }
 
 void scr_dyn_symbol_key_set(ScrDyn *value, ScrDyn *key, ScrDyn *stored) {
+  if (scr_dyn_native_constructor_is(value)) {
+    scr_dyn_class_reflection_fence(value);
+    return;
+  }
   ScrDyn *receiver = scr_dyn_symbol_receiver(value);
   if (!receiver) {
     if (!scr_exc_pending()) {
@@ -3917,6 +3998,10 @@ void scr_dyn_symbol_key_set(ScrDyn *value, ScrDyn *key, ScrDyn *stored) {
 }
 
 static ScrDyn *scr_dyn_define_symbol(ScrDyn *target, ScrDyn *key, ScrDyn *descriptor) {
+  if (scr_dyn_native_constructor_is(target)) {
+    scr_dyn_class_reflection_fence(target);
+    return NULL;
+  }
   ScrDyn *receiver = scr_dyn_symbol_receiver(target);
   if (!receiver) {
     if (!scr_exc_pending()) {
@@ -4916,6 +5001,12 @@ ScrStr *scr_dyn_to_string(const ScrDyn *d, const ScrStr *enc) {
     return out;
   }
   case SCR_DYN_FUNC: {
+    if (scr_dyn_native_constructor_is(d)) {
+      scr_dyn_class_reflection_fence(d);
+      // String-coercion callers may inspect the buffer before their outer
+      // exception check; preserve the existing valid-sentinel contract.
+      return scr_str_new("", 0);
+    }
     static const char f[] = "function () { [native code] }";
     return scr_str_new(f, sizeof f - 1);
   }
@@ -7312,6 +7403,10 @@ static ScrDyn *scr_function_constructor(uint32_t kind) {
 /* Keyed read on a FUNC node (see scr_runtime.h): own props first, then
  * the function-instance built-ins name/length. +1 or NULL. */
 ScrDyn *scr_dyn_fn_get(const ScrDyn *d, const char *key, size_t key_len) {
+  if (scr_native_constructor_unmodeled_key(d, key, key_len)) {
+    scr_dyn_class_reflection_fence(d);
+    return NULL;
+  }
   ScrClosure *owner = scr_closure_identity(d->v.fn.clo);
   if (d->v.fn.class_obj && d->v.fn.class_obj->static_data && !owner->props)
     owner->props = scr_box_retain(d->v.fn.class_obj->static_data);
@@ -7508,6 +7603,7 @@ static ScrDyn *scr_sc_clone(const ScrDyn *v, const ScrScParent *up) {
      * String() rendering stands in ("function () { [native code] } could
      * not be cloned."). */
     ScrStr *what = scr_dyn_string_coerce(v);
+    if (scr_exc_pending()) { scr_str_release(what); return NULL; }
     static const char suffix[] = " could not be cloned.";
     size_t len = what->len + sizeof suffix - 1;
     char *msg = malloc(len + 1);
@@ -7562,6 +7658,10 @@ bool scr_dyn_err_instanceof(const ScrDyn *d, double kind) {
 
 static ScrDyn *scr_dyn_obj_read_receiver(const ScrDyn *d, const char *key, size_t key_len, const ScrDyn *receiver) {
   for (const ScrDyn *current = d; current; current = current->prototype) {
+    if (scr_native_constructor_unmodeled_key(current, key, key_len)) {
+      scr_dyn_class_reflection_fence(current);
+      return NULL;
+    }
     if (current == scr_builtin_object_prototype) {
       scr_dyn_class_reflection_fence(current);
       return NULL;
@@ -7707,6 +7807,10 @@ void scr_dyn_bag_set(ScrDyn *bag, ScrStr *key, ScrDyn *value, ScrDyn *receiver) 
  * receiver. Failed descriptor writes return false; user callbacks still
  * propagate their exceptions. Keys are converted once before dispatch. */
 ScrDyn *scr_dyn_reflect_get(ScrDyn *target, ScrDyn *raw_key, ScrDyn *receiver) {
+  if (scr_dyn_native_constructor_is(target)) {
+    scr_dyn_class_reflection_fence(target);
+    return NULL;
+  }
   if (!scr_dyn_to_primitive_result_is_object(target)) {
     static const char message[] = "Reflect.get called on non-object";
     scr_throw_error_msg(SCR_ERR_TYPE, message, sizeof message - 1);
@@ -7737,6 +7841,10 @@ ScrDyn *scr_dyn_reflect_get(ScrDyn *target, ScrDyn *raw_key, ScrDyn *receiver) {
 }
 
 bool scr_dyn_reflect_define(ScrDyn *receiver, ScrDyn *raw_key, ScrDyn *value) {
+  if (scr_dyn_native_constructor_is(receiver)) {
+    scr_dyn_class_reflection_fence(receiver);
+    return false;
+  }
   if (!scr_dyn_to_primitive_result_is_object(receiver)) return false;
   ScrDyn *key = scr_dyn_property_key_value(raw_key);
   if (!key) return false;
@@ -7790,6 +7898,14 @@ bool scr_dyn_reflect_define(ScrDyn *receiver, ScrDyn *raw_key, ScrDyn *value) {
 }
 
 bool scr_dyn_reflect_set(ScrDyn *target, ScrDyn *raw_key, ScrDyn *value, ScrDyn *receiver) {
+  if (scr_dyn_native_constructor_is(target)) {
+    scr_dyn_class_reflection_fence(target);
+    return false;
+  }
+  if (scr_dyn_native_constructor_is(receiver)) {
+    scr_dyn_class_reflection_fence(receiver);
+    return false;
+  }
   if (!scr_dyn_to_primitive_result_is_object(target)) {
     static const char message[] = "Reflect.set called on non-object";
     scr_throw_error_msg(SCR_ERR_TYPE, message, sizeof message - 1);
@@ -8874,6 +8990,7 @@ ScrError *scr_domex_new(const ScrDyn *message, const ScrDyn *name_or_options) {
   d->message = (message == NULL || message->kind == SCR_DYN_UNDEF)
                    ? scr_str_new("", 0)
                    : scr_dyn_string_coerce(message);
+  if (scr_exc_pending()) { scr_error_release((ScrError *)d); return NULL; }
   const ScrDyn *no = name_or_options;
   if (no == NULL || no->kind == SCR_DYN_UNDEF) {
     d->name = scr_str_new("Error", 5);
@@ -8894,6 +9011,7 @@ ScrError *scr_domex_new(const ScrDyn *message, const ScrDyn *name_or_options) {
      * name "null", a number names its decimal rendering). */
     d->name = scr_dyn_string_coerce(no);
   }
+  if (scr_exc_pending()) { scr_error_release((ScrError *)d); return NULL; }
   d->dom_code = scr_domex_code_of(d->name);
   return (ScrError *)d;
 }

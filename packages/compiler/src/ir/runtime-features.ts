@@ -190,7 +190,8 @@ function scanRuntimeFeatures(mod: IrModule, stopAt?: keyof RuntimeFeatures): Run
       if (fn.startsWith("sym.") || fn === "util.isDeepStrictEqual") features.symbol = true;
       if (fn === "process.hrtimeValue") features.bigint = true;
       if (fn.startsWith("bigint.")) features.bigint = true;
-      if (fn.startsWith("sp.") || fn === "url.searchParams") features.searchParams = true;
+      if (fn.startsWith("sp.") || fn === "url.searchParams" || fn === "dyn.nativeSearchParamsIs")
+        features.searchParams = true;
       if (fn === "qs.parse" || fn === "qs.stringify" || fn === "qs.unescape") features.qs = true;
       if (fn === "util.parseArgs" || fn === "util.isDeepStrictEqual" || fn === "util.styleText")
         features.parseArgs = true;

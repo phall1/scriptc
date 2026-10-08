@@ -41,6 +41,11 @@ import {
   MAX_INSTANTIATION_RECURSION,
   type InstantiationPath,
 } from "./instantiation-path.js";
+import {
+  builtinConstructorIdentityOf,
+  builtinConstructorScope,
+  type BuiltinConstructorIdentity,
+} from "./builtin-constructor-identity.js";
 
 /** A generic function-like declaration, collected instead of an FnSig —
  * top-level generic function declarations, class GENERIC METHODS (own type
@@ -119,6 +124,8 @@ export interface GenericInstance {
    * checker type, consulted by the Lowerer's typeOf while this instance's
    * body lowers (the implicit twin of `bindings`). */
   implicitArgTypes?: Map<ts.Symbol, ts.Type>;
+  /** Proven immutable constructor snapshots; ABI types alone cannot distinguish their brands. */
+  builtinConstructors?: Map<ts.Symbol, BuiltinConstructorIdentity>;
   /** Implicit instances only: eager-lowering lifecycle. "lowering" while
    * the body builds (a re-demand is same-key recursion: the caller uses
    * the PINNED fallback returnType and returnPinned locks it); "done" once
@@ -656,6 +663,7 @@ export function lowerGenericInstance(
   const prevSuppress = lowerer.suppressStats;
   const prevClass = lowerer.currentClass;
   const prevImplicit = lowerer.implicitParamTypes;
+  const prevConstructors = lowerer.implicitBuiltinConstructors;
   // A generic METHOD of a generic-class INSTANTIATION lowers under BOTH
   // binding sets: the receiver instantiation's class type parameters
   // underneath, the method instantiation's own on top (disjoint symbol
@@ -717,6 +725,11 @@ export function lowerGenericInstance(
   lowerer.localClassInstantiations.push({ owner: decl, name: inst.name });
   lowerer.genericInstantiationPath = inst.path;
   try {
+    lowerer.implicitBuiltinConstructors = builtinConstructorScope(
+      prevConstructors,
+      inst.builtinConstructors,
+      info.implicitParams,
+    );
     // Static specializations bind lexical this only when the caller
     // proved its exact receiver. Other instances retain the fence;
     // super remains unsupported. Arrows inherit the lexical receiver.
@@ -815,6 +828,7 @@ export function lowerGenericInstance(
     lowerer.typeParamBindings = prevBindings;
     lowerer.typeParamTsBindings = prevTsBindings;
     lowerer.implicitParamTypes = prevImplicit;
+    lowerer.implicitBuiltinConstructors = prevConstructors;
     lowerer.instantiationContext = prevContext;
     lowerer.localClassInstantiations.pop();
     lowerer.suppressStats = prevSuppress;
@@ -1009,9 +1023,9 @@ export function implicitMonoFile(sf: ts.SourceFile): boolean {
   return isJsSourceFile(sf) && npmStaticPackageOfPath(sf.fileName) !== null;
 }
 
-/** True when the body (or a nested function capturing it) ever WRITES the
- * parameter symbol — assignment, compound assignment, ++/--, a
- * destructuring-assignment target, or a for-in/of cursor. A written
+/** True when defaults, the body, or a nested function ever WRITES the
+ * parameter symbol — assignment, redeclaration initialization, hoisted
+ * function replacement, ++/--, destructuring, or a for-in/of cursor. A written
  * param's binding could lie after the write, so it stays dyn. */
 function paramWrittenInBody(
   lowerer: Lowerer,
@@ -1049,35 +1063,68 @@ function paramWrittenInBody(
     }
     return false;
   };
-  const walk = (n: ts.Node): void => {
+  const declarationRebinds = (node: ts.Node): boolean => {
+    if (ts.isFunctionDeclaration(node)) {
+      if (!node.name) return false;
+      if (lowerer.checker.getSymbolAtLocation(node.name) === sym) return true;
+      // The checker can split a parameter and a same-body function's
+      // symbols even though JavaScript replaces the parameter binding.
+      return node.name.text === name && ts.isFunctionLike(body) && node.parent === body.body;
+    }
+    if (!ts.isVariableDeclaration(node) || !node.initializer) return false;
+    let found = false;
+    const scan = (binding: ts.Node): void => {
+      if (ts.isIdentifier(binding) && lowerer.checker.getSymbolAtLocation(binding) === sym)
+        found = true;
+      binding.forEachChild(scan);
+    };
+    scan(node.name);
+    return found;
+  };
+  const assignmentRebinds = (node: ts.Node): boolean => {
+    if (!ts.isBinaryExpression(node)) return false;
+    const operator = node.operatorToken.kind;
+    if (operator < ts.SyntaxKind.FirstAssignment || operator > ts.SyntaxKind.LastAssignment)
+      return false;
+    return targetsSym(node.left);
+  };
+  const incrementRebinds = (node: ts.Node): boolean => {
+    if (!ts.isPrefixUnaryExpression(node) && !ts.isPostfixUnaryExpression(node)) return false;
+    if (
+      node.operator !== ts.SyntaxKind.PlusPlusToken &&
+      node.operator !== ts.SyntaxKind.MinusMinusToken
+    )
+      return false;
+    return targetsSym(node.operand);
+  };
+  const cursorRebinds = (node: ts.Node): boolean => {
+    if (!ts.isForInStatement(node) && !ts.isForOfStatement(node)) return false;
+    if (ts.isVariableDeclarationList(node.initializer)) {
+      let found = false;
+      const scan = (binding: ts.Node): void => {
+        if (ts.isIdentifier(binding) && lowerer.checker.getSymbolAtLocation(binding) === sym)
+          found = true;
+        binding.forEachChild(scan);
+      };
+      for (const declaration of node.initializer.declarations) scan(declaration.name);
+      return found;
+    }
+    if (!ts.isExpression(node.initializer)) return false;
+    return targetsSym(node.initializer);
+  };
+  const nodeRebinds = (node: ts.Node): boolean => {
+    if (declarationRebinds(node)) return true;
+    if (assignmentRebinds(node)) return true;
+    if (incrementRebinds(node)) return true;
+    return cursorRebinds(node);
+  };
+  const walk = (node: ts.Node): void => {
     if (written) return;
-    if (ts.isBinaryExpression(n)) {
-      const k = n.operatorToken.kind;
-      const isAssign = k >= ts.SyntaxKind.FirstAssignment && k <= ts.SyntaxKind.LastAssignment;
-      if (isAssign && targetsSym(n.left)) {
-        written = true;
-        return;
-      }
-    }
-    if (
-      (ts.isPrefixUnaryExpression(n) || ts.isPostfixUnaryExpression(n)) &&
-      (n.operator === ts.SyntaxKind.PlusPlusToken ||
-        n.operator === ts.SyntaxKind.MinusMinusToken) &&
-      targetsSym(n.operand)
-    ) {
+    if (nodeRebinds(node)) {
       written = true;
       return;
     }
-    if (
-      (ts.isForInStatement(n) || ts.isForOfStatement(n)) &&
-      !ts.isVariableDeclarationList(n.initializer) &&
-      ts.isExpression(n.initializer) &&
-      targetsSym(n.initializer)
-    ) {
-      written = true;
-      return;
-    }
-    n.forEachChild(walk);
+    node.forEachChild(walk);
   };
   walk(body);
   return written;
@@ -1138,7 +1185,7 @@ export function implicitAnyParamSymbolsOf(
       return null;
     const sym = lowerer.checker.getSymbolAtLocation(param.name);
     if (!sym) return null;
-    if (paramWrittenInBody(lowerer, decl.body!, sym, param.name.text)) return null;
+    if (paramWrittenInBody(lowerer, decl, sym, param.name.text)) return null;
     hasImplicitParams = true;
     return sym;
   });
@@ -1414,6 +1461,7 @@ export function implicitCallInstance(
 ): GenericInstance {
   const shapes: ParamShape[] = [];
   const argTypes = new Map<ts.Symbol, ts.Type>();
+  const constructors = new Map<ts.Symbol, BuiltinConstructorIdentity>();
   info.decl.parameters.forEach((param, i) => {
     const sym = info.implicitParams![i];
     if (!sym) {
@@ -1426,6 +1474,16 @@ export function implicitCallInstance(
     const arg = call.arguments[i];
     if (arg && !ts.isSpreadElement(arg)) {
       const stored = storedImplicitArgumentType(lowerer, arg);
+      const constructor = builtinConstructorIdentityOf(lowerer, arg);
+      const constructorType = constructor
+        ? (stored ?? tryLowerExpression(lowerer, arg)?.type)
+        : null;
+      if (constructor && constructorType) {
+        constructors.set(sym, constructor);
+        argTypes.set(sym, lowerer.checker.getUnknownType());
+        shapes.push({ type: constructorType, mode: "required" });
+        return;
+      }
       if (stored?.kind === "dyn") {
         bound = DYN;
         argTypes.set(sym, lowerer.checker.getUnknownType());
@@ -1541,7 +1599,7 @@ export function implicitCallInstance(
     }
     shapes.push({ type: bound, mode: "required" });
   });
-  return internImplicitInstance(lowerer, call, info, shapes, argTypes);
+  return internImplicitInstance(lowerer, call, info, shapes, argTypes, constructors);
 }
 
 /** The all-dyn DEFAULT instance — today's compiled body exactly: what a
@@ -1568,14 +1626,28 @@ export function implicitDefaultInstance(
   return internImplicitInstance(lowerer, blame, info, shapes, argTypes);
 }
 
+function implicitInstanceKey(
+  info: GenericFnInfo,
+  shapes: ParamShape[],
+  constructors: Map<ts.Symbol, BuiltinConstructorIdentity>,
+): string {
+  const types = shapes.map((shape) => typeKey(shape.type)).join(",");
+  if (constructors.size === 0) return types;
+  const identities = info
+    .implicitParams!.map((symbol) => (symbol ? (constructors.get(symbol) ?? "") : ""))
+    .join(",");
+  return `${types};constructors:${identities}`;
+}
+
 function internImplicitInstance(
   lowerer: Lowerer,
   blame: ts.Node,
   info: GenericFnInfo,
   shapes: ParamShape[],
   argTypes: Map<ts.Symbol, ts.Type>,
+  constructors = new Map<ts.Symbol, BuiltinConstructorIdentity>(),
 ): GenericInstance {
-  const key = shapes.map((s) => typeKey(s.type)).join(",");
+  const key = implicitInstanceKey(info, shapes, constructors);
   let inst = info.instances.get(key);
   if (inst?.implicitState === "failed")
     lowerer.unsupported("SC1090", blame, `the failed specialization of '${info.baseName}'`);
@@ -1615,6 +1687,7 @@ function internImplicitInstance(
     bindings: new Map(),
     typeArgsText: `(${rendered.length > 80 ? rendered.slice(0, 77) + "..." : rendered})`,
     implicitArgTypes: argTypes,
+    builtinConstructors: constructors,
     implicitState: "lowering",
     ...(declared === null ? { implicitInferReturn: true as const } : {}),
   };

@@ -66,6 +66,22 @@ test.each([
   expect(answer.indirect).toBe(false);
 });
 
+test.each(["dyn.nativeInstanceOfOperand", "error.newDom"] as const)(
+  "%s refusals retain exception edges",
+  (libFn) => {
+    const guard: IrExpr = {
+      kind: "libCall",
+      fn: libFn,
+      args: [{ kind: "dynObjLit", fields: [], type: DYN, loc }],
+      type: VOID,
+      loc,
+    };
+    expect(computeMayThrow(moduleWith(fn("caller", [exprStmt(guard)], []))).fns.has("caller")).toBe(
+      true,
+    );
+  },
+);
+
 test.each([F64, STRING])("$kind array presence tracks prototype exception edges", (type) => {
   const key: IrExpr =
     type.kind === "string"

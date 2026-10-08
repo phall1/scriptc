@@ -1123,6 +1123,35 @@ export function isWorkerHandleType(
   return handle;
 }
 
+const NATIVE_CONSTRUCTOR_NAMES = new Set(["URL", "URLSearchParams", "RegExp", "RegExpConstructor"]);
+
+function nativeConstructorDeclaration(
+  declaration: ts.Node,
+  symbol: ts.Symbol,
+  ctx: TypeMapperCtx,
+): boolean {
+  if (!ctx.isStdlibFile(declaration.getSourceFile())) return false;
+  let node: ts.Node | undefined = declaration;
+  while (node) {
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      NATIVE_CONSTRUCTOR_NAMES.has(node.name.text)
+    )
+      return true;
+    node = node.parent;
+  }
+  return NATIVE_CONSTRUCTOR_NAMES.has(symbol.name);
+}
+
+function nativeConstructorType(type: ts.Type, ctx: TypeMapperCtx): boolean {
+  const symbol = type.getSymbol();
+  if (!symbol || ctx.checker.getConstructSignatures(type).length === 0) return false;
+  return ctx.checker
+    .declarationsOf(symbol)
+    .some((declaration) => nativeConstructorDeclaration(declaration, symbol, ctx));
+}
+
 export function mapType(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
   if (mapTypeDepth >= MAP_TYPE_MAX_DEPTH) return null;
   // These intrinsic domains cannot depend on generic bindings, declaration
@@ -1782,6 +1811,7 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
   // outside stays unmapped — callers report the component fence (SC2009)
   // naming the offending half, as does the `new Map` lowering per site.
   const psym = widened.getSymbol();
+  if (nativeConstructorType(widened, ctx)) return DYN;
   const isStdlibInterface = (name: string): boolean =>
     psym?.name === name &&
     checker
@@ -2259,6 +2289,7 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
   // record/class like any other.
   if (
     psym?.name === "URL" &&
+    checker.getConstructSignatures(widened).length === 0 &&
     checker
       .declarationsOf(psym)
       .some(
@@ -2274,6 +2305,7 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
   // URLSearchParams` in the "url" module). Provenance-checked like URL.
   if (
     psym?.name === "URLSearchParams" &&
+    checker.getConstructSignatures(widened).length === 0 &&
     checker
       .declarationsOf(psym)
       .some(
