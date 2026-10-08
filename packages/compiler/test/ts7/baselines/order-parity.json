@@ -14831,6 +14831,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/3139-regex-native-deep-alternatives.ts": {
+   "order": [
+    "<repo>/tests/corpus/3139-regex-native-deep-alternatives.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/3140-array-dense-access.ts": {
    "order": [
     "<repo>/tests/corpus/3140-array-dense-access.ts"
@@ -14840,6 +14846,12 @@
   "<repo>/tests/corpus/json-typed-parse-direct.ts": {
    "order": [
     "<repo>/tests/corpus/json-typed-parse-direct.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/regex-native-matcher.ts": {
+   "order": [
+    "<repo>/tests/corpus/regex-native-matcher.ts"
    ],
    "diags": []
   }

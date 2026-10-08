@@ -25,6 +25,9 @@
  * - Global and sticky exec/test use numeric lastIndex and update or reset
  *   it after matching. String matching/replacement follows its own state
  *   rules; matchAll, search, and split preserve the original regex state.
+ * - One-byte (ASCII) subjects run a native matcher translated from the same
+ *   bytecode when the pattern stays inside its subset (scr_regex_native.h);
+ *   it reports lre_exec's exact captures, so every loop below is shared.
  */
 #include "scr_runtime.h"
 
@@ -34,6 +37,7 @@
 #include <string.h>
 
 #include "libregexp.h"
+#include "scr_regex_native.h"
 
 static void scr_regex_oom(void) {
   scr_trap("scriptc: out of memory\n");
@@ -88,6 +92,8 @@ static void scr_regex_free_bytecodes(void) {
   for (size_t i = 0; i < scr_compiled_len; i++) {
     lre_realloc(lre_opaque(), scr_compiled[i]->bc, 0);
     scr_compiled[i]->bc = NULL;
+    scr_re_native_free(scr_compiled[i]->native);
+    scr_compiled[i]->native = NULL;
   }
   free(scr_compiled);
   scr_compiled = NULL;
@@ -175,7 +181,11 @@ static char *scr_pattern_cesu8(const ScrStr *src, size_t *plen) {
 /* The compiled bytecode, compiling (and caching) on first use. */
 static uint8_t *scr_regex_bc(ScrRegex *re) {
   if (re->bc) return re->bc;
-  if (re->literal) return re->bc = scr_regex_bc(re->literal);
+  if (re->literal) {
+    re->bc = scr_regex_bc(re->literal);
+    re->native = re->literal->native;
+    return re->bc;
+  }
   int flags = scr_lre_flags(re->flags);
   const char *pat = re->source->data;
   size_t pat_len = re->source->len;
@@ -199,6 +209,7 @@ static uint8_t *scr_regex_bc(ScrRegex *re) {
                  re->source->data, re->flags->data, error_msg);
   }
   re->bc = bc;
+  re->native = scr_re_native_build(bc);
   scr_note_compiled(re);
   return bc;
 }
@@ -212,7 +223,10 @@ void scr_regex_release(ScrRegex *re) {
   if (--re->rc == 0) {
     scr_str_release(re->source);
     scr_str_release(re->flags);
-    if (re->bc && !re->literal) lre_realloc(lre_opaque(), re->bc, 0);
+    if (re->bc && !re->literal) {
+      lre_realloc(lre_opaque(), re->bc, 0);
+      scr_re_native_free(re->native);
+    }
     free(re);
   }
 }
@@ -392,6 +406,7 @@ static void scr_jb_put_utf16(ScrJsonBuf *b, const uint16_t *u, int start, int en
 typedef struct ScrRegexInput {
   const uint8_t *data;
   uint16_t *utf16;
+  const ScrReNative *native; /* one-byte subjects of translated patterns */
   int len;
   int wide;
   uint8_t **capture;
@@ -411,10 +426,11 @@ static bool scr_text_ascii(const ScrStr *s) {
   return true;
 }
 
-static void scr_regex_input_init(ScrRegexInput *input, const uint8_t *bc,
-                                  const ScrStr *s) {
+static void scr_regex_input_init(ScrRegexInput *input, const ScrRegex *re,
+                                  const uint8_t *bc, const ScrStr *s) {
   if (s->len > (size_t)INT32_MAX - 1) scr_regex_oom();
   input->wide = !scr_text_ascii(s);
+  input->native = input->wide ? NULL : (const ScrReNative *)re->native;
   input->utf16 = input->wide ? scr_to_utf16(s, &input->len) : NULL;
   input->data = input->wide ? (const uint8_t *)input->utf16 : (const uint8_t *)s->data;
   if (!input->wide) input->len = (int)s->len;
@@ -430,8 +446,9 @@ static void scr_regex_input_dispose(ScrRegexInput *input) {
 }
 
 static int scr_exec(ScrRegexInput *input, const uint8_t *bc, int index) {
-  int rc = lre_exec(input->capture, bc, input->data, index, input->len,
-                    input->wide, lre_opaque());
+  int rc = input->native
+    ? scr_re_native_exec(input->native, input->capture, input->data, index, input->len)
+    : lre_exec(input->capture, bc, input->data, index, input->len, input->wide, lre_opaque());
   if (rc < 0) {
     fflush(stdout);
     scr_trap("scriptc: regular expression execution failed\n");
@@ -496,7 +513,7 @@ static int scr_regex_start(ScrRegex *re, int len) {
 bool scr_regex_test(ScrRegex *re, ScrStr *s) {
   uint8_t *bc = scr_regex_bc(re);
   ScrRegexInput input;
-  scr_regex_input_init(&input, bc, s);
+  scr_regex_input_init(&input, re, bc, s);
   bool stateful = (lre_get_flags(bc) & (LRE_FLAG_GLOBAL | LRE_FLAG_STICKY)) != 0;
   int pos = stateful ? scr_regex_start(re, input.len) : 0;
   int rc = pos < 0 ? 0 : scr_exec(&input, bc, pos);
@@ -517,7 +534,7 @@ ScrArr *scr_regex_exec(ScrStr *s, ScrRegex *re) {
   uint8_t *bc = scr_regex_bc(re);
   bool stateful = (lre_get_flags(bc) & (LRE_FLAG_GLOBAL | LRE_FLAG_STICKY)) != 0;
   ScrRegexInput input;
-  scr_regex_input_init(&input, bc, s);
+  scr_regex_input_init(&input, re, bc, s);
   int len = input.len;
   uint8_t **capture = input.capture;
   int pos = stateful ? scr_regex_start(re, len) : 0;
@@ -557,7 +574,7 @@ ScrArr *scr_regex_match(ScrStr *s, ScrRegex *re) {
   re->last_index = 0;
   bool unicode = (flags & (LRE_FLAG_UNICODE | LRE_FLAG_UNICODE_SETS)) != 0;
   ScrRegexInput input;
-  scr_regex_input_init(&input, bc, s);
+  scr_regex_input_init(&input, re, bc, s);
   int len = input.len;
   uint8_t **capture = input.capture;
   ScrArr *out = NULL;
@@ -584,7 +601,7 @@ ScrArr *scr_regex_match(ScrStr *s, ScrRegex *re) {
 double scr_regex_search(ScrStr *s, ScrRegex *re) {
   uint8_t *bc = scr_regex_bc(re);
   ScrRegexInput input;
-  scr_regex_input_init(&input, bc, s);
+  scr_regex_input_init(&input, re, bc, s);
   uint8_t **capture = input.capture;
   int rc = scr_exec(&input, bc, 0);
   double out = -1;
@@ -614,7 +631,7 @@ static ScrArr *scr_regex_match_all_core(ScrStr *s, ScrRegex *re, ScrArr *indices
   bool unicode = (re_flags & (LRE_FLAG_UNICODE | LRE_FLAG_UNICODE_SETS)) != 0;
   int capture_count = lre_get_capture_count(bc);
   ScrRegexInput input;
-  scr_regex_input_init(&input, bc, s);
+  scr_regex_input_init(&input, re, bc, s);
   int len = input.len;
   uint8_t **capture = input.capture;
   ScrArr *out = scr_arr_new(SCR_ELEM_ARR, 4);
@@ -758,7 +775,7 @@ static ScrStr *scr_replace_impl(ScrStr *s, ScrRegex *re, ScrStr *rep) {
   int capture_count = lre_get_capture_count(bc);
   const char *groupnames = lre_get_groupnames(bc);
   ScrRegexInput input;
-  scr_regex_input_init(&input, bc, s);
+  scr_regex_input_init(&input, re, bc, s);
   int len = input.len;
   uint8_t **capture = input.capture;
   ScrJsonBuf b;
@@ -831,7 +848,7 @@ ScrStr *scr_regex_replace_callback(ScrStr *s, ScrRegex *re, ScrDyn *callback, bo
   int capture_count = lre_get_capture_count(bc);
   const char *groupnames = lre_get_groupnames(bc);
   ScrRegexInput input;
-  scr_regex_input_init(&input, bc, s);
+  scr_regex_input_init(&input, re, bc, s);
   int len = input.len;
   ScrReplacementMatch *matches = NULL;
   size_t count = 0, capacity = 0;
@@ -981,7 +998,7 @@ ScrArr *scr_regex_split_limit(ScrStr *s, ScrRegex *re, double limit_num) {
   bool unicode = (re_flags & (LRE_FLAG_UNICODE | LRE_FLAG_UNICODE_SETS)) != 0;
   bool sticky = (re_flags & LRE_FLAG_STICKY) != 0;
   ScrRegexInput input;
-  scr_regex_input_init(&input, bc, s);
+  scr_regex_input_init(&input, re, bc, s);
   int len = input.len;
   uint8_t **capture = input.capture;
   ScrArr *out = scr_arr_new(SCR_ELEM_STR, 0);
@@ -1420,6 +1437,7 @@ ScrRegex *scr_regex_new(ScrStr *pattern, ScrStr *flags) {
     return NULL;
   }
   re->bc = bc;
+  re->native = scr_re_native_build(bc);
   return re;
 }
 
