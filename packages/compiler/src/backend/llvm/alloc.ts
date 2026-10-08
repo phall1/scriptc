@@ -23,8 +23,10 @@
  *
  * Inlining is limited to the targets where the allocator can be live and
  * its state is a process global: 64-bit, not WASI, not Windows, and not
- * thread-instanced libraries (whose runtime state is thread-local and whose
- * allocator is compiled out). Elsewhere the out-of-line calls remain. */
+ * thread-instanced libraries or worker programs (whose runtime state,
+ * including scr_cyc_live and scr_weak_dispose_hook, is thread-local and
+ * whose allocator is compiled out). Elsewhere the out-of-line calls
+ * remain. */
 
 /** The emitter surface this module needs (a subset of ShapeHost). */
 export interface AllocHost {
