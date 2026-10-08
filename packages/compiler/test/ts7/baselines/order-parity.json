@@ -14930,6 +14930,24 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/4294-console-line-sizes.ts": {
+   "order": [
+    "<repo>/tests/corpus/4294-console-line-sizes.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4295-console-template-parts.ts": {
+   "order": [
+    "<repo>/tests/corpus/4295-console-template-parts.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4296-console-glued-long-parts.ts": {
+   "order": [
+    "<repo>/tests/corpus/4296-console-glued-long-parts.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/4410-inline-object-allocation.ts": {
    "order": [
     "<repo>/tests/corpus/4410-inline-object-allocation.ts"
