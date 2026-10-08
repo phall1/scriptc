@@ -1,4 +1,13 @@
-import { BOOL, F64, STRING, type IrExpr, type IrType, type SrcLoc } from "../../ir/ir.js";
+import {
+  BOOL,
+  DYN,
+  F64,
+  STRING,
+  UNDEFINED_T,
+  type IrExpr,
+  type IrType,
+  type SrcLoc,
+} from "../../ir/ir.js";
 import { numLit, varRef } from "../../ir/build.js";
 import type { Lowerer } from "./lowerer.js";
 
@@ -63,6 +72,39 @@ export function lowerOptionalStringIndex(
       loc,
     },
     type,
+    loc,
+  };
+}
+
+/** JavaScript element access whose checker type did not map (implicit any
+ * inside a monomorphized JS function). A numeric index is a UTF-16 read
+ * that is undefined when missing. A string key is ordinary property lookup
+ * on the boxed string, so brand keys are undefined and "length" is kept. */
+export function lowerUnmappedStringIndex(
+  lowerer: Lowerer,
+  receiver: IrExpr,
+  index: IrExpr,
+  resultType: IrType | null,
+  loc: SrcLoc,
+): IrExpr | null {
+  if (receiver.type.kind !== "string") return null;
+  if (resultType !== null && resultType.kind !== "dyn") return null;
+  if (index.type.kind === "f64") {
+    const optional: IrType = {
+      kind: "union",
+      unionId: lowerer.unions.intern([STRING, UNDEFINED_T]),
+    };
+    return lowerer.coerceToExpected(
+      lowerOptionalStringIndex(lowerer, receiver, index, optional, loc),
+      DYN,
+    );
+  }
+  if (index.type.kind !== "string") return null;
+  return {
+    kind: "dynKeyGet",
+    value: lowerer.coerceToExpected(receiver, DYN),
+    key: index,
+    type: DYN,
     loc,
   };
 }

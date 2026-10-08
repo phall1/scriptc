@@ -745,57 +745,8 @@ export function lowerCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr {
     );
   }
 
-  if (
-    lowerer.isStdlibGlobal(expr.expression, "String") ||
-    lowerer.isStdlibGlobal(expr.expression, "Boolean") ||
-    lowerer.isStdlibGlobal(expr.expression, "Number")
-  ) {
-    const name = lowerer.isStdlibGlobal(expr.expression, "String")
-      ? "String"
-      : lowerer.isStdlibGlobal(expr.expression, "Boolean")
-        ? "Boolean"
-        : "Number";
-    if (expr.arguments.length > 1) {
-      lowerer.noLowering(`${name} with ${expr.arguments.length} arguments`, expr);
-    }
-    const argNode = expr.arguments[0];
-    if (!argNode) {
-      if (name === "String") return { kind: "strLit", value: "", type: STRING, loc };
-      if (name === "Boolean") return { kind: "boolLit", value: false, type: BOOL, loc };
-      return { kind: "numLit", value: 0, type: F64, loc };
-    }
-    // String(e) on a catch binding: the snapshot's own ToString —
-    // intercepted before lowerExpr (caughtRead would fence the raw read).
-    if (name === "String") {
-      const caught = lowerer.caughtToString(argNode);
-      if (caught) return caught;
-    }
-    // Boolean(x) IS condition position: route through lowerCondition so
-    // `&&`/`||` operands descend as ToBoolean'd conditions (JS-exact —
-    // `Boolean(a && b)` ≡ `Boolean(a) && Boolean(b)`, short-circuit
-    // preserved). This also admits mixed-kind operands with no VALUE
-    // representation (`Boolean(rec && list.some(f))` — a record and a
-    // bool) that a value lowering of the `&&` would fence on.
-    if (name === "Boolean") return lowerer.lowerCondition(argNode);
-    if (name === "Number") return lowerNumberConstructorValue(lowerer, argNode, loc);
-    const arg = lowerer.lowerExpr(argNode);
-    if (
-      name === "String" &&
-      (arg.type.kind === "dyn" ||
-        (arg.type.kind === "union" &&
-          lowerer.unions.get(arg.type.unionId)?.arms.some((arm) => arm.kind === "symbol") &&
-          lowerer.dynConvertible(arg.type)))
-    ) {
-      return {
-        kind: "libCall",
-        fn: "dyn.stringConstructor",
-        args: [lowerer.coerceToExpected(arg, DYN)],
-        type: STRING,
-        loc,
-      };
-    }
-    if (name === "String") return lowerer.ensureString(arg, argNode);
-  }
+  const primitiveCall = lowerPrimitiveConstructorCall(lowerer, expr, loc);
+  if (primitiveCall) return primitiveCall;
 
   // __island_eval: the internal island testing hook (eval in the embedded
   // engine, String(result) back). Provenance-checked like setTimeout.
@@ -2248,6 +2199,84 @@ function lowerStringMethodCallWithOptionalArgs(
     changed = true;
   }
   return changed ? { ...lowered, args } : lowered;
+}
+
+const PRIMITIVE_CONSTRUCTOR_TYPES = {
+  StringConstructor: "String",
+  NumberConstructor: "Number",
+  BooleanConstructor: "Boolean",
+} as const;
+
+/** Global `String`/`Number`/`Boolean`, or a value typed as that lib constructor.
+ * Effect re-exports the globals as `BooleanConstructor` and its siblings.
+ * Those call sites use the same ToString/ToNumber/ToBoolean lowering as the
+ * bare global. Passing the constructor as a value still uses the stored
+ * string-closure representation. */
+function primitiveConstructorName(
+  lowerer: Lowerer,
+  callee: ts.Expression,
+): "String" | "Number" | "Boolean" | null {
+  if (lowerer.isStdlibGlobal(callee, "String")) return "String";
+  if (lowerer.isStdlibGlobal(callee, "Number")) return "Number";
+  if (lowerer.isStdlibGlobal(callee, "Boolean")) return "Boolean";
+  const symbol = lowerer.typeOf(callee).getSymbol();
+  if (!symbol || !lowerer.isStdlibSymbol(symbol)) return null;
+  const name = symbol.name as keyof typeof PRIMITIVE_CONSTRUCTOR_TYPES;
+  return PRIMITIVE_CONSTRUCTOR_TYPES[name] ?? null;
+}
+
+function primitiveConstructorConstant(name: "String" | "Number" | "Boolean", loc: SrcLoc): IrExpr {
+  if (name === "String") return { kind: "strLit", value: "", type: STRING, loc };
+  if (name === "Boolean") return { kind: "boolLit", value: false, type: BOOL, loc };
+  return { kind: "numLit", value: 0, type: F64, loc };
+}
+
+function stringConstructorInputIsDynamic(lowerer: Lowerer, arg: IrExpr): boolean {
+  if (arg.type.kind === "dyn") return true;
+  if (arg.type.kind !== "union") return false;
+  const hasSymbol =
+    lowerer.unions.get(arg.type.unionId)?.arms.some((arm) => arm.kind === "symbol") === true;
+  return hasSymbol && lowerer.dynConvertible(arg.type);
+}
+
+function lowerStringConstructorCall(lowerer: Lowerer, argNode: ts.Expression, loc: SrcLoc): IrExpr {
+  // String(e) on a catch binding: the snapshot's own ToString —
+  // intercepted before lowerExpr (caughtRead would fence the raw read).
+  const caught = lowerer.caughtToString(argNode);
+  if (caught) return caught;
+  const arg = lowerer.lowerExpr(argNode);
+  if (!stringConstructorInputIsDynamic(lowerer, arg)) return lowerer.ensureString(arg, argNode);
+  return {
+    kind: "libCall",
+    fn: "dyn.stringConstructor",
+    args: [lowerer.coerceToExpected(arg, DYN)],
+    type: STRING,
+    loc,
+  };
+}
+
+function lowerPrimitiveConstructorCall(
+  lowerer: Lowerer,
+  expr: ts.CallExpression,
+  loc: SrcLoc,
+): IrExpr | null {
+  if (expr.questionDotToken) return null;
+  const name = primitiveConstructorName(lowerer, expr.expression);
+  if (!name) return null;
+  if (expr.arguments.length > 1) {
+    lowerer.noLowering(`${name} with ${expr.arguments.length} arguments`, expr);
+  }
+  const argNode = expr.arguments[0];
+  if (!argNode) return primitiveConstructorConstant(name, loc);
+  // Boolean(x) IS condition position: route through lowerCondition so
+  // `&&`/`||` operands descend as ToBoolean'd conditions (JS-exact —
+  // `Boolean(a && b)` ≡ `Boolean(a) && Boolean(b)`, short-circuit
+  // preserved). This also admits mixed-kind operands with no VALUE
+  // representation (`Boolean(rec && list.some(f))` — a record and a
+  // bool) that a value lowering of the `&&` would fence on.
+  if (name === "Boolean") return lowerer.lowerCondition(argNode);
+  if (name === "Number") return lowerNumberConstructorValue(lowerer, argNode, loc);
+  return lowerStringConstructorCall(lowerer, argNode, loc);
 }
 
 function lowerNumberConstructorValue(
