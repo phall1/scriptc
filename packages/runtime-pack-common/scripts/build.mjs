@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import { createRuntimePackMatrix } from "../runtime-pack-matrix.mjs";
 import { assertArtifactsExcludeStrings } from "./artifact-policy.mjs";
 import { createDeterministicArchive } from "./archive.mjs";
+import { buildRuntimeUnit, resolveRuntimeUnitHelper } from "./runtime-unit.mjs";
 import { installRuntimePack, withBuildLock } from "./build-state.mjs";
 import { parallelMap } from "./parallel-map.mjs";
 
@@ -63,14 +64,19 @@ async function build() {
   // unrelated code changes size. Starting each vendored function on a
   // cache-line boundary keeps their placement fixed; it costs size only in
   // programs that link the archive. WASM code has no addresses to align.
+  // libunicode's many small table helpers are exempt: they are not hot
+  // loops, and aligning them was most of the regex programs' padding.
   const codeAlignment = config.platform === "wasi" ? [] : ["-falign-functions=64"];
-  // On x86-64 the runtime's own functions are aligned as well. Generated
-  // loops that call runtime helpers otherwise swing by up to ~14% with the
-  // helpers' offsets within their cache lines (numeric-kernels on Linux),
-  // and an x86 function already starts on a 16-byte boundary, so the extra
-  // padding is small. arm64 functions start on 4-byte boundaries, where the
-  // size cost is higher and the measured effect was not.
-  const runtimeAlignment = config.target.architecture === "x64" ? codeAlignment : [];
+  const unalignedVendorSources = new Set(["libunicode.c"]);
+  // On x86-64 the speed flavor aligns the runtime's own functions as well:
+  // generated loops that call runtime helpers otherwise swing by several
+  // percent with the helpers' offsets within their cache lines. Release and
+  // library flavors keep the compiler's default alignment, because aligning
+  // every runtime function cost 2-11 KB per program, the largest share of
+  // the default build's size budget (results/h45-size-budget). The runtime is
+  // linked before the program either way, so program size changes never
+  // move runtime code.
+  const speedRuntimeAlignment = config.target.architecture === "x64" ? codeAlignment : [];
   const quickjs = join(vendorRoot, "quickjs-ng");
   const zlib = join(vendorRoot, "zlib");
   const mbedtls = join(vendorRoot, "mbedtls");
@@ -109,6 +115,12 @@ async function build() {
       output,
     ]);
   };
+  // Speed-flavor executable units are emitted through the host LLVM helper
+  // so their object and import bitcode come from one promoted module.
+  const unitHelper =
+    config.bitcode === false
+      ? null
+      : await resolveRuntimeUnitHelper(repoRoot, matrix.target.llvm_triple);
   const parallel = async (items, task) => {
     const width = Math.max(1, Math.min(8, availableParallelism()));
     return parallelMap(items, width, task);
@@ -118,7 +130,13 @@ async function build() {
     const root = join(stagedOutputRoot, "vendor", id);
     const objectRoot = join(root, "objects");
     await parallel(sources, async (source) =>
-      compile(join(sourceRoot, source), join(objectRoot, source.replace(/\.c$/, ".o")), flags),
+      compile(
+        join(sourceRoot, source),
+        join(objectRoot, source.replace(/\.c$/, ".o")),
+        unalignedVendorSources.has(source)
+          ? flags.filter((flag) => !codeAlignment.includes(flag))
+          : flags,
+      ),
     );
     const output = join(root, `libscriptc-${id}.a`);
     await createDeterministicArchive(
@@ -155,20 +173,32 @@ async function build() {
       await rm(versionProbeRoot, { recursive: true, force: true });
     }
     const flavors = {};
-    for (const [flavor, flavorSpec] of Object.entries(matrix.flavors)) {
+    // The executable `speed` flavor (--optimization=speed) exists only when
+    // it differs from release: its static units are emitted through the host
+    // LLVM helper with import bitcode. Its SCR_DYNAMIC variants are the
+    // release objects themselves.
+    const flavorPlan = [
+      ...Object.entries(matrix.flavors),
+      ...("release" in matrix.flavors && unitHelper !== null
+        ? [["speed", matrix.flavors.release]]
+        : []),
+    ];
+    const releaseVariants = new Map();
+    for (const [flavor, flavorSpec] of flavorPlan) {
       process.stdout.write(`building ${packageManifest.name} ${flavor} runtime\n`);
       // Zig emits DWARF by default, including descriptions of functions
       // removed by section GC. Release packs must opt out explicitly.
-      // Zig keeps frame pointers by default; Linux release units drop them
-      // (unwinding still uses .eh_frame), which measurably speeds the small
-      // hot runtime leaves. Dev flavors keep them.
-      const debugFlags = flavor.endsWith("release")
-        ? [
-            "-g0",
-            ...runtimeAlignment,
-            ...(config.platform === "linux" ? ["-fomit-frame-pointer"] : []),
-          ]
-        : [];
+      // Zig keeps frame pointers by default; Linux release (and speed) units
+      // drop them (unwinding still uses .eh_frame), which measurably speeds
+      // the small hot runtime leaves. Dev flavors keep them.
+      const debugFlags =
+        flavor.endsWith("release") || flavor === "speed"
+          ? [
+              "-g0",
+              ...(flavor === "speed" ? speedRuntimeAlignment : []),
+              ...(config.platform === "linux" ? ["-fomit-frame-pointer"] : []),
+            ]
+          : [];
       const units = await parallel(
         flavorSpec.runtime_units ?? matrix.runtime_units,
         async (unit) => {
@@ -178,6 +208,11 @@ async function build() {
               ...baseVariant,
               defines: [...(flavorSpec.defines ?? []), ...baseVariant.defines],
             };
+            const variantKey = `${unit.source}\0${variant.id}`;
+            if (flavor === "speed" && variant.defines.includes("SCR_DYNAMIC")) {
+              variants.push(releaseVariants.get(variantKey));
+              continue;
+            }
             const output = join(
               stagedOutputRoot,
               flavor,
@@ -194,21 +229,61 @@ async function build() {
                 ? ["-I", zlib]
                 : []),
             ];
-            await compile(join(runtimeSrc, unit.source), output, [
+            const unitFlags = [
               ...commonFlags,
               flavorSpec.optimization,
               ...debugFlags,
               ...variant.defines.map((define) => `-D${define}`),
               ...includeFlags,
-            ]);
-            variants.push({
+            ];
+            let bitcode;
+            const bitcodeOutput = output.replace(/\.o$/, ".bc");
+            if (flavor === "speed") await mkdir(dirname(output), { recursive: true });
+            if (
+              flavor === "speed" &&
+              (await buildRuntimeUnit({
+                helper: unitHelper,
+                compileBitcode: (optimized) =>
+                  run(compiler, [
+                    ...compilerArgs,
+                    ...sourcePathFlags,
+                    ...unitFlags,
+                    "-g0",
+                    "-emit-llvm",
+                    "-c",
+                    join(runtimeSrc, unit.source),
+                    "-o",
+                    optimized,
+                  ]),
+                object: output,
+                bitcode: bitcodeOutput,
+                triple: matrix.target.llvm_triple,
+                tag: unit.source.replace(/\.c$/, ""),
+                sections:
+                  matrix.executable_section_elimination.compile_flags.includes(
+                    "-ffunction-sections",
+                  ),
+              }))
+            ) {
+              bitcode = {
+                path: artifactPath(bitcodeOutput),
+                sha256: await sha256(bitcodeOutput),
+                size: (await stat(bitcodeOutput)).size,
+              };
+            } else {
+              await compile(join(runtimeSrc, unit.source), output, unitFlags);
+            }
+            const built = {
               id: variant.id,
               when: variant.when,
               defines: variant.defines,
               path: artifactPath(output),
               sha256: await sha256(output),
               size: (await stat(output)).size,
-            });
+              ...(bitcode === undefined ? {} : { bitcode }),
+            };
+            if (flavor === "release") releaseVariants.set(variantKey, built);
+            variants.push(built);
           }
           return { source: unit.source, predicate: unit.predicate, variants };
         },
@@ -318,7 +393,12 @@ async function build() {
       version: packageManifest.version,
       target: matrix.target,
       runtime_abi: { version: 8, marker: "scr_runtime_abi_v8" },
-      compiler: { command: compiler, identity: compilerVersion, target: matrix.target.llvm_triple },
+      compiler: {
+        command: compiler,
+        identity: compilerVersion,
+        target: matrix.target.llvm_triple,
+        ...(unitHelper === null ? {} : { speed_codegen: unitHelper.identity }),
+      },
       macros: {
         executable: ["SCR_DYNAMIC", "SCR_TEXT_DECODER_LEGACY"],
         excluded: ["SCR_RC_AUDIT", "SCR_ASAN_FIBERS"],

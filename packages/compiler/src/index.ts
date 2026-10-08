@@ -1,3 +1,8 @@
+import {
+  optimizationClass,
+  optimizationField,
+  type NativeOptimization,
+} from "./backend/optimization.js";
 import { compilationTiming, type CompilationTiming } from "./timing.js";
 import { prepareExecutableModule } from "./executable/prepare.js";
 import {
@@ -64,7 +69,7 @@ import { privateSiblingPath } from "./backend/build-cache.js";
 import { nativeCodegenTarget, nativeCodegenTargetRefusal } from "./backend/targets.js";
 import { windowsSubsystemLinkerArgs, type WindowsSubsystem } from "./backend/targets.js";
 import { createNativeLinkInfo } from "./backend/native-link-info.js";
-import { RuntimePackError } from "./backend/runtime-pack.js";
+import { RuntimePackError, loadRuntimeBitcode } from "./backend/runtime-pack.js";
 import { createNativeLinkPlan } from "./backend/link-plan.js";
 import {
   executableLinkerEnvironmentFingerprint,
@@ -352,11 +357,11 @@ function executableNativeFeatures(
   mod: IrModule,
   backend: "llvm",
   dynamic: boolean,
-  optimization: "release" | "dev",
+  optimization: NativeOptimization,
 ): EarlyExecutableNativeFeatures {
   return {
     backend,
-    ...(optimization === "dev" ? { optimization: "dev" as const } : {}),
+    ...optimizationField(optimization),
     ...executableLinkFeatures(mod, dynamic),
   };
 }
@@ -414,7 +419,7 @@ async function compileExecutableNative(
     cPath: llvmPath,
     outPath,
     cacheIdentity: "scriptc-generated-v1",
-    ...(features.optimization === "dev" ? { optimization: "dev" as const } : {}),
+    ...optimizationField(features.optimization),
     ...(strip ? { strip: true } : {}),
     ...(windowsSubsystem === undefined ? {} : { windowsSubsystem }),
     ...(effectiveProgramSplit === null
@@ -478,6 +483,7 @@ async function emitNativeProgramObject(
   entryPath: string,
   opts: CompileRequestOptions,
   llvm: string | readonly string[],
+  features: EarlyExecutableNativeFeatures,
 ): Promise<NativeProgramObject> {
   const stem = basename(entryPath).replace(/\.(ts|mts|cts|js|mjs|cjs)$/, "");
   const artifactPath = join(opts.outDir, `${stem}.helper.o`);
@@ -492,12 +498,19 @@ async function emitNativeProgramObject(
       ? 1
       : nativeProgramPartitions(
           target,
-          opts.optimization === "dev" ? "dev" : "release",
+          optimizationClass(opts.optimization),
           (typeof llvm === "string" ? [llvm] : llvm).reduce(
             (bytes, part) => bytes + Buffer.byteLength(part),
             0,
           ),
         );
+  // Speed programs import small runtime functions from the bitcode of the
+  // exact runtime units they link, so LLVM can inline across the boundary.
+  // Release programs never do: their objects stay independent of it.
+  const runtimeBitcode =
+    opts.optimization === "speed" && opts.sanitize !== true && target !== null
+      ? await loadRuntimeBitcode({ target, features })
+      : null;
   try {
     const artifact = await emitNativeArtifact({
       outputPath: linkPath,
@@ -507,12 +520,15 @@ async function emitNativeProgramObject(
       optimization: opts.optimization === "dev" ? "0" : "2",
       ...(opts.sanitize === undefined ? {} : { sanitize: opts.sanitize }),
       partitions,
+      ...(runtimeBitcode === null
+        ? {}
+        : { importBitcode: { paths: runtimeBitcode.paths, digests: runtimeBitcode.digests } }),
     });
     return {
       linkPath,
       partitionPaths: artifact.outputPaths.slice(1),
       artifactPath,
-      dependencies: artifact.dependencies,
+      dependencies: [...artifact.dependencies, ...(runtimeBitcode?.dependencies ?? [])],
     };
   } catch (error) {
     await removeNativeProgramObject(linkPath, nativePartitionPaths(linkPath, partitions));
@@ -597,6 +613,7 @@ async function prepareExecutableInput(
         wasi: buildPlatform === "wasi",
         runtimeAbiMarker: outputKind === "obj",
         objectAudit: opts.sanitize === true,
+        ...(opts.optimization === "speed" ? { inlineRc: true } : {}),
       });
     } catch (err) {
       if (!(err instanceof LlvmUnsupportedError)) throw err;
@@ -666,6 +683,7 @@ async function prepareExecutableInput(
       wasi: buildPlatform === "wasi",
       runtimeAbiMarker: useRuntimePack,
       objectAudit: opts.sanitize === true,
+      ...(opts.optimization === "speed" ? { inlineRc: true } : {}),
     });
   } catch (err) {
     if (!(err instanceof LlvmUnsupportedError)) throw err;
@@ -917,7 +935,7 @@ async function compileTracked(
       sanitize: opts.sanitize ?? false,
       dynamic: opts.dynamic ?? false,
       backend: "llvm",
-      ...(opts.optimization === "dev" ? { optimization: "dev" as const } : {}),
+      ...optimizationField(opts.optimization),
       ...(opts.strip ? { strip: true as const } : {}),
       ...(opts.windowsSubsystem === "gui" ? { windowsSubsystem: "gui" as const } : {}),
       npmStatic: opts.npmStatic ?? null,
@@ -990,6 +1008,7 @@ async function compileTracked(
           entryPath,
           opts,
           await readFile(earlyHit.llvmPath, "utf8"),
+          earlyHit.native,
         );
         nativeInputPath = nativeProgramObject.linkPath;
       } catch (err) {
@@ -1090,7 +1109,12 @@ async function compileTracked(
         );
       }
       try {
-        nativeProgramObject = await emitNativeProgramObject(entryPath, opts, llvmSource);
+        nativeProgramObject = await emitNativeProgramObject(
+          entryPath,
+          opts,
+          llvmSource,
+          nativeFeatures,
+        );
         timing("native-object");
       } catch (err) {
         if (!(err instanceof NativeCodegenError)) throw err;
@@ -1613,6 +1637,7 @@ async function compileLibraryTracked(
       pointerBits: buildPlatform === "wasi" ? 32 : 64,
       wasi: buildPlatform === "wasi",
       objectAudit: opts.sanitize === true,
+      ...(profile.optimization === "speed" ? { inlineRc: true } : {}),
     });
     timing("llvm-emit", {
       output_bytes:

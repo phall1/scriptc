@@ -37,6 +37,8 @@ const { values } = parseArgs({
     warmup: { type: "string", default: "2" },
     timeout: { type: "string", default: "120" },
     layouts: { type: "string", default: "1" },
+    "baseline-optimization": { type: "string", default: "release" },
+    "candidate-optimization": { type: "string", default: "release" },
     json: { type: "string" },
     "no-lock": { type: "boolean", default: false },
     node: { type: "boolean", default: true },
@@ -47,6 +49,7 @@ const { values } = parseArgs({
 if (values.help) {
   console.log(`Usage: node scripts/bench-runtime.mjs [--candidate=<checkout>] [--baseline=<checkout>]
        [--workloads=a,b] [--runs=15] [--warmup=2] [--timeout=120] [--layouts=1] [--json=<file>]
+       [--baseline-optimization=release] [--candidate-optimization=release]
        [--no-lock] [--no-node] [--keep]
 
 Each checkout must have a built CLI (packages/cli/dist/bootstrap.js) and native
@@ -59,7 +62,12 @@ those layouts, so verdicts cover code-placement luck instead of one placement.
 Use it for small codegen changes (e.g. --layouts=4 --runs=16).
 
 Workload names are listed in benchmarks/runtime/workloads.json; for example
---workloads=cli-config,http-api runs only the startup and server workloads.`);
+--workloads=cli-config,http-api runs only the startup and server workloads.
+
+--baseline-optimization/--candidate-optimization pick each contender's
+--optimization posture (default release). The same checkout may be both
+contenders, e.g. --baseline=. --candidate-optimization=speed compares speed with
+release. cold_build_ms records each contender's first, uncached build.`);
   process.exit(0);
 }
 const runs = Number(values.runs);
@@ -67,6 +75,11 @@ const warmup = Number(values.warmup);
 const timeoutMs = Number(values.timeout) * 1000;
 assert.ok(Number.isInteger(runs) && runs >= 3 && runs <= 200, "--runs must be 3..200");
 assert.ok(Number.isInteger(warmup) && warmup >= 0 && warmup <= 20, "--warmup must be 0..20");
+for (const option of ["baseline-optimization", "candidate-optimization"])
+  assert.ok(
+    ["release", "dev", "speed"].includes(values[option]),
+    `--${option} must be release, dev, or speed`,
+  );
 const layouts = Number(values.layouts);
 assert.ok(Number.isInteger(layouts) && layouts >= 1 && layouts <= 8, "--layouts must be 1..8");
 assert.ok(
@@ -413,7 +426,7 @@ function revision(root) {
   });
   return r.stdout.trim() + (dirty.stdout.trim() ? "+dirty" : "");
 }
-function build(label, root, workload, layout = 0) {
+function build(label, root, workload, layout, optimization) {
   const cli = cliFor(root);
   const out = join(work, label, layout === 0 ? workload.name : `${workload.name}.layout${layout}`);
   mkdirSync(dirname(out), { recursive: true });
@@ -427,10 +440,14 @@ function build(label, root, workload, layout = 0) {
     env.SCRIPTC_BENCH_LAYOUT_PAD = layoutTools.pads[layout];
   }
   const entry = join(suiteRoot, workload.entry);
-  const result = run(process.execPath, [cli, "build", entry, "--optimization=release", "-o", out], {
-    env,
-    timeout: 900_000,
-  });
+  const result = run(
+    process.execPath,
+    [cli, "build", entry, `--optimization=${optimization}`, "-o", out],
+    {
+      env,
+      timeout: 900_000,
+    },
+  );
   if (result.status !== 0)
     return {
       ok: false,
@@ -442,8 +459,20 @@ function build(label, root, workload, layout = 0) {
 
 /* ── main ──────────────────────────────────────────────────────────────── */
 const contenders = [
-  ...(values.baseline ? [{ label: "baseline", root: resolve(values.baseline) }] : []),
-  { label: "candidate", root: resolve(values.candidate) },
+  ...(values.baseline
+    ? [
+        {
+          label: "baseline",
+          root: resolve(values.baseline),
+          optimization: values["baseline-optimization"],
+        },
+      ]
+    : []),
+  {
+    label: "candidate",
+    root: resolve(values.candidate),
+    optimization: values["candidate-optimization"],
+  },
 ];
 const report = {
   schema: 1,
@@ -551,8 +580,9 @@ try {
       entry.results[c.label] = result;
       result.binaries = [];
       for (let layout = 0; layout < layouts && result.status === undefined; layout++) {
-        const built = build(c.label, c.root, w, layout);
+        const built = build(c.label, c.root, w, layout, c.optimization);
         result.build_ms += Math.round(built.buildMs);
+        if (layout === 0) result.cold_build_ms = Math.round(built.buildMs);
         if (!built.ok) {
           result.status = "build-failed";
           result.error = built.error;

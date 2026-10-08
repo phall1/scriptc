@@ -289,9 +289,12 @@ import {
   arrNewCall,
   boxAccess,
   boxNewCall,
+  boxReleaseSym,
   computeTraced,
   elemAccess,
+  emitInlineRcHelpers,
   FN_ATTRS,
+  inlineRcDecls,
   llFieldType,
   type MapKeyAccess,
   releaseSym,
@@ -367,6 +370,9 @@ export interface LlvmTargetOptions {
    * builds pass false so release/dev objects carry no empty calls.
    * Defaults to true for direct emission. */
   objectAudit?: boolean;
+  /** Emit retain/release fast paths inline (the `speed` posture). Off, every
+   * retain and release is a runtime call. */
+  inlineRc?: boolean;
 }
 
 export function emitLlvmModule(mod: IrModule, options: LlvmTargetOptions = {}): string {
@@ -495,6 +501,9 @@ export class LlEmitter {
   needsBadTag = false;
   needsBadKey = false;
   private needsRetainBox = false;
+  /** Inline RC fast-path helpers requested by call sites (shapes.ts); null
+   * when inline RC is off. */
+  private readonly rcHelpers: Set<string> | null;
 
   readonly fnByName = new Map<string, IrFunction>();
   /** Emitted LLVM text of every IR function body, by function name: the
@@ -692,6 +701,7 @@ export class LlEmitter {
     this.wasi = options.wasi === true;
     this.emitLibraryIdentity = options.emitLibraryIdentity !== false;
     this.runtimeAbiMarker = options.runtimeAbiMarker === true;
+    this.rcHelpers = options.inlineRc === true ? new Set() : null;
     // ScrCycHdr.color stays 12 bytes behind a wasm32 object and 16 bytes
     // behind a 64-bit object. The wasm32 header pads before color so its
     // payload remains double-aligned without changing this ABI offset.
@@ -748,6 +758,7 @@ export class LlEmitter {
         // exactly like thread-instanced libraries.
         threadInstances: mod.lib?.threadInstances === true || mod.workers === true,
       }),
+      rcHelpers: this.rcHelpers,
       unionsById: this.unionsById,
       declare: (decl) => this.declare(decl),
       needOom: () => this.needOom(),
@@ -1599,6 +1610,12 @@ export class LlEmitter {
       // commits swap its mutable dense, sparse, presence, and property
       // storage while preserving the target object's identity.
       `%ScrArr = type { ${this.sizeType}, ${this.sizeType}, ${this.sizeType}, i32, ptr, ptr, ptr, ptr, ptr, ptr, ${this.sizeType}, ${this.sizeType}, ptr, ${this.sizeType}, ${this.sizeType}, ptr }`,
+      // The ScrMap prefix { rc, key_kind, val_kind, val_retain, val_release,
+      // val_trace, key_retain, key_release, key_trace } — the inline RC
+      // fast paths test the two trace slots (shapes.ts).
+      ...(this.rcHelpers === null
+        ? []
+        : [`%ScrMapRc = type { ${this.sizeType}, i32, i32, ptr, ptr, ptr, ptr, ptr, ptr }`]),
       // The runtime error prefix { rc, vt, name, message, code, cause } and the
       // class-object shape { rc, pre, post, ctor, name } — field reads on
       // builtin errors and classval loads GEP through these.
@@ -1655,6 +1672,7 @@ export class LlEmitter {
     );
     for (const d of this.decls) out.push(d);
     out.push(``);
+    const flushedDecls = new Set(this.decls);
     for (const table of this.constantNumericTables.values()) {
       const n = table.values.length;
       out.push(
@@ -1894,6 +1912,7 @@ export class LlEmitter {
       // LIBRARY mode: no @main — the profile-declared external
       // symbols specified by the library IR instead.
       for (const line of this.emitLibDefs(globals, globalReleaseLines, stamps)) out.push(line);
+      out.push(...this.inlineRcTail(flushedDecls));
       out.push(`attributes #0 = { sanitize_address }`);
       if (this.wasi) out.push(`attributes #1 = { sanitize_address presplitcoroutine }`);
       if (hasNoInlineRecordClone) out.push(`attributes #2 = { noinline sanitize_address }`);
@@ -2037,6 +2056,7 @@ export class LlEmitter {
           : [`  %native_exit = call i32 @scr_exit_code_hint_get()`, `  ret i32 %native_exit`]),
       `}`,
       ``,
+      ...this.inlineRcTail(flushedDecls),
       // sanitize_address is inert under the plain pipeline; the sanitized
       // lane's -fsanitize=address link activates instrumentation over the
       // emitted functions too (the runtime TUs get theirs from clang).
@@ -2605,6 +2625,15 @@ export class LlEmitter {
     // The declarations these helpers added must land in the extern block,
     // which already flushed — append here instead (LLVM is order-free).
     return defs.length > 0 ? [...defs] : defs;
+  }
+
+  /** The inline RC helpers every call site requested, emitted last so
+   * requests from main/library epilogues are included. Slow-path
+   * declarations a late request added after the extern block flushed land
+   * here too. */
+  private inlineRcTail(flushedDecls: ReadonlySet<string>): string[] {
+    const late = inlineRcDecls(this.shapeHost).filter((d) => !flushedDecls.has(d));
+    return [...late, ...emitInlineRcHelpers(this.shapeHost)];
   }
 
   /** Env-signature wrappers + interned immortal closures for declared
@@ -3283,8 +3312,7 @@ export class LlEmitter {
         const t = this.B.tmp();
         this.B.line(`${t} = load ptr, ptr ${v.name}`);
         if (v.boxed) {
-          this.declare(`declare void @scr_box_release(ptr)`);
-          this.B.line(`call void @scr_box_release(ptr ${t})`);
+          this.B.line(`call void ${boxReleaseSym(this.shapeHost)}(ptr ${t})`);
         } else {
           this.releaseValue(t, v.type);
         }
@@ -3299,8 +3327,7 @@ export class LlEmitter {
       const t = this.B.tmp();
       this.B.line(`${t} = load ptr, ptr ${e.slot}`);
       if (e.boxed) {
-        this.declare(`declare void @scr_box_release(ptr)`);
-        this.B.line(`call void @scr_box_release(ptr ${t})`);
+        this.B.line(`call void ${boxReleaseSym(this.shapeHost)}(ptr ${t})`);
       } else {
         this.releaseValue(t, e.type); // runtime releases are NULL-tolerant
       }
