@@ -10,15 +10,15 @@ import {
   type IrStmt,
   type SrcLoc,
 } from "../../ir/ir.js";
-import { locOf } from "../program.js";
+import { isJsSourceFile, locOf } from "../program.js";
 import type { Lowerer } from "./lowerer.js";
 import { findMethodOn, type ClassInfo } from "./lower-classes.js";
 import { classPropertiesHelper } from "./class-dynamic-dispatch.js";
 import { classPrototypeData } from "./class-prototypes.js";
 import { tryLowerExpression } from "./expressions/try-lower-expression.js";
 
-/** Observed method slots and zero-argument notifications can be replaced
- * through instance properties or their shared prototype chain. */
+/** Unmodified typed methods retain direct or virtual native dispatch.
+ * JavaScript notification methods keep their checked property fallback. */
 export function isClassCallback(lowerer: Lowerer, info: ClassInfo, name: string): boolean {
   if (!isClassOwnEnumerableFieldName(name) || name.startsWith("get:") || name.startsWith("set:"))
     return false;
@@ -35,7 +35,10 @@ export function isClassCallback(lowerer: Lowerer, info: ClassInfo, name: string)
     !!found &&
     !found.sig.abstract &&
     (lowerer.prototypeMethodAccesses.has(name) ||
-      (found.sig.params.length === 0 && found.sig.ret.kind === "void"))
+      (info.decl !== null &&
+        isJsSourceFile(info.decl.getSourceFile()) &&
+        found.sig.params.length === 0 &&
+        found.sig.ret.kind === "void"))
   );
 }
 
