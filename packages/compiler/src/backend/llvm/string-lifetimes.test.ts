@@ -428,6 +428,8 @@ test("string comparisons decide identity, lengths and leading bytes before the r
     expect(bytes).toContain("call i32 @scr_str_cmp(ptr %a, ptr %b)");
     const units = helper("sc_str_cmp_u16");
     expect(units).toContain("%wascii = icmp eq i64 %whigh, 0");
+    expect(units).toContain("%tascii = icmp eq i64 %thigh, 0");
+    expect(bytes).toContain("%tailable = and i1 %samelen, %short");
     expect(units).toContain("%ascii = icmp sge i8 %bits, 0");
     expect(units).toContain("call i32 @scr_str_cmp_u16(ptr %a, ptr %b)");
   }
