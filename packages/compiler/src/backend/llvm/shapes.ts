@@ -335,6 +335,17 @@ function releaseHelper(host: ShapeHost, family: string, row: InlineRcFamily): st
     `dec:`,
     `  %n = sub ${S} %rc, 1`,
     `  store ${S} %n, ptr %o`,
+    ...(family === "union"
+      ? [
+          // scr_union_release buffers a surviving box only when its arm can
+          // reach a cycle: a box whose arm_trace is NULL visits nothing.
+          `  %atp = getelementptr i8, ptr %o, ${S} ${S === "i64" ? 32 : 16} ; ScrUnion.arm_trace`,
+          `  %at = load ptr, ptr %atp`,
+          `  %untraced = icmp eq ptr %at, null`,
+          `  br i1 %untraced, label %done, label %root`,
+          `root:`,
+        ]
+      : []),
     ...(cycle === "always"
       ? [
           // scr_cyc_on_release: color = PURPLE; an already-buffered candidate

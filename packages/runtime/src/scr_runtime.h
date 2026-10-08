@@ -2093,6 +2093,10 @@ typedef struct ScrUnion {
   ScrTraceFn arm_trace;
   uint64_t slot; /* double/bool/pointer via memcpy and casts */
 } ScrUnion;
+/* The speed posture's inline union release (shapes.ts) reads arm_trace at
+ * this byte offset to skip buffering untraced boxes, like scr_union_release. */
+_Static_assert(offsetof(ScrUnion, arm_trace) == 2 * sizeof(size_t) + 2 * sizeof(void *),
+               "inline RC fast paths read ScrUnion.arm_trace at 32 (64-bit) / 16 (32-bit)");
 
 ScrUnion *scr_union_new_f64(uint32_t tag, double v);  /* returns +1 */
 ScrUnion *scr_union_new_bool(uint32_t tag, bool v);   /* returns +1 */
