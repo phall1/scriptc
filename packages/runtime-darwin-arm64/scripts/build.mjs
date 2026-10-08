@@ -58,6 +58,10 @@ async function build() {
     "-I",
     runtimeSrc,
   ];
+  // Vendored -Os archives start each function on a cache-line boundary so
+  // their hot loops keep their placement when unrelated code changes size
+  // (see the shared pack builder in runtime-pack-common).
+  const codeAlignment = ["-falign-functions=64"];
   const quickjs = join(vendorRoot, "quickjs-ng");
   const zlib = join(vendorRoot, "zlib");
   const mbedtls = join(vendorRoot, "mbedtls");
@@ -182,6 +186,7 @@ async function build() {
         "-D_GNU_SOURCE",
         "-DNDEBUG",
         "-Os",
+        ...codeAlignment,
         "-I",
         quickjs,
       ]),
@@ -190,6 +195,7 @@ async function build() {
         RUNTIME_PACK_MATRIX.target.llvm_triple,
         "-std=c11",
         "-Os",
+        ...codeAlignment,
         "-I",
         quickjs,
       ]),
@@ -198,6 +204,7 @@ async function build() {
         RUNTIME_PACK_MATRIX.target.llvm_triple,
         "-std=c11",
         "-Os",
+        ...codeAlignment,
         "-I",
         zlib,
       ]),
@@ -206,6 +213,7 @@ async function build() {
         RUNTIME_PACK_MATRIX.target.llvm_triple,
         "-std=c11",
         "-Os",
+        ...codeAlignment,
         "-I",
         join(mbedtls, "include"),
         "-I",
