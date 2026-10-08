@@ -101,6 +101,12 @@ function collectUses(fn: IrFunction): Uses {
       case "unionIsTag":
         if (node.value.kind === "varRef") return true;
         break;
+      case "unionEq":
+        // Tag and payload comparison through borrowed boxes. The emitter
+        // reads proven local operands in place (canBorrowCallArgument).
+        for (const value of [node.left, node.right])
+          if (value.kind !== "varRef" || value.type.kind !== "union") expr(value);
+        return true;
       case "fieldGet":
       case "recordGet":
         if (node.obj.kind === "varRef") return true;
@@ -182,8 +188,9 @@ function collectUses(fn: IrFunction): Uses {
  * do not recurse on the compiler stack or repeatedly rescan function bodies.
  *
  * The result is private to one emission of the finalized IR. No fact is
- * serialized or reused after a compiler transformation. Synchronous bodies
- * without environments are the only supported calling convention. */
+ * serialized or reused after a compiler transformation. Parameter facts
+ * cover synchronous bodies without environments only; closure bodies get
+ * local facts alone. */
 export function analyzeCallLifetimes(functions: ReadonlyMap<string, IrFunction>): CallLifetimes {
   const usesByFunction = new Map<string, Uses>();
   const nodes = new Map<string, Parameter[]>();
@@ -196,20 +203,12 @@ export function analyzeCallLifetimes(functions: ReadonlyMap<string, IrFunction>)
     projectedLocals: new Map(),
   };
   for (const fn of functions.values()) {
-    if (fn.async || fn.generator || fn.captures !== undefined || fn.classCaptures !== undefined)
-      continue;
+    if (fn.async || fn.generator || fn.classCaptures !== undefined) continue;
     const uses = collectUses(fn);
     usesByFunction.set(fn.name, uses);
     const locals = new Map(fn.locals.map((local) => [local.id, local]));
-    const borrowed = new Set<number>();
     const stable = (local: IrLocal): boolean =>
       !local.boxed && !local.tdz && !uses.written.has(local.id);
-    fn.params.forEach((param, index) => {
-      const local = locals.get(param.localId);
-      if (local && isRefCounted(param.type) && stable(local) && !uses.declarations.has(local.id))
-        borrowed.add(index);
-    });
-    if (borrowed.size > 0) result.borrowed.set(fn.name, borrowed);
     result.bindings.set(
       fn.name,
       new Set(
@@ -218,6 +217,20 @@ export function analyzeCallLifetimes(functions: ReadonlyMap<string, IrFunction>)
           .map((local) => local.id),
       ),
     );
+    if (fn.captures !== undefined) {
+      // A closure body is invoked through its environment trampoline, so
+      // its parameters keep the owned convention and no direct call can
+      // forward to them. Its own unboxed locals follow the same rules as
+      // any synchronous body; captured cells are boxed and marked invalid.
+      continue;
+    }
+    const borrowed = new Set<number>();
+    fn.params.forEach((param, index) => {
+      const local = locals.get(param.localId);
+      if (local && isRefCounted(param.type) && stable(local) && !uses.declarations.has(local.id))
+        borrowed.add(index);
+    });
+    if (borrowed.size > 0) result.borrowed.set(fn.name, borrowed);
     nodes.set(
       fn.name,
       fn.params.map((param) => {

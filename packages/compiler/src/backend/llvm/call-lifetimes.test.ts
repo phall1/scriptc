@@ -430,3 +430,60 @@ test("unchanged let bindings can own call inputs but subsequent writes and captu
   });
   expect(analyze(fn).bindings.get(fn.name)?.size).toBe(0);
 });
+
+test("strict union equality is a borrowing use of a local operand", () => {
+  const fn = helper("same", ["left", "right"]);
+  fn.returnType = BOOL;
+  fn.body = [
+    ret({
+      kind: "unionEq",
+      unionId: "optional",
+      negated: false,
+      sameValue: false,
+      left: ref("left"),
+      right: ref("right"),
+      type: BOOL,
+      loc,
+    }),
+  ];
+  expect(analyze(fn).parameters.get("same")).toEqual(new Set([0, 1]));
+  fn.body = [
+    ret({
+      kind: "unionEq",
+      unionId: "optional",
+      negated: false,
+      sameValue: false,
+      left: ref("left"),
+      right: {
+        kind: "unionWrap",
+        value: ref("right"),
+        unionId: "nested",
+        tag: 0,
+        type: optional,
+        loc,
+      },
+      type: BOOL,
+      loc,
+    }),
+  ];
+  expect(analyze(fn).parameters.get("same")).toEqual(new Set([0]));
+});
+
+test("closure bodies get local facts but never parameter facts", () => {
+  const fn = helper("closure");
+  fn.captures = [];
+  fn.locals.push(local("item"));
+  fn.body = [
+    { kind: "varDecl", localId: "item", init: ref("value"), loc },
+    { kind: "exprStmt", expr: tag("item"), loc },
+  ];
+  const result = analyze(fn);
+  expect(result.parameters.has("closure")).toBe(false);
+  expect(result.borrowed.has("closure")).toBe(false);
+  expect(result.locals.get("closure")).toEqual(new Set(["item"]));
+  expect(result.projectedLocals.get("closure")).toEqual(new Set(["item"]));
+  expect(result.bindings.get("closure")).toEqual(new Set(["item"]));
+  fn.locals[0]!.boxed = true;
+  fn.body.push({ kind: "exprStmt", expr: tag("value"), loc });
+  expect(analyze(fn).locals.get("closure")).toEqual(new Set(["item"]));
+});
