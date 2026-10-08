@@ -65,7 +65,9 @@ async function build() {
   // Vendored -Os archives start each function on a cache-line boundary so
   // their hot loops keep their placement when unrelated code changes size
   // (see the shared pack builder in runtime-pack-common).
+  // libunicode's small table helpers are exempt (see runtime-pack-common).
   const codeAlignment = ["-falign-functions=64"];
+  const unalignedVendorSources = new Set(["libunicode.c"]);
   const quickjs = join(vendorRoot, "quickjs-ng");
   const zlib = join(vendorRoot, "zlib");
   const mbedtls = join(vendorRoot, "mbedtls");
@@ -115,7 +117,9 @@ async function build() {
       await compile(
         join(sourceRoot, source),
         join(objectRoot, source.replace(/\.c$/, ".o")),
-        flags,
+        unalignedVendorSources.has(source)
+          ? flags.filter((flag) => !codeAlignment.includes(flag))
+          : flags,
       );
     });
     const output = join(root, `libscriptc-${id}.a`);

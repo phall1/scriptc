@@ -29,8 +29,8 @@ Options:
                      uses -O0, source breakpoints, and cached LLVM object shards;
                      macOS executable builds also produce an adjacent .dSYM.
                      speed trades larger executables and longer builds for
-                     faster programs (profile-optimized runtime, runtime
-                     inlining, inline reference counting)
+                     faster programs (runtime inlining, inline reference
+                     counting, cache-line-aligned runtime code on x86-64)
       --strip        remove symbol/debug payload from the linked executable
                      for smaller builds (opt in; --emit=exe only)
       --windows-subsystem <console|gui>

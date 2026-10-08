@@ -64,14 +64,19 @@ async function build() {
   // unrelated code changes size. Starting each vendored function on a
   // cache-line boundary keeps their placement fixed; it costs size only in
   // programs that link the archive. WASM code has no addresses to align.
+  // libunicode's many small table helpers are exempt: they are not hot
+  // loops, and aligning them was most of the regex programs' padding.
   const codeAlignment = config.platform === "wasi" ? [] : ["-falign-functions=64"];
-  // On x86-64 the runtime's own functions are aligned as well. Generated
-  // loops that call runtime helpers otherwise swing by up to ~14% with the
-  // helpers' offsets within their cache lines (numeric-kernels on Linux),
-  // and an x86 function already starts on a 16-byte boundary, so the extra
-  // padding is small. arm64 functions start on 4-byte boundaries, where the
-  // size cost is higher and the measured effect was not.
-  const runtimeAlignment = config.target.architecture === "x64" ? codeAlignment : [];
+  const unalignedVendorSources = new Set(["libunicode.c"]);
+  // On x86-64 the speed flavor aligns the runtime's own functions as well:
+  // generated loops that call runtime helpers otherwise swing by several
+  // percent with the helpers' offsets within their cache lines. Release and
+  // library flavors keep the compiler's default alignment, because aligning
+  // every runtime function cost 2-11 KB per program, the largest share of
+  // the default build's size budget (results/h45-size-budget). The runtime is
+  // linked before the program either way, so program size changes never
+  // move runtime code.
+  const speedRuntimeAlignment = config.target.architecture === "x64" ? codeAlignment : [];
   const quickjs = join(vendorRoot, "quickjs-ng");
   const zlib = join(vendorRoot, "zlib");
   const mbedtls = join(vendorRoot, "mbedtls");
@@ -125,7 +130,13 @@ async function build() {
     const root = join(stagedOutputRoot, "vendor", id);
     const objectRoot = join(root, "objects");
     await parallel(sources, async (source) =>
-      compile(join(sourceRoot, source), join(objectRoot, source.replace(/\.c$/, ".o")), flags),
+      compile(
+        join(sourceRoot, source),
+        join(objectRoot, source.replace(/\.c$/, ".o")),
+        unalignedVendorSources.has(source)
+          ? flags.filter((flag) => !codeAlignment.includes(flag))
+          : flags,
+      ),
     );
     const output = join(root, `libscriptc-${id}.a`);
     await createDeterministicArchive(
@@ -184,7 +195,7 @@ async function build() {
         flavor.endsWith("release") || flavor === "speed"
           ? [
               "-g0",
-              ...runtimeAlignment,
+              ...(flavor === "speed" ? speedRuntimeAlignment : []),
               ...(config.platform === "linux" ? ["-fomit-frame-pointer"] : []),
             ]
           : [];
