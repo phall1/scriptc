@@ -284,6 +284,7 @@ import {
 import { LlDyn, type DynHost } from "./dyn.js";
 import { LlvmUnsupportedError } from "./unsupported.js";
 import { LlWalkers } from "./walkers.js";
+import { literalCapWord } from "./string-key-hash.js";
 import {
   arrNewCall,
   boxAccess,
@@ -1687,9 +1688,13 @@ export class LlEmitter {
     for (const [text, lit] of this.literals) {
       // Immortal interned ScrStr: { rc = SIZE_MAX, len, cap = len, bytes\0 } —
       // the runtime ABI’s static table, retain/release skip rc == SIZE_MAX.
+      // 64-bit (little-endian) targets split the capacity word: the high
+      // half carries the precomputed Map key hash (SCR_STR_HASH_CACHE).
+      const capWord =
+        this.sizeType === "i64" ? literalCapWord(Buffer.from(text, "utf8")) : String(lit.len);
       out.push(
         `@${lit.sym} = internal global { ${this.sizeType}, ${this.sizeType}, ${this.sizeType}, [${lit.len + 1} x i8] } ` +
-          `{ ${this.sizeType} -1, ${this.sizeType} ${lit.len}, ${this.sizeType} ${lit.len}, [${lit.len + 1} x i8] c"${llStrBytes(text)}" }`,
+          `{ ${this.sizeType} -1, ${this.sizeType} ${lit.len}, ${this.sizeType} ${capWord}, [${lit.len + 1} x i8] c"${llStrBytes(text)}" }`,
       );
     }
     if (this.literals.size > 0) out.push(``);

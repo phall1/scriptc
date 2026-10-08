@@ -635,13 +635,50 @@ typedef struct ScrVt {
  * scr_str_concat can append in place when the left operand is uniquely
  * owned (rc == 1) — observable immutability is preserved: a string with
  * rc > 1 or rc == SIZE_MAX is never mutated.
+ *
+ * On 64-bit little-endian targets the capacity word is split: the low half
+ * is cap (strings never exceed SCR_STR_MAX_CAP bytes; JavaScript strings are
+ * far shorter) and the high half caches the string's Map key hash (0 = not
+ * computed). Emitted literals and runtime statics still initialize one
+ * size-sized word to len, which leaves the hash half zero. Only uniquely
+ * owned heap strings are ever mutated, and every such path clears the hash
+ * (scr_str_hash_forget); immortal strings are never written, so they always
+ * hash on demand.
  */
+#if SIZE_MAX > UINT32_MAX && defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#define SCR_STR_HASH_CACHE 1
+#define SCR_STR_MAX_CAP ((size_t)UINT32_MAX)
+#else
+#define SCR_STR_HASH_CACHE 0
+#define SCR_STR_MAX_CAP (SIZE_MAX - sizeof(size_t) * 3 - 1)
+#endif
 typedef struct ScrStr {
   size_t rc;
   size_t len;
+#if SCR_STR_HASH_CACHE
+  uint32_t cap;
+  uint32_t hash;
+#else
   size_t cap;
+#endif
   char data[];
 } ScrStr;
+
+/* The capacity word of a static string: cap == len, plus the precomputed
+ * 32-bit key hash where the header caches one (0 leaves it to be computed). */
+#if SCR_STR_HASH_CACHE
+#define SCR_STR_CAP_WORD(len, hash32) ((size_t)(len) | ((size_t)(uint32_t)(hash32) << 32))
+#else
+#define SCR_STR_CAP_WORD(len, hash32) ((size_t)(len))
+#endif
+
+static inline void scr_str_hash_forget(ScrStr *s) {
+#if SCR_STR_HASH_CACHE
+  s->hash = 0;
+#else
+  (void)s;
+#endif
+}
 
 ScrStr *scr_str_new(const char *bytes, size_t len); /* returns +1 */
 /* Native callback boundary: copy and WHATWG-decode a UTF-8 span, replacing
