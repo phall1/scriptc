@@ -14,7 +14,11 @@
 #if SCR_SMALL_ALLOC
 #include <sys/mman.h>
 
-ScrSaState scr_sa;
+/* Explicitly initialized so it is an ordinary (localizable) definition: a
+ * tentative definition becomes a COMMON symbol, which library localization
+ * deliberately keeps global (abi.localize_runtime), leaking it from every
+ * localized library archive. */
+ScrSaState scr_sa = {0};
 static bool scr_sa_refused;
 
 /* Reserve address space for every class slice at once; smaller slices are
