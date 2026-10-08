@@ -330,14 +330,23 @@ const RECEIVER_FREE_LIB_FNS = new Set<IrLibFn>([
 /** Typed container and string operations. Their runtime paths compare and
  * copy values but never call back into compiled code, as long as no
  * operand is a function or a checked/engine value. */
-const DATA_INTRINSICS = new Set<IrExpr["kind"]>([
-  "arrIntrinsic",
-  "strIntrinsic",
-  "mapIntrinsic",
-  "setIntrinsic",
-  "mapNew",
-  "setNew",
-]);
+/** Operands of a data intrinsic (receiver first), or null when `e` is not
+ * one. A switch over the kinds keeps this inside the self-hosted subset,
+ * which has no `in` on IR expression unions. */
+function dataIntrinsicOperands(e: IrExpr): IrExpr[] | null {
+  switch (e.kind) {
+    case "arrIntrinsic":
+    case "strIntrinsic":
+    case "mapIntrinsic":
+    case "setIntrinsic":
+      return [e.receiver, ...e.args];
+    case "mapNew":
+    case "setNew":
+      return [];
+    default:
+      return null;
+  }
+}
 
 function opaqueOperand(e: IrExpr): boolean {
   const kind = e.type.kind;
@@ -403,15 +412,10 @@ export class AmbientReceiverReaders {
                 return isBorrowSafeMath(expr.fn) || RECEIVER_FREE_LIB_FNS.has(expr.fn);
               case "toString":
                 return !opaqueOperand(expr.operand);
-              default:
-                if (DATA_INTRINSICS.has(expr.kind)) {
-                  const operands: IrExpr[] = [
-                    ...("receiver" in expr ? [expr.receiver as IrExpr] : []),
-                    ...("args" in expr ? (expr.args as IrExpr[]) : []),
-                  ];
-                  return !operands.some(opaqueOperand);
-                }
-                return true;
+              default: {
+                const operands = dataIntrinsicOperands(expr);
+                return operands === null || !operands.some(opaqueOperand);
+              }
             }
           },
         });
