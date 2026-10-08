@@ -1,14 +1,7 @@
 import { lowerUnionEquality, tagEqualityMayMissAlias } from "./strict-equality.js";
 import { isOptionalProcessStreamProperty } from "./builtins/process.js";
 import { lowerWorkerMetadata } from "./builtins/workers.js";
-import {
-  dynUndefinedExpr,
-  nodeThrowExpr,
-  countedFor,
-  numLit,
-  strLit,
-  varRef,
-} from "../../ir/build.js";
+import { dynUndefinedExpr, nodeThrowExpr, numLit, strLit, varRef } from "../../ir/build.js";
 import { InternalCompilerError } from "../../errors.js";
 import { SYMBOL_T } from "../../ir/ir.js";
 import { literalValues } from "../literal-values.js";
@@ -12493,6 +12486,37 @@ function lowerInExpression(lowerer: Lowerer, expr: ts.BinaryExpression, loc: Src
       }
     }
   }
+  // A RUNTIME numeric key over an ARRAY receiver (`if (i in arr)` in a
+  // loop) asks the same slot/property presence query as the literal fold
+  // above and `Object.hasOwn`. The checked-dynamic fallback below would
+  // box the receiver and materialize every element on each evaluation,
+  // which makes such loops quadratic. A Number key never names an
+  // inherited property: neither Array.prototype nor Object.prototype has
+  // index-like or numeric-string keys. JS evaluates the key before the
+  // receiver, so the key is stabilized in a hidden local first.
+  if (
+    lowerer.mapTypeOf(lowerer.typeOf(expr.left))?.kind === "f64" &&
+    lowerer.mapTypeOf(lowerer.typeOf(expr.right))?.kind === "array"
+  ) {
+    const k = lowerer.lowerExpr(expr.left);
+    const recvArr = lowerer.lowerExpr(expr.right);
+    if (k.type.kind === "f64" && recvArr.type.kind === "array") {
+      const keyLocal = lowerer.declareHiddenLocal("%inIndex", F64);
+      return {
+        kind: "seqExpr",
+        stmts: [{ kind: "varDecl", localId: keyLocal.id, init: k, loc }],
+        result: {
+          kind: "arrayHas",
+          arr: recvArr,
+          index: varRef(keyLocal.id, F64, loc),
+          type: BOOL,
+          loc,
+        },
+        type: BOOL,
+        loc,
+      };
+    }
+  }
   const key = foldedStringKeyOf(lowerer, expr.left);
   if (key === null) {
     // A RUNTIME string key over an INDEX-SIGNATURE record receiver (the
@@ -12831,9 +12855,9 @@ function lowerInExpression(lowerer: Lowerer, expr: ts.BinaryExpression, loc: Src
  * runtime string and r an index-signature record — an interned
  * `%rec.haskey.<n>(k, r)` walks the declared names (a string-equality
  * chain: non-optional fields and accessor slots answer true, optional
- * slots answer their per-value tag test) and then the overflow map's
- * live keys. Null when the pair is outside that shape (the caller keeps
- * its fence). */
+ * slots answer their per-value tag test) and then probes the overflow
+ * map's hashed key set. Null when the pair is outside that shape (the
+ * caller keeps its fence). */
 function lowerRuntimeKeyIn(
   lowerer: Lowerer,
   expr: ts.BinaryExpression,
@@ -12874,48 +12898,11 @@ function lowerRuntimeKeyIn(
         : lowerer.recordFieldPresent(r, recvT.shapeId, f.name, loc);
       body.push({ kind: "if", cond: eq, then: [ret(answer)], else_: null, loc });
     }
-    const ksT = arrayOf(STRING);
+    // Overflow keys answer through the map's hashed presence probe (a
+    // stored undefined value is still present), not a scan over a fresh
+    // key snapshot, which made `k in dict` loops quadratic.
     body.push(
-      {
-        kind: "varDecl",
-        localId: "ks.0",
-        init: { kind: "recordOvfKeys", obj: r, shapeId: recvT.shapeId, type: ksT, loc },
-        loc,
-      },
-      countedFor(
-        loc,
-        {
-          kind: "arrIntrinsic",
-          method: "length",
-          receiver: varRef("ks.0", ksT, loc),
-          args: [],
-          type: F64,
-          loc,
-        },
-        () => [
-          {
-            kind: "if",
-            cond: {
-              kind: "strEq",
-              negated: false,
-              left: k,
-              right: {
-                kind: "arrayGet",
-                arr: varRef("ks.0", ksT, loc),
-                index: varRef("i.0", F64, loc),
-                type: STRING,
-                loc,
-              },
-              type: BOOL,
-              loc,
-            },
-            then: [ret({ kind: "boolLit", value: true, type: BOOL, loc })],
-            else_: null,
-            loc,
-          },
-        ],
-      ),
-      ret({ kind: "boolLit", value: false, type: BOOL, loc }),
+      ret({ kind: "recordOvfHas", obj: r, shapeId: recvT.shapeId, key: k, type: BOOL, loc }),
     );
     lowerer.liftedFns.push({
       name: helper,
@@ -12927,8 +12914,6 @@ function lowerRuntimeKeyIn(
       locals: [
         { id: "k.0", name: "k", type: STRING, mutable: true },
         { id: "r.0", name: "r", type: recT, mutable: true },
-        { id: "ks.0", name: "ks", type: ksT, mutable: false },
-        { id: "i.0", name: "i", type: F64, mutable: true },
       ],
       body,
       loc,
