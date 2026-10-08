@@ -14,7 +14,7 @@ import { emitBorrowedInput } from "./borrowed-inputs.js";
 import { exactInteger, widenInteger, integerNumber } from "./integer-values.js";
 import { integerArithmeticRange } from "../../ir/integer-ranges.js";
 import { emitArrayValues } from "./expr-containers.js";
-import { emitSignedIntegerRemainder } from "./integer-remainder.js";
+import { emitCheckedRemainder, emitSignedIntegerRemainder } from "./integer-remainder.js";
 import { emitDenseArrayGet, emitDenseArrayState } from "./dense-array-access.js";
 
 export function emitLiteralExpr(
@@ -245,6 +245,10 @@ export function emitOperatorExpr(
             B.line(`${t} = icmp ${integerCmp[e.op]} i64 ${left}, ${right}`);
             return { name: t, type: e.type };
           }
+        }
+        if (e.op === "%") {
+          const checked = emitCheckedRemainder(host, l, r, li, ri);
+          if (checked) return checked;
         }
         if (arith[e.op] !== undefined) B.line(`${t} = ${arith[e.op]} double ${l.name}, ${r.name}`);
         else B.line(`${t} = fcmp ${cmp[e.op]} double ${l.name}, ${r.name}`);

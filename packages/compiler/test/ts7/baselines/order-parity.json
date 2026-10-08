@@ -14843,6 +14843,18 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/3150-integer-remainder.ts": {
+   "order": [
+    "<repo>/tests/corpus/3150-integer-remainder.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/3151-array-push-writes.ts": {
+   "order": [
+    "<repo>/tests/corpus/3151-array-push-writes.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/4290-acyclic-immutable-trees.ts": {
    "order": [
     "<repo>/tests/corpus/4290-acyclic-immutable-trees.ts"
