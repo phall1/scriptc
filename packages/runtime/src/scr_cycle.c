@@ -154,12 +154,190 @@ void scr_rc_destroy(void *obj, void (*destroy)(void *)) {
   }
 }
 
+/* ── small-object allocator ─────────────────────────────────────────────
+ * Runtime objects are small, short-lived and freed by the thread that made
+ * them, which is the pattern a general-purpose malloc pays the most for
+ * (macOS's xzone malloc spends a third to a half of an allocation-heavy
+ * program inside malloc/calloc/free). Blocks of up to SCR_SA_MAX bytes
+ * therefore come from per-size-class free lists refilled by a bump pointer.
+ *
+ * One virtual reservation is split into SCR_SA_NCLASS equal slices, one per
+ * class, so a block's class is its slice index: (p - base) >> shift. That
+ * is what lets scr_mem_free/scr_mem_realloc accept ANY pointer — a block
+ * outside the reservation came from the system allocator and goes back to
+ * it — so a free site may be switched without auditing where every pointer
+ * it sees was allocated. The reverse is not true: a block from scr_mem_*
+ * must never reach the system free/realloc.
+ *
+ * Fresh bump memory is zero (anonymous mmap); recycled blocks are cleared
+ * on scr_mem_calloc. Freed blocks are recycled, never returned to the OS. A
+ * class whose slice is exhausted, or a host that refuses the reservation,
+ * falls back to the system allocator transparently.
+ *
+ * Compiled out (plain malloc/calloc/realloc/free) under SCR_RC_AUDIT and
+ * AddressSanitizer — the audit lane must see every logical free as a real
+ * free — and on targets without a cheap reservation (wasm32, Windows,
+ * 32-bit) and in thread-instanced library archives, whose per-thread
+ * instances would strand each other's free lists. Executables keep runtime
+ * state on one thread: native worker threads never allocate runtime
+ * objects. */
+#if defined(SCR_RC_AUDIT) || defined(__SANITIZE_ADDRESS__) || defined(__wasi__) || \
+    defined(__wasm__) || defined(_WIN32) || UINTPTR_MAX != UINT64_MAX ||              \
+    (defined(SCR_LIB) && defined(SCR_THREAD_INSTANCES))
+#define SCR_SMALL_ALLOC 0
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define SCR_SMALL_ALLOC 0
+#else
+#define SCR_SMALL_ALLOC 1
+#endif
+#else
+#define SCR_SMALL_ALLOC 1
+#endif
+
+#if SCR_SMALL_ALLOC
+#include <string.h>
+#include <sys/mman.h>
+
+#define SCR_SA_STEP 16u   /* class granularity; keeps malloc's 16-byte alignment */
+#define SCR_SA_NCLASS 32u /* classes of 16, 32, ... 512 bytes */
+#define SCR_SA_MAX (SCR_SA_STEP * SCR_SA_NCLASS)
+
+typedef struct ScrSaBlock {
+  struct ScrSaBlock *next;
+} ScrSaBlock;
+
+static uintptr_t scr_sa_base; /* reservation start (0 until reserved) */
+static uintptr_t scr_sa_span; /* reservation bytes (0 = none: system only) */
+static unsigned scr_sa_shift; /* log2 of one class slice */
+static bool scr_sa_refused;
+static ScrSaBlock *scr_sa_free[SCR_SA_NCLASS];
+static char *scr_sa_bump[SCR_SA_NCLASS], *scr_sa_lim[SCR_SA_NCLASS];
+
+/* Reserve address space only; pages are committed as the bump pointers
+ * touch them. Smaller slices are tried when the host limits address space
+ * or overcommit. */
+static bool scr_sa_reserve(void) {
+  for (unsigned shift = 30; shift >= 24; shift -= 2) {
+    size_t span = (size_t)SCR_SA_NCLASS << shift;
+    int flags = MAP_PRIVATE | MAP_ANON;
+#ifdef MAP_NORESERVE
+    flags |= MAP_NORESERVE;
+#endif
+    void *p = mmap(NULL, span, PROT_READ | PROT_WRITE, flags, -1, 0);
+    if (p == MAP_FAILED) continue;
+#if defined(__linux__) && defined(MADV_NOHUGEPAGE)
+    /* Each class touches its own slice; transparent huge pages would turn
+     * every touched slice into a 2 MiB resident minimum. */
+    (void)madvise(p, span, MADV_NOHUGEPAGE);
+#endif
+    scr_sa_base = (uintptr_t)p;
+    scr_sa_span = span;
+    scr_sa_shift = shift;
+    for (unsigned c = 0; c < SCR_SA_NCLASS; c++) {
+      scr_sa_bump[c] = (char *)p + ((size_t)c << shift);
+      scr_sa_lim[c] = scr_sa_bump[c] + ((size_t)1 << shift);
+    }
+    return true;
+  }
+  scr_sa_refused = true;
+  return false;
+}
+
+/* Bump-pointer refill miss: reserve on first use; NULL once the class's
+ * slice is exhausted (or the host refused the reservation). */
+static __attribute__((noinline)) void *scr_sa_slow(unsigned c) {
+  if (!scr_sa_base && !scr_sa_refused && scr_sa_reserve()) {
+    size_t sz = (size_t)(c + 1) * SCR_SA_STEP;
+    char *p = scr_sa_bump[c];
+    scr_sa_bump[c] = p + sz;
+    return p;
+  }
+  return NULL;
+}
+
+/* A fresh (zero) block, or a recycled (dirty) one with *dirty set. */
+static inline void *scr_sa_take(size_t n, bool *dirty) {
+  unsigned c = (unsigned)((n - 1) / SCR_SA_STEP);
+  ScrSaBlock *b = scr_sa_free[c];
+  if (b) {
+    scr_sa_free[c] = b->next;
+    *dirty = true;
+    return b;
+  }
+  size_t sz = (size_t)(c + 1) * SCR_SA_STEP;
+  char *p = scr_sa_bump[c];
+  if ((size_t)(scr_sa_lim[c] - p) >= sz) {
+    scr_sa_bump[c] = p + sz;
+    return p;
+  }
+  return scr_sa_slow(c);
+}
+
+static inline void *scr_sa_calloc(size_t n) {
+  if (n - 1 < SCR_SA_MAX) { /* n == 0 wraps and takes the system path */
+    bool dirty = false;
+    void *p = scr_sa_take(n, &dirty);
+    if (p) {
+      if (dirty) memset(p, 0, n);
+      return p;
+    }
+  }
+  return calloc(1, n);
+}
+
+static inline void scr_sa_release(void *p) {
+  uintptr_t off = (uintptr_t)p - scr_sa_base;
+  if (off < scr_sa_span) {
+    ScrSaBlock *b = p;
+    unsigned c = (unsigned)(off >> scr_sa_shift);
+    b->next = scr_sa_free[c];
+    scr_sa_free[c] = b;
+    return;
+  }
+  free(p);
+}
+
+void *scr_mem_alloc(size_t n) {
+  if (n - 1 < SCR_SA_MAX) {
+    bool dirty;
+    void *p = scr_sa_take(n, &dirty);
+    if (p) return p;
+  }
+  return malloc(n);
+}
+
+void *scr_mem_calloc(size_t n) { return scr_sa_calloc(n); }
+
+void *scr_mem_realloc(void *p, size_t n) {
+  uintptr_t off = (uintptr_t)p - scr_sa_base;
+  if (!p) return scr_mem_alloc(n);
+  if (off >= scr_sa_span) return realloc(p, n);
+  size_t have = (size_t)((off >> scr_sa_shift) + 1) * SCR_SA_STEP;
+  if (n && n <= have) return p;
+  void *q = scr_mem_alloc(n ? n : 1);
+  if (!q) return NULL;
+  memcpy(q, p, have < n ? have : n);
+  scr_sa_release(p);
+  return q;
+}
+
+void scr_mem_free(void *p) { scr_sa_release(p); }
+#else
+static inline void *scr_sa_calloc(size_t n) { return calloc(1, n); }
+static inline void scr_sa_release(void *p) { free(p); }
+void *scr_mem_alloc(size_t n) { return malloc(n); }
+void *scr_mem_calloc(size_t n) { return calloc(1, n); }
+void *scr_mem_realloc(void *p, size_t n) { return realloc(p, n); }
+void scr_mem_free(void *p) { free(p); }
+#endif
+
 /* Live cycle-headered objects — what the full-pass trigger watches. */
 static SCR_TL size_t scr_cyc_live = 0;
 
 void *scr_cyc_alloc(size_t size, ScrTraceFn trace, ScrCycFreeFn free_fn) {
   if (size > SIZE_MAX - sizeof(ScrCycHdr)) scr_cyc_oom();
-  ScrCycHdr *h = calloc(1, sizeof(ScrCycHdr) + size);
+  ScrCycHdr *h = scr_sa_calloc(sizeof(ScrCycHdr) + size);
   if (!h) scr_cyc_oom();
   h->trace = trace;
   h->free_fn = free_fn;
@@ -172,7 +350,7 @@ void *scr_cyc_alloc(size_t size, ScrTraceFn trace, ScrCycFreeFn free_fn) {
 void scr_cyc_free(void *obj) {
   scr_weak_dispose(obj);
   scr_cyc_live--;
-  free(scr_cyc_hdr(obj));
+  scr_sa_release(scr_cyc_hdr(obj));
 }
 
 /* A pointer vector that only ever grows (these reuse their capacity across

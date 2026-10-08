@@ -416,6 +416,16 @@ static inline ScrCycHdr *scr_cyc_hdr(void *obj) { return (ScrCycHdr *)obj - 1; }
 void *scr_cyc_alloc(size_t size, ScrTraceFn trace, ScrCycFreeFn free_fn);
 void scr_cyc_free(void *obj); /* frees the block, header included */
 
+/* The runtime's small-object allocator (scr_cycle.c): malloc/calloc/
+ * realloc/free contracts (NULL on OOM), 16-byte aligned. scr_mem_free and
+ * scr_mem_realloc accept any pointer, including system-allocated ones; a
+ * block from scr_mem_alloc/calloc/realloc must never reach the system
+ * free/realloc. Plain system calls under SCR_RC_AUDIT/ASan. */
+void *scr_mem_alloc(size_t n);
+void *scr_mem_calloc(size_t n);
+void *scr_mem_realloc(void *p, size_t n);
+void scr_mem_free(void *p);
+
 /* Dispose an object whose reference count already reached zero. The caller
  * removes its cycle candidate first. Nested disposals keep bounded stack
  * depth; deeper objects wait until the outer disposal drains the worklist.
