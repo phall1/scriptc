@@ -433,14 +433,15 @@ void scr_cyc_free(void *obj); /* frees the block, header included */
  * Compiled to the plain system calls under SCR_RC_AUDIT and AddressSanitizer
  * (the audit lane must see every logical free as a real free), on targets
  * without a cheap address-space reservation (wasm32, Windows, 32-bit), and
- * in thread-instanced library archives, whose per-thread instances would
- * strand each other's free lists. Elsewhere the allocator state is
+ * in thread-instanced library archives and worker executables (SCR_WORKERS),
+ * where several runtime instances run on their own threads and would race
+ * on, or strand each other's, free lists. Elsewhere the allocator state is
  * process-global and unsynchronized: runtime objects are only allocated and
  * freed on the runtime thread (native worker jobs never touch them). */
 #include <stdlib.h>
 #if defined(SCR_RC_AUDIT) || defined(__SANITIZE_ADDRESS__) || defined(__wasi__) || \
     defined(__wasm__) || defined(_WIN32) || UINTPTR_MAX != UINT64_MAX ||              \
-    (defined(SCR_LIB) && defined(SCR_THREAD_INSTANCES))
+    (defined(SCR_LIB) && defined(SCR_THREAD_INSTANCES)) || defined(SCR_WORKERS)
 #define SCR_SMALL_ALLOC 0
 #elif defined(__has_feature)
 #if __has_feature(address_sanitizer)
