@@ -162,40 +162,62 @@ void scr_init(void) {
  * a tentative common symbol stays externally visible on Mach-O. */
 SCR_TL bool (*scr_stdio_write_hook)(int fd, const void *data, size_t len) = NULL;
 
+/* One rendered console line, newline included, in a fresh malloc block. */
+static char *scr_console_line(size_t n, const ScrLogArg *args, size_t *len_out) {
+  size_t capacity = 1;
+  for (size_t i = 0; i < n; i++) {
+    size_t length = args[i].tag == SCR_ARG_STR ? args[i].v.s->len : 32;
+    if (length >= SIZE_MAX - capacity) scr_trap("scriptc: console output too large\n");
+    capacity += length + 1;
+  }
+  char *line = malloc(capacity);
+  if (!line) scr_trap("scriptc: out of memory\n");
+  size_t used = 0;
+  for (size_t i = 0; i < n; i++) {
+    if (i) line[used++] = ' ';
+    const ScrLogArg *arg = &args[i];
+    if (arg->tag == SCR_ARG_STR) {
+      memcpy(line + used, arg->v.s->data, arg->v.s->len);
+      used += arg->v.s->len;
+    } else if (arg->tag == SCR_ARG_BOOL) {
+      const char *text = arg->v.b ? "true" : "false";
+      size_t length = arg->v.b ? 4 : 5;
+      memcpy(line + used, text, length);
+      used += length;
+    } else if (arg->v.f == 0 && signbit(arg->v.f)) {
+      memcpy(line + used, "-0", 2);
+      used += 2;
+    } else {
+      used += scr_f64_to_str(arg->v.f, line + used);
+    }
+  }
+  line[used++] = '\n';
+  *len_out = used;
+  return line;
+}
+
 static void scr_console_write(FILE *out, size_t n, const ScrLogArg *args) {
   if (scr_stdio_write_hook) {
-    size_t capacity = 1;
-    for (size_t i = 0; i < n; i++) {
-      size_t length = args[i].tag == SCR_ARG_STR ? args[i].v.s->len : 32;
-      if (length >= SIZE_MAX - capacity) scr_trap("scriptc: console output too large\n");
-      capacity += length + 1;
-    }
-    char *line = malloc(capacity);
-    if (!line) scr_trap("scriptc: out of memory\n");
-    size_t used = 0;
-    for (size_t i = 0; i < n; i++) {
-      if (i) line[used++] = ' ';
-      const ScrLogArg *arg = &args[i];
-      if (arg->tag == SCR_ARG_STR) {
-        memcpy(line + used, arg->v.s->data, arg->v.s->len);
-        used += arg->v.s->len;
-      } else if (arg->tag == SCR_ARG_BOOL) {
-        const char *text = arg->v.b ? "true" : "false";
-        size_t length = arg->v.b ? 4 : 5;
-        memcpy(line + used, text, length);
-        used += length;
-      } else if (arg->v.f == 0 && signbit(arg->v.f)) {
-        memcpy(line + used, "-0", 2);
-        used += 2;
-      } else {
-        used += scr_f64_to_str(arg->v.f, line + used);
-      }
-    }
-    line[used++] = '\n';
+    size_t used;
+    char *line = scr_console_line(n, args, &used);
     scr_stdio_write_hook(out == stderr ? 2 : 1, line, used);
     free(line);
     /* The global Node console uses ignoreErrors=true for stream writes. */
     if (scr_exc_pending()) scr_exc_clear();
+    return;
+  }
+  if (out == stderr) {
+    /* stderr is unbuffered, so piecewise stdio calls would issue one
+     * write(2) per argument, separator, and newline. Render the line first:
+     * one write per call, which also keeps the line whole against other
+     * writers sharing the descriptor, as Node's single chunk does. A single
+     * fwrite is atomic under the stream's own lock, so concurrent workers
+     * cannot interleave inside the line either. */
+    size_t used;
+    char *line = scr_console_line(n, args, &used);
+    fwrite(line, 1, used, out);
+    free(line);
+    fflush(out);
     return;
   }
   /* Formatting a single line uses several libc calls. Hold the stream lock
