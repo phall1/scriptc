@@ -949,6 +949,125 @@ static void test_primitive_sort(void) {
   check(scr_arr_live_count() == arrays0, "primitive sorting releases all arrays");
 }
 
+/* scr_arr_sort_values: closures built by hand with the callValue ABI. */
+static long sort_calls = 0, sort_throw_at = -1;
+
+static double sort_by_floor(ScrClosure *self, double a, double b) {
+  (void)self;
+  sort_calls++;
+  return floor(a) - floor(b);
+}
+
+static double sort_by_length(ScrClosure *self, void *a, void *b) {
+  (void)self;
+  double d = (double)((ScrStr *)a)->len - (double)((ScrStr *)b)->len;
+  scr_str_release((ScrStr *)a); /* the callee owns its parameters */
+  scr_str_release((ScrStr *)b);
+  if (++sort_calls == sort_throw_at) scr_throw_f64(42);
+  return d;
+}
+
+static double sort_one_arg(ScrClosure *self, double a) {
+  (void)self;
+  sort_calls++;
+  return a > 1 ? 1 : 0;
+}
+
+static double sort_nan(ScrClosure *self) {
+  (void)self;
+  sort_calls++;
+  return NAN;
+}
+
+static void test_comparator_sort(void) {
+  ScrClosure floor_fn = {SIZE_MAX, (void *)sort_by_floor, 0, NULL, 0};
+  ScrArr *nums = scr_arr_new(SCR_ELEM_F64, 0);
+  const double input[] = {3.1, 1.1, 2.1, 1.2, 9.1, 3.2, 0.1, 1.3, 2.2, 8.1, 7.1, 6.1,
+                          5.1, 4.1, 3.3, 2.3, 1.4, 0.2, 9.2, 8.2, 7.2, 6.2, 5.2, 4.2};
+  const size_t n = sizeof(input) / sizeof(*input);
+  for (size_t i = 0; i < n; i++) scr_arr_push_f64(nums, input[i]);
+  scr_arr_push_f64(nums, -1); /* beyond the sorted count */
+  scr_arr_sort_values(nums, (double)n, &floor_fn, 2);
+  bool ordered = true;
+  for (size_t i = 1; i < n; i++) {
+    double a = scr_arr_get_f64(nums, (double)(i - 1)), b = scr_arr_get_f64(nums, (double)i);
+    if (floor(a) > floor(b) || (floor(a) == floor(b) && a > b)) ordered = false;
+  }
+  check(ordered, "comparator sort orders keys and keeps equal keys stable");
+  check_f64(scr_arr_get_f64(nums, (double)n), -1, "comparator sort leaves slots past the count");
+
+  ScrClosure one_fn = {SIZE_MAX, (void *)sort_one_arg, 0, NULL, 0};
+  ScrClosure nan_fn = {SIZE_MAX, (void *)sort_nan, 0, NULL, 0};
+  ScrArr *few = scr_arr_new(SCR_ELEM_F64, 0);
+  for (int i = 0; i < 5; i++) scr_arr_push_f64(few, 5 - i);
+  sort_calls = 0;
+  scr_arr_sort_values(few, 5, &nan_fn, 0);
+  check(sort_calls > 0 && scr_arr_get_f64(few, 0) == 5 && scr_arr_get_f64(few, 4) == 1,
+        "a NaN comparator result keeps the input order");
+  scr_arr_sort_values(few, 5, &one_fn, 1);
+  check_f64(scr_arr_len(few), 5, "a one-parameter comparator sort keeps every element");
+  sort_calls = 0;
+  scr_arr_sort_values(few, 1, &nan_fn, 0);
+  check(sort_calls == 0, "a single value needs no comparator call");
+  scr_arr_release(few);
+  scr_arr_release(nums);
+
+  long strings0 = scr_str_live_count();
+  ScrClosure length_fn = {SIZE_MAX, (void *)sort_by_length, 0, NULL, 0};
+  ScrArr *words = scr_arr_new(SCR_ELEM_STR, 0);
+  const char *spellings[] = {"ccc", "a", "bb", "dddd", "e", "ff", "ggg", "h",
+                             "iiiii", "jj", "k", "llll", "mmm", "n", "oo", "p",
+                             "qqq", "r", "ss", "t"};
+  const size_t word_count = sizeof(spellings) / sizeof(*spellings);
+  ScrStr *originals[sizeof(spellings) / sizeof(*spellings)];
+  for (size_t i = 0; i < word_count; i++) {
+    originals[i] = scr_str_new(spellings[i], strlen(spellings[i]));
+    scr_arr_push_ref(words, scr_str_retain(originals[i]));
+  }
+  sort_calls = 0;
+  sort_throw_at = 7;
+  scr_arr_sort_values(words, (double)word_count, &length_fn, 2);
+  check(scr_exc_pending(), "a throwing comparator leaves the exception pending");
+  scr_exc_clear();
+  check(sort_calls == 7, "the sort stops at the first comparator exception");
+  bool unchanged = true;
+  for (size_t i = 0; i < word_count; i++)
+    if (scr_arr_peek_ref(words, (double)i) != originals[i]) unchanged = false;
+  check(unchanged, "a comparator exception leaves the snapshot unchanged");
+  sort_throw_at = -1;
+  scr_arr_sort_values(words, (double)word_count, &length_fn, 2);
+  check(!scr_exc_pending(), "a successful comparator sort leaves no exception");
+  bool stable = true;
+  size_t last_index = 0, last_len = 0;
+  for (size_t i = 0; i < word_count; i++) {
+    ScrStr *s = scr_arr_peek_ref(words, (double)i);
+    size_t index = 0;
+    while (index < word_count && originals[index] != s) index++;
+    size_t len = s->len;
+    if (index == word_count || len < last_len || (i && len == last_len && index < last_index))
+      stable = false;
+    last_len = len;
+    last_index = index;
+  }
+  check(stable, "reference sort is a stable permutation of the original strings");
+  for (size_t i = 0; i < word_count; i++) scr_str_release(originals[i]);
+  check(scr_str_live_count() == strings0 + (long)word_count,
+        "comparator calls balance every retained argument");
+  scr_arr_release(words);
+  check(scr_str_live_count() == strings0, "comparator sort releases all strings");
+
+  /* Past the dense limit the tail lives in sparse slots. */
+  const size_t big = ((size_t)1 << 20) + 300;
+  ScrArr *wide = scr_arr_new(SCR_ELEM_F64, 0);
+  for (size_t i = 0; i < big; i++) scr_arr_push_f64(wide, (double)(big - i) + 0.5);
+  scr_arr_sort_values(wide, (double)big, &floor_fn, 2);
+  bool wide_ordered = true;
+  for (size_t i = 0; i < big; i++)
+    if (scr_arr_get_f64(wide, (double)i) != (double)(i + 1) + 0.5) wide_ordered = false;
+  check(wide_ordered, "comparator sort writes sparse tail slots");
+  scr_arr_release(wide);
+}
+
 int main(int argc, char **argv) {
   if (argc > 1) {
     ScrArr *a = scr_arr_new(SCR_ELEM_F64, 0);
@@ -972,6 +1091,7 @@ int main(int argc, char **argv) {
   }
 
   test_primitive_sort();
+  test_comparator_sort();
   test_f64_basics();
   test_numeric_read();
   test_borrowed_ref_read();

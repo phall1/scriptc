@@ -1972,6 +1972,163 @@ ScrArr *scr_arr_sort_primitive(ScrArr *a, bool copy) {
   return copy ? out : scr_arr_retain(a);
 }
 
+/* ── comparator sort over a compacted private snapshot ────────────────── */
+
+typedef struct {
+  const ScrArr *a;
+  ScrClosure *f;
+  uint32_t arity;
+  bool numbers;
+} ScrSortCompare;
+
+/* One comparator call with the closure ABI of the emitted callValue: the
+ * callee owns its reference parameters, runs under an undefined `this`, and
+ * reports an exception through the pending flag. */
+static bool scr_sort_greater(const ScrSortCompare *c, uint64_t left, uint64_t right,
+                             bool *failed) {
+  double result;
+  scr_dyn_this_push_dyn(NULL);
+  if (c->numbers) {
+    double x = scr_slot_to_f64(left), y = scr_slot_to_f64(right);
+    if (c->arity == 2) result = ((double (*)(ScrClosure *, double, double))c->f->fn)(c->f, x, y);
+    else if (c->arity == 1) result = ((double (*)(ScrClosure *, double))c->f->fn)(c->f, x);
+    else result = ((double (*)(ScrClosure *))c->f->fn)(c->f);
+  } else {
+    void *x = c->arity >= 1 ? scr_slot_to_ptr(scr_elem_retain_slot(c->a, left)) : NULL;
+    void *y = c->arity >= 2 ? scr_slot_to_ptr(scr_elem_retain_slot(c->a, right)) : NULL;
+    if (c->arity == 2) result = ((double (*)(ScrClosure *, void *, void *))c->f->fn)(c->f, x, y);
+    else if (c->arity == 1) result = ((double (*)(ScrClosure *, void *))c->f->fn)(c->f, x);
+    else result = ((double (*)(ScrClosure *))c->f->fn)(c->f);
+  }
+  scr_dyn_this_pop();
+  if (scr_exc_pending()) {
+    *failed = true;
+    return false;
+  }
+  return result > 0;
+}
+
+/* The stable natural merge sort of the compiler's IR helper, over borrowed
+ * slot copies: strictly descending runs reverse, short runs grow to 16 with
+ * binary insertion after equal values, then merge passes consume pairs of
+ * runs. Comparator calls happen in exactly the IR helper's order. The array
+ * keeps owning every element and stays untouched while user code runs, so
+ * the cycle collector and a throwing comparator both see the original
+ * snapshot; the sorted permutation is published only after success. */
+void scr_arr_sort_values(ScrArr *a, double count, ScrClosure *f, uint32_t arity) {
+  size_t n = (size_t)count;
+  if (n < 2) return;
+  if (n > a->len || n > SIZE_MAX / 2 / sizeof(uint64_t))
+    scr_trap("scriptc: invalid comparator sort snapshot\n");
+  ScrSortCompare c = {a, f, arity, a->elem == SCR_ELEM_F64};
+  if (!c.numbers && !scr_elem_is_ref(a->elem))
+    scr_trap("scriptc: invalid comparator sort element kind\n");
+  uint64_t *src = malloc(n * sizeof(*src));
+  uint64_t *dst = malloc(n * sizeof(*dst));
+  size_t *runs = malloc((n + 1) * sizeof(*runs));
+  if (!src || !dst || !runs) scr_arr_oom();
+  for (size_t i = 0; i < n; i++) {
+    if (scr_arr_state_at(a, i, &src[i]) != SCR_ARR_VALUE)
+      scr_trap("scriptc: invalid comparator sort snapshot\n");
+  }
+  bool failed = false;
+#define SCR_SORT_GREATER(x, y) (scr_sort_greater(&c, (x), (y), &failed))
+#define SCR_SORT_CHECK() \
+  do {                   \
+    if (failed) goto done; \
+  } while (0)
+  size_t run_count = 1, start = 0;
+  runs[0] = 0;
+  while (start < n) {
+    size_t end = start + 1;
+    if (end < n) {
+      bool descending = SCR_SORT_GREATER(src[start], src[end]);
+      SCR_SORT_CHECK();
+      end++;
+      while (end < n) {
+        bool greater = SCR_SORT_GREATER(src[end - 1], src[end]);
+        SCR_SORT_CHECK();
+        if (descending ? greater : !greater) end++;
+        else break;
+      }
+      if (descending) {
+        for (size_t left = start, right = end - 1; left < right; left++, right--) {
+          uint64_t v = src[left];
+          src[left] = src[right];
+          src[right] = v;
+        }
+      }
+    }
+    size_t limit = start + 16 < n ? start + 16 : n;
+    for (; end < limit; end++) {
+      uint64_t pivot = src[end];
+      size_t low = start, high = end;
+      while (low < high) {
+        size_t center = low + (high - low) / 2;
+        bool greater = SCR_SORT_GREATER(src[center], pivot);
+        SCR_SORT_CHECK();
+        if (greater) high = center;
+        else low = center + 1;
+      }
+      memmove(src + low + 1, src + low, (end - low) * sizeof(*src));
+      src[low] = pivot;
+    }
+    runs[run_count++] = end;
+    start = end;
+  }
+  while (run_count > 2) {
+    size_t next_run = 1;
+    for (size_t run = 0; run + 1 < run_count; run += 2) {
+      size_t lo = runs[run], mid = runs[run + 1];
+      size_t right = run + 2 < run_count ? runs[run + 2] : n;
+      size_t i = lo, j = mid, k = lo;
+      bool merge = false;
+      if (mid < right) {
+        merge = SCR_SORT_GREATER(src[mid - 1], src[mid]);
+        SCR_SORT_CHECK();
+      }
+      if (merge) {
+        uint64_t left_value = src[i], right_value = src[j];
+        while (i < mid && j < right) {
+          bool greater = SCR_SORT_GREATER(left_value, right_value);
+          SCR_SORT_CHECK();
+          if (greater) {
+            dst[k] = right_value;
+            if (++j < right) right_value = src[j];
+          } else {
+            dst[k] = left_value;
+            if (++i < mid) left_value = src[i];
+          }
+          k++;
+        }
+      }
+      memcpy(dst + k, src + i, (mid - i) * sizeof(*src));
+      k += mid - i;
+      memcpy(dst + k, src + j, (right - j) * sizeof(*src));
+      runs[next_run++] = right;
+    }
+    run_count = next_run;
+    uint64_t *tmp = src;
+    src = dst;
+    dst = tmp;
+  }
+#undef SCR_SORT_CHECK
+#undef SCR_SORT_GREATER
+  /* A permutation of the same owned slots: no reference count changes. */
+  for (size_t i = 0; i < n; i++) {
+    if (i < a->cap) {
+      a->data[i] = src[i];
+    } else {
+      size_t pos = scr_arr_sparse_lower_bound(a->sparse, a->sparse_len, i);
+      a->sparse[pos].slot = src[i];
+    }
+  }
+done:
+  free(src);
+  free(dst);
+  free(runs);
+}
+
 ScrStr *scr_arr_join(ScrArr *a, ScrStr *sep) {
   size_t cap = 64;
   /* String widths are already known. Size once to avoid growth and copying
