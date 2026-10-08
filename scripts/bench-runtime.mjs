@@ -63,6 +63,7 @@ Use it for small codegen changes (e.g. --layouts=4 --runs=16).
 
 Workload names are listed in benchmarks/runtime/workloads.json; for example
 --workloads=cli-config,http-api runs only the startup and server workloads.
+
 --baseline-optimization/--candidate-optimization pick each contender's
 --optimization posture (default release). The same checkout may be both
 contenders, e.g. --baseline=. --candidate-optimization=speed compares speed with
