@@ -224,6 +224,7 @@ export function prepareNativeExecutable(
           wasi: toolchain.target.platform === "wasi",
           runtimeAbiMarker: outputKind === "obj" || outputKind === "exe",
           objectAudit: options.sanitize === true,
+          ...(options.optimization === "speed" ? { inlineRc: true } : {}),
           ...(options.optimization === "dev" && !options.strip
             ? { debugSources: prepared.sourceTexts }
             : {}),
@@ -338,6 +339,7 @@ export function prepareNativeLibrary(
     pointerBits: toolchain.target.pointerBits,
     wasi: toolchain.target.platform === "wasi",
     objectAudit: options.sanitize === true,
+    ...(profile.optimization === "speed" ? { inlineRc: true } : {}),
   });
   timing("llvm-emit");
   const input: NativeExecutableInput = {

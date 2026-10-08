@@ -390,7 +390,12 @@ typedef struct ScrCycHdr {
  * llvm/shapes.ts, llvm/classes.ts, and llvm/emitter.ts. Nothing but `color`
  * may share those four bytes: a field placed in them is silently zeroed by
  * every retain, which is invisible to the type system and to the C
- * compiler. Hence the target-width assertions. */
+ * compiler. Hence the target-width assertions.
+ *
+ * The inline release fast paths (llvm/shapes.ts emitInlineRcHelpers) also
+ * mirror scr_cyc_on_release's already-buffered case: they store
+ * SCR_CYC_PURPLE (the literal 1) into color and read `buffered` as the i16
+ * immediately after it, calling scr_cyc_on_release only when it is 0. */
 #if UINTPTR_MAX == UINT64_MAX
 _Static_assert(sizeof(ScrCycHdr) == 32, "LLVM backend expects a 32-byte cycle header");
 _Static_assert(offsetof(ScrCycHdr, color) == 16,
@@ -408,6 +413,12 @@ _Static_assert(SCR_CYC_BLACK == 0,
                "the emitted mark-live stores the LITERAL 0, not the enumerator "
                "— reordering the colors would make every compiled retain write "
                "the wrong one");
+_Static_assert(SCR_CYC_PURPLE == 1,
+               "the emitted release fast path stores the LITERAL 1 as purple");
+_Static_assert(offsetof(ScrCycHdr, buffered) == offsetof(ScrCycHdr, color) + 4 &&
+                   sizeof(((ScrCycHdr *)0)->buffered) == 2,
+               "the emitted release fast path reads `buffered` as an i16 four bytes "
+               "after color");
 
 static inline ScrCycHdr *scr_cyc_hdr(void *obj) { return (ScrCycHdr *)obj - 1; }
 
@@ -1309,6 +1320,11 @@ typedef struct ScrArr {
   size_t prop_cap;
   struct ScrDyn *metadata; /* heterogeneous named properties of match results */
 } ScrArr;
+/* The LLVM backend's inline retain/release read elem_trace through its
+ * mirrored %ScrArr type (field 6) to decide mark-live / candidate buffering
+ * exactly like scr_arr_retain and scr_arr_release. */
+_Static_assert(offsetof(ScrArr, elem_trace) == 3 * sizeof(size_t) + 3 * sizeof(void *),
+               "inline RC fast paths read ScrArr.elem_trace as %ScrArr field 6");
 
 typedef struct ScrArrSparseSlot {
   size_t index;
@@ -1690,6 +1706,13 @@ typedef struct ScrMap {
   const ScrMapDynOps *dyn_ops;
   const uint8_t *union_keys; /* immutable key-kind table indexed by union tag */
 } ScrMap;
+/* The LLVM backend's inline retain/release read both trace slots through
+ * its %ScrMapRc prefix type (fields 5 and 8), mirroring scr_map_retain and
+ * scr_map_release's `key_trace || val_trace` header test. */
+_Static_assert(offsetof(ScrMap, val_trace) == sizeof(size_t) + 2 * sizeof(uint32_t) + 2 * sizeof(void *),
+               "inline RC fast paths read ScrMap.val_trace as %ScrMapRc field 5");
+_Static_assert(offsetof(ScrMap, key_trace) == offsetof(ScrMap, val_trace) + 3 * sizeof(void *),
+               "inline RC fast paths read ScrMap.key_trace as %ScrMapRc field 8");
 
 /* Called once on a fresh UNION_VALUE collection, before its first insert. */
 void scr_map_union_keys(ScrMap *map, const uint8_t *kinds);
