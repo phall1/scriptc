@@ -105,7 +105,12 @@ export function emitObjectAlloc(
   return lines;
 }
 
-function allocLines(host: AllocHost, size: string, cyc: CycHeader | null, stored: number): string[] {
+function allocLines(
+  host: AllocHost,
+  size: string,
+  cyc: CycHeader | null,
+  stored: number,
+): string[] {
   const S = host.sizeType;
   if (host.inlineAlloc !== true) {
     if (cyc) {
