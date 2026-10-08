@@ -4231,8 +4231,10 @@ export class LlEmitter {
     this.numericLocals = new Map(numericFn.locals.map((l) => [l.id, l]));
     this.borrowedParameters.clear();
     this.projectedParameters.clear();
-    for (const index of this.callLifetimes.parameters.get(fn.name) ?? [])
-      this.projectedParameters.add(fn.params[index]!.localId);
+    const projectedParameterIndexes = this.callLifetimes.parameters.get(fn.name);
+    if (projectedParameterIndexes)
+      for (const index of projectedParameterIndexes)
+        this.projectedParameters.add(fn.params[index]!.localId);
     this.stableCallBindings = this.callLifetimes.bindings.get(fn.name) ?? new Set();
     const borrowedParameterIndexes = this.callLifetimes.borrowed.get(fn.name);
     if (borrowedParameterIndexes) {
