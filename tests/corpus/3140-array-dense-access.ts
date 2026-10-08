@@ -100,3 +100,29 @@ for (let i = 0; i < mixed.length; i++) {
 // Fractional and negative computed indices from arithmetic.
 const table: number[] = [0, 1, 4, 9, 16, 25];
 for (let i = 0; i < 6; i++) console.log("half " + i, table[i / 2], table[i - 3]);
+
+// Conditions on scalar element reads: holes, present undefined, indices
+// past the length, noncanonical indices, zero, and NaN are all falsy.
+const truth: boolean[] = [true, false, true];
+truth[5] = true;
+const truthIdx: number[] = [0, 1, 2, 3, 4, 5, 6, -1, 0.5, NaN, -0];
+let truthy = "";
+for (const k of truthIdx) truthy += truth[k] ? "T" : "f";
+for (let i = 0; i < truth.length + 2; i++) truthy += truth[i] && i > 0 ? "1" : "0";
+let w = 0;
+while (truth[w]) w++;
+console.log("bool truth", truthy, w);
+const numsTruth: number[] = [1, 0, NaN, -2, 0.5];
+numsTruth[7] = 3;
+let numTruthy = "";
+for (let i = -1; i < numsTruth.length + 1; i++) numTruthy += numsTruth[i] ? "T" : "f";
+for (const k of truthIdx) numTruthy += numsTruth[k] || numsTruth[k] === 0 ? "1" : "0";
+console.log("num truth", numTruthy);
+function pickFlags(n: number): boolean[] {
+  const out: boolean[] = [];
+  for (let i = 0; i < n; i += 2) out[i] = i % 4 === 0;
+  return out;
+}
+let fromCall = "";
+for (let i = 0; i < 8; i++) fromCall += pickFlags(6)[i] ? "T" : "f";
+console.log("call truth", fromCall);

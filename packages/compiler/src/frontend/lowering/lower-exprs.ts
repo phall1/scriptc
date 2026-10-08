@@ -114,6 +114,7 @@ import {
   arrayValueStore,
   arrayValueType,
   lowerSafeIndexRead,
+  tryLowerIndexTruthiness,
   tryLowerNumericIndexRead,
 } from "./array-values.js";
 import { strCharsCall } from "./containers/array-construction.js";
@@ -4570,7 +4571,10 @@ export function lowerCondition(lowerer: Lowerer, expr: ts.Expression): IrExpr {
       };
     }
   }
-  return lowerer.ensureBool(lowerAbsenceProbe(lowerer, expr) ?? lowerer.lowerExpr(expr), expr);
+  const value = lowerAbsenceProbe(lowerer, expr) ?? lowerer.lowerExpr(expr);
+  return (
+    tryLowerIndexTruthiness(lowerer, value, expr, locOf(expr)) ?? lowerer.ensureBool(value, expr)
+  );
 }
 
 function lowerPromiseThenPresence(

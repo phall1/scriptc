@@ -16,11 +16,20 @@ import { exactInteger, widenInteger } from "./integer-values.js";
 
 const SCR_ARR_VALUE = 1;
 
+/** Call-site effects of the non-retaining read fallbacks: they only read
+ * module-visible memory, or trap without returning to the caller (the trap
+ * writes runtime-private stderr/TLS state). Declaring this lets LLVM keep
+ * array header loads out of loops whose only calls are these cold paths. */
+const READ_FALLBACK = " cold memory(read, inaccessiblemem: readwrite)";
+
 interface DenseGuard {
   /** The checked dense offset, in the target's size type. */
   offset: string;
   /** The array length loaded by the guard, in the target's size type. */
   len: string;
+  /** Dense value and state storage base pointers. */
+  data: string;
+  states: string;
 }
 
 /** Branch to `slow` unless `index` names a canonical array index inside
@@ -69,6 +78,19 @@ function emitDenseGuard(
   B.line(`${capPtr} = getelementptr inbounds %ScrArr, ptr ${array}, i32 0, i32 2`);
   host.markMemoryPointer(capPtr, "array:header");
   B.line(`${cap} = load ${size}, ptr ${capPtr}${host.fieldAliasAttachment(capPtr)}`);
+  // Load the storage bases before branching: the header of a live array is
+  // always readable, and unconditional loads let LLVM hoist them out of
+  // loops whose only calls are read-only fallbacks.
+  const dataPtr = B.tmp(),
+    data = B.tmp(),
+    statesPtr = B.tmp(),
+    states = B.tmp();
+  B.line(`${dataPtr} = getelementptr inbounds %ScrArr, ptr ${array}, i32 0, i32 7`);
+  host.markMemoryPointer(dataPtr, "array:header");
+  B.line(`${data} = load ptr, ptr ${dataPtr}${host.fieldAliasAttachment(dataPtr)}`);
+  B.line(`${statesPtr} = getelementptr inbounds %ScrArr, ptr ${array}, i32 0, i32 8`);
+  host.markMemoryPointer(statesPtr, "array:header");
+  B.line(`${states} = load ptr, ptr ${statesPtr}${host.fieldAliasAttachment(statesPtr)}`);
   const widen = (value: string): string => {
     if (size === "i64") return value;
     const t = B.tmp();
@@ -99,37 +121,31 @@ function emitDenseGuard(
     offset = B.tmp();
     B.line(`${offset} = trunc i64 ${wide} to i32`);
   }
-  return { offset, len };
+  return { offset, len, data, states };
 }
 
-function statePointer(host: LlvmEmitterContext, array: string, offset: string): string {
+function statePointer(host: LlvmEmitterContext, guard: DenseGuard): string {
   const B = host.B;
-  const statesPtr = B.tmp(),
-    states = B.tmp(),
-    statePtr = B.tmp();
-  B.line(`${statesPtr} = getelementptr inbounds %ScrArr, ptr ${array}, i32 0, i32 8`);
-  host.markMemoryPointer(statesPtr, "array:header");
-  B.line(`${states} = load ptr, ptr ${statesPtr}${host.fieldAliasAttachment(statesPtr)}`);
-  B.line(`${statePtr} = getelementptr inbounds i8, ptr ${states}, ${host.sizeType} ${offset}`);
+  const statePtr = B.tmp();
+  B.line(
+    `${statePtr} = getelementptr inbounds i8, ptr ${guard.states}, ${host.sizeType} ${guard.offset}`,
+  );
   host.markMemoryPointer(statePtr, "array:present");
   return statePtr;
 }
 
-function valuePointer(host: LlvmEmitterContext, array: string, offset: string): string {
+function valuePointer(host: LlvmEmitterContext, guard: DenseGuard): string {
   const B = host.B;
-  const dataPtr = B.tmp(),
-    data = B.tmp(),
-    valuePtr = B.tmp();
-  B.line(`${dataPtr} = getelementptr inbounds %ScrArr, ptr ${array}, i32 0, i32 7`);
-  host.markMemoryPointer(dataPtr, "array:header");
-  B.line(`${data} = load ptr, ptr ${dataPtr}${host.fieldAliasAttachment(dataPtr)}`);
-  B.line(`${valuePtr} = getelementptr inbounds i64, ptr ${data}, ${host.sizeType} ${offset}`);
+  const valuePtr = B.tmp();
+  B.line(
+    `${valuePtr} = getelementptr inbounds i64, ptr ${guard.data}, ${host.sizeType} ${guard.offset}`,
+  );
   host.markMemoryPointer(valuePtr, "array:elements");
   return valuePtr;
 }
 
-function loadState(host: LlvmEmitterContext, array: string, offset: string): string {
-  const ptr = statePointer(host, array, offset);
+function loadState(host: LlvmEmitterContext, guard: DenseGuard): string {
+  const ptr = statePointer(host, guard);
   const state = host.B.tmp();
   host.B.line(`${state} = load i8, ptr ${ptr}${host.fieldAliasAttachment(ptr)}`);
   return state;
@@ -163,14 +179,14 @@ export function emitDenseArrayGet(
   }
   const slow = B.newLabel("arr.get.slow"),
     join = B.newLabel("arr.get.join");
-  const { offset } = emitDenseGuard(host, array, index, indexExpr, slow, true);
-  const state = loadState(host, array, offset);
+  const guard = emitDenseGuard(host, array, index, indexExpr, slow, true);
+  const state = loadState(host, guard);
   const present = B.tmp();
   B.line(`${present} = icmp eq i8 ${state}, ${SCR_ARR_VALUE}`);
   const valueLabel = B.newLabel("arr.get.value");
   B.condBr(present, valueLabel, slow);
   B.startBlock(valueLabel);
-  const ptr = valuePointer(host, array, offset);
+  const ptr = valuePointer(host, guard);
   let fast: string;
   let fastLabel = valueLabel;
   if (acc === "f64") {
@@ -194,7 +210,8 @@ export function emitDenseArrayGet(
   B.br(join);
   B.startBlock(slow);
   const slowValue = B.tmp();
-  B.line(`${slowValue} = call ${ty} @${getter}(ptr ${array}, double ${index.name}) cold`);
+  const attrs = acc === "ref" && retain ? " cold" : READ_FALLBACK;
+  B.line(`${slowValue} = call ${ty} @${getter}(ptr ${array}, double ${index.name})${attrs}`);
   B.br(join);
   B.startBlock(join);
   const result = B.tmp();
@@ -238,8 +255,8 @@ export function emitDenseArrayState(
   host.declare(`declare ${kind === "state" ? "double" : "zeroext i1"} @${fn}(ptr, double)`);
   const slow = B.newLabel("arr.state.slow"),
     join = B.newLabel("arr.state.join");
-  const { offset } = emitDenseGuard(host, array, index, indexExpr, slow, true);
-  const state = loadState(host, array, offset);
+  const guard = emitDenseGuard(host, array, index, indexExpr, slow, true);
+  const state = loadState(host, guard);
   const fast = B.tmp();
   if (kind === "state") B.line(`${fast} = uitofp i8 ${state} to double`);
   else B.line(`${fast} = icmp ne i8 ${state}, 0`);
@@ -249,7 +266,7 @@ export function emitDenseArrayState(
   B.br(join);
   B.startBlock(slow);
   const slowValue = B.tmp();
-  B.line(`${slowValue} = call ${ty} @${fn}(ptr ${array}, double ${index.name}) cold`);
+  B.line(`${slowValue} = call ${ty} @${fn}(ptr ${array}, double ${index.name})${READ_FALLBACK}`);
   B.br(join);
   B.startBlock(join);
   const result = B.tmp();
@@ -283,9 +300,10 @@ export function emitDenseArraySet(
   }
   const slow = B.newLabel("arr.set.slow"),
     join = B.newLabel("arr.set.join");
-  const { offset, len } = emitDenseGuard(host, array, index, indexExpr, slow, false);
-  const statePtr = statePointer(host, array, offset);
-  const valuePtr = valuePointer(host, array, offset);
+  const guard = emitDenseGuard(host, array, index, indexExpr, slow, false);
+  const { offset, len } = guard;
+  const statePtr = statePointer(host, guard);
+  const valuePtr = valuePointer(host, guard);
   let oldState: string | null = null;
   let old: string | null = null;
   if (acc === "ref") {
