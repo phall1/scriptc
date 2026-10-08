@@ -14843,6 +14843,24 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/fiber-switch-stress.ts": {
+   "order": [
+    "<repo>/tests/corpus/fiber-switch-stress.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/fiberless-async-ordering.ts": {
+   "order": [
+    "<repo>/tests/corpus/fiberless-async-ordering.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/fiberless-async-unhandled.ts": {
+   "order": [
+    "<repo>/tests/corpus/fiberless-async-unhandled.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/json-typed-parse-direct.ts": {
    "order": [
     "<repo>/tests/corpus/json-typed-parse-direct.ts"
