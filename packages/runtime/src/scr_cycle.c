@@ -154,26 +154,16 @@ void scr_rc_destroy(void *obj, void (*destroy)(void *)) {
   }
 }
 
-/* Live cycle-headered objects — what the full-pass trigger watches. */
-static SCR_TL size_t scr_cyc_live = 0;
+/* Live cycle-headered objects — what the full-pass trigger watches.
+ * Exported: the inline allocation paths (scr_runtime.h, llvm/alloc.ts)
+ * maintain it too. */
+SCR_TL size_t scr_cyc_live = 0;
 
 void *scr_cyc_alloc(size_t size, ScrTraceFn trace, ScrCycFreeFn free_fn) {
-  if (size > SIZE_MAX - sizeof(ScrCycHdr)) scr_cyc_oom();
-  ScrCycHdr *h = scr_mem_calloc(sizeof(ScrCycHdr) + size);
-  if (!h) scr_cyc_oom();
-  h->trace = trace;
-  h->free_fn = free_fn;
-  h->color = SCR_CYC_BLACK;
-  h->gen = SCR_CYC_NURSERY;
-  scr_cyc_live++;
-  return h + 1;
+  return scr_cyc_alloc_inline(size, trace, free_fn);
 }
 
-void scr_cyc_free(void *obj) {
-  scr_weak_dispose(obj);
-  scr_cyc_live--;
-  scr_mem_free(scr_cyc_hdr(obj));
-}
+void scr_cyc_free(void *obj) { scr_cyc_free_inline(obj); }
 
 /* A pointer vector that only ever grows (these reuse their capacity across
  * passes rather than churning it). Pointer, count and capacity live in ONE

@@ -120,12 +120,10 @@ export function emissionCases(): EmissionCase[] {
       ],
     },
   ];
-  add("recursive records", recursive, [
-    "@scr_cyc_alloc",
-    "@scr_cyc_on_dead",
-    "@scr_arr_trace",
-    "@scr_cyc_free",
-  ]);
+  // The free path is width-specific (64-bit emission inlines the allocator
+  // and pushes the block onto its free list; 32-bit calls scr_cyc_free), so
+  // only the shared allocation and collector entry points are asserted.
+  add("recursive records", recursive, ["@scr_cyc_alloc", "@scr_cyc_on_dead", "@scr_arr_trace"]);
 
   // Constructor-only edges are proven acyclic (cycle-analysis.ts): a record
   // whose only self reference goes through a nullable union field skips

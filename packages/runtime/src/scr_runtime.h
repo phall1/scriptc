@@ -457,7 +457,6 @@ void *scr_mem_realloc(void *p, size_t n);
 void *scr_rt_calloc(size_t n); /* emitted-code entry points */
 void scr_rt_free(void *p);
 
-#if SCR_SMALL_ALLOC
 #define SCR_SA_STEP 16u   /* class granularity; keeps malloc's 16-byte alignment */
 #define SCR_SA_NCLASS 32u /* classes of 16, 32, ... 512 bytes */
 #define SCR_SA_MAX (SCR_SA_STEP * SCR_SA_NCLASS)
@@ -468,7 +467,20 @@ typedef struct ScrSaBlock {
 
 /* One reservation split into SCR_SA_NCLASS equal slices, one per class, so
  * a block's class is its slice index: (p - base) >> shift. span is 0 until
- * the first refill reserves (and stays 0 if the host refuses). */
+ * the first refill reserves (and stays 0 if the host refuses).
+ *
+ * scr_sa exists in EVERY build, and its layout is an ABI: the LLVM backend
+ * inlines the fast paths into emitted constructors and releases
+ * (llvm/alloc.ts) as `{ i64, i64, i32, [32 x ptr], [32 x ptr], [32 x ptr] }`
+ * on 64-bit targets. Where SCR_SMALL_ALLOC is 0 the state is never written,
+ * so the emitted fast paths see no free block, no bump room and an empty
+ * span, and always take their out-of-line slow path (scr_rt_calloc /
+ * scr_rt_free → the system allocator) — the sanitizer and RC-audit lanes
+ * therefore see every logical allocation and free without the compiler
+ * knowing which runtime it links against. The emitted fast paths also skip
+ * scr_obj_alloc_note/scr_obj_free_note, which is sound because those are
+ * no-ops whenever the allocator is live (SCR_RC_AUDIT implies
+ * SCR_SMALL_ALLOC == 0). */
 typedef struct ScrSaState {
   uintptr_t base, span;
   unsigned shift;
@@ -476,7 +488,17 @@ typedef struct ScrSaState {
   char *bump[SCR_SA_NCLASS], *lim[SCR_SA_NCLASS];
 } ScrSaState;
 extern ScrSaState scr_sa;
+#if UINTPTR_MAX == UINT64_MAX
+_Static_assert(offsetof(ScrSaState, span) == 8 && offsetof(ScrSaState, shift) == 16 &&
+                   offsetof(ScrSaState, free) == 24 && offsetof(ScrSaState, bump) == 280 &&
+                   offsetof(ScrSaState, lim) == 536 && sizeof(ScrSaState) == 792,
+               "llvm/alloc.ts inlines the small-object allocator against this layout");
+#endif
+#if defined(SCR_RC_AUDIT) && SCR_SMALL_ALLOC
+#error "emitted allocation fast paths skip the RC-audit object notes"
+#endif
 
+#if SCR_SMALL_ALLOC
 /* Refill miss: reserves on first use, falls back to the system allocator
  * for large blocks, n == 0, an exhausted slice, or a refused reservation. */
 void *scr_sa_slow(size_t n, bool zero);
@@ -519,6 +541,31 @@ static inline void *scr_mem_alloc(size_t n) { return malloc(n); }
 static inline void *scr_mem_calloc(size_t n) { return calloc(1, n); }
 static inline void scr_mem_free(void *p) { free(p); }
 #endif
+
+/* Inline twins of scr_cyc_alloc/scr_cyc_free for hot runtime allocation
+ * sites (union boxes, arrays, boxes, closures, maps, dyn nodes). With a
+ * constant size the size class and the zeroing fold at compile time. The
+ * live count is exported for these and for the emitted inline paths
+ * (llvm/alloc.ts), which do the same three things: header words, live
+ * count, block. Every other header word starts zero (SCR_CYC_BLACK,
+ * SCR_CYC_NURSERY, unbuffered). */
+extern SCR_TL size_t scr_cyc_live;
+extern SCR_TL void (*scr_weak_dispose_hook)(void *);
+static inline void *scr_cyc_alloc_inline(size_t size, ScrTraceFn trace, ScrCycFreeFn free_fn) {
+  if (size > SIZE_MAX - sizeof(ScrCycHdr)) scr_trap("scriptc: out of memory\n");
+  ScrCycHdr *h = (ScrCycHdr *)scr_mem_calloc(sizeof(ScrCycHdr) + size);
+  if (!h) scr_trap("scriptc: out of memory\n");
+  h->trace = trace;
+  h->free_fn = free_fn;
+  scr_cyc_live++;
+  return h + 1;
+}
+static inline void scr_cyc_free_inline(void *obj) {
+  if (scr_weak_dispose_hook) scr_weak_dispose_hook(obj);
+  scr_cyc_live--;
+  scr_mem_free(scr_cyc_hdr(obj));
+}
+_Static_assert(SCR_CYC_NURSERY == 0, "zeroed cycle headers start in the nursery");
 
 /* Dispose an object whose reference count already reached zero. The caller
  * removes its cycle candidate first. Nested disposals keep bounded stack

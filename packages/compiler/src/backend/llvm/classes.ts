@@ -26,6 +26,7 @@ import {
   mangleVtInstance,
   mangleVtStruct,
 } from "../mangle.js";
+import { emitObjectAlloc, emitObjectFree } from "./alloc.js";
 import { llvmCommentText } from "./common.js";
 import { NullableRefFields } from "./nullable-fields.js";
 import {
@@ -477,15 +478,7 @@ export function emitClassShapes(
       });
       if (isEmitterRooted) lines.push(...regCall("td", "scr_emitter_reg_drop", ""));
       if (isStreamRooted) lines.push(...stCall("tds", "scr_stream_st_release", ""));
-      if (audit) lines.push(`  call void @scr_obj_free_note()`);
-      if (traced) {
-        host.declare(`declare void @scr_cyc_free(ptr)`);
-        lines.push(`  call void @scr_cyc_free(ptr %o)`);
-      } else {
-        host.declare(`declare void @scr_rt_free(ptr)`);
-        host.declare(`declare void @scr_weak_dispose(ptr)`);
-        lines.push(`  call void @scr_weak_dispose(ptr %o)`, `  call void @scr_rt_free(ptr %o)`);
-      }
+      lines.push(...emitObjectFree(host, traced));
     };
 
     if (meta.hierarchy) {
@@ -570,30 +563,22 @@ export function emitClassShapes(
 
     // new: zeroed allocation, rc = 1, the vtable word on hierarchy
     // members, undefined-admitting union fields at the interned unit
-    // instance, alloc note. Traced shapes allocate with the collector
-    // header (scr_cyc_alloc zeroes and aborts on OOM itself).
+    // instance. Traced shapes allocate with the collector header; alloc.ts
+    // inlines the allocator fast paths and the alloc note.
     const nw: string[] = [
       `define internal ptr @${mangleClassNew(cls.name)}() ${FN_ATTRS} { ; new ${cls.name}`,
       `entry:`,
     ];
-    if (traced) {
-      host.declare(`declare ptr @scr_cyc_alloc(${host.sizeType}, ptr, ptr)`);
-      nw.push(
-        `  %o = call ptr @scr_cyc_alloc(${host.sizeType} ${sizeOf}, ptr @${mangleClassTrace(cls.name)}, ptr @${mangleClassGcFree(cls.name)})`,
-      );
-    } else {
-      host.declare(`declare ptr @scr_rt_calloc(${host.sizeType})`);
-      host.needOom();
-      nw.push(
-        `  %o = call ptr @scr_rt_calloc(${host.sizeType} ${sizeOf})`,
-        `  %isnull = icmp eq ptr %o, null`,
-        `  br i1 %isnull, label %oom, label %ok`,
-        `oom:`,
-        `  call void @sc_oom()`,
-        `  unreachable`,
-        `ok:`,
-      );
-    }
+    nw.push(
+      ...emitObjectAlloc(
+        host,
+        sizeOf,
+        traced
+          ? { trace: `@${mangleClassTrace(cls.name)}`, free: `@${mangleClassGcFree(cls.name)}` }
+          : null,
+        meta.hierarchy ? 16 : 8,
+      ),
+    );
     nw.push(`  store ${host.sizeType} 1, ptr %o`);
     if (meta.hierarchy) {
       nw.push(
@@ -614,7 +599,6 @@ export function emitClassShapes(
       );
     }
     nw.push(...undefFieldInits(host, meta, nullable));
-    if (audit) nw.push(`  call void @scr_obj_alloc_note()`);
     nw.push(`  ret ptr %o`, `}`, ``);
     defs.push(...nw);
 
@@ -658,9 +642,7 @@ export function emitClassShapes(
           `  call void ${releaseSym(host, f.type)}(ptr %v${i}) ; ${llvmCommentText(f.name)} (acyclic)`,
         );
       });
-      host.declare(`declare void @scr_cyc_free(ptr)`);
-      if (audit) gf.push(`  call void @scr_obj_free_note()`);
-      gf.push(`  call void @scr_cyc_free(ptr %o)`, `  ret void`, `}`, ``);
+      gf.push(...emitObjectFree(host, true), `  ret void`, `}`, ``);
       defs.push(...gf);
     }
   }

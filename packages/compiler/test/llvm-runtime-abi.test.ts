@@ -220,6 +220,12 @@ async function parseHeader(): Promise<{ protos: Map<string, CProto>; dataSyms: S
   for (const m of src.matchAll(/\bextern\s+[^;(){}]*?\b(scr_[a-z0-9_]+)\s*(?:\[[^\]]*\])?\s*;/g)) {
     dataSyms.add(m[1]!);
   }
+  // Function-pointer data: `extern void (*scr_hook)(void *);`.
+  for (const m of src.matchAll(
+    /\bextern\s+[^;(){}]*\(\s*\*\s*(scr_[a-z0-9_]+)\s*\)\s*\([^;{}]*\)\s*;/g,
+  )) {
+    dataSyms.add(m[1]!);
+  }
   return { protos, dataSyms };
 }
 

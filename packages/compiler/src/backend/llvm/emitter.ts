@@ -1,4 +1,5 @@
 import { emitLlvmLayouts } from "./layouts.js";
+import { inlineAllocSupported } from "./alloc.js";
 import { llvmBytes as llBytes } from "../literals.js";
 import { InternalCompilerError } from "../../errors.js";
 /** Lower typed IR to LLVM, using the runtime's C ABI.
@@ -735,6 +736,15 @@ export class LlEmitter {
       recordsById: this.recordsById,
       recordCloneShapes: this.recordCloneShapes,
       objectAudit: options.objectAudit !== false,
+      inlineAlloc: inlineAllocSupported({
+        pointerBits: options.pointerBits,
+        wasi: options.wasi,
+        targetTriple: options.targetTriple,
+        // Worker programs (SCR_WORKERS) make scr_cyc_live and
+        // scr_weak_dispose_hook thread-local and compile the allocator out,
+        // exactly like thread-instanced libraries.
+        threadInstances: mod.lib?.threadInstances === true || mod.workers === true,
+      }),
       unionsById: this.unionsById,
       declare: (decl) => this.declare(decl),
       needOom: () => this.needOom(),
