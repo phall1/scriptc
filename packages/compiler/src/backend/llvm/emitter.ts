@@ -3626,6 +3626,18 @@ export class LlEmitter {
     B.startBlock(lk);
   }
 
+  /** After a runtime call that ALWAYS leaves an exception pending (the
+   * compiler-resolved Node throws): the pending test would always answer
+   * true, so unwind unconditionally. Emission continues in a block with no
+   * predecessors so the caller's remaining instructions stay well-formed;
+   * LLVM deletes it. */
+  emitAlwaysPendingUnwind(): void {
+    const B = this.B;
+    if (B.isTerminated()) return;
+    this.emitUnwind();
+    B.startBlock(B.newLabel("exc.dead"));
+  }
+
   private workerLoopBudget(): string | null {
     if (!this.mod.workers) return null;
     const slot = this.B.slot();
