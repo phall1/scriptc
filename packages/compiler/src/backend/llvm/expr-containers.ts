@@ -24,6 +24,7 @@ import {
 } from "./map-read-lifetimes.js";
 import { emitBorrowedInput } from "./borrowed-inputs.js";
 import { emitStringSliceRead } from "./string-slices.js";
+import { emitDenseArrayNumber } from "./dense-array-access.js";
 
 export function resolveThunkFor(host: LlvmEmitterContext, inner: IrType): string {
   const key = typeKey(inner);
@@ -421,6 +422,8 @@ export function emitArrIntrinsic(
         e.receiver.kind === "varRef"
           ? host.constantNumericTables.get(e.receiver.localId)
           : undefined;
+      if (!table && elem.kind === "f64")
+        return { name: emitDenseArrayNumber(host, r.name, index, e.args[0]), type: e.type };
       host.declare(`declare double @scr_arr_get_number(ptr, double)`);
       const t = B.tmp();
       B.line(
