@@ -4054,6 +4054,42 @@ void scr_dyn_release(ScrDyn *d); /* releases the tree recursively; NULL-tolerant
  * compiler-emitted pending checks — json.parse is in the may-throw seed). */
 ScrDyn *scr_json_parse(ScrStr *text);
 
+/* Compiler-emitted description of a statically known JSON.parse target
+ * (`JSON.parse(text) as T`). Constant data in the program image; the LLVM
+ * backend mirrors this layout ({size, size, ptr, ptr, ptr, ptr, ptr} and
+ * {ptr, size, size, ptr}). Records list their declared fields (at most
+ * 64), each with its byte offset in the record struct; bool fields are one
+ * byte, f64 fields doubles, every other kind a +1 pointer. */
+enum {
+  SCR_JSCHEMA_F64 = 0,
+  SCR_JSCHEMA_BOOL = 1,
+  SCR_JSCHEMA_STR = 2,
+  SCR_JSCHEMA_REC = 3,
+  SCR_JSCHEMA_ARR = 4,
+};
+typedef struct ScrJsonSchema ScrJsonSchema;
+typedef struct {
+  const char *name;
+  size_t name_len;
+  size_t offset;
+  const ScrJsonSchema *type;
+} ScrJsonSchemaField;
+struct ScrJsonSchema {
+  size_t kind;
+  size_t nfields;
+  const ScrJsonSchemaField *fields; /* records */
+  const ScrJsonSchema *elem;        /* arrays */
+  void *(*rec_new)(void);           /* records: zeroed instance, rc 1 */
+  ScrArr *(*arr_new)(size_t);       /* arrays: empty array of the element kind */
+  void (*release)(void *);          /* records and arrays */
+};
+
+/* One-pass parse straight into the native layout. Returns the +1 record
+ * or array, or NULL WITHOUT throwing whenever the checked-dynamic route
+ * (scr_json_parse + dynCheck) might fail or differ; the caller then runs
+ * that route, which reports the exact error. */
+void *scr_json_parse_schema(const ScrStr *text, const ScrJsonSchema *schema);
+
 /* Native JSON callbacks. All inputs borrowed, result owned (+1), NULL on
  * pending exception. Stringify returns a dyn string OR actual undefined
  * when the replacer omits the root. gap has already applied space rules. */
