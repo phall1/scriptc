@@ -76,6 +76,59 @@ export function lowerOptionalStringIndex(
   };
 }
 
+function isStringOrUndefined(
+  lowerer: Lowerer,
+  unionId: string,
+  arms: readonly IrType[] | undefined,
+): boolean {
+  return (
+    arms?.length === 2 &&
+    lowerer.armTag(unionId, STRING) >= 0 &&
+    lowerer.armTag(unionId, UNDEFINED_T) >= 0
+  );
+}
+
+function lowerMappedNumericStringIndex(
+  lowerer: Lowerer,
+  receiver: IrExpr,
+  index: IrExpr,
+  resultType: IrType | null,
+  loc: SrcLoc,
+): IrExpr | null {
+  if (index.type.kind !== "f64" || receiver.type.kind !== "string") return null;
+  if (resultType?.kind === "string") {
+    return {
+      kind: "strIntrinsic",
+      method: "charAt",
+      receiver,
+      args: [index],
+      type: STRING,
+      loc,
+    };
+  }
+  if (resultType?.kind !== "union") return null;
+  const arms = lowerer.unions.get(resultType.unionId)?.arms;
+  if (!isStringOrUndefined(lowerer, resultType.unionId, arms)) return null;
+  return lowerOptionalStringIndex(lowerer, receiver, index, resultType, loc);
+}
+
+/** String element access: charAt for a string result, the optional UTF-16
+ * read for `string | undefined`, and the unmapped JavaScript fallback when
+ * the checker type did not map. */
+export function lowerStringElement(
+  lowerer: Lowerer,
+  receiver: IrExpr,
+  index: IrExpr,
+  resultType: IrType | null,
+  loc: SrcLoc,
+): IrExpr | null {
+  if (receiver.type.kind !== "string") return null;
+  return (
+    lowerMappedNumericStringIndex(lowerer, receiver, index, resultType, loc) ??
+    lowerUnmappedStringIndex(lowerer, receiver, index, resultType, loc)
+  );
+}
+
 /** JavaScript element access whose checker type did not map (implicit any
  * inside a monomorphized JS function). A numeric index is a UTF-16 read
  * that is undefined when missing. A string key is ordinary property lookup

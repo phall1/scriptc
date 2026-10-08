@@ -119,7 +119,11 @@ import {
   lowerSafeBytesRead,
 } from "./array-values.js";
 import { strCharsCall } from "./containers/array-construction.js";
-import { lowerOptionalStringIndex, lowerUnmappedStringIndex } from "./string-index.js";
+import {
+  lowerOptionalStringIndex,
+  lowerStringElement,
+  lowerUnmappedStringIndex,
+} from "./string-index.js";
 import { tryLowerIndexedComparison } from "./indexed-comparison.js";
 import { npmStaticPackageOfPath } from "../npm-static.js";
 import { unsupportedModuleFeatureOf } from "../builtin-modules.js";
@@ -6957,6 +6961,24 @@ export function lowerElementAccess(lowerer: Lowerer, expr: ts.ElementAccessExpre
         );
       }
     }
+    // A generic JavaScript body whose checker type did not map, instantiated
+    // to a string (`stripped[length - 1]` in Base64.decode). Use the lowered
+    // value here so the receiver expression runs once.
+    if (receiverIr === null && obj.type.kind === "string") {
+      const indexed = lowerStringElement(
+        lowerer,
+        obj,
+        lowerer.lowerExpr(expr.argumentExpression),
+        lowerer.mapTypeOf(lowerer.typeOf(expr)),
+        locOf(expr),
+      );
+      if (indexed) return indexed;
+      lowerer.unsupported(
+        "SC1090",
+        expr,
+        "string indexing with this index/result shape (expected a number index and a string or string | undefined result)",
+      );
+    }
   }
   // `env[key]` on a UNION of record shapes (`ProcessEnv | Record<string,
   // string>` — the env-bag parameter pattern): the per-arm keyed read,
@@ -7078,7 +7100,13 @@ export function lowerElementAccess(lowerer: Lowerer, expr: ts.ElementAccessExpre
           locOf(expr),
         );
       }
-      const unmapped = lowerUnmappedStringIndex(lowerer, recv, index, resultType, locOf(expr));
+      const unmapped = lowerUnmappedStringIndex(
+        lowerer,
+        recv,
+        index,
+        lowerer.mapTypeOf(lowerer.typeOf(expr)),
+        locOf(expr),
+      );
       if (unmapped) return unmapped;
       lowerer.unsupported(
         "SC1090",
