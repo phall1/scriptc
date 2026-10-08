@@ -216,8 +216,8 @@ function constructorEscapes(fn: IrFunction, thisId: string, baseCtor: string | n
       escaped = true;
       return false;
     }
-    const captures = (e as { captures?: unknown }).captures;
-    if (Array.isArray(captures) && captures.includes(thisId)) {
+    // Closures and class references are the expressions that capture locals.
+    if ((e.kind === "closure" || e.kind === "classRef") && (e.captures ?? []).includes(thisId)) {
       escaped = true;
       return false;
     }

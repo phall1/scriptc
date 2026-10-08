@@ -150,19 +150,18 @@ export function computeTraced(mod: IrModule): { shapes: Set<string>; unions: Set
   let nextIndex = 0;
   for (const start of all) {
     if (start.index >= 0) continue;
-    const work: { n: Node; it: Iterator<Node> }[] = [];
+    const work: { n: Node; next: Node[]; i: number }[] = [];
     const enter = (n: Node): void => {
       n.index = n.low = nextIndex++;
       n.onStack = true;
       stack.push(n);
-      work.push({ n, it: n.edges.keys() });
+      work.push({ n, next: [...n.edges.keys()], i: 0 });
     };
     enter(start);
     while (work.length > 0) {
       const frame = work[work.length - 1]!;
-      const step = frame.it.next();
-      if (!step.done) {
-        const m = step.value;
+      if (frame.i < frame.next.length) {
+        const m = frame.next[frame.i++]!;
         if (m.index < 0) enter(m);
         else if (m.onStack) frame.n.low = Math.min(frame.n.low, m.index);
         continue;
