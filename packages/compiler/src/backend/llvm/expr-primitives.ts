@@ -15,6 +15,7 @@ import { exactInteger, widenInteger, integerNumber } from "./integer-values.js";
 import { integerArithmeticRange } from "../../ir/integer-ranges.js";
 import { emitArrayValues } from "./expr-containers.js";
 import { emitSignedIntegerRemainder } from "./integer-remainder.js";
+import { emitDenseArrayGet, emitDenseArrayState } from "./dense-array-access.js";
 
 export function emitLiteralExpr(
   host: LlvmEmitterContext,
@@ -683,15 +684,20 @@ export function emitContainerExpr(
       const idx = host.emitExpr(e.index);
       if (e.arr.type.kind !== "array")
         throw new InternalCompilerError("llvm emitter bug: arrayGet on non-array");
-      // Ref-element reads return +1 (the runtime retains); own registers
-      // the owned temp in the frame like any other.
-      const acc = elemAccess(e.arr.type.elem);
-      const accTy = acc === "f64" ? "double" : acc === "bool" ? "i1" : "ptr";
-      host.declare(
-        `declare ${acc === "bool" ? "zeroext i1" : accTy} @scr_arr_get_${acc}(ptr, double)`,
+      // Ref-element reads return +1 (the inline dense path retains like
+      // the runtime getter); own registers the owned temp in the frame.
+      const elem = e.arr.type.elem;
+      const acc = elemAccess(elem);
+      const t = emitDenseArrayGet(
+        host,
+        arr.name,
+        idx,
+        e.index,
+        acc,
+        elem,
+        `scr_arr_get_${acc}`,
+        true,
       );
-      const t = B.tmp();
-      B.line(`${t} = call ${accTy} @scr_arr_get_${acc}(ptr ${arr.name}, double ${idx.name})`);
       return host.own({ name: t, type: e.type });
     }
     case "arrayHas": {
@@ -699,9 +705,7 @@ export function emitContainerExpr(
       const idx = host.emitExpr(e.index);
       if (e.arr.type.kind !== "array")
         throw new InternalCompilerError("llvm emitter bug: arrayHas on non-array");
-      host.declare(`declare zeroext i1 @scr_arr_has(ptr, double)`);
-      const t = B.tmp();
-      B.line(`${t} = call zeroext i1 @scr_arr_has(ptr ${arr.name}, double ${idx.name})`);
+      const t = emitDenseArrayState(host, arr.name, idx, e.index, "has");
       return { name: t, type: e.type };
     }
     case "arrayState": {
@@ -709,9 +713,7 @@ export function emitContainerExpr(
       const idx = host.emitExpr(e.index);
       if (e.arr.type.kind !== "array")
         throw new InternalCompilerError("llvm emitter bug: arrayState on non-array");
-      host.declare(`declare double @scr_arr_state(ptr, double)`);
-      const t = B.tmp();
-      B.line(`${t} = call double @scr_arr_state(ptr ${arr.name}, double ${idx.name})`);
+      const t = emitDenseArrayState(host, arr.name, idx, e.index, "state");
       return { name: t, type: e.type };
     }
     case "arrIntrinsic":

@@ -14831,6 +14831,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/3140-array-dense-access.ts": {
+   "order": [
+    "<repo>/tests/corpus/3140-array-dense-access.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/json-typed-parse-direct.ts": {
    "order": [
     "<repo>/tests/corpus/json-typed-parse-direct.ts"

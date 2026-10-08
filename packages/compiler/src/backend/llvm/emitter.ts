@@ -141,6 +141,7 @@ import {
   OptionalArrayReads,
   type LocalArrayRead,
 } from "./local-array-reads.js";
+import { emitDenseArrayGet, emitDenseArraySet } from "./dense-array-access.js";
 import {
   emitStackMapRead,
   findMapReadLifetimes,
@@ -4462,13 +4463,7 @@ export class LlEmitter {
           throw new InternalCompilerError("llvm emitter bug: arraySet on non-array");
         const acc = elemAccess(s.arr.type.elem);
         if (acc === "ref") this.moveTemp(v);
-        const argTy = acc === "f64" ? "double" : acc === "bool" ? "i1" : "ptr";
-        this.declare(
-          `declare void @scr_arr_set_${acc}(ptr, double, ${argTy === "i1" ? "i1 zeroext" : argTy})`,
-        );
-        B.line(
-          `call void @scr_arr_set_${acc}(ptr ${arr.name}, double ${idx.name}, ${argTy} ${v.name})`,
-        );
+        emitDenseArraySet(this, arr.name, idx, s.index, acc, s.arr.type.elem, v.name);
         break;
       }
       case "arraySetLength": {
@@ -5059,10 +5054,17 @@ export class LlEmitter {
           B.line(`${inBounds} = icmp ne ptr ${cur}, null`);
         } else {
           const i = B.tmp(),
+            lenPtr = B.tmp(),
+            rawLen = B.tmp(),
             len = B.tmp();
-          this.declare(`declare double @scr_arr_len(ptr)`);
           B.line(`${i} = load double, ptr ${idxSlot}`);
-          B.line(`${len} = call double @scr_arr_len(ptr ${arr!.name})`);
+          // The inline form of scr_arr_len, like the `length` intrinsic.
+          B.line(`${lenPtr} = getelementptr inbounds %ScrArr, ptr ${arr!.name}, i32 0, i32 1`);
+          this.markMemoryPointer(lenPtr, "array:header");
+          B.line(
+            `${rawLen} = load ${this.sizeType}, ptr ${lenPtr}${this.fieldAliasAttachment(lenPtr)}`,
+          );
+          B.line(`${len} = uitofp ${this.sizeType} ${rawLen} to double`);
           B.line(`${inBounds} = fcmp olt double ${i}, ${len}`);
           cur = i;
         }
@@ -5086,12 +5088,17 @@ export class LlEmitter {
         const borrowedElement = !snapshot && this.loopArrayBorrows.has(s);
         if (!snapshot) {
           const acc = elemAccess(elem);
-          const accTy = acc === "f64" ? "double" : acc === "bool" ? "i1" : "ptr";
           const getter = borrowedElement ? "scr_arr_borrow_ref" : `scr_arr_get_${acc}`;
-          this.declare(`declare ${acc === "bool" ? "zeroext i1" : accTy} @${getter}(ptr, double)`);
-          const value = B.tmp();
-          B.line(`${value} = call ${accTy} @${getter}(ptr ${arr!.name}, double ${cur})`);
-          cur = value;
+          cur = emitDenseArrayGet(
+            this,
+            arr!.name,
+            { name: cur, type: { kind: "f64" } },
+            undefined,
+            acc,
+            elem,
+            getter,
+            !borrowedElement,
+          );
         }
         if (spanLength) {
           const length = B.tmp();
