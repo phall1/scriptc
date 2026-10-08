@@ -134,6 +134,7 @@ import {
 } from "./local-union-storage.js";
 import { BlockBuilder } from "./blocks.js";
 import {
+  emitCallArrayRead,
   emitLocalArrayRead,
   emitBorrowedArrayRead,
   findLocalArrayReads,
@@ -496,7 +497,7 @@ export class LlEmitter {
    * fiberless-async analysis scans it for suspension entry points. */
   private readonly fnDefText = new Map<string, string>();
   readonly referenceEffects: ReferenceEffects;
-  private readonly optionalArrayReads: OptionalArrayReads;
+  readonly optionalArrayReads: OptionalArrayReads;
   callArrayReads = new Map<IrExpr, LocalArrayRead>();
   mapReadLifetimes: MapReadLifetimes = { locals: new Map(), arguments: new Map() };
   readonly callLifetimes: CallLifetimes;
@@ -3509,13 +3510,9 @@ export class LlEmitter {
       this.unionTagSwitch(v.name, def, (arm) => {
         let valueName = "false";
         if (arm.kind === "f64" || arm.kind === "procStream") {
-          valueName = B.tmp();
-          this.declare(`declare double @scr_union_get_f64(ptr)`);
-          B.line(`${valueName} = call double @scr_union_get_f64(ptr ${v.name})`);
+          valueName = this.unionGetF64(v.name);
         } else if (arm.kind === "bool") {
-          valueName = B.tmp();
-          this.declare(`declare zeroext i1 @scr_union_get_bool(ptr)`);
-          B.line(`${valueName} = call zeroext i1 @scr_union_get_bool(ptr ${v.name})`);
+          valueName = this.unionGetBool(v.name);
         } else if (arm.kind === "string") {
           valueName = this.unionPeek(v.name);
         } else if (arm.kind === "bigint" || arm.kind === "dyn" || arm.kind === "jsval") {
@@ -3700,23 +3697,33 @@ export class LlEmitter {
   }
 
   /** The +1 extraction of a union's single narrowed arm (unionNarrow /
-   * the nullish-family reads): scalars via the runtime getters, ref arms
+   * the nullish-family reads): scalars via inline payload loads, ref arms
    * a retained peek. */
   unionExtract(uName: string, arm: IrType): string {
-    const B = this.B;
-    if (arm.kind === "f64" || arm.kind === "procStream") {
-      const t = B.tmp();
-      this.declare(`declare double @scr_union_get_f64(ptr)`);
-      B.line(`${t} = call double @scr_union_get_f64(ptr ${uName})`);
-      return t;
-    }
-    if (arm.kind === "bool") {
-      const t = B.tmp();
-      this.declare(`declare zeroext i1 @scr_union_get_bool(ptr)`);
-      B.line(`${t} = call zeroext i1 @scr_union_get_bool(ptr ${uName})`);
-      return t;
-    }
+    if (arm.kind === "f64" || arm.kind === "procStream") return this.unionGetF64(uName);
+    if (arm.kind === "bool") return this.unionGetBool(uName);
     return this.retainValue(this.unionPeek(uName), arm);
+  }
+
+  /** A scalar f64 arm's payload (scr_union_get_f64 inlined). Inline loads
+   * keep stack boxes free of escaping calls, so LLVM can scalarize them. */
+  unionGetF64(uName: string): string {
+    const p = this.B.tmp();
+    const t = this.B.tmp();
+    this.B.line(`${p} = getelementptr inbounds %ScrUnion, ptr ${uName}, i64 0, i32 5`);
+    this.B.line(`${t} = load double, ptr ${p}`);
+    return t;
+  }
+
+  /** A bool arm's payload (scr_union_get_bool inlined: nonzero slot). */
+  unionGetBool(uName: string): string {
+    const p = this.B.tmp();
+    const bits = this.B.tmp();
+    const t = this.B.tmp();
+    this.B.line(`${p} = getelementptr inbounds %ScrUnion, ptr ${uName}, i64 0, i32 5`);
+    this.B.line(`${bits} = load i64, ptr ${p}`);
+    this.B.line(`${t} = icmp ne i64 ${bits}, 0`);
+    return t;
   }
 
   /** Constructs a union box around an OWNED (+1, already moved) value —
@@ -6062,6 +6069,10 @@ export class LlEmitter {
       return result.value;
     }
     if (canStackUnion(e, this.unionsById)) return emitStackUnion(this, e).value;
+    // An optional array read consumed by a projection needs no heap box:
+    // a private stack box owns the payload until the statement frame ends.
+    const arrayRead = e.type.kind === "union" ? this.optionalArrayReads.get(e) : null;
+    if (arrayRead) return emitCallArrayRead(this, arrayRead, true);
     if (e.kind === "unionNarrow") {
       const union = this.emitReadReceiver(e.value);
       return { name: this.unionPeek(union.name), type: e.type };
@@ -6103,6 +6114,28 @@ export class LlEmitter {
       return { name: value, type: e.type };
     }
     return this.emitExpr(e);
+  }
+
+  /** True for union sources that emitReadReceiver can produce as a private
+   * stack box with an independently owned payload (no heap union). */
+  isStackUnionSource(e: IrExpr): boolean {
+    if (e.type.kind !== "union") return false;
+    return (
+      canStackUnion(e, this.unionsById) ||
+      matchMapRead(e, this.unionsById) !== null ||
+      this.optionalArrayReads.get(e) !== null
+    );
+  }
+
+  /** A union local whose binding slot holds a private stack box. Such a
+   * box must only be projected: never retained, released, or stored. */
+  isStackUnionLocal(localId: string): boolean {
+    return (
+      this.localStackUnions.has(localId) ||
+      this.localUnionStorage.has(localId) ||
+      this.localArrayReads.has(localId) ||
+      this.mapReadLifetimes.locals.has(localId)
+    );
   }
 
   canBorrowReceiver(e: IrExpr): boolean {

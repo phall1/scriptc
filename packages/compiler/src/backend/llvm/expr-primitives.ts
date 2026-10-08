@@ -472,21 +472,17 @@ export function emitStringExpr(
               B.line(`store ptr ${host.retainValue(host.unionPeek(v.name), e.type)}, ptr ${slot}`);
               break;
             case "f64": {
-              const x = B.tmp();
+              const x = host.unionGetF64(v.name);
               const r = B.tmp();
-              host.declare(`declare double @scr_union_get_f64(ptr)`);
               host.declare(`declare ptr @scr_f64_to_scrstr(double)`);
-              B.line(`${x} = call double @scr_union_get_f64(ptr ${v.name})`);
               B.line(`${r} = call ptr @scr_f64_to_scrstr(double ${x})`);
               B.line(`store ptr ${r}, ptr ${slot}`);
               break;
             }
             case "bool": {
-              const x = B.tmp();
+              const x = host.unionGetBool(v.name);
               const r = B.tmp();
-              host.declare(`declare zeroext i1 @scr_union_get_bool(ptr)`);
               host.declare(`declare ptr @scr_bool_to_scrstr(i1 zeroext)`);
-              B.line(`${x} = call zeroext i1 @scr_union_get_bool(ptr ${v.name})`);
               B.line(`${r} = call ptr @scr_bool_to_scrstr(i1 zeroext ${x})`);
               B.line(`store ptr ${r}, ptr ${slot}`);
               break;

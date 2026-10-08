@@ -1,6 +1,5 @@
 import { classMembershipIntervals } from "./classes.js";
 import { borrowableInputs, emitBorrowedInput, emitBorrowedInputs } from "./borrowed-inputs.js";
-import { canStackUnion } from "./stack-unions.js";
 import { preservesDynTest } from "./checked-value-lifetimes.js";
 import { typedRefConstructor } from "./shapes.js";
 /* Focused LLVM expression emission extracted from emitter.ts. */
@@ -736,13 +735,16 @@ export function emitDynamicExpr(
       if (direct) return direct;
       // Strict equality of the ARM values (tag compare + per-arm payload
       // compare — the C per-union helper, inlined). Both boxes borrowed.
-      // A freshly wrapped operand (`key === "name"` against a union) never
-      // escapes this comparison, so it gets a stack box instead of a heap
-      // allocation; its payload stays owned by the statement frame.
+      // Stack-representable operands (wrapped literals, optional array
+      // reads, Map.get results) and stack-boxed locals never allocate: the
+      // compare only reads tags and payloads, and each payload has its own
+      // owner, so later operands cannot invalidate an earlier stack box.
       const operands = [e.left, e.right];
       const borrowed = borrowableInputs(host, operands);
       const inputs = operands.map((value, index) =>
-        borrowed[index] || canStackUnion(value, host.unionsById)
+        borrowed[index] ||
+        host.isStackUnionSource(value) ||
+        (value.kind === "varRef" && host.isStackUnionLocal(value.localId))
           ? host.emitReadReceiver(value)
           : host.emitExpr(value),
       );
@@ -769,12 +771,9 @@ export function emitDynamicExpr(
             B.line(`store i1 true, ptr ${slot}`);
             break;
           case "f64": {
-            host.declare(`declare double @scr_union_get_f64(ptr)`);
-            const a = B.tmp();
-            const b = B.tmp();
+            const a = host.unionGetF64(l.name);
+            const b = host.unionGetF64(r.name);
             const t = B.tmp();
-            B.line(`${a} = call double @scr_union_get_f64(ptr ${l.name})`);
-            B.line(`${b} = call double @scr_union_get_f64(ptr ${r.name})`);
             if (e.sameValue) {
               // Object.is's f64 compare: NaN equals NaN, +0 differs
               // from -0 — the runtime SameValue.
@@ -787,12 +786,9 @@ export function emitDynamicExpr(
             break;
           }
           case "bool": {
-            host.declare(`declare zeroext i1 @scr_union_get_bool(ptr)`);
-            const a = B.tmp();
-            const b = B.tmp();
+            const a = host.unionGetBool(l.name);
+            const b = host.unionGetBool(r.name);
             const t = B.tmp();
-            B.line(`${a} = call zeroext i1 @scr_union_get_bool(ptr ${l.name})`);
-            B.line(`${b} = call zeroext i1 @scr_union_get_bool(ptr ${r.name})`);
             B.line(`${t} = icmp eq i1 ${a}, ${b}`);
             B.line(`store i1 ${t}, ptr ${slot}`);
             break;

@@ -481,6 +481,34 @@ export function emitControlExpr(
       const unitTags = def.arms.flatMap((a, i) => (isUnitType(a) ? [i] : []));
       if (unitTags.length === 0)
         throw new InternalCompilerError("llvm emitter bug: nullish union lacks unit arms");
+      if (
+        !typeEquals(e.type, e.left.type) &&
+        (host.isStackUnionSource(e.left) ||
+          (e.left.kind === "varRef" && host.isStackUnionLocal(e.left.localId)))
+      ) {
+        // Narrowed shape over a stack box (`arr[i] ?? d`, `map.get(k) ?? d`):
+        // test the tag and extract the payload (+1); the box is never
+        // retained or released, and its payload owner is independent.
+        const l = host.emitReadReceiver(e.left);
+        const ty = host.llType(e.type);
+        const slot = B.slot();
+        B.entryAllocas.push(`${slot} = alloca ${ty}`);
+        const isUnit = host.tagInSet(l.name, unitTags);
+        const lu = B.newLabel("nul.u");
+        const lv = B.newLabel("nul.v");
+        const lj = B.newLabel("nul.j");
+        B.condBr(isUnit, lu, lv);
+        B.startBlock(lu);
+        host.emitBranchInto(slot, e.right);
+        B.br(lj);
+        B.startBlock(lv);
+        B.line(`store ${ty} ${host.unionExtract(l.name, e.type)}, ptr ${slot}`);
+        B.br(lj);
+        B.startBlock(lj);
+        const t = B.tmp();
+        B.line(`${t} = load ${ty}, ptr ${slot}`);
+        return host.own({ name: t, type: e.type });
+      }
       const l = host.emitExpr(e.left);
       host.moveTemp(l);
       const ty = host.llType(e.type);

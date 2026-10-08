@@ -273,6 +273,46 @@ test("records safe local consumers without accepting duplicate or absent declara
   expect(analyze(fn, leaf).locals.get("work")?.size).toBe(0);
 });
 
+test("closure locals get local facts while their parameters stay unproven", () => {
+  const fn = helper("closure");
+  fn.captures = [];
+  fn.locals.push(local("item"));
+  fn.body = [
+    { kind: "varDecl", localId: "item", init: ref("value"), loc },
+    { kind: "exprStmt", expr: tag("item"), loc },
+  ];
+  const result = analyze(fn);
+  expect(result.parameters.has("closure")).toBe(false);
+  expect(result.borrowed.has("closure")).toBe(false);
+  expect(result.locals.get("closure")).toEqual(new Set(["item"]));
+  // A captured local is never a stack candidate inside the closure body.
+  fn.captures = [{ localId: "item", name: "item", type: optional }];
+  expect(analyze(fn).locals.get("closure")?.has("item")).toBe(false);
+});
+
+test("strict union equality and narrowed nullish reads are projections", () => {
+  const fn = helper("compare");
+  const equal: IrExpr = {
+    kind: "unionEq",
+    unionId: "optional",
+    negated: false,
+    sameValue: false,
+    left: ref("value"),
+    right: ref("value"),
+    type: BOOL,
+    loc,
+  };
+  fn.body = [{ kind: "exprStmt", expr: equal, loc }];
+  expect(analyze(fn).parameters.get("compare")).toEqual(new Set([0]));
+  const narrowed: IrExpr = { kind: "nullish", left: ref("value"), right: num(), type: F64, loc };
+  fn.body = [ret(narrowed)];
+  expect(analyze(fn).parameters.get("compare")).toEqual(new Set([0]));
+  // The pass-through shape returns the box itself.
+  fn.returnType = optional;
+  fn.body = [ret({ kind: "nullish", left: ref("value"), right: ref("value"), type: optional, loc })];
+  expect(analyze(fn).parameters.has("compare")).toBe(false);
+});
+
 test("visits nested argument effects even when the outer helper is safe", () => {
   const fn = helper("work"),
     leaf = helper("leaf");
