@@ -1,3 +1,8 @@
+import {
+  optimizationClass,
+  optimizationField,
+  type NativeOptimization,
+} from "./backend/optimization.js";
 import { compilationTiming, type CompilationTiming } from "./timing.js";
 import { prepareExecutableModule } from "./executable/prepare.js";
 import {
@@ -352,11 +357,11 @@ function executableNativeFeatures(
   mod: IrModule,
   backend: "llvm",
   dynamic: boolean,
-  optimization: "release" | "dev",
+  optimization: NativeOptimization,
 ): EarlyExecutableNativeFeatures {
   return {
     backend,
-    ...(optimization === "dev" ? { optimization: "dev" as const } : {}),
+    ...optimizationField(optimization),
     ...executableLinkFeatures(mod, dynamic),
   };
 }
@@ -414,7 +419,7 @@ async function compileExecutableNative(
     cPath: llvmPath,
     outPath,
     cacheIdentity: "scriptc-generated-v1",
-    ...(features.optimization === "dev" ? { optimization: "dev" as const } : {}),
+    ...optimizationField(features.optimization),
     ...(strip ? { strip: true } : {}),
     ...(windowsSubsystem === undefined ? {} : { windowsSubsystem }),
     ...(effectiveProgramSplit === null
@@ -492,7 +497,7 @@ async function emitNativeProgramObject(
       ? 1
       : nativeProgramPartitions(
           target,
-          opts.optimization === "dev" ? "dev" : "release",
+          optimizationClass(opts.optimization),
           (typeof llvm === "string" ? [llvm] : llvm).reduce(
             (bytes, part) => bytes + Buffer.byteLength(part),
             0,
@@ -917,7 +922,7 @@ async function compileTracked(
       sanitize: opts.sanitize ?? false,
       dynamic: opts.dynamic ?? false,
       backend: "llvm",
-      ...(opts.optimization === "dev" ? { optimization: "dev" as const } : {}),
+      ...optimizationField(opts.optimization),
       ...(opts.strip ? { strip: true as const } : {}),
       ...(opts.windowsSubsystem === "gui" ? { windowsSubsystem: "gui" as const } : {}),
       npmStatic: opts.npmStatic ?? null,

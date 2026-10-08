@@ -1,4 +1,5 @@
 /** Ordered link inputs shared by synchronous native and asynchronous Node hosts. */
+import type { NativeOptimization } from "./optimization.js";
 import {
   executableOptimizationLinkerArgs,
   executableStripLinkerArgs,
@@ -24,7 +25,7 @@ export function executableLinkInputs(options: {
   runtimeObjects: readonly string[];
   runtimeArchives: readonly string[];
   runtimeSystemLibraries: readonly string[];
-  optimization: "release" | "dev";
+  optimization: NativeOptimization;
   strip?: boolean;
   windowsSubsystem?: WindowsSubsystem;
 }): ExecutableLinkInputs {

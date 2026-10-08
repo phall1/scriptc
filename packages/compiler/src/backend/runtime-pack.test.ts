@@ -627,3 +627,62 @@ test("library runtime selection requires dedicated packs and never substitutes e
   });
   await expect(loadRuntimePack(options)).rejects.toThrow("no release flavor");
 });
+
+test("speed selects the pack's speed flavor and falls back to release objects without one", async () => {
+  const f = await fixture();
+  const options = {
+    target: MACOS_ARM64_TARGET,
+    features: BASE,
+    resolver: () => f.packagePath,
+  };
+  // A pack without a speed flavor links its release objects for speed.
+  const fallback = await loadRuntimePack({ ...options, optimization: "speed" });
+  expect(fallback.flavor).toBe("speed");
+  expect(fallback.runtimeObjects.map((path) => basename(path))).toEqual(["base.o"]);
+
+  const bytes = "speed";
+  await writeFile(join(f.root, "artifacts/speed.o"), bytes);
+  const speedArtifact = {
+    path: "artifacts/speed.o",
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    size: Buffer.byteLength(bytes),
+  };
+  const unit = f.manifest.flavors.release!.runtime_units[0]!;
+  f.manifest.flavors.speed = {
+    optimization: "-O2",
+    runtime_units: [
+      {
+        ...unit,
+        variants: unit.variants.map((variant) =>
+          variant.id === "default" ? { ...variant, ...speedArtifact } : variant,
+        ),
+      },
+    ],
+  };
+  await writeFile(join(f.root, "runtime-pack.json"), JSON.stringify(f.manifest));
+  const speed = await loadRuntimePack({ ...options, optimization: "speed" });
+  expect(speed.runtimeObjects.map((path) => basename(path))).toEqual(["speed.o"]);
+  // Release and dev never see the speed flavor's objects.
+  const release = await loadRuntimePack({ ...options, optimization: "release" });
+  expect(release.runtimeObjects.map((path) => basename(path))).toEqual(["base.o"]);
+  // Library modes have no speed flavor and link their release objects.
+  f.manifest.flavors["library-release"] = {
+    optimization: "-O2",
+    runtime_units: [{ ...unit, variants: [{ ...unit.variants[0]!, defines: ["SCR_LIB"] }] }],
+  };
+  await writeFile(join(f.root, "runtime-pack.json"), JSON.stringify(f.manifest));
+  await expect(
+    loadRuntimePack({ ...options, optimization: "speed", mode: "library" }),
+  ).resolves.toMatchObject({ runtimeObjects: release.runtimeObjects });
+  // A speed flavor must be optimized and accompany the release flavor.
+  expect(() =>
+    parseRuntimePackManifest({
+      ...f.manifest,
+      flavors: { ...f.manifest.flavors, speed: { optimization: "-O0", runtime_units: [unit] } },
+    }),
+  ).toThrow("malformed");
+  const { release: _release, dev: _dev, ...withoutExecutable } = f.manifest.flavors;
+  expect(() => parseRuntimePackManifest({ ...f.manifest, flavors: withoutExecutable })).toThrow(
+    "malformed",
+  );
+});

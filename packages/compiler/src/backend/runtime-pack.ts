@@ -1,3 +1,4 @@
+import type { NativeOptimization } from "./optimization.js";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -35,7 +36,7 @@ export interface RuntimePackSelection {
   root: string;
   manifestPath: string;
   manifest: RuntimePackManifest;
-  flavor: "release" | "dev";
+  flavor: NativeOptimization;
   features: RuntimeFeatureSet;
   runtimeObjects: string[];
   archives: string[];
@@ -154,7 +155,7 @@ export async function stageRuntimePackArtifacts(selection: RuntimePackSelection)
 export async function loadRuntimePack(options: {
   target: NativeTargetSpec;
   features: NativeLinkFeatures;
-  optimization: "release" | "dev";
+  optimization: NativeOptimization;
   mode?: RuntimePackMode;
   env?: NodeJS.ProcessEnv;
   resolver?: (specifier: string) => string;
