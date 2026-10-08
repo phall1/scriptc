@@ -85,6 +85,13 @@
       ]
     },
     {
+      "name": "log-lines",
+      "entry": "workloads/log-lines.ts",
+      "args": [
+        "4"
+      ]
+    },
+    {
       "name": "log-summary",
       "entry": "../builds/log-summary/main.ts",
       "input": "log-summary",
