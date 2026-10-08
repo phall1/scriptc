@@ -1684,6 +1684,8 @@ double scr_parse_int(ScrStr *s, double radix) {
   const char *p = s->data;
   size_t n = s->len, i = 0;
   while (i < n) {
+    unsigned char c = (unsigned char)p[i];
+    if (c > 0x20 && c < 0x80) break; /* ASCII non-whitespace */
     size_t adv;
     uint32_t cp = scr_utf8_decode(p + i, &adv);
     if (!scr_is_js_whitespace(cp)) break;
@@ -1729,6 +1731,8 @@ double scr_parse_float(ScrStr *s) {
   const char *p = s->data;
   size_t n = s->len, i = 0;
   while (i < n) {
+    unsigned char c = (unsigned char)p[i];
+    if (c > 0x20 && c < 0x80) break; /* ASCII non-whitespace */
     size_t adv;
     uint32_t cp = scr_utf8_decode(p + i, &adv);
     if (!scr_is_js_whitespace(cp)) break;
@@ -1767,6 +1771,8 @@ double scr_parse_float(ScrStr *s) {
     if (j > ed) end = j; /* exponent joins only with digits ("1e" is 1) */
   }
   size_t span = end - start;
+  double fast;
+  if (scr_decimal_fast(p + start, span, &fast)) return fast;
   char buf[64];
   char *tmp = span < sizeof(buf) ? buf : malloc(span + 1);
   if (!tmp) scr_oom();
@@ -1793,12 +1799,16 @@ double scr_string_to_number(ScrStr *s) {
   const char *p = s->data;
   size_t b = 0, e = s->len;
   while (b < e) {
+    unsigned char c = (unsigned char)p[b];
+    if (c > 0x20 && c < 0x80) break; /* ASCII non-whitespace */
     size_t adv;
     uint32_t cp = scr_utf8_decode(p + b, &adv);
     if (!scr_is_js_whitespace(cp)) break;
     b += adv;
   }
   while (e > b) {
+    unsigned char c = (unsigned char)p[e - 1];
+    if (c > 0x20 && c < 0x80) break; /* ASCII non-whitespace */
     size_t cs = e - 1; /* back up to the lead byte of the last char */
     while (cs > b && ((unsigned char)p[cs] & 0xC0) == 0x80) cs--;
     size_t adv;
@@ -1824,37 +1834,18 @@ double scr_string_to_number(ScrStr *s) {
     return scr_digits_to_double(p + dig_start, i - dig_start, radix);
   }
   /* StrDecimalLiteral, whole-span: [+-]? (Infinity | digits [. digits*]
-   * | . digits) ([eE][+-]?digits)? — nothing before, nothing after. */
-  size_t i = 0;
-  double sign = 1.0;
-  if (p[0] == '+' || p[0] == '-') {
-    if (p[0] == '-') sign = -1.0;
-    i = 1;
-  }
+   * | . digits) ([eE][+-]?digits)? — nothing before, nothing after. The
+   * digit grammar and Clinger's exact fast path share one scan
+   * (scr_decimal_scan, scr_number.c); valid spans it cannot convert exactly
+   * fall through to strtod. */
+  size_t i = (p[0] == '+' || p[0] == '-') ? 1 : 0;
   if (n - i == 8 && memcmp(p + i, "Infinity", 8) == 0) {
-    return sign * (double)INFINITY;
+    return p[0] == '-' ? -(double)INFINITY : (double)INFINITY;
   }
-  size_t int_digits = 0, frac_digits = 0;
-  while (i < n && p[i] >= '0' && p[i] <= '9') {
-    i++;
-    int_digits++;
-  }
-  if (i < n && p[i] == '.') {
-    i++;
-    while (i < n && p[i] >= '0' && p[i] <= '9') {
-      i++;
-      frac_digits++;
-    }
-  }
-  if (int_digits == 0 && frac_digits == 0) return NAN; /* ".", "+", "e5" */
-  if (i < n && (p[i] == 'e' || p[i] == 'E')) {
-    i++;
-    if (i < n && (p[i] == '+' || p[i] == '-')) i++;
-    size_t ed = i;
-    while (i < n && p[i] >= '0' && p[i] <= '9') i++;
-    if (i == ed) return NAN; /* "1e", "1e+" — exponent needs digits */
-  }
-  if (i != n) return NAN; /* trailing garbage ("1_000", "1.2.3", "12px") */
+  double fast;
+  int scanned = scr_decimal_scan(p, n, &fast);
+  if (scanned < 0) return NAN; /* ".", "1e", "1.2.3", "12px", "1_000" */
+  if (scanned > 0) return fast;
   char buf[64];
   char *tmp = n < sizeof(buf) ? buf : malloc(n + 1);
   if (!tmp) scr_oom();
