@@ -370,22 +370,34 @@ void scr_promise_trace_v(void *p, ScrTraceVisit visit, void *ctx) {
 
 /* ── fibers and the scheduler ─────────────────────────────────────────── */
 
-/* One saved execution context. x86_64/AArch64 POSIX: the saved stack
- * pointer of a callee-saved register frame (scr_ctx_swap below). Other
- * POSIX targets: a ucontext_t (swapcontext saves the outgoing context INTO
- * the `from` slot). Windows: the fiber HANDLE — SwitchToFiber saves the
- * outgoing state inside the fiber object itself, so the slot only needs to
- * name the destination; `from` is unused. */
+/* One saved execution context. x86_64/AArch64 POSIX: the callee-saved
+ * register file (scr_ctx_swap below). Other POSIX targets: a ucontext_t
+ * (swapcontext saves the outgoing context INTO the `from` slot). Windows:
+ * the fiber HANDLE — SwitchToFiber saves the outgoing state inside the
+ * fiber object itself, so the slot only needs to name the destination;
+ * `from` is unused. */
 #if !defined(_WIN32) && !defined(__wasi__) && (defined(__x86_64__) || defined(__aarch64__))
 #define SCR_FAST_CTX 1
 #endif
 
-#ifdef _WIN32
+#if defined(SCR_FAST_CTX) && defined(__x86_64__)
+/* rsp, rbp, rbx, r12..r15, resume address; then MXCSR and the x87 control
+ * word (callee-saved control state in the SysV ABI). */
+typedef struct {
+  void *gpr[8];
+  uint32_t mxcsr;
+  uint16_t fpcw;
+} ScrCtx;
+#elif defined(SCR_FAST_CTX)
+/* x19..x28, x29 (fp), x30 (lr), sp, d8..d15. */
+typedef struct {
+  uint64_t reg[13];
+  uint64_t fpr[8];
+} ScrCtx;
+#elif defined(_WIN32)
 typedef void *ScrCtx;
 #elif defined(__wasi__)
 typedef unsigned char ScrCtx;
-#elif defined(SCR_FAST_CTX)
-typedef struct { void *sp; } ScrCtx;
 #else
 typedef ucontext_t ScrCtx;
 #endif
@@ -398,17 +410,14 @@ typedef ucontext_t ScrCtx;
  * which dominated await-heavy programs. The runtime never uses a context
  * to change the signal mask, so the mask simply stays the process's.
  *
- * scr_ctx_swap(save, load) pushes the callee-saved registers onto the
- * current stack, stores the resulting stack pointer in *save, switches to
- * `load`, pops the target's frame, and returns into it. A fresh fiber's
- * stack is seeded with the same frame shape (scr_fiber_context_init) so
- * its first switch-in "returns" into the trampoline.
- *
- * x86_64 SysV frame (low → high): mxcsr(4) x87cw(2) pad(2), r15, r14, r13,
- * r12, rbx, rbp, return address. MXCSR and the x87 control word are
- * callee-saved control state in the SysV ABI.
- * AArch64 AAPCS64 frame: x19..x28, x29 (fp), x30 (lr), d8..d15 — 160
- * bytes. x18 (the Darwin platform register) is never touched. */
+ * scr_ctx_swap(from, to) stores the callee-saved registers, the stack
+ * pointer, and the resume address into *from, then loads *to and resumes
+ * there. The register file lives in the ScrCtx itself — inside the heap
+ * ScrFiber for fibers, on the C stack for a resumer — exactly where
+ * ucontext_t kept it, so LeakSanitizer still sees pointers a suspended
+ * fiber holds in callee-saved registers. A fresh fiber's ScrCtx is seeded
+ * by scr_fiber_context_init so its first switch-in enters the trampoline.
+ * x18 (the Darwin platform register) is never touched. */
 #if defined(__APPLE__)
 #define SCR_CTX_FN(name) \
   ".globl _" name "\n.private_extern _" name "\n.p2align 4\n_" name ":\n"
@@ -429,56 +438,56 @@ __asm__(".text\n"
 #ifdef __CET__
         "  endbr64\n"
 #endif
-        "  pushq %rbp\n"
-        "  pushq %rbx\n"
-        "  pushq %r12\n"
-        "  pushq %r13\n"
-        "  pushq %r14\n"
-        "  pushq %r15\n"
-        "  subq $8, %rsp\n"
-        "  stmxcsr (%rsp)\n"
-        "  fnstcw 4(%rsp)\n"
-        "  movq %rsp, (%rdi)\n"
-        "  movq %rsi, %rsp\n"
-        "  ldmxcsr (%rsp)\n"
-        "  fldcw 4(%rsp)\n"
-        "  addq $8, %rsp\n"
-        "  popq %r15\n"
-        "  popq %r14\n"
-        "  popq %r13\n"
-        "  popq %r12\n"
-        "  popq %rbx\n"
-        "  popq %rbp\n"
-        "  ret\n"
+        "  movq (%rsp), %rax\n"   /* resume address */
+        "  leaq 8(%rsp), %rcx\n"  /* rsp after our return */
+        "  movq %rcx, 0(%rdi)\n"
+        "  movq %rbp, 8(%rdi)\n"
+        "  movq %rbx, 16(%rdi)\n"
+        "  movq %r12, 24(%rdi)\n"
+        "  movq %r13, 32(%rdi)\n"
+        "  movq %r14, 40(%rdi)\n"
+        "  movq %r15, 48(%rdi)\n"
+        "  movq %rax, 56(%rdi)\n"
+        "  stmxcsr 64(%rdi)\n"
+        "  fnstcw 68(%rdi)\n"
+        "  movq 0(%rsi), %rsp\n"
+        "  movq 8(%rsi), %rbp\n"
+        "  movq 16(%rsi), %rbx\n"
+        "  movq 24(%rsi), %r12\n"
+        "  movq 32(%rsi), %r13\n"
+        "  movq 40(%rsi), %r14\n"
+        "  movq 48(%rsi), %r15\n"
+        "  ldmxcsr 64(%rsi)\n"
+        "  fldcw 68(%rsi)\n"
+        "  jmpq *56(%rsi)\n"
         SCR_CTX_END("scr_ctx_swap"));
 #else
 __asm__(".text\n"
         SCR_CTX_FN("scr_ctx_swap")
-        "  sub sp, sp, #160\n"
-        "  stp x19, x20, [sp, #0]\n"
-        "  stp x21, x22, [sp, #16]\n"
-        "  stp x23, x24, [sp, #32]\n"
-        "  stp x25, x26, [sp, #48]\n"
-        "  stp x27, x28, [sp, #64]\n"
-        "  stp x29, x30, [sp, #80]\n"
-        "  stp d8, d9, [sp, #96]\n"
-        "  stp d10, d11, [sp, #112]\n"
-        "  stp d12, d13, [sp, #128]\n"
-        "  stp d14, d15, [sp, #144]\n"
+        "  stp x19, x20, [x0, #0]\n"
+        "  stp x21, x22, [x0, #16]\n"
+        "  stp x23, x24, [x0, #32]\n"
+        "  stp x25, x26, [x0, #48]\n"
+        "  stp x27, x28, [x0, #64]\n"
+        "  stp x29, x30, [x0, #80]\n"
         "  mov x9, sp\n"
-        "  str x9, [x0]\n"
-        "  mov sp, x1\n"
-        "  ldp x19, x20, [sp, #0]\n"
-        "  ldp x21, x22, [sp, #16]\n"
-        "  ldp x23, x24, [sp, #32]\n"
-        "  ldp x25, x26, [sp, #48]\n"
-        "  ldp x27, x28, [sp, #64]\n"
-        "  ldp x29, x30, [sp, #80]\n"
-        "  ldp d8, d9, [sp, #96]\n"
-        "  ldp d10, d11, [sp, #112]\n"
-        "  ldp d12, d13, [sp, #128]\n"
-        "  ldp d14, d15, [sp, #144]\n"
-        "  add sp, sp, #160\n"
+        "  str x9, [x0, #96]\n"
+        "  stp d8, d9, [x0, #104]\n"
+        "  stp d10, d11, [x0, #120]\n"
+        "  stp d12, d13, [x0, #136]\n"
+        "  stp d14, d15, [x0, #152]\n"
+        "  ldp x19, x20, [x1, #0]\n"
+        "  ldp x21, x22, [x1, #16]\n"
+        "  ldp x23, x24, [x1, #32]\n"
+        "  ldp x25, x26, [x1, #48]\n"
+        "  ldp x27, x28, [x1, #64]\n"
+        "  ldp x29, x30, [x1, #80]\n"
+        "  ldr x9, [x1, #96]\n"
+        "  mov sp, x9\n"
+        "  ldp d8, d9, [x1, #104]\n"
+        "  ldp d10, d11, [x1, #120]\n"
+        "  ldp d12, d13, [x1, #136]\n"
+        "  ldp d14, d15, [x1, #152]\n"
         "  ret\n"
         SCR_CTX_END("scr_ctx_swap")
         /* First switch-in of a fresh fiber: x19 holds the trampoline. Clear
@@ -492,7 +501,13 @@ __asm__(".text\n"
         SCR_CTX_END("scr_ctx_boot"));
 extern void scr_ctx_boot(void);
 #endif
-extern void scr_ctx_swap(void **save, void *load);
+#if defined(__x86_64__)
+_Static_assert(offsetof(ScrCtx, mxcsr) == 64 && offsetof(ScrCtx, fpcw) == 68,
+               "scr_ctx_swap's x86_64 register-file offsets");
+#else
+_Static_assert(offsetof(ScrCtx, fpr) == 104, "scr_ctx_swap's AArch64 register-file offsets");
+#endif
+extern void scr_ctx_swap(ScrCtx *from, ScrCtx *to);
 #endif
 
 struct ScrFiber {
@@ -1143,7 +1158,7 @@ static void scr_switch(ScrCtx *from, ScrCtx *to, ScrFiber *to_fiber) {
   size_t size = to_fiber ? SCR_FIBER_STACK : 0;
   __sanitizer_start_switch_fiber(save, bottom, size);
 #ifdef SCR_FAST_CTX
-  scr_ctx_swap(&from->sp, to->sp);
+  scr_ctx_swap(from, to);
 #else
   swapcontext(from, to);
 #endif
@@ -1152,7 +1167,7 @@ static void scr_switch(ScrCtx *from, ScrCtx *to, ScrFiber *to_fiber) {
   __sanitizer_finish_switch_fiber(
       scr_current ? scr_current->fake_stack : scr_main_fake_stack, &old_bottom, &old_size);
 #elif defined(SCR_FAST_CTX)
-  scr_ctx_swap(&from->sp, to->sp);
+  scr_ctx_swap(from, to);
 #else
   swapcontext(from, to);
 #endif
@@ -1443,33 +1458,27 @@ static void scr_trampoline(void) {
 }
 
 #ifdef SCR_FAST_CTX
-/* Seeds a fresh stack with the frame scr_ctx_swap pops, so the first
- * switch-in returns into the trampoline with an ABI-conforming stack.
- * Only the top few words are written, so the mapping stays lazily
- * committed. */
+/* Seeds a fresh fiber's register file so its first switch-in enters the
+ * trampoline with an ABI-conforming stack. The stack itself is only
+ * written at its top word, so the mapping stays lazily committed. */
 static void scr_fiber_context_init(ScrFiber *f) {
   f->stack = scr_fiber_stack_new();
-  void **sp = (void **)(((uintptr_t)f->stack + SCR_FIBER_STACK) & ~(uintptr_t)15);
+  uintptr_t top = ((uintptr_t)f->stack + SCR_FIBER_STACK) & ~(uintptr_t)15;
+  memset(&f->ctx, 0, sizeof f->ctx);
 #if defined(__x86_64__)
-  /* After `ret` pops the trampoline address, rsp points at a NULL fake
-   * return address with rsp ≡ 8 (mod 16): the SysV function-entry state.
-   * rbp = 0 terminates frame-pointer unwinding. */
-  *--sp = NULL;                        /* trampoline's return address */
-  *--sp = (void *)scr_trampoline;      /* ret target */
-  for (int i = 0; i < 6; i++) *--sp = NULL; /* rbp, rbx, r12..r15 */
-  --sp;
-  uint32_t mxcsr = __builtin_ia32_stmxcsr();
-  uint16_t fpcw;
-  __asm__ volatile("fnstcw %0" : "=m"(fpcw));
-  memcpy((char *)sp, &mxcsr, sizeof mxcsr);
-  memcpy((char *)sp + 4, &fpcw, sizeof fpcw);
+  /* The trampoline starts like a called function: rsp ≡ 8 (mod 16) with a
+   * NULL return address at [rsp]; rbp = 0 ends frame-pointer unwinding. */
+  void **sp = (void **)top;
+  *--sp = NULL;
+  f->ctx.gpr[0] = sp;
+  f->ctx.gpr[7] = (void *)scr_trampoline;
+  f->ctx.mxcsr = __builtin_ia32_stmxcsr();
+  __asm__ volatile("fnstcw %0" : "=m"(f->ctx.fpcw));
 #else
-  sp -= 20; /* the 160-byte frame; the stack top stays 16-aligned */
-  memset(sp, 0, 160);
-  sp[0] = (void *)scr_trampoline; /* x19, consumed by scr_ctx_boot */
-  sp[11] = (void *)scr_ctx_boot;  /* x30: the frame's return target */
+  f->ctx.reg[0] = (uint64_t)(uintptr_t)scr_trampoline; /* x19, for scr_ctx_boot */
+  f->ctx.reg[11] = (uint64_t)(uintptr_t)scr_ctx_boot;  /* x30: resume address */
+  f->ctx.reg[12] = (uint64_t)top;                      /* sp */
 #endif
-  f->ctx.sp = sp;
 }
 #elif !defined(_WIN32) && !defined(__wasi__)
 /* Apple Silicon's makecontext clears all of uc_stack before installing the
