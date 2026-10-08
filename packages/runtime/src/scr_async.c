@@ -533,6 +533,11 @@ struct ScrFiber {
    * fiber (the exc-cell pattern) so run()'s window rides awaits. */
   ScrAlsCtx *als;
   bool done;
+  /* Fiberless async bodies (scr_async_inline_enter) currently running on
+   * this fiber's stack. Such a body was proven never to park, so a park
+   * or hop while this is nonzero is a compiler bug — trap loudly instead
+   * of resuming the caller out of order. */
+  unsigned inline_depth;
   /* Trampoline args: the spawn wrapper stores a pointer to a stack-local
    * argpack; the trampoline copies it out before the spawner resumes. */
   void *argpack;
@@ -1598,6 +1603,46 @@ ScrPromise *scr_async_spawn(void (*entry)(ScrFiber *, void *), void *argpack) {
 #endif
 }
 
+/* ── fiberless async calls ─────────────────────────────────────────────
+ * An async function whose body the compiler proved can never park its
+ * execution context (no await, no other suspending runtime call, directly
+ * or through the functions it calls) completes synchronously on every
+ * path, exactly like a fiber that never suspends: JS runs an async body
+ * eagerly to its first await, and the promise settles before the call
+ * returns. Running it on the caller's stack skips the fiber, its stack,
+ * and two context switches while keeping every observable effect: the
+ * settled promise is created and settled in the same order, rejections
+ * enter the unhandled ledger through the same settle path, and the frame
+ * isolates what a fresh fiber would — the Error.stack frame chain
+ * (cell->stack) and the AsyncLocalStorage context (enterWith inside the
+ * body stays inside it). The caller's exception cell is clean at any call
+ * (try/finally stashes in-flight exceptions), so a pending exception
+ * after the body is the body's own throw. */
+static void scr_inline_park_trap(void) {
+  scr_trap("scriptc: internal error: fiberless async body suspended\n");
+}
+
+void scr_async_inline_enter(ScrAsyncInline *frame) {
+  ScrExcCell *cell = scr_exc_current_cell();
+  frame->stack = cell->stack;
+  cell->stack = NULL;
+  frame->als = scr_als_ctx_retain(*scr_als_active);
+  if (scr_current != NULL) scr_current->inline_depth++;
+}
+
+ScrPromise *scr_async_inline_leave(ScrAsyncInline *frame) {
+  if (scr_current != NULL) scr_current->inline_depth--;
+  scr_exc_current_cell()->stack = (ScrStackFrame *)frame->stack;
+  ScrAlsCtx *saved = (ScrAlsCtx *)frame->als;
+  if (*scr_als_active != saved) {
+    scr_als_ctx_release(*scr_als_active);
+    *scr_als_active = saved; /* the frame's reference moves back in */
+  } else {
+    scr_als_ctx_release(saved);
+  }
+  return scr_promise_new();
+}
+
 /* A runtime-authored C continuation whose first operation awaits one known
  * dependency. Native fibers can park normally. wasm32 has no resumable C
  * stack, so queue the fiber only after the dependency settles; the entry's
@@ -1640,6 +1685,7 @@ static void scr_await_park(ScrPromise *p) {
     fputs("scriptc: internal error: await outside an async function\n", stderr);
     abort();
   }
+  if (self->inline_depth != 0) scr_inline_park_trap();
   if (p->nwaiters == p->waiters_cap) {
     p->waiters_cap = p->waiters_cap ? p->waiters_cap * 2 : 4;
     p->waiters = realloc(p->waiters, p->waiters_cap * sizeof *p->waiters);
@@ -1712,6 +1758,7 @@ static void scr_await_yield(void) {
     fputs("scriptc: internal error: await outside an async function\n", stderr);
     abort();
   }
+  if (self->inline_depth != 0) scr_inline_park_trap();
   scr_ready_push(self);
   scr_switch(&self->ctx, self->return_to, NULL);
 }

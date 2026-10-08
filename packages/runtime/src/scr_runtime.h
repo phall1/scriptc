@@ -4911,6 +4911,18 @@ ScrPromise *scr_async_spawn(void (*entry)(ScrFiber *, void *), void *argpack);
 ScrPromise *scr_async_spawn_after(ScrPromise *dependency,
                                   void (*entry)(ScrFiber *, void *),
                                   void *argpack);
+/* Fiberless async call (native targets): the compiler proves an async body
+ * can never park its execution context and runs it directly on the
+ * caller's stack between enter and leave. The frame saves what a fresh
+ * fiber would isolate — the Error.stack frame chain and the
+ * AsyncLocalStorage context — and leave restores both, returning a fresh
+ * pending promise (+1) the caller settles from the body's outcome. */
+typedef struct ScrAsyncInline {
+  void *stack;
+  void *als;
+} ScrAsyncInline;
+void scr_async_inline_enter(ScrAsyncInline *frame);
+ScrPromise *scr_async_inline_leave(ScrAsyncInline *frame);
 
 /* wasm32-wasi lowers async functions and generators through LLVM switched
  * coroutines instead of the native stack-switching implementations. The
