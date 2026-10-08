@@ -57,6 +57,20 @@ async function build() {
     runtimeSrc,
     ...(config.runtimeDefines ?? []).map((define) => `-D${define}`),
   ];
+  // Vendored archives build at -Os, which drops function alignment entirely,
+  // so their hot loops (the regex interpreter's above all) land wherever
+  // surrounding code puts them and run up to ~15% slower or faster as
+  // unrelated code changes size. Starting each vendored function on a
+  // cache-line boundary keeps their placement fixed; it costs size only in
+  // programs that link the archive. WASM code has no addresses to align.
+  const codeAlignment = config.platform === "wasi" ? [] : ["-falign-functions=64"];
+  // On x86-64 the runtime's own functions are aligned as well. Generated
+  // loops that call runtime helpers otherwise swing by up to ~14% with the
+  // helpers' offsets within their cache lines (numeric-kernels on Linux),
+  // and an x86 function already starts on a 16-byte boundary, so the extra
+  // padding is small. arm64 functions start on 4-byte boundaries, where the
+  // size cost is higher and the measured effect was not.
+  const runtimeAlignment = config.target.architecture === "x64" ? codeAlignment : [];
   const quickjs = join(vendorRoot, "quickjs-ng");
   const zlib = join(vendorRoot, "zlib");
   const mbedtls = join(vendorRoot, "mbedtls");
@@ -145,7 +159,7 @@ async function build() {
       process.stdout.write(`building ${packageManifest.name} ${flavor} runtime\n`);
       // Zig emits DWARF by default, including descriptions of functions
       // removed by section GC. Release packs must opt out explicitly.
-      const debugFlags = flavor.endsWith("release") ? ["-g0"] : [];
+      const debugFlags = flavor.endsWith("release") ? ["-g0", ...runtimeAlignment] : [];
       const units = await parallel(
         flavorSpec.runtime_units ?? matrix.runtime_units,
         async (unit) => {
@@ -202,6 +216,7 @@ async function build() {
       ...config.targetArgs,
       ...(config.compilerFlags ?? []),
       "-g0",
+      ...codeAlignment,
       ...(config.runtimeDefines ?? []).map((define) => `-D${define}`),
     ];
     const requestedArchives = new Set(matrix.archives.map((entry) => entry.id));
