@@ -6036,6 +6036,24 @@ size_t scr_f64_to_str(double x, char *buf);
  * Returns k, the digit count (≤ 17). */
 int scr_f64_digits(double x, char digits[18], int *n_out);
 
+/* Clinger's exact fast path for a VALIDATED decimal span ([+-]? digits
+ * with optional fraction and exponent; no whitespace, no Infinity): sets
+ * *out and returns true when the value is m × 10^e with m <= 2^53 and a
+ * small |e| (one correctly rounded multiply/divide, bit-identical to
+ * strtod); false means the caller must take its strtod path. */
+bool scr_decimal_fast(const char *p, size_t n, double *out);
+/* The same fast path with whole-span validation folded into its scan: -1
+ * when p[0..n) is not such a decimal literal, 1 with *out set when exact,
+ * 0 when valid but the caller must use strtod. */
+int scr_decimal_scan(const char *p, size_t n, double *out);
+
+/* Number.prototype.toFixed's digit string for finite |x| < 1e21 and
+ * 0 <= f <= 100: the spec's n (closest to |x| × 10^f on the EXACT binary
+ * value, ties up) with the point placed f digits from the right and "-"
+ * for x < 0. Writes NUL-terminated text into buf (>= 128 bytes); returns
+ * the length. */
+size_t scr_f64_to_fixed(double x, int f, char *buf);
+
 /* ToString for template literals / string coercion. Returns +1. */
 ScrStr *scr_f64_to_scrstr(double x);
 ScrStr *scr_bool_to_scrstr(bool b); /* interned "true"/"false" */
