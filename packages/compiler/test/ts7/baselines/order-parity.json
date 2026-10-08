@@ -14954,15 +14954,39 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/in-array-runtime-index.ts": {
+   "order": [
+    "<repo>/tests/corpus/in-array-runtime-index.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/json-typed-parse-direct.ts": {
    "order": [
     "<repo>/tests/corpus/json-typed-parse-direct.ts"
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/regex-exec-long-subject.ts": {
+   "order": [
+    "<repo>/tests/corpus/regex-exec-long-subject.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/regex-native-matcher.ts": {
    "order": [
     "<repo>/tests/corpus/regex-native-matcher.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/regexp-constructor-repeat.ts": {
+   "order": [
+    "<repo>/tests/corpus/regexp-constructor-repeat.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/timers-clear-many.ts": {
+   "order": [
+    "<repo>/tests/corpus/timers-clear-many.ts"
    ],
    "diags": []
   }
