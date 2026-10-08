@@ -247,15 +247,17 @@ console.log(work(["first"]));
   expect(work).not.toContain("@scr_union_release");
 });
 
-test("whole-union string comparisons keep their established owned representation", async () => {
+test("whole-union string comparisons borrow a caller's stack box", async () => {
   const module = await lower(`
 function size(text: string): number { return text.length + (text === "" ? 1 : 0); }
 function work(words: string[], index: number): number { return size(words[index]); }
 console.log(work([""], 0));
 `);
   const facts = analyzeCallLifetimes(new Map(module.functions.map((fn) => [fn.name, fn])));
-  expect(facts.parameters.has("size")).toBe(false);
+  // Strict union equality only reads the tag and payload of both boxes.
+  expect(facts.parameters.has("size")).toBe(true);
   const work = body(emitLlvmModule(module), "sc_bf_work");
-  expect(work).not.toContain("alloca %ScrUnion");
+  expect(work).toContain("alloca %ScrUnion");
+  expect(work).not.toMatch(/@scr_union_new/);
   expect(work).toContain("@sc_bf_size");
 });

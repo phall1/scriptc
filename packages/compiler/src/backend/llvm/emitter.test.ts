@@ -107,9 +107,17 @@ test("throwing-call count does not multiply identical scope cleanup", () => {
 });
 
 test("cleanup snapshots keep locals declared after an earlier throw separate", () => {
+  // An owned value: a stable binding of an immortal literal needs no cleanup.
+  const owned: IrExpr = {
+    kind: "strConcat",
+    left: literal("cre"),
+    right: literal("ated"),
+    type: STRING,
+    loc,
+  };
   const module = moduleFor([
     call(),
-    { kind: "varDecl", localId: "later", init: literal("created"), loc },
+    { kind: "varDecl", localId: "later", init: owned, loc },
     call(),
   ]);
   const blocks = cleanupBlocks(module);
