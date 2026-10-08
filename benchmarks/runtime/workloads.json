@@ -103,6 +103,34 @@
       "args": [
         "{input}"
       ]
+    },
+    {
+      "name": "cli-config",
+      "entry": "workloads/cli-config.ts",
+      "input": "cli-config",
+      "launches": 20,
+      "args": [
+        "{input}",
+        "--env",
+        "production",
+        "--max-wave",
+        "12"
+      ]
+    },
+    {
+      "name": "http-api",
+      "kind": "server",
+      "entry": "workloads/http-api.ts",
+      "args": [],
+      "client": {
+        "script": "clients/http-load.mjs",
+        "args": [
+          "--connections=64",
+          "--threads=2",
+          "--warmup=4000",
+          "--requests=40000"
+        ]
+      }
     }
   ]
 }
