@@ -2018,6 +2018,24 @@ static bool scr_sort_greater(const ScrSortCompare *c, uint64_t left, uint64_t ri
   return result > 0;
 }
 
+/* Merges touch one element they have not seen before per comparison; for
+ * reference elements that load usually misses the cache. Request it a few
+ * comparisons early so the miss overlaps the current comparator call. */
+#ifndef SCR_SORT_PREFETCH_DISTANCE
+#define SCR_SORT_PREFETCH_DISTANCE 4
+#endif
+#if defined(__GNUC__) || defined(__clang__)
+#define SCR_SORT_PREFETCH_AT(c, buf, at, limit)                      \
+  do {                                                              \
+    if (!(c).numbers && (at) < (limit))                             \
+      __builtin_prefetch(scr_slot_to_ptr((buf)[(at)]));             \
+  } while (0)
+#else
+#define SCR_SORT_PREFETCH_AT(c, buf, at, limit) ((void)0)
+#endif
+#define SCR_SORT_PREFETCH(c, buf, index, limit) \
+  SCR_SORT_PREFETCH_AT(c, buf, (index) + SCR_SORT_PREFETCH_DISTANCE, limit)
+
 /* The stable natural merge sort of the compiler's IR helper, over borrowed
  * slot copies: strictly descending runs reverse, short runs grow to 16 with
  * binary insertion after equal values, then merge passes consume pairs of
@@ -2062,6 +2080,7 @@ void scr_arr_sort_values(ScrArr *a, double count, ScrClosure *f, uint32_t arity)
       SCR_SORT_CHECK();
       end++;
       while (end < n) {
+        SCR_SORT_PREFETCH(c, src, end, n);
         bool greater = SCR_SORT_GREATER(src[end - 1], src[end]);
         SCR_SORT_CHECK();
         if (descending ? greater : !greater) end++;
@@ -2105,15 +2124,21 @@ void scr_arr_sort_values(ScrArr *a, double count, ScrClosure *f, uint32_t arity)
       }
       if (merge) {
         uint64_t left_value = src[i], right_value = src[j];
+        for (size_t ahead = 1; ahead < SCR_SORT_PREFETCH_DISTANCE; ahead++) {
+          SCR_SORT_PREFETCH_AT(c, src, i + ahead, mid);
+          SCR_SORT_PREFETCH_AT(c, src, j + ahead, right);
+        }
         while (i < mid && j < right) {
           bool greater = SCR_SORT_GREATER(left_value, right_value);
           SCR_SORT_CHECK();
           if (greater) {
             dst[k] = right_value;
             if (++j < right) right_value = src[j];
+            SCR_SORT_PREFETCH(c, src, j, right);
           } else {
             dst[k] = left_value;
             if (++i < mid) left_value = src[i];
+            SCR_SORT_PREFETCH(c, src, i, mid);
           }
           k++;
         }
