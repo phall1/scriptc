@@ -14861,6 +14861,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/3170-number-conversion-fast-paths.ts": {
+   "order": [
+    "<repo>/tests/corpus/3170-number-conversion-fast-paths.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/4032-inline-rc-fast-paths.ts": {
    "order": [
     "<repo>/tests/corpus/4032-inline-rc-fast-paths.ts"
