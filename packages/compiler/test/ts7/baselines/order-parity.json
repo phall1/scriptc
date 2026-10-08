@@ -14843,6 +14843,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/3141-map-string-key-hash.ts": {
+   "order": [
+    "<repo>/tests/corpus/3141-map-string-key-hash.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/3150-integer-remainder.ts": {
    "order": [
     "<repo>/tests/corpus/3150-integer-remainder.ts"
