@@ -1,6 +1,5 @@
 /* Focused LLVM expression emission extracted from emitter.ts. */
 import { InternalCompilerError } from "../../errors.js";
-import { callbackIgnoresReceiver } from "./constant-callbacks.js";
 import { newValueMayThrow } from "../../ir/analysis.js";
 import {
   isFfiCallbackParam,
@@ -661,7 +660,7 @@ export function emitCallExpr(
       };
       let t: string;
       if (direct && e.callee.kind === "closure") {
-        t = invoke(direct, !callbackIgnoresReceiver(known!));
+        t = invoke(direct, !host.receiverReaders.ignores(known!));
       } else {
         const fnp = B.tmp(),
           fn = B.tmp();
@@ -680,7 +679,7 @@ export function emitCallExpr(
           B.line(`${matches} = icmp eq ptr ${fn}, ${direct}`);
           B.condBr(matches, fast, fallback);
           B.startBlock(fast);
-          const specialized = invoke(direct, !callbackIgnoresReceiver(known!));
+          const specialized = invoke(direct, !host.receiverReaders.ignores(known!));
           B.br(done);
           B.startBlock(fallback);
           const indirect = invoke(fn, true);

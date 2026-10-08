@@ -158,7 +158,7 @@ import { ReferenceEffects } from "./reference-effects.js";
 import { LlvmDebugInfo } from "./debug-info.js";
 import { StackCallbacks } from "./stack-callbacks.js";
 import { findLoopArrayBorrows } from "./loop-array-borrows.js";
-import { findConstantCallbacks } from "./constant-callbacks.js";
+import { AmbientReceiverReaders, findConstantCallbacks } from "./constant-callbacks.js";
 import {
   findScalarStringSlices,
   emitStringSliceSnapshot,
@@ -507,6 +507,7 @@ export class LlEmitter {
   readonly constantCallbacks: Map<string, Map<string, string>>;
   currentConstantCallbacks: ReadonlyMap<string, string> = new Map();
   readonly stackCallbacks: StackCallbacks;
+  readonly receiverReaders: AmbientReceiverReaders;
   private readonly stackCaptures: StackCaptures;
   private borrowedParameters = new Set<string>();
   /** Parameters proven projection-only: callers may pass stack boxes. */
@@ -723,6 +724,7 @@ export class LlEmitter {
     );
     this.constantCallbacks = findConstantCallbacks(mod, this.callLifetimes);
     this.stackCallbacks = new StackCallbacks(this.fnByName);
+    this.receiverReaders = new AmbientReceiverReaders(this.fnByName);
     this.stackCaptures = new StackCaptures(this.fnByName, this.callLifetimes, this.stackCallbacks);
     for (const r of mod.records ?? []) this.recordsById.set(r.id, r);
     const traced = computeTraced(mod);
@@ -3952,16 +3954,26 @@ export class LlEmitter {
     return b;
   }
 
+  /** The payload slot of a capture box (ScrBox.slot, field 5). */
+  private boxSlot(box: string): string {
+    const slot = this.B.tmp();
+    this.B.line(`${slot} = getelementptr inbounds %ScrBox, ptr ${box}, i32 0, i32 5`);
+    return slot;
+  }
+
   boxGet(box: string, t: IrType): string {
     const B = this.B;
     const acc = boxAccess(t);
     const r = B.tmp();
+    // Scalar payloads are read in place (scr_box_get_f64/bool are a
+    // memcpy and a nonzero test of the same slot), so LLVM can keep a
+    // captured number in a register across a loop of calls.
     if (acc === "f64") {
-      this.declare(`declare double @scr_box_get_f64(ptr)`);
-      B.line(`${r} = call double @scr_box_get_f64(ptr ${box})`);
+      B.line(`${r} = load double, ptr ${this.boxSlot(box)}`);
     } else if (acc === "bool") {
-      this.declare(`declare zeroext i1 @scr_box_get_bool(ptr)`);
-      B.line(`${r} = call zeroext i1 @scr_box_get_bool(ptr ${box})`);
+      const raw = B.tmp();
+      B.line(`${raw} = load i64, ptr ${this.boxSlot(box)}`);
+      B.line(`${r} = icmp ne i64 ${raw}, 0`);
     } else {
       this.declare(`declare ptr @scr_box_get_ref(ptr)`);
       B.line(`${r} = call ptr @scr_box_get_ref(ptr ${box})`); // returns +1
@@ -3974,11 +3986,11 @@ export class LlEmitter {
     const B = this.B;
     const acc = boxAccess(t);
     if (acc === "f64") {
-      this.declare(`declare void @scr_box_set_f64(ptr, double)`);
-      B.line(`call void @scr_box_set_f64(ptr ${box}, double ${value})`);
+      B.line(`store double ${value}, ptr ${this.boxSlot(box)}`);
     } else if (acc === "bool") {
-      this.declare(`declare void @scr_box_set_bool(ptr, i1 zeroext)`);
-      B.line(`call void @scr_box_set_bool(ptr ${box}, i1 ${value})`);
+      const raw = B.tmp();
+      B.line(`${raw} = zext i1 ${value} to i64`);
+      B.line(`store i64 ${raw}, ptr ${this.boxSlot(box)}`);
     } else {
       this.declare(`declare void @scr_box_set_ref(ptr, ptr)`);
       B.line(`call void @scr_box_set_ref(ptr ${box}, ptr ${value})`);
