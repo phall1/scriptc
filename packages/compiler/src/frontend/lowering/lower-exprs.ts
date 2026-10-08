@@ -116,7 +116,7 @@ import {
 } from "./containers/array-methods.js";
 import { strCharsCall } from "./containers/array-construction.js";
 import { arrayValueRead, arrayValueStore, arrayValueType } from "./array-values.js";
-import { lowerOptionalStringIndex, lowerUnmappedStringIndex } from "./string-index.js";
+import { lowerStringElement } from "./string-index.js";
 import { tryLowerIndexedComparison } from "./indexed-comparison.js";
 import { npmStaticPackageOfPath } from "../npm-static.js";
 import { unsupportedModuleFeatureOf } from "../builtin-modules.js";
@@ -6613,6 +6613,24 @@ export function lowerElementAccess(lowerer: Lowerer, expr: ts.ElementAccessExpre
         );
       }
     }
+    // A generic JavaScript body whose checker type did not map, instantiated
+    // to a string (`stripped[length - 1]` in Base64.decode). Use the lowered
+    // value here so the receiver expression runs once.
+    if (receiverIr === null && obj.type.kind === "string") {
+      const indexed = lowerStringElement(
+        lowerer,
+        obj,
+        lowerer.lowerExpr(expr.argumentExpression),
+        lowerer.mapTypeOf(lowerer.typeOf(expr)),
+        locOf(expr),
+      );
+      if (indexed) return indexed;
+      lowerer.unsupported(
+        "SC1090",
+        expr,
+        "string indexing with this index/result shape (expected a number index and a string or string | undefined result)",
+      );
+    }
   }
   // `env[key]` on a UNION of record shapes (`ProcessEnv | Record<string,
   // string>` — the env-bag parameter pattern): the per-arm keyed read,
@@ -6713,33 +6731,14 @@ export function lowerElementAccess(lowerer: Lowerer, expr: ts.ElementAccessExpre
       // SEMANTICS.md documents the divergence; in-range integer reads
       // (the loop pattern) are JS-exact. Optional results instead retain
       // undefined for missing string properties.
-      const recv = lowerer.lowerExpr(expr.expression);
-      const index = lowerer.lowerExpr(expr.argumentExpression);
-      const resultType = lowerer.mapTypeOf(lowerer.typeOf(expr));
-      if (index.type.kind === "f64" && recv.type.kind === "string") {
-        if (resultType?.kind === "string") {
-          return {
-            kind: "strIntrinsic",
-            method: "charAt",
-            receiver: recv,
-            args: [index],
-            type: STRING,
-            loc: locOf(expr),
-          };
-        }
-        if (resultType?.kind === "union") {
-          const arms = lowerer.unions.get(resultType.unionId)?.arms;
-          if (
-            arms?.length === 2 &&
-            lowerer.armTag(resultType.unionId, STRING) >= 0 &&
-            lowerer.armTag(resultType.unionId, UNDEFINED_T) >= 0
-          ) {
-            return lowerOptionalStringIndex(lowerer, recv, index, resultType, locOf(expr));
-          }
-        }
-      }
-      const unmapped = lowerUnmappedStringIndex(lowerer, recv, index, resultType, locOf(expr));
-      if (unmapped) return unmapped;
+      const indexed = lowerStringElement(
+        lowerer,
+        lowerer.lowerExpr(expr.expression),
+        lowerer.lowerExpr(expr.argumentExpression),
+        lowerer.mapTypeOf(lowerer.typeOf(expr)),
+        locOf(expr),
+      );
+      if (indexed) return indexed;
       lowerer.unsupported(
         "SC1090",
         expr,

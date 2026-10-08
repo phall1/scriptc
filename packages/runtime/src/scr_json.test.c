@@ -560,7 +560,21 @@ int main(void) {
     scr_str_release(rendered);
     scr_dyn_release(copy);
   }
+  ScrDyn *flag = scr_dyn_new_bool(true);
+  assert(scr_dyn_is_frozen(flag) && !scr_exc_pending());
+  scr_dyn_release(flag);
+  ScrDyn *open = scr_dyn_new_obj();
+  assert(!scr_dyn_is_frozen(open) && !scr_exc_pending());
+  scr_dyn_release(open);
   ScrDyn *snapshot = scr_dyn_mark_snapshot(scr_dyn_new_obj());
+  ScrStr *field = scr_str_new("a", 1);
+  scr_dyn_obj_set(snapshot, "k", 1, scr_dyn_new_str(field));
+  scr_str_release(field);
+  assert(snapshot->copied_from_native && !scr_dyn_is_frozen(snapshot) && !scr_exc_pending());
+  snapshot->non_extensible = true;
+  snapshot->v.obj.entries[0].writable = false;
+  snapshot->v.obj.entries[0].configurable = false;
+  assert(scr_dyn_is_frozen(snapshot) && !scr_exc_pending());
   scr_dyn_release(snapshot);
   ScrDyn *fresh = scr_dyn_new_obj();
   assert(!fresh->copied_from_native);
