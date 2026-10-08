@@ -9,7 +9,15 @@
  * agents on one machine do not disturb each other's numbers. */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -150,6 +158,7 @@ function run(command, args, options = {}) {
 
 function peakRss(binary, args) {
   if (process.platform !== "darwin" && process.platform !== "linux") return null;
+  if (!existsSync("/usr/bin/time")) return null;
   const timeArgs =
     process.platform === "darwin" ? ["-l", binary, ...args] : ["-f", "rss_kib=%M", binary, ...args];
   const result = run("/usr/bin/time", timeArgs);
