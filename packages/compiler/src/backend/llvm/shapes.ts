@@ -43,6 +43,12 @@ export interface ShapeHost {
   readonly tracedUnions: Set<string>;
   readonly recordsById: Map<string, IrRecordShape>;
   readonly recordCloneShapes: ReadonlySet<string>;
+  /** Emit the live-object audit notes (`scr_obj_alloc_note` /
+   * `scr_obj_free_note`) in emitted new/free helpers. Only runtimes built
+   * with SCR_RC_AUDIT (the sanitized lane) count them; release and dev
+   * runtime packs define them empty, so plain builds omit the calls.
+   * Absent means emit. */
+  readonly objectAudit?: boolean;
 }
 
 /** Every emitted function/helper carries #0 = { sanitize_address } — see
@@ -499,8 +505,11 @@ export function emitRecordShapes(
   const defs: string[] = [];
   const records = mod.records ?? [];
   if (records.length === 0) return { typeDefs, defs };
-  host.declare(`declare void @scr_obj_alloc_note()`);
-  host.declare(`declare void @scr_obj_free_note()`);
+  const audit = host.objectAudit !== false;
+  if (audit) {
+    host.declare(`declare void @scr_obj_alloc_note()`);
+    host.declare(`declare void @scr_obj_free_note()`);
+  }
 
   for (const shape of records) {
     const struct = mangleRecordStruct(shape.id);
@@ -535,7 +544,7 @@ export function emitRecordShapes(
       );
       t++;
     }
-    freeBody.push(`  call void @scr_obj_free_note()`);
+    if (audit) freeBody.push(`  call void @scr_obj_free_note()`);
     if (traced) {
       host.declare(`declare void @scr_cyc_free(ptr)`);
       freeBody.push(`  call void @scr_cyc_free(ptr %o)`);
@@ -596,7 +605,8 @@ export function emitRecordShapes(
         `  store ptr %ovf, ptr %ovfp`,
       );
     }
-    nw.push(`  call void @scr_obj_alloc_note()`, `  ret ptr %o`, `}`, ``);
+    if (audit) nw.push(`  call void @scr_obj_alloc_note()`);
+    nw.push(`  ret ptr %o`, `}`, ``);
     defs.push(...nw);
 
     if (host.recordCloneShapes.has(shape.id)) {
@@ -659,13 +669,8 @@ export function emitRecordShapes(
           `  call void ${releaseSym(host, m.type)}(ptr %v${i}) ; ${llvmCommentText(m.name)} (acyclic)`,
         );
       });
-      gf.push(
-        `  call void @scr_obj_free_note()`,
-        `  call void @scr_cyc_free(ptr %o)`,
-        `  ret void`,
-        `}`,
-        ``,
-      );
+      if (audit) gf.push(`  call void @scr_obj_free_note()`);
+      gf.push(`  call void @scr_cyc_free(ptr %o)`, `  ret void`, `}`, ``);
       defs.push(...gf);
     }
   }
