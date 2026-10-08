@@ -3,7 +3,7 @@
  *
  * Model (see docs/ir.md):
  * - An async function's body is ordinary compiled C, run on its own fiber
- *   (dedicated ucontext stack). Calling it runs the body EAGERLY until
+ *   (dedicated stack). Calling it runs the body EAGERLY until
  *   the first suspension (JS's synchronous-prefix rule), then control
  *   returns to the spawner with a +1 promise.
  * - `await` on a pending promise parks the fiber on the promise's waiter
@@ -102,7 +102,7 @@ void __sanitizer_finish_switch_fiber(void *fake_stack_save, const void **bottom_
  * sleeps. This avoids both heap fragmentation and per-call mmap overhead.
  * The sanitizer lane unmaps every finished stack immediately. */
 #ifndef SCR_ASAN_FIBERS
-#define SCR_FIBER_SPARES 4
+#define SCR_FIBER_SPARES 64
 static SCR_TL void *scr_fiber_spares[SCR_FIBER_SPARES];
 static SCR_TL size_t scr_fiber_nspares;
 static SCR_TL bool scr_fiber_cleanup_registered;
@@ -370,16 +370,144 @@ void scr_promise_trace_v(void *p, ScrTraceVisit visit, void *ctx) {
 
 /* ── fibers and the scheduler ─────────────────────────────────────────── */
 
-/* One saved execution context. POSIX: a ucontext_t (swapcontext saves the
- * outgoing context INTO the `from` slot). Windows: the fiber HANDLE —
- * SwitchToFiber saves the outgoing state inside the fiber object itself,
- * so the slot only needs to name the destination; `from` is unused. */
-#ifdef _WIN32
+/* One saved execution context. x86_64/AArch64 POSIX: the callee-saved
+ * register file (scr_ctx_swap below). Other POSIX targets: a ucontext_t
+ * (swapcontext saves the outgoing context INTO the `from` slot). Windows:
+ * the fiber HANDLE — SwitchToFiber saves the outgoing state inside the
+ * fiber object itself, so the slot only needs to name the destination;
+ * `from` is unused. */
+#if !defined(_WIN32) && !defined(__wasi__) && (defined(__x86_64__) || defined(__aarch64__))
+#define SCR_FAST_CTX 1
+#endif
+
+#if defined(SCR_FAST_CTX) && defined(__x86_64__)
+/* rsp, rbp, rbx, r12..r15, resume address; then MXCSR and the x87 control
+ * word (callee-saved control state in the SysV ABI). */
+typedef struct {
+  void *gpr[8];
+  uint32_t mxcsr;
+  uint16_t fpcw;
+} ScrCtx;
+#elif defined(SCR_FAST_CTX)
+/* x19..x28, x29 (fp), x30 (lr), sp, d8..d15. */
+typedef struct {
+  uint64_t reg[13];
+  uint64_t fpr[8];
+} ScrCtx;
+#elif defined(_WIN32)
 typedef void *ScrCtx;
 #elif defined(__wasi__)
 typedef unsigned char ScrCtx;
 #else
 typedef ucontext_t ScrCtx;
+#endif
+
+#ifdef SCR_FAST_CTX
+/* User-space context switch: the fibers only need the ABI's callee-saved
+ * state preserved across a cooperative switch. swapcontext additionally
+ * saves and restores the process signal mask (one rt_sigprocmask syscall
+ * per switch on glibc; sigprocmask + sigaltstack + getrlimit on Darwin),
+ * which dominated await-heavy programs. The runtime never uses a context
+ * to change the signal mask, so the mask simply stays the process's.
+ *
+ * scr_ctx_swap(from, to) stores the callee-saved registers, the stack
+ * pointer, and the resume address into *from, then loads *to and resumes
+ * there. The register file lives in the ScrCtx itself — inside the heap
+ * ScrFiber for fibers, on the C stack for a resumer — exactly where
+ * ucontext_t kept it, so LeakSanitizer still sees pointers a suspended
+ * fiber holds in callee-saved registers. A fresh fiber's ScrCtx is seeded
+ * by scr_fiber_context_init so its first switch-in enters the trampoline.
+ * x18 (the Darwin platform register) is never touched. */
+#if defined(__APPLE__)
+#define SCR_CTX_FN(name) \
+  ".globl _" name "\n.private_extern _" name "\n.p2align 4\n_" name ":\n"
+#define SCR_CTX_END(name) ""
+#elif defined(__x86_64__)
+#define SCR_CTX_FN(name) \
+  ".globl " name "\n.hidden " name "\n.type " name ", @function\n.p2align 4\n" name ":\n"
+#define SCR_CTX_END(name) ".size " name ", .-" name "\n"
+#else
+#define SCR_CTX_FN(name) \
+  ".globl " name "\n.hidden " name "\n.type " name ", %function\n.p2align 4\n" name ":\n"
+#define SCR_CTX_END(name) ".size " name ", .-" name "\n"
+#endif
+
+#if defined(__x86_64__)
+__asm__(".text\n"
+        SCR_CTX_FN("scr_ctx_swap")
+#ifdef __CET__
+        "  endbr64\n"
+#endif
+        "  movq (%rsp), %rax\n"   /* resume address */
+        "  leaq 8(%rsp), %rcx\n"  /* rsp after our return */
+        "  movq %rcx, 0(%rdi)\n"
+        "  movq %rbp, 8(%rdi)\n"
+        "  movq %rbx, 16(%rdi)\n"
+        "  movq %r12, 24(%rdi)\n"
+        "  movq %r13, 32(%rdi)\n"
+        "  movq %r14, 40(%rdi)\n"
+        "  movq %r15, 48(%rdi)\n"
+        "  movq %rax, 56(%rdi)\n"
+        "  stmxcsr 64(%rdi)\n"
+        "  fnstcw 68(%rdi)\n"
+        "  movq 0(%rsi), %rsp\n"
+        "  movq 8(%rsi), %rbp\n"
+        "  movq 16(%rsi), %rbx\n"
+        "  movq 24(%rsi), %r12\n"
+        "  movq 32(%rsi), %r13\n"
+        "  movq 40(%rsi), %r14\n"
+        "  movq 48(%rsi), %r15\n"
+        "  ldmxcsr 64(%rsi)\n"
+        "  fldcw 68(%rsi)\n"
+        "  jmpq *56(%rsi)\n"
+        SCR_CTX_END("scr_ctx_swap"));
+#else
+__asm__(".text\n"
+        SCR_CTX_FN("scr_ctx_swap")
+        "  stp x19, x20, [x0, #0]\n"
+        "  stp x21, x22, [x0, #16]\n"
+        "  stp x23, x24, [x0, #32]\n"
+        "  stp x25, x26, [x0, #48]\n"
+        "  stp x27, x28, [x0, #64]\n"
+        "  stp x29, x30, [x0, #80]\n"
+        "  mov x9, sp\n"
+        "  str x9, [x0, #96]\n"
+        "  stp d8, d9, [x0, #104]\n"
+        "  stp d10, d11, [x0, #120]\n"
+        "  stp d12, d13, [x0, #136]\n"
+        "  stp d14, d15, [x0, #152]\n"
+        "  ldp x19, x20, [x1, #0]\n"
+        "  ldp x21, x22, [x1, #16]\n"
+        "  ldp x23, x24, [x1, #32]\n"
+        "  ldp x25, x26, [x1, #48]\n"
+        "  ldp x27, x28, [x1, #64]\n"
+        "  ldp x29, x30, [x1, #80]\n"
+        "  ldr x9, [x1, #96]\n"
+        "  mov sp, x9\n"
+        "  ldp d8, d9, [x1, #104]\n"
+        "  ldp d10, d11, [x1, #120]\n"
+        "  ldp d12, d13, [x1, #136]\n"
+        "  ldp d14, d15, [x1, #152]\n"
+        "  ret\n"
+        SCR_CTX_END("scr_ctx_swap")
+        /* First switch-in of a fresh fiber: x19 holds the trampoline. Clear
+         * fp and lr so unwinders stop at the fiber's base, and branch
+         * through x16 (a valid BTI `bti c` landing source). */
+        SCR_CTX_FN("scr_ctx_boot")
+        "  mov x16, x19\n"
+        "  mov x29, xzr\n"
+        "  mov x30, xzr\n"
+        "  br x16\n"
+        SCR_CTX_END("scr_ctx_boot"));
+extern void scr_ctx_boot(void);
+#endif
+#if defined(__x86_64__)
+_Static_assert(offsetof(ScrCtx, mxcsr) == 64 && offsetof(ScrCtx, fpcw) == 68,
+               "scr_ctx_swap's x86_64 register-file offsets");
+#else
+_Static_assert(offsetof(ScrCtx, fpr) == 104, "scr_ctx_swap's AArch64 register-file offsets");
+#endif
+extern void scr_ctx_swap(ScrCtx *from, ScrCtx *to);
 #endif
 
 struct ScrFiber {
@@ -405,6 +533,11 @@ struct ScrFiber {
    * fiber (the exc-cell pattern) so run()'s window rides awaits. */
   ScrAlsCtx *als;
   bool done;
+  /* Fiberless async bodies (scr_async_inline_enter) currently running on
+   * this fiber's stack. Such a body was proven never to park, so a park
+   * or hop while this is nonzero is a compiler bug — trap loudly instead
+   * of resuming the caller out of order. */
+  unsigned inline_depth;
   /* Trampoline args: the spawn wrapper stores a pointer to a stack-local
    * argpack; the trampoline copies it out before the spawner resumes. */
   void *argpack;
@@ -1029,11 +1162,17 @@ static void scr_switch(ScrCtx *from, ScrCtx *to, ScrFiber *to_fiber) {
   const void *bottom = to_fiber ? to_fiber->stack : NULL;
   size_t size = to_fiber ? SCR_FIBER_STACK : 0;
   __sanitizer_start_switch_fiber(save, bottom, size);
+#ifdef SCR_FAST_CTX
+  scr_ctx_swap(from, to);
+#else
   swapcontext(from, to);
+#endif
   const void *old_bottom;
   size_t old_size;
   __sanitizer_finish_switch_fiber(
       scr_current ? scr_current->fake_stack : scr_main_fake_stack, &old_bottom, &old_size);
+#elif defined(SCR_FAST_CTX)
+  scr_ctx_swap(from, to);
 #else
   swapcontext(from, to);
 #endif
@@ -1323,7 +1462,30 @@ static void scr_trampoline(void) {
   /* unreachable */
 }
 
-#if !defined(_WIN32) && !defined(__wasi__)
+#ifdef SCR_FAST_CTX
+/* Seeds a fresh fiber's register file so its first switch-in enters the
+ * trampoline with an ABI-conforming stack. The stack itself is only
+ * written at its top word, so the mapping stays lazily committed. */
+static void scr_fiber_context_init(ScrFiber *f) {
+  f->stack = scr_fiber_stack_new();
+  uintptr_t top = ((uintptr_t)f->stack + SCR_FIBER_STACK) & ~(uintptr_t)15;
+  memset(&f->ctx, 0, sizeof f->ctx);
+#if defined(__x86_64__)
+  /* The trampoline starts like a called function: rsp ≡ 8 (mod 16) with a
+   * NULL return address at [rsp]; rbp = 0 ends frame-pointer unwinding. */
+  void **sp = (void **)top;
+  *--sp = NULL;
+  f->ctx.gpr[0] = sp;
+  f->ctx.gpr[7] = (void *)scr_trampoline;
+  f->ctx.mxcsr = __builtin_ia32_stmxcsr();
+  __asm__ volatile("fnstcw %0" : "=m"(f->ctx.fpcw));
+#else
+  f->ctx.reg[0] = (uint64_t)(uintptr_t)scr_trampoline; /* x19, for scr_ctx_boot */
+  f->ctx.reg[11] = (uint64_t)(uintptr_t)scr_ctx_boot;  /* x30: resume address */
+  f->ctx.reg[12] = (uint64_t)top;                      /* sp */
+#endif
+}
+#elif !defined(_WIN32) && !defined(__wasi__)
 /* Apple Silicon's makecontext clears all of uc_stack before installing the
  * initial registers. Passing the whole mapping eagerly commits 256 KiB
  * (8 MiB under ASan) per call, defeating the lazy allocation above. Its
@@ -1416,7 +1578,7 @@ ScrPromise *scr_async_spawn(void (*entry)(ScrFiber *, void *), void *argpack) {
 #else
   scr_fiber_context_init(f);
 
-  ucontext_t here;
+  ScrCtx here;
 #endif
 #ifndef __wasi__
   f->return_to = &here;
@@ -1439,6 +1601,47 @@ ScrPromise *scr_async_spawn(void (*entry)(ScrFiber *, void *), void *argpack) {
   }
   return result;
 #endif
+}
+
+/* ── fiberless async calls ─────────────────────────────────────────────
+ * An async function whose body the compiler proved can never park its
+ * execution context (no await, no other suspending runtime call, directly
+ * or through the functions it calls) completes synchronously on every
+ * path, exactly like a fiber that never suspends: JS runs an async body
+ * eagerly to its first await, and the promise settles before the call
+ * returns. Running it on the caller's stack skips the fiber, its stack,
+ * and two context switches while keeping every observable effect: the
+ * settled promise is created and settled in the same order, rejections
+ * enter the unhandled ledger through the same settle path, and the frame
+ * isolates what a fresh fiber would — the Error.stack frame chain
+ * (cell->stack) and the AsyncLocalStorage context (enterWith inside the
+ * body stays inside it). The caller's exception cell is clean at any call
+ * (try/finally stashes in-flight exceptions), so a pending exception
+ * after the body is the body's own throw. */
+static void scr_inline_park_trap(void) {
+  scr_trap("scriptc: internal error: fiberless async body suspended\n");
+}
+
+void scr_async_inline_enter(ScrAsyncInline *frame) {
+  ScrExcCell *cell = scr_exc_current_cell();
+  frame->stack = cell->stack;
+  cell->stack = NULL;
+  frame->als = scr_als_ctx_retain(*SCR_ALS_SLOT());
+  if (scr_current != NULL) scr_current->inline_depth++;
+}
+
+ScrPromise *scr_async_inline_leave(ScrAsyncInline *frame) {
+  if (scr_current != NULL) scr_current->inline_depth--;
+  scr_exc_current_cell()->stack = (ScrStackFrame *)frame->stack;
+  ScrAlsCtx *saved = (ScrAlsCtx *)frame->als;
+  ScrAlsCtx **slot = SCR_ALS_SLOT();
+  if (*slot != saved) {
+    scr_als_ctx_release(*slot);
+    *slot = saved; /* the frame's reference moves back in */
+  } else {
+    scr_als_ctx_release(saved);
+  }
+  return scr_promise_new();
 }
 
 /* A runtime-authored C continuation whose first operation awaits one known
@@ -1483,6 +1686,7 @@ static void scr_await_park(ScrPromise *p) {
     fputs("scriptc: internal error: await outside an async function\n", stderr);
     abort();
   }
+  if (self->inline_depth != 0) scr_inline_park_trap();
   if (p->nwaiters == p->waiters_cap) {
     p->waiters_cap = p->waiters_cap ? p->waiters_cap * 2 : 4;
     p->waiters = realloc(p->waiters, p->waiters_cap * sizeof *p->waiters);
@@ -1555,6 +1759,7 @@ static void scr_await_yield(void) {
     fputs("scriptc: internal error: await outside an async function\n", stderr);
     abort();
   }
+  if (self->inline_depth != 0) scr_inline_park_trap();
   scr_ready_push(self);
   scr_switch(&self->ctx, self->return_to, NULL);
 }
@@ -3895,7 +4100,7 @@ static void scr_gen_switch_in(ScrGen *g) {
 #elif defined(__wasi__)
   ScrCtx here = 0;
 #else
-  ucontext_t here;
+  ScrCtx here;
 #endif
   f->return_to = &here;
   ScrFiber *me = scr_current;

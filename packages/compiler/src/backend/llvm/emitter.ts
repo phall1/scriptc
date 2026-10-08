@@ -487,6 +487,9 @@ export class LlEmitter {
   private needsRetainBox = false;
 
   readonly fnByName = new Map<string, IrFunction>();
+  /** Emitted LLVM text of every IR function body, by function name: the
+   * fiberless-async analysis scans it for suspension entry points. */
+  private readonly fnDefText = new Map<string, string>();
   readonly referenceEffects: ReferenceEffects;
   private readonly optionalArrayReads: OptionalArrayReads;
   callArrayReads = new Map<IrExpr, LocalArrayRead>();
@@ -1190,7 +1193,11 @@ export class LlEmitter {
     // Function bodies first (the literal/unit/fn-value tables fill as they
     // emit), then the file assembles around them — the runtime ABI’s order.
     const fnDefs: string[] = [];
-    for (const fn of this.mod.functions) fnDefs.push(this.emitFunction(fn));
+    for (const fn of this.mod.functions) {
+      const def = this.emitFunction(fn);
+      fnDefs.push(def);
+      this.fnDefText.set(fn.name, def);
+    }
     const errorViews: string[] = [];
     for (const property of ["name", "message"])
       if (this.mod.functions.some((fn) => fn.name === `%error.${property}.read`)) {
@@ -2518,6 +2525,144 @@ export class LlEmitter {
     return { definitions, pack, lifted, fieldTys, ret, tr, spawnParams, argPackLines };
   }
 
+  /** Settles `promise` from a clean async body result `%r` (moved in). */
+  private asyncFulfillLines(ret: IrType, promise: string): string[] {
+    switch (ret.kind) {
+      case "void":
+        this.declare(`declare void @scr_promise_fulfill_void(ptr)`);
+        return [`  call void @scr_promise_fulfill_void(ptr ${promise})`];
+      case "f64":
+      case "date":
+        this.declare(`declare void @scr_promise_fulfill_f64(ptr, double)`);
+        return [`  call void @scr_promise_fulfill_f64(ptr ${promise}, double %r)`];
+      case "bool":
+        this.declare(`declare void @scr_promise_fulfill_bool(ptr, i1 zeroext)`);
+        return [`  call void @scr_promise_fulfill_bool(ptr ${promise}, i1 %r)`];
+      case "string":
+        this.declare(`declare void @scr_promise_fulfill_str(ptr, ptr)`);
+        return [`  call void @scr_promise_fulfill_str(ptr ${promise}, ptr %r) ; moves in`];
+      case "dyn":
+        this.declare(`declare void @scr_promise_resolve_dyn(ptr, ptr)`);
+        return [`  call void @scr_promise_resolve_dyn(ptr ${promise}, ptr %r) ; moves in`];
+      default: {
+        const v = vAdapters(this.shapeHost, ret);
+        this.declare(`declare void @scr_promise_fulfill_ref(ptr, ptr, ptr, ptr, ptr)`);
+        return [
+          `  call void @scr_promise_fulfill_ref(ptr ${promise}, ptr %r, ptr ${v.retain}, ptr ${v.release}, ptr ${traceArg(this.shapeHost, ret)})`,
+        ];
+      }
+    }
+  }
+
+  /** Async functions whose calls can skip the fiber (scr_async_inline_*).
+   * A body qualifies only when nothing it runs can park its execution
+   * context: its emitted text, and the text of every module function it
+   * mentions (transitively), contains no suspension entry point. Such a
+   * body always completes before the call returns, which is exactly the
+   * behavior of a fiber that never suspends. Excluded conservatively:
+   * wasm32 (its coroutine lowering owns async bodies), programs embedding
+   * the dynamic engine, module-evaluation bodies (their promise caches),
+   * `dyn` results (resolution may adopt a thenable), and every program
+   * that uses node:test subtests — `t.test()` runs a subtest inline and
+   * awaits it on the CURRENT fiber even from synchronous code. Worker
+   * programs keep fibers too: their fiber epilogue owns context
+   * termination (a stopping worker rejects and observes the promise), which
+   * the fiberless wrapper does not reproduce. A missed suspension still
+   * cannot reorder silently: the runtime traps when a context parks while a
+   * fiberless body is on its stack. */
+  private fiberlessAsyncFunctions(): Set<string> {
+    const eligible = new Set<string>();
+    if (this.wasi || this.mod.workers === true) return eligible;
+    const embedded = this.mod.embedded;
+    if (embedded !== undefined && embedded.modules.length > 0) return eligible;
+    const suspends =
+      /@scr_(?:await_|module_await\b|promise_await_settled\b|test_sub\b|gen_yield_|async_gen_|fiber_)/;
+    for (const decl of this.decls) if (/@scr_test_sub\b/.test(decl)) return eligible;
+    for (const text of this.fnDefText.values()) if (/@scr_test_sub\b/.test(text)) return eligible;
+    const byMangled = new Map<string, string>();
+    for (const fn of this.mod.functions) {
+      byMangled.set(mangleFunction(fn.name), fn.name);
+      byMangled.set(mangleBorrowedFunction(fn.name), fn.name);
+    }
+    // Reverse mention edges, then propagate "may park" to every mentioner.
+    const mentionedBy = new Map<string, Set<string>>();
+    const parks = new Set<string>();
+    const work: string[] = [];
+    for (const [name, text] of this.fnDefText) {
+      if (suspends.test(text)) {
+        parks.add(name);
+        work.push(name);
+      }
+      for (const match of text.matchAll(/@(sc_b?f_[A-Za-z0-9_]+)/g)) {
+        const callee = byMangled.get(match[1]!);
+        if (callee === undefined || callee === name) continue;
+        let callers = mentionedBy.get(callee);
+        if (callers === undefined) mentionedBy.set(callee, (callers = new Set()));
+        callers.add(name);
+      }
+    }
+    while (work.length > 0) {
+      const callers = mentionedBy.get(work.pop()!);
+      if (callers === undefined) continue;
+      for (const caller of callers) {
+        if (parks.has(caller)) continue;
+        parks.add(caller);
+        work.push(caller);
+      }
+    }
+    for (const fn of this.mod.functions) {
+      if (fn.async !== true || fn.generator !== undefined) continue;
+      if (fn.asyncCacheGlobal !== undefined || fn.asyncCycleCacheGlobal !== undefined) continue;
+      if (fn.returnType.kind === "dyn" || parks.has(fn.name)) continue;
+      if (!this.fnDefText.has(fn.name)) continue;
+      eligible.add(fn.name);
+    }
+    return eligible;
+  }
+
+  /** The spawn wrapper of a fiberless async function: runs the body on the
+   * caller's stack between scr_async_inline_enter/leave and settles the
+   * fresh promise from its outcome — the fiber trampoline's epilogue,
+   * without the fiber. */
+  private emitFiberlessAsyncSpawn(fn: IrFunction, spawnParams: string[]): string[] {
+    const ret = fn.returnType;
+    const retTy = this.llType(ret);
+    const lifted = fn.captures !== undefined;
+    this.declare(`declare void @scr_async_inline_enter(ptr)`);
+    this.declare(`declare ptr @scr_async_inline_leave(ptr)`);
+    this.declare(`declare void @scr_promise_reject_pending(ptr)`);
+    this.declare(`declare zeroext i1 @scr_exc_pending()`);
+    if (lifted) {
+      this.declare(`declare ptr @scr_closure_retain_v(ptr)`);
+      this.declare(`declare void @scr_closure_release(ptr)`);
+    }
+    const bodyCall = `call ${retTy} @${mangleFunction(fn.name)}(${spawnParams.join(", ")})`;
+    const out = [
+      `define internal ptr @${mangleAsyncSpawn(fn.name)}(${spawnParams.join(", ")}) ${FN_ATTRS} { ; fiberless ${fn.name}`,
+      `entry:`,
+      `  %frame = alloca { ptr, ptr }`,
+      // The fiber path holds +1 on a lifted environment for the body's
+      // duration (packed, released by the trampoline); keep that lifetime.
+      ...(lifted ? [`  %env = call ptr @scr_closure_retain_v(ptr %a0)`] : []),
+      `  call void @scr_async_inline_enter(ptr %frame)`,
+      retTy === "void" ? `  ${bodyCall}` : `  %r = ${bodyCall}`,
+      ...(lifted ? [`  call void @scr_closure_release(ptr %a0)`] : []),
+      `  %pend = call zeroext i1 @scr_exc_pending()`,
+      `  %p = call ptr @scr_async_inline_leave(ptr %frame)`,
+      `  br i1 %pend, label %thrown, label %clean`,
+      `clean:`,
+      ...this.asyncFulfillLines(ret, "%p"),
+      `  ret ptr %p`,
+      `thrown:`,
+    ];
+    if (ret.kind !== "void" && isRefCounted(ret)) {
+      // An escaping throw means %r is the never-read dummy (NULL).
+      out.push(`  call void ${releaseSym(this.shapeHost, ret)}(ptr %r)`);
+    }
+    out.push(`  call void @scr_promise_reject_pending(ptr %p)`, `  ret ptr %p`, `}`, ``);
+    return out;
+  }
+
   /** Per-async-function machinery — async.ts's scaffolding, .ll
    * flavored: an argument-pack struct type, a fiber trampoline (unpacks,
    * frees the pack, runs the ordinary compiled body, settles the
@@ -2544,8 +2689,18 @@ export class LlEmitter {
         ``,
       );
     }
+    const fiberless = this.fiberlessAsyncFunctions();
     for (const fn of this.mod.functions) {
       if (fn.async !== true || fn.generator !== undefined) continue;
+      if (fiberless.has(fn.name)) {
+        const fieldTys = [
+          ...(fn.captures !== undefined ? ["ptr"] : []),
+          ...fn.params.map((p) => this.llType(p.type)),
+        ];
+        const params = fieldTys.map((ty, i) => `${ty} %a${i}`);
+        for (const line of this.emitFiberlessAsyncSpawn(fn, params)) out.push(line);
+        continue;
+      }
       const { definitions, ret, tr, spawnParams, argPackLines } =
         this.emitArgPackAndTrampolinePrologue(fn);
       for (const line of definitions) out.push(line);
@@ -2567,36 +2722,7 @@ export class LlEmitter {
           `clean:`,
           `  %pr = call ptr @scr_fiber_promise(ptr %self)`,
         );
-        switch (ret.kind) {
-          case "void":
-            this.declare(`declare void @scr_promise_fulfill_void(ptr)`);
-            tr.push(`  call void @scr_promise_fulfill_void(ptr %pr)`);
-            break;
-          case "f64":
-          case "date":
-            this.declare(`declare void @scr_promise_fulfill_f64(ptr, double)`);
-            tr.push(`  call void @scr_promise_fulfill_f64(ptr %pr, double %r)`);
-            break;
-          case "bool":
-            this.declare(`declare void @scr_promise_fulfill_bool(ptr, i1 zeroext)`);
-            tr.push(`  call void @scr_promise_fulfill_bool(ptr %pr, i1 %r)`);
-            break;
-          case "string":
-            this.declare(`declare void @scr_promise_fulfill_str(ptr, ptr)`);
-            tr.push(`  call void @scr_promise_fulfill_str(ptr %pr, ptr %r) ; moves in`);
-            break;
-          case "dyn":
-            this.declare(`declare void @scr_promise_resolve_dyn(ptr, ptr)`);
-            tr.push(`  call void @scr_promise_resolve_dyn(ptr %pr, ptr %r) ; moves in`);
-            break;
-          default: {
-            const v = vAdapters(this.shapeHost, ret);
-            this.declare(`declare void @scr_promise_fulfill_ref(ptr, ptr, ptr, ptr, ptr)`);
-            tr.push(
-              `  call void @scr_promise_fulfill_ref(ptr %pr, ptr %r, ptr ${v.retain}, ptr ${v.release}, ptr ${traceArg(this.shapeHost, ret)})`,
-            );
-          }
-        }
+        for (const line of this.asyncFulfillLines(ret, "%pr")) tr.push(line);
         tr.push(`  ret void`, `thrown:`);
         if (ret.kind !== "void" && isRefCounted(ret)) {
           // An escaping throw means %r is the never-read dummy (NULL).
