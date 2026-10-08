@@ -14879,6 +14879,18 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/array-sort-runtime-comparator.ts": {
+   "order": [
+    "<repo>/tests/corpus/array-sort-runtime-comparator.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/closure-union-locals.ts": {
+   "order": [
+    "<repo>/tests/corpus/closure-union-locals.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/fiber-switch-stress.ts": {
    "order": [
     "<repo>/tests/corpus/fiber-switch-stress.ts"
