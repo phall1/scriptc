@@ -8006,8 +8006,19 @@ void scr_assert_eq_sym(ScrSym *a, ScrSym *b, bool negated, bool deep,
 
 /* ── console ──────────────────────────────────────────────────────────── */
 
+enum {
+  SCR_ARG_F64,  /* a number argument: inspect rendering (-0 prints "-0") */
+  SCR_ARG_STR,  /* a string, verbatim */
+  SCR_ARG_BOOL, /* true / false */
+  SCR_ARG_NUM,  /* a number inside a string concatenation: String() rendering
+                 * (-0 prints "0") — scr_console_*_parts only */
+  SCR_ARG_KIND = 0xff,
+  SCR_ARG_GLUE = 0x100, /* flag: this part continues the previous argument
+                         * (no separating space) — scr_console_*_parts only */
+};
+
 typedef struct {
-  enum { SCR_ARG_F64, SCR_ARG_STR, SCR_ARG_BOOL } tag;
+  int tag; /* SCR_ARG_KIND bits, optionally | SCR_ARG_GLUE */
   union {
     double f;
     ScrStr *s;
@@ -8021,6 +8032,13 @@ void scr_console_log(size_t n, const ScrLogArg *args);
  * identical formatting, with stdout settled first so merged (2>&1) output
  * keeps source order. */
 void scr_console_error(size_t n, const ScrLogArg *args);
+/* The same lines where the compiler passed a string-concatenation argument
+ * (template literal, `"a" + n`) as its parts — glued with SCR_ARG_GLUE and
+ * numbers as SCR_ARG_NUM — so the joined string is never materialized.
+ * Separate entry points: programs using these tags cannot link against a
+ * runtime that does not understand them. */
+void scr_console_log_parts(size_t n, const ScrLogArg *args);
+void scr_console_error_parts(size_t n, const ScrLogArg *args);
 
 bool scr_fetch_web_is(const ScrDyn *value, const ScrStr *name);
 bool scr_fetch_stream_is(const ScrDyn *value);

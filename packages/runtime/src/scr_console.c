@@ -261,19 +261,21 @@ static size_t scr_console_capacity(size_t n, const ScrLogArg *args) {
 static size_t scr_console_render(char *line, size_t n, const ScrLogArg *args) {
   size_t used = 0;
   for (size_t i = 0; i < n; i++) {
-    if (i) line[used++] = ' ';
     const ScrLogArg *arg = &args[i];
-    if (arg->tag == SCR_ARG_STR) {
+    if (i && !(arg->tag & SCR_ARG_GLUE)) line[used++] = ' ';
+    int kind = arg->tag & SCR_ARG_KIND;
+    if (kind == SCR_ARG_STR) {
       memcpy(line + used, arg->v.s->data, arg->v.s->len);
       used += arg->v.s->len;
-    } else if (arg->tag == SCR_ARG_BOOL) {
+    } else if (kind == SCR_ARG_BOOL) {
       const char *text = arg->v.b ? "true" : "false";
       size_t length = arg->v.b ? 4 : 5;
       memcpy(line + used, text, length);
       used += length;
-    } else if (arg->v.f == 0 && signbit(arg->v.f)) {
+    } else if (kind == SCR_ARG_F64 && arg->v.f == 0 && signbit(arg->v.f)) {
       /* console.log renders numbers via inspect, which distinguishes -0
-       * (String(-0) is "0", but console.log(-0) prints "-0"). */
+       * (String(-0) is "0", but console.log(-0) prints "-0"). A number
+       * inside a concatenation (SCR_ARG_NUM) keeps String()'s "0". */
       memcpy(line + used, "-0", 2);
       used += 2;
     } else {
@@ -325,6 +327,14 @@ void scr_console_log(size_t n, const ScrLogArg *args) {
  * merged redirection (2>&1); JavaScript-visible stdout writes have already
  * been submitted. */
 void scr_console_error(size_t n, const ScrLogArg *args) {
+  scr_console_write(2, n, args);
+}
+
+void scr_console_log_parts(size_t n, const ScrLogArg *args) {
+  scr_console_write(1, n, args);
+}
+
+void scr_console_error_parts(size_t n, const ScrLogArg *args) {
   scr_console_write(2, n, args);
 }
 
