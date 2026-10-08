@@ -17,6 +17,12 @@ describe("runtime feature snapshots", () => {
     expr: { kind: "libCall" as const, fn, args: [], type: VOID, loc },
   });
 
+  test("native search-params brand checks link their runtime unit", () => {
+    const mod = module();
+    mod.functions[0]!.body.push(call("dyn.nativeSearchParamsIs"));
+    expect(moduleRuntimeFeatures(mod).searchParams).toBe(true);
+  });
+
   test("prototype exposure links lazy Array.prototype construction", () => {
     const mod = module();
     mod.functions[0]!.body.push(call("dyn.getPrototype"));
