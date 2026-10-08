@@ -4886,6 +4886,12 @@ void scr_obj_alloc_note(void);
 void scr_obj_free_note(void);
 #ifdef SCR_RC_AUDIT
 long scr_obj_live_count(void);
+#else
+/* Only the RC audit lane counts live objects. Other runtimes keep the
+ * out-of-line no-op symbols for direct-emission objects that still call
+ * them (scr_object.c), while runtime-internal call sites compile away. */
+#define scr_obj_alloc_note() ((void)0)
+#define scr_obj_free_note() ((void)0)
 #endif
 
 /* ── async: promises, fibers, event loop ────────────────────────────

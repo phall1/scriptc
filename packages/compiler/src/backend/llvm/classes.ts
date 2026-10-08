@@ -343,8 +343,11 @@ export function emitClassShapes(
   const defs: string[] = [];
   const emitted = (mod.classes ?? []).filter((c) => !c.runtime);
   if (emitted.length === 0) return { typeDefs, defs };
-  host.declare(`declare void @scr_obj_alloc_note()`);
-  host.declare(`declare void @scr_obj_free_note()`);
+  const audit = host.objectAudit !== false;
+  if (audit) {
+    host.declare(`declare void @scr_obj_alloc_note()`);
+    host.declare(`declare void @scr_obj_free_note()`);
+  }
 
   for (const cls of emitted) {
     const meta = metaMap.get(cls.name)!;
@@ -459,7 +462,7 @@ export function emitClassShapes(
       });
       if (isEmitterRooted) lines.push(...regCall("td", "scr_emitter_reg_drop", ""));
       if (isStreamRooted) lines.push(...stCall("tds", "scr_stream_st_release", ""));
-      lines.push(`  call void @scr_obj_free_note()`);
+      if (audit) lines.push(`  call void @scr_obj_free_note()`);
       if (traced) {
         host.declare(`declare void @scr_cyc_free(ptr)`);
         lines.push(`  call void @scr_cyc_free(ptr %o)`);
@@ -596,7 +599,8 @@ export function emitClassShapes(
       );
     }
     nw.push(...undefFieldInits(host, meta));
-    nw.push(`  call void @scr_obj_alloc_note()`, `  ret ptr %o`, `}`, ``);
+    if (audit) nw.push(`  call void @scr_obj_alloc_note()`);
+    nw.push(`  ret ptr %o`, `}`, ``);
     defs.push(...nw);
 
     if (traced) {
@@ -640,13 +644,8 @@ export function emitClassShapes(
         );
       });
       host.declare(`declare void @scr_cyc_free(ptr)`);
-      gf.push(
-        `  call void @scr_obj_free_note()`,
-        `  call void @scr_cyc_free(ptr %o)`,
-        `  ret void`,
-        `}`,
-        ``,
-      );
+      if (audit) gf.push(`  call void @scr_obj_free_note()`);
+      gf.push(`  call void @scr_cyc_free(ptr %o)`, `  ret void`, `}`, ``);
       defs.push(...gf);
     }
   }

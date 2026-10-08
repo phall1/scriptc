@@ -596,6 +596,7 @@ async function prepareExecutableInput(
         pointerBits: buildPlatform === "wasi" ? 32 : 64,
         wasi: buildPlatform === "wasi",
         runtimeAbiMarker: outputKind === "obj",
+        objectAudit: opts.sanitize === true,
       });
     } catch (err) {
       if (!(err instanceof LlvmUnsupportedError)) throw err;
@@ -664,6 +665,7 @@ async function prepareExecutableInput(
       pointerBits: buildPlatform === "wasi" ? 32 : 64,
       wasi: buildPlatform === "wasi",
       runtimeAbiMarker: useRuntimePack,
+      objectAudit: opts.sanitize === true,
     });
   } catch (err) {
     if (!(err instanceof LlvmUnsupportedError)) throw err;
@@ -1610,6 +1612,7 @@ async function compileLibraryTracked(
       targetTriple: process.env["SCRIPTC_TARGET"] ?? "",
       pointerBits: buildPlatform === "wasi" ? 32 : 64,
       wasi: buildPlatform === "wasi",
+      objectAudit: opts.sanitize === true,
     });
     timing("llvm-emit", {
       output_bytes:

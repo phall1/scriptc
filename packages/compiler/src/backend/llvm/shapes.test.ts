@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { RUNTIME_EMITTER_CLASS } from "../../ir/ir.js";
-import { releaseSym, type ShapeHost, vAdapters } from "./shapes.js";
+import { F64, type IrModule, RUNTIME_EMITTER_CLASS } from "../../ir/ir.js";
+import { emitRecordShapes, releaseSym, type ShapeHost, vAdapters } from "./shapes.js";
 
 function declarationHost(): { host: ShapeHost; declarations: string[] } {
   const declarations: string[] = [];
@@ -55,5 +55,36 @@ describe("LLVM runtime RC symbols", () => {
       retain: "@sc_retain_Widget",
       release: "@sc_release_Widget",
     });
+  });
+});
+
+describe("live-object audit notes", () => {
+  const mod: IrModule = {
+    irVersion: 15,
+    sourceFile: "audit.ts",
+    entry: "main",
+    functions: [],
+    records: [{ id: "r0", fields: [{ name: "x", type: F64 }] }],
+  };
+  const emit = (objectAudit?: boolean) => {
+    const { host, declarations } = declarationHost();
+    const defs = emitRecordShapes(
+      objectAudit === undefined ? host : { ...host, objectAudit },
+      mod,
+    ).defs.join("\n");
+    return { defs, declarations };
+  };
+
+  test("direct emission keeps the SCR_RC_AUDIT notes by default", () => {
+    const { defs, declarations } = emit();
+    expect(defs).toContain("call void @scr_obj_alloc_note()");
+    expect(defs).toContain("call void @scr_obj_free_note()");
+    expect(declarations).toContain("declare void @scr_obj_alloc_note()");
+  });
+
+  test("plain builds omit the calls and their declarations", () => {
+    const { defs, declarations } = emit(false);
+    expect(defs).not.toContain("_note()");
+    expect(declarations.filter((decl) => decl.includes("_note()"))).toEqual([]);
   });
 });

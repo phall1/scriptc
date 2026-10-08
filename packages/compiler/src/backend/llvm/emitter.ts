@@ -357,6 +357,11 @@ export interface LlvmTargetOptions {
   /** Program objects carry a strong reference to the matching runtime ABI
    * marker so manual links against an incompatible runtime fail loudly. */
   runtimeAbiMarker?: boolean;
+  /** Emit live-object audit notes in emitted new/free helpers. Only the
+   * sanitized lane's SCR_RC_AUDIT runtime counts them; production plain
+   * builds pass false so release/dev objects carry no empty calls.
+   * Defaults to true for direct emission. */
+  objectAudit?: boolean;
 }
 
 export function emitLlvmModule(mod: IrModule, options: LlvmTargetOptions = {}): string {
@@ -719,6 +724,7 @@ export class LlEmitter {
       tracedUnions: this.tracedUnions,
       recordsById: this.recordsById,
       recordCloneShapes: this.recordCloneShapes,
+      objectAudit: options.objectAudit !== false,
       unionsById: this.unionsById,
       declare: (decl) => this.declare(decl),
       needOom: () => this.needOom(),
