@@ -19,10 +19,12 @@ export interface RuntimePackArtifact {
   size: number;
 }
 
-interface RuntimePackVariant extends RuntimePackArtifact {
+export interface RuntimePackVariant extends RuntimePackArtifact {
   id: string;
   when: Record<string, boolean>;
   defines: string[];
+  /** LLVM bitcode of the same unit, imported by the helper for inlining. */
+  bitcode?: RuntimePackArtifact;
 }
 
 interface RuntimePackUnit {
@@ -161,6 +163,7 @@ export function parseRuntimePackManifest(value: unknown): RuntimePackManifest {
             const when = object(variant?.when);
             return (
               validArtifact(variantRaw) &&
+              (variant?.bitcode === undefined || validArtifact(variant.bitcode)) &&
               typeof variant?.id === "string" &&
               when !== null &&
               Object.values(when).every((entry) => typeof entry === "boolean") &&
@@ -344,7 +347,8 @@ export function validateRuntimePackIdentity(
 
 export interface RuntimePackArtifacts {
   features: RuntimeFeatureSet;
-  runtime: RuntimePackArtifact[];
+  /** Selected unit variants; each may carry its bitcode artifact. */
+  runtime: (RuntimePackArtifact & { bitcode?: RuntimePackArtifact })[];
   archives: RuntimePackArtifact[];
   systemLibraries: string[];
 }

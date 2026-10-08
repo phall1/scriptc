@@ -9,6 +9,7 @@ import type { NativeLinkFeatures } from "./native-link-info.js";
 import {
   effectiveRuntimeFeatures,
   evaluateRuntimePredicate,
+  loadRuntimeBitcode,
   loadRuntimePack,
   parseRuntimePackManifest,
   RuntimePackError,
@@ -246,6 +247,80 @@ describe("runtime pack manifests", () => {
     expect(dynamic.flavor).toBe("dev");
     expect(dynamic.runtimeObjects.map((path) => path.split("/").at(-1))).toEqual(["dynamic.o"]);
     expect(dynamic.archives.map((path) => path.split("/").at(-1))).toEqual(["qjs.a"]);
+  });
+
+  test("runtime bitcode follows the selected speed variant and is verified", async () => {
+    const { root, packagePath, manifest } = await fixture();
+    const bitcode = async (path: string, bytes: string) => {
+      await writeFile(join(root, path), bytes);
+      return {
+        path,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        size: Buffer.byteLength(bytes),
+      };
+    };
+    const unit = manifest.flavors.release!.runtime_units[0]!;
+    const withBitcode: RuntimePackManifest = {
+      ...manifest,
+      flavors: {
+        ...manifest.flavors,
+        speed: {
+          optimization: "-O2",
+          runtime_units: [
+            {
+              ...unit,
+              variants: [
+                { ...unit.variants[0]!, bitcode: await bitcode("artifacts/base.bc", "base-bc") },
+                {
+                  ...unit.variants[1]!,
+                  bitcode: await bitcode("artifacts/legacy.bc", "legacy-bc"),
+                },
+                unit.variants[2]!,
+              ],
+            },
+          ],
+        },
+      },
+    };
+    const resolver = () => packagePath;
+    // Release-flavor bitcode is never imported; only the speed flavor's is.
+    await writeFile(
+      join(root, "runtime-pack.json"),
+      JSON.stringify({
+        ...withBitcode,
+        flavors: { ...withBitcode.flavors, release: withBitcode.flavors.speed, speed: undefined },
+      }),
+    );
+    expect(
+      await loadRuntimeBitcode({ target: MACOS_ARM64_TARGET, features: BASE, resolver }),
+    ).toBeNull();
+    await writeFile(join(root, "runtime-pack.json"), JSON.stringify(withBitcode));
+    const legacy = await loadRuntimeBitcode({
+      target: MACOS_ARM64_TARGET,
+      features: { ...BASE, textDecoderLegacy: true },
+      resolver,
+    });
+    expect(legacy?.paths.map((path) => basename(path))).toEqual(["legacy.bc"]);
+    expect(legacy?.digests).toEqual([createHash("sha256").update("legacy-bc").digest("hex")]);
+    // A variant without bitcode imports nothing.
+    expect(
+      await loadRuntimeBitcode({
+        target: MACOS_ARM64_TARGET,
+        features: { ...BASE, dynamic: true },
+        resolver,
+      }),
+    ).toBeNull();
+    await writeFile(join(root, "artifacts/base.bc"), "damaged");
+    await expect(
+      loadRuntimeBitcode({ target: MACOS_ARM64_TARGET, features: BASE, resolver }),
+    ).rejects.toThrow("hash mismatch");
+    const malformed = structuredClone(withBitcode);
+    malformed.flavors.speed!.runtime_units[0]!.variants[0]!.bitcode = {
+      path: "../escape.bc",
+      sha256: "0".repeat(64),
+      size: 1,
+    };
+    expect(() => parseRuntimePackManifest(malformed)).toThrow("malformed");
   });
 
   test("a stale manifest reports its identity independently from the package", async () => {

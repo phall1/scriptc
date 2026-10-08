@@ -69,7 +69,7 @@ import { privateSiblingPath } from "./backend/build-cache.js";
 import { nativeCodegenTarget, nativeCodegenTargetRefusal } from "./backend/targets.js";
 import { windowsSubsystemLinkerArgs, type WindowsSubsystem } from "./backend/targets.js";
 import { createNativeLinkInfo } from "./backend/native-link-info.js";
-import { RuntimePackError } from "./backend/runtime-pack.js";
+import { RuntimePackError, loadRuntimeBitcode } from "./backend/runtime-pack.js";
 import { createNativeLinkPlan } from "./backend/link-plan.js";
 import {
   executableLinkerEnvironmentFingerprint,
@@ -483,6 +483,7 @@ async function emitNativeProgramObject(
   entryPath: string,
   opts: CompileRequestOptions,
   llvm: string | readonly string[],
+  features: EarlyExecutableNativeFeatures,
 ): Promise<NativeProgramObject> {
   const stem = basename(entryPath).replace(/\.(ts|mts|cts|js|mjs|cjs)$/, "");
   const artifactPath = join(opts.outDir, `${stem}.helper.o`);
@@ -503,6 +504,13 @@ async function emitNativeProgramObject(
             0,
           ),
         );
+  // Speed programs import small runtime functions from the bitcode of the
+  // exact runtime units they link, so LLVM can inline across the boundary.
+  // Release programs never do: their objects stay independent of it.
+  const runtimeBitcode =
+    opts.optimization === "speed" && opts.sanitize !== true && target !== null
+      ? await loadRuntimeBitcode({ target, features })
+      : null;
   try {
     const artifact = await emitNativeArtifact({
       outputPath: linkPath,
@@ -512,12 +520,15 @@ async function emitNativeProgramObject(
       optimization: opts.optimization === "dev" ? "0" : "2",
       ...(opts.sanitize === undefined ? {} : { sanitize: opts.sanitize }),
       partitions,
+      ...(runtimeBitcode === null
+        ? {}
+        : { importBitcode: { paths: runtimeBitcode.paths, digests: runtimeBitcode.digests } }),
     });
     return {
       linkPath,
       partitionPaths: artifact.outputPaths.slice(1),
       artifactPath,
-      dependencies: artifact.dependencies,
+      dependencies: [...artifact.dependencies, ...(runtimeBitcode?.dependencies ?? [])],
     };
   } catch (error) {
     await removeNativeProgramObject(linkPath, nativePartitionPaths(linkPath, partitions));
@@ -997,6 +1008,7 @@ async function compileTracked(
           entryPath,
           opts,
           await readFile(earlyHit.llvmPath, "utf8"),
+          earlyHit.native,
         );
         nativeInputPath = nativeProgramObject.linkPath;
       } catch (err) {
@@ -1097,7 +1109,12 @@ async function compileTracked(
         );
       }
       try {
-        nativeProgramObject = await emitNativeProgramObject(entryPath, opts, llvmSource);
+        nativeProgramObject = await emitNativeProgramObject(
+          entryPath,
+          opts,
+          llvmSource,
+          nativeFeatures,
+        );
         timing("native-object");
       } catch (err) {
         if (!(err instanceof NativeCodegenError)) throw err;
