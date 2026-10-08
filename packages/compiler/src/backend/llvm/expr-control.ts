@@ -70,7 +70,7 @@ export function emitControlExpr(
       return out;
     }
     case "toBool":
-      return { name: host.truthy(host.emitReadReceiver(e.operand)), type: e.type };
+      return { name: host.truthy(host.emitUnionProjection(e.operand)), type: e.type };
     case "logical": {
       // JS value semantics: the result is the deciding operand itself.
       // Left evaluates once, ownership moves into the result slot; when
@@ -483,7 +483,9 @@ export function emitControlExpr(
         throw new InternalCompilerError("llvm emitter bug: nullish union lacks unit arms");
       if (
         !typeEquals(e.type, e.left.type) &&
-        (e.left.kind === "varRef" || host.isStackUnionSource(e.left))
+        (e.left.kind === "varRef" ||
+          host.isStackUnionSource(e.left) ||
+          host.nullableFieldGet(e.left) !== null)
       ) {
         // Narrowed shape over a binding or a stack box (`arr[i] ?? d`,
         // `map.get(k) ?? d`): test the tag and extract the payload (+1).
@@ -491,7 +493,7 @@ export function emitControlExpr(
         // no code runs between its read and the extraction, and the
         // default never touches it. Bindings proven projection-only may
         // hold stack boxes, which must never reach RC entry points.
-        const l = host.emitReadReceiver(e.left);
+        const l = host.emitUnionProjection(e.left);
         const ty = host.llType(e.type);
         const slot = B.slot();
         B.entryAllocas.push(`${slot} = alloca ${ty}`);

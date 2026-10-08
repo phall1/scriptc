@@ -305,7 +305,7 @@ export function emitDynamicExpr(
       // Tag-UNCHECKED payload extraction: the frontend emits this only
       // where tsc's control-flow narrowing proved the tag. Ref payloads
       // come out +1. The receiver is consumed before any later expression.
-      const u = host.emitReadReceiver(e.value);
+      const u = host.emitUnionProjection(e.value);
       const arm = e.type;
       if (isUnitType(arm))
         throw new InternalCompilerError(`llvm emitter bug: unionNarrow to unit arm ${arm.kind}`);
@@ -316,7 +316,7 @@ export function emitDynamicExpr(
       // Shared-field read `r.kind`: switch on the runtime tag and read
       // the (same-typed) field from the concretely-typed payload.
       // Ref-counted results come out retained (+1), owned by this frame.
-      const u = host.emitReadReceiver(e.value);
+      const u = host.emitUnionProjection(e.value);
       const def = host.unionsById.get(e.unionId);
       if (!def)
         throw new InternalCompilerError(
@@ -338,9 +338,15 @@ export function emitDynamicExpr(
             arm.kind === "object"
               ? host.classFieldPtr(payload, arm.className, e.field)
               : host.recordFieldPtr(payload, arm.shapeId, e.field);
+          const nullable =
+            arm.kind === "object" ? host.nullableFields.get(arm.className, e.field) : null;
           const v =
             arm.kind === "object" ? host.loadField(ptr, type) : host.loadRecordField(ptr, type);
-          const value = isRefCounted(e.type) ? host.retainValue(v, e.type) : v;
+          const value = nullable
+            ? host.nullableToOwnedUnion(v, nullable)
+            : isRefCounted(e.type)
+              ? host.retainValue(v, e.type)
+              : v;
           B.line(`store ${ty} ${value}, ptr ${slot}`);
           B.br(join);
         },
@@ -486,7 +492,7 @@ export function emitDynamicExpr(
     }
     case "unionIsTag": {
       // A pure tag compare — the box is borrowed, no payload is touched.
-      const u = host.emitReadReceiver(e.value);
+      const u = host.emitUnionProjection(e.value);
       const tag = host.unionTag(u.name);
       const t = B.tmp();
       B.line(`${t} = icmp ${e.negated ? "ne" : "eq"} i32 ${tag}, ${e.tag}`);
@@ -739,13 +745,16 @@ export function emitDynamicExpr(
       // reads, Map.get results) and stack-boxed locals never allocate: the
       // compare only reads tags and payloads, and each payload has its own
       // owner, so later operands cannot invalidate an earlier stack box.
+      // A borrowed nullable-pointer field read projects its pointer the
+      // same way; borrowableInputs already proved later operands cannot
+      // replace the field.
       const operands = [e.left, e.right];
       const borrowed = borrowableInputs(host, operands);
       const inputs = operands.map((value, index) =>
         borrowed[index] ||
         host.isStackUnionSource(value) ||
         (value.kind === "varRef" && host.isStackUnionLocal(value.localId))
-          ? host.emitReadReceiver(value)
+          ? host.emitUnionProjection(value)
           : host.emitExpr(value),
       );
       const l = inputs[0]!,

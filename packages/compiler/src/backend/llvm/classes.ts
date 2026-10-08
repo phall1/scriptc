@@ -27,6 +27,7 @@ import {
   mangleVtStruct,
 } from "../mangle.js";
 import { llvmCommentText } from "./common.js";
+import type { NullableRefFields } from "./nullable-fields.js";
 import {
   FN_ATTRS,
   llFieldType,
@@ -301,12 +302,18 @@ export interface ClassHost extends ShapeHost {
  * at the interned unit instance; dyn fields start at native undefined;
  * jsval fields (an `any` class field under --dynamic) start at the engine's
  * undefined cell. */
-function undefFieldInits(host: ClassHost, meta: LlClassMeta): string[] {
+function undefFieldInits(
+  host: ClassHost,
+  meta: LlClassMeta,
+  nullable: NullableRefFields | undefined,
+): string[] {
   const out: string[] = [];
   meta.def.fields.forEach((f, i) => {
     // Error.cause uses NULL for absence; an options constructor installs
     // a value only when the cause property is present.
     if (f.name === "%cause") return;
+    // A nullable-pointer field's zeroed slot already is its unit arm.
+    if (nullable?.get(meta.def.name, f.name)) return;
     const { index } = classFieldIndex(meta, f.name);
     if (f.type.kind === "jsval" || f.type.kind === "dyn") {
       const undefinedFn = f.type.kind === "dyn" ? "scr_dyn_undefined" : "scr_jsval_undefined";
@@ -338,6 +345,7 @@ export function emitClassShapes(
   host: ClassHost,
   mod: IrModule,
   metaMap: Map<string, LlClassMeta>,
+  nullable?: NullableRefFields,
 ): { typeDefs: string[]; defs: string[] } {
   const typeDefs: string[] = [];
   const defs: string[] = [];
@@ -414,8 +422,15 @@ export function emitClassShapes(
     const isEmitterRooted = emitterRooted(meta);
     const isStreamRooted = streamRooted(meta);
     const fieldIndex = (i: number): number => fieldBase(meta) + i;
+    // Teardown, trace and gcFree see each slot's storage type: a nullable
+    // class field holds the instance pointer (NULL for the unit arm), and
+    // every class retain/release/visit entry point is NULL-tolerant.
     const indexedFields = [
-      ...cls.fields.map((f, i) => ({ name: f.name, type: f.type, index: fieldIndex(i) })),
+      ...cls.fields.map((f, i) => ({
+        name: f.name,
+        type: nullable?.storageType(cls.name, f.name, f.type) ?? f.type,
+        index: fieldIndex(i),
+      })),
     ];
     const refFields = indexedFields.filter((f) => isRefCounted(f.type));
     const bounded =
@@ -598,7 +613,7 @@ export function emitClassShapes(
         `  store ptr ${host.cstr(displayName)}, ptr %clsp ; EventEmitter prefix display name`,
       );
     }
-    nw.push(...undefFieldInits(host, meta));
+    nw.push(...undefFieldInits(host, meta, nullable));
     if (audit) nw.push(`  call void @scr_obj_alloc_note()`);
     nw.push(`  ret ptr %o`, `}`, ``);
     defs.push(...nw);

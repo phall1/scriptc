@@ -68,7 +68,11 @@ function eligible(local: IrLocal): boolean {
  * Projection results may escape: the existing emitter retains extracted
  * payloads. The enclosing union box itself must never be retained, released,
  * stored, returned, captured, or passed to arbitrary runtime code. */
-function collectUses(fn: IrFunction): Uses {
+/** True for class fields stored as nullable instance pointers: a store
+ * extracts and retains the payload, so the stored union is only projected. */
+export type NullableFieldTest = (className: string, field: string) => boolean;
+
+function collectUses(fn: IrFunction, nullableField: NullableFieldTest): Uses {
   const uses: Uses = {
     invalid: new Set(),
     written: new Set(),
@@ -159,6 +163,14 @@ function collectUses(fn: IrFunction): Uses {
       case "varDecl":
         uses.declarations.set(node.localId, (uses.declarations.get(node.localId) ?? 0) + 1);
         break;
+      case "fieldSet":
+        if (
+          node.value.kind === "varRef" &&
+          node.value.type.kind === "union" &&
+          nullableField(node.className, node.field)
+        )
+          return expr(node.obj);
+        break;
       case "assign":
         uses.written.add(node.localId);
         // Sequence expressions can rebind a previous call argument before
@@ -201,7 +213,10 @@ function collectUses(fn: IrFunction): Uses {
  * serialized or reused after a compiler transformation. Parameter facts
  * cover synchronous bodies without environments only; closure bodies get
  * local facts alone. */
-export function analyzeCallLifetimes(functions: ReadonlyMap<string, IrFunction>): CallLifetimes {
+export function analyzeCallLifetimes(
+  functions: ReadonlyMap<string, IrFunction>,
+  nullableField: NullableFieldTest = () => false,
+): CallLifetimes {
   const usesByFunction = new Map<string, Uses>();
   const nodes = new Map<string, Parameter[]>();
   const unsafe: Parameter[] = [];
@@ -214,7 +229,7 @@ export function analyzeCallLifetimes(functions: ReadonlyMap<string, IrFunction>)
   };
   for (const fn of functions.values()) {
     if (fn.async || fn.generator) continue;
-    const uses = collectUses(fn);
+    const uses = collectUses(fn, nullableField);
     usesByFunction.set(fn.name, uses);
     // Class-capturing bodies get only local facts (computed below from
     // their uses; class captures are already invalid). Binding and

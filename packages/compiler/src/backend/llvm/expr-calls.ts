@@ -718,6 +718,47 @@ export function emitCallExpr(
       const o = B.tmp();
       B.line(`${o} = call ptr @${mangleClassNew(e.className)}()`);
       const out = host.own({ name: o, type: e.type });
+      const ctorName = `%${e.className}.constructor`;
+      const borrowed = host.callLifetimes.borrowed.get(ctorName);
+      if (borrowed) {
+        // The borrowed constructor body, like a direct call: this frame
+        // owns the new object across the call, borrowed arguments stay
+        // owned by a call frame, and projection-only parameters (stores
+        // into nullable-pointer fields, tests) receive private stack boxes.
+        const projected = host.callLifetimes.parameters.get(ctorName);
+        const inputs = borrowableInputs(
+          host,
+          e.args,
+          host.referenceEffects.functions.has(ctorName),
+        );
+        host.frames.push([]);
+        const args = e.args.map((a, i) => {
+          if (borrowed.has(i + 1)) {
+            if (projected?.has(i + 1) && canStackUnion(a, host.unionsById))
+              return emitStackUnion(host, a).value;
+            if (inputs[i]) return host.emitReadReceiver(a);
+          }
+          return host.emitExpr(a);
+        });
+        args.forEach((a, i) => {
+          if (!borrowed.has(i + 1)) host.moveTemp(a);
+        });
+        const self = borrowed.has(0)
+          ? o
+          : (() => {
+              const r = B.tmp();
+              B.line(`${r} = call ptr @${mangleClassRetain(e.className)}(ptr ${o})`);
+              return r;
+            })();
+        const argList = [
+          `ptr ${self}`,
+          ...args.map((a, i) => `${host.llType(ctor.params[i + 1]!.type)} ${a.name}`),
+        ].join(", ");
+        B.line(`call void @${mangleBorrowedFunction(ctorName)}(${argList})`);
+        if (host.mayThrow.has(ctorName)) host.emitPendingCheck();
+        host.releaseFrame(host.frames.pop()!);
+        return out;
+      }
       const args = e.args.map((a) => host.emitExpr(a));
       for (const a of args) host.moveTemp(a);
       const r = B.tmp();

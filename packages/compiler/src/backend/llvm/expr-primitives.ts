@@ -801,6 +801,12 @@ export function emitRecordExpr(
     case "fieldGet": {
       const obj = host.emitReadReceiver(e.obj);
       const { ptr, type } = host.classFieldPtr(obj.name, e.className, e.field);
+      const nullable = host.nullableFieldGet(e);
+      if (nullable) {
+        const p = B.tmp();
+        B.line(`${p} = load ptr, ptr ${ptr}${host.fieldAliasAttachment(ptr)}`);
+        return host.own({ name: host.nullableToOwnedUnion(p, nullable), type: e.type });
+      }
       const v = host.loadField(ptr, type);
       if (isRefCounted(e.type))
         return host.own({ name: host.retainValue(v, e.type), type: e.type });

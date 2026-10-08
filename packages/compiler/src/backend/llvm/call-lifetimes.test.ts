@@ -529,3 +529,38 @@ test("closure bodies get local facts but never parameter facts", () => {
   fn.body.push({ kind: "exprStmt", expr: tag("value"), loc });
   expect(analyze(fn).locals.get("closure")).toEqual(new Set(["item"]));
 });
+
+test("stores into nullable-pointer class fields project the stored union", () => {
+  const self: IrType = { kind: "object", className: "Node" };
+  const store = (className: string, field: string, value: IrExpr): IrStmt => ({
+    kind: "fieldSet",
+    obj: ref("this", self),
+    className,
+    field,
+    value,
+    loc,
+  });
+  const fn: IrFunction = {
+    name: "%Node.constructor",
+    loc,
+    returnType: { kind: "void" },
+    params: [
+      { localId: "this", name: "this", type: self },
+      { localId: "value", name: "value", type: optional },
+    ],
+    locals: [local("this", self), local("value")],
+    body: [store("Node", "next", ref("value"))],
+  };
+  const nullable = (className: string, field: string): boolean =>
+    className === "Node" && field === "next";
+  const functions = new Map([[fn.name, fn]]);
+  // Ordinary union fields store (retain) the box itself.
+  expect(analyzeCallLifetimes(functions).parameters.get(fn.name)?.has(1)).toBeFalsy();
+  expect(analyzeCallLifetimes(functions, nullable).parameters.get(fn.name)).toEqual(new Set([1]));
+  // Another field of the same class keeps ordinary storage.
+  fn.body = [store("Node", "other", ref("value"))];
+  expect(analyzeCallLifetimes(functions, nullable).parameters.get(fn.name)?.has(1)).toBeFalsy();
+  // The receiver is still an ordinary use, and a second escape still rejects.
+  fn.body = [store("Node", "next", ref("value")), ret(ref("value"))];
+  expect(analyzeCallLifetimes(functions, nullable).parameters.get(fn.name)?.has(1)).toBeFalsy();
+});
