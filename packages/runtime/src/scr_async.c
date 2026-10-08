@@ -690,6 +690,86 @@ static bool scr_timer_before(const ScrTimer *a, const ScrTimer *b) {
   return a->seq < b->seq;
 }
 
+/* Heap slot of every handle-carrying timer (id != 0), so clear, ref,
+ * unref, refresh, and hasRef find their entry without scanning the heap.
+ * The scan made a server that arms and clears a timeout per request
+ * quadratic in the number of live timers. Open addressing with linear
+ * probing; deletion shifts the probe run back (no tombstones). Every heap
+ * write goes through scr_timer_set so the slots stay exact. */
+typedef struct {
+  unsigned long id; /* 0 = empty */
+  size_t slot;
+} ScrTimerSlot;
+static ScrTimerSlot *scr_timer_slots = NULL;
+static size_t scr_timer_slots_cap = 0, scr_timer_slots_len = 0;
+
+static size_t scr_timer_slot_home(unsigned long id) {
+  uint64_t h = (uint64_t)id * UINT64_C(0x9E3779B97F4A7C15);
+  return (size_t)(h >> 32) & (scr_timer_slots_cap - 1);
+}
+
+static size_t scr_timer_slot_find(unsigned long id) {
+  if (scr_timer_slots_cap == 0) return SIZE_MAX;
+  size_t mask = scr_timer_slots_cap - 1;
+  for (size_t i = scr_timer_slot_home(id); scr_timer_slots[i].id != 0; i = (i + 1) & mask) {
+    if (scr_timer_slots[i].id == id) return i;
+  }
+  return SIZE_MAX;
+}
+
+static void scr_timer_slot_put(unsigned long id, size_t slot);
+
+static void scr_timer_slots_grow(void) {
+  ScrTimerSlot *old = scr_timer_slots;
+  size_t old_cap = scr_timer_slots_cap;
+  scr_timer_slots_cap = old_cap ? old_cap * 2 : 64;
+  scr_timer_slots = calloc(scr_timer_slots_cap, sizeof *scr_timer_slots);
+  if (!scr_timer_slots) scr_oom();
+  scr_timer_slots_len = 0;
+  for (size_t i = 0; i < old_cap; i++) {
+    if (old[i].id != 0) scr_timer_slot_put(old[i].id, old[i].slot);
+  }
+  free(old);
+}
+
+static void scr_timer_slot_put(unsigned long id, size_t slot) {
+  if ((scr_timer_slots_len + 1) * 2 > scr_timer_slots_cap) scr_timer_slots_grow();
+  size_t mask = scr_timer_slots_cap - 1;
+  size_t i = scr_timer_slot_home(id);
+  while (scr_timer_slots[i].id != 0 && scr_timer_slots[i].id != id) i = (i + 1) & mask;
+  if (scr_timer_slots[i].id == 0) scr_timer_slots_len++;
+  scr_timer_slots[i].id = id;
+  scr_timer_slots[i].slot = slot;
+}
+
+static void scr_timer_slot_delete(unsigned long id) {
+  if (id == 0) return;
+  size_t i = scr_timer_slot_find(id);
+  if (i == SIZE_MAX) return;
+  size_t mask = scr_timer_slots_cap - 1;
+  for (size_t j = (i + 1) & mask; scr_timer_slots[j].id != 0; j = (j + 1) & mask) {
+    size_t home = scr_timer_slot_home(scr_timer_slots[j].id);
+    /* Entry j stays when its home lies cyclically in (i, j]. */
+    bool stays = i <= j ? (i < home && home <= j) : (i < home || home <= j);
+    if (stays) continue;
+    scr_timer_slots[i] = scr_timer_slots[j];
+    i = j;
+  }
+  scr_timer_slots[i].id = 0;
+  scr_timer_slots_len--;
+}
+
+static void scr_timer_set(size_t i, ScrTimer t) {
+  scr_timers[i] = t;
+  if (t.id != 0) scr_timer_slot_put(t.id, i);
+}
+
+static void scr_timer_swap(size_t i, size_t j) {
+  ScrTimer tmp = scr_timers[i];
+  scr_timer_set(i, scr_timers[j]);
+  scr_timer_set(j, tmp);
+}
+
 static void scr_timer_push(ScrTimer t) {
   if (scr_ntimers == scr_timers_cap) {
     scr_timers_cap = scr_timers_cap ? scr_timers_cap * 2 : 16;
@@ -698,13 +778,11 @@ static void scr_timer_push(ScrTimer t) {
   }
   if (t.reffed) scr_reffed_timers++;
   size_t i = scr_ntimers++;
-  scr_timers[i] = t;
+  scr_timer_set(i, t);
   while (i > 0) {
     size_t parent = (i - 1) / 2;
     if (!scr_timer_before(&scr_timers[i], &scr_timers[parent])) break;
-    ScrTimer tmp = scr_timers[i];
-    scr_timers[i] = scr_timers[parent];
-    scr_timers[parent] = tmp;
+    scr_timer_swap(i, parent);
     i = parent;
   }
 }
@@ -712,16 +790,16 @@ static void scr_timer_push(ScrTimer t) {
 static ScrTimer scr_timer_pop(void) {
   ScrTimer top = scr_timers[0];
   if (top.reffed && scr_reffed_timers > 0) scr_reffed_timers--;
-  scr_timers[0] = scr_timers[--scr_ntimers];
+  scr_timer_slot_delete(top.id);
+  if (--scr_ntimers == 0) return top;
+  scr_timer_set(0, scr_timers[scr_ntimers]);
   size_t i = 0;
   for (;;) {
     size_t l = 2 * i + 1, r = 2 * i + 2, min = i;
     if (l < scr_ntimers && scr_timer_before(&scr_timers[l], &scr_timers[min])) min = l;
     if (r < scr_ntimers && scr_timer_before(&scr_timers[r], &scr_timers[min])) min = r;
     if (min == i) break;
-    ScrTimer tmp = scr_timers[i];
-    scr_timers[i] = scr_timers[min];
-    scr_timers[min] = tmp;
+    scr_timer_swap(i, min);
     i = min;
   }
   return top;
@@ -767,15 +845,14 @@ static SCR_TL bool scr_firing_refresh = false; /* refresh() called mid-callback 
  * entry needs). */
 static void scr_timer_remove_at(size_t i) {
   if (scr_timers[i].reffed && scr_reffed_timers > 0) scr_reffed_timers--;
-  scr_timers[i] = scr_timers[--scr_ntimers];
-  if (i >= scr_ntimers) return;
+  scr_timer_slot_delete(scr_timers[i].id);
+  if (i >= --scr_ntimers) return;
+  scr_timer_set(i, scr_timers[scr_ntimers]);
   /* Sift up if the moved entry beats its parent, else sift down. */
   while (i > 0) {
     size_t parent = (i - 1) / 2;
     if (!scr_timer_before(&scr_timers[i], &scr_timers[parent])) break;
-    ScrTimer tmp = scr_timers[i];
-    scr_timers[i] = scr_timers[parent];
-    scr_timers[parent] = tmp;
+    scr_timer_swap(i, parent);
     i = parent;
   }
   for (;;) {
@@ -783,9 +860,7 @@ static void scr_timer_remove_at(size_t i) {
     if (l < scr_ntimers && scr_timer_before(&scr_timers[l], &scr_timers[min])) min = l;
     if (r < scr_ntimers && scr_timer_before(&scr_timers[r], &scr_timers[min])) min = r;
     if (min == i) break;
-    ScrTimer tmp = scr_timers[i];
-    scr_timers[i] = scr_timers[min];
-    scr_timers[min] = tmp;
+    scr_timer_swap(i, min);
     i = min;
   }
 }
@@ -817,10 +892,8 @@ double scr_set_timeout_handle(ScrClosure *cb, double ms) {
  * handle (id 0) cannot be unref'd by id — the compiler routes .unref()
  * only over handle-returning timers, so id 0 never reaches here. */
 static ScrTimer *scr_timer_find(unsigned long id) {
-  for (size_t i = 0; i < scr_ntimers; i++) {
-    if (scr_timers[i].id == id) return &scr_timers[i];
-  }
-  return NULL;
+  size_t i = scr_timer_slot_find(id);
+  return i == SIZE_MAX ? NULL : &scr_timers[scr_timer_slots[i].slot];
 }
 
 void scr_timer_unref(double handle) {
@@ -868,15 +941,13 @@ void scr_timer_refresh(double handle) {
     scr_firing_refresh = true;
     return;
   }
-  for (size_t i = 0; i < scr_ntimers; i++) {
-    if (scr_timers[i].id == id) {
-      ScrTimer t = scr_timers[i];
-      scr_timer_remove_at(i);
-      t.deadline_ms = scr_now_ms() + t.delay_ms;
-      t.seq = scr_timer_seq++;
-      scr_timer_push(t);
-      return;
-    }
+  ScrTimer *found = scr_timer_find(id);
+  if (found) {
+    ScrTimer t = *found;
+    scr_timer_remove_at((size_t)(found - scr_timers));
+    t.deadline_ms = scr_now_ms() + t.delay_ms;
+    t.seq = scr_timer_seq++;
+    scr_timer_push(t);
   }
 }
 
@@ -984,6 +1055,9 @@ void scr_timers_teardown(void) {
   for (size_t i = 0; i < scr_ntimers; i++) scr_closure_release(scr_timers[i].cb);
   scr_ntimers = 0;
   scr_reffed_timers = 0;
+  free(scr_timer_slots);
+  scr_timer_slots = NULL;
+  scr_timer_slots_cap = scr_timer_slots_len = 0;
   scr_immediates_teardown();
   scr_nticks_teardown();
 }
@@ -995,12 +1069,10 @@ void scr_clear_interval(double handle) {
     scr_firing_cleared = true; /* the run loop drops the callback */
     return;
   }
-  for (size_t i = 0; i < scr_ntimers; i++) {
-    if (scr_timers[i].id == id) {
-      scr_closure_release(scr_timers[i].cb);
-      scr_timer_remove_at(i);
-      return;
-    }
+  ScrTimer *found = scr_timer_find(id);
+  if (found) {
+    scr_closure_release(found->cb);
+    scr_timer_remove_at((size_t)(found - scr_timers));
   }
 }
 
