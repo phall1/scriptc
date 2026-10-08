@@ -14830,6 +14830,12 @@
     "<repo>/tests/corpus/3138-array-large-storage.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/json-typed-parse-direct.ts": {
+   "order": [
+    "<repo>/tests/corpus/json-typed-parse-direct.ts"
+   ],
+   "diags": []
   }
  }
 }

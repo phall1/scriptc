@@ -268,6 +268,20 @@ export function emitSerializationExpr(
       // path-annotated TypeError. The dyn temp is BORROWED; the result
       // joins the frame BEFORE the pending check so an unwind releases
       // the dummy harmlessly.
+      // `JSON.parse(text) as T` fuses into one schema-directed parse that
+      // falls back to exactly this route whenever the fast path declines.
+      const parsed = e.value;
+      if (!e.preserveRefs && parsed.kind === "libCall" && parsed.fn === "json.parse") {
+        const fused = host.dyn.jsonParseHelper(e.type);
+        if (fused) {
+          const text = emitBorrowedInput(host, parsed.args[0]!);
+          const r = B.tmp();
+          B.line(`${r} = call ptr @${fused}(ptr ${text.name})`);
+          const fusedOut = host.own({ name: r, type: e.type });
+          host.emitPendingCheck();
+          return fusedOut;
+        }
+      }
       const dynV = emitBorrowedInput(host, e.value);
       const helper = host.dyn.dynCheckHelper(e.type, e.preserveRefs);
       const ty = host.llType(e.type);
