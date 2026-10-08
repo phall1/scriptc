@@ -126,3 +126,19 @@ function pickFlags(n: number): boolean[] {
 let fromCall = "";
 for (let i = 0; i < 8; i++) fromCall += pickFlags(6)[i] ? "T" : "f";
 console.log("call truth", fromCall);
+
+// Number() of string element reads: missing slots convert like undefined.
+const cells: string[] = ["12", " 3.5 ", "", "x", "0x10", "-0", "1e3"];
+cells[9] = "7";
+const parsed: number[] = [];
+for (let i = -1; i < cells.length + 1; i++) parsed.push(Number(cells[i]));
+for (const k of [0.5, NaN, -0, 2 ** 32]) parsed.push(Number(cells[k]));
+console.log("number cells", parsed.join(","), Object.is(Number(cells[5]), -0));
+const rows = "a,1,2.5\nb,,x\nc,4".split("\n");
+let rowSum = 0;
+for (let r = 0; r < rows.length; r++) {
+  const cols = rows[r]!.split(",");
+  const v = Number(cols[1]) + Number(cols[2]);
+  rowSum += Number.isNaN(v) ? 100 : v;
+}
+console.log("row sum", rowSum, Number("1,2".split(",")[3]));

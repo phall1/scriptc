@@ -284,7 +284,34 @@ export function tryLowerIndexTruthiness(
     const number = tryLowerNumericIndexRead(lowerer, operand, loc);
     return number ? lowerer.ensureBool(number, node) : null;
   }
+  return tryFuseIndexRead(lowerer, operand, BOOL, (read) => read, {
+    kind: "boolLit",
+    value: false,
+    type: BOOL,
+    loc,
+  });
+}
+
+/** Fuse our own non-union array read helper with its single consumer:
+ * `present` receives the strict element read, `missing` answers holes,
+ * present undefined, and absent indices. The receiver and index evaluate
+ * once more than in the helper form, so both must be plain bindings or
+ * numeric literals (nothing can run between the state test and the read). */
+export function tryFuseIndexRead(
+  lowerer: Lowerer,
+  operand: IrExpr,
+  type: IrType,
+  present: (read: IrExpr) => IrExpr,
+  missing: IrExpr,
+): IrExpr | null {
+  if (operand.kind !== "call" || operand.args.length !== 2) return null;
+  const [arr, index] = operand.args;
+  if (arr?.type.kind !== "array" || index?.type.kind !== "f64") return null;
+  const elem = arr.type.elem;
+  if (elem.kind === "union" || elem.kind === "void") return null;
+  if (operand.callee !== lowerer.arrHofHelpers.get(`idxOr:${typeKey(elem)}`)) return null;
   if (arr.kind !== "varRef" || (index.kind !== "varRef" && index.kind !== "numLit")) return null;
+  const loc = operand.loc;
   return {
     kind: "ternary",
     cond: {
@@ -295,9 +322,9 @@ export function tryLowerIndexTruthiness(
       type: BOOL,
       loc,
     },
-    then: { kind: "arrayGet", arr, index, type: BOOL, loc },
-    else_: { kind: "boolLit", value: false, type: BOOL, loc },
-    type: BOOL,
+    then: present({ kind: "arrayGet", arr, index, type: elem, loc }),
+    else_: missing,
+    type,
     loc,
   };
 }
