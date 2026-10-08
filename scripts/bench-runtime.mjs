@@ -8,7 +8,7 @@
  * timed. A per-host advisory lock serializes measurements so concurrent
  * agents on one machine do not disturb each other's numbers. */
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -56,7 +56,10 @@ timed in the same interleaved loop as the reference to beat (--no-node skips it)
 --layouts=N (macOS/Linux) links every executable N times, shifting the program
 object by 0, 16, 32, ... bytes of padding, and spreads the timed runs evenly over
 those layouts, so verdicts cover code-placement luck instead of one placement.
-Use it for small codegen changes (e.g. --layouts=4 --runs=16).`);
+Use it for small codegen changes (e.g. --layouts=4 --runs=16).
+
+Workload names are listed in benchmarks/runtime/workloads.json; for example
+--workloads=cli-config,http-api runs only the startup and server workloads.`);
   process.exit(0);
 }
 const runs = Number(values.runs);
@@ -156,8 +159,60 @@ function generateInput(kind) {
         ["sku-" + i, "category-" + (i % 17), "product " + i, i % 40, 199 + (i % 5000)].join("\t"),
       ).join("\n") + "\n",
     );
+  } else if (kind === "cli-config") {
+    writeFileSync(path, JSON.stringify(deployManifest(), null, 2) + "\n");
   } else throw new Error(`unknown input kind ${kind}`);
   return path;
+}
+
+/** A ~110 KB project manifest for the cli-config workload: 80 services in a
+ * dependency DAG, with env interpolation (two undefined variables produce
+ * warnings) and per-service routes. Valid, so the CLI exits 0. */
+function deployManifest() {
+  const random = makeRandom(0xc0ffee);
+  const roles = ["api", "worker", "web", "cache", "queue", "search", "auth", "billing"];
+  const methods = ["GET", "POST", "PUT", "DELETE"];
+  const services = [];
+  for (let i = 0; i < 80; i++) {
+    const name = `${roles[i % roles.length]}-${String(i).padStart(2, "0")}`;
+    const dependsOn = [];
+    for (let d = 0; d < Math.floor(random() * 4) && i > 0; d++) {
+      const dep = services[Math.floor(random() * i)].name;
+      if (!dependsOn.includes(dep)) dependsOn.push(dep);
+    }
+    const env = Array.from({ length: 4 + Math.floor(random() * 7) }, (_, e) => ({
+      name: `${name.toUpperCase().replace("-", "_")}_VAR_${e}`,
+      value:
+        e === 0
+          ? `https://\${REGION}.internal/${name}`
+          : e === 1 && i % 37 === 5
+            ? `\${MISSING_${i}}`
+            : `\${ENV}-${name}-\${VAR_${e % 12}}-${Math.floor(random() * 1e6)}`,
+    }));
+    const routes = Array.from({ length: 1 + Math.floor(random() * 4) }, (_, r) => ({
+      path: `/${name}/v${1 + (r % 2)}/${["items", "status", "search", "events"][r]}`,
+      methods: methods
+        .filter(() => random() < 0.5)
+        .concat(["GET"])
+        .filter((m, k, a) => a.indexOf(m) === k),
+    }));
+    services.push({
+      name,
+      image: `registry.example.com/\${ENV}/${roles[i % roles.length]}:1.${i % 9}.${Math.floor(random() * 20)}`,
+      replicas: 1 + Math.floor(random() * 8),
+      port: 8000 + i,
+      cpu: [0.25, 0.5, 1, 2][Math.floor(random() * 4)],
+      memoryMb: [256, 512, 1024, 2048][Math.floor(random() * 4)],
+      dependsOn,
+      env,
+      routes,
+    });
+  }
+  const variables = Array.from({ length: 12 }, (_, v) => ({
+    name: `VAR_${v}`,
+    value: `value-${v}-${Math.floor(random() * 1e9).toString(36)}`,
+  }));
+  return { project: "storefront", region: "iad1", variables, services };
 }
 
 /* ── advisory lock ─────────────────────────────────────────────────────── */
@@ -236,6 +291,87 @@ function peakRss(binary, args) {
       : /rss_kib=(\d+)/.exec(result.stderr);
   if (!match) return null;
   return Number(match[1]) * (process.platform === "darwin" ? 1 : 1024);
+}
+
+/* ── server sessions ───────────────────────────────────────────────────── */
+/* A server workload binds 127.0.0.1 on port 0 and reports `PORT <n>` on
+ * stderr (the protocol of tests/harness/server.test.ts). The runner then
+ * starts the workload's load client, which is the same Node script for every
+ * server, and waits for both to exit; the client ends the session with a
+ * request that makes the server close. Compared legs: server stdout, server
+ * stderr without the PORT line, server exit status, and client stdout. The
+ * client reports timing on stderr as `BENCH {json}`. */
+function runServer(command, args, workload, { wrap } = {}) {
+  const [cmd, cmdArgs] = wrap ? [wrap[0], [...wrap.slice(1), command, ...args]] : [command, args];
+  return new Promise((resolvePromise, reject) => {
+    const server = spawn(cmd, cmdArgs, { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    let client = null;
+    let clientStdout = "";
+    let clientStderr = "";
+    let clientStatus = null;
+    let clientDone = Promise.resolve();
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      server.kill("SIGKILL");
+      client?.kill("SIGKILL");
+    }, timeoutMs);
+    server.on("error", reject);
+    server.stdout.setEncoding("utf8").on("data", (c) => (stdout += c));
+    server.stderr.setEncoding("utf8").on("data", (c) => {
+      stderr += c;
+      const port = client === null ? /^PORT (\d+)$/m.exec(stderr) : null;
+      if (port === null) return;
+      client = spawn(
+        process.execPath,
+        [join(suiteRoot, workload.client.script), `--port=${port[1]}`, ...workload.client.args],
+        { stdio: ["ignore", "pipe", "pipe"] },
+      );
+      client.stdout.setEncoding("utf8").on("data", (c) => (clientStdout += c));
+      client.stderr.setEncoding("utf8").on("data", (c) => (clientStderr += c));
+      clientDone = new Promise((done) =>
+        client.on("close", (code, signal) => {
+          clientStatus = code ?? signal;
+          // A failed client cannot shut the server down.
+          if (code !== 0) server.kill("SIGKILL");
+          done();
+        }),
+      );
+    });
+    server.on("close", async (status, signal) => {
+      if (client !== null && clientStatus === null && !timedOut) {
+        // The server exited first; give the client a moment to finish.
+        const grace = setTimeout(() => client.kill("SIGKILL"), 5000);
+        await clientDone;
+        clearTimeout(grace);
+      } else await clientDone;
+      clearTimeout(timer);
+      const benchLine = /^BENCH (.*)$/m.exec(clientStderr);
+      resolvePromise({
+        stdout,
+        stderr: stderr.replace(/^PORT \d+\n/m, ""),
+        status,
+        signal,
+        timedOut,
+        clientStatus,
+        clientStdout,
+        clientStderr: clientStderr.replace(/^BENCH .*\n/m, ""),
+        bench: benchLine ? JSON.parse(benchLine[1]) : null,
+      });
+    });
+  });
+}
+
+/** Problems with a server session, or "" when it completed cleanly. */
+function serverFailure(session) {
+  if (session.timedOut) return "timed out";
+  if (session.clientStatus === null) return "server exited without reporting a PORT line";
+  if (session.clientStatus !== 0 || session.bench === null)
+    return `load client failed (${session.clientStatus}): ${session.clientStderr.slice(0, 2000)}`;
+  if (session.signal) return `server died to ${session.signal}`;
+  return "";
 }
 
 /* ── statistics ────────────────────────────────────────────────────────── */
@@ -319,6 +455,65 @@ const report = {
   workloads: [],
 };
 
+/* Workload kinds: "process" (default) times whole launches; `launches` > 1
+ * makes each sample the median of that many sequential launches (startup-bound
+ * CLIs). "server" times the measured phase of a load-client session. */
+const categoryOf = (w) =>
+  w.kind === "server" ? "server" : (w.launches ?? 1) > 1 ? "startup" : "cpu";
+for (const w of workloads) {
+  assert.ok((w.kind ?? "process") === "process" || w.kind === "server", `${w.name}: unknown kind`);
+  if (w.kind === "server") assert.ok(w.client?.script, `${w.name}: server workloads need a client`);
+  const launches = w.launches ?? 1;
+  assert.ok(Number.isInteger(launches) && launches >= 1, `${w.name}: launches must be >= 1`);
+}
+
+/** One timing sample: { ms } on success, { failed } otherwise. */
+async function sample(w, command, args) {
+  if (w.kind === "server") {
+    const session = await runServer(command, args, w);
+    const failure = serverFailure(session) || (session.status !== 0 ? "unstable-exit" : "");
+    if (failure) return { failed: session.timedOut ? "timeout" : "unstable-exit" };
+    return { ms: session.bench.measured_ms, bench: session.bench };
+  }
+  // A startup-bound sample is the median of its launches: a few milliseconds
+  // per launch is easily disturbed by unrelated activity on the host.
+  const times = [];
+  for (let i = 0; i < (w.launches ?? 1); i++) {
+    const result = run(command, args);
+    if (result.timedOut || result.status !== 0)
+      return { failed: result.timedOut ? "timeout" : "unstable-exit" };
+    times.push(result.ms);
+  }
+  return { ms: median(times) };
+}
+
+async function serverPeakRss(binary, args, w) {
+  if (process.platform !== "darwin" && process.platform !== "linux") return null;
+  if (!existsSync("/usr/bin/time")) return null;
+  const wrap =
+    process.platform === "darwin" ? ["/usr/bin/time", "-l"] : ["/usr/bin/time", "-f", "rss_kib=%M"];
+  const session = await runServer(binary, args, w, { wrap });
+  const match =
+    process.platform === "darwin"
+      ? /(\d+)\s+maximum resident set size/.exec(session.stderr)
+      : /rss_kib=(\d+)/.exec(session.stderr);
+  if (!match) return null;
+  return Number(match[1]) * (process.platform === "darwin" ? 1 : 1024);
+}
+
+function summarizeBenches(benches) {
+  if (benches.length === 0) return undefined;
+  const pick = (key) => median(benches.map((b) => b[key]));
+  return {
+    rps: Math.round(pick("rps")),
+    p50_ms: Math.round(pick("p50_ms") * 1000) / 1000,
+    p90_ms: Math.round(pick("p90_ms") * 1000) / 1000,
+    p99_ms: Math.round(pick("p99_ms") * 1000) / 1000,
+    client_cores:
+      Math.round(median(benches.map((b) => b.client_cpu_ms / b.measured_ms)) * 100) / 100,
+  };
+}
+
 try {
   const inputs = new Map();
   for (const w of workloads)
@@ -332,14 +527,22 @@ try {
     const args = w.args.map((a) => (a === "{input}" ? inputs.get(w.input) : a));
     // The application workloads are ESM without a package.json "type"; Node's
     // reparse warning is an oracle artifact, not program output.
-    const oracle = run(process.execPath, [
+    const nodeCommand = [
       "--disable-warning=MODULE_TYPELESS_PACKAGE_JSON",
       join(suiteRoot, w.entry),
       ...args,
-    ]);
+    ];
+    const server = w.kind === "server";
+    const oracle = server
+      ? await runServer(process.execPath, nodeCommand, w)
+      : run(process.execPath, nodeCommand);
     const entry = { name: w.name, args, results: {} };
-    if (oracle.status !== 0 || oracle.timedOut) {
-      entry.error = `node oracle failed (status ${oracle.status}): ${oracle.stderr.slice(0, 2000)}`;
+    if (w.kind === "server") entry.kind = "server";
+    if ((w.launches ?? 1) > 1) entry.launches = w.launches;
+    entry.category = categoryOf(w);
+    const oracleFailure = server ? serverFailure(oracle) : oracle.timedOut ? "timed out" : "";
+    if (oracle.status !== 0 || oracleFailure) {
+      entry.error = `node oracle failed (status ${oracle.status}${oracleFailure ? `, ${oracleFailure}` : ""}): ${oracle.stderr.slice(0, 2000)}`;
       prepared.push(entry);
       continue;
     }
@@ -357,18 +560,20 @@ try {
         }
         if (layout === 0) result.bytes = built.bytes;
         result.binaries.push(built.binary);
-        const check = run(built.binary, args);
+        const check = server ? await runServer(built.binary, args, w) : run(built.binary, args);
         if (check.timedOut) {
           result.status = "timeout";
           break;
         }
-        if (
-          check.stdout !== oracle.stdout ||
-          check.stderr !== oracle.stderr ||
-          check.status !== oracle.status
-        ) {
+        const legs = [
+          ["stdout", check.stdout === oracle.stdout],
+          ["stderr", check.stderr === oracle.stderr],
+          ...(server ? [["client stdout", check.clientStdout === oracle.clientStdout]] : []),
+        ];
+        const failure = server ? serverFailure(check) : "";
+        if (failure || check.status !== oracle.status || legs.some(([, same]) => !same)) {
           result.status = "mismatch";
-          result.error = `${layout === 0 ? "" : `layout ${layout}: `}expected status ${oracle.status}, got ${check.status}; stdout ${check.stdout === oracle.stdout ? "matches" : "differs"}; stderr ${check.stderr === oracle.stderr ? "matches" : "differs"}`;
+          result.error = `${layout === 0 ? "" : `layout ${layout}: `}expected status ${oracle.status}, got ${check.status}; ${legs.map(([leg, same]) => `${leg} ${same ? "matches" : "differs"}`).join("; ")}${failure ? `; ${failure}` : ""}`;
           break;
         }
       }
@@ -377,13 +582,11 @@ try {
       result.status = "ok";
       result.samples = [];
       if (layouts > 1) result.layout_samples = result.binaries.map(() => []);
+      if (server) result.benches = [];
     }
-    entry.node_ms = Math.round(oracle.ms);
-    entry.nodeCommand = [
-      "--disable-warning=MODULE_TYPELESS_PACKAGE_JSON",
-      join(suiteRoot, w.entry),
-      ...args,
-    ];
+    entry.node_ms = Math.round(oracle.ms ?? oracle.bench.measured_ms);
+    entry.nodeCommand = nodeCommand;
+    entry.workload = w;
     prepared.push(entry);
     process.stderr.write(`prepared ${w.name}\n`);
   }
@@ -391,15 +594,23 @@ try {
   if (!values["no-lock"]) acquireLock();
   try {
     for (const entry of prepared) {
+      const w = entry.workload;
       const live = contenders.filter((c) => entry.results[c.label]?.status === "ok");
       if (live.length === 0) continue;
+      // Server sessions warm up in-process (the client's untimed phase), so
+      // one extra session per contender is enough to settle the machine.
+      const warmupRuns = w.kind === "server" ? Math.min(warmup, 1) : warmup;
       for (const c of live)
         for (const binary of entry.results[c.label].binaries)
-          for (let i = 0; i < warmup; i++) run(binary, entry.args);
+          for (let i = 0; i < warmupRuns; i++)
+            if (w.kind === "server") await sample(w, binary, entry.args);
+            else run(binary, entry.args);
       // Node is the reference the project aims to beat, so it is timed in the
-      // same interleaved loop (whole-process wall time, startup included).
+      // same interleaved loop (whole-process wall time, startup included, or
+      // the server's measured phase).
       const nodeSamples = [];
-      if (values.node) run(process.execPath, entry.nodeCommand);
+      const nodeBenches = [];
+      if (values.node) await sample(w, process.execPath, entry.nodeCommand);
       const random = makeRandom(entry.name.length * 7919);
       for (let r = 0; r < runs; r++) {
         const order = [...live];
@@ -408,21 +619,39 @@ try {
           const result = entry.results[c.label];
           // Runs rotate through the layouts so each gets an equal share.
           const layout = r % result.binaries.length;
-          const sample = run(result.binaries[layout], entry.args);
-          if (sample.timedOut || sample.status !== 0) {
-            result.status = sample.timedOut ? "timeout" : "unstable-exit";
+          const s = await sample(w, result.binaries[layout], entry.args);
+          if (s.failed) {
+            result.status = s.failed;
             break;
           }
-          const ms = Math.round(sample.ms * 100) / 100;
+          const ms = Math.round(s.ms * 100) / 100;
           result.samples.push(ms);
           result.layout_samples?.[layout].push(ms);
+          if (s.bench) result.benches.push(s.bench);
         }
-        if (values.node) nodeSamples.push(run(process.execPath, entry.nodeCommand).ms);
+        if (values.node) {
+          const s = await sample(w, process.execPath, entry.nodeCommand);
+          if (s.failed) entry.error = `node ${s.failed} during timing`;
+          else {
+            nodeSamples.push(s.ms);
+            if (s.bench) nodeBenches.push(s.bench);
+          }
+        }
       }
       if (nodeSamples.length > 0) entry.node_ms = Math.round(median(nodeSamples) * 100) / 100;
       const reference = entry.results.candidate;
       if (reference?.status === "ok" && reference.samples.length > 0 && nodeSamples.length > 0)
         entry.vs_node = Math.round((median(reference.samples) / entry.node_ms) * 1000) / 1000;
+      if (w.kind === "server") {
+        entry.server = { node: summarizeBenches(nodeBenches) };
+        for (const c of live) {
+          const result = entry.results[c.label];
+          if (result.status === "ok") entry.server[c.label] = summarizeBenches(result.benches);
+          delete result.benches;
+        }
+      }
+      if (w.kind === "server" && values.node)
+        entry.node_peak_rss_bytes = await serverPeakRss(process.execPath, entry.nodeCommand, w);
       for (const c of live) {
         const result = entry.results[c.label];
         if (result.status !== "ok") continue;
@@ -431,7 +660,10 @@ try {
           result.layout_medians_ms = result.layout_samples.map(
             (xs) => Math.round(median(xs) * 100) / 100,
           );
-        result.peak_rss_bytes = peakRss(result.binary, entry.args);
+        result.peak_rss_bytes =
+          w.kind === "server"
+            ? await serverPeakRss(result.binary, entry.args, w)
+            : peakRss(result.binary, entry.args);
       }
       const base = entry.results.baseline;
       const cand = entry.results.candidate;
@@ -451,20 +683,29 @@ try {
     for (const result of Object.values(entry.results)) {
       delete result.binary;
       delete result.binaries;
+      delete result.benches;
     }
     delete entry.nodeCommand;
+    delete entry.workload;
     report.workloads.push(entry);
   }
-  const vsNode = report.workloads.filter((w) => w.vs_node !== undefined).map((w) => w.vs_node);
-  if (vsNode.length > 0)
-    report.geomean_vs_node =
-      Math.round(Math.exp(vsNode.reduce((s, r) => s + Math.log(r), 0) / vsNode.length) * 1000) /
-      1000;
+  const geomean = (xs, digits) =>
+    Math.round(Math.exp(xs.reduce((s, r) => s + Math.log(r), 0) / xs.length) * digits) / digits;
+  const vsNode = report.workloads.filter((w) => w.vs_node !== undefined);
+  if (vsNode.length > 0) {
+    report.geomean_vs_node = geomean(
+      vsNode.map((w) => w.vs_node),
+      1000,
+    );
+    report.geomean_vs_node_by_category = {};
+    for (const category of new Set(vsNode.map((w) => w.category)))
+      report.geomean_vs_node_by_category[category] = geomean(
+        vsNode.filter((w) => w.category === category).map((w) => w.vs_node),
+        1000,
+      );
+  }
   const ratios = report.workloads.filter((w) => w.ratio !== undefined).map((w) => w.ratio);
-  if (ratios.length > 0)
-    report.geomean_ratio =
-      Math.round(Math.exp(ratios.reduce((s, r) => s + Math.log(r), 0) / ratios.length) * 10000) /
-      10000;
+  if (ratios.length > 0) report.geomean_ratio = geomean(ratios, 10000);
 } finally {
   if (!values.keep) rmSync(work, { recursive: true, force: true });
 }
@@ -475,6 +716,10 @@ if (values.json) writeFileSync(values.json, JSON.stringify(report, null, 2) + "\
 const pct = (r) => `${r < 1 ? "" : "+"}${((r - 1) * 100).toFixed(1)}%`;
 const lines = [];
 const xNode = (w) => (w.vs_node === undefined ? "-" : `${w.vs_node.toFixed(2)}x`);
+// Server rows show the measured-phase wall time for the fixed request count;
+// startup rows show the mean time per launch.
+const label = (w) =>
+  w.kind === "server" ? `${w.name} (server)` : w.launches ? `${w.name} (per launch)` : w.name;
 if (values.baseline) {
   lines.push(
     "| workload | baseline ms | candidate ms | change | 95% CI | verdict | size | node ms | candidate/node |",
@@ -488,15 +733,15 @@ for (const w of report.workloads) {
   const b = w.results.baseline;
   const c = w.results.candidate;
   if (w.error) {
-    lines.push(`| ${w.name} | ${w.error.split("\n")[0]} |`);
+    lines.push(`| ${label(w)} | ${w.error.split("\n")[0]} |`);
   } else if (values.baseline) {
     const show = (r) => (r?.status === "ok" ? r.median_ms.toFixed(1) : (r?.status ?? "-"));
     lines.push(
-      `| ${w.name} | ${show(b)} | ${show(c)} | ${w.ratio ? pct(w.ratio) : "-"} | ${w.ci95 ? `${pct(w.ci95[0])} .. ${pct(w.ci95[1])}` : "-"} | ${w.verdict ?? "-"} | ${w.size_ratio ? pct(w.size_ratio) : "-"} | ${w.node_ms} | ${xNode(w)} |`,
+      `| ${label(w)} | ${show(b)} | ${show(c)} | ${w.ratio ? pct(w.ratio) : "-"} | ${w.ci95 ? `${pct(w.ci95[0])} .. ${pct(w.ci95[1])}` : "-"} | ${w.verdict ?? "-"} | ${w.size_ratio ? pct(w.size_ratio) : "-"} | ${w.node_ms} | ${xNode(w)} |`,
     );
   } else {
     lines.push(
-      `| ${w.name} | ${c?.median_ms?.toFixed(1) ?? "-"} | ${c?.status ?? "-"} | ${c?.bytes ?? "-"} | ${c?.peak_rss_bytes ? (c.peak_rss_bytes / 1048576).toFixed(1) : "-"} | ${w.node_ms} | ${xNode(w)} |`,
+      `| ${label(w)} | ${c?.median_ms?.toFixed(1) ?? "-"} | ${c?.status ?? "-"} | ${c?.bytes ?? "-"} | ${c?.peak_rss_bytes ? (c.peak_rss_bytes / 1048576).toFixed(1) : "-"} | ${w.node_ms} | ${xNode(w)} |`,
     );
   }
 }
@@ -517,12 +762,33 @@ if (layouts > 1) {
     if (spreads.length > 0) lines.push(`- ${w.name}: ${spreads.join(", ")}`);
   }
 }
+const servers = report.workloads.filter((w) => w.server);
+if (servers.length > 0) {
+  lines.push(
+    "",
+    "| server workload | server | req/s | p50 ms | p90 ms | p99 ms | client cores | peak RSS MiB |",
+    "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+  );
+  for (const w of servers)
+    for (const who of ["node", "baseline", "candidate"]) {
+      const s = w.server[who];
+      if (!s) continue;
+      const rss = who === "node" ? w.node_peak_rss_bytes : w.results[who]?.peak_rss_bytes;
+      lines.push(
+        `| ${w.name} | ${who} | ${s.rps} | ${s.p50_ms.toFixed(2)} | ${s.p90_ms.toFixed(2)} | ${s.p99_ms.toFixed(2)} | ${s.client_cores.toFixed(2)} | ${rss ? (rss / 1048576).toFixed(1) : "-"} |`,
+      );
+    }
+}
 if (report.geomean_ratio !== undefined)
   lines.push("", `geomean change: ${pct(report.geomean_ratio)}`);
-if (report.geomean_vs_node !== undefined)
+if (report.geomean_vs_node !== undefined) {
   lines.push(
     `geomean candidate/node: ${report.geomean_vs_node.toFixed(3)}x (lower is better; goal: well below 1)`,
   );
+  const byCategory = Object.entries(report.geomean_vs_node_by_category);
+  if (byCategory.length > 1)
+    lines.push(`  by category: ${byCategory.map(([k, v]) => `${k} ${v.toFixed(3)}x`).join(", ")}`);
+}
 console.log(lines.join("\n"));
 const broken = report.workloads.some(
   (w) => w.error || Object.values(w.results).some((r) => r.status !== "ok"),
