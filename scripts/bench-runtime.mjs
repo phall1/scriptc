@@ -10,6 +10,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -35,6 +36,7 @@ const { values } = parseArgs({
     runs: { type: "string", default: "15" },
     warmup: { type: "string", default: "2" },
     timeout: { type: "string", default: "120" },
+    layouts: { type: "string", default: "1" },
     json: { type: "string" },
     "no-lock": { type: "boolean", default: false },
     node: { type: "boolean", default: true },
@@ -44,11 +46,17 @@ const { values } = parseArgs({
 });
 if (values.help) {
   console.log(`Usage: node scripts/bench-runtime.mjs [--candidate=<checkout>] [--baseline=<checkout>]
-       [--workloads=a,b] [--runs=15] [--warmup=2] [--timeout=120] [--json=<file>] [--no-lock] [--no-node] [--keep]
+       [--workloads=a,b] [--runs=15] [--warmup=2] [--timeout=120] [--layouts=1] [--json=<file>]
+       [--no-lock] [--no-node] [--keep]
 
 Each checkout must have a built CLI (packages/cli/dist/bootstrap.js) and native
 artifacts for this host. Without --baseline, reports absolute times only. Node is
-timed in the same interleaved loop as the reference to beat (--no-node skips it).`);
+timed in the same interleaved loop as the reference to beat (--no-node skips it).
+
+--layouts=N (macOS/Linux) links every executable N times, shifting the program
+object by 0, 16, 32, ... bytes of padding, and spreads the timed runs evenly over
+those layouts, so verdicts cover code-placement luck instead of one placement.
+Use it for small codegen changes (e.g. --layouts=4 --runs=16).`);
   process.exit(0);
 }
 const runs = Number(values.runs);
@@ -56,6 +64,12 @@ const warmup = Number(values.warmup);
 const timeoutMs = Number(values.timeout) * 1000;
 assert.ok(Number.isInteger(runs) && runs >= 3 && runs <= 200, "--runs must be 3..200");
 assert.ok(Number.isInteger(warmup) && warmup >= 0 && warmup <= 20, "--warmup must be 0..20");
+const layouts = Number(values.layouts);
+assert.ok(Number.isInteger(layouts) && layouts >= 1 && layouts <= 8, "--layouts must be 1..8");
+assert.ok(
+  layouts === 1 || process.platform === "darwin" || process.platform === "linux",
+  "--layouts needs macOS or Linux",
+);
 
 const manifest = JSON.parse(readFileSync(join(suiteRoot, "workloads.json"), "utf8"));
 const selected = values.workloads ? new Set(values.workloads.split(",")) : null;
@@ -71,6 +85,57 @@ if (selected) {
 const work = mkdtempSync(
   join(process.platform === "win32" ? tmpdir() : "/tmp", "scriptc-bench-runtime-"),
 );
+
+/* ── code-layout perturbation ──────────────────────────────────────────── */
+// Layout k > 0 links a retained k*16-byte padding object directly before the
+// program object, through a SCRIPTC_LINKER wrapper that forwards to clang (the
+// default linker driver on macOS and Linux). Code after that point moves as if
+// earlier code had grown; any checkout's compiler can be perturbed this way.
+function layoutTooling() {
+  if (layouts === 1) return null;
+  const root = join(work, "layouts");
+  mkdirSync(root, { recursive: true });
+  const symbol =
+    process.platform === "darwin" ? "_scriptc_bench_layout_pad" : "scriptc_bench_layout_pad";
+  const pads = [null];
+  for (let k = 1; k < layouts; k++) {
+    const source = join(root, `pad${k}.s`);
+    const object = join(root, `pad${k}.o`);
+    writeFileSync(
+      source,
+      process.platform === "darwin"
+        ? `.section __TEXT,__text,regular,pure_instructions\n.globl ${symbol}\n.no_dead_strip ${symbol}\n.p2align 0\n${symbol}:\n.fill ${k * 16},1,0xcc\n`
+        : `.section .text.scriptc_bench_layout_pad,"axR",@progbits\n.globl ${symbol}\n.p2align 0\n${symbol}:\n.fill ${k * 16},1,0xcc\n`,
+    );
+    const assembled = run("clang", ["-c", source, "-o", object], { timeout: 60_000 });
+    assert.equal(assembled.status, 0, `cannot assemble layout padding: ${assembled.stderr}`);
+    pads.push(object);
+  }
+  const wrapper = join(root, "link.mjs");
+  writeFileSync(
+    wrapper,
+    `#!/usr/bin/env node
+import { spawnSync } from "node:child_process";
+import { basename } from "node:path";
+const args = process.argv.slice(2);
+const pad = process.env.SCRIPTC_BENCH_LAYOUT_PAD;
+let out = args;
+if (pad && !args.some((a) => a.startsWith("-print-prog-name"))) {
+  const at = args.findIndex((a) => basename(a).startsWith(".scriptc-native-program-object-"));
+  if (at < 0) {
+    process.stderr.write("bench layout wrapper: no program object on the link line\\n");
+    process.exit(2);
+  }
+  out = ["-Wl,-u,${symbol}", ...args.slice(0, at), pad, ...args.slice(at)];
+}
+const result = spawnSync("clang", out, { stdio: "inherit" });
+process.exit(result.status ?? 1);
+`,
+  );
+  chmodSync(wrapper, 0o755);
+  return { wrapper, pads };
+}
+const layoutTools = layoutTooling();
 
 /* ── inputs for file-processing applications ──────────────────────────── */
 function generateInput(kind) {
@@ -212,15 +277,19 @@ function revision(root) {
   });
   return r.stdout.trim() + (dirty.stdout.trim() ? "+dirty" : "");
 }
-function build(label, root, workload) {
+function build(label, root, workload, layout = 0) {
   const cli = cliFor(root);
-  const out = join(work, label, workload.name);
+  const out = join(work, label, layout === 0 ? workload.name : `${workload.name}.layout${layout}`);
   mkdirSync(dirname(out), { recursive: true });
   const cache = join(work, label, ".cache");
   mkdirSync(cache, { recursive: true });
   const env = { ...process.env, SCRIPTC_CACHE_DIR: cache };
   delete env.SCRIPTC_NO_CACHE;
   delete env.SCRIPTC_TIMING;
+  if (layout !== 0) {
+    env.SCRIPTC_LINKER = layoutTools.wrapper;
+    env.SCRIPTC_BENCH_LAYOUT_PAD = layoutTools.pads[layout];
+  }
   const entry = join(suiteRoot, workload.entry);
   const result = run(process.execPath, [cli, "build", entry, "--optimization=release", "-o", out], {
     env,
@@ -245,6 +314,7 @@ const report = {
   date: new Date().toISOString(),
   host: { platform: process.platform, arch: process.arch, node: process.version },
   runs,
+  layouts,
   contenders: contenders.map((c) => ({ ...c, revision: revision(c.root) })),
   workloads: [],
 };
@@ -274,32 +344,39 @@ try {
       continue;
     }
     for (const c of contenders) {
-      const built = build(c.label, c.root, w);
-      const result = { build_ms: Math.round(built.buildMs) };
+      const result = { build_ms: 0 };
       entry.results[c.label] = result;
-      if (!built.ok) {
-        result.status = "build-failed";
-        result.error = built.error;
-        continue;
+      result.binaries = [];
+      for (let layout = 0; layout < layouts && result.status === undefined; layout++) {
+        const built = build(c.label, c.root, w, layout);
+        result.build_ms += Math.round(built.buildMs);
+        if (!built.ok) {
+          result.status = "build-failed";
+          result.error = built.error;
+          break;
+        }
+        if (layout === 0) result.bytes = built.bytes;
+        result.binaries.push(built.binary);
+        const check = run(built.binary, args);
+        if (check.timedOut) {
+          result.status = "timeout";
+          break;
+        }
+        if (
+          check.stdout !== oracle.stdout ||
+          check.stderr !== oracle.stderr ||
+          check.status !== oracle.status
+        ) {
+          result.status = "mismatch";
+          result.error = `${layout === 0 ? "" : `layout ${layout}: `}expected status ${oracle.status}, got ${check.status}; stdout ${check.stdout === oracle.stdout ? "matches" : "differs"}; stderr ${check.stderr === oracle.stderr ? "matches" : "differs"}`;
+          break;
+        }
       }
-      result.bytes = built.bytes;
-      result.binary = built.binary;
-      const check = run(built.binary, args);
-      if (check.timedOut) {
-        result.status = "timeout";
-        continue;
-      }
-      if (
-        check.stdout !== oracle.stdout ||
-        check.stderr !== oracle.stderr ||
-        check.status !== oracle.status
-      ) {
-        result.status = "mismatch";
-        result.error = `expected status ${oracle.status}, got ${check.status}; stdout ${check.stdout === oracle.stdout ? "matches" : "differs"}; stderr ${check.stderr === oracle.stderr ? "matches" : "differs"}`;
-        continue;
-      }
+      result.binary = result.binaries[0];
+      if (result.status !== undefined) continue;
       result.status = "ok";
       result.samples = [];
+      if (layouts > 1) result.layout_samples = result.binaries.map(() => []);
     }
     entry.node_ms = Math.round(oracle.ms);
     entry.nodeCommand = [
@@ -317,7 +394,8 @@ try {
       const live = contenders.filter((c) => entry.results[c.label]?.status === "ok");
       if (live.length === 0) continue;
       for (const c of live)
-        for (let i = 0; i < warmup; i++) run(entry.results[c.label].binary, entry.args);
+        for (const binary of entry.results[c.label].binaries)
+          for (let i = 0; i < warmup; i++) run(binary, entry.args);
       // Node is the reference the project aims to beat, so it is timed in the
       // same interleaved loop (whole-process wall time, startup included).
       const nodeSamples = [];
@@ -328,12 +406,16 @@ try {
         if (order.length === 2 && random() < 0.5) order.reverse();
         for (const c of order) {
           const result = entry.results[c.label];
-          const sample = run(result.binary, entry.args);
+          // Runs rotate through the layouts so each gets an equal share.
+          const layout = r % result.binaries.length;
+          const sample = run(result.binaries[layout], entry.args);
           if (sample.timedOut || sample.status !== 0) {
             result.status = sample.timedOut ? "timeout" : "unstable-exit";
             break;
           }
-          result.samples.push(Math.round(sample.ms * 100) / 100);
+          const ms = Math.round(sample.ms * 100) / 100;
+          result.samples.push(ms);
+          result.layout_samples?.[layout].push(ms);
         }
         if (values.node) nodeSamples.push(run(process.execPath, entry.nodeCommand).ms);
       }
@@ -345,6 +427,10 @@ try {
         const result = entry.results[c.label];
         if (result.status !== "ok") continue;
         result.median_ms = Math.round(median(result.samples) * 100) / 100;
+        if (result.layout_samples)
+          result.layout_medians_ms = result.layout_samples.map(
+            (xs) => Math.round(median(xs) * 100) / 100,
+          );
         result.peak_rss_bytes = peakRss(result.binary, entry.args);
       }
       const base = entry.results.baseline;
@@ -362,7 +448,10 @@ try {
     if (!values["no-lock"]) releaseLock();
   }
   for (const entry of prepared) {
-    for (const result of Object.values(entry.results)) delete result.binary;
+    for (const result of Object.values(entry.results)) {
+      delete result.binary;
+      delete result.binaries;
+    }
     delete entry.nodeCommand;
     report.workloads.push(entry);
   }
@@ -409,6 +498,23 @@ for (const w of report.workloads) {
     lines.push(
       `| ${w.name} | ${c?.median_ms?.toFixed(1) ?? "-"} | ${c?.status ?? "-"} | ${c?.bytes ?? "-"} | ${c?.peak_rss_bytes ? (c.peak_rss_bytes / 1048576).toFixed(1) : "-"} | ${w.node_ms} | ${xNode(w)} |`,
     );
+  }
+}
+if (layouts > 1) {
+  // Each layout gets only runs/layouts samples, so these spreads include run
+  // noise; the verdicts above already pool every layout.
+  lines.push(
+    "",
+    `layout spread (max/min of per-layout medians, ${layouts} layouts x ~${Math.floor(runs / layouts)} runs; includes run noise):`,
+  );
+  for (const w of report.workloads) {
+    const spreads = Object.entries(w.results)
+      .filter(([, r]) => r.layout_medians_ms)
+      .map(([label, r]) => {
+        const ms = r.layout_medians_ms;
+        return `${label} ${((Math.max(...ms) / Math.min(...ms) - 1) * 100).toFixed(1)}%`;
+      });
+    if (spreads.length > 0) lines.push(`- ${w.name}: ${spreads.join(", ")}`);
   }
 }
 if (report.geomean_ratio !== undefined)
