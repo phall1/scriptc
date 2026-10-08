@@ -247,11 +247,14 @@ static inline void scr_fd_stream_unlock(FILE *stream) {
 #endif
 
 /* Render args into line (capacity from scr_console_capacity): space-joined
- * with a trailing newline. Returns the byte count. */
+ * with a trailing newline. Returns the byte count. Tags may carry
+ * SCR_ARG_GLUE, so every kind test masks with SCR_ARG_KIND: a glued string
+ * part must reserve its full length, exactly as scr_console_render copies
+ * it. */
 static size_t scr_console_capacity(size_t n, const ScrLogArg *args) {
   size_t capacity = 1;
   for (size_t i = 0; i < n; i++) {
-    size_t length = args[i].tag == SCR_ARG_STR ? args[i].v.s->len : 32;
+    size_t length = (args[i].tag & SCR_ARG_KIND) == SCR_ARG_STR ? args[i].v.s->len : 32;
     if (length >= SIZE_MAX - capacity) scr_trap("scriptc: console output too large\n");
     capacity += length + 1;
   }
@@ -294,7 +297,7 @@ static void scr_console_write(int fd, size_t n, const ScrLogArg *args) {
 #if SCR_STDIO_DIRECT
   /* A large single string goes out without a copy: string + newline in one
    * vectored write. */
-  if (!scr_stdio_write_hook && n == 1 && args[0].tag == SCR_ARG_STR &&
+  if (!scr_stdio_write_hook && n == 1 && (args[0].tag & SCR_ARG_KIND) == SCR_ARG_STR &&
       args[0].v.s->len >= SCR_CONSOLE_STACK_LINE) {
     FILE *locked = scr_fd_stream_lock(fd);
     if (scr_stdout_pending()) fflush(stdout);
