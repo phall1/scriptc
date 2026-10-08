@@ -785,7 +785,7 @@ static ScrDyn *scr_dyn_alloc(ScrDynKind kind) {
     return d;
   }
 #endif
-  ScrDyn *fresh = scr_cyc_alloc(sizeof *fresh, &scr_dyn_trace_v, &scr_dyn_gcfree);
+  ScrDyn *fresh = scr_cyc_alloc_inline(sizeof *fresh, &scr_dyn_trace_v, &scr_dyn_gcfree);
   if (!fresh) scr_json_oom();
   fresh->rc = 1;
   fresh->kind = kind;
@@ -909,7 +909,7 @@ static void scr_dyn_dispose(ScrDyn *d, bool collected) {
     scr_dyn_obj_drop_keys(d, false);
     scr_mem_free(d->v.obj.entries);
   }
-  scr_cyc_free(d);
+  scr_cyc_free_inline(d);
 }
 
 static void scr_dyn_gcfree(void *ptr) { scr_dyn_dispose(ptr, true); }

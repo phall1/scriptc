@@ -1,4 +1,5 @@
 import { emitLlvmLayouts } from "./layouts.js";
+import { inlineAllocSupported } from "./alloc.js";
 import { llvmBytes as llBytes } from "../literals.js";
 import { InternalCompilerError } from "../../errors.js";
 /** Lower typed IR to LLVM, using the runtime's C ABI.
@@ -735,6 +736,12 @@ export class LlEmitter {
       recordsById: this.recordsById,
       recordCloneShapes: this.recordCloneShapes,
       objectAudit: options.objectAudit !== false,
+      inlineAlloc: inlineAllocSupported({
+        pointerBits: options.pointerBits,
+        wasi: options.wasi,
+        targetTriple: options.targetTriple,
+        threadInstances: mod.lib?.threadInstances === true,
+      }),
       unionsById: this.unionsById,
       declare: (decl) => this.declare(decl),
       needOom: () => this.needOom(),

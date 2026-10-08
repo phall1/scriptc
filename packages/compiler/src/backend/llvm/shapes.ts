@@ -26,6 +26,7 @@ import {
   mangleRecordStruct,
   mangleRecordTrace,
 } from "../mangle.js";
+import { emitObjectAlloc, emitObjectFree } from "./alloc.js";
 import { llvmCommentText } from "./common.js";
 import { LlvmUnsupportedError } from "./unsupported.js";
 
@@ -49,6 +50,8 @@ export interface ShapeHost {
    * runtime packs define them empty, so plain builds omit the calls.
    * Absent means emit. */
   readonly objectAudit?: boolean;
+  /** Inline the small-object allocator's fast paths (llvm/alloc.ts). */
+  readonly inlineAlloc?: boolean;
 }
 
 /** Every emitted function/helper carries #0 = { sanitize_address } — see
@@ -544,15 +547,7 @@ export function emitRecordShapes(
       );
       t++;
     }
-    if (audit) freeBody.push(`  call void @scr_obj_free_note()`);
-    if (traced) {
-      host.declare(`declare void @scr_cyc_free(ptr)`);
-      freeBody.push(`  call void @scr_cyc_free(ptr %o)`);
-    } else {
-      host.declare(`declare void @scr_rt_free(ptr)`);
-      host.declare(`declare void @scr_weak_dispose(ptr)`);
-      freeBody.push(`  call void @scr_weak_dispose(ptr %o)`, `  call void @scr_rt_free(ptr %o)`);
-    }
+    freeBody.push(...emitObjectFree(host, traced));
     defs.push(
       ...releaseBody(
         host,
@@ -566,30 +561,24 @@ export function emitRecordShapes(
     );
 
     // new: zeroed allocation (+ the overflow map on index-signature
-    // shapes), rc = 1, alloc note. Traced shapes allocate with the
-    // collector header (scr_cyc_alloc zeroes and aborts on OOM itself).
+    // shapes), rc = 1. Traced shapes allocate with the collector header;
+    // alloc.ts inlines the allocator fast paths and the alloc note.
     const nw: string[] = [
       `define internal ptr @${mangleRecordNew(shape.id)}() ${FN_ATTRS} {`,
       `entry:`,
     ];
-    if (traced) {
-      host.declare(`declare ptr @scr_cyc_alloc(${host.sizeType}, ptr, ptr)`);
-      nw.push(
-        `  %o = call ptr @scr_cyc_alloc(${host.sizeType} ${sizeOf}, ptr @${mangleRecordTrace(shape.id)}, ptr @${mangleRecordGcFree(shape.id)})`,
-      );
-    } else {
-      host.declare(`declare ptr @scr_rt_calloc(${host.sizeType})`);
-      host.needOom();
-      nw.push(
-        `  %o = call ptr @scr_rt_calloc(${host.sizeType} ${sizeOf})`,
-        `  %isnull = icmp eq ptr %o, null`,
-        `  br i1 %isnull, label %oom, label %ok`,
-        `oom:`,
-        `  call void @sc_oom()`,
-        `  unreachable`,
-        `ok:`,
-      );
-    }
+    nw.push(
+      ...emitObjectAlloc(
+        host,
+        sizeOf,
+        traced
+          ? {
+              trace: `@${mangleRecordTrace(shape.id)}`,
+              free: `@${mangleRecordGcFree(shape.id)}`,
+            }
+          : null,
+      ),
+    );
     nw.push(`  store ${host.sizeType} 1, ptr %o`);
     if (shape.indexValue) {
       // The overflow map (string-keyed): value handling is type-directed
@@ -605,7 +594,6 @@ export function emitRecordShapes(
         `  store ptr %ovf, ptr %ovfp`,
       );
     }
-    if (audit) nw.push(`  call void @scr_obj_alloc_note()`);
     nw.push(`  ret ptr %o`, `}`, ``);
     defs.push(...nw);
 
@@ -669,8 +657,7 @@ export function emitRecordShapes(
           `  call void ${releaseSym(host, m.type)}(ptr %v${i}) ; ${llvmCommentText(m.name)} (acyclic)`,
         );
       });
-      if (audit) gf.push(`  call void @scr_obj_free_note()`);
-      gf.push(`  call void @scr_cyc_free(ptr %o)`, `  ret void`, `}`, ``);
+      gf.push(...emitObjectFree(host, true), `  ret void`, `}`, ``);
       defs.push(...gf);
     }
   }

@@ -11,14 +11,17 @@
  * pages are committed as the bump pointers first touch them. */
 #include "scr_runtime.h"
 
-#if SCR_SMALL_ALLOC
-#include <sys/mman.h>
-
-/* Explicitly initialized so it is an ordinary (localizable) definition: a
+/* Defined in every build: the emitted fast paths read it (see the layout
+ * contract in scr_runtime.h); without the allocator it stays all-zero.
+ * Explicitly initialized so it is an ordinary (localizable) definition: a
  * tentative definition becomes a COMMON symbol, which library localization
  * deliberately keeps global (abi.localize_runtime), leaking it from every
  * localized library archive. */
 ScrSaState scr_sa = {0};
+
+#if SCR_SMALL_ALLOC
+#include <sys/mman.h>
+
 static bool scr_sa_refused;
 
 /* Reserve address space for every class slice at once; smaller slices are

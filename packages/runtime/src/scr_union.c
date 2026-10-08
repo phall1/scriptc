@@ -33,11 +33,11 @@ static void scr_union_gcfree(void *o) {
 #ifdef SCR_RC_AUDIT
   scr_live_unions--;
 #endif
-  scr_cyc_free(u);
+  scr_cyc_free_inline(u);
 }
 
 static ScrUnion *scr_union_alloc(uint32_t tag) {
-  ScrUnion *u = scr_cyc_alloc(sizeof(ScrUnion), &scr_union_trace, &scr_union_gcfree);
+  ScrUnion *u = scr_cyc_alloc_inline(sizeof(ScrUnion), &scr_union_trace, &scr_union_gcfree);
   u->rc = 1;
   u->tag = tag;
 #ifdef SCR_RC_AUDIT
@@ -94,7 +94,7 @@ static void scr_union_destroy(void *object) {
 #ifdef SCR_RC_AUDIT
   scr_live_unions--;
 #endif
-  scr_cyc_free(u);
+  scr_cyc_free_inline(u);
 }
 
 void scr_union_release(ScrUnion *u) {
