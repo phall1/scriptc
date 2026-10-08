@@ -2564,12 +2564,15 @@ export class LlEmitter {
    * the dynamic engine, module-evaluation bodies (their promise caches),
    * `dyn` results (resolution may adopt a thenable), and every program
    * that uses node:test subtests — `t.test()` runs a subtest inline and
-   * awaits it on the CURRENT fiber even from synchronous code. A missed
-   * suspension still cannot reorder silently: the runtime traps when a
-   * context parks while a fiberless body is on its stack. */
+   * awaits it on the CURRENT fiber even from synchronous code. Worker
+   * programs keep fibers too: their fiber epilogue owns context
+   * termination (a stopping worker rejects and observes the promise), which
+   * the fiberless wrapper does not reproduce. A missed suspension still
+   * cannot reorder silently: the runtime traps when a context parks while a
+   * fiberless body is on its stack. */
   private fiberlessAsyncFunctions(): Set<string> {
     const eligible = new Set<string>();
-    if (this.wasi) return eligible;
+    if (this.wasi || this.mod.workers === true) return eligible;
     const embedded = this.mod.embedded;
     if (embedded !== undefined && embedded.modules.length > 0) return eligible;
     const suspends =

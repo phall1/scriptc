@@ -1626,7 +1626,7 @@ void scr_async_inline_enter(ScrAsyncInline *frame) {
   ScrExcCell *cell = scr_exc_current_cell();
   frame->stack = cell->stack;
   cell->stack = NULL;
-  frame->als = scr_als_ctx_retain(*scr_als_active);
+  frame->als = scr_als_ctx_retain(*SCR_ALS_SLOT());
   if (scr_current != NULL) scr_current->inline_depth++;
 }
 
@@ -1634,9 +1634,10 @@ ScrPromise *scr_async_inline_leave(ScrAsyncInline *frame) {
   if (scr_current != NULL) scr_current->inline_depth--;
   scr_exc_current_cell()->stack = (ScrStackFrame *)frame->stack;
   ScrAlsCtx *saved = (ScrAlsCtx *)frame->als;
-  if (*scr_als_active != saved) {
-    scr_als_ctx_release(*scr_als_active);
-    *scr_als_active = saved; /* the frame's reference moves back in */
+  ScrAlsCtx **slot = SCR_ALS_SLOT();
+  if (*slot != saved) {
+    scr_als_ctx_release(*slot);
+    *slot = saved; /* the frame's reference moves back in */
   } else {
     scr_als_ctx_release(saved);
   }
