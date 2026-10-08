@@ -206,6 +206,7 @@ async function parseHeader(): Promise<{ protos: Map<string, CProto>; dataSyms: S
       .trim();
     if (retText === "" || !/^[A-Za-z_][A-Za-z0-9_ *]*[ *]$/.test(`${retText} `)) continue;
     if (/\btypedef\b/.test(retText)) continue;
+    if (/\breturn\b/.test(retText)) continue; // a call inside a static inline body
     const argsText = src
       .slice(m.index + m[0].length, end)
       .replace(/\s+/g, " ")
