@@ -6766,6 +6766,14 @@ bool scr_net_sock_established(ScrNetSocket *s); /* connected, including TLS hand
 void scr_net_sock_set_native_events(ScrNetSocket *s, ScrNetNativeEventFn timeout, ScrNetNativeErrFn err);
 void scr_net_sock_set_native_http_timeout(ScrNetSocket *s, ScrNetNativeTimeoutHandledFn fn);
 void scr_net_sock_write_native(ScrNetSocket *s, const char *buf, size_t n);
+/* Several protocol-layer slices in order as one write: a single vectored
+ * syscall when the bytes can go out immediately, else the same buffering
+ * as consecutive scr_net_sock_write_native calls. */
+typedef struct {
+  const char *data;
+  size_t len;
+} ScrNetSlice;
+void scr_net_sock_writev_native(ScrNetSocket *s, const ScrNetSlice *slices, size_t n);
 /* The protocol layer's deferred-emit hook: `pending` joins the loop's
  * liveness test, `sweep` runs at every net sweep top. */
 void scr_net_set_proto_sweep(bool (*pending)(void), void (*sweep)(void));
