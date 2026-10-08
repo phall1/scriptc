@@ -1460,6 +1460,7 @@ typedef struct ScrRegex {
   uint8_t *bc;    /* lazily compiled libregexp bytecode; NULL until first use */
   double last_index;
   struct ScrRegex *literal; /* immutable bytecode owner for literal instances */
+  void *native;   /* one-byte-subject matcher built with bc (NULL: lre_exec only) */
 } ScrRegex;
 
 static inline ScrRegex *scr_regex_retain(ScrRegex *re) {

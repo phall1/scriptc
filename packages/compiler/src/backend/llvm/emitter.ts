@@ -1557,7 +1557,7 @@ export class LlEmitter {
       `%ScrUnion = type { ${this.sizeType}, i32, ptr, ptr, ptr, i64 }`,
       `%ScrClosure = type { ${this.sizeType}, ptr, ${this.sizeType}, ptr, i32, i32, ptr }`,
       `%ScrFfiTable = type { ptr, ${this.sizeType}, ${this.sizeType}, ptr, i8, ptr, ptr, ${this.sizeType}, ${this.sizeType}, ${this.sizeType}, ptr, ptr }`,
-      `%ScrRegex = type { ${this.sizeType}, ptr, ptr, ptr, double, ptr }`,
+      `%ScrRegex = type { ${this.sizeType}, ptr, ptr, ptr, double, ptr, ptr }`,
       // ScrArr mirrors scr_runtime.h field-for-field. Live dynamic stream
       // commits swap its mutable dense, sparse, presence, and property
       // storage while preserving the target object's identity.
@@ -1681,10 +1681,11 @@ export class LlEmitter {
     if (this.absentInstances.size > 0) out.push(``);
     for (const [key, re] of this.regexInstances) {
       // One immortal ScrRegex per (pattern, flags) literal, pointing at
-      // the interned source/flags strings. The bc slot starts null (lazy
-      // compile, cached by the runtime) — a mutable global, not constant.
+      // the interned source/flags strings. The bc and native-matcher slots
+      // start null (lazy compile, cached by the runtime) — a mutable
+      // global, not constant.
       out.push(
-        `@${re.sym} = internal ${tl}global %ScrRegex { ${this.sizeType} -1, ptr ${re.src}, ptr ${re.fl}, ptr null, double 0.0, ptr null } ; ${key.replace(/\n/g, "\\n")}`,
+        `@${re.sym} = internal ${tl}global %ScrRegex { ${this.sizeType} -1, ptr ${re.src}, ptr ${re.fl}, ptr null, double 0.0, ptr null, ptr null } ; ${key.replace(/\n/g, "\\n")}`,
       );
     }
     if (this.regexInstances.size > 0) out.push(``);
