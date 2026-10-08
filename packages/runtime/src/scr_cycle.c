@@ -159,7 +159,7 @@ static SCR_TL size_t scr_cyc_live = 0;
 
 void *scr_cyc_alloc(size_t size, ScrTraceFn trace, ScrCycFreeFn free_fn) {
   if (size > SIZE_MAX - sizeof(ScrCycHdr)) scr_cyc_oom();
-  ScrCycHdr *h = calloc(1, sizeof(ScrCycHdr) + size);
+  ScrCycHdr *h = scr_mem_calloc(sizeof(ScrCycHdr) + size);
   if (!h) scr_cyc_oom();
   h->trace = trace;
   h->free_fn = free_fn;
@@ -172,7 +172,7 @@ void *scr_cyc_alloc(size_t size, ScrTraceFn trace, ScrCycFreeFn free_fn) {
 void scr_cyc_free(void *obj) {
   scr_weak_dispose(obj);
   scr_cyc_live--;
-  free(scr_cyc_hdr(obj));
+  scr_mem_free(scr_cyc_hdr(obj));
 }
 
 /* A pointer vector that only ever grows (these reuse their capacity across

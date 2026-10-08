@@ -277,7 +277,7 @@ static void scr_arr_grow_dense_to(ScrArr *a, size_t need, bool exact) {
    * publishing the larger capacity: their previous location is now part
    * of the value area. Existing data and state pointers keep their ABI. */
   if (cap > SIZE_MAX / (sizeof(uint64_t) + sizeof(uint8_t))) scr_arr_oom();
-  uint64_t *data = realloc(a->data, cap * (sizeof(uint64_t) + sizeof(uint8_t)));
+  uint64_t *data = scr_mem_realloc(a->data, cap * (sizeof(uint64_t) + sizeof(uint8_t)));
   if (!data) scr_arr_oom();
   uint8_t *present = (uint8_t *)(data + cap);
   if (a->cap) memmove(present, (uint8_t *)(data + a->cap), a->cap);
@@ -535,7 +535,7 @@ static ScrArrStorage scr_arr_take_storage(ScrArr *a) {
 }
 
 static void scr_arr_free_storage(ScrArrStorage *s) {
-  free(s->data);
+  scr_mem_free(s->data);
   scr_arr_sparse_free(s->sparse);
   memset(s, 0, sizeof(*s));
 }
@@ -589,7 +589,7 @@ static void scr_arr_copy_dense(ScrArr *dst, size_t to, const ScrArr *src,
 }
 
 ScrArr *scr_arr_new(ScrElemKind elem, size_t initial_cap) {
-  ScrArr *a = malloc(sizeof(ScrArr));
+  ScrArr *a = scr_mem_alloc(sizeof(ScrArr));
   if (!a) scr_arr_oom();
   a->rc = 1;
   a->len = 0;
@@ -640,7 +640,7 @@ void scr_arr_trace_v(void *a0, ScrTraceVisit visit, void *ctx) {
 
 static void scr_arr_gc_free(void *a0) {
   ScrArr *a = (ScrArr *)a0;
-  free(a->data);
+  scr_mem_free(a->data);
   scr_arr_sparse_free(a->sparse);
   for (size_t i = 0; i < a->prop_len; i++) free(a->props[i].key);
   free(a->props);
@@ -657,7 +657,7 @@ ScrArr *scr_arr_new_ref(void *(*elem_retain)(void *),
   if (elem_trace) {
     a = scr_cyc_alloc(sizeof(ScrArr), &scr_arr_trace_v, &scr_arr_gc_free);
   } else {
-    a = malloc(sizeof(ScrArr));
+    a = scr_mem_alloc(sizeof(ScrArr));
     if (!a) scr_arr_oom();
   }
   a->rc = 1;
@@ -716,7 +716,7 @@ static void scr_arr_destroy(void *object) {
   if (a->elem_trace) {
     scr_arr_gc_free(a);
   } else {
-    free(a->data);
+    scr_mem_free(a->data);
     scr_arr_sparse_free(a->sparse);
     for (size_t i = 0; i < a->prop_len; i++) free(a->props[i].key);
     free(a->props);
@@ -724,7 +724,7 @@ static void scr_arr_destroy(void *object) {
     scr_live_arrays--;
 #endif
     scr_weak_dispose(a);
-    free(a);
+    scr_mem_free(a);
   }
 }
 

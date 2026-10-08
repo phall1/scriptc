@@ -54,6 +54,7 @@ test("scr_string_to_number matches Node Number(s) on committed oracle cases", as
     join(testDir, "../src/scr_exception.c"),
     join(testDir, "../src/scr_object.c"),
     join(testDir, "../src/scr_cycle.c"),
+    join(testDir, "../src/scr_alloc.c"),
     ...(process.platform === "linux" ? ["-lm"] : []),
   ]);
   const { stderr } = await execFileAsync(bin, [join(testDir, "tonumber-cases.txt")]);

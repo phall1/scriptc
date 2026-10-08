@@ -904,10 +904,10 @@ static void scr_dyn_dispose(ScrDyn *d, bool collected) {
     return;
   }
 #endif
-  if (d->kind == SCR_DYN_ARR) free(d->v.arr.items);
+  if (d->kind == SCR_DYN_ARR) scr_mem_free(d->v.arr.items);
   else if (d->kind == SCR_DYN_OBJ) {
     scr_dyn_obj_drop_keys(d, false);
-    free(d->v.obj.entries);
+    scr_mem_free(d->v.obj.entries);
   }
   scr_cyc_free(d);
 }
@@ -1066,7 +1066,7 @@ bool scr_dyn_field_eq_bool(const ScrDyn *d, const ScrStr *key, bool value) {
 void scr_dyn_arr_push(ScrDyn *arr, ScrDyn *item) {
   if (arr->v.arr.len == arr->v.arr.cap) {
     size_t cap = arr->v.arr.cap ? arr->v.arr.cap * 2 : 4;
-    ScrDyn **items = realloc(arr->v.arr.items, cap * sizeof *items);
+    ScrDyn **items = scr_mem_realloc(arr->v.arr.items, cap * sizeof *items);
     if (!items) scr_json_oom();
     arr->v.arr.items = items;
     if (arr->v.arr.presence) {
@@ -1332,7 +1332,7 @@ static void scr_dyn_obj_put(ScrDyn *obj, const char *key, size_t key_len, ScrDyn
   }
   if (obj->v.obj.len == obj->v.obj.cap) {
     size_t cap = obj->v.obj.cap ? obj->v.obj.cap * 2 : 4;
-    ScrDynEntry *entries = realloc(obj->v.obj.entries, cap * sizeof *entries);
+    ScrDynEntry *entries = scr_mem_realloc(obj->v.obj.entries, cap * sizeof *entries);
     if (!entries) scr_json_oom();
     memset(entries + obj->v.obj.cap, 0, (cap - obj->v.obj.cap) * sizeof *entries);
     obj->v.obj.entries = entries;

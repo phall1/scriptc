@@ -416,6 +416,110 @@ static inline ScrCycHdr *scr_cyc_hdr(void *obj) { return (ScrCycHdr *)obj - 1; }
 void *scr_cyc_alloc(size_t size, ScrTraceFn trace, ScrCycFreeFn free_fn);
 void scr_cyc_free(void *obj); /* frees the block, header included */
 
+/* ── small-object allocator (scr_alloc.c) ───────────────────────────────
+ * Runtime objects are small, short-lived and freed by the thread that made
+ * them — the pattern a general-purpose malloc pays the most for. Blocks of
+ * up to SCR_SA_MAX bytes come from per-size-class free lists refilled by a
+ * bump pointer; the fast paths below inline into every runtime unit.
+ *
+ * Contracts match malloc/calloc/realloc/free (NULL on OOM, 16-byte
+ * alignment). scr_mem_free and scr_mem_realloc accept ANY pointer — a
+ * block outside the allocator's reservation goes back to the system — so a
+ * free site can be switched without proving where its pointers came from.
+ * The converse does not hold: a block from scr_mem_alloc/calloc/realloc
+ * must never reach the system free/realloc. Emitted code reaches the same
+ * allocator through scr_rt_calloc/scr_rt_free.
+ *
+ * Compiled to the plain system calls under SCR_RC_AUDIT and AddressSanitizer
+ * (the audit lane must see every logical free as a real free), on targets
+ * without a cheap address-space reservation (wasm32, Windows, 32-bit), and
+ * in thread-instanced library archives and worker executables (SCR_WORKERS),
+ * where several runtime instances run on their own threads and would race
+ * on, or strand each other's, free lists. Elsewhere the allocator state is
+ * process-global and unsynchronized: runtime objects are only allocated and
+ * freed on the runtime thread (native worker jobs never touch them). */
+#include <stdlib.h>
+#if defined(SCR_RC_AUDIT) || defined(__SANITIZE_ADDRESS__) || defined(__wasi__) || \
+    defined(__wasm__) || defined(_WIN32) || UINTPTR_MAX != UINT64_MAX ||              \
+    (defined(SCR_LIB) && defined(SCR_THREAD_INSTANCES)) || defined(SCR_WORKERS)
+#define SCR_SMALL_ALLOC 0
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define SCR_SMALL_ALLOC 0
+#else
+#define SCR_SMALL_ALLOC 1
+#endif
+#else
+#define SCR_SMALL_ALLOC 1
+#endif
+
+void *scr_mem_realloc(void *p, size_t n);
+void *scr_rt_calloc(size_t n); /* emitted-code entry points */
+void scr_rt_free(void *p);
+
+#if SCR_SMALL_ALLOC
+#define SCR_SA_STEP 16u   /* class granularity; keeps malloc's 16-byte alignment */
+#define SCR_SA_NCLASS 32u /* classes of 16, 32, ... 512 bytes */
+#define SCR_SA_MAX (SCR_SA_STEP * SCR_SA_NCLASS)
+
+typedef struct ScrSaBlock {
+  struct ScrSaBlock *next;
+} ScrSaBlock;
+
+/* One reservation split into SCR_SA_NCLASS equal slices, one per class, so
+ * a block's class is its slice index: (p - base) >> shift. span is 0 until
+ * the first refill reserves (and stays 0 if the host refuses). */
+typedef struct ScrSaState {
+  uintptr_t base, span;
+  unsigned shift;
+  ScrSaBlock *free[SCR_SA_NCLASS];
+  char *bump[SCR_SA_NCLASS], *lim[SCR_SA_NCLASS];
+} ScrSaState;
+extern ScrSaState scr_sa;
+
+/* Refill miss: reserves on first use, falls back to the system allocator
+ * for large blocks, n == 0, an exhausted slice, or a refused reservation. */
+void *scr_sa_slow(size_t n, bool zero);
+
+static inline void *scr_sa_take(size_t n, bool zero) {
+  if (n - 1 < SCR_SA_MAX) { /* n == 0 wraps to the slow path */
+    unsigned c = (unsigned)((n - 1) / SCR_SA_STEP);
+    ScrSaBlock *b = scr_sa.free[c];
+    if (b) {
+      scr_sa.free[c] = b->next;
+      if (zero) memset(b, 0, n); /* recycled blocks are dirty */
+      return b;
+    }
+    size_t sz = (size_t)(c + 1) * SCR_SA_STEP;
+    char *p = scr_sa.bump[c];
+    if ((size_t)(scr_sa.lim[c] - p) >= sz) { /* fresh mmap memory is zero */
+      scr_sa.bump[c] = p + sz;
+      return p;
+    }
+  }
+  return scr_sa_slow(n, zero);
+}
+
+static inline void *scr_mem_alloc(size_t n) { return scr_sa_take(n, false); }
+static inline void *scr_mem_calloc(size_t n) { return scr_sa_take(n, true); }
+
+static inline void scr_mem_free(void *p) {
+  uintptr_t off = (uintptr_t)p - scr_sa.base;
+  if (off < scr_sa.span) {
+    ScrSaBlock *b = p;
+    unsigned c = (unsigned)(off >> scr_sa.shift);
+    b->next = scr_sa.free[c];
+    scr_sa.free[c] = b;
+    return;
+  }
+  free(p);
+}
+#else
+static inline void *scr_mem_alloc(size_t n) { return malloc(n); }
+static inline void *scr_mem_calloc(size_t n) { return calloc(1, n); }
+static inline void scr_mem_free(void *p) { free(p); }
+#endif
+
 /* Dispose an object whose reference count already reached zero. The caller
  * removes its cycle candidate first. Nested disposals keep bounded stack
  * depth; deeper objects wait until the outer disposal drains the worklist.
