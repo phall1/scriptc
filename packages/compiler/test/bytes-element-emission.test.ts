@@ -75,7 +75,7 @@ function fixture(): IrModule {
   );
 
   return {
-    irVersion: 13,
+    irVersion: 14,
     sourceFile: loc.file,
     entry: "__main",
     functions: [{ name: "__main", params: [], returnType: VOID, locals, body, loc }],
@@ -145,7 +145,7 @@ function receiverReassignmentFixture(): IrModule {
   ];
 
   return {
-    irVersion: 13,
+    irVersion: 14,
     sourceFile: loc.file,
     entry: "__main",
     functions: [{ name: "__main", params: [], returnType: VOID, locals, body, loc }],
@@ -212,7 +212,7 @@ function integerLoopFixture(mutatesIndex = false): IrModule {
     { kind: "bytesSet", arr: bytesRef(), index: indexRef(), value: ref("sum"), loc },
   );
   return {
-    irVersion: 13,
+    irVersion: 14,
     sourceFile: loc.file,
     entry: "__main",
     functions: [
@@ -271,7 +271,7 @@ test("LLVM emission performs typed-array element access directly on the valid pa
   const mod = fixture();
   expect(validateModule(mod)).toEqual([]);
   const ll = emitLlvmModule(mod);
-  expect(ll).toContain("%ScrBytes = type { i64, i64, i32, ptr, ptr, i8 }");
+  expect(ll).toContain("%ScrBytes = type { i64, i64, i32, ptr, ptr, i8, i8, i8, ptr }");
   expect(ll).toContain("getelementptr inbounds i8");
   expect(ll).toContain("getelementptr inbounds i32");
   expect(ll).toContain("getelementptr inbounds float");
@@ -333,7 +333,7 @@ test("large record clones stay outlined while small clones remain inlineable", (
     const fields = Array.from({ length: count }, (_, i) => ({ name: `f${i}`, type: F64 }));
     const type = { kind: "record", shapeId: id } as const;
     return {
-      irVersion: 13,
+      irVersion: 14,
       sourceFile: "record-clone.ts",
       entry: "__main",
       records: [{ id, fields }],
