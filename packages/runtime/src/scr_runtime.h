@@ -4071,6 +4071,10 @@ ScrDyn *scr_dyn_own_descriptor(const ScrDyn *value, const ScrStr *key);
 void scr_dyn_proxy_set(ScrDyn *proxy, ScrStr *key, ScrDyn *value);
 void scr_dyn_proxy_delete(ScrDyn *proxy, const ScrStr *key);
 void scr_dyn_proxy_unsupported(const char *operation);
+/* Borrows value; rejects Proxy operands before a specialized native brand test. */
+void scr_dyn_native_instanceof_operand(const ScrDyn *value);
+/* Canonical checked function identities; unsupported calls remain explicit. */
+ScrDyn *scr_dyn_native_constructor(const ScrStr *name);
 /* Retains the native view, preserving identity and its shared backing
  * allocation across the checked-dynamic boundary. Borrows b. */
 ScrDyn *scr_dyn_new_bytes(const ScrBytes *b);
