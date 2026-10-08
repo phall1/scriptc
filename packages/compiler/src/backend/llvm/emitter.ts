@@ -4280,7 +4280,12 @@ export class LlEmitter {
       this.debug === null ? findScalarStringSlices(fn, this.callLifetimes) : new Map();
     this.mapReadLifetimes = findMapReadLifetimes(fn, this.unionsById, this.callLifetimes);
     this.localStackUnions = findLocalStackUnions(fn, this.callLifetimes, this.unionsById);
-    this.localUnionStorageProofs = findLocalUnionStorage(fn, this.callLifetimes, this.unionsById);
+    this.localUnionStorageProofs = findLocalUnionStorage(
+      fn,
+      this.callLifetimes,
+      this.unionsById,
+      (e) => this.nullableFieldGet(e) !== null,
+    );
     this.localUnionStorage = new Map();
     this.integerRanges = analyzeIntegerRanges(numericFn);
     this.bytesBounds = findBytesBounds(numericFn, this.integerRanges);
@@ -6172,6 +6177,22 @@ export class LlEmitter {
     const p = B.tmp();
     B.line(`${p} = load ptr, ptr ${ptr}${this.fieldAliasAttachment(ptr)}`);
     return { name: this.stackNullableBox(p, nullable), type: e.type };
+  }
+
+  /** A private stack box over a nullable-pointer field read whose payload
+   * is retained into the current frame: an independent owner, so the box
+   * may outlive later stores to the field (call arguments, local copies).
+   * The box itself must still never reach an RC entry point. */
+  emitOwnedNullableStack(e: IrExpr): { box: string; owner: LlValue } {
+    const nullable = this.nullableFieldGet(e);
+    if (!nullable || e.kind !== "fieldGet")
+      throw new InternalCompilerError("llvm emitter bug: owned nullable stack of non-field");
+    const receiver = this.emitReadReceiver(e.obj);
+    const { ptr } = this.classFieldPtr(receiver.name, e.className, e.field);
+    const p = this.B.tmp();
+    this.B.line(`${p} = load ptr, ptr ${ptr}${this.fieldAliasAttachment(ptr)}`);
+    const owner = this.own({ name: this.retainValue(p, nullable.arm), type: nullable.arm });
+    return { box: this.stackNullableBox(owner.name, nullable), owner };
   }
 
   /** A private stack box over a borrowed nullable pointer. */

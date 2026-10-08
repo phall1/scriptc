@@ -169,6 +169,27 @@ outer.inner = new Box("again");
 console.log("json", JSON.stringify(view));
 console.log(outer);
 
+// Local copies own their payload: a copied field read survives a later
+// store to the field, and copies of other bindings keep scalar arms intact.
+const keeper = new Node(40);
+keeper.next = new Node(41);
+let kept: Node | null = keeper.next;
+keeper.next = null;
+console.log("kept", describe(kept), keeper.next);
+kept = keeper.next;
+console.log("kept2", describe(kept));
+function mixed(flag: number): string {
+  const first: string | number | undefined = flag > 1 ? "two" : flag > 0 ? 1 : undefined;
+  let copy = first;
+  let out = typeof copy === "string" ? copy.toUpperCase() : String(copy);
+  const second: string | number | undefined = flag > 0 ? -0 : `s${flag}`;
+  copy = second;
+  out += "|" + (typeof copy === "number" ? String(Object.is(copy, -0)) : copy);
+  copy = first;
+  return out + "|" + (copy ?? "none");
+}
+console.log("mixed", mixed(0), mixed(1), mixed(2));
+
 // Cycles through nullable fields are collected; output stays stable.
 let survivors = 0;
 for (let i = 0; i < 20000; i++) {

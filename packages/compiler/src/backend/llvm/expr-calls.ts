@@ -83,6 +83,8 @@ export function emitCallExpr(
               return result.value;
             }
             if (canStackUnion(a, host.unionsById)) return emitStackUnion(host, a).value;
+            if (host.nullableFieldGet(a))
+              return { name: host.emitOwnedNullableStack(a).box, type: a.type };
           }
           if (inputs[index]) return host.emitReadReceiver(a);
         }
@@ -736,6 +738,8 @@ export function emitCallExpr(
           if (borrowed.has(i + 1)) {
             if (projected?.has(i + 1) && canStackUnion(a, host.unionsById))
               return emitStackUnion(host, a).value;
+            if (projected?.has(i + 1) && host.nullableFieldGet(a))
+              return { name: host.emitOwnedNullableStack(a).box, type: a.type };
             if (inputs[i]) return host.emitReadReceiver(a);
           }
           return host.emitExpr(a);
