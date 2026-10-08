@@ -1,3 +1,5 @@
+import { identityPreservingWidening } from "../coercions/identity.js";
+import { arrayConcatHelper } from "./array-concat.js";
 import { boolLit, countedFor, numLit, strLit, varRef } from "../../../ir/build.js";
 import { InternalCompilerError } from "../../../errors.js";
 import * as ts from "../../ts7/adapter.js";
@@ -7,8 +9,6 @@ import {
   DYN,
   F64,
   type IrExpr,
-  type IrLocal,
-  type IrParam,
   type IrStmt,
   type IrType,
   JSVAL,
@@ -46,7 +46,11 @@ import {
   lowerArrayFlatMapCall,
   lowerArrayReduceCall,
 } from "./array-callbacks.js";
-import { lowerArraySpreadItems, lowerArrayValueItems } from "./array-construction.js";
+import {
+  lowerArraySpreadItems,
+  lowerArrayValueItems,
+  widenArraySpread,
+} from "./array-construction.js";
 import { arrayLengthDeclaration } from "./array-iteration.js";
 import {
   lowerArrayCallback,
@@ -582,15 +586,30 @@ export function lowerArrayMethodCall(
         : null;
     if ((name === "push" || name === "unshift") && spreadArg && ts.isSpreadElement(spreadArg)) {
       let src = lowerer.lowerExpr(spreadArg.expression);
-      // `a.push(...someSet)` / `a.unshift(...someSet)`: a same-element Set drains first
+      // `a.push(...someSet)` / `a.unshift(...someSet)`: a compatible Set drains first
       // (setIntrinsic toArray — insertion order), then appends.
-      if (src.type.kind === "set" && typeEquals(src.type.elem, elem)) {
+      if (src.type.kind === "set" && identityPreservingWidening(lowerer, src.type.elem, elem)) {
         src = {
           kind: "setIntrinsic",
           method: "toArray",
           receiver: src,
           args: [],
           type: arrayOf(src.type.elem),
+          loc,
+        };
+      }
+      if (
+        src.type.kind === "array" &&
+        !typeEquals(src.type, receiverIr) &&
+        identityPreservingWidening(lowerer, src.type.elem, elem)
+      ) {
+        const items = widenArraySpread(lowerer, src, elem, loc);
+        return {
+          kind: "arrIntrinsic",
+          method: name === "push" ? "pushSpread" : "unshiftSpread",
+          receiver,
+          args: [items],
+          type: F64,
           loc,
         };
       }
@@ -693,7 +712,7 @@ export function lowerArrayMethodCall(
     // an array-of-arrays receiver given a bare inner array, where TS
     // types it as an element but JS would SPREAD it — is fenced.
     const receiver = lowerer.lowerExpr(access.expression);
-    const shape: ("e" | "a")[] = [];
+    const shape: (IrType | null)[] = [];
     const args: IrExpr[] = [];
     for (const argNode of call.arguments) {
       if (ts.isSpreadElement(argNode)) {
@@ -707,7 +726,7 @@ export function lowerArrayMethodCall(
       const probedArg = probedUntyped ? tryLowerExpression(lowerer, argNode) : null;
       const argArrayType =
         probedArg?.type.kind === "array" ? probedArg.type : argIr?.kind === "array" ? argIr : null;
-      if (argArrayType !== null && typeEquals(argArrayType.elem, elem)) {
+      if (argArrayType !== null) {
         if (elem.kind === "array" && typeEquals(argArrayType, elem)) {
           // number[][].concat(inner: number[]) — TS says element, JS's
           // IsArray says spread; no honest static answer exists.
@@ -723,7 +742,7 @@ export function lowerArrayMethodCall(
         let arg = lowerer.lowerExpr(argNode);
         if (arg.type.kind === "dyn") arg = lowerer.coerceInto(argNode, arg, argArrayType);
         if (arg.type.kind !== "array") lowerer.badType(argNode, lowerer.typeOf(argNode));
-        shape.push("a");
+        shape.push(arg.type.elem);
         args.push(arg);
         continue;
       }
@@ -736,16 +755,16 @@ export function lowerArrayMethodCall(
       if (elem.kind === "jsval") {
         const arg = lowerer.lowerExpr(argNode);
         if (arg.type.kind === "array" && arg.type.elem.kind === "jsval") {
-          shape.push("a");
+          shape.push(arg.type.elem);
           args.push(arg);
           continue;
         }
       }
       // An element value — union elements wrap exactly like a push.
-      shape.push("e");
+      shape.push(null);
       args.push(lowerer.lowerExprExpecting(argNode, elem));
     }
-    const helper = arrayConcatHelper(lowerer, elem, shape, loc);
+    const helper = arrayConcatHelper(lowerer, elem, shape, call, loc);
     return { kind: "call", callee: helper, args: [receiver, ...args], type: receiverIr, loc };
   }
   if (name === "slice") {
@@ -1902,155 +1921,6 @@ export function lowerTupleReadMethodCall(
     });
   }
   return { kind: "call", callee: helper, args: [receiver, fnArg], type: outType, loc };
-}
-
-/** An ordinary indexed read: values retain their element type, while
- * holes, missing properties, and present undefined yield undefined. */
-export function lowerSafeIndexRead(
-  lowerer: Lowerer,
-  arr: IrExpr,
-  index: IrExpr,
-  loc: SrcLoc,
-): IrExpr | null {
-  if (arr.type.kind !== "array") throw new InternalCompilerError("indexed read requires an array");
-  const elem = arr.type.elem;
-  if (elem.kind === "void") return null;
-  const resultT = arrayValueType(lowerer, elem);
-  const key = `idxOr:${typeKey(elem)}`;
-  let name = lowerer.arrHofHelpers.get(key);
-  if (!name) {
-    name = `%arr.idxOr.${lowerer.arrHofHelpers.size}`;
-    lowerer.arrHofHelpers.set(key, name);
-    const arrT = arr.type;
-    lowerer.liftedFns.push({
-      name,
-      params: [
-        { localId: "a.0", name: "a", type: arrT },
-        { localId: "i.0", name: "i", type: F64 },
-      ],
-      returnType: resultT,
-      locals: [
-        { id: "a.0", name: "a", type: arrT, mutable: false },
-        { id: "i.0", name: "i", type: F64, mutable: false },
-      ],
-      body: [
-        {
-          kind: "return",
-          value: arrayValueRead(
-            lowerer,
-            varRef("a.0", arrT, loc),
-            varRef("i.0", F64, loc),
-            elem,
-            loc,
-          ),
-          loc,
-        },
-      ],
-      loc,
-    });
-  }
-  return { kind: "call", callee: name, args: [arr, index], type: resultT, loc };
-}
-
-/** Fuse only our own f64-array read helper with immediate ToNumber.
- * Reuse its arguments verbatim so the receiver and index still evaluate
- * exactly once, in order, before the read. Do not specialize user calls,
- * union-element arrays, or optional values stored in locals. */
-export function tryLowerNumericIndexRead(
-  lowerer: Lowerer,
-  operand: IrExpr,
-  loc: SrcLoc,
-): IrExpr | null {
-  if (
-    operand.kind !== "call" ||
-    operand.callee !== lowerer.arrHofHelpers.get(`idxOr:${typeKey(F64)}`)
-  )
-    return null;
-  const [arr, index] = operand.args;
-  if (
-    operand.args.length !== 2 ||
-    arr?.type.kind !== "array" ||
-    arr.type.elem.kind !== "f64" ||
-    index?.type.kind !== "f64"
-  )
-    return null;
-  // The intrinsic owns the evaluated receiver through index evaluation,
-  // then borrows it for one slot lookup. No extra helper parameter or
-  // separate state/getter expressions need to retain the array again.
-  return {
-    kind: "arrIntrinsic",
-    method: "getNumber",
-    receiver: arr,
-    args: [index],
-    type: F64,
-    loc,
-  };
-}
-
-/** Backward-compatible name for the npm-static probe path. */
-export const lowerNpmStaticSafeIndexRead = lowerSafeIndexRead;
-
-/** Interned synthetic function for one (elem, argument-shape) concat —
- * `%arr.concat.<n>(a, x0, x1, ...)`: a fresh array takes a's elements
- * (pushSpread), then each argument pushes (element) or spreads (array)
- * in order; the receiver and array arguments are only READ. Rides
- * liftedFns like the HOF helpers (a plain function — no captures). */
-function arrayConcatHelper(
-  lowerer: Lowerer,
-  elem: IrType,
-  shape: ("e" | "a")[],
-  loc: SrcLoc,
-): string {
-  const key = `concat:${typeKey(elem)}:${shape.join("")}`;
-  const existing = lowerer.arrHofHelpers.get(key);
-  if (existing) return existing;
-  const name = `%arr.concat.${lowerer.arrHofHelpers.size}`;
-  lowerer.arrHofHelpers.set(key, name);
-  const arrT = arrayOf(elem);
-
-  const locals: IrLocal[] = [
-    { id: "a.0", name: "a", type: arrT, mutable: false },
-    ...shape.map((s, i): IrLocal => ({
-      id: `x.${i}`,
-      name: `x${i}`,
-      type: s === "a" ? arrT : elem,
-      mutable: false,
-    })),
-    { id: "out.0", name: "out", type: arrT, mutable: false },
-  ];
-  const params: IrParam[] = [
-    { localId: "a.0", name: "a", type: arrT },
-    ...shape.map((s, i): IrParam => ({
-      localId: `x.${i}`,
-      name: `x${i}`,
-      type: s === "a" ? arrT : elem,
-    })),
-  ];
-  const append = (s: "e" | "a", src: IrExpr): IrStmt => ({
-    kind: "exprStmt",
-    expr: {
-      kind: "arrIntrinsic",
-      method: s === "a" ? "concatSpread" : "push",
-      receiver: varRef("out.0", arrT, loc),
-      args: [src],
-      type: F64,
-      loc,
-    },
-    loc,
-  });
-  const body: IrStmt[] = [
-    {
-      kind: "varDecl",
-      localId: "out.0",
-      init: { kind: "arrayLit", elems: [], type: arrT, loc },
-      loc,
-    },
-    append("a", varRef("a.0", arrT, loc)),
-    ...shape.map((s, i) => append(s, varRef(`x.${i}`, s === "a" ? arrT : elem, loc))),
-    { kind: "return", value: varRef("out.0", arrT, loc), loc },
-  ];
-  lowerer.liftedFns.push({ name, params, returnType: arrT, locals, body, loc });
-  return name;
 }
 
 /** `a.at(i)` — the es2022 relative-index read. Desugars to an interned

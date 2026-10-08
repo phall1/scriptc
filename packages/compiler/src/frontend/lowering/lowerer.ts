@@ -1,3 +1,8 @@
+import { identityPreservingWidening } from "./coercions/identity.js";
+import { checkedClassAssertion } from "./class-assertions.js";
+import { narrowStoredClassValue, narrowGenericClassValue } from "./class-unions.js";
+import { isOptionalProcessStreamProperty } from "./builtins/process.js";
+import { concreteCollectionNarrow } from "./collection-narrowing.js";
 import { lowerWorkerMetadata } from "./builtins/workers.js";
 import { dynUndefinedExpr, nodeThrowExpr, numLit, varRef } from "../../ir/build.js";
 import type { FieldLift } from "./coercions/structural-plans.js";
@@ -2036,7 +2041,14 @@ export class Lowerer {
    * whose checker type is the corresponding bare arm. */
   runtimeOptionalWidening(actual: IrType, expected: IrType): IrType | null {
     if (actual.kind !== "union" || this.armTag(actual.unionId, UNDEFINED_T) < 0) return null;
-    return typeEquals(this.stripUndefinedArm(actual), expected) ? actual : null;
+    const present = this.stripUndefinedArm(actual);
+    if (typeEquals(present, expected)) return actual;
+    // Only a bare expected arm gains runtime-optional storage. A slot that
+    // already admits undefined keeps its own checked representation.
+    if (expected.kind === "union" && this.armTag(expected.unionId, UNDEFINED_T) >= 0) return null;
+    return identityPreservingWidening(this, present, expected)
+      ? this.runtimeOptionalType(expected)
+      : null;
   }
 
   runtimeOptionalType(t: IrType): IrType {
@@ -2108,6 +2120,8 @@ export class Lowerer {
   /** True while re-lowering a base function's 2nd+ instance: the same source
    * statements were already counted for the first instance. */
   suppressStats = false;
+  /** Comparisons interned by operand representations and equality semantics. */
+  readonly equalityHelpers = new Map<string, string>();
   /** Synthetic array-HOF loop functions (map/filter/forEach desugar),
    * interned per method + element/callback-result type: key → fn name. */
   readonly arrHofHelpers = new Map<string, string>();
@@ -2249,6 +2263,8 @@ export class Lowerer {
   /** Named method slots observed before class collection need a callable
    * ABI and shared prototype descriptors instead of call-site specialization. */
   readonly prototypeMethodAccesses = new Map<string, ts.Node>();
+  /** Field names whose complete source census stores only lexical arrows. */
+  readonly receiverFreeCallbackFields = new Set<string>();
   /** Inferred JS methods participating in an override chain keep a vtable
    * ABI instead of call-site specialization. Filled before class collection. */
   readonly virtualJsMethods = new Set<ts.MethodDeclaration>();
@@ -3628,6 +3644,7 @@ export class Lowerer {
     const optionalSymbols = new Set<ts.Symbol>();
     const optionalReturns = new Set<ts.Symbol>();
     const arithmeticReturns = new Map<ts.Symbol, IrType>();
+    const primitiveBindings = new Map<ts.Symbol, IrType>();
     const optionalParams = new Map<ts.Symbol, Set<number>>();
     const optionalFields = new Map<ts.Symbol, Set<string>>();
     const dynamicObjectEntryRows = new Set<ts.Symbol>();
@@ -3654,6 +3671,15 @@ export class Lowerer {
       );
     };
     const functionDeclBySymbol = new Map<ts.Symbol, ts.FunctionLikeDeclaration>();
+    const staticFieldsBySymbol = new Map<ts.Symbol, ClassInfo["staticFields"][number]>();
+    for (const info of this.classes.values()) {
+      for (const field of info.staticFields) {
+        const declaration = field.initializer.parent;
+        if (!ts.isPropertyDeclaration(declaration)) continue;
+        const symbol = symbolOf(declaration.name);
+        if (symbol) staticFieldsBySymbol.set(symbol, field);
+      }
+    }
     type RuntimeSig = {
       params: ParamShape[];
       returnType: IrType;
@@ -3758,10 +3784,11 @@ export class Lowerer {
       }
       return false;
     };
-    const isArrayRead = (node: ts.Expression): boolean => {
+    const isIndexedRead = (node: ts.Expression): boolean => {
       const e = peel(node);
       if (!ts.isElementAccessExpression(e)) return false;
-      return this.mapTypeOf(this.typeOf(e.expression))?.kind === "array";
+      const kind = this.mapTypeOf(this.typeOf(e.expression))?.kind;
+      return kind === "array" || kind === "string";
     };
     const isDynamicObjectEntryRead = (node: ts.Expression): boolean => {
       const read = peel(node);
@@ -3796,7 +3823,8 @@ export class Lowerer {
       // function/global ABI to `T | undefined`.
       if (explicitlyNonNull(node)) return false;
       const e = peel(node);
-      if (isArrayRead(e)) return true;
+      if (isIndexedRead(e)) return true;
+      if (ts.isPropertyAccessExpression(e) && isOptionalProcessStreamProperty(this, e)) return true;
       if (ts.isCallExpression(e) && this.runtimeOptionalReduceTypes.has(e)) return true;
       if (
         ts.isCallExpression(e) &&
@@ -3820,6 +3848,10 @@ export class Lowerer {
       if (ts.isIdentifier(e)) {
         const symbol = symbolOf(e);
         return symbol !== null && optionalSymbols.has(symbol);
+      }
+      if (ts.isPropertyAccessExpression(e)) {
+        const symbol = symbolOf(e.name);
+        if (symbol && optionalSymbols.has(symbol)) return true;
       }
       if (ts.isCallExpression(e) && ts.isIdentifier(e.expression)) {
         const symbol = callableSymbolOf(e.expression);
@@ -3848,28 +3880,43 @@ export class Lowerer {
       }
       return false;
     };
-    const optionalStringArithmeticType = (node: ts.Expression): IrType | null => {
+    const optionalPrimitiveResultType = (node: ts.Expression): IrType | null => {
       const e = peel(node);
-      if (!ts.isBinaryExpression(e) || e.operatorToken.kind !== ts.SyntaxKind.PlusToken)
+      if (ts.isIdentifier(e)) {
+        const symbol = symbolOf(e);
+        return symbol ? (primitiveBindings.get(symbol) ?? null) : null;
+      }
+      if (ts.isCallExpression(e)) {
+        const symbol = callableSymbolOf(e.expression);
+        return symbol ? (arithmeticReturns.get(symbol) ?? null) : null;
+      }
+      if (!ts.isBinaryExpression(e)) return null;
+      if (e.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken && mayBeOptional(e.left)) {
+        const left = this.mapTypeOf(this.typeOf(e.left));
+        const right = this.mapTypeOf(this.typeOf(e.right));
+        const primitive = (t: IrType | null): t is IrType =>
+          t?.kind === "f64" || t?.kind === "string" || t?.kind === "bool";
+        if (primitive(left) && primitive(right) && !typeEquals(left, right)) {
+          const arms = [left, right].sort((a, b) => (typeKey(a) < typeKey(b) ? -1 : 1));
+          return { kind: "union", unionId: this.unions.intern(arms) };
+        }
         return null;
-      const stringArrayRead = (part: ts.Expression): boolean => {
+      }
+      if (e.operatorToken.kind !== ts.SyntaxKind.PlusToken) return null;
+      const stringRead = (part: ts.Expression): boolean => {
         const p = peel(part);
         if (!ts.isElementAccessExpression(p)) return false;
         const t = this.mapTypeOf(this.typeOf(part));
         if (t?.kind !== "string") return false;
         const recv = this.mapTypeOf(this.typeOf(p.expression));
-        return recv?.kind === "array" && recv.elem.kind === "string";
+        return recv?.kind === "string" || (recv?.kind === "array" && recv.elem.kind === "string");
       };
       const primitive = (part: ts.Expression): boolean => {
         const t = this.mapTypeOf(this.typeOf(part));
         return t?.kind === "f64" || t?.kind === "string";
       };
-      if (!stringArrayRead(e.left) && !stringArrayRead(e.right)) return null;
-      if (
-        !(primitive(e.left) || stringArrayRead(e.left)) ||
-        !(primitive(e.right) || stringArrayRead(e.right))
-      )
-        return null;
+      if (!stringRead(e.left) && !stringRead(e.right)) return null;
+      if (!primitive(e.left) || !primitive(e.right)) return null;
       return { kind: "union", unionId: this.unions.intern([F64, STRING]) };
     };
     const noteField = (decl: ts.VariableDeclaration, name: string): boolean => {
@@ -4181,6 +4228,16 @@ export class Lowerer {
       const scan = (node: ts.Node): void => {
         if (ts.isVariableDeclaration(node)) {
           if (node.initializer) {
+            const result = optionalPrimitiveResultType(node.initializer);
+            const symbol = ts.isIdentifier(node.name) ? symbolOf(node.name) : null;
+            if (result?.kind === "union" && symbol) {
+              const before = primitiveBindings.get(symbol);
+              if (!before || !typeEquals(before, result)) {
+                primitiveBindings.set(symbol, result);
+                this.runtimeOptionalBindingTypes.set(symbol, result);
+                changed = true;
+              }
+            }
             if (ts.isIdentifier(node.name) && isDynamicObjectEntryRead(node.initializer)) {
               const symbol = symbolOf(node.name);
               if (symbol && !dynamicObjectEntryRows.has(symbol)) {
@@ -4268,12 +4325,15 @@ export class Lowerer {
               optionalSymbols.add(symbol);
               changed = true;
             }
-          } else if (
-            ts.isPropertyAccessExpression(node.left) &&
-            ts.isIdentifier(node.left.expression)
-          ) {
-            const symbol = symbolOf(node.left.expression);
-            if (symbol && noteFieldSymbol(symbol, node.left.name.text)) changed = true;
+          } else if (ts.isPropertyAccessExpression(node.left)) {
+            const field = symbolOf(node.left.name);
+            if (field && staticFieldsBySymbol.has(field) && !optionalSymbols.has(field)) {
+              optionalSymbols.add(field);
+              changed = true;
+            } else if (ts.isIdentifier(node.left.expression)) {
+              const symbol = symbolOf(node.left.expression);
+              if (symbol && noteFieldSymbol(symbol, node.left.name.text)) changed = true;
+            }
           }
         }
         if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
@@ -4472,7 +4532,7 @@ export class Lowerer {
           optionalReturns.add(symbol);
           changed = true;
         }
-        const arithmetic = optionalStringArithmeticType(expression);
+        const arithmetic = optionalPrimitiveResultType(expression);
         if (arithmetic && !arithmeticReturns.has(symbol)) {
           arithmeticReturns.set(symbol, arithmetic);
           changed = true;
@@ -4483,6 +4543,12 @@ export class Lowerer {
     let changed = true;
     while (changed) {
       changed = false;
+      for (const [symbol, field] of staticFieldsBySymbol) {
+        if (!optionalSymbols.has(symbol) && mayBeOptional(field.initializer)) {
+          optionalSymbols.add(symbol);
+          changed = true;
+        }
+      }
       for (const sf of sourceFiles) if (scanFile(sf)) changed = true;
       for (const [symbol, decl] of functionDeclBySymbol)
         if (scanReturns(symbol, decl)) changed = true;
@@ -4511,6 +4577,20 @@ export class Lowerer {
             changed = true;
           }
         }
+      }
+    }
+    const globalsById = new Map(this.globalsList.map((global) => [global.id, global]));
+    for (const [symbol, field] of staticFieldsBySymbol) {
+      if (!optionalSymbols.has(symbol)) continue;
+      const promoted = addUndefined(field.type);
+      // An explicit optional annotation already has the right layout, but
+      // an indexed assignment still invalidates the checker's presence fact.
+      field.type = promoted;
+      field.runtimeOptional = true;
+      const global = globalsById.get(field.globalId);
+      if (global) {
+        global.type = promoted;
+        this.runtimeOptionalGlobals.add(global);
       }
     }
     for (const [symbol, sig] of signatureBySymbol) {
@@ -4887,7 +4967,7 @@ export class Lowerer {
       this.diags.length > 0
         ? null
         : {
-            irVersion: 14,
+            irVersion: 15,
             sourceFile: this.entry.fileName,
             functions,
             classes: artifacts.classes,
@@ -5974,6 +6054,8 @@ export class Lowerer {
       const arm = sym !== undefined ? this.aliasNarrowTypes.get(sym) : undefined;
       if (arm !== undefined) return arm;
     }
+    const collection = concreteCollectionNarrow(this, node, t);
+    if (collection) return collection;
     // IMPLICIT-ANY instance bodies: an identifier reference to a BOUND
     // param answers the call site's concrete type wherever the checker
     // still says `any` (there is no `T` for mapType to substitute — the
@@ -6415,6 +6497,24 @@ export class Lowerer {
     return literalUnionArm(def, values, (id) => this.shapes.get(id), cached.owners);
   }
 
+  /** Widen only the result view; identical parameter ABIs preserve closure identity. */
+  coerceCovariantFunction(expr: IrExpr, expected: IrType): IrExpr | null {
+    if (
+      expr.type.kind === "func" &&
+      expected.kind === "func" &&
+      expr.type.rest === expected.rest &&
+      expr.type.restAbi === expected.restAbi &&
+      expr.type.argumentsAll === expected.argumentsAll &&
+      expr.type.params.length === expected.params.length &&
+      expr.type.params.every((type, i) => typeEquals(type, expected.params[i]!)) &&
+      expr.type.ret.kind === "object" &&
+      expected.ret.kind === "object" &&
+      this.isSubclassOf(expr.type.ret.className, expected.ret.className)
+    )
+      return { kind: "upcast", value: expr, type: expected, loc: expr.loc };
+    return null;
+  }
+
   /** Implicit union construction. Wherever a value flows into a typed slot
    * (initializer, assignment, call argument, return, field write, record
    * literal field, ternary arm) whose expected type is a union and the
@@ -6724,6 +6824,8 @@ export class Lowerer {
         return { kind: "call", callee: adapter, args: [expr], type: expected, loc: expr.loc };
       }
     }
+    const covariant = this.coerceCovariantFunction(expr, expected);
+    if (covariant) return covariant;
     // The GENERAL function-value adapter (funcCoerceAdapter): a function
     // whose signature differs from the slot's only by coercible pieces —
     // fewer parameters (JS ignores extras: `load(function () {})` into an
@@ -6748,6 +6850,34 @@ export class Lowerer {
       this.isSubclassOf(expr.type.className, expected.className)
     ) {
       return { kind: "upcast", value: expr, type: expected, loc: expr.loc };
+    }
+    // Optional subclass storage still has the same object payload. Extract
+    // it with a checked tag test, then widen the class view without copying.
+    if (expected.kind === "object" && expr.type.kind === "union") {
+      const arms = this.unions.get(expr.type.unionId)?.arms;
+      const present = arms?.filter((arm) => !isUnitType(arm)) ?? [];
+      if (
+        present.length === 1 &&
+        present[0]!.kind === "object" &&
+        present[0]!.className !== expected.className &&
+        this.isSubclassOf(present[0]!.className, expected.className)
+      ) {
+        // One class arm: the ordinary checked narrow reports a missing value
+        // exactly like same-class storage before the prefix view widens it.
+        return {
+          kind: "upcast",
+          value: this.coerceToExpected(expr, present[0]!),
+          type: expected,
+          loc: expr.loc,
+        };
+      }
+      if (
+        present.length > 1 &&
+        present.every((arm) => identityPreservingWidening(this, arm, expected))
+      ) {
+        const view = checkedClassAssertion(this, expr, expected, expr.loc);
+        if (view) return view;
+      }
     }
     // CLASS-VALUE widening (classval:D into a classval:C slot): the same
     // pointer with only the static type changing — legal exactly when D
@@ -7221,6 +7351,19 @@ export class Lowerer {
             loc: expr.loc,
           }
         : this.coerceToExpected(expr, expected);
+    // Keep storage intact when ordinary widening already accepts it. Only
+    // a destination needing a more specific class layout uses the site's
+    // refinement and checked extraction.
+    if (
+      !typeEquals(e.type, expected) &&
+      (expected.kind === "object" || expected.kind === "union")
+    ) {
+      const site = e.type.kind === "union" ? this.mapTypeOf(this.typeOf(node)) : null;
+      const narrowed =
+        (site && narrowStoredClassValue(this, e, site)) ??
+        narrowGenericClassValue(this, e, expected);
+      if (narrowed) e = this.coerceToExpected(narrowed, expected);
+    }
     // Existing JavaScript arrays retain mutations and identity across checked
     // slots. Fresh literals have no prior identity and use checked storage
     // directly, so later writes can change their inferred element type.
@@ -7901,6 +8044,49 @@ export class Lowerer {
 
   wrappedUndefined(type: IrType, loc: SrcLoc): IrExpr | null {
     return wrappedUndefined(this, type, loc);
+  }
+
+  /** The value an OMITTED or deleted property leaves in a record field
+   * slot of `type`: the ABSENT state for undefined-armed unions (the slot
+   * reads as undefined but the property does not exist), the dyn
+   * undefined for 'unknown' slots, and null when the slot cannot be
+   * missing. Only legal as a direct field-slot write (IR fieldAbsent). */
+  absentFieldValue(type: IrType, loc: SrcLoc): IrExpr | null {
+    if (type.kind === "union" && this.armTag(type.unionId, UNDEFINED_T) >= 0) {
+      return { kind: "fieldAbsent", unionId: type.unionId, type, loc };
+    }
+    return this.wrappedUndefined(type, loc);
+  }
+
+  /** A field copy that keeps absence: `value` (the converted read of
+   * `field` from record `obj`, which must be repeatable) when the source
+   * property exists, else the target slot's ABSENT state. Fields that are
+   * always present, and targets that cannot be absent, copy `value`
+   * as-is. Only legal as a direct field-slot write. */
+  presenceKeepingCopy(
+    obj: IrExpr,
+    shapeId: string,
+    field: string,
+    value: IrExpr,
+    loc: SrcLoc,
+  ): IrExpr {
+    const present = this.recordFieldPresent(obj, shapeId, field, loc);
+    if (present.kind !== "recordHas") return value;
+    const absent = this.absentFieldValue(value.type, loc);
+    if (absent?.kind !== "fieldAbsent") return value;
+    return { kind: "ternary", cond: present, then: value, else_: absent, type: value.type, loc };
+  }
+
+  /** Own-property presence of declared field `field` on record `obj`
+   * (borrowed — callers pass a repeatable receiver): a runtime test for
+   * undefined-armed union fields, which can be absent, and `true` for
+   * every other declared field. */
+  recordFieldPresent(obj: IrExpr, shapeId: string, field: string, loc: SrcLoc): IrExpr {
+    const f = this.shapes.get(shapeId)?.fields.find((x) => x.name === field);
+    if (f && f.type.kind === "union" && this.armTag(f.type.unionId, UNDEFINED_T) >= 0) {
+      return { kind: "recordHas", obj, shapeId, field, type: BOOL, loc };
+    }
+    return { kind: "boolLit", value: true, type: BOOL, loc };
   }
 
   /** The entry value of a binding JS initializes to `undefined` (an

@@ -283,7 +283,7 @@ test.each([mapOf(STRING, F64), setOf(STRING), { kind: "promise", inner: F64 } as
   },
 );
 
-test.each([mapOf(STRING, F64), setOf(STRING), { kind: "promise", inner: F64 } as IrType])(
+test.each([{ kind: "promise", inner: F64 } as IrType])(
   "%j payloads still refuse unrelated data siblings",
   (type) => {
     const mod = expressionModule({ kind: "numLit", value: 0, type: F64, loc }, [
@@ -295,13 +295,12 @@ test.each([mapOf(STRING, F64), setOf(STRING), { kind: "promise", inner: F64 } as
   },
 );
 
-test("two differently typed Map payloads cannot silently share one tag test", () => {
+test("differently typed collection payloads preserve separate union tags", () => {
   const mod = expressionModule({ kind: "numLit", value: 0, type: F64, loc }, [
     { id: "maps", arms: [mapOf(STRING, F64), mapOf(STRING, STRING), UNDEFINED_T] },
   ]);
-  expect(
-    validateModule(mod).filter((error) => error.message.includes("beside non-unit arms")),
-  ).toHaveLength(2);
+  expect(validateModule(mod)).toEqual([]);
+  expect(deserializeModule(serializeModule(mod))).toEqual(mod);
 });
 
 function numericReadModule(overrides: Partial<IrExpr & { kind: "arrIntrinsic" }> = {}): IrModule {
@@ -315,7 +314,7 @@ function numericReadModule(overrides: Partial<IrExpr & { kind: "arrIntrinsic" }>
     ...overrides,
   };
   return {
-    irVersion: 14,
+    irVersion: 15,
     sourceFile: loc.file,
     entry: "main",
     functions: [
@@ -399,7 +398,7 @@ test.each(["sortPrimitive", "toSortedPrimitive"] as const)(
 
 function expressionModule(expr: IrExpr, unions: IrUnionDef[]): IrModule {
   return {
-    irVersion: 14,
+    irVersion: 15,
     sourceFile: loc.file,
     entry: "main",
     unions,
@@ -1286,7 +1285,7 @@ test.each([
 function tdzModule(mutable = true): IrModule {
   const value: IrExpr = { kind: "numLit", value: 0, type: F64, loc };
   return {
-    irVersion: 14,
+    irVersion: 15,
     sourceFile: loc.file,
     entry: "main",
     functions: [
@@ -1444,6 +1443,91 @@ test.each(["receiver", "key", "result"] as const)(
   },
 );
 
+function fieldPresenceModule(absentInLiteral: boolean): IrModule {
+  const optional: IrType = { kind: "union", unionId: "maybeCount" };
+  const record: IrType = { kind: "record", shapeId: "item" };
+  const absent: IrExpr = { kind: "fieldAbsent", unionId: "maybeCount", type: optional, loc };
+  const literal: IrExpr = {
+    kind: "recordLit",
+    fields: [
+      {
+        name: "count",
+        value: absentInLiteral
+          ? {
+              kind: "ternary",
+              cond: { kind: "boolLit", value: true, type: BOOL, loc },
+              then: {
+                kind: "unionWrap",
+                unionId: "maybeCount",
+                tag: 0,
+                value: { kind: "numLit", value: 1, type: F64, loc },
+                type: optional,
+                loc,
+              },
+              else_: absent,
+              type: optional,
+              loc,
+            }
+          : {
+              kind: "unionWrap",
+              unionId: "maybeCount",
+              tag: 1,
+              value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc },
+              type: optional,
+              loc,
+            },
+      },
+    ],
+    type: record,
+    loc,
+  };
+  const check: IrExpr = {
+    kind: "recordHas",
+    obj: literal,
+    shapeId: "item",
+    field: "count",
+    type: BOOL,
+    loc,
+  };
+  const mod = expressionModule(check, [{ id: "maybeCount", arms: [F64, UNDEFINED_T] }]);
+  mod.records = [{ id: "item", fields: [{ name: "count", type: optional }] }];
+  if (!absentInLiteral) mod.functions[0]!.body.push({ kind: "exprStmt", expr: absent, loc });
+  return mod;
+}
+
+test("field presence checks and absent field states validate and serialize", () => {
+  const mod = fieldPresenceModule(true);
+  expect(validateModule(mod)).toEqual([]);
+  expect(deserializeModule(serializeModule(mod))).toEqual(mod);
+});
+
+test("the absent field state is confined to field writes", () => {
+  expect(
+    validateModule(fieldPresenceModule(false)).some((error) =>
+      error.message.includes("fieldAbsent outside a record field write"),
+    ),
+  ).toBe(true);
+});
+
+test("the absent field state requires an undefined arm", () => {
+  const mod = fieldPresenceModule(true);
+  mod.unions = [{ id: "maybeCount", arms: [F64, STRING] }];
+  expect(
+    validateModule(mod).some((error) => error.message.includes("the union has no undefined arm")),
+  ).toBe(true);
+});
+
+test("field presence checks name a declared field", () => {
+  const mod = fieldPresenceModule(true);
+  const statement = mod.functions[0]!.body[0]!;
+  if (statement.kind !== "exprStmt" || statement.expr.kind !== "recordHas")
+    throw new Error("fixture");
+  statement.expr.field = "missing";
+  expect(
+    validateModule(mod).some((error) => error.message.includes('has no field "missing"')),
+  ).toBe(true);
+});
+
 test("TDZ locals require a shared box", () => {
   const mod = tdzModule();
   delete mod.functions[0]!.locals[0]!.boxed;
@@ -1454,7 +1538,7 @@ test("TDZ locals require a shared box", () => {
 
 function discriminatedModule(): IrModule {
   return {
-    irVersion: 14,
+    irVersion: 15,
     sourceFile: loc.file,
     entry: "main",
     functions: [{ name: "main", params: [], locals: [], returnType: VOID, body: [], loc }],
@@ -1615,4 +1699,144 @@ test("typed-array brand tests serialize their element kind and reject misplaced 
   expect(validateModule(mod).map((d) => d.message)).toContain(
     "in main: dynTest bytesElem requires a valid bytes test",
   );
+});
+
+test("function result views preserve the parameter ABI and reject reversed covariance", () => {
+  const source: IrType = {
+    kind: "func",
+    params: [F64],
+    ret: { kind: "object", className: "Child" },
+  };
+  const target: IrType = {
+    kind: "func",
+    params: [F64],
+    ret: { kind: "object", className: "Base" },
+  };
+  const mod = expressionModule(
+    {
+      kind: "upcast",
+      value: { kind: "varRef", localId: "callback", type: source, loc },
+      type: target,
+      loc,
+    },
+    [],
+  );
+  mod.classes = [
+    { name: "Base", fields: [], loc },
+    { name: "Child", base: "Base", fields: [], loc },
+    { name: "Other", fields: [], loc },
+  ];
+  mod.functions[0]!.params = [{ localId: "callback", name: "callback", type: source }];
+  mod.functions[0]!.locals = [{ id: "callback", name: "callback", type: source, mutable: false }];
+  expect(validateModule(deserializeModule(serializeModule(mod)))).toEqual([]);
+  for (const variant of [
+    "parameter",
+    "arity",
+    "rest",
+    "rest-abi",
+    "arguments",
+    "return",
+    "unrelated",
+    "reverse",
+  ] as const) {
+    const bad = structuredClone(mod);
+    const stmt = bad.functions[0]!.body[0]!;
+    if (stmt.kind !== "exprStmt" || stmt.expr.kind !== "upcast" || stmt.expr.type.kind !== "func")
+      throw new Error("fixture");
+    const type = stmt.expr.type;
+    if (variant === "parameter") type.params[0] = STRING;
+    if (variant === "arity") type.params.push(F64);
+    if (variant === "rest") type.rest = true;
+    if (variant === "rest-abi") type.restAbi = "jsval";
+    if (variant === "arguments") type.argumentsAll = true;
+    if (variant === "return") type.ret = F64;
+    if (variant === "unrelated") type.ret = { kind: "object", className: "Other" };
+    if (variant === "reverse") {
+      if (stmt.expr.value.type.kind !== "func") throw new Error("fixture");
+      stmt.expr.value.type.ret = { kind: "object", className: "Base" };
+      type.ret = { kind: "object", className: "Child" };
+    }
+    expect(
+      validateModule(bad).map((error) => error.message),
+      variant,
+    ).toContain(
+      "in main: function upcast requires identical parameters and a covariant class return",
+    );
+  }
+});
+
+test("abstract virtual slots admit subclass returns without admitting unrelated return layouts", () => {
+  const mod = virtualCallModule();
+  const base: IrType = { kind: "object", className: "Base" };
+  const child: IrType = { kind: "object", className: "First" };
+  for (const fn of mod.functions.filter((fn) => fn.name.startsWith("%"))) {
+    fn.params.push({ localId: "result", name: "result", type: child });
+    fn.locals.push({ id: "result", name: "result", type: child, mutable: false });
+    fn.returnType = child;
+    fn.body = [
+      { kind: "return", value: { kind: "varRef", localId: "result", type: child, loc }, loc },
+    ];
+  }
+  for (const fn of mod.functions.filter((fn) => fn.name.startsWith("caller"))) {
+    fn.params.push({ localId: "result", name: "result", type: child });
+    fn.locals.push({ id: "result", name: "result", type: child, mutable: false });
+    const stmt = fn.body[0]!;
+    if (stmt.kind !== "exprStmt" || stmt.expr.kind !== "virtualCall") throw new Error("fixture");
+    stmt.expr.type = base;
+    stmt.expr.args.push({ kind: "varRef", localId: "result", type: child, loc });
+  }
+  expect(validateModule(deserializeModule(serializeModule(mod)))).toEqual([]);
+  mod.classes!.find((cls) => cls.name === "First")!.base = "Unrelated";
+  expect(validateModule(mod).map((error) => error.message)).toEqual([
+    "in caller0: virtualCall Base.run result type mismatch",
+    "in caller1: virtualCall Base.run result type mismatch",
+  ]);
+});
+
+test("signature adapters capture the function whose identity they share", () => {
+  const source: IrType = { kind: "func", params: [F64], ret: VOID };
+  const target: IrType = { kind: "func", params: [F64, F64], ret: VOID };
+  const adapter: IrExpr & { kind: "closure" } = {
+    kind: "closure",
+    fnName: "view",
+    captures: ["f.0"],
+    adapts: true,
+    type: target,
+    loc,
+  };
+  const mod = expressionModule(adapter, []);
+  mod.functions[0]!.locals.push({
+    id: "f.0",
+    name: "f",
+    type: source,
+    mutable: false,
+    boxed: true,
+  });
+  mod.functions.push({
+    name: "view",
+    params: [
+      { localId: "a.0", name: "a", type: F64 },
+      { localId: "b.0", name: "b", type: F64 },
+    ],
+    captures: [{ localId: "f.0", name: "f", type: source }],
+    locals: [
+      { id: "f.0", name: "f", type: source, mutable: false, boxed: true },
+      { id: "a.0", name: "a", type: F64, mutable: false },
+      { id: "b.0", name: "b", type: F64, mutable: false },
+    ],
+    returnType: VOID,
+    body: [],
+    loc,
+  });
+  expect(validateModule(mod)).toEqual([]);
+  expect(deserializeModule(serializeModule(mod))).toEqual(mod);
+  const numeric = structuredClone(mod);
+  for (const fn of numeric.functions)
+    for (const local of fn.locals) if (local.id === "f.0") local.type = F64;
+  numeric.functions[1]!.captures = [{ localId: "f.0", name: "f", type: F64 }];
+  expect(
+    validateModule(numeric).some((error) =>
+      error.message.includes("an adapter's first capture must be a function"),
+    ),
+  ).toBe(true);
 });

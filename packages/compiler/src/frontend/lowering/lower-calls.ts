@@ -1,3 +1,5 @@
+import { lowerUnionEquality, tagEqualityMayMissAlias } from "./strict-equality.js";
+import { lowerArrayCallbackCall } from "./containers/array-callback-call.js";
 /** Dispatch source calls, builtin members and receiver-specific operations.
  * Signature collection, argument completion and function bodies have their
  * own owners; this module selects the applicable call path. */
@@ -1422,6 +1424,25 @@ export function lowerCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr {
       if (sig && !(jsSpreadArgs && spreadNeedsRuntimeArity(lowerer, sig.params, expr.arguments))) {
         lowerer.noteEdge(sig.name);
         const args = lowerer.completeArgs(expr.arguments, sig.params, loc, expr);
+        const symbol = lowerer.resolveValueSymbol(expr.expression);
+        const declaration = symbol ? lowerer.checker.valueDeclarationOf(symbol) : undefined;
+        // A bare call supplies undefined as this, even inside a callback
+        // currently carrying a receiver. The value-call ABI saves and
+        // restores that ambient receiver around the function invocation.
+        if (
+          declaration &&
+          ts.isFunctionDeclaration(declaration) &&
+          declaration.parameters.some(isThisParameter)
+        ) {
+          const callee = lowerer.lowerExpr(expr.expression);
+          return reconcileOverloadReturn(lowerer, expr, {
+            kind: "callValue",
+            callee,
+            args,
+            type: sig.returnType,
+            loc,
+          });
+        }
         return reconcileOverloadReturn(lowerer, expr, {
           kind: "call",
           callee: sig.name,
@@ -1871,6 +1892,11 @@ export function lowerCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr {
   ) {
     const access = expr.expression;
     const value = tryLowerExpression(lowerer, access.expression);
+    if (value?.type.kind === "array" && !isJsSourceFile(expr.getSourceFile())) {
+      const callback = lowerArrayCallbackCall(lowerer, expr, access, value);
+      if (callback) return callback;
+    }
+
     if (
       value?.type.kind === "dyn" ||
       value?.type.kind === "generator" ||
@@ -4840,14 +4866,14 @@ function reconcileOverloadReturn(
 ): IrExpr {
   const rsig = lowerer.checker.getResolvedSignature(expr);
   const rdecl = rsig ? lowerer.checker.signatureDeclaration(rsig) : undefined;
-  // Fluent JS overrides share the base's return ABI, but their result
-  // still has the receiver's subclass layout at the call site.
+  // Nominal covariant overrides share the base's return ABI, but retain
+  // their declared subclass result at the call site. Unannotated fluent
+  // JS overrides use the same bridge for their proven receiver result.
   if (
     call.type.kind === "object" &&
     rdecl &&
     ts.isMethodDeclaration(rdecl) &&
-    isJsSourceFile(rdecl.getSourceFile()) &&
-    returnsOnlyThis(rdecl)
+    (!isJsSourceFile(rdecl.getSourceFile()) || returnsOnlyThis(rdecl))
   ) {
     call = lowerer.maybeNarrow(call, expr);
   }
@@ -6482,11 +6508,10 @@ function filterNarrowHelper(
  * no runtime walk. ORDER is the shape's first-seen DECLARATION order
  * (threaded through the shape registry), which matches Node whenever
  * objects are constructed in declaration order — the divergence for
- * reordered construction is SEMANTICS.md 36. Fields holding the
- * undefined arm of their union are SKIPPED at runtime (Node's missing
- * key: an unset optional never made it into the object), which also
- * means an EXPLICIT `{ a: undefined }` key is dropped where Node lists
- * it — same rule as jsonStringify, same SEMANTICS entry. Values wrap
+ * reordered construction is SEMANTICS.md 36. Optional fields that are
+ * absent (omitted or deleted) are SKIPPED at runtime, Node's missing key,
+ * while an explicit `{ a: undefined }` is listed with its undefined
+ * value. Values wrap
  * into the checker's result-element type per field; a multi-arm field
  * union that differs from the result union would need a re-tag — fenced.
  * Null when this isn't an Object static over a fixed record (index
@@ -6619,9 +6644,9 @@ function lowerSymbolMethodCall(
 
 /** The interned keys-array helper over a FIXED record shape: a call of a
  * lifted helper whose body pushes each declared field name in first-seen
- * DECLARATION order, skipping fields currently holding the undefined arm
- * of their union at runtime (Node's missing key — an unset optional
- * never made it into the object; SEMANTICS.md 37's rules). ONE
+ * DECLARATION order, skipping optional fields that are currently absent
+ * (omitted or deleted — Node's missing key; a field explicitly holding
+ * undefined is present and listed). ONE
  * construction, interned per shape, shared by Object.keys and for-in —
  * for-in iterates exactly the keys Object.keys answers. */
 export function recordKeysArrayCall(
@@ -6676,33 +6701,12 @@ export function recordKeysArrayCall(
           },
           loc,
         };
-        // Undefined-armed fields: the push is guarded by a tag test (the
+        // Fields that can be absent push behind their presence test (the
         // key exists exactly when Object.keys would list it).
-        const utag = f.type.kind === "union" ? lowerer.armTag(f.type.unionId, UNDEFINED_T) : -1;
+        const present = lowerer.recordFieldPresent(ref, argIr.shapeId, f.name, loc);
         body.push(
-          utag >= 0 && f.type.kind === "union"
-            ? {
-                kind: "if",
-                cond: {
-                  kind: "unionIsTag",
-                  unionId: f.type.unionId,
-                  tag: utag,
-                  negated: true,
-                  value: {
-                    kind: "recordGet",
-                    obj: ref,
-                    shapeId: argIr.shapeId,
-                    field: f.name,
-                    type: f.type,
-                    loc,
-                  },
-                  type: BOOL,
-                  loc,
-                },
-                then: [pushStmt],
-                else_: null,
-                loc,
-              }
+          present.kind === "recordHas"
+            ? { kind: "if", cond: present, then: [pushStmt], else_: null, loc }
             : pushStmt,
         );
       }
@@ -6718,9 +6722,9 @@ export function recordKeysArrayCall(
 
 /** Interned `%obj.hasOwn.<n>(r, k)` — Object.hasOwn's membership walk
  * over a record shape: the key compares against each
- * declared field name, undefined-armed fields answering by their tag
+ * declared field name, optional fields answering by their presence
  * (a key is own exactly when Object.keys would list it — the two share
- * the guard), everything else true. Unmatched keys probe the overflow
+ * the test), everything else true. Unmatched keys probe the overflow
  * map when present, so explicit undefined values remain own keys. */
 function recordHasOwnHelper(lowerer: Lowerer, shapeId: string, loc: SrcLoc): string {
   const key = `obj.hasOwn:${shapeId}`;
@@ -6734,19 +6738,7 @@ function recordHasOwnHelper(lowerer: Lowerer, shapeId: string, loc: SrcLoc): str
   const kRef: IrExpr = { kind: "varRef", localId: "k.0", type: STRING, loc };
   const body: IrStmt[] = [];
   for (const f of shape.fields) {
-    const utag = f.type.kind === "union" ? lowerer.armTag(f.type.unionId, UNDEFINED_T) : -1;
-    const answer: IrExpr =
-      utag >= 0 && f.type.kind === "union"
-        ? {
-            kind: "unionIsTag",
-            unionId: f.type.unionId,
-            tag: utag,
-            negated: true,
-            value: { kind: "recordGet", obj: rRef, shapeId, field: f.name, type: f.type, loc },
-            type: BOOL,
-            loc,
-          }
-        : { kind: "boolLit", value: true, type: BOOL, loc };
+    const answer = lowerer.recordFieldPresent(rRef, shapeId, f.name, loc);
     body.push({
       kind: "if",
       cond: {
@@ -6785,8 +6777,9 @@ function recordHasOwnHelper(lowerer: Lowerer, shapeId: string, loc: SrcLoc): str
 
 /** Interned `%obj.assign.<n>(t, s)` — Object.assign's per-field copy
  * over signature-free records (every source field lands on a same-named,
- * same-typed target field — the caller's gate): undefined-armed source
- * fields copy behind the not-undefined guard, everything else straight,
+ * same-typed target field — the caller's gate): optional source fields
+ * copy only when present (an explicit undefined copies), everything else
+ * straight,
  * and the TARGET returns (JS's aliasing). */
 function recordAssignHelper(
   lowerer: Lowerer,
@@ -6822,24 +6815,10 @@ function recordAssignHelper(
       value: get,
       loc,
     };
-    const utag = f.type.kind === "union" ? lowerer.armTag(f.type.unionId, UNDEFINED_T) : -1;
+    const present = lowerer.recordFieldPresent(sRef, srcShapeId, f.name, loc);
     body.push(
-      utag >= 0 && f.type.kind === "union"
-        ? {
-            kind: "if",
-            cond: {
-              kind: "unionIsTag",
-              unionId: f.type.unionId,
-              tag: utag,
-              negated: true,
-              value: get,
-              type: BOOL,
-              loc,
-            },
-            then: [set],
-            else_: null,
-            loc,
-          }
+      present.kind === "recordHas"
+        ? { kind: "if", cond: present, then: [set], else_: null, loc }
         : set,
     );
   }
@@ -7171,6 +7150,9 @@ function lowerObjectStaticCall(
       };
     }
     if (left.type.kind === "union" || right.type.kind === "union") {
+      const compared = lowerUnionEquality(lowerer, left, right, false, true, loc);
+      if (compared) return compared;
+
       const ut =
         left.type.kind === "union" ? left.type : (right.type as IrType & { kind: "union" });
       const bothUnion = left.type.kind === "union" && right.type.kind === "union";
@@ -7179,9 +7161,23 @@ function lowerObjectStaticCall(
         const plain = left.type.kind === "union" ? right : left;
         const arms = lowerer.unions.get(ut.unionId)?.arms ?? [];
         // The plain side wraps into the union exactly like === when the
-        // union holds its type; a plain PRIMITIVE the union has no arm
-        // for is the disjoint constant false (coercing it would strand).
-        if (bothUnion || arms.some((a) => typeEquals(a, plain.type))) {
+        // union holds its type, or when a plain class instance upcasts
+        // into exactly one class arm (the same pointer under a base tag);
+        // a plain PRIMITIVE the union has no arm for is the disjoint
+        // constant false (coercing it would strand).
+        const plainType = plain.type;
+        const upcastArm =
+          plainType.kind === "object" &&
+          arms.filter(
+            (a) => a.kind === "object" && lowerer.isSubclassOf(plainType.className, a.className),
+          ).length === 1;
+        if (bothUnion || upcastArm || arms.some((a) => typeEquals(a, plain.type))) {
+          if (tagEqualityMayMissAlias(lowerer, ut))
+            lowerer.noLowering(
+              "Object.is over related class values beside structural union members",
+              call,
+              NARROW_FIRST,
+            );
           const sameValue = arms.some((a) => a.kind === "f64");
           return {
             kind: "unionEq",
@@ -7412,12 +7408,10 @@ function lowerObjectStaticCall(
     // (the mockable-clock restore: `Object.assign(mocked,
     // implementations)` over one shape): the per-field copy helper,
     // returning the TARGET — JS's aliasing, the target mutates in
-    // place. Undefined-armed source fields copy behind the
-    // not-undefined guard (an omitted optional field holds the
-    // undefined arm and must not erase the target's value — Node
-    // copies own keys only; an EXPLICIT `k: undefined` source diverges,
-    // the explicit-undefined-is-absent stance). Everything else keeps
-    // the spread hint.
+    // place. Optional source fields copy only when present (an omitted
+    // optional field must not erase the target's value — Node copies own
+    // keys only — while an explicit `k: undefined` does). Everything
+    // else keeps the spread hint.
     if (call.arguments.length === 2 && !call.arguments.some((a) => ts.isSpreadElement(a))) {
       const tProbe = tryLowerExpression(lowerer, call.arguments[0]!);
       const sProbe = tryLowerExpression(lowerer, call.arguments[1]!);
@@ -7822,11 +7816,9 @@ function lowerObjectStaticCall(
   }
   // `Object.hasOwn(r, k)` over a RECORD receiver: a record's own-key set
   // is its declared field list, so membership is a compare chain against
-  // the field names (interned per shape). Undefined-armed (optional)
-  // fields answer by their runtime tag — the explicit-undefined-is-absent
-  // stance: an omitted optional field holds the undefined arm and reads
-  // as NOT own, exactly Node's absent key (an EXPLICIT `k: undefined`
-  // diverges — documented next to the child-env/JSON rule). Tuple
+  // the field names (interned per shape). Optional fields answer by
+  // their runtime presence: an omitted or deleted optional field is NOT
+  // own, while an explicit `k: undefined` is, exactly Node's keys. Tuple
   // and accessor-carrying shapes keep the SC2020 fence. Index-signature
   // records additionally probe the overflow map; non-record receivers
   // do too.
@@ -8115,8 +8107,8 @@ function lowerObjectStaticCall(
           }
           return null;
         };
-        // Undefined-armed fields: the push is guarded by a tag test, and
-        // the pushed value is the narrowed non-undefined arm.
+        // Undefined-armed fields: the push is guarded by the field's
+        // presence; a narrowed push re-tags the non-undefined arm.
         let guardUndefTag: number | null = null;
         let value: IrExpr = raw;
         let vt: IrType = f.type;
@@ -8176,49 +8168,83 @@ function lowerObjectStaticCall(
               `cannot flow into the '${lowerer.fmt(valueT!)}' result element — read the fields directly)`,
           );
         }
-        const pushed: IrExpr =
-          member === "values"
-            ? coerced
-            : {
-                kind: "recordLit",
-                fields: [
-                  { name: "0", value: { kind: "strLit", value: f.name, type: STRING, loc } },
-                  { name: "1", value: coerced },
-                ],
-                type: tupleT!,
-                loc,
-              };
-        const pushStmt: IrStmt = {
+        const pushOf = (element: IrExpr): IrStmt => ({
           kind: "exprStmt",
           expr: {
             kind: "arrIntrinsic",
             method: "push",
             receiver: outRef,
-            args: [pushed],
+            args: [
+              member === "values"
+                ? element
+                : {
+                    kind: "recordLit",
+                    fields: [
+                      { name: "0", value: { kind: "strLit", value: f.name, type: STRING, loc } },
+                      { name: "1", value: element },
+                    ],
+                    type: tupleT!,
+                    loc,
+                  },
+            ],
             type: F64,
             loc,
           },
           loc,
-        };
-        body.push(
-          guardUndefTag !== null && f.type.kind === "union"
-            ? {
-                kind: "if",
-                cond: {
-                  kind: "unionIsTag",
-                  unionId: f.type.unionId,
-                  tag: guardUndefTag,
-                  negated: true,
-                  value: raw,
-                  type: BOOL,
-                  loc,
-                },
-                then: [pushStmt],
-                else_: null,
+        });
+        let stmt = pushOf(coerced);
+        if (guardUndefTag !== null && f.type.kind === "union") {
+          if (value !== raw) {
+            // A narrowed push: a present field holding undefined pushes
+            // the result element's own undefined when it has one; a values
+            // array without one stores a present undefined element (a
+            // runtime-optional field the checker typed as required). An
+            // entries tuple slot has no spelling for it.
+            const undefinedElement = valueT ? lowerer.wrappedUndefined(valueT, loc) : null;
+            const undefinedPush: IrStmt | null = undefinedElement
+              ? pushOf(undefinedElement)
+              : member === "values"
+                ? {
+                    kind: "arraySetUndefined",
+                    arr: outRef,
+                    index: {
+                      kind: "arrIntrinsic",
+                      method: "length",
+                      receiver: outRef,
+                      args: [],
+                      type: F64,
+                      loc,
+                    },
+                    loc,
+                  }
+                : null;
+            stmt = {
+              kind: "if",
+              cond: {
+                kind: "unionIsTag",
+                unionId: f.type.unionId,
+                tag: guardUndefTag,
+                negated: true,
+                value: raw,
+                type: BOOL,
                 loc,
-              }
-            : pushStmt,
-        );
+              },
+              then: [stmt],
+              else_: undefinedPush ? [undefinedPush] : null,
+              loc,
+            };
+          }
+          // Absent fields contribute nothing; present ones push their
+          // value, undefined included.
+          stmt = {
+            kind: "if",
+            cond: lowerer.recordFieldPresent(ref, argIr.shapeId, f.name, loc),
+            then: [stmt],
+            else_: null,
+            loc,
+          };
+        }
+        body.push(stmt);
       }
       body.push({ kind: "return", value: outRef, loc });
       fn.body = body;
@@ -8302,7 +8328,7 @@ function lowerObjectAssignHybrid(lowerer: Lowerer, call: ts.CallExpression): IrE
   for (const f of shape.fields) {
     const v = values.get(f.name);
     if (!v) {
-      const absent = lowerer.wrappedUndefined(f.type, loc);
+      const absent = lowerer.absentFieldValue(f.type, loc);
       if (!absent) {
         lowerer.unsupported(
           "SC1090",
@@ -8991,7 +9017,9 @@ export function lowerObjectMethodCall(
       const receiverLocal = lowerer.declareHiddenLocal("%callReceiver", target.obj.type);
       const init: IrStmt = { kind: "varDecl", localId: receiverLocal.id, init: target.obj, loc };
       target.obj = { kind: "varRef", localId: receiverLocal.id, type: receiverLocal.type, loc };
-      const receiver = lowerer.coerceToExpected(target.obj, DYN);
+      const receiver: { receiver?: IrExpr } = {};
+      if (!lowerer.receiverFreeCallbackFields.has(access.name.text))
+        receiver.receiver = lowerer.coerceToExpected(target.obj, DYN);
       const finish = (result: IrExpr): IrExpr => ({
         kind: "seqExpr",
         stmts: [init],
@@ -9021,12 +9049,12 @@ export function lowerObjectMethodCall(
         ) {
           const boxed: IrExpr = { kind: "dynFrom", value: callee, type: DYN, loc };
           const spread = lowerSpreadArgsCall(lowerer, call, boxed, loc);
-          if (spread?.kind === "dynCall") return finish({ ...spread, receiver });
+          if (spread?.kind === "dynCall") return finish({ ...spread, ...receiver });
           const args = call.arguments.map((arg) => lowerer.lowerExprExpecting(arg, DYN));
           return finish({
             kind: "dynCall",
             callee: boxed,
-            receiver,
+            ...receiver,
             calleeName: access.getText(),
             args,
             type: DYN,
@@ -9034,7 +9062,7 @@ export function lowerObjectMethodCall(
           });
         }
         const args = completeFuncValueArgs(lowerer, call, callee.type, locOf(call));
-        return finish({ kind: "callValue", callee, receiver, args, type: callee.type.ret, loc });
+        return finish({ kind: "callValue", callee, ...receiver, args, type: callee.type.ret, loc });
       }
       if (callee?.type.kind === "dyn") {
         if (call.arguments.some((a) => ts.isSpreadElement(a))) {
@@ -9044,7 +9072,7 @@ export function lowerObjectMethodCall(
         return finish({
           kind: "dynCall",
           callee,
-          receiver,
+          ...receiver,
           calleeName: access.getText(),
           args,
           type: DYN,
@@ -9130,7 +9158,7 @@ export function lowerObjectMethodCall(
       lowerer,
       value,
       method,
-      call.arguments.map((arg) => lowerer.lowerExprExpecting(arg, DYN)),
+      call.arguments,
       fallback,
       loc,
       access.getText(),

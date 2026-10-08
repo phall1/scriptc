@@ -16,6 +16,7 @@ import {
   arrayValueStore,
   arrayValueType,
   unionArrayValueRead,
+  lowerSafeIndexRead,
 } from "./array-values.js";
 import {
   lowerForAwaitGenerator,
@@ -96,7 +97,6 @@ import {
   lowerForOfSearchParams,
   lowerForOfSet,
 } from "./containers/for-of.js";
-import { lowerSafeIndexRead } from "./containers/array-methods.js";
 import { objectIterOverIndexShape } from "./containers/indexed-objects.js";
 import { strCharsCall } from "./containers/array-construction.js";
 import {
@@ -124,7 +124,7 @@ import { classStaticDataFor } from "./class-static-data.js";
 import { objectFactorySignature } from "./object-factory-new.js";
 import { isClassCallback, lowerClassCallbackAssign } from "./class-callbacks.js";
 import { classForInHasKey, classPropertiesHelper } from "./class-dynamic-dispatch.js";
-import { genericIfaceBindingKeepsClass, staticFieldWriteTarget } from "./lower-classes.js";
+import { genericIfaceBindingKeepsClass } from "./lower-classes.js";
 import { lowerStreamUnderscoreAssign, streamClassAliasDecl } from "./lower-stream.js";
 import {
   lowerHttpResPropertyAssignment,
@@ -153,6 +153,7 @@ import {
   lowerCompoundValueToTarget,
   lowerElementCompound,
   lowerIncDec,
+  lowerIncDecTarget,
   lowerGroupsProjection,
   matchResultNamedGroupsOf,
   runtimeOptionalGuardIds,
@@ -3583,14 +3584,20 @@ function objectRestValue(
       kind: "recordLit",
       fields: rem.map((f) => ({
         name: f.name,
-        value: {
-          kind: "recordGet",
-          obj: srcRef(),
-          shapeId: srcType.shapeId,
-          field: f.name,
-          type: f.type,
+        value: lowerer.presenceKeepingCopy(
+          srcRef(),
+          srcType.shapeId,
+          f.name,
+          {
+            kind: "recordGet",
+            obj: srcRef(),
+            shapeId: srcType.shapeId,
+            field: f.name,
+            type: f.type,
+            loc,
+          },
           loc,
-        } as IrExpr,
+        ),
       })),
       type: {
         kind: "record",
@@ -3638,7 +3645,16 @@ function objectRestValue(
       type: srcField.type,
       loc,
     };
-    return { name: f.name, value: lowerer.coerceInto(el, read, f.type) };
+    return {
+      name: f.name,
+      value: lowerer.presenceKeepingCopy(
+        srcRef(),
+        srcType.shapeId,
+        srcField.name,
+        lowerer.coerceInto(el, read, f.type),
+        loc,
+      ),
+    };
   });
   return { kind: "recordLit", fields, type: restT, loc };
 }
@@ -4691,10 +4707,13 @@ export function lowerVarDecl(
     const arithmetic =
       raw.type.kind === "union" ? lowerer.unions.get(raw.type.unionId)?.arms : undefined;
     if (
-      g.type.kind === "string" &&
       arithmetic?.length === 2 &&
-      arithmetic.some((a) => a.kind === "f64") &&
-      arithmetic.some((a) => a.kind === "string")
+      arithmetic.every((a) => a.kind === "f64" || a.kind === "string" || a.kind === "bool") &&
+      (lowerer.runtimeOptionalArithmeticTypes.has(decl.initializer) ||
+        lowerer.runtimeOptionalBindingType(decl.name)?.kind === "union" ||
+        (g.type.kind === "string" &&
+          arithmetic.some((a) => a.kind === "f64") &&
+          arithmetic.some((a) => a.kind === "string")))
     ) {
       g.type = raw.type;
       lowerer.runtimeOptionalArithmeticGlobals.add(g);
@@ -5107,9 +5126,13 @@ export function lowerVarDecl(
     );
   };
   const runtimeStringArithmetic =
-    settledType.kind === "string" &&
-    ((arithmeticType && typeEquals(arithmeticType, init.type)) ||
-      isStringArithmeticUnion(init.type));
+    (arithmeticType !== undefined && typeEquals(arithmeticType, init.type)) ||
+    (settledType.kind === "string" && isStringArithmeticUnion(init.type)) ||
+    (init.type.kind === "union" &&
+      typeEquals(lowerer.runtimeOptionalBindingType(decl.name, settledType), init.type) &&
+      lowerer.unions
+        .get(init.type.unionId)
+        ?.arms.every((a) => a.kind === "f64" || a.kind === "string" || a.kind === "bool") === true);
   if (runtimeStringArithmetic) {
     settledType = init.type;
   }
@@ -5255,7 +5278,7 @@ export function lowerVarDecl(
   // subtyping (`const p: {a: number} = wider;`) is rejected, not coerced.
   init = lowerer.coerceInto(decl.initializer, init, settledType);
   const local = lowerer.declareLocal(decl.name, decl.name.text, settledType, isLet);
-  if (runtimeStringArithmetic && isStringArithmeticUnion(init.type)) {
+  if (runtimeStringArithmetic && init.type.kind === "union") {
     lowerer.runtimeOptionalArithmeticLocals.add(lowerer.runtimeOptionalRootOf(local));
   }
   if (runtimeOptional) {
@@ -5811,8 +5834,9 @@ function isStrictDelete(node: ts.DeleteExpression): boolean {
 
 /** Statement-position `delete`: process.env keys → process.envUnset
  * (unsetenv), pure `Record<string, T>` keys → recordKeyDelete (the
- * overflow Map delete), declared OPTIONAL fields → the undefined-arm
- * write (absence IS the undefined arm; divergence 60). Everything else
+ * overflow Map delete), declared OPTIONAL fields → the field's ABSENT
+ * state (the slot reads undefined and no longer counts as an own
+ * property). Everything else
  * fences with the honest reason — a required field is a struct slot no
  * runtime can remove. */
 function lowerDeleteStatement(lowerer: Lowerer, expr: ts.DeleteExpression): IrStmt {
@@ -5933,14 +5957,13 @@ function lowerDeleteStatement(lowerer: Lowerer, expr: ts.DeleteExpression): IrSt
     if (shape?.indexValue && shape.fields.length === 0 && !shape.tuple) {
       return { kind: "recordKeyDelete", obj, shapeId: obj.type.shapeId, key: lowerKey(), loc };
     }
-    // `delete r.f` of a declared OPTIONAL field (undefined-armed slot) is
-    // the undefined-arm write: a monomorphic shape cannot remove its
-    // slot, and absence IS the undefined arm (divergences 37/56), so the
-    // observable results — `in` answers false, Object.keys skips it,
-    // JSON.stringify drops it — match Node's post-delete answers exactly
-    // (divergence 60 documents the delete/`= undefined` collapse).
-    // Constant keys only (dot access or a literal bracket); required
-    // fields keep the honest fence below.
+    // `delete r.f` of a declared OPTIONAL field (undefined-armed slot)
+    // writes the field's ABSENT state: a monomorphic shape cannot remove
+    // its slot, but the slot remembers that no property exists, so `in`
+    // answers false, Object.keys skips it, and JSON.stringify drops it,
+    // while a later write makes it present again. Constant keys only
+    // (dot access or a literal bracket); required fields keep the honest
+    // fence below.
     const fieldName = ts.isPropertyAccessExpression(target)
       ? target.name.text
       : ts.isStringLiteral(target.argumentExpression)
@@ -5951,7 +5974,7 @@ function lowerDeleteStatement(lowerer: Lowerer, expr: ts.DeleteExpression): IrSt
         ? shape?.fields.find((f) => f.name === fieldName)
         : undefined;
     if (field) {
-      const absent = lowerer.wrappedUndefined(field.type, loc);
+      const absent = lowerer.absentFieldValue(field.type, loc);
       if (absent) {
         return {
           kind: "recordSet",
@@ -6864,7 +6887,7 @@ export function lowerExprStatement(lowerer: Lowerer, expr: ts.Expression): IrStm
           };
         }
         const unionWrite = lowerUnionFieldWrite(lowerer, expr.left, expr.right);
-        if (unionWrite) return unionWrite;
+        if (unionWrite) return { kind: "exprStmt", expr: unionWrite, loc: locOf(expr) };
         const target = lowerer.fieldTarget(expr.left);
         if (target) {
           const value = lowerer.lowerExprExpecting(expr.right, target.fieldType);
@@ -7085,31 +7108,7 @@ export function lowerExprStatement(lowerer: Lowerer, expr: ts.Expression): IrStm
       };
     }
     // Statement position only: pre/post distinction is unobservable, so
-    // both desugar to `x = x ± 1`.
-    if (
-      ts.isPropertyAccessExpression(expr.operand) ||
-      (ts.isElementAccessExpression(expr.operand) && symbolFieldInfo(lowerer, expr.operand))
-    ) {
-      // `N.x++` — the namespace-qualified spelling of a module-global
-      // increment (the member's global IS the variable); expando
-      // function members (`foo.count++`) are module globals too.
-      if (ts.isPropertyAccessExpression(expr.operand) && !expr.operand.questionDotToken) {
-        const staticTarget = staticFieldWriteTarget(lowerer, expr.operand);
-        if (staticTarget) return lowerIncDecToTarget(lowerer, expr, staticTarget);
-        const exT = expandoWritableTarget(lowerer, expr.operand);
-        if (exT) return lowerIncDecToTarget(lowerer, expr, exT);
-        const nsT = nsWritableTarget(lowerer, expr.operand);
-        if (nsT) return lowerIncDecToTarget(lowerer, expr, nsT);
-      }
-      // `obj.f++` desugars through the compound-field path (`obj.f += 1`);
-      // `this[kLimit]++` is the same desugar over the symbol-keyed slot.
-      return lowerer.lowerFieldCompound(
-        expr.operand as ts.PropertyAccessExpression | ts.ElementAccessExpression,
-        expr.operator === ts.SyntaxKind.PlusPlusToken ? "+" : "-",
-        null,
-        locOf(expr),
-      );
-    }
+    // numeric bindings retain the simple `x = x ± 1` loop form.
     if (!ts.isIdentifier(expr.operand)) {
       lowerer.unsupported("SC1090", expr.operand, "increment/decrement of non-variables");
     }
@@ -7197,22 +7196,17 @@ function lowerIncDecToTarget(
   const loc = locOf(expr);
   const op = expr.operator === ts.SyntaxKind.PlusPlusToken ? "+" : "-";
   const readTarget: IrExpr = { kind: "varRef", localId: target.id, type: target.type, loc };
-  // JS any-origin targets: check the read to number, convert the
-  // result back into the dyn slot (the compound-assign stance).
-  const dynTarget = target.type.kind === "dyn" && isJsSourceFile(expr.getSourceFile());
-  if (target.type.kind !== "f64" && !dynTarget) {
-    lowerer.unsupported("SC1090", expr.operand, "increment/decrement of non-number targets");
-  }
+  if (target.type.kind !== "f64")
+    return { kind: "exprStmt", expr: lowerIncDecTarget(lowerer, expr, target, false), loc };
   const computed: IrExpr = {
     kind: "bin",
     op,
-    left: dynTarget ? { kind: "dynCheck", value: readTarget, type: F64, loc } : readTarget,
+    left: readTarget,
     right: { kind: "numLit", value: 1, type: F64, loc },
     type: F64,
     loc,
   };
-  const value: IrExpr = dynTarget ? { kind: "dynFrom", value: computed, type: DYN, loc } : computed;
-  return { kind: "assign", localId: target.id, value, loc };
+  return { kind: "assign", localId: target.id, value: computed, loc };
 }
 
 /** The shared tail of `x op= e` over a resolved variable/global target —

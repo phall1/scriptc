@@ -1,4 +1,5 @@
 import { dynUndefinedExpr, nodeThrowExpr } from "../../ir/build.js";
+import { collectClassMethodMutations } from "./class-method-mutations.js";
 import { InternalCompilerError } from "../../errors.js";
 /* Class lowering: shape collection over the single-inheritance graph
  * (fields, methods, accessors, overrides), constructor/member lowering with
@@ -509,6 +510,8 @@ export interface ClassInfo {
   staticFields: {
     name: string;
     type: IrType;
+    /** Indexed sources can be absent despite the declared static type. */
+    runtimeOptional?: true;
     initializer: ts.Expression;
     globalId: string;
     readonly: boolean;
@@ -758,6 +761,10 @@ export function registerBuiltinErrorClasses(lowerer: Lowerer): void {
           { name: "%nameEnumerable", type: BOOL },
           { name: "%stackFrames", type: STRING },
           { name: "%stack", type: STRING },
+          { name: "%systemErrno", type: F64 },
+          { name: "%systemCall", type: STRING },
+          { name: "%systemPath", type: STRING },
+          { name: "%systemDest", type: STRING },
         ],
         loc,
       },
@@ -2508,8 +2515,8 @@ export function collectClassShapeInner(
         // declaration is an ordinary OWN field (tsc guarantees every
         // instantiable subclass declares it and, under
         // strictPropertyInitialization, initializes it). Reads through
-        // ABSTRACT-typed receivers have no slot to read and keep a
-        // per-site fence.
+        // ABSTRACT-typed receivers resolve the concrete instance's
+        // property through checked class dispatch.
         if (modifiers?.some((m) => m.kind === ts.SyntaxKind.AbstractKeyword)) continue;
         if (modifiers?.some((m) => m.kind === ts.SyntaxKind.AccessorKeyword)) {
           // `accessor x = 1` desugars (in JS) to a private slot plus a
@@ -2913,20 +2920,20 @@ export function collectClassShapeInner(
               `overriding the inherited generic method '${mName}' with a non-generic method (generic methods dispatch statically and would never reach this override)`,
             );
           }
-          // Abstract re-declarations keep the overridden ABI exactly,
-          // like any override (a concrete implementation below must
-          // agree with BOTH, which exactness makes one constraint).
           const overridden = lowerer.findMethodOn(base, mName);
           if (
             overridden &&
             (overridden.sig.params.length !== shapes.length ||
               !overridden.sig.params.every((p, i) => typeEquals(p.type, shapes[i]!.type)) ||
-              !typeEquals(overridden.sig.ret, ret))
+              !typeEquals(
+                overridden.sig.ret,
+                overrideReturnAbi(lowerer, ret, overridden.sig.ret, className, base),
+              ))
           ) {
             lowerer.unsupported(
               "SC1090",
               member.name,
-              "overriding a method with a different signature (parameter and return types must match the base declaration exactly)",
+              "overriding a method with a different signature (parameter types must match the base declaration exactly; returns may narrow to a subclass)",
             );
           }
           methods.set(mName, { params: shapes, ret, abstract: true });
@@ -3060,11 +3067,12 @@ export function collectClassShapeInner(
           const refined = symbolSlotReturnType(lowerer, member, symbolFields, fields);
           if (refined) ft.ret = refined;
         }
-        // Overrides keep the EXACT overridden ABI signature. tsc's method
+        // Overrides keep the inherited ABI signature. tsc's method
         // bivariance would let a narrowed parameter type through, and a
         // vtable-dispatched call could then hand the override a base
         // instance it reads out-of-bounds fields from — exactness keeps
-        // every slot sound (covariant returns can come later). Comparing
+        // every parameter slot sound. Nominal covariant returns share the
+        // base pointer ABI while retaining their declared result type. Comparing
         // ABI types only (not modes) is deliberate: call sites complete
         // against the STATIC receiver's shape, so `m(x?: number)` and
         // `m(x: number | undefined)` interchange soundly in overrides.
@@ -3142,7 +3150,10 @@ export function collectClassShapeInner(
           member.asteriskToken === undefined &&
           (overridden.sig.params.length !== shapes.length ||
             !overridden.sig.params.every((p, i) => typeEquals(p.type, shapes[i]!.type)) ||
-            !typeEquals(overridden.sig.ret, ft.ret))
+            !typeEquals(
+              overridden.sig.ret,
+              overrideReturnAbi(lowerer, ft.ret, overridden.sig.ret, className, base),
+            ))
         ) {
           const fencedJsOverride =
             isJsSourceFile(member.getSourceFile()) &&
@@ -3179,7 +3190,7 @@ export function collectClassShapeInner(
                 locOf(member.name),
                 returnOnly
                   ? `overriding method '${mName}' with a different return type (the native return type must match the base declaration exactly)`
-                  : `overriding method '${mName}' with a different signature (the native parameter and return types must match the base declaration exactly)`,
+                  : `overriding method '${mName}' with a different signature (the native parameter types must match the base declaration exactly; returns may narrow to a subclass)`,
               ),
             );
             shapes.splice(0, shapes.length, ...overridden.sig.params);
@@ -3188,7 +3199,7 @@ export function collectClassShapeInner(
             lowerer.unsupported(
               "SC1090",
               member.name,
-              "overriding a method with a different signature (parameter and return types must match the base declaration exactly)",
+              "overriding a method with a different signature (parameter types must match the base declaration exactly; returns may narrow to a subclass)",
             );
           }
         }
@@ -4831,10 +4842,13 @@ export function lowerStaticFieldRead(
     );
   }
   if (found?.field !== undefined) {
-    return lowerer.maybeNarrow(
-      { kind: "varRef", localId: found.field.globalId, type: found.field.type, loc },
-      expr,
-    );
+    const value: IrExpr = {
+      kind: "varRef",
+      localId: found.field.globalId,
+      type: found.field.type,
+      loc,
+    };
+    return found.field.runtimeOptional ? value : lowerer.maybeNarrow(value, expr);
   }
   if (found) {
     return staticMethodValue(lowerer, found.declarer, expr.name.text, found.method, expr, loc);
@@ -5773,10 +5787,13 @@ export function lowerClassValueProperty(
     );
   }
   if (found.field !== undefined) {
-    return lowerer.maybeNarrow(
-      { kind: "varRef", localId: found.field.globalId, type: found.field.type, loc },
-      expr,
-    );
+    const value: IrExpr = {
+      kind: "varRef",
+      localId: found.field.globalId,
+      type: found.field.type,
+      loc,
+    };
+    return found.field.runtimeOptional ? value : lowerer.maybeNarrow(value, expr);
   }
   return staticMethodValue(lowerer, found.declarer, member, found.method, expr, loc);
 }
@@ -5796,6 +5813,28 @@ function abstractMemberSignature(
     shapes: lowerer.paramShapes(member.parameters),
     ret: lowerer.declaredReturnType(member, member.name),
   };
+}
+
+/** A nominal return subtype uses the same owned pointer as the inherited
+ * return slot. The current class is still being collected, so consult its
+ * already collected base chain before the complete class graph is available. */
+function overrideReturnAbi(
+  lowerer: Lowerer,
+  declared: IrType,
+  inherited: IrType,
+  className: string,
+  base: ClassInfo | null,
+): IrType {
+  if (declared.kind !== "object" || inherited.kind !== "object") return declared;
+  if (
+    lowerer.isSubclassOf(declared.className, inherited.className) ||
+    (declared.className === className &&
+      base !== null &&
+      (base.def.name === inherited.className ||
+        lowerer.isSubclassOf(base.def.name, inherited.className)))
+  )
+    return inherited;
+  return declared;
 }
 
 /** The nearest declaration of `name` at or above `info` — the method a
@@ -5984,36 +6023,7 @@ export function collectInheritedJsFieldWrites(
  * hierarchy identifies the original declarations through aliases as well. */
 export function collectVirtualJsMethods(lowerer: Lowerer, files: readonly ts.SourceFile[]): void {
   const families: [ts.MethodDeclaration, ts.MethodDeclaration][] = [];
-  // Record named prototype accesses before collecting method signatures.
-  // Those slots need a callable ABI even when JavaScript would otherwise
-  // specialize each call independently.
-  for (const file of files)
-    ts.walkPreorder(file, (node) => {
-      if (!ts.isPropertyAccessExpression(node) && !ts.isElementAccessExpression(node)) return;
-      const name = ts.isPropertyAccessExpression(node)
-        ? node.name.text
-        : ts.isStringLiteralLike(node.argumentExpression)
-          ? node.argumentExpression.text
-          : null;
-      if (name === null) return;
-      const prototype =
-        ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === "prototype";
-      const assigned =
-        ts.isBinaryExpression(node.parent) &&
-        node.parent.left === node &&
-        node.parent.operatorToken.kind === ts.SyntaxKind.EqualsToken;
-      const symbol = !assigned
-        ? undefined
-        : ts.isPropertyAccessExpression(node)
-          ? lowerer.checker.getSymbolAtLocation(node.name)
-          : lowerer.checker.getPropertyOfType(lowerer.typeOf(node.expression), name);
-      if (
-        prototype ||
-        (symbol && lowerer.checker.declarationsOf(symbol).some(ts.isMethodDeclaration))
-      ) {
-        lowerer.prototypeMethodAccesses.set(name, node);
-      }
-    });
+  collectClassMethodMutations(lowerer, files);
   const visit = (node: ts.Node): void => {
     if (ts.isClassDeclaration(node) || ts.isClassExpression(node)) {
       const accessors = node.members.filter(
@@ -8589,7 +8599,7 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
           expr,
           `Map values of type '${lowerer.checker.typeToString(targs[1])}' ` +
             `(Map values must be number, string, boolean, records, class instances, ` +
-            `arrays, promises, Maps, Sets, or unions of those — not functions, 'unknown', or 'any')`,
+            `typed arrays, arrays, promises, Maps, Sets, or supported unions and checked values)`,
         );
       }
       lowerer.badType(expr, tsType);

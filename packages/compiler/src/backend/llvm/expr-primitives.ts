@@ -7,7 +7,7 @@ import { arrNewCall, elemAccess } from "./shapes.js";
 import { LlvmUnsupportedError } from "./unsupported.js";
 import type { LlvmEmitterContext, ExprOf, LlValue } from "./expr-context.js";
 
-import { BYTES_ELEM_NUM, f64Lit } from "./common.js";
+import { BYTES_ELEM_NUM, closureIdentityEqual, f64Lit } from "./common.js";
 import { emitStringInputs } from "./string-lifetimes.js";
 import { emitStringParts, stringParts } from "./string-construction.js";
 import { emitBorrowedInput } from "./borrowed-inputs.js";
@@ -187,6 +187,16 @@ export function emitOperatorExpr(
         B.line(
           `${equal} = call zeroext i1 @scr_promise_identity_equal(ptr ${l.name}, ptr ${r.name})`,
         );
+        if (e.op === "!==") B.line(`${t} = xor i1 ${equal}, true`);
+      } else if (
+        (e.op === "===" || e.op === "!==") &&
+        e.left.type.kind === "func" &&
+        e.right.type.kind === "func"
+      ) {
+        // A signature adapter stands for the function it adapts, so
+        // function identity compares the closures' identity roots.
+        const equal = e.op === "===" ? t : B.tmp();
+        B.line(`${equal} = ${closureIdentityEqual(host, l.name, r.name)}`);
         if (e.op === "!==") B.line(`${t} = xor i1 ${equal}, true`);
       } else if ((e.op === "===" || e.op === "!==") && host.llType(e.left.type) === "ptr") {
         // Reference identity (JS object equality) — closures, arrays,
@@ -779,6 +789,8 @@ export function emitRecordExpr(
     | "recordKeyGet"
     | "recordOvfKeys"
     | "recordOvfHas"
+    | "recordHas"
+    | "fieldAbsent"
   >,
 ): LlValue {
   const B = host.B;
@@ -794,7 +806,7 @@ export function emitRecordExpr(
     case "recordGet": {
       const obj = host.emitReadReceiver(e.obj);
       const { ptr, type } = host.recordFieldPtr(obj.name, e.shapeId, e.field);
-      const v = host.loadField(ptr, type);
+      const v = host.loadRecordField(ptr, type);
       if (isRefCounted(e.type))
         return host.own({ name: host.retainValue(v, e.type), type: e.type });
       return { name: v, type: e.type };
@@ -863,6 +875,21 @@ export function emitRecordExpr(
     }
     case "recordKeyGet":
       return host.emitRecordKeyGet(e);
+    case "recordHas": {
+      // Own-property presence: only an undefined-armed union slot can
+      // lack its property, by holding the ABSENT state.
+      const obj = host.emitReadReceiver(e.obj);
+      const { ptr, type } = host.recordFieldPtr(obj.name, e.shapeId, e.field);
+      if (type.kind !== "union" || undefinedArmTag(type, host.unionsById) < 0)
+        return { name: "true", type: e.type };
+      const v = host.loadField(ptr, type);
+      const absent = host.fieldAbsentTest(v, type.unionId);
+      const t = B.tmp();
+      B.line(`${t} = xor i1 ${absent}, true`);
+      return { name: t, type: e.type };
+    }
+    case "fieldAbsent":
+      return { name: host.absentInstanceRef(e.unionId), type: e.type };
     case "recordOvfHas": {
       const obj = host.emitExpr(e.obj);
       const key = host.emitExpr(e.key);

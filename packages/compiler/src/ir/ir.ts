@@ -702,6 +702,7 @@ export function isSupportedSetElem(t: IrType, unionArms?: IrType[]): boolean {
  * cycle analysis and docs/memory.md). Shared frontend/validator. */
 export function isSupportedMapValue(t: IrType): boolean {
   switch (t.kind) {
+    case "bytes":
     case "dyn":
     case "f64":
     case "bigint":
@@ -771,15 +772,12 @@ export function funcOf(params: IrType[], ret: IrType): IrType {
   return { kind: "func", params, ret };
 }
 
-/** Maps, sets and promises may share a union with null/undefined only.
- * Unit tag tests can narrow nullable containers without losing identity;
- * arbitrary data siblings require a separate runtime narrowing operation.
- * Share this rule across checker mapping, synthesized unions and validation. */
+/** Maps and sets use tagged union storage and retain their native identity.
+ * Promises still require nullable-only unions until their data-arm narrowing
+ * and await boundary have a matching contract. */
 export function unionContainerArmsOk(arms: IrType[]): boolean {
   return arms.every(
-    (a, i) =>
-      (a.kind !== "map" && a.kind !== "set" && a.kind !== "promise") ||
-      arms.every((b, j) => j === i || isUnitType(b)),
+    (a, i) => a.kind !== "promise" || arms.every((b, j) => j === i || isUnitType(b)),
   );
 }
 
@@ -903,7 +901,7 @@ export function isRefCounted(t: IrType): boolean {
 
 export interface IrModule {
   /** Bumped on any breaking IR change; serialize.ts refuses mismatches. */
-  irVersion: 14;
+  irVersion: 15;
   sourceFile: string;
   functions: IrFunction[];
   /** Class shapes. Constructors and methods are ordinary module functions
@@ -2551,8 +2549,18 @@ export type IrExpr =
    * in the callee's captures[] order). The result is owned (+1); the closure
    * itself retains each captured box. A reference to a top-level declared
    * function lowers to a zero-capture closure — backends must intern that
-   * case so `f === f` is true (JS function identity). */
-  | { kind: "closure"; fnName: string; captures: string[]; type: IrType; loc: SrcLoc }
+   * case so `f === f` is true (JS function identity). `adapts` marks a
+   * signature adapter: captures[0] holds the function it forwards to, and
+   * the new closure takes that function's identity (JS sees one function,
+   * so `===`, SameValue and searches compare identity roots). */
+  | {
+      kind: "closure";
+      fnName: string;
+      captures: string[];
+      adapts?: true;
+      type: IrType;
+      loc: SrcLoc;
+    }
   /** Indirect call of a func-typed value. Args follow `call`'s convention
    * (callee owns its params, callers pass +1). The callee expression is an
    * ordinary owned temp, released at statement end. receiver supplies the
@@ -2676,7 +2684,9 @@ export type IrExpr =
    * pointer, type-only — legal exactly when D strictly descends from C
    * AND the two constructors' completed ABIs are equal (param-wise
    * typeEquals; validator-enforced), the invariant `newValue` completion
-   * rests on. */
+   * rests on. Function values may also widen a nominal class return with
+   * identical parameter/rest types: the closure identity and pointer-return
+   * ABI remain unchanged. */
   | { kind: "upcast"; value: IrExpr; type: IrType; loc: SrcLoc }
   /** Implicit widening of a promise value into a VOID-promise slot (an
    * inferred Promise<never>/Promise<void> return whose body built a
@@ -2756,7 +2766,8 @@ export type IrExpr =
       loc: SrcLoc;
     }
   /** Record field read `r.f` — mirrors `fieldGet`: refcounted fields come
-   * out retained (+1). */
+   * out retained (+1). A field in its ABSENT state (fieldAbsent) reads as
+   * the ordinary undefined arm. */
   | { kind: "recordGet"; obj: IrExpr; shapeId: string; field: string; type: IrType; loc: SrcLoc }
   /** Dynamic-keyed record read `r[k]` (string key, evaluated at runtime).
    * Declared fields are tried FIRST (an emitted string-switch — field
@@ -3049,6 +3060,25 @@ export type IrExpr =
    * value. Declared fields are handled separately by the lowering. Both
    * operands are borrowed, the key is string, the result is bool. */
   | { kind: "recordOvfHas"; obj: IrExpr; shapeId: string; key: IrExpr; type: IrType; loc: SrcLoc }
+  /** Own-property presence of a DECLARED record field (`"f" in r`,
+   * Object.keys/hasOwn and every other key surface). A field whose type
+   * has no undefined arm is always present; an undefined-armed union field
+   * is present unless its slot holds the field's ABSENT state (see
+   * fieldAbsent), so `{ f: undefined }` keeps `f` while an omitted or
+   * deleted optional field lacks it. The receiver is borrowed; the result
+   * is bool. */
+  | { kind: "recordHas"; obj: IrExpr; shapeId: string; field: string; type: IrType; loc: SrcLoc }
+  /** The ABSENT state of an undefined-armed record field slot: the value
+   * stored for an omitted optional property, a `delete`d property, or a
+   * checked-dynamic key that does not exist. It is the union's undefined
+   * arm in every respect (tag tests, narrowing, equality, JSON), but the
+   * slot remembers that no property exists, which recordHas observes.
+   * Record field reads surface the ordinary undefined arm, so the state
+   * never escapes its slot. Legal only where a field slot is written
+   * directly: a recordLit field value, a recordSet value, a recordClone
+   * override, or a ternary arm in one of those positions. `type` is the
+   * union named by `unionId`, which has an undefined arm. Immortal. */
+  | { kind: "fieldAbsent"; unionId: string; type: IrType; loc: SrcLoc }
   /** Union construction: wrap an arm value into a fresh tagged box (the
    * frontend inserts these wherever a `B` flows into an `A | B` slot).
    * `tag` is the arm's index in the union's canonical arm list; `value` has
@@ -3074,9 +3104,9 @@ export type IrExpr =
    * borrowed). The primitive tests ("string"/"number"/"boolean") compare
    * the snapshot's kind tag. "object" also checks reference payloads,
    * excluding callable and primitive references;
-   * "instanceof" requires `className` (a hierarchy class) and tests an OBJ
-   * payload's vtable preorder against its interval (false for every other
-   * payload kind). `negated` flips the result (the `!==` spelling). */
+   * "instanceof" requires `className`: hierarchy payloads use the vtable
+   * interval, while standalone classes use their exact retain adapter.
+   * Other payloads answer false. `negated` flips the result (the `!==` spelling). */
   | {
       kind: "caughtTest";
       value: IrExpr;
@@ -3091,7 +3121,7 @@ export type IrExpr =
    * tsc's control-flow narrowing has already proven the matching test
    * (`e instanceof C` / `typeof e === "string"`), so the read is
    * kind-UNCHECKED at runtime. `type` is f64, bool, string, or a
-   * hierarchy-class object; refcounted results come out retained (+1). */
+   * class object; refcounted results come out retained (+1). */
   | { kind: "caughtNarrow"; value: IrExpr; type: IrType; loc: SrcLoc }
   /** CHECKED extraction of a catch binding's payload as a hierarchy-class
    * instance — the caught analog of dynCheck, emitted for `e as C` casts

@@ -7,13 +7,14 @@ import { InternalCompilerError } from "../../errors.js";
 import { streamTypedRefEligible } from "../../ir/analysis.js";
 import {
   DYN,
+  type IrExpr,
   isDynTypedRefType,
   isRefCounted,
   isUnitType,
   typeEquals,
   typeKey,
 } from "../../ir/ir.js";
-import { BYTES_ELEM_NUM } from "./common.js";
+import { BYTES_ELEM_NUM, closureIdentityEqual } from "./common.js";
 import { DYN_KIND } from "./dyn.js";
 import { elemAccess, vAdapters } from "./shapes.js";
 import { LlvmUnsupportedError } from "./unsupported.js";
@@ -337,7 +338,8 @@ export function emitDynamicExpr(
             arm.kind === "object"
               ? host.classFieldPtr(payload, arm.className, e.field)
               : host.recordFieldPtr(payload, arm.shapeId, e.field);
-          const v = host.loadField(ptr, type);
+          const v =
+            arm.kind === "object" ? host.loadField(ptr, type) : host.loadRecordField(ptr, type);
           const value = isRefCounted(e.type) ? host.retainValue(v, e.type) : v;
           B.line(`store ${ty} ${value}, ptr ${slot}`);
           B.br(join);
@@ -437,7 +439,7 @@ export function emitDynamicExpr(
           literal !== null ? shape.fields.find((f) => f.name === literal) : undefined;
         if (declared) {
           const { ptr, type: ft } = host.recordFieldPtr(payload, arm.shapeId, declared.name);
-          const v = host.loadField(ptr, ft);
+          const v = host.loadRecordField(ptr, ft);
           if (typeEquals(ft, e.type)) {
             B.line(`store ${ty} ${isRefCounted(ft) ? host.retainValue(v, ft) : v}, ptr ${slot}`);
             B.br(join);
@@ -729,6 +731,8 @@ export function emitDynamicExpr(
       return { name: neg, type: e.type };
     }
     case "unionEq": {
+      const direct = emitUnionEqWrappedScalar(host, e);
+      if (direct) return direct;
       // Strict equality of the ARM values (tag compare + per-arm payload
       // compare — the C per-union helper, inlined). Both boxes borrowed.
       const inputs = emitBorrowedInputs(host, [e.left, e.right]);
@@ -803,10 +807,12 @@ export function emitDynamicExpr(
           }
           default: {
             // Ref arms: pointer identity, exactly JS object equality.
+            // Function arms compare identity roots (adapters included).
             const a = host.unionPeek(l.name);
             const b = host.unionPeek(r.name);
             const t = B.tmp();
-            B.line(`${t} = icmp eq ptr ${a}, ${b} ; ${arm.kind}`);
+            if (arm.kind === "func") B.line(`${t} = ${closureIdentityEqual(host, a, b)}`);
+            else B.line(`${t} = icmp eq ptr ${a}, ${b} ; ${arm.kind}`);
             B.line(`store i1 ${t}, ptr ${slot}`);
             break;
           }
@@ -828,11 +834,23 @@ export function emitDynamicExpr(
       const tag = host.unionTag(u.name);
       const tagMatch = B.tmp();
       B.line(`${tagMatch} = icmp eq i32 ${tag}, ${e.tag}`);
+      // The payload is a closure only under the function tag; another
+      // arm's payload must never be read as one.
+      const slot = B.slot();
+      B.entryAllocas.push(`${slot} = alloca i1`);
+      B.line(`store i1 false, ptr ${slot}`);
+      const check = B.newLabel("ufe.c");
+      const join = B.newLabel("ufe.j");
+      B.condBr(tagMatch, check, join);
+      B.startBlock(check);
       const payload = host.unionPeek(u.name);
-      const ptrMatch = B.tmp();
-      B.line(`${ptrMatch} = icmp eq ptr ${payload}, ${f.name}`);
+      const identical = B.tmp();
+      B.line(`${identical} = ${closureIdentityEqual(host, payload, f.name)}`);
+      B.line(`store i1 ${identical}, ptr ${slot}`);
+      B.br(join);
+      B.startBlock(join);
       const result = B.tmp();
-      B.line(`${result} = and i1 ${tagMatch}, ${ptrMatch}`);
+      B.line(`${result} = load i1, ptr ${slot}`);
       if (!e.negated) return host.own({ name: result, type: e.type });
       const negated = B.tmp();
       B.line(`${negated} = xor i1 ${result}, true`);
@@ -846,6 +864,38 @@ export function emitDynamicExpr(
       const c = host.emitReadReceiver(e.value);
       if (e.test === "instanceof") {
         const target = host.classMetaOf(e.className!);
+        if (!target.hierarchy) {
+          // Standalone class payloads have no vtable word. Their retain
+          // adapter identifies the exact native layout in the snapshot.
+          const adapterSlot = B.tmp();
+          const adapter = B.tmp();
+          B.line(`${adapterSlot} = getelementptr inbounds %ScrCaught, ptr ${c.name}, i64 0, i32 5`);
+          B.line(`${adapter} = load ptr, ptr ${adapterSlot}`);
+          let result: string | undefined;
+          const intervals = classMembershipIntervals(host.classMeta, target.def.name);
+          for (const candidate of host.classMeta.values()) {
+            if (
+              candidate.hierarchy ||
+              !intervals.some((range) => range.pre <= candidate.pre && candidate.pre <= range.post)
+            )
+              continue;
+            const rc = vAdapters(host.shapeHost, { kind: "object", className: candidate.def.name });
+            const matches = B.tmp();
+            B.line(`${matches} = icmp eq ptr ${adapter}, ${rc.retain}`);
+            if (result === undefined) result = matches;
+            else {
+              const joined = B.tmp();
+              B.line(`${joined} = or i1 ${result}, ${matches}`);
+              result = joined;
+            }
+          }
+          if (result === undefined)
+            throw new InternalCompilerError("empty standalone class membership");
+          if (e.negated !== true) return { name: result, type: e.type };
+          const negated = B.tmp();
+          B.line(`${negated} = xor i1 ${result}, true`);
+          return { name: negated, type: e.type };
+        }
         host.declare(
           `declare zeroext i1 @scr_caught_instanceof(ptr, ${host.sizeType}, ${host.sizeType})`,
         );
@@ -992,4 +1042,82 @@ export function emitDynamicExpr(
       throw new InternalCompilerError("unreachable");
     }
   }
+}
+
+/** `u === v` where one side wraps a unit, bool, or number arm value
+ * (`o.flag === true`, `o.n === undefined`): compare the other union's tag
+ * and payload directly instead of boxing the plain side. Operands keep
+ * their left-to-right evaluation; the union stays borrowed. Null when
+ * neither side is such a wrap. */
+function emitUnionEqWrappedScalar(
+  host: LlvmEmitterContext,
+  e: IrExpr & { kind: "unionEq" },
+): LlValue | null {
+  const B = host.B;
+  const def = host.unionsById.get(e.unionId);
+  if (!def) return null;
+  const scalarWrap = (x: IrExpr): (IrExpr & { kind: "unionWrap" }) | null => {
+    if (x.kind !== "unionWrap" || x.unionId !== e.unionId) return null;
+    const arm = def.arms[x.tag];
+    if (!arm) return null;
+    if (isUnitType(arm)) return x;
+    // The plain value must not run code that could release the borrowed
+    // union: literals and local reads only.
+    const v = x.value;
+    const pure = v.kind === "boolLit" || v.kind === "numLit" || v.kind === "varRef";
+    return pure && (arm.kind === "f64" || arm.kind === "bool") ? x : null;
+  };
+  const rightWrap = scalarWrap(e.right);
+  const leftWrap = rightWrap ? null : scalarWrap(e.left);
+  const wrap = rightWrap ?? leftWrap;
+  if (!wrap) return null;
+  const arm = def.arms[wrap.tag]!;
+  let union: LlValue;
+  let plain: LlValue | null = null;
+  if (rightWrap) {
+    union = emitBorrowedInput(host, e.left);
+    if (!isUnitType(arm)) plain = host.emitExpr(wrap.value);
+  } else {
+    if (!isUnitType(arm)) plain = host.emitExpr(wrap.value);
+    union = emitBorrowedInput(host, e.right);
+  }
+  const tag = host.unionTag(union.name);
+  const tagMatch = B.tmp();
+  B.line(`${tagMatch} = icmp eq i32 ${tag}, ${wrap.tag}`);
+  let result = tagMatch;
+  if (plain) {
+    const slot = B.slot();
+    B.entryAllocas.push(`${slot} = alloca i1`);
+    B.line(`store i1 false, ptr ${slot}`);
+    const same = B.newLabel("ueq.s");
+    const join = B.newLabel("ueq.j");
+    B.condBr(tagMatch, same, join);
+    B.startBlock(same);
+    const eq = B.tmp();
+    if (arm.kind === "f64") {
+      host.declare(`declare double @scr_union_get_f64(ptr)`);
+      const v = B.tmp();
+      B.line(`${v} = call double @scr_union_get_f64(ptr ${union.name})`);
+      if (e.sameValue) {
+        host.declare(`declare zeroext i1 @scr_num_same_value(double, double)`);
+        B.line(`${eq} = call zeroext i1 @scr_num_same_value(double ${v}, double ${plain.name})`);
+      } else {
+        B.line(`${eq} = fcmp oeq double ${v}, ${plain.name}`);
+      }
+    } else {
+      host.declare(`declare zeroext i1 @scr_union_get_bool(ptr)`);
+      const v = B.tmp();
+      B.line(`${v} = call zeroext i1 @scr_union_get_bool(ptr ${union.name})`);
+      B.line(`${eq} = icmp eq i1 ${v}, ${plain.name}`);
+    }
+    B.line(`store i1 ${eq}, ptr ${slot}`);
+    B.br(join);
+    B.startBlock(join);
+    result = B.tmp();
+    B.line(`${result} = load i1, ptr ${slot}`);
+  }
+  if (!e.negated) return { name: result, type: e.type };
+  const negated = B.tmp();
+  B.line(`${negated} = xor i1 ${result}, true`);
+  return { name: negated, type: e.type };
 }

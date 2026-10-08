@@ -8802,6 +8802,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/abstract-property-dispatch.ts": {
+   "order": [
+    "<repo>/tests/corpus/abstract-property-dispatch.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/arguments-arrow-capture.mjs": {
    "order": [
     "<repo>/tests/corpus/arguments-arrow-capture.mjs"
@@ -8837,6 +8843,12 @@
   "<repo>/tests/corpus/array-checked-constructor.js": {
    "order": [
     "<repo>/tests/corpus/array-checked-constructor.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/array-concat-widening.ts": {
+   "order": [
+    "<repo>/tests/corpus/array-concat-widening.ts"
    ],
    "diags": []
   },
@@ -8965,6 +8977,12 @@
   "<repo>/tests/corpus/catch-capture.ts": {
    "order": [
     "<repo>/tests/corpus/catch-capture.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/caught-standalone-class.ts": {
+   "order": [
+    "<repo>/tests/corpus/caught-standalone-class.ts"
    ],
    "diags": []
   },
@@ -9233,6 +9251,12 @@
   "<repo>/tests/corpus/class-local-function-base.mjs": {
    "order": [
     "<repo>/tests/corpus/class-local-function-base.mjs"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/class-method-spreads.ts": {
+   "order": [
+    "<repo>/tests/corpus/class-method-spreads.ts"
    ],
    "diags": []
   },
@@ -9652,6 +9676,12 @@
    "order": [
     "<repo>/tests/corpus/generic-class-js-functions/functions.js",
     "<repo>/tests/corpus/generic-class-js-functions/main.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/generic-class-recovery.ts": {
+   "order": [
+    "<repo>/tests/corpus/generic-class-recovery.ts"
    ],
    "diags": []
   },
@@ -10433,6 +10463,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/map-typed-array-values.ts": {
+   "order": [
+    "<repo>/tests/corpus/map-typed-array-values.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/math-function-values.js": {
    "order": [
     "<repo>/tests/corpus/math-function-values.js"
@@ -10857,6 +10893,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/optional-class-flows.ts": {
+   "order": [
+    "<repo>/tests/corpus/optional-class-flows.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/optional-native-callables.js": {
    "order": [
     "<repo>/tests/corpus/optional-native-callables.js"
@@ -10890,6 +10932,12 @@
   "<repo>/tests/corpus/primitive-and-function-descriptors.js": {
    "order": [
     "<repo>/tests/corpus/primitive-and-function-descriptors.js"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/primitive-union-string.ts": {
+   "order": [
+    "<repo>/tests/corpus/primitive-union-string.ts"
    ],
    "diags": []
   },
@@ -14635,6 +14683,145 @@
   "<repo>/tests/corpus/native-worker-terminate-wait.ts": {
    "order": [
     "<repo>/tests/corpus/native-worker-terminate-wait.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/caught-class-identity.ts": {
+   "order": [
+    "<repo>/tests/corpus/caught-class-identity.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/caught-system-error-fields.ts": {
+   "order": [
+    "<repo>/tests/corpus/caught-system-error-fields.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/collection-data-unions.ts": {
+   "order": [
+    "<repo>/tests/corpus/collection-data-unions.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-callback-dispatch.ts": {
+   "order": [
+    "<repo>/tests/corpus/native-callback-dispatch.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/terminal-stream-properties.ts": {
+   "order": [
+    "<repo>/tests/corpus/terminal-stream-properties.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/typed-index-arguments.ts": {
+   "order": [
+    "<repo>/tests/corpus/typed-index-arguments.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/fixtures/node-types/terminal-error-fields.ts": {
+   "order": [
+    "<repo>/tests/fixtures/node-types/terminal-error-fields.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/class-narrowed-views.ts": {
+   "order": [
+    "<repo>/tests/corpus/class-narrowed-views.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/class-covariant-returns.ts": {
+   "order": [
+    "<repo>/tests/corpus/class-covariant-returns.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/derived-numeric-updates.ts": {
+   "order": [
+    "<repo>/tests/corpus/derived-numeric-updates.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/captured-class-refinement.ts": {
+   "order": [
+    "<repo>/tests/corpus/captured-class-refinement.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/class-collection-insertion.ts": {
+   "order": [
+    "<repo>/tests/corpus/class-collection-insertion.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/union-reference-comparison.ts": {
+   "order": [
+    "<repo>/tests/corpus/union-reference-comparison.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/optional-flag-comparisons.ts": {
+   "order": [
+    "<repo>/tests/corpus/optional-flag-comparisons.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/record-field-presence.ts": {
+   "order": [
+    "<repo>/tests/corpus/record-field-presence.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/record-presence-copies.ts": {
+   "order": [
+    "<repo>/tests/corpus/record-presence-copies.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/record-presence-delete-json.ts": {
+   "order": [
+    "<repo>/tests/corpus/record-presence-delete-json.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/record-unchecked-read-presence.ts": {
+   "order": [
+    "<repo>/tests/corpus/record-unchecked-read-presence.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4040-adapted-function-identity.ts": {
+   "order": [
+    "<repo>/tests/corpus/4040-adapted-function-identity.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4041-adapted-function-properties.ts": {
+   "order": [
+    "<repo>/tests/corpus/4041-adapted-function-properties.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4042-object-is-union-subclass.ts": {
+   "order": [
+    "<repo>/tests/corpus/4042-object-is-union-subclass.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4043-nonnull-missing-element.ts": {
+   "order": [
+    "<repo>/tests/corpus/4043-nonnull-missing-element.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4044-adapted-callback-modules/main.ts": {
+   "order": [
+    "<repo>/tests/corpus/4044-adapted-callback-modules/registry.ts",
+    "<repo>/tests/corpus/4044-adapted-callback-modules/main.ts"
    ],
    "diags": []
   }

@@ -804,9 +804,8 @@ export function validateModule(mod: IrModule): IrValidationError[] {
     }
     u.arms.forEach((arm, i) => {
       // The unit kinds (undefinedT/nullT) are valid arms — union membership
-      // is the ONLY place they may appear. Containers are valid beside
-      // unit arms: tag tests distinguish absence while the reference
-      // payload preserves identity. The shared rule refuses data siblings.
+      // is the ONLY place they may appear. Container payloads preserve
+      // identity; promise data siblings retain their separate fence.
       if (
         arm.kind === "void" ||
         arm.kind === "union" ||
@@ -817,10 +816,7 @@ export function validateModule(mod: IrModule): IrValidationError[] {
       ) {
         errors.push({ message: `union ${u.id}: arm ${i} is ${arm.kind}`, loc: noLoc });
       }
-      if (
-        (arm.kind === "map" || arm.kind === "set" || arm.kind === "promise") &&
-        !unionContainerArmsOk(u.arms)
-      ) {
+      if (arm.kind === "promise" && !unionContainerArmsOk(u.arms)) {
         errors.push({
           message: `union ${u.id}: ${arm.kind} arm ${i} beside non-unit arms`,
           loc: noLoc,
@@ -1117,14 +1113,15 @@ function validateFunction(
   if (isUnitType(fn.returnType)) {
     err(`return type is bare unit type ${fn.returnType.kind}`, fn.loc);
   }
-  // Exception snapshots may be captured, but are never public parameters
-  // or return values. Their payload crosses those boundaries explicitly.
+  // Exception snapshots may be captured or passed to internal conversion
+  // helpers. They are not source-level types and never return as values.
   if (fn.returnType.kind === "caught") err("return type is caught", fn.loc);
   for (const p of fn.params) {
+    if (p.type.kind === "caught" && fn.name !== "%caught.dynamicValue")
+      err(`param "${p.name}" is caught-typed`, fn.loc);
     if (!locals.has(p.localId)) {
       err(`param "${p.name}" has no local entry "${p.localId}"`, fn.loc);
     }
-    if (p.type.kind === "caught") err(`param "${p.name}" is caught-typed`, fn.loc);
   }
   for (const c of [...(fn.captures ?? []), ...(fn.classCaptures ?? [])]) {
     const local = locals.get(c.localId);
@@ -1285,6 +1282,23 @@ function validateFunction(
 
   // Keep expression families in separate functions so native bootstrap builds
   // do not feed LLVM a single control-flow graph containing every IR check.
+  /** fieldAbsent nodes that sit directly in a field-slot write (a
+   * recordLit field, recordSet value, recordClone override, or a ternary
+   * arm in one of those positions) — the only places the absent state may
+   * appear. */
+  const fieldSlotValues = new Set<IrExpr>();
+  function checkSlotValue(e: IrExpr): void {
+    const mark = (v: IrExpr): void => {
+      if (v.kind === "fieldAbsent") fieldSlotValues.add(v);
+      else if (v.kind === "ternary") {
+        mark(v.then);
+        mark(v.else_);
+      }
+    };
+    mark(e);
+    checkExpr(e);
+  }
+
   function checkExpr(e: IrExpr): void {
     switch (e.kind) {
       case "numLit":
@@ -1357,6 +1371,8 @@ function validateFunction(
       case "recordKeyGet":
       case "recordOvfHas":
       case "recordOvfKeys":
+      case "recordHas":
+      case "fieldAbsent":
         return checkRecordExpr(e);
       case "dynFrom":
       case "dynFromJsval":
@@ -2656,6 +2672,9 @@ function validateFunction(
           break;
         }
         const wantCaps = target.captures ?? [];
+        if (e.adapts === true && locals.get(e.captures[0] ?? "")?.type.kind !== "func") {
+          err(`closure ${e.fnName}: an adapter's first capture must be a function`, e.loc);
+        }
         if (target.captures === undefined && e.captures.length > 0) {
           err(`closure over plain function "${e.fnName}" cannot capture`, e.loc);
         }
@@ -2821,6 +2840,25 @@ function validateFunction(
         // exactly when D strictly descends from C AND the two completed
         // constructor ABIs agree (what newValue completion rests on).
         checkExpr(e.value);
+        if (e.kind === "upcast" && e.type.kind === "func" && e.value.type.kind === "func") {
+          const source = e.value.type;
+          const target = e.type;
+          if (
+            source.rest !== target.rest ||
+            source.restAbi !== target.restAbi ||
+            source.argumentsAll !== target.argumentsAll ||
+            source.params.length !== target.params.length ||
+            !source.params.every((param, i) => typeEquals(param, target.params[i]!)) ||
+            source.ret.kind !== "object" ||
+            target.ret.kind !== "object" ||
+            !isStrictSubclass(source.ret.className, target.ret.className)
+          )
+            err(
+              "function upcast requires identical parameters and a covariant class return",
+              e.loc,
+            );
+          break;
+        }
         if (e.kind === "upcast" && e.type.kind === "classval" && e.value.type.kind === "classval") {
           const [sub, sup] = [e.value.type.className, e.type.className];
           if (!isPhysicalSubclass(sub, sup)) {
@@ -2997,7 +3035,15 @@ function validateFunction(
           const p = impl.params[i + 1];
           if (p) expectType(a, p.type, `virtualCall ${e.className}.${e.method} arg ${i}`);
         });
-        if (!typeEquals(e.type, callSiteReturnType(impl))) {
+        const returned = callSiteReturnType(impl);
+        if (
+          !typeEquals(e.type, returned) &&
+          !(
+            e.type.kind === "object" &&
+            returned.kind === "object" &&
+            isStrictSubclass(returned.className, e.type.className)
+          )
+        ) {
           err(`virtualCall ${e.className}.${e.method} result type mismatch`, e.loc);
         }
         break;
@@ -3017,7 +3063,9 @@ function validateFunction(
         | "recordGet"
         | "recordKeyGet"
         | "recordOvfHas"
-        | "recordOvfKeys";
+        | "recordOvfKeys"
+        | "recordHas"
+        | "fieldAbsent";
     },
   ): void {
     switch (e.kind) {
@@ -3034,7 +3082,8 @@ function validateFunction(
         const want = recordValidation.get(shape.id)!.initializationFields;
         const seen = new Set<string>();
         for (const f of e.fields) {
-          checkExpr(f.value);
+          if (f.drop || f.overflow) checkExpr(f.value);
+          else checkSlotValue(f.value);
           if (seen.has(f.name)) err(`recordLit initializes field "${f.name}" twice`, e.loc);
           seen.add(f.name);
           if (f.drop) {
@@ -3094,13 +3143,33 @@ function validateFunction(
         const want = recordValidation.get(shape.id)!.initializationFields;
         const seen = new Set<string>();
         for (const f of e.overrides) {
-          checkExpr(f.value);
+          checkSlotValue(f.value);
           if (seen.has(f.name)) err(`recordClone overrides field "${f.name}" twice`, e.loc);
           seen.add(f.name);
           const ft = want.get(f.name);
           if (!ft) err(`shape ${shape.id} has no field "${f.name}"`, e.loc);
           else expectType(f.value, ft, `recordClone field "${f.name}"`);
         }
+        break;
+      }
+      case "recordHas": {
+        checkExpr(e.obj);
+        const shape = records.get(e.shapeId);
+        if (!shape) err(`recordHas on undeclared shape "${e.shapeId}"`, e.loc);
+        else if (!recordValidation.get(e.shapeId)?.fields.has(e.field))
+          err(`shape ${e.shapeId} has no field "${e.field}"`, e.loc);
+        expectType(e.obj, { kind: "record", shapeId: e.shapeId }, "recordHas receiver");
+        if (e.type.kind !== "bool") err("recordHas must be bool", e.loc);
+        break;
+      }
+      case "fieldAbsent": {
+        const def = unions.get(e.unionId);
+        if (!def) err(`fieldAbsent of undeclared union "${e.unionId}"`, e.loc);
+        else if (!def.arms.some((arm) => arm.kind === "undefinedT"))
+          err(`fieldAbsent of ${e.unionId}: the union has no undefined arm`, e.loc);
+        if (e.type.kind !== "union" || e.type.unionId !== e.unionId)
+          err("fieldAbsent must have its union type", e.loc);
+        if (!fieldSlotValues.has(e)) err("fieldAbsent outside a record field write", e.loc);
         break;
       }
       case "recordGet": {
@@ -3419,8 +3488,8 @@ function validateFunction(
         if (e.type.kind !== "bool") err("caughtTest must be bool", e.loc);
         if (e.test === "instanceof") {
           if (!e.className) err("caughtTest instanceof without a class", e.loc);
-          else if (!hierarchy.has(e.className)) {
-            err(`caughtTest instanceof against non-hierarchy class "${e.className}"`, e.loc);
+          else if (!classes.has(e.className)) {
+            err(`caughtTest instanceof against undeclared class "${e.className}"`, e.loc);
           }
         } else if (e.className !== undefined) {
           err(`caughtTest ${e.test} with a class name`, e.loc);
@@ -3455,10 +3524,10 @@ function validateFunction(
           t.kind === "f64" ||
           t.kind === "bool" ||
           t.kind === "string" ||
-          (t.kind === "object" && hierarchy.has(t.className));
+          (t.kind === "object" && classes.has(t.className));
         if (!ok) {
           err(
-            `caughtNarrow to ${t.kind === "object" ? `non-hierarchy class "${t.className}"` : t.kind}`,
+            `caughtNarrow to ${t.kind === "object" ? `undeclared class "${t.className}"` : t.kind}`,
             e.loc,
           );
         }
@@ -5901,7 +5970,7 @@ function validateFunction(
       }
       case "recordSet": {
         checkExpr(s.obj);
-        checkExpr(s.value);
+        checkSlotValue(s.value);
         const shape = records.get(s.shapeId);
         const field = recordValidation.get(s.shapeId)?.fields.get(s.field);
         if (!shape) err(`recordSet on undeclared shape "${s.shapeId}"`, s.loc);

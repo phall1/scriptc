@@ -62,8 +62,8 @@ void scr_init(void);
 /* Program objects emitted by the bundled LLVM helper reference this symbol.
  * Its versioned spelling makes a mismatched manual runtime link fail before
  * the program can start. */
-void scr_runtime_abi_v7(void);
-void scr_runtime_workers_v7(void);
+void scr_runtime_abi_v8(void);
+void scr_runtime_workers_v8(void);
 
 /* ── the trap funnel (scr_console.c; scr_library.c under -DSCR_LIB) ──────
  * Every unrecoverable runtime trap — OOM, semantic range traps, internal-
@@ -617,6 +617,10 @@ typedef struct ScrError {
   bool name_enumerable;
   ScrStr *stack_frames; /* captured native source frames */
   ScrStr *stack; /* lazily formatted, cached stack */
+  double system_errno; /* present exactly when system_call is non-NULL */
+  ScrStr *system_call;
+  ScrStr *system_path;
+  ScrStr *system_dest;
 } ScrError;
 
 enum {
@@ -654,6 +658,10 @@ typedef struct ScrDomException {
   bool name_enumerable;
   ScrStr *stack_frames;
   ScrStr *stack;
+  double system_errno;
+  ScrStr *system_call;
+  ScrStr *system_path;
+  ScrStr *system_dest;
   double dom_code; /* the WebIDL legacy code (0 when the name is off-table) */
   bool has_cause;  /* the options form carried a `cause` member */
   struct ScrDyn *cause; /* owned; NULL when has_cause is false */
@@ -1698,6 +1706,16 @@ typedef struct ScrClosure {
    * collected. */
   ScrBox *props;
   uint32_t function_kind; /* low bits: 0 ordinary, 1 generator, 2 async, 3 async generator; bit 2: ordinary own prototype; bit 3: checked callable adapter in caps[0] */
+  /* The root's `length` as boxed values report it; meaningful only when
+   * identity is set (the root's own boxes carry their arity). */
+  uint32_t identity_length;
+  /* The JS function this closure stands for. NULL means the closure is
+   * its own identity. A signature adapter (the same function viewed
+   * through a different native ABI) points at the root of the function
+   * it adapts, so chains of adapters collapse to one root and `===`,
+   * SameValue, searches and own properties all observe one function.
+   * Borrowed: the adapter keeps its original alive through its captures. */
+  struct ScrClosure *identity;
   ScrBox *caps[];
 } ScrClosure;
 
@@ -1712,6 +1730,23 @@ static inline ScrClosure *scr_closure_retain(ScrClosure *c) {
 }
 
 void scr_closure_release(ScrClosure *c); /* releases the boxes; NULL-tolerant */
+
+/* The identity root of a function value (NULL-tolerant). */
+static inline ScrClosure *scr_closure_identity(ScrClosure *c) {
+  return c != NULL && c->identity != NULL ? c->identity : c;
+}
+
+/* JS function identity: two closures are the same function when their
+ * identity roots match. */
+bool scr_closure_identity_equal(ScrClosure *a, ScrClosure *b);
+
+/* Mark `adapter` as a signature view of `original` (both borrowed);
+ * `length` is the original's arity when it is a root. */
+void scr_closure_adopt_identity(ScrClosure *adapter, ScrClosure *original, uint32_t length);
+
+/* Mark `adapter` as a typed view of a dynamic function value (both
+ * borrowed). Other callables keep the adapter as its own identity. */
+void scr_dyn_adopt_identity(ScrClosure *adapter, const struct ScrDyn *value);
 
 /* ── outbound FFI retained callbacks (scr_ffi.c) ─────────────────────
  * One compiler-emitted table per retained callback descriptor. For
