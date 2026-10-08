@@ -52,6 +52,7 @@ import {
   RUNTIME_EMITTER_CLASS,
   RUNTIME_ERROR_CLASSES,
   RUNTIME_STREAM_CLASSES,
+  typeEquals,
   typeKey,
   STRING,
   VOID,
@@ -133,7 +134,9 @@ import {
   type LocalUnionStorage,
 } from "./local-union-storage.js";
 import { BlockBuilder } from "./blocks.js";
+import { NullableRefFields, type NullableRefField } from "./nullable-fields.js";
 import {
+  emitCallArrayRead,
   emitLocalArrayRead,
   emitBorrowedArrayRead,
   findLocalArrayReads,
@@ -496,7 +499,7 @@ export class LlEmitter {
    * fiberless-async analysis scans it for suspension entry points. */
   private readonly fnDefText = new Map<string, string>();
   readonly referenceEffects: ReferenceEffects;
-  private readonly optionalArrayReads: OptionalArrayReads;
+  readonly optionalArrayReads: OptionalArrayReads;
   callArrayReads = new Map<IrExpr, LocalArrayRead>();
   mapReadLifetimes: MapReadLifetimes = { locals: new Map(), arguments: new Map() };
   readonly callLifetimes: CallLifetimes;
@@ -505,6 +508,8 @@ export class LlEmitter {
   readonly stackCallbacks: StackCallbacks;
   private readonly stackCaptures: StackCaptures;
   private borrowedParameters = new Set<string>();
+  /** Parameters proven projection-only: callers may pass stack boxes. */
+  private projectedParameters = new Set<string>();
   private stableCallBindings: ReadonlySet<string> = new Set();
   /** Manifest-bound native imports, used by ffiCall emission. */
   readonly ffiByName = new Map<string, IrFfiImport>();
@@ -544,6 +549,7 @@ export class LlEmitter {
   readonly liveDynUnionRefAdapters = new Map<string, string>();
   readonly dynPromiseAdapters = new Map<string, string>();
   readonly unionsById = new Map<string, IrUnionDef>();
+  readonly nullableFields: NullableRefFields;
   readonly recordsById = new Map<string, IrRecordShape>();
   readonly recordCloneShapes = new Set<string>();
   readonly tracedShapes: Set<string>;
@@ -704,12 +710,16 @@ export class LlEmitter {
       }
     }
     for (const u of mod.unions ?? []) this.unionsById.set(u.id, u);
+    this.nullableFields = new NullableRefFields(mod.classes ?? [], this.unionsById);
     this.optionalArrayReads = new OptionalArrayReads(this.fnByName, this.unionsById);
     this.referenceEffects = new ReferenceEffects(
       this.fnByName,
       (call) => this.optionalArrayReads.get(call) !== null,
     );
-    this.callLifetimes = analyzeCallLifetimes(this.fnByName);
+    this.callLifetimes = analyzeCallLifetimes(
+      this.fnByName,
+      (className, field) => this.nullableFields.get(className, field) !== null,
+    );
     this.constantCallbacks = findConstantCallbacks(mod, this.callLifetimes);
     this.stackCallbacks = new StackCallbacks(this.fnByName);
     this.stackCaptures = new StackCaptures(this.fnByName, this.callLifetimes, this.stackCallbacks);
@@ -1239,6 +1249,7 @@ export class LlEmitter {
       this.classObjs,
       this.fnByName,
       (t) => this.llType(t),
+      this.nullableFields,
     );
     const shapes = layouts.records;
     const classShapes = layouts.classes;
@@ -3509,13 +3520,9 @@ export class LlEmitter {
       this.unionTagSwitch(v.name, def, (arm) => {
         let valueName = "false";
         if (arm.kind === "f64" || arm.kind === "procStream") {
-          valueName = B.tmp();
-          this.declare(`declare double @scr_union_get_f64(ptr)`);
-          B.line(`${valueName} = call double @scr_union_get_f64(ptr ${v.name})`);
+          valueName = this.unionGetF64(v.name);
         } else if (arm.kind === "bool") {
-          valueName = B.tmp();
-          this.declare(`declare zeroext i1 @scr_union_get_bool(ptr)`);
-          B.line(`${valueName} = call zeroext i1 @scr_union_get_bool(ptr ${v.name})`);
+          valueName = this.unionGetBool(v.name);
         } else if (arm.kind === "string") {
           valueName = this.unionPeek(v.name);
         } else if (arm.kind === "bigint" || arm.kind === "dyn" || arm.kind === "jsval") {
@@ -3700,23 +3707,33 @@ export class LlEmitter {
   }
 
   /** The +1 extraction of a union's single narrowed arm (unionNarrow /
-   * the nullish-family reads): scalars via the runtime getters, ref arms
+   * the nullish-family reads): scalars via inline payload loads, ref arms
    * a retained peek. */
   unionExtract(uName: string, arm: IrType): string {
-    const B = this.B;
-    if (arm.kind === "f64" || arm.kind === "procStream") {
-      const t = B.tmp();
-      this.declare(`declare double @scr_union_get_f64(ptr)`);
-      B.line(`${t} = call double @scr_union_get_f64(ptr ${uName})`);
-      return t;
-    }
-    if (arm.kind === "bool") {
-      const t = B.tmp();
-      this.declare(`declare zeroext i1 @scr_union_get_bool(ptr)`);
-      B.line(`${t} = call zeroext i1 @scr_union_get_bool(ptr ${uName})`);
-      return t;
-    }
+    if (arm.kind === "f64" || arm.kind === "procStream") return this.unionGetF64(uName);
+    if (arm.kind === "bool") return this.unionGetBool(uName);
     return this.retainValue(this.unionPeek(uName), arm);
+  }
+
+  /** A scalar f64 arm's payload (scr_union_get_f64 inlined). Inline loads
+   * keep stack boxes free of escaping calls, so LLVM can scalarize them. */
+  unionGetF64(uName: string): string {
+    const p = this.B.tmp();
+    const t = this.B.tmp();
+    this.B.line(`${p} = getelementptr inbounds %ScrUnion, ptr ${uName}, i64 0, i32 5`);
+    this.B.line(`${t} = load double, ptr ${p}`);
+    return t;
+  }
+
+  /** A bool arm's payload (scr_union_get_bool inlined: nonzero slot). */
+  unionGetBool(uName: string): string {
+    const p = this.B.tmp();
+    const bits = this.B.tmp();
+    const t = this.B.tmp();
+    this.B.line(`${p} = getelementptr inbounds %ScrUnion, ptr ${uName}, i64 0, i32 5`);
+    this.B.line(`${bits} = load i64, ptr ${p}`);
+    this.B.line(`${t} = icmp ne i64 ${bits}, 0`);
+    return t;
   }
 
   /** Constructs a union box around an OWNED (+1, already moved) value —
@@ -4213,6 +4230,11 @@ export class LlEmitter {
     const numericFn = withInitializerBindings(fn, initializerBindings);
     this.numericLocals = new Map(numericFn.locals.map((l) => [l.id, l]));
     this.borrowedParameters.clear();
+    this.projectedParameters.clear();
+    const projectedParameterIndexes = this.callLifetimes.parameters.get(fn.name);
+    if (projectedParameterIndexes)
+      for (const index of projectedParameterIndexes)
+        this.projectedParameters.add(fn.params[index]!.localId);
     this.stableCallBindings = this.callLifetimes.bindings.get(fn.name) ?? new Set();
     const borrowedParameterIndexes = this.callLifetimes.borrowed.get(fn.name);
     if (borrowedParameterIndexes) {
@@ -4260,7 +4282,12 @@ export class LlEmitter {
       this.debug === null ? findScalarStringSlices(fn, this.callLifetimes) : new Map();
     this.mapReadLifetimes = findMapReadLifetimes(fn, this.unionsById, this.callLifetimes);
     this.localStackUnions = findLocalStackUnions(fn, this.callLifetimes, this.unionsById);
-    this.localUnionStorageProofs = findLocalUnionStorage(fn, this.callLifetimes, this.unionsById);
+    this.localUnionStorageProofs = findLocalUnionStorage(
+      fn,
+      this.callLifetimes,
+      this.unionsById,
+      (e) => this.nullableFieldGet(e) !== null,
+    );
     this.localUnionStorage = new Map();
     this.integerRanges = analyzeIntegerRanges(numericFn);
     this.bytesBounds = findBytesBounds(numericFn, this.integerRanges);
@@ -4789,6 +4816,13 @@ export class LlEmitter {
         // release — a release can trigger a cycle collection, which must
         // never see a heap edge whose count was already given up).
         // Classes and records share the struct layout, so one emission.
+        const nullable =
+          s.kind === "fieldSet" ? this.nullableFields.get(s.className, s.field) : null;
+        if (nullable && s.kind === "fieldSet") {
+          const obj = this.emitExpr(s.obj);
+          this.emitNullableFieldStore(obj.name, s.className, s.field, nullable, s.value);
+          break;
+        }
         const obj = isRefCounted(s.value.type)
           ? this.emitExpr(s.obj)
           : this.emitStableReceiver(s.obj, [s.value]);
@@ -6062,10 +6096,17 @@ export class LlEmitter {
       return result.value;
     }
     if (canStackUnion(e, this.unionsById)) return emitStackUnion(this, e).value;
+    // An optional array read consumed by a projection needs no heap box:
+    // a private stack box owns the payload until the statement frame ends.
+    const arrayRead = e.type.kind === "union" ? this.optionalArrayReads.get(e) : null;
+    if (arrayRead) return emitCallArrayRead(this, arrayRead, true);
     if (e.kind === "unionNarrow") {
-      const union = this.emitReadReceiver(e.value);
+      const union = this.emitUnionProjection(e.value);
       return { name: this.unionPeek(union.name), type: e.type };
     }
+    // A nullable-pointer field has no box to borrow. Projections use
+    // emitUnionProjection; other borrowers get an owned heap box.
+    if (this.nullableFieldGet(e)) return this.emitExpr(e);
     if (e.kind === "recordGet" || e.kind === "fieldGet") {
       const receiver = this.emitReadReceiver(e.obj);
       if (e.kind === "recordGet") {
@@ -6103,6 +6144,169 @@ export class LlEmitter {
       return { name: value, type: e.type };
     }
     return this.emitExpr(e);
+  }
+
+  /** True for union sources that emitReadReceiver can produce as a private
+   * stack box with an independently owned payload (no heap union). */
+  isStackUnionSource(e: IrExpr): boolean {
+    if (e.type.kind !== "union") return false;
+    return (
+      canStackUnion(e, this.unionsById) ||
+      matchMapRead(e, this.unionsById) !== null ||
+      this.optionalArrayReads.get(e) !== null
+    );
+  }
+
+  /** The nullable-pointer representation behind a union-typed class field
+   * read, or null for every other expression. */
+  nullableFieldGet(e: IrExpr): NullableRefField | null {
+    if (e.kind !== "fieldGet" || e.type.kind !== "union") return null;
+    return this.nullableFields.get(e.className, e.field);
+  }
+
+  /** A union operand consumed only by a projection (tag test, payload
+   * extraction, arm compare, truthiness). A nullable-pointer field read
+   * becomes a private stack box whose payload is borrowed from the field:
+   * the consumer must finish before any later expression can store to the
+   * field, and must never retain, release, or store the box. Every other
+   * operand takes the ordinary borrowed-receiver path. */
+  emitUnionProjection(e: IrExpr): LlValue {
+    const nullable = this.nullableFieldGet(e);
+    if (!nullable || e.kind !== "fieldGet") return this.emitReadReceiver(e);
+    const B = this.B;
+    const receiver = this.emitReadReceiver(e.obj);
+    const { ptr } = this.classFieldPtr(receiver.name, e.className, e.field);
+    const p = B.tmp();
+    B.line(`${p} = load ptr, ptr ${ptr}${this.fieldAliasAttachment(ptr)}`);
+    return { name: this.stackNullableBox(p, nullable), type: e.type };
+  }
+
+  /** A private stack box over a nullable-pointer field read whose payload
+   * is retained into the current frame: an independent owner, so the box
+   * may outlive later stores to the field (call arguments, local copies).
+   * The box itself must still never reach an RC entry point. */
+  emitOwnedNullableStack(e: IrExpr): { box: string; owner: LlValue } {
+    const nullable = this.nullableFieldGet(e);
+    if (!nullable || e.kind !== "fieldGet")
+      throw new InternalCompilerError("llvm emitter bug: owned nullable stack of non-field");
+    const receiver = this.emitReadReceiver(e.obj);
+    const { ptr } = this.classFieldPtr(receiver.name, e.className, e.field);
+    const p = this.B.tmp();
+    this.B.line(`${p} = load ptr, ptr ${ptr}${this.fieldAliasAttachment(ptr)}`);
+    const owner = this.own({ name: this.retainValue(p, nullable.arm), type: nullable.arm });
+    return { box: this.stackNullableBox(owner.name, nullable), owner };
+  }
+
+  /** A private stack box over a borrowed nullable pointer. */
+  stackNullableBox(p: string, nullable: NullableRefField): string {
+    const B = this.B;
+    const box = B.slot();
+    B.entryAllocas.push(`${box} = alloca %ScrUnion`);
+    const isNull = B.tmp(),
+      tag = B.tmp(),
+      tagPtr = B.tmp(),
+      slot = B.tmp();
+    B.line(`${isNull} = icmp eq ptr ${p}, null`);
+    B.line(`${tag} = select i1 ${isNull}, i32 ${nullable.unitTag}, i32 ${nullable.refTag}`);
+    B.line(`${tagPtr} = getelementptr inbounds %ScrUnion, ptr ${box}, i64 0, i32 1`);
+    B.line(`store i32 ${tag}, ptr ${tagPtr}`);
+    B.line(`${slot} = getelementptr inbounds %ScrUnion, ptr ${box}, i64 0, i32 5`);
+    B.line(`store i64 0, ptr ${slot}`);
+    B.line(`store ptr ${p}, ptr ${slot}`);
+    return box;
+  }
+
+  /** The owned (+1) union value of a nullable-pointer slot: the unit arm's
+   * immortal instance, or a fresh heap box around a retained instance. */
+  nullableToOwnedUnion(p: string, nullable: NullableRefField): string {
+    const B = this.B;
+    const slot = B.slot();
+    B.entryAllocas.push(`${slot} = alloca ptr`);
+    const isNull = B.tmp();
+    const unit = B.newLabel("nf.u"),
+      ref = B.newLabel("nf.r"),
+      join = B.newLabel("nf.j");
+    B.line(`${isNull} = icmp eq ptr ${p}, null`);
+    B.condBr(isNull, unit, ref);
+    B.startBlock(unit);
+    B.line(`store ptr ${this.unitInstanceRef(nullable.unionId, nullable.unitTag)}, ptr ${slot}`);
+    B.br(join);
+    B.startBlock(ref);
+    const owned = this.retainValue(p, nullable.arm);
+    const box = this.unionNewOwned(nullable.refTag, { name: owned, type: nullable.arm });
+    B.line(`store ptr ${box}, ptr ${slot}`);
+    B.br(join);
+    B.startBlock(join);
+    const t = B.tmp();
+    B.line(`${t} = load ptr, ptr ${slot}`);
+    return t;
+  }
+
+  /** The owned (+1) instance pointer (NULL for the unit arm) of a union
+   * box, which stays owned by its existing owner. */
+  unionToNullable(u: string, nullable: NullableRefField): string {
+    const B = this.B;
+    const tag = this.unionTag(u);
+    const isRef = B.tmp(),
+      sel = B.tmp();
+    B.line(`${isRef} = icmp eq i32 ${tag}, ${nullable.refTag}`);
+    const payload = this.unionPeek(u);
+    B.line(`${sel} = select i1 ${isRef}, ptr ${payload}, ptr null`);
+    return this.retainValue(sel, nullable.arm);
+  }
+
+  /** `obj.f = value` for a nullable-pointer field: the new instance pointer
+   * is produced without a union box where the value is a wrap, and as a
+   * retained payload of a borrowed box otherwise. Unlink-then-release like
+   * every field store. */
+  emitNullableFieldStore(
+    obj: string,
+    className: string,
+    field: string,
+    nullable: NullableRefField,
+    value: IrExpr,
+  ): void {
+    const B = this.B;
+    let next: string;
+    if (
+      value.kind === "unionWrap" &&
+      value.unionId === nullable.unionId &&
+      (value.tag === nullable.refTag
+        ? typeEquals(value.value.type, nullable.arm)
+        : value.tag === nullable.unitTag)
+    ) {
+      if (value.tag === nullable.refTag) {
+        const inner = this.emitExpr(value.value);
+        this.moveTemp(inner);
+        next = inner.name;
+      } else {
+        // Unit payloads carry nothing; a void payload runs for effects.
+        if (!isUnitType(value.value.type)) this.emitExpr(value.value);
+        next = "null";
+      }
+    } else if (value.kind === "varRef" && !this.canBorrowReceiver(value)) {
+      next = this.unionToNullable(this.emitExpr(value).name, nullable);
+    } else {
+      next = this.unionToNullable(this.emitUnionProjection(value).name, nullable);
+    }
+    const { ptr } = this.classFieldPtr(obj, className, field);
+    const old = B.tmp();
+    B.line(`${old} = load ptr, ptr ${ptr}`);
+    B.line(`store ptr ${next}, ptr ${ptr}${this.fieldAliasAttachment(ptr)}`);
+    this.releaseValue(old, nullable.arm);
+  }
+
+  /** A union binding whose slot may hold a private stack box: stack locals
+   * and projection-only parameters (callers may pass stack boxes). Such a
+   * box must only be projected: never retained, released, or stored. */
+  isStackUnionLocal(localId: string): boolean {
+    return (
+      this.projectedParameters.has(localId) ||
+      this.localStackUnions.has(localId) ||
+      this.localUnionStorage.has(localId) ||
+      this.localArrayReads.has(localId) ||
+      this.mapReadLifetimes.locals.has(localId)
+    );
   }
 
   canBorrowReceiver(e: IrExpr): boolean {

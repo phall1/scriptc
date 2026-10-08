@@ -14855,6 +14855,18 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/4060-stack-union-reads.ts": {
+   "order": [
+    "<repo>/tests/corpus/4060-stack-union-reads.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4061-nullable-ref-fields.ts": {
+   "order": [
+    "<repo>/tests/corpus/4061-nullable-ref-fields.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/4290-acyclic-immutable-trees.ts": {
    "order": [
     "<repo>/tests/corpus/4290-acyclic-immutable-trees.ts"

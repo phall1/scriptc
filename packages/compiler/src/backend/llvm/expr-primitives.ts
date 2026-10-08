@@ -472,21 +472,17 @@ export function emitStringExpr(
               B.line(`store ptr ${host.retainValue(host.unionPeek(v.name), e.type)}, ptr ${slot}`);
               break;
             case "f64": {
-              const x = B.tmp();
+              const x = host.unionGetF64(v.name);
               const r = B.tmp();
-              host.declare(`declare double @scr_union_get_f64(ptr)`);
               host.declare(`declare ptr @scr_f64_to_scrstr(double)`);
-              B.line(`${x} = call double @scr_union_get_f64(ptr ${v.name})`);
               B.line(`${r} = call ptr @scr_f64_to_scrstr(double ${x})`);
               B.line(`store ptr ${r}, ptr ${slot}`);
               break;
             }
             case "bool": {
-              const x = B.tmp();
+              const x = host.unionGetBool(v.name);
               const r = B.tmp();
-              host.declare(`declare zeroext i1 @scr_union_get_bool(ptr)`);
               host.declare(`declare ptr @scr_bool_to_scrstr(i1 zeroext)`);
-              B.line(`${x} = call zeroext i1 @scr_union_get_bool(ptr ${v.name})`);
               B.line(`${r} = call ptr @scr_bool_to_scrstr(i1 zeroext ${x})`);
               B.line(`store ptr ${r}, ptr ${slot}`);
               break;
@@ -805,6 +801,12 @@ export function emitRecordExpr(
     case "fieldGet": {
       const obj = host.emitReadReceiver(e.obj);
       const { ptr, type } = host.classFieldPtr(obj.name, e.className, e.field);
+      const nullable = host.nullableFieldGet(e);
+      if (nullable) {
+        const p = B.tmp();
+        B.line(`${p} = load ptr, ptr ${ptr}${host.fieldAliasAttachment(ptr)}`);
+        return host.own({ name: host.nullableToOwnedUnion(p, nullable), type: e.type });
+      }
       const v = host.loadField(ptr, type);
       if (isRefCounted(e.type))
         return host.own({ name: host.retainValue(v, e.type), type: e.type });
