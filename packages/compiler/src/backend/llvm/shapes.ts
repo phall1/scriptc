@@ -540,9 +540,9 @@ export function emitRecordShapes(
       host.declare(`declare void @scr_cyc_free(ptr)`);
       freeBody.push(`  call void @scr_cyc_free(ptr %o)`);
     } else {
-      host.declare(`declare void @free(ptr)`);
+      host.declare(`declare void @scr_rt_free(ptr)`);
       host.declare(`declare void @scr_weak_dispose(ptr)`);
-      freeBody.push(`  call void @scr_weak_dispose(ptr %o)`, `  call void @free(ptr %o)`);
+      freeBody.push(`  call void @scr_weak_dispose(ptr %o)`, `  call void @scr_rt_free(ptr %o)`);
     }
     defs.push(
       ...releaseBody(
@@ -569,10 +569,10 @@ export function emitRecordShapes(
         `  %o = call ptr @scr_cyc_alloc(${host.sizeType} ${sizeOf}, ptr @${mangleRecordTrace(shape.id)}, ptr @${mangleRecordGcFree(shape.id)})`,
       );
     } else {
-      host.declare(`declare ptr @calloc(${host.sizeType}, ${host.sizeType})`);
+      host.declare(`declare ptr @scr_rt_calloc(${host.sizeType})`);
       host.needOom();
       nw.push(
-        `  %o = call ptr @calloc(${host.sizeType} 1, ${host.sizeType} ${sizeOf})`,
+        `  %o = call ptr @scr_rt_calloc(${host.sizeType} ${sizeOf})`,
         `  %isnull = icmp eq ptr %o, null`,
         `  br i1 %isnull, label %oom, label %ok`,
         `oom:`,

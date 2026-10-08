@@ -85,7 +85,11 @@ export function emissionCases(): EmissionCase[] {
       ],
     },
   ];
-  add("scalar record allocation", scalar, ["type { i64, i8, double }", "@calloc", "@free"]);
+  add("scalar record allocation", scalar, [
+    "type { i64, i8, double }",
+    "@scr_rt_calloc",
+    "@scr_rt_free",
+  ]);
 
   const refs = emissionModule();
   refs.records = [
