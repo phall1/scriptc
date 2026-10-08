@@ -14867,6 +14867,27 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/4140-array-callback-split-visit.ts": {
+   "order": [
+    "<repo>/tests/corpus/4140-array-callback-split-visit.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4141-array-callback-ambient-receiver/main.ts": {
+   "order": [
+    "<repo>/tests/corpus/4141-array-callback-ambient-receiver/peek.mjs",
+    "<repo>/tests/corpus/4141-array-callback-ambient-receiver/mapper.ts",
+    "<repo>/tests/corpus/4141-array-callback-ambient-receiver/holder.mjs",
+    "<repo>/tests/corpus/4141-array-callback-ambient-receiver/main.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4142-array-callback-factories.ts": {
+   "order": [
+    "<repo>/tests/corpus/4142-array-callback-factories.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/4290-acyclic-immutable-trees.ts": {
    "order": [
     "<repo>/tests/corpus/4290-acyclic-immutable-trees.ts"
