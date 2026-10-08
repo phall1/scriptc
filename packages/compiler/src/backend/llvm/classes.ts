@@ -27,7 +27,7 @@ import {
   mangleVtStruct,
 } from "../mangle.js";
 import { llvmCommentText } from "./common.js";
-import type { NullableRefFields } from "./nullable-fields.js";
+import { NullableRefFields } from "./nullable-fields.js";
 import {
   FN_ATTRS,
   llFieldType,

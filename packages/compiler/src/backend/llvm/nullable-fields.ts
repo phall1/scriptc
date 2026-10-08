@@ -10,7 +10,7 @@ export interface NullableRefField {
   unionId: string;
   refTag: number;
   unitTag: number;
-  arm: IrType & { kind: "object" };
+  arm: { kind: "object"; className: string };
 }
 
 export class NullableRefFields {
