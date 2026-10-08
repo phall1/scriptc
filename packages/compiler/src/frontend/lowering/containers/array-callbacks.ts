@@ -19,6 +19,7 @@ import {
   VOID,
   arrayOf,
   funcOf,
+  isSortValuesElement,
   isUnitType,
   typeEquals,
 } from "../../../ir/ir.js";
@@ -1539,7 +1540,13 @@ export function lowerArraySortCall(
     lowerer.badType(argNode, lowerer.typeOf(argNode));
   }
   const arity = fnArg.type.params.length;
-  const key = `${method}:${typeKey(elem)}:${arity}`;
+  // The runtime sorts raw slots without per-move reference counting; this
+  // beats the IR merge sort even when its comparator call becomes direct.
+  const native = isSortValuesElement(
+    elem,
+    elem.kind === "union" ? lowerer.unions.get(elem.unionId)?.arms : undefined,
+  );
+  const key = `${method}:${typeKey(elem)}:${arity}${native ? ":native" : ""}`;
   let helper = lowerer.arrHofHelpers.get(key);
   if (!helper) {
     helper = `%arr.${method}.${lowerer.arrHofHelpers.size}`;
@@ -1553,6 +1560,7 @@ export function lowerArraySortCall(
         copyFirst,
         undefinedTag >= 0 ? undefinedTag : null,
         loc,
+        native,
       ),
     );
   }

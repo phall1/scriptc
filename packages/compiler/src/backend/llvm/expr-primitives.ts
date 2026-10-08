@@ -424,7 +424,7 @@ export function emitStringExpr(
       const [l, r] = emitStringInputs(host, [e.left, e.right]);
       host.declare(`declare zeroext i1 @scr_str_eq(ptr, ptr)`);
       const eq = B.tmp();
-      B.line(`${eq} = call zeroext i1 @scr_str_eq(ptr ${l!.name}, ptr ${r!.name})`);
+      B.line(`${eq} = call zeroext i1 @sc_str_eq(ptr ${l!.name}, ptr ${r!.name})`);
       if (!e.negated) return { name: eq, type: e.type };
       const t = B.tmp();
       B.line(`${t} = xor i1 ${eq}, true`);
@@ -437,7 +437,8 @@ export function emitStringExpr(
       const c = B.tmp();
       const t = B.tmp();
       const pred = { "<": "slt", "<=": "sle", ">": "sgt", ">=": "sge" }[e.op];
-      B.line(`${c} = call i32 @${fn}(ptr ${l!.name}, ptr ${r!.name})`);
+      // Identity short-circuits through the inlined sc_ wrapper (helperDefs).
+      B.line(`${c} = call i32 @${fn.replace(/^scr_/, "sc_")}(ptr ${l!.name}, ptr ${r!.name})`);
       B.line(`${t} = icmp ${pred} i32 ${c}, 0`);
       return { name: t, type: e.type };
     }

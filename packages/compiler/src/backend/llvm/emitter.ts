@@ -2438,6 +2438,142 @@ export class LlEmitter {
         ``,
       );
     }
+    // String comparisons enter through small internal wrappers that LLVM
+    // inlines at each site: interned literals and shared values compare by
+    // identity, and equality rejects different byte lengths, before any
+    // runtime call (scr_str_eq/scr_str_cmp keep the complete semantics).
+    if (this.decls.has(`declare zeroext i1 @scr_str_eq(ptr, ptr)`)) {
+      defs.push(
+        `define internal zeroext i1 @sc_str_eq(ptr %a, ptr %b) ${FN_ATTRS} {`,
+        `entry:`,
+        `  %same = icmp eq ptr %a, %b`,
+        `  br i1 %same, label %yes, label %lengths`,
+        `lengths:`,
+        `  %alen.p = getelementptr inbounds %ScrStr, ptr %a, i32 0, i32 1`,
+        `  %blen.p = getelementptr inbounds %ScrStr, ptr %b, i32 0, i32 1`,
+        `  %alen = load ${this.sizeType}, ptr %alen.p`,
+        `  %blen = load ${this.sizeType}, ptr %blen.p`,
+        `  %samelen = icmp eq ${this.sizeType} %alen, %blen`,
+        `  br i1 %samelen, label %bytes, label %no`,
+        `bytes:`,
+        `  %eq = call zeroext i1 @scr_str_eq(ptr %a, ptr %b)`,
+        `  ret i1 %eq`,
+        `yes:`,
+        `  ret i1 true`,
+        `no:`,
+        `  ret i1 false`,
+        `}`,
+        ``,
+      );
+    }
+    // Ordering also decides inline when the first bytes differ: byte order
+    // is the plain comparison's order, and the UTF-16 order whenever both
+    // bytes are ASCII. Callers only test the sign of the result.
+    for (const fn of ["scr_str_cmp", "scr_str_cmp_u16"]) {
+      if (!this.decls.has(`declare i32 @${fn}(ptr, ptr)`)) continue;
+      this.declare("declare i64 @llvm.bswap.i64(i64)");
+      const utf16 = fn === "scr_str_cmp_u16";
+      defs.push(
+        `define internal i32 @${fn.replace(/^scr_/, "sc_")}(ptr %a, ptr %b) ${FN_ATTRS} {`,
+        `entry:`,
+        `  %same = icmp eq ptr %a, %b`,
+        `  br i1 %same, label %equal, label %lengths`,
+        `lengths:`,
+        `  %alen.p = getelementptr inbounds %ScrStr, ptr %a, i32 0, i32 1`,
+        `  %blen.p = getelementptr inbounds %ScrStr, ptr %b, i32 0, i32 1`,
+        `  %alen = load ${this.sizeType}, ptr %alen.p`,
+        `  %blen = load ${this.sizeType}, ptr %blen.p`,
+        `  %aempty = icmp eq ${this.sizeType} %alen, 0`,
+        `  %bempty = icmp eq ${this.sizeType} %blen, 0`,
+        `  %empty = or i1 %aempty, %bempty`,
+        `  br i1 %empty, label %order, label %words`,
+        // Both at least 8 bytes: the first differing byte of one word pair.
+        // Byte-swapped little-endian words compare in byte order.
+        `words:`,
+        `  %along = icmp uge ${this.sizeType} %alen, 8`,
+        `  %blong = icmp uge ${this.sizeType} %blen, 8`,
+        `  %long = and i1 %along, %blong`,
+        `  br i1 %long, label %word, label %first`,
+        `word:`,
+        `  %awp = getelementptr inbounds %ScrStr, ptr %a, i32 1`,
+        `  %bwp = getelementptr inbounds %ScrStr, ptr %b, i32 1`,
+        `  %aw = load i64, ptr %awp, align 1`,
+        `  %bw = load i64, ptr %bwp, align 1`,
+        `  %wdiffer = icmp ne i64 %aw, %bw`,
+        `  br i1 %wdiffer, label %wdiff, label %wsame`,
+        `wdiff:`,
+        ...(utf16
+          ? [
+              `  %wbits = or i64 %aw, %bw`,
+              `  %whigh = and i64 %wbits, -9187201950435737472`,
+              `  %wascii = icmp eq i64 %whigh, 0`,
+              `  br i1 %wascii, label %wordorder, label %order`,
+            ]
+          : [`  br label %wordorder`]),
+        `wordorder:`,
+        `  %asw = call i64 @llvm.bswap.i64(i64 %aw)`,
+        `  %bsw = call i64 @llvm.bswap.i64(i64 %bw)`,
+        `  %wbelow = icmp ult i64 %asw, %bsw`,
+        `  %wsign = select i1 %wbelow, i32 -1, i32 1`,
+        `  ret i32 %wsign`,
+        // Equal first words and one length of at most 16 bytes: the word
+        // ending at that length covers the rest, and any difference lies
+        // past the equal first word.
+        `wsame:`,
+        `  %samelen = icmp eq ${this.sizeType} %alen, %blen`,
+        `  %short = icmp ule ${this.sizeType} %alen, 16`,
+        `  %tailable = and i1 %samelen, %short`,
+        `  br i1 %tailable, label %tail, label %order`,
+        `tail:`,
+        `  %toff = sub ${this.sizeType} %alen, 8`,
+        `  %atp = getelementptr inbounds i8, ptr %awp, ${this.sizeType} %toff`,
+        `  %btp = getelementptr inbounds i8, ptr %bwp, ${this.sizeType} %toff`,
+        `  %at = load i64, ptr %atp, align 1`,
+        `  %bt = load i64, ptr %btp, align 1`,
+        `  %tdiffer = icmp ne i64 %at, %bt`,
+        `  br i1 %tdiffer, label %tdiff, label %equal`,
+        `tdiff:`,
+        ...(utf16
+          ? [
+              `  %tbits = or i64 %at, %bt`,
+              `  %thigh = and i64 %tbits, -9187201950435737472`,
+              `  %tascii = icmp eq i64 %thigh, 0`,
+              `  br i1 %tascii, label %tailorder, label %order`,
+            ]
+          : [`  br label %tailorder`]),
+        `tailorder:`,
+        `  %ats = call i64 @llvm.bswap.i64(i64 %at)`,
+        `  %bts = call i64 @llvm.bswap.i64(i64 %bt)`,
+        `  %tbelow = icmp ult i64 %ats, %bts`,
+        `  %tsign = select i1 %tbelow, i32 -1, i32 1`,
+        `  ret i32 %tsign`,
+        `first:`,
+        `  %adata = getelementptr inbounds %ScrStr, ptr %a, i32 1`,
+        `  %bdata = getelementptr inbounds %ScrStr, ptr %b, i32 1`,
+        `  %x = load i8, ptr %adata`,
+        `  %y = load i8, ptr %bdata`,
+        `  %differ = icmp ne i8 %x, %y`,
+        ...(utf16
+          ? [
+              `  %bits = or i8 %x, %y`,
+              `  %ascii = icmp sge i8 %bits, 0`,
+              `  %decide = and i1 %differ, %ascii`,
+            ]
+          : [`  %decide = and i1 %differ, true`]),
+        `  br i1 %decide, label %byte, label %order`,
+        `byte:`,
+        `  %below = icmp ult i8 %x, %y`,
+        `  %sign = select i1 %below, i32 -1, i32 1`,
+        `  ret i32 %sign`,
+        `order:`,
+        `  %c = call i32 @${fn}(ptr %a, ptr %b)`,
+        `  ret i32 %c`,
+        `equal:`,
+        `  ret i32 0`,
+        `}`,
+        ``,
+      );
+    }
     // The declarations these helpers added must land in the extern block,
     // which already flushed — append here instead (LLVM is order-free).
     return defs.length > 0 ? [...defs] : defs;
@@ -4743,7 +4879,7 @@ export class LlEmitter {
             const lit = this.internLiteral(f.name);
             const hit = B.tmp();
             B.line(
-              `${hit} = call zeroext i1 @scr_str_eq(ptr ${key.name}, ptr ${lit}) ; ${llvmCommentText(f.name)}`,
+              `${hit} = call zeroext i1 @sc_str_eq(ptr ${key.name}, ptr ${lit}) ; ${llvmCommentText(f.name)}`,
             );
             const lh = B.newLabel("rks.h");
             const ln = B.newLabel("rks.n");
@@ -4801,7 +4937,7 @@ export class LlEmitter {
           const lit = this.internLiteral(f.name);
           const hit = B.tmp();
           B.line(
-            `${hit} = call zeroext i1 @scr_str_eq(ptr ${key.name}, ptr ${lit}) ; ${llvmCommentText(f.name)}`,
+            `${hit} = call zeroext i1 @sc_str_eq(ptr ${key.name}, ptr ${lit}) ; ${llvmCommentText(f.name)}`,
           );
           const lh = B.newLabel("rks.h");
           const ln = B.newLabel("rks.n");
@@ -5614,7 +5750,7 @@ export class LlEmitter {
         const hit = B.tmp();
         if (c.test.type.kind === "string") {
           this.declare(`declare zeroext i1 @scr_str_eq(ptr, ptr)`);
-          B.line(`${hit} = call zeroext i1 @scr_str_eq(ptr ${disc.name}, ptr ${t.name})`);
+          B.line(`${hit} = call zeroext i1 @sc_str_eq(ptr ${disc.name}, ptr ${t.name})`);
         } else if (c.test.type.kind === "bool") {
           B.line(`${hit} = icmp eq i1 ${disc.name}, ${t.name}`);
         } else {

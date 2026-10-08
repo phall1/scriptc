@@ -1,5 +1,6 @@
 import { classMembershipIntervals } from "./classes.js";
-import { emitBorrowedInput, emitBorrowedInputs } from "./borrowed-inputs.js";
+import { borrowableInputs, emitBorrowedInput, emitBorrowedInputs } from "./borrowed-inputs.js";
+import { canStackUnion } from "./stack-unions.js";
 import { preservesDynTest } from "./checked-value-lifetimes.js";
 import { typedRefConstructor } from "./shapes.js";
 /* Focused LLVM expression emission extracted from emitter.ts. */
@@ -560,7 +561,7 @@ export function emitDynamicExpr(
           B.line(`${pv} = getelementptr inbounds i8, ptr ${d.name}, i64 16 ; ->v.str`);
           const sv = B.tmp();
           B.line(`${sv} = load ptr, ptr ${pv}`);
-          B.line(`${eq} = call zeroext i1 @scr_str_eq(ptr ${sv}, ptr ${s.name})`);
+          B.line(`${eq} = call zeroext i1 @sc_str_eq(ptr ${sv}, ptr ${s.name})`);
         } else if (st.kind === "f64") {
           B.line(`${pv} = getelementptr inbounds i8, ptr ${d.name}, i64 16 ; ->v.num`);
           const nv = B.tmp();
@@ -735,7 +736,16 @@ export function emitDynamicExpr(
       if (direct) return direct;
       // Strict equality of the ARM values (tag compare + per-arm payload
       // compare — the C per-union helper, inlined). Both boxes borrowed.
-      const inputs = emitBorrowedInputs(host, [e.left, e.right]);
+      // A freshly wrapped operand (`key === "name"` against a union) never
+      // escapes this comparison, so it gets a stack box instead of a heap
+      // allocation; its payload stays owned by the statement frame.
+      const operands = [e.left, e.right];
+      const borrowed = borrowableInputs(host, operands);
+      const inputs = operands.map((value, index) =>
+        borrowed[index] || canStackUnion(value, host.unionsById)
+          ? host.emitReadReceiver(value)
+          : host.emitExpr(value),
+      );
       const l = inputs[0]!,
         r = inputs[1]!;
       const def = host.unionsById.get(e.unionId);
@@ -792,7 +802,7 @@ export function emitDynamicExpr(
             const a = host.unionPeek(l.name);
             const b = host.unionPeek(r.name);
             const t = B.tmp();
-            B.line(`${t} = call zeroext i1 @scr_str_eq(ptr ${a}, ptr ${b})`);
+            B.line(`${t} = call zeroext i1 @sc_str_eq(ptr ${a}, ptr ${b})`);
             B.line(`store i1 ${t}, ptr ${slot}`);
             break;
           }

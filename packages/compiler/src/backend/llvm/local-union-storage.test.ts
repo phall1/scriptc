@@ -226,3 +226,71 @@ test("immediate tag and string conversions keep temporary payload ownership", ()
   ];
   expect(body(mod, 64)).not.toMatch(/@scr_union_(?:new|retain|release)/);
 });
+
+const unionEq = (left: IrExpr, right: IrExpr): IrExpr => ({
+  kind: "unionEq",
+  unionId: "optional",
+  negated: false,
+  sameValue: false,
+  left,
+  right,
+  type: BOOL,
+  loc,
+});
+
+function equalityFixture(): IrModule {
+  const mod = fixture();
+  const fn = mod.functions[1]!;
+  fn.returnType = BOOL;
+  fn.body = [
+    fn.body[0]!,
+    {
+      kind: "return",
+      loc,
+      value: {
+        kind: "logical",
+        op: "||",
+        left: unionEq(ref("item"), wrap(text("department"), 0)),
+        right: unionEq(wrap(text("level"), 0), ref("item")),
+        type: BOOL,
+        loc,
+      },
+    },
+  ];
+  return mod;
+}
+
+test("strict equality against a wrapped literal borrows the local and stack-boxes the literal", () => {
+  const mod = equalityFixture();
+  expect(facts(mod).has("item")).toBe(true);
+  for (const bits of [32, 64] as const) {
+    const ir = body(mod, bits);
+    expect(ir).toContain("@sc_str_eq");
+    expect(ir).not.toMatch(/@scr_union_(?:new|retain|release)/);
+  }
+});
+
+test("closure bodies keep their own union locals on the stack", () => {
+  const mod = equalityFixture();
+  mod.functions[1]!.captures = [];
+  expect(facts(mod).has("item")).toBe(true);
+  expect(body(mod, 64)).not.toMatch(/@scr_union_(?:new|retain|release)/);
+});
+
+test("equality whose other operand captures the whole local keeps the heap path", () => {
+  const mod = equalityFixture();
+  const fn = mod.functions[1]!;
+  fn.body[1] = {
+    kind: "return",
+    loc,
+    value: unionEq(ref("item"), {
+      kind: "ternary",
+      cond: ref("choose", BOOL),
+      then: ref("item"),
+      else_: missing(),
+      type: optional,
+      loc,
+    }),
+  };
+  expect(facts(mod).has("item")).toBe(false);
+});

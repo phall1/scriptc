@@ -1383,6 +1383,13 @@ double scr_arr_unshift_spread(ScrArr *a, const ScrArr *src);
 ScrArr *scr_arr_reverse(ScrArr *a);
 /* Default primitive String ordering; stable, borrowed receiver, owned result. */
 ScrArr *scr_arr_sort_primitive(ScrArr *a, bool copy);
+/* Stable comparator sort of the first `count` slots of a private, compacted
+ * snapshot (every slot a value; f64 or reference elements). `f` is a borrowed
+ * closure of `arity` (0..2) element parameters returning a number. Elements
+ * move without reference-count traffic; a pending exception from `f` stops
+ * the sort and leaves the snapshot unchanged. */
+struct ScrClosure;
+void scr_arr_sort_values(ScrArr *a, double count, struct ScrClosure *f, uint32_t arity);
 
 /* pop traps on an empty array; _ref transfers ownership out (+1 to the
  * caller, no release). */
