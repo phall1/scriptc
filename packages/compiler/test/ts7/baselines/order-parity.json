@@ -14891,6 +14891,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/4410-inline-object-allocation.ts": {
+   "order": [
+    "<repo>/tests/corpus/4410-inline-object-allocation.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/array-sort-runtime-comparator.ts": {
    "order": [
     "<repo>/tests/corpus/array-sort-runtime-comparator.ts"
