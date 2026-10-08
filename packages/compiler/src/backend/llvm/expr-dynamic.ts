@@ -561,7 +561,7 @@ export function emitDynamicExpr(
           B.line(`${pv} = getelementptr inbounds i8, ptr ${d.name}, i64 16 ; ->v.str`);
           const sv = B.tmp();
           B.line(`${sv} = load ptr, ptr ${pv}`);
-          B.line(`${eq} = call zeroext i1 @scr_str_eq(ptr ${sv}, ptr ${s.name})`);
+          B.line(`${eq} = call zeroext i1 @sc_str_eq(ptr ${sv}, ptr ${s.name})`);
         } else if (st.kind === "f64") {
           B.line(`${pv} = getelementptr inbounds i8, ptr ${d.name}, i64 16 ; ->v.num`);
           const nv = B.tmp();
@@ -802,7 +802,7 @@ export function emitDynamicExpr(
             const a = host.unionPeek(l.name);
             const b = host.unionPeek(r.name);
             const t = B.tmp();
-            B.line(`${t} = call zeroext i1 @scr_str_eq(ptr ${a}, ptr ${b})`);
+            B.line(`${t} = call zeroext i1 @sc_str_eq(ptr ${a}, ptr ${b})`);
             B.line(`store i1 ${t}, ptr ${slot}`);
             break;
           }

@@ -1975,32 +1975,42 @@ ScrArr *scr_arr_sort_primitive(ScrArr *a, bool copy) {
 /* ── comparator sort over a compacted private snapshot ────────────────── */
 
 typedef struct {
-  const ScrArr *a;
   ScrClosure *f;
+  void *(*retain)(void *); /* reference elements; NULL for numbers */
   uint32_t arity;
   bool numbers;
 } ScrSortCompare;
 
+static void *scr_sort_retain_str(void *p) { return scr_str_retain((ScrStr *)p); }
+static void *scr_sort_retain_arr(void *p) { return scr_arr_retain((ScrArr *)p); }
+static void *scr_sort_retain_bytes(void *p) { return scr_bytes_retain((ScrBytes *)p); }
+
 /* One comparator call with the closure ABI of the emitted callValue: the
- * callee owns its reference parameters, runs under an undefined `this`, and
- * reports an exception through the pending flag. */
+ * callee owns its reference parameters and reports an exception through
+ * the pending flag. The caller holds the undefined-`this` window open for
+ * the whole sort; every emitted call restores the receiver stack it
+ * pushed, so its top is undefined at each comparator entry. */
 static bool scr_sort_greater(const ScrSortCompare *c, uint64_t left, uint64_t right,
                              bool *failed) {
   double result;
-  scr_dyn_this_push_dyn(NULL);
   if (c->numbers) {
     double x = scr_slot_to_f64(left), y = scr_slot_to_f64(right);
     if (c->arity == 2) result = ((double (*)(ScrClosure *, double, double))c->f->fn)(c->f, x, y);
     else if (c->arity == 1) result = ((double (*)(ScrClosure *, double))c->f->fn)(c->f, x);
     else result = ((double (*)(ScrClosure *))c->f->fn)(c->f);
   } else {
-    void *x = c->arity >= 1 ? scr_slot_to_ptr(scr_elem_retain_slot(c->a, left)) : NULL;
-    void *y = c->arity >= 2 ? scr_slot_to_ptr(scr_elem_retain_slot(c->a, right)) : NULL;
-    if (c->arity == 2) result = ((double (*)(ScrClosure *, void *, void *))c->f->fn)(c->f, x, y);
-    else if (c->arity == 1) result = ((double (*)(ScrClosure *, void *))c->f->fn)(c->f, x);
-    else result = ((double (*)(ScrClosure *))c->f->fn)(c->f);
+    void *x = scr_slot_to_ptr(left), *y = scr_slot_to_ptr(right);
+    if (c->arity == 2) {
+      if (x) x = c->retain(x);
+      if (y) y = c->retain(y);
+      result = ((double (*)(ScrClosure *, void *, void *))c->f->fn)(c->f, x, y);
+    } else if (c->arity == 1) {
+      if (x) x = c->retain(x);
+      result = ((double (*)(ScrClosure *, void *))c->f->fn)(c->f, x);
+    } else {
+      result = ((double (*)(ScrClosure *))c->f->fn)(c->f);
+    }
   }
-  scr_dyn_this_pop();
   if (scr_exc_pending()) {
     *failed = true;
     return false;
@@ -2020,9 +2030,14 @@ void scr_arr_sort_values(ScrArr *a, double count, ScrClosure *f, uint32_t arity)
   if (n < 2) return;
   if (n > a->len || n > SIZE_MAX / 2 / sizeof(uint64_t))
     scr_trap("scriptc: invalid comparator sort snapshot\n");
-  ScrSortCompare c = {a, f, arity, a->elem == SCR_ELEM_F64};
-  if (!c.numbers && !scr_elem_is_ref(a->elem))
-    scr_trap("scriptc: invalid comparator sort element kind\n");
+  ScrSortCompare c = {f, NULL, arity, a->elem == SCR_ELEM_F64};
+  if (!c.numbers) {
+    if (a->elem == SCR_ELEM_STR) c.retain = scr_sort_retain_str;
+    else if (a->elem == SCR_ELEM_ARR) c.retain = scr_sort_retain_arr;
+    else if (a->elem == SCR_ELEM_BYTES) c.retain = scr_sort_retain_bytes;
+    else if (a->elem == SCR_ELEM_REF) c.retain = a->elem_retain;
+    else scr_trap("scriptc: invalid comparator sort element kind\n");
+  }
   uint64_t *src = malloc(n * sizeof(*src));
   uint64_t *dst = malloc(n * sizeof(*dst));
   size_t *runs = malloc((n + 1) * sizeof(*runs));
@@ -2032,6 +2047,7 @@ void scr_arr_sort_values(ScrArr *a, double count, ScrClosure *f, uint32_t arity)
       scr_trap("scriptc: invalid comparator sort snapshot\n");
   }
   bool failed = false;
+  scr_dyn_this_push_dyn(NULL);
 #define SCR_SORT_GREATER(x, y) (scr_sort_greater(&c, (x), (y), &failed))
 #define SCR_SORT_CHECK() \
   do {                   \
@@ -2124,6 +2140,7 @@ void scr_arr_sort_values(ScrArr *a, double count, ScrClosure *f, uint32_t arity)
     }
   }
 done:
+  scr_dyn_this_pop();
   free(src);
   free(dst);
   free(runs);
