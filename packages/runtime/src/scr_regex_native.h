@@ -199,46 +199,63 @@ static int rn_loop_jump(const uint8_t *body, int off) {
   return off + 10 + (int32_t)rn_u32(body + off + 6);
 }
 
-/* First-byte analysis from op `i`: which bytes can the first consumed
+/* First-byte analysis from op `start`: which bytes can the first consumed
  * character be, whether a path is anchored at position 0, and whether a
  * path can reach the match without consuming. Zero-width assertions are
- * transparent (they only restrict positions further). */
-RN_ONCE static void rn_first(const ScrReNative *p, int i, uint8_t *visited, uint8_t *set, bool *any,
-                     bool *bol) {
-  while (i >= 0 && i < p->nops && !visited[i]) {
-    visited[i] = 1;
-    const RnOp *op = &p->ops[i];
-    switch (op->op) {
-      case RN_CLASS:
-        for (int c = 0; c < 128; c++) set[c] |= op->tab[c];
-        return;
-      case RN_STR:
-        set[op->str[0]] = 1;
-        return;
-      case RN_LOOP:
-        for (int c = 0; c < 128; c++) set[c] |= op->tab[c];
-        if (op->a > 0) return;
-        i++;
-        break;
-      case RN_BOL:
-        *bol = true;
-        return;
-      case RN_GOTO:
-        i = op->target;
-        break;
-      case RN_SPLIT_NEXT:
-      case RN_SPLIT_GOTO:
-      case RN_LOOPCNT:
-      case RN_LOOPSPLIT:
-        rn_first(p, op->target, visited, set, any, bol);
-        i++;
-        break;
-      case RN_MATCH:
-        *any = true;
-        return;
-      default: /* SAVE, RESET, BOL_M, EOL, EOL_M, WORDB, NWORDB, SETPOS, CHECKADV, SETI32 */
-        i++;
-        break;
+ * transparent (they only restrict positions further).
+ *
+ * The walk is iterative: split targets go on `work` (nops + 1 entries)
+ * instead of the C stack, because a flat pattern such as a long run of empty
+ * alternatives chains one split per alternative and would otherwise recurse
+ * once per alternative while the regex is constructed. Every op is processed
+ * at most once (`visited`), so each split pushes at most one entry, and the
+ * accumulated set/any/bol do not depend on the visiting order. */
+RN_ONCE static void rn_first(const ScrReNative *p, int start, uint8_t *visited, int *work,
+                             uint8_t *set, bool *any, bool *bol) {
+  int top = 0;
+  work[top++] = start;
+  while (top > 0) {
+    int i = work[--top];
+    bool stop = false;
+    while (!stop && i >= 0 && i < p->nops && !visited[i]) {
+      visited[i] = 1;
+      const RnOp *op = &p->ops[i];
+      switch (op->op) {
+        case RN_CLASS:
+          for (int c = 0; c < 128; c++) set[c] |= op->tab[c];
+          stop = true;
+          break;
+        case RN_STR:
+          set[op->str[0]] = 1;
+          stop = true;
+          break;
+        case RN_LOOP:
+          for (int c = 0; c < 128; c++) set[c] |= op->tab[c];
+          if (op->a > 0) stop = true;
+          else i++;
+          break;
+        case RN_BOL:
+          *bol = true;
+          stop = true;
+          break;
+        case RN_GOTO:
+          i = op->target;
+          break;
+        case RN_SPLIT_NEXT:
+        case RN_SPLIT_GOTO:
+        case RN_LOOPCNT:
+        case RN_LOOPSPLIT:
+          if (top <= p->nops) work[top++] = op->target;
+          i++;
+          break;
+        case RN_MATCH:
+          *any = true;
+          stop = true;
+          break;
+        default: /* SAVE, RESET, BOL_M, EOL, EOL_M, WORDB, NWORDB, SETPOS, CHECKADV, SETI32 */
+          i++;
+          break;
+      }
     }
   }
 }
@@ -528,9 +545,14 @@ RN_ONCE static ScrReNative *scr_re_native_build(const uint8_t *bc) {
   /* First-byte prefilter. */
   {
     uint8_t *visited = calloc((size_t)p->nops + 1, 1);
-    if (!visited) goto fail;
+    int *work = malloc(((size_t)p->nops + 1) * sizeof *work);
+    if (!visited || !work) {
+      free(visited);
+      free(work);
+      goto fail;
+    }
     memset(p->first, 0, sizeof p->first);
-    rn_first(p, 0, visited, p->first, &p->first_any, &p->first_bol);
+    rn_first(p, 0, visited, work, p->first, &p->first_any, &p->first_bol);
     p->first_byte = -1;
     int count = 0;
     for (int c = 0; c < 128; c++) {
@@ -558,7 +580,7 @@ RN_ONCE static ScrReNative *scr_re_native_build(const uint8_t *bc) {
       uint8_t follow[128] = {0};
       bool any = false, bol = false;
       memset(visited, 0, (size_t)p->nops + 1);
-      rn_first(p, i + 1, visited, follow, &any, &bol);
+      rn_first(p, i + 1, visited, work, follow, &any, &bol);
       if (any || bol) continue;
       bool disjoint = true;
       for (int c = 0; c < 128; c++) {
@@ -570,6 +592,7 @@ RN_ONCE static ScrReNative *scr_re_native_build(const uint8_t *bc) {
       op->possessive = disjoint;
     }
     free(visited);
+    free(work);
   }
   free(offs);
   free(map);
