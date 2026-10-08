@@ -86,6 +86,8 @@ export interface DynHost extends WalkerHost {
   dynPromiseAdapter(t: IrType): string;
   isErrorClass(className: string): boolean;
   classSubtypes(className: string): readonly string[];
+  /** emitter.ts's pendingTestLines: the inline pending-exception test. */
+  pendingTestLines(dest: string): string[];
 }
 
 const FN_ATTRS = "#0";
@@ -484,9 +486,8 @@ export class LlDyn {
   /** Emit the standard in-helper pending check: on a pending exception
    * run `cleanup` and return `dummy`. */
   private pendingBail(B: BlockBuilder, hint: string, cleanup: () => void, dummy: string): void {
-    this.host.declare(`declare zeroext i1 @scr_exc_pending()`);
     const p = B.tmp();
-    B.line(`${p} = call zeroext i1 @scr_exc_pending()`);
+    for (const line of this.host.pendingTestLines(p)) B.line(line.trimStart());
     const lu = B.newLabel(`${hint}.u`);
     const lk = B.newLabel(`${hint}.k`);
     B.condBr(p, lu, lk);

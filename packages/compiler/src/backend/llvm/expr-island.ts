@@ -653,7 +653,6 @@ export function islandTypedAdapter(
       `cont${b}:`,
     );
   };
-  host.declare(`declare zeroext i1 @scr_exc_pending()`);
   fn.params.forEach((p, i) => {
     d.push(
       `  %ap${i} = getelementptr inbounds ptr, ptr %argv, i64 ${i}`,
@@ -742,7 +741,7 @@ export function islandTypedAdapter(
           `cont${b3}:`,
           `  %cv${i} = call ${host.llType(p)} @${host.dyn.dynCheckHelper(p)}(ptr %dp${i}, ptr null)`,
           `  call void @scr_dyn_release(ptr %dp${i})`,
-          `  %pe${i} = call zeroext i1 @scr_exc_pending()`,
+          ...host.pendingTestLines(`%pe${i}`),
         );
         const b4 = blk++;
         d.push(
@@ -852,7 +851,7 @@ export function islandTypedAdapter(
         d.push(
           `  %jbuf = alloca %ScrJsonBuf`,
           `  %rv = call ${host.llType(fn.ret)} %fn(${passed.join(", ")})`,
-          `  %rpend = call zeroext i1 @scr_exc_pending()`,
+          ...host.pendingTestLines("%rpend"),
           `  br i1 %rpend, label %jfail, label %jok`,
           `jfail:`,
           ...(isRefCounted(fn.ret)

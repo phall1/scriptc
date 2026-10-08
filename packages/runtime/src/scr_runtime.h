@@ -2666,6 +2666,18 @@ ScrExcCell *scr_exc_current_cell(void);          /* the ACTIVE cell */
 
 bool scr_exc_pending(void);
 
+#if !((defined(SCR_LIB) && defined(SCR_THREAD_INSTANCES)) || defined(SCR_WORKERS))
+/* Runtime units test the active cell's kind inline, as emitted exception
+ * polls do (scr_exc_active is never NULL outside thread-instanced libraries
+ * and worker executables, which also poll cross-thread termination in
+ * scr_exc_pending). The out-of-line definition in scr_exception.c stays
+ * for those lanes and for emitted code's slow paths. */
+static inline bool scr_exc_pending_inline(void) { return scr_exc_active->kind != SCR_EXC_NONE; }
+#define scr_exc_pending() scr_exc_pending_inline()
+#endif
+_Static_assert(offsetof(ScrExcCell, kind) == 0 && sizeof(ScrExcKind) == 4 && SCR_EXC_NONE == 0,
+               "the LLVM emitter's inline pending check loads an i32 kind at offset 0");
+
 void scr_throw_f64(double v);
 void scr_throw_bool(bool v);
 void scr_throw_str(ScrStr *v); /* takes ownership */

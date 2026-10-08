@@ -15079,6 +15079,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/4431-exception-pending-contexts.ts": {
+   "order": [
+    "<repo>/tests/corpus/4431-exception-pending-contexts.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/array-sort-runtime-comparator.ts": {
    "order": [
     "<repo>/tests/corpus/array-sort-runtime-comparator.ts"
