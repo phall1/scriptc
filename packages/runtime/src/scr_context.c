@@ -175,3 +175,70 @@ double scr_worker_root(void) { return -1; }
 ScrDyn *scr_worker_data(void) { return scr_dyn_new_null(); }
 ScrDyn *scr_worker_parent_port(void) { return scr_dyn_new_null(); }
 #endif
+
+/* ── native stack guard ─────────────────────────────────────────────────
+ * Executables call scr_stack_guard_init on every context's thread before
+ * compiled code runs; async fibers install their own guard on each switch
+ * (scr_async.c). The guard itself is defined in scr_exception.c. Platforms
+ * without a known stack extent keep the guard at zero, which leaves the
+ * generated entry checks inert. */
+#if defined(__linux__) && !defined(SCR_LIB)
+#include <sys/auxv.h>
+#include <sys/resource.h>
+#elif defined(__APPLE__) && !defined(SCR_LIB)
+#include <pthread.h>
+#endif
+#if defined(__linux__) && defined(SCR_WORKERS) && !defined(SCR_LIB)
+#include <pthread.h>
+#endif
+
+void scr_stack_guard_init(void) {
+#if defined(__APPLE__) && !defined(SCR_LIB)
+  pthread_t self = pthread_self();
+  uintptr_t high = (uintptr_t)pthread_get_stackaddr_np(self);
+  size_t size = pthread_get_stacksize_np(self);
+  if (high > size) scr_stack_guard = scr_stack_guard_for(high - size, size);
+#elif defined(__linux__) && !defined(SCR_LIB)
+#ifdef SCR_WORKERS
+  if (!scr_context_is_main()) {
+    /* Worker threads: the thread library knows the exact extent. */
+    pthread_attr_t attr;
+    void *low = NULL;
+    size_t size = 0;
+    if (pthread_getattr_np(pthread_self(), &attr) != 0) return;
+    if (pthread_attr_getstack(&attr, &low, &size) == 0 && low && size)
+      scr_stack_guard = scr_stack_guard_for((uintptr_t)low, size);
+    pthread_attr_destroy(&attr);
+    return;
+  }
+#endif
+  /* The main thread's stack grows on demand up to RLIMIT_STACK, measured
+   * from the top of its mapping. The kernel places the executable's path
+   * (AT_EXECFN) at the very top, followed only by a terminating pointer, so
+   * it bounds the mapping's end without parsing /proc. Without it, assume
+   * the arguments and environment above this frame fit in 256 KiB. */
+  struct rlimit limit;
+  size_t size = (size_t)8 << 20;
+  if (getrlimit(RLIMIT_STACK, &limit) == 0) {
+    if (limit.rlim_cur == RLIM_INFINITY) size = (size_t)64 << 20;
+    else if (limit.rlim_cur < ((rlim_t)1 << 30)) size = (size_t)limit.rlim_cur;
+    else size = (size_t)1 << 30;
+  }
+  uintptr_t here = (uintptr_t)__builtin_frame_address(0);
+  const char *execfn = (const char *)getauxval(AT_EXECFN);
+  uintptr_t high = execfn ? (uintptr_t)execfn + strlen(execfn) + 1 + sizeof(void *)
+                          : here + ((uintptr_t)256 << 10);
+  if (high < here) high = here;
+  uintptr_t page = (uintptr_t)getauxval(AT_PAGESZ);
+  if (page == 0 || (page & (page - 1)) != 0) page = 4096;
+  high = (high + page - 1) & ~(page - 1);
+  if (high > size) scr_stack_guard = scr_stack_guard_for(high - size, size);
+#endif
+}
+
+/* Out of line and cold: the generated entry checks branch here and then
+ * unwind like any other pending exception. */
+__attribute__((cold, noinline)) void scr_stack_overflow(void) {
+  static const char text[] = "Maximum call stack size exceeded";
+  scr_throw_error_msg(SCR_ERR_RANGE, text, sizeof text - 1);
+}

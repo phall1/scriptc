@@ -15551,6 +15551,42 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/native-worker-stack-overflow.ts": {
+   "order": [
+    "<repo>/tests/corpus/native-worker-stack-overflow.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/stack-overflow-async.ts": {
+   "order": [
+    "<repo>/tests/corpus/stack-overflow-async.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/stack-overflow-caught.ts": {
+   "order": [
+    "<repo>/tests/corpus/stack-overflow-caught.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/stack-overflow-finally.ts": {
+   "order": [
+    "<repo>/tests/corpus/stack-overflow-finally.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/stack-overflow-shapes.ts": {
+   "order": [
+    "<repo>/tests/corpus/stack-overflow-shapes.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/stack-overflow-uncaught.ts": {
+   "order": [
+    "<repo>/tests/corpus/stack-overflow-uncaught.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/4471-unassigned-field-reads.ts": {
    "order": [
     "<repo>/tests/corpus/4471-unassigned-field-reads.ts"

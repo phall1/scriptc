@@ -308,6 +308,29 @@ struct ScrArr *scr_context_env_pairs(void);
 
 /* Also used by ordinary event-loop builds, where this always returns true. */
 bool scr_context_is_main(void);
+
+/* Native stack guard. Compiled functions that can recurse compare their
+ * stack pointer against scr_stack_guard on entry and throw Node's catchable
+ * RangeError below it. The guard sits a reserve above the lowest usable
+ * address of the running stack (thread or async fiber), leaving room for the
+ * throw, unwinding, finally blocks, catch handlers and the uncaught-error
+ * report. Zero (the default) disables the check on that stack. */
+extern SCR_TL uintptr_t scr_stack_guard;
+void scr_stack_guard_init(void);
+void scr_stack_overflow(void);
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define SCR_STACK_RESERVE_MAX ((size_t)2 << 20)
+#endif
+#endif
+#ifndef SCR_STACK_RESERVE_MAX
+#define SCR_STACK_RESERVE_MAX ((size_t)256 << 10)
+#endif
+static inline uintptr_t scr_stack_guard_for(uintptr_t low, size_t size) {
+  size_t reserve = size / 4;
+  if (reserve > SCR_STACK_RESERVE_MAX) reserve = SCR_STACK_RESERVE_MAX;
+  return low + reserve;
+}
 double scr_context_thread_number(void);
 double scr_worker_root(void);
 int scr_worker_argc(void);

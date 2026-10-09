@@ -111,7 +111,7 @@ export function emitCallExpr(
       const t = B.tmp();
       B.line(`${t} = call ${host.llType(e.type)} ${target}(${argList})`);
       const out = host.own({ name: t, type: e.type });
-      if (host.mayThrow.has(e.callee)) host.emitPendingCheck();
+      if (host.mayThrow.has(e.callee)) host.emitPendingCheck(out);
       if (borrowed) {
         host.moveTemp(out);
         host.releaseFrame(host.frames.pop()!);

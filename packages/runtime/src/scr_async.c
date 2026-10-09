@@ -1249,6 +1249,12 @@ static void scr_switch(ScrCtx *from, ScrCtx *to, ScrFiber *to_fiber) {
   scr_current = to_fiber;
   scr_exc_swap_cell(to_fiber ? &to_fiber->exc : NULL);
   scr_als_active = to_fiber ? &to_fiber->als : &scr_als_main_slot;
+#if !defined(_WIN32) && !defined(__wasi__)
+  /* The stack guard follows the running stack. A fresh fiber starts with
+   * its own; every resumed context restores the guard it saved here. */
+  uintptr_t guard = scr_stack_guard;
+  if (to_fiber) scr_stack_guard = scr_stack_guard_for((uintptr_t)to_fiber->stack, SCR_FIBER_STACK);
+#endif
 #ifdef _WIN32
   /* SwitchToFiber snapshots the outgoing fiber's state inside its own
    * fiber object — `from` has nothing to record. */
@@ -1276,6 +1282,9 @@ static void scr_switch(ScrCtx *from, ScrCtx *to, ScrFiber *to_fiber) {
   scr_ctx_swap(from, to);
 #else
   swapcontext(from, to);
+#endif
+#if !defined(_WIN32) && !defined(__wasi__)
+  scr_stack_guard = guard;
 #endif
 }
 

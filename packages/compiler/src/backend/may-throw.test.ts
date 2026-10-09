@@ -404,3 +404,63 @@ test("worker programs poll for termination only where execution can be unbounded
   ]);
   expect(computeMayThrow({ ...mod, workers: false }).workerEntryPolls).toBeUndefined();
 });
+
+test("stack checks cover recursive components and recursion through reentrant operations", () => {
+  const mod = moduleWith(
+    fn("caller", [call("self"), call("left"), call("leaf"), call("walker")], []),
+    fn("self", [call("self"), call("leaf")], []),
+    fn("left", [call("right")], []),
+    fn("right", [call("left")], []),
+    fn("leaf", [exprStmt(value)], []),
+    // walker reaches itself only through a closure it calls indirectly.
+    fn("walker", [callClosure("step")], []),
+    fn("step", [call("walker")], []),
+    // A reentrant leaf whose closure targets never come back stays unchecked.
+    fn("visitor", [callClosure("leaf")], []),
+  );
+  const answer = computeMayThrow(mod, { stackChecks: true });
+  expect([...answer.stackChecks!].sort()).toEqual(["left", "right", "self", "step", "walker"]);
+  // Checked functions throw the overflow RangeError, so their callers poll;
+  // a throwing closure target makes every indirect call poll as well.
+  expect(answer.indirect).toBe(true);
+  expect([...answer.fns].sort()).toEqual([
+    "caller",
+    "left",
+    "right",
+    "self",
+    "step",
+    "visitor",
+    "walker",
+  ]);
+  expect(computeMayThrow(mod).stackChecks).toBeUndefined();
+  expect(computeMayThrow(mod).fns.size).toBe(0);
+});
+
+test("class members are reachable from reentrant operations", () => {
+  const mod: IrModule = {
+    ...moduleWith(
+      fn("%Shape.describe", [exprStmt({ kind: "dynFrom", value, type: DYN, loc })], []),
+      fn("%Shape.area", [exprStmt(value)], []),
+      fn("%main", [exprStmt({ kind: "dynFrom", value, type: DYN, loc })], []),
+    ),
+    classes: [{ name: "Shape", fields: [], methods: ["describe", "area"], loc }],
+  };
+  const answer = computeMayThrow(mod, { stackChecks: true });
+  // describe stays bounded too: dynFrom is a plain conversion.
+  expect([...answer.stackChecks!]).toEqual([]);
+  mod.functions[0]!.body = [
+    exprStmt({
+      kind: "dynInvoke",
+      recv: { kind: "dynFrom", value, type: DYN, loc },
+      method: "describe",
+      calleeName: "describe",
+      args: [],
+      type: DYN,
+      loc,
+    }),
+  ];
+  mod.functions[2]!.body = mod.functions[0]!.body;
+  expect([...computeMayThrow(mod, { stackChecks: true }).stackChecks!]).toEqual([
+    "%Shape.describe",
+  ]);
+});

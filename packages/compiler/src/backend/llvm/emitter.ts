@@ -606,6 +606,9 @@ export class LlEmitter {
   /** Worker programs: the functions that poll for termination on entry
    * (workerTerminationPolls); null outside worker programs. */
   private readonly workerEntryPolls: ReadonlySet<string> | null;
+  /** Functions that check the native stack guard on entry
+   * (stackCheckedFunctions); null where the runtime has no guard. */
+  private readonly stackChecks: ReadonlySet<string> | null;
   /** Method names with at least one may-throw implementation — the
    * virtualCall pending check's key. */
   readonly mayThrowMethods = new Set<string>();
@@ -794,9 +797,16 @@ export class LlEmitter {
     for (const entry of mod.ffiImports ?? []) {
       this.ffiByName.set(entry.name, entry);
     }
-    const mt = computeMayThrow(mod);
+    // Executables on Linux and macOS install a native stack guard per thread
+    // and per async fiber; WASI, Windows and library builds have none.
+    const triple = (options.targetTriple ?? "").toLowerCase();
+    const windows = triple === "" ? process.platform === "win32" : triple.includes("windows");
+    const mt = computeMayThrow(mod, {
+      stackChecks: !this.wasi && mod.lib === undefined && !windows,
+    });
     this.mayThrow = mt.fns;
     this.workerEntryPolls = mt.workerEntryPolls ?? null;
+    this.stackChecks = mt.stackChecks ?? null;
     this.indirectMayThrow = mt.indirect || mod.workers === true;
     for (const cls of mod.classes ?? []) {
       for (const m of cls.methods ?? []) {
@@ -1789,6 +1799,7 @@ export class LlEmitter {
       `declare void @scr_init()`,
       `declare void @scr_lib_init(i32, ptr)`,
       ...(this.mod.workers ? [`declare void @scr_runtime_workers_v8()`] : []),
+      ...(this.stackChecks?.size ? [`declare void @scr_stack_guard_init()`] : []),
       ...(this.runtimeAbiMarker && this.mod.lib === undefined
         ? [`declare void @${RUNTIME_ABI_MARKER}()`]
         : []),
@@ -2073,6 +2084,9 @@ export class LlEmitter {
       ...(this.runtimeAbiMarker ? [`  call void @${RUNTIME_ABI_MARKER}()`] : []),
       ...(this.mod.workers ? [`  call void @scr_runtime_workers_v8()`] : []),
       `  call void @scr_init()`,
+      // Each context (the main thread, every worker) installs its stack
+      // guard before running compiled code that checks it.
+      ...(this.stackChecks?.size ? [`  call void @scr_stack_guard_init()`] : []),
       ...stamps,
       // Event-surface programs (signal/exit listeners) fill the loop's
       // nullable event hooks before %main — scr_events.c links only when
@@ -3635,8 +3649,11 @@ export class LlEmitter {
    * function — and branch to the handler / return a dummy value (never
    * read: callers of a may-throw function test the pending flag before
    * using the result). Callers own the surrounding pending branch; a
-   * `throw` unwinds unconditionally. */
-  private emitUnwind(): void {
+   * `throw` unwinds unconditionally. `passThrough` names a scalar call
+   * result of the function's own return type: with nothing to release, the
+   * unwind returns it as the dummy, so a call in tail position keeps a single
+   * return and stays eligible for tail-call and recursion elimination. */
+  private emitUnwind(passThrough?: string): void {
     if (this.mod.workers && this.tryStack.length > 0) {
       this.declare(`declare zeroext i1 @scr_context_stopping()`);
       const stopped = this.B.tmp();
@@ -3683,6 +3700,10 @@ export class LlEmitter {
       }
     }
     if (entries.length === 0) {
+      if (passThrough !== undefined && !target && this.currentWasiCoro === null) {
+        const t = this.llType(this.currentReturnType);
+        if (t === "double" || t === "i1") terminator = `ret ${t} ${passThrough}`;
+      }
       this.B.terminate(terminator);
       return;
     }
@@ -3719,8 +3740,16 @@ export class LlEmitter {
   /** The emitter contract for exceptions: after EVERY call that can throw
    * (per the may-throw analysis), test the pending flag and unwind. The
    * call's result temp must join its frame BEFORE this runs so the unwind
-   * releases the dummy (NULL for refcounted kinds) harmlessly. */
-  emitPendingCheck(): void {
+   * releases the dummy (NULL for refcounted kinds) harmlessly. A scalar
+   * call result of the function's return type may be passed as the unwind's
+   * dummy value (see emitUnwind). */
+  emitPendingCheck(passThrough?: { name: string; type: IrType }): void {
+    const through =
+      passThrough !== undefined &&
+      this.llType(passThrough.type) === this.llType(this.currentReturnType) &&
+      (passThrough.type.kind === "f64" || passThrough.type.kind === "bool")
+        ? passThrough.name
+        : undefined;
     const B = this.B;
     if (B.isTerminated()) return;
     if (this.mod.lib !== undefined) {
@@ -3731,7 +3760,7 @@ export class LlEmitter {
       const lk = B.newLabel("exc.k");
       B.condBr(p, lu, lk);
       B.startBlock(lu);
-      this.emitUnwind();
+      this.emitUnwind(through);
       B.startBlock(lk);
       return;
     }
@@ -3777,7 +3806,7 @@ export class LlEmitter {
       B.condBr(cold, lu, lk);
     }
     B.startBlock(lu);
-    this.emitUnwind();
+    this.emitUnwind(through);
     B.startBlock(lk);
   }
 
@@ -3791,6 +3820,32 @@ export class LlEmitter {
     if (B.isTerminated()) return;
     this.emitUnwind();
     B.startBlock(B.newLabel("exc.dead"));
+  }
+
+  /** A recursive function's entry check: below the running stack's guard,
+   * throw Node's RangeError and unwind like any other pending exception. */
+  private emitStackCheck(): void {
+    const B = this.B;
+    const tl = this.mod.workers === true ? "thread_local " : "";
+    this.declare(`@scr_stack_guard = external ${tl}global ptr`);
+    this.declare(`declare ptr @llvm.stacksave.p0()`);
+    this.declare(`declare i1 @llvm.expect.i1(i1, i1)`);
+    this.declare(`declare void @scr_stack_overflow()`);
+    const sp = B.tmp();
+    const guard = B.tmp();
+    const low = B.tmp();
+    const cold = B.tmp();
+    B.line(`${sp} = call ptr @llvm.stacksave.p0()`);
+    B.line(`${guard} = load ptr, ptr @scr_stack_guard`);
+    B.line(`${low} = icmp ult ptr ${sp}, ${guard}`);
+    B.line(`${cold} = call i1 @llvm.expect.i1(i1 ${low}, i1 false)`);
+    const over = B.newLabel("stack.over");
+    const ok = B.newLabel("stack.ok");
+    B.condBr(cold, over, ok);
+    B.startBlock(over);
+    B.line(`call void @scr_stack_overflow()`);
+    this.emitUnwind();
+    B.startBlock(ok);
   }
 
   private workerLoopBudget(): string | null {
@@ -4940,6 +4995,7 @@ export class LlEmitter {
       B.line(`call void @scr_stack_enter(ptr %source_frame, ptr ${this.cstr(frame)})`);
       B.returnEpilogue = `call void @scr_stack_leave(ptr %source_frame)`;
     }
+    if (this.stackChecks?.has(fn.name)) this.emitStackCheck();
     if (this.workerEntryPolls?.has(fn.name)) this.emitPendingCheck();
     this.emitStmts(fn.body);
     // Implicit exit of a void function: release the function scope unless

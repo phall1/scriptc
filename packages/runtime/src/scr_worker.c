@@ -201,7 +201,16 @@ ScrWorkerThread *scr_worker_thread_start(ScrWorkerEntry entry, uint32_t root,
   worker->thread = (HANDLE)_beginthreadex(NULL, 0, scr_worker_thread_main, worker, 0, NULL);
   if (!worker->thread) goto failed;
 #else
-  if (pthread_create(&worker->thread, NULL, scr_worker_thread_main, worker) != 0) goto failed;
+  /* An explicit size keeps recursion depth independent of the C library's
+   * default thread stack (as small as 128 KiB with musl and 512 KiB on
+   * macOS): workers get the 8 MiB a main thread usually has. Pages are
+   * committed only as the stack grows. */
+  pthread_attr_t attr;
+  if (pthread_attr_init(&attr) != 0) goto failed;
+  (void)pthread_attr_setstacksize(&attr, (size_t)8 << 20);
+  int started = pthread_create(&worker->thread, &attr, scr_worker_thread_main, worker);
+  pthread_attr_destroy(&attr);
+  if (started != 0) goto failed;
 #endif
   return worker;
 failed:
