@@ -248,7 +248,7 @@ export function analyzeIntegerRanges(fn: IrFunction, slots: IntegerSlotFacts = {
   }
   /** Invalidate the region's writes, keeping int32-closed locals as int32.
    * `entry` is the state before any of the region's writes can run. */
-  function havoc(facts: Facts, nodes: (IrExpr | IrStmt)[], entry: Facts = facts): void {
+  function havoc(facts: Facts, nodes: (IrExpr | IrStmt)[], entry: Facts): void {
     const closed = closedLocals(nodes, entry);
     invalidate(facts, nodes);
     for (const id of closed) facts.set(id, SIGNED);
@@ -422,7 +422,7 @@ export function analyzeIntegerRanges(fn: IrFunction, slots: IntegerSlotFacts = {
       }
       case "arrIntrinsic":
         // Callbacks and arguments can have writes hidden in lazy lowering.
-        havoc(facts, [e]);
+        havoc(facts, [e], facts);
         everyExprChild(
           e,
           (child) => {
@@ -443,7 +443,7 @@ export function analyzeIntegerRanges(fn: IrFunction, slots: IntegerSlotFacts = {
       default:
         // Do not assume the traversal order is an evaluation order for an
         // unknown node. Every child gets the same conservative entry state.
-        havoc(facts, [e]);
+        havoc(facts, [e], facts);
         everyExprChild(
           e,
           (child) => {
@@ -547,7 +547,11 @@ export function analyzeIntegerRanges(fn: IrFunction, slots: IntegerSlotFacts = {
           const counter = induction(s, facts);
           const bounded = boundedIntegerLoopFacts(s, loopLocals, facts);
           const loop = new Map(facts);
-          havoc(loop, [...s.body, ...(s.cond ? [s.cond] : []), ...(s.update ? [s.update] : [])]);
+          havoc(
+            loop,
+            [...s.body, ...(s.cond ? [s.cond] : []), ...(s.update ? [s.update] : [])],
+            loop,
+          );
           if (counter) loop.set(counter.id, counter.range);
           for (const [id, range] of bounded) loop.set(id, range);
           if (s.cond) expr(s.cond, loop);
@@ -557,40 +561,40 @@ export function analyzeIntegerRanges(fn: IrFunction, slots: IntegerSlotFacts = {
           // Continue can bypass any body assignment. The update therefore
           // starts from header invariants rather than the body's exit facts.
           if (s.update) body([s.update], new Map(loop));
-          havoc(facts, [s]);
+          havoc(facts, [s], facts);
           break;
         }
         case "while":
         case "doWhile": {
           const loop = new Map(facts);
-          havoc(loop, [s]);
+          havoc(loop, [s], loop);
           const header = new Map(loop);
           expr(s.cond, header);
           if (s.kind === "while") {
             refine(s.cond, true, header);
             body(s.body, header);
           } else body(s.body, new Map(loop));
-          havoc(facts, [s]);
+          havoc(facts, [s], facts);
           break;
         }
         case "forOf": {
           expr(s.iterable, facts);
           const loop = new Map(facts);
-          havoc(loop, [s]);
+          havoc(loop, [s], loop);
           body(s.body, loop);
-          havoc(facts, [s]);
+          havoc(facts, [s], facts);
           break;
         }
         case "tryCatch":
           // Catch/finally, fallthrough and nonlocal exits need their own
           // control-flow joins. Analyze each region from invariant facts.
-          havoc(facts, [s]);
+          havoc(facts, [s], facts);
           body(s.tryBody, new Map(facts));
           if (s.catchBody) body(s.catchBody, new Map(facts));
           if (s.finallyBody) body(s.finallyBody, new Map(facts));
           break;
         case "switch":
-          havoc(facts, [s]);
+          havoc(facts, [s], facts);
           expr(s.disc, new Map(facts));
           for (const region of s.cases) {
             if (region.test) expr(region.test, new Map(facts));
@@ -604,7 +608,7 @@ export function analyzeIntegerRanges(fn: IrFunction, slots: IntegerSlotFacts = {
           facts.clear();
           break;
         default:
-          havoc(facts, [s]);
+          havoc(facts, [s], facts);
           everyStmtChild(
             s,
             (child) => {
@@ -621,7 +625,7 @@ export function analyzeIntegerRanges(fn: IrFunction, slots: IntegerSlotFacts = {
     }
   }
   const entry: Facts = new Map();
-  for (const [id, range] of slots.params ?? []) set(entry, id, range);
+  if (slots.params) for (const [id, range] of slots.params) set(entry, id, range);
   body(fn.body, entry);
   return ranges;
 }

@@ -704,11 +704,13 @@ export function analyzeInt32Slots(mod: IrModule): Int32Slots {
   const queue: string[] = mod.functions.map((fn) => fn.name);
   const queued = new Set(queue);
   const invalidate = (slot: string): void => {
-    for (const fnName of readers.get(slot) ?? [])
-      if (!queued.has(fnName)) {
-        queued.add(fnName);
-        queue.push(fnName);
-      }
+    const dependents = readers.get(slot);
+    if (dependents)
+      for (const fnName of dependents)
+        if (!queued.has(fnName)) {
+          queued.add(fnName);
+          queue.push(fnName);
+        }
   };
   const provenByFunction = new Map<string, IrExpr[]>();
   while (queue.length) {
