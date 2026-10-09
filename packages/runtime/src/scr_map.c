@@ -475,7 +475,7 @@ static void scr_map_dense_alloc(ScrMap *m, size_t n) {
  * take an absent key: index it directly when every live key and the
  * incoming key fit a compact table, keep hashing otherwise. One scan per
  * growth step keeps this amortized constant per insertion. */
-static void scr_map_enter_dense(ScrMap *m, double incoming) {
+static __attribute__((noinline)) void scr_map_enter_dense(ScrMap *m, double incoming) {
   size_t limit = scr_map_dense_limit(m->nlive + 1), top, i;
   if (m->nentries >= UINT32_MAX - 1 || !scr_map_dense_slot(incoming, limit, &top)) return;
   for (size_t e = 0; e < m->nentries; e++) {
@@ -491,7 +491,7 @@ static void scr_map_enter_dense(ScrMap *m, double incoming) {
 }
 
 /* Extend the table to cover a new integral key while it stays compact. */
-static bool scr_map_grow_dense(ScrMap *m, double k, size_t *out) {
+static __attribute__((noinline)) bool scr_map_grow_dense(ScrMap *m, double k, size_t *out) {
   size_t i;
   if (!scr_map_dense_slot(k, scr_map_dense_limit(m->nlive + 1), &i)) return false;
   size_t old = m->ndense, n = scr_map_dense_size(i);
@@ -502,7 +502,7 @@ static bool scr_map_grow_dense(ScrMap *m, double k, size_t *out) {
 }
 
 /* Switch to the bucket table; cached entry hashes are already complete. */
-static void scr_map_leave_dense(ScrMap *m) {
+static __attribute__((noinline)) void scr_map_leave_dense(ScrMap *m) {
   free(m->dense);
   m->dense = NULL;
   m->ndense = 0;
@@ -839,6 +839,13 @@ static void scr_map_set_str_slot(ScrMap *m, uint64_t hash, uint64_t key, uint64_
   scr_map_set_with(m, hash, key, val, SCR_MAP_LOOKUP_STR);
 }
 
+/* One out-of-line copy of the word-key insert serves both the generic
+ * dispatcher and the number-key path below. */
+static __attribute__((noinline)) void scr_map_set_word(ScrMap *m, uint64_t hash, uint64_t key,
+                                                       uint64_t val) {
+  scr_map_set_with(m, hash, key, val, SCR_MAP_LOOKUP_WORD);
+}
+
 /* Whether appending one more entry would grow the lookup index rather than
  * reuse tombstones: scr_map_reserve_append compacts a linear map with a
  * dead entry, or a bucket table at most half live, whenever no iteration
@@ -883,7 +890,7 @@ static void scr_map_set_f64_slot(ScrMap *m, uint64_t key, uint64_t val) {
     }
     scr_map_leave_dense(m);
   }
-  scr_map_set_with(m, scr_map_hash_word(key), key, val, SCR_MAP_LOOKUP_WORD);
+  scr_map_set_word(m, scr_map_hash_word(key), key, val);
 }
 
 static void scr_map_set(ScrMap *m, uint64_t hash, uint64_t key, uint64_t val) {
@@ -893,7 +900,7 @@ static void scr_map_set(ScrMap *m, uint64_t hash, uint64_t key, uint64_t val) {
   }
   switch (scr_map_lookup_kind(m)) {
   case SCR_MAP_LOOKUP_STR: scr_map_set_str_slot(m, hash, key, val); return;
-  case SCR_MAP_LOOKUP_WORD: scr_map_set_with(m, hash, key, val, SCR_MAP_LOOKUP_WORD); return;
+  case SCR_MAP_LOOKUP_WORD: scr_map_set_word(m, hash, key, val); return;
   default: scr_map_set_with(m, hash, key, val, SCR_MAP_LOOKUP_GENERIC); return;
   }
 }
