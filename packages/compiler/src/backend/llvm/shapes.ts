@@ -28,6 +28,7 @@ import {
 } from "../mangle.js";
 import { emitObjectAlloc, emitObjectFree } from "./alloc.js";
 import { llvmCommentText } from "./common.js";
+import type { NullableUnions } from "./nullable-unions.js";
 import { LlvmUnsupportedError } from "./unsupported.js";
 
 /** What the tables need from the emitter: the extern-declaration ledger
@@ -42,6 +43,9 @@ export interface ShapeHost {
   readonly cycleColorOffset: number;
   readonly tracedShapes: Set<string>;
   readonly tracedUnions: Set<string>;
+  /** Unions represented as a nullable arm pointer (nullable-unions.ts):
+   * their RC and trace entry points are the arm's NULL-tolerant ones. */
+  readonly nullableUnions: NullableUnions;
   readonly recordsById: Map<string, IrRecordShape>;
   readonly recordCloneShapes: ReadonlySet<string>;
   /** Emit the live-object audit notes (`scr_obj_alloc_note` /
@@ -75,6 +79,11 @@ export { computeTraced } from "../cycle-analysis.js";
  * use their emitted per-shape helpers, whose signatures are already
  * `_v`-shaped. */
 export function vAdapters(host: ShapeHost, t: IrType): { retain: string; release: string } {
+  const nullable = host.nullableUnions.of(t);
+  if (nullable) {
+    const arm = vAdapters(host, nullable.arm);
+    return { retain: nullableRetainSym(host, nullable.arm), release: arm.release };
+  }
   const stem = runtimeRcStem(t);
   if (stem !== null) {
     // Catch-binding snapshots have typed ptr-shaped entry points but no
@@ -108,6 +117,8 @@ export function vAdapters(host: ShapeHost, t: IrType): { retain: string; release
  * table above; the split exists so call sites read type-directedly.
  * Families with a mirrored fast path call the inline helper instead. */
 export function retainSym(host: ShapeHost, t: IrType): string {
+  const nullable = host.nullableUnions.of(t);
+  if (nullable) return nullableRetainSym(host, nullable.arm);
   const stem = runtimeRcStem(t);
   if (host.rcHelpers !== null && stem !== null && inlineRcFamily(stem, "retain") !== null) {
     return inlineRcSym(host, stem, "retain");
@@ -115,11 +126,45 @@ export function retainSym(host: ShapeHost, t: IrType): string {
   return vAdapters(host, t).retain;
 }
 
+/** The retain entry point of a nullable union's value: the arm's own when
+ * it tolerates NULL (emitted class and record helpers), otherwise a
+ * NULL-skipping wrapper around it (the null sentinel and literals are
+ * immortal, which every retain already skips). */
+function nullableRetainSym(host: ShapeHost, arm: IrType): string {
+  if (arm.kind === "object" || arm.kind === "record") return retainSym(host, arm);
+  const sym = `@sc_nretain_${arm.kind}`;
+  if (!host.nullableUnions.retainWrappers.has(sym))
+    host.nullableUnions.retainWrappers.set(sym, retainSym(host, arm));
+  return sym;
+}
+
+/** Definitions of the requested NULL-skipping retain wrappers. */
+export function emitNullableRetainWrappers(host: ShapeHost): string[] {
+  const out: string[] = [];
+  for (const [sym, inner] of host.nullableUnions.retainWrappers)
+    out.push(
+      `define internal ptr ${sym}(ptr %o) ${FN_ATTRS} { ; NULL-tolerant retain`,
+      `entry:`,
+      `  %isnull = icmp eq ptr %o, null`,
+      `  br i1 %isnull, label %done, label %live`,
+      `live:`,
+      `  %r = call ptr ${inner}(ptr %o)`,
+      `  br label %done`,
+      `done:`,
+      `  ret ptr %o`,
+      `}`,
+      ``,
+    );
+  return out;
+}
+
 /** The release call target (ptr → void, NULL-tolerant). The runtime's
  * typed releases are external symbols, so the direct (non-`_v`) entry
  * points serve where one exists; records use their emitted helper.
  * Families with a mirrored fast path call the inline helper instead. */
 export function releaseSym(host: ShapeHost, t: IrType): string {
+  const nullable = host.nullableUnions.of(t);
+  if (nullable) return releaseSym(host, nullable.arm);
   const stem = runtimeRcStem(t);
   if (host.rcHelpers !== null && stem !== null && inlineRcFamily(stem, "release") !== null) {
     return inlineRcSym(host, stem, "release");
@@ -423,10 +468,13 @@ export function traceAdapter(host: ShapeHost, t: IrType): string | null {
       // is an arbitrary thrown value) — shapes.ts's row.
       host.declare(`declare void @scr_promise_trace_v(ptr, ptr, ptr)`);
       return "@scr_promise_trace_v";
-    case "union":
+    case "union": {
+      const nullable = host.nullableUnions.get(t.unionId);
+      if (nullable) return traceAdapter(host, nullable.arm);
       if (!host.tracedUnions.has(t.unionId)) return null;
       host.declare(`declare void @scr_union_trace_v(ptr, ptr, ptr)`);
       return "@scr_union_trace_v";
+    }
     case "record":
       return host.tracedShapes.has(`record:${t.shapeId}`)
         ? `@${mangleRecordTrace(t.shapeId)}`

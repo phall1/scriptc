@@ -469,7 +469,9 @@ export function emitStringExpr(
               break;
             }
             case "string":
-              B.line(`store ptr ${host.retainValue(host.unionPeek(v.name), e.type)}, ptr ${slot}`);
+              B.line(
+                `store ptr ${host.retainValue(host.unionPeek(v.name, def.id), e.type)}, ptr ${slot}`,
+              );
               break;
             case "f64": {
               const x = host.unionGetF64(v.name);
@@ -488,7 +490,7 @@ export function emitStringExpr(
               break;
             }
             case "bigint": {
-              const p = host.unionPeek(v.name);
+              const p = host.unionPeek(v.name, def.id);
               const r = B.tmp();
               host.declare(`declare ptr @scr_bigint_to_string(ptr, double)`);
               B.line(`${r} = call ptr @scr_bigint_to_string(ptr ${p}, double ${f64Lit(10)})`);
@@ -499,7 +501,7 @@ export function emitStringExpr(
               // Buffer.toString() IS the utf8 decode (Node's default
               // encoding) — the `Buffer | string` chunk idiom.
               const enc = host.internLiteral("utf8");
-              const p = host.unionPeek(v.name);
+              const p = host.unionPeek(v.name, def.id);
               const r = B.tmp();
               host.declare(`declare ptr @scr_bytes_to_str(ptr, ptr)`);
               B.line(`${r} = call ptr @scr_bytes_to_str(ptr ${p}, ptr ${enc})`);

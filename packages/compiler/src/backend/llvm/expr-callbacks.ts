@@ -5,6 +5,26 @@ import { mangleGenResThunk, mangleRecordNew, mangleRecordStruct } from "../mangl
 import { FN_ATTRS, releaseSym, retainSym, traceArg, vAdapters } from "./shapes.js";
 import { LlvmUnsupportedError } from "./unsupported.js";
 import type { LlvmEmitterContext } from "./expr-context.js";
+import { unionPeekLines, unionTagLines } from "./union-repr.js";
+
+/** Text-template union construction around an owned (+1) reference payload:
+ * a fresh box, or the payload itself for a nullable union. */
+function unionWrapRefLines(
+  host: LlvmEmitterContext,
+  unionId: string,
+  tag: number,
+  arm: IrType,
+  payload: string,
+  out: string,
+): string[] {
+  if (host.nullableUnions.has(unionId))
+    return [`  ${out} = getelementptr i8, ptr ${payload}, i64 0`];
+  const av = vAdapters(host.shapeHost, arm);
+  host.declare(`declare ptr @scr_union_new_ref(i32, ptr, ptr, ptr, ptr)`);
+  return [
+    `  ${out} = call ptr @scr_union_new_ref(i32 ${tag}, ptr ${payload}, ptr ${av.retain}, ptr ${av.release}, ptr ${traceArg(host.shapeHost, arm)})`,
+  ];
+}
 
 export function dynKind(host: LlvmEmitterContext, d: string): string {
   const B = host.B;
@@ -66,13 +86,14 @@ export function raceAdapterFor(host: LlvmEmitterContext, from: IrType, to: IrTyp
       );
     } else if (from.kind === "string") {
       host.declare(`declare ptr @scr_promise_payload_str(ptr)`);
-      host.declare(`declare ptr @scr_union_new_ref(i32, ptr, ptr, ptr, ptr)`);
       d.push(
         `  %x = call ptr @scr_promise_payload_str(ptr %src)`,
-        `  %u = call ptr @scr_union_new_ref(i32 ${tag}, ptr %x, ptr @scr_str_retain_v, ptr @scr_str_release_v, ptr null)`,
+        ...unionWrapRefLines(host, to.unionId, tag, from, "%x", "%u"),
       );
-      host.declare(`declare ptr @scr_str_retain_v(ptr)`);
-      host.declare(`declare void @scr_str_release_v(ptr)`);
+    } else if (host.nullableUnions.has(to.unionId)) {
+      // The nullable result union is the (+1) reference payload itself.
+      host.declare(`declare ptr @scr_promise_payload_ref(ptr)`);
+      d.push(`  %u = call ptr @scr_promise_payload_ref(ptr %src)`);
     } else {
       const fv = vAdapters(host.shapeHost, from);
       host.declare(`declare ptr @scr_promise_payload_ref(ptr)`);
@@ -92,11 +113,10 @@ export function raceAdapterFor(host: LlvmEmitterContext, from: IrType, to: IrTyp
   if (!fromDef)
     throw new InternalCompilerError("llvm emitter bug: race adapter from an unknown union");
   host.declare(`declare ptr @scr_promise_payload_ref(ptr)`);
-  host.declare(`declare void @scr_union_release(ptr)`);
+  const fromNullable = host.nullableUnions.get(from.unionId);
   d.push(
     `  %u0 = call ptr @scr_promise_payload_ref(ptr %src)`,
-    `  %tagp = getelementptr inbounds %ScrUnion, ptr %u0, i64 0, i32 1`,
-    `  %tag = load i32, ptr %tagp`,
+    ...unionTagLines(fromNullable, "%u0", "%tag"),
     `  %slot = alloca ptr`,
     `  switch i32 %tag, label %bad [ ${fromDef.arms.map((_, i) => `i32 ${i}, label %a${i}`).join(" ")} ]`,
   );
@@ -125,12 +145,10 @@ export function raceAdapterFor(host: LlvmEmitterContext, from: IrType, to: IrTyp
       );
     } else {
       const av = vAdapters(host.shapeHost, arm);
-      host.declare(`declare ptr @scr_union_new_ref(i32, ptr, ptr, ptr, ptr)`);
       d.push(
-        `  %pp${i} = getelementptr inbounds %ScrUnion, ptr %u0, i64 0, i32 5`,
-        `  %p${i} = load ptr, ptr %pp${i}`,
+        ...unionPeekLines(fromNullable, "%u0", `%p${i}`),
         `  %r${i} = call ptr ${av.retain}(ptr %p${i})`,
-        `  %v${i} = call ptr @scr_union_new_ref(i32 ${tag}, ptr %r${i}, ptr ${av.retain}, ptr ${av.release}, ptr ${traceArg(host.shapeHost, arm)})`,
+        ...unionWrapRefLines(host, to.unionId, tag, arm, `%r${i}`, `%v${i}`),
         `  store ptr %v${i}, ptr %slot`,
         `  br label %join`,
       );
@@ -141,7 +159,7 @@ export function raceAdapterFor(host: LlvmEmitterContext, from: IrType, to: IrTyp
     `  store ptr null, ptr %slot`,
     `  br label %join`,
     `join:`,
-    `  call void @scr_union_release(ptr %u0)`,
+    `  call void ${releaseSym(host.shapeHost, from)}(ptr %u0)`,
     `  %v = load ptr, ptr %slot`,
     `  ${fulfill("%v")}`,
     `  ret void`,
@@ -264,11 +282,9 @@ export function genResultThunkFor(
     }
     host.declare(`declare ptr @scr_gen_take_out_ref(ptr)`);
     if (srcT.kind !== "union") {
-      const v = vAdapters(host.shapeHost, srcT);
-      host.declare(`declare ptr @scr_union_new_ref(i32, ptr, ptr, ptr, ptr)`);
       return [
         `  %${px}x = call ptr @scr_gen_take_out_ref(ptr %g)`,
-        `  %${px}u = call ptr @scr_union_new_ref(i32 ${tagOf(srcT)}, ptr %${px}x, ptr ${v.retain}, ptr ${v.release}, ptr ${traceArg(host.shapeHost, srcT)})`,
+        ...unionWrapRefLines(host, valueT.unionId, tagOf(srcT), srcT, `%${px}x`, `%${px}u`),
         `  store ptr %${px}u, ptr %vslot`,
         `  br label %join`,
       ];
@@ -285,11 +301,10 @@ export function genResultThunkFor(
     const srcDef = host.unionsById.get(srcT.unionId);
     if (!srcDef)
       throw new InternalCompilerError("llvm emitter bug: genResume channel union unknown");
-    host.declare(`declare void @scr_union_release(ptr)`);
+    const srcNullable = host.nullableUnions.get(srcT.unionId);
     const lines: string[] = [
       `  %${px}u0 = call ptr @scr_gen_take_out_ref(ptr %g)`,
-      `  %${px}tp = getelementptr inbounds %ScrUnion, ptr %${px}u0, i64 0, i32 1`,
-      `  %${px}t = load i32, ptr %${px}tp`,
+      ...unionTagLines(srcNullable, `%${px}u0`, `%${px}t`),
       `  switch i32 %${px}t, label %${px}bad [ ${srcDef.arms.map((_, i) => `i32 ${i}, label %${px}a${i}`).join(" ")} ]`,
     ];
     srcDef.arms.forEach((arm, i) => {
@@ -315,12 +330,10 @@ export function genResultThunkFor(
         );
       } else {
         const av = vAdapters(host.shapeHost, arm);
-        host.declare(`declare ptr @scr_union_new_ref(i32, ptr, ptr, ptr, ptr)`);
         lines.push(
-          `  %${px}pp${i} = getelementptr inbounds %ScrUnion, ptr %${px}u0, i64 0, i32 5`,
-          `  %${px}p${i} = load ptr, ptr %${px}pp${i}`,
+          ...unionPeekLines(srcNullable, `%${px}u0`, `%${px}p${i}`),
           `  %${px}r${i} = call ptr ${av.retain}(ptr %${px}p${i})`,
-          `  %${px}v${i} = call ptr @scr_union_new_ref(i32 ${tag}, ptr %${px}r${i}, ptr ${av.retain}, ptr ${av.release}, ptr ${traceArg(host.shapeHost, arm)})`,
+          ...unionWrapRefLines(host, valueT.unionId, tag, arm, `%${px}r${i}`, `%${px}v${i}`),
           `  store ptr %${px}v${i}, ptr %vslot`,
         );
       }
@@ -331,7 +344,7 @@ export function genResultThunkFor(
       `  store ptr ${undefRef}, ptr %vslot`,
       `  br label %${px}rel`,
       `${px}rel:`,
-      `  call void @scr_union_release(ptr %${px}u0)`,
+      `  call void ${releaseSym(host.shapeHost, srcT)}(ptr %${px}u0)`,
       `  br label %join`,
     );
     return lines;
@@ -446,7 +459,7 @@ export function childExitSignalThunkFor(
     `sigs:`,
     `  %len = call ${host.sizeType} @strlen(ptr %sig)`,
     `  %ss = call ptr @scr_str_new(ptr %sig, ${host.sizeType} %len)`,
-    `  %su = call ptr @scr_union_new_ref(i32 ${strTag}, ptr %ss, ptr @scr_str_retain_v, ptr @scr_str_release_v, ptr null)`,
+    ...unionWrapRefLines(host, sigParam.unionId, strTag, { kind: "string" }, "%ss", "%su"),
     `  store ptr %su, ptr %sslot`,
     `  br label %go`,
     `signull:`,

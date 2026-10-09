@@ -419,6 +419,41 @@ export function emitLocalArrayRead(
   const array = host.emitStableReceiver(read.array, [read.index]);
   const integerIndex = inline ? host.emitIntegerLoopIndex(read.index) : null;
   const index = host.emitExpr(read.index);
+  const nullable = read.type.kind === "union" ? host.nullableUnions.get(read.type.unionId) : null;
+  if (nullable) {
+    // A nullable union is the element pointer itself: borrowed from an
+    // array proven to keep it alive, or one owned reference the caller
+    // releases from this slot. The missing arm is its unit encoding.
+    const slow = B.newLabel("local.array.slow"),
+      no = B.newLabel("local.array.missing"),
+      join = B.newLabel("local.array.join");
+    const store = (value: string): void => {
+      B.line(
+        `store ptr ${read.borrow ? value : host.retainValue(value, read.element)}, ptr ${localSlot}`,
+      );
+    };
+    if (inline)
+      emitDenseReferenceArrayRead(host, array, index, integerIndex, store, no, slow, join, "ptr");
+    else B.br(slow);
+    B.startBlock(slow);
+    const present = B.newLabel("local.array.slow.value");
+    host.declare("declare ptr @scr_arr_peek_ref(ptr, double) memory(read)");
+    const value = B.tmp(),
+      found = B.tmp();
+    B.line(`${value} = call ptr @scr_arr_peek_ref(ptr ${array.name}, double ${index.name})`);
+    B.line(`${found} = icmp ne ptr ${value}, null`);
+    B.condBr(found, present, no);
+    B.startBlock(present);
+    store(value);
+    B.br(join);
+    B.startBlock(no);
+    B.line(
+      `store ptr ${host.unitInstanceRef(nullable.unionId, read.missingTag)}, ptr ${localSlot}`,
+    );
+    B.br(join);
+    B.startBlock(join);
+    return read.borrow ? null : { slot: localSlot, type: read.element };
+  }
   const box = B.slot(),
     payload = B.slot(),
     tag = B.slot();

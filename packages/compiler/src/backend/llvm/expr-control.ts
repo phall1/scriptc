@@ -291,9 +291,9 @@ export function emitControlExpr(
         `store ${host.llType(narrowed)} ${host.llType(narrowed) === "ptr" ? "null" : host.llType(narrowed) === "double" ? f64Lit(0) : "false"}, ptr ${bind}`,
       );
       host.ownSlot(bind, narrowed);
-      const isUnit = host.tagInSet(r.name, unitTags);
+      const isUnit = host.tagInSet(r.name, def.id, unitTags);
       const extract = (): string =>
-        multiple ? host.retainValue(r.name, narrowed) : host.unionExtract(r.name, narrowed);
+        multiple ? host.retainValue(r.name, narrowed) : host.unionExtract(r.name, def.id, narrowed);
       if (e.type.kind === "void") {
         // Statement form (cb?.()): no result value at all.
         const lb = B.newLabel("oc.b");
@@ -405,8 +405,13 @@ export function emitControlExpr(
         );
         B.line(`store ${ty} ${t}, ptr ${slot}`);
         if (host.mayThrow.has(e.retag)) host.emitPendingCheck();
+      } else if (host.nullableUnions.has(e.left.type.unionId)) {
+        // The owned nullable pointer IS the owned arm value.
+        B.line(`store ${ty} ${l.name}, ptr ${slot}`);
       } else {
-        B.line(`store ${ty} ${host.unionExtract(l.name, e.type)}, ptr ${slot}`);
+        B.line(
+          `store ${ty} ${host.unionExtract(l.name, e.left.type.unionId, e.type)}, ptr ${slot}`,
+        );
         host.releaseValue(l.name, e.left.type);
       }
       B.br(lj);
@@ -504,7 +509,7 @@ export function emitControlExpr(
         const ty = host.llType(e.type);
         const slot = B.slot();
         B.entryAllocas.push(`${slot} = alloca ${ty}`);
-        const isUnit = host.tagInSet(l.name, unitTags);
+        const isUnit = host.tagInSet(l.name, def.id, unitTags);
         const lu = B.newLabel("nul.u");
         const lv = B.newLabel("nul.v");
         const lj = B.newLabel("nul.j");
@@ -513,7 +518,7 @@ export function emitControlExpr(
         host.emitBranchInto(slot, e.right);
         B.br(lj);
         B.startBlock(lv);
-        B.line(`store ${ty} ${host.unionExtract(l.name, e.type)}, ptr ${slot}`);
+        B.line(`store ${ty} ${host.unionExtract(l.name, def.id, e.type)}, ptr ${slot}`);
         B.br(lj);
         B.startBlock(lj);
         const t = B.tmp();
@@ -525,7 +530,7 @@ export function emitControlExpr(
       const ty = host.llType(e.type);
       const slot = B.slot();
       B.entryAllocas.push(`${slot} = alloca ${ty}`);
-      const isUnit = host.tagInSet(l.name, unitTags);
+      const isUnit = host.tagInSet(l.name, def.id, unitTags);
       const lu = B.newLabel("nul.u");
       const lv = B.newLabel("nul.v");
       const lj = B.newLabel("nul.j");
@@ -535,10 +540,11 @@ export function emitControlExpr(
       host.emitBranchInto(slot, e.right);
       B.br(lj);
       B.startBlock(lv);
-      if (typeEquals(e.type, e.left.type)) {
+      if (typeEquals(e.type, e.left.type) || host.nullableUnions.has(def.id)) {
+        // Pass-through, or a nullable pointer that IS its owned arm value.
         B.line(`store ${ty} ${l.name}, ptr ${slot}`);
       } else {
-        B.line(`store ${ty} ${host.unionExtract(l.name, e.type)}, ptr ${slot}`);
+        B.line(`store ${ty} ${host.unionExtract(l.name, def.id, e.type)}, ptr ${slot}`);
         host.releaseValue(l.name, e.left.type);
       }
       B.br(lj);
@@ -591,7 +597,7 @@ function emitNullishOptionalChain(host: LlvmEmitterContext, e: ExprOf<"nullish">
     `store ${bindTy} ${bindTy === "ptr" ? "null" : bindTy === "double" ? f64Lit(0) : "false"}, ptr ${bind}`,
   );
   host.ownSlot(bind, narrowed);
-  const isUnit = host.tagInSet(r.name, unitTags);
+  const isUnit = host.tagInSet(r.name, receiverDef.id, unitTags);
   const ty = host.llType(e.type);
   const slot = B.slot();
   B.entryAllocas.push(`${slot} = alloca ${ty}`);
@@ -603,7 +609,7 @@ function emitNullishOptionalChain(host: LlvmEmitterContext, e: ExprOf<"nullish">
   host.emitBranchInto(slot, e.right);
   B.br(lj);
   B.startBlock(lb);
-  B.line(`store ${bindTy} ${host.unionExtract(r.name, narrowed)}, ptr ${bind}`);
+  B.line(`store ${bindTy} ${host.unionExtract(r.name, receiverDef.id, narrowed)}, ptr ${bind}`);
   host.chainSlots.set(chain.id, { name: bind, type: narrowed, slot: true });
   host.emitBranchInto(slot, chain.body.value);
   host.chainSlots.delete(chain.id);

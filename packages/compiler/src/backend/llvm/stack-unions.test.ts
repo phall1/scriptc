@@ -15,6 +15,7 @@ import {
 } from "../../ir/ir.js";
 import { validateModule } from "../../ir/validate.js";
 import { emitLlvmModule } from "./emitter.js";
+import { keepUnionsBoxed } from "./test-boxed-unions.js";
 import { canStackUnion } from "./stack-unions.js";
 
 /** A pending-exception check: the inline active-cell test or a runtime call. */
@@ -89,7 +90,7 @@ function body(ir: string, name: string): string {
 
 function emit(mod: IrModule, pointerBits: 32 | 64 = 64): string {
   expect(validateModule(mod)).toEqual([]);
-  return emitLlvmModule(mod, { pointerBits });
+  return emitLlvmModule(keepUnionsBoxed(mod), { pointerBits });
 }
 
 function declareLocal(mod: IrModule, init: IrExpr): void {

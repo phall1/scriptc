@@ -286,6 +286,8 @@ import {
 import { LlDyn, type DynHost } from "./dyn.js";
 import { LlvmUnsupportedError } from "./unsupported.js";
 import { LlWalkers } from "./walkers.js";
+import { isObjectArm, NULLABLE_ABSENT, NULLABLE_NULL, NullableUnions } from "./nullable-unions.js";
+import { emitNullablePresent, emitUnionPeek, emitUnionTag } from "./union-repr.js";
 import { literalCapWord } from "./string-key-hash.js";
 import {
   arrNewCall,
@@ -295,6 +297,7 @@ import {
   computeTraced,
   elemAccess,
   emitInlineRcHelpers,
+  emitNullableRetainWrappers,
   FN_ATTRS,
   inlineRcDecls,
   llFieldType,
@@ -473,6 +476,8 @@ export class LlEmitter {
   private readonly unitInstances = new Map<string, string>();
   /** unionId → symbol of the union's immortal ABSENT field-slot instance. */
   private readonly absentInstances = new Map<string, string>();
+  /** The nullable-union ABSENT sentinel was referenced (absentInstanceRef). */
+  private needsNullableAbsent = false;
   private readonly immortalValues = new Set<string>();
   /** Regex literal templates: "<flags>/<pattern>" → { symbol, interned
    * source/flags literal refs } — one immortal ScrRegex template per distinct
@@ -576,6 +581,10 @@ export class LlEmitter {
   readonly dynPromiseAdapters = new Map<string, string>();
   readonly unionsById = new Map<string, IrUnionDef>();
   readonly nullableFields: NullableRefFields;
+  /** Unions whose values are nullable arm pointers (nullable-unions.ts). */
+  readonly nullableUnions: NullableUnions;
+  /** The union table without nullable unions: the stack-box analyses. */
+  readonly boxedUnionsById: Map<string, IrUnionDef>;
   readonly recordsById = new Map<string, IrRecordShape>();
   readonly recordCloneShapes = new Set<string>();
   readonly tracedShapes: Set<string>;
@@ -703,10 +712,17 @@ export class LlEmitter {
           expr: (expr) => !(expr.kind === "libCall" && expr.fn === "error.stack"),
         }),
     );
+    this.nullableUnions = new NullableUnions(mod);
     this.debug =
       options.debugSources === undefined
         ? null
-        : new LlvmDebugInfo(mod.sourceFile, options.debugSources, options.pointerBits, mod.unions);
+        : new LlvmDebugInfo(
+            mod.sourceFile,
+            options.debugSources,
+            options.pointerBits,
+            mod.unions,
+            this.nullableUnions.armTypes(),
+          );
     this.constantNumericTables = findConstantNumericTables(mod);
     this.initializerBindings = findInitializerBindings(mod);
     this.sizeType = options.pointerBits === 32 ? "i32" : "i64";
@@ -737,7 +753,12 @@ export class LlEmitter {
       }
     }
     for (const u of mod.unions ?? []) this.unionsById.set(u.id, u);
-    this.nullableFields = new NullableRefFields(mod.classes ?? [], this.unionsById);
+    this.boxedUnionsById = this.nullableUnions.boxedUnions(this.unionsById);
+    this.immortalValues.add("null");
+    this.immortalValues.add(NULLABLE_NULL);
+    this.nullableFields = new NullableRefFields(mod.classes ?? [], this.boxedUnionsById);
+    // Optional array reads also cover nullable unions: emitLocalArrayRead
+    // then yields the (borrowed or owned) element pointer, not a stack box.
     this.optionalArrayReads = new OptionalArrayReads(this.fnByName, this.unionsById);
     this.checkedNarrows = new CheckedNarrows(this.fnByName);
     this.referenceEffects = new ReferenceEffects(
@@ -762,6 +783,7 @@ export class LlEmitter {
       cycleColorOffset: this.cycleColorOffset,
       tracedShapes: this.tracedShapes,
       tracedUnions: this.tracedUnions,
+      nullableUnions: this.nullableUnions,
       recordsById: this.recordsById,
       recordCloneShapes: this.recordCloneShapes,
       objectAudit: options.objectAudit !== false,
@@ -782,6 +804,7 @@ export class LlEmitter {
       internLiteral: (text) => this.internLiteral(text),
       cstr: (text) => this.cstr(text),
       unitInstanceRef: (unionId, tag) => this.unitInstanceRef(unionId, tag),
+      fieldAbsentTestIn: (B, value, unionId) => this.fieldAbsentTestIn(B, value, unionId),
       absentInstanceRef: (unionId) => this.absentInstanceRef(unionId),
       liveDynRefAdapter: (type) => this.liveDynRefAdapter(type),
       liveDynUnionRefAdapter: (type) => this.liveDynUnionRefAdapter(type),
@@ -1755,6 +1778,26 @@ export class LlEmitter {
       );
     }
     if (this.absentInstances.size > 0) out.push(``);
+    if (this.nullableUnions.usesNullSentinel) {
+      // `null` in every `C | null | undefined` union (NULL is undefined):
+      // one module-scope immortal object like the ABSENT sentinel.
+      const S = this.sizeType;
+      out.push(
+        `${NULLABLE_NULL} = internal global { ${S}, ${S}, ${S}, ${S} } { ${S} -1, ${S} 0, ${S} 0, ${S} 0 } ; nullable null arm`,
+        ``,
+      );
+    }
+    if (this.needsNullableAbsent) {
+      // The ABSENT field-slot state of every nullable-pointer union: one
+      // module-scope immortal object (rc == SIZE_MAX), distinct from NULL
+      // (undefined) and from every instance. RC entry points and the
+      // collector skip it like any immortal; field reads compare its address.
+      const S = this.sizeType;
+      out.push(
+        `${NULLABLE_ABSENT} = internal global { ${S}, ${S}, ${S}, ${S} } { ${S} -1, ${S} 0, ${S} 0, ${S} 0 } ; nullable absent field`,
+        ``,
+      );
+    }
     for (const [key, re] of this.regexInstances) {
       // One immortal ScrRegex per (pattern, flags) literal, pointing at
       // the interned source/flags strings. The bc and native-matcher slots
@@ -2651,7 +2694,18 @@ export class LlEmitter {
    * here too. */
   private inlineRcTail(flushedDecls: ReadonlySet<string>): string[] {
     const late = inlineRcDecls(this.shapeHost).filter((d) => !flushedDecls.has(d));
-    return [...late, ...emitInlineRcHelpers(this.shapeHost)];
+    // NULL-skipping retain wrappers of nullable unions; a runtime inner
+    // retain requested after the extern block flushed is declared here.
+    for (const inner of this.nullableUnions.retainWrappers.values()) {
+      const decl = `declare ptr ${inner}(ptr)`;
+      if (inner.startsWith("@scr_") && !flushedDecls.has(decl) && !late.includes(decl))
+        late.push(decl);
+    }
+    return [
+      ...late,
+      ...emitNullableRetainWrappers(this.shapeHost),
+      ...emitInlineRcHelpers(this.shapeHost),
+    ];
   }
 
   /** Env-signature wrappers + interned immortal closures for declared
@@ -3214,6 +3268,12 @@ export class LlEmitter {
         `llvm emitter bug: unit instance for non-unit arm ${tag} of ${unionId}`,
       );
     }
+    const nullable = this.nullableUnions.get(unionId);
+    if (nullable) {
+      // NULL is the unit arm of a nullable union (`undefined` when it has
+      // both); the `null` sentinel is immortal. Neither owns anything.
+      return tag === nullable.nullTag ? NULLABLE_NULL : "null";
+    }
     const key = `${unionId}:${tag}`;
     let sym = this.unitInstances.get(key);
     if (!sym) {
@@ -3233,6 +3293,11 @@ export class LlEmitter {
         `llvm emitter bug: absent state of ${unionId} without undefined`,
       );
     }
+    if (this.nullableUnions.has(unionId)) {
+      this.needsNullableAbsent = true;
+      this.immortalValues.add(NULLABLE_ABSENT);
+      return NULLABLE_ABSENT;
+    }
     let sym = this.absentInstances.get(unionId);
     if (!sym) {
       sym = `sc_absent_${this.absentInstances.size}`;
@@ -3246,8 +3311,20 @@ export class LlEmitter {
   /** i1: a union value loaded from a field slot is the ABSENT state — the
    * undefined arm's tag with the absent payload marker. */
   fieldAbsentTest(value: string, unionId: string): string {
+    return this.fieldAbsentTestIn(this.B, value, unionId);
+  }
+
+  /** fieldAbsentTest in another block builder (helper generators). A
+   * nullable union's ABSENT state is the module's immortal sentinel. */
+  fieldAbsentTestIn(B: BlockBuilder, value: string, unionId: string): string {
+    if (this.nullableUnions.has(unionId)) {
+      this.needsNullableAbsent = true;
+      const t = B.tmp();
+      B.line(`${t} = icmp eq ptr ${value}, ${NULLABLE_ABSENT}`);
+      return t;
+    }
     return emitFieldAbsentTest(
-      this.B,
+      B,
       value,
       undefinedArmTag({ kind: "union", unionId }, this.unionsById),
     );
@@ -3636,6 +3713,10 @@ export class LlEmitter {
         throw new InternalCompilerError(
           `llvm emitter bug: truthiness of unknown union ${v.type.unionId}`,
         );
+      const nullable = this.nullableUnions.get(def.id);
+      // Object arms are always truthy: present iff neither unit encoding.
+      if (nullable && isObjectArm(nullable)) return emitNullablePresent(B, nullable, v.name);
+      const unionId = def.id;
       const slot = B.slot();
       B.entryAllocas.push(`${slot} = alloca i1`);
       const join = B.newLabel("ut.j");
@@ -3646,9 +3727,9 @@ export class LlEmitter {
         } else if (arm.kind === "bool") {
           valueName = this.unionGetBool(v.name);
         } else if (arm.kind === "string") {
-          valueName = this.unionPeek(v.name);
+          valueName = this.unionPeek(v.name, unionId);
         } else if (arm.kind === "bigint" || arm.kind === "dyn" || arm.kind === "jsval") {
-          valueName = this.unionPeek(v.name);
+          valueName = this.unionPeek(v.name, unionId);
         }
         const truthy = this.truthyOf(arm.kind, valueName, true);
         B.line(`store i1 ${truthy}, ptr ${slot}`);
@@ -3756,23 +3837,26 @@ export class LlEmitter {
 
   // ── union plumbing ──────────────────────────────────────────────────────
 
-  /** Loads a union box's tag (i32). */
-  unionTag(uName: string): string {
-    const p = this.B.tmp();
-    const t = this.B.tmp();
-    this.B.line(`${p} = getelementptr inbounds %ScrUnion, ptr ${uName}, i64 0, i32 1`);
-    this.B.line(`${t} = load i32, ptr ${p}`);
-    return t;
+  /** A union value's tag (i32): the box's tag word, or the NULL test of a
+   * nullable union's pointer. */
+  unionTag(uName: string, unionId: string): string {
+    return emitUnionTag(this.B, this.nullableUnions.get(unionId), uName);
+  }
+
+  /** Guard for helpers that build or read a union's `%ScrUnion` box
+   * directly (library-shaped unions with fixed arms): a nullable union
+   * reaching one is an emitter bug, never a silent miscompile. */
+  requireBoxedUnion(unionId: string): void {
+    if (this.nullableUnions.has(unionId))
+      throw new InternalCompilerError(
+        `llvm emitter bug: nullable union ${unionId} reached a tagged-box helper`,
+      );
   }
 
   /** The BORROWED payload pointer of a ref arm (scr_union_peek inlined —
-   * the runtime's is a static inline). */
-  unionPeek(uName: string): string {
-    const p = this.B.tmp();
-    const t = this.B.tmp();
-    this.B.line(`${p} = getelementptr inbounds %ScrUnion, ptr ${uName}, i64 0, i32 5`);
-    this.B.line(`${t} = load ptr, ptr ${p}`);
-    return t;
+   * the runtime's is a static inline); a nullable union is its payload. */
+  unionPeek(uName: string, unionId: string): string {
+    return emitUnionPeek(this.B, this.nullableUnions.get(unionId), uName);
   }
 
   /** Emits `switch` over a union's tag with one block per arm; each arm
@@ -3786,7 +3870,7 @@ export class LlEmitter {
     fieldGroups?: number[][],
   ): void {
     const B = this.B;
-    const tag = this.unionTag(uName);
+    const tag = this.unionTag(uName, def.id);
     const bad = B.newLabel("u.bad");
     const labels: string[] = [];
     if (fieldGroups) {
@@ -3831,10 +3915,10 @@ export class LlEmitter {
   /** The +1 extraction of a union's single narrowed arm (unionNarrow /
    * the nullish-family reads): scalars via inline payload loads, ref arms
    * a retained peek. */
-  unionExtract(uName: string, arm: IrType): string {
+  unionExtract(uName: string, unionId: string, arm: IrType): string {
     if (arm.kind === "f64" || arm.kind === "procStream") return this.unionGetF64(uName);
     if (arm.kind === "bool") return this.unionGetBool(uName);
-    return this.retainValue(this.unionPeek(uName), arm);
+    return this.retainValue(this.unionPeek(uName, unionId), arm);
   }
 
   /** A scalar f64 arm's payload (scr_union_get_f64 inlined). Inline loads
@@ -3861,8 +3945,17 @@ export class LlEmitter {
   /** Constructs a union box around an OWNED (+1, already moved) value —
    * the scr_union_new_* dispatch of unionWrap and the wrap-into-join
    * sites (shift). */
-  unionNewOwned(tag: number, v: LlValue): string {
+  unionNewOwned(unionId: string, tag: number, v: LlValue): string {
     const B = this.B;
+    const nullable = this.nullableUnions.get(unionId);
+    if (nullable) {
+      // The owned payload IS the nullable union's value.
+      if (tag !== nullable.refTag)
+        throw new InternalCompilerError(
+          `llvm emitter bug: payload wrap into unit arm ${tag} of ${unionId}`,
+        );
+      return v.name;
+    }
     const t = B.tmp();
     if (v.type.kind === "f64" || v.type.kind === "procStream") {
       this.declare(`declare ptr @scr_union_new_f64(i32, double)`);
@@ -4456,12 +4549,12 @@ export class LlEmitter {
     );
     this.scalarStringSlices =
       this.debug === null ? findScalarStringSlices(fn, this.callLifetimes) : new Map();
-    this.mapReadLifetimes = findMapReadLifetimes(fn, this.unionsById, this.callLifetimes);
-    this.localStackUnions = findLocalStackUnions(fn, this.callLifetimes, this.unionsById);
+    this.mapReadLifetimes = findMapReadLifetimes(fn, this.boxedUnionsById, this.callLifetimes);
+    this.localStackUnions = findLocalStackUnions(fn, this.callLifetimes, this.boxedUnionsById);
     this.localUnionStorageProofs = findLocalUnionStorage(
       fn,
       this.callLifetimes,
-      this.unionsById,
+      this.boxedUnionsById,
       (e) => this.nullableFieldGet(e) !== null,
     );
     this.localUnionStorage = new Map();
@@ -6284,7 +6377,7 @@ export class LlEmitter {
       this.B.line(`${value} = load ptr, ptr ${binding.slot}`);
       return { name: value, type: e.type };
     }
-    const read = matchMapRead(e, this.unionsById);
+    const read = matchMapRead(e, this.boxedUnionsById);
     if (read) {
       const result = emitStackMapRead(this, read);
       if (result.owner) this.ownSlot(result.owner.slot, result.owner.type);
@@ -6295,10 +6388,10 @@ export class LlEmitter {
     const narrow = this.checkedNarrows.get(e);
     const narrowed = narrow ? emitCheckedNarrowReceiver(this, narrow) : null;
     if (narrowed) return narrowed;
-    if (canStackUnion(e, this.unionsById)) return emitStackUnion(this, e).value;
+    if (canStackUnion(e, this.boxedUnionsById)) return emitStackUnion(this, e).value;
     if (e.kind === "unionNarrow") {
       const union = this.emitUnionProjection(e.value);
-      return { name: this.unionPeek(union.name), type: e.type };
+      return { name: this.unionPeek(union.name, e.unionId), type: e.type };
     }
     // A nullable-pointer field has no box to borrow. Projections use
     // emitUnionProjection; other borrowers get an owned heap box.
@@ -6352,8 +6445,8 @@ export class LlEmitter {
   isStackUnionSource(e: IrExpr): boolean {
     if (e.type.kind !== "union") return false;
     return (
-      canStackUnion(e, this.unionsById) ||
-      matchMapRead(e, this.unionsById) !== null ||
+      canStackUnion(e, this.boxedUnionsById) ||
+      matchMapRead(e, this.boxedUnionsById) !== null ||
       this.optionalArrayReads.get(e) !== null
     );
   }
@@ -6434,7 +6527,10 @@ export class LlEmitter {
     B.br(join);
     B.startBlock(ref);
     const owned = this.retainValue(p, nullable.arm);
-    const box = this.unionNewOwned(nullable.refTag, { name: owned, type: nullable.arm });
+    const box = this.unionNewOwned(nullable.unionId, nullable.refTag, {
+      name: owned,
+      type: nullable.arm,
+    });
     B.line(`store ptr ${box}, ptr ${slot}`);
     B.br(join);
     B.startBlock(join);
@@ -6447,11 +6543,11 @@ export class LlEmitter {
    * box, which stays owned by its existing owner. */
   unionToNullable(u: string, nullable: NullableRefField): string {
     const B = this.B;
-    const tag = this.unionTag(u);
+    const tag = this.unionTag(u, nullable.unionId);
     const isRef = B.tmp(),
       sel = B.tmp();
     B.line(`${isRef} = icmp eq i32 ${tag}, ${nullable.refTag}`);
-    const payload = this.unionPeek(u);
+    const payload = this.unionPeek(u, nullable.unionId);
     B.line(`${sel} = select i1 ${isRef}, ptr ${payload}, ptr null`);
     return this.retainValue(sel, nullable.arm);
   }
@@ -6654,8 +6750,8 @@ export class LlEmitter {
     return resolveThunkFor(this, inner);
   }
 
-  tagInSet(uName: string, tags: number[]): string {
-    return tagInSet(this, uName, tags);
+  tagInSet(uName: string, unionId: string, tags: number[]): string {
+    return tagInSet(this, uName, unionId, tags);
   }
 
   arrPush(arr: string, acc: "f64" | "bool" | "ref", value: string): string {

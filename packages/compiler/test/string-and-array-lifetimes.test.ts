@@ -111,6 +111,11 @@ class Item { value: number; constructor(value: number) { this.value = value; } }
 function value(item: Item): number { return item.value; }
 function work(items: Item[], index: number): number { return value(items[index]); }
 console.log(work([new Item(7)], 0));
+
+// Keeps the optional element union a tagged box (Set elements are boxes),
+// so the stack-box paths stay exercised; nullable pointers bypass them.
+const keepBoxed = new Set<Item | undefined>();
+void keepBoxed;
 `);
   const value = module.functions.find((fn) => fn.name === "value")!;
   expect(value.params[0]!.type.kind).toBe("union");
@@ -131,6 +136,11 @@ function value(item: Item, ignored: number): number { return item.value + ignore
 function clear(items: Item[]): number { items.length = 0; return 1; }
 function work(items: Item[]): number { return value(items[0], clear(items)); }
 console.log(work([new Item(7)]));
+
+// Keeps the optional element union a tagged box (Set elements are boxes),
+// so the stack-box paths stay exercised; nullable pointers bypass them.
+const keepBoxed = new Set<Item | undefined>();
+void keepBoxed;
 `);
   const llvm = emitLlvmModule(module);
   const work = body(llvm, "sc_bf_work");
@@ -159,6 +169,11 @@ class Item { label: string; constructor(label: string) { this.label = label; } }
 function label(item: Item): string { return item.label; }
 function work(items: Item[]): string { return label(items[0]); }
 console.log(work([new Item("kept")]));
+
+// Keeps the optional element union a tagged box (Set elements are boxes),
+// so the stack-box paths stay exercised; nullable pointers bypass them.
+const keepBoxed = new Set<Item | undefined>();
+void keepBoxed;
 `);
   const llvm = emitLlvmModule(module);
   expect(body(llvm, "sc_bf_work")).toContain("alloca %ScrUnion");
@@ -184,6 +199,11 @@ class Item { value = 7; }
 function pair(left: Item, right: Item): number { return left.value + right.value; }
 function work(items: Item[]): number { return pair(items[0], items[1]) + pair(items[1], items[0]); }
 console.log(work([new Item(), new Item()]));
+
+// Keeps the optional element union a tagged box (Set elements are boxes),
+// so the stack-box paths stay exercised; nullable pointers bypass them.
+const keepBoxed = new Set<Item | undefined>();
+void keepBoxed;
 `);
   const work = body(emitLlvmModule(module), "sc_bf_work");
   expect(work.match(/alloca %ScrUnion/g)).toHaveLength(4);
@@ -213,6 +233,11 @@ test("pure string helpers preserve the array owner of an immediate optional stri
 function size(text: string): number { return text.length + text.charCodeAt(0); }
 function work(words: string[], index: number): number { return size(words[index]); }
 console.log(work(["first"], 0));
+
+// Keeps the optional element union a tagged box (Set elements are boxes),
+// so the stack-box paths stay exercised; nullable pointers bypass them.
+const keepBoxed = new Set<string | undefined>();
+void keepBoxed;
 `);
   const work = body(emitLlvmModule(module), "sc_bf_work");
   expect(work).toContain("alloca %ScrUnion");
@@ -227,6 +252,11 @@ test("string-producing helpers return an owner while borrowing their array input
 function trim(text: string): string { return text.trim(); }
 function work(words: string[]): string { return trim(words[0]); }
 console.log(work([" first "]));
+
+// Keeps the optional element union a tagged box (Set elements are boxes),
+// so the stack-box paths stay exercised; nullable pointers bypass them.
+const keepBoxed = new Set<string | undefined>();
+void keepBoxed;
 `);
   const llvm = emitLlvmModule(module);
   const work = body(llvm, "sc_bf_work");
@@ -242,6 +272,11 @@ function prefix(text: string, start: string): boolean { return text.startsWith(s
 function clear(words: string[]): string { words.length = 0; return "f"; }
 function work(words: string[]): boolean { return prefix(words[0], clear(words)); }
 console.log(work(["first"]));
+
+// Keeps the optional element union a tagged box (Set elements are boxes),
+// so the stack-box paths stay exercised; nullable pointers bypass them.
+const keepBoxed = new Set<string | undefined>();
+void keepBoxed;
 `);
   const work = body(emitLlvmModule(module), "sc_bf_work");
   expect(work).toContain("alloca %ScrUnion");
@@ -255,6 +290,11 @@ test("whole-union string comparisons only project their operands", async () => {
 function size(text: string): number { return text.length + (text === "" ? 1 : 0); }
 function work(words: string[], index: number): number { return size(words[index]); }
 console.log(work([""], 0));
+
+// Keeps the optional element union a tagged box (Set elements are boxes),
+// so the stack-box paths stay exercised; nullable pointers bypass them.
+const keepBoxed = new Set<string | undefined>();
+void keepBoxed;
 `);
   const facts = analyzeCallLifetimes(new Map(module.functions.map((fn) => [fn.name, fn])));
   expect(facts.parameters.get("size")?.has(0)).toBe(true);
@@ -265,7 +305,7 @@ console.log(work([""], 0));
 });
 
 test("class element comparisons, tests and optional chains read through stack tags", async () => {
-  const module = await lower(`
+  const source = `
 class Part { weight = 1; }
 function same(parts: Part[], index: number, probe: Part): boolean { return parts[index] === probe; }
 function missing(parts: Part[], index: number): boolean { return parts[index] === undefined; }
@@ -280,13 +320,26 @@ function count(parts: Part[], probe: Part): number {
 }
 const parts = [new Part()];
 console.log(same(parts, 0, parts[0]), missing(parts, 3), weight(parts, 2), count(parts, parts[0]));
-`);
-  const llvm = emitLlvmModule(module);
+`;
+  // Keeps the optional element union a tagged box (Set elements are boxes),
+  // so the stack-tag paths stay exercised; nullable pointers bypass them.
+  const boxed = emitLlvmModule(
+    await lower(`${source}
+const keepBoxed = new Set<Part | undefined>();
+void keepBoxed;
+`),
+  );
+  const nullable = emitLlvmModule(await lower(source));
   for (const name of ["same", "missing", "weight", "count"]) {
-    const work = body(llvm, `sc_bf_${name}`);
+    const work = body(boxed, `sc_bf_${name}`);
     expect(work, name).toContain("alloca %ScrUnion");
     expect(work, name).not.toContain("@scr_union_new");
     expect(work, name).not.toMatch(/call ptr @sc_bf__x25_arr_idxOr/);
+    // A nullable class element is the element pointer itself: no box at all.
+    const plain = body(nullable, `sc_bf_${name}`);
+    expect(plain, name).not.toContain("%ScrUnion");
+    expect(plain, name).not.toContain("@scr_union_new");
+    expect(plain, name).not.toMatch(/call ptr @sc_bf__x25_arr_idxOr/);
   }
 });
 

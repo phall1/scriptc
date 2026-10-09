@@ -668,7 +668,7 @@ export function emitAsyncExpr(
       }
       const inner = promiseArm.inner;
       const u = host.emitExpr(e.value);
-      const tag = host.unionTag(u.name);
+      const tag = host.unionTag(u.name, def.id);
       const isP = B.tmp();
       B.line(`${isP} = icmp eq i32 ${tag}, ${e.promiseTag}`);
       host.declare(`declare void @scr_await_hop()`);
@@ -680,7 +680,7 @@ export function emitAsyncExpr(
         B.startBlock(lp);
         host.declare(`declare void @scr_await_void(ptr)`);
         {
-          const promise = host.unionPeek(u.name);
+          const promise = host.unionPeek(u.name, def.id);
           if (host.wasi) host.emitWasiSuspend(promise);
           B.line(`call void @scr_await_void(ptr ${promise})`);
         }
@@ -717,7 +717,7 @@ export function emitAsyncExpr(
       const lj = B.newLabel("au.j");
       B.condBr(isP, lp, lh);
       B.startBlock(lp);
-      const peek = host.unionPeek(u.name);
+      const peek = host.unionPeek(u.name, def.id);
       if (host.wasi) host.emitWasiSuspend(peek);
       let awaited: LlValue;
       if (inner.kind === "f64" || inner.kind === "date") {
@@ -741,7 +741,7 @@ export function emitAsyncExpr(
         B.line(`${x} = call ptr @scr_await_ref(ptr ${peek})`);
         awaited = { name: x, type: inner };
       }
-      B.line(`store ptr ${host.unionNewOwned(innerTag, awaited)}, ptr ${slot}`);
+      B.line(`store ptr ${host.unionNewOwned(resUnionId, innerTag, awaited)}, ptr ${slot}`);
       B.br(lj);
       B.startBlock(lh);
       if (host.wasi) host.emitWasiSuspend(null);
