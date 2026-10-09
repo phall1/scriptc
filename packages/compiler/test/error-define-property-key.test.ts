@@ -54,3 +54,17 @@ console.log(boom.message);
 `);
   expect(libFns(ir).filter((fn) => fn === "dyn.defineProperty").length).toBeGreaterThan(0);
 });
+
+test("defineProperty on a class constructor stores a dynamic static", async () => {
+  const ir = await compileIr(`
+class Item {
+  static tag = "item";
+}
+function add(name: string): void {
+  Object.defineProperty(Item, name, { value: 1 });
+}
+add("insert");
+console.log(Item.tag);
+`);
+  expect(libFns(ir).filter((fn) => fn === "dyn.defineProperty").length).toBeGreaterThan(0);
+});
