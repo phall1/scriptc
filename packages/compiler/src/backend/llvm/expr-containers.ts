@@ -152,15 +152,62 @@ export function emitArrayValues(
  * without a result or argument array. Returns false for every other shape,
  * which keeps the ordinary intrinsic. */
 export function emitDiscardedSplice(host: LlvmEmitterContext, e: IrExpr): boolean {
-  if (e.kind !== "arrIntrinsic" || e.receiver.type.kind !== "array") return false;
-  let items: IrExpr[] = [];
-  if (e.method === "spliceInsert") {
-    const list = e.args[2];
-    if (list?.kind !== "arrayLit" || (list.spreads?.length ?? 0) > 0) return false;
-    items = list.elems;
-  } else if (e.method !== "splice") return false;
-  if (items.length > 64) return false;
+  if (!discardsSplice(e)) return false;
+  emitDiscarded(host, e);
+  return true;
+}
+
+/** The plain-value items of a splice that can drop its result, or null. */
+function droppableSpliceItems(e: IrExpr): IrExpr[] | null {
+  if (e.kind !== "arrIntrinsic" || e.receiver.type.kind !== "array") return null;
+  if (e.method === "splice") return [];
+  if (e.method !== "spliceInsert") return null;
+  const list = e.args[2];
+  if (list?.kind !== "arrayLit" || (list.spreads?.length ?? 0) > 0) return null;
+  return list.elems.length <= 64 ? list.elems : null;
+}
+
+/** A droppable splice, possibly behind statements or one arm of a
+ * conditional (the runtime-optional item lowering). */
+function discardsSplice(e: IrExpr): boolean {
+  if (e.kind === "seqExpr") return discardsSplice(e.result);
+  if (e.kind === "ternary") return discardsSplice(e.then) || discardsSplice(e.else_);
+  return droppableSpliceItems(e) !== null;
+}
+
+/** Emit an expression whose value is unused. Ternary arms keep their own
+ * frames, exactly like an evaluated conditional. */
+function emitDiscarded(host: LlvmEmitterContext, e: IrExpr): void {
   const B = host.B;
+  if (e.kind === "seqExpr") {
+    for (const s of e.stmts) host.emitStmt(s);
+    emitDiscarded(host, e.result);
+    return;
+  }
+  if (e.kind === "ternary") {
+    const c = host.emitExpr(e.cond);
+    const lt = B.newLabel("drop.t"),
+      lf = B.newLabel("drop.f"),
+      lj = B.newLabel("drop.j");
+    B.condBr(c.name, lt, lf);
+    for (const [label, arm] of [
+      [lt, e.then],
+      [lf, e.else_],
+    ] as const) {
+      B.startBlock(label);
+      host.frames.push([]);
+      emitDiscarded(host, arm);
+      host.releaseFrame(host.frames.pop()!);
+      B.br(lj);
+    }
+    B.startBlock(lj);
+    return;
+  }
+  const items = droppableSpliceItems(e);
+  if (items === null || e.kind !== "arrIntrinsic" || e.receiver.type.kind !== "array") {
+    host.emitExpr(e);
+    return;
+  }
   const r = emitBorrowedInput(host, e.receiver);
   const acc = elemAccess(e.receiver.type.elem);
   const start = host.emitExpr(e.args[0]!);
@@ -189,7 +236,6 @@ export function emitDiscardedSplice(host: LlvmEmitterContext, e: IrExpr): boolea
   B.line(
     `call void @scr_arr_splice_drop(ptr ${r.name}, double ${start.name}, double ${count}, ${host.sizeType} ${values.length}, ptr ${buffer})`,
   );
-  return true;
 }
 
 export function emitArrayCopyLoop(

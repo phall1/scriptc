@@ -218,3 +218,47 @@ test("length assignments skip the runtime when the length is unchanged", () => {
   expect(fn.match(/call void @scr_arr_set_len\(/g)).toHaveLength(1);
   expect(fn).toMatch(/br i1 %t\d+, label %arr\.len\.done\d*, label %arr\.len\.set\d*/);
 });
+
+test("a discarded conditional splice drops the result of its literal arm", () => {
+  const insert = (items: IrExpr): IrExpr => ({
+    kind: "arrIntrinsic",
+    method: "spliceInsert",
+    receiver: ref("s", words),
+    args: [index, { kind: "numLit", value: 0, type: F64, loc }, items],
+    type: words,
+    loc,
+  });
+  const word: IrExpr = { kind: "strLit", value: "x", type: STRING, loc };
+  const llvm = emitLlvmModule(
+    module("pick", VOID, [
+      {
+        kind: "exprStmt",
+        expr: {
+          kind: "seqExpr",
+          stmts: [],
+          result: {
+            kind: "ternary",
+            cond: { kind: "boolLit", value: true, type: BOOL, loc },
+            then: insert({
+              kind: "seqExpr",
+              stmts: [],
+              result: { kind: "arrayLit", elems: [word], type: words, loc },
+              type: words,
+              loc,
+            }),
+            else_: insert({ kind: "arrayLit", elems: [word], type: words, loc }),
+            type: words,
+            loc,
+          },
+          type: words,
+          loc,
+        },
+        loc,
+      },
+    ]),
+  );
+  const fn = body(llvm, "pick");
+  expect(fn.match(/call void @scr_arr_splice_drop\(/g)).toHaveLength(1);
+  expect(fn.match(/call ptr @scr_arr_splice_insert\(/g)).toHaveLength(1);
+  expect(fn).toMatch(/drop\.t\d*:/);
+});

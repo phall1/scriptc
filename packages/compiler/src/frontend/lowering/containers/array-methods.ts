@@ -123,6 +123,71 @@ function lowerOptionalArrayPush(
   return { kind: "seqExpr", stmts, result: length(), type: F64, loc };
 }
 
+/** `a.splice(start, count, v)` where v may hold undefined at run time.
+ * Receiver, start, count, and v evaluate once, in order; a present v is
+ * inserted as a plain element literal (which a statement-position splice
+ * then inserts without any temporary array), a missing one through the
+ * present-undefined item array. Both arms return the removed elements. */
+function lowerOptionalSpliceItem(
+  lowerer: Lowerer,
+  receiver: IrExpr,
+  positions: IrExpr[],
+  value: IrExpr,
+  elem: IrType,
+  arrType: IrType & { kind: "array" },
+  loc: SrcLoc,
+): IrExpr {
+  const stmts: IrStmt[] = [];
+  const repeatable = (e: IrExpr): boolean => e.kind === "numLit" || isSafeToRepeat(e);
+  const pure = repeatable(receiver) && positions.every(repeatable) && repeatable(value);
+  const stable = (e: IrExpr, name: string): IrExpr => {
+    if (pure) return e;
+    const temp = lowerer.declareHiddenLocal(name, e.type);
+    stmts.push({ kind: "varDecl", localId: temp.id, init: e, loc });
+    return varRef(temp.id, e.type, loc);
+  };
+  const target = stable(receiver, "%spliceTarget");
+  const bounds = positions.map((position) => stable(position, "%splicePosition"));
+  const item = stable(value, "%spliceValue");
+  if (item.type.kind !== "union")
+    throw new InternalCompilerError("runtime-optional splice item is not a union");
+  const splice = (items: IrExpr): IrExpr => ({
+    kind: "arrIntrinsic",
+    method: "spliceInsert",
+    receiver: target,
+    args: [...bounds, items],
+    type: arrType,
+    loc,
+  });
+  return {
+    kind: "seqExpr",
+    stmts,
+    result: {
+      kind: "ternary",
+      cond: {
+        kind: "unionIsTag",
+        unionId: item.type.unionId,
+        tag: lowerer.armTag(item.type.unionId, UNDEFINED_T),
+        negated: false,
+        value: item,
+        type: BOOL,
+        loc,
+      },
+      then: splice(lowerArrayValueItems(lowerer, [item], elem, arrType, loc)),
+      else_: splice({
+        kind: "arrayLit",
+        elems: [lowerer.coerceToExpected(item, elem)],
+        type: arrType,
+        loc,
+      }),
+      type: arrType,
+      loc,
+    },
+    type: arrType,
+    loc,
+  };
+}
+
 function primitivePositionType(lowerer: Lowerer, type: IrType): boolean {
   if (type.kind === "union") {
     return (
@@ -891,6 +956,17 @@ export function lowerArrayMethodCall(
     const statefulItems = itemProbes.some(
       (probe) => probe !== null && lowerer.runtimeOptionalWidening(probe.type, elem) !== null,
     );
+    if (statefulItems && itemNodes.length === 1) {
+      return lowerOptionalSpliceItem(
+        lowerer,
+        receiver,
+        args,
+        lowerer.lowerExpr(itemNodes[0]!),
+        elem,
+        receiverIr,
+        loc,
+      );
+    }
     const items: IrExpr = hasSpread
       ? lowerArraySpreadItems(lowerer, itemNodes, elem, receiverIr, loc)
       : statefulItems
