@@ -134,6 +134,8 @@ function statementPreservesEdges(s: IrStmt, privateLocals?: ReadonlySet<string>)
     case "exprStmt":
     case "return":
     case "throw":
+    // Throws a fresh Error with a constant message (an unreachable trap).
+    case "runtimeFence":
     case "if":
     case "for":
     case "forOf":

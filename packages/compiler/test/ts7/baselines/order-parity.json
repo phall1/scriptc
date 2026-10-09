@@ -15610,6 +15610,12 @@
     "<repo>/tests/corpus/4544-checked-cast-aliases.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/4543-walk-borrowed-locals.ts": {
+   "order": [
+    "<repo>/tests/corpus/4543-walk-borrowed-locals.ts"
+   ],
+   "diags": []
   }
  }
 }

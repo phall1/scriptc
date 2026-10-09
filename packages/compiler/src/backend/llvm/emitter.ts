@@ -156,6 +156,7 @@ import {
 } from "./map-read-lifetimes.js";
 import { emitBorrowedFieldSequence, guardedValue } from "./borrowed-receivers.js";
 import { emitBorrowedInput } from "./borrowed-inputs.js";
+import { findWalkBorrows } from "./walk-borrows.js";
 import { ReferenceEffects } from "./reference-effects.js";
 import { LlvmDebugInfo } from "./debug-info.js";
 import { StackCallbacks } from "./stack-callbacks.js";
@@ -585,6 +586,8 @@ export class LlEmitter {
   /** Parameters proven projection-only: callers may pass stack boxes. */
   private projectedParameters = new Set<string>();
   private stableCallBindings: ReadonlySet<string> = new Set();
+  /** Locals holding borrowed pointers for their whole lifetime (walk-borrows.ts). */
+  private walkBorrows: ReadonlySet<string> = new Set();
   /** Manifest-bound native imports, used by ffiCall emission. */
   readonly ffiByName = new Map<string, IrFfiImport>();
   /** C-ABI callback trampolines and (for raw/no-userdata callbacks) their
@@ -4834,6 +4837,16 @@ export class LlEmitter {
       (e) => this.nullableFieldGet(e) !== null,
     );
     this.localUnionStorage = new Map();
+    this.walkBorrows =
+      this.debug === null && this.referenceEffects.functions.has(fn.name)
+        ? findWalkBorrows(fn, {
+            pointerLocal: (local) =>
+              local.type.kind === "object" ||
+              (local.type.kind === "union" &&
+                this.nullableUnions.get(local.type.unionId)?.arm.kind === "object"),
+            borrowsWithoutOwning: (e) => this.borrowsWithoutOwning(e),
+          })
+        : new Set();
     this.integerRanges = analyzeIntegerRanges(numericFn, this.int32Slots.facts(fn.name));
     this.bytesBounds = findBytesBounds(numericFn, this.integerRanges);
     this.chainSlots.clear();
@@ -5193,6 +5206,12 @@ export class LlEmitter {
     switch (s.kind) {
       case "varDecl": {
         const b = this.binding(s.localId);
+        if (this.walkBorrows.has(s.localId) && b.kind === "local") {
+          // A borrowed walk pointer: no retain now, no release at scope exit.
+          const v = s.init === null ? "null" : this.emitReadReceiver(s.init).name;
+          B.line(`store ptr ${v}, ptr ${b.slot}`);
+          break;
+        }
         const slice = this.scalarStringSlices.get(s.localId);
         if (slice) {
           const snapshot = emitStringSliceSnapshot(this, slice);
@@ -5336,6 +5355,11 @@ export class LlEmitter {
           break;
         }
         const b = this.binding(s.localId);
+        if (this.walkBorrows.has(s.localId) && b.kind === "local") {
+          // Rebinding a borrowed walk pointer releases nothing.
+          B.line(`store ptr ${this.emitReadReceiver(s.value).name}, ptr ${b.slot}`);
+          break;
+        }
         const v = this.emitExpr(s.value);
         if (b.kind === "global" && !s.initializes) this.checkGlobalTdz(s.localId);
         if (b.kind === "boxed") {
@@ -7102,6 +7126,32 @@ export class LlEmitter {
           this.canBorrowReceiver(e.arr) &&
           this.referenceEffects.preserves(e.index)
         );
+      default:
+        return false;
+    }
+  }
+
+  /** emitReadReceiver produces this node's pointer without acquiring a
+   * reference, given operands that do the same: plain class/record field
+   * reads, class casts, nullable-pointer narrows and wraps, and checked
+   * ternaries. Stack-boxed, map-read and boxed-field sources are owned. */
+  borrowsWithoutOwning(e: IrExpr): boolean {
+    if (!isRefCounted(e.type) || this.isStackUnionSource(e)) return false;
+    if (matchMapRead(e, this.boxedUnionsById)) return false;
+    switch (e.kind) {
+      case "fieldGet":
+        return this.nullableFieldGet(e) === null;
+      case "recordGet":
+        return true;
+      case "unionNarrow":
+        return this.nullableUnions.has(e.unionId);
+      case "downcast":
+      case "upcast":
+        return e.value.type.kind === "object";
+      case "unionWrap":
+        return this.borrowableNullableWrap(e) !== null;
+      case "ternary":
+        return this.canBorrowReceiver(e.then) && this.canBorrowReceiver(e.else_);
       default:
         return false;
     }
