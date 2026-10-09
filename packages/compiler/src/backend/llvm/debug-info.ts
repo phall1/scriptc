@@ -31,6 +31,8 @@ export class LlvmDebugInfo {
     sources: ReadonlyMap<string, string>,
     private readonly pointerBits = 64,
     private readonly unions: readonly IrUnionDef[] = [],
+    /** Unions whose values are the nullable arm pointer itself. */
+    private readonly nullableArms: ReadonlyMap<string, IrType> = new Map(),
   ) {
     this.source = new SourceLocations(sources);
     this.unit(sourceFile);
@@ -167,6 +169,12 @@ export class LlvmDebugInfo {
         break;
       }
       case "union": {
+        const nullableArm = this.nullableArms.get(type.unionId);
+        if (nullableArm) {
+          // NULL is the unit arm; any other value is the arm's instance.
+          id = this.type(nullableArm);
+          break;
+        }
         const arms = this.unions.find((union) => union.id === type.unionId)?.arms ?? [];
         const tags = arms.map((arm, i) =>
           this.add(`!DIEnumerator(name: ${quoted(typeKey(arm))}, value: ${i}, isUnsigned: true)`),

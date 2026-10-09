@@ -10,6 +10,7 @@ import {
   type ShapeHost,
   vAdapters,
 } from "./shapes.js";
+import { NullableUnions } from "./nullable-unions.js";
 
 function declarationHost(
   pointerBits: 32 | 64 = 64,
@@ -25,6 +26,12 @@ function declarationHost(
     cycleColorOffset: pointerBits === 32 ? 12 : 16,
     tracedShapes: new Set(),
     tracedUnions: new Set(),
+    nullableUnions: new NullableUnions({
+      irVersion: 15,
+      sourceFile: "test.ts",
+      functions: [],
+      entry: "main",
+    }),
     recordsById: new Map(),
     recordCloneShapes: new Set(),
     rcHelpers: inlineRc ? new Set() : null,

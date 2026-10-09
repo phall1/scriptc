@@ -114,6 +114,8 @@ export function nullableReference(
   const absentTag = arms.findIndex((arm) => arm.kind === absentKind);
   if (presentTag < 0 || absentTag < 0)
     throw new InternalCompilerError("nullable runtime result lacks its union arms");
+  // A nullable union is the reference itself, NULL when absent.
+  if (host.nullableUnions.has(type.unionId)) return host.own({ name: value, type });
   const adapters = vAdapters(host.shapeHost, arms[presentTag]!);
   const B = host.B,
     yes = B.newLabel("runtime.present"),

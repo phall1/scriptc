@@ -25,6 +25,7 @@ import {
 import { emitBorrowedInput } from "./borrowed-inputs.js";
 import { emitStringSliceRead } from "./string-slices.js";
 import { emitDenseArrayNumber, emitDenseArrayPush } from "./dense-array-access.js";
+import { emitUnionWiden } from "./expr-records.js";
 
 export function resolveThunkFor(host: LlvmEmitterContext, inner: IrType): string {
   const key = typeKey(inner);
@@ -46,9 +47,14 @@ export function resolveThunkFor(host: LlvmEmitterContext, inner: IrType): string
   return sym;
 }
 
-export function tagInSet(host: LlvmEmitterContext, uName: string, tags: number[]): string {
+export function tagInSet(
+  host: LlvmEmitterContext,
+  uName: string,
+  unionId: string,
+  tags: number[],
+): string {
   const B = host.B;
-  const tag = host.unionTag(uName);
+  const tag = host.unionTag(uName, unionId);
   let acc = "";
   for (const t of tags) {
     const c = B.tmp();
@@ -519,7 +525,7 @@ export function emitArrIntrinsic(
       else if (elem.kind === "bool") B.line(`${value} = icmp ne i64 ${raw}, 0`);
       else B.line(`${value} = inttoptr i64 ${raw} to ptr`);
       B.line(
-        `store ptr ${dynamic || sameUnion ? value : host.unionNewOwned(tag, { name: value, type: elem })}, ptr ${resultSlot}`,
+        `store ptr ${dynamic || sameUnion || e.type.kind !== "union" ? value : host.unionNewOwned(e.type.unionId, tag, { name: value, type: elem })}, ptr ${resultSlot}`,
       );
       B.br(lj);
       B.startBlock(la);
@@ -720,6 +726,15 @@ export function wrapNullable(
   absentTag: number,
 ): LlValue {
   const B = host.B;
+  if (host.nullableUnions.has(resultType.unionId)) {
+    // A nullable union is its present payload, NULL when absent.
+    if (raw === present) return host.own({ name: present, type: resultType });
+    const isnull = B.tmp(),
+      t = B.tmp();
+    B.line(`${isnull} = icmp eq ptr ${raw}, null`);
+    B.line(`${t} = select i1 ${isnull}, ptr null, ptr ${present}`);
+    return host.own({ name: t, type: resultType });
+  }
   const slot = B.slot();
   B.entryAllocas.push(`${slot} = alloca ptr`);
   const isnull = B.tmp();
@@ -730,7 +745,7 @@ export function wrapNullable(
   B.condBr(isnull, la, lp);
   B.startBlock(lp);
   B.line(
-    `store ptr ${host.unionNewOwned(valueTag, { name: present, type: valueType })}, ptr ${slot}`,
+    `store ptr ${host.unionNewOwned(resultType.unionId, valueTag, { name: present, type: valueType })}, ptr ${slot}`,
   );
   B.br(lj);
   B.startBlock(la);
@@ -944,6 +959,37 @@ export function emitMapLikeIntrinsic(
       if (!def || undefTag < 0)
         throw new InternalCompilerError("llvm emitter bug: map get union lacks its undefined arm");
       const absent = host.unitInstanceRef(e.type.unionId, undefTag);
+      if (
+        value.kind === "union" &&
+        host.nullableUnions.has(value.unionId) &&
+        !typeEquals(value, e.type)
+      ) {
+        // A nullable `C | null` value widens into `C | null | undefined`:
+        // NULL is the stored null, so presence decides the undefined arm.
+        host.declare(`declare zeroext i1 @scr_map_has_${kAcc}(ptr, ${kTy})`);
+        host.declare(`declare ptr @scr_map_get_${kAcc}_ref(ptr, ${kTy})`);
+        const has = B.tmp();
+        B.line(`${has} = call zeroext i1 @scr_map_has_${kAcc}(ptr ${r.name}, ${k.args})`);
+        const slot = B.slot();
+        B.entryAllocas.push(`${slot} = alloca ptr`);
+        const lp = B.newLabel("mgn.p");
+        const la = B.newLabel("mgn.a");
+        const lj = B.newLabel("mgn.j");
+        B.condBr(has, lp, la);
+        B.startBlock(lp);
+        const raw = B.tmp();
+        B.line(`${raw} = call ptr @scr_map_get_${kAcc}_ref(ptr ${r.name}, ${k.args})`);
+        const widened = emitUnionWiden(host, raw, value.unionId, e.type.unionId, true);
+        B.line(`store ptr ${widened}, ptr ${slot}`);
+        B.br(lj);
+        B.startBlock(la);
+        B.line(`store ptr ${absent}, ptr ${slot}`);
+        B.br(lj);
+        B.startBlock(lj);
+        const t = B.tmp();
+        B.line(`${t} = load ptr, ptr ${slot}`);
+        return host.own({ name: t, type: e.type });
+      }
       if (value.kind === "union") {
         host.declare(`declare ptr @scr_map_get_${kAcc}_ref(ptr, ${kTy})`);
         const raw = B.tmp();
@@ -984,7 +1030,7 @@ export function emitMapLikeIntrinsic(
           B.line(`${hit} = trunc i8 ${rawOut} to i1`);
         }
         B.line(
-          `store ptr ${host.unionNewOwned(valueTag, { name: hit, type: value })}, ptr ${slot}`,
+          `store ptr ${host.unionNewOwned(e.type.unionId, valueTag, { name: hit, type: value })}, ptr ${slot}`,
         );
         B.br(lj);
         B.startBlock(la);

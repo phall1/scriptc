@@ -22,6 +22,7 @@ import { BlockBuilder } from "./blocks.js";
 import { llvmCommentText } from "./common.js";
 import { llFieldType, releaseSym, traceAdapter, type ShapeHost } from "./shapes.js";
 import { LlvmUnsupportedError } from "./unsupported.js";
+import { emitUnionPeek, emitUnionTag } from "./union-repr.js";
 import { undefinedArmTag } from "../../ir/analysis.js";
 
 /** What the walkers need from the emitter beyond the shape tables: union
@@ -36,6 +37,9 @@ export interface WalkerHost extends ShapeHost {
   cstr(text: string): string;
   /** Request the shared invalid-union-tag abort helper (@sc_bad_tag). */
   needBadTag(): void;
+  /** i1: a value loaded from an undefined-armed record field slot is the
+   * slot's ABSENT state. */
+  fieldAbsentTestIn(B: BlockBuilder, value: string, unionId: string): string;
 }
 
 const FN_ATTRS = "#0";
@@ -80,21 +84,13 @@ export class LlWalkers {
     B.line(`call void @scr_jb_put_str(ptr ${buf}, ptr ${s})`);
   }
 
-  /** Loads a union box's tag. */
-  private unionTag(B: BlockBuilder, uName: string): string {
-    const p = B.tmp();
-    const t = B.tmp();
-    B.line(`${p} = getelementptr inbounds %ScrUnion, ptr ${uName}, i64 0, i32 1`);
-    B.line(`${t} = load i32, ptr ${p}`);
-    return t;
+  /** A union value's tag (representation-aware: union-repr.ts). */
+  private unionTag(B: BlockBuilder, uName: string, unionId: string): string {
+    return emitUnionTag(B, this.host.nullableUnions.get(unionId), uName);
   }
 
-  private unionPeek(B: BlockBuilder, uName: string): string {
-    const p = B.tmp();
-    const t = B.tmp();
-    B.line(`${p} = getelementptr inbounds %ScrUnion, ptr ${uName}, i64 0, i32 5`);
-    B.line(`${t} = load ptr, ptr ${p}`);
-    return t;
+  private unionPeek(B: BlockBuilder, uName: string, unionId: string): string {
+    return emitUnionPeek(B, this.host.nullableUnions.get(unionId), uName);
   }
 
   /* ── circular-structure detection (the C walkers' scr_jb_enter bracket,
@@ -208,6 +204,15 @@ export class LlWalkers {
     const fieldTy = llFieldType(t);
     const raw = B.tmp();
     B.line(`${raw} = load ${fieldTy}, ptr ${p}`);
+    if (t.kind === "union" && this.host.nullableUnions.has(t.unionId)) {
+      if (undefinedArmTag(t, this.host.unionsById) < 0) return raw;
+      // A nullable slot's ABSENT sentinel reads as undefined (NULL); the
+      // boxed ABSENT state already carries the undefined tag.
+      const absent = this.host.fieldAbsentTestIn(B, raw, t.unionId);
+      const value = B.tmp();
+      B.line(`${value} = select i1 ${absent}, ptr null, ptr ${raw}`);
+      return value;
+    }
     if (fieldTy !== "i8") return raw;
     const b = B.tmp();
     B.line(`${b} = trunc i8 ${raw} to i1`);
@@ -289,9 +294,9 @@ export class LlWalkers {
         const utag = undefinedArmTag(f.type, this.host.unionsById);
         const v = this.loadField(B, "%v", shapeId, fieldIndex.get(f.name)!, f.type);
         let skip: string | null = null;
-        if (utag >= 0) {
+        if (utag >= 0 && f.type.kind === "union") {
           // Undefined-valued field: dropped, like Node.
-          const tag = this.unionTag(B, v);
+          const tag = this.unionTag(B, v, f.type.unionId);
           const isu = B.tmp();
           B.line(`${isu} = icmp eq i32 ${tag}, ${utag}`);
           const lw = B.newLabel("jwf.w");
@@ -388,8 +393,8 @@ export class LlWalkers {
           `${isu} = icmp eq i32 ${kd}, 6 ; SCR_DYN_UNDEF (NULL is 0 — null members DO serialize)`,
         );
         skipUndef = isu;
-      } else if (undefinedArmTag(iv, this.host.unionsById) >= 0) {
-        const tag = this.unionTag(B, val);
+      } else if (iv.kind === "union" && undefinedArmTag(iv, this.host.unionsById) >= 0) {
+        const tag = this.unionTag(B, val, iv.unionId);
         const isu = B.tmp();
         B.line(`${isu} = icmp eq i32 ${tag}, ${undefinedArmTag(iv, this.host.unionsById)}`);
         skipUndef = isu;
@@ -501,7 +506,7 @@ export class LlWalkers {
       throw new InternalCompilerError(
         `llvm emitter bug: jsonStringify of unknown union ${unionId}`,
       );
-    const tag = this.unionTag(B, "%v");
+    const tag = this.unionTag(B, "%v", unionId);
     const bad = B.newLabel("jwu.bad");
     const done = B.newLabel("jwu.d");
     const labels = def.arms.map(() => B.newLabel("jwu.a"));
@@ -536,7 +541,7 @@ export class LlWalkers {
         B.line(`call void @${w}(ptr %b, i1 ${x})`);
       } else {
         // Payload is BORROWED out of the box for the write.
-        const p = this.unionPeek(B, "%v");
+        const p = this.unionPeek(B, "%v", unionId);
         B.line(`call void @${w}(ptr %b, ptr ${p}) ; ${arm.kind}`);
       }
       B.br(done);
@@ -601,7 +606,7 @@ export class LlWalkers {
       B.startBlock(lvalue);
       const u = B.tmp();
       B.line(`${u} = call ptr @scr_arr_peek_ref(ptr %a, double ${i}) ; borrowed scalar union`);
-      const tag = this.unionTag(B, u);
+      const tag = this.unionTag(B, u, unionId);
       const bad = B.newLabel("uj.bad");
       const written = B.newLabel("uj.written");
       const labels = def.arms.map(() => B.newLabel("uj.arm"));
@@ -615,7 +620,7 @@ export class LlWalkers {
           case "nullT":
             break;
           case "string":
-            this.putScrStr(B, buf, this.unionPeek(B, u));
+            this.putScrStr(B, buf, this.unionPeek(B, u, unionId));
             break;
           case "f64": {
             host.declare(`declare double @scr_union_get_f64(ptr)`);

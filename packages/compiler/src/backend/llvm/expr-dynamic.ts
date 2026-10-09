@@ -299,7 +299,7 @@ export function emitDynamicExpr(
       }
       const v = host.emitExpr(e.value);
       if (isRefCounted(arm)) host.moveTemp(v);
-      return host.own({ name: host.unionNewOwned(e.tag, v), type: e.type });
+      return host.own({ name: host.unionNewOwned(e.unionId, e.tag, v), type: e.type });
     }
     case "unionNarrow": {
       // Tag-UNCHECKED payload extraction: the frontend emits this only
@@ -309,7 +309,7 @@ export function emitDynamicExpr(
       const arm = e.type;
       if (isUnitType(arm))
         throw new InternalCompilerError(`llvm emitter bug: unionNarrow to unit arm ${arm.kind}`);
-      const v = host.unionExtract(u.name, arm);
+      const v = host.unionExtract(u.name, e.unionId, arm);
       return host.own({ name: v, type: arm });
     }
     case "unionDisc": {
@@ -333,7 +333,7 @@ export function emitDynamicExpr(
           if (arm.kind !== "record" && arm.kind !== "object") {
             throw new LlvmUnsupportedError(`unionDisc:${arm.kind}`, e.loc);
           }
-          const payload = host.unionPeek(u.name);
+          const payload = host.unionPeek(u.name, def.id);
           const { ptr, type } =
             arm.kind === "object"
               ? host.classFieldPtr(payload, arm.className, e.field)
@@ -407,7 +407,7 @@ export function emitDynamicExpr(
           // runtime getter answers owned (+1 for ref elements); invalid
           // indices trap. The result wraps into the join when unit arms
           // widened it.
-          const payload = host.unionPeek(u.name);
+          const payload = host.unionPeek(u.name, def.id);
           const acc = elemAccess(arm.elem);
           const accTy = acc === "f64" ? "double" : acc === "bool" ? "i1" : "ptr";
           host.declare(
@@ -434,13 +434,15 @@ export function emitDynamicExpr(
           }
           // The element read is already owned (+1) — ownership MOVES
           // into the union box, no extra retain.
-          B.line(`store ptr ${host.unionNewOwned(tag, { name: v, type: arm.elem })}, ptr ${slot}`);
+          B.line(
+            `store ptr ${host.unionNewOwned(e.type.unionId, tag, { name: v, type: arm.elem })}, ptr ${slot}`,
+          );
           B.br(join);
           return;
         }
         if (arm.kind !== "record") throw new LlvmUnsupportedError(`unionKeyGet:${arm.kind}`, e.loc);
         const shape = host.recordShape(arm.shapeId);
-        const payload = host.unionPeek(u.name);
+        const payload = host.unionPeek(u.name, def.id);
         const declared =
           literal !== null ? shape.fields.find((f) => f.name === literal) : undefined;
         if (declared) {
@@ -465,8 +467,11 @@ export function emitDynamicExpr(
           }
           const wrapped =
             ft.kind === "f64" || ft.kind === "bool"
-              ? host.unionNewOwned(tag, { name: v, type: ft })
-              : host.unionNewOwned(tag, { name: host.retainValue(v, ft), type: ft });
+              ? host.unionNewOwned(e.type.unionId, tag, { name: v, type: ft })
+              : host.unionNewOwned(e.type.unionId, tag, {
+                  name: host.retainValue(v, ft),
+                  type: ft,
+                });
           B.line(`store ptr ${wrapped}, ptr ${slot}`);
           B.br(join);
           return;
@@ -493,8 +498,15 @@ export function emitDynamicExpr(
     case "unionIsTag": {
       // A pure tag compare — the box is borrowed, no payload is touched.
       const u = host.emitUnionProjection(e.value);
-      const tag = host.unionTag(u.name);
+      const nullable = host.nullableUnions.get(e.unionId);
       const t = B.tmp();
+      if (nullable) {
+        // NULL is the unit arm.
+        const isUnit = e.tag === nullable.unitTag;
+        B.line(`${t} = icmp ${isUnit !== e.negated ? "eq" : "ne"} ptr ${u.name}, null`);
+        return { name: t, type: e.type };
+      }
+      const tag = host.unionTag(u.name, e.unionId);
       B.line(`${t} = icmp ${e.negated ? "ne" : "eq"} i32 ${tag}, ${e.tag}`);
       return { name: t, type: e.type };
     }
@@ -762,12 +774,18 @@ export function emitDynamicExpr(
       const def = host.unionsById.get(e.unionId);
       if (!def)
         throw new InternalCompilerError(`llvm emitter bug: equality of unknown union ${e.unionId}`);
+      if (host.nullableUnions.has(def.id)) {
+        // Object identity, and NULL === NULL for the unit arm: one compare.
+        const eq = B.tmp();
+        B.line(`${eq} = icmp ${e.negated ? "ne" : "eq"} ptr ${l.name}, ${r.name}`);
+        return { name: eq, type: e.type };
+      }
       const slot = B.slot();
       B.entryAllocas.push(`${slot} = alloca i1`);
       const join = B.newLabel("ue.j");
       const same = B.newLabel("ue.s");
-      const ltag = host.unionTag(l.name);
-      const rtag = host.unionTag(r.name);
+      const ltag = host.unionTag(l.name, def.id);
+      const rtag = host.unionTag(r.name, def.id);
       const tagEq = B.tmp();
       B.line(`${tagEq} = icmp eq i32 ${ltag}, ${rtag}`);
       B.line(`store i1 false, ptr ${slot}`);
@@ -804,8 +822,8 @@ export function emitDynamicExpr(
           }
           case "string": {
             host.declare(`declare zeroext i1 @scr_str_eq(ptr, ptr)`);
-            const a = host.unionPeek(l.name);
-            const b = host.unionPeek(r.name);
+            const a = host.unionPeek(l.name, def.id);
+            const b = host.unionPeek(r.name, def.id);
             const t = B.tmp();
             B.line(`${t} = call zeroext i1 @sc_str_eq(ptr ${a}, ptr ${b})`);
             B.line(`store i1 ${t}, ptr ${slot}`);
@@ -813,8 +831,8 @@ export function emitDynamicExpr(
           }
           case "bigint": {
             host.declare(`declare zeroext i1 @scr_bigint_eq(ptr, ptr)`);
-            const a = host.unionPeek(l.name);
-            const b = host.unionPeek(r.name);
+            const a = host.unionPeek(l.name, def.id);
+            const b = host.unionPeek(r.name, def.id);
             const t = B.tmp();
             B.line(`${t} = call zeroext i1 @scr_bigint_eq(ptr ${a}, ptr ${b})`);
             B.line(`store i1 ${t}, ptr ${slot}`);
@@ -823,8 +841,8 @@ export function emitDynamicExpr(
           default: {
             // Ref arms: pointer identity, exactly JS object equality.
             // Function arms compare identity roots (adapters included).
-            const a = host.unionPeek(l.name);
-            const b = host.unionPeek(r.name);
+            const a = host.unionPeek(l.name, def.id);
+            const b = host.unionPeek(r.name, def.id);
             const t = B.tmp();
             if (arm.kind === "func") B.line(`${t} = ${closureIdentityEqual(host, a, b)}`);
             else B.line(`${t} = icmp eq ptr ${a}, ${b} ; ${arm.kind}`);
@@ -846,7 +864,7 @@ export function emitDynamicExpr(
       const inputs = emitBorrowedInputs(host, [e.union, e.func]);
       const u = inputs[0]!,
         f = inputs[1]!;
-      const tag = host.unionTag(u.name);
+      const tag = host.unionTag(u.name, e.unionId);
       const tagMatch = B.tmp();
       B.line(`${tagMatch} = icmp eq i32 ${tag}, ${e.tag}`);
       // The payload is a closure only under the function tag; another
@@ -858,7 +876,7 @@ export function emitDynamicExpr(
       const join = B.newLabel("ufe.j");
       B.condBr(tagMatch, check, join);
       B.startBlock(check);
-      const payload = host.unionPeek(u.name);
+      const payload = host.unionPeek(u.name, e.unionId);
       const identical = B.tmp();
       B.line(`${identical} = ${closureIdentityEqual(host, payload, f.name)}`);
       B.line(`store i1 ${identical}, ptr ${slot}`);
@@ -1098,7 +1116,7 @@ function emitUnionEqWrappedScalar(
     if (!isUnitType(arm)) plain = host.emitExpr(wrap.value);
     union = unionInput(e.right);
   }
-  const tag = host.unionTag(union.name);
+  const tag = host.unionTag(union.name, e.unionId);
   const tagMatch = B.tmp();
   B.line(`${tagMatch} = icmp eq i32 ${tag}, ${wrap.tag}`);
   let result = tagMatch;

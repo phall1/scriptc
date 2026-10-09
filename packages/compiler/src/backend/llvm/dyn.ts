@@ -1,5 +1,6 @@
 import { typedRefConstructor } from "./shapes.js";
-import { BYTES_ELEM_NUM, emitFieldAbsentTest, f64Lit } from "./common.js";
+import { BYTES_ELEM_NUM, f64Lit } from "./common.js";
+import { emitUnionPeek, emitUnionTag } from "./union-repr.js";
 import { InternalCompilerError } from "../../errors.js";
 /* ScrDyn helpers for the LLVM backend: per-type match predicates
  * (dynMatchHelper), checked builders (dynCheckHelper), static→dyn
@@ -369,7 +370,7 @@ export class LlDyn {
     const def = this.host.unionsById.get(t.unionId);
     const utag = def ? def.arms.findIndex((arm) => arm.kind === "undefinedT") : -1;
     if (utag < 0) return null;
-    const absent = emitFieldAbsentTest(B, value, utag);
+    const absent = this.host.fieldAbsentTestIn(B, value, t.unionId);
     const lSkip = B.newLabel("tdr.absent");
     const lSet = B.newLabel("tdr.set");
     B.condBr(absent, lSkip, lSet);
@@ -394,11 +395,8 @@ export class LlDyn {
     const def = this.host.unionsById.get(t.unionId);
     const utag = def ? def.arms.findIndex((arm) => arm.kind === "undefinedT") : -1;
     if (utag < 0) return value;
-    const tp = B.tmp();
-    const tag = B.tmp();
+    const tag = emitUnionTag(B, this.host.nullableUnions.get(t.unionId), value);
     const isUndef = B.tmp();
-    B.line(`${tp} = getelementptr inbounds %ScrUnion, ptr ${value}, i64 0, i32 1`);
-    B.line(`${tag} = load i32, ptr ${tp}`);
     B.line(`${isUndef} = icmp eq i32 ${tag}, ${utag}`);
     const kind = this.kindOf(B, d);
     const isObj = B.tmp();
@@ -1736,6 +1734,11 @@ export class LlDyn {
             );
             B.line(`${u} = call ptr @scr_union_new_bool(i32 ${i}, i1 ${x})`);
             B.terminate(`ret ptr ${u}`);
+          } else if (host.nullableUnions.has(t.unionId)) {
+            // A nullable union is its (+1) reference payload.
+            const x = B.tmp();
+            B.line(`${x} = call ptr @${this.dynCheckHelper(arm, preserveRefs)}(ptr %d, ptr %path)`);
+            B.terminate(`ret ptr ${x}`);
           } else {
             const rc = vAdapters(host, arm);
             host.declare(`declare ptr @scr_union_new_ref(i32, ptr, ptr, ptr, ptr)`);
@@ -1775,6 +1778,21 @@ export class LlDyn {
         const lFail = B.newLabel("dcu.fail");
         B.condBr(capsule, lCapsule, lFail);
         B.startBlock(lCapsule);
+        if (host.nullableUnions.has(t.unionId)) {
+          // No box identity to cache: the structural snapshot's payload is
+          // the value, and NULL is the undefined arm, so failure is the
+          // pending exception rather than a NULL result.
+          const materialized = B.tmp();
+          const checked = B.tmp();
+          B.line(`${materialized} = call ptr @scr_dyn_typed_ref_materialize(ptr %d)`);
+          B.line(`${checked} = call ptr @${name}(ptr ${materialized}, ptr %path)`);
+          B.line(`call void @scr_dyn_release_v(ptr ${materialized})`);
+          B.terminate(`ret ptr ${checked}`);
+          B.startBlock(lFail);
+          B.line(`call void @scr_dyn_check_fail(ptr %path, ptr ${want}, ptr %d)`);
+          B.terminate(`ret ptr null`);
+          break;
+        }
         const cached = B.tmp();
         B.line(
           `${cached} = call ptr @scr_dyn_typed_ref_cached_cast(ptr %d, ptr ${host.cstr(key)}, ${host.sizeType} ${Buffer.byteLength(key, "utf8")})`,
@@ -2355,10 +2373,8 @@ export class LlDyn {
         const def = host.unionsById.get(t.unionId);
         if (!def)
           throw new InternalCompilerError(`llvm emitter bug: to-dyn of unknown union ${t.unionId}`);
-        const tagp = B.tmp();
-        const tag = B.tmp();
-        B.line(`${tagp} = getelementptr inbounds %ScrUnion, ptr %v, i64 0, i32 1`);
-        B.line(`${tag} = load i32, ptr ${tagp}`);
+        const nullable = host.nullableUnions.get(t.unionId);
+        const tag = emitUnionTag(B, nullable, "%v");
         const bad = B.newLabel("tdu.bad");
         const labels = def.arms.map(() => B.newLabel("tdu.a"));
         B.terminate(
@@ -2393,18 +2409,12 @@ export class LlDyn {
           } else if (arm.kind === "func") {
             // A boxable function arm crosses through the checked-dynamic
             // function boundary (the dynFrom func special case, sans name).
-            const pp = B.tmp();
-            const p = B.tmp();
-            B.line(`${pp} = getelementptr inbounds %ScrUnion, ptr %v, i64 0, i32 5`);
-            B.line(`${p} = load ptr, ptr ${pp}`);
+            const p = emitUnionPeek(B, nullable, "%v");
             const r = B.tmp();
             B.line(`${r} = call ptr @${this.dynFuncBoxHelper(arm)}(ptr ${p}, ptr null)`);
             B.terminate(`ret ptr ${r}`);
           } else {
-            const pp = B.tmp();
-            const p = B.tmp();
-            B.line(`${pp} = getelementptr inbounds %ScrUnion, ptr %v, i64 0, i32 5`);
-            B.line(`${p} = load ptr, ptr ${pp}`);
+            const p = emitUnionPeek(B, nullable, "%v");
             const r = B.tmp();
             B.line(`${r} = call ptr @${this.toDynHelper(arm)}(ptr ${p}) ; ${arm.kind}`);
             B.terminate(`ret ptr ${r}`);

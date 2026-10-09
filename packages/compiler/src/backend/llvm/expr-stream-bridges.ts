@@ -16,10 +16,11 @@ import {
 import { mangleFunction, mangleGlobal, mangleRecordStruct } from "../mangle.js";
 import { BlockBuilder } from "./blocks.js";
 import { classFieldIndex, classStructSym } from "./classes.js";
-import { emitFieldAbsentTest, llvmCommentText } from "./common.js";
+import { llvmCommentText } from "./common.js";
 import { FN_ATTRS, llFieldType, releaseSym, traceArg, vAdapters } from "./shapes.js";
 import type { LlvmEmitterContext, LlStreamTypedRefAdapter } from "./expr-context.js";
 import type { NullableRefField } from "./nullable-fields.js";
+import { emitUnionPeek, emitUnionTag } from "./union-repr.js";
 
 /** An owned (+1) union value for a nullable-pointer class field slot `p`
  * (the unit arm's immortal instance, or a fresh box around a retained
@@ -518,10 +519,8 @@ export function liveDynUnionRefAdapter(
   }
 
   const B = new BlockBuilder();
-  const tagPtr = B.tmp();
-  const tagValue = B.tmp();
-  B.line(`${tagPtr} = getelementptr inbounds %ScrUnion, ptr %u, i64 0, i32 1`);
-  B.line(`${tagValue} = load i32, ptr ${tagPtr}`);
+  const nullable = host.nullableUnions.get(t.unionId);
+  const tagValue = emitUnionTag(B, nullable, "%u");
   const fallback = B.newLabel("ldu.bad");
   const armLabels = mutableArms.map(() => B.newLabel("ldu.ref"));
   const mutableTags = new Set(mutableArms.map(({ tag }) => tag));
@@ -540,11 +539,8 @@ export function liveDynUnionRefAdapter(
     const rc = vAdapters(host.shapeHost, arm);
     const armKey = typeKey(arm);
     B.startBlock(armLabels[index]!);
-    const payloadPtr = B.tmp();
-    const payload = B.tmp();
+    const payload = emitUnionPeek(B, nullable, "%u");
     const boxed = B.tmp();
-    B.line(`${payloadPtr} = getelementptr inbounds %ScrUnion, ptr %u, i64 0, i32 5`);
-    B.line(`${payload} = load ptr, ptr ${payloadPtr}`);
     B.line(
       `${boxed} = call ptr ${typedRefConstructor(host.shapeHost, arm)}(ptr ${payload}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${host.cstr(armKey)}, ${host.sizeType} ${Buffer.byteLength(armKey, "utf8")}, ptr @${adapter.snapshot}, ptr ${adapter.commit})`,
     );
@@ -581,11 +577,8 @@ export function liveDynUnionRefAdapter(
       B.line(`${boxed} = call ptr @scr_dyn_new_bool(i1 ${value})`);
       B.terminate(`ret ptr ${boxed}`);
     } else {
-      const payloadPtr = B.tmp();
-      const payload = B.tmp();
+      const payload = emitUnionPeek(B, nullable, "%u");
       const boxed = B.tmp();
-      B.line(`${payloadPtr} = getelementptr inbounds %ScrUnion, ptr %u, i64 0, i32 5`);
-      B.line(`${payload} = load ptr, ptr ${payloadPtr}`);
       B.line(`${boxed} = call ptr @${host.dyn.toDynHelper(arm)}(ptr ${payload})`);
       B.terminate(`ret ptr ${boxed}`);
     }
@@ -928,8 +921,8 @@ export function streamTypedRefMaterializeAdapter(
         // An ABSENT optional field contributes no key.
         const undefinedTag = undefinedArmTag(field.type, host.unionsById);
         let skip: string | null = null;
-        if (undefinedTag >= 0) {
-          const absent = emitFieldAbsentTest(B, fieldValue, undefinedTag);
+        if (undefinedTag >= 0 && field.type.kind === "union") {
+          const absent = host.fieldAbsentTestIn(B, fieldValue, field.type.unionId);
           skip = B.newLabel("live.record.absent");
           const set = B.newLabel("live.record.set");
           B.condBr(absent, skip, set);
@@ -1071,10 +1064,8 @@ export function streamFromArrayAdapter(
     } else {
       const boxedSlot = B.slot();
       B.entryAllocas.push(`${boxedSlot} = alloca ptr`);
-      const tagPtr = B.tmp();
-      const tagValue = B.tmp();
-      B.line(`${tagPtr} = getelementptr inbounds %ScrUnion, ptr ${value}, i64 0, i32 1`);
-      B.line(`${tagValue} = load i32, ptr ${tagPtr}`);
+      const elemNullable = host.nullableUnions.get(elem.unionId);
+      const tagValue = emitUnionTag(B, elemNullable, value);
       const fallback = B.newLabel("sfa.union.dyn");
       const join = B.newLabel("sfa.union.join");
       const armLabels = unionRefArms.map(() => B.newLabel("sfa.union.ref"));
@@ -1087,11 +1078,8 @@ export function streamFromArrayAdapter(
         const armCommit = host.streamTypedRefCommitAdapter(arm, armSnapshot);
         const rc = vAdapters(host.shapeHost, arm);
         B.startBlock(armLabels[i]!);
-        const payloadPtr = B.tmp();
-        const payload = B.tmp();
+        const payload = emitUnionPeek(B, elemNullable, value);
         const armBoxed = B.tmp();
-        B.line(`${payloadPtr} = getelementptr inbounds %ScrUnion, ptr ${value}, i64 0, i32 5`);
-        B.line(`${payload} = load ptr, ptr ${payloadPtr}`);
         B.line(
           `${armBoxed} = call ptr ${typedRefConstructor(host.shapeHost, arm)}(ptr ${payload}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${host.cstr(armKey)}, ${host.sizeType} ${Buffer.byteLength(armKey, "utf8")}, ptr @${armSnapshot}, ptr ${armCommit})`,
         );

@@ -119,11 +119,11 @@ export function emitCheckedNarrowReceiver(
   const union = read
     ? emitCallArrayRead(host, { ...read, borrow: true }, true)
     : host.emitUnionProjection(narrow.value);
-  const tagPtr = B.tmp(),
-    tag = B.tmp(),
-    present = B.tmp();
-  B.line(`${tagPtr} = getelementptr inbounds %ScrUnion, ptr ${union.name}, i64 0, i32 1`);
-  B.line(`${tag} = load i32, ptr ${tagPtr}`);
+  // Nullable unions (nullable-unions.ts) are the payload pointer itself;
+  // the representation-aware tag and peek cover both forms.
+  const unionId = (narrow.value.type as IrType & { kind: "union" }).unionId;
+  const tag = host.unionTag(union.name, unionId);
+  const present = B.tmp();
   B.line(`${present} = icmp eq i32 ${tag}, ${narrow.tag}`);
   const yes = B.newLabel("narrow.present"),
     no = B.newLabel("narrow.other");
@@ -134,5 +134,5 @@ export function emitCheckedNarrowReceiver(
   // Every arm but the target throws, so the helper never returns here.
   B.terminate("unreachable");
   B.startBlock(yes);
-  return { name: host.unionPeek(union.name), type: narrow.call.type };
+  return { name: host.unionPeek(union.name, unionId), type: narrow.call.type };
 }

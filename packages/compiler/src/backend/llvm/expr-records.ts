@@ -32,15 +32,15 @@ export function emitUnionWiden(
     const result =
       arm.kind === "undefinedT" || arm.kind === "nullT"
         ? host.unitInstanceRef(toId, tag)
-        : host.unionNewOwned(tag, { name: host.unionExtract(value, arm), type: arm });
+        : host.unionNewOwned(toId, tag, {
+            name: host.unionExtract(value, fromId, arm),
+            type: arm,
+          });
     B.line(`store ptr ${result}, ptr ${slot}`);
     B.br(join);
   });
   B.startBlock(join);
-  if (owned) {
-    host.declare("declare void @scr_union_release(ptr)");
-    B.line(`call void @scr_union_release(ptr ${value})`);
-  }
+  if (owned) host.releaseValue(value, { kind: "union", unionId: fromId });
   const result = B.tmp();
   B.line(`${result} = load ptr, ptr ${slot}`);
   return result;
@@ -331,10 +331,10 @@ export function keyedRecordReadInto(
     if (tag < 0)
       throw new InternalCompilerError(`llvm emitter bug: keyed read arm for ${vt.kind} missing`);
     if (vt.kind === "f64" || vt.kind === "bool") {
-      return host.unionNewOwned(tag, { name: expr, type: vt });
+      return host.unionNewOwned(def.id, tag, { name: expr, type: vt });
     }
     const payload = owned ? expr : host.retainValue(expr, vt);
-    return host.unionNewOwned(tag, { name: payload, type: vt });
+    return host.unionNewOwned(def.id, tag, { name: payload, type: vt });
   };
   host.declare(`declare zeroext i1 @scr_str_eq(ptr, ptr)`);
   for (const f of overflowOnly ? [] : shape.fields) {

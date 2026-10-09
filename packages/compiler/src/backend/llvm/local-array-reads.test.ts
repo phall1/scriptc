@@ -132,6 +132,12 @@ function fixture(): IrModule {
     entry: "main",
     records: [{ id: "cell", fields: [{ name: "x", type: F64 }] }],
     unions: [{ id: "optional", arms: [element, UNDEFINED_T] }],
+    // A Set of the union keeps `cell | undefined` a tagged box (Set
+    // elements are runtime-inspected boxes), so these tests exercise the
+    // stack-box paths. Nullable-pointer unions bypass them entirely.
+    globals: [
+      { id: "%g.keep.boxed", name: "boxed", type: { kind: "set", elem: optional }, mutable: false },
+    ],
     functions: [
       { name: "main", params: [], returnType: VOID, locals: [], body: [], loc },
       producer,

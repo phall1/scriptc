@@ -433,6 +433,8 @@ export function emitPathUrlLibCall(host: LlvmEmitterContext, e: LibCallExpr): Ll
     if (!dictShape || iv?.kind !== "union")
       throw new InternalCompilerError("llvm emitter bug: qs.parse dict shape");
     const ivDef = host.unionsById.get(iv.unionId);
+    // The bucket union is built and read as a tagged box below.
+    host.requireBoxedUnion(iv.unionId);
     const strTag = ivDef?.arms.findIndex((a) => a.kind === "string") ?? -1;
     const arrTag = ivDef?.arms.findIndex((a) => a.kind === "array") ?? -1;
     if (strTag < 0 || arrTag < 0)
@@ -635,7 +637,7 @@ export function emitPathUrlLibCall(host: LlvmEmitterContext, e: LibCallExpr): Ll
     B.entryAllocas.push(`${rowsSlot} = alloca ptr`);
     B.condBr(hasCell, lh, lm);
     B.startBlock(lh);
-    const peeked = host.unionPeek(cell);
+    const peeked = host.unionPeek(cell, iv.unionId);
     const retained = B.tmp();
     B.line(`${retained} = call ptr @scr_arr_retain_v(ptr ${peeked})`);
     B.line(`store ptr ${retained}, ptr ${rowsSlot}`);

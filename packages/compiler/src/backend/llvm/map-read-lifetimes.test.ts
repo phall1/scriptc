@@ -91,7 +91,7 @@ function body(mod: IrModule, bits: 32 | 64 = 64): string {
 }
 
 test("local map results keep scalar and owned reference payloads without heap wrappers on both ABIs", () => {
-  for (const value of [F64, BOOL, STRING, record]) {
+  for (const value of [F64, BOOL, STRING]) {
     const mod = fixture(value);
     expect(facts(mod).locals.has("value")).toBe(true);
     for (const bits of [32, 64] as const) {
@@ -101,14 +101,24 @@ test("local map results keep scalar and owned reference payloads without heap wr
       expect(ir).not.toContain("@scr_union_new");
       expect(ir).not.toContain("@scr_union_release");
       if (value === BOOL) expect(ir).toMatch(/zext i8 %\w+ to i64/);
-      if (value === record) expect(ir).toContain("@sc_rrelease_");
       if (value === STRING) expect(ir).toContain("@scr_str_release");
     }
   }
 });
 
+test("nullable record results are the looked-up pointer itself on both ABIs", () => {
+  const mod = fixture(record);
+  for (const bits of [32, 64] as const) {
+    const ir = body(mod, bits);
+    expect(ir).not.toContain("%ScrUnion");
+    expect(ir).not.toContain("@scr_union_");
+    expect(ir).toMatch(/icmp (?:eq|ne) ptr %\w+, null/);
+    expect(ir).toContain("@sc_rrelease_");
+  }
+});
+
 test("direct helper arguments have independent stack boxes and call-scoped payload owners", () => {
-  const mod = fixture();
+  const mod = fixture(STRING);
   const fn = mod.functions[1]!;
   const init = fn.body[0]!;
   if (init.kind !== "varDecl" || !init.init) throw new Error("missing lookup");
@@ -155,11 +165,11 @@ test("direct helper arguments have independent stack boxes and call-scoped paylo
   expect(ir).not.toContain("@scr_union_release");
   const call = ir.indexOf("@sc_bf_inspect");
   expect(call).toBeGreaterThan(0);
-  expect(ir.slice(call).match(/call void @sc_rrelease_/g)).toHaveLength(2);
+  expect(ir.slice(call).match(/call void @scr_str_release\(/g)).toHaveLength(2);
 });
 
 test("escaping local boxes retain ordinary ownership", () => {
-  const mod = fixture();
+  const mod = fixture(STRING);
   const fn = mod.functions[1]!;
   fn.returnType = optional;
   fn.body[1] = { kind: "return", value: ref("value", optional), loc };

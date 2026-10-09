@@ -80,7 +80,7 @@ export function emitCallExpr(
               if (result.owner) host.ownSlot(result.owner.slot, result.owner.type);
               return result.value;
             }
-            if (canStackUnion(a, host.unionsById)) return emitStackUnion(host, a).value;
+            if (canStackUnion(a, host.boxedUnionsById)) return emitStackUnion(host, a).value;
             if (host.nullableFieldGet(a))
               return { name: host.emitOwnedNullableStack(a).box, type: a.type };
           }
@@ -734,7 +734,7 @@ export function emitCallExpr(
         host.frames.push([]);
         const args = e.args.map((a, i) => {
           if (borrowed.has(i + 1)) {
-            if (projected?.has(i + 1) && canStackUnion(a, host.unionsById))
+            if (projected?.has(i + 1) && canStackUnion(a, host.boxedUnionsById))
               return emitStackUnion(host, a).value;
             if (projected?.has(i + 1) && host.nullableFieldGet(a))
               return { name: host.emitOwnedNullableStack(a).box, type: a.type };

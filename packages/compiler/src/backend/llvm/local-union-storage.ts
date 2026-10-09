@@ -143,12 +143,16 @@ export function storeLocalUnion(
   }
   let source: string;
   let owner = "null";
+  // Local union storage holds tagged boxes only (the analysis runs over the
+  // boxed union table), and every source has the binding's own union.
+  const unionId = expr.type.kind === "union" ? expr.type.unionId : "";
+  host.requireBoxedUnion(unionId);
   if (host.nullableFieldGet(expr) !== null) {
     const copied = host.emitOwnedNullableStack(expr);
     source = copied.box;
     owner = copied.owner.name;
     host.moveTemp(copied.owner);
-  } else if (expr.kind === "varRef" && !canStackUnion(expr, host.unionsById)) {
+  } else if (expr.kind === "varRef" && !canStackUnion(expr, host.boxedUnionsById)) {
     // A copy of another binding: snapshot the tag and bits, and retain the
     // reference payload (scalar and unit arms own nothing).
     source = host.emitReadReceiver(expr).name;
@@ -156,7 +160,7 @@ export function storeLocalUnion(
       const def = host.unionsById.get(expr.type.kind === "union" ? expr.type.unionId : "")!;
       const refTag = def.arms.findIndex(isRefCounted);
       // Not every retain entry point is NULL-tolerant: branch on the tag.
-      const tag = host.unionTag(source);
+      const tag = host.unionTag(source, unionId);
       const isRef = B.tmp(),
         held = B.slot();
       B.entryAllocas.push(`${held} = alloca ptr`);
@@ -166,14 +170,14 @@ export function storeLocalUnion(
       B.line(`${isRef} = icmp eq i32 ${tag}, ${refTag}`);
       B.condBr(isRef, yes, join);
       B.startBlock(yes);
-      const retained = host.retainValue(host.unionPeek(source), storage.ownerType);
+      const retained = host.retainValue(host.unionPeek(source, unionId), storage.ownerType);
       B.line(`store ptr ${retained}, ptr ${held}`);
       B.br(join);
       B.startBlock(join);
       owner = B.tmp();
       B.line(`${owner} = load ptr, ptr ${held}`);
     }
-  } else if (canStackUnion(expr, host.unionsById)) {
+  } else if (canStackUnion(expr, host.boxedUnionsById)) {
     const wrapped = emitStackUnion(host, expr);
     source = wrapped.value.name;
     if (wrapped.payload) {
@@ -181,7 +185,7 @@ export function storeLocalUnion(
       host.moveTemp(wrapped.payload);
     }
   } else {
-    const read = matchMapRead(expr, host.unionsById)!;
+    const read = matchMapRead(expr, host.boxedUnionsById)!;
     const lookup = emitStackMapRead(host, read);
     source = lookup.value.name;
     if (lookup.owner) {
@@ -189,7 +193,7 @@ export function storeLocalUnion(
       B.line(`${owner} = load ptr, ptr ${lookup.owner.slot}`);
     }
   }
-  const tag = host.unionTag(source);
+  const tag = host.unionTag(source, unionId);
   const slot = B.tmp(),
     bits = B.tmp();
   B.line(`${slot} = getelementptr inbounds %ScrUnion, ptr ${source}, i32 0, i32 5`);

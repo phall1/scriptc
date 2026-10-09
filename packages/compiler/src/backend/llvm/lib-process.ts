@@ -209,7 +209,9 @@ export function emitChildProcessLibCall(host: LlvmEmitterContext, e: LibCallExpr
     B.startBlock(lp);
     const x = B.tmp();
     B.line(`${x} = call double @${get}(ptr ${recv.name})`);
-    B.line(`store ptr ${host.unionNewOwned(f64Tag, { name: x, type: F64 })}, ptr ${slot}`);
+    B.line(
+      `store ptr ${host.unionNewOwned(e.type.unionId, f64Tag, { name: x, type: F64 })}, ptr ${slot}`,
+    );
     B.br(lj);
     B.startBlock(la);
     B.line(`store ptr ${host.unitInstanceRef(e.type.unionId, unitTag)}, ptr ${slot}`);
@@ -608,7 +610,7 @@ export function emitProcessLibCall(host: LlvmEmitterContext, e: LibCallExpr): Ll
     B.condBr(present, lp, la);
     B.startBlock(lp);
     B.line(
-      `store ptr ${host.unionNewOwned(valTag, { name: raw, type: isEnv ? STRING : F64 })}, ptr ${slot}`,
+      `store ptr ${host.unionNewOwned(e.type.unionId, valTag, { name: raw, type: isEnv ? STRING : F64 })}, ptr ${slot}`,
     );
     B.br(lj);
     B.startBlock(la);
