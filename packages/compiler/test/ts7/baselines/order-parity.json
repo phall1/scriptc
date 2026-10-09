@@ -15544,6 +15544,12 @@
     "<repo>/tests/corpus/4563-array-read-projection-receivers.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/4564-literal-choice-strings.ts": {
+   "order": [
+    "<repo>/tests/corpus/4564-literal-choice-strings.ts"
+   ],
+   "diags": []
   }
  }
 }

@@ -511,6 +511,9 @@ export class LlEmitter {
   /** The nullable-union ABSENT sentinel was referenced (absentInstanceRef). */
   private needsNullableAbsent = false;
   private readonly immortalValues = new Set<string>();
+  /** Temps known to hold immortal values, per block builder (temp names
+   * are only unique within one). */
+  private readonly immortalTemps = new WeakMap<BlockBuilder, Set<string>>();
   /** Regex literal templates: "<flags>/<pattern>" → { symbol, interned
    * source/flags literal refs } — one immortal ScrRegex template per distinct
    * (pattern, flags) pair; the bytecode slot starts null and the runtime
@@ -3527,9 +3530,24 @@ export class LlEmitter {
     return frame;
   }
 
+  /** Whether a value is immortal: an interned constant, or a temp marked by
+   * markImmortal. */
+  private isImmortal(name: string): boolean {
+    return this.immortalValues.has(name) || this.immortalTemps.get(this.B)?.has(name) === true;
+  }
+
+  /** Record that a temp holds an immortal value (a choice between interned
+   * literals): nothing owns it, and retains, releases and moves skip it. */
+  markImmortal(v: LlValue): LlValue {
+    let temps = this.immortalTemps.get(this.B);
+    if (!temps) this.immortalTemps.set(this.B, (temps = new Set()));
+    temps.add(v.name);
+    return v;
+  }
+
   /** Registers an owned refcounted value on the current statement frame. */
   own(v: LlValue): LlValue {
-    if (isRefCounted(v.type) && !this.immortalValues.has(v.name)) this.currentFrame().push(v);
+    if (isRefCounted(v.type) && !this.isImmortal(v.name)) this.currentFrame().push(v);
     return v;
   }
 
@@ -3541,7 +3559,7 @@ export class LlEmitter {
 
   /** Strike a refcounted temp from its frame: ownership is being moved. */
   moveTemp(v: LlValue): void {
-    if (!isRefCounted(v.type) || this.immortalValues.has(v.name)) return;
+    if (!isRefCounted(v.type) || this.isImmortal(v.name)) return;
     for (let i = this.frames.length - 1; i >= 0; i--) {
       const idx = this.frames[i]!.findIndex((e) => e.name === v.name);
       if (idx >= 0) {
@@ -3557,7 +3575,7 @@ export class LlEmitter {
   /** The retained (+1) read of a refcounted value — type-directed through
    * the `_v` table (immortals skip, exactly the C retain calls). */
   retainValue(name: string, type: IrType): string {
-    if (this.immortalValues.has(name)) return name;
+    if (this.isImmortal(name)) return name;
     const t = this.B.tmp();
     this.B.line(`${t} = call ptr ${retainSym(this.shapeHost, type)}(ptr ${name})`);
     return t;
@@ -3566,7 +3584,7 @@ export class LlEmitter {
   /** The release call for one owned refcounted value — type-directed like
    * releaseCallC (all runtime releases are NULL-tolerant). */
   releaseValue(name: string, type: IrType): void {
-    if (this.immortalValues.has(name)) return;
+    if (this.isImmortal(name)) return;
     this.B.line(`call void ${releaseSym(this.shapeHost, type)}(ptr ${name})`);
   }
 
