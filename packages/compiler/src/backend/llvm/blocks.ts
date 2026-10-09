@@ -22,6 +22,9 @@ export class BlockBuilder {
   debugLocation: string | null = null;
   /** Function epilogue shared by normal and exceptional returns. */
   returnEpilogue: string | null = null;
+  /** Temps known to hold immortal values (temp names are only unique
+   * within one builder). */
+  readonly immortalTemps = new Set<string>();
 
   constructor() {
     this.cur = { label: "entry", lines: [], term: null };
