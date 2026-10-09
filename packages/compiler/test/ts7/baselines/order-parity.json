@@ -15013,6 +15013,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/4143-union-refinement-intersection-arms.ts": {
+   "order": [
+    "<repo>/tests/corpus/4143-union-refinement-intersection-arms.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/4290-acyclic-immutable-trees.ts": {
    "order": [
     "<repo>/tests/corpus/4290-acyclic-immutable-trees.ts"
