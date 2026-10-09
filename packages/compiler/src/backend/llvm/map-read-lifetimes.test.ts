@@ -94,19 +94,26 @@ function body(mod: IrModule, bits: 32 | 64 = 64): string {
 }
 
 test("local map results keep scalar and owned reference payloads without heap wrappers on both ABIs", () => {
-  for (const value of [F64, BOOL, STRING]) {
-    const mod = fixture(value);
-    expect(facts(mod).locals.has("value")).toBe(true);
-    for (const bits of [32, 64] as const) {
-      const ir = body(mod, bits);
-      expect(ir).toContain("alloca %ScrUnion");
-      expect(ir).toContain("select i1");
-      expect(ir).not.toContain("@scr_union_new");
-      expect(ir).not.toContain("@scr_union_release");
-      if (value === BOOL) expect(ir).toMatch(/zext i8 %\w+ to i64/);
-      if (value === STRING) expect(ir).toContain("@scr_str_release");
+  const keys: IrType[] = [F64, STRING];
+  const values: IrType[] = [F64, BOOL, STRING];
+  for (const key of keys)
+    for (const value of values) {
+      const mod = fixture(value, key);
+      expect(facts(mod).locals.has("value")).toBe(true);
+      for (const bits of [32, 64] as const) {
+        const ir = body(mod, bits);
+        expect(ir).toContain("alloca %ScrUnion");
+        expect(ir).toContain("select i1");
+        expect(ir).not.toContain("@scr_union_new");
+        expect(ir).not.toContain("@scr_union_release");
+        if (key === F64) {
+          // Number keys read the entry's slot inline; booleans are stored 0/1.
+          expect(ir).toContain("call ptr @sc_map_entry_f64(");
+          expect(ir).not.toContain("@scr_map_get_");
+        } else if (value === BOOL) expect(ir).toMatch(/zext i8 %\w+ to i64/);
+        if (value === STRING) expect(ir).toContain("@scr_str_release");
+      }
     }
-  }
 });
 
 test("nullable record results are the looked-up pointer itself on both ABIs", () => {

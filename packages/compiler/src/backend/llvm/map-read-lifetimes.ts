@@ -9,6 +9,7 @@ import {
 import { everyStmtList } from "../../ir/traverse.js";
 import type { CallLifetimes } from "./call-lifetimes.js";
 import type { LlValue, LlvmEmitterContext } from "./expr-context.js";
+import { emitNumberMapGetRef, emitNumberMapGetScalar } from "./map-number-lookup.js";
 import { mapKeyAccess, mapKeyParamType } from "./shapes.js";
 
 function hasTypedCollectionReceiver(
@@ -144,7 +145,7 @@ export function emitMapLookupKey(
   host: LlvmEmitterContext,
   key: IrExpr,
   borrow: boolean,
-): { access: string; types: string; args: string } {
+): { access: string; types: string; args: string; value?: string } {
   const span =
     borrow && key.kind === "varRef" && key.type.kind === "string"
       ? host.splitSpans.get(key.localId)
@@ -158,7 +159,12 @@ export function emitMapLookupKey(
   const value = borrow ? host.emitReadReceiver(key) : host.emitExpr(key);
   const access = mapKeyAccess(key.type);
   const type = mapKeyParamType(access);
-  return { access, types: type, args: `${type} ${value.name}` };
+  return { access, types: type, args: `${type} ${value.name}`, value: value.name };
+}
+
+/** The key's double operand when the lookup can take the inline number path. */
+export function inlineNumberKey(key: { access: string; value?: string }): string | null {
+  return key.access === "f64" && key.value !== undefined ? key.value : null;
 }
 
 export interface StackMapRead {
@@ -182,9 +188,23 @@ export function emitStackMapRead(host: LlvmEmitterContext, read: LocalMapRead): 
   B.entryAllocas.push(`${box} = alloca %ScrUnion`);
   B.entryAllocas.push(`${payload} = getelementptr inbounds %ScrUnion, ptr ${box}, i32 0, i32 5`);
   B.entryAllocas.push(`${tag} = getelementptr inbounds %ScrUnion, ptr ${box}, i32 0, i32 1`);
-  const found = B.tmp();
+  let found = B.tmp();
   let owner: StackMapRead["owner"] = null;
-  if (isRefCounted(read.value)) {
+  const number = inlineNumberKey(key);
+  if (number !== null) {
+    if (isRefCounted(read.value)) {
+      const raw = emitNumberMapGetRef(host, receiver.name, number, read.value);
+      B.line(`${found} = icmp ne ptr ${raw}, null`);
+      B.line(`store i64 0, ptr ${payload}`);
+      B.line(`store ptr ${raw}, ptr ${payload}`);
+      owner = { slot: payload, type: read.value };
+    } else {
+      // Booleans are stored as 0/1, already the widened union payload.
+      const scalar = emitNumberMapGetScalar(host, receiver.name, number);
+      found = scalar.found;
+      B.line(`store i64 ${scalar.bits}, ptr ${payload}`);
+    }
+  } else if (isRefCounted(read.value)) {
     const raw = B.tmp();
     host.declare(`declare ptr @scr_map_get_${access}_ref(ptr, ${keyType})`);
     B.line(`${raw} = call ptr @scr_map_get_${access}_ref(ptr ${receiver.name}, ${key.args})`);

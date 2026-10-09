@@ -327,7 +327,41 @@ static ScrMapLookup scr_map_lookup_kind(const ScrMap *m) {
   }
 }
 
+/* ── direct-indexed number keys ────────────────────────────────────────
+ * Number-keyed maps whose keys are small non-negative integers (ids,
+ * indices) index entries through dense[k] instead of hashing. The entries
+ * array, tombstones and iteration are unchanged; only the index differs.
+ * -0 lands on slot 0 (SameValueZero), and NaN, fractions, negatives and
+ * keys beyond the table are absent by construction. A key that cannot be
+ * stored densely converts the map to the bucket table; when that table
+ * must grow, compact integer keys switch it back (scr_map_enter_dense). */
+
+#define SCR_MAP_DENSE_MIN 16
+/* Grow the table only while it stays within this factor of the live count
+ * (32 bytes of index per entry at worst), so sparse keys fall back to the
+ * bucket table instead of allocating for the largest key. */
+#define SCR_MAP_DENSE_SPREAD 8
+/* Small maps may cover keys up to this bound regardless of their size. */
+#define SCR_MAP_DENSE_FLOOR 64
+
+/* The table slot for a number key, or false when the key cannot have one. */
+static inline bool scr_map_dense_slot(double k, size_t limit, size_t *out) {
+  if (!(k >= 0) || !(k < (double)limit)) return false;
+  size_t i = (size_t)k;
+  if ((double)i != k) return false;
+  *out = i;
+  return true;
+}
+
+static inline size_t scr_map_find_dense(const ScrMap *m, double k) {
+  size_t i;
+  if (!scr_map_dense_slot(k, m->ndense, &i)) return SCR_MAP_EMPTY;
+  uint32_t entry = m->dense[i];
+  return entry ? (size_t)entry - 1 : SCR_MAP_EMPTY;
+}
+
 static size_t scr_map_find(const ScrMap *m, uint64_t hash, uint64_t key) {
+  if (m->ndense) return scr_map_find_dense(m, scr_map_slot_to_f64(key));
   switch (scr_map_lookup_kind(m)) {
   case SCR_MAP_LOOKUP_STR: return scr_map_find_with(m, hash, key, SCR_MAP_LOOKUP_STR);
   case SCR_MAP_LOOKUP_WORD: return scr_map_find_with(m, hash, key, SCR_MAP_LOOKUP_WORD);
@@ -336,9 +370,15 @@ static size_t scr_map_find(const ScrMap *m, uint64_t hash, uint64_t key) {
 }
 
 static size_t scr_map_find_f64(const ScrMap *m, double key) {
+  if (m->ndense) return scr_map_find_dense(m, key);
   if (m->nlive == 0) return SCR_MAP_EMPTY;
   uint64_t k = scr_map_f64_bits(key);
   return scr_map_find_with(m, scr_map_hash_word(k), k, SCR_MAP_LOOKUP_WORD);
+}
+
+const ScrMapEntry *scr_map_entry_f64(const ScrMap *m, double key) {
+  size_t e = scr_map_find_f64(m, key);
+  return e == SCR_MAP_EMPTY ? NULL : &m->entries[e];
 }
 
 /* The key's hash is usually cached, so even the small linear scan rejects
@@ -399,6 +439,82 @@ static void scr_map_rebuild_buckets(ScrMap *m, size_t nbuckets) {
   }
 }
 
+/* Point every live entry's dense slot at it (the table is zeroed first). */
+static void scr_map_fill_dense(ScrMap *m) {
+  memset(m->dense, 0, m->ndense * sizeof *m->dense);
+  for (size_t e = 0; e < m->nentries; e++) {
+    if (!m->entries[e].hash) continue;
+    m->dense[(size_t)scr_map_slot_to_f64(m->entries[e].key)] = (uint32_t)(e + 1);
+  }
+}
+
+/* A table of at least SCR_MAP_DENSE_MIN slots covering index `top`. */
+static size_t scr_map_dense_size(size_t top) {
+  size_t n = SCR_MAP_DENSE_MIN;
+  while (n <= top) n *= 2;
+  return n;
+}
+
+/* The exclusive key bound a table may cover once it holds `live` entries. */
+static size_t scr_map_dense_limit(size_t live) {
+  if (live > SIZE_MAX / SCR_MAP_DENSE_SPREAD) return SIZE_MAX;
+  size_t limit = SCR_MAP_DENSE_SPREAD * live;
+  if (limit < SCR_MAP_DENSE_FLOOR) limit = SCR_MAP_DENSE_FLOOR;
+  /* Entry indices are stored as uint32_t + 1. */
+  return limit < UINT32_MAX ? limit : UINT32_MAX;
+}
+
+static void scr_map_dense_alloc(ScrMap *m, size_t n) {
+  uint32_t *dense = realloc(m->dense, n * sizeof *dense);
+  if (!dense) scr_map_oom();
+  m->dense = dense;
+  m->ndense = n;
+}
+
+/* Called when a number-key map's linear scan or bucket table would grow to
+ * take an absent key: index it directly when every live key and the
+ * incoming key fit a compact table, keep hashing otherwise. One scan per
+ * growth step keeps this amortized constant per insertion. */
+static __attribute__((noinline)) void scr_map_enter_dense(ScrMap *m, double incoming) {
+  size_t limit = scr_map_dense_limit(m->nlive + 1), top, i;
+  if (m->nentries >= UINT32_MAX - 1 || !scr_map_dense_slot(incoming, limit, &top)) return;
+  for (size_t e = 0; e < m->nentries; e++) {
+    if (!m->entries[e].hash) continue;
+    if (!scr_map_dense_slot(scr_map_slot_to_f64(m->entries[e].key), limit, &i)) return;
+    if (i > top) top = i;
+  }
+  free(m->buckets);
+  m->buckets = NULL;
+  m->nbuckets = 0;
+  scr_map_dense_alloc(m, scr_map_dense_size(top));
+  scr_map_fill_dense(m);
+}
+
+/* Extend the table to cover a new integral key while it stays compact. */
+static __attribute__((noinline)) bool scr_map_grow_dense(ScrMap *m, double k, size_t *out) {
+  size_t i;
+  if (!scr_map_dense_slot(k, scr_map_dense_limit(m->nlive + 1), &i)) return false;
+  size_t old = m->ndense, n = scr_map_dense_size(i);
+  scr_map_dense_alloc(m, n);
+  memset(m->dense + old, 0, (n - old) * sizeof *m->dense);
+  *out = i;
+  return true;
+}
+
+/* Switch to the bucket table; cached entry hashes are already complete. */
+static __attribute__((noinline)) void scr_map_leave_dense(ScrMap *m) {
+  free(m->dense);
+  m->dense = NULL;
+  m->ndense = 0;
+  if (m->nentries < SCR_MAP_LINEAR_LIMIT) return;
+  size_t nbuckets = 16;
+  while (nbuckets < 2 * (m->nentries + 1)) {
+    if (nbuckets > SIZE_MAX / 2 / sizeof(size_t)) scr_map_oom();
+    nbuckets *= 2;
+  }
+  scr_map_rebuild_buckets(m, nbuckets);
+}
+
 /* Drop tombstones, preserving insertion order. Only legal when no iteration
  * is active (the forEach desugar's indices would shift). */
 static void scr_map_compact(ScrMap *m) {
@@ -408,12 +524,32 @@ static void scr_map_compact(ScrMap *m) {
   }
   m->nentries = w;
   if (m->nbuckets > 0) scr_map_rebuild_buckets(m, m->nbuckets);
+  else if (m->ndense) scr_map_fill_dense(m);
+}
+
+static void scr_map_grow_entries(ScrMap *m) {
+  size_t cap = m->ecap ? m->ecap : 4;
+  while (cap < m->nentries + 1) {
+    if (cap > SIZE_MAX / 2 / sizeof(ScrMapEntry)) scr_map_oom();
+    cap *= 2;
+  }
+  ScrMapEntry *entries = realloc(m->entries, cap * sizeof *entries);
+  if (!entries) scr_map_oom();
+  m->entries = entries;
+  m->ecap = cap;
 }
 
 /* Make room to append one entry. Prefers compaction (tombstone-heavy maps
  * reuse their storage) and grows otherwise; while an iteration is active it
  * ONLY grows — indices must stay stable under callback mutation. */
 static void scr_map_reserve_append(ScrMap *m) {
+  if (m->ndense) {
+    /* Directly indexed: the table is sized by keys, not entry count. */
+    if (m->nentries < m->ecap) return;
+    if (m->iter_depth == 0 && m->nlive <= m->nentries / 2) scr_map_compact(m);
+    if (m->nentries == m->ecap) scr_map_grow_entries(m);
+    return;
+  }
   if (m->nentries < m->ecap &&
       ((m->nbuckets == 0 && m->nentries < SCR_MAP_LINEAR_LIMIT) ||
        m->nbuckets >= 2 * (m->nentries + 1))) return;
@@ -421,17 +557,7 @@ static void scr_map_reserve_append(ScrMap *m) {
       (m->nbuckets == 0 ? m->nlive < m->nentries : m->nlive <= m->nentries / 2)) {
     scr_map_compact(m);
   }
-  if (m->nentries == m->ecap) {
-    size_t cap = m->ecap ? m->ecap : 4;
-    while (cap < m->nentries + 1) {
-      if (cap > SIZE_MAX / 2 / sizeof(ScrMapEntry)) scr_map_oom();
-      cap *= 2;
-    }
-    ScrMapEntry *entries = realloc(m->entries, cap * sizeof *entries);
-    if (!entries) scr_map_oom();
-    m->entries = entries;
-    m->ecap = cap;
-  }
+  if (m->nentries == m->ecap) scr_map_grow_entries(m);
   if (m->nbuckets == 0 && m->nentries < SCR_MAP_LINEAR_LIMIT) return;
   if (m->nbuckets < 2 * (m->nentries + 1)) {
     size_t nbuckets = m->nbuckets ? m->nbuckets : 16;
@@ -489,6 +615,7 @@ static void scr_map_gcfree(void *o) {
   }
   free(m->entries);
   free(m->buckets);
+  free(m->dense);
 #ifdef SCR_RC_AUDIT
   scr_live_maps--;
 #endif
@@ -546,6 +673,7 @@ static void scr_map_destroy(void *object) {
   }
   free(m->entries);
   free(m->buckets);
+  free(m->dense);
 #ifdef SCR_RC_AUDIT
   scr_live_maps--;
 #endif
@@ -585,6 +713,7 @@ void scr_map_clear(ScrMap *m) {
      * after the clear append past them and ARE visited (Node-exact). */
     m->nentries = 0;
   }
+  if (m->ndense) memset(m->dense, 0, m->ndense * sizeof *m->dense);
   if (m->nbuckets) {
     bool compact = scr_map_compact_buckets(m->nbuckets);
     memset(m->buckets, compact ? 0 : 0xff,
@@ -606,6 +735,7 @@ static bool scr_map_delete_found(ScrMap *m, size_t e) {
   if (e == SCR_MAP_EMPTY) return false;
   m->entries[e].hash = 0; /* bucket slot stays: probe chains intact */
   m->nlive--;
+  if (m->ndense) m->dense[(size_t)scr_map_slot_to_f64(m->entries[e].key)] = 0;
   scr_map_release_key(m, m->entries[e].key);
   scr_map_release_val(m, m->entries[e].val);
   return true;
@@ -709,17 +839,74 @@ static void scr_map_set_str_slot(ScrMap *m, uint64_t hash, uint64_t key, uint64_
   scr_map_set_with(m, hash, key, val, SCR_MAP_LOOKUP_STR);
 }
 
+/* One out-of-line copy of the word-key insert serves both the generic
+ * dispatcher and the number-key path below. */
+static __attribute__((noinline)) void scr_map_set_word(ScrMap *m, uint64_t hash, uint64_t key,
+                                                       uint64_t val) {
+  scr_map_set_with(m, hash, key, val, SCR_MAP_LOOKUP_WORD);
+}
+
+/* Whether appending one more entry would grow the lookup index rather than
+ * reuse tombstones: scr_map_reserve_append compacts a linear map with a
+ * dead entry, or a bucket table at most half live, whenever no iteration
+ * is active. Only real growth may move a number-key map to the direct
+ * index; churn on a small map keeps its compact storage. */
+static inline bool scr_map_append_grows_index(const ScrMap *m) {
+  bool compacts = m->iter_depth == 0 && m->nentries > 0;
+  if (m->nbuckets == 0)
+    return m->nentries >= SCR_MAP_LINEAR_LIMIT && !(compacts && m->nlive < m->nentries);
+  return m->nbuckets < 2 * (m->nentries + 1) && !(compacts && m->nlive <= m->nentries / 2);
+}
+
+/* Number keys arrive normalized (+0 for -0, canonical NaN). A directly
+ * indexed map overwrites or appends through its table; a key the table
+ * cannot hold converts it to hashing first. */
+static void scr_map_set_f64_slot(ScrMap *m, uint64_t key, uint64_t val) {
+  double k = scr_map_slot_to_f64(key);
+  if (!m->ndense && scr_map_append_grows_index(m) && scr_map_find_f64(m, k) == SCR_MAP_EMPTY) {
+    scr_map_enter_dense(m, k); /* the append would grow the index */
+  }
+  if (m->ndense) {
+    size_t i;
+    if (scr_map_dense_slot(k, m->ndense, &i) || scr_map_grow_dense(m, k, &i)) {
+      uint32_t entry = m->dense[i];
+      if (entry) {
+        uint64_t old = m->entries[entry - 1].val;
+        m->entries[entry - 1].val = val; /* unlink before releasing (cycle collector) */
+        scr_map_release_val(m, old);
+        return;
+      }
+      if (m->nentries < UINT32_MAX - 1) {
+        scr_map_reserve_append(m); /* may compact, which refills the table */
+        size_t idx = m->nentries++;
+        uint64_t hash = scr_map_hash_word(key);
+        m->entries[idx].key = key;
+        m->entries[idx].val = val;
+        m->entries[idx].hash = hash ? hash : 1;
+        m->nlive++;
+        m->dense[i] = (uint32_t)(idx + 1);
+        return;
+      }
+    }
+    scr_map_leave_dense(m);
+  }
+  scr_map_set_word(m, scr_map_hash_word(key), key, val);
+}
+
 static void scr_map_set(ScrMap *m, uint64_t hash, uint64_t key, uint64_t val) {
+  if (m->key_kind == SCR_MAP_KEY_F64) {
+    scr_map_set_f64_slot(m, key, val);
+    return;
+  }
   switch (scr_map_lookup_kind(m)) {
   case SCR_MAP_LOOKUP_STR: scr_map_set_str_slot(m, hash, key, val); return;
-  case SCR_MAP_LOOKUP_WORD: scr_map_set_with(m, hash, key, val, SCR_MAP_LOOKUP_WORD); return;
+  case SCR_MAP_LOOKUP_WORD: scr_map_set_word(m, hash, key, val); return;
   default: scr_map_set_with(m, hash, key, val, SCR_MAP_LOOKUP_GENERIC); return;
   }
 }
 
 static void scr_map_set_f64_key(ScrMap *m, double key, uint64_t val) {
-  uint64_t k = scr_map_f64_bits(key); /* stores +0 for -0, canonical NaN */
-  scr_map_set(m, scr_map_hash_word(k), k, val);
+  scr_map_set_f64_slot(m, scr_map_f64_bits(key), val); /* stores +0 for -0, canonical NaN */
 }
 
 static void scr_map_set_str_key(ScrMap *m, ScrStr *key, uint64_t val) {
@@ -988,6 +1175,12 @@ ScrMap *scr_map_clone(const ScrMap *source, bool keys_only) {
     else if (out->val_kind == SCR_MAP_VAL_REF) out->val_retain(scr_map_slot_to_ptr(copy->val));
   }
   out->nlive = count;
+  if (source->ndense) {
+    /* Same keys, so the same table size; entry indices are compacted. */
+    scr_map_dense_alloc(out, source->ndense);
+    scr_map_fill_dense(out);
+    return out;
+  }
   if (count <= SCR_MAP_LINEAR_LIMIT) return out;
   size_t buckets = 16;
   while (buckets < 2 * count) {

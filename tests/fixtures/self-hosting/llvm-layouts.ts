@@ -9,6 +9,7 @@ import { BlockBuilder } from "../../../packages/compiler/src/backend/llvm/blocks
 import { NULLABLE_ABSENT, NullableUnions } from "../../../packages/compiler/src/backend/llvm/nullable-unions.js";
 import { emitFieldAbsentTest } from "../../../packages/compiler/src/backend/llvm/common.js";
 import { undefinedArmTag } from "../../../packages/compiler/src/ir/analysis.js";
+import { analyzeInt32Slots } from "../../../packages/compiler/src/ir/int32-slots.js";
 import { f64Lit } from "../../../packages/compiler/src/backend/llvm/common.js";
 import { mangleClassObj } from "../../../packages/compiler/src/backend/mangle.js";
 import { type IrType } from "../../../packages/compiler/src/ir/ir.js";
@@ -80,7 +81,8 @@ try {
   const graph = buildClassGraph(mod, functions);
   const classObjects = new Map(request.classObjects.map((name) => [name, { nameSym: `@name_${mangleClassObj(name)}` }]));
   const typeName = (type: IrType): string => type.kind === "void" ? "void" : type.kind === "f64" || type.kind === "date" ? "double" : type.kind === "bool" ? "i1" : "ptr";
-  const layouts = emitLlvmLayouts(host, mod, graph, classObjects, functions, typeName);
+  // Mirrors the emitter: whole-program int32 fields store the exact i32.
+  const layouts = emitLlvmLayouts(host, mod, graph, classObjects, functions, typeName, undefined, analyzeInt32Slots(mod));
   const walkers = new LlWalkers(host);
   const helpers: string[] = [];
   for (const type of request.writers ?? []) helpers.push(walkers.jsonWriteHelper(type));

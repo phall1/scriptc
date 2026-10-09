@@ -10457,6 +10457,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/map-number-keys-dense.ts": {
+   "order": [
+    "<repo>/tests/corpus/map-number-keys-dense.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/map-read-lifetimes-exits.ts": {
    "order": [
     "<repo>/tests/corpus/map-read-lifetimes-exits.ts"
@@ -11227,6 +11233,12 @@
   "<repo>/tests/corpus/string-code-points.ts": {
    "order": [
     "<repo>/tests/corpus/string-code-points.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/string-concat-number-parts.ts": {
+   "order": [
+    "<repo>/tests/corpus/string-concat-number-parts.ts"
    ],
    "diags": []
   },

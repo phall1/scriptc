@@ -708,6 +708,13 @@ void scr_str_release(ScrStr *s); /* NULL-tolerant (uninitialized locals) */
 ScrStr *scr_str_concat(ScrStr *a, ScrStr *b);
 /* Borrow each part without mutation; return one independently owned result. */
 ScrStr *scr_str_concat_parts(ScrStr *const *parts, size_t count);
+/* Concatenate up to 16 string or number operands (parts[i] == NULL selects
+ * nums[i], formatted like String(n)) onto an optional borrowed head, +1
+ * result. The head may be appended in place under scr_str_concat's rule for
+ * its left operand; parts are never mutated. */
+ScrStr *scr_str_concat_mixed(ScrStr *head, ScrStr *const *parts, const double *nums, size_t count);
+/* a + String(x): scr_str_concat's contract with a number right operand. */
+ScrStr *scr_str_concat_f64(ScrStr *a, double x);
 
 bool scr_str_eq(ScrStr *a, ScrStr *b);
 
@@ -1700,6 +1707,14 @@ typedef struct ScrMap {
   size_t iter_depth; /* > 0: an iteration is active — no compaction */
   const ScrMapDynOps *dyn_ops;
   const uint8_t *union_keys; /* immutable key-kind table indexed by union tag */
+  /* Direct index for number keys (SCR_MAP_KEY_F64 only). While ndense is
+   * nonzero every live key is an integer in [0, ndense) and dense[k] holds
+   * its entry index + 1 (0 = absent); the map then keeps no bucket table.
+   * A key outside that shape moves the map to hashing; whenever the bucket
+   * table would grow, compact integer keys move it back. Iteration order is
+   * always the entries array's. */
+  uint32_t *dense;
+  size_t ndense;
 } ScrMap;
 /* The LLVM backend's inline retain/release read both trace slots through
  * its %ScrMapRc prefix type (fields 5 and 8), mirroring scr_map_retain and
@@ -1708,6 +1723,20 @@ _Static_assert(offsetof(ScrMap, val_trace) == sizeof(size_t) + 2 * sizeof(uint32
                "inline RC fast paths read ScrMap.val_trace as %ScrMapRc field 5");
 _Static_assert(offsetof(ScrMap, key_trace) == offsetof(ScrMap, val_trace) + 3 * sizeof(void *),
                "inline RC fast paths read ScrMap.key_trace as %ScrMapRc field 8");
+/* The LLVM backend's inline number-key lookup (sc_map_entry_f64) reads
+ * entries, dense and ndense through %ScrMapIx fields 12, 18 and 19, and
+ * entries as %ScrMapEntry { key, val, hash }. */
+_Static_assert(offsetof(ScrMap, entries) == sizeof(size_t) + 2 * sizeof(uint32_t) + 6 * sizeof(void *) + 3 * sizeof(size_t),
+               "inline number-key lookups read ScrMap.entries as %ScrMapIx field 12");
+_Static_assert(offsetof(ScrMap, dense) == offsetof(ScrMap, entries) + 6 * sizeof(void *),
+               "inline number-key lookups read ScrMap.dense as %ScrMapIx field 18");
+_Static_assert(offsetof(ScrMap, ndense) == offsetof(ScrMap, dense) + sizeof(void *),
+               "inline number-key lookups read ScrMap.ndense as %ScrMapIx field 19");
+_Static_assert(sizeof(ScrMapEntry) == 24 && offsetof(ScrMapEntry, val) == 8,
+               "inline number-key lookups read ScrMapEntry.val at byte 8");
+/* Entry for a number key, or NULL when absent. The pointer is valid until
+ * the next mutation; generated code reads the value slot through it. */
+const ScrMapEntry *scr_map_entry_f64(const ScrMap *m, double key);
 
 /* Called once on a fresh UNION_VALUE collection, before its first insert. */
 void scr_map_union_keys(ScrMap *map, const uint8_t *kinds);
