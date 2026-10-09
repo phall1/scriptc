@@ -2,6 +2,7 @@ import { generatorDrain } from "./iterator-adapters.js";
 import { lowerUnionEquality, tagEqualityMayMissAlias } from "./strict-equality.js";
 import { isOptionalProcessStreamProperty } from "./builtins/process.js";
 import { lowerWorkerMetadata } from "./builtins/workers.js";
+import { threadsImportOf } from "../threads-import.js";
 import { dynUndefinedExpr, nodeThrowExpr, numLit, strLit, varRef } from "../../ir/build.js";
 import { InternalCompilerError } from "../../errors.js";
 import { SYMBOL_T } from "../../ir/ir.js";
@@ -1427,6 +1428,18 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
     // as interned string literals; functions have no closure
     // representation (they lower to libCall at call sites only); members
     // with no lowering at all fence with the module-qualified name.
+    {
+      const member = threadsImportOf(lowerer.program, expr);
+      // scriptc delivers published graphs by reference.
+      if (member === "sharesPublishedGraphs")
+        return { kind: "boolLit", value: true, type: BOOL, loc };
+      if (member === "publish")
+        lowerer.noLowering(
+          "publish (@scriptc/threads) as a value",
+          expr,
+          "call publish(value) directly",
+        );
+    }
     {
       const bi = lowerer.builtinImportOf(expr);
       if (bi) {

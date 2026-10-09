@@ -3740,6 +3740,15 @@ function validateFunction(
       if (e.type.kind !== "void") err("module.tdzCheck must be void", e.loc);
       return;
     }
+    if (e.name === "threads.publish") {
+      if (e.args.length !== 1) err("threads.publish takes exactly one argument", e.loc);
+      for (const a of e.args) {
+        checkExpr(a);
+        if (!typeEquals(a.type, e.type))
+          err(`threads.publish result ${typeKey(e.type)} differs from its argument`, e.loc);
+      }
+      return;
+    }
     if (e.name === "module.await") {
       if (e.args.length !== 1) err("module.await takes exactly one argument", e.loc);
       for (const a of e.args) {

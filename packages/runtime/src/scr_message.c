@@ -18,6 +18,9 @@ typedef enum {
   SCR_MESSAGE_ERROR,
   /* A deeply frozen plain-data graph shared by pointer (see publication). */
   SCR_MESSAGE_PUBLISHED,
+  /* A typed value published with @scriptc/threads (immortal), delivered as
+   * a fresh typed-ref capsule over the same pointer. */
+  SCR_MESSAGE_TYPED_REF,
 } ScrMessageKind;
 
 typedef struct {
@@ -40,6 +43,18 @@ typedef struct {
   ScrBytesElem element;
   bool data_view;
   ScrDyn *published; /* SCR_MESSAGE_PUBLISHED: immortal root, owns nothing */
+  /* SCR_MESSAGE_TYPED_REF: the capsule's process-wide adapters and type key
+   * (vtables, adapters and type keys are shared by every thread). */
+  struct {
+    void *ptr;
+    void *(*retain)(void *);
+    void (*release)(void *);
+    const char *type_key;
+    size_t type_key_len;
+    ScrDyn *(*materialize)(void *);
+    void (*commit)(void *, const ScrDyn *);
+    bool traced;
+  } typed;
 } ScrMessageNode;
 
 struct ScrMessage {
@@ -200,6 +215,33 @@ static size_t scr_message_value(ScrMessageEncoder *encoder, const ScrDyn *input)
   size_t id = scr_message_node(encoder);
   scr_message_identify(encoder, identity, domain, id);
   encoder->visits[id].input = scr_dyn_retain((ScrDyn *)input);
+  /* Published values (immortal) travel by pointer: a typed value as a
+   * capsule over the same object, a dyn graph as itself. */
+  if (input->kind == SCR_DYN_TYPED_REF && input->v.typed_ref.ptr &&
+      *(const size_t *)input->v.typed_ref.ptr == SIZE_MAX) {
+    encoder->visits[id].view = (ScrDyn *)input;
+    ScrMessageNode *node = &encoder->message->nodes[id];
+    node->kind = SCR_MESSAGE_TYPED_REF;
+    node->typed.ptr = input->v.typed_ref.ptr;
+    node->typed.retain = input->v.typed_ref.retain;
+    node->typed.release = input->v.typed_ref.release;
+    node->typed.type_key = input->v.typed_ref.type_key;
+    node->typed.type_key_len = input->v.typed_ref.type_key_len;
+    node->typed.materialize = input->v.typed_ref.materialize;
+    node->typed.commit = input->v.typed_ref.commit;
+    node->typed.traced = input->v.typed_ref.traced;
+    if (getenv("SCRIPTC_PUBLISH_TRACE"))
+      fprintf(stderr, "scriptc: published %.*s shared by reference\n", (int)node->typed.type_key_len,
+              node->typed.type_key);
+    return id;
+  }
+  if ((input->kind == SCR_DYN_OBJ || input->kind == SCR_DYN_ARR) && input->rc == SIZE_MAX) {
+    encoder->visits[id].view = (ScrDyn *)input;
+    ScrMessageNode *node = &encoder->message->nodes[id];
+    node->kind = SCR_MESSAGE_PUBLISHED;
+    node->published = (ScrDyn *)input;
+    return id;
+  }
   ScrDyn *value = input->kind == SCR_DYN_TYPED_REF
       ? scr_dyn_typed_ref_materialize(input) : (ScrDyn *)input;
   encoder->visits[id].view = value;
@@ -548,7 +590,12 @@ ScrDyn *scr_message_decode(const ScrMessage *message) {
       values[i] = scr_array_buffer_from_bytes(storage[node->storage]);
       break;
     case SCR_MESSAGE_STORAGE: continue;
-    case SCR_MESSAGE_PUBLISHED: continue;
+    case SCR_MESSAGE_PUBLISHED: values[i] = scr_dyn_retain(node->published); break;
+    case SCR_MESSAGE_TYPED_REF:
+      values[i] = (node->typed.traced ? scr_dyn_new_typed_ref_traced : scr_dyn_new_typed_ref)(
+          node->typed.ptr, node->typed.retain, node->typed.release, node->typed.type_key,
+          node->typed.type_key_len, node->typed.materialize, node->typed.commit);
+      break;
     }
     if (!values[i] || scr_exc_pending()) goto done;
   }

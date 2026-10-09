@@ -1660,8 +1660,11 @@ export type IrStmt =
   | { kind: "arraySet"; arr: IrExpr; index: IrExpr; value: IrExpr; loc: SrcLoc }
   /** Writable `a.length = n`: growth creates holes and truncation releases
    * removed reference elements. Invalid array lengths raise a catchable
-   * RangeError from the runtime. */
-  | { kind: "arraySetLength"; arr: IrExpr; length: IrExpr; loc: SrcLoc }
+   * RangeError from the runtime. `pop` marks the stores that implement
+   * `pop()`: a frozen (published) array fails with pop's TypeError rather
+   * than the length assignment's, and pop's `length = 0` store on an empty
+   * array is dropped unless the array may be frozen. */
+  | { kind: "arraySetLength"; arr: IrExpr; length: IrExpr; loc: SrcLoc; pop?: boolean }
   /** Write an explicit present `undefined` state without shrinking length. */
   | { kind: "arraySetUndefined"; arr: IrExpr; index: IrExpr; loc: SrcLoc }
   /** Delete an indexed/property slot without changing Array.length. */
@@ -3306,7 +3309,10 @@ export type IrExpr =
         | "promise.reject"
         | "promise.resolve"
         | "module.await"
-        | "module.tdzCheck";
+        | "module.tdzCheck"
+        /* @scriptc/threads publish(value): one argument, the result is the
+         * same value (and type); its graph becomes immortal and immutable. */
+        | "threads.publish";
       args: IrExpr[];
       type: IrType;
       loc: SrcLoc;

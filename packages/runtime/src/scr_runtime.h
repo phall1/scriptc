@@ -694,6 +694,43 @@ void scr_cyc_context_cleanup(void);
  * a bounded full pass so sparse roots cannot float forever. */
 void scr_cyc_collect_scheduled(void);
 
+/* Publication (@scriptc/threads publish; scr_cycle.c): makes everything a
+ * root reaches immortal and immutable. Compiler-emitted per-type walkers
+ * mark their object (scr_pub_mark: false when already immortal) and push
+ * their references; containers, strings and dyn subgraphs have runtime
+ * walkers. scr_publish throws a TypeError, leaving the graph unchanged,
+ * when it reaches an unpublishable dyn value. */
+typedef struct ScrPub ScrPub;
+typedef void (*ScrPubFn)(void *v, ScrPub *ctx);
+/* What a marked object is, for the RC audit's live counts (scr_pub_mark). */
+enum {
+  SCR_PUB_KIND_LEAF = 0, /* not counted (bigints) */
+  SCR_PUB_KIND_STRING = 1,
+  SCR_PUB_KIND_ARRAY = 2,
+  SCR_PUB_KIND_MAP = 3,
+  SCR_PUB_KIND_OBJECT = 4,
+  SCR_PUB_KIND_UNION = 5,
+  SCR_PUB_KIND_DYN = 6,
+};
+void scr_publish(void *root, ScrPubFn fn);
+void scr_pub_push(ScrPub *ctx, void *v, ScrPubFn fn);
+bool scr_pub_mark(ScrPub *ctx, void *obj, bool cyc, int kind);
+void scr_pub_refuse(ScrPub *ctx, const char *message);
+void scr_pub_refuse_at(ScrPub *ctx, const char *message, const char *detail);
+void scr_pub_str_fn(void *v, ScrPub *ctx);
+void scr_pub_leaf_fn(void *v, ScrPub *ctx);
+void scr_pub_dyn_fn(void *v, ScrPub *ctx);
+void scr_pub_arr(void *v, ScrPub *ctx, ScrPubFn elem);
+void scr_pub_map(void *v, ScrPub *ctx, ScrPubFn key, ScrPubFn val);
+void scr_publish_refuse(const char *message);
+/* Writes into published objects (emitted guards): Node's frozen-object
+ * TypeErrors. scr_throw_published_array answers false (and throws nothing)
+ * when Node's operation would not write the array. */
+struct ScrArr;
+void scr_throw_published_field(const char *prop, const char *owner);
+bool scr_throw_published_array(int op, const struct ScrArr *a, double index, double n);
+void scr_throw_published_collection(bool set);
+
 /* ── class hierarchies (single inheritance) ───────────────────────────
  * Classes in an `extends` hierarchy share a two-word object prefix: the
  * usual `size_t rc`, then a pointer to the class's static vtable (emitted
@@ -2049,6 +2086,9 @@ long scr_map_live_count(void);
  * stops counting them (scr_message.c). */
 void scr_str_live_forget(void);
 void scr_dyn_live_forget(void);
+void scr_arr_live_forget(void);
+void scr_map_live_forget(void);
+void scr_union_live_forget(void);
 #endif
 
 /* ── closures ───────────────────────────────────────────────────────

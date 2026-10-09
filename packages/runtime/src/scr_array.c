@@ -25,6 +25,8 @@
 #ifdef SCR_RC_AUDIT
 static SCR_TL long scr_live_arrays = 0;
 long scr_arr_live_count(void) { return scr_live_arrays; }
+/* A published array is immortal: it is never freed, so it leaves the count. */
+void scr_arr_live_forget(void) { scr_live_arrays--; }
 #endif
 
 static void scr_arr_oom(void) {

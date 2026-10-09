@@ -11,6 +11,9 @@ importers:
 
   .:
     devDependencies:
+      '@scriptc/threads':
+        specifier: workspace:*
+        version: link:packages/threads
       '@types/node':
         specifier: ^24.0.0
         version: 24.13.3
@@ -195,6 +198,8 @@ importers:
   packages/runtime-wasm32-wasi: {}
 
   packages/runtime-win32-x64-msvc: {}
+
+  packages/threads: {}
 
   tests/fixtures/effect4:
     dependencies:
