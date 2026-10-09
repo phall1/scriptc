@@ -15212,6 +15212,18 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/cycle-growth-yield.ts": {
+   "order": [
+    "<repo>/tests/corpus/cycle-growth-yield.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/indexed-element-field-reads.ts": {
+   "order": [
+    "<repo>/tests/corpus/indexed-element-field-reads.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/const-enum-module-cycle/main.ts": {
    "order": [
     "<repo>/tests/corpus/const-enum-module-cycle/flags.ts",
