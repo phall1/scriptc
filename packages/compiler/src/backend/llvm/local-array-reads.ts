@@ -3,6 +3,7 @@ import {
   typeEquals,
   type IrExpr,
   type IrFunction,
+  type IrLocal,
   type IrStmt,
   type IrType,
   type IrUnionDef,
@@ -176,7 +177,7 @@ function stableArrayParameters(fn: IrFunction, lifetimes: CallLifetimes): Set<st
 function stableArrayOperand(
   array: IrExpr,
   stableParams: ReadonlySet<string>,
-  locals: ReadonlyMap<string, { boxed?: boolean }>,
+  locals: ReadonlyMap<string, IrLocal>,
 ): boolean {
   switch (array.kind) {
     case "varRef":
