@@ -153,21 +153,37 @@ describe(`console/process output visibility${sanitize ? " (sanitized)" : ""}`, (
     expect(nativeRes.signal).toBe(nodeRes.signal);
   });
 
-  /* stdout and stderr share one pipe or one regular file (2>&1), so the
-   * bytes record the exact submission order across both streams. */
+  /* A bounded probe cannot fill the shared pipe: Node submits these writes
+   * immediately. With backpressure, its independent asynchronous stdout and
+   * stderr queues can interleave larger chunks, so compare large pipe output
+   * per stream and retain the shared-file ordering check below. */
   const posix = process.platform !== "win32";
   test.skipIf(!posix)("stdout/stderr merged into one pipe keep Node's order", async () => {
     const probe = await build("merged-order");
     const merged = (cmd: string, args: string[]) =>
       runToClose("sh", ["-c", 'exec "$@" 2>&1', "sh", cmd, ...args]);
     const [nodeRes, nativeRes] = await Promise.all([
-      merged("node", [probe.sourceFile]),
-      merged(probe.binary, []),
+      merged("node", [probe.sourceFile, "--small"]),
+      merged(probe.binary, ["--small"]),
     ]);
     expect(nodeRes.code).toBe(0);
     expect(nativeRes.code).toBe(0);
-    expect(nativeRes.stdout.length).toBe(nodeRes.stdout.length);
-    expect(nativeRes.stdout.equals(nodeRes.stdout)).toBe(true);
+    expect(nodeRes.stdout.length).toBeLessThan(4096);
+    expect(nativeRes.stdout).toEqual(nodeRes.stdout);
+  });
+
+  test("large stdout/stderr pipe writes match Node per stream", async () => {
+    const probe = await build("merged-order");
+    const [nodeRes, nativeRes] = await Promise.all([
+      runToClose("node", [probe.sourceFile]),
+      runToClose(probe.binary, []),
+    ]);
+    expect(nodeRes.code).toBe(0);
+    expect(nativeRes.code).toBe(0);
+    expect(nodeRes.stdout.length).toBeGreaterThan(65536);
+    expect(nodeRes.stderr.length).toBeGreaterThan(65536);
+    expect(nativeRes.stdout).toEqual(nodeRes.stdout);
+    expect(nativeRes.stderr).toEqual(nodeRes.stderr);
   });
 
   test.skipIf(!posix)("stdout/stderr merged into one file keep Node's order", async () => {

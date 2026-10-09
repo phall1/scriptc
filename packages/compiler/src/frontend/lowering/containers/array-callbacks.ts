@@ -416,8 +416,12 @@ function withFastCallback(fn: IrFunction, fastT: CallbackType | null, elem: IrTy
       return null;
     const at = e.args.findIndex(isValueRead);
     if (at < 0) return null;
-    const read = e.args[at] as IrExpr & { kind: "ternary" };
-    const state = (read.cond as IrExpr & { kind: "bin" }).left as IrExpr & { kind: "arrayState" };
+    const read = e.args[at]!;
+    if (read.kind !== "ternary") return null;
+    const condition = read.cond;
+    if (condition.kind !== "bin") return null;
+    const state = condition.left;
+    if (state.kind !== "arrayState") return null;
     const fastArgs = e.args.slice();
     fastArgs[at] = {
       kind: "arrayGet",
