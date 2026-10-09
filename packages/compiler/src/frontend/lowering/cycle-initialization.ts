@@ -6,7 +6,12 @@
  * temporal-dead-zone ReferenceError, with the same message. */
 import * as ts from "../ts7/adapter.js";
 import type { Lowerer } from "./lowerer.js";
-import { cycleEarlyBindings, locOf } from "../program.js";
+import {
+  cycleEarlyBindings,
+  locOf,
+  moduleEarlyBindings,
+  type CycleEarlyBinding,
+} from "../program.js";
 import { unsupportedDiag } from "../../diagnostics/diagnostic.js";
 import {
   BOOL,
@@ -20,7 +25,7 @@ import {
   type IrType,
   type SrcLoc,
 } from "../../ir/ir.js";
-import { everyStmt, transformStmtList } from "../../ir/traverse.js";
+import { everyStmt, mapExprChildren, mapStmtChildren } from "../../ir/traverse.js";
 
 /** One flagged binding: its storage, its flag, and the module bodies whose
  * top-level code only runs after the declaration (no check needed). */
@@ -31,6 +36,10 @@ export interface CycleInitFlag {
   /** The declaring module. */
   module: ts.SourceFile;
   settled: ReadonlySet<ts.SourceFile>;
+  /** True for a binding of an import cycle. A binding flagged only for its
+   * own module's early calls is checked opportunistically: whatever cannot
+   * be checked keeps the unchecked behavior instead of refusing. */
+  cycle: boolean;
 }
 
 /** Registers the initialization flags after global collection. Bindings
@@ -72,24 +81,43 @@ export function markCycleEarlyBindings(lowerer: Lowerer): void {
       );
       continue;
     }
-    if (lowerer.cycleInitFlags.has(global.id)) continue;
-    const flagId = `${global.id}%initialized`;
-    lowerer.globalsList.push({ id: flagId, name: "%initialized", type: BOOL, mutable: true });
-    global.initFlag = flagId;
-    const flag: CycleInitFlag = {
-      global,
-      flagId,
-      name: binding.name.text,
-      module: binding.module,
-      settled: binding.settled,
-    };
-    lowerer.cycleInitFlags.set(global.id, flag);
-    const stmt = declaringStatement(binding.name);
-    if (stmt !== null) {
-      const list = lowerer.cycleInitDeclarations.get(stmt) ?? [];
-      list.push(flag);
-      lowerer.cycleInitDeclarations.set(stmt, list);
+    registerInitFlag(lowerer, binding, global, true);
+  }
+  // A module's own function declarations are callable before its later
+  // bindings are declared. Only bindings that such early-running code can
+  // read get a flag; the others keep their unchecked storage.
+  for (const binding of moduleEarlyBindings(lowerer.program, lowerer.moduleOrder)) {
+    const global = lowerer.globalsBySymbol.get(binding.symbol);
+    if (global !== undefined && binding.folded === undefined) {
+      registerInitFlag(lowerer, binding, global, false);
     }
+  }
+}
+
+function registerInitFlag(
+  lowerer: Lowerer,
+  binding: CycleEarlyBinding,
+  global: IrGlobal,
+  cycle: boolean,
+): void {
+  if (lowerer.cycleInitFlags.has(global.id)) return;
+  const flagId = `${global.id}%initialized`;
+  lowerer.globalsList.push({ id: flagId, name: "%initialized", type: BOOL, mutable: true });
+  global.initFlag = flagId;
+  const flag: CycleInitFlag = {
+    global,
+    flagId,
+    name: binding.name.text,
+    module: binding.module,
+    settled: binding.settled,
+    cycle,
+  };
+  lowerer.cycleInitFlags.set(global.id, flag);
+  const stmt = declaringStatement(binding.name);
+  if (stmt !== null) {
+    const list = lowerer.cycleInitDeclarations.get(stmt) ?? [];
+    list.push(flag);
+    lowerer.cycleInitDeclarations.set(stmt, list);
   }
 }
 
@@ -155,7 +183,10 @@ export function withCycleInitFlags(
             return true;
           },
         });
-        if (nested && !lowerer.remainder) {
+        if (nested && !flag.cycle) {
+          // Unmarkable store of a same-module binding: keep it unchecked.
+          lowerer.cycleInitFlags.delete(id);
+        } else if (nested && !lowerer.remainder) {
           lowerer.pushDiag(
             unsupportedDiag(
               "SC1016",
@@ -204,7 +235,6 @@ function rewriteFunction(
     }
   }
   if (active.size === 0) return;
-  const produced = new WeakSet<object>();
   let temps = 0;
   const check = (flag: CycleInitFlag, loc: SrcLoc): IrStmt => {
     const expr: IrExpr = {
@@ -224,9 +254,11 @@ function rewriteFunction(
     fn.locals.push({ id, name: "%cycleInit", type, mutable: false });
     return id;
   };
-  const transform = {
+  // Post-order: children are rewritten before their parent is wrapped, so
+  // a wrapper is never visited again. (No identity set: compiled code
+  // cannot key weak collections by IR records.)
+  const wrap = {
     expr: (e: IrExpr): IrExpr => {
-      if (produced.has(e)) return e;
       if (e.kind !== "varRef" && e.kind !== "incDec" && e.kind !== "assignExpr") return e;
       const flag = active.get(e.localId);
       if (flag === undefined) return e;
@@ -234,7 +266,6 @@ function rewriteFunction(
         const t = temp(e.value.type);
         const value: IrExpr = { kind: "varRef", localId: t, type: e.value.type, loc: e.loc };
         const write: IrExpr = { ...e, value };
-        produced.add(write);
         return {
           kind: "seqExpr",
           stmts: [{ kind: "varDecl", localId: t, init: e.value, loc: e.loc }, check(flag, e.loc)],
@@ -243,11 +274,10 @@ function rewriteFunction(
           loc: e.loc,
         };
       }
-      produced.add(e);
       return { kind: "seqExpr", stmts: [check(flag, e.loc)], result: e, type: e.type, loc: e.loc };
     },
     stmt: (s: IrStmt): IrStmt => {
-      if (produced.has(s) || s.kind !== "assign" || s.initializes) return s;
+      if (s.kind !== "assign" || s.initializes) return s;
       const flag = active.get(s.localId);
       if (flag === undefined) return s;
       const t = temp(s.value.type);
@@ -257,7 +287,6 @@ function rewriteFunction(
         value: { kind: "varRef", localId: t, type: s.value.type, loc: s.loc },
         loc: s.loc,
       };
-      produced.add(write);
       return {
         kind: "block",
         body: [
@@ -269,15 +298,20 @@ function rewriteFunction(
       };
     },
   };
+  const rewriteExpr = (e: IrExpr): IrExpr =>
+    wrap.expr(mapExprChildren(e, rewriteExpr, rewriteStmt));
+  const rewriteStmt = (s: IrStmt): IrStmt =>
+    wrap.stmt(mapStmtChildren(s, rewriteExpr, rewriteStmt));
+  const rewriteList = (list: IrStmt[]): IrStmt[] => list.map(rewriteStmt);
   if (initOf === undefined) {
-    fn.body = transformStmtList(fn.body, transform);
+    fn.body = rewriteList(fn.body);
     return;
   }
   // A module %init: its own bindings stop needing checks once the
   // top-level statement setting their flag completed.
   fn.body = fn.body.map((s) => {
     if (active.size === 0) return s;
-    const out = transformStmtList([s], transform)[0]!;
+    const out = rewriteStmt(s);
     for (const [id, flag] of [...active]) {
       if (flag.module !== initOf) continue;
       const sets = !everyStmt(out, {
@@ -292,17 +326,25 @@ function rewriteFunction(
 
 /** Class layouts that read module storage directly (an evaluated heritage
  * value, a symbol-keyed field) bypass the checks: refuse when that storage
- * is a flagged binding. */
+ * is a flagged import-cycle binding, and leave a same-module binding
+ * unchecked. */
 export function refuseUncheckedCycleReads(
   lowerer: Lowerer,
   classes: readonly { baseValueGlobal?: string; symbolFields?: { globalId: string }[] }[],
 ): void {
-  if (lowerer.cycleInitFlags.size === 0 || lowerer.remainder) return;
+  if (lowerer.cycleInitFlags.size === 0) return;
   for (const cls of classes) {
     const ids = [cls.baseValueGlobal, ...(cls.symbolFields ?? []).map((f) => f.globalId)];
     for (const id of ids) {
       const flag = id === undefined ? undefined : lowerer.cycleInitFlags.get(id);
       if (flag === undefined) continue;
+      if (!flag.cycle) {
+        // A same-module binding whose storage a class layout reads keeps
+        // the unchecked behavior: no check, and no refusal.
+        lowerer.cycleInitFlags.delete(id!);
+        continue;
+      }
+      if (lowerer.remainder) continue;
       const loc = flag.global.source?.loc ?? { file: lowerer.entry.fileName, start: 0, end: 0 };
       lowerer.pushDiag(
         unsupportedDiag(
