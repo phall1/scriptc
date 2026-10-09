@@ -82,3 +82,5 @@ for (let i = 0; i < 20000; i++) {
   if (s !== undefined) total += s.length;
 }
 console.log("total", total);
+const labels: Record<string, string | null> = { a: "A", n: null };
+for (const key of ["a", "n"]) console.log("index", key, labels[key] ?? "null", labels[key] === null);

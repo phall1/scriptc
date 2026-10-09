@@ -383,14 +383,26 @@ export function keyedRecordReadInto(
       B.startBlock(ln);
     } else {
       host.declare(`declare ptr @scr_map_get_str_ref(ptr, ptr)`);
-      const raw = B.tmp();
-      const isnull = B.tmp();
-      B.line(`${raw} = call ptr @scr_map_get_str_ref(ptr ${ovf}, ptr ${keyName})`);
-      B.line(`${isnull} = icmp eq ptr ${raw}, null`);
       const lh = B.newLabel("rkg.h");
       const ln = B.newLabel("rkg.n");
-      B.condBr(isnull, ln, lh);
-      B.startBlock(lh);
+      let raw: string;
+      if (iv.kind === "union" && host.nullableUnions.has(iv.unionId)) {
+        // NULL is a stored unit arm of a nullable value: presence decides.
+        host.declare(`declare zeroext i1 @scr_map_has_str(ptr, ptr)`);
+        const has = B.tmp();
+        B.line(`${has} = call zeroext i1 @scr_map_has_str(ptr ${ovf}, ptr ${keyName})`);
+        B.condBr(has, lh, ln);
+        B.startBlock(lh);
+        raw = B.tmp();
+        B.line(`${raw} = call ptr @scr_map_get_str_ref(ptr ${ovf}, ptr ${keyName})`);
+      } else {
+        raw = B.tmp();
+        const isnull = B.tmp();
+        B.line(`${raw} = call ptr @scr_map_get_str_ref(ptr ${ovf}, ptr ${keyName})`);
+        B.line(`${isnull} = icmp eq ptr ${raw}, null`);
+        B.condBr(isnull, ln, lh);
+        B.startBlock(lh);
+      }
       B.line(`store ${ty} ${surface(iv, raw, true)}, ptr ${slot}`);
       B.br(join);
       B.startBlock(ln);

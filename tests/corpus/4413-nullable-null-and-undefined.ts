@@ -71,3 +71,9 @@ async function f(v: number): Promise<Item | null | undefined> {
 }
 const ps: Promise<Item | null | undefined>[] = [f(0), f(1), f(2)];
 Promise.all(ps).then((r) => console.log("async", r.map(kind).join(",")));
+// Index-signature reads of a `C | null` value: a stored null is NULL in the
+// overflow map, so presence (not the pointer) decides a missing key.
+const byKey: Record<string, Item | null> = { a, n: null };
+for (const key of ["a", "n"]) console.log("index", key, kind(byKey[key]));
+const wide: Record<string, Item | null | undefined> = { n: null, u: undefined };
+for (const key of ["n", "u", "zz"]) console.log("index3", key, kind(wide[key]), key in wide);
