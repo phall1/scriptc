@@ -2736,7 +2736,28 @@ double scr_bytes_write_str(ScrBytes *b, const ScrStr *s, const ScrStr *enc,
   bool utf16 = scr_enc_is(enc, "utf16le");
   if (utf16 || scr_enc_is(enc, "latin1") || scr_enc_is(enc, "ascii")) {
     size_t i = 0, written = 0, width = utf16 ? 2 : 1;
+    const uint64_t high = UINT64_C(0x8080808080808080);
     while (i < s->len && budget - written >= width) {
+      /* ASCII runs encode byte-for-unit: widen (or copy) eight bytes per
+       * step while the budget holds them all, else one code point below. */
+      if (s->len - i >= 8 && budget - written >= 8 * width) {
+        uint64_t w;
+        memcpy(&w, s->data + i, 8);
+        if (!(w & high)) {
+          uint8_t *d = b->data + o + written;
+          if (utf16) {
+            for (int k = 0; k < 8; k++) {
+              d[2 * k] = (uint8_t)s->data[i + k];
+              d[2 * k + 1] = 0;
+            }
+          } else {
+            memcpy(d, s->data + i, 8);
+          }
+          i += 8;
+          written += 8 * width;
+          continue;
+        }
+      }
       uint32_t cp = scr_bytes_next_cp((const uint8_t *)s->data, &i);
       uint32_t first = cp, second = 0;
       if (cp > 0xffff) {

@@ -15460,6 +15460,24 @@
     "<repo>/tests/corpus/4453-int32-closed-locals.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/4476-string-ascii-header-fact.ts": {
+   "order": [
+    "<repo>/tests/corpus/4476-string-ascii-header-fact.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4477-buffer-write-ascii-runs.ts": {
+   "order": [
+    "<repo>/tests/corpus/4477-buffer-write-ascii-runs.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4478-string-large-index-reads.ts": {
+   "order": [
+    "<repo>/tests/corpus/4478-string-large-index-reads.ts"
+   ],
+   "diags": []
   }
  }
 }

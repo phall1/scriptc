@@ -80,8 +80,8 @@ test.each([32, 64] as const)(
     const zero = /^define internal [^\n]*@sc_[bf]+_length_0\([^]*?^}/m.exec(llvm)![0];
     const one = /^define internal [^\n]*@sc_[bf]+_length_1\([^]*?^}/m.exec(llvm)![0];
     expect(zero).toContain(`getelementptr inbounds i${bits}`);
-    expect(zero).not.toContain("@scr_str_utf16_len");
-    expect(one).toContain("@scr_str_utf16_len");
+    expect(zero).not.toContain("_str_utf16_len");
+    expect(one).toContain("@sc_str_utf16_len");
   },
 );
 

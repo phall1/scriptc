@@ -649,40 +649,113 @@ typedef struct ScrVt {
  * owned heap strings are ever mutated, and every such path clears the hash
  * (scr_str_hash_forget); immortal strings are never written, so they always
  * hash on demand.
+ *
+ * Bit 31 of the capacity word (on every target) is the proven-ASCII fact:
+ * when set, every byte is below 0x80, so UTF-16 indices equal byte offsets
+ * and .length == len. A clear bit means "not known", never "non-ASCII":
+ * constructors set it only where it is cheap, and string reads that prove
+ * ASCII set it later. Capacity therefore stops at 2^31 - 1 bytes, which
+ * still holds every string V8 can represent (2^29 - 24 UTF-16 units, at
+ * most three UTF-8 bytes each). Generated code reads the bit for inline
+ * charCodeAt/length (llvm/strings.ts); emitted literals and runtime
+ * statics set it in their capacity word. scr_str_hash_forget clears it
+ * with the hash: every in-place mutation already forgets cached facts.
  */
 #if SIZE_MAX > UINT32_MAX && defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 #define SCR_STR_HASH_CACHE 1
-#define SCR_STR_MAX_CAP ((size_t)UINT32_MAX)
 #else
 #define SCR_STR_HASH_CACHE 0
-#define SCR_STR_MAX_CAP (SIZE_MAX - sizeof(size_t) * 3 - 1)
 #endif
+#define SCR_STR_MAX_CAP ((size_t)0x7fffffff)
 typedef struct ScrStr {
   size_t rc;
   size_t len;
 #if SCR_STR_HASH_CACHE
-  uint32_t cap;
+  uint32_t cap : 31;
+  uint32_t ascii : 1;
   uint32_t hash;
 #else
-  size_t cap;
+  size_t cap : 31;
+  size_t ascii : 1;
 #endif
   char data[];
 } ScrStr;
 
-/* The capacity word of a static string: cap == len, plus the precomputed
- * 32-bit key hash where the header caches one (0 leaves it to be computed). */
+/* The capacity word of a static string: cap == len, the proven-ASCII bit,
+ * plus the precomputed 32-bit key hash where the header caches one (0
+ * leaves it to be computed). */
+#define SCR_STR_ASCII_BIT ((size_t)1 << 31)
 #if SCR_STR_HASH_CACHE
-#define SCR_STR_CAP_WORD(len, hash32) ((size_t)(len) | ((size_t)(uint32_t)(hash32) << 32))
+#define SCR_STR_CAP_WORD(len, hash32, ascii)                                  \
+  ((size_t)(len) | ((ascii) ? SCR_STR_ASCII_BIT : 0) |                        \
+   ((size_t)(uint32_t)(hash32) << 32))
 #else
-#define SCR_STR_CAP_WORD(len, hash32) ((size_t)(len))
+#define SCR_STR_CAP_WORD(len, hash32, ascii) ((size_t)(len) | ((ascii) ? SCR_STR_ASCII_BIT : 0))
 #endif
 
+/* Forget every cached content fact (key hash, proven ASCII) before a
+ * uniquely owned string's bytes change. */
 static inline void scr_str_hash_forget(ScrStr *s) {
 #if SCR_STR_HASH_CACHE
   s->hash = 0;
-#else
-  (void)s;
 #endif
+  s->ascii = 0;
+}
+
+/* True only when every byte is proven below 0x80 (see above). */
+static inline bool scr_str_known_ascii(const ScrStr *s) { return s->ascii; }
+
+/* Record a proven-ASCII fact. Immortal strings may live in read-only
+ * memory and are shared across threads, so they are never written. */
+static inline void scr_str_note_ascii(ScrStr *s) {
+  if (s->rc != SIZE_MAX) s->ascii = 1;
+}
+
+/* memcpy for the short, variable-length copies of string construction
+ * (identifiers, keys, number text): fixed-size overlapping moves instead of
+ * a libc call. Longer spans keep the platform's bulk copy. */
+static inline void scr_copy_bytes(char *dst, const char *src, size_t n) {
+  if (n <= 16) {
+    if (n >= 8) {
+      uint64_t a, b;
+      memcpy(&a, src, 8);
+      memcpy(&b, src + n - 8, 8);
+      memcpy(dst, &a, 8);
+      memcpy(dst + n - 8, &b, 8);
+    } else if (n >= 4) {
+      uint32_t a, b;
+      memcpy(&a, src, 4);
+      memcpy(&b, src + n - 4, 4);
+      memcpy(dst, &a, 4);
+      memcpy(dst + n - 4, &b, 4);
+    } else if (n) {
+      dst[0] = src[0];
+      dst[n / 2] = src[n / 2];
+      dst[n - 1] = src[n - 1];
+    }
+    return;
+  }
+  memcpy(dst, src, n);
+}
+
+/* Whether a byte span is all ASCII: 32 bytes per step, stopping at the
+ * first chunk with a high bit. */
+static inline bool scr_bytes_all_ascii(const char *p, size_t n) {
+  const uint64_t high = UINT64_C(0x8080808080808080);
+  size_t i = 0;
+  for (; n - i >= 32; i += 32) {
+    uint64_t w[4];
+    memcpy(w, p + i, sizeof w);
+    if ((w[0] | w[1] | w[2] | w[3]) & high) return false;
+  }
+  uint64_t acc = 0;
+  for (; n - i >= 8; i += 8) {
+    uint64_t w;
+    memcpy(&w, p + i, 8);
+    acc |= w;
+  }
+  for (; i < n; i++) acc |= (unsigned char)p[i];
+  return (acc & high) == 0;
 }
 
 ScrStr *scr_str_new(const char *bytes, size_t len); /* returns +1 */
