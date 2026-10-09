@@ -15382,6 +15382,24 @@
     "<repo>/tests/corpus/4412-nullable-record-values.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/4413-nullable-null-and-undefined.ts": {
+   "order": [
+    "<repo>/tests/corpus/4413-nullable-null-and-undefined.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4414-nullable-string-values.ts": {
+   "order": [
+    "<repo>/tests/corpus/4414-nullable-string-values.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4415-nullable-container-values.ts": {
+   "order": [
+    "<repo>/tests/corpus/4415-nullable-container-values.ts"
+   ],
+   "diags": []
   }
  }
 }
