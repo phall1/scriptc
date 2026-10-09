@@ -825,6 +825,7 @@ export class LlEmitter {
     this.referenceEffects = new ReferenceEffects(
       this.fnByName,
       (call) => this.optionalArrayReads.get(call) !== null,
+      mod.classes ?? [],
     );
     this.callLifetimes = analyzeCallLifetimes(
       this.fnByName,
@@ -5117,6 +5118,12 @@ export class LlEmitter {
       const guarded = guardedValue(value);
       return guarded !== null && this.canBorrowCallArgument(guarded);
     }
+    // A nullable-union wrap reinterprets its payload pointer; an immortal
+    // unit constant needs no owner at all.
+    const wrap = this.borrowableNullableWrap(value);
+    if (wrap === "unit") return true;
+    if (wrap === "ref" && value.kind === "unionWrap")
+      return this.canBorrowCallArgument(value.value);
     if (value.kind !== "varRef") return false;
     const binding = this.binding(value.localId);
     return (
@@ -6791,6 +6798,21 @@ export class LlEmitter {
       this.B.line(`${value} = load ptr, ptr ${binding.slot}`);
       return { name: value, type: e.type };
     }
+    if (e.kind === "arrayGet" && this.canBorrowReceiver(e)) {
+      // The array keeps the element alive until the consumer; a missing
+      // element still traps exactly like the owned read.
+      const slot = this.B.slot();
+      this.B.entryAllocas.push(`${slot} = alloca ptr`);
+      emitBorrowedArrayRead(this, e, slot);
+      const value = this.B.tmp();
+      this.B.line(`${value} = load ptr, ptr ${slot}`);
+      return { name: value, type: e.type };
+    }
+    const wrap = this.borrowableNullableWrap(e);
+    if (wrap === "unit" && e.kind === "unionWrap")
+      return { name: this.unitInstanceRef(e.unionId, e.tag), type: e.type };
+    if (wrap === "ref" && e.kind === "unionWrap")
+      return { name: this.emitReadReceiver(e.value).name, type: e.type };
     const read = matchMapRead(e, this.boxedUnionsById);
     if (read) {
       const result = emitStackMapRead(this, read);
@@ -7055,9 +7077,34 @@ export class LlEmitter {
       // typed dummy is null and owns no receiver.
       case "libCall":
         return e.fn === "error.nodeThrow";
+      case "unionWrap": {
+        const wrap = this.borrowableNullableWrap(e);
+        return wrap === "unit" || (wrap === "ref" && this.canBorrowReceiver(e.value));
+      }
+      // A required element read: the (borrowed) array owns the element
+      // while an edge-preserving index computes.
+      case "arrayGet":
+        return (
+          e.arr.type.kind === "array" &&
+          isRefCounted(e.arr.type.elem) &&
+          this.canBorrowReceiver(e.arr) &&
+          this.referenceEffects.preserves(e.index)
+        );
       default:
         return false;
     }
+  }
+
+  /** A wrap into a nullable-pointer union is the payload pointer itself
+   * (the reference arm) or an immortal constant (a unit arm), so it can
+   * borrow exactly when its payload can. Void payloads run for effects and
+   * keep the ordinary path; tagged unions still construct a box. */
+  borrowableNullableWrap(e: IrExpr): "unit" | "ref" | null {
+    if (e.kind !== "unionWrap") return null;
+    const nullable = this.nullableUnions.get(e.unionId);
+    if (!nullable) return null;
+    if (isUnitType(e.value.type)) return e.value.kind === "unitLit" ? "unit" : null;
+    return e.tag === nullable.refTag && isRefCounted(e.value.type) ? "ref" : null;
   }
 
   materializeSplitLocal(localId: string): void {

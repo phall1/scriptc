@@ -15592,6 +15592,18 @@
     "<repo>/tests/corpus/4471-unassigned-field-reads.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/4541-nullable-wrap-borrows.ts": {
+   "order": [
+    "<repo>/tests/corpus/4541-nullable-wrap-borrows.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4542-preserving-call-borrows.ts": {
+   "order": [
+    "<repo>/tests/corpus/4542-preserving-call-borrows.ts"
+   ],
+   "diags": []
   }
  }
 }

@@ -5,11 +5,12 @@ import {
   F64,
   STRING,
   VOID,
+  type IrClassDef,
   type IrExpr,
   type IrFunction,
   type IrStmt,
 } from "../../ir/ir.js";
-import { ReferenceEffects, preservesRegexInputs } from "./reference-effects.js";
+import { ReferenceEffects, VirtualTargets, preservesRegexInputs } from "./reference-effects.js";
 
 const loc = { file: "effects.ts", start: 0, end: 0 };
 const number: IrExpr = { kind: "numLit", value: 1, type: F64, loc };
@@ -194,4 +195,43 @@ test("nullish fallbacks and Math calls preserve references; their operands still
   const summary = effects([fn("read")]);
   expect(summary.preserves(fallback(write))).toBe(false);
   expect(summary.preserves(fallback(call("read")))).toBe(true);
+});
+
+test("virtual calls preserve references only when every reachable override does", () => {
+  const cls = (name: string, methods: string[], base?: string, extra?: Partial<IrClassDef>) =>
+    ({ name, base, fields: [], methods, loc, ...extra }) as IrClassDef;
+  const classes = [
+    cls("A", ["run", "size"], undefined, { abstractMethods: ["size"] }),
+    cls("B", ["size"], "A"),
+    cls("C", ["run"], "B"),
+    cls("D", [], "A"),
+  ];
+  const targets = new VirtualTargets(classes);
+  expect(targets.targets("A", "run")).toEqual(["%A.run", "%C.run"]);
+  // B inherits A.run; only C overrides below it. Abstract slots have no body.
+  expect(targets.targets("B", "run")).toEqual(["%A.run", "%C.run"]);
+  expect(targets.targets("A", "size")).toEqual(["%B.size"]);
+  expect(targets.targets("D", "run")).toEqual(["%A.run"]);
+  expect(
+    new VirtualTargets([...classes, cls("E", ["run"], "D", { runtime: true })]).targets("A", "run"),
+  ).toBe(null);
+  const virtual: IrExpr = {
+    kind: "virtualCall",
+    className: "A",
+    method: "run",
+    args: [],
+    type: F64,
+    loc,
+  };
+  const build = (mutating: boolean) => {
+    const functions = [fn("%A.run"), fn("%C.run"), fn("caller", [virtual])];
+    if (mutating) functions[1]!.body.push({ kind: "assign", localId: "owner", value: text, loc });
+    return new ReferenceEffects(new Map(functions.map((f) => [f.name, f])), () => false, classes);
+  };
+  expect(build(false).preserves(virtual)).toBe(true);
+  expect(build(false).functions.has("caller")).toBe(true);
+  expect(build(true).preserves(virtual)).toBe(false);
+  expect(build(true).functions.has("caller")).toBe(false);
+  // Without class facts a virtual call stays a barrier.
+  expect(effects([fn("%A.run")]).preserves(virtual)).toBe(false);
 });

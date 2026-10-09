@@ -1,12 +1,19 @@
 import { preservesDynTest } from "./checked-value-lifetimes.js";
 import { isStableReceiverOperand } from "../../ir/analysis.js";
-import { isRefCounted, type IrExpr, type IrFunction, type IrStmt } from "../../ir/ir.js";
+import {
+  isRefCounted,
+  type IrClassDef,
+  type IrExpr,
+  type IrFunction,
+  type IrStmt,
+} from "../../ir/ir.js";
 import { everyExprChild, everyStmtChild, everyStmtList } from "../../ir/traverse.js";
 import { borrowsStringInputs } from "./string-lifetimes.js";
 import { borrowsMapReadInputs } from "./map-read-lifetimes.js";
 import { byteNumberAccess } from "../../ir/byte-numbers.js";
 
 type Call = IrExpr & { kind: "call" };
+type VirtualCall = IrExpr & { kind: "virtualCall" };
 
 /** These native operations may update lastIndex and allocate results, but
  * never invoke user code or remove an existing reference edge. Results own
@@ -35,6 +42,7 @@ function expressionPreservesEdges(
   e: IrExpr,
   call: (value: Call) => boolean,
   privateLocals?: ReadonlySet<string>,
+  virtualCall?: (value: VirtualCall) => boolean,
 ): boolean {
   switch (e.kind) {
     case "numLit":
@@ -70,7 +78,18 @@ function expressionPreservesEdges(
     case "caughtTest":
     case "caughtNarrow":
     case "caughtCheck":
+    // An immortal class object, or a fresh one retaining captured boxes.
+    case "classRef":
       return true;
+    // Formatting a primitive allocates a string and runs no user code.
+    case "toString":
+      return (
+        e.operand.type.kind === "f64" ||
+        e.operand.type.kind === "bool" ||
+        e.operand.type.kind === "string"
+      );
+    case "virtualCall":
+      return virtualCall?.(e) ?? false;
     case "dynTest":
       return preservesDynTest(e.test);
     case "assignExpr":
@@ -121,6 +140,7 @@ function statementPreservesEdges(s: IrStmt, privateLocals?: ReadonlySet<string>)
     case "while":
     case "doWhile":
     case "block":
+    case "switch":
     case "break":
     case "continue":
     case "bytesSet":
@@ -135,6 +155,61 @@ function statementPreservesEdges(s: IrStmt, privateLocals?: ReadonlySet<string>)
   }
 }
 
+/** The module functions a virtual call can reach: the implementation the
+ * static class inherits or declares, plus every override in its subtree.
+ * Runtime classes keep their dispatch out of view, so they answer null. */
+export class VirtualTargets {
+  private readonly classes = new Map<string, IrClassDef>();
+  private readonly children = new Map<string, IrClassDef[]>();
+  private readonly cache = new Map<string, readonly string[] | null>();
+
+  constructor(classes: readonly IrClassDef[]) {
+    for (const cls of classes) this.classes.set(cls.name, cls);
+    for (const cls of classes) {
+      if (cls.base === undefined) continue;
+      let list = this.children.get(cls.base);
+      if (!list) this.children.set(cls.base, (list = []));
+      list.push(cls);
+    }
+  }
+
+  targets(className: string, method: string): readonly string[] | null {
+    const key = `${className}\0${method}`;
+    const known = this.cache.get(key);
+    if (known !== undefined) return known;
+    const result = this.compute(className, method);
+    this.cache.set(key, result);
+    return result;
+  }
+
+  private compute(className: string, method: string): readonly string[] | null {
+    const declares = (cls: IrClassDef): "concrete" | "abstract" | null =>
+      cls.methods?.includes(method) !== true
+        ? null
+        : cls.abstractMethods?.includes(method) === true
+          ? "abstract"
+          : "concrete";
+    const targets = new Set<string>();
+    // The nearest declaration on the static class or its ancestors.
+    for (let name: string | undefined = className; name !== undefined;) {
+      const cls = this.classes.get(name);
+      if (!cls || cls.runtime) return null;
+      const declared = declares(cls);
+      if (declared === "concrete") targets.add(`%${cls.name}.${method}`);
+      if (declared !== null) break;
+      name = cls.base;
+    }
+    const pending = [...(this.children.get(className) ?? [])];
+    while (pending.length > 0) {
+      const cls = pending.pop()!;
+      if (cls.runtime) return null;
+      if (declares(cls) === "concrete") targets.add(`%${cls.name}.${method}`);
+      pending.push(...(this.children.get(cls.name) ?? []));
+    }
+    return [...targets];
+  }
+}
+
 /** Reference preservation is weaker than purity: scalar writes, allocation
  * and throwing are allowed. Caller owners and their reference edges must
  * survive until the consuming operation; callee-local rebinding is private.
@@ -146,12 +221,23 @@ export class ReferenceEffects {
   readonly functions = new Set<string>();
   private readonly expressions = new Map<IrExpr, boolean>();
 
+  private readonly virtualTargets: VirtualTargets | null;
+
   constructor(
     functions: ReadonlyMap<string, IrFunction>,
     private readonly intrinsicCall: (call: Call) => boolean,
+    classes?: readonly IrClassDef[],
   ) {
+    this.virtualTargets = classes ? new VirtualTargets(classes) : null;
     const callers = new Map<string, Set<string>>();
     const unsafe: string[] = [];
+    const dependOn = (callee: string, caller: string): boolean => {
+      if (!functions.has(callee)) return false;
+      let incoming = callers.get(callee);
+      if (!incoming) callers.set(callee, (incoming = new Set()));
+      incoming.add(caller);
+      return true;
+    };
     for (const fn of functions.values()) {
       // Rebinding a callee's unboxed local cannot replace the caller's
       // owner. The same write in a later caller operand still must reject
@@ -169,15 +255,14 @@ export class ReferenceEffects {
           expr: (e) =>
             expressionPreservesEdges(
               e,
-              (call) => {
-                if (intrinsicCall(call)) return true;
-                if (!functions.has(call.callee)) return false;
-                let incoming = callers.get(call.callee);
-                if (!incoming) callers.set(call.callee, (incoming = new Set()));
-                incoming.add(fn.name);
-                return true;
-              },
+              (call) => intrinsicCall(call) || dependOn(call.callee, fn.name),
               privateLocals,
+              // Every reachable implementation must preserve edges; the
+              // dispatch itself passes owned arguments that callees release.
+              (call) =>
+                this.virtualTargets
+                  ?.targets(call.className, call.method)
+                  ?.every((target) => dependOn(target, fn.name)) ?? false,
             ),
         });
       if (safe) this.functions.add(fn.name);
@@ -202,9 +287,19 @@ export class ReferenceEffects {
       expressionPreservesEdges(
         value,
         (call) => this.intrinsicCall(call) || this.functions.has(call.callee),
+        undefined,
+        (call) => this.virtualPreserves(call),
       ) && everyExprChild(value, expr, stmt);
     this.expressions.set(value, result);
     return result;
+  }
+
+  virtualPreserves(call: VirtualCall): boolean {
+    return (
+      this.virtualTargets
+        ?.targets(call.className, call.method)
+        ?.every((target) => this.functions.has(target)) ?? false
+    );
   }
 
   preservesScope(body: IrStmt[]): boolean {
