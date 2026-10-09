@@ -51,8 +51,14 @@ static void *scr_pub_grow(void *p, size_t *cap, size_t size) {
   return q;
 }
 
+void scr_pub_str_fn(void *v, ScrPub *ctx);
+
 void scr_pub_push(ScrPub *ctx, void *v, ScrPubFn fn) {
   if (!v || *(size_t *)v == SIZE_MAX || ctx->refusal) return;
+  if (fn == scr_pub_str_fn) { /* a leaf: mark it now */
+    scr_pub_str_fn(v, ctx);
+    return;
+  }
   if (ctx->len == ctx->cap) ctx->stack = scr_pub_grow(ctx->stack, &ctx->cap, sizeof *ctx->stack);
   ctx->stack[ctx->len].v = v;
   ctx->stack[ctx->len].fn = fn;
@@ -79,10 +85,22 @@ void scr_pub_refuse_at(ScrPub *ctx, const char *message, const char *detail) {
   scr_pub_refuse(ctx, message);
 }
 
+/* Strings up to this length cache their Map key hash before they become
+ * immortal (map keys are short); longer ones hash per lookup, since no
+ * thread may write an immortal header (the map code skips them). */
+#define SCR_PUB_HASH_PRIME_MAX 256
+
 void scr_pub_str_fn(void *v, ScrPub *ctx) {
   ScrStr *s = v;
   if (s->rc == SIZE_MAX) return;
-  scr_str_hash_prime(s); /* no thread may write an immortal header later */
+  if (s->len <= SCR_PUB_HASH_PRIME_MAX) scr_str_hash_prime(s);
+  /* Record proven ASCII now: an immortal string cannot record it later,
+   * and every UTF-16 index mapper answers ASCII strings by identity. */
+  if (!s->ascii) {
+    bool ascii = true;
+    for (size_t i = 0; i < s->len && ascii; i++) ascii = (unsigned char)s->data[i] < 0x80;
+    if (ascii) s->ascii = 1;
+  }
   scr_pub_mark(ctx, s, false, SCR_PUB_KIND_STRING);
 }
 
@@ -245,6 +263,8 @@ static void scr_pub_audit_forget(int kind) {
 void scr_publish(void *root, ScrPubFn fn) {
   if (!root || *(size_t *)root == SIZE_MAX) return;
   ScrPub ctx = {0};
+  bool trace = getenv("SCRIPTC_PUBLISH_TRACE") != NULL;
+  uint64_t t0 = trace ? scr_hrtime_ns() : 0, t1 = 0;
   scr_pub_push(&ctx, root, fn);
   while (ctx.len > 0 && !ctx.refusal) {
     ctx.len--;
@@ -254,6 +274,7 @@ void scr_publish(void *root, ScrPubFn fn) {
     for (size_t i = ctx.logged; i-- > 0;) *(size_t *)ctx.log[i].obj = ctx.log[i].rc;
     scr_throw_error_msg(SCR_ERR_TYPE, ctx.refusal, strlen(ctx.refusal));
   } else {
+    if (trace) t1 = scr_hrtime_ns();
     /* Leave this thread's collector buffers: no pass may visit them. */
     for (size_t i = 0; i < ctx.logged; i++) {
       if (ctx.log[i].cyc) scr_cyc_on_dead(ctx.log[i].obj);
@@ -261,6 +282,11 @@ void scr_publish(void *root, ScrPubFn fn) {
 #ifdef SCR_RC_AUDIT
       scr_pub_audit_forget(ctx.log[i].kind);
 #endif
+    }
+    if (trace) {
+      uint64_t t2 = scr_hrtime_ns();
+      double walk = (double)(t1 - t0) / 1e6, post = (double)(t2 - t1) / 1e6;
+      fprintf(stderr, "scriptc: published %zu objects (walk %.1fms, commit %.1fms)\n", ctx.logged, walk, post);
     }
   }
   free(ctx.stack);
