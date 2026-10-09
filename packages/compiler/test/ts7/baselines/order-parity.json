@@ -15592,6 +15592,12 @@
     "<repo>/tests/corpus/4471-unassigned-field-reads.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/stack-depth-async-bodies.ts": {
+   "order": [
+    "<repo>/tests/corpus/stack-depth-async-bodies.ts"
+   ],
+   "diags": []
   }
  }
 }
