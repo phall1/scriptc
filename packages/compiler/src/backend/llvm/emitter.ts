@@ -757,7 +757,9 @@ export class LlEmitter {
     this.immortalValues.add("null");
     this.immortalValues.add(NULLABLE_NULL);
     this.nullableFields = new NullableRefFields(mod.classes ?? [], this.boxedUnionsById);
-    this.optionalArrayReads = new OptionalArrayReads(this.fnByName, this.boxedUnionsById);
+    // Optional array reads also cover nullable unions: emitLocalArrayRead
+    // then yields the (borrowed or owned) element pointer, not a stack box.
+    this.optionalArrayReads = new OptionalArrayReads(this.fnByName, this.unionsById);
     this.checkedNarrows = new CheckedNarrows(this.fnByName);
     this.referenceEffects = new ReferenceEffects(
       this.fnByName,
@@ -4533,7 +4535,7 @@ export class LlEmitter {
     this.localArrayReads = findLocalArrayReads(
       fn,
       this.fnByName,
-      this.boxedUnionsById,
+      this.unionsById,
       this.referenceEffects.functions,
       this.callLifetimes,
       this.optionalArrayReads,
