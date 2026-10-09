@@ -156,6 +156,26 @@ function functionLocalClass(decl: ts.ClassLikeDeclaration): boolean {
   return false;
 }
 
+/** `extends factory()` — one paren layer included. The emit pass lowers
+ * the call again when collection could not, so a binding whose type named
+ * a class that was not registered yet still becomes the runtime base. */
+function isCallHeritage(expression: ts.Expression): boolean {
+  const inner = ts.isParenthesizedExpression(expression) ? expression.expression : expression;
+  return ts.isCallExpression(inner);
+}
+
+/** A heritage whose one call signature is a JavaScript function body. */
+function jsFunctionHeritage(lowerer: Lowerer, expression: ts.Expression): boolean {
+  const signatures = lowerer.checker.getCallSignatures(lowerer.typeOf(expression));
+  const source =
+    signatures.length === 1 ? lowerer.checker.signatureDeclaration(signatures[0]!) : undefined;
+  return (
+    source !== undefined &&
+    isJsSourceFile(source.getSourceFile()) &&
+    (ts.isFunctionDeclaration(source) || ts.isFunctionExpression(source))
+  );
+}
+
 export function storedClassValueType(
   lowerer: Lowerer,
   expression: ts.Expression,
@@ -1775,31 +1795,25 @@ export function collectClassShapeInner(
     let genericBase: ts.ExpressionWithTypeArguments | undefined;
     let callableBase: ClassInfo["callableBase"];
     let factoryBaseExpression: ts.Expression | undefined;
-    const adoptCallableBase = (expression: ts.Expression): boolean => {
-      if (familyMode || inst || mixin) return false;
-      if (lowerer.computedCallableBases.has(decl)) {
-        callableBase = {
-          expression,
-          constructorId: `%g.${className}.base`,
-          prototypeId: `%g.${className}.basePrototype`,
-        };
-        return true;
-      }
-      const signatures = lowerer.checker.getCallSignatures(lowerer.typeOf(expression));
-      const source =
-        signatures.length === 1 ? lowerer.checker.signatureDeclaration(signatures[0]!) : undefined;
-      if (
-        !source ||
-        !isJsSourceFile(source.getSourceFile()) ||
-        !(ts.isFunctionDeclaration(source) || ts.isFunctionExpression(source))
-      )
-        return false;
+    const rememberCallableBase = (expression: ts.Expression): boolean => {
       callableBase = {
         expression,
         constructorId: `%g.${className}.base`,
         prototypeId: `%g.${className}.basePrototype`,
       };
       return true;
+    };
+    // A call heritage whose collection-time lower missed (a binding whose
+    // type named a class not registered yet) is lowered again at emit,
+    // when those classes exist. Emit reads `callableBase.expression`
+    // directly when this declaration is absent from `computedCallableBases`.
+    const adoptCallableBase = (expression: ts.Expression): boolean => {
+      if (familyMode || inst || mixin) return false;
+      if (lowerer.computedCallableBases.has(decl) || isCallHeritage(expression)) {
+        return rememberCallableBase(expression);
+      }
+      if (!jsFunctionHeritage(lowerer, expression)) return false;
+      return rememberCallableBase(expression);
     };
     const ownGenericBase = inst?.family.genericBase;
     if (inst && ownGenericBase) {
