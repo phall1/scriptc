@@ -1316,3 +1316,9 @@ ScrArr *scr_map_keys_js_order(const ScrMap *m) {
   }
   return out;
 }
+
+/* Publication (scr_message.c): cache a heap string's key hash before it
+ * becomes immortal, after which no thread may write its header. */
+void scr_str_hash_prime(ScrStr *s) {
+  if (s && s->rc != SIZE_MAX) (void)scr_map_hash_str(s);
+}

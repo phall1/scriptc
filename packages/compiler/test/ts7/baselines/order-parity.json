@@ -14608,6 +14608,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/native-worker-published-graphs.ts": {
+   "order": [
+    "<repo>/tests/corpus/native-worker-published-graphs.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/native-worker-references.ts": {
    "order": [
     "<repo>/tests/corpus/native-worker-references.ts"
