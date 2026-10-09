@@ -33,6 +33,7 @@ import type { Int32Slots } from "../../ir/int32-slots.js";
 import {
   cycleRootLines,
   FN_ATTRS,
+  cycleDeadLines,
   llFieldType,
   releaseBody,
   releaseFastPath,
@@ -545,10 +546,7 @@ export function emitClassShapes(
         `  br i1 %dead, label %free, label %${traced ? "root" : "done"}`,
         `free:`,
       ];
-      if (traced) {
-        host.declare(`declare void @scr_cyc_on_dead(ptr)`);
-        reld.push(`  call void @scr_cyc_on_dead(ptr %o)`);
-      }
+      if (traced) reld.push(...cycleDeadLines(host, "teardown"));
       if (bounded) {
         const destroy = `${mangleClassReleaseDirect(cls.name)}_destroy`;
         const destroyBody: string[] = [

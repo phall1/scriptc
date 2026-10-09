@@ -590,6 +590,17 @@ void scr_rc_destroy(void *obj, void (*destroy)(void *));
 void scr_cyc_on_release(void *obj);
 void scr_cyc_on_dead(void *obj);
 
+/* Inline halves of the hooks for runtime release paths, mirroring the
+ * emitted ones (llvm/shapes.ts): a release of an already-buffered
+ * object, and the death of an object that was never buffered, need no call.
+ * Most releases of long-lived containers take the first early return. */
+static inline void scr_cyc_released(void *obj) {
+  if (!scr_cyc_hdr(obj)->buffered) scr_cyc_on_release(obj);
+}
+static inline void scr_cyc_dead(void *obj) {
+  if (scr_cyc_hdr(obj)->buffered) scr_cyc_on_dead(obj);
+}
+
 /* Full sweep: trial-deletion passes over EVERY generation, to a fixpoint.
  * This is the exit / session-reset entry point (the RC audit runs straight
  * after and wants nothing reclaimable left), and it costs a walk of the
