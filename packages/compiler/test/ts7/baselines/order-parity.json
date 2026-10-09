@@ -11236,6 +11236,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/string-concat-number-parts.ts": {
+   "order": [
+    "<repo>/tests/corpus/string-concat-number-parts.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/string-normalize.ts": {
    "order": [
     "<repo>/tests/corpus/string-normalize.ts"

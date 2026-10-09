@@ -392,6 +392,74 @@ ScrStr *scr_str_concat(ScrStr *a, ScrStr *b) {
   return s;
 }
 
+/* String and number operands of one concatenation, numbers formatted with
+ * JavaScript's Number::toString straight into the result instead of through
+ * temporary strings. parts[i] == NULL selects nums[i]. A head, when given,
+ * follows scr_str_concat's left-operand rule: appended in place when the
+ * caller's borrow is its only reference, it has room, and it is not also
+ * one of the parts; otherwise copied, with geometric slack when unique. */
+#define SCR_STR_MIXED_MAX 16
+ScrStr *scr_str_concat_mixed(ScrStr *head, ScrStr *const *parts, const double *nums, size_t count) {
+  if (count > SCR_STR_MIXED_MAX) scr_trap("scriptc: internal error: too many concatenation parts\n");
+  char text[SCR_STR_MIXED_MAX][32];
+  size_t lens[SCR_STR_MIXED_MAX];
+  const size_t limit = SCR_STR_MAX_CAP;
+  size_t extra = 0;
+  bool aliased = false;
+  for (size_t i = 0; i < count; i++) {
+    if (parts[i]) {
+      lens[i] = parts[i]->len;
+      aliased |= parts[i] == head;
+    } else {
+      lens[i] = scr_f64_to_str(nums[i], text[i]);
+    }
+    if (lens[i] > limit - extra) scr_oom();
+    extra += lens[i];
+  }
+  size_t base = head ? head->len : 0;
+  if (extra > limit - base) scr_oom();
+  size_t newlen = base + extra;
+  if (head && extra == 0) return scr_str_retain(head);
+  ScrStr *out;
+  size_t at;
+  if (head && head->rc == 1 && !aliased && head->cap >= newlen) {
+    /* See scr_str_concat's in-place append. */
+    scr_short_forget(head);
+    scr_str_hash_forget(head);
+    out = head;
+    at = base;
+  } else {
+    size_t newcap = newlen;
+    if (head && head->rc == 1) {
+      size_t grown = (size_t)head->cap + (head->cap >> 1) + 16;
+      if (grown > newcap) newcap = grown;
+    } else if (newlen >= 512 && newlen <= (SIZE_MAX - sizeof(ScrStr) - 1) / 2) {
+      newcap = newlen + (newlen >> 1);
+    }
+    if (newcap > SCR_STR_MAX_CAP) newcap = SCR_STR_MAX_CAP;
+    out = scr_str_take_spare(newlen);
+    if (!out) out = scr_str_alloc(newlen, newcap);
+    if (base) memcpy(out->data, head->data, base);
+    at = base;
+  }
+  for (size_t i = 0; i < count; i++) {
+    memcpy(out->data + at, parts[i] ? parts[i]->data : text[i], lens[i]);
+    at += lens[i];
+  }
+  out->len = newlen;
+  out->data[newlen] = '\0';
+  if (out == head) {
+    scr_sidx_concat_append(head, base);
+    head->rc = 2; /* +1 for the returned reference, beside the caller's borrow */
+  }
+  return out;
+}
+
+ScrStr *scr_str_concat_f64(ScrStr *a, double x) {
+  ScrStr *none = NULL;
+  return scr_str_concat_mixed(a, &none, &x, 1);
+}
+
 ScrStr *scr_str_concat_parts(ScrStr *const *parts, size_t count) {
   const size_t limit = SIZE_MAX - sizeof(ScrStr) - 1;
   size_t len = 0;

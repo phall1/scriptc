@@ -292,6 +292,12 @@ import { emitNullablePresent, emitUnionPeek, emitUnionTag } from "./union-repr.j
 import { literalCapWord } from "./string-key-hash.js";
 import { NUMBER_MAP_ENTRY_DECL } from "./map-number-lookup.js";
 import {
+  emitConcatInputs,
+  emitMixedConcat,
+  numberPart,
+  stringParts,
+} from "./string-construction.js";
+import {
   arrNewCall,
   boxAccess,
   boxNewCall,
@@ -6348,7 +6354,13 @@ export class LlEmitter {
     retainForYield: boolean,
   ): LlValue {
     const snapshot = this.emitExpr(left);
-    const right = this.emitExpr(suffix);
+    // A suffix of several parts, or a number, appends each operand to the
+    // snapshot directly (in place once the binding lets go of it) instead
+    // of first building the suffix as a separate string.
+    const parts = stringParts(suffix);
+    const mixed = parts.length > 1 || numberPart(parts[0]!) !== null;
+    const inputs = mixed ? emitConcatInputs(this, parts) : [];
+    const right = mixed ? null : this.emitExpr(suffix);
     const b = this.binding(localId);
     const B = this.B;
     if (b.kind === "boxed") {
@@ -6360,9 +6372,14 @@ export class LlEmitter {
       B.line(`store ptr null, ptr ${b.slot}`);
       this.releaseValue(old, b.type);
     }
-    this.declare(`declare ptr @scr_str_concat(ptr, ptr)`);
-    const raw = B.tmp();
-    B.line(`${raw} = call ptr @scr_str_concat(ptr ${snapshot.name}, ptr ${right.name})`);
+    let raw: string;
+    if (right === null) {
+      raw = emitMixedConcat(this, snapshot.name, inputs);
+    } else {
+      this.declare(`declare ptr @scr_str_concat(ptr, ptr)`);
+      raw = B.tmp();
+      B.line(`${raw} = call ptr @scr_str_concat(ptr ${snapshot.name}, ptr ${right.name})`);
+    }
     const result = this.own({ name: raw, type: left.type });
     if (retainForYield) {
       const stored = this.retainValue(result.name, result.type);

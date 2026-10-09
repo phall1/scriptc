@@ -708,6 +708,13 @@ void scr_str_release(ScrStr *s); /* NULL-tolerant (uninitialized locals) */
 ScrStr *scr_str_concat(ScrStr *a, ScrStr *b);
 /* Borrow each part without mutation; return one independently owned result. */
 ScrStr *scr_str_concat_parts(ScrStr *const *parts, size_t count);
+/* Concatenate up to 16 string or number operands (parts[i] == NULL selects
+ * nums[i], formatted like String(n)) onto an optional borrowed head, +1
+ * result. The head may be appended in place under scr_str_concat's rule for
+ * its left operand; parts are never mutated. */
+ScrStr *scr_str_concat_mixed(ScrStr *head, ScrStr *const *parts, const double *nums, size_t count);
+/* a + String(x): scr_str_concat's contract with a number right operand. */
+ScrStr *scr_str_concat_f64(ScrStr *a, double x);
 
 bool scr_str_eq(ScrStr *a, ScrStr *b);
 
