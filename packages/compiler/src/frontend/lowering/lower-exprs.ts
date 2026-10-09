@@ -6139,8 +6139,21 @@ export function lowerArrayLiteral(
   }
   const out = lowerer.declareHiddenLocal("%arrayLit", type);
   const outRef = varRef(out.id, type, loc);
+  // Dense capacity for the elements the statements below store.
+  const capacity = Math.min(elems.length - spreads.length, 1024);
   const body: IrStmt[] = [
-    { kind: "varDecl", localId: out.id, init: { kind: "arrayLit", elems: [], type, loc }, loc },
+    {
+      kind: "varDecl",
+      localId: out.id,
+      init: {
+        kind: "arrayLit",
+        elems: [],
+        ...(capacity > 0 ? { capacity } : {}),
+        type,
+        loc,
+      },
+      loc,
+    },
   ];
   const spreadSet = new Set(spreads);
   const currentLength = (): IrExpr => ({

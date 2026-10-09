@@ -15514,6 +15514,12 @@
     "<repo>/tests/corpus/4486-array-field-element-borrows.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/4487-array-literal-optional-values.ts": {
+   "order": [
+    "<repo>/tests/corpus/4487-array-literal-optional-values.ts"
+   ],
+   "diags": []
   }
  }
 }

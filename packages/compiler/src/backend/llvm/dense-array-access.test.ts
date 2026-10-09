@@ -262,3 +262,16 @@ test("a discarded conditional splice drops the result of its literal arm", () =>
   expect(fn.match(/call ptr @scr_arr_splice_insert\(/g)).toHaveLength(1);
   expect(fn).toMatch(/drop\.t\d*:/);
 });
+
+test("an empty literal's capacity hint sizes its first dense storage", () => {
+  const llvm = emitLlvmModule(
+    module("fresh", words, [
+      {
+        kind: "return",
+        value: { kind: "arrayLit", elems: [], capacity: 3, type: words, loc },
+        loc,
+      },
+    ]),
+  );
+  expect(body(llvm, "fresh")).toMatch(/call ptr @scr_arr_new\(.*, i64 3\)/);
+});

@@ -2423,8 +2423,17 @@ export type IrExpr =
    * element-by-element at construction (JS-exact: a fresh array, source
    * untouched). Allocates; the result is owned (+1); ownership of
    * refcounted plain elements MOVES into the array, spread sources are
-   * BORROWED (their elements copy in retained). */
-  | { kind: "arrayLit"; elems: IrExpr[]; spreads?: number[]; type: IrType; loc: SrcLoc }
+   * BORROWED (their elements copy in retained). `capacity` is an optional
+   * dense-storage hint for an empty literal that statements fill right
+   * away; it has no observable effect. */
+  | {
+      kind: "arrayLit";
+      elems: IrExpr[];
+      spreads?: number[];
+      capacity?: number;
+      type: IrType;
+      loc: SrcLoc;
+    }
   /** Mapper-less `Array.from({ length: n })` — a length-n array of ABSENT
    * slots: unions carrying an undefined arm hold the interned undefined
    * instance (reads are JS-exact), every other refcounted element kind
