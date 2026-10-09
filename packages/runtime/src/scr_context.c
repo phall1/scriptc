@@ -13,14 +13,14 @@ typedef struct ScrContextExit {
 
 static SCR_TL ScrContextExit *scr_context_exits;
 static SCR_TL uint64_t scr_context_id;
-/* The context's stop signal, which generated exception polls test inline
- * beside the active exception cell's kind: a worker points it at the flag
- * its owner sets to terminate it, and a stopping context points it at a
- * constant raised flag so every later poll takes the slow path and
- * reinstalls the termination sentinel. It is never NULL. */
-static const atomic_bool scr_context_quiet = false;
+/* The context's stop signal, which the out-of-line exception poll tests: a
+ * worker points it at the flag its owner sets to terminate it (the owner
+ * also raises the exception alert, so emitted polls take that slow path),
+ * and a stopping context points it at a constant raised flag so every later
+ * poll reinstalls the termination sentinel. It is never NULL. */
+static const atomic_bool scr_context_unsignaled = false;
 static const atomic_bool scr_context_raised = true;
-SCR_TL const atomic_bool *scr_context_signal = &scr_context_quiet;
+static SCR_TL const atomic_bool *scr_context_signal = &scr_context_unsignaled;
 static SCR_TL bool scr_context_stopped;
 SCR_TL void (*scr_context_report_error)(void);
 
@@ -119,9 +119,13 @@ uint64_t scr_context_thread_id(void) { return scr_context_id; }
 double scr_context_thread_number(void) { return (double)scr_context_id; }
 
 void scr_context_stop_flag(const void *flag) {
-  if (!scr_context_stopped) scr_context_signal = flag ? flag : &scr_context_quiet;
+  if (!scr_context_stopped) scr_context_signal = flag ? flag : &scr_context_unsignaled;
 }
 bool scr_context_stopping(void) { return scr_context_stopped; }
+/* Neither stopping nor asked to stop. */
+bool scr_context_quiet(void) {
+  return !scr_context_stopped && !atomic_load_explicit(scr_context_signal, memory_order_relaxed);
+}
 
 void scr_context_stop(int code) {
   scr_context_stopped = true;
@@ -129,6 +133,7 @@ void scr_context_stop(int code) {
   scr_exit_code_note(code);
   scr_exc_clear();
   scr_exc_current_cell()->kind = SCR_EXC_TERMINATE;
+  scr_exc_cell_changed();
 }
 
 bool scr_context_checkpoint(void) {
@@ -140,6 +145,7 @@ bool scr_context_checkpoint(void) {
   if (scr_exc_current_cell()->kind != SCR_EXC_TERMINATE) {
     scr_exc_clear();
     scr_exc_current_cell()->kind = SCR_EXC_TERMINATE;
+    scr_exc_cell_changed();
   }
   return true;
 }

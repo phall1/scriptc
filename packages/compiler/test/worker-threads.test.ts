@@ -249,13 +249,14 @@ console.log(mix(1, 2), spin(5));
       return llvm.slice(start, llvm.indexOf("\n}\n", start));
     };
     // A bounded helper neither polls on entry nor makes its callers poll.
-    expect(body("sc_f_mix")).not.toContain("@scr_exc_active");
-    // Recursion polls on entry: the stop signal folds into the inline test,
-    // and only the slow path calls into the runtime.
-    expect(body("sc_f_spin")).toContain("load ptr, ptr @scr_exc_active");
-    expect(body("sc_f_spin")).toContain("load ptr, ptr @scr_context_signal");
-    expect(body("sc_f_spin")).toMatch(/load atomic i8, ptr %t\d+ monotonic/);
-    expect(llvm).toMatch(/^@scr_exc_active = external thread_local(\(initialexec\))? global ptr$/m);
+    expect(body("sc_f_mix")).not.toContain("@scr_exc_alert");
+    // Recursion polls on entry: the inline test reads the process-wide
+    // alert word (no thread-local access), and only the slow path calls into
+    // the runtime.
+    expect(body("sc_f_spin")).toMatch(/load atomic i32, ptr @scr_exc_alert monotonic/);
+    expect(body("sc_f_spin")).toContain("call zeroext i1 @scr_exc_pending()");
+    expect(body("sc_f_spin")).not.toContain("@scr_exc_active");
+    expect(llvm).toMatch(/^@scr_exc_alert = external global i32, align 64$/m);
   }
 });
 
@@ -277,7 +278,7 @@ test.each([
     if (models) {
       expect(llvm).not.toMatch(plain);
       expect(llvm).toMatch(/^@[-$._A-Za-z0-9]+ = internal thread_local\(localexec\) global /m);
-      expect(llvm).toMatch(/^@scr_exc_active = external thread_local\(initialexec\) global ptr$/m);
+      expect(llvm).toMatch(/^@[-$._A-Za-z0-9]+ = external thread_local\(initialexec\) global /m);
     } else {
       expect(llvm).toMatch(plain);
       expect(llvm).not.toContain("thread_local(");

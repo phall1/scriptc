@@ -10,6 +10,7 @@
  */
 #include "scr_runtime.h"
 
+#include <stdatomic.h>
 #include <stdio.h>
 #include <math.h>
 #include <stdlib.h>
@@ -61,11 +62,60 @@ ScrExcCell *scr_exc_active = &scr_main_exc;
  * localized library archive would otherwise leave shared. */
 SCR_TL uintptr_t scr_stack_guard = 0;
 
+#if defined(SCR_WORKERS) && !defined(SCR_LIB)
+/* The process-wide exception alert, tested inline by every emitted pending
+ * check in worker executables: one ordinary load, where reading the active
+ * cell would be a thread-local access (a call on Darwin). It counts the
+ * script threads whose active cell may hold a pending exception or which
+ * must stop, plus one reference per outstanding worker.terminate() request
+ * (scr_worker.c). Zero proves that no thread has anything pending, so the
+ * check falls through; otherwise the out-of-line scr_exc_pending answers for
+ * the calling thread. A thread raises its share whenever its active cell may
+ * have become pending (throws, rethrows, the termination sentinel, fiber
+ * switches and moves into the active cell) and drops it once that cell is
+ * clear again (take, clear, the slow path), so an exception in flight in one
+ * thread costs the others slow-path calls only until it is caught. Only its
+ * owner changes a thread's share, so a thread's own raise is visible to all
+ * of its later checks. */
+_Alignas(64) _Atomic uint32_t scr_exc_alert;
+static SCR_TL bool scr_exc_alerted;
+
+void scr_exc_alert_add(int delta) {
+  atomic_fetch_add_explicit(&scr_exc_alert, (uint32_t)delta, memory_order_release);
+}
+
+static void scr_exc_alert_raise(void) {
+  if (scr_exc_alerted) return;
+  scr_exc_alerted = true;
+  atomic_fetch_add_explicit(&scr_exc_alert, 1, memory_order_relaxed);
+}
+
+static void scr_exc_alert_drop(void) {
+  if (!scr_exc_alerted) return;
+  scr_exc_alerted = false;
+  atomic_fetch_sub_explicit(&scr_exc_alert, 1, memory_order_relaxed);
+}
+
+/* The active cell, or the context's stop state, may have changed. */
+void scr_exc_cell_changed(void) {
+  if (SCR_EXC_CUR()->kind != SCR_EXC_NONE || !scr_context_quiet()) scr_exc_alert_raise();
+  else scr_exc_alert_drop();
+}
+
+/* A worker thread's script execution has ended for good. */
+void scr_exc_alert_thread_exit(void) { scr_exc_alert_drop(); }
+#define SCR_EXC_RAISED() scr_exc_alert_raise()
+#else
+void scr_exc_cell_changed(void) {}
+#define SCR_EXC_RAISED() ((void)0)
+#endif
+
 /* Fiber switching (scr_async.c) points the exception machinery at the
  * incoming fiber's cell; returns the previous cell. */
 ScrExcCell *scr_exc_swap_cell(ScrExcCell *cell) {
   ScrExcCell *prev = SCR_EXC_CUR();
   scr_exc_active = cell ? cell : &scr_main_exc;
+  scr_exc_cell_changed();
   return prev;
 }
 
@@ -135,7 +185,12 @@ bool(scr_exc_pending)(void) {
 #ifdef SCR_WORKERS
   if (scr_context_checkpoint()) return true;
 #endif
-  return scr_exc_kind != SCR_EXC_NONE;
+  bool pending = scr_exc_kind != SCR_EXC_NONE;
+#if defined(SCR_WORKERS) && !defined(SCR_LIB)
+  /* The slow path of the alert test: settle this thread's share. */
+  if (pending != scr_exc_alerted) scr_exc_cell_changed();
+#endif
+  return pending;
 }
 
 /* Release the current payload (if any) and reset to NONE. Shared by clear,
@@ -154,7 +209,10 @@ static void scr_exc_reset(void) {
   scr_exc_trace_fn = NULL;
 }
 
-void scr_exc_clear(void) { scr_exc_reset(); }
+void scr_exc_clear(void) {
+  scr_exc_reset();
+  scr_exc_cell_changed();
+}
 
 /* ── catch bindings (ScrCaught — contract in scr_runtime.h) ──────────── */
 
@@ -189,6 +247,7 @@ ScrCaught *scr_exc_take(void) {
   scr_exc_retain_fn = NULL;
   scr_exc_release_fn = NULL;
   scr_exc_trace_fn = NULL;
+  scr_exc_cell_changed();
   scr_obj_alloc_note();
   return c;
 }
@@ -238,6 +297,7 @@ void scr_rethrow(const ScrCaught *c) {
      * payload exists. */
     scr_exc_reset();
     scr_exc_kind = c->kind;
+    SCR_EXC_RAISED();
     break;
   }
 }
@@ -398,18 +458,21 @@ void scr_throw_f64(double v) {
   scr_exc_reset();
   scr_exc_kind = SCR_EXC_F64;
   scr_exc_f64 = v;
+  SCR_EXC_RAISED();
 }
 
 void scr_throw_bool(bool v) {
   scr_exc_reset();
   scr_exc_kind = SCR_EXC_BOOL;
   scr_exc_bool = v;
+  SCR_EXC_RAISED();
 }
 
 void scr_throw_str(ScrStr *v) {
   scr_exc_reset();
   scr_exc_kind = SCR_EXC_STR;
   scr_exc_payload = v; /* ownership moves in */
+  SCR_EXC_RAISED();
 }
 
 void scr_throw_ref(void *v, void *(*retain)(void *), void (*release)(void *),
@@ -420,6 +483,7 @@ void scr_throw_ref(void *v, void *(*retain)(void *), void (*release)(void *),
   scr_exc_retain_fn = retain;
   scr_exc_release_fn = release;
   scr_exc_trace_fn = trace;
+  SCR_EXC_RAISED();
 }
 
 void scr_throw_primitive_ref(void *v, void *(*retain)(void *), void (*release)(void *),

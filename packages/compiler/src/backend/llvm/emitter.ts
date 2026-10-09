@@ -3794,28 +3794,24 @@ export class LlEmitter {
       return;
     }
     // Executables test the active exception cell's kind inline (its first
-    // field). Worker programs fold their context's stop signal into the
-    // same test, so cancellation and an already stopping context take the
-    // out-of-line scr_exc_pending path, which observes the request and
-    // reinstalls the termination sentinel.
-    const tl = this.mod.workers === true ? "thread_local " : "";
-    this.declare(`@scr_exc_active = external ${tl}global ptr`);
+    // field). Worker programs test the process-wide alert word instead: it
+    // is nonzero while any script thread may have an exception pending in
+    // its active cell or has been asked to stop, so the common case is one
+    // ordinary global load (a thread-local access is a call on Darwin) and
+    // the out-of-line scr_exc_pending answers for this thread, observing
+    // cancellation and reinstalling the termination sentinel.
     this.declare(`declare i1 @llvm.expect.i1(i1, i1)`);
-    const cell = B.tmp();
-    const kind = B.tmp();
-    B.line(`${cell} = load ptr, ptr @scr_exc_active`);
-    B.line(`${kind} = load i32, ptr ${cell}`);
-    let word = kind;
+    let word: string;
     if (this.mod.workers === true) {
-      this.declare(`@scr_context_signal = external thread_local global ptr`);
-      const signalPtr = B.tmp();
-      const signal = B.tmp();
-      const wide = B.tmp();
+      this.declare(`@scr_exc_alert = external global i32, align 64`);
       word = B.tmp();
-      B.line(`${signalPtr} = load ptr, ptr @scr_context_signal`);
-      B.line(`${signal} = load atomic i8, ptr ${signalPtr} monotonic, align 1`);
-      B.line(`${wide} = zext i8 ${signal} to i32`);
-      B.line(`${word} = or i32 ${kind}, ${wide}`);
+      B.line(`${word} = load atomic i32, ptr @scr_exc_alert monotonic, align 64`);
+    } else {
+      this.declare(`@scr_exc_active = external global ptr`);
+      const cell = B.tmp();
+      word = B.tmp();
+      B.line(`${cell} = load ptr, ptr @scr_exc_active`);
+      B.line(`${word} = load i32, ptr ${cell}`);
     }
     const hit = B.tmp();
     const cold = B.tmp();

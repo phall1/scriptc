@@ -289,9 +289,13 @@ void scr_context_stop_flag(const void *flag);
 void scr_context_stop(int code);
 bool scr_context_stopping(void);
 bool scr_context_checkpoint(void);
-/* Read inline by generated exception polls in worker executables: points at
- * a raised flag once the context must stop. Never NULL. */
-extern SCR_TL const _Atomic bool *scr_context_signal;
+bool scr_context_quiet(void);
+/* The process-wide exception alert that emitted pending checks of worker
+ * executables test inline (scr_exception.c): nonzero while some script
+ * thread may have an exception pending in its active cell or must stop. */
+extern _Atomic uint32_t scr_exc_alert;
+void scr_exc_alert_add(int delta); /* worker.terminate() references */
+void scr_exc_alert_thread_exit(void);
 void scr_loop_context_shutdown(void);
 extern SCR_TL void (*scr_context_report_error)(void);
 typedef struct ScrContextEnv ScrContextEnv;
@@ -2840,6 +2844,9 @@ ScrExcCell *scr_exc_swap_cell(ScrExcCell *cell); /* NULL = main's cell */
  * builds use NULL for the main cell until scr_init installs it). */
 extern SCR_TL ScrExcCell *scr_exc_active;
 ScrExcCell *scr_exc_current_cell(void);          /* the ACTIVE cell */
+/* Runtime code that moved a payload into or out of the active cell (or a
+ * cell that may be active) without the throw/take/clear entry points. */
+void scr_exc_cell_changed(void);
 
 bool scr_exc_pending(void);
 
