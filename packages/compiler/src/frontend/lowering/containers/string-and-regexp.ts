@@ -20,6 +20,7 @@ import type { Lowerer } from "../lowerer.js";
 import { own } from "../lowerer.js";
 import { isRequireMainFilename } from "../expressions/optional-chains.js";
 import { STRING_INDEX_METHODS, STRING_REPLACE_METHODS, STR_METHODS } from "../surfaces.js";
+import { dynStringReceiver } from "./dynamic-receivers.js";
 import { lowerStringReplacement } from "./string-replacement.js";
 import {
   coerceStringSearchValue,
@@ -1269,16 +1270,26 @@ export function lowerStringMethodCall(
  * root-locale collation (scr_str_locale_compare): Node's ICU order for
  * Latin-script text — letters before case and accents ("a" < "B", "ä" <
  * "z") — and code-point order for other scripts, the documented limit.
- * Null when the receiver isn't a stdlib string (caller keeps its generic
- * rejection). */
+ * A dynamic receiver is checked to be a string at runtime. That is the
+ * HashMap key shape, where inference leaves both sides `any`.
+ * Null when the receiver isn't a string or dynamic (caller keeps its
+ * generic rejection). */
 function lowerLocaleCompareCall(
   lowerer: Lowerer,
   call: ts.CallExpression,
   access: ts.PropertyAccessExpression,
 ): IrExpr | null {
-  const receiverIr = lowerer.mapTypeOf(lowerer.typeOf(access.expression));
-  if (receiverIr?.kind !== "string") return null;
-  if (!lowerer.isStdlibMember(access)) return null;
+  const receiverTs = lowerer.typeOf(access.expression);
+  const receiverIr = lowerer.mapTypeOf(receiverTs);
+  // Checker `any` stays unmapped, but a TypeScript `any` binding is stored
+  // as dyn. HashMap's inferred keys are that binding.
+  const anyBacked =
+    receiverIr == null &&
+    (receiverTs.flags & ts.TypeFlags.Any) !== 0 &&
+    lowerer.irTypeOf(access.expression).kind === "dyn";
+  const dynamic = receiverIr?.kind === "dyn" || anyBacked;
+  if (receiverIr?.kind !== "string" && !dynamic) return null;
+  if (!dynamic && !lowerer.isStdlibMember(access)) return null;
   const loc = locOf(call);
   if (call.arguments.length !== 1) {
     lowerer.noLowering(
@@ -1288,9 +1299,14 @@ function lowerLocaleCompareCall(
         "pass exactly the comparison string",
     );
   }
-  const receiver = lowerMethodReceiver(lowerer, access.expression, STRING, access.name.text);
-  const arg = lowerer.lowerExpr(call.arguments[0]!);
-  if (arg.type.kind !== "string")
-    lowerer.badType(call.arguments[0]!, lowerer.typeOf(call.arguments[0]!));
-  return { kind: "libCall", fn: "str.localeCompare", args: [receiver, arg], type: F64, loc };
+  const receiver = dynamic
+    ? dynStringReceiver(lowerer, lowerer.lowerExpr(access.expression), access)
+    : lowerMethodReceiver(lowerer, access.expression, STRING, access.name.text);
+  const argument = call.arguments[0]!;
+  const lowered = lowerer.lowerExpr(argument);
+  if (!dynamic && lowered.type.kind !== "string")
+    lowerer.badType(argument, lowerer.typeOf(argument));
+  const compared =
+    lowered.type.kind === "string" ? lowered : lowerer.ensureString(lowered, argument);
+  return { kind: "libCall", fn: "str.localeCompare", args: [receiver, compared], type: F64, loc };
 }
