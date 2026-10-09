@@ -7923,6 +7923,18 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/4413-cycle-old-late-death.ts": {
+   "order": [
+    "<repo>/tests/corpus/4413-cycle-old-late-death.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4414-cycle-old-weak-keys.ts": {
+   "order": [
+    "<repo>/tests/corpus/4414-cycle-old-weak-keys.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/500-array-basics.ts": {
    "order": [
     "<repo>/tests/corpus/500-array-basics.ts"
@@ -15398,6 +15410,12 @@
   "<repo>/tests/corpus/4415-nullable-container-values.ts": {
    "order": [
     "<repo>/tests/corpus/4415-nullable-container-values.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4415-identity-borrowed-operands.ts": {
+   "order": [
+    "<repo>/tests/corpus/4415-identity-borrowed-operands.ts"
    ],
    "diags": []
   }

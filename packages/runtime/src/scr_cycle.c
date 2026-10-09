@@ -3,8 +3,8 @@
  * synchronous algorithm) over cycle-headered objects only — the object
  * model and the trace/teardown contract live in scr_runtime.h.
  *
- * Life of a candidate: a release that leaves rc > 0 buffers the object
- * (purple). Collection walks the buffer in three phases over the graph
+ * Life of a candidate: a release that leaves rc > 0 buffers the object.
+ * Collection walks the buffer in three phases over the graph
  * reachable from it:
  *   markGray     trial-delete: decrement rc once per internal edge;
  *   scan         nodes still rc > 0 are externally referenced — re-blacken
@@ -479,11 +479,11 @@ void scr_cyc_on_dead(void *obj) {
     scr_cyc_scheduled_mature_age = 0;
 }
 
-/* THE hot path — every release that leaves an object alive lands here, so
- * it stays what it has always been: buffer inline, then one compare. */
+/* Every release that leaves an unbuffered object alive lands here (the
+ * emitted and inline release paths test `buffered` first), so it stays what
+ * it has always been: buffer inline, then one compare. */
 void scr_cyc_on_release(void *obj) {
   ScrCycHdr *h = scr_cyc_hdr(obj);
-  h->color = SCR_CYC_PURPLE;
   /* Releasing an existing candidate cannot advance the trigger. A pass
    * always re-arms after its teardowns, including any candidates they add. */
   if (h->buffered) return;
@@ -694,13 +694,12 @@ static SCR_CYC_COMPACT size_t scr_cyc_settle(unsigned gen_limit) {
    * needs none of this: it walked every edge, so rc > 0 there means a
    * genuine outside reference and Bacon-Rajan's own reasoning retires the
    * candidate. Re-buffering costs a walk, never correctness: an object that
-   * is truly live gets re-blackened by the next retain and dropped then. */
+   * is truly live survives the next pass at its level and is dropped then. */
   if (gen_limit < SCR_CYC_OLD) {
     for (size_t i = 0; i < scr_cands.n; i++) {
       void *obj = scr_cands.v[i];
       ScrCycHdr *h = scr_cyc_hdr(obj);
       if (h->color == SCR_CYC_DOOMED) continue; /* being freed below */
-      h->color = SCR_CYC_PURPLE;
       if (!h->buffered) {
         h->buffered = 1;
         h->buf_index = scr_roots[h->gen].n;
@@ -752,19 +751,19 @@ static size_t scr_cyc_pass(unsigned gen_limit) {
   scr_collecting = true;
   scr_gen_limit = gen_limit;
 
-  /* markRoots: keep live candidates (still purple), drop the rest — an
-   * object re-retained since buffering is black. Drain the buffers before
-   * walking: tracing only adjusts counts and worklists, so nothing can
-   * re-buffer underneath us. Candidates ABOVE the limit keep their slots
-   * and wait for a pass at their own level. */
+  /* markRoots: every buffered entry is a candidate (retains do not mark
+   * candidates live; measured on the tsc-ts self-check, that filter dropped
+   * almost none, and it cost a header store per retain). Drain the buffers
+   * before walking: tracing only adjusts counts and worklists, so nothing
+   * can re-buffer underneath us. Candidates ABOVE the limit keep their
+   * slots and wait for a pass at their own level. */
   scr_cands.n = 0;
   for (unsigned g = 0; g <= gen_limit; g++) {
     for (size_t i = 0; i < scr_roots[g].n; i++) {
       void *obj = scr_roots[g].v[i];
       ScrCycHdr *h = scr_cyc_hdr(obj);
       h->buffered = 0;
-      if (h->color == SCR_CYC_PURPLE)
-        scr_cyc_push(&scr_cands, obj);
+      scr_cyc_push(&scr_cands, obj);
     }
     scr_roots[g].n = 0;
   }

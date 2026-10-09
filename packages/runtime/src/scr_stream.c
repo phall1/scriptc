@@ -314,7 +314,6 @@ static void scr_stream_release_direct(void *obj) {
 ScrStream *scr_stream_retain(ScrStream *s) {
   if (s && s->rc != SIZE_MAX) {
     s->rc++;
-    scr_cyc_mark_live(s);
   }
   return s;
 }

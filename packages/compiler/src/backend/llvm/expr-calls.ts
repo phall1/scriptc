@@ -25,7 +25,7 @@ import { f64Lit, ffiNativeTypeLl, ffiNativeParamLl, ffiNativeReturnLl } from "./
 import { canStackUnion, emitStackUnion } from "./stack-unions.js";
 import { emitCallArrayRead } from "./local-array-reads.js";
 import { emitStackMapRead } from "./map-read-lifetimes.js";
-import { borrowableInputs, emitBorrowedInput } from "./borrowed-inputs.js";
+import { borrowableInputs, emitBorrowedInput, emitBorrowedInputs } from "./borrowed-inputs.js";
 
 export function emitCallExpr(
   host: LlvmEmitterContext,
@@ -900,7 +900,9 @@ export function emitCallExpr(
       // carries; the target's interval is a compile-time constant.
       if (e.value.type.kind !== "object")
         throw new InternalCompilerError("llvm emitter bug: instanceOf on a non-object");
-      const v = host.emitExpr(e.value);
+      // The test only reads the vtable word: a borrowable operand needs no
+      // retain/release pair around it.
+      const v = emitBorrowedInputs(host, [e.value])[0]!;
       const target = host.classMetaOf(e.className);
       const pre = host.loadVtPre(v.name, e.value.type.className);
       let result: string | undefined;

@@ -10,7 +10,7 @@ import type { LlvmEmitterContext, ExprOf, LlValue } from "./expr-context.js";
 import { BYTES_ELEM_NUM, closureIdentityEqual, f64Lit } from "./common.js";
 import { emitStringInputs } from "./string-lifetimes.js";
 import { emitStringParts, stringParts } from "./string-construction.js";
-import { emitBorrowedInput } from "./borrowed-inputs.js";
+import { emitBorrowedInput, emitBorrowedInputs } from "./borrowed-inputs.js";
 import { exactInteger, widenInteger, integerNumber } from "./integer-values.js";
 import { integerArithmeticRange } from "../../ir/integer-ranges.js";
 import { emitArrayValues } from "./expr-containers.js";
@@ -147,8 +147,19 @@ export function emitOperatorExpr(
       ) {
         return { name: f64Lit(NaN), type: e.type };
       }
-      const l = host.emitExpr(e.left);
-      const r = host.emitExpr(e.right);
+      // Reference identity only reads the two pointers, so its operands can
+      // borrow instead of taking a retain/release pair around one compare.
+      // borrowableInputs keeps left-to-right evaluation and the owning
+      // fallback for each operand.
+      const identity =
+        (e.op === "===" || e.op === "!==") &&
+        e.left.type.kind !== "bool" &&
+        host.llType(e.left.type) === "ptr";
+      const operands = identity
+        ? emitBorrowedInputs(host, [e.left, e.right])
+        : [host.emitExpr(e.left), host.emitExpr(e.right)];
+      const l = operands[0]!;
+      const r = operands[1]!;
       const t = B.tmp();
       // Strict frem has JS's truncating remainder semantics, including
       // signed zero, while exposing constant divisors to LLVM.

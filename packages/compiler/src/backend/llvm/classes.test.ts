@@ -37,15 +37,46 @@ test("leaf layouts keep direct teardown while recursive layouts share the depth 
     for (const [name, bounded] of [
       [mangleClassReleaseDirect("Scalar"), false],
       [mangleClassReleaseDirect("Text"), false],
-      [mangleRecordRelease("leaf"), false],
-      [mangleClassRelease("Linked"), true],
-      [mangleRecordRelease("branch"), true],
+      // Standalone and record releases keep their teardown in the out-of-line
+      // half; the public symbol is the inlinable fast path.
+      [`${mangleRecordRelease("leaf")}_slow`, false],
+      [`${mangleClassRelease("Linked")}_slow`, true],
+      [`${mangleRecordRelease("branch")}_slow`, true],
     ] as const) {
       const body = new RegExp(`^define internal void @${name}\\([^]*?^}`, "m").exec(llvm)?.[0];
       expect(body, name).toBeDefined();
       expect(body?.includes("call void @scr_rc_destroy"), name).toBe(bounded);
     }
   }
+});
+
+test("releases split into an inlinable fast path and an out-of-line remainder", () => {
+  // An array of the class itself makes the hierarchy cycle-capable.
+  const kids = { kind: "array" as const, elem: { kind: "object" as const, className: "Node" } };
+  const mod: IrModule = {
+    irVersion: 15,
+    sourceFile: loc.file,
+    entry: "main",
+    functions: [{ name: "main", params: [], returnType: VOID, locals: [], body: [], loc }],
+    classes: [
+      { name: "Node", fields: [{ name: "kids", type: kids }], methods: [], loc },
+      { name: "Leaf", base: "Node", fields: [{ name: "kids", type: kids }], methods: [], loc },
+    ],
+  };
+  const llvm = emitLlvmModule(mod, { pointerBits: 64 });
+  const body = (name: string): string =>
+    new RegExp(`^define internal void @${name}\\([^]*?^}`, "m").exec(llvm)?.[0] ?? "";
+  // A hierarchy rooted in the program: a surviving release decrements and
+  // takes the possible-root step without loading the vtable.
+  const fast = body(mangleClassRelease("Node"));
+  expect(fast).toContain("%shared = icmp ult i64 %rcm2, -3");
+  expect(fast).toContain("load i16, ptr %bufp");
+  expect(fast).toContain(`call void @${mangleClassRelease("Node")}_slow(ptr %o)`);
+  expect(fast).not.toContain("%ScrVt");
+  // Only the last reference dispatches, from a noinline remainder.
+  const slow = body(`${mangleClassRelease("Node")}_slow`);
+  expect(slow).toMatch(/noinline/);
+  expect(slow).toContain("getelementptr inbounds %ScrVt, ptr %vt, i64 0, i32 2");
 });
 
 function graph() {

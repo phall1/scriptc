@@ -532,7 +532,6 @@ ScrMap *scr_map_new_typed(ScrMapKeyKind key_kind, ScrMapValKind val_kind,
 ScrMap *scr_map_retain(ScrMap *m) {
   if (m->rc != SIZE_MAX) {
     m->rc++;
-    if (m->key_trace || m->val_trace) scr_cyc_mark_live(m);
   }
   return m;
 }
