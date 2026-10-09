@@ -5793,6 +5793,48 @@ export function lowerIntrinsicProperty(
   return null;
 }
 
+/** A parenthesized identifier, or the element itself. One paren layer matches
+ * the other JavaScript heritage checks; assertions keep their own conversion. */
+function arrayElementNode(element: ts.Expression): ts.Expression {
+  return ts.isParenthesizedExpression(element) ? element.expression : element;
+}
+
+/** The binding was kept dynamic because a later write adds or deletes a key.
+ * Peek is read-only: this predicate runs before the element is lowered. */
+function dynOpenBinding(lowerer: Lowerer, element: ts.Expression): boolean {
+  const node = arrayElementNode(element);
+  if (!ts.isIdentifier(node)) return false;
+  const local = lowerer.peekLocal(node);
+  if (local) return local.type.kind === "dyn";
+  const global = lowerer.globalOf(node);
+  return global !== null && global.type.kind === "dyn";
+}
+
+/** True when `mapped` is a fixed record array, not a tuple and not a union. */
+function fixedRecordArray(lowerer: Lowerer, mapped: IrType | null): boolean {
+  if (mapped?.kind !== "array") return false;
+  if (mapped.elem.kind !== "record") return false;
+  const shape = lowerer.shapes.get(mapped.elem.shapeId);
+  return shape !== undefined && !shape.tuple;
+}
+
+/** JavaScript kept the element's binding open, but the array's inferred
+ * element type is still the record from before that write. Projecting the
+ * value onto that record drops the late key (`dataPoint.asDouble = n`,
+ * then `dataPoints: [dataPoint]`). An explicit destination and TypeScript
+ * literals keep the record projection. */
+function jsExpandedRecordArray(
+  lowerer: Lowerer,
+  expr: ts.ArrayLiteralExpression,
+  expected: (IrType & { kind: "array" }) | (IrType & { kind: "record" }) | undefined,
+  mapped: IrType | null,
+): boolean {
+  if (expected !== undefined) return false;
+  if (!isJsSourceFile(expr.getSourceFile())) return false;
+  if (!fixedRecordArray(lowerer, mapped)) return false;
+  return expr.elements.some((element) => dynOpenBinding(lowerer, element));
+}
+
 /** `[a, b, c]`. The element type comes from the contextual type when tsc
  * has one (`const a: number[] = []`, arguments, nested literals) and from
  * the literal's own inferred type otherwise. A bare `[]` with no context
@@ -5990,6 +6032,11 @@ export function lowerArrayLiteral(
     expr.elements.some(ts.isObjectLiteralExpression)
   )
     mapped = DYN;
+  // A late key on a JavaScript object (`point.extra = 1` after the
+  // literal) leaves the binding dynamic while this array still infers
+  // the original record. Checking the value back onto that record drops
+  // the key. Keep the array dynamic so the stored object is the binding.
+  if (jsExpandedRecordArray(lowerer, expr, expected, mapped)) mapped = DYN;
 
   // A TUPLE-typed slot (`const t: [string, number] = ["a", 1]`): the
   // literal constructs the tuple's record shape — one positional field
