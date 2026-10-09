@@ -15520,6 +15520,12 @@
     "<repo>/tests/corpus/4487-array-literal-optional-values.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/4560-field-store-borrowed-receivers.ts": {
+   "order": [
+    "<repo>/tests/corpus/4560-field-store-borrowed-receivers.ts"
+   ],
+   "diags": []
   }
  }
 }

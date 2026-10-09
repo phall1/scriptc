@@ -154,7 +154,7 @@ import {
   matchMapRead,
   type MapReadLifetimes,
 } from "./map-read-lifetimes.js";
-import { emitBorrowedFieldSequence } from "./borrowed-receivers.js";
+import { emitBorrowedFieldSequence, guardedValue } from "./borrowed-receivers.js";
 import { emitBorrowedInput } from "./borrowed-inputs.js";
 import { ReferenceEffects } from "./reference-effects.js";
 import { LlvmDebugInfo } from "./debug-info.js";
@@ -4963,6 +4963,16 @@ export class LlEmitter {
    * Other writable bindings need an owned snapshot. */
   canBorrowCallArgument(value: IrExpr): boolean {
     if (value.kind === "strLit") return true;
+    // Class casts reinterpret the same pointer (prefix layouts).
+    if (
+      (value.kind === "upcast" || value.kind === "downcast") &&
+      value.value.type.kind === "object"
+    )
+      return this.canBorrowCallArgument(value.value);
+    if (value.kind === "seqExpr") {
+      const guarded = guardedValue(value);
+      return guarded !== null && this.canBorrowCallArgument(guarded);
+    }
     if (value.kind !== "varRef") return false;
     const binding = this.binding(value.localId);
     return (
@@ -5183,7 +5193,7 @@ export class LlEmitter {
       }
       case "exprStmt":
         // A statement-position splice never observes its removed elements.
-        if (!emitDiscardedSplice(this, s.expr)) this.emitExpr(s.expr);
+        if (!emitDiscardedSplice(this, s.expr)) this.emitDiscarded(s.expr);
         break;
       case "arraySet": {
         // Evaluation order matches JS: array, index, then value. Ownership
@@ -5275,7 +5285,7 @@ export class LlEmitter {
         const nullable =
           s.kind === "fieldSet" ? this.nullableFields.get(s.className, s.field) : null;
         if (nullable && s.kind === "fieldSet") {
-          const obj = this.emitExpr(s.obj);
+          const obj = this.emitStableReceiver(s.obj, [s.value]);
           this.emitNullableFieldStore(obj.name, s.className, s.field, nullable, s.value);
           break;
         }
@@ -5286,9 +5296,7 @@ export class LlEmitter {
           this.storeInt32Field(ptr, v, s.value);
           break;
         }
-        const obj = isRefCounted(s.value.type)
-          ? this.emitExpr(s.obj)
-          : this.emitStableReceiver(s.obj, [s.value]);
+        const obj = this.emitStableReceiver(s.obj, [s.value]);
         const v = this.emitExpr(s.value);
         const { ptr, type } =
           s.kind === "fieldSet"
@@ -6324,23 +6332,48 @@ export class LlEmitter {
   emitOperatorExpr(
     e: ExprOf<"bin" | "unary" | "incDec" | "fieldIncDec" | "assignExpr" | "seqExpr">,
   ): LlValue {
-    if (e.kind === "seqExpr") {
-      // Saved operands can feed later call arguments. Transfer ownership
-      // to this expression's frame so they survive those reads and still
-      // die on the path that created them, including inside lazy branches.
-      this.scopes.push([]);
-      const result = emitBorrowedFieldSequence(this, e) ?? emitOperatorExpr(this, e);
-      for (const local of this.scopes.pop()!) {
-        this.currentFrame().push({
-          name: local.slot,
-          type: local.type,
-          slot: true,
-          ...(local.boxed ? { boxed: true } : {}),
-        });
-      }
-      return result;
-    }
+    if (e.kind === "seqExpr")
+      return this.emitSequence(
+        () => emitBorrowedFieldSequence(this, e) ?? emitOperatorExpr(this, e),
+      );
     return emitOperatorExpr(this, e);
+  }
+
+  /** Saved operands can feed later call arguments. Transfer ownership of a
+   * sequence's locals to this expression's frame so they survive those
+   * reads and still die on the path that created them, including inside
+   * lazy branches. */
+  private emitSequence<T>(body: () => T): T {
+    this.scopes.push([]);
+    const result = body();
+    for (const local of this.scopes.pop()!) {
+      this.currentFrame().push({
+        name: local.slot,
+        type: local.type,
+        slot: true,
+        ...(local.boxed ? { boxed: true } : {}),
+      });
+    }
+    return result;
+  }
+
+  /** A statement-position expression whose value is dropped. When a
+   * sequence's result only reads an unchanged local (a derived
+   * constructor's `super()` evaluates to `this`), its statements still run
+   * in place, but the result is neither retained nor released. */
+  private emitDiscarded(e: IrExpr): void {
+    if (
+      e.kind === "seqExpr" &&
+      isRefCounted(e.result.type) &&
+      e.result.kind !== "strLit" &&
+      this.canBorrowCallArgument(e.result)
+    ) {
+      this.emitSequence(() => {
+        for (const s of e.stmts) this.emitStmt(s);
+      });
+      return;
+    }
+    this.emitExpr(e);
   }
 
   emitControlExpr(
@@ -6543,6 +6576,12 @@ export class LlEmitter {
   emitReadReceiver(e: IrExpr): LlValue {
     if (!isRefCounted(e.type)) return this.emitExpr(e);
     if (e.kind === "strLit") return { name: this.internLiteral(e.value), type: e.type };
+    const guarded = guardedValue(e);
+    if (guarded !== null) {
+      // Throwing guards run in place, exactly as the sequence emits them.
+      for (const s of (e as IrExpr & { kind: "seqExpr" }).stmts) this.emitStmt(s);
+      return this.emitReadReceiver(guarded);
+    }
     if (e.kind === "varRef") {
       this.materializeSplitLocal(e.localId);
       const binding = this.binding(e.localId);
@@ -6818,6 +6857,10 @@ export class LlEmitter {
         return this.canBorrowReceiver(e.obj);
       case "ternary":
         return this.canBorrowReceiver(e.then) && this.canBorrowReceiver(e.else_);
+      case "seqExpr": {
+        const guarded = guardedValue(e);
+        return guarded !== null && this.canBorrowReceiver(guarded);
+      }
       // The runtime always sets a pending exception; its unreachable
       // typed dummy is null and owns no receiver.
       case "libCall":
