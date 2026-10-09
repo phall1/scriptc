@@ -16,13 +16,20 @@ import { hasRetainedFfiCallback } from "./ffi-callbacks.js";
  * not exceptions, so most intrinsics never contribute. The module evaluator's
  * internal await and throwing library calls are the exceptions: both can
  * surface a catchable rejection/error and seed the fixpoint like a `throw`. */
-export function computeMayThrow(mod: IrModule): {
+export function computeMayThrow(
+  mod: IrModule,
+  options: { stackChecks?: boolean } = {},
+): {
   fns: Set<string>;
   indirect: boolean;
   /** Worker programs: the functions that poll for termination on entry. */
   workerEntryPolls?: Set<string>;
+  /** With `stackChecks`: the functions that check the native stack guard on
+   * entry (and may therefore throw the stack-overflow RangeError). */
+  stackChecks?: Set<string>;
 } {
   const terminations = mod.workers === true ? workerTerminationPolls(mod) : null;
+  const stackChecks = options.stackChecks === true ? stackCheckedFunctions(mod) : null;
   interface Facts {
     throws: boolean;
     callees: string[];
@@ -302,6 +309,8 @@ export function computeMayThrow(mod: IrModule): {
     // A worker can be terminated at any of its polls: the noncatchable
     // stop unwinds like an exception from every function that polls.
     if (terminations?.polls.has(fn.name)) f.throws = true;
+    // A stack-overflow check throws Node's RangeError from the entry.
+    if (stackChecks?.has(fn.name)) f.throws = true;
     facts.set(fn.name, f);
   }
 
@@ -350,7 +359,12 @@ export function computeMayThrow(mod: IrModule): {
       cls = def.base;
     }
   }
-  return { fns: may, indirect, ...(terminations ? { workerEntryPolls: terminations.entry } : {}) };
+  return {
+    fns: may,
+    indirect,
+    ...(terminations ? { workerEntryPolls: terminations.entry } : {}),
+    ...(stackChecks ? { stackChecks } : {}),
+  };
 }
 
 /** Statement and expression kinds that cannot reenter scriptc code except
@@ -521,6 +535,66 @@ export function workerTerminationPolls(mod: IrModule): {
   for (const name of cyclicFunctions(edges)) entry.add(name);
   for (const name of entry) polls.add(name);
   return { entry, polls };
+}
+
+/** The functions that can take part in unbounded recursion, which check the
+ * native stack guard on entry: every function on a cycle of the call graph.
+ * Direct edges are calls, constructions and virtual dispatch. A function
+ * containing any operation that can reenter scriptc code other than through
+ * those edges (an indirect call, a callback-taking or dynamic operation, a
+ * library call; see boundedNode) also reaches every function that such an
+ * operation can invoke: closure targets and class members. Non-recursive
+ * functions, including leaf callbacks, stay check-free. */
+export function stackCheckedFunctions(mod: IrModule): Set<string> {
+  const reentry = "\0reentry";
+  const methodImpls = new Map<string, string[]>();
+  const memberPrefixes = new Set<string>();
+  for (const cls of mod.classes ?? []) {
+    memberPrefixes.add(`%${cls.name}.`);
+    for (const m of cls.methods ?? []) {
+      let list = methodImpls.get(m);
+      if (!list) methodImpls.set(m, (list = []));
+      list.push(`%${cls.name}.${m}`);
+    }
+  }
+  const names = new Set(mod.functions.map((fn) => fn.name));
+  const edges = new Map<string, string[]>();
+  const targets = new Set<string>();
+  for (const fn of mod.functions) {
+    const dot = fn.name.indexOf(".");
+    if (dot > 0 && memberPrefixes.has(fn.name.slice(0, dot + 1))) targets.add(fn.name);
+    const out: string[] = [];
+    let reenters = false;
+    const visit = (rec: IrExpr | IrStmt): boolean => {
+      if (!boundedNode(rec)) reenters = true;
+      switch (rec.kind) {
+        case "call":
+          out.push(rec.callee);
+          break;
+        case "new":
+          out.push(`%${rec.className}.constructor`);
+          break;
+        case "virtualCall":
+          out.push(...(methodImpls.get(rec.method) ?? []));
+          break;
+        case "closure":
+          targets.add(rec.fnName);
+          break;
+      }
+      return true;
+    };
+    everyStmtList(fn.body, { expr: visit, stmt: visit });
+    const callees = out.filter((callee) => names.has(callee));
+    if (reenters) callees.push(reentry);
+    edges.set(fn.name, callees);
+  }
+  edges.set(
+    reentry,
+    [...targets].filter((name) => names.has(name)),
+  );
+  const cyclic = cyclicFunctions(edges);
+  cyclic.delete(reentry);
+  return cyclic;
 }
 
 /** Functions on a cycle of the call graph (Tarjan's strongly connected
