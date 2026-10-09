@@ -5205,8 +5205,27 @@ export class LlEmitter {
         if (s.arr.type.kind !== "array")
           throw new InternalCompilerError("llvm emitter bug: arraySetLength on non-array");
         this.declare(`declare void @scr_arr_set_len(ptr, double)`);
+        // Assigning the current length (a reused work array reset to where
+        // it already is) changes nothing: the runtime's validation accepts
+        // exactly the value equal to the length (-0 included, NaN never),
+        // and no element is released. Everything else keeps the call.
+        const lenPtr = B.tmp(),
+          len = B.tmp(),
+          lenNumber = B.tmp(),
+          same = B.tmp();
+        const resize = B.newLabel("arr.len.set"),
+          done = B.newLabel("arr.len.done");
+        B.line(`${lenPtr} = getelementptr inbounds %ScrArr, ptr ${arr.name}, i32 0, i32 1`);
+        this.markMemoryPointer(lenPtr, "array:header");
+        B.line(`${len} = load ${this.sizeType}, ptr ${lenPtr}${this.fieldAliasAttachment(lenPtr)}`);
+        B.line(`${lenNumber} = uitofp ${this.sizeType} ${len} to double`);
+        B.line(`${same} = fcmp oeq double ${length.name}, ${lenNumber}`);
+        B.condBr(same, done, resize);
+        B.startBlock(resize);
         B.line(`call void @scr_arr_set_len(ptr ${arr.name}, double ${length.name})`);
         this.emitPendingCheck();
+        B.br(done);
+        B.startBlock(done);
         break;
       }
       case "arraySetUndefined":

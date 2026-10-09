@@ -15496,6 +15496,12 @@
     "<repo>/tests/corpus/4483-array-splice-statement.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/4484-array-length-reset.ts": {
+   "order": [
+    "<repo>/tests/corpus/4484-array-length-reset.ts"
+   ],
+   "diags": []
   }
  }
 }
