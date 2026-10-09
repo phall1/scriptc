@@ -23,6 +23,8 @@ function power(x: number, y: number): number { return x ** y; }
 function signed(x: number): number { return (x | 0) % -7; }
 function maybeZero(x: number, y: number): number { return (x | 0) % (y | 0); }
 console.log(remainder(-9.5, 8), constants(17.25), power(2, 3), signed(-7), maybeZero(7, 0));
+// Fractional arguments keep the parameters arbitrary (no call-site proof).
+console.log(remainder(5, 2.5), signed(-7.5), maybeZero(7.5, 2.5));
 `,
     );
     const result = await compile(entry, { outDir: dir, outPath, outputKind: "ir" });

@@ -22,6 +22,8 @@ function safe(input: number): number {
 function unknown(input: number): number { return (input + 1) >>> 0; }
 function negativeZero(): number { const x = -0; return x + x; }
 console.log(safe(17), unknown(1.5), 1 / negativeZero());
+// A fractional argument keeps safe's input arbitrary (no call-site proof).
+console.log(safe(0.5));
 `,
     );
     const result = await compile(entry, { outDir: dir, outPath, outputKind: "ir" });
