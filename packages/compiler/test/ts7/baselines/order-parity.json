@@ -15478,6 +15478,48 @@
     "<repo>/tests/corpus/4478-string-large-index-reads.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/4481-array-optional-push.ts": {
+   "order": [
+    "<repo>/tests/corpus/4481-array-optional-push.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4482-instanceof-static-class-optional.ts": {
+   "order": [
+    "<repo>/tests/corpus/4482-instanceof-static-class-optional.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4483-array-splice-statement.ts": {
+   "order": [
+    "<repo>/tests/corpus/4483-array-splice-statement.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4484-array-length-reset.ts": {
+   "order": [
+    "<repo>/tests/corpus/4484-array-length-reset.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4485-array-splice-optional-item.ts": {
+   "order": [
+    "<repo>/tests/corpus/4485-array-splice-optional-item.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4486-array-field-element-borrows.ts": {
+   "order": [
+    "<repo>/tests/corpus/4486-array-field-element-borrows.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4487-array-literal-optional-values.ts": {
+   "order": [
+    "<repo>/tests/corpus/4487-array-literal-optional-values.ts"
+   ],
+   "diags": []
   }
  }
 }

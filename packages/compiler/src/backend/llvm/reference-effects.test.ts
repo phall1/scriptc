@@ -179,3 +179,19 @@ test("checked scalar tests preserve owners while materializing reads stay conser
     summary.preserves({ kind: "dynScalarEq", left: value, right: replace, type: BOOL, loc }),
   ).toBe(false);
 });
+
+test("nullish fallbacks and Math calls preserve references; their operands still count", () => {
+  const min: IrExpr = { kind: "libCall", fn: "math.min", args: [number, number], type: F64, loc };
+  const fallback = (right: IrExpr): IrExpr => ({
+    kind: "nullish",
+    left: number,
+    right,
+    type: F64,
+    loc,
+  });
+  expect(effects([fn("pure", [fallback(min)])]).functions).toEqual(new Set(["pure"]));
+  const write: IrExpr = { kind: "assignExpr", localId: "owner", value: text, type: STRING, loc };
+  const summary = effects([fn("read")]);
+  expect(summary.preserves(fallback(write))).toBe(false);
+  expect(summary.preserves(fallback(call("read")))).toBe(true);
+});

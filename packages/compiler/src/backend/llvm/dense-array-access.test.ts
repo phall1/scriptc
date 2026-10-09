@@ -174,3 +174,104 @@ test("state and presence queries answer dense slots inline", () => {
   expect(fn).toMatch(/call double @scr_arr_state\(.*\) cold memory\(read/);
   expect(fn).toMatch(/call i1 @scr_arr_has\(.*\) cold memory\(read/);
 });
+
+test("statement-position splices insert values without result or item arrays", () => {
+  const num = (value: number): IrExpr => ({ kind: "numLit", value, type: F64, loc });
+  const splice = (items: IrExpr[] | null): IrStmt => ({
+    kind: "exprStmt",
+    expr: {
+      kind: "arrIntrinsic",
+      method: items ? "spliceInsert" : "splice",
+      receiver: ref("s", words),
+      args: [
+        index,
+        num(0),
+        ...(items ? [{ kind: "arrayLit" as const, elems: items, type: words, loc }] : []),
+      ],
+      type: words,
+      loc,
+    },
+    loc,
+  });
+  const llvm = emitLlvmModule(
+    module("insert", VOID, [
+      splice([{ kind: "strLit", value: "x", type: STRING, loc }]),
+      splice(null),
+    ]),
+  );
+  const fn = body(llvm, "insert");
+  expect(fn.match(/call void @scr_arr_splice_drop\(/g)).toHaveLength(2);
+  expect(fn).toMatch(/call void @scr_arr_splice_drop\(.*, i64 1, ptr %t\d+\)/);
+  expect(fn).toMatch(/call void @scr_arr_splice_drop\(.*, i64 0, ptr null\)/);
+  expect(fn).not.toContain("@scr_arr_new");
+  expect(fn).not.toContain("@scr_arr_splice_insert");
+  expect(fn).not.toContain("@scr_arr_release");
+});
+
+test("length assignments skip the runtime when the length is unchanged", () => {
+  const llvm = emitLlvmModule(
+    module("reset", VOID, [{ kind: "arraySetLength", arr: ref("s", words), length: index, loc }]),
+  );
+  const fn = body(llvm, "reset");
+  expect(fn).toMatch(/uitofp i64 .* to double/);
+  expect(fn).toMatch(/fcmp oeq double %p?\S*, %t\d+/);
+  expect(fn.match(/call void @scr_arr_set_len\(/g)).toHaveLength(1);
+  expect(fn).toMatch(/br i1 %t\d+, label %arr\.len\.done\d*, label %arr\.len\.set\d*/);
+});
+
+test("a discarded conditional splice drops the result of its literal arm", () => {
+  const insert = (items: IrExpr): IrExpr => ({
+    kind: "arrIntrinsic",
+    method: "spliceInsert",
+    receiver: ref("s", words),
+    args: [index, { kind: "numLit", value: 0, type: F64, loc }, items],
+    type: words,
+    loc,
+  });
+  const word: IrExpr = { kind: "strLit", value: "x", type: STRING, loc };
+  const llvm = emitLlvmModule(
+    module("pick", VOID, [
+      {
+        kind: "exprStmt",
+        expr: {
+          kind: "seqExpr",
+          stmts: [],
+          result: {
+            kind: "ternary",
+            cond: { kind: "boolLit", value: true, type: BOOL, loc },
+            then: insert({
+              kind: "seqExpr",
+              stmts: [],
+              result: { kind: "arrayLit", elems: [word], type: words, loc },
+              type: words,
+              loc,
+            }),
+            else_: insert({ kind: "arrayLit", elems: [word], type: words, loc }),
+            type: words,
+            loc,
+          },
+          type: words,
+          loc,
+        },
+        loc,
+      },
+    ]),
+  );
+  const fn = body(llvm, "pick");
+  expect(fn.match(/call void @scr_arr_splice_drop\(/g)).toHaveLength(1);
+  expect(fn.match(/call ptr @scr_arr_splice_insert\(/g)).toHaveLength(1);
+  expect(fn).toMatch(/drop\.t\d*:/);
+});
+
+test("an empty literal's capacity hint sizes its first dense storage", () => {
+  const llvm = emitLlvmModule(
+    module("fresh", words, [
+      {
+        kind: "return",
+        value: { kind: "arrayLit", elems: [], capacity: 3, type: words, loc },
+        loc,
+      },
+    ]),
+  );
+  expect(body(llvm, "fresh")).toMatch(/call ptr @scr_arr_new\(.*, i64 3\)/);
+});

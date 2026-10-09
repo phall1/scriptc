@@ -23,6 +23,7 @@ import {
 } from "../../../ir/ir.js";
 import { ARRAY_METHODS } from "../surfaces.js";
 import { tryLowerExpression } from "../expressions/try-lower-expression.js";
+import { isSafeToRepeat } from "../expressions/evaluation-safety.js";
 import { isJsSourceFile, locOf } from "../../program.js";
 import { islandPrimitiveExit, lowerDynDispatchMethodCall } from "../lower-calls.js";
 import {
@@ -58,6 +59,134 @@ import {
   callbackArrayElement,
   requireProducedArrayElement,
 } from "./callback-arguments.js";
+
+/** `a.push(v, ...)` where some argument is a runtime-optional read of the
+ * element type (an unchecked array read or a hole-observing iteration
+ * binding). Every argument evaluates before the first append; a present
+ * value takes the ordinary push (and its inline dense fast path), while a
+ * missing one appends a present-undefined slot at the current length,
+ * exactly what Node stores. The result is the final length. Pure
+ * receivers and arguments are repeated instead of copied into temporaries:
+ * appends run no user code, so repeated reads observe the same values. */
+function lowerOptionalArrayPush(
+  lowerer: Lowerer,
+  receiver: IrExpr,
+  values: IrExpr[],
+  elem: IrType,
+  loc: SrcLoc,
+): IrExpr {
+  const stmts: IrStmt[] = [];
+  const pure = isSafeToRepeat(receiver) && values.every(isSafeToRepeat);
+  const stable = (value: IrExpr, name: string): IrExpr => {
+    if (pure) return value;
+    const temp = lowerer.declareHiddenLocal(name, value.type);
+    stmts.push({ kind: "varDecl", localId: temp.id, init: value, loc });
+    return varRef(temp.id, value.type, loc);
+  };
+  const target = stable(receiver, "%pushTarget");
+  const args = values.map((value) => stable(value, "%pushValue"));
+  const length = (): IrExpr => ({
+    kind: "arrIntrinsic",
+    method: "length",
+    receiver: target,
+    args: [],
+    type: F64,
+    loc,
+  });
+  const push = (value: IrExpr): IrStmt => ({
+    kind: "exprStmt",
+    expr: { kind: "arrIntrinsic", method: "push", receiver: target, args: [value], type: F64, loc },
+    loc,
+  });
+  for (const value of args) {
+    if (value.type.kind === "union" && lowerer.runtimeOptionalWidening(value.type, elem) !== null) {
+      const unionId = value.type.unionId;
+      stmts.push({
+        kind: "if",
+        cond: {
+          kind: "unionIsTag",
+          unionId,
+          tag: lowerer.armTag(unionId, UNDEFINED_T),
+          negated: false,
+          value,
+          type: BOOL,
+          loc,
+        },
+        then: [{ kind: "arraySetUndefined", arr: target, index: length(), loc }],
+        else_: [push(lowerer.coerceToExpected(value, elem))],
+        loc,
+      });
+    } else {
+      stmts.push(push(lowerer.coerceToExpected(value, elem)));
+    }
+  }
+  return { kind: "seqExpr", stmts, result: length(), type: F64, loc };
+}
+
+/** `a.splice(start, count, v)` where v may hold undefined at run time.
+ * Receiver, start, count, and v evaluate once, in order; a present v is
+ * inserted as a plain element literal (which a statement-position splice
+ * then inserts without any temporary array), a missing one through the
+ * present-undefined item array. Both arms return the removed elements. */
+function lowerOptionalSpliceItem(
+  lowerer: Lowerer,
+  receiver: IrExpr,
+  positions: IrExpr[],
+  value: IrExpr,
+  elem: IrType,
+  arrType: IrType & { kind: "array" },
+  loc: SrcLoc,
+): IrExpr {
+  const stmts: IrStmt[] = [];
+  const repeatable = (e: IrExpr): boolean => e.kind === "numLit" || isSafeToRepeat(e);
+  const pure = repeatable(receiver) && positions.every(repeatable) && repeatable(value);
+  const stable = (e: IrExpr, name: string): IrExpr => {
+    if (pure) return e;
+    const temp = lowerer.declareHiddenLocal(name, e.type);
+    stmts.push({ kind: "varDecl", localId: temp.id, init: e, loc });
+    return varRef(temp.id, e.type, loc);
+  };
+  const target = stable(receiver, "%spliceTarget");
+  const bounds = positions.map((position) => stable(position, "%splicePosition"));
+  const item = stable(value, "%spliceValue");
+  if (item.type.kind !== "union")
+    throw new InternalCompilerError("runtime-optional splice item is not a union");
+  const splice = (items: IrExpr): IrExpr => ({
+    kind: "arrIntrinsic",
+    method: "spliceInsert",
+    receiver: target,
+    args: [...bounds, items],
+    type: arrType,
+    loc,
+  });
+  return {
+    kind: "seqExpr",
+    stmts,
+    result: {
+      kind: "ternary",
+      cond: {
+        kind: "unionIsTag",
+        unionId: item.type.unionId,
+        tag: lowerer.armTag(item.type.unionId, UNDEFINED_T),
+        negated: false,
+        value: item,
+        type: BOOL,
+        loc,
+      },
+      then: splice(lowerArrayValueItems(lowerer, [item], elem, arrType, loc)),
+      else_: splice({
+        kind: "arrayLit",
+        elems: [lowerer.coerceToExpected(item, elem)],
+        type: arrType,
+        loc,
+      }),
+      type: arrType,
+      loc,
+    },
+    type: arrType,
+    loc,
+  };
+}
 
 function primitivePositionType(lowerer: Lowerer, type: IrType): boolean {
   if (type.kind === "union") {
@@ -670,6 +799,15 @@ export function lowerArrayMethodCall(
         (probe) => probe !== null && lowerer.runtimeOptionalWidening(probe.type, elem) !== null,
       )
     ) {
+      if (name === "push") {
+        return lowerOptionalArrayPush(
+          lowerer,
+          receiver,
+          call.arguments.map((arg) => lowerer.lowerExpr(arg)),
+          elem,
+          loc,
+        );
+      }
       const items = lowerArrayValueItems(
         lowerer,
         call.arguments.map((arg) => lowerer.lowerExpr(arg)),
@@ -679,7 +817,7 @@ export function lowerArrayMethodCall(
       );
       return {
         kind: "arrIntrinsic",
-        method: name === "push" ? "pushSpread" : "unshiftSpread",
+        method: "unshiftSpread",
         receiver,
         args: [items],
         type: F64,
@@ -818,6 +956,17 @@ export function lowerArrayMethodCall(
     const statefulItems = itemProbes.some(
       (probe) => probe !== null && lowerer.runtimeOptionalWidening(probe.type, elem) !== null,
     );
+    if (statefulItems && itemNodes.length === 1) {
+      return lowerOptionalSpliceItem(
+        lowerer,
+        receiver,
+        args,
+        lowerer.lowerExpr(itemNodes[0]!),
+        elem,
+        receiverIr,
+        loc,
+      );
+    }
     const items: IrExpr = hasSpread
       ? lowerArraySpreadItems(lowerer, itemNodes, elem, receiverIr, loc)
       : statefulItems

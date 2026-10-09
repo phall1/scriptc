@@ -146,6 +146,98 @@ export function emitArrayValues(
   return result;
 }
 
+/** A splice whose removed-elements array is discarded (statement position)
+ * and whose insertion items, if any, are plain evaluated values: evaluate
+ * the receiver, start, count, and items in order, then splice the values in
+ * without a result or argument array. Returns false for every other shape,
+ * which keeps the ordinary intrinsic. */
+export function emitDiscardedSplice(host: LlvmEmitterContext, e: IrExpr): boolean {
+  if (!discardsSplice(e)) return false;
+  emitDiscarded(host, e);
+  return true;
+}
+
+/** The plain-value items of a splice that can drop its result, or null. */
+function droppableSpliceItems(e: IrExpr): IrExpr[] | null {
+  if (e.kind !== "arrIntrinsic" || e.receiver.type.kind !== "array") return null;
+  if (e.method === "splice") return [];
+  if (e.method !== "spliceInsert") return null;
+  const list = e.args[2];
+  if (list?.kind !== "arrayLit" || (list.spreads?.length ?? 0) > 0) return null;
+  return list.elems.length <= 64 ? list.elems : null;
+}
+
+/** A droppable splice, possibly behind statements or one arm of a
+ * conditional (the runtime-optional item lowering). */
+function discardsSplice(e: IrExpr): boolean {
+  if (e.kind === "seqExpr") return discardsSplice(e.result);
+  if (e.kind === "ternary") return discardsSplice(e.then) || discardsSplice(e.else_);
+  return droppableSpliceItems(e) !== null;
+}
+
+/** Emit an expression whose value is unused. Ternary arms keep their own
+ * frames, exactly like an evaluated conditional. */
+function emitDiscarded(host: LlvmEmitterContext, e: IrExpr): void {
+  const B = host.B;
+  if (e.kind === "seqExpr") {
+    for (const s of e.stmts) host.emitStmt(s);
+    emitDiscarded(host, e.result);
+    return;
+  }
+  if (e.kind === "ternary") {
+    const c = host.emitExpr(e.cond);
+    const lt = B.newLabel("drop.t"),
+      lf = B.newLabel("drop.f"),
+      lj = B.newLabel("drop.j");
+    B.condBr(c.name, lt, lf);
+    for (const [label, arm] of [
+      [lt, e.then],
+      [lf, e.else_],
+    ] as const) {
+      B.startBlock(label);
+      host.frames.push([]);
+      emitDiscarded(host, arm);
+      host.releaseFrame(host.frames.pop()!);
+      B.br(lj);
+    }
+    B.startBlock(lj);
+    return;
+  }
+  const items = droppableSpliceItems(e);
+  if (items === null || e.kind !== "arrIntrinsic" || e.receiver.type.kind !== "array") {
+    host.emitExpr(e);
+    return;
+  }
+  const r = emitBorrowedInput(host, e.receiver);
+  const acc = elemAccess(e.receiver.type.elem);
+  const start = host.emitExpr(e.args[0]!);
+  const count = e.args[1] ? host.emitExpr(e.args[1]).name : F64_INF;
+  const values = items.map((item) => host.emitExpr(item));
+  if (acc === "ref") values.forEach((value) => host.moveTemp(value));
+  let buffer = "null";
+  if (values.length > 0) {
+    buffer = B.tmp();
+    B.entryAllocas.push(`${buffer} = alloca [${values.length} x i64]`);
+    values.forEach((value, i) => {
+      const slot = B.tmp(),
+        pointer = B.tmp();
+      const pack =
+        acc === "f64"
+          ? `bitcast double ${value.name} to i64`
+          : acc === "bool"
+            ? `zext i1 ${value.name} to i64`
+            : `ptrtoint ptr ${value.name} to i64`;
+      B.line(`${slot} = ${pack}`);
+      B.line(`${pointer} = getelementptr inbounds i64, ptr ${buffer}, ${host.sizeType} ${i}`);
+      B.line(`store i64 ${slot}, ptr ${pointer}`);
+    });
+  }
+  host.declare(`declare void @scr_arr_splice_drop(ptr, double, double, ${host.sizeType}, ptr)`);
+  B.line(
+    `call void @scr_arr_splice_drop(ptr ${r.name}, double ${start.name}, double ${count}, ${host.sizeType} ${values.length}, ptr ${buffer})`,
+  );
+}
+
 export function emitArrayCopyLoop(
   host: LlvmEmitterContext,
   dst: string,

@@ -2036,6 +2036,12 @@ function validateFunction(
         if (!isSupportedArrayElem(elem)) {
           err(`arrayLit with unsupported ${elem.kind} elements (frontend must fence)`, e.loc);
         }
+        if (
+          e.capacity !== undefined &&
+          (!Number.isInteger(e.capacity) || e.capacity < e.elems.length || e.capacity > 1024)
+        ) {
+          err(`arrayLit capacity ${e.capacity} must be an integer in [elements, 1024]`, e.loc);
+        }
         const spreadSet = new Set(e.spreads ?? []);
         for (const i of spreadSet) {
           if (!Number.isInteger(i) || i < 0 || i >= e.elems.length) {

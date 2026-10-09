@@ -47,6 +47,7 @@ function expressionPreservesEdges(
     case "incDec":
     case "toBool":
     case "logical":
+    case "nullish":
     case "ternary":
     case "seqExpr":
     case "fieldGet":
@@ -84,7 +85,13 @@ function expressionPreservesEdges(
     case "libCall":
       // The typed-message constructor only allocates an error and retains
       // its message. The checked options constructor may invoke user code.
-      return e.fn === "error.new" || e.fn === "error.nodeThrow" || isStableReceiverOperand(e, "");
+      // Math functions take numbers (the spread forms only read an array).
+      return (
+        e.fn === "error.new" ||
+        e.fn === "error.nodeThrow" ||
+        e.fn.startsWith("math.") ||
+        isStableReceiverOperand(e, "")
+      );
     case "call":
       return call(e);
     case "arrIntrinsic":

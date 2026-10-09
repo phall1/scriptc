@@ -869,6 +869,42 @@ static void test_bulk_reference_ownership(void) {
   check(scr_arr_live_count() == arrays0, "bulk reference operations release every array");
 }
 
+/* Statement-position splices release removed values and keep inserted
+ * ownership, on the dense path and the sparse fallback alike. */
+static void test_splice_drop(void) {
+  long strings0 = scr_str_live_count(), arrays0 = scr_arr_live_count();
+  ScrArr *a = scr_arr_new(SCR_ELEM_STR, 0);
+  uint64_t slots[12];
+  for (size_t i = 0; i < 12; i++) {
+    char text[] = {(char)('a' + i)};
+    slots[i] = (uint64_t)(uintptr_t)scr_str_from_utf8_lossy((const uint8_t *)text, 1);
+  }
+  scr_arr_push_many(a, 10, slots);
+  scr_arr_set_undefined(a, 10);
+  scr_arr_set_len(a, 13); /* holes at 11 and 12 */
+  scr_arr_splice_drop(a, 1, 9, 1, slots + 10); /* removes b..j (> 8 values) */
+  check_f64(scr_arr_len(a), 5, "drop splice removes and inserts in place");
+  check(scr_arr_state(a, 2) == SCR_ARR_UNDEFINED, "drop splice shifts explicit undefined");
+  check(scr_arr_state(a, 3) == SCR_ARR_HOLE, "drop splice shifts holes");
+  check(scr_str_live_count() == strings0 + 3, "drop splice releases every removed value");
+  scr_arr_splice_drop(a, -2, INFINITY, 0, NULL);
+  check_f64(scr_arr_len(a), 3, "drop splice clamps relative starts and counts");
+  scr_arr_splice_drop(a, NAN, -1, 1, slots + 11);
+  check_f64(scr_arr_len(a), 4, "drop splice treats NaN and negative counts as zero");
+  ScrStr *first = scr_arr_get_ref(a, 0);
+  check(first == (ScrStr *)(uintptr_t)slots[11], "drop splice inserts at the clamped start");
+  scr_str_release(first);
+  ScrArr *s = scr_arr_new(SCR_ELEM_STR, 0);
+  scr_arr_set_ref(s, 2000000, scr_str_retain((ScrStr *)(uintptr_t)slots[0]));
+  uint64_t one = (uint64_t)(uintptr_t)scr_str_retain((ScrStr *)(uintptr_t)slots[0]);
+  scr_arr_splice_drop(s, 0, 1, 1, &one);
+  check_f64(scr_arr_len(s), 2000001, "sparse drop splice keeps sparse semantics");
+  scr_arr_release(s);
+  scr_arr_release(a);
+  check(scr_str_live_count() == strings0, "drop splices balance string ownership");
+  check(scr_arr_live_count() == arrays0, "drop splices free their temporary arrays");
+}
+
 typedef struct {
   ScrStr *value;
   size_t position;
@@ -1108,6 +1144,7 @@ int main(int argc, char **argv) {
   test_sparse_holes();
   test_large_storage();
   test_bulk_reference_ownership();
+  test_splice_drop();
 
   fprintf(stderr, "%ld/%ld cases passed\n", total - failed, total);
   return failed == 0 ? 0 : 1;

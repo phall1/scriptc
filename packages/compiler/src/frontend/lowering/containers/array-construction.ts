@@ -70,7 +70,13 @@ export function lowerArrayValueItems(
     {
       kind: "varDecl",
       localId: out.id,
-      init: { kind: "arrayLit", elems: [], type: arrType, loc },
+      init: {
+        kind: "arrayLit",
+        elems: [],
+        ...(values.length > 0 ? { capacity: Math.min(values.length, 1024) } : {}),
+        type: arrType,
+        loc,
+      },
       loc,
     },
   ];
@@ -93,6 +99,7 @@ export function lowerArraySpreadItems(
 ): IrExpr {
   const out = lowerer.declareHiddenLocal("%arrayItems", arrType);
   const outRef = varRef(out.id, arrType, loc);
+  const plainItems = nodes.filter((node) => !ts.isSpreadElement(node)).length;
   const length = (): IrExpr => ({
     kind: "arrIntrinsic",
     method: "length",
@@ -105,7 +112,13 @@ export function lowerArraySpreadItems(
     {
       kind: "varDecl",
       localId: out.id,
-      init: { kind: "arrayLit", elems: [], type: arrType, loc },
+      init: {
+        kind: "arrayLit",
+        elems: [],
+        ...(plainItems > 0 ? { capacity: Math.min(plainItems, 1024) } : {}),
+        type: arrType,
+        loc,
+      },
       loc,
     },
   ];
