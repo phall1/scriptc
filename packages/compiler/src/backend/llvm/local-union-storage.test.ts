@@ -109,7 +109,7 @@ test("conditional and reassigned locals own payload snapshots without heap wrapp
   expect(facts(mod).get("item")?.ownerType).toEqual(STRING);
   for (const bits of [32, 64] as const) {
     const ir = body(mod, bits);
-    expect(ir).toContain("@scr_map_get_f64_ref");
+    expect(ir).toContain("call ptr @sc_map_entry_f64("); // inline number-key read
     expect(ir).toContain("@scr_str_release");
     expect(ir).not.toMatch(/@scr_union_(?:new|retain|release)/);
     expect(ir).toContain("store i64 0");

@@ -290,6 +290,7 @@ import { LlWalkers } from "./walkers.js";
 import { isObjectArm, NULLABLE_ABSENT, NULLABLE_NULL, NullableUnions } from "./nullable-unions.js";
 import { emitNullablePresent, emitUnionPeek, emitUnionTag } from "./union-repr.js";
 import { literalCapWord } from "./string-key-hash.js";
+import { NUMBER_MAP_ENTRY_DECL } from "./map-number-lookup.js";
 import {
   arrNewCall,
   boxAccess,
@@ -1662,6 +1663,15 @@ export class LlEmitter {
       ...(this.rcHelpers === null
         ? []
         : [`%ScrMapRc = type { ${this.sizeType}, i32, i32, ptr, ptr, ptr, ptr, ptr, ptr }`]),
+      // The complete ScrMap and its { key, val, hash } entry, read by the
+      // inline number-key lookup (sc_map_entry_f64): entries is field 12,
+      // the direct index and its length fields 18 and 19.
+      ...(this.decls.has(NUMBER_MAP_ENTRY_DECL)
+        ? [
+            `%ScrMapIx = type { ${this.sizeType}, i32, i32, ptr, ptr, ptr, ptr, ptr, ptr, ${this.sizeType}, ${this.sizeType}, ${this.sizeType}, ptr, ${this.sizeType}, ptr, ${this.sizeType}, ptr, ptr, ptr, ${this.sizeType} }`,
+            `%ScrMapEntry = type { i64, i64, i64 }`,
+          ]
+        : []),
       // The runtime error prefix { rc, vt, name, message, code, cause } and the
       // class-object shape { rc, pre, post, ctor, name } — field reads on
       // builtin errors and classval loads GEP through these.
@@ -2546,6 +2556,55 @@ export class LlEmitter {
         `  br label %done`,
         `done:`,
         `  ret ptr %b`,
+        `}`,
+        ``,
+      );
+    }
+    // Number-key Map/Set lookups probe the runtime's direct index inline:
+    // while ndense is nonzero every live key is an integer below it, so an
+    // in-range integral key reads its slot (entry index + 1, 0 = absent) and
+    // any other key is absent. Maps without the index (ndense 0) and every
+    // non-integral probe outside the table take the runtime lookup, which
+    // keeps the complete SameValueZero semantics.
+    if (this.decls.has(NUMBER_MAP_ENTRY_DECL)) {
+      const sz = this.sizeType;
+      defs.push(
+        `define internal ptr @sc_map_entry_f64(ptr %m, double %k) ${FN_ATTRS} {`,
+        `entry:`,
+        `  %ndp = getelementptr inbounds %ScrMapIx, ptr %m, i32 0, i32 19`,
+        `  %nd = load ${sz}, ptr %ndp`,
+        `  %ndf = uitofp ${sz} %nd to double`,
+        `  %lo = fcmp oge double %k, 0.0`,
+        `  %hi = fcmp olt double %k, %ndf`,
+        `  %in = and i1 %lo, %hi`,
+        `  br i1 %in, label %direct, label %outside`,
+        `direct:`,
+        `  %i = fptoui double %k to ${sz}`,
+        `  %back = uitofp ${sz} %i to double`,
+        `  %int = fcmp oeq double %back, %k`,
+        `  br i1 %int, label %slot, label %miss`,
+        `slot:`,
+        `  %dp = getelementptr inbounds %ScrMapIx, ptr %m, i32 0, i32 18`,
+        `  %dense = load ptr, ptr %dp`,
+        `  %sp = getelementptr inbounds i32, ptr %dense, ${sz} %i`,
+        `  %s = load i32, ptr %sp`,
+        `  %empty = icmp eq i32 %s, 0`,
+        `  br i1 %empty, label %miss, label %hit`,
+        `hit:`,
+        `  %e32 = sub i32 %s, 1`,
+        sz === "i32" ? `  %e = add i32 %e32, 0` : `  %e = zext i32 %e32 to ${sz}`,
+        `  %ep = getelementptr inbounds %ScrMapIx, ptr %m, i32 0, i32 12`,
+        `  %entries = load ptr, ptr %ep`,
+        `  %found = getelementptr inbounds %ScrMapEntry, ptr %entries, ${sz} %e`,
+        `  ret ptr %found`,
+        `miss:`,
+        `  ret ptr null`,
+        `outside:`,
+        `  %dense.any = icmp ne ${sz} %nd, 0`,
+        `  br i1 %dense.any, label %miss, label %slow`,
+        `slow:`,
+        `  %r = call ptr @scr_map_entry_f64(ptr %m, double %k)`,
+        `  ret ptr %r`,
         `}`,
         ``,
       );

@@ -21,7 +21,13 @@ import {
   emitMapLookupKey,
   borrowsMapReadInputs,
   borrowsMapMutationReceiver,
+  inlineNumberKey,
 } from "./map-read-lifetimes.js";
+import {
+  emitNumberMapGetRef,
+  emitNumberMapGetScalar,
+  emitNumberMapHas,
+} from "./map-number-lookup.js";
 import { emitBorrowedInput } from "./borrowed-inputs.js";
 import { emitStringSliceRead } from "./string-slices.js";
 import { emitDenseArrayNumber, emitDenseArrayPush } from "./dense-array-access.js";
@@ -991,12 +997,18 @@ export function emitMapLikeIntrinsic(
         B.line(`${t} = load ptr, ptr ${slot}`);
         return host.own({ name: t, type: e.type });
       }
+      const numberKey = inlineNumberKey(k);
       if (value.kind === "union") {
-        host.declare(`declare ptr @scr_map_get_${kAcc}_ref(ptr, ${kTy})`);
-        const raw = B.tmp();
         const isnull = B.tmp();
         const t = B.tmp();
-        B.line(`${raw} = call ptr @scr_map_get_${kAcc}_ref(ptr ${r.name}, ${k.args})`);
+        let raw: string;
+        if (numberKey !== null) {
+          raw = emitNumberMapGetRef(host, r.name, numberKey, value);
+        } else {
+          host.declare(`declare ptr @scr_map_get_${kAcc}_ref(ptr, ${kTy})`);
+          raw = B.tmp();
+          B.line(`${raw} = call ptr @scr_map_get_${kAcc}_ref(ptr ${r.name}, ${k.args})`);
+        }
         B.line(`${isnull} = icmp eq ptr ${raw}, null`);
         B.line(`${t} = select i1 ${isnull}, ptr ${absent}, ptr ${raw}`);
         return host.own({ name: t, type: e.type });
@@ -1006,16 +1018,40 @@ export function emitMapLikeIntrinsic(
         throw new InternalCompilerError("llvm emitter bug: map get union lacks its value arm");
       if (value.kind === "f64" || value.kind === "bool") {
         const outTy = value.kind === "f64" ? "double" : "i8";
-        const outSlot = B.slot();
-        B.entryAllocas.push(`${outSlot} = alloca ${outTy}`);
-        B.line(`store ${outTy} ${value.kind === "f64" ? f64Lit(0) : "0"}, ptr ${outSlot}`);
-        host.declare(
-          `declare zeroext i1 @scr_map_get_${kAcc}_${value.kind === "f64" ? "f64" : "bool"}(ptr, ${kTy}, ptr)`,
-        );
-        const found = B.tmp();
-        B.line(
-          `${found} = call zeroext i1 @scr_map_get_${kAcc}_${value.kind === "f64" ? "f64" : "bool"}(ptr ${r.name}, ${k.args}, ptr ${outSlot})`,
-        );
+        let found: string;
+        let readHit: () => string;
+        if (numberKey !== null) {
+          const scalar = emitNumberMapGetScalar(host, r.name, numberKey);
+          found = scalar.found;
+          readHit = () => {
+            const hit = B.tmp();
+            B.line(
+              value.kind === "f64"
+                ? `${hit} = bitcast i64 ${scalar.bits} to double`
+                : `${hit} = icmp ne i64 ${scalar.bits}, 0`,
+            );
+            return hit;
+          };
+        } else {
+          const outSlot = B.slot();
+          B.entryAllocas.push(`${outSlot} = alloca ${outTy}`);
+          B.line(`store ${outTy} ${value.kind === "f64" ? f64Lit(0) : "0"}, ptr ${outSlot}`);
+          host.declare(
+            `declare zeroext i1 @scr_map_get_${kAcc}_${value.kind === "f64" ? "f64" : "bool"}(ptr, ${kTy}, ptr)`,
+          );
+          found = B.tmp();
+          B.line(
+            `${found} = call zeroext i1 @scr_map_get_${kAcc}_${value.kind === "f64" ? "f64" : "bool"}(ptr ${r.name}, ${k.args}, ptr ${outSlot})`,
+          );
+          readHit = () => {
+            const rawOut = B.tmp();
+            B.line(`${rawOut} = load ${outTy}, ptr ${outSlot}`);
+            if (value.kind !== "bool") return rawOut;
+            const hit = B.tmp();
+            B.line(`${hit} = trunc i8 ${rawOut} to i1`);
+            return hit;
+          };
+        }
         const slot = B.slot();
         B.entryAllocas.push(`${slot} = alloca ptr`);
         const lp = B.newLabel("mg.p");
@@ -1023,13 +1059,7 @@ export function emitMapLikeIntrinsic(
         const lj = B.newLabel("mg.j");
         B.condBr(found, lp, la);
         B.startBlock(lp);
-        const rawOut = B.tmp();
-        B.line(`${rawOut} = load ${outTy}, ptr ${outSlot}`);
-        let hit = rawOut;
-        if (value.kind === "bool") {
-          hit = B.tmp();
-          B.line(`${hit} = trunc i8 ${rawOut} to i1`);
-        }
+        const hit = readHit();
         B.line(
           `store ptr ${host.unionNewOwned(e.type.unionId, valueTag, { name: hit, type: value })}, ptr ${slot}`,
         );
@@ -1041,6 +1071,10 @@ export function emitMapLikeIntrinsic(
         const t = B.tmp();
         B.line(`${t} = load ptr, ptr ${slot}`);
         return host.own({ name: t, type: e.type });
+      }
+      if (numberKey !== null && isRefCounted(value)) {
+        const raw = emitNumberMapGetRef(host, r.name, numberKey, value);
+        return host.wrapNullable(raw, raw, value, valueTag, e.type, undefTag);
       }
       host.declare(`declare ptr @scr_map_get_${kAcc}_ref(ptr, ${kTy})`);
       const raw = B.tmp();
@@ -1068,6 +1102,7 @@ export function emitMapLikeIntrinsic(
     }
     case "has": {
       const k = borrowInputs ? host.emitReadReceiver(e.args[0]!) : host.emitExpr(e.args[0]!);
+      if (kAcc === "f64") return { name: emitNumberMapHas(host, r.name, k.name), type: e.type };
       host.declare(`declare zeroext i1 @scr_map_has_${kAcc}(ptr, ${kTy})`);
       const t = B.tmp();
       B.line(`${t} = call zeroext i1 @scr_map_has_${kAcc}(ptr ${r.name}, ${kTy} ${k.name})`);
