@@ -171,6 +171,29 @@ describe("LLVM runtime RC symbols", () => {
   });
 });
 
+describe("emitted object releases", () => {
+  test("a surviving headered record enqueues only when not already buffered", () => {
+    const mod: IrModule = {
+      irVersion: 15,
+      sourceFile: "cycle.ts",
+      entry: "main",
+      functions: [],
+      records: [{ id: "r0", fields: [{ name: "self", type: { kind: "record", shapeId: "r0" } }] }],
+    };
+    const { host } = declarationHost();
+    host.tracedShapes.add("record:r0");
+    const defs = emitRecordShapes({ ...host, objectAudit: false }, mod).defs.join("\n");
+    const start = defs.indexOf("root:");
+    const root = defs.slice(start, defs.indexOf("done:", start));
+    expect(root).toContain("store i32 1, ptr %colorp");
+    expect(root).toContain("getelementptr i8, ptr %o, i64 -12");
+    expect(root).toContain("br i1 %queued, label %done, label %enqueue");
+    expect(root.indexOf("enqueue:")).toBeLessThan(
+      root.indexOf("call void @scr_cyc_on_release(ptr %o)"),
+    );
+  });
+});
+
 describe("live-object audit notes", () => {
   const mod: IrModule = {
     irVersion: 15,

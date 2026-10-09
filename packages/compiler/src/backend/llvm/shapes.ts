@@ -363,7 +363,6 @@ function retainHelper(host: ShapeHost, family: string, row: InlineRcFamily): str
 
 function releaseHelper(host: ShapeHost, family: string, row: InlineRcFamily): string[] {
   const S = host.sizeType;
-  const color = host.cycleColorOffset;
   const cycle = row.cycle;
   return [
     `define internal void @${inlineRcName(family, "release")}(ptr %o) ${FN_ATTRS} { ; ${row.release} fast path`,
@@ -400,21 +399,7 @@ function releaseHelper(host: ShapeHost, family: string, row: InlineRcFamily): st
           `root:`,
         ]
       : []),
-    ...(cycle === "always"
-      ? [
-          // scr_cyc_on_release: color = PURPLE; an already-buffered candidate
-          // is done, anything else is enqueued by the runtime.
-          `  %colorp = getelementptr i8, ptr %o, ${S} -${color}`,
-          `  store i32 1, ptr %colorp ; purple: possible cycle root`,
-          `  %bufp = getelementptr i8, ptr %o, ${S} -${color - 4}`,
-          `  %buf = load i16, ptr %bufp`,
-          `  %queued = icmp ne i16 %buf, 0`,
-          `  br i1 %queued, label %done, label %enqueue`,
-          `enqueue:`,
-          `  call void @scr_cyc_on_release(ptr %o) ; buffer the candidate; may collect`,
-        ]
-      : []),
-    `  br label %done`,
+    ...(cycle === "always" ? cycleRootLines(host, "done") : [`  br label %done`]),
     `done:`,
     `  ret void`,
     `}`,
@@ -806,15 +791,33 @@ export function releaseBody(
   ];
   if (traced) {
     host.declare(`declare void @scr_cyc_on_dead(ptr)`);
-    host.declare(`declare void @scr_cyc_on_release(ptr)`);
-    lines.push(
-      `root:`,
-      `  call void @scr_cyc_on_release(ptr %o) ; possible cycle root; may collect`,
-      `  br label %done`,
-    );
+    lines.push(`root:`, ...cycleRootLines(host, "done"));
   }
   lines.push(`done:`, `  ret void`, `}`);
   return lines;
+}
+
+/** The possible-cycle-root step of a release that left a headered object
+ * alive: scr_cyc_on_release with its already-buffered case inlined. Store
+ * PURPLE into color, then read `buffered` (the i16 four bytes after it) and
+ * call the runtime only to enqueue a new candidate. Every emitted release
+ * of a headered object shares this sequence (scr_runtime.h asserts both
+ * offsets); it ends by branching to `done`. */
+export function cycleRootLines(host: ShapeHost, done: string): string[] {
+  const S = host.sizeType;
+  const color = host.cycleColorOffset;
+  host.declare(`declare void @scr_cyc_on_release(ptr)`);
+  return [
+    `  %colorp = getelementptr i8, ptr %o, ${S} -${color}`,
+    `  store i32 1, ptr %colorp ; purple: possible cycle root`,
+    `  %bufp = getelementptr i8, ptr %o, ${S} -${color - 4}`,
+    `  %buf = load i16, ptr %bufp`,
+    `  %queued = icmp ne i16 %buf, 0`,
+    `  br i1 %queued, label %${done}, label %enqueue`,
+    `enqueue:`,
+    `  call void @scr_cyc_on_release(ptr %o) ; buffer the candidate; may collect`,
+    `  br label %${done}`,
+  ];
 }
 
 /** Per-record-shape LLVM emission: the named struct types (returned as

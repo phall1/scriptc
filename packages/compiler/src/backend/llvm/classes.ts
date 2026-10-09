@@ -30,6 +30,7 @@ import { emitObjectAlloc, emitObjectFree } from "./alloc.js";
 import { llvmCommentText } from "./common.js";
 import { NullableRefFields } from "./nullable-fields.js";
 import {
+  cycleRootLines,
   FN_ATTRS,
   llFieldType,
   releaseBody,
@@ -535,14 +536,7 @@ export function emitClassShapes(
         reld.push(`  call void @scr_rc_destroy(ptr %o, ptr @${destroy})`);
       } else teardown(reld);
       reld.push(`  br label %done`);
-      if (traced) {
-        host.declare(`declare void @scr_cyc_on_release(ptr)`);
-        reld.push(
-          `root:`,
-          `  call void @scr_cyc_on_release(ptr %o) ; possible cycle root; may collect`,
-          `  br label %done`,
-        );
-      }
+      if (traced) reld.push(`root:`, ...cycleRootLines(host, "done"));
       reld.push(`done:`, `  ret void`, `}`, ``);
       defs.push(...reld);
     } else {
