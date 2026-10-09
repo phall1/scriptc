@@ -2201,11 +2201,20 @@ function lowerStringMethodCallWithOptionalArgs(
   return changed ? { ...lowered, args } : lowered;
 }
 
-const PRIMITIVE_CONSTRUCTOR_TYPES = {
-  StringConstructor: "String",
-  NumberConstructor: "Number",
-  BooleanConstructor: "Boolean",
-} as const;
+/** Lib constructor interface names only. A plain object lookup would inherit
+ * `Object.prototype.toString` and treat every `.toString()` call as `String()`. */
+function constructorNameFromSymbol(name: string): "String" | "Number" | "Boolean" | null {
+  switch (name) {
+    case "StringConstructor":
+      return "String";
+    case "NumberConstructor":
+      return "Number";
+    case "BooleanConstructor":
+      return "Boolean";
+    default:
+      return null;
+  }
+}
 
 /** Global `String`/`Number`/`Boolean`, or a value typed as that lib constructor.
  * Effect re-exports the globals as `BooleanConstructor` and its siblings.
@@ -2221,8 +2230,7 @@ function primitiveConstructorName(
   if (lowerer.isStdlibGlobal(callee, "Boolean")) return "Boolean";
   const symbol = lowerer.typeOf(callee).getSymbol();
   if (!symbol || !lowerer.isStdlibSymbol(symbol)) return null;
-  const name = symbol.name as keyof typeof PRIMITIVE_CONSTRUCTOR_TYPES;
-  return PRIMITIVE_CONSTRUCTOR_TYPES[name] ?? null;
+  return constructorNameFromSymbol(symbol.name);
 }
 
 function primitiveConstructorConstant(name: "String" | "Number" | "Boolean", loc: SrcLoc): IrExpr {
