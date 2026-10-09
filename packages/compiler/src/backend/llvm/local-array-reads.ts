@@ -169,6 +169,30 @@ function stableArrayParameters(fn: IrFunction, lifetimes: CallLifetimes): Set<st
   );
 }
 
+/** The array operand of a borrowed read: a stable parameter, or a pure
+ * projection chain (fields, narrowing, casts) rooted at one. In a function
+ * that preserves every heap edge, the caller-owned parameter keeps each
+ * projected field, the array, and its elements alive for the whole frame. */
+function stableArrayOperand(
+  array: IrExpr,
+  stableParams: ReadonlySet<string>,
+  locals: ReadonlyMap<string, { boxed?: boolean }>,
+): boolean {
+  switch (array.kind) {
+    case "varRef":
+      return stableParams.has(array.localId) && !locals.get(array.localId)?.boxed;
+    case "fieldGet":
+    case "recordGet":
+      return stableArrayOperand(array.obj, stableParams, locals);
+    case "unionNarrow":
+    case "downcast":
+    case "upcast":
+      return stableArrayOperand(array.value, stableParams, locals);
+    default:
+      return false;
+  }
+}
+
 export function findLocalArrayReads(
   fn: IrFunction,
   functions: ReadonlyMap<string, IrFunction>,
@@ -197,9 +221,10 @@ export function findLocalArrayReads(
       const read = reads.get(node.init);
       if (read && lifetimes.locals.get(fn.name)?.has(local.id)) {
         if (
-          read.array.kind === "varRef" &&
-          ((borrow && stableParams.has(read.array.localId)) || loopBorrows.has(node)) &&
-          !locals.get(read.array.localId)?.boxed
+          (borrow && stableArrayOperand(read.array, stableParams, locals)) ||
+          (read.array.kind === "varRef" &&
+            loopBorrows.has(node) &&
+            !locals.get(read.array.localId)?.boxed)
         )
           read.borrow = true;
         result.set(local.id, read);
@@ -236,13 +261,7 @@ export function findCallArrayReads(
         if (!parameters.has(index)) return;
         const read = reads.get(arg);
         if (!read) return;
-        if (
-          borrow &&
-          read.array.kind === "varRef" &&
-          stableParams.has(read.array.localId) &&
-          !locals.get(read.array.localId)?.boxed
-        )
-          read.borrow = true;
+        if (borrow && stableArrayOperand(read.array, stableParams, locals)) read.borrow = true;
         result.set(arg, read);
       });
       return true;
