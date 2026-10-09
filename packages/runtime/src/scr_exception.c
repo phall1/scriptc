@@ -56,8 +56,10 @@ ScrExcCell *scr_exc_active = &scr_main_exc;
 
 /* The running stack's overflow guard (scr_runtime.h). It lives beside the
  * exception cell so fiber switching can maintain it whenever scr_async.c is
- * linked; scr_context.c installs it per thread. */
-SCR_TL uintptr_t scr_stack_guard;
+ * linked; scr_context.c installs it per thread. The explicit initializer
+ * keeps it an ordinary definition rather than a common symbol, which a
+ * localized library archive would otherwise leave shared. */
+SCR_TL uintptr_t scr_stack_guard = 0;
 
 /* Fiber switching (scr_async.c) points the exception machinery at the
  * incoming fiber's cell; returns the previous cell. */
