@@ -1089,7 +1089,8 @@ export function lowerCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr {
     // they are total (the spec's URIError is the unpaired surrogate,
     // which cannot exist in well-formed UTF-8). decode THROWS the
     // spec's URIError ("URI malformed") catchably and keeps the
-    // string-only argument rule.
+    // string-only argument rule. `globalThis.decodeURIComponent` is
+    // the same intrinsic; see lowerGlobalThisUriCall.
     if (
       (expr.expression.text === "encodeURIComponent" ||
         expr.expression.text === "encodeURI" ||
@@ -1097,35 +1098,7 @@ export function lowerCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr {
         expr.expression.text === "decodeURIComponent") &&
       lowerer.isStdlibSymbol(lowerer.resolveValueSymbol(expr.expression) ?? undefined)
     ) {
-      const name = expr.expression.text;
-      if (expr.arguments.length !== 1) {
-        lowerer.noLowering(
-          `${name} with ${expr.arguments.length} argument${expr.arguments.length === 1 ? "" : "s"}`,
-          expr,
-        );
-      }
-      const loc = locOf(expr);
-      const argNode = expr.arguments[0]!;
-      if (name === "decodeURIComponent" || name === "decodeURI") {
-        const d = optionalCallValue(lowerer, argNode) ?? lowerer.lowerExpr(argNode);
-        const s = lowerer.ensureString(d, argNode);
-        return {
-          kind: "libCall",
-          fn: name === "decodeURI" ? "str.decodeUri" : "str.decodeUriComponent",
-          args: [s],
-          type: STRING,
-          loc,
-        };
-      }
-      const value = optionalCallValue(lowerer, argNode) ?? lowerer.lowerExpr(argNode);
-      const s = lowerer.ensureString(value, argNode);
-      return {
-        kind: "libCall",
-        fn: name === "encodeURIComponent" ? "str.encodeUriComponent" : "str.encodeUri",
-        args: [s],
-        type: STRING,
-        loc,
-      };
+      return lowerStdlibUriCall(lowerer, expr, expr.expression.text);
     }
     // STATIC atob/btoa (str.atob / str.btoa — scr_string.c; WHATWG
     // forgiving-base64, Node is the oracle). The argument crosses as a
@@ -1455,6 +1428,7 @@ export function lowerCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr {
   }
   if (ts.isPropertyAccessExpression(expr.expression)) {
     const intrinsic =
+      lowerGlobalThisUriCall(lowerer, expr, expr.expression) ??
       fenceNodeModuleMutationCall(lowerer, expr, expr.expression) ??
       // Builtin namespace imports first (`fs.readFileSync(...)` where fs
       // is `import * as fs from "node:fs"`): the same tables and fences
@@ -3366,6 +3340,58 @@ function lowerOptionalStringNumber(
     });
   }
   return { kind: "call", callee: helper, args: [arg], type: F64, loc };
+}
+
+function uriLibFn(
+  name: string,
+): "str.encodeUriComponent" | "str.encodeUri" | "str.decodeUri" | "str.decodeUriComponent" | null {
+  switch (name) {
+    case "encodeURIComponent":
+      return "str.encodeUriComponent";
+    case "encodeURI":
+      return "str.encodeUri";
+    case "decodeURI":
+      return "str.decodeUri";
+    case "decodeURIComponent":
+      return "str.decodeUriComponent";
+    default:
+      return null;
+  }
+}
+
+/** Bare `decodeURIComponent(s)` and the same four names. One argument.
+ * `noLowering` does not return. */
+function lowerStdlibUriCall(lowerer: Lowerer, expr: ts.CallExpression, name: string): IrExpr {
+  const fn = uriLibFn(name);
+  if (fn === null) lowerer.noLowering(name, expr);
+  if (expr.arguments.length !== 1) {
+    lowerer.noLowering(
+      `${name} with ${expr.arguments.length} argument${expr.arguments.length === 1 ? "" : "s"}`,
+      expr,
+    );
+  }
+  const argNode = expr.arguments[0]!;
+  const value = optionalCallValue(lowerer, argNode) ?? lowerer.lowerExpr(argNode);
+  return {
+    kind: "libCall",
+    fn,
+    args: [lowerer.ensureString(value, argNode)],
+    type: STRING,
+    loc: locOf(expr),
+  };
+}
+
+/** `globalThis.decodeURIComponent(s)` — Effect's schema getter spells the
+ * intrinsic this way. A stored-global read throws inside the getter's
+ * catch and the config falls through to undefined. */
+function lowerGlobalThisUriCall(
+  lowerer: Lowerer,
+  expr: ts.CallExpression,
+  access: ts.PropertyAccessExpression,
+): IrExpr | null {
+  if (!lowerer.isStdlibGlobal(access.expression, "globalThis")) return null;
+  if (uriLibFn(access.name.text) === null) return null;
+  return lowerStdlibUriCall(lowerer, expr, access.name.text);
 }
 
 /** METHOD calls on dyn receivers (`pkg.name.replace(...)`, `rawName.split`,
