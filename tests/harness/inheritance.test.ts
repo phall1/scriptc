@@ -98,7 +98,7 @@ console.log(a.id(), a.speak());
     // ...and id never becomes a vtable slot, while speak does and the
     // base-typed call site dispatches through it.
     expect(llvm).toMatch(/%sc_vtt_Animal = type \{ %ScrVt, ptr \}/);
-    expect(llvm).toMatch(/@sc_vtable_Dog = [^\n]*ptr @sc_f__x25_Dog_speak/);
+    expect(llvm).toMatch(/@sc_vtable_Dog = [^\n]*ptr @sc_b?f__x25_Dog_speak\b/);
     expect(llvm).toMatch(
       /getelementptr inbounds %sc_vtt_Animal, ptr %\w+, i64 0, i32 1[\s\S]*call ptr %\w+\(ptr /,
     );
@@ -163,7 +163,7 @@ console.log(c.v, c.label);
     );
     // The overridden getter dispatches through its slot...
     expect(llvm).toMatch(/%sc_vtt_Cell = type \{ %ScrVt, ptr \}/);
-    expect(llvm).toMatch(/@sc_vtable_LoudCell = [^\n]*ptr @sc_f__x25_LoudCell_get_x3a_label/);
+    expect(llvm).toMatch(/@sc_vtable_LoudCell = [^\n]*ptr @sc_b?f__x25_LoudCell_get_x3a_label\b/);
     expect(llvm).toMatch(
       /getelementptr inbounds %sc_vtt_Cell, ptr %\w+, i64 0, i32 1[\s\S]*call ptr %\w+\(ptr /,
     );
@@ -261,7 +261,7 @@ console.log(b.v);
     // dispatch dynamically here.
     expect(llvm).toMatch(/%sc_vtt_Box = type \{ %ScrVt, ptr, ptr \}/);
     expect(llvm).toMatch(
-      /@sc_vtable_SealedBox = [^\n]*ptr @sc_f__x25_SealedBox_get_x3a_v, ptr @sc_f__x25_SealedBox_set_x3a_v/,
+      /@sc_vtable_SealedBox = [^\n]*ptr @sc_b?f__x25_SealedBox_get_x3a_v(\.virtual)?, ptr @sc_b?f__x25_SealedBox_set_x3a_v\b/,
     );
     expect(llvm).toMatch(/getelementptr inbounds %sc_vtt_Box, ptr %\w+, i64 0, i32 2/);
     expect(llvm).toMatch(/sc_f__x25_SealedBox_set_x3a_v/);
