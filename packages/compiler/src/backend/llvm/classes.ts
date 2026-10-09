@@ -34,6 +34,7 @@ import {
   FN_ATTRS,
   llFieldType,
   releaseBody,
+  releaseFastPath,
   needsBoundedRelease,
   releaseSym,
   retainBody,
@@ -485,9 +486,29 @@ export function emitClassShapes(
     if (meta.hierarchy) {
       // Public release: NULL/immortal checks, then dispatch through the
       // object's vtable so a base-typed release tears down the DERIVED
-      // object (scr_error_release's contract exactly).
+      // object (scr_error_release's contract exactly). In a hierarchy the
+      // program owns end to end (no runtime root), every member shares the
+      // rc word and the header decision (cycle-analysis groups hierarchies),
+      // so a release that leaves the object alive is the same for every
+      // class: the inlinable fast path decrements without the indirect call,
+      // and only the last reference reaches the dispatching release.
+      const userRooted = meta.root.def.runtime !== true;
+      const dispatchName = userRooted
+        ? `${mangleClassRelease(cls.name)}_slow`
+        : mangleClassRelease(cls.name);
+      if (userRooted)
+        defs.push(
+          ...releaseFastPath(
+            host,
+            mangleClassRelease(cls.name),
+            dispatchName,
+            traced,
+            `release ${cls.name}`,
+          ),
+          ``,
+        );
       defs.push(
-        `define internal void @${mangleClassRelease(cls.name)}(ptr %o) ${FN_ATTRS} { ; release ${cls.name} (dispatches)`,
+        `define internal void @${dispatchName}(ptr %o) ${userRooted ? "noinline " : ""}${FN_ATTRS} { ; release ${cls.name} (dispatches)`,
         `entry:`,
         `  %isnull = icmp eq ptr %o, null`,
         `  br i1 %isnull, label %done, label %check`,

@@ -749,7 +749,11 @@ export function needsBoundedRelease(type: IrType): boolean {
 
 /** Common NULL/immortal/decrement skeleton for ordinary object releases.
  * `freeBody` owns the zero-ref teardown and must leave the current block at
- * its end; traced objects also get the possible-cycle-root branch. */
+ * its end; traced objects also get the possible-cycle-root branch.
+ *
+ * `fnName` is only the inlinable fast path (releaseFastPath); the complete
+ * release is `${fnName}_slow`, kept out of line so callers that inline the
+ * release do not also inline its teardown. */
 export function releaseBody(
   host: ShapeHost,
   fnName: string,
@@ -771,7 +775,8 @@ export function releaseBody(
           `}`,
         ]
       : []),
-    `define internal void @${fnName}(ptr %o) ${FN_ATTRS} {${comment ? ` ; ${comment}` : ""}`,
+    ...releaseFastPath(host, fnName, `${fnName}_slow`, traced, comment),
+    `define internal void @${fnName}_slow(ptr %o) noinline ${FN_ATTRS} {${comment ? ` ; ${comment}` : ""}`,
     `entry:`,
     `  %isnull = icmp eq ptr %o, null`,
     `  br i1 %isnull, label %done, label %check`,
@@ -795,6 +800,43 @@ export function releaseBody(
   }
   lines.push(`done:`, `  ret void`, `}`);
   return lines;
+}
+
+/** The inlinable half of an object release. A reference that is neither the
+ * last one nor immortal (rc - 2 < SIZE_MAX - 2 rules out 0, 1 and SIZE_MAX
+ * in one compare) only decrements and, for headered objects, takes the
+ * possible-root step. NULL, immortal and last references call `slow`, which
+ * holds the complete release: inlining it everywhere would copy teardowns
+ * (and their destroy calls) into every caller. */
+export function releaseFastPath(
+  host: ShapeHost,
+  fnName: string,
+  slow: string,
+  traced: boolean,
+  comment = "",
+): string[] {
+  const S = host.sizeType;
+  return [
+    `define internal void @${fnName}(ptr %o) ${FN_ATTRS} {${comment ? ` ; ${comment} (fast path)` : ""}`,
+    `entry:`,
+    `  %isnull = icmp eq ptr %o, null`,
+    `  br i1 %isnull, label %done, label %check`,
+    `check:`,
+    `  %rc = load ${S}, ptr %o`,
+    `  %rcm2 = sub ${S} %rc, 2`,
+    `  %shared = icmp ult ${S} %rcm2, -3`,
+    `  br i1 %shared, label %dec, label %slow`,
+    `dec:`,
+    `  %n = sub ${S} %rc, 1`,
+    `  store ${S} %n, ptr %o`,
+    ...(traced ? cycleRootLines(host, "done") : [`  br label %done`]),
+    `slow:`,
+    `  call void @${slow}(ptr %o)`,
+    `  br label %done`,
+    `done:`,
+    `  ret void`,
+    `}`,
+  ];
 }
 
 /** The possible-cycle-root step of a release that left a headered object
