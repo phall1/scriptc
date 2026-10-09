@@ -113,6 +113,7 @@ const condition = (
   right: IrExpr,
 ): IrExpr => ({ loc, kind: "bin", op, left, right, type: BOOL });
 const observe = (value: IrExpr): IrStmt => ({ loc, kind: "exprStmt", expr: value });
+const INT32 = { min: -2147483648, max: 2147483647 };
 
 test("joins branch assignments and refines signed masks on guarded paths", () => {
   const inside = ref(),
@@ -226,8 +227,11 @@ test("labeled exits and do-while conditions cannot lend facts to skipped paths",
       },
     ]),
   );
-  expect(ranges.get(afterBlock)).toBeNull();
-  expect(ranges.get(firstBody)).toBeNull();
+  // The break skips `x = 1`; both writes are int32 literals, so the join
+  // keeps only the int32-closed range, never the skipped path's fact.
+  expect(ranges.get(afterBlock)).toEqual(INT32);
+  // Likewise the condition's `x = 0` does not reach the first iteration.
+  expect(ranges.get(firstBody)).toEqual(INT32);
 });
 
 test("unit induction is exact but loop-carried assignments remain unknown", () => {
@@ -341,4 +345,77 @@ test("an exit branch does not discard the surviving facts or escape its own labe
   );
   expect(ranges.get(afterReturn)).toEqual({ min: 3, max: 3 });
   expect(ranges.get(afterLabel)).toBeNull();
+});
+
+test("int32-closed locals keep the int32 range across loops and switches", () => {
+  const loop = (write: IrExpr): { inside: IrExpr; after: IrExpr; f: IrFunction } => {
+    const inside = ref(),
+      after = ref();
+    const f = fn([
+      assign(num(0)),
+      {
+        loc,
+        kind: "while",
+        cond: condition("<", ref("unknown"), num(1)),
+        body: [assign(write), observe(inside)],
+      },
+      observe(after),
+    ]);
+    return { inside, after, f };
+  };
+  const closed = loop(bin("|", ref(), ref("unknown")));
+  const closedRanges = analyzeIntegerRanges(closed.f);
+  expect(closedRanges.get(closed.inside)).toEqual(INT32);
+  expect(closedRanges.get(closed.after)).toEqual(INT32);
+  for (const write of [
+    bin("+", ref(), num(1)),
+    bin("/", ref(), num(2)),
+    bin(">>>", ref(), num(0)),
+  ]) {
+    const open = loop(write);
+    expect(analyzeIntegerRanges(open.f).get(open.after), write.kind).toBeNull();
+  }
+  const afterSwitch = ref();
+  const switched = analyzeIntegerRanges(
+    fn([
+      assign(num(1)),
+      {
+        loc,
+        kind: "switch",
+        disc: ref("unknown"),
+        cases: [
+          { test: num(0), body: [assign(bin("^", ref(), num(4)))] },
+          { test: null, body: [assign(num(-1))] },
+        ],
+      } as IrStmt,
+      observe(afterSwitch),
+    ]),
+  );
+  expect(switched.get(afterSwitch)).toEqual(INT32);
+});
+
+test("whole-program slot facts seed parameters, field reads and call results", () => {
+  const field: IrExpr = {
+    loc,
+    kind: "fieldGet",
+    obj: { loc, kind: "varRef", localId: "o", type: { kind: "object", className: "C" } },
+    className: "C",
+    field: "flags",
+    type: F64,
+  };
+  const result: IrExpr = { loc, kind: "call", callee: "bits", args: [], type: F64 };
+  const param = ref("p");
+  const f: IrFunction = {
+    ...fn([observe(field), observe(result), observe(param)]),
+    params: [{ localId: "p", name: "p", type: F64 }],
+    locals: [{ id: "p", name: "p", type: F64, mutable: true }],
+  };
+  const plain = analyzeIntegerRanges(f);
+  expect([plain.get(field), plain.get(result), plain.get(param)]).toEqual([null, null, null]);
+  const seeded = analyzeIntegerRanges(f, {
+    params: new Map([["p", INT32]]),
+    field: (className, name) => (className === "C" && name === "flags" ? INT32 : null),
+    call: (callee) => (callee === "bits" ? INT32 : null),
+  });
+  expect([seeded.get(field), seeded.get(result), seeded.get(param)]).toEqual([INT32, INT32, INT32]);
 });
