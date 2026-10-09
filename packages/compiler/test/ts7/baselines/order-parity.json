@@ -15490,6 +15490,12 @@
     "<repo>/tests/corpus/4482-instanceof-static-class-optional.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/4483-array-splice-statement.ts": {
+   "order": [
+    "<repo>/tests/corpus/4483-array-splice-statement.ts"
+   ],
+   "diags": []
   }
  }
 }

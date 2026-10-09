@@ -1636,6 +1636,60 @@ ScrArr *scr_arr_splice_insert(ScrArr *a, double start, double deleteCount,
   return removed;
 }
 
+/* A statement-position splice: `a.splice(start, deleteCount, ...items)`
+ * whose removed-elements array is never observed. The `count` owned value
+ * slots are inserted exactly as scr_arr_splice_insert would (same clamping,
+ * same resulting states), but no result array or argument array is built.
+ * The removed values are released only after the receiver is consistent
+ * again: a release can run the cycle collector. Sparse receivers and
+ * sparse-sized results keep the general implementation. */
+void scr_arr_splice_drop(ScrArr *a, double start, double deleteCount, size_t count,
+                         const uint64_t *slots) {
+  double len = (double)a->len;
+  double s0 = isnan(start) ? 0 : trunc(start);
+  if (s0 < 0) s0 += len;
+  size_t from = s0 <= 0 ? 0 : s0 >= len ? a->len : (size_t)s0;
+  double avail = len - (double)from;
+  double d0 = isnan(deleteCount) ? 0 : trunc(deleteCount);
+  size_t n = d0 <= 0 ? 0 : d0 >= avail ? (size_t)avail : (size_t)d0;
+  if (count > SCR_ARR_MAX_LENGTH - (a->len - n)) scr_arr_oom();
+  size_t next_len = a->len - n + count;
+  bool refs = scr_elem_is_ref(a->elem);
+  if (!scr_arr_is_dense(a) || !scr_arr_dense_ok(a, next_len, count)) {
+    ScrArr *items = a->elem == SCR_ELEM_REF
+        ? scr_arr_new_ref(a->elem_retain, a->elem_release, a->elem_trace, count)
+        : scr_arr_new(a->elem, count);
+    scr_arr_push_many(items, count, slots);
+    scr_arr_release(scr_arr_splice_insert(a, start, deleteCount, items));
+    scr_arr_release(items);
+    return;
+  }
+  /* Removed slots, kept until the receiver is rewritten. */
+  uint64_t inline_removed[8];
+  uint64_t *removed = inline_removed;
+  size_t kept = 0;
+  if (refs && n > 0) {
+    if (n > 8) {
+      removed = scr_mem_alloc(n * sizeof(uint64_t));
+      if (!removed) scr_arr_oom();
+    }
+    for (size_t i = from; i < from + n; i++) {
+      if (a->present[i] == SCR_ARR_VALUE) removed[kept++] = a->data[i];
+    }
+  }
+  size_t old_len = a->len;
+  scr_arr_grow_dense(a, next_len);
+  scr_arr_move_dense(a, from + count, from + n, old_len - from - n);
+  if (count) {
+    memcpy(a->data + from, slots, count * sizeof(*slots));
+    memset(a->present + from, SCR_ARR_VALUE, count);
+  }
+  if (next_len < old_len) scr_arr_clear_dense(a, next_len, old_len - next_len);
+  a->len = next_len;
+  for (size_t i = 0; i < kept; i++) scr_elem_release(a, removed[i]);
+  if (removed != inline_removed) scr_mem_free(removed);
+}
+
 /* FlattenIntoArray for static arrays: a dense copy with depth zero, or one
  * level over array elements. The frontend supplies an empty result of the
  * correct element kind; inner holes are skipped and present undefined stays

@@ -1588,6 +1588,11 @@ uint8_t scr_arr_shift_state(ScrArr *a, uint64_t *slot_out);
 ScrArr *scr_arr_splice(ScrArr *a, double start, double deleteCount);
 ScrArr *scr_arr_splice_insert(ScrArr *a, double start, double deleteCount,
                               const ScrArr *items);
+/* The same splice in statement position: inserts `count` owned value slots
+ * (moved in) and releases the removed elements without building a result
+ * array. Borrows a. */
+void scr_arr_splice_drop(ScrArr *a, double start, double deleteCount, size_t count,
+                         const uint64_t *slots);
 ScrArr *scr_arr_flat_copy(const ScrArr *a, ScrArr *out, bool flatten);
 
 /* indexOf: first index whose element strictly equals (JS ===) the needle,

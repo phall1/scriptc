@@ -174,3 +174,36 @@ test("state and presence queries answer dense slots inline", () => {
   expect(fn).toMatch(/call double @scr_arr_state\(.*\) cold memory\(read/);
   expect(fn).toMatch(/call i1 @scr_arr_has\(.*\) cold memory\(read/);
 });
+
+test("statement-position splices insert values without result or item arrays", () => {
+  const num = (value: number): IrExpr => ({ kind: "numLit", value, type: F64, loc });
+  const splice = (items: IrExpr[] | null): IrStmt => ({
+    kind: "exprStmt",
+    expr: {
+      kind: "arrIntrinsic",
+      method: items ? "spliceInsert" : "splice",
+      receiver: ref("s", words),
+      args: [
+        index,
+        num(0),
+        ...(items ? [{ kind: "arrayLit" as const, elems: items, type: words, loc }] : []),
+      ],
+      type: words,
+      loc,
+    },
+    loc,
+  });
+  const llvm = emitLlvmModule(
+    module("insert", VOID, [
+      splice([{ kind: "strLit", value: "x", type: STRING, loc }]),
+      splice(null),
+    ]),
+  );
+  const fn = body(llvm, "insert");
+  expect(fn.match(/call void @scr_arr_splice_drop\(/g)).toHaveLength(2);
+  expect(fn).toMatch(/call void @scr_arr_splice_drop\(.*, i64 1, ptr %t\d+\)/);
+  expect(fn).toMatch(/call void @scr_arr_splice_drop\(.*, i64 0, ptr null\)/);
+  expect(fn).not.toContain("@scr_arr_new");
+  expect(fn).not.toContain("@scr_arr_splice_insert");
+  expect(fn).not.toContain("@scr_arr_release");
+});

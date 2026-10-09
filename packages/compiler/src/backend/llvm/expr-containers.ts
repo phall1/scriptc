@@ -146,6 +146,52 @@ export function emitArrayValues(
   return result;
 }
 
+/** A splice whose removed-elements array is discarded (statement position)
+ * and whose insertion items, if any, are plain evaluated values: evaluate
+ * the receiver, start, count, and items in order, then splice the values in
+ * without a result or argument array. Returns false for every other shape,
+ * which keeps the ordinary intrinsic. */
+export function emitDiscardedSplice(host: LlvmEmitterContext, e: IrExpr): boolean {
+  if (e.kind !== "arrIntrinsic" || e.receiver.type.kind !== "array") return false;
+  let items: IrExpr[] = [];
+  if (e.method === "spliceInsert") {
+    const list = e.args[2];
+    if (list?.kind !== "arrayLit" || (list.spreads?.length ?? 0) > 0) return false;
+    items = list.elems;
+  } else if (e.method !== "splice") return false;
+  if (items.length > 64) return false;
+  const B = host.B;
+  const r = emitBorrowedInput(host, e.receiver);
+  const acc = elemAccess(e.receiver.type.elem);
+  const start = host.emitExpr(e.args[0]!);
+  const count = e.args[1] ? host.emitExpr(e.args[1]).name : F64_INF;
+  const values = items.map((item) => host.emitExpr(item));
+  if (acc === "ref") values.forEach((value) => host.moveTemp(value));
+  let buffer = "null";
+  if (values.length > 0) {
+    buffer = B.tmp();
+    B.entryAllocas.push(`${buffer} = alloca [${values.length} x i64]`);
+    values.forEach((value, i) => {
+      const slot = B.tmp(),
+        pointer = B.tmp();
+      const pack =
+        acc === "f64"
+          ? `bitcast double ${value.name} to i64`
+          : acc === "bool"
+            ? `zext i1 ${value.name} to i64`
+            : `ptrtoint ptr ${value.name} to i64`;
+      B.line(`${slot} = ${pack}`);
+      B.line(`${pointer} = getelementptr inbounds i64, ptr ${buffer}, ${host.sizeType} ${i}`);
+      B.line(`store i64 ${slot}, ptr ${pointer}`);
+    });
+  }
+  host.declare(`declare void @scr_arr_splice_drop(ptr, double, double, ${host.sizeType}, ptr)`);
+  B.line(
+    `call void @scr_arr_splice_drop(ptr ${r.name}, double ${start.name}, double ${count}, ${host.sizeType} ${values.length}, ptr ${buffer})`,
+  );
+  return true;
+}
+
 export function emitArrayCopyLoop(
   host: LlvmEmitterContext,
   dst: string,

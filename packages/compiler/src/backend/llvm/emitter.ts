@@ -229,6 +229,7 @@ import {
   emitArrayCopyLoop,
   emitStrIntrinsic,
   emitArrIntrinsic,
+  emitDiscardedSplice,
   wrapNullable,
   emitMapNew,
   mapSet,
@@ -5181,7 +5182,8 @@ export class LlEmitter {
         break;
       }
       case "exprStmt":
-        this.emitExpr(s.expr);
+        // A statement-position splice never observes its removed elements.
+        if (!emitDiscardedSplice(this, s.expr)) this.emitExpr(s.expr);
         break;
       case "arraySet": {
         // Evaluation order matches JS: array, index, then value. Ownership
