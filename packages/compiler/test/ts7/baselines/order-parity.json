@@ -15604,6 +15604,12 @@
     "<repo>/tests/corpus/4542-preserving-call-borrows.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/4544-checked-cast-aliases.ts": {
+   "order": [
+    "<repo>/tests/corpus/4544-checked-cast-aliases.ts"
+   ],
+   "diags": []
   }
  }
 }

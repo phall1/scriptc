@@ -5124,6 +5124,18 @@ export class LlEmitter {
     if (wrap === "unit") return true;
     if (wrap === "ref" && value.kind === "unionWrap")
       return this.canBorrowCallArgument(value.value);
+    // Checked casts (`x as C`, `x!` on a nullable) lower to a ternary whose
+    // failing arm always throws; the successful arm projects the same
+    // stable owner. The throwing arm's typed dummy owns nothing.
+    if (value.kind === "unionNarrow") return this.canBorrowCallArgument(value.value);
+    if (value.kind === "libCall") return value.fn === "error.nodeThrow";
+    if (value.kind === "ternary")
+      return (
+        this.canBorrowReceiver(value.then) &&
+        this.canBorrowReceiver(value.else_) &&
+        this.canBorrowCallArgument(value.then) &&
+        this.canBorrowCallArgument(value.else_)
+      );
     if (value.kind !== "varRef") return false;
     const binding = this.binding(value.localId);
     return (
