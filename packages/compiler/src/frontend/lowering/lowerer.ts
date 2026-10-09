@@ -1,3 +1,8 @@
+import {
+  checkCycleBindingAccesses,
+  refuseUncheckedCycleReads,
+  type CycleInitFlag,
+} from "./cycle-initialization.js";
 import { identityPreservingWidening } from "./coercions/identity.js";
 import { checkedClassAssertion } from "./class-assertions.js";
 import { narrowStoredClassValue, narrowGenericClassValue } from "./class-unions.js";
@@ -5,6 +10,7 @@ import { isOptionalProcessStreamProperty } from "./builtins/process.js";
 import { concreteCollectionNarrow } from "./collection-narrowing.js";
 import { lowerWorkerMetadata } from "./builtins/workers.js";
 import { dynUndefinedExpr, nodeThrowExpr, numLit, varRef } from "../../ir/build.js";
+import { iteratorSlotAdapter } from "./iterator-adapters.js";
 import type { FieldLift } from "./coercions/structural-plans.js";
 import { lowerBuiltinCall } from "./builtin-calls.js";
 import { CoercionState } from "./coercions/state.js";
@@ -60,6 +66,7 @@ import {
   utilTypesModuleValue,
 } from "./lower-builtin-values.js";
 import { everyExprChild, everyStmtChild, transformStmtList } from "../../ir/traverse.js";
+import { RuntimeOptionalProvenance } from "./runtime-optional-provenance.js";
 import { RuntimeOptionalLocals } from "./runtime-optional-locals.js";
 import { sanitizeUnregisteredClassTypes } from "./sanitize-class-types.js";
 import { UnregisteredClassTypes } from "./unregistered-class-types.js";
@@ -2220,6 +2227,10 @@ export class Lowerer {
    * node carrying the ?. token is marked handled so the receiver-typed
    * lowerings stop declining it (chainBlocked). */
   readonly chainRecvByNode = new Map<ts.Node, IrExpr>();
+  /** Lowered void calls whose checked type is `never` (they throw or exit).
+   * TypeScript lets such a call stand where any value is expected;
+   * coerceToExpected turns them into diverging sequences. */
+  readonly neverValued = new Set<IrExpr>();
   readonly chainNarrowedType = new Map<ts.Node, ts.Type>();
   readonly chainHandled = new Set<ts.Node>();
   /** for-of-over-matchAll bindings whose `.index` reads the companion-index
@@ -2463,6 +2474,10 @@ export class Lowerer {
    * function called above the declaration statement reads that, never a
    * NULL slot. Filled by collectGlobals. */
   readonly varGlobalEntryInits = new Map<ts.SourceFile, IrGlobal[]>();
+  /** Import-cycle bindings with an initialization flag, by global id, and
+   * the top-level statements declaring them (cycle-initialization.ts). */
+  readonly cycleInitFlags = new Map<string, CycleInitFlag>();
+  readonly cycleInitDeclarations = new Map<ts.Statement, CycleInitFlag[]>();
 
   get ctx(): FnCtx {
     const top = this.fnStack[this.fnStack.length - 1];
@@ -3641,6 +3656,9 @@ export class Lowerer {
    * but it is not a runtime proof; promoting only the affected slots keeps
    * the rest of the dense ABI unchanged. */
   analyzeRuntimeOptionalArrayReads(parts: FileParts[]): void {
+    const provenance = RuntimeOptionalProvenance.fromEnvironment();
+    // The site whose value the current promotion follows (debug only).
+    let provenanceSite: ts.Node | undefined;
     const optionalSymbols = new Set<ts.Symbol>();
     const optionalReturns = new Set<ts.Symbol>();
     const arithmeticReturns = new Map<ts.Symbol, IrType>();
@@ -3943,6 +3961,7 @@ export class Lowerer {
           const symbol = symbolOf(el.name);
           if (symbol && !el.initializer && !optionalSymbols.has(symbol)) {
             optionalSymbols.add(symbol);
+            provenance?.note("pattern-binding", el.name, init);
             // Indexed flow facts can survive a mutating method call in the
             // checker. The array's element ABI describes every value a
             // position may hold after that call, so bind from that type.
@@ -4089,6 +4108,7 @@ export class Lowerer {
             const widened = this.runtimeOptionalType(current);
             const previous = this.runtimeOptionalBindingTypes.get(symbol);
             this.runtimeOptionalBindingTypes.set(symbol, widened);
+            provenance?.note("callback-parameter", parameter.name, provenanceSite);
             if (!previous || !typeEquals(previous, widened)) changed = true;
             if (!optionalSymbols.has(symbol)) {
               optionalSymbols.add(symbol);
@@ -4099,6 +4119,7 @@ export class Lowerer {
         const fnType = this.mapTypeOf(this.typeOf(fn));
         if (fnType?.kind === "func" && bodyReturnsOptional(fn)) {
           const widenedReturn = this.runtimeOptionalType(fnType.ret);
+          provenance?.note("callback-return", fn, provenanceSite);
           const previousReturn = this.runtimeOptionalFunctionReturnType(fn, fnType.ret);
           this.runtimeOptionalFunctionReturns.set(fn, widenedReturn);
           if (!typeEquals(previousReturn, widenedReturn)) changed = true;
@@ -4248,6 +4269,7 @@ export class Lowerer {
               const symbol = symbolOf(node.name);
               if (symbol && !optionalSymbols.has(symbol)) {
                 optionalSymbols.add(symbol);
+                provenance?.note("binding", node.name, node.initializer);
                 changed = true;
               }
             }
@@ -4270,6 +4292,7 @@ export class Lowerer {
               if (symbol && valueSymbol && sourceOptional) {
                 const aliasNew = !optionalReturns.has(symbol);
                 if (aliasNew) optionalReturns.add(symbol);
+                if (aliasNew) provenance?.note("function-alias", node.name, node.initializer);
                 if (aliasNew) changed = true;
                 const valueType = this.mapTypeOf(this.typeOf(node.name));
                 if (valueType?.kind === "func" && sourceSig) {
@@ -4306,7 +4329,10 @@ export class Lowerer {
                 const value = ts.isPropertyAssignment(prop)
                   ? prop.initializer
                   : (prop.name as ts.Expression);
-                if (mayBeOptional(value) && noteField(node, name.text)) changed = true;
+                if (mayBeOptional(value) && noteField(node, name.text)) {
+                  provenance?.note("literal-field", name, value);
+                  changed = true;
+                }
               }
             }
           }
@@ -4323,16 +4349,21 @@ export class Lowerer {
             const symbol = symbolOf(node.left);
             if (symbol && !optionalSymbols.has(symbol)) {
               optionalSymbols.add(symbol);
+              provenance?.note("assigned-binding", node.left, node.right);
               changed = true;
             }
           } else if (ts.isPropertyAccessExpression(node.left)) {
             const field = symbolOf(node.left.name);
             if (field && staticFieldsBySymbol.has(field) && !optionalSymbols.has(field)) {
               optionalSymbols.add(field);
+              provenance?.note("static-field", node.left, node.right);
               changed = true;
             } else if (ts.isIdentifier(node.left.expression)) {
               const symbol = symbolOf(node.left.expression);
-              if (symbol && noteFieldSymbol(symbol, node.left.name.text)) changed = true;
+              if (symbol && noteFieldSymbol(symbol, node.left.name.text)) {
+                provenance?.note("assigned-field", node.left, node.right);
+                changed = true;
+              }
             }
           }
         }
@@ -4384,6 +4415,7 @@ export class Lowerer {
               }
             }
             if (nativeArrayReceiver) {
+              provenanceSite = node;
               if (promoteHofCallback(callback, callbackIndices)) changed = true;
               const method = node.expression.name.text;
               if (
@@ -4435,6 +4467,7 @@ export class Lowerer {
                 if (typeEquals(shape.type, widened)) continue;
                 shape.type = widened;
                 const parameter = functionDeclBySymbol.get(target)?.parameters[i];
+                provenance?.note("parameter", parameter, node, "(omitted or undefined argument)");
                 if (parameter) {
                   for (const bound of boundIdentifiersOf(parameter.name)) {
                     const boundSymbol = symbolOf(bound);
@@ -4464,6 +4497,7 @@ export class Lowerer {
               const optionalCallbackParams = callbackSlot.params.flatMap((type, index) =>
                 type.kind === "union" && this.armTag(type.unionId, UNDEFINED_T) >= 0 ? [index] : [],
               );
+              provenanceSite = node;
               if (
                 optionalCallbackParams.length > 0 &&
                 promoteHofCallback(arg, optionalCallbackParams)
@@ -4483,6 +4517,7 @@ export class Lowerer {
                 if (typeEquals(rest.type, widened)) continue;
                 rest.type = widened;
                 const parameter = functionDeclBySymbol.get(target)?.parameters[i];
+                provenance?.note("rest-parameter", parameter, arg);
                 if (parameter && ts.isIdentifier(parameter.name)) {
                   const bound = symbolOf(parameter.name);
                   if (bound) this.runtimeOptionalBindingTypes.set(bound, widened);
@@ -4508,6 +4543,12 @@ export class Lowerer {
               if (set.size !== before) {
                 changed = true;
                 const parameter = functionDeclBySymbol.get(target)?.parameters[i];
+                provenance?.note(
+                  "parameter",
+                  parameter,
+                  arg,
+                  target === symbol ? "" : "(override)",
+                );
                 if (parameter) {
                   for (const bound of boundIdentifiersOf(parameter.name)) {
                     const boundSymbol = symbolOf(bound);
@@ -4530,6 +4571,7 @@ export class Lowerer {
       for (const expression of returnsOf(decl)) {
         if (mayBeOptional(expression) && !optionalReturns.has(symbol)) {
           optionalReturns.add(symbol);
+          provenance?.note("return", decl.name ?? decl, expression);
           changed = true;
         }
         const arithmetic = optionalPrimitiveResultType(expression);
@@ -4546,6 +4588,7 @@ export class Lowerer {
       for (const [symbol, field] of staticFieldsBySymbol) {
         if (!optionalSymbols.has(symbol) && mayBeOptional(field.initializer)) {
           optionalSymbols.add(symbol);
+          provenance?.note("static-field", field.initializer.parent, field.initializer);
           changed = true;
         }
       }
@@ -4574,6 +4617,12 @@ export class Lowerer {
         for (const symbol of family) {
           if (!optionalReturns.has(symbol)) {
             optionalReturns.add(symbol);
+            provenance?.note(
+              "return",
+              functionDeclBySymbol.get(symbol),
+              undefined,
+              "(override family)",
+            );
             changed = true;
           }
         }
@@ -4717,6 +4766,8 @@ export class Lowerer {
         }
       });
     }
+
+    provenance?.flush();
   }
 
   run(): LowerResult {
@@ -4952,6 +5003,7 @@ export class Lowerer {
     // the emitted program references, flushing deferred class diagnostics
     // that a reached type makes relevant.
     const artifacts = this.moduleArtifacts(functions);
+    refuseUncheckedCycleReads(this, artifacts.classes ?? []);
     // Types still naming a class that never REGISTERED after retention's
     // flush (JS graphs whose class fences deferred to runtime — the
     // sentence-walker's path params, printer tables whose func-typed
@@ -4980,6 +5032,7 @@ export class Lowerer {
             ...(this.ffiImports.length > 0 ? { ffiImports: [...this.ffiImports] } : {}),
           };
     if (module) sanitizeUnregisteredClassTypes(module, (name) => this.classes.has(name));
+    if (module) checkCycleBindingAccesses(this, module);
     return {
       module,
       diagnostics: this.diags,
@@ -6432,6 +6485,15 @@ export class Lowerer {
       );
       throw new PoisonError();
     }
+    // Iterator-typed slots hold generators and built-in collection
+    // iterators; any other iterator object (a user class) stays fenced.
+    if (expected.kind === "generator" && actual.kind !== "generator") {
+      this.unsupported(
+        "SC1090",
+        node,
+        `'${this.fmt(actual)}' values in an iterator-typed slot (Iterator and IterableIterator slots hold generators and built-in collection iterators)`,
+      );
+    }
     // Everything else — a plain-kind mismatch like a string flowing into a
     // class-instance slot — is tsc-rejected in the lowering world and only
     // reaches here through preflight's project-world second chance (e.g. a
@@ -6523,6 +6585,14 @@ export class Lowerer {
    * else (including a DIFFERENT union) is left for requireExactShape, which
    * rejects union mismatches with SC2003. */
   coerceToExpected(expr: IrExpr, expected: IrType): IrExpr {
+    if (expr.type.kind === "void" && expected.kind !== "void" && this.neverValued.has(expr))
+      return this.divergentValue(expr, expected);
+    // Iterator-typed slots: native iterators and differently typed
+    // generators step through an adapter generator.
+    if (expected.kind === "generator" && !typeEquals(expr.type, expected)) {
+      const adapted = iteratorSlotAdapter(this, expr, expected);
+      if (adapted) return adapted;
+    }
     // Island boundary, both directions. IN: any static value flowing into
     // an any-typed slot marshals implicitly (tsc allows the assignment;
     // the marshal is where its semantics live). OUT: an 'any' value
@@ -8596,6 +8666,33 @@ export class Lowerer {
       this.checker.getSymbolAtLocation(nameNode),
       bindingSource(nameNode),
     );
+  }
+
+  /** A never-returning call in a value position of type `expected`: the
+   * call runs for its effects (it throws or exits), and the expression ends
+   * in an unreachable trap instead of producing a value. The result reads an
+   * uninitialized hidden local that control never reaches. */
+  divergentValue(call: IrExpr, expected: IrType): IrExpr {
+    const loc = call.loc;
+    const slot = this.declareHiddenLocal("%never", expected);
+    slot.mutable = true;
+    return {
+      kind: "seqExpr",
+      stmts: [
+        { kind: "exprStmt", expr: call, loc },
+        { kind: "varDecl", localId: slot.id, init: null, loc },
+        {
+          kind: "runtimeFence",
+          code: "SC9002",
+          message: "unreachable: a 'never' call returned — please report this",
+          loc,
+        },
+      ],
+      result: varRef(slot.id, expected, loc),
+      diverges: true,
+      type: expected,
+      loc,
+    };
   }
 
   /** A function-scope local bound to NO ts.Symbol — the hidden ABI slot of a

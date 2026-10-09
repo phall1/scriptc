@@ -266,11 +266,22 @@ function freeLines(host: AllocHost, cyc: boolean): string[] {
   ];
   if (cyc) {
     host.declare(`@scr_cyc_live = external global i64`);
+    host.declare(`@scr_cyc_old_freed = external global i64`);
     lines.push(
       `  %sf.live = load i64, ptr @scr_cyc_live`,
       `  %sf.live1 = sub i64 %sf.live, 1`,
       `  store i64 %sf.live1, ptr @scr_cyc_live`,
       `  %sf.blk = getelementptr inbounds i8, ptr %o, i64 -${CYC_HDR}`,
+      `  %sf.genp = getelementptr inbounds i8, ptr %sf.blk, i64 22`,
+      `  %sf.gen = load i16, ptr %sf.genp`,
+      `  %sf.old = icmp eq i16 %sf.gen, 2`,
+      `  br i1 %sf.old, label %sf.oldcount, label %sf.accounted`,
+      `sf.oldcount:`,
+      `  %sf.freed = load i64, ptr @scr_cyc_old_freed`,
+      `  %sf.freed1 = add i64 %sf.freed, 1`,
+      `  store i64 %sf.freed1, ptr @scr_cyc_old_freed`,
+      `  br label %sf.accounted`,
+      `sf.accounted:`,
     );
   }
   const blk = cyc ? "%sf.blk" : "%o";

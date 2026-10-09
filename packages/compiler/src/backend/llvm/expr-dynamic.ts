@@ -1089,12 +1089,14 @@ function emitUnionEqWrappedScalar(
   const arm = def.arms[wrap.tag]!;
   let union: LlValue;
   let plain: LlValue | null = null;
+  const unionInput = (value: IrExpr): LlValue =>
+    host.canStackReceiver(value) ? host.emitReadReceiver(value) : emitBorrowedInput(host, value);
   if (rightWrap) {
-    union = emitBorrowedInput(host, e.left);
+    union = unionInput(e.left);
     if (!isUnitType(arm)) plain = host.emitExpr(wrap.value);
   } else {
     if (!isUnitType(arm)) plain = host.emitExpr(wrap.value);
-    union = emitBorrowedInput(host, e.right);
+    union = unionInput(e.right);
   }
   const tag = host.unionTag(union.name);
   const tagMatch = B.tmp();

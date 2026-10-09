@@ -261,7 +261,26 @@ function work(expr: IrExpr, parameter: IrType, boxed = false, tdz = false): stri
             ...(tdz ? { tdz: true } : {}),
           },
         ],
-        body: [{ kind: "return", value: expr, loc: receiverLoc }],
+        body: [
+          { kind: "return", value: expr, loc: receiverLoc },
+          // An unreachable rebinding keeps a boxed parameter in its shared
+          // box; a captured parameter that is never rebound uses a plain slot.
+          ...(boxed
+            ? [
+                {
+                  kind: "assign" as const,
+                  localId: "value",
+                  value: {
+                    kind: "varRef" as const,
+                    localId: "value",
+                    type: parameter,
+                    loc: receiverLoc,
+                  },
+                  loc: receiverLoc,
+                },
+              ]
+            : []),
+        ],
         loc: receiverLoc,
       },
     ],

@@ -336,12 +336,13 @@ char **scr_worker_argv(void);
  * scan: restore externally-referenced subgraphs; gather: free the
  * dead cycle members, releasing only edges that LEAVE the white set).
  * It is GENERATIONAL: each header carries a generation, a pass names the
- * oldest one it will walk, and objects that survive a pass are promoted out
- * of the nursery so later nursery passes never re-walk them. That is what
- * keeps a pass proportional to recent allocation rather than to the whole
- * live heap — see the generation note in scr_cycle.c for the soundness
- * argument and the schedule. Collection points: program exit (before the RC
- * audit), event-loop quiescence, and the per-generation triggers.
+ * oldest one it will walk, and objects that survive a pass are promoted one
+ * generation (nursery, mature, old) so later restricted passes never re-walk
+ * them. That is what keeps a pass proportional to recent allocation rather
+ * than to the whole live heap — see the generation note in scr_cycle.c for
+ * the soundness argument and the schedule. Collection points: program
+ * exit (before the RC audit), event-loop quiescence, and the per-generation
+ * triggers.
  * SCR_CYCLE_THRESHOLD pins the nursery trigger to a fixed candidate count.
  * There is no concurrent or incremental collection.
  *
@@ -367,8 +368,9 @@ enum {
 };
 
 /* Generations. A candidate sits in the buffer named by its own `gen`, and a
- * pass walks only objects at or below the generation it collects. */
-enum { SCR_CYC_NURSERY = 0, SCR_CYC_MATURE = 1, SCR_CYC_NGENS = 2 };
+ * pass walks only objects at or below the generation it collects; a pass at
+ * SCR_CYC_OLD is a full pass. */
+enum { SCR_CYC_NURSERY = 0, SCR_CYC_MATURE = 1, SCR_CYC_OLD = 2, SCR_CYC_NGENS = 3 };
 
 typedef struct ScrCycHdr {
   ScrTraceFn trace;
@@ -380,7 +382,7 @@ typedef struct ScrCycHdr {
 #endif
   uint32_t color;    /* SCR_CYC_* */
   uint16_t buffered; /* 1 = sitting in its generation's candidate buffer */
-  uint16_t gen;      /* SCR_CYC_NURSERY..SCR_CYC_MATURE (the walk filter) */
+  uint16_t gen;      /* SCR_CYC_NURSERY..SCR_CYC_OLD (the walk filter) */
   size_t buf_index;  /* position there (O(1) removal when rc hits 0) */
 } ScrCycHdr;
 
@@ -400,6 +402,8 @@ typedef struct ScrCycHdr {
 _Static_assert(sizeof(ScrCycHdr) == 32, "LLVM backend expects a 32-byte cycle header");
 _Static_assert(offsetof(ScrCycHdr, color) == 16,
                "LLVM backend's inlined mark-live stores i32 0 at obj-16");
+_Static_assert(offsetof(ScrCycHdr, gen) == 22,
+               "LLVM backend's inline free reads the generation at header+22");
 #elif UINTPTR_MAX == UINT32_MAX
 _Static_assert(sizeof(ScrCycHdr) == 24, "wasm32 cycle payloads require an aligned 24-byte header");
 _Static_assert(offsetof(ScrCycHdr, color) == 12,
@@ -561,6 +565,7 @@ static inline void scr_mem_free(void *p) { free(p); }
  * count, block. Every other header word starts zero (SCR_CYC_BLACK,
  * SCR_CYC_NURSERY, unbuffered). */
 extern SCR_TL size_t scr_cyc_live;
+extern SCR_TL size_t scr_cyc_old_freed;
 extern SCR_TL void (*scr_weak_dispose_hook)(void *);
 static inline void *scr_cyc_alloc_inline(size_t size, ScrTraceFn trace, ScrCycFreeFn free_fn) {
   if (size > SIZE_MAX - sizeof(ScrCycHdr)) scr_trap("scriptc: out of memory\n");
@@ -574,9 +579,12 @@ static inline void *scr_cyc_alloc_inline(size_t size, ScrTraceFn trace, ScrCycFr
 static inline void scr_cyc_free_inline(void *obj) {
   if (scr_weak_dispose_hook) scr_weak_dispose_hook(obj);
   scr_cyc_live--;
+  if (scr_cyc_hdr(obj)->gen == SCR_CYC_OLD) scr_cyc_old_freed++;
   scr_mem_free(scr_cyc_hdr(obj));
 }
 _Static_assert(SCR_CYC_NURSERY == 0, "zeroed cycle headers start in the nursery");
+_Static_assert(sizeof(((ScrCycHdr *)0)->gen) == 2 && SCR_CYC_OLD == 2,
+               "LLVM backend's inline free compares an i16 generation against 2");
 
 /* Dispose an object whose reference count already reached zero. The caller
  * removes its cycle candidate first. Nested disposals keep bounded stack

@@ -1551,6 +1551,11 @@ export interface IrGlobal {
   /** Lexical record/function/checked-value bindings use their initially-null
    * pointer as a TDZ sentinel. Reads and later writes throw until initializing assign. */
   tdz?: true;
+  /** An import-cycle binding whose initialization state lives in this BOOL
+   * global instead: the declaration's store is the `assign` marked
+   * `initializes`, followed by the flag's set; accesses that can run
+   * earlier test it with the module.tdzCheck intrinsic. */
+  initFlag?: string;
   /** Original declaration and lexical scope, when this is a source binding. */
   source?: IrBindingSource;
 }
@@ -3028,6 +3033,11 @@ export type IrExpr =
       stmts: IrStmt[];
       result: IrExpr;
       generatorDelegate?: true;
+      /** The statements end in a `runtimeFence` that control never reaches:
+       * the value of a call whose checked type is `never` (it throws or exits)
+       * flowing into a typed slot. `result` is a placeholder read of an
+       * uninitialized hidden local and is never evaluated. */
+      diverges?: true;
       type: IrType;
       loc: SrcLoc;
     }
@@ -3261,7 +3271,11 @@ export type IrExpr =
    * result's inner type (promise arguments never reach here — the
    * frontend returns them as-is, the spec's native-promise identity;
    * thenables and promise-armed unions fence); the backend mints a fresh
-   * promise and fulfills it immediately per the inner kind. */
+   * promise and fulfills it immediately per the inner kind.
+   * module.tdzCheck: two args, a BOOL initialization flag and the binding's
+   * source name as a strLit; void. Throws the catchable ReferenceError
+   * "Cannot access 'name' before initialization" while the flag is false
+   * (a module binding of an import cycle read before its declaration). */
   | {
       kind: "intrinsic";
       name:
@@ -3271,7 +3285,8 @@ export type IrExpr =
         | "promise.all"
         | "promise.reject"
         | "promise.resolve"
-        | "module.await";
+        | "module.await"
+        | "module.tdzCheck";
       args: IrExpr[];
       type: IrType;
       loc: SrcLoc;

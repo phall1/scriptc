@@ -1639,6 +1639,12 @@ function validateFunction(
           allowed.add("throw");
           allowed.add("runtimeFence");
         }
+        if (e.diverges) {
+          const last = e.stmts[e.stmts.length - 1];
+          if (last?.kind !== "runtimeFence")
+            err("diverging seqExpr must end in a runtimeFence", e.loc);
+          allowed.add("runtimeFence");
+        }
         const flat = (ss: IrStmt[]): void => {
           for (const s of ss) {
             if (!allowed.has(s.kind)) {
@@ -3717,6 +3723,17 @@ function validateFunction(
   }
 
   function checkIntrinsicExpr(e: IrExpr & { kind: "intrinsic" }): void {
+    if (e.name === "module.tdzCheck") {
+      const [flag, name] = e.args;
+      if (e.args.length !== 2 || flag === undefined || name?.kind !== "strLit") {
+        err("module.tdzCheck takes a flag and a binding-name literal", e.loc);
+        return;
+      }
+      checkExpr(flag);
+      if (flag.type.kind !== "bool") err("module.tdzCheck flag must be bool", e.loc);
+      if (e.type.kind !== "void") err("module.tdzCheck must be void", e.loc);
+      return;
+    }
     if (e.name === "module.await") {
       if (e.args.length !== 1) err("module.await takes exactly one argument", e.loc);
       for (const a of e.args) {
@@ -5860,7 +5877,7 @@ function validateFunction(
       }
       case "assign": {
         const binding = locals.get(s.localId) ?? globals.get(s.localId);
-        if (s.initializes && !binding?.tdz) {
+        if (s.initializes && !binding?.tdz && globals.get(s.localId)?.initFlag === undefined) {
           err(`initializing assign requires a TDZ binding "${s.localId}"`, s.loc);
         }
         if (!binding) err(`assign to undeclared local/global "${s.localId}"`, s.loc);
