@@ -2004,6 +2004,8 @@ export class Lowerer {
    * optional-read analysis, so ordinary assertions keep their generic
    * checked-narrow behavior. */
   runtimeOptionalSourceValue(node: ts.Expression, value: IrExpr): IrExpr | null {
+    const slot = this.deferredFieldSlot(value);
+    if (slot) return slot;
     let origin: ts.Expression = node;
     while (ts.isParenthesizedExpression(origin)) origin = origin.expression;
     let optionalOrigin =
@@ -7326,6 +7328,12 @@ export class Lowerer {
    * else (including a DIFFERENT union) is left for requireExactShape, which
    * rejects union mismatches with SC2003. */
   coerceToExpected(expr: IrExpr, expected: IrType): IrExpr {
+    // A destination that holds undefined takes an unassigned deferred-init
+    // field's slot as is (Node passes the undefined along).
+    if (expected.kind === "union" && this.armTag(expected.unionId, UNDEFINED_T) >= 0) {
+      const slot = this.deferredFieldSlot(expr);
+      if (slot) expr = slot;
+    }
     if (expr.type.kind === "void" && expected.kind !== "void" && this.neverValued.has(expr))
       return this.divergentValue(expr, expected);
     // Iterator-typed slots: native iterators and differently typed
@@ -10852,6 +10860,37 @@ export class Lowerer {
 
   fieldGetExpr(target: FieldTarget, loc: SrcLoc, blame: ts.Node): IrExpr {
     return fieldGetExpr(this, target, loc, blame);
+  }
+
+  /** The undefined-armed slot read behind a checked deferred-init field
+   * read, or null. Consumers that observe undefined itself (equality,
+   * typeof, truthiness, nullish defaults) test the slot instead of the
+   * checked extraction, which throws for an unassigned field. */
+  deferredFieldSlot(value: IrExpr): IrExpr | null {
+    // The inline form: `slot is undefined ? throw : narrow(slot)`.
+    if (
+      value.kind === "ternary" &&
+      value.cond.kind === "unionIsTag" &&
+      value.else_.kind === "unionNarrow" &&
+      value.else_.value === value.cond.value &&
+      value.then.kind === "libCall" &&
+      value.then.fn === "error.nodeThrow"
+    ) {
+      const read = value.cond.value;
+      return read.kind === "fieldGet" &&
+        read.type.kind === "union" &&
+        this.classes.get(read.className)?.deferredInitFields?.has(read.field) === true
+        ? read
+        : null;
+    }
+    if (value.kind !== "call" || value.args.length !== 1) return null;
+    const read = value.args[0]!;
+    if (read.kind !== "fieldGet" || read.type.kind !== "union") return null;
+    if (this.classes.get(read.className)?.deferredInitFields?.has(read.field) !== true) return null;
+    return this.coercions.checkedNarrows.has(value.callee) ||
+      value.callee.startsWith("%deferred.read.")
+      ? read
+      : null;
   }
 
   fieldSetStmt(target: FieldTarget, value: IrExpr, loc: SrcLoc, blame: ts.Node): IrStmt {
