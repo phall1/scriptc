@@ -79,3 +79,11 @@ export function nodeThrowExpr(
     loc,
   };
 }
+
+/** The location for a shared helper the lowering creates from its first
+ * use. The helper is compiler code, not that use's source line: without a
+ * source position it gets no debug info, so a breakpoint on the line stops
+ * only at the use itself. */
+export function helperLoc(loc: SrcLoc): SrcLoc {
+  return { file: loc.file, start: -1, end: -1 };
+}
