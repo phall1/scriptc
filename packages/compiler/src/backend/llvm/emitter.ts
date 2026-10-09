@@ -511,6 +511,8 @@ export class LlEmitter {
   readonly ffiExtendNarrowIntegers: boolean;
   readonly cycleColorOffset: number;
   readonly wasi: boolean;
+  /** ELF worker executables give thread-locals the executable TLS models. */
+  private readonly executableTls: boolean;
   private readonly emitLibraryIdentity: boolean;
   private readonly runtimeAbiMarker: boolean;
   /** Interned string literals: UTF-8 text → { symbol, byte length } —
@@ -783,6 +785,11 @@ export class LlEmitter {
     this.ffiExtendNarrowIntegers =
       options.wasi === true || ffiExtendsNarrowIntegers(options.targetTriple);
     this.wasi = options.wasi === true;
+    this.executableTls =
+      mod.workers === true &&
+      mod.lib === undefined &&
+      !this.wasi &&
+      !/apple|darwin|windows|mingw|cygwin|win32/.test(options.targetTriple || process.platform);
     this.emitLibraryIdentity = options.emitLibraryIdentity !== false;
     this.runtimeAbiMarker = options.runtimeAbiMarker === true;
     this.rcHelpers = options.inlineRc === true ? new Set() : null;
@@ -1351,6 +1358,28 @@ export class LlEmitter {
   }
 
   emitParts(): string[] {
+    const parts = this.emitModuleParts();
+    if (!this.executableTls) return parts;
+    // A worker executable's thread-locals all live in the executable's own
+    // TLS block (the program's internal ones, the runtime's external ones),
+    // so on ELF they can use the executable models: LLVM's default
+    // general-dynamic sequence (relaxed by the linker to `mov %fs:0` plus
+    // an add) becomes one %fs-relative access LLVM can fold into loads.
+    // Darwin's thread-local variables have a single model.
+    return parts.map((part) =>
+      part
+        .replace(
+          /^(@[-$._A-Za-z0-9]+ = internal )thread_local global /gm,
+          "$1thread_local(localexec) global ",
+        )
+        .replace(
+          /^(@[-$._A-Za-z0-9]+ = external )thread_local global /gm,
+          "$1thread_local(initialexec) global ",
+        ),
+    );
+  }
+
+  private emitModuleParts(): string[] {
     // Function bodies first (the literal/unit/fn-value tables fill as they
     // emit), then the file assembles around them — the runtime ABI’s order.
     const fnDefs: string[] = [];
