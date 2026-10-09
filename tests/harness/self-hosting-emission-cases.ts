@@ -132,9 +132,11 @@ export function emissionCases(): EmissionCase[] {
   const acyclicUnion = emissionModule();
   acyclicUnion.records = [{ id: "linked", fields: [{ name: "next", type: optional }] }];
   acyclicUnion.unions = [{ id: "optional", arms: [rec("linked"), UNDEFINED_T] }];
+  // `linked | undefined` is a nullable pointer: the field releases through
+  // the record's NULL-tolerant helper, with no union box.
   add("constructor-only nullable union edge", acyclicUnion, [
     "@scr_rt_calloc",
-    "@scr_union_release",
+    "@sc_rrelease_linked",
   ]);
 
   const union = emissionModule();
@@ -148,7 +150,21 @@ export function emissionCases(): EmissionCase[] {
     },
   ];
   union.unions = [{ id: "optional", arms: [rec("linked"), UNDEFINED_T] }];
-  add("cycles through a nullable union", union, ["@scr_union_trace", "@scr_union_release"]);
+  add("cycles through a nullable union", union, ["@scr_cyc_alloc", "@sc_rrelease_linked"]);
+
+  // A second non-unit arm keeps the union a tagged box.
+  const boxedUnion = emissionModule();
+  boxedUnion.records = [
+    {
+      id: "linked",
+      fields: [
+        { name: "next", type: optional },
+        { name: "peers", type: arrayOf(optional) },
+      ],
+    },
+  ];
+  boxedUnion.unions = [{ id: "optional", arms: [rec("linked"), STRING, UNDEFINED_T] }];
+  add("cycles through a boxed union", boxedUnion, ["@scr_union_trace", "@scr_union_release"]);
 
   const overflow = emissionModule();
   overflow.records = [
