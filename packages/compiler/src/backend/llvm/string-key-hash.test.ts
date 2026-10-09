@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { literalCapWord, stringKeyHash32 } from "./string-key-hash.js";
+import { literalCapWord, literalCapWord32, stringKeyHash32 } from "./string-key-hash.js";
 
 // Shared with packages/runtime/test/test_map.c (hash_vectors): the runtime
 // computes these for heap strings, the compiler bakes them into literals.
@@ -26,12 +26,24 @@ describe("string key hash", () => {
     expect(stringKeyHash32(Buffer.from("ab"))).not.toBe(stringKeyHash32(Buffer.from("abc")));
   });
 
-  test("literal capacity word keeps cap = len in the low half", () => {
+  test("literal capacity word keeps cap = len in the low 31 bits", () => {
     for (const [text, hash] of VECTORS) {
       const bytes = Buffer.from(text, "utf8");
       const word = BigInt.asUintN(64, BigInt(literalCapWord(bytes)));
-      expect(word & 0xffffffffn).toBe(BigInt(bytes.length));
+      expect(word & 0x7fffffffn).toBe(BigInt(bytes.length));
       expect(word >> 32n).toBe(BigInt(hash));
+    }
+  });
+
+  test("literal capacity words carry the proven-ASCII bit exactly", () => {
+    for (const [text] of VECTORS) {
+      const bytes = Buffer.from(text, "utf8");
+      const ascii = bytes.every((byte) => byte < 0x80);
+      const word = BigInt.asUintN(64, BigInt(literalCapWord(bytes)));
+      expect((word & 0x80000000n) !== 0n).toBe(ascii);
+      const word32 = Number(literalCapWord32(bytes)) >>> 0;
+      expect(word32 & 0x7fffffff).toBe(bytes.length);
+      expect((word32 & 0x80000000) !== 0).toBe(ascii);
     }
   });
 });

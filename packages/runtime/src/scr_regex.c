@@ -416,6 +416,7 @@ typedef struct ScrRegexInput {
 } ScrRegexInput;
 
 static bool scr_text_ascii(const ScrStr *s) {
+  if (scr_str_known_ascii(s)) return true;
   size_t i = 0;
   for (; s->len - i >= sizeof(uint64_t); i += sizeof(uint64_t)) {
     uint64_t word;

@@ -57,10 +57,28 @@ export function stringKeyHash32(bytes: Uint8Array): number {
   return folded === 0 ? 1 : folded;
 }
 
+/** Bit 31 of every capacity word: the string is proven all ASCII, so the
+ * runtime and inline string reads map UTF-16 units to bytes by identity
+ * (SCR_STR_ASCII_BIT in scr_runtime.h). */
+export const STRING_ASCII_BIT = 0x80000000;
+
+function isAscii(bytes: Uint8Array): boolean {
+  for (const byte of bytes) if (byte >= 0x80) return false;
+  return true;
+}
+
 /** The capacity word of an immortal literal on 64-bit targets: cap = len in
- * the low half, the precomputed key hash in the high half, printed as the
- * signed i64 LLVM expects. */
+ * bits 0-30, the proven-ASCII bit, the precomputed key hash in the high
+ * half, printed as the signed i64 LLVM expects. */
 export function literalCapWord(bytes: Uint8Array): string {
-  const word = BigInt(bytes.length) | (BigInt(stringKeyHash32(bytes)) << 32n);
+  const ascii = isAscii(bytes) ? BigInt(STRING_ASCII_BIT) : 0n;
+  const word = BigInt(bytes.length) | ascii | (BigInt(stringKeyHash32(bytes)) << 32n);
   return BigInt.asIntN(64, word).toString();
+}
+
+/** The capacity word of an immortal literal on 32-bit targets: cap = len
+ * plus the proven-ASCII bit, printed as the signed i32 LLVM expects. */
+export function literalCapWord32(bytes: Uint8Array): string {
+  const word = bytes.length + (isAscii(bytes) ? STRING_ASCII_BIT : 0);
+  return String(word | 0);
 }

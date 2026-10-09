@@ -30,6 +30,7 @@ import {
 } from "./map-number-lookup.js";
 import { emitBorrowedInput } from "./borrowed-inputs.js";
 import { emitStringSliceRead } from "./string-slices.js";
+import { STRING_CHAR_CODE_AT_DECL, STRING_UTF16_LEN_DECL } from "./string-reads.js";
 import { emitDenseArrayNumber, emitDenseArrayPush } from "./dense-array-access.js";
 import { emitUnionWiden } from "./expr-records.js";
 
@@ -189,16 +190,19 @@ export function emitStrIntrinsic(
   };
   const method = e.method;
   switch (method) {
-    case "length":
-      return call("scr_str_utf16_len", "double (ptr)", `ptr ${r.name}`, "double", false);
-    case "charCodeAt":
-      return call(
-        "scr_str_char_code_at",
-        "double (ptr, double)",
-        `ptr ${r.name}, double ${args[0]!.name}`,
-        "double",
-        false,
-      );
+    case "length": {
+      // sc_str_utf16_len (string-reads.ts) answers proven-ASCII strings inline.
+      host.declare(STRING_UTF16_LEN_DECL);
+      const t = B.tmp();
+      B.line(`${t} = call double @sc_str_utf16_len(ptr ${r.name})`);
+      return { name: t, type: e.type };
+    }
+    case "charCodeAt": {
+      host.declare(STRING_CHAR_CODE_AT_DECL);
+      const t = B.tmp();
+      B.line(`${t} = call double @sc_str_char_code_at(ptr ${r.name}, double ${args[0]!.name})`);
+      return { name: t, type: e.type };
+    }
     case "charAt":
       return call(
         "scr_str_char_at",

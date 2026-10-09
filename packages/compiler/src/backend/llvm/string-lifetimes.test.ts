@@ -277,9 +277,11 @@ const methodCases: {
   args: IrExpr[];
   result: IrType;
   target: string;
+  /** Sites enter through the inlined sc_str_* wrapper (string-reads.ts). */
+  inline?: boolean;
 }[] = [
-  { method: "length", args: [], result: F64, target: "utf16_len" },
-  { method: "charCodeAt", args: [num(1)], result: F64, target: "char_code_at" },
+  { method: "length", args: [], result: F64, target: "utf16_len", inline: true },
+  { method: "charCodeAt", args: [num(1)], result: F64, target: "char_code_at", inline: true },
   { method: "charAt", args: [num(1)], result: STRING, target: "char_at" },
   { method: "indexOf", args: [ref("argument"), num(1)], result: F64, target: "index_of" },
   { method: "includes", args: [ref("argument")], result: BOOL, target: "includes" },
@@ -314,7 +316,7 @@ const methodCases: {
 
 test.each(methodCases)(
   "$method passes borrowed string inputs through its runtime ABI",
-  ({ method, args, result, target }) => {
+  ({ method, args, result, target, inline }) => {
     const f = fn(
       "method",
       ["receiver", "argument"],
@@ -322,7 +324,7 @@ test.each(methodCases)(
     );
     for (const bits of [32, 64] as const) {
       const ir = body(mod(f), "sc_bf_method", bits);
-      expect(ir).toContain(`@scr_str_${target}(`);
+      expect(ir).toContain(`@${inline ? "sc" : "scr"}_str_${target}(`);
       expect(ir).not.toContain("@scr_str_retain_v");
       // Throwing methods release their owned result on the unwind path.
       if (method !== "normalize" && method !== "repeat")
@@ -381,7 +383,7 @@ test("boxed string lengths borrow initialized payloads and keep checked TDZ read
   expect(ir).toMatch(/br i1 %t\d+, label %lazy\.release\d+/);
   expect(ir).toContain("@scr_box_release");
   expect(ir).not.toContain("@scr_box_get_ref");
-  expect(ir).toContain("@scr_str_utf16_len");
+  expect(ir).toContain("@sc_str_utf16_len");
   inspect.locals[0]!.tdz = true;
   const checked = body(mod(inspect), "sc_f_inspect");
   expect(checked).toContain("@scr_box_get_ref");

@@ -81,7 +81,7 @@ test("string dispatch uses target-width byte lengths and checks equality inside 
     const body = emit(STRING, ["", "a", "é", "😀", "tail", "é"].map(string), bits);
     expect(body).toContain(`load i${bits}, ptr`);
     expect(body).toContain(`switch i${bits}`);
-    expect(body).not.toContain("scr_str_utf16_len");
+    expect(body).not.toContain("_str_utf16_len");
     expect(body.match(/call zeroext i1 @sc_str_eq/g)).toHaveLength(5);
     const dispatch = body.split("\n").find((line) => line.includes(`switch i${bits}`))!;
     expect(dispatch).toContain(`i${bits} 2, label`);

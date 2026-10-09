@@ -289,8 +289,9 @@ import { LlvmUnsupportedError } from "./unsupported.js";
 import { LlWalkers } from "./walkers.js";
 import { isObjectArm, NULLABLE_ABSENT, NULLABLE_NULL, NullableUnions } from "./nullable-unions.js";
 import { emitNullablePresent, emitUnionPeek, emitUnionTag } from "./union-repr.js";
-import { literalCapWord } from "./string-key-hash.js";
+import { literalCapWord, literalCapWord32 } from "./string-key-hash.js";
 import { NUMBER_MAP_ENTRY_DECL } from "./map-number-lookup.js";
+import { STRING_READ_HELPERS } from "./string-reads.js";
 import {
   emitConcatInputs,
   emitMixedConcat,
@@ -1770,8 +1771,11 @@ export class LlEmitter {
       // the runtime ABI’s static table, retain/release skip rc == SIZE_MAX.
       // 64-bit (little-endian) targets split the capacity word: the high
       // half carries the precomputed Map key hash (SCR_STR_HASH_CACHE).
+      // Bit 31 marks all-ASCII literals (SCR_STR_ASCII_BIT) on every target.
       const capWord =
-        this.sizeType === "i64" ? literalCapWord(Buffer.from(text, "utf8")) : String(lit.len);
+        this.sizeType === "i64"
+          ? literalCapWord(Buffer.from(text, "utf8"))
+          : literalCapWord32(Buffer.from(text, "utf8"));
       out.push(
         `@${lit.sym} = internal global { ${this.sizeType}, ${this.sizeType}, ${this.sizeType}, [${lit.len + 1} x i8] } ` +
           `{ ${this.sizeType} -1, ${this.sizeType} ${lit.len}, ${this.sizeType} ${capWord}, [${lit.len + 1} x i8] c"${llStrBytes(text)}" }`,
@@ -2642,6 +2646,14 @@ export class LlEmitter {
         `}`,
         ``,
       );
+    }
+    // String length and charCodeAt read proven-ASCII strings inline: bit 31
+    // of the capacity word (SCR_STR_ASCII_BIT, the low half's sign bit on
+    // little-endian targets) makes UTF-16 units bytes. Unproven strings and
+    // anything but an in-range index take the runtime's UTF-16 mapping.
+    for (const helper of STRING_READ_HELPERS) {
+      if (!this.decls.has(helper.decl)) continue;
+      defs.push(...helper.define(this.sizeType, FN_ATTRS), ``);
     }
     // Ordering also decides inline when the first bytes differ: byte order
     // is the plain comparison's order, and the UTF-16 order whenever both
