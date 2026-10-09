@@ -15622,6 +15622,12 @@
     "<repo>/tests/corpus/4545-borrowed-returns.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/4546-rebound-borrowed-params.ts": {
+   "order": [
+    "<repo>/tests/corpus/4546-rebound-borrowed-params.ts"
+   ],
+   "diags": []
   }
  }
 }

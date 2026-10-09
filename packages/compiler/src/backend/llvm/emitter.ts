@@ -157,6 +157,7 @@ import {
 import { emitBorrowedFieldSequence, guardedValue } from "./borrowed-receivers.js";
 import { emitBorrowedInput } from "./borrowed-inputs.js";
 import { analyzeWalks, findWalkBorrows } from "./walk-borrows.js";
+import { findReboundParameters } from "./rebound-parameters.js";
 import { ReferenceEffects } from "./reference-effects.js";
 import { LlvmDebugInfo } from "./debug-info.js";
 import { StackCallbacks } from "./stack-callbacks.js";
@@ -593,6 +594,10 @@ export class LlEmitter {
   /** Functions whose borrowing body returns its result without a reference
    * (analyzeBorrowedReturns), and whether the current body is one. */
   readonly borrowedReturns = new Set<string>();
+  /** Rebound parameters that keep the borrowed convention with an owner
+   * slot (rebound-parameters.ts), per function, and the current owner slots. */
+  private readonly reboundByFunction = new Map<string, ReadonlySet<string>>();
+  private readonly reboundOwnerSlots = new Map<string, string>();
   private currentBorrowedReturn = false;
   /** Manifest-bound native imports, used by ffiCall emission. */
   readonly ffiByName = new Map<string, IrFfiImport>();
@@ -852,6 +857,27 @@ export class LlEmitter {
           if (walks.has(param.localId)) indexes.add(index);
         });
         if (indexes.size > 0) walkParameters.set(fn.name, indexes);
+      }
+    }
+    if (this.debug === null) {
+      for (const fn of this.fnByName.values()) {
+        // Strings keep the owned parameter: their in-place append
+        // (`s = s + x`) needs a uniquely owned binding.
+        const rebound = findReboundParameters(
+          fn,
+          (type) =>
+            this.plainReference(type) &&
+            type.kind !== "string" &&
+            (type.kind !== "union" || this.nullableUnions.get(type.unionId)?.arm.kind !== "string"),
+          this.walkBorrowsByFunction.get(fn.name) ?? new Set(),
+        );
+        if (rebound.size === 0) continue;
+        this.reboundByFunction.set(fn.name, rebound);
+        const indexes = walkParameters.get(fn.name) ?? new Set<number>();
+        fn.params.forEach((param, index) => {
+          if (rebound.has(param.localId)) indexes.add(index);
+        });
+        walkParameters.set(fn.name, indexes);
       }
     }
     this.callLifetimes = analyzeCallLifetimes(
@@ -4820,6 +4846,7 @@ export class LlEmitter {
     const numericFn = withInitializerBindings(fn, initializerBindings);
     this.numericLocals = new Map(numericFn.locals.map((l) => [l.id, l]));
     this.borrowedParameters.clear();
+    this.reboundOwnerSlots.clear();
     this.projectedParameters.clear();
     const projectedParameterIndexes = this.callLifetimes.parameters.get(fn.name);
     if (projectedParameterIndexes)
@@ -4831,7 +4858,10 @@ export class LlEmitter {
       // Rebound walk parameters borrow too, but only unchanged ones may
       // serve as stable owners for call arguments and aliases.
       for (const index of borrowedParameterIndexes)
-        if (!this.walkBorrowsByFunction.get(fn.name)?.has(fn.params[index]!.localId))
+        if (
+          !this.walkBorrowsByFunction.get(fn.name)?.has(fn.params[index]!.localId) &&
+          !this.reboundByFunction.get(fn.name)?.has(fn.params[index]!.localId)
+        )
           this.borrowedParameters.add(fn.params[index]!.localId);
     }
     this.captureIds = new Set(
@@ -5034,6 +5064,15 @@ export class LlEmitter {
       B.line(`store ${this.llType(p.type)} %p_${mangleLocal(p.localId)}, ptr ${slot}`);
       this.storeIntegerView(p.localId, { name: `%p_${mangleLocal(p.localId)}`, type: p.type });
       if (isRefCounted(p.type) && !borrowed?.has(index)) fnScope.push({ slot, type: p.type });
+      if (this.reboundByFunction.get(fn.name)?.has(p.localId) && borrowed?.has(index)) {
+        // The caller's borrow stays in the parameter slot; values the body
+        // assigns are owned here until rebinding or exit releases them.
+        const owner = `${slot}.owner`;
+        B.entryAllocas.push(`${owner} = alloca ptr`);
+        B.line(`store ptr null, ptr ${owner}`);
+        fnScope.push({ slot: owner, type: p.type });
+        this.reboundOwnerSlots.set(p.localId, owner);
+      }
     }
     this.scopes.push(fnScope);
     // Stackful native fibers retain these frames while suspended. The
@@ -5400,6 +5439,23 @@ export class LlEmitter {
         break;
       }
       case "assign": {
+        const owner = this.reboundOwnerSlots.get(s.localId);
+        if (owner !== undefined && !this.walkBorrows.has(s.localId)) {
+          // A rebound borrowed parameter: the new value moves into the owner
+          // slot, replacing (and releasing) the previous owned value. This
+          // precedes the in-place string append, which would release the
+          // caller's borrow.
+          const param = this.binding(s.localId);
+          const slot = param.slot;
+          const v = this.emitExpr(s.value);
+          this.moveTemp(v);
+          const old = B.tmp();
+          B.line(`${old} = load ptr, ptr ${owner}`);
+          this.releaseValue(old, param.type);
+          B.line(`store ptr ${v.name}, ptr ${slot}`);
+          B.line(`store ptr ${v.name}, ptr ${owner}`);
+          break;
+        }
         const localStorage = this.localUnionStorage.get(s.localId);
         if (localStorage) {
           storeLocalUnion(this, localStorage, s.value);

@@ -319,9 +319,11 @@ console.log(alias(new Item()).value, snapshot(new Item()).value);
   expect(alias).not.toContain("@sc_retain_Item");
   expect(alias).not.toContain("@sc_release_Item");
   expect(body(llvm, "sc_f_alias").match(/@sc_retain_Item/g)).toHaveLength(1);
-  const snapshot = body(llvm, "sc_f_snapshot");
+  // The rebound parameter keeps borrowing (its new value lives in an owner
+  // slot), but the alias saved before the rebinding must own its value.
   // `new Item()` calls the borrowed constructor body, so no retain transfers
   // the fresh instance into it: the saved alias and the returned value.
+  const snapshot = body(llvm, "sc_bf_snapshot");
   expect(snapshot.match(/@sc_retain_Item/g)).toHaveLength(2);
   expect(snapshot).toContain("@sc_bf__x25_Item_constructor");
   expect(snapshot).toContain("@sc_release_Item");
