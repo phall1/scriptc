@@ -96,7 +96,8 @@ import {
 import { scalarizeNumericRecords } from "../../ir/scalar-records.js";
 import { specializeNumericCalls } from "../../ir/numeric-call-specialization.js";
 import { everyStmtList } from "../../ir/traverse.js";
-import { analyzeIntegerRanges, type IntegerRanges } from "../../ir/integer-ranges.js";
+import { analyzeIntegerRanges, INT32_RANGE, type IntegerRanges } from "../../ir/integer-ranges.js";
+import { analyzeInt32Slots, type Int32Slots } from "../../ir/int32-slots.js";
 import { findIntegerViews } from "./integer-views.js";
 import { findInitializerBindings, withInitializerBindings } from "../../ir/initializer-bindings.js";
 import { findConstantNumericTables, type ConstantNumericTable } from "../../ir/constant-tables.js";
@@ -644,6 +645,8 @@ export class LlEmitter {
   private storedSplits = new Map<string, StoredSplitSnapshot>();
   private streamingSplitsEnabled = false;
   private readonly initializerBindings: ReturnType<typeof findInitializerBindings>;
+  /** Whole-program int32 storage and parameter/result facts. */
+  readonly int32Slots: Int32Slots;
   private numericLocals = new Map<string, IrLocal>();
   private captureIds = new Set<string>();
   /** Active induction bindings retain their width independently of size_t. */
@@ -725,6 +728,7 @@ export class LlEmitter {
           );
     this.constantNumericTables = findConstantNumericTables(mod);
     this.initializerBindings = findInitializerBindings(mod);
+    this.int32Slots = analyzeInt32Slots(mod);
     this.sizeType = options.pointerBits === 32 ? "i32" : "i64";
     this.ffiExtendNarrowIntegers =
       options.wasi === true || ffiExtendsNarrowIntegers(options.targetTriple);
@@ -1313,6 +1317,7 @@ export class LlEmitter {
       this.fnByName,
       (t) => this.llType(t),
       this.nullableFields,
+      this.int32Slots,
     );
     const shapes = layouts.records;
     const classShapes = layouts.classes;
@@ -4147,6 +4152,41 @@ export class LlEmitter {
     B.line(`store i8 ${z}, ptr ${ptr}${this.fieldAliasAttachment(ptr)}`);
   }
 
+  /** Reads an int32-specialized class field: the i32 slot is the value,
+   * and its widening is the exact double every program observation sees. */
+  loadInt32Field(ptr: string, type: IrType): LlValue {
+    const B = this.B;
+    const raw = B.tmp();
+    const number = B.tmp();
+    B.line(`${raw} = load i32, ptr ${ptr}${this.fieldAliasAttachment(ptr)}`);
+    B.line(`${number} = sitofp i32 ${raw} to double`);
+    return {
+      name: number,
+      type,
+      uint32: raw,
+      integer: { name: raw, type: "i32", signed: true, range: INT32_RANGE },
+    };
+  }
+
+  /** Stores a value the whole-program analysis proved to be an int32 (never
+   * -0, NaN or fractional) into an int32-specialized class field. */
+  storeInt32Field(ptr: string, value: LlValue, expr: IrExpr): void {
+    if (!this.int32Slots.provenWrites.has(expr))
+      throw new InternalCompilerError("llvm emitter bug: unproven int32 field write");
+    const B = this.B;
+    let bits: string;
+    if (value.integer?.type === "i32") bits = value.integer.name;
+    else if (value.integer) {
+      bits = B.tmp();
+      B.line(`${bits} = trunc i64 ${value.integer.name} to i32`);
+    } else if (value.uint32 !== undefined) bits = value.uint32;
+    else {
+      bits = B.tmp();
+      B.line(`${bits} = fptosi double ${value.name} to i32`);
+    }
+    B.line(`store i32 ${bits}, ptr ${ptr}${this.fieldAliasAttachment(ptr)}`);
+  }
+
   // ── bindings ────────────────────────────────────────────────────────────
 
   /** A binding's storage: a module global, a plain local slot, or a boxed
@@ -4588,7 +4628,7 @@ export class LlEmitter {
       (e) => this.nullableFieldGet(e) !== null,
     );
     this.localUnionStorage = new Map();
-    this.integerRanges = analyzeIntegerRanges(numericFn);
+    this.integerRanges = analyzeIntegerRanges(numericFn, this.int32Slots.facts(fn.name));
     this.bytesBounds = findBytesBounds(numericFn, this.integerRanges);
     this.chainSlots.clear();
     this.finallyStack = [];
@@ -5139,6 +5179,13 @@ export class LlEmitter {
         if (nullable && s.kind === "fieldSet") {
           const obj = this.emitExpr(s.obj);
           this.emitNullableFieldStore(obj.name, s.className, s.field, nullable, s.value);
+          break;
+        }
+        if (s.kind === "fieldSet" && this.int32Slots.isField(s.className, s.field)) {
+          const obj = this.emitStableReceiver(s.obj, [s.value]);
+          const v = this.emitExpr(s.value);
+          const { ptr } = this.classFieldPtr(obj.name, s.className, s.field);
+          this.storeInt32Field(ptr, v, s.value);
           break;
         }
         const obj = isRefCounted(s.value.type)
@@ -6436,6 +6483,7 @@ export class LlEmitter {
         return { name: this.loadRecordField(ptr, type), type: e.type };
       }
       const { ptr, type } = this.classFieldPtr(receiver.name, e.className, e.field);
+      if (this.int32Slots.isField(e.className, e.field)) return this.loadInt32Field(ptr, e.type);
       return { name: this.loadField(ptr, type), type: e.type };
     }
     if (e.kind === "ternary" && this.canBorrowReceiver(e.then) && this.canBorrowReceiver(e.else_)) {

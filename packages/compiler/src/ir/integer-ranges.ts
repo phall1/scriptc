@@ -58,12 +58,32 @@ export function integerArithmeticRange(
   return Number.isSafeInteger(min) && Number.isSafeInteger(max) ? { min, max } : null;
 }
 
+export const INT32_RANGE: IntegerRange = SIGNED;
+export function withinInt32(range: IntegerRange | null | undefined): boolean {
+  return !!range && range.min >= SIGNED.min && range.max <= SIGNED.max;
+}
+
+/** Whole-program facts about storage outside the analyzed function, each
+ * proven by the caller (int32-slots.ts): every value a field slot, a
+ * captured (boxed) binding or a function result can hold, and the values
+ * every caller passes to a parameter. Absent entries carry no proof. */
+export interface IntegerSlotFacts {
+  params?: ReadonlyMap<string, IntegerRange>;
+  field?: (className: string, field: string) => IntegerRange | null;
+  call?: (callee: string) => IntegerRange | null;
+  boxed?: (localId: string) => IntegerRange | null;
+}
+
 /** Structured local dataflow. Calls cannot write uncaptured local slots,
  * but argument expressions can; unknown evaluation forms invalidate all
  * syntactically written slots before their children are inspected. Loops
- * discard loop-carried facts and retain only invariant or induction facts.
- * Suspensions and captured bindings deliberately remain outside the proof. */
-export function analyzeIntegerRanges(fn: IrFunction): IntegerRanges {
+ * discard loop-carried facts and retain only invariant or induction facts,
+ * except int32-closed locals: a local whose region-entry value is an int32
+ * and whose every write inside the region is int32 by construction
+ * (bitwise results, int32 literals and slots, other such locals) remains a
+ * full int32 range across the region. Suspensions and captured bindings
+ * deliberately remain outside the proof. */
+export function analyzeIntegerRanges(fn: IrFunction, slots: IntegerSlotFacts = {}): IntegerRanges {
   const ranges = new Map<IrExpr, IntegerRange | null>();
   if (fn.async || fn.generator) return ranges;
   const captures = new Set(
@@ -75,6 +95,120 @@ export function analyzeIntegerRanges(fn: IrFunction): IntegerRanges {
       .map((l) => l.id),
   );
   const loopLocals = new Map(fn.locals.filter((l) => !captures.has(l.id)).map((l) => [l.id, l]));
+  // A captured binding has no local dataflow: only a proof that covers
+  // every write of the shared box anywhere applies to its reads.
+  const boxedRange = (localId: string): IntegerRange | null =>
+    eligible.has(localId) ? null : (slots.boxed?.(localId) ?? null);
+  const slotRange = (e: IrExpr): IntegerRange | null =>
+    e.type.kind !== "f64"
+      ? null
+      : e.kind === "fieldGet"
+        ? (slots.field?.(e.className, e.field) ?? null)
+        : e.kind === "call"
+          ? (slots.call?.(e.callee) ?? null)
+          : null;
+
+  /** Every write of a local in the given nodes: the written value, or null
+   * for writes whose value is not an ordinary expression (++/--, for-of
+   * and catch bindings). Declarations are reported separately. */
+  function regionWrites(nodes: (IrExpr | IrStmt)[]): {
+    values: Map<string, (IrExpr | null)[]>;
+    declared: Set<string>;
+  } {
+    const values = new Map<string, (IrExpr | null)[]>();
+    const declared = new Set<string>();
+    const add = (id: string, value: IrExpr | null): void => {
+      if (!eligible.has(id)) return;
+      const list = values.get(id);
+      if (list) list.push(value);
+      else values.set(id, [value]);
+    };
+    const walkExpr = (value: IrExpr): boolean => {
+      if (value.kind === "assignExpr") add(value.localId, value.value);
+      else if (value.kind === "incDec") add(value.localId, null);
+      return everyExprChild(value, walkExpr, walkStmt);
+    };
+    const walkStmt = (value: IrStmt): boolean => {
+      if (value.kind === "assign") add(value.localId, value.value);
+      else if (value.kind === "varDecl") {
+        declared.add(value.localId);
+        if (value.init) add(value.localId, value.init);
+      } else if (value.kind === "forOf") add(value.localId, null);
+      else if (value.kind === "tryCatch" && value.catchLocalId) add(value.catchLocalId, null);
+      return everyStmtChild(value, walkExpr, walkStmt);
+    };
+    for (const node of nodes) {
+      if ("type" in node) walkExpr(node as IrExpr);
+      else walkStmt(node as IrStmt);
+    }
+    return { values, declared };
+  }
+  let functionWrites: Map<string, (IrExpr | null)[]> | null = null;
+
+  /** Locals that hold an int32 everywhere inside and after a region whose
+   * control flow this analysis does not follow. A candidate either enters
+   * with an int32 fact or is declared inside the region and written only
+   * there (definite assignment: every read follows one of those writes).
+   * The greatest fixpoint keeps candidates whose every write is int32 by
+   * construction given the other candidates. */
+  function closedLocals(nodes: (IrExpr | IrStmt)[], entry: Facts): Set<string> {
+    const { values, declared } = regionWrites(nodes);
+    const closed = new Set<string>();
+    if (values.size === 0) return closed;
+    for (const [id, list] of values) {
+      if (withinInt32(entry.get(id))) closed.add(id);
+      else if (declared.has(id)) {
+        functionWrites ??= regionWrites(fn.body).values;
+        if (functionWrites.get(id)?.length === list.length) closed.add(id);
+      }
+    }
+    const int32 = (e: IrExpr): boolean => {
+      if (e.type.kind !== "f64") return false;
+      switch (e.kind) {
+        case "numLit":
+          return (
+            Number.isInteger(e.value) &&
+            withinInt32({ min: e.value, max: e.value }) &&
+            !Object.is(e.value, -0)
+          );
+        case "bin":
+          return e.op === "&" || e.op === "|" || e.op === "^" || e.op === "<<" || e.op === ">>";
+        case "unary":
+          return e.op === "~";
+        case "libCall":
+          return e.fn === "math.imul" || e.fn === "math.clz32";
+        case "ternary":
+          return int32(e.then) && int32(e.else_);
+        case "logical":
+          return int32(e.left) && int32(e.right);
+        case "assignExpr":
+          return int32(e.value);
+        case "seqExpr":
+          return int32(e.result);
+        case "varRef":
+          return (
+            closed.has(e.localId) ||
+            (!values.has(e.localId) && withinInt32(entry.get(e.localId))) ||
+            withinInt32(boxedRange(e.localId))
+          );
+        case "fieldGet":
+        case "call":
+          return withinInt32(slotRange(e));
+        default:
+          return false;
+      }
+    };
+    for (let changed = true; changed;) {
+      changed = false;
+      for (const id of closed)
+        if (values.get(id)!.some((value) => value === null || !int32(value))) {
+          closed.delete(id);
+          changed = true;
+        }
+    }
+    for (const id of closed) if (!entry.has(id)) closed.delete(id);
+    return closed;
+  }
 
   function remember(e: IrExpr, range: IntegerRange | null): IntegerRange | null {
     // Shared IR objects have to satisfy the proof at every occurrence.
@@ -111,6 +245,13 @@ export function analyzeIntegerRanges(fn: IrFunction): IntegerRanges {
   }
   function invalidate(facts: Facts, nodes: (IrExpr | IrStmt)[]): void {
     for (const node of nodes) for (const id of writes(node)) facts.delete(id);
+  }
+  /** Invalidate the region's writes, keeping int32-closed locals as int32.
+   * `entry` is the state before any of the region's writes can run. */
+  function havoc(facts: Facts, nodes: (IrExpr | IrStmt)[], entry: Facts): void {
+    const closed = closedLocals(nodes, entry);
+    invalidate(facts, nodes);
+    for (const id of closed) facts.set(id, SIGNED);
   }
   function refine(condition: IrExpr, truth: boolean, facts: Facts): void {
     // A comparison constrains operand snapshots. If evaluating it writes a
@@ -177,7 +318,7 @@ export function analyzeIntegerRanges(fn: IrFunction): IntegerRanges {
           range = { min: e.value, max: e.value };
         break;
       case "varRef":
-        range = facts.get(e.localId) ?? null;
+        range = facts.get(e.localId) ?? boxedRange(e.localId);
         break;
       case "assignExpr":
         range = expr(e.value, facts);
@@ -281,7 +422,7 @@ export function analyzeIntegerRanges(fn: IrFunction): IntegerRanges {
       }
       case "arrIntrinsic":
         // Callbacks and arguments can have writes hidden in lazy lowering.
-        invalidate(facts, [e]);
+        havoc(facts, [e], facts);
         everyExprChild(
           e,
           (child) => {
@@ -295,10 +436,14 @@ export function analyzeIntegerRanges(fn: IrFunction): IntegerRanges {
         );
         if (e.method === "length") range = UNSIGNED;
         break;
+      case "fieldGet":
+        expr(e.obj, facts);
+        range = slotRange(e);
+        break;
       default:
         // Do not assume the traversal order is an evaluation order for an
         // unknown node. Every child gets the same conservative entry state.
-        invalidate(facts, [e]);
+        havoc(facts, [e], facts);
         everyExprChild(
           e,
           (child) => {
@@ -310,6 +455,8 @@ export function analyzeIntegerRanges(fn: IrFunction): IntegerRanges {
             return true;
           },
         );
+        // A direct call's result carries its whole-program return proof.
+        range = slotRange(e);
         break;
     }
     return remember(e, range);
@@ -364,7 +511,8 @@ export function analyzeIntegerRanges(fn: IrFunction): IntegerRanges {
           if (s.value) expr(s.value, facts);
           facts.clear();
           break;
-        case "block":
+        case "block": {
+          const before = new Map(facts);
           body(s.body, facts);
           // A labeled break can skip the tail of this block. We have no
           // exit-edge lattice here, so discard its written facts at a join.
@@ -374,8 +522,9 @@ export function analyzeIntegerRanges(fn: IrFunction): IntegerRanges {
               stmt: (node) => node.kind !== "break" && node.kind !== "continue",
             })
           )
-            invalidate(facts, s.body);
+            havoc(facts, s.body, before);
           break;
+        }
         case "if": {
           expr(s.cond, facts);
           const yes = new Map(facts),
@@ -398,11 +547,11 @@ export function analyzeIntegerRanges(fn: IrFunction): IntegerRanges {
           const counter = induction(s, facts);
           const bounded = boundedIntegerLoopFacts(s, loopLocals, facts);
           const loop = new Map(facts);
-          invalidate(loop, [
-            ...s.body,
-            ...(s.cond ? [s.cond] : []),
-            ...(s.update ? [s.update] : []),
-          ]);
+          havoc(
+            loop,
+            [...s.body, ...(s.cond ? [s.cond] : []), ...(s.update ? [s.update] : [])],
+            loop,
+          );
           if (counter) loop.set(counter.id, counter.range);
           for (const [id, range] of bounded) loop.set(id, range);
           if (s.cond) expr(s.cond, loop);
@@ -412,40 +561,40 @@ export function analyzeIntegerRanges(fn: IrFunction): IntegerRanges {
           // Continue can bypass any body assignment. The update therefore
           // starts from header invariants rather than the body's exit facts.
           if (s.update) body([s.update], new Map(loop));
-          invalidate(facts, [s]);
+          havoc(facts, [s], facts);
           break;
         }
         case "while":
         case "doWhile": {
           const loop = new Map(facts);
-          invalidate(loop, [s]);
+          havoc(loop, [s], loop);
           const header = new Map(loop);
           expr(s.cond, header);
           if (s.kind === "while") {
             refine(s.cond, true, header);
             body(s.body, header);
           } else body(s.body, new Map(loop));
-          invalidate(facts, [s]);
+          havoc(facts, [s], facts);
           break;
         }
         case "forOf": {
           expr(s.iterable, facts);
           const loop = new Map(facts);
-          invalidate(loop, [s]);
+          havoc(loop, [s], loop);
           body(s.body, loop);
-          invalidate(facts, [s]);
+          havoc(facts, [s], facts);
           break;
         }
         case "tryCatch":
           // Catch/finally, fallthrough and nonlocal exits need their own
           // control-flow joins. Analyze each region from invariant facts.
-          invalidate(facts, [s]);
+          havoc(facts, [s], facts);
           body(s.tryBody, new Map(facts));
           if (s.catchBody) body(s.catchBody, new Map(facts));
           if (s.finallyBody) body(s.finallyBody, new Map(facts));
           break;
         case "switch":
-          invalidate(facts, [s]);
+          havoc(facts, [s], facts);
           expr(s.disc, new Map(facts));
           for (const region of s.cases) {
             if (region.test) expr(region.test, new Map(facts));
@@ -459,7 +608,7 @@ export function analyzeIntegerRanges(fn: IrFunction): IntegerRanges {
           facts.clear();
           break;
         default:
-          invalidate(facts, [s]);
+          havoc(facts, [s], facts);
           everyStmtChild(
             s,
             (child) => {
@@ -475,6 +624,8 @@ export function analyzeIntegerRanges(fn: IrFunction): IntegerRanges {
       }
     }
   }
-  body(fn.body, new Map());
+  const entry: Facts = new Map();
+  if (slots.params) for (const [id, range] of slots.params) set(entry, id, range);
+  body(fn.body, entry);
   return ranges;
 }

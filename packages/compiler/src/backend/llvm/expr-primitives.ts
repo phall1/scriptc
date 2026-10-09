@@ -335,6 +335,8 @@ export function emitOperatorExpr(
       // release like fieldSet (exprs.ts's shape).
       const obj = host.emitExpr(e.obj);
       const { ptr } = host.classFieldPtr(obj.name, e.className, e.field);
+      if (host.int32Slots.isField(e.className, e.field))
+        throw new InternalCompilerError("llvm emitter bug: ++/-- on an int32 field");
       if (e.fieldDyn) {
         const box = B.tmp();
         B.line(`${box} = load ptr, ptr ${ptr}`);
@@ -814,6 +816,7 @@ export function emitRecordExpr(
     case "fieldGet": {
       const obj = host.emitReadReceiver(e.obj);
       const { ptr, type } = host.classFieldPtr(obj.name, e.className, e.field);
+      if (host.int32Slots.isField(e.className, e.field)) return host.loadInt32Field(ptr, e.type);
       const nullable = host.nullableFieldGet(e);
       if (nullable) {
         const p = B.tmp();

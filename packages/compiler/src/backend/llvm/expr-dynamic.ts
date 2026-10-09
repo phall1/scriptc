@@ -343,7 +343,11 @@ export function emitDynamicExpr(
           const nullable =
             arm.kind === "object" ? host.nullableFields.get(arm.className, e.field) : null;
           const v =
-            arm.kind === "object" ? host.loadField(ptr, type) : host.loadRecordField(ptr, type);
+            arm.kind === "object"
+              ? host.int32Slots.isField(arm.className, e.field)
+                ? host.loadInt32Field(ptr, e.type).name
+                : host.loadField(ptr, type)
+              : host.loadRecordField(ptr, type);
           const value = nullable
             ? host.nullableToOwnedUnion(v, nullable)
             : isRefCounted(e.type)
