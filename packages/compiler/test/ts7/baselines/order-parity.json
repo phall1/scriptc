@@ -15478,6 +15478,12 @@
     "<repo>/tests/corpus/4478-string-large-index-reads.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/4481-array-optional-push.ts": {
+   "order": [
+    "<repo>/tests/corpus/4481-array-optional-push.ts"
+   ],
+   "diags": []
   }
  }
 }

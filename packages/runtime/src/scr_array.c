@@ -1068,6 +1068,15 @@ static bool scr_arr_read_value(const ScrArr *a, double i, uint64_t *slot) {
 }
 
 void *scr_arr_peek_ref(const ScrArr *a, double i) {
+  /* Dense in-range canonical indices answer from the state byte without
+   * the general lookup; the range check precedes the cast. */
+  if (i >= 0 && i < (double)a->cap) {
+    size_t idx = (size_t)i;
+    if ((double)idx == i) {
+      if (idx >= a->len || a->present[idx] != SCR_ARR_VALUE) return NULL;
+      return scr_slot_to_ptr(a->data[idx]);
+    }
+  }
   uint64_t slot;
   return scr_arr_read_value(a, i, &slot) ? scr_slot_to_ptr(slot) : NULL;
 }

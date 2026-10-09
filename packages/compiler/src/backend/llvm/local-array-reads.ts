@@ -257,15 +257,17 @@ export function findCallArrayReads(
 export function emitCallArrayRead(
   host: LlvmEmitterContext,
   read: LocalArrayRead,
-  inline = read.borrow === true,
+  inline?: boolean,
 ): LlValue {
   const slot = host.B.slot();
   host.B.entryAllocas.push(`${slot} = alloca ptr`);
   // Snapshot arguments already cross a runtime ownership boundary. Keep
-  // their lookup compact instead of duplicating the dense fast path at
-  // every call site; proven borrowed reads and immediate projections
-  // (tests, narrowing, comparisons) still expose that path to LLVM.
-  const owner = emitLocalArrayRead(host, read, slot, inline);
+  // boxed lookups compact instead of duplicating the dense fast path at
+  // every call site; proven borrowed reads, immediate projections (tests,
+  // narrowing, comparisons), and nullable references (the element pointer
+  // itself, so the dense path is a few loads) still expose it to LLVM.
+  const nullable = read.type.kind === "union" && host.nullableUnions.has(read.type.unionId);
+  const owner = emitLocalArrayRead(host, read, slot, inline ?? (read.borrow === true || nullable));
   if (owner) host.ownSlot(owner.slot, owner.type);
   const value = host.B.tmp();
   host.B.line(`${value} = load ptr, ptr ${slot}`);
