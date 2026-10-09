@@ -110,6 +110,7 @@ import {
   lowerSafeIndexRead,
   tryLowerIndexTruthiness,
   tryLowerNumericIndexRead,
+  lowerSafeBytesRead,
 } from "./array-values.js";
 import { strCharsCall } from "./containers/array-construction.js";
 import { lowerOptionalStringIndex } from "./string-index.js";
@@ -6661,14 +6662,21 @@ export function lowerElementAccess(lowerer: Lowerer, expr: ts.ElementAccessExpre
     if (index.type.kind !== "f64") {
       lowerer.unsupported("SC1090", expr.argumentExpression, "indexing with non-number keys");
     }
-    return {
-      kind: "bytesIntrinsic",
-      method: "get",
-      receiver: recv,
-      args: [index],
-      type: F64,
-      loc: locOf(expr),
-    };
+    // `t[i]!` asserts presence: the numeric element read (NaN when
+    // invalid). Every other read answers undefined for an invalid index,
+    // like Node.
+    if (ts.isNonNullExpression(expr.parent) && expr.parent.expression === expr) {
+      return {
+        kind: "bytesIntrinsic",
+        method: "get",
+        receiver: recv,
+        args: [index],
+        type: F64,
+        loc: locOf(expr),
+        invalidNaN: true,
+      };
+    }
+    return lowerSafeBytesRead(lowerer, recv, index, locOf(expr));
   }
   // Tuple element read `t[0]`: a positional-field read of the tuple's
   // record shape — LITERAL indices only (the checker's per-index types
@@ -7709,12 +7717,15 @@ export function lowerElementCompound(
     receiver.type.kind === "array"
       ? arrayValueRead(lowerer, receiverRef(), indexRef(), receiver.type.elem, locOf(target))
       : {
+          // An invalid index reads undefined in Node, which every numeric
+          // compound operator turns into NaN; the write is then ignored.
           kind: "bytesIntrinsic",
           method: "get",
           receiver: receiverRef(),
           args: [indexRef()],
           type: F64,
           loc: locOf(target),
+          invalidNaN: true,
         };
   const oldLocal = lowerer.declareHiddenLocal("%compoundOld", oldValue.type);
   const oldRef = (): IrExpr => varRef(oldLocal.id, oldValue.type, loc);
@@ -9225,7 +9236,15 @@ export function lowerIncDec(
       const read: IrExpr =
         type.kind === "array"
           ? arrayValueRead(lowerer, receiver, index, type.elem, loc)
-          : { kind: "bytesIntrinsic", method: "get", receiver, args: [index], type: F64, loc };
+          : {
+              kind: "bytesIntrinsic",
+              method: "get",
+              receiver,
+              args: [index],
+              type: F64,
+              loc,
+              invalidNaN: true,
+            };
       return finish(read, (value) =>
         type.kind === "array"
           ? arrayValueStore(
