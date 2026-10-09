@@ -586,7 +586,9 @@ export class LlEmitter {
   /** Parameters proven projection-only: callers may pass stack boxes. */
   private projectedParameters = new Set<string>();
   private stableCallBindings: ReadonlySet<string> = new Set();
-  /** Locals holding borrowed pointers for their whole lifetime (walk-borrows.ts). */
+  /** Locals and rebound parameters holding borrowed pointers for their
+   * whole lifetime (walk-borrows.ts), per function and for the current one. */
+  private readonly walkBorrowsByFunction = new Map<string, ReadonlySet<string>>();
   private walkBorrows: ReadonlySet<string> = new Set();
   /** Manifest-bound native imports, used by ffiCall emission. */
   readonly ffiByName = new Map<string, IrFfiImport>();
@@ -830,9 +832,31 @@ export class LlEmitter {
       (call) => this.optionalArrayReads.get(call) !== null,
       mod.classes ?? [],
     );
+    const walkParameters = new Map<string, Set<number>>();
+    if (this.debug === null) {
+      const host = {
+        pointerLocal: (local: IrLocal) =>
+          local.type.kind === "object" ||
+          (local.type.kind === "union" &&
+            this.nullableUnions.get(local.type.unionId)?.arm.kind === "object"),
+        borrowsWithoutOwning: (e: IrExpr) => this.borrowsWithoutOwning(e),
+      };
+      for (const fn of this.fnByName.values()) {
+        if (!this.referenceEffects.functions.has(fn.name)) continue;
+        const walks = findWalkBorrows(fn, host);
+        if (walks.size === 0) continue;
+        this.walkBorrowsByFunction.set(fn.name, walks);
+        const indexes = new Set<number>();
+        fn.params.forEach((param, index) => {
+          if (walks.has(param.localId)) indexes.add(index);
+        });
+        if (indexes.size > 0) walkParameters.set(fn.name, indexes);
+      }
+    }
     this.callLifetimes = analyzeCallLifetimes(
       this.fnByName,
       (className, field) => this.nullableFields.get(className, field) !== null,
+      walkParameters,
     );
     this.constantCallbacks = findConstantCallbacks(mod, this.callLifetimes);
     this.stackCallbacks = new StackCallbacks(this.fnByName);
@@ -4786,8 +4810,11 @@ export class LlEmitter {
     this.stableCallBindings = this.callLifetimes.bindings.get(fn.name) ?? new Set();
     const borrowedParameterIndexes = this.callLifetimes.borrowed.get(fn.name);
     if (borrowedParameterIndexes) {
+      // Rebound walk parameters borrow too, but only unchanged ones may
+      // serve as stable owners for call arguments and aliases.
       for (const index of borrowedParameterIndexes)
-        this.borrowedParameters.add(fn.params[index]!.localId);
+        if (!this.walkBorrowsByFunction.get(fn.name)?.has(fn.params[index]!.localId))
+          this.borrowedParameters.add(fn.params[index]!.localId);
     }
     this.captureIds = new Set(
       [...(fn.captures ?? []), ...(fn.classCaptures ?? [])].map((c) => c.localId),
@@ -4837,16 +4864,7 @@ export class LlEmitter {
       (e) => this.nullableFieldGet(e) !== null,
     );
     this.localUnionStorage = new Map();
-    this.walkBorrows =
-      this.debug === null && this.referenceEffects.functions.has(fn.name)
-        ? findWalkBorrows(fn, {
-            pointerLocal: (local) =>
-              local.type.kind === "object" ||
-              (local.type.kind === "union" &&
-                this.nullableUnions.get(local.type.unionId)?.arm.kind === "object"),
-            borrowsWithoutOwning: (e) => this.borrowsWithoutOwning(e),
-          })
-        : new Set();
+    this.walkBorrows = this.walkBorrowsByFunction.get(fn.name) ?? new Set();
     this.integerRanges = analyzeIntegerRanges(numericFn, this.int32Slots.facts(fn.name));
     this.bytesBounds = findBytesBounds(numericFn, this.integerRanges);
     this.chainSlots.clear();
@@ -7132,9 +7150,11 @@ export class LlEmitter {
   }
 
   /** emitReadReceiver produces this node's pointer without acquiring a
-   * reference, given operands that do the same: plain class/record field
-   * reads, class casts, nullable-pointer narrows and wraps, and checked
-   * ternaries. Stack-boxed, map-read and boxed-field sources are owned. */
+   * reference, given operands (and ternary arms) that do the same: plain
+   * class/record field reads, class casts, nullable-pointer narrows and
+   * wraps, and checked ternaries. Stack-boxed, map-read and boxed-field
+   * sources are owned. Depends only on module facts, not the current
+   * function. */
   borrowsWithoutOwning(e: IrExpr): boolean {
     if (!isRefCounted(e.type) || this.isStackUnionSource(e)) return false;
     if (matchMapRead(e, this.boxedUnionsById)) return false;
@@ -7150,8 +7170,9 @@ export class LlEmitter {
         return e.value.type.kind === "object";
       case "unionWrap":
         return this.borrowableNullableWrap(e) !== null;
+      // The caller proves each arm separately.
       case "ternary":
-        return this.canBorrowReceiver(e.then) && this.canBorrowReceiver(e.else_);
+        return true;
       default:
         return false;
     }

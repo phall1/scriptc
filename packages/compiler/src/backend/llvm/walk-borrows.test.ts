@@ -56,11 +56,19 @@ test("parent walks rooted at unwritten parameters borrow", () => {
   );
 });
 
+const call: IrExpr = { kind: "call", callee: "make", args: [], type: NODE, loc };
+
+test("parameters rebound only to walks keep borrowing", () => {
+  const body = [assign("node", parent(ref("node"))), decl("up", parent(ref("node")))];
+  expect(findWalkBorrows(fn(body, ["up"]), host)).toEqual(new Set(["node", "up"]));
+  // A parameter re-declared without an initializer is left alone.
+  expect(findWalkBorrows(fn([decl("node", null)], []), host).size).toBe(0);
+});
+
 test("rebound parameters, owned sources and other writers keep ownership", () => {
-  const call: IrExpr = { kind: "call", callee: "make", args: [], type: NODE, loc };
   const body = [
-    // A rebound parameter is no root, and neither is its walk.
-    assign("node", parent(ref("node"))),
+    // A parameter rebound to an owned value is no root, and neither is its walk.
+    assign("node", call),
     decl("fromParam", parent(ref("node"))),
     // A call result is owned, and the failure propagates transitively.
     decl("owned", call),

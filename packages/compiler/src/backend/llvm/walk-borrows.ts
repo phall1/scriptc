@@ -12,10 +12,12 @@ export interface WalkBorrowHost {
   borrowsWithoutOwning(e: IrExpr): boolean;
 }
 
-/** Locals that may hold borrowed pointers for their whole lifetime: every
- * definition (declaration or statement assignment) is a projection of an
- * unwritten parameter or of another such local, for example the parent
- * walk `let p = node.parent; while (p.parent) p = p.parent;`.
+/** Locals (including rebound parameters) that may hold borrowed pointers
+ * for their whole lifetime: every definition (declaration or statement
+ * assignment) is a projection of an unwritten parameter or of another such
+ * local, for example the parent walk `let p = node.parent; while (p.parent)
+ * p = p.parent;`. A rebound parameter in the result keeps the borrowed
+ * calling convention.
  *
  * Soundness rests on the whole body preserving heap edges (the caller
  * passes only functions in ReferenceEffects.functions): neither the body
@@ -76,20 +78,18 @@ export function findWalkBorrows(fn: IrFunction, host: WalkBorrowHost): ReadonlyS
       return true;
     },
   });
-  // Parameters are roots only while no definition rebinds them.
-  const roots = new Set([...params].filter((id) => !definitions.has(id) && !excluded.has(id)));
-  const candidates = new Set<string>();
-  for (const id of definitions.keys()) {
+  const plain = (id: string): boolean => {
     const local = locals.get(id);
-    if (
-      params.has(id) ||
-      excluded.has(id) ||
-      !local ||
-      local.boxed ||
-      local.tdz ||
-      !host.pointerLocal(local)
-    )
-      continue;
+    return !!local && !local.boxed && !local.tdz && !excluded.has(id) && host.pointerLocal(local);
+  };
+  // Parameters are roots only while no definition rebinds them. A
+  // parameter rebound by statement assignments alone (`t = t.regular`) is a
+  // candidate like any local: its incoming value is the caller's borrow.
+  const roots = new Set([...params].filter((id) => !definitions.has(id) && plain(id)));
+  const candidates = new Set<string>();
+  for (const [id, values] of definitions) {
+    if (!plain(id)) continue;
+    if (params.has(id) && values.some((value) => value === null)) continue;
     candidates.add(id);
   }
   // A walk projects roots or candidates through reads that never acquire a
@@ -108,6 +108,8 @@ export function findWalkBorrows(fn: IrFunction, host: WalkBorrowHost): ReadonlyS
       case "unionWrap":
         if (!host.borrowsWithoutOwning(e)) return false;
         return e.value.kind === "unitLit" || walk(e.value);
+      // Each arm is itself a walk (or a throw), which emitReadReceiver reads
+      // without owning.
       case "ternary":
         return host.borrowsWithoutOwning(e) && walkOrThrow(e.then) && walkOrThrow(e.else_);
       default:

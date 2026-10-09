@@ -86,6 +86,24 @@ function climb(node: Node, steps: number): number {
   return total;
 }
 
+// Rebound parameters walk too (they keep the borrowed convention), unless
+// the body removes an edge: here the old parent link is cut while the
+// rebound parameter still points at the node it held.
+function parentKind(node: Node): number {
+  if (node.parent !== undefined) node = node.parent;
+  return node.kind;
+}
+
+function parentKindAfterCut(node: Node): number {
+  if (node.parent !== undefined) {
+    const child = node;
+    node = node.parent;
+    cut(child);
+  }
+  const fresh = new Node(100, undefined);
+  return node.kind + fresh.kind;
+}
+
 interface Inner {
   name: string;
 }
@@ -132,3 +150,4 @@ console.log(sourceFileOf(chain(5)).fileName, depth(chain(7)));
 console.log(cutWalk(chain(6)));
 console.log(climb(chain(4), 2), climb(chain(4), 10));
 console.log(rebound("x"));
+console.log(parentKind(chain(3)), parentKind(file), parentKindAfterCut(chain(3)), parentKindAfterCut(chain(1)));
