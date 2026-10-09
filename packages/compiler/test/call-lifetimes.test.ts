@@ -167,6 +167,11 @@ function work(items: Item[]): number {
   return relay(item);
 }
 console.log(work([new Item(7)]));
+
+// Keeps the optional element union a tagged box (Set elements are boxes),
+// so the stack-box paths stay exercised; nullable pointers bypass them.
+const keepBoxed = new Set<Item | undefined>();
+void keepBoxed;
 `);
   const reader = fn(mod, "read");
   expect(reader.params[0]!.type.kind).toBe("union");
