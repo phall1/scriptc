@@ -84,3 +84,54 @@ test.each([32, 64] as const)(
     expect(one).toContain("@scr_str_utf16_len");
   },
 );
+
+test("reference identity and instanceof borrow their operands", () => {
+  const node = { kind: "object" as const, className: "Node" };
+  const a: IrExpr = { kind: "varRef", localId: "a", type: node, loc };
+  const b: IrExpr = { kind: "varRef", localId: "b", type: node, loc };
+  const next: IrExpr = {
+    kind: "fieldGet",
+    obj: b,
+    className: "Node",
+    field: "next",
+    type: node,
+    loc,
+  };
+  const fn = (name: string, value: IrExpr) => ({
+    name,
+    params: [
+      { name: "a", localId: "a", type: node },
+      { name: "b", localId: "b", type: node },
+    ],
+    returnType: BOOL,
+    locals: [
+      { id: "a", name: "a", type: node, mutable: false },
+      { id: "b", name: "b", type: node, mutable: false },
+    ],
+    loc,
+    body: [{ kind: "return" as const, value, loc }],
+  });
+  const mod: IrModule = {
+    irVersion: 15,
+    sourceFile: loc.file,
+    entry: "__main",
+    classes: [
+      { name: "Node", fields: [{ name: "next", type: node }], methods: [], loc },
+      { name: "Leaf", base: "Node", fields: [{ name: "next", type: node }], methods: [], loc },
+    ],
+    functions: [
+      { name: "__main", params: [], returnType: VOID, locals: [], body: [], loc },
+      fn("same", { kind: "bin", op: "===", left: a, right: next, type: BOOL, loc }),
+      fn("leaf", { kind: "instanceOf", value: next, className: "Leaf", type: BOOL, loc }),
+    ],
+  };
+  const llvm = emitLlvmModule(mod);
+  for (const name of ["same", "leaf"]) {
+    const body = new RegExp(`^define internal [^\\n]*@sc_bf_${name}\\([^]*?^}`, "m").exec(
+      llvm,
+    )?.[0];
+    expect(body, name).toBeDefined();
+    expect(body, name).not.toMatch(/call ptr @sc_retain_Node/);
+    expect(body, name).not.toMatch(/call void @sc_release_Node/);
+  }
+});

@@ -15400,6 +15400,12 @@
     "<repo>/tests/corpus/4415-nullable-container-values.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/4415-identity-borrowed-operands.ts": {
+   "order": [
+    "<repo>/tests/corpus/4415-identity-borrowed-operands.ts"
+   ],
+   "diags": []
   }
  }
 }
