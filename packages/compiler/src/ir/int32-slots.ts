@@ -43,6 +43,10 @@ export class Int32Slots {
   private readonly familyOf = new Map<string, string | null>();
   private readonly paramFacts = new Map<string, Map<string, IntegerRange>>();
   private readonly returns = new Set<string>();
+  /** Captured-binding groups (one shared box) that hold an int32, and the
+   * group of each `function\0local` member. */
+  private readonly boxes = new Set<string>();
+  private readonly boxGroupOf = new Map<string, string>();
   /** Field write values proven int32 by the final analysis. */
   readonly provenWrites = new Set<IrExpr>();
   /** Disqualified candidates and the first reason, for tests. */
@@ -78,17 +82,39 @@ export class Int32Slots {
 
   /** The facts analyzeIntegerRanges may assume inside one function. */
   facts(fnName: string): IntegerSlotFacts {
-    if (this.fields.size === 0 && this.returns.size === 0 && this.paramFacts.size === 0) return {};
+    if (
+      this.fields.size === 0 &&
+      this.returns.size === 0 &&
+      this.paramFacts.size === 0 &&
+      this.boxes.size === 0
+    )
+      return {};
     const result: IntegerSlotFacts = {
       field: (className, field) => (this.isField(className, field) ? INT32_RANGE : null),
       call: (callee) => (this.returns.has(callee) ? INT32_RANGE : null),
+      boxed: (localId) => (this.hasBox(this.boxGroup(fnName, localId)) ? INT32_RANGE : null),
     };
     const params = this.paramFacts.get(fnName);
     if (params) result.params = params;
     return result;
   }
 
+  boxGroup(fnName: string, localId: string): string | null {
+    return this.boxGroupOf.get(`${fnName}\0${localId}`) ?? null;
+  }
+
   /* ── construction (analyzeInt32Slots only) ── */
+
+  addBox(group: string, members: readonly string[]): void {
+    this.boxes.add(group);
+    for (const member of members) this.boxGroupOf.set(member, group);
+  }
+  dropBox(group: string): boolean {
+    return this.boxes.delete(group);
+  }
+  hasBox(group: string | null): boolean {
+    return group !== null && this.boxes.has(group);
+  }
 
   addField(family: string): void {
     this.fields.add(family);
@@ -559,6 +585,94 @@ export function analyzeInt32Slots(mod: IrModule): Int32Slots {
       },
     });
 
+  /* ── captured bindings ── */
+  // A captured local lives in one box shared by its declaring function and
+  // every closure that captures it (closure.captures[i] is the lifted
+  // function's captures[i]). The box holds an int32 when every write to it
+  // anywhere is proven and it starts from a proven parameter or an
+  // initialized declaration. Class-captured bindings stay unknown.
+  const boxParent = new Map<string, string>();
+  const boxRoot = (key: string): string => {
+    let root = key;
+    while (boxParent.has(root)) root = boxParent.get(root)!;
+    if (root !== key) boxParent.set(key, root);
+    return root;
+  };
+  const boxKey = (fnName: string, localId: string): string => `${fnName}\0${localId}`;
+  const boxMembers = new Set<string>();
+  const unstableBoxes = new Set<string>();
+  for (const fn of mod.functions) {
+    for (const local of fn.locals)
+      if (local.boxed) {
+        const key = boxKey(fn.name, local.id);
+        boxMembers.add(key);
+        if (local.type.kind !== "f64" || local.tdz) unstableBoxes.add(key);
+      }
+    for (const capture of fn.classCaptures ?? [])
+      unstableBoxes.add(boxKey(fn.name, capture.localId));
+    walkFunction(fn, {
+      expr: (e) => {
+        if (e.kind === "closure") {
+          const lifted = functions.get(e.fnName);
+          e.captures.forEach((id, i) => {
+            const inner = lifted?.captures?.[i];
+            const outer = boxKey(fn.name, id);
+            if (!inner) unstableBoxes.add(outer);
+            else {
+              const a = boxRoot(outer),
+                b = boxRoot(boxKey(lifted!.name, inner.localId));
+              if (a !== b) boxParent.set(a, b);
+            }
+          });
+        } else if (e.kind === "classRef")
+          for (const id of e.captures ?? []) unstableBoxes.add(boxKey(fn.name, id));
+        else if (e.kind === "incDec") unstableBoxes.add(boxKey(fn.name, e.localId));
+      },
+      stmt: (s) => {
+        if (s.kind === "forOf") unstableBoxes.add(boxKey(fn.name, s.localId));
+        if (s.kind === "tryCatch" && s.catchLocalId)
+          unstableBoxes.add(boxKey(fn.name, s.catchLocalId));
+      },
+    });
+  }
+  const groups = new Map<string, string[]>();
+  for (const key of boxMembers) {
+    const root = boxRoot(key);
+    const list = groups.get(root);
+    if (list) list.push(key);
+    else groups.set(root, [key]);
+  }
+  const boxOrigin = new Map<string, string>();
+  for (const [group, members] of groups) {
+    if (members.some((key) => unstableBoxes.has(key))) continue;
+    // The origin is the one member that is not a capture of its function.
+    const origins = members.filter((key) => {
+      const [fnName, localId] = key.split("\0") as [string, string];
+      return !functions.get(fnName)?.captures?.some((c) => c.localId === localId);
+    });
+    if (origins.length !== 1) continue;
+    const [fnName, localId] = origins[0]!.split("\0") as [string, string];
+    const origin = functions.get(fnName)!;
+    if (origin.params.some((p) => p.localId === localId)) {
+      if (!slots.hasParam(fnName, localId)) continue;
+    } else {
+      let initialized = false;
+      walkFunction(origin, {
+        stmt: (s) => {
+          if (s.kind === "varDecl" && s.localId === localId && s.init) initialized = true;
+        },
+      });
+      if (!initialized) continue;
+    }
+    boxOrigin.set(`param:${fnName}\0${localId}`, group);
+    slots.addBox(group, members);
+  }
+  const dropBox = (group: string | null, why: string): boolean => {
+    if (group === null) return false;
+    reason(`box:${group}`, why);
+    return slots.dropBox(group);
+  };
+
   /* ── readers: which functions depend on which slot facts ── */
   const readers = new Map<string, Set<string>>();
   const reads = (slot: string, fnName: string): void => {
@@ -573,7 +687,10 @@ export function analyzeInt32Slots(mod: IrModule): Int32Slots {
           const family = slots.family(e.className, e.field);
           if (family) reads(`field:${family}`, fn.name);
         } else if (e.kind === "call") reads(`ret:${e.callee}`, fn.name);
-        else if (e.kind === "fieldIncDec") {
+        else if (e.kind === "varRef") {
+          const group = slots.boxGroup(fn.name, e.localId);
+          if (group !== null) reads(`box:${group}`, fn.name);
+        } else if (e.kind === "fieldIncDec") {
           const family = slots.family(e.className, e.field);
           if (family) dropFamily(family, "++/-- on the field");
         }
@@ -607,12 +724,22 @@ export function analyzeInt32Slots(mod: IrModule): Int32Slots {
       list.forEach((arg, i) => {
         const param = callee.params[i + offset];
         if (!param || !slots.hasParam(callee.name, param.localId) || int32(arg)) return;
+        const slot = `param:${callee.name}\0${param.localId}`;
         if (dropParam(callee.name, param.localId, `argument in ${fn.name} is not int32`))
-          invalidate(`param:${callee.name}\0${param.localId}`);
+          invalidate(slot);
+        const group = boxOrigin.get(slot) ?? null;
+        if (dropBox(group, `parameter ${param.localId} is not int32`)) invalidate(`box:${group}`);
       });
+    };
+    const boxWrite = (localId: string, value: IrExpr): void => {
+      const group = slots.boxGroup(fn.name, localId);
+      if (!slots.hasBox(group) || int32(value)) return;
+      if (dropBox(group, `write in ${fn.name} is not int32`)) invalidate(`box:${group}`);
     };
     walkFunction(fn, {
       stmt: (s) => {
+        if (s.kind === "assign") boxWrite(s.localId, s.value);
+        else if (s.kind === "varDecl" && s.init) boxWrite(s.localId, s.init);
         if (s.kind === "fieldSet") {
           const family = slots.family(s.className, s.field);
           if (!family || !slots.hasFamily(family)) return;
@@ -631,6 +758,7 @@ export function analyzeInt32Slots(mod: IrModule): Int32Slots {
       expr: (e) => {
         if (e.kind === "call") args(functions.get(e.callee), e.args, 0);
         else if (e.kind === "new") args(functions.get(`%${e.className}.constructor`), e.args, 1);
+        else if (e.kind === "assignExpr") boxWrite(e.localId, e.value);
       },
     });
     provenByFunction.set(fn.name, proven);

@@ -130,3 +130,32 @@ const cell = new Cell(0x1234);
 const anyCell: any = cell;
 anyCell.value = 0.75;
 console.log(cell.value, cell.other, cell.other << 4, JSON.stringify(anyCell));
+
+// Captured bindings: an int32 parameter read by closures keeps its proof;
+// a closure that stores a fraction, or counts past int32, does not.
+function relate(state: number, items: number[]): number {
+  const check = (n: number): boolean => (n & state) !== 0;
+  let hits = 0;
+  for (const item of items) if (check(item)) hits = hits | (1 << (item & 7));
+  return hits ^ state;
+}
+function drift(start: number): number {
+  let level = start | 0;
+  const lower = (): void => {
+    level = level / 3;
+  };
+  lower();
+  lower();
+  return level;
+}
+function count(limit: number): number {
+  let calls = 0;
+  const tick = (): void => {
+    calls = calls + 0x40000000;
+  };
+  for (let i = 0; i < limit; i++) tick();
+  return calls;
+}
+console.log(relate(6, [1, 2, 3, 4, 5, 6, 7]), relate(-1, [8, 9]), relate(0, []));
+console.log(drift(10), drift(-7), Object.is(drift(0), 0));
+console.log(count(1), count(2), count(5), count(0));

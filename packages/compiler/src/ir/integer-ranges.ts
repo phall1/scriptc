@@ -64,13 +64,14 @@ export function withinInt32(range: IntegerRange | null | undefined): boolean {
 }
 
 /** Whole-program facts about storage outside the analyzed function, each
- * proven by the caller (int32-slots.ts): every value a field slot or a
- * function result can hold, and the values every caller passes to a
- * parameter. Absent entries carry no proof. */
+ * proven by the caller (int32-slots.ts): every value a field slot, a
+ * captured (boxed) binding or a function result can hold, and the values
+ * every caller passes to a parameter. Absent entries carry no proof. */
 export interface IntegerSlotFacts {
   params?: ReadonlyMap<string, IntegerRange>;
   field?: (className: string, field: string) => IntegerRange | null;
   call?: (callee: string) => IntegerRange | null;
+  boxed?: (localId: string) => IntegerRange | null;
 }
 
 /** Structured local dataflow. Calls cannot write uncaptured local slots,
@@ -94,6 +95,10 @@ export function analyzeIntegerRanges(fn: IrFunction, slots: IntegerSlotFacts = {
       .map((l) => l.id),
   );
   const loopLocals = new Map(fn.locals.filter((l) => !captures.has(l.id)).map((l) => [l.id, l]));
+  // A captured binding has no local dataflow: only a proof that covers
+  // every write of the shared box anywhere applies to its reads.
+  const boxedRange = (localId: string): IntegerRange | null =>
+    eligible.has(localId) ? null : (slots.boxed?.(localId) ?? null);
   const slotRange = (e: IrExpr): IntegerRange | null =>
     e.type.kind !== "f64"
       ? null
@@ -182,7 +187,9 @@ export function analyzeIntegerRanges(fn: IrFunction, slots: IntegerSlotFacts = {
           return int32(e.result);
         case "varRef":
           return (
-            closed.has(e.localId) || (!values.has(e.localId) && withinInt32(entry.get(e.localId)))
+            closed.has(e.localId) ||
+            (!values.has(e.localId) && withinInt32(entry.get(e.localId))) ||
+            withinInt32(boxedRange(e.localId))
           );
         case "fieldGet":
         case "call":
@@ -311,7 +318,7 @@ export function analyzeIntegerRanges(fn: IrFunction, slots: IntegerSlotFacts = {
           range = { min: e.value, max: e.value };
         break;
       case "varRef":
-        range = facts.get(e.localId) ?? null;
+        range = facts.get(e.localId) ?? boxedRange(e.localId);
         break;
       case "assignExpr":
         range = expr(e.value, facts);

@@ -242,6 +242,36 @@ test("dynamic stores disqualify the field names they can reach", () => {
   expect([readOnly.isField("C", "a"), readOnly.isField("C", "b")]).toEqual([true, true]);
 });
 
+test("captured bindings share one proof across the declaring function and its closures", () => {
+  const closure: IrExpr = { loc, kind: "closure", fnName: "inner", captures: ["s"], type: DYN };
+  const outer = (): IrFunction => ({
+    ...fn("outer", [{ id: "s" }], [stmt(closure)]),
+    locals: [{ id: "s", name: "s", type: F64, mutable: true, boxed: true }],
+  });
+  const inner = (body: IrStmt[]): IrFunction => ({
+    ...fn("inner", [], body),
+    captures: [{ localId: "c", name: "s", type: F64 }],
+    locals: [{ id: "c", name: "s", type: F64, mutable: true, boxed: true }],
+  });
+  const caller = fn("caller", [], [stmt(call("outer", [num(5)], VOID))]);
+  const read = inner([ret(null)]);
+  const proven = analyzeInt32Slots(mod([], [outer(), read, caller]));
+  expect(proven.facts("inner").boxed?.("c")).toEqual({ min: -2147483648, max: 2147483647 });
+  expect(proven.facts("outer").boxed?.("s")).toEqual({ min: -2147483648, max: 2147483647 });
+
+  const store = inner([{ loc, kind: "assign", localId: "c", value: bin("/", ref("c"), num(2)) }]);
+  const stored = analyzeInt32Slots(mod([], [outer(), store, caller]));
+  expect(stored.facts("outer").boxed?.("s") ?? null).toBeNull();
+  expect(stored.reasons.get(`box:${stored.boxGroup("outer", "s")}`)).toMatch(/inner/);
+
+  const fraction = fn("caller", [], [stmt(call("outer", [num(0.5)], VOID))]);
+  expect(
+    analyzeInt32Slots(mod([], [outer(), read, fraction]))
+      .facts("inner")
+      .boxed?.("c") ?? null,
+  ).toBeNull();
+});
+
 test("library and worker builds keep ordinary storage", () => {
   const program = mod(
     [cls("T", ["x"])],
