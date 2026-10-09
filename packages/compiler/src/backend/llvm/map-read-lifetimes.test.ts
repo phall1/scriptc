@@ -14,6 +14,7 @@ import {
 import { validateModule } from "../../ir/validate.js";
 import { analyzeCallLifetimes } from "./call-lifetimes.js";
 import { emitLlvmModule } from "./emitter.js";
+import { keepUnionsBoxed } from "./test-boxed-unions.js";
 import { borrowsMapReadInputs, findMapReadLifetimes } from "./map-read-lifetimes.js";
 
 const loc = { file: "map-reads.ts", start: 0, end: 1 };
@@ -86,7 +87,9 @@ function facts(mod: IrModule) {
 
 function body(mod: IrModule, bits: 32 | 64 = 64): string {
   expect(validateModule(mod)).toEqual([]);
-  const llvm = emitLlvmModule(mod, { pointerBits: bits });
+  // Record values are nullable pointers; the other fixtures pin stack boxes.
+  const nullable = mod.unions?.[0]?.arms[0]?.kind === "record";
+  const llvm = emitLlvmModule(nullable ? mod : keepUnionsBoxed(mod), { pointerBits: bits });
   return /^define internal [^\n]*@sc_(?:b)?f_work\([^]*?^}/m.exec(llvm)![0];
 }
 

@@ -286,8 +286,8 @@ import {
 import { LlDyn, type DynHost } from "./dyn.js";
 import { LlvmUnsupportedError } from "./unsupported.js";
 import { LlWalkers } from "./walkers.js";
-import { NULLABLE_ABSENT, NullableUnions } from "./nullable-unions.js";
-import { emitUnionPeek, emitUnionTag } from "./union-repr.js";
+import { isObjectArm, NULLABLE_ABSENT, NULLABLE_NULL, NullableUnions } from "./nullable-unions.js";
+import { emitNullablePresent, emitUnionPeek, emitUnionTag } from "./union-repr.js";
 import { literalCapWord } from "./string-key-hash.js";
 import {
   arrNewCall,
@@ -297,6 +297,7 @@ import {
   computeTraced,
   elemAccess,
   emitInlineRcHelpers,
+  emitNullableRetainWrappers,
   FN_ATTRS,
   inlineRcDecls,
   llFieldType,
@@ -754,6 +755,7 @@ export class LlEmitter {
     for (const u of mod.unions ?? []) this.unionsById.set(u.id, u);
     this.boxedUnionsById = this.nullableUnions.boxedUnions(this.unionsById);
     this.immortalValues.add("null");
+    this.immortalValues.add(NULLABLE_NULL);
     this.nullableFields = new NullableRefFields(mod.classes ?? [], this.boxedUnionsById);
     this.optionalArrayReads = new OptionalArrayReads(this.fnByName, this.boxedUnionsById);
     this.checkedNarrows = new CheckedNarrows(this.fnByName);
@@ -1774,6 +1776,15 @@ export class LlEmitter {
       );
     }
     if (this.absentInstances.size > 0) out.push(``);
+    if (this.nullableUnions.usesNullSentinel) {
+      // `null` in every `C | null | undefined` union (NULL is undefined):
+      // one module-scope immortal object like the ABSENT sentinel.
+      const S = this.sizeType;
+      out.push(
+        `${NULLABLE_NULL} = internal global { ${S}, ${S}, ${S}, ${S} } { ${S} -1, ${S} 0, ${S} 0, ${S} 0 } ; nullable null arm`,
+        ``,
+      );
+    }
     if (this.needsNullableAbsent) {
       // The ABSENT field-slot state of every nullable-pointer union: one
       // module-scope immortal object (rc == SIZE_MAX), distinct from NULL
@@ -2681,7 +2692,18 @@ export class LlEmitter {
    * here too. */
   private inlineRcTail(flushedDecls: ReadonlySet<string>): string[] {
     const late = inlineRcDecls(this.shapeHost).filter((d) => !flushedDecls.has(d));
-    return [...late, ...emitInlineRcHelpers(this.shapeHost)];
+    // NULL-skipping retain wrappers of nullable unions; a runtime inner
+    // retain requested after the extern block flushed is declared here.
+    for (const inner of this.nullableUnions.retainWrappers.values()) {
+      const decl = `declare ptr ${inner}(ptr)`;
+      if (inner.startsWith("@scr_") && !flushedDecls.has(decl) && !late.includes(decl))
+        late.push(decl);
+    }
+    return [
+      ...late,
+      ...emitNullableRetainWrappers(this.shapeHost),
+      ...emitInlineRcHelpers(this.shapeHost),
+    ];
   }
 
   /** Env-signature wrappers + interned immortal closures for declared
@@ -3244,10 +3266,11 @@ export class LlEmitter {
         `llvm emitter bug: unit instance for non-unit arm ${tag} of ${unionId}`,
       );
     }
-    if (this.nullableUnions.has(unionId)) {
-      // NULL is the unit arm of a nullable union; it owns nothing.
-      this.immortalValues.add("null");
-      return "null";
+    const nullable = this.nullableUnions.get(unionId);
+    if (nullable) {
+      // NULL is the unit arm of a nullable union (`undefined` when it has
+      // both); the `null` sentinel is immortal. Neither owns anything.
+      return tag === nullable.nullTag ? NULLABLE_NULL : "null";
     }
     const key = `${unionId}:${tag}`;
     let sym = this.unitInstances.get(key);
@@ -3688,12 +3711,9 @@ export class LlEmitter {
         throw new InternalCompilerError(
           `llvm emitter bug: truthiness of unknown union ${v.type.unionId}`,
         );
-      if (this.nullableUnions.has(def.id)) {
-        // Object arms are always truthy: present iff non-NULL.
-        const t = B.tmp();
-        B.line(`${t} = icmp ne ptr ${v.name}, null`);
-        return t;
-      }
+      const nullable = this.nullableUnions.get(def.id);
+      // Object arms are always truthy: present iff neither unit encoding.
+      if (nullable && isObjectArm(nullable)) return emitNullablePresent(B, nullable, v.name);
       const unionId = def.id;
       const slot = B.slot();
       B.entryAllocas.push(`${slot} = alloca i1`);

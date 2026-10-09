@@ -3,6 +3,7 @@ import { InternalCompilerError } from "../../errors.js";
 import { type IrType, isRefCounted, typeKey } from "../../ir/ir.js";
 import { FN_ATTRS, releaseSym, retainSym, traceArg } from "./shapes.js";
 import type { LlvmEmitterContext } from "./expr-context.js";
+import { unionPeekLines, unionTagLines } from "./union-repr.js";
 
 export function streamDataAdapter(
   host: LlvmEmitterContext,
@@ -166,17 +167,17 @@ export function streamDoneFnFor(
   let arm = 0;
   const unwrap = (u: string, tag: number, retain: string, slot: string): void => {
     const a = arm++;
+    const union = u === "%e" ? errT : dataT;
+    const nullable = union?.kind === "union" ? host.nullableUnions.get(union.unionId) : null;
     d.push(
       `  %un${a} = icmp ne ptr ${u}, null`,
       `  br i1 %un${a}, label %chk${a}, label %done${a}`,
       `chk${a}:`,
-      `  %tp${a} = getelementptr inbounds %ScrUnion, ptr ${u}, i64 0, i32 1`,
-      `  %tg${a} = load i32, ptr %tp${a}`,
+      ...unionTagLines(nullable, u, `%tg${a}`),
       `  %hit${a} = icmp eq i32 %tg${a}, ${tag}`,
       `  br i1 %hit${a}, label %yes${a}, label %done${a}`,
       `yes${a}:`,
-      `  %pp${a} = getelementptr inbounds %ScrUnion, ptr ${u}, i64 0, i32 5`,
-      `  %pv${a} = load ptr, ptr %pp${a}`,
+      ...unionPeekLines(nullable, u, `%pv${a}`),
       `  %rt${a} = call ptr ${retain}(ptr %pv${a})`,
       `  store ptr %rt${a}, ptr ${slot}`,
       `  br label %done${a}`,
@@ -203,8 +204,8 @@ export function streamDoneFnFor(
     d.push(`  call void @${entry}(ptr %s, ptr %ev) ; moves err; borrows s`);
   }
   d.push(`  call void @scr_stream_release_v(ptr %s)`);
-  if (errT !== undefined) d.push(`  call void @scr_union_release(ptr %e)`);
-  if (dataT !== undefined) d.push(`  call void @scr_union_release(ptr %d)`);
+  if (errT !== undefined) d.push(`  call void ${releaseSym(host.shapeHost, errT)}(ptr %e)`);
+  if (dataT !== undefined) d.push(`  call void ${releaseSym(host.shapeHost, dataT)}(ptr %d)`);
   d.push(`  ret void`, `}`, ``);
   host.resolveThunkDefs.push(...d);
   return sym;

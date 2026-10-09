@@ -13,6 +13,7 @@ import {
 import { validateModule } from "../../ir/validate.js";
 import { analyzeCallLifetimes } from "./call-lifetimes.js";
 import { emitLlvmModule } from "./emitter.js";
+import { keepUnionsBoxed } from "./test-boxed-unions.js";
 import { findLocalUnionStorage } from "./local-union-storage.js";
 
 const loc = { file: "local-unions.ts", start: 0, end: 1 };
@@ -99,7 +100,7 @@ function facts(mod: IrModule) {
 function body(mod: IrModule, pointerBits: 32 | 64): string {
   expect(validateModule(mod)).toEqual([]);
   return /^define internal [^\n]*@sc_(?:b)?f_work\([^]*?^}/m.exec(
-    emitLlvmModule(mod, { pointerBits }),
+    emitLlvmModule(keepUnionsBoxed(mod), { pointerBits }),
   )![0];
 }
 

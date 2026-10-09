@@ -494,16 +494,10 @@ export function emitJsExit(host: LlvmEmitterContext, e: IrExpr & { kind: "jsExit
           // The `any[] | undefined` defaulted-parameter spelling: the
           // engine array exits BY REFERENCE into the data arm.
           host.declare(`declare ptr @scr_jsval_exit_jsval_arr(ptr)`);
-          host.declare(`declare ptr @scr_union_new_ref(i32, ptr, ptr, ptr, ptr)`);
-          host.declare(`declare ptr @scr_arr_retain_v(ptr)`);
-          host.declare(`declare void @scr_arr_release_v(ptr)`);
           const arr = B.tmp();
           B.line(`${arr} = call ptr @scr_jsval_exit_jsval_arr(ptr ${v.name})`);
           host.emitPendingCheck();
-          t = B.tmp();
-          B.line(
-            `${t} = call ptr @scr_union_new_ref(i32 ${jsvalArr.i}, ptr ${arr}, ptr @scr_arr_retain_v, ptr @scr_arr_release_v, ptr null)`,
-          );
+          t = host.unionNewOwned(e.type.unionId, jsvalArr.i, { name: arr, type: jsvalArr.a });
           B.line(`store ptr ${t}, ptr ${slot}`);
         } else {
           t = roundTrip();

@@ -433,8 +433,6 @@ export function emitPathUrlLibCall(host: LlvmEmitterContext, e: LibCallExpr): Ll
     if (!dictShape || iv?.kind !== "union")
       throw new InternalCompilerError("llvm emitter bug: qs.parse dict shape");
     const ivDef = host.unionsById.get(iv.unionId);
-    // The bucket union is built and read as a tagged box below.
-    host.requireBoxedUnion(iv.unionId);
     const strTag = ivDef?.arms.findIndex((a) => a.kind === "string") ?? -1;
     const arrTag = ivDef?.arms.findIndex((a) => a.kind === "array") ?? -1;
     if (strTag < 0 || arrTag < 0)
@@ -578,18 +576,12 @@ export function emitPathUrlLibCall(host: LlvmEmitterContext, e: LibCallExpr): Ll
       B.entryAllocas.push(`${cidrSlot} = alloca ptr`);
       B.condBr(hasCidr, lcs, lcn);
       B.startBlock(lcs);
-      const cu = B.tmp();
-      B.line(
-        `${cu} = call ptr @scr_union_new_ref(i32 ${cidrStrTag}, ptr ${cs}, ptr @scr_str_retain_v, ptr @scr_str_release_v, ptr null)`,
-      );
+      const cu = host.unionNewOwned(cidrT.unionId, cidrStrTag, { name: cs, type: STRING });
       B.line(`store ptr ${cu}, ptr ${cidrSlot}`);
       B.br(lcj);
       B.startBlock(lcn);
-      const cn = B.tmp();
-      B.line(
-        `${cn} = call ptr @scr_union_retain_v(ptr ${host.unitInstanceRef(cidrT.unionId, cidrNullTag)})`,
-      );
-      B.line(`store ptr ${cn}, ptr ${cidrSlot}`);
+      // The unit arm is immortal in both representations: no retain owed.
+      B.line(`store ptr ${host.unitInstanceRef(cidrT.unionId, cidrNullTag)}, ptr ${cidrSlot}`);
       B.br(lcj);
       B.startBlock(lcj);
       const cv = B.tmp();
@@ -641,18 +633,14 @@ export function emitPathUrlLibCall(host: LlvmEmitterContext, e: LibCallExpr): Ll
     const retained = B.tmp();
     B.line(`${retained} = call ptr @scr_arr_retain_v(ptr ${peeked})`);
     B.line(`store ptr ${retained}, ptr ${rowsSlot}`);
-    B.line(`call void @scr_union_release(ptr ${cell})`);
+    host.releaseValue(cell, iv);
     B.br(lj);
     B.startBlock(lm);
     const fresh = B.tmp();
     B.line(`${fresh} = ${arrNewCall(host.shapeHost, infoT, "1")}`);
-    const arrRc = vAdapters(host.shapeHost, arrT);
     const freshRet = B.tmp();
     B.line(`${freshRet} = call ptr @scr_arr_retain_v(ptr ${fresh})`);
-    const bucketU = B.tmp();
-    B.line(
-      `${bucketU} = call ptr @scr_union_new_ref(i32 ${arrTag}, ptr ${freshRet}, ptr ${arrRc.retain}, ptr ${arrRc.release}, ptr ${traceArg(host.shapeHost, arrT)})`,
-    );
+    const bucketU = host.unionNewOwned(iv.unionId, arrTag, { name: freshRet, type: arrT });
     B.line(`call void @scr_map_set_str_ref(ptr ${ovf}, ptr ${nm}, ptr ${bucketU})`);
     B.line(`store ptr ${fresh}, ptr ${rowsSlot}`);
     B.br(lj);

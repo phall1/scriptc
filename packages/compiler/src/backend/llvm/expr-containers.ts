@@ -727,12 +727,13 @@ export function wrapNullable(
 ): LlValue {
   const B = host.B;
   if (host.nullableUnions.has(resultType.unionId)) {
-    // A nullable union is its present payload, NULL when absent.
-    if (raw === present) return host.own({ name: present, type: resultType });
+    // A nullable union is its present payload, or the absent arm's encoding.
+    const absent = host.unitInstanceRef(resultType.unionId, absentTag);
+    if (raw === present && absent === "null") return host.own({ name: present, type: resultType });
     const isnull = B.tmp(),
       t = B.tmp();
     B.line(`${isnull} = icmp eq ptr ${raw}, null`);
-    B.line(`${t} = select i1 ${isnull}, ptr null, ptr ${present}`);
+    B.line(`${t} = select i1 ${isnull}, ptr ${absent}, ptr ${present}`);
     return host.own({ name: t, type: resultType });
   }
   const slot = B.slot();

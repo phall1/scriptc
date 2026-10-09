@@ -4,6 +4,8 @@ import { preservesDynTest } from "./checked-value-lifetimes.js";
 import { typedRefConstructor } from "./shapes.js";
 /* Focused LLVM expression emission extracted from emitter.ts. */
 import { InternalCompilerError } from "../../errors.js";
+import { emitNullableIsTag } from "./union-repr.js";
+import { isObjectArm } from "./nullable-unions.js";
 import { streamTypedRefEligible } from "../../ir/analysis.js";
 import {
   DYN,
@@ -500,12 +502,8 @@ export function emitDynamicExpr(
       const u = host.emitUnionProjection(e.value);
       const nullable = host.nullableUnions.get(e.unionId);
       const t = B.tmp();
-      if (nullable) {
-        // NULL is the unit arm.
-        const isUnit = e.tag === nullable.unitTag;
-        B.line(`${t} = icmp ${isUnit !== e.negated ? "eq" : "ne"} ptr ${u.name}, null`);
-        return { name: t, type: e.type };
-      }
+      if (nullable)
+        return { name: emitNullableIsTag(B, nullable, u.name, e.tag, e.negated), type: e.type };
       const tag = host.unionTag(u.name, e.unionId);
       B.line(`${t} = icmp ${e.negated ? "ne" : "eq"} i32 ${tag}, ${e.tag}`);
       return { name: t, type: e.type };
@@ -774,7 +772,8 @@ export function emitDynamicExpr(
       const def = host.unionsById.get(e.unionId);
       if (!def)
         throw new InternalCompilerError(`llvm emitter bug: equality of unknown union ${e.unionId}`);
-      if (host.nullableUnions.has(def.id)) {
+      const nullable = host.nullableUnions.get(def.id);
+      if (nullable && isObjectArm(nullable)) {
         // Object identity, and NULL === NULL for the unit arm: one compare.
         const eq = B.tmp();
         B.line(`${eq} = icmp ${e.negated ? "ne" : "eq"} ptr ${l.name}, ${r.name}`);

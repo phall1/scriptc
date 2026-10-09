@@ -86,13 +86,10 @@ export function raceAdapterFor(host: LlvmEmitterContext, from: IrType, to: IrTyp
       );
     } else if (from.kind === "string") {
       host.declare(`declare ptr @scr_promise_payload_str(ptr)`);
-      host.declare(`declare ptr @scr_union_new_ref(i32, ptr, ptr, ptr, ptr)`);
       d.push(
         `  %x = call ptr @scr_promise_payload_str(ptr %src)`,
-        `  %u = call ptr @scr_union_new_ref(i32 ${tag}, ptr %x, ptr @scr_str_retain_v, ptr @scr_str_release_v, ptr null)`,
+        ...unionWrapRefLines(host, to.unionId, tag, from, "%x", "%u"),
       );
-      host.declare(`declare ptr @scr_str_retain_v(ptr)`);
-      host.declare(`declare void @scr_str_release_v(ptr)`);
     } else if (host.nullableUnions.has(to.unionId)) {
       // The nullable result union is the (+1) reference payload itself.
       host.declare(`declare ptr @scr_promise_payload_ref(ptr)`);
@@ -462,7 +459,7 @@ export function childExitSignalThunkFor(
     `sigs:`,
     `  %len = call ${host.sizeType} @strlen(ptr %sig)`,
     `  %ss = call ptr @scr_str_new(ptr %sig, ${host.sizeType} %len)`,
-    `  %su = call ptr @scr_union_new_ref(i32 ${strTag}, ptr %ss, ptr @scr_str_retain_v, ptr @scr_str_release_v, ptr null)`,
+    ...unionWrapRefLines(host, sigParam.unionId, strTag, { kind: "string" }, "%ss", "%su"),
     `  store ptr %su, ptr %sslot`,
     `  br label %go`,
     `signull:`,

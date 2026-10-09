@@ -7,9 +7,11 @@ import {
 } from "../../ir/ir.js";
 import { everyModuleNode } from "../../ir/traverse.js";
 
-/** A union of exactly one reference arm and one unit arm (`C | undefined`,
- * `C | null`) whose VALUES are the reference pointer itself: NULL is the
- * unit arm, anything else is the reference arm's instance. No union box
+/** A union of exactly one reference arm and one or two unit arms
+ * (`C | undefined`, `C | null`, `C | null | undefined`) whose VALUES are
+ * the reference pointer itself: NULL is the unit arm (`undefined` when both
+ * unit arms exist, where the module's immortal NULLABLE_NULL sentinel is
+ * `null`), anything else is the reference arm's instance. No union box
  * ever exists for such a type: wraps move the payload, narrowing borrows
  * it, retain/release/trace are the arm's NULL-tolerant entry points, and
  * every container, field, capture, parameter, and return slot holds the
@@ -17,25 +19,47 @@ import { everyModuleNode } from "../../ir/traverse.js";
 export interface NullableUnion {
   unionId: string;
   refTag: number;
+  /** The unit arm NULL encodes. */
   unitTag: number;
+  /** The `null` arm of a two-unit-arm union, encoded by NULLABLE_NULL;
+   * -1 when the union has one unit arm. */
+  nullTag: number;
   arm: NullableRefArm;
 }
+
+/** The module-scope immortal sentinel standing for `null` in a
+ * `C | null | undefined` union (NULL is `undefined` there). */
+export const NULLABLE_NULL = "@sc_nullable_null";
 
 /** The module-scope immortal sentinel standing for the ABSENT state of a
  * nullable union's record field slot (an omitted optional property). */
 export const NULLABLE_ABSENT = "@sc_nullable_absent";
 
-/** The reference arms whose instances are never NULL and whose emitted
- * retain/release/trace entry points all tolerate NULL. */
+/** The reference arms whose instances are never NULL. Class and record
+ * entry points all tolerate NULL; strings, arrays, maps and sets retain
+ * through a NULL-skipping wrapper (shapes.ts). Object arms are always truthy and compare by
+ * identity; string arms are truthy when non-empty and compare bytes. */
 export type NullableRefArm =
   | { kind: "object"; className: string }
-  | { kind: "record"; shapeId: string };
+  | { kind: "record"; shapeId: string }
+  | { kind: "string" }
+  | (IrType & { kind: "array" | "map" | "set" });
+
+/** The arm is a JS object: always truthy, compared by identity. */
+export function isObjectArm(nullable: NullableUnion): boolean {
+  return nullable.arm.kind !== "string";
+}
 
 /** The representation decision for every union of one module. It is a
  * pure function of the module, so serialized-IR and in-memory emission
  * agree. */
 export class NullableUnions {
   private readonly byId = new Map<string, NullableUnion>();
+  /** NULL-skipping retain wrappers requested so far: symbol → inner retain
+   * call target. The emitter defines each once. */
+  readonly retainWrappers = new Map<string, string>();
+  /** Some nullable union encodes `null` with NULLABLE_NULL. */
+  readonly usesNullSentinel: boolean = false;
 
   constructor(mod: IrModule) {
     const emitted = new Set<string>();
@@ -46,7 +70,9 @@ export class NullableUnions {
     for (const def of mod.unions ?? []) {
       if (boxed.has(def.id)) continue;
       const nullable = nullableShape(def, emitted, records);
-      if (nullable) this.byId.set(def.id, nullable);
+      if (!nullable) continue;
+      this.byId.set(def.id, nullable);
+      if (nullable.nullTag >= 0) this.usesNullSentinel = true;
     }
   }
 
@@ -88,15 +114,26 @@ function nullableShape(
   emittedClasses: ReadonlySet<string>,
   records: ReadonlySet<string>,
 ): NullableUnion | null {
-  if (def.arms.length !== 2) return null;
-  const unitTag = def.arms.findIndex(isUnitType);
-  if (unitTag < 0) return null;
-  const refTag = 1 - unitTag;
+  const units = def.arms.filter(isUnitType).length;
+  if (units < 1 || units > 2 || def.arms.length !== units + 1) return null;
+  const refTag = def.arms.findIndex((arm) => !isUnitType(arm));
+  let unitTag: number, nullTag: number;
+  if (units === 1) {
+    unitTag = def.arms.findIndex(isUnitType);
+    nullTag = -1;
+  } else {
+    unitTag = def.arms.findIndex((arm) => arm.kind === "undefinedT");
+    nullTag = def.arms.findIndex((arm) => arm.kind === "nullT");
+    if (unitTag < 0 || nullTag < 0) return null;
+  }
   const arm = def.arms[refTag]!;
+  const base = { unionId: def.id, refTag, unitTag, nullTag };
   if (arm.kind === "object" && emittedClasses.has(arm.className))
-    return { unionId: def.id, refTag, unitTag, arm: { kind: "object", className: arm.className } };
+    return { ...base, arm: { kind: "object", className: arm.className } };
   if (arm.kind === "record" && records.has(arm.shapeId))
-    return { unionId: def.id, refTag, unitTag, arm: { kind: "record", shapeId: arm.shapeId } };
+    return { ...base, arm: { kind: "record", shapeId: arm.shapeId } };
+  if (arm.kind === "string") return { ...base, arm: { kind: "string" } };
+  if (arm.kind === "array" || arm.kind === "map" || arm.kind === "set") return { ...base, arm };
   return null;
 }
 
