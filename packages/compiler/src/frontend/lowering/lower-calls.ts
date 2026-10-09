@@ -7581,13 +7581,23 @@ function lowerObjectStaticCall(
       target = lowerer.coerceToExpected(target, DYN);
     }
     // Error instances share a live property table with their checked view.
+    // A dynamic key is the `__proto__` branch in Effect's assignProperty:
+    // the checker type is any, and the value is stored as dyn.
     const keyNode = call.arguments[1]!;
+    const keyTs = lowerer.typeOf(keyNode);
+    const keyMapped = lowerer.mapTypeOf(keyTs);
+    const dynamicKey =
+      keyMapped?.kind === "dyn" ||
+      keyMapped?.kind === "symbol" ||
+      (keyMapped == null &&
+        (keyTs.flags & ts.TypeFlags.Any) !== 0 &&
+        lowerer.irTypeOf(keyNode).kind === "dyn");
     if (
       target?.type.kind === "object" &&
       target.type.className !== "%DOMException" &&
       lowerer.errorHierarchyClassOf(target.type.className) &&
       ((ts.isStringLiteral(keyNode) && (keyNode.text === "cause" || keyNode.text === "message")) ||
-        lowerer.mapTypeOf(lowerer.typeOf(keyNode))?.kind === "symbol")
+        dynamicKey)
     ) {
       target = lowerer.coerceToExpected(target, DYN);
     }
