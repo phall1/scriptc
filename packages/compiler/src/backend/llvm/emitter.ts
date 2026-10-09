@@ -95,7 +95,7 @@ import {
 } from "./split-loops.js";
 import { scalarizeNumericRecords } from "../../ir/scalar-records.js";
 import { specializeNumericCalls } from "../../ir/numeric-call-specialization.js";
-import { everyStmtList } from "../../ir/traverse.js";
+import { everyExprChild, everyStmtChild, everyStmtList } from "../../ir/traverse.js";
 import { analyzeIntegerRanges, INT32_RANGE, type IntegerRanges } from "../../ir/integer-ranges.js";
 import { analyzeInt32Slots, type Int32Slots } from "../../ir/int32-slots.js";
 import { findIntegerViews } from "./integer-views.js";
@@ -425,6 +425,25 @@ function llStrBytes(text: string): string {
 }
 
 const NO_BORROWED: ReadonlySet<number> = new Set();
+
+/** Whether any node of `e` names the local (reads, writes, declarations,
+ * captures). */
+function mentionsLocal(e: IrExpr, localId: string): boolean {
+  const names = (node: IrExpr | IrStmt): boolean =>
+    ("localId" in node && node.localId === localId) ||
+    ("captures" in node && Array.isArray(node.captures) && node.captures.includes(localId));
+  let found = false;
+  const expr = (node: IrExpr): boolean => {
+    if (found || names(node)) return !(found = true);
+    return everyExprChild(node, expr, stmt);
+  };
+  const stmt = (node: IrStmt): boolean => {
+    if (found || names(node)) return !(found = true);
+    return everyStmtChild(node, expr, stmt);
+  };
+  expr(e);
+  return found;
+}
 
 export class LlEmitter {
   localArrayReads = new Map<string, LocalArrayRead>();
@@ -6506,6 +6525,8 @@ export class LlEmitter {
     suffix: IrExpr,
     retainForYield: boolean,
   ): LlValue {
+    const moved = this.emitMovedSelfConcat(localId, left, suffix, retainForYield);
+    if (moved) return moved;
     const snapshot = this.emitExpr(left);
     // A suffix of several parts, or a number, appends each operand to the
     // snapshot directly (in place once the binding lets go of it) instead
@@ -6544,6 +6565,50 @@ export class LlEmitter {
       else B.line(`store ptr ${result.name}, ptr ${b.slot}`);
     }
     return result;
+  }
+
+  /** `local = local + suffix` when the suffix cannot read or write the
+   * local (an unboxed binding is only reachable through this function's own
+   * expressions): reading the binding after the suffix gives the value the
+   * left side had, so it moves into a consuming concat, and the result takes
+   * its place. Null when the general snapshot path is needed. */
+  private emitMovedSelfConcat(
+    localId: string,
+    left: IrExpr,
+    suffix: IrExpr,
+    retainForYield: boolean,
+  ): LlValue | null {
+    const b = this.binding(localId);
+    if (
+      retainForYield ||
+      b.kind !== "local" ||
+      b.local === undefined ||
+      b.local.boxed ||
+      b.local.tdz ||
+      b.type.kind !== "string" ||
+      left.kind !== "varRef" ||
+      left.localId !== localId ||
+      mentionsLocal(suffix, localId)
+    )
+      return null;
+    const parts = stringParts(suffix);
+    const mixed = parts.length > 1 || numberPart(parts[0]!) !== null;
+    const inputs = mixed ? emitConcatInputs(this, parts) : [];
+    const right = mixed ? null : this.emitExpr(suffix);
+    this.materializeSplitLocal(localId);
+    const B = this.B;
+    const head = B.tmp();
+    B.line(`${head} = load ptr, ptr ${b.slot}`);
+    let raw: string;
+    if (right === null) {
+      raw = emitMixedConcat(this, head, inputs, true);
+    } else {
+      this.declare(`declare ptr @scr_str_concat_move(ptr, ptr)`);
+      raw = B.tmp();
+      B.line(`${raw} = call ptr @scr_str_concat_move(ptr ${head}, ptr ${right.name})`);
+    }
+    B.line(`store ptr ${raw}, ptr ${b.slot}`);
+    return { name: raw, type: left.type }; // moved into the binding
   }
 
   emitContainerExpr(
