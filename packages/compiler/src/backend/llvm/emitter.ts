@@ -429,16 +429,30 @@ const NO_BORROWED: ReadonlySet<number> = new Set();
 /** Whether any node of `e` names the local (reads, writes, declarations,
  * captures). */
 function mentionsLocal(e: IrExpr, localId: string): boolean {
-  const names = (node: IrExpr | IrStmt): boolean =>
-    ("localId" in node && node.localId === localId) ||
-    ("captures" in node && Array.isArray(node.captures) && node.captures.includes(localId));
+  const exprNames = (node: IrExpr): boolean => {
+    if (node.kind === "varRef" || node.kind === "incDec" || node.kind === "assignExpr")
+      return node.localId === localId;
+    if (node.kind === "closure") return node.captures.includes(localId);
+    if (node.kind === "classRef") return node.captures?.includes(localId) === true;
+    return false;
+  };
+  const stmtNames = (node: IrStmt): boolean => {
+    if (
+      node.kind === "varDecl" ||
+      node.kind === "assign" ||
+      node.kind === "forOf" ||
+      node.kind === "rethrow"
+    )
+      return node.localId === localId;
+    return false;
+  };
   let found = false;
   const expr = (node: IrExpr): boolean => {
-    if (found || names(node)) return !(found = true);
+    if (found || exprNames(node)) return !(found = true);
     return everyExprChild(node, expr, stmt);
   };
   const stmt = (node: IrStmt): boolean => {
-    if (found || names(node)) return !(found = true);
+    if (found || stmtNames(node)) return !(found = true);
     return everyStmtChild(node, expr, stmt);
   };
   expr(e);
@@ -511,9 +525,6 @@ export class LlEmitter {
   /** The nullable-union ABSENT sentinel was referenced (absentInstanceRef). */
   private needsNullableAbsent = false;
   private readonly immortalValues = new Set<string>();
-  /** Temps known to hold immortal values, per block builder (temp names
-   * are only unique within one). */
-  private readonly immortalTemps = new WeakMap<BlockBuilder, Set<string>>();
   /** Regex literal templates: "<flags>/<pattern>" → { symbol, interned
    * source/flags literal refs } — one immortal ScrRegex template per distinct
    * (pattern, flags) pair; the bytecode slot starts null and the runtime
@@ -3488,15 +3499,13 @@ export class LlEmitter {
   /** Whether a value is immortal: an interned constant, or a temp marked by
    * markImmortal. */
   private isImmortal(name: string): boolean {
-    return this.immortalValues.has(name) || this.immortalTemps.get(this.B)?.has(name) === true;
+    return this.immortalValues.has(name) || this.B.immortalTemps.has(name);
   }
 
   /** Record that a temp holds an immortal value (a choice between interned
    * literals): nothing owns it, and retains, releases and moves skip it. */
   markImmortal(v: LlValue): LlValue {
-    let temps = this.immortalTemps.get(this.B);
-    if (!temps) this.immortalTemps.set(this.B, (temps = new Set()));
-    temps.add(v.name);
+    this.B.immortalTemps.add(v.name);
     return v;
   }
 
