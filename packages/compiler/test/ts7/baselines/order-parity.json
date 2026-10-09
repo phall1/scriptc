@@ -15538,6 +15538,12 @@
     "<repo>/tests/corpus/4562-string-self-concat-move.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/4563-array-read-projection-receivers.ts": {
+   "order": [
+    "<repo>/tests/corpus/4563-array-read-projection-receivers.ts"
+   ],
+   "diags": []
   }
  }
 }
