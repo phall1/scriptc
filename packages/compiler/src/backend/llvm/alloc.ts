@@ -43,26 +43,35 @@ export interface AllocHost {
   readonly threadLocalAlloc?: boolean;
 }
 
-const STATE_GLOBALS: readonly [global: string, type: string][] = [
-  ["@scr_sa", "{ i64, i64, i32, [32 x ptr], [32 x ptr], [32 x ptr] }"],
-  ["@scr_cyc_live", "i64"],
-  ["@scr_cyc_old_freed", "i64"],
-  ["@scr_weak_dispose_hook", "ptr"],
+/** The state globals of the inline allocation paths and, in worker
+ * executables, their byte offsets inside the runtime's one thread-local
+ * ScrThreadHot block (layout asserted in scr_runtime.h). */
+const STATE_GLOBALS: readonly [global: string, offset: number][] = [
+  ["@scr_sa", 0],
+  ["@scr_cyc_live", 792],
+  ["@scr_cyc_old_freed", 800],
+  ["@scr_weak_dispose_hook", 808],
 ];
+const THREAD_HOT_TYPE = "{ { i64, i64, i32, [32 x ptr], [32 x ptr], [32 x ptr] }, i64, i64, ptr }";
 
-/** Worker executables: address each thread-local state global once through
- * llvm.threadlocal.address (which LLVM can share across a function) and
- * rewrite the lines to use those addresses. */
+/** Worker executables: address the thread's ScrThreadHot block once through
+ * llvm.threadlocal.address (which LLVM can share across a function; on
+ * Darwin each distinct thread-local costs a call) and rewrite the lines to
+ * address the state globals at their offsets in it. */
 function threadLocalState(host: AllocHost, prefix: string, lines: string[]): string[] {
   if (host.threadLocalAlloc !== true) return lines;
+  const hot = `%${prefix}.tl.hot`;
   const preamble: string[] = [];
   let text = lines.join("\n");
-  for (const [global, type] of STATE_GLOBALS) {
+  for (const [global, offset] of STATE_GLOBALS) {
     if (!text.includes(`ptr ${global}`)) continue;
+    if (preamble.length === 0) {
+      host.declare(`@scr_thread_hot = external thread_local global ${THREAD_HOT_TYPE}`);
+      host.declare(`declare nonnull ptr @llvm.threadlocal.address.p0(ptr nonnull)`);
+      preamble.push(`  ${hot} = call ptr @llvm.threadlocal.address.p0(ptr @scr_thread_hot)`);
+    }
     const local = `%${prefix}.tl.${global.slice(5)}`;
-    host.declare(`${global} = external thread_local global ${type}`);
-    host.declare(`declare nonnull ptr @llvm.threadlocal.address.p0(ptr nonnull)`);
-    preamble.push(`  ${local} = call ptr @llvm.threadlocal.address.p0(ptr ${global})`);
+    preamble.push(`  ${local} = getelementptr inbounds i8, ptr ${hot}, i64 ${offset}`);
     text = text
       .replaceAll(`ptr ${global},`, `ptr ${local},`)
       .replaceAll(`ptr ${global}`, `ptr ${local}`);

@@ -17,7 +17,11 @@
  * tentative definition becomes a COMMON symbol, which library localization
  * deliberately keeps global (abi.localize_runtime), leaking it from every
  * localized library archive. */
-SCR_SA_TL ScrSaState scr_sa = {0};
+#ifdef SCR_WORKERS
+_Thread_local ScrThreadHot scr_thread_hot = {{0}};
+#else
+ScrSaState scr_sa = {0};
+#endif
 
 #if SCR_SMALL_ALLOC
 #include <sys/mman.h>

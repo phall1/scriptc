@@ -177,14 +177,12 @@ settle().then((value) => console.log(value));
   if (result.ok) {
     const llvm = await readFile(request.outPath, "utf8");
     // Worker runtimes keep one small-object allocator per script thread:
-    // the inline paths address its state, live count and dispose hook as
-    // thread-locals.
-    expect(llvm).toMatch(/@scr_sa = external thread_local(\(initialexec\))? global/);
-    expect(llvm).toMatch(
-      /@scr_weak_dispose_hook = external thread_local(\(initialexec\))? global ptr/,
-    );
-    expect(llvm).not.toMatch(/@scr_(sa|cyc_live|weak_dispose_hook) = external global/);
-    expect(llvm).toContain("call ptr @llvm.threadlocal.address.p0(ptr @scr_sa)");
+    // the inline paths address its state, live counts and dispose hook in
+    // the runtime's one thread-local ScrThreadHot block.
+    expect(llvm).toMatch(/@scr_thread_hot = external thread_local(\(initialexec\))? global /);
+    expect(llvm).not.toMatch(/@scr_(sa|cyc_live|cyc_old_freed|weak_dispose_hook) = external/);
+    expect(llvm).toContain("call ptr @llvm.threadlocal.address.p0(ptr @scr_thread_hot)");
+    expect(llvm).toMatch(/getelementptr inbounds i8, ptr %[\w.]+\.tl\.hot, i64 808/);
     // Worker fibers own context termination; no fiberless async frames.
     expect(llvm).not.toContain("@scr_async_inline_enter");
   }

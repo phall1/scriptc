@@ -529,14 +529,35 @@ typedef struct ScrSaState {
   ScrSaBlock *free[SCR_SA_NCLASS];
   char *bump[SCR_SA_NCLASS], *lim[SCR_SA_NCLASS];
 } ScrSaState;
-/* Worker executables keep one allocator per script thread (see above); the
- * emitted fast paths then address `scr_sa` as a thread-local. */
+/* Worker executables keep one allocator per script thread (see above). Its
+ * state shares one thread-local block with the collector's live counts and
+ * the weak dispose hook (ScrThreadHot below): on Darwin every distinct
+ * thread-local costs a call per function that touches it, and allocation
+ * and free paths touch all four. */
 #ifdef SCR_WORKERS
-#define SCR_SA_TL _Thread_local
-#else
-#define SCR_SA_TL
+/* The per-thread state of the allocation and free fast paths, in one
+ * thread-local block; its layout is an ABI (llvm/alloc.ts addresses the
+ * fields at fixed offsets from one llvm.threadlocal.address). */
+typedef struct ScrThreadHot {
+  ScrSaState sa;
+  size_t cyc_live;
+  size_t cyc_old_freed;
+  void (*weak_dispose_hook)(void *);
+} ScrThreadHot;
+extern _Thread_local ScrThreadHot scr_thread_hot;
+#define scr_sa (scr_thread_hot.sa)
+#define scr_cyc_live (scr_thread_hot.cyc_live)
+#define scr_cyc_old_freed (scr_thread_hot.cyc_old_freed)
+#define scr_weak_dispose_hook (scr_thread_hot.weak_dispose_hook)
+#if UINTPTR_MAX == UINT64_MAX
+_Static_assert(offsetof(ScrThreadHot, sa) == 0 && offsetof(ScrThreadHot, cyc_live) == 792 &&
+                   offsetof(ScrThreadHot, cyc_old_freed) == 800 &&
+                   offsetof(ScrThreadHot, weak_dispose_hook) == 808,
+               "llvm/alloc.ts addresses ScrThreadHot fields at these offsets");
 #endif
-extern SCR_SA_TL ScrSaState scr_sa;
+#else
+extern ScrSaState scr_sa;
+#endif
 #if UINTPTR_MAX == UINT64_MAX
 _Static_assert(offsetof(ScrSaState, span) == 8 && offsetof(ScrSaState, shift) == 16 &&
                    offsetof(ScrSaState, free) == 24 && offsetof(ScrSaState, bump) == 280 &&
@@ -609,9 +630,11 @@ static inline void scr_mem_free(void *p) { free(p); }
  * (llvm/alloc.ts), which do the same three things: header words, live
  * count, block. Every other header word starts zero (SCR_CYC_BLACK,
  * SCR_CYC_NURSERY, unbuffered). */
+#ifndef SCR_WORKERS
 extern SCR_TL size_t scr_cyc_live;
 extern SCR_TL size_t scr_cyc_old_freed;
 extern SCR_TL void (*scr_weak_dispose_hook)(void *);
+#endif
 static inline void *scr_cyc_alloc_inline(size_t size, ScrTraceFn trace, ScrCycFreeFn free_fn) {
   if (size > SIZE_MAX - sizeof(ScrCycHdr)) scr_trap("scriptc: out of memory\n");
   ScrCycHdr *h = (ScrCycHdr *)scr_mem_calloc(sizeof(ScrCycHdr) + size);
@@ -4629,8 +4652,11 @@ ScrDyn *scr_weak_map_new(ScrDyn *entries);
 ScrDyn *scr_weak_set_new(ScrDyn *values);
 ScrDyn *scr_dyn_from_entries(ScrDyn *entries);
 ScrDyn *scr_dyn_mark_snapshot(ScrDyn *value); /* consumes and returns +1 */
-/* Optional non-owning observers, installed by weak collections. */
+/* Optional non-owning observers, installed by weak collections (worker
+ * executables keep the hook in scr_thread_hot). */
+#ifndef SCR_WORKERS
 extern SCR_TL void (*scr_weak_dispose_hook)(void *);
+#endif
 void scr_weak_dispose(void *object);
 /* The for-of-over-dyn pack accessors (the emitted index loop drives them
  * over a scr_dyn_iter_pack result, which is ARR by construction).
