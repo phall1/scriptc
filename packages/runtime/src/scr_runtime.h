@@ -362,13 +362,12 @@ typedef void (*ScrTraceVisit)(void *child, void *ctx);
 typedef void (*ScrTraceFn)(void *obj, ScrTraceVisit visit, void *ctx);
 typedef void (*ScrCycFreeFn)(void *obj);
 
-/* DOOMED identifies the gathered dead set during re-buffering and weak
- * observer teardown. WHITE candidates may still become black when a later
- * outside root restores them; only the settled white set becomes DOOMED. */
-enum {
-  SCR_CYC_BLACK = 0, SCR_CYC_PURPLE = 1, SCR_CYC_GRAY = 2, SCR_CYC_WHITE = 3,
-  SCR_CYC_DOOMED = 4
-};
+/* Colors belong to the collector alone: retains and releases never write
+ * them (a buffered entry is a candidate until a pass drains it). DOOMED
+ * identifies the gathered dead set during re-buffering and weak observer
+ * teardown. WHITE candidates may still become black when a later outside
+ * root restores them; only the settled white set becomes DOOMED. */
+enum { SCR_CYC_BLACK = 0, SCR_CYC_GRAY = 1, SCR_CYC_WHITE = 2, SCR_CYC_DOOMED = 3 };
 
 /* Generations. A candidate sits in the buffer named by its own `gen`, and a
  * pass walks only objects at or below the generation it collects; a pass at
@@ -380,7 +379,7 @@ typedef struct ScrCycHdr {
   ScrCycFreeFn free_fn;
 #if UINTPTR_MAX == UINT32_MAX
   /* calloc aligns the block for doubles; keep the payload aligned too.
-   * Padding BEFORE color preserves the emitted obj-12 mark-live offset. */
+   * Padding BEFORE color preserves the emitted obj-8 `buffered` offset. */
   uint32_t payload_alignment;
 #endif
   uint32_t color;    /* SCR_CYC_* */
@@ -389,39 +388,25 @@ typedef struct ScrCycHdr {
   size_t buf_index;  /* position there (O(1) removal when rc hits 0) */
 } ScrCycHdr;
 
-/* This layout is an ABI, not an implementation detail. The LLVM backend
- * inlines scr_cyc_mark_live as a raw `store i32 0`: color is at obj-16 on
- * 64-bit targets and obj-12 on wasm32. Three sites emit it —
- * llvm/shapes.ts, llvm/classes.ts, and llvm/emitter.ts. Nothing but `color`
- * may share those four bytes: a field placed in them is silently zeroed by
- * every retain, which is invisible to the type system and to the C
- * compiler. Hence the target-width assertions.
- *
- * The inline release fast paths (llvm/shapes.ts emitInlineRcHelpers) also
- * mirror scr_cyc_on_release's already-buffered case: they store
- * SCR_CYC_PURPLE (the literal 1) into color and read `buffered` as the i16
- * immediately after it, calling scr_cyc_on_release only when it is 0. */
+/* This layout is an ABI, not an implementation detail. Every emitted release
+ * of a headered object (llvm/shapes.ts cycleRootLines, used by the record,
+ * class and inline RC helpers) mirrors scr_cyc_on_release's early return:
+ * it reads `buffered` as an i16 at obj-12 on 64-bit targets and obj-8 on
+ * wasm32 (the backend's cycleColorOffset - 4) and calls scr_cyc_on_release
+ * only when it is 0. Hence the target-width assertions. */
 #if UINTPTR_MAX == UINT64_MAX
 _Static_assert(sizeof(ScrCycHdr) == 32, "LLVM backend expects a 32-byte cycle header");
 _Static_assert(offsetof(ScrCycHdr, color) == 16,
-               "LLVM backend's inlined mark-live stores i32 0 at obj-16");
+               "LLVM backend's cycleColorOffset is obj-16 on 64-bit targets");
 _Static_assert(offsetof(ScrCycHdr, gen) == 22,
                "LLVM backend's inline free reads the generation at header+22");
 #elif UINTPTR_MAX == UINT32_MAX
 _Static_assert(sizeof(ScrCycHdr) == 24, "wasm32 cycle payloads require an aligned 24-byte header");
 _Static_assert(offsetof(ScrCycHdr, color) == 12,
-               "LLVM backend's inlined mark-live stores i32 0 at obj-12");
+               "LLVM backend's cycleColorOffset is obj-12 on wasm32");
 #endif
 _Static_assert(sizeof(ScrCycHdr) % _Alignof(double) == 0,
                "cycle-headered payloads must preserve double alignment");
-_Static_assert(sizeof(((ScrCycHdr *)0)->color) == 4,
-               "mark-live is an i32 store: color must own all four bytes");
-_Static_assert(SCR_CYC_BLACK == 0,
-               "the emitted mark-live stores the LITERAL 0, not the enumerator "
-               "— reordering the colors would make every compiled retain write "
-               "the wrong one");
-_Static_assert(SCR_CYC_PURPLE == 1,
-               "the emitted release fast path stores the LITERAL 1 as purple");
 _Static_assert(offsetof(ScrCycHdr, buffered) == offsetof(ScrCycHdr, color) + 4 &&
                    sizeof(((ScrCycHdr *)0)->buffered) == 2,
                "the emitted release fast path reads `buffered` as an i16 four bytes "
@@ -599,13 +584,11 @@ void scr_rc_destroy(void *obj, void (*destroy)(void *));
  * stayed above zero — buffer the object as a possible cycle root (may run
  * a collection when the buffer crosses the threshold; the caller must not
  * touch the object afterwards). on_dead: rc hit zero — drop any buffer
- * entry BEFORE tearing the object down. mark_live: retain hook (a
- * re-retained candidate is certainly not garbage). */
+ * entry BEFORE tearing the object down. Retains need no hook: a candidate
+ * re-retained after it was buffered simply stays a candidate, and the pass
+ * that walks it finds it externally referenced. */
 void scr_cyc_on_release(void *obj);
 void scr_cyc_on_dead(void *obj);
-static inline void scr_cyc_mark_live(void *obj) {
-  scr_cyc_hdr(obj)->color = SCR_CYC_BLACK;
-}
 
 /* Full sweep: trial-deletion passes over EVERY generation, to a fixpoint.
  * This is the exit / session-reset entry point (the RC audit runs straight
@@ -762,7 +745,6 @@ typedef struct ScrClassObj {
 static inline ScrClassObj *scr_classobj_retain(ScrClassObj *c) {
   if (c && c->rc != SIZE_MAX) {
     c->rc++;
-    scr_cyc_mark_live(c);
   }
   return c;
 }
@@ -1366,7 +1348,6 @@ ScrArr *scr_arr_new_ref(void *(*elem_retain)(void *),
 static inline ScrArr *scr_arr_retain(ScrArr *a) {
   if (a->rc != SIZE_MAX) {
     a->rc++;
-    if (a->elem_trace) scr_cyc_mark_live(a);
   }
   return a;
 }
@@ -1908,7 +1889,6 @@ ScrBox *scr_box_new_obj(void *(*retain)(void *), void (*release)(void *),
 static inline ScrBox *scr_box_retain(ScrBox *b) {
   if (b->rc != SIZE_MAX) {
     b->rc++;
-    scr_cyc_mark_live(b);
   }
   return b;
 }
@@ -1957,7 +1937,6 @@ ScrClosure *scr_closure_new(void *fn, size_t ncaps); /* +1; caller fills caps wi
 static inline ScrClosure *scr_closure_retain(ScrClosure *c) {
   if (c->rc != SIZE_MAX) {
     c->rc++;
-    scr_cyc_mark_live(c);
   }
   return c;
 }
@@ -2124,7 +2103,6 @@ ScrUnion *scr_union_new_ref(uint32_t tag, void *v,
 static inline ScrUnion *scr_union_retain(ScrUnion *u) {
   if (u->rc != SIZE_MAX) {
     u->rc++;
-    scr_cyc_mark_live(u);
   }
   return u;
 }
@@ -4178,7 +4156,6 @@ struct ScrDyn {
 static inline ScrDyn *scr_dyn_retain(ScrDyn *d) {
   if (d->rc != SIZE_MAX) {
     d->rc++;
-    scr_cyc_mark_live(d);
   }
   return d;
 }

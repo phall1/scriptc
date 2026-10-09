@@ -135,7 +135,6 @@ SCR_TL ScrVt scr_error_vts[SCR_ERR_COUNT] = {
 ScrError *scr_error_retain(ScrError *e) {
   if (e && e->rc != SIZE_MAX) {
     e->rc++;
-    if (scr_error_traced) scr_cyc_mark_live(e);
   }
   return e;
 }

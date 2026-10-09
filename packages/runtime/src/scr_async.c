@@ -339,7 +339,6 @@ void scr_promise_mark_handled(ScrPromise *p) {
 ScrPromise *scr_promise_retain(ScrPromise *p) {
   if (p && p->rc != SIZE_MAX) {
     p->rc++;
-    scr_cyc_mark_live(p);
   }
   return p;
 }

@@ -2526,8 +2526,7 @@ export class LlEmitter {
       );
     }
     if (this.needsRetainBox) {
-      // scr_box_retain is a static inline (increment-unless-immortal, then
-      // mark the cycle header live — every box is collector-headered);
+      // scr_box_retain is a static inline (increment-unless-immortal);
       // emitted once with internal linkage, like the record retains.
       defs.push(
         `define internal ptr @sc_retain_box(ptr %b) ${FN_ATTRS} {`,
@@ -2538,8 +2537,6 @@ export class LlEmitter {
         `inc:`,
         `  %n = add ${this.sizeType} %rc, 1`,
         `  store ${this.sizeType} %n, ptr %b`,
-        `  %colorp = getelementptr i8, ptr %b, ${this.sizeType} -${this.cycleColorOffset}`,
-        `  store i32 0, ptr %colorp ; mark live`,
         `  br label %done`,
         `done:`,
         `  ret ptr %b`,

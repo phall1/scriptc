@@ -189,8 +189,8 @@ export function releaseSym(host: ShapeHost, t: IrType): string {
 /* ── inline RC fast paths ─────────────────────────────────────────────── */
 
 /** How a runtime family decides whether an object carries a ScrCycHdr:
- * never, always, or per object through the trace slots its C retain and
- * release test (`a->elem_trace`, `m->key_trace || m->val_trace`). */
+ * never, always, or per object through the trace slots its C release
+ * tests (`a->elem_trace`, `m->key_trace || m->val_trace`). */
 type RcCycle = "none" | "always" | "arr" | "map";
 
 interface InlineRcFamily {
@@ -207,9 +207,8 @@ interface InlineRcFamily {
 /** Runtime RC families whose fast paths the backend mirrors in IR, keyed
  * by the family name without its `scr_` stem prefix. Each
  * row restates the C entry points in scr_runtime.h and the runtime TUs:
- * retain is `if (rc != SIZE_MAX) { rc++; mark-live if headered }`, and a
- * release that leaves the object alive is `rc--`, then scr_cyc_on_release
- * when headered. Everything else (destruction, RC-audit accounting, the
+ * retain is `if (rc != SIZE_MAX) rc++`, and a release that leaves the
+ * object alive is `rc--`, then scr_cyc_on_release when headered. Everything else (destruction, RC-audit accounting, the
  * collector's on_dead bookkeeping) stays in the runtime release, which
  * repeats its own checks, so the fast path never duplicates it.
  *
@@ -332,11 +331,6 @@ function rcHeaderTest(cycle: "arr" | "map", yes: string, no: string): string[] {
 
 function retainHelper(host: ShapeHost, family: string, row: InlineRcFamily): string[] {
   const S = host.sizeType;
-  const markLive = [
-    `  %colorp = getelementptr i8, ptr %o, ${S} -${host.cycleColorOffset}`,
-    `  store i32 0, ptr %colorp ; mark live`,
-    `  br label %done`,
-  ];
   return [
     `define internal ptr @${inlineRcName(family, "retain")}(ptr %o) ${FN_ATTRS} { ; scr_${family}_retain fast path`,
     `entry:`,
@@ -349,11 +343,7 @@ function retainHelper(host: ShapeHost, family: string, row: InlineRcFamily): str
     `inc:`,
     `  %n = add ${S} %rc, 1`,
     `  store ${S} %n, ptr %o`,
-    ...(row.cycle === "none"
-      ? [`  br label %done`]
-      : row.cycle === "always"
-        ? markLive
-        : [...rcHeaderTest(row.cycle, "live", "done"), `live:`, ...markLive]),
+    `  br label %done`,
     `done:`,
     `  ret ptr %o`,
     `}`,
@@ -409,15 +399,14 @@ function releaseHelper(host: ShapeHost, family: string, row: InlineRcFamily): st
 
 /** Definitions for every requested inline RC helper, in a stable order.
  *
- * retain: a NULL skip where the C retain tolerates NULL, the immortal skip,
- * the increment, and for headered objects the mark-live `store i32 0` at
- * obj-cycleColorOffset (scr_cyc_mark_live).
+ * retain: a NULL skip where the C retain tolerates NULL, the immortal skip
+ * and the increment; retains never touch the cycle header.
  *
  * release: NULL and immortal skips. rc == 1 (and any headered object of a
  * per-object family) calls the runtime release, marked cold so destruction
  * stays out of line. Otherwise decrement; always-headered families then
- * inline scr_cyc_on_release's already-buffered case (color = PURPLE, and
- * `buffered` is the i16 four bytes after color), calling the runtime only
+ * inline scr_cyc_on_release's already-buffered case (`buffered` is the i16
+ * four bytes after color), calling the runtime only
  * to enqueue a new candidate. scr_runtime.h asserts both header offsets and
  * the trace-slot offsets. */
 export function emitInlineRcHelpers(host: ShapeHost): string[] {
@@ -704,17 +693,10 @@ function rcMembers(shape: IrRecordShape): { index: number; type: IrType; name: s
   ];
 }
 
-/** The immortal-skip + mark-live retain body shared by every shape. The
- * cycle header sits before the object; `color` is at obj-16 on 64-bit
- * targets and obj-12 on wasm32,
- * so mark-live is one i32 store at obj-16 (scr_cyc_mark_live inlined —
- * the runtime's is a static inline with no external symbol). */
-export function retainBody(
-  host: ShapeHost,
-  fnName: string,
-  traced: boolean,
-  comment = "",
-): string[] {
+/** The NULL- and immortal-skipping retain body shared by every shape. A
+ * retain never touches the cycle header: a buffered candidate that is
+ * retained again stays a candidate (scr_cycle.c, markRoots). */
+export function retainBody(host: ShapeHost, fnName: string, comment = ""): string[] {
   const S = host.sizeType;
   return [
     `define internal ptr @${fnName}(ptr %o) ${FN_ATTRS} {${comment ? ` ; ${comment}` : ""}`,
@@ -728,12 +710,6 @@ export function retainBody(
     `inc:`,
     `  %n = add ${S} %rc, 1`,
     `  store ${S} %n, ptr %o`,
-    ...(traced
-      ? [
-          `  %colorp = getelementptr i8, ptr %o, ${S} -${host.cycleColorOffset}`,
-          `  store i32 0, ptr %colorp ; mark live`,
-        ]
-      : []),
     `  br label %done`,
     `done:`,
     `  ret ptr %o`,
@@ -840,19 +816,16 @@ export function releaseFastPath(
 }
 
 /** The possible-cycle-root step of a release that left a headered object
- * alive: scr_cyc_on_release with its already-buffered case inlined. Store
- * PURPLE into color, then read `buffered` (the i16 four bytes after it) and
- * call the runtime only to enqueue a new candidate. Every emitted release
- * of a headered object shares this sequence (scr_runtime.h asserts both
- * offsets); it ends by branching to `done`. */
+ * alive: scr_cyc_on_release with its early return inlined. Read `buffered`
+ * (the i16 four bytes after color; nonzero for a queued candidate or a
+ * tenured object) and call the runtime only to enqueue a new candidate.
+ * Every emitted release of a headered object shares this sequence
+ * (scr_runtime.h asserts the offset); it ends by branching to `done`. */
 export function cycleRootLines(host: ShapeHost, done: string): string[] {
   const S = host.sizeType;
-  const color = host.cycleColorOffset;
   host.declare(`declare void @scr_cyc_on_release(ptr)`);
   return [
-    `  %colorp = getelementptr i8, ptr %o, ${S} -${color}`,
-    `  store i32 1, ptr %colorp ; purple: possible cycle root`,
-    `  %bufp = getelementptr i8, ptr %o, ${S} -${color - 4}`,
+    `  %bufp = getelementptr i8, ptr %o, ${S} -${host.cycleColorOffset - 4}`,
     `  %buf = load i16, ptr %bufp`,
     `  %queued = icmp ne i16 %buf, 0`,
     `  br i1 %queued, label %${done}, label %enqueue`,
@@ -899,7 +872,7 @@ export function emitRecordShapes(
     const refMembers = members.filter((m) => isRefCounted(m.type));
     const sizeOf = `ptrtoint (ptr getelementptr (%${struct}, ptr null, i32 1) to ${host.sizeType})`;
 
-    defs.push(...retainBody(host, mangleRecordRetain(shape.id), traced), ``);
+    defs.push(...retainBody(host, mangleRecordRetain(shape.id)), ``);
 
     // release: NULL-tolerant, immortal-skip; at rc == 0 release every
     // refcounted member (runtime releases are NULL-tolerant) and free —

@@ -57,7 +57,6 @@ static void scr_worker_view_destroy(void *ptr) {
 static void *scr_worker_view_retain(void *ptr) {
   ScrWorkerView *view = ptr;
   view->rc++;
-  scr_cyc_mark_live(view);
   return view;
 }
 

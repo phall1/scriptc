@@ -367,7 +367,6 @@ static void *mock_cyc_retain(void *p) {
   MockRec *r = (MockRec *)p;
   if (r->rc != SIZE_MAX) {
     r->rc++;
-    scr_cyc_mark_live(r);
   }
   return r;
 }

@@ -176,7 +176,6 @@ static Node *make_leaf(void) {
 /* A temporary reference taken and dropped, as when a program reads it. */
 static void read_live(Node *node) {
   node->rc++;
-  scr_cyc_mark_live(node);
   release_live(node);
 }
 
@@ -480,7 +479,6 @@ static void check_repeated_buffered_release(void) {
   scr_collect_cycles();
   for (size_t i = 0; i < 1000; i++) {
     root->rc++;
-    scr_cyc_mark_live(root);
     release_live(root);
   }
   check(freed == before && root->rc == 2,

@@ -463,9 +463,9 @@ export function emitClassShapes(
     const stCall = (tag: string, entry: string, tail: string): string[] =>
       prefixCall(tag, 4, entry, tail, "stream state (ScrStream prefix)");
 
-    // retain: NULL-tolerant, immortal-skip, mark-live on traced shapes —
-    // layout-generic (rc at 0), so hierarchy members need no dispatch.
-    defs.push(...retainBody(host, mangleClassRetain(cls.name), traced, `retain ${cls.name}`), ``);
+    // retain: NULL-tolerant, immortal-skip — layout-generic (rc at 0), so
+    // hierarchy members need no dispatch.
+    defs.push(...retainBody(host, mangleClassRetain(cls.name), `retain ${cls.name}`), ``);
 
     // The field-releasing teardown body shared by both release shapes
     // (the public one on standalone classes, the DIRECT one on hierarchy

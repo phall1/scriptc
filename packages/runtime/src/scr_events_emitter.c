@@ -302,7 +302,6 @@ void scr_emitter_init(void *obj) { (void)obj; }
 ScrEmitter *scr_emitter_retain(ScrEmitter *em) {
   if (em && em->rc != SIZE_MAX) {
     em->rc++;
-    scr_cyc_mark_live(em);
   }
   return em;
 }
