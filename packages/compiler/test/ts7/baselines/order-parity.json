@@ -15550,6 +15550,12 @@
     "<repo>/tests/corpus/4564-literal-choice-strings.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/4471-unassigned-field-reads.ts": {
+   "order": [
+    "<repo>/tests/corpus/4471-unassigned-field-reads.ts"
+   ],
+   "diags": []
   }
  }
 }

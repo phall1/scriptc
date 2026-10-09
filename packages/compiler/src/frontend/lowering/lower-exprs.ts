@@ -988,8 +988,10 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
     // A known static result type fixes typeof's answer, but its producer
     // still evaluates: calls, getters, and checked reads can have effects
     // or throw. Only trivial operands may disappear.
-    let operand =
-      runtimeOptionalStorageOperand(lowerer, expr.expression) ?? lowerer.lowerExpr(expr.expression);
+    let operand = deferredSlotOr(
+      lowerer,
+      runtimeOptionalStorageOperand(lowerer, expr.expression) ?? lowerer.lowerExpr(expr.expression),
+    );
     if (operand.type.kind === "jsval") {
       return { kind: "jsOp", op: "typeof", args: [operand], type: STRING, loc };
     }
@@ -4137,6 +4139,18 @@ export function lowerUnitComparison(
     // Two unit literals (`undefined === undefined`): statically decided.
     return { kind: "boolLit", value: (other.unit === unit.unit) !== negated, type: BOOL, loc };
   }
+  const slot = lowerer.deferredFieldSlot(other);
+  if (slot) return lowerUnitComparison(lowerer, slot, unit, negated, loc);
+  // A binding the checker narrowed past the unit can still hold it at
+  // runtime when its value came from an unassigned deferred-init field;
+  // the stored tag answers either way.
+  if (
+    other.kind === "unionNarrow" &&
+    other.value.kind === "varRef" &&
+    other.value.type.kind === "union" &&
+    lowerer.armTag(other.value.type.unionId, unit.type) >= 0
+  )
+    return lowerUnitComparison(lowerer, other.value, unit, negated, loc);
   if (other.type.kind === "union") {
     const tag = lowerer.armTag(other.type.unionId, unit.type);
     if (tag < 0) {
@@ -4390,6 +4404,72 @@ function assertedPresenceOperand(lowerer: Lowerer, node: ts.Expression): IrExpr 
   const target = lowerer.mapTypeOf(lowerer.checker.getTypeFromTypeNode(outer.type));
   if (target?.kind !== "union" || typeEquals(target, probe.type)) return probe;
   return checkedClassUnionAssertion(lowerer, probe, target, locOf(outer)) ?? probe;
+}
+
+/** Read-modify-write updates read the member first: an unassigned
+ * deferred-init receiver throws Node's member-read TypeError. */
+function checkDeferredMemberReceiver(
+  lowerer: Lowerer,
+  target: FieldTarget,
+  access: ts.Expression,
+): void {
+  if (
+    target.container !== "class" ||
+    !ts.isPropertyAccessExpression(access) ||
+    target.obj.type.kind !== "object" ||
+    lowerer.deferredFieldSlot(target.obj) === null
+  )
+    return;
+  target.obj =
+    lowerer.runtimeOptionalPropertyReceiver(
+      access.expression,
+      target.obj,
+      target.obj.type,
+      target.field,
+    ) ?? target.obj;
+}
+
+/** Whether evaluating `expr` cannot store anything or run other code:
+ * reads, arithmetic, tests and checked extractions (which at most throw). */
+function writeFree(expr: IrExpr): boolean {
+  switch (expr.kind) {
+    case "numLit":
+    case "strLit":
+    case "boolLit":
+    case "unitLit":
+    case "varRef":
+      return true;
+    case "fieldGet":
+    case "recordGet":
+      return writeFree(expr.obj);
+    case "bin":
+    case "logical":
+      return writeFree(expr.left) && writeFree(expr.right);
+    case "unary":
+    case "toBool":
+      return writeFree(expr.operand);
+    case "ternary":
+      return writeFree(expr.cond) && writeFree(expr.then) && writeFree(expr.else_);
+    case "unionIsTag":
+    case "unionNarrow":
+    case "unionWrap":
+      return writeFree(expr.value);
+    case "libCall":
+      return expr.fn === "error.nodeThrow";
+    default:
+      return false;
+  }
+}
+
+/** The TypeError of a deferred-init field read that finds the field
+ * unassigned where its declared type cannot hold undefined. */
+export const DEFERRED_READ_MESSAGE =
+  "undefined is not representable in the target union (a value narrowed or asserted past it still held it)";
+
+/** The undefined-armed slot behind a checked deferred-init field read, or
+ * the value itself (Lowerer.deferredFieldSlot). */
+function deferredSlotOr(lowerer: Lowerer, value: IrExpr): IrExpr {
+  return lowerer.deferredFieldSlot(value) ?? value;
 }
 
 /** A plain value read that may be runtime-optional: an unchecked element
@@ -7449,10 +7529,12 @@ export function runtimeOptionalStorageOperand(
 /** A presence-test operand: an absence-aware element or field read, an
  * identifier's runtime-optional storage, or the ordinary lowering. */
 export function lowerPresenceOperand(lowerer: Lowerer, node: ts.Expression): IrExpr {
-  return (
+  // An unassigned deferred-init field observes its undefined slot too.
+  return deferredSlotOr(
+    lowerer,
     lowerAbsenceProbe(lowerer, node) ??
-    runtimeOptionalStorageOperand(lowerer, node) ??
-    lowerer.lowerExpr(node)
+      runtimeOptionalStorageOperand(lowerer, node) ??
+      lowerer.lowerExpr(node),
   );
 }
 
@@ -9076,7 +9158,10 @@ export function lowerPrefixUnary(lowerer: Lowerer, expr: ts.PrefixUnaryExpressio
     case ts.SyntaxKind.ExclamationToken: {
       // `!x` is ToBoolean-then-negate: f64/string operands go through toBool.
       const operand = lowerer.ensureBool(
-        runtimeOptionalStorageOperand(lowerer, expr.operand) ?? lowerer.lowerExpr(expr.operand),
+        deferredSlotOr(
+          lowerer,
+          runtimeOptionalStorageOperand(lowerer, expr.operand) ?? lowerer.lowerExpr(expr.operand),
+        ),
         expr.operand,
       );
       return { kind: "unary", op: "!", operand, type: BOOL, loc };
@@ -9258,6 +9343,7 @@ export function lowerIncDec(
       ? lowerer.fieldTarget(access)
       : symbolFieldTarget(lowerer, access);
     if (target && lowerer.dynConvertible(target.fieldType)) {
+      checkDeferredMemberReceiver(lowerer, target, access);
       target.obj = save(target.obj, "%incrementReceiver");
       return finish(lowerer.fieldGetExpr(target, loc, access), (value) =>
         lowerer.fieldSetStmt(
@@ -9862,8 +9948,8 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
     if (nullTest) return nullTest;
     const loose = lowerAbstractEquality(
       lowerer,
-      lowerer.lowerExpr(expr.left),
-      lowerer.lowerExpr(expr.right),
+      deferredSlotOr(lowerer, lowerer.lowerExpr(expr.left)),
+      deferredSlotOr(lowerer, lowerer.lowerExpr(expr.right)),
       op === ts.SyntaxKind.ExclamationEqualsToken,
       loc,
     );
@@ -14561,6 +14647,22 @@ export function fieldGetExpr(
   loc: SrcLoc,
   blame: ts.Node,
 ): IrExpr {
+  // A member read through an unassigned deferred-init field throws Node's
+  // member-read TypeError instead of the generic checked extraction.
+  if (
+    target.container === "class" &&
+    ts.isPropertyAccessExpression(blame) &&
+    target.obj.type.kind === "object" &&
+    lowerer.deferredFieldSlot(target.obj) !== null
+  ) {
+    const checked = lowerer.runtimeOptionalPropertyReceiver(
+      blame.expression,
+      target.obj,
+      target.obj.type,
+      target.field,
+    );
+    if (checked) target = { ...target, obj: checked };
+  }
   if (target.container === "dynamic")
     return lowerer.coerceInto(
       blame,
@@ -14721,6 +14823,36 @@ export function fieldGetExpr(
       target.fieldType.kind === "union"
     ) {
       const inner = lowerer.stripUndefinedArm(target.fieldType);
+      // Reference arms over a stable receiver check inline: the present
+      // arm is a plain projection of the slot, so ordinary reads keep their
+      // borrowed form and only an unassigned slot reaches the throw.
+      const unionId = target.fieldType.unionId;
+      const presentTag = lowerer.armTag(unionId, inner);
+      const undefTag = lowerer.armTag(unionId, UNDEFINED_T);
+      if (
+        inner.kind === "object" &&
+        presentTag >= 0 &&
+        undefTag >= 0 &&
+        lowerer.unions.get(unionId)?.arms.length === 2 &&
+        isSafeToRepeat(read)
+      ) {
+        return {
+          kind: "ternary",
+          cond: {
+            kind: "unionIsTag",
+            unionId,
+            tag: undefTag,
+            negated: false,
+            value: read,
+            type: BOOL,
+            loc,
+          },
+          then: nodeThrowExpr(1, "", DEFERRED_READ_MESSAGE, inner, loc),
+          else_: { kind: "unionNarrow", unionId, tag: presentTag, value: read, type: inner, loc },
+          type: inner,
+          loc,
+        };
+      }
       const helper = lowerer.deferredReadHelper(target.fieldType.unionId, inner, loc);
       if (helper) return { kind: "call", callee: helper, args: [read], type: inner, loc };
     }
@@ -14746,6 +14878,84 @@ export function fieldSetStmt(
   loc: SrcLoc,
   blame: ts.Node,
 ): IrStmt {
+  // A member write through an unassigned deferred-init field: the value
+  // still evaluates first, then the write throws Node's TypeError.
+  const deferredSlot =
+    target.container === "class" &&
+    !(
+      (target.field === "message" || target.field === "name") &&
+      (target.className === "%Error" || lowerer.isSubclassOf(target.className, "%Error"))
+    )
+      ? lowerer.deferredFieldSlot(target.obj)
+      : null;
+  if (target.container === "class" && deferredSlot?.type.kind === "union") {
+    const unionId = deferredSlot.type.unionId;
+    const undefTag = lowerer.armTag(unionId, UNDEFINED_T);
+    const presentTag = lowerer.armTag(unionId, target.obj.type);
+    if (undefTag >= 0 && presentTag >= 0) {
+      // A value that cannot write anything leaves the field unchanged, so
+      // the field is read after it (no snapshot of the slot).
+      const late = isSafeToRepeat(deferredSlot) && writeFree(value);
+      const receiver = late
+        ? null
+        : lowerer.declareHiddenLocal("%deferredWriteObject", deferredSlot.type);
+      const stored = lowerer.declareHiddenLocal("%deferredWriteValue", value.type);
+      const receiverRef = receiver ? varRef(receiver.id, receiver.type, loc) : deferredSlot;
+      const result = varRef(stored.id, stored.type, loc);
+      const write: IrStmt = {
+        kind: "fieldSet",
+        obj: {
+          kind: "unionNarrow",
+          unionId,
+          tag: presentTag,
+          value: receiverRef,
+          type: target.obj.type,
+          loc,
+        },
+        className: target.className,
+        field: target.field,
+        value: result,
+        loc,
+      };
+      return {
+        kind: "exprStmt",
+        expr: {
+          kind: "seqExpr",
+          stmts: [
+            ...(receiver
+              ? [{ kind: "varDecl" as const, localId: receiver.id, init: deferredSlot, loc }]
+              : []),
+            { kind: "varDecl", localId: stored.id, init: value, loc },
+          ],
+          result: {
+            kind: "ternary",
+            cond: {
+              kind: "unionIsTag",
+              unionId,
+              tag: undefTag,
+              value: receiverRef,
+              negated: false,
+              type: BOOL,
+              loc,
+            },
+            then: nodeThrowExpr(
+              1,
+              "",
+              `Cannot set properties of undefined (setting '${target.field}')`,
+              result.type,
+              loc,
+            ),
+            else_: { kind: "seqExpr", stmts: [write], result, type: result.type, loc },
+            type: result.type,
+            loc,
+          },
+          type: result.type,
+          loc,
+        },
+        loc,
+      };
+    }
+  }
   if (target.container === "dynamic")
     return {
       kind: "exprStmt",
@@ -15143,6 +15353,7 @@ function lowerFieldCompoundValue(
   const target = targetOf();
   if (!target)
     lowerer.unsupported("SC1090", access, "compound assignment to unsupported field targets");
+  checkDeferredMemberReceiver(lowerer, target, access);
   target.obj = save(target.obj, "%compoundReceiver");
   // Accessors observe getter, RHS side effects, then setter, all through
   // the saved receiver.

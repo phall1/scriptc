@@ -513,7 +513,13 @@ export function lowerCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr {
       // inspect distinction, per arm), Maps/Sets, plain undefined/null,
       // regexes, symbols, error values, Buffers. Shapes inspect cannot
       // render fence honestly with the reason.
-      return lowerConsoleInspectArg(lowerer, a, lowered, surface, loc);
+      return lowerConsoleInspectArg(
+        lowerer,
+        a,
+        lowerer.deferredFieldSlot(lowered) ?? lowered,
+        surface,
+        loc,
+      );
     });
     return withReceiver({
       kind: "intrinsic",

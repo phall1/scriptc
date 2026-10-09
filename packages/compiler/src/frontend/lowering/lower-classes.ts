@@ -122,6 +122,7 @@ import { lowerObjectFactoryNew } from "./object-factory-new.js";
 import { tryLowerExpression } from "./expressions/try-lower-expression.js";
 import { lowerInstanceConstructorNew } from "./class-instance-constructor.js";
 import { classPrototypeData } from "./class-prototypes.js";
+import { constructionEscape } from "./construction-escapes.js";
 import { checkedClassConstruction, checkedClassConstructionPacked } from "./class-construction.js";
 import { initializeRuntimeStatics, hasRuntimeStatics } from "./class-runtime-statics.js";
 import { reflectedClassStaticMethodValue } from "./class-method-values.js";
@@ -443,6 +444,10 @@ export interface ClassInfo {
    * unassigned read throws the catchable TypeError instead of yielding
    * an undefined the declared type cannot hold (SEMANTICS.md). */
   deferredInitFields?: Set<string>;
+  /** True when construction may hand the instance to other code (a method
+   * call, an argument, a callback, or a base constructor that does) — a
+   * subclass's own fields can then be read before their assignment. */
+  constructionEscapes?: true;
   /** null for the builtin error classes (runtime-provided; no source).
    * Class EXPRESSIONS carry their ts.ClassExpression here — members,
    * accessors, and locs read identically off either form. */
@@ -3383,6 +3388,65 @@ export function collectClassShapeInner(
       );
     }
 
+    // Fields read before their first assignment. Construction that hands
+    // the instance to other code (a method call, an argument, a callback,
+    // a base constructor that does either) before assigning a class-typed
+    // field lets that code read the field while Node still holds
+    // undefined. Such fields take the deferred-init representation, whose
+    // slot (a nullable instance pointer) starts empty and whose reads check
+    // it. Fields assigned before any exposure keep their plain reads.
+    const derived =
+      decl.heritageClauses?.some((clause) => clause.token === ts.SyntaxKind.ExtendsKeyword) ??
+      false;
+    // Generic instances and mixins share layouts across declarations, so
+    // they only report whether construction exposes the instance.
+    const escape: { escapes: boolean; assigned: Set<string> | null } =
+      familyMode || mixin
+        ? { escapes: derived, assigned: null }
+        : constructionEscape({
+            ctor,
+            fields: fieldOrder.flatMap((f) =>
+              paramProps.some((pp) => pp.name === f.name)
+                ? []
+                : [{ name: f.name, initializer: f.initializer }],
+            ),
+            paramProps: paramProps.map((pp) => pp.name),
+            derived,
+            baseEscapes:
+              base === null ||
+              callableBase !== undefined ||
+              factoryBaseExpression !== undefined ||
+              base.constructionEscapes === true,
+            isField: (name) =>
+              fields.has(name) &&
+              !methods.has(`set:${name}`) &&
+              !lowerer.findMethodOn(base, `set:${name}`),
+            privateMethodBody: (call) => {
+              const callee = call.expression;
+              if (!ts.isPropertyAccessExpression(callee)) return null;
+              const name = callee.name.text;
+              const declaration = decl.members.find(
+                (member): member is ts.MethodDeclaration =>
+                  ts.isMethodDeclaration(member) &&
+                  member.body !== undefined &&
+                  (ts.isIdentifier(member.name) || ts.isPrivateIdentifier(member.name)) &&
+                  member.name.text === name,
+              );
+              if (!declaration?.body || declaration.asteriskToken) return null;
+              const modifiers = ts.getModifiers(declaration) ?? [];
+              if (
+                modifiers.some(
+                  (m) =>
+                    m.kind === ts.SyntaxKind.StaticKeyword || m.kind === ts.SyntaxKind.AsyncKeyword,
+                )
+              )
+                return null;
+              const isPrivate =
+                ts.isPrivateIdentifier(declaration.name) ||
+                modifiers.some((m) => m.kind === ts.SyntaxKind.PrivateKeyword);
+              return isPrivate ? declaration.body : null;
+            },
+          });
     // The deferred definite-assignment check: a field on the unguarded
     // list passes only with an unconditional `this.x = ...` at the
     // constructor's TOP LEVEL — the same standard the JS-class path
@@ -3405,7 +3469,7 @@ export function collectClassShapeInner(
         }
       }
       for (const f of unguardedFields) {
-        if (topAssigned.has(f.name)) continue;
+        if (topAssigned.has(f.name) || escape.assigned?.has(f.name)) continue;
         // DEFERRED INITIALIZATION (the Output.initialize idiom —
         // `stream!: T` assigned inside a method the constructor calls):
         // the slot becomes the undefined-armed union — allocation writes
@@ -3436,6 +3500,21 @@ export function collectClassShapeInner(
           continue;
         }
         lowerer.unsupported("SC1090", f.node, f.why);
+      }
+    }
+
+    if (escape.assigned && !inst) {
+      for (const f of fieldOrder) {
+        if (f.redeclared || escape.assigned.has(f.name) || deferredInitFields.has(f.name)) continue;
+        if (paramProps.some((pp) => pp.name === f.name)) continue;
+        const declared = fields.get(f.name);
+        if (declared?.kind !== "object" || lowerer.classes.get(declared.className)?.def.runtime)
+          continue;
+        const armed = lowerer.withUndefinedArm(declared);
+        if (armed === null || armed.kind !== "union") continue;
+        fields.set(f.name, armed);
+        f.type = armed;
+        deferredInitFields.add(f.name);
       }
     }
 
@@ -3856,6 +3935,7 @@ export function collectClassShapeInner(
         ? { classDecorators: { nodes: classDecoratorNodes } }
         : {}),
       ...(deferredInitFields.size > 0 ? { deferredInitFields } : {}),
+      ...(escape.escapes ? { constructionEscapes: true as const } : {}),
     };
     // GENERIC members get their declaring-class backlink now that the
     // info exists (instance lowering reads it for `this` typing and the
