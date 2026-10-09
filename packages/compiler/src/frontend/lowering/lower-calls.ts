@@ -7166,7 +7166,10 @@ function lowerObjectStaticCall(
     ) {
       target = lowerer.coerceToExpected(target, DYN);
     }
-    if (target?.type.kind === "func" && lowerer.dynConvertible(target.type)) {
+    if (
+      (target?.type.kind === "func" || target?.type.kind === "classval") &&
+      lowerer.dynConvertible(target.type)
+    ) {
       const fnName = jsFuncNameOf(call.arguments[0]!, lowerer);
       target = {
         kind: "dynFrom",
