@@ -711,6 +711,33 @@ static inline void scr_str_note_ascii(ScrStr *s) {
   if (s->rc != SIZE_MAX) s->ascii = 1;
 }
 
+/* memcpy for the short, variable-length copies of string construction
+ * (identifiers, keys, number text): fixed-size overlapping moves instead of
+ * a libc call. Longer spans keep the platform's bulk copy. */
+static inline void scr_copy_bytes(char *dst, const char *src, size_t n) {
+  if (n <= 16) {
+    if (n >= 8) {
+      uint64_t a, b;
+      memcpy(&a, src, 8);
+      memcpy(&b, src + n - 8, 8);
+      memcpy(dst, &a, 8);
+      memcpy(dst + n - 8, &b, 8);
+    } else if (n >= 4) {
+      uint32_t a, b;
+      memcpy(&a, src, 4);
+      memcpy(&b, src + n - 4, 4);
+      memcpy(dst, &a, 4);
+      memcpy(dst + n - 4, &b, 4);
+    } else if (n) {
+      dst[0] = src[0];
+      dst[n / 2] = src[n / 2];
+      dst[n - 1] = src[n - 1];
+    }
+    return;
+  }
+  memcpy(dst, src, n);
+}
+
 /* Whether a byte span is all ASCII: 32 bytes per step, stopping at the
  * first chunk with a high bit. */
 static inline bool scr_bytes_all_ascii(const char *p, size_t n) {

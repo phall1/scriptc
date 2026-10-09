@@ -291,13 +291,47 @@ static ScrStr *scr_str_alloc(size_t len, size_t cap) {
   return s;
 }
 
+/* scr_copy_bytes that also reports whether the bytes are all ASCII. Short
+ * spans test the words they already moved; longer ones scan after the bulk
+ * copy, stopping at the first non-ASCII chunk. */
+static bool scr_copy_bytes_ascii(char *dst, const char *src, size_t n) {
+  const uint64_t high = UINT64_C(0x8080808080808080);
+  if (n <= 16) {
+    if (n >= 8) {
+      uint64_t a, b;
+      memcpy(&a, src, 8);
+      memcpy(&b, src + n - 8, 8);
+      memcpy(dst, &a, 8);
+      memcpy(dst + n - 8, &b, 8);
+      return ((a | b) & high) == 0;
+    }
+    if (n >= 4) {
+      uint32_t a, b;
+      memcpy(&a, src, 4);
+      memcpy(&b, src + n - 4, 4);
+      memcpy(dst, &a, 4);
+      memcpy(dst + n - 4, &b, 4);
+      return ((a | b) & UINT32_C(0x80808080)) == 0;
+    }
+    if (n == 0) return true;
+    unsigned char c0 = (unsigned char)src[0], c1 = (unsigned char)src[n / 2],
+                  c2 = (unsigned char)src[n - 1];
+    dst[0] = (char)c0;
+    dst[n / 2] = (char)c1;
+    dst[n - 1] = (char)c2;
+    return ((c0 | c1 | c2) & 0x80) == 0;
+  }
+  memcpy(dst, src, n);
+  return scr_bytes_all_ascii(src, n);
+}
+
 ScrStr *scr_str_new(const char *bytes, size_t len) {
   ScrStr *s = scr_str_alloc(len, len);
-  memcpy(s->data, bytes, len);
+  /* Proving ASCII while copying lets every later UTF-16 index, length and
+   * slice skip the index cache. */
+  bool ascii = scr_copy_bytes_ascii(s->data, bytes, len);
   s->data[len] = '\0';
-  /* The copy already streams the bytes; proving ASCII here lets every later
-   * UTF-16 index, length and slice skip the index cache. */
-  if (scr_bytes_all_ascii(bytes, len)) s->ascii = 1;
+  s->ascii = ascii;
   return s;
 }
 
@@ -305,7 +339,7 @@ ScrStr *scr_str_new(const char *bytes, size_t len) {
  * string): no scan. */
 static ScrStr *scr_str_new_ascii(const char *bytes, size_t len) {
   ScrStr *s = scr_str_alloc(len, len);
-  memcpy(s->data, bytes, len);
+  scr_copy_bytes(s->data, bytes, len);
   s->data[len] = '\0';
   s->ascii = 1;
   return s;
@@ -364,7 +398,9 @@ void scr_str_release(ScrStr *s) {
   if (!s || s->rc == SIZE_MAX) return; /* NULL: an uninitialized `let` local */
   if (--s->rc == 0) {
     scr_short_forget(s);
-    scr_sidx_purge(s); /* the address may be recycled by the next malloc */
+    /* The address may be recycled by the next malloc. A proven-ASCII string
+     * owns no index entry (scr_sidx_finish). */
+    if (!s->ascii) scr_sidx_purge(s);
 #ifdef SCR_RC_AUDIT
     scr_live_strings--;
 #endif
@@ -395,7 +431,7 @@ ScrStr *scr_str_concat(ScrStr *a, ScrStr *b) {
     size_t oldlen = a->len;
     scr_short_forget(a);
     scr_str_hash_forget(a);
-    memcpy(a->data + a->len, b->data, b->len);
+    scr_copy_bytes(a->data + a->len, b->data, b->len);
     a->len = newlen;
     a->data[newlen] = '\0';
     a->ascii = ascii;
@@ -427,8 +463,8 @@ ScrStr *scr_str_concat(ScrStr *a, ScrStr *b) {
   if (newcap > SCR_STR_MAX_CAP && newlen <= SCR_STR_MAX_CAP) newcap = SCR_STR_MAX_CAP;
   ScrStr *s = scr_str_take_spare(newlen);
   if (!s) s = scr_str_alloc(newlen, newcap);
-  memcpy(s->data, a->data, a->len);
-  memcpy(s->data + a->len, b->data, b->len);
+  scr_copy_bytes(s->data, a->data, a->len);
+  scr_copy_bytes(s->data + a->len, b->data, b->len);
   s->data[newlen] = '\0';
   s->ascii = ascii;
   return s;
@@ -483,11 +519,11 @@ ScrStr *scr_str_concat_mixed(ScrStr *head, ScrStr *const *parts, const double *n
     if (newcap > SCR_STR_MAX_CAP) newcap = SCR_STR_MAX_CAP;
     out = scr_str_take_spare(newlen);
     if (!out) out = scr_str_alloc(newlen, newcap);
-    if (base) memcpy(out->data, head->data, base);
+    if (base) scr_copy_bytes(out->data, head->data, base);
     at = base;
   }
   for (size_t i = 0; i < count; i++) {
-    memcpy(out->data + at, parts[i] ? parts[i]->data : text[i], lens[i]);
+    scr_copy_bytes(out->data + at, parts[i] ? parts[i]->data : text[i], lens[i]);
     at += lens[i];
   }
   out->len = newlen;
@@ -525,7 +561,7 @@ ScrStr *scr_str_concat_parts(ScrStr *const *parts, size_t count) {
   bool ascii = true;
   for (size_t i = 0; i < count; i++) {
     const ScrStr *part = parts[i];
-    memcpy(out->data + offset, part->data, part->len);
+    scr_copy_bytes(out->data + offset, part->data, part->len);
     offset += part->len;
     ascii &= part->ascii;
   }
@@ -845,11 +881,21 @@ static void scr_sidx_rebuild_points(const ScrStr *s, ScrSidx *e) {
   e->points_complete = true;
 }
 
+/* Completing a scan that proves a heap string ASCII records the fact in its
+ * header and drops the entry: a proven-ASCII string never owns one (every
+ * mapper answers it by identity first, and a release of it skips the
+ * purge). Callers re-check the header bit before touching the entry again.
+ * Immortal strings cannot record the bit and keep the entry. */
 static void scr_sidx_finish(const ScrStr *s, ScrSidx *e) {
   if (e->indexed_cb != s->len) return;
   e->u16len = e->indexed_cu;
   if (e->u16len == s->len) { /* proven all ASCII: identity needs no index */
-    scr_str_note_ascii((ScrStr *)s);
+    if (s->rc != SIZE_MAX) {
+      ((ScrStr *)s)->ascii = 1;
+      bool sparse = (uintptr_t)e - (uintptr_t)scr_sidx_sparse_tab < sizeof scr_sidx_sparse_tab;
+      scr_sidx_clear(e, sparse ? &scr_sidx_sparse_live : NULL);
+      return;
+    }
     free(e->points);
     e->points = NULL;
     e->npoints = 0;
@@ -897,7 +943,7 @@ static size_t scr_sidx_len(const ScrStr *s, ScrSidx *e) {
   if (e->u16len != SCR_U16_UNKNOWN) return e->u16len;
   while (e->indexed_cb < s->len) scr_sidx_extend_one(s, e);
   scr_sidx_finish(s, e);
-  return e->u16len;
+  return s->ascii ? s->len : e->u16len;
 }
 
 /* Step the cursor back one char (cb must be > 0 and on a boundary). */
@@ -1040,7 +1086,7 @@ static size_t scr_u16_to_byte_c(const ScrStr *s, ScrSidx *e, size_t u16,
   scr_sidx_extend_to_u16(s, e, u16);
   /* Extending a far-end lookup can just have proved identity. Do not
    * materialize an index that the identity fast path will never consult. */
-  if (e->u16len == s->len) {
+  if (s->ascii || e->u16len == s->len) {
     *mid = false;
     return u16 < s->len ? u16 : s->len;
   }
@@ -1108,7 +1154,7 @@ static size_t scr_byte_to_u16_c(const ScrStr *s, ScrSidx *e,
   }
   /* As above, a completed all-ASCII scan is its own index. In particular,
    * do not rebuild points that scr_sidx_finish() deliberately discarded. */
-  if (e->u16len == s->len) return byte_off;
+  if (s->ascii || e->u16len == s->len) return byte_off;
   scr_sidx_materialize_identity_prefix(s, e);
   ScrSidxPoint near = scr_sidx_near_byte(s, e, byte_off);
   size_t cu = near.cu, cb = near.cb;

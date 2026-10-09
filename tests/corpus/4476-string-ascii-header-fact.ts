@@ -94,6 +94,17 @@ probe("join-bmp", ["ab", "\u00e9", "cb"].join("-"));
 const pieces = "abcdefgh,b\u00e9cdefgh,abcdefgb".split(",");
 for (const p of pieces) console.log("piece", p.length, p.charCodeAt(1), p.charCodeAt(p.length - 1), codes(p));
 
+// Builder-made strings (join, JSON.stringify) are proven ASCII by their
+// first read, then appended in place with non-ASCII text and read again.
+let built = ["ab", "cd", "ef", String(n)].join("");
+console.log("built", built.length, built.charCodeAt(4), built.indexOf("7"), built.slice(2, 5));
+built += "\u00e9" + built;
+console.log("built+bmp", built.length, built.charCodeAt(7), built.charCodeAt(8), built.lastIndexOf("e"), built.slice(5, 9));
+let json = JSON.stringify({ k: [1, 2, 3], s: "x" });
+console.log("json", json.length, json.charCodeAt(2), json.indexOf("s"));
+json += "\u{1F600}";
+console.log("json+astral", json.length, json.charCodeAt(json.length - 2), json.charCodeAt(json.length - 1), json.slice(-4));
+
 // Interleaved reads of several receivers (index cache residency).
 const a1 = "alpha\u00e9" + String(n);
 const a2 = "beta" + String(n);

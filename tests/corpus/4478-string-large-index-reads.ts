@@ -73,3 +73,13 @@ console.log("big+bmp", big.length, big.charCodeAt(big.length - 3), big.charCodeA
 big += "\u{1F600}";
 console.log("big+astral", big.length, big.charCodeAt(big.length - 2), big.charCodeAt(big.length - 1), big.indexOf("\u00e9"));
 summary("big", big);
+
+// A large builder-made string proven ASCII by its length, then appended in
+// place: the proof must not survive the append.
+const rows: number[][] = [];
+for (let i = 0; i < 5000; i++) rows.push([i, i * 2, i % 7]);
+let doc = JSON.stringify(rows);
+console.log("doc", doc.length, doc.charCodeAt(doc.length - 1), doc.indexOf("[4999"));
+doc += "\u00e9\u{1F600}";
+console.log("doc+", doc.length, doc.charCodeAt(doc.length - 3), doc.charCodeAt(doc.length - 2), doc.charCodeAt(doc.length - 1), doc.slice(-8));
+summary("doc", doc);
