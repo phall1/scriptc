@@ -15467,6 +15467,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/4477-buffer-write-ascii-runs.ts": {
+   "order": [
+    "<repo>/tests/corpus/4477-buffer-write-ascii-runs.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/4478-string-large-index-reads.ts": {
    "order": [
     "<repo>/tests/corpus/4478-string-large-index-reads.ts"
