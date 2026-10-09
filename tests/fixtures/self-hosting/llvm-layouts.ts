@@ -6,6 +6,9 @@ import { emitLlvmLayouts } from "../../../packages/compiler/src/backend/llvm/lay
 import { LlvmDebugInfo } from "../../../packages/compiler/src/backend/llvm/debug-info.js";
 import { LlWalkers, type WalkerHost } from "../../../packages/compiler/src/backend/llvm/walkers.js";
 import { BlockBuilder } from "../../../packages/compiler/src/backend/llvm/blocks.js";
+import { NULLABLE_ABSENT, NullableUnions } from "../../../packages/compiler/src/backend/llvm/nullable-unions.js";
+import { emitFieldAbsentTest } from "../../../packages/compiler/src/backend/llvm/common.js";
+import { undefinedArmTag } from "../../../packages/compiler/src/ir/analysis.js";
 import { f64Lit } from "../../../packages/compiler/src/backend/llvm/common.js";
 import { mangleClassObj } from "../../../packages/compiler/src/backend/mangle.js";
 import { type IrType } from "../../../packages/compiler/src/ir/ir.js";
@@ -30,6 +33,8 @@ try {
   let needsOom = false;
   let needsBadTag = false;
   const traced = computeTraced(mod);
+  const nullableUnions = new NullableUnions(mod);
+  const unionsById = new Map((mod.unions ?? []).map((union) => [union.id, union]));
   const host: ClassHost & WalkerHost = {
     declare: (decl) => { declarations.add(decl); },
     needOom: () => { needsOom = true; },
@@ -46,7 +51,8 @@ try {
     recordsById: new Map((mod.records ?? []).map((record) => [record.id, record])),
     // emitLlvmModule enables the inline allocator for 64-bit host targets.
     inlineAlloc: request.bits === 64,
-    unionsById: new Map((mod.unions ?? []).map((union) => [union.id, union])),
+    unionsById,
+    nullableUnions,
     recordCloneShapes: new Set(request.clones),
     rcHelpers: null,
     unitInstanceRef: (union, tag) => {
@@ -56,6 +62,13 @@ try {
         units.push({ union, tag });
       }
       return `@native_unit_${index}`;
+    },
+    // Mirrors the emitter: a nullable slot's ABSENT state is the sentinel.
+    fieldAbsentTestIn: (B, value, unionId) => {
+      if (!nullableUnions.has(unionId)) return emitFieldAbsentTest(B, value, undefinedArmTag({ kind: "union", unionId }, unionsById));
+      const absent = B.tmp();
+      B.line(`${absent} = icmp eq ptr ${value}, ${NULLABLE_ABSENT}`);
+      return absent;
     },
     cstr: (text) => {
       let index = strings.indexOf(text);
