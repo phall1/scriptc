@@ -1,4 +1,4 @@
-import { dynUndefinedExpr, boolLit, numLit, strLit, varRef } from "../../ir/build.js";
+import { dynUndefinedExpr, boolLit, helperLoc, numLit, strLit, varRef } from "../../ir/build.js";
 import { InternalCompilerError } from "../../errors.js";
 /* The node:util inspect/format lowering (a spoke module like
  * lower-assert.ts): STATIC util.inspect — one synthesized traversal
@@ -1207,11 +1207,12 @@ function formatUnionHelper(
   lowerer: Lowerer,
   t: IrType & { kind: "union" },
   depth: number,
-  loc: SrcLoc,
+  site: SrcLoc,
 ): string {
   const key = `fmtv:${typeKey(t)}:${depth}`;
   const existing = lowerer.inspectHelpers.get(key);
   if (existing) return existing;
+  const loc = helperLoc(site);
   const name = `%util.fmtv.${lowerer.inspectHelpers.size}`;
   lowerer.inspectHelpers.set(key, name);
   const def = lowerer.unions.get(t.unionId);

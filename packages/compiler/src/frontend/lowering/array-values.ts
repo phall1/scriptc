@@ -1,5 +1,5 @@
 import { InternalCompilerError } from "../../errors.js";
-import { dynUndefinedExpr, varRef } from "../../ir/build.js";
+import { dynUndefinedExpr, helperLoc, varRef } from "../../ir/build.js";
 import {
   BOOL,
   F64,
@@ -193,6 +193,7 @@ export function lowerSafeIndexRead(
   const key = `idxOr:${typeKey(elem)}`;
   let name = lowerer.arrHofHelpers.get(key);
   if (!name) {
+    const at = helperLoc(loc);
     name = `%arr.idxOr.${lowerer.arrHofHelpers.size}`;
     lowerer.arrHofHelpers.set(key, name);
     const arrT = arr.type;
@@ -210,17 +211,11 @@ export function lowerSafeIndexRead(
       body: [
         {
           kind: "return",
-          value: arrayValueRead(
-            lowerer,
-            varRef("a.0", arrT, loc),
-            varRef("i.0", F64, loc),
-            elem,
-            loc,
-          ),
-          loc,
+          value: arrayValueRead(lowerer, varRef("a.0", arrT, at), varRef("i.0", F64, at), elem, at),
+          loc: at,
         },
       ],
-      loc,
+      loc: at,
     });
   }
   return { kind: "call", callee: name, args: [arr, index], type: resultT, loc };
@@ -244,22 +239,23 @@ export function lowerSafeBytesRead(
   const key = `bytesIdxOr:${typeKey(bytesT)}`;
   let name = lowerer.arrHofHelpers.get(key);
   if (!name) {
+    const at = helperLoc(loc);
     name = `%bytes.idxOr.${lowerer.arrHofHelpers.size}`;
     lowerer.arrHofHelpers.set(key, name);
-    const b = varRef("b.0", bytesT, loc);
-    const i = varRef("i.0", F64, loc);
+    const b = varRef("b.0", bytesT, at);
+    const i = varRef("i.0", F64, at);
     const cmp = (op: "<" | ">=" | "===", left: IrExpr, right: IrExpr): IrExpr => ({
       kind: "bin",
       op,
       left,
       right,
       type: BOOL,
-      loc,
+      loc: at,
     });
     const inRange: IrExpr = {
       kind: "logical",
       op: "&&",
-      left: cmp(">=", i, { kind: "numLit", value: 0, type: F64, loc }),
+      left: cmp(">=", i, { kind: "numLit", value: 0, type: F64, loc: at }),
       right: {
         kind: "logical",
         op: "&&",
@@ -269,14 +265,14 @@ export function lowerSafeBytesRead(
           receiver: b,
           args: [],
           type: F64,
-          loc,
+          loc: at,
         }),
-        right: cmp("===", { kind: "libCall", fn: "math.trunc", args: [i], type: F64, loc }, i),
+        right: cmp("===", { kind: "libCall", fn: "math.trunc", args: [i], type: F64, loc: at }, i),
         type: BOOL,
-        loc,
+        loc: at,
       },
       type: BOOL,
-      loc,
+      loc: at,
     };
     const read: IrExpr = {
       kind: "bytesIntrinsic",
@@ -284,7 +280,7 @@ export function lowerSafeBytesRead(
       receiver: b,
       args: [i],
       type: F64,
-      loc,
+      loc: at,
     };
     lowerer.liftedFns.push({
       name,
@@ -304,14 +300,14 @@ export function lowerSafeBytesRead(
             kind: "ternary",
             cond: inRange,
             then: lowerer.coerceToExpected(read, resultT),
-            else_: lowerer.wrappedUndefined(resultT, loc)!,
+            else_: lowerer.wrappedUndefined(resultT, at)!,
             type: resultT,
-            loc,
+            loc: at,
           },
-          loc,
+          loc: at,
         },
       ],
-      loc,
+      loc: at,
     });
   }
   return { kind: "call", callee: name, args: [receiver, index], type: resultT, loc };
