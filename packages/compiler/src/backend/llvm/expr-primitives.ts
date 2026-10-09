@@ -10,7 +10,7 @@ import type { LlvmEmitterContext, ExprOf, LlValue } from "./expr-context.js";
 import { BYTES_ELEM_NUM, closureIdentityEqual, f64Lit } from "./common.js";
 import { emitStringInputs } from "./string-lifetimes.js";
 import { emitStringParts, numberPart, stringParts } from "./string-construction.js";
-import { emitBorrowedInput, emitBorrowedInputs } from "./borrowed-inputs.js";
+import { emitBorrowedInputs } from "./borrowed-inputs.js";
 import { exactInteger, widenInteger, integerNumber } from "./integer-values.js";
 import { integerArithmeticRange } from "../../ir/integer-ranges.js";
 import { emitArrayValues } from "./expr-containers.js";
@@ -709,7 +709,9 @@ export function emitContainerExpr(
       return out;
     }
     case "arrayGet": {
-      const arr = emitBorrowedInput(host, e.arr);
+      // Element reads run no user code: a projection receiver (an array in
+      // a parameter's field) stays rooted while the index preserves edges.
+      const arr = host.emitStableReceiver(e.arr, [e.index]);
       const idx = host.emitExpr(e.index);
       if (e.arr.type.kind !== "array")
         throw new InternalCompilerError("llvm emitter bug: arrayGet on non-array");
@@ -730,7 +732,7 @@ export function emitContainerExpr(
       return host.own({ name: t, type: e.type });
     }
     case "arrayHas": {
-      const arr = emitBorrowedInput(host, e.arr);
+      const arr = host.emitStableReceiver(e.arr, [e.index]);
       const idx = host.emitExpr(e.index);
       if (e.arr.type.kind !== "array")
         throw new InternalCompilerError("llvm emitter bug: arrayHas on non-array");
@@ -738,7 +740,7 @@ export function emitContainerExpr(
       return { name: t, type: e.type };
     }
     case "arrayState": {
-      const arr = emitBorrowedInput(host, e.arr);
+      const arr = host.emitStableReceiver(e.arr, [e.index]);
       const idx = host.emitExpr(e.index);
       if (e.arr.type.kind !== "array")
         throw new InternalCompilerError("llvm emitter bug: arrayState on non-array");
