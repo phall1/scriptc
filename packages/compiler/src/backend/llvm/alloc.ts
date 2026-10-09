@@ -21,12 +21,12 @@
  * otherwise). Blocks outside the reservation (system fallbacks) go back
  * through scr_rt_free.
  *
- * Inlining is limited to the targets where the allocator can be live and
- * its state is a process global: 64-bit, not WASI, not Windows, and not
- * thread-instanced libraries or worker programs (whose runtime state,
- * including scr_cyc_live and scr_weak_dispose_hook, is thread-local and
- * whose allocator is compiled out). Elsewhere the out-of-line calls
- * remain. */
+ * Inlining is limited to the targets where the allocator can be live: 64-bit,
+ * not WASI, not Windows, and not thread-instanced libraries (whose
+ * allocator is compiled out). Worker programs inline too, against the
+ * thread-local allocator state, live count and dispose hook of the calling
+ * script thread (each thread owns an arena; see scr_runtime.h). Elsewhere
+ * the out-of-line calls remain. */
 
 /** The emitter surface this module needs (a subset of ShapeHost). */
 export interface AllocHost {
@@ -38,6 +38,36 @@ export interface AllocHost {
   /** Emit the RC-audit object notes on the out-of-line paths (ShapeHost
    * objectAudit: only --sanitize builds count them). Absent means emit. */
   readonly objectAudit?: boolean;
+  /** The allocator state, live count and dispose hook are thread-local
+   * (worker executables). */
+  readonly threadLocalAlloc?: boolean;
+}
+
+const STATE_GLOBALS: readonly [global: string, type: string][] = [
+  ["@scr_sa", "{ i64, i64, i32, [32 x ptr], [32 x ptr], [32 x ptr] }"],
+  ["@scr_cyc_live", "i64"],
+  ["@scr_cyc_old_freed", "i64"],
+  ["@scr_weak_dispose_hook", "ptr"],
+];
+
+/** Worker executables: address each thread-local state global once through
+ * llvm.threadlocal.address (which LLVM can share across a function) and
+ * rewrite the lines to use those addresses. */
+function threadLocalState(host: AllocHost, prefix: string, lines: string[]): string[] {
+  if (host.threadLocalAlloc !== true) return lines;
+  const preamble: string[] = [];
+  let text = lines.join("\n");
+  for (const [global, type] of STATE_GLOBALS) {
+    if (!text.includes(`ptr ${global}`)) continue;
+    const local = `%${prefix}.tl.${global.slice(5)}`;
+    host.declare(`${global} = external thread_local global ${type}`);
+    host.declare(`declare nonnull ptr @llvm.threadlocal.address.p0(ptr nonnull)`);
+    preamble.push(`  ${local} = call ptr @llvm.threadlocal.address.p0(ptr ${global})`);
+    text = text
+      .replaceAll(`ptr ${global},`, `ptr ${local},`)
+      .replaceAll(`ptr ${global}`, `ptr ${local}`);
+  }
+  return [...preamble, ...text.split("\n")];
 }
 
 const ALLOC_NOTE = `  call void @scr_obj_alloc_note()`;
@@ -74,8 +104,12 @@ const SA_MAX = 512;
 const CYC_HDR = 32;
 
 function declareState(host: AllocHost): void {
-  host.declare(`@scr_sa = external global ${SA_TYPE}`);
+  if (host.threadLocalAlloc !== true) host.declare(`@scr_sa = external global ${SA_TYPE}`);
   host.declare(`declare i1 @llvm.expect.i1(i1, i1)`);
+}
+
+function declareGlobal(host: AllocHost, decl: string): void {
+  if (host.threadLocalAlloc !== true) host.declare(decl);
 }
 
 /** A collector header to install: the object's trace and teardown. */
@@ -99,7 +133,7 @@ export function emitObjectAlloc(
   cyc: CycHeader | null,
   stored = 8,
 ): string[] {
-  const lines = allocLines(host, size, cyc, stored);
+  const lines = threadLocalState(host, "sa", allocLines(host, size, cyc, stored));
   if (host.objectAudit === false) return lines.filter((line) => line !== ALLOC_NOTE);
   host.declare(`declare void @scr_obj_alloc_note()`);
   return lines;
@@ -181,7 +215,7 @@ function allocLines(
   host.declare(`declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)`);
   if (cyc) {
     host.declare(`declare ptr @scr_cyc_alloc(${S}, ptr, ptr)`);
-    host.declare(`@scr_cyc_live = external global i64`);
+    declareGlobal(host, `@scr_cyc_live = external global i64`);
     lines.push(
       `sa.fast:`,
       `  %sa.blk = phi ptr [ %sa.b, %sa.pop ], [ %sa.p, %sa.carve ]`,
@@ -231,7 +265,7 @@ function allocLines(
  * Labels use the `sf.` prefix; the lines end in an open block.
  */
 export function emitObjectFree(host: AllocHost, cyc: boolean): string[] {
-  const lines = freeLines(host, cyc);
+  const lines = threadLocalState(host, "sf", freeLines(host, cyc));
   if (host.objectAudit === false) return lines.filter((line) => line !== FREE_NOTE);
   host.declare(`declare void @scr_obj_free_note()`);
   return lines;
@@ -253,7 +287,7 @@ function freeLines(host: AllocHost, cyc: boolean): string[] {
   }
   declareState(host);
   host.declare(`declare void @scr_rt_free(ptr)`);
-  host.declare(`@scr_weak_dispose_hook = external global ptr`);
+  declareGlobal(host, `@scr_weak_dispose_hook = external global ptr`);
   const lines = [
     `  %sf.hook = load ptr, ptr @scr_weak_dispose_hook`,
     `  %sf.has = icmp ne ptr %sf.hook, null`,
@@ -265,8 +299,8 @@ function freeLines(host: AllocHost, cyc: boolean): string[] {
     `sf.block:`,
   ];
   if (cyc) {
-    host.declare(`@scr_cyc_live = external global i64`);
-    host.declare(`@scr_cyc_old_freed = external global i64`);
+    declareGlobal(host, `@scr_cyc_live = external global i64`);
+    declareGlobal(host, `@scr_cyc_old_freed = external global i64`);
     lines.push(
       `  %sf.live = load i64, ptr @scr_cyc_live`,
       `  %sf.live1 = sub i64 %sf.live, 1`,

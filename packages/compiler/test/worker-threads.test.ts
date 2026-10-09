@@ -157,7 +157,7 @@ test("worker programs refuse foreign callbacks and guard byte-pointer FFI calls"
   }
 });
 
-test("worker programs keep thread-local allocator and async state behind runtime calls", async () => {
+test("worker programs inline the thread-local allocator and keep async state behind runtime calls", async () => {
   const source =
     worker +
     `
@@ -176,11 +176,13 @@ settle().then((value) => console.log(value));
   expect(result.ok, JSON.stringify(result)).toBe(true);
   if (result.ok) {
     const llvm = await readFile(request.outPath, "utf8");
-    // scr_cyc_live and scr_weak_dispose_hook are thread-local in worker
-    // runtimes, and their small-object allocator is compiled out.
-    expect(llvm).not.toContain("@scr_sa");
-    expect(llvm).not.toContain("@scr_cyc_live");
-    expect(llvm).not.toContain("@scr_weak_dispose_hook");
+    // Worker runtimes keep one small-object allocator per script thread:
+    // the inline paths address its state, live count and dispose hook as
+    // thread-locals.
+    expect(llvm).toContain("@scr_sa = external thread_local global");
+    expect(llvm).toContain("@scr_weak_dispose_hook = external thread_local global ptr");
+    expect(llvm).not.toMatch(/@scr_(sa|cyc_live|weak_dispose_hook) = external global/);
+    expect(llvm).toContain("call ptr @llvm.threadlocal.address.p0(ptr @scr_sa)");
     // Worker fibers own context termination; no fiberless async frames.
     expect(llvm).not.toContain("@scr_async_inline_enter");
   }

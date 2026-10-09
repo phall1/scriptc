@@ -852,11 +852,11 @@ export class LlEmitter {
         pointerBits: options.pointerBits,
         wasi: options.wasi,
         targetTriple: options.targetTriple,
-        // Worker programs (SCR_WORKERS) make scr_cyc_live and
-        // scr_weak_dispose_hook thread-local and compile the allocator out,
-        // exactly like thread-instanced libraries.
-        threadInstances: mod.lib?.threadInstances === true || mod.workers === true,
+        threadInstances: mod.lib?.threadInstances === true,
       }),
+      // Worker programs keep one allocator per script thread: the inline
+      // paths address its thread-local state.
+      threadLocalAlloc: mod.workers === true,
       rcHelpers: this.rcHelpers,
       unionsById: this.unionsById,
       declare: (decl) => this.declare(decl),

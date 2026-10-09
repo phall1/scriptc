@@ -459,15 +459,27 @@ void scr_cyc_free(void *obj); /* frees the block, header included */
  * Compiled to the plain system calls under SCR_RC_AUDIT and AddressSanitizer
  * (the audit lane must see every logical free as a real free), on targets
  * without a cheap address-space reservation (wasm32, Windows, 32-bit), and
- * in thread-instanced library archives and worker executables (SCR_WORKERS),
- * where several runtime instances run on their own threads and would race
- * on, or strand each other's, free lists. Elsewhere the allocator state is
- * process-global and unsynchronized: runtime objects are only allocated and
- * freed on the runtime thread (native worker jobs never touch them). */
+ * in thread-instanced library archives, where several runtime instances
+ * run on embedder threads the runtime does not manage. Elsewhere the
+ * allocator state is unsynchronized: runtime objects are only allocated
+ * and freed on their runtime thread (native worker jobs never touch them).
+ *
+ * Worker executables (SCR_WORKERS) give every script thread its own
+ * allocator: `scr_sa` is thread-local and describes the thread's ARENA, one
+ * of SCR_SA_ARENAS equal slices of a single process-wide reservation, so
+ * the owning arena of any block is address arithmetic. A thread claims an
+ * arena on its first allocation and parks it (free lists and bump pointers
+ * intact, memory never unmapped) when it exits; the next thread to claim
+ * it continues from there. Script objects stay on their thread, so a free
+ * normally hits the caller's own arena inline. A block freed by another
+ * thread goes to the owning arena's lock-free remote list, which the owner
+ * drains on its slow path; published (immortal) objects are never freed,
+ * so they stay valid after their allocating thread exits. Threads beyond
+ * SCR_SA_ARENAS, or a refused reservation, use the system allocator. */
 #include <stdlib.h>
 #if defined(SCR_RC_AUDIT) || defined(__SANITIZE_ADDRESS__) || defined(__wasi__) || \
     defined(__wasm__) || defined(_WIN32) || UINTPTR_MAX != UINT64_MAX ||              \
-    (defined(SCR_LIB) && defined(SCR_THREAD_INSTANCES)) || defined(SCR_WORKERS)
+    (defined(SCR_LIB) && defined(SCR_THREAD_INSTANCES))
 #define SCR_SMALL_ALLOC 0
 #elif defined(__has_feature)
 #if __has_feature(address_sanitizer)
@@ -513,7 +525,14 @@ typedef struct ScrSaState {
   ScrSaBlock *free[SCR_SA_NCLASS];
   char *bump[SCR_SA_NCLASS], *lim[SCR_SA_NCLASS];
 } ScrSaState;
-extern ScrSaState scr_sa;
+/* Worker executables keep one allocator per script thread (see above); the
+ * emitted fast paths then address `scr_sa` as a thread-local. */
+#ifdef SCR_WORKERS
+#define SCR_SA_TL _Thread_local
+#else
+#define SCR_SA_TL
+#endif
+extern SCR_SA_TL ScrSaState scr_sa;
 #if UINTPTR_MAX == UINT64_MAX
 _Static_assert(offsetof(ScrSaState, span) == 8 && offsetof(ScrSaState, shift) == 16 &&
                    offsetof(ScrSaState, free) == 24 && offsetof(ScrSaState, bump) == 280 &&
@@ -522,6 +541,17 @@ _Static_assert(offsetof(ScrSaState, span) == 8 && offsetof(ScrSaState, shift) ==
 #endif
 #if defined(SCR_RC_AUDIT) && SCR_SMALL_ALLOC
 #error "emitted allocation fast paths skip the RC-audit object notes"
+#endif
+
+#ifdef SCR_WORKERS
+/* A block outside the calling thread's arena: another arena's (remote
+ * free) or the system's. */
+void scr_sa_free_foreign(void *p);
+/* The calling script thread is done with its arena (worker exit). */
+void scr_sa_thread_park(void);
+#define SCR_SA_FREE_FOREIGN(p) scr_sa_free_foreign(p)
+#else
+#define SCR_SA_FREE_FOREIGN(p) free(p)
 #endif
 
 #if SCR_SMALL_ALLOC
@@ -560,7 +590,7 @@ static inline void scr_mem_free(void *p) {
     scr_sa.free[c] = b;
     return;
   }
-  free(p);
+  SCR_SA_FREE_FOREIGN(p);
 }
 #else
 static inline void *scr_mem_alloc(size_t n) { return malloc(n); }
