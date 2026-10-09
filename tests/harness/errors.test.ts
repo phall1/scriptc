@@ -186,6 +186,89 @@ console.log("sync done");
   });
 });
 
+// `x as Sub` on a class value is a CHECKED downcast, and `x!` / `u as Arm`
+// on a union value is a checked extraction: a stored value outside the
+// target throws a catchable TypeError where Node's erasure would let the
+// value flow on. The type and message are scriptc's contract (corpus 4432
+// pins the Node-observable part: the failure is a TypeError raised before
+// any later read). Plain operands are tested inline at the use and call
+// operands through the interned helper; both must fail identically.
+describe("checked class downcasts and extractions", () => {
+  test("failed downcasts throw the TypeError naming the target class", async () => {
+    const r = await compileAndRun(
+      "checked-downcast-messages",
+      `class Base {
+  kind = 0;
+}
+class Sub extends Base {
+  text = "sub";
+}
+class Other {
+  tag = "other";
+}
+function direct(b: Base): string {
+  return (b as Sub).text;
+}
+function optional(b: Base | undefined): string {
+  return (b as Sub).text;
+}
+function mixed(v: Base | Other): string {
+  return (v as Sub).text;
+}
+function make(b: Base | undefined): Base | undefined {
+  return b;
+}
+function called(b: Base | undefined): string {
+  return (make(b) as Sub).text;
+}
+function asserted(b: Base | undefined): number {
+  return b!.kind;
+}
+function assertedCall(b: Base | undefined): number {
+  return make(b)!.kind;
+}
+const runs: Array<() => unknown> = [
+  () => direct(new Sub()),
+  () => direct(new Base()),
+  () => optional(undefined),
+  () => optional(new Base()),
+  () => mixed(new Other()),
+  () => called(new Base()),
+  () => called(undefined),
+  () => asserted(new Base()),
+  () => asserted(undefined),
+  () => assertedCall(undefined),
+];
+for (const run of runs) {
+  try {
+    console.log("ok", run());
+  } catch (e) {
+    console.log(e instanceof TypeError, String(e));
+  }
+}
+direct(new Base());
+`,
+    );
+    expect(r.stdout).toBe(
+      [
+        "ok sub",
+        "true TypeError: Value is not an instance of 'Sub'",
+        "true TypeError: Value is not an instance of 'Sub'",
+        "true TypeError: Value is not an instance of 'Sub'",
+        "true TypeError: Value is not an instance of 'Sub'",
+        "true TypeError: Value is not an instance of 'Sub'",
+        "true TypeError: Value is not an instance of 'Sub'",
+        "ok 0",
+        "true TypeError: undefined is not representable in the target union (a value narrowed or asserted past it still held it)",
+        "true TypeError: undefined is not representable in the target union (a value narrowed or asserted past it still held it)",
+        "",
+      ].join("\n"),
+    );
+    expect(r.stderr).toBe("Uncaught TypeError: Value is not an instance of 'Sub'\n");
+    expect(r.exitCode).toBe(1);
+  });
+});
+
 // `e as C` on a catch binding is a CHECKED cast: a payload outside C's
 // hierarchy throws a catchable TypeError where Node's erasure would read
 // undefined off the value — dynCheck's documented trust-but-verify stance

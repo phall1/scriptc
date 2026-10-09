@@ -70,7 +70,6 @@ export function dynPromiseAdapter(host: LlvmEmitterContext, inner: IrType): stri
   host.dynPromiseAdapters.set(key, sym);
   host.declare(`declare ptr @scr_promise_payload_ref(ptr)`);
   host.declare(`declare void @scr_dyn_release_v(ptr)`);
-  host.declare(`declare zeroext i1 @scr_exc_pending()`);
   host.declare(`declare void @scr_promise_reject_pending(ptr)`);
   const B = new BlockBuilder();
   const dyn = B.tmp();
@@ -83,7 +82,7 @@ export function dynPromiseAdapter(host: LlvmEmitterContext, inner: IrType): stri
       : `${value} = call ${host.llType(inner)} @${host.dyn.dynCheckHelper(inner)}(ptr ${dyn}, ptr null)`,
   );
   B.line(`call void @scr_dyn_release_v(ptr ${dyn})`);
-  B.line(`${pending} = call zeroext i1 @scr_exc_pending()`);
+  for (const line of host.pendingTestLines(pending)) B.line(line.trimStart());
   const fail = B.newLabel("sra.fail");
   const ok = B.newLabel("sra.ok");
   B.condBr(pending, fail, ok);
@@ -210,7 +209,6 @@ export function streamTypedRefCommitAdapter(
     const commit = `${snapshot}_commit`;
     host.declare(`declare ptr @scr_dyn_obj_get(ptr, ptr, ${host.sizeType})`);
     host.declare(`declare ptr @scr_dyn_undefined()`);
-    host.declare(`declare zeroext i1 @scr_exc_pending()`);
     const lines = [
       `define internal void @${commit}(ptr %target, ptr %d) ${FN_ATTRS} { ; commit unknown class ${typeKey(t)}`,
       `entry:`,
@@ -304,7 +302,7 @@ export function streamTypedRefCommitAdapter(
         `  %${input} = select i1 %${missing}, ptr %${undef}, ptr %${raw}`,
         `  %${next} = call ${field.type.kind === "bool" ? "zeroext " : ""}${checkTy} @${host.dyn.dynCheckHelper(field.type)}(ptr %${input}, ptr null)`,
         ...(symbolGlobal ? [`  call void @scr_dyn_release_v(ptr %${raw})`] : []),
-        `  %${pending} = call zeroext i1 @scr_exc_pending()`,
+        ...host.pendingTestLines(`%${pending}`),
         `  br i1 %${pending}, label %done, label %${store}`,
         `${store}:`,
         `  %f${index}_ptr = getelementptr inbounds %${classStructSym(t.className)}, ptr %target, i64 0, i32 ${fieldIndex}`,
@@ -360,7 +358,7 @@ export function streamTypedRefCommitAdapter(
         `  %bag = call ptr @scr_dyn_new_obj()`,
         `  %bag_copy = call ptr @scr_dyn_copy_property_descriptors(ptr %bag, ptr %d)`,
         `  call void @scr_dyn_release_v(ptr %bag_copy)`,
-        `  %bag_pending = call zeroext i1 @scr_exc_pending()`,
+        ...host.pendingTestLines("%bag_pending"),
         `  br i1 %bag_pending, label %bag_fail, label %bag_keys`,
         `bag_fail:`,
         `  call void @scr_dyn_release_v(ptr %bag)`,

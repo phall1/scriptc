@@ -54,6 +54,9 @@ function expressionPreservesEdges(
     case "unionNarrow":
     case "unionIsTag":
     case "unionWrap":
+    case "downcast":
+    case "upcast":
+    case "instanceOf":
     case "strConcat":
     case "strEq":
     case "strCmp":

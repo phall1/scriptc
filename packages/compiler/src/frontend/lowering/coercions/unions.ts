@@ -1,4 +1,6 @@
-import { buildUnionNarrow } from "../union-narrow.js";
+import { buildUnionNarrow, unionNarrowFailureMessage } from "../union-narrow.js";
+import { isSafeToRepeat } from "../expressions/evaluation-safety.js";
+import { nodeThrowExpr } from "../../../ir/build.js";
 import {
   planUnionRetag,
   buildUnionRetag,
@@ -8,7 +10,7 @@ import {
 import { InternalCompilerError } from "../../../errors.js";
 import * as ts from "../../ts7/adapter.js";
 import type { IrExpr, IrType, SrcLoc } from "../../../ir/ir.js";
-import { BOOL, F64, isUnitType, STRING } from "../../../ir/ir.js";
+import { BOOL, F64, isUnitType, STRING, typeEquals } from "../../../ir/ir.js";
 import { typeKey } from "../../type-mapper.js";
 import type { Lowerer } from "../lowerer.js";
 
@@ -339,8 +341,82 @@ export function narrowedArmHelper(
   lowerer.coercions.checkedNarrows.add(name);
   const fn = buildUnionNarrow(name, from, target, loc, (type) => lowerer.fmt(type));
   if (!fn) throw new InternalCompilerError("lowerer bug: invalid checked union extraction");
+  lowerer.coercions.checkedNarrowArms.set(name, { unionId: fromId, tag, target: from.arms[tag]! });
   lowerer.liftedFns.push(fn);
   return name;
+}
+
+/** A checked extraction at its use. A plain read tests the stored tag in
+ * place and projects the payload directly, so member reads can borrow it;
+ * every other arm throws the helper's TypeError with the same message.
+ * Other operands call the interned helper to evaluate them exactly once. */
+export function checkedNarrowCall(
+  lowerer: Lowerer,
+  helper: string,
+  value: IrExpr,
+  type: IrType,
+  loc: SrcLoc,
+): IrExpr {
+  const call: IrExpr = { kind: "call", callee: helper, args: [value], type, loc };
+  const arm = lowerer.coercions.checkedNarrowArms.get(helper);
+  const from = arm ? lowerer.unions.get(arm.unionId) : undefined;
+  if (
+    !arm ||
+    !from ||
+    from.arms.length < 2 ||
+    value.type.kind !== "union" ||
+    value.type.unionId !== arm.unionId ||
+    !typeEquals(type, arm.target) ||
+    !isSafeToRepeat(value)
+  )
+    return call;
+  const unionId = arm.unionId;
+  const isTag = (tag: number): IrExpr => ({
+    kind: "unionIsTag",
+    unionId,
+    tag,
+    negated: false,
+    value,
+    type: BOOL,
+    loc,
+  });
+  let failure: IrExpr | null = null;
+  for (let tag = from.arms.length - 1; tag >= 0; tag--) {
+    if (tag === arm.tag) continue;
+    const message = unionNarrowFailureMessage(from.arms[tag]!, (t) => lowerer.fmt(t));
+    const thrown = nodeThrowExpr(1, "", message, type, loc);
+    failure =
+      failure === null
+        ? thrown
+        : { kind: "ternary", cond: isTag(tag), then: thrown, else_: failure, type, loc };
+  }
+  return {
+    kind: "ternary",
+    cond: isTag(arm.tag),
+    then: { kind: "unionNarrow", unionId, tag: arm.tag, value, type, loc },
+    else_: failure!,
+    type,
+    loc,
+  };
+}
+
+/** The operand of a checked extraction in either form checkedNarrowCall
+ * produces, or null for every other expression. */
+export function checkedNarrowOperand(lowerer: Lowerer, value: IrExpr): IrExpr | null {
+  if (value.kind === "call")
+    return lowerer.coercions.checkedNarrows.has(value.callee) && value.args.length === 1
+      ? value.args[0]!
+      : null;
+  if (
+    value.kind === "ternary" &&
+    value.cond.kind === "unionIsTag" &&
+    value.then.kind === "unionNarrow" &&
+    value.then.value === value.cond.value &&
+    value.then.tag === value.cond.tag &&
+    !value.cond.negated
+  )
+    return value.cond.value;
+  return null;
 }
 
 /** The DEFERRED-INIT field read (`stream!: T` assigned past the

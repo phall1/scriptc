@@ -819,6 +819,7 @@ export class LlEmitter {
           )
           .map((meta) => meta.def.name);
       },
+      pendingTestLines: (dest) => this.pendingTestLines(dest),
     };
     this.walkers = new LlWalkers(this.shapeHost);
     this.dyn = new LlDyn(this.shapeHost);
@@ -916,7 +917,6 @@ export class LlEmitter {
     const globals: string[] = [];
     const defs: string[] = [];
     if (this.ffiCallbackAdapters.size === 0) return { globals, defs };
-    this.declare(`declare zeroext i1 @scr_exc_pending()`);
     this.declare(`declare void @scr_trap(ptr)`);
     const expired = this.cstr(
       "scriptc: native callback invoked outside its call-scoped lifetime\n",
@@ -1081,7 +1081,7 @@ export class LlEmitter {
         `  call void @scr_trap(ptr ${adapter.callback.lifetime === "call" ? expired : released})`,
         `  unreachable`,
         `ready:`,
-        `  %pending = call zeroext i1 @scr_exc_pending()`,
+        ...this.pendingTestLines("%pending"),
         `  br i1 %pending, label %skip, label %invoke`,
         `skip:`,
         `  ret ${ffiCallbackDummyLl(cb)}`,
@@ -1519,8 +1519,9 @@ export class LlEmitter {
     const topPendingReleases = asyncEntry ? globalReleaseLines("gp") : [];
     const loopReportedReleases = runsLoop ? globalReleaseLines("gq") : [];
     // main's epilogues read the flag / the loop entry points — declared
-    // HERE, before the extern block flushes (a pending check usually
-    // declared the flag already; the Set dedupes).
+    // HERE, before the extern block flushes. They run once, so they keep
+    // the out-of-line scr_exc_pending call; per-call checks inline the
+    // test (pendingTestLines).
     if (entryMayThrow || runsLoop) this.declare(`declare zeroext i1 @scr_exc_pending()`);
     if (runsLoop) {
       this.declare(`declare zeroext i1 @scr_loop_run(ptr)`);
@@ -2745,7 +2746,6 @@ export class LlEmitter {
 
     this.declare(`declare void @free(ptr)`);
     this.declare(`declare ptr @malloc(${this.sizeType})`);
-    this.declare(`declare zeroext i1 @scr_exc_pending()`);
 
     const tr: string[] = [
       `define internal void @${mangleTrampoline(fn.name)}(ptr %self, ptr %ap) ${FN_ATTRS} {`,
@@ -2899,7 +2899,6 @@ export class LlEmitter {
     this.declare(`declare void @scr_async_inline_enter(ptr)`);
     this.declare(`declare ptr @scr_async_inline_leave(ptr)`);
     this.declare(`declare void @scr_promise_reject_pending(ptr)`);
-    this.declare(`declare zeroext i1 @scr_exc_pending()`);
     if (lifted) {
       this.declare(`declare ptr @scr_closure_retain_v(ptr)`);
       this.declare(`declare void @scr_closure_release(ptr)`);
@@ -2915,7 +2914,7 @@ export class LlEmitter {
       `  call void @scr_async_inline_enter(ptr %frame)`,
       retTy === "void" ? `  ${bodyCall}` : `  %r = ${bodyCall}`,
       ...(lifted ? [`  call void @scr_closure_release(ptr %a0)`] : []),
-      `  %pend = call zeroext i1 @scr_exc_pending()`,
+      ...this.pendingTestLines("%pend"),
       `  %p = call ptr @scr_async_inline_leave(ptr %frame)`,
       `  br i1 %pend, label %thrown, label %clean`,
       `clean:`,
@@ -2985,7 +2984,7 @@ export class LlEmitter {
           this.declare(`declare void @scr_closure_release(ptr)`);
         }
         tr.push(
-          `  %pend = call zeroext i1 @scr_exc_pending()`,
+          ...this.pendingTestLines("%pend"),
           `  br i1 %pend, label %thrown, label %clean`,
           `clean:`,
           `  %pr = call ptr @scr_fiber_promise(ptr %self)`,
@@ -3105,7 +3104,7 @@ export class LlEmitter {
       } else {
         tr.push(
           `  %g = call ptr @scr_gen_of_fiber(ptr %self)`,
-          `  %pend = call zeroext i1 @scr_exc_pending()`,
+          ...this.pendingTestLines("%pend"),
           `  br i1 %pend, label %thrown, label %clean`,
           `clean:`,
         );
@@ -3540,6 +3539,28 @@ export class LlEmitter {
     this.B.br(cleanup.label);
   }
 
+  /** Instructions (two-space indented) that set the i1 `dest` to "an
+   * exception is pending in the active context" — scr_exc_pending()'s
+   * meaning — for the helper and adapter bodies that test it outside
+   * emitPendingCheck. Executables read the runtime's exported active-cell
+   * pointer and compare its i32 kind (offset 0) against SCR_EXC_NONE inline,
+   * as emitPendingCheck does; the out-of-line call would be opaque to LLVM
+   * because the runtime links as prebuilt objects. Libraries and worker
+   * programs keep the runtime call, which is emitPendingCheck's path there
+   * too (workers also observe cross-thread termination in it). */
+  pendingTestLines(dest: string): string[] {
+    if (this.mod.lib !== undefined || this.mod.workers === true) {
+      this.declare(`declare zeroext i1 @scr_exc_pending()`);
+      return [`  ${dest} = call zeroext i1 @scr_exc_pending()`];
+    }
+    this.declare(`@scr_exc_active = external global ptr`);
+    return [
+      `  ${dest}.cell = load ptr, ptr @scr_exc_active`,
+      `  ${dest}.kind = load i32, ptr ${dest}.cell`,
+      `  ${dest} = icmp ne i32 ${dest}.kind, 0`,
+    ];
+  }
+
   /** The emitter contract for exceptions: after EVERY call that can throw
    * (per the may-throw analysis), test the pending flag and unwind. The
    * call's result temp must join its frame BEFORE this runs so the unwind
@@ -3603,6 +3624,18 @@ export class LlEmitter {
     B.startBlock(lu);
     this.emitUnwind();
     B.startBlock(lk);
+  }
+
+  /** After a runtime call that ALWAYS leaves an exception pending (the
+   * compiler-resolved Node throws): the pending test would always answer
+   * true, so unwind unconditionally. Emission continues in a block with no
+   * predecessors so the caller's remaining instructions stay well-formed;
+   * LLVM deletes it. */
+  emitAlwaysPendingUnwind(): void {
+    const B = this.B;
+    if (B.isTerminated()) return;
+    this.emitUnwind();
+    B.startBlock(B.newLabel("exc.dead"));
   }
 
   private workerLoopBudget(): string | null {
@@ -5224,9 +5257,8 @@ export class LlEmitter {
             B.line(`call void @scr_dyn_release(ptr ${v.name})`);
             // Mismatched write: TypeError pending, field untouched — the
             // statement-level check below unwinds.
-            this.declare(`declare zeroext i1 @scr_exc_pending()`);
             const pend = B.tmp();
-            B.line(`${pend} = call zeroext i1 @scr_exc_pending()`);
+            for (const line of this.pendingTestLines(pend)) B.line(line.trimStart());
             const lw = B.newLabel("rks.w");
             B.condBr(pend, join, lw);
             B.startBlock(lw);
@@ -6390,6 +6422,10 @@ export class LlEmitter {
       const union = this.emitUnionProjection(e.value);
       return { name: this.unionPeek(union.name, e.unionId), type: e.type };
     }
+    if ((e.kind === "downcast" || e.kind === "upcast") && e.value.type.kind === "object") {
+      // Prefix layouts: a class cast reads the operand's own pointer.
+      return { name: this.emitReadReceiver(e.value).name, type: e.type };
+    }
     // A nullable-pointer field has no box to borrow. Projections use
     // emitUnionProjection; other borrowers get an owned heap box.
     if (this.nullableFieldGet(e)) return this.emitExpr(e);
@@ -6616,6 +6652,9 @@ export class LlEmitter {
         );
       }
       case "unionNarrow":
+      // Class casts reinterpret the same pointer (prefix layouts).
+      case "downcast":
+      case "upcast":
         return this.canBorrowReceiver(e.value);
       case "fieldGet":
       case "recordGet":

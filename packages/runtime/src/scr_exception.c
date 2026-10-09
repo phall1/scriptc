@@ -122,7 +122,9 @@ ScrStr *scr_stack_capture(void) {
 #define scr_exc_release_fn (SCR_EXC_CUR()->release_fn)
 #define scr_exc_trace_fn (SCR_EXC_CUR()->trace_fn)
 
-bool scr_exc_pending(void) {
+/* Parenthesized: scr_runtime.h maps runtime-internal calls to an inline
+ * test with a function-like macro; this keeps the exported symbol. */
+bool(scr_exc_pending)(void) {
 #ifdef SCR_WORKERS
   if (scr_context_checkpoint()) return true;
 #endif

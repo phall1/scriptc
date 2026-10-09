@@ -114,7 +114,7 @@ export function emitDynamicLibCall(host: LlvmEmitterContext, e: LibCallExpr): Ll
     const ty = host.llType(e.type);
     const dummy = ty === "double" ? f64Lit(0) : ty === "i1" ? "false" : "null";
     const out = host.own({ name: dummy, type: e.type });
-    host.emitPendingCheck();
+    host.emitAlwaysPendingUnwind();
     return out;
   }
   return host.emitGenericLibCall(e);

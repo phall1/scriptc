@@ -2130,13 +2130,7 @@ function lowerBufferStaticCallWithNarrowedArg(
   }
   const narrowedValue: IrExpr = {
     ...lowered,
-    source: {
-      kind: "call",
-      callee: helper,
-      args: [lowered.source],
-      type: narrowed,
-      loc: lowered.source.loc,
-    },
+    source: lowerer.checkedNarrowCall(helper, lowered.source, narrowed, lowered.source.loc),
   };
   return branded ? { ...branded, args: [narrowedValue] } : narrowedValue;
 }
@@ -4814,7 +4808,7 @@ function reconcileOverloadReturn(
   if (call.type.kind === "dyn") return call;
   if (call.type.kind === "union" && rt.kind !== "union") {
     const helper = lowerer.narrowedArmHelper(call.type.unionId, rt, call.loc);
-    if (helper) return { kind: "call", callee: helper, args: [call], type: rt, loc: call.loc };
+    if (helper) return lowerer.checkedNarrowCall(helper, call, rt, call.loc);
   }
   return lowerer.coerceInto(expr, call, rt);
 }
@@ -8907,13 +8901,7 @@ export function lowerObjectMethodCall(
         locOf(access.expression),
       );
       if (helper !== null)
-        return {
-          kind: "call",
-          callee: helper,
-          args: [receiver],
-          type: receiverIr,
-          loc: locOf(access.expression),
-        };
+        return lowerer.checkedNarrowCall(helper, receiver, receiverIr, locOf(access.expression));
     }
     return receiver.type.kind === "dyn"
       ? lowerer.coerceInto(access.expression, receiver, receiverIr)
@@ -8993,13 +8981,7 @@ export function lowerObjectMethodCall(
       if (callee?.type.kind === "union" && callableType !== null) {
         const helper = lowerer.narrowedArmHelper(callee.type.unionId, callableType, locOf(access));
         if (helper !== null) {
-          callee = {
-            kind: "call",
-            callee: helper,
-            args: [callee],
-            type: callableType,
-            loc: locOf(access),
-          };
+          callee = lowerer.checkedNarrowCall(helper, callee, callableType, locOf(access));
         }
       }
       if (callee?.type.kind === "func") {

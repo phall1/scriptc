@@ -568,9 +568,8 @@ export function ipcMessageThunkFor(
     } else {
       const helper = host.dyn.dynCheckHelper(param);
       d.push(`  %value = call ${ty} @${helper}(ptr %message, ptr null)`);
-      host.declare(`declare zeroext i1 @scr_exc_pending()`);
       d.push(
-        `  %bad = call zeroext i1 @scr_exc_pending()`,
+        ...host.pendingTestLines("%bad"),
         `  br i1 %bad, label %fail, label %invoke`,
         `fail:`,
         ...(isRefCounted(param)

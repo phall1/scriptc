@@ -411,7 +411,8 @@ test("checked field receivers borrow only the successful projection", () => {
   };
   const llvm = work(text(child(checked)), union);
   expect(llvm).toContain("@scr_throw_node_coded");
-  expect(llvm).toMatch(PENDING_CHECK);
+  // The throw always leaves an exception pending: it unwinds directly.
+  expect(llvm).not.toMatch(PENDING_CHECK);
   expect(llvm).not.toContain("@scr_union_retain_v");
   expect(llvm).not.toMatch(/call ptr @sc_rretain_/);
   const captured = work(text(child(checked)), union, true);

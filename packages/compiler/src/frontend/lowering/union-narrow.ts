@@ -1,6 +1,19 @@
 import { BOOL, STRING, isUnitType, typeEquals } from "../../ir/ir.js";
 import type { IrExpr, IrFunction, IrStmt, IrType, IrUnionDef, SrcLoc } from "../../ir/ir.js";
 
+/** The TypeError message for a checked extraction that finds `arm`. */
+export function unionNarrowFailureMessage(
+  arm: IrType,
+  formatType: (type: IrType) => string,
+): string {
+  const what = isUnitType(arm)
+    ? arm.kind === "undefinedT"
+      ? "undefined"
+      : "null"
+    : `a '${formatType(arm)}' value`;
+  return `${what} is not representable in the target union (a value narrowed or asserted past it still held it)`;
+}
+
 /** Build checked extraction from a union's actual storage. Successful reads
  * retain reference payloads through unionNarrow; every other valid tag
  * throws before the payload can be interpreted as the target type.
@@ -44,11 +57,6 @@ export function buildUnionNarrow(
     } else if (arm.kind === "undefinedT" && undefinedDefault !== null) {
       branch = [{ kind: "return", value: undefinedDefault, loc }];
     } else {
-      const what = isUnitType(arm)
-        ? arm.kind === "undefinedT"
-          ? "undefined"
-          : "null"
-        : `a '${formatType(arm)}' value`;
       branch = [
         {
           kind: "throw",
@@ -58,7 +66,7 @@ export function buildUnionNarrow(
             args: [
               {
                 kind: "strLit",
-                value: `${what} is not representable in the target union (a value narrowed or asserted past it still held it)`,
+                value: unionNarrowFailureMessage(arm, formatType),
                 type: STRING,
                 loc,
               },

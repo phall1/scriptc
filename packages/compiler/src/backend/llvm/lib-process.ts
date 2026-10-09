@@ -636,12 +636,12 @@ export function emitErrorsEventsLibCall(host: LlvmEmitterContext, e: LibCallExpr
     B.line(`call void @scr_throw_arg_type(ptr ${an.name}, ptr ${ex.name}, ptr ${got.name})`);
     const ty = host.llType(e.type);
     if (ty === "void") {
-      host.emitPendingCheck();
+      host.emitAlwaysPendingUnwind();
       return { name: "", type: e.type };
     }
     const dummy = ty === "double" ? f64Lit(0) : ty === "i1" ? "false" : "null";
     const out = host.own({ name: dummy, type: e.type });
-    host.emitPendingCheck();
+    host.emitAlwaysPendingUnwind();
     return out;
   }
   if (e.fn === "error.propTypeThrow") {
@@ -653,12 +653,12 @@ export function emitErrorsEventsLibCall(host: LlvmEmitterContext, e: LibCallExpr
     B.line(`call void @scr_throw_prop_type(ptr ${an.name}, ptr ${ex.name}, ptr ${got.name})`);
     const ty = host.llType(e.type);
     if (ty === "void") {
-      host.emitPendingCheck();
+      host.emitAlwaysPendingUnwind();
       return { name: "", type: e.type };
     }
     const dummy = ty === "double" ? f64Lit(0) : ty === "i1" ? "false" : "null";
     const out = host.own({ name: dummy, type: e.type });
-    host.emitPendingCheck();
+    host.emitAlwaysPendingUnwind();
     return out;
   }
   if (e.fn === "error.nodeThrow") {
@@ -673,12 +673,12 @@ export function emitErrorsEventsLibCall(host: LlvmEmitterContext, e: LibCallExpr
     );
     const ty = host.llType(e.type);
     if (ty === "void") {
-      host.emitPendingCheck();
+      host.emitAlwaysPendingUnwind();
       return { name: "", type: e.type };
     }
     const dummy = ty === "double" ? f64Lit(0) : ty === "i1" ? "false" : "null";
     const out = host.own({ name: dummy, type: e.type });
-    host.emitPendingCheck();
+    host.emitAlwaysPendingUnwind();
     return out;
   }
   if (e.fn === "emitter.on") {

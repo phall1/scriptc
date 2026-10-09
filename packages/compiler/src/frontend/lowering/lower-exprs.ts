@@ -522,7 +522,7 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
       if (target && target.kind !== "union" && !typeEquals(target, inner.type)) {
         const helper = lowerer.narrowedArmHelper(inner.type.unionId, target, loc);
         if (helper) {
-          return { kind: "call", callee: helper, args: [inner], type: target, loc };
+          return lowerer.checkedNarrowCall(helper, inner, target, loc);
         }
       }
       return inner;
@@ -1237,13 +1237,12 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
                   ? lowerer.narrowedArmHelper(local.type.unionId, narrowed, loc)
                   : null;
             if (helper) {
-              return {
-                kind: "call",
-                callee: helper,
-                args: [varRef(local.id, local.type, loc)],
-                type: narrowed,
+              return lowerer.checkedNarrowCall(
+                helper,
+                varRef(local.id, local.type, loc),
+                narrowed,
                 loc,
-              };
+              );
             }
           }
         }
@@ -1323,7 +1322,7 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
           lowerer.armTag(g.type.unionId, narrowed) >= 0
         ) {
           const helper = lowerer.narrowedArmHelper(g.type.unionId, narrowed, loc);
-          if (helper) return { kind: "call", callee: helper, args: [ref], type: narrowed, loc };
+          if (helper) return lowerer.checkedNarrowCall(helper, ref, narrowed, loc);
         }
         const use = runtimeOptionalUseOf(expr);
         // The enclosing logical/conditional expression consumes the union
@@ -3856,13 +3855,7 @@ function runtimeOptionalReceiverRead(
         "a direct read from a runtime-optional capture with multiple value arms",
       );
     }
-    return {
-      kind: "call",
-      callee: helper,
-      args: [varRef(local.id, local.type, loc)],
-      type: narrowed,
-      loc,
-    };
+    return lowerer.checkedNarrowCall(helper, varRef(local.id, local.type, loc), narrowed, loc);
   }
   // A predicate can strengthen a record's fields or narrow a base class
   // to a subclass without changing the slot's stored value arm. Extract
@@ -4761,13 +4754,7 @@ function lowerPromiseThenPresence(
     else {
       const helper = lowerer.narrowedArmHelper(receiver.type.unionId, promiseType, receiver.loc);
       if (helper === null) return null;
-      receiver = {
-        kind: "call",
-        callee: helper,
-        args: [receiver],
-        type: promiseType,
-        loc: receiver.loc,
-      };
+      receiver = lowerer.checkedNarrowCall(helper, receiver, promiseType, receiver.loc);
     }
   }
   if (receiver.type.kind === "dyn") {
@@ -5539,13 +5526,7 @@ export function lowerIntrinsicProperty(
             ? lowerer.narrowedArmHelper(receiver.type.unionId, present, locOf(expr.expression))
             : null;
         receiver = helper
-          ? {
-              kind: "call",
-              callee: helper,
-              args: [receiver],
-              type: present,
-              loc: locOf(expr.expression),
-            }
+          ? lowerer.checkedNarrowCall(helper, receiver, present, locOf(expr.expression))
           : lowerer.maybeNarrow(receiver, expr.expression);
       }
       // An island handle behind a typed-array .d.ts surface: the engine
@@ -5652,13 +5633,7 @@ export function lowerIntrinsicProperty(
           ? lowerer.narrowedArmHelper(receiver.type.unionId, present, locOf(expr.expression))
           : null;
       receiver = helper
-        ? {
-            kind: "call",
-            callee: helper,
-            args: [receiver],
-            type: present,
-            loc: locOf(expr.expression),
-          }
+        ? lowerer.checkedNarrowCall(helper, receiver, present, locOf(expr.expression))
         : lowerer.maybeNarrow(receiver, expr.expression);
     }
     // An island handle behind an array-typed .d.ts surface
@@ -6624,7 +6599,7 @@ export function lowerElementAccess(lowerer: Lowerer, expr: ts.ElementAccessExpre
           ? lowerer.narrowedArmHelper(recv.type.unionId, present, locOf(expr.expression))
           : null;
       recv = helper
-        ? { kind: "call", callee: helper, args: [recv], type: present, loc: locOf(expr.expression) }
+        ? lowerer.checkedNarrowCall(helper, recv, present, locOf(expr.expression))
         : lowerer.maybeNarrow(recv, expr.expression);
     }
     // A typed-array .d.ts surface whose VALUE is an island handle
@@ -6726,13 +6701,7 @@ export function lowerElementAccess(lowerer: Lowerer, expr: ts.ElementAccessExpre
             ? lowerer.narrowedArmHelper(obj.type.unionId, present, locOf(expr.expression))
             : null;
         obj = helper
-          ? {
-              kind: "call",
-              callee: helper,
-              args: [obj],
-              type: present,
-              loc: locOf(expr.expression),
-            }
+          ? lowerer.checkedNarrowCall(helper, obj, present, locOf(expr.expression))
           : lowerer.maybeNarrow(obj, expr.expression);
       }
       const idx = tupleLiteralIndex(expr.argumentExpression);
@@ -7050,7 +7019,7 @@ export function lowerElementAccess(lowerer: Lowerer, expr: ts.ElementAccessExpre
         ? lowerer.narrowedArmHelper(arr.type.unionId, present, locOf(expr.expression))
         : null;
     arr = helper
-      ? { kind: "call", callee: helper, args: [arr], type: present, loc: locOf(expr.expression) }
+      ? lowerer.checkedNarrowCall(helper, arr, present, locOf(expr.expression))
       : lowerer.maybeNarrow(arr, expr.expression);
   }
   // The checker sees an array but the VALUE is an island handle (an
@@ -7691,13 +7660,7 @@ export function lowerElementCompound(
         ? lowerer.narrowedArmHelper(receiver.type.unionId, present, locOf(target.expression))
         : null;
     if (helper)
-      receiver = {
-        kind: "call",
-        callee: helper,
-        args: [receiver],
-        type: present,
-        loc: locOf(target.expression),
-      };
+      receiver = lowerer.checkedNarrowCall(helper, receiver, present, locOf(target.expression));
   }
   if (receiver.type.kind !== receiverType.kind) {
     lowerer.unsupported(
@@ -8483,13 +8446,7 @@ export function lowerElementWrite(lowerer: Lowerer, expr: ts.BinaryExpression): 
         ? lowerer.narrowedArmHelper(arr.type.unionId, present, locOf(target.expression))
         : null;
     if (helper) {
-      arr = {
-        kind: "call",
-        callee: helper,
-        args: [arr],
-        type: present,
-        loc: locOf(target.expression),
-      };
+      arr = lowerer.checkedNarrowCall(helper, arr, present, locOf(target.expression));
     }
   }
   if (arr.type.kind !== "array") {
@@ -8635,11 +8592,7 @@ export function ensureString(lowerer: Lowerer, e: IrExpr, node: ts.Node): IrExpr
     ) {
       const helper = lowerer.narrowedArmHelper(e.type.unionId, narrowed, e.loc);
       if (helper) {
-        return ensureString(
-          lowerer,
-          { kind: "call", callee: helper, args: [e], type: narrowed, loc: e.loc },
-          node,
-        );
+        return ensureString(lowerer, lowerer.checkedNarrowCall(helper, e, narrowed, e.loc), node);
       }
     }
     if (
@@ -8951,7 +8904,7 @@ export function lowerAsExpression(
       if (target && target.kind !== "union" && !typeEquals(target, inner.type)) {
         const helper = lowerer.narrowedArmHelper(inner.type.unionId, target, locOf(expr));
         if (helper) {
-          return { kind: "call", callee: helper, args: [inner], type: target, loc: locOf(expr) };
+          return lowerer.checkedNarrowCall(helper, inner, target, locOf(expr));
         }
       }
     }
@@ -13967,13 +13920,7 @@ export function lowerUnionProperty(
           locOf(expr.expression),
         );
         if (helper !== null)
-          receiver = {
-            kind: "call",
-            callee: helper,
-            args: [value],
-            type: objectType,
-            loc: locOf(expr.expression),
-          };
+          receiver = lowerer.checkedNarrowCall(helper, value, objectType, locOf(expr.expression));
       }
       if (receiver !== null) {
         return {
@@ -14195,13 +14142,7 @@ function classFieldTarget(
     if (obj.type.kind === "union") {
       const helper = lowerer.narrowedArmHelper(obj.type.unionId, receiverType, locOf(receiverNode));
       obj = helper
-        ? {
-            kind: "call",
-            callee: helper,
-            args: [obj],
-            type: receiverType,
-            loc: locOf(receiverNode),
-          }
+        ? lowerer.checkedNarrowCall(helper, obj, receiverType, locOf(receiverNode))
         : lowerer.maybeNarrow(obj, receiverNode);
     }
     return lowerer.coerceInto(receiverNode, obj, receiverType);
@@ -14403,13 +14344,7 @@ export function fieldTarget(
             ? lowerer.narrowedArmHelper(obj.type.unionId, present, locOf(access.expression))
             : null;
         obj = helper
-          ? {
-              kind: "call",
-              callee: helper,
-              args: [obj],
-              type: present,
-              loc: locOf(access.expression),
-            }
+          ? lowerer.checkedNarrowCall(helper, obj, present, locOf(access.expression))
           : lowerer.maybeNarrow(obj, access.expression);
       }
       if (obj.type.kind !== "record") return null;
