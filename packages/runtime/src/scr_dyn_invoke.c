@@ -1788,6 +1788,92 @@ ScrDyn *scr_dyn_get_prototype_exposed(ScrDyn *object) {
   return scr_dyn_array_prototype();
 }
 
+static bool bad_accessor_fn(const ScrDyn *fn) {
+  return fn != NULL && fn->kind != SCR_DYN_UNDEF && fn->kind != SCR_DYN_FUNC;
+}
+
+/* The six descriptor fields defineProperty understands. A missing read
+ * fails the whole defineProperties call. */
+static ScrDyn *copy_descriptor_fields(ScrDyn *descriptor) {
+  static const char *const names[] = {"enumerable", "configurable", "value", "writable", "get", "set"};
+  static const size_t lengths[] = {10, 12, 5, 8, 3, 3};
+  ScrDyn *snapshot = scr_dyn_new_obj();
+  for (size_t field = 0; field < 6; field++) {
+    if (!scr_dyn_obj_get(descriptor, names[field], lengths[field])) continue;
+    ScrDyn *value = scr_dyn_obj_read(descriptor, names[field], lengths[field]);
+    if (!value) {
+      scr_dyn_release(snapshot);
+      return NULL;
+    }
+    scr_dyn_obj_set(snapshot, names[field], lengths[field], value);
+  }
+  return snapshot;
+}
+
+static bool reject_bad_descriptor_accessors(ScrDyn *snapshot) {
+  ScrDyn *get = scr_dyn_obj_get(snapshot, "get", 3);
+  ScrDyn *set = scr_dyn_obj_get(snapshot, "set", 3);
+  bool accessor = get != NULL || set != NULL;
+  bool data = scr_dyn_obj_get(snapshot, "value", 5) != NULL ||
+              scr_dyn_obj_get(snapshot, "writable", 8) != NULL;
+  if (accessor && data) {
+    static const char msg[] =
+        "Invalid property descriptor. Cannot both specify accessors and a value or writable attribute";
+    scr_throw_error_msg(SCR_ERR_TYPE, msg, sizeof msg - 1);
+    return false;
+  }
+  if (bad_accessor_fn(get) || bad_accessor_fn(set)) {
+    static const char msg[] = "Getter and setter must be functions";
+    scr_throw_error_msg(SCR_ERR_TYPE, msg, sizeof msg - 1);
+    return false;
+  }
+  return true;
+}
+
+static void throw_descriptor_must_be_object(ScrDyn *descriptor) {
+  ScrJsonBuf b;
+  scr_jb_init(&b);
+  scr_jb_puts(&b, "Property description must be an object: ");
+  scr_dyn_display_buf(&b, descriptor);
+  scr_throw_error(SCR_ERR_TYPE, scr_jb_finish(&b));
+}
+
+/* Object.defineProperties visits enumerable symbol keys after strings.
+ * String own-key enumeration does not see them. */
+static bool queue_symbol_property(ScrDyn *pending, ScrDyn *descs, ScrDyn *key) {
+  if (key->kind != SCR_DYN_SYMBOL) return true;
+  bool enumerable = scr_dyn_property_is_enumerable_computed(descs, key);
+  if (scr_exc_pending()) return false;
+  if (!enumerable) return true;
+  ScrDyn *descriptor = scr_dyn_symbol_key_get(descs, key, false);
+  if (!descriptor) return false;
+  if (descriptor->kind != SCR_DYN_OBJ) {
+    throw_descriptor_must_be_object(descriptor);
+    scr_dyn_release(descriptor);
+    return false;
+  }
+  ScrDyn *snapshot = copy_descriptor_fields(descriptor);
+  scr_dyn_release(descriptor);
+  if (!snapshot) return false;
+  if (!reject_bad_descriptor_accessors(snapshot)) {
+    scr_dyn_release(snapshot);
+    return false;
+  }
+  ScrDyn *pair = scr_dyn_new_arr();
+  scr_dyn_arr_push(pair, scr_dyn_retain(key));
+  scr_dyn_arr_push(pair, snapshot);
+  scr_dyn_arr_push(pending, pair);
+  return true;
+}
+
+static bool queue_symbol_properties(ScrDyn *descs, ScrDyn *pending) {
+  if (!descs->symbol_keys) return true;
+  for (size_t i = 0; i < descs->symbol_keys->v.arr.len; i++) {
+    if (!queue_symbol_property(pending, descs, descs->symbol_keys->v.arr.items[i])) return false;
+  }
+  return true;
+}
+
 /* Object.defineProperties over dyn values (see scr_runtime.h). */
 static ScrDyn *scr_dyn_define_props_internal(ScrDyn *target, ScrDyn *descs, ScrDyn *protected_keys) {
   /* Island-held operands ARE objects to Node — the non-object TypeError
@@ -1857,6 +1943,7 @@ static ScrDyn *scr_dyn_define_props_internal(ScrDyn *target, ScrDyn *descs, ScrD
     scr_dyn_arr_push(pair, snapshot);
     scr_dyn_arr_push(pending, pair);
   }
+  if (!queue_symbol_properties(descs, pending)) goto fail;
   scr_dyn_release(keys);
   for (size_t i = 0; i < pending->v.arr.len; i++) {
     ScrDyn *pair = pending->v.arr.items[i];
