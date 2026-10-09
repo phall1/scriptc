@@ -254,7 +254,8 @@ export function streamTypedRefCommitAdapter(
       const store = `f${index}_store`;
       const after = `f${index}_after`;
       const { index: fieldIndex } = classFieldIndex(meta, field.name);
-      const fieldTy = llFieldType(field.type);
+      const int32 = host.int32Slots.isField(t.className, field.name);
+      const fieldTy = int32 ? "i32" : llFieldType(field.type);
       const checkTy = host.llType(field.type);
       const symbolGlobal = symbols.get(field.name);
       if (symbolGlobal) {
@@ -308,6 +309,30 @@ export function streamTypedRefCommitAdapter(
         `  %f${index}_ptr = getelementptr inbounds %${classStructSym(t.className)}, ptr %target, i64 0, i32 ${fieldIndex}`,
         `  %f${index}_old = load ${fieldTy}, ptr %f${index}_ptr`,
       );
+      if (int32) {
+        // int32-slots.ts keeps a field int32 only when no dynamic store in
+        // the program can name it, so the view still holds the exact int32
+        // snapshot. Anything else would mean the proof was wrong: trap
+        // rather than store a different number.
+        host.declare(`declare i32 @llvm.fptosi.sat.i32.f64(double)`);
+        host.declare(`declare void @llvm.trap()`);
+        lines.push(
+          `  %f${index}_int = call i32 @llvm.fptosi.sat.i32.f64(double %${next})`,
+          `  %f${index}_back = sitofp i32 %f${index}_int to double`,
+          `  %f${index}_bits = bitcast double %${next} to i64`,
+          `  %f${index}_backbits = bitcast double %f${index}_back to i64`,
+          `  %f${index}_exact = icmp eq i64 %f${index}_bits, %f${index}_backbits`,
+          `  br i1 %f${index}_exact, label %f${index}_int_store, label %f${index}_int_trap`,
+          `f${index}_int_trap:`,
+          `  call void @llvm.trap()`,
+          `  unreachable`,
+          `f${index}_int_store:`,
+          `  store i32 %f${index}_int, ptr %f${index}_ptr`,
+          `  br label %${after}`,
+          `${after}:`,
+        );
+        continue;
+      }
       const nullable = host.nullableFields.get(t.className, field.name);
       if (nullable) {
         // The checked union is owned here; the slot takes its retained
@@ -762,7 +787,11 @@ export function streamTypedRefMaterializeAdapter(
       B.line(
         `${fieldPtr} = getelementptr inbounds %${classStructSym(t.className)}, ptr %p, i64 0, i32 ${index}`,
       );
-      B.line(`${fieldValue} = load ${llFieldType(field.type)}, ptr ${fieldPtr}`);
+      if (host.int32Slots.isField(t.className, field.name)) {
+        const raw = B.tmp();
+        B.line(`${raw} = load i32, ptr ${fieldPtr}`);
+        B.line(`${fieldValue} = sitofp i32 ${raw} to double`);
+      } else B.line(`${fieldValue} = load ${llFieldType(field.type)}, ptr ${fieldPtr}`);
       if (llFieldType(field.type) === "i8") {
         const boolValue = B.tmp();
         B.line(`${boolValue} = trunc i8 ${fieldValue} to i1`);
@@ -792,7 +821,11 @@ export function streamTypedRefMaterializeAdapter(
       B.line(
         `${fieldPtr} = getelementptr inbounds %${classStructSym(t.className)}, ptr %p, i64 0, i32 ${index}`,
       );
-      B.line(`${fieldValue} = load ${llFieldType(field.type)}, ptr ${fieldPtr}`);
+      if (host.int32Slots.isField(t.className, field.name)) {
+        const raw = B.tmp();
+        B.line(`${raw} = load i32, ptr ${fieldPtr}`);
+        B.line(`${fieldValue} = sitofp i32 ${raw} to double`);
+      } else B.line(`${fieldValue} = load ${llFieldType(field.type)}, ptr ${fieldPtr}`);
       B.line(`${rawKey} = load ptr, ptr @${mangleGlobal(symbol.globalId)}`);
       const key = host.streamTypedRefBoxValue(B, SYMBOL_T, rawKey);
       const afterSymbol =

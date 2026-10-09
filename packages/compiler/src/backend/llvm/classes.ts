@@ -29,6 +29,7 @@ import {
 import { emitObjectAlloc, emitObjectFree } from "./alloc.js";
 import { llvmCommentText } from "./common.js";
 import { NullableRefFields } from "./nullable-fields.js";
+import type { Int32Slots } from "../../ir/int32-slots.js";
 import {
   cycleRootLines,
   FN_ATTRS,
@@ -349,6 +350,7 @@ export function emitClassShapes(
   mod: IrModule,
   metaMap: Map<string, LlClassMeta>,
   nullable?: NullableRefFields,
+  int32?: Int32Slots,
 ): { typeDefs: string[]; defs: string[] } {
   const typeDefs: string[] = [];
   const defs: string[] = [];
@@ -362,7 +364,10 @@ export function emitClassShapes(
 
   for (const cls of emitted) {
     const meta = metaMap.get(cls.name)!;
-    const fieldTys = cls.fields.map((f) => llFieldType(f.type));
+    // Whole-program int32 fields (int32-slots.ts) store the exact i32.
+    const fieldTys = cls.fields.map((f) =>
+      int32?.isField(cls.name, f.name) ? "i32" : llFieldType(f.type),
+    );
     // Emitter subclasses embed ScrEmitter's remaining prefix (the registry
     // and display-name slots) between the vtable word and the field list;
     // stream subclasses add the state pointer — upcasts to ScrEmitter* /
