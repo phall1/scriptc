@@ -284,9 +284,9 @@ import {
   classFieldIndex,
   classStructSym,
   type LlClassMeta,
-  vtEntriesFor,
 } from "./classes.js";
 import { LlDyn, type DynHost } from "./dyn.js";
+import { VirtualBorrows } from "./virtual-borrows.js";
 import { LlvmUnsupportedError } from "./unsupported.js";
 import { LlWalkers } from "./walkers.js";
 import { isObjectArm, NULLABLE_ABSENT, NULLABLE_NULL, NullableUnions } from "./nullable-unions.js";
@@ -627,11 +627,8 @@ export class LlEmitter {
   /** The class graph (buildClassGraph): preorder numbering, hierarchy
    * membership, virtual slot lists. */
   readonly classMeta: Map<string, LlClassMeta>;
-  /** Parameters every implementation of a vtable slot borrows, keyed by
-   * `root\0slot index`, and each implementation's slot key (see
-   * virtualSlotBorrowed). */
-  private readonly slotBorrowed = new Map<string, ReadonlySet<number>>();
-  private readonly implSlot = new Map<string, string>();
+  /** Which vtable slots borrow which parameters (virtual-borrows.ts). */
+  private virtualBorrows!: VirtualBorrows;
   /** Class objects (classes as first-class values): className → the
    * interned .name literal ref — registered during body emission, the
    * statics and construct thunks assemble around the bodies. */
@@ -917,68 +914,26 @@ export class LlEmitter {
         lib: rec.lib,
       });
     }
-    this.computeVirtualBorrowing(mod);
-  }
-
-  /** Virtual dispatch normally keeps the owned ABI: the caller passes +1
-   * and the method's owned entry releases what its body borrows. When every
-   * implementation of a slot has a borrowing body for the same parameter
-   * (call-lifetimes proves this per function, independent of the caller),
-   * the slot borrows that parameter instead: call sites pass it like a
-   * direct call to a borrowing body, so a receiver that survives the call
-   * is neither retained nor released (and, being cycle-capable, not
-   * buffered as a candidate either). Implementations that borrow more
-   * parameters than the slot get an adapter that releases the difference. */
-  private computeVirtualBorrowing(mod: IrModule): void {
-    const impls = new Map<string, Set<string>>();
-    const emitted = new Set((mod.classes ?? []).filter((c) => !c.runtime).map((c) => c.name));
-    for (const meta of this.classMeta.values()) {
-      if (!meta.hierarchy || !emitted.has(meta.def.name)) continue;
-      vtEntriesFor(meta).forEach(({ slot, impl }, index) => {
-        if (impl === null) return;
-        const key = `${meta.root.def.name}\0${index}`;
-        const name = `%${impl.def.name}.${slot.method}`;
-        let set = impls.get(key);
-        if (!set) impls.set(key, (set = new Set()));
-        set.add(name);
-        this.implSlot.set(name, key);
-      });
-    }
-    for (const [key, names] of impls) {
-      let common: number[] | null = null;
-      for (const name of names) {
-        const fn = this.fnByName.get(name);
-        const borrowed = this.callLifetimes.borrowed.get(name);
-        if (!fn || !borrowed || fn.captures !== undefined || fn.async || fn.generator) {
-          common = [];
-          break;
-        }
-        common = (common ?? [...borrowed]).filter((index) => borrowed.has(index));
-      }
-      if (common !== null && common.length > 0) this.slotBorrowed.set(key, new Set(common));
-    }
+    this.virtualBorrows = new VirtualBorrows(
+      mod,
+      this.classMeta,
+      this.fnByName,
+      this.callLifetimes.borrowed,
+    );
   }
 
   /** The borrowed parameters of a hierarchy's vtable slot (empty: owned). */
   virtualSlotBorrowed(rootName: string, slotIndex: number): ReadonlySet<number> {
-    return this.slotBorrowed.get(`${rootName}\0${slotIndex}`) ?? NO_BORROWED;
+    return this.virtualBorrows.slot(rootName, slotIndex);
   }
 
-  /** The vtable entry for one implementation: its owned entry for an owned
-   * slot, its borrowing body when that borrows exactly the slot's
-   * parameters, otherwise its virtual adapter (emitOwnedCallAdapter). */
+  /** The vtable entry for one implementation (VirtualBorrows.entry). */
   virtualEntry(implFn: string): string {
-    const slot = this.implSlotBorrowed(implFn);
-    if (slot.size === 0) return mangleFunction(implFn);
-    const own = this.callLifetimes.borrowed.get(implFn)!;
-    return own.size === slot.size
-      ? mangleBorrowedFunction(implFn)
-      : `${mangleBorrowedFunction(implFn)}.virtual`;
+    return this.virtualBorrows.entry(implFn);
   }
 
   private implSlotBorrowed(implFn: string): ReadonlySet<number> {
-    const key = this.implSlot.get(implFn);
-    return (key !== undefined && this.slotBorrowed.get(key)) || NO_BORROWED;
+    return this.virtualBorrows.implSlotBorrowed(implFn);
   }
 
   abiOffset(native64: number, wasm32: number): number {
