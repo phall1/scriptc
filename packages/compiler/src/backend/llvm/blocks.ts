@@ -20,6 +20,12 @@ export class BlockBuilder {
   private tempCounter = 0;
   private labelCounter = 0;
   debugLocation: string | null = null;
+  /** The body is a synchronous IR function: the active exception cell is one
+   * value from entry to every pending check. Other builders (adapters,
+   * runtime helpers) keep loading it at each check. */
+  excCellInvariant = false;
+  /** The entry-block load of the active exception cell, once requested. */
+  excCell: string | null = null;
   /** Function epilogue shared by normal and exceptional returns. */
   returnEpilogue: string | null = null;
   /** Temps known to hold immortal values (temp names are only unique

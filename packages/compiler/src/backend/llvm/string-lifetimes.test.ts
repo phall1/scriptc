@@ -18,7 +18,8 @@ import { emitLlvmModule } from "./emitter.js";
 import { borrowsStringInputs } from "./string-lifetimes.js";
 
 /** A pending-exception check: the inline active-cell test or a runtime call. */
-const PENDING_CHECK = /@scr_exc_(?:active|pending)\b/;
+// Synchronous bodies test the kind of the entry-loaded exception cell.
+const PENDING_CHECK = /@scr_exc_(?:active|pending)\b| = load i32, ptr %exc\.cell\b/;
 
 const loc = { file: "strings.ts", start: 0, end: 1 };
 const ref = (id: string, type: IrType = STRING): IrExpr => ({

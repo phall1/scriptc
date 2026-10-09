@@ -3800,9 +3800,21 @@ export class LlEmitter {
     const tl = this.mod.workers === true ? "thread_local " : "";
     this.declare(`@scr_exc_active = external ${tl}global ptr`);
     this.declare(`declare i1 @llvm.expect.i1(i1, i1)`);
-    const cell = B.tmp();
+    let cell: string;
+    if (B.excCellInvariant && this.mod.workers !== true) {
+      // Fiber switches restore the active cell before control returns to a
+      // synchronous frame, so its pointer is one value for the whole call:
+      // load it once in the entry block and test only the kind here.
+      if (B.excCell === null) {
+        B.excCell = "%exc.cell";
+        B.entryAllocas.push(`${B.excCell} = load ptr, ptr @scr_exc_active`);
+      }
+      cell = B.excCell;
+    } else {
+      cell = B.tmp();
+      B.line(`${cell} = load ptr, ptr @scr_exc_active`);
+    }
     const kind = B.tmp();
-    B.line(`${cell} = load ptr, ptr @scr_exc_active`);
     B.line(`${kind} = load i32, ptr ${cell}`);
     let word = kind;
     if (this.mod.workers === true) {
@@ -4770,6 +4782,9 @@ export class LlEmitter {
   private emitFunction(fn: IrFunction): string {
     const B = new BlockBuilder();
     this.B = B;
+    // Fiber switches restore the active exception cell before control
+    // returns to a synchronous frame (emitPendingCheck).
+    B.excCellInvariant = fn.async !== true && fn.generator === undefined;
     this.debugScope = this.debug?.function(fn) ?? null;
     B.debugLocation = this.debug?.location(fn.loc, this.debugScope) ?? null;
     this.frames = [];
