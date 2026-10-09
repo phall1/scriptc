@@ -1,15 +1,29 @@
-import type { IrExpr, IrFunction, IrLocal } from "../../ir/ir.js";
+import { isRefCounted, type IrExpr, type IrFunction, type IrLocal } from "../../ir/ir.js";
 import { everyStmtList } from "../../ir/traverse.js";
 
 /** What the emitter knows about a projection's storage. */
 export interface WalkBorrowHost {
-  /** The local holds a plain pointer: a class instance or a nullable-pointer
-   * union. Tagged union boxes, strings and containers keep ownership. */
+  /** The local holds one plain reference pointer (instances, records,
+   * arrays, strings, nullable-pointer unions). Tagged union boxes, closures
+   * and dynamic values keep ownership. */
   pointerLocal(local: IrLocal): boolean;
   /** emitReadReceiver yields this expression's pointer without acquiring a
    * reference (class casts, nullable wraps, plain field reads, checked
    * ternaries). */
   borrowsWithoutOwning(e: IrExpr): boolean;
+  /** The callee returns a borrowed walk of its arguments (findWalkBorrows'
+   * returnsWalk); a call to it with walk arguments is itself a walk. */
+  borrowedReturn?(callee: string): boolean;
+  /** Parameters that may become candidates; once calling conventions are
+   * fixed, only borrowed parameters qualify. Defaults to every parameter. */
+  parameterAllowed?(localId: string): boolean;
+}
+
+export interface WalkFacts {
+  locals: ReadonlySet<string>;
+  /** Every return yields a walk (or a throw), so the body can return its
+   * pointer without a reference: no try statement, at least one return. */
+  returnsWalk: boolean;
 }
 
 /** Locals (including rebound parameters) that may hold borrowed pointers
@@ -30,8 +44,15 @@ export interface WalkBorrowHost {
  * freely: they never root a walk, so releasing their old values cannot free
  * an object the walk reaches. */
 export function findWalkBorrows(fn: IrFunction, host: WalkBorrowHost): ReadonlySet<string> {
+  return analyzeWalks(fn, host).locals;
+}
+
+export function analyzeWalks(fn: IrFunction, host: WalkBorrowHost): WalkFacts {
   const result = new Set<string>();
-  if (fn.async || fn.generator || fn.captures || fn.classCaptures) return result;
+  if (fn.async || fn.generator || fn.captures || fn.classCaptures)
+    return { locals: result, returnsWalk: false };
+  const returns: (IrExpr | null)[] = [];
+  let guarded = false;
   const params = new Set(fn.params.map((param) => param.localId));
   const locals = new Map(fn.locals.map((local) => [local.id, local]));
   const definitions = new Map<string, (IrExpr | null)[]>();
@@ -59,7 +80,11 @@ export function findWalkBorrows(fn: IrFunction, host: WalkBorrowHost): ReadonlyS
           excluded.add(s.localId);
           break;
         case "tryCatch":
+          guarded = true;
           if (s.catchLocalId !== null) excluded.add(s.catchLocalId);
+          break;
+        case "return":
+          returns.push(s.value);
           break;
       }
       return true;
@@ -80,7 +105,14 @@ export function findWalkBorrows(fn: IrFunction, host: WalkBorrowHost): ReadonlyS
   });
   const plain = (id: string): boolean => {
     const local = locals.get(id);
-    return !!local && !local.boxed && !local.tdz && !excluded.has(id) && host.pointerLocal(local);
+    return (
+      !!local &&
+      !local.boxed &&
+      !local.tdz &&
+      !excluded.has(id) &&
+      host.pointerLocal(local) &&
+      (!params.has(id) || host.parameterAllowed?.(id) !== false)
+    );
   };
   // Parameters are roots only while no definition rebinds them. A
   // parameter rebound by statement assignments alone (`t = t.regular`) is a
@@ -112,6 +144,13 @@ export function findWalkBorrows(fn: IrFunction, host: WalkBorrowHost): ReadonlyS
       // without owning.
       case "ternary":
         return host.borrowsWithoutOwning(e) && walkOrThrow(e.then) && walkOrThrow(e.else_);
+      // A borrowed result is reachable from walk arguments.
+      case "call":
+        return (
+          host.borrowedReturn?.(e.callee) === true &&
+          host.borrowsWithoutOwning(e) &&
+          e.args.every((arg) => !isRefCounted(arg.type) || walk(arg))
+        );
       default:
         return false;
     }
@@ -127,5 +166,9 @@ export function findWalkBorrows(fn: IrFunction, host: WalkBorrowHost): ReadonlyS
     }
   }
   for (const id of candidates) result.add(id);
-  return result;
+  const returnsWalk =
+    !guarded &&
+    returns.length > 0 &&
+    returns.every((value) => value !== null && walkOrThrow(value));
+  return { locals: result, returnsWalk };
 }

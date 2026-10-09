@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { F64, VOID, type IrExpr, type IrFunction, type IrStmt, type IrType } from "../../ir/ir.js";
-import { findWalkBorrows, type WalkBorrowHost } from "./walk-borrows.js";
+import { analyzeWalks, findWalkBorrows, type WalkBorrowHost } from "./walk-borrows.js";
 
 const loc = { file: "walk.ts", start: 0, end: 0 };
 const NODE: IrType = { kind: "object", className: "Node" };
@@ -102,4 +102,40 @@ test("scalar locals, owning projections and suspending bodies are never walks", 
   expect(findWalkBorrows(owning, { ...host, borrowsWithoutOwning: () => false }).size).toBe(0);
   const suspending: IrFunction = { ...fn([decl("p", parent(ref("node")))], ["p"]), async: true };
   expect(findWalkBorrows(suspending, host).size).toBe(0);
+});
+
+test("returns of walks, including calls to borrowed-return callees, return borrowed", () => {
+  const ret = (value: IrExpr | null): IrStmt => ({ kind: "return", value, loc });
+  const accessor: IrExpr = { kind: "call", callee: "fileOf", args: [ref("node")], type: NODE, loc };
+  const borrowedHost = { ...host, borrowedReturn: (callee: string) => callee === "fileOf" };
+  const walking = fn([decl("p", accessor), ret(parent(ref("p")))], ["p"]);
+  expect(analyzeWalks(walking, borrowedHost)).toEqual({
+    locals: new Set(["p"]),
+    returnsWalk: true,
+  });
+  // Without the callee fact the call result is owned.
+  expect(analyzeWalks(walking, host)).toEqual({ locals: new Set(), returnsWalk: false });
+  // Every return must walk, a try statement disqualifies, and parameters
+  // outside the borrowing convention are no roots.
+  const mixed = fn([ret(parent(ref("node"))), ret(call)], []);
+  expect(analyzeWalks(mixed, borrowedHost).returnsWalk).toBe(false);
+  const guarded = fn(
+    [
+      {
+        kind: "tryCatch",
+        tryBody: [ret(ref("node"))],
+        catchBody: null,
+        catchLocalId: null,
+        finallyBody: [],
+        loc,
+      },
+    ],
+    [],
+  );
+  expect(analyzeWalks(guarded, borrowedHost).returnsWalk).toBe(false);
+  const owned = fn([ret(parent(ref("node")))], []);
+  expect(analyzeWalks(owned, { ...borrowedHost, parameterAllowed: () => false }).returnsWalk).toBe(
+    false,
+  );
+  expect(analyzeWalks(owned, borrowedHost).returnsWalk).toBe(true);
 });

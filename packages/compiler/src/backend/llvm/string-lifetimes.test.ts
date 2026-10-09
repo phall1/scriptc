@@ -110,10 +110,15 @@ test("string comparisons borrow parameters while owned entry adapters release th
 test("returning a borrowed input acquires a result owner", () => {
   const identity = fn("identity", ["text"], ref("text"));
   expect(facts(identity).parameters.size).toBe(0);
+  // The borrowing body returns its input without a reference; direct
+  // callers own it themselves and the owned adapter retains the result
+  // before releasing the parameter.
   const ir = body(mod(identity), "sc_bf_identity");
-  expect(ir).toContain("@scr_str_retain_v");
+  expect(ir).not.toContain("@scr_str_retain_v");
   expect(ir).not.toContain("@scr_str_release");
-  expect(body(mod(identity), "sc_f_identity")).toContain("@scr_str_release");
+  const adapter = body(mod(identity), "sc_f_identity");
+  expect(adapter.indexOf("@scr_str_retain_v")).toBeGreaterThan(0);
+  expect(adapter.indexOf("@scr_str_release")).toBeGreaterThan(adapter.indexOf("@scr_str_retain_v"));
 });
 
 test("literal arguments remain immortal while the called body borrows them", () => {

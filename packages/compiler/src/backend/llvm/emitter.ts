@@ -156,7 +156,7 @@ import {
 } from "./map-read-lifetimes.js";
 import { emitBorrowedFieldSequence, guardedValue } from "./borrowed-receivers.js";
 import { emitBorrowedInput } from "./borrowed-inputs.js";
-import { findWalkBorrows } from "./walk-borrows.js";
+import { analyzeWalks, findWalkBorrows } from "./walk-borrows.js";
 import { ReferenceEffects } from "./reference-effects.js";
 import { LlvmDebugInfo } from "./debug-info.js";
 import { StackCallbacks } from "./stack-callbacks.js";
@@ -187,7 +187,7 @@ import {
   emitRecordExpr,
 } from "./expr-primitives.js";
 import { emitControlExpr } from "./expr-control.js";
-import { emitCallExpr } from "./expr-calls.js";
+import { emitBorrowedResultCall, emitCallExpr } from "./expr-calls.js";
 import { emitDynamicExpr } from "./expr-dynamic.js";
 import { emitIntrinsicExpr, emitSerializationExpr, emitAsyncExpr } from "./expr-async.js";
 import { emitJsInteropExpr, emitExpr } from "./expr-dispatch.js";
@@ -590,6 +590,10 @@ export class LlEmitter {
    * whole lifetime (walk-borrows.ts), per function and for the current one. */
   private readonly walkBorrowsByFunction = new Map<string, ReadonlySet<string>>();
   private walkBorrows: ReadonlySet<string> = new Set();
+  /** Functions whose borrowing body returns its result without a reference
+   * (analyzeBorrowedReturns), and whether the current body is one. */
+  readonly borrowedReturns = new Set<string>();
+  private currentBorrowedReturn = false;
   /** Manifest-bound native imports, used by ffiCall emission. */
   readonly ffiByName = new Map<string, IrFfiImport>();
   /** C-ABI callback trampolines and (for raw/no-userdata callbacks) their
@@ -835,10 +839,7 @@ export class LlEmitter {
     const walkParameters = new Map<string, Set<number>>();
     if (this.debug === null) {
       const host = {
-        pointerLocal: (local: IrLocal) =>
-          local.type.kind === "object" ||
-          (local.type.kind === "union" &&
-            this.nullableUnions.get(local.type.unionId)?.arm.kind === "object"),
+        pointerLocal: (local: IrLocal) => this.plainReference(local.type),
         borrowsWithoutOwning: (e: IrExpr) => this.borrowsWithoutOwning(e),
       };
       for (const fn of this.fnByName.values()) {
@@ -969,6 +970,8 @@ export class LlEmitter {
       this.fnByName,
       this.callLifetimes.borrowed,
     );
+    // After the vtable slots: borrowing slots exclude their implementations.
+    if (this.debug === null) this.analyzeBorrowedReturns();
   }
 
   /** The borrowed parameters of a hierarchy's vtable slot (empty: owned). */
@@ -4887,6 +4890,7 @@ export class LlEmitter {
     this.tryStack = [];
     this.currentReturnType = fn.returnType;
     this.currentGenerator = fn.generator ?? null;
+    this.currentBorrowedReturn = this.borrowedReturns.has(fn.name);
     this.currentWasiCoro = null;
     this.logArgSlots = 0;
 
@@ -5140,9 +5144,29 @@ export class LlEmitter {
     const ret = this.llType(fn.returnType);
     const call = `call ${ret} @${mangleBorrowedFunction(fn.name)}(${params.join(", ")})`;
     B.line(ret === "void" ? call : `%result = ${call}`);
+    // A borrowed result is reachable from the parameters: own it first. A
+    // throwing body returns a null dummy, which needs no owner (and string
+    // or array retains do not accept NULL).
+    let result = "%result";
+    if (this.borrowedReturns.has(fn.name)) {
+      const slot = B.slot();
+      B.entryAllocas.push(`${slot} = alloca ptr`);
+      B.line(`store ptr null, ptr ${slot}`);
+      const present = B.tmp();
+      const own = B.newLabel("result.own");
+      const done = B.newLabel("result.done");
+      B.line(`${present} = icmp ne ptr %result, null`);
+      B.condBr(present, own, done);
+      B.startBlock(own);
+      B.line(`store ptr ${this.retainValue("%result", fn.returnType)}, ptr ${slot}`);
+      B.br(done);
+      B.startBlock(done);
+      result = B.tmp();
+      B.line(`${result} = load ptr, ptr ${slot}`);
+    }
     for (const index of borrowed)
       if (!kept.has(index)) this.releaseValue(`%p${index}`, fn.params[index]!.type);
-    B.terminate(ret === "void" ? "ret void" : `ret ${ret} %result`);
+    B.terminate(ret === "void" ? "ret void" : `ret ${ret} ${result}`);
     const symbol =
       kept.size > 0 ? `${mangleBorrowedFunction(fn.name)}.virtual` : mangleFunction(fn.name);
     return `define internal ${ret} @${symbol}(${params.join(", ")}) ${FN_ATTRS} {\n${B.render()}\n}`;
@@ -6178,7 +6202,11 @@ export class LlEmitter {
         // the actual ret. The parked value owns a synthetic slot-backed
         // scope entry during each copy so a throwing finally releases it.
         let v: LlValue | null = null;
-        if (s.value !== null) {
+        if (s.value !== null && this.currentBorrowedReturn) {
+          // A borrowed-return body hands back its walk without a reference
+          // (it has no try statements, so no finally can intervene).
+          v = this.emitReadReceiver(s.value);
+        } else if (s.value !== null) {
           v = this.emitExpr(s.value);
           this.moveTemp(v);
         }
@@ -6942,6 +6970,7 @@ export class LlEmitter {
       B.line(`${value} = load ptr, ptr ${slot}`);
       return { name: value, type: e.type };
     }
+    if (e.kind === "call" && this.canBorrowReceiver(e)) return emitBorrowedResultCall(this, e);
     return this.emitExpr(e);
   }
 
@@ -7150,6 +7179,17 @@ export class LlEmitter {
         const wrap = this.borrowableNullableWrap(e);
         return wrap === "unit" || (wrap === "ref" && this.canBorrowReceiver(e.value));
       }
+      // A borrowed-return callee preserves edges, so its result stays
+      // reachable from borrowable arguments until the consumer runs.
+      case "call":
+        return (
+          this.borrowedReturns.has(e.callee) &&
+          e.args.every(
+            (arg) =>
+              (!isRefCounted(arg.type) || this.canBorrowReceiver(arg)) &&
+              this.referenceEffects.preserves(arg),
+          )
+        );
       // A required element read: the (borrowed) array owns the element
       // while an edge-preserving index computes.
       case "arrayGet":
@@ -7161,6 +7201,79 @@ export class LlEmitter {
         );
       default:
         return false;
+    }
+  }
+
+  /** A reference held as one plain pointer that emitReadReceiver can read
+   * without owning: class instances, records, arrays, strings and
+   * nullable-pointer unions. Tagged union boxes, closures and dynamic
+   * values keep ordinary ownership. */
+  plainReference(type: IrType): boolean {
+    switch (type.kind) {
+      case "object":
+      case "record":
+      case "array":
+      case "string":
+        return true;
+      case "union":
+        return this.nullableUnions.has(type.unionId);
+      default:
+        return false;
+    }
+  }
+
+  /** Functions returning a walk of their borrowed parameters return it
+   * without a reference (+0) from their borrowing body; direct callers
+   * either consume it as a receiver/walk or retain it at once, and the owned
+   * adapter retains before releasing its parameters. Candidates preserve
+   * every heap edge (so the result stays reachable from the arguments),
+   * borrow every reference parameter and return plain pointers. The set
+   * grows to a fixpoint because a call to a borrowed-return function with
+   * walk arguments is itself a walk; walk facts are then recomputed with
+   * the final set, admitting only parameters whose convention borrows. */
+  private analyzeBorrowedReturns(): void {
+    const pointer = (type: IrType): boolean => this.plainReference(type);
+    const borrowedIds = (fn: IrFunction): Set<string> => {
+      const indexes = this.callLifetimes.borrowed.get(fn.name);
+      return new Set(fn.params.filter((_, i) => indexes?.has(i)).map((p) => p.localId));
+    };
+    const hostFor = (fn: IrFunction) => {
+      const allowed = borrowedIds(fn);
+      return {
+        pointerLocal: (local: IrLocal) => pointer(local.type),
+        borrowsWithoutOwning: (e: IrExpr) => this.borrowsWithoutOwning(e),
+        borrowedReturn: (callee: string) => this.borrowedReturns.has(callee),
+        parameterAllowed: (id: string) => allowed.has(id),
+      };
+    };
+    const preserving = [...this.fnByName.values()].filter((fn) =>
+      this.referenceEffects.functions.has(fn.name),
+    );
+    const candidates = preserving.filter((fn) => {
+      if (!pointer(fn.returnType) || fn.async || fn.generator || fn.captures) return false;
+      // A borrowing vtable slot dispatches to the borrowing body (or its
+      // virtual adapter) directly, and virtual callers own the result.
+      if (this.implSlotBorrowed(fn.name).size > 0) return false;
+      const indexes = this.callLifetimes.borrowed.get(fn.name);
+      return (
+        indexes !== undefined &&
+        indexes.size > 0 &&
+        fn.params.every((p, i) => !isRefCounted(p.type) || indexes.has(i))
+      );
+    });
+    for (let changed = true; changed;) {
+      changed = false;
+      for (const fn of candidates) {
+        if (this.borrowedReturns.has(fn.name)) continue;
+        if (!analyzeWalks(fn, hostFor(fn)).returnsWalk) continue;
+        this.borrowedReturns.add(fn.name);
+        changed = true;
+      }
+    }
+    if (this.borrowedReturns.size === 0) return;
+    for (const fn of preserving) {
+      const walks = analyzeWalks(fn, hostFor(fn)).locals;
+      if (walks.size > 0) this.walkBorrowsByFunction.set(fn.name, walks);
     }
   }
 
@@ -7188,6 +7301,13 @@ export class LlEmitter {
       // The caller proves each arm separately.
       case "ternary":
         return true;
+      // The caller proves the arguments are walks; their evaluation must not
+      // remove an edge before the call reads them.
+      case "call":
+        return (
+          this.borrowedReturns.has(e.callee) &&
+          e.args.every((arg) => this.referenceEffects.preserves(arg))
+        );
       default:
         return false;
     }

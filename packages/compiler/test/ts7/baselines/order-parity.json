@@ -15616,6 +15616,12 @@
     "<repo>/tests/corpus/4543-walk-borrowed-locals.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/4545-borrowed-returns.ts": {
+   "order": [
+    "<repo>/tests/corpus/4545-borrowed-returns.ts"
+   ],
+   "diags": []
   }
  }
 }

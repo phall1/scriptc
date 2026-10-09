@@ -110,8 +110,17 @@ export function emitCallExpr(
       }
       const t = B.tmp();
       B.line(`${t} = call ${host.llType(e.type)} ${target}(${argList})`);
-      const out = host.own({ name: t, type: e.type });
-      if (host.mayThrow.has(e.callee)) host.emitPendingCheck(out);
+      let out: LlValue;
+      if (borrowed && host.borrowedReturns.has(e.callee)) {
+        // A borrowed-return body hands back +0 (a null dummy when it threw):
+        // test the exception first, then own the result before the
+        // argument snapshots that keep it reachable are released.
+        if (host.mayThrow.has(e.callee)) host.emitPendingCheck();
+        out = host.own({ name: host.retainValue(t, e.type), type: e.type });
+      } else {
+        out = host.own({ name: t, type: e.type });
+        if (host.mayThrow.has(e.callee)) host.emitPendingCheck(out);
+      }
       if (borrowed) {
         host.moveTemp(out);
         host.releaseFrame(host.frames.pop()!);
@@ -989,4 +998,24 @@ export function emitCallExpr(
       throw new InternalCompilerError("unreachable");
     }
   }
+}
+
+/** A direct call to a borrowed-return function whose result a receiver or
+ * walk consumes without owning it (LlEmitter.canBorrowReceiver proved every
+ * reference argument borrowable and every argument edge-preserving). The
+ * result stays reachable from the borrowed arguments until the consumer. */
+export function emitBorrowedResultCall(host: LlvmEmitterContext, e: ExprOf<"call">): LlValue {
+  const callee = host.fnByName.get(e.callee);
+  if (!callee || !host.borrowedReturns.has(e.callee))
+    throw new InternalCompilerError(`llvm emitter bug: borrowed result of ${e.callee}`);
+  const args = e.args.map((arg) =>
+    isRefCounted(arg.type) ? host.emitReadReceiver(arg) : host.emitExpr(arg),
+  );
+  const argList = args.map((a, i) => `${host.llType(callee.params[i]!.type)} ${a.name}`).join(", ");
+  const t = host.B.tmp();
+  host.B.line(
+    `${t} = call ${host.llType(e.type)} @${mangleBorrowedFunction(e.callee)}(${argList}) ; borrowed result`,
+  );
+  if (host.mayThrow.has(e.callee)) host.emitPendingCheck();
+  return { name: t, type: e.type };
 }

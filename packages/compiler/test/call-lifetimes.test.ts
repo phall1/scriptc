@@ -313,9 +313,12 @@ function snapshot(item: Item): Item { const saved = item; item = new Item(); ret
 console.log(alias(new Item()).value, snapshot(new Item()).value);
 `);
   const llvm = emitLlvmModule(mod);
+  // The aliases borrow the parameter, and so does the result: the borrowing
+  // body returns it without a reference and the owned adapter retains it.
   const alias = body(llvm, "sc_bf_alias");
-  expect(alias.match(/@sc_retain_Item/g)).toHaveLength(1);
+  expect(alias).not.toContain("@sc_retain_Item");
   expect(alias).not.toContain("@sc_release_Item");
+  expect(body(llvm, "sc_f_alias").match(/@sc_retain_Item/g)).toHaveLength(1);
   const snapshot = body(llvm, "sc_f_snapshot");
   // `new Item()` calls the borrowed constructor body, so no retain transfers
   // the fresh instance into it: the saved alias and the returned value.
