@@ -284,6 +284,7 @@ import {
   classFieldIndex,
   classStructSym,
   type LlClassMeta,
+  vtEntriesFor,
 } from "./classes.js";
 import { LlDyn, type DynHost } from "./dyn.js";
 import { LlvmUnsupportedError } from "./unsupported.js";
@@ -422,6 +423,8 @@ export function emitLlvmModuleSource(
 function llStrBytes(text: string): string {
   return llBytes(Buffer.from(text, "utf8"));
 }
+
+const NO_BORROWED: ReadonlySet<number> = new Set();
 
 export class LlEmitter {
   localArrayReads = new Map<string, LocalArrayRead>();
@@ -602,6 +605,11 @@ export class LlEmitter {
   /** The class graph (buildClassGraph): preorder numbering, hierarchy
    * membership, virtual slot lists. */
   readonly classMeta: Map<string, LlClassMeta>;
+  /** Parameters every implementation of a vtable slot borrows, keyed by
+   * `root\0slot index`, and each implementation's slot key (see
+   * virtualSlotBorrowed). */
+  private readonly slotBorrowed = new Map<string, ReadonlySet<number>>();
+  private readonly implSlot = new Map<string, string>();
   /** Class objects (classes as first-class values): className → the
    * interned .name literal ref — registered during body emission, the
    * statics and construct thunks assemble around the bodies. */
@@ -833,6 +841,7 @@ export class LlEmitter {
           .map((meta) => meta.def.name);
       },
       pendingTestLines: (dest) => this.pendingTestLines(dest),
+      virtualEntry: (implFn) => this.virtualEntry(implFn),
     };
     this.walkers = new LlWalkers(this.shapeHost);
     this.dyn = new LlDyn(this.shapeHost);
@@ -886,6 +895,68 @@ export class LlEmitter {
         lib: rec.lib,
       });
     }
+    this.computeVirtualBorrowing(mod);
+  }
+
+  /** Virtual dispatch normally keeps the owned ABI: the caller passes +1
+   * and the method's owned entry releases what its body borrows. When every
+   * implementation of a slot has a borrowing body for the same parameter
+   * (call-lifetimes proves this per function, independent of the caller),
+   * the slot borrows that parameter instead: call sites pass it like a
+   * direct call to a borrowing body, so a receiver that survives the call
+   * is neither retained nor released (and, being cycle-capable, not
+   * buffered as a candidate either). Implementations that borrow more
+   * parameters than the slot get an adapter that releases the difference. */
+  private computeVirtualBorrowing(mod: IrModule): void {
+    const impls = new Map<string, Set<string>>();
+    const emitted = new Set((mod.classes ?? []).filter((c) => !c.runtime).map((c) => c.name));
+    for (const meta of this.classMeta.values()) {
+      if (!meta.hierarchy || !emitted.has(meta.def.name)) continue;
+      vtEntriesFor(meta).forEach(({ slot, impl }, index) => {
+        if (impl === null) return;
+        const key = `${meta.root.def.name}\0${index}`;
+        const name = `%${impl.def.name}.${slot.method}`;
+        let set = impls.get(key);
+        if (!set) impls.set(key, (set = new Set()));
+        set.add(name);
+        this.implSlot.set(name, key);
+      });
+    }
+    for (const [key, names] of impls) {
+      let common: number[] | null = null;
+      for (const name of names) {
+        const fn = this.fnByName.get(name);
+        const borrowed = this.callLifetimes.borrowed.get(name);
+        if (!fn || !borrowed || fn.captures !== undefined || fn.async || fn.generator) {
+          common = [];
+          break;
+        }
+        common = (common ?? [...borrowed]).filter((index) => borrowed.has(index));
+      }
+      if (common !== null && common.length > 0) this.slotBorrowed.set(key, new Set(common));
+    }
+  }
+
+  /** The borrowed parameters of a hierarchy's vtable slot (empty: owned). */
+  virtualSlotBorrowed(rootName: string, slotIndex: number): ReadonlySet<number> {
+    return this.slotBorrowed.get(`${rootName}\0${slotIndex}`) ?? NO_BORROWED;
+  }
+
+  /** The vtable entry for one implementation: its owned entry for an owned
+   * slot, its borrowing body when that borrows exactly the slot's
+   * parameters, otherwise its virtual adapter (emitOwnedCallAdapter). */
+  virtualEntry(implFn: string): string {
+    const slot = this.implSlotBorrowed(implFn);
+    if (slot.size === 0) return mangleFunction(implFn);
+    const own = this.callLifetimes.borrowed.get(implFn)!;
+    return own.size === slot.size
+      ? mangleBorrowedFunction(implFn)
+      : `${mangleBorrowedFunction(implFn)}.virtual`;
+  }
+
+  private implSlotBorrowed(implFn: string): ReadonlySet<number> {
+    const key = this.implSlot.get(implFn);
+    return (key !== undefined && this.slotBorrowed.get(key)) || NO_BORROWED;
   }
 
   abiOffset(native64: number, wasm32: number): number {
@@ -4937,7 +5008,13 @@ export class LlEmitter {
     const debug = this.debugScope === null ? "" : ` !dbg ${this.debugScope}`;
     const symbol = borrowed ? mangleBorrowedFunction(fn.name) : mangleFunction(fn.name);
     const body = `define internal ${ret} @${symbol}(${params.join(", ")}) ${attrs}${debug} { ; ${fn.name}\n${B.render()}\n}`;
-    return borrowed ? body + "\n" + this.emitOwnedCallAdapter(fn, borrowed) : body;
+    if (!borrowed) return body;
+    const slot = this.implSlotBorrowed(fn.name);
+    const virtual =
+      slot.size > 0 && slot.size !== borrowed.size
+        ? "\n" + this.emitOwnedCallAdapter(fn, borrowed, slot)
+        : "";
+    return body + "\n" + this.emitOwnedCallAdapter(fn, borrowed) + virtual;
   }
 
   /** Keep the ordinary owned ABI for closures, virtual dispatch, generated
@@ -4945,16 +5022,26 @@ export class LlEmitter {
    * borrowing body. Ownership of other parameters moves into that body;
    * borrowed parameters are released here on normal and exceptional exits.
    * The pending exception remains for the adapter's caller to handle. */
-  private emitOwnedCallAdapter(fn: IrFunction, borrowed: ReadonlySet<number>): string {
+  /** With `kept`, the virtual adapter of a borrowing slot instead: the
+   * slot's parameters stay borrowed, the body's other borrowed ones are
+   * released here. */
+  private emitOwnedCallAdapter(
+    fn: IrFunction,
+    borrowed: ReadonlySet<number>,
+    kept: ReadonlySet<number> = NO_BORROWED,
+  ): string {
     const B = new BlockBuilder();
     this.B = B;
     const params = fn.params.map((param, index) => `${this.llType(param.type)} %p${index}`);
     const ret = this.llType(fn.returnType);
     const call = `call ${ret} @${mangleBorrowedFunction(fn.name)}(${params.join(", ")})`;
     B.line(ret === "void" ? call : `%result = ${call}`);
-    for (const index of borrowed) this.releaseValue(`%p${index}`, fn.params[index]!.type);
+    for (const index of borrowed)
+      if (!kept.has(index)) this.releaseValue(`%p${index}`, fn.params[index]!.type);
     B.terminate(ret === "void" ? "ret void" : `ret ${ret} %result`);
-    return `define internal ${ret} @${mangleFunction(fn.name)}(${params.join(", ")}) ${FN_ATTRS} {\n${B.render()}\n}`;
+    const symbol =
+      kept.size > 0 ? `${mangleBorrowedFunction(fn.name)}.virtual` : mangleFunction(fn.name);
+    return `define internal ${ret} @${symbol}(${params.join(", ")}) ${FN_ATTRS} {\n${B.render()}\n}`;
   }
 
   /** A local stable binding keeps its value alive while later arguments

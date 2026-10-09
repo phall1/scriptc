@@ -15526,6 +15526,12 @@
     "<repo>/tests/corpus/4560-field-store-borrowed-receivers.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/4561-virtual-borrowed-parameters.ts": {
+   "order": [
+    "<repo>/tests/corpus/4561-virtual-borrowed-parameters.ts"
+   ],
+   "diags": []
   }
  }
 }

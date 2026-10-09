@@ -231,7 +231,7 @@ export function emitClassMembershipHelper(
 /** The root's slot list as seen by one class: the implementation the class
  * dispatches to, or null outside the slot's declaring subtree / on a
  * fully-abstract chain (vtEntriesFor, ported). */
-function vtEntriesFor(meta: LlClassMeta): { slot: LlVtSlot; impl: LlClassMeta | null }[] {
+export function vtEntriesFor(meta: LlClassMeta): { slot: LlVtSlot; impl: LlClassMeta | null }[] {
   return meta.root.slots.map((slot): { slot: LlVtSlot; impl: LlClassMeta | null } => {
     if (!(slot.declarer.pre <= meta.pre && meta.pre <= slot.declarer.post)) {
       return { slot, impl: null };
@@ -300,6 +300,10 @@ export interface ClassHost extends ShapeHost {
   readonly unionsById: Map<string, IrUnionDef>;
   unitInstanceRef(unionId: string, tag: number): string;
   cstr(text: string): string;
+  /** The symbol a vtable stores for a method implementation (its owned
+   * entry point unless the slot's calling convention borrows; see
+   * LlEmitter.virtualEntry). */
+  virtualEntry?(implFn: string): string;
 }
 
 /** The newFn initialization stores for fields whose type ADMITS undefined
@@ -414,7 +418,7 @@ export function emitClassShapes(
     const entries = vtEntriesFor(meta).map(({ slot, impl }) =>
       impl === null
         ? `ptr null` // outside the declaring subtree / fully-abstract chain
-        : `ptr @${mangleFunction(`%${impl.def.name}.${slot.method}`)}`,
+        : `ptr @${host.virtualEntry?.(`%${impl.def.name}.${slot.method}`) ?? mangleFunction(`%${impl.def.name}.${slot.method}`)}`,
     );
     const head = `%ScrVt { ${host.sizeType} ${meta.pre}, ${host.sizeType} ${meta.post}, ptr @${mangleClassReleaseDirect(cls.name)} }`;
     defs.push(
