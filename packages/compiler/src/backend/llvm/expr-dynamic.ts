@@ -4,7 +4,7 @@ import { preservesDynTest } from "./checked-value-lifetimes.js";
 import { typedRefConstructor } from "./shapes.js";
 /* Focused LLVM expression emission extracted from emitter.ts. */
 import { InternalCompilerError } from "../../errors.js";
-import { emitNullableIsTag } from "./union-repr.js";
+import { emitNullableIsTag, emitNullablePresent } from "./union-repr.js";
 import { isObjectArm } from "./nullable-unions.js";
 import { streamTypedRefEligible } from "../../ir/analysis.js";
 import {
@@ -778,6 +778,40 @@ export function emitDynamicExpr(
         const eq = B.tmp();
         B.line(`${eq} = icmp ${e.negated ? "ne" : "eq"} ptr ${l.name}, ${r.name}`);
         return { name: eq, type: e.type };
+      }
+      if (nullable) {
+        // String arm: identical pointers are equal (the same string or the
+        // same unit encoding); otherwise equal only when both hold strings
+        // with the same bytes.
+        const slot = B.slot();
+        B.entryAllocas.push(`${slot} = alloca i1`);
+        const same = B.tmp(),
+          present = B.tmp();
+        B.line(`${same} = icmp eq ptr ${l.name}, ${r.name}`);
+        const lPresent = emitNullablePresent(B, nullable, l.name);
+        const rPresent = emitNullablePresent(B, nullable, r.name);
+        B.line(`${present} = and i1 ${lPresent}, ${rPresent}`);
+        B.line(`store i1 ${same}, ptr ${slot}`);
+        const bytes = B.newLabel("ues.b"),
+          join = B.newLabel("ues.j");
+        const notSame = B.tmp(),
+          go = B.tmp();
+        B.line(`${notSame} = xor i1 ${same}, true`);
+        B.line(`${go} = and i1 ${notSame}, ${present}`);
+        B.condBr(go, bytes, join);
+        B.startBlock(bytes);
+        host.declare(`declare zeroext i1 @scr_str_eq(ptr, ptr)`);
+        const eqBytes = B.tmp();
+        B.line(`${eqBytes} = call zeroext i1 @sc_str_eq(ptr ${l.name}, ptr ${r.name})`);
+        B.line(`store i1 ${eqBytes}, ptr ${slot}`);
+        B.br(join);
+        B.startBlock(join);
+        const eq = B.tmp();
+        B.line(`${eq} = load i1, ptr ${slot}`);
+        if (!e.negated) return { name: eq, type: e.type };
+        const ne = B.tmp();
+        B.line(`${ne} = xor i1 ${eq}, true`);
+        return { name: ne, type: e.type };
       }
       const slot = B.slot();
       B.entryAllocas.push(`${slot} = alloca i1`);
