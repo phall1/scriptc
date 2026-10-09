@@ -10604,8 +10604,14 @@ export class Lowerer {
       right = this.lowerExpr(expr.right);
     }
     if (right.type.kind !== "classval") return lower();
-    const stableRight = this.declareHiddenLocal("%instanceofRight", right.type);
-    const rightValue = varRef(stableRight.id, right.type, locOf(expr.right));
+    // A capture-free class reference is the immortal static class object:
+    // re-reading it is pure, so it needs no owned temporary (whose retain
+    // and release would be out-of-line calls on every test).
+    const constantRight = right.kind === "classRef" && right.captures === undefined;
+    const stableRight = constantRight
+      ? null
+      : this.declareHiddenLocal("%instanceofRight", right.type);
+    const rightValue = stableRight ? varRef(stableRight.id, right.type, locOf(expr.right)) : right;
     const body = this.withExpressionOverride(
       expr.left,
       {
@@ -10623,7 +10629,16 @@ export class Lowerer {
       kind: "seqExpr",
       stmts: [
         { kind: "varDecl", localId: stable.id, init: left, loc: locOf(expr.left) },
-        { kind: "varDecl", localId: stableRight.id, init: right, loc: locOf(expr.right) },
+        ...(stableRight
+          ? [
+              {
+                kind: "varDecl" as const,
+                localId: stableRight.id,
+                init: right,
+                loc: locOf(expr.right),
+              },
+            ]
+          : []),
       ],
       result: {
         kind: "ternary",

@@ -15484,6 +15484,12 @@
     "<repo>/tests/corpus/4481-array-optional-push.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/4482-instanceof-static-class-optional.ts": {
+   "order": [
+    "<repo>/tests/corpus/4482-instanceof-static-class-optional.ts"
+   ],
+   "diags": []
   }
  }
 }
