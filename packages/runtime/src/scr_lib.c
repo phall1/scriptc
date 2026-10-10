@@ -6966,6 +6966,9 @@ double scr_date_parse_get_time(ScrStr *s) {
   }
 }
 
+static double scr_date_make_utc(double y, double mo, double d,
+                                double h, double mi, double s, double ms);
+
 /* Date.UTC(year, month, date, hours, minutes, seconds, ms) — the spec's
  * MakeDay/MakeTime/TimeClip pipeline over ALREADY-NUMBER arguments (tsc
  * pins them; the frontend completes omitted trailing arguments with the
@@ -6991,8 +6994,27 @@ double scr_date_utc(double y, double mo, double d,
   mi = trunc(mi);
   s = trunc(s);
   ms = trunc(ms);
-  if (fabs(y) > 1000000.0 || fabs(mo) > 10000000.0) return NAN;
   if (y >= 0 && y <= 99) y += 1900;
+  return scr_date_make_utc(y, mo, d, h, mi, s, ms);
+}
+
+/* MakeDay/MakeTime/TimeClip for an already-full year. No 0–99 mapping:
+ * calendar fields read back off a Date are full years, and feeding them
+ * through Date.UTC would turn year 50 into 1950. */
+static double scr_date_make_utc(double y, double mo, double d,
+                                double h, double mi, double s, double ms) {
+  if (!isfinite(y) || !isfinite(mo) || !isfinite(d) || !isfinite(h) ||
+      !isfinite(mi) || !isfinite(s) || !isfinite(ms)) {
+    return NAN;
+  }
+  y = trunc(y);
+  mo = trunc(mo);
+  d = trunc(d);
+  h = trunc(h);
+  mi = trunc(mi);
+  s = trunc(s);
+  ms = trunc(ms);
+  if (fabs(y) > 1000000.0 || fabs(mo) > 10000000.0) return NAN;
   double ym = y + floor(mo / 12.0);
   int mn = (int)(mo - floor(mo / 12.0) * 12.0); /* 0..11 */
   double days = scr_days_from_civil((long long)ym, mn + 1, 1) + (d - 1.0);
@@ -7048,6 +7070,77 @@ static bool scr_date_utc_parts(double ms, ScrDateParts *out) {
   if (!isfinite(ms) || fabs(ms) > 8640000000000000.0) return false;
   scr_date_utc_parts_unchecked(trunc(ms), out);
   return true;
+}
+
+/* UTC setters. `nopt` counts optional components after the required one.
+ * An invalid receiver is NaN for every setter except setUTCFullYear, which
+ * the spec restarts from +0. Years read from the calendar are full years. */
+static int scr_date_base(double ms, int invalid_is_zero, ScrDateParts *out) {
+  int invalid = !isfinite(ms) || fabs(ms) > 8640000000000000.0;
+  if (invalid && !invalid_is_zero) return 0;
+  scr_date_utc_parts_unchecked(invalid ? 0.0 : trunc(ms), out);
+  return 1;
+}
+
+double scr_date_set_utc_full_year(double ms, double y, double mo, double dt, double nopt) {
+  ScrDateParts p;
+  int n = (int)nopt;
+  scr_date_base(ms, 1, &p);
+  return scr_date_make_utc(
+      y, n >= 1 ? mo : (double)p.month, n >= 2 ? dt : (double)p.date, (double)p.hours,
+      (double)p.minutes, (double)p.seconds, (double)p.milliseconds);
+}
+
+double scr_date_set_utc_month(double ms, double mo, double dt, double nopt) {
+  ScrDateParts p;
+  if (!scr_date_base(ms, 0, &p)) return NAN;
+  int n = (int)nopt;
+  return scr_date_make_utc(
+      (double)p.year, mo, n >= 1 ? dt : (double)p.date, (double)p.hours, (double)p.minutes,
+      (double)p.seconds, (double)p.milliseconds);
+}
+
+double scr_date_set_utc_date(double ms, double dt) {
+  ScrDateParts p;
+  if (!scr_date_base(ms, 0, &p)) return NAN;
+  return scr_date_make_utc(
+      (double)p.year, (double)p.month, dt, (double)p.hours, (double)p.minutes, (double)p.seconds,
+      (double)p.milliseconds);
+}
+
+double scr_date_set_utc_hours(double ms, double h, double mi, double s, double milli, double nopt) {
+  ScrDateParts p;
+  if (!scr_date_base(ms, 0, &p)) return NAN;
+  int n = (int)nopt;
+  return scr_date_make_utc(
+      (double)p.year, (double)p.month, (double)p.date, h, n >= 1 ? mi : (double)p.minutes,
+      n >= 2 ? s : (double)p.seconds, n >= 3 ? milli : (double)p.milliseconds);
+}
+
+double scr_date_set_utc_minutes(double ms, double mi, double s, double milli, double nopt) {
+  ScrDateParts p;
+  if (!scr_date_base(ms, 0, &p)) return NAN;
+  int n = (int)nopt;
+  return scr_date_make_utc(
+      (double)p.year, (double)p.month, (double)p.date, (double)p.hours, mi,
+      n >= 1 ? s : (double)p.seconds, n >= 2 ? milli : (double)p.milliseconds);
+}
+
+double scr_date_set_utc_seconds(double ms, double s, double milli, double nopt) {
+  ScrDateParts p;
+  if (!scr_date_base(ms, 0, &p)) return NAN;
+  int n = (int)nopt;
+  return scr_date_make_utc(
+      (double)p.year, (double)p.month, (double)p.date, (double)p.hours, (double)p.minutes, s,
+      n >= 1 ? milli : (double)p.milliseconds);
+}
+
+double scr_date_set_utc_milliseconds(double ms, double milli) {
+  ScrDateParts p;
+  if (!scr_date_base(ms, 0, &p)) return NAN;
+  return scr_date_make_utc(
+      (double)p.year, (double)p.month, (double)p.date, (double)p.hours, (double)p.minutes,
+      (double)p.seconds, milli);
 }
 
 static bool scr_date_localtime(double secd, struct tm *out) {
@@ -7845,9 +7938,73 @@ double scr_dyn_native_date_value(const ScrDyn *value) {
   return ((ScrNativeDate *)value->v.handle.ptr)->milliseconds;
 }
 
+static int scr_native_date_utc_kind(const char *method) {
+  if (strcmp(method, "setUTCFullYear") == 0) return 1;
+  if (strcmp(method, "setUTCMonth") == 0) return 2;
+  if (strcmp(method, "setUTCDate") == 0) return 3;
+  return 0;
+}
+
+static int scr_native_date_utc_time_kind(const char *method) {
+  if (strcmp(method, "setUTCHours") == 0) return 4;
+  if (strcmp(method, "setUTCMinutes") == 0) return 5;
+  if (strcmp(method, "setUTCSeconds") == 0) return 6;
+  if (strcmp(method, "setUTCMilliseconds") == 0) return 7;
+  return 0;
+}
+
+static double scr_native_date_apply_ymd(int kind, double ms, const double *a, int nopt) {
+  if (kind == 1)
+    return scr_date_set_utc_full_year(ms, a[0], a[1], a[2], (double)nopt);
+  if (kind == 2) return scr_date_set_utc_month(ms, a[0], a[1], (double)nopt);
+  return scr_date_set_utc_date(ms, a[0]);
+}
+
+static double scr_native_date_apply_hms(int kind, double ms, const double *a, int nopt) {
+  if (kind == 4)
+    return scr_date_set_utc_hours(ms, a[0], a[1], a[2], a[3], (double)nopt);
+  if (kind == 5) return scr_date_set_utc_minutes(ms, a[0], a[1], a[2], (double)nopt);
+  if (kind == 6) return scr_date_set_utc_seconds(ms, a[0], a[1], (double)nopt);
+  return scr_date_set_utc_milliseconds(ms, a[0]);
+}
+
+static bool scr_native_date_load_nums(ScrDyn *const *args, size_t argc, double *a, int *nopt) {
+  size_t n = argc < 4 ? argc : 4;
+  for (size_t i = 0; i < n; i++) {
+    if (!scr_dyn_number_coerce_js(args[i], &a[i])) return false;
+  }
+  if (n == 0) a[0] = NAN;
+  *nopt = n == 0 ? 0 : (int)n - 1;
+  return true;
+}
+
+/* Mutates the handle when `method` is a UTC setter. `*matched` is 0 when
+ * the name is some other Date method. A coercion failure returns NULL
+ * with the exception already set. */
+static ScrDyn *scr_native_date_utc_set(ScrNativeDate *date, const char *method,
+    ScrDyn *const *args, size_t argc, int *matched) {
+  int kind = scr_native_date_utc_kind(method);
+  double a[4] = {0, 0, 0, 0};
+  int nopt = 0;
+  double next;
+  if (kind == 0) kind = scr_native_date_utc_time_kind(method);
+  *matched = kind != 0;
+  if (kind == 0) return NULL;
+  if (!scr_native_date_load_nums(args, argc, a, &nopt)) return NULL;
+  next = kind <= 3
+      ? scr_native_date_apply_ymd(kind, date->milliseconds, a, nopt)
+      : scr_native_date_apply_hms(kind, date->milliseconds, a, nopt);
+  date->milliseconds = next;
+  return scr_dyn_new_num(next);
+}
+
 static ScrDyn *scr_native_date_invoke(void *ptr, ScrDyn *self, const char *method,
     ScrDyn *const *args, size_t argc, const char *what) {
-  (void)self; (void)args; (void)argc; (void)what;
+  int matched = 0;
+  ScrDyn *updated;
+  (void)self; (void)what;
+  updated = scr_native_date_utc_set((ScrNativeDate *)ptr, method, args, argc, &matched);
+  if (matched) return updated;
   double ms = ((ScrNativeDate *)ptr)->milliseconds;
   if (!strcmp(method, "getTime") || !strcmp(method, "valueOf")) return scr_dyn_new_num(ms);
   if (!strcmp(method, "toISOString") || !strcmp(method, "toJSON")) {

@@ -9908,6 +9908,7 @@ export class Lowerer {
       }
       const local = this.declareLocal(decl.name, name, shape.type, true);
       params.push({ localId: local.id, name, type: local.type });
+      (this.ctx.paramIndexByLocal ??= new Map()).set(local.id, params.length - 1);
       if (
         shape.mode === "required" &&
         shape.type.kind === "union" &&

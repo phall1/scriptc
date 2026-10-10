@@ -2,17 +2,20 @@ import * as ts from "../ts7/adapter.js";
 import { bodyReadsArguments } from "../arguments-usage.js";
 import type { Lowerer } from "./lowerer.js";
 import {
+  DATE_T,
   DYN,
   type IrExpr,
   type IrFunction,
   type IrParam,
   type IrStmt,
   type IrType,
+  type SrcLoc,
   isUnitType,
   typeEquals,
 } from "../../ir/ir.js";
 import { isJsSourceFile, locOf } from "../program.js";
 import { typeKey } from "../type-mapper.js";
+import type { FnCtx } from "./function-context.js";
 import { PoisonError, dynFallbackType, neverTaintedJsType, newFnCtx } from "./lowerer.js";
 import { tryLowerExpression } from "./expressions/try-lower-expression.js";
 import { findGenericMethodOn, type ClassInfo } from "./lower-classes.js";
@@ -139,6 +142,8 @@ export interface GenericInstance {
    * any-params poisoned it) — the body lowers in return-INFERENCE mode
    * (returnType holds the DYN recursion pin until the post-pass settles). */
   implicitInferReturn?: true;
+  /** Argument index whose date scalar this instance returns after a UTC setter. */
+  dateWritebackParam?: number;
 }
 
 /** Defaults bind during inference; collection only resolves symbols in
@@ -245,7 +250,26 @@ export function lowerGenericCall(
     ? implicitCallInstance(lowerer, expr, info)
     : genericCallInstance(lowerer, expr, info);
   const args = lowerer.completeArgs(expr.arguments, instance.params, loc, expr);
-  return { kind: "call", callee: instance.name, args, type: instance.returnType, loc };
+  const call: IrExpr = { kind: "call", callee: instance.name, args, type: instance.returnType, loc };
+  return dateWritebackCall(lowerer, instance, call, loc);
+}
+
+/** A void function that assigned a date parameter returns that scalar, and
+ * the call writes it back onto the argument local. */
+function dateWritebackCall(
+  lowerer: Lowerer,
+  instance: GenericInstance,
+  call: IrExpr,
+  loc: SrcLoc,
+): IrExpr {
+  const index = instance.dateWritebackParam;
+  if (index === undefined || call.kind !== "call" || call.type.kind !== "date") return call;
+  const arg = call.args[index];
+  if (arg?.kind !== "varRef" || arg.type.kind !== "date") return call;
+  const local = lowerer.ctx.locals.find((item) => item.id === arg.localId);
+  if (!local || local.type.kind !== "date") return call;
+  local.mutable = true;
+  return { kind: "assignExpr", localId: local.id, value: call, type: DATE_T, loc };
 }
 
 /** The instance a CALL of a generic function-like names: resolved
@@ -650,6 +674,37 @@ function unifySignatureBindings(
  * mapType call via typeParamResolver — the checker keeps reporting the
  * unsubstituted `T`s inside the body). Coverage stats count a base
  * function's statements once: only the FIRST instance contributes. */
+/** A function whose body only mutates a date parameter returns that scalar
+ * so the caller can store it. A body that already returns the date just
+ * records the argument index. */
+function settleDateWriteback(
+  inst: GenericInstance,
+  fnCtx: FnCtx,
+  body: IrStmt[],
+  bodyReturn: IrType,
+  loc: SrcLoc,
+): IrType {
+  const writeback = fnCtx.dateWriteback;
+  if (!writeback || inst.returnPinned) return bodyReturn;
+  if (bodyReturn.kind === "date") {
+    inst.dateWritebackParam = writeback.index;
+    return bodyReturn;
+  }
+  if (bodyReturn.kind !== "dyn" && bodyReturn.kind !== "void") return bodyReturn;
+  const valued = fnCtx.inferReturn?.entries.some(
+    (entry) => entry.stmt.kind === "return" && entry.stmt.value != null,
+  );
+  if (valued) return bodyReturn;
+  inst.dateWritebackParam = writeback.index;
+  inst.returnType = DATE_T;
+  body.push({
+    kind: "return",
+    value: { kind: "varRef", localId: writeback.localId, type: DATE_T, loc },
+    loc,
+  });
+  return DATE_T;
+}
+
 export function lowerGenericInstance(
   lowerer: Lowerer,
   info: GenericFnInfo,
@@ -769,6 +824,7 @@ export function lowerGenericInstance(
         bodyReturn = resolveInferredReturn(lowerer, inst, fnCtx.inferReturn, body, decl);
         inst.returnType = bodyReturn;
       }
+      bodyReturn = settleDateWriteback(inst, fnCtx, body, bodyReturn, locOf(decl));
       appendImplicitUndefinedReturn(lowerer, body, bodyReturn, locOf(decl));
     } else if (ts.isArrowFunction(decl) && decl.body !== undefined && !ts.isBlock(decl.body)) {
       // A concise arrow body: the expression IS the return value —
@@ -781,6 +837,7 @@ export function lowerGenericInstance(
           body.push({ kind: "exprStmt", expr: value, loc: locOf(decl.body) });
           bodyReturn = resolveInferredReturn(lowerer, inst, fnCtx.inferReturn, body, decl);
           inst.returnType = bodyReturn;
+          bodyReturn = settleDateWriteback(inst, fnCtx, body, bodyReturn, locOf(decl));
           appendImplicitUndefinedReturn(lowerer, body, bodyReturn, locOf(decl));
         } else {
           const stmt: IrStmt = { kind: "return", value, loc: locOf(decl.body) };
@@ -788,6 +845,7 @@ export function lowerGenericInstance(
           body.push(stmt);
           bodyReturn = resolveInferredReturn(lowerer, inst, fnCtx.inferReturn, body, decl);
           inst.returnType = bodyReturn;
+          bodyReturn = settleDateWriteback(inst, fnCtx, body, bodyReturn, locOf(decl));
         }
       } else {
         const value = lowerer.lowerExprExpecting(decl.body, bodyReturn);
@@ -796,6 +854,7 @@ export function lowerGenericInstance(
         } else {
           body.push({ kind: "return", value, loc: locOf(decl.body) });
         }
+        bodyReturn = settleDateWriteback(inst, fnCtx, body, bodyReturn, locOf(decl));
       }
     } else {
       lowerer.unsupported(

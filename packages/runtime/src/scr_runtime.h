@@ -6382,10 +6382,12 @@ bool scr_num_same_value(double a, double b);
  * en-US is the one embedded locale. Result +1; never throws. */
 ScrStr *scr_intl_num_format_en_us(double x);
 
-/* ── Date, the read-only value slice (scr_lib.c) ──────────────────────
- * A Date value is its TimeClip'd epoch-millisecond scalar. Identity and
- * mutation are frontend-fenced; construction, storage, getters, and ISO
- * formatting are exact over this representation. */
+/* ── Date (scr_lib.c) ─────────────────────────────────────────────────
+ * A typed Date is its TimeClip'd epoch-millisecond scalar. Identity and
+ * local-time setters stay frontend-fenced. Construction, storage, getters,
+ * ISO formatting, and UTC setters (which return the new scalar) are exact.
+ * JavaScript `new Date` stores a native handle; its UTC setters write
+ * that handle's milliseconds and return the new time value. */
 double scr_date_now(void); /* integer ms since epoch, like Node */
 double scr_date_new_ms(double ms); /* TimeClip (NaN when invalid) */
 double scr_date_get_time(double ms);
@@ -6402,6 +6404,18 @@ double scr_date_parse_get_time(ScrStr *s);
  * and years past V8's ±1e6 MakeDay bound. Never throws. */
 double scr_date_utc(double y, double mo, double d,
                     double h, double mi, double s, double ms);
+/* UTC setters. `nopt` is how many optional components after the required
+ * one were passed. setUTCFullYear treats an invalid time as +0 and does
+ * not apply Date.UTC's 0–99 year mapping. The others return NaN on an
+ * invalid time and keep the calendar year as a full year. Each returns
+ * the new TimeClip. */
+double scr_date_set_utc_full_year(double ms, double y, double mo, double dt, double nopt);
+double scr_date_set_utc_month(double ms, double mo, double dt, double nopt);
+double scr_date_set_utc_date(double ms, double dt);
+double scr_date_set_utc_hours(double ms, double h, double mi, double s, double milli, double nopt);
+double scr_date_set_utc_minutes(double ms, double mi, double s, double milli, double nopt);
+double scr_date_set_utc_seconds(double ms, double s, double milli, double nopt);
+double scr_date_set_utc_milliseconds(double ms, double milli);
 double scr_date_get_full_year(double ms, bool utc);
 double scr_date_get_month(double ms, bool utc);
 double scr_date_get_date(double ms, bool utc);

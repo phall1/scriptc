@@ -62,6 +62,11 @@ export interface FnCtx {
    * through the cleanup regions it crosses. Per function, so a nested
    * function's jumps never bind to enclosing constructs. */
   ctl: { kind: "loop" | "switch" | "block"; labels?: string[] }[];
+  /** Source parameter localId → argument index. Date setters use it to
+   * return the updated scalar to the caller. */
+  paramIndexByLocal?: Map<string, number>;
+  /** Set when a UTC setter assigns a date parameter. */
+  dateWriteback?: { localId: string; index: number };
 }
 
 export function newFnCtx(

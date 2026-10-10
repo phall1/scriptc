@@ -12940,6 +12940,35 @@ function lowerPrivateIn(
  * idiom over multiple shapes), index-signature keys, class instances,
  * and dyn/unknown stay fenced. Keys are literal strings — a computed key
  * over a shape would need the runtime key table. */
+/** `"k" in aString` throws TypeError. The operand is still evaluated. A
+ * `typeof === "object" &&` guard must keep this throw on the right-hand
+ * side so a string instantiation is not a function-level fence. */
+function lowerStringKeyIn(
+  recv: IrExpr,
+  key: string,
+  loc: SrcLoc,
+  pureNode: boolean,
+): IrExpr {
+  const shown = recv.kind === "strLit" ? recv.value : "a string";
+  const thrown = nodeThrowExpr(
+    1,
+    "",
+    `Cannot use 'in' operator to search for '${key}' in ${shown}`,
+    BOOL,
+    loc,
+  );
+  const pure =
+    pureNode || recv.kind === "varRef" || recv.kind === "recordGet" || recv.kind === "fieldGet";
+  if (pure) return thrown;
+  return {
+    kind: "seqExpr",
+    stmts: [{ kind: "exprStmt", expr: recv, loc }],
+    result: thrown,
+    type: BOOL,
+    loc,
+  };
+}
+
 function lowerInExpression(lowerer: Lowerer, expr: ts.BinaryExpression, loc: SrcLoc): IrExpr {
   if (
     lowerer.isStdlibGlobal(expr.right, "process") &&
@@ -13279,6 +13308,9 @@ function lowerInExpression(lowerer: Lowerer, expr: ts.BinaryExpression, loc: Src
         "statically-decided 'in' on computed receivers (bind the value to a variable first)",
       );
     }
+  }
+  if (recv.type.kind === "string") {
+    return lowerStringKeyIn(recv, key, loc, pureRecvNode);
   }
   if (recv.type.kind !== "record") {
     lowerer.unsupported(
