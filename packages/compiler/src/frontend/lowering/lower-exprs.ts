@@ -6650,7 +6650,8 @@ export function lowerElementAccess(lowerer: Lowerer, expr: ts.ElementAccessExpre
       isDynTypedRefType(receiver.type) ||
       (classInfo && (classInfo.callableBase || hasRuntimeStatics(classInfo))) ||
       ((receiver.type.kind === "map" || receiver.type.kind === "set") &&
-        lowerer.dynConvertible(receiver.type))
+        lowerer.dynConvertible(receiver.type)) ||
+      (receiver.type.kind === "searchParams" && lowerer.dynConvertible(receiver.type))
     ) {
       const fnName = jsFuncNameOf(expr.expression);
       receiver = {
