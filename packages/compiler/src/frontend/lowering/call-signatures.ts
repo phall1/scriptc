@@ -133,6 +133,26 @@ export function generatorMeta(
   return { yieldT: type.yieldT, nextT: type.nextT, resultType };
 }
 
+/** A tuple whose fields are all checked-dynamic. */
+function dynOnlyTuple(lowerer: Lowerer, type: IrType | null): boolean {
+  if (type?.kind !== "record") return false;
+  const shape = lowerer.shapes.get(type.shapeId);
+  if (!shape?.tuple || shape.fields.length === 0) return false;
+  return shape.fields.every((field) => field.type.kind === "dyn");
+}
+
+/** `([id, name])` on an `any` value is checker-typed `[any, any]`. The
+ * arity is the pattern's, not the array's. A declared parameter type
+ * keeps its tuple. */
+function openAnyTuplePattern(lowerer: Lowerer, param: ts.ParameterDeclaration): boolean {
+  if (param.type || !ts.isArrayBindingPattern(param.name)) return false;
+  const rest = param.name.elements.some(
+    (element) => !ts.isOmittedExpression(element) && element.dotDotDotToken !== undefined,
+  );
+  if (rest) return false;
+  return dynOnlyTuple(lowerer, lowerer.mapTypeOf(lowerer.typeOf(param.name)));
+}
+
 /** One parameter's ParamShape — the shared signature-shaped collection
  * point for function declarations, methods, constructors, and lambdas
  * (generic declarations defer to their call sites, where the resolved
@@ -211,6 +231,9 @@ export function paramShape(lowerer: Lowerer, param: ts.ParameterDeclaration): Pa
       ? { type: DYN, mode: "omittable", bodyType: DYN }
       : { type: DYN, mode: "required" };
   }
+  // The pattern length is not an array-length contract. `any` contextual
+  // typing spells `[any, any]` for two bindings; longer rows still match.
+  if (openAnyTuplePattern(lowerer, param)) return { type: DYN, mode: "required" };
   if (lowerer.checkedCallbackParams.has(param)) {
     if (param.dotDotDotToken) return { type: DYN, mode: "dynRest" };
     return param.initializer
