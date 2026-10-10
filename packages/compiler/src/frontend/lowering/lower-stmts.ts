@@ -4838,7 +4838,7 @@ export function lowerVarDecl(
               lowerer,
               decl.initializer,
               decl.type && (lowerer.typeOf(decl.name).flags & ts.TypeFlags.Never) === 0
-                ? (lowerer.mapTypeOf(lowerer.typeOf(decl.name)) ?? undefined)
+                ? annotatedInitializerTarget(lowerer, decl.name)
                 : undefined,
             );
   } catch (e) {
@@ -5291,6 +5291,16 @@ export function lowerVarDecl(
     lowerer.runtimeOptionalStorageLocals.add(runtimeOptionalRoot);
   }
   return { kind: "varDecl", localId: local.id, init, loc: locOf(decl) };
+}
+
+/** The destination an annotated declaration builds its initializer for:
+ * the declared type, or the record layout the optional-read analysis
+ * widened for fields a missing element can leave undefined. */
+function annotatedInitializerTarget(lowerer: Lowerer, name: ts.Identifier): IrType | undefined {
+  const declared = lowerer.mapTypeOf(lowerer.typeOf(name));
+  if (!declared) return undefined;
+  const widened = lowerer.runtimeOptionalBindingType(name, declared);
+  return lowerer.isRuntimeOptionalRecordVariant(widened, declared) ? widened : declared;
 }
 
 // lib.d.ts declares named captures as strings, but nonparticipating captures
@@ -8916,8 +8926,19 @@ export function lowerForOf(lowerer: Lowerer, stmt: ts.ForOfStatement): IrStmt {
   }
   const elementType = iterable.type.kind === "array" ? iterable.type.elem : tupleSource!.elem;
   const privateSplit = !awaitArray && isPrivateSplitConsumer(lowerer, iterSrc, iterable);
+  // An array the optional-read analysis proved free of holes and stored
+  // undefined yields its payload directly, with no per-element state test.
+  const presentElements =
+    tupleSource === null &&
+    !privateSplit &&
+    !awaitArray &&
+    elementType.kind !== "dyn" &&
+    elementType.kind !== "jsval" &&
+    lowerer.presentElementLoops.has(stmt);
   const yieldedT =
-    tupleSource === null && !privateSplit ? arrayValueType(lowerer, elementType) : elementType;
+    tupleSource === null && !privateSplit && !presentElements
+      ? arrayValueType(lowerer, elementType)
+      : elementType;
   let elemValueT = yieldedT;
   let awaitPromiseTag: number | null = null;
   if (awaitArray) {
@@ -9021,6 +9042,14 @@ export function lowerForOf(lowerer: Lowerer, stmt: ts.ForOfStatement): IrStmt {
           loc,
         };
       }
+    } else if (presentElements) {
+      yielded = {
+        kind: "arrayGet",
+        arr: varRef(source.id, sourceT, loc),
+        index: varRef(cursor.id, F64, loc),
+        type: elementType,
+        loc,
+      };
     } else {
       yielded = arrayValueRead(
         lowerer,

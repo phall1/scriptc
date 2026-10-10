@@ -1,10 +1,11 @@
 /* Cheap whole-module may-throw analysis (see computeMayThrow). Pure function
  * of the IR module; the emitter consults the result to place unwind checks. */
-import type { IrExpr, IrStmt, IrModule } from "../ir/ir.js";
+import type { IrExpr, IrStmt, IrModule, IrType } from "../ir/ir.js";
 import { isFfiCallbackParam, MAY_THROW_ARR_METHODS, MAY_THROW_BYTES_METHODS } from "../ir/ir.js";
 import { MAY_THROW_LIB_FNS } from "../ir/builtin-effects.js";
 import { everyStmtList } from "../ir/traverse.js";
 import { hasRetainedFfiCallback } from "./ffi-callbacks.js";
+import { computePublishedTypes, writesPublished } from "./publication.js";
 
 /** Cheap may-throw analysis (cost discipline: functions that transitively
  * CANNOT throw pay for no pending-exception checks). A function may throw
@@ -30,6 +31,8 @@ export function computeMayThrow(
 } {
   const terminations = mod.workers === true ? workerTerminationPolls(mod) : null;
   const stackChecks = options.stackChecks === true ? stackCheckedFunctions(mod) : null;
+  // Stores that can reach a published object throw the frozen TypeError.
+  const published = computePublishedTypes(mod);
   interface Facts {
     throws: boolean;
     callees: string[];
@@ -76,6 +79,7 @@ export function computeMayThrow(
     ]);
     // Traverse typed executable nodes without copying the IR into unknown.
     const visit = (rec: IrExpr | IrStmt): boolean => {
+      if (published !== null && writesPublished(published, rec)) f.throws = true;
       switch (rec.kind) {
         case "throw":
         case "rethrow":
@@ -157,6 +161,8 @@ export function computeMayThrow(
           if (rec.name === "module.await") f.throws = true;
           // A cycle binding read before its declaration ran (TDZ).
           if (rec.name === "module.tdzCheck") f.throws = true;
+          // publish() throws on an unpublishable dyn value.
+          if (rec.name === "threads.publish") f.throws = true;
           break;
         case "yieldExpr":
           // A consumer .throw() surfaces at the yield (and .return()'s
@@ -443,16 +449,36 @@ const BOUNDED_KINDS: ReadonlySet<string> = new Set([
   "instanceOf",
   "closure",
   "classRef",
+  // Throw-only and storage-only operations: they run no script code and
+  // cannot block (truncation and stores release values, which runs no
+  // script code either).
+  "runtimeFence",
+  "arraySetLength",
+  "bytesSet",
+  "caughtTest",
+  "caughtNarrow",
 ]);
+
+/** Typed-array reads that run no script code. */
+const BOUNDED_BYTES_METHODS: ReadonlySet<string> = new Set(["get", "length", "subarray"]);
 
 /** Array methods that can call back into scriptc code (a comparator, or
  * element string conversion). */
 const UNBOUNDED_ARR_METHODS: ReadonlySet<string> = new Set(["sortValues", "join"]);
 
+function primitiveArgument(arg: IrExpr): boolean {
+  const kind = arg.type.kind;
+  return kind === "string" || kind === "f64" || kind === "bool";
+}
+
 function primitiveDynArgument(arg: IrExpr): boolean {
   if (arg.kind !== "dynFrom") return false;
   const kind = arg.value.type.kind;
   return kind === "string" || kind === "f64" || kind === "bool" || kind === "undefinedT";
+}
+
+function staticContainer(type: IrType): boolean {
+  return type.kind === "array" || type.kind === "set" || type.kind === "bytes";
 }
 
 function boundedNode(rec: IrExpr | IrStmt): boolean {
@@ -461,15 +487,34 @@ function boundedNode(rec: IrExpr | IrStmt): boolean {
     case "arrIntrinsic":
       return !UNBOUNDED_ARR_METHODS.has(rec.method);
     case "libCall":
-      if (rec.fn === "error.new") return true;
+      // A compiler-resolved Node error with literal arguments: it only throws.
+      if (rec.fn === "error.new" || rec.fn === "error.nodeThrow") return true;
       // `new Error(message, options)` stays bounded while its message cannot
       // reach a user toString and no options object is passed.
       if (rec.fn === "error.newOptions") return rec.args.every(primitiveDynArgument);
+      // String and number library calls over primitives cannot reach a user
+      // callback or conversion.
+      if (rec.fn.startsWith("string.") || rec.fn.startsWith("num."))
+        return rec.args.every(primitiveArgument);
       return rec.fn.startsWith("math.");
+    case "intrinsic":
+      // A module binding read before its declaration ran only throws.
+      return rec.name === "module.tdzCheck";
+    case "bytesIntrinsic":
+      return BOUNDED_BYTES_METHODS.has(rec.method);
     case "toString": {
       const operand = rec.operand.type.kind;
       return operand === "f64" || operand === "bool" || operand === "string";
     }
+    // Allocations: literal entries are visited on their own, and a static
+    // seed or source is a finite container walk (a dynamic iterable could
+    // run a user iterator).
+    case "mapNew":
+      return true;
+    case "setNew":
+      return rec.seed === undefined || staticContainer(rec.seed.type);
+    case "bytesNew":
+      return rec.source === null || staticContainer(rec.source.type);
     default:
       return false;
   }

@@ -1,6 +1,7 @@
-/* White-box checks for the small-object allocator (scr_alloc.c). Built
- * twice by scr_alloc.test.ts: without ASan (the size-class allocator is
- * live) and with ASan (every call must reach the system allocator). */
+/* White-box checks for the small-object allocator (scr_alloc.c). Built by
+ * scr_alloc.test.ts without ASan (the size-class allocator is live), with
+ * ASan (every call must reach the system allocator), and as a worker
+ * executable's allocator (per-thread arenas, also under ThreadSanitizer). */
 #include "scr_runtime.h"
 #include <assert.h>
 #include <stdio.h>
@@ -97,11 +98,77 @@ static void check_churn(void) {
   }
 }
 
+#if defined(SCR_WORKERS) && SCR_SMALL_ALLOC
+#include <pthread.h>
+
+/* Script threads own disjoint arenas; blocks freed by another thread return
+ * to their owner through its remote list, and an exiting thread's arena
+ * (free lists included) passes to the next thread that claims one. */
+enum { HANDOFF = 256 };
+static void *handoff[HANDOFF];
+static void *handed[HANDOFF]; /* the addresses, kept after the frees */
+static uintptr_t worker_base;
+
+static void *alloc_and_hand_off(void *arg) {
+  (void)arg;
+  for (unsigned i = 0; i < HANDOFF; i++) {
+    handoff[i] = scr_mem_calloc(48);
+    assert(handoff[i] && owned(handoff[i]));
+    handed[i] = handoff[i];
+    fill(handoff[i], 48, (unsigned char)i);
+  }
+  worker_base = scr_sa.base;
+  scr_sa_thread_park();
+  return NULL;
+}
+
+static void *reclaim_arena(void *arg) {
+  (void)arg;
+  /* The parked arena is the only free one besides main's: claimed again,
+   * with the main thread's remote frees drained into its free lists. */
+  void *p = scr_mem_alloc(48);
+  assert(scr_sa.base == worker_base);
+  bool recycled = false;
+  for (unsigned i = 0; i < HANDOFF; i++) recycled |= p == handed[i];
+  assert(recycled);
+  scr_mem_free(p);
+  scr_sa_thread_park();
+  return NULL;
+}
+
+static void check_threads(void) {
+  void *mine = scr_mem_alloc(48);
+  assert(owned(mine));
+  pthread_t t;
+  assert(pthread_create(&t, NULL, alloc_and_hand_off, NULL) == 0);
+  assert(pthread_join(t, NULL) == 0);
+  assert(worker_base != scr_sa.base);
+  for (unsigned i = 0; i < HANDOFF; i++) {
+    assert(!owned(handoff[i]));
+    verify(handoff[i], 48, (unsigned char)i);
+    if (i == 0) {
+      handoff[0] = scr_mem_realloc(handoff[0], 600); /* moves to the system */
+      verify(handoff[0], 48, 0);
+      free(handoff[0]);
+      handoff[0] = NULL;
+    } else scr_mem_free(handoff[i]); /* remote free */
+  }
+  assert(pthread_create(&t, NULL, reclaim_arena, NULL) == 0);
+  assert(pthread_join(t, NULL) == 0);
+  scr_mem_free(mine);
+}
+#endif
+
 int main(void) {
   check_alignment_and_zeroing();
   check_realloc();
   check_system_pointers();
   check_churn();
+#if defined(SCR_WORKERS) && SCR_SMALL_ALLOC
+  check_threads();
+  printf("allocator checks passed: size-class workers\n");
+#else
   printf("allocator checks passed: %s\n", SCR_SMALL_ALLOC ? "size-class" : "system");
+#endif
   return 0;
 }

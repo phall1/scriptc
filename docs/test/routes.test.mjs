@@ -32,6 +32,8 @@ for (const { href, title, headings } of pages) {
 
 test("previous docs URLs redirect permanently and preserve query parameters", async () => {
   for (const { legacy, href } of pages) {
+    // Pages added after the migration have no previous URL.
+    if (legacy === undefined) continue;
     const response = await get(`${legacy}?mode=static`);
     assert.equal(response.status, 308, legacy);
     const destination = new URL(response.headers.get("location"), base);

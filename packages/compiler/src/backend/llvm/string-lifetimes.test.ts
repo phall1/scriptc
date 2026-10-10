@@ -18,7 +18,8 @@ import { emitLlvmModule } from "./emitter.js";
 import { borrowsStringInputs } from "./string-lifetimes.js";
 
 /** A pending-exception check: the inline active-cell test or a runtime call. */
-const PENDING_CHECK = /@scr_exc_(?:active|pending)\b/;
+// Synchronous bodies test the kind of the entry-loaded exception cell.
+const PENDING_CHECK = /@scr_exc_(?:active|pending)\b| = load i32, ptr %exc\.cell\b/;
 
 const loc = { file: "strings.ts", start: 0, end: 1 };
 const ref = (id: string, type: IrType = STRING): IrExpr => ({
@@ -109,10 +110,15 @@ test("string comparisons borrow parameters while owned entry adapters release th
 test("returning a borrowed input acquires a result owner", () => {
   const identity = fn("identity", ["text"], ref("text"));
   expect(facts(identity).parameters.size).toBe(0);
+  // The borrowing body returns its input without a reference; direct
+  // callers own it themselves and the owned adapter retains the result
+  // before releasing the parameter.
   const ir = body(mod(identity), "sc_bf_identity");
-  expect(ir).toContain("@scr_str_retain_v");
+  expect(ir).not.toContain("@scr_str_retain_v");
   expect(ir).not.toContain("@scr_str_release");
-  expect(body(mod(identity), "sc_f_identity")).toContain("@scr_str_release");
+  const adapter = body(mod(identity), "sc_f_identity");
+  expect(adapter.indexOf("@scr_str_retain_v")).toBeGreaterThan(0);
+  expect(adapter.indexOf("@scr_str_release")).toBeGreaterThan(adapter.indexOf("@scr_str_retain_v"));
 });
 
 test("literal arguments remain immortal while the called body borrows them", () => {

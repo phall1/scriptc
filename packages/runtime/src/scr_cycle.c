@@ -121,7 +121,9 @@
  */
 #include "scr_runtime.h"
 
+#ifndef SCR_WORKERS /* worker executables keep it in scr_thread_hot */
 SCR_TL void (*scr_weak_dispose_hook)(void *) = NULL;
+#endif
 
 void scr_weak_dispose(void *object) {
   if (scr_weak_dispose_hook) scr_weak_dispose_hook(object);
@@ -137,6 +139,16 @@ static void scr_cyc_oom(void) {
   scr_trap("scriptc: out of memory\n");
 }
 
+/* A pointer vector that only ever grows (these reuse their capacity across
+ * passes rather than churning it). Pointer, count and capacity live in ONE
+ * struct on purpose: buffering a candidate is the hot path, and splitting
+ * them across three arrays indexed by generation would touch three cache
+ * lines per release where the original single buffer touched one. */
+typedef struct {
+  void **v;
+  size_t n, cap;
+} ScrVec;
+
 typedef struct {
   void *object;
   void (*destroy)(void *);
@@ -147,9 +159,62 @@ typedef struct {
  * depth budget covers every participating destructor. Queued zero-count
  * objects still own their children until their callback runs. */
 #define SCR_DESTROY_DEPTH 64
+#ifdef SCR_WORKERS
+/* Worker executables keep the collector's per-thread state in one
+ * thread-local block: on Darwin every distinct thread-local costs a call
+ * per function that touches it, and the release, disposal and walk paths
+ * touch several. Ordinary and library builds keep separate variables. */
+typedef struct {
+  unsigned destroy_depth;
+  ScrDestroyEntry *destroy_pending;
+  size_t destroy_count;
+  size_t destroy_capacity;
+  ScrVec roots[SCR_CYC_NGENS];
+  bool collecting;
+  ScrVec cands;
+  ScrVec promote;
+  ScrVec pending;
+  ScrVec restore_pending;
+  ScrVec white;
+  ScrVec xgen;
+  unsigned gen_limit;
+  size_t live_after[SCR_CYC_NGENS];
+  unsigned char growth_shift[SCR_CYC_NGENS];
+  unsigned char growth_streak[SCR_CYC_NGENS];
+  unsigned backlog_shift[SCR_CYC_NGENS];
+  size_t nbuffered;
+  size_t trigger;
+  size_t scheduled_mature_age;
+  size_t xg_freed;
+} ScrCycThread;
+static _Thread_local ScrCycThread scr_cyc_thread = {.gen_limit = SCR_CYC_OLD};
+#define scr_destroy_depth (scr_cyc_thread.destroy_depth)
+#define scr_destroy_pending (scr_cyc_thread.destroy_pending)
+#define scr_destroy_count (scr_cyc_thread.destroy_count)
+#define scr_destroy_capacity (scr_cyc_thread.destroy_capacity)
+#define scr_roots (scr_cyc_thread.roots)
+#define scr_collecting (scr_cyc_thread.collecting)
+#define scr_cands (scr_cyc_thread.cands)
+#define scr_promote (scr_cyc_thread.promote)
+#define scr_pending (scr_cyc_thread.pending)
+#define scr_restore_pending (scr_cyc_thread.restore_pending)
+#define scr_white (scr_cyc_thread.white)
+#define scr_xgen (scr_cyc_thread.xgen)
+#define scr_gen_limit (scr_cyc_thread.gen_limit)
+#define scr_cyc_live_after (scr_cyc_thread.live_after)
+#define scr_cyc_growth_shift (scr_cyc_thread.growth_shift)
+#define scr_cyc_growth_streak (scr_cyc_thread.growth_streak)
+#define scr_cyc_backlog_shift (scr_cyc_thread.backlog_shift)
+#define scr_cyc_nbuffered (scr_cyc_thread.nbuffered)
+#define scr_cyc_trigger (scr_cyc_thread.trigger)
+#define scr_cyc_scheduled_mature_age (scr_cyc_thread.scheduled_mature_age)
+#define scr_xg_freed (scr_cyc_thread.xg_freed)
+#endif
+#ifndef SCR_WORKERS
 static SCR_TL unsigned scr_destroy_depth;
 static SCR_TL ScrDestroyEntry *scr_destroy_pending;
 static SCR_TL size_t scr_destroy_count, scr_destroy_capacity;
+#endif
 
 void scr_rc_destroy(void *obj, void (*destroy)(void *)) {
   if (scr_destroy_depth == SCR_DESTROY_DEPTH) {
@@ -187,24 +252,16 @@ void scr_rc_destroy(void *obj, void (*destroy)(void *)) {
 /* Live cycle-headered objects and the running count of OLD objects freed.
  * The inline allocation/free paths (scr_runtime.h, llvm/alloc.ts) maintain
  * both counters so full passes can measure old-generation reclamation. */
+#ifndef SCR_WORKERS /* worker executables keep them in scr_thread_hot */
 SCR_TL size_t scr_cyc_live = 0;
 SCR_TL size_t scr_cyc_old_freed = 0;
+#endif
 
 void *scr_cyc_alloc(size_t size, ScrTraceFn trace, ScrCycFreeFn free_fn) {
   return scr_cyc_alloc_inline(size, trace, free_fn);
 }
 
 void scr_cyc_free(void *obj) { scr_cyc_free_inline(obj); }
-
-/* A pointer vector that only ever grows (these reuse their capacity across
- * passes rather than churning it). Pointer, count and capacity live in ONE
- * struct on purpose: buffering a candidate is the hot path, and splitting
- * them across three arrays indexed by generation would touch three cache
- * lines per release where the original single buffer touched one. */
-typedef struct {
-  void **v;
-  size_t n, cap;
-} ScrVec;
 
 static void scr_cyc_grow(ScrVec *vec) {
   vec->cap = vec->cap ? vec->cap * 2 : 64;
@@ -220,31 +277,45 @@ static void scr_cyc_push(ScrVec *vec, void *obj) {
 
 /* ── the candidate-root buffers (one per generation) ──────────────────── */
 
+#ifndef SCR_WORKERS
 static SCR_TL ScrVec scr_roots[SCR_CYC_NGENS];
 static SCR_TL bool scr_collecting = false;
+#endif
 
 /* The candidates of the pass in flight, gathered across the generations it
  * collects so the phases can walk them without re-filtering the buffers. */
+#ifndef SCR_WORKERS
 static SCR_TL ScrVec scr_cands;
+#endif
 
 /* Nursery survivors awaiting promotion (see scr_scan_black). */
+#ifndef SCR_WORKERS
 static SCR_TL ScrVec scr_promote;
+#endif
 
 /* Deferred traces cap recursive traversal without changing the common
  * depth-first walk. Restore can run inside scan, so it has its own stack. */
+#ifndef SCR_WORKERS
 static SCR_TL ScrVec scr_pending;
 static SCR_TL ScrVec scr_restore_pending;
+#endif
 #define SCR_CYC_WALK_DEPTH 64
 
 /* The gathered white set (freed after the walk completes). */
+#ifndef SCR_WORKERS
 static SCR_TL ScrVec scr_white;
+#endif
 
 /* Cross-generation targets pinned by the white set (see scr_xg_pin_visit),
  * one entry per skipped edge. Drained after the teardowns. */
+#ifndef SCR_WORKERS
 static SCR_TL ScrVec scr_xgen;
+#endif
 
 /* Objects above this generation are invisible to the pass in flight. */
+#ifndef SCR_WORKERS
 static SCR_TL unsigned scr_gen_limit = SCR_CYC_OLD;
+#endif
 
 static size_t scr_cyc_pass(unsigned gen_limit);
 
@@ -267,7 +338,9 @@ static size_t scr_cyc_pass(unsigned gen_limit);
 /* Per level, the live count as of the end of the last pass that walked it:
  * the mature entry is set by mature and full passes, the old entry by full
  * passes. The nursery entry is unused. */
+#ifndef SCR_WORKERS
 static SCR_TL size_t scr_cyc_live_after[SCR_CYC_NGENS];
+#endif
 
 /* Per level, doublings of the growth fraction (see scr_cyc_adapt_growth),
  * and the run of growth-triggered passes at that level whose yield asked for
@@ -275,14 +348,18 @@ static SCR_TL size_t scr_cyc_live_after[SCR_CYC_NGENS];
  * may at most double past its size after the last pass at a level before
  * the next. Only the mature and old entries are used. */
 #define SCR_CYC_GROWTH_MAX_SHIFT 2
+#ifndef SCR_WORKERS
 static SCR_TL unsigned char scr_cyc_growth_shift[SCR_CYC_NGENS];
 static SCR_TL unsigned char scr_cyc_growth_streak[SCR_CYC_NGENS];
+#endif
 
 /* Doublings of each generation's backlog threshold earned by consecutive
  * passes that found almost nothing to free (see scr_cyc_backlog_threshold).
  * Only the mature and old entries are used. */
 #define SCR_CYC_BACKLOG_MAX_SHIFT 8
+#ifndef SCR_WORKERS
 static SCR_TL unsigned scr_cyc_backlog_shift[SCR_CYC_NGENS];
+#endif
 
 static size_t scr_cyc_nursery_threshold(void) {
   static SCR_TL size_t cached = 0;
@@ -302,13 +379,17 @@ static size_t scr_cyc_nursery_threshold(void) {
  * hysteresis a large older buffer — which a nursery pass cannot drain —
  * would re-arm on every single release. Both start at zero, so the first
  * release runs one trivial pass that arms them properly. */
+#ifndef SCR_WORKERS
 static SCR_TL size_t scr_cyc_nbuffered = 0;
 static SCR_TL size_t scr_cyc_trigger = 0;
+#endif
 
 /* Scheduled nursery passes for which at least one mature or old root was
  * waiting. A full pass resets the age; with no such backlog there is nothing
  * to age. */
+#ifndef SCR_WORKERS
 static SCR_TL size_t scr_cyc_scheduled_mature_age = 0;
+#endif
 
 static size_t scr_cyc_buffered(void) {
   return scr_roots[SCR_CYC_NURSERY].n + scr_roots[SCR_CYC_MATURE].n
@@ -614,7 +695,9 @@ static SCR_CYC_COMPACT void scr_xg_pin_visit(void *child, void *ctx) {
 }
 
 /* Freed by the cross-generation drain, for the caller's fixpoint. */
+#ifndef SCR_WORKERS
 static SCR_TL size_t scr_xg_freed = 0;
+#endif
 
 static void scr_xg_release(void *obj);
 static void scr_xg_child_visit(void *child, void *ctx) {

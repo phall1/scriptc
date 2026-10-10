@@ -26,6 +26,8 @@
 #ifdef SCR_RC_AUDIT
 static SCR_TL long scr_live_maps = 0;
 long scr_map_live_count(void) { return scr_live_maps; }
+/* A published map or set is immortal: it is never freed, so it leaves the count. */
+void scr_map_live_forget(void) { scr_live_maps--; }
 #endif
 
 #define SCR_MAP_EMPTY SIZE_MAX
@@ -1230,9 +1232,14 @@ void *scr_map_iter_val_ref(const ScrMap *m, double i) {
   return m->val_retain(scr_map_slot_to_ptr(scr_map_iter_at(m, i)->val)); /* +1 */
 }
 
-void scr_map_iter_enter(ScrMap *m) { m->iter_depth++; }
+/* A published (immortal) map never changes, so iterating it needs no
+ * compaction guard, and it must not be written: other threads read it. */
+void scr_map_iter_enter(ScrMap *m) {
+  if (m->rc != SIZE_MAX) m->iter_depth++;
+}
 
 void scr_map_iter_exit(ScrMap *m) {
+  if (m->rc == SIZE_MAX) return;
   if (m->iter_depth > 0) m->iter_depth--;
   /* A churny callback may have left many tombstones; with no iteration
    * active they are safe to drop now (bounds memory under forEach-heavy
@@ -1315,4 +1322,10 @@ ScrArr *scr_map_keys_js_order(const ScrMap *m) {
     if (!scr_map_key_array_index(key, &index)) scr_arr_push_ref(out, scr_str_retain(key));
   }
   return out;
+}
+
+/* Publication (scr_message.c): cache a heap string's key hash before it
+ * becomes immortal, after which no thread may write its header. */
+void scr_str_hash_prime(ScrStr *s) {
+  if (s && s->rc != SIZE_MAX) (void)scr_map_hash_str(s);
 }

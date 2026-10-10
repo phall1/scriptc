@@ -157,7 +157,7 @@ test("worker programs refuse foreign callbacks and guard byte-pointer FFI calls"
   }
 });
 
-test("worker programs keep thread-local allocator and async state behind runtime calls", async () => {
+test("worker programs inline the thread-local allocator and keep async state behind runtime calls", async () => {
   const source =
     worker +
     `
@@ -176,11 +176,13 @@ settle().then((value) => console.log(value));
   expect(result.ok, JSON.stringify(result)).toBe(true);
   if (result.ok) {
     const llvm = await readFile(request.outPath, "utf8");
-    // scr_cyc_live and scr_weak_dispose_hook are thread-local in worker
-    // runtimes, and their small-object allocator is compiled out.
-    expect(llvm).not.toContain("@scr_sa");
-    expect(llvm).not.toContain("@scr_cyc_live");
-    expect(llvm).not.toContain("@scr_weak_dispose_hook");
+    // Worker runtimes keep one small-object allocator per script thread:
+    // the inline paths address its state, live counts and dispose hook in
+    // the runtime's one thread-local ScrThreadHot block.
+    expect(llvm).toMatch(/@scr_thread_hot = external thread_local(\(initialexec\))? global /);
+    expect(llvm).not.toMatch(/@scr_(sa|cyc_live|cyc_old_freed|weak_dispose_hook) = external/);
+    expect(llvm).toContain("call ptr @llvm.threadlocal.address.p0(ptr @scr_thread_hot)");
+    expect(llvm).toMatch(/getelementptr inbounds i8, ptr %[\w.]+\.tl\.hot, i64 808/);
     // Worker fibers own context termination; no fiberless async frames.
     expect(llvm).not.toContain("@scr_async_inline_enter");
   }
@@ -245,12 +247,39 @@ console.log(mix(1, 2), spin(5));
       return llvm.slice(start, llvm.indexOf("\n}\n", start));
     };
     // A bounded helper neither polls on entry nor makes its callers poll.
-    expect(body("sc_f_mix")).not.toContain("@scr_exc_active");
-    // Recursion polls on entry: the stop signal folds into the inline test,
-    // and only the slow path calls into the runtime.
-    expect(body("sc_f_spin")).toContain("load ptr, ptr @scr_exc_active");
-    expect(body("sc_f_spin")).toContain("load ptr, ptr @scr_context_signal");
-    expect(body("sc_f_spin")).toMatch(/load atomic i8, ptr %t\d+ monotonic/);
-    expect(llvm).toContain("@scr_exc_active = external thread_local global ptr");
+    expect(body("sc_f_mix")).not.toContain("@scr_exc_alert");
+    // Recursion polls on entry: the inline test reads the process-wide
+    // alert word (no thread-local access), and only the slow path calls into
+    // the runtime.
+    expect(body("sc_f_spin")).toMatch(/load atomic i32, ptr @scr_exc_alert monotonic/);
+    expect(body("sc_f_spin")).toContain("call zeroext i1 @scr_exc_pending()");
+    expect(body("sc_f_spin")).not.toContain("@scr_exc_active");
+    expect(llvm).toMatch(/^@scr_exc_alert = external global i32, align 64$/m);
+  }
+});
+
+test.each([
+  ["x86_64-unknown-linux-gnu", true],
+  ["aarch64-unknown-linux-gnu", true],
+  ["arm64-apple-macosx14.0.0", false],
+])("worker executables for %s use the executable TLS models: %s", async (target, models) => {
+  vi.stubEnv("SCRIPTC_TARGET", target);
+  const request = await fixture(worker + "\nlet count = 0;\ncount++;\nconsole.log(count);\n");
+  const result = await compile(request.entry, request);
+  expect(result.ok, JSON.stringify(result)).toBe(true);
+  if (result.ok) {
+    const llvm = await readFile(request.outPath, "utf8");
+    // Every thread-local of a worker executable lives in its own TLS block:
+    // ELF uses local-exec for the program's and initial-exec for the
+    // runtime's; Darwin's thread-local variables have one model.
+    const plain = /^@[-$._A-Za-z0-9]+ = (internal|external) thread_local global /m;
+    if (models) {
+      expect(llvm).not.toMatch(plain);
+      expect(llvm).toMatch(/^@[-$._A-Za-z0-9]+ = internal thread_local\(localexec\) global /m);
+      expect(llvm).toMatch(/^@[-$._A-Za-z0-9]+ = external thread_local\(initialexec\) global /m);
+    } else {
+      expect(llvm).toMatch(plain);
+      expect(llvm).not.toContain("thread_local(");
+    }
   }
 });

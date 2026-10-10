@@ -34,9 +34,12 @@ import { everyExprChild, everyStmtChild, everyTypeChild } from "./traverse.js";
  * with runtime-provided ancestors, generic families, fields under
  * `++`/`--`, and parameters of functions that escape as values, are
  * constructed through class values, or are virtual-dispatch targets are
- * excluded as well. Library and worker builds keep ordinary storage: their
- * instances cross a native boundary. Reads are never restricted: every
- * reader (static code, dyn views, JSON, inspect) widens the i32 exactly. */
+ * excluded as well. Library builds keep ordinary storage: their instances
+ * cross a native boundary. Worker builds do not: instances reach another
+ * thread only through postMessage/workerData, whose dyn views read (and
+ * commit) fields like every other dynamic reader. Reads are never
+ * restricted: every reader (static code, dyn views, JSON, inspect) widens
+ * the i32 exactly. */
 export class Int32Slots {
   /** Field families (topmost declaring class and field) stored as i32. */
   private readonly fields = new Set<string>();
@@ -190,6 +193,7 @@ const BOUNDARY_KINDS = new Set<IrExpr["kind"]>([
  * target). Any other helper that receives a dynamic value may store any
  * property, except literal-keyed `dyn.keySet`/`dyn.keyDelete`. */
 const DYN_READ_ONLY = new Set<string>([
+  "arrayBuffer.new",
   "arrayBuffer.viewF32",
   "arrayBuffer.viewF64",
   "arrayBuffer.viewI16",
@@ -225,7 +229,9 @@ const DYN_READ_ONLY = new Set<string>([
   "json.stringifyReplacer",
   "json.stringifyValue",
   "num.toStringRadix",
+  "sharedArrayBuffer.new",
   "text.decodeStream",
+  "worker.new",
 ]);
 const ISLAND_KINDS = new Set<IrExpr["kind"]>([
   "jsOp",
@@ -264,7 +270,7 @@ function walkFunction(
 export function analyzeInt32Slots(mod: IrModule): Int32Slots {
   const classes = new Map((mod.classes ?? []).map((c) => [c.name, c]));
   const slots = new Int32Slots(classes);
-  if (mod.lib || mod.workers) return slots;
+  if (mod.lib) return slots;
   const reason = (key: string, why: string): void => {
     if (!slots.reasons.has(key)) slots.reasons.set(key, why);
   };

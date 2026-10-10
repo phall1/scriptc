@@ -1092,7 +1092,8 @@ function resultDiscarded(call: ts.Expression): boolean {
 
 /** `xs.pop()` whose result is unused: truncate a non-empty array by one
  * slot. Truncation releases the removed element and leaves the length of
- * an empty array at zero, as pop does. */
+ * an empty array at zero, as pop does (pop's own `length = 0` store, a
+ * no-op unless the array is frozen). */
 function lowerDiscardedPop(lowerer: Lowerer, source: ts.Expression, loc: SrcLoc): IrExpr {
   const receiver = lowerer.lowerExpr(source);
   const arr = lowerer.declareHiddenLocal("%popArray", receiver.type);
@@ -1132,9 +1133,10 @@ function lowerDiscardedPop(lowerer: Lowerer, source: ts.Expression, loc: SrcLoc)
               loc,
             },
             loc,
+            pop: true,
           },
         ],
-        else_: null,
+        else_: [{ kind: "arraySetLength", arr: arrRef, length: numLit(0, loc), loc, pop: true }],
         loc,
       },
     ],
@@ -1214,8 +1216,12 @@ function lowerUnionArrayRemoval(
               type: BOOL,
               loc,
             },
-            then: [{ kind: "arraySetLength", arr: arrRef, length: indexRef, loc }],
-            else_: null,
+            then: [{ kind: "arraySetLength", arr: arrRef, length: indexRef, loc, pop: true }],
+            // Pop's `length = 0` store on an empty array (a no-op unless the
+            // array is frozen).
+            else_: [
+              { kind: "arraySetLength", arr: arrRef, length: numLit(0, loc), loc, pop: true },
+            ],
             loc,
           },
     ],

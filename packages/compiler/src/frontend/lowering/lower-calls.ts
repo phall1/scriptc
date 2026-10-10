@@ -5,6 +5,7 @@ import { lowerArrayCallbackCall } from "./containers/array-callback-call.js";
  * own owners; this module selects the applicable call path. */
 import { dynUndefinedExpr, nodeThrowExpr, countedFor, numLit, varRef } from "../../ir/build.js";
 import { lowerBuiltinCall } from "./builtin-calls.js";
+import { threadsImportOf } from "../threads-import.js";
 import {
   adaptZeroArgTimerCallback,
   lowerTimersMemberCall,
@@ -1044,6 +1045,14 @@ export function lowerCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr {
       // client lowering with the RUNTIME-secure dial.
       const rf = sym ? httpClientFnBindingOf(lowerer, sym) : undefined;
       if (rf) return lowerHttpClientFnCall(lowerer, expr, rf, loc);
+    }
+    if (threadsImportOf(lowerer.program, expr.expression) === "publish") {
+      // @scriptc/threads publish(value): the same value, its graph made
+      // immortal and immutable (backend/llvm/publish.ts).
+      if (expr.arguments.length !== 1 || ts.isSpreadElement(expr.arguments[0]!))
+        lowerer.noLowering(`publish with ${expr.arguments.length} arguments`, expr);
+      const value = lowerer.lowerExpr(expr.arguments[0]!);
+      return { kind: "intrinsic", name: "threads.publish", args: [value], type: value.type, loc };
     }
     const bi = lowerer.builtinImportOf(expr.expression);
     if (bi) return lowerBuiltinCall(lowerer, expr, bi, loc);

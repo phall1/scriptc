@@ -229,11 +229,22 @@ async function build() {
                 ? ["-I", zlib]
                 : []),
             ];
+            // Worker variants link only into executables, whose own TLS block
+            // holds every runtime thread-local: on ELF the initial-exec model
+            // makes each access one %fs-relative load, where the default
+            // general-dynamic model compiles to a __tls_get_addr call (the
+            // linker relaxes the call away, but the callers already spilled
+            // their registers around it).
+            const tlsFlags =
+              variant.defines.includes("SCR_WORKERS") && matrix.target.object_format === "elf"
+                ? ["-ftls-model=initial-exec"]
+                : [];
             const unitFlags = [
               ...commonFlags,
               flavorSpec.optimization,
               ...debugFlags,
               ...variant.defines.map((define) => `-D${define}`),
+              ...tlsFlags,
               ...includeFlags,
             ];
             let bitcode;

@@ -10,10 +10,14 @@ const exec = promisify(execFile);
 // The size-class allocator is compiled out under AddressSanitizer, so the
 // UBSan-only build is the one that exercises it; the ASan build pins the
 // system-allocator bypass the sanitizer lane relies on.
+// Worker executables (-DSCR_WORKERS) give each script thread its own arena;
+// the ThreadSanitizer build checks the cross-thread handoff for races.
 test.each([
   ["size-class", ["-fsanitize=undefined"]],
   ["system", ["-fsanitize=address,undefined"]],
-])("small-object allocator contracts hold (%s)", async (mode, sanitize) => {
+  ["size-class workers", ["-fsanitize=undefined", "-DSCR_WORKERS", "-pthread"]],
+  ["size-class workers", ["-fsanitize=thread", "-DSCR_WORKERS", "-pthread"]],
+])("small-object allocator contracts hold (%s, %j)", async (mode, sanitize) => {
   const scratch = await mkdtemp(join(tmpdir(), "scriptc-alloc-"));
   try {
     const binary = join(scratch, "alloc");
@@ -32,6 +36,7 @@ test.each([
       env: {
         ...process.env,
         ASAN_OPTIONS: "halt_on_error=1",
+        TSAN_OPTIONS: "halt_on_error=1",
         UBSAN_OPTIONS: "halt_on_error=1",
       },
     });

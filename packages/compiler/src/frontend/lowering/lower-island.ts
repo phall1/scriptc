@@ -5,6 +5,11 @@ import { InternalCompilerError } from "../../errors.js";
  * surface (Math and number/string methods under --dynamic), and the npm
  * package boundary fences for node_modules-declared symbols. */
 import * as ts from "../ts7/adapter.js";
+import {
+  lowerAbsenceProbe,
+  lowerOptionalNumber,
+  runtimeOptionalStorageOperand,
+} from "./lower-exprs.js";
 import type { Lowerer } from "./lowerer.js";
 import {
   arrayOf,
@@ -3396,11 +3401,26 @@ export function lowerIslandMethodCall(
   // Static numeric Math calls precede the island path. The scalar methods
   // use their declared arity; min/max and hypot accept their variadic forms.
   const staticMath = isMath ? own(STATIC_MATH_FNS, name) : undefined;
+  // A missing element (a hole bound by a loop, a local holding a missing
+  // read, or the read itself) converts to NaN, ToNumber's answer for
+  // undefined, instead of trusting the checker's number type.
+  const mathArg = (a: ts.Expression): IrExpr => {
+    let inner = a;
+    while (ts.isParenthesizedExpression(inner)) inner = inner.expression;
+    const optional = ts.isIdentifier(inner)
+      ? runtimeOptionalStorageOperand(lowerer, inner)
+      : ts.isElementAccessExpression(inner)
+        ? lowerAbsenceProbe(lowerer, inner)
+        : null;
+    return optional &&
+      optional.type.kind === "union" &&
+      lowerer.stripUndefinedArm(optional.type).kind === "f64"
+      ? lowerOptionalNumber(lowerer, optional, loc, inner)
+      : lowerer.lowerExprExpecting(a, F64);
+  };
   if (staticMath && name === "hypot") {
     const elems = call.arguments.map((a) =>
-      ts.isSpreadElement(a)
-        ? lowerer.lowerExprExpecting(a.expression, arrayOf(F64))
-        : lowerer.lowerExprExpecting(a, F64),
+      ts.isSpreadElement(a) ? lowerer.lowerExprExpecting(a.expression, arrayOf(F64)) : mathArg(a),
     );
     const spreads = call.arguments.flatMap((a, i) => (ts.isSpreadElement(a) ? [i] : []));
     const packed: IrExpr = {
@@ -3426,7 +3446,7 @@ export function lowerIslandMethodCall(
       if (call.arguments.length === 0) {
         return { kind: "numLit", value: name === "max" ? -Infinity : Infinity, type: F64, loc };
       }
-      const args = call.arguments.map((a) => lowerer.lowerExprExpecting(a, F64));
+      const args = call.arguments.map(mathArg);
       let acc = args[0]!;
       for (let i = 1; i < args.length; i++) {
         acc = { kind: "libCall", fn: staticMath.fn, args: [acc, args[i]!], type: F64, loc };
@@ -3434,7 +3454,7 @@ export function lowerIslandMethodCall(
       return acc;
     }
     if (call.arguments.length === staticMath.arity) {
-      const args = call.arguments.map((a) => lowerer.lowerExprExpecting(a, F64));
+      const args = call.arguments.map(mathArg);
       return { kind: "libCall", fn: staticMath.fn, args, type: F64, loc };
     }
   }

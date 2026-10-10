@@ -165,8 +165,19 @@ export class OptionalArrayReads {
  * that the parameter holding the array is never replaced or captured. */
 function stableArrayParameters(fn: IrFunction, lifetimes: CallLifetimes): Set<string> {
   const borrowed = lifetimes.borrowed.get(fn.name);
+  // Borrowed walk parameters may be rebound by statements (walk-borrows.ts).
+  const rebound = new Set<string>();
+  everyStmtList(fn.body, {
+    stmt: (stmt) => {
+      if (stmt.kind === "assign") rebound.add(stmt.localId);
+      return true;
+    },
+    expr: () => true,
+  });
   return new Set(
-    fn.params.filter((_, index) => borrowed?.has(index)).map((param) => param.localId),
+    fn.params
+      .filter((param, index) => borrowed?.has(index) && !rebound.has(param.localId))
+      .map((param) => param.localId),
   );
 }
 

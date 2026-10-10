@@ -50,6 +50,8 @@ static bool scr_dyn_class_reflection_fence(const ScrDyn *value) {
 #ifdef SCR_RC_AUDIT
 static SCR_TL long scr_live_dyns = 0;
 long scr_dyn_live_count(void) { return scr_live_dyns; }
+/* A published dyn value is immortal: it is never freed, so it leaves the count. */
+void scr_dyn_live_forget(void) { scr_live_dyns--; }
 #endif
 
 static void scr_json_oom(void) {
@@ -1412,22 +1414,26 @@ ScrDyn *scr_dyn_symbol_get(const ScrDyn *value, const ScrStr *key) {
   return scr_dyn_retain(scr_dyn_undefined());
 }
 
+/* Small integers are immutable primitives, just like the boolean and null
+ * singletons. The table is process-wide, like those: a published graph
+ * (scr_message.c, scr_publish.c) may hold these nodes after the thread that
+ * created them has exited. It is filled before main, so no thread writes it
+ * later, and it neither grows nor owns heap references. */
+static ScrDyn scr_dyn_small_ints[384];
+
+__attribute__((constructor)) static void scr_dyn_small_ints_init(void) {
+  for (int i = 0; i < 384; i++) {
+    scr_dyn_small_ints[i].rc = SIZE_MAX;
+    scr_dyn_small_ints[i].kind = SCR_DYN_NUM;
+    scr_dyn_small_ints[i].v.num = (double)(i - 128);
+  }
+}
+
 ScrDyn *scr_dyn_new_num(double n) {
-  /* Small integers are immutable primitives, just like the boolean and null
-   * singletons. Initialize only touched slots; the table neither grows nor
-   * owns heap references. Preserve negative zero as a distinct payload. */
+  /* Preserve negative zero as a distinct payload. */
   if (n >= -128 && n <= 255) {
     int value = (int)n;
-    if ((double)value == n && (value != 0 || !signbit(n))) {
-      static SCR_TL ScrDyn values[384];
-      ScrDyn *cached = &values[value + 128];
-      if (cached->rc == 0) {
-        cached->rc = SIZE_MAX;
-        cached->kind = SCR_DYN_NUM;
-        cached->v.num = n;
-      }
-      return cached;
-    }
+    if ((double)value == n && (value != 0 || !signbit(n))) return &scr_dyn_small_ints[value + 128];
   }
   ScrDyn *d = scr_dyn_alloc(SCR_DYN_NUM);
   d->v.num = n;

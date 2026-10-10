@@ -344,6 +344,7 @@ export function emitOperatorExpr(
         const old = B.tmp();
         B.line(`${old} = call double @${helper}(ptr ${box}, ptr null)`);
         host.emitPendingCheck();
+        host.emitPublishedFieldGuard(obj.name, e.className, e.field);
         const next = B.tmp();
         B.line(`${next} = ${e.op === "+" ? "fadd" : "fsub"} double ${old}, ${f64Lit(1)}`);
         host.declare(`declare ptr @scr_dyn_new_num(double)`);
@@ -354,6 +355,7 @@ export function emitOperatorExpr(
         B.line(`call void @scr_dyn_release(ptr ${box})`);
         return { name: e.prefix ? next : old, type: e.type };
       }
+      host.emitPublishedFieldGuard(obj.name, e.className, e.field);
       const old = B.tmp();
       const next = B.tmp();
       B.line(`${old} = load double, ptr ${ptr}`);

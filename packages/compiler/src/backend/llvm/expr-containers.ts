@@ -16,6 +16,7 @@ import {
 } from "./shapes.js";
 import type { LlvmEmitterContext, LlValue } from "./expr-context.js";
 import { F64_INF, f64Lit } from "./common.js";
+import { MUTATING_COLLECTION_METHODS } from "../publication.js";
 import { borrowsStringInputs, emitStringInputs } from "./string-lifetimes.js";
 import {
   emitMapLookupKey,
@@ -562,12 +563,19 @@ export function emitArrIntrinsic(
       // the last push's return, or the unchanged length for Node's
       // no-op zero-argument call.
       const vs = e.args.map((a) => host.emitExpr(a));
+      host.emitPublishedArrayGuard(r.name, e.receiver.type, 1, f64Lit(0), f64Lit(vs.length));
       return { name: emitArrayValues(host, r.name, acc, vs), type: e.type };
     }
     case "pushSpread": {
       // `a.push(...src)`: append src's elements in order (borrowed src,
       // count snapshotted). Result: the new length.
       const src = emitBorrowedInput(host, e.args[0]!);
+      if (host.publishedTypes?.containerGuarded(e.receiver.type) === true) {
+        host.declare(`declare double @scr_arr_len(ptr)`);
+        const n = B.tmp();
+        B.line(`${n} = call double @scr_arr_len(ptr ${src.name})`);
+        host.emitPublishedArrayGuard(r.name, e.receiver.type, 1, f64Lit(0), n);
+      }
       host.emitArrayCopyLoop(r.name, src.name, acc);
       host.declare(`declare double @scr_arr_len(ptr)`);
       const t = B.tmp();
@@ -585,11 +593,18 @@ export function emitArrIntrinsic(
       // Evaluate every argument before the first mutation, then insert
       // from right to left so the final front order is source order.
       const vs = e.args.map((a) => host.emitExpr(a));
+      host.emitPublishedArrayGuard(r.name, e.receiver.type, 4, f64Lit(0), f64Lit(vs.length));
       return { name: emitArrayValues(host, r.name, acc, vs, true), type: e.type };
     }
     case "unshiftSpread": {
       // The runtime snapshots the borrowed source and handles self-spread.
       const src = emitBorrowedInput(host, e.args[0]!);
+      if (host.publishedTypes?.containerGuarded(e.receiver.type) === true) {
+        host.declare(`declare double @scr_arr_len(ptr)`);
+        const n = B.tmp();
+        B.line(`${n} = call double @scr_arr_len(ptr ${src.name})`);
+        host.emitPublishedArrayGuard(r.name, e.receiver.type, 4, f64Lit(0), n);
+      }
       host.declare(`declare double @scr_arr_unshift_spread(ptr, ptr)`);
       const t = B.tmp();
       B.line(`${t} = call double @scr_arr_unshift_spread(ptr ${r.name}, ptr ${src.name})`);
@@ -597,6 +612,7 @@ export function emitArrIntrinsic(
     }
     case "pop":
     case "shift": {
+      host.emitPublishedArrayGuard(r.name, e.receiver.type, method === "pop" ? 2 : 6);
       const dynamic = elem.kind === "dyn" && e.type.kind === "dyn";
       if (!dynamic && e.type.kind !== "union")
         throw new InternalCompilerError("llvm emitter bug: array removal result is not a union");
@@ -697,6 +713,7 @@ export function emitArrIntrinsic(
     }
     case "sortPrimitive":
     case "toSortedPrimitive": {
+      if (e.method === "sortPrimitive") host.emitPublishedArrayGuard(r.name, e.receiver.type, 7);
       host.declare(`declare ptr @scr_arr_sort_primitive(ptr, i1 zeroext)`);
       const result = B.tmp();
       B.line(
@@ -720,6 +737,7 @@ export function emitArrIntrinsic(
     }
     case "reverse": {
       // Mutates in place and returns the same receiver as a fresh +1.
+      host.emitPublishedArrayGuard(r.name, e.receiver.type, 7);
       host.declare(`declare ptr @scr_arr_reverse(ptr)`);
       const t = B.tmp();
       B.line(`${t} = call ptr @scr_arr_reverse(ptr ${r.name})`);
@@ -729,6 +747,7 @@ export function emitArrIntrinsic(
     case "fill":
     case "fillUndefined": {
       const args = e.args.map((arg) => host.emitExpr(arg));
+      host.emitPublishedArrayGuard(r.name, e.receiver.type, 7);
       const helper =
         e.method === "copyWithin"
           ? "scr_arr_copy_within"
@@ -784,6 +803,7 @@ export function emitArrIntrinsic(
       // removes to the end (+Infinity, the slice convention).
       const start = host.emitExpr(e.args[0]!);
       const cnt = e.args[1] ? host.emitExpr(e.args[1]).name : F64_INF;
+      host.emitPublishedArrayGuard(r.name, e.receiver.type, 7);
       host.declare(`declare ptr @scr_arr_splice(ptr, double, double)`);
       const t = B.tmp();
       B.line(`${t} = call ptr @scr_arr_splice(ptr ${r.name}, double ${start.name}, double ${cnt})`);
@@ -793,6 +813,7 @@ export function emitArrIntrinsic(
       const start = host.emitExpr(e.args[0]!);
       const count = host.emitExpr(e.args[1]!);
       const items = emitBorrowedInput(host, e.args[2]!);
+      host.emitPublishedArrayGuard(r.name, e.receiver.type, 7);
       host.declare(`declare ptr @scr_arr_splice_insert(ptr, double, double, ptr)`);
       const t = B.tmp();
       B.line(
@@ -951,6 +972,10 @@ export function emitMapLikeIntrinsic(
   const kAcc = mapKeyAccess(key);
   const kTy = mapKeyParamType(kAcc);
   const method = e.method;
+  // A published Map or Set rejects mutation (the guard precedes the
+  // operands, which each method evaluates itself).
+  if (MUTATING_COLLECTION_METHODS.has(method))
+    host.emitPublishedCollectionGuard(r.name, receiverType);
   if (method === "clone" || method === "keySet") {
     const keysOnly = method === "keySet" || receiverType.kind === "set";
     const checked =

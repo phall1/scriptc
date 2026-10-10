@@ -56,6 +56,8 @@ export interface ShapeHost {
   readonly objectAudit?: boolean;
   /** Inline the small-object allocator's fast paths (llvm/alloc.ts). */
   readonly inlineAlloc?: boolean;
+  /** Worker executables: the inline allocator state is thread-local. */
+  readonly threadLocalAlloc?: boolean;
   /** Inline RC fast-path helpers requested so far ("<family>:<op>"); the
    * emitter defines each once through {@link emitInlineRcHelpers}. Null
    * keeps every retain/release a runtime call: inline RC is a
@@ -781,7 +783,8 @@ export function releaseBody(
 /** The inlinable half of an object release. A reference that is neither the
  * last one nor immortal (rc - 2 < SIZE_MAX - 2 rules out 0, 1 and SIZE_MAX
  * in one compare) only decrements and, for headered objects, takes the
- * possible-root step. NULL, immortal and last references call `slow`, which
+ * possible-root step. Immortal references return; NULL and last references
+ * call `slow`, which
  * holds the complete release: inlining it everywhere would copy teardowns
  * (and their destroy calls) into every caller. */
 export function releaseFastPath(
@@ -806,7 +809,13 @@ export function releaseFastPath(
     `  %n = sub ${S} %rc, 1`,
     `  store ${S} %n, ptr %o`,
     ...(traced ? cycleRootLines(host, "done") : [`  br label %done`]),
+    // Immortal objects (static literals, published graphs) return here
+    // rather than through the out-of-line call: releases of a published
+    // graph's objects are as frequent as ordinary ones.
     `slow:`,
+    `  %imm = icmp eq ${S} %rc, -1`,
+    `  br i1 %imm, label %done, label %slowcall`,
+    `slowcall:`,
     `  call void @${slow}(ptr %o)`,
     `  br label %done`,
     `done:`,

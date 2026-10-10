@@ -15634,6 +15634,78 @@
     "<repo>/tests/diagnostics/deferred-class-receiver/main.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/native-worker-publish-classes.ts": {
+   "order": [
+    "<repo>/tests/corpus/native-worker-publish-classes.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-worker-publish-refusals.ts": {
+   "order": [
+    "<repo>/tests/corpus/native-worker-publish-refusals.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-worker-published-graphs.ts": {
+   "order": [
+    "<repo>/tests/corpus/native-worker-published-graphs.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-worker-typed-arrays.ts": {
+   "order": [
+    "<repo>/tests/corpus/native-worker-typed-arrays.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4541-nullable-wrap-borrows.ts": {
+   "order": [
+    "<repo>/tests/corpus/4541-nullable-wrap-borrows.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4542-preserving-call-borrows.ts": {
+   "order": [
+    "<repo>/tests/corpus/4542-preserving-call-borrows.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4544-checked-cast-aliases.ts": {
+   "order": [
+    "<repo>/tests/corpus/4544-checked-cast-aliases.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4543-walk-borrowed-locals.ts": {
+   "order": [
+    "<repo>/tests/corpus/4543-walk-borrowed-locals.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4545-borrowed-returns.ts": {
+   "order": [
+    "<repo>/tests/corpus/4545-borrowed-returns.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4546-rebound-borrowed-params.ts": {
+   "order": [
+    "<repo>/tests/corpus/4546-rebound-borrowed-params.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4568-for-of-hole-elements.ts": {
+   "order": [
+    "<repo>/tests/corpus/4568-for-of-hole-elements.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4569-shorthand-missing-elements.ts": {
+   "order": [
+    "<repo>/tests/corpus/4569-shorthand-missing-elements.ts"
+   ],
+   "diags": []
   }
  }
 }

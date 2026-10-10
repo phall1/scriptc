@@ -44,7 +44,12 @@ console.log(preserve(holder), snapshot(holder));
   expect(body(llvm, "preserve")).not.toContain("@sc_release_Cell");
   expect(body(llvm, "snapshot")).toContain("@sc_retain_Cell");
   expect(body(llvm, "snapshot")).toContain("@sc_release_Cell");
-  expect(body(llvm, "read")).toContain("@scr_str_retain_v");
+  // `read` returns a projection of its borrowed parameter without a
+  // reference; its owned adapter takes one for callers outside direct calls.
+  expect(body(llvm, "read")).not.toContain("@scr_str_retain_v");
+  expect(/^define internal [^\n]*@sc_f_read\([^]*?^}/m.exec(llvm)?.[0]).toContain(
+    "@scr_str_retain_v",
+  );
 });
 
 test("regex runtime inputs borrow independently of result ownership and lastIndex mutation", async () => {
