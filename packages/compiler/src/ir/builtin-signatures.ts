@@ -2620,6 +2620,11 @@ export const LIB_FN_SIGS = defineLibFnSignatures({
   "ffi.argument": { argTypes: [DYN, STRING], result: DYN },
   "ffi.memoryModule": { argTypes: [DYN], result: DYN },
   "intl.segmenterNew": { argTypes: [], result: DYN },
+  /** `new Intl.DateTimeFormat("en-US", options)` for the numeric longOffset
+   * bag. The value is a dyn handle: resolvedOptions().timeZone and
+   * formatToParts(millis) read host zoneinfo. Other locales and option
+   * bags throw. */
+  "intl.dateTimeFormatNew": { argTypes: [DYN, DYN], result: DYN },
   "arrayBuffer.is": { argTypes: [DYN], result: BOOL },
   "arrayBuffer.isView": { argTypes: [DYN], result: BOOL },
   "arrayBuffer.byteLengthGetter": { argTypes: [], result: F64 },

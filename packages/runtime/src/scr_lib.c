@@ -7135,6 +7135,438 @@ double scr_date_get_timezone_offset(double ms) {
   return scr_date_local_parts(ms, &p) ? p.timezone_offset : NAN;
 }
 
+/* ── Intl.DateTimeFormat for one option bag ────────────────────────────
+ * Effect's named zones construct
+ * `new Intl.DateTimeFormat("en-US", { ...numeric fields, timeZoneName:
+ * "longOffset", fractionalSecondDigits: 3, hourCycle: "h23", timeZone })`
+ * and then read resolvedOptions().timeZone plus formatToParts(utcMillis).
+ * toDate indexes the non-literal parts as month, day, year, hour, minute,
+ * second, fractionalSecond. The offset comes from the host TZif file
+ * (/usr/share/zoneinfo), which is the same data localtime would use.
+ * Other locales and option bags throw rather than invent a part order. */
+
+typedef struct {
+  int64_t at;
+  int32_t gmtoff;
+} ScrTzTrans;
+
+typedef struct {
+  size_t rc;
+  char *id;
+  size_t id_len;
+  int32_t initial_gmtoff;
+  size_t ntrans;
+  ScrTzTrans *trans;
+} ScrDateTimeFormat;
+
+static bool scr_tz_name_char(unsigned char c) {
+  static const char ok[] =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_+-/";
+  return memchr(ok, c, sizeof ok - 1) != NULL;
+}
+
+static bool scr_tz_name_ok(const char *s, size_t n) {
+  if (n == 0 || n > 128 || s[0] == '/' || s[n - 1] == '/') return false;
+  for (size_t i = 0; i < n; i++) {
+    if (!scr_tz_name_char((unsigned char)s[i])) return false;
+    if (s[i] == '/' && s[i - 1] == '/') return false;
+  }
+  return true;
+}
+
+static bool scr_tz_u32(const unsigned char *p, size_t n, size_t off, uint32_t *out) {
+  if (off + 4 > n) return false;
+  *out = ((uint32_t)p[off] << 24) | ((uint32_t)p[off + 1] << 16) |
+         ((uint32_t)p[off + 2] << 8) | (uint32_t)p[off + 3];
+  return true;
+}
+
+static bool scr_tz_i64(const unsigned char *p, size_t n, size_t off, int64_t *out) {
+  uint32_t hi, lo;
+  if (!scr_tz_u32(p, n, off, &hi) || !scr_tz_u32(p, n, off + 4, &lo)) return false;
+  *out = ((int64_t)hi << 32) | (int64_t)lo;
+  return true;
+}
+
+static bool scr_tz_header(const unsigned char *p, size_t n, size_t off, uint32_t counts[6]) {
+  if (off + 44 > n || memcmp(p + off, "TZif", 4) != 0) return false;
+  for (int i = 0; i < 6; i++) {
+    if (!scr_tz_u32(p, n, off + 20 + (size_t)i * 4, &counts[i])) return false;
+  }
+  return true;
+}
+
+/* counts: ttisut, ttisstd, leap, timecnt, typecnt, charcnt. */
+static bool scr_tz_block_size(const uint32_t counts[6], int wide, size_t *out) {
+  size_t time_bytes = wide ? 8 : 4;
+  size_t leap_bytes = wide ? 12 : 8;
+  *out = (size_t)counts[3] * time_bytes + (size_t)counts[3] + (size_t)counts[4] * 6 +
+         (size_t)counts[5] + (size_t)counts[2] * leap_bytes + (size_t)counts[1] +
+         (size_t)counts[0];
+  return true;
+}
+
+static bool scr_tz_initial(const unsigned char *infos, uint32_t typecnt, int32_t *initial) {
+  int32_t first = 0;
+  bool saw_standard = false;
+  for (uint32_t i = 0; i < typecnt; i++) {
+    uint32_t raw;
+    if (!scr_tz_u32(infos, (size_t)typecnt * 6, (size_t)i * 6, &raw)) return false;
+    if (!saw_standard && infos[(size_t)i * 6 + 4] == 0) {
+      first = (int32_t)raw;
+      saw_standard = true;
+    }
+  }
+  if (saw_standard) {
+    *initial = first;
+    return true;
+  }
+  uint32_t raw;
+  if (!scr_tz_u32(infos, (size_t)typecnt * 6, 0, &raw)) return false;
+  *initial = (int32_t)raw;
+  return true;
+}
+
+static bool scr_tz_transition(const unsigned char *times, const unsigned char *indexes,
+                              const unsigned char *infos, uint32_t timecnt, uint32_t typecnt,
+                              int wide, uint32_t index, ScrTzTrans *out) {
+  int64_t when;
+  if (wide) {
+    if (!scr_tz_i64(times, (size_t)timecnt * 8, (size_t)index * 8, &when)) return false;
+  } else {
+    uint32_t raw;
+    if (!scr_tz_u32(times, (size_t)timecnt * 4, (size_t)index * 4, &raw)) return false;
+    when = (int32_t)raw;
+  }
+  unsigned type_index = indexes[index];
+  if (type_index >= typecnt) return false;
+  uint32_t raw;
+  if (!scr_tz_u32(infos, (size_t)typecnt * 6, (size_t)type_index * 6, &raw)) return false;
+  out->at = when;
+  out->gmtoff = (int32_t)raw;
+  return true;
+}
+
+static bool scr_tz_load_types(const unsigned char *p, size_t n, size_t *cursor, uint32_t timecnt,
+                              uint32_t typecnt, int wide, ScrTzTrans **trans_out, size_t *ntrans,
+                              int32_t *initial) {
+  size_t at = *cursor;
+  size_t time_bytes = wide ? 8 : 4;
+  if (typecnt == 0) return false;
+  if (at + (size_t)timecnt * time_bytes + (size_t)timecnt + (size_t)typecnt * 6 > n) return false;
+  const unsigned char *times = p + at;
+  at += (size_t)timecnt * time_bytes;
+  const unsigned char *indexes = p + at;
+  at += timecnt;
+  const unsigned char *infos = p + at;
+  at += (size_t)typecnt * 6;
+  *cursor = at;
+  if (!scr_tz_initial(infos, typecnt, initial)) return false;
+  ScrTzTrans *trans = NULL;
+  if (timecnt != 0) {
+    trans = calloc(timecnt, sizeof *trans);
+    if (!trans) return false;
+    for (uint32_t i = 0; i < timecnt; i++) {
+      if (!scr_tz_transition(times, indexes, infos, timecnt, typecnt, wide, i, &trans[i])) {
+        free(trans);
+        return false;
+      }
+    }
+  }
+  *trans_out = trans;
+  *ntrans = timecnt;
+  return true;
+}
+
+static bool scr_tz_parse(const unsigned char *p, size_t n, ScrDateTimeFormat *fmt) {
+  uint32_t counts[6];
+  if (!scr_tz_header(p, n, 0, counts)) return false;
+  size_t cursor = 44;
+  int wide = 0;
+  if (p[4] >= '2') {
+    size_t v1;
+    if (!scr_tz_block_size(counts, 0, &v1) || cursor + v1 + 44 > n) return false;
+    cursor += v1;
+    if (!scr_tz_header(p, n, cursor, counts)) return false;
+    cursor += 44;
+    wide = 1;
+  }
+  size_t body = cursor;
+  if (!scr_tz_load_types(p, n, &body, counts[3], counts[4], wide, &fmt->trans, &fmt->ntrans,
+                         &fmt->initial_gmtoff))
+    return false;
+  return true;
+}
+
+static int32_t scr_tz_offset_at(const ScrDateTimeFormat *fmt, int64_t sec) {
+  if (fmt->ntrans == 0 || sec < fmt->trans[0].at) return fmt->initial_gmtoff;
+  size_t lo = 0, hi = fmt->ntrans;
+  while (lo + 1 < hi) {
+    size_t mid = lo + (hi - lo) / 2;
+    if (fmt->trans[mid].at <= sec) lo = mid;
+    else hi = mid;
+  }
+  return fmt->trans[lo].gmtoff;
+}
+
+static bool scr_tz_read(const char *id, size_t id_len, ScrDateTimeFormat *fmt) {
+  char path[160];
+  int wrote = snprintf(path, sizeof path, "/usr/share/zoneinfo/%.*s", (int)id_len, id);
+  if (wrote < 0 || (size_t)wrote >= sizeof path) return false;
+  FILE *file = fopen(path, "rb");
+  if (!file) return false;
+  if (fseek(file, 0, SEEK_END) != 0) {
+    fclose(file);
+    return false;
+  }
+  long bytes = ftell(file);
+  if (bytes < 44 || bytes > 1 << 20 || fseek(file, 0, SEEK_SET) != 0) {
+    fclose(file);
+    return false;
+  }
+  unsigned char *buf = malloc((size_t)bytes);
+  if (!buf) {
+    fclose(file);
+    return false;
+  }
+  size_t got = fread(buf, 1, (size_t)bytes, file);
+  fclose(file);
+  bool ok = got == (size_t)bytes && scr_tz_parse(buf, got, fmt);
+  free(buf);
+  return ok;
+}
+
+static void *scr_dtf_retain(void *ptr) {
+  ScrDateTimeFormat *fmt = ptr;
+  fmt->rc++;
+  return fmt;
+}
+
+static void scr_dtf_release(void *ptr) {
+  ScrDateTimeFormat *fmt = ptr;
+  if (--fmt->rc) return;
+  free(fmt->trans);
+  free(fmt->id);
+  free(fmt);
+}
+
+static bool scr_dtf_field_is(const ScrDyn *obj, const char *key, const char *expect) {
+  ScrDyn *value = scr_dyn_obj_get(obj, key, strlen(key));
+  size_t n = strlen(expect);
+  return value && value->kind == SCR_DYN_STR && value->v.str->len == n &&
+         memcmp(value->v.str->data, expect, n) == 0;
+}
+
+static bool scr_dtf_supported_bag(const ScrDyn *obj) {
+  static const char *const fields[][2] = {
+      {"day", "numeric"},
+      {"month", "numeric"},
+      {"year", "numeric"},
+      {"hour", "numeric"},
+      {"minute", "numeric"},
+      {"second", "numeric"},
+      {"timeZoneName", "longOffset"},
+      {"hourCycle", "h23"},
+  };
+  for (size_t i = 0; i < sizeof fields / sizeof fields[0]; i++) {
+    if (!scr_dtf_field_is(obj, fields[i][0], fields[i][1])) return false;
+  }
+  ScrDyn *digits = scr_dyn_obj_get(obj, "fractionalSecondDigits", 22);
+  return digits && digits->kind == SCR_DYN_NUM && digits->v.num == 3;
+}
+
+static void scr_dtf_throw_zone(const char *id, size_t len) {
+  char buf[192];
+  int n = snprintf(buf, sizeof buf, "Invalid time zone specified: %.*s", (int)len, id);
+  if (n < 0 || (size_t)n >= sizeof buf) n = (int)strlen(buf);
+  scr_throw_error_msg(SCR_ERR_RANGE, buf, (size_t)n);
+}
+
+static void scr_dtf_push(ScrDyn *arr, const char *type, const char *value) {
+  ScrDyn *part = scr_dyn_new_obj();
+  ScrStr *type_str = scr_str_new(type, strlen(type));
+  ScrStr *value_str = scr_str_new(value, strlen(value));
+  scr_dyn_obj_set(part, "type", 4, scr_dyn_new_str(type_str));
+  scr_dyn_obj_set(part, "value", 5, scr_dyn_new_str(value_str));
+  scr_str_release(type_str);
+  scr_str_release(value_str);
+  scr_dyn_arr_push(arr, part);
+}
+
+static void scr_dtf_push_num(ScrDyn *arr, const char *type, int value, int width) {
+  char buf[16];
+  if (width > 0) snprintf(buf, sizeof buf, "%0*d", width, value);
+  else snprintf(buf, sizeof buf, "%d", value);
+  scr_dtf_push(arr, type, buf);
+}
+
+static ScrDyn *scr_dtf_format_to_parts(ScrDateTimeFormat *fmt, double ms) {
+  if (!isfinite(ms) || fabs(ms) > 8640000000000000.0) {
+    scr_throw_error_msg(SCR_ERR_RANGE, "Invalid time value", 18);
+    return NULL;
+  }
+  double clipped = trunc(ms);
+  double sec_d = floor(clipped / 1000.0);
+  int64_t sec = (int64_t)sec_d;
+  if ((double)sec != sec_d) {
+    scr_throw_error_msg(SCR_ERR_RANGE, "Invalid time value", 18);
+    return NULL;
+  }
+  int32_t gmtoff = scr_tz_offset_at(fmt, sec);
+  ScrDateParts cal;
+  scr_date_utc_parts_unchecked(clipped + (double)gmtoff * 1000.0, &cal);
+  int millis = (int)(clipped - sec_d * 1000.0);
+  char frac[8];
+  snprintf(frac, sizeof frac, "%03d", millis);
+  int32_t abs_off = gmtoff < 0 ? -gmtoff : gmtoff;
+  char zone[24];
+  snprintf(zone, sizeof zone, "GMT%c%02d:%02d", gmtoff < 0 ? '-' : '+', abs_off / 3600,
+           (abs_off % 3600) / 60);
+  ScrDyn *parts = scr_dyn_new_arr();
+  scr_dtf_push_num(parts, "month", cal.month + 1, 0);
+  scr_dtf_push(parts, "literal", "/");
+  scr_dtf_push_num(parts, "day", cal.date, 0);
+  scr_dtf_push(parts, "literal", "/");
+  scr_dtf_push_num(parts, "year", (int)cal.year, 0);
+  scr_dtf_push(parts, "literal", ", ");
+  scr_dtf_push_num(parts, "hour", cal.hours, 2);
+  scr_dtf_push(parts, "literal", ":");
+  scr_dtf_push_num(parts, "minute", cal.minutes, 2);
+  scr_dtf_push(parts, "literal", ":");
+  scr_dtf_push_num(parts, "second", cal.seconds, 2);
+  scr_dtf_push(parts, "literal", ".");
+  scr_dtf_push(parts, "fractionalSecond", frac);
+  scr_dtf_push(parts, "literal", " ");
+  scr_dtf_push(parts, "timeZoneName", zone);
+  return parts;
+}
+
+static ScrDyn *scr_dtf_resolved(ScrDateTimeFormat *fmt) {
+  ScrDyn *obj = scr_dyn_new_obj();
+  ScrStr *id = scr_str_new(fmt->id, fmt->id_len);
+  scr_dyn_obj_set(obj, "timeZone", 8, scr_dyn_new_str(id));
+  scr_str_release(id);
+  return obj;
+}
+
+static ScrDyn *scr_dtf_invoke(void *ptr, ScrDyn *self, const char *method, ScrDyn *const *args,
+                              size_t argc, const char *what) {
+  (void)self;
+  (void)what;
+  ScrDateTimeFormat *fmt = ptr;
+  if (strcmp(method, "resolvedOptions") == 0) return scr_dtf_resolved(fmt);
+  if (strcmp(method, "formatToParts") == 0) {
+    ScrDyn *arg = argc ? args[0] : NULL;
+    double ms = 0;
+    if (!arg || !scr_dyn_number_coerce_js(arg, &ms)) {
+      if (!scr_exc_pending()) scr_throw_error_msg(SCR_ERR_RANGE, "Invalid time value", 18);
+      return NULL;
+    }
+    return scr_dtf_format_to_parts(fmt, ms);
+  }
+  char buf[96];
+  int n = snprintf(buf, sizeof buf, "%s is not a function", what ? what : method);
+  if (n < 0 || (size_t)n >= sizeof buf) n = (int)strlen(buf);
+  scr_throw_error_msg(SCR_ERR_TYPE, buf, (size_t)n);
+  return NULL;
+}
+
+static ScrDyn *scr_dtf_get(void *ptr, const char *key, size_t len) {
+  (void)ptr;
+  (void)key;
+  (void)len;
+  return NULL;
+}
+
+static bool scr_dtf_set(void *ptr, const char *key, size_t len, const ScrDyn *value) {
+  (void)ptr;
+  (void)key;
+  (void)len;
+  (void)value;
+  return false;
+}
+
+static void scr_dtf_install(void) {
+  static const ScrDynHandleOps ops = {
+      .cls = "DateTimeFormat",
+      .retain = scr_dtf_retain,
+      .release = scr_dtf_release,
+      .invoke = scr_dtf_invoke,
+      .get = scr_dtf_get,
+      .set = scr_dtf_set,
+      .pipe_from = NULL,
+      .iter_pack = NULL,
+      .iter_step = NULL,
+  };
+  scr_dyn_handle_install(SCR_DYNH_DATETIME_FORMAT, &ops);
+}
+
+static const ScrDyn *scr_dtf_options(const ScrDyn *options, ScrDyn **owned) {
+  *owned = NULL;
+  if (options->kind != SCR_DYN_TYPED_REF) return options;
+  *owned = scr_dyn_typed_ref_materialize(options);
+  return *owned;
+}
+
+static bool scr_dtf_locale_en_us(const ScrDyn *locale) {
+  return locale->kind == SCR_DYN_STR && locale->v.str->len == 5 &&
+         memcmp(locale->v.str->data, "en-US", 5) == 0;
+}
+
+static bool scr_dtf_copy_zone(const ScrDyn *obj, char **id, size_t *id_len) {
+  ScrDyn *zone = scr_dyn_obj_get(obj, "timeZone", 8);
+  if (!zone || zone->kind != SCR_DYN_STR || !scr_tz_name_ok(zone->v.str->data, zone->v.str->len))
+    return false;
+  char *copy = malloc(zone->v.str->len + 1);
+  if (!copy) return false;
+  memcpy(copy, zone->v.str->data, zone->v.str->len);
+  copy[zone->v.str->len] = 0;
+  *id = copy;
+  *id_len = zone->v.str->len;
+  return true;
+}
+
+ScrDyn *scr_intl_datetime_format_new(ScrDyn *locale, ScrDyn *options) {
+  scr_dtf_install();
+  if (!scr_dtf_locale_en_us(locale)) {
+    scr_throw_error_msg(SCR_ERR_RANGE, "Unsupported Intl.DateTimeFormat locale", 38);
+    return NULL;
+  }
+  ScrDyn *owned = NULL;
+  const ScrDyn *obj = scr_dtf_options(options, &owned);
+  if (scr_exc_pending()) return NULL;
+  if (!obj || obj->kind != SCR_DYN_OBJ || !scr_dtf_supported_bag(obj)) {
+    if (owned) scr_dyn_release(owned);
+    scr_throw_error_msg(SCR_ERR_RANGE, "Unsupported Intl.DateTimeFormat options", 39);
+    return NULL;
+  }
+  char *id = NULL;
+  size_t id_len = 0;
+  bool copied = scr_dtf_copy_zone(obj, &id, &id_len);
+  if (owned) scr_dyn_release(owned);
+  if (!copied || !id) {
+    free(id);
+    scr_throw_error_msg(SCR_ERR_RANGE, "Invalid time zone specified", 28);
+    return NULL;
+  }
+  ScrDateTimeFormat *fmt = calloc(1, sizeof *fmt);
+  if (!fmt) {
+    free(id);
+    scr_trap("scriptc: out of memory\n");
+  }
+  fmt->rc = 1;
+  fmt->id = id;
+  fmt->id_len = id_len;
+  if (!scr_tz_read(id, id_len, fmt)) {
+    scr_dtf_throw_zone(id, id_len);
+    scr_dtf_release(fmt);
+    return NULL;
+  }
+  ScrDyn *boxed = scr_dyn_new_handle(fmt, SCR_DYNH_DATETIME_FORMAT);
+  scr_dtf_release(fmt);
+  return boxed;
+}
+
 /* ── Number statics ────────────────────────────────────────────────────
  * JS-exact: the ES2015 Number statics never coerce (unlike the global
  * isNaN/isFinite), and the compiler routes only number-typed arguments

@@ -8064,6 +8064,31 @@ function lowerStdlibRegExpNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr 
   };
 }
 
+/** Effect's named-zone constructor: `new Intl.DateTimeFormat("en-US", options)`.
+ * The formatter is a dyn handle. Host zoneinfo supplies the offset;
+ * resolvedOptions and formatToParts run at the call. */
+function lowerIntlDateTimeFormatNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
+  const loc = locOf(expr);
+  const args = expr.arguments ?? [];
+  if (args.length !== 2 || args.some(ts.isSpreadElement)) {
+    lowerer.noLowering(
+      "new Intl.DateTimeFormat",
+      expr,
+      'the supported form is new Intl.DateTimeFormat("en-US", options) with timeZoneName ' +
+        '"longOffset" and numeric calendar fields; the offset comes from host zoneinfo',
+    );
+  }
+  const locale = lowerer.coerceInto(args[0]!, lowerer.lowerExpr(args[0]!), DYN);
+  const options = lowerer.coerceInto(args[1]!, lowerer.lowerExpr(args[1]!), DYN);
+  return {
+    kind: "libCall",
+    fn: "intl.dateTimeFormatNew",
+    args: [locale, options],
+    type: DYN,
+    loc,
+  };
+}
+
 export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
   const loc = locOf(expr);
   const worker = lowerWorkerNew(lowerer, expr);
@@ -8078,6 +8103,7 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
   const intl = ts.isPropertyAccessExpression(intlConstructor)
     ? lowerer.stdlibGlobalMember(intlConstructor, "Intl")
     : null;
+  if (intl === "DateTimeFormat") return lowerIntlDateTimeFormatNew(lowerer, expr);
   if (intl && intl !== "Segmenter")
     lowerer.noLowering(
       `new Intl.${intl}`,
