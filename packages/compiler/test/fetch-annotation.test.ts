@@ -1,37 +1,19 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 import { compile } from "../src/index.js";
 
-// `typeof globalThis.fetch` is an @types/node signature. The const still
-// holds the arrow, and Effect's fetch client calls that arrow.
+// The ready probe annotates the const as typeof globalThis.fetch. That
+// signature is @types/node. Effect still calls the arrow.
 test("a fetch annotation keeps the function passed to FetchHttpClient", async () => {
   const directory = mkdtempSync(join(tmpdir(), "scriptc-fetch-annotation-"));
-  const entry = join(directory, "main.ts");
+  const entry = join(
+    import.meta.dirname,
+    "../../../../effect-scriptc-compat/cases/namespace-http-fetchhttpclient.ts",
+  );
   const binary = join(directory, "main");
-  symlinkSync(
-    join(import.meta.dirname, "../../../../effect-scriptc-compat/node_modules"),
-    join(directory, "node_modules"),
-    "dir",
-  );
-  writeFileSync(
-    entry,
-    [
-      'import { Effect } from "effect";',
-      'import * as M from "effect/http/FetchHttpClient";',
-      'import { HttpClient } from "effect/http";',
-      "const fakeFetch: typeof globalThis.fetch = async () => new Response('{\"value\":7}', { status: 200, headers: { \"content-type\": \"application/json\" } });",
-      "const program = Effect.gen(function* () {",
-      "  const client = yield* HttpClient.HttpClient;",
-      '  const response = yield* client.get("https://example.invalid/fixture");',
-      "  return yield* response.json;",
-      "}).pipe(Effect.provide(M.layer), Effect.provideService(M.Fetch, fakeFetch));",
-      "console.log(JSON.stringify(await Effect.runPromise(program)));",
-      "",
-    ].join("\n"),
-  );
   try {
     const result = await compile(entry, {
       outDir: directory,
