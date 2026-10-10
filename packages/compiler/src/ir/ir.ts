@@ -4004,6 +4004,7 @@ export function classDynViewSupported(
 /** A static type that CONVERTS into a dyn value — the dynFrom domain:
  * JSON-safe data, numeric typed arrays (retained views), identity-preserving class
  * references, undefined-armed unions of those arms, boxable function types,
+ * typed Dates (a native Date handle, not a number),
  * and the runtime HANDLE kinds (boxed by reference — DYN_HANDLE_KINDS). */
 export function canConvertToDyn(
   t: IrType,
@@ -4012,6 +4013,11 @@ export function canConvertToDyn(
   visiting: Set<string> = new Set(),
 ): boolean {
   if (isJsonSafeType(t, getRecord, getUnion)) return true;
+  // A typed Date is a TimeClip scalar. Boxing it as a number would make
+  // `instanceof Date` and `getTime` fail. The dyn value is a native Date
+  // handle. Nested dates stay fenced: array and union walkers still treat
+  // the scalar as a pointer.
+  if (t.kind === "date") return true;
   // numeric typed arrays and boxable functions are dyn kinds the walker boxes
   // ANYWHERE (bytes and functions held by identity), including nested
   // in records/arrays/unions. isJsonSafeType rejects them, but dynFrom

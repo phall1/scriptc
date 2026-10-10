@@ -7927,7 +7927,12 @@ ScrArr *scr_set_to_arr_ref(const ScrMap *s) {
  * to use milliseconds and explicitly extracts them for native getters. */
 typedef struct { size_t rc; double milliseconds; } ScrNativeDate;
 static void *scr_native_date_retain(void *ptr) { ((ScrNativeDate *)ptr)->rc++; return ptr; }
-static void scr_native_date_release(void *ptr) { if (--((ScrNativeDate *)ptr)->rc == 0) free(ptr); }
+static void scr_native_date_release(void *ptr) {
+  ScrNativeDate *date = ptr;
+  if (--date->rc != 0) return;
+  scr_weak_dispose(date);
+  free(date);
+}
 
 bool scr_dyn_native_date_is(const ScrDyn *value) {
   return value && value->kind == SCR_DYN_HANDLE && value->v.handle.tag == SCR_DYNH_DATE;
@@ -8039,16 +8044,9 @@ static ScrDyn *scr_native_date_invoke(void *ptr, ScrDyn *self, const char *metho
   return NULL;
 }
 
-ScrDyn *scr_dyn_native_date_new(const ScrDyn *arguments) {
-  double ms;
-  if (arguments->v.arr.len == 0) ms = scr_date_now();
-  else {
-    ScrDyn *value = arguments->v.arr.items[0];
-    if (scr_dyn_native_date_is(value)) ms = scr_dyn_native_date_value(value);
-    else if (value->kind == SCR_DYN_STR) ms = scr_date_parse_get_time(value->v.str);
-    else if (!scr_dyn_number_coerce_js(value, &ms)) return NULL;
-    ms = scr_date_new_ms(ms);
-  }
+/* A typed TimeClip scalar crossing into unknown. The milliseconds are
+ * already clipped; this only gives them Date identity. */
+ScrDyn *scr_dyn_native_date_box(double ms) {
   static const ScrDynHandleOps ops = {
     "Date", &scr_native_date_retain, &scr_native_date_release, &scr_native_date_invoke,
     NULL, NULL, NULL, NULL,
@@ -8061,4 +8059,17 @@ ScrDyn *scr_dyn_native_date_new(const ScrDyn *arguments) {
   ScrDyn *result = scr_dyn_new_handle(date, SCR_DYNH_DATE);
   scr_native_date_release(date);
   return result;
+}
+
+ScrDyn *scr_dyn_native_date_new(const ScrDyn *arguments) {
+  double ms;
+  if (arguments->v.arr.len == 0) ms = scr_date_now();
+  else {
+    ScrDyn *value = arguments->v.arr.items[0];
+    if (scr_dyn_native_date_is(value)) ms = scr_dyn_native_date_value(value);
+    else if (value->kind == SCR_DYN_STR) ms = scr_date_parse_get_time(value->v.str);
+    else if (!scr_dyn_number_coerce_js(value, &ms)) return NULL;
+    ms = scr_date_new_ms(ms);
+  }
+  return scr_dyn_native_date_box(ms);
 }
