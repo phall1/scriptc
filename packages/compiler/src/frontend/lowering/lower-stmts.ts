@@ -4342,10 +4342,10 @@ export function lowerVarDeclList(
 /** A single static type for an initializer-less JavaScript `let` whose
  * later plain writes all agree. An evolving JS local reads as `undefined`
  * until control flow proves a write, so a scalar slot is sound only when
- * every ordinary use already has that concrete flow type. Any closure
- * capture stays checked-dynamic: it can observe the local before an outer
- * assignment, and the checker deliberately leaves captured evolving lets
- * broad. */
+ * every ordinary use already has that concrete flow type. A closure can
+ * observe the local before that write, and `??=` exists because the slot
+ * may still be empty, so those bindings keep an undefined arm instead of
+ * staying a checked-dynamic value the concrete write cannot enter. */
 function inferredEvolvingLetType(lowerer: Lowerer, decl: ts.VariableDeclaration): IrType | null {
   if (!ts.isIdentifier(decl.name)) return null;
   const symbol = lowerer.checker.getSymbolAtLocation(decl.name);
@@ -4360,7 +4360,8 @@ function inferredEvolvingLetType(lowerer: Lowerer, decl: ts.VariableDeclaration)
     const parent = target.parent;
     return (
       ts.isBinaryExpression(parent) &&
-      parent.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      (parent.operatorToken.kind === ts.SyntaxKind.EqualsToken ||
+        parent.operatorToken.kind === ts.SyntaxKind.QuestionQuestionEqualsToken) &&
       parent.left === target
     );
   };
@@ -4383,19 +4384,23 @@ function inferredEvolvingLetType(lowerer: Lowerer, decl: ts.VariableDeclaration)
   const writes: IrType[] = [];
   const reads: ts.Identifier[] = [];
   let invalid = false;
+  let captured = false;
+  let nullishWrite = false;
   ts.walkPreorder(scope, (node) => {
-    if (node !== scope && ts.isFunctionLike(node)) {
-      if (captures(node)) invalid = true;
-      return "skip";
-    }
+    if (node !== scope && ts.isFunctionLike(node) && captures(node)) captured = true;
     if (ts.isBinaryExpression(node)) {
       let left = node.left;
       while (ts.isParenthesizedExpression(left)) left = left.expression;
       if (ts.isIdentifier(left) && lowerer.checker.getSymbolAtLocation(left) === symbol) {
-        if (node.operatorToken.kind !== ts.SyntaxKind.EqualsToken) {
+        const op = node.operatorToken.kind;
+        if (
+          op !== ts.SyntaxKind.EqualsToken &&
+          op !== ts.SyntaxKind.QuestionQuestionEqualsToken
+        ) {
           invalid = true;
           return "stop";
         }
+        if (op === ts.SyntaxKind.QuestionQuestionEqualsToken) nullishWrite = true;
         if (
           ts.isCallExpression(node.right) &&
           (implicitMethodCallInfersReturn(lowerer, node.right) ||
@@ -4439,6 +4444,13 @@ function inferredEvolvingLetType(lowerer: Lowerer, decl: ts.VariableDeclaration)
   const first = writes[0];
   if (invalid || first === undefined || !writes.every((write) => typeEquals(write, first)))
     return null;
+  if (captured || nullishWrite) {
+    const readsFit = reads.every((read) => {
+      const mapped = lowerer.mapTypeOf(lowerer.typeOf(read));
+      return mapped === null || mapped.kind === "dyn" || typeEquals(mapped, first);
+    });
+    return readsFit ? lowerer.withUndefinedArmOf(first) : null;
+  }
   return reads.every((read) => {
     const mapped = lowerer.mapTypeOf(lowerer.typeOf(read));
     return mapped !== null && typeEquals(mapped, first);
