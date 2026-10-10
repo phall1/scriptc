@@ -3921,6 +3921,20 @@ export function maybeNarrow(lowerer: Lowerer, expr: IrExpr, node: ts.Node): IrEx
   };
 }
 
+/** JS monomorphization stores one concrete element plus undefined. The
+ * checker still sees implicit any, which has no IR type. The stored
+ * value arm is that element. */
+function implicitOptionalValueArm(lowerer: Lowerer, stored: IrType): IrType | null {
+  if (stored.kind !== "union") return null;
+  const arms = lowerer.unions.get(stored.unionId)?.arms;
+  if (!arms || arms.length !== 2) return null;
+  const undef = lowerer.armTag(stored.unionId, UNDEFINED_T);
+  if (undef < 0) return null;
+  const value = arms[undef === 0 ? 1 : 0];
+  if (!value || isUnitType(value)) return null;
+  return value;
+}
+
 /** A runtime-optional slot can be assigned while a truthy guard is in
  * force. TypeScript then types a direct member receiver as the plain arm,
  * even though an OOB-safe assignment may have restored undefined. Check
@@ -3951,7 +3965,9 @@ function runtimeOptionalReceiverRead(
   ) {
     narrowedNode = narrowedNode.parent;
   }
-  const narrowed = lowerer.mapTypeOf(lowerer.typeOf(narrowedNode));
+  const narrowed =
+    lowerer.mapTypeOf(lowerer.typeOf(narrowedNode)) ??
+    implicitOptionalValueArm(lowerer, local.type);
   if (!narrowed || isUnitType(narrowed)) {
     lowerer.unsupported(
       "SC1090",
