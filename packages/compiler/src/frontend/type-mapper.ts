@@ -1987,6 +1987,22 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
         { name: "written", type: F64 },
       ]),
     };
+  // WeakRef and FinalizationRegistry instances are checked-dynamic
+  // objects. deref returns the target while it is still live, and the
+  // registry retains its callback without running it: collection timing
+  // is not a result these probes observe.
+  if (
+    (psym?.name === "WeakRef" || psym?.name === "FinalizationRegistry") &&
+    checker
+      .declarationsOf(psym)
+      .some(
+        (d) =>
+          (ts.isInterfaceDeclaration(d) || ts.isClassDeclaration(d)) &&
+          ctx.isStdlibFile(d.getSourceFile()),
+      )
+  ) {
+    return DYN;
+  }
   // WHATWG codec instances have ordinary reference identity and ownership.
   // Their private encoding slot is omitted from enumeration and JSON.
   if (
