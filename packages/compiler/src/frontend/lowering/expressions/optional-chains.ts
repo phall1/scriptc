@@ -32,6 +32,13 @@ import type { Lowerer } from "../lowerer.js";
  * lowering's re-dispatch walk past its own step. `f?.()` steps stay out
  * (a call carrying the token has no member step to re-enter — the
  * split-it fence keeps them). */
+/** `?.` strips null and undefined. `typeOf` keeps an implicit-any
+ * specialization (`seed` is a Uint8Array). The checker's raw `any` is
+ * not a nullish proof, and installing it would hide that specialization. */
+function nonNullishCheckerType(lowerer: Lowerer, node: ts.Node): ts.Type {
+  return lowerer.checker.getNonNullableType(lowerer.typeOf(node));
+}
+
 function chainTailDot(
   lowerer: Lowerer,
   expr: ts.Expression,
@@ -387,10 +394,7 @@ export function lowerOptionalChain(
     lowerer.chainHandled.add(dotNode);
     const hadNarrow = lowerer.chainNarrowedType.has(recvNode);
     if (!hadNarrow) {
-      lowerer.chainNarrowedType.set(
-        recvNode,
-        lowerer.checker.getNonNullableType(lowerer.checker.getTypeAtLocation(recvNode)),
-      );
+      lowerer.chainNarrowedType.set(recvNode, nonNullishCheckerType(lowerer, recvNode));
     }
     try {
       return lowerer.lowerExpr(expr);
@@ -440,9 +444,7 @@ export function lowerOptionalChain(
 
   // Member forms: re-dispatch the normal lowering with the receiver node
   // bound to the chain (reads as chainRecv, types as non-nullish).
-  const narrowedTs = lowerer.checker.getNonNullableType(
-    lowerer.checker.getTypeAtLocation(recvNode),
-  );
+  const narrowedTs = nonNullishCheckerType(lowerer, recvNode);
   lowerer.chainRecvByNode.set(recvNode, recvRef);
   lowerer.chainNarrowedType.set(recvNode, narrowedTs);
   lowerer.chainHandled.add(dotNode);
@@ -459,19 +461,13 @@ export function lowerOptionalChain(
         : (cur as ts.PropertyAccessExpression | ts.ElementAccessExpression).expression;
       if (next === dotNode) break;
       if (!lowerer.chainNarrowedType.has(next)) {
-        lowerer.chainNarrowedType.set(
-          next,
-          lowerer.checker.getNonNullableType(lowerer.checker.getTypeAtLocation(next)),
-        );
+        lowerer.chainNarrowedType.set(next, nonNullishCheckerType(lowerer, next));
         tailSteps.push(next);
       }
       cur = next;
     }
     if (!lowerer.chainNarrowedType.has(dotNode)) {
-      lowerer.chainNarrowedType.set(
-        dotNode,
-        lowerer.checker.getNonNullableType(lowerer.checker.getTypeAtLocation(dotNode)),
-      );
+      lowerer.chainNarrowedType.set(dotNode, nonNullishCheckerType(lowerer, dotNode));
       tailSteps.push(dotNode as ts.Expression);
     }
   }

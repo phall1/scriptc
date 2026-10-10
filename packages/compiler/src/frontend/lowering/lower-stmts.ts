@@ -4176,6 +4176,20 @@ function jsvalFlavoredType(t: IrType): boolean {
   return t.kind === "jsval" || (t.kind === "array" && t.elem.kind === "jsval");
 }
 
+/** A JavaScript default such as `maxFieldSize = 1024 * 1024` types the
+ * binding as that number. A present value can still be a bigint. The
+ * default already replaced undefined, so the present value stays checked
+ * dynamic instead of being forced into the default's type. */
+function jsDefaultedDynBinding(name: ts.Identifier): boolean {
+  const parent = name.parent;
+  return (
+    isJsSourceFile(name.getSourceFile()) &&
+    ts.isBindingElement(parent) &&
+    parent.name === name &&
+    parent.initializer !== undefined
+  );
+}
+
 export function bindPatternTarget(
   lowerer: Lowerer,
   name: ts.BindingName,
@@ -4225,10 +4239,11 @@ export function bindPatternTarget(
     // world is the honest dispatch.
     const dynStays =
       value.type.kind === "dyn" &&
-      (() => {
-        const mapped = lowerer.mapTypeOf(lowerer.typeOf(name));
-        return mapped === null || (lowerer.dynamic && jsvalFlavoredType(mapped));
-      })();
+      (jsDefaultedDynBinding(name) ||
+        (() => {
+          const mapped = lowerer.mapTypeOf(lowerer.typeOf(name));
+          return mapped === null || (lowerer.dynamic && jsvalFlavoredType(mapped));
+        })());
     let type = dynStays
       ? DYN
       : (lowerer.runtimeOptionalBindingType(name, lowerer.irTypeOf(name)) ??
