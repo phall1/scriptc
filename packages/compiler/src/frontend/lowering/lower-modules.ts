@@ -3183,8 +3183,8 @@ export function lowerFileInit(
  * later import of it (or of a module depending on it) throws that same
  * error again instead of resolving. */
 function importRetryModules(lowerer: Lowerer): ReadonlySet<ts.SourceFile> {
-  const memo = importRetryMemo.get(lowerer);
-  if (memo !== undefined) return memo;
+  const memo = lowerer.importRetryModules;
+  if (memo !== null) return memo;
   const out = new Set<ts.SourceFile>();
   const visit = (sf: ts.SourceFile): void => {
     if (out.has(sf) || sf.fileName.endsWith(".cts") || isCjsJsFile(sf, lowerer.program)) return;
@@ -3196,11 +3196,9 @@ function importRetryModules(lowerer: Lowerer): ReadonlySet<ts.SourceFile> {
   for (const sf of lowerer.moduleOrder) {
     for (const dep of dynamicProgramImportsOf(lowerer.program, sf)) visit(dep);
   }
-  importRetryMemo.set(lowerer, out);
+  lowerer.importRetryModules = out;
   return out;
 }
-
-const importRetryMemo = new WeakMap<Lowerer, Set<ts.SourceFile>>();
 
 /** Wraps a guarded module body so a thrown evaluation error is kept and
  * thrown again by every later call of the initializer. The first two
