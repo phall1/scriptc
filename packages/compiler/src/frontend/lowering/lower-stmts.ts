@@ -4447,6 +4447,16 @@ function inferredEvolvingLetType(lowerer: Lowerer, decl: ts.VariableDeclaration)
     : null;
 }
 
+/** `[]` and `(())` carry no element. `never[]` lowers as number[], which is
+ * not a type a later push can use. Assertions are kept: `[] as number[]`
+ * is an explicit element type. */
+function isEmptyArrayLiteral(expr: ts.Expression | undefined): boolean {
+  if (expr === undefined) return false;
+  let current = expr;
+  while (ts.isParenthesizedExpression(current)) current = current.expression;
+  return ts.isArrayLiteralExpression(current) && current.elements.length === 0;
+}
+
 export function lowerVarDecl(
   lowerer: Lowerer,
   decl: ts.VariableDeclaration,
@@ -5108,12 +5118,18 @@ export function lowerVarDecl(
   // their tuple record likewise). Const only — an evolving-`any`
   // `let` may be reassigned a different shape later; genuine `any`
   // only — every other unmappable keeps its own diagnostic.
+  // An empty literal is not evidence (`const states: Array<Schema.Json> =
+  // []` when the annotation does not resolve). never[] lowers as
+  // number[], and a later object push then throws "expected number".
+  // dynFallbackType keeps that binding checked-dynamic.
   const checkerAny = (lowerer.typeOf(decl.name).flags & ts.TypeFlags.Any) !== 0;
   if (
     (type === null || (type.kind === "dyn" && checkerAny)) &&
     !isLet &&
     (checkerAny ||
-      (lowerer.checkerAnyArray(decl.name) && lowerer.isArrayValueType(init.type)) ||
+      (lowerer.checkerAnyArray(decl.name) &&
+        lowerer.isArrayValueType(init.type) &&
+        !isEmptyArrayLiteral(decl.initializer)) ||
       // JS declarations carry no annotations: an unmappable inferred
       // type (a union with a fence-folded arm — the typeof-'bigint'
       // dual-mode ternary) adopts the initializer's static type, the
@@ -5122,7 +5138,8 @@ export function lowerVarDecl(
     init.type.kind !== "void" &&
     init.type.kind !== "caught" &&
     init.type.kind !== "jsval" &&
-    !isUnitType(init.type)
+    !isUnitType(init.type) &&
+    !(checkerAny && isEmptyArrayLiteral(decl.initializer))
   ) {
     type = init.type;
   }
@@ -5315,6 +5332,18 @@ export function lowerVarDecl(
   if (openDynCarryingBinding(lowerer, decl, settledType, init.type)) settledType = DYN;
   // Slot coercion: `const r: A | B = bValue;` wraps implicitly; width
   // subtyping (`const p: {a: number} = wider;`) is rejected, not coerced.
+  // `[]` infers never[] and lowers as number[]. dynFrom of that array is a
+  // live number[] capsule: a later object push commits through dynCheck and
+  // throws "expected number". An unresolved element (`Array<Schema.Json>`
+  // once npm-static drops the alias) is a checked-dynamic array, so the
+  // literal is built as one instead of borrowing the placeholder.
+  if (
+    settledType.kind === "dyn" &&
+    init.type.kind === "array" &&
+    isEmptyArrayLiteral(decl.initializer)
+  ) {
+    init = { kind: "dynArrLit", elems: [], type: DYN, loc: init.loc };
+  }
   init = lowerer.coerceInto(decl.initializer, init, settledType);
   const local = lowerer.declareLocal(decl.name, decl.name.text, settledType, isLet);
   if (runtimeStringArithmetic && init.type.kind === "union") {
