@@ -778,6 +778,20 @@ export function lowerObjectLiteral(
   ) {
     return lowerDynObjectLiteral(lowerer, expr);
   }
+  // A JavaScript spread of an unknown source has no field list to copy.
+  // Later explicit properties still override, and the runtime copy keeps
+  // keys the checker could not name.
+  if (
+    !expected &&
+    isJsSourceFile(expr.getSourceFile()) &&
+    expr.properties.some(
+      (prop) =>
+        ts.isSpreadAssignment(prop) &&
+        lowerer.mapTypeOf(lowerer.typeOf(prop.expression))?.kind === "dyn",
+    )
+  ) {
+    return lowerDynObjectLiteral(lowerer, expr);
+  }
   const loc = locOf(expr);
   // Module collection already chose checked storage for this JavaScript
   // binding. Construct in that representation: an intermediate record would
