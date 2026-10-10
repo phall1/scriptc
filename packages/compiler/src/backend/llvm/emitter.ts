@@ -192,6 +192,8 @@ import { emitControlExpr } from "./expr-control.js";
 import { emitBorrowedResultCall, emitCallExpr } from "./expr-calls.js";
 import { emitDynamicExpr } from "./expr-dynamic.js";
 import { emitIntrinsicExpr, emitSerializationExpr, emitAsyncExpr } from "./expr-async.js";
+import { PublishWalkers } from "./publish.js";
+import { computePublishedTypes, type PublishedTypes } from "../publication.js";
 import { emitJsInteropExpr, emitExpr } from "./expr-dispatch.js";
 import {
   emitJsMarshal,
@@ -628,6 +630,9 @@ export class LlEmitter {
   /** Functions that check the native stack guard on entry
    * (stackCheckedFunctions); null where the runtime has no guard. */
   private readonly stackChecks: ReadonlySet<string> | null;
+  /** Static types whose values can be published (@scriptc/threads): their
+   * stores carry the frozen-object guard. Null without publish calls. */
+  readonly publishedTypes: PublishedTypes | null;
   /** Method names with at least one may-throw implementation — the
    * virtualCall pending check's key. */
   readonly mayThrowMethods = new Set<string>();
@@ -831,6 +836,7 @@ export class LlEmitter {
     this.mayThrow = mt.fns;
     this.workerEntryPolls = mt.workerEntryPolls ?? null;
     this.stackChecks = mt.stackChecks ?? null;
+    this.publishedTypes = computePublishedTypes(mod);
     this.indirectMayThrow = mt.indirect || mod.workers === true;
     for (const cls of mod.classes ?? []) {
       for (const m of cls.methods ?? []) {
@@ -1799,6 +1805,8 @@ export class LlEmitter {
     const helpers = [
       ...this.helperDefs(),
       ...emitClassMembershipHelper(this.classMeta, this.sizeType),
+      ...(this.publishWalkersCache?.defs() ?? []),
+      ...this.publishedClassNamesDefs(),
     ];
     if (this.constantNumericTables.size > 0)
       this.declare(`declare double @scr_arr_get_number(ptr, double)`);
@@ -5554,15 +5562,26 @@ export class LlEmitter {
         if (s.arr.type.kind !== "array")
           throw new InternalCompilerError("llvm emitter bug: arraySet on non-array");
         const acc = elemAccess(s.arr.type.elem);
+        this.emitPublishedArrayGuard(arr.name, s.arr.type, 0, idx.name);
         if (acc === "ref") this.moveTemp(v);
         emitDenseArraySet(this, arr.name, idx, s.index, acc, s.arr.type.elem, v.name);
         break;
       }
       case "arraySetLength": {
+        // Pop's `length = 0` store on an empty array only matters when the
+        // array can be frozen (published); its operand is a local.
+        if (
+          s.pop === true &&
+          s.length.kind === "numLit" &&
+          s.length.value === 0 &&
+          this.publishedTypes?.containerGuarded(s.arr.type) !== true
+        )
+          break;
         const arr = emitBorrowedInput(this, s.arr);
         const length = this.emitExpr(s.length);
         if (s.arr.type.kind !== "array")
           throw new InternalCompilerError("llvm emitter bug: arraySetLength on non-array");
+        this.emitPublishedArrayGuard(arr.name, s.arr.type, s.pop === true ? 2 : 3);
         this.declare(`declare void @scr_arr_set_len(ptr, double)`);
         // Assigning the current length (a reused work array reset to where
         // it already is) changes nothing: the runtime's validation accepts
@@ -5593,6 +5612,12 @@ export class LlEmitter {
         const idx = this.emitExpr(s.index);
         if (s.arr.type.kind !== "array")
           throw new InternalCompilerError(`llvm emitter bug: ${s.kind} on non-array`);
+        this.emitPublishedArrayGuard(
+          arr.name,
+          s.arr.type,
+          s.kind === "arrayDelete" ? 5 : 0,
+          idx.name,
+        );
         const fn = s.kind === "arraySetUndefined" ? "scr_arr_set_undefined" : "scr_arr_delete";
         this.declare(
           `declare ${s.kind === "arrayDelete" ? "zeroext i1" : "void"} @${fn}(ptr, double)`,
@@ -5635,18 +5660,25 @@ export class LlEmitter {
           s.kind === "fieldSet" ? this.nullableFields.get(s.className, s.field) : null;
         if (nullable && s.kind === "fieldSet") {
           const obj = this.emitStableReceiver(s.obj, [s.value]);
+          // (The guard precedes the value here: the nullable store
+          // evaluates it itself.)
+          this.emitPublishedFieldGuard(obj.name, s.className, s.field);
           this.emitNullableFieldStore(obj.name, s.className, s.field, nullable, s.value);
           break;
         }
         if (s.kind === "fieldSet" && this.int32Slots.isField(s.className, s.field)) {
           const obj = this.emitStableReceiver(s.obj, [s.value]);
           const v = this.emitExpr(s.value);
+          this.emitPublishedFieldGuard(obj.name, s.className, s.field);
           const { ptr } = this.classFieldPtr(obj.name, s.className, s.field);
           this.storeInt32Field(ptr, v, s.value);
           break;
         }
         const obj = this.emitStableReceiver(s.obj, [s.value]);
         const v = this.emitExpr(s.value);
+        if (s.kind === "fieldSet") this.emitPublishedFieldGuard(obj.name, s.className, s.field);
+        else if (this.publishedTypes?.recordGuarded(s.shapeId) === true)
+          this.emitPublishedFieldGuard(obj.name, null, s.field);
         const { ptr, type } =
           s.kind === "fieldSet"
             ? this.classFieldPtr(obj.name, s.className, s.field)
@@ -5685,6 +5717,11 @@ export class LlEmitter {
         // the overflow (key and value released; absent keys no-op).
         const obj = this.emitExpr(s.obj);
         const key = this.emitExpr(s.key);
+        if (this.publishedTypes?.recordGuarded(s.shapeId) === true) {
+          // Node: "Cannot delete property 'k' of #<Object>" (key known at
+          // run time only; the guard reports the frozen record generically).
+          this.emitPublishedFieldGuard(obj.name, null, "[key]");
+        }
         const ovf = this.recordOvfPtr(obj.name, s.shapeId);
         this.declare(`declare zeroext i1 @scr_map_delete_str(ptr, ptr)`);
         const t = B.tmp();
@@ -5700,6 +5737,8 @@ export class LlEmitter {
         const obj = this.emitExpr(s.obj);
         const key = this.emitExpr(s.key);
         const v = this.emitExpr(s.value);
+        if (this.publishedTypes?.recordGuarded(s.shapeId) === true)
+          this.emitPublishedFieldGuard(obj.name, null, "[key]");
         if (isRefCounted(v.type)) this.moveTemp(v);
         const shape = this.recordShape(s.shapeId);
         // Signature-free shapes dispatch over their (one-typed) declared
@@ -6963,7 +7002,165 @@ export class LlEmitter {
   }
 
   emitIntrinsicExpr(e: ExprOf<"intrinsic">): LlValue {
+    if (e.name === "threads.publish") return this.emitPublish(e);
     return emitIntrinsicExpr(this, e);
+  }
+
+  private publishWalkersCache: PublishWalkers | null = null;
+
+  /** Per-type publication walkers, created on the first publish. */
+  private get publishWalkers(): PublishWalkers {
+    if (this.publishWalkersCache !== null) return this.publishWalkersCache;
+    const byPre = [...this.classMeta.values()].sort((a, b) => a.pre - b.pre);
+    this.publishWalkersCache = new PublishWalkers({
+      declare: (decl) => this.declare(decl),
+      cstr: (text) => this.cstr(text),
+      sizeType: this.sizeType,
+      tracedShapes: this.tracedShapes,
+      unionsById: this.unionsById,
+      recordsById: this.recordsById,
+      nullableArm: (t) => this.nullableUnions.of(t)?.arm ?? null,
+      classInfo: (className) => {
+        const meta = this.classMetaOf(className);
+        return {
+          def: meta.def,
+          hierarchy: meta.hierarchy,
+          pre: meta.pre,
+          post: meta.post,
+          runtimeRooted: meta.root.def.runtime === true,
+          fields: meta.def.fields.map((f) => ({
+            name: f.name,
+            index: classFieldIndex(meta, f.name).index,
+            type: this.nullableFields.storageType(className, f.name, f.type),
+          })),
+        };
+      },
+      classesInInterval: (pre, post) =>
+        byPre.filter((m) => m.pre >= pre && m.pre <= post).map((m) => m.def.name),
+    });
+    return this.publishWalkersCache;
+  }
+
+  /** `publish(value)` (@scriptc/threads): makes the graph immortal and
+   * immutable (scr_publish with the static type's walker) and answers the
+   * same value. Throws (pending) when a dyn part is unpublishable. */
+  private emitPublish(e: ExprOf<"intrinsic">): LlValue {
+    const value = this.emitExpr(e.args[0]!);
+    if (this.B.isTerminated()) return value;
+    const lines = this.publishWalkers.emitPublish(value.name, value.type, e.loc);
+    if (lines.length > 0) {
+      for (const line of lines) this.B.line(line.trimStart());
+      // A refusal unwinds while the operand temp still owns its reference.
+      this.emitPendingCheck();
+    }
+    // The result IS the operand: ownership moves to the result temp.
+    if (!isRefCounted(value.type)) return { name: value.name, type: e.type };
+    this.moveTemp(value);
+    return this.own({ name: value.name, type: e.type });
+  }
+
+  /** Branches on "`obj` is published" (rc == SIZE_MAX); leaves the builder
+   * in the cold block and answers the continuation label. */
+  private emitPublishedTest(obj: string): string {
+    const B = this.B;
+    const rc = B.tmp(),
+      frozen = B.tmp(),
+      expected = B.tmp();
+    B.line(`${rc} = load ${this.sizeType}, ptr ${obj}`);
+    B.line(`${frozen} = icmp eq ${this.sizeType} ${rc}, -1`);
+    this.declare(`declare i1 @llvm.expect.i1(i1, i1)`);
+    B.line(`${expected} = call i1 @llvm.expect.i1(i1 ${frozen}, i1 false)`);
+    const cold = B.newLabel("pub.frozen"),
+      ok = B.newLabel("pub.ok");
+    B.condBr(expected, cold, ok);
+    B.startBlock(cold);
+    return ok;
+  }
+
+  private publishedNamesSym: string | null = null;
+
+  /** The class-name table the hierarchy field guards index by preorder. */
+  private publishedClassNamesDefs(): string[] {
+    if (this.publishedNamesSym === null) return [];
+    const metas = [...this.classMeta.values()];
+    const size = metas.reduce((max, m) => Math.max(max, m.pre + 1), 0);
+    const names: string[] = new Array<string>(size).fill("ptr null");
+    for (const m of metas) names[m.pre] = `ptr ${this.cstr(m.def.jsName ?? m.def.name)}`;
+    return [
+      `${this.publishedNamesSym} = internal constant [${size} x ptr] [ ${names.join(", ")} ]`,
+      ``,
+    ];
+  }
+
+  /** The frozen-object guard of a class field or record field store:
+   * Node's "Cannot assign to read only property" TypeError when the target
+   * is published. `className` null means a record (`#<Object>`). */
+  emitPublishedFieldGuard(obj: string, className: string | null, field: string): void {
+    const published = this.publishedTypes;
+    if (published === null) return;
+    if (className !== null && !published.classGuarded(className)) return;
+    const B = this.B;
+    const ok = this.emitPublishedTest(obj);
+    let owner: string;
+    const meta = className === null ? undefined : this.classMeta.get(className);
+    if (meta === undefined) owner = this.cstr("Object");
+    else if (!meta.hierarchy) owner = this.cstr(meta.def.jsName ?? meta.def.name);
+    else {
+      // The DYNAMIC class names the object, as in Node.
+      this.publishedNamesSym ??= "@sc_pub_class_names";
+      const vtp = B.tmp(),
+        vt = B.tmp(),
+        pre = B.tmp(),
+        slot = B.tmp(),
+        name = B.tmp();
+      B.line(`${vtp} = getelementptr inbounds ptr, ptr ${obj}, i64 1`);
+      B.line(`${vt} = load ptr, ptr ${vtp}`);
+      B.line(`${pre} = load ${this.sizeType}, ptr ${vt}`);
+      B.line(
+        `${slot} = getelementptr inbounds ptr, ptr ${this.publishedNamesSym}, ${this.sizeType} ${pre}`,
+      );
+      B.line(`${name} = load ptr, ptr ${slot}`);
+      owner = name;
+    }
+    this.declare(`declare void @scr_throw_published_field(ptr, ptr)`);
+    B.line(`call void @scr_throw_published_field(ptr ${this.cstr(field)}, ptr ${owner})`);
+    this.emitUnwind();
+    B.startBlock(ok);
+  }
+
+  /** The frozen-array guard (scr_throw_published_array's ops): `index` and
+   * `count` are doubles (the written index, the argument count). */
+  emitPublishedArrayGuard(
+    arr: string,
+    arrType: IrType,
+    op: number,
+    index = f64Lit(0),
+    count = f64Lit(0),
+  ): void {
+    if (this.publishedTypes?.containerGuarded(arrType) !== true) return;
+    const B = this.B;
+    const ok = this.emitPublishedTest(arr);
+    this.declare(`declare zeroext i1 @scr_throw_published_array(i32, ptr, double, double)`);
+    const threw = B.tmp();
+    B.line(
+      `${threw} = call zeroext i1 @scr_throw_published_array(i32 ${op}, ptr ${arr}, double ${index}, double ${count})`,
+    );
+    const unwind = B.newLabel("pub.throw");
+    B.condBr(threw, unwind, ok);
+    B.startBlock(unwind);
+    this.emitUnwind();
+    B.startBlock(ok);
+  }
+
+  /** The published Map/Set guard: "Cannot modify a published Map/Set". */
+  emitPublishedCollectionGuard(m: string, t: IrType): void {
+    if (this.publishedTypes?.containerGuarded(t) !== true) return;
+    const B = this.B;
+    const ok = this.emitPublishedTest(m);
+    this.declare(`declare void @scr_throw_published_collection(i1 zeroext)`);
+    B.line(`call void @scr_throw_published_collection(i1 ${t.kind === "set" ? "true" : "false"})`);
+    this.emitUnwind();
+    B.startBlock(ok);
   }
 
   emitSerializationExpr(e: ExprOf<"jsonStringify" | "dynCheck">): LlValue {

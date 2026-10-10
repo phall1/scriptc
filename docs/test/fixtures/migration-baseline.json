@@ -198,6 +198,36 @@
     ]
   },
   {
+    "href": "/docs/threads",
+    "title": "Sharing Data Between Workers",
+    "headings": [
+      {
+        "text": "Example",
+        "id": "example"
+      },
+      {
+        "text": "The publication contract",
+        "id": "the-publication-contract"
+      },
+      {
+        "text": "The write guard",
+        "id": "the-write-guard"
+      },
+      {
+        "text": "How it differs from structured clone",
+        "id": "how-it-differs-from-structured-clone"
+      },
+      {
+        "text": "Frozen plain data",
+        "id": "frozen-plain-data"
+      },
+      {
+        "text": "Cost",
+        "id": "cost"
+      }
+    ]
+  },
+  {
     "legacy": "/wasm",
     "href": "/docs/wasm",
     "title": "WebAssembly Modules",

@@ -5,6 +5,7 @@ import { isFfiCallbackParam, MAY_THROW_ARR_METHODS, MAY_THROW_BYTES_METHODS } fr
 import { MAY_THROW_LIB_FNS } from "../ir/builtin-effects.js";
 import { everyStmtList } from "../ir/traverse.js";
 import { hasRetainedFfiCallback } from "./ffi-callbacks.js";
+import { computePublishedTypes, writesPublished } from "./publication.js";
 
 /** Cheap may-throw analysis (cost discipline: functions that transitively
  * CANNOT throw pay for no pending-exception checks). A function may throw
@@ -30,6 +31,8 @@ export function computeMayThrow(
 } {
   const terminations = mod.workers === true ? workerTerminationPolls(mod) : null;
   const stackChecks = options.stackChecks === true ? stackCheckedFunctions(mod) : null;
+  // Stores that can reach a published object throw the frozen TypeError.
+  const published = computePublishedTypes(mod);
   interface Facts {
     throws: boolean;
     callees: string[];
@@ -76,6 +79,7 @@ export function computeMayThrow(
     ]);
     // Traverse typed executable nodes without copying the IR into unknown.
     const visit = (rec: IrExpr | IrStmt): boolean => {
+      if (published !== null && writesPublished(published, rec)) f.throws = true;
       switch (rec.kind) {
         case "throw":
         case "rethrow":
@@ -157,6 +161,8 @@ export function computeMayThrow(
           if (rec.name === "module.await") f.throws = true;
           // A cycle binding read before its declaration ran (TDZ).
           if (rec.name === "module.tdzCheck") f.throws = true;
+          // publish() throws on an unpublishable dyn value.
+          if (rec.name === "threads.publish") f.throws = true;
           break;
         case "yieldExpr":
           // A consumer .throw() surfaces at the yield (and .return()'s

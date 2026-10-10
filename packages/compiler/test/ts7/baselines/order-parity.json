@@ -10692,6 +10692,18 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/native-worker-publish-classes.ts": {
+   "order": [
+    "<repo>/tests/corpus/native-worker-publish-classes.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-worker-publish-refusals.ts": {
+   "order": [
+    "<repo>/tests/corpus/native-worker-publish-refusals.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/nested-map-cycles.ts": {
    "order": [
     "<repo>/tests/corpus/nested-map-cycles.ts"

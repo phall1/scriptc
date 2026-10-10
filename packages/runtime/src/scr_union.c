@@ -18,6 +18,8 @@
 #ifdef SCR_RC_AUDIT
 static SCR_TL long scr_live_unions = 0;
 long scr_union_live_count(void) { return scr_live_unions; }
+/* A published union box is immortal: it is never freed, so it leaves the count. */
+void scr_union_live_forget(void) { scr_live_unions--; }
 #endif
 
 static void scr_union_trace(void *o, ScrTraceVisit visit, void *ctx) {

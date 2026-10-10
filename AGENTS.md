@@ -189,7 +189,8 @@ The docs site is a standalone pnpm workspace under `docs/`. It uses Next.js App 
 1. Add `docs/content/docs/<topic>.mdx` with a `title` in YAML frontmatter. Geistdocs renders the page title, so do not duplicate it as a Markdown H1. `index.mdx` is served at `/docs`; other pages are served at `/docs/<topic>`.
 2. Add the topic to `docs/content/docs/meta.json` to set sidebar order and groups.
 3. Add the slug to `PAGE_TITLES` in `docs/src/lib/page-titles.ts` for the existing social image routes.
-4. Keep internal links on the canonical `/docs` paths. Redirect retired public URLs in `docs/next.config.mjs`.
+4. Add the page's href, title, and heading anchors to `docs/test/fixtures/migration-baseline.json` so the route tests cover it; pages added after the migration have no `legacy` URL.
+5. Keep internal links on the canonical `/docs` paths. Redirect retired public URLs in `docs/next.config.mjs`.
 
 ### Docs development and verification
 
