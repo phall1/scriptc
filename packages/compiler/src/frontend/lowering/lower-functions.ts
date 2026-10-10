@@ -118,10 +118,18 @@ export function lowerNestedFunctionDecl(lowerer: Lowerer, stmt: ts.FunctionDecla
   const published = boxed ? DYN : init.type.kind === "func" ? init.type : null;
   if (published && !typeEquals(local.type, published)) {
     local.type = published;
-    for (const fn of lowerer.liftedFns)
+    for (const fn of lowerer.liftedFns) {
       for (const capture of fn.captures ?? []) {
-        if (capture.localId === local.id) capture.type = published;
+        if (capture.localId !== local.id) continue;
+        capture.type = published;
+        // Capturing allocated this slot at the pre-property function
+        // type. The param and that local are one box; leaving the local
+        // behind fails validation (`capture local has the wrong type`).
+        for (const slot of fn.locals) {
+          if (slot.id === capture.localId) slot.type = published;
+        }
       }
+    }
   }
   const value = boxed
     ? { kind: "dynFrom" as const, value: init, type: DYN, loc: init.loc }
