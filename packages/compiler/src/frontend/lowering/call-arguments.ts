@@ -546,7 +546,7 @@ export function lowerSpreadArgsCall(
   callee: IrExpr,
   loc: SrcLoc,
 ): IrExpr | null {
-  if (!isJsSourceFile(expr.getSourceFile())) return null;
+  if (!isJsSourceFile(expr.getSourceFile()) && callee.type.kind !== "dyn") return null;
   if (!expr.arguments.some((a) => ts.isSpreadElement(a))) return null;
   if (callee.type.kind !== "dyn" && callee.type.kind !== "func") return null;
   const calleeName =
