@@ -2630,7 +2630,8 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
     // Prototype-method VALUE reads (`ps.map` unparenthesized) keep the
     // fence-first order: a stored-member undefined would mis-answer
     // them, and calls dispatch through the dyn method machinery
-    // instead.
+    // instead. A checked-dynamic array method is the exception: the
+    // read materializes Array.prototype, then the keyed read answers it.
     if (
       (isJsSourceFile(expr.getSourceFile()) &&
         (lowerer.mapTypeOf(lowerer.typeOf(expr.expression)) === null ||
@@ -2645,6 +2646,8 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
     ) {
       const recv = lowerer.lowerExpr(expr.expression);
       if (recv.type.kind === "dyn") {
+        const method = dynArrayMethodValue(lowerer, expr, recv, loc);
+        if (method) return method;
         const key: IrExpr = {
           kind: "strLit",
           value: expr.name.text,
@@ -5136,6 +5139,50 @@ export function eqComparableUnion(lowerer: Lowerer, unionId: string): boolean {
   return (
     !!def && def.arms.every((a) => a.kind !== "dyn" && a.kind !== "caught" && a.kind !== "jsval")
   );
+}
+
+/** A checked-dynamic array method read (`binds.push.apply`) answers
+ * Array.prototype. Direct calls dispatch without that table; the property
+ * read does not, so the table is materialized first. An own `push` still
+ * wins. Null for every other name. */
+function dynArrayMethodValue(
+  lowerer: Lowerer,
+  expr: ts.PropertyAccessExpression,
+  recv: IrExpr,
+  loc: SrcLoc,
+): IrExpr | null {
+  if (!ARRAY_METHODS.has(expr.name.text)) return null;
+  const saved = lowerer.declareHiddenLocal("%arrayMethodRecv", DYN);
+  const key: IrExpr = {
+    kind: "strLit",
+    value: expr.name.text,
+    type: STRING,
+    loc: locOf(expr.name),
+  };
+  const opt = hasOptionalChainGuard(expr.expression);
+  const read: IrExpr = {
+    kind: "dynKeyGet",
+    key,
+    ...(opt ? { optional: true as const } : {}),
+    value: varRef(saved.id, DYN, loc),
+    type: DYN,
+    loc,
+  };
+  const result = lowerer.maybeNarrow(read, expr);
+  return {
+    kind: "seqExpr",
+    stmts: [
+      { kind: "varDecl", localId: saved.id, init: recv, loc },
+      {
+        kind: "exprStmt",
+        expr: { kind: "libCall", fn: "dyn.arrayPrototype", args: [], type: DYN, loc },
+        loc,
+      },
+    ],
+    result,
+    type: result.type,
+    loc,
+  };
 }
 
 /** Property access on a string or array receiver: `.length` lowers to the
@@ -14073,7 +14120,9 @@ export function lowerFieldRead(lowerer: Lowerer, expr: ts.PropertyAccessExpressi
     const stored = lowerer.peekLocal(expr.expression) ?? lowerer.globalOf(expr.expression);
     if (stored?.type.kind === "dyn") {
       const value = lowerer.lowerExpr(expr.expression);
-      if (value.type.kind === "dyn")
+      if (value.type.kind === "dyn") {
+        const method = dynArrayMethodValue(lowerer, expr, value, locOf(expr));
+        if (method) return method;
         return {
           kind: "dynKeyGet",
           value,
@@ -14084,6 +14133,7 @@ export function lowerFieldRead(lowerer: Lowerer, expr: ts.PropertyAccessExpressi
           type: DYN,
           loc: locOf(expr),
         };
+      }
     }
   }
   const target = lowerer.fieldTarget(expr);
