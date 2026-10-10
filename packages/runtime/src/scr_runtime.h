@@ -784,6 +784,7 @@ typedef struct ScrStr {
 #define SCR_STR_CAP_WORD(len, hash32, ascii) ((size_t)(len) | ((ascii) ? SCR_STR_ASCII_BIT : 0))
 #endif
 
+void scr_str_hash_prime(ScrStr *s); /* scr_map.c; before a string becomes immortal */
 /* Forget every cached content fact (key hash, proven ASCII) before a
  * uniquely owned string's bytes change. */
 static inline void scr_str_hash_forget(ScrStr *s) {
@@ -2044,6 +2045,10 @@ ScrArr *scr_map_keys_js_order(const ScrMap *m);
 
 #ifdef SCR_RC_AUDIT
 long scr_map_live_count(void);
+/* Publication makes objects immortal and never frees them, so the RC audit
+ * stops counting them (scr_message.c). */
+void scr_str_live_forget(void);
+void scr_dyn_live_forget(void);
 #endif
 
 /* ── closures ───────────────────────────────────────────────────────

@@ -1,5 +1,6 @@
 #include "scr_message.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 
 typedef enum {
@@ -15,6 +16,8 @@ typedef enum {
   SCR_MESSAGE_BYTES,
   SCR_MESSAGE_ARRAY_BUFFER,
   SCR_MESSAGE_ERROR,
+  /* A deeply frozen plain-data graph shared by pointer (see publication). */
+  SCR_MESSAGE_PUBLISHED,
 } ScrMessageKind;
 
 typedef struct {
@@ -36,6 +39,7 @@ typedef struct {
   size_t offset;
   ScrBytesElem element;
   bool data_view;
+  ScrDyn *published; /* SCR_MESSAGE_PUBLISHED: immortal root, owns nothing */
 } ScrMessageNode;
 
 struct ScrMessage {
@@ -295,7 +299,157 @@ static void scr_message_property(ScrMessageEncoder *encoder, size_t id,
   };
 }
 
+
+/* ── publication: zero-copy delivery of deeply frozen plain-data graphs ──
+ * Structured clone of a graph that is immutable on BOTH sides is observably
+ * a share, as long as the receiver freezes what it receives (Node's clone is
+ * not frozen) and does not compare identity across messages. A graph whose
+ * every object and array is frozen, ordinary (no prototype, accessors,
+ * symbols, non-enumerable or native-copied members) and holds only
+ * primitives, strings and such containers is published instead of encoded:
+ * every node and string becomes immortal (rc == SIZE_MAX: retains and
+ * releases skip it, the collector never walks into it, nothing frees it)
+ * and the receiver gets the same pointers. Strings cache their Map key hash
+ * first, because no thread may write an immortal header. Object keys stay
+ * owned by their (never released) entries. SCRIPTC_PUBLISH=0 turns this off
+ * for A/B comparisons. */
+typedef struct {
+  ScrDyn **nodes;
+  size_t count, capacity;
+  const void **seen;
+  size_t seen_count, seen_capacity;
+} ScrPublish;
+
+static bool scr_publish_seen(ScrPublish *p, const void *ptr) {
+  if (p->seen_count >= p->seen_capacity / 2) {
+    size_t capacity = scr_message_grow(p->seen_capacity);
+    const void **seen = scr_message_alloc(capacity, sizeof(*seen));
+    for (size_t i = 0; i < p->seen_capacity; i++) {
+      const void *e = p->seen[i];
+      if (!e) continue;
+      size_t slot = scr_message_hash(e, 0) & (capacity - 1);
+      while (seen[slot]) slot = (slot + 1) & (capacity - 1);
+      seen[slot] = e;
+    }
+    free(p->seen);
+    p->seen = seen;
+    p->seen_capacity = capacity;
+  }
+  size_t slot = scr_message_hash(ptr, 0) & (p->seen_capacity - 1);
+  while (p->seen[slot]) {
+    if (p->seen[slot] == ptr) return true;
+    slot = (slot + 1) & (p->seen_capacity - 1);
+  }
+  p->seen[slot] = ptr;
+  p->seen_count++;
+  return false;
+}
+
+static void scr_publish_push(ScrPublish *p, ScrDyn *node) {
+  if (p->count == p->capacity) {
+    size_t capacity = scr_message_grow(p->capacity);
+    ScrDyn **nodes = scr_message_alloc(capacity, sizeof(*nodes));
+    if (p->count) memcpy(nodes, p->nodes, p->count * sizeof(*nodes));
+    free(p->nodes);
+    p->nodes = nodes;
+    p->capacity = capacity;
+  }
+  p->nodes[p->count++] = node;
+}
+
+static bool scr_publish_container_ok(const ScrDyn *d) {
+  if (d->prototype || d->symbol_properties || d->symbol_keys || d->copied_from_native) return false;
+  if (!scr_dyn_is_frozen(d)) return false;
+  if (d->kind == SCR_DYN_ARR) return d->v.arr.properties == NULL;
+  if (d->null_proto || d->v.obj.source_identity || d->v.obj.source_access) return false;
+  for (size_t i = 0; i < d->v.obj.len; i++) {
+    const ScrDynEntry *e = &d->v.obj.entries[i];
+    if (e->accessor || !e->enumerable) return false;
+  }
+  return true;
+}
+
+/* Collects the graph's containers and heap strings into p->nodes (strings
+ * tagged with the low pointer bit); false when any node is ineligible. */
+static bool scr_publish_collect(ScrPublish *p, ScrDyn *root) {
+  size_t cursor = p->count;
+  if (!scr_publish_seen(p, root)) scr_publish_push(p, root);
+  while (cursor < p->count) {
+    ScrDyn *d = p->nodes[cursor++];
+    if ((uintptr_t)d & 1) continue;
+    switch (d->kind) {
+    case SCR_DYN_NULL: case SCR_DYN_UNDEF: case SCR_DYN_BOOL: case SCR_DYN_NUM: break;
+    case SCR_DYN_STR:
+      if (d->v.str->rc != SIZE_MAX && !scr_publish_seen(p, d->v.str))
+        scr_publish_push(p, (ScrDyn *)((uintptr_t)d->v.str | 1));
+      break;
+    case SCR_DYN_ARR:
+      if (!scr_publish_container_ok(d)) return false;
+      for (size_t i = 0; i < d->v.arr.len; i++) {
+        ScrDyn *child = d->v.arr.items[i];
+        if (child && !scr_publish_seen(p, child)) scr_publish_push(p, child);
+      }
+      break;
+    case SCR_DYN_OBJ:
+      if (!scr_publish_container_ok(d)) return false;
+      for (size_t i = 0; i < d->v.obj.len; i++) {
+        ScrDyn *child = d->v.obj.entries[i].value;
+        if (child && !scr_publish_seen(p, child)) scr_publish_push(p, child);
+      }
+      break;
+    default: return false;
+    }
+  }
+  return true;
+}
+
+static int scr_publish_enabled = -1;
+
+static ScrMessage *scr_message_try_publish(const ScrDyn *value) {
+  if (scr_publish_enabled < 0) {
+    const char *env = getenv("SCRIPTC_PUBLISH");
+    scr_publish_enabled = !(env && env[0] == '0');
+  }
+  if (!scr_publish_enabled || (value->kind != SCR_DYN_OBJ && value->kind != SCR_DYN_ARR)) return NULL;
+  ScrMessage *message = NULL;
+  ScrPublish p = {0};
+  if (value->rc == SIZE_MAX || scr_publish_collect(&p, (ScrDyn *)value)) {
+    for (size_t i = 0; i < p.count; i++) {
+      ScrDyn *d = p.nodes[i];
+      if ((uintptr_t)d & 1) {
+        ScrStr *text = (ScrStr *)((uintptr_t)d & ~(uintptr_t)1);
+        scr_str_hash_prime(text);
+        text->rc = SIZE_MAX;
+#ifdef SCR_RC_AUDIT
+        scr_str_live_forget();
+#endif
+      } else if (d->rc != SIZE_MAX) {
+        scr_cyc_on_dead(d); /* leave the candidate and tenured buffers */
+        d->rc = SIZE_MAX;
+#ifdef SCR_RC_AUDIT
+        scr_dyn_live_forget();
+#endif
+      }
+    }
+    message = scr_message_alloc(1, sizeof(*message));
+    message->nodes = scr_message_alloc(1, sizeof(*message->nodes));
+    message->count = message->capacity = 1;
+    message->nodes[0].kind = SCR_MESSAGE_PUBLISHED;
+    message->nodes[0].published = (ScrDyn *)value;
+    if (getenv("SCRIPTC_PUBLISH_TRACE"))
+      fprintf(stderr, "scriptc: published %zu nodes zero-copy%s\n", p.count,
+              value->rc == SIZE_MAX && !p.count ? " (already published)" : "");
+  } else if (getenv("SCRIPTC_PUBLISH_TRACE")) {
+    fprintf(stderr, "scriptc: graph not deeply frozen plain data; cloned\n");
+  }
+  free(p.nodes);
+  free(p.seen);
+  return message;
+}
+
 ScrMessage *scr_message_encode(const ScrDyn *value) {
+  ScrMessage *published = scr_message_try_publish(value);
+  if (published) return published;
   ScrMessage *message = scr_message_alloc(1, sizeof(*message));
   ScrMessageEncoder encoder = {.message = message};
   if (scr_message_value(&encoder, value) == SIZE_MAX) goto done;
@@ -339,6 +493,8 @@ static size_t scr_message_array_index(const char *key, size_t length, size_t lim
 }
 
 ScrDyn *scr_message_decode(const ScrMessage *message) {
+  if (message->count == 1 && message->nodes[0].kind == SCR_MESSAGE_PUBLISHED)
+    return scr_dyn_retain(message->nodes[0].published);
   ScrDyn **values = scr_message_alloc(message->count, sizeof(*values));
   ScrBytes **storage = scr_message_alloc(message->count, sizeof(*storage));
   for (size_t i = 0; i < message->count; i++) {
@@ -392,6 +548,7 @@ ScrDyn *scr_message_decode(const ScrMessage *message) {
       values[i] = scr_array_buffer_from_bytes(storage[node->storage]);
       break;
     case SCR_MESSAGE_STORAGE: continue;
+    case SCR_MESSAGE_PUBLISHED: continue;
     }
     if (!values[i] || scr_exc_pending()) goto done;
   }

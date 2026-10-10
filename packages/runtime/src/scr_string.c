@@ -14,6 +14,8 @@
 #ifdef SCR_RC_AUDIT
 static SCR_TL long scr_live_strings = 0;
 long scr_str_live_count(void) { return scr_live_strings; }
+/* A published string is immortal: it is never freed, so it leaves the count. */
+void scr_str_live_forget(void) { scr_live_strings--; }
 #endif
 
 static void scr_oom(void) {
