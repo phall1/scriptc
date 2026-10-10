@@ -281,6 +281,19 @@ function lowerArrayJoinSeparator(
  * direct call of a synthetic loop function (see lowerArrayHofCall and
  * friends). Null when this isn't an ambient array method call. tsc has
  * already checked arity and argument types against ambient/scriptc.d.ts. */
+/** `unknown[]` / `any[]` map to dyn, not to an array type. The value is
+ * still an array; array methods the runtime dispatches run on it. */
+function anyArrayDynMethod(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
+  access: ts.PropertyAccessExpression,
+): IrExpr | null {
+  if (!lowerer.checkerAnyArray(access.expression)) return null;
+  const receiver = lowerer.lowerExpr(access.expression);
+  if (receiver.type.kind !== "dyn") return null;
+  return lowerDynDispatchMethodCall(lowerer, call, access, receiver, true);
+}
+
 export function lowerArrayMethodCall(
   lowerer: Lowerer,
   call: ts.CallExpression,
@@ -335,7 +348,7 @@ export function lowerArrayMethodCall(
     const unionHof = lowerArrayUnionHofCall(lowerer, call, access, receiverIr);
     if (unionHof) return unionHof;
   }
-  if (receiverIr?.kind !== "array") return null;
+  if (receiverIr?.kind !== "array") return anyArrayDynMethod(lowerer, call, access);
   if (!probedUntyped && !lowerer.isStdlibMember(access)) return null;
   let elem = receiverIr.elem;
   const loc = locOf(call);
