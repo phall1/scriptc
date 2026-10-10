@@ -46,6 +46,7 @@ import {
   isUnitType,
   shapeHasAccessorSlots,
   typeEquals,
+  typeKey,
 } from "../../ir/ir.js";
 import {
   PoisonError,
@@ -5523,6 +5524,125 @@ export function hasJsTypeAnnotation(decl: ts.VariableDeclaration): boolean {
   return (
     !!statement && /@type\b/.test(decl.getSourceFile().text.slice(statement.pos, decl.getStart()))
   );
+}
+
+/** Class-constructor arms of a type, or null when the type is not exactly
+ * those constructors. */
+function classvalArms(lowerer: Lowerer, type: IrType): ReadonlyMap<string, IrType> | null {
+  if (type.kind === "classval") return new Map([[typeKey(type), type]]);
+  if (type.kind !== "union") return null;
+  const arms = lowerer.unions.get(type.unionId)?.arms;
+  if (!arms?.length || arms.some((arm) => arm.kind !== "classval")) return null;
+  return new Map(arms.map((arm) => [typeKey(arm), arm]));
+}
+
+function bareArrayLiteralExpr(node: ts.Expression): ts.ArrayLiteralExpression | null {
+  let expr = node;
+  while (ts.isParenthesizedExpression(expr)) expr = expr.expression;
+  return ts.isArrayLiteralExpression(expr) ? expr : null;
+}
+
+function spreadConstructorArms(
+  lowerer: Lowerer,
+  element: ts.SpreadElement,
+): ReadonlyMap<string, IrType> | null {
+  if (!ts.isIdentifier(element.expression)) return null;
+  const stored =
+    lowerer.peekLocal(element.expression)?.type ?? lowerer.globalOf(element.expression)?.type;
+  if (stored?.kind !== "array") return null;
+  return classvalArms(lowerer, stored.elem);
+}
+
+function identifierConstructorArm(
+  lowerer: Lowerer,
+  element: ts.Expression,
+): ReadonlyMap<string, IrType> | null {
+  if (!ts.isIdentifier(element)) return null;
+  const symbol = lowerer.resolveValueSymbol(element);
+  const info = symbol ? lowerer.classBySymbol.get(symbol) : undefined;
+  if (!info) return null;
+  const arm: IrType = { kind: "classval", className: info.def.name };
+  return new Map([[typeKey(arm), arm]]);
+}
+
+/** Every element is a class constructor or a spread of such an array. */
+function literalConstructorArms(
+  lowerer: Lowerer,
+  expr: ts.ArrayLiteralExpression,
+): ReadonlyMap<string, IrType> | null {
+  const byKey = new Map<string, IrType>();
+  for (const element of expr.elements) {
+    if (ts.isOmittedExpression(element)) return null;
+    const arms = ts.isSpreadElement(element)
+      ? spreadConstructorArms(lowerer, element)
+      : identifierConstructorArm(lowerer, element);
+    if (!arms) return null;
+    for (const [key, arm] of arms) byKey.set(key, arm);
+  }
+  return byKey.size > 0 ? byKey : null;
+}
+
+/** The checker's array type collapsed structurally identical constructors.
+ * The literal still holds each class object, so the binding has to name
+ * every one of them or the element check rejects a real constructor. */
+function widenedClassConstructorArray(
+  lowerer: Lowerer,
+  declared: IrType,
+  expr: ts.ArrayLiteralExpression,
+): IrType | null {
+  if (declared.kind !== "array") return null;
+  const declaredArms = classvalArms(lowerer, declared.elem);
+  const literalArms = literalConstructorArms(lowerer, expr);
+  if (!declaredArms || !literalArms) return null;
+  let wider = false;
+  for (const key of literalArms.keys()) {
+    if (!declaredArms.has(key)) wider = true;
+  }
+  if (!wider) return null;
+  const merged = new Map(declaredArms);
+  for (const [key, arm] of literalArms) merged.set(key, arm);
+  const arms = [...merged.values()].sort((a, b) => (typeKey(a) < typeKey(b) ? -1 : 1));
+  const elem =
+    arms.length === 1 ? arms[0]! : { kind: "union" as const, unionId: lowerer.unions.intern(arms) };
+  return arrayOf(elem);
+}
+
+function plainJsArrayBinding(decl: ts.VariableDeclaration): decl is ts.VariableDeclaration & {
+  name: ts.Identifier;
+  initializer: ts.Expression;
+} {
+  return (
+    ts.isIdentifier(decl.name) && !decl.type && !hasJsTypeAnnotation(decl) && !!decl.initializer
+  );
+}
+
+function widenGlobalClassConstructorArray(lowerer: Lowerer, decl: ts.VariableDeclaration): boolean {
+  if (!plainJsArrayBinding(decl)) return false;
+  const expr = bareArrayLiteralExpr(decl.initializer);
+  if (!expr) return false;
+  const global = lowerer.globalOf(decl.name);
+  if (!global) return false;
+  const widened = widenedClassConstructorArray(lowerer, global.type, expr);
+  if (!widened || typeEquals(widened, global.type)) return false;
+  global.type = widened;
+  return true;
+}
+
+/** File-scope JS arrays of class constructors, widened before any body
+ * lowers. A later spread sees the updated element union. */
+export function widenJsClassConstructorArrays(
+  lowerer: Lowerer,
+  parts: readonly { sf: ts.SourceFile; topStmts: readonly ts.Statement[] }[],
+): void {
+  for (const part of parts) {
+    if (!isJsSourceFile(part.sf)) continue;
+    for (const stmt of part.topStmts) {
+      if (!ts.isVariableStatement(stmt)) continue;
+      for (const decl of stmt.declarationList.declarations) {
+        widenGlobalClassConstructorArray(lowerer, decl);
+      }
+    }
+  }
 }
 
 /** A closed empty record: no fields, no index signature, not a tuple. */

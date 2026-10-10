@@ -514,6 +514,7 @@ import {
   lowerExprStatement,
   lowerForOf,
   lowerForStatement,
+  widenJsClassConstructorArrays,
 } from "./lower-stmts.js";
 import {
   type FieldTarget,
@@ -5565,6 +5566,10 @@ export class Lowerer {
     for (const info of this.classes.values()) analyzeClassDecoration(this, info);
     this.prepareModuleInits(parts);
     prepareCjsModuleGraph(this, parts);
+    // Structurally identical JS constructors collapse in the checker type.
+    // Name every class the literal actually holds before bodies specialize
+    // calls against that array.
+    widenJsClassConstructorArrays(this, parts);
 
     const functions: IrFunction[] = [];
     for (const fp of parts) {
@@ -5951,6 +5956,10 @@ export class Lowerer {
     for (const info of this.classes.values()) analyzeClassDecoration(this, info);
     this.prepareModuleInits(parts);
     prepareCjsModuleGraph(this, parts);
+    // Structurally identical JS constructors collapse in the checker type.
+    // Name every class the literal actually holds before bodies specialize
+    // calls against that array.
+    widenJsClassConstructorArrays(this, parts);
 
     // Every lowerable body, by emitted-function name. The names double as
     // retained-function keys and are deterministic by construction
