@@ -38,7 +38,11 @@ import {
   hasExplicitJsDocReturn,
   promiseCarriesDyn,
 } from "./function-returns.js";
-import { bindingNeverReassigned, stripValueWrappers } from "./binding-analysis.js";
+import {
+  bindingNeverReassigned,
+  jsFunctionReceivesProperties,
+  stripValueWrappers,
+} from "./binding-analysis.js";
 import {
   extendInstantiationPath,
   MAX_INSTANTIATION_RECURSION,
@@ -1251,6 +1255,79 @@ export function implicitAnyParamSymbolsOf(
   return hasImplicitParams ? out : null;
 }
 
+function decoratedFunctionDecl(lowerer: Lowerer, expr: ts.Expression): boolean {
+  let node = expr;
+  while (ts.isParenthesizedExpression(node)) node = node.expression;
+  if (!ts.isIdentifier(node)) return false;
+  const symbol = lowerer.resolveValueSymbol(node);
+  const decl = symbol ? lowerer.checker.valueDeclarationOf(symbol) : undefined;
+  return (
+    decl !== undefined && ts.isFunctionDeclaration(decl) && jsFunctionReceivesProperties(lowerer, decl)
+  );
+}
+
+function writtenFunction(
+  decl: ts.Node,
+): ts.ArrowFunction | ts.FunctionExpression | ts.FunctionDeclaration | null {
+  if (ts.isFunctionDeclaration(decl) || ts.isFunctionExpression(decl) || ts.isArrowFunction(decl)) {
+    return decl.body !== undefined ? decl : null;
+  }
+  return null;
+}
+
+function callableWithBody(
+  decl: ts.Node | undefined,
+): ts.ArrowFunction | ts.FunctionExpression | ts.FunctionDeclaration | null {
+  if (!decl) return null;
+  const direct = writtenFunction(decl);
+  if (direct) return direct;
+  if (!ts.isVariableDeclaration(decl) || decl.initializer === undefined) return null;
+  let init: ts.Expression = decl.initializer;
+  while (ts.isParenthesizedExpression(init)) init = init.expression;
+  return writtenFunction(init);
+}
+
+function callReturnsDecorated(lowerer: Lowerer, expr: ts.Expression, depth: number): boolean {
+  let node = expr;
+  while (ts.isParenthesizedExpression(node)) node = node.expression;
+  if (!ts.isCallExpression(node) || depth > 2) return false;
+  let callee = node.expression;
+  while (ts.isParenthesizedExpression(callee)) callee = callee.expression;
+  if (!ts.isIdentifier(callee)) return false;
+  const symbol = lowerer.resolveValueSymbol(callee);
+  const body = callableWithBody(symbol ? lowerer.checker.valueDeclarationOf(symbol) : undefined);
+  if (!body) return false;
+  return returnsDecoratedFunction(lowerer, body, depth + 1);
+}
+
+/** `return Workflow` or `return makeProto(...)` where that helper returns
+ * a function properties were assigned onto. The checker still says
+ * `() => void`; the body has to settle the real value. */
+function returnsDecoratedFunction(lowerer: Lowerer, decl: ts.Node, depth: number): boolean {
+  const fn =
+    writtenFunction(decl) ??
+    (ts.isMethodDeclaration(decl) && decl.body !== undefined ? decl : null);
+  if (depth > 2 || !fn || fn.body === undefined) return false;
+  // A concise arrow's body is the return value. `make = () => makeProto(...)`
+  // has no return statement.
+  if (ts.isArrowFunction(fn) && !ts.isBlock(fn.body)) {
+    return (
+      decoratedFunctionDecl(lowerer, fn.body) || callReturnsDecorated(lowerer, fn.body, depth)
+    );
+  }
+  const body = fn.body;
+  let found = false;
+  ts.walkPreorder(body, (node) => {
+    if (found) return undefined;
+    if (node !== body && ts.isFunctionLike(node)) return "skip";
+    if (!ts.isReturnStatement(node) || node.expression === undefined) return undefined;
+    if (decoratedFunctionDecl(lowerer, node.expression)) found = true;
+    else if (callReturnsDecorated(lowerer, node.expression, depth)) found = true;
+    return undefined;
+  });
+  return found;
+}
+
 /** The checker-fallback return type an implicit instance PROMISES before
  * its body lowers: the declared/inferred return when it maps statically
  * (JSDoc @returns, `void`, concrete inference the any-params didn't
@@ -1389,6 +1466,8 @@ function implicitDeclaredReturn(lowerer: Lowerer, info: GenericFnInfo): IrType |
     )
       return null;
     if (mapped !== null && promiseCarriesDyn(lowerer, mapped) && !hasExplicitJsDocReturn(info.decl))
+      return null;
+    if (!hasExplicitJsDocReturn(info.decl) && returnsDecoratedFunction(lowerer, info.decl, 0))
       return null;
     return mapped;
   } catch (e) {

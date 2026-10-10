@@ -4725,7 +4725,7 @@ export function lowerVarDecl(
     // `const builder = urlBuilder(...)` is checker-typed `{}` because the
     // helper returns an empty object literal. The value is already
     // checked-dynamic and carries the keys written into that object.
-    if (openEmptyRecordBinding(lowerer, decl, g.type, raw.type)) g.type = DYN;
+    if (openDynCarryingBinding(lowerer, decl, g.type, raw.type)) g.type = DYN;
     const init = lowerer.coerceInto(decl.initializer, raw, g.type);
     return {
       kind: "assign",
@@ -5285,7 +5285,7 @@ export function lowerVarDecl(
   // `const builder = {}` inside package JS is filled by later keyed
   // writes. The empty record cannot hold those keys, so the local stays
   // the checked-dynamic object the writes mutate.
-  if (openEmptyRecordBinding(lowerer, decl, settledType, init.type)) settledType = DYN;
+  if (openDynCarryingBinding(lowerer, decl, settledType, init.type)) settledType = DYN;
   // Slot coercion: `const r: A | B = bValue;` wraps implicitly; width
   // subtyping (`const p: {a: number} = wider;`) is rejected, not coerced.
   init = lowerer.coerceInto(decl.initializer, init, settledType);
@@ -5580,10 +5580,18 @@ function jsConstEmptyObjectIsOpen(lowerer: Lowerer, decl: ts.VariableDeclaration
   return open;
 }
 
-/** An unannotated empty-record binding whose value is already
- * checked-dynamic, or a JavaScript const empty object filled in later.
+/** `() => void`: the checker type of `function Workflow() {}`. */
+function voidFunctionType(type: IrType | null): boolean {
+  if (type?.kind !== "func" || type.rest === true) return false;
+  return type.params.length === 0 && type.ret.kind === "void";
+}
+
+/** An unannotated binding whose value is already checked-dynamic and
+ * whose checker type cannot hold the keys written onto it: an empty
+ * record, or `() => void` after properties were assigned to that
+ * function. A JavaScript const empty object filled in later counts too.
  * A declared type keeps its slot. */
-function openEmptyRecordBinding(
+function openDynCarryingBinding(
   lowerer: Lowerer,
   decl: ts.VariableDeclaration,
   type: IrType | null,
@@ -5591,7 +5599,8 @@ function openEmptyRecordBinding(
 ): boolean {
   if (jsConstEmptyObjectIsOpen(lowerer, decl)) return true;
   if (decl.type || hasJsTypeAnnotation(decl)) return false;
-  return init.kind === "dyn" && closedEmptyRecord(lowerer, type);
+  if (init.kind !== "dyn") return false;
+  return closedEmptyRecord(lowerer, type) || voidFunctionType(type);
 }
 
 /** Inferred JS scalar initializers do not constrain later writes through
