@@ -81,3 +81,44 @@ console.log(JSON.stringify(go(new URLSearchParams("a=1&a=2"))));
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("a monomorphic URL walks searchParams.entries", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "scriptc-sp-entries-"));
+  const pkg = join(directory, "node_modules", "effect");
+  mkdirSync(pkg, { recursive: true });
+  writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "effect", version: "0.0.0" }));
+  writeFileSync(
+    join(pkg, "probe.js"),
+    `export function pairs(url) {
+  const out = [];
+  for (const [key, value] of url.searchParams.entries()) out.push([key, value]);
+  return out;
+}
+`,
+  );
+  const entry = join(directory, "main.js");
+  const binary = join(directory, "main");
+  writeFileSync(
+    entry,
+    `import { pairs } from "effect/probe.js";
+console.log(JSON.stringify(pairs(new URL("https://example.invalid/items?a=1&a=2"))));
+`,
+  );
+  try {
+    const result = await compile(entry, {
+      outDir: directory,
+      outPath: binary,
+      outputKind: "exe",
+      optimization: "dev",
+      npmStatic: ["effect"],
+    });
+    expect(result.ok, result.ok ? "" : JSON.stringify(result.diagnostics)).toBe(true);
+    if (!result.ok) return;
+    const run = spawnSync(result.binaryPath, [], { encoding: "utf8" });
+    expect(run.stderr).toBe("");
+    expect(run.status).toBe(0);
+    expect(run.stdout).toBe('[["a","1"],["a","2"]]\n');
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
