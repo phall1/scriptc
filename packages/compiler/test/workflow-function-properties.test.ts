@@ -53,3 +53,16 @@ async function compileAndMatch(source: string, expected: string): Promise<void> 
 test("workflow fields assigned onto the function stay readable", async () => {
   await compileAndMatch(workflowSource, '["Fixture","a",{"id":"a"},"approval"]\n');
 }, 180_000);
+
+test("an array of workflow functions keeps execute on each element", async () => {
+  await compileAndMatch(
+    `import { Schema } from "effect";
+import { Workflow } from "effect/workflow";
+import * as M from "effect/workflow/WorkflowProxyServer";
+const workflow = Workflow.make("Fixture", { payload: { value: Schema.Number }, success: Schema.Number, idempotencyKey: () => "fixed" });
+const layer = M.layerRpcHandlers([workflow]);
+console.log(typeof layer);
+`,
+    "object\n",
+  );
+}, 180_000);
