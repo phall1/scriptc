@@ -5417,19 +5417,32 @@ function inferredOptionalRecordType(
   return actual;
 }
 
-/** A const annotated `typeof fetch` holds the user's function, not the
- * ambient signature. The signature's symbol is the stdlib `fetch`. */
+/** `const f: typeof fetch = <function>`. The annotation is the @types/node
+ * fetch signature, which has no static layout. The initializer is the
+ * function callers actually invoke. */
+export function ambientFetchAnnotation(lowerer: Lowerer, decl: ts.VariableDeclaration): boolean {
+  const init = decl.initializer;
+  if (
+    decl.type === undefined ||
+    !ts.isIdentifier(decl.name) ||
+    init === undefined ||
+    (!ts.isArrowFunction(init) && !ts.isFunctionExpression(init)) ||
+    (init.typeParameters?.length ?? 0) > 0
+  )
+    return false;
+  const annotated = lowerer.checker.getBaseTypeOfLiteralType(lowerer.typeOf(decl.name));
+  const sym = annotated.getAliasSymbol() ?? annotated.getSymbol();
+  if (sym?.name !== "fetch" || lowerer.checker.getCallSignatures(annotated).length === 0)
+    return false;
+  return lowerer.nodeTypesOnlySymbol(sym) || lowerer.isStdlibSymbol(sym);
+}
+
 function ambientFetchInitializerType(
   lowerer: Lowerer,
   decl: ts.VariableDeclaration,
   init: IrType,
 ): IrType | null {
-  if (decl.type === undefined || init.kind !== "func") return null;
-  const annotated = lowerer.checker.getBaseTypeOfLiteralType(lowerer.typeOf(decl.name));
-  const sym = annotated.getAliasSymbol() ?? annotated.getSymbol();
-  if (sym?.name !== "fetch" || lowerer.checker.getCallSignatures(annotated).length === 0)
-    return null;
-  if (!lowerer.nodeTypesOnlySymbol(sym) && !lowerer.isStdlibSymbol(sym)) return null;
+  if (init.kind !== "func" || !ambientFetchAnnotation(lowerer, decl)) return null;
   return init;
 }
 
