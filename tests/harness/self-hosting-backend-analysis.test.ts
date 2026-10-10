@@ -195,5 +195,7 @@ for (const backend of ["llvm"] as const) {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+    // Compiling this much of the backend under the sanitizer takes most of
+    // the default five minutes on a loaded runner.
+  }, 600_000);
 }

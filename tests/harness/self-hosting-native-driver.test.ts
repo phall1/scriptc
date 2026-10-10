@@ -254,6 +254,10 @@ test(
         await checkProgram(probe, join(root, "tests/corpus/record-optional-json-presence.ts"));
         await checkProgram(probe, join(root, "tests/corpus/1010-json-stringify-space.ts"));
         await checkProgram(probe, join(root, "tests/corpus/fs-write-string-bytes-union.ts"));
+        // Exact import-cycle initialization and weak keys from unions and empty objects.
+        await checkProgram(probe, join(root, "tests/corpus/4592-cycle-const-from-import/main.ts"));
+        await checkProgram(probe, join(root, "tests/corpus/4591-weak-keys-union-records.ts"));
+        await checkProgram(probe, join(root, "tests/corpus/4593-weak-keys-empty-objects.ts"));
 
         const fetchOptions = join(directory, "fetch-options.ts");
         writeFileSync(

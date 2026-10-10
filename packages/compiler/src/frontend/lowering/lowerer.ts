@@ -2535,6 +2535,9 @@ export class Lowerer {
    * and therefore becomes the cycle's evaluation root. Dynamic imports
    * wait on this shared verdict rather than a build-time-selected member. */
   readonly asyncCyclePromiseOf = new Map<ts.SourceFile, string>();
+  /** Modules whose evaluation an import() can request again after it threw,
+   * computed on first use (lower-modules.ts importRetryModules). */
+  importRetryModules: ReadonlySet<ts.SourceFile> | null = null;
   /** Record-shape interner: canonical (name-sorted) field list → shapeId.
    * Threaded into every mapType call; its `shapes` array becomes
    * IrModule.records. */
@@ -7506,10 +7509,18 @@ export class Lowerer {
         };
       }
       if (expr.kind === "unitLit" || this.dynConvertible(expr.type)) {
-        const shape = expr.type.kind === "record" ? this.shapes.get(expr.type.shapeId) : undefined;
+        // Records and arrays keep their identity as untyped values, including
+        // when they arrive through a union, so `unknown` views, weak
+        // collection keys and later typed reads all see the same object.
+        const liveReference = (type: IrType): boolean => {
+          if (type.kind === "array") return true;
+          const shape = type.kind === "record" ? this.shapes.get(type.shapeId) : undefined;
+          return !!shape && (shape.fields.length > 0 || shape.indexValue !== undefined);
+        };
         const liveRef =
-          expr.type.kind === "array" ||
-          (!!shape && (shape.fields.length > 0 || shape.indexValue !== undefined));
+          liveReference(expr.type) ||
+          (expr.type.kind === "union" &&
+            (this.unions.get(expr.type.unionId)?.arms.some(liveReference) ?? false));
         return {
           kind: "dynFrom",
           value: expr,

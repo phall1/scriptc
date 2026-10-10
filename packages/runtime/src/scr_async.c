@@ -99,7 +99,10 @@ void __lsan_unregister_root_region(const void *p, size_t size) __attribute__((we
 #ifdef SCR_ASAN_FIBERS
 #define SCR_FIBER_STACK (8 * 1024 * 1024)
 #else
-#define SCR_FIBER_STACK (256 * 1024)
+/* Deep enough for ordinary recursion inside async bodies and generators
+ * once the overflow guard's reserve is taken off; idle and shallow fibers
+ * only touch the pages they use. */
+#define SCR_FIBER_STACK (512 * 1024)
 #endif
 
 #if !defined(_WIN32) && !defined(__wasi__)
@@ -1597,7 +1600,7 @@ static void scr_fiber_context_init(ScrFiber *f) {
 }
 #elif !defined(_WIN32) && !defined(__wasi__)
 /* Apple Silicon's makecontext clears all of uc_stack before installing the
- * initial registers. Passing the whole mapping eagerly commits 256 KiB
+ * initial registers. Passing the whole mapping eagerly commits all of it
  * (8 MiB under ASan) per call, defeating the lazy allocation above. Its
  * zero-argument startup frame only needs the top of the downward-growing
  * stack. Initialize that window, then publish the FULL stack bounds before

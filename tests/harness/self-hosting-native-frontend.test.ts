@@ -116,7 +116,9 @@ for (const backend of ["llvm"] as const) {
           sanitize ? "1" : "0",
           profile,
         ],
-        { cwd: root, timeout: 900_000, maxBuffer: 16 * 1024 * 1024 },
+        // Under the sanitizer this compile alone can take most of 15 minutes
+        // on a loaded macOS runner.
+        { cwd: root, timeout: 1_500_000, maxBuffer: 16 * 1024 * 1024 },
       );
       expect(stderr).toBe("");
       const built = JSON.parse(stdout) as Awaited<ReturnType<typeof compile>>;
@@ -351,5 +353,5 @@ for (const backend of ["llvm"] as const) {
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
-  }, 1_200_000);
+  }, 1_800_000);
 }
