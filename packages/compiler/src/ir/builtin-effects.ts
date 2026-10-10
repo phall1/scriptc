@@ -417,6 +417,7 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "error.domClone",
   // new RegExp compiles the pattern eagerly: an invalid pattern or flag
   // throws Node's catchable SyntaxError at construction.
+  "intl.dateTimeFormatNew",
   "regex.new",
   "regex.resetLastIndex",
   "regex.newChecked",

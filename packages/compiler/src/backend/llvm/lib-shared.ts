@@ -28,6 +28,7 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "insp.jsonDyn": "scr_dyn_format_j",
   "http.reqH2StreamOrThrow": "scr_http_req_h2_stream_or_throw",
   "intl.segmenterNew": "scr_intl_segmenter_new",
+  "intl.dateTimeFormatNew": "scr_intl_datetime_format_new",
   "weakMap.is": "scr_weak_map_is",
   "weakSet.is": "scr_weak_set_is",
   "weakMap.new": "scr_weak_map_new",
