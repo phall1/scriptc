@@ -9535,11 +9535,16 @@ static void scr_weak_map_release(void *ptr) {
 /* Return 1 for an observed identity, 0 for a primitive, and -1 for a
  * reference whose native lifetime has no observer contract yet. */
 static int scr_weak_key(const ScrDyn *key, void **ptr, unsigned *kind) {
+  /* A view of a native object (an empty record boxed with its identity) is
+   * keyed by that object, exactly like its typed reference: native frees
+   * notify scr_weak_dispose with the same pointer. */
+  if (key->kind == SCR_DYN_OBJ && key->v.obj.source_identity) {
+    *ptr = key->v.obj.source_identity; *kind = 32; return 1;
+  }
   if (key->copied_from_native) return -1;
   *kind = 0;
   switch (key->kind) {
   case SCR_DYN_OBJ:
-    if (key->v.obj.source_identity) return -1;
     *ptr = (void *)key; return 1;
   case SCR_DYN_ARR: case SCR_DYN_PROXY:
     *ptr = (void *)key; return 1;

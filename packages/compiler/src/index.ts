@@ -1,8 +1,4 @@
-import {
-  optimizationClass,
-  optimizationField,
-  type NativeOptimization,
-} from "./backend/optimization.js";
+import { optimizationField, type NativeOptimization } from "./backend/optimization.js";
 import { compilationTiming, type CompilationTiming } from "./timing.js";
 import { prepareExecutableModule } from "./executable/prepare.js";
 import {
@@ -66,7 +62,11 @@ import {
   resolveCc,
 } from "./backend/external-c.js";
 import { emitLlvmModuleSource, LlvmUnsupportedError } from "./backend/llvm/emitter.js";
-import { emitNativeArtifact, NativeCodegenError } from "./backend/native-codegen.js";
+import {
+  emitNativeArtifact,
+  NativeCodegenError,
+  writeLlvmSource,
+} from "./backend/native-codegen.js";
 import { nativePartitionPaths, nativeProgramPartitions } from "./backend/native-codegen-core.js";
 import { privateSiblingPath } from "./backend/build-cache.js";
 import { nativeCodegenTarget, nativeCodegenTargetRefusal } from "./backend/targets.js";
@@ -565,7 +565,6 @@ async function emitNativeProgramObject(
       ? 1
       : nativeProgramPartitions(
           target,
-          optimizationClass(opts.optimization),
           (typeof llvm === "string" ? [llvm] : llvm).reduce(
             (bytes, part) => bytes + Buffer.byteLength(part),
             0,
@@ -762,7 +761,7 @@ async function prepareExecutableInput(
     return { ok: false, diagnostics: [llvmRefusalDiag(err, entryPath)], sourceTexts };
   }
   timing("llvm-emit");
-  await writeFile(llvmPath, llvmSource);
+  await writeLlvmSource(llvmPath, llvmSource);
   timing("llvm-write");
   let irPath: string | undefined;
   if (opts.emitIr) {

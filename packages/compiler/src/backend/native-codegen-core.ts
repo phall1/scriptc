@@ -1,5 +1,4 @@
 /** Native codegen helper protocol shared by compiler hosts. */
-import type { NativeOptimization } from "./optimization.js";
 import type { NativeHelperSpec, NativeTargetSpec } from "./targets.js";
 
 export const NATIVE_CODEGEN_PROTOCOL_VERSION = "1";
@@ -8,20 +7,20 @@ export const NATIVE_CODEGEN_LLVM_VERSION = "22.1.8";
 export type NativeCodegenOutputKind = "asm" | "obj";
 
 /** LLVM text per partition, and the most partitions one executable uses. */
-const PROGRAM_PARTITION_BYTES = 1024 * 1024;
-const MAX_PROGRAM_PARTITIONS = 8;
+const PROGRAM_PARTITION_BYTES = 4 * 1024 * 1024;
+const MAX_PROGRAM_PARTITIONS = 64;
 
-/** Optimized executable objects this large keep whole-program simplification
- * and inlining, then optimize and generate code in concurrent partitions. The
- * count depends only on the module, so artifacts never vary with the host. */
-export function nativeProgramPartitions(
-  target: NativeTargetSpec,
-  optimization: NativeOptimization,
-  llvmBytes: number,
-): number {
-  if (optimization === "dev" || target.platform === "wasi") return 1;
-  const count = Math.floor(llvmBytes / PROGRAM_PARTITION_BYTES);
-  return Math.max(1, Math.min(MAX_PROGRAM_PARTITIONS, count));
+/** Executable objects this large are divided into partitions that the helper
+ * simplifies, optimizes and compiles concurrently, importing small functions
+ * across partitions for inlining, and reuses individually across builds. The
+ * count is a power of two that depends only on the module, so artifacts never
+ * vary with the host and ordinary edits keep every function in its
+ * partition. */
+export function nativeProgramPartitions(target: NativeTargetSpec, llvmBytes: number): number {
+  if (target.platform === "wasi") return 1;
+  const required = Math.ceil(llvmBytes / PROGRAM_PARTITION_BYTES);
+  if (required < 2) return 1;
+  return Math.min(MAX_PROGRAM_PARTITIONS, 2 ** Math.ceil(Math.log2(required)));
 }
 
 /** Output paths for each partition; the first is the requested path. */

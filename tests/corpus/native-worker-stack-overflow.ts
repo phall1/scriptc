@@ -10,12 +10,17 @@ function endless(n: number): number {
 if (isMainThread) {
   for (const mode of ["caught", "uncaught"]) {
     await new Promise<void>((resolve) => {
+      // Messages and the error event travel on separate channels, so their
+      // relative order is not specified; report both once the worker exits.
+      const messages: string[] = [];
+      const errors: string[] = [];
       const worker = new Worker(new URL(import.meta.url), { workerData: mode });
-      worker.on("message", (text: string) => console.log(mode, "message", text));
+      worker.on("message", (text: string) => messages.push(`${mode} message ${text}`));
       worker.on("error", (error: Error) =>
-        console.log(mode, "error", error.name, error.message, error instanceof RangeError),
+        errors.push(`${mode} error ${error.name} ${error.message} ${error instanceof RangeError}`),
       );
       worker.on("exit", (code: number) => {
+        for (const line of [...messages, ...errors]) console.log(line);
         console.log(mode, "exit", code);
         resolve();
       });

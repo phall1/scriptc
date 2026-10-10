@@ -8,7 +8,8 @@ import { emitLlvmModule } from "../src/backend/llvm/emitter.js";
 import { type IrModule } from "../src/ir/ir.js";
 
 /** A pending-exception check: the inline active-cell test or a runtime call. */
-const PENDING_CHECK = /@scr_exc_(?:active|pending)\b/;
+// Synchronous bodies test the kind of the entry-loaded exception cell.
+const PENDING_CHECK = /@scr_exc_(?:active|pending)\b| = load i32, ptr %exc\.cell\b/;
 
 async function lower(source: string): Promise<IrModule> {
   const dir = await mkdtemp(join(tmpdir(), "scriptc-input-lifetimes-"));

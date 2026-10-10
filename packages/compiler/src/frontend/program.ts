@@ -2343,11 +2343,7 @@ export function makeCycleAdmission(
       const reason = exactCycleRefusal7(program, comp, lineOf);
       exactVerdict.set(comp, reason);
       if (reason === null) {
-        let members = exactCycleMembers7.get(program);
-        if (members === undefined) {
-          members = new Set();
-          exactCycleMembers7.set(program, members);
-        }
+        const members = program.analysis.exactCycleMembers;
         for (const m of comp) members.add(m);
       }
     }
@@ -2368,13 +2364,10 @@ export function makeCycleAdmission(
  * before the declaration. The shapes below have no such representation
  * and keep the SC1016 fence. */
 
-/** Program → the modules of every cycle the exact rule admitted. */
-const exactCycleMembers7 = new WeakMap<ts.Program, Set<ts.SourceFile>>();
-
 /** The modules of `program` whose import cycles were admitted by the
  * exact initialization rule (not the declaration-only rule). */
 export function exactCycleMembers(program: ts.Program): ReadonlySet<ts.SourceFile> {
-  return exactCycleMembers7.get(program) ?? new Set();
+  return program.analysis.exactCycleMembers;
 }
 
 /** True when the module's top level (outside every function-like body)
@@ -2506,21 +2499,16 @@ export function cycleEarlyBindings(
   order: readonly ts.SourceFile[],
   singleRoot: boolean,
 ): CycleEarlyBinding[] {
-  const exact = exactCycleMembers7.get(program);
-  if (exact === undefined || exact.size === 0) return [];
+  const exact = program.analysis.exactCycleMembers;
+  if (exact.size === 0) return [];
   // Every lowering pass of one compile asks with the same inputs.
   const key = `${entry.fileName}\0${order.map((sf) => sf.fileName).join("\0")}\0${singleRoot}`;
-  const memo = earlyBindingsMemo7.get(program);
-  if (memo !== undefined && memo.key === key) return memo.bindings;
+  const memo = program.analysis.cycleEarlyBindings;
+  if (memo !== null && memo.key === key) return memo.bindings;
   const bindings = computeCycleEarlyBindings7(program, entry, order, singleRoot, exact);
-  earlyBindingsMemo7.set(program, { key, bindings });
+  program.analysis.cycleEarlyBindings = { key, bindings };
   return bindings;
 }
-
-const earlyBindingsMemo7 = new WeakMap<
-  ts.Program,
-  { key: string; bindings: CycleEarlyBinding[] }
->();
 
 function computeCycleEarlyBindings7(
   program: ts.Program,
@@ -2740,22 +2728,17 @@ export function moduleEarlyBindings(
   order: readonly ts.SourceFile[],
 ): CycleEarlyBinding[] {
   const key = order.map((sf) => sf.fileName).join("\0");
-  const memo = moduleEarlyBindingsMemo7.get(program);
-  if (memo !== undefined && memo.key === key) return memo.bindings;
-  const exact = exactCycleMembers7.get(program) ?? new Set<ts.SourceFile>();
+  const memo = program.analysis.moduleEarlyBindings;
+  if (memo !== null && memo.key === key) return memo.bindings;
+  const exact = program.analysis.exactCycleMembers;
   const out: CycleEarlyBinding[] = [];
   for (const sf of order) {
     if (sf.isDeclarationFile || exact.has(sf)) continue;
     out.push(...moduleEarlyBindingsOf7(program, sf, order));
   }
-  moduleEarlyBindingsMemo7.set(program, { key, bindings: out });
+  program.analysis.moduleEarlyBindings = { key, bindings: out };
   return out;
 }
-
-const moduleEarlyBindingsMemo7 = new WeakMap<
-  ts.Program,
-  { key: string; bindings: CycleEarlyBinding[] }
->();
 
 function moduleEarlyBindingsOf7(
   program: ts.Program,

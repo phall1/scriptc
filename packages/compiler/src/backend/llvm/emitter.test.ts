@@ -532,3 +532,23 @@ test("literal zero division emits the JavaScript NaN constant in development bui
   );
   expect(dynamic).toContain("fdiv double");
 });
+
+test("synchronous bodies load the active exception cell once for all pending checks", () => {
+  const body = (llvm: string, name: string): string => {
+    const start = llvm.indexOf(`@${name}(`);
+    return llvm.slice(start, llvm.indexOf("\n}\n", start));
+  };
+  const module = moduleFor([call(), call(), call()]);
+  const work = body(emitLlvmModule(module), "sc_f_work");
+  expect(work.match(/= load ptr, ptr @scr_exc_active/g)).toHaveLength(1);
+  expect(work.slice(work.indexOf("entry:")).split("\n").slice(1).join("\n")).toMatch(
+    /^(?:  %[^\n]* = alloca [^\n]*\n)*  %exc\.cell = load ptr, ptr @scr_exc_active/,
+  );
+  expect(work.match(/= load i32, ptr %exc\.cell\b/g)).toHaveLength(3);
+  // Worker executables test the process-wide alert word at each check
+  // instead, and never read their thread-local cell inline.
+  const workers = body(emitLlvmModule({ ...module, workers: true }), "sc_f_work");
+  expect(workers).not.toContain("%exc.cell");
+  expect(workers).not.toContain("@scr_exc_active");
+  expect(workers.match(/= load atomic i32, ptr @scr_exc_alert monotonic/g)).toHaveLength(3);
+});

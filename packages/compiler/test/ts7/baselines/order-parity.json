@@ -15599,9 +15599,67 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/4541-nullable-wrap-borrows.ts": {
+   "order": [
+    "<repo>/tests/corpus/4541-nullable-wrap-borrows.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4542-preserving-call-borrows.ts": {
+   "order": [
+    "<repo>/tests/corpus/4542-preserving-call-borrows.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4544-checked-cast-aliases.ts": {
+   "order": [
+    "<repo>/tests/corpus/4544-checked-cast-aliases.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4543-walk-borrowed-locals.ts": {
+   "order": [
+    "<repo>/tests/corpus/4543-walk-borrowed-locals.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4545-borrowed-returns.ts": {
+   "order": [
+    "<repo>/tests/corpus/4545-borrowed-returns.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4546-rebound-borrowed-params.ts": {
+   "order": [
+    "<repo>/tests/corpus/4546-rebound-borrowed-params.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/stack-depth-async-bodies.ts": {
    "order": [
     "<repo>/tests/corpus/stack-depth-async-bodies.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4591-weak-keys-union-records.ts": {
+   "order": [
+    "<repo>/tests/corpus/4591-weak-keys-union-records.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4592-cycle-const-from-import/main.ts": {
+   "order": [
+    "<repo>/tests/corpus/4592-cycle-const-from-import/report.ts",
+    "<repo>/tests/corpus/4592-cycle-const-from-import/stock.ts",
+    "<repo>/tests/corpus/4592-cycle-const-from-import/markup.ts",
+    "<repo>/tests/corpus/4592-cycle-const-from-import/pricing.ts",
+    "<repo>/tests/corpus/4592-cycle-const-from-import/main.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4593-weak-keys-empty-objects.ts": {
+   "order": [
+    "<repo>/tests/corpus/4593-weak-keys-empty-objects.ts"
    ],
    "diags": []
   }

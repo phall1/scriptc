@@ -359,7 +359,11 @@ export function trackClassFieldCreation(lowerer: Lowerer, functions: IrFunction[
     (isClassOwnEnumerableFieldName(field) ||
       symbolMemberKey(lowerer, lowerer.classes.get(className)!, field, loc) !== null);
   for (const fn of functions) {
-    const instrumented = new WeakSet<object>();
+    // The transform revisits the replacement it returns. An instrumented
+    // write is recognized by its receiver, a temporary created here.
+    const receivers = new Set<string>();
+    const instrumented = (obj: IrExpr): boolean =>
+      obj.kind === "varRef" && receivers.has(obj.localId);
     const local = (type: IrType, loc: SrcLoc): Extract<IrExpr, { kind: "varRef" }> => {
       const id = `%fieldCreated.${fn.locals.length}`;
       fn.locals.push({ id, name: id, type, mutable: false });
@@ -369,13 +373,13 @@ export function trackClassFieldCreation(lowerer: Lowerer, functions: IrFunction[
       stmt: (statement) => {
         if (
           statement.kind !== "fieldSet" ||
-          instrumented.has(statement) ||
+          instrumented(statement.obj) ||
           !tracked(statement.className, statement.field)
         )
           return statement;
         const receiver = local(statement.obj.type, statement.loc);
+        receivers.add(receiver.localId);
         const store: Extract<IrStmt, { kind: "fieldSet" }> = { ...statement, obj: receiver };
-        instrumented.add(store);
         return {
           kind: "block",
           body: [
@@ -389,14 +393,14 @@ export function trackClassFieldCreation(lowerer: Lowerer, functions: IrFunction[
       expr: (expression) => {
         if (
           expression.kind !== "fieldIncDec" ||
-          instrumented.has(expression) ||
+          instrumented(expression.obj) ||
           !tracked(expression.className, expression.field)
         )
           return expression;
         const receiver = local(expression.obj.type, expression.loc),
           result = local(expression.type, expression.loc);
+        receivers.add(receiver.localId);
         const update: Extract<IrExpr, { kind: "fieldIncDec" }> = { ...expression, obj: receiver };
-        instrumented.add(update);
         return {
           kind: "seqExpr",
           stmts: [

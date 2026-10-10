@@ -1,30 +1,42 @@
 #include "emit.h"
 
+#include "cache.h"
 #include "diagnostics.h"
+#include "partition.h"
 #include "runtime-import.h"
 #include "target.h"
 
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
+#include "llvm/Bitcode/BitcodeWriterPass.h"
+#include "llvm/IR/DiagnosticInfo.h"
+#include "llvm/IR/DiagnosticPrinter.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
+#include "llvm/LTO/LTO.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/Caching.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/SHA256.h"
 #include "llvm/Support/SourceMgr.h"
+#include "llvm/Support/ThreadPool.h"
+#include "llvm/Support/Threading.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/Utils/SplitModule.h"
 
+#include <mutex>
 #include <optional>
 #include <string>
 #include <system_error>
-#include <thread>
 #include <vector>
 
 using namespace llvm;
@@ -59,6 +71,8 @@ std::optional<EmitOptions> parseEmitOptions(int Argc, char **Argv) {
       Options.SourcePath = Value.str();
     else if (Arg == "--import-bitcode")
       Options.ImportBitcode.push_back(Value.str());
+    else if (Arg == "--cache-dir")
+      Options.CacheDirectory = Value.str();
     else
       return std::nullopt;
   }
@@ -174,83 +188,401 @@ emitModule(Module &M, TargetMachine &Machine, OptimizationLevel Level,
   return generateCode(M, Machine, Type, OutputPath, Temporaries);
 }
 
-// Large programs keep whole-program simplification, including every inlining
-// decision, then split into independent partitions whose remaining
-// optimization and code generation run concurrently. Each partition is
-// reloaded from bitcode in its own context because LLVM contexts are not
-// shared across threads. The split is a deterministic function of the module
-// and partition count, so output never depends on host parallelism.
+// Bytes of each partition's module, as LLVM assembly or bitcode, plus the
+// names of definitions that were externally visible before partitioning.
+struct PartitionPlan {
+  std::vector<std::string> Modules;
+  StringSet<> PublicSymbols;
+};
+
+// Fallback when the input is outside the text partitioner's grammar: parse
+// the whole module once and split it with LLVM, which makes every local
+// definition hidden so partitions can reference each other.
+std::optional<EmitFailure> splitParsedModule(const EmitOptions &Options,
+                                             PartitionPlan &Plan) {
+  SMDiagnostic ParseDiagnostic;
+  LLVMContext Context;
+  std::unique_ptr<Module> Mod =
+      parseIRFile(Options.Input, ParseDiagnostic, Context);
+  if (!Mod) {
+    std::string Detail;
+    raw_string_ostream Stream(Detail);
+    ParseDiagnostic.print("scriptc-llvm-codegen", Stream);
+    return EmitFailure{"invalid_ir", Stream.str()};
+  }
+  if (std::optional<EmitFailure> Failure = verify(*Mod, "verification_failed"))
+    return Failure;
+  for (const GlobalValue &GV : Mod->global_values())
+    if (!GV.isDeclaration() && !GV.hasLocalLinkage())
+      Plan.PublicSymbols.insert(GV.getName());
+  SplitModule(*Mod, static_cast<unsigned>(Options.Outputs.size()),
+              [&](std::unique_ptr<Module> Partition) {
+                Plan.Modules.emplace_back();
+                raw_string_ostream Stream(Plan.Modules.back());
+                WriteBitcodeToFile(*Partition, Stream);
+              });
+  if (Plan.Modules.size() != Options.Outputs.size())
+    return EmitFailure{"partition_failed", "LLVM produced an unexpected number "
+                                           "of program partitions"};
+  return std::nullopt;
+}
+
+// Runs Work(I) for every partition on a pool sized to the host. Outputs never
+// depend on the pool size or scheduling order.
+void forEachPartition(size_t Count, function_ref<void(size_t)> Work) {
+  DefaultThreadPool Pool(hardware_concurrency());
+  for (size_t I = 0; I < Count; ++I)
+    Pool.async([&Work, I] { Work(I); });
+  Pool.wait();
+}
+
+class SharedFailure {
+public:
+  void set(EmitFailure Failure) {
+    std::lock_guard<std::mutex> Lock(Mutex);
+    if (!First)
+      First = std::move(Failure);
+  }
+  std::optional<EmitFailure> take() { return std::move(First); }
+
+private:
+  std::mutex Mutex;
+  std::optional<EmitFailure> First;
+};
+
+// Parses one partition into its own context with the requested target.
+Expected<std::unique_ptr<Module>> loadPartition(const EmitOptions &Options,
+                                                StringRef Bytes, size_t Index,
+                                                LLVMContext &Context,
+                                                TargetMachine &Machine) {
+  SMDiagnostic Diagnostic;
+  std::string Name = "partition-" + std::to_string(Index);
+  std::unique_ptr<Module> Mod =
+      parseIR(MemoryBufferRef(Bytes, Name), Diagnostic, Context);
+  if (!Mod) {
+    std::string Detail;
+    raw_string_ostream Stream(Detail);
+    Diagnostic.print("scriptc-llvm-codegen", Stream);
+    return createStringError(inconvertibleErrorCode(), Stream.str());
+  }
+  if (!Options.SourcePath.empty())
+    Mod->setSourceFileName(Options.SourcePath);
+  Mod->setTargetTriple(Triple(Options.Target));
+  Mod->setDataLayout(Machine.createDataLayout());
+  if (std::optional<EmitFailure> Failure = verify(*Mod, "verification_failed"))
+    return createStringError(inconvertibleErrorCode(), Failure->Message);
+  return std::move(Mod);
+}
+
+// A raw_ostream that only hashes what is written to it.
+class HashingStream : public raw_ostream {
+public:
+  explicit HashingStream(SHA256 &Hash) : Hash(Hash) { SetUnbuffered(); }
+
+private:
+  void write_impl(const char *Data, size_t Size) override {
+    Hash.update(StringRef(Data, Size));
+    Position += Size;
+  }
+  uint64_t current_pos() const override { return Position; }
+  SHA256 &Hash;
+  uint64_t Position = 0;
+};
+
+// Collects one native object per partition in memory.
+class ObjectStream : public CachedFileStream {
+public:
+  explicit ObjectStream(SmallVector<char, 0> &Buffer)
+      : CachedFileStream(std::make_unique<raw_svector_ostream>(Buffer)) {}
+};
+
+// Unoptimized partitions are independent: each compiles, or comes from the
+// cache keyed by its exact source, on its own thread.
 std::optional<EmitFailure>
-emitPartitions(std::unique_ptr<Module> Mod, const EmitOptions &Options,
-               OptimizationLevel Level, CodeGenFileType Type,
-               std::vector<SmallString<256>> &Temporaries) {
-  {
+compileUnoptimizedPartitions(const EmitOptions &Options,
+                             const PartitionPlan &Plan, StringRef Salt,
+                             const ArtifactCache &Cache,
+                             std::vector<SmallVector<char, 0>> &Objects) {
+  SharedFailure Failures;
+  forEachPartition(Plan.Modules.size(), [&](size_t I) {
+    std::string Key = hashParts({Salt, "object", Plan.Modules[I]});
+    if (std::unique_ptr<MemoryBuffer> Hit = Cache.lookup(Key, "o")) {
+      Objects[I].assign(Hit->getBufferStart(), Hit->getBufferEnd());
+      return;
+    }
     std::string LookupError;
     std::unique_ptr<TargetMachine> Machine =
         createTargetMachine(Options.Target, Options.OptLevel, LookupError);
     if (!Machine)
-      return EmitFailure{"target_machine_failed", LookupError};
-    Pipeline P(*Machine, Level);
-    P.PB.buildModuleSimplificationPipeline(Level, ThinOrFullLTOPhase::None)
-        .run(*Mod, P.MAM);
-  }
-  size_t Count = Options.Outputs.size();
-  std::vector<SmallVector<char, 0>> Partitions;
-  SplitModule(*Mod, static_cast<unsigned>(Count),
-              [&](std::unique_ptr<Module> Partition) {
-                Partitions.emplace_back();
-                raw_svector_ostream Stream(Partitions.back());
-                WriteBitcodeToFile(*Partition, Stream);
-              });
-  Mod.reset();
-  if (Partitions.size() != Count)
-    return EmitFailure{"partition_failed", "LLVM produced an unexpected number "
-                                           "of program partitions"};
+      return Failures.set({"target_machine_failed", LookupError});
+    LLVMContext Context;
+    Expected<std::unique_ptr<Module>> Mod =
+        loadPartition(Options, Plan.Modules[I], I, Context, *Machine);
+    if (!Mod)
+      return Failures.set({"partition_failed", toString(Mod.takeError())});
+    // The O0 pipeline still lowers coroutines and always-inline calls.
+    Pipeline P(*Machine, OptimizationLevel::O0);
+    P.PB.buildPerModuleDefaultPipeline(OptimizationLevel::O0)
+        .run(**Mod, P.MAM);
+    raw_svector_ostream Output(Objects[I]);
+    legacy::PassManager CodeGeneration;
+    if (Machine->addPassesToEmitFile(CodeGeneration, Output, nullptr,
+                                     CodeGenFileType::ObjectFile))
+      return Failures.set({"emission_not_supported",
+                           "target does not support object emission"});
+    CodeGeneration.run(**Mod);
+    Cache.store(Key, "o", StringRef(Objects[I].data(), Objects[I].size()));
+  });
+  return Failures.take();
+}
 
-  std::vector<std::optional<EmitFailure>> Failures(Count);
-  std::vector<std::vector<SmallString<256>>> Written(Count);
-  std::vector<std::thread> Workers;
-  for (size_t I = 0; I < Count; ++I) {
-    Workers.emplace_back([&, I] {
-      LLVMContext Context;
-      Expected<std::unique_ptr<Module>> Partition = parseBitcodeFile(
-          MemoryBufferRef(StringRef(Partitions[I].data(), Partitions[I].size()),
-                          Options.Outputs[I]),
-          Context);
-      if (!Partition) {
-        Failures[I] =
-            EmitFailure{"partition_failed", toString(Partition.takeError())};
-        return;
-      }
-      std::string LookupError;
-      std::unique_ptr<TargetMachine> Machine =
-          createTargetMachine(Options.Target, Options.OptLevel, LookupError);
-      if (!Machine) {
-        Failures[I] = EmitFailure{"target_machine_failed", LookupError};
-        return;
-      }
+// Optimized partitions follow the ThinLTO model. Each partition is simplified
+// on its own thread and summarized; a thin link over the summaries decides
+// which small functions every partition imports from the others for
+// inlining and which promoted symbols return to internal linkage; then each
+// partition is optimized and compiled on its own thread. Simplified bitcode
+// is cached by the partition's exact source, and objects by the exact module
+// after importing, so an edit recompiles only the partitions it can affect.
+std::optional<EmitFailure>
+compileOptimizedPartitions(const EmitOptions &Options,
+                           const PartitionPlan &Plan, OptimizationLevel Level,
+                           StringRef Salt, const ArtifactCache &Cache,
+                           std::vector<SmallVector<char, 0>> &Objects) {
+  size_t Count = Plan.Modules.size();
+  std::vector<std::unique_ptr<MemoryBuffer>> Summaries(Count);
+  SharedFailure Failures;
+  forEachPartition(Count, [&](size_t I) {
+    std::string Key = hashParts({Salt, "summary", Plan.Modules[I]});
+    if ((Summaries[I] = Cache.lookup(Key, "bc")))
+      return;
+    std::string LookupError;
+    std::unique_ptr<TargetMachine> Machine =
+        createTargetMachine(Options.Target, Options.OptLevel, LookupError);
+    if (!Machine)
+      return Failures.set({"target_machine_failed", LookupError});
+    LLVMContext Context;
+    Expected<std::unique_ptr<Module>> Loaded =
+        loadPartition(Options, Plan.Modules[I], I, Context, *Machine);
+    if (!Loaded)
+      return Failures.set({"partition_failed", toString(Loaded.takeError())});
+    Module &Mod = **Loaded;
+    if (!Options.ImportBitcode.empty()) {
+      // See emit(): the attribute is inert without a sanitizer pass and
+      // would block inlining of the imported runtime bodies.
+      for (Function &F : Mod)
+        F.removeFnAttr(Attribute::SanitizeAddress);
+      if (std::optional<std::string> Error =
+              importRuntimeBitcode(Mod, Options.ImportBitcode))
+        return Failures.set({"runtime_import_failed", *Error});
+      if (std::optional<EmitFailure> Failure =
+              verify(Mod, "runtime_import_verification_failed"))
+        return Failures.set(std::move(*Failure));
+    }
+    SmallVector<char, 0> Bitcode;
+    {
+      raw_svector_ostream Stream(Bitcode);
       Pipeline P(*Machine, Level);
-      P.PB.buildModuleOptimizationPipeline(Level, ThinOrFullLTOPhase::None)
-          .run(**Partition, P.MAM);
-      Failures[I] =
-          verify(**Partition, "post_optimization_verification_failed");
-      if (!Failures[I])
-        Failures[I] = generateCode(**Partition, *Machine, Type,
-                                   Options.Outputs[I], Written[I]);
-    });
-  }
-  for (std::thread &Worker : Workers)
-    Worker.join();
+      ModulePassManager MPM = P.PB.buildThinLTOPreLinkDefaultPipeline(Level);
+      MPM.addPass(BitcodeWriterPass(Stream, /*ShouldPreserveUseListOrder=*/false,
+                                    /*EmitSummaryIndex=*/true,
+                                    /*EmitModuleHash=*/true));
+      MPM.run(Mod, P.MAM);
+    }
+    StringRef Contents(Bitcode.data(), Bitcode.size());
+    Cache.store(Key, "bc", Contents);
+    Summaries[I] = MemoryBuffer::getMemBufferCopy(Contents);
+  });
+  if (std::optional<EmitFailure> Failure = Failures.take())
+    return Failure;
+
+  lto::Config Config;
+  Triple TargetTriple(Options.Target);
+  Config.CPU = "generic";
+  Config.Options = targetOptions(TargetTriple);
+  Config.RelocModel = Reloc::PIC_;
+  Config.CodeModel = CodeModel::Small;
+  Config.CGOptLevel = codeGenLevel(Options.OptLevel);
+  Config.OptLevel = Level == OptimizationLevel::O1   ? 1
+                    : Level == OptimizationLevel::O3 ? 3
+                                                     : 2;
+  Config.PTO = tuningFor(Level);
+  Config.CGFileType = CodeGenFileType::ObjectFile;
+  Config.DefaultTriple = Options.Target;
+  Config.DiagHandler = [&](const DiagnosticInfo &Info) {
+    if (Info.getSeverity() != DS_Error)
+      return;
+    std::string Message;
+    raw_string_ostream Stream(Message);
+    DiagnosticPrinterRawOStream Printer(Stream);
+    Info.print(Printer);
+    Failures.set({"partition_failed", Stream.str()});
+  };
+  std::vector<std::string> ObjectKeys(Count);
+  Config.PostImportModuleHook = [&](unsigned Task, const Module &Mod) {
+    size_t I = Task - 1;
+    if (I >= Count)
+      return true;
+    SHA256 Hash;
+    {
+      HashingStream Stream(Hash);
+      WriteBitcodeToFile(Mod, Stream);
+    }
+    std::string Key =
+        hashParts({Salt, "object", toHex(Hash.final(), /*LowerCase=*/true)});
+    if (std::unique_ptr<MemoryBuffer> Hit = Cache.lookup(Key, "o")) {
+      Objects[I].assign(Hit->getBufferStart(), Hit->getBufferEnd());
+      return false;
+    }
+    ObjectKeys[I] = std::move(Key);
+    return true;
+  };
+
+  // The link refers to module identifiers for its whole lifetime.
+  std::vector<std::string> Names(Count);
+  for (size_t I = 0; I < Count; ++I)
+    Names[I] = "partition-" + std::to_string(I);
+  lto::LTO Link(std::move(Config),
+                lto::createInProcessThinBackend(hardware_concurrency()));
   for (size_t I = 0; I < Count; ++I) {
-    if (Written[I].empty())
-      Temporaries.emplace_back();
-    else
-      Temporaries.push_back(Written[I].front());
+    Expected<std::unique_ptr<lto::InputFile>> Input = lto::InputFile::create(
+        MemoryBufferRef(Summaries[I]->getBuffer(), Names[I]));
+    if (!Input)
+      return EmitFailure{"partition_failed", toString(Input.takeError())};
+    std::vector<lto::SymbolResolution> Resolutions;
+    for (const lto::InputFile::Symbol &Symbol : (*Input)->symbols()) {
+      lto::SymbolResolution Resolution;
+      if (!Symbol.isUndefined()) {
+        // Partitions define disjoint symbols. Only definitions that were
+        // external before partitioning are visible to the runtime objects
+        // linked beside them; the rest may become internal again.
+        bool Public = Plan.PublicSymbols.contains(Symbol.getIRName());
+        Resolution.Prevailing = true;
+        Resolution.VisibleToRegularObj = Public;
+        Resolution.FinalDefinitionInLinkageUnit = !Public;
+      }
+      Resolutions.push_back(Resolution);
+    }
+    if (Error Err = Link.add(std::move(*Input), Resolutions))
+      return EmitFailure{"partition_failed", toString(std::move(Err))};
   }
-  for (std::optional<EmitFailure> &Failure : Failures)
-    if (Failure)
-      return Failure;
+  Error Err = Link.run([&](unsigned Task, const Twine &)
+                           -> Expected<std::unique_ptr<CachedFileStream>> {
+    size_t I = Task - 1;
+    if (I >= Count)
+      return createStringError(inconvertibleErrorCode(),
+                               "unexpected regular LTO output");
+    Objects[I].clear();
+    return std::make_unique<ObjectStream>(Objects[I]);
+  });
+  if (Err)
+    return EmitFailure{"partition_failed", toString(std::move(Err))};
+  if (std::optional<EmitFailure> Failure = Failures.take())
+    return Failure;
+  for (size_t I = 0; I < Count; ++I)
+    if (!ObjectKeys[I].empty())
+      Cache.store(ObjectKeys[I], "o",
+                  StringRef(Objects[I].data(), Objects[I].size()));
   return std::nullopt;
+}
+
+std::optional<EmitFailure>
+compilePartitions(const EmitOptions &Options, const PartitionPlan &Plan,
+                  std::vector<SmallVector<char, 0>> &Objects) {
+  // Everything besides a partition's own bytes that determines its
+  // artifacts. The caller's cache directory already identifies the exact
+  // helper build; source content and partition count arrive per module.
+  std::string Salt = hashParts({"scriptc-partition-v1", LLVM_VERSION_STRING,
+                                Options.Target, Options.OptLevel,
+                                Options.RelocationModel, Options.SourcePath});
+  for (const std::string &Path : Options.ImportBitcode) {
+    ErrorOr<std::unique_ptr<MemoryBuffer>> Bitcode =
+        MemoryBuffer::getFile(Path, /*IsText=*/false,
+                              /*RequiresNullTerminator=*/false);
+    if (!Bitcode)
+      return EmitFailure{"runtime_import_failed",
+                         Path + ": " + Bitcode.getError().message()};
+    Salt = hashParts({Salt, (*Bitcode)->getBuffer()});
+  }
+  ArtifactCache Cache(Options.CacheDirectory);
+  Objects.assign(Plan.Modules.size(), {});
+  if (Options.OptLevel == "0")
+    return compileUnoptimizedPartitions(Options, Plan, Salt, Cache, Objects);
+  return compileOptimizedPartitions(Options, Plan,
+                                    optimizationLevel(Options.OptLevel), Salt,
+                                    Cache, Objects);
+}
+
+// Publishes in-memory partition objects through private sibling files.
+std::optional<EmitFailure>
+writePartitionObjects(const EmitOptions &Options,
+                      const std::vector<SmallVector<char, 0>> &Objects,
+                      std::vector<SmallString<256>> &Temporaries) {
+  for (size_t I = 0; I < Objects.size(); ++I) {
+    SmallString<256> TemporaryPath(Options.Outputs[I]);
+    TemporaryPath.append(".tmp-%%%%%%");
+    int TemporaryFd = -1;
+    if (std::error_code EC = sys::fs::createUniqueFile(
+            TemporaryPath, TemporaryFd, TemporaryPath))
+      return EmitFailure{"output_open_failed", EC.message()};
+    Temporaries.push_back(TemporaryPath);
+    raw_fd_ostream Output(TemporaryFd, true);
+    Output.write(Objects[I].data(), Objects[I].size());
+    Output.close();
+    if (Output.has_error()) {
+      std::string Message = Output.error().message();
+      Output.clear_error();
+      return EmitFailure{"output_write_failed", Message};
+    }
+  }
+  return std::nullopt;
+}
+
+// Several outputs: divide the program into that many partitions, then
+// compile them concurrently. The division is a deterministic function of the
+// module and the partition count, so output never depends on host
+// parallelism. Splitting the assembly text lets partitions parse
+// concurrently; any input outside the text partitioner's grammar, or a
+// partition it produced that does not load, falls back to LLVM's splitter.
+int emitPartitions(const EmitOptions &Options) {
+  // Every partition may come from the cache, so the optimizer's target
+  // lookups cannot rely on an earlier target machine having registered it.
+  initializeTargets();
+  std::vector<SmallVector<char, 0>> Objects;
+  std::optional<EmitFailure> Failure;
+  bool Compiled = false;
+  {
+    ErrorOr<std::unique_ptr<MemoryBuffer>> Input =
+        MemoryBuffer::getFile(Options.Input, /*IsText=*/false,
+                              /*RequiresNullTerminator=*/false);
+    if (Input) {
+      std::optional<ProgramPartitions> Text = partitionProgramText(
+          (*Input)->getBuffer(), static_cast<unsigned>(Options.Outputs.size()));
+      if (Text) {
+        Input->reset();
+        PartitionPlan Plan{std::move(Text->Sources),
+                           std::move(Text->PublicSymbols)};
+        Compiled = !compilePartitions(Options, Plan, Objects);
+      }
+    }
+  }
+  if (!Compiled) {
+    PartitionPlan Plan;
+    Failure = splitParsedModule(Options, Plan);
+    if (!Failure)
+      Failure = compilePartitions(Options, Plan, Objects);
+  }
+  std::vector<SmallString<256>> Temporaries;
+  if (!Failure)
+    Failure = writePartitionObjects(Options, Objects, Temporaries);
+  for (size_t I = 0; !Failure && I < Temporaries.size(); ++I)
+    Failure = publish(Temporaries[I], Options.Outputs[I]);
+  if (Failure) {
+    for (const SmallString<256> &Temporary : Temporaries)
+      sys::fs::remove(Temporary);
+    return reportError(Failure->Code, Failure->Message,
+                       Options.DiagnosticFormat);
+  }
+  return 0;
 }
 
 } // namespace
@@ -276,14 +608,26 @@ int emit(const EmitOptions &Options) {
                            " outputs are supported",
                        Options.DiagnosticFormat);
   if (Options.Outputs.size() > 1 &&
-      (Options.FileType != "obj" || Options.OptLevel == "0"))
+      (Options.FileType != "obj" || Options.OptLevel == "s" ||
+       Options.OptLevel == "z"))
     return reportError("invalid_partitions",
-                       "several outputs require optimized object emission",
+                       "several outputs require object emission at opt-level "
+                       "0, 1, 2, or 3",
+                       Options.DiagnosticFormat);
+  if (!Options.CacheDirectory.empty() && Options.Outputs.size() == 1)
+    return reportError("invalid_cache_directory",
+                       "a cache directory requires several outputs",
                        Options.DiagnosticFormat);
   if (Options.RelocationModel != "pic")
     return reportError("invalid_relocation_model",
                        "only the pic relocation model is supported",
                        Options.DiagnosticFormat);
+  if (!Options.ImportBitcode.empty() && Options.OptLevel == "0")
+    return reportError("invalid_import",
+                       "runtime bitcode import requires an optimized build",
+                       Options.DiagnosticFormat);
+  if (Options.Outputs.size() > 1)
+    return emitPartitions(Options);
 
   SMDiagnostic ParseDiagnostic;
   LLVMContext Context;
@@ -317,10 +661,6 @@ int emit(const EmitOptions &Options) {
   // Runtime bitcode import is the `speed` posture's opt-in; without it the
   // module reaches the pipeline exactly as emitted.
   if (!Options.ImportBitcode.empty()) {
-    if (Options.OptLevel == "0")
-      return reportError("invalid_import",
-                         "runtime bitcode import requires an optimized build",
-                         Options.DiagnosticFormat);
     // The emitter marks every function sanitize_address so the sanitized
     // lane's clang link can instrument it. This helper never runs a
     // sanitizer pass, so the attribute is inert here except that it
@@ -345,13 +685,10 @@ int emit(const EmitOptions &Options) {
                              ? CodeGenFileType::ObjectFile
                              : CodeGenFileType::AssemblyFile;
   std::vector<SmallString<256>> Temporaries;
-  std::optional<EmitFailure> Failure =
-      Options.Outputs.size() == 1
-          ? emitModule(*Mod, *Machine, Level, Type, Options.Outputs[0],
-                       Temporaries)
-          : emitPartitions(std::move(Mod), Options, Level, Type, Temporaries);
-  for (size_t I = 0; !Failure && I < Temporaries.size(); ++I)
-    Failure = publish(Temporaries[I], Options.Outputs[I]);
+  std::optional<EmitFailure> Failure = emitModule(
+      *Mod, *Machine, Level, Type, Options.Outputs[0], Temporaries);
+  if (!Failure)
+    Failure = publish(Temporaries[0], Options.Outputs[0]);
   if (Failure) {
     for (const SmallString<256> &Temporary : Temporaries)
       sys::fs::remove(Temporary);

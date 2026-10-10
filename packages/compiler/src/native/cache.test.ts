@@ -1,4 +1,13 @@
-import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
@@ -51,6 +60,27 @@ test("eviction removes oldest complete entries and leaves unrelated paths alone"
   expect(cache.read("frontend", oldKey)).toBeNull();
   expect(cache.read("object", newKey)?.length).toBe(700);
   expect(readFileSync(unrelated, "utf8")).toBe("keep");
+});
+
+test("eviction also ages helper partition entries", () => {
+  const cache = new NativeCache(directory());
+  const partitions = cache.partitionDirectory("helper identity")!;
+  expect(partitions).toBe(cache.partitionDirectory("helper identity"));
+  expect(statSync(partitions).mode & 0o777).toBe(0o700);
+  const bucket = join(partitions, "ab");
+  mkdirSync(bucket);
+  const oldEntry = join(bucket, `${contentDigest("old")}.o`);
+  const newEntry = join(bucket, `${contentDigest("new")}.bc`);
+  const pending = join(bucket, ".tmp-pending");
+  writeFileSync(oldEntry, "a".repeat(700));
+  writeFileSync(newEntry, "b".repeat(700));
+  writeFileSync(pending, "c".repeat(700));
+  utimesSync(oldEntry, new Date(0), new Date(0));
+  vi.stubEnv("SCRIPTC_CACHE_MAX_MB", String(1000 / (1024 * 1024)));
+  cache.prune();
+  expect(existsSync(oldEntry)).toBe(false);
+  expect(readFileSync(newEntry, "utf8")).toHaveLength(700);
+  expect(readFileSync(pending, "utf8")).toHaveLength(700);
 });
 
 test("private-directory admission and cache disable options fail closed", () => {

@@ -18,6 +18,8 @@ struct EmitOptions {
   std::string SourcePath;
   // Runtime bitcode whose small functions are imported available_externally.
   std::vector<std::string> ImportBitcode;
+  // Private directory for reusable partition artifacts; empty disables reuse.
+  std::string CacheDirectory;
 };
 
 std::optional<EmitOptions> parseEmitOptions(int Argc, char **Argv);
