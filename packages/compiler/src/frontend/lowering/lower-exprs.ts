@@ -5895,6 +5895,42 @@ function bareArrayLiteral(node: ts.Expression): ts.ArrayLiteralExpression | null
   return expr;
 }
 
+/** A record with no fields and no index. That is the shape of an empty
+ * object literal, not TypeScript's `{}` supertype. */
+function isClosedEmptyRecord(lowerer: Lowerer, type: IrType | null): boolean {
+  if (type?.kind !== "record") return false;
+  const shape = lowerer.shapes.get(type.shapeId);
+  if (!shape || shape.tuple || shape.indexValue) return false;
+  return shape.fields.length === 0;
+}
+
+/** The element node a spread or a spelled value contributes, if any. */
+function arrayElementSource(
+  element: ts.Expression | ts.SpreadElement | ts.OmittedExpression,
+): ts.Expression | null {
+  if (ts.isOmittedExpression(element)) return null;
+  if (ts.isSpreadElement(element)) return element.expression;
+  return element;
+}
+
+/** True when an array's inferred element type is a closed empty record
+ * but a spelled element is not. TypeScript's best common type can be `{}`
+ * because every non-nullish value is assignable to it; the empty record
+ * cannot hold a string. */
+function emptyRecordElementMismatch(
+  lowerer: Lowerer,
+  expr: ts.ArrayLiteralExpression,
+  mapped: IrType | null,
+): boolean {
+  const element = mapped?.kind === "array" ? mapped.elem : null;
+  if (!isClosedEmptyRecord(lowerer, element)) return false;
+  return expr.elements.some((el) => {
+    const source = arrayElementSource(el);
+    if (source === null) return false;
+    return !isClosedEmptyRecord(lowerer, lowerer.mapTypeOf(lowerer.typeOf(source)));
+  });
+}
+
 export function lowerArrayLiteral(
   lowerer: Lowerer,
   expr: ts.ArrayLiteralExpression,
@@ -6089,6 +6125,9 @@ export function lowerArrayLiteral(
   // the original record. Checking the value back onto that record drops
   // the key. Keep the array dynamic so the stored object is the binding.
   if (jsExpandedRecordArray(lowerer, expr, expected, mapped)) mapped = DYN;
+  // `["a", {}]` infers `{}[]`. The empty record is not that supertype, so
+  // the string has nowhere to go. Checked-dynamic storage keeps both.
+  if (!expected && emptyRecordElementMismatch(lowerer, expr, mapped)) mapped = DYN;
 
   // A TUPLE-typed slot (`const t: [string, number] = ["a", 1]`): the
   // literal constructs the tuple's record shape — one positional field
