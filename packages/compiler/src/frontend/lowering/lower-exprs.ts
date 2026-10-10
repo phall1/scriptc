@@ -3059,6 +3059,8 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
         );
       }
     }
+    const absentOnArray = absentPackageArrayProperty(lowerer, expr, recvLowered);
+    if (absentOnArray) return absentOnArray;
     lowerer.unsupported(
       "SC1090",
       expr,
@@ -3091,6 +3093,28 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
       entry.feature,
     );
   lowerer.unsupported("SC1090", expr, `syntax '${ts.syntaxKindName(expr.kind)}'`);
+}
+
+/** A package-JS specialization reads a name the array type does not
+ * store. Typed arrays have no expando slot; the property is undefined,
+ * and the receiver still runs. Prototype methods stay on the stdlib fence. */
+function absentPackageArrayProperty(
+  lowerer: Lowerer,
+  expr: ts.PropertyAccessExpression,
+  recvLowered: IrExpr,
+): IrExpr | null {
+  if (lowerer.implicitParamTypes === null) return null;
+  if (!isJsSourceFile(expr.getSourceFile())) return null;
+  if (npmStaticPackageOfPath(expr.getSourceFile().fileName) === null) return null;
+  if (lowerer.stripUndefinedArm(recvLowered.type).kind !== "array") return null;
+  const loc = locOf(expr);
+  return {
+    kind: "seqExpr",
+    stmts: [{ kind: "exprStmt", expr: recvLowered, loc }],
+    result: dynUndefinedExpr(loc),
+    type: DYN,
+    loc,
+  };
 }
 
 function moduleFileName(lowerer: Lowerer, sf: ts.SourceFile): string {
