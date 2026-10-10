@@ -372,13 +372,31 @@ export function storedTextCodecClassOf(
     : null;
 }
 
+/** `(decoder ??= new TextDecoder()).decode(...)` keeps the stdlib receiver
+ * even when the binding's checker type is still the evolving `any`. */
+function assignedStdlibTextCodec(
+  lowerer: Lowerer,
+  expr: ts.Expression,
+): "TextDecoder" | "TextEncoder" | null {
+  let current = expr;
+  while (ts.isParenthesizedExpression(current)) current = current.expression;
+  if (
+    !ts.isBinaryExpression(current) ||
+    (current.operatorToken.kind !== ts.SyntaxKind.EqualsToken &&
+      current.operatorToken.kind !== ts.SyntaxKind.QuestionQuestionEqualsToken)
+  )
+    return null;
+  return directTextCodecCtorOf(lowerer, current.right)?.cls ?? null;
+}
+
 function lowerStoredTextCodecCall(
   lowerer: Lowerer,
   call: ts.CallExpression,
   access: ts.PropertyAccessExpression,
 ): IrExpr | null {
-  const cls = storedTextCodecClassOf(lowerer, access.expression);
-  if (cls === null || !lowerer.isStdlibMember(access)) return null;
+  const known = assignedStdlibTextCodec(lowerer, access.expression);
+  const cls = storedTextCodecClassOf(lowerer, access.expression) ?? known;
+  if (cls === null || (known === null && !lowerer.isStdlibMember(access))) return null;
   if (access.name.text !== (cls === "TextEncoder" ? "encode" : "decode")) return null;
   if (call.arguments.length > (cls === "TextDecoder" ? 2 : 1)) {
     lowerer.noLowering(`${cls}.${access.name.text} with extra arguments`, call);
@@ -402,7 +420,12 @@ function lowerStoredTextCodecCall(
       );
     }
   }
-  const receiver = lowerer.lowerExpr(access.expression);
+  let receiver = lowerer.lowerExpr(access.expression);
+  if (receiver.type.kind === "union") {
+    const present = lowerer.stripUndefinedArm(receiver.type);
+    if (present.kind === "record")
+      receiver = lowerer.coerceInto(access.expression, receiver, present);
+  }
   if (receiver.type.kind !== "record")
     lowerer.badType(access.expression, lowerer.typeOf(access.expression));
   let arg: IrExpr =
