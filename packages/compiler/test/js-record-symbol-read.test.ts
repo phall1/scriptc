@@ -6,13 +6,17 @@ import { expect, test } from "vitest";
 import { compile } from "../src/index.js";
 
 const source = `
-function entriesOf(input) {
+function entriesOfObject(input) {
   const entries = typeof input[Symbol.iterator] === "function" ? Array.from(input) : Object.entries(input);
   return entries;
 }
-console.log(JSON.stringify(entriesOf({ q: "a b", page: "1" })));
+function entriesOfParams(input) {
+  const entries = typeof input[Symbol.iterator] === "function" ? Array.from(input) : Object.entries(input);
+  return entries;
+}
+console.log(JSON.stringify(entriesOfObject({ q: "a b", page: "1" })));
 console.log(typeof ({ q: "a" })[Symbol.iterator]);
-console.log(JSON.stringify(entriesOf(new URLSearchParams("a=1&a=2"))));
+console.log(JSON.stringify(entriesOfParams(new URLSearchParams("a=1&a=2"))));
 `;
 
 test("symbol reads follow whether the value is iterable", async () => {
