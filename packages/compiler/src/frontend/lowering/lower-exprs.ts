@@ -931,6 +931,8 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
     return { kind: "jsOp", op: "arrLit", args, type: JSVAL, loc };
   }
   if (ts.isTypeOfExpression(expr)) {
+    const searchParamsIterator = searchParamsIteratorTypeof(lowerer, expr);
+    if (searchParamsIterator) return searchParamsIterator;
     if (lowerer.isStdlibGlobal(expr.expression, "process"))
       return { kind: "strLit", value: "object", type: STRING, loc };
     if (lowerer.isStdlibGlobal(expr.expression, "fetch"))
@@ -14757,6 +14759,41 @@ export function uniqueSymbolKeyOf(
     return null;
   // Symbol() and Symbol('') both print `Symbol()` — Node's toString.
   return { sym, fieldName: `Symbol(${arg?.text ?? ""})` };
+}
+
+/** `typeof params[Symbol.iterator]` on a URLSearchParams value is "function".
+ * Folding it lets a `typeof === "function"` ternary keep only Array.from.
+ * The other arm is Object.entries, which has no lowering for this type,
+ * and the iterator is present so that arm never runs. */
+function searchParamsIteratorTypeof(lowerer: Lowerer, expr: ts.TypeOfExpression): IrExpr | null {
+  let operand: ts.Expression = expr.expression;
+  while (ts.isParenthesizedExpression(operand)) operand = operand.expression;
+  if (
+    !ts.isElementAccessExpression(operand) ||
+    operand.questionDotToken ||
+    operand.argumentExpression === undefined
+  )
+    return null;
+  let key: ts.Expression = operand.argumentExpression;
+  while (ts.isParenthesizedExpression(key)) key = key.expression;
+  if (
+    !ts.isPropertyAccessExpression(key) ||
+    key.questionDotToken ||
+    lowerer.stdlibGlobalMember(key, "Symbol") !== "iterator"
+  )
+    return null;
+  if (lowerer.mapTypeOf(lowerer.typeOf(operand.expression))?.kind !== "searchParams") return null;
+  const loc = locOf(expr);
+  const answer: IrExpr = { kind: "strLit", value: "function", type: STRING, loc };
+  const receiver = lowerer.lowerExpr(operand.expression);
+  if (isSafeToDiscard(receiver)) return answer;
+  return {
+    kind: "seqExpr",
+    stmts: [{ kind: "exprStmt", expr: receiver, loc }],
+    result: answer,
+    type: STRING,
+    loc,
+  };
 }
 
 /** The declared symbol-keyed field (class name / layout field / type)
