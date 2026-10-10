@@ -2049,12 +2049,10 @@ export function lowerArraySortCall(
     fnArg.type.params.length <= 2 &&
     fnArg.type.params.every((param) => lowerer.coercibleValue(elem, param))
   ) {
-    // Arithmetic on inferred JS values retains a checked result because
-    // it can produce BigInt. The sort callback still requires a number.
-    const result =
-      fnArg.type.ret.kind === "dyn" && isJsSourceFile(argNode.getSourceFile())
-        ? F64
-        : fnArg.type.ret;
+    // A dyn result is checked as a number. JavaScript arithmetic can be a
+    // bigint, and an erased numeric alias such as Ordering (`-1 | 0 | 1`)
+    // is any once its declaration file is hidden. Sort still requires a number.
+    const result = fnArg.type.ret.kind === "dyn" ? F64 : fnArg.type.ret;
     const expected = funcOf(
       fnArg.type.params.map(() => elem),
       result,
