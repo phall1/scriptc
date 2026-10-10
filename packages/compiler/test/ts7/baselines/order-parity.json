@@ -15620,6 +15620,20 @@
     "<repo>/tests/corpus/4593-weak-keys-empty-objects.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/diagnostics/deferred-class-binding/main.ts": {
+   "order": [
+    "<repo>/tests/diagnostics/deferred-class-binding/crate.ts",
+    "<repo>/tests/diagnostics/deferred-class-binding/main.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/diagnostics/deferred-class-receiver/main.ts": {
+   "order": [
+    "<repo>/tests/diagnostics/deferred-class-receiver/shelf.ts",
+    "<repo>/tests/diagnostics/deferred-class-receiver/main.ts"
+   ],
+   "diags": []
   }
  }
 }

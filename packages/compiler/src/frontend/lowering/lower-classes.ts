@@ -1468,14 +1468,7 @@ function collectClassShapeDeferring(lowerer: Lowerer, decl: ts.ClassDeclaration)
       (m) => m.kind === ts.SyntaxKind.Decorator,
     );
   if (symbol && (hasDeclTimeCode(decl) || decl.members.some(hasDeclTimeCode))) {
-    const diags = lowerer.deferredDiags.get(symbol);
-    if (diags) {
-      lowerer.deferredDiags.delete(symbol);
-      if (!lowerer.alreadyFlushed.has(symbol)) {
-        lowerer.flushedSymbols.add(symbol);
-        for (const d of diags) lowerer.pushDiag(d);
-      }
-    }
+    lowerer.reportDeferred(symbol);
   }
   // A poisoned BASE this class EXTENDS must report EAGERLY for the same
   // reason: the derived statement evaluates its heritage when module
@@ -1493,14 +1486,7 @@ function collectClassShapeDeferring(lowerer: Lowerer, decl: ts.ClassDeclaration)
       ?.types.map((t) => t.expression)
       .filter(ts.isIdentifier)[0];
     const baseSym = baseIdent ? lowerer.resolveValueSymbol(baseIdent) : null;
-    const baseDiags = baseSym ? lowerer.deferredDiags.get(baseSym) : undefined;
-    if (baseSym && baseDiags) {
-      lowerer.deferredDiags.delete(baseSym);
-      if (!lowerer.alreadyFlushed.has(baseSym)) {
-        lowerer.flushedSymbols.add(baseSym);
-        for (const d of baseDiags) lowerer.pushDiag(d);
-      }
-    }
+    if (baseSym) lowerer.reportDeferred(baseSym);
   }
 }
 
