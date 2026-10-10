@@ -4619,6 +4619,12 @@ static bool scr_dyn_json_write(ScrJsonBuf *b, const ScrDyn *d) {
     return present;
   }
   case SCR_DYN_HANDLE:
+    /* RegExp has no enumerable own properties, so Node answers "{}". */
+    if (d->v.handle.tag == SCR_DYNH_REGEXP) {
+      scr_jb_puts(b, "{}");
+      return true;
+    }
+    /* fall through */
   default: {
     const char *msg = "JSON.stringify of a runtime handle is not supported yet";
     scr_throw_error_msg(SCR_ERR_ERROR, msg, strlen(msg));

@@ -115,6 +115,7 @@ import {
 } from "./lower-namespaces.js";
 import { mixinResultBindingClassOf, type MixinInstanceInfo } from "./lower-mixins.js";
 import { hasLexicalPrivateReference, hasStaticThis, rejectStaticThis } from "./static-this.js";
+import { reexportedBuiltinConstructor } from "./builtin-constructor-identity.js";
 import { lowerUrlNew } from "./lower-url.js";
 import { isNativeProxyInitializer, lowerNativeProxy } from "./expressions/native-proxy.js";
 import { classStaticDataFor } from "./class-static-data.js";
@@ -7998,6 +7999,71 @@ function assignedThisFieldType(lowerer: Lowerer, expr: ts.NewExpression): IrType
   return lowerer.currentClass?.fields.get(parent.left.name.text) ?? null;
 }
 
+/** `new RegExp(pattern, flags?)` and a const re-export of that constructor.
+ * The pattern compiles eagerly, so bad input throws Node's catchable
+ * SyntaxError at construction. Checked arguments retain native regexes. */
+function lowerStdlibRegExpNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
+  const loc = locOf(expr);
+  const args = expr.arguments ?? [];
+  if (args.length > 2) {
+    lowerer.noLowering(`new RegExp with ${args.length} arguments`, expr);
+  }
+  if (args.some(ts.isSpreadElement)) lowerer.noLowering("new RegExp with spread arguments", expr);
+  const values = args.map((arg) => lowerer.lowerExpr(arg));
+  if (values.some((value) => value.type.kind === "dyn" || value.type.kind === "regex")) {
+    const checked = [0, 1].map((index): IrExpr =>
+      values[index] ? lowerer.coerceInto(args[index]!, values[index]!, DYN) : dynUndefinedExpr(loc),
+    );
+    return {
+      kind: "libCall",
+      fn: "regex.newChecked",
+      args: checked,
+      type: { kind: "regex" },
+      loc,
+    };
+  }
+  const strArg = (a: ts.Expression | undefined, what: string): IrExpr => {
+    if (!a) return { kind: "strLit", value: "", type: STRING, loc };
+    const v = values[args.indexOf(a)]!;
+    const empty: IrExpr = { kind: "strLit", value: "", type: STRING, loc };
+    if (v.type.kind === "undefinedT") {
+      if (v.kind === "unitLit") return empty;
+      return {
+        kind: "seqExpr",
+        stmts: [{ kind: "exprStmt", expr: lowerer.coerceToExpected(v, DYN), loc: locOf(a) }],
+        result: empty,
+        type: STRING,
+        loc,
+      };
+    }
+    if (
+      v.type.kind === "union" &&
+      lowerer.unions
+        .get(v.type.unionId)
+        ?.arms.every((arm) => arm.kind === "string" || arm.kind === "undefinedT")
+    ) {
+      return { kind: "nullish", left: v, right: empty, type: STRING, loc: locOf(a) };
+    }
+    if (v.type.kind !== "string") {
+      lowerer.noLowering(
+        `new RegExp with a '${lowerer.fmt(v.type)}' ${what}`,
+        a,
+        "string or undefined arguments are the lowered form (a RegExp copy or ToString coercion has no lowering)",
+      );
+    }
+    return v;
+  };
+  const pattern = strArg(args[0], "pattern");
+  const flags = strArg(args[1], "flags argument");
+  return {
+    kind: "libCall",
+    fn: "regex.new",
+    args: [pattern, flags],
+    type: { kind: "regex" },
+    loc,
+  };
+}
+
 export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
   const loc = locOf(expr);
   const worker = lowerWorkerNew(lowerer, expr);
@@ -8389,67 +8455,7 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
     // so bad input throws Node's catchable SyntaxError at construction.
     // Checked arguments retain native regexes and perform runtime coercion.
     if (symbol && symbol.name === "RegExp" && lowerer.isStdlibSymbol(symbol)) {
-      const args = expr.arguments ?? [];
-      if (args.length > 2) {
-        lowerer.noLowering(`new RegExp with ${args.length} arguments`, expr);
-      }
-      if (args.some(ts.isSpreadElement))
-        lowerer.noLowering("new RegExp with spread arguments", expr);
-      const values = args.map((arg) => lowerer.lowerExpr(arg));
-      if (values.some((value) => value.type.kind === "dyn" || value.type.kind === "regex")) {
-        const checked = [0, 1].map((index): IrExpr =>
-          values[index]
-            ? lowerer.coerceInto(args[index]!, values[index]!, DYN)
-            : dynUndefinedExpr(loc),
-        );
-        return {
-          kind: "libCall",
-          fn: "regex.newChecked",
-          args: checked,
-          type: { kind: "regex" },
-          loc,
-        };
-      }
-      const strArg = (a: ts.Expression | undefined, what: string): IrExpr => {
-        if (!a) return { kind: "strLit", value: "", type: STRING, loc };
-        const v = values[args.indexOf(a)]!;
-        const empty: IrExpr = { kind: "strLit", value: "", type: STRING, loc };
-        if (v.type.kind === "undefinedT") {
-          if (v.kind === "unitLit") return empty;
-          return {
-            kind: "seqExpr",
-            stmts: [{ kind: "exprStmt", expr: lowerer.coerceToExpected(v, DYN), loc: locOf(a) }],
-            result: empty,
-            type: STRING,
-            loc,
-          };
-        }
-        if (
-          v.type.kind === "union" &&
-          lowerer.unions
-            .get(v.type.unionId)
-            ?.arms.every((arm) => arm.kind === "string" || arm.kind === "undefinedT")
-        ) {
-          return { kind: "nullish", left: v, right: empty, type: STRING, loc: locOf(a) };
-        }
-        if (v.type.kind !== "string") {
-          lowerer.noLowering(
-            `new RegExp with a '${lowerer.fmt(v.type)}' ${what}`,
-            a,
-            "string or undefined arguments are the lowered form (a RegExp copy or ToString coercion has no lowering)",
-          );
-        }
-        return v;
-      };
-      const pattern = strArg(args[0], "pattern");
-      const flags = strArg(args[1], "flags argument");
-      return {
-        kind: "libCall",
-        fn: "regex.new",
-        args: [pattern, flags],
-        type: { kind: "regex" },
-        loc,
-      };
+      return lowerStdlibRegExpNew(lowerer, expr);
     }
     if (symbol && symbol.name === "URL" && lowerer.isStdlibSymbol(symbol)) {
       return lowerUrlNew(lowerer, expr);
@@ -9157,6 +9163,13 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
         lowerer.unsupported("SC1090", expr, hint);
       }
     }
+  }
+  // `new RegExp.RegExp(source, flags)` — a const re-export of the global
+  // constructor. The direct `new RegExp` path above never sees the
+  // namespace member, so construct with the same libCall instead of the
+  // indirect native-constructor fence.
+  if (reexportedBuiltinConstructor(lowerer, expr.expression) === "RegExp") {
+    return lowerStdlibRegExpNew(lowerer, expr);
   }
   // Checked construction supports emitted classes and builtin typed arrays.
   const callee = tryLowerExpression(lowerer, expr.expression);
