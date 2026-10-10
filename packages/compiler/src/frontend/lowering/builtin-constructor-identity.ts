@@ -182,3 +182,25 @@ export function builtinConstructorIdentityOf(
   const initializer = constInitializer(lowerer, expr);
   return initializer ? builtinConstructorIdentityOf(lowerer, initializer, seen) : null;
 }
+
+/** `export const RegExp = globalThis.RegExp`, read as a namespace member
+ * (`new RegExp.RegExp(source, flags)`). Direct identifiers and
+ * `globalThis.RegExp` already answer through builtinConstructorIdentityOf,
+ * so this only follows a const export the direct check cannot see. */
+export function reexportedBuiltinConstructor(
+  lowerer: Lowerer,
+  expr: ts.Expression,
+): BuiltinConstructorIdentity | null {
+  while (ts.isParenthesizedExpression(expr)) expr = expr.expression;
+  if (builtinConstructorIdentityOf(lowerer, expr)) return null;
+  if (!ts.isPropertyAccessExpression(expr) || expr.questionDotToken || !ts.isIdentifier(expr.name))
+    return null;
+  const raw = lowerer.checker.getSymbolAtLocation(expr.name);
+  if (!raw) return null;
+  const symbol = raw.flags & ts.SymbolFlags.Alias ? lowerer.checker.getAliasedSymbol(raw) : raw;
+  const declaration = lowerer.checker.valueDeclarationOf(symbol);
+  if (!declaration || !ts.isVariableDeclaration(declaration) || !declaration.initializer)
+    return null;
+  if ((ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) === 0) return null;
+  return builtinConstructorIdentityOf(lowerer, declaration.initializer);
+}
