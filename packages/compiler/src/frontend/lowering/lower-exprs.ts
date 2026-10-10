@@ -6668,6 +6668,13 @@ export function lowerElementAccess(lowerer: Lowerer, expr: ts.ElementAccessExpre
         expr,
       );
     }
+    // A non-tuple record has no symbol-keyed slots, and Object.prototype
+    // does not provide Symbol.iterator. The missing read is undefined.
+    // Tuples stay fenced: they are arrays, and this read is not their iterator.
+    if (receiver.type.kind === "record") {
+      const shape = lowerer.shapes.get(receiver.type.shapeId);
+      if (!shape?.tuple) return lowerer.maybeNarrow(dynUndefinedExpr(locOf(expr)), expr);
+    }
     lowerer.unsupported(
       "SC1090",
       expr,
