@@ -2646,6 +2646,16 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
       const tm = lowerCjsExportTableThisMember(lowerer, expr);
       if (tm) return tm;
     }
+    // TypeScript `globalThis.crypto` is the WebCrypto object. The bare
+    // `crypto` identifier already lowers to it. A read through the stored
+    // global object has no crypto member.
+    if (
+      !lowerer.dynamic &&
+      !isJsSourceFile(expr.getSourceFile()) &&
+      lowerer.isStdlibGlobal(expr, "crypto")
+    ) {
+      return { kind: "libCall", fn: "crypto.native", args: [], type: DYN, loc };
+    }
     const handled =
       lowerer.lowerProcessEnvGet(expr) ??
       lowerer.lowerServerProperty(expr) ??
