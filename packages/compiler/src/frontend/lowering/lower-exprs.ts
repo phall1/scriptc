@@ -6143,6 +6143,13 @@ function emptyRecordElementMismatch(
   });
 }
 
+/** An array or tuple the literal can build directly, or a dyn array. */
+function arrayLiteralHasStaticHome(lowerer: Lowerer, mapped: IrType | null): boolean {
+  if (mapped === null) return false;
+  if (mapped.kind === "array" || mapped.kind === "dyn") return true;
+  return mapped.kind === "record" && lowerer.shapes.get(mapped.shapeId)?.tuple === true;
+}
+
 export function lowerArrayLiteral(
   lowerer: Lowerer,
   expr: ts.ArrayLiteralExpression,
@@ -6208,6 +6215,11 @@ export function lowerArrayLiteral(
   // the literal's own inferred type is the real tuple.
   if (!mapped || mapped.kind === "union" || mapped.kind === "dyn") {
     const ctxUnion = mapped?.kind === "union" ? mapped : null;
+    // `JSON.stringify([...])` contextually types the literal as unknown.
+    // Its own element types may not map (an `any[]` from a JavaScript
+    // Set). The slot is still a checked-dynamic array: keep that when
+    // the inferred shape has no static home.
+    const contextualDyn = mapped?.kind === "dyn";
     mapped = lowerer.mapTypeOf(lowerer.typeOf(expr));
     // The never-tainted own type carries no element information here
     // either (the JS story above) — only a contextual union's single
@@ -6264,6 +6276,7 @@ export function lowerArrayLiteral(
         if (arms.length === 1) mapped = arms[0]!;
       }
     }
+    if (contextualDyn && !arrayLiteralHasStaticHome(lowerer, mapped)) mapped = DYN;
   }
   // An array literal inside an npm-static implicit-any instance can
   // inherit the checker's poisoned any[] context even after the
