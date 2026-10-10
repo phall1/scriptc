@@ -75,9 +75,11 @@ if(TARGET zstd::libzstd_shared AND TARGET zstd::libzstd_static)
 endif()
 
 add_executable(scriptc-llvm-codegen
+  src/cache.cpp
   src/diagnostics.cpp
   src/emit.cpp
   src/main.cpp
+  src/partition.cpp
   src/runtime-import.cpp
   src/runtime-unit.cpp
   src/target.cpp
@@ -178,7 +180,7 @@ if(SCRIPTC_STATIC_LINUX_BUILD)
     endif()
   endfunction()
 
-  set(SCRIPTC_LLVM_LINK_ROOTS ${SCRIPTC_LLVM_TARGET_LIBS} BitReader BitWriter IRReader Linker Passes TransformUtils)
+  set(SCRIPTC_LLVM_LINK_ROOTS ${SCRIPTC_LLVM_TARGET_LIBS} BitReader BitWriter IRReader LTO Linker Passes TransformUtils)
   foreach(component IN LISTS SCRIPTC_LLVM_LINK_ROOTS)
     if(TARGET "LLVM${component}")
       scriptc_collect_llvm_target("LLVM${component}")
@@ -204,6 +206,7 @@ else()
     Core
     Coroutines
     IRReader
+    LTO
     Linker
     Passes
     Support

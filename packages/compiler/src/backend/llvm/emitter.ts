@@ -19,6 +19,7 @@ import { InternalCompilerError } from "../../errors.js";
  * Dynamic values and islands share the runtime ABI; embedded npm modules use
  * compressed source tables that the runtime inflates on demand.
  */
+import { createHash } from "node:crypto";
 import { deflateRawSync } from "node:zlib";
 import {
   endsWithJump,
@@ -516,6 +517,8 @@ export class LlEmitter {
   /** Interned string literals: UTF-8 text → { symbol, byte length } —
    * first-use order, the runtime ABI’s determinism discipline. */
   private readonly literals = new Map<string, { sym: string; len: number }>();
+  /** Symbols of interned constant data, named by content (contentSymbol). */
+  private readonly contentSymbols = new Set<string>();
   /** Interned unit-armed union instances: "unionId:tag" → symbol — one
    * immortal (rc == SIZE_MAX) static per (union, unit tag).
    * RC entry points and the collector skip immortals. */
@@ -3383,10 +3386,31 @@ export class LlEmitter {
 
   // ── plumbing (frame and scope ownership) ──────
 
+  /** A symbol derived from the constant's text rather than its first-use
+   * index, so an edit that interns one more string leaves every other
+   * constant's symbol, and the code referencing it, unchanged. This lets
+   * native builds reuse the compiled partitions an edit does not touch. A
+   * collision retries with a counter, still in first-use order. */
+  private contentSymbol(prefix: string, text: string): string {
+    for (let attempt = 0; ; attempt++) {
+      const digest = createHash("sha256")
+        .update(attempt === 0 ? text : `${attempt}\0${text}`)
+        .digest("hex");
+      const symbol = `${prefix}${parseInt(digest.slice(0, 13), 16)}`;
+      if (!this.contentSymbols.has(symbol)) {
+        this.contentSymbols.add(symbol);
+        return symbol;
+      }
+    }
+  }
+
   internLiteral(text: string): string {
     let lit = this.literals.get(text);
     if (!lit) {
-      lit = { sym: `sc_lit_${this.literals.size}`, len: Buffer.byteLength(text, "utf8") };
+      lit = {
+        sym: this.contentSymbol("sc_lit_", text),
+        len: Buffer.byteLength(text, "utf8"),
+      };
       this.literals.set(text, lit);
     }
     const name = `@${lit.sym}`;
@@ -3399,7 +3423,7 @@ export class LlEmitter {
   cstr(text: string): string {
     let c = this.cstrs.get(text);
     if (!c) {
-      c = { sym: `sc_cs_${this.cstrs.size}`, len: Buffer.byteLength(text, "utf8") };
+      c = { sym: this.contentSymbol("sc_cs_", text), len: Buffer.byteLength(text, "utf8") };
       this.cstrs.set(text, c);
     }
     return `@${c.sym}`;

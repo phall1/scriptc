@@ -43,6 +43,8 @@ export function emitNativeObject(options: {
   outputKind?: NativeCodegenOutputKind;
   /** Program partitions, written to nativePartitionPaths(outputPath). */
   partitions?: number;
+  /** Private directory where the helper reuses partition artifacts. */
+  partitionCache?: string;
 }): string[] {
   verifyNativeHelper(options);
   const outputs = nativePartitionPaths(options.outputPath, options.partitions ?? 1);
@@ -63,6 +65,9 @@ export function emitNativeObject(options: {
     "json",
     "--source-path",
     options.sourcePath,
+    ...(options.partitionCache === undefined || outputs.length < 2
+      ? []
+      : ["--cache-dir", options.partitionCache]),
   ]);
   for (const output of outputs) requireNativeArtifact(output);
   return outputs;
