@@ -1283,7 +1283,7 @@ export function anyInObjectType(
   if (
     lowerer.checker
       .getIndexInfosOfType(t)
-      .some((info) => anyInObjectType(lowerer, info.type, seen, depth + 1))
+      .some((info) => anyInObjectType(lowerer, info.valueType, seen, depth + 1))
   )
     return true;
   return lowerer.checker
