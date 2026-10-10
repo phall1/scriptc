@@ -8491,10 +8491,9 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
     if (symbol && symbol.name === "URLSearchParams" && lowerer.isStdlibSymbol(symbol)) {
       return lowerSearchParamsNew(lowerer, expr, loc);
     }
-    // Date's read-only value slice: store the constructor's TimeClip'd
-    // epoch milliseconds as the scalar date kind. That is sufficient
-    // for every getter and toISOString; identity and setters stay
-    // fenced, so copying the scalar cannot create an observable lie.
+    // TypeScript stores the TimeClip scalar. JavaScript stores a mutable
+    // native date, so a UTC setter updates that same handle. Copying the
+    // scalar still cannot pretend to be a shared object.
     if (symbol && symbol.name === "Date" && lowerer.isStdlibSymbol(symbol)) {
       const args = expr.arguments ?? [];
       if (args.some(ts.isSpreadElement) || args.length > 1) {

@@ -3354,6 +3354,16 @@ export const LIB_FN_SIGS = defineLibFnSignatures({
    * map to 1900+year, out-of-range months/dates roll over, non-finite
    * parts and out-of-range results answer NaN. Never throws. */
   "date.utc": { argTypes: [F64, F64, F64, F64, F64, F64, F64], result: F64 },
+  /** UTC setters return the new TimeClip scalar. `nopt` is the number of
+   * optional components after the required one. The frontend writes that
+   * scalar back onto the Date local. */
+  "date.setUTCFullYear": { argTypes: [DATE_T, F64, F64, F64, F64], result: DATE_T },
+  "date.setUTCMonth": { argTypes: [DATE_T, F64, F64, F64], result: DATE_T },
+  "date.setUTCDate": { argTypes: [DATE_T, F64], result: DATE_T },
+  "date.setUTCHours": { argTypes: [DATE_T, F64, F64, F64, F64, F64], result: DATE_T },
+  "date.setUTCMinutes": { argTypes: [DATE_T, F64, F64, F64, F64], result: DATE_T },
+  "date.setUTCSeconds": { argTypes: [DATE_T, F64, F64, F64], result: DATE_T },
+  "date.setUTCMilliseconds": { argTypes: [DATE_T, F64], result: DATE_T },
   /** WHATWG TextDecoder.decode over u8 bytes (scr_bytes.c): utf-8 with
    * default options — the same maximal-subpart replacement decode as
    * Buffer.toString("utf8"), with the leading BOM stripped (the one
