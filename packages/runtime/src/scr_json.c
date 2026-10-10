@@ -1521,9 +1521,25 @@ ScrDyn *scr_dyn_new_obj_null_proto(void) {
   return d;
 }
 
+/* The stored `console` value is a handle, and in JavaScript it is an
+ * ordinary object. Object.create(console) must accept it. Other handles
+ * stay refused. */
+static bool scr_dyn_creatable_prototype(const ScrDyn *prototype) {
+  switch (prototype->kind) {
+    case SCR_DYN_OBJ:
+    case SCR_DYN_ARR:
+    case SCR_DYN_NULL:
+      return true;
+    case SCR_DYN_HANDLE:
+      return prototype->v.handle.tag == SCR_DYNH_CONSOLE;
+    default:
+      return false;
+  }
+}
+
 ScrDyn *scr_dyn_obj_create(ScrDyn *prototype) {
   if (prototype != scr_builtin_object_prototype && scr_dyn_class_reflection_fence(prototype)) return NULL;
-  if (prototype->kind != SCR_DYN_OBJ && prototype->kind != SCR_DYN_ARR && prototype->kind != SCR_DYN_NULL) {
+  if (!scr_dyn_creatable_prototype(prototype)) {
     static const char message[] = "Object prototype may only be an Object or null";
     scr_throw_error_msg(SCR_ERR_TYPE, message, sizeof message - 1);
     return NULL;

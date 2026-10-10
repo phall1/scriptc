@@ -1125,6 +1125,22 @@ export function isWorkerHandleType(
 
 const NATIVE_CONSTRUCTOR_NAMES = new Set(["URL", "URLSearchParams", "RegExp", "RegExpConstructor"]);
 
+/** `readonly T[]` is `ReadonlyArray<T>` in the standard library. It is the
+ * same runtime array as `T[]`; the readonly modifier erases. A program
+ * interface that happens to be named ReadonlyArray is not this type. */
+function stdlibReadonlyArrayReference(
+  widened: ts.Type,
+  ctx: Pick<TypeMapperCtx, "checker" | "isStdlibFile">,
+): ts.TypeReference | null {
+  const symbol = widened.getSymbol();
+  if (symbol?.name !== "ReadonlyArray") return null;
+  const declaredInLib = ctx.checker.declarationsOf(symbol).some((decl) => {
+    return ts.isInterfaceDeclaration(decl) && ctx.isStdlibFile(decl.getSourceFile());
+  });
+  if (!declaredInLib) return null;
+  return widened as ts.TypeReference;
+}
+
 function nativeConstructorDeclaration(
   declaration: ts.Node,
   symbol: ts.Symbol,
@@ -1519,8 +1535,11 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
   // Date (scalar-backed but identity-bearing in JS) and the other opaque
   // handles stay unsupported as array elements; ordinary Date locals,
   // params, fixed record/tuple fields, and promise payloads are supported.
-  if (checker.isArrayType(widened)) {
-    const elemTs = checker.getTypeArguments(widened as ts.TypeReference)[0];
+  // `readonly T[]` is the same array; the modifier erases.
+  const readonlyArray = stdlibReadonlyArrayReference(widened, ctx);
+  if (checker.isArrayType(widened) || readonlyArray) {
+    const arrayType = (readonlyArray ?? widened) as ts.TypeReference;
+    const elemTs = checker.getTypeArguments(arrayType)[0];
     if (!elemTs) return null;
     let elem = mapType(elemTs, ctx);
     // `undefined[]` (sparse literals — `[,]` — and explicit annotations):
@@ -3301,6 +3320,7 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
     }
     const params: IrType[] = [];
     let typedRest = false;
+    let dynRest = false;
     for (const p of sig.getParameters()) {
       const decl = checker.valueDeclarationOf(p);
       const rest = decl !== undefined && ts.isParameter(decl) && decl.dotDotDotToken !== undefined;
@@ -3365,6 +3385,13 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
       }
       if (!pt) return null;
       if (rest) {
+        // `...args: readonly unknown[]` collapses with its element to dyn.
+        // That is the variadic dyn pack (a hidden ScrDyn array), not a
+        // typed trailing slot and not a missing array type.
+        if (pt.kind === "dyn") {
+          dynRest = true;
+          continue;
+        }
         if (pt.kind !== "array") return null;
         typedRest = true;
       }
@@ -3421,6 +3448,7 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
     )
       ret = withUndefinedArm(ret, ctx.unions) ?? ret;
     if (!ret) return null;
+    if (dynRest) return { kind: "func", params, ret, rest: true };
     return typedRest
       ? { kind: "func", params, ret, rest: true, restAbi: "typed" }
       : funcOf(params, ret);
@@ -5233,9 +5261,11 @@ export function describeComponentBlocker(widened: ts.Type, ctx: TypeMapperCtx): 
   }
 
   // Arrays: the element is the failure by construction (a mappable element
-  // makes the array map).
-  if (checker.isArrayType(widened)) {
-    const elemTs = checker.getTypeArguments(widened as ts.TypeReference)[0];
+  // makes the array map). Readonly arrays use that same element rule.
+  const readonlyArray = stdlibReadonlyArrayReference(widened, ctx);
+  if (checker.isArrayType(widened) || readonlyArray) {
+    const arrayType = (readonlyArray ?? widened) as ts.TypeReference;
+    const elemTs = checker.getTypeArguments(arrayType)[0];
     if (elemTs === undefined) return null;
     const elem = mapType(elemTs, ctx);
     if (!elem) {

@@ -571,15 +571,16 @@ export function undefinedArgFor(
  *   shape (exactly the forwarding idiom).
  *
  * Answers null when neither lane fits (typed .ts spreads keep
- * completeArgs' rest packing and its fences). JS sources only — the
- * same guard as the over-arity dynCall precedent. */
+ * completeArgs' rest packing and its fences). A TypeScript file reaches
+ * this lane only when the callee is already dyn (`errors.push(...args)`
+ * on `unknown[]`); a typed function keeps its static completion. */
 export function lowerSpreadArgsCall(
   lowerer: Lowerer,
   expr: ts.CallExpression,
   callee: IrExpr,
   loc: SrcLoc,
 ): IrExpr | null {
-  if (!isJsSourceFile(expr.getSourceFile())) return null;
+  if (!isJsSourceFile(expr.getSourceFile()) && callee.type.kind !== "dyn") return null;
   if (!expr.arguments.some((a) => ts.isSpreadElement(a))) return null;
   if (callee.type.kind !== "dyn" && callee.type.kind !== "func" && callee.type.kind !== "jsval")
     return null;

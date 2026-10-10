@@ -310,8 +310,10 @@ export function paramShape(lowerer: Lowerer, param: ts.ParameterDeclaration): Pa
       }
     }
     const type = lowerer.runtimeOptionalBindingType(param.name, lowerer.irTypeOf(param.name));
-    // Tuple-typed rest params don't map to an array; generic rest is the
-    // generic path's business. Anything non-array here is unmappable.
+    // `...args: readonly unknown[]` collapses to dyn. Pack surplus
+    // arguments into the variadic dyn array, the same ABI as a JavaScript
+    // rest with no element type. Tuple rest stays unmappable.
+    if (type.kind === "dyn") return { type: DYN, mode: "dynRest" };
     if (type.kind !== "array") lowerer.badType(param.name, lowerer.typeOf(param.name));
     return { type, mode: "rest" };
   }
