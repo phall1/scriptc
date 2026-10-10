@@ -96,7 +96,7 @@ import {
   lowerImportMetaResolveCall,
   lowerRequireResolveCall,
 } from "./builtins/module-resolution.js";
-import { lowerCryptoHashMethodCall } from "./builtins/crypto.js";
+import { lowerCryptoHashMethodCall, lowerGlobalCryptoCall } from "./builtins/crypto.js";
 import {
   lowerDirentMethodCall,
   lowerFileHandleMethodCall,
@@ -1435,6 +1435,9 @@ export function lowerCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr {
       // as named builtin imports — before anything below tries to lower
       // the namespace object itself as a receiver.
       lowerer.lowerNamespaceBuiltinCall(expr, expr.expression) ??
+      // Bare `crypto.randomUUID()` — the Web Crypto global, not a
+      // node:crypto namespace import. Before the member fence.
+      lowerGlobalCryptoCall(lowerer, expr, expr.expression) ??
       // The node:perf_hooks spoke: performance.now() and its
       // .bind(performance) function value over the runtime's
       // process-start-anchored monotonic clock.
