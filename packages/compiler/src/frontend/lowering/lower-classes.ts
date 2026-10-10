@@ -7541,44 +7541,48 @@ export function superCallStmt(
     type: { kind: "object", className: info.def.name },
     loc,
   };
-  if (info.callableBase)
+  if (info.callableBase) {
+    // The derived object does not embed the runtime base's layout, so the
+    // base is constructed on its own instance and its own properties are
+    // copied here. Calling the boxed class throws "without new".
+    const base: IrExpr = info.localClass
+      ? {
+          kind: "libCall",
+          fn: "dyn.getPrototype",
+          args: [
+            {
+              kind: "dynFrom",
+              value: {
+                kind: "fieldGet",
+                obj: thisRef,
+                className: info.def.name,
+                field: `%classEnvironment:${info.def.name}`,
+                type: { kind: "classval", className: info.def.name },
+                loc,
+              },
+              type: DYN,
+              loc,
+            },
+          ],
+          type: DYN,
+          loc,
+        }
+      : { kind: "varRef", localId: info.callableBase.constructorId, type: DYN, loc };
     return {
       kind: "exprStmt",
       expr: {
         kind: "libCall",
-        fn: "dyn.classSuper",
+        fn: "dyn.assign",
         args: [
-          info.localClass
-            ? {
-                kind: "libCall",
-                fn: "dyn.getPrototype",
-                args: [
-                  {
-                    kind: "dynFrom",
-                    value: {
-                      kind: "fieldGet",
-                      obj: thisRef,
-                      className: info.def.name,
-                      field: `%classEnvironment:${info.def.name}`,
-                      type: { kind: "classval", className: info.def.name },
-                      loc,
-                    },
-                    type: DYN,
-                    loc,
-                  },
-                ],
-                type: DYN,
-                loc,
-              }
-            : { kind: "varRef", localId: info.callableBase.constructorId, type: DYN, loc },
           lowerer.coerceToExpected(thisRef, DYN),
-          args[0]!,
+          checkedClassConstructionPacked(lowerer, base, args[0]!, loc),
         ],
-        type: VOID,
+        type: DYN,
         loc,
       },
       loc,
     };
+  }
   if (base.builtinError) {
     // super(message) into the runtime-provided Error constructor: stamps
     // name/message on the (already-allocated) object. Receiver + message
