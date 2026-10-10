@@ -10286,12 +10286,60 @@ bool scr_dyn_native_collection_is(const ScrDyn *value, int map, const char *type
   return !type || (storage->dyn_ops && strcmp(storage->dyn_ops->type, type) == 0);
 }
 
-ScrMap *scr_dyn_native_collection_check(const ScrDyn *value, int map, const char *type, const ScrDynPath *path) {
-  if (!scr_dyn_native_collection_is(value, map, type)) {
-    scr_dyn_check_fail(path, type ? type : map ? "Map" : "Set", value);
-    return NULL;
+/* map<dyn,dyn> stores dyn pointers and is boxed with no dyn_ops. A typed
+ * map<string,f64> reads string and f64 slots, so the same pointer cannot
+ * be shared. Wider maps copy only when every entry is a string and a
+ * number. A concrete map<string,string> keeps its type string and fails. */
+static bool scr_map_slots_widen_to_string_f64(const char *have) {
+  if (!have) return true;
+  return strcmp(have, "map<dyn,dyn>") == 0
+      || strcmp(have, "map<string,dyn>") == 0
+      || strcmp(have, "map<dyn,f64>") == 0;
+}
+
+static bool scr_dyn_string_number_entry(const ScrDyn *key, const ScrDyn *value) {
+  return key && key->kind == SCR_DYN_STR && value && value->kind == SCR_DYN_NUM;
+}
+
+static bool scr_wants_string_f64_map(int map, const char *type) {
+  return map && type && strcmp(type, "map<string,f64>") == 0;
+}
+
+static ScrMap *scr_map_copy_string_f64(const ScrMap *source) {
+  ScrMap *out = scr_map_new(SCR_MAP_KEY_STR, SCR_MAP_VAL_F64, NULL, NULL, NULL);
+  for (double i = 0; i < scr_map_iter_count(source); i++) {
+    if (!scr_map_iter_live(source, i)) continue;
+    ScrDyn *key = scr_map_dyn_key(source, i);
+    ScrDyn *value = scr_map_dyn_value(source, i);
+    if (!scr_dyn_string_number_entry(key, value)) {
+      scr_dyn_release(key);
+      scr_dyn_release(value);
+      scr_map_release(out);
+      return NULL;
+    }
+    scr_map_set_str_f64(out, key->v.str, value->v.num);
+    scr_dyn_release(key);
+    scr_dyn_release(value);
   }
-  return scr_map_retain(value->v.handle.ptr);
+  return out;
+}
+
+static ScrMap *scr_map_widen_string_f64(const ScrDyn *value, int map, const char *type) {
+  if (!scr_wants_string_f64_map(map, type) || !scr_dyn_native_map_is(value)) return NULL;
+  const ScrMap *storage = value->v.handle.ptr;
+  const char *have = storage->dyn_ops ? storage->dyn_ops->type : NULL;
+  if (!scr_map_slots_widen_to_string_f64(have)) return NULL;
+  return scr_map_copy_string_f64(storage);
+}
+
+ScrMap *scr_dyn_native_collection_check(const ScrDyn *value, int map, const char *type, const ScrDynPath *path) {
+  if (scr_dyn_native_collection_is(value, map, type)) {
+    return scr_map_retain(value->v.handle.ptr);
+  }
+  ScrMap *widened = scr_map_widen_string_f64(value, map, type);
+  if (widened) return widened;
+  scr_dyn_check_fail(path, type ? type : map ? "Map" : "Set", value);
+  return NULL;
 }
 
 ScrStr *scr_dyn_to_string_method(const ScrDyn *d, const ScrStr *enc, const ScrStr *what) {
