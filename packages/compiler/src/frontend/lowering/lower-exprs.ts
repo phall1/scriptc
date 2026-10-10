@@ -14388,12 +14388,33 @@ export function lowerUnionProperty(
       loc: locOf(expr),
     };
   }
+  // A generated class can store a key the compiled field list does not
+  // name. Read it from the instance when every arm is a class.
+  if (objectUnion(lowerer, def.arms) && lowerer.dynConvertible(value.type)) {
+    return {
+      kind: "dynKeyGet",
+      value: lowerer.coerceToExpected(value, DYN),
+      key,
+      ...(hasOptionalChainGuard(expr.expression) ? { optional: true as const } : {}),
+      type: DYN,
+      loc: locOf(expr),
+    };
+  }
   lowerer.unsupported(
     "SC1090",
     expr,
     `reading '${field}' on a union-typed value (every arm must be an object/record ` +
       `with a same-typed field '${field}'; ` +
       `${NARROW_FIRST})`,
+  );
+}
+
+/** Every present arm is a class object. */
+function objectUnion(lowerer: Lowerer, arms: readonly IrType[]): boolean {
+  const present = arms.filter((arm) => !isUnitType(arm));
+  if (present.length === 0) return false;
+  return present.every(
+    (arm) => arm.kind === "object" && lowerer.classes.get(arm.className)?.def.runtime !== true,
   );
 }
 

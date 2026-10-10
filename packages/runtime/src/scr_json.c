@@ -4798,6 +4798,12 @@ void scr_error_commit_dyn(ScrError *e, const ScrDyn *view) {
     if (entry->key_len == 4 && memcmp(entry->key, "name", 4) == 0) { name_entry = entry; break; }
   }
   ScrDyn *name = name_entry ? name_entry->value : NULL;
+  /* Schema constructors copy `name: undefined` onto the instance. The
+   * Error slot stores that as an omitted name, not a string failure. */
+  if (name && name->kind == SCR_DYN_UNDEF) {
+    name = NULL;
+    name_entry = NULL;
+  }
   if (name && name->kind != SCR_DYN_STR) {
     scr_dyn_check_fail(NULL, "string", name);
     return;
@@ -4808,6 +4814,9 @@ void scr_error_commit_dyn(ScrError *e, const ScrDyn *view) {
   e->name_present = name != NULL;
   e->name_enumerable = name_entry && name_entry->enumerable;
   ScrDyn *message = scr_dyn_obj_get(view, "message", 7);
+  /* Schema constructors copy `message: undefined` onto the instance.
+   * The Error slot stores that as an omitted message, not a string failure. */
+  if (message && message->kind == SCR_DYN_UNDEF) message = NULL;
   if (message && message->kind != SCR_DYN_STR) {
     scr_dyn_check_fail(NULL, "string", message);
     return;
@@ -6931,8 +6940,10 @@ static void scr_json_delete_member(ScrDyn *object, const ScrStr *key) {
 void scr_dyn_key_delete(ScrDyn *recv, const ScrStr *key, bool strict) {
   if (scr_dyn_class_reflection_fence(recv)) return;
   if (recv->kind == SCR_DYN_PROXY) { scr_dyn_proxy_delete(recv, key); return; }
-  if (recv->kind == SCR_DYN_TYPED_REF && recv->v.typed_ref.commit &&
-      !strncmp(recv->v.typed_ref.type_key, "record:", 7)) {
+  /* A committing typed ref, including a class instance, stores the key on
+   * its materialized view. Error constructors delete `cause` before writing
+   * the replacement; refusing that delete aborts the constructor. */
+  if (recv->kind == SCR_DYN_TYPED_REF && recv->v.typed_ref.commit) {
     ScrDyn *materialized = scr_dyn_typed_ref_materialize(recv);
     if (!scr_exc_pending()) scr_dyn_key_delete(materialized, key, strict);
     if (!scr_exc_pending()) scr_dyn_typed_ref_commit(recv);

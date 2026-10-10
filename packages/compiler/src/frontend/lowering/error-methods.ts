@@ -42,6 +42,28 @@ export function errorPropertyRead(
   };
 }
 
+/** Schema constructors copy `message: undefined` onto the instance.
+ * The Error slot is a string; an explicit undefined is an absent message,
+ * the same value the constructor stores when the field is omitted. */
+export function errorDynamicPropertyWrite(
+  lowerer: Lowerer,
+  receiver: IrExpr,
+  value: IrExpr,
+  property: "name" | "message",
+): IrStmt {
+  const loc = value.loc;
+  const absent: IrExpr = { kind: "strLit", value: "", type: STRING, loc };
+  return {
+    kind: "if",
+    cond: { kind: "dynTest", test: "undefined", value, type: BOOL, loc },
+    then: [errorPropertyWrite(lowerer, receiver, absent, property)],
+    else_: [
+      errorPropertyWrite(lowerer, receiver, lowerer.coerceToExpected(value, STRING), property),
+    ],
+    loc,
+  };
+}
+
 export function errorPropertyWrite(
   lowerer: Lowerer,
   receiver: IrExpr,
