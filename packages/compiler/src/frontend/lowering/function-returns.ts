@@ -28,6 +28,21 @@ function bodyMayFallThrough(body: readonly IrStmt[]): boolean {
   );
 }
 
+/** TextEncoder and TextDecoder are fixed codec records. An unannotated
+ * JavaScript return must keep that record: boxing it and copying it back
+ * at `.encode` or `.decode` drops the encoding slot. */
+export function stdlibTextCodecType(lowerer: Lowerer, type: ts.Type): boolean {
+  const symbol = type.getSymbol();
+  if (symbol?.name !== "TextDecoder" && symbol?.name !== "TextEncoder") return false;
+  return lowerer.checker
+    .declarationsOf(symbol)
+    .some(
+      (decl) =>
+        (ts.isInterfaceDeclaration(decl) || ts.isClassDeclaration(decl)) &&
+        lowerer.isStdlibFile(decl.getSourceFile()),
+    );
+}
+
 /** The BODY-facing return type of a (possibly async) function: an async
  * body's `return v` fulfills its promise with v, so the body returns the
  * promise's INNER type while call sites keep Promise<T>. The declared
@@ -166,7 +181,8 @@ export function declaredReturnType(
     isJsSourceFile(decl.getSourceFile()) &&
     !decl.type &&
     !hasExplicitJsDocReturn(decl) &&
-    mappedReturn?.kind === "record"
+    mappedReturn?.kind === "record" &&
+    !stdlibTextCodecType(lowerer, retTsType)
   )
     return DYN;
   if (
@@ -300,6 +316,7 @@ export function declaredReturnType(
     recordReturn !== null &&
     recordReturn !== undefined &&
     inferredRecordReturn &&
+    !stdlibTextCodecType(lowerer, retTsType) &&
     lowerer.dynConvertible(recordReturn) &&
     decl.parameters.every((p) => {
       const mt = lowerer.mapTypeOf(lowerer.typeOf(p));

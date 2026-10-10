@@ -3569,6 +3569,25 @@ export function lowerTernary(
   }
 }
 
+/** The parameter or variable that owns a binding element, walking out of
+ * nested patterns (`{ outer: { n = 0 } }`). */
+function patternBindingHost(
+  decl: ts.BindingElement,
+): ts.ParameterDeclaration | ts.VariableDeclaration | null {
+  let host: ts.Node | undefined = decl.parent;
+  while (
+    host !== undefined &&
+    (ts.isObjectBindingPattern(host) ||
+      ts.isArrayBindingPattern(host) ||
+      ts.isBindingElement(host))
+  ) {
+    host = host.parent;
+  }
+  return host !== undefined && (ts.isParameter(host) || ts.isVariableDeclaration(host))
+    ? host
+    : null;
+}
+
 /** Checker-driven union narrowing. tsc's control-flow analysis narrows a
  * union-typed reference at use sites (`if (r.kind === "ok") { ...r... }`
  * types `r` as the ok-arm inside the branch); the IR value is still the
@@ -3579,6 +3598,23 @@ export function lowerTernary(
  * the same union (unnarrowed use), to a SUB-union (partial narrowing —
  * unrepresentable without a re-tag), or to nothing (`never` in an
  * exhaustive default) leaves the expression union-typed. */
+
+/** A JavaScript pattern default is not a runtime type. `maxFieldSize =
+ * 1024 * 1024` types the name as a number, but a present property can be a
+ * bigint; the default applies only when the property is undefined. */
+function jsDefaultedPatternBinding(lowerer: Lowerer, symbol: ts.Symbol): boolean {
+  return lowerer.checker.declarationsOf(symbol).some((decl) => {
+    if (!ts.isBindingElement(decl) || decl.initializer === undefined) return false;
+    if (!isJsSourceFile(decl.getSourceFile())) return false;
+    const host = patternBindingHost(decl);
+    if (host === null || host.type !== undefined) return false;
+    if (!ts.isParameter(host)) return true;
+    return !/@(?:param|type)\b/.test(
+      host.getSourceFile().text.slice(host.parent?.pos ?? host.pos, host.getStart()),
+    );
+  });
+}
+
 export function maybeNarrow(lowerer: Lowerer, expr: IrExpr, node: ts.Node): IrExpr {
   if (
     (expr.type.kind === "union" || expr.type.kind === "dyn") &&
@@ -3703,6 +3739,10 @@ export function maybeNarrow(lowerer: Lowerer, expr: IrExpr, node: ts.Node): IrEx
           )
       )
         return expr;
+      // `{ maxFieldSize: maxFieldSizeInput = 1024 * 1024 }` types the name
+      // as a number. The stored value stayed dyn so a present bigint still
+      // reaches Number(); checking it here would throw first.
+      if (symbol && jsDefaultedPatternBinding(lowerer, symbol)) return expr;
       if (
         symbol &&
         lowerer.checker.declarationsOf(symbol).some((decl) => {

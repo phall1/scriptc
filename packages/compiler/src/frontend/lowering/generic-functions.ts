@@ -37,6 +37,7 @@ import {
   appendImplicitUndefinedReturn,
   hasExplicitJsDocReturn,
   promiseCarriesDyn,
+  stdlibTextCodecType,
 } from "./function-returns.js";
 import {
   bindingNeverReassigned,
@@ -1407,6 +1408,9 @@ function implicitDeclaredReturn(lowerer: Lowerer, info: GenericFnInfo): IrType |
       if (elem && (elem.flags & ts.TypeFlags.Any) !== 0) return null;
     }
     const mapped = lowerer.mapTypeOf(retTs);
+    // A TextDecoder/TextEncoder result is the codec record, not an
+    // evolving object. Pin it so `.decode` sees the encoding slot.
+    if (mapped?.kind === "record" && stdlibTextCodecType(lowerer, retTs)) return mapped;
     // Mixed inferred results can select a closure or a class instance.
     // Their callable ABI is settled by the lowered body, including native
     // classes whose reflected calls return checked values.
