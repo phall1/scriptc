@@ -6698,9 +6698,13 @@ export function lowerElementAccess(lowerer: Lowerer, expr: ts.ElementAccessExpre
         expr,
       );
     }
-    if (receiver?.type.kind === "func" && lowerer.dynConvertible(receiver.type)) {
+    if (
+      receiver &&
+      (receiver.type.kind === "func" || receiver.type.kind === "classval") &&
+      lowerer.dynConvertible(receiver.type)
+    ) {
       const loc = locOf(expr);
-      const fnName = jsFuncNameOf(expr.expression);
+      const fnName = receiver.type.kind === "func" ? jsFuncNameOf(expr.expression) : null;
       const boxed: IrExpr = {
         kind: "dynFrom",
         value: receiver,
@@ -7090,20 +7094,23 @@ export function lowerElementAccess(lowerer: Lowerer, expr: ts.ElementAccessExpre
           expr,
         );
       }
+      const classReceiver =
+        receiver?.type.kind === "classval" && lowerer.dynConvertible(receiver.type);
       if (
-        receiver?.type.kind === "func" &&
-        canBoxFuncIntoDyn(
-          receiver.type,
-          (id) => lowerer.shapes.get(id),
-          (id) => lowerer.unions.get(id),
-        )
+        classReceiver ||
+        (receiver?.type.kind === "func" &&
+          canBoxFuncIntoDyn(
+            receiver.type,
+            (id) => lowerer.shapes.get(id),
+            (id) => lowerer.unions.get(id),
+          ))
       ) {
         const key = lowerRecordPropertyKey(
           lowerer,
           lowerer.lowerExpr(expr.argumentExpression),
           expr.argumentExpression,
         );
-        if (key.type.kind === "string") {
+        if (key.type.kind === "string" && receiver) {
           const boxed: IrExpr = {
             kind: "dynFrom",
             value: receiver,
@@ -8051,6 +8058,20 @@ export function lowerNativeFunctionAssignment(
       lowerer.lowerExprExpecting(target.expression, DYN),
     );
   }
+  // A call-heritage constructor stores later statics on the class object,
+  // the same table Object.defineProperty writes. Declared statics keep
+  // their globals below.
+  if (
+    staticClass?.callableBase &&
+    ts.isPropertyAccessExpression(target) &&
+    !lowerer.findStaticOn(staticClass, target.name.text)
+  ) {
+    return lowerDynMemberAssignment(
+      lowerer,
+      expr,
+      lowerer.lowerExprExpecting(target.expression, DYN),
+    );
+  }
   // Other class statics and prototype tables have their own paths.
   // Probing them as ordinary functions could materialize unused methods.
   if (
@@ -8583,7 +8604,13 @@ export function lowerElementWrite(lowerer: Lowerer, expr: ts.BinaryExpression): 
   // type (static `any` — mapTypeOf answers null without --dynamic)
   // probes the receiver's own lowered world: a dyn value takes the same
   // write, anything else falls through to the fences.
-  if (receiverIr?.kind === "dyn" || receiverIr?.kind === "object" || receiverIr === null) {
+  if (
+    receiverIr?.kind === "dyn" ||
+    receiverIr?.kind === "object" ||
+    receiverIr?.kind === "classval" ||
+    receiverIr?.kind === "func" ||
+    receiverIr === null
+  ) {
     const obj =
       receiverIr !== null
         ? lowerer.lowerExpr(target.expression)
@@ -8592,7 +8619,9 @@ export function lowerElementWrite(lowerer: Lowerer, expr: ts.BinaryExpression): 
       obj !== null &&
       (obj.type.kind === "dyn" ||
         (obj.type.kind === "object" && obj.type.className === "%Error") ||
-        isDynTypedRefType(obj.type))
+        isDynTypedRefType(obj.type) ||
+        ((obj.type.kind === "classval" || obj.type.kind === "func") &&
+          lowerer.dynConvertible(obj.type)))
     ) {
       const loc = locOf(expr);
       const litKey = recordKeyLiteralText(target.argumentExpression);

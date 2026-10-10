@@ -47,6 +47,13 @@ static bool scr_dyn_class_reflection_fence(const ScrDyn *value) {
   return true;
 }
 
+/* A class constructor with no property table yet. Writes create that table.
+ * Reads keep the reflection fence so an empty view is never invented. */
+static bool scr_dyn_fresh_class_table(const ScrDyn *value) {
+  return value && value->kind == SCR_DYN_FUNC && value->v.fn.class_obj &&
+      !value->v.fn.class_obj->static_data && !scr_dyn_native_constructor_is(value);
+}
+
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -4144,7 +4151,7 @@ ScrDyn *scr_dyn_define_property(ScrDyn *target, ScrDyn *key, ScrDyn *descriptor)
   if (!scr_exc_pending()) scr_dyn_isl_fence(descriptor, "Object.defineProperty descriptor");
   if (scr_exc_pending()) return NULL;
   if (target->kind == SCR_DYN_FUNC) {
-    if (scr_dyn_class_reflection_fence(target)) return NULL;
+    if (!scr_dyn_fresh_class_table(target) && scr_dyn_class_reflection_fence(target)) return NULL;
     ScrStr *name = scr_dyn_property_key(key);
     if (!name) return NULL;
     if (scr_dyn_fn_property_fence(name)) { scr_str_release(name); return NULL; }
@@ -5739,7 +5746,7 @@ static void scr_dyn_object_key_set(ScrDyn *recv, ScrStr *key, ScrDyn *value, con
 }
 
 void scr_dyn_key_set(ScrDyn *recv, ScrStr *key, ScrDyn *value) {
-  if (scr_dyn_class_reflection_fence(recv)) return;
+  if (!scr_dyn_fresh_class_table(recv) && scr_dyn_class_reflection_fence(recv)) return;
   if (recv->kind == SCR_DYN_PROXY) { scr_dyn_proxy_set(recv, key, value); return; }
   if (recv->kind == SCR_DYN_TYPED_REF) {
     ScrDyn *materialized = scr_dyn_typed_ref_materialize(recv);
