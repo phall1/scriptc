@@ -1,6 +1,6 @@
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, expect, test } from "vitest";
 import {
   emitNativeArtifact,
@@ -402,22 +402,25 @@ test("partitioned objects are emitted, cached and restored together", async () =
   expect(all[1]).not.toContain("--cache-dir");
 });
 
-test("LLVM text parts are written as one file and existing inputs are read in place", async () => {
+test("LLVM text parts are written as one file and the helper reads a private copy", async () => {
   const pkg = await fakePackage();
   const parts = Array.from({ length: 5000 }, (_, index) => `; part ${index} \u00e9\n`);
   const written = join(pkg.root, "parts.ll");
   await writeLlvmSource(written, parts);
   expect(await readFile(written, "utf8")).toBe(parts.join(""));
 
-  const output = join(pkg.root, "in-place", "program.o");
+  // The caller's .ll can be shared by a concurrent build of another entry
+  // with the same stem, so the helper never reads it directly.
+  const output = join(pkg.root, "private", "program.o");
   await emitNativeArtifact({
     ...request(pkg.root, pkg.packageJson, output),
     llvm: parts,
-    inputPath: written,
     cacheRoot: null,
   });
   const call = (await readFile(pkg.log, "utf8")).trim().split(" ");
-  expect(call[call.indexOf("--input") + 1]).toBe(written);
+  const input = call[call.indexOf("--input") + 1]!;
+  expect(input).not.toBe(written);
+  expect(dirname(input)).toBe(dirname(output));
   expect(await readFile(output, "utf8")).toBe(parts.join(""));
-  expect(await readFile(written, "utf8")).toBe(parts.join(""));
+  await expect(stat(input)).rejects.toThrow();
 });

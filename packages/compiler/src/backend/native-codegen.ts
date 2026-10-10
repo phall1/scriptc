@@ -85,8 +85,6 @@ export interface NativeCodegenOptions {
   partitions?: number;
   /** Runtime bitcode whose small functions the helper imports for inlining. */
   importBitcode?: { paths: readonly string[]; digests: readonly string[] };
-  /** An existing file that holds exactly `llvm`; the helper reads it in place. */
-  inputPath?: string;
 }
 
 /** Writes LLVM text in large batches. Programs past the engine's string
@@ -414,10 +412,11 @@ export async function emitNativeArtifact(
   const stages = outputs.map((output) =>
     privateSiblingPath(output, `native-${options.outputKind}`),
   );
-  const ownsInput = options.inputPath === undefined;
-  const input = options.inputPath ?? privateSiblingPath(options.outputPath, "native-input");
+  // The helper reads a private copy: the caller's .ll may be shared with a
+  // concurrent build of another entry that has the same output stem.
+  const input = privateSiblingPath(options.outputPath, "native-input");
   try {
-    if (ownsInput) await writeLlvmSource(input, options.llvm, 0o600);
+    await writeLlvmSource(input, options.llvm, 0o600);
     await invoke(helper.binaryPath, [
       "emit",
       "--input",
@@ -466,7 +465,7 @@ export async function emitNativeArtifact(
   } finally {
     await Promise.all([
       ...stages.map((stage) => rm(stage, { force: true }).catch(() => undefined)),
-      ...(ownsInput ? [rm(input, { force: true }).catch(() => undefined)] : []),
+      rm(input, { force: true }).catch(() => undefined),
     ]);
   }
 }

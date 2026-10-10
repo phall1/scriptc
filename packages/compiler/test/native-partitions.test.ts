@@ -215,7 +215,8 @@ describe.runIf(helper !== null)("LLVM program partitions", () => {
     const cache = join(dir, "cache");
     const objects = await emit(dir, source, { outputs: 4, optLevel: "0", cache, name: "debug" });
     const bytes = await Promise.all(objects.map((path) => readFile(path)));
-    expect(bytes.filter((object) => object.includes(".debug_info")).length).toBeGreaterThan(1);
+    // ELF and COFF name the section .debug_info; Mach-O names it __debug_info.
+    expect(bytes.filter((object) => object.includes("debug_info")).length).toBeGreaterThan(1);
     expect(await exitCode(dir, objects, "debug")).toBe(expectedExit());
 
     // Partitions number their metadata locally, so a module whose node
