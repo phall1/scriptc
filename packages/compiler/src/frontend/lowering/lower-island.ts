@@ -5,6 +5,7 @@ import { InternalCompilerError } from "../../errors.js";
  * surface (Math and number/string methods under --dynamic), and the npm
  * package boundary fences for node_modules-declared symbols. */
 import * as ts from "../ts7/adapter.js";
+import { lowerOptionalNumber, runtimeOptionalStorageOperand } from "./lower-exprs.js";
 import type { Lowerer } from "./lowerer.js";
 import {
   arrayOf,
@@ -3412,6 +3413,16 @@ export function lowerIslandMethodCall(
     };
     return { kind: "libCall", fn: staticMath.fn, args: [packed], type: F64, loc };
   }
+  // A binding that can hold a missing element converts undefined to NaN,
+  // ToNumber's answer, instead of trusting the checker's number type.
+  const mathArg = (a: ts.Expression): IrExpr => {
+    let inner = a;
+    while (ts.isParenthesizedExpression(inner)) inner = inner.expression;
+    const stored = ts.isIdentifier(inner) ? runtimeOptionalStorageOperand(lowerer, inner) : null;
+    return stored && lowerer.stripUndefinedArm(stored.type).kind === "f64"
+      ? lowerOptionalNumber(lowerer, stored, loc, inner)
+      : lowerer.lowerExprExpecting(a, F64);
+  };
   if (staticMath && call.arguments.every((a) => !ts.isSpreadElement(a))) {
     // Math.max/Math.min at ANY plain arity — Node's are variadic. The
     // spec's reduction is a left fold of the same NaN-poisoning
@@ -3426,7 +3437,7 @@ export function lowerIslandMethodCall(
       if (call.arguments.length === 0) {
         return { kind: "numLit", value: name === "max" ? -Infinity : Infinity, type: F64, loc };
       }
-      const args = call.arguments.map((a) => lowerer.lowerExprExpecting(a, F64));
+      const args = call.arguments.map(mathArg);
       let acc = args[0]!;
       for (let i = 1; i < args.length; i++) {
         acc = { kind: "libCall", fn: staticMath.fn, args: [acc, args[i]!], type: F64, loc };
@@ -3434,7 +3445,7 @@ export function lowerIslandMethodCall(
       return acc;
     }
     if (call.arguments.length === staticMath.arity) {
-      const args = call.arguments.map((a) => lowerer.lowerExprExpecting(a, F64));
+      const args = call.arguments.map(mathArg);
       return { kind: "libCall", fn: staticMath.fn, args, type: F64, loc };
     }
   }

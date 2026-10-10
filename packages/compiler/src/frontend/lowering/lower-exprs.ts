@@ -6054,7 +6054,26 @@ export function lowerArrayLiteral(
     }
     lowerer.badType(expr, tsType);
   }
-  const type = mapped as IrType & { kind: "array" };
+  let type = mapped as IrType & { kind: "array" };
+  // An inferred array of records takes the layout of an element literal
+  // whose fields widened for missing-element reads; the other elements
+  // build that layout directly. An explicit destination keeps its own.
+  if (!expected && type.elem.kind === "record") {
+    let variant: IrType | null = null;
+    for (const candidate of expr.elements) {
+      let x: ts.Expression = candidate;
+      while (ts.isParenthesizedExpression(x)) x = x.expression;
+      if (!ts.isObjectLiteralExpression(x)) continue;
+      const probe = tryLowerExpression(lowerer, x);
+      if (!probe || !lowerer.isRuntimeOptionalRecordVariant(probe.type, type.elem)) continue;
+      if (variant !== null && !typeEquals(variant, probe.type)) {
+        variant = null;
+        break;
+      }
+      variant = probe.type;
+    }
+    if (variant !== null) type = arrayOf(variant) as IrType & { kind: "array" };
+  }
   // Keep the array payload type fixed. Optional reads are stored through
   // arrayValueStore, which records UNDEFINED in the state byte while the
   // payload remains number/string/etc.; widening the array element here

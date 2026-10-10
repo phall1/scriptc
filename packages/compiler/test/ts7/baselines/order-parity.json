@@ -15620,6 +15620,18 @@
     "<repo>/tests/corpus/4593-weak-keys-empty-objects.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/4568-for-of-hole-elements.ts": {
+   "order": [
+    "<repo>/tests/corpus/4568-for-of-hole-elements.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4569-shorthand-missing-elements.ts": {
+   "order": [
+    "<repo>/tests/corpus/4569-shorthand-missing-elements.ts"
+   ],
+   "diags": []
   }
  }
 }

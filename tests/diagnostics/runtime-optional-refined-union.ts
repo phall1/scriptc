@@ -32,3 +32,7 @@ function classNames(animals: (Animal | string)[]): void {
 
 recordWidths([{ rect: { width: 1 } }, "plain"]);
 classNames([new Dog("dog"), "plain"]);
+// A hole keeps the loop binding optional, so its refined read meets the fence.
+const pending: (Item | string)[] = ["plain"];
+pending[2] = { rect: { width: 2 } };
+recordWidths(pending);

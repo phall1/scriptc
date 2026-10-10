@@ -28,9 +28,10 @@ export interface ElementStateHost {
   /** Element keys of the rest parameter that the spread arguments of
    * `call` fill: `[]` when the callee has none, null when it is unknown. */
   restKeys(call: ts.CallExpression | ts.NewExpression): readonly string[] | null;
-  /** Record that iterating `node`'s binding can observe `undefined`.
-   * Returns true when the binding was not already recorded. */
-  markIterationBinding(node: ts.Identifier): boolean;
+  /** Record that iterating `node`'s binding can observe `undefined`;
+   * `known` when the iterated array's own facts (not only those shared by
+   * its element ABI) say so. Returns true when the binding's record grew. */
+  markIterationBinding(node: ts.Identifier, known: boolean): boolean;
   /** The storage slot that alone owns the array `node` references, whose
    * facts are tracked for that slot instead of its element ABI. */
   ownerOf(node: ts.Expression): ts.Symbol | null;
@@ -78,6 +79,8 @@ export class ArrayElementStates {
 
   /** The node being scanned, for provenance notes. */
   private site: ts.Node | undefined;
+  /** While set, arrays judged only by their element ABI count as present. */
+  private ownFactsOnly = false;
 
   constructor(private readonly host: ElementStateHost) {}
 
@@ -313,6 +316,7 @@ export class ArrayElementStates {
 
   /** The facts recorded for arrays with these element ABIs. */
   private stored(keys: readonly string[] | null): Contents | null {
+    if (this.ownFactsOnly) return NOTHING;
     if (keys === null) return null;
     return {
       undefined:
@@ -560,7 +564,30 @@ export class ArrayElementStates {
     return changed;
   }
 
-  private scanForOf(node: ts.ForOfStatement): boolean {
+  /** A for-of loop over `node`'s iterable can bind `undefined`: a hole
+   * or a stored undefined in the array it walks. When it cannot, every
+   * element the loop reads is a present value. */
+  loopMayYieldUndefined(node: ts.ForOfStatement): boolean {
+    return this.mayYieldUndefined(this.loopSource(node));
+  }
+
+  /** The loop's array itself, as built or as owned by one slot, can hold
+   * a hole or undefined. Facts shared by every array with the same element
+   * ABI are coarser: a loop judged only by them keeps checked reads. */
+  private loopHolesKnown(node: ts.ForOfStatement): boolean {
+    const source = this.loopSource(node);
+    const keys = this.host.arrayKeys(source);
+    if (keys !== null && keys.length === 0) return false;
+    this.ownFactsOnly = true;
+    try {
+      const contents = this.contents(source);
+      return contents !== null && (contents.undefined || contents.holes);
+    } finally {
+      this.ownFactsOnly = false;
+    }
+  }
+
+  private loopSource(node: ts.ForOfStatement): ts.Expression {
     let source = peel(node.expression);
     if (
       ts.isCallExpression(source) &&
@@ -571,12 +598,17 @@ export class ArrayElementStates {
       const receiver = this.host.arrayKeys(source.expression.expression);
       if (receiver === null || receiver.length > 0) source = source.expression.expression;
     }
-    if (!this.mayYieldUndefined(source)) return false;
+    return source;
+  }
+
+  private scanForOf(node: ts.ForOfStatement): boolean {
+    if (!this.loopMayYieldUndefined(node)) return false;
+    const known = this.loopHolesKnown(node);
     const initializer = node.initializer;
     let changed = false;
     const mark = (name: ts.Node): void => {
       if (ts.isIdentifier(name)) {
-        if (this.host.markIterationBinding(name)) changed = true;
+        if (this.host.markIterationBinding(name, known)) changed = true;
         return;
       }
       name.forEachChild(mark);

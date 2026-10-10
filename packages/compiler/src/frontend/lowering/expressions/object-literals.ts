@@ -29,6 +29,7 @@ import { isSafeToRepeat } from "./evaluation-safety.js";
 import { tryLowerExpression } from "./try-lower-expression.js";
 import { fenceSymbolFieldCopy } from "../symbol-fields.js";
 import { planUnionRetag } from "../union-retag.js";
+import { runtimeOptionalStorageOperand } from "../lower-exprs.js";
 
 /** `{ a: 1, b: "x" }` → recordLit. The record type comes from the
  * contextual type when tsc has one (annotated declarations, arguments,
@@ -2228,6 +2229,18 @@ export function lowerObjectLiteral(
           fenceClosureProbe(lowerer, prop.initializer, fieldType, () =>
             lowerer.lowerExpr(prop.initializer),
           ) ??
+          // A nested literal keeps fields it widened for missing-element
+          // reads; the field promotion below adopts that layout.
+          (fieldType?.kind === "record" &&
+          ts.isObjectLiteralExpression(init) &&
+          init.properties.length > 0
+            ? (() => {
+                const nested = lowerer.lowerObjectLiteral(init, fieldType);
+                return lowerer.isRuntimeOptionalRecordVariant(nested.type, fieldType)
+                  ? nested
+                  : lowerer.coerceInto(init, nested, fieldType);
+              })()
+            : null) ??
           (fieldType !== undefined &&
           (ts.isArrayLiteralExpression(init) ||
             ts.isObjectLiteralExpression(init) ||
@@ -2282,7 +2295,12 @@ export function lowerObjectLiteral(
       fields.push({ name, value: slotted, overflow: true });
       continue;
     }
-    const promotedField = fieldType ? lowerer.runtimeOptionalWidening(value.type, fieldType) : null;
+    // A nested literal whose own fields widened for missing-element reads
+    // keeps that layout in its parent field too.
+    const promotedField = fieldType
+      ? (lowerer.runtimeOptionalWidening(value.type, fieldType) ??
+        (lowerer.isRuntimeOptionalRecordVariant(value.type, fieldType) ? value.type : null))
+      : null;
     if (promotedField && fieldType) {
       type = lowerer.runtimeOptionalRecordField(type, name, promotedField);
       if (type.kind === "record") shape = lowerer.shapes.get(type.shapeId)!;
@@ -2993,6 +3011,12 @@ export function lowerShorthandValue(
     if (lowerer.ctx.selfSymbol === symbol) {
       return { kind: "selfRef", type: lowerer.ctx.selfType!, loc };
     }
+    // A binding whose storage can hold undefined that the checker's type
+    // here has dropped (a missing-element read) keeps its stored union,
+    // exactly like the long form `{ name: name }`: the field records
+    // absence instead of an unchecked extraction of the present arm.
+    const stored = runtimeOptionalStorageOperand(lowerer, propName);
+    if (stored) return stored;
     const local = lowerer.resolveKey(symbol, propName);
     if (local) {
       return lowerer.maybeNarrow(
