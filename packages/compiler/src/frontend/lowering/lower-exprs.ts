@@ -361,6 +361,110 @@ function isStatFsDynProperty(lowerer: Lowerer, expr: ts.PropertyAccessExpression
   );
 }
 
+/** A class expression is named by a value's type before its statement
+ * lowers (`Schema.isGreaterThan` mentions `Filter = class extends
+ * Pipeable.Class` while a subclass heritage is still being collected).
+ * Collect it so the read is a real value. A class whose collection
+ * already fenced stays unregistered. */
+function collectUnregisteredClassExprs(lowerer: Lowerer, type: IrType): void {
+  const seen = new Set<string>();
+  walkUnregisteredClassExprs(lowerer, type, seen);
+}
+
+function walkUnregisteredClassExprs(lowerer: Lowerer, type: IrType, seen: Set<string>): void {
+  switch (type.kind) {
+    case "object":
+      collectClassExprNamed(lowerer, type.className, seen);
+      return;
+    case "array":
+    case "set":
+      walkUnregisteredClassExprs(lowerer, type.elem, seen);
+      return;
+    case "map":
+      walkUnregisteredClassExprs(lowerer, type.key, seen);
+      walkUnregisteredClassExprs(lowerer, type.value, seen);
+      return;
+    case "promise":
+      walkUnregisteredClassExprs(lowerer, type.inner, seen);
+      return;
+    case "func":
+      for (const param of type.params) walkUnregisteredClassExprs(lowerer, param, seen);
+      walkUnregisteredClassExprs(lowerer, type.ret, seen);
+      return;
+    case "record":
+      walkRecordClassExprs(lowerer, type, seen);
+      return;
+    case "union":
+      walkUnionClassExprs(lowerer, type, seen);
+      return;
+    default:
+      return;
+  }
+}
+
+function walkRecordClassExprs(
+  lowerer: Lowerer,
+  type: IrType & { kind: "record" },
+  seen: Set<string>,
+): void {
+  if (seen.has(type.shapeId)) return;
+  seen.add(type.shapeId);
+  const shape = lowerer.shapes.get(type.shapeId);
+  if (!shape) return;
+  if (shape.indexValue) walkUnregisteredClassExprs(lowerer, shape.indexValue, seen);
+  for (const field of shape.fields) walkUnregisteredClassExprs(lowerer, field.type, seen);
+}
+
+function walkUnionClassExprs(
+  lowerer: Lowerer,
+  type: IrType & { kind: "union" },
+  seen: Set<string>,
+): void {
+  if (seen.has(type.unionId)) return;
+  seen.add(type.unionId);
+  const def = lowerer.unions.get(type.unionId);
+  if (!def) return;
+  for (const arm of def.arms) walkUnregisteredClassExprs(lowerer, arm, seen);
+}
+
+function collectClassExprNamed(lowerer: Lowerer, className: string, seen: Set<string>): void {
+  if (lowerer.classes.has(className) || seen.has(className)) return;
+  seen.add(className);
+  const expr = classExpressionNamed(lowerer, className);
+  if (!expr || lowerer.collectingExprClasses.has(expr)) return;
+  try {
+    lowerer.lowerClassExpressionInfo(expr);
+  } catch (error) {
+    if (!(error instanceof PoisonError)) throw error;
+  }
+}
+
+function classExpressionNamed(lowerer: Lowerer, className: string): ts.ClassExpression | null {
+  const match = /^(.*)%cx(\d+)\./.exec(className);
+  if (!match || match[1] === undefined || match[2] === undefined) return null;
+  const tag = match[1];
+  const start = Number(match[2]);
+  for (const [sf, fileTag] of lowerer.fileTag) {
+    if (fileTag !== tag) continue;
+    return classExpressionAt(sf, start);
+  }
+  return null;
+}
+
+function classExpressionAt(sf: ts.SourceFile, start: number): ts.ClassExpression | null {
+  const visit = (node: ts.Node): ts.ClassExpression | null => {
+    if (node.end < start || node.getStart() > start) return null;
+    if (ts.isClassExpression(node) && node.getStart() === start) return node;
+    let found: ts.ClassExpression | null = null;
+    node.forEachChild((child) => {
+      if (found) return;
+      found = visit(child);
+    });
+    return found;
+  };
+  return visit(sf);
+}
+
 export function lowerExpr(lowerer: Lowerer, expr: ts.Expression): IrExpr {
   if (lowerExprDepth >= LOWER_EXPR_MAX_DEPTH) {
     lowerer.unsupported(
@@ -1300,6 +1404,11 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
       // that does not exist. The blocked-binding cascade names the use;
       // without this the validator's registration check ICEs on the live
       // reference (`@this {T}` inference — signature 07).
+      if (lowerer.typeNamesUnregisteredClass(g.type)) {
+        // Named before its statement lowers. Collecting a fenced class
+        // leaves it unregistered, and the cascade below still reports.
+        collectUnregisteredClassExprs(lowerer, g.type);
+      }
       const unregistered = lowerer.unregisteredClassOf(g.type, new Set());
       if (unregistered !== null) {
         // The class's own rejection is the root cause the cascade names.
