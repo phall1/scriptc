@@ -129,10 +129,31 @@ export function lowerStringElement(
   );
 }
 
+/** Arms that box into a dyn property key. Numbers stringify; symbols stay
+ * symbols. A plain string key does not take this path. */
+function isBoxedStringIndexArm(arm: IrType): boolean {
+  return arm.kind === "string" || arm.kind === "f64" || arm.kind === "symbol" || arm.kind === "dyn";
+}
+
+/** `string | symbol` (and the other PropertyKey unions) on a string receiver.
+ * The keyed read applies ToPropertyKey, so "length" stays a number and a
+ * symbol does not become the string "Symbol(...)". */
+function boxedStringIndexKey(lowerer: Lowerer, index: IrExpr): IrExpr | null {
+  if (index.type.kind === "dyn") return index;
+  if (index.type.kind === "symbol") {
+    return { kind: "dynFrom", value: index, type: DYN, loc: index.loc };
+  }
+  if (index.type.kind !== "union") return null;
+  const arms = lowerer.unions.get(index.type.unionId)?.arms;
+  if (!arms?.every(isBoxedStringIndexArm)) return null;
+  return { kind: "dynFrom", value: index, type: DYN, loc: index.loc };
+}
+
 /** JavaScript element access whose checker type did not map (implicit any
  * inside a monomorphized JS function). A numeric index is a UTF-16 read
- * that is undefined when missing. A string key is ordinary property lookup
- * on the boxed string, so brand keys are undefined and "length" is kept. */
+ * that is undefined when missing. Any other property key is ordinary
+ * property lookup on the boxed string, so brand keys are undefined and
+ * "length" is kept. */
 export function lowerUnmappedStringIndex(
   lowerer: Lowerer,
   receiver: IrExpr,
@@ -152,11 +173,12 @@ export function lowerUnmappedStringIndex(
       DYN,
     );
   }
-  if (index.type.kind !== "string") return null;
+  const key = index.type.kind === "string" ? index : boxedStringIndexKey(lowerer, index);
+  if (!key) return null;
   return {
     kind: "dynKeyGet",
     value: lowerer.coerceToExpected(receiver, DYN),
-    key: index,
+    key,
     type: DYN,
     loc,
   };
