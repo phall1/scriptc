@@ -887,6 +887,10 @@ export function lowerSetSeedNew(
       const selected = lowerSetSeedNew(lowerer, fallback, setT);
       return selected ? defaultAfterUndefined(source, selected) : null;
     }
+    if (source.type.kind === "dyn" && setT.elem.kind === "dyn") {
+      const selected = lowerSetSeedNew(lowerer, fallback, setT);
+      return selected ? setFromNullishDyn(lowerer, source, selected, setT) : null;
+    }
     return setFromSeedValue(lowerer, source, setT, () => lowerSetSeedNew(lowerer, fallback, setT));
   }
   if (ts.isConditionalExpression(node)) {
@@ -971,6 +975,39 @@ export function lowerSetSeedNew(
     }
   }
   return setFromSeedValue(lowerer, source, setT, () => ({ kind: "setNew", type: setT, loc }));
+}
+
+/** `values ?? fallback` when `values` is checked-dynamic. Null and undefined
+ * take the fallback Set; any other value is the iterable `new Set` walks. */
+function setFromNullishDyn(
+  lowerer: Lowerer,
+  source: IrExpr,
+  fallback: IrExpr,
+  setT: IrType & { kind: "set" },
+): IrExpr {
+  const loc = source.loc;
+  const slot = lowerer.declareHiddenLocal("%setSeed", DYN);
+  const value = varRef(slot.id, DYN, loc);
+  const fromDyn: IrExpr = {
+    kind: "dynCheck",
+    value: { kind: "libCall", fn: "dyn.nativeSetNew", args: [value], type: DYN, loc },
+    type: setT,
+    loc,
+  };
+  return {
+    kind: "seqExpr",
+    stmts: [{ kind: "varDecl", localId: slot.id, init: source, loc }],
+    result: {
+      kind: "ternary",
+      cond: { kind: "dynTest", test: "nullish", value, type: BOOL, loc },
+      then: fallback,
+      else_: fromDyn,
+      type: setT,
+      loc,
+    },
+    type: setT,
+    loc,
+  };
 }
 
 /** A missing npm-static option reads as dyn `undefined`, not the unit type. */
