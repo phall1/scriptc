@@ -20,7 +20,7 @@ import type { IrExpr, IrLocal, IrRecordShape, IrStmt, IrType, SrcLoc } from "../
 import { isCjsExportTableLiteral, isJsSourceFile, locOf } from "../../program.js";
 import { NARROW_FIRST } from "../surfaces.js";
 import { recordShapeMismatchDiag } from "../../../diagnostics/diagnostic.js";
-import { PoisonError, neverTaintedJsType } from "../lowerer.js";
+import { PoisonError, anyInObjectType, neverTaintedJsType } from "../lowerer.js";
 import type { Lowerer } from "../lowerer.js";
 import { lowerIndexMergeHelper } from "../containers/indexed-objects.js";
 import type { IndexMergeContributor } from "../containers/indexed-objects.js";
@@ -1151,12 +1151,14 @@ export function lowerObjectLiteral(
   // consumers ride the keyed-dyn paths. TypeScript keeps the fence for
   // authored `any`. An unresolved annotation is the error type, which
   // prints as `any` (`Sharding.Sharding["Service"]` once the package
-  // `.d.ts` is hidden). Its own type collapses with it, so the literal
-  // still builds as a checked-dynamic object.
+  // `.d.ts` is hidden). An object type that merely contains `any`
+  // (a span whose fields did not resolve) is the same kind of residue.
+  // Those literals still build as checked-dynamic objects.
   if (
     mapped?.kind === "dyn" ||
     (!mapped && isJsSourceFile(expr.getSourceFile())) ||
     (!mapped && !expected && tsType.isErrorType()) ||
+    (!mapped && !expected && anyInObjectType(lowerer, tsType)) ||
     (!expected &&
       mapped &&
       jsOpenObjectType(expr, mapped, lowerer.shapes, lowerer.unions).kind === "dyn")
