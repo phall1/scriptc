@@ -1551,6 +1551,24 @@ function storedImplicitArgumentType(lowerer: Lowerer, arg: ts.Expression): IrTyp
     return DYN;
   if (ts.isIdentifier(arg))
     return lowerer.peekLocal(arg)?.type ?? lowerer.globalOf(arg)?.type ?? null;
+  // `[workflow]` is inferred as `(() => void)[]` after Workflow.make assigns
+  // execute/resume onto the function. The element is already checked-dynamic.
+  // Specializing the array to the empty function drops those properties.
+  if (ts.isArrayLiteralExpression(arg)) {
+    const mapped = lowerer.mapTypeOf(lowerer.typeOf(arg));
+    const elem = mapped?.kind === "array" ? mapped.elem : null;
+    if (
+      elem?.kind === "func" &&
+      elem.rest !== true &&
+      elem.params.length === 0 &&
+      elem.ret.kind === "void"
+    ) {
+      for (const element of arg.elements) {
+        if (ts.isSpreadElement(element)) continue;
+        if (storedImplicitArgumentType(lowerer, element)?.kind === "dyn") return DYN;
+      }
+    }
+  }
   if (
     isJsSourceFile(arg.getSourceFile()) &&
     (ts.isPropertyAccessExpression(arg) || ts.isElementAccessExpression(arg))
