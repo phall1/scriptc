@@ -21,7 +21,9 @@
  *   a later write's value);
  * - writes to the READ-ONLY function members (`length`, `name`,
  *   `caller`, `arguments`) fence: strict-mode JS (every module) throws
- *   TypeError there, and a global slot would silently succeed. WRITABLE
+ *   TypeError there, and a global slot would silently succeed. An
+ *   ordinary function's `prototype` is writable; the assignment stores
+ *   the object and a later member write sees it. WRITABLE
  *   Function.prototype members (`apply`, `call`, `bind`, `toString`)
  *   shadow through an own property in JS and lower like any other member
  *   — reads route to the registry, so the shadowed value is what reads
@@ -32,7 +34,7 @@
  *   precedent); runtime-valued keys keep their fences. */
 import * as ts from "../ts7/adapter.js";
 import type { Lowerer } from "./lowerer.js";
-import { type IrExpr, type IrGlobal, type IrStmt, type IrType } from "../../ir/ir.js";
+import { DYN, type IrExpr, type IrGlobal, type IrStmt, type IrType } from "../../ir/ir.js";
 import { isJsSourceFile, locOf } from "../program.js";
 import { isUnitOnlyTsType, unitOnlyUnion } from "../type-mapper.js";
 
@@ -65,8 +67,10 @@ function memberOf(
 /** Function members JS refuses to assign in strict mode (every module is
  * strict): non-writable own properties of functions plus the poisoned
  * caller/arguments pair. A global slot would silently succeed where Node
- * throws TypeError, so writes fence by name. */
-const READONLY_FN_MEMBERS = new Set(["length", "name", "caller", "arguments", "prototype"]);
+ * throws TypeError, so writes fence by name. `prototype` is writable on
+ * an ordinary function (an arrow assignment creates an own property) and
+ * is not in this set. Class constructors are not expando targets. */
+const READONLY_FN_MEMBERS = new Set(["length", "name", "caller", "arguments"]);
 
 /** The member key of an assignment target / read site: a spelled or
  * folded string name, a unique-symbol const's ts.Symbol, or null (not a
@@ -156,6 +160,27 @@ function expandoWriteOf(
   return { fnSym, key, access: left };
 }
 
+/** `Function.prototype` is declared `any`, which has no IR type. The
+ * property is writable; dyn storage is the assigned object. */
+function anyWritablePrototype(key: string | ts.Symbol, tsType: ts.Type): boolean {
+  return key === "prototype" && (tsType.flags & ts.TypeFlags.Any) !== 0;
+}
+
+/** The slot type for one expando member, or null when the write should
+ * stay fenced. A void-only declared type becomes the unit union. An
+ * `any` prototype becomes dyn so the following member write observes it. */
+function expandoSlotType(
+  lowerer: Lowerer,
+  key: string | ts.Symbol,
+  tsType: ts.Type,
+  mapped: IrType | null,
+): IrType | null {
+  if (mapped?.kind === "void" && isUnitOnlyTsType(tsType)) return unitOnlyUnion(lowerer.unions);
+  if (mapped && mapped.kind !== "void") return mapped;
+  if (anyWritablePrototype(key, tsType)) return DYN;
+  return null;
+}
+
 /** Collection: walk one file for expando member assignments and register
  * a module global per (function symbol × member key). Runs with
  * collectGlobals — before any statement lowers — so reads inside earlier
@@ -197,8 +222,9 @@ export function collectExpandoMembers(lowerer: Lowerer, sf: ts.SourceFile): void
           lowerer.diags.splice(diagsBefore); // PoisonError — the statement re-diagnoses
           type = null;
         }
-        if (type?.kind === "void" && isUnitOnlyTsType(tsType)) type = unitOnlyUnion(lowerer.unions);
-        if (type && type.kind !== "void") {
+        const slot = expandoSlotType(lowerer, w.key, tsType, type);
+        if (slot) {
+          type = slot;
           const fnName = w.fnSym.name;
           const memberName =
             typeof w.key === "string"
