@@ -5869,6 +5869,32 @@ function jsExpandedRecordArray(
  * tsc's API doesn't surface it (ternary arms under an array context —
  * tsc accepts the arm covariantly, but a tagged element representation
  * must be BUILT as the slot's element type). */
+/** A fresh array literal flowing into a fixed tuple builds that tuple's
+ * fields directly. The literal's own inference can widen an unannotated
+ * callback parameter to unknown, and a later whole-tuple check then
+ * rejects a number slot the destination already named. Spreads keep the
+ * ordinary path: their positions are not this literal's elements. */
+export function lowerTupleDestination(
+  lowerer: Lowerer,
+  node: ts.Expression,
+  expected: IrType & { kind: "record" },
+): IrExpr | null {
+  const shape = lowerer.shapes.get(expected.shapeId);
+  if (shape?.tuple !== true) return null;
+  const expr = bareArrayLiteral(node);
+  if (expr === null) return null;
+  if (expr.elements.length !== shape.fields.length) return null;
+  return lowerer.coerceInto(node, lowerArrayLiteral(lowerer, expr, expected), expected);
+}
+
+function bareArrayLiteral(node: ts.Expression): ts.ArrayLiteralExpression | null {
+  let expr = node;
+  while (ts.isParenthesizedExpression(expr)) expr = expr.expression;
+  if (!ts.isArrayLiteralExpression(expr)) return null;
+  if (expr.elements.some(ts.isSpreadElement)) return null;
+  return expr;
+}
+
 export function lowerArrayLiteral(
   lowerer: Lowerer,
   expr: ts.ArrayLiteralExpression,

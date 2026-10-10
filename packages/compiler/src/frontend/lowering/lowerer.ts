@@ -527,6 +527,7 @@ import {
   eqComparableUnion,
   lowerIntrinsicProperty,
   lowerArrayLiteral,
+  lowerTupleDestination,
   lowerElementAccess,
   lowerElementWrite,
   lowerRecordKeyRead,
@@ -8600,6 +8601,8 @@ export class Lowerer {
       }
     }
     if (expected?.kind === "record") {
+      const tuple = lowerTupleDestination(this, node, expected);
+      if (tuple) return tuple;
       let x = node;
       while (ts.isParenthesizedExpression(x)) x = x.expression;
       if (ts.isObjectLiteralExpression(x)) {
