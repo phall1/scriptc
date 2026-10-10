@@ -40,6 +40,19 @@ export class NativeCache {
     }
   }
 
+  /** Directory where the LLVM helper reuses partition artifacts for one
+   * helper build. The helper names and verifies the entries itself. */
+  partitionDirectory(helperIdentity: string): string | null {
+    const directory = join(this.root, "partitions", contentDigest(helperIdentity).slice(0, 32));
+    try {
+      mkdirSync(directory, { recursive: true, mode: 0o700 });
+      return directory;
+    } catch {
+      /* An unavailable cache only prevents reuse. */
+      return null;
+    }
+  }
+
   write(family: string, key: string, bytes: string | Uint8Array): void {
     let stage: string | null = null;
     try {
@@ -94,6 +107,29 @@ export class NativeCache {
           if (!info.isFile()) continue;
           files.push({ path, size: info.size, time: info.mtimeMs });
           total += info.size;
+        }
+      }
+      // Helper partition entries: partitions/<helper>/<xx>/<key>.<kind>.
+      const partitions = join(this.root, "partitions");
+      const list = (directory: string) => {
+        try {
+          return readdirSync(directory, { withFileTypes: true });
+        } catch {
+          return [];
+        }
+      };
+      for (const helper of list(partitions)) {
+        if (!helper.isDirectory()) continue;
+        for (const bucket of list(join(partitions, helper.name))) {
+          if (!bucket.isDirectory()) continue;
+          const directory = join(partitions, helper.name, bucket.name);
+          for (const entry of list(directory)) {
+            if (!entry.isFile() || !/^[0-9a-f]{64}\.(?:o|bc)$/.test(entry.name)) continue;
+            const path = join(directory, entry.name);
+            const info = statSync(path);
+            files.push({ path, size: info.size, time: info.mtimeMs });
+            total += info.size;
+          }
         }
       }
       if (total <= limit) return;

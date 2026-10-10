@@ -56,7 +56,7 @@ import { archiveNativeLibrary, localizeNativeLibrary, linkNativeWasmLibrary } fr
 import type { NativeToolchain } from "./toolchain.js";
 import { evaluateNativeComptime } from "./comptime.js";
 import { contentDigest, type NativeCache } from "./cache.js";
-import { splitLlvmProgram, splitLlvmLibraryProgram } from "../backend/llvm/split.js";
+import { splitLlvmLibraryProgram } from "../backend/llvm/split.js";
 import { prepareNativeExecutable, prepareNativeLibrary } from "./prepare.js";
 import { buildSanitizedRuntime, sanitizerDriver, sanitizerFlags } from "./sanitizer.js";
 import { openNativeExecutableCache } from "./executable-cache.js";
@@ -189,6 +189,10 @@ export class NativeCompiler {
         key = null;
       }
     }
+    const partitionCache =
+      this.cache === null || identity === null || partitions < 2
+        ? null
+        : this.cache.partitionDirectory(identity);
     emitNativeObject({
       executable: toolchain.helperExecutable,
       packageRoot: toolchain.helperPackageRoot,
@@ -201,6 +205,7 @@ export class NativeCompiler {
       optimization,
       outputKind,
       partitions,
+      ...(partitionCache === null ? {} : { partitionCache }),
     });
     if (this.cache !== null && key !== null) {
       try {
@@ -223,16 +228,17 @@ export class NativeCompiler {
     stage: string,
     library: boolean,
   ): string[] {
+    // Library archives merge dev shards relocatably; executables link the
+    // helper's program partitions directly.
     const llvm =
-      optimization === "dev" && this.toolchain.target.platform !== "wasi"
+      library && optimization === "dev" && this.toolchain.target.platform !== "wasi"
         ? readFileSync(input, "utf8")
         : null;
-    const split =
-      llvm === null ? null : library ? splitLlvmLibraryProgram(llvm) : splitLlvmProgram(llvm);
+    const split = llvm === null ? null : splitLlvmLibraryProgram(llvm);
     if (split === null) {
       const partitions = library
         ? 1
-        : nativeProgramPartitions(this.toolchain.target, optimization, statSync(input).size);
+        : nativeProgramPartitions(this.toolchain.target, statSync(input).size);
       return this.emitObject(input, output, source, optimization, "obj", partitions);
     }
     const objects: string[] = [];

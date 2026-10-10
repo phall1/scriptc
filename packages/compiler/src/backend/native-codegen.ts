@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { createRequire } from "node:module";
-import { access, chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import {
@@ -85,6 +85,43 @@ export interface NativeCodegenOptions {
   partitions?: number;
   /** Runtime bitcode whose small functions the helper imports for inlining. */
   importBitcode?: { paths: readonly string[]; digests: readonly string[] };
+  /** An existing file that holds exactly `llvm`; the helper reads it in place. */
+  inputPath?: string;
+}
+
+/** Writes LLVM text in large batches. Programs past the engine's string
+ * limit arrive as many parts, and writing each part separately is several
+ * times slower than writing the same bytes in a few large chunks. */
+export async function writeLlvmSource(
+  path: string,
+  llvm: string | readonly string[],
+  mode = 0o666,
+): Promise<void> {
+  const file = await open(path, "w", mode);
+  try {
+    const write = async (text: string): Promise<void> => {
+      const bytes = Buffer.from(text, "utf8");
+      for (let offset = 0; offset < bytes.length;) {
+        const { bytesWritten } = await file.write(bytes, offset, bytes.length - offset);
+        offset += bytesWritten;
+      }
+    };
+    if (typeof llvm === "string") return await write(llvm);
+    let batch: string[] = [];
+    let length = 0;
+    for (const part of llvm) {
+      batch.push(part);
+      length += part.length;
+      if (length >= 16 * 1024 * 1024) {
+        await write(batch.join(""));
+        batch = [];
+        length = 0;
+      }
+    }
+    if (batch.length > 0) await write(batch.join(""));
+  } finally {
+    await file.close();
+  }
 }
 
 function parseJsonObject(text: string): Record<string, unknown> | null {
@@ -358,13 +395,29 @@ export async function emitNativeArtifact(
     outputPaths: outputs,
   } satisfies NativeCodegenArtifact;
   if (await installCachedPartitions(cached, outputs)) return artifact;
+  // Partitioned programs also reuse individual partition artifacts, so an
+  // edit recompiles only the partitions it affects. The directory names the
+  // exact helper build and target; the helper keys entries by content.
+  const partitionCache =
+    root === null || outputs.length < 2
+      ? null
+      : join(
+          root,
+          "native-partitions-v1",
+          createHash("sha256")
+            .update(JSON.stringify({ helper: helper.identity, target }))
+            .digest("hex")
+            .slice(0, 32),
+        );
+  if (partitionCache !== null) await mkdir(partitionCache, { recursive: true, mode: 0o700 });
 
   const stages = outputs.map((output) =>
     privateSiblingPath(output, `native-${options.outputKind}`),
   );
-  const input = privateSiblingPath(options.outputPath, "native-input");
+  const ownsInput = options.inputPath === undefined;
+  const input = options.inputPath ?? privateSiblingPath(options.outputPath, "native-input");
   try {
-    await writeFile(input, options.llvm, { mode: 0o600 });
+    if (ownsInput) await writeLlvmSource(input, options.llvm, 0o600);
     await invoke(helper.binaryPath, [
       "emit",
       "--input",
@@ -383,6 +436,7 @@ export async function emitNativeArtifact(
       "--source-path",
       options.sourcePath,
       ...(options.importBitcode?.paths ?? []).flatMap((path) => ["--import-bitcode", path]),
+      ...(partitionCache === null ? [] : ["--cache-dir", partitionCache]),
     ]);
     for (const stage of stages) {
       const emitted = await stat(stage).catch(() => null);
@@ -412,7 +466,7 @@ export async function emitNativeArtifact(
   } finally {
     await Promise.all([
       ...stages.map((stage) => rm(stage, { force: true }).catch(() => undefined)),
-      rm(input, { force: true }).catch(() => undefined),
+      ...(ownsInput ? [rm(input, { force: true }).catch(() => undefined)] : []),
     ]);
   }
 }

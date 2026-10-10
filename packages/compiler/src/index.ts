@@ -1,8 +1,4 @@
-import {
-  optimizationClass,
-  optimizationField,
-  type NativeOptimization,
-} from "./backend/optimization.js";
+import { optimizationField, type NativeOptimization } from "./backend/optimization.js";
 import { compilationTiming, type CompilationTiming } from "./timing.js";
 import { prepareExecutableModule } from "./executable/prepare.js";
 import {
@@ -66,7 +62,11 @@ import {
   resolveCc,
 } from "./backend/external-c.js";
 import { emitLlvmModuleSource, LlvmUnsupportedError } from "./backend/llvm/emitter.js";
-import { emitNativeArtifact, NativeCodegenError } from "./backend/native-codegen.js";
+import {
+  emitNativeArtifact,
+  NativeCodegenError,
+  writeLlvmSource,
+} from "./backend/native-codegen.js";
 import { nativePartitionPaths, nativeProgramPartitions } from "./backend/native-codegen-core.js";
 import { privateSiblingPath } from "./backend/build-cache.js";
 import { nativeCodegenTarget, nativeCodegenTargetRefusal } from "./backend/targets.js";
@@ -551,6 +551,7 @@ async function emitNativeProgramObject(
   opts: CompileRequestOptions,
   llvm: string | readonly string[],
   features: EarlyExecutableNativeFeatures,
+  llvmPath: string,
 ): Promise<NativeProgramObject> {
   const stem = basename(entryPath).replace(/\.(ts|mts|cts|js|mjs|cjs)$/, "");
   const artifactPath = join(opts.outDir, `${stem}.helper.o`);
@@ -565,7 +566,6 @@ async function emitNativeProgramObject(
       ? 1
       : nativeProgramPartitions(
           target,
-          optimizationClass(opts.optimization),
           (typeof llvm === "string" ? [llvm] : llvm).reduce(
             (bytes, part) => bytes + Buffer.byteLength(part),
             0,
@@ -582,6 +582,7 @@ async function emitNativeProgramObject(
     const artifact = await emitNativeArtifact({
       outputPath: linkPath,
       llvm,
+      inputPath: llvmPath,
       outputKind: "obj",
       sourcePath: entryPath,
       optimization: opts.optimization === "dev" ? "0" : "2",
@@ -762,7 +763,7 @@ async function prepareExecutableInput(
     return { ok: false, diagnostics: [llvmRefusalDiag(err, entryPath)], sourceTexts };
   }
   timing("llvm-emit");
-  await writeFile(llvmPath, llvmSource);
+  await writeLlvmSource(llvmPath, llvmSource);
   timing("llvm-write");
   let irPath: string | undefined;
   if (opts.emitIr) {
@@ -1082,6 +1083,7 @@ async function compileTracked(
           opts,
           await readFile(earlyHit.llvmPath, "utf8"),
           earlyHit.native,
+          earlyHit.llvmPath,
         );
         nativeInputPath = nativeProgramObject.linkPath;
       } catch (err) {
@@ -1194,6 +1196,7 @@ async function compileTracked(
           opts,
           llvmSource,
           nativeFeatures,
+          llvmPath,
         );
         timing("native-object");
       } catch (err) {

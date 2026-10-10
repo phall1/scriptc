@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
 import {
   emitNativeArtifact,
+  writeLlvmSource,
   NativeCodegenError,
   validateNativeCodegenVersion,
 } from "./native-codegen.js";
@@ -345,13 +346,16 @@ test("sanitized native artifacts fail before helper resolution", async () => {
   ).rejects.toMatchObject({ diagnosticCode: "SC3002", detailCode: "sanitize_unsupported" });
 });
 
-test("program partitions depend only on optimized module size and target", () => {
+test("program partitions depend only on module size and target", () => {
   const megabyte = 1024 * 1024;
-  expect(nativeProgramPartitions(LINUX_X64_GNU_TARGET, "release", megabyte - 1)).toBe(1);
-  expect(nativeProgramPartitions(LINUX_X64_GNU_TARGET, "release", 3.5 * megabyte)).toBe(3);
-  expect(nativeProgramPartitions(MACOS_ARM64_TARGET, "release", 100 * megabyte)).toBe(8);
-  expect(nativeProgramPartitions(MACOS_ARM64_TARGET, "dev", 100 * megabyte)).toBe(1);
-  expect(nativeProgramPartitions(WASM32_WASI_TARGET, "release", 100 * megabyte)).toBe(1);
+  expect(nativeProgramPartitions(LINUX_X64_GNU_TARGET, 4 * megabyte)).toBe(1);
+  expect(nativeProgramPartitions(LINUX_X64_GNU_TARGET, 4 * megabyte + 1)).toBe(2);
+  // Powers of two keep every function in its partition across small edits.
+  expect(nativeProgramPartitions(LINUX_X64_GNU_TARGET, 13 * megabyte)).toBe(4);
+  expect(nativeProgramPartitions(LINUX_X64_GNU_TARGET, 16 * megabyte)).toBe(4);
+  expect(nativeProgramPartitions(MACOS_ARM64_TARGET, 100 * megabyte)).toBe(32);
+  expect(nativeProgramPartitions(MACOS_ARM64_TARGET, 1024 * megabyte)).toBe(64);
+  expect(nativeProgramPartitions(WASM32_WASI_TARGET, 100 * megabyte)).toBe(1);
   expect(nativePartitionPaths("/build.d/program.o", 3)).toEqual([
     "/build.d/program.o",
     "/build.d/program.part1.o",
@@ -375,7 +379,12 @@ test("partitioned objects are emitted, cached and restored together", async () =
     expect(await readFile(path, "utf8")).toBe("define i32 @answer() { ret i32 42 }\n");
   const calls = (await readFile(pkg.log, "utf8")).trim().split("\n");
   expect(calls).toHaveLength(1);
-  expect(calls[0]!.split(" ").filter((arg) => arg === "--output")).toHaveLength(3);
+  const args = calls[0]!.split(" ");
+  expect(args.filter((arg) => arg === "--output")).toHaveLength(3);
+  // Partition artifacts are reused from a private directory per helper build.
+  const partitionCache = args[args.indexOf("--cache-dir") + 1]!;
+  expect(partitionCache).toMatch(/[/\\]cache[/\\]native-partitions-v1[/\\][0-9a-f]{32}$/);
+  expect((await stat(partitionCache)).mode & 0o777).toBe(0o700);
 
   const second = join(pkg.root, "second", "program.o");
   const restored = await emitNativeArtifact({
@@ -388,5 +397,27 @@ test("partitioned objects are emitted, cached and restored together", async () =
 
   // A single object for the same module is a distinct artifact.
   await emitNativeArtifact(request(pkg.root, pkg.packageJson, join(pkg.root, "whole.o")));
-  expect((await readFile(pkg.log, "utf8")).trim().split("\n")).toHaveLength(2);
+  const all = (await readFile(pkg.log, "utf8")).trim().split("\n");
+  expect(all).toHaveLength(2);
+  expect(all[1]).not.toContain("--cache-dir");
+});
+
+test("LLVM text parts are written as one file and existing inputs are read in place", async () => {
+  const pkg = await fakePackage();
+  const parts = Array.from({ length: 5000 }, (_, index) => `; part ${index} \u00e9\n`);
+  const written = join(pkg.root, "parts.ll");
+  await writeLlvmSource(written, parts);
+  expect(await readFile(written, "utf8")).toBe(parts.join(""));
+
+  const output = join(pkg.root, "in-place", "program.o");
+  await emitNativeArtifact({
+    ...request(pkg.root, pkg.packageJson, output),
+    llvm: parts,
+    inputPath: written,
+    cacheRoot: null,
+  });
+  const call = (await readFile(pkg.log, "utf8")).trim().split(" ");
+  expect(call[call.indexOf("--input") + 1]).toBe(written);
+  expect(await readFile(output, "utf8")).toBe(parts.join(""));
+  expect(await readFile(written, "utf8")).toBe(parts.join(""));
 });

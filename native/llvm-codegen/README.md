@@ -33,6 +33,10 @@ lowering, verifies before and after optimization, and publishes through a
 private sibling file so a failed or interrupted request cannot truncate the
 requested output.
 
+Repeating `--output` divides the program into that many partitions, which are compiled concurrently and linked together. The helper splits the emitter's LLVM assembly text directly, so partitions also parse concurrently; input outside the emitter's narrow grammar is parsed whole and split with LLVM instead. Internal definitions become hidden so partitions can reference each other. At opt-level 0 each partition is compiled independently. Optimized partitions follow the ThinLTO model: each is simplified and summarized on its own thread, a thin link decides which small functions every partition imports for inlining and which hidden definitions become internal again, and each partition is then optimized and compiled on its own thread. Partition placement depends only on the module and the partition count, so output never depends on the host.
+
+`--cache-dir <dir>` names a private directory the caller owns for one helper build. Simplified partitions are stored under the hash of their exact source and objects under the hash of the exact module after importing, each with a trailing digest and published by rename, so a rebuild recompiles only the partitions an edit can affect.
+
 `--optimization=speed` program builds pass `--import-bitcode <unit.bc>` once per runtime-pack unit the program links. Small runtime functions reachable from the program's runtime calls are imported as `available_externally` so LLVM can inline them; the runtime objects remain the only definitions. The helper never runs a sanitizer pass, so with import it also drops the emitter's inert `sanitize_address` attributes, which would otherwise block that inlining. Without `--import-bitcode` the module is optimized exactly as emitted.
 
 Runtime-pack builds emit each unit of the executable `speed` flavor through the helper:
