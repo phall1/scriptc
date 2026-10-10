@@ -1148,10 +1148,15 @@ export function lowerObjectLiteral(
   // PropertyDescriptorMap argument of Object.defineProperties, nested
   // descriptor records with `any` values) — builds as a dyn OBJECT:
   // each field converts through the usual dyn boundary, and dynamic
-  // consumers ride the keyed-dyn paths. TypeScript keeps the fence.
+  // consumers ride the keyed-dyn paths. TypeScript keeps the fence for
+  // authored `any`. An unresolved annotation is the error type, which
+  // prints as `any` (`Sharding.Sharding["Service"]` once the package
+  // `.d.ts` is hidden). Its own type collapses with it, so the literal
+  // still builds as a checked-dynamic object.
   if (
     mapped?.kind === "dyn" ||
     (!mapped && isJsSourceFile(expr.getSourceFile())) ||
+    (!mapped && !expected && tsType.isErrorType()) ||
     (!expected &&
       mapped &&
       jsOpenObjectType(expr, mapped, lowerer.shapes, lowerer.unions).kind === "dyn")
