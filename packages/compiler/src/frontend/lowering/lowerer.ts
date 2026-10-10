@@ -1114,6 +1114,33 @@ export function ladderFenceExpr(
   };
 }
 
+/** An object or union that is not itself `any`, but a field or arm is.
+ * Those shapes have no static record once a package declaration is hidden.
+ * Bare `any` stays out: that fence is the authored-`any` rule. */
+export function anyInObjectType(
+  lowerer: Lowerer,
+  t: ts.Type,
+  seen: Set<ts.Type> = new Set(),
+  depth = 0,
+): boolean {
+  if (depth > 4 || seen.has(t)) return false;
+  seen.add(t);
+  if ((t.flags & ts.TypeFlags.Any) !== 0) return depth > 0;
+  if (t.isUnionType() || t.isIntersectionType()) {
+    return ts.constituentTypes(t).some((part) => anyInObjectType(lowerer, part, seen, depth + 1));
+  }
+  if ((t.flags & ts.TypeFlags.Object) === 0) return false;
+  if (
+    lowerer.checker
+      .getIndexInfosOfType(t)
+      .some((info) => anyInObjectType(lowerer, info.type, seen, depth + 1))
+  )
+    return true;
+  return lowerer.checker
+    .getPropertiesOfType(t)
+    .some((prop) => anyInObjectType(lowerer, lowerer.checker.getTypeOfSymbol(prop), seen, depth + 1));
+}
+
 export function dynFallbackType(lowerer: Lowerer, node: ts.Node, t: ts.Type): IrType | null {
   if (t.flags & ts.TypeFlags.Void) return null;
   if (!isJsSourceFile(node.getSourceFile())) {
@@ -1141,6 +1168,7 @@ export function dynFallbackType(lowerer: Lowerer, node: ts.Node, t: ts.Type): Ir
     // TS single-call-signature function types: per-piece fallback, but
     // ONLY `any` pieces fall to dyn — any other unmappable piece keeps
     // the whole type's own fence.
+    if (anyInObjectType(lowerer, t)) return DYN;
     return anyPiecedFuncType(lowerer, node, t);
   }
   const promise = jsFallbackPromiseType(lowerer, t);
