@@ -6665,12 +6665,32 @@ export class LlEmitter {
    * sequence's result only reads an unchanged local (a derived
    * constructor's `super()` evaluates to `this`), its statements still run
    * in place, but the result is neither retained nor released. */
+  /** Whether a discarded value can be skipped entirely: a borrowable read
+   * with no effect of its own. canBorrowCallArgument also accepts checked
+   * projections (a ternary or narrow whose failing arm throws, and the
+   * throwing call itself) because a borrowed use still evaluates them;
+   * skipping those would drop the throw. */
+  private discardableRead(value: IrExpr): boolean {
+    if (value.kind === "libCall" || value.kind === "ternary" || value.kind === "unionNarrow")
+      return false;
+    if (
+      (value.kind === "upcast" || value.kind === "downcast" || value.kind === "unionWrap") &&
+      !this.discardableRead(value.value)
+    )
+      return false;
+    if (value.kind === "seqExpr") {
+      const guarded = guardedValue(value);
+      if (guarded === null || !this.discardableRead(guarded)) return false;
+    }
+    return this.canBorrowCallArgument(value);
+  }
+
   private emitDiscarded(e: IrExpr): void {
     if (
       e.kind === "seqExpr" &&
       isRefCounted(e.result.type) &&
       e.result.kind !== "strLit" &&
-      this.canBorrowCallArgument(e.result)
+      this.discardableRead(e.result)
     ) {
       this.emitSequence(() => {
         for (const s of e.stmts) this.emitStmt(s);
