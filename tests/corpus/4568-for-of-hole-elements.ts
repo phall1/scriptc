@@ -104,3 +104,12 @@ function show(value: unknown): string {
 }
 for (const count of restocked) console.log(show(count));
 for (const count of dense) console.log(show(count));
+
+// Variadic Math statics read a hole or a missing element as NaN.
+for (const count of restocked) {
+  console.log(Math.hypot(count, 4), Math.max(count, 1, 2), Math.min(9, count), Math.hypot(count));
+}
+const absent = dense[12];
+console.log(Math.hypot(absent, 3), Math.max(absent), Math.min(1, absent));
+console.log(Math.hypot(dense[20], 3), Math.max(dense[21], 1), Math.min(dense[0], dense[30]));
+console.log(Math.hypot(3, 4), Math.max(...dense), Math.min(...dense), Math.hypot(...dense));
