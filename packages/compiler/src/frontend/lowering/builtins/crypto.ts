@@ -19,6 +19,24 @@ import {
   arrayOf,
 } from "../../../ir/ir.js";
 
+/** Global Web Crypto `crypto.randomUUID()` and `globalThis.crypto.randomUUID()`.
+ * Named and namespace imports of node:crypto already dispatch through the
+ * module table. The bare global lowers as the dyn `crypto.native` object,
+ * whose only runtime member is `subtle.digest`, so the zero-argument call
+ * is the same CSPRNG libCall as `import { randomUUID } from "node:crypto"`.
+ * Optional calls, spreads, and the node:crypto options object fall through. */
+export function lowerGlobalCryptoCall(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
+  access: ts.PropertyAccessExpression,
+): IrExpr | null {
+  if (call.questionDotToken || access.questionDotToken) return null;
+  if (access.name.text !== "randomUUID") return null;
+  if (!lowerer.isStdlibGlobal(access.expression, "crypto")) return null;
+  if (call.arguments.length !== 0 || call.arguments.some(ts.isSpreadElement)) return null;
+  return { kind: "libCall", fn: "crypto.randomUUID", args: [], type: STRING, loc: locOf(call) };
+}
+
 /** The composed crypto pattern: `randomBytes(n).toString(enc)` lowers
  * as ONE string-producing libCall — the Buffer between the two calls
  * never exists at runtime. Only literal "hex"/"base64" encodings lower
