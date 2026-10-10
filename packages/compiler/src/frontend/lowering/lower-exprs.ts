@@ -6639,6 +6639,31 @@ export function lowerElementAccess(lowerer: Lowerer, expr: ts.ElementAccessExpre
     const target = symbolFieldTarget(lowerer, expr);
     if (target) return lowerer.maybeNarrow(lowerer.fieldGetExpr(target, locOf(expr), expr), expr);
     let receiver = lowerer.lowerExpr(expr.expression);
+    // URLSearchParams[Symbol.iterator] is a function. A function-typed
+    // read lets `typeof === "function"` fold, so the unused Object.entries
+    // arm of a monomorphic JavaScript function is not lowered.
+    if (
+      receiver.type.kind === "searchParams" &&
+      isSymbolIteratorAccess(lowerer, expr.argumentExpression)
+    ) {
+      const loc = locOf(expr);
+      const type = funcOf([], DYN);
+      const method: IrExpr = {
+        kind: "closure",
+        fnName: "%urlSearchParams.iterator",
+        captures: [],
+        type,
+        loc,
+      };
+      if (isSafeToDiscard(receiver)) return method;
+      return {
+        kind: "seqExpr",
+        stmts: [{ kind: "exprStmt", expr: receiver, loc }],
+        result: method,
+        type,
+        loc,
+      };
+    }
     const classInfo =
       receiver.type.kind === "classval" ? lowerer.classes.get(receiver.type.className) : undefined;
     if (
@@ -14765,21 +14790,23 @@ export function uniqueSymbolKeyOf(
  * Folding it lets a `typeof === "function"` ternary keep only Array.from.
  * The other arm is Object.entries, which has no lowering for this type,
  * and the iterator is present so that arm never runs. */
+function isSymbolIteratorAccess(lowerer: Lowerer, key: ts.Expression): boolean {
+  while (ts.isParenthesizedExpression(key)) key = key.expression;
+  return (
+    ts.isPropertyAccessExpression(key) &&
+    !key.questionDotToken &&
+    lowerer.stdlibGlobalMember(key, "Symbol") === "iterator"
+  );
+}
+
 function searchParamsIteratorTypeof(lowerer: Lowerer, expr: ts.TypeOfExpression): IrExpr | null {
   let operand: ts.Expression = expr.expression;
   while (ts.isParenthesizedExpression(operand)) operand = operand.expression;
   if (
     !ts.isElementAccessExpression(operand) ||
     operand.questionDotToken ||
-    operand.argumentExpression === undefined
-  )
-    return null;
-  let key: ts.Expression = operand.argumentExpression;
-  while (ts.isParenthesizedExpression(key)) key = key.expression;
-  if (
-    !ts.isPropertyAccessExpression(key) ||
-    key.questionDotToken ||
-    lowerer.stdlibGlobalMember(key, "Symbol") !== "iterator"
+    operand.argumentExpression === undefined ||
+    !isSymbolIteratorAccess(lowerer, operand.argumentExpression)
   )
     return null;
   if (lowerer.mapTypeOf(lowerer.typeOf(operand.expression))?.kind !== "searchParams") return null;
