@@ -26,7 +26,7 @@ import { InternalCompilerError } from "../../errors.js";
  *   ScrDynPath { parent, key, index } — the %ScrDynPath type. */
 import type { IrType, IrUnionDef } from "../../ir/ir.js";
 import { DYN_HANDLE_KINDS, isDynTypedRefType, isRefCounted, typeKey } from "../../ir/ir.js";
-import { dynDesc, streamTypedRefEligible } from "../../ir/analysis.js";
+import { dynDesc, streamTypedRefEligible, undefinedArmTag } from "../../ir/analysis.js";
 import { mangleRecordNew, mangleRecordStruct } from "../mangle.js";
 import { BlockBuilder } from "./blocks.js";
 import { llvmCommentText } from "./common.js";
@@ -93,6 +93,19 @@ export interface DynHost extends WalkerHost {
 }
 
 const FN_ATTRS = "#0";
+
+/** A native array element can keep a dyn undefined value as its own payload.
+ * Every other element type uses the array's present-undefined state, which
+ * is what `a[i] = undefined` means for a `number[]` that JavaScript still
+ * mutates through a checked-dynamic view. */
+function elementStoresDynUndefined(elem: IrType, unions: DynHost["unionsById"]): boolean {
+  return (
+    elem.kind === "dyn" ||
+    elem.kind === "jsval" ||
+    elem.kind === "undefinedT" ||
+    undefinedArmTag(elem, unions) >= 0
+  );
+}
 
 export class LlDyn {
   private readonly dynMatchers = new Map<string, string>();
@@ -1673,6 +1686,22 @@ export class LlDyn {
           B.line(`call void @scr_arr_set_len(ptr ${a}, double ${length})`);
           B.br(doneLabel);
           B.startBlock(valueLabel);
+          const e = this.itemAt(B, items, i);
+          if (!elementStoresDynUndefined(elem, host.unionsById)) {
+            const elementKind = this.kindOf(B, e);
+            const isUndefined = B.tmp();
+            B.line(`${isUndefined} = icmp eq i32 ${elementKind}, ${DYN_KIND.UNDEF}`);
+            const undefinedLabel = B.newLabel("dca.undef");
+            const checkLabel = B.newLabel("dca.check");
+            B.condBr(isUndefined, undefinedLabel, checkLabel);
+            B.startBlock(undefinedLabel);
+            host.declare(`declare void @scr_arr_set_undefined(ptr, double)`);
+            const undefinedIndex = B.tmp();
+            B.line(`${undefinedIndex} = uitofp ${this.S} ${i} to double`);
+            B.line(`call void @scr_arr_set_undefined(ptr ${a}, double ${undefinedIndex})`);
+            B.br(doneLabel);
+            B.startBlock(checkLabel);
+          }
           const pp = B.tmp();
           const kp = B.tmp();
           const ip = B.tmp();
@@ -1682,7 +1711,6 @@ export class LlDyn {
           B.line(`store ptr null, ptr ${kp}`);
           B.line(`${ip} = getelementptr inbounds %ScrDynPath, ptr ${pathSlot}, i64 0, i32 2`);
           B.line(`store ${host.sizeType} ${i}, ptr ${ip}`);
-          const e = this.itemAt(B, items, i);
           const v = B.tmp();
           B.line(`${v} = call ${this.valTy(elem)} @${c}(ptr ${e}, ptr ${pathSlot})`);
           this.pendingBail(
