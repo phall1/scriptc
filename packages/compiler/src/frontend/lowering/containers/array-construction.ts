@@ -44,6 +44,7 @@ import {
   lowerArrayCallback,
   callbackArrayElement,
 } from "./callback-arguments.js";
+import { lowerDynObjectLiteral } from "../expressions/object-literals.js";
 
 /** Build the argument array for a mutating/copying operation while keeping
  * the receiver's scalar payload ABI. A missing read is represented as the
@@ -874,6 +875,12 @@ export function lowerArrayFromCall(
       }
     }
   }
+  // An object literal that is not `{ length }` is a value with its own
+  // iterator method. `{ [Symbol.iterator]: () => rest }` is the
+  // NonEmptyIterable.unprepend consumer. The counted `{ length: n }`
+  // forms stay on the paths below.
+  const iterableObject = lowerIterableObjectFrom(lowerer, call);
+  if (iterableObject) return iterableObject;
   // MAPPER-LESS `Array.from({ length: n })` (usually with an explicit
   // type argument — the pMap results-array idiom): a length-n array of
   // ABSENT slots, filled by index before any read. Union elements with
@@ -1231,6 +1238,43 @@ function buildStrCharsFn(name: string, loc: SrcLoc): IrFunction {
     body,
     loc,
   };
+}
+
+function lengthPropertyName(prop: ts.ObjectLiteralElementLike): string | null {
+  if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name)) return prop.name.text;
+  if (ts.isShorthandPropertyAssignment(prop)) return (prop.name as ts.Identifier).text;
+  return null;
+}
+
+function isLengthOnlyLiteral(expr: ts.Expression): boolean {
+  if (!ts.isObjectLiteralExpression(expr) || expr.properties.length !== 1) return false;
+  return lengthPropertyName(expr.properties[0]!) === "length";
+}
+
+function iterableObjectSource(
+  args: readonly ts.Expression[],
+): ts.ObjectLiteralExpression | null {
+  if (args.length !== 1 && args.length !== 2) return null;
+  if (args.some(ts.isSpreadElement)) return null;
+  const source = args[0]!;
+  if (!ts.isObjectLiteralExpression(source)) return null;
+  if (isLengthOnlyLiteral(source)) return null;
+  return source;
+}
+
+/** `Array.from` of an object that is not the counted `{ length: n }` idiom.
+ * The literal is a dynamic object, so a symbol method such as
+ * `[Symbol.iterator]` is a real property the iterator protocol can call. */
+function lowerIterableObjectFrom(lowerer: Lowerer, call: ts.CallExpression): IrExpr | null {
+  const source = iterableObjectSource(call.arguments);
+  if (!source) return null;
+  const mapper = call.arguments[1];
+  return lowerCheckedArrayFrom(
+    lowerer,
+    lowerDynObjectLiteral(lowerer, source),
+    locOf(call),
+    mapper ? lowerer.lowerExprExpecting(mapper, DYN) : undefined,
+  );
 }
 
 /** The lowered `length` value of the one-property source literal, or null
