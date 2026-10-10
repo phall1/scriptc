@@ -5586,11 +5586,20 @@ function voidFunctionType(type: IrType | null): boolean {
   return type.params.length === 0 && type.ret.kind === "void";
 }
 
+/** Object.assign's function-with-properties type: a record whose callable
+ * lives in the reserved `%call` field. The runtime value is still the
+ * function the properties were copied onto. */
+function hybridCallableRecord(lowerer: Lowerer, type: IrType | null): boolean {
+  if (type?.kind !== "record") return false;
+  const call = lowerer.shapes.get(type.shapeId)?.fields.find((field) => field.name === "%call");
+  return call?.type.kind === "func";
+}
+
 /** An unannotated binding whose value is already checked-dynamic and
- * whose checker type cannot hold the keys written onto it: an empty
- * record, or `() => void` after properties were assigned to that
- * function. A JavaScript const empty object filled in later counts too.
- * A declared type keeps its slot. */
+ * whose checker type cannot hold that value: an empty record, `() => void`
+ * after properties were assigned onto the function, or a `%call` record
+ * standing in for that same function. A JavaScript const empty object
+ * filled in later counts too. A declared type keeps its slot. */
 function openDynCarryingBinding(
   lowerer: Lowerer,
   decl: ts.VariableDeclaration,
@@ -5600,7 +5609,11 @@ function openDynCarryingBinding(
   if (jsConstEmptyObjectIsOpen(lowerer, decl)) return true;
   if (decl.type || hasJsTypeAnnotation(decl)) return false;
   if (init.kind !== "dyn") return false;
-  return closedEmptyRecord(lowerer, type) || voidFunctionType(type);
+  return (
+    closedEmptyRecord(lowerer, type) ||
+    voidFunctionType(type) ||
+    hybridCallableRecord(lowerer, type)
+  );
 }
 
 /** Inferred JS scalar initializers do not constrain later writes through
