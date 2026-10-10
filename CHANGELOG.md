@@ -6,6 +6,30 @@ All notable changes to scriptc will be documented in this file.
 
 <!-- release:start -->
 
+## 0.2.8
+
+### Features
+
+- **Workers can share immutable object graphs without copying.** The new `@scriptc/threads` package adds `publish(value)`, which makes a graph read-only so native executables hand the same objects to every worker by reference; Node.js runs its JavaScript implementation. Deeply frozen plain data sent to workers is also shared rather than cloned.
+- **Deep recursion throws a catchable `RangeError`.** Recursive functions check the native stack on Linux and macOS and throw `RangeError: Maximum call stack size exceeded` on the main thread, in workers, and inside async functions and generators, which now run on 512 KiB stacks.
+- **Compile blockers and Node.js differences are easier to act on.** Diagnostics explain what stopped a compile and where native behavior differs, and a rejected declaration now reports its own diagnostic instead of only a follow-on error.
+
+### Performance
+
+- **Large executables compile faster and rebuild incrementally.** Code is divided into partitions that are optimized and compiled in parallel, with small functions imported across partitions for inlining, and rebuilds reuse the partitions an edit does not touch.
+- **Native code does less reference-count and allocation work.** Nullable references are stored as plain pointers, release fast paths are inlined without cycle-color writes, more parameters, receivers and locals are borrowed, provably 32-bit integer fields and values use native integers, and temporary arrays are avoided.
+- **Strings, collections, loops and exceptions use more direct paths.** Strings cache a proven-ASCII flag and read elements inline, number-keyed Maps and Sets index directly, loops over arrays without holes read elements directly, and exception checks run inline.
+- **Programs that create workers pay far less overhead.** A per-thread allocator, initial-exec thread-local storage and a single exception alert word keep single-threaded code in worker programs close to its non-worker speed.
+
+### Fixes
+
+- **More values behave as in Node.js.** Out-of-range typed array reads, holes in `for...of` loops, object literals built from missing array elements, and class fields read before assignment all produce `undefined`. Optional values keep their state through callbacks, captures, `pop()` and initialization order.
+- **Weak collections accept more keys.** Records and arrays reached through unions and empty object literals work as `WeakMap` and `WeakSet` keys.
+- **Debuggers stop only at user code.** Shared helpers no longer appear on user source lines, so a breakpoint on a line stops only at that line's code.
+- **Native program objects use runtime ABI v9.** External object consumers must link the matching v0.2.8 runtime pack; the versioned marker rejects incompatible runtime objects at link time.
+
+<!-- release:end -->
+
 ## 0.2.7
 
 ### Features
@@ -27,8 +51,6 @@ All notable changes to scriptc will be documented in this file.
 - **Class, record, and callback values preserve more JavaScript behavior.** Class references retain identity through unions and collections, adapted callbacks remain the same function, and record field presence stays distinct from an explicit undefined value. Data-property writes no longer incorrectly mark unrelated class methods as replaced.
 - **Console line buffers account for concatenated string parts.** Long template literals and string concatenations reserve sufficient space before output.
 - **Native program objects use runtime ABI v8.** External object consumers must link the matching v0.2.7 runtime pack; the versioned marker rejects incompatible runtime objects at link time.
-
-<!-- release:end -->
 
 ## 0.2.6
 
