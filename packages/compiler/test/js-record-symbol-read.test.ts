@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
@@ -37,6 +37,46 @@ test("symbol reads follow whether the value is iterable", async () => {
     expect(run.stderr).toBe("");
     expect(run.status).toBe(0);
     expect(run.stdout).toBe('[["q","a b"],["page","1"]]\nundefined\n[["a","1"],["a","2"]]\n');
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a monomorphic URLSearchParams argument skips Object.entries", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "scriptc-sp-mono-"));
+  const pkg = join(directory, "node_modules", "effect");
+  mkdirSync(pkg, { recursive: true });
+  writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "effect", version: "0.0.0" }));
+  writeFileSync(
+    join(pkg, "probe.js"),
+    `export function go(input) {
+  const entries = typeof input[Symbol.iterator] === "function" ? Array.from(input) : Object.entries(input);
+  return entries;
+}
+`,
+  );
+  const entry = join(directory, "main.js");
+  const binary = join(directory, "main");
+  writeFileSync(
+    entry,
+    `import { go } from "effect/probe.js";
+console.log(JSON.stringify(go(new URLSearchParams("a=1&a=2"))));
+`,
+  );
+  try {
+    const result = await compile(entry, {
+      outDir: directory,
+      outPath: binary,
+      outputKind: "exe",
+      optimization: "dev",
+      npmStatic: ["effect"],
+    });
+    expect(result.ok, result.ok ? "" : JSON.stringify(result.diagnostics)).toBe(true);
+    if (!result.ok) return;
+    const run = spawnSync(result.binaryPath, [], { encoding: "utf8" });
+    expect(run.stderr).toBe("");
+    expect(run.status).toBe(0);
+    expect(run.stdout).toBe('[["a","1"],["a","2"]]\n');
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
