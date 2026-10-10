@@ -6865,6 +6865,26 @@ export class Lowerer {
   }
 
   typeOf(node: ts.Node): ts.Type {
+    // Implicit-any instances bind the parameter, not the properties read
+    // from it. `url` is URL, so `url.searchParams` is URLSearchParams even
+    // though the checker still sees `any` on the access.
+    if (
+      this.implicitParamTypes !== null &&
+      ts.isPropertyAccessExpression(node) &&
+      !node.questionDotToken
+    ) {
+      const checkerType = this.checker.getTypeAtLocation(node);
+      if (checkerType.flags & ts.TypeFlags.Any) {
+        const receiverType = this.typeOf(node.expression);
+        if ((receiverType.flags & ts.TypeFlags.Any) === 0) {
+          const prop = this.checker.getPropertyOfType(receiverType, node.name.text);
+          if (prop) {
+            const propType = this.checker.getTypeOfSymbol(prop);
+            if ((propType.flags & ts.TypeFlags.Any) === 0) return propType;
+          }
+        }
+      }
+    }
     if (ts.isPropertyAccessExpression(node) && isJsSourceFile(node.getSourceFile())) {
       const receiver =
         node.expression.kind === ts.SyntaxKind.ThisKeyword && this.fnStack.length > 0
