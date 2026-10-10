@@ -787,6 +787,47 @@ export function lowerArrayFromValue(lowerer: Lowerer, loc: SrcLoc): IrExpr {
  * Strings iterate by code point and may map.
  * Other iterable shapes keep the fence. Null when the callee isn't an
  * Array-static access. */
+
+/** `Set<any>` stores checked-dynamic values. A static array of those
+ * values is only a drain: default `.sort()` has no lowering there, and
+ * `JSON.stringify` would see a typed vector instead of one dyn array.
+ * Copy into a dyn array. Typed sets (`Set<string>`) stay static. */
+function dynArrayFromDynamicSet(
+  lowerer: Lowerer,
+  source: IrExpr,
+  element: IrType,
+  loc: SrcLoc,
+): IrExpr | null {
+  if (element.kind !== "dyn" || source.type.kind !== "set") return null;
+  const local = lowerer.declareHiddenLocal("%setValues", arrayOf(DYN));
+  return {
+    kind: "seqExpr",
+    stmts: [
+      {
+        kind: "varDecl",
+        localId: local.id,
+        init: {
+          kind: "setIntrinsic",
+          method: "toArray",
+          receiver: source,
+          args: [],
+          type: arrayOf(DYN),
+          loc,
+        },
+        loc,
+      },
+    ],
+    result: {
+      kind: "dynFrom",
+      value: varRef(local.id, arrayOf(DYN), loc),
+      type: DYN,
+      loc,
+    },
+    type: DYN,
+    loc,
+  };
+}
+
 export function lowerArrayFromCall(
   lowerer: Lowerer,
   call: ts.CallExpression,
@@ -842,6 +883,8 @@ export function lowerArrayFromCall(
       const source = lowerCollectionInput(lowerer, input);
       if (source) {
         if (args.length === 1) {
+          const dynamic = dynArrayFromDynamicSet(lowerer, source, input.element, loc);
+          if (dynamic) return dynamic;
           requireProducedArrayElement(lowerer, call, "'Array.from(collection)'", input.element);
           return ingestCollection(
             lowerer,
@@ -992,6 +1035,8 @@ export function lowerArrayFromCall(
       };
     }
     if (src.type.kind === "set" && args.length === 1) {
+      const dynamic = dynArrayFromDynamicSet(lowerer, src, src.type.elem, loc);
+      if (dynamic) return dynamic;
       return {
         kind: "setIntrinsic",
         method: "toArray",
