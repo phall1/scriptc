@@ -3660,6 +3660,8 @@ const DYN_DISPATCH_METHODS = new Set([
   "forEach",
   "map",
   "filter",
+  "reduce",
+  "reduceRight",
   "some",
   "every",
   "find",
