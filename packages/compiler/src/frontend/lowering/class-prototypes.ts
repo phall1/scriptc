@@ -25,6 +25,38 @@ import type { Lowerer } from "./lowerer.js";
 import { newFnCtx } from "./lowerer.js";
 import { classMethodValue } from "./class-method-values.js";
 
+/** A method inherited from a JavaScript constructor this class extends.
+ * The compiled class has no declaration for it. The prototype object built
+ * from that constructor answers the call, and the instance is `this`. */
+export function lowerInheritedPrototypeCall(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
+  access: ts.PropertyAccessExpression,
+  info: ClassInfo,
+  receiver: IrExpr,
+): IrExpr | null {
+  if (!info.callableBase || call.arguments.some(ts.isSpreadElement)) return null;
+  const loc = locOf(call);
+  const prototype = classPrototypeData(lowerer, info, loc);
+  if (!prototype) return null;
+  const callee: IrExpr = {
+    kind: "dynKeyGet",
+    value: prototype,
+    key: { kind: "strLit", value: access.name.text, type: STRING, loc },
+    type: DYN,
+    loc,
+  };
+  return {
+    kind: "dynCall",
+    callee,
+    receiver: lowerer.coerceToExpected(receiver, DYN),
+    calleeName: access.getText(),
+    args: call.arguments.map((arg) => lowerer.lowerExprExpecting(arg, DYN)),
+    type: DYN,
+    loc,
+  };
+}
+
 /** Data added to a top-level class prototype has shared identity and remains
  * separate from instance fields. Allocate lazily so inheritance and module
  * initialization order do not require hoisting source assignments. */

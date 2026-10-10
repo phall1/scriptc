@@ -18,7 +18,11 @@ import type { Lowerer } from "./lowerer.js";
 import { lowerGenMethodCall } from "./lower-generators.js";
 import { lowerClassSymbolMethodCall } from "./symbol-methods.js";
 import { errorToStringCall } from "./error-methods.js";
-import { lowerClassPrototypeAssign, lowerClassPrototypeDescriptors } from "./class-prototypes.js";
+import {
+  lowerClassPrototypeAssign,
+  lowerClassPrototypeDescriptors,
+  lowerInheritedPrototypeCall,
+} from "./class-prototypes.js";
 import {
   BYTES_ELEMENT_NAME,
   BIGINT_T,
@@ -9163,6 +9167,14 @@ export function lowerObjectMethodCall(
         loc,
       };
     }
+    const inherited = lowerInheritedPrototypeCall(
+      lowerer,
+      call,
+      access,
+      info,
+      lowerReceiver(),
+    );
+    if (inherited) return inherited;
     return null;
   }
   if (!info || !found) return null;
