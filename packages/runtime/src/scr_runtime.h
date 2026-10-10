@@ -4398,6 +4398,7 @@ typedef enum {
   SCR_DYNH_ITERATOR,       /* live native array/string/byte iterator */
   SCR_DYNH_CONSOLE,        /* stored global console value */
   SCR_DYNH_SEARCH_PARAMS,  /* live WHATWG URLSearchParams */
+  SCR_DYNH_DATETIME_FORMAT, /* Intl.DateTimeFormat backed by host zoneinfo */
   SCR_DYNH_FETCH_REQUEST,
   SCR_DYNH_WORKER,
   SCR_DYNH_MESSAGE_PORT,
@@ -5098,6 +5099,10 @@ typedef struct ScrDynHandleOps {
 ScrDyn *scr_dyn_native_handle_iterator(ScrDyn *source, unsigned selection);
 
 ScrDyn *scr_intl_segmenter_new(void);
+/* en-US DateTimeFormat for Effect's named-zone bag. Locale and options are
+ * borrowed dyn values. Invalid zones and any other option bag throw a
+ * catchable RangeError. Result +1. */
+ScrDyn *scr_intl_datetime_format_new(ScrDyn *locale, ScrDyn *options);
 ScrStr *scr_process_builtin_id(ScrDyn *id, ScrArr *known);
 ScrDyn *scr_process_builtin_module(ScrStr *id, ScrDyn *getter);
 ScrDyn *scr_process_builtin_unsupported(ScrStr *id, ScrStr *member);
