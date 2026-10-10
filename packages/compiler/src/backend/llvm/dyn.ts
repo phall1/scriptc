@@ -2061,6 +2061,15 @@ export class LlDyn {
         B.terminate(`ret ptr ${r}`);
         break;
       }
+      case "date": {
+        // The operand is already TimeClip'd. The handle keeps that payload
+        // so Equal.equals sees a Date, not a number.
+        host.declare(`declare ptr @scr_dyn_native_date_box(double)`);
+        const r = B.tmp();
+        B.line(`${r} = call ptr @scr_dyn_native_date_box(double %v)`);
+        B.terminate(`ret ptr ${r}`);
+        break;
+      }
       case "bool": {
         host.declare(`declare ptr @scr_dyn_new_bool(i1 zeroext)`);
         const r = B.tmp();
