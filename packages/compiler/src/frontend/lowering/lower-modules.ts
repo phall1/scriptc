@@ -100,6 +100,7 @@ import {
 import { funcTypeFromParamShapes, registerOverloadedCallableAlias } from "./call-signatures.js";
 import {
   jsBindingHasOpenWrites,
+  ambientFetchAnnotation,
   hasJsTypeAnnotation,
   isVarDeclared,
   numericIteratorSourceOf,
@@ -2364,7 +2365,24 @@ export function collectGlobals(
             !lowerer.mapTypeOf(lowerer.typeOf(nameNode))
           )
             continue;
-          let type = handleT ?? factoryType ?? (inferredJsCall ? DYN : lowerer.irTypeOf(nameNode));
+          // File-scope collection types the binding before its initializer
+          // lowers. `typeof fetch` has no static layout; the user's function
+          // is the value, same as the declaration rule in lowerVarDecl.
+          const fetchInit = decl.initializer;
+          const fetchFn =
+            !isLet &&
+            fetchInit !== undefined &&
+            (ts.isArrowFunction(fetchInit) || ts.isFunctionExpression(fetchInit)) &&
+            ts.isIdentifier(decl.name) &&
+            nameNode === decl.name &&
+            ambientFetchAnnotation(lowerer, decl)
+              ? lowerer.lambdaSignature(fetchInit).funcType
+              : null;
+          let type =
+            handleT ??
+            factoryType ??
+            fetchFn ??
+            (inferredJsCall ? DYN : lowerer.irTypeOf(nameNode));
           if (
             isJsSourceFile(sf) &&
             !decl.type &&
