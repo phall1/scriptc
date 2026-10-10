@@ -966,6 +966,52 @@ export function builtinStreamInfoOf(
   return declared ? (lowerer.classes.get(irName) ?? null) : null;
 }
 
+function assignsThisField(node: ts.Node, field: string): ts.Expression | null {
+  if (!ts.isBinaryExpression(node) || node.operatorToken.kind !== ts.SyntaxKind.EqualsToken)
+    return null;
+  const left = node.left;
+  if (!ts.isPropertyAccessExpression(left) || left.expression.kind !== ts.SyntaxKind.ThisKeyword)
+    return null;
+  return left.name.text === field ? node.right : null;
+}
+
+function nestedClass(node: ts.Node, owner: ts.Node): boolean {
+  return node !== owner && (ts.isClassDeclaration(node) || ts.isClassExpression(node));
+}
+
+function untypedJsParameter(lowerer: Lowerer, expression: ts.Expression): boolean {
+  let node = expression;
+  while (ts.isParenthesizedExpression(node)) node = node.expression;
+  if (!ts.isIdentifier(node) || !isJsSourceFile(node.getSourceFile())) return false;
+  const symbol = lowerer.resolveValueSymbol(node);
+  const decl = symbol ? lowerer.checker.valueDeclarationOf(symbol) : undefined;
+  return decl !== undefined && ts.isParameter(decl) && decl.type === undefined;
+}
+
+/** `value = AbsentValue` then `this.value = payload`. The initializer is a
+ * symbol, and a later write stores the published element in the same slot. */
+function jsSymbolFieldHoldsPayload(
+  lowerer: Lowerer,
+  owner: ts.ClassDeclaration | ts.ClassExpression,
+  field: string,
+): boolean {
+  let payload = false;
+  const scan = (node: ts.Node): void => {
+    if (payload || nestedClass(node, owner)) return;
+    const rhs = assignsThisField(node, field);
+    if (rhs) {
+      const flags = lowerer.typeOf(rhs).flags;
+      const anyValue = (flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) !== 0;
+      const mapped = lowerer.mapTypeOf(lowerer.typeOf(rhs));
+      const untyped = untypedJsParameter(lowerer, rhs);
+      if (anyValue || untyped || mapped?.kind !== "symbol") payload = true;
+    }
+    node.forEachChild(scan);
+  };
+  scan(owner);
+  return payload;
+}
+
 /** A dictionary lookup may be absent even when its checker type is a
  * required reference. Keep literal nullish fallbacks in inferred JS storage. */
 function jsFieldInitializerType(lowerer: Lowerer, type: IrType, expression: ts.Expression): IrType {
@@ -2724,6 +2770,13 @@ export function collectClassShapeInner(
           !/@type\b/.test(member.getSourceFile().text.slice(member.pos, member.getStart())) &&
           (type.kind === "func" || type.kind === "record") &&
           lowerer.dynConvertible(type)
+        )
+          type = DYN;
+        if (
+          isJsSourceFile(member.getSourceFile()) &&
+          !member.type &&
+          type.kind === "symbol" &&
+          jsSymbolFieldHoldsPayload(lowerer, decl, member.name.text)
         )
           type = DYN;
         // JS permits reads before a constructor's first assignment even

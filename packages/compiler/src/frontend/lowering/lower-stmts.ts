@@ -4704,7 +4704,7 @@ export function lowerVarDecl(
       !decl.type &&
       !hasJsTypeAnnotation(decl) &&
       raw.type.kind === "dyn" &&
-      (g.type.kind === "record" || g.type.kind === "object")
+      (g.type.kind === "record" || g.type.kind === "object" || g.type.kind === "symbol")
     )
       g.type = DYN;
     g.type = inferredOptionalRecordType(lowerer, decl, g.type, raw.type);
@@ -5069,6 +5069,17 @@ export function lowerVarDecl(
     !hasJsTypeAnnotation(decl) &&
     init.type.kind === "dyn" &&
     (type?.kind === "record" || type?.kind === "object")
+  )
+    type = DYN;
+  // `const a = this.poll()` is inferred as the sentinel symbol, while the
+  // value is the payload already stored as checked-dynamic. Checking that
+  // payload back into a symbol throws `expected symbol, got number`.
+  if (
+    type?.kind === "symbol" &&
+    init.type.kind === "dyn" &&
+    isJsSourceFile(decl.getSourceFile()) &&
+    !decl.type &&
+    !hasJsTypeAnnotation(decl)
   )
     type = DYN;
   // A checker-`any` CONST whose initializer lowered to a STATIC type

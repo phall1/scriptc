@@ -176,6 +176,17 @@ export function declaredReturnType(
     mappedReturn?.kind === "date"
   )
     return DYN;
+  // A sentinel such as `Symbol.for("effect/MutableList/Empty")` makes the
+  // checker infer a symbol return. The same local is later assigned the
+  // payload, which is a number for SubscriptionRef. The let is already
+  // dynamic; the return must not check that payload back into a symbol.
+  if (
+    isJsSourceFile(decl.getSourceFile()) &&
+    !decl.type &&
+    !hasExplicitJsDocReturn(decl) &&
+    mappedReturn?.kind === "symbol"
+  )
+    return DYN;
   if (
     isJsSourceFile(decl.getSourceFile()) &&
     !decl.type &&
