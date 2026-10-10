@@ -2653,6 +2653,13 @@ export class Lowerer {
    * coverage remainder as alreadyFlushed). */
   readonly flushedSymbols = new Set<ts.Symbol>();
   readonly alreadyFlushed: ReadonlySet<ts.Symbol>;
+  /** Deferred diagnostics a flush handed to a capture buffer (diagSink)
+   * instead of the build, keyed by the copy in that buffer. A buffer can
+   * be discarded (a declined probe, a collection that succeeded) or
+   * re-deferred under another declaration, so the declaration stays
+   * deferred until one of these copies reaches `diags` (pushDiag commits
+   * it); until then a later flush reports the diagnostics again. */
+  readonly pendingFlushes = new Map<ScrDiagnostic, { symbol: ts.Symbol; source: ScrDiagnostic }>();
   /** The build's target platform ("win32" | "darwin" | "linux" | ...):
    * selects the platform-keyed builtin surfaces (builtinModuleFnsOf /
    * builtinModuleConstOf in surfaces.ts). */
@@ -5666,9 +5673,9 @@ export class Lowerer {
       // Deferred collection diagnostics nothing flushed — declarations no
       // reference ever made relevant. They belong to the unreached group
       // (collection order keeps them deterministic).
-      for (const [symbol, diags] of this.deferredDiags) {
+      for (const [symbol, diags] of [...this.deferredDiags]) {
         if (this.alreadyFlushed.has(symbol)) continue;
-        for (const d of diags) this.pushDiag(d);
+        for (const d of [...diags]) this.pushDiag(d);
       }
       return {
         module: null,
@@ -5813,42 +5820,49 @@ export class Lowerer {
    * registered ClassInfo — the shape of a JS class whose collection fenced.
    * Used by run()'s global pruning; shapes/unions recurse with a seen-set
    * (interned ids can nest). */
-  typeNamesUnregisteredClass(t: IrType, seen: Set<string> = new Set()): boolean {
+  typeNamesUnregisteredClass(t: IrType): boolean {
+    return this.unregisteredClassOf(t, new Set()) !== null;
+  }
+
+  /** The first class name typeNamesUnregisteredClass finds in `t`. */
+  unregisteredClassOf(t: IrType, seen: Set<string>): string | null {
+    const first = (types: readonly IrType[]): string | null => {
+      for (const type of types) {
+        const name = this.unregisteredClassOf(type, seen);
+        if (name !== null) return name;
+      }
+      return null;
+    };
     switch (t.kind) {
       case "object":
-        return !this.classes.has(t.className);
+        return this.classes.has(t.className) ? null : t.className;
       case "array":
       case "set":
-        return this.typeNamesUnregisteredClass(t.elem, seen);
+        return first([t.elem]);
       case "map":
-        return (
-          this.typeNamesUnregisteredClass(t.key, seen) ||
-          this.typeNamesUnregisteredClass(t.value, seen)
-        );
+        return first([t.key, t.value]);
       case "promise":
-        return this.typeNamesUnregisteredClass(t.inner, seen);
+        return first([t.inner]);
       case "func":
-        return (
-          t.params.some((p) => this.typeNamesUnregisteredClass(p, seen)) ||
-          this.typeNamesUnregisteredClass(t.ret, seen)
-        );
+        return first([...t.params, t.ret]);
       case "record": {
-        if (seen.has(t.shapeId)) return false;
+        if (seen.has(t.shapeId)) return null;
         seen.add(t.shapeId);
         const shape = this.shapes.get(t.shapeId);
-        if (!shape) return false;
-        if (shape.indexValue && this.typeNamesUnregisteredClass(shape.indexValue, seen))
-          return true;
-        return shape.fields.some((f) => this.typeNamesUnregisteredClass(f.type, seen));
+        if (!shape) return null;
+        return first([
+          ...(shape.indexValue ? [shape.indexValue] : []),
+          ...shape.fields.map((f) => f.type),
+        ]);
       }
       case "union": {
-        if (seen.has(t.unionId)) return false;
+        if (seen.has(t.unionId)) return null;
         seen.add(t.unionId);
         const def = this.unions.get(t.unionId);
-        return !!def && def.arms.some((a) => this.typeNamesUnregisteredClass(a, seen));
+        return def ? first(def.arms) : null;
       }
       default:
-        return false;
+        return null;
     }
   }
 
@@ -6476,13 +6490,16 @@ export class Lowerer {
     const d = this.instantiationContext
       ? { ...diag, message: `${diag.message} (${this.instantiationContext})` }
       : diag;
+    const pending = this.pendingFlushes.get(diag);
     // Deferred collection: the wrapper decides whether these ever report
     // (a reference flushes them; unreferenced declarations stay silent in
     // builds and report under coverage's unreached group).
     if (this.diagSink) {
+      if (pending && d !== diag) this.pendingFlushes.set(d, pending);
       this.diagSink.push(d);
       return;
     }
+    if (pending) this.commitFlush(pending.symbol, pending.source);
     // One site, one report: some declarations map a type twice (module
     // globals pre-register before their initializers lower) — an exact
     // duplicate (code + span + message) adds noise, not information.
@@ -9081,12 +9098,44 @@ export class Lowerer {
    * diagnostics the eager collector historically produced. */
   flushDeferred(symbol: ts.Symbol): void {
     if (this.collecting) return;
+    this.reportDeferred(symbol);
+  }
+
+  /** flushDeferred without the collection-pass guard: for declarations
+   * whose diagnostics must report eagerly (class statements with
+   * declaration-time code, extended bases — collectClassShapeDeferring). */
+  reportDeferred(symbol: ts.Symbol): void {
     const diags = this.deferredDiags.get(symbol);
     if (!diags) return;
-    this.deferredDiags.delete(symbol);
-    if (this.alreadyFlushed.has(symbol)) return; // the emit pass reported these
+    if (this.alreadyFlushed.has(symbol)) {
+      this.deferredDiags.delete(symbol); // the emit pass reported these
+      return;
+    }
+    if (this.diagSink === null) {
+      this.deferredDiags.delete(symbol);
+      this.flushedSymbols.add(symbol);
+      for (const d of diags) this.pushDiag(d);
+      return;
+    }
+    // A capture buffer is active (a probe, or another declaration's
+    // deferred collection): the copies ride that buffer, and the
+    // declaration stays deferred until one of them reaches the build.
+    for (const d of diags) {
+      this.pendingFlushes.set(d, { symbol, source: d });
+      this.pushDiag(d);
+    }
+  }
+
+  /** A flushed copy of a deferred diagnostic reached `diags`: that
+   * diagnostic is reported, so it leaves the declaration's deferred list
+   * (the declaration counts as flushed for the coverage remainder). */
+  private commitFlush(symbol: ts.Symbol, source: ScrDiagnostic): void {
     this.flushedSymbols.add(symbol);
-    for (const d of diags) this.pushDiag(d);
+    const list = this.deferredDiags.get(symbol);
+    if (!list) return;
+    const index = list.indexOf(source);
+    if (index >= 0) list.splice(index, 1);
+    if (list.length === 0) this.deferredDiags.delete(symbol);
   }
 
   flushDeferredClass(className: string): void {

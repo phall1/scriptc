@@ -1287,7 +1287,10 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
       // that does not exist. The blocked-binding cascade names the use;
       // without this the validator's registration check ICEs on the live
       // reference (`@this {T}` inference — signature 07).
-      if (lowerer.typeNamesUnregisteredClass(g.type)) {
+      const unregistered = lowerer.unregisteredClassOf(g.type, new Set());
+      if (unregistered !== null) {
+        // The class's own rejection is the root cause the cascade names.
+        lowerer.flushDeferredClass(unregistered);
         lowerer.pushDiag(blockedBindingUseDiag(expr.text, loc));
         throw new PoisonError();
       }

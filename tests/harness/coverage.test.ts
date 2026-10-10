@@ -285,6 +285,14 @@ test("runtime-optional refined unions report blockers without crashing", () => {
   }
 });
 
+test("a rejected class reached only through a receiver probe reports its own diagnostic once", () => {
+  const { coverage } = analyze(join(repoRoot, "tests/diagnostics/deferred-class-receiver/main.ts"));
+  const messages = coverage.diagnostics.map((d) => d.message);
+  expect(messages.filter((m) => m.startsWith("'unknown'-typed class fields"))).toHaveLength(1);
+  expect(messages.some((m) => m.startsWith("constructing through a class value"))).toBe(true);
+  expect(coverage.unreached?.diagnostics ?? []).toEqual([]);
+});
+
 test("settled generic rest-order fences count each source statement once", () => {
   const { coverage } = analyze(join(repoRoot, "tests/diagnostics/retained-generic-rest-order.ts"));
   expect(coverage.diagnostics.map((d) => d.code)).toEqual(["SC1031", "SC2004"]);

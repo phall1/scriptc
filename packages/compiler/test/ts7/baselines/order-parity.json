@@ -10692,18 +10692,6 @@
    ],
    "diags": []
   },
-  "<repo>/tests/corpus/native-worker-publish-classes.ts": {
-   "order": [
-    "<repo>/tests/corpus/native-worker-publish-classes.ts"
-   ],
-   "diags": []
-  },
-  "<repo>/tests/corpus/native-worker-publish-refusals.ts": {
-   "order": [
-    "<repo>/tests/corpus/native-worker-publish-refusals.ts"
-   ],
-   "diags": []
-  },
   "<repo>/tests/corpus/nested-map-cycles.ts": {
    "order": [
     "<repo>/tests/corpus/nested-map-cycles.ts"
@@ -14620,12 +14608,6 @@
    ],
    "diags": []
   },
-  "<repo>/tests/corpus/native-worker-published-graphs.ts": {
-   "order": [
-    "<repo>/tests/corpus/native-worker-published-graphs.ts"
-   ],
-   "diags": []
-  },
   "<repo>/tests/corpus/native-worker-references.ts": {
    "order": [
     "<repo>/tests/corpus/native-worker-references.ts"
@@ -14659,12 +14641,6 @@
   "<repo>/tests/corpus/native-worker-terminate-wait.ts": {
    "order": [
     "<repo>/tests/corpus/native-worker-terminate-wait.ts"
-   ],
-   "diags": []
-  },
-  "<repo>/tests/corpus/native-worker-typed-arrays.ts": {
-   "order": [
-    "<repo>/tests/corpus/native-worker-typed-arrays.ts"
    ],
    "diags": []
   },
@@ -15617,6 +15593,72 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/stack-depth-async-bodies.ts": {
+   "order": [
+    "<repo>/tests/corpus/stack-depth-async-bodies.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4591-weak-keys-union-records.ts": {
+   "order": [
+    "<repo>/tests/corpus/4591-weak-keys-union-records.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4592-cycle-const-from-import/main.ts": {
+   "order": [
+    "<repo>/tests/corpus/4592-cycle-const-from-import/report.ts",
+    "<repo>/tests/corpus/4592-cycle-const-from-import/stock.ts",
+    "<repo>/tests/corpus/4592-cycle-const-from-import/markup.ts",
+    "<repo>/tests/corpus/4592-cycle-const-from-import/pricing.ts",
+    "<repo>/tests/corpus/4592-cycle-const-from-import/main.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/4593-weak-keys-empty-objects.ts": {
+   "order": [
+    "<repo>/tests/corpus/4593-weak-keys-empty-objects.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/diagnostics/deferred-class-binding/main.ts": {
+   "order": [
+    "<repo>/tests/diagnostics/deferred-class-binding/crate.ts",
+    "<repo>/tests/diagnostics/deferred-class-binding/main.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/diagnostics/deferred-class-receiver/main.ts": {
+   "order": [
+    "<repo>/tests/diagnostics/deferred-class-receiver/shelf.ts",
+    "<repo>/tests/diagnostics/deferred-class-receiver/main.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-worker-publish-classes.ts": {
+   "order": [
+    "<repo>/tests/corpus/native-worker-publish-classes.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-worker-publish-refusals.ts": {
+   "order": [
+    "<repo>/tests/corpus/native-worker-publish-refusals.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-worker-published-graphs.ts": {
+   "order": [
+    "<repo>/tests/corpus/native-worker-published-graphs.ts"
+   ],
+   "diags": []
+  },
+  "<repo>/tests/corpus/native-worker-typed-arrays.ts": {
+   "order": [
+    "<repo>/tests/corpus/native-worker-typed-arrays.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/4541-nullable-wrap-borrows.ts": {
    "order": [
     "<repo>/tests/corpus/4541-nullable-wrap-borrows.ts"
@@ -15650,34 +15692,6 @@
   "<repo>/tests/corpus/4546-rebound-borrowed-params.ts": {
    "order": [
     "<repo>/tests/corpus/4546-rebound-borrowed-params.ts"
-   ],
-   "diags": []
-  },
-  "<repo>/tests/corpus/stack-depth-async-bodies.ts": {
-   "order": [
-    "<repo>/tests/corpus/stack-depth-async-bodies.ts"
-   ],
-   "diags": []
-  },
-  "<repo>/tests/corpus/4591-weak-keys-union-records.ts": {
-   "order": [
-    "<repo>/tests/corpus/4591-weak-keys-union-records.ts"
-   ],
-   "diags": []
-  },
-  "<repo>/tests/corpus/4592-cycle-const-from-import/main.ts": {
-   "order": [
-    "<repo>/tests/corpus/4592-cycle-const-from-import/report.ts",
-    "<repo>/tests/corpus/4592-cycle-const-from-import/stock.ts",
-    "<repo>/tests/corpus/4592-cycle-const-from-import/markup.ts",
-    "<repo>/tests/corpus/4592-cycle-const-from-import/pricing.ts",
-    "<repo>/tests/corpus/4592-cycle-const-from-import/main.ts"
-   ],
-   "diags": []
-  },
-  "<repo>/tests/corpus/4593-weak-keys-empty-objects.ts": {
-   "order": [
-    "<repo>/tests/corpus/4593-weak-keys-empty-objects.ts"
    ],
    "diags": []
   },
