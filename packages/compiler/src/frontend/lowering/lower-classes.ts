@@ -165,6 +165,19 @@ function isCallHeritage(expression: ts.Expression): boolean {
   return ts.isCallExpression(inner);
 }
 
+/** Type arguments on `extends Data.Class<{ name: string }>` erase: the
+ * runtime class has no type parameters, and the argument only types the
+ * constructor props. A generic class (`class Box<T>`) still needs its
+ * concrete instantiation, and an unresolved base stays fenced. */
+function heritageTypeArgumentsErase(
+  base: ClassInfo | null | undefined,
+  typeArguments: ts.NodeArray<ts.TypeNode> | undefined,
+): boolean {
+  if (typeArguments === undefined) return false;
+  if (base == null || base.generic) return false;
+  return true;
+}
+
 /** A heritage whose one call signature is a JavaScript function body. */
 function jsFunctionHeritage(lowerer: Lowerer, expression: ts.Expression): boolean {
   const signatures = lowerer.checker.getCallSignatures(lowerer.typeOf(expression));
@@ -1894,7 +1907,9 @@ export function collectClassShapeInner(
               `extending the namespace member '${t.expression.name.text}' (no class lowering)`,
             );
           }
-          if (t.typeArguments) lowerer.unsupported("SC1090", t, "extending generic classes");
+          if (t.typeArguments && !heritageTypeArgumentsErase(nsBase, t.typeArguments)) {
+            lowerer.unsupported("SC1090", t, "extending generic classes");
+          }
           base = nsBase;
           continue;
         }
@@ -1912,7 +1927,9 @@ export function collectClassShapeInner(
         if (!t.expression.questionDotToken) {
           const propBase = propertyAssignedClassInfoOf(lowerer, memberSym);
           if (propBase) {
-            if (t.typeArguments) lowerer.unsupported("SC1090", t, "extending generic classes");
+            if (t.typeArguments && !heritageTypeArgumentsErase(propBase, t.typeArguments)) {
+              lowerer.unsupported("SC1090", t, "extending generic classes");
+            }
             const baseDecl = propBase.decl;
             if (
               baseDecl != null &&
@@ -2053,7 +2070,9 @@ export function collectClassShapeInner(
         base = instBase;
         continue;
       }
-      if (t.typeArguments) lowerer.unsupported("SC1090", t, "extending generic classes");
+      if (t.typeArguments && !heritageTypeArgumentsErase(named, t.typeArguments)) {
+        lowerer.unsupported("SC1090", t, "extending generic classes");
+      }
       base = named;
       if (!base) {
         if (adoptCallableBase(t.expression)) continue;
