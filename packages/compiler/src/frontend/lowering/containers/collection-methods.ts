@@ -883,7 +883,7 @@ export function lowerSetSeedNew(
       return selected ? defaultAfterUndefined(undefinedLeft, selected) : null;
     }
     const source = lowerer.lowerExpr(node.left);
-    if (isUnitType(source.type)) {
+    if (isUnitType(source.type) || isDynUndefined(source)) {
       const selected = lowerSetSeedNew(lowerer, fallback, setT);
       return selected ? defaultAfterUndefined(source, selected) : null;
     }
@@ -965,6 +965,14 @@ export function lowerSetSeedNew(
     }
   }
   return setFromSeedValue(lowerer, source, setT, () => ({ kind: "setNew", type: setT, loc }));
+}
+
+/** A missing npm-static option reads as dyn `undefined`, not the unit type. */
+function isDynUndefined(expr: IrExpr): boolean {
+  if (expr.kind === "seqExpr") return isDynUndefined(expr.result);
+  return (
+    expr.kind === "dynFrom" && expr.value.kind === "unitLit" && expr.value.unit === "undefined"
+  );
 }
 
 function setFromSeedValue(
@@ -1073,7 +1081,7 @@ export function lowerMapSeedNew(
     argNode.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken
   ) {
     const source = lowerer.lowerExpr(argNode.left);
-    if (isUnitType(source.type)) {
+    if (isUnitType(source.type) || isDynUndefined(source)) {
       const fallback = lowerMapSeedNew(lowerer, argNode.right, mapT);
       return fallback ? defaultAfterUndefined(source, fallback) : null;
     }
