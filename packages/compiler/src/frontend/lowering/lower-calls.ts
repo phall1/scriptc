@@ -183,6 +183,8 @@ import {
   objLitGenericFnNodeOf,
   objLitGenericFnInfoOf,
   genericCallInstance,
+  implicitDefaultInstance,
+  type GenericFnInfo,
 } from "./generic-functions.js";
 
 /** An island call result the .d.ts DECLARES as a primitive exits eagerly
@@ -4955,8 +4957,69 @@ function templateEscapesValid(raw: string): boolean {
  * plain calls), an island value under --dynamic (engine method/function
  * call with the engine's cooked/raw template object), and
  * a checked-dynamic value (the dynCall boundary — a non-function tag
- * throws Node's catchable TypeError). Everything else — generic tags,
- * method tags, function-value bindings — fences by name. */
+ * throws Node's catchable TypeError). A namespace-import member
+ * (`ns.tag\`...\``) calls that member the same way a plain call does:
+ * a plain function directly, an implicit-any JavaScript function through
+ * its default instance. Declared generic tags and other function values
+ * still fence by name. */
+
+/** `ns.tag\`a${x}b\`` where `ns` is a module namespace import. The member
+ * is the exporter's function, so the tag is that function's direct call
+ * with the cooked strings array in front of the interpolations. */
+function lowerNamespaceTaggedTemplate(
+  lowerer: Lowerer,
+  expr: ts.TaggedTemplateExpression,
+  values: readonly ts.Expression[],
+  strings: () => IrExpr,
+): IrExpr | null {
+  if (!ts.isPropertyAccessExpression(expr.tag) || expr.tag.questionDotToken !== undefined)
+    return null;
+  const member = nsMemberIdentOf(lowerer, expr.tag);
+  if (!member) return null;
+  const memberSym = lowerer.checker.getSymbolAtLocation(member);
+  if (memberSym) fenceEarlyNsMemberRef(lowerer, expr.tag, memberSym);
+  const generic = lowerer.genericFnOf(member);
+  if (generic?.implicitParams)
+    return lowerImplicitTaggedCall(lowerer, expr, generic, values, strings);
+  if (generic) {
+    lowerer.unsupported("SC1090", expr, "tagged templates with generic tag functions");
+  }
+  const sig = lowerer.fnSigOf(member);
+  if (!sig) return null;
+  lowerer.noteEdge(sig.name);
+  const loc = locOf(expr);
+  return reconcileOverloadReturn(lowerer, expr, {
+    kind: "call",
+    callee: sig.name,
+    args: completeArgs(lowerer, values, sig.params, loc, expr, [strings()]),
+    type: sig.returnType,
+    loc,
+  });
+}
+
+/** An implicit-any JavaScript tag has no single checker signature. The
+ * default instance is the body compiled for a value call; the strings
+ * array and interpolations complete against that instance, including a
+ * dynamic rest pack. */
+function lowerImplicitTaggedCall(
+  lowerer: Lowerer,
+  expr: ts.TaggedTemplateExpression,
+  info: GenericFnInfo,
+  values: readonly ts.Expression[],
+  strings: () => IrExpr,
+): IrExpr {
+  const inst = implicitDefaultInstance(lowerer, expr, info);
+  const loc = locOf(expr);
+  lowerer.noteEdge(inst.name);
+  return {
+    kind: "call",
+    callee: inst.name,
+    args: completeArgs(lowerer, values, inst.params, loc, expr, [strings()]),
+    type: inst.returnType,
+    loc,
+  };
+}
+
 export function lowerTaggedTemplate(lowerer: Lowerer, expr: ts.TaggedTemplateExpression): IrExpr {
   const loc = locOf(expr);
   const pieces = ts.isNoSubstitutionTemplateLiteral(expr.template)
@@ -5068,6 +5131,9 @@ export function lowerTaggedTemplate(lowerer: Lowerer, expr: ts.TaggedTemplateExp
       }
     }
   }
+
+  const namespaceTag = lowerNamespaceTaggedTemplate(lowerer, expr, values, strings);
+  if (namespaceTag) return namespaceTag;
 
   // Checked-dynamic tags (`var f: any; f\`abc\``, dyn property chains):
   // the dynCall boundary — arguments convert into dyn, a non-function
