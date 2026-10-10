@@ -1924,6 +1924,9 @@ export class Lowerer {
    * never holds an explicit undefined (or a hole, for the find family):
    * their callbacks take the element type itself. */
   readonly presentElementCalls = new Set<ts.CallExpression>();
+  /** for-of loops over arrays that can hold neither holes nor undefined:
+   * each pass reads the element payload directly. */
+  readonly presentElementLoops = new Set<ts.ForOfStatement>();
   /** Capture entries and their origin share one mutable box. Normalize each
    * entry to the origin so writes and flow proofs stay synchronized. */
   readonly runtimeOptionalRoots = new Map<IrLocal, IrLocal>();
@@ -2176,7 +2179,7 @@ export class Lowerer {
   }
 
   /** True when `actual` is `declared` with some record fields (directly,
-   * or in an array's element records) widened to runtime-optional unions:
+   * in nested records, or in an array's element records) widened to runtime-optional unions:
    * fields filled from unchecked indexed reads the checker calls present.
    * Inferred bindings and destructured parameters keep that layout instead
    * of narrowing it away. */
@@ -2196,7 +2199,8 @@ export class Lowerer {
       if (typeEquals(source.type, field.type)) continue;
       if (
         this.isRuntimeOptionalField(actual.shapeId, field.name) &&
-        this.runtimeOptionalWidening(source.type, field.type) !== null
+        (this.runtimeOptionalWidening(source.type, field.type) !== null ||
+          this.isRuntimeOptionalRecordVariant(source.type, field.type))
       ) {
         widened = true;
         continue;
@@ -4047,6 +4051,14 @@ export class Lowerer {
       presenceProofs.set(use, proven);
       return proven;
     };
+    // Bindings of a for-of loop over an array that can hold holes or
+    // undefined. Lowering keeps such a binding's runtime union, so storing
+    // it into another array can store undefined.
+    const iterationSymbols = new Set<ts.Symbol>();
+    // The subset whose iterated array's own facts show a hole or undefined.
+    // Such a binding reads `T | undefined`, so a typed parameter, local or
+    // field it flows into widens like any other missing element read.
+    const holeyIterationSymbols = new Set<ts.Symbol>();
     const mayBeOptional = (node: ts.Expression): boolean => {
       // `xs[i]!` is the explicit proven-present form. Its array read keeps
       // the established dense bounds trap and must not promote the enclosing
@@ -4076,8 +4088,17 @@ export class Lowerer {
       )
         return true;
       if (ts.isIdentifier(e)) {
-        const symbol = symbolOf(e);
-        return symbol !== null && optionalSymbols.has(symbol) && !provenPresent(e, symbol);
+        // A shorthand property's name reads the binding of the same name.
+        const shorthand =
+          ts.isShorthandPropertyAssignment(e.parent) && e.parent.name === e
+            ? this.checker.getShorthandAssignmentValueSymbol(e.parent)
+            : undefined;
+        const symbol = shorthand ?? symbolOf(e);
+        return (
+          symbol !== null &&
+          (optionalSymbols.has(symbol) || holeyIterationSymbols.has(symbol)) &&
+          !provenPresent(e, symbol)
+        );
       }
       if (ts.isPropertyAccessExpression(e)) {
         const symbol = symbolOf(e.name);
@@ -4167,9 +4188,36 @@ export class Lowerer {
     // a spread or a parameter receives the source's optional fields.
     const fieldsOfValue = (node: ts.Expression): ReadonlySet<string> | undefined => {
       const e = peel(node);
+      if (ts.isObjectLiteralExpression(e)) return literalFieldsOf(e);
       if (!ts.isIdentifier(e)) return undefined;
       const symbol = symbolOf(e);
       return symbol === null ? undefined : optionalFields.get(symbol);
+    };
+    /** Optional fields of a fresh object literal: properties whose value
+     * may be a missing element (shorthand or long form) and fields copied
+     * from spreads, minus the names a later member writes. */
+    const literalFieldsOf = (object: ts.ObjectLiteralExpression): Set<string> | undefined => {
+      const out = new Set<string>();
+      for (const prop of object.properties) {
+        if (ts.isSpreadAssignment(prop)) {
+          const fields = fieldsOfValue(prop.expression);
+          if (fields !== undefined) for (const field of fields) out.add(field);
+          continue;
+        }
+        if (
+          prop.name === undefined ||
+          !(ts.isIdentifier(prop.name) || ts.isStringLiteral(prop.name))
+        )
+          continue;
+        const value = ts.isPropertyAssignment(prop)
+          ? prop.initializer
+          : ts.isShorthandPropertyAssignment(prop)
+            ? (prop.name as ts.Expression)
+            : null;
+        if (value !== null && mayBeOptional(value)) out.add(prop.name.text);
+        else out.delete(prop.name.text);
+      }
+      return out.size > 0 ? out : undefined;
     };
     const noteFieldsFrom = (symbol: ts.Symbol, source: ts.Expression): boolean => {
       const fields = fieldsOfValue(source);
@@ -4533,10 +4581,6 @@ export class Lowerer {
         callbackReturnsOptional(decl.initializer, seen)
       );
     };
-    // Bindings of a for-of loop over an array that can hold holes or
-    // undefined. Lowering keeps such a binding's runtime union, so storing
-    // it into another array can store undefined.
-    const iterationSymbols = new Set<ts.Symbol>();
     // Element ABIs whose own type admits undefined (`(T | undefined)[]`,
     // or a rest array widened for an absent argument).
     const optionalElementKeys = new Set<string>();
@@ -4758,11 +4802,23 @@ export class Lowerer {
         const rest = sig.params.find((shape) => shape.mode === "rest");
         return rest?.type.kind === "array" ? [typeKey(rest.type.elem)] : [];
       },
-      markIterationBinding: (node) => {
+      markIterationBinding: (node, known) => {
         const symbol = symbolOf(node);
-        if (!symbol || iterationSymbols.has(symbol)) return false;
-        iterationSymbols.add(symbol);
-        return true;
+        if (!symbol) return false;
+        let changed = false;
+        if (!iterationSymbols.has(symbol)) {
+          iterationSymbols.add(symbol);
+          changed = true;
+        }
+        if (known && !holeyIterationSymbols.has(symbol)) {
+          holeyIterationSymbols.add(symbol);
+          // `for (name of xs)` assigns an existing binding, whose own
+          // storage must then hold the loop's undefined too.
+          if (!ts.isVariableDeclaration(node.parent) && !ts.isBindingElement(node.parent))
+            optionalSymbols.add(symbol);
+          changed = true;
+        }
+        return changed;
       },
       note: provenance
         ? (fact, key, site) => provenance.note(`element-${fact}`, site, site, key)
@@ -4771,6 +4827,8 @@ export class Lowerer {
     // Each pass revisits every array callback site; the last visit holds
     // the decision at the fixed point.
     const presentSites = new Map<ts.CallExpression, boolean>();
+    // The same for each for-of loop over an array.
+    const presentLoops = new Map<ts.ForOfStatement, boolean>();
     const scanSites = new Map<ts.SourceFile, ts.Node[]>();
     const sitesOf = (sf: ts.SourceFile): ts.Node[] => {
       const cached = scanSites.get(sf);
@@ -4798,6 +4856,8 @@ export class Lowerer {
       let changed = false;
       const scan = (node: ts.Node): void => {
         if (elementStates.scan(node)) changed = true;
+        if (ts.isForOfStatement(node))
+          presentLoops.set(node, !elementStates.loopMayYieldUndefined(node));
         if (ts.isVariableDeclaration(node)) {
           if (node.initializer) {
             const result = optionalPrimitiveResultType(node.initializer);
@@ -5068,7 +5128,39 @@ export class Lowerer {
           const symbol = callableSymbolOf(node.expression);
           if (!symbol) return;
           const sig = signatureBySymbol.get(symbol);
-          if (!sig) return;
+          if (!sig) {
+            // A direct call of a function-valued const (`const show = (n:
+            // number) => ...`): a possibly missing argument widens that
+            // parameter, as for a callback the same value is passed as.
+            if (!ts.isIdentifier(node.expression) || reassigned.has(symbol)) return;
+            const declaration = this.checker.valueDeclarationOf(symbol);
+            const value =
+              declaration && ts.isVariableDeclaration(declaration) && declaration.initializer
+                ? peel(declaration.initializer)
+                : null;
+            if (!value || !(ts.isArrowFunction(value) || ts.isFunctionExpression(value))) return;
+            // Optional, defaulted and rest parameters keep their own ABI.
+            if (
+              value.parameters.some(
+                (parameter) =>
+                  parameter.questionToken !== undefined ||
+                  parameter.initializer !== undefined ||
+                  parameter.dotDotDotToken !== undefined,
+              )
+            )
+              return;
+            const indices = node.arguments.flatMap((arg, i) =>
+              !ts.isSpreadElement(arg) &&
+              value.parameters[i] !== undefined &&
+              !value.parameters[i]!.dotDotDotToken &&
+              mayBeOptional(arg)
+                ? [i]
+                : [],
+            );
+            provenanceSite = node;
+            if (indices.length > 0 && promoteHofCallback(node.expression, indices)) changed = true;
+            return;
+          }
           // JSDoc describes the usual value, not a runtime arity check.
           // A short JavaScript call still passes undefined. Widen only the
           // observed slots before bodies lower so both caller and callee
@@ -5306,6 +5398,7 @@ export class Lowerer {
       }
     }
     for (const [site, present] of presentSites) if (present) this.presentElementCalls.add(site);
+    for (const [loop, present] of presentLoops) if (present) this.presentElementLoops.add(loop);
     const globalsById = new Map(this.globalsList.map((global) => [global.id, global]));
     for (const [symbol, field] of staticFieldsBySymbol) {
       if (!optionalSymbols.has(symbol)) continue;
