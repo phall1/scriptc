@@ -5155,6 +5155,14 @@ export function lowerVarDecl(
   ) {
     type = init.type;
   }
+  if (type === null && !isLet) {
+    // `const fakeFetch: typeof globalThis.fetch = async () => new Response(...)`.
+    // The annotation is the @types/node fetch signature, which has no static
+    // layout. The initializer is the function a later caller invokes; extra
+    // arguments are ignored when that function is boxed and called.
+    const adopted = ambientFetchInitializerType(lowerer, decl, init.type);
+    if (adopted) type = adopted;
+  }
   if (!type) {
     // The JS declaration fallback (irTypeOf's story): the binding holds
     // the checked-dynamic kind when even the initializer's type has no
@@ -5407,6 +5415,22 @@ function inferredOptionalRecordType(
   )
     return declared;
   return actual;
+}
+
+/** A const annotated `typeof fetch` holds the user's function, not the
+ * ambient signature. The signature's symbol is the stdlib `fetch`. */
+function ambientFetchInitializerType(
+  lowerer: Lowerer,
+  decl: ts.VariableDeclaration,
+  init: IrType,
+): IrType | null {
+  if (decl.type === undefined || init.kind !== "func") return null;
+  const annotated = lowerer.checker.getBaseTypeOfLiteralType(lowerer.typeOf(decl.name));
+  const sym = annotated.getAliasSymbol() ?? annotated.getSymbol();
+  if (sym?.name !== "fetch" || lowerer.checker.getCallSignatures(annotated).length === 0)
+    return null;
+  if (!lowerer.nodeTypesOnlySymbol(sym) && !lowerer.isStdlibSymbol(sym)) return null;
+  return init;
 }
 
 function lowerVariableInitializer(
