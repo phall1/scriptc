@@ -8516,9 +8516,10 @@ export function lowerRecordFieldCall(
   // reserved %call slot — `colors.blue("x")` where blue also carries
   // `.bold` (the chalk shape).
   if (callee.type.kind === "record") callee = lowerer.hybridCallUnwrap(callee);
-  // Inferred JavaScript option records can retain checked callables in
-  // fields even when the checker only describes those members as any.
-  if (callee.type.kind === "dyn" && isJsSourceFile(call.getSourceFile())) {
+  // Option records can retain checked callables in fields even when the
+  // checker only describes those members as any. A hidden package
+  // declaration leaves the same dyn field on a TypeScript record.
+  if (callee.type.kind === "dyn") {
     const receiver =
       target && receiverLocal ? lowerer.coerceToExpected(target.obj, DYN) : undefined;
     const spread = call.arguments.some(ts.isSpreadElement)
