@@ -217,6 +217,9 @@ function collectUses(fn: IrFunction, nullableField: NullableFieldTest): Uses {
 export function analyzeCallLifetimes(
   functions: ReadonlyMap<string, IrFunction>,
   nullableField: NullableFieldTest = () => false,
+  /** Rebound parameters that only ever hold borrowed walk pointers
+   * (walk-borrows.ts): they keep the borrowed convention although written. */
+  walkParameters: ReadonlyMap<string, ReadonlySet<number>> = new Map(),
 ): CallLifetimes {
   const usesByFunction = new Map<string, Uses>();
   const lazyCaptures = new LazyCaptures(functions);
@@ -255,7 +258,7 @@ export function analyzeCallLifetimes(
       // any synchronous body; captured cells are boxed and marked invalid.
       continue;
     }
-    const borrowed = new Set<number>();
+    const borrowed = new Set<number>(walkParameters.get(fn.name));
     // A captured parameter that nothing rebinds keeps its entry value; its
     // environment box takes a reference of its own when it is created.
     const unchangedCaptures = lazyCaptures.parameters(fn);
