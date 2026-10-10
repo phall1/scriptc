@@ -46,7 +46,7 @@ const shelf = new Shelf("north");
 let index = 0;
 for (const count of reserved) {
   const typed: number = count;
-  const bin: Bin = { slot: index, count };
+  const bin: Bin = { slot: index, count: count };
   console.log(shelf.describe(typed), typeof typed, binLabel(bin), JSON.stringify(bin));
   index++;
 }

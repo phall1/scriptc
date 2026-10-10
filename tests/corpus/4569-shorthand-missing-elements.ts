@@ -31,7 +31,8 @@ console.log(JSON.stringify({ outer: { inner: { side } } }));
 // Arrays of records and typed parameters.
 const shapes = [{ side }, { side: 5 }];
 console.log(JSON.stringify(shapes), shapes.length, shapes[0]!.side === undefined);
-console.log(sideCount({ side }), describe({ side }), describe({ side: known }));
+const holder = { side: side };
+console.log(sideCount(holder), describe(holder), describe({ side: known }));
 
 // Annotated records inside a function and a loop.
 function report(at: number): void {

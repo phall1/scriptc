@@ -15706,6 +15706,12 @@
     "<repo>/tests/corpus/4569-shorthand-missing-elements.ts"
    ],
    "diags": []
+  },
+  "<repo>/tests/corpus/4570-map-lookup-default-record.ts": {
+   "order": [
+    "<repo>/tests/corpus/4570-map-lookup-default-record.ts"
+   ],
+   "diags": []
   }
  }
 }

@@ -28,6 +28,12 @@ const entry = join(root, "tests/fixtures/self-hosting/llvm-emitter.ts");
 const execFileAsync = promisify(execFile);
 const runOptions = { cwd: root, timeout: 60_000, maxBuffer: 256 * 1024 * 1024 };
 const sanitize = process.env["SCRIPTC_SAN"] === "1";
+// Under ASan every allocation records its stack, which makes the emitter
+// several times slower than the plain build. Emitting its own module (tens
+// of megabytes of LLVM) then needs more room than the plain lane on shared
+// runners; the limits still stop a stage that hangs.
+const emitTimeout = sanitize ? 900_000 : 300_000;
+const testTimeout = sanitize ? 2_400_000 : 1_200_000;
 const generatedProgram = "scriptc-generated-v1";
 
 function programStderr(stderr: Buffer): string {
@@ -149,7 +155,7 @@ for (const backend of ["llvm"] as const) {
         writeFileSync(config, JSON.stringify(request));
         const result = await execFileAsync(stage, [input, output, config], {
           ...runOptions,
-          timeout: 300_000,
+          timeout: emitTimeout,
         }).catch((cause: unknown) => {
           throw new Error(`native LLVM emission failed for ${name}`, { cause });
         });
@@ -261,7 +267,7 @@ for (const backend of ["llvm"] as const) {
       const again = join(dir, "again.ll");
       const second = await execFileAsync(secondStage, [input, again, config], {
         ...runOptions,
-        timeout: 300_000,
+        timeout: emitTimeout,
       });
       expect(second.stdout).toBe("");
       expect(second.stderr).toBe("");
@@ -269,5 +275,5 @@ for (const backend of ["llvm"] as const) {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 1_200_000);
+  }, testTimeout);
 }

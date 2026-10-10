@@ -4095,12 +4095,7 @@ export class Lowerer {
       )
         return true;
       if (ts.isIdentifier(e)) {
-        // A shorthand property's name reads the binding of the same name.
-        const shorthand =
-          ts.isShorthandPropertyAssignment(e.parent) && e.parent.name === e
-            ? this.checker.getShorthandAssignmentValueSymbol(e.parent)
-            : undefined;
-        const symbol = shorthand ?? symbolOf(e);
+        const symbol = symbolOf(e);
         return (
           symbol !== null &&
           (optionalSymbols.has(symbol) || holeyIterationSymbols.has(symbol)) &&
@@ -4195,36 +4190,9 @@ export class Lowerer {
     // a spread or a parameter receives the source's optional fields.
     const fieldsOfValue = (node: ts.Expression): ReadonlySet<string> | undefined => {
       const e = peel(node);
-      if (ts.isObjectLiteralExpression(e)) return literalFieldsOf(e);
       if (!ts.isIdentifier(e)) return undefined;
       const symbol = symbolOf(e);
       return symbol === null ? undefined : optionalFields.get(symbol);
-    };
-    /** Optional fields of a fresh object literal: properties whose value
-     * may be a missing element (shorthand or long form) and fields copied
-     * from spreads, minus the names a later member writes. */
-    const literalFieldsOf = (object: ts.ObjectLiteralExpression): Set<string> | undefined => {
-      const out = new Set<string>();
-      for (const prop of object.properties) {
-        if (ts.isSpreadAssignment(prop)) {
-          const fields = fieldsOfValue(prop.expression);
-          if (fields !== undefined) for (const field of fields) out.add(field);
-          continue;
-        }
-        if (
-          prop.name === undefined ||
-          !(ts.isIdentifier(prop.name) || ts.isStringLiteral(prop.name))
-        )
-          continue;
-        const value = ts.isPropertyAssignment(prop)
-          ? prop.initializer
-          : ts.isShorthandPropertyAssignment(prop)
-            ? (prop.name as ts.Expression)
-            : null;
-        if (value !== null && mayBeOptional(value)) out.add(prop.name.text);
-        else out.delete(prop.name.text);
-      }
-      return out.size > 0 ? out : undefined;
     };
     const noteFieldsFrom = (symbol: ts.Symbol, source: ts.Expression): boolean => {
       const fields = fieldsOfValue(source);
