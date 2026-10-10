@@ -1688,10 +1688,21 @@ export function lowerObjectLiteral(
       // TypeScript describes a required record. Select the copy strategy
       // from that stored representation so absent sources copy nothing.
       // Checked-dynamic bindings still use the checker's field contract.
-      const srcType =
+      let srcType =
         srcLowered.type.kind === "dyn"
           ? lowerer.mapTypeOf(lowerer.typeOf(srcNode))
           : srcLowered.type;
+      // A JavaScript any-field object maps to unknown, while the literal's
+      // destination still names those fields. Copy them from the dynamic
+      // value; later properties override as usual.
+      if (
+        srcType?.kind !== "record" &&
+        isJsSourceFile(expr.getSourceFile()) &&
+        srcLowered.type.kind === "dyn" &&
+        expected?.kind === "record"
+      ) {
+        srcType = expected;
+      }
       // `...options.installConfig` — a spread of `Partial<X> | undefined`
       // (the optional-options merge idiom `{ ...DEFAULTS, ...overrides }`):
       // JS spreads nothing for the unit arm and copies present keys
