@@ -4722,6 +4722,10 @@ export function lowerVarDecl(
       g.type = raw.type;
       lowerer.runtimeOptionalArithmeticGlobals.add(g);
     }
+    // `const builder = urlBuilder(...)` is checker-typed `{}` because the
+    // helper returns an empty object literal. The value is already
+    // checked-dynamic and carries the keys written into that object.
+    if (openEmptyRecordBinding(lowerer, decl, g.type, raw.type)) g.type = DYN;
     const init = lowerer.coerceInto(decl.initializer, raw, g.type);
     return {
       kind: "assign",
@@ -5278,6 +5282,10 @@ export function lowerVarDecl(
       loc: locOf(decl),
     };
   }
+  // `const builder = {}` inside package JS is filled by later keyed
+  // writes. The empty record cannot hold those keys, so the local stays
+  // the checked-dynamic object the writes mutate.
+  if (openEmptyRecordBinding(lowerer, decl, settledType, init.type)) settledType = DYN;
   // Slot coercion: `const r: A | B = bValue;` wraps implicitly; width
   // subtyping (`const p: {a: number} = wider;`) is rejected, not coerced.
   init = lowerer.coerceInto(decl.initializer, init, settledType);
@@ -5489,6 +5497,101 @@ export function hasJsTypeAnnotation(decl: ts.VariableDeclaration): boolean {
   return (
     !!statement && /@type\b/.test(decl.getSourceFile().text.slice(statement.pos, decl.getStart()))
   );
+}
+
+/** A closed empty record: no fields, no index signature, not a tuple. */
+function closedEmptyRecord(lowerer: Lowerer, type: IrType | null): boolean {
+  if (type?.kind !== "record") return false;
+  const shape = lowerer.shapes.get(type.shapeId);
+  if (!shape || shape.tuple || shape.indexValue) return false;
+  return shape.fields.length === 0;
+}
+
+/** `{}`, including a parenthesized spelling. */
+function emptyObjectLiteral(node: ts.Expression | undefined): boolean {
+  if (node === undefined) return false;
+  let expr = node;
+  while (ts.isParenthesizedExpression(expr)) expr = expr.expression;
+  return ts.isObjectLiteralExpression(expr) && expr.properties.length === 0;
+}
+
+/** The function or file that owns later uses of this binding. */
+function bindingOwner(decl: ts.VariableDeclaration): ts.Node {
+  let owner: ts.Node = decl;
+  while (owner.parent && !ts.isFunctionLike(owner) && !ts.isSourceFile(owner)) owner = owner.parent;
+  return owner;
+}
+
+function skipParens(node: ts.Node): ts.Node {
+  let current = node;
+  while (ts.isParenthesizedExpression(current.parent)) current = current.parent;
+  return current;
+}
+
+function isElementReceiver(node: ts.Node): boolean {
+  const parent = node.parent;
+  return ts.isElementAccessExpression(parent) && parent.expression === node;
+}
+
+function isReturnedExpression(node: ts.Node): boolean {
+  const parent = node.parent;
+  return ts.isReturnStatement(parent) && parent.expression === node;
+}
+
+function isCallArgument(node: ts.Node): boolean {
+  const parent = node.parent;
+  if (!ts.isCallExpression(parent) || parent.expression === node) return false;
+  for (const arg of parent.arguments) {
+    if (arg === node) return true;
+  }
+  return false;
+}
+
+/** `builder[k]`, `return builder`, or `f(builder)`, through parentheses. */
+function openEmptyObjectUse(node: ts.Identifier): boolean {
+  const current = skipParens(node);
+  return isElementReceiver(current) || isReturnedExpression(current) || isCallArgument(current);
+}
+
+function sameSymbolUse(
+  lowerer: Lowerer,
+  node: ts.Node,
+  name: string,
+  symbol: ts.Symbol,
+  declName: ts.Identifier,
+): boolean {
+  if (!ts.isIdentifier(node) || node === declName || node.text !== name) return false;
+  return lowerer.resolveValueSymbol(node) === symbol && openEmptyObjectUse(node);
+}
+
+/** JavaScript `const builder = {}` that is later indexed, returned, or
+ * passed onward. The empty record cannot grow, so the binding holds the
+ * same checked-dynamic object those uses mutate. */
+function jsConstEmptyObjectIsOpen(lowerer: Lowerer, decl: ts.VariableDeclaration): boolean {
+  if (!isJsSourceFile(decl.getSourceFile()) || decl.type || hasJsTypeAnnotation(decl)) return false;
+  if (!ts.isIdentifier(decl.name) || !emptyObjectLiteral(decl.initializer)) return false;
+  const symbol = lowerer.resolveValueSymbol(decl.name);
+  if (!symbol) return false;
+  const name = decl.name;
+  let open = false;
+  ts.walkPreorder(bindingOwner(decl), (node) => {
+    if (!open && sameSymbolUse(lowerer, node, name.text, symbol, name)) open = true;
+  });
+  return open;
+}
+
+/** An unannotated empty-record binding whose value is already
+ * checked-dynamic, or a JavaScript const empty object filled in later.
+ * A declared type keeps its slot. */
+function openEmptyRecordBinding(
+  lowerer: Lowerer,
+  decl: ts.VariableDeclaration,
+  type: IrType | null,
+  init: IrType,
+): boolean {
+  if (jsConstEmptyObjectIsOpen(lowerer, decl)) return true;
+  if (decl.type || hasJsTypeAnnotation(decl)) return false;
+  return init.kind === "dyn" && closedEmptyRecord(lowerer, type);
 }
 
 /** Inferred JS scalar initializers do not constrain later writes through
