@@ -41,8 +41,8 @@ import {
   reflectClassPrototype,
 } from "./class-prototypes.js";
 import {
+  errorDynamicPropertyWrite,
   errorPropertyRead,
-  errorPropertyWrite,
   errorToStringCall,
   errorToStringMethod,
   refreshErrorPropertyDispatch,
@@ -3256,12 +3256,7 @@ export class ClassDynamicDispatch {
     if ((name === "message" || name === "name") && lowerer.isSubclassOf(info.def.name, "%Error"))
       return write
         ? [
-            errorPropertyWrite(
-              lowerer,
-              receiver,
-              lowerer.coerceToExpected(varRef("p.1", DYN, loc), STRING),
-              name,
-            ),
+            errorDynamicPropertyWrite(lowerer, receiver, varRef("p.1", DYN, loc), name),
             { kind: "return", value: null, loc },
           ]
         : [
