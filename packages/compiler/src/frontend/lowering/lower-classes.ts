@@ -74,6 +74,7 @@ import { bufEncoding } from "./containers/bytes.js";
 import { isSafeToRepeat } from "./expressions/evaluation-safety.js";
 import { lowerSearchParamsNew } from "./builtins/url.js";
 import { lowerTextCodecNew } from "./builtins/text-codecs.js";
+import { lowerGcHandleNew } from "./builtins/weak-refs.js";
 import { lowerWorkerNew } from "./builtins/workers.js";
 import {
   requiresDynamicPackageDiag,
@@ -8636,6 +8637,13 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
         type: decT,
         loc,
       };
+    }
+    if (
+      symbol &&
+      (symbol.name === "WeakRef" || symbol.name === "FinalizationRegistry") &&
+      lowerer.isStdlibSymbol(symbol)
+    ) {
+      return lowerGcHandleNew(lowerer, expr, symbol.name);
     }
     if (
       symbol &&
