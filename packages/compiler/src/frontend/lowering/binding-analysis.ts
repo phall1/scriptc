@@ -376,3 +376,46 @@ export function deadUnmappableBinding(
   if (dead) lowerer.deadBindings.add(sym);
   return dead;
 }
+
+function skipParenParents(node: ts.Node): ts.Node {
+  let current = node;
+  while (ts.isParenthesizedExpression(current.parent)) current = current.parent;
+  return current;
+}
+
+/** First argument of `Object.assign` or `Object.setPrototypeOf` /
+ * `Reflect.setPrototypeOf`. */
+function isStdlibPropertyTarget(lowerer: Lowerer, node: ts.Identifier): boolean {
+  const current = skipParenParents(node);
+  const parent = current.parent;
+  if (!ts.isCallExpression(parent) || parent.arguments[0] !== current) return false;
+  const callee = parent.expression;
+  if (!ts.isPropertyAccessExpression(callee)) return false;
+  const method = callee.name.text;
+  if (method !== "assign" && method !== "setPrototypeOf") return false;
+  if (lowerer.isStdlibGlobal(callee.expression, "Object")) return true;
+  return method === "setPrototypeOf" && lowerer.isStdlibGlobal(callee.expression, "Reflect");
+}
+
+/** A JavaScript nested `function Workflow() {}` that later receives
+ * properties. The function value has to stay one checked-dynamic object
+ * so those writes and the return see the same value. */
+export function jsFunctionReceivesProperties(
+  lowerer: Lowerer,
+  decl: ts.FunctionDeclaration,
+): boolean {
+  if (!isJsSourceFile(decl.getSourceFile()) || !decl.name) return false;
+  const symbol = lowerer.resolveValueSymbol(decl.name);
+  const scope = decl.parent;
+  if (!symbol || !scope) return false;
+  const name = decl.name;
+  let found = false;
+  ts.walkPreorder(scope, (node) => {
+    if (found || node === decl) return node === decl ? "skip" : undefined;
+    if (!ts.isIdentifier(node) || node === name || node.text !== name.text) return undefined;
+    if (lowerer.resolveValueSymbol(node) === symbol && isStdlibPropertyTarget(lowerer, node))
+      found = true;
+    return undefined;
+  });
+  return found;
+}

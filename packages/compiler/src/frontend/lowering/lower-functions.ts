@@ -18,6 +18,7 @@ import { PoisonError, jsFuncNameOf, newFnCtx } from "./lowerer.js";
 import { enforceLibBoundary, lowerSurplusCalls } from "./lib-boundary.js";
 import { returnsOnlyThis } from "./lower-classes.js";
 import { declSymbolOf } from "./lower-modules.js";
+import { jsFunctionReceivesProperties } from "./binding-analysis.js";
 import {
   hasExplicitJsDocReturn,
   producesConstructor,
@@ -83,6 +84,7 @@ export function lowerNestedFunctionDecl(lowerer: Lowerer, stmt: ts.FunctionDecla
   // BEFORE lowerLambda lets a sibling lowered from that body capture this
   // local's eventual box. The local object may become boxed while either
   // body lowers; backends inspect its final shape when emitting varDecl.
+  const receivesProperties = jsFunctionReceivesProperties(lowerer, stmt);
   const local = lowerer.declareLocal(stmt.name, stmt.name.text, funcType, true);
   let declared = false;
   for (let i = lowerer.activeStmtLists.length - 1; i >= 0; i--) {
@@ -98,17 +100,33 @@ export function lowerNestedFunctionDecl(lowerer: Lowerer, stmt: ts.FunctionDecla
     );
   }
   const init = lowerer.lowerLambda(stmt);
+  // `function Workflow() {}` then `Object.assign(Workflow, options)`:
+  // the properties live on that function. A static function slot cannot
+  // hold them, so the binding is the boxed function those writes mutate.
+  const boxed =
+    receivesProperties &&
+    init.type.kind === "func" &&
+    canBoxFuncIntoDyn(
+      init.type,
+      (id) => lowerer.shapes.get(id),
+      (id) => lowerer.unions.get(id),
+    );
   // Body inference may settle a JS return differently from the initial
   // checker signature. Publish that same ABI on the hoisted binding and
-  // every mutable capture of it before callers are lowered.
-  if (init.type.kind === "func" && !typeEquals(local.type, init.type)) {
-    local.type = init.type;
+  // every mutable capture of it before callers are lowered. A function
+  // that receives properties publishes the boxed value instead.
+  const published = boxed ? DYN : init.type.kind === "func" ? init.type : null;
+  if (published && !typeEquals(local.type, published)) {
+    local.type = published;
     for (const fn of lowerer.liftedFns)
       for (const capture of fn.captures ?? []) {
-        if (capture.localId === local.id) capture.type = init.type;
+        if (capture.localId === local.id) capture.type = published;
       }
   }
-  return { kind: "assign", localId: local.id, value: init, loc: locOf(stmt) };
+  const value = boxed
+    ? { kind: "dynFrom" as const, value: init, type: DYN, loc: init.loc }
+    : init;
+  return { kind: "assign", localId: local.id, value, loc: locOf(stmt) };
 }
 
 /** Install the hidden arguments binding, or clone a source rest pack
