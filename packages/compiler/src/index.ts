@@ -551,7 +551,6 @@ async function emitNativeProgramObject(
   opts: CompileRequestOptions,
   llvm: string | readonly string[],
   features: EarlyExecutableNativeFeatures,
-  llvmPath: string,
 ): Promise<NativeProgramObject> {
   const stem = basename(entryPath).replace(/\.(ts|mts|cts|js|mjs|cjs)$/, "");
   const artifactPath = join(opts.outDir, `${stem}.helper.o`);
@@ -582,7 +581,6 @@ async function emitNativeProgramObject(
     const artifact = await emitNativeArtifact({
       outputPath: linkPath,
       llvm,
-      inputPath: llvmPath,
       outputKind: "obj",
       sourcePath: entryPath,
       optimization: opts.optimization === "dev" ? "0" : "2",
@@ -1083,7 +1081,6 @@ async function compileTracked(
           opts,
           await readFile(earlyHit.llvmPath, "utf8"),
           earlyHit.native,
-          earlyHit.llvmPath,
         );
         nativeInputPath = nativeProgramObject.linkPath;
       } catch (err) {
@@ -1196,7 +1193,6 @@ async function compileTracked(
           opts,
           llvmSource,
           nativeFeatures,
-          llvmPath,
         );
         timing("native-object");
       } catch (err) {
