@@ -194,10 +194,61 @@ export function emitBytesGet(
   if (host.mod.workers) {
     const fn = invalidNaN ? "scr_bytes_get_or_nan" : "scr_bytes_get";
     host.declare(`declare double @${fn}(ptr, double)`);
+    const local = emitSharedBytesSplit(host, receiver);
     const result = B.tmp();
     B.line(`${result} = call double @${fn}(ptr ${receiver}, double ${index.name})`);
-    return { name: result, type: F64 };
+    const shared = B.newLabel("bytes.shared.done");
+    B.br(shared);
+    B.startBlock(local);
+    const own = emitBytesGetLocal(host, elem, receiver, index, expr, inBounds, invalidNaN);
+    const owned = B.newLabel("bytes.local.done");
+    B.br(owned);
+    B.startBlock(owned);
+    const join = B.newLabel("bytes.join");
+    B.br(join);
+    B.startBlock(shared);
+    B.br(join);
+    B.startBlock(join);
+    const out = B.tmp();
+    B.line(`${out} = phi double [ ${own.name}, %${owned} ], [ ${result}, %${shared} ]`);
+    return { name: out, type: F64 };
   }
+  return emitBytesGetLocal(host, elem, receiver, index, expr, inBounds, invalidNaN);
+}
+
+/** Worker programs: a view of a SharedArrayBuffer (`shared` is fixed before
+ * script code can see the view) is read and written by the runtime under
+ * its shared-memory lock; every other buffer belongs to this thread and
+ * takes the ordinary inline path. Branches to the returned label for a
+ * thread-owned buffer and continues in the shared block. */
+function emitSharedBytesSplit(host: LlvmEmitterContext, receiver: string): string {
+  const B = host.B;
+  host.declare(`declare i1 @llvm.expect.i1(i1, i1)`);
+  const slot = B.tmp(),
+    storage = B.tmp(),
+    isShared = B.tmp(),
+    expected = B.tmp();
+  B.line(`${slot} = getelementptr inbounds %ScrBytes, ptr ${receiver}, i64 0, i32 8`);
+  B.line(`${storage} = load ptr, ptr ${slot}`);
+  B.line(`${isShared} = icmp ne ptr ${storage}, null`);
+  B.line(`${expected} = call i1 @llvm.expect.i1(i1 ${isShared}, i1 false)`);
+  const shared = B.newLabel("bytes.shared"),
+    local = B.newLabel("bytes.local");
+  B.condBr(expected, shared, local);
+  B.startBlock(shared);
+  return local;
+}
+
+function emitBytesGetLocal(
+  host: LlvmEmitterContext,
+  elem: IrBytesElem,
+  receiver: string,
+  index: LlValue,
+  expr: IrExpr | undefined,
+  inBounds: boolean,
+  invalidNaN: boolean,
+): LlValue {
+  const B = host.B;
   // Any invalid index traps (the array runtime's discipline).
   if (!invalidNaN) return emitBytesLoad(host, elem, receiver, index, expr, inBounds, undefined);
   // The numeric view of an ordinary read: an invalid index never touches
@@ -362,9 +413,30 @@ export function emitBytesSet(
   const B = host.B;
   if (host.mod.workers) {
     host.declare(`declare void @scr_bytes_set(ptr, double, double)`);
+    const local = emitSharedBytesSplit(host, receiver);
     B.line(`call void @scr_bytes_set(ptr ${receiver}, double ${index.name}, double ${value.name})`);
+    const join = B.newLabel("bytes.join");
+    B.br(join);
+    B.startBlock(local);
+    emitBytesSetLocal(host, elem, receiver, index, value, indexExpr, expr, inBounds);
+    B.br(join);
+    B.startBlock(join);
     return;
   }
+  emitBytesSetLocal(host, elem, receiver, index, value, indexExpr, expr, inBounds);
+}
+
+function emitBytesSetLocal(
+  host: LlvmEmitterContext,
+  elem: IrBytesElem,
+  receiver: string,
+  index: LlValue,
+  value: LlValue,
+  indexExpr: IrExpr | undefined,
+  expr: IrExpr | undefined,
+  inBounds: boolean,
+): void {
+  const B = host.B;
   // Invalid integer-indexed writes are ignored after evaluating the RHS.
   const done = B.newLabel("bytes.store.done");
   const idx = emitBytesIndex(host, receiver, index, indexExpr, done, inBounds);

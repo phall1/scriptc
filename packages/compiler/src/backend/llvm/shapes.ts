@@ -56,6 +56,8 @@ export interface ShapeHost {
   readonly objectAudit?: boolean;
   /** Inline the small-object allocator's fast paths (llvm/alloc.ts). */
   readonly inlineAlloc?: boolean;
+  /** Worker executables: the inline allocator state is thread-local. */
+  readonly threadLocalAlloc?: boolean;
   /** Inline RC fast-path helpers requested so far ("<family>:<op>"); the
    * emitter defines each once through {@link emitInlineRcHelpers}. Null
    * keeps every retain/release a runtime call: inline RC is a

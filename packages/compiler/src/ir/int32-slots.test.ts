@@ -272,11 +272,11 @@ test("captured bindings share one proof across the declaring function and its cl
   ).toBeNull();
 });
 
-test("library and worker builds keep ordinary storage", () => {
+test("worker builds specialize int32 fields like ordinary executables", () => {
   const program = mod(
     [cls("T", ["x"])],
     [fn("init", [{ id: "t", type: obj("T") }], [set(ref("t", obj("T")), "T", "x", num(1))])],
   );
   expect(analyzeInt32Slots(program).isField("T", "x")).toBe(true);
-  expect(analyzeInt32Slots({ ...program, workers: true }).isField("T", "x")).toBe(false);
+  expect(analyzeInt32Slots({ ...program, workers: true }).isField("T", "x")).toBe(true);
 });

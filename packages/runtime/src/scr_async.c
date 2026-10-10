@@ -1523,6 +1523,7 @@ static void scr_promise_reject_from_cell(ScrPromise *p, ScrExcCell *cell) {
   cell->kind = SCR_EXC_NONE;
   cell->payload = NULL;
   cell->trace_fn = NULL;
+  scr_exc_cell_changed();
 }
 
 static void scr_fiber_finish(ScrFiber *self) {
@@ -3928,6 +3929,7 @@ static void scr_gen_exc_move(ScrExcCell *dst, ScrExcCell *src) {
   dst->stack = dst_stack;
   memset(src, 0, sizeof *src);
   src->stack = src_stack;
+  scr_exc_cell_changed();
 }
 
 struct ScrGen {
@@ -4353,6 +4355,7 @@ void scr_gen_resume_throw(ScrGen *g) {
     mine->kind = SCR_EXC_NONE;
     mine->payload = NULL;
     mine->trace_fn = NULL;
+    scr_exc_cell_changed();
     scr_gen_switch_in(g);
   }
   }

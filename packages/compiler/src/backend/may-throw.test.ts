@@ -3,6 +3,7 @@ import {
   BOOL,
   DYN,
   F64,
+  STRING,
   VOID,
   funcOf,
   type IrExpr,
@@ -463,4 +464,33 @@ test("class members are reachable from reentrant operations", () => {
   expect([...computeMayThrow(mod, { stackChecks: true }).stackChecks!]).toEqual([
     "%Shape.describe",
   ]);
+});
+
+test("throw-only, storage and primitive library operations stay bounded in workers", () => {
+  const text: IrExpr = { kind: "strLit", value: "a", type: STRING, loc };
+  const nodeThrow: IrExpr = {
+    kind: "libCall",
+    fn: "error.nodeThrow",
+    args: [value, text, text],
+    type: VOID,
+    loc,
+  };
+  const stringCall = (arg: IrExpr): IrExpr => ({
+    kind: "libCall",
+    fn: "string.lastIndexOf",
+    args: [text, arg],
+    type: F64,
+    loc,
+  });
+  const dynArg: IrExpr = { kind: "dynFrom", value: { ...value }, type: DYN, loc };
+  const mod: IrModule = {
+    ...moduleWith(
+      fn("thrower", [exprStmt(nodeThrow)], []),
+      fn("primitive", [exprStmt(stringCall(text))], []),
+      fn("dynamic", [exprStmt(stringCall(dynArg))], []),
+    ),
+    workers: true,
+  };
+  // Only a library call that can reach a dynamic value's conversion polls.
+  expect([...computeMayThrow(mod).workerEntryPolls!].sort()).toEqual(["dynamic"]);
 });

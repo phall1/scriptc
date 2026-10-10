@@ -289,9 +289,13 @@ void scr_context_stop_flag(const void *flag);
 void scr_context_stop(int code);
 bool scr_context_stopping(void);
 bool scr_context_checkpoint(void);
-/* Read inline by generated exception polls in worker executables: points at
- * a raised flag once the context must stop. Never NULL. */
-extern SCR_TL const _Atomic bool *scr_context_signal;
+bool scr_context_quiet(void);
+/* The process-wide exception alert that emitted pending checks of worker
+ * executables test inline (scr_exception.c): nonzero while some script
+ * thread may have an exception pending in its active cell or must stop. */
+extern _Atomic uint32_t scr_exc_alert;
+void scr_exc_alert_add(int delta); /* worker.terminate() references */
+void scr_exc_alert_thread_exit(void);
 void scr_loop_context_shutdown(void);
 extern SCR_TL void (*scr_context_report_error)(void);
 typedef struct ScrContextEnv ScrContextEnv;
@@ -459,15 +463,27 @@ void scr_cyc_free(void *obj); /* frees the block, header included */
  * Compiled to the plain system calls under SCR_RC_AUDIT and AddressSanitizer
  * (the audit lane must see every logical free as a real free), on targets
  * without a cheap address-space reservation (wasm32, Windows, 32-bit), and
- * in thread-instanced library archives and worker executables (SCR_WORKERS),
- * where several runtime instances run on their own threads and would race
- * on, or strand each other's, free lists. Elsewhere the allocator state is
- * process-global and unsynchronized: runtime objects are only allocated and
- * freed on the runtime thread (native worker jobs never touch them). */
+ * in thread-instanced library archives, where several runtime instances
+ * run on embedder threads the runtime does not manage. Elsewhere the
+ * allocator state is unsynchronized: runtime objects are only allocated
+ * and freed on their runtime thread (native worker jobs never touch them).
+ *
+ * Worker executables (SCR_WORKERS) give every script thread its own
+ * allocator: `scr_sa` is thread-local and describes the thread's ARENA, one
+ * of SCR_SA_ARENAS equal slices of a single process-wide reservation, so
+ * the owning arena of any block is address arithmetic. A thread claims an
+ * arena on its first allocation and parks it (free lists and bump pointers
+ * intact, memory never unmapped) when it exits; the next thread to claim
+ * it continues from there. Script objects stay on their thread, so a free
+ * normally hits the caller's own arena inline. A block freed by another
+ * thread goes to the owning arena's lock-free remote list, which the owner
+ * drains on its slow path; published (immortal) objects are never freed,
+ * so they stay valid after their allocating thread exits. Threads beyond
+ * SCR_SA_ARENAS, or a refused reservation, use the system allocator. */
 #include <stdlib.h>
 #if defined(SCR_RC_AUDIT) || defined(__SANITIZE_ADDRESS__) || defined(__wasi__) || \
     defined(__wasm__) || defined(_WIN32) || UINTPTR_MAX != UINT64_MAX ||              \
-    (defined(SCR_LIB) && defined(SCR_THREAD_INSTANCES)) || defined(SCR_WORKERS)
+    (defined(SCR_LIB) && defined(SCR_THREAD_INSTANCES))
 #define SCR_SMALL_ALLOC 0
 #elif defined(__has_feature)
 #if __has_feature(address_sanitizer)
@@ -513,7 +529,35 @@ typedef struct ScrSaState {
   ScrSaBlock *free[SCR_SA_NCLASS];
   char *bump[SCR_SA_NCLASS], *lim[SCR_SA_NCLASS];
 } ScrSaState;
+/* Worker executables keep one allocator per script thread (see above). Its
+ * state shares one thread-local block with the collector's live counts and
+ * the weak dispose hook (ScrThreadHot below): on Darwin every distinct
+ * thread-local costs a call per function that touches it, and allocation
+ * and free paths touch all four. */
+#ifdef SCR_WORKERS
+/* The per-thread state of the allocation and free fast paths, in one
+ * thread-local block; its layout is an ABI (llvm/alloc.ts addresses the
+ * fields at fixed offsets from one llvm.threadlocal.address). */
+typedef struct ScrThreadHot {
+  ScrSaState sa;
+  size_t cyc_live;
+  size_t cyc_old_freed;
+  void (*weak_dispose_hook)(void *);
+} ScrThreadHot;
+extern _Thread_local ScrThreadHot scr_thread_hot;
+#define scr_sa (scr_thread_hot.sa)
+#define scr_cyc_live (scr_thread_hot.cyc_live)
+#define scr_cyc_old_freed (scr_thread_hot.cyc_old_freed)
+#define scr_weak_dispose_hook (scr_thread_hot.weak_dispose_hook)
+#if UINTPTR_MAX == UINT64_MAX
+_Static_assert(offsetof(ScrThreadHot, sa) == 0 && offsetof(ScrThreadHot, cyc_live) == 792 &&
+                   offsetof(ScrThreadHot, cyc_old_freed) == 800 &&
+                   offsetof(ScrThreadHot, weak_dispose_hook) == 808,
+               "llvm/alloc.ts addresses ScrThreadHot fields at these offsets");
+#endif
+#else
 extern ScrSaState scr_sa;
+#endif
 #if UINTPTR_MAX == UINT64_MAX
 _Static_assert(offsetof(ScrSaState, span) == 8 && offsetof(ScrSaState, shift) == 16 &&
                    offsetof(ScrSaState, free) == 24 && offsetof(ScrSaState, bump) == 280 &&
@@ -522,6 +566,17 @@ _Static_assert(offsetof(ScrSaState, span) == 8 && offsetof(ScrSaState, shift) ==
 #endif
 #if defined(SCR_RC_AUDIT) && SCR_SMALL_ALLOC
 #error "emitted allocation fast paths skip the RC-audit object notes"
+#endif
+
+#ifdef SCR_WORKERS
+/* A block outside the calling thread's arena: another arena's (remote
+ * free) or the system's. */
+void scr_sa_free_foreign(void *p);
+/* The calling script thread is done with its arena (worker exit). */
+void scr_sa_thread_park(void);
+#define SCR_SA_FREE_FOREIGN(p) scr_sa_free_foreign(p)
+#else
+#define SCR_SA_FREE_FOREIGN(p) free(p)
 #endif
 
 #if SCR_SMALL_ALLOC
@@ -560,7 +615,7 @@ static inline void scr_mem_free(void *p) {
     scr_sa.free[c] = b;
     return;
   }
-  free(p);
+  SCR_SA_FREE_FOREIGN(p);
 }
 #else
 static inline void *scr_mem_alloc(size_t n) { return malloc(n); }
@@ -575,9 +630,11 @@ static inline void scr_mem_free(void *p) { free(p); }
  * (llvm/alloc.ts), which do the same three things: header words, live
  * count, block. Every other header word starts zero (SCR_CYC_BLACK,
  * SCR_CYC_NURSERY, unbuffered). */
+#ifndef SCR_WORKERS
 extern SCR_TL size_t scr_cyc_live;
 extern SCR_TL size_t scr_cyc_old_freed;
 extern SCR_TL void (*scr_weak_dispose_hook)(void *);
+#endif
 static inline void *scr_cyc_alloc_inline(size_t size, ScrTraceFn trace, ScrCycFreeFn free_fn) {
   if (size > SIZE_MAX - sizeof(ScrCycHdr)) scr_trap("scriptc: out of memory\n");
   ScrCycHdr *h = (ScrCycHdr *)scr_mem_calloc(sizeof(ScrCycHdr) + size);
@@ -2810,6 +2867,9 @@ ScrExcCell *scr_exc_swap_cell(ScrExcCell *cell); /* NULL = main's cell */
  * builds use NULL for the main cell until scr_init installs it). */
 extern SCR_TL ScrExcCell *scr_exc_active;
 ScrExcCell *scr_exc_current_cell(void);          /* the ACTIVE cell */
+/* Runtime code that moved a payload into or out of the active cell (or a
+ * cell that may be active) without the throw/take/clear entry points. */
+void scr_exc_cell_changed(void);
 
 bool scr_exc_pending(void);
 
@@ -4592,8 +4652,11 @@ ScrDyn *scr_weak_map_new(ScrDyn *entries);
 ScrDyn *scr_weak_set_new(ScrDyn *values);
 ScrDyn *scr_dyn_from_entries(ScrDyn *entries);
 ScrDyn *scr_dyn_mark_snapshot(ScrDyn *value); /* consumes and returns +1 */
-/* Optional non-owning observers, installed by weak collections. */
+/* Optional non-owning observers, installed by weak collections (worker
+ * executables keep the hook in scr_thread_hot). */
+#ifndef SCR_WORKERS
 extern SCR_TL void (*scr_weak_dispose_hook)(void *);
+#endif
 void scr_weak_dispose(void *object);
 /* The for-of-over-dyn pack accessors (the emitted index loop drives them
  * over a scr_dyn_iter_pack result, which is ARR by construction).

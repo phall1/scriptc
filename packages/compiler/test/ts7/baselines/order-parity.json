@@ -14644,6 +14644,12 @@
    ],
    "diags": []
   },
+  "<repo>/tests/corpus/native-worker-typed-arrays.ts": {
+   "order": [
+    "<repo>/tests/corpus/native-worker-typed-arrays.ts"
+   ],
+   "diags": []
+  },
   "<repo>/tests/corpus/caught-class-identity.ts": {
    "order": [
     "<repo>/tests/corpus/caught-class-identity.ts"
