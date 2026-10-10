@@ -12,9 +12,10 @@ function entriesOf(input) {
 }
 console.log(JSON.stringify(entriesOf({ q: "a b", page: "1" })));
 console.log(typeof ({ q: "a" })[Symbol.iterator]);
+console.log(JSON.stringify(entriesOf(new URLSearchParams("a=1&a=2"))));
 `;
 
-test("a symbol read on a plain object is undefined", async () => {
+test("symbol reads follow whether the value is iterable", async () => {
   const directory = mkdtempSync(join(tmpdir(), "scriptc-record-symbol-"));
   const entry = join(directory, "main.js");
   const binary = join(directory, "main");
@@ -31,7 +32,7 @@ test("a symbol read on a plain object is undefined", async () => {
     const run = spawnSync(result.binaryPath, [], { encoding: "utf8" });
     expect(run.stderr).toBe("");
     expect(run.status).toBe(0);
-    expect(run.stdout).toBe('[["q","a b"],["page","1"]]\nundefined\n');
+    expect(run.stdout).toBe('[["q","a b"],["page","1"]]\nundefined\n[["a","1"],["a","2"]]\n');
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
