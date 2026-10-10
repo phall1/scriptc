@@ -112,6 +112,27 @@ export function emitGenericLibCall(host: LlvmEmitterContext, e: LibCallExpr): Ll
     host.emitPendingCheck();
     return output;
   }
+  if (e.fn === "dyn.isTypedRef") {
+    const value = host.emitExpr(e.args[0]!);
+    const slot = B.slot();
+    B.entryAllocas.push(`${slot} = alloca i1`);
+    B.line(`store i1 false, ptr ${slot}`);
+    const present = B.tmp();
+    const inspect = B.newLabel("typedref.inspect");
+    const done = B.newLabel("typedref.done");
+    B.line(`${present} = icmp ne ptr ${value.name}, null`);
+    B.condBr(present, inspect, done);
+    B.startBlock(inspect);
+    const kind = host.dynKind(value.name);
+    const typed = B.tmp();
+    B.line(`${typed} = icmp eq i32 ${kind}, ${DYN_KIND.TYPED_REF}`);
+    B.line(`store i1 ${typed}, ptr ${slot}`);
+    B.br(done);
+    B.startBlock(done);
+    const result = B.tmp();
+    B.line(`${result} = load i1, ptr ${slot}`);
+    return { name: result, type: e.type };
+  }
   if (e.fn === "dyn.typedRefIs") {
     // A literal brand cannot replace the receiver while being evaluated.
     // Generated class dispatch uses these probes repeatedly on one local.

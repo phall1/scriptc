@@ -148,6 +148,8 @@ export const LIB_FN_SIGS = defineLibFnSignatures({
   "dyn.globalSymbolDelete": { argTypes: [SYMBOL_T], result: VOID },
   /** Exact native class capsule identity, without materializing its fields. */
   "dyn.typedRefIs": { argTypes: [DYN, STRING], result: BOOL },
+  /** True when the value is any native class capsule, ignoring its brand. */
+  "dyn.isTypedRef": { argTypes: [DYN], result: BOOL },
   "dyn.classIs": { argTypes: [DYN, STRING], result: BOOL },
   /** Destructuring pack over a dyn source — `const [a, b] = d`, a
    * destructured dyn callback param (args: the source and the STATIC

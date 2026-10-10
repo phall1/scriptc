@@ -1359,21 +1359,45 @@ export class ClassDynamicDispatch {
                     cond: { kind: "dynTest", test: "symbol", value: key, type: BOOL, loc },
                     then: [
                       {
-                        kind: "exprStmt",
-                        expr: {
-                          ...expr,
-                          args: [
-                            {
-                              kind: "call",
-                              callee: this.propertyBag!.name,
-                              args: [target],
-                              type: DYN,
-                              loc,
-                            },
-                            key,
-                            descriptor,
-                          ],
+                        // A class instance keeps symbol properties in its bag.
+                        // Prototype setup defines those same symbols on a plain
+                        // object while the bag helper is still on the stack;
+                        // entering that helper again overflows a fiber.
+                        kind: "if",
+                        cond: {
+                          kind: "libCall",
+                          fn: "dyn.isTypedRef",
+                          args: [target],
+                          type: BOOL,
+                          loc,
                         },
+                        then: [
+                          {
+                            kind: "exprStmt",
+                            expr: {
+                              ...expr,
+                              args: [
+                                {
+                                  kind: "call",
+                                  callee: this.propertyBag!.name,
+                                  args: [target],
+                                  type: DYN,
+                                  loc,
+                                },
+                                key,
+                                descriptor,
+                              ],
+                            },
+                            loc,
+                          },
+                        ],
+                        else_: [
+                          {
+                            kind: "exprStmt",
+                            expr: { ...expr, args: [target, key, descriptor] },
+                            loc,
+                          },
+                        ],
                         loc,
                       },
                       { kind: "return", value: target, loc },
