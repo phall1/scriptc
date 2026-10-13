@@ -182,7 +182,102 @@ import {
   type GenericFnInfo,
 } from "./generic-functions.js";
 
+/** `typeof input === "function"` (Effect's Predicate.isFunction). A
+ * specialized argument is either always a function or never one, so the
+ * call is a boolean constant and the other arm of `if (isFunction(x))`
+ * is not compiled. Dynamic and mixed values keep the real call. */
+function staticTypeofFunction(lowerer: Lowerer, type: IrType): boolean | null {
+  switch (type.kind) {
+    case "func":
+    case "classval":
+      return true;
+    case "dyn":
+      return null;
+    case "union": {
+      const arms = lowerer.unions.get(type.unionId)?.arms ?? [];
+      let sawTrue = false;
+      let sawFalse = false;
+      for (const arm of arms) {
+        const answer = staticTypeofFunction(lowerer, arm);
+        if (answer === null) return null;
+        if (answer) sawTrue = true;
+        else sawFalse = true;
+      }
+      if (sawTrue === sawFalse) return null;
+      return sawTrue;
+    }
+    default:
+      return false;
+  }
+}
+
+function foldTypeofFunctionPredicate(lowerer: Lowerer, expr: ts.CallExpression): IrExpr | null {
+  if (
+    expr.questionDotToken !== undefined ||
+    expr.arguments.length !== 1 ||
+    ts.isSpreadElement(expr.arguments[0]!) ||
+    !ts.isIdentifier(expr.expression)
+  )
+    return null;
+  const symbol = lowerer.resolveValueSymbol(expr.expression);
+  const decl = symbol
+    ? (lowerer.checker.valueDeclarationOf(symbol) ?? lowerer.checker.declarationsOf(symbol)[0])
+    : undefined;
+  const fn =
+    decl &&
+    (ts.isFunctionDeclaration(decl) || ts.isFunctionExpression(decl) || ts.isArrowFunction(decl))
+      ? decl
+      : decl &&
+          ts.isVariableDeclaration(decl) &&
+          decl.initializer &&
+          (ts.isArrowFunction(decl.initializer) || ts.isFunctionExpression(decl.initializer))
+        ? decl.initializer
+        : undefined;
+  if (!fn?.body || fn.parameters.length !== 1 || !ts.isIdentifier(fn.parameters[0]?.name))
+    return null;
+  const paramName = fn.parameters[0].name.text;
+  const returned = ts.isBlock(fn.body)
+    ? fn.body.statements.length === 1 && ts.isReturnStatement(fn.body.statements[0])
+      ? fn.body.statements[0].expression
+      : undefined
+    : fn.body;
+  if (!returned || !ts.isBinaryExpression(returned)) return null;
+  const op = returned.operatorToken.kind;
+  const negated = op === ts.SyntaxKind.ExclamationEqualsEqualsToken;
+  if (op !== ts.SyntaxKind.EqualsEqualsEqualsToken && !negated) return null;
+  if (
+    !ts.isTypeOfExpression(returned.left) ||
+    !ts.isIdentifier(returned.left.expression) ||
+    returned.left.expression.text !== paramName ||
+    !ts.isStringLiteral(returned.right) ||
+    returned.right.text !== "function"
+  )
+    return null;
+  const arg = lowerer.lowerExpr(expr.arguments[0]!);
+  const isFunction = staticTypeofFunction(lowerer, arg.type);
+  if (isFunction === null) return null;
+  const loc = locOf(expr);
+  const lit: IrExpr = { kind: "boolLit", value: negated ? !isFunction : isFunction, type: BOOL, loc };
+  if (
+    arg.kind === "varRef" ||
+    arg.kind === "strLit" ||
+    arg.kind === "numLit" ||
+    arg.kind === "boolLit" ||
+    arg.kind === "unitLit"
+  )
+    return lit;
+  return {
+    kind: "seqExpr",
+    stmts: [{ kind: "exprStmt", expr: arg, loc }],
+    result: lit,
+    type: BOOL,
+    loc,
+  };
+}
+
 export function lowerCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr {
+  const foldedPredicate = foldTypeofFunctionPredicate(lowerer, expr);
+  if (foldedPredicate) return foldedPredicate;
   const loc = locOf(expr);
 
   // Object's checker return type is `any`. Claim known object inputs

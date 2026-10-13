@@ -419,3 +419,35 @@ console.log(threw);
 test("nullable string trim and toLowerCase match Node", async () => {
   await matchesNode("cookie-trim-fixture", cookieProbe, cookieProgram);
 });
+
+const tryProbe = `
+function isFunction(input) {
+  return typeof input === "function";
+}
+export function attempt(evaluate) {
+  if (isFunction(evaluate)) {
+    try {
+      return "fn:" + evaluate();
+    } catch (e) {
+      return "fn-threw";
+    }
+  }
+  try {
+    return "obj:" + evaluate.try();
+  } catch (e) {
+    return "obj:" + evaluate.catch(e);
+  }
+}
+`;
+
+const tryProgram = `
+import { attempt } from "try-predicate-fixture/probe.js";
+
+console.log(attempt(() => "direct"));
+console.log(attempt({ try: () => "https://example.com", catch: (error: unknown) => String(error) }));
+console.log(attempt({ try: () => { throw new Error("bad"); }, catch: (error: unknown) => error instanceof Error ? error.message : "other" }));
+`;
+
+test("isFunction folds so object and function attempts both match Node", async () => {
+  await matchesNode("try-predicate-fixture", tryProbe, tryProgram);
+});
