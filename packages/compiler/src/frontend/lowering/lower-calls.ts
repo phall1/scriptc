@@ -4287,14 +4287,15 @@ function lowerCaughtPredicateCall(
   }
 }
 
-/** Radix-free `.toString()` on a PRIMITIVE receiver: numbers take the
- * STATIC JS-exact number formatter — the same `toString` node templates
- * and String(n) lower to (Number::toString with radix 10 IS that
- * conversion, per spec) — booleans the "true"/"false" texts, and strings
- * the identity read (String.prototype.toString returns `this`). The
- * explicit-radix number form uses the native radix formatter;
- * null for other receivers, argument shapes, or non-lib members (a
- * user's own `.toString` takes the ordinary paths). */
+/** `.toString()` / `.toString(radix)` on a PRIMITIVE receiver: numbers take
+ * the static JS-exact formatter (radix 10 is the same conversion String(n)
+ * uses) — booleans the "true"/"false" texts, and strings the identity
+ * read (String.prototype.toString returns `this`). The explicit-radix
+ * number form uses the native radix formatter. A JavaScript callback can
+ * leave the checker type `any` after the operand has already lowered to
+ * a primitive (`character.charCodeAt(0).toString(16)`); that primitive
+ * has no own toString. Null for other receivers and argument shapes, and
+ * for a typed receiver whose member is not the lib method. */
 function lowerNumberToStringCall(
   lowerer: Lowerer,
   call: ts.CallExpression,
@@ -4307,10 +4308,17 @@ function lowerNumberToStringCall(
     call.arguments.some(ts.isSpreadElement)
   )
     return null;
-  const recvKind = lowerer.mapTypeOf(lowerer.typeOf(access.expression))?.kind;
-  if (recvKind !== "f64" && recvKind !== "bool" && recvKind !== "string") return null;
-  if (!lowerer.isStdlibMember(access)) return null;
+  const recvTs = lowerer.typeOf(access.expression);
+  const mapped = lowerer.mapTypeOf(recvTs)?.kind;
+  const checkerUntyped = (recvTs.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) !== 0;
+  if (!checkerUntyped) {
+    if (mapped !== "f64" && mapped !== "bool" && mapped !== "string") return null;
+    if (!lowerer.isStdlibMember(access)) return null;
+  }
   const operand = lowerer.lowerExpr(access.expression);
+  const recvKind = operand.type.kind;
+  if (recvKind !== "f64" && recvKind !== "bool" && recvKind !== "string" && recvKind !== "dyn")
+    return null;
   // JavaScript array and typed-array reads can still be undefined even
   // when the checker declares a number. Preserve that runtime value and
   // let native method dispatch format numbers or throw for missing data.

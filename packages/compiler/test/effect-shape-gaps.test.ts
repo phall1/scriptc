@@ -782,3 +782,22 @@ console.log(narrowest("12"));
 test("Math.max and Math.min spread unknown iterables", async () => {
   await matchesNode("math-spread-fixture", mathSpreadProbe, mathSpreadProgram);
 });
+
+const codePointProbe = `
+export function escapeControl(text) {
+  return text.replace(/[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F]/g, (character) => {
+    return "\\\\x" + character.charCodeAt(0).toString(16).padStart(2, "0");
+  });
+}
+`;
+
+const codePointProgram = `
+import { escapeControl } from "code-point-fixture/probe.js";
+
+console.log(escapeControl("A\\n\\tB"));
+console.log(escapeControl("ok"));
+`;
+
+test("a code point formats in hex and pads", async () => {
+  await matchesNode("code-point-fixture", codePointProbe, codePointProgram);
+});
