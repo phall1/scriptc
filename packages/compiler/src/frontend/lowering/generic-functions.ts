@@ -771,7 +771,19 @@ export function lowerGenericInstance(
   let bodyReturn = isGenerator
     ? lowerer.genBodyReturnType(inst.returnType)
     : lowerer.bodyReturnType(isAsync, inst.returnType);
-  const fnCtx = newFnCtx(false, null, null, bodyReturn);
+  // `Effect.suspend(function loop() { return loop() })`: the inner name is
+  // in scope for the body. Generic instances are plain functions, so the
+  // name denotes this instance directly.
+  const selfName =
+    (ts.isFunctionExpression(decl) || ts.isFunctionDeclaration(decl)) &&
+    decl.name !== undefined &&
+    ts.isIdentifier(decl.name)
+      ? decl.name
+      : null;
+  const selfSymbol = selfName ? (lowerer.checker.getSymbolAtLocation(selfName) ?? null) : null;
+  const selfType = selfSymbol ? funcTypeFromParamShapes(inst.params, inst.returnType) : null;
+  const fnCtx = newFnCtx(false, selfSymbol, selfType, bodyReturn);
+  if (selfSymbol && selfType) fnCtx.plainSelfName = inst.name;
   fnCtx.bodyDecl = decl;
   fnCtx.isAsync = isAsync;
   // Implicit-any instances whose declared return did not map lower in

@@ -635,3 +635,30 @@ console.log(formatInstance("Person", { name: "Alice", age: 30 }));
 test("spreading a class instance omits prototype toString", async () => {
   await matchesNode("class-spread-fixture", classSpreadProbe, classSpreadProgram);
 });
+
+const namedLoopProbe = `
+export function firstPositive(pulls) {
+  let i = 0;
+  return (function loop() {
+    const step = (value) => (value < 0 ? loop() : value);
+    return step(pulls[i++]);
+  })();
+}
+export function countdown(n) {
+  const run = (body) => body(n);
+  return run(function loop(left) {
+    return left <= 0 ? "done" : loop(left - 1);
+  });
+}
+`;
+
+const namedLoopProgram = `
+import { countdown, firstPositive } from "named-loop-fixture/probe.js";
+
+console.log(firstPositive([-1, -2, 4]));
+console.log(countdown(3));
+`;
+
+test("a named function expression can call itself from a nested function", async () => {
+  await matchesNode("named-loop-fixture", namedLoopProbe, namedLoopProgram);
+});

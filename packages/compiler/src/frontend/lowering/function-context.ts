@@ -41,6 +41,10 @@ export interface FnCtx {
    * its own closure would be an RC cycle and leak). */
   selfSymbol: ts.Symbol | null;
   selfType: IrType | null;
+  /** Named function expression instantiated as a plain generic. Its inner
+   * name is this function, which has no lifted environment, so references
+   * are a direct closure of `plainSelfName` rather than `selfRef`. */
+  plainSelfName?: string | null;
   /** Await is legal here (async function body). */
   isAsync?: boolean;
   /** Yield is legal here (generator function body): the yield/next value

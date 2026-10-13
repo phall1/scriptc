@@ -900,6 +900,17 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
     const moduleValue = lowerNodeModuleIdentifier(lowerer, expr);
     if (moduleValue) return moduleValue;
     if (lowerer.isSelfReference(expr)) {
+      // A generic instance is a plain function. Its own name is a direct
+      // reference to that instance, not a lifted closure environment.
+      if (lowerer.ctx.plainSelfName && lowerer.ctx.selfType) {
+        return {
+          kind: "closure",
+          fnName: lowerer.ctx.plainSelfName,
+          captures: [],
+          type: lowerer.ctx.selfType,
+          loc,
+        };
+      }
       return { kind: "selfRef", type: lowerer.ctx.selfType!, loc };
     }
     // `arguments` in a variadic JS function (the rest-marked form): the

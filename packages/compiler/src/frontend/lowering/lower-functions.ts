@@ -311,6 +311,11 @@ export function lowerLambda(
         : null;
     const { params, prologue } = lowerer.declareParams(node.parameters, shapes);
     if (receiver) prologue.unshift(receiver);
+    // The inner name of `function loop() {}` is visible to nested
+    // functions. Direct calls use selfRef; a nested `loop()` captures this
+    // local, which holds the running closure.
+    const selfLocal =
+      selfSymbol && nameIdent ? lowerer.declareLocal(nameIdent, baseName, funcType, false) : null;
     declareFunctionArguments(
       lowerer,
       node,
@@ -393,6 +398,15 @@ export function lowerLambda(
       );
       funcType = { ...funcType, ret: bodyReturn };
       fnCtx.returnType = bodyReturn;
+    }
+    if (selfLocal) {
+      selfLocal.type = funcType;
+      body.unshift({
+        kind: "varDecl",
+        localId: selfLocal.id,
+        init: { kind: "selfRef", type: funcType, loc },
+        loc,
+      });
     }
     body = [...prologue, ...body];
     // Bare-expression bodies never pass through lowerStmts, so the
