@@ -41,6 +41,25 @@ import {
 import { strCharsCall } from "./array-construction.js";
 import { arrayElementRead } from "./array-iteration.js";
 
+/** A JS local can be `Set | undefined` or `Map | undefined` after `??= new
+ * Set()`. The checker still says `any`. Narrow to the collection, which
+ * throws if the value is missing, then use the ordinary method lowering. */
+function preparedCollectionReceiver(
+  lowerer: Lowerer,
+  access: ts.PropertyAccessExpression,
+  kind: "map" | "set",
+): { type: IrType; value: IrExpr } | null {
+  const probed = tryLowerExpression(lowerer, access.expression);
+  if (probed?.type.kind === kind) return { type: probed.type, value: probed };
+  if (probed?.type.kind !== "union") return null;
+  const present = lowerer.stripUndefinedArm(probed.type);
+  if (present.kind !== kind) return null;
+  const loc = locOf(access);
+  const helper = lowerer.narrowedArmHelper(probed.type.unionId, present, loc);
+  if (helper === null) return null;
+  return { type: present, value: lowerer.checkedNarrowCall(helper, probed, present, loc) };
+}
+
 /** Ambient Map method calls. `get`/`set`/`has`/`delete`/`clear` lower to
  * mapIntrinsic; `forEach` desugars to a direct call of a synthetic loop
  * function over the iteration primitives (lowerMapForEachCall). Null when
@@ -56,10 +75,12 @@ export function lowerMapMethodCall(
   if (!MAP_METHODS.has(name)) return null;
   let receiverIr = lowerer.mapTypeOf(lowerer.typeOf(access.expression));
   let probedUntyped = false;
+  let prepared: IrExpr | null = null;
   if (receiverIr?.kind !== "map" && isJsSourceFile(access.getSourceFile())) {
-    const probed = tryLowerExpression(lowerer, access.expression);
-    if (probed?.type.kind === "map") {
-      receiverIr = probed.type;
+    const found = preparedCollectionReceiver(lowerer, access, "map");
+    if (found) {
+      receiverIr = found.type;
+      prepared = found.value;
       probedUntyped = true;
     }
   }
@@ -67,7 +88,7 @@ export function lowerMapMethodCall(
   // Collection views can refine has() while retaining its native ABI.
   if (!probedUntyped && !lowerer.isStdlibMember(access) && name !== "has") return null;
   const loc = locOf(call);
-  const value = lowerer.lowerExpr(access.expression);
+  const value = prepared ?? lowerer.lowerExpr(access.expression);
   const receiver =
     lowerer.runtimeOptionalPropertyReceiver(access.expression, value, receiverIr, name) ?? value;
   if (receiver.type.kind !== "map") {
@@ -536,14 +557,17 @@ export function lowerSetMethodCall(
   if (!SET_METHODS.has(name) && !SET_COMBINE_METHODS.has(name)) return null;
   let receiverIr = lowerer.mapTypeOf(lowerer.typeOf(access.expression));
   let probedUntyped = false;
+  let prepared: IrExpr | null = null;
   // The identity-Set idiom (JS): the CHECKER type is an unmappable
   // Set<union-of-signatures>, but the VALUE lowered as a real Set of
   // identity tokens (the new-Set probe) — the lowered receiver's type
-  // is the honest dispatch key.
+  // is the honest dispatch key. `let failures; failures ??= new Set()`
+  // stores Set|undefined and needs the same narrowing.
   if (receiverIr?.kind !== "set" && isJsSourceFile(access.getSourceFile())) {
-    const probed = tryLowerExpression(lowerer, access.expression);
-    if (probed?.type.kind === "set") {
-      receiverIr = probed.type;
+    const found = preparedCollectionReceiver(lowerer, access, "set");
+    if (found) {
+      receiverIr = found.type;
+      prepared = found.value;
       probedUntyped = true;
     }
   }
@@ -553,7 +577,7 @@ export function lowerSetMethodCall(
   // still rejects structural mocks and assertions over other objects.
   if (!probedUntyped && !lowerer.isStdlibMember(access) && name !== "has") return null;
   const loc = locOf(call);
-  const value = lowerer.lowerExpr(access.expression);
+  const value = prepared ?? lowerer.lowerExpr(access.expression);
   const receiver =
     lowerer.runtimeOptionalPropertyReceiver(access.expression, value, receiverIr, name) ?? value;
   // The lib's `add` returns the Set (chaining typechecks); the lowered

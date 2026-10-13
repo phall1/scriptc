@@ -226,3 +226,28 @@ console.log(octet("zz"));
 test("Symbol.keyFor and Number.parseInt of unknown values match Node", async () => {
   await matchesNode("symbol-parse-fixture", symbolProbe, symbolProgram);
 });
+
+const setProbe = `
+export function segment(input) {
+  let failures;
+  function go(i) {
+    if (failures?.has(i)) return false;
+    failures ??= new Set();
+    failures.add(i);
+    return true;
+  }
+  const first = go(input.length);
+  const second = go(input.length);
+  return first + ":" + second;
+}
+`;
+
+const setProgram = `
+import { segment } from "set-failure-fixture/probe.js";
+
+console.log(segment("ab"));
+`;
+
+test("a lazily created Set accepts add and has", async () => {
+  await matchesNode("set-failure-fixture", setProbe, setProgram);
+});
